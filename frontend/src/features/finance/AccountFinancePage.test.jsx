@@ -459,6 +459,13 @@ describe('AccountFinancePage — grouped worklist (design a-fin-land)', () => {
       expect(within(groupRow(206)).queryByText(/Express|บันทึกเอง/)).toBeNull();
     });
 
+    it('the receipt source chip is not on บันทึกใบกำกับ rows either (F9)', async () => {
+      listReturns([], [{ ...closedPaidTicket, receiptSource: 'EXPRESS' }]);
+      renderPage();
+      await screen.findByText('บริษัท เอฟ จำกัด');
+      expect(within(groupRow(203)).queryByText(/Express|บันทึกเอง/)).toBeNull();
+    });
+
     it('the receipt source chip is a ยืนยันพร้อมปิดงาน thing: a chase row keeps its due chip only', async () => {
       listReturns([{ ...overdueTicket, receiptSource: 'EXPRESS' }]);
       renderPage();

@@ -8519,23 +8519,36 @@ function mockRequireReturnDateNotPast(pauseReturnOn) {
 }
 
 /**
- * BoardDeal's slice-6.2 card fields (SalesBoardRepository ROW_SELECT + #withPaymentDue): the value quotation's own
- * number, the deal's buyer, the earliest OPEN DEPOSIT expected-payment week, the deposit-in-hand fact (DEPOSIT_PAID /
- * AWAITING_FINAL_PAYMENT on a deal whose policy did not bypass the deposit), and the due date + overdue flag taken from
- * this mock's OWN summary derivation (derivePaymentFields), the way the server reads TicketRepository#paymentDueStates.
- * The mock's due date is its demo billing date, not the server's delivery-based one — a plumbing stand-in only.
+ * BoardDeal's slice-6.2 card fields from SalesBoardRepository's ROW_SELECT: the value quotation's own number, the
+ * deal's buyer, the EARLIEST OPEN DEPOSIT expected-payment week (MIN(expected_week)), and the deposit-in-hand fact
+ * (DEPOSIT_PAID / AWAITING_FINAL_PAYMENT on a deal whose policy did not bypass the deposit). The due date and overdue
+ * flag start null / false, as in Java; mockWithPaymentDue adds them where the server does.
  */
 function mockBoardCardDetails(t, valueQuotation) {
   const deposits = mockExpectedPaymentsOf(t.id).filter((p) => p.kind === 'DEPOSIT' && p.status === 'OPEN');
-  const due = derivePaymentFields(t);
   return {
     quotationNumber: valueQuotation?.number ?? null,
     buyerName: t.buyerName ?? null,
     expectedDepositWeek: deposits.length ? deposits.map((p) => p.expectedWeek).sort()[0] : null,
     depositReceived: ['DEPOSIT_PAID', 'AWAITING_FINAL_PAYMENT'].includes(t.paymentStatus) && !depositBypassesNotice(t),
-    paymentDueDate: due.paymentDueDate ?? null,
-    overdue: Boolean(due.overdue),
+    paymentDueDate: null,
+    overdue: false,
   };
+}
+
+/**
+ * Mirrors SalesBoardRepository#withPaymentDue (fix round 1): the due date + overdue flag, taken from this mock's OWN
+ * summary derivation (derivePaymentFields, as Java reads TicketRepository#paymentDueStates), on cards from รอมัดจำ
+ * (column 4) on only — and SalesBoardService calls it only for my-work `board` and team-board `board`, so followUp,
+ * stale and returning rows keep null / false. The mock's due date is its demo billing date, not the server's
+ * delivery-based one — a plumbing stand-in only.
+ */
+function mockWithPaymentDue(rows) {
+  return rows.map((d) => {
+    if (d.boardColumn < 4) return d;
+    const due = derivePaymentFields(db.tickets.find((t) => t.id === d.ticketId));
+    return { ...d, paymentDueDate: due.paymentDueDate ?? null, overdue: Boolean(due.overdue) };
+  });
 }
 
 /**
@@ -8544,7 +8557,13 @@ function mockBoardCardDetails(t, valueQuotation) {
  * null with no receipt.
  */
 function mockReceiptSource(ticketId) {
-  const receipts = receiptsForTicket(ticketId);
+  return receiptSourceForTests(receiptsForTicket(ticketId));
+}
+
+/** The pure rule behind mockReceiptSource, exported so its branches are pinned without seeding receipts. */
+export function receiptSourceForTests(allReceipts) {
+  // Owner ruling (fix round 1): a refund / credit note (ADJUSTMENT) or a zero amount is not money received.
+  const receipts = allReceipts.filter((r) => r.kind !== 'ADJUSTMENT' && Number(r.amount) > 0);
   if (!receipts.length) return null;
   const express = receipts.filter((r) => r.source === 'EXPRESS' || r.expressDocNo).length;
   if (express === receipts.length) return 'EXPRESS';
@@ -14211,7 +14230,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       // ควรตามต่อ also takes the caller's OWN returning paused deals (SalesBoardRepository#returningPausedDealsOwnedBy).
       const returning = mockReturningPausedDeals().filter((d) => d.ownerId === user.id);
       return delay({
-        followUp: mockRankFollowUp(board, returning, 5), board, quietDays: MOCK_QUIET_DAYS,
+        followUp: mockRankFollowUp(board, returning, 5), board: mockWithPaymentDue(board), quietDays: MOCK_QUIET_DAYS,
         visitsThisWeek: mockVisitsThisWeek(user.id),
         cash: mockCashForMonth(user.id, mockTodayIso().slice(0, 7)),
       });
@@ -14221,7 +14240,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
     async teamBoard() {
       const user = requireSession();
       if (!['sales_manager', 'ceo'].includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
-      return delay({ board: mockBoardDeals(), quietDays: MOCK_QUIET_DAYS });
+      return delay({ board: mockWithPaymentDue(mockBoardDeals()), quietDays: MOCK_QUIET_DAYS });
     },
     async teamOverview() {
       const user = requireSession();

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { api, rankQuietForTests } from './mockApi.js';
+import { api, rankQuietForTests, receiptSourceForTests } from './mockApi.js';
 
 // Mirrors SalesBoardService / SalesBoardRepository (backend SalesBoardScopeIntegrationTest). The mock's authz is
 // NOT evidence about the Java service — the role gates and the own-deals scope are proven only by the real-DB
@@ -203,11 +203,48 @@ describe('mockApi drawn details (slice 6)', () => {
     const { board } = await api.salesBoard.teamBoard();
     const rows = (await api.tickets.list()).tickets;
 
+    // Adapted (fix round 1): only cards from รอมัดจำ (column 4) on carry the due state, as SalesBoardRepository#withPaymentDue.
     for (const d of board) {
       const row = rows.find((t) => t.id === d.ticketId);
-      expect(d.paymentDueDate).toBe(row.paymentDueDate ?? null);
-      expect(d.overdue).toBe(Boolean(row.overdue));
+      expect(d.paymentDueDate).toBe(d.boardColumn >= 4 ? (row.paymentDueDate ?? null) : null);
+      expect(d.overdue).toBe(d.boardColumn >= 4 ? Boolean(row.overdue) : false);
     }
+  });
+
+  it('the due state is never on ควรตามต่อ or the team\'s stale list (no screen shows it there)', async () => {
+    await api.auth.login({ role: 'ceo' });
+    const { stale } = await api.salesBoard.teamOverview();
+    await api.auth.login({ role: 'sales' });
+    const { followUp } = await api.salesBoard.myWork();
+
+    for (const d of [...stale, ...followUp]) {
+      expect(d.paymentDueDate).toBeNull();
+      expect(d.overdue).toBe(false);
+    }
+  });
+
+  it('a card\'s expected deposit week is the EARLIEST open deposit week, as MIN(expected_week) in Java (F14)', async () => {
+    await api.auth.login({ role: 'sales' });
+    const [first] = (await api.salesBoard.myWork()).board;
+    await api.expectedPayments.create(first.ticketId, { kind: 'DEPOSIT', amount: 1000, expectedWeek: '2027-01-11' });
+    await api.expectedPayments.create(first.ticketId, { kind: 'DEPOSIT', amount: 1000, expectedWeek: '2027-01-04' });
+    await api.expectedPayments.create(first.ticketId, { kind: 'BALANCE', amount: 1000, expectedWeek: '2026-12-28' });
+
+    const card = (await api.salesBoard.myWork()).board.find((d) => d.ticketId === first.ticketId);
+    const earliestOpenDeposit = (await api.expectedPayments.list(first.ticketId))
+      .filter((p) => p.kind === 'DEPOSIT' && p.status === 'OPEN').map((p) => p.expectedWeek).sort()[0];
+    expect(card.expectedDepositWeek).toBe(earliestOpenDeposit);
+    expect(card.expectedDepositWeek <= '2027-01-04').toBe(true);
+  });
+
+  it('receiptSource counts only money received: refunds (ADJUSTMENT) and zero amounts are left out', () => {
+    const r = (source, kind = 'DEPOSIT', amount = 100, expressDocNo = null) => ({ source, kind, amount, expressDocNo });
+    expect(receiptSourceForTests([r('EXPRESS'), r('MANUAL', 'ADJUSTMENT')])).toBe('EXPRESS');
+    expect(receiptSourceForTests([r('MANUAL', 'ADJUSTMENT')])).toBeNull();
+    expect(receiptSourceForTests([r('EXPRESS'), r('MANUAL', 'DEPOSIT', 0)])).toBe('EXPRESS');
+    expect(receiptSourceForTests([r('MANUAL'), r('MANUAL', 'BALANCE', 100, 'RE69001')])).toBe('MIXED');
+    expect(receiptSourceForTests([r('MANUAL'), r('MANUAL', 'BALANCE')])).toBe('MANUAL');
+    expect(receiptSourceForTests([])).toBeNull();
   });
 
   it('import\'s list rows never carry expectedQuarter or receiptSource (TicketSummaryDto#withoutMoney)', async () => {
