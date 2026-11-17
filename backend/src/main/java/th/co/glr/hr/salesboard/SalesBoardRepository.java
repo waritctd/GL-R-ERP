@@ -6,12 +6,16 @@ import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.util.List;
 import java.util.Map;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
 import th.co.glr.hr.dealquotation.WastageCalculator;
 import th.co.glr.hr.salesboard.SalesBoardDtos.BoardDeal;
 import th.co.glr.hr.ticket.DealStage;
+import th.co.glr.hr.ticket.DepositPolicy;
+import th.co.glr.hr.ticket.PaymentTrack;
 import th.co.glr.hr.ticket.QuietRule;
+import th.co.glr.hr.ticket.TicketRepository;
 import th.co.glr.hr.ticket.WinProbabilityDefaults;
 
 /**
@@ -26,6 +30,12 @@ import th.co.glr.hr.ticket.WinProbabilityDefaults;
  * last touch ascending, then ticket id — mockApi.salesBoard mirrors this ORDER BY. The two
  * {@code returningPausedDeals*} reads (V220) take the same row shape for PAUSED deals whose วันที่จะกลับมาดู has
  * arrived ({@link QuietRule#returningSql}), with the same owner predicate split.
+ *
+ * <p>Slice 6.2 card fields: the value quotation's own {@code number}, {@code buyer_name}, the earliest OPEN DEPOSIT
+ * {@code expected_payment} week and the deposit-received fact come from this statement; the due date and overdue flag
+ * come from {@link TicketRepository#paymentDueStates} — ONE more statement per read for the whole row set (never one
+ * per row), and the finance summary's own derivation, never a copy of it. Every read keeps its WHERE clause unchanged,
+ * so the new fields ride on rows the caller could already see.
  */
 @Repository
 public class SalesBoardRepository {
@@ -48,13 +58,19 @@ public class SalesBoardRepository {
                GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (now() - %1$s)) / 86400))::int AS days_quiet,
                %2$s AS quiet,
                %3$s AS returning,
-               q.total_amount, q.document_language, q.currency, q.expired,
+               q.total_amount, q.document_language, q.currency, q.expired, q.number AS quotation_number,
+               t.buyer_name,
+               (SELECT MIN(ep.expected_week) FROM sales.expected_payment ep
+                 WHERE ep.ticket_id = t.ticket_id AND ep.kind = 'DEPOSIT' AND ep.status = 'OPEN') AS expected_deposit_week,
+               (t.payment_status IN (:depositInHandStatuses)
+                AND COALESCE(t.deposit_policy, '') NOT IN (:depositBypassPolicies)) AS deposit_received,
                la.kind AS last_activity_kind, la.note AS last_activity_note
           FROM sales.ticket t
           JOIN hr.employee e ON e.employee_id = t.created_by
           LEFT JOIN customers.project p ON p.project_id = t.project_id
           LEFT JOIN LATERAL (
-              SELECT vq.total_amount, vq.document_language, vq.currency, vq.doc_status = 'EXPIRED' AS expired
+              SELECT vq.total_amount, vq.document_language, vq.currency, vq.doc_status = 'EXPIRED' AS expired,
+                     vq.number
                 FROM sales.quotation vq
                 LEFT JOIN sales.deal_party vp ON vp.party_id = vq.party_id
                WHERE vq.ticket_id = t.ticket_id AND vq.doc_status IN (:valueStatuses)
@@ -84,36 +100,53 @@ public class SalesBoardRepository {
     private static final String BOARD_SELECT = ROW_SELECT + ACTIVE_WHERE;
     private static final String RETURNING_SELECT = ROW_SELECT + RETURNING_WHERE;
 
+    /** The payment-track states at which the deposit is in hand (DocumentChainRules#DEPOSIT_PAID_STATUSES minus
+     * FULLY_PAID, which leaves the board as CLOSED_PAID once delivered). A bypass policy (DepositPolicy#NON_REQUIRED)
+     * reaches AWAITING_FINAL_PAYMENT without any deposit, so it is excluded below. */
+    private static final List<String> DEPOSIT_IN_HAND_STATUSES =
+        List.of(PaymentTrack.DEPOSIT_PAID, PaymentTrack.AWAITING_FINAL_PAYMENT);
+
     private final NamedParameterJdbcTemplate jdbc;
     private final QuietRule quietRule;
+    private final TicketRepository tickets;
 
-    public SalesBoardRepository(NamedParameterJdbcTemplate jdbc, QuietRule quietRule) {
+    @Autowired
+    public SalesBoardRepository(NamedParameterJdbcTemplate jdbc, QuietRule quietRule, TicketRepository tickets) {
         this.jdbc = jdbc;
         this.quietRule = quietRule;
+        this.tickets = tickets;
+    }
+
+    /** Tests and tools that build the board by hand: the due-date facts read through a TicketRepository on the same
+     * connection and quiet rule. */
+    public SalesBoardRepository(NamedParameterJdbcTemplate jdbc, QuietRule quietRule) {
+        this(jdbc, quietRule, new TicketRepository(jdbc, quietRule));
     }
 
     /** The caller's own ACTIVE deals — the deal's owner ({@code created_by}), not its keyer. */
     public List<BoardDeal> activeDealsOwnedBy(long ownerId) {
-        return jdbc.query(BOARD_SELECT + " AND t.created_by = :ownerId ORDER BY last_touched_at, t.ticket_id",
-            params().addValue("ownerId", ownerId), this::map);
+        return withPaymentDue(jdbc.query(BOARD_SELECT + " AND t.created_by = :ownerId ORDER BY last_touched_at, t.ticket_id",
+            params().addValue("ownerId", ownerId), this::map));
     }
 
     /** Every ACTIVE deal of every rep. Only for the sales_manager/ceo team overview. */
     public List<BoardDeal> activeDealsAllReps() {
-        return jdbc.query(BOARD_SELECT + " ORDER BY last_touched_at, t.ticket_id", params(), this::map);
+        return withPaymentDue(jdbc.query(BOARD_SELECT + " ORDER BY last_touched_at, t.ticket_id", params(), this::map));
     }
 
     /** The caller's own paused deals whose วันที่จะกลับมาดู has arrived — owner ({@code created_by}) scoped in the
      * WHERE clause exactly as {@link #activeDealsOwnedBy}. Same row order. */
     public List<BoardDeal> returningPausedDealsOwnedBy(long ownerId) {
-        return jdbc.query(RETURNING_SELECT + " AND t.created_by = :ownerId ORDER BY last_touched_at, t.ticket_id",
-            params().addValue("ownerId", ownerId), this::map);
+        return withPaymentDue(jdbc.query(
+            RETURNING_SELECT + " AND t.created_by = :ownerId ORDER BY last_touched_at, t.ticket_id",
+            params().addValue("ownerId", ownerId), this::map));
     }
 
     /** Every rep's returning paused deals. Only for the sales_manager/ceo team overview, like
      * {@link #activeDealsAllReps}. */
     public List<BoardDeal> returningPausedDealsAllReps() {
-        return jdbc.query(RETURNING_SELECT + " ORDER BY last_touched_at, t.ticket_id", params(), this::map);
+        return withPaymentDue(jdbc.query(RETURNING_SELECT + " ORDER BY last_touched_at, t.ticket_id", params(),
+            this::map));
     }
 
     /** The bind parameters every board read needs: the value statuses, the quiet threshold, and the Asia/Bangkok
@@ -122,7 +155,23 @@ public class SalesBoardRepository {
         return new org.springframework.jdbc.core.namedparam.MapSqlParameterSource()
             .addValue("valueStatuses", VALUE_STATUSES)
             .addValue("quietDays", quietRule.quietDays())
-            .addValue("returnToday", quietRule.bangkokToday(), java.sql.Types.DATE);
+            .addValue("returnToday", quietRule.bangkokToday(), java.sql.Types.DATE)
+            .addValue("depositInHandStatuses", DEPOSIT_IN_HAND_STATUSES)
+            .addValue("depositBypassPolicies", List.copyOf(DepositPolicy.NON_REQUIRED));
+    }
+
+    /** The rows with the finance summary's due date and overdue flag (TicketRepository#paymentDueStates): one
+     * statement for the whole list, in the rows' own order. */
+    private List<BoardDeal> withPaymentDue(List<BoardDeal> rows) {
+        if (rows.isEmpty()) {
+            return rows;
+        }
+        Map<Long, TicketRepository.PaymentDueState> due =
+            tickets.paymentDueStates(rows.stream().map(BoardDeal::ticketId).toList());
+        return rows.stream().map(d -> {
+            TicketRepository.PaymentDueState state = due.get(d.ticketId());
+            return state == null ? d : d.withPaymentDue(state.dueDate(), state.overdue());
+        }).toList();
     }
 
     private BoardDeal map(ResultSet rs, int rowNum) throws SQLException {
@@ -154,7 +203,10 @@ public class SalesBoardRepository {
             lastTouched == null ? null : lastTouched.toInstant(),
             rs.getInt("days_quiet"), rs.getBoolean("quiet"),
             rs.getString("last_activity_kind"), rs.getString("last_activity_note"),
-            rs.getBoolean("returning"), rs.getObject("pause_return_on", java.time.LocalDate.class));
+            rs.getBoolean("returning"), rs.getObject("pause_return_on", java.time.LocalDate.class),
+            rs.getString("quotation_number"), rs.getString("buyer_name"),
+            rs.getObject("expected_deposit_week", java.time.LocalDate.class), rs.getBoolean("deposit_received"),
+            null, false);
     }
 
     /** The quotation's grand total, derived exactly as DealQuotationRepository#mapQuotation derives it. */

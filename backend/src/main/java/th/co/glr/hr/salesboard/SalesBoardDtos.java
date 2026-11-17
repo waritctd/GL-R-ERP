@@ -19,13 +19,47 @@ public final class SalesBoardDtos {
      * {@code returning} is true for a PAUSED deal whose วันที่จะกลับมาดู ({@code pauseReturnOn}, V220) has arrived
      * ({@link QuietRule#returningSql}): such a row is never on the board, only in ควรตามต่อ / the team's stale list,
      * and {@code quiet} is false on it (that rule is ACTIVE-only).
+     *
+     * <p>Slice 6.2, the card's drawn details. {@code quotationNumber} is the number of the SAME quotation
+     * {@code value} comes from (null when the value is the import / estimate fallback, or there is none);
+     * {@code buyerName} is {@code sales.ticket.buyer_name}. The money state: {@code expectedDepositWeek} is the
+     * earliest OPEN {@code DEPOSIT} row in {@code sales.expected_payment} (V212) — a WEEK, its Monday, never a day;
+     * {@code depositReceived} is true when the payment track is DEPOSIT_PAID / AWAITING_FINAL_PAYMENT on a deal whose
+     * deposit policy did not bypass the deposit ({@code DepositPolicy#NON_REQUIRED} reach AWAITING_FINAL_PAYMENT
+     * without one); {@code paymentDueDate} / {@code overdue} are the deal's {@code TicketSummaryDto#paymentDueDate} /
+     * {@code #overdue}, read through {@code TicketRepository#paymentDueStates} — the one derivation the finance
+     * worklist uses, never a second copy. Every board read is already scoped (own deals for my-work, sales_manager /
+     * ceo for the team reads), and those roles already read the deal's value, so these add no exposure.
      */
     public record BoardDeal(long ticketId, String title, String customerName, String projectName, long ownerId,
                             String ownerName, String salesStage, String repCode, int boardColumn, BigDecimal value,
                             String currency, boolean valueExpired, String designerName, Integer winProbability,
                             String expectedQuarter, Instant lastTouchedAt, int daysQuiet, boolean quiet,
                             String lastActivityKind, String lastActivityNote, boolean returning,
-                            LocalDate pauseReturnOn) {
+                            LocalDate pauseReturnOn, String quotationNumber, String buyerName,
+                            LocalDate expectedDepositWeek, boolean depositReceived, LocalDate paymentDueDate,
+                            boolean overdue) {
+        /** The shape before slice 6.2's card fields: no quotation number / buyer, no money state. */
+        public BoardDeal(long ticketId, String title, String customerName, String projectName, long ownerId,
+                         String ownerName, String salesStage, String repCode, int boardColumn, BigDecimal value,
+                         String currency, boolean valueExpired, String designerName, Integer winProbability,
+                         String expectedQuarter, Instant lastTouchedAt, int daysQuiet, boolean quiet,
+                         String lastActivityKind, String lastActivityNote, boolean returning,
+                         LocalDate pauseReturnOn) {
+            this(ticketId, title, customerName, projectName, ownerId, ownerName, salesStage, repCode, boardColumn,
+                value, currency, valueExpired, designerName, winProbability, expectedQuarter, lastTouchedAt,
+                daysQuiet, quiet, lastActivityKind, lastActivityNote, returning, pauseReturnOn, null, null, null,
+                false, null, false);
+        }
+
+        /** Copy with the finance summary's payment-due state ({@code TicketRepository#paymentDueStates}). */
+        public BoardDeal withPaymentDue(LocalDate paymentDueDate, boolean overdue) {
+            return new BoardDeal(ticketId, title, customerName, projectName, ownerId, ownerName, salesStage, repCode,
+                boardColumn, value, currency, valueExpired, designerName, winProbability, expectedQuarter,
+                lastTouchedAt, daysQuiet, quiet, lastActivityKind, lastActivityNote, returning, pauseReturnOn,
+                quotationNumber, buyerName, expectedDepositWeek, depositReceived, paymentDueDate, overdue);
+        }
+
         /** The shape before {@code returning}/{@code pauseReturnOn}: an ACTIVE board row. */
         public BoardDeal(long ticketId, String title, String customerName, String projectName, long ownerId,
                          String ownerName, String salesStage, String repCode, int boardColumn, BigDecimal value,
