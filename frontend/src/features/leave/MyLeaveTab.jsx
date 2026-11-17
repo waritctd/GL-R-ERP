@@ -16,7 +16,7 @@ import { addDaysIso } from '../../utils/format.js';
 import { LeaveFilterBar } from './LeaveFilterBar.jsx';
 import { LeaveReportDownload } from './LeaveReportDownload.jsx';
 import {
-  formatDays, todayIso, yearFrom,
+  carryPoolYearsBe, formatDays, todayIso, yearFrom,
 } from './leaveFormatting.js';
 import { canSubmitOwnLeave } from './leaveSurfaceTabs.js';
 import { LeaveRequestsSection } from './leaveRequestTable.jsx';
@@ -61,13 +61,21 @@ function everydayBalanceSummary(balance) {
 }
 
 // Each entitlement year's remaining days, shown whenever days were carried in, so a spent carry-over
-// still reads as "used up" instead of the year disappearing. Null when nothing was carried in.
+// still reads as gone instead of the year disappearing. Null (no line) when nothing was carried in,
+// when the response has no figure for this year, or when the two pools do not add up to `remainingDays`
+// (rows never split by pool): the card must not contradict its own "เหลือ".
 function yearBreakdown(balance) {
-  if (!(Number(balance.carriedInDays || 0) > 0) || balance.carriedInFromYear == null) return null;
-  const fromYearBe = Number(balance.carriedInFromYear) + 543;
+  if (!(Number(balance.carriedInDays || 0) > 0)) return null;
+  if (balance.carriedInFromYear == null || balance.ownQuotaRemainingDays == null) return null;
   const carriedLeft = Number(balance.carriedInRemainingDays || 0);
-  const carried = carriedLeft > 0 ? `เหลือ ${formatDays(carriedLeft)}` : 'ใช้หมดแล้ว';
-  return `สิทธิ์ปี ${fromYearBe} ${carried} · สิทธิ์ปี ${fromYearBe + 1} เหลือ ${formatDays(balance.ownQuotaRemainingDays)}`;
+  const ownLeft = Number(balance.ownQuotaRemainingDays);
+  if (Math.abs(carriedLeft + ownLeft - Number(balance.remainingDays || 0)) > 0.005) return null;
+  const { carriedInYearBe, ownYearBe } = carryPoolYearsBe(balance.carriedInFromYear);
+  // A pending request already draws on the pool server-side and gives the days back if rejected, so
+  // "used up" is only said when nothing is awaiting approval.
+  const spent = Number(balance.pendingDays || 0) > 0 ? 'ไม่เหลือแล้ว (รวมรายการรออนุมัติ)' : 'ใช้หมดแล้ว';
+  const carried = carriedLeft > 0 ? `เหลือ ${formatDays(carriedLeft)}` : spent;
+  return `สิทธิ์ปี ${carriedInYearBe} ${carried} · สิทธิ์ปี ${ownYearBe} เหลือ ${formatDays(ownLeft)}`;
 }
 
 // Deliberately never reads balance.annualQuotaDays/remainingDays -- see rareLeaveConditionText's comment above
@@ -134,6 +142,7 @@ function PrimaryLeaveBalanceCard({ loading, balance, leaveType, isEveryday }) {
   // Same arithmetic as the API's balance.remainingDays; see the doc comment above.
   const used = Number(balance.approvedDays || 0) + Number(balance.pendingDays || 0);
   const summary = isEveryday ? everydayBalanceSummary(balance) : rareBalanceSummary(balance, leaveType);
+  const byYear = isEveryday ? yearBreakdown(balance) : null;
   // §5.3.5 carry-forward: `cap` folds in carriedInDays, because approved+pending legitimately draws
   // on the carried-in pool too; with the flat annual figure the bar pinned at 100% red and fired a
   // false "exceeded your annual quota" warning. The bar's 100% means "used everything actually
@@ -165,9 +174,7 @@ function PrimaryLeaveBalanceCard({ loading, balance, leaveType, isEveryday }) {
         </>
       ) : null}
       <small className="mt-1 block text-sm text-text-muted">{summary}</small>
-      {isEveryday && yearBreakdown(balance) ? (
-        <small className="block text-sm text-text-muted">{yearBreakdown(balance)}</small>
-      ) : null}
+      {byYear ? <small className="block text-sm text-text-muted">{byYear}</small> : null}
     </div>
   );
 }

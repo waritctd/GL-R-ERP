@@ -23,7 +23,7 @@ import { addDaysIso, formatThaiDate } from '../../utils/format.js';
 import { EVERYDAY_LEAVE_TYPE_CODES } from './MyLeaveTab.jsx';
 import { LeaveRulePanel, LeaveRuleWarningList } from './LeaveRulePanel.jsx';
 import { LEAVE_PURPOSE_OPTIONS } from './leaveRequestTable.jsx';
-import { formatDate, formatDays, todayIso, yearFrom } from './leaveFormatting.js';
+import { carryPoolYearsBe, formatDate, formatDays, todayIso, yearFrom } from './leaveFormatting.js';
 import { ThaiDateController } from '../../components/common/ThaiDateInput.jsx';
 
 // Leave-request composer. The same gate chain as submit runs as a dry-run
@@ -278,11 +278,7 @@ function TypeChoice({ type, outcomeQuery, selected, onSelect, showCondition }) {
 // split of a request straddling 31 Dec, a different axis. Option labels therefore never lead with a
 // bare "ปี {number}"; each names the pool (สะสม / ปีนี้) first.
 function QuotaPoolPreferenceField({ register, balance }) {
-  // Both years are derived from carriedInFromYear alone: the Javadoc on LeaveBalanceDto ties carriedInExpiresOn
-  // to `31 Dec of carriedInFromYear + 1` by construction, so re-deriving from the clock could only ever disagree
-  // with the balance this control is actually describing.
-  const carriedInYearBe = Number(balance.carriedInFromYear) + 543;
-  const ownYearBe = Number(balance.carriedInFromYear) + 1 + 543;
+  const { carriedInYearBe, ownYearBe } = carryPoolYearsBe(balance.carriedInFromYear);
   return (
     <fieldset className="grid gap-2.5 rounded-md border border-border-input bg-surface p-3">
       <legend className="px-1 text-sm font-bold text-text">

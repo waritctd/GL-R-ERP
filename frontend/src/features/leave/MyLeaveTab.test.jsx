@@ -274,6 +274,25 @@ describe('MyLeaveTab balances: one primary card + a single disclosure (owner fee
       expect(text).toMatch(/สิทธิ์ปี 2569 เหลือ 6\u00A0วัน/);
     });
 
+    // The server counts a request still awaiting approval as drawing on the pool, so "used up" would be
+    // premature: the days come back if it is rejected.
+    it('does not call the carried year used up while a request is still awaiting approval', async () => {
+      api.leave.balances.mockResolvedValue(vacation({ approvedDays: 2, pendingDays: 2 }));
+      const text = await cardText();
+      expect(text).not.toMatch(/ใช้หมดแล้ว/);
+      expect(text).toMatch(/สิทธิ์ปี 2568 ไม่เหลือแล้ว \(รวมรายการรออนุมัติ\)/);
+    });
+
+    it('hides the line when the two years do not add up to the total left, instead of contradicting it', async () => {
+      api.leave.balances.mockResolvedValue(vacation({ remainingDays: 5 }));
+      expect(await cardText()).not.toMatch(/สิทธิ์ปี/);
+    });
+
+    it('hides the line when the response has no figure for this year, instead of printing 0', async () => {
+      api.leave.balances.mockResolvedValue(vacation({ ownQuotaRemainingDays: undefined }));
+      expect(await cardText()).not.toMatch(/สิทธิ์ปี/);
+    });
+
     it('shows no per-year line when nothing was carried in', async () => {
       api.leave.balances.mockResolvedValue(vacation({
         approvedDays: 0, carriedInDays: 0, carriedInFromYear: null, carriedInRemainingDays: 0,
