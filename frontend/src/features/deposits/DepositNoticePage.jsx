@@ -19,6 +19,7 @@ import { depositNoticeStatusLabel, formatThaiDate } from '../../utils/format.js'
 import { downloadBlob } from '../../utils/download.js';
 import { round2 } from '../quotations/quotationMeta.js';
 import { createDepositNoticeDraft } from './createDepositNoticeDraft.js';
+import { invalidateDealDocuments } from '../documentChain/documentChain.js';
 
 function money(v) {
   if (v == null) return '—';
@@ -317,8 +318,10 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
     // eslint-disable-next-line react-hooks/exhaustive-deps -- deliberately keyed on docSeedKey only, see comment above
   }, [docSeedKey]);
 
+  // Create / save / issue all move the document chain the deal page and the quotation page's card read: one helper
+  // invalidates the notice list AND those keys.
   function invalidateDepositNotices() {
-    return queryClient.invalidateQueries({ queryKey: queryKeys.depositNotices(ticketId) });
+    return invalidateDealDocuments(queryClient, ticketId);
   }
 
   async function saveDraft() {

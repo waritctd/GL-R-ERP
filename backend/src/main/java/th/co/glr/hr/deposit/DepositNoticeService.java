@@ -1128,24 +1128,65 @@ public class DepositNoticeService {
         requireRole(actor, VIEWER_ROLES);
         TicketDto t = tickets.findById(ticketId)
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบดีลนี้"));
-        if ("sales".equals(actor.role()) && !DealOwnership.isOwnerOrKeyer(t.summary(), actor.id())) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
-        }
-        if (IMPORT_ROLES.contains(actor.role())) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
-        }
-        // account is ROW-scoped -- it reads a deal's deposit notices / remaining invoices only
-        // when the deal is inside its list scope (the same predicate that filters GET /api/tickets).
-        // Every deposit-notice and remaining-invoice read funnels through this method.
-        // Read gate only (deposit-notice writes use requireTicketOwner): also a lost/cancelled deal that still has an
-        // issued deposit notice, so the finance page can show its documents. This method is
-        // also reached on remaining-invoice writes via resolveRemainingInvoiceSnapshot; those are blocked for a dead
-        // deal by requireDepositNoticeIssueGate + requireActiveLifecycle, so the widening never lets one through.
-        if ("account".equals(actor.role()) && !tickets.isInAccountScope(ticketId)
-                && !tickets.isDeadDealWithIssuedDepositNotice(ticketId)) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
+        // The per-role half is dealDocumentScope (below), which the document chain's list mark applies in SQL too.
+        switch (dealDocumentScope(actor.role())) {
+            case ALL -> { }
+            case OWNER_OR_KEYER -> {
+                if (!DealOwnership.isOwnerOrKeyer(t.summary(), actor.id())) {
+                    throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
+                }
+            }
+            // account is ROW-scoped -- it reads a deal's deposit notices / remaining invoices only
+            // when the deal is inside its list scope (the same predicate that filters GET /api/tickets).
+            // Every deposit-notice and remaining-invoice read funnels through this method.
+            // Read gate only (deposit-notice writes use requireTicketOwner): also a lost/cancelled deal that still has an
+            // issued deposit notice, so the finance page can show its documents. This method is
+            // also reached on remaining-invoice writes via resolveRemainingInvoiceSnapshot; those are blocked for a dead
+            // deal by requireDepositNoticeIssueGate + requireActiveLifecycle, so the widening never lets one through.
+            case ACCOUNT -> {
+                if (!tickets.isInAccountScope(ticketId) && !tickets.isDeadDealWithIssuedDepositNotice(ticketId)) {
+                    throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
+                }
+            }
+            case NONE -> throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
         return t;
+    }
+
+    /** Which deals' documents (deposit notices, remaining invoices) a role may read — the per-role half of
+     * {@link #requireTicketViewer}, which applies it to one deal. */
+    public enum DealDocumentScope {
+        /** every deal: ceo, sales_manager (read-only oversight) */
+        ALL,
+        /** deals the viewer owns or keyed: sales */
+        OWNER_OR_KEYER,
+        /** deals inside account's list scope (plus a dead deal with an issued notice): account */
+        ACCOUNT,
+        /** none: import (a deposit notice is a customer financial document end to end), and every non-viewer role */
+        NONE
+    }
+
+    public static DealDocumentScope dealDocumentScope(String role) {
+        if (role == null || !VIEWER_ROLES.contains(role) || IMPORT_ROLES.contains(role)) {
+            return DealDocumentScope.NONE;
+        }
+        return switch (role) {
+            case "sales" -> DealDocumentScope.OWNER_OR_KEYER;
+            case "account" -> DealDocumentScope.ACCOUNT;
+            default -> DealDocumentScope.ALL;
+        };
+    }
+
+    /** {@link #requireTicketViewer} for callers outside this package (the document chain summary). */
+    public void requireDealDocumentViewer(long ticketId, UserPrincipal actor) {
+        requireTicketViewer(ticketId, actor);
+    }
+
+    /** The identity half of every deposit-notice and remaining-invoice WRITE: {@link #requireDepositNoticeIssueGate}
+     * (and createDraft/update/issue's own requireRole(SALES_ROLES) + requireTicketOwner) as a yes/no, for the document
+     * chain's "may this viewer act" flags. */
+    public boolean mayWriteDealDocuments(TicketSummaryDto summary, UserPrincipal actor) {
+        return SALES_ROLES.contains(actor.role()) && DealOwnership.isOwnerOrKeyer(summary, actor.id());
     }
 
     private void requireTicketOwner(long ticketId, UserPrincipal actor) {

@@ -89,6 +89,7 @@ import { SearchableCombobox } from '../../components/common/SearchableCombobox.j
 // validation (see ImportFactoryPicker below).
 import { FactoryFormModal } from '../catalog/PriceImportPage.jsx';
 import { ThaiDateInput } from '../../components/common/ThaiDateInput.jsx';
+import { invalidateDealDocuments } from '../documentChain/documentChain.js';
 
 function isImport(user) {
   return user?.role === 'import';
@@ -1693,6 +1694,8 @@ export function PricingRequestDetailPage({ user, showToast }) {
     mutationFn: () => api.pricingRequests.createDepositNoticeFromQuotation(pricingRequestId, {}),
     onSuccess: () => {
       showToast?.('success', 'สร้างร่างใบแจ้งยอดเงินรับมัดจำแล้ว');
+      // A new draft moves the document chain (deal page เงิน tab, quotation card) and the notice list the page below reads.
+      invalidateDealDocuments(queryClient, summary.ticketId);
       // Reuse the legacy deposit-notice page as-is: it loads/edits/issues a DRAFT by ticketId, and
       // the draft just created is what it will find.
       navigate(`/tickets/${summary.ticketId}/deposit`);

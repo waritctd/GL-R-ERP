@@ -3611,17 +3611,31 @@ public class DealQuotationService {
      * on any deal; OR a {@code canCreateQuotation}-granted employee on ANY deal regardless of role (a per-person
      * capability, not a role). Read LIVE via {@link #hasQuotationGrant}, never from {@code actor}. */
     private void requireEditAccess(UserPrincipal actor, TicketSummaryDto ticket) {
+        String refusal = editAccessRefusal(actor, ticket);
+        if (refusal != null) {
+            throw new ApiException(HttpStatus.FORBIDDEN, refusal);
+        }
+    }
+
+    /** {@link #requireEditAccess} as a yes/no — the same decision, for the document chain's "may this viewer confirm
+     * the order" flag ({@link #confirmOrderFromDirectQuotation}'s authz is requireEditAccess). */
+    public boolean hasEditAccess(UserPrincipal actor, TicketSummaryDto ticket) {
+        return editAccessRefusal(actor, ticket) == null;
+    }
+
+    /** null when {@code actor} may edit quotations on {@code ticket}; otherwise the 403's message. */
+    private String editAccessRefusal(UserPrincipal actor, TicketSummaryDto ticket) {
         boolean grant = hasQuotationGrant(actor);
         if (!EDIT_ROLES.contains(actor.role()) && !grant) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
+            return "ไม่มีสิทธิ์เข้าถึงรายการนี้";
         }
         if ("sales_manager".equals(actor.role()) || grant) {
-            return; // any deal
+            return null; // any deal
         }
         if ("sales".equals(actor.role()) && DealOwnership.isOwnerOrKeyer(ticket, actor.id())) {
-            return;
+            return null;
         }
-        throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงดีลนี้");
+        return "ไม่มีสิทธิ์เข้าถึงดีลนี้";
     }
 
     private void requireEditAccessForQuotation(UserPrincipal actor, DealQuotationDto quotation) {

@@ -19,6 +19,25 @@ import {
   filterDealQuotationRows, isDealQuotationReadOnlyViewer,
 } from './quotationMeta.js';
 import { readQuotationListView, writeQuotationListView } from './quotationPrefs.js';
+import { chainListMark } from '../documentChain/documentChainText.js';
+
+/**
+ * The row's document chain mark (the list endpoint's per-row `chainStage`, DocumentChainService#listStages — set only
+ * on an APPROVED direct quotation whose deal's documents this viewer may read). Compact-badge style; it WRAPS inside
+ * the สถานะ column's measured 4.75rem floor rather than widening it (see LIST_TABLE_GRID's comment).
+ */
+function ChainMark({ stage }) {
+  const mark = chainListMark(stage);
+  if (!mark) return null;
+  return (
+    <span
+      data-testid="quotation-chain-mark"
+      className="whitespace-normal [&_.status-badge]:min-h-5 [&_.status-badge]:justify-start [&_.status-badge]:whitespace-normal [&_.status-badge]:px-2 [&_.status-badge]:py-0 [&_.status-badge]:text-left [&_.status-badge]:text-2xs [&_.status-badge]:font-bold"
+    >
+      <StatusBadge tone={mark.tone}>{mark.label}</StatusBadge>
+    </span>
+  );
+}
 
 // DataTable's `gridClassName` becomes the desktop `<tr>`'s own class; the shared
 // `.table-head`/`.data-row` rules in styles.css set `display:grid` with no
@@ -457,7 +476,12 @@ const makeColumns = (searchTotals) => [
     render: (row) => {
       if (row.isGroup) return null;
       const status = dealQuotationStatusLabel(row.docStatus);
-      return <span className="[&_.status-badge]:min-h-5 [&_.status-badge]:px-2 [&_.status-badge]:py-0 [&_.status-badge]:text-2xs"><StatusBadge tone={status.tone}>{status.label}</StatusBadge></span>;
+      return (
+        <span className="flex flex-col items-start gap-1 [&>.status-badge]:min-h-5 [&>.status-badge]:px-2 [&>.status-badge]:py-0 [&>.status-badge]:text-2xs">
+          <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
+          <ChainMark stage={row.chainStage} />
+        </span>
+      );
     },
   },
   {
@@ -525,7 +549,10 @@ function QuotationCard({ row }) {
         <Link to={`/quotations/${row.id}`} className="min-w-0 truncate text-xs text-info underline" onClick={(event) => event.stopPropagation()}>
           <code>{row.number}</code>
         </Link>
-        <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
+        <span className="flex shrink-0 flex-col items-end gap-1">
+          <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
+          <ChainMark stage={row.chainStage} />
+        </span>
       </div>
       <strong className="min-w-0 truncate text-md leading-snug font-extrabold text-text">
         {row.customerName ?? '-'}

@@ -8,6 +8,7 @@ import { DialogSummary } from '../../components/common/DocumentDialogParts.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { Skeleton } from '../../components/common/Skeleton.jsx';
 import { downloadBlob } from '../../utils/download.js';
+import { invalidateDealDocuments } from '../documentChain/documentChain.js';
 import { formatMoney } from '../../utils/format.js';
 import { ThaiDateInput } from '../../components/common/ThaiDateInput.jsx';
 
@@ -89,8 +90,10 @@ export function RemainingInvoiceDialog({ ticketId, canWrite = true, onClose, onD
     [list],
   );
 
+  // Every write here (save / issue / revise / delete) moves the document chain: the invoice list AND the summary the
+  // deal page's เงิน tab and the quotation page's chain card read.
   function invalidateList() {
-    return queryClient.invalidateQueries({ queryKey: queryKeys.storedRemainingInvoices(ticketId) });
+    return invalidateDealDocuments(queryClient, ticketId);
   }
 
   async function handleDownloadVersion(id, docNumber) {
