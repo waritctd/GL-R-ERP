@@ -49,6 +49,7 @@ import {
   lastStageChangeAt as dealLastStageChangeAt,
   STAGE_ADVANCE_GATE_MESSAGE as DEAL_STAGE_ADVANCE_GATE_MESSAGE,
 } from '../features/tickets/dealTrackingMeta.js';
+import { deliveryDateBounds as mockDeliveryDateBounds } from '../features/tickets/deliveryDate.js';
 // PricingRequest (commit 6): status transition table + option lists shared with the UI so the mock's gates
 // can't drift from PricingRequestService's — the authoritative rules live in the backend pricingrequest/
 // package.
@@ -3861,16 +3862,19 @@ function updateItemWeightMultipliersForTicket(ticket, user, payload = {}) {
 
 /**
  * Mirrors TicketService#backDatedDeliveryInstant (slice 6d, วันที่ส่ง): null for no date or today (the record is
- * stamped with the moment it is saved); a past day at most 7 back on the Asia/Bangkok calendar is stored at 12:00
- * Bangkok (05:00Z) on that day; a future day or one further back is 400. Called after the permission and lifecycle
- * checks and before anything is written, as in Java (Java checks the date before the source; the mock after it —
- * either way a refused date writes nothing).
+ * stamped with the moment it is saved); a past day is stored at 12:00 Bangkok (05:00Z) on that day. A future day is
+ * 400; so is a day before the earliest one — the later of today − 7 and the Bangkok day the order was confirmed (fix
+ * round 1, L1; deliveryDateBounds mirrors TicketRepository.ORDER_CONFIRMED_AT_SQL) — with the message naming that day.
+ * Called where Java calls it: after the permission, lifecycle and lines checks, before the source and anything written.
  */
-function mockBackDatedDeliveryAt(deliveredOn) {
+function mockBackDatedDeliveryAt(deliveredOn, ticket) {
   if (!deliveredOn) return null;
   const today = mockTodayIso();
   if (deliveredOn > today) fail('วันที่ส่งต้องไม่เป็นวันในอนาคต', 400);
-  if (deliveredOn < mockAddDaysIso(today, -7)) fail('ย้อนวันที่ส่งได้ไม่เกิน 7 วัน', 400);
+  const { min, confirmedOn } = mockDeliveryDateBounds(today, ticket?.events);
+  if (deliveredOn < min) {
+    fail(`${confirmedOn ? 'วันที่ส่งต้องไม่ก่อนวันยืนยันคำสั่งซื้อ' : 'ย้อนวันที่ส่งได้ไม่เกิน 7 วัน'} — เลือกได้ตั้งแต่ ${mockThaiLongDate(min)}`, 400);
+  }
   return deliveredOn === today ? null : `${deliveredOn}T05:00:00.000Z`;
 }
 
@@ -3884,14 +3888,15 @@ function mockThaiLongDate(iso) {
 }
 
 function recordDeliveryForTicket(ticket, user, payload = {}, completing = false) {
+  // Java's order (TicketService#recordDeliveryInternal): lines, then the date, then the source.
+  const lines = payload.lines ?? [];
+  if (!lines.length) fail('ต้องระบุรายการส่งสินค้า', 400);
+  const deliveredAt = mockBackDatedDeliveryAt(payload.deliveredOn, ticket);
   const source = String(payload.source ?? '').trim().toUpperCase();
   if (!['WAREHOUSE', 'STOCK'].includes(source)) fail('source ต้องเป็น WAREHOUSE หรือ STOCK', 400);
   if (source === 'STOCK' && !depositSettled(ticket)) {
     fail('ส่งสินค้าจากสต็อกได้หลังรับชำระมัดจำแล้ว (หรือได้รับการยกเว้นมัดจำ) เท่านั้น', 409);
   }
-  const lines = payload.lines ?? [];
-  if (!lines.length) fail('ต้องระบุรายการส่งสินค้า', 400);
-  const deliveredAt = mockBackDatedDeliveryAt(payload.deliveredOn);
   const combined = new Map();
   for (const line of lines) {
     const item = ticket.items.find((it) => it.id === Number(line.itemId));
@@ -9817,6 +9822,8 @@ export const api = {
         note: payload.note ?? null,
         recipientName: payload.recipientName ?? null,
         lines: remaining,
+        // Slice 6d fix round 1 (M2): CompleteDeliveryRequest.deliveredOn, the same window as the dialog.
+        deliveredOn: payload.deliveredOn ?? null,
       }, true);
       return delay({ ticket: buildTicketDetail(ticket) });
     },
@@ -10415,16 +10422,18 @@ export const api = {
 
     async addActivity(id, payload) {
       const user = requireSession();
-      const ticket = findTicketRaw(Number(id));
-      // Deliberately NOT requireActive: a rep can still log why a deal went quiet on a non-ACTIVE deal (mirrors
-      // TicketService.addActivity — see handoff 103).
-      if (!mockCanDealOwnership(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      // Java's order (slice 6d fix round 1, review L3): the body's own checks — @NotNull activityDate, then
+      // TicketService.addActivity's kind and SAMPLE_SENT note — come BEFORE the deal is read and the ownership 403.
       if (!payload?.activityDate) fail('ต้องระบุวันที่ทำกิจกรรม', 400);
       if (!dealIsValidActivityKind(payload?.kind)) fail(`ไม่รองรับประเภทกิจกรรม '${payload?.kind}'`, 400);
       // Slice 6d (DealActivityKind.requiresNote): ส่งตัวอย่าง's note — what was sent — must not be blank.
       if (dealActivityNoteRequired(payload?.kind) && !String(payload?.note ?? '').trim()) {
         fail('ระบุว่าส่งอะไรไป (เช่น ตัวอย่างกระเบื้อง 3 สี)', 400);
       }
+      const ticket = findTicketRaw(Number(id));
+      // Deliberately NOT requireActive: a rep can still log why a deal went quiet on a non-ACTIVE deal (mirrors
+      // TicketService.addActivity — see handoff 103).
+      if (!mockCanDealOwnership(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       // Slice 6.4 (TicketService.addActivity): an optional nextFollowUpAt needs what PUT /tracking needs — the ownership
       // above plus an ACTIVE deal — and a date not in the past; checked before anything is written.
       const nextFollowUpAt = payload?.nextFollowUpAt || null;

@@ -84,6 +84,7 @@ function renderPanel(user, rows = [draftRow()], {
   hasUncoveredFactories = undefined, // undefined = an older backend that does not send the flag
   uncoveredFactoryNames = undefined, // undefined = an older backend that sends no names
   procurementSource = undefined,
+  events = undefined,
 } = {}) {
   if (rows instanceof Error) api.storedImportRequests.listForTicket.mockRejectedValue(rows);
   else {
@@ -99,7 +100,7 @@ function renderPanel(user, rows = [draftRow()], {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   return render(
     <QueryClientProvider client={queryClient}>
-      <DealFulfilmentPanel ref={ref} user={user} ticketId={1} summary={dealSummary} items={items} availableActions={availableActions} procurementSource={procurementSource} showToast={showToast} />
+      <DealFulfilmentPanel ref={ref} user={user} ticketId={1} summary={dealSummary} items={items} availableActions={availableActions} procurementSource={procurementSource} showToast={showToast} events={events} />
     </QueryClientProvider>,
   );
 }
@@ -1654,6 +1655,82 @@ describe('DealFulfilmentPanel — บันทึกการส่งสิน�
       const dialog = within(await open());
       expect(dialog.getByTestId('delivery-date-hint').textContent)
         .toBe('ย้อนหลังได้ไม่เกิน 7 วัน · วันครบกำหนดชำระนับจากวันที่ส่งครบ');
+    });
+  });
+
+  // Fix round 1 (L1): never before the Bangkok day the order was confirmed — the server's rule, offered by the field.
+  describe('วันที่ส่ง is not before the order confirmation (fix round 1, L1)', () => {
+    const today = bangkokTodayIso();
+    const be = (iso) => `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${Number(iso.slice(0, 4)) + 543}`;
+    const confirmedOn = addDaysIso(today, -3);
+    // 00:30 Bangkok on confirmedOn = 17:30 UTC the day before.
+    const events = [{ id: 1, kind: 'CUSTOMER_CONFIRMED', createdAt: `${addDaysIso(confirmedOn, -1)}T17:30:00.000Z` }];
+
+    it('the day before the confirmation is refused in the field; the day itself is sent', async () => {
+      const dialog = within(await open({ events }));
+      const field = dialog.getByLabelText('วันที่ส่ง');
+      fireEvent.change(field, { target: { value: be(addDaysIso(confirmedOn, -1)) } });
+      fireEvent.blur(field);
+      expect(field.value).toBe(be(today));
+      expect(dialog.getByText('วันที่อยู่นอกช่วงที่เลือกได้')).toBeTruthy();
+      fireEvent.change(field, { target: { value: be(confirmedOn) } });
+      fireEvent.blur(field);
+      submit();
+      await waitFor(() => expect(api.tickets.recordDelivery).toHaveBeenCalledTimes(1));
+      expect(api.tickets.recordDelivery.mock.calls[0][1].deliveredOn).toBe(confirmedOn);
+    });
+
+    it('the hint names the confirmation day when it is what sets the earliest day', async () => {
+      const dialog = within(await open({ events }));
+      const [y, m, d] = confirmedOn.split('-').map(Number);
+      const thaiShort = ['ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.', 'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.'][m - 1];
+      expect(dialog.getByTestId('delivery-date-hint').textContent)
+        .toBe(`เลือกได้ตั้งแต่วันยืนยันคำสั่งซื้อ ${d} ${thaiShort} ${y + 543} · วันครบกำหนดชำระนับจากวันที่ส่งครบ`);
+    });
+  });
+
+  // Fix round 1 (M2): the one-click ส่งมอบครบ asks for the same วันที่ส่ง, in a small confirm dialog.
+  describe('ส่งมอบครบ with วันที่ส่ง (fix round 1, M2)', () => {
+    const today = bangkokTodayIso();
+    const be = (iso) => `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${Number(iso.slice(0, 4)) + 543}`;
+    const COMPLETE = [{ action: 'COMPLETE_DELIVERY' }];
+    const openComplete = async (over = {}) => {
+      api.tickets.completeDelivery.mockReset();
+      api.tickets.completeDelivery.mockResolvedValue({});
+      renderPanel(OWNER, [], { items: lines, availableActions: COMPLETE, ...over });
+      fireEvent.click(await screen.findByTestId('deal-fulfilment-complete'));
+      return within(await screen.findByRole('dialog', { name: 'ส่งมอบครบทุกรายการ' }));
+    };
+    const confirm = (dialog) => fireEvent.click(dialog.getByRole('button', { name: 'ยืนยันส่งมอบครบ' }));
+
+    it('asks first: nothing is sent until confirmed; today sends the request exactly as before', async () => {
+      const dialog = await openComplete();
+      expect(api.tickets.completeDelivery).not.toHaveBeenCalled();
+      expect(dialog.getByLabelText('วันที่ส่ง').value).toBe(be(today));
+      confirm(dialog);
+      await waitFor(() => expect(api.tickets.completeDelivery).toHaveBeenCalledTimes(1));
+      expect(api.tickets.completeDelivery.mock.calls[0]).toEqual([1, { note: 'ส่งมอบครบจากหน้ารายละเอียดงาน' }]);
+    });
+
+    it('a past day up to 7 back goes as deliveredOn; 8 back is refused in the field', async () => {
+      const dialog = await openComplete();
+      const field = dialog.getByLabelText('วันที่ส่ง');
+      fireEvent.change(field, { target: { value: be(addDaysIso(today, -8)) } });
+      fireEvent.blur(field);
+      expect(field.value).toBe(be(today));
+      fireEvent.change(field, { target: { value: be(addDaysIso(today, -4)) } });
+      fireEvent.blur(field);
+      confirm(dialog);
+      await waitFor(() => expect(api.tickets.completeDelivery).toHaveBeenCalledTimes(1));
+      expect(api.tickets.completeDelivery.mock.calls[0]).toEqual([1,
+        { note: 'ส่งมอบครบจากหน้ารายละเอียดงาน', deliveredOn: addDaysIso(today, -4) }]);
+    });
+
+    it('ยกเลิก sends nothing', async () => {
+      const dialog = await openComplete();
+      fireEvent.click(dialog.getByRole('button', { name: 'ยกเลิก' }));
+      await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+      expect(api.tickets.completeDelivery).not.toHaveBeenCalled();
     });
   });
 

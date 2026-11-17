@@ -277,7 +277,10 @@ export function TodayOnPhone({
       </Button>
 
       {canCall || canQuote ? (
-        <div data-testid="today-quick-actions" role="group" aria-label="ทำต่อ" className="grid auto-cols-fr grid-flow-col gap-2">
+        // Two columns (fix round 1, review L6): three tiles in one 320px row wrapped ทำใบเสนอราคา to three lines and broke
+        // ส่งตัวอย่าง mid-word. โทรแล้ว and ส่งตัวอย่าง always come as a pair, so the tile count is odd exactly when
+        // ทำใบเสนอราคา shows, and it takes the whole second row.
+        <div data-testid="today-quick-actions" role="group" aria-label="ทำต่อ" className="grid grid-cols-2 gap-2">
           {canCall ? (
             <Button type="button" variant="secondary" className={TILE} onClick={onCall}>
               <Icon name="phone" size={16} />
@@ -292,7 +295,7 @@ export function TodayOnPhone({
           ) : null}
           {canQuote ? (
             // The same entry point and gate as ใบเสนอราคา's own "สร้างใบเสนอราคา" (canCreateDealQuotationStandalone).
-            <Link to="/quotations/new" className={cn(buttonVariants({ variant: 'secondary' }), TILE, 'no-underline')}>
+            <Link to="/quotations/new" className={cn(buttonVariants({ variant: 'secondary' }), TILE, 'col-span-2 no-underline')}>
               <Icon name="fileText" size={16} />
               ทำใบเสนอราคา
             </Link>

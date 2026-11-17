@@ -366,6 +366,25 @@ describe('MyWork on a phone — วันนี้ของฉัน', () => {
       expect([...row.children].map((tile) => tile.textContent)).toEqual(['โทรแล้ว', 'ส่งตัวอย่าง', 'ทำใบเสนอราคา']);
     });
 
+    // Fix round 1 (review L6): three tiles in one row squeezed ทำใบเสนอราคา onto three lines and broke ส่งตัวอย่าง
+    // mid-word at 320px. Two columns; an odd last tile takes the whole row. jsdom has no layout, so this pins the
+    // structure; the widths were measured in the browser (slice6d-shots w320/w375).
+    it('lays the quick row out in two columns, the odd last tile across both', async () => {
+      renderMyWork();
+      const row = await screen.findByTestId('today-quick-actions');
+      await within(row).findByRole('button', { name: 'โทรแล้ว' });
+      expect(row.className).toMatch(/(^|\s)grid-cols-2(\s|$)/);
+      expect(row.className).not.toMatch(/grid-flow-col/);
+      expect([...row.children].map((tile) => tile.className.includes('col-span-2'))).toEqual([false, false, true]);
+    });
+
+    it('with an even number of tiles none spans the row', async () => {
+      renderMyWork({ user: { id: 1, role: 'ceo', employeeId: 1, name: 'ซีอีโอ' } });
+      const row = await screen.findByTestId('today-quick-actions');
+      await within(row).findByRole('button', { name: 'โทรแล้ว' });
+      expect([...row.children].map((tile) => tile.className.includes('col-span-2'))).toEqual([false, false]);
+    });
+
     it('hides ทำใบเสนอราคา from someone the create-quotation entry points refuse', async () => {
       renderMyWork({ user: { id: 1, role: 'ceo', employeeId: 1, name: 'ซีอีโอ' } });
       const row = await screen.findByTestId('today-quick-actions');
