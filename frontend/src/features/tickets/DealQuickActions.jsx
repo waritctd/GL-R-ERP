@@ -8,21 +8,24 @@ import { bangkokTodayIso } from '../../utils/format.js';
 import { CallModal } from '../salesBoard/CallModal.jsx';
 import { withFollowUp } from '../salesBoard/FollowUpPicks.jsx';
 import { PlanVisitModal } from '../salesBoard/VisitDialogs.jsx';
+import { SampleSentModal } from '../salesBoard/SampleSentModal.jsx';
 
 /**
  * The deal header's quick actions (drawing a-deal): โทรแล้ว and นัดเข้าพบ, opening the SAME dialogs งานของฉัน uses
  * (salesBoard/CallModal, salesBoard/VisitDialogs' PlanVisitModal). They replace the deal page's old always-open
  * "บันทึกกิจกรรม" form as the everyday way to log a touch; the full form is still under "+ บันทึก" on the timeline.
+ * Slice 6d adds ส่งตัวอย่าง beside โทรแล้ว: the same SampleSentModal วันนี้ของฉัน opens, with this งาน fixed.
  *
  * Gates (the page passes them; both mirror the server):
  *   - canLogCall — TicketService#addActivity's requireDealOwnership: the deal's owner/keyer with the sales role, or
- *     sales_manager / ceo. The page's existing canAddActivity.
+ *     sales_manager / ceo. The page's existing canAddActivity. ส่งตัวอย่าง is the same endpoint, so the same gate.
  *   - canPlanVisit — VisitService#create on a deal: the same requireDealWriteAccess, AND the deal ACTIVE (it refuses
  *     "ดีลนี้ไม่ได้เปิดอยู่" otherwise).
  */
 export function DealQuickActions({ deal, canLogCall, canPlanVisit, canSetFollowUp = false, showToast }) {
   const queryClient = useQueryClient();
   const [calling, setCalling] = useState(false);
+  const [sampling, setSampling] = useState(false);
   const [planning, setPlanning] = useState(false);
   const ticketId = deal.ticketId;
 
@@ -42,6 +45,11 @@ export function DealQuickActions({ deal, canLogCall, canPlanVisit, canSetFollowU
       withFollowUp({ kind: 'CALL', activityDate: bangkokTodayIso(), note }, nextFollowUpAt)),
     onSuccess: refreshDeal,
   });
+  const sampleMutation = useMutation({
+    mutationFn: ({ note, nextFollowUpAt }) => api.tickets.addActivity(ticketId,
+      withFollowUp({ kind: 'SAMPLE_SENT', activityDate: bangkokTodayIso(), note }, nextFollowUpAt)),
+    onSuccess: refreshDeal,
+  });
   const visitMutation = useMutation({
     mutationFn: (payload) => api.salesVisits.create(payload),
     onSuccess: refreshDeal,
@@ -55,6 +63,12 @@ export function DealQuickActions({ deal, canLogCall, canPlanVisit, canSetFollowU
         <Button type="button" variant="secondary" size="sm" className="mobile:min-h-[44px]" onClick={() => setCalling(true)}>
           <Icon name="phone" size={14} />
           โทรแล้ว
+        </Button>
+      ) : null}
+      {canLogCall ? (
+        <Button type="button" variant="secondary" size="sm" className="mobile:min-h-[44px]" onClick={() => setSampling(true)}>
+          <Icon name="package" size={14} />
+          ส่งตัวอย่าง
         </Button>
       ) : null}
       {canPlanVisit ? (
@@ -76,6 +90,23 @@ export function DealQuickActions({ deal, canLogCall, canPlanVisit, canSetFollowU
               await callMutation.mutateAsync({ note, nextFollowUpAt });
               setCalling(false);
               showToast('success', 'บันทึกการโทรแล้ว');
+            } catch (error) {
+              showToast('error', error?.message || 'บันทึกไม่สำเร็จ');
+            }
+          }}
+        />
+      ) : null}
+      {sampling ? (
+        <SampleSentModal
+          deal={deal}
+          followUpAllowed={canSetFollowUp}
+          submitting={sampleMutation.isPending}
+          onClose={() => setSampling(false)}
+          onSubmit={async (_deal, note, nextFollowUpAt) => {
+            try {
+              await sampleMutation.mutateAsync({ note, nextFollowUpAt });
+              setSampling(false);
+              showToast('success', 'บันทึกส่งตัวอย่างแล้ว');
             } catch (error) {
               showToast('error', error?.message || 'บันทึกไม่สำเร็จ');
             }

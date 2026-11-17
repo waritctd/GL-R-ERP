@@ -355,12 +355,15 @@ describe('MyWork on a phone — วันนี้ของฉัน', () => {
   });
 
   describe('quick actions', () => {
-    it('offers โทรแล้ว and ทำใบเสนอราคา to a rep, and no ส่งตัวอย่าง (nothing records a sample)', async () => {
+    // Slice 6d: ส่งตัวอย่าง is recorded now (deal activity SAMPLE_SENT, V223), so the drawn tile is real — before 6d
+    // this test asserted its absence because nothing could record a sample.
+    it('offers โทรแล้ว, ส่งตัวอย่าง and ทำใบเสนอราคา to a rep, in the drawn order', async () => {
       renderMyWork();
       const row = await screen.findByTestId('today-quick-actions');
       expect(await within(row).findByRole('button', { name: 'โทรแล้ว' })).toBeTruthy();
+      expect(within(row).getByRole('button', { name: 'ส่งตัวอย่าง' })).toBeTruthy();
       expect(within(row).getByRole('link', { name: 'ทำใบเสนอราคา' }).getAttribute('href')).toBe('/quotations/new');
-      expect(screen.queryByText('ส่งตัวอย่าง')).toBeNull();
+      expect([...row.children].map((tile) => tile.textContent)).toEqual(['โทรแล้ว', 'ส่งตัวอย่าง', 'ทำใบเสนอราคา']);
     });
 
     it('hides ทำใบเสนอราคา from someone the create-quotation entry points refuse', async () => {
@@ -376,13 +379,73 @@ describe('MyWork on a phone — วันนี้ของฉัน', () => {
       expect(within(row).getByRole('link', { name: 'ทำใบเสนอราคา' })).toBeTruthy();
     });
 
-    it('hides โทรแล้ว when the rep has no open งาน to call about', async () => {
+    it('hides โทรแล้ว and ส่งตัวอย่าง when the rep has no open งาน to call about or send to', async () => {
       api.salesBoard.myWork.mockResolvedValue(workWith({ followUp: [], board: [] }));
       renderMyWork();
       // Wait for the payload: the row itself renders before /my-work answers (ruling 2).
       await screen.findByTestId('today-follow-up');
       const row = screen.getByTestId('today-quick-actions');
       expect(within(row).queryByRole('button', { name: 'โทรแล้ว' })).toBeNull();
+      expect(within(row).queryByRole('button', { name: 'ส่งตัวอย่าง' })).toBeNull();
+    });
+
+    describe('ส่งตัวอย่าง (slice 6d)', () => {
+      const openSample = async () => {
+        fireEvent.click(await within(await screen.findByTestId('today-quick-actions')).findByRole('button', { name: 'ส่งตัวอย่าง' }));
+        return within(await screen.findByRole('dialog', { name: 'ส่งตัวอย่าง' }));
+      };
+
+      it('one sheet: pick the งาน, say what was sent, follow up when — recorded as a SAMPLE_SENT activity today', async () => {
+        renderMyWork();
+        const sheet = await openSample();
+        fireEvent.change(sheet.getByLabelText(/^งาน/), { target: { value: '31' } });
+        fireEvent.change(sheet.getByLabelText(/^ส่งอะไร/), { target: { value: 'ตัวอย่าง Raku สีเทา 3 แผ่น' } });
+        fireEvent.click(sheet.getByRole('radio', { name: '1 สัปดาห์' }));
+        fireEvent.click(sheet.getByRole('button', { name: 'บันทึก' }));
+
+        await waitFor(() => expect(api.tickets.addActivity).toHaveBeenCalledWith(31, {
+          kind: 'SAMPLE_SENT', activityDate: TODAY, note: 'ตัวอย่าง Raku สีเทา 3 แผ่น', nextFollowUpAt: '2026-11-19',
+        }));
+        await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+      });
+
+      it('without a follow-up date the request carries no nextFollowUpAt key at all', async () => {
+        renderMyWork();
+        const sheet = await openSample();
+        fireEvent.change(sheet.getByLabelText(/^งาน/), { target: { value: '32' } });
+        fireEvent.change(sheet.getByLabelText(/^ส่งอะไร/), { target: { value: 'แคตตาล็อก' } });
+        fireEvent.click(sheet.getByRole('button', { name: 'บันทึก' }));
+        await waitFor(() => expect(api.tickets.addActivity).toHaveBeenCalledTimes(1));
+        expect(api.tickets.addActivity.mock.calls[0]).toStrictEqual([32, {
+          kind: 'SAMPLE_SENT', activityDate: TODAY, note: 'แคตตาล็อก',
+        }]);
+      });
+
+      it('a refusal is toasted and the sheet stays open with what was typed', async () => {
+        const showToast = vi.fn();
+        api.tickets.addActivity.mockRejectedValue(new Error('ไม่มีสิทธิ์เข้าถึงรายการนี้'));
+        renderMyWork({ showToast });
+        const sheet = await openSample();
+        fireEvent.change(sheet.getByLabelText(/^งาน/), { target: { value: '31' } });
+        fireEvent.change(sheet.getByLabelText(/^ส่งอะไร/), { target: { value: 'ตัวอย่างไม้' } });
+        fireEvent.click(sheet.getByRole('button', { name: 'บันทึก' }));
+        await waitFor(() => expect(showToast).toHaveBeenCalledWith('error', 'ไม่มีสิทธิ์เข้าถึงรายการนี้'));
+        expect(screen.getByRole('dialog', { name: 'ส่งตัวอย่าง' })).toBeTruthy();
+        expect(sheet.getByLabelText(/^ส่งอะไร/).value).toBe('ตัวอย่างไม้');
+      });
+
+      it('survives the switch to the full page with what was typed (the sheet is owned by MyWork)', async () => {
+        renderMyWork();
+        const sheet = await openSample();
+        fireEvent.change(sheet.getByLabelText(/^ส่งอะไร/), { target: { value: 'ตัวอย่างหิน' } });
+        act(() => viewport.set(false));
+        try {
+          expect(screen.getByRole('dialog', { name: 'ส่งตัวอย่าง' })).toBeTruthy();
+          expect(screen.getByLabelText(/^ส่งอะไร/).value).toBe('ตัวอย่างหิน');
+        } finally {
+          act(() => viewport.set(true));
+        }
+      });
     });
 
     it('โทรแล้ว picks a งาน — ควรตามต่อ first — then logs the call through the existing dialog', async () => {

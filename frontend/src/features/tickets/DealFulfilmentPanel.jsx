@@ -11,9 +11,10 @@ import { FormField } from '../../components/common/FormField.jsx';
 import { Panel } from '../../components/common/Layout.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
+import { ThaiDateInput } from '../../components/common/ThaiDateInput.jsx';
 import { cn } from '../../utils/cn.js';
 import { downloadBlob } from '../../utils/download.js';
-import { formatThaiDate, fulfilmentStatusLabel } from '../../utils/format.js';
+import { addDaysIso, bangkokTodayIso, formatThaiDate, fulfilmentStatusLabel } from '../../utils/format.js';
 import { depositReadyForIr } from './dealMoneyStatus.js';
 import { ImportStatusStrip } from '../importProgress/ImportStatusStrip.jsx';
 import { importStepIndex } from '../importProgress/importSteps.js';
@@ -631,7 +632,7 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
     items.forEach((item) => {
       lines[item.id] = String(Math.max(0, Number(item.qty || 0) - Number(item.qtyDelivered || 0)));
     });
-    setDeliveryDraft({ source, note: '', lines });
+    setDeliveryDraft({ source, note: '', lines, deliveredOn: bangkokTodayIso() });
     setDeliveryOpen(true);
   }
 
@@ -650,7 +651,14 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
       showToast?.('error', 'กรุณาระบุจำนวนส่งมอบอย่างน้อย 1 รายการ');
       return;
     }
-    recordDeliveryMutation.mutate({ source: deliveryDraft.source, note: deliveryDraft.note.trim() || null, lines });
+    // วันที่ส่ง (slice 6d): only a past day is sent; today leaves the request exactly as before (the server stamps
+    // the moment it records), as an unused ตามครั้งถัดไป does on a call.
+    const deliveredOn = deliveryDraft.deliveredOn && deliveryDraft.deliveredOn !== bangkokTodayIso()
+      ? deliveryDraft.deliveredOn : null;
+    recordDeliveryMutation.mutate({
+      source: deliveryDraft.source, note: deliveryDraft.note.trim() || null, lines,
+      ...(deliveredOn ? { deliveredOn } : {}),
+    });
   }
 
   function handleSetItemWeight() {
@@ -1113,6 +1121,10 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
                     }).join(', ')}
                     {record.deliveredByName ? ` · ${record.deliveredByName}` : ''}
                     {record.note ? ` · ${record.note}` : ''}
+                    {/* Slice 6d: a back-dated record says when it was keyed in (created_at), so the date shown
+                        first — the delivery day — is not mistaken for the day it was recorded. */}
+                    {record.createdAt && bangkokTodayIso(new Date(record.createdAt)) !== bangkokTodayIso(new Date(record.deliveredAt))
+                      ? ` · บันทึก ${formatThaiDate(record.createdAt)}` : ''}
                   </span>
                 </div>
               ))
@@ -1122,10 +1134,10 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
       </div>
 
       {deliveryOpen ? (
-        // Drawing m-delivery (2026-11-16). The request is unchanged (handleRecordDelivery): source, note, and the
-        // lines with a qty > 0. Not built from the drawing: "งวดที่ N · นัดส่ง …" (no delivery round or appointment
-        // reaches this panel) and "วันที่ส่ง" (RecordDeliveryRequest has no date — the server stamps the record).
-        // Every figure is the item's own qty / qtyDelivered and the remaining the tracker table above derives.
+        // Drawing m-delivery (2026-11-16). The request (handleRecordDelivery): source, note, the lines with a qty > 0,
+        // and — slice 6d — deliveredOn when วันที่ส่ง is a past day. Not built from the drawing: "นัดส่ง …" (owner
+        // answer 3: not now). Every figure is the item's own qty / qtyDelivered and the remaining the tracker table
+        // above derives.
         <Modal
           title="บันทึกการส่งสินค้า"
           subtitle={summary?.projectName || summary?.title || undefined}
@@ -1208,6 +1220,24 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
                 ))}
               </select>
             </label>
+            {/* วันที่ส่ง (slice 6d, owner answer 2): default today, back at most 7 days, never a future day — the
+                window TicketService#backDatedDeliveryInstant enforces on the server (the field's min/max only spare
+                the rep a refusal). The due date counts from it, so the hint says so. */}
+            <div className="flex flex-col gap-1.5">
+              <label htmlFor="delivery-date" className="text-sm font-bold text-text-secondary">วันที่ส่ง</label>
+              <ThaiDateInput
+                id="delivery-date"
+                value={deliveryDraft.deliveredOn ?? bangkokTodayIso()}
+                min={addDaysIso(bangkokTodayIso(), -7)}
+                max={bangkokTodayIso()}
+                aria-describedby="delivery-date-hint"
+                onChange={(e) => setDeliveryDraft((draft) => ({ ...draft, deliveredOn: e.target.value || bangkokTodayIso() }))}
+                className="min-h-[44px] w-full text-base"
+              />
+              <p id="delivery-date-hint" data-testid="delivery-date-hint" className="m-0 text-xs text-text-muted">
+                ย้อนหลังได้ไม่เกิน 7 วัน · วันครบกำหนดชำระนับจากวันที่ส่งครบ
+              </p>
+            </div>
             <label className="flex flex-col gap-1.5 text-sm font-bold text-text-secondary">
               หมายเหตุ
               <textarea className="min-h-16" value={deliveryDraft.note}

@@ -4,6 +4,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DealFulfilmentPanel } from './DealFulfilmentPanel.jsx';
 import { api } from '../../api/index.js';
+import { addDaysIso, bangkokTodayIso } from '../../utils/format.js';
 
 globalThis.React = React;
 
@@ -1597,14 +1598,81 @@ describe('DealFulfilmentPanel — บันทึกการส่งสิน�
     expect(table.className).not.toMatch(/min-w-/);
   });
 
-  it('keeps แหล่งสินค้า and หมายเหตุ, says what the server does when everything is delivered, and has no วันที่ส่ง', async () => {
+  // Before slice 6d this test asserted the dialog had NO วันที่ส่ง (RecordDeliveryRequest had no date). It has one now
+  // (owner answer 2): the rest of what it pinned is kept.
+  it('keeps แหล่งสินค้า and หมายเหตุ, says what the server does when everything is delivered, and has วันที่ส่ง', async () => {
     const dialogEl = await open();
     const dialog = within(dialogEl);
     expect(dialog.getByLabelText('แหล่งสินค้า')).toBeTruthy();
     expect(dialog.getByLabelText('หมายเหตุ')).toBeTruthy();
-    expect(dialogEl.textContent).not.toContain('วันที่ส่ง');
+    expect(dialog.getByLabelText('วันที่ส่ง')).toBeTruthy();
     expect(dialogEl.textContent).not.toContain('ดีล');
     expect(dialog.getByTestId('deal-fulfilment-record-delivery-submit').textContent).toBe('บันทึกการส่ง');
+  });
+
+  describe('วันที่ส่ง (slice 6d): default today, back at most 7 days, never a future day', () => {
+    const today = bangkokTodayIso();
+    const be = (iso) => `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${Number(iso.slice(0, 4)) + 543}`;
+    const typeDate = (dialog, iso) => {
+      const field = dialog.getByLabelText('วันที่ส่ง');
+      fireEvent.change(field, { target: { value: be(iso) } });
+      fireEvent.blur(field);
+    };
+
+    it('starts on today, and today sends the request exactly as before — no deliveredOn key', async () => {
+      const dialog = within(await open());
+      expect(dialog.getByLabelText('วันที่ส่ง').value).toBe(be(today));
+      submit();
+      await waitFor(() => expect(api.tickets.recordDelivery).toHaveBeenCalledTimes(1));
+      expect(Object.keys(api.tickets.recordDelivery.mock.calls[0][1])).toEqual(['source', 'note', 'lines']);
+    });
+
+    it('a day up to 7 back is sent as deliveredOn', async () => {
+      const dialog = within(await open());
+      typeDate(dialog, addDaysIso(today, -7));
+      submit();
+      await waitFor(() => expect(api.tickets.recordDelivery).toHaveBeenCalledTimes(1));
+      expect(api.tickets.recordDelivery.mock.calls).toEqual([[1, {
+        source: 'WAREHOUSE', note: null, lines: [{ itemId: 21, qty: 64 }, { itemId: 23, qty: 75.5 }],
+        deliveredOn: addDaysIso(today, -7),
+      }]]);
+    });
+
+    it('8 days back and tomorrow are refused in the field, which keeps the day it had', async () => {
+      const dialog = within(await open());
+      typeDate(dialog, addDaysIso(today, -8));
+      expect(dialog.getByLabelText('วันที่ส่ง').value).toBe(be(today));
+      expect(dialog.getByText('วันที่อยู่นอกช่วงที่เลือกได้')).toBeTruthy();
+      typeDate(dialog, addDaysIso(today, 1));
+      expect(dialog.getByLabelText('วันที่ส่ง').value).toBe(be(today));
+      submit();
+      await waitFor(() => expect(api.tickets.recordDelivery).toHaveBeenCalledTimes(1));
+      expect(api.tickets.recordDelivery.mock.calls[0][1]).not.toHaveProperty('deliveredOn');
+    });
+
+    it('says the window and that the payment due date counts from this day', async () => {
+      const dialog = within(await open());
+      expect(dialog.getByTestId('delivery-date-hint').textContent)
+        .toBe('ย้อนหลังได้ไม่เกิน 7 วัน · วันครบกำหนดชำระนับจากวันที่ส่งครบ');
+    });
+  });
+
+  it('the history line of a back-dated record also says when it was recorded', async () => {
+    api.tickets.listDeliveries.mockResolvedValue({
+      items: [
+        { deliveryId: 1, deliveredAt: '2026-11-10T05:00:00Z', createdAt: '2026-11-14T03:00:00Z', source: 'WAREHOUSE', items: [{ itemId: 21, qty: 30 }], deliveredByName: 'สมหญิง', note: null },
+        { deliveryId: 2, deliveredAt: '2026-11-15T03:00:00Z', createdAt: '2026-11-15T03:00:00Z', source: 'WAREHOUSE', items: [{ itemId: 21, qty: 26 }], deliveredByName: null, note: null },
+      ],
+    });
+    try {
+      renderPanel(OWNER, [], { items: lines, availableActions: ACTIONS });
+      const first = (await screen.findByText(/Equipe Raku 20x20: 30/)).parentElement;
+      expect(first.textContent).toContain('บันทึก 14 พ.ย. 2569');
+      const second = screen.getByText(/Equipe Raku 20x20: 26/).parentElement;
+      expect(second.textContent).not.toContain('บันทึก');
+    } finally {
+      api.tickets.listDeliveries.mockResolvedValue({ items: [] });
+    }
   });
 
   // Fix round 1, F3/F6: the note is CONDITIONAL — whether this save completes the deal is the server's call

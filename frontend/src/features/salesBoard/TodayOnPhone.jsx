@@ -11,6 +11,7 @@ import { returningLabel } from './FollowUpList.jsx';
 import { CASH_SERIES } from './CashCard.jsx';
 import { weekEndDay } from './cashFormat.js';
 import { VisitRow } from './VisitsThisWeek.jsx';
+import { dealName, dealPickGroups } from './dealPickGroups.js';
 import { dayLineLabel, isOverdue, nextVisit, shortWeekday, timeLabel, weekStartIso } from './visitWeek.js';
 
 const CARD = 'grid gap-1 rounded-md border border-border bg-surface p-3.5';
@@ -18,7 +19,6 @@ const CARD_TITLE = 'm-0 text-base font-extrabold text-text';
 // The quick row and the way-out row: a full-width 52px tile, so a thumb finds it without aiming.
 // Labels wrap rather than clip at 320px ("นัดเข้าพบทั้งสัปดาห์" is the longest).
 const TILE = 'min-h-[52px] mobile:min-h-[52px] w-full min-w-0 px-2 py-1.5 text-center text-sm leading-snug whitespace-normal';
-const dealName = (d) => d.title || d.customerName || `#${d.ticketId}`;
 
 /** "นัดถัดไป · 14:00" today, "นัดถัดไป · ศ. 13 · 10:00" on a later day (visitWeek.nextVisit picks which visit). */
 function nextHeading({ visit, isToday }) {
@@ -163,11 +163,7 @@ function CashCompact({ cash, todayIso }) {
  * with its other dialogs, so it survives the switch between the phone screen and the full page.
  */
 export function CallPicker({ followUp, board, onPick, onClose }) {
-  const quietIds = new Set(followUp.map((d) => d.ticketId));
-  const groups = [
-    { label: 'ควรตามต่อ', deals: followUp },
-    { label: 'งานอื่นของฉัน', deals: board.filter((d) => !quietIds.has(d.ticketId)) },
-  ].filter((g) => g.deals.length);
+  const groups = dealPickGroups(followUp, board);
   return (
     <Modal
       title="โทรหางานไหน"
@@ -231,12 +227,13 @@ function upcoming(work, ahead) {
  * นัดถัดไป reads this week's visits plus `ahead` — GET /api/sales/visits from today to `aheadTo` (today + 7) — so a
  * Monday visit is "next" on a Sunday. `carriedOver` is MyWork's ค้างจากสัปดาห์ก่อน query (the 31 days before Monday).
  *
- * Not built from the drawing: "ส่งตัวอย่าง" — no activity kind or endpoint records a sample sent on a deal
- * (DealActivityKind has none), so the button would be a fake action.
+ * ส่งตัวอย่าง (slice 6d): built now that a sample sent is a deal activity of its own (SAMPLE_SENT, V223) — it opens
+ * MyWork's SampleSentModal, one sheet: pick the งาน (the same groups โทรแล้ว's picker offers) · what was sent · ตามต่อ.
+ * Offered exactly when โทรแล้ว is: both need one of the rep's open งาน.
  */
 export function TodayOnPhone({
-  work, failed, onRetry, todayIso, user, ahead = [], aheadTo, carriedOver = [], onLog, onCall, onPlan, onTick,
-  onCancelVisit, onCreate, onShowFull, onResume, resuming = false,
+  work, failed, onRetry, todayIso, user, ahead = [], aheadTo, carriedOver = [], onLog, onCall, onSample, onPlan,
+  onTick, onCancelVisit, onCreate, onShowFull, onResume, resuming = false,
 }) {
   const followUp = work?.followUp ?? [];
   const board = work?.board ?? [];
@@ -285,6 +282,12 @@ export function TodayOnPhone({
             <Button type="button" variant="secondary" className={TILE} onClick={onCall}>
               <Icon name="phone" size={16} />
               โทรแล้ว
+            </Button>
+          ) : null}
+          {canCall ? (
+            <Button type="button" variant="secondary" className={TILE} onClick={onSample}>
+              <Icon name="package" size={16} />
+              ส่งตัวอย่าง
             </Button>
           ) : null}
           {canQuote ? (
