@@ -36,6 +36,7 @@ import {
   newLocationGroupId,
   REMAINDER_MODE_OPTIONS, UNLABELLED_LOCATION_TEXT, validateQuotationItem, VALIDITY_DAYS_OPTIONS,
   VALIDITY_MODE_OPTIONS, FULL_PAYMENT_TERM_OPTIONS,
+  carryContactDetails,
 } from './quotationMeta.js';
 import { CustomerDetailsFields } from './CustomerDetailsFields.jsx';
 import { ChangeCustomerModal } from './ChangeCustomerModal.jsx';
@@ -440,6 +441,16 @@ export function QuotationEditorPage({ user, showToast }) {
   // contract). Sent as `contactId`; it prints after "เรียน", never in the ผู้สั่งซื้อ slot. The ref is
   // for flushPendingContactSave (submit and download).
   const [contact, setContact] = useState(null);
+  // The picker's async save-refused revert calls `onChange` from a stale closure, so the previous
+  // contact is read from a ref, not from the render's `contact`.
+  const contactRef = useRef(contact);
+  useEffect(() => { contactRef.current = contact; }, [contact]);
+  // Every rep-driven change of the contact (pick, edit, revert, drop with the customer) carries the
+  // printed โทร./อีเมล boxes along. A reopened draft (applyEditorState, onResolve) must never refill.
+  const changeContact = (next) => {
+    setTerms((t) => carryContactDetails(t, contactRef.current, next));
+    setContact(next);
+  };
   const contactPickerRef = useRef(null);
   function updateDealForm(patch) {
     // The ดีล card reports ผู้รับ through the same patch-upward channel; it is quotation state, not deal-form
@@ -456,7 +467,7 @@ export function QuotationEditorPage({ user, showToast }) {
     if (Object.keys(dealPatch).length === 0) return;
     // A contact belongs to one customer (the server 400s another customer's), so a different
     // customer drops it. An edit of the same customer's ที่อยู่ also patches `customer`, so ids.
-    if ('customer' in dealPatch && String(dealPatch.customer?.id) !== String(dealForm.customer?.id)) setContact(null);
+    if ('customer' in dealPatch && String(dealPatch.customer?.id) !== String(dealForm.customer?.id)) changeContact(null);
     setDealForm((prev) => ({ ...prev, ...dealPatch }));
     setDirty(true);
   }
@@ -634,7 +645,7 @@ export function QuotationEditorPage({ user, showToast }) {
       // existing quotation).
       if (initializedFor === null || initializedFor.startsWith('t-') || initializedFor.startsWith('c-')) {
         setTerms((t) => ({ ...t, projectName: '' }));
-        setContact(null); // picked for the previous deal's customer
+        changeContact(null); // picked for the previous deal's customer
         projectNameSeededForTicket.current = null;
         recipientSeededForTicket.current = null;
         setInitializedFor(key);
@@ -2073,7 +2084,7 @@ export function QuotationEditorPage({ user, showToast }) {
         customerId={recordCustomerId ?? (isInlineCreate ? dealForm.customer?.id : null) ?? null}
         customerName={customerName}
         value={contact}
-        onChange={(next) => { setContact(next); setDirty(true); }}
+        onChange={(next) => { changeContact(next); setDirty(true); }}
         onResolve={setContact}
         showToast={showToast}
         idPrefix="quotation-contact"
@@ -3361,7 +3372,7 @@ export function QuotationEditorPage({ user, showToast }) {
             ]);
             setTerms((t) => ({ ...t, projectName: project.name }));
             // The server dropped the old customer's contact from every draft; so does the picker.
-            setContact(null);
+            changeContact(null);
             showToast('success', 'เปลี่ยนลูกค้าแล้ว');
           }}
         />

@@ -2253,3 +2253,17 @@ export function generateClientRequestId() {
  * quotation (include the engine when ids can collide). Drop the key after a successful record. */
 export const outcomeKeyFor = (map, scope, outcome) => (map[`${scope}:${outcome}`] ??= generateClientRequestId());
 export const dropOutcomeKey = (map, scope, outcome) => { delete map[`${scope}:${outcome}`]; };
+
+// The PDF prints only terms.orderedByPhone/Email, so a picked contact's values fill a box the rep left
+// blank or never changed from the previous contact's; typed text is kept.
+export function carryContactDetails(terms, prev, next) {
+  const carry = (cur, was, now) => {
+    const c = (cur ?? '').trim();
+    return !c || c === (was ?? '').trim() ? (now ?? '') : cur;
+  };
+  return {
+    ...terms,
+    orderedByPhone: carry(terms.orderedByPhone, prev?.phone, next?.phone),
+    orderedByEmail: carry(terms.orderedByEmail, prev?.email, next?.email),
+  };
+}
