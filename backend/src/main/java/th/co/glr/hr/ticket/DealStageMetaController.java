@@ -33,7 +33,8 @@ public class DealStageMetaController {
                 .toList(),
             "phases", DealStage.ORDER.stream().map(DealStage::phaseOf).distinct().sorted().toList(),
             "lostReasons", DealLostReason.ORDER,
-            "cancelReasons", DealCancelReason.ORDER,
+            // What a NEW cancellation offers (owner ruling 2026-11-16); retired codes stay valid but are not offered.
+            "cancelReasons", DealCancelReason.OFFERED,
             "routes", routes());
     }
 

@@ -61,4 +61,31 @@ class CreateTicketRequestValidationTest {
     void unspecifiedPassesBeanValidationBecauseTheServiceOwnsThatRefusal() {
         assertThat(violatedFields(withChannel(EntryChannel.UNSPECIFIED))).isEmpty();
     }
+
+    // The short create form's optional fields (2026-11-16; see DealLifecycleDialogsIntegrationTest). A channel is
+    // stated in each, so the only violation is the field under test.
+    private static CreateTicketRequest shortForm(String designerName, java.math.BigDecimal estimatedValue) {
+        return new CreateTicketRequest("Test deal", "NORMAL", "ลูกค้า", null, 77L, null, null,
+            EntryChannel.DESIGNER_LED, List.of(), null, null, null, designerName, estimatedValue, null);
+    }
+
+    @Test
+    void anEstimateMustBePositive() {
+        assertThat(violatedFields(shortForm(null, new java.math.BigDecimal("-1")))).containsExactly("estimatedValue");
+        assertThat(violatedFields(shortForm(null, java.math.BigDecimal.ZERO))).containsExactly("estimatedValue");
+        assertThat(violatedFields(shortForm(null, new java.math.BigDecimal("0.01")))).isEmpty();
+    }
+
+    /** The ceiling is the column's: NUMERIC(14,2), the same precision as imported_value (V215). */
+    @Test
+    void anEstimateMustFitTheColumn() {
+        assertThat(violatedFields(shortForm(null, new java.math.BigDecimal("999999999999.99")))).isEmpty();
+        assertThat(violatedFields(shortForm(null, new java.math.BigDecimal("1000000000000")))).containsExactly("estimatedValue");
+        assertThat(violatedFields(shortForm(null, new java.math.BigDecimal("1.005")))).containsExactly("estimatedValue");
+    }
+
+    @Test
+    void anOverlongDesignerNameIsRejected() {
+        assertThat(violatedFields(shortForm("ก".repeat(201), null))).containsExactly("designerName");
+    }
 }

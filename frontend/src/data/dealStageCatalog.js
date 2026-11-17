@@ -30,7 +30,9 @@ export const DEAL_STAGE_CATALOG = {
     'PRODUCT_FIT', 'PRICE', 'LEAD_TIME', 'PAYMENT_TERMS',
     'RELATIONSHIP', 'PROJECT_ON_HOLD', 'PROJECT_CANCELLED', 'ALREADY_PURCHASED',
   ],
-  cancelReasons: ['OWNER_CANCELLED', 'PROJECT_SUSPENDED', 'BUDGET_CANCELLED', 'OTHER'],
+  // DealCancelReason.OFFERED (owner ruling 2026-11-16): what a NEW cancellation offers. The three retired codes
+  // (OWNER_CANCELLED / PROJECT_SUSPENDED / BUDGET_CANCELLED) stay valid — see CANCEL_REASON_VALID in mockApi.js.
+  cancelReasons: ['DUPLICATE_DEAL', 'WRONG_CUSTOMER_OR_PROJECT', 'NO_REAL_PROJECT', 'OTHER'],
   // Stage CODES per entry channel, in DealStage.ORDER — what a deal LIST row reads to print its position on its
   // own route (`4/11`) instead of the catalog-wide `8/15`. UNSPECIFIED is all fifteen: DealRoute gives it no
   // off-route stage.

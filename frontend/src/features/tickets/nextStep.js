@@ -6,6 +6,7 @@
 // moves the deal on a document or payment; a stage the rep enters by hand says so (fix round 1).
 
 import { depositBypassed } from './dealMoneyStatus.js';
+import { chainNextStep } from '../documentChain/documentChainText.js';
 
 const QUOTE_FOLLOW_UP = { title: 'ติดตามผลใบเสนอราคา', hint: 'บันทึกผลแล้วเซลส์ย้ายงานไป S5 หรือเสนอราคาผู้ซื้อแล้วงานย้ายไป S6 ตามเอกสาร', tab: 'quote' };
 const PRESENTING = { title: 'นำเสนอสินค้าจนผู้ออกแบบตกลงสเปค', hint: 'ตกลงสเปคแล้ว เซลส์ย้ายงานไป S2 เอง', tab: 'overview' };
@@ -50,15 +51,21 @@ const NONE = Object.freeze({ kind: 'none', title: null, hint: null, tab: null })
  *   'closed' — CANCELLED / COMPLETED,
  *   'none'   — an unknown stage: named nothing rather than guessed.
  */
-export function nextStepFor({ salesStage, lifecycle, depositPolicy } = {}) {
+export function nextStepFor({ salesStage, lifecycle, depositPolicy, chain = null } = {}) {
   const byLifecycle = BY_LIFECYCLE[lifecycle];
   if (byLifecycle) return { ...byLifecycle };
   if (salesStage === 'CLOSED_PAID') return { kind: 'done', title: 'ปิดการขายแล้ว — เก็บเงินครบ', hint: null, tab: 'money' };
   // A deal that skips the deposit leaves ORDER_RECEIVED on its first payment (TicketService: the bypass target is
   // AWAITING_FINAL_PAYMENT, then autoAdvanceStage DEPOSIT_RECEIVED), never on a deposit notice.
-  if (salesStage === 'ORDER_RECEIVED' && depositBypassed(depositPolicy)) {
-    return { kind: 'step', title: 'รอรับชำระงวดแรก', hint: 'ไม่เก็บมัดจำ — ฝ่ายบัญชีบันทึกรับชำระงวดแรกแล้วงานย้ายไป S7 ตามเอกสาร', tab: 'money' };
+  const step = salesStage === 'ORDER_RECEIVED' && depositBypassed(depositPolicy)
+    ? { kind: 'step', title: 'รอรับชำระงวดแรก', hint: 'ไม่เก็บมัดจำ — ฝ่ายบัญชีบันทึกรับชำระงวดแรกแล้วงานย้ายไป S7 ตามเอกสาร', tab: 'money' }
+    : BY_STAGE[salesStage] ? { kind: 'step', ...BY_STAGE[salesStage] } : { ...NONE };
+  // Document chain (2026-11-17): at a stage whose work is on the เงิน tab, the line under the title is the chain's own
+  // next step (documentChainText.chainNextStep over the server's summary) — the sentence the quotation page's chain
+  // card prints — so the two pages name the same next step in the same words.
+  if (chain && step.kind === 'step' && step.tab === 'money') {
+    const line = chainNextStep(chain).line;
+    if (line) return { ...step, hint: line, fromChain: true };
   }
-  const step = BY_STAGE[salesStage];
-  return step ? { kind: 'step', ...step } : { ...NONE };
+  return step;
 }

@@ -49,11 +49,11 @@ export function Modal({
         data-testid={testId}
       >
         <header className="modal-header flex items-center justify-between gap-4 px-5 py-[18px] border-b border-border">
-          <div>
+          <div className="min-w-0">
             <h2 className="m-0">{title}</h2>
             {subtitle ? <p className="m-0 text-text-muted text-[length:var(--text-sm)]">{subtitle}</p> : null}
           </div>
-          <Button variant="icon" onClick={onClose} title="ปิด" aria-label="ปิด">
+          <Button variant="icon" onClick={onClose} title="ปิด" aria-label="ปิด" className="shrink-0">
             <Icon name="close" />
           </Button>
         </header>

@@ -7,6 +7,9 @@ import { DealPaymentSection } from './DealPaymentSection.jsx';
 import { api } from '../../api/index.js';
 import { downloadBlob } from '../../utils/download.js';
 import { formatThaiDate } from '../../utils/format.js';
+import {
+  chainDepositBlockedReason, chainDepositState, chainRemainingBlockedReason, chainRemainingState,
+} from '../../api/mockDocumentChainRules.js';
 
 globalThis.React = React;
 
@@ -20,9 +23,32 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         listByTicket: vi.fn(), issue: vi.fn(), preview: vi.fn(), downloadPdf: vi.fn(), downloadXlsx: vi.fn(),
       },
       storedRemainingInvoices: { listForTicket: vi.fn(), download: vi.fn() },
+      documentChain: { get: vi.fn() },
     },
   };
 });
+
+// Document chain (2026-11-17): the step STATES now come from the server's summary (GET /tickets/{id}/document-chain).
+// Each fixture's summary is the one the server would compute from the same deal facts — built here through the
+// mock's mirror of DocumentChainRules, which documentChainCases.test.js pins to the Java rules' state table.
+function chainFor({ summary, depositNotices = [], remainingInvoices = [], user }) {
+  const f = {
+    status: summary.status, lifecycle: summary.lifecycle ?? 'ACTIVE', depositPolicy: summary.depositPolicy ?? 'REQUIRED',
+    paymentStatus: summary.paymentStatus ?? null, fulfillmentStatus: summary.fulfillmentStatus ?? null,
+    noticeDraft: depositNotices.some((d) => d.status === 'DRAFT'), noticeIssued: depositNotices.some((d) => d.status === 'ISSUED'),
+    invoiceDraft: remainingInvoices.some((r) => r.status === 'DRAFT'), invoiceIssued: remainingInvoices.some((r) => r.status === 'ISSUED'),
+  };
+  const mayWrite = user.role === 'sales' && Number(summary.createdById) === Number(user.id);
+  const remainingState = chainRemainingState(f);
+  const remainingReason = chainRemainingBlockedReason(f);
+  return {
+    ticketId: 19, dealStatus: f.status, lifecycle: f.lifecycle,
+    order: { confirmed: f.paymentStatus != null, confirmable: false, confirmedFromQuotationId: null, confirmedAt: null },
+    deposit: { policy: f.depositPolicy, state: chainDepositState(f), blockedReason: chainDepositBlockedReason(f) },
+    remaining: { state: remainingState, blockedReason: remainingReason, canCreate: remainingState === 'TO_CREATE' && remainingReason == null },
+    viewer: { mayConfirmOrder: false, mayWriteDepositNotice: mayWrite, mayWriteRemainingInvoice: mayWrite },
+  };
+}
 
 const owner = { id: 1, role: 'sales' };
 const otherSales = { id: 2, role: 'sales' };
@@ -52,6 +78,7 @@ function renderSection({
   else api.depositNotices.listByTicket.mockResolvedValue({ depositNotices });
   if (remainingFails) api.storedRemainingInvoices.listForTicket.mockRejectedValue(new Error('boom'));
   else api.storedRemainingInvoices.listForTicket.mockResolvedValue({ remainingInvoices });
+  api.documentChain.get.mockResolvedValue({ documentChain: chainFor({ summary, depositNotices, remainingInvoices, user }) });
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   const showToast = vi.fn();
   const utils = render(
@@ -389,6 +416,37 @@ describe('DealPaymentSection — step 2 ใบแจ้งหนี้ส่ว�
     await settled();
     expect(remaining().queryByText('รอรับมัดจำก่อน')).toBeNull();
     expect(remaining().getByRole('button', { name: 'สร้างใบแจ้งหนี้ส่วนที่เหลือ' })).toBeTruthy();
+  });
+});
+
+describe('DealPaymentSection — fix round 1: never a button the server refuses', () => {
+  // F-2: the legacy cancelled status on an ACTIVE lifecycle is a dead deal (the quotation card says งานนี้ยกเลิกแล้ว).
+  it('a legacy cancelled-status deal on an ACTIVE lifecycle offers no create, and says why', async () => {
+    renderSection({ summary: summaryOf({ status: 'cancelled', lifecycle: 'ACTIVE', paymentStatus: 'CUSTOMER_CONFIRMED' }) });
+    await settled();
+    expect(deposit().queryByRole('button', { name: 'สร้างใบแจ้งยอดเงินรับมัดจำ' })).toBeNull();
+    expect(deposit().getByText(/งานพักหรือปิดอยู่/)).toBeTruthy();
+  });
+
+  // Surviving mutation F17: the create button follows the server's canCreate, not merely the TO_CREATE state.
+  it('deposit received but the goods are not in: no สร้างใบแจ้งหนี้ส่วนที่เหลือ even for the manager, and the reason', async () => {
+    renderSection({
+      summary: summaryOf({ paymentStatus: 'DEPOSIT_PAID', status: 'quotation_issued', fulfillmentStatus: null }),
+      depositNotices: [issuedNotice], canManageRemainingInvoice: true,
+    });
+    await settled();
+    expect(remaining().getByText('ยังไม่ออก')).toBeTruthy();
+    expect(remaining().queryByRole('button', { name: 'สร้างใบแจ้งหนี้ส่วนที่เหลือ' })).toBeNull();
+    expect(remaining().getByText('ออกได้เมื่อสินค้าถึงขั้นรับ/ส่งมอบแล้ว')).toBeTruthy();
+  });
+
+  // F-4 on the deal page: an unconfirmed no-deposit deal waits on the order, not on a deposit.
+  it('an unconfirmed no-deposit deal: step 2 never says รอรับมัดจำก่อน', async () => {
+    renderSection({ summary: summaryOf({ status: 'draft', depositPolicy: 'CREDIT_CUSTOMER', paymentStatus: null }), canManageRemainingInvoice: true });
+    await settled();
+    expect(remaining().queryByText('รอรับมัดจำก่อน')).toBeNull();
+    expect(remaining().getByText('ยังไม่ถึงขั้นตอน')).toBeTruthy();
+    expect(remaining().queryByRole('button')).toBeNull();
   });
 });
 

@@ -18,9 +18,10 @@ import { depositNoticesQueryOptions, pickDepositNotice } from '../deposits/creat
 import { DepositIssueSummary } from '../deposits/DepositNoticePage.jsx';
 import { canCreateDepositNoticeFromQuotation } from '../pricingRequests/pricingRequestMeta.js';
 import { newestQuotationByRequest } from '../quotations/quotationMeta.js';
-import { depositStatus } from './dealMoneyStatus.js';
+import { invalidateDealDocuments, useDocumentChain } from '../documentChain/documentChain.js';
+import { depositBadge, depositHint, remainingBadge, remainingHint } from '../documentChain/documentChainText.js';
 import { EVENT_KIND_LABEL, PAYMENT_TRACK_KINDS } from './DealHistoryPanel.jsx';
-import { isRemainingInvoiceReady, pickRemainingInvoice } from './remainingInvoiceReadiness.js';
+import { pickRemainingInvoice } from './remainingInvoiceReadiness.js';
 import { isOwnerOrKeyer } from './dealOwnership.js';
 import { ReceiptSourceChip } from '../finance/ReceiptSourceChip.jsx';
 
@@ -99,29 +100,11 @@ function Step({
   );
 }
 
-const DEP_BADGE = {
-  skipped: { label: 'ไม่เก็บมัดจำ', tone: 'neutral' },
-  notyet: { label: 'ยังไม่ถึงขั้นตอน', tone: 'neutral' },
-  create: { label: 'ยังไม่สร้าง', tone: 'warning' },
-  draft: { label: 'ร่าง', tone: 'warning' },
-  issued: { label: 'รอชำระ', tone: 'warning' },
-  paid: { label: 'ชำระแล้ว', tone: 'success' },
-};
-
-const DEP_HINT = {
-  skipped: 'ข้ามขั้นตอนนี้ — ไม่ต้องเก็บมัดจำสำหรับงานนี้',
-  notyet: 'สร้างได้เมื่อลูกค้ายืนยันคำสั่งซื้อ',
-  issued: 'รอลูกค้าชำระ — ฝ่ายบัญชียืนยันรับเงินที่หน้าการเงินของฝ่ายบัญชี',
-};
-
-const REM_BADGE = {
-  wait: { label: 'รอรับมัดจำก่อน', tone: 'neutral' },
-  create: { label: 'ยังไม่ออก', tone: 'warning' },
-  draft: { label: 'ร่าง', tone: 'warning' },
-  issued: { label: 'รอชำระ', tone: 'warning' },
-  paid: { label: 'ชำระแล้ว', tone: 'success' },
-  notneeded: { label: 'ไม่ต้องออก — ชำระครบจากมัดจำ', tone: 'neutral' },
-};
+// The two document steps' STATES are the server's (GET /tickets/{id}/document-chain — the summary the quotation
+// page's chain card reads too), their badges and hints documentChainText.js's. Before 2026-11-17 this file derived
+// both itself; the derivation moved, unchanged, into DocumentChainRules (Java), so the two pages cannot disagree.
+const DEPOSIT_STEP = { NOT_REQUIRED: 'skipped', NOT_YET: 'notyet', TO_CREATE: 'create', DRAFT: 'draft', ISSUED: 'issued', PAID: 'paid' };
+const REMAINING_STEP = { WAITING: 'wait', TO_CREATE: 'create', DRAFT: 'draft', ISSUED: 'issued', PAID: 'paid', NOT_NEEDED: 'notneeded' };
 
 const ERROR_BADGE = { label: 'โหลดไม่สำเร็จ', tone: 'danger' };
 
@@ -179,12 +162,13 @@ export function DealPaymentSection({
   const doc = useMemo(() => pickDepositNotice(depositQuery.data), [depositQuery.data]);
   const invoice = pickRemainingInvoice(remainingQuery.data ?? []);
 
+  const chainQuery = useDocumentChain(ticketId, { enabled: !!ticketId && canReadDepositNotices });
+  const chain = chainQuery.data ?? null;
+
   function invalidateAfterDepositChange() {
-    queryClient.invalidateQueries({ queryKey: queryKeys.depositNotices(ticketId) });
-    queryClient.invalidateQueries({ queryKey: queryKeys.ticketDetail(ticketId) });
-    queryClient.invalidateQueries({ queryKey: queryKeys.ticketActions(ticketId) });
+    // The chain's keys (both pages) plus this tab's payment rows.
+    invalidateDealDocuments(queryClient, ticketId);
     queryClient.invalidateQueries({ queryKey: queryKeys.ticketPayments(ticketId) });
-    queryClient.invalidateQueries({ queryKey: ['tickets', 'list'] });
   }
 
   const issueMutation = useMutation({
@@ -225,12 +209,11 @@ export function DealPaymentSection({
   );
 
   // ── Step 1: ใบแจ้งยอดเงินรับมัดจำ ───────────────────────────────────────────────────────────────
-  const { bypassed, paid: depositPaid, noticeIssued } = depositStatus(summary);
   const acceptedPr = useMemo(
     () => pricingRequests.filter((pr) => pr.status === 'QUOTATION_ACCEPTED').sort((a, b) => b.id - a.id)[0] ?? null,
     [pricingRequests],
   );
-  const orderConfirmed = Boolean(acceptedPr?.orderConfirmedAt) || ps != null;
+  const orderConfirmed = Boolean(chain?.order?.confirmed);
   const canCreateNotice = acceptedPr != null && canCreateDepositNoticeFromQuotation(
     user, acceptedPr, newestQuotationByRequest(dealQuotations).get(acceptedPr.id) ?? null, depositQuery.data,
   );
@@ -238,17 +221,19 @@ export function DealPaymentSection({
   const legacyCreate = !doc && !canCreateNotice && isOwnerSales && hasAction('ISSUE_DEPOSIT_NOTICE')
     && summary.status === 'quotation_issued' && ps === 'CUSTOMER_CONFIRMED';
 
-  let dep;
-  if (bypassed) dep = 'skipped';
-  else if (depositPaid) dep = 'paid';
-  else if (doc?.status === 'ISSUED' || noticeIssued) dep = 'issued';
-  else if (doc?.status === 'DRAFT') dep = 'draft';
-  else if (orderConfirmed) dep = 'create';
-  else dep = 'notyet';
+  const dep = DEPOSIT_STEP[chain?.deposit?.state] ?? 'notyet';
   const depositDone = dep === 'skipped' || dep === 'paid';
+  // A direct-quotation deal has neither an accepted pricing request nor (on the Java service) an
+  // ISSUE_DEPOSIT_NOTICE action, so neither button above exists for it: when the page's main button does not create
+  // the notice either (e.g. it is บันทึกผลประมูล for a deal still holding another bidder), the step offers the same
+  // create — the page's own handler, the server's TO_CREATE state and its write flag (2026-11-17).
+  const chainCreate = !doc && !canCreateNotice && !legacyCreate && dep === 'create'
+    && Boolean(chain?.viewer?.mayWriteDepositNotice) && !chain?.deposit?.blockedReason;
 
-  const depositLoading = depositQuery.isLoading;
-  const depositError = depositQuery.isError;
+  const chainLoading = chainQuery.isLoading;
+  const chainError = chainQuery.isError;
+  const depositLoading = depositQuery.isLoading || chainLoading;
+  const depositError = depositQuery.isError || chainError;
   const depositReceipt = paymentReceipts
     .filter((r) => r.kind === 'DEPOSIT')
     .sort((a, b) => (toTimestamp(b.receivedAt) ?? -Infinity) - (toTimestamp(a.receivedAt) ?? -Infinity))[0];
@@ -258,32 +243,18 @@ export function DealPaymentSection({
       <span>มัดจำ {Math.round(Number(doc.depositPercent ?? 0.5) * 100)}%</span>
       <span className="font-bold tabular-nums text-text-secondary">{formatMoney(doc.totalPayable)}</span>
       {dep === 'paid' && depositReceipt ? <span>รับเงิน {formatThaiDate(depositReceipt.receivedAt)}</span>
-        : doc.docDate ? <span>ออกเมื่อ {formatThaiDate(doc.docDate)}</span> : null}
+        : (doc.issueDate ?? doc.docDate) ? <span>ออกเมื่อ {formatThaiDate(doc.issueDate ?? doc.docDate)}</span> : null}
     </>
   ) : null;
-  let depositHint = DEP_HINT[dep];
-  if (dep === 'create') {
-    if (mainButtonCreatesNotice) depositHint = 'ลูกค้ายืนยันคำสั่งซื้อแล้ว — กดปุ่ม "สร้างใบแจ้งยอดเงินรับมัดจำ" ด้านบน';
-    else depositHint = isOwnerSales ? 'ลูกค้ายืนยันคำสั่งซื้อแล้ว — สร้างจากใบเสนอราคาที่ยอมรับได้เลย' : 'ลูกค้ายืนยันคำสั่งซื้อแล้ว — รอฝ่ายขายสร้าง';
-  }
+  const depositStepHint = chain ? depositHint(chain, { mainButtonCreatesNotice }) : null;
 
   // ── Step 2: ใบแจ้งหนี้ส่วนที่เหลือ ──────────────────────────────────────────────────────────────
   const fullyPaid = ps === 'FULLY_PAID';
-  const remainingReady = isRemainingInvoiceReady(summary);
-  let rem;
-  if (invoice?.status === 'ISSUED') rem = fullyPaid ? 'paid' : 'issued';
-  else if (invoice?.status === 'DRAFT') rem = 'draft';
-  else if (fullyPaid) rem = 'notneeded'; // paid in full by the deposit (custom 100%): no remaining invoice to issue
-  else rem = depositDone ? 'create' : 'wait';
+  const rem = REMAINING_STEP[chain?.remaining?.state] ?? 'wait';
   const remDone = invoice?.status === 'ISSUED' || rem === 'notneeded';
-  const remainingLoading = remainingQuery.isLoading;
-  const remainingError = remainingQuery.isError;
-  let remainingHint = null;
-  if (rem === 'wait') remainingHint = 'ออกได้หลังฝ่ายบัญชียืนยันรับมัดจำ';
-  else if (rem === 'create') {
-    if (!remainingReady) remainingHint = 'ออกได้เมื่อสินค้าถึงขั้นรับ/ส่งมอบแล้ว';
-    else if (!canManageRemainingInvoice) remainingHint = 'รอฝ่ายขายออกเอกสาร';
-  }
+  const remainingLoading = remainingQuery.isLoading || chainLoading;
+  const remainingError = remainingQuery.isError || chainError;
+  const remainingStepHint = chain ? remainingHint(chain) : null;
 
   // ── Step 3: รับชำระครบ ────────────────────────────────────────────────────────────────────────
   const outstanding = Number(summary.amountOutstanding ?? 0);
@@ -378,8 +349,8 @@ export function DealPaymentSection({
             <Step
               no={1} id="deposit" title="ใบแจ้งยอดเงินรับมัดจำ" done={depositDone} muted={dep === 'skipped'}
               current={currentIndex === 0}
-              badge={depositLoading ? { label: 'กำลังโหลด…', tone: 'neutral' } : depositError ? ERROR_BADGE : DEP_BADGE[dep]}
-              meta={depositLoading || depositError ? null : docMeta} hint={depositLoading || depositError ? null : depositHint}
+              badge={depositLoading ? { label: 'กำลังโหลด…', tone: 'neutral' } : depositError ? ERROR_BADGE : depositBadge(chain)}
+              meta={depositLoading || depositError ? null : docMeta} hint={depositLoading || depositError ? null : depositStepHint}
               extra={previewHtml ? (
                 <div className="flex flex-col gap-1 pl-8 mobile:pl-0">
                   <div className="flex items-center justify-between">
@@ -390,9 +361,9 @@ export function DealPaymentSection({
                 </div>
               ) : null}
             >
-              {depositLoading ? null : depositError ? <ListError onRetry={() => depositQuery.refetch()} /> : (
+              {depositLoading ? null : depositError ? <ListError onRetry={() => { depositQuery.refetch(); chainQuery.refetch(); }} /> : (
                 <>
-                  {dep === 'create' && !mainButtonCreatesNotice && canCreateNotice ? (
+                  {dep === 'create' && !mainButtonCreatesNotice && (canCreateNotice || chainCreate) ? (
                     <Button type="button" variant="primary" disabled={actionLoading} onClick={() => onCreateDepositNotice?.()}>
                       สร้างใบแจ้งยอดเงินรับมัดจำ
                     </Button>
@@ -430,18 +401,18 @@ export function DealPaymentSection({
             </Step>
             <Step
               no={2} id="remaining" title="ใบแจ้งหนี้ส่วนที่เหลือ" done={remDone} current={currentIndex === 1}
-              badge={remainingLoading ? { label: 'กำลังโหลด…', tone: 'neutral' } : remainingError ? ERROR_BADGE : REM_BADGE[rem]}
+              badge={remainingLoading ? { label: 'กำลังโหลด…', tone: 'neutral' } : remainingError ? ERROR_BADGE : remainingBadge(chain)}
               meta={invoice && !remainingLoading && !remainingError ? (
                 <>
                   {invoice.docNumber ? mono(invoice.docNumber) : <span>ฉบับร่าง — ยังไม่ออกเลขที่เอกสาร</span>}
                   {invoice.docDate ? <span>{invoice.status === 'ISSUED' ? 'ออกเมื่อ' : 'วันที่'} {formatThaiDate(invoice.docDate)}</span> : null}
                 </>
               ) : null}
-              hint={remainingLoading || remainingError ? null : remainingHint}
+              hint={remainingLoading || remainingError ? null : remainingStepHint}
             >
-              {remainingLoading ? null : remainingError ? <ListError onRetry={() => remainingQuery.refetch()} /> : (
+              {remainingLoading ? null : remainingError ? <ListError onRetry={() => { remainingQuery.refetch(); chainQuery.refetch(); }} /> : (
                 <>
-                  {rem === 'create' && canManageRemainingInvoice && remainingReady ? (
+                  {rem === 'create' && canManageRemainingInvoice && chain?.remaining?.canCreate ? (
                     <Button type="button" variant="primary" onClick={() => onManageRemainingInvoice?.()}>สร้างใบแจ้งหนี้ส่วนที่เหลือ</Button>
                   ) : null}
                   {invoice?.status === 'ISSUED' ? downloadButton(
