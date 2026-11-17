@@ -1777,7 +1777,9 @@ public class TicketService {
             source,
             request == null ? null : request.note(),
             remaining,
-            request == null ? null : request.recipientName());
+            request == null ? null : request.recipientName(),
+            // Slice 6d fix round 1 (M2): the one-click ส่งมอบครบ takes the dialog's วันที่ส่ง, same window.
+            request == null ? null : request.deliveredOn());
         return recordDeliveryInternal(ticket, delivery, actor, true);
     }
 
@@ -1788,7 +1790,7 @@ public class TicketService {
         if (request == null || request.lines() == null || request.lines().isEmpty()) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุรายการส่งสินค้า");
         }
-        java.time.Instant deliveredAt = backDatedDeliveryInstant(request.deliveredOn());
+        java.time.Instant deliveredAt = backDatedDeliveryInstant(request.deliveredOn(), s.id());
         String source = request.source() == null ? "" : request.source().trim().toUpperCase();
         if (!DELIVERY_SOURCES.contains(source)) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "source ต้องเป็น WAREHOUSE หรือ STOCK");
@@ -1873,10 +1875,18 @@ public class TicketService {
      * day — at most {@link #MAX_DELIVERY_BACK_DAYS} back on the Asia/Bangkok calendar — is stored at 12:00 Bangkok on
      * that day: every reader of the column takes its Bangkok calendar date (paymentTermsRowSql's
      * {@code delivered_on}, the history's date), and noon keeps that date the same in any zone from UTC−5 to UTC+12,
-     * so a browser formatting the instant in local time still shows the day. Never a future day. 400, writing nothing:
-     * this runs after the caller's permission check and before any write. The window is the server's, not the client's.
+     * so a browser formatting the instant in local time still shows the day (UTC−5 to UTC+14). Never a future day.
+     *
+     * <p>Fix round 1 (L1, controller ruling): never before the day the order was confirmed either — the Asia/Bangkok
+     * date of {@link TicketRepository#findOrderConfirmedAt} (the document chain's own "order confirmed": the latest
+     * confirm-from-quotation event, else the latest CUSTOMER_CONFIRMED). The earliest allowed day is the later of
+     * today − {@link #MAX_DELIVERY_BACK_DAYS} and that day, and the 400 names it. A deal with no confirmation event has
+     * the 7-day window only.
+     *
+     * <p>400, writing nothing: this runs after the caller's permission check and before any write. The window is the
+     * server's, not the client's.
      */
-    private java.time.Instant backDatedDeliveryInstant(LocalDate deliveredOn) {
+    private java.time.Instant backDatedDeliveryInstant(LocalDate deliveredOn, long ticketId) {
         if (deliveredOn == null) {
             return null;
         }
@@ -1884,9 +1894,17 @@ public class TicketService {
         if (deliveredOn.isAfter(today)) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "วันที่ส่งต้องไม่เป็นวันในอนาคต");
         }
-        if (deliveredOn.isBefore(today.minusDays(MAX_DELIVERY_BACK_DAYS))) {
-            throw new ApiException(HttpStatus.BAD_REQUEST,
-                "ย้อนวันที่ส่งได้ไม่เกิน " + MAX_DELIVERY_BACK_DAYS + " วัน");
+        LocalDate windowStart = today.minusDays(MAX_DELIVERY_BACK_DAYS);
+        LocalDate confirmedOn = tickets.findOrderConfirmedAt(ticketId)
+            .map(at -> LocalDate.ofInstant(at, java.time.ZoneId.of("Asia/Bangkok")))
+            .orElse(null);
+        boolean confirmationGoverns = confirmedOn != null && confirmedOn.isAfter(windowStart);
+        LocalDate earliest = confirmationGoverns ? confirmedOn : windowStart;
+        if (deliveredOn.isBefore(earliest)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, (confirmationGoverns
+                ? "วันที่ส่งต้องไม่ก่อนวันยืนยันคำสั่งซื้อ"
+                : "ย้อนวันที่ส่งได้ไม่เกิน " + MAX_DELIVERY_BACK_DAYS + " วัน")
+                + " — เลือกได้ตั้งแต่ " + ThaiText.date(earliest));
         }
         if (deliveredOn.equals(today)) {
             return null;
