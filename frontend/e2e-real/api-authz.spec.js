@@ -229,6 +229,7 @@ test.describe('document chain summary — DepositNoticeService#requireTicketView
 //   3. rows: every owner's for sales_manager / ceo (as /visits/team), the caller's OWN for sales (as /visits).
 // The owner predicate itself is proven by DealPlannedVisitsScopeIntegrationTest (real Postgres, wrong-way-round,
 // mutation-checked); here it is pinned on whatever the seed holds: a sales caller never receives another owner's row.
+// That row loop is vacuous on a seed with no planned visits; deal-follow-up.spec.js creates its own and is not.
 // ─────────────────────────────────────────────────────────────────────────────
 test.describe('planned visits on a deal — VisitService#plannedOnDeal', () => {
   /** @type {Record<string, import('@playwright/test').APIRequestContext>} */
