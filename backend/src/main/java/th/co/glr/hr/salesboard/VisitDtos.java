@@ -19,10 +19,15 @@ public final class VisitDtos {
      * only (review NEW-2 / NEW-A). Null otherwise. {@code dealMoved} says why, when the name is set: true when the
      * deal was reassigned at or after this visit was created ("ดีลนี้ย้ายไปให้ …"), false when the visit's owner never
      * held it — a keyer's or a manager's own visit ("… ดีลนี้เป็นของ …"). Always false when the name is null.
+     * {@code dealFollowUpOpen} (slice 6b fix round 1): the visit is on a deal, its owner is the deal's current owner
+     * ({@code created_by}, so a tick lands on the deal) and the deal is ACTIVE — exactly when ตามต่อ may set the deal's
+     * follow-up date (TicketService#requireVisitFollowUpWritable). Unlike dealMovedToName it does not depend on the
+     * owner having a Thai name.
      */
     public record VisitDto(long id, long ownerId, String ownerName, Long ticketId, String ticketTitle,
                            String contactName, LocalDate plannedDate, LocalTime plannedTime, String status,
-                           Instant doneAt, String note, String dealMovedToName, boolean dealMoved) {}
+                           Instant doneAt, String note, String dealMovedToName, boolean dealMoved,
+                           boolean dealFollowUpOpen) {}
 
     /**
      * POST /api/sales/visits. {@code done = true} records a visit that already happened (the phone's บันทึกเข้าพบ):

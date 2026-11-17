@@ -159,6 +159,35 @@ class DealActivityFollowUpIntegrationTest extends AbstractDealQuotationSlice2Int
         assertThat(activityCount(deal)).isEqualTo(1);
     }
 
+    // ── fix round 1 (review M1) ──────────────────────────────────────────────
+
+    @Test
+    void aCallWithNoDateOnAPausedDeal_isStillRecordedExactlyAsBeforeThisSlice() {
+        long deal = deal(salesActor);
+        LocalDate original = nextFollowUp(deal);
+        jdbc.update("UPDATE sales.ticket SET lifecycle = 'ON_HOLD' WHERE ticket_id = :id", Map.of("id", deal));
+
+        DealActivityDto logged = ticketService.addActivity(deal,
+            new DealActivityRequest(TODAY, DealActivityKind.CALL, "ลูกค้าขอพักไว้ก่อน"), salesActor);
+
+        assertThat(logged.note()).isEqualTo("ลูกค้าขอพักไว้ก่อน");
+        assertThat(activityCount(deal)).isEqualTo(1);
+        assertThat(nextFollowUp(deal)).isEqualTo(original);
+    }
+
+    @Test
+    void aDateRefusedOnAPausedDeal_saysInThaiThatItIsTheDateThatCannotBeSet() {
+        long deal = deal(salesActor);
+        jdbc.update("UPDATE sales.ticket SET lifecycle = 'ON_HOLD' WHERE ticket_id = :id", Map.of("id", deal));
+
+        var refused = refusal(() -> ticketService.addActivity(deal,
+            new DealActivityRequest(TODAY, DealActivityKind.CALL, null, TODAY.plusDays(7)), salesActor),
+            HttpStatus.CONFLICT);
+
+        assertThat(refused.getMessage()).contains("ตั้งวันตามครั้งถัดไปไม่ได้").contains("ไม่ใส่วัน");
+        assertThat(activityCount(deal)).isZero();
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────────
 
     /** A QC employee holding hr.employee.can_create_quotation, resolved through the real session resolver: it acts

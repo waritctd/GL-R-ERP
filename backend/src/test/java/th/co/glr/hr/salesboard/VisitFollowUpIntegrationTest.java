@@ -256,6 +256,95 @@ class VisitFollowUpIntegrationTest extends AbstractDealQuotationSlice2Integratio
         assertThat(original).isNotEqualTo(today);
     }
 
+    // ── fix round 1 ──────────────────────────────────────────────────────────
+
+    /** Review M3: the 60-second de-duplication must not drop a date the duplicate carries. */
+    @Test
+    void aDuplicateLogWithinAMinuteThatAddsADate_appliesTheDate_withoutASecondVisitOrActivity() throws Exception {
+        long deal = deal(salesActor);
+        long first = ok(log(deal, "คุณอรุณ", null), salesActor).get("id").asLong();
+
+        long again = ok(log(deal, "คุณอรุณ", today.plusDays(7)), salesActor).get("id").asLong();
+
+        assertThat(again).isEqualTo(first);
+        assertThat(visitCount()).isEqualTo(1);
+        assertThat(siteVisitRows(deal)).isEqualTo(1);
+        assertThat(nextFollowUp(deal)).isEqualTo(today.plusDays(7));
+    }
+
+    @Test
+    void aDuplicateLogWithinAMinuteThatChangesTheDate_appliesTheNewDate() throws Exception {
+        long deal = deal(salesActor);
+        ok(log(deal, "คุณอรุณ", today.plusDays(3)), salesActor);
+
+        ok(log(deal, "คุณอรุณ", today.plusDays(14)), salesActor);
+
+        assertThat(visitCount()).isEqualTo(1);
+        assertThat(nextFollowUp(deal)).isEqualTo(today.plusDays(14));
+    }
+
+    @Test
+    void aDuplicateLogCarryingARefusedDate_isRefusedLikeAFreshOne_andChangesNothing() throws Exception {
+        long deal = deal(salesActor);
+        LocalDate original = nextFollowUp(deal);
+        ok(log(deal, "คุณอรุณ", null), salesActor);
+
+        assertThat(status(log(deal, "คุณอรุณ", today.minusDays(1)), salesActor)).isEqualTo(400);
+
+        assertThat(visitCount()).isEqualTo(1);
+        assertThat(nextFollowUp(deal)).isEqualTo(original);
+    }
+
+    /** Review M1: a date refused because the deal is paused says so in Thai; the tick without a date still works. */
+    @Test
+    void aDateRefusedOnAPausedDeal_saysSoInThai_andTheTickWithoutADateStillWorks() throws Exception {
+        long deal = deal(salesActor);
+        long visit = plan(salesActor, deal, today);
+        jdbc.update("UPDATE sales.ticket SET lifecycle = 'ON_HOLD' WHERE ticket_id = :id", Map.of("id", deal));
+
+        MvcResult refused = perform(done(visit, today.plusDays(7)), salesActor);
+        assertThat(refused.getResponse().getStatus()).isEqualTo(409);
+        assertThat(refused.getResponse().getContentAsString(StandardCharsets.UTF_8))
+            .contains("ตั้งวันตามต่อไม่ได้").contains("ไม่ใส่วัน");
+        assertThat(visitStatus(visit)).isEqualTo("PLANNED");
+
+        ok(post("/api/sales/visits/" + visit + "/done").contentType(MediaType.APPLICATION_JSON).content("{}"), salesActor);
+        assertThat(visitStatus(visit)).isEqualTo("DONE");
+    }
+
+    /**
+     * Review M1 / LOW: VisitDto.dealFollowUpOpen tells the dialogs exactly when the server accepts ตามต่อ (the visit's
+     * activity lands on its deal, and the deal is ACTIVE) — including the case dealMovedToName cannot express, a deal
+     * owner with no Thai name.
+     */
+    @Test
+    void dealFollowUpOpenIsTrueOnlyWhereTheServerAcceptsADate() throws Exception {
+        long own = deal(salesActor);
+        assertThat(ok(createRequest(own, "ก", today, false, null), salesActor).get("dealFollowUpOpen").asBoolean())
+            .as("own visit on own ACTIVE deal").isTrue();
+        assertThat(ok(createRequest(null, "ข", today, false, null), salesActor).get("dealFollowUpOpen").asBoolean())
+            .as("no deal").isFalse();
+        assertThat(ok(createRequest(own, "ค", today, false, null), salesManagerActor).get("dealFollowUpOpen").asBoolean())
+            .as("a manager's own visit on a rep's deal").isFalse();
+
+        long paused = deal(salesActor);
+        long pausedVisit = plan(salesActor, paused, today);
+        jdbc.update("UPDATE sales.ticket SET lifecycle = 'ON_HOLD' WHERE ticket_id = :id", Map.of("id", paused));
+        assertThat(ok(post("/api/sales/visits/" + pausedVisit + "/done").contentType(MediaType.APPLICATION_JSON)
+            .content("{}"), salesActor).get("dealFollowUpOpen").asBoolean()).as("paused after planning").isFalse();
+
+        UserPrincipal nameless = actor(createEmployee("ไม่มีชื่อ", "nameless-64@glr.co.th", "SALES", "แผนกขาย", null),
+            "sales");
+        jdbc.update("UPDATE hr.employee SET first_name_th = '', last_name_th = '' WHERE employee_id = :id",
+            Map.of("id", nameless.id()));
+        long keyed = deal(salesActor);
+        jdbc.update("UPDATE sales.ticket SET created_by = :owner, keyed_by = :keyer WHERE ticket_id = :id",
+            Map.of("owner", nameless.id(), "keyer", salesActor.id(), "id", keyed));
+        JsonNode keyerVisit = ok(createRequest(keyed, "ง", today, false, null), salesActor);
+        assertThat(keyerVisit.get("dealMovedToName").isNull()).as("the owner has no Thai name").isTrue();
+        assertThat(keyerVisit.get("dealFollowUpOpen").asBoolean()).as("a keyer's visit, owner nameless").isFalse();
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────────
 
     private UserPrincipal grantHolder() {

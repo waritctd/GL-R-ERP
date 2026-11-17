@@ -41,7 +41,9 @@ public class VisitRepository {
                    SELECT 1 FROM sales.ticket_event te
                     WHERE te.ticket_id = t.ticket_id AND te.kind = 'EDITED'
                       AND te.message LIKE '{OWNER_CHANGED_PREFIX}%'
-                      AND te.created_at >= v.created_at)) AS deal_moved
+                      AND te.created_at >= v.created_at)) AS deal_moved,
+               -- Slice 6b fix round 1: where ตามต่อ may set the deal's follow-up date (requireVisitFollowUpWritable).
+               (t.ticket_id IS NOT NULL AND v.owner_id = t.created_by AND t.lifecycle = 'ACTIVE') AS deal_follow_up_open
           FROM sales.visit v
           JOIN hr.employee e ON e.employee_id = v.owner_id
           LEFT JOIN sales.ticket t ON t.ticket_id = v.ticket_id
@@ -159,6 +161,6 @@ public class VisitRepository {
             rs.getString("ticket_title"), rs.getString("contact_name"), rs.getObject("planned_date", LocalDate.class),
             time == null ? null : time.toLocalTime(), rs.getString("status"),
             doneAt == null ? null : doneAt.toInstant(), rs.getString("note"), rs.getString("deal_moved_to_name"),
-            rs.getBoolean("deal_moved"));
+            rs.getBoolean("deal_moved"), rs.getBoolean("deal_follow_up_open"));
     }
 }

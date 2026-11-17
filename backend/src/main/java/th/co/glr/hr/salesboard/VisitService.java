@@ -136,6 +136,12 @@ public class VisitService {
             Optional<VisitDto> same = visits.findRecentDoneLog(actor.id(), request.ticketId(), contact,
                 request.plannedDate(), DUPLICATE_LOG_SECONDS);
             if (same.isPresent()) {
+                // Fix round 1 (M3): a duplicate is still the same visit, but a date it carries is never dropped — it
+                // has passed the same checks as a fresh log (above) and is written now, without a second activity.
+                if (nextFollowUpAt != null) {
+                    tickets.recordVisitFollowUp(request.ticketId(), actor.id(), nextFollowUpAt);
+                    return require(same.get().id());
+                }
                 return same.get();
             }
         }
