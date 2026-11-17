@@ -136,7 +136,7 @@ class DealQuotationSlice2HttpIntegrationTest extends AbstractDealQuotationSlice2
 
         MvcResult refused = send(post("/api/tickets/" + ticketId + "/deal-quotations"), quotationBody("DESIGNER"));
         assertThat(refused.getResponse().getStatus()).isEqualTo(409);
-        assertThat(body(refused)).isEqualTo("{\"message\":\"ดีลนี้มีคำขอราคาที่ยังดำเนินการอยู่ — "
+        assertThat(body(refused)).isEqualTo("{\"message\":\"งานนี้มีคำขอราคาที่ยังดำเนินการอยู่ — "
             + "ใช้ใบเสนอราคาจากคำขอราคา หรือยกเลิกคำขอราคาก่อน\",\"status\":409}");
     }
 
