@@ -38,7 +38,7 @@ vi.mock('../../api/index.js', async (importOriginal) => {
       designers: { search: vi.fn(), getByCode: vi.fn().mockRejectedValue(new Error('not found')) },
       customers: {
         search: vi.fn(), create: vi.fn(), update: vi.fn(), projects: vi.fn(), createProject: vi.fn(),
-        contacts: vi.fn(), createContact: vi.fn(),
+        contacts: vi.fn(), createContact: vi.fn(), updateContact: vi.fn(),
       },
     },
   };
@@ -440,5 +440,114 @@ describe('buildQuotationChecklist — a malformed Email is a blocking entry that
     expect(emailEntry({ orderedByEmail: '' })).toBeUndefined();
     expect(emailEntry({ orderedByEmail: EMAIL })).toBeUndefined();
     expect(emailEntry({})).toBeUndefined();
+  });
+});
+
+// The โทร./อีเมล boxes are the only phone and e-mail the document prints. A picked contact's own
+// เบอร์/อีเมล (the card) fill them, so the rep does not key the same number twice.
+describe('ผู้ติดต่อ — the picked contact fills โทร. / อีเมล', () => {
+  const KANNIKA = { id: 32, customerId: 5, firstName: 'กรรณิการ์', lastName: null, phone: '081-926-1114', email: 'kannika@contractor-b.example' };
+  const boxes = () => [screen.getByLabelText(PHONE_LABEL, BOX).value, screen.getByLabelText(EMAIL_LABEL, BOX).value];
+
+  beforeEach(() => {
+    api.customers.contacts.mockResolvedValue({ contacts: [SOMCHAI, KANNIKA] });
+  });
+
+  it('picking a contact puts its เบอร์ and อีเมล in the empty boxes, and the save sends them', async () => {
+    renderEditor('/quotations/5');
+    await screen.findByDisplayValue('Trilogy');
+
+    await pickContact('กรรณิการ์');
+    expect(boxes()).toEqual([KANNIKA.phone, KANNIKA.email]);
+
+    await waitFor(() => expect(saveButton().disabled).toBe(false));
+    fireEvent.click(saveButton());
+    await waitFor(() => expect(api.dealQuotations.update).toHaveBeenCalled());
+    expect(api.dealQuotations.update.mock.calls[0][1])
+      .toMatchObject({ contactId: KANNIKA.id, orderedByPhone: KANNIKA.phone, orderedByEmail: KANNIKA.email });
+  });
+
+  it('a box the rep already typed in is left alone', async () => {
+    renderEditor('/quotations/5');
+    await screen.findByDisplayValue('Trilogy');
+    fireEvent.change(screen.getByLabelText(PHONE_LABEL, BOX), { target: { value: PHONE } });
+
+    await pickContact('กรรณิการ์');
+    expect(boxes()).toEqual([PHONE, KANNIKA.email]);
+  });
+
+  it('untouched boxes follow a change of contact and empty on ล้าง; typed text survives both', async () => {
+    renderEditor('/quotations/5');
+    await screen.findByDisplayValue('Trilogy');
+
+    await pickContact('กรรณิการ์');
+    await pickContact('สมชาย'); // has a phone, no e-mail
+    expect(boxes()).toEqual([SOMCHAI.phone, '']);
+
+    fireEvent.change(screen.getByLabelText(EMAIL_LABEL, BOX), { target: { value: EMAIL } });
+    fireEvent.click(screen.getByRole('button', { name: 'ล้างผู้ติดต่อ' }));
+    expect(boxes()).toEqual(['', EMAIL]);
+  });
+
+  it('editing the card’s เบอร์ carries into an untouched โทร. box', async () => {
+    api.customers.updateContact.mockImplementation(async (_customerId, _contactId, patch) => ({ contact: { ...KANNIKA, ...patch } }));
+    renderEditor('/quotations/5');
+    await screen.findByDisplayValue('Trilogy');
+    await pickContact('กรรณิการ์');
+
+    const cardPhone = screen.getByLabelText('แก้ไขเบอร์ผู้ติดต่อ');
+    fireEvent.change(cardPhone, { target: { value: '02-555-0100' } });
+    fireEvent.blur(cardPhone);
+
+    await waitFor(() => expect(boxes()).toEqual(['02-555-0100', KANNIKA.email]));
+  });
+
+  // Blank is a choice the rep can make (print no number): reopening a draft never refills it.
+  it('a stored draft with a contact and empty boxes opens with the boxes still empty', async () => {
+    api.dealQuotations.get.mockResolvedValue({
+      quotation: draft({ contactId: KANNIKA.id, contactName: 'กรรณิการ์', contactPhone: KANNIKA.phone, contactEmail: KANNIKA.email }),
+    });
+    renderEditor('/quotations/5');
+    await screen.findByDisplayValue(KANNIKA.phone); // the card has the contact
+    expect(boxes()).toEqual(['', '']);
+  });
+
+  // The picked contact's values are only "untouched" while the picker still remembers that contact:
+  // every path that drops or reverts it must carry the boxes with it, or X's number prints on Y's quotation.
+  it('changing the customer on the new-deal card empties the filled boxes; the next customer’s contact fills them again', async () => {
+    const OTHER = { id: 6, name: 'บริษัท ซิตี้โฮม จำกัด', taxId: '0105559999999', address: 'ชลบุรี', phone: '03-000-0000' };
+    const OTHER_CONTACT = { id: 41, customerId: 6, firstName: 'มาลี', lastName: null, phone: '090-111-2222', email: 'malee@city-home.example' };
+    api.customers.search.mockResolvedValue({ customers: [CUSTOMER, OTHER] });
+    api.customers.contacts.mockImplementation(async (customerId) => ({ contacts: customerId === OTHER.id ? [OTHER_CONTACT] : [KANNIKA] }));
+    renderEditor('/quotations/new');
+    fireEvent.click(await screen.findByRole('button', { name: 'สร้างงานใหม่' }));
+
+    fireEvent.change(await screen.findByLabelText(/^ลูกค้า/), { target: { value: 'แฟชั่น' } });
+    fireEvent.mouseDown(await screen.findByRole('option', { name: new RegExp(CUSTOMER.name) }));
+    await pickContact('กรรณิการ์');
+    expect(boxes()).toEqual([KANNIKA.phone, KANNIKA.email]);
+
+    fireEvent.click(screen.getByRole('button', { name: 'ล้างลูกค้าที่เลือก' }));
+    fireEvent.change(await screen.findByLabelText(/^ลูกค้า/), { target: { value: 'ซิตี้' } });
+    fireEvent.mouseDown(await screen.findByRole('option', { name: new RegExp(OTHER.name) }));
+    await waitFor(() => expect(boxes()).toEqual(['', '']));
+
+    await pickContact('มาลี');
+    expect(boxes()).toEqual([OTHER_CONTACT.phone, OTHER_CONTACT.email]);
+  });
+
+  it('a refused edit of the card’s อีเมล puts the contact’s original address back in the box', async () => {
+    api.customers.updateContact.mockRejectedValue(new Error('refused'));
+    renderEditor('/quotations/5');
+    await screen.findByDisplayValue('Trilogy');
+    await pickContact('กรรณิการ์');
+    expect(boxes()).toEqual([KANNIKA.phone, KANNIKA.email]);
+
+    const cardEmail = screen.getByLabelText('แก้ไขอีเมลผู้ติดต่อ');
+    fireEvent.change(cardEmail, { target: { value: 'rejected@contractor-b.example' } });
+    fireEvent.blur(cardEmail);
+
+    await waitFor(() => expect(api.customers.updateContact).toHaveBeenCalled());
+    await waitFor(() => expect(boxes()).toEqual([KANNIKA.phone, KANNIKA.email]));
   });
 });
