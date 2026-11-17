@@ -135,6 +135,8 @@ export const queryKeys = {
   salesBoardQuietDays: () => ['salesBoard', 'quietDays'],
   // The weekly sales-analytics snapshot. Outside 'tickets': no deal write changes it.
   salesAnalyticsSnapshot: () => ['salesAnalytics', 'snapshot'],
+  // The weekly figures computed in the portal (analytics.metric_weekly); recomputed by a job, no write in the app changes them.
+  salesAnalyticsMetrics: () => ['salesAnalytics', 'metrics'],
   // The leave + check-in analytics page, per served scope. No write in the app changes it.
   peopleInsights: (scope, year) => ['peopleInsights', scope ?? 'default', year ?? 'default'],
   // Same reasoning, for UnitBasis's four codes. See features/pricingRequests/unitBasisCatalog.js.
