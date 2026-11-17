@@ -245,6 +245,8 @@ export function MyWork({ subtitle, before = null, user, showToast = () => {} }) 
           onCancelVisit={setCancelling}
           onCreate={() => setCreating(true)}
           onShowFull={() => setFullOnPhone(true)}
+          onResume={(deal) => resumeMutation.mutate(deal)}
+          resuming={resumeMutation.isPending}
         />
       ) : (
         <>

@@ -7,6 +7,7 @@ import { Skeleton } from '../../components/common/Skeleton.jsx';
 import { cn } from '../../utils/cn.js';
 import { canCreateDealQuotationStandalone } from '../quotations/quotationMeta.js';
 import { baht } from './boardFormat.js';
+import { returningLabel } from './FollowUpList.jsx';
 import { CASH_SERIES } from './CashCard.jsx';
 import { weekEndDay } from './cashFormat.js';
 import { VisitRow } from './VisitsThisWeek.jsx';
@@ -74,7 +75,12 @@ function MissedVisits({ visits, todayIso, onTick, onCancel }) {
   );
 }
 
-function FollowUpCompact({ deals, quietDays }) {
+/**
+ * ควรตามต่อ, compact. A quiet row is one link with its days-quiet chip. A RETURNING row (V220: a paused deal whose
+ * วันที่จะกลับมาดู has arrived) carries what the desktop list (FollowUpList) gives it: the return label instead of
+ * days quiet, and ดำเนินการต่อ — MyWork's own resume mutation — beside the link, never inside it.
+ */
+function FollowUpCompact({ deals, quietDays, onResume, resuming = false }) {
   const ids = useId();
   return (
     <section data-testid="today-follow-up" aria-labelledby={`${ids}-h`} className="rounded-md border border-border bg-surface">
@@ -84,16 +90,33 @@ function FollowUpCompact({ deals, quietDays }) {
       ) : (
         <ul className="m-0 list-none p-0 pb-1">
           {deals.map((deal) => (
-            <li key={deal.ticketId} className="border-t border-border-subtle first:border-t-0">
-              <Link
-                to={`/tickets/${deal.ticketId}`}
-                className="flex min-h-11 items-center justify-between gap-3 px-3.5 py-2 text-text no-underline hover:bg-surface-hover focus-visible:bg-surface-hover"
-              >
-                <span className="min-w-0 truncate text-sm font-bold">{dealName(deal)}</span>
-                <span className="shrink-0 rounded-full bg-warning-bg px-2 py-px text-2xs font-bold text-warning-dark">
-                  {`${deal.daysQuiet} วัน`}
-                </span>
-              </Link>
+            <li key={deal.ticketId} data-testid={`today-follow-up-${deal.ticketId}`} className="border-t border-border-subtle first:border-t-0">
+              {deal.returning ? (
+                <div className="flex items-center gap-2 pr-3.5">
+                  <Link
+                    to={`/tickets/${deal.ticketId}`}
+                    className="grid min-h-11 min-w-0 flex-1 content-center gap-0.5 py-2 pl-3.5 text-text no-underline hover:bg-surface-hover focus-visible:bg-surface-hover"
+                  >
+                    <span className="min-w-0 truncate text-sm font-bold">{dealName(deal)}</span>
+                    <span className="justify-self-start rounded-full bg-info-bg px-2 py-px text-2xs font-bold text-info-dark">
+                      {returningLabel(deal)}
+                    </span>
+                  </Link>
+                  <Button type="button" variant="secondary" size="sm" className="min-h-11 mobile:min-h-11 shrink-0" disabled={resuming} onClick={() => onResume?.(deal)}>
+                    ดำเนินการต่อ
+                  </Button>
+                </div>
+              ) : (
+                <Link
+                  to={`/tickets/${deal.ticketId}`}
+                  className="flex min-h-11 items-center justify-between gap-3 px-3.5 py-2 text-text no-underline hover:bg-surface-hover focus-visible:bg-surface-hover"
+                >
+                  <span className="min-w-0 truncate text-sm font-bold">{dealName(deal)}</span>
+                  <span className="shrink-0 rounded-full bg-warning-bg px-2 py-px text-2xs font-bold text-warning-dark">
+                    {`${deal.daysQuiet} วัน`}
+                  </span>
+                </Link>
+              )}
             </li>
           ))}
         </ul>
@@ -213,7 +236,7 @@ function upcoming(work, ahead) {
  */
 export function TodayOnPhone({
   work, failed, onRetry, todayIso, user, ahead = [], aheadTo, carriedOver = [], onLog, onCall, onPlan, onTick,
-  onCancelVisit, onCreate, onShowFull,
+  onCancelVisit, onCreate, onShowFull, onResume, resuming = false,
 }) {
   const followUp = work?.followUp ?? [];
   const board = work?.board ?? [];
@@ -278,7 +301,7 @@ export function TodayOnPhone({
 
       {work ? (
         <>
-          <FollowUpCompact deals={followUp} quietDays={work.quietDays ?? 14} />
+          <FollowUpCompact deals={followUp} quietDays={work.quietDays ?? 14} onResume={onResume} resuming={resuming} />
           {work.cash ? <CashCompact cash={work.cash} todayIso={todayIso} /> : null}
         </>
       ) : !failed ? (

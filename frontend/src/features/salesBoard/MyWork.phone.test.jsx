@@ -45,7 +45,7 @@ vi.mock('../../api/index.js', async (importOriginal) => {
     api: {
       salesBoard: { myWork: vi.fn() },
       salesVisits: { list: vi.fn(), create: vi.fn(), done: vi.fn(), cancel: vi.fn() },
-      tickets: { addActivity: vi.fn(), markLost: vi.fn(), create: vi.fn() },
+      tickets: { addActivity: vi.fn(), markLost: vi.fn(), create: vi.fn(), resume: vi.fn() },
       meta: { dealStages: vi.fn().mockResolvedValue(DEAL_STAGE_CATALOG) },
     },
   };
@@ -431,6 +431,44 @@ describe('MyWork on a phone — วันนี้ของฉัน', () => {
     expect(link.getAttribute('href')).toBe('/tickets/31');
     expect(within(link).getByText('27 วัน')).toBeTruthy();
     expect(within(list).queryByText('BMW Showroom เชียงใหม่')).toBeNull();
+  });
+
+  // V220 on the phone (review wn3 P1): a paused deal whose วันที่จะกลับมาดู has arrived is listed as on the desktop
+  // ควรตามต่อ (FollowUpList) — its return label and ดำเนินการต่อ — never as a quiet "n วัน" deal.
+  describe('a returning paused deal in ควรตามต่อ', () => {
+    const back = {
+      ...quiet, ticketId: 40, title: 'งานที่พักไว้', quiet: false, returning: true, pauseReturnOn: '2026-11-12', daysQuiet: 61,
+    };
+
+    it('shows the return label, not a quiet-days chip', async () => {
+      api.salesBoard.myWork.mockResolvedValue(workWith({ followUp: [back, quiet] }));
+      renderMyWork();
+      const row = await screen.findByTestId('today-follow-up-40');
+      expect(row.textContent).toContain('พักไว้ · ถึงวันกลับมาดู 12 พ.ย. 2569');
+      expect(row.textContent).not.toContain('61 วัน');
+      expect(within(row).getByRole('link', { name: /งานที่พักไว้/ }).getAttribute('href')).toBe('/tickets/40');
+      // The quiet row beside it keeps its chip and has no resume.
+      const quietRow = screen.getByTestId('today-follow-up-31');
+      expect(quietRow.textContent).toContain('27 วัน');
+      expect(within(quietRow).queryByRole('button', { name: 'ดำเนินการต่อ' })).toBeNull();
+    });
+
+    it('resumes from the phone with the desktop request, and the row leaves the list', async () => {
+      api.salesBoard.myWork.mockResolvedValue(workWith({ followUp: [back, quiet] }));
+      api.tickets.resume.mockResolvedValue({});
+      renderMyWork();
+      const row = await screen.findByTestId('today-follow-up-40');
+      const resume = within(row).getByRole('button', { name: 'ดำเนินการต่อ' });
+      // A thumb-sized tap target (≥44px), as every other phone control here.
+      expect(resume.className).toMatch(/min-h-11|min-h-\[44px\]|min-h-\[52px\]/);
+
+      api.salesBoard.myWork.mockResolvedValue(workWith({ followUp: [quiet] }));
+      fireEvent.click(resume);
+
+      await waitFor(() => expect(api.tickets.resume).toHaveBeenCalledWith(40, {}));
+      await waitFor(() => expect(screen.queryByTestId('today-follow-up-40')).toBeNull());
+      expect(screen.getByText('ควรตามต่อ (1)')).toBeTruthy();
+    });
   });
 
   describe('เงินเข้าเดือนนี้', () => {
