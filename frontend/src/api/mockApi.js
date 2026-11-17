@@ -8714,6 +8714,10 @@ function mockVisitDto(v) {
         && String(e.message ?? '').startsWith(MOCK_OWNER_CHANGED_MESSAGE_PREFIX)
         // A visit with no createdAt cannot be placed before the move, so it is never "moved" (v.created_at is NOT NULL server-side).
         && v.createdAt != null && Date.parse(e.createdAt) >= Date.parse(v.createdAt)),
+    // VisitRepository's deal_follow_up_open (slice 6b fix round 1): on a deal, the visit's owner is its created_by and
+    // the deal is ACTIVE — where TicketService#requireVisitFollowUpWritable accepts ตามต่อ.
+    dealFollowUpOpen: Boolean(ticket) && Number(ticket.createdById) === Number(v.ownerId)
+      && (ticket.lifecycle ?? 'ACTIVE') === 'ACTIVE',
   };
 }
 
@@ -8741,6 +8745,31 @@ function mockRequireVisitRange(from, to) {
 
 const MOCK_VISIT_ROLES = ['sales', 'sales_manager', 'ceo'];
 const MOCK_VISIT_TEAM_ROLES = ['sales_manager', 'ceo'];
+
+/** TicketService.requireFollowUpNotPast (slice 6.4): today or later in Asia/Bangkok; no upper bound. */
+function mockRequireFollowUpNotPast(nextFollowUpAt) {
+  if (nextFollowUpAt && nextFollowUpAt < mockTodayIso()) fail('วันตามครั้งถัดไปต้องเป็นวันนี้หรือหลังจากนี้', 400);
+}
+
+/**
+ * TicketService.requireVisitFollowUpWritable (slice 6.4): a visit's ตามต่อ may set the deal's follow-up date only where
+ * the visit's activity lands on the deal (its owner is the deal's created_by — recordVisitActivity's rule), the caller
+ * passes requireDealOwnership, the deal is ACTIVE, and the date is not past. A visit with no deal is refused (400).
+ * NOT authoritative — VisitFollowUpIntegrationTest is the evidence.
+ */
+function mockRequireVisitFollowUpWritable(ticketId, visitOwnerId, nextFollowUpAt, user) {
+  if (ticketId == null) fail('การเข้าพบนี้ไม่ได้อยู่ในงาน จึงตั้งวันตามต่อไม่ได้', 400);
+  const ticket = findTicketRaw(Number(ticketId));
+  if (Number(ticket.createdById) !== Number(visitOwnerId)) {
+    fail('การเข้าพบนี้ไม่ได้บันทึกลงงาน จึงตั้งวันตามต่อของงานไม่ได้', 403);
+  }
+  if (!mockCanDealOwnership(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+  if ((ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE') {
+    fail('งานนี้ไม่ได้อยู่ระหว่างดำเนินการ จึงตั้งวันตามต่อไม่ได้ — บันทึกเข้าพบได้โดยไม่ใส่วัน', 409);
+  }
+  mockRequireFollowUpNotPast(nextFollowUpAt);
+  return ticket;
+}
 
 /** VisitService.requireWritable: 404 when missing; the owner, or sales_manager / ceo. */
 function mockWritableVisit(user, id) {
@@ -10364,6 +10393,15 @@ export const api = {
       if (!mockCanDealOwnership(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       if (!payload?.activityDate) fail('ต้องระบุวันที่ทำกิจกรรม', 400);
       if (!dealIsValidActivityKind(payload?.kind)) fail(`ไม่รองรับประเภทกิจกรรม '${payload?.kind}'`, 400);
+      // Slice 6.4 (TicketService.addActivity): an optional nextFollowUpAt needs what PUT /tracking needs — the ownership
+      // above plus an ACTIVE deal — and a date not in the past; checked before anything is written.
+      const nextFollowUpAt = payload?.nextFollowUpAt || null;
+      if (nextFollowUpAt) {
+        if ((ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE') {
+          fail('งานนี้ไม่ได้อยู่ระหว่างดำเนินการ จึงตั้งวันตามครั้งถัดไปไม่ได้ — บันทึกได้โดยไม่ใส่วัน', 409);
+        }
+        mockRequireFollowUpNotPast(nextFollowUpAt);
+      }
       const activity = {
         id: mockDealActivitySeq++,
         ticketId: ticket.id,
@@ -10375,6 +10413,8 @@ export const api = {
         createdAt: new Date().toISOString(),
       };
       mockDealActivities.push(activity);
+      // ONLY the follow-up date — never the tracking full replace, which would wipe designer/owner/buyer names.
+      if (nextFollowUpAt) ticket.nextFollowUpAt = nextFollowUpAt;
       return delay(structuredClone(activity));
     },
 
@@ -14569,9 +14609,10 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
     },
   },
   // Mirrors VisitController / VisitService / VisitRepository (salesboard/). AUTHZ NOTE: these gates approximate the
-  // Java service and are NOT evidence — VisitScopeIntegrationTest is. list = the caller's own visits; team =
-  // sales_manager / ceo; a visit on a deal needs TicketService#requireDealWriteAccess (mockCanDealOwnership);
-  // done / cancel = the owner or sales_manager / ceo, only from PLANNED.
+  // Java service and are NOT evidence — VisitScopeIntegrationTest, VisitFollowUpIntegrationTest and
+  // DealPlannedVisitsScopeIntegrationTest are. list = the caller's own visits; team = sales_manager / ceo; a visit on
+  // a deal needs TicketService#requireDealWriteAccess (mockCanDealOwnership); done / cancel = the owner or
+  // sales_manager / ceo, only from PLANNED; nextFollowUpAt = TicketService#requireVisitFollowUpWritable.
   salesVisits: {
     async list({ from, to }) {
       const user = requireSession();
@@ -14610,13 +14651,23 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
         if (!mockCanDealOwnership(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
         if ((ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE') fail('งานนี้ไม่ได้เปิดอยู่ จึงนัดเข้าพบในงานนี้ไม่ได้', 400);
       }
+      // Slice 6.4 (VisitService.create): ตามต่อ only on a done log, on a deal, where the log lands on the deal.
+      const nextFollowUpAt = payload.nextFollowUpAt || null;
+      if (nextFollowUpAt) {
+        if (!done) fail('ตั้งวันตามต่อได้เมื่อบันทึกว่าเข้าพบแล้วเท่านั้น', 400);
+        mockRequireVisitFollowUpWritable(ticketId, user.id, nextFollowUpAt, user);
+      }
       if (done) {
         // VisitRepository.findRecentDoneLog: the same one-step log within 60 s is the same visit.
         const cutoff = Date.now() - 60_000;
         const same = mockVisits.filter((v) => v.ownerId === user.id && v.ticketId === ticketId
           && v.contactName === contactName && v.plannedDate === payload.plannedDate && v.status === 'DONE'
           && Date.parse(v.createdAt ?? 0) > cutoff).at(-1);
-        if (same) return delay(mockVisitDto(same));
+        if (same) {
+          // VisitService.create fix round 1 (M3): a duplicate's date is applied, never dropped (no second activity).
+          if (nextFollowUpAt) db.tickets.find((t) => t.id === ticketId).nextFollowUpAt = nextFollowUpAt;
+          return delay(mockVisitDto(same));
+        }
       }
       const visit = {
         id: mockVisitSeq++, ownerId: user.id, ticketId, contactName, plannedDate: payload.plannedDate,
@@ -14625,7 +14676,10 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       };
       mockVisits.push(visit);
       const ownsDeal = ticketId != null && Number(db.tickets.find((t) => t.id === ticketId)?.createdById) === user.id;
-      if (done && ownsDeal) mockLogSiteVisit(user.id, ticketId, note);
+      if (done && ownsDeal) {
+        mockLogSiteVisit(user.id, ticketId, note);
+        if (nextFollowUpAt) db.tickets.find((t) => t.id === ticketId).nextFollowUpAt = nextFollowUpAt;
+      }
       return delay(mockVisitDto(visit));
     },
     async done(id, payload = {}) {
@@ -14636,6 +14690,9 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       if (visit.status === 'PLANNED' && visit.plannedDate > mockTodayIso()) {
         fail('ยังไม่ถึงวันนัด จึงบันทึกว่าเข้าพบแล้วไม่ได้', 409);
       }
+      // Slice 6.4 (VisitService.markDone): ตามต่อ is checked before the tick, so a refusal ticks nothing.
+      const nextFollowUpAt = payload?.nextFollowUpAt || null;
+      if (nextFollowUpAt) mockRequireVisitFollowUpWritable(visit.ticketId, visit.ownerId, nextFollowUpAt, user);
       if (visit.status !== 'PLANNED') mockVisitNotPlanned(visit);
       visit.status = 'DONE';
       visit.doneAt = new Date().toISOString();
@@ -14645,8 +14702,28 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       if (ticket && Number(ticket.createdById) === Number(visit.ownerId)) {
         const recordedBy = visit.ownerId !== user.id ? `บันทึกโดย ${user.name}` : null;
         mockLogSiteVisit(visit.ownerId, visit.ticketId, [visit.note, recordedBy].filter(Boolean).join(' · ') || null);
+        if (nextFollowUpAt) ticket.nextFollowUpAt = nextFollowUpAt;
       }
       return delay(mockVisitDto(visit));
+    },
+    // Slice 6.5 — mirrors VisitService.plannedOnDeal + VisitRepository.findPlannedOnDeal(OwnedBy): VISIT_ROLES, then
+    // the whole-deal read rule of TicketService.get (requireDealReadAccess: import / account refused, a rep only their
+    // own or keyed deal), then the deal's PLANNED rows — every owner's for sales_manager / ceo, the caller's own for
+    // sales — in VisitRepository's ORDER BY planned_date, planned_time NULLS LAST, visit_id, with no LIMIT (the Java
+    // read has none). AUTHZ NOTE: approximate; DealPlannedVisitsScopeIntegrationTest is the evidence.
+    async plannedOnDeal(ticketId) {
+      const user = requireSession();
+      if (!MOCK_VISIT_ROLES.includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      const ticket = findTicketRaw(Number(ticketId));
+      if (user.role === 'sales' && !isOwnerOrKeyer(ticket, user.id)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      const ownerId = MOCK_VISIT_TEAM_ROLES.includes(user.role) ? null : user.id;
+      return delay(mockVisits
+        .filter((v) => v.ticketId === ticket.id && v.status === 'PLANNED' && (ownerId == null || v.ownerId === ownerId))
+        .sort((a, b) => a.plannedDate.localeCompare(b.plannedDate)
+          || (a.plannedTime == null) - (b.plannedTime == null)
+          || String(a.plannedTime ?? '').localeCompare(String(b.plannedTime ?? ''))
+          || a.id - b.id)
+        .map(mockVisitDto));
     },
     async cancel(id) {
       const user = requireSession();

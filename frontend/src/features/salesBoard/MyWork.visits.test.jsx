@@ -55,7 +55,7 @@ const visit = (over) => ({
 const visits = [
   visit({ id: 1, contactName: 'อรุณ อาร์คิเทค', plannedDate: otherDay.iso, status: 'DONE', note: 'เทียบสเปค',
     doneAt: '2026-11-10T03:00:00Z' }),
-  visit({ id: 2, contactName: 'Linea Interior', plannedTime: '14:00:00', ticketId: 31,
+  visit({ id: 2, contactName: 'Linea Interior', plannedTime: '14:00:00', ticketId: 31, dealFollowUpOpen: true,
     ticketTitle: 'สยามพารากอน · ห้องน้ำชั้น 3', note: 'ตามใบเสนอราคา' }),
   visit({ id: 3, contactName: 'Studio Nomad', plannedDate: otherDay.iso, status: 'CANCELLED' }),
   // PLANNED on other days pin the today-only filter of บันทึกเข้าพบ (review M5) and the overdue / future states.
@@ -212,6 +212,60 @@ describe('MyWork — นัดเข้าพบสัปดาห์นี้',
     await waitFor(() => expect(api.salesVisits.create).toHaveBeenCalledTimes(1));
     expect(api.salesVisits.create.mock.calls[0][0]).toEqual({
       contactName: 'Walk-in · คุณวราภรณ์', ticketId: null, plannedDate: today, note: 'บ้าน 2 ชั้น', done: true,
+    });
+  });
+
+  // Slice 6.4: ตามต่อ. Unused, the requests are byte-for-byte what they were (no nextFollowUpAt key at all).
+  it('ticking a visit on a deal with ตามต่อ sends the deal\'s next follow-up date with the tick', async () => {
+    renderMyWork();
+    const row = await screen.findByTestId('visit-2');
+    fireEvent.click(within(row).getByRole('button', { name: 'เข้าพบแล้ว: Linea Interior' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(within(dialog).getByRole('radiogroup', { name: 'ตามต่อ' })).getByRole('radio', { name: '1 สัปดาห์' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'บันทึก' }));
+
+    await waitFor(() => expect(api.salesVisits.done).toHaveBeenCalledTimes(1));
+    expect(api.salesVisits.done.mock.calls[0]).toStrictEqual([2, { note: undefined, nextFollowUpAt: '2026-11-19' }]);
+  });
+
+  it('without ตามต่อ the tick and the one-step log send exactly the requests they sent before', async () => {
+    renderMyWork();
+    await screen.findByTestId('visit-2');
+    fireEvent.click(screen.getByTestId('log-visit-header'));
+    let dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('radio', { name: 'ขอใบเสนอราคา' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'บันทึก' }));
+    await waitFor(() => expect(api.salesVisits.done).toHaveBeenCalledTimes(1));
+    expect(api.salesVisits.done.mock.calls[0]).toStrictEqual([2, { note: 'ขอใบเสนอราคา' }]);
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+
+    fireEvent.click(screen.getByTestId('log-visit-header'));
+    dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('radio', { name: 'ไม่ได้นัด' }));
+    fireEvent.change(within(dialog).getByLabelText(/พบใคร/), { target: { value: 'Walk-in' } });
+    fireEvent.change(within(dialog).getByLabelText(/^งาน/), { target: { value: '31' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'บันทึก' }));
+    await waitFor(() => expect(api.salesVisits.create).toHaveBeenCalledTimes(1));
+    expect(api.salesVisits.create.mock.calls[0][0]).toStrictEqual({
+      contactName: 'Walk-in', ticketId: 31, plannedDate: today, note: undefined, done: true,
+    });
+  });
+
+  it('an unplanned log on a deal with ตามต่อ sends the date with the one-step log', async () => {
+    renderMyWork();
+    await screen.findByTestId('visit-2');
+    fireEvent.click(screen.getByTestId('log-visit-header'));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('radio', { name: 'ไม่ได้นัด' }));
+    fireEvent.change(within(dialog).getByLabelText(/พบใคร/), { target: { value: 'Walk-in' } });
+    fireEvent.change(within(dialog).getByLabelText(/^งาน/), { target: { value: '31' } });
+    fireEvent.click(within(dialog).getByRole('radio', { name: '3 วัน' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'บันทึก' }));
+
+    await waitFor(() => expect(api.salesVisits.create).toHaveBeenCalledTimes(1));
+    expect(api.salesVisits.create.mock.calls[0][0]).toStrictEqual({
+      contactName: 'Walk-in', ticketId: 31, plannedDate: today, note: undefined, done: true,
+      nextFollowUpAt: '2026-11-15',
     });
   });
 

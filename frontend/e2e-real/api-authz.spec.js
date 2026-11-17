@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { REAL_ROLES } from './helpers/accounts.js';
-import { anonApi, apiSessionsFor, disposeSessions } from './helpers/api.js';
+import { anonApi, apiSessionsFor, apiWrite, disposeSessions } from './helpers/api.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // BACKEND AUTHORIZATION — real Spring services, real Postgres, real sessions.
@@ -217,5 +217,141 @@ test.describe('document chain summary — DepositNoticeService#requireTicketView
     test.skip(!foreign, 'every seeded deal belongs to the sales persona');
     expect((await sessions.sales.get(chainPath(foreign.id))).status(), `sales on deal ${foreign.id}`).toBe(403);
     expect((await sessions.ceo.get(chainPath(foreign.id))).status(), `ceo on deal ${foreign.id}`).toBe(200);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /api/sales/visits/deal/{ticketId}/planned — a deal's PLANNED visits for the deal page (slice 6.5). The read is the
+// INTERSECTION of two existing rules (VisitService#plannedOnDeal):
+//   1. requireRole(VISIT_ROLES = sales, sales_manager, ceo) — everyone else 403, before any lookup;
+//   2. TicketService#requireDealReadAccess — GET /api/tickets/{id}'s rule: 404 for a missing deal; a sales rep only a
+//      deal it owns or keyed (403 otherwise);
+//   3. rows: every owner's for sales_manager / ceo (as /visits/team), the caller's OWN for sales (as /visits).
+// The owner predicate itself is proven by DealPlannedVisitsScopeIntegrationTest (real Postgres, wrong-way-round,
+// mutation-checked); here it is pinned on whatever the seed holds: a sales caller never receives another owner's row.
+// That row loop is vacuous on a seed with no planned visits; deal-follow-up.spec.js creates its own and is not.
+// ─────────────────────────────────────────────────────────────────────────────
+test.describe('planned visits on a deal — VisitService#plannedOnDeal', () => {
+  /** @type {Record<string, import('@playwright/test').APIRequestContext>} */
+  let sessions;
+  const READERS = ['sales', 'sales_manager', 'ceo'];
+  const NON_READERS = except('sales', 'sales_manager', 'ceo');
+  const plannedPath = (id) => `/api/sales/visits/deal/${id}/planned`;
+  const MISSING = 2147480000;
+
+  test.beforeAll(async () => { sessions = await apiSessionsFor(ALL); });
+  test.afterAll(async () => { await disposeSessions(sessions); });
+
+  async function dealsOf(role) {
+    const response = await sessions[role].get('/api/tickets?size=50');
+    expect(response.status(), `${role} lists its deals`).toBe(200);
+    return (await response.json()).tickets ?? [];
+  }
+
+  test('roles outside the visit roles get 403 — before the deal is even looked up', async () => {
+    for (const role of NON_READERS) {
+      expect((await sessions[role].get(plannedPath(MISSING))).status(), `${role} on a missing deal`).toBe(403);
+    }
+  });
+
+  test('the visit roles get 404 for a deal that does not exist', async () => {
+    for (const role of READERS) {
+      expect((await sessions[role].get(plannedPath(MISSING))).status(), `${role} on a missing deal`).toBe(404);
+    }
+  });
+
+  test('each reader gets 200 on a deal from its own list, and a sales rep only its own PLANNED rows', async () => {
+    const me = (await (await sessions.sales.get('/api/auth/me')).json()).user;
+    let checked = 0;
+    for (const role of READERS) {
+      const [deal] = await dealsOf(role);
+      if (!deal) continue;
+      checked += 1;
+      const response = await sessions[role].get(plannedPath(deal.id));
+      expect(response.status(), `${role} on its own deal ${deal.id}`).toBe(200);
+      const rows = await response.json();
+      expect(Array.isArray(rows)).toBe(true);
+      for (const row of rows) {
+        expect(row.status, `${role}: only PLANNED`).toBe('PLANNED');
+        expect(Number(row.ticketId), `${role}: only this deal`).toBe(Number(deal.id));
+        if (role === 'sales') expect(Number(row.ownerId), 'sales: only its own visits').toBe(Number(me.id));
+      }
+      for (const denied of NON_READERS) {
+        expect((await sessions[denied].get(plannedPath(deal.id))).status(), `${denied} on deal ${deal.id}`).toBe(403);
+      }
+    }
+    test.skip(checked === 0, 'the seed has no deal any reader can list');
+  });
+
+  test('a sales rep is refused the planned visits of a deal it neither owns nor keyed (wrong-way-round)', async () => {
+    const me = (await (await sessions.sales.get('/api/auth/me')).json()).user;
+    const foreign = (await dealsOf('ceo')).find((deal) => Number(deal.createdById) !== Number(me.id)
+      && Number(deal.keyedById) !== Number(me.id));
+    test.skip(!foreign, 'every seeded deal belongs to the sales persona');
+    expect((await sessions.sales.get(plannedPath(foreign.id))).status(), `sales on deal ${foreign.id}`).toBe(403);
+    expect((await sessions.ceo.get(plannedPath(foreign.id))).status(), `ceo on deal ${foreign.id}`).toBe(200);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// nextFollowUpAt on POST /api/tickets/{id}/activities and POST /api/sales/visits (slice 6.4) — DENY DIRECTION ONLY, as
+// this file's header requires: every request below is refused before it writes, so the shared database is untouched.
+// Who may set a deal's follow-up date is who may already set it through PUT /tracking: TicketService
+// #requireDealOwnership (the deal's owner/keyer with the sales role, sales_manager, ceo). A visit adds VisitService's
+// VISIT_ROLES and requireDealWriteAccess in front. The allowed direction and "nothing written" are proven by
+// DealActivityFollowUpIntegrationTest and VisitFollowUpIntegrationTest (real Postgres, mutation-checked).
+// ─────────────────────────────────────────────────────────────────────────────
+test.describe('follow-up date writes — refused before anything is written', () => {
+  /** @type {Record<string, import('@playwright/test').APIRequestContext>} */
+  let sessions;
+  const bangkokToday = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Bangkok' }).format(new Date());
+  const plusDays = (iso, n) => {
+    const d = new Date(`${iso}T00:00:00Z`);
+    d.setUTCDate(d.getUTCDate() + n);
+    return d.toISOString().slice(0, 10);
+  };
+
+  test.beforeAll(async () => { sessions = await apiSessionsFor(ALL); });
+  test.afterAll(async () => { await disposeSessions(sessions); });
+
+  async function foreignDeal() {
+    const me = (await (await sessions.sales.get('/api/auth/me')).json()).user;
+    const listed = await sessions.ceo.get('/api/tickets?size=50');
+    expect(listed.status()).toBe(200);
+    return ((await listed.json()).tickets ?? []).find((deal) => Number(deal.createdById) !== Number(me.id)
+      && Number(deal.keyedById) !== Number(me.id));
+  }
+
+  async function nextFollowUpOf(id) {
+    const response = await sessions.ceo.get(`/api/tickets/${id}`);
+    expect(response.status()).toBe(200);
+    return (await response.json()).ticket.summary.nextFollowUpAt ?? null;
+  }
+
+  test('a call carrying nextFollowUpAt is 403 for another rep and for every role outside the deal writers', async () => {
+    const deal = await foreignDeal();
+    test.skip(!deal, 'every seeded deal belongs to the sales persona');
+    const before = await nextFollowUpOf(deal.id);
+    const body = { kind: 'CALL', activityDate: bangkokToday(), note: 'e2e: refused', nextFollowUpAt: plusDays(bangkokToday(), 7) };
+    for (const role of ['sales', ...except('sales', 'sales_manager', 'ceo')]) {
+      const response = await apiWrite(sessions[role], 'post', `/api/tickets/${deal.id}/activities`, body);
+      expect(response.status(), `${role} POST activities with nextFollowUpAt on deal ${deal.id}`).toBe(403);
+    }
+    expect(await nextFollowUpOf(deal.id), 'the deal\'s follow-up date is untouched').toBe(before);
+  });
+
+  test('a one-step visit log carrying nextFollowUpAt is 403 on another rep\'s deal and for every non-visit role', async () => {
+    const deal = await foreignDeal();
+    test.skip(!deal, 'every seeded deal belongs to the sales persona');
+    const before = await nextFollowUpOf(deal.id);
+    const body = {
+      ticketId: deal.id, contactName: 'e2e: refused', plannedDate: bangkokToday(), done: true,
+      nextFollowUpAt: plusDays(bangkokToday(), 7),
+    };
+    for (const role of ['sales', ...except('sales', 'sales_manager', 'ceo')]) {
+      const response = await apiWrite(sessions[role], 'post', '/api/sales/visits', body);
+      expect(response.status(), `${role} POST /api/sales/visits with nextFollowUpAt on deal ${deal.id}`).toBe(403);
+    }
+    expect(await nextFollowUpOf(deal.id), 'the deal\'s follow-up date is untouched').toBe(before);
   });
 });

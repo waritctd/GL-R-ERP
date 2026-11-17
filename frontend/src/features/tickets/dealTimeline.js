@@ -8,9 +8,14 @@ export const TIMELINE_FILTERS = Object.freeze([
 ]);
 
 // A ticked visit is written as a SITE_VISIT deal_activity (VisitService → TicketService#recordVisitActivity); a
-// MEETING is the rep's own "นัดพบ / ประชุม" log. Planned visits (sales.visit) are not served per deal, so they cannot
-// be in this timeline.
+// MEETING is the rep's own "นัดพบ / ประชุม" log. Planned visits (sales.visit PLANNED) are served per deal since slice
+// 6.5 (GET /api/sales/visits/deal/{id}/planned) and lead the timeline as upcoming rows — see showsPlannedVisits.
 const VISIT_ACTIVITY_KINDS = new Set(['SITE_VISIT', 'MEETING']);
+
+/** Slice 6.5: planned visits are visits, not documents — shown under ทั้งหมด and เข้าพบ. */
+export function showsPlannedVisits(filterId) {
+  return filterId !== 'documents';
+}
 
 // ticket.events that record a document being made, sent, decided or replaced (EVENT_KIND_LABEL in
 // DealHistoryPanel.jsx names each of them).

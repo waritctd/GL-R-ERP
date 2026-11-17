@@ -45,6 +45,12 @@ export function timeLabel(plannedTime) {
 
 const SHORT_MONTH = ['ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.', 'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.'];
 
+/** "ศ. 20 พ.ย." for one ISO date; with `todayIso`, a date outside today's year gets its พ.ศ. year: "อ. 5 ม.ค. 2570". */
+export function shortDayLabel(iso, todayIso = null) {
+  const label = `${shortWeekday(iso)} ${Number(iso.slice(8, 10))} ${SHORT_MONTH[Number(iso.slice(5, 7)) - 1]}`;
+  return todayIso && iso.slice(0, 4) !== todayIso.slice(0, 4) ? `${label} ${Number(iso.slice(0, 4)) + 543}` : label;
+}
+
 /** "9–15 พ.ย." for the week starting `mondayIso`; "30 พ.ย.–6 ธ.ค." across a month end. With `todayIso`, a week
  * that is not wholly in today's year gets the พ.ศ. year: "4–10 ม.ค. 2570". */
 export function weekRangeLabel(mondayIso, todayIso = null) {
