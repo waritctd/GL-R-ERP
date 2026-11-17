@@ -458,7 +458,7 @@ public class DealQuotationRepository {
     }
 
     /** The party whose quotation became the confirmed order has won (V204); the bid outcome also sets it. Remembers the
-     * status and not-awarded reason it overwrites (V222) so an undone confirmation can put them back; a row that is
+     * status and not-awarded reason it overwrites (V223) so an undone confirmation can put them back; a row that is
      * already AWARDED (the bid path awards first) is not touched, so nothing is remembered for it. */
     public int markPartyAwarded(long partyId) {
         return jdbc.update("""
@@ -470,7 +470,7 @@ public class DealQuotationRepository {
     }
 
     /** The reverse of {@link #markPartyAwarded}, for an undone order confirmation: AWARDED -> the status (and reason) it
-     * had before; QUOTED when none was remembered (awarded before V222). */
+     * had before; QUOTED when none was remembered (awarded before V223). */
     public int restorePartyBeforeAward(long partyId) {
         return jdbc.update("""
             UPDATE sales.deal_party
