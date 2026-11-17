@@ -555,6 +555,10 @@ public record TicketSummaryDto(
      * {@code expectedQuarter} (not money, but import could not read {@code expected_quarter} anywhere before — the board
      * that serves it is sales / sales_manager / ceo only — so serving it here would widen import's view). What this view
      * already showed it keeps showing: {@code buyerName}, the win probability, the follow-up dates.
+     *
+     * <p>Known, pre-existing gap (unchanged here): import's OWN action responses built straight from
+     * {@code TicketService#requireTicket} (e.g. markIrSent / markShipping / markGoodsReceived) are not projected — see
+     * {@code TicketService#projectForRole} — so they carry the full summary, money totals and these two fields included.
      */
     public TicketSummaryDto withoutMoney() {
         return new TicketSummaryDto(id, code, type, title, status, priority, createdById, createdByName,

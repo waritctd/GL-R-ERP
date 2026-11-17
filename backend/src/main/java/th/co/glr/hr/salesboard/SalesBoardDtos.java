@@ -28,8 +28,11 @@ public final class SalesBoardDtos {
      * deposit policy did not bypass the deposit ({@code DepositPolicy#NON_REQUIRED} reach AWAITING_FINAL_PAYMENT
      * without one); {@code paymentDueDate} / {@code overdue} are the deal's {@code TicketSummaryDto#paymentDueDate} /
      * {@code #overdue}, read through {@code TicketRepository#paymentDueStates} — the one derivation the finance
-     * worklist uses, never a second copy. Every board read is already scoped (own deals for my-work, sales_manager /
-     * ceo for the team reads), and those roles already read the deal's value, so these add no exposure.
+     * worklist uses, never a second copy — and SERVED ONLY where a screen shows them (fix round 1): on
+     * {@code MyWork.board} and {@code TeamBoard.board} cards from รอมัดจำ on (S6+). Everywhere else — earlier columns,
+     * {@code MyWork.followUp}, {@code TeamOverview.stale}, returning paused deals — they are null / false, never
+     * computed. Every board read is already scoped (own deals for my-work, sales_manager / ceo for the team reads), and
+     * those roles already read the deal's value, so these add no exposure.
      */
     public record BoardDeal(long ticketId, String title, String customerName, String projectName, long ownerId,
                             String ownerName, String salesStage, String repCode, int boardColumn, BigDecimal value,

@@ -73,7 +73,7 @@ class SummaryDrawnDetailsIntegrationTest extends AbstractDealQuotationSlice2Inte
     // ── wrong way round: import's no-money summary gains neither field ───────────────────────────
 
     @Test
-    void importNeverReceivesExpectedQuarterOrReceiptSource_onADealItCanList() {
+    void importsListRowNeverCarriesExpectedQuarterOrReceiptSource() {
         long id = orderDeal(salesActor);
         tickets.updateExpectedQuarter(id, "2026-Q4");
         receipt(id, "EXPRESS", null);
@@ -147,6 +147,36 @@ class SummaryDrawnDetailsIntegrationTest extends AbstractDealQuotationSlice2Inte
         assertThat(summary(id).receiptSource()).isEqualTo("MIXED");
     }
 
+    /** B1 (fix round 1): one hand-typed receipt plus one hand-typed receipt later LINKED to an Express document is
+     * MIXED — the express_doc_no branch, not only the source column, decides. */
+    @Test
+    void receiptSourceIsMixed_whenOneHandTypedReceiptIsLinkedToExpressAndTheOtherIsNot() {
+        long id = orderDeal(salesActor);
+        receipt(id, "MANUAL", null);
+        receipt(id, "MANUAL", "RE6900456");
+
+        assertThat(summary(id).receiptSource()).isEqualTo("MIXED");
+    }
+
+    /** Ruling (fix round 1): the chip describes how the money RECEIVED was recorded, so a refund / credit note
+     * (kind ADJUSTMENT) never counts — a hand-typed refund on an Express-paid deal leaves it Express. */
+    @Test
+    void aHandTypedRefundDoesNotMakeAnExpressDealMixed() {
+        long id = orderDeal(salesActor);
+        receipt(id, "EXPRESS", null);
+        receipt(id, "MANUAL", null, "ADJUSTMENT");
+
+        assertThat(summary(id).receiptSource()).isEqualTo("EXPRESS");
+    }
+
+    @Test
+    void aDealWhoseOnlyReceiptIsARefundHasNoReceiptSource() {
+        long id = orderDeal(salesActor);
+        receipt(id, "MANUAL", null, "ADJUSTMENT");
+
+        assertThat(summary(id).receiptSource()).isNull();
+    }
+
     @Test
     void receiptSourceIsNull_whenTheDealHasNoReceiptAtAll() {
         long id = orderDeal(salesActor);
@@ -179,9 +209,16 @@ class SummaryDrawnDetailsIntegrationTest extends AbstractDealQuotationSlice2Inte
     }
 
     private void receipt(long ticketId, String source, String expressDocNo) {
+        receipt(ticketId, source, expressDocNo, "DEPOSIT");
+    }
+
+    /** Zero-amount receipts cannot exist (V53: CHECK amount > 0) and there is no void/reversal column, so ADJUSTMENT
+     * is the only "money not received" kind a test can build. */
+    private void receipt(long ticketId, String source, String expressDocNo, String kind) {
         jdbc.update("""
             INSERT INTO sales.payment_receipt (ticket_id, kind, amount, recorded_by, source, express_doc_no, receipt_ref)
-            VALUES (:t, 'DEPOSIT', :a, :by, :source, :doc, :ref)""", new MapSqlParameterSource()
+            VALUES (:t, :kind, :a, :by, :source, :doc, :ref)""", new MapSqlParameterSource()
+            .addValue("kind", kind)
             .addValue("t", ticketId).addValue("a", new BigDecimal("1000.00")).addValue("by", salesActor.id())
             .addValue("source", source).addValue("doc", expressDocNo)
             .addValue("ref", "S6-" + ticketId + "-" + System.nanoTime()));

@@ -1404,7 +1404,8 @@ public class TicketRepository {
             return Map.of();
         }
         Map<Long, PaymentDueState> out = new HashMap<>();
-        summaryFacts(List.copyOf(ticketIds)).forEach((id, f) -> out.put(id, paymentDueState(f, f.paymentStatus())));
+        LocalDate today = quietRule.bangkokToday();
+        summaryFacts(List.copyOf(ticketIds)).forEach((id, f) -> out.put(id, paymentDueState(f, f.paymentStatus(), today)));
         return out;
     }
 
@@ -1418,11 +1419,14 @@ public class TicketRepository {
      * THE overdue decision (Java side), shared by {@link #enrichSummary} and {@link #paymentDueStates}. OVERDUE comes
      * from the payable quotation's terms + the delivery date, never from the stored billing due_date; an unpaid
      * deposit is never overdue. {@link #paymentOverduePredicate} is its SQL twin for the list scope and dashboard.
+     * {@code today} is the Asia/Bangkok calendar date ({@link QuietRule#bangkokToday()} — the same clock source the
+     * quiet rule uses, injectable in tests; the system clock in production, exactly the old {@code LocalDate.now(BANGKOK)}).
+     * Due ON {@code today} is not overdue; the Bangkok day after is.
      */
-    private static PaymentDueState paymentDueState(SummaryFacts f, String paymentStatus) {
+    private static PaymentDueState paymentDueState(SummaryFacts f, String paymentStatus, LocalDate today) {
         PaymentDue due = f.due();
         boolean overdue = due != null && due.date() != null
-            && LocalDate.now(BANGKOK).isAfter(due.date())
+            && today.isAfter(due.date())
             && outstanding(f.payable(), f.paid()).signum() > 0
             && !"DEPOSIT_NOTICE_ISSUED".equals(paymentStatus);
         return new PaymentDueState(due == null ? null : due.date(), overdue);
@@ -1444,7 +1448,7 @@ public class TicketRepository {
         String stage = derivePaymentStage(s, payable, paid, outstanding, f.balanceReceipt());
         // The one overdue decision (paymentDueState), shared with paymentDueStates — the board's due chip.
         PaymentDue due = f.due();
-        boolean overdue = paymentDueState(f, s.paymentStatus()).overdue();
+        boolean overdue = paymentDueState(f, s.paymentStatus(), quietRule.bangkokToday()).overdue();
         // Staleness only means anything for a deal actively being worked — a DRAFT that hasn't
         // started or a CLOSED_LOST/CANCELLED/COMPLETED deal is never flagged.
         boolean stale = DealLifecycle.ACTIVE.equals(s.lifecycle()) && f.stale();
@@ -2986,6 +2990,9 @@ public class TicketRepository {
          * TicketSummaryDto#receiptSource for the deal at {@code t}: EXPRESS when every receipt came from the Express
          * file (source, V213) or is linked to an Express document (express_doc_no, V214); MANUAL when none is; MIXED
          * when some are; NULL with no receipt at all ({@code bool_and} of no rows is NULL, so COUNT decides first).
+         * Owner ruling (fix round 1): the chip says how the money RECEIVED was recorded, so a refund / credit note
+         * (kind ADJUSTMENT) never counts, nor would a zero amount (impossible today: V53's CHECK amount > 0; there is no
+         * void / reversal column on payment_receipt).
          */
         static final String RECEIPT_SOURCE_SQL = """
             (SELECT CASE WHEN COUNT(*) = 0 THEN NULL
@@ -2993,7 +3000,7 @@ public class TicketRepository {
                          WHEN bool_or(pr.source = 'EXPRESS' OR pr.express_doc_no IS NOT NULL) THEN 'MIXED'
                          ELSE 'MANUAL' END
                FROM sales.payment_receipt pr
-              WHERE pr.ticket_id = t.ticket_id)""";
+              WHERE pr.ticket_id = t.ticket_id AND pr.kind <> 'ADJUSTMENT' AND pr.amount > 0)""";
 
         static final String SELECT = "SELECT t.ticket_id, ("
             + payableAmountSelect("t.ticket_id") + ") AS payable, ("

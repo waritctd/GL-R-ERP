@@ -170,9 +170,10 @@ public class SalesBoardService {
         }
         List<BoardDeal> board = repository.activeDealsOwnedBy(actor.id());
         // ควรตามต่อ also takes the caller's OWN paused deals whose วันที่จะกลับมาดู has arrived (V220); the board does not.
+        // Ranked BEFORE the due state is added: ควรตามต่อ shows no money chip, so its rows keep null (fix round 1, M1).
         List<BoardDeal> followUp = rankFollowUp(board, repository.returningPausedDealsOwnedBy(actor.id()),
             FOLLOW_UP_LIMIT);
-        return new MyWork(followUp, board, quietRule.quietDays(), visits.ownThisWeek(actor),
+        return new MyWork(followUp, repository.withPaymentDue(board), quietRule.quietDays(), visits.ownThisWeek(actor),
             cashForMonth(actor.id(), thisMonth()));
     }
 
@@ -197,7 +198,9 @@ public class SalesBoardService {
         if (!TEAM_ROLES.contains(actor.role())) {
             throw new ApiException(HttpStatus.FORBIDDEN, FORBIDDEN);
         }
-        return new SalesBoardDtos.TeamBoard(repository.activeDealsAllReps(), quietRule.quietDays());
+        // DealBoard renders this list, so it — and only it among the team reads — carries the due state.
+        return new SalesBoardDtos.TeamBoard(repository.withPaymentDue(repository.activeDealsAllReps()),
+            quietRule.quietDays());
     }
 
     /**

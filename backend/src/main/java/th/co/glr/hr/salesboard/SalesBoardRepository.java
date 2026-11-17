@@ -32,10 +32,11 @@ import th.co.glr.hr.ticket.WinProbabilityDefaults;
  * arrived ({@link QuietRule#returningSql}), with the same owner predicate split.
  *
  * <p>Slice 6.2 card fields: the value quotation's own {@code number}, {@code buyer_name}, the earliest OPEN DEPOSIT
- * {@code expected_payment} week and the deposit-received fact come from this statement; the due date and overdue flag
- * come from {@link TicketRepository#paymentDueStates} — ONE more statement per read for the whole row set (never one
- * per row), and the finance summary's own derivation, never a copy of it. Every read keeps its WHERE clause unchanged,
- * so the new fields ride on rows the caller could already see.
+ * {@code expected_payment} week and the deposit-received fact come from this statement. The due date and overdue flag
+ * do NOT: the reads leave them null / false, and {@link #withPaymentDue} adds them — the finance summary's own
+ * derivation ({@link TicketRepository#paymentDueStates}), never a copy — only where a screen shows them (fix round 1:
+ * {@code SalesBoardService} calls it for the two lists {@code DealBoard} renders), and only for cards from รอมัดจำ on.
+ * Every read keeps its WHERE clause unchanged, so the new fields ride on rows the caller could already see.
  */
 @Repository
 public class SalesBoardRepository {
@@ -106,6 +107,9 @@ public class SalesBoardRepository {
     private static final List<String> DEPOSIT_IN_HAND_STATUSES =
         List.of(PaymentTrack.DEPOSIT_PAID, PaymentTrack.AWAITING_FINAL_PAYMENT);
 
+    /** The first board column whose cards carry a money chip: รอมัดจำ (rep code S6, DealStage.boardColumnOf). */
+    static final int FIRST_MONEY_CHIP_COLUMN = 4;
+
     private final NamedParameterJdbcTemplate jdbc;
     private final QuietRule quietRule;
     private final TicketRepository tickets;
@@ -125,28 +129,26 @@ public class SalesBoardRepository {
 
     /** The caller's own ACTIVE deals — the deal's owner ({@code created_by}), not its keyer. */
     public List<BoardDeal> activeDealsOwnedBy(long ownerId) {
-        return withPaymentDue(jdbc.query(BOARD_SELECT + " AND t.created_by = :ownerId ORDER BY last_touched_at, t.ticket_id",
-            params().addValue("ownerId", ownerId), this::map));
+        return jdbc.query(BOARD_SELECT + " AND t.created_by = :ownerId ORDER BY last_touched_at, t.ticket_id",
+            params().addValue("ownerId", ownerId), this::map);
     }
 
     /** Every ACTIVE deal of every rep. Only for the sales_manager/ceo team overview. */
     public List<BoardDeal> activeDealsAllReps() {
-        return withPaymentDue(jdbc.query(BOARD_SELECT + " ORDER BY last_touched_at, t.ticket_id", params(), this::map));
+        return jdbc.query(BOARD_SELECT + " ORDER BY last_touched_at, t.ticket_id", params(), this::map);
     }
 
     /** The caller's own paused deals whose วันที่จะกลับมาดู has arrived — owner ({@code created_by}) scoped in the
      * WHERE clause exactly as {@link #activeDealsOwnedBy}. Same row order. */
     public List<BoardDeal> returningPausedDealsOwnedBy(long ownerId) {
-        return withPaymentDue(jdbc.query(
-            RETURNING_SELECT + " AND t.created_by = :ownerId ORDER BY last_touched_at, t.ticket_id",
-            params().addValue("ownerId", ownerId), this::map));
+        return jdbc.query(RETURNING_SELECT + " AND t.created_by = :ownerId ORDER BY last_touched_at, t.ticket_id",
+            params().addValue("ownerId", ownerId), this::map);
     }
 
     /** Every rep's returning paused deals. Only for the sales_manager/ceo team overview, like
      * {@link #activeDealsAllReps}. */
     public List<BoardDeal> returningPausedDealsAllReps() {
-        return withPaymentDue(jdbc.query(RETURNING_SELECT + " ORDER BY last_touched_at, t.ticket_id", params(),
-            this::map));
+        return jdbc.query(RETURNING_SELECT + " ORDER BY last_touched_at, t.ticket_id", params(), this::map);
     }
 
     /** The bind parameters every board read needs: the value statuses, the quiet threshold, and the Asia/Bangkok
@@ -160,14 +162,20 @@ public class SalesBoardRepository {
             .addValue("depositBypassPolicies", List.copyOf(DepositPolicy.NON_REQUIRED));
     }
 
-    /** The rows with the finance summary's due date and overdue flag (TicketRepository#paymentDueStates): one
-     * statement for the whole list, in the rows' own order. */
-    private List<BoardDeal> withPaymentDue(List<BoardDeal> rows) {
-        if (rows.isEmpty()) {
+    /**
+     * The rows with the finance summary's due date and overdue flag (TicketRepository#paymentDueStates) on every card
+     * from รอมัดจำ on ({@link #FIRST_MONEY_CHIP_COLUMN}); earlier cards, which never show a money chip, keep null /
+     * false. At most ONE statement, none when no row qualifies; rows keep their order. Called by SalesBoardService only
+     * for the lists DealBoard renders. The ids passed are bounded by those rows: the board reads carry no LIMIT, so it is
+     * every open deal at S6 or later in the list (the caller's own on my-work, the team's on team-board).
+     */
+    public List<BoardDeal> withPaymentDue(List<BoardDeal> rows) {
+        List<Long> ids = rows.stream().filter(d -> d.boardColumn() >= FIRST_MONEY_CHIP_COLUMN)
+            .map(BoardDeal::ticketId).toList();
+        if (ids.isEmpty()) {
             return rows;
         }
-        Map<Long, TicketRepository.PaymentDueState> due =
-            tickets.paymentDueStates(rows.stream().map(BoardDeal::ticketId).toList());
+        Map<Long, TicketRepository.PaymentDueState> due = tickets.paymentDueStates(ids);
         return rows.stream().map(d -> {
             TicketRepository.PaymentDueState state = due.get(d.ticketId());
             return state == null ? d : d.withPaymentDue(state.dueDate(), state.overdue());
