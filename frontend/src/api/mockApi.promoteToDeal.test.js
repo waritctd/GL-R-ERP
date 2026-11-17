@@ -419,3 +419,189 @@ describe('mock dealQuotations.undoConfirmOrder — refusals and restore parity',
     expect((await api.tickets.parties(deal)).parties.find((p) => p.id === party.id).status).toBe(status);
   });
 });
+
+// The mock's undo does what DealQuotationService#undoOrderConfirmation does (read the Java, not the old mock).
+describe('mock dealQuotations.undoConfirmOrder — the backend reversal, divergence by divergence', () => {
+  const STOCK_TILE = { ...TILE, stockSource: 'IN_THAILAND' };
+  const chainOf = async (ticketId) => (await api.documentChain.get(ticketId)).documentChain;
+  const summaryOf = async (ticketId) => (await api.tickets.get(ticketId)).ticket.summary;
+
+  async function quotationWith(ghost, { depositPercent = 50, items = [TILE, PLAIN] } = {}) {
+    await asRole('sales');
+    const { quotation: draft } = await api.dealQuotations.create(ghost, {
+      recipientType: 'DESIGNER', depositPercent, fullPaymentTerm: 'BEFORE_DELIVERY', items,
+    });
+    await api.dealQuotations.submit(draft.id);
+    await asRole('sales_manager');
+    const { quotation } = await api.dealQuotations.approve(draft.id);
+    await asRole('sales');
+    return quotation;
+  }
+
+  it('deletes every line of the deal (the backend deletes all ticket_item rows), not restoring the earlier ones', async () => {
+    const ghost = await quotationOnlyTicket();
+    const approved = await approvedQuotation(ghost);
+    patchTicketForTests(ghost, { items: [{ id: 1, ticketId: ghost, brand: 'เดิม', qty: 1 }] });
+    await api.dealQuotations.promoteToDeal(approved.id);
+
+    await api.dealQuotations.undoConfirmOrder(approved.id);
+
+    // (the deal read falls back to the quotation's own lines when it has none, as the backend's does)
+    expect((await api.tickets.get(ghost)).ticket.items.some((i) => i.brand === 'เดิม')).toBe(false);
+  });
+
+  it('leaves quotationOnly as the confirmation set it (the backend does not restore the provenance flag)', async () => {
+    const ghost = await quotationOnlyTicket();
+    expect((await summaryOf(ghost)).quotationOnly).toBe(true);
+    const approved = await approvedQuotation(ghost);
+    await api.dealQuotations.promoteToDeal(approved.id);
+    expect((await summaryOf(ghost)).quotationOnly).toBe(false);
+
+    await api.dealQuotations.undoConfirmOrder(approved.id);
+
+    expect((await summaryOf(ghost)).quotationOnly).toBe(false);
+  });
+
+  it("reverses the system's own policy flip (reason cleared), but never a person's later waiver", async () => {
+    const flipped = await quotationOnlyTicket();
+    const zero = await quotationWith(flipped, { depositPercent: 0 });
+    await api.dealQuotations.promoteToDeal(zero.id);
+    expect((await summaryOf(flipped)).depositPolicy).toBe('NOT_REQUIRED');
+    await api.dealQuotations.undoConfirmOrder(zero.id);
+    expect(await summaryOf(flipped)).toMatchObject({ depositPolicy: 'REQUIRED', depositPolicyReason: null });
+
+    const waived = await quotationOnlyTicket();
+    const zero2 = await quotationWith(waived, { depositPercent: 0 });
+    await api.dealQuotations.promoteToDeal(zero2.id);
+    await api.tickets.setDepositPolicy(waived, { policy: 'WAIVED', reason: 'ลูกค้าเก่า' });
+    await api.dealQuotations.undoConfirmOrder(zero2.id);
+    expect(await summaryOf(waived)).toMatchObject({ depositPolicy: 'WAIVED', depositPolicyReason: 'ลูกค้าเก่า' });
+  });
+
+  it('clears the FROM_STOCK fulfilment the confirmation set on a 0% all-stock deal, and the stage goes back', async () => {
+    const ghost = await quotationOnlyTicket();
+    const stageBefore = (await summaryOf(ghost)).salesStage;
+    const approved = await quotationWith(ghost, { depositPercent: 0, items: [STOCK_TILE] });
+    const stageQuoted = (await summaryOf(ghost)).salesStage;
+    await api.dealQuotations.promoteToDeal(approved.id);
+    expect(await summaryOf(ghost)).toMatchObject({ fulfillmentStatus: 'FROM_STOCK', salesStage: 'DELIVERY_SCHEDULING' });
+    expect((await chainOf(ghost)).order.undoable).toBe(true);
+
+    await api.dealQuotations.undoConfirmOrder(approved.id);
+
+    const after = await summaryOf(ghost);
+    expect(after.fulfillmentStatus).toBeNull();
+    expect(after.salesStage).toBe(stageQuoted);
+    expect(stageQuoted).not.toBe('ORDER_RECEIVED');
+    void stageBefore;
+  });
+
+  it('refuses with 409 once the deal is no longer quotation_issued / CUSTOMER_CONFIRMED, or has moved past ORDER_RECEIVED', async () => {
+    const stage = await quotationOnlyTicket();
+    const q1 = await approvedQuotation(stage);
+    await api.dealQuotations.promoteToDeal(q1.id);
+    patchTicketForTests(stage, { salesStage: 'PROCUREMENT' });
+    expect((await chainOf(stage)).order.undoable).toBe(false);
+    await expect(api.dealQuotations.undoConfirmOrder(q1.id)).rejects.toMatchObject({ status: 409 });
+
+    const status = await quotationOnlyTicket();
+    const q2 = await approvedQuotation(status);
+    await api.dealQuotations.promoteToDeal(q2.id);
+    patchTicketForTests(status, { status: 'draft' });
+    expect((await chainOf(status)).order.undoable).toBe(false);
+    await expect(api.dealQuotations.undoConfirmOrder(q2.id)).rejects.toMatchObject({ status: 409 });
+
+    const routed = await quotationOnlyTicket();
+    const q3 = await approvedQuotation(routed);
+    await api.dealQuotations.promoteToDeal(q3.id);
+    patchTicketForTests(routed, { salesStage: 'DELIVERY_SCHEDULING' }); // no FROM_STOCK: not the confirmation's route
+    await expect(api.dealQuotations.undoConfirmOrder(q3.id)).rejects.toMatchObject({ status: 409 });
+  });
+
+  it('writes the backend event note: who confirmed and when, the reason, the deleted draft notice', async () => {
+    const ghost = await quotationOnlyTicket();
+    const approved = await approvedQuotation(ghost);
+    await api.dealQuotations.promoteToDeal(approved.id);
+    await api.depositNotices.createDraft(ghost, {});
+    const buddhistYear = new Date().getFullYear() + 543;
+
+    await api.dealQuotations.undoConfirmOrder(approved.id, { reason: ' กดผิด ' });
+
+    const note = (await api.tickets.get(ghost)).ticket.events.find((e) => e.kind === 'ORDER_CONFIRMATION_UNDONE').message;
+    expect(note).toMatch(new RegExp(
+      `^ยกเลิกการยืนยันคำสั่งซื้อจากใบเสนอราคา ${approved.number} \\(ยืนยันโดย .+ เมื่อ \\d{1,2}/\\d{1,2}/${buddhistYear} \\d{2}:\\d{2}\\)`
+      + ' · เหตุผล: กดผิด · ลบใบแจ้งรับมัดจำฉบับร่างแล้ว$'));
+
+    const plain = await quotationOnlyTicket();
+    const second = await approvedQuotation(plain);
+    await api.dealQuotations.promoteToDeal(second.id);
+    await api.dealQuotations.undoConfirmOrder(second.id);
+    const bare = (await api.tickets.get(plain)).ticket.events.find((e) => e.kind === 'ORDER_CONFIRMATION_UNDONE').message;
+    expect(bare).not.toContain('เหตุผล');
+    expect(bare).not.toContain('ลบใบแจ้งรับมัดจำ');
+  });
+
+  it('a delayed retry naming the old confirmation is a 409 and leaves the re-confirmation; the current id is undone', async () => {
+    const ghost = await quotationOnlyTicket();
+    const approved = await approvedQuotation(ghost);
+    await api.dealQuotations.promoteToDeal(approved.id);
+    const firstId = (await chainOf(ghost)).order.confirmationEventId;
+    expect(firstId).toEqual(expect.any(Number));
+    await api.dealQuotations.undoConfirmOrder(approved.id, { confirmationEventId: firstId });
+    expect((await chainOf(ghost)).order.confirmationEventId).toBeNull();
+    await api.dealQuotations.promoteToDeal(approved.id);
+    const secondId = (await chainOf(ghost)).order.confirmationEventId;
+    expect(secondId).not.toBe(firstId);
+
+    await expect(api.dealQuotations.undoConfirmOrder(approved.id, { confirmationEventId: firstId }))
+      .rejects.toMatchObject({ status: 409 });
+    expect((await chainOf(ghost)).order.confirmed).toBe(true);
+
+    await expect(api.dealQuotations.undoConfirmOrder(approved.id, { confirmationEventId: secondId })).resolves.toBeTruthy();
+    expect((await summaryOf(ghost)).status).toBe('draft');
+  });
+
+  it('a replay after the undo is still a 200 with the old id', async () => {
+    const ghost = await quotationOnlyTicket();
+    const approved = await approvedQuotation(ghost);
+    await api.dealQuotations.promoteToDeal(approved.id);
+    const id = (await chainOf(ghost)).order.confirmationEventId;
+    await api.dealQuotations.undoConfirmOrder(approved.id, { confirmationEventId: id });
+    await expect(api.dealQuotations.undoConfirmOrder(approved.id, { confirmationEventId: id })).resolves.toBeTruthy();
+  });
+
+  describe('the all-stock auto-route is exempt only when it was the confirmation\'s own', () => {
+    it("a person's waiver after the confirmation that routes an all-stock deposit deal: 409, nothing changed, not undoable", async () => {
+      const ghost = await quotationOnlyTicket();
+      const approved = await quotationWith(ghost, { depositPercent: 50, items: [STOCK_TILE] });
+      await api.dealQuotations.promoteToDeal(approved.id);
+      expect((await summaryOf(ghost)).salesStage).toBe('ORDER_RECEIVED');
+      await api.tickets.setDepositPolicy(ghost, { policy: 'WAIVED', reason: 'ลูกค้าเก่า' });
+      expect(await summaryOf(ghost)).toMatchObject({ salesStage: 'DELIVERY_SCHEDULING', fulfillmentStatus: 'FROM_STOCK' });
+      const before = JSON.stringify((await api.tickets.get(ghost)).ticket);
+
+      expect((await chainOf(ghost)).order.undoable).toBe(false);
+      await expect(api.dealQuotations.undoConfirmOrder(approved.id)).rejects.toMatchObject({ status: 409 });
+
+      expect(JSON.stringify((await api.tickets.get(ghost)).ticket)).toBe(before);
+    });
+
+    it('a waiver that routed nothing does not block (the deal is still at ORDER_RECEIVED)', async () => {
+      const ghost = await quotationOnlyTicket();
+      const approved = await approvedQuotation(ghost);
+      await api.dealQuotations.promoteToDeal(approved.id);
+      await api.tickets.setDepositPolicy(ghost, { policy: 'WAIVED', reason: 'ลูกค้าเก่า' });
+      expect((await chainOf(ghost)).order.undoable).toBe(true);
+    });
+
+    it('a waiver recorded BEFORE the confirmation: its auto-route is the confirmation\'s own, still undoable', async () => {
+      const ghost = await quotationOnlyTicket();
+      const approved = await quotationWith(ghost, { depositPercent: 50, items: [STOCK_TILE] });
+      await api.tickets.setDepositPolicy(ghost, { policy: 'WAIVED', reason: 'ลูกค้าเก่า' });
+      await api.dealQuotations.promoteToDeal(approved.id);
+      expect((await summaryOf(ghost)).salesStage).toBe('DELIVERY_SCHEDULING');
+      expect((await chainOf(ghost)).order.undoable).toBe(true);
+      await expect(api.dealQuotations.undoConfirmOrder(approved.id)).resolves.toBeTruthy();
+    });
+  });
+});

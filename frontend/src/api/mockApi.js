@@ -4271,17 +4271,25 @@ function mockListChainStage(row, viewer) {
   return chainListStage(mockChainFacts(ticket), promoted, ticket.orderConfirmedQuotationId ?? null, row.id);
 }
 
+// DealQuotationService#UNDO_NOTE_TIME: d/M/yyyy HH:mm on the Bangkok clock, Buddhist-era year.
+function mockUndoNoteTime(iso) {
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Bangkok', day: 'numeric', month: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+  }).formatToParts(new Date(iso)).map((x) => [x.type, x.value]));
+  return `${Number(p.day)}/${Number(p.month)}/${Number(p.year) + 543} ${p.hour}:${p.minute}`;
+}
+
 // Mirrors DealQuotationService#undoRefusal as far as this mock models the downstream facts: a deal no longer ACTIVE, a
 // non-draft deposit notice, a payment, a remaining invoice, a bid outcome written after the confirmation (or a split
 // deal), an import request, a delivery record, a manual stock / procurement decision, or a fulfilment step blocks the
 // undo. Returns the Thai refusal or null.
 function mockUndoRefusal(ticket) {
   if ((ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE') return 'ยกเลิกไม่ได้ — งานไม่ได้อยู่ในสถานะ ACTIVE';
+  if (ticket.status !== 'quotation_issued' || ticket.paymentStatus !== 'CUSTOMER_CONFIRMED') {
+    return 'งานเดินหน้าเกินขั้นยืนยันคำสั่งซื้อแล้ว จึงยกเลิกการยืนยันไม่ได้';
+  }
   if (mockDepositNotices.some((d) => d.ticketId === ticket.id && d.status !== 'DRAFT')) {
     return 'ยกเลิกไม่ได้ — ออกใบแจ้งยอดเงินรับมัดจำแล้ว';
-  }
-  if (ticket.paymentStatus != null && ticket.paymentStatus !== 'CUSTOMER_CONFIRMED') {
-    return 'ยกเลิกไม่ได้ — มีการรับชำระเงินแล้ว';
   }
   // Only the bid path writes BID_OUTCOME_RECORDED right AFTER the confirmation; an older outcome does not block.
   const promotionId = mockConfirmedQuotationEvent(ticket)?.id ?? 0;
@@ -4296,10 +4304,25 @@ function mockUndoRefusal(ticket) {
   if (after(['STOCK_RESERVED', 'PROCUREMENT_SOURCE_DECIDED']) || ticket.procurementDecidedAt != null) {
     return 'ยกเลิกไม่ได้ — มีการระบุที่มาสินค้าหลังยืนยันคำสั่งซื้อแล้ว';
   }
+  // DELIVERY_SCHEDULING + FROM_STOCK is exempt only when the CONFIRMATION routed the deal there (0% all-stock): a person's
+  // deposit waiver after the confirmation routes it too, and that is a person's move.
+  const autoRouted = ticket.salesStage === 'DELIVERY_SCHEDULING' && ticket.fulfillmentStatus === 'FROM_STOCK'
+    && !mockPersonPolicyChangeAfter(ticket, promotionId);
+  if (ticket.salesStage !== 'ORDER_RECEIVED' && !autoRouted) {
+    return 'งานเดินหน้าไปขั้นถัดไปแล้ว จึงยกเลิกการยืนยันคำสั่งซื้อไม่ได้';
+  }
   if (ticket.fulfillmentStatus != null && ticket.fulfillmentStatus !== 'FROM_STOCK') {
     return 'ยกเลิกไม่ได้ — งานดำเนินการต่อจากการยืนยันแล้ว';
   }
   return null;
+}
+
+// TicketRepository#hasPersonPolicyChangeAfter: a deposit_policy POLICY_CHANGED after the promotion that is not the
+// system's own follow-the-quotation flip for the confirmed quotation.
+function mockPersonPolicyChangeAfter(ticket, promotionId) {
+  const number = mockDealQuotations.find((q) => q.id === ticket.orderConfirmedQuotationId)?.number;
+  return ticket.events.some((e) => e.kind === 'POLICY_CHANGED' && e.id > promotionId
+    && String(e.message).startsWith('deposit_policy →') && !isFollowedPolicyNote(e.message, number));
 }
 
 // Mirrors DocumentChainService#forTicket's assembly (the gate is the caller's).
@@ -4337,6 +4360,7 @@ function mockDocumentChainFor(ticket, user) {
       confirmed,
       confirmable: ticket.status === 'draft' && (ticket.lifecycle ?? 'ACTIVE') === 'ACTIVE' && !promoted,
       undoable: promoted && mockUndoRefusal(ticket) == null,
+      confirmationEventId: promoted ? mockConfirmedQuotationEvent(ticket).id : null,
       confirmedFromQuotationId: confirmedRow?.id ?? null,
       confirmedFromQuotationNumber: confirmedRow?.number ?? null,
       // account reads no ticket events (TicketService#requireViewAccess).
@@ -6893,11 +6917,6 @@ function submitDealQuotationRow(row, user) {
 // the bid outcome (its primary deal and every forked child). `fromStatus` is the event's from-status.
 function applyMockOrderConfirmation(ticket, row, user, fromStatus = ticket.status) {
   const now = new Date().toISOString();
-  // mock-internal: what the undo restores
-  ticket.preConfirmation = {
-    status: ticket.status, salesStage: ticket.salesStage, stageUpdatedAt: ticket.stageUpdatedAt,
-    depositPolicy: ticket.depositPolicy, items: ticket.items, quotationOnly: ticket.quotationOnly,
-  };
   ticket.quotationOnly = false;
   ticket.status = 'quotation_issued';
   ticket.updatedAt = now;
@@ -19650,26 +19669,48 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       const result = () => delay({
         result: { ticketId: ticket.id, ticket: buildTicketDetail(ticket).summary, quotation: buildDealQuotationDto(row) },
       });
-      if (!mockConfirmedQuotationEvent(ticket)) {
+      const promotion = mockConfirmedQuotationEvent(ticket);
+      if (!promotion) {
         if (ticket.undoneQuotationIds?.includes(row.id)) return result();
         fail('ยังไม่ได้ยืนยันคำสั่งซื้อ จึงยกเลิกไม่ได้', 409);
+      }
+      // The request names the confirmation it means; a later re-confirmation has another event id.
+      if (payload?.confirmationEventId != null && Number(payload.confirmationEventId) !== promotion.id) {
+        fail('คำสั่งซื้อนี้ถูกยืนยันใหม่อีกครั้งแล้ว กรุณาโหลดข้อมูลใหม่ก่อนยกเลิก', 409);
       }
       if (ticket.orderConfirmedQuotationId !== row.id) {
         fail('ยืนยันคำสั่งซื้อจากใบเสนอราคาฉบับอื่น จึงยกเลิกจากฉบับนี้ไม่ได้', 409);
       }
       const refusal = mockUndoRefusal(ticket);
       if (refusal) fail(refusal, 409);
-      for (let i = mockDepositNotices.length - 1; i >= 0; i -= 1) {
-        if (mockDepositNotices[i].ticketId === ticket.id && mockDepositNotices[i].status === 'DRAFT') mockDepositNotices.splice(i, 1);
+      const events = ticket.events;
+      const autoStage = (e) => e.kind === 'STAGE_CHANGED' && e.message === 'อัตโนมัติจากขั้นตอนของดีล';
+      // The stage goes back to the `from` of the first automatic move after the promotion (unchanged if none), its
+      // timestamp to the latest earlier stage move (TicketRepository#firstAutoStageFromAfter / latestStageChangeAtBefore).
+      const restoreStage = events.find((e) => e.id > promotion.id && autoStage(e))?.fromStatus ?? null;
+      const restoreStageAt = restoreStage == null ? null
+        : [...events].reverse().find((e) => e.kind === 'STAGE_CHANGED' && e.id < promotion.id)?.createdAt ?? null;
+      // The system's policy flip is reversed only while nobody chose the policy (deposit_policy_set_by NULL).
+      if (events.some((e) => e.id > promotion.id && e.kind === 'POLICY_CHANGED' && isFollowedPolicyNote(e.message, row.number))) {
+        const nowNotRequired = ticket.depositPolicy === 'NOT_REQUIRED';
+        if ((ticket.depositPolicy ?? 'REQUIRED') === (nowNotRequired ? 'NOT_REQUIRED' : 'REQUIRED')
+          && ticket.depositPolicySetBy == null && ticket.paymentStatus === 'CUSTOMER_CONFIRMED') {
+          ticket.depositPolicy = nowNotRequired ? 'REQUIRED' : 'NOT_REQUIRED';
+          ticket.depositPolicyReason = null;
+        }
       }
-      const before = ticket.preConfirmation ?? { status: 'draft', salesStage: ticket.salesStage };
+      let draftNotices = 0;
+      for (let i = mockDepositNotices.length - 1; i >= 0; i -= 1) {
+        if (mockDepositNotices[i].ticketId === ticket.id && mockDepositNotices[i].status === 'DRAFT') {
+          mockDepositNotices.splice(i, 1);
+          draftNotices += 1;
+        }
+      }
       const reason = String(payload?.reason ?? '').trim();
       // The confirmation's own events: the promotion, then CUSTOMER_CONFIRMED, its automatic stage moves and its system
       // POLICY_CHANGED (the auto-cancel CANCELLED events stay).
-      const promotionId = mockConfirmedQuotationEvent(ticket).id;
-      ticket.events = ticket.events.filter((e) => e.id !== promotionId && !(e.id > promotionId && (e.kind === 'CUSTOMER_CONFIRMED'
-        || (e.kind === 'STAGE_CHANGED' && e.message === 'อัตโนมัติจากขั้นตอนของดีล')
-        || (e.kind === 'POLICY_CHANGED' && isFollowedPolicyNote(e.message, row.number)))));
+      ticket.events = events.filter((e) => e.id !== promotion.id && !(e.id > promotion.id && (e.kind === 'CUSTOMER_CONFIRMED'
+        || autoStage(e) || (e.kind === 'POLICY_CHANGED' && isFollowedPolicyNote(e.message, row.number)))));
       const party = row.partyId != null ? mockDealParties.find((p) => p.id === row.partyId) : null;
       if (party?.status === 'AWARDED') {
         Object.assign(party, {
@@ -19677,14 +19718,16 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
           statusBeforeAward: null, notAwardedReasonBeforeAward: null, updatedAt: new Date().toISOString(),
         });
       }
+      // TicketRepository#revertOrderConfirmation + deleteItems: every line goes; quotation_only stays as the confirm set it.
       Object.assign(ticket, {
-        status: before.status, salesStage: before.salesStage, stageUpdatedAt: before.stageUpdatedAt,
-        depositPolicy: before.depositPolicy, items: before.items, quotationOnly: before.quotationOnly,
-        paymentStatus: null, orderConfirmedQuotationId: null, updatedAt: new Date().toISOString(),
+        status: 'draft', paymentStatus: null, items: [], orderConfirmedQuotationId: null, updatedAt: new Date().toISOString(),
+        fulfillmentStatus: ticket.fulfillmentStatus === 'FROM_STOCK' ? null : ticket.fulfillmentStatus,
+        salesStage: restoreStage ?? ticket.salesStage, stageUpdatedAt: restoreStageAt ?? ticket.stageUpdatedAt,
       });
       ticket.undoneQuotationIds = [...(ticket.undoneQuotationIds ?? []), row.id];
-      pushEvent(ticket, user, 'ORDER_CONFIRMATION_UNDONE', 'quotation_issued', before.status,
-        `ยกเลิกการยืนยันคำสั่งซื้อจากใบเสนอราคา ${row.number}${reason ? ` — ${reason}` : ''}`);
+      pushEvent(ticket, user, 'ORDER_CONFIRMATION_UNDONE', 'quotation_issued', 'draft',
+        `ยกเลิกการยืนยันคำสั่งซื้อจากใบเสนอราคา ${row.number} (ยืนยันโดย ${promotion.actorName} เมื่อ ${mockUndoNoteTime(promotion.createdAt)})`
+        + (reason ? ` · เหตุผล: ${reason}` : '') + (draftNotices > 0 ? ' · ลบใบแจ้งรับมัดจำฉบับร่างแล้ว' : ''));
       return result();
     },
 

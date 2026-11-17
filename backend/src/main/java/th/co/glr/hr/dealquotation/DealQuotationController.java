@@ -251,7 +251,8 @@ public class DealQuotationController {
             @Valid @RequestBody(required = false) DealQuotationRequests.UndoOrderConfirmationRequest request,
             HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
-        return Map.of("result", quotations.undoOrderConfirmation(id, request == null ? null : request.reason(), user));
+        return Map.of("result", quotations.undoOrderConfirmation(id, request == null ? null : request.reason(),
+            request == null ? null : request.confirmationEventId(), user));
     }
 
     @PostMapping("/deal-quotations/{id}/cancel")

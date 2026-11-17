@@ -38,6 +38,7 @@ import th.co.glr.hr.ticket.ProcurementSourceRequest;
 import th.co.glr.hr.ticket.QuotationStatus;
 import th.co.glr.hr.ticket.StockReservationRequest;
 import th.co.glr.hr.ticket.TicketEventKind;
+import th.co.glr.hr.ticket.TicketService;
 import th.co.glr.hr.ticket.TicketStatus;
 import th.co.glr.hr.ticket.TicketSummaryDto;
 
@@ -78,7 +79,7 @@ class DealQuotationUndoOrderConfirmationIntegrationTest extends DirectQuotationD
         assertThat(summary(deal).salesStage()).isEqualTo(DealStage.ORDER_RECEIVED);
         assertThat(itemCount(deal)).isEqualTo(2);
 
-        PromoteToDealResultDto result = confirmer.undoOrderConfirmation(approved.id(), "ลูกค้าแจ้งว่ากดผิด", salesActor);
+        PromoteToDealResultDto result = confirmer.undoOrderConfirmation(approved.id(), "ลูกค้าแจ้งว่ากดผิด", null, salesActor);
 
         assertThat(result.ticketId()).isEqualTo(deal);
         assertThat(result.ticket().status()).isEqualTo(TicketStatus.DRAFT);
@@ -138,8 +139,8 @@ class DealQuotationUndoOrderConfirmationIntegrationTest extends DirectQuotationD
         DealQuotationDto blankQuote = approvedDirectQuotation(blank, salesActor);
         confirmer.confirmOrderFromDirectQuotation(blankQuote.id(), salesActor);
 
-        confirmer.undoOrderConfirmation(paddedQuote.id(), "  กดผิด  ", salesActor);
-        confirmer.undoOrderConfirmation(blankQuote.id(), "   ", salesActor);
+        confirmer.undoOrderConfirmation(paddedQuote.id(), "  กดผิด  ", null, salesActor);
+        confirmer.undoOrderConfirmation(blankQuote.id(), "   ", null, salesActor);
 
         assertThat(undoNote(padded)).contains("เหตุผล").contains("กดผิด").doesNotContain("  กดผิด").doesNotContain("กดผิด  ");
         assertThat(undoNote(blank)).doesNotContain("เหตุผล");
@@ -149,7 +150,7 @@ class DealQuotationUndoOrderConfirmationIntegrationTest extends DirectQuotationD
     void noReason_isAccepted() {
         Confirmed c = confirmedDeal();
 
-        confirmer.undoOrderConfirmation(c.quotation().id(), null, salesActor);
+        confirmer.undoOrderConfirmation(c.quotation().id(), null, null, salesActor);
 
         assertThat(summary(c.deal()).status()).isEqualTo(TicketStatus.DRAFT);
         assertThat(undoNote(c.deal())).contains(c.quotation().number()).doesNotContain("เหตุผล");
@@ -169,7 +170,7 @@ class DealQuotationUndoOrderConfirmationIntegrationTest extends DirectQuotationD
         DepositNoticeDto othersDraft = depositNoticeService.createDraft(other.deal(),
             new DepositNoticeDraftRequest(null, null, null, null, null, null, null, null), salesActor);
 
-        confirmer.undoOrderConfirmation(c.quotation().id(), null, salesActor);
+        confirmer.undoOrderConfirmation(c.quotation().id(), null, null, salesActor);
 
         assertThat(count("SELECT COUNT(*) FROM sales.deposit_notice WHERE ticket_id = :id", c.deal())).isZero();
         assertThat(noticeItemCount(draft.id())).isZero();
@@ -191,7 +192,7 @@ class DealQuotationUndoOrderConfirmationIntegrationTest extends DirectQuotationD
         assertThat(summary(deal).depositPolicy()).as("fixture").isEqualTo(DepositPolicy.NOT_REQUIRED);
         assertThat(eventCount(deal, TicketEventKind.POLICY_CHANGED)).as("fixture").isEqualTo(1);
 
-        confirmer.undoOrderConfirmation(approved.id(), null, salesActor);
+        confirmer.undoOrderConfirmation(approved.id(), null, null, salesActor);
 
         TicketSummaryDto after = summary(deal);
         assertThat(after.depositPolicy()).isEqualTo(DepositPolicy.REQUIRED);
@@ -208,7 +209,7 @@ class DealQuotationUndoOrderConfirmationIntegrationTest extends DirectQuotationD
         confirmer.confirmOrderFromDirectQuotation(approved.id(), salesActor);
         tickets.updateDepositPolicy(deal, DepositPolicy.CREDIT_CUSTOMER, "ลูกค้าเครดิต", salesManagerActor.id());
 
-        confirmer.undoOrderConfirmation(approved.id(), null, salesActor);
+        confirmer.undoOrderConfirmation(approved.id(), null, null, salesActor);
 
         TicketSummaryDto after = summary(deal);
         assertThat(after.depositPolicy()).isEqualTo(DepositPolicy.CREDIT_CUSTOMER);
@@ -230,7 +231,7 @@ class DealQuotationUndoOrderConfirmationIntegrationTest extends DirectQuotationD
         assertThat(confirmed.salesStage()).as("fixture: auto-routed").isEqualTo(DealStage.DELIVERY_SCHEDULING);
         assertThat(confirmed.fulfillmentStatus()).as("fixture").isEqualTo(FulfilmentStatus.FROM_STOCK);
 
-        PromoteToDealResultDto result = confirmer.undoOrderConfirmation(approved.id(), null, salesActor);
+        PromoteToDealResultDto result = confirmer.undoOrderConfirmation(approved.id(), null, null, salesActor);
 
         TicketSummaryDto after = summary(deal);
         assertThat(after.salesStage()).as("the FIRST automatic move's `from`, not the intermediate ORDER_RECEIVED")
@@ -255,7 +256,7 @@ class DealQuotationUndoOrderConfirmationIntegrationTest extends DirectQuotationD
     void afterUndo_aRevisionCanBeCreated_approved_andTheDealConfirmedFromIt() {
         Confirmed c = confirmedDeal();
         assertStatus(HttpStatus.CONFLICT, () -> quotationService.createRevision(c.quotation().id(), salesActor));
-        confirmer.undoOrderConfirmation(c.quotation().id(), null, salesActor);
+        confirmer.undoOrderConfirmation(c.quotation().id(), null, null, salesActor);
 
         DealQuotationDto revision = approvedRevision(c.quotation(), directDraft());
 
@@ -269,7 +270,7 @@ class DealQuotationUndoOrderConfirmationIntegrationTest extends DirectQuotationD
     @Test
     void afterUndo_confirmOrderWorksFullyAgain_onTheSameQuotation() {
         Confirmed c = confirmedDeal();
-        confirmer.undoOrderConfirmation(c.quotation().id(), "กดผิด", salesActor);
+        confirmer.undoOrderConfirmation(c.quotation().id(), "กดผิด", null, salesActor);
 
         confirmer.confirmOrderFromDirectQuotation(c.quotation().id(), salesActor);
 
@@ -288,7 +289,7 @@ class DealQuotationUndoOrderConfirmationIntegrationTest extends DirectQuotationD
             new DepositNoticeDraftRequest(null, null, null, null, null, null, null, null), salesActor).items())
             .as("the money side unlocks again").isNotEmpty();
         // ...and the undo can be pressed again: the promotion names this quotation once more.
-        confirmer.undoOrderConfirmation(c.quotation().id(), null, salesActor);
+        confirmer.undoOrderConfirmation(c.quotation().id(), null, null, salesActor);
     }
 
     // ───────────────────────────────────────────────────────────────────────────────────
@@ -303,7 +304,7 @@ class DealQuotationUndoOrderConfirmationIntegrationTest extends DirectQuotationD
         confirmer.confirmOrderFromDirectQuotation(v1.id(), salesActor);
         assertThat(quotationService.get(clone.id(), salesActor).docStatus()).as("fixture").isEqualTo(QuotationStatus.CANCELLED);
 
-        confirmer.undoOrderConfirmation(v1.id(), null, salesActor);
+        confirmer.undoOrderConfirmation(v1.id(), null, null, salesActor);
 
         assertThat(quotationService.get(clone.id(), salesActor).docStatus()).isEqualTo(QuotationStatus.CANCELLED);
         assertThat(quotationService.get(v1.id(), salesActor).docStatus()).isEqualTo(QuotationStatus.APPROVED);
@@ -326,7 +327,7 @@ class DealQuotationUndoOrderConfirmationIntegrationTest extends DirectQuotationD
         int mails = mailer.mails().size();
         assertThat(bellRows).as("fixture: the CONFIRMATION does notify (CEO, account, SM)").isPositive();
 
-        confirmer.undoOrderConfirmation(approved.id(), "กดผิด", salesActor);
+        confirmer.undoOrderConfirmation(approved.id(), "กดผิด", null, salesActor);
 
         assertThat(bellRows()).isEqualTo(bellRows);
         assertThat(mailer.mails()).hasSize(mails);
@@ -492,7 +493,7 @@ class DealQuotationUndoOrderConfirmationIntegrationTest extends DirectQuotationD
         DealQuotationDto approved = approvedDirectQuotation(deal, salesActor);
         confirmer.confirmOrderFromDirectQuotation(approved.id(), salesActor);
 
-        confirmer.undoOrderConfirmation(approved.id(), null, salesActor);
+        confirmer.undoOrderConfirmation(approved.id(), null, null, salesActor);
 
         assertThat(summary(deal).status()).isEqualTo(TicketStatus.DRAFT);
         assertThat(eventCount(deal, TicketEventKind.BID_OUTCOME_RECORDED)).as("the older outcome stays").isEqualTo(1);
@@ -567,7 +568,7 @@ class DealQuotationUndoOrderConfirmationIntegrationTest extends DirectQuotationD
         DealQuotationDto approved = approvedDirectQuotation(deal, salesActor);
         Map<String, Object> before = state(deal);
 
-        assertStatus(HttpStatus.CONFLICT, () -> confirmer.undoOrderConfirmation(approved.id(), null, salesActor));
+        assertStatus(HttpStatus.CONFLICT, () -> confirmer.undoOrderConfirmation(approved.id(), null, null, salesActor));
 
         assertThat(state(deal)).isEqualTo(before);
     }
@@ -580,7 +581,7 @@ class DealQuotationUndoOrderConfirmationIntegrationTest extends DirectQuotationD
         confirmer.confirmOrderFromDirectQuotation(v1.id(), salesActor);
         Map<String, Object> before = state(deal);
 
-        assertStatus(HttpStatus.CONFLICT, () -> confirmer.undoOrderConfirmation(clone.id(), null, salesActor));
+        assertStatus(HttpStatus.CONFLICT, () -> confirmer.undoOrderConfirmation(clone.id(), null, null, salesActor));
 
         assertThat(state(deal)).isEqualTo(before);
         assertThat(eventCount(deal, TicketEventKind.DEAL_PROMOTED_FROM_QUOTATION)).isEqualTo(1);
@@ -595,14 +596,14 @@ class DealQuotationUndoOrderConfirmationIntegrationTest extends DirectQuotationD
             Map.of("id", approved.id()));
         Map<String, Object> before = state(deal);
 
-        assertStatus(HttpStatus.CONFLICT, () -> confirmer.undoOrderConfirmation(approved.id(), null, salesActor));
+        assertStatus(HttpStatus.CONFLICT, () -> confirmer.undoOrderConfirmation(approved.id(), null, null, salesActor));
 
         assertThat(state(deal)).isEqualTo(before);
     }
 
     @Test
     void missingQuotation_is404() {
-        assertStatus(HttpStatus.NOT_FOUND, () -> confirmer.undoOrderConfirmation(987_654_321L, null, salesActor));
+        assertStatus(HttpStatus.NOT_FOUND, () -> confirmer.undoOrderConfirmation(987_654_321L, null, null, salesActor));
     }
 
     // ───────────────────────────────────────────────────────────────────────────────────
@@ -618,10 +619,10 @@ class DealQuotationUndoOrderConfirmationIntegrationTest extends DirectQuotationD
         Map<String, Object> unconfirmedBefore = state(unconfirmedDeal);
 
         for (UserPrincipal outsider : List.of(otherSalesActor, ceoActor, importActor, accountActor)) {
-            assertThatThrownBy(() -> confirmer.undoOrderConfirmation(confirmed.quotation().id(), "x", outsider))
+            assertThatThrownBy(() -> confirmer.undoOrderConfirmation(confirmed.quotation().id(), "x", null, outsider))
                 .as(outsider.role() + " on a confirmed order")
                 .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
-            assertThatThrownBy(() -> confirmer.undoOrderConfirmation(unconfirmed.id(), "x", outsider))
+            assertThatThrownBy(() -> confirmer.undoOrderConfirmation(unconfirmed.id(), "x", null, outsider))
                 .as(outsider.role() + " where the state alone would be a 409: 403 first")
                 .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
         }
@@ -634,7 +635,7 @@ class DealQuotationUndoOrderConfirmationIntegrationTest extends DirectQuotationD
     void salesManager_canUndoARepsOrder() {
         Confirmed c = confirmedDeal();
 
-        confirmer.undoOrderConfirmation(c.quotation().id(), null, salesManagerActor);
+        confirmer.undoOrderConfirmation(c.quotation().id(), null, null, salesManagerActor);
 
         assertThat(summary(c.deal()).status()).isEqualTo(TicketStatus.DRAFT);
         assertThat(summary(c.deal()).createdById()).as("ownership never moves").isEqualTo(salesActor.id());
@@ -644,7 +645,7 @@ class DealQuotationUndoOrderConfirmationIntegrationTest extends DirectQuotationD
     void quotationGrantHolder_canUndoARepsOrder() {
         Confirmed c = confirmedDeal();
 
-        confirmer.undoOrderConfirmation(c.quotation().id(), null, grantedQcActor);
+        confirmer.undoOrderConfirmation(c.quotation().id(), null, null, grantedQcActor);
 
         assertThat(summary(c.deal()).status()).isEqualTo(TicketStatus.DRAFT);
     }
@@ -656,10 +657,10 @@ class DealQuotationUndoOrderConfirmationIntegrationTest extends DirectQuotationD
     @Test
     void replay_returnsTheSameState_andWritesNothingMore() {
         Confirmed c = confirmedDeal();
-        PromoteToDealResultDto first = confirmer.undoOrderConfirmation(c.quotation().id(), "กดผิด", salesActor);
+        PromoteToDealResultDto first = confirmer.undoOrderConfirmation(c.quotation().id(), "กดผิด", null, salesActor);
         Map<String, Object> afterFirst = state(c.deal());
 
-        PromoteToDealResultDto replay = confirmer.undoOrderConfirmation(c.quotation().id(), "กดผิด", salesActor);
+        PromoteToDealResultDto replay = confirmer.undoOrderConfirmation(c.quotation().id(), "กดผิด", null, salesActor);
 
         assertThat(replay.ticketId()).isEqualTo(first.ticketId());
         assertThat(replay.ticket().status()).isEqualTo(TicketStatus.DRAFT);
@@ -698,7 +699,7 @@ class DealQuotationUndoOrderConfirmationIntegrationTest extends DirectQuotationD
         jdbc.getJdbcOperations().execute("CREATE TRIGGER trg_fail_undo_test " + trigger
             + " EXECUTE FUNCTION sales.fail_undo_test()");
 
-        assertThatThrownBy(() -> confirmer.undoOrderConfirmation(approved.id(), "กดผิด", salesActor))
+        assertThatThrownBy(() -> confirmer.undoOrderConfirmation(approved.id(), "กดผิด", null, salesActor))
             .as("the injected database failure, not an ApiException")
             .isInstanceOf(DataAccessException.class)
             .hasMessageContaining("injected undo failure");
@@ -719,7 +720,7 @@ class DealQuotationUndoOrderConfirmationIntegrationTest extends DirectQuotationD
         confirmer.confirmOrderFromDirectQuotation(approved.id(), salesActor);
         assertThat(partyStatus(party)).as("fixture").isEqualTo("AWARDED");
 
-        confirmer.undoOrderConfirmation(approved.id(), null, salesActor);
+        confirmer.undoOrderConfirmation(approved.id(), null, null, salesActor);
 
         assertThat(partyStatus(party)).isEqualTo("NEGOTIATING");
     }
@@ -735,7 +736,7 @@ class DealQuotationUndoOrderConfirmationIntegrationTest extends DirectQuotationD
         assertThat(jdbc.queryForObject("SELECT not_awarded_reason FROM sales.deal_party WHERE party_id = :id",
             Map.of("id", party), String.class)).as("fixture: the award cleared the reason").isNull();
 
-        confirmer.undoOrderConfirmation(approved.id(), null, salesActor);
+        confirmer.undoOrderConfirmation(approved.id(), null, null, salesActor);
 
         assertThat(partyStatus(party)).isEqualTo("NOT_AWARDED");
         assertThat(jdbc.queryForObject("SELECT not_awarded_reason FROM sales.deal_party WHERE party_id = :id",
@@ -753,7 +754,7 @@ class DealQuotationUndoOrderConfirmationIntegrationTest extends DirectQuotationD
         jdbc.update("UPDATE sales.deal_party SET status_before_award = NULL, not_awarded_reason_before_award = NULL"
             + " WHERE party_id = :id", Map.of("id", party));
 
-        confirmer.undoOrderConfirmation(approved.id(), null, salesActor);
+        confirmer.undoOrderConfirmation(approved.id(), null, null, salesActor);
 
         assertThat(partyStatus(party)).isEqualTo("QUOTED");
     }
@@ -769,7 +770,7 @@ class DealQuotationUndoOrderConfirmationIntegrationTest extends DirectQuotationD
         assertThat(jdbc.queryForObject("SELECT status_before_award FROM sales.deal_party WHERE party_id = :id",
             Map.of("id", party), String.class)).as("fixture: remembered").isEqualTo("QUOTED");
 
-        confirmer.undoOrderConfirmation(approved.id(), null, salesActor);
+        confirmer.undoOrderConfirmation(approved.id(), null, null, salesActor);
 
         assertThat(jdbc.queryForObject("SELECT status_before_award FROM sales.deal_party WHERE party_id = :id",
             Map.of("id", party), String.class)).isNull();
@@ -787,7 +788,7 @@ class DealQuotationUndoOrderConfirmationIntegrationTest extends DirectQuotationD
             "ใบเสนอราคา " + c.quotation().number() + " ตกลงยกเว้นมัดจำแล้ว", salesManagerActor);
         assertThat(eventCount(c.deal(), TicketEventKind.POLICY_CHANGED)).as("fixture").isEqualTo(1);
 
-        confirmer.undoOrderConfirmation(c.quotation().id(), null, salesActor);
+        confirmer.undoOrderConfirmation(c.quotation().id(), null, null, salesActor);
 
         assertThat(eventCount(c.deal(), TicketEventKind.POLICY_CHANGED)).as("the person's waiver event is kept").isEqualTo(1);
         assertThat(summary(c.deal()).depositPolicy()).isEqualTo(DepositPolicy.WAIVED);
@@ -864,6 +865,14 @@ class DealQuotationUndoOrderConfirmationIntegrationTest extends DirectQuotationD
      */
     private Throwable outcomeAfterWaitingForTicketRowLock(long deal, java.util.concurrent.Callable<?> creator)
             throws Exception {
+        return outcomeAfterWaitingForTicketRowLock(deal, creator,
+            "UPDATE sales.ticket SET status = 'draft', payment_status = NULL WHERE ticket_id = ?");
+    }
+
+    /** {@link #outcomeAfterWaitingForTicketRowLock(long, java.util.concurrent.Callable)} with the holder's own
+     * undo-effect UPDATE (one {@code ?} = the ticket id), for a writer whose gate reads more than status. */
+    private Throwable outcomeAfterWaitingForTicketRowLock(long deal, java.util.concurrent.Callable<?> creator,
+                                                          String undoUpdateSql) throws Exception {
         javax.sql.DataSource ds = ((org.springframework.jdbc.datasource.DataSourceTransactionManager) transactionManager)
             .getDataSource();
         java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newSingleThreadExecutor();
@@ -878,8 +887,7 @@ class DealQuotationUndoOrderConfirmationIntegrationTest extends DirectQuotationD
             assertThatThrownBy(() -> create.get(2, java.util.concurrent.TimeUnit.SECONDS))
                 .as("creation must wait on the ticket row lock another transaction holds")
                 .isInstanceOf(java.util.concurrent.TimeoutException.class);
-            try (java.sql.PreparedStatement ps = holder.prepareStatement(
-                    "UPDATE sales.ticket SET status = 'draft', payment_status = NULL WHERE ticket_id = ?")) {
+            try (java.sql.PreparedStatement ps = holder.prepareStatement(undoUpdateSql)) {
                 ps.setLong(1, deal);
                 ps.executeUpdate();
             }
@@ -893,6 +901,175 @@ class DealQuotationUndoOrderConfirmationIntegrationTest extends DirectQuotationD
         } finally {
             pool.shutdownNow();
         }
+    }
+
+    /** The undo's ticket effect that the stock gates read: back to draft AND to the stage before the confirmation. */
+    private static final String UNDO_RESETS_STAGE_SQL = "UPDATE sales.ticket SET status = 'draft', payment_status = NULL, "
+        + "sales_stage = '" + DealStage.QUOTE_OWNER + "' WHERE ticket_id = ?";
+
+    /** The CEO's stock declaration read the deal (stage ORDER_RECEIVED) before the undo and must not write on it. */
+    @Test
+    void reserveStock_waitsForTheTicketRowLock_andIsRefusedOnceAnUndoCommitted() throws Exception {
+        Confirmed c = confirmedDeal();
+        TicketService writer = transactional(ticketService);
+        long item = firstItemId(c.deal());
+        Throwable outcome = outcomeAfterWaitingForTicketRowLock(c.deal(),
+            () -> writer.reserveStock(c.deal(), new StockReservationRequest(
+                List.of(new StockReservationRequest.Line(item, new BigDecimal("3"), null))), ceoActor),
+            UNDO_RESETS_STAGE_SQL);
+        assertThat(outcome).isInstanceOfSatisfying(ApiException.class,
+            e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+        assertThat(eventCount(c.deal(), TicketEventKind.STOCK_RESERVED)).isZero();
+        assertThat(jdbc.queryForObject("SELECT qty_from_stock FROM sales.ticket_item WHERE item_id = :i",
+            Map.of("i", item), BigDecimal.class)).isEqualByComparingTo(BigDecimal.ZERO);
+    }
+
+    /** The rep's import/stock decision would otherwise set the V208 latch (and route) on a deal that is a draft again. */
+    @Test
+    void decideProcurementSource_waitsForTheTicketRowLock_andIsRefusedOnceAnUndoCommitted() throws Exception {
+        Confirmed c = confirmedDeal();
+        TicketService writer = transactional(ticketService);
+        List<ProcurementSourceRequest.Line> lines = jdbc.queryForList(
+            "SELECT item_id FROM sales.ticket_item WHERE ticket_id = :id", Map.of("id", c.deal()), Long.class).stream()
+            .map(id -> new ProcurementSourceRequest.Line(id, false)).toList();
+        Throwable outcome = outcomeAfterWaitingForTicketRowLock(c.deal(),
+            () -> writer.decideProcurementSource(c.deal(), new ProcurementSourceRequest(lines), salesActor),
+            UNDO_RESETS_STAGE_SQL);
+        assertThat(outcome).isInstanceOfSatisfying(ApiException.class,
+            e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+        assertThat(jdbc.queryForObject("SELECT procurement_source_decided_at FROM sales.ticket WHERE ticket_id = :id",
+            Map.of("id", c.deal()), java.sql.Timestamp.class)).as("the latch stays unset").isNull();
+        assertThat(eventCount(c.deal(), TicketEventKind.PROCUREMENT_SOURCE_DECIDED)).isZero();
+    }
+
+    /** A 0%-deposit all-stock deal is delivered from stock at once; a partial delivery that read it before an undo
+     * must not be recorded after it. */
+    @Test
+    void recordPartialDelivery_waitsForTheTicketRowLock_andIsRefusedOnceAnUndoCommitted() throws Exception {
+        long deal = zeroDepositAllStockConfirmedDeal();
+        TicketService writer = transactional(ticketService);
+        long item = firstItemId(deal);
+        Throwable outcome = outcomeAfterWaitingForTicketRowLock(deal,
+            () -> writer.recordPartialDelivery(deal, new th.co.glr.hr.ticket.RecordDeliveryRequest("STOCK", null,
+                List.of(new th.co.glr.hr.ticket.RecordDeliveryRequest.Line(item, BigDecimal.ONE)), null), salesActor));
+        assertThat(outcome).isInstanceOfSatisfying(ApiException.class,
+            e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+        assertThat(count("SELECT COUNT(*) FROM sales.delivery_record WHERE ticket_id = :id", deal)).isZero();
+    }
+
+    @Test
+    void completeDelivery_waitsForTheTicketRowLock_andIsRefusedOnceAnUndoCommitted() throws Exception {
+        long deal = zeroDepositAllStockConfirmedDeal();
+        TicketService writer = transactional(ticketService);
+        Throwable outcome = outcomeAfterWaitingForTicketRowLock(deal,
+            () -> writer.completeDelivery(deal, new th.co.glr.hr.ticket.CompleteDeliveryRequest(null, null), salesActor));
+        assertThat(outcome).isInstanceOfSatisfying(ApiException.class,
+            e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+        assertThat(count("SELECT COUNT(*) FROM sales.delivery_record WHERE ticket_id = :id", deal)).isZero();
+    }
+
+    private long zeroDepositAllStockConfirmedDeal() {
+        long deal = pipelineTicket(salesActor);
+        DealQuotationDto approved = approvedQuotation(deal, stockDraft(0, "BEFORE_DELIVERY", stockTile("Stock A", true)));
+        confirmer.confirmOrderFromDirectQuotation(approved.id(), salesActor);
+        assertThat(summary(deal).fulfillmentStatus()).as("fixture: auto-routed from stock").isEqualTo(FulfilmentStatus.FROM_STOCK);
+        return deal;
+    }
+
+    // ───────────────────────────────────────────────────────────────────────────────────
+    // 15. A delayed retry names the confirmation it means (confirmationEventId)
+    // ───────────────────────────────────────────────────────────────────────────────────
+
+    private long promotionEventId(long deal) {
+        return tickets.findPromotionEvent(deal).orElseThrow().eventId();
+    }
+
+    /** Undo, confirm again, then the FIRST request arrives again with its old id: refused, the second confirmation stays. */
+    @Test
+    void aDelayedRetryNamingTheOldConfirmation_isRefused_andTheReConfirmationIsIntact() {
+        Confirmed c = confirmedDeal();
+        long firstId = promotionEventId(c.deal());
+        confirmer.undoOrderConfirmation(c.quotation().id(), null, firstId, salesActor);
+        confirmer.confirmOrderFromDirectQuotation(c.quotation().id(), salesActor);
+        long secondId = promotionEventId(c.deal());
+        assertThat(secondId).as("fixture: a new confirmation event").isNotEqualTo(firstId);
+        Map<String, Object> before = state(c.deal());
+
+        assertThatThrownBy(() -> confirmer.undoOrderConfirmation(c.quotation().id(), null, firstId, salesActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> {
+                assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
+                assertThat(e.getMessage()).containsPattern("[\\u0E00-\\u0E7F]");
+            });
+
+        assertThat(state(c.deal())).as("nothing written").isEqualTo(before);
+        assertThat(promotionEventId(c.deal())).isEqualTo(secondId);
+        assertThat(eventCount(c.deal(), TicketEventKind.ORDER_CONFIRMATION_UNDONE)).as("only the first undo").isEqualTo(1);
+
+        confirmer.undoOrderConfirmation(c.quotation().id(), null, secondId, salesActor);
+        assertThat(summary(c.deal()).status()).as("the current id is undone").isEqualTo(TicketStatus.DRAFT);
+    }
+
+    @Test
+    void noConfirmationId_undoesTheCurrentConfirmation_asBefore() {
+        Confirmed c = confirmedDeal();
+        confirmer.undoOrderConfirmation(c.quotation().id(), null, null, salesActor);
+        confirmer.confirmOrderFromDirectQuotation(c.quotation().id(), salesActor);
+
+        confirmer.undoOrderConfirmation(c.quotation().id(), null, null, salesActor);
+
+        assertThat(summary(c.deal()).status()).isEqualTo(TicketStatus.DRAFT);
+    }
+
+    /** No promotion event and an undo event: the replay answers 200 whatever id it carries, and writes nothing. */
+    @Test
+    void aReplayAfterTheUndo_withTheOldId_isStillThe200Replay() {
+        Confirmed c = confirmedDeal();
+        long id = promotionEventId(c.deal());
+        confirmer.undoOrderConfirmation(c.quotation().id(), null, id, salesActor);
+        Map<String, Object> before = state(c.deal());
+
+        PromoteToDealResultDto replay = confirmer.undoOrderConfirmation(c.quotation().id(), null, id, salesActor);
+
+        assertThat(replay.ticket().status()).isEqualTo(TicketStatus.DRAFT);
+        assertThat(state(c.deal())).isEqualTo(before);
+        assertThat(eventCount(c.deal(), TicketEventKind.ORDER_CONFIRMATION_UNDONE)).isEqualTo(1);
+    }
+
+    // ───────────────────────────────────────────────────────────────────────────────────
+    // 16. The all-stock route is only the confirmation's own
+    // ───────────────────────────────────────────────────────────────────────────────────
+
+    /** A person's waiver after the confirmation routes an all-stock deposit deal to delivery: that is a person's move. */
+    @Test
+    void cutOff_aPersonWaivedTheDepositAfterTheConfirmation_andThatRoutedTheAllStockDeal() {
+        long deal = pipelineTicket(salesActor);
+        DealQuotationDto approved = approvedQuotation(deal, stockDraft(50, "BEFORE_DELIVERY", stockTile("Stock A", true)));
+        confirmer.confirmOrderFromDirectQuotation(approved.id(), salesActor);
+        assertThat(summary(deal).salesStage()).as("fixture: a deposit deal waits at ORDER_RECEIVED").isEqualTo(DealStage.ORDER_RECEIVED);
+        assertThat(quotationService.isOrderConfirmationUndoable(summary(deal))).as("fixture: undoable so far").isTrue();
+        ticketService.waiveDeposit(deal, DepositPolicy.WAIVED, "ลูกค้าตกลงไม่จ่ายมัดจำ", salesManagerActor);
+        TicketSummaryDto s = summary(deal);
+        assertThat(s.salesStage()).as("fixture: the waiver routed it").isEqualTo(DealStage.DELIVERY_SCHEDULING);
+        assertThat(s.fulfillmentStatus()).as("fixture").isEqualTo(FulfilmentStatus.FROM_STOCK);
+
+        assertThat(quotationService.isOrderConfirmationUndoable(s)).as("order.undoable follows").isFalse();
+        assertRefusedAndNothingWritten(new Confirmed(deal, approved));
+    }
+
+    /** A waiver recorded BEFORE the confirmation: the confirmation's own auto-route is still its own, so still undoable. */
+    @Test
+    void aWaiverBeforeTheConfirmation_theConfirmationsOwnAutoRouteStaysUndoable() {
+        long deal = pipelineTicket(salesActor);
+        DealQuotationDto approved = approvedQuotation(deal, stockDraft(50, "BEFORE_DELIVERY", stockTile("Stock A", true)));
+        ticketService.waiveDeposit(deal, DepositPolicy.WAIVED, "ลูกค้าตกลงไม่จ่ายมัดจำ", salesManagerActor);
+        confirmer.confirmOrderFromDirectQuotation(approved.id(), salesActor);
+        assertThat(summary(deal).salesStage()).as("fixture: auto-routed by the confirmation").isEqualTo(DealStage.DELIVERY_SCHEDULING);
+
+        assertThat(quotationService.isOrderConfirmationUndoable(summary(deal))).isTrue();
+        confirmer.undoOrderConfirmation(approved.id(), null, null, salesActor);
+
+        assertThat(summary(deal).status()).isEqualTo(TicketStatus.DRAFT);
+        assertThat(summary(deal).fulfillmentStatus()).isNull();
     }
 
     // ───────────────────────────────────────────────────────────────────────────────────
@@ -909,7 +1086,7 @@ class DealQuotationUndoOrderConfirmationIntegrationTest extends DirectQuotationD
 
     private void assertRefusedAndNothingWritten(Confirmed c) {
         Map<String, Object> before = state(c.deal());
-        assertThatThrownBy(() -> confirmer.undoOrderConfirmation(c.quotation().id(), "กดผิด", salesActor))
+        assertThatThrownBy(() -> confirmer.undoOrderConfirmation(c.quotation().id(), "กดผิด", null, salesActor))
             .isInstanceOfSatisfying(ApiException.class, e -> {
                 assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
                 assertThat(e.getMessage()).as("a Thai message of its own").isNotBlank().containsPattern("[\\u0E00-\\u0E7F]");

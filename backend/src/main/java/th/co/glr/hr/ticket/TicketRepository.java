@@ -2700,6 +2700,18 @@ public class TicketRepository {
                 quotationNumber), Boolean.class));
     }
 
+    /** A person's deposit-policy change (waiver) after the promotion: a deposit_policy POLICY_CHANGED that is not the
+     * system's own flip for this quotation. entry_channel and other POLICY_CHANGED notes do not count. */
+    public boolean hasPersonDepositPolicyChangeAfter(long ticketId, long afterEventId, String quotationNumber) {
+        return Boolean.TRUE.equals(jdbc.queryForObject("""
+            SELECT EXISTS(SELECT 1 FROM sales.ticket_event WHERE ticket_id = :t AND kind = 'POLICY_CHANGED'
+                           AND event_id > :after AND starts_with(message, 'deposit_policy →')
+                           AND NOT
+            """ + FOLLOWED_POLICY_NOTE_MATCH + ")",
+            followedPolicyNoteParams(new MapSqlParameterSource().addValue("t", ticketId).addValue("after", afterEventId),
+                quotationNumber), Boolean.class));
+    }
+
     /** Deletes the deal's DRAFT deposit notices and their items (no ON DELETE CASCADE); returns the notices deleted. */
     public int deleteDraftDepositNotices(long ticketId) {
         jdbc.update("""

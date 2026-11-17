@@ -287,7 +287,7 @@ describe('QuotationEditorPage — the document chain card', () => {
   // and the confirmation came from THIS quotation. The server re-checks everything; these pin the card's gate.
   describe('ยกเลิกการยืนยันคำสั่งซื้อ', () => {
     const undoBtn = () => screen.queryByTestId('quotation-chain-undo-confirm');
-    const undoable = (extra = {}) => confirmed({ ...extra, order: { undoable: true, ...extra.order } });
+    const undoable = (extra = {}) => confirmed({ ...extra, order: { undoable: true, confirmationEventId: 71, ...extra.order } });
 
     it('shows on the confirmed step when undoable + viewer may confirm + confirmed from this quotation', async () => {
       api.documentChain.get.mockResolvedValue({ documentChain: undoable() });
@@ -342,18 +342,18 @@ describe('QuotationEditorPage — the document chain card', () => {
       expect(reason.getAttribute('maxlength')).toBe('500');
       fireEvent.change(reason, { target: { value: '  กดผิดดีล  ' } });
       fireEvent.click(screen.getByTestId('quotation-undo-confirm-submit'));
-      await waitFor(() => expect(api.dealQuotations.undoConfirmOrder).toHaveBeenCalledWith('5', { reason: 'กดผิดดีล' }));
+      await waitFor(() => expect(api.dealQuotations.undoConfirmOrder).toHaveBeenCalledWith('5', { reason: 'กดผิดดีล', confirmationEventId: 71 }));
       await waitFor(() => expect(screen.queryByTestId('quotation-undo-confirm-dialog')).toBeNull());
       expect(showToast).toHaveBeenCalledWith('success', 'ยกเลิกการยืนยันคำสั่งซื้อแล้ว');
       await waitFor(() => expect(undoBtn()).toBeNull());
       expect(await (await card()).findByRole('button', { name: 'ยืนยันคำสั่งซื้อ' })).toBeTruthy();
     });
 
-    it('with no reason typed, sends an empty body (no reason key)', async () => {
+    it('with no reason typed, sends no reason key, only the confirmation the chain showed', async () => {
       api.dealQuotations.undoConfirmOrder.mockResolvedValue({ result: { ticketId: 18, ticket: { id: 18 }, quotation: quotation() } });
       await openDialog();
       fireEvent.click(screen.getByTestId('quotation-undo-confirm-submit'));
-      await waitFor(() => expect(api.dealQuotations.undoConfirmOrder).toHaveBeenCalledWith('5', {}));
+      await waitFor(() => expect(api.dealQuotations.undoConfirmOrder).toHaveBeenCalledWith('5', { confirmationEventId: 71 }));
     });
 
     it('a 409 closes the dialog, shows the server message and re-reads the chain', async () => {

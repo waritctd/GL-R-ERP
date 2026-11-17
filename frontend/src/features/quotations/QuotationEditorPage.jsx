@@ -1839,6 +1839,7 @@ export function QuotationEditorPage({ user, showToast }) {
   // "ยกเลิกการยืนยันคำสั่งซื้อ" dialog (opened from the chain card) and its optional reason.
   const [undoOpen, setUndoOpen] = useState(false);
   const [undoReason, setUndoReason] = useState('');
+  const [undoConfirmationId, setUndoConfirmationId] = useState(null); // the confirmation the dialog was opened over
   const approveMutation = useMutation({
     mutationFn: (payload) => api.dealQuotations.approve(id, payload || {}),
     onSuccess: (res) => {
@@ -1924,7 +1925,10 @@ export function QuotationEditorPage({ user, showToast }) {
   // The server refuses (409, its own Thai message) once anything downstream exists; on success the deal is back at its
   // quotation stage, so the same views the confirm refreshes are refreshed and the revise button reappears.
   const undoMutation = useMutation({
-    mutationFn: (reason) => api.dealQuotations.undoConfirmOrder(id, reason ? { reason } : {}),
+    // order.confirmationEventId says WHICH confirmation is meant, so a delayed retry cannot undo a later re-confirmation.
+    mutationFn: (reason) => api.dealQuotations.undoConfirmOrder(id, {
+      ...(reason ? { reason } : {}), ...(undoConfirmationId != null ? { confirmationEventId: undoConfirmationId } : {}),
+    }),
     onSuccess: (res) => {
       const dealId = res?.result?.ticketId ?? quotation?.ticketId;
       queryClient.removeQueries({ queryKey: queryKeys.ticketDetail(dealId), exact: true });
@@ -2333,7 +2337,7 @@ export function QuotationEditorPage({ user, showToast }) {
           quotation={quotation}
           chain={chainQuery.data}
           onConfirmOrder={() => setPromoteConfirmOpen(true)}
-          onUndoConfirm={() => setUndoOpen(true)}
+          onUndoConfirm={() => { setUndoConfirmationId(chainQuery.data?.order?.confirmationEventId ?? null); setUndoOpen(true); }}
           confirmBusy={promoteMutation.isPending}
           showToast={showToast}
         />

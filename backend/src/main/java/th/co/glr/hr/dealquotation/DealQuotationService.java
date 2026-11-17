@@ -1852,7 +1852,9 @@ public class DealQuotationService {
      * (403, the same audience as confirm; before any 409) → {@code origin = DEAL_DIRECT} (409) → lock (advisory, then
      * ticket row, as confirm) → idempotent replay: no {@code DEAL_PROMOTED_FROM_QUOTATION} event and an
      * {@code ORDER_CONFIRMATION_UNDONE} event naming this quotation → return the current state, write nothing (no
-     * promotion event and no undo event: 409 never confirmed) → the promotion event must name THIS quotation (409) →
+     * promotion event and no undo event: 409 never confirmed) → {@code confirmationEventId}, when the request carries one,
+     * must be the current promotion event's id (409: the order was confirmed again since the caller looked; the replay
+     * above is unaffected) → the promotion event must name THIS quotation (409) →
      * the cut-off, {@link #undoRefusal} (409 with its own message; the same rule the document chain's
      * {@code order.undoable} reads).
      *
@@ -1881,7 +1883,8 @@ public class DealQuotationService {
      * earlier stage move keeps the confirm-time stamp.
      */
     @Transactional
-    public PromoteToDealResultDto undoOrderConfirmation(long quotationId, String reason, UserPrincipal actor) {
+    public PromoteToDealResultDto undoOrderConfirmation(long quotationId, String reason, Long confirmationEventId,
+                                                        UserPrincipal actor) {
         DealQuotationDto quotation = requireQuotation(quotationId);
         long ticketId = quotation.ticketId();
         requireEditAccess(actor, requireTicketSummary(ticketId));
@@ -1899,6 +1902,11 @@ public class DealQuotationService {
             }
             throw new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคานี้ยังไม่ได้ยืนยันคำสั่งซื้อ จึงไม่มีอะไรให้ยกเลิก");
         }
+        TicketRepository.PromotionEvent promotion = tickets.findPromotionEvent(ticketId).orElseThrow();
+        if (confirmationEventId != null && confirmationEventId != promotion.eventId()) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "คำสั่งซื้อของงานนี้ถูกยืนยันใหม่อีกครั้งแล้ว กรุณาโหลดข้อมูลใหม่ก่อนยกเลิก");
+        }
         if (!tickets.isOrderConfirmedFromQuotation(ticketId, quotationId)) {
             throw new ApiException(HttpStatus.CONFLICT, "คำสั่งซื้อของงานนี้ยืนยันจากใบเสนอราคาฉบับอื่น");
         }
@@ -1907,7 +1915,6 @@ public class DealQuotationService {
             throw new ApiException(HttpStatus.CONFLICT, refusal);
         }
 
-        TicketRepository.PromotionEvent promotion = tickets.findPromotionEvent(ticketId).orElseThrow();
         String restoreStage = tickets.firstAutoStageFromAfter(ticketId, promotion.eventId()).orElse(null);
         Instant restoreStageAt = restoreStage == null ? null
             : tickets.latestStageChangeAtBefore(ticketId, promotion.eventId()).orElse(null);
@@ -1959,7 +1966,8 @@ public class DealQuotationService {
      * or null when the confirmation may be undone. Assumes the deal has a promotion event naming a direct quotation.
      * The stage rule has one exception: DELIVERY_SCHEDULING with fulfilment FROM_STOCK, which the confirmation itself
      * auto-sets on a 0%-deposit all-stock deal (a person's all-stock reservation also looks like that, but is caught
-     * earlier as a manual stock decision).
+     * earlier as a manual stock decision), and only while no person changed the deposit policy after the confirmation
+     * ({@link #routedByTheConfirmationItself}: a waiver also routes an all-stock deposit deal there).
      */
     private String undoRefusal(TicketSummaryDto s) {
         if (!DealLifecycle.ACTIVE.equals(s.lifecycle())) {
@@ -1992,7 +2000,7 @@ public class DealQuotationService {
             return "มีการระบุที่มาสินค้า (สต็อก/นำเข้า) หลังยืนยันคำสั่งซื้อแล้ว จึงยกเลิกการยืนยันไม่ได้";
         }
         boolean autoRoutedFromStock = DealStage.DELIVERY_SCHEDULING.equals(s.salesStage())
-            && FulfilmentStatus.FROM_STOCK.equals(s.fulfillmentStatus());
+            && FulfilmentStatus.FROM_STOCK.equals(s.fulfillmentStatus()) && routedByTheConfirmationItself(s.id());
         if (!DealStage.ORDER_RECEIVED.equals(s.salesStage()) && !autoRoutedFromStock) {
             return "งานเดินหน้าไปขั้น " + s.salesStage() + " แล้ว จึงยกเลิกการยืนยันคำสั่งซื้อไม่ได้";
         }
@@ -2000,6 +2008,19 @@ public class DealQuotationService {
             return "งานเริ่มขั้นตอนจัดหาสินค้าแล้ว (" + s.fulfillmentStatus() + ") จึงยกเลิกการยืนยันคำสั่งซื้อไม่ได้";
         }
         return null;
+    }
+
+    /**
+     * The all-stock route to DELIVERY_SCHEDULING is the confirmation's own unless a person changed the deposit policy
+     * after it: {@code TicketService#waiveDeposit} routes an all-stock deposit deal there too, with the same automatic
+     * note. A waiver recorded BEFORE the confirmation does not count (the confirmation itself then routes the deal), and
+     * a waiver that routed nothing never reaches this check (the deal is still at ORDER_RECEIVED). Fails closed.
+     */
+    private boolean routedByTheConfirmationItself(long ticketId) {
+        var promotion = tickets.findPromotionEvent(ticketId);
+        var number = tickets.findOrderConfirmedQuotationId(ticketId).flatMap(tickets::quotationNumber);
+        return promotion.isPresent() && number.isPresent()
+            && !tickets.hasPersonDepositPolicyChangeAfter(ticketId, promotion.get().eventId(), number.get());
     }
 
     private PromoteToDealResultDto promotionResult(long ticketId, long quotationId) {

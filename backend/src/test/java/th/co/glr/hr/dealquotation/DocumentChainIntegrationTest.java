@@ -235,6 +235,7 @@ class DocumentChainIntegrationTest extends AbstractPostgresIntegrationTest {
         long deal = deal(owner);
         DealQuotationDto q = approved(deal, 50);
         assertThat(chain.forTicket(deal, owner).order().undoable()).as("not confirmed yet").isFalse();
+        assertThat(chain.forTicket(deal, owner).order().confirmationEventId()).as("not confirmed yet").isNull();
 
         confirmer.confirmOrderFromDirectQuotation(q.id(), owner);
         assertThat(chain.forTicket(deal, owner).order().undoable()).as("right after the confirmation").isTrue();
@@ -248,7 +249,10 @@ class DocumentChainIntegrationTest extends AbstractPostgresIntegrationTest {
         long other = deal(owner);
         DealQuotationDto q2 = approved(other, 50);
         confirmer.confirmOrderFromDirectQuotation(q2.id(), owner);
-        confirmer.undoOrderConfirmation(q2.id(), null, owner);
+        assertThat(chain.forTicket(other, owner).order().confirmationEventId()).as("names the confirmation event")
+            .isEqualTo(tickets.findPromotionEvent(other).orElseThrow().eventId());
+        confirmer.undoOrderConfirmation(q2.id(), null, null, owner);
+        assertThat(chain.forTicket(other, owner).order().confirmationEventId()).as("none once undone").isNull();
         assertThat(chain.forTicket(other, owner).order().undoable()).as("after the undo it is not confirmed").isFalse();
     }
 

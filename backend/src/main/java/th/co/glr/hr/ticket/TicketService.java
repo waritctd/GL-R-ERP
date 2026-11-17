@@ -1451,7 +1451,7 @@ public class TicketService {
         if (!CEO_ROLES.contains(actor.role())) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ระบุสินค้าจากสต็อกผ่านปุ่ม \"จัดซื้อสินค้า\" เท่านั้น");
         }
-        TicketDto ticket = requireTicket(ticketId);
+        TicketDto ticket = requireTicketLocked(ticketId);
         TicketSummaryDto s = ticket.summary();
         requireActive(s);
         if (!stockCoverageStageReached(s)) {
@@ -1507,7 +1507,11 @@ public class TicketService {
     @Transactional
     public TicketDto decideProcurementSource(long ticketId, ProcurementSourceRequest req, UserPrincipal actor) {
         requireRole(actor, STOCK_DECLARATION_ROLES);
-        TicketDto ticket = requireTicket(ticketId);
+        if (!canDeclareStockCoverage(requireTicket(ticketId).summary(), actor)) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
+        }
+        // Row lock, then the deal is read again: an undo of the order confirmation that committed first must be seen.
+        TicketDto ticket = requireTicketLocked(ticketId);
         TicketSummaryDto s = ticket.summary();
         if (!canDeclareStockCoverage(s, actor)) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
@@ -1746,17 +1750,15 @@ public class TicketService {
 
     @Transactional
     public TicketDto recordPartialDelivery(long ticketId, RecordDeliveryRequest request, UserPrincipal actor) {
-        TicketDto ticket = requireTicket(ticketId);
         // Ownership-aware, so the ticket must be loaded BEFORE the gate — unlike a plain role check. See
         // canWriteDelivery: stages 13-14 are Sales's, and the owning rep is identified by the deal's own createdById.
-        requireDeliveryAccess(ticket.summary(), actor);
+        TicketDto ticket = lockedAfterDeliveryAccess(ticketId, actor);
         return recordDeliveryInternal(ticket, request, actor, false);
     }
 
     @Transactional
     public TicketDto completeDelivery(long ticketId, CompleteDeliveryRequest request, UserPrincipal actor) {
-        TicketDto ticket = requireTicket(ticketId);
-        requireDeliveryAccess(ticket.summary(), actor);
+        TicketDto ticket = lockedAfterDeliveryAccess(ticketId, actor);
         TicketSummaryDto s = ticket.summary();
         requireActive(s);
         List<RecordDeliveryRequest.Line> remaining = ticket.items().stream()
@@ -1781,6 +1783,15 @@ public class TicketService {
             // Slice 6d fix round 1 (M2): the one-click ส่งมอบครบ takes the dialog's วันที่ส่ง, same window.
             request == null ? null : request.deliveredOn());
         return recordDeliveryInternal(ticket, delivery, actor, true);
+    }
+
+    /** The delivery gate, then the deal's row lock and a fresh read (an undo of the order confirmation that committed
+     * first must be seen), then the gate again on what was read under the lock. Row lock only: never the advisory one. */
+    private TicketDto lockedAfterDeliveryAccess(long ticketId, UserPrincipal actor) {
+        requireDeliveryAccess(requireTicket(ticketId).summary(), actor);
+        TicketDto ticket = requireTicketLocked(ticketId);
+        requireDeliveryAccess(ticket.summary(), actor);
+        return ticket;
     }
 
     private TicketDto recordDeliveryInternal(TicketDto ticket, RecordDeliveryRequest request,
@@ -4061,6 +4072,12 @@ public class TicketService {
 
     // canSetStage(s, targetStage, actor) — a try/catch around requireStageWriteAccess — is gone. stageDecisions
     // runs the full gate chain by the same try/catch technique and addStageActions now reads it.
+
+    /** {@link #requireTicket} under the deal's row lock, for a writer that acts on what it reads. */
+    private TicketDto requireTicketLocked(long id) {
+        tickets.lockTicketForUpdate(id);
+        return requireTicket(id);
+    }
 
     private TicketDto requireTicket(long id) {
         return tickets.findById(id)

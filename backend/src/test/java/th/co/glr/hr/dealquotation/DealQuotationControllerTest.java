@@ -124,8 +124,8 @@ class DealQuotationControllerTest {
     void undoConfirmOrder_bodyIsOptional_andTheReasonReachesTheService() throws Exception {
         DealQuotationDtos.PromoteToDealResultDto result =
             new DealQuotationDtos.PromoteToDealResultDto(9L, null, quotation(42L, "QT-2026-0042-1"));
-        when(service.undoOrderConfirmation(eq(42L), isNull(), any(UserPrincipal.class))).thenReturn(result);
-        when(service.undoOrderConfirmation(eq(42L), eq("กดผิด"), any(UserPrincipal.class))).thenReturn(result);
+        when(service.undoOrderConfirmation(eq(42L), isNull(), isNull(), any(UserPrincipal.class))).thenReturn(result);
+        when(service.undoOrderConfirmation(eq(42L), eq("กดผิด"), isNull(), any(UserPrincipal.class))).thenReturn(result);
 
         mvc.perform(post("/api/deal-quotations/42/undo-confirm-order").session(session()))
             .andExpect(status().isOk())
@@ -137,13 +137,26 @@ class DealQuotationControllerTest {
                 .contentType("application/json").content("{\"reason\":\"กดผิด\"}"))
             .andExpect(status().isOk());
 
-        verify(service, org.mockito.Mockito.times(2)).undoOrderConfirmation(eq(42L), isNull(), any(UserPrincipal.class));
-        verify(service).undoOrderConfirmation(eq(42L), eq("กดผิด"), any(UserPrincipal.class));
+        verify(service, org.mockito.Mockito.times(2)).undoOrderConfirmation(eq(42L), isNull(), isNull(), any(UserPrincipal.class));
+        verify(service).undoOrderConfirmation(eq(42L), eq("กดผิด"), isNull(), any(UserPrincipal.class));
+    }
+
+    /** The optional {@code confirmationEventId} reaches the service as a Long, next to the reason. */
+    @Test
+    void undoConfirmOrder_confirmationEventIdInTheBody_reachesTheService() throws Exception {
+        when(service.undoOrderConfirmation(eq(42L), any(), eq(77L), any(UserPrincipal.class))).thenReturn(
+            new DealQuotationDtos.PromoteToDealResultDto(9L, null, quotation(42L, "QT-2026-0042-1")));
+
+        mvc.perform(post("/api/deal-quotations/42/undo-confirm-order").session(session())
+                .contentType("application/json").content("{\"reason\":\"กดผิด\",\"confirmationEventId\":77}"))
+            .andExpect(status().isOk());
+
+        verify(service).undoOrderConfirmation(eq(42L), eq("กดผิด"), eq(77L), any(UserPrincipal.class));
     }
 
     @Test
     void undoConfirmOrder_reasonOver500Chars_is400_andNeverReachesTheService() throws Exception {
-        when(service.undoOrderConfirmation(eq(42L), any(), any(UserPrincipal.class))).thenReturn(
+        when(service.undoOrderConfirmation(eq(42L), any(), any(), any(UserPrincipal.class))).thenReturn(
             new DealQuotationDtos.PromoteToDealResultDto(9L, null, quotation(42L, "QT-2026-0042-1")));
         mvc.perform(post("/api/deal-quotations/42/undo-confirm-order").session(session())
                 .contentType("application/json").content("{\"reason\":\"" + "ก".repeat(501) + "\"}"))
@@ -152,7 +165,7 @@ class DealQuotationControllerTest {
                 .contentType("application/json").content("{\"reason\":\"" + "ก".repeat(500) + "\"}"))
             .andExpect(status().isOk());
 
-        verify(service, org.mockito.Mockito.times(1)).undoOrderConfirmation(eq(42L), any(), any(UserPrincipal.class));
+        verify(service, org.mockito.Mockito.times(1)).undoOrderConfirmation(eq(42L), any(), any(), any(UserPrincipal.class));
     }
 
     @Test
