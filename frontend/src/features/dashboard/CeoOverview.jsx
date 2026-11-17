@@ -285,9 +285,9 @@ function CeoToday({ user, employee, dashboardSummary, switcher, panelProps }) {
             danger
             label="เกินกำหนดชำระ"
             value={money(overdue)}
-            caption="ดีลที่เลยกำหนดชำระ"
+            caption="งานที่เลยกำหนดชำระ"
           />
-          <Figure label="ยอดคาดการณ์" value={money(forecast)} caption="ดีลที่ยังไม่ได้รับคำสั่งซื้อ" />
+          <Figure label="ยอดคาดการณ์" value={money(forecast)} caption="งานที่ยังไม่ได้รับคำสั่งซื้อ" />
         </dl>
       </section>
 

@@ -530,7 +530,7 @@ export function fulfilmentStatusLabel(value) {
  * one label. Where both appear on one surface (the new-deal card at /quotations/new) each is
  * qualified; where only one appears, the plain form is used.
  *
- * This renames the FIELD only. The remedy button ("แก้ช่องทางดีล") and the server's refusal
+ * This renames the FIELD only. The remedy button ("แก้ช่องทางงาน" since 2026-11-17) and the server's refusal
  * ("… — แก้ช่องทางดีลก่อน", DealRoute.refusalMessage) keep the old wording: they name the ACTION.
  *
  * The channel's OPTION labels below deliberately differ from {@link quotationRecipientLabel}'s:
@@ -538,7 +538,7 @@ export function fulfilmentStatusLabel(value) {
  * symmetry. Do not "fix" that.
  */
 export const OFFERED_TO_LABEL = 'เสนอแก่';
-export const DEAL_OFFERED_TO_LABEL = 'ดีลนี้เสนอแก่';
+export const DEAL_OFFERED_TO_LABEL = 'งานนี้เสนอแก่';
 export const QUOTATION_OFFERED_TO_LABEL = 'ใบเสนอราคานี้เสนอแก่';
 
 export function entryChannelLabel(value) {

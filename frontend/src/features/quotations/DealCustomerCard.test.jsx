@@ -500,10 +500,10 @@ describe('DealCustomerCard — ดีล step (slice 2)', () => {
 
   it('is titled "ดีล" and opens on เลือกดีลที่มีอยู่: the deal search, no customer/project fields, no ช่องทางรับงาน', async () => {
     renderCard();
-    expect(screen.getByRole('heading', { name: 'ดีล' })).not.toBeNull();
-    expect(screen.getByRole('button', { name: 'เลือกดีลที่มีอยู่' }).getAttribute('aria-pressed')).toBe('true');
-    expect(screen.getByRole('button', { name: 'สร้างดีลใหม่' }).getAttribute('aria-pressed')).toBe('false');
-    expect(await screen.findByRole('combobox', { name: /ดีล/ })).not.toBeNull();
+    expect(screen.getByRole('heading', { name: 'งาน' })).not.toBeNull();
+    expect(screen.getByRole('button', { name: 'เลือกงานที่มีอยู่' }).getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByRole('button', { name: 'สร้างงานใหม่' }).getAttribute('aria-pressed')).toBe('false');
+    expect(await screen.findByRole('combobox', { name: /^งาน/ })).not.toBeNull();
     expect(screen.queryByLabelText(/^ลูกค้า/)).toBeNull();
     expect(screen.queryByText('ช่องทางรับงาน')).toBeNull();
   });
@@ -511,12 +511,12 @@ describe('DealCustomerCard — ดีล step (slice 2)', () => {
   it('สร้างดีลใหม่ swaps in today\'s customer + project card and ช่องทางรับงาน (reports the choice upward)', async () => {
     const onModeChange = vi.fn();
     renderCard({ onModeChange });
-    fireEvent.click(screen.getByRole('button', { name: 'สร้างดีลใหม่' }));
+    fireEvent.click(screen.getByRole('button', { name: 'สร้างงานใหม่' }));
     expect(onModeChange).toHaveBeenCalledWith('create');
-    expect(screen.getByRole('button', { name: 'สร้างดีลใหม่' }).getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByRole('button', { name: 'สร้างงานใหม่' }).getAttribute('aria-pressed')).toBe('true');
     expect(screen.getByLabelText(/^ลูกค้า/)).not.toBeNull();
     expect(screen.getByText('ช่องทางรับงาน')).not.toBeNull();
-    expect(screen.queryByRole('combobox', { name: /^ดีล/ })).toBeNull();
+    expect(screen.queryByRole('combobox', { name: /^งาน/ })).toBeNull();
   });
 
   it.each([['pick'], ['create']])('ผู้รับใบเสนอราคา is offered on the %s branch: three radios in S-order, none chosen', (initialMode) => {
@@ -536,7 +536,7 @@ describe('DealCustomerCard — ดีล step (slice 2)', () => {
     expect(screen.getAllByRole('radio').map((r) => r.getAttribute('aria-checked'))).toEqual(['false', 'false', 'true']);
     // No "ดีลจะอยู่ที่ขั้น …" line: the recipient does not move the deal's stage, so the field must
     // not say it will. And no S-codes.
-    expect(screen.queryByText(/ดีลจะอยู่ที่ขั้น|ดีลอยู่ที่ขั้น/)).toBeNull();
+    expect(screen.queryByText(/(ดีล|งาน)จะอยู่ที่ขั้น|(ดีล|งาน)อยู่ที่ขั้น/)).toBeNull();
     expect(document.body.textContent).not.toMatch(/\bS\d+\b|QUOTE_/);
   });
 

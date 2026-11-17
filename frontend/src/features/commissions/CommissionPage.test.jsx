@@ -440,7 +440,7 @@ function financeDeal(overrides = {}) {
 
 async function loadEligibleDeal(ticketId = '42') {
   fireEvent.change(screen.getByLabelText(/เลขที่ Ticket ID/), { target: { value: ticketId } });
-  fireEvent.click(screen.getByRole('button', { name: /โหลดข้อมูลดีล/ }));
+  fireEvent.click(screen.getByRole('button', { name: /โหลดข้อมูลงาน/ }));
   await screen.findByText('TCK-0042');
 }
 
@@ -488,7 +488,7 @@ describe('CommissionPage — account create-from-deal tax invoice upload', () =>
     api.finance.getDeal.mockResolvedValue({ deal: financeDeal({ salesStage: 'DELIVERY_SCHEDULING' }) });
     renderAccountPage();
     fireEvent.change(screen.getByLabelText(/เลขที่ Ticket ID/), { target: { value: '42' } });
-    fireEvent.click(screen.getByRole('button', { name: /โหลดข้อมูลดีล/ }));
+    fireEvent.click(screen.getByRole('button', { name: /โหลดข้อมูลงาน/ }));
     const msg = (await screen.findByText(/ยังไม่ถึงขั้นตอนปิดงาน/)).textContent;
     // dealStageLabel() returns { label, tone }, never a string: interpolating the call itself renders "[object
     // Object]" where the Thai stage name belongs. Pin the rendered text.
@@ -502,7 +502,7 @@ describe('CommissionPage — account create-from-deal tax invoice upload', () =>
     api.finance.getDeal.mockResolvedValue({ deal: financeDeal({ salesStage: 'FUTURE_STAGE' }) });
     renderAccountPage();
     fireEvent.change(screen.getByLabelText(/เลขที่ Ticket ID/), { target: { value: '42' } });
-    fireEvent.click(screen.getByRole('button', { name: /โหลดข้อมูลดีล/ }));
+    fireEvent.click(screen.getByRole('button', { name: /โหลดข้อมูลงาน/ }));
     const msg = (await screen.findByText(/ยังไม่ถึงขั้นตอนปิดงาน/)).textContent;
     expect(msg).toContain('FUTURE_STAGE');
     expect(msg).not.toContain('[object Object]');
@@ -658,7 +658,7 @@ describe('CommissionPage — manual-commission rep picker (issue #737)', () => {
     // No employeeCode: CommissionRepOptionDto dropped it (review fix, #737) -- the option shows ONLY the name now,
     // precisely so there is nothing on screen that could be mistaken for the separate numeric Employee ID field.
     api.commissions.reps.mockResolvedValue({
-      reps: [{ id: 777, name: 'ผู้จัดการ ไม่มีดีลเลย' }],
+      reps: [{ id: 777, name: 'ผู้จัดการ ไม่มีงานเลย' }],
     });
 
     renderPage(salesManagerUser);
@@ -670,7 +670,7 @@ describe('CommissionPage — manual-commission rep picker (issue #737)', () => {
 
     // Present by name alone -- proves the rep with no deal reached the option list.
     // Scoped to the manual form's picker (kept from when the page had its own rep <select>).
-    expect(await within(await screen.findByLabelText(/หรือเลือกจากพนักงานขาย/)).findByText('ผู้จัดการ ไม่มีดีลเลย')).not.toBeNull();
+    expect(await within(await screen.findByLabelText(/หรือเลือกจากพนักงานขาย/)).findByText('ผู้จัดการ ไม่มีงานเลย')).not.toBeNull();
 
     // api.tickets.list resolves { tickets: [] } by default (top-level mock) -- the OLD ticket-derived picker could
     // never have shown a rep with no deal. This picker never calls it at all any more, for any role: proof the rep
@@ -1404,7 +1404,7 @@ describe('CommissionPage — payroll-round approval page (sales_manager / ceo)',
     const all = await screen.findByRole('region', { name: 'รายการทั้งหมดในรอบนี้' });
     fireEvent.click(await within(all).findByRole('button', { name: 'ดูรายละเอียด INV-OK-0704' }));
     const status = within(await screen.findByTestId('detail-panel-704')).getByRole('region', { name: 'สถานะและเอกสาร' });
-    expect(within(status).getByRole('link', { name: 'เปิดดีล' }).getAttribute('href')).toBe('/tickets/88');
+    expect(within(status).getByRole('link', { name: 'เปิดงาน' }).getAttribute('href')).toBe('/tickets/88');
     expect(within(status).queryByRole('link', { name: /invoice\.pdf/ })).toBeNull();
   });
 

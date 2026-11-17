@@ -46,7 +46,7 @@ function PageSkeleton() {
   return (
     <div
       className="grid w-full min-w-0 max-w-[1200px] items-start gap-x-6 gap-y-4 grid-cols-[minmax(17rem,21rem)_minmax(0,1fr)] nav-drawer:grid-cols-[minmax(0,1fr)]"
-      aria-busy="true" aria-label="กำลังโหลดดีล"
+      aria-busy="true" aria-label="กำลังโหลดงาน"
     >
       <div className="grid gap-4 rounded-md border border-border bg-surface p-5 mobile:p-4">
         <Bone className="h-4 w-24" />
@@ -274,16 +274,16 @@ export function FinanceDealPage({ user }) {
   if (dealQuery.error) {
     const status = dealQuery.error.status;
     if (status === 403) {
-      return <BlockedState icon="lock" title="ไม่มีสิทธิ์เข้าถึงดีลนี้" description="ดีลนี้อยู่นอกขอบเขตงานการเงินของคุณ" />;
+      return <BlockedState icon="lock" title="ไม่มีสิทธิ์เข้าถึงงานนี้" description="งานนี้อยู่นอกขอบเขตงานการเงินของคุณ" />;
     }
     if (status === 404) {
-      return <BlockedState icon="search" title="ไม่พบดีลนี้" description="ดีลอาจถูกลบไป หรือเลขที่ในลิงก์ไม่ถูกต้อง" />;
+      return <BlockedState icon="search" title="ไม่พบงานนี้" description="งานอาจถูกลบไป หรือเลขที่ในลิงก์ไม่ถูกต้อง" />;
     }
     return (
       <div className="grid max-w-[520px] gap-3 py-8">
         <p role="alert" className="m-0 flex items-start gap-2 text-sm font-bold text-danger">
           <Icon name="triangleAlert" size={16} className="mt-0.5 shrink-0" />
-          <span>{dealQuery.error.message || 'โหลดดีลไม่สำเร็จ'}</span>
+          <span>{dealQuery.error.message || 'โหลดงานไม่สำเร็จ'}</span>
         </p>
         <Button type="button" variant="secondary" className="justify-self-start whitespace-nowrap" onClick={() => dealQuery.refetch()}>ลองอีกครั้ง</Button>
         <BackLink />
@@ -337,25 +337,25 @@ export function FinanceDealPage({ user }) {
         return {
           title: 'ยืนยันรับมัดจำ', confirmLabel: 'ยืนยันรับมัดจำ',
           // Design m-deposit-confirm: a matched Express receipt confirms the deposit by itself.
-          text: `ยืนยันว่าได้รับเงินมัดจำของดีล ${deal.code} แล้ว? ${expressUploadEnabled ? 'จะยืนยันเองเมื่อจับคู่รายการจาก Express ได้ ใช้ปุ่มนี้เฉพาะเมื่อรับเงินนอก Express — ' : ''}รายการรับเงินจะถูกบันทึกและย้อนกลับไม่ได้`,
+          text: `ยืนยันว่าได้รับเงินมัดจำของงาน ${deal.code} แล้ว? ${expressUploadEnabled ? 'จะยืนยันเองเมื่อจับคู่รายการจาก Express ได้ ใช้ปุ่มนี้เฉพาะเมื่อรับเงินนอก Express — ' : ''}รายการรับเงินจะถูกบันทึกและย้อนกลับไม่ได้`,
           call: (options) => (options ? api.finance.confirmDepositPaid(deal.id, options) : api.finance.confirmDepositPaid(deal.id)),
         };
       case 'FINAL_PAYMENT':
         return {
           title: 'ยืนยันรับชำระส่วนที่เหลือ', confirmLabel: 'ยืนยันรับชำระส่วนที่เหลือ',
-          text: `ยืนยันว่าได้รับเงินส่วนที่เหลือของดีล ${deal.code} ครบแล้ว? ยอดคงค้างปัจจุบัน ${money(deal.money.amountOutstanding)}`,
+          text: `ยืนยันว่าได้รับเงินส่วนที่เหลือของงาน ${deal.code} ครบแล้ว? ยอดคงค้างปัจจุบัน ${money(deal.money.amountOutstanding)}`,
           call: (options) => (options ? api.finance.confirmFinalPayment(deal.id, options) : api.finance.confirmFinalPayment(deal.id)),
         };
       case 'CONFIRM_CLOSE':
         return {
           title: 'ยืนยันพร้อมปิดงาน', confirmLabel: 'ยืนยันพร้อมปิดงาน',
-          text: `ยืนยันว่าดีล ${deal.code} ชำระครบและส่งมอบครบแล้ว? หลังยืนยัน ระบบจะรอการตรวจสอบปิดงาน`,
+          text: `ยืนยันว่างาน ${deal.code} ชำระครบและส่งมอบครบแล้ว? หลังยืนยัน ระบบจะรอการตรวจสอบปิดงาน`,
           call: () => api.finance.confirmCloseReady(deal.id),
         };
       case 'ADVANCE_STAGE':
         return {
-          title: 'เลื่อนสถานะดีล', confirmLabel: actionLabel(a),
-          text: `เลื่อนดีล ${deal.code} ไปขั้น ${dealStageLabel(a.targetStage).label}`,
+          title: 'เลื่อนสถานะงาน', confirmLabel: actionLabel(a),
+          text: `เลื่อนงาน ${deal.code} ไปขั้น ${dealStageLabel(a.targetStage).label}`,
           call: () => api.finance.updateStage(deal.id, { stage: a.targetStage }),
         };
       default:
@@ -483,7 +483,7 @@ export function FinanceDealPage({ user }) {
           busy={busy}
           message={(
             <p className="m-0 text-text-secondary leading-normal">
-              {'อาจซ้ำกับ ' + possibleDuplicate.expressDocNo + ' ที่อัปโหลดแล้ว — ยอดเท่ากันและวันที่ใกล้กันบนดีลนี้ บันทึกต่อเฉพาะเมื่อเป็นเงินคนละรายการ'}
+              {'อาจซ้ำกับ ' + possibleDuplicate.expressDocNo + ' ที่อัปโหลดแล้ว — ยอดเท่ากันและวันที่ใกล้กันบนงานนี้ บันทึกต่อเฉพาะเมื่อเป็นเงินคนละรายการ'}
             </p>
           )}
           onConfirm={() => actionMutation.mutate({ call: possibleDuplicate.call, options: { confirmPossibleDuplicate: true } })}

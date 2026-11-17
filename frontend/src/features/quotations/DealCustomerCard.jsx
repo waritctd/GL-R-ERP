@@ -24,8 +24,8 @@ const PILL_OFF = 'border-border bg-surface';
 
 // "ดีล" step: which way the quotation gets its deal.
 const DEAL_MODES = [
-  { code: 'pick', label: 'เลือกดีลที่มีอยู่' },
-  { code: 'create', label: 'สร้างดีลใหม่' },
+  { code: 'pick', label: 'เลือกงานที่มีอยู่' },
+  { code: 'create', label: 'สร้างงานใหม่' },
 ];
 
 /**
@@ -141,14 +141,14 @@ export function ExistingDealNotice({
   const choices = [
     {
       value: 'existing',
-      title: `เพิ่ม ${customerName} เป็น${roleLabel}ในดีลเดิม (แนะนำ)`,
+      title: `เพิ่ม ${customerName} เป็น${roleLabel}ในงานเดิม (แนะนำ)`,
       hint: isBuyer
-        ? 'ดีลนับใน pipeline ครั้งเดียว · ใบเสนอราคาได้เลขใหม่ของตัวเอง · ผลประมูลบันทึกต่อราย'
-        : 'ดีลนับใน pipeline ครั้งเดียว · ใบเสนอราคาได้เลขใหม่ของตัวเอง',
+        ? 'งานนับใน pipeline ครั้งเดียว · ใบเสนอราคาได้เลขใหม่ของตัวเอง · ผลประมูลบันทึกต่อราย'
+        : 'งานนับใน pipeline ครั้งเดียว · ใบเสนอราคาได้เลขใหม่ของตัวเอง',
     },
     {
       value: 'new',
-      title: 'สร้างดีลใหม่แยกต่างหาก',
+      title: 'สร้างงานใหม่แยกต่างหาก',
       hint: 'ใช้เมื่อเป็นคนละงาน คนละขอบเขต แม้ชื่อโครงการเหมือนกัน',
     },
   ];
@@ -156,7 +156,7 @@ export function ExistingDealNotice({
     <div role="group" aria-labelledby="existing-deal-title" data-testid="existing-deal-notice" className="mt-4 grid gap-3 rounded-md border border-info-border bg-info-bg p-3.5 text-sm">
       <div id="existing-deal-title" className="flex items-center gap-2 font-extrabold text-info-dark">
         <Icon name="info" size={16} className="shrink-0" />
-        โครงการนี้มีดีลของคุณอยู่แล้ว
+        โครงการนี้มีงานของคุณอยู่แล้ว
       </div>
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-md bg-surface px-3 py-2">
         <code className="text-xs text-text-muted">{deal.code}</code>
@@ -166,7 +166,7 @@ export function ExistingDealNotice({
         {buyers.length ? <span className="text-xs text-text-muted">{buyers.map((p) => p.customerName).join(' · ')}</span> : null}
         <StatusBadge tone={stage.tone}>{stage.label}</StatusBadge>
       </div>
-      <div role="radiogroup" aria-label="ใช้ดีลเดิมหรือสร้างดีลใหม่" className="grid gap-2">
+      <div role="radiogroup" aria-label="เลือกงานเดิมหรือสร้างงานใหม่" className="grid gap-2">
         {choices.map((option) => (
           <label
             key={option.value}
@@ -193,8 +193,8 @@ export function ExistingDealNotice({
       <p className="m-0 text-xs font-bold text-info-dark" data-testid="existing-deal-result">
         {choice === 'existing'
           ? `จะสร้างใบเสนอราคาใหม่ภายใต้ ${deal.code}${isBuyer ? ` · ผู้รับเหมา ${resultCount} ราย` : ` · เสนอแก่${roleLabel}`}`
-          : 'จะสร้างดีลใหม่และใบเสนอราคาใหม่ · ดีลนี้จะนับแยกใน pipeline'}
-        {moreCount > 0 ? ` (โครงการนี้มีดีลของคุณอีก ${moreCount} ดีล)` : ''}
+          : 'จะสร้างงานใหม่และใบเสนอราคาใหม่ · งานนี้จะนับแยกใน pipeline'}
+        {moreCount > 0 ? ` (โครงการนี้มีงานของคุณอีก ${moreCount} งาน)` : ''}
       </p>
     </div>
   );
@@ -462,11 +462,11 @@ export function DealCustomerCard({
   }
 
   return (
-    <Panel title="ดีล">
+    <Panel title="งาน">
       {onModeChange ? (
         // A segmented choice, not a modal (DESIGN.md §16): both branches live on this one panel. aria-pressed toggle
         // buttons in the same pill voice as ช่องทางรับงาน.
-        <div role="group" aria-label="วิธีเลือกดีล" className="mb-4 flex flex-wrap gap-2">
+        <div role="group" aria-label="วิธีเลือกงาน" className="mb-4 flex flex-wrap gap-2">
           {DEAL_MODES.map((option) => (
             <button
               key={option.code}

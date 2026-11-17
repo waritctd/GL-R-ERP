@@ -155,7 +155,7 @@ describe('UpdateStageModal blocked rows — แก้ช่องทางดี
     fireEvent.click(screen.getByTestId('update-stage-blocked-toggle'));
     return utils;
   }
-  const toggles = () => screen.queryAllByRole('button', { name: /แก้ช่องทางดีล/ });
+  const toggles = () => screen.queryAllByRole('button', { name: /แก้ช่องทางงาน/ });
   // Asserts the control exists BEFORE clicking, so a missing remedy fails as an assertion.
   const firstToggle = () => {
     expect(toggles().length).toBeGreaterThan(0);
@@ -166,14 +166,14 @@ describe('UpdateStageModal blocked rows — แก้ช่องทางดี
     renderRouted();
     const list = within(screen.getByTestId('update-stage-blocked-list'));
     expect(list.getByText(OFF_REASON)).toBeTruthy();
-    expect(list.getAllByRole('button', { name: /แก้ช่องทางดีล/ })).toHaveLength(1);
+    expect(list.getAllByRole('button', { name: /แก้ช่องทางงาน/ })).toHaveLength(1);
   });
 
   it('does NOT offer it on rows blocked for another reason (permission, payment fact, no onRoute at all)', () => {
     renderRouted();
     const list = screen.getByTestId('update-stage-blocked-list');
     const rows = Array.from(list.querySelectorAll('li'));
-    const withRemedy = rows.filter((row) => within(row).queryByRole('button', { name: /แก้ช่องทางดีล/ }));
+    const withRemedy = rows.filter((row) => within(row).queryByRole('button', { name: /แก้ช่องทางงาน/ }));
     expect(withRemedy).toHaveLength(1);
     expect(withRemedy[0].textContent).toContain('ไม่อยู่ในเส้นทางของดีลนี้');
   });

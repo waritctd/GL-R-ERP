@@ -277,7 +277,7 @@ export function acceptOutcomeConfirmCopy(recipientType) {
   }
   return {
     title,
-    message: `ใบเสนอราคานี้ส่งถึง${quotationRecipientOption(recipientType).label} ถ้าลูกค้ายอมรับ ดีลจะใช้ใบนี้ยืนยันคำสั่งซื้อและข้ามผู้รับรายถัดไป`,
+    message: `ใบเสนอราคานี้ส่งถึง${quotationRecipientOption(recipientType).label} ถ้าลูกค้ายอมรับ งานจะใช้ใบนี้ยืนยันคำสั่งซื้อและข้ามผู้รับรายถัดไป`,
   };
 }
 
@@ -424,7 +424,7 @@ function liveDirectQuotationBlockMessage(live) {
  * the quotation editor and the deal page's sticky CTA so the two never drift. `stage` is the part
  * both render in <strong>. */
 export const CONFIRM_ORDER_FROM_QUOTATION_COPY = Object.freeze({
-  lead: (number) => `ระบบจะนำดีลของ${number ? `ใบเสนอราคา ${number}` : 'ใบเสนอราคานี้'} เข้าสู่ขั้นตอนการขาย ที่ขั้น`,
+  lead: (number) => `ระบบจะนำงานของ${number ? `ใบเสนอราคา ${number}` : 'ใบเสนอราคานี้'} เข้าสู่ขั้นตอนการขาย ที่ขั้น`,
   stage: 'ได้รับคำสั่งซื้อ',
   // Follows the quotation's deposit %: 0 takes no deposit, unknown (null) keeps the usual wording.
   tail: (depositPercent) => (depositPercent != null && Number(depositPercent) === 0
@@ -2146,7 +2146,7 @@ export function buildQuotationChecklist({
     });
   };
 
-  if (needsDeal) push(QUOTATION_CHECK.DEAL, 'ต้องเลือกดีลก่อนบันทึกร่าง', QUOTATION_FIELD_IDS.deal);
+  if (needsDeal) push(QUOTATION_CHECK.DEAL, 'ต้องเลือกงานก่อนบันทึกร่าง', QUOTATION_FIELD_IDS.deal);
   const blockingLive = blockingDirectQuotation(liveDirectQuotation, recipientType, dealStatus);
   if (blockingLive) push(QUOTATION_CHECK.LIVE_DIRECT_QUOTATION, liveDirectQuotationBlockMessage(blockingLive));
   if (livePricingRequest) push(QUOTATION_CHECK.LIVE_PRICING_REQUEST, LIVE_PRICING_REQUEST_BLOCK_MESSAGE);
@@ -2162,7 +2162,7 @@ export function buildQuotationChecklist({
     if (!needsDeal && !hasProject) push(QUOTATION_CHECK.PROJECT, 'ต้องเลือกโครงการก่อนบันทึกร่าง', QUOTATION_FIELD_IDS.project);
     if (!needsDeal && !hasEntryChannel) push(QUOTATION_CHECK.ENTRY_CHANNEL, 'ต้องเลือกช่องทางรับงานก่อนบันทึกร่าง', QUOTATION_FIELD_IDS.entryChannel);
   } else if (projectName !== undefined && blankValue(projectName)) {
-    push(QUOTATION_CHECK.DEAL_PROJECT, 'ดีลนี้ยังไม่มีโครงการ (แก้ได้ที่หน้ารายละเอียดดีล)');
+    push(QUOTATION_CHECK.DEAL_PROJECT, 'งานนี้ยังไม่มีโครงการ (แก้ได้ที่หน้ารายละเอียดงาน)');
   }
   // ผู้สั่งซื้อ is not checked here: the signature slot is always left for the customer's pen, and
   // the optional ผู้ติดต่อ (`contactId`) can never be "missing" in a way worth flagging. ผู้ออกแบบ (unitCode) is deliberately NOT checked

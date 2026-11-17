@@ -367,7 +367,7 @@ test.describe.serial('quote stage gates + versioning — real browser walk', () 
     const c2 = await newCustomer('born');
     const page = salesPage;
     await page.goto('/quotations/new');
-    await page.getByRole('button', { name: 'สร้างดีลใหม่' }).click();
+    await page.getByRole('button', { name: 'สร้างงานใหม่' }).click();
     await page.locator('#deal-customer').fill(c2.name);
     await page.getByRole('option', { name: new RegExp(c2.name) }).first().click();
     await page.locator('#deal-project').click();

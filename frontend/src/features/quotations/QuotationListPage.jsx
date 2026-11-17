@@ -114,7 +114,7 @@ const LIST_TABLE_GRID = 'grid-cols-[minmax(6.875rem,1fr)_minmax(0,2.2fr)_minmax(
 // document's "ซ่อนเวอร์ชันก่อนหน้า N" button folds them away.
 const LIST_VIEW_OPTIONS = [
   { value: 'flat', label: 'เรียงตามเลขที่' },
-  { value: 'grouped', label: 'จัดกลุ่มตามดีล' },
+  { value: 'grouped', label: 'จัดกลุ่มตามงาน' },
 ];
 
 const IN_FORCE_STATUSES = new Set(['APPROVED', 'ACCEPTED', 'ISSUED', 'SENT']);
@@ -337,16 +337,16 @@ function GroupRowContent({ row }) {
       <span className="contents mobile:flex mobile:min-w-0 mobile:items-center mobile:justify-between mobile:gap-3">
         <span className="inline-flex min-w-0 shrink-0 items-center gap-1.5 text-2xs font-extrabold uppercase tracking-wide text-info" data-testid="quotation-group-deal">
           <Icon name="briefcase" size={13} />
-          <span className="truncate">{`ดีล ${row.ticketCode ?? `#${row.ticketId}`}`}</span>
+          <span className="truncate">{`งาน ${row.ticketCode ?? `#${row.ticketId}`}`}</span>
           {row.decided ? <StatusBadge tone="neutral">ตัดสินแล้ว</StatusBadge> : null}
         </span>
         {row.ticketId != null ? (
           <Link
             to={`/tickets/${row.ticketId}`}
-            aria-label={`เปิดดีล ${row.ticketCode ?? row.ticketId}`}
+            aria-label={`เปิดงาน ${row.ticketCode ?? row.ticketId}`}
             className="order-last ml-auto inline-flex min-h-6 shrink-0 items-center text-xs font-bold text-info underline mobile:order-none mobile:ml-0 mobile:min-h-[44px]"
           >
-            เปิดดีล →
+            เปิดงาน →
           </Link>
         ) : null}
       </span>

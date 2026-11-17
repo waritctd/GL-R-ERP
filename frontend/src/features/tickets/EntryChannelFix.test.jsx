@@ -18,7 +18,7 @@ function renderFix(props = {}) {
   return { onSubmit, ...utils };
 }
 
-const toggle = () => screen.getByRole('button', { name: /แก้ช่องทางดีล/ });
+const toggle = () => screen.getByRole('button', { name: /แก้ช่องทางงาน/ });
 const open = () => fireEvent.click(toggle());
 const radios = () => screen.getAllByRole('radio');
 const save = () => screen.getByRole('button', { name: 'บันทึกช่องทางใหม่' });

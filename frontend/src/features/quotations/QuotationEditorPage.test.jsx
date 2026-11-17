@@ -666,7 +666,7 @@ describe('QuotationEditorPage inline deal creation', () => {
     );
     // /quotations/new opens on "เลือกดีลที่มีอยู่"; this block is about the OTHER branch, so every
     // case starts by choosing สร้างดีลใหม่. (QuotationEditorPage.recipient.test.jsx covers the pick branch.)
-    fireEvent.click(screen.getByRole('button', { name: 'สร้างดีลใหม่' }));
+    fireEvent.click(screen.getByRole('button', { name: 'สร้างงานใหม่' }));
     return { ...result, showToast, queryClient };
   }
 
@@ -878,12 +878,12 @@ describe('QuotationEditorPage inline deal creation', () => {
       await selectCustomerAndProject({ channel: false });
       const notice = within(await screen.findByTestId('existing-deal-notice'));
       expect(api.tickets.openForProject).toHaveBeenCalledWith(testProject.name);
-      expect(notice.getByText('โครงการนี้มีดีลของคุณอยู่แล้ว')).toBeTruthy();
+      expect(notice.getByText('โครงการนี้มีงานของคุณอยู่แล้ว')).toBeTruthy();
       expect(notice.getByText('DL-2026-0280')).toBeTruthy();
       expect(notice.getByText('2 ผู้รับเหมา')).toBeTruthy();
       expect(notice.getByText('บริษัท ตัวอย่าง คอนสตรัคชั่น · บจก.สมมติ ก่อสร้าง')).toBeTruthy();
       // The helper picked ผู้ออกแบบ: the notice names THAT role, not always "ผู้รับเหมา".
-      expect(notice.getByRole('radio', { name: new RegExp(`เพิ่ม ${testCustomer.name} เป็นผู้ออกแบบในดีลเดิม`) }).checked).toBe(true);
+      expect(notice.getByRole('radio', { name: new RegExp(`เพิ่ม ${testCustomer.name} เป็นผู้ออกแบบในงานเดิม`) }).checked).toBe(true);
       expect(notice.getByTestId('existing-deal-result').textContent).toBe('จะสร้างใบเสนอราคาใหม่ภายใต้ DL-2026-0280 · เสนอแก่ผู้ออกแบบ');
       // Attaching makes no deal, so ช่องทางรับงาน is not asked.
       expect(screen.queryByRole('group', { name: 'ช่องทางรับงาน' })).toBeNull();
@@ -937,7 +937,7 @@ describe('QuotationEditorPage inline deal creation', () => {
       await selectCustomerAndProject({ channel: false });
       fireEvent.click(screen.getByRole('radio', { name: 'ผู้ซื้อ / ผู้รับเหมา' }));
       const notice = within(await screen.findByTestId('existing-deal-notice'));
-      expect(notice.getByRole('radio', { name: new RegExp(`เพิ่ม ${testCustomer.name} เป็นผู้รับเหมาในดีลเดิม`) })).toBeTruthy();
+      expect(notice.getByRole('radio', { name: new RegExp(`เพิ่ม ${testCustomer.name} เป็นผู้รับเหมาในงานเดิม`) })).toBeTruthy();
       expect(notice.getByTestId('existing-deal-result').textContent).toBe('จะสร้างใบเสนอราคาใหม่ภายใต้ DL-2026-0280 · ผู้รับเหมา 3 ราย');
       await fillOneValidItem();
       await waitFor(() => expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).disabled).toBe(false));
@@ -949,8 +949,8 @@ describe('QuotationEditorPage inline deal creation', () => {
       api.tickets.create.mockResolvedValue({ ticket: { summary: { id: 42 } } });
       renderInlineCreate();
       await selectCustomerAndProject({ channel: false });
-      fireEvent.click(within(await screen.findByTestId('existing-deal-notice')).getByRole('radio', { name: /สร้างดีลใหม่แยกต่างหาก/ }));
-      expect(screen.getByTestId('existing-deal-result').textContent).toContain('จะสร้างดีลใหม่');
+      fireEvent.click(within(await screen.findByTestId('existing-deal-notice')).getByRole('radio', { name: /สร้างงานใหม่แยกต่างหาก/ }));
+      expect(screen.getByTestId('existing-deal-result').textContent).toContain('จะสร้างงานใหม่');
       pickEntryChannel();
       await fillOneValidItem();
       await waitFor(() => expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).disabled).toBe(false));
@@ -1119,9 +1119,9 @@ describe('QuotationEditorPage inline deal creation', () => {
 
     await screen.findByRole('button', { name: /เพิ่มรายการ/ });
     expect(screen.queryByLabelText(/^ลูกค้า/)).toBeNull(); // the สร้างดีลใหม่ branch's own field, not this mode's
-    const link = screen.getByRole('link', { name: /เปิดดีล/ });
+    const link = screen.getByRole('link', { name: /เปิดงาน/ });
     expect(link.getAttribute('href')).toBe('/tickets/18');
-    expect(screen.queryByRole('link', { name: 'ดูรายละเอียดดีลนี้' })).toBeNull();
+    expect(screen.queryByRole('link', { name: /^ดูรายละเอียด(ดีล|งาน)นี้$/ })).toBeNull();
   });
 });
 
@@ -1546,7 +1546,7 @@ describe('QuotationEditorPage ผู้ติดต่อ picker (owner rulings 
     api.customers.search.mockResolvedValue({ customers: [{ id: 5, name: 'บริษัท แฟชั่นไอส์แลนด์ จำกัด' }] });
     api.customers.projects.mockResolvedValue({ projects: [] });
     renderEditor('/quotations/new');
-    fireEvent.click(await screen.findByRole('button', { name: 'สร้างดีลใหม่' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'สร้างงานใหม่' }));
     fireEvent.change(await screen.findByLabelText(/^ลูกค้า/), { target: { value: 'แฟชั่น' } });
     fireEvent.mouseDown(await screen.findByRole('option', { name: /แฟชั่นไอส์แลนด์/ }));
 
@@ -1596,7 +1596,7 @@ describe('QuotationEditorPage ผู้ติดต่อ picker (owner rulings 
   it('an inline-create quotation (no deal yet) renders the picker too, waiting for a customer', async () => {
     renderEditor('/quotations/new');
     // The inline (new-deal) branch is behind the ดีล step's "สร้างดีลใหม่".
-    fireEvent.click(await screen.findByRole('button', { name: 'สร้างดีลใหม่' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'สร้างงานใหม่' }));
 
     // DealCustomerCard itself renders no ผู้ติดต่อ control -- the picker lives on the editor,
     // right next to the card, same as the ticket/existing-draft path.
@@ -1653,7 +1653,7 @@ describe('QuotationEditorPage — the ผู้สั่งซื้อ field is
   it('the same on a quotation that creates its deal inline', async () => {
     renderEditor('/quotations/new');
     // /quotations/new opens on เลือกดีลที่มีอยู่; the inline card is the other branch.
-    fireEvent.click(await screen.findByRole('button', { name: 'สร้างดีลใหม่' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'สร้างงานใหม่' }));
 
     await screen.findByLabelText(/^ลูกค้า/);
     expect(screen.getByLabelText(/^ผู้ติดต่อ/).id).toBe('quotation-contact');
@@ -1673,7 +1673,7 @@ describe('QuotationEditorPage — the ผู้สั่งซื้อ field is
   it('the inline-create field carries the same hint', async () => {
     renderEditor('/quotations/new');
     // /quotations/new opens on เลือกดีลที่มีอยู่; the inline card is the other branch.
-    fireEvent.click(await screen.findByRole('button', { name: 'สร้างดีลใหม่' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'สร้างงานใหม่' }));
 
     await screen.findByLabelText(/^ลูกค้า/);
     expect(hintOf(screen.getByLabelText(/^ผู้ติดต่อ/))).toBe(HINT);
@@ -1816,7 +1816,7 @@ describe('QuotationEditorPage ไม่แสดงชื่อโครงก�
   it('is offered on an inline-created quotation too (no deal exists yet)', async () => {
     renderEditor('/quotations/new');
     // /quotations/new opens on เลือกดีลที่มีอยู่; the inline card is the other branch.
-    fireEvent.click(await screen.findByRole('button', { name: 'สร้างดีลใหม่' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'สร้างงานใหม่' }));
     await screen.findByLabelText(/^ลูกค้า/);
     expect(screen.getByRole('checkbox', { name: new RegExp(TOGGLE) }).checked).toBe(false);
   });
@@ -1831,7 +1831,7 @@ describe('QuotationEditorPage ไม่แสดงชื่อโครงก�
   it('sits directly under the โครงการ box on an inline-created quotation', async () => {
     renderEditor('/quotations/new');
     // /quotations/new opens on เลือกดีลที่มีอยู่; the inline card is the other branch.
-    fireEvent.click(await screen.findByRole('button', { name: 'สร้างดีลใหม่' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'สร้างงานใหม่' }));
     const project = await screen.findByLabelText(/^โครงการ/);
 
     expect(nextFormControlAfter(project)).toBe(screen.getByRole('checkbox', { name: new RegExp(TOGGLE) }));
@@ -1846,7 +1846,7 @@ describe('QuotationEditorPage ไม่แสดงชื่อโครงก�
     expect(nextFormControlAfter(screen.getByLabelText(/^โครงการ/))).toBe(box);
     expect(follows(box, document.getElementById('salesRepDisplayIdCard'))).toBe(true);
     // The consequence is on screen, not left to be discovered on the PDF.
-    expect(screen.getByText(/ชื่อโครงการยังอยู่ในดีล/)).not.toBeNull();
+    expect(screen.getByText(/ชื่อโครงการยังอยู่ในงาน/)).not.toBeNull();
   });
 
   // The wrong-way-round case: a document that already hides its project must not start printing it again just

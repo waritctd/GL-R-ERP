@@ -86,7 +86,7 @@ const CALCULATED_ITEM_FIELDS = [
 const EMPTY_ITEM_ERRORS = {};
 
 // Shown under both พนักงานขาย selects: the pick moves the deal's owner (backend DealQuotationService#moveOwnerToSalesRep).
-const SALES_REP_MOVES_OWNER_HINT = 'เปลี่ยนพนักงานขาย = ย้ายเจ้าของงานของดีลไปให้คนนี้ (คนที่คีย์ดีลยังเข้าถึงได้)';
+const SALES_REP_MOVES_OWNER_HINT = 'เปลี่ยนพนักงานขาย = ย้ายเจ้าของงานไปให้คนนี้ (คนที่คีย์งานยังเข้าถึงได้)';
 
 // Autosave debounce: long enough that it never fires mid-word, short enough that a rep who closes
 // the tab loses at most one field.
@@ -1736,7 +1736,7 @@ export function QuotationEditorPage({ user, showToast }) {
           partyId = (res?.parties ?? []).find((p) => Number(p.customerId) === Number(dealForm.customer.id) && p.role === role)?.id;
           if (!partyId) throw error;
         }
-        if (!partyId) throw new Error('เพิ่มผู้รับใบเสนอราคาในดีลไม่สำเร็จ');
+        if (!partyId) throw new Error('เพิ่มผู้รับใบเสนอราคาในงานไม่สำเร็จ');
         setAttachedPartyIds((made) => ({ ...made, [madeFor]: partyId }));
       }
       let quotationRes;
@@ -1799,7 +1799,7 @@ export function QuotationEditorPage({ user, showToast }) {
         });
         // TicketDto envelope: the new ticket's id is at `.summary.id`, never `.ticket.id`/`.id`.
         ticketId = ticketRes.ticket?.summary?.id;
-        if (!ticketId) throw new Error('สร้างดีลไม่สำเร็จ');
+        if (!ticketId) throw new Error('สร้างงานไม่สำเร็จ');
         setCreatedTicketIds((made) => ({ ...made, [madeFor]: ticketId }));
       }
       const quotationRes = await api.dealQuotations.create(ticketId, buildUpsertPayload());
@@ -2037,7 +2037,7 @@ export function QuotationEditorPage({ user, showToast }) {
     return (
       <PageStack>
         <PageHeader title="สร้างใบเสนอราคา" />
-        <Panel><p className="text-danger">ไม่พบดีลนี้ — เปิดหน้านี้จากรายละเอียดดีลเท่านั้น</p></Panel>
+        <Panel><p className="text-danger">ไม่พบงานนี้ — เปิดหน้านี้จากรายละเอียดงานเท่านั้น</p></Panel>
       </PageStack>
     );
   }
@@ -2149,7 +2149,7 @@ export function QuotationEditorPage({ user, showToast }) {
         ) : null}
         subtitle={customerName
           ? `${customerName}${projectName ? ` · ${projectName}` : ''}`
-          : 'เริ่มจากเลือกดีลด้านล่าง หรือสร้างดีลใหม่'}
+          : 'เริ่มจากเลือกงานด้านล่าง หรือสร้างงานใหม่'}
         context={(
           <>
             {status ? <StatusBadge tone={status.tone}>{status.label}</StatusBadge> : null}
@@ -2239,7 +2239,7 @@ export function QuotationEditorPage({ user, showToast }) {
                   data-testid="quotation-go-to-deal"
                 >
                   <Icon name="chevronRight" size={14} />
-                  ไปที่ดีล
+                  ไปที่งาน
                 </Link>
               ) : (
                 <Button
@@ -2267,7 +2267,7 @@ export function QuotationEditorPage({ user, showToast }) {
           data-testid="quotation-deal-strip"
           className="flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1.5 text-sm"
         >
-          <span className="font-bold text-text-muted">ดีล</span>
+          <span className="font-bold text-text-muted">งาน</span>
           <code className="font-mono text-sm text-text">{stripDeal.code ?? `#${stripDealId}`}</code>
           <span aria-hidden="true" className="text-text-muted">·</span>
           <span className="min-w-0 max-w-full truncate font-bold text-text" title={stripDeal.customerName ?? undefined}>
@@ -2279,7 +2279,7 @@ export function QuotationEditorPage({ user, showToast }) {
               to={`/tickets/${stripDealId}`}
               className="inline-flex min-h-[38px] items-center gap-1 rounded-md font-bold text-primary no-underline hover:text-primary-hover mobile:min-h-[44px]"
             >
-              เปิดดีล
+              เปิดงาน
               <Icon name="chevronRight" size={14} />
             </Link>
           ) : null}
@@ -2326,7 +2326,7 @@ export function QuotationEditorPage({ user, showToast }) {
             <> ใบนี้เข้ามาแทนที่ใบเดิมแล้ว (ใบเดิมถูกเปลี่ยนสถานะเป็นถูกแทนที่)</>
           ) : quotation.derivedFromQuotationStatus === 'APPROVED' ? (
             <>
-              {' '}ใบเดิมยังคงสถานะอนุมัติแล้ว จนกว่าใบเสนอราคาใบใดใบหนึ่งในดีลนี้ (รวมถึงใบนี้) จะได้รับอนุมัติ
+              {' '}ใบเดิมยังคงสถานะอนุมัติแล้ว จนกว่าใบเสนอราคาใบใดใบหนึ่งในงานนี้ (รวมถึงใบนี้) จะได้รับอนุมัติ
               ซึ่งจะเข้ามาแทนที่ใบที่อนุมัติอยู่ในปัจจุบันทันที
             </>
           ) : null}
@@ -2375,7 +2375,7 @@ export function QuotationEditorPage({ user, showToast }) {
           <p className="text-danger">
             {readOnlyViewer
               ? 'บัญชีนี้มีสิทธิ์ดูใบเสนอราคาเท่านั้น ไม่สามารถสร้างใบเสนอราคาได้'
-              : 'ไม่มีสิทธิ์สร้างใบเสนอราคา — สร้างได้เฉพาะพนักงานขายเจ้าของดีลหรือผู้จัดการฝ่ายขายเท่านั้น'}
+              : 'ไม่มีสิทธิ์สร้างใบเสนอราคา — สร้างได้เฉพาะพนักงานขายเจ้าของงานหรือผู้จัดการฝ่ายขายเท่านั้น'}
           </p>
         </Panel>
       ) : (
@@ -2421,7 +2421,7 @@ export function QuotationEditorPage({ user, showToast }) {
                 />
               )}
               errors={{
-                deal: showValidationSummary && needsDeal ? 'กรุณาเลือกดีล' : undefined,
+                deal: showValidationSummary && needsDeal ? 'กรุณาเลือกงาน' : undefined,
                 recipient: showValidationSummary && !recipientType ? 'กรุณาเลือกผู้รับใบเสนอราคา' : undefined,
                 customer: showValidationSummary && !dealForm.customer ? 'กรุณาเลือกลูกค้า' : undefined,
                 project: showValidationSummary && dealForm.customer && !dealForm.project ? 'กรุณาเลือกโครงการ' : undefined,

@@ -413,7 +413,7 @@ describe('offered-to field labels (R8, owner ruling 2026-09-30)', () => {
   });
 
   it('qualifies each one where both appear on the same surface', () => {
-    expect(DEAL_OFFERED_TO_LABEL).toBe('ดีลนี้เสนอแก่');
+    expect(DEAL_OFFERED_TO_LABEL).toBe('งานนี้เสนอแก่');
     expect(QUOTATION_OFFERED_TO_LABEL).toBe('ใบเสนอราคานี้เสนอแก่');
     // Both qualified forms must contain the shared label, or the two fields stop reading as the same question
     // asked of two different documents.

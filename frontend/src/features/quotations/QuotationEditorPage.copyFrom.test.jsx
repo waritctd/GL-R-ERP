@@ -656,8 +656,8 @@ describe('/quotations/new?copyFrom= — then picking an existing deal', () => {
     renderBothRoutes('/quotations/new?copyFrom=918273');
     await waitFor(() => expect(byId('model-0')?.value).toBe('Trilogy'));
 
-    fireEvent.click(screen.getByRole('button', { name: 'เลือกดีลที่มีอยู่' }));
-    fireEvent.focus(await screen.findByRole('combobox', { name: /ดีล/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'เลือกงานที่มีอยู่' }));
+    fireEvent.focus(await screen.findByRole('combobox', { name: /^งาน/ }));
     fireEvent.mouseDown(await screen.findByRole('option', { name: /DL-2026-0018/ }));
     await waitFor(() => expect(api.tickets.get).toHaveBeenCalledWith(18));
 
@@ -711,14 +711,14 @@ describe('a copy opened from a page that was already showing something else', ()
 
   it('opens on สร้างดีลใหม่ even after the rep chose เลือกดีลที่มีอยู่ on an earlier new-quotation visit', async () => {
     renderWithGoCopy('/quotations/new');
-    fireEvent.click(await screen.findByRole('button', { name: 'สร้างดีลใหม่' }));
-    fireEvent.click(screen.getByRole('button', { name: 'เลือกดีลที่มีอยู่' }));
-    expect(screen.getByRole('button', { name: 'เลือกดีลที่มีอยู่' }).getAttribute('aria-pressed')).toBe('true');
+    fireEvent.click(await screen.findByRole('button', { name: 'สร้างงานใหม่' }));
+    fireEvent.click(screen.getByRole('button', { name: 'เลือกงานที่มีอยู่' }));
+    expect(screen.getByRole('button', { name: 'เลือกงานที่มีอยู่' }).getAttribute('aria-pressed')).toBe('true');
 
     fireEvent.click(screen.getByRole('button', { name: GO_COPY }));
 
     await waitFor(() => expect(byId('model-0')?.value).toBe('Trilogy'));
-    expect(screen.getByRole('button', { name: 'สร้างดีลใหม่' }).getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByRole('button', { name: 'สร้างงานใหม่' }).getAttribute('aria-pressed')).toBe('true');
     expect(screen.getByLabelText(/^ลูกค้า/)).not.toBeNull();
   });
 });

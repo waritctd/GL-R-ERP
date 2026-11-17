@@ -176,11 +176,11 @@ export function DealPicker({
   if (selected) {
     return (
       <div className="grid gap-2">
-        <span className="text-sm font-bold text-text-secondary">ดีล</span>
+        <span className="text-sm font-bold text-text-secondary">งาน</span>
         <div className="flex items-center gap-3 rounded-md border border-border-muted bg-surface-muted px-3 py-2">
           <DealIdentity deal={selected} />
           <Button variant="text" className="shrink-0 px-1 text-sm mobile:min-h-[44px]" onClick={clearPick}>
-            เปลี่ยนดีล
+            เปลี่ยนงาน
           </Button>
         </div>
         {live ? (
@@ -193,12 +193,12 @@ export function DealPicker({
             <div className="flex min-w-0 flex-1 flex-col gap-2">
               <div className="flex flex-col gap-0.5">
                 <strong className="break-words">
-                  {`ดีลนี้มีใบเสนอราคาที่ใช้งานอยู่ — ${live.number} · ${dealQuotationStatusLabel(live.docStatus).label}`}
+                  {`งานนี้มีใบเสนอราคาที่ใช้งานอยู่ — ${live.number} · ${dealQuotationStatusLabel(live.docStatus).label}`}
                 </strong>
                 <span className="text-xs">
                   {live.docStatus === 'APPROVED'
-                    ? 'สร้างใบเสนอราคาใหม่บนดีลนี้ไม่ได้ — สร้างฉบับแก้ไขจากฉบับที่อนุมัติแล้วแทน เลขที่จะต่อจากเดิม'
-                    : 'สร้างใบเสนอราคาใหม่บนดีลนี้ไม่ได้ — แก้ไขฉบับนั้นแทน'}
+                    ? 'สร้างใบเสนอราคาใหม่บนงานนี้ไม่ได้ — สร้างฉบับแก้ไขจากฉบับที่อนุมัติแล้วแทน เลขที่จะต่อจากเดิม'
+                    : 'สร้างใบเสนอราคาใหม่บนงานนี้ไม่ได้ — แก้ไขฉบับนั้นแทน'}
                 </span>
               </div>
               <div className="flex flex-wrap gap-2">
@@ -242,13 +242,13 @@ export function DealPicker({
   return (
     <div className="relative">
       <FormField
-        label="ดีล"
+        label="งาน"
         htmlFor="deal-picker"
         required
         error={error}
         // A list this role cannot read (e.g. a quotation grant-holder with no deal pipeline access) is said up front,
         // beside the field, with the way round it — not discovered on focus.
-        hint={dealsQuery.isError ? 'โหลดรายการดีลไม่ได้ — เลือก “สร้างดีลใหม่” แทน' : undefined}
+        hint={dealsQuery.isError ? 'โหลดรายการงานไม่ได้ — เลือก “สร้างงานใหม่” แทน' : undefined}
       >
         <input
           id="deal-picker"
@@ -258,7 +258,7 @@ export function DealPicker({
           aria-controls={LIST_ID}
           aria-autocomplete="list"
           aria-activedescendant={activeOption ? optionId(activeOption) : undefined}
-          placeholder="ค้นหา รหัสดีล / ลูกค้า / โครงการ…"
+          placeholder="ค้นหา รหัสงาน / ลูกค้า / โครงการ…"
           value={search}
           onChange={(event) => { setSearch(event.target.value); setActiveIndex(-1); setOpen(true); }}
           onFocus={() => setOpen(true)}
@@ -270,7 +270,7 @@ export function DealPicker({
         <ul
           id={LIST_ID}
           role="listbox"
-          aria-label="ผลการค้นหาดีล"
+          aria-label="ผลการค้นหางาน"
           // Same popup voice as the ลูกค้า/โครงการ typeaheads beside it. `max-h` in viewport units so the list never
           // runs off a short phone screen; `w-full` of the field keeps it inside the 16px page gutter at 320px.
           className="absolute z-10 mt-1 max-h-[min(20rem,60vh)] w-full list-none overflow-auto rounded-md border border-border bg-surface pl-0 shadow-[var(--shadow-lg-heavy)]"
@@ -278,9 +278,9 @@ export function DealPicker({
           {dealsQuery.isLoading ? (
             <li role="presentation" className="px-3 py-2 text-xs text-text-muted">กำลังโหลด…</li>
           ) : dealsQuery.isError ? null : eligible.length === 0 ? (
-            <li role="presentation" className="px-3 py-2 text-xs text-text-muted">ยังไม่มีดีลที่สร้างใบเสนอราคาได้ — เลือก “สร้างดีลใหม่” แทน</li>
+            <li role="presentation" className="px-3 py-2 text-xs text-text-muted">ยังไม่มีงานที่สร้างใบเสนอราคาได้ — เลือก “สร้างงานใหม่” แทน</li>
           ) : filtered.length === 0 ? (
-            <li role="presentation" className="px-3 py-2 text-xs text-text-muted">ไม่พบดีลที่ตรงกับคำค้น</li>
+            <li role="presentation" className="px-3 py-2 text-xs text-text-muted">ไม่พบงานที่ตรงกับคำค้น</li>
           ) : null}
           {filtered.map((deal, index) => (
             // The OPTION is the button, not the — same reasoning as DealCustomerCard's own listboxes: a listbox child must

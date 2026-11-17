@@ -34,8 +34,8 @@ export function UpdateStageModal({
 
   return (
     <Modal
-      title="แก้ไขสถานะดีล"
-      subtitle="ขั้นตอนที่เลือกได้คือขั้นตอนที่ระบบยืนยันแล้วว่าดีลนี้ไปได้จริง"
+      title="แก้ไขสถานะงาน"
+      subtitle="ขั้นตอนที่เลือกได้คือขั้นตอนที่ระบบยืนยันแล้วว่างานนี้ไปได้จริง"
       testId="update-stage-modal"
       onClose={onClose}
       footer={(

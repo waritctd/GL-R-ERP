@@ -1658,7 +1658,7 @@ describe('buildQuotationChecklist', () => {
   it('slice 2: no deal picked yet blocks with "ต้องเลือกดีล…" and skips the new-deal customer/project checks', () => {
     const entries = meta.buildQuotationChecklist({ ...complete, isInlineCreate: true, customer: null, needsDeal: true });
     expect(entries.map((e) => [e.check, e.blocking])).toEqual([['deal', true]]);
-    expect(entries[0].message).toBe('ต้องเลือกดีลก่อนบันทึกร่าง');
+    expect(entries[0].message).toBe('ต้องเลือกงานก่อนบันทึกร่าง');
     expect(entries[0].targetId).toBe('deal-picker');
   });
 
@@ -1872,7 +1872,7 @@ describe('buildQuotationChecklist', () => {
 
   it('on a deal with no โครงการ only WARNS — the quotation service does not refuse it, and it is not editable here', () => {
     const entries = meta.buildQuotationChecklist({ ...complete, projectName: null });
-    expect(entries).toEqual([{ check: 'dealProject', message: 'ดีลนี้ยังไม่มีโครงการ (แก้ได้ที่หน้ารายละเอียดดีล)', targetId: null, blocking: false, submitBlocking: false }]);
+    expect(entries).toEqual([{ check: 'dealProject', message: 'งานนี้ยังไม่มีโครงการ (แก้ได้ที่หน้ารายละเอียดงาน)', targetId: null, blocking: false, submitBlocking: false }]);
   });
 
   it('BLOCKS on an incomplete row and targets its FIRST missing field', () => {
@@ -2087,7 +2087,7 @@ describe('acceptOutcomeConfirmCopy', () => {
   it('DESIGNER and OWNER keep the skip-the-later-parties copy', () => {
     expect(meta.acceptOutcomeConfirmCopy('DESIGNER')).toEqual({
       title: 'ยืนยันว่าลูกค้ายอมรับใบเสนอราคานี้',
-      message: 'ใบเสนอราคานี้ส่งถึงผู้ออกแบบ ถ้าลูกค้ายอมรับ ดีลจะใช้ใบนี้ยืนยันคำสั่งซื้อและข้ามผู้รับรายถัดไป',
+      message: 'ใบเสนอราคานี้ส่งถึงผู้ออกแบบ ถ้าลูกค้ายอมรับ งานจะใช้ใบนี้ยืนยันคำสั่งซื้อและข้ามผู้รับรายถัดไป',
     });
     expect(meta.acceptOutcomeConfirmCopy('OWNER').message).toContain('เจ้าของโครงการ');
   });
@@ -2106,12 +2106,12 @@ describe('acceptOutcomeConfirmCopy', () => {
 describe('CONFIRM_ORDER_FROM_QUOTATION_COPY.lead', () => {
   it('names the quotation number when there is one', () => {
     expect(meta.CONFIRM_ORDER_FROM_QUOTATION_COPY.lead('QT-2026-0101-1'))
-      .toBe('ระบบจะนำดีลของใบเสนอราคา QT-2026-0101-1 เข้าสู่ขั้นตอนการขาย ที่ขั้น');
+      .toBe('ระบบจะนำงานของใบเสนอราคา QT-2026-0101-1 เข้าสู่ขั้นตอนการขาย ที่ขั้น');
   });
 
   it.each([undefined, null, ''])('falls back to ใบเสนอราคานี้ with no stray double space when the number is %j', (number) => {
     const lead = meta.CONFIRM_ORDER_FROM_QUOTATION_COPY.lead(number);
-    expect(lead).toBe('ระบบจะนำดีลของใบเสนอราคานี้ เข้าสู่ขั้นตอนการขาย ที่ขั้น');
+    expect(lead).toBe('ระบบจะนำงานของใบเสนอราคานี้ เข้าสู่ขั้นตอนการขาย ที่ขั้น');
     expect(lead).not.toMatch(/\s{2,}/);
   });
 });

@@ -459,7 +459,7 @@ describe('files picked before the first บันทึกร่าง', () => {
     api.tickets.create.mockResolvedValue({ ticket: { summary: { id: 42 } } });
     openNew('/quotations/new');
     // Slice 2 flow A: /quotations/new opens on เลือกดีลที่มีอยู่; the inline card is the other branch.
-    fireEvent.click(await screen.findByRole('button', { name: 'สร้างดีลใหม่' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'สร้างงานใหม่' }));
     await selectCustomerAndProject();
     await fillOneValidItem();
     pick(fileA, fileB);

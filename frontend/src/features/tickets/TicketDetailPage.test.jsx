@@ -1953,7 +1953,7 @@ describe('TicketDetailPage', () => {
     });
 
     it('cannot reach: when the server refuses the move for another reason, no เลื่อนไป main button is offered', async () => {
-      earlyDeal('LEAD_APPROACH', 'PRESENTATION', { decision: { blockedReason: 'เฉพาะผู้รับผิดชอบดีลเท่านั้น' } });
+      earlyDeal('LEAD_APPROACH', 'PRESENTATION', { decision: { blockedReason: 'เฉพาะผู้รับผิดชอบงานเท่านั้น' } });
       renderTicketDetailPage({ id: 2, employeeId: 2, name: 'พนักงานขายอีกคน', role: 'sales' });
 
       // The stage panel's "who moves it" hint proves the server's verdict has loaded.
@@ -2110,7 +2110,7 @@ describe('TicketDetailPage', () => {
         <QueryClientProvider client={queryClient}>
           <MemoryRouter initialEntries={['/tickets/701']}>
             <LocationProbe />
-            <Link to="/tickets">ไปหน้ารายการดีล</Link>
+            <Link to="/tickets">ไปหน้ารายการงาน</Link>
             <Routes>
               <Route path="/tickets/701" element={<TicketDetailPage user={salesOwnerUser} ticketId={701} onBack={vi.fn()} showToast={vi.fn()} />} />
               <Route path="*" element={null} />
@@ -2122,7 +2122,7 @@ describe('TicketDetailPage', () => {
       fireEvent.click(screen.getByTestId('ticket-primary-action'));
       await waitFor(() => expect(api.dealQuotations.createFromPricingRequest).toHaveBeenCalledWith(501));
 
-      fireEvent.click(screen.getByRole('link', { name: 'ไปหน้ารายการดีล' }));
+      fireEvent.click(screen.getByRole('link', { name: 'ไปหน้ารายการงาน' }));
       expect(location()).toBe('/tickets');
       expect(screen.queryByTestId('ticket-primary-action')).toBeNull(); // the deal page is gone
 
@@ -3515,7 +3515,7 @@ describe('TicketDetailPage', () => {
       fireEvent.click(await screen.findByTestId('deal-quotation-accept'));
 
       const dialog = within(await screen.findByRole('dialog', { name: 'ยืนยันว่าลูกค้ายอมรับใบเสนอราคานี้' }));
-      expect(dialog.getByText('ใบเสนอราคานี้ส่งถึงผู้ออกแบบ ถ้าลูกค้ายอมรับ ดีลจะใช้ใบนี้ยืนยันคำสั่งซื้อและข้ามผู้รับรายถัดไป')).not.toBeNull();
+      expect(dialog.getByText('ใบเสนอราคานี้ส่งถึงผู้ออกแบบ ถ้าลูกค้ายอมรับ งานจะใช้ใบนี้ยืนยันคำสั่งซื้อและข้ามผู้รับรายถัดไป')).not.toBeNull();
       expect(api.pricingRequests.recordCustomerQuotationOutcome).not.toHaveBeenCalled();
       fireEvent.click(dialog.getByRole('button', { name: 'ยืนยัน' }));
 
@@ -5452,7 +5452,7 @@ describe('TicketDetailPage', () => {
           no: stage.no,
           allowed: stage.code !== salesStage && (onRoute || lax),
           requiresReason: false,
-          blockedReason: onRoute || lax ? null : 'ขั้นตอนนี้ไม่อยู่ในเส้นทางของดีลนี้',
+          blockedReason: onRoute || lax ? null : 'ขั้นตอนนี้ไม่อยู่ในเส้นทางของงานนี้',
           onRoute,
         };
       });
@@ -5776,7 +5776,7 @@ describe('TicketDetailPage', () => {
 
       fireEvent.click(within(dialog.getByTestId('bid-winner-1')).getByRole('checkbox'));
       fireEvent.click(within(dialog.getByTestId('bid-winner-2')).getByRole('checkbox'));
-      expect(dialog.getByText('ได้งานมากกว่า 1 ราย · แยกดีล')).toBeTruthy();
+      expect(dialog.getByText('ได้งานมากกว่า 1 ราย · แยกงาน')).toBeTruthy();
       expect(dialog.getAllByText('DL-2026-0280-A').length).toBeGreaterThan(0);
       // Make the second winner the primary: the first becomes -A.
       fireEvent.click(dialog.getAllByRole('radio', { name: /บจก.สมมติ ก่อสร้าง/ })[0]);

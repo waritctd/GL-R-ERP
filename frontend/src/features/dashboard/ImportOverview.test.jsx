@@ -258,10 +258,10 @@ describe('ImportOverview — the งานนำเข้า worklist', () => {
       api.storedImportRequests.listForTicket.mockRejectedValue(new Error('boom'));
       renderOverview();
       const banner = await screen.findByTestId('import-rows-error');
-      expect(banner.textContent).toContain('โหลดใบขอซื้อของดีลต่อไปนี้ไม่สำเร็จ');
+      expect(banner.textContent).toContain('โหลดใบขอซื้อของงานต่อไปนี้ไม่สำเร็จ');
       expect(within(banner).getByRole('link', { name: /Siam Mall/ }).getAttribute('href')).toBe('/import/deals/3');
       expect(screen.queryByText('ไม่มีงานนำเข้าที่ต้องทำตอนนี้')).toBeNull();
-      expect(screen.getByTestId('import-partial').textContent).toContain('ข้อมูลไม่ครบ — โหลดบางดีลไม่สำเร็จ ลองใหม่');
+      expect(screen.getByTestId('import-partial').textContent).toContain('ข้อมูลไม่ครบ — โหลดบางงานไม่สำเร็จ ลองใหม่');
     });
 
     it('some per-deal queries failing marks the shipment counts as partial, with a retry', async () => {

@@ -347,12 +347,12 @@ export function CommissionPage({ user, showToast }) {
         : (await api.tickets.get(ticketId)).ticket?.summary;
       if (!summary) {
         setLoadedTicket(null);
-        setTicketLookupError('ไม่พบดีลนี้');
+        setTicketLookupError('ไม่พบงานนี้');
         return;
       }
       if (summary.salesStage !== 'CLOSED_PAID') {
         setLoadedTicket(null);
-        setTicketLookupError(`ดีลนี้ยังไม่ถึงขั้นตอนปิดงาน/รับเงินครบ (สถานะปัจจุบัน: ${dealStageLabel(summary.salesStage).label}) จึงยังบันทึกค่าคอมไม่ได้`);
+        setTicketLookupError(`งานนี้ยังไม่ถึงขั้นตอนปิดงาน/รับเงินครบ (สถานะปัจจุบัน: ${dealStageLabel(summary.salesStage).label}) จึงยังบันทึกค่าคอมไม่ได้`);
         return;
       }
       setLoadedTicket(summary);
@@ -360,7 +360,7 @@ export function CommissionPage({ user, showToast }) {
       updateCreateForm('grossAmount', defaultGross != null ? String(defaultGross) : '');
     } catch (error) {
       setLoadedTicket(null);
-      setTicketLookupError(error.message || 'ไม่พบดีลนี้');
+      setTicketLookupError(error.message || 'ไม่พบงานนี้');
     } finally {
       setTicketLookupLoading(false);
     }
@@ -375,7 +375,7 @@ export function CommissionPage({ user, showToast }) {
   async function submitFromDeal(event) {
     event.preventDefault();
     if (!loadedTicket) {
-      showToast('error', 'กรุณาโหลดข้อมูลดีลที่ปิดงานแล้วก่อนบันทึก');
+      showToast('error', 'กรุณาโหลดข้อมูลงานที่ปิดแล้วก่อนบันทึก');
       return;
     }
     setSaving(true);
@@ -817,14 +817,14 @@ function AccountCreateFromDeal({
 }) {
   return (
     <>
-      <Panel flush title="บันทึกใบกำกับภาษี / สร้างคำขอค่าคอมจากดีล">
+      <Panel flush title="บันทึกใบกำกับภาษี / สร้างคำขอค่าคอมจากงาน">
         <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_minmax(0,1.8fr)] nav-drawer:grid-cols-[minmax(0,1fr)]">
           {/* Left half: which deal this invoice belongs to. */}
           <div className="grid min-w-0 content-start gap-3 bg-surface-muted p-[18px] mobile:p-4 min-[1041px]:border-r min-[1041px]:border-border nav-drawer:border-b nav-drawer:border-border">
-            <h3 className="m-0 text-md font-extrabold text-text">ดีลที่จะบันทึกใบกำกับ</h3>
+            <h3 className="m-0 text-md font-extrabold text-text">งานที่จะบันทึกใบกำกับ</h3>
             <div className="grid gap-2">
               <label htmlFor="commission-ticket-lookup" className="text-sm font-bold">
-                เลขที่ Ticket ID ของดีลที่ปิดงาน/รับเงินครบแล้ว (CLOSED_PAID)
+                เลขที่ Ticket ID ของงานที่ปิดงาน/รับเงินครบแล้ว (CLOSED_PAID)
               </label>
               <div className="flex flex-wrap items-center gap-2">
                 <input
@@ -838,14 +838,14 @@ function AccountCreateFromDeal({
                 />
                 <Button type="button" variant="secondary" className="whitespace-nowrap pointer-coarse:min-h-11" disabled={ticketLookupLoading || !ticketIdInput} onClick={onLookup}>
                   <Icon name="search" size={14} />
-                  {ticketLookupLoading ? 'กำลังโหลดข้อมูลดีล…' : 'โหลดข้อมูลดีล'}
+                  {ticketLookupLoading ? 'กำลังโหลดข้อมูลงาน…' : 'โหลดข้อมูลงาน'}
                 </Button>
               </div>
               {eligibleTickets.length > 0 ? (
                 <label className="grid gap-1.5 text-sm">
-                  หรือเลือกจากดีลที่ปรากฏในรายการ
+                  หรือเลือกจากงานที่ปรากฏในรายการ
                   <select value="" className="hover:border-border-muted pointer-coarse:min-h-11" onChange={(event) => onSelectEligible(event.target.value)}>
-                    <option value="">— เลือกดีล —</option>
+                    <option value="">— เลือกงาน —</option>
                     {eligibleTickets.map((ticket) => (
                       <option key={ticket.id} value={ticket.id}>
                         {ticket.code} · {ticket.customerName || 'ไม่ระบุลูกค้า'}
@@ -855,7 +855,7 @@ function AccountCreateFromDeal({
                 </label>
               ) : (
                 <p className="m-0 text-xs text-text-muted">
-                  ดีลที่ปิดงาน/รับเงินครบแล้วอาจไม่ปรากฏในรายการอัตโนมัติ (รายการนี้แสดงเฉพาะดีลที่ยังรอดำเนินการด้านการเงิน) — กรอกเลขที่ Ticket ID ด้วยตนเองด้านบนได้เสมอ
+                  งานที่ปิดงาน/รับเงินครบแล้วอาจไม่ปรากฏในรายการอัตโนมัติ (รายการนี้แสดงเฉพาะงานที่ยังรอดำเนินการด้านการเงิน) — กรอกเลขที่ Ticket ID ด้วยตนเองด้านบนได้เสมอ
                 </p>
               )}
               {ticketLookupError ? <StatusBadge tone="danger">{ticketLookupError}</StatusBadge> : null}
@@ -863,7 +863,7 @@ function AccountCreateFromDeal({
                 <div className="rounded-md border border-success-border bg-surface p-3 text-sm">
                   <strong>{loadedTicket.code}</strong> · {loadedTicket.customerName || 'ไม่ระบุลูกค้า'}
                   <div className="mt-1 flex items-center justify-between gap-3">
-                    <span className="text-text-muted">ยอดที่ต้องชำระของดีล</span>
+                    <span className="text-text-muted">ยอดที่ต้องชำระของงาน</span>
                     <code className="font-mono">{formatMoney(loadedTicket.amountPayable)}</code>
                   </div>
                 </div>
@@ -876,7 +876,7 @@ function AccountCreateFromDeal({
             {!loadedTicket ? (
               <p className="m-0 flex items-start gap-2 text-sm text-text-muted">
                 <Icon name="info" size={16} className="mt-0.5 shrink-0" />
-                <span>โหลดข้อมูลดีลก่อน จึงจะบันทึกใบกำกับได้ — กรอกฟอร์มไว้ล่วงหน้าได้</span>
+                <span>โหลดข้อมูลงานก่อน จึงจะบันทึกใบกำกับได้ — กรอกฟอร์มไว้ล่วงหน้าได้</span>
               </p>
             ) : null}
             <InvoiceFromDealForm

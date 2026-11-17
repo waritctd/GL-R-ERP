@@ -120,7 +120,7 @@ describe('QuotationEditorPage — V179 ผู้พิมพ์/พนักง�
   it('warns on BOTH พนักงานขาย selects that picking one moves the deal owner', async () => {
     renderEditor('/quotations/5');
     await waitFor(() => expect(byId('salesRepDisplayId')).toBeTruthy());
-    const warning = 'เปลี่ยนพนักงานขาย = ย้ายเจ้าของงานของดีลไปให้คนนี้ (คนที่คีย์ดีลยังเข้าถึงได้)';
+    const warning = 'เปลี่ยนพนักงานขาย = ย้ายเจ้าของงานไปให้คนนี้ (คนที่คีย์งานยังเข้าถึงได้)';
     expect((await screen.findAllByText((_, el) => el.children.length === 0 && el.textContent.includes(warning))).length)
       .toBe(2);
   });

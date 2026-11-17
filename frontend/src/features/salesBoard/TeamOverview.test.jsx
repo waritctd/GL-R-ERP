@@ -59,12 +59,12 @@ describe('TeamOverview', () => {
 
     expect(screen.getByRole('heading', { name: 'ภาพรวมทีมขาย' })).toBeTruthy();
     const held = await screen.findByTestId('tile-held');
-    expect(within(held).getByText('ดีลที่ถืออยู่')).toBeTruthy();
-    expect(within(held).getByText('42 ดีล')).toBeTruthy();
+    expect(within(held).getByText('งานที่ถืออยู่')).toBeTruthy();
+    expect(within(held).getByText('42 งาน')).toBeTruthy();
     expect(within(held).getByText('มูลค่า ฿49,800,000')).toBeTruthy();
     const quiet = screen.getByTestId('tile-quiet');
-    expect(within(quiet).getByText('ดีลเงียบเกิน 14 วัน')).toBeTruthy();
-    expect(within(quiet).getByText('6 ดีล')).toBeTruthy();
+    expect(within(quiet).getByText('งานเงียบเกิน 14 วัน')).toBeTruthy();
+    expect(within(quiet).getByText('6 งาน')).toBeTruthy();
   });
 
   it('can drop its own heading when the page header already says it', async () => {
@@ -79,7 +79,7 @@ describe('TeamOverview', () => {
 
     const table = await screen.findByRole('table');
     const headers = within(table).getAllByRole('columnheader').map((th) => th.textContent);
-    expect(headers).toEqual(['พนักงานขาย', 'ดีล', 'มูลค่า', 'ดีลเงียบ', 'คาดรับเดือนนี้', 'รับแล้ว', 'เข้าพบสัปดาห์นี้',
+    expect(headers).toEqual(['พนักงานขาย', 'งาน', 'มูลค่า', 'งานเงียบ', 'คาดรับเดือนนี้', 'รับแล้ว', 'เข้าพบสัปดาห์นี้',
       'อัปเดตล่าสุด']);
     const rows = within(table).getAllByRole('row').slice(1);
     expect(rows).toHaveLength(3);
@@ -87,7 +87,7 @@ describe('TeamOverview', () => {
     expect(within(somMai).getByText('คุณสมหมาย ขายดี')).toBeTruthy();
     expect(within(somMai).getByText('14')).toBeTruthy();
     expect(within(somMai).getByText('฿18,600,000')).toBeTruthy();
-    expect(within(somMai).getByText('3 ดีล')).toBeTruthy();
+    expect(within(somMai).getByText('3 งาน')).toBeTruthy();
     expect(within(somMai).getByText('เมื่อวาน')).toBeTruthy();
     expect(within(rows[0]).getByText('ไม่มี')).toBeTruthy();
     expect(within(rows[0]).getByText('วันนี้')).toBeTruthy();
@@ -99,7 +99,7 @@ describe('TeamOverview', () => {
     renderTeam();
 
     const list = await screen.findByTestId('team-stale');
-    expect(screen.getByText('ดีลที่ควรโทรตาม')).toBeTruthy();
+    expect(screen.getByText('งานที่ควรโทรตาม')).toBeTruthy();
     const items = within(list).getAllByRole('listitem');
     expect(items.map((li) => within(li).getByRole('link').textContent)).toEqual(['Etihad Lounge', 'สยามพารากอน', 'Central Ladprao']);
     expect(within(items[0]).getByText('฿1,880,000')).toBeTruthy();

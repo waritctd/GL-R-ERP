@@ -201,12 +201,12 @@ export function SalesOverview({ user, employee, showToast }) {
                 lead
                 label="ยอดที่สั่งซื้อแล้ว"
                 value={dash(ticketsQuery, ticketsQuery.data && (catalogReady ? formatMoney(sumAmount(ordered)) : '—'))}
-                caption={`${ordered.length} ดีล · ยังไม่ปิดงาน`}
+                caption={`${ordered.length} งาน · ยังไม่ปิดงาน`}
               />
               <Figure
                 label="ยอดคาดหวัง"
                 value={dash(ticketsQuery, ticketsQuery.data && (catalogReady ? formatMoney(sumAmount(expected)) : '—'))}
-                caption={`${expected.length} ดีล · ยังไม่ได้รับใบสั่งซื้อ`}
+                caption={`${expected.length} งาน · ยังไม่ได้รับใบสั่งซื้อ`}
               />
               <Figure
                 label="ค่าคอมประมาณการ (เดือนนี้)"
@@ -227,7 +227,7 @@ export function SalesOverview({ user, employee, showToast }) {
             actions={!loading && !dealsFailed ? (
               <span className="rounded-full bg-text px-2.5 py-px text-xs font-extrabold text-surface">
                 <span data-testid="worklist-total" aria-hidden="true">{worklist.length}</span>
-                <span className="sr-only">รวม {worklist.length} ดีล</span>
+                <span className="sr-only">รวม {worklist.length} งาน</span>
               </span>
             ) : null}
           >
@@ -252,7 +252,7 @@ export function SalesOverview({ user, employee, showToast }) {
                     <div className="flex flex-wrap items-center gap-2 px-5 py-2.5 mobile:px-3.5">
                       <span aria-hidden="true" className={`size-2 rounded-full ${g.dot}`} />
                       <span className={`text-sm font-extrabold ${g.muted ? 'text-text-muted' : 'text-text'}`}>{g.label}</span>
-                      <span className="text-xs tabular-nums text-text-muted">{items.length} ดีล</span>
+                      <span className="text-xs tabular-nums text-text-muted">{items.length} งาน</span>
                       <span className="text-xs text-text-faint">· {g.hint}</span>
                     </div>
                     {items.map(({ deal, action }) => (

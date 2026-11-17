@@ -418,8 +418,13 @@ describe('2026-11-17 wording matches the screens', () => {
 
   it('every "quoted" label exists in the source of the screen it describes', () => {
     expect(release).not.toBeNull();
+    // A published notice is not rewritten (it describes the screens as captured). A label the owner renamed after
+    // publication (ดีล → งาน, 2026-11-17) is checked under its CURRENT name instead, so the entry still has to point
+    // at something that is on the screen. Only exact renames belong here.
+    const RENAMED_AFTER_PUBLISH = { 'จัดกลุ่มตามดีล': 'จัดกลุ่มตามงาน' };
     for (const entry of release.entries) {
-      for (const label of quotedLabels(entry)) {
+      for (const quoted of quotedLabels(entry)) {
+        const label = RENAMED_AFTER_PUBLISH[quoted] ?? quoted;
         expect(labelInSources(label, ENTRY_SOURCES[entry.id]), `${entry.id}: "${label}" is not on the screen`).toBe(true);
       }
     }

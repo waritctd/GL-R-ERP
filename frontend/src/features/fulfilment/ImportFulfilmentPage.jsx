@@ -329,7 +329,7 @@ export function ImportFulfilmentPage({ user, showToast }) {
           ticketCode: ticket?.code,
           customerName: ticket?.customerName ?? null,
           title: ticket?.title ?? null,
-          message: query.error?.message ?? 'โหลดใบขอซื้อของดีลนี้ไม่สำเร็จ',
+          message: query.error?.message ?? 'โหลดใบขอซื้อของงานนี้ไม่สำเร็จ',
         });
         return;
       }
@@ -446,7 +446,7 @@ export function ImportFulfilmentPage({ user, showToast }) {
     <PageStack>
       <PageHeader
         title="การขนส่ง"
-        subtitle="ที่เดียวที่เลื่อนขั้นตอนการนำเข้าได้ — ส่ง IR ให้จัดซื้อ → สั่งซื้อผู้ผลิต → ขนส่งรับของ → กำลังเดินทาง → ถึงไทย รอออกของ → ถึงโกดัง · ฝ่ายขายเห็นขั้นตอนเดียวกันในดีล (ดูอย่างเดียว)"
+        subtitle="ที่เดียวที่เลื่อนขั้นตอนการนำเข้าได้ — ส่ง IR ให้จัดซื้อ → สั่งซื้อผู้ผลิต → ขนส่งรับของ → กำลังเดินทาง → ถึงไทย รอออกของ → ถึงโกดัง · ฝ่ายขายเห็นขั้นตอนเดียวกันในงาน (ดูอย่างเดียว)"
         actions={(
           <Button
             type="button"
@@ -485,12 +485,12 @@ export function ImportFulfilmentPage({ user, showToast }) {
           );
         })}
         <label className="ml-auto flex items-center gap-2 mobile:ml-0 mobile:w-full">
-          <span className="sr-only">ค้นหาดีล</span>
+          <span className="sr-only">ค้นหางาน</span>
           <input
             type="search"
             value={search}
             onChange={(event) => setSearch(event.target.value)}
-            placeholder="ค้นหาลูกค้า / เลขที่ดีล"
+            placeholder="ค้นหาลูกค้า / เลขที่งาน"
             className="min-h-9 w-52 rounded-md border border-border-input px-3 text-sm mobile:w-full"
             data-testid="fulfilment-search"
           />
@@ -503,13 +503,13 @@ export function ImportFulfilmentPage({ user, showToast }) {
       {ticketsQuery.isError ? (
         <Panel className="border-danger-border bg-danger-bg" data-testid="fulfilment-tickets-error">
           <p className="text-sm text-danger-dark">
-            โหลดรายชื่อดีลไม่สำเร็จ — {ticketsQuery.error?.message || 'ลองรีเฟรชหน้านี้อีกครั้ง'}
+            โหลดรายชื่องานไม่สำเร็จ — {ticketsQuery.error?.message || 'ลองรีเฟรชหน้านี้อีกครั้ง'}
           </p>
         </Panel>
       ) : null}
       {erroredDeals.length > 0 ? (
         <Panel className="border-danger-border bg-danger-bg" data-testid="fulfilment-rows-error">
-          <p className="mb-1.5 text-sm font-bold text-danger-dark">โหลดใบขอซื้อของดีลต่อไปนี้ไม่สำเร็จ</p>
+          <p className="mb-1.5 text-sm font-bold text-danger-dark">โหลดใบขอซื้อของงานต่อไปนี้ไม่สำเร็จ</p>
           <ul className="m-0 list-disc pl-5 text-xs text-danger-dark">
             {erroredDeals.map((d) => (
               <li key={d.ticketId}>
@@ -531,7 +531,7 @@ export function ImportFulfilmentPage({ user, showToast }) {
         <EmptyState
           icon="check"
           title="ยังไม่มีงานนำเข้ารายโรงงาน"
-          description="เมื่อมีการออกใบขอซื้อของโรงงานในดีลใดดีลหนึ่ง แต่ละโรงงานจะขึ้นที่นี่ให้เลื่อนสถานะ"
+          description="เมื่อมีการออกใบขอซื้อของโรงงานในงานใดงานหนึ่ง แต่ละโรงงานจะขึ้นที่นี่ให้เลื่อนสถานะ"
         />
       ) : visibleActive.length === 0 && doneDeals.length === 0 && visibleLegacy.length === 0 ? (
         <EmptyState
@@ -622,7 +622,7 @@ export function ImportFulfilmentPage({ user, showToast }) {
 
           {visibleActive.length === 0 ? (
             <p className="rounded-lg border border-dashed border-border px-4 py-6 text-center text-xs text-text-muted">
-              ไม่มีงานนำเข้าที่ตรงกับตัวกรองนี้ — ดูดีลที่รับครบแล้วด้านล่าง
+              ไม่มีงานนำเข้าที่ตรงกับตัวกรองนี้ — ดูงานที่รับครบแล้วด้านล่าง
             </p>
           ) : null}
 
@@ -663,7 +663,7 @@ export function ImportFulfilmentPage({ user, showToast }) {
           {visibleLegacy.length > 0 ? (
             <section className="rounded-xl border border-dashed border-border bg-surface p-3" data-testid="fulfilment-legacy">
               <p className="mb-2 text-xs font-bold text-text-muted">
-                ดีลอื่นที่ยังไม่ติดตามแบบรายโรงงาน — เปิดที่หน้าดีลเพื่อดำเนินการ
+                งานอื่นที่ยังไม่ติดตามแบบรายโรงงาน — เปิดที่หน้ารายละเอียดงานเพื่อดำเนินการ
               </p>
               <div className="flex flex-col gap-1.5">
                 {visibleLegacy.map((deal) => (
@@ -678,7 +678,7 @@ export function ImportFulfilmentPage({ user, showToast }) {
                       ) : null}
                     </span>
                     <Link to={`/import/deals/${deal.ticketId}`} className="text-info underline">
-                      ไปที่หน้าดีล <code>{deal.ticketCode}</code>
+                      เปิดงาน <code>{deal.ticketCode}</code>
                     </Link>
                   </div>
                 ))}
@@ -689,7 +689,7 @@ export function ImportFulfilmentPage({ user, showToast }) {
       )}
 
       <p className="text-2xs text-text-muted">
-        การส่งมอบสินค้าให้ลูกค้าไม่ได้อยู่ในหน้านี้ — บันทึกที่แท็บ จัดซื้อ-ส่งมอบ ของดีลนั้น
+        การส่งมอบสินค้าให้ลูกค้าไม่ได้อยู่ในหน้านี้ — บันทึกที่แท็บ จัดซื้อ-ส่งมอบ ของงานนั้น
       </p>
 
       {undo ? (

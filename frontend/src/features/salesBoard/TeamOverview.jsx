@@ -43,7 +43,7 @@ function Tile({ testId, label, value, sub, warn }) {
 
 function QuietChip({ count }) {
   return count > 0
-    ? <span className="whitespace-nowrap rounded-full bg-warning-bg px-2 py-px text-2xs font-bold text-warning-dark">{count} ดีล</span>
+    ? <span className="whitespace-nowrap rounded-full bg-warning-bg px-2 py-px text-2xs font-bold text-warning-dark">{count} งาน</span>
     : <span className="whitespace-nowrap rounded-full bg-surface-subtle px-2 py-px text-2xs font-bold text-text-muted">ไม่มี</span>;
 }
 
@@ -105,15 +105,15 @@ export function TeamOverview({ showTitle = true }) {
             ) : null}
             <Tile
               testId="tile-held"
-              label="ดีลที่ถืออยู่"
-              value={`${openDeals} ดีล`}
+              label="งานที่ถืออยู่"
+              value={`${openDeals} งาน`}
               sub={`มูลค่า ${totalLabel(openValue, mergeOther(team.reps))}`}
             />
             <Tile
               testId="tile-quiet"
-              label={`ดีลเงียบเกิน ${quietDays} วัน`}
-              value={`${quietDeals} ดีล`}
-              sub={quietDeals > 0 ? 'รายชื่อด้านล่าง' : 'ทุกดีลมีความเคลื่อนไหว'}
+              label={`งานเงียบเกิน ${quietDays} วัน`}
+              value={`${quietDeals} งาน`}
+              sub={quietDeals > 0 ? 'รายชื่อด้านล่าง' : 'ทุกงานมีความเคลื่อนไหว'}
               warn={quietDeals > 0}
             />
             <Tile
@@ -126,15 +126,15 @@ export function TeamOverview({ showTitle = true }) {
 
           <Panel flush title="รายคน">
             {team.reps.length === 0 ? (
-              <p className={`m-0 text-sm text-text-muted ${ROW}`}>ยังไม่มีดีลที่เปิดอยู่</p>
+              <p className={`m-0 text-sm text-text-muted ${ROW}`}>ยังไม่มีงานที่เปิดอยู่</p>
             ) : (
               <table className="w-full border-collapse text-sm">
                 <thead>
                   <tr className="text-left text-xs text-text-muted">
                     <th scope="col" className="px-5 py-2.5 font-bold mobile:px-3.5">พนักงานขาย</th>
-                    <th scope="col" className="px-3 py-2.5 text-right font-bold mobile:px-1.5">ดีล</th>
+                    <th scope="col" className="px-3 py-2.5 text-right font-bold mobile:px-1.5">งาน</th>
                     <th scope="col" className="px-3 py-2.5 text-right font-bold mobile:px-1.5">มูลค่า</th>
-                    <th scope="col" className="whitespace-nowrap px-3 py-2.5 font-bold mobile:px-1.5">ดีลเงียบ</th>
+                    <th scope="col" className="whitespace-nowrap px-3 py-2.5 font-bold mobile:px-1.5">งานเงียบ</th>
                     <th scope="col" className="whitespace-nowrap px-3 py-2.5 text-right font-bold mobile:hidden">
                       {month ? `คาดรับ ${month}` : 'คาดรับเดือนนี้'}
                     </th>
@@ -183,7 +183,7 @@ export function TeamOverview({ showTitle = true }) {
             flush
             title={(
               <span className="grid gap-0.5">
-                <span>ดีลที่ควรโทรตาม</span>
+                <span>งานที่ควรโทรตาม</span>
                 {/* The real order (SalesBoardService.rankFollowUp): every returning paused deal first — never capped,
                     listed until resumed or re-dated — then the quiet ones by value × days quiet (review round 2, M-1). */}
                 <small className="text-xs font-normal text-text-muted">งานที่ถึงวันกลับมาดูขึ้นก่อน แล้วเรียงตามมูลค่า × วันที่เงียบ</small>
@@ -197,7 +197,7 @@ export function TeamOverview({ showTitle = true }) {
           >
             {team.stale.length === 0 ? (
               <p className={`m-0 text-sm font-bold text-text-muted ${ROW}`}>
-                ไม่มีดีลเงียบ — ทุกดีลมีความเคลื่อนไหวใน {quietDays} วันที่ผ่านมา
+                ไม่มีงานเงียบ — ทุกงานมีความเคลื่อนไหวใน {quietDays} วันที่ผ่านมา
               </p>
             ) : (
               <ul data-testid="team-stale" className="m-0 list-none p-0">

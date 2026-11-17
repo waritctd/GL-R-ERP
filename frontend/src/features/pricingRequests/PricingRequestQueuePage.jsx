@@ -105,7 +105,7 @@ function buildColumns(user) {
     },
     {
       key: 'deal',
-      header: 'ดีล / ลูกค้า',
+      header: 'งาน / ลูกค้า',
       searchAccessor: (row) => `${row.ticketCode ?? ''} ${row.customerName ?? ''} ${row.projectName ?? ''}`,
       render: (row) => (
         <div className="flex flex-col">

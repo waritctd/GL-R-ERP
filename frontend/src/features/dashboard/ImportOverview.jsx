@@ -207,10 +207,10 @@ export function ImportOverview({ user, showToast }) {
       {partial ? (
         <div className="grid gap-2 rounded-md border border-danger-border bg-danger-bg p-4" data-testid="import-rows-error">
           <p className="m-0 flex flex-wrap items-center justify-between gap-2 text-sm font-bold text-danger-dark" data-testid="import-partial">
-            <span>ข้อมูลไม่ครบ — โหลดบางดีลไม่สำเร็จ ลองใหม่</span>
+            <span>ข้อมูลไม่ครบ — โหลดบางงานไม่สำเร็จ ลองใหม่</span>
             <Button type="button" variant="secondary" size="sm" className="mobile:min-h-11" onClick={retryErrored}>ลองใหม่</Button>
           </p>
-          <p className="m-0 text-xs font-bold text-danger-dark">โหลดใบขอซื้อของดีลต่อไปนี้ไม่สำเร็จ</p>
+          <p className="m-0 text-xs font-bold text-danger-dark">โหลดใบขอซื้อของงานต่อไปนี้ไม่สำเร็จ</p>
           <ul className="m-0 list-disc pl-5 text-xs text-danger-dark">
             {erroredDeals.map((t) => (
               <li key={t.id}>
@@ -282,7 +282,7 @@ export function ImportOverview({ user, showToast }) {
                 testId={`import-row-transit-legacy-${x.ticket.id}`}
                 code={x.ticket.code}
                 title={x.ticket.customerName || x.ticket.title || x.ticket.code}
-                sub="ดีลรูปแบบเดิม (ยังไม่ติดตามรายโรงงาน)"
+                sub="งานรูปแบบเดิม (ยังไม่ติดตามรายโรงงาน)"
                 detail={<StatusBadge tone={fulfilmentStatusLabel(x.ticket.fulfillmentStatus).tone}>{fulfilmentStatusLabel(x.ticket.fulfillmentStatus).label}</StatusBadge>}
                 chip={null}
                 action={(

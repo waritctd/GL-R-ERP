@@ -30,10 +30,10 @@ function renderCard(props) {
 // slice. Its wording there stays as it was, and the "ดูอย่างเดียว" chip is the deal page's opt-in, shown only on a
 // card that offers this viewer nothing to edit.
 describe('ImportRequestFactoryCard — what the deal page changed stays on the deal page', () => {
-  it('by default (ImportDealPage) the draft hint keeps its original wording', () => {
+  it('by default (ImportDealPage) the draft hint also says งาน (owner ruling 2026-11-17)', () => {
     renderCard({ row: draft });
     expect(screen.getByTestId('ir-draft-hint-42').textContent)
-      .toBe('ยังเป็นร่าง — ยังไม่มีขั้นนำเข้าให้เลื่อน เมื่อฝ่ายขายเจ้าของดีลหรือ CEO ออกเลขแล้ว จะติดตามการนำเข้ารายโรงงาน (S12–S17) แทนการเลื่อนสถานะทั้งดีล');
+      .toBe('ยังเป็นร่าง — ยังไม่มีขั้นนำเข้าให้เลื่อน เมื่อฝ่ายขายเจ้าของงานหรือ CEO ออกเลขแล้ว จะติดตามการนำเข้ารายโรงงาน (S12–S17) แทนการเลื่อนสถานะทั้งงาน');
   });
 
   it('the deal page asks for งาน', () => {

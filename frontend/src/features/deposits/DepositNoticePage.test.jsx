@@ -331,7 +331,7 @@ describe('DepositNoticePage', () => {
 
     expect(await screen.findByText('ยังไม่มีใบแจ้งยอดเงินรับมัดจำ')).not.toBeNull();
     // A deal document: the helper says ดีล, not คำขอราคา.
-    expect(screen.getByText('สร้างเอกสารฉบับร่างเพื่อเริ่มกรอกรายละเอียดใบแจ้งยอดมัดจำสำหรับดีลนี้')).not.toBeNull();
+    expect(screen.getByText('สร้างเอกสารฉบับร่างเพื่อเริ่มกรอกรายละเอียดใบแจ้งยอดมัดจำสำหรับงานนี้')).not.toBeNull();
 
     const createButton = screen.getByRole('button', { name: /สร้างเอกสารฉบับร่าง/ });
     fireEvent.click(createButton);
@@ -420,7 +420,7 @@ describe('DepositNoticePage', () => {
     // QA-32: this is a DEAL document, so the trail says ดีล — never คำขอราคา — and the issue
     // helper no longer talks about a คำขอราคา status change.
     const trail = within(screen.getByRole('navigation', { name: 'breadcrumb' }));
-    expect(trail.getByText('ดีล')).not.toBeNull();
+    expect(trail.getByText('งานทั้งหมด')).not.toBeNull();
     expect(trail.getByText('บริษัท ทดสอบ จำกัด')).not.toBeNull();
     expect(trail.getByText('ใบแจ้งยอดเงินรับมัดจำ')).not.toBeNull();
     expect(trail.queryByText('คำขอราคา')).toBeNull();

@@ -281,12 +281,12 @@ export function MyWork({ subtitle, before = null, user, showToast = () => {} }) 
           title={(
             <span className="grid gap-0.5">
               <span>ควรตามต่อ</span>
-              <small className="text-xs font-normal text-text-muted">ดีลที่เงียบเกิน {quietDays} วัน</small>
+              <small className="text-xs font-normal text-text-muted">งานที่เงียบเกิน {quietDays} วัน</small>
             </span>
           )}
           actions={work ? <CountPill count={work.followUp.length} /> : null}
         >
-          {workQuery.isError ? <Failed /> : !work ? <Loading label="กำลังโหลดดีลที่ควรตามต่อ" /> : (
+          {workQuery.isError ? <Failed /> : !work ? <Loading label="กำลังโหลดงานที่ควรตามต่อ" /> : (
             <FollowUpList
               deals={work.followUp}
               quietDays={quietDays}

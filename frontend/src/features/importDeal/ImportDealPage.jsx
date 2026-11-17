@@ -117,7 +117,7 @@ export function ImportDealPage({ user, showToast }) {
   if (dealQuery.isLoading) {
     return (
       <PageStack>
-        <Panel aria-busy="true" aria-label="กำลังโหลดดีล">
+        <Panel aria-busy="true" aria-label="กำลังโหลดงาน">
           <SkeletonText lines={6} />
         </Panel>
       </PageStack>
@@ -131,10 +131,10 @@ export function ImportDealPage({ user, showToast }) {
         <Panel data-testid={status === 403 ? 'import-deal-forbidden' : status === 404 ? 'import-deal-not-found' : 'import-deal-error'}>
           <EmptyState
             icon="search"
-            title={status === 403 ? 'ดีลนี้ไม่อยู่ในขอบเขตงานนำเข้าของคุณ'
-              : status === 404 ? 'ไม่พบดีลนี้'
-                : 'โหลดดีลไม่สำเร็จ'}
-            description={status === 403 ? 'ดีลที่ยังไม่ถึงขั้นจัดซื้อและนำเข้าจะยังไม่ปรากฏในงานนำเข้า — กลับไปเลือกจากรายการงานนำเข้า'
+            title={status === 403 ? 'งานนี้ไม่อยู่ในขอบเขตงานนำเข้าของคุณ'
+              : status === 404 ? 'ไม่พบงานนี้'
+                : 'โหลดงานไม่สำเร็จ'}
+            description={status === 403 ? 'งานที่ยังไม่ถึงขั้นจัดซื้อและนำเข้าจะยังไม่ปรากฏในงานนำเข้า — กลับไปเลือกจากรายการงานนำเข้า'
               : status === 404 ? 'ตรวจสอบลิงก์อีกครั้ง หรือกลับไปเลือกจากรายการงานนำเข้า'
                 : (dealQuery.error?.message || 'ลองใหม่อีกครั้ง')}
           />
@@ -233,7 +233,7 @@ export function ImportDealPage({ user, showToast }) {
         {liveRows.length === 0 ? (
           <div className="grid gap-4">
             <p className="m-0 text-sm text-text-muted" data-testid="import-deal-no-ir">
-              ดีลนี้ยังไม่มีใบขอซื้อรายโรงงาน — ฝ่ายขายเป็นผู้สร้างและออกเลขใบขอซื้อ แล้วฝ่ายนำเข้าจึงเลื่อนสถานะรายโรงงานได้ที่นี่
+              งานนี้ยังไม่มีใบขอซื้อรายโรงงาน — ฝ่ายขายเป็นผู้สร้างและออกเลขใบขอซื้อ แล้วฝ่ายนำเข้าจึงเลื่อนสถานะรายโรงงานได้ที่นี่
             </p>
           </div>
         ) : (
@@ -261,9 +261,9 @@ export function ImportDealPage({ user, showToast }) {
               data-testid="import-deal-legacy-action"
             >
               <div className="min-w-0 flex-1 basis-56">
-                <h3 className="m-0 text-sm font-bold text-text">ดำเนินการนำเข้า (ดีลรูปแบบเดิม)</h3>
+                <h3 className="m-0 text-sm font-bold text-text">ดำเนินการนำเข้า (งานรูปแบบเดิม)</h3>
                 <p className="m-0 mt-1 text-xs text-text-muted">
-                  ดีลนี้ยังไม่ใช้ใบขอซื้อรายโรงงาน — เลื่อนสถานะทั้งดีลทีละขั้นด้วยปุ่มนี้
+                  งานนี้ยังไม่ใช้ใบขอซื้อรายโรงงาน — เลื่อนสถานะทั้งงานทีละขั้นด้วยปุ่มนี้
                 </p>
               </div>
               <Button
@@ -401,7 +401,7 @@ export function ImportDealPage({ user, showToast }) {
           canUpload={false}
           notTerminal={false}
           user={user}
-          emptyDescription="ยังไม่มีไฟล์แนบสำหรับดีลนี้"
+          emptyDescription="ยังไม่มีไฟล์แนบสำหรับงานนี้"
         />
       </div>
     </PageStack>

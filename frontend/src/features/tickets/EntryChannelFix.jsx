@@ -13,8 +13,8 @@ const SETTABLE_ENTRY_CHANNELS = ['DESIGNER_LED', 'OWNER_DIRECT', 'BUYER_DIRECT']
  * off the deal's route with a message that ends "— แก้ช่องทางดีลก่อน". */
 export function EntryChannelFix({
   entryChannel, action, onSubmit, disabled = false, context,
-  // The deal page's stepper says งาน (owner ruling 2026-11-16, that page only); UpdateStageModal keeps ดีล.
-  noun = 'ดีล',
+  // Every sales screen says งาน (owner ruling 2026-11-16 for the deal page, extended to the rest 2026-11-17).
+  noun = 'งาน',
 }) {
   const uid = useId();
   const panelId = `${uid}-panel`;
