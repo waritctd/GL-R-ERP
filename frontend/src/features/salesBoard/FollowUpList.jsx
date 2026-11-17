@@ -108,9 +108,9 @@ export function FollowUpList({
           deal={calling}
           submitting={loggingCall}
           onClose={() => setCalling(null)}
-          onSubmit={async (note) => {
+          onSubmit={async (note, nextFollowUpAt) => {
             // A failure is reported by the caller (toast) and the dialog stays open with what was typed.
-            if (await onLogCall(calling, note)) setCalling(null);
+            if (await onLogCall(calling, note, nextFollowUpAt)) setCalling(null);
           }}
         />
       ) : null}

@@ -181,6 +181,25 @@ describe('VisitsPage — a sales rep\'s own week', () => {
     await waitFor(() => expect(api.salesVisits.done).toHaveBeenCalledWith(2, { note: 'ส่งตัวอย่าง' }));
   });
 
+  // Slice 6.4: the same ตามต่อ as on งานของฉัน, on this page's tick and log dialogs.
+  it('a tick with ตามต่อ sends the deal\'s next follow-up date; without it, exactly the old request', async () => {
+    renderPage();
+    const row = await screen.findByTestId('visit-2');
+    fireEvent.click(within(row).getByRole('button', { name: 'เข้าพบแล้ว: Linea Interior' }));
+    let dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(within(dialog).getByRole('radiogroup', { name: 'ตามต่อ' })).getByRole('radio', { name: '3 วัน' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'บันทึก' }));
+    await waitFor(() => expect(api.salesVisits.done).toHaveBeenCalledTimes(1));
+    expect(api.salesVisits.done.mock.calls[0]).toStrictEqual([2, { note: undefined, nextFollowUpAt: '2026-11-15' }]);
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกเข้าพบ' }));
+    dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'บันทึก' }));
+    await waitFor(() => expect(api.salesVisits.done).toHaveBeenCalledTimes(2));
+    expect(api.salesVisits.done.mock.calls[1]).toStrictEqual([2, { note: undefined }]);
+  });
+
   it('a tick on a งาน that has moved to someone else says so, in งาน wording', async () => {
     const showToast = vi.fn();
     api.salesVisits.done.mockResolvedValue(visit({ id: 2, status: 'DONE', dealMovedToName: 'คุณอรุณี', dealMoved: true }));

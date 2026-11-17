@@ -179,6 +179,7 @@ export const API_ROUTES = {
     create: '/api/sales/visits',
     done: (id) => `/api/sales/visits/${id}/done`,
     cancel: (id) => `/api/sales/visits/${id}/cancel`,
+    plannedOnDeal: (ticketId) => `/api/sales/visits/deal/${ticketId}/planned`,
   },
   tickets: {
     list: '/api/tickets',

@@ -10,6 +10,7 @@ import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { PageStack, Panel } from '../../components/common/Layout.jsx';
 import { Skeleton } from '../../components/common/Skeleton.jsx';
 import { addDaysIso, bangkokTodayIso } from '../../utils/format.js';
+import { withFollowUp } from './FollowUpPicks.jsx';
 import { LogVisitModal, PlanVisitModal, VisitDoneModal } from './VisitDialogs.jsx';
 import { CarriedOverVisits, VisitRow, WeekNav } from './VisitsThisWeek.jsx';
 import { VisitWeekGrid } from './VisitWeekGrid.jsx';
@@ -86,7 +87,8 @@ function RepWeek({ showToast }) {
   const refresh = () => queryClient.invalidateQueries({ queryKey: ['tickets'] });
   const createVisit = useMutation({ mutationFn: (payload) => api.salesVisits.create(payload), onSuccess: refresh });
   const doneVisit = useMutation({
-    mutationFn: ({ visit, note }) => api.salesVisits.done(visit.id, { note }),
+    // Slice 6.4: ตามต่อ's date only when picked — otherwise exactly the old request.
+    mutationFn: ({ visit, note, nextFollowUpAt }) => api.salesVisits.done(visit.id, withFollowUp({ note }, nextFollowUpAt)),
     onSuccess: refresh,
   });
   const cancelVisit = useMutation({ mutationFn: (visit) => api.salesVisits.cancel(visit.id), onSuccess: refresh });
@@ -228,7 +230,8 @@ function RepWeek({ showToast }) {
           visit={ticking}
           submitting={doneVisit.isPending}
           onClose={() => setTicking(null)}
-          onSubmit={(note) => attempt(doneVisit, { visit: ticking, note }, () => setTicking(null), 'บันทึกเข้าพบแล้ว')}
+          onSubmit={(note, nextFollowUpAt) => attempt(doneVisit, { visit: ticking, note, nextFollowUpAt },
+            () => setTicking(null), 'บันทึกเข้าพบแล้ว')}
         />
       ) : null}
       {logging ? (
@@ -237,10 +240,10 @@ function RepWeek({ showToast }) {
           deals={deals}
           submitting={doneVisit.isPending || createVisit.isPending}
           onClose={() => setLogging(false)}
-          onSubmit={({ visit, contactName, ticketId, note }) => (visit
-            ? attempt(doneVisit, { visit, note }, () => setLogging(false), 'บันทึกเข้าพบแล้ว')
-            : attempt(createVisit, { contactName, ticketId, plannedDate: todayIso, note, done: true },
-              () => setLogging(false), 'บันทึกเข้าพบแล้ว'))}
+          onSubmit={({ visit, contactName, ticketId, note, nextFollowUpAt }) => (visit
+            ? attempt(doneVisit, { visit, note, nextFollowUpAt }, () => setLogging(false), 'บันทึกเข้าพบแล้ว')
+            : attempt(createVisit, withFollowUp({ contactName, ticketId, plannedDate: todayIso, note, done: true },
+              nextFollowUpAt), () => setLogging(false), 'บันทึกเข้าพบแล้ว'))}
         />
       ) : null}
       <ConfirmDialog

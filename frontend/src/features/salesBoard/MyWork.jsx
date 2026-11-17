@@ -19,6 +19,7 @@ import { CashCard } from './CashCard.jsx';
 import { DealBoard } from './DealBoard.jsx';
 import { FollowUpList } from './FollowUpList.jsx';
 import { CallModal } from './CallModal.jsx';
+import { withFollowUp } from './FollowUpPicks.jsx';
 import { CallPicker, TodayOnPhone } from './TodayOnPhone.jsx';
 import { LogVisitModal, PlanVisitModal, VisitDoneModal } from './VisitDialogs.jsx';
 import { CarriedOverVisits, VisitsThisWeek } from './VisitsThisWeek.jsx';
@@ -136,9 +137,10 @@ export function MyWork({ subtitle, before = null, user, showToast = () => {} }) 
   const fail = (error) => showToast('error', error?.message || 'บันทึกไม่สำเร็จ');
 
   const callMutation = useMutation({
-    mutationFn: ({ deal, note }) => api.tickets.addActivity(deal.ticketId, {
+    // Slice 6.4: a picked ตามครั้งถัดไป rides on the same request as the deal's nextFollowUpAt; none, no key at all.
+    mutationFn: ({ deal, note, nextFollowUpAt }) => api.tickets.addActivity(deal.ticketId, withFollowUp({
       kind: 'CALL', activityDate: bangkokTodayIso(), note,
-    }),
+    }, nextFollowUpAt)),
     onSuccess: refresh,
   });
   const lostMutation = useMutation({
@@ -164,7 +166,7 @@ export function MyWork({ subtitle, before = null, user, showToast = () => {} }) 
 
   const createVisit = useMutation({ mutationFn: (payload) => api.salesVisits.create(payload), onSuccess: refresh });
   const doneVisit = useMutation({
-    mutationFn: ({ visit, note }) => api.salesVisits.done(visit.id, { note }),
+    mutationFn: ({ visit, note, nextFollowUpAt }) => api.salesVisits.done(visit.id, withFollowUp({ note }, nextFollowUpAt)),
     onSuccess: refresh,
   });
   const cancelVisit = useMutation({ mutationFn: (visit) => api.salesVisits.cancel(visit.id), onSuccess: refresh });
@@ -184,9 +186,9 @@ export function MyWork({ subtitle, before = null, user, showToast = () => {} }) 
     }
   }
 
-  async function logCall(deal, note) {
+  async function logCall(deal, note, nextFollowUpAt) {
     try {
-      await callMutation.mutateAsync({ deal, note });
+      await callMutation.mutateAsync({ deal, note, nextFollowUpAt });
       return true;
     } catch (error) {
       fail(error);
@@ -382,9 +384,9 @@ export function MyWork({ subtitle, before = null, user, showToast = () => {} }) 
           deal={calling}
           submitting={callMutation.isPending}
           onClose={() => setCalling(null)}
-          onSubmit={async (note) => {
+          onSubmit={async (note, nextFollowUpAt) => {
             // A failure is toasted and the dialog stays open with what was typed.
-            if (await logCall(calling, note)) setCalling(null);
+            if (await logCall(calling, note, nextFollowUpAt)) setCalling(null);
           }}
         />
       ) : null}
@@ -406,7 +408,8 @@ export function MyWork({ subtitle, before = null, user, showToast = () => {} }) 
           visit={ticking}
           submitting={doneVisit.isPending}
           onClose={() => setTicking(null)}
-          onSubmit={(note) => attempt(doneVisit, { visit: ticking, note }, () => setTicking(null), 'บันทึกเข้าพบแล้ว')}
+          onSubmit={(note, nextFollowUpAt) => attempt(doneVisit, { visit: ticking, note, nextFollowUpAt },
+            () => setTicking(null), 'บันทึกเข้าพบแล้ว')}
         />
       ) : null}
       {logging ? (
@@ -415,10 +418,10 @@ export function MyWork({ subtitle, before = null, user, showToast = () => {} }) 
           deals={work?.board ?? []}
           submitting={doneVisit.isPending || createVisit.isPending}
           onClose={() => setLogging(false)}
-          onSubmit={({ visit, contactName, ticketId, note }) => (visit
-            ? attempt(doneVisit, { visit, note }, () => setLogging(false), 'บันทึกเข้าพบแล้ว')
-            : attempt(createVisit, { contactName, ticketId, plannedDate: todayIso, note, done: true },
-              () => setLogging(false), 'บันทึกเข้าพบแล้ว'))}
+          onSubmit={({ visit, contactName, ticketId, note, nextFollowUpAt }) => (visit
+            ? attempt(doneVisit, { visit, note, nextFollowUpAt }, () => setLogging(false), 'บันทึกเข้าพบแล้ว')
+            : attempt(createVisit, withFollowUp({ contactName, ticketId, plannedDate: todayIso, note, done: true },
+              nextFollowUpAt), () => setLogging(false), 'บันทึกเข้าพบแล้ว'))}
         />
       ) : null}
       <ConfirmDialog

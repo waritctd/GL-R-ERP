@@ -1,5 +1,6 @@
 /* Hallmark · genre: modern-minimal · macrostructure: Workbench · design-system: design.md · designed-as-app · pre-emit critique: P4 H4 E5 S4 R5 V5 */
 import { useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { Button } from '../../components/common/Button.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
@@ -8,7 +9,8 @@ import { SkeletonText } from '../../components/common/Skeleton.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { bangkokTodayIso, formatMoney, formatThaiDate, PAYMENT_KIND_LABEL } from '../../utils/format.js';
 import { ACTIVITY_KINDS, activityKindLabel } from './dealTrackingMeta.js';
-import { TIMELINE_FILTERS, timelineRowMatches } from './dealTimeline.js';
+import { showsPlannedVisits, TIMELINE_FILTERS, timelineRowMatches } from './dealTimeline.js';
+import { shortDayLabel, timeLabel } from '../salesBoard/visitWeek.js';
 import { CANCEL_REASON_LABEL, LOST_REASON_F_CODE, LOST_REASON_LABEL } from './stageMeta.js';
 import { ThaiDateInput } from '../../components/common/ThaiDateInput.jsx';
 
@@ -205,6 +207,42 @@ function ActivityRow({ activity }) {
   );
 }
 
+/**
+ * Slice 6.5 (prototype screen D): one PLANNED visit on this deal, above the dated history — it is what happens next,
+ * not something that happened. A dashed card with นัดไว้ (or เลยวันนัด once its day has passed unticked), who is being
+ * met, when, by whom, and the purpose. With `href` the whole card opens the นัดเข้าพบ page, where it is ticked.
+ */
+function PlannedVisitRow({ visit, todayIso, href }) {
+  const overdue = visit.plannedDate < todayIso;
+  const when = [shortDayLabel(visit.plannedDate, todayIso), timeLabel(visit.plannedTime)].filter(Boolean).join(' · ');
+  const body = (
+    <>
+      <span className="flex flex-wrap items-center gap-2">
+        <StatusBadge tone={overdue ? 'warning' : 'info'}>{overdue ? 'เลยวันนัด' : 'นัดไว้'}</StatusBadge>
+        <strong className="min-w-0 text-sm text-text [overflow-wrap:anywhere]">{`นัดเข้าพบ · ${visit.contactName}`}</strong>
+      </span>
+      <span className="text-xs font-bold text-text-secondary">
+        {when}
+        {visit.ownerName ? <span className="font-normal text-text-muted">{` · ${visit.ownerName}`}</span> : null}
+      </span>
+      {visit.note ? <span className="text-xs text-text-secondary [overflow-wrap:anywhere]">{visit.note}</span> : null}
+    </>
+  );
+  const card = 'flex flex-col gap-1 rounded-lg border border-dashed border-border-strong bg-surface px-3 py-2';
+  return (
+    <li data-testid="timeline-planned-visit" className={href ? '' : card}>
+      {href ? (
+        <Link
+          to={href}
+          className={`${card} min-h-11 no-underline transition-colors hover:border-primary hover:bg-surface-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary`}
+        >
+          {body}
+        </Link>
+      ) : body}
+    </li>
+  );
+}
+
 /** "ประวัติ" (drawing a-deal, on the ภาพรวม tab): one chronological history merging the system audit trail with the
  * rep's own follow-up log (`activities`, formerly DealTrackingPanel's "ประวัติการติดตาม"), filtered by
  * ทั้งหมด / เข้าพบ / เอกสาร (dealTimeline.js). The note composer (comment + the any-kind activity form) is closed
@@ -224,6 +262,11 @@ export function DealHistoryPanel({
   canAddActivity = false,
   onAddActivity,
   addingActivity = false,
+  // Slice 6.5: the deal's PLANNED visits as the server served them to this viewer (already narrowed to the visits they
+  // may read); `visitsHref` links each to the นัดเข้าพบ page when the viewer may open it; `todayIso` marks the overdue.
+  plannedVisits = [],
+  visitsHref = null,
+  todayIso = bangkokTodayIso(),
 }) {
   const [activityDraft, setActivityDraft] = useState(emptyActivityDraft);
   const [filter, setFilter] = useState('all');
@@ -250,6 +293,8 @@ export function DealHistoryPanel({
     });
   }, [events, activities]);
   const rows = allRows.filter((row) => timelineRowMatches(row, filter));
+  const upcoming = showsPlannedVisits(filter) ? plannedVisits : [];
+  const nothing = rows.length === 0 && upcoming.length === 0;
 
   async function submitActivity() {
     if (!activityDraft.activityDate) return;
@@ -309,9 +354,9 @@ export function DealHistoryPanel({
         />
       ) : null}
       <div className="ticket-events">
-        {rows.length === 0 && !loading && allRows.length > 0 ? (
+        {nothing && !loading && (allRows.length > 0 || plannedVisits.length > 0) ? (
           <p className="m-0 px-1 py-3 text-sm text-text-muted">ไม่มีรายการในตัวกรองนี้</p>
-        ) : rows.length === 0 && !loading ? (
+        ) : nothing && !loading ? (
           // FIX 1 (Opus review): when `canViewActivityFeed` is false, `activities` is always `[]` because it was never
           // fetched for this viewer (see the parent's `activitiesQuery.enabled`) — an empty `events` list here only
           // proves the AUDIT TRAIL is empty, not that "nothing has happened on this deal".
@@ -326,6 +371,9 @@ export function DealHistoryPanel({
           )
         ) : (
           <ul className="m-0 flex list-none flex-col gap-2 p-0">
+            {upcoming.map((visit) => (
+              <PlannedVisitRow key={`visit-${visit.id}`} visit={visit} todayIso={todayIso} href={visitsHref} />
+            ))}
             {rows.map((row) => (
               row.type === 'event'
                 ? <EventRow key={row.key} event={row.event} />

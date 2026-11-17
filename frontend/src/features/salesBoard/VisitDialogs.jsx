@@ -2,6 +2,8 @@ import { useId, useState } from 'react';
 import { Button } from '../../components/common/Button.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { ThaiDateInput } from '../../components/common/ThaiDateInput.jsx';
+import { bangkokTodayIso } from '../../utils/format.js';
+import { FollowUpPicks, withFollowUp } from './FollowUpPicks.jsx';
 import { timeLabel, weekRangeLabel, weekStartIso } from './visitWeek.js';
 
 // The m-visit-log dialog's three outcomes. Stored as the note's first line (sales.visit and deal_activity have no
@@ -64,6 +66,17 @@ function DealSelect({ id, deals, value, onChange }) {
       </select>
     </label>
   );
+}
+
+/**
+ * Slice 6.4: whether a tick on this visit lands on a deal — the only case ตามต่อ can set the deal's follow-up date. Mirrors
+ * the server (TicketService#requireVisitFollowUpWritable): the visit is on a deal and its owner still holds the deal;
+ * VisitDto.dealMovedToName is set exactly when they do not (a moved deal, a keyer's or a manager's own visit).
+ */
+const landsOnDeal = (visit) => Boolean(visit?.ticketId) && !visit.dealMovedToName;
+
+function FollowUpField({ value, onChange }) {
+  return <FollowUpPicks label="ตามต่อ" todayIso={bangkokTodayIso()} value={value} onChange={onChange} />;
 }
 
 const footerHint = (text) => <span className="mr-auto text-xs text-text-muted mobile:hidden">{text}</span>;
@@ -162,10 +175,15 @@ export function PlanVisitModal({ deals, initialDeal = null, todayIso, submitting
   );
 }
 
-/** The tick on one planned visit: optional outcome + note, then done. */
+/**
+ * The tick on one planned visit: optional outcome + note, then done. ตามต่อ (slice 6.4) only when the tick lands on the
+ * visit's deal; onSubmit receives the joined note and the picked date (`undefined` when none or not on a deal).
+ */
 export function VisitDoneModal({ visit, submitting, onClose, onSubmit }) {
   const [outcome, setOutcome] = useState(null);
   const [note, setNote] = useState('');
+  const [followUp, setFollowUp] = useState('');
+  const onDeal = landsOnDeal(visit);
   return (
     <Modal
       title="เข้าพบแล้ว"
@@ -175,7 +193,11 @@ export function VisitDoneModal({ visit, submitting, onClose, onSubmit }) {
         <>
           {visit.ticketId ? footerHint('บันทึกแล้วงานนี้ออกจาก “ควรตามต่อ”') : null}
           <Button type="button" variant="secondary" onClick={onClose}>ยกเลิก</Button>
-          <Button type="button" disabled={submitting} onClick={() => onSubmit(joinNote(outcome, note))}>
+          <Button
+            type="button"
+            disabled={submitting}
+            onClick={() => onSubmit(joinNote(outcome, note), (onDeal && followUp) || undefined)}
+          >
             {submitting ? 'กำลังบันทึก…' : 'บันทึก'}
           </Button>
         </>
@@ -184,6 +206,7 @@ export function VisitDoneModal({ visit, submitting, onClose, onSubmit }) {
       <div className="grid gap-4">
         <OutcomeField value={outcome} onChange={setOutcome} />
         <NoteField value={note} onChange={setNote} />
+        {onDeal ? <FollowUpField value={followUp} onChange={setFollowUp} /> : null}
       </div>
     </Modal>
   );
@@ -194,7 +217,9 @@ const UNPLANNED = 'unplanned';
 /**
  * m-visit-log — บันทึกเข้าพบ, the phone's one-step log after a visit: pick one of today's planned visits (it is
  * ticked done) or ไม่ได้นัด (a visit is created DONE for today, optionally on a deal).
- * onSubmit receives `{ visit, note }` or `{ contactName, ticketId, note }`.
+ * onSubmit receives `{ visit, note }` or `{ contactName, ticketId, note }`, plus `nextFollowUpAt` (slice 6.4 ตามต่อ)
+ * only when one was picked and the log lands on a deal — the picked visit's, or the deal chosen for ไม่ได้นัด (the
+ * rep's own deals, so the log lands on it).
  */
 export function LogVisitModal({ todaysPlanned, deals, submitting, onClose, onSubmit }) {
   const ids = useId();
@@ -203,15 +228,30 @@ export function LogVisitModal({ todaysPlanned, deals, submitting, onClose, onSub
   const [note, setNote] = useState('');
   const [contactName, setContactName] = useState('');
   const [ticketId, setTicketId] = useState('');
+  const [followUp, setFollowUp] = useState('');
   const unplanned = choice === UNPLANNED;
   const ready = unplanned ? contactName.trim() : choice;
+  const picked = unplanned ? null : todaysPlanned.find((v) => String(v.id) === choice);
+  const onDeal = unplanned ? Boolean(ticketId) : landsOnDeal(picked);
+  const nextFollowUpAt = onDeal ? followUp : '';
+  // A date picked for one visit or deal is not carried to another, nor kept hidden once the log is off any deal.
+  const pickVisit = (key) => {
+    if (key !== choice) setFollowUp('');
+    setChoice(key);
+  };
+  const pickDeal = (id) => {
+    if (!id) setFollowUp('');
+    setTicketId(id);
+  };
 
   const submit = () => {
     const text = joinNote(outcome, note);
     if (unplanned) {
-      onSubmit({ contactName: contactName.trim(), ticketId: ticketId ? Number(ticketId) : null, note: text });
+      onSubmit(withFollowUp(
+        { contactName: contactName.trim(), ticketId: ticketId ? Number(ticketId) : null, note: text }, nextFollowUpAt,
+      ));
     } else {
-      onSubmit({ visit: todaysPlanned.find((v) => String(v.id) === choice), note: text });
+      onSubmit(withFollowUp({ visit: picked, note: text }, nextFollowUpAt));
     }
   };
 
@@ -240,7 +280,7 @@ export function LogVisitModal({ todaysPlanned, deals, submitting, onClose, onSub
       <div className="grid gap-4">
         <fieldset className="m-0 grid gap-2 border-0 p-0">
           <legend className="mb-2 p-0 text-sm font-bold text-text">นัดวันนี้</legend>
-          <Picks label="นัดวันนี้" options={choices} value={choice} onChange={(key) => setChoice(key ?? choice)} />
+          <Picks label="นัดวันนี้" options={choices} value={choice} onChange={(key) => pickVisit(key ?? choice)} />
         </fieldset>
         {unplanned ? (
           <>
@@ -255,11 +295,12 @@ export function LogVisitModal({ todaysPlanned, deals, submitting, onClose, onSub
                 className={INPUT}
               />
             </label>
-            <DealSelect id={`${ids}-deal`} deals={deals} value={ticketId} onChange={setTicketId} />
+            <DealSelect id={`${ids}-deal`} deals={deals} value={ticketId} onChange={pickDeal} />
           </>
         ) : null}
         <OutcomeField value={outcome} onChange={setOutcome} />
         <NoteField value={note} onChange={setNote} />
+        {onDeal ? <FollowUpField value={followUp} onChange={setFollowUp} /> : null}
       </div>
     </Modal>
   );

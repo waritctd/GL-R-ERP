@@ -127,6 +127,9 @@ export const queryKeys = {
   // Under 'tickets' so every deal/visit write's ['tickets'] invalidation refreshes them too.
   salesVisitsOwn: (from, to) => ['tickets', 'salesVisits', 'own', from, to],
   salesVisitsTeam: (from, to) => ['tickets', 'salesVisits', 'team', from, to],
+  // Slice 6.5: one deal's planned visits (the deal page's history) — under 'salesVisits' so planning, ticking or
+  // cancelling a visit anywhere refreshes it.
+  salesVisitsPlannedOnDeal: (ticketId) => ['tickets', 'salesVisits', 'deal', ticketId == null ? ticketId : Number(ticketId)],
   // The quiet threshold the deal list's ภาพรวมทีม badge names. Deliberately OUTSIDE 'tickets': it is near-static, so a
   // ['tickets'] invalidation (an activity, a stage move) must not refetch the whole team overview just to re-read it.
   salesBoardQuietDays: () => ['salesBoard', 'quietDays'],

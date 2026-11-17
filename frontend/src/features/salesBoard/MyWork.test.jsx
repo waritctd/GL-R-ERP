@@ -5,6 +5,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { MyWork } from './MyWork.jsx';
 import { api } from '../../api/index.js';
+import { addDaysIso, bangkokTodayIso } from '../../utils/format.js';
 
 globalThis.React = React;
 
@@ -88,6 +89,38 @@ describe('MyWork', () => {
     expect(payload.activityDate).toMatch(/^\d{4}-\d{2}-\d{2}$/);
     await waitFor(() => expect(screen.queryByTestId('follow-up-31')).toBeNull());
     expect(api.salesBoard.myWork).toHaveBeenCalledTimes(2);
+  });
+
+  // Slice 6.4: โทรแล้ว · ตามครั้งถัดไป. Unused, the request has no nextFollowUpAt key at all.
+  it('โทรแล้ว without ตามครั้งถัดไป sends exactly the CALL it sent before', async () => {
+    renderMyWork();
+    const row = await screen.findByTestId('follow-up-31');
+    fireEvent.click(within(row).getByRole('button', { name: /โทรแล้ว/ }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('radio', { name: 'ไม่รับสาย' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'บันทึก' }));
+
+    await waitFor(() => expect(api.tickets.addActivity).toHaveBeenCalledTimes(1));
+    const [, payload] = api.tickets.addActivity.mock.calls[0];
+    expect(payload).toStrictEqual({ kind: 'CALL', activityDate: bangkokTodayIso(), note: 'ไม่รับสาย' });
+  });
+
+  it('โทรแล้ว with ตามครั้งถัดไป 2 สัปดาห์ sends the deal\'s next follow-up date with the CALL', async () => {
+    renderMyWork();
+    const row = await screen.findByTestId('follow-up-31');
+    fireEvent.click(within(row).getByRole('button', { name: /โทรแล้ว/ }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('radio', { name: 'คุยแล้ว ยังสนใจ' }));
+    fireEvent.click(within(dialog).getByRole('radio', { name: '2 สัปดาห์' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'บันทึก' }));
+
+    await waitFor(() => expect(api.tickets.addActivity).toHaveBeenCalledTimes(1));
+    const [id, payload] = api.tickets.addActivity.mock.calls[0];
+    expect(id).toBe(31);
+    expect(payload).toStrictEqual({
+      kind: 'CALL', activityDate: bangkokTodayIso(), note: 'คุยแล้ว ยังสนใจ',
+      nextFollowUpAt: addDaysIso(bangkokTodayIso(), 14),
+    });
   });
 
   // ปิดงานนี้ (was ปิดดีลนี้) now opens the rebuilt ปิดงาน · เสียงาน dialog (drawing m-lost); it used to assert the old

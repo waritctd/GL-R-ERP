@@ -215,6 +215,60 @@ describe('MyWork — นัดเข้าพบสัปดาห์นี้',
     });
   });
 
+  // Slice 6.4: ตามต่อ. Unused, the requests are byte-for-byte what they were (no nextFollowUpAt key at all).
+  it('ticking a visit on a deal with ตามต่อ sends the deal\'s next follow-up date with the tick', async () => {
+    renderMyWork();
+    const row = await screen.findByTestId('visit-2');
+    fireEvent.click(within(row).getByRole('button', { name: 'เข้าพบแล้ว: Linea Interior' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(within(dialog).getByRole('radiogroup', { name: 'ตามต่อ' })).getByRole('radio', { name: '1 สัปดาห์' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'บันทึก' }));
+
+    await waitFor(() => expect(api.salesVisits.done).toHaveBeenCalledTimes(1));
+    expect(api.salesVisits.done.mock.calls[0]).toStrictEqual([2, { note: undefined, nextFollowUpAt: '2026-11-19' }]);
+  });
+
+  it('without ตามต่อ the tick and the one-step log send exactly the requests they sent before', async () => {
+    renderMyWork();
+    await screen.findByTestId('visit-2');
+    fireEvent.click(screen.getByTestId('log-visit-header'));
+    let dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('radio', { name: 'ขอใบเสนอราคา' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'บันทึก' }));
+    await waitFor(() => expect(api.salesVisits.done).toHaveBeenCalledTimes(1));
+    expect(api.salesVisits.done.mock.calls[0]).toStrictEqual([2, { note: 'ขอใบเสนอราคา' }]);
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+
+    fireEvent.click(screen.getByTestId('log-visit-header'));
+    dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('radio', { name: 'ไม่ได้นัด' }));
+    fireEvent.change(within(dialog).getByLabelText(/พบใคร/), { target: { value: 'Walk-in' } });
+    fireEvent.change(within(dialog).getByLabelText(/^งาน/), { target: { value: '31' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'บันทึก' }));
+    await waitFor(() => expect(api.salesVisits.create).toHaveBeenCalledTimes(1));
+    expect(api.salesVisits.create.mock.calls[0][0]).toStrictEqual({
+      contactName: 'Walk-in', ticketId: 31, plannedDate: today, note: undefined, done: true,
+    });
+  });
+
+  it('an unplanned log on a deal with ตามต่อ sends the date with the one-step log', async () => {
+    renderMyWork();
+    await screen.findByTestId('visit-2');
+    fireEvent.click(screen.getByTestId('log-visit-header'));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('radio', { name: 'ไม่ได้นัด' }));
+    fireEvent.change(within(dialog).getByLabelText(/พบใคร/), { target: { value: 'Walk-in' } });
+    fireEvent.change(within(dialog).getByLabelText(/^งาน/), { target: { value: '31' } });
+    fireEvent.click(within(dialog).getByRole('radio', { name: '3 วัน' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'บันทึก' }));
+
+    await waitFor(() => expect(api.salesVisits.create).toHaveBeenCalledTimes(1));
+    expect(api.salesVisits.create.mock.calls[0][0]).toStrictEqual({
+      contactName: 'Walk-in', ticketId: 31, plannedDate: today, note: undefined, done: true,
+      nextFollowUpAt: '2026-11-15',
+    });
+  });
+
   it('a failed save shows the error toast and keeps the dialog open', async () => {
     const showToast = vi.fn();
     api.salesVisits.create.mockRejectedValue(new Error('ไม่มีสิทธิ์เข้าถึงรายการนี้'));

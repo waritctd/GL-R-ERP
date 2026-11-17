@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { Button } from '../../components/common/Button.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
+import { bangkokTodayIso } from '../../utils/format.js';
+import { FollowUpPicks } from './FollowUpPicks.jsx';
 
 // The m-call dialog's four outcomes. Stored as the activity note's first line (deal_activity has no outcome
 // column); the rep's own note follows.
@@ -14,12 +16,14 @@ const CALL_OUTCOMES = ['คุยแล้ว ยังสนใจ', 'ขอใ
 /**
  * m-call — โทรแล้ว. Shared by งานของฉัน's follow-up list and the deal page's header (extracted from FollowUpList so the
  * two open the SAME dialog). `deal` needs a title or customerName; `daysQuiet` is shown when the caller knows it (the
- * follow-up list does; the deal page does not). onSubmit receives the joined note.
+ * follow-up list does; the deal page does not). onSubmit receives the joined note and the picked ตามครั้งถัดไป date
+ * (slice 6.4) — `undefined` when none was picked, so the caller's request stays what it was.
  */
 export function CallModal({ deal, submitting, onClose, onSubmit }) {
   const [outcome, setOutcome] = useState(null);
   const [note, setNote] = useState('');
-  const submit = () => onSubmit([outcome, note.trim()].filter(Boolean).join(' — ') || undefined);
+  const [followUp, setFollowUp] = useState('');
+  const submit = () => onSubmit([outcome, note.trim()].filter(Boolean).join(' — ') || undefined, followUp || undefined);
   const name = deal.title || deal.customerName;
 
   return (
@@ -65,6 +69,7 @@ export function CallModal({ deal, submitting, onClose, onSubmit }) {
             className="w-full rounded-md border border-border-input bg-surface p-2.5 text-sm font-normal text-text"
           />
         </label>
+        <FollowUpPicks todayIso={bangkokTodayIso()} value={followUp} onChange={setFollowUp} />
       </div>
     </Modal>
   );

@@ -8,6 +8,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api, ROLE_PERMISSIONS } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
+import { canAccessPath } from '../../app/permissions.js';
 import { Breadcrumbs } from '../../components/common/Breadcrumbs.jsx';
 import { Button, buttonVariants } from '../../components/common/Button.jsx';
 import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
@@ -444,6 +445,15 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     enabled: canViewDealTracking && !!ticketId && !!ticket,
   });
   const activities = canViewDealTracking ? (activitiesQuery.data ?? []) : [];
+  // Slice 6.5: the deal's PLANNED visits for ประวัติ. Asked by the same roles that read the activity feed (the visit
+  // roles); the server serves only the ones this viewer could already read (VisitService#plannedOnDeal) — the page
+  // shows what it is given and never filters by owner itself. A failure leaves the history as it was.
+  const plannedVisitsQuery = useQuery({
+    queryKey: queryKeys.salesVisitsPlannedOnDeal(ticketId),
+    queryFn: () => api.salesVisits.plannedOnDeal(ticketId),
+    enabled: canViewDealTracking && !!ticketId && !!ticket,
+  });
+  const plannedVisits = canViewDealTracking ? (plannedVisitsQuery.data ?? []) : [];
 
   // Deal parties (deal-party-model.md): the contractors bidding this deal, its designer and owner.
   // Same audience as the whole-deal read (GET /tickets/{id}): sales, sales_manager, ceo.
@@ -1835,6 +1845,8 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                 canAddActivity={canAddActivity}
                 onAddActivity={(payload) => addActivityMutation.mutateAsync(payload)}
                 addingActivity={addActivityMutation.isPending}
+                plannedVisits={plannedVisits}
+                visitsHref={canAccessPath('/visits', user) ? '/visits' : null}
               />
             </div>
           )}
