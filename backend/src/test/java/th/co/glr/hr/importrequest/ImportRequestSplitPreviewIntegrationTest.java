@@ -44,11 +44,69 @@ class ImportRequestSplitPreviewIntegrationTest extends SplitFixtureSupport {
         return List.of(new ItemFactoryInput(deal.d1ItemId(), deal.deltaFactoryId()));
     }
 
+    /** {@link #richDeal()} plus a live (APPROVED, empty) direct quotation: the only kind of deal whose confirm step
+     * shows the factory picker (DealFulfilmentPanel's factorylessLines), so the only kind whose picks the preview
+     * honours (fix round, L1). The quotation has no items, so it adds no quotation lead time. */
+    private RichDeal directDeal() {
+        RichDeal deal = richDeal();
+        insertLiveDirectQuotation(deal.ticketId());
+        return deal;
+    }
+
+    // ── fix round L1: the picks are only what the picker could have offered ─────────────────────
+
+    /** On a deal with no live direct quotation the confirm shows no picker, so a hand-crafted pick there — even to a
+     * factory that has a country default — is ignored: the preview is byte-for-byte the no-pick preview and names
+     * no factory and no lead time for it. */
+    @Test
+    void l1_aPickOnADealWhoseConfirmShowsNoPicker_isIgnored_andRevealsNoLeadTime() {
+        RichDeal deal = richDeal(); // no direct quotation
+        long hidden = insertFactory("Pin Hidden CN", "CN"); // 30–45 if it ever leaked
+
+        ImportRequestSplitPreview withPick = preview(deal, owner,
+            List.of(new ItemFactoryInput(deal.d1ItemId(), hidden)));
+
+        assertThat(withPick).isEqualTo(preview(deal, owner, List.of()));
+        assertThat(withPick.factories()).extracting(SplitPreviewFactory::factoryName).doesNotContain("Pin Hidden CN");
+        assertThat(withPick.linesWithoutFactory()).extracting(SplitPreviewLine::ticketItemId)
+            .containsExactly(deal.d1ItemId());
+    }
+
+    /** A factory id the picker cannot offer (it lists the factory master — an id not in it) is ignored the same way. */
+    @Test
+    void l1_aPickForAFactoryIdOutsideTheOfferedSet_isIgnored() {
+        RichDeal deal = directDeal();
+        long notInMaster = jdbc.queryForObject("SELECT COALESCE(max(factory_id), 0) + 1000 FROM price_catalog.factories",
+            Map.of(), Long.class);
+
+        ImportRequestSplitPreview withPick = preview(deal, owner,
+            List.of(new ItemFactoryInput(deal.d1ItemId(), notInMaster)));
+
+        assertThat(withPick).isEqualTo(preview(deal, owner, List.of()));
+    }
+
+    // ── fix round L4: the create's 409 names the FIRST unplaced line ────────────────────────────
+
+    @Test
+    void l4_createDraftsRefusal_namesTheFirstUnplacedLineInDealOrder() {
+        long ticket = insertTicket("SPLIT-L4");
+        insertFactory("Pin L4 Factory", "IT");
+        insertItem(ticket, "Pin L4 Factory", "Placed", "60x60 cm", "5", "0", 0, null);
+        insertItem(ticket, null, "First Unplaced", "10x10 cm", "1", "0", 1, null);
+        insertItem(ticket, null, "Second Unplaced", "20x20 cm", "1", "0", 2, null);
+
+        assertThatThrownBy(() -> service.createDrafts(ticket, null, owner))
+            .isInstanceOfSatisfying(ApiException.class, e -> {
+                assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
+                assertThat(e.getMessage()).endsWith(": First Unplaced (10x10 cm)").doesNotContain("Second Unplaced");
+            });
+    }
+
     // ── the preview says what the create does ─────────────────────────────────────────────────
 
     @Test
     void preview_listsEachFactoryCreateWouldIssue_inCreateOrder_withItemCountsLeadTimesAndTheirSource() {
-        RichDeal deal = richDeal();
+        RichDeal deal = directDeal();
 
         ImportRequestSplitPreview preview = preview(deal, owner, deltaPick(deal));
 
@@ -64,7 +122,7 @@ class ImportRequestSplitPreviewIntegrationTest extends SplitFixtureSupport {
 
     @Test
     void preview_matchesWhatCreateThenIssues_factoryForFactory() {
-        RichDeal deal = richDeal();
+        RichDeal deal = directDeal();
         ImportRequestSplitPreview preview = preview(deal, owner, deltaPick(deal));
 
         service.createDrafts(deal.ticketId(), fullRequest(deal), owner);
@@ -92,7 +150,7 @@ class ImportRequestSplitPreviewIntegrationTest extends SplitFixtureSupport {
 
     @Test
     void preview_withoutThePick_namesTheFactorylessLine_andCreateRefusesThatSameLine() {
-        RichDeal deal = richDeal();
+        RichDeal deal = directDeal();
 
         ImportRequestSplitPreview preview = preview(deal, owner, List.of());
 
@@ -111,7 +169,7 @@ class ImportRequestSplitPreviewIntegrationTest extends SplitFixtureSupport {
 
     @Test
     void preview_aFactoryCoveredOnlyBySupersededRowsIsBackInIt() {
-        RichDeal deal = richDeal();
+        RichDeal deal = directDeal();
         jdbc.update("UPDATE sales.import_request SET status = 'SUPERSEDED' WHERE ticket_id = :t",
             Map.of("t", deal.ticketId()));
 
@@ -121,7 +179,7 @@ class ImportRequestSplitPreviewIntegrationTest extends SplitFixtureSupport {
 
     @Test
     void preview_ignoresAPickItCannotApply_ratherThanFailingTheCoverageRead() {
-        RichDeal deal = richDeal();
+        RichDeal deal = directDeal();
         long betaTwo = jdbc.queryForObject("SELECT item_id FROM sales.ticket_item WHERE model = 'Beta Two'",
             Map.of(), Long.class);
 
@@ -142,7 +200,7 @@ class ImportRequestSplitPreviewIntegrationTest extends SplitFixtureSupport {
 
     @Test
     void preview_writesNothingAnywhere_evenWithANewFactoryNameAndAPickInPlay() {
-        RichDeal deal = richDeal();
+        RichDeal deal = directDeal();
         Map<String, String> before = databaseFingerprint();
 
         for (UserPrincipal actor : List.of(owner, ceoUser, importUser, salesManager)) {
@@ -161,7 +219,7 @@ class ImportRequestSplitPreviewIntegrationTest extends SplitFixtureSupport {
 
     @Test
     void wrongWayRound_importAndSalesManager_readTheCoveredFlag_butNeverThePreview() {
-        RichDeal deal = richDeal();
+        RichDeal deal = directDeal();
 
         for (UserPrincipal reader : List.of(importUser, salesManager)) {
             ImportRequestCoverageResponse coverage = service.coverage(deal.ticketId(), deltaPick(deal), reader);
@@ -172,7 +230,7 @@ class ImportRequestSplitPreviewIntegrationTest extends SplitFixtureSupport {
 
     @Test
     void wrongWayRound_aNonOwningRepAndAccount_areRefusedTheRouteItself() {
-        RichDeal deal = richDeal();
+        RichDeal deal = directDeal();
 
         for (UserPrincipal outsider : List.of(otherSalesRep, accountUser)) {
             assertThatThrownBy(() -> service.coverage(deal.ticketId(), deltaPick(deal), outsider))
@@ -184,7 +242,7 @@ class ImportRequestSplitPreviewIntegrationTest extends SplitFixtureSupport {
 
     @Test
     void theCeoAndTheKeyingRep_getTheSamePreviewAsTheOwner() {
-        RichDeal deal = richDeal();
+        RichDeal deal = directDeal();
         ImportRequestSplitPreview owners = preview(deal, owner, deltaPick(deal));
         jdbc.update("UPDATE sales.ticket SET keyed_by = :k WHERE ticket_id = :t",
             Map.of("k", otherSalesRep.id(), "t", deal.ticketId()));
@@ -198,7 +256,7 @@ class ImportRequestSplitPreviewIntegrationTest extends SplitFixtureSupport {
 
     @Test
     void route_passesItemFactoryPairsToThePreview_andRefusesAMalformedPair() {
-        RichDeal deal = richDeal();
+        RichDeal deal = directDeal();
         SessionContext sessions = mock(SessionContext.class);
         MockHttpSession session = new MockHttpSession();
         when(sessions.requireUser(session)).thenReturn(owner);

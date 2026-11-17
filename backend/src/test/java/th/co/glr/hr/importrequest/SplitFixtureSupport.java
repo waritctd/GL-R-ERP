@@ -219,6 +219,18 @@ abstract class SplitFixtureSupport extends AbstractPostgresIntegrationTest {
             """, new MapSqlParameterSource().addValue("pr", pr).addValue("ti", ticketItem), Long.class);
     }
 
+    /** A live (APPROVED) direct quotation with no items, addressed to the OWNER — so it adds no lead-time row and does
+     * not collide with richDeal's PR-route quotation on (ticket, recipient, version). Its presence is what makes the
+     * confirm step show the factory picker (fix round L1). */
+    protected long insertLiveDirectQuotation(long ticket) {
+        return jdbc.queryForObject("""
+            INSERT INTO sales.quotation (ticket_id, number, issued_by, origin, doc_status, recipient_type)
+            VALUES (:t, :number, :by, 'DEAL_DIRECT', 'APPROVED', 'OWNER')
+            RETURNING quotation_id
+            """, new MapSqlParameterSource().addValue("t", ticket).addValue("number", "QT-SPLIT-D" + (++seq))
+                .addValue("by", ownerId), Long.class);
+    }
+
     protected long insertQuotation(long ticket, String origin, String docStatus, Long pricingRequestId) {
         return jdbc.queryForObject("""
             INSERT INTO sales.quotation (ticket_id, number, issued_by, origin, doc_status, pricing_request_id)

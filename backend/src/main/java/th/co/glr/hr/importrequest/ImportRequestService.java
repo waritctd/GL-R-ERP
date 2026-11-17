@@ -1315,8 +1315,8 @@ public class ImportRequestService {
                                   Map<Long, String> resolvedNameById,
                                   Map<Long, String> countryCodeById) {}
 
-    private CandidateSplit splitCandidates(List<LineFactoryCandidate> candidates) {
-        Map<Long, FactoryConfigDto> factoriesById = factories.findAll().stream()
+    private CandidateSplit splitCandidates(List<LineFactoryCandidate> candidates, List<FactoryConfigDto> master) {
+        Map<Long, FactoryConfigDto> factoriesById = master.stream()
             .collect(Collectors.toMap(FactoryConfigDto::id, f -> f, (a, b) -> a, LinkedHashMap::new));
         Map<String, Long> normalizedNameToId = factoriesById.values().stream()
             .collect(Collectors.toMap(f -> normalizeFactoryName(f.factoryName()), FactoryConfigDto::id,
@@ -1437,7 +1437,7 @@ public class ImportRequestService {
             return List.of();
         }
         // Phase 1 (read-only, shared with the split preview): resolve without creating anything.
-        CandidateSplit split = splitCandidates(candidates);
+        CandidateSplit split = splitCandidates(candidates, factories.findAll());
         if (!split.unplaced().isEmpty()) {
             // The FIRST unplaced line in deal-line order — the one the inline loop used to stop at (phase 1 only reads,
             // so finishing it before refusing changes nothing observable).
@@ -1509,13 +1509,24 @@ public class ImportRequestService {
         List<LineFactoryCandidate> candidates = repository.factoryResolutionCandidates(ticketId);
         Map<Long, LineFactoryCandidate> byItemId = candidates.stream()
             .collect(Collectors.toMap(LineFactoryCandidate::ticketItemId, c -> c, (a, b) -> a));
+        // ONE read of the factory master per request (fix round L2): it is both the picker's offered set and the
+        // cascade's match table below — never one read per pair.
+        List<FactoryConfigDto> master = factories.findAll();
+        Map<Long, FactoryConfigDto> offered = master.stream()
+            .collect(Collectors.toMap(FactoryConfigDto::id, f -> f, (a, b) -> a));
+        // Fix round L1 (owner ruling): a pick counts only where the confirm step's picker could have produced it.
+        // DealFulfilmentPanel shows the picker only on a deal with a live direct quotation (summary.liveDirectQuotation,
+        // the same predicate as TicketRepository#hasLiveDirectQuotation), only for a line with no factory anywhere
+        // (itemFactoryChoice's own condition), and offers the factory master (FactoryConfigController#names). Any
+        // other pick is ignored exactly like an inapplicable one.
+        boolean pickerShown = !picks.isEmpty() && tickets.hasLiveDirectQuotation(ticketId);
         Map<Long, String> pickedNames = new LinkedHashMap<>();
-        for (ImportRequestRequests.ItemFactoryInput pick : picks) {
+        for (ImportRequestRequests.ItemFactoryInput pick : pickerShown ? picks : List.<ImportRequestRequests.ItemFactoryInput>of()) {
             if (pick == null || pick.ticketItemId() == null || pick.factoryId() == null) {
                 continue;
             }
             // First pick for a line wins, like setItemFactoryIfBlank's "only while blank" guard.
-            itemFactoryChoice(ticketId, pick, byItemId, false)
+            itemFactoryChoice(ticketId, pick, byItemId, false, id -> Optional.ofNullable(offered.get(id)))
                 .ifPresent(name -> pickedNames.putIfAbsent(pick.ticketItemId(), name));
         }
         List<LineFactoryCandidate> effective = candidates.stream()
@@ -1525,7 +1536,7 @@ public class ImportRequestService {
                 : c)
             .toList();
 
-        CandidateSplit split = splitCandidates(effective);
+        CandidateSplit split = splitCandidates(effective, master);
         List<FactoryGroup> groups = new ArrayList<>();
         split.byFactory().forEach((factoryId, lines) -> groups.add(groupOf(factoryId,
             split.resolvedNameById().get(factoryId), split.countryCodeById().get(factoryId), lines)));
@@ -1595,7 +1606,7 @@ public class ImportRequestService {
             .collect(Collectors.toMap(LineFactoryCandidate::ticketItemId, c -> c, (a, b) -> a));
         for (ImportRequestRequests.ItemFactoryInput choice : request.itemFactories()) {
             // Decided by the same function the split preview applies in memory (slice 6c); only this caller writes.
-            itemFactoryChoice(ticketId, choice, candidates, true)
+            itemFactoryChoice(ticketId, choice, candidates, true, this::freshFactoryLookup)
                 .ifPresent(name -> repository.setItemFactoryIfBlank(ticketId, choice.ticketItemId(), name));
         }
     }
@@ -1607,8 +1618,10 @@ public class ImportRequestService {
      * pick must not fail the coverage read the panel depends on). Reads only.
      */
     private Optional<String> itemFactoryChoice(long ticketId, ImportRequestRequests.ItemFactoryInput choice,
-            Map<Long, LineFactoryCandidate> candidates, boolean refuseInvalid) {
-        Optional<FactoryConfigDto> factory = freshFactoryLookup(choice.factoryId());
+            Map<Long, LineFactoryCandidate> candidates, boolean refuseInvalid,
+            java.util.function.LongFunction<Optional<FactoryConfigDto>> factoryLookup) {
+        // createDrafts passes a fresh read per pick (unchanged); the preview passes its one per-request master read.
+        Optional<FactoryConfigDto> factory = factoryLookup.apply(choice.factoryId());
         if (factory.isEmpty()) {
             if (refuseInvalid) {
                 throw new ApiException(HttpStatus.BAD_REQUEST, "ไม่พบโรงงานที่เลือก");
