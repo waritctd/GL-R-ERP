@@ -1900,7 +1900,7 @@ public class DealQuotationService {
             throw new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคานี้ยังไม่ได้ยืนยันคำสั่งซื้อ จึงไม่มีอะไรให้ยกเลิก");
         }
         if (!tickets.isOrderConfirmedFromQuotation(ticketId, quotationId)) {
-            throw new ApiException(HttpStatus.CONFLICT, "คำสั่งซื้อของดีลนี้ยืนยันจากใบเสนอราคาฉบับอื่น");
+            throw new ApiException(HttpStatus.CONFLICT, "คำสั่งซื้อของงานนี้ยืนยันจากใบเสนอราคาฉบับอื่น");
         }
         String refusal = undoRefusal(locked);
         if (refusal != null) {
@@ -1922,7 +1922,7 @@ public class DealQuotationService {
         tickets.deleteItems(ticketId);
         if (tickets.revertOrderConfirmation(ticketId, restoreStage, restoreStageAt) != 1) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "สถานะดีลถูกเปลี่ยนโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
+                "สถานะงานถูกเปลี่ยนโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
         }
         if (quotation.partyId() != null) {
             quotations.restorePartyBeforeAward(quotation.partyId());
@@ -1963,15 +1963,15 @@ public class DealQuotationService {
      */
     private String undoRefusal(TicketSummaryDto s) {
         if (!DealLifecycle.ACTIVE.equals(s.lifecycle())) {
-            return "ดีลไม่ได้อยู่ในสถานะ ACTIVE (" + s.lifecycle() + ") จึงยกเลิกการยืนยันคำสั่งซื้อไม่ได้";
+            return "งานไม่ได้อยู่ในสถานะ ACTIVE (" + s.lifecycle() + ") จึงยกเลิกการยืนยันคำสั่งซื้อไม่ได้";
         }
         if (!TicketStatus.QUOTATION_ISSUED.equals(s.status()) || !"CUSTOMER_CONFIRMED".equals(s.paymentStatus())) {
-            return "ดีลเดินหน้าเกินขั้นยืนยันคำสั่งซื้อแล้ว (สถานะ " + s.status() + ", การชำระเงิน "
+            return "งานเดินหน้าเกินขั้นยืนยันคำสั่งซื้อแล้ว (สถานะ " + s.status() + ", การชำระเงิน "
                 + s.paymentStatus() + ") จึงยกเลิกการยืนยันไม่ได้";
         }
         TicketRepository.UndoFacts f = tickets.undoConfirmationFacts(s.id());
         if (f.bidOrSplit()) {
-            return "คำสั่งซื้อนี้มาจากการบันทึกผลประมูลหรือการแยกดีล จึงยกเลิกการยืนยันจากหน้านี้ไม่ได้";
+            return "คำสั่งซื้อนี้มาจากการบันทึกผลประมูลหรือการแยกงาน จึงยกเลิกการยืนยันจากหน้านี้ไม่ได้";
         }
         if (f.nonDraftDepositNotice()) {
             return "ออกใบแจ้งรับมัดจำแล้ว จึงยกเลิกการยืนยันคำสั่งซื้อไม่ได้";
@@ -1994,10 +1994,10 @@ public class DealQuotationService {
         boolean autoRoutedFromStock = DealStage.DELIVERY_SCHEDULING.equals(s.salesStage())
             && FulfilmentStatus.FROM_STOCK.equals(s.fulfillmentStatus());
         if (!DealStage.ORDER_RECEIVED.equals(s.salesStage()) && !autoRoutedFromStock) {
-            return "ดีลเดินหน้าไปขั้น " + s.salesStage() + " แล้ว จึงยกเลิกการยืนยันคำสั่งซื้อไม่ได้";
+            return "งานเดินหน้าไปขั้น " + s.salesStage() + " แล้ว จึงยกเลิกการยืนยันคำสั่งซื้อไม่ได้";
         }
         if (s.fulfillmentStatus() != null && !FulfilmentStatus.FROM_STOCK.equals(s.fulfillmentStatus())) {
-            return "ดีลเริ่มขั้นตอนจัดหาสินค้าแล้ว (" + s.fulfillmentStatus() + ") จึงยกเลิกการยืนยันคำสั่งซื้อไม่ได้";
+            return "งานเริ่มขั้นตอนจัดหาสินค้าแล้ว (" + s.fulfillmentStatus() + ") จึงยกเลิกการยืนยันคำสั่งซื้อไม่ได้";
         }
         return null;
     }

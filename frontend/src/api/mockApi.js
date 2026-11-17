@@ -4276,7 +4276,7 @@ function mockListChainStage(row, viewer) {
 // deal), an import request, a delivery record, a manual stock / procurement decision, or a fulfilment step blocks the
 // undo. Returns the Thai refusal or null.
 function mockUndoRefusal(ticket) {
-  if ((ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE') return 'ยกเลิกไม่ได้ — ดีลไม่ได้อยู่ในสถานะ ACTIVE';
+  if ((ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE') return 'ยกเลิกไม่ได้ — งานไม่ได้อยู่ในสถานะ ACTIVE';
   if (mockDepositNotices.some((d) => d.ticketId === ticket.id && d.status !== 'DRAFT')) {
     return 'ยกเลิกไม่ได้ — ออกใบแจ้งยอดเงินรับมัดจำแล้ว';
   }
@@ -4288,7 +4288,7 @@ function mockUndoRefusal(ticket) {
   const after = (kinds) => ticket.events.some((e) => kinds.includes(e.kind) && e.id > promotionId);
   if (after(['BID_OUTCOME_RECORDED']) || ticket.events.some((e) => e.kind === 'DEAL_SPLIT_FROM_PARENT')
     || db.tickets.some((t) => t.parentTicketId === ticket.id)) {
-    return 'ยกเลิกไม่ได้ — คำสั่งซื้อนี้มาจากการบันทึกผลประมูลหรือการแยกดีล';
+    return 'ยกเลิกไม่ได้ — คำสั่งซื้อนี้มาจากการบันทึกผลประมูลหรือการแยกงาน';
   }
   if (mockRemainingInvoices.some((r) => r.ticketId === ticket.id)) return 'ยกเลิกไม่ได้ — ออกใบแจ้งหนี้ส่วนที่เหลือแล้ว';
   if (mockImportRequests.some((r) => r.ticketId === ticket.id)) return 'ยกเลิกไม่ได้ — มีใบขอซื้อ (นำเข้า) แล้ว';
@@ -4297,7 +4297,7 @@ function mockUndoRefusal(ticket) {
     return 'ยกเลิกไม่ได้ — มีการระบุที่มาสินค้าหลังยืนยันคำสั่งซื้อแล้ว';
   }
   if (ticket.fulfillmentStatus != null && ticket.fulfillmentStatus !== 'FROM_STOCK') {
-    return 'ยกเลิกไม่ได้ — ดีลดำเนินการต่อจากการยืนยันแล้ว';
+    return 'ยกเลิกไม่ได้ — งานดำเนินการต่อจากการยืนยันแล้ว';
   }
   return null;
 }
