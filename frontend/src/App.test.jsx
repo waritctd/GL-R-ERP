@@ -321,6 +321,28 @@ describe('App / release lockdown (SELF_SERVICE_ONLY)', () => {
     expect(screen.queryByText(/เวลาทำงานและคำขอของคุณ/)).toBeNull();
   });
 
+  // The dashboard follows the ROLE: no employee row and the manager flag change nothing for import.
+  it('lands a locked import user on the import dashboard with no employee row, and with the manager flag', async () => {
+    const first = await renderLockedAppAt('/', { ...importUser, employeeId: null });
+    expect(await screen.findByRole('heading', { name: 'งานนำเข้า' })).toBeTruthy();
+    first.unmount();
+
+    await renderLockedAppAt('/', { ...importUser, manager: true });
+    expect(await screen.findByRole('heading', { name: 'งานนำเข้า' })).toBeTruthy();
+    expect(screen.queryByText(/เวลาทำงานและคำขอของคุณ/)).toBeNull();
+  });
+
+  // The two dashboards are sales screens: with sales switched off there is none to show, so the lock's
+  // self-service landing stays.
+  it('keeps a locked import user on self-service when the sales screens are off', async () => {
+    vi.stubEnv('VITE_ENABLE_SALES', 'false');
+    await renderLockedAppAt('/', importUser);
+
+    expect(await screen.findByRole('heading', { name: `สวัสดี คุณ${importUser.name}` })).toBeTruthy();
+    expect(screen.getByText(/เวลาทำงานและคำขอของคุณ/)).toBeTruthy();
+    expect(screen.queryByRole('heading', { name: 'งานนำเข้า' })).toBeNull();
+  });
+
   it('falls back to EmployeeDashboard for a locked user with no employee row', async () => {
     await renderLockedAppAt('/', warehouseUserNoEmployeeId);
 
