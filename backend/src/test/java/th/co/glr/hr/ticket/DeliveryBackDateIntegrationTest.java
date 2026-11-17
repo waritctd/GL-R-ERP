@@ -27,6 +27,7 @@ import th.co.glr.hr.auth.SessionAccountResolver;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.customer.CustomerRepository;
+import th.co.glr.hr.documentchain.DocumentChainRepository;
 import th.co.glr.hr.employee.EmployeeCodeGenerator;
 import th.co.glr.hr.employee.EmployeeReferenceRepository;
 import th.co.glr.hr.employee.EmployeeRepository;
@@ -391,12 +392,35 @@ class DeliveryBackDateIntegrationTest extends AbstractPostgresIntegrationTest {
      * event wins over a CUSTOMER_CONFIRMED one. */
     @Test
     void theConfirmationDayIsTheDocumentChainsOne_promotionFirst() {
+        // Round 2: the CUSTOMER_CONFIRMED is LATER than the promotion, so only the promotion-first rule picks the
+        // promotion — "the latest event of either kind" would pick today−1.
         long deal = deliverableDeal(null);
-        confirmOrderAt(deal, TicketEventKind.CUSTOMER_CONFIRMED, today().minusDays(6).atTime(9, 0));
-        confirmOrderAt(deal, TicketEventKind.DEAL_PROMOTED_FROM_QUOTATION, today().minusDays(2).atTime(9, 0));
+        LocalDateTime promotedAt = today().minusDays(5).atTime(9, 0);
+        confirmOrderAt(deal, TicketEventKind.DEAL_PROMOTED_FROM_QUOTATION, promotedAt);
+        confirmOrderAt(deal, TicketEventKind.CUSTOMER_CONFIRMED, today().minusDays(1).atTime(9, 0));
 
-        refusal(() -> ticketService.recordPartialDelivery(deal, deliver(deal, "1.00", today().minusDays(4)), owner),
+        assertThat(new DocumentChainRepository(jdbc).findOrderConfirmedAt(deal))
+            .contains(promotedAt.atZone(BANGKOK).toInstant());
+        refusal(() -> ticketService.recordPartialDelivery(deal, deliver(deal, "1.00", today().minusDays(6)), owner),
             HttpStatus.BAD_REQUEST);
+        ticketService.recordPartialDelivery(deal, deliver(deal, "1.00", today().minusDays(3)), owner);
+        assertThat(deliveredAtsInBangkok(deal)).containsExactly(today().minusDays(3).atTime(12, 0));
+    }
+
+    /** Round 2: two confirmations of the same kind (a re-confirmation) — the LATEST one is the order's, for the
+     * document chain and for the floor alike. */
+    @Test
+    void twoConfirmationsOfTheSameKind_theLatestIsTheOrdersDay() {
+        long deal = deliverableDeal(null);
+        LocalDateTime latest = today().minusDays(2).atTime(9, 0);
+        confirmOrderAt(deal, TicketEventKind.CUSTOMER_CONFIRMED, today().minusDays(6).atTime(9, 0));
+        confirmOrderAt(deal, TicketEventKind.CUSTOMER_CONFIRMED, latest);
+
+        assertThat(new DocumentChainRepository(jdbc).findOrderConfirmedAt(deal))
+            .contains(latest.atZone(BANGKOK).toInstant());
+        ApiException e = refusal(() -> ticketService.recordPartialDelivery(
+            deal, deliver(deal, "1.00", today().minusDays(3)), owner), HttpStatus.BAD_REQUEST);
+        assertThat(e.getMessage()).contains(th.co.glr.hr.common.ThaiText.date(today().minusDays(2)));
         ticketService.recordPartialDelivery(deal, deliver(deal, "1.00", today().minusDays(2)), owner);
         assertThat(deliveredAtsInBangkok(deal)).containsExactly(today().minusDays(2).atTime(12, 0));
     }

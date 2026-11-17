@@ -32,12 +32,13 @@ function stripComments(text) {
 }
 
 /** Every shape that names a kind: a quoted code, a bare object key (`CALL: …`), a qualified constant
- * (`DealActivityKind.CALL`), or a switch label (`case CALL ->`, `case CALL:`). */
+ * (`DealActivityKind.CALL`, or through any other object — `KINDS.CALL`, round 2), or a switch label (`case CALL ->`,
+ * `case CALL:`). */
 function kindForms(kind) {
   return [
     new RegExp(`['"\`]${kind}['"\`]`),
     new RegExp(`(^|[{,\\s])${kind}\\s*:(?!:)`, 'm'),
-    new RegExp(`\\bDealActivityKind\\.${kind}\\b`),
+    new RegExp(`\\b[A-Za-z_$][\\w$]*\\.${kind}\\b`),
     new RegExp(`\\bcase\\s+${kind}\\s*(->|:)`),
   ];
 }
@@ -45,7 +46,15 @@ function kindForms(kind) {
 /** A file lists the kinds when, outside comments, it names three or more of them in any of those shapes. */
 function listsKinds(text) {
   const code = stripComments(text);
-  return ORIGINAL_KINDS.filter((kind) => kindForms(kind).some((form) => form.test(code))).length >= 3;
+  const enums = enumBodies(code);
+  return ORIGINAL_KINDS.filter((kind) => kindForms(kind).some((form) => form.test(code))
+    || new RegExp(`\\b${kind}\\b`).test(enums)).length >= 3;
+}
+
+/** Round 2: the constants of every Java enum body (`enum X { CALL, MEETING, … ` up to the first `;` or `}`) — a kind
+ * named there counts too. */
+function enumBodies(code) {
+  return [...code.matchAll(/\benum\s+\w+[^{]*\{([^;}]*)/g)].map((m) => m[1]).join(' ');
 }
 
 /** …and it lists SAMPLE_SENT when the code itself names it — a comment does not count. */
@@ -119,6 +128,12 @@ describe('deal-activity kinds: one list everywhere', () => {
             default -> "?";
         };`;
     const DEMO_BARE_CASES = `switch (kind) { case CALL -> 1; case MEETING -> 2; case EMAIL -> 3; default -> 0; }`;
+    const DEMO_OTHER_QUALIFIER = `const order = [KINDS.CALL, KINDS.MEETING, KINDS.EMAIL];`;
+    const DEMO_JAVA_ENUM = `public enum ActivityKind {
+    CALL,
+    MEETING,
+    EMAIL;
+}`;
     const COMMENT_ONLY = `// SAMPLE_SENT is handled elsewhere\nconst KINDS = ['CALL', 'MEETING', 'SITE_VISIT'];\n/* SAMPLE_SENT */`;
 
     it.each([
@@ -126,6 +141,9 @@ describe('deal-activity kinds: one list everywhere', () => {
       ['a Java switch over DealActivityKind constants', DEMO_JAVA_SWITCH],
       ['a switch over bare enum constants', DEMO_BARE_CASES],
       ['a quoted list whose SAMPLE_SENT is only in comments', COMMENT_ONLY],
+      // Round 2: kinds qualified through some other object, and a Java enum body.
+      ['a list qualified through another object', DEMO_OTHER_QUALIFIER],
+      ['a Java enum body', DEMO_JAVA_ENUM],
     ])('%s is a kind list missing SAMPLE_SENT', (_shape, text) => {
       expect(listsKinds(text)).toBe(true);
       expect(namesSampleSent(text)).toBe(false);
@@ -139,6 +157,8 @@ describe('deal-activity kinds: one list everywhere', () => {
     it('two kinds, or one kind and unrelated words, is not a list', () => {
       expect(listsKinds(`const VISIT_ACTIVITY_KINDS = new Set(['SITE_VISIT', 'MEETING']);`)).toBe(false);
       expect(listsKinds(`fail('OTHER'); const x = { EMAIL: 1 };`)).toBe(false);
+      expect(listsKinds(`const VISITS = new Set([KINDS.SITE_VISIT, KINDS.MEETING]);`)).toBe(false);
+      expect(listsKinds(`enum Visit { SITE_VISIT, MEETING }`)).toBe(false);
     });
   });
 
