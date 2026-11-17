@@ -2,7 +2,7 @@ package th.co.glr.hr.ticket;
 
 import java.util.Set;
 
-/** What kind of follow-up a sales.deal_activity row records. Backs chk_deal_activity_kind (V83, widened by V223) — keep
+/** What kind of follow-up a sales.deal_activity row records. Backs chk_deal_activity_kind (V83, widened by V225) — keep
  * in sync with that CHECK constraint (DealActivitySampleSentIntegrationTest compares the two on a live database, and
  * frontend/src/features/tickets/activityKinds.guard.test.js fails when a place that lists kinds misses one).
  * Owner-review assumption (Slice B1, handoff 103): this is a first-pass list, not an owner-confirmed taxonomy of how
@@ -15,7 +15,7 @@ public final class DealActivityKind {
     public static final String MESSAGE            = "MESSAGE";
     public static final String QUOTATION_FOLLOWUP = "QUOTATION_FOLLOWUP";
     public static final String OTHER              = "OTHER";
-    /** ส่งตัวอย่าง (slice 6d, V223): a sample sent to the customer. Its note — what was sent — is required
+    /** ส่งตัวอย่าง (slice 6d, V225): a sample sent to the customer. Its note — what was sent — is required
      * ({@link #requiresNote}); it is a follow-up touch like any other kind. */
     public static final String SAMPLE_SENT        = "SAMPLE_SENT";
 

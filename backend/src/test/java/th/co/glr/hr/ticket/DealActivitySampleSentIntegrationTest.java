@@ -22,7 +22,7 @@ import th.co.glr.hr.salesboard.SalesBoardRepository;
 
 /**
  * Slice 6d (prototype item 6.7, owner answer 1): ส่งตัวอย่าง is a deal activity of its own kind, {@code SAMPLE_SENT}
- * (V223 widens chk_deal_activity_kind). It goes through the SAME POST /api/tickets/{id}/activities path as a call —
+ * (V225 widens chk_deal_activity_kind). It goes through the SAME POST /api/tickets/{id}/activities path as a call —
  * TicketService#addActivity, real repository, real Postgres — so it carries exactly a call's rule: requireDealOwnership
  * (the deal's owner/keyer with the sales role, or sales_manager / ceo), the optional nextFollowUpAt of slice 6.4, and it
  * counts as a touch for the quiet rule and as ควรตามต่อ's "ครั้งล่าสุด". Unlike a call, what was sent is required.

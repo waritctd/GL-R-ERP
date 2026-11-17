@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { ACTIVITY_KINDS, activityKindIcon, activityKindLabel, activityNoteRequired } from './dealTrackingMeta.js';
 import { timelineRowMatches } from './dealTimeline.js';
 
-// Slice 6d (ส่งตัวอย่าง = SAMPLE_SENT, V223). The deal-activity kinds live in three places that must agree — the
+// Slice 6d (ส่งตัวอย่าง = SAMPLE_SENT, V225). The deal-activity kinds live in three places that must agree — the
 // database constraint, DealActivityKind.java and dealTrackingMeta.js's ACTIVITY_KINDS (which the mock validates
 // through) — and in every other file that spells the whole list out. This guard reads the repository itself, so a
 // kind added in one place and forgotten in another fails here rather than as a 400 or a raw code on screen.
@@ -29,7 +29,9 @@ function javaKinds() {
   return valid.split(',').map((name) => constants[name.trim()]);
 }
 
-/** The kinds in the LAST migration that declares chk_deal_activity_kind — what a fresh database ends up with. */
+/** The kinds in the LAST migration that declares chk_deal_activity_kind — what a fresh database ends up with. Files
+ * are filtered by content before the highest version is taken, so a later migration that does not touch this constraint
+ * (e.g. V223/V224 from other PRs, below or above ours) never hides it. */
 function constraintKinds() {
   const dir = 'backend/src/main/resources/db/migration';
   const version = (file) => file.slice(1, file.indexOf('__')).split('.').map(Number);
@@ -80,7 +82,7 @@ describe('deal-activity kinds: one list everywhere', () => {
   it('every file that lists the kinds names SAMPLE_SENT too (grep guard over backend, frontend, e2e-real, docs)', () => {
     const EXEMPT = {
       'backend/src/main/resources/db/migration/V83__deal_tracking_and_activity.sql':
-        'applied migration — V223 re-declares the constraint; an applied migration is never edited',
+        'applied migration — V225 re-declares the constraint; an applied migration is never edited',
     };
     const roots = ['backend/src/main', 'frontend/src', 'frontend/e2e-real', 'docs/repo-map'];
     const files = [];

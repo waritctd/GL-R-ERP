@@ -355,7 +355,7 @@ describe('MyWork on a phone — วันนี้ของฉัน', () => {
   });
 
   describe('quick actions', () => {
-    // Slice 6d: ส่งตัวอย่าง is recorded now (deal activity SAMPLE_SENT, V223), so the drawn tile is real — before 6d
+    // Slice 6d: ส่งตัวอย่าง is recorded now (deal activity SAMPLE_SENT, V225), so the drawn tile is real — before 6d
     // this test asserted its absence because nothing could record a sample.
     it('offers โทรแล้ว, ส่งตัวอย่าง and ทำใบเสนอราคา to a rep, in the drawn order', async () => {
       renderMyWork();

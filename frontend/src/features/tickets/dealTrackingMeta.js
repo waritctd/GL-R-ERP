@@ -32,7 +32,7 @@ export function effectiveWinProbability(winProbabilityOverride, salesStage) {
   return winProbabilityOverride != null ? Number(winProbabilityOverride) : winProbabilityDefault(salesStage);
 }
 
-// Mirrors DealActivityKind.java's VALID set exactly (and chk_deal_activity_kind, V83 widened by V223) —
+// Mirrors DealActivityKind.java's VALID set exactly (and chk_deal_activity_kind, V83 widened by V225) —
 // activityKinds.guard.test.js reads both and fails when the three disagree. `icon` is the history row's
 // (DealHistoryPanel's ActivityRow) — an Icon.jsx name.
 export const ACTIVITY_KINDS = [
@@ -43,7 +43,7 @@ export const ACTIVITY_KINDS = [
   { code: 'MESSAGE', label: 'ข้อความ (แชท/ไลน์)', icon: 'mail' },
   { code: 'QUOTATION_FOLLOWUP', label: 'ติดตามใบเสนอราคา', icon: 'fileText' },
   { code: 'OTHER', label: 'อื่น ๆ', icon: 'pencil' },
-  // Slice 6d (V223): a sample sent — its note, what was sent, is required (DealActivityKind.requiresNote).
+  // Slice 6d (V225): a sample sent — its note, what was sent, is required (DealActivityKind.requiresNote).
   { code: 'SAMPLE_SENT', label: 'ส่งตัวอย่าง', icon: 'package' },
 ];
 
