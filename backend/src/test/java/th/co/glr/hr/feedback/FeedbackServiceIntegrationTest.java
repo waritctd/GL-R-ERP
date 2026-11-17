@@ -311,7 +311,7 @@ class FeedbackServiceIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     @Test
-    void acceptWithEtaRecordsDecisionAndTellsTheReporterByBellOnly() {
+    void acceptWithEtaRecordsDecisionAndTellsTheReporterByBellAndEmail() {
         long id = pending();
         clearInvocations(mailer);
 
@@ -327,8 +327,16 @@ class FeedbackServiceIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(bells.get(0).link()).isEqualTo(LINK);
         // Thai Buddhist-era date, never ISO.
         assertThat(bells.get(0).message()).contains("5 ธันวาคม 2569").doesNotContain("2026-12-05");
-        // Bell only: the reporter is not emailed about a decision.
-        verifyNoInteractions(mailer);
+        // รับเรื่อง is emailed to the reporter, and to nobody else.
+        ArgumentCaptor<String> to = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<String> text = ArgumentCaptor.forClass(String.class);
+        verify(mailer, times(1)).sendHtml(to.capture(), anyString(), anyString(), text.capture(), anyList());
+        assertThat(to.getValue()).isEqualTo("rep@glr.co.th");
+        // Detailed: which request (number, kind, page), its status, the date, and the reporter's own words back.
+        assertThat(text.getValue()).contains("#" + id).contains("แจ้งปัญหา").contains("ใบเสนอราคา")
+            .contains("รับเรื่อง").contains("5 ธันวาคม 2569").contains(DETAILS).doesNotContain("ACCEPTED");
+        // The bell stays one short line: the reporter's own text is for the email only.
+        assertThat(bells.get(0).message()).doesNotContain(DETAILS);
         assertThat(feedbackBells(otherRep)).isEmpty();
     }
 
@@ -344,6 +352,7 @@ class FeedbackServiceIntegrationTest extends AbstractPostgresIntegrationTest {
         }
         assertThat(statusOf(id)).isEqualTo("PENDING");
 
+        clearInvocations(mailer);
         FeedbackDto denied = service.decide(principal(admin, "employee"), id,
             new DecisionRequest("DENY", null, "ห้าตัวพอดี"));
 
@@ -354,6 +363,14 @@ class FeedbackServiceIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(bells).hasSize(1);
         assertThat(bells.get(0).type()).isEqualTo("FEEDBACK_DECIDED");
         assertThat(bells.get(0).message()).contains("ห้าตัวพอดี");
+        // ไม่รับเรื่อง is emailed to the reporter too, with the reason and their own words back.
+        ArgumentCaptor<String> to = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<String> text = ArgumentCaptor.forClass(String.class);
+        verify(mailer, times(1)).sendHtml(to.capture(), anyString(), anyString(), text.capture(), anyList());
+        assertThat(to.getValue()).isEqualTo("rep@glr.co.th");
+        assertThat(text.getValue()).contains("#" + id).contains("ไม่รับเรื่อง").contains("ห้าตัวพอดี")
+            .contains(DETAILS).doesNotContain("DENIED");
+        assertThat(bells.get(0).message()).doesNotContain(DETAILS);
     }
 
     @Test
@@ -413,6 +430,7 @@ class FeedbackServiceIntegrationTest extends AbstractPostgresIntegrationTest {
         long id = acceptedRequest();
         long before = bellCount(rep);
         UserPrincipal adminActor = principal(admin, "employee");
+        clearInvocations(mailer);
 
         for (String status : List.of("TESTING", "RELEASED", "IN_PROGRESS", "ACCEPTED", "RELEASED")) {
             FeedbackDto updated = service.update(adminActor, id, new UpdateRequest(status, null));
@@ -420,6 +438,15 @@ class FeedbackServiceIntegrationTest extends AbstractPostgresIntegrationTest {
         }
 
         assertThat(bellCount(rep)).isEqualTo(before + 5);
+        // Only the FIRST move into ใช้งานได้แล้ว (done) emails the reporter; going back and releasing again, and the
+        // other steps, are bell only.
+        ArgumentCaptor<String> to = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<String> text = ArgumentCaptor.forClass(String.class);
+        verify(mailer, times(1)).sendHtml(to.capture(), anyString(), anyString(), text.capture(), anyList());
+        assertThat(to.getAllValues()).containsOnly("rep@glr.co.th");
+        assertThat(text.getValue()).contains("#" + id).contains("ใช้งานได้แล้ว").contains(DETAILS)
+            .doesNotContain("RELEASED");
+        assertThat(feedbackBells(rep).get(0).message()).doesNotContain(DETAILS);
         // Thai step labels and a พ.ศ. date, never raw codes. Newest first: the last change was RELEASED.
         assertThat(feedbackBells(rep).get(0).message()).contains("ใช้งานได้แล้ว").contains("5 ธันวาคม 2569")
             .doesNotContain("RELEASED").doesNotContain("2026-12-05");

@@ -21,7 +21,7 @@ const ceo = { id: 8, role: 'ceo', employeeId: 48, name: 'ซีอีโอ' };
 
 function renderPage(user, path = '/whats-new/2026-11-16', showToast = vi.fn()) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
-  render(
+  const { unmount } = render(
     <QueryClientProvider client={queryClient}>
       <MemoryRouter initialEntries={[path]}>
         <Routes>
@@ -31,7 +31,7 @@ function renderPage(user, path = '/whats-new/2026-11-16', showToast = vi.fn()) {
       </MemoryRouter>
     </QueryClientProvider>,
   );
-  return { showToast };
+  return { showToast, unmount };
 }
 
 /** An admin button once it is usable: both stay disabled until the first status read says the backend is current. */
@@ -65,7 +65,7 @@ describe('WhatsNewPage', () => {
   });
 
   it('"ทั้งหมด" shows a section per role, page by page, and names the address-only roles', async () => {
-    renderPage(sales);
+    renderPage(ceo);
 
     fireEvent.click(await screen.findByRole('tab', { name: /ทั้งหมด/ }));
 
@@ -75,6 +75,21 @@ describe('WhatsNewPage', () => {
     // The published 16 Nov page, word for word: a second release must not change what this one says.
     expect(screen.getByText(/ฝ่ายบุคคล · คลังสินค้า · QC · พนักงานทั่วไป/).textContent)
       .toBe('ฝ่ายบุคคล · คลังสินค้า · QC · พนักงานทั่วไป: ฉบับนี้มีเฉพาะการย้ายที่อยู่เว็บ (ด้านบน)');
+  });
+
+  it('"ทั้งหมด" is for hr, ceo and the owner (admin flag) only — every other role has just their own tab', async () => {
+    for (const role of ['sales', 'sales_manager', 'account', 'import', 'warehouse']) {
+      const { unmount } = renderPage({ id: 9, role, employeeId: 50, name: 'x' });
+      await screen.findByRole('tab', { name: /สำหรับแผนกของคุณ/ });
+      expect(screen.queryByRole('tab', { name: /ทั้งหมด/ }), role).toBeNull();
+      unmount();
+    }
+    // The owner is gated on the admin flag, not a role: a plain-role admin still sees it.
+    for (const user of [hr, ceo, { id: 1, role: 'employee', employeeId: 1, name: 'เจ้าของ', admin: true }]) {
+      const { unmount } = renderPage(user);
+      expect(await screen.findByRole('tab', { name: /ทั้งหมด/ }), user.role).toBeTruthy();
+      unmount();
+    }
   });
 
   it('the 16 Nov page is unchanged for a role a later release has nothing for', async () => {
