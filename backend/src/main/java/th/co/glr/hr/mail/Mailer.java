@@ -30,6 +30,13 @@ public interface Mailer {
      * String, String). */
     void sendWithAttachments(String to, String subject, String body, List<Attachment> attachments);
 
+    /** Whether a call that returns normally means a mail actually left for the recipient. True for every real
+     * transport; false for LogMailer, which only logs. Callers that record a per-person "sent" outcome (the release
+     * notice) must check it, so a deployment without a provider never records a false "sent". */
+    default boolean delivers() {
+        return true;
+    }
+
     /** Sends one fully-specified message: an HTML body with a required plain-text alternative, an optional CC list,
      * inline images, and file attachments, all in one email. */
     default void send(OutgoingEmail email) {

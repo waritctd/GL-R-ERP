@@ -839,11 +839,13 @@ export const api = {
     },
     markRead: (id) => apiRequest(API_ROUTES.notifications.markRead(id), { method: 'PATCH' }),
   },
-  // มีอะไรใหม่ (ReleaseNoticeController). payload = audiences.js publishPayload(release):
-  // { releaseId, title, changes: [{ title, roles }] }. publish never emails; email is its own explicit call.
+  // มีอะไรใหม่ (ReleaseNoticeController). payload = audiences.js noticePayload(release):
+  // { releaseId, title, date, changes: [{ title, roles, why }] } (+ resendUnconfirmed, honoured by email only).
+  // publishWithEmail = bell + email in one press; email = the retry for whoever has not received it. The server's
+  // bell-only POST /publish is no longer called (kept for the previous bundle; see serverContract SERVER_ONLY).
   releaseNotes: {
     audience: (payload) => apiRequest(API_ROUTES.releaseNotes.audience, { method: 'POST', body: payload }),
-    publish: (payload) => apiRequest(API_ROUTES.releaseNotes.publish, { method: 'POST', body: payload }),
+    publishWithEmail: (payload) => apiRequest(API_ROUTES.releaseNotes.publishWithEmail, { method: 'POST', body: payload }),
     email: (payload) => apiRequest(API_ROUTES.releaseNotes.email, { method: 'POST', body: payload }),
   },
   // แจ้งปัญหา / ขอฟีเจอร์. decide payload { decision: 'ACCEPT'|'DENY', eta?, reason? }; update { status?, eta? }.

@@ -13,6 +13,12 @@ import org.springframework.stereotype.Component;
 public class LogMailer implements Mailer {
     private static final Logger log = LoggerFactory.getLogger(LogMailer.class);
 
+    /** Logs only: nothing ever leaves, so nothing may be recorded as delivered. */
+    @Override
+    public boolean delivers() {
+        return false;
+    }
+
     @Override
     public void send(String to, String subject, String body) {
         log.info("[LogMailer] email NOT sent (provider=log). to={} subject={}", to, subject);

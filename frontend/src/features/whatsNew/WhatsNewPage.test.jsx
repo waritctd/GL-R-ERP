@@ -11,7 +11,7 @@ globalThis.React = React;
 vi.mock('../../api/index.js', () => ({
   api: {
     notifications: { list: vi.fn(), markRead: vi.fn() },
-    releaseNotes: { audience: vi.fn(), publish: vi.fn(), email: vi.fn() },
+    releaseNotes: { audience: vi.fn(), publishWithEmail: vi.fn(), email: vi.fn() },
   },
 }));
 
@@ -32,6 +32,13 @@ function renderPage(user, path = '/whats-new/2026-11-16', showToast = vi.fn()) {
     </QueryClientProvider>,
   );
   return { showToast };
+}
+
+/** An admin button once it is usable: both stay disabled until the first status read says the backend is current. */
+async function readyButton(name) {
+  const button = await screen.findByRole('button', { name });
+  await waitFor(() => expect(button.disabled).toBe(false));
+  return button;
 }
 
 const changeHeadings = () => screen.getAllByRole('heading', { level: 3 }).map((h) => h.textContent);
@@ -187,12 +194,23 @@ describe('WhatsNewPage', () => {
   });
 
   describe('admin control (CEO / HR)', () => {
-    const audience = { targeted: 9, alreadyNotified: 3, pendingNotification: 6, alreadyEmailed: 0, pendingEmail: 8, withoutEmail: 1 };
+    // The per-person email truth (Audience.email): every targeted person in exactly one bucket.
+    const emailStatus = {
+      sent: 0, failed: 0, sending: 0, unconfirmed: 0, notYetEmailed: 8, withoutEmail: 1,
+      withoutEmailNames: ['หมวย'], failedNames: [], unconfirmedNames: [],
+    };
+    const audience = {
+      targeted: 9, alreadyNotified: 3, pendingNotification: 6, alreadyEmailed: 0, pendingEmail: 8, withoutEmail: 1,
+      email: emailStatus,
+    };
 
     beforeEach(() => {
       api.releaseNotes.audience.mockResolvedValue(audience);
-      api.releaseNotes.publish.mockResolvedValue({ targeted: 9, inserted: 6, alreadyNotified: 3 });
-      api.releaseNotes.email.mockResolvedValue({ targeted: 9, sent: 8, alreadyEmailed: 0, withoutEmail: 1 });
+      api.releaseNotes.publishWithEmail.mockResolvedValue({
+        targeted: 9, inserted: 6, alreadyNotified: 3,
+        email: { targeted: 9, queued: 8, alreadyEmailed: 0, withoutEmail: 1 }, emailError: null,
+      });
+      api.releaseNotes.email.mockResolvedValue({ targeted: 9, queued: 2, alreadyEmailed: 6, withoutEmail: 1 });
     });
 
     it('is not shown to anyone outside CEO / HR', async () => {
@@ -208,54 +226,199 @@ describe('WhatsNewPage', () => {
         );
         await screen.findAllByRole('tab');
         expect(screen.queryByRole('button', { name: 'เผยแพร่ประกาศ' }), role).toBeNull();
-        expect(screen.queryByRole('button', { name: 'ส่งอีเมล' }), role).toBeNull();
+        expect(screen.queryByRole('button', { name: 'ส่งอีเมลให้คนที่ยังไม่ได้รับ' }), role).toBeNull();
         unmount();
       }
       expect(api.releaseNotes.audience).not.toHaveBeenCalled();
     });
 
-    it('publish confirms with the number of people, then publishes, and never emails', async () => {
-      const { showToast } = renderPage(hr);
+    it('shows the true email outcome per person: sent, failed and no address, by name', async () => {
+      api.releaseNotes.audience.mockResolvedValue({
+        ...audience, alreadyEmailed: 5, pendingEmail: 2,
+        email: {
+          ...emailStatus, sent: 5, failed: 1, unconfirmed: 1, notYetEmailed: 1,
+          failedNames: ['วาริส'], unconfirmedNames: ['ยา'],
+        },
+      });
+      renderPage(hr);
 
-      fireEvent.click(await screen.findByRole('button', { name: 'เผยแพร่ประกาศ' }));
-      const dialog = await screen.findByRole('dialog');
-      await within(dialog).findByText(/6 คน/);
-      expect(api.releaseNotes.audience).toHaveBeenCalledWith(expect.objectContaining({ releaseId: '2026-11-16' }));
-      fireEvent.click(within(dialog).getByRole('button', { name: 'เผยแพร่' }));
-
-      await waitFor(() => expect(api.releaseNotes.publish).toHaveBeenCalledTimes(1));
-      const payload = api.releaseNotes.publish.mock.calls[0][0];
-      expect(payload.releaseId).toBe('2026-11-16');
-      expect(payload.changes).toHaveLength(13);
-      expect(api.releaseNotes.email).not.toHaveBeenCalled();
-      await waitFor(() => expect(showToast).toHaveBeenCalledWith('success', expect.stringContaining('6')));
+      const status = await screen.findByRole('region', { name: 'ผลการส่งอีเมล' });
+      await within(status).findByText(/ส่งสำเร็จ/);
+      expect(status.textContent).toMatch(/ส่งสำเร็จ\s*5/);
+      expect(status.textContent).toMatch(/ส่งไม่สำเร็จ\s*1/);
+      expect(status.textContent).toMatch(/ไม่มีอีเมล\s*1/);
+      expect(status.textContent).toMatch(/ไม่ทราบผล\s*1/);
+      expect(status.textContent).toContain('วาริส');
+      expect(status.textContent).toContain('หมวย');
+      expect(status.textContent).toContain('ยา');
     });
 
-    it('email is a separate button with its own confirm showing who will receive it', async () => {
+    it('one press publishes AND emails, behind one confirm that counts both and names who has no address', async () => {
+      const { showToast } = renderPage(hr);
+
+      fireEvent.click(await readyButton('เผยแพร่ประกาศ'));
+      const dialog = await screen.findByRole('dialog');
+      await within(dialog).findByText(/กระดิ่ง/);
+      expect(dialog.textContent).toMatch(/แจ้งเตือนในกระดิ่ง\s*6 คน/);
+      expect(dialog.textContent).toMatch(/ส่งอีเมล\s*8 คน/);
+      expect(dialog.textContent).toMatch(/ไม่มีอีเมล\s*1 คน/);
+      expect(dialog.textContent).toContain('หมวย');
+      expect(api.releaseNotes.publishWithEmail).not.toHaveBeenCalled();
+      fireEvent.click(within(dialog).getByRole('button', { name: 'เผยแพร่และส่งอีเมล' }));
+
+      await waitFor(() => expect(api.releaseNotes.publishWithEmail).toHaveBeenCalledTimes(1));
+      const payload = api.releaseNotes.publishWithEmail.mock.calls[0][0];
+      expect(payload.releaseId).toBe('2026-11-16');
+      expect(payload.date).toBe('2026-11-16');
+      expect(payload.changes).toHaveLength(13);
+      expect(payload.changes.every((change) => typeof change.why === 'string' && change.why.length > 0)).toBe(true);
+      expect(api.releaseNotes.email).not.toHaveBeenCalled();
+      await waitFor(() => expect(showToast).toHaveBeenCalledWith('success', expect.stringMatching(/6 คน.*8 คน/)));
+    });
+
+    it('an email failure is reported without hiding that the bell went out', async () => {
+      api.releaseNotes.publishWithEmail.mockResolvedValue({
+        targeted: 9, inserted: 6, alreadyNotified: 3, email: null, emailError: 'ส่งอีเมลไม่สำเร็จ',
+      });
+      const { showToast } = renderPage(ceo);
+
+      fireEvent.click(await readyButton('เผยแพร่ประกาศ'));
+      const dialog = await screen.findByRole('dialog');
+      await within(dialog).findByText(/กระดิ่ง/);
+      fireEvent.click(within(dialog).getByRole('button', { name: 'เผยแพร่และส่งอีเมล' }));
+
+      await waitFor(() => expect(showToast).toHaveBeenCalledWith('error', expect.stringContaining('แจ้งเตือน 6 คน')));
+      expect(showToast.mock.calls.at(-1)[1]).toContain('ส่งอีเมลให้คนที่ยังไม่ได้รับ');
+    });
+
+    it('the retry button mails only those not yet emailed, and never re-sends the unconfirmed unless ticked', async () => {
+      api.releaseNotes.audience.mockResolvedValue({
+        ...audience, alreadyEmailed: 6, pendingEmail: 2,
+        email: { ...emailStatus, sent: 5, failed: 1, unconfirmed: 1, notYetEmailed: 1, failedNames: ['วาริส'], unconfirmedNames: ['ยา'] },
+      });
       renderPage(ceo);
 
-      fireEvent.click(await screen.findByRole('button', { name: 'ส่งอีเมล' }));
+      fireEvent.click(await readyButton('ส่งอีเมลให้คนที่ยังไม่ได้รับ'));
       const dialog = await screen.findByRole('dialog');
-      await within(dialog).findByText(/8 คน/);
-      expect(within(dialog).getByText(/ไม่มีอีเมล 1 คน/)).toBeTruthy();
-      expect(api.releaseNotes.email).not.toHaveBeenCalled();
+      await within(dialog).findByText(/2 คน/);
+      expect(dialog.textContent).toContain('วาริส');
+      const box = within(dialog).getByRole('checkbox', { name: /ไม่ทราบผล 1 คน/ });
+      expect(box.checked).toBe(false);
       fireEvent.click(within(dialog).getByRole('button', { name: 'ส่งอีเมล' }));
 
       await waitFor(() => expect(api.releaseNotes.email).toHaveBeenCalledTimes(1));
-      expect(api.releaseNotes.publish).not.toHaveBeenCalled();
+      expect(api.releaseNotes.email.mock.calls[0][0].resendUnconfirmed).toBeFalsy();
+      expect(api.releaseNotes.publishWithEmail).not.toHaveBeenCalled();
+    });
+
+    it('ticking the unconfirmed box is the only way to re-send them', async () => {
+      api.releaseNotes.audience.mockResolvedValue({
+        ...audience, alreadyEmailed: 9, pendingEmail: 0, withoutEmail: 0,
+        email: { ...emailStatus, sent: 6, unconfirmed: 3, notYetEmailed: 0, withoutEmail: 0, withoutEmailNames: [], unconfirmedNames: ['ก', 'ข', 'ค'] },
+      });
+      renderPage(hr);
+
+      fireEvent.click(await readyButton('ส่งอีเมลให้คนที่ยังไม่ได้รับ'));
+      const dialog = await screen.findByRole('dialog');
+      const box = await within(dialog).findByRole('checkbox', { name: /ไม่ทราบผล 3 คน/ });
+      // The box names who may get a second copy.
+      expect(box.closest('label').textContent).toMatch(/ก, ข, ค/);
+      // Nothing pending and the box unticked: nothing to send.
+      expect(within(dialog).getByRole('button', { name: 'ส่งอีเมล' }).disabled).toBe(true);
+      expect(dialog.textContent).toMatch(/จะส่งอีเมลถึง\s*0 คน/);
+      fireEvent.click(box);
+      // Ticked, the headline counts them and says how many may get two.
+      expect(dialog.textContent).toMatch(/จะส่งอีเมลถึง\s*3 คน/);
+      expect(dialog.textContent).toMatch(/3 คนอาจได้รับ 2 ฉบับ/);
+      // ...and the "will not be re-sent" line no longer counts the three being re-sent (9 - 3).
+      expect(dialog.textContent).toMatch(/ได้รับหรือกำลังส่งแล้ว 6 คน ไม่ส่งซ้ำ/);
+      expect(within(dialog).getByRole('button', { name: 'ส่งอีเมล' }).disabled).toBe(false);
+      fireEvent.click(within(dialog).getByRole('button', { name: 'ส่งอีเมล' }));
+
+      await waitFor(() => expect(api.releaseNotes.email).toHaveBeenCalledTimes(1));
+      expect(api.releaseNotes.email.mock.calls[0][0].resendUnconfirmed).toBe(true);
+    });
+
+    it('the opt-in box is never remembered: closing and reopening the confirm finds it unticked', async () => {
+      api.releaseNotes.audience.mockResolvedValue({
+        ...audience, alreadyEmailed: 9, pendingEmail: 0, withoutEmail: 0,
+        email: { ...emailStatus, sent: 6, unconfirmed: 3, notYetEmailed: 0, withoutEmail: 0, withoutEmailNames: [], unconfirmedNames: ['ก', 'ข', 'ค'] },
+      });
+      renderPage(hr);
+
+      fireEvent.click(await readyButton('ส่งอีเมลให้คนที่ยังไม่ได้รับ'));
+      let dialog = await screen.findByRole('dialog');
+      fireEvent.click(await within(dialog).findByRole('checkbox', { name: /ไม่ทราบผล 3 คน/ }));
+      fireEvent.click(within(dialog).getByRole('button', { name: 'ยกเลิก' }));
+      await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+
+      fireEvent.click(await readyButton('ส่งอีเมลให้คนที่ยังไม่ได้รับ'));
+      dialog = await screen.findByRole('dialog');
+      const box = await within(dialog).findByRole('checkbox', { name: /ไม่ทราบผล 3 คน/ });
+      expect(box.checked).toBe(false);
+      expect(within(dialog).getByRole('button', { name: 'ส่งอีเมล' }).disabled).toBe(true);
+      expect(api.releaseNotes.email).not.toHaveBeenCalled();
+    });
+
+    it('a refused hand-off on the retry is reported as an error with its count', async () => {
+      api.releaseNotes.email.mockResolvedValue({
+        targeted: 9, queued: 0, alreadyEmailed: 0, withoutEmail: 1, notQueued: 8, error: 'ระบบส่งอีเมลไม่รับงาน',
+      });
+      const { showToast } = renderPage(hr);
+
+      fireEvent.click(await readyButton('ส่งอีเมลให้คนที่ยังไม่ได้รับ'));
+      const dialog = await screen.findByRole('dialog');
+      await within(dialog).findByText(/8 คน/);
+      fireEvent.click(within(dialog).getByRole('button', { name: 'ส่งอีเมล' }));
+
+      await waitFor(() => expect(showToast).toHaveBeenCalledWith('error', expect.stringContaining('8 คน')));
+      expect(showToast.mock.calls.at(-1)[1]).toContain('ระบบส่งอีเมลไม่รับงาน');
+    });
+
+    it('re-reads the status by itself while mails are still being sent', async () => {
+      api.releaseNotes.audience
+        .mockResolvedValueOnce({ ...audience, email: { ...emailStatus, sending: 8, notYetEmailed: 0 } })
+        .mockResolvedValue({ ...audience, email: { ...emailStatus, sent: 8, notYetEmailed: 0 } });
+      renderPage(hr);
+
+      const status = await screen.findByRole('region', { name: 'ผลการส่งอีเมล' });
+      await within(status).findByText('กำลังส่ง');
+      await waitFor(() => expect(status.textContent).toMatch(/ส่งสำเร็จ\s*8/), { timeout: 7000 });
+      expect(api.releaseNotes.audience.mock.calls.length).toBeGreaterThanOrEqual(2);
+    }, 10000);
+
+    it('against a backend that has not been updated, both buttons are disabled and a click sends nothing', async () => {
+      // The previous backend's /audience: no `email` block (and no per-person outcomes behind it).
+      api.releaseNotes.audience.mockResolvedValue({
+        targeted: 9, alreadyNotified: 0, pendingNotification: 9, alreadyEmailed: 0, pendingEmail: 8, withoutEmail: 1,
+      });
+      renderPage(ceo);
+
+      await screen.findByText(/เซิร์ฟเวอร์ยังไม่ได้อัปเดต/);
+      const publish = screen.getByRole('button', { name: 'เผยแพร่ประกาศ' });
+      const retry = screen.getByRole('button', { name: 'ส่งอีเมลให้คนที่ยังไม่ได้รับ' });
+      expect(publish.disabled).toBe(true);
+      expect(retry.disabled).toBe(true);
+      fireEvent.click(publish);
+      fireEvent.click(retry);
+
+      expect(screen.queryByRole('dialog')).toBeNull();
+      expect(api.releaseNotes.publishWithEmail).not.toHaveBeenCalled();
+      expect(api.releaseNotes.email).not.toHaveBeenCalled();
+      expect(api.releaseNotes.audience).toHaveBeenCalledTimes(1);
     });
 
     it('cancelling the confirm sends nothing', async () => {
       renderPage(hr);
 
-      fireEvent.click(await screen.findByRole('button', { name: 'ส่งอีเมล' }));
+      fireEvent.click(await readyButton('ส่งอีเมลให้คนที่ยังไม่ได้รับ'));
       const dialog = await screen.findByRole('dialog');
       await within(dialog).findByText(/8 คน/);
       fireEvent.click(within(dialog).getByRole('button', { name: 'ยกเลิก' }));
 
       await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
       expect(api.releaseNotes.email).not.toHaveBeenCalled();
-      expect(api.releaseNotes.publish).not.toHaveBeenCalled();
+      expect(api.releaseNotes.publishWithEmail).not.toHaveBeenCalled();
     });
   });
 });

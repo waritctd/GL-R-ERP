@@ -32,7 +32,8 @@ export const queryKeys = {
   notifications: () => ['notifications'],
   feedbackMine: () => ['feedback', 'mine'],
   feedbackAll: () => ['feedback', 'all'],
-  // มีอะไรใหม่ admin confirm: who publish / email would still reach (POST /api/release-notes/audience).
+  // มีอะไรใหม่ admin: who publish / email would still reach, and each person's email outcome
+  // (POST /api/release-notes/audience). action = 'publish' | 'email' (a confirm) | 'status' (the result panel).
   releaseNoteAudience: (releaseId, action) => ['releaseNoteAudience', releaseId, action ?? ''],
   leaveRequests: (filters = {}) => ['leave', 'list', filters.from, filters.to, filters.status, filters.employeeId],
   leaveBalances: (employeeId, year) => ['leave', 'balances', employeeId, year],

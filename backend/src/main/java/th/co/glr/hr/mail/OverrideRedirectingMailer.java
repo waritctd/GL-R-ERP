@@ -8,7 +8,7 @@ import org.slf4j.LoggerFactory;
 /** Decorates the active Mailer so that when app.mail.override-to is configured, EVERY outbound email is
  * redirected to that one test inbox instead of the caller-supplied recipient - no matter which class placed
  * the call, and no matter which transport is active underneath. */
-final class OverrideRedirectingMailer implements Mailer {
+final class OverrideRedirectingMailer implements Mailer, KeyedHtmlMailer {
     private static final Logger log = LoggerFactory.getLogger(OverrideRedirectingMailer.class);
 
     private final Mailer delegate;
@@ -22,6 +22,26 @@ final class OverrideRedirectingMailer implements Mailer {
         }
         this.delegate = delegate;
         this.overrideTo = overrideTo;
+    }
+
+    /** Redirects exactly like {@link #sendHtml} and keeps the idempotency key when the wrapped transport takes one;
+     * otherwise falls back to the wrapped plain send. */
+    @Override
+    public void sendHtmlOnce(String to, String subject, String htmlBody, String textBody,
+                             List<InlineImage> inlineImages, String idempotencyKey) {
+        if (!(delegate instanceof KeyedHtmlMailer keyed)) {
+            sendHtml(to, subject, htmlBody, textBody, inlineImages);
+            return;
+        }
+        log.info("app.mail.override-to active: redirecting mail from {} to {}", describe(to), overrideTo);
+        keyed.sendHtmlOnce(overrideTo, subject, htmlNote(htmlBody, to), plainNote(textBody, to), inlineImages,
+            idempotencyKey);
+    }
+
+    /** Redirecting does not change whether the wrapped transport delivers. */
+    @Override
+    public boolean delivers() {
+        return delegate.delivers();
     }
 
     @Override
