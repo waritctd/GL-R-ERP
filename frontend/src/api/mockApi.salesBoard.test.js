@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { api, rankQuietForTests, receiptSourceForTests } from './mockApi.js';
+import { api, patchTicketForTests, rankQuietForTests, receiptSourceForTests } from './mockApi.js';
 
 // Mirrors SalesBoardService / SalesBoardRepository (backend SalesBoardScopeIntegrationTest). The mock's authz is
 // NOT evidence about the Java service — the role gates and the own-deals scope are proven only by the real-DB
@@ -211,13 +211,61 @@ describe('mockApi drawn details (slice 6)', () => {
     }
   });
 
-  it('the due state is never on ควรตามต่อ or the team\'s stale list (no screen shows it there)', async () => {
+  it('a returning paused deal past its due date reads overdue on its quiet-view card, as on finance (NEW-1)', async () => {
+    // Deal 23: SALES1's, fully delivered, deposit paid, balance unpaid, due 2026-07-28 — paused, its return date today.
+    await api.auth.login({ role: 'sales' });
+    const today = new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Bangkok' });
+    patchTicketForTests(23, { lifecycle: 'ON_HOLD', pauseReturnOn: today });
+    try {
+      const card = (await api.salesBoard.myWork()).followUp.find((d) => d.ticketId === 23);
+      await api.auth.login({ role: 'ceo' });
+      const finance = (await api.tickets.list()).tickets.find((t) => t.id === 23);
+
+      expect(card.returning).toBe(true);
+      expect(finance.overdue).toBe(true);
+      expect(card.overdue).toBe(true);
+      expect(card.paymentDueDate).toBe(finance.paymentDueDate);
+    } finally {
+      patchTicketForTests(23, { lifecycle: 'ACTIVE', pauseReturnOn: null });
+    }
+  });
+
+  it('a column-4 card with a due date carries it (the money chip starts at รอมัดจำ, not ส่งของ)', async () => {
+    await api.auth.login({ role: 'ceo' });
+    const before = (await api.tickets.list()).tickets.find((t) => t.id === 23).salesStage;
+    patchTicketForTests(23, { salesStage: 'NEGOTIATION' });
+    try {
+      const card = (await api.salesBoard.teamBoard()).board.find((d) => d.ticketId === 23);
+      expect(card.boardColumn).toBe(4);
+      expect(card.paymentDueDate).not.toBeNull();
+      expect(card.overdue).toBe(true);
+    } finally {
+      patchTicketForTests(23, { salesStage: before });
+    }
+  });
+
+  it('no due date before the deal is fully delivered, as the server derives it (fix round 2)', async () => {
+    await api.auth.login({ role: 'ceo' });
+    const { tickets } = await api.tickets.list();
+    for (const t of tickets) {
+      if (t.paymentDueDate != null) expect(t.fulfillmentStatus, `deal ${t.id}`).toBe('FULLY_DELIVERED');
+      if (t.overdue) expect(t.paymentDueDate, `deal ${t.id}`).not.toBeNull();
+    }
+    // Deal 22 carries a demo billing due date but is only reserved from stock: no due date, not overdue.
+    const notDelivered = tickets.find((t) => t.id === 22);
+    expect(notDelivered.fulfillmentStatus).not.toBe('FULLY_DELIVERED');
+    expect(notDelivered.paymentDueDate).toBeNull();
+    expect(notDelivered.overdue).toBe(false);
+  });
+
+  // Adapted (fix round 2): the RETURNING followUp rows are quiet-view cards and carry it (test above); the rest do not.
+  it('the due state is never on the team\'s stale list or an ACTIVE ควรตามต่อ row (no card shows it there)', async () => {
     await api.auth.login({ role: 'ceo' });
     const { stale } = await api.salesBoard.teamOverview();
     await api.auth.login({ role: 'sales' });
     const { followUp } = await api.salesBoard.myWork();
 
-    for (const d of [...stale, ...followUp]) {
+    for (const d of [...stale, ...followUp.filter((row) => !row.returning)]) {
       expect(d.paymentDueDate).toBeNull();
       expect(d.overdue).toBe(false);
     }

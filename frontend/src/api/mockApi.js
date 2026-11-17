@@ -3611,12 +3611,19 @@ function derivePaymentFields(ticket) {
   else if (payable > 0 && !depositBypassesNotice(ticket)
       && ['CUSTOMER_CONFIRMED', 'DEPOSIT_NOTICE_ISSUED'].includes(ticket.paymentStatus)) paymentStage = 'DEPOSIT_PENDING';
   else if (payable > 0 && outstanding > 0) paymentStage = 'BALANCE_PENDING';
-  const overdue = Boolean(ticket.dueDate && new Date(`${ticket.dueDate}T00:00:00`) < new Date() && outstanding > 0);
+  // Fix round 2: the server has a due date only once the deal is FULLY_DELIVERED (TicketRepository#paymentTermsRowSql's
+  // delivery join) and is overdue only from the Bangkok day AFTER it, never while the deposit notice waits
+  // (TicketRepository#paymentDueState). The mock keeps its demo billing date as the date itself, but behind the same
+  // preconditions, so no card or finance row shows a due date the server could not produce.
+  const paymentDueDate = ticket.fulfillmentStatus === 'FULLY_DELIVERED' ? (ticket.dueDate ?? null) : null;
+  const overdue = Boolean(paymentDueDate && mockTodayIso() > paymentDueDate && outstanding > 0
+    && ticket.paymentStatus !== 'DEPOSIT_NOTICE_ISSUED');
   return {
     billingDate: ticket.billingDate ?? null,
     dueDate: ticket.dueDate ?? null,
-    // Mock approximation: no quotation-terms/delivery derivation, so the demo billing due date stands in.
-    paymentDueDate: ticket.dueDate ?? null, paymentDueBasis: null, paymentDueCreditDays: null,
+    // Mock approximation: no quotation-terms derivation, so the demo billing due date stands in — only once fully
+    // delivered, as above.
+    paymentDueDate, paymentDueBasis: null, paymentDueCreditDays: null,
     creditTermDays: ticket.creditTermDays ?? null,
     lastFollowUpAt: ticket.lastFollowUpAt ?? null,
     nextFollowUpAt: ticket.nextFollowUpAt ?? null,
@@ -8544,6 +8551,7 @@ function mockBoardCardDetails(t, valueQuotation) {
  * delivery-based one — a plumbing stand-in only.
  */
 function mockWithPaymentDue(rows) {
+  // Callers (fix round 2): my-work board, team-board board, and my-work's returning followUp rows.
   return rows.map((d) => {
     if (d.boardColumn < 4) return d;
     const due = derivePaymentFields(db.tickets.find((t) => t.id === d.ticketId));
@@ -14230,7 +14238,10 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       // ควรตามต่อ also takes the caller's OWN returning paused deals (SalesBoardRepository#returningPausedDealsOwnedBy).
       const returning = mockReturningPausedDeals().filter((d) => d.ownerId === user.id);
       return delay({
-        followUp: mockRankFollowUp(board, returning, 5), board: mockWithPaymentDue(board), quietDays: MOCK_QUIET_DAYS,
+        // Fix round 2 (SalesBoardService#myWork): the RETURNING followUp rows are DealBoard cards in งานของฉัน's
+        // เฉพาะงานเงียบ view, so they carry the due state too; the active followUp rows (ควรตามต่อ list only) do not.
+        followUp: mockRankFollowUp(board, returning, 5).map((d) => (d.returning ? mockWithPaymentDue([d])[0] : d)),
+        board: mockWithPaymentDue(board), quietDays: MOCK_QUIET_DAYS,
         visitsThisWeek: mockVisitsThisWeek(user.id),
         cash: mockCashForMonth(user.id, mockTodayIso().slice(0, 7)),
       });
