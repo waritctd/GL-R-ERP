@@ -340,7 +340,7 @@ describe('route-aware lookups', () => {
     no: stage.no,
     allowed: !off.includes(stage.code),
     requiresReason: false,
-    blockedReason: off.includes(stage.code) ? `ขั้นที่ ${stage.no} ไม่อยู่ในเส้นทางของงานนี้` : null,
+    blockedReason: off.includes(stage.code) ? `ขั้นที่ ${stage.no} ไม่อยู่ในเส้นทางนี้` : null,
     onRoute: !off.includes(stage.code),
   }));
 
@@ -613,7 +613,7 @@ describe('routeForChannel / routePositionForChannel — lookups over the SERVED 
 
 describe('recipientRouteRefusal — the server\'s DealRoute.refusalMessage, read off the served catalog', () => {
   const catalog = DEAL_STAGE_CATALOG;
-  const sentence = (phrase, no) => `งานนี้เป็น${phrase} — ขั้นที่ ${no} ไม่อยู่ในเส้นทางของงานนี้ — แก้ช่องทางงานก่อน`;
+  const sentence = (phrase, no) => `ช่องทางรับงานของงานนี้คือ${phrase} — ขั้นที่ ${no} ไม่อยู่ในเส้นทางนี้ — แก้ช่องทางรับงานก่อน`;
 
   it('names the channel, the stage\'s display number and the remedy for an off-route party', () => {
     expect(recipientRouteRefusal(catalog, 'OWNER_DIRECT', 'DESIGNER')).toBe(sentence('เจ้าของติดต่อโดยตรง', 4));

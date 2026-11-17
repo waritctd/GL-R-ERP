@@ -336,7 +336,7 @@ class DealQuotationCreateGuardsIntegrationTest extends AbstractDealQuotationSlic
     //    and owner; UNSPECIFIED / unknown has no route => allowed). BUYER -> QUOTE_BUYER is on EVERY route. ────
 
     private static final String OWNER_DIRECT_DESIGNER_SENTENCE =
-        "งานนี้เป็นเจ้าของติดต่อโดยตรง — ขั้นที่ 4 ไม่อยู่ในเส้นทางของงานนี้ — แก้ช่องทางงานก่อน";
+        "ช่องทางรับงานของงานนี้คือเจ้าของติดต่อโดยตรง — ขั้นที่ 4 ไม่อยู่ในเส้นทางนี้ — แก้ช่องทางรับงานก่อน";
 
     private void assertRouteRefused(long ticket, String recipient, String channel, String stage) {
         ApiException e = refusal(() -> quotationService.create(ticket, draft(recipient), salesActor), HttpStatus.CONFLICT);
@@ -378,7 +378,7 @@ class DealQuotationCreateGuardsIntegrationTest extends AbstractDealQuotationSlic
         assertRouteRefused(deal(salesActor, EntryChannel.BUYER_DIRECT), "OWNER", EntryChannel.BUYER_DIRECT,
             DealStage.QUOTE_OWNER);
         assertThat(DealRoute.refusalMessage(EntryChannel.BUYER_DIRECT, DealStage.QUOTE_OWNER))
-            .isEqualTo("งานนี้เป็นผู้ซื้อ/ผู้รับเหมาติดต่อโดยตรง — ขั้นที่ 5 ไม่อยู่ในเส้นทางของงานนี้ — แก้ช่องทางงานก่อน");
+            .isEqualTo("ช่องทางรับงานของงานนี้คือผู้ซื้อ/ผู้รับเหมาติดต่อโดยตรง — ขั้นที่ 5 ไม่อยู่ในเส้นทางนี้ — แก้ช่องทางรับงานก่อน");
 
         long buyer = deal(salesActor, EntryChannel.BUYER_DIRECT);
         assertThat(quotationService.create(buyer, draft("BUYER"), salesActor).recipientType()).isEqualTo("BUYER");

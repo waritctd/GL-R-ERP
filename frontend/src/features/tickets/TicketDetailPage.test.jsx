@@ -5452,7 +5452,7 @@ describe('TicketDetailPage', () => {
           no: stage.no,
           allowed: stage.code !== salesStage && (onRoute || lax),
           requiresReason: false,
-          blockedReason: onRoute || lax ? null : 'ขั้นตอนนี้ไม่อยู่ในเส้นทางของงานนี้',
+          blockedReason: onRoute || lax ? null : 'ขั้นตอนนี้ไม่อยู่ในเส้นทางนี้',
           onRoute,
         };
       });
@@ -5612,7 +5612,7 @@ describe('TicketDetailPage', () => {
         allowed: stage.code !== 'SPEC_APPROVED' && !off.has(stage.code),
         requiresReason: false,
         blockedReason: off.has(stage.code)
-          ? 'งานนี้เป็นเจ้าของติดต่อโดยตรง — ขั้นที่ 4 ไม่อยู่ในเส้นทางของงานนี้ — แก้ช่องทางงานก่อน'
+          ? 'ช่องทางรับงานของงานนี้คือเจ้าของติดต่อโดยตรง — ขั้นที่ 4 ไม่อยู่ในเส้นทางนี้ — แก้ช่องทางรับงานก่อน'
           : null,
         onRoute: !off.has(stage.code),
       }));

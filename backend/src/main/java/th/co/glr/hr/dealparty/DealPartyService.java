@@ -77,7 +77,7 @@ public class DealPartyService {
             .orElseThrow(() -> new ApiException(HttpStatus.BAD_REQUEST, "ไม่พบลูกค้า"));
         Long contactId = requireContactOf(customer.id(), request.contactId());
         if (parties.findByTicketCustomerRole(ticketId, customer.id(), role).isPresent()) {
-            throw new ApiException(HttpStatus.CONFLICT, "ลูกค้ารายนี้อยู่ในงานนี้ในบทบาทนี้แล้ว");
+            throw new ApiException(HttpStatus.CONFLICT, "ลูกค้ารายนี้อยู่ในงานนี้ด้วยบทบาทเดียวกันแล้ว");
         }
         // The first party on a deal (one that pre-dates V204 and had no customer, or whose backfill found none) is
         // the headline by definition; later parties are not until the rep says so.
@@ -178,7 +178,7 @@ public class DealPartyService {
         if (!alreadyAwarded) {
             Long primaryId = request.primaryPartyId() != null ? request.primaryPartyId() : winners.get(0).id();
             primary = winners.stream().filter(p -> p.id() == primaryId).findFirst()
-                .orElseThrow(() -> new ApiException(HttpStatus.BAD_REQUEST, "งานหลักต้องเป็นหนึ่งในผู้รับเหมาที่ชนะ"));
+                .orElseThrow(() -> new ApiException(HttpStatus.BAD_REQUEST, "ผู้รับเหมาของงานหลักต้องเป็นหนึ่งในผู้ที่ชนะ"));
         }
         // Every winner needs an APPROVED document before anything is written.
         Map<Long, Long> approvedQuotationByParty = new java.util.HashMap<>();

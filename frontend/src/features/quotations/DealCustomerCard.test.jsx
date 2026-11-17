@@ -571,7 +571,7 @@ describe('DealCustomerCard — ดีล step (slice 2)', () => {
   describe('off-route recipient pills (owner ruling 2026-11-07)', () => {
     const OWNER_DIRECT = 'เจ้าของติดต่อโดยตรง';
     const BUYER_DIRECT = 'ผู้ซื้อ/ผู้รับเหมาติดต่อโดยตรง';
-    const sentence = (channelPhrase, no) => `งานนี้เป็น${channelPhrase} — ขั้นที่ ${no} ไม่อยู่ในเส้นทางของงานนี้ — แก้ช่องทางงานก่อน`;
+    const sentence = (channelPhrase, no) => `ช่องทางรับงานของงานนี้คือ${channelPhrase} — ขั้นที่ ${no} ไม่อยู่ในเส้นทางนี้ — แก้ช่องทางรับงานก่อน`;
     const isDisabled = (el) => el.disabled || el.getAttribute('aria-disabled') === 'true';
     const pills = () => within(screen.getByRole('radiogroup', { name: 'ผู้รับใบเสนอราคา' })).getAllByRole('radio');
 
@@ -614,7 +614,7 @@ describe('DealCustomerCard — ดีล step (slice 2)', () => {
         expect(isDisabled(screen.getByRole('radio', { name: recipientType === 'OWNER' ? 'เจ้าของโครงการ' : 'ผู้ซื้อ / ผู้รับเหมา' }))).toBe(false);
       } else {
         pills().forEach((pill) => expect(isDisabled(pill)).toBe(false));
-        expect(screen.queryByText(/ไม่อยู่ในเส้นทางของงานนี้/)).toBeNull();
+        expect(screen.queryByText(/ไม่อยู่ในเส้นทางนี้/)).toBeNull();
       }
     });
 
@@ -670,7 +670,7 @@ describe('DealCustomerCard — off-route pills on a PICKED deal (owner ruling 20
 
   it('reads the PICKED deal\'s own channel: an owner-direct deal disables ผู้ออกแบบ and says why', async () => {
     renderPicked({ id: 18, code: 'DL-2026-0018', customerName: 'ก', salesStage: 'PRESENTATION', entryChannel: 'OWNER_DIRECT' }, 'OWNER');
-    expect((await screen.findAllByText('งานนี้เป็นเจ้าของติดต่อโดยตรง — ขั้นที่ 4 ไม่อยู่ในเส้นทางของงานนี้ — แก้ช่องทางงานก่อน')).length)
+    expect((await screen.findAllByText('ช่องทางรับงานของงานนี้คือเจ้าของติดต่อโดยตรง — ขั้นที่ 4 ไม่อยู่ในเส้นทางนี้ — แก้ช่องทางรับงานก่อน')).length)
       .toBeGreaterThan(0);
     expect(isDisabled(screen.getByRole('radio', { name: 'ผู้ออกแบบ' }))).toBe(true);
     expect(isDisabled(screen.getByRole('radio', { name: 'เจ้าของโครงการ' }))).toBe(false);
@@ -682,7 +682,7 @@ describe('DealCustomerCard — off-route pills on a PICKED deal (owner ruling 20
     await waitFor(() => expect(api.meta.dealStages).toHaveBeenCalled());
     await new Promise((resolve) => { setTimeout(resolve, 0); });
     screen.getAllByRole('radio').forEach((pill) => expect(isDisabled(pill)).toBe(false));
-    expect(screen.queryByText(/ไม่อยู่ในเส้นทางของงานนี้/)).toBeNull();
+    expect(screen.queryByText(/ไม่อยู่ในเส้นทางนี้/)).toBeNull();
   });
 });
 

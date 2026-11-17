@@ -1786,7 +1786,7 @@ describe('buildQuotationChecklist', () => {
   // find out from the 409. The caller (the editor) passes the sentence ONLY for a NEW or CHANGED recipient: an
   // unchanged stored recipient on a legacy draft still saves (the server only refuses a change), so it passes none.
   it('the checklist blocks the save with the route sentence when an off-route party is chosen', () => {
-    const sentence = 'งานนี้เป็นเจ้าของติดต่อโดยตรง — ขั้นที่ 4 ไม่อยู่ในเส้นทางของงานนี้ — แก้ช่องทางงานก่อน';
+    const sentence = 'ช่องทางรับงานของงานนี้คือเจ้าของติดต่อโดยตรง — ขั้นที่ 4 ไม่อยู่ในเส้นทางนี้ — แก้ช่องทางรับงานก่อน';
     const entries = meta.buildQuotationChecklist({ ...complete, recipientRequired: true, recipientType: 'DESIGNER',
       offRouteRecipientMessage: sentence });
     expect(entries).toEqual([expect.objectContaining({ message: sentence, blocking: true })]);

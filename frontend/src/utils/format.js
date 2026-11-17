@@ -530,8 +530,8 @@ export function fulfilmentStatusLabel(value) {
  * one label. Where both appear on one surface (the new-deal card at /quotations/new) each is
  * qualified; where only one appears, the plain form is used.
  *
- * This renames the FIELD only. The remedy button ("แก้ช่องทางงาน") and the server's refusal
- * ("… — แก้ช่องทางงานก่อน", DealRoute.refusalMessage) name the ACTION, not the field. Both said ดีล until 2026-11-17.
+ * This renames the FIELD only. The remedy button ("แก้ช่องทางรับงาน") and the server's refusal
+ * ("… — แก้ช่องทางรับงานก่อน", DealRoute.refusalMessage) name the ACTION, not the field. Both said ดีล until 2026-11-17.
  *
  * The channel's OPTION labels below deliberately differ from {@link quotationRecipientLabel}'s:
  * the how-the-deal-arrived nuance ("ผู้ออกแบบนำงานมา", "เจ้าของติดต่อโดยตรง"; DealRoute.channelPhrase says the same) matters more than

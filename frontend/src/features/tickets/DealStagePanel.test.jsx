@@ -177,7 +177,7 @@ describe('DealStagePanel imperative handle (overflow menu / danger zone triggers
 
   it('openEditStage() keeps an off-route stage in the blocked list with its reason, even though the deal never sat on it', () => {
     const offRoute = allAllowed.map((d) => (d.stage === 'QUOTE_OWNER'
-      ? { ...d, allowed: false, onRoute: false, blockedReason: 'ขั้นนี้ไม่อยู่ในเส้นทางของงานนี้' } : d));
+      ? { ...d, allowed: false, onRoute: false, blockedReason: 'ขั้นนี้ไม่อยู่ในเส้นทางนี้' } : d));
     const { ref } = renderPanelWithRef({
       summary: baseSummary({ salesStage: 'QUOTE_BUYER' }),
       availableActions: [{ action: 'UPDATE_STAGE' }],
@@ -186,7 +186,7 @@ describe('DealStagePanel imperative handle (overflow menu / danger zone triggers
     });
     act(() => ref.current.openEditStage());
     fireEvent.click(screen.getByTestId('update-stage-blocked-toggle'));
-    expect(screen.getByTestId('update-stage-blocked-list').textContent).toContain('ขั้นนี้ไม่อยู่ในเส้นทางของงานนี้');
+    expect(screen.getByTestId('update-stage-blocked-list').textContent).toContain('ขั้นนี้ไม่อยู่ในเส้นทางนี้');
   });
 
   it('openEditStage() offers every stage when the deal skipped none (no STAGE_CHANGED events)', () => {
@@ -892,7 +892,7 @@ describe('DealStagePanel route awareness', () => {
     allowed: !off.includes(stage.code),
     requiresReason: false,
     blockedReason: off.includes(stage.code)
-      ? `งานนี้ไม่ผ่านเส้นทาง — ขั้นที่ ${index + 1} ไม่อยู่ในเส้นทางของงานนี้ — แก้ช่องทางงานก่อน`
+      ? `งานนี้ไม่ผ่านเส้นทาง — ขั้นที่ ${index + 1} ไม่อยู่ในเส้นทางนี้ — แก้ช่องทางรับงานก่อน`
       : null,
     onRoute: !off.includes(stage.code),
   }));
@@ -1187,7 +1187,7 @@ describe('DealStagePanel แก้ช่องทางดีล wiring', () => 
     allowed: !off.includes(stage.code),
     requiresReason: false,
     blockedReason: off.includes(stage.code)
-      ? `งานนี้เป็นเจ้าของติดต่อโดยตรง — ขั้นที่ ${index + 1} ไม่อยู่ในเส้นทางของงานนี้ — แก้ช่องทางงานก่อน`
+      ? `ช่องทางรับงานของงานนี้คือเจ้าของติดต่อโดยตรง — ขั้นที่ ${index + 1} ไม่อยู่ในเส้นทางนี้ — แก้ช่องทางรับงานก่อน`
       : null,
     onRoute: !off.includes(stage.code),
   }));
@@ -1275,7 +1275,7 @@ describe('DealStagePanel แก้ช่องทางดีล wiring', () => 
     });
     act(() => ref.current.openEditStage());
     fireEvent.click(screen.getByTestId('update-stage-blocked-toggle'));
-    fireEvent.click(within(screen.getByTestId('update-stage-blocked-list')).getByRole('button', { name: /แก้ช่องทางงาน/ }));
+    fireEvent.click(within(screen.getByTestId('update-stage-blocked-list')).getByRole('button', { name: /แก้ช่องทางรับงาน/ }));
     expect(screen.getAllByRole('dialog')).toHaveLength(1);
     fireEvent.click(screen.getByRole('radio', { name: /ผู้ออกแบบนำงานมา/ }));
     fireEvent.change(screen.getByTestId('entry-channel-fix-reason'), { target: { value: 'มีผู้ออกแบบจริง' } });

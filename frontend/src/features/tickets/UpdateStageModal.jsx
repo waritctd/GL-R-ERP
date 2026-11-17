@@ -126,7 +126,7 @@ export function UpdateStageModal({
                       <span className="block text-2xs leading-snug text-text-muted [overflow-wrap:anywhere]">
                         {decision.blockedReason}
                       </span>
-                      {/* "…— แก้ช่องทางงานก่อน" is the server's remedy; this is the control that does it, INLINE because this
+                      {/* "…— แก้ช่องทางรับงานก่อน" is the server's remedy; this is the control that does it, INLINE because this
                        * component is already a dialog. Only rows the server itself marked off-route: a row blocked for permission or
                        * a payment fact would be offered a remedy that cannot clear it. */}
                       {decision.onRoute === false ? (

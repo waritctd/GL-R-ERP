@@ -65,11 +65,11 @@ public final class DealRoute {
     }
 
     /** The Thai refusal for a manual move into an off-route stage — names the deal's channel, the stage and the
-     * remedy: ดีลนี้เป็นเจ้าของติดต่อโดยตรง — ขั้นที่ 4 ไม่อยู่ในเส้นทางของดีลนี้ — แก้ช่องทางดีลก่อน. The channel
+     * remedy: ช่องทางรับงานของงานนี้คือเจ้าของติดต่อโดยตรง — ขั้นที่ 4 ไม่อยู่ในเส้นทางนี้ — แก้ช่องทางรับงานก่อน. The channel
      * phrase is derived from the channel, never hardcoded to one route. */
     public static String refusalMessage(String entryChannel, String stage) {
-        return "งานนี้เป็น" + channelPhrase(entryChannel) + " — ขั้นที่ " + DealStage.displayNoOf(stage)
-            + " ไม่อยู่ในเส้นทางของงานนี้ — แก้ช่องทางงานก่อน";
+        return "ช่องทางรับงานของงานนี้คือ" + channelPhrase(entryChannel) + " — ขั้นที่ " + DealStage.displayNoOf(stage)
+            + " ไม่อยู่ในเส้นทางนี้ — แก้ช่องทางรับงานก่อน";
     }
 
     /** How {@link #refusalMessage} names a stage: {@code "ขั้นที่ 4"}. Tests assert against this. */
@@ -89,7 +89,7 @@ public final class DealRoute {
         if (EntryChannel.DESIGNER_LED.equals(entryChannel)) {
             return "ผู้ออกแบบนำงานมา";
         }
-        return "งานที่ระบุช่องทางไว้";
+        return "ช่องทางที่ระบุไว้";
     }
 
     private DealRoute() {}

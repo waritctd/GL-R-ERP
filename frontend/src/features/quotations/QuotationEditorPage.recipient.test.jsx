@@ -561,7 +561,7 @@ describe('/quotations/new?ticket= — a deal with a live pricing request (one pr
 });
 
 // Owner ruling 2026-11-07: DealRoute.refusalMessage's sentence (the server's 409), shown beside a disabled off-route pill.
-const routeSentence = (channelPhrase, no) => `งานนี้เป็น${channelPhrase} — ขั้นที่ ${no} ไม่อยู่ในเส้นทางของงานนี้ — แก้ช่องทางงานก่อน`;
+const routeSentence = (channelPhrase, no) => `ช่องทางรับงานของงานนี้คือ${channelPhrase} — ขั้นที่ ${no} ไม่อยู่ในเส้นทางนี้ — แก้ช่องทางรับงานก่อน`;
 const isDisabled = (el) => el.disabled || el.getAttribute('aria-disabled') === 'true';
 const checkedRecipients = () => within(recipientGroup()).getAllByRole('radio').map((r) => r.getAttribute('aria-checked'));
 

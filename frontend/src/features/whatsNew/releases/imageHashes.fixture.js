@@ -8,7 +8,7 @@ export const IMAGE_SHA256_2026_11_16 = Object.freeze({
   'address-1.png': '83285c30be93c5759f35c16fd5b55d9b0d9cf3da1c4288e422554cded5a05473',
   'address-2.png': 'b7eba8132ca69994932398781024c5793b8346b9afe221c15da986a7871aabaa',
   'ceo-home-1.png': '221e4ff758fc0be36227c71e92d92e5733b8ae4021f2e37742743c16bd6fc129',
-  'ceo-home-2.png': 'bcf8390c1ab2abdf80668b71c80c12316ba5adfb8e073eadddc508773f8731f3',
+  'ceo-home-2.png': '5374b60f9155666fac2eac51025d097ef321dcbb621a0d6ccaa34b44bad9d37d',
   'deal-list-1.png': '0489beb3060e1b98d5ce1334e2b2d45b55ecb6b6c69a5a5e525b5ab5c60ad1ad',
   'deal-page-1.png': 'f236c10655c41e15c12cc59569c8cc00a65a6f079dd0ef8468ea516d25604ec3',
   'deal-page-2.png': 'c1699e00671719a5f087bcd8ecb7dcb2590ef39f96b61327c07348c24a1cdb8e',

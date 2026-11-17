@@ -390,7 +390,7 @@ test.describe.serial('quote stage gates + versioning — real browser walk', () 
   test('9. off-route recipient: the pill is disabled with the route sentence, and the API refuses it 409', async () => {
     const deal = await newDeal('C-offroute', 'OWNER_DIRECT');
     const page = salesPage;
-    const sentence = 'งานนี้เป็นเจ้าของติดต่อโดยตรง — ขั้นที่ 4 ไม่อยู่ในเส้นทางของงานนี้ — แก้ช่องทางงานก่อน';
+    const sentence = 'ช่องทางรับงานของงานนี้คือเจ้าของติดต่อโดยตรง — ขั้นที่ 4 ไม่อยู่ในเส้นทางนี้ — แก้ช่องทางรับงานก่อน';
     await page.goto(`/quotations/new?ticket=${deal}`);
     // The designer has no place on an owner-direct route: its pill is disabled and says why; the pre-select is
     // the channel's own party (the owner), never the off-route one.

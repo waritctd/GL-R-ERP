@@ -223,7 +223,7 @@ class DealRouteGateIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThatThrownBy(() -> ticketService.updateStage(ticketId, DealStage.DEPOSIT_RECEIVED, "เหตุผล", ceoActor))
             .isInstanceOfSatisfying(ApiException.class, e -> {
                 assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
-                assertThat(e.getMessage()).contains("ยังไม่ได้รับชำระมัดจำ").doesNotContain("แก้ช่องทางงาน");
+                assertThat(e.getMessage()).contains("ยังไม่ได้รับชำระมัดจำ").doesNotContain("แก้ช่องทางรับงาน");
             });
     }
 
@@ -235,7 +235,7 @@ class DealRouteGateIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThatThrownBy(() -> ticketService.updateStage(ticketId, DealStage.QUOTE_DESIGN_SIDE, null, ownerRep))
             .isInstanceOfSatisfying(ApiException.class, e -> {
                 assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
-                assertThat(e.getMessage()).contains("อยู่ในขั้นตอน").doesNotContain("แก้ช่องทางงาน");
+                assertThat(e.getMessage()).contains("อยู่ในขั้นตอน").doesNotContain("แก้ช่องทางรับงาน");
             });
     }
 
@@ -269,7 +269,7 @@ class DealRouteGateIntegrationTest extends AbstractPostgresIntegrationTest {
                     .contains("ผู้ซื้อ/ผู้รับเหมาติดต่อโดยตรง")
                     .contains(DealRoute.stagePhrase(d.stage()))
                     .doesNotContain(d.stage())
-                    .contains("แก้ช่องทางงาน");
+                    .contains("แก้ช่องทางรับงาน");
             } else {
                 assertThat(d.onRoute()).as("onRoute for %s", d.stage()).isTrue();
             }
@@ -335,7 +335,7 @@ class DealRouteGateIntegrationTest extends AbstractPostgresIntegrationTest {
                 assertThat(e.getMessage()).contains(channelPhrase)
                     .contains(DealRoute.stagePhrase(stage))
                     .doesNotContain(stage)
-                    .contains("แก้ช่องทางงาน");
+                    .contains("แก้ช่องทางรับงาน");
             });
     }
 
@@ -343,7 +343,7 @@ class DealRouteGateIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(decisions).hasSize(DealStage.ORDER.size());
         for (StageDecisionDto d : decisions) {
             assertThat(d.onRoute()).as("onRoute for %s", d.stage()).isTrue();
-            assertThat(d.blockedReason() == null || !d.blockedReason().contains("แก้ช่องทางงาน"))
+            assertThat(d.blockedReason() == null || !d.blockedReason().contains("แก้ช่องทางรับงาน"))
                 .as("route refusal on %s: %s", d.stage(), d.blockedReason()).isTrue();
         }
     }

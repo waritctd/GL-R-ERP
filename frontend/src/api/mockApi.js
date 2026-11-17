@@ -4403,8 +4403,8 @@ function mockIsOnRoute(entryChannel, stage) {
 /** Mirrors DealRoute.refusalMessage — names the channel, the stage BY DISPLAY NUMBER, and the remedy. */
 function mockRouteRefusal(entryChannel, stage) {
   const no = DEAL_STAGE_CATALOG.stages.find((s) => s.code === stage)?.no ?? '';
-  return `งานนี้เป็น${MOCK_ENTRY_CHANNEL_PHRASE[entryChannel] ?? 'งานที่ระบุช่องทางไว้'}`
-    + ` — ขั้นที่ ${no} ไม่อยู่ในเส้นทางของงานนี้ — แก้ช่องทางงานก่อน`;
+  return `ช่องทางรับงานของงานนี้คือ${MOCK_ENTRY_CHANNEL_PHRASE[entryChannel] ?? 'ช่องทางที่ระบุไว้'}`
+    + ` — ขั้นที่ ${no} ไม่อยู่ในเส้นทางนี้ — แก้ช่องทางรับงานก่อน`;
 }
 
 /** Mirrors TicketService.requireQuotationRecipientOnRoute: a direct quotation may not be addressed to a party off
@@ -10385,7 +10385,7 @@ export const api = {
         if (!contact || contact.customerId !== customer.id) fail('ผู้ติดต่อนี้ไม่ได้อยู่ภายใต้ลูกค้าที่เลือก', 400);
       }
       if (mockPartiesOf(ticket.id).some((p) => p.customerId === customer.id && p.role === role)) {
-        fail(`${customer.name} อยู่ในงานนี้ในบทบาทนี้แล้ว`, 409);
+        fail(`ลูกค้ารายนี้อยู่ในงานนี้ด้วยบทบาทเดียวกันแล้ว`, 409);
       }
       const party = mockInsertDealParty({ ticketId: ticket.id, customerId: customer.id, contactId, role, addedById: user.id });
       pushEvent(ticket, user, 'DEAL_PARTY_ADDED', ticket.status, ticket.status, `เพิ่ม ${customer.name}`);
@@ -10450,7 +10450,7 @@ export const api = {
       let primary = null;
       if (!alreadyAwarded) {
         primary = payload?.primaryPartyId != null ? awarded.find((p) => p.id === Number(payload.primaryPartyId)) : awarded[0];
-        if (!primary) fail('งานหลักต้องเป็นหนึ่งในผู้รับเหมาที่ชนะ', 400);
+        if (!primary) fail('ผู้รับเหมาของงานหลักต้องเป็นหนึ่งในผู้ที่ชนะ', 400);
         if (ticket.paymentStatus != null && ticket.paymentStatus !== 'CUSTOMER_CONFIRMED') {
           fail('ขั้นตอนการรับชำระเงินผ่านสถานะ CUSTOMER_CONFIRMED ไปแล้ว', 409);
         }

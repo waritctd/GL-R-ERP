@@ -285,7 +285,7 @@ describe('mock stageDecisions — the quote stages are fact-gated on a quotation
     const decision = (await decisionsOf(ticketId)).find((d) => d.stage === 'QUOTE_DESIGN_SIDE');
 
     expect(decision.allowed).toBe(false);
-    expect(decision.blockedReason).toContain('แก้ช่องทางงานก่อน');
+    expect(decision.blockedReason).toContain('แก้ช่องทางรับงานก่อน');
     expect(decision.blockedReason).not.toContain('ยังไม่มีใบเสนอราคาถึง');
   });
 
@@ -567,8 +567,8 @@ describe('mock dealQuotations — issuing a pricing-route quotation supersedes t
 describe('mock dealQuotations — a direct quotation may not be addressed to a party OFF the deal route (2026-11-07)', () => {
   beforeEach(async () => { await asRole('sales'); });
 
-  const DESIGNER_ON_OWNER_DIRECT = 'งานนี้เป็นเจ้าของติดต่อโดยตรง — ขั้นที่ 4 ไม่อยู่ในเส้นทางของงานนี้ — แก้ช่องทางงานก่อน';
-  const OWNER_ON_BUYER_DIRECT = 'งานนี้เป็นผู้ซื้อ/ผู้รับเหมาติดต่อโดยตรง — ขั้นที่ 5 ไม่อยู่ในเส้นทางของงานนี้ — แก้ช่องทางงานก่อน';
+  const DESIGNER_ON_OWNER_DIRECT = 'ช่องทางรับงานของงานนี้คือเจ้าของติดต่อโดยตรง — ขั้นที่ 4 ไม่อยู่ในเส้นทางนี้ — แก้ช่องทางรับงานก่อน';
+  const OWNER_ON_BUYER_DIRECT = 'ช่องทางรับงานของงานนี้คือผู้ซื้อ/ผู้รับเหมาติดต่อโดยตรง — ขั้นที่ 5 ไม่อยู่ในเส้นทางนี้ — แก้ช่องทางรับงานก่อน';
 
   it('create: owner-direct refuses the designer 409 with the route sentence and stores nothing', async () => {
     const ticketId = await freshDeal('OWNER_DIRECT');
@@ -581,7 +581,7 @@ describe('mock dealQuotations — a direct quotation may not be addressed to a p
     const a = await freshDeal('BUYER_DIRECT');
     await expect(createDirect(a, 'OWNER')).rejects.toMatchObject({ status: 409, message: OWNER_ON_BUYER_DIRECT });
     await expect(createDirect(a, 'DESIGNER'))
-      .rejects.toMatchObject({ status: 409, message: expect.stringContaining('ขั้นที่ 4 ไม่อยู่ในเส้นทางของงานนี้') });
+      .rejects.toMatchObject({ status: 409, message: expect.stringContaining('ขั้นที่ 4 ไม่อยู่ในเส้นทางนี้') });
     expect((await api.dealQuotations.listForTicket(a)).items).toHaveLength(0);
     expect((await createDirect(a, 'BUYER')).recipientType).toBe('BUYER');
   });
