@@ -1,4 +1,4 @@
--- V220: "แจ้งปัญหา / ขอฟีเจอร์" requests raised by staff from the มีอะไรใหม่ page and decided by the admin
+-- V221: "แจ้งปัญหา / ขอฟีเจอร์" requests raised by staff from the มีอะไรใหม่ page and decided by the admin
 -- (hr.employee.is_admin). Additive: a new table, nothing existing changes. The reporter's name / department / role
 -- are a snapshot taken by the server at submit time, never read from the client.
 CREATE TABLE IF NOT EXISTS hr.feedback_request (
