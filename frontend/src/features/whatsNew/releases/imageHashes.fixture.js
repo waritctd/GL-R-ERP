@@ -1,13 +1,14 @@
 // TEST FIXTURE: the sha256 of every "มีอะไรใหม่" screenshot, as reviewed. A re-shoot changes a hash ON PURPOSE: update
 // the line in the same change, after looking at the new picture. Generated from the files on disk (fix round 1, wn3).
 
-// The published 16 Nov release: must never change (it is already in staff bells).
+// The published 16 Nov release: changes only by a deliberate owner ruling. 2026-11-17 (ดีล → งาน sweep, fix round 1):
+// team-overview-1..4 and ceo-home-1..2 re-shot so the labels they show are the ones on screen.
 export const IMAGE_SHA256_2026_11_16 = Object.freeze({
   '.gitkeep': 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
   'address-1.png': '83285c30be93c5759f35c16fd5b55d9b0d9cf3da1c4288e422554cded5a05473',
   'address-2.png': 'b7eba8132ca69994932398781024c5793b8346b9afe221c15da986a7871aabaa',
-  'ceo-home-1.png': '7de020636e5f82234840bf36f6925ee223fc4d3b46f8eacba7c18370b978a5c6',
-  'ceo-home-2.png': '808c20cb7c52fd07dfa1cde0a7a46a2c56cdacea41c42b11de32b6b8110761cb',
+  'ceo-home-1.png': '221e4ff758fc0be36227c71e92d92e5733b8ae4021f2e37742743c16bd6fc129',
+  'ceo-home-2.png': 'bcf8390c1ab2abdf80668b71c80c12316ba5adfb8e073eadddc508773f8731f3',
   'deal-list-1.png': '0489beb3060e1b98d5ce1334e2b2d45b55ecb6b6c69a5a5e525b5ab5c60ad1ad',
   'deal-page-1.png': 'f236c10655c41e15c12cc59569c8cc00a65a6f079dd0ef8468ea516d25604ec3',
   'deal-page-2.png': 'c1699e00671719a5f087bcd8ecb7dcb2590ef39f96b61327c07348c24a1cdb8e',
@@ -31,10 +32,10 @@ export const IMAGE_SHA256_2026_11_16 = Object.freeze({
   'sales-insights-1.png': 'afa886f290137c399e1a7a5fd3424195dd2d6ec01949cba2826995c0fb3a01ea',
   'sales-insights-2.png': 'e93b2daa2c33dae0c81547b5c93a6d641d8617adb323c632fcb277c09f54083d',
   'sales-insights-3.png': '4ab527ff4c941bd2e017868658129daf54ff4f4cba9199fc91dc472d02d7e474',
-  'team-overview-1.png': 'e9db6f24f8baa3641b0a9b536a4484b4d701173da992e526766d1a455588d739',
-  'team-overview-2.png': 'af2aa726908d4f11031479d86db72831415d517bcc0489e058b23b7f381b8293',
-  'team-overview-3.png': '3c46410f1a66ac8821622e9a54059c10fbe3e91a35b5b5c16647637aa0bc8ba2',
-  'team-overview-4.png': 'cadb39e3e4862dac84b289db55a090cdb52e6a83482beb2b1695026bdcdae753',
+  'team-overview-1.png': '7d0403892fc38b6cb1b01b3d2ee5bf91c0d5079cd8698afe18a816d5f5adb9b9',
+  'team-overview-2.png': '71b4be29de266d95cd236ac2e1eff4fb27177832ae2ed0ef7ed08a2fcec8ae38',
+  'team-overview-3.png': '76f201af73d006d2393de3032b8054c1a7bfd46314ea78b54da02557a41f64cd',
+  'team-overview-4.png': '47ac07a0a3b03327343c5c69cd7de169b0643c5d540435f2020e66adc6956bd4',
 });
 
 // The 17 Nov release (17a + 17d), reviewed in adversarial-task-wn2 / wn3.
@@ -63,7 +64,7 @@ export const IMAGE_SHA256_2026_11_17 = Object.freeze({
   'deal-lifecycle-5.png': '8e106b2126fdfbce7e4847323b524c786e38c182433a2222c4a39a7fb58f2942',
   'deal-lifecycle-6.png': 'c3583ca72b1cb67fac63ffe1d48e7ca16c505410840e665e791f4b8f69b82665',
   'deal-lifecycle-team-1.png': '332c91fb9041685f26bb0c73c1a32f5bdce2092f821f844e153d8206d2842bbd',
-  'deal-lifecycle-team-2.png': '4b7169585e864f18d60198888219ecf9b23accc8cdd7803f1bd7b8784aa77090',
+  'deal-lifecycle-team-2.png': '4eaec4b519a2751f28bc84c4a2bca8cf77daf28758a3c672cd63cc8717378dfa',
   'deal-lifecycle-team-3.png': '879192790ed7c0e5cbf3ff55c9394d36ad99d819180323d87384cd574fe394fb',
   'deal-lifecycle-team-4.png': '8e106b2126fdfbce7e4847323b524c786e38c182433a2222c4a39a7fb58f2942',
   'deal-page-1.png': '94b426e0cff12b3c0ab7429c2ddfbb05c79762c1fa214b0a6089c8c9b1680d92',
@@ -92,13 +93,13 @@ export const IMAGE_SHA256_2026_11_17 = Object.freeze({
   'quotation-chain-manager-2.png': 'db76d95b8f32d46b1669a579b9e8b7468e701cbc3df23c87602a0fa4e345c692',
   'quotation-chain-manager-3.png': '1ec2666e2b56f7231480060cc0d0845b792d8358958ed3fb949a8d8d91e7a2e2',
   'quotation-chain-manager-4.png': 'b1dcabea4b635f1c1b4d2a02ececd873d93750eb9375d7dbff827e6e66ae4609',
-  'quotation-list-1.png': 'cd777baf0e92d1a90092d73861b0715ec8f001db8cecef48fe6dd1665f9b0bf0',
-  'quotation-list-2.png': 'af5fe8b7f19eb367676a3fca88751ea035c4d6927a55430ebbd84e4eb7c9d583',
-  'quotation-list-3.png': '90f427e728e9c6c0f551ce8cad32441d9ac5d6665cb65a038437b558965407b0',
+  'quotation-list-1.png': '0c4637aaff1235f38bfc753953c082803f6d7f547be7dbbafafb3df9f074ff9e',
+  'quotation-list-2.png': '3aa917e264b349d7c9b65a736b16f0057450ca471a72c7ef55d2e47944b376e6',
+  'quotation-list-3.png': '0d3fb088b8d83d5c774edc0f9fd6baf0ce9caa93631e87122d27e6c701b321f3',
   'quotation-list-4.png': '132714348df275beb455ad0a7fc3f0a26f404b288185086ac180f4344786562b',
-  'quotation-list-approver-1.png': '2748fcdc52e85ea8ae1ab65d7c0cf2466783d71277f3289772bcb8509a34e317',
-  'quotation-list-approver-2.png': '82debc0deee827b5cdf1d1b85552cce0a1d1deb44cc72aacd3fcee310324e854',
-  'quotation-list-approver-3.png': '60415ffe0cca066cba0a3c7cd21c289f9dc54fb3be598efa0b23310d5deee69e',
+  'quotation-list-approver-1.png': '40c23cb53248ad7706245524bc77672e167e8b7a6892023d32b0629f36a892d0',
+  'quotation-list-approver-2.png': 'e9e35ae5bc2d4b6a79b4df53697afde3acf54be26d18d4da99f27756ec1eac97',
+  'quotation-list-approver-3.png': '0e3064ed684d0a287b1e8d87d5babf7bd397e72a2c2efb20a9badcf3d25b1239',
   'quotation-list-approver-4.png': '3fa58d856738975e7297f071ad4ae0910b1534478605cabb8a24ff589d56f184',
   'today-phone-1.png': '1f196daa230f5a268725388ffe7d7bf122baaafefb6c0a8e78dc4ba0d9f514f8',
   'today-phone-2.png': 'd114d42dd8c4f437e5a81558283748935f5ac11dccb1d51544878b1a5cdd9843',
