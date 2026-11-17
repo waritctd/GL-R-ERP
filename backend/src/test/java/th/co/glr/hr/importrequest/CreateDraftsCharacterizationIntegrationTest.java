@@ -35,7 +35,7 @@ class CreateDraftsCharacterizationIntegrationTest extends SplitFixtureSupport {
 
     /** Key names masked out: surrogate ids, timestamps, dates, the minted number. */
     private static final Pattern VOLATILE_KEY = Pattern.compile(
-        "(id|.*_id|.*Id|.*_at|.*At|.*date|.*Date|expectedArrivalFrom|expectedArrivalTo"
+        "(id|.*_id|.*Id|.*_by|.*_at|.*At|.*date|.*Date|expectedArrivalFrom|expectedArrivalTo"
             + "|doc_number|docNumber|last_seq|year_th)");
     private static final Pattern IR_NUMBER = Pattern.compile("IR\\d{5}");
     private static final Pattern SLASH_DATE = Pattern.compile("\\d{1,2}/\\d{1,2}/\\d{2,4}");
