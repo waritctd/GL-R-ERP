@@ -12,10 +12,10 @@ const sqm = (v) => (isNum(v) ? `${Math.round(v).toLocaleString('en-US')} ตร.
 
 // The four checks of analytics.dq_check (V223). An unknown key is shown as it comes.
 const CHECK_LABEL = {
-  stage_mapped: 'ดีลที่ยังไม่ได้จับคู่ขั้นงาน',
+  stage_mapped: 'งานที่ยังไม่ได้จับคู่ขั้นงาน',
   quote_line_brand_present: 'รายการสินค้าในใบเสนอราคาที่ไม่มีแบรนด์',
-  won_deal_has_value: 'ดีลที่ได้งานแล้วแต่ไม่มีมูลค่า',
-  test_flag_reviewed: 'ดีลที่ชื่อเหมือนดีลทดสอบแต่ยังไม่ได้ตรวจสอบ',
+  won_deal_has_value: 'งานที่ได้รับคำสั่งซื้อแล้วแต่ไม่มีมูลค่า',
+  test_flag_reviewed: 'งานที่ชื่อเหมือนงานทดสอบแต่ยังไม่ได้ตรวจสอบ',
 };
 
 /** "เทียบสัปดาห์ก่อน +2.0 ล้าน": only when this week and the week before are both numbers. */
@@ -81,13 +81,13 @@ function Week({ d }) {
       <InsightPanel title="มูลค่า pipeline">
         <FigureBand>
           {fig('pipeline_value_dedup', 'มูลค่า pipeline (นับโครงการละครั้ง)', ml)}
-          {fig('pipeline_value_raw', 'มูลค่า pipeline (รวมทุกดีล)', ml)}
+          {fig('pipeline_value_raw', 'มูลค่า pipeline (รวมทุกงาน)', ml)}
           {fig('pipeline_stale_share', 'สัดส่วน pipeline ที่เงียบเกิน 14 วัน', pct, STALE)}
         </FigureBand>
       </InsightPanel>
       {reps.length ? (
         <InsightPanel className={NOWRAP} title="ทีมขายสัปดาห์นี้">
-          <InsightTable testId="portal-team" cols={[['พนักงาน'], ['เลื่อนขั้นดีล (ครั้ง)', true], ['กิจกรรมที่บันทึก', true], ['ดีลที่เงียบเกิน 14 วัน', true], ['ข้อมูลดีลครบถ้วน', true]]}>
+          <InsightTable testId="portal-team" cols={[['พนักงาน'], ['เลื่อนขั้นงาน (ครั้ง)', true], ['กิจกรรมที่บันทึก', true], ['งานที่เงียบเกิน 14 วัน', true], ['ข้อมูลงานครบถ้วน', true]]}>
             {reps.map(([dim, label]) => (
               <tr key={dim}>
                 <Td><b>{label}</b></Td><Td right>{num(val('rep_stage_moves_week', dim))}</Td><Td right>{num(val('rep_activities_week', dim))}</Td>
@@ -99,7 +99,7 @@ function Week({ d }) {
       ) : null}
       {brands.length ? (
         <InsightPanel className={NOWRAP} data-testid="portal-brands-panel" title="เสนอราคาตามแบรนด์"
-          foot="ได้รับคำสั่งซื้อ = ดีลที่อยู่ขั้นรับคำสั่งซื้อหรือหลังจากนั้น · นับโครงการละครั้ง">
+          foot="ได้รับคำสั่งซื้อ = งานที่อยู่ขั้นรับคำสั่งซื้อหรือหลังจากนั้น · นับโครงการละครั้ง">
           <InsightTable testId="portal-brands" cols={[['แบรนด์'], ['มูลค่าที่เสนอราคา', true], ['สัดส่วนของยอดที่เสนอ', true], ['พื้นที่ที่เสนอราคา', true], ['มูลค่าที่ได้รับคำสั่งซื้อ', true]]}>
             {brands.map(([dim, label]) => (
               <tr key={dim}>

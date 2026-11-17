@@ -635,8 +635,8 @@ describe('SalesInsights', () => {
       const fig = (label) => within(el).getByText(label).closest('div');
       expect(fig('มูลค่า pipeline (นับโครงการละครั้ง)').textContent).toContain(ml(12_000_000));
       expect(fig('มูลค่า pipeline (นับโครงการละครั้ง)').textContent).toContain('เทียบสัปดาห์ก่อน +2.0 ล้าน');
-      expect(fig('มูลค่า pipeline (รวมทุกดีล)').textContent).toContain(ml(15_000_000));
-      expect(fig('มูลค่า pipeline (รวมทุกดีล)').textContent).not.toContain('เทียบสัปดาห์ก่อน');
+      expect(fig('มูลค่า pipeline (รวมทุกงาน)').textContent).toContain(ml(15_000_000));
+      expect(fig('มูลค่า pipeline (รวมทุกงาน)').textContent).not.toContain('เทียบสัปดาห์ก่อน');
       expect(fig('สัดส่วน pipeline ที่เงียบเกิน 14 วัน').textContent).toContain(pct(0.25));
       expect(fig('สัดส่วน pipeline ที่เงียบเกิน 14 วัน').textContent).toContain('เทียบสัปดาห์ก่อน +5 จุด');
     });
@@ -675,7 +675,7 @@ describe('SalesInsights', () => {
       expect(banner.textContent).toContain('รายการสินค้าในใบเสนอราคาที่ไม่มีแบรนด์');
       expect(banner.textContent).toContain('lines with no brand=4');
       expect(banner.textContent).not.toContain('stage_mapped');
-      expect(banner.textContent).not.toContain('ดีลที่ยังไม่ได้จับคู่ขั้นงาน');
+      expect(banner.textContent).not.toContain('งานที่ยังไม่ได้จับคู่ขั้นงาน');
       unmount();
 
       withMetrics();
@@ -693,9 +693,9 @@ describe('SalesInsights', () => {
       ] });
       renderInsights('ceo');
       const t = (await screen.findByTestId('portal-checks')).textContent;
-      expect(t).toContain('ดีลที่ยังไม่ได้จับคู่ขั้นงาน');
-      expect(t).toContain('ดีลที่ได้งานแล้วแต่ไม่มีมูลค่า');
-      expect(t).toContain('ดีลที่ชื่อเหมือนดีลทดสอบแต่ยังไม่ได้ตรวจสอบ');
+      expect(t).toContain('งานที่ยังไม่ได้จับคู่ขั้นงาน');
+      expect(t).toContain('งานที่ได้รับคำสั่งซื้อแล้วแต่ไม่มีมูลค่า');
+      expect(t).toContain('งานที่ชื่อเหมือนงานทดสอบแต่ยังไม่ได้ตรวจสอบ');
       expect(t).toContain('brand_new_check');
       expect(t).not.toContain('stage_mapped');
     });
