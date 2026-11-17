@@ -11,6 +11,7 @@ import { downloadBlob } from '../../utils/download.js';
 import { invalidateDealDocuments } from '../documentChain/documentChain.js';
 import { formatMoney } from '../../utils/format.js';
 import { ThaiDateInput } from '../../components/common/ThaiDateInput.jsx';
+import { paymentTermsLine } from '../finance/paymentDueText.js';
 
 const STATUS_LABEL = { DRAFT: 'ร่าง', ISSUED: 'ออกแล้ว', SUPERSEDED: 'ถูกแทนที่แล้ว' };
 
@@ -77,6 +78,18 @@ function DialogFooterRow({ children }) {
 export function RemainingInvoiceDialog({ ticketId, canWrite = true, onClose, onDownloaded }) {
   const queryClient = useQueryClient();
 
+  // Slice 6.1: the payment terms and due date, READ-ONLY, from the summary the server already serves
+  // (TicketSummaryDto#paymentDueBasis / #paymentDueCreditDays / #paymentDueDate). Same key and fn as the deal page's
+  // own ticket read (TicketDetailPage), so there it is a cache hit; elsewhere one GET. A read the viewer may not make
+  // just leaves the line out.
+  const dealQuery = useQuery({
+    queryKey: queryKeys.ticketDetail(ticketId),
+    queryFn: () => api.tickets.get(ticketId).then((r) => r.ticket),
+    enabled: Boolean(ticketId),
+    retry: false,
+  });
+  const termsLine = paymentTermsLine(dealQuery.data?.summary);
+
   const listQuery = useQuery({
     queryKey: queryKeys.storedRemainingInvoices(ticketId),
     queryFn: () => api.storedRemainingInvoices.listForTicket(ticketId).then((r) => r.remainingInvoices ?? []),
@@ -120,6 +133,13 @@ export function RemainingInvoiceDialog({ ticketId, canWrite = true, onClose, onD
         </p>
       ) : (
         <>
+          {termsLine ? (
+            <p data-testid="remaining-invoice-terms"
+              className="m-0 mb-3 flex flex-wrap items-baseline gap-x-2 gap-y-0.5 rounded-md border border-border-subtle bg-surface-muted px-3 py-2 text-sm">
+              <span className="font-bold text-text-secondary">เงื่อนไขชำระ</span>
+              <span className="text-text [overflow-wrap:anywhere]">{termsLine}</span>
+            </p>
+          ) : null}
           {draft && canWrite ? (
             <DraftEditor draft={draft} issuedOfSameQuotation={list.find((d) => d.status === 'ISSUED' && d.customerQuotationId === draft.customerQuotationId)} onSaved={invalidateList} onIssued={invalidateList}
               onDeleted={invalidateList} onDownloaded={onDownloaded} />

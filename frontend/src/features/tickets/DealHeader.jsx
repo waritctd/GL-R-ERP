@@ -3,7 +3,7 @@ import { Icon } from '../../components/common/Icon.jsx';
 import { OverflowMenu } from '../../components/common/OverflowMenu.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { dealLifecycleLabel } from '../../utils/format.js';
-import { baht } from '../salesBoard/boardFormat.js';
+import { baht, quarterLabel } from '../salesBoard/boardFormat.js';
 import { DealStepper } from './DealStepper.jsx';
 import { NextStepCard } from './NextStepCard.jsx';
 import { REP_STEPS } from './dealSteps.js';
@@ -43,6 +43,7 @@ export function DealHeader({
   onRefresh,
 }) {
   const lifecycle = dealLifecycleLabel(summary.lifecycle ?? 'ACTIVE');
+  const expectedQuarterLabel = quarterLabel(summary.expectedQuarter);
   const step = stepIndex >= 0 ? REP_STEPS[stepIndex] : null;
   // Never an empty h1 (fix round 1, L4): the deal's code when it has no name at all.
   const title = awaitingBid?.projectName || summary.projectName || summary.title || summary.customerName
@@ -53,6 +54,8 @@ export function DealHeader({
       : summary.customerName && summary.customerName !== title ? <span key="customer">{summary.customerName}</span> : null,
     designerName ? <span key="designer">ผู้ออกแบบ {designerName}</span> : null,
     dealValue != null && Number(dealValue) > 0 ? <span key="value" className="tabular-nums">{baht(dealValue)}</span> : null,
+    // Slice 6.3: คาดปิด from TicketSummaryDto.expectedQuarter (V209), in the board's own "Q4/69" style.
+    expectedQuarterLabel ? <span key="quarter" className="tabular-nums">{`คาดปิด ${expectedQuarterLabel}`}</span> : null,
     winProbability != null ? <span key="win" className="tabular-nums">{`โอกาส ${winProbability}%`}</span> : null,
   ].filter(Boolean);
   const overflow = overflowItems.length > 0

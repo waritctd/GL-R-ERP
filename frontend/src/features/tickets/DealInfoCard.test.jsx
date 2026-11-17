@@ -16,10 +16,13 @@ const row = (label) => screen.getByText(label, { selector: 'dt' }).nextElementSi
 
 // ข้อมูลงาน (drawing a-deal) merges the old ดีล tab's วันสำคัญ / ผู้เกี่ยวข้อง blocks with the การติดตามดีล panel.
 describe('DealInfoCard', () => {
-  it('shows the drawn fields first: ลูกค้า, ผู้ออกแบบ, เจ้าของโครงการ, เจ้าของงาน, โอกาส, ติดตามครั้งถัดไป', () => {
+  // Adapted (slice 6.3): the drawn คาดปิด row sits after เจ้าของงาน (approved prototype after-deal-tl), so the drawn
+  // order has seven fields now; the six it pinned keep their order around it.
+  it('shows the drawn fields first: ลูกค้า, ผู้ออกแบบ, เจ้าของโครงการ, เจ้าของงาน, คาดปิด, โอกาส, ติดตามครั้งถัดไป', () => {
     render(<DealInfoCard summary={summary} trackingVisible canEdit={false} onUpdateTracking={vi.fn()} />);
     const labels = screen.getAllByRole('term').map((dt) => dt.textContent);
-    expect(labels.slice(0, 6)).toEqual(['ลูกค้า', 'ผู้ออกแบบ', 'เจ้าของโครงการ', 'เจ้าของงาน', 'โอกาส', 'ติดตามครั้งถัดไป']);
+    expect(labels.slice(0, 7))
+      .toEqual(['ลูกค้า', 'ผู้ออกแบบ', 'เจ้าของโครงการ', 'เจ้าของงาน', 'คาดปิด', 'โอกาส', 'ติดตามครั้งถัดไป']);
     expect(row('ลูกค้า').textContent).toBe('บริษัท ลุมพินี จำกัด');
     expect(row('เจ้าของงาน').textContent).toBe('คุณสมหมาย');
     expect(row('โอกาส').textContent).toContain('60%');
@@ -31,6 +34,17 @@ describe('DealInfoCard', () => {
       expect(row(label)).toBeTruthy();
     }
     expect(row('ผู้รับเรื่องคำขอราคา').textContent).toBe('คุณวรรณา');
+  });
+
+  it('คาดปิด reads the served expectedQuarter in the board\'s own style, and a dash when the rep set none', () => {
+    const { unmount } = render(<DealInfoCard summary={{ ...summary, expectedQuarter: '2027-Q1' }} trackingVisible
+      canEdit={false} onUpdateTracking={vi.fn()} />);
+    expect(row('คาดปิด').textContent).toBe('Q1/70');
+    unmount();
+
+    render(<DealInfoCard summary={{ ...summary, expectedQuarter: null }} trackingVisible canEdit={false}
+      onUpdateTracking={vi.fn()} />);
+    expect(row('คาดปิด').textContent).toBe('—');
   });
 
   it('shows no ผู้ซื้อ row (buyers are deal parties)', () => {

@@ -159,7 +159,9 @@ export function Tabs({ items, value, onChange, ariaLabel, idPrefix, onSurface = 
               </span>
               {item.badge != null ? (
                 <span
-                  className="rounded-full bg-surface-subtle px-1.5 py-0.5 text-2xs font-extrabold text-text-secondary"
+                  // `badgeClassName` (optional, per item) adds to the badge's own classes — e.g. the deal page hides its
+                  // tab counts under the mobile breakpoint so the last tab is not pushed off a phone screen.
+                  className={`rounded-full bg-surface-subtle px-1.5 py-0.5 text-2xs font-extrabold text-text-secondary${item.badgeClassName ? ` ${item.badgeClassName}` : ''}`}
                   // Hidden from the accessible name whenever the caller supplied a proper `badgeLabel` to say the same thing in
                   // words instead (see the badgeLabel doc above) — otherwise left in-band, unchanged, for a caller that has
                   // none.

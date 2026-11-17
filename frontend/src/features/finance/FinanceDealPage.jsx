@@ -21,6 +21,7 @@ import {
 import { MilestoneSections, money, vatCaption } from './FinanceMilestoneSections.jsx';
 import { orderActions, pickPrimaryAction } from './financeDealActions.js';
 import { paymentPrefill } from './paymentPrefill.js';
+import { paymentDueBasisText } from './paymentDueText.js';
 import { invalidateDealDocuments } from '../documentChain/documentChain.js';
 
 const ACTION_LABEL = {
@@ -95,9 +96,7 @@ function MoneyBand({ deal }) {
   const m = deal.money;
   const caption = vatCaption(m.amountVatBasis);
   // Derived from the payable quotation's terms + the delivery date (server-side); nothing is invented here.
-  const basisText = m.paymentDueBasis === 'CREDIT_FROM_DELIVERY'
-    ? `เครดิต ${m.paymentDueCreditDays} วันนับจากวันส่งมอบ`
-    : m.paymentDueBasis === 'ON_DELIVERY' ? 'ชำระเมื่อส่งมอบ' : null;
+  const basisText = paymentDueBasisText(m.paymentDueBasis, m.paymentDueCreditDays);
   let dueText = null;
   if (m.paymentDueDate) dueText = `ครบกำหนด ${formatThaiDate(m.paymentDueDate)}${basisText ? ` · ${basisText}` : ''}`;
   else if (basisText) dueText = 'ยังไม่ถึงกำหนด — รอส่งมอบ';

@@ -178,3 +178,57 @@ describe('mockApi review-fix mirrors', () => {
     }
   });
 });
+
+// Slice 6.2 / 6.3: the mock carries the new BoardDeal and TicketSummaryDto fields in the backend's shape. Shape and
+// plumbing only — the values are NOT evidence (the mock's due date is its demo billing date; authz is proven by
+// BoardDrawnDetailsIntegrationTest / SummaryDrawnDetailsIntegrationTest on real Postgres).
+describe('mockApi drawn details (slice 6)', () => {
+  it('every board row carries the card fields, each in its own type', async () => {
+    await api.auth.login({ role: 'ceo' });
+    const { board } = await api.salesBoard.teamBoard();
+
+    expect(board.length).toBeGreaterThan(0);
+    for (const d of board) {
+      for (const key of ['quotationNumber', 'buyerName', 'expectedDepositWeek', 'paymentDueDate']) {
+        expect(d).toHaveProperty(key);
+      }
+      expect(typeof d.depositReceived).toBe('boolean');
+      expect(typeof d.overdue).toBe('boolean');
+      if (d.expectedDepositWeek) expect(new Date(`${d.expectedDepositWeek}T00:00:00Z`).getUTCDay()).toBe(1);
+    }
+  });
+
+  it('a board row\'s due date and overdue flag are the mock summary\'s own (one derivation, as on the server)', async () => {
+    await api.auth.login({ role: 'ceo' });
+    const { board } = await api.salesBoard.teamBoard();
+    const rows = (await api.tickets.list()).tickets;
+
+    for (const d of board) {
+      const row = rows.find((t) => t.id === d.ticketId);
+      expect(d.paymentDueDate).toBe(row.paymentDueDate ?? null);
+      expect(d.overdue).toBe(Boolean(row.overdue));
+    }
+  });
+
+  it('import\'s list rows never carry expectedQuarter or receiptSource (TicketSummaryDto#withoutMoney)', async () => {
+    await api.auth.login({ role: 'import' });
+    const visible = (await api.tickets.list()).tickets.map((t) => t.id);
+    expect(visible.length).toBeGreaterThan(0);
+    // Give an import-visible ACTIVE deal a quarter, and find one with receipts, as the CEO — so a null on import's row
+    // is the projection, not missing data.
+    await api.auth.login({ role: 'ceo' });
+    const ceoRows = (await api.tickets.list()).tickets.filter((t) => visible.includes(t.id));
+    const target = ceoRows.find((t) => t.lifecycle === 'ACTIVE');
+    await api.tickets.updateTracking(target.id, { expectedQuarter: '2026-Q4' });
+    const withReceipts = ceoRows.find((t) => t.receiptSource != null);
+    expect(withReceipts, 'fixture: an import-visible deal with receipts').toBeTruthy();
+    expect((await api.tickets.list()).tickets.find((t) => t.id === target.id).expectedQuarter).toBe('2026-Q4');
+
+    await api.auth.login({ role: 'import' });
+    const { tickets } = await api.tickets.list();
+    for (const t of tickets) {
+      expect(t.expectedQuarter).toBeNull();
+      expect(t.receiptSource).toBeNull();
+    }
+  });
+});

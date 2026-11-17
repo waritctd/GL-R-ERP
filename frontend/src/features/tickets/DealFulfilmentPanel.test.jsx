@@ -1544,9 +1544,28 @@ describe('DealFulfilmentPanel — บันทึกการส่งสิน�
     }
   });
 
+  it('ส่งงวดที่ N counts the delivery records the panel already loads, plus this one', async () => {
+    api.tickets.listDeliveries.mockResolvedValue({
+      items: [
+        { deliveryId: 1, deliveredAt: '2026-10-01T03:00:00Z', source: 'WAREHOUSE', items: [{ itemId: 21, qty: 30 }], deliveredByName: null, note: null },
+        { deliveryId: 2, deliveredAt: '2026-10-08T03:00:00Z', source: 'WAREHOUSE', items: [{ itemId: 21, qty: 26 }], deliveredByName: null, note: null },
+      ],
+    });
+    try {
+      renderPanel(OWNER, [], { items: lines, availableActions: ACTIONS });
+      await screen.findByText(/Equipe Raku 20x20: 30/);
+      fireEvent.click(screen.getByTestId('deal-fulfilment-record-delivery'));
+      const dialog = within(await screen.findByRole('dialog', { name: 'บันทึกการส่งสินค้า' }));
+      expect(dialog.getByTestId('delivery-summary').textContent).toBe('ส่งงวดที่ 3 · เหลือส่ง 2 รายการ');
+    } finally {
+      api.tickets.listDeliveries.mockResolvedValue({ items: [] });
+    }
+  });
+
   it('shows the drawn summary and a table of ordered / delivered / remaining / this delivery per line', async () => {
     const dialog = within(await open());
-    expect(dialog.getByTestId('delivery-summary').textContent).toBe('เหลือส่ง 2 รายการ');
+    // Adapted (slice 6.1): the drawn "ส่งงวดที่ N" leads the summary — no delivery recorded yet, so this is งวดที่ 1.
+    expect(dialog.getByTestId('delivery-summary').textContent).toBe('ส่งงวดที่ 1 · เหลือส่ง 2 รายการ');
     const table = dialog.getByRole('table', { name: 'รายการที่ส่งครั้งนี้' });
     expect(within(table).getAllByRole('columnheader').map((th) => th.textContent))
       .toEqual(['รายการ', 'สั่ง', 'ส่งแล้ว', 'เหลือส่ง', 'ส่งครั้งนี้']);
@@ -1627,7 +1646,8 @@ describe('DealFulfilmentPanel — บันทึกการส่งสิน�
     const row = within(table).getByText('Over Delivered').closest('tr');
     expect(within(row).getAllByRole('cell').slice(1, 4).map((td) => td.textContent)).toEqual(['10', '12', '0']);
     expect(dialog.getByTestId('delivery-line-figures-24').textContent).toBe('สั่ง 10 · ส่งแล้ว 12 · เหลือส่ง 0');
-    expect(dialog.getByTestId('delivery-summary').textContent).toBe('เหลือส่ง 2 รายการ');
+    // Adapted (slice 6.1): the drawn "ส่งงวดที่ N" leads the summary — no delivery recorded yet, so this is งวดที่ 1.
+    expect(dialog.getByTestId('delivery-summary').textContent).toBe('ส่งงวดที่ 1 · เหลือส่ง 2 รายการ');
     expect(table.textContent).not.toMatch(/-\d/);
   });
 
