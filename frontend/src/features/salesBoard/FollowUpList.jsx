@@ -20,6 +20,9 @@ import { CallModal } from './CallModal.jsx';
  * out of the list besides re-pausing it with a later date on the deal page. Mark-lost and visits need an ACTIVE deal on
  * the server, so those two buttons are not offered on it.
  */
+/** A returning paused deal's chip: the same words on the desktop list and the phone's compact one (TodayOnPhone). */
+export const returningLabel = (deal) => `พักไว้ · ถึงวันกลับมาดู ${formatThaiDate(deal.pauseReturnOn)}`;
+
 export function FollowUpList({
   deals, quietDays, quietTotal = 0, onShowAll, onLogCall, onBookVisit, onCloseDeal, onResume, loggingCall, resuming,
 }) {
@@ -64,7 +67,7 @@ export function FollowUpList({
                 <span className="text-sm font-bold tabular-nums text-text">{money(deal.value, deal.currency)}</span>
                 {deal.returning ? (
                   <span className="rounded-full bg-info-bg px-2 py-px text-2xs font-bold text-info-dark">
-                    {`พักไว้ · ถึงวันกลับมาดู ${formatThaiDate(deal.pauseReturnOn)}`}
+                    {returningLabel(deal)}
                   </span>
                 ) : (
                   <span className="rounded-full bg-warning-bg px-2 py-px text-2xs font-bold text-warning-dark">
