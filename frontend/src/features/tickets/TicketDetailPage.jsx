@@ -978,6 +978,18 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // No tab is per-instance gated: `tabItems`/`activeTab` are role-level only and used directly. The attachments
   // panel's identity check (`canViewDocumentsTab`) is an inner render condition inside the always-visible ไฟล์ tab.
 
+  // Slice 6.1, the drawn tab counts — from the two lists this page already loads, no extra request: ใบเสนอราคา counts
+  // this deal's quotation rows still in force (not SUPERSEDED / CANCELLED), ไฟล์ counts the uploaded files. Read
+  // in-band ("ไฟล์ 3"), not through Tabs' badgeLabel (its sr-only span escapes a scrolled-off tab on a 320px phone).
+  // `mobile:hidden`: on a phone the counts step aside so ไฟล์ stays reachable on the strip.
+  const inForceQuotationCount = (dealQuotationsQuery.data ?? [])
+    .filter((q) => !['SUPERSEDED', 'CANCELLED'].includes(q.docStatus)).length;
+  const fileCount = (attachmentsQuery.data ?? []).length;
+  const tabItemsWithCounts = tabItems.map((tab) => {
+    const count = { quote: inForceQuotationCount, files: fileCount }[tab.id];
+    return count > 0 ? { ...tab, badge: count, badgeClassName: 'mobile:hidden' } : tab;
+  });
+
   // `can.editItems` lives in the items table's panel header (it's an items action) and
   // `can.revokeCloseConfirm` in the money tab (a close-lifecycle action), each rendered at its own
   // site rather than behind one shared `hasActions` flag. The empty-draft hint travels with
@@ -1741,7 +1753,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                 sites (see Tabs.jsx). */}
             <Tabs
               onSurface
-              items={tabItems}
+              items={tabItemsWithCounts}
               value={activeTab}
               onChange={setActiveTab}
               ariaLabel="รายละเอียดงาน"

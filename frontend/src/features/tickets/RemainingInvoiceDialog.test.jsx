@@ -14,6 +14,8 @@ vi.mock('../../api/index.js', async (importOriginal) => {
     api: {
       tickets: {
         remainingInvoiceOptions: vi.fn(),
+        // slice 6.1: the dialog reads the deal's served payment terms (same query as the deal page).
+        get: vi.fn(),
       },
       storedRemainingInvoices: {
         listForTicket: vi.fn(),
@@ -818,5 +820,59 @@ describe('RemainingInvoiceDialog — canWrite=false (not this deal\'s owning sal
     renderDialog({ canWrite: false });
 
     expect(await screen.findByTestId('remaining-invoice-history')).not.toBeNull();
+  });
+});
+
+// ── slice 6.1: the payment terms, read-only, from the summary the server already serves ─────────────────────────
+describe('RemainingInvoiceDialog — payment terms (read-only, slice 6.1)', () => {
+  const dealWith = (summary) => api.tickets.get.mockResolvedValue({ ticket: { summary: { id: 701, ...summary } } });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.storedRemainingInvoices.listForTicket.mockResolvedValue({ remainingInvoices: [] });
+    api.tickets.remainingInvoiceOptions.mockResolvedValue({ options: baseOptions() });
+  });
+
+  it('credit terms: the served basis, credit days and due date, as text — no field to change them', async () => {
+    dealWith({ paymentDueBasis: 'CREDIT_FROM_DELIVERY', paymentDueCreditDays: 30, paymentDueDate: '2026-11-28' });
+    renderDialog();
+
+    const terms = await screen.findByTestId('remaining-invoice-terms');
+    expect(terms.textContent).toBe('เงื่อนไขชำระเครดิต 30 วันนับจากวันส่งมอบ · ครบกำหนด 28 พ.ย. 2569');
+    expect(terms.querySelector('input, select, textarea, button')).toBeNull();
+    expect(api.tickets.get).toHaveBeenCalledWith(701);
+  });
+
+  it('pay on delivery: says so, with the served due date', async () => {
+    dealWith({ paymentDueBasis: 'ON_DELIVERY', paymentDueCreditDays: null, paymentDueDate: '2026-11-20' });
+    renderDialog();
+
+    expect((await screen.findByTestId('remaining-invoice-terms')).textContent)
+      .toBe('เงื่อนไขชำระชำระเมื่อส่งมอบ · ครบกำหนด 20 พ.ย. 2569');
+  });
+
+  it('a term with no due date yet (not fully delivered) says it is waiting for delivery, inventing no date', async () => {
+    dealWith({ paymentDueBasis: 'CREDIT_FROM_DELIVERY', paymentDueCreditDays: 45, paymentDueDate: null });
+    renderDialog();
+
+    expect((await screen.findByTestId('remaining-invoice-terms')).textContent)
+      .toBe('เงื่อนไขชำระเครดิต 45 วันนับจากวันส่งมอบ · ยังไม่ถึงกำหนด — รอส่งมอบ');
+  });
+
+  it('no structured term on the quotation: no terms line at all', async () => {
+    dealWith({ paymentDueBasis: null, paymentDueCreditDays: null, paymentDueDate: null });
+    renderDialog();
+
+    await screen.findByDisplayValue('QT-2026-0099');
+    await waitFor(() => expect(api.tickets.get).toHaveBeenCalled());
+    expect(screen.queryByTestId('remaining-invoice-terms')).toBeNull();
+  });
+
+  it('a deal the viewer cannot read (the read fails): the dialog still works, without the terms line', async () => {
+    api.tickets.get.mockRejectedValue(Object.assign(new Error('ไม่มีสิทธิ์'), { status: 403 }));
+    renderDialog();
+
+    await screen.findByDisplayValue('QT-2026-0099');
+    expect(screen.queryByTestId('remaining-invoice-terms')).toBeNull();
   });
 });

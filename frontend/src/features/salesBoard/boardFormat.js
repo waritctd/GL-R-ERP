@@ -1,13 +1,61 @@
 // Display helpers shared by งานของฉัน and ภาพรวมทีมขาย. Labels only — every number is served by SalesBoardService.
+import { weekEndDay } from './cashFormat.js';
 
-/** The five board columns (DealStage.boardColumnOf), with the reps' own S-codes. */
+/**
+ * The five board columns (DealStage.boardColumnOf), with the reps' own S-codes. `moveHint` (slice 6.1) says what moves
+ * a deal INTO an auto column, read off TicketService's autoAdvanceStage call sites — DealBoard.test.jsx pins each one
+ * against its source.
+ */
 export const BOARD_COLUMNS = [
   { column: 1, label: 'เสนอสินค้า', code: 'S1', auto: false },
   { column: 2, label: 'สเปคผ่าน', code: 'S2', auto: false },
-  { column: 3, label: 'เสนอราคาแล้ว', code: 'S3–5', auto: true },
-  { column: 4, label: 'รอมัดจำ', code: 'S6', auto: true },
-  { column: 5, label: 'ส่งของ · เก็บเงิน', code: 'S7–9', auto: true },
+  // Fix round 1: each hint is true and fits one line at 1440px; `moveRule` (the tooltip) is the whole rule.
+  // boardMoveHints.test.js pins every one against TicketService / DealStage / DealRoute.
+  {
+    column: 3, label: 'เสนอราคาแล้ว', code: 'S3–5', auto: true,
+    moveHint: 'เข้าเองเมื่ออนุมัติใบถึงผู้ออกแบบ/เจ้าของ',
+    moveRule: 'งานเข้าช่องนี้เองเมื่อใบเสนอราคาถึงผู้ออกแบบหรือเจ้าของโครงการได้รับอนุมัติ',
+  },
+  {
+    column: 4, label: 'รอมัดจำ', code: 'S6', auto: true,
+    moveHint: 'เข้าเองเมื่ออนุมัติใบถึงผู้ซื้อหรือยืนยันสั่งซื้อ',
+    moveRule: 'งานเข้าช่องนี้เองเมื่อใบเสนอราคาถึงผู้ซื้อ (หรือใบที่ไม่ระบุผู้รับ) ได้รับอนุมัติ หรือเมื่อยืนยันคำสั่งซื้อ',
+  },
+  {
+    column: 5, label: 'ส่งของ · เก็บเงิน', code: 'S7–9', auto: true,
+    moveHint: 'เข้าเองเมื่อรับมัดจำหรือเริ่มสั่ง/ส่งของ',
+    moveRule: 'งานเข้าช่องนี้เองเมื่อรับเงินมัดจำ ออกใบขอซื้อ หรือของครบจากสต็อกจนพร้อมส่ง',
+  },
 ];
+
+/** The columns whose cards carry the money chip in place of the % chip (approved prototype, slice 6.2). */
+export const MONEY_CHIP_COLUMNS = new Set([4, 5]);
+
+const SHORT_MONTH = ['ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.', 'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.'];
+
+/** "23 พ.ย." from "2026-11-23" — a card is too narrow for the year. */
+function chipDay(iso) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso ?? '');
+  return m ? `${Number(m[3])} ${SHORT_MONTH[Number(m[2]) - 1]}` : null;
+}
+
+/**
+ * The ONE money chip a รอมัดจำ / ส่งของ · เก็บเงิน card carries, from BoardDeal's served money state, or null (the card
+ * then keeps its % chip). Priority: a due date (เกินกำหนด when the SERVER says overdue, else ครบกำหนด), then มัดจำ in
+ * hand, then the rep's expected deposit week. The week is a Monday the rep picked, so the chip names that week's Friday
+ * the way the เงินที่จะเข้า card labels a week ("ถึง 4 ธ.ค."), never a single day the rep did not give. Labels only:
+ * nothing here decides what is due or overdue.
+ */
+export function cardMoneyChip(deal) {
+  if (deal.paymentDueDate) {
+    return deal.overdue
+      ? { tone: 'danger', text: `เกินกำหนด ${chipDay(deal.paymentDueDate)}` }
+      : { tone: 'warning', text: `ครบกำหนด ${chipDay(deal.paymentDueDate)}` };
+  }
+  if (deal.depositReceived) return { tone: 'success', text: 'ได้มัดจำ' };
+  if (deal.expectedDepositWeek) return { tone: 'info', text: `นัดรับ ถึง ${weekEndDay(deal.expectedDepositWeek)}` };
+  return null;
+}
 
 export const columnLabel = (column) => BOARD_COLUMNS.find((c) => c.column === column)?.label ?? '';
 

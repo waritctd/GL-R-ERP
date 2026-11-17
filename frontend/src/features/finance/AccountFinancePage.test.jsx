@@ -2,7 +2,7 @@ import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { render, screen, fireEvent, within, waitFor } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AccountFinancePage } from './AccountFinancePage.jsx';
 import { api } from '../../api/index.js';
 
@@ -230,7 +230,10 @@ describe('AccountFinancePage — grouped worklist (design a-fin-land)', () => {
     expect(within(groupRow(201)).getByText('ยืนยันรับมัดจำ')).not.toBeNull();
     expect(within(groupRow(202)).getByText('รับชำระส่วนที่เหลือ')).not.toBeNull();
     expect(within(groupRow(202)).getByText('ครบกำหนด 20 พ.ย. 2569')).not.toBeNull();
-    expect(within(groupRow(205)).getByText('เกินกำหนดชำระ 1 ก.ย. 2569')).not.toBeNull();
+    // Adapted (slice 6.1): the overdue chip counts the days ("เกินกำหนด n วัน", n pinned under a fixed clock in the
+    // slice-6.1 block below) and the due date moved to the line beneath it — still flagged, still dated.
+    expect(within(groupRow(205)).getByText(/^เกินกำหนด \d+ วัน$/)).not.toBeNull();
+    expect(within(groupRow(205)).getByText('ครบกำหนด 1 ก.ย. 2569')).not.toBeNull();
     // the overdue row does not repeat its group's own name as a step
     expect(within(groupRow(205)).queryByText('ติดตามชำระ')).toBeNull();
   });
@@ -374,6 +377,100 @@ describe('AccountFinancePage — grouped worklist (design a-fin-land)', () => {
       await screen.findByText('บริษัท ดี จำกัด');
       await waitFor(() => expect(api.receiptImports.latest).toHaveBeenCalled());
       expect(screen.queryByRole('heading', { name: 'อัปโหลดไฟล์รับเงินจาก Express' })).toBeNull();
+    });
+  });
+
+  // ── slice 6.1 / 6.3: the drawn row details ───────────────────────────────────────────────────────────────────
+  describe('drawn row details (slice 6)', () => {
+    afterEach(() => { vi.useRealTimers(); });
+
+    it('every row names the deal\'s rep — createdByName, the board\'s own owner', async () => {
+      listReturns([{ ...overdueTicket, createdByName: 'สมหมาย ขายดี' }, { ...closeReadyTicket, createdByName: 'อรุณี ขายเก่ง' }]);
+      renderPage();
+      await screen.findByText('บริษัท โอเวอร์ จำกัด');
+      expect(within(groupRow(205)).getByText('ฝ่ายขาย สมหมาย ขายดี')).not.toBeNull();
+      expect(within(groupRow(206)).getByText('ฝ่ายขาย อรุณี ขายเก่ง')).not.toBeNull();
+    });
+
+    it('a row with no rep name says nothing rather than a dangling label', async () => {
+      listReturns([{ ...overdueTicket, createdByName: null }]);
+      renderPage();
+      await screen.findByText('บริษัท โอเวอร์ จำกัด');
+      expect(within(groupRow(205)).queryByText(/ฝ่ายขาย/)).toBeNull();
+    });
+
+    it('an overdue row counts whole Bangkok days from the served due date to today', async () => {
+      // 10:00 Bangkok on 7 Sep 2026 (03:00 UTC); due 1 Sep → 6 days. Only Date is faked: react-query keeps real timers.
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(new Date('2026-09-07T03:00:00Z'));
+      listReturns([overdueTicket]);
+      renderPage();
+      await screen.findByText('บริษัท โอเวอร์ จำกัด');
+      expect(within(groupRow(205)).getByText('เกินกำหนด 6 วัน')).not.toBeNull();
+      expect(within(groupRow(205)).getByText('ครบกำหนด 1 ก.ย. 2569')).not.toBeNull();
+    });
+
+    it('the day count follows the Bangkok calendar, not UTC: 23:30 UTC on 6 Sep is already 7 Sep in Bangkok', async () => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(new Date('2026-09-06T23:30:00Z'));
+      listReturns([overdueTicket]);
+      renderPage();
+      await screen.findByText('บริษัท โอเวอร์ จำกัด');
+      expect(within(groupRow(205)).getByText('เกินกำหนด 6 วัน')).not.toBeNull();
+    });
+
+    it('"overdue or not" stays the server\'s flag: a past due date the server does not flag is not counted', async () => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(new Date('2026-09-07T03:00:00Z'));
+      listReturns([{ ...finalPaymentTicket, paymentDueDate: '2026-09-01', overdue: false }]);
+      renderPage();
+      await screen.findByText('บริษัท อี จำกัด');
+      expect(within(groupRow(202)).queryByText(/เกินกำหนด/)).toBeNull();
+      expect(within(groupRow(202)).getByText('ครบกำหนด 1 ก.ย. 2569')).not.toBeNull();
+    });
+
+    it('a server-overdue row whose due date is not yet behind today (clock skew) still says overdue, without a count', async () => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(new Date('2026-09-01T03:00:00Z'));
+      listReturns([overdueTicket]);
+      renderPage();
+      await screen.findByText('บริษัท โอเวอร์ จำกัด');
+      expect(within(groupRow(205)).getByText('เกินกำหนดชำระ')).not.toBeNull();
+      expect(within(groupRow(205)).queryByText(/วัน$/)).toBeNull();
+    });
+
+    it.each([
+      ['EXPRESS', ['Express']],
+      ['MANUAL', ['บันทึกเอง']],
+      ['MIXED', ['Express', 'บันทึกเอง']],
+    ])('a ยืนยันพร้อมปิดงาน row says where its money came from — %s', async (receiptSource, chips) => {
+      listReturns([{ ...closeReadyTicket, receiptSource }]);
+      renderPage();
+      await screen.findByText('บริษัท ปิดงาน จำกัด');
+      chips.forEach((text) => expect(within(groupRow(206)).getByText(text)).not.toBeNull());
+      ['Express', 'บันทึกเอง'].filter((t) => !chips.includes(t))
+        .forEach((text) => expect(within(groupRow(206)).queryByText(text)).toBeNull());
+    });
+
+    it('no receipt source (no receipts, or a role the server withholds it from) shows no source chip', async () => {
+      listReturns([{ ...closeReadyTicket, receiptSource: null }]);
+      renderPage();
+      await screen.findByText('บริษัท ปิดงาน จำกัด');
+      expect(within(groupRow(206)).queryByText(/Express|บันทึกเอง/)).toBeNull();
+    });
+
+    it('the receipt source chip is not on บันทึกใบกำกับ rows either (F9)', async () => {
+      listReturns([], [{ ...closedPaidTicket, receiptSource: 'EXPRESS' }]);
+      renderPage();
+      await screen.findByText('บริษัท เอฟ จำกัด');
+      expect(within(groupRow(203)).queryByText(/Express|บันทึกเอง/)).toBeNull();
+    });
+
+    it('the receipt source chip is a ยืนยันพร้อมปิดงาน thing: a chase row keeps its due chip only', async () => {
+      listReturns([{ ...overdueTicket, receiptSource: 'EXPRESS' }]);
+      renderPage();
+      await screen.findByText('บริษัท โอเวอร์ จำกัด');
+      expect(within(groupRow(205)).queryByText('Express')).toBeNull();
     });
   });
 });

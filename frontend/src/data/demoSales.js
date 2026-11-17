@@ -667,7 +667,10 @@ export function buildDemoSalesSeed() {
       customerName: 'บริษัท เดอะ ซีนเนอรี่ วิลล่า จำกัด',
       priority: 'HIGH',
       paymentStatus: 'AWAITING_FINAL_PAYMENT', fulfillmentStatus: 'FULLY_DELIVERED',
-      salesStage: 'PROCUREMENT', allDelivered: true,
+      // Fully delivered, so DELIVERED (S9): recording the last delivery auto-advances the stage (TicketService
+      // recordDelivery → autoAdvanceStage(DELIVERED)). It sat at PROCUREMENT before, which real data cannot do
+      // — and the board then showed an overdue chip on an S7 card (slice 6a fix round 2).
+      salesStage: 'DELIVERED', allDelivered: true,
       quotationTotal: 1560000,
       quotationIssuedAt: '2026-05-28T16:00:00Z', quotationAcceptedAt: '2026-06-03T11:00:00Z',
       items: [{ brand: 'Panaria', model: 'Trilogy', color: 'Ivory', texture: 'Lappato', size: '60x120 cm', factory: 'Panaria SpA', qty: 1200, qtySqm: 864, rawPrice: 980, price: 1300 }],

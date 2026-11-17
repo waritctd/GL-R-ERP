@@ -6,12 +6,16 @@ import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.util.List;
 import java.util.Map;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
 import th.co.glr.hr.dealquotation.WastageCalculator;
 import th.co.glr.hr.salesboard.SalesBoardDtos.BoardDeal;
 import th.co.glr.hr.ticket.DealStage;
+import th.co.glr.hr.ticket.DepositPolicy;
+import th.co.glr.hr.ticket.PaymentTrack;
 import th.co.glr.hr.ticket.QuietRule;
+import th.co.glr.hr.ticket.TicketRepository;
 import th.co.glr.hr.ticket.WinProbabilityDefaults;
 
 /**
@@ -26,6 +30,13 @@ import th.co.glr.hr.ticket.WinProbabilityDefaults;
  * last touch ascending, then ticket id — mockApi.salesBoard mirrors this ORDER BY. The two
  * {@code returningPausedDeals*} reads (V220) take the same row shape for PAUSED deals whose วันที่จะกลับมาดู has
  * arrived ({@link QuietRule#returningSql}), with the same owner predicate split.
+ *
+ * <p>Slice 6.2 card fields: the value quotation's own {@code number}, {@code buyer_name}, the earliest OPEN DEPOSIT
+ * {@code expected_payment} week and the deposit-received fact come from this statement. The due date and overdue flag
+ * do NOT: the reads leave them null / false, and {@link #withPaymentDue} adds them — the finance summary's own
+ * derivation ({@link TicketRepository#paymentDueStates}), never a copy — only where a screen shows them (fix round 1:
+ * {@code SalesBoardService} calls it for the two lists {@code DealBoard} renders), and only for cards from รอมัดจำ on.
+ * Every read keeps its WHERE clause unchanged, so the new fields ride on rows the caller could already see.
  */
 @Repository
 public class SalesBoardRepository {
@@ -48,13 +59,19 @@ public class SalesBoardRepository {
                GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (now() - %1$s)) / 86400))::int AS days_quiet,
                %2$s AS quiet,
                %3$s AS returning,
-               q.total_amount, q.document_language, q.currency, q.expired,
+               q.total_amount, q.document_language, q.currency, q.expired, q.number AS quotation_number,
+               t.buyer_name,
+               (SELECT MIN(ep.expected_week) FROM sales.expected_payment ep
+                 WHERE ep.ticket_id = t.ticket_id AND ep.kind = 'DEPOSIT' AND ep.status = 'OPEN') AS expected_deposit_week,
+               (t.payment_status IN (:depositInHandStatuses)
+                AND COALESCE(t.deposit_policy, '') NOT IN (:depositBypassPolicies)) AS deposit_received,
                la.kind AS last_activity_kind, la.note AS last_activity_note
           FROM sales.ticket t
           JOIN hr.employee e ON e.employee_id = t.created_by
           LEFT JOIN customers.project p ON p.project_id = t.project_id
           LEFT JOIN LATERAL (
-              SELECT vq.total_amount, vq.document_language, vq.currency, vq.doc_status = 'EXPIRED' AS expired
+              SELECT vq.total_amount, vq.document_language, vq.currency, vq.doc_status = 'EXPIRED' AS expired,
+                     vq.number
                 FROM sales.quotation vq
                 LEFT JOIN sales.deal_party vp ON vp.party_id = vq.party_id
                WHERE vq.ticket_id = t.ticket_id AND vq.doc_status IN (:valueStatuses)
@@ -84,12 +101,30 @@ public class SalesBoardRepository {
     private static final String BOARD_SELECT = ROW_SELECT + ACTIVE_WHERE;
     private static final String RETURNING_SELECT = ROW_SELECT + RETURNING_WHERE;
 
+    /** The payment-track states at which the deposit is in hand (DocumentChainRules#DEPOSIT_PAID_STATUSES minus
+     * FULLY_PAID, which leaves the board as CLOSED_PAID once delivered). A bypass policy (DepositPolicy#NON_REQUIRED)
+     * reaches AWAITING_FINAL_PAYMENT without any deposit, so it is excluded below. */
+    private static final List<String> DEPOSIT_IN_HAND_STATUSES =
+        List.of(PaymentTrack.DEPOSIT_PAID, PaymentTrack.AWAITING_FINAL_PAYMENT);
+
+    /** The first board column whose cards carry a money chip: รอมัดจำ (rep code S6, DealStage.boardColumnOf). */
+    static final int FIRST_MONEY_CHIP_COLUMN = 4;
+
     private final NamedParameterJdbcTemplate jdbc;
     private final QuietRule quietRule;
+    private final TicketRepository tickets;
 
-    public SalesBoardRepository(NamedParameterJdbcTemplate jdbc, QuietRule quietRule) {
+    @Autowired
+    public SalesBoardRepository(NamedParameterJdbcTemplate jdbc, QuietRule quietRule, TicketRepository tickets) {
         this.jdbc = jdbc;
         this.quietRule = quietRule;
+        this.tickets = tickets;
+    }
+
+    /** Tests and tools that build the board by hand: the due-date facts read through a TicketRepository on the same
+     * connection and quiet rule. */
+    public SalesBoardRepository(NamedParameterJdbcTemplate jdbc, QuietRule quietRule) {
+        this(jdbc, quietRule, new TicketRepository(jdbc, quietRule));
     }
 
     /** The caller's own ACTIVE deals — the deal's owner ({@code created_by}), not its keyer. */
@@ -122,7 +157,43 @@ public class SalesBoardRepository {
         return new org.springframework.jdbc.core.namedparam.MapSqlParameterSource()
             .addValue("valueStatuses", VALUE_STATUSES)
             .addValue("quietDays", quietRule.quietDays())
-            .addValue("returnToday", quietRule.bangkokToday(), java.sql.Types.DATE);
+            .addValue("returnToday", quietRule.bangkokToday(), java.sql.Types.DATE)
+            .addValue("depositInHandStatuses", DEPOSIT_IN_HAND_STATUSES)
+            .addValue("depositBypassPolicies", List.copyOf(DepositPolicy.NON_REQUIRED));
+    }
+
+    /**
+     * The rows with the finance summary's due date and overdue flag (TicketRepository#paymentDueStates) on every card
+     * from รอมัดจำ on ({@link #FIRST_MONEY_CHIP_COLUMN}); earlier cards, which never show a money chip, keep null /
+     * false. At most ONE statement, none when no row qualifies; rows keep their order. Called by SalesBoardService only
+     * for the lists DealBoard renders. The ids passed are bounded by those rows: the board reads carry no LIMIT, so it is
+     * every open deal at S6 or later in the list (the caller's own on my-work, the team's on team-board).
+     */
+    public List<BoardDeal> withPaymentDue(List<BoardDeal> rows) {
+        return withPaymentDue(rows, paymentDueOf(rows));
+    }
+
+    /**
+     * The due state of every row from รอมัดจำ on, in ONE statement over all of them (none when no row qualifies) —
+     * for a caller that shows rows of several lists as board cards (my-work: the board AND the returning paused rows of
+     * ควรตามต่อ) and must not pay one statement per list.
+     */
+    public Map<Long, TicketRepository.PaymentDueState> paymentDueOf(java.util.Collection<BoardDeal> rows) {
+        List<Long> ids = rows.stream().filter(d -> d.boardColumn() >= FIRST_MONEY_CHIP_COLUMN)
+            .map(BoardDeal::ticketId).distinct().toList();
+        return ids.isEmpty() ? Map.of() : tickets.paymentDueStates(ids);
+    }
+
+    /** {@code rows} with the state from {@code due} on each row from รอมัดจำ on; other rows unchanged, order kept. */
+    public static List<BoardDeal> withPaymentDue(List<BoardDeal> rows,
+                                                 Map<Long, TicketRepository.PaymentDueState> due) {
+        return rows.stream().map(d -> withPaymentDue(d, due)).toList();
+    }
+
+    /** One row with its state from {@code due} when it is from รอมัดจำ on and has one; otherwise unchanged. */
+    public static BoardDeal withPaymentDue(BoardDeal d, Map<Long, TicketRepository.PaymentDueState> due) {
+        TicketRepository.PaymentDueState state = d.boardColumn() >= FIRST_MONEY_CHIP_COLUMN ? due.get(d.ticketId()) : null;
+        return state == null ? d : d.withPaymentDue(state.dueDate(), state.overdue());
     }
 
     private BoardDeal map(ResultSet rs, int rowNum) throws SQLException {
@@ -154,7 +225,10 @@ public class SalesBoardRepository {
             lastTouched == null ? null : lastTouched.toInstant(),
             rs.getInt("days_quiet"), rs.getBoolean("quiet"),
             rs.getString("last_activity_kind"), rs.getString("last_activity_note"),
-            rs.getBoolean("returning"), rs.getObject("pause_return_on", java.time.LocalDate.class));
+            rs.getBoolean("returning"), rs.getObject("pause_return_on", java.time.LocalDate.class),
+            rs.getString("quotation_number"), rs.getString("buyer_name"),
+            rs.getObject("expected_deposit_week", java.time.LocalDate.class), rs.getBoolean("deposit_received"),
+            null, false);
     }
 
     /** The quotation's grand total, derived exactly as DealQuotationRepository#mapQuotation derives it. */

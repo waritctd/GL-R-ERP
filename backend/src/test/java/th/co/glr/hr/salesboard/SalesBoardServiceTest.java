@@ -43,6 +43,8 @@ class SalesBoardServiceTest {
         employees = mock(th.co.glr.hr.auth.EmployeeAuthRepository.class);
         cash = mock(CashRepository.class);
         service = new SalesBoardService(repository, new QuietRule(null, 14), employees, visits, cash);
+        // Fix round 1: the due state is added by the repository; here it hands the rows back unchanged.
+        when(repository.withPaymentDue(org.mockito.ArgumentMatchers.anyList())).thenAnswer(inv -> inv.getArgument(0));
     }
 
     @ParameterizedTest

@@ -13,7 +13,8 @@ import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { TabPanel, Tabs } from '../../components/common/Tabs.jsx';
 import { fetchDashboardSummary } from '../../hooks/useHrData.js';
 import { cn } from '../../utils/cn.js';
-import { dealStageLabel, formatMoney, formatThaiDate } from '../../utils/format.js';
+import { bangkokTodayIso, dealStageLabel, formatMoney, formatThaiDate } from '../../utils/format.js';
+import { ReceiptSourceChip } from './ReceiptSourceChip.jsx';
 import { nextAccountAction } from '../tickets/accountActions.js';
 import { dedupeById, rowAmount, useAccountTickets } from './accountTickets.js';
 import { findStage, useStageCatalog } from '../tickets/stageCatalog.js';
@@ -100,12 +101,42 @@ function workDetail(row, buttonLabel) {
   return { amount: `คงค้าง ${money(ticket.amountOutstanding)}`, step };
 }
 
+/** Whole Asia/Bangkok calendar days from `dueIso` to `todayIso` — date arithmetic on the served paymentDueDate only. */
+function daysPast(dueIso, todayIso = bangkokTodayIso()) {
+  return Math.round((Date.parse(`${todayIso}T00:00:00Z`) - Date.parse(`${dueIso}T00:00:00Z`)) / 86_400_000);
+}
+
+// Slice 6.1: an overdue chase row counts the days ("เกินกำหนด 6 วัน") with the due date on the line beneath. Whether the
+// row IS overdue stays the server's flag (TicketSummaryDto#overdue): a past date the server does not flag is only
+// ครบกำหนด, and a flagged row whose date is not yet behind today's Bangkok date (clock skew) says เกินกำหนดชำระ uncounted.
 function dueChip(ticket) {
   if (ticket.overdue) {
-    return <StatusBadge tone="danger">{ticket.paymentDueDate ? `เกินกำหนดชำระ ${formatThaiDate(ticket.paymentDueDate)}` : 'เกินกำหนดชำระ'}</StatusBadge>;
+    const days = ticket.paymentDueDate ? daysPast(ticket.paymentDueDate) : 0;
+    return (
+      <span className="grid justify-items-start gap-0.5">
+        <StatusBadge tone="danger">{days > 0 ? `เกินกำหนด ${days} วัน` : 'เกินกำหนดชำระ'}</StatusBadge>
+        {ticket.paymentDueDate
+          ? <span className="text-sm text-text-muted">{`ครบกำหนด ${formatThaiDate(ticket.paymentDueDate)}`}</span>
+          : null}
+      </span>
+    );
   }
   if (ticket.paymentDueDate) return <StatusBadge tone="warning">{`ครบกำหนด ${formatThaiDate(ticket.paymentDueDate)}`}</StatusBadge>;
   return null;
+}
+
+/** Slice 6.3: where a close-ready deal's money came from (TicketSummaryDto#receiptSource) — both chips when mixed, none
+ * when the server sends none. */
+function SourceChips({ source }) {
+  if (source === 'MIXED') {
+    return (
+      <span className="inline-flex flex-wrap gap-1">
+        <ReceiptSourceChip source="EXPRESS" />
+        <ReceiptSourceChip source="MANUAL" />
+      </span>
+    );
+  }
+  return <ReceiptSourceChip source={source} />;
 }
 
 // One worklist line (design a-fin-land .wl): code · customer/project · figure · due chip · the group's ONE button.
@@ -117,7 +148,9 @@ function WorkRow({ group, row, role }) {
   const name = ticket.customerName || ticket.title || ticket.code;
   const button = rowButton(group, row.action, role);
   const { amount, step } = workDetail(row, button.label);
-  const chip = group.key === 'chase' ? dueChip(ticket) : null;
+  let chip = null;
+  if (group.key === 'chase') chip = dueChip(ticket);
+  else if (group.key === 'closeReady' && ticket.receiptSource) chip = <SourceChips source={ticket.receiptSource} />;
   // The chip track is max-content: a long overdue chip widens its own column (the fr columns give way and their
   // text wraps) instead of running under the button.
   return (
@@ -129,6 +162,10 @@ function WorkRow({ group, row, role }) {
       <span className="grid min-w-0 gap-0.5 nav-drawer:col-start-1">
         <strong className="min-w-0 text-md font-bold text-text [overflow-wrap:anywhere]">{name}</strong>
         {ticket.projectName ? <span className="min-w-0 text-sm text-text-muted [overflow-wrap:anywhere]">{ticket.projectName}</span> : null}
+        {/* Slice 6.1: the deal's rep — createdByName, the same owner (sales.ticket.created_by) the boards use. */}
+        {ticket.createdByName
+          ? <span className="min-w-0 text-sm text-text-muted [overflow-wrap:anywhere]">{`ฝ่ายขาย ${ticket.createdByName}`}</span>
+          : null}
       </span>
       <span className="grid min-w-0 gap-0.5 nav-drawer:col-start-1">
         <span className="text-sm font-bold tabular-nums text-text [overflow-wrap:anywhere]">{amount}</span>

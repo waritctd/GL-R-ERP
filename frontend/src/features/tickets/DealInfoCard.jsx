@@ -7,6 +7,7 @@ import { ThaiDateInput } from '../../components/common/ThaiDateInput.jsx';
 import { formatThaiDate } from '../../utils/format.js';
 import { hasActivitySince, isReadyToAdvance, lastStageChangeAt } from './dealTrackingMeta.js';
 import { ESTIMATE_ERROR, parseEstimatedValue } from './dealEstimate.js';
+import { quarterLabel } from '../salesBoard/boardFormat.js';
 
 function Row({ label, children }) {
   return (
@@ -151,6 +152,8 @@ export function DealInfoCard({
           <Row label="ผู้ออกแบบ">{designers.length ? designers.join(', ') : summary.designerName}</Row>
           <Row label="เจ้าของโครงการ">{owners.length ? owners.join(', ') : summary.ownerName}</Row>
           <Row label="เจ้าของงาน">{summary.createdByName}</Row>
+          {/* Slice 6.3: the drawn คาดปิด row (TicketSummaryDto.expectedQuarter, V209), in the board's own style. */}
+          <Row label="คาดปิด">{quarterLabel(summary.expectedQuarter)}</Row>
           {trackingVisible ? (
             <Row label="โอกาส">
               <span className="inline-flex flex-wrap items-center gap-1.5">

@@ -40,14 +40,14 @@ export const IMAGE_SHA256_2026_11_16 = Object.freeze({
 
 // The 17 Nov release (17a + 17d), reviewed in adversarial-task-wn2 / wn3.
 export const IMAGE_SHA256_2026_11_17 = Object.freeze({
-  'all-deals-1.png': 'd6470bedce2f91e130d83a8b8f2a8b89362158fbc423033cdb2a079a60e68c79',
-  'all-deals-2.png': 'c64a6474ca600905497f97b8c39a717c1c3a2a88d9be53ba55f4a40e8d4ef4e4',
-  'all-deals-3.png': '1ef12575edf02c4e1fddb6c3d4152952500d98f39346405034deeeff65dca802',
+  'all-deals-1.png': 'f995ddb9c69c19043569a21a506bb19c6c1c389d83e651d30ef254f77ca7c66c',
+  'all-deals-2.png': '5cba821252356e9d72b006a3925222a7c163ee7e43ff65b83368080142e38339',
+  'all-deals-3.png': '5be640f0834caf0095c73880c2322d2fc4c668464a48327afd0e6d232adbdab2',
   'all-deals-4.png': 'b6eea5f3837846eed72aa1cf194a5c9287c33b62a0436f979668bd34b77d0e31',
-  'all-deals-team-1.png': '3778617a208f21a0ca9b76aee772272fce3f18d74a5f830a6faa40ff40753c3e',
-  'all-deals-team-2.png': 'dc3c87d952dd3c91d33db72f1155b7fae468a466bf6b7eca8df5eae034d12000',
+  'all-deals-team-1.png': '216b7593461713568f353e738c94f68f701d240ceb98c131e87682f7eee5f8a3',
+  'all-deals-team-2.png': 'ee3ab491261d3ef224efa89daee4e68d2a2cd481de111dabe587992d723b0813',
   'all-deals-team-3.png': '6a41d9d1df14eb30d99aa63c8a6b78b5d4de9fa2bb2c9bdad3be86737ba82417',
-  'all-deals-team-4.png': '0a9f015fa9a541cfccaa87a17b8fe8a8a8e1f1e4bba2a9af7dc4ffb8e7a0f7ed',
+  'all-deals-team-4.png': '5c8cf2d71810e3ebfed3f3b3d36c264dcba745a006c241780733a26b27d0025b',
   'deal-create-1.png': '6657b6fb92feba2eb0706016bb67ee83dba80406e5a1f9f089f27c3c9da4bab4',
   'deal-create-2.png': '8852e6bd55a71cb590cf37113b231b94451a49bc26ce7c372a41425b8b2ebda4',
   'deal-create-3.png': 'eda4983134e4593a56e75b01c2b04aa1af03b83d9f6083562167b373b0185a2a',

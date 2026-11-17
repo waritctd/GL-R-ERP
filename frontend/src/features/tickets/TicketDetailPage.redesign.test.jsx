@@ -623,7 +623,9 @@ describe('ใบเสนอราคา tab', () => {
     api.dealQuotations.listForTicket.mockResolvedValue({ items: [draft, approved] });
     renderPage();
     await pageReady();
-    await openTab('ใบเสนอราคา');
+    // Adapted (slice 6.1): with two quotations in force the tab reads "ใบเสนอราคา 2" (its count is in-band), so the
+    // tab is found by its leading label.
+    await openTab(/^ใบเสนอราคา/);
     const quotations = await screen.findByTestId('deal-quotations-card');
     expect(within(quotations).getByRole('heading', { name: 'ใบเสนอราคาของงานนี้' })).toBeTruthy();
     expect(document.querySelector('a[href*="/quotations/new"]')).toBeNull();
@@ -1077,5 +1079,61 @@ describe('fix round 2', () => {
     const facts = await screen.findByTestId('next-step-facts');
     expect(facts.textContent).toContain('เหตุผล: -');
     expect(facts.textContent).toContain('ปิดเมื่อ -');
+  });
+});
+
+// ── slice 6.1 / 6.3: drawn details on the deal page ─────────────────────────────────────────────────────────────
+describe('drawn details (slice 6)', () => {
+  it('the header says คาดปิด from the served expectedQuarter, in the board\'s style', async () => {
+    setDeal({ expectedQuarter: '2026-Q4' });
+    renderPage();
+    const header = await pageReady();
+    expect(within(header).getByText('คาดปิด Q4/69')).not.toBeNull();
+  });
+
+  it('no expectedQuarter, no คาดปิด in the header', async () => {
+    setDeal({ expectedQuarter: null });
+    renderPage();
+    const header = await pageReady();
+    expect(within(header).queryByText(/คาดปิด/)).toBeNull();
+  });
+
+  it('the ใบเสนอราคา tab counts only quotations still in force; ไฟล์ counts the files the page already loads', async () => {
+    api.dealQuotations.listForTicket.mockResolvedValue({ items: [
+      { id: 1, ticketId: 701, number: 'QT-1', docStatus: 'APPROVED' },
+      { id: 2, ticketId: 701, number: 'QT-2', docStatus: 'DRAFT' },
+      { id: 3, ticketId: 701, number: 'QT-3', docStatus: 'SUPERSEDED' },
+      { id: 4, ticketId: 701, number: 'QT-4', docStatus: 'CANCELLED' },
+    ] });
+    api.attachments.list.mockResolvedValue({ attachments: [
+      { id: 11, fileName: 'a.pdf' }, { id: 12, fileName: 'b.pdf' }, { id: 13, fileName: 'c.pdf' },
+    ] });
+    renderPage();
+    await pageReady();
+
+    const quote = screen.getByRole('tab', { name: /^ใบเสนอราคา/ });
+    const files = screen.getByRole('tab', { name: /^ไฟล์/ });
+    await waitFor(() => expect(within(quote).getByText('2')).not.toBeNull());
+    await waitFor(() => expect(within(files).getByText('3')).not.toBeNull());
+  });
+
+  it('on a phone the counts step aside so ไฟล์ stays on screen (the badge hides under the mobile breakpoint)', async () => {
+    api.dealQuotations.listForTicket.mockResolvedValue({ items: [{ id: 1, ticketId: 701, number: 'QT-1', docStatus: 'APPROVED' }] });
+    api.attachments.list.mockResolvedValue({ attachments: [{ id: 11, fileName: 'a.pdf' }] });
+    renderPage();
+    await pageReady();
+
+    const quote = screen.getByRole('tab', { name: /^ใบเสนอราคา/ });
+    const badge = await within(quote).findByText('1');
+    expect(badge.className).toContain('mobile:hidden');
+    const filesBadge = await within(screen.getByRole('tab', { name: /^ไฟล์/ })).findByText('1');
+    expect(filesBadge.className).toContain('mobile:hidden');
+  });
+
+  it('no quotations and no files: the tabs carry no count at all', async () => {
+    renderPage();
+    await pageReady();
+    await settle();
+    expect(tabNames()).toEqual(['ภาพรวม', 'ใบเสนอราคา', 'เงิน', 'ส่งของ', 'ไฟล์']);
   });
 });

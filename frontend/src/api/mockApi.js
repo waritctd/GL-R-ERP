@@ -3611,12 +3611,19 @@ function derivePaymentFields(ticket) {
   else if (payable > 0 && !depositBypassesNotice(ticket)
       && ['CUSTOMER_CONFIRMED', 'DEPOSIT_NOTICE_ISSUED'].includes(ticket.paymentStatus)) paymentStage = 'DEPOSIT_PENDING';
   else if (payable > 0 && outstanding > 0) paymentStage = 'BALANCE_PENDING';
-  const overdue = Boolean(ticket.dueDate && new Date(`${ticket.dueDate}T00:00:00`) < new Date() && outstanding > 0);
+  // Fix round 2: the server has a due date only once the deal is FULLY_DELIVERED (TicketRepository#paymentTermsRowSql's
+  // delivery join) and is overdue only from the Bangkok day AFTER it, never while the deposit notice waits
+  // (TicketRepository#paymentDueState). The mock keeps its demo billing date as the date itself, but behind the same
+  // preconditions, so no card or finance row shows a due date the server could not produce.
+  const paymentDueDate = ticket.fulfillmentStatus === 'FULLY_DELIVERED' ? (ticket.dueDate ?? null) : null;
+  const overdue = Boolean(paymentDueDate && mockTodayIso() > paymentDueDate && outstanding > 0
+    && ticket.paymentStatus !== 'DEPOSIT_NOTICE_ISSUED');
   return {
     billingDate: ticket.billingDate ?? null,
     dueDate: ticket.dueDate ?? null,
-    // Mock approximation: no quotation-terms/delivery derivation, so the demo billing due date stands in.
-    paymentDueDate: ticket.dueDate ?? null, paymentDueBasis: null, paymentDueCreditDays: null,
+    // Mock approximation: no quotation-terms derivation, so the demo billing due date stands in — only once fully
+    // delivered, as above.
+    paymentDueDate, paymentDueBasis: null, paymentDueCreditDays: null,
     creditTermDays: ticket.creditTermDays ?? null,
     lastFollowUpAt: ticket.lastFollowUpAt ?? null,
     nextFollowUpAt: ticket.nextFollowUpAt ?? null,
@@ -4825,6 +4832,9 @@ function buildTicketDetail(ticket) {
       pauseReturnOn: ticket.pauseReturnOn ?? null,
       // V220 มูลค่าโดยประมาณ (TicketSummaryDto.estimatedValue).
       estimatedValue: ticket.estimatedValue ?? null,
+      // Slice 6.3: คาดปิด (TicketSummaryDto.expectedQuarter, V209) and where the money came from (receiptSource).
+      expectedQuarter: ticket.expectedQuarter ?? null,
+      receiptSource: mockReceiptSource(ticket.id),
       closeConfirmedAt: ticket.closeConfirmedAt ?? null,
       closeConfirmedByName: ticket.closeConfirmedByName ?? null,
       invoiceOnFile: hasInvoiceAttachment(ticket),
@@ -8515,6 +8525,59 @@ function mockRequireReturnDateNotPast(pauseReturnOn) {
   }
 }
 
+/**
+ * BoardDeal's slice-6.2 card fields from SalesBoardRepository's ROW_SELECT: the value quotation's own number, the
+ * deal's buyer, the EARLIEST OPEN DEPOSIT expected-payment week (MIN(expected_week)), and the deposit-in-hand fact
+ * (DEPOSIT_PAID / AWAITING_FINAL_PAYMENT on a deal whose policy did not bypass the deposit). The due date and overdue
+ * flag start null / false, as in Java; mockWithPaymentDue adds them where the server does.
+ */
+function mockBoardCardDetails(t, valueQuotation) {
+  const deposits = mockExpectedPaymentsOf(t.id).filter((p) => p.kind === 'DEPOSIT' && p.status === 'OPEN');
+  return {
+    quotationNumber: valueQuotation?.number ?? null,
+    buyerName: t.buyerName ?? null,
+    expectedDepositWeek: deposits.length ? deposits.map((p) => p.expectedWeek).sort()[0] : null,
+    depositReceived: ['DEPOSIT_PAID', 'AWAITING_FINAL_PAYMENT'].includes(t.paymentStatus) && !depositBypassesNotice(t),
+    paymentDueDate: null,
+    overdue: false,
+  };
+}
+
+/**
+ * Mirrors SalesBoardRepository#withPaymentDue (fix round 1): the due date + overdue flag, taken from this mock's OWN
+ * summary derivation (derivePaymentFields, as Java reads TicketRepository#paymentDueStates), on cards from รอมัดจำ
+ * (column 4) on only — and SalesBoardService calls it only for my-work `board` and team-board `board`, so followUp,
+ * stale and returning rows keep null / false. The mock's due date is its demo billing date, not the server's
+ * delivery-based one — a plumbing stand-in only.
+ */
+function mockWithPaymentDue(rows) {
+  // Callers (fix round 2): my-work board, team-board board, and my-work's returning followUp rows.
+  return rows.map((d) => {
+    if (d.boardColumn < 4) return d;
+    const due = derivePaymentFields(db.tickets.find((t) => t.id === d.ticketId));
+    return { ...d, paymentDueDate: due.paymentDueDate ?? null, overdue: Boolean(due.overdue) };
+  });
+}
+
+/**
+ * TicketSummaryDto#receiptSource (slice 6.3, TicketRepository SummaryFactsSql.RECEIPT_SOURCE_SQL): EXPRESS when every
+ * receipt came from the Express file or is linked to an Express document, MANUAL when none did, MIXED when some did,
+ * null with no receipt.
+ */
+function mockReceiptSource(ticketId) {
+  return receiptSourceForTests(receiptsForTicket(ticketId));
+}
+
+/** The pure rule behind mockReceiptSource, exported so its branches are pinned without seeding receipts. */
+export function receiptSourceForTests(allReceipts) {
+  // Owner ruling (fix round 1): a refund / credit note (ADJUSTMENT) or a zero amount is not money received.
+  const receipts = allReceipts.filter((r) => r.kind !== 'ADJUSTMENT' && Number(r.amount) > 0);
+  if (!receipts.length) return null;
+  const express = receipts.filter((r) => r.source === 'EXPRESS' || r.expressDocNo).length;
+  if (express === receipts.length) return 'EXPRESS';
+  return express > 0 ? 'MIXED' : 'MANUAL';
+}
+
 /** Every open deal (ACTIVE, not CLOSED_PAID) as a BoardDeal, ordered as the repository's
  * `ORDER BY last_touched_at, t.ticket_id`. */
 function mockBoardDeals() {
@@ -8570,6 +8633,7 @@ function mockBoardRows(include) {
         // V220 (BoardDeal.returning / pauseReturnOn): a paused deal coming back — never an ACTIVE board row.
         returning: mockIsReturning(t, today),
         pauseReturnOn: t.pauseReturnOn ?? null,
+        ...mockBoardCardDetails(t, valueQuotation),
         lastTouchedMs: last,
       };
     })
@@ -9508,6 +9572,10 @@ export const api = {
         // V220: the list rows are the same TicketSummaryDto, so they carry the pause return date and estimate too.
         pauseReturnOn: t.pauseReturnOn ?? null,
         estimatedValue: t.estimatedValue ?? null,
+        // Slice 6.3 (TicketSummaryDto.expectedQuarter / receiptSource). TicketSummaryDto#withoutMoney withholds both from
+        // import, so the mock does too — never more permissive than the Java service on a field this slice adds.
+        expectedQuarter: user.role === 'import' ? null : (t.expectedQuarter ?? null),
+        receiptSource: user.role === 'import' ? null : mockReceiptSource(t.id),
         // The real TicketSummaryDto (TicketService.java / TicketRepository.java) carries these
         // three fields on the LIST projection, not just the single-ticket detail one; dropping them
         // here would hide real capability. AccountOverview's nextAccountAction() needs
@@ -14158,7 +14226,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
   },
 
   // Mirrors SalesBoardService / SalesBoardRepository (salesboard/). AUTHZ NOTE: these role gates and the own-deals
-  // scope approximate the Java service and are NOT evidence — SalesBoardScopeIntegrationTest and
+  // scope approximate the Java service and are NOT evidence — SalesBoardScopeIntegrationTest, BoardDrawnDetailsIntegrationTest and
   // TeamBoardScopeIntegrationTest are. my-work is the caller's OWN deals (created_by only, not keyed_by), sales /
   // sales_manager / ceo; team-overview and team-board are sales_manager / ceo. Quiet uses the same 14-day rule
   // (features/salesBoard/quietRule.js).
@@ -14170,7 +14238,10 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       // ควรตามต่อ also takes the caller's OWN returning paused deals (SalesBoardRepository#returningPausedDealsOwnedBy).
       const returning = mockReturningPausedDeals().filter((d) => d.ownerId === user.id);
       return delay({
-        followUp: mockRankFollowUp(board, returning, 5), board, quietDays: MOCK_QUIET_DAYS,
+        // Fix round 2 (SalesBoardService#myWork): the RETURNING followUp rows are DealBoard cards in งานของฉัน's
+        // เฉพาะงานเงียบ view, so they carry the due state too; the active followUp rows (ควรตามต่อ list only) do not.
+        followUp: mockRankFollowUp(board, returning, 5).map((d) => (d.returning ? mockWithPaymentDue([d])[0] : d)),
+        board: mockWithPaymentDue(board), quietDays: MOCK_QUIET_DAYS,
         visitsThisWeek: mockVisitsThisWeek(user.id),
         cash: mockCashForMonth(user.id, mockTodayIso().slice(0, 7)),
       });
@@ -14180,7 +14251,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
     async teamBoard() {
       const user = requireSession();
       if (!['sales_manager', 'ceo'].includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
-      return delay({ board: mockBoardDeals(), quietDays: MOCK_QUIET_DAYS });
+      return delay({ board: mockWithPaymentDue(mockBoardDeals()), quietDays: MOCK_QUIET_DAYS });
     },
     async teamOverview() {
       const user = requireSession();

@@ -796,7 +796,8 @@ public class TicketService {
             s.commissionRecorded(), s.reopenedAt(), s.reopenCount(), s.quotationOnly(),
             s.paymentDueDate(), s.paymentDueBasis(), s.paymentDueCreditDays(),
             s.liveDirectQuotation(), s.quotedRecipients(), s.depositDue(), s.keyedById(),
-            s.stageChangedInRange(), s.activityInRange(), s.lastActivityAt(), s.pauseReturnOn(), s.estimatedValue());
+            s.stageChangedInRange(), s.activityInRange(), s.lastActivityAt(), s.pauseReturnOn(), s.estimatedValue(),
+            s.expectedQuarter(), s.receiptSource());
     }
 
     /** Closing is a three-party sequence, not one person's decision: the goods must be delivered, the balance paid,

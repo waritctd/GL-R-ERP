@@ -557,6 +557,13 @@ describe('2026-11-17 wording matches the screens', () => {
     for (const id of ['all-deals', 'all-deals-team']) {
       for (const column of BOARD_COLUMNS) expect(quotedLabels(byId(id)), `${id}: ${column.label}`).toContain(column.label);
     }
+    // Slice 6a fix round 2: the board pictures show the money chip, so both board entries say so, in the chip's own
+    // words (each fixed fragment is checked against boardFormat.js by the "quoted" label test).
+    for (const id of ['all-deals', 'all-deals-team']) {
+      for (const chip of ['นัดรับ ถึง …', 'ได้มัดจำ', 'ครบกำหนด …', 'เกินกำหนด …']) {
+        expect(quotedLabels(byId(id)), `${id}: ${chip}`).toContain(chip);
+      }
+    }
     // The five deal-page tabs and the stepper's two "who moves it" labels.
     for (const tab of TICKET_DETAIL_TABS) expect(quotedLabels(byId('deal-page')), tab.label).toContain(tab.label);
     for (const label of Object.values(MOVER_LABEL)) expect(quotedLabels(byId('deal-page')), label).toContain(label);

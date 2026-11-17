@@ -1147,7 +1147,10 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
               บันทึกแล้วแก้ไขหรือลบไม่ได้ ตรวจจำนวนก่อนกดบันทึก
             </DialogCallout>
             <DialogSummary icon="truck" testId="delivery-summary">
-              {`เหลือส่ง ${items.filter((item) => Number(item.qty || 0) - Number(item.qtyDelivered || 0) > 0).length} รายการ`}
+              {/* Slice 6.1, the drawn "ส่งงวดที่ N": the deliveries already recorded on this deal (sales.delivery_record,
+                  the history this panel already loads) plus this one — said only once that history has loaded, never
+                  guessed from an empty list that is still on its way. */}
+              {`${deliveriesQuery.isSuccess ? `ส่งงวดที่ ${deliveryRecords.length + 1} · ` : ''}เหลือส่ง ${items.filter((item) => Number(item.qty || 0) - Number(item.qtyDelivered || 0) > 0).length} รายการ`}
             </DialogSummary>
             {/* Phones (≤520px, mobile-xs): the สั่ง / ส่งแล้ว / เหลือส่ง columns fold into a line under the name, so
                 the table is two columns — name and the ส่งครั้งนี้ input — and the input is in view at 320px with no
