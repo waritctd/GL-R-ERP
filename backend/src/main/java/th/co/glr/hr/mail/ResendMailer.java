@@ -2,6 +2,8 @@ package th.co.glr.hr.mail;
 
 import com.resend.Resend;
 import com.resend.core.exception.ResendException;
+import com.resend.core.net.RequestOptions;
+import com.resend.services.emails.Emails;
 import com.resend.services.emails.model.CreateEmailOptions;
 import com.resend.services.emails.model.CreateEmailResponse;
 import java.util.Base64;
@@ -18,7 +20,7 @@ import org.springframework.stereotype.Component;
  * instead of a silently dropped notification. */
 @Component
 @ConditionalOnProperty(name = "app.mail.provider", havingValue = "resend")
-public class ResendMailer implements Mailer {
+public class ResendMailer implements Mailer, KeyedHtmlMailer {
     private static final Logger log = LoggerFactory.getLogger(ResendMailer.class);
 
     /** Functional seam over Resend.emails()::send - Emails is a final class, so this lets unit tests fake the
@@ -26,6 +28,27 @@ public class ResendMailer implements Mailer {
     @FunctionalInterface
     interface ResendSender {
         CreateEmailResponse send(CreateEmailOptions options) throws ResendException;
+
+        /** The same send with request options (the Idempotency-Key). Production overrides it with the SDK's
+         * {@code Emails#send(CreateEmailOptions, RequestOptions)}; a one-method test fake falls back to the plain send. */
+        default CreateEmailResponse send(CreateEmailOptions options, RequestOptions requestOptions)
+            throws ResendException {
+            return send(options);
+        }
+    }
+
+    /**
+     * The release notice's send: identical to {@link #sendHtml}, plus Resend's {@code Idempotency-Key}, so a repeat of
+     * the SAME request (this class's own 429 retry loop, or a resubmission of the same attempt) cannot create a
+     * second mail. A new attempt carries a new key on purpose: it is a new mail.
+     */
+    @Override
+    public void sendHtmlOnce(String to, String subject, String htmlBody, String textBody,
+                             List<InlineImage> inlineImages, String idempotencyKey) {
+        RequestOptions options = idempotencyKey == null || idempotencyKey.isBlank()
+            ? null
+            : RequestOptions.builder().setIdempotencyKey(idempotencyKey).build();
+        sendWithRetry(htmlRequest(to, subject, htmlBody, textBody, inlineImages), to, options);
     }
 
     static final int MAX_ATTEMPTS = 4;
@@ -44,7 +67,19 @@ public class ResendMailer implements Mailer {
                         @Value("${app.mail.reply-to:}") String replyTo) {
         // Constructing with a blank key is harmless (no network call happens until send()).
         Resend client = new Resend(apiKey);
-        this.sender = client.emails()::send;
+        Emails emails = client.emails();
+        this.sender = new ResendSender() {
+            @Override
+            public CreateEmailResponse send(CreateEmailOptions options) throws ResendException {
+                return emails.send(options);
+            }
+
+            @Override
+            public CreateEmailResponse send(CreateEmailOptions options, RequestOptions requestOptions)
+                throws ResendException {
+                return emails.send(options, requestOptions);
+            }
+        };
         this.fromAddress = fromAddress;
         this.replyTo = replyTo == null ? "" : replyTo.trim();
     }
@@ -70,11 +105,16 @@ public class ResendMailer implements Mailer {
             .subject(subject)
             .text(body);
         applyReplyTo(request);
-        sendWithRetry(request.build(), to);
+        sendWithRetry(request.build(), to, null);
     }
 
     @Override
     public void sendHtml(String to, String subject, String htmlBody, String textBody, List<InlineImage> inlineImages) {
+        sendWithRetry(htmlRequest(to, subject, htmlBody, textBody, inlineImages), to, null);
+    }
+
+    private CreateEmailOptions htmlRequest(String to, String subject, String htmlBody, String textBody,
+                                           List<InlineImage> inlineImages) {
         CreateEmailOptions.Builder request = CreateEmailOptions.builder()
             .from(fromAddress)
             .to(to)
@@ -95,7 +135,7 @@ public class ResendMailer implements Mailer {
                     .build())
                 .toList());
         }
-        sendWithRetry(request.build(), to);
+        return request.build();
     }
 
     @Override
@@ -120,7 +160,7 @@ public class ResendMailer implements Mailer {
             .text(body)
             .attachments(resendAttachments);
         applyReplyTo(request);
-        sendWithRetry(request.build(), to);
+        sendWithRetry(request.build(), to, null);
     }
 
     @Override
@@ -156,7 +196,7 @@ public class ResendMailer implements Mailer {
             request.attachments(resendAttachments);
         }
         applyReplyTo(request);
-        sendWithRetry(request.build(), email.to());
+        sendWithRetry(request.build(), email.to(), null);
     }
 
     /** Sets Reply-To on the request being built, or leaves it unset when app.mail.reply-to is blank (the default -
@@ -168,11 +208,13 @@ public class ResendMailer implements Mailer {
         }
     }
 
-    private void sendWithRetry(CreateEmailOptions request, String to) {
+    private void sendWithRetry(CreateEmailOptions request, String to, RequestOptions requestOptions) {
         ResendException lastFailure = null;
         for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
             try {
-                CreateEmailResponse response = sender.send(request);
+                CreateEmailResponse response = requestOptions == null
+                    ? sender.send(request)
+                    : sender.send(request, requestOptions);
                 log.info("Email sent via Resend: id={} to={}", response.getId(), to);
                 return;
             } catch (ResendException exception) {

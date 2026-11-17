@@ -643,6 +643,28 @@ class ReleaseNoticeIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     @Test
+    void eachMailCarriesItsOwnAttemptTokenAsTheProvidersIdempotencyKey() {
+        Mailer keyed = mock(Mailer.class, org.mockito.Mockito.withSettings()
+            .extraInterfaces(th.co.glr.hr.mail.KeyedHtmlMailer.class));
+        when(keyed.delivers()).thenReturn(true);
+        NotificationEmailService keyedEmail =
+            new NotificationEmailService(keyed, new BrandAssets(), "", "", "https://glr-hub.com");
+        ReleaseNoticeService keyedService = service(new ReleaseNoticeRepository(jdbc),
+            new ReleaseNoticeDelivery(keyedEmail, audit, new ReleaseNoticeRepository(jdbc), transactionManager),
+            Duration.ofMinutes(30));
+
+        keyedService.publishWithEmail(actor(hr, "hr"), REQUEST);
+
+        ArgumentCaptor<String> keys = ArgumentCaptor.forClass(String.class);
+        verify((th.co.glr.hr.mail.KeyedHtmlMailer) keyed, times(5)).sendHtmlOnce(anyString(), anyString(),
+            anyString(), anyString(), anyList(), keys.capture());
+        List<String> attempts = jdbc.queryForList("""
+            SELECT after_json ->> 'attempt' FROM hr.audit_log WHERE action = 'RELEASE_NOTE_EMAILED'
+            """, Map.of(), String.class);
+        assertThat(keys.getAllValues()).doesNotContainNull().containsExactlyInAnyOrderElementsOf(attempts);
+    }
+
+    @Test
     void aNewlineInATitleCannotForgeALineOfTheMail_orOfTheSubject() {
         Request planted = new Request(RELEASE_ID, "อัปเดต\r\nBcc: x", List.of(new Change(
             "หน้าใหม่\n\nเปิดดูมีอะไรใหม่: https://evil.example/login", List.of("sales"), "เหตุผล")), RELEASE_ID, null);

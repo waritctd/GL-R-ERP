@@ -39,6 +39,20 @@ class NotificationEmailServiceReleaseNoticeTest {
     }
 
     @Test
+    void aMailerThatTakesKeysGetsTheAttemptTokenAsItsIdempotencyKey() {
+        Mailer keyed = mock(Mailer.class, org.mockito.Mockito.withSettings()
+            .extraInterfaces(th.co.glr.hr.mail.KeyedHtmlMailer.class));
+        when(keyed.delivers()).thenReturn(true);
+
+        new NotificationEmailService(keyed, new BrandAssets(), "", "", "https://glr-hub.com")
+            .sendReleaseNotice(TO, "ยา", email, "attempt-9");
+
+        verify((th.co.glr.hr.mail.KeyedHtmlMailer) keyed).sendHtmlOnce(eq(TO), anyString(), anyString(), anyString(),
+            anyList(), eq("attempt-9"));
+        verify(keyed, never()).sendHtml(anyString(), anyString(), anyString(), anyString(), anyList());
+    }
+
+    @Test
     void aMailerThatDoesNotDeliverIsNeverHandedTheMail_theCallFails_andTheLogMasksTheAddress(CapturedOutput output) {
         when(mailer.delivers()).thenReturn(false);
 

@@ -7,6 +7,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import th.co.glr.hr.brand.BrandAssets;
+import th.co.glr.hr.mail.KeyedHtmlMailer;
 import th.co.glr.hr.mail.MailNotDeliveredException;
 import th.co.glr.hr.mail.Mailer;
 
@@ -116,6 +117,13 @@ public class NotificationEmailService {
      * button AND as visible text, and a plain-text alternative. No attachment; only the shell's inline logo.
      */
     public void sendReleaseNotice(String to, String recipientName, ReleaseNoticeEmail email) {
+        sendReleaseNotice(to, recipientName, email, null);
+    }
+
+    /** As above, sending {@code idempotencyKey} (the release notice's per-person attempt token) when the mailer can
+     * carry one (KeyedHtmlMailer: Resend, also through the override decorator). It protects only a repeat of the SAME
+     * attempt; a new attempt has a new token, so a deliberate re-send is still a new mail. */
+    public void sendReleaseNotice(String to, String recipientName, ReleaseNoticeEmail email, String idempotencyKey) {
         if (!mailer.delivers()) {
             // The log provider (or no provider): nothing would leave, so this must not become a "sent". The mailer is
             // not called at all, so its log line (which prints the full address and body) is never written for this
@@ -126,8 +134,13 @@ public class NotificationEmailService {
         }
         String finalSubject = "[GL&R Portal] " + clean(email.subject()) + subjectSuffix;
         String url = appBaseUrl + normalizeLink(clean(email.link()));
-        mailer.sendHtml(to, finalSubject, releaseNoticeHtml(recipientName, email, url),
-            releaseNoticeText(recipientName, email, url), logoInlineImages);
+        String html = releaseNoticeHtml(recipientName, email, url);
+        String text = releaseNoticeText(recipientName, email, url);
+        if (idempotencyKey != null && mailer instanceof KeyedHtmlMailer keyed) {
+            keyed.sendHtmlOnce(to, finalSubject, html, text, logoInlineImages, idempotencyKey);
+        } else {
+            mailer.sendHtml(to, finalSubject, html, text, logoInlineImages);
+        }
     }
 
     private String releaseNoticeHtml(String recipientName, ReleaseNoticeEmail email, String url) {

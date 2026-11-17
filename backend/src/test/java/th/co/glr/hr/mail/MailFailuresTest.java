@@ -32,8 +32,11 @@ class MailFailuresTest {
     void aResendErrorResponseIsARejection() {
         ResendException rejected = new ResendException(422, "{\"name\":\"validation_error\",\"message\":\"bad\"}");
         assertThat(MailFailures.certainlyNotAccepted(new MailSendException("Resend send failed", rejected))).isTrue();
-        ResendException server = new ResendException(500, "{\"name\":\"internal_server_error\",\"message\":\"x\"}");
-        assertThat(MailFailures.certainlyNotAccepted(new MailSendException("Resend send failed", server))).isTrue();
+        // 503: the service refused the request outright (round 3 ruling: stays FAILED; 500/502/504 are UNKNOWN, see
+        // MailFailureTableTest).
+        ResendException unavailable = new ResendException(503, "{\"name\":\"unavailable\",\"message\":\"x\"}");
+        assertThat(MailFailures.certainlyNotAccepted(new MailSendException("Resend send failed", unavailable)))
+            .isTrue();
     }
 
     @Test

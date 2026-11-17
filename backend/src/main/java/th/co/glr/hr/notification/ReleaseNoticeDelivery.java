@@ -97,7 +97,8 @@ public class ReleaseNoticeDelivery {
         String outcome;
         String reason;
         try {
-            emailService.sendReleaseNotice(delivery.to().email(), delivery.to().name(), delivery.email());
+            emailService.sendReleaseNotice(delivery.to().email(), delivery.to().name(), delivery.email(),
+                delivery.attempt());
             outcome = ReleaseNoticeRepository.SENT_ACTION;
             reason = null;
         } catch (RuntimeException exception) {
