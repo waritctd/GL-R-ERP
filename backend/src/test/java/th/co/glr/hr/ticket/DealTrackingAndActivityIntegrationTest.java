@@ -233,6 +233,30 @@ class DealTrackingAndActivityIntegrationTest extends AbstractPostgresIntegration
         assertThat(summary.nextFollowUpAt()).isEqualTo(LocalDate.now().plusDays(5));
     }
 
+    /** A call or visit set the date after the ข้อมูลงาน form loaded; saving the form without a date must keep it. */
+    @Test
+    void trackingUpdate_withoutADate_keepsTheDateACallSet() {
+        long ticketId = createTicket();
+        LocalDate fromCall = LocalDate.now().plusDays(9);
+        tickets.updateNextFollowUpAt(ticketId, fromCall);
+
+        ticketService.updateTracking(ticketId,
+            new TrackingUpdateRequest(null, "ดีไซเนอร์ ก", null, null, null), salesRep);
+
+        assertThat(currentNextFollowUp(ticketId)).isEqualTo(fromCall);
+    }
+
+    @Test
+    void trackingUpdate_clearNextFollowUpAt_clearsTheDate() {
+        long ticketId = createTicket();
+        tickets.updateNextFollowUpAt(ticketId, LocalDate.now().plusDays(9));
+
+        ticketService.updateTracking(ticketId, new TrackingUpdateRequest(null, null, null, null, null, null, null,
+            null, true), salesRep);
+
+        assertThat(currentNextFollowUp(ticketId)).isNull();
+    }
+
     // ── deal activity CRUD ───────────────────────────────────────────────────
 
     @Test

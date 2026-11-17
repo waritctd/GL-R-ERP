@@ -2699,6 +2699,11 @@ public class TicketService {
         if (DealActivityKind.requiresNote(request.kind()) && blankToNull(request.note()) == null) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "ระบุว่าส่งอะไรไป (เช่น ตัวอย่างกระเบื้อง 3 สี)");
         }
+        // #1353: with a date, the deal's row lock first — before the deal is read and the ACTIVE check runs. Every kind
+        // takes this path, SAMPLE_SENT (slice 6d) included; the body checks above read no row, so they may come first.
+        if (request.nextFollowUpAt() != null) {
+            tickets.lockTicketForUpdate(ticketId); // so requireActiveForFollowUp reads the locked row
+        }
         TicketSummaryDto s = requireTicket(ticketId).summary();
         requireDealOwnership(s, actor);
         LocalDate nextFollowUpAt = request.nextFollowUpAt();
@@ -2790,10 +2795,12 @@ public class TicketService {
      *   <li>the deal is ACTIVE — updateTracking's requireActive; 409;</li>
      * </ol>
      * and the date is today or later on the Asia/Bangkok calendar ({@code bangkokToday} is the visit service's own
-     * clock); 400. Writes nothing.
+     * clock); 400. Takes the deal's row lock (must run inside the caller's transaction), so the owner/ACTIVE checks read
+     * the deal as it is under the lock; still writes nothing.
      */
     public void requireVisitFollowUpWritable(long ticketId, long visitOwnerId, LocalDate nextFollowUpAt,
                                              LocalDate bangkokToday, UserPrincipal actor) {
+        tickets.lockTicketForUpdate(ticketId);
         TicketSummaryDto s = requireTicket(ticketId).summary();
         if (s.createdById() != visitOwnerId) {
             throw visitFollowUpNotOnDeal();
@@ -2816,16 +2823,6 @@ public class TicketService {
             throw visitFollowUpNotOnDeal();
         }
         tickets.updateNextFollowUpAt(ticketId, nextFollowUpAt);
-    }
-
-    /**
-     * Fix round 2: the deal's row lock ({@link TicketRepository#lockTicketForUpdate}) for a caller that is about to write
-     * a visit AND, through {@link #recordVisitActivity} / {@link #recordVisitFollowUp}, this deal's follow-up date — so
-     * every such transaction locks deal-then-visit, never the reverse (VisitService#create). Must run inside the
-     * caller's transaction; re-entrant with the lock those methods take.
-     */
-    public void lockDealForFollowUp(long ticketId) {
-        tickets.lockTicketForUpdate(ticketId);
     }
 
     private static ApiException visitFollowUpNotOnDeal() {
@@ -2867,9 +2864,8 @@ public class TicketService {
     /**
      * Sets the rep-facing tracking fields (win% override, counterparty names, next follow-up).
      *
-     * <p>Known, pre-existing (noted in slice 6b, not changed): this is a FULL replace. An editor opened before a call
-     * or visit set the next follow-up date (slice 6.4) and saved afterwards writes back the date it loaded, overwriting
-     * the newer one — the same lost-update every tracking field already has.
+     * <p>The next follow-up date is KEPT when absent (set when sent, cleared by clearNextFollowUpAt), so a stale form
+     * no longer overwrites a date a call or visit set in the meantime.
      */
     @Transactional
     public TicketDto updateTracking(long ticketId, TrackingUpdateRequest request, UserPrincipal actor) {
@@ -2877,7 +2873,12 @@ public class TicketService {
         requireDealOwnership(s, actor);
         requireActive(s);
         tickets.updateTracking(ticketId, request.winProbability(), blankToNull(request.designerName()),
-            blankToNull(request.ownerName()), blankToNull(request.buyerName()), request.nextFollowUpAt());
+            blankToNull(request.ownerName()), blankToNull(request.buyerName()));
+        if (Boolean.TRUE.equals(request.clearNextFollowUpAt())) {
+            tickets.updateNextFollowUpAt(ticketId, null);
+        } else if (request.nextFollowUpAt() != null) {
+            tickets.updateNextFollowUpAt(ticketId, request.nextFollowUpAt());
+        }
         if (request.expectedQuarter() != null) { // null = keep (see TrackingUpdateRequest); "" = clear
             tickets.updateExpectedQuarter(ticketId, blankToNull(request.expectedQuarter()));
         }

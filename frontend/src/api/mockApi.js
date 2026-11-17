@@ -10574,7 +10574,9 @@ export const api = {
       ticket.designerName = (payload?.designerName || '').trim() || null;
       ticket.ownerName = (payload?.ownerName || '').trim() || null;
       ticket.buyerName = (payload?.buyerName || '').trim() || null;
-      ticket.nextFollowUpAt = payload?.nextFollowUpAt || null;
+      // Mirrors the server: the date is KEPT when absent, set when sent, cleared by clearNextFollowUpAt (which wins).
+      if (payload?.clearNextFollowUpAt) ticket.nextFollowUpAt = null;
+      else if (payload?.nextFollowUpAt) ticket.nextFollowUpAt = payload.nextFollowUpAt;
       // V209 expectedQuarter is the one exception to full-replace (TrackingUpdateRequest): absent/null KEEPS it,
       // "" clears it, anything else must be YYYY-Qn.
       if (payload?.expectedQuarter != null) {

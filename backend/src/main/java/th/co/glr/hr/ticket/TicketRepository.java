@@ -2893,22 +2893,21 @@ public class TicketRepository {
             new MapSqlParameterSource().addValue("q", expectedQuarter).addValue("id", ticketId));
     }
 
-    /** Slice 6.4: the deal's next follow-up date and nothing else (a call's or a visit's ตามครั้งถัดไป / ตามต่อ). Never
-     * {@link #updateTracking}, which rewrites every tracking column. */
+    /** Slice 6.4: the deal's next follow-up date and nothing else (a call's or a visit's ตามครั้งถัดไป / ตามต่อ). Also
+     * used by {@link #updateTracking}'s caller to set or clear the date, since updateTracking no longer writes it. */
     public void updateNextFollowUpAt(long ticketId, LocalDate nextFollowUpAt) {
         jdbc.update("UPDATE sales.ticket SET next_follow_up_at = :d, updated_at = now() WHERE ticket_id = :id",
             new MapSqlParameterSource().addValue("d", nextFollowUpAt).addValue("id", ticketId));
     }
 
     public void updateTracking(long ticketId, Integer winProbabilityOverride, String designerName,
-                               String ownerName, String buyerName, LocalDate nextFollowUpAt) {
+                               String ownerName, String buyerName) {
         jdbc.update("""
             UPDATE sales.ticket
                SET win_probability  = :winProbability,
                    designer_name    = :designerName,
                    owner_name       = :ownerName,
                    buyer_name       = :buyerName,
-                   next_follow_up_at = :nextFollowUpAt,
                    updated_at       = now()
              WHERE ticket_id = :ticketId
             """,
@@ -2917,7 +2916,6 @@ public class TicketRepository {
                 .addValue("designerName", designerName)
                 .addValue("ownerName", ownerName)
                 .addValue("buyerName", buyerName)
-                .addValue("nextFollowUpAt", nextFollowUpAt)
                 .addValue("ticketId", ticketId));
     }
 
