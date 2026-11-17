@@ -272,17 +272,30 @@ test.describe('stored IR coverage + split preview — ImportRequestService#cover
     expect(Array.isArray(ceo.splitPreview?.linesWithoutFactory), 'ceo gets the unplaced lines').toBe(true);
   });
 
+  /** Every deal id `role` can list, all pages (TicketService#list scopes sales to created_by OR keyed_by in SQL, so
+   * this set IS "owns or keyed" without reading keyedById off a row, which a summary may omit). */
+  async function allDealIdsOf(role) {
+    const ids = new Set();
+    for (let page = 0; ; page += 1) {
+      const response = await sessions[role].get(`/api/tickets?size=500&page=${page}`);
+      expect(response.status(), `${role} lists its deals (page ${page})`).toBe(200);
+      const body = await response.json();
+      (body.tickets ?? []).forEach((deal) => ids.add(Number(deal.id)));
+      if ((body.tickets ?? []).length === 0 || ids.size >= Number(body.total ?? 0)) return ids;
+    }
+  }
+
   test('the owning rep gets the preview on its own deal and is refused a foreign one', async () => {
-    const me = (await (await sessions.sales.get('/api/auth/me')).json()).user;
-    const own = (await dealsOf('sales')).find((deal) => Number(deal.createdById) === Number(me.id)
-      || Number(deal.keyedById) === Number(me.id));
+    // Fix round (review e2e risk): ownership comes from the server's own scope, never from createdById/keyedById on a
+    // row, so a deal the persona only KEYED can never be mistaken for a foreign one.
+    const ownIds = await allDealIdsOf('sales');
+    const own = (await dealsOf('sales'))[0];
     if (own) {
       const response = await sessions.sales.get(coveragePath(own.id));
       expect(response.status(), `sales on its own deal ${own.id}`).toBe(200);
       expect(Array.isArray((await response.json()).splitPreview?.factories), 'owner gets the split preview').toBe(true);
     }
-    const foreign = (await dealsOf('ceo')).find((deal) => Number(deal.createdById) !== Number(me.id)
-      && Number(deal.keyedById) !== Number(me.id));
+    const foreign = (await dealsOf('ceo')).find((deal) => !ownIds.has(Number(deal.id)));
     if (foreign) {
       expect((await sessions.sales.get(coveragePath(foreign.id))).status(), `sales on deal ${foreign.id}`).toBe(403);
     }
