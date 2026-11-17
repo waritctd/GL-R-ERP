@@ -78,3 +78,10 @@ export function formatDays(value) {
 export function formatDaysOrDash(value) {
   return value == null ? '-' : formatDays(value);
 }
+
+/** The two vacation pools' พ.ศ. years, derived from `carriedInFromYear` alone: LeaveBalanceDto ties the
+ * carry-in to exactly one usable year (carriedInFromYear + 1), so the clock is never consulted. */
+export function carryPoolYearsBe(carriedInFromYear) {
+  const carriedInYearBe = Number(carriedInFromYear) + 543;
+  return { carriedInYearBe, ownYearBe: carriedInYearBe + 1 };
+}
