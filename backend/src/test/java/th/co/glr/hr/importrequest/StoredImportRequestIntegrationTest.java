@@ -173,7 +173,7 @@ class StoredImportRequestIntegrationTest extends AbstractPostgresIntegrationTest
         when(sessions.requireUser(session)).thenReturn(owner);
         ImportRequestController controller = new ImportRequestController(service, sessions);
         assertThat(controller.listForTicket(forTicket, session)).containsOnlyKeys("importRequests");
-        return controller.coverage(forTicket, session);
+        return controller.coverage(forTicket, null, session);
     }
 
     private Object hasUncoveredFactoriesOverHttpShape(long forTicket) {
