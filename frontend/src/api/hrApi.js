@@ -1408,6 +1408,8 @@ export const api = {
     // (DealQuotationDtos.PromoteToDealResultDto). Idempotent server-side: a replay on an
     // already-promoted deal returns the same shape. See DealQuotationService#promoteToDeal.
     promoteToDeal: (id) => apiRequest(API_ROUTES.dealQuotations.promoteToDeal(id), { method: 'POST' }),
+    // Undo of the above; body `{ reason? }` (optional, <= 500 chars). Same `{ result }` shape; a replay answers 200.
+    undoConfirmOrder: (id, payload = {}) => apiRequest(API_ROUTES.dealQuotations.undoConfirmOrder(id), { method: 'POST', body: payload }),
     cancel: (id, payload = {}) => apiRequest(API_ROUTES.dealQuotations.cancel(id), { method: 'POST', body: payload }),
     // No request body: everything is rebuilt server-side from the same approved decision item.
     restoreRemovedItem: (id, pricingDecisionItemId) => apiRequest(

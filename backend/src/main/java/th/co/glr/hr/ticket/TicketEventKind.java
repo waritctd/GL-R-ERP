@@ -154,5 +154,8 @@ public final class TicketEventKind {
     /** Stage-10 procurement-source decision (V208): the rep's import/stock split for an order confirmed before the quotation carried it. */
     public static final String PROCUREMENT_SOURCE_DECIDED = "PROCUREMENT_SOURCE_DECIDED";
 
+    /** The rep took back an order confirmation (DealQuotationService#undoOrderConfirmation). */
+    public static final String ORDER_CONFIRMATION_UNDONE = "ORDER_CONFIRMATION_UNDONE";
+
     private TicketEventKind() {}
 }

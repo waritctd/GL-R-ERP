@@ -1,7 +1,7 @@
 // "เอกสารต่อจากใบเสนอราคานี้" — the document chain card on an APPROVED direct quotation (owner-approved design
 // 2026-11-17): ใบเสนอราคา → ยืนยันคำสั่งซื้อ → ใบแจ้งยอดเงินรับมัดจำ → ใบแจ้งหนี้ส่วนที่เหลือ. Every state is the server's
 // (GET /tickets/{id}/document-chain, the same summary the deal page's เงิน tab reads); quotationChain.js turns it into
-// steps. Every action goes through an existing endpoint behind an existing confirm: the page's ยืนยันคำสั่งซื้อ dialog,
+// steps. Every action goes through an existing endpoint behind an existing confirm: the page's ยืนยันคำสั่งซื้อ dialog (and its undo, ยกเลิกการยืนยันคำสั่งซื้อ, while nothing downstream exists),
 // the deposit notice's issue dialog below (the deal page's own DepositIssueSummary body), RemainingInvoiceDialog.
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -49,7 +49,7 @@ const mono = 'font-mono text-xs font-bold text-text';
  * waiting step is its title and who it waits on, a future step its title alone (the lock reason is desktop-only, to
  * keep the card near 160px above the document at 375px).
  */
-function Step({ index, step, last, railDone, onAction, actionBusy, download }) {
+function Step({ index, step, last, railDone, onAction, actionBusy, download, onUndo }) {
   const folded = step.state === 'done' || step.state === 'skipped';
   const muted = step.state === 'todo' || step.state === 'skipped';
   return (
@@ -101,6 +101,14 @@ function Step({ index, step, last, railDone, onAction, actionBusy, download }) {
             {step.actionLabel}
           </Button>
         ) : null}
+        {onUndo ? (
+          <Button
+            type="button" variant="text" onClick={onUndo} data-testid="quotation-chain-undo-confirm"
+            className="mt-1 text-xs font-bold mobile:mt-0"
+          >
+            ยกเลิกการยืนยันคำสั่งซื้อ
+          </Button>
+        ) : null}
         {download ? (
           <Button
             type="button" variant="secondary" size="sm" disabled={download.busy} onClick={download.onClick}
@@ -147,7 +155,7 @@ export function QuotationChainNotice({ view }) {
   );
 }
 
-export function QuotationDocumentChain({ quotation, chain, onConfirmOrder, confirmBusy = false, showToast }) {
+export function QuotationDocumentChain({ quotation, chain, onConfirmOrder, onUndoConfirm, confirmBusy = false, showToast }) {
   const queryClient = useQueryClient();
   const ticketId = quotation.ticketId;
   const [noticeDialogOpen, setNoticeDialogOpen] = useState(false);
@@ -181,6 +189,9 @@ export function QuotationDocumentChain({ quotation, chain, onConfirmOrder, confi
   const hasAction = steps.some((s) => s.action);
   const deposit = chain.deposit ?? {};
   const remaining = chain.remaining ?? {};
+  // Server's say-so (order.undoable: nothing downstream blocks), the viewer's right to confirm, and THIS quotation being the one confirmed.
+  const canUndo = Boolean(onUndoConfirm && chain.order?.undoable && chain.viewer?.mayConfirmOrder
+    && chain.order.confirmedFromQuotationId != null && Number(chain.order.confirmedFromQuotationId) === Number(quotation.id));
 
   async function download(key, fetchBlob, name) {
     setDownloading(key);
@@ -236,6 +247,7 @@ export function QuotationDocumentChain({ quotation, chain, onConfirmOrder, confi
               onAction={action?.onClick}
               actionBusy={action?.busy ?? false}
               download={step.download ? downloads[step.download] : null}
+              onUndo={canUndo && index === 1 ? onUndoConfirm : null}
             />
           );
         })}

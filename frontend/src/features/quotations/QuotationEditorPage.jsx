@@ -1836,6 +1836,9 @@ export function QuotationEditorPage({ user, showToast }) {
   const [cancelConfirmOpen, setCancelConfirmOpen] = useState(false);
   // "ยืนยันคำสั่งซื้อ" confirm dialog.
   const [promoteConfirmOpen, setPromoteConfirmOpen] = useState(false);
+  // "ยกเลิกการยืนยันคำสั่งซื้อ" dialog (opened from the chain card) and its optional reason.
+  const [undoOpen, setUndoOpen] = useState(false);
+  const [undoReason, setUndoReason] = useState('');
   const approveMutation = useMutation({
     mutationFn: (payload) => api.dealQuotations.approve(id, payload || {}),
     onSuccess: (res) => {
@@ -1914,6 +1917,34 @@ export function QuotationEditorPage({ user, showToast }) {
       }
       setPromoteConfirmOpen(false);
       showToast('error', error.message || 'ยืนยันคำสั่งซื้อไม่สำเร็จ');
+    },
+  });
+
+  // "ยกเลิกการยืนยันคำสั่งซื้อ": takes back a confirm pressed by mistake (DealQuotationService#undoOrderConfirmation).
+  // The server refuses (409, its own Thai message) once anything downstream exists; on success the deal is back at its
+  // quotation stage, so the same views the confirm refreshes are refreshed and the revise button reappears.
+  const undoMutation = useMutation({
+    mutationFn: (reason) => api.dealQuotations.undoConfirmOrder(id, reason ? { reason } : {}),
+    onSuccess: (res) => {
+      const dealId = res?.result?.ticketId ?? quotation?.ticketId;
+      queryClient.removeQueries({ queryKey: queryKeys.ticketDetail(dealId), exact: true });
+      queryClient.invalidateQueries({ queryKey: ['tickets'] });
+      queryClient.invalidateQueries({ queryKey: ['dealQuotations'] });
+      invalidateDealDocuments(queryClient, dealId);
+      quotationQuery.refetch();
+      promotionTicketQuery.refetch();
+      setUndoOpen(false);
+      setUndoReason('');
+      showToast('success', 'ยกเลิกการยืนยันคำสั่งซื้อแล้ว');
+    },
+    onError: (error) => {
+      if (error.status === 409) {
+        quotationQuery.refetch();
+        promotionTicketQuery.refetch();
+        invalidateDealDocuments(queryClient, quotation?.ticketId);
+      }
+      setUndoOpen(false);
+      showToast('error', error.message || 'ยกเลิกการยืนยันคำสั่งซื้อไม่สำเร็จ');
     },
   });
 
@@ -2302,6 +2333,7 @@ export function QuotationEditorPage({ user, showToast }) {
           quotation={quotation}
           chain={chainQuery.data}
           onConfirmOrder={() => setPromoteConfirmOpen(true)}
+          onUndoConfirm={() => setUndoOpen(true)}
           confirmBusy={promoteMutation.isPending}
           showToast={showToast}
         />
@@ -3417,8 +3449,45 @@ export function QuotationEditorPage({ user, showToast }) {
         </Modal>
       ) : null}
 
-      {/* Promotion is not reversible (nothing un-promotes a deal), so it is confirmed, and the
+      {/* ยืนยันคำสั่งซื้อ is confirmed first (it can be taken back only until a downstream document exists), and the
           dialog says exactly where the deal lands and what it carries over. */}
+      {undoOpen ? (
+        <Modal
+          title="ยกเลิกการยืนยันคำสั่งซื้อ"
+          onClose={() => setUndoOpen(false)}
+          testId="quotation-undo-confirm-dialog"
+          footer={(
+            <>
+              <Button variant="secondary" onClick={() => setUndoOpen(false)}>ปิด</Button>
+              <Button
+                variant="danger"
+                loading={undoMutation.isPending}
+                onClick={() => undoMutation.mutate(undoReason.trim())}
+                data-testid="quotation-undo-confirm-submit"
+              >
+                ยกเลิกการยืนยัน
+              </Button>
+            </>
+          )}
+        >
+          <p className="m-0">ใช้เมื่อกดยืนยันคำสั่งซื้อผิด ระบบจะ:</p>
+          <ul className="m-0 mt-2 grid list-disc gap-1 pl-5">
+            <li>ย้ายดีลกลับไปขั้นใบเสนอราคา และให้แก้ไขใบเสนอราคา {quotation?.number} ได้อีก</li>
+            <li>ลบใบแจ้งยอดเงินรับมัดจำที่ยังเป็นฉบับร่าง (ฉบับที่ออกเลขแล้วจะยกเลิกให้ไม่ได้)</li>
+            <li>ใบเสนอราคาฉบับอื่นที่ถูกยกเลิกอัตโนมัติตอนยืนยัน จะยังคงเป็นยกเลิกอยู่</li>
+            <li>ไม่มีการแจ้งเตือนถึงใคร แต่บันทึกไว้ในประวัติดีล</li>
+          </ul>
+          <div className="mt-3">
+            <FormField label="เหตุผล (ไม่บังคับ)" htmlFor="undo-confirm-reason">
+              <textarea
+                id="undo-confirm-reason" className="min-h-20" maxLength={500}
+                value={undoReason} onChange={(e) => setUndoReason(e.target.value)}
+              />
+            </FormField>
+          </div>
+        </Modal>
+      ) : null}
+
       {promoteConfirmOpen ? (
         <Modal
           title="ยืนยันคำสั่งซื้อ"

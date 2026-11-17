@@ -213,6 +213,7 @@
     "POST /api/deal-quotations/{id}/reject",
     "POST /api/deal-quotations/{id}/revisions",
     "POST /api/deal-quotations/{id}/submit",
+    "POST /api/deal-quotations/{id}/undo-confirm-order",
     "POST /api/deposit-notices/{docId}/issue",
     "POST /api/deposit-notices/{docId}/preview",
     "POST /api/designers",

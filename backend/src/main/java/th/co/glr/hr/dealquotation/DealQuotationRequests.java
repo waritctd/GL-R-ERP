@@ -779,6 +779,9 @@ public final class DealQuotationRequests {
 
     public record CancelRequest(@Size(max = 2000) String reason) {}
 
+    /** Optional body of {@code POST /deal-quotations/{id}/undo-confirm-order}. */
+    public record UndoOrderConfirmationRequest(@Size(max = 500) String reason) {}
+
     /** Customer outcome — mirrors {@code
      * CustomerQuotationRequests.RecordQuotationOutcomeRequest} field-for-field; kept as this
      * package's own record rather than reused across packages, matching this file's existing

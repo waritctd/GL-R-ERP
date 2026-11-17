@@ -239,3 +239,80 @@ describe('mock dealQuotations.promoteToDeal (GLA-136)', () => {
       .toEqual([expect.stringContaining(approved.number)]);
   });
 });
+
+// DealQuotationService#undoOrderConfirmation: "ยกเลิกการยืนยันคำสั่งซื้อ".
+describe('mock dealQuotations.undoConfirmOrder', () => {
+  const chainOf = async (ticketId) => (await api.documentChain.get(ticketId)).documentChain;
+
+  it('round trip: confirm -> undo -> revise allowed -> confirm again; the history records the undo', async () => {
+    const ghost = await quotationOnlyTicket();
+    const approved = await approvedQuotation(ghost);
+    await api.dealQuotations.promoteToDeal(approved.id);
+    expect((await chainOf(ghost)).order).toMatchObject({ confirmed: true, undoable: true, confirmedFromQuotationId: approved.id });
+
+    const { result } = await api.dealQuotations.undoConfirmOrder(approved.id, { reason: 'กดผิด' });
+    expect(result.ticketId).toBe(ghost);
+
+    const { ticket } = await api.tickets.get(ghost);
+    expect(ticket.summary.status).toBe('draft');
+    expect(ticket.summary.paymentStatus).toBeNull();
+    expect(ticket.events.some((e) => e.kind === 'DEAL_PROMOTED_FROM_QUOTATION')).toBe(false);
+    const undone = ticket.events.filter((e) => e.kind === 'ORDER_CONFIRMATION_UNDONE');
+    expect(undone).toHaveLength(1);
+    expect(undone[0].message).toContain('กดผิด');
+    const order = (await chainOf(ghost)).order;
+    expect(order).toMatchObject({ confirmed: false, undoable: false, confirmable: true });
+
+    // the quotation can be revised again, and the order confirmed again
+    const { quotation: revision } = await api.dealQuotations.createRevision(approved.id);
+    await api.dealQuotations.cancel(revision.id);
+    await api.dealQuotations.promoteToDeal(approved.id);
+    expect((await chainOf(ghost)).order.confirmed).toBe(true);
+  });
+
+  it('replay after an undo is a 200 that writes nothing', async () => {
+    const ghost = await quotationOnlyTicket();
+    const approved = await approvedQuotation(ghost);
+    await api.dealQuotations.promoteToDeal(approved.id);
+    await api.dealQuotations.undoConfirmOrder(approved.id);
+    await expect(api.dealQuotations.undoConfirmOrder(approved.id)).resolves.toBeTruthy();
+    const { ticket } = await api.tickets.get(ghost);
+    expect(ticket.events.filter((e) => e.kind === 'ORDER_CONFIRMATION_UNDONE')).toHaveLength(1);
+  });
+
+  it('409 when the order was never confirmed', async () => {
+    const ghost = await quotationOnlyTicket();
+    const approved = await approvedQuotation(ghost);
+    await expect(api.dealQuotations.undoConfirmOrder(approved.id)).rejects.toMatchObject({ status: 409 });
+  });
+
+  it('409 once a deposit notice is issued, and the confirmation stays', async () => {
+    const ghost = await quotationOnlyTicket();
+    const approved = await approvedQuotation(ghost);
+    await api.dealQuotations.promoteToDeal(approved.id);
+    const { depositNotice } = await api.depositNotices.createDraft(ghost, {});
+    await api.depositNotices.issue(depositNotice.id, { expectedUpdatedAt: depositNotice.updatedAt ?? null });
+    expect((await chainOf(ghost)).order.undoable).toBe(false);
+    await expect(api.dealQuotations.undoConfirmOrder(approved.id)).rejects.toMatchObject({ status: 409 });
+    expect((await chainOf(ghost)).order.confirmed).toBe(true);
+  });
+
+  it('a DRAFT deposit notice is deleted by the undo', async () => {
+    const ghost = await quotationOnlyTicket();
+    const approved = await approvedQuotation(ghost);
+    await api.dealQuotations.promoteToDeal(approved.id);
+    await api.depositNotices.createDraft(ghost, {});
+    await api.dealQuotations.undoConfirmOrder(approved.id);
+    const { depositNotices } = await api.depositNotices.listByTicket(ghost);
+    expect(depositNotices).toHaveLength(0);
+  });
+
+  it('403 for import, 404 for an unknown quotation', async () => {
+    const ghost = await quotationOnlyTicket();
+    const approved = await approvedQuotation(ghost);
+    await api.dealQuotations.promoteToDeal(approved.id);
+    await asRole('import');
+    await expect(api.dealQuotations.undoConfirmOrder(approved.id)).rejects.toMatchObject({ status: 403 });
+    await expect(api.dealQuotations.undoConfirmOrder(987654)).rejects.toMatchObject({ status: 404 });
+  });
+});

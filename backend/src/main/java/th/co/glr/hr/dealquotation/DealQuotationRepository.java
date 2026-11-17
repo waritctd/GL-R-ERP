@@ -465,6 +465,14 @@ public class DealQuotationRepository {
             """, Map.of("id", partyId));
     }
 
+    /** The reverse of {@link #markPartyAwarded}, for an undone order confirmation: AWARDED -> QUOTED. */
+    public int markPartyQuotedAgain(long partyId) {
+        return jdbc.update("""
+            UPDATE sales.deal_party SET status = 'QUOTED', updated_at = now()
+             WHERE party_id = :id AND status = 'AWARDED'
+            """, Map.of("id", partyId));
+    }
+
     /** ACTIVE -> QUOTED once the party's first document exists; every other status is left alone. */
     public int markPartyQuoted(long partyId) {
         return jdbc.update("""

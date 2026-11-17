@@ -1027,8 +1027,9 @@ public class TicketService {
     /**
      * While the payment track is at
      * CUSTOMER_CONFIRMED, a deposit policy the SYSTEM owns follows the deal's quotation. ไม่รับมัดจำ
-     * (0%) means NOT_REQUIRED; any deposit means REQUIRED. Called at the first confirmation only (the
-     * confirmed direct quotation can no longer be revised or replaced).
+     * (0%) means NOT_REQUIRED; any deposit means REQUIRED. Called at the first confirmation only (while the
+     * confirmation stands the confirmed direct quotation cannot be revised or replaced; an undo,
+     * {@code DealQuotationService#undoOrderConfirmation}, reverses a system flip and the next confirmation re-applies it).
      *
      * <p>A policy a person chose ({@link #waiveDeposit}: WAIVED, CREDIT_CUSTOMER, or a typed
      * NOT_REQUIRED) is never touched, and nothing moves once a deposit notice is out. Both are
@@ -3187,7 +3188,7 @@ public class TicketService {
         }
         tickets.updateSalesStage(s.id(), targetStage);
         tickets.addEvent(s.id(), actor.id(), actor.name(),
-            TicketEventKind.STAGE_CHANGED, s.salesStage(), targetStage, "อัตโนมัติจากขั้นตอนของดีล");
+            TicketEventKind.STAGE_CHANGED, s.salesStage(), targetStage, TicketRepository.AUTO_STAGE_NOTE);
     }
 
     @Transactional

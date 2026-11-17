@@ -2594,6 +2594,132 @@ public class TicketRepository {
             """, Map.of("id", ticketId));
     }
 
+    /** The note of every system-driven stage move ({@code TicketService#autoAdvanceStage}); the undo finds them by it. */
+    public static final String AUTO_STAGE_NOTE = "อัตโนมัติจากขั้นตอนของดีล";
+
+    // ── Undo of an order confirmation (DealQuotationService#undoOrderConfirmation) ──
+
+    /** The deal-level facts that stop an order confirmation being undone; see {@code DealQuotationService#undoRefusal}. */
+    public record UndoFacts(boolean bidOrSplit, boolean nonDraftDepositNotice, boolean paymentReceipt,
+                            boolean remainingInvoice, boolean importRequest, boolean deliveryRecord,
+                            boolean manualStockDecision) {}
+
+    /** One read of every downstream row an undo must not orphan. "Manual stock decision" = a STOCK_RESERVED or
+     * PROCUREMENT_SOURCE_DECIDED event after the (latest) promotion event, or the V208 latch; the confirmation's own
+     * cover of จากสต็อก lines writes neither. */
+    public UndoFacts undoConfirmationFacts(long ticketId) {
+        return jdbc.queryForObject("""
+            SELECT
+              EXISTS(SELECT 1 FROM sales.ticket_event WHERE ticket_id = :t
+                      AND kind IN ('BID_OUTCOME_RECORDED', 'DEAL_SPLIT_FROM_PARENT')) AS bid_or_split,
+              EXISTS(SELECT 1 FROM sales.deposit_notice WHERE ticket_id = :t AND status <> 'DRAFT') AS notice,
+              EXISTS(SELECT 1 FROM sales.payment_receipt WHERE ticket_id = :t) AS receipt,
+              EXISTS(SELECT 1 FROM sales.remaining_invoice WHERE ticket_id = :t) AS invoice,
+              EXISTS(SELECT 1 FROM sales.import_request WHERE ticket_id = :t) AS import_req,
+              EXISTS(SELECT 1 FROM sales.delivery_record WHERE ticket_id = :t) AS delivery,
+              (EXISTS(SELECT 1 FROM sales.ticket_event e WHERE e.ticket_id = :t
+                        AND e.kind IN ('STOCK_RESERVED', 'PROCUREMENT_SOURCE_DECIDED')
+                        AND e.event_id > COALESCE((SELECT MAX(event_id) FROM sales.ticket_event
+                                                    WHERE ticket_id = :t AND kind = 'DEAL_PROMOTED_FROM_QUOTATION'), 0))
+               OR EXISTS(SELECT 1 FROM sales.ticket WHERE ticket_id = :t
+                          AND procurement_source_decided_at IS NOT NULL)) AS manual_stock
+            """, Map.of("t", ticketId), (rs, n) -> new UndoFacts(rs.getBoolean("bid_or_split"), rs.getBoolean("notice"),
+                rs.getBoolean("receipt"), rs.getBoolean("invoice"), rs.getBoolean("import_req"),
+                rs.getBoolean("delivery"), rs.getBoolean("manual_stock")));
+    }
+
+    /** The confirmation's own event: who pressed it and when. */
+    public record PromotionEvent(long eventId, String actorName, Instant at) {}
+
+    public Optional<PromotionEvent> findPromotionEvent(long ticketId) {
+        return jdbc.query("""
+            SELECT event_id, actor_name, created_at FROM sales.ticket_event
+             WHERE ticket_id = :t AND kind = :kind ORDER BY event_id DESC LIMIT 1
+            """, Map.of("t", ticketId, "kind", TicketEventKind.DEAL_PROMOTED_FROM_QUOTATION),
+            (rs, n) -> new PromotionEvent(rs.getLong("event_id"), rs.getString("actor_name"),
+                rs.getTimestamp("created_at").toInstant())).stream().findFirst();
+    }
+
+    /** The `from` stage of the earliest automatic stage move written after {@code afterEventId}. */
+    public Optional<String> firstAutoStageFromAfter(long ticketId, long afterEventId) {
+        return jdbc.query("""
+            SELECT from_status FROM sales.ticket_event
+             WHERE ticket_id = :t AND kind = 'STAGE_CHANGED' AND message = :note AND event_id > :after
+             ORDER BY event_id LIMIT 1
+            """, Map.of("t", ticketId, "note", AUTO_STAGE_NOTE, "after", afterEventId),
+            (rs, n) -> rs.getString("from_status")).stream().findFirst();
+    }
+
+    /** When the deal last moved stage before {@code beforeEventId}: the best available `stage_updated_at` to restore. */
+    public Optional<Instant> latestStageChangeAtBefore(long ticketId, long beforeEventId) {
+        return jdbc.query("""
+            SELECT created_at FROM sales.ticket_event
+             WHERE ticket_id = :t AND kind = 'STAGE_CHANGED' AND event_id < :before ORDER BY event_id DESC LIMIT 1
+            """, Map.of("t", ticketId, "before", beforeEventId),
+            (rs, n) -> rs.getTimestamp("created_at").toInstant()).stream().findFirst();
+    }
+
+    /** A system POLICY_CHANGED written after the promotion, for this quotation (a person's waiver has another note). */
+    public boolean hasSystemPolicyChangeAfter(long ticketId, long afterEventId, String quotationNumber) {
+        return Boolean.TRUE.equals(jdbc.queryForObject("""
+            SELECT EXISTS(SELECT 1 FROM sales.ticket_event WHERE ticket_id = :t AND kind = 'POLICY_CHANGED'
+                           AND event_id > :after AND message LIKE :like)
+            """, Map.of("t", ticketId, "after", afterEventId, "like", "deposit_policy → %— ใบเสนอราคา " + quotationNumber + " %"),
+            Boolean.class));
+    }
+
+    /** Deletes the deal's DRAFT deposit notices and their items (no ON DELETE CASCADE); returns the notices deleted. */
+    public int deleteDraftDepositNotices(long ticketId) {
+        jdbc.update("""
+            DELETE FROM sales.deposit_notice_item WHERE deposit_notice_id IN
+              (SELECT deposit_notice_id FROM sales.deposit_notice WHERE ticket_id = :t AND status = 'DRAFT')
+            """, Map.of("t", ticketId));
+        return jdbc.update("DELETE FROM sales.deposit_notice WHERE ticket_id = :t AND status = 'DRAFT'", Map.of("t", ticketId));
+    }
+
+    public void deleteItems(long ticketId) {
+        jdbc.update("DELETE FROM sales.ticket_item WHERE ticket_id = :t", Map.of("t", ticketId));
+    }
+
+    /** The ticket half of an undo, a compare-and-set from quotation_issued (0 = lost a race). A null stage / stamp
+     * leaves that column alone; fulfilment is cleared only when it is FROM_STOCK. */
+    public int revertOrderConfirmation(long ticketId, String restoreStage, Instant restoreStageUpdatedAt) {
+        return jdbc.update("""
+            UPDATE sales.ticket
+               SET status = 'draft', payment_status = NULL,
+                   fulfillment_status = CASE WHEN fulfillment_status = 'FROM_STOCK' THEN NULL ELSE fulfillment_status END,
+                   sales_stage = COALESCE(:stage, sales_stage),
+                   stage_updated_at = COALESCE(:at, stage_updated_at),
+                   updated_at = now()
+             WHERE ticket_id = :t AND status = 'quotation_issued'
+            """, new MapSqlParameterSource().addValue("t", ticketId).addValue("stage", restoreStage)
+                .addValue("at", restoreStageUpdatedAt == null ? null : java.sql.Timestamp.from(restoreStageUpdatedAt),
+                    java.sql.Types.TIMESTAMP));
+    }
+
+    /** Deletes what the confirmation wrote: its promotion event and, after it, CUSTOMER_CONFIRMED, the automatic stage
+     * moves and the system POLICY_CHANGED for this quotation. The auto-cancel CANCELLED events stay. */
+    public void deleteConfirmationEvents(long ticketId, long promotionEventId, String quotationNumber) {
+        jdbc.update("""
+            DELETE FROM sales.ticket_event
+             WHERE ticket_id = :t
+               AND (event_id = :promo
+                    OR (event_id > :promo AND (kind = 'CUSTOMER_CONFIRMED'
+                        OR (kind = 'STAGE_CHANGED' AND message = :note)
+                        OR (kind = 'POLICY_CHANGED' AND message LIKE :like))))
+            """, new MapSqlParameterSource().addValue("t", ticketId).addValue("promo", promotionEventId)
+                .addValue("note", AUTO_STAGE_NOTE)
+                .addValue("like", "deposit_policy → %— ใบเสนอราคา " + quotationNumber + " %"));
+    }
+
+    /** An ORDER_CONFIRMATION_UNDONE event naming this quotation exists (the undo's idempotent replay). */
+    public boolean hasOrderConfirmationUndoneEvent(long ticketId, long quotationId) {
+        return Boolean.TRUE.equals(jdbc.queryForObject("""
+            SELECT EXISTS(SELECT 1 FROM sales.ticket_event WHERE ticket_id = :t AND kind = :kind
+                           AND related_document_type = 'QUOTATION' AND related_document_id = :q)
+            """, Map.of("t", ticketId, "kind", TicketEventKind.ORDER_CONFIRMATION_UNDONE, "q", quotationId), Boolean.class));
+    }
+
     /**
      * The quotation whose confirm-order made this deal an order: the one the deal's
      * DEAL_PROMOTED_FROM_QUOTATION event names (the same per-quotation fact {@link #ANSWERED_QUOTATION_SQL} reads).

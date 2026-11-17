@@ -4256,6 +4256,20 @@ function mockListChainStage(row, viewer) {
   return chainListStage(mockChainFacts(ticket), promoted, ticket.orderConfirmedQuotationId ?? null, row.id);
 }
 
+// Mirrors DealQuotationService#undoRefusal as far as this mock models the downstream documents: a non-draft deposit
+// notice, a payment, a remaining invoice, or a fulfilment step blocks the undo. Returns the Thai refusal or null.
+function mockUndoRefusal(ticket) {
+  if (mockDepositNotices.some((d) => d.ticketId === ticket.id && d.status !== 'DRAFT')) {
+    return 'ยกเลิกไม่ได้ — ออกใบแจ้งยอดเงินรับมัดจำแล้ว';
+  }
+  if (ticket.paymentStatus != null && ticket.paymentStatus !== 'CUSTOMER_CONFIRMED') {
+    return 'ยกเลิกไม่ได้ — มีการรับชำระเงินแล้ว';
+  }
+  if (mockRemainingInvoices.some((r) => r.ticketId === ticket.id)) return 'ยกเลิกไม่ได้ — ออกใบแจ้งหนี้ส่วนที่เหลือแล้ว';
+  if (ticket.fulfillmentStatus != null) return 'ยกเลิกไม่ได้ — ดีลดำเนินการต่อจากการยืนยันแล้ว';
+  return null;
+}
+
 // Mirrors DocumentChainService#forTicket's assembly (the gate is the caller's).
 function mockDocumentChainFor(ticket, user) {
   const f = mockChainFacts(ticket);
@@ -4290,6 +4304,7 @@ function mockDocumentChainFor(ticket, user) {
     order: {
       confirmed,
       confirmable: ticket.status === 'draft' && (ticket.lifecycle ?? 'ACTIVE') === 'ACTIVE' && !promoted,
+      undoable: promoted && mockUndoRefusal(ticket) == null,
       confirmedFromQuotationId: confirmedRow?.id ?? null,
       confirmedFromQuotationNumber: confirmedRow?.number ?? null,
       // account reads no ticket events (TicketService#requireViewAccess).
@@ -6833,6 +6848,11 @@ function submitDealQuotationRow(row, user) {
 // the bid outcome (its primary deal and every forked child). `fromStatus` is the event's from-status.
 function applyMockOrderConfirmation(ticket, row, user, fromStatus = ticket.status) {
   const now = new Date().toISOString();
+  // mock-internal: what the undo restores
+  ticket.preConfirmation = {
+    status: ticket.status, salesStage: ticket.salesStage, stageUpdatedAt: ticket.stageUpdatedAt,
+    depositPolicy: ticket.depositPolicy, items: ticket.items, quotationOnly: ticket.quotationOnly,
+  };
   ticket.quotationOnly = false;
   ticket.status = 'quotation_issued';
   ticket.updatedAt = now;
@@ -19563,6 +19583,48 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
         fail('ขั้นตอนการรับชำระเงินผ่านสถานะ CUSTOMER_CONFIRMED ไปแล้ว', 409);
       }
       applyMockOrderConfirmation(ticket, row, user, 'draft');
+      return result();
+    },
+
+    // "ยกเลิกการยืนยันคำสั่งซื้อ". Mirrors DealQuotationService#undoOrderConfirmation: 404 -> authz 403 -> origin 409 ->
+    // replay (an undo event naming this quotation and no promotion: 200, writes nothing) -> never confirmed 409 ->
+    // confirmed from another quotation 409 -> downstream refusal 409. Effects: the deal returns to its pre-confirmation
+    // state, a draft deposit notice is deleted, the promotion event is removed and ONE ORDER_CONFIRMATION_UNDONE added.
+    async undoConfirmOrder(id, payload = {}) {
+      const user = requireSession();
+      const row = mockDealQuotations.find((q) => q.id === Number(id));
+      if (!row) fail('ไม่พบใบเสนอราคานี้', 404);
+      const ticket = findTicketRaw(row.ticketId);
+      requireDealQuotationWriteAccess(ticket, user, 'DEAL_DIRECT');
+      if ((row.origin || 'DEAL_DIRECT') !== 'DEAL_DIRECT') {
+        fail('ยกเลิกการยืนยันคำสั่งซื้อได้เฉพาะใบเสนอราคา (ไม่ผ่านคำขอราคา) เท่านั้น', 409);
+      }
+      const result = () => delay({
+        result: { ticketId: ticket.id, ticket: buildTicketDetail(ticket).summary, quotation: buildDealQuotationDto(row) },
+      });
+      if (!mockConfirmedQuotationEvent(ticket)) {
+        if (ticket.undoneQuotationIds?.includes(row.id)) return result();
+        fail('ยังไม่ได้ยืนยันคำสั่งซื้อ จึงยกเลิกไม่ได้', 409);
+      }
+      if (ticket.orderConfirmedQuotationId !== row.id) {
+        fail('ยืนยันคำสั่งซื้อจากใบเสนอราคาฉบับอื่น จึงยกเลิกจากฉบับนี้ไม่ได้', 409);
+      }
+      const refusal = mockUndoRefusal(ticket);
+      if (refusal) fail(refusal, 409);
+      for (let i = mockDepositNotices.length - 1; i >= 0; i -= 1) {
+        if (mockDepositNotices[i].ticketId === ticket.id && mockDepositNotices[i].status === 'DRAFT') mockDepositNotices.splice(i, 1);
+      }
+      const before = ticket.preConfirmation ?? { status: 'draft', salesStage: ticket.salesStage };
+      const reason = String(payload?.reason ?? '').trim();
+      ticket.events = ticket.events.filter((e) => e.kind !== 'DEAL_PROMOTED_FROM_QUOTATION');
+      Object.assign(ticket, {
+        status: before.status, salesStage: before.salesStage, stageUpdatedAt: before.stageUpdatedAt,
+        depositPolicy: before.depositPolicy, items: before.items, quotationOnly: before.quotationOnly,
+        paymentStatus: null, orderConfirmedQuotationId: null, updatedAt: new Date().toISOString(),
+      });
+      ticket.undoneQuotationIds = [...(ticket.undoneQuotationIds ?? []), row.id];
+      pushEvent(ticket, user, 'ORDER_CONFIRMATION_UNDONE', 'quotation_issued', before.status,
+        `ยกเลิกการยืนยันคำสั่งซื้อจากใบเสนอราคา ${row.number}${reason ? ` — ${reason}` : ''}`);
       return result();
     },
 
