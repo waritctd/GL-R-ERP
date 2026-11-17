@@ -129,6 +129,11 @@ public class VisitService {
                 throw new ApiException(HttpStatus.BAD_REQUEST, "ตั้งวันตามต่อได้เมื่อบันทึกว่าเข้าพบแล้วเท่านั้น");
             }
             requireFollowUpTarget(request.ticketId());
+            // Fix round 2 (deadlock): take the deal's row lock BEFORE the visit is inserted. The insert's foreign key
+            // takes KEY SHARE on the deal row and recordVisitActivity then asks for FOR UPDATE on it, so two of these
+            // logs at once (a double submit) deadlocked. One order — deal, then visit — and the second request waits
+            // here, then finds the first in the de-duplication below. Held to the end of this transaction.
+            tickets.lockDealForFollowUp(request.ticketId());
             tickets.requireVisitFollowUpWritable(request.ticketId(), actor.id(), nextFollowUpAt, today(), actor);
         }
         if (done) {

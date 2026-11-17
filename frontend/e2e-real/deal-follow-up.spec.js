@@ -14,7 +14,9 @@ import { cancelDeal, createDeal, readDeal, setTracking } from './helpers/sales.j
 // directions are proven by the real-DB integration tests (DealPlannedVisitsScopeIntegrationTest,
 // DealActivityFollowUpIntegrationTest, VisitFollowUpIntegrationTest, VisitFollowUpTransactionIntegrationTest).
 //
-// Writes: one deal of this run (cancelled in afterAll) and its visits (PLANNED ones cancelled in afterAll).
+// Writes: one deal of this run (cancelled in afterAll) and its visits (PLANNED ones cancelled in afterAll). The one-step
+// log's DONE visit stays, on the cancelled deal: the API has no delete, and cancel is PLANNED-only (409 on DONE), as
+// visits.spec.js already notes for its own DONE visits.
 // ─────────────────────────────────────────────────────────────────────────────
 
 process.env.E2E_RUN_ID ||= `e2e-6b-${Date.now().toString(36)}`;

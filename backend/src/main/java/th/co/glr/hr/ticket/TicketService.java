@@ -2760,6 +2760,16 @@ public class TicketService {
         tickets.updateNextFollowUpAt(ticketId, nextFollowUpAt);
     }
 
+    /**
+     * Fix round 2: the deal's row lock ({@link TicketRepository#lockTicketForUpdate}) for a caller that is about to write
+     * a visit AND, through {@link #recordVisitActivity} / {@link #recordVisitFollowUp}, this deal's follow-up date — so
+     * every such transaction locks deal-then-visit, never the reverse (VisitService#create). Must run inside the
+     * caller's transaction; re-entrant with the lock those methods take.
+     */
+    public void lockDealForFollowUp(long ticketId) {
+        tickets.lockTicketForUpdate(ticketId);
+    }
+
     private static ApiException visitFollowUpNotOnDeal() {
         return new ApiException(HttpStatus.FORBIDDEN, "การเข้าพบนี้ไม่ได้บันทึกลงงาน จึงตั้งวันตามต่อของงานไม่ได้");
     }
