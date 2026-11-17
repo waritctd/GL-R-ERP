@@ -4,6 +4,7 @@ import React from 'react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from './App.jsx';
+import { getLastPage } from './features/whatsNew/lastPage.js';
 
 // Some deeper components (e.g. AppShell.jsx) rely on the classic JSX runtime's implicit global `React`, per
 // the same pattern used by features/dashboard/EmployeeDashboard.test.jsx.
@@ -353,5 +354,24 @@ describe('App / release lockdown (SELF_SERVICE_ONLY)', () => {
 
     expect(await screen.findByRole('heading', { name: 'งานของฉัน' })).toBeTruthy();
     expect(screen.queryByText(/เวลาทำงานและคำขอของคุณ/)).toBeNull();
+  });
+});
+
+describe('App / last page memory for the feedback form', () => {
+  it('forgets the previous page on logout, so the next user in the same tab starts blank', async () => {
+    const { api: mocked } = await import('./api/index.js');
+    mocked.auth.me.mockResolvedValue({ user: { employeeId: 41, name: 'พนักงานขาย ทดสอบ', role: 'sales', email: 'sales@glr.co' } });
+    mocked.auth.logout.mockResolvedValue({});
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <MemoryRouter initialEntries={['/leave']}><App /></MemoryRouter>
+      </QueryClientProvider>,
+    );
+    await waitFor(() => expect(getLastPage()).toBe('/leave'));
+
+    fireEvent.click(await screen.findByRole('button', { name: 'เมนูผู้ใช้' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: /ออกจากระบบ/ }));
+
+    await waitFor(() => expect(getLastPage()).toBeNull());
   });
 });

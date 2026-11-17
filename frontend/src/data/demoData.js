@@ -239,7 +239,7 @@ export function createDemoDatabase() {
     // Sales module users
     { id: 6, email: 'sales@glr.co.th', password: 'demo1234', name: 'คุณสมหมาย ขายดี', role: 'sales', employeeId: null, active: true, createdAt: iso(2025, 6, 1) },
     { id: 7, email: 'import@glr.co.th', password: 'demo1234', name: 'คุณนำเข้า พานิช', role: 'import', employeeId: null, active: true, createdAt: iso(2025, 6, 1) },
-    { id: 8, email: 'ceo@glr.co.th', password: 'demo1234', name: 'คุณวิชัย ธนาคาร', role: 'ceo', employeeId: employees[0].id, active: true, createdAt: iso(2025, 6, 1) },
+    { id: 8, email: 'ceo@glr.co.th', password: 'demo1234', name: 'คุณวิชัย ธนาคาร', role: 'ceo', employeeId: employees[0].id, active: true, createdAt: iso(2025, 6, 1), admin: true },
     // employees[0], the SAL ผู้จัดการฝ่าย (not employees[1], an ordinary พนักงานขาย whose managerId
     // is employees[0]): this persona needs direct reports, or api.leave.employees() returns only
     // themselves and /leave shows no "ลูกทีม" or "รอพิจารณา" tab (likewise on every team-scoped

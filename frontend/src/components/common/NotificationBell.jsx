@@ -23,6 +23,10 @@ const TYPE_ICON = {
   DEAL_QUOTATION_REJECTED:  { name: 'close',    color: '#dc2626' },
   // มีอะไรใหม่ release notice (ReleaseNoticePolicy.NOTIFICATION_TYPE). Brand indigo, = --color-primary.
   RELEASE_NOTE:             { name: 'sparkles', color: '#4f46e5' },
+  // แจ้งปัญหา / ขอฟีเจอร์ (FeedbackService). All three link to /whats-new?tab=feedback.
+  FEEDBACK_SUBMITTED:       { name: 'info',     color: '#f59e0b' },
+  FEEDBACK_DECIDED:         { name: 'check',    color: '#22c55e' },
+  FEEDBACK_UPDATED:         { name: 'sparkles', color: '#4f46e5' },
 };
 
 /** The bell's query, shared with the มีอะไรใหม่ bubble and page so all three read ONE cache entry (one poll). */

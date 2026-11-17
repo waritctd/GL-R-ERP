@@ -848,6 +848,14 @@ export const api = {
     publishWithEmail: (payload) => apiRequest(API_ROUTES.releaseNotes.publishWithEmail, { method: 'POST', body: payload }),
     email: (payload) => apiRequest(API_ROUTES.releaseNotes.email, { method: 'POST', body: payload }),
   },
+  // แจ้งปัญหา / ขอฟีเจอร์. decide payload { decision: 'ACCEPT'|'DENY', eta?, reason? }; update { status?, eta? }.
+  feedback: {
+    submit: (payload) => apiRequest(API_ROUTES.feedback.submit, { method: 'POST', body: payload }),
+    listMine: () => apiRequest(API_ROUTES.feedback.mine),
+    listAll: () => apiRequest(API_ROUTES.feedback.list),
+    decide: (id, payload) => apiRequest(API_ROUTES.feedback.decision(id), { method: 'POST', body: payload }),
+    update: (id, payload) => apiRequest(API_ROUTES.feedback.detail(id), { method: 'PATCH', body: payload }),
+  },
   commissions: {
     list: (params) => apiRequest(withQuery(API_ROUTES.commissions.list, params)),
     // sales_manager/ceo รออนุมัติ view: -> { commissions: [PendingCommissionDto] }.
