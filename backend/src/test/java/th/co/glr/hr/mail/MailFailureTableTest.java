@@ -72,8 +72,47 @@ class MailFailureTableTest {
             new org.springframework.mail.MailSendException(Map.of(new Object(),
                 new MessagingException("IO during DATA", new SocketTimeoutException("Read timed out"))))), UNKNOWN));
 
-        table.forEach((name, row) -> assertThat(MailFailures.certainlyNotAccepted((Throwable) row[0]))
-            .as(name).isEqualTo(row[1]));
+        // Round 4: FAILED needs positive proof.
+        table.put("Resend 409 concurrent idempotent request", row(resendHttp(409), UNKNOWN));
+        table.put("Resend 409 invalid idempotent request", row(new MailSendException("Resend send failed (status=409)",
+            new ResendException(409, "{\"name\":\"invalid_idempotent_request\",\"message\":\"x\"}")), UNKNOWN));
+        table.put("Resend 408 request timeout", row(resendHttp(408), UNKNOWN));
+        table.put("Resend 400", row(resendHttp(400), FAILED));
+        table.put("Resend 404", row(resendHttp(404), FAILED));
+        table.put("Resend TLS peer not verified (handshake phase)",
+            row(resendIo(new javax.net.ssl.SSLPeerUnverifiedException("Hostname not verified")), FAILED));
+        // OkHttp retries a failed call by itself and throws the LAST failure with the earlier ones attached
+        // (Util.withSuppressed). The earlier one may be a request that was written and processed, so whatever the
+        // last failure looks like, the result is unknowable.
+        table.put("OkHttp retry: stale connection, then connection refused",
+            row(okhttpRetryThenConnectFails(new ConnectException("Failed to connect to api.example")), UNKNOWN));
+        table.put("OkHttp retry: stale connection, then DNS failure",
+            row(okhttpRetryThenConnectFails(new UnknownHostException("api.example")), UNKNOWN));
+        table.put("OkHttp retry: stale connection, then TLS handshake failure",
+            row(okhttpRetryThenConnectFails(new SSLHandshakeException("handshake")), UNKNOWN));
+        table.put("OkHttp retry: stale connection, then connect timeout",
+            row(okhttpRetryThenConnectFails(connectTimeout()), UNKNOWN));
+        table.put("OkHttp retry: stale connection, then TLS peer not verified", row(okhttpRetryThenConnectFails(
+            new javax.net.ssl.SSLPeerUnverifiedException("Hostname not verified")), UNKNOWN));
+        IOException refusedDeepInTheChain = new ConnectException("Failed to connect");
+        refusedDeepInTheChain.addSuppressed(new IOException("earlier attempt"));
+        table.put("An earlier failure attached deeper in the chain", row(new MailSendException("wrapped",
+            new IllegalStateException("middle", refusedDeepInTheChain)), UNKNOWN));
+        IOException earlierBelowARefusal = new IOException("socket closed");
+        earlierBelowARefusal.addSuppressed(new IOException("earlier attempt"));
+        table.put("A refusal whose own cause carries an earlier failure", row(new MailSendException("x",
+            new MailAuthenticationException("535", earlierBelowARefusal)), UNKNOWN));
+        Throwable smtpWithEarlier = smtpConnect(new ConnectException("Connection refused"));
+        smtpWithEarlier.addSuppressed(new IOException("earlier"));
+        table.put("SMTP refusal with an earlier failure attached", row(smtpWithEarlier, UNKNOWN));
+
+        java.util.List<String> misclassified = new java.util.ArrayList<>();
+        table.forEach((name, row) -> {
+            if (MailFailures.certainlyNotAccepted((Throwable) row[0]) != (boolean) row[1]) {
+                misclassified.add(name + " (expected " + ((boolean) row[1] ? "FAILED" : "UNKNOWN") + ")");
+            }
+        });
+        assertThat(misclassified).as("rows classified wrongly").isEmpty();
     }
 
     // ── The same distinctions on REAL sockets, so the connect-vs-read rule is not a guess about stack shapes ──────
@@ -147,6 +186,14 @@ class MailFailureTableTest {
 
     private static Throwable resendIo(IOException io) {
         return new RuntimeException(io);
+    }
+
+    /** OkHttp 4.12 RetryAndFollowUpInterceptor: attempt 1 fails on a stale pooled connection after the request was
+     * written; the retry's connect fails; the thrown exception is the connect failure with attempt 1's failure
+     * attached. The Resend SDK wraps it in RuntimeException(IOException). (Adversarial review round 4.) */
+    private static Throwable okhttpRetryThenConnectFails(IOException connectFailure) {
+        connectFailure.addSuppressed(new IOException("unexpected end of stream on https://api.example/..."));
+        return new RuntimeException(connectFailure);
     }
 
     private static Throwable smtpConnect(IOException socketError) {

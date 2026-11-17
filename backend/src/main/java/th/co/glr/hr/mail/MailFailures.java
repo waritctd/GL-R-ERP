@@ -25,15 +25,21 @@ import org.springframework.mail.MailPreparationException;
  * in its own {@code MailSendException}):
  * <ul>
  *   <li>{@link MailNotDeliveredException}: the active Mailer does not deliver, nothing was attempted;</li>
- *   <li>Resend: a {@link ResendException} carrying an HTTP status other than 500, 502 and 504 — the API answered
- *       with an error (any 4xx including 429 after the retries, or 503); the SDK raises it only from a response it
- *       received. 500/502/504 are unknowable: an edge error can follow an accepted mail;</li>
+ *   <li>Resend: a {@link ResendException} carrying an HTTP status other than 408, 409, 500, 502 and 504 — the API
+ *       answered with an error (any other 4xx including 429 after the retries, or 503); the SDK raises it only from a
+ *       response it received. 500/502/504 are unknowable (an edge error can follow an accepted mail), and so are 409
+ *       (Idempotency-Key in progress or already used) and 408;</li>
  *   <li>never connected: {@link ConnectException}, {@link NoRouteToHostException}, {@link UnknownHostException},
  *       a connect-phase {@link SocketTimeoutException}, Angus' MailConnectException (both transports);</li>
  *   <li>TLS failed during the handshake, before any request was written;</li>
  *   <li>SMTP: {@link MailAuthenticationException} (refused at login), {@link MailPreparationException} (the message
  *       was never built), {@code jakarta.mail.SendFailedException} (the server refused the envelope or recipients).</li>
  * </ul>
+ * <p>None of this counts when any exception in the chain carries attached earlier failures (see
+ * {@link #certainlyNotAccepted}). OkHttp's own silent retry cannot be switched off from here: resend-java 4.13.0
+ * builds its {@code OkHttpClient} inside {@code com.resend.core.net.impl.HttpClient} with no way to pass one in
+ * (verified by disassembly), so the attached-failure rule is what covers it.
+ *
  * <p><b>Unknowable</b>: everything else — in particular the Resend SDK's bare {@code RuntimeException} around an OkHttp
  * {@code IOException} (read timeout, connection reset, {@code InterruptedIOException} on a shutdown interrupt), a
  * {@code ResendException} without a status or with 500/502/504, an SMTP {@code MessagingException} or socket error during DATA, and any
@@ -44,20 +50,32 @@ public final class MailFailures {
     private MailFailures() {
     }
 
+    /**
+     * Conservative by construction (round 4 ruling): FAILED needs positive proof, everything else is unknowable.
+     * <ol>
+     *   <li>If ANY exception in the chain carries attached earlier failures ({@link Throwable#getSuppressed()}), the
+     *       answer is unknowable, whatever the last failure looks like. OkHttp retries a failed call by itself — also
+     *       a POST whose request was already written and possibly processed — and throws the LAST failure with the
+     *       earlier ones attached. A connect failure on the retry proves nothing about the first try.</li>
+     *   <li>Only then does a recognised refusal anywhere in the chain prove "not accepted".</li>
+     * </ol>
+     */
     public static boolean certainlyNotAccepted(Throwable failure) {
         Deque<Throwable> pending = new ArrayDeque<>();
         Set<Throwable> seen = Collections.newSetFromMap(new IdentityHashMap<>());
         if (failure != null) {
             pending.add(failure);
         }
+        boolean refusal = false;
         while (!pending.isEmpty()) {
             Throwable current = pending.poll();
             if (!seen.add(current)) {
                 continue;
             }
-            if (isRefusal(current)) {
-                return true;
+            if (current.getSuppressed().length > 0) {
+                return false;
             }
+            refusal |= isRefusal(current);
             if (current.getCause() != null) {
                 pending.add(current.getCause());
             }
@@ -65,7 +83,7 @@ public final class MailFailures {
                 Collections.addAll(pending, springSend.getMessageExceptions());
             }
         }
-        return false;
+        return refusal;
     }
 
     private static boolean isRefusal(Throwable failure) {
@@ -82,10 +100,12 @@ public final class MailFailures {
             || failure instanceof jakarta.mail.SendFailedException;
     }
 
-    /** An HTTP error answer refuses the mail, EXCEPT 500, 502 and 504: a gateway or edge error can follow a mail the
-     * backend already accepted (round 3 ruling). Every 4xx (401, 403, 422, 429 after the retries …) and 503 refuse. */
+    /** An HTTP error answer refuses the mail, EXCEPT: 500, 502 and 504 (a gateway or edge error can follow a mail
+     * the backend already accepted, round 3); 409 (with an Idempotency-Key, "a request with this key is in progress
+     * or was already used": the first copy may be delivered, round 4); and 408 (the server gave up waiting, round 4).
+     * Every other 4xx (400, 401, 403, 404, 422, 429 after the retries …) and 503 refuse. */
     private static boolean isRefusingStatus(Integer status) {
-        return status != null && status != 500 && status != 502 && status != 504;
+        return status != null && status != 408 && status != 409 && status != 500 && status != 502 && status != 504;
     }
 
     /**
