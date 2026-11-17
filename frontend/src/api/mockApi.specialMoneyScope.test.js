@@ -142,8 +142,8 @@ describe('mockApi specialMoney — confidential-to-self scoping (2026-08-10 ruli
         const codes = employees.map((option) => option.employeeCode);
         expect(codes).toEqual([...codes].sort());
 
-        // Mirrors the repository's `WHERE e.is_active = TRUE` -- resigned employees never appear,
-        // even to hr/ceo's includeAll roster.
+        // Mirrors the repository's `WHERE e.is_active = TRUE` -- resigned employees never appear, even to hr/ceo's
+        // includeAll roster.
         INACTIVE_EMPLOYEE_IDS.forEach((inactiveId) => {
           expect(employees.some((option) => option.employeeId === inactiveId)).toBe(false);
         });
@@ -167,8 +167,8 @@ describe('mockApi specialMoney — confidential-to-self scoping (2026-08-10 ruli
       const { employees } = await api.specialMoney.employees();
       const createdOption = employees.find((option) => option.employeeId === created.id);
       expect(createdOption).toBeDefined();
-      // The new hire has the HIGHEST code of anyone in the roster, so a correctly sorted result
-      // must place it LAST -- not first, which is where db.employees now literally has it.
+      // The new hire has the HIGHEST code of anyone in the roster, so a correctly sorted result must place it LAST
+      // -- not first, which is where db.employees now literally has it.
       expect(employees[employees.length - 1].employeeId).toBe(created.id);
 
       const codes = employees.map((option) => option.employeeCode);
@@ -205,9 +205,8 @@ describe('mockApi specialMoney — confidential-to-self scoping (2026-08-10 ruli
       await loginManager();
       const { requests } = await api.specialMoney.list(WIDE_WINDOW);
 
-      // Own rows only -- not "empty". Without this positive assertion, a bug that scoped the
-      // manager out of EVERYTHING (not just their report) would pass the `every()` check below
-      // vacuously.
+      // Own rows only -- not "empty". Without this positive assertion, a bug that scoped the manager out of
+      // EVERYTHING (not just their report) would pass the `every()` check below vacuously.
       expect(requests.some((request) => request.id === MANAGER_OWN_REQUEST_ID)).toBe(true);
       expect(requests.every((request) => request.employeeId === MANAGER_EMPLOYEE_ID)).toBe(true);
       expect(requests.some((request) => request.id === SEEDED_REQUEST_ID)).toBe(false);
@@ -316,8 +315,8 @@ describe('mockApi specialMoney — confidential-to-self scoping (2026-08-10 ruli
     });
   });
 
-  // --- approve()/reject(): sections 2, 5, 6, 7 (CEO-only role gate, not a scope gate) -------------
-  // Must run before the cancel() section below, while request id 1 is still SUBMITTED.
+  // approve()/reject(): sections 2, 5, 6, 7 (CEO-only role gate, not a scope gate) ------------- Must run before
+  // the cancel() section below, while request id 1 is still SUBMITTED.
   describe('approve() / reject() — CEO only, no manager/hr/self exception', () => {
     it('a ฝ่าย manager cannot approve, not even their own in-division report\'s request', async () => {
       await loginManager();
@@ -368,8 +367,8 @@ describe('mockApi specialMoney — confidential-to-self scoping (2026-08-10 ruli
       });
 
       await loginCeo();
-      // Asserted verbatim against SpecialMoneyService.requireEvidence's message:
-      //   "คำขอประเภท " + type.thaiLabel() + " ต้องแนบเอกสารหลักฐานก่อนจึงจะอนุมัติได้"
+      // Asserted verbatim against SpecialMoneyService.requireEvidence's message: "คำขอประเภท " + type.thaiLabel() +
+      // " ต้องแนบเอกสารหลักฐานก่อนจึงจะอนุมัติได้"
       await expect(api.specialMoney.approve(created.id, {}))
         .rejects.toThrow('คำขอประเภท เงินช่วยเหลืองานศพ ต้องแนบเอกสารหลักฐานก่อนจึงจะอนุมัติได้');
 
@@ -405,9 +404,9 @@ describe('mockApi specialMoney — confidential-to-self scoping (2026-08-10 ruli
   // own fresh row: the guard mutates the row to APPROVED on success, and a shared row would let one
   // test's approval hide the next test's guard check.
   describe('approve() — cap-override-reason guard', () => {
-    // One day as a domestic driver: Java's eligibleAmount is rate_driver (฿400, V66) x 1 day, so
-    // requesting exactly ฿400 keeps every case below one Java would decide the same way. (A ฿500
-    // request would be over the cap, and Java would refuse even "approve exactly what was asked".)
+    // One day as a domestic driver: Java's eligibleAmount is rate_driver (฿400, V66) x 1 day, so requesting
+    // exactly ฿400 keeps every case below one Java would decide the same way. (A ฿500 request would be over the
+    // cap, and Java would refuse even "approve exactly what was asked".)
     async function freshTravelRequest(requestedAmount = 400) {
       await loginReport();
       const { request } = await api.specialMoney.create({
@@ -483,11 +482,9 @@ describe('mockApi specialMoney — confidential-to-self scoping (2026-08-10 ruli
     });
   });
 
-  // --- legacy on-behalf filer (row 13): mirrors the Java IT's
-  // aLegacyOnBehalfFilerCanNoLongerCancelOrAttachToTheRow, exercised through the seed instead of a
-  // raw-SQL UPDATE (see the header comment). Must run LAST -- the positive-control case
-  // terminally mutates request id 13 to CANCELLED, same reason the id-1 cancel() block above is
-  // last in its own section.
+  // legacy on-behalf filer (row 13): mirrors the Java IT's
+  // aLegacyOnBehalfFilerCanNoLongerCancelOrAttachToTheRow, exercised through the seed instead of a raw-SQL
+  // UPDATE (see the header comment).
   describe('legacy on-behalf filer (row 13, requestedById !== employeeId)', () => {
     it('the recorded filer cannot see the row in their own list()', async () => {
       await loginManager();
@@ -513,8 +510,8 @@ describe('mockApi specialMoney — confidential-to-self scoping (2026-08-10 ruli
         .rejects.toThrow('ไม่มีสิทธิ์เข้าถึงรายการนี้');
     });
 
-    // View-all is a READ grant only. hr/ceo can list this row, but cancel/attach are the owner's
-    // alone (SpecialMoneyService.cancel()/requireCanAttach() have no view-all branch).
+    // View-all is a READ grant only. hr/ceo can list this row, but cancel/attach are the owner's alone
+    // (SpecialMoneyService.cancel()/requireCanAttach() have no view-all branch).
     it('hr and ceo, who can read the row, still cannot attach evidence to it or cancel it', async () => {
       for (const login of [loginHr, loginCeo]) {
         await login();

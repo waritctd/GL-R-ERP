@@ -17,35 +17,9 @@ import org.springframework.security.web.authentication.WebAuthenticationDetailsS
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
-/**
- * Turns the session's principal into the request's authentication — after first bringing that
- * principal up to date with the employee row it stands for.
- *
- * <p><b>The re-check</b> (owner ruling 2026-10-06, alongside "a session never expires" — sales
- * feedback #8). This filter used to trust whatever {@link UserPrincipal} the session carried,
- * however long ago it was put there. That was tolerable only because an idle session died after
- * 30 minutes. With no idle timeout, a signed-in session is checked against the database on every
- * request:
- *
- * <ul>
- *   <li>the account is gone or no longer active → the session is ENDED server-side and the
- *       request goes on unauthenticated (401 from {@code SecurityConfig}'s entry point). Ended,
- *       not merely refused: re-activating the account later does not revive an old cookie;</li>
- *   <li>the account has changed — moved to another ฝ่าย, flagged must-change-password, renamed —
- *       → the session's principal is replaced with the current one, so the role this request runs
- *       with, the one every controller reads back out of the session
- *       ({@link SessionContext#requireUser}), and the one {@link MustChangePasswordFilter} reads
- *       right after this filter are all today's;</li>
- *   <li>nothing has changed → the session is left untouched (no write).</li>
- * </ul>
- *
- * <p>Only a session carrying a sign-in record is re-checked — see
- * {@link SessionContext#SESSION_SIGNED_IN_AT_KEY} for why one without it (a test's planted
- * principal; never a production session) is trusted as before.
- *
- * <p>A lookup that fails is an exception, not a verdict: it propagates and the session is left
- * alone. See {@link SessionAccountResolver#current}.
- */
+/** Turns the session's principal into the request's authentication — after first bringing that principal up to
+ * date with the employee row it stands for. The re-check (owner ruling 2026-10-06, alongside "a session never
+ * expires" — sales feedback #8). */
 @Component
 public class SessionSecurityFilter extends OncePerRequestFilter {
 

@@ -17,8 +17,8 @@ import th.co.glr.hr.dealquotation.WastageCalculator.Result;
  */
 class WastageCalculatorTest {
 
-    /** {@code sqmPerPiece} derived from a target piecesPerSqm so the roundtrip
-     * {@code round(1/sqmPerPiece, 2)} lands back on exactly that figure. */
+    /** sqmPerPiece derived from a target piecesPerSqm so the roundtrip round(1/sqmPerPiece, 2) lands back on
+     * exactly that figure. */
     private static BigDecimal sqmPerPieceFor(String piecesPerSqm) {
         return BigDecimal.ONE.divide(new BigDecimal(piecesPerSqm), 10, RoundingMode.HALF_UP);
     }
@@ -210,10 +210,9 @@ class WastageCalculatorTest {
     void subtotalVatGrandTotal_roundToTwoDecimals() {
         BigDecimal subtotal = WastageCalculator.subtotal(List.of(
             new BigDecimal("100.00"), new BigDecimal("50.005"), new BigDecimal("0.005")));
-        // 100.00 + 50.005 + 0.005 = 150.01 exactly, then rounded (already 2dp after HALF_UP on
-        // the raw sum) -- values already rounded per-line in practice, but subtotal() itself
-        // also rounds its own sum for callers (e.g. calculate-line preview) that pass unrounded
-        // figures.
+        // 100.00 + 50.005 + 0.005 = 150.01 exactly, then rounded (already 2dp after HALF_UP on the raw sum) -- values
+        // already rounded per-line in practice, but subtotal() itself also rounds its own sum for callers (e.g.
+        // calculate-line preview) that pass unrounded figures.
         assertThat(subtotal).isEqualByComparingTo("150.01");
 
         BigDecimal vat = WastageCalculator.vat(subtotal);
@@ -265,8 +264,7 @@ class WastageCalculatorTest {
             .isInstanceOf(ArithmeticException.class);
     }
 
-    // ── H4 sanity bound: reject an sqmPerPiece outside [0.001, 10] rather than silently pricing
-    // off a unit mistake. ──────────────────────────────────────────────────────────────────────
+    // H4 sanity bound: reject an sqmPerPiece outside [0.001, 10] rather than silently pricing off a unit mistake.
 
     @Test
     void sqmPerPiece_tooSmall_rejectedWithThaiMessage() {
@@ -279,9 +277,9 @@ class WastageCalculatorTest {
 
     @Test
     void sqmPerPiece_tooLarge_rejectedWithThaiMessage() {
-        // The sanity bound doesn't care how an implausible figure was arrived at -- 72 sqm/piece
-        // is refused whether it came from a mislabeled unit, a bad catalog row, or anything else
-        // that resolved sqmPerPiece; it refuses the RESULT, not any particular source of it.
+        // The sanity bound doesn't care how an implausible figure was arrived at -- 72 sqm/piece is refused whether it
+        // came from a mislabeled unit, a bad catalog row, or anything else that resolved sqmPerPiece; it refuses the
+        // RESULT, not any particular source of it.
         assertThatThrownBy(() -> WastageCalculator.calculate(new Input(
             new BigDecimal("72"), WastageCalculator.QUANTITY_MODE_AREA, new BigDecimal("10"), null,
             WastageCalculator.WASTAGE_MODE_NONE, null, null, BigDecimal.TEN, null)))
@@ -342,12 +340,7 @@ class WastageCalculatorTest {
             new BigDecimal("790"), new BigDecimal("0.72"))).isEqualByComparingTo("531.16");
     }
 
-    /**
-     * The ROUNDING ORDER, pinned separately from the four figures above so a regression names its
-     * own cause. Rounding the ตร.ม./แผ่น reciprocal to 2dp FIRST is what makes QN6900648 come out
-     * at 1,210.25: dividing by the unrounded 1.3888… gives 1,211.21 instead — 96 satang OVER the
-     * printed figure, i.e. this rounding is worth real money on a line, not a cosmetic digit.
-     */
+    /** The ROUNDING ORDER, pinned separately from the four figures above so a regression names its own cause. */
     @Test
     void netPerPieceFromSpecialSqm_dividesByThe2dpReciprocal_notTheExactOne() {
         BigDecimal exact = new BigDecimal("1800").divide(new BigDecimal("1.07"), 10, java.math.RoundingMode.HALF_UP)
@@ -358,8 +351,8 @@ class WastageCalculatorTest {
             new BigDecimal("1800"), new BigDecimal("0.72"))).isEqualByComparingTo("1210.25");
     }
 
-    /** ...and the VAT-stripped figure must NOT be rounded to 2dp before the division — a third
-     * rounding there costs QN6900648 one satang (1,210.24 against the printed 1,210.25). */
+    /** ...and the VAT-stripped figure must NOT be rounded to 2dp before the division — a third rounding there costs
+     * QN6900648 one satang (1,210.24 against the printed 1,210.25). */
     @Test
     void netPerPieceFromSpecialSqm_doesNotRoundTheVatStrippedFigureFirst() {
         BigDecimal roundedFirst = new BigDecimal("1800")
@@ -384,8 +377,8 @@ class WastageCalculatorTest {
             .isInstanceOf(IllegalArgumentException.class);
     }
 
-    /** The reciprocal is a DIVISOR in the money math now, so its 2dp value is pinned in its own
-     * right — these are the very figures the printed sub-line carries ("ตร.ม.ๆละ 2.78 แผ่น"). */
+    /** The reciprocal is a DIVISOR in the money math now, so its 2dp value is pinned in its own right — these are
+     * the very figures the printed sub-line carries ("ตร.ม.ๆละ 2.78 แผ่น"). */
     @Test
     void piecesPerSqm_roundsTheReciprocalTo2dp() {
         assertThat(WastageCalculator.piecesPerSqm(new BigDecimal("0.36"))).isEqualByComparingTo("2.78");
@@ -445,8 +438,8 @@ class WastageCalculatorTest {
         assertThat(qty).isEqualByComparingTo("71.64");
         assertThat(qty.scale()).isEqualTo(2);
         assertThat(qty.multiply(new BigDecimal("64")).setScale(2, RoundingMode.HALF_UP)).isEqualByComparingTo("4584.96");
-        // The trap, stated: pricing the unrounded box area gives a figure that disagrees with the
-        // printed Qty × Unit price by 0.31.
+        // The trap, stated: pricing the unrounded box area gives a figure that disagrees with the printed Qty × Unit
+        // price by 0.31.
         assertThat(new BigDecimal("120").multiply(new BigDecimal("0.59696")).multiply(new BigDecimal("64"))
             .setScale(2, RoundingMode.HALF_UP)).isEqualByComparingTo("4584.65");
     }
@@ -472,13 +465,13 @@ class WastageCalculatorTest {
         assertThat(WastageCalculator.sqmQuantityFromPieces(0, new BigDecimal("0.36"))).isEqualByComparingTo("0.00");
     }
 
-    /** Multiplies the RAW sqmPerPiece, not the 2dp {@code piecesPerSqm} reciprocal — a genuinely
-     * different figure on a value that does not round-trip evenly, same discipline as
-     * {@link WastageCalculator#piecesPerSqm}'s own Javadoc warns about. */
+    /** Multiplies the RAW sqmPerPiece, not the 2dp piecesPerSqm reciprocal — a genuinely different figure on a
+     * value that does not round-trip evenly, same discipline as WastageCalculator#piecesPerSqm's own Javadoc warns
+     * about. */
     @Test
     void sqmQuantityFromPieces_multipliesRawSqmPerPiece_notThe2dpReciprocal() {
-        // sqmPerPiece = 1/2.78 = 0.359712... — piecesPerSqm(sqmPerPiece) rounds to 0.36, a
-        // DIFFERENT number from the raw value this method must actually multiply.
+        // sqmPerPiece = 1/2.78 = 0.359712... — piecesPerSqm(sqmPerPiece) rounds to 0.36, a DIFFERENT number from the
+        // raw value this method must actually multiply.
         BigDecimal sqmPerPiece = BigDecimal.ONE.divide(new BigDecimal("2.78"), 10, RoundingMode.HALF_UP);
         BigDecimal viaRaw = WastageCalculator.sqmQuantityFromPieces(1000, sqmPerPiece);
         BigDecimal viaRounded = new BigDecimal("1000").multiply(new BigDecimal("0.36")).setScale(2, RoundingMode.HALF_UP);
@@ -509,10 +502,9 @@ class WastageCalculatorTest {
 
     // ── "Sell loose pieces" ─────────────────────────────────
 
-    /** The 9-arg legacy {@code Input} constructor (every test above this section) defaults
-     * {@code roundToFullBox} true — byte-for-byte the only behaviour that existed before this
-     * feature. Proven once, directly, rather than merely assumed from the tests above still
-     * passing unchanged. */
+    /** The 9-arg legacy Input constructor (every test above this section) defaults roundToFullBox true —
+     * byte-for-byte the only behaviour that existed before this feature. Proven once, directly, rather than merely
+     * assumed from the tests above still passing unchanged. */
     @Test
     void legacyNineArgInput_defaultsRoundToFullBoxTrue() {
         Result viaLegacy = WastageCalculator.calculate(new Input(
@@ -526,8 +518,8 @@ class WastageCalculatorTest {
         assertThat(viaLegacy.loosePieces()).isEqualTo(viaExplicitTrue.loosePieces()).isEqualTo(0);
     }
 
-    /** The headline case: 32 pieces, box of 10, no wastage — 3 full boxes plus 2 loose, and
-     * piecesFinal is the UNROUNDED 32, not the old ceiling of 40. */
+    /** The headline case: 32 pieces, box of 10, no wastage — 3 full boxes plus 2 loose, and piecesFinal is the
+     * UNROUNDED 32, not the old ceiling of 40. */
     @Test
     void roundToFullBoxFalse_splitsIntoFullBoxesPlusLooseRemainder() {
         Result r = WastageCalculator.calculate(new Input(
@@ -541,8 +533,8 @@ class WastageCalculatorTest {
         assertThat(r.loosePieces()).isEqualTo(2);
     }
 
-    /** loose = 0: an exact multiple is still reported as full boxes with a zero remainder, not
-     * null — the printed line (DealQuotationLinesTest) is what decides how to phrase zero. */
+    /** loose = 0: an exact multiple is still reported as full boxes with a zero remainder, not null — the printed
+     * line (DealQuotationLinesTest) is what decides how to phrase zero. */
     @Test
     void roundToFullBoxFalse_exactMultiple_looseIsZeroNotNull() {
         Result r = WastageCalculator.calculate(new Input(
@@ -582,8 +574,8 @@ class WastageCalculatorTest {
         assertThat(r.loosePieces()).isEqualTo(2); // 110 - 9*12
     }
 
-    /** PIECES wastage (a flat extra count) — same "applies upstream of the loose split" shape as
-     * the PERCENT case above, with a different arithmetic rule feeding it. */
+    /** PIECES wastage (a flat extra count) — same "applies upstream of the loose split" shape as the PERCENT case
+     * above, with a different arithmetic rule feeding it. */
     @Test
     void roundToFullBoxFalse_piecesWastage_appliesBeforeTheLooseSplit() {
         Result r = WastageCalculator.calculate(new Input(
@@ -597,8 +589,8 @@ class WastageCalculatorTest {
         assertThat(r.loosePieces()).isEqualTo(7); // 115 - 9*12
     }
 
-    /** AREA quantity mode is unaffected by which field feeds piecesBeforeWastage — the loose
-     * split only cares about piecesFinal and piecesPerBox, whatever produced piecesFinal. */
+    /** AREA quantity mode is unaffected by which field feeds piecesBeforeWastage — the loose split only cares about
+     * piecesFinal and piecesPerBox, whatever produced piecesFinal. */
     @Test
     void roundToFullBoxFalse_areaQuantityMode_stillSplitsCorrectly() {
         Result r = WastageCalculator.calculate(new Input(
@@ -611,9 +603,9 @@ class WastageCalculatorTest {
         assertThat(r.loosePieces()).isEqualTo(0);
     }
 
-    /** No piecesPerBox at all: roundToFullBox is simply moot (there is no box multiple to round
-     * to or split by), exactly as {@code null}/{@code <= 0} already behaved before this feature —
-     * {@code false} must not invent box/loose figures out of nothing. */
+    /** No piecesPerBox at all: roundToFullBox is simply moot (there is no box multiple to round to or split by),
+     * exactly as null/<= 0 already behaved before this feature — false must not invent box/loose figures out of
+     * nothing. */
     @Test
     void roundToFullBoxFalse_noPiecesPerBox_boxesAndLooseStayNull() {
         Result r = WastageCalculator.calculate(new Input(
@@ -631,11 +623,9 @@ class WastageCalculatorTest {
         assertThat(rZero.loosePieces()).isNull();
     }
 
-    /** Every price mode's amount follows piecesFinal EXACTLY as it does when rounding — the money
-     * math (R-D: single rounding of list × piecesFinal × discountFactor) does not know or care
-     * whether piecesFinal got there by ceiling or by staying unrounded. Pinned against the SAME
-     * discount arithmetic {@link #discountPct_reducesNetUnitPrice_andLineAmount} pins for the
-     * rounding-true case, with piecesFinal=32 (unrounded) standing in for that test's pieces=10. */
+    /** Every price mode's amount follows piecesFinal EXACTLY as it does when rounding — the money math (R-D: single
+     * rounding of list × piecesFinal × discountFactor) does not know or care whether piecesFinal got there by
+     * ceiling or by staying unrounded. */
     @Test
     void roundToFullBoxFalse_lineAmountFollowsUnroundedPiecesFinal_notTheOldCeiling() {
         Result r = WastageCalculator.calculate(new Input(
@@ -643,8 +633,8 @@ class WastageCalculatorTest {
             WastageCalculator.WASTAGE_MODE_NONE, null, 10, new BigDecimal("100"), new BigDecimal("10"), false));
 
         assertThat(r.piecesFinal()).isEqualTo(32);
-        assertThat(r.netUnitPrice()).isEqualByComparingTo("90.00"); // 100 * (1 - 10%), unaffected by rounding mode
-        // 100 * 32 * 0.90 = 2,880.00 -- NOT 100 * 40 * 0.90 = 3,600.00 (the old ceil-to-40 amount).
+        assertThat(r.netUnitPrice()).isEqualByComparingTo("90.00"); // 100 * (1 - 10%), unaffected by rounding mode 100 * 32 * 0.90 = 2,880.00 -- NOT 100 * 40 * 0.90 = 3,600.00
+        // (the old ceil-to-40 amount).
         assertThat(r.lineAmount()).isEqualByComparingTo("2880.00");
     }
 }

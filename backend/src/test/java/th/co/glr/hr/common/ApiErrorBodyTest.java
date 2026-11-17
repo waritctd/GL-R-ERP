@@ -19,21 +19,9 @@ import org.springframework.web.bind.annotation.RestController;
 import tools.jackson.databind.DeserializationFeature;
 import tools.jackson.databind.json.JsonMapper;
 
-/**
- * The JSON error body, byte for byte, through the SAME HTTP converter production uses (Boot 4's
- * Jackson-3 {@link JacksonJsonHttpMessageConverter} — see CatalogPricingReadAuthzIntegrationTest's
- * note on why a bare ObjectMapper would not be the production serializer).
- *
- * <p>Quotation ↔ deal linking slice 2 (N6) needed a 409 whose body names the live quotation in
- * TOP-LEVEL fields ({@code liveQuotationId}, {@code number}, {@code docStatus}) — the frontend reads
- * them as {@code ApiError.details.<key>}, where {@code details} is the whole response JSON
- * ({@code frontend/src/api/client.js}). Before this, {@code ApiExceptionHandler#handleApiException}
- * rendered ONLY {@code {message, status}} and {@link ApiException} could not carry anything else.
- *
- * <p>The extension is opt-in and must be invisible to every existing refusal:
- * {@link #anOrdinaryApiException_rendersExactlyMessageAndStatus} is the byte-identical pin — a
- * {@code "details":{}} key, a null, or any reordering fails it.
- */
+/** The JSON error body, byte for byte, through the SAME HTTP converter production uses (Boot 4's Jackson-3
+ * JacksonJsonHttpMessageConverter — see CatalogPricingReadAuthzIntegrationTest's note on why a bare
+ * ObjectMapper would not be the production serializer). */
 class ApiErrorBodyTest {
 
     @RestController

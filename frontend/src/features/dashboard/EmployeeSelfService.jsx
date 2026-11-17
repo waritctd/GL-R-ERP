@@ -22,19 +22,13 @@ import {
   requestStatus,
 } from '../../utils/format.js';
 
-// Three-tile grid: no shared primitive has this exact ratio (StatGrid is
-// Terminal negative states: a stepper implies "still progressing", which is
-// wrong once a request has been stopped. Rejected/cancelled rows show only
-// the status badge, never the chain.
-// EXPIRED joins these for ล.ย.01: an expired declaration has stopped progressing, so a stepper
-// implying "still on its way" would be wrong in exactly the way this set exists to prevent.
+// Three-tile grid: no shared primitive has this exact ratio (StatGrid is Terminal negative states: a stepper
+// implies "still progressing", which is wrong once a request has been stopped. Rejected/cancelled rows show
+// only the status badge, never the chain.
 const TERMINAL_NEGATIVE = new Set(['REJECTED', 'CANCELLED', 'AUTO_REJECTED', 'rejected', 'EXPIRED']);
 
-// ส่งแล้ว → หัวหน้าฝ่าย → CEO for OT (mirrors OvertimePanel's
-// SUBMITTED -> MANAGER_APPROVED -> APPROVED chain); ส่งแล้ว → อนุมัติ for leave
-// (single reviewer, no separate CEO step — LeavePage has no ceo-stage fields);
-// ส่งแล้ว → HR อนุมัติ for profile-change requests (ProfileRequestsPage is
-// hr-only, single step). Never invents an approver name the API didn't return.
+// ส่งแล้ว → หัวหน้าฝ่าย → CEO for OT; ส่งแล้ว → อนุมัติ for leave; ส่งแล้ว → HR อนุมัติ for profile-change
+// requests. Never invents an approver name the API didn't return.
 function chainForRequest(kind, request) {
   if (kind === 'ot') {
     return [
@@ -49,9 +43,9 @@ function chainForRequest(kind, request) {
       { label: 'อนุมัติ', done: request.status === 'APPROVED', name: request.reviewedByName, at: request.reviewedAt },
     ];
   }
-  // ล.ย.01: HR approval and payroll application are two distinct steps, and the gap between them
-  // matters — an approved-but-unapplied declaration is not yet reducing anyone's tax. The status
-  // badge already refuses to call that state "done"; the chain shows the same thing structurally.
+  // ล.ย.01: HR approval and payroll application are two distinct steps, and the gap between them matters — an
+  // approved-but-unapplied declaration is not yet reducing anyone's tax. The status badge already refuses to
+  // call that state "done"; the chain shows the same thing structurally.
   if (kind === 'taxAllowance') {
     return [
       { label: 'ส่งแล้ว', done: true },
@@ -98,10 +92,9 @@ function MyRequestRow({ row }) {
 export function EmployeeSelfService({ user, employee, profileRequests = [], taxAllowanceSummary }) {
   const navigate = useNavigate();
 
-  // Omitting from/to gives the current calendar month (mirrors
-  // AttendancePage.monthBounds()'s self-view range and mockApi's own default
-  // when params are omitted), so today's row and the month tile come from one
-  // fetch instead of two.
+  // Omitting from/to gives the current calendar month (mirrors AttendancePage.monthBounds()'s self-view range
+  // and mockApi's own default when params are omitted), so today's row and the month tile come from one fetch
+  // instead of two.
   const attendanceQuery = useQuery({
     queryKey: queryKeys.attendanceDaily(),
     queryFn: () => api.attendance.daily({}).then((response) => response.days || []),
@@ -110,11 +103,9 @@ export function EmployeeSelfService({ user, employee, profileRequests = [], taxA
   const todayIso = bangkokTodayIso();
   const today = attendanceDays.find((day) => day.work_date === todayIso) ?? null;
 
-  // No from/to filter — both endpoints scope to the caller automatically for a
-  // plain employee (leave.list/overtime.list: `list.filter(item =>
-  // item.employeeId === user.employeeId || canReview...)`), so this returns
-  // every own request regardless of date, same shape OvertimePanel/LeavePage
-  // already rely on for their own-row visibility.
+  // No from/to filter — both endpoints scope to the caller automatically for a plain employee
+  // (leave.list/overtime.list: `list.filter`), so this returns every own request regardless of date, same shape
+  // OvertimePanel/LeavePage already rely on for their own-row visibility.
   const ownLeaveQuery = useQuery({
     queryKey: queryKeys.leaveRequests({}),
     queryFn: () => api.leave.list({}).then((response) => response.requests || []),
@@ -127,8 +118,8 @@ export function EmployeeSelfService({ user, employee, profileRequests = [], taxA
   const myRequests = useMemo(() => {
     const leaveRows = (ownLeaveQuery.data ?? []).map((request) => ({
       id: `leave-${request.id}`,
-      // leaveTypeNameTh already carries the "ลา" prefix (ลาพักร้อน/ลากิจ/ลาป่วย)
-      // — prepending it again read as a stutter ("ลาลาพักร้อน").
+      // leaveTypeNameTh already carries the "ลา" prefix (ลาพักร้อน/ลากิจ/ลาป่วย) — prepending it again read as a
+      // stutter ("ลาลาพักร้อน").
       title: request.leaveTypeNameTh || `ลา${request.leaveTypeCode}`,
       dateLabel: formatShortDate(request.startDate),
       requestedAt: request.requestedAt || request.startDate,
@@ -142,9 +133,8 @@ export function EmployeeSelfService({ user, employee, profileRequests = [], taxA
       dateLabel: formatShortDate(request.workDate),
       requestedAt: request.requestedAt || request.workDate,
       status: request.status,
-      // A1: pass pendingApproverRole through -- a status-only call mislabels every SUBMITTED
-      // request 'รอผู้จัดการ' on this dashboard too, including the ones OvertimeService routes
-      // straight to the CEO.
+      // pass pendingApproverRole through -- a status-only call mislabels every SUBMITTED request 'รอผู้จัดการ' on
+      // this dashboard too, including the ones OvertimeService routes straight to the CEO.
       statusInfo: overtimeStatusLabel(request.status, request.pendingApproverRole),
       chain: chainForRequest('ot', request),
     }));
@@ -157,9 +147,9 @@ export function EmployeeSelfService({ user, employee, profileRequests = [], taxA
       statusInfo: requestStatus(request.status),
       chain: chainForRequest('profile', request),
     }));
-    // ล.ย.01 is a request with an approval chain exactly like the three above, and it was the one
-    // the employee had no way to track. `statusInfo` comes from the shared taxAllowanceStatus
-    // helper, so its labels stay identical to the ones on /tax-allowance and /profile.
+    // ล.ย.01 is a request with an approval chain exactly like the three above, and it was the one the employee had
+    // no way to track. `statusInfo` comes from the shared taxAllowanceStatus helper, so its labels stay identical
+    // to the ones on /tax-allowance and /profile.
     const declaration = taxAllowanceSummary?.declaration;
     const taxAllowanceRows = declaration ? [{
       id: `tax-allowance-${declaration.declarationId}`,
@@ -186,11 +176,8 @@ export function EmployeeSelfService({ user, employee, profileRequests = [], taxA
         subtitle={`${formatThaiDate(new Date())} · เวลาทำงานและคำขอของคุณ`}
       />
 
-      {/* Clock card: no self-punch endpoint exists yet (attendance is derived
-          from badge-scanner imports — see AttendancePage/routes.js, there is
-          no POST clock-in/out route), so the primary action is honest about
-          being a link to the attendance page rather than a real punch
-          action, exactly as instructed when no such action exists. */}
+      {/* Clock card: no self-punch endpoint exists yet, so the primary action is honest about being a link to the
+       * attendance page rather than a real punch action, exactly as instructed when no such action exists. */}
       <button
         type="button"
         onClick={() => navigate('/attendance')}
@@ -217,22 +204,12 @@ export function EmployeeSelfService({ user, employee, profileRequests = [], taxA
         </span>
       </button>
 
-      {/* Only rendered when there is something to file — see TaxAllowanceActionRow. Sits with the
-          attendance card above the tiles because it is an action, not a metric. */}
+      {/* Only rendered when there is something to file — see TaxAllowanceActionRow. Sits with the attendance card
+       * above the tiles because it is an action, not a metric. */}
       <TaxAllowanceActionRow summary={taxAllowanceSummary} />
 
-      {/* The three stat tiles that used to sit here (เวลาทำงานเดือนนี้ / วันลาคงเหลือ /
-          สลิปเงินเดือน) were removed on 2026-08-10, owner call: they did not earn the space.
-          Each was a number this page could not act on — the sidebar already reaches
-          /attendance, /leave and the payslip, and the คำขอของฉัน panel below is what the
-          employee actually came to do.
-
-          The leave tile was worse than merely redundant. It summed every leave type's
-          remaining days into one headline, and MILITARY's annualQuotaDays is 366 — a
-          deliberate sentinel, not a policy number (see mockApi.js's db.leaveTypes comment, and
-          MyLeaveTab.jsx, which excludes it from its own quota display for exactly this reason).
-          So the card read "564 วัน" (7+30+3+98+366+60): a total nobody has, presented as the
-          most prominent figure on the employee's home screen. */}
+      {/* The three stat tiles that used to sit here (เวลาทำงานเดือนนี้ / วันลาคงเหลือ / สลิปเงินเดือน) were removed
+       * on 2026-08-10, owner call: they did not earn the space. The leave tile was worse than merely redundant. */}
 
       <Panel
         title="คำขอของฉัน"

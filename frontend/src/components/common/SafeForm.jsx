@@ -95,17 +95,15 @@ export const SafeForm = forwardRef(function SafeForm(
     onSubmit?.(event);
   }
 
-  // Not eslint-disabled here on purpose: eslint.config.js exempts this whole file from the
-  // no-restricted-syntax ban on raw <form> JSX by path (files: ['.../SafeForm.jsx']) rather than
-  // an inline directive, so there is exactly one place that grants the exemption, not one per
-  // occurrence. This IS the primitive every other file's <form> is banned in favour of.
+  // Not eslint-disabled here on purpose: eslint.config.js exempts this whole file from the no-restricted-syntax
+  // ban on raw <form> JSX by path (files: ['.../SafeForm.jsx']) rather than an inline directive, so there is
+  // exactly one place that grants the exemption, not one per occurrence.
   return <form ref={ref} onSubmit={handleSubmit} {...props} />;
 });
 
-// Loud in development, silent in production: a blocked submit should be inert, not throw — a
-// developer's mistaken form should not take down a real user's page — but a developer who hits
-// the block while building deserves to know WHY their button did nothing instead of chasing a
-// ghost. Mirrors Button.jsx's dev-loud/prod-quiet split for its own accessible-name check.
+// Loud in development, silent in production: a blocked submit should be inert, not throw — a developer's
+// mistaken form should not take down a real user's page — but a developer who hits the block while building
+// deserves to know WHY their button did nothing instead of chasing a ghost.
 function warnBlocked(props, reason) {
   if (!import.meta.env.DEV) return;
   const label = props.id

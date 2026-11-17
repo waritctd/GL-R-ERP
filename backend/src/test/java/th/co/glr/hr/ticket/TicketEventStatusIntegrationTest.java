@@ -14,15 +14,9 @@ import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.employee.UpsertEmployeeRequest;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
-/**
- * Regression for the deal-pipeline stage/lifecycle events (V50+). {@code addEvent} reuses the same
- * from/to slots to carry a {@code sales_stage} / lifecycle value purely as a timeline label, and must
- * NOT write that stage code onto {@code sales.ticket.status} — a stage such as {@code QUOTE_BUYER}
- * would violate {@code chk_ticket_status} and roll back the entire stage advance.
- *
- * <p>Mockito-based unit tests stub the repository, so {@code addEventInternal}'s UPDATE never runs
- * there; this bug only reproduces against a real database (it surfaced on hosted UAT).
- */
+/** Regression for the deal-pipeline stage/lifecycle events (V50+). Mockito-based unit tests stub the
+ * repository, so addEventInternal's UPDATE never runs there; this bug only reproduces against a real database
+ * (it surfaced on hosted UAT). */
 class TicketEventStatusIntegrationTest extends AbstractPostgresIntegrationTest {
     private TicketRepository tickets;
     private long actorId;
@@ -64,8 +58,8 @@ class TicketEventStatusIntegrationTest extends AbstractPostgresIntegrationTest {
         long ticketId = insertTicket(TicketStatus.QUOTATION_ISSUED, DealStage.AWAITING_BUYER);
         tickets.updateSalesStage(ticketId, DealStage.QUOTE_BUYER);
 
-        // The stage-advance event carries the stage code as its "to" label. It must neither violate
-        // chk_ticket_status nor overwrite the ticket status with a stage code.
+        // The stage-advance event carries the stage code as its "to" label. It must neither violate chk_ticket_status
+        // nor overwrite the ticket status with a stage code.
         assertThatCode(() -> tickets.addEvent(ticketId, actorId, "เทสเตอร์ ขาย",
             TicketEventKind.STAGE_CHANGED, DealStage.AWAITING_BUYER, DealStage.QUOTE_BUYER, "advance"))
             .doesNotThrowAnyException();
@@ -85,17 +79,9 @@ class TicketEventStatusIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(columnOf(ticketId, "status")).isEqualTo(TicketStatus.QUOTATION_ISSUED);
     }
 
-    /**
-     * The contract this test pins INVERTED with the status machine, so it is worth stating plainly.
-     *
-     * <p>It used to assert that an event whose {@code toStatus} was a real ticket status wrote that
-     * status onto the row — {@code addEventInternal}'s side effect, gated only by
-     * {@link TicketStatus#isValid}, a membership check with no from-state guard at all. That is
-     * exactly the conflation the machine removes: logging an event is now purely logging an event,
-     * and the status is moved only by {@link TicketRepository#transitionStatus}.
-     *
-     * <p>Written wrong-way-round on purpose: the assertion is that the status did NOT move.
-     */
+    /** The contract this test pins INVERTED with the status machine, so it is worth stating plainly. That is
+     * exactly the conflation the machine removes: logging an event is now purely logging an event, and the status
+     * is moved only by TicketRepository#transitionStatus. */
     @Test
     void genuineStatusTransitionEvent_noLongerWritesTicketStatus() {
         long ticketId = insertTicket(TicketStatus.QUOTATION_ISSUED, DealStage.DELIVERED);
@@ -106,12 +92,7 @@ class TicketEventStatusIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(columnOf(ticketId, "status")).isEqualTo(TicketStatus.QUOTATION_ISSUED);
     }
 
-    /**
-     * …and the side effect that DOES still key off {@code toStatus} keeps working unchanged.
-     * {@code closed_at} is written by the event, not by the transition, so a caller that
-     * transitions and then logs gets the same row it always did — the two halves together must
-     * still produce a closed row with both {@code status} and {@code closed_at} set.
-     */
+    /** …and the side effect that DOES still key off toStatus keeps working unchanged. */
     @Test
     void transitionThenEvent_togetherProduceTheSameRowAsTheOldSingleStatement() {
         long ticketId = insertTicket(TicketStatus.QUOTATION_ISSUED, DealStage.DELIVERED);

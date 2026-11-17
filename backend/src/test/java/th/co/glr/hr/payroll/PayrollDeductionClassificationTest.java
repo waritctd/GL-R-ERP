@@ -5,13 +5,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import org.junit.jupiter.api.Test;
 import th.co.glr.hr.payroll.PayrollDeductionClassification.Entry;
 
-/**
- * Table test for issue #376's classification table -- every {@link PayrollDeductionKind} the
- * engine supports must have an {@link Entry}, and the entry must match the legal position the issue
- * settles: กยศ. is {@code STATUTORY_AUTHORITY_DIRECTED}/{@code NONE} (NOT ม.76-capped -- the
- * corrected position, see issue #373/#376), and the ป.วิ.พ. ม.302 garnishment is the one deduction
- * classified {@code LED_GARNISHMENT} (already enforced, reused rather than duplicated).
- */
+/** Table test for issue #376's classification table -- every PayrollDeductionKind the engine supports must have
+ * an Entry, and the entry must match the legal position the issue settles: กยศ. */
 class PayrollDeductionClassificationTest {
 
     @Test

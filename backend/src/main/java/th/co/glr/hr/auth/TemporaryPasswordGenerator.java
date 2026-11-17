@@ -3,11 +3,9 @@ package th.co.glr.hr.auth;
 import java.security.SecureRandom;
 import org.springframework.stereotype.Component;
 
-/**
- * Mints high-entropy temporary passwords for the HR reset-password flow. Uses {@link SecureRandom}
- * over an unambiguous alphabet (no {@code O/0/I/l/1}) so the value is safe to read aloud or type,
- * yet not guessable like the old {@code employee_code} temp password.
- */
+/** Mints high-entropy temporary passwords for the HR reset-password flow. Uses SecureRandom over an unambiguous
+ * alphabet (no O/0/I/l/1) so the value is safe to read aloud or type, yet not guessable like the old
+ * employee_code temp password. */
 @Component
 public class TemporaryPasswordGenerator {
     // Uppercase + lowercase + digits, with visually ambiguous characters (O, 0, I, l, 1) removed.

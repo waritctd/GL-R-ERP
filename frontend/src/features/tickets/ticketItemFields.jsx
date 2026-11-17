@@ -48,11 +48,9 @@ export const ITEM_FIELD_META = {
   size: { label: 'ขนาด (ซม.)', placeholder: 'เช่น 60x120' },
 };
 
-// ── quantity requiredness (PIECE vs SQM basis) ──────────────────────────────
-// A ตร.ม./แผ่น factor cross-fills the two quantity boxes, but only ONE of them is ever the field the
-// rep is required to fill for a given basis: จำนวน (แผ่น) for PIECE, พื้นที่ (ตร.ม.) for SQM. Single
-// source for which one that is, so the asterisk on each surface's qty/qtySqm label and the
-// validation that actually blocks submit can never point at different fields.
+// quantity requiredness (PIECE vs SQM basis) ────────────────────────────── A ตร.ม./แผ่น factor cross-fills
+// the two quantity boxes, but only ONE of them is ever the field the rep is required to fill for a given
+// basis: จำนวน (แผ่น) for PIECE, พื้นที่ (ตร.ม.) for SQM.
 export function requiredQtyField(unitBasis) {
   return (unitBasis || 'PIECE') === 'SQM' ? 'qtySqm' : 'qty';
 }
@@ -74,11 +72,9 @@ export function missingQtyMessage(unitBasis, rowNumber) {
     : `กรุณากรอกจำนวน (แผ่น) ในรายการที่ ${rowNumber}`;
 }
 
-// ── catalog pick / hand-edit rules ──────────────────────────────────────────
-// Every field a hand-edit to which invalidates a previously-picked catalog link — what's typed no
-// longer necessarily matches what the link points at. Mirrors PricingRequestCreateModal.updateItem's
-// identical rule. 'factory' is included even though neither surface exposes it as its own input any
-// more (ยี่ห้อ and โรงงาน are one field) — see applyDescriptiveFieldEdit's brand branch below.
+// catalog pick / hand-edit rules ────────────────────────────────────────── Every field a hand-edit to which
+// invalidates a previously-picked catalog link — what's typed no longer necessarily matches what the link
+// points at.
 const DESCRIPTIVE_ITEM_FIELDS = ['brand', 'model', 'color', 'texture', 'size', 'factory'];
 
 /**
@@ -190,14 +186,7 @@ export function searchCatalog(query, onResults) {
 
 // ── small sub-components ────────────────────────────────────────────────────
 
-/**
- * Label content for the item-editor fields.
- *
- * Everything is wrapped in ONE <span> on purpose. The global `label { display: grid }` rule in
- * styles.css turns every direct child of a <label> — including a bare text node — into its own grid
- * row, so an unwrapped `{label}` + required-marker + hint would render as three stacked lines
- * instead of one (the same trap FormField.jsx documents at length).
- */
+/** Label content for the item-editor fields. Everything is wrapped in ONE <span> on purpose. */
 export function ItemFieldLabel({ label, required, hint }) {
   return (
     <span>

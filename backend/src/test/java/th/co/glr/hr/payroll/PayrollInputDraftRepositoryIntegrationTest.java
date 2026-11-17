@@ -10,14 +10,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
-/**
- * Payroll input draft (2026-07-30): exercises {@link PayrollRepository#saveInputDrafts}/
- * {@link PayrollRepository#findInputDrafts}/{@link PayrollRepository#deleteInputDrafts} against a
- * real PostgreSQL database (not Mockito) -- the point under test is that every field actually
- * survives an INSERT/SELECT round trip through {@code hr.payroll_input_draft} (V104), and that the
- * upsert and delete SQL do what their names say, which a mocked repository would "pass" regardless
- * of what the SQL actually does.
- */
+/** Payroll input draft: exercises PayrollRepository#saveInputDrafts/
+ * PayrollRepository#findInputDrafts/PayrollRepository#deleteInputDrafts against a real PostgreSQL database. */
 class PayrollInputDraftRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
     private PayrollRepository repository;
 

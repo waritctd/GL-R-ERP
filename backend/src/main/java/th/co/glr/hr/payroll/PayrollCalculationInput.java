@@ -51,10 +51,9 @@ public record PayrollCalculationInput(
     // falls back to 13 - payrollMonthValue. It is NOT capped at a leaver's final period: ข้อ 2.10 is
     // a known gap because resignations are not recorded in this platform at all.
     int remainingPayPeriods,
-    // taxpayerAge: the employee's age in this tax year, from hr.employee.date_of_birth. Drives the
-    // ยกเว้นเงินได้ 190,000 for taxpayers aged 65+ (กฎกระทรวง ฉบับที่ 126); the disability-card route
-    // to the same exemption is a ล.ย.01 declaration and travels on PayrollTaxAllowanceInput instead.
-    // Zero means "date of birth unknown" -- the exemption is then NOT granted on an assumption.
+    // taxpayerAge: the employee's age in this tax year, from hr.employee.date_of_birth. Drives the ยกเว้นเงินได้
+    // 190,000 for taxpayers aged 65+ (กฎกระทรวง ฉบับที่ 126); the disability-card route to the same exemption is a
+    // ล.ย.01 declaration and travels on PayrollTaxAllowanceInput instead.
     int taxpayerAge,
     // Dedicated one-off pay. เงินโบนัส and อื่นๆ get their own fields so a one-off
     // payment is not typed into a พิเศษ slot that also carries a monthly allowance -- that
@@ -80,11 +79,8 @@ public record PayrollCalculationInput(
             customerReturnDeduction, otherPretaxDeduction, leaveRefundDays, withholdingTaxOverride,
             taxYear, remainingPayPeriods, taxpayerAge, BigDecimal.ZERO, BigDecimal.ZERO);
     }
-    /**
-     * Legacy 20-arg constructor: the full signature before {@code taxpayerAge} existed. Age defaults
-     * to zero, i.e. unknown, so the 65+ exemption is not granted — which is what every call site
-     * predating the field got.
-     */
+    /** Legacy 20-arg constructor: the full signature before taxpayerAge existed. Age defaults to zero, i.e.
+     * unknown, so the 65+ exemption is not granted — which is what every call site predating the field got. */
     public PayrollCalculationInput(
         BigDecimal baseSalary,
         List<BigDecimal> specialPays,
@@ -117,12 +113,8 @@ public record PayrollCalculationInput(
         );
     }
 
-    /**
-     * Legacy 18-arg constructor: the full signature as it stood before ป.96/2543 compliance added
-     * {@code taxYear} and {@code remainingPayPeriods}. Both default to zero, which the calculator
-     * reads as "not supplied" and handles exactly as it did before the fields existed -- no
-     * year-scoped allowance restriction, and pay periods derived from the payroll month.
-     */
+    /** Legacy 18-arg constructor: the full signature as it stood before ป.96/2543 compliance added taxYear and
+     * remainingPayPeriods. */
     public PayrollCalculationInput(
         BigDecimal baseSalary,
         List<BigDecimal> specialPays,
@@ -221,13 +213,8 @@ public record PayrollCalculationInput(
         );
     }
 
-    /**
-     * Legacy 17-arg constructor: the full signature as it stood right before {@code
-     * withholdingTaxOverride} existed (i.e. through {@code leaveRefundDays}). Keeps every 17-arg
-     * positional call site compiling unchanged; {@code withholdingTaxOverride} defaults to {@code
-     * null}, which means "no override -- compute withholding normally" and therefore reproduces the
-     * pre-override calculation exactly (see {@link PayrollCalculator}).
-     */
+    /** Legacy 17-arg constructor: the full signature as it stood right before withholdingTaxOverride existed (i.e.
+     * through leaveRefundDays). */
     public PayrollCalculationInput(
         BigDecimal baseSalary,
         List<BigDecimal> specialPays,

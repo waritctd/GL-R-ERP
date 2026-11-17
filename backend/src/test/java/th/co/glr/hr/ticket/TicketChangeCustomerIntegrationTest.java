@@ -411,7 +411,7 @@ class TicketChangeCustomerIntegrationTest extends AbstractPostgresIntegrationTes
                 .as("a pricing request in %s", status)
                 .isInstanceOfSatisfying(ApiException.class, e -> {
                     assertThat(e.getStatus().value()).isEqualTo(409);
-                    assertThat(e.getMessage()).isEqualTo("เปลี่ยนลูกค้าไม่ได้ เนื่องจากดีลนี้มีคำขอราคาอยู่");
+                    assertThat(e.getMessage()).isEqualTo("เปลี่ยนลูกค้าไม่ได้ เนื่องจากงานนี้มีคำขอราคาอยู่");
                 });
             assertTicketStillUnderCustomerA(ticketId);
         }

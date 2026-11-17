@@ -66,8 +66,8 @@ describe('LeaveSurfacePage', () => {
     api.leave.balances.mockResolvedValue({ balances: [] });
     api.leave.contactDefaults.mockResolvedValue({ contactDefaults: {} });
     api.leave.reviewSummary.mockResolvedValue({ pendingCount: 0, requests: [] });
-    // The state every environment is in today (see LeavePolicyBar.jsx's own header comment) --
-    // none of this file's assertions are about the bar itself, so the neutral default is enough.
+    // The state every environment is in today (see LeavePolicyBar.jsx's own header comment) -- none of this file's
+    // assertions are about the bar itself, so the neutral default is enough.
     api.leave.policyDocumentAvailable.mockResolvedValue('absent');
   });
 
@@ -82,8 +82,8 @@ describe('LeaveSurfacePage', () => {
     );
     expect(tabs.some((tab) => tab.textContent.includes('กฎการลา'))).toBe(false);
     expect(tabs.some((tab) => tab.textContent.includes('รอพิจารณา'))).toBe(false);
-    // The beforeEach's api.leave.employees() fixture is self-only (directReport: false) --
-    // see leaveSurfaceTabs.test.js's hasTeamMembers coverage for the pure-function rule.
+    // The beforeEach's api.leave.employees() fixture is self-only (directReport: false) -- see
+    // leaveSurfaceTabs.test.js's hasTeamMembers coverage for the pure-function rule.
     expect(tabs.some((tab) => tab.textContent.includes('ลูกทีม'))).toBe(false);
     expect(screen.getByRole('tab', { name: /ของฉัน/ }).getAttribute('aria-selected')).toBe('true');
   });
@@ -139,9 +139,9 @@ describe('LeaveSurfacePage', () => {
     });
     renderLeaveSurfacePage(manager);
 
-    // Both "ลูกทีม" and "รอพิจารณา" only appear once their own async signal queries resolve --
-    // wait for the slower of the two before reading tab order, or this can race and see only
-    // the two unconditionally-visible tabs ("ของฉัน"/"กฎการลา").
+    // Both "ลูกทีม" and "รอพิจารณา" only appear once their own async signal queries resolve -- wait for the slower
+    // of the two before reading tab order, or this can race and see only the two unconditionally-visible tabs
+    // ("ของฉัน"/"กฎการลา").
     await screen.findByRole('tab', { name: /รอพิจารณา/ });
     const tabs = await screen.findAllByRole('tab');
     const labels = tabs.map((tab) => tab.textContent);
@@ -277,11 +277,9 @@ describe('LeaveSurfacePage', () => {
     await screen.findAllByRole('tab');
 
     const tablist = container.querySelector('[role="tablist"]');
-    // PageStack is the only ancestor between the scroll container and the tab
-    // bar / form that renders Tailwind's literal `grid` class (its signature
-    // utility, per Layout.jsx's PageStack) -- walk up to it rather than
-    // asserting on `container.firstChild`, which is brittle to unrelated
-    // wrapper changes.
+    // PageStack is the only ancestor between the scroll container and the tab bar / form that renders Tailwind's
+    // literal `grid` class (its signature utility, per Layout.jsx's PageStack) -- walk up to it rather than
+    // asserting on `container.firstChild`, which is brittle to unrelated wrapper changes.
     const pageRoot = tablist.closest('.grid');
     expect(pageRoot).not.toBeNull();
     expect(pageRoot.classList.contains('relative')).toBe(true);

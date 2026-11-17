@@ -16,11 +16,9 @@ import org.springframework.http.HttpStatus;
 import org.springframework.mock.web.MockMultipartFile;
 import th.co.glr.hr.common.ApiException;
 
-/**
- * GLA-75: the upload gate for a quotation item's picture. Type is decided by the file's MAGIC
- * BYTES — never the declared Content-Type or the filename — and a file must also parse as an
- * image. Every negative case here asserts a REFUSAL (wrong-way-round).
- */
+/** GLA-75: the upload gate for a quotation item's picture. Type is decided by the file's MAGIC BYTES — never
+ * the declared Content-Type or the filename — and a file must also parse as an image. Every negative case here
+ * asserts a REFUSAL (wrong-way-round). */
 class QuotationItemPicturesTest {
 
     @Test
@@ -66,8 +64,8 @@ class QuotationItemPicturesTest {
 
     @Test
     void aDeclaredSizeOverTheDimensionCap_isRejected_beforeAnythingDecodesIt() {
-        // A flat colour at the cap + 1 compresses to a few KB — exactly the decompression-bomb shape
-        // the dimension cap exists for.
+        // A flat colour at the cap + 1 compresses to a few KB — exactly the decompression-bomb shape the dimension cap
+        // exists for.
         byte[] huge = png(QuotationItemPictures.MAX_DIMENSION_PX + 1, 8);
         assertThat(huge.length).isLessThan((int) QuotationItemPictures.MAX_BYTES);
         assertBadRequest(() -> QuotationItemPictures.validate(huge), "พิกเซล");

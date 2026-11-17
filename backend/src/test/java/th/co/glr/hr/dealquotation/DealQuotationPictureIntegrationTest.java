@@ -51,19 +51,8 @@ import th.co.glr.hr.ticket.QuotationStatus;
 import th.co.glr.hr.ticket.TicketRepository;
 import th.co.glr.hr.ticket.TicketService;
 
-/**
- * GLA-75 per-item quotation pictures (V170) — the AUTHZ surface, through the REAL
- * {@link DealQuotationService} and {@link DealQuotationRepository} against a REAL Postgres.
- *
- * <p>The rule under test: picture WRITES (upload / change placement / remove) are gated EXACTLY like
- * editing the quotation — {@code sales} on their OWN deal, {@code sales_manager} or a
- * {@code can_create_quotation} grant on any deal — and only while the quotation is DRAFT. The
- * READ is gated like viewing the quotation.
- *
- * <p>Every negative case is written WRONG-WAY-ROUND (CLAUDE.md "Permission changes must ship
- * evidence"): it asserts the caller CANNOT, and then reads the database back to prove nothing was
- * stored or changed — a 403 thrown after a write had already landed would otherwise pass.
- */
+/** GLA-75 per-item quotation pictures (V170) — the AUTHZ surface, through the REAL DealQuotationService and
+ * DealQuotationRepository against a REAL Postgres. The READ is gated like viewing the quotation. */
 class DealQuotationPictureIntegrationTest extends AbstractPostgresIntegrationTest {
     private DealQuotationService quotationService;
     private CustomerRepository customers;
@@ -151,9 +140,9 @@ class DealQuotationPictureIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(quotationService.setItemPicturePlacement(q.id(), itemId, "BESIDE", salesActor)
             .items().get(0).picturePlacement()).isEqualTo("BESIDE");
 
-        // The stored bytes reach the rendered document: the XLS (the row plan BOTH PDF engines
-        // print) embeds exactly this picture. A single-picture quotation is the case a dropped
-        // first row of the bytes query would lose entirely.
+        // The stored bytes reach the rendered document: the XLS (the row plan BOTH PDF engines print) embeds exactly
+        // this picture. A single-picture quotation is the case a dropped first row of the bytes query would lose
+        // entirely.
         assertThat(embeddedPictureCount(quotationService.renderXlsx(q.id(), salesActor), png))
             .as("the item's picture is embedded in the rendered XLS").isEqualTo(1);
         byte[] pdf = quotationService.renderPdf(q.id(), salesActor);
@@ -327,20 +316,17 @@ class DealQuotationPictureIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(pictureRows()).as("the dropped picture's row is deleted").isEqualTo(1);
     }
 
-    /**
-     * The headline case the stable-id fix exists for: an editor loads a draft, autosaves it once
-     * (picking up its own already-stable ids), and autosaves it again a moment later WITHOUT
-     * re-keying — exactly what a v3 editor, a second browser tab, or two saves racing each other
-     * all look like on the wire. Every id must survive BOTH saves, not just one.
-     */
+    /** The headline case the stable-id fix exists for: an editor loads a draft, autosaves it once (picking up its
+     * own already-stable ids), and autosaves it again a moment later WITHOUT re-keying — exactly what a v3 editor,
+     * a second browser tab, or two saves racing each other all look like on the wire. */
     @Test
     void aPicture_survivesTwoConsecutiveDraftSaves_fromAnEditorShapedPayload_withStableIds() {
         DealQuotationDto q0 = draft(ticketId, salesActor, 2);
         long tile1 = q0.items().get(0).id();
         long tile2 = q0.items().get(1).id();
 
-        // The editor's own first save after load: it adds a PLAIN row and an ADJUSTMENT row,
-        // resending the two tile ids the create just handed back.
+        // The editor's own first save after load: it adds a PLAIN row and an ADJUSTMENT row, resending the two tile
+        // ids the create just handed back.
         DealQuotationDto q1 = quotationService.update(q0.id(), upsert(List.of(
             withId(sampleItem("100.00", 10), tile1),
             withId(sampleItem("100.00", 11), tile2),
@@ -367,8 +353,7 @@ class DealQuotationPictureIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(saved1.items().get(0).id()).as("id survives save #1").isEqualTo(tile1);
         assertThat(saved1.items().get(0).hasPicture()).as("picture survives save #1").isTrue();
 
-        // Save #2: the editor never re-keyed -- it resends the SAME original ids, with another
-        // field changed.
+        // Save #2: the editor never re-keyed -- it resends the SAME original ids, with another field changed.
         DealQuotationDto saved2 = quotationService.update(q1.id(), upsert(List.of(
             withId(sampleItem("150.00", 12), tile1),   // pieces 10 -> 12
             withId(sampleItem("100.00", 11), tile2),
@@ -401,11 +386,9 @@ class DealQuotationPictureIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(storedLink(theirItem)).isEqualTo("BELOW");
     }
 
-    /** Wrong-way-round (CLAUDE.md "Permission changes must ship evidence"): sending another
-     * quotation's item id, with different data attached, must not modify that row at all — not
-     * its quotation_id, not its brand, not its price. The membership check (this quotation's OWN
-     * current ids) is the decision; the UPDATE's {@code quotation_id = :quotationId} predicate is
-     * the enforcement underneath it. */
+    /** Wrong-way-round (CLAUDE.md "Permission changes must ship evidence"): sending another quotation's item id,
+     * with different data attached, must not modify that row at all — not its quotation_id, not its brand, not its
+     * price. */
     @Test
     void aDraftSave_sendingAnotherQuotationsItemId_leavesThatRowEntirelyUntouched_andCreatesANewRowOnMine() {
         DealQuotationDto mine = draft(ticketId, salesActor, 1);
@@ -453,14 +436,8 @@ class DealQuotationPictureIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(pictureRows()).as("still referenced by the parent, so not deleted").isEqualTo(1);
     }
 
-    /**
-     * An item OMITTED from a draft save's payload is deleted along with its row — and so is its
-     * picture, UNLESS something else still references that exact picture row. Both halves need a
-     * row each, or the fix and its absence look identical: the child revision's FIRST item SHARES
-     * its picture with the (immutable, approved) parent (dropping it must not delete a picture the
-     * parent still prints), while the child's SECOND item carries a picture of its own that
-     * nothing else references (dropping it must delete the row).
-     */
+    /** An item OMITTED from a draft save's payload is deleted along with its row — and so is its picture, UNLESS
+     * something else still references that exact picture row. */
     @Test
     void aDraftSave_thatOmitsAnItem_deletesItsRow_andItsPicture_unlessAParentRevisionStillUsesIt() {
         DealQuotationDto q = draft(ticketId, salesActor, 2);
@@ -492,17 +469,16 @@ class DealQuotationPictureIntegrationTest extends AbstractPostgresIntegrationTes
 
         // The parent's approved document still prints exactly what it was approved with...
         assertThat(quotationService.getItemPicture(q.id(), first, salesActor).image()).isEqualTo(pngShared);
-        // ...and only the picture NOTHING else references is actually gone: the shared one
-        // survives, the child-only one does not.
+        // ...and only the picture NOTHING else references is actually gone: the shared one survives, the child-only
+        // one does not.
         assertThat(pictureRows())
             .as("shared picture kept (still referenced by the parent); child-only picture deleted")
             .isEqualTo(1);
     }
 
-    /** Two inputs in the SAME payload sending the SAME existing item id — the editor sending a
-     * corrupted or duplicated row, not a client this code otherwise expects. The first occurrence
-     * claims the row (and keeps its picture); the second is inserted as a brand-new row (no
-     * picture); no exception. */
+    /** Two inputs in the SAME payload sending the SAME existing item id — the editor sending a corrupted or
+     * duplicated row, not a client this code otherwise expects. The first occurrence claims the row (and keeps its
+     * picture); the second is inserted as a brand-new row (no picture); no exception. */
     @Test
     void aDraftSave_withADuplicateIdWithinOnePayload_keepsTheFirstOccurrence_andInsertsTheSecondAsNew() {
         DealQuotationDto q = draft(ticketId, salesActor, 1);
@@ -567,8 +543,8 @@ class DealQuotationPictureIntegrationTest extends AbstractPostgresIntegrationTes
         return new UpsertDealQuotationRequest(null, "P003", "D002", LocalDate.now(), 30, "CREDIT", 30, 30, null, items).withRecipientType("OWNER");
     }
 
-    /** 60x60 -> 0.36 ตร.ม./แผ่น (explicit -- ตร.ม./แผ่น is never derived from sizeText any more;
-     * see DealQuotationService#resolveSqmPerPiece's Javadoc). */
+    /** 60x60 -> 0.36 ตร.ม./แผ่น (explicit -- ตร.ม./แผ่น is never derived from sizeText any more; see
+     * DealQuotationService#resolveSqmPerPiece's Javadoc). */
     private static ItemInput sampleItem(String unitPrice, int pieces) {
         return new ItemInput(null, null, null, "Brand A", "Model A", "White", "Matte", "60x60",
             new BigDecimal("10"), new BigDecimal("0.36"), WastageCalculator.QUANTITY_MODE_PIECES, null, pieces,
@@ -576,8 +552,8 @@ class DealQuotationPictureIntegrationTest extends AbstractPostgresIntegrationTes
             30, 45, null);
     }
 
-    /** S2 — a PLAIN row (description/quantity/unit/price, no tile machinery). Same shape as
-     * {@code DealQuotationIntegrationTest#plainItem}. */
+    /** a PLAIN row (description/quantity/unit/price, no tile machinery). Same shape as
+     * DealQuotationIntegrationTest#plainItem. */
     private static ItemInput plainItem(String description, String quantity, String unit, String unitPrice) {
         return new ItemInput(null, null, null, null, null, null, null, null,
             null, null, null, null, null, null, null, null,
@@ -586,8 +562,7 @@ class DealQuotationPictureIntegrationTest extends AbstractPostgresIntegrationTes
             null, null, null, null, null);
     }
 
-    /** S3 — an ADJUSTMENT row entered as a percent. Same shape as
-     * {@code DealQuotationIntegrationTest#adjustmentPctItem}. */
+    /** an ADJUSTMENT row entered as a percent. Same shape as DealQuotationIntegrationTest#adjustmentPctItem. */
     private static ItemInput adjustmentPctItem(String pct) {
         return new ItemInput(null, null, null, null, null, null, null, null,
             null, null, null, null, null, null, null, null,

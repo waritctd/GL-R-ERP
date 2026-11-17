@@ -6,22 +6,9 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
-// Converts Office documents (XLS/XLSX) to PDF by shelling out to LibreOffice.
-// Requires LibreOffice to be installed:
-//   macOS:  brew install --cask libreoffice
-//   Ubuntu: apt-get install -y libreoffice-calc
-//
-// A temporary XLS file is written to the system temp dir, converted, and
-// both temp files are deleted when done. The --env:UserInstallation flag
-// points LibreOffice's user-profile scratch space to a temp dir so this works
-// even when running as a service account with no home directory.
-//
-// The profile directory is unique per JVM process (…/glr-lo-profile-<pid>).
-// LibreOffice takes an exclusive lock on its user profile, so two soffice
-// processes sharing one profile collide and one fails. Scoping it per process
-// keeps a single JVM reusing one warm profile across calls (no behaviour change
-// for the app), while separate processes — parallel test forks, or two app
-// instances on one host — no longer clobber each other.
+// Converts Office documents (XLS/XLSX) to PDF by shelling out to LibreOffice. The --env:UserInstallation flag
+// points LibreOffice's user-profile scratch space to a temp dir so this works even when running as a service
+// account with no home directory.
 public final class LibreOfficePdfConverter {
 
     private static final List<String> SOFFICE_CANDIDATES = List.of(
@@ -37,12 +24,9 @@ public final class LibreOfficePdfConverter {
 
     private LibreOfficePdfConverter() {}
 
-    /**
-     * Whether a usable LibreOffice {@code soffice} binary is present. Lets tests and callers
-     * gate the PDF-conversion path (which shells out to LibreOffice) the same way the repo gates
-     * Testcontainers tests on Docker availability, so environments without LibreOffice skip
-     * rather than fail.
-     */
+    /** Whether a usable LibreOffice soffice binary is present. Lets tests and callers gate the PDF-conversion path
+     * (which shells out to LibreOffice) the same way the repo gates Testcontainers tests on Docker availability,
+     * so environments without LibreOffice skip rather than fail. */
     public static boolean isAvailable() {
         return findSoffice() != null;
     }
@@ -89,15 +73,9 @@ public final class LibreOfficePdfConverter {
             String pdfName = xlsName.substring(0, xlsName.lastIndexOf('.')) + ".pdf";
             pdfPath = outDir.resolve(pdfName);
 
-            // LibreOffice exits 0 even when it could not load the source at all — it prints
-            // "Error: source file could not be loaded" and returns success. The exit-code check
-            // above therefore passes, and without this guard the next line fails with a bare
-            // NoSuchFileException that reads like a disk problem.
-            //
-            // The overwhelmingly common cause is an incomplete install: `libreoffice-core` alone
-            // has no spreadsheet import filter, so every XLS is unloadable. That is a one-package
-            // fix, but nothing in the old error said so — this message does, and echoes what
-            // soffice actually printed. Diagnosed the hard way while working #666.
+            // LibreOffice exits 0 even when it could not load the source at all — it prints "Error: source file could not
+            // be loaded" and returns success. The exit-code check above therefore passes, and without this guard the next
+            // line fails with a bare NoSuchFileException that reads like a disk problem.
             if (!Files.exists(pdfPath)) {
                 throw new IllegalStateException(
                     "LibreOffice exited 0 but produced no PDF at " + pdfPath + ". It almost"

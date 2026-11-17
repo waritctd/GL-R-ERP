@@ -27,10 +27,9 @@ import th.co.glr.hr.config.AppProperties;
 
 @Service
 public class AttendanceService {
-    // Package-private (not private): AttendanceMonthlySummaryService's "generated at" timestamp
-    // needs the SAME zone this class uses for "today", or the export's own header could disagree
-    // with the day-view page about what day it currently is. One constant, reused, rather than a
-    // second ZoneId.of("Asia/Bangkok") literal drifting from this one.
+    // Package-private (not private): AttendanceMonthlySummaryService's "generated at" timestamp needs the SAME
+    // zone this class uses for "today", or the export's own header could disagree with the day-view page about
+    // what day it currently is.
     static final ZoneId DEFAULT_WORK_DATE_ZONE = ZoneId.of("Asia/Bangkok");
     // HR and executives (ceo) see all attendance company-wide.
     private static final Set<String> VIEW_ALL_ROLES = Set.of("hr", "ceo");
@@ -78,10 +77,8 @@ public class AttendanceService {
             scope.employeeId(), scope.divisionId(), effectiveFrom, effectiveTo));
     }
 
-    /**
-     * Badges that scanned but match no employee. HR/CEO only — this is a data-repair queue, not
-     * something an employee can act on.
-     */
+    /** Badges that scanned but match no employee. HR/CEO only — this is a data-repair queue, not something an
+     * employee can act on. */
     public List<UnmappedBadge> listUnmappedBadges(LocalDate fromDate, LocalDate toDate) {
         LocalDate today = LocalDate.now(DEFAULT_WORK_DATE_ZONE);
         LocalDate effectiveTo = toDate == null ? today : toDate;
@@ -89,11 +86,9 @@ public class AttendanceService {
         return dailyService.listUnmappedBadges(effectiveFrom, effectiveTo);
     }
 
-    /**
-     * Employees the caller may filter by. Mirrors the overtime picker's self/direct-report/division
-     * scope — {@code useHrData}'s employee list is HR-only, so a ฝ่าย manager would otherwise get a
-     * one-entry picker that cannot pick any of their team.
-     */
+    /** Employees the caller may filter by. Mirrors the overtime picker's self/direct-report/division scope —
+     * useHrData's employee list is HR-only, so a ฝ่าย manager would otherwise get a one-entry picker that cannot
+     * pick any of their team. */
     public List<AttendanceEmployeeOption> listEmployeeOptions(UserPrincipal user) {
         boolean includeAll = canViewAll(user);
         Long managerDivisionId = user.manager() ? user.divisionId() : null;
@@ -121,8 +116,8 @@ public class AttendanceService {
         if (punchId == null) {
             return new AttendancePunchResponse(null, false, "duplicate");
         }
-        // Keep the day view current as scans arrive. Only the affected day is re-derived, and an
-        // unmapped badge yields no pair, so this is a no-op until the badge is mapped.
+        // Keep the day view current as scans arrive. Only the affected day is re-derived, and an unmapped badge yields
+        // no pair, so this is a no-op until the badge is mapped.
         dailyService.recalculateForPunches(List.of(punchId));
         return new AttendancePunchResponse(punchId, true, "inserted");
     }
@@ -158,9 +153,8 @@ public class AttendanceService {
             parseResult.errors().size()
         );
 
-        // Roll up once for the whole imported span, collapsing to distinct employee-days. Doing this
-        // per punch instead would turn a 10,000-row import into 10,000 recalculations of a few
-        // hundred days.
+        // Roll up once for the whole imported span, collapsing to distinct employee-days. Doing this per punch instead
+        // would turn a 10,000-row import into 10,000 recalculations of a few hundred days.
         recalculateImportedSpan(parseResult);
 
         return new AttendanceImportResponse(
@@ -193,34 +187,15 @@ public class AttendanceService {
             scope.employeeId(), scope.divisionId(), effectiveFrom, effectiveTo, limit));
     }
 
-    /**
-     * Resolves which employees' attendance {@code user} may read.
-     *
-     * <p>The single source of truth for attendance authorization — punch list, day view, unmapped
-     * badges and the employee picker all route through here. Keep it that way: a second copy of
-     * these rules would drift, and a drift here leaks other people's attendance rather than
-     * throwing.
-     *
-     * <ul>
-     *   <li>hr/ceo — company-wide, and may request any employee.
-     *   <li>ฝ่าย manager — their whole division. A requested employeeId narrows <em>within</em> the
-     *       division because both predicates AND, so an out-of-division id matches nothing instead
-     *       of leaking.
-     *   <li>everyone else — forced to their own employee id; asking for someone else is a 403.
-     * </ul>
-     */
+    /** Resolves which employees' attendance user may read. The single source of truth for attendance authorization
+     * — punch list, day view, unmapped badges and the employee picker all route through here. hr/ceo —
+     * company-wide, and may request any employee. ฝ่าย manager — their whole division. */
     AttendanceScope resolveScope(UserPrincipal user, Long requestedEmployeeId) {
         return resolveScope(user, requestedEmployeeId, null);
     }
 
-    /**
-     * As {@link #resolveScope(UserPrincipal, Long)}, plus an optional ฝ่าย narrowing.
-     *
-     * <p>{@code requestedDivisionId} is honoured <strong>only</strong> for hr/ceo, who can already
-     * see every division — for them it is a convenience filter, not a grant. A ฝ่าย manager's
-     * division is always taken from their own principal and the requested value is ignored
-     * outright, so the parameter can never widen anyone's access.
-     */
+    /** As #resolveScope(UserPrincipal, Long), plus an optional ฝ่าย narrowing. requestedDivisionId is honoured only
+     * for hr/ceo, who can already see every division — for them it is a convenience filter, not a grant. */
     AttendanceScope resolveScope(UserPrincipal user, Long requestedEmployeeId, Long requestedDivisionId) {
         if (VIEW_ALL_ROLES.contains(user.role())) {
             if (requestedEmployeeId == null && requestedDivisionId == null) {
@@ -245,18 +220,9 @@ public class AttendanceService {
         return VIEW_ALL_ROLES.contains(user.role());
     }
 
-    /**
-     * The CEO/HR stand-up roster: marks everyone in {@code employeeIds} present for {@code workDate}
-     * with no punches, and clears any earlier WFH mark for that date not resubmitted (§76 — reporting
-     * only, never touches payroll). HR/CEO only at the controller.
-     *
-     * <p>The submitted ids are still re-validated here against the caller's own attendance scope —
-     * the same {@link #listEmployeeOptions} the picker and every other attendance read use — rather
-     * than trusted from the request body outright. In practice this endpoint is reachable only by
-     * hr/ceo (both {@link #VIEW_ALL_ROLES}), so {@code allowedIds} is normally every active employee;
-     * the check exists so a future change to the role gate cannot silently widen who an id can
-     * target.
-     */
+    /** The CEO/HR stand-up roster: marks everyone in employeeIds present for workDate with no punches, and clears
+     * any earlier WFH mark for that date not resubmitted (§76 — reporting only, never touches payroll). HR/CEO
+     * only at the controller. */
     @Transactional
     public AttendanceWfhRosterResult markPresent(
             UserPrincipal user, LocalDate workDate, List<Long> employeeIds, String notes) {
@@ -279,13 +245,9 @@ public class AttendanceService {
         return dailyService.setWfhRoster(workDate, requestedIds, notes);
     }
 
-    /**
-     * Rolls up every employee-day covered by an import, in one pass.
-     *
-     * <p>Scoped to the span the file actually covers rather than the whole table. The set of
-     * employee-days is resolved from the database rather than from the parsed rows because the .dat
-     * carries badge codes, not employee ids — a badge only becomes a person after resolution.
-     */
+    /** Rolls up every employee-day covered by an import, in one pass. The set of employee-days is resolved from the
+     * database rather than from the parsed rows because the .dat carries badge codes, not employee ids — a badge
+     * only becomes a person after resolution. */
     private void recalculateImportedSpan(DatParseResult parseResult) {
         LocalDate from = null;
         LocalDate to = null;
@@ -308,12 +270,9 @@ public class AttendanceService {
         return attendanceRepository.findActiveDevices();
     }
 
-    /**
-     * Backfills hr.employee.badge_card_no from a device-user export so historical card punches
-     * resolve. Each row's device User ID (Pin) is matched to employee_code; rows without a card
-     * number (fingerprint/PIN-only users) are skipped, and cards whose Pin matches no employee are
-     * reported as unmatched. Once badge_card_no is set, the punch-history query resolves those rows.
-     */
+    /** Backfills hr.employee.badge_card_no from a device-user export so historical card punches resolve. Each row's
+     * device User ID (Pin) is matched to employee_code; rows without a card number (fingerprint/PIN-only users)
+     * are skipped, and cards whose Pin matches no employee are reported as unmatched. */
     @Transactional
     public AttendanceCardBackfillResponse backfillCardNumbers(AttendanceCardBackfillRequest request) {
         int updated = 0;
@@ -333,18 +292,15 @@ public class AttendanceService {
             }
         }
         if (updated > 0) {
-            // Punches that were unmapped now resolve to a person. Without this their days would
-            // stay permanently blank in the day view — the badge would be "fixed" while the
-            // attendance it unlocked never appeared.
+            // Punches that were unmapped now resolve to a person. Without this their days would stay permanently blank in
+            // the day view — the badge would be "fixed" while the attendance it unlocked never appeared.
             dailyService.recalculateAllHistory();
         }
         return new AttendanceCardBackfillResponse(updated, skipped, unmatched);
     }
 
-    /**
-     * Issues (or rotates) the agent token for one device. Returns the plaintext token once; only its
-     * SHA-256 hash is stored. HR-only mutation — authorization is enforced at the controller.
-     */
+    /** Issues (or rotates) the agent token for one device. Returns the plaintext token once; only its SHA-256 hash
+     * is stored. HR-only mutation — authorization is enforced at the controller. */
     @Transactional
     public RotateAgentTokenResponse rotateDeviceToken(String rawDeviceCode) {
         if (rawDeviceCode == null || rawDeviceCode.isBlank()) {
@@ -360,18 +316,15 @@ public class AttendanceService {
         return new RotateAgentTokenResponse(deviceCode, token, rotatedAt);
     }
 
-    /**
-     * Authenticates an inbound punch against the presenting device's own token, scoping the accepted
-     * site/device to that credential. Devices not yet provisioned with a per-device token fall back to
-     * the legacy shared token during rollout; unset that shared token to enforce per-device-only.
-     */
+    /** Authenticates an inbound punch against the presenting device's own token, scoping the accepted site/device
+     * to that credential. Devices not yet provisioned with a per-device token fall back to the legacy shared token
+     * during rollout; unset that shared token to enforce per-device-only. */
     private void authenticateDevice(String siteCode, String deviceCode, String agentToken) {
         AttendanceDeviceCredential device = attendanceRepository.findDeviceCredential(deviceCode).orElse(null);
         if (device == null || !device.active()) {
-            // Returned to the physical scanner/agent process on receivePunch's device-auth path
-            // only (never rendered in the browser UI — see receivePunch's single call site above).
-            // Left in English: an out-of-repo device agent may match on this text, and there is no
-            // human-facing surface to translate it for.
+            // Returned to the physical scanner/agent process on receivePunch's device-auth path only (never rendered in
+            // the browser UI — see receivePunch's single call site above). Left in English: an out-of-repo device agent
+            // may match on this text, and there is no human-facing surface to translate it for.
             throw new ApiException(HttpStatus.UNAUTHORIZED, "Unknown or inactive attendance device");
         }
         if (!device.siteCode().equals(siteCode)) {

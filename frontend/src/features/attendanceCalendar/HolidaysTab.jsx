@@ -16,9 +16,9 @@ import { parseCooldownSeconds, summarizeFetchOutcomes } from './holidayFetch.js'
 
 const GRID = 'grid-cols-[minmax(0,0.9fr)_minmax(0,2.1fr)_minmax(0,1fr)_minmax(0,0.8fr)] nav-drawer:min-w-[620px] reflow-cards';
 
-// Default cooldown fallback if a 429 message somehow doesn't carry a parseable seconds figure
-// (message shape changed server-side) — matches BotHolidayFetchService.MANUAL_FETCH_COOLDOWN
-// (10 minutes) exactly, so the countdown is still roughly honest even in that edge case.
+// Default cooldown fallback if a 429 message somehow doesn't carry a parseable seconds figure (message shape
+// changed server-side) — matches BotHolidayFetchService.MANUAL_FETCH_COOLDOWN (10 minutes) exactly, so the
+// countdown is still roughly honest even in that edge case.
 const DEFAULT_COOLDOWN_SECONDS = 600;
 
 function yearOptions(centerYear) {
@@ -29,13 +29,8 @@ function isDuplicateDateError(error) {
   return error?.status === 409;
 }
 
-/**
- * วันหยุด tab: `GET /api/holidays?from&to` in a DataTable, plus create/edit/delete and the manual
- * BOT-fetch trigger. See HolidaysTab's siblings' own comments for the two tabs this one is grouped
- * with; this file owns every "the error state IS the feature" case called out in this branch's
- * brief — the 429 cooldown, the honest zero-row fetch report, the 409 duplicate-date offer, and the
- * BANK->COMPANY reclassification confirm.
- */
+/** วันหยุด tab: `GET /api/holidays?from&to` in a DataTable, plus create/edit/delete and the manual BOT-fetch
+ * trigger. */
 export function HolidaysTab({ showToast }) {
   const queryClient = useQueryClient();
   const currentYear = new Date().getFullYear();
@@ -50,8 +45,8 @@ export function HolidaysTab({ showToast }) {
   const rows = holidaysQuery.data ?? [];
 
   function invalidateHolidays() {
-    // Every year's list is its own cache entry (queryKeys.holidays(from,to)); invalidate the whole
-    // ['holidays', ...] prefix so switching the year selector afterwards never shows stale data.
+    // Every year's list is its own cache entry (queryKeys.holidays(from,to)); invalidate the whole ['holidays',
+    // ...] prefix so switching the year selector afterwards never shows stale data.
     queryClient.invalidateQueries({ queryKey: ['holidays'] });
   }
 
@@ -69,9 +64,9 @@ export function HolidaysTab({ showToast }) {
       setFormError('');
     },
     onError: (error) => {
-      // 409: the exact date already has a row. HolidayAdminService's own message already says
-      // "กรุณาแก้ไขรายการเดิม" — surfaced verbatim, inline, field-shaped (not a toast), plus a
-      // shortcut into edit mode for that row when it's already in the loaded list.
+      // 409: the exact date already has a row. HolidayAdminService's own message already says "กรุณาแก้ไขรายการเดิม"
+      // — surfaced verbatim, inline, field-shaped (not a toast), plus a shortcut into edit mode for that row when
+      // it's already in the loaded list.
       setFormError(error.message || 'เพิ่มวันหยุดไม่สำเร็จ');
     },
   });
@@ -100,10 +95,9 @@ export function HolidaysTab({ showToast }) {
     const row = formTarget?.row;
     if (!row) return;
     if (row.source === 'BANK') {
-      // PUT /api/holidays/{date} always forces source='COMPANY' — HolidayController's own javadoc
-      // is explicit that this is a real, permanent consequence of editing a BANK row (the next BOT
-      // fetch will never touch this date again). Confirm before firing the mutation rather than
-      // just doing it.
+      // PUT /api/holidays/{date} always forces source='COMPANY' — HolidayController's own javadoc is explicit that
+      // this is a real, permanent consequence of editing a BANK row (the next BOT fetch will never touch this date
+      // again). Confirm before firing the mutation rather than just doing it.
       setReclassifyConfirm({ date: row.holidayDate, nameTh: values.nameTh });
       return;
     }
@@ -165,9 +159,9 @@ export function HolidaysTab({ showToast }) {
         invalidateHolidays();
         showToast?.('success', 'ดึงข้อมูลวันหยุดจากธนาคารแห่งประเทศไทยสำเร็จ — ดูรายละเอียดด้านล่าง');
       } else {
-        // The exact production failure mode this branch's brief names: HTTP 200, but nothing was
-        // actually imported (BOT token unset, or BOT has nothing published yet). Never a "success"
-        // toast for this — an info nudge pointing at the honest, persistent detail panel below.
+        // The exact production failure mode this branch's brief names: HTTP 200, but nothing was actually imported
+        // (BOT token unset, or BOT has nothing published yet). Never a "success" toast for this — an info nudge
+        // pointing at the honest, persistent detail panel below.
         showToast?.('info', 'ดึงข้อมูลจาก ธปท. เสร็จแล้ว แต่ไม่มีวันหยุดใหม่ที่นำเข้าได้ — ดูรายละเอียดด้านล่าง');
       }
     },
@@ -177,11 +171,9 @@ export function HolidaysTab({ showToast }) {
         const now = Date.now();
         setCooldownMessage(error.message || '');
         setCooldownUntil(now + seconds * 1000);
-        // nowTick's initial value is only set once, at mount -- by the time this error lands it
-        // can be arbitrarily stale (however long the request took), which would inflate the very
-        // first countdown render (cooldownUntil - a stale nowTick > the true remaining ms). Reset
-        // it here so the first render is accurate instead of waiting a tick for the interval below
-        // to correct it.
+        // nowTick's initial value is only set once, at mount -- by the time this error lands it can be arbitrarily
+        // stale (however long the request took), which would inflate the very first countdown render (cooldownUntil -
+        // a stale nowTick > the true remaining ms).
         setNowTick(now);
         return;
       }
@@ -300,15 +292,7 @@ export function HolidaysTab({ showToast }) {
 
       {formTarget ? (
         <HolidayFormModal
-          // Keyed on mode+row-date so switching from "create" to "edit" (the 409 conflict's
-          // "แก้ไขรายการเดิม" shortcut) forces a remount -- HolidayFormModal's nameTh/holidayDate
-          // are plain useState seeded from initialNameTh/initialDate, which only run on first
-          // mount; without a key change here the modal would keep showing the just-typed
-          // duplicate name instead of the existing row's real one. Deliberately NOT keyed on
-          // `pendingDate`: that field only exists to remember which date a 409 was about (for the
-          // conflictRow lookup below), and it changes on every submit attempt -- keying on it would
-          // remount the form (silently wiping the name the user just typed) on every failed submit,
-          // not only the one 409 case this key exists to handle.
+          // Keyed on mode+row-date so switching from "create" to "edit" forces a remount.
           key={formTarget.mode === 'edit' ? `edit:${formTarget.row.holidayDate}` : 'create'}
           mode={formTarget.mode}
           initialDate={formTarget.mode === 'edit' ? formTarget.row.holidayDate : undefined}

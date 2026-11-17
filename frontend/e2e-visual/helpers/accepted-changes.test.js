@@ -1,10 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { parseAcceptedChanges } from './accepted-changes.js';
 
-// This parser decides whether a pixel diff is allowed through a REQUIRED check, so the
-// cases below are written wrong-way-round: they assert what must NOT be accepted. A test
-// that only proves "my own entry works" would pass just as happily if the PR scoping were
-// deleted entirely.
+// This parser decides whether a pixel diff is allowed through a REQUIRED check, so the cases below are written
+// wrong-way-round: they assert what must NOT be accepted. A test that only proves "my own entry works" would
+// pass just as happily if the PR scoping were deleted entirely.
 
 const KNOWN = new Set(['desktop-hr-employee-requests', 'mobile-ceo-ticket-overview']);
 const ENTRY = '615  desktop-hr-employee-requests  — OT panel gains the suggested-rate row';
@@ -28,18 +27,16 @@ describe('parseAcceptedChanges', () => {
   });
 
   it('does not even parse the file when there is no PR number', () => {
-    // The assertion above passes either way — the PR-scoping check alone already skips
-    // every entry, so it does NOT prove the early return exists (mutation-checked: deleting
-    // that line leaves it green). This is the case that pins it. Without the early return a
-    // broken accepted-changes.txt would throw on every LOCAL run too, where acceptances are
-    // switched off and the file is none of the run's business.
+    // The assertion above passes either way — the PR-scoping check alone already skips every entry, so it does NOT
+    // prove the early return exists (mutation-checked: deleting that line leaves it green). This is the case that
+    // pins it.
     expect(() => parseAcceptedChanges('this is not a valid entry', undefined, KNOWN)).not.toThrow();
     expect(() => parseAcceptedChanges('this is not a valid entry', 615, KNOWN)).toThrow(/PR number/);
   });
 
   it('does not let a numeric-string PR miss its own entry', () => {
-    // The env var arrives as a string; the file holds text. A === between the two forms
-    // would silently accept nothing, and the PR author would see a red they cannot explain.
+    // The env var arrives as a string; the file holds text. A === between the two forms would silently accept
+    // nothing, and the PR author would see a red they cannot explain.
     expect(parseAcceptedChanges(ENTRY, '615', KNOWN).size).toBe(1);
   });
 
@@ -53,8 +50,8 @@ describe('parseAcceptedChanges', () => {
   });
 
   it('leaves an unknown snapshot for ANOTHER PR inert rather than throwing', () => {
-    // A merged entry pointing at a since-deleted route must not break the suite for
-    // everyone else — that is the difference between housekeeping and a landmine.
+    // A merged entry pointing at a since-deleted route must not break the suite for everyone else — that is the
+    // difference between housekeeping and a landmine.
     expect(parseAcceptedChanges('600  route-since-deleted  — x', 615, KNOWN).size).toBe(0);
   });
 

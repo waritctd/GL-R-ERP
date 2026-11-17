@@ -10,16 +10,9 @@ import th.co.glr.hr.dealquotation.DealQuotationRequests.ApproveRequest;
 import th.co.glr.hr.dealquotation.DealQuotationRequests.CancelRequest;
 import th.co.glr.hr.dealquotation.AbstractDealQuotationSlice2IntegrationTest;
 
-/**
- * Quotation ↔ deal linking slice 2, S2-B4 — {@link TicketSummaryDto#liveDirectQuotation} on the deal
- * LIST ({@code TicketService#list} / {@code #listPage} → {@code TicketRepository#findSummaries}) and on
- * the single-deal read ({@code TicketService#get} → {@code TicketRepository#findById}), through the real
- * services against real Postgres.
- *
- * <p>Pinned: {@code {id, number, docStatus, recipientType}} of the NEWEST live DEAL_DIRECT row;
- * {@code null} when there is none; CANCELLED / SUPERSEDED / REJECTED rows and PRICING_REQUEST-origin
- * rows never count; list and detail agree.
- */
+/** Quotation ↔ deal linking slice 2, S2-B4 — TicketSummaryDto#liveDirectQuotation on the deal LIST
+ * (TicketService#list / #listPage → TicketRepository#findSummaries) and on the single-deal read
+ * (TicketService#get → TicketRepository#findById), through the real services against real Postgres. */
 class TicketListLiveDirectQuotationIntegrationTest extends AbstractDealQuotationSlice2IntegrationTest {
 
     @Test

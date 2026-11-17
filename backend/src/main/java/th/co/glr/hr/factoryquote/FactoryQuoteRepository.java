@@ -135,8 +135,8 @@ public class FactoryQuoteRepository {
                 .addValue("pricingRequestItemId", pricingRequestItemIds.get(i))
                 .addValue("sortOrder", startAt + i);
         }
-        // Same unit_basis-copied-verbatim shape as insertDraftItems — see that method's Javadoc
-        // for why no COALESCE is needed.
+        // Same unit_basis-copied-verbatim shape as insertDraftItems — see that method's Javadoc for why no COALESCE is
+        // needed.
         jdbc.batchUpdate("""
             INSERT INTO sales.factory_quote_item
                 (factory_quote_id, pricing_request_item_id, quoted_quantity, quoted_unit, unit_basis, currency, sort_order)
@@ -496,10 +496,7 @@ public class FactoryQuoteRepository {
     }
 
     public void lockResponseIdempotencyKey(long actorId, String clientRequestId) {
-        // Single 64-bit combined key via the pg_advisory_xact_lock(bigint) overload. The
-        // two-int32 overload (pg_advisory_xact_lock(int, int)) would require casting actorId
-        // down to int4, silently truncating employee ids above 2^31; hashtextextended hashes
-        // the combined "actorId:clientRequestId" string into a bigint instead.
+        // Single 64-bit combined key via the pg_advisory_xact_lock(bigint) overload.
         jdbc.query("SELECT pg_advisory_xact_lock(hashtextextended(:lockKey, 0))",
             new MapSqlParameterSource()
                 .addValue("lockKey", actorId + ":" + clientRequestId),
@@ -525,13 +522,8 @@ public class FactoryQuoteRepository {
         }
     }
 
-    /**
-     * Inserts the receipt unless one already exists for (created_by, client_request_id); returns
-     * empty in that case instead of letting the unique index throw. {@code ON CONFLICT DO NOTHING}
-     * never aborts the surrounding transaction (unlike a caught unique-violation, which under
-     * Postgres leaves the transaction in an aborted state — 25P02 — so a subsequent statement in
-     * the same transaction, such as a fallback lookup, would itself fail).
-     */
+    /** Inserts the receipt unless one already exists for (created_by, client_request_id); returns empty in that
+     * case instead of letting the unique index throw. */
     public Optional<FactoryQuoteResponseReceiptDto> createResponseReceiptIfAbsent(
         long factoryQuoteId, long actorId, String clientRequestId
     ) {
@@ -643,13 +635,9 @@ public class FactoryQuoteRepository {
                    SET root_factory_quote_id = :id
                  WHERE factory_quote_id = :id
                 """, Map.of("id", newQuoteId));
-            // Item-by-item rather than INSERT ... SELECT with a join: the remapping lives in a Java
-            // Map (built by the item-equivalence check that authorised this copy in the first
-            // place), and an item whose parent id is absent from that map must be SKIPPED, not
-            // silently inserted with a dangling reference. In practice the map is total — the
-            // caller only reaches here when every item matched — so a skip would mean the caller's
-            // own precondition broke, and the isFullyResolvable re-check it performs afterwards is
-            // what catches that.
+            // Item-by-item rather than INSERT ... SELECT with a join: the remapping lives in a Java Map (built by the
+            // item-equivalence check that authorised this copy in the first place), and an item whose parent id is absent
+            // from that map must be SKIPPED, not silently inserted with a dangling reference.
             for (FactoryQuoteItemDto item : findItems(sourceQuoteId)) {
                 Long childItemId = itemIdMapping.get(item.pricingRequestItemId());
                 if (childItemId == null) {
@@ -680,19 +668,9 @@ public class FactoryQuoteRepository {
         return created;
     }
 
-    /**
-     * Compensating delete for {@link #copyReadyQuotesToRevision}, used when the copy turns out not
-     * to satisfy {@code LandedCostCalculator.isFullyResolvable} after all.
-     *
-     * <p>Deliberately NOT left to a transaction rollback. Every integration test in this repo
-     * hand-wires its services with {@code new}, so {@code @Transactional} is inert there and a
-     * test asserting "the copy was undone" would be asserting a rollback that never happens (see
-     * {@code AbstractPostgresIntegrationTest}'s own Javadoc). An explicit delete behaves
-     * identically in production and under test, which is the point.
-     *
-     * <p>Safe as a hard delete: these rows were created moments earlier by the copy and nothing
-     * can reference them yet. {@code factory_quote_item} goes via ON DELETE CASCADE.
-     */
+    /** Compensating delete for #copyReadyQuotesToRevision, used when the copy turns out not to satisfy
+     * LandedCostCalculator.isFullyResolvable after all. Deliberately NOT left to a transaction rollback. An
+     * explicit delete behaves identically in production and under test, which is the point. */
     public int deleteQuotes(List<Long> factoryQuoteIds) {
         if (factoryQuoteIds.isEmpty()) {
             return 0;
@@ -745,14 +723,8 @@ public class FactoryQuoteRepository {
             """, Map.of("quoteId", quoteId), (rs, rowNum) -> mapAttachment(rs));
     }
 
-    /**
-     * True if any {@code SUBMITTED} costing was calculated against this quote (i.e. any {@code
-     * sales.pricing_costing_item} row it produced points at this {@code factory_quote_id}). Used
-     * by {@link th.co.glr.hr.factoryquote.FactoryQuoteService#deleteAttachment} — supplier
-     * evidence backing a costing the CEO has already reviewed must never be deletable, even if
-     * the quote itself never individually reached {@code READY_FOR_COSTING} again after a later
-     * supersede (the costing line still references this exact revision).
-     */
+    /** True if any SUBMITTED costing was calculated against this quote (i.e. any sales.pricing_costing_item row it
+     * produced points at this factory_quote_id). */
     public boolean existsSubmittedCostingReferencingQuote(long factoryQuoteId) {
         Boolean exists = jdbc.queryForObject("""
             SELECT EXISTS (

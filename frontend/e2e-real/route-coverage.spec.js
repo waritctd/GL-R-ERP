@@ -5,31 +5,11 @@ import { canAccessPath } from '../src/app/permissions.js';
 import { REAL_ROLES } from './helpers/accounts.js';
 import { loginAs, sessionUser, spaGoto } from './helpers/auth.js';
 
-// ─────────────────────────────────────────────────────────────────────────────
-// WHOLE-APP ROUTE COVERAGE — every route in App.jsx, opened by every seeded role, in a real
-// browser against the real backend.
-//
-// e2e/rbac.spec.js already walks most of these routes against the MOCK frontend and checks
-// render-vs-redirect against canAccessPath. It says in its own header that this proves nothing
-// about the server. Two things are different here, and both need a real backend:
-//
-//   1. For every route a role may open, the page must actually LOAD — no error boundary, and
-//      no 5xx from any request it fires. Against mocks every page loads by construction,
-//      because the fixture always answers; the interesting failures (a broken query, a DTO the
-//      UI can't parse, an endpoint the page calls that doesn't exist) only exist server-side.
-//   2. The permission oracle is the REAL principal. canAccessPath is called with the `user`
-//      object the backend issued for that session, not a hand-maintained stand-in — so if
-//      DivisionAccessPolicy resolved a different role or employeeId than the frontend's table
-//      assumes, that shows up here.
-//
-// The route list is checked against App.jsx on every run (see the completeness test), so a new
-// route cannot be added without either being covered or being explicitly excluded with a reason.
-// ─────────────────────────────────────────────────────────────────────────────
+// WHOLE-APP ROUTE COVERAGE — every route in App.jsx, opened by every seeded role, in a real browser against
+// the real backend. For every route a role may open, the page must actually LOAD — no error boundary, and no
+// 5xx from any request it fires.
 
-// Concrete ids for the dynamic segments. Where the demo seed has a real row, the real id is
-// used so the page renders its populated state rather than a not-found; where it does not, the
-// id is a placeholder and the assertion is only that the page handles "no such record" without
-// erroring — which is itself worth asserting.
+// Concrete ids for the dynamic segments.
 const ROUTES = [
   '/',
   '/hr',
@@ -50,9 +30,11 @@ const ROUTES = [
   '/settings/leave-policy', // §5 announcement PDF upload
   '/settings/attendance-calendar',
   '/attendance',
+  '/people-insights', // วิเคราะห์การลาและเวลาเข้างาน — ceo/hr (and team heads); with no teams configured it renders the whole-company view
   '/tickets',
   '/tickets/1', // DEMO-TKT-01 (V21) — a real deal
   '/tickets/1/deposit',
+  '/visits', // นัดเข้าพบ — sales: own week (GET /api/sales/visits); sales_manager / ceo: team grid; every other role refuses
   '/pricing-requests',
   '/pricing-requests/1',
   // Direct deal quotation. '/quotations/1' is deliberately a
@@ -62,22 +44,26 @@ const ROUTES = [
   '/quotations',
   '/quotations/new',
   '/quotations/1',
-  '/fulfilment', // งานนำเข้า — Import's fulfilment workspace (import/ceo; every other role refuses)
+  '/fulfilment', // การขนส่ง — Import's fulfilment workspace (import/ceo; every other role refuses)
   '/import/deals/1', // Import's own per-deal page (GET /api/import/deals/{id}; import/ceo, import row-scoped)
   '/commissions',
   '/finance',
   '/finance/deals/1', // Account's own per-deal finance page (GET /api/finance/deals/{id}; account/ceo, account row-scoped)
+  '/finance/receipts-import', // Express receipts upload (GET /api/sales/receipt-imports/latest; account only — ceo refused by guard and service)
   '/price-import',
   '/ceo-settings',
   '/catalog',
+  '/whats-new', // มีอะไรใหม่ — release notice, every role (static content; no API call to render)
+  '/whats-new/2026-11-16', // the same page pinned to one release: where the bell row and the email link land
+  '/whats-new/2026-11-17', // the second release: /whats-new now shows it, and the 16 Nov link above must still load
 ];
 
 // Declared in App.jsx but deliberately outside this sweep, each with the reason.
 const EXCLUDED_ROUTE_PATTERNS = [
   // The catch-all; it has no path of its own, it redirects whatever is left to '/'.
   '*',
-  // A test-only probe component mounted for the mock suite's SafeForm guard spec — not a
-  // product route, and not something a real user can reach meaningfully.
+  // A test-only probe component mounted for the mock suite's SafeForm guard spec — not a product route, and not
+  // something a real user can reach meaningfully.
   '/__e2e/safe-form-submitter-probe',
   // Admin-only portal activity log. NO seeded persona holds the admin capability, so every
   // persona this suite can log in as gets the access-denied page — sweeping it would assert
@@ -95,9 +81,9 @@ const EXCLUDED_ROUTE_PATTERNS = [
 ];
 
 function declaredRoutes() {
-  // Parsed from the source rather than imported, because App.jsx's routes are JSX inside a
-  // component — there is no exported table to read. This is the coverage oracle: it is what
-  // makes "the whole app" a claim the suite re-checks rather than a claim made once.
+  // Parsed from the source rather than imported, because App.jsx's routes are JSX inside a component — there is
+  // no exported table to read. This is the coverage oracle: it is what makes "the whole app" a claim the suite
+  // re-checks rather than a claim made once.
   const appJsx = readFileSync(
     fileURLToPath(new URL('../src/App.jsx', import.meta.url)),
     'utf8'
@@ -143,8 +129,8 @@ test.describe('route coverage is complete', () => {
   test('every route in ROUTES still exists in App.jsx', () => {
     const declared = declaredRoutes();
     const orphaned = ROUTES.filter((route) => toPattern(route, declared) === null);
-    // The other direction: a route deleted from the app should not linger here quietly
-    // passing as "denied to everyone" — which is exactly what a removed route looks like.
+    // The other direction: a route deleted from the app should not linger here quietly passing as "denied to
+    // everyone" — which is exactly what a removed route looks like.
     expect(orphaned, 'ROUTES entries with no matching <Route> in App.jsx').toEqual([]);
   });
 });
@@ -159,8 +145,8 @@ test.describe('every role can open every route it is allowed to open', () => {
       const user = await sessionUser(page);
       expect(user.role).toBe(role);
 
-      // Attributed to whichever route was open when the response landed — a bare list of
-      // failing endpoints would say a page somewhere is broken without saying which one.
+      // Attributed to whichever route was open when the response landed — a bare list of failing endpoints would say
+      // a page somewhere is broken without saying which one.
       let currentRoute = '(during login)';
       const serverErrors = [];
       page.on('response', (response) => {
@@ -171,13 +157,9 @@ test.describe('every role can open every route it is allowed to open', () => {
         }
       });
 
-      // Uncaught JS exceptions, attributed the same way. This is deliberately NOT the same check
-      // as the error boundary below: React catches a throw during *render* and shows the fallback,
-      // but a throw from an event handler, an effect's async continuation, or a promise rejection
-      // never reaches a boundary at all. Those leave the page looking fine and silently broken,
-      // which is precisely the failure this sweep could not see before.
-      //
-      // Asserted with no allowlist, because an uncaught exception has no benign form.
+      // Uncaught JS exceptions, attributed the same way. Those leave the page looking fine and silently broken,
+      // which is precisely the failure this sweep could not see before. Asserted with no allowlist, because an
+      // uncaught exception has no benign form.
       const pageErrors = [];
       page.on('pageerror', (error) => {
         pageErrors.push(`${currentRoute} → ${error.name}: ${error.message}`);
@@ -189,20 +171,18 @@ test.describe('every role can open every route it is allowed to open', () => {
       for (const route of ROUTES) {
         currentRoute = route;
         await spaGoto(page, route);
-        // Settle before waiting on idle. React Query fires this route's requests during the
-        // render that follows popstate, so networkidle asked for immediately would resolve
-        // against the PREVIOUS route's quiet network and wave this one through unloaded.
+        // Settle before waiting on idle. React Query fires this route's requests during the render that follows
+        // popstate, so networkidle asked for immediately would resolve against the PREVIOUS route's quiet network and
+        // wave this one through unloaded.
         await page.waitForTimeout(250);
         await page
           .waitForLoadState('networkidle', { timeout: 15_000 })
           .catch(() => {/* a page that keeps polling never idles; the checks below still hold */});
 
         const allowed = canAccessPath(route, user);
-        // A denied route may refuse by REDIRECTING to a page the role can use, rather than by
-        // showing the AccessDenied heading — e.g. import hitting a deal page (`/tickets/:id`) is
-        // sent to its own `/import/deals/:id` (RequireAccess; pinned in RequireAccess.test.jsx).
-        // Landing on a DIFFERENT path than the one requested is therefore a clean refusal, not a
-        // "denied but rendered" leak. (`canAccessPath` still governs whether the guard denies.)
+        // A denied route may refuse by REDIRECTING to a page the role can use, rather than by showing the AccessDenied
+        // heading — e.g. import hitting a deal page (`/tickets/:id`) is sent to its own `/import/deals/:id`
+        // (RequireAccess; pinned in RequireAccess.test.jsx).
         const landedPath = new URL(page.url()).pathname;
         const redirectedAway = landedPath !== route.split('?')[0];
         const deniedShown = await page

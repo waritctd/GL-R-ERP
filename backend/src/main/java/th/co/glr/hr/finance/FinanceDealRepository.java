@@ -8,10 +8,8 @@ import java.util.Optional;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
 
-/**
- * The few reads the finance deal view needs that no existing repository exposes, each selecting an
- * explicit allowlist of columns -- never {@code SELECT *}, never a cost/FX/margin column.
- */
+/** The few reads the finance deal view needs that no existing repository exposes, each selecting an explicit
+ * allowlist of columns -- never SELECT *, never a cost/FX/margin column. */
 @Repository
 public class FinanceDealRepository {
     private final NamedParameterJdbcTemplate jdbc;
@@ -25,11 +23,9 @@ public class FinanceDealRepository {
                                   java.time.Instant issuedAt, java.time.Instant acceptedAt, String origin,
                                   Long pricingRequestId) {}
 
-    /**
-     * The customer quotation that defines what the customer owes: ACCEPTED first, else
-     * ISSUED/SENT, in exactly the order {@code TicketRepository#payableAmountSelect} picks its
-     * total, so the document shown here is the one the payable figure was read from.
-     */
+    /** The customer quotation that defines what the customer owes: ACCEPTED first, else ISSUED/SENT, in exactly the
+     * order TicketRepository#payableAmountSelect picks its total, so the document shown here is the one the
+     * payable figure was read from. */
     public Optional<QuotationHeader> findPayableQuotation(long ticketId) {
         return jdbc.query("""
             SELECT q.quotation_id, q.number, q.doc_status, q.total_amount, q.currency,
@@ -70,11 +66,9 @@ public class FinanceDealRepository {
                 rs.getBigDecimal("unit_price"), rs.getBigDecimal("line_total"), FinanceDealDto.EXCLUDING_VAT));
     }
 
-    /**
-     * Fallback for a deal with no live quotation: its own lines at the APPROVED selling price only
-     * (the same figure {@code payableAmountSelect}'s last fallback sums). Raw/proposed/calculated
-     * price columns are deliberately not selected.
-     */
+    /** Fallback for a deal with no live quotation: its own lines at the APPROVED selling price only (the same
+     * figure payableAmountSelect's last fallback sums). Raw/proposed/calculated price columns are deliberately not
+     * selected. */
     public List<FinanceDealDto.Item> findTicketItemsAtApprovedPrice(long ticketId) {
         return jdbc.query("""
             SELECT NULLIF(TRIM(CONCAT_WS(' ', ti.brand, ti.model, ti.color, ti.texture, ti.size)), '') AS description,
@@ -88,10 +82,8 @@ public class FinanceDealRepository {
                 rs.getBigDecimal("unit_price"), rs.getBigDecimal("line_total"), FinanceDealDto.EXCLUDING_VAT));
     }
 
-    /**
-     * Live billing notes (ISSUED or SETTLED) that bill this deal, with the amount of THIS deal's
-     * lines (a note is a per-customer cover sheet that may bill several deals).
-     */
+    /** Live billing notes (ISSUED or SETTLED) that bill this deal, with the amount of THIS deal's lines (a note is
+     * a per-customer cover sheet that may bill several deals). */
     public List<FinanceDealDto.BillingNoteDoc> findLiveBillingNotesForTicket(long ticketId) {
         return jdbc.query("""
             SELECT bn.id, bn.doc_number, bn.status, bn.bill_date, SUM(l.amount) AS amount
@@ -120,13 +112,9 @@ public class FinanceDealRepository {
                 rs.getTimestamp("created_at").toInstant(), rs.getString("message")));
     }
 
-    /**
-     * The deal's LATEST (highest commission_id) non-VOID SALE commission joined to its invoice, as the
-     * finance view may see it: invoice fields and approval status only. Explicit allowlist -- never a
-     * commission amount, weight, tier, payroll month or rep. {@code downloadPath} points at the deal's
-     * INVOICE ticket attachment whose file_path equals the commission invoice file's (createFromDeal
-     * writes the same physical file to both); the highest such attachment id wins, null when none.
-     */
+    /** The deal's LATEST (highest commission_id) non-VOID SALE commission joined to its invoice, as the finance
+     * view may see it: invoice fields and approval status only. Explicit allowlist -- never a commission amount,
+     * weight, tier, payroll month or rep. */
     public Optional<FinanceDealDto.CommissionInvoice> findCommissionInvoice(long ticketId) {
         return jdbc.query("""
             SELECT inv.invoice_number, inv.invoice_date, inv.gross_amount, inv.bank_fees, inv.suspense_vat,

@@ -11,12 +11,12 @@ globalThis.React = React;
 const catalog = DEAL_STAGE_CATALOG;
 const OWNER_OFF = ['QUOTE_DESIGN_SIDE'];
 const BUYER_OFF = ['QUOTE_DESIGN_SIDE', 'QUOTE_OWNER', 'OWNER_SIGNOFF', 'AWAITING_BUYER'];
-// The server's own refusal, one distinct sentence per stage so a test can prove it is rendered
-// VERBATIM per row (DealRoute.refusalMessage's shape).
-const reasonFor = (stage) => `ดีลนี้เป็นผู้ซื้อ/ผู้รับเหมาติดต่อโดยตรง — ขั้นที่ ${stage.no} ไม่อยู่ในเส้นทางของดีลนี้ — แก้ช่องทางดีลก่อน`;
+// The server's own refusal, one distinct sentence per stage so a test can prove it is rendered VERBATIM per
+// row (DealRoute.refusalMessage's shape).
+const reasonFor = (stage) => `ช่องทางรับงานของงานนี้คือผู้ซื้อ/ผู้รับเหมาติดต่อโดยตรง — ขั้นที่ ${stage.no} ไม่อยู่ในเส้นทางนี้ — แก้ช่องทางรับงานก่อน`;
 
-// ⚠️ Built here and passed DIRECTLY as props. mockApi.js does not emit `onRoute`, so driving these
-// through the mock would see every stage on-route and pass vacuously.
+// ⚠️ Built here and passed DIRECTLY as props. mockApi.js does not emit `onRoute`, so driving these through the
+// mock would see every stage on-route and pass vacuously.
 const decisionsFor = (off) => catalog.stages.map((stage) => ({
   stage: stage.code,
   no: stage.no,
@@ -43,8 +43,8 @@ describe('RouteRibbon — ordinal numbering', () => {
   it('numbers pips by the ROUTE ordinal, not the business stage number', () => {
     render(<DealStageStepper salesStage="QUOTE_BUYER" catalog={catalog}
       stageDecisions={decisionsFor(BUYER_OFF)} entryChannel="BUYER_DIRECT" />);
-    // 11-stage route, current is its 4th step. Steps 1–3 are done and render a tick, so the first
-    // NUMBER shown is the current step: 4, then 5…11. The business numbers (8, 9, 10…) must be gone.
+    // 11-stage route, current is its 4th step. Steps 1–3 are done and render a tick, so the first NUMBER shown is
+    // the current step: 4, then 5…11. The business numbers (8, 9, 10…) must be gone.
     expect(pipNumbers()).toEqual(['4', '5', '6', '7', '8', '9', '10', '11']);
   });
 
@@ -216,7 +216,7 @@ describe('DealStageStepper off-route group', () => {
   it('still says the reason when the server sent none (never a silently dead row)', () => {
     const noReason = decisionsFor(OWNER_OFF).map((d) => ({ ...d, blockedReason: null }));
     render(<DealStageStepper catalog={catalog} salesStage="SPEC_APPROVED" stageDecisions={noReason} />);
-    expect(within(screen.getByTestId('off-route-group')).getByText(/ไม่อยู่ในเส้นทางของดีลนี้/)).not.toBeNull();
+    expect(within(screen.getByTestId('off-route-group')).getByText(/ไม่อยู่ในเส้นทางนี้ — แก้ช่องทางรับงานก่อน/)).not.toBeNull();
   });
 
   it('labels the row a deal is actually SITTING on, so a corrected channel does not read as an error', () => {
@@ -224,7 +224,7 @@ describe('DealStageStepper off-route group', () => {
     render(
       <DealStageStepper catalog={catalog} salesStage="QUOTE_DESIGN_SIDE" stageDecisions={decisionsFor(OWNER_OFF)} />,
     );
-    expect(within(screen.getByTestId('off-route-group')).getByText('ดีลอยู่ขั้นนี้')).not.toBeNull();
+    expect(within(screen.getByTestId('off-route-group')).getByText('งานอยู่ขั้นนี้')).not.toBeNull();
   });
 });
 
@@ -266,14 +266,9 @@ describe('DealStageStepper phase list follows the route', () => {
   });
 });
 
-/**
- * The remedy for the gate's own refusal. The server's blockedReason ends "— แก้ช่องทางดีลก่อน", and
- * GLA-156 had deleted the only control that could do that. It lives WHERE THE REFUSAL IS READ — on
- * each off-route row — as an inline disclosure, never a permanent row and never a modal.
- *
- * `entryChannelAction` is the server's own SET_ENTRY_CHANNEL advertisement, passed straight in;
- * the stepper decides nothing about who may correct a channel.
- */
+/** The remedy for the gate's own refusal. The server's blockedReason ends "— แก้ช่องทางดีลก่อน", and GLA-156
+ * had deleted the only control that could do that. It lives WHERE THE REFUSAL IS READ — on each off-route row
+ * — as an inline disclosure, never a permanent row and never a modal. */
 describe('DealStageStepper off-route rows — แก้ช่องทางดีล', () => {
   const FIRST = { action: 'SET_ENTRY_CHANNEL', kind: 'policy', requiredFields: ['value'] };
   const STATED = { action: 'SET_ENTRY_CHANNEL', kind: 'policy', requiredFields: ['value', 'note'] };
@@ -288,7 +283,7 @@ describe('DealStageStepper off-route rows — แก้ช่องทางด�
       {...props}
     />,
   );
-  const toggles = () => screen.queryAllByRole('button', { name: /แก้ช่องทางดีล/ });
+  const toggles = () => screen.queryAllByRole('button', { name: /แก้ช่องทาง/ });
   // Asserts the control exists BEFORE clicking, so a missing remedy fails as an assertion.
   const firstToggle = () => {
     expect(toggles().length).toBeGreaterThan(0);
@@ -298,7 +293,7 @@ describe('DealStageStepper off-route rows — แก้ช่องทางด�
   it('puts one remedy on EACH off-route row, and only inside the off-route group', () => {
     renderBuyer();
     const group = within(screen.getByTestId('off-route-group'));
-    expect(group.getAllByRole('button', { name: /แก้ช่องทางดีล/ })).toHaveLength(BUYER_OFF.length);
+    expect(group.getAllByRole('button', { name: /แก้ช่องทาง/ })).toHaveLength(BUYER_OFF.length);
     // Not in the phase list, not in the ribbon: nowhere but beside the refusal it answers.
     expect(toggles()).toHaveLength(BUYER_OFF.length);
   });
@@ -351,7 +346,7 @@ describe('DealStageStepper off-route rows — แก้ช่องทางด�
     const { unmount } = renderBuyer({ entryChannelAction: FIRST, onSetEntryChannel });
     fireEvent.click(firstToggle());
     expect(screen.queryByTestId('entry-channel-fix-reason')).toBeNull();
-    fireEvent.click(screen.getByRole('radio', { name: /ผู้ออกแบบนำดีล/ }));
+    fireEvent.click(screen.getByRole('radio', { name: /ผู้ออกแบบนำงานมา/ }));
     fireEvent.click(screen.getByRole('button', { name: 'บันทึกช่องทางใหม่' }));
     expect(onSetEntryChannel).toHaveBeenCalledWith({ value: 'DESIGNER_LED', note: null });
     unmount();
@@ -359,7 +354,7 @@ describe('DealStageStepper off-route rows — แก้ช่องทางด�
     const stated = vi.fn();
     renderBuyer({ entryChannelAction: STATED, onSetEntryChannel: stated });
     fireEvent.click(firstToggle());
-    fireEvent.click(screen.getByRole('radio', { name: /ผู้ออกแบบนำดีล/ }));
+    fireEvent.click(screen.getByRole('radio', { name: /ผู้ออกแบบนำงานมา/ }));
     expect(screen.getByRole('button', { name: 'บันทึกช่องทางใหม่' }).disabled).toBe(true);
     fireEvent.change(screen.getByTestId('entry-channel-fix-reason'), { target: { value: 'มีผู้ออกแบบจริง' } });
     fireEvent.click(screen.getByRole('button', { name: 'บันทึกช่องทางใหม่' }));
@@ -369,14 +364,14 @@ describe('DealStageStepper off-route rows — แก้ช่องทางด�
   it('disables saving while an action is in flight', () => {
     renderBuyer({ actionLoading: true });
     fireEvent.click(firstToggle());
-    fireEvent.click(screen.getByRole('radio', { name: /ผู้ออกแบบนำดีล/ }));
+    fireEvent.click(screen.getByRole('radio', { name: /ผู้ออกแบบนำงานมา/ }));
     expect(screen.getByRole('button', { name: 'บันทึกช่องทางใหม่' }).disabled).toBe(true);
   });
 });
 
-// The list's segmented bar had the same catalog-wide denominator as its text: one flex-weighted
-// segment per phase, sized by the phase's stage count (2,4,3,3,3 = 15). A buyer-direct deal's bar
-// now counts only that channel's on-route stages, so the graphic and "ขั้นตอน 4/11" cannot disagree.
+// The list's segmented bar had the same catalog-wide denominator as its text: one flex-weighted segment per
+// phase, sized by the phase's stage count (2,4,3,3,3 = 15). A buyer-direct deal's bar now counts only that
+// channel's on-route stages, so the graphic and "ขั้นตอน 4/11" cannot disagree.
 describe('StageProgressBar — per-phase segments count only the deal\'s on-route stages', () => {
   const segments = (container) => Array.from(container.firstChild.children);
   const grows = (container) => segments(container).map((seg) => Number(seg.style.flexGrow));

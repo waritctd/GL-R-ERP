@@ -52,45 +52,9 @@ import th.co.glr.hr.pricingrequest.PricingRequestService;
 import th.co.glr.hr.pricingrequest.QuantityType;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
-/**
- * Slice D ("the เอกสาร document register"): characterises what the REAL backend enforces for the
- * three document-row families {@code DealDocumentRegister.jsx} rolls up — customer quotations
- * (both the PricingRequest/CustomerQuotation chain and the legacy embedded {@code
- * ticket.quotations}), the deposit notice + remaining invoice, and formal attachments — through
- * the real services and repositories on real Postgres, per CLAUDE.md's "Permission changes must
- * ship evidence" section ({@link th.co.glr.hr.attendance.AttendanceScopeIntegrationTest} is the
- * cited reference shape; {@link TicketIaAuthzMatrixIntegrationTest} is this test's direct sibling
- * — it already pins the per-tab matrix this document register draws its three predicates from).
- * Every case below is written the WRONG WAY ROUND: it asks whether a caller can reach data it
- * should not, never merely that it can reach its own.
- *
- * <p>This test does not re-litigate the whole IA matrix — see
- * {@code TicketIaAuthzMatrixIntegrationTest} for the exhaustive per-tab pin. It adds exactly what
- * Slice D's own frontend gate needs proven, that the matrix did not already need to state:
- *
- * <ul>
- *   <li><b>The remaining invoice shares {@link DepositNoticeService}'s deposit-notice gate, NOT
- *       the attachments gate.</b> {@code getRemainingInvoiceOptions} calls {@code
- *       requireTicketViewer} FIRST, before its own {@code quotation_issued} status check — so the
- *       403 fires (or does not) purely off the same role/participation rule as {@code
- *       listByTicket}, independent of the ticket's business status. This branch's brief originally
- *       sketched the remaining invoice under the SAME "participant OR canViewTicketDocuments" shape
- *       as attachments; reading the source shows that is wrong — an import rep who IS this deal's
- *       assignee (a participant) reaches attachments but is STILL refused the remaining invoice,
- *       exactly like the deposit notice. See {@code importAssignee_*} below and this branch's PR
- *       body for the full note.</li>
- *   <li><b>The legacy embedded {@code ticket.quotations} field is nulled for {@code import}
- *       unconditionally by {@code TicketService#projectForRole} — regardless of participation.</b>
- *       This is a role-only strip, not identity-scoped, so it fires even for this deal's own
- *       import assignee. It is a SEPARATE mechanism from the new PricingRequest/CustomerQuotation
- *       chain, which {@code CustomerQuotationService.VIEW_ROLES} genuinely grants {@code import}
- *       (pinned by the sibling matrix's own {@code quotation_salesManagerCeoImportCanAllList}) —
- *       DealDocumentRegister.jsx additionally hides that chain from {@code import} too, but that
- *       half is a documented FRONTEND-ONLY choice (salesViewScope.js), not something this backend
- *       enforces. See {@code importAssignee_seesZeroQuotationRows} below, which asserts both halves
- *       precisely so a future reader cannot confuse one for the other.</li>
- * </ul>
- */
+/** Slice D: characterises what the REAL backend enforces for the three document-row families
+ * DealDocumentRegister.jsx rolls up. Every case below is written the WRONG WAY ROUND: it asks whether a caller
+ * can reach data it should not, never merely that it can reach its own. */
 class DealDocumentRegisterAuthzIntegrationTest extends AbstractPostgresIntegrationTest {
 
     private TicketRepository tickets;
@@ -141,10 +105,7 @@ class DealDocumentRegisterAuthzIntegrationTest extends AbstractPostgresIntegrati
 
         attachmentController = new AttachmentController(new AttachmentRepository(jdbc), new SessionContext(), tickets,
             new AuditService(new AuditLogRepository(jdbc), objectMapper), fileStorage);
-        // AttachmentController#list is package-private — only reachable from within
-        // th.co.glr.hr.attachment. Going through MockMvc against the real route is the actually
-        // correct shape anyway (a bare UserPrincipal call would skip SessionContext.requireUser
-        // entirely) — same pattern as TicketIaAuthzMatrixIntegrationTest/AttachmentControllerTest.
+        // AttachmentController#list is package-private — only reachable from within th.co.glr.hr.attachment.
         mvc = MockMvcBuilders.standaloneSetup(attachmentController)
             .setControllerAdvice(new ApiExceptionHandler())
             .build();
@@ -181,28 +142,20 @@ class DealDocumentRegisterAuthzIntegrationTest extends AbstractPostgresIntegrati
             salesOwnerActor);
         ticketId = created.summary().id();
 
-        // The real pickup flow (import claiming a deal) sets assigned_to — set directly here
-        // (fixture only, not the code path under test), mirroring
-        // TicketIaAuthzMatrixIntegrationTest's own identical fixture comment, so this deal has a
-        // real PARTICIPANT import actor to prove the participant-vs-role divergence against.
+        // The real pickup flow sets assigned_to — set directly here, mirroring TicketIaAuthzMatrixIntegrationTest's
+        // own identical fixture comment, so this deal has a real PARTICIPANT import actor to prove the
+        // participant-vs-role divergence against.
         jdbc.update("UPDATE sales.ticket SET assigned_to = :assigneeId WHERE ticket_id = :ticketId",
             Map.of("assigneeId", importAssigneeId, "ticketId", ticketId));
 
-        // Opus review finding: the two "import cannot see legacy quotations" cases below used to
-        // assert `ticket.quotations()).isEmpty()` on a deal that had NO legacy quotation for
-        // ANYONE — that assertion is true whether or not `TicketService#projectForRole` strips
-        // anything, so mutating the stripping away left every affected test green (a "cannot
-        // fail" test, exactly what CLAUDE.md's mutation-check rule exists to catch). Seeding one
-        // real legacy row here — via the same `TicketRepository#createQuotation` the retired
-        // ticket-native quotation flow itself used (see TicketRepositoryIntegrationTest for the
-        // same call shape) — makes the comparison mean something: a role that MAY see it (sales,
-        // the owner) must see exactly one row on this same deal where import sees zero.
+        // Opus review finding: the two "import cannot see legacy quotations" cases below used to assert
+        // `ticket.quotations).isEmpty` on a deal that had NO legacy quotation for ANYONE.
         tickets.createQuotation(ticketId, "QT-2026-DOCREG-0001", salesOwnerId, new BigDecimal("1000.00"));
 
         long catalogPriceId = insertCatalogProduct("Factory Doc Register", "TH", "DOCREG-001",
             new BigDecimal("100.00"), "THB", "per_piece");
-        // V185 (direct-deal-form parity): color/texture/thicknessMm/sqmPerPiece/piecesPerBox/a
-        // quantity are now required on every item PricingRequestService#createDraft persists —
+        // V185 (direct-deal-form parity): color/texture/thicknessMm/sqmPerPiece/piecesPerBox/a quantity are now
+        // required on every item PricingRequestService#createDraft persists —
         // requestedQty/requestedUnit/requestedUnitBasis are derived instead.
         var item = new PricingRequestRequests.PricingRequestItemRequest(null, catalogPriceId, null,
             "Brand", "Model", "Brand Model", "White", "Matte", "60x60", "Factory Doc Register",
@@ -216,16 +169,12 @@ class DealDocumentRegisterAuthzIntegrationTest extends AbstractPostgresIntegrati
             null, "THB", "doc register authz test", UUID.randomUUID().toString(), List.of(item));
         pricingRequestId = pricingRequestService.createDraft(ticketId, createPrRequest, salesOwnerActor)
             .summary().id();
-        // SUBMITTED (not DRAFT — a DRAFT is owner/ceo/sales_manager-only, which would make
-        // import's genuine positive grant on the new chain untestable). Every refusal under test
-        // fires on the role/participation gate itself, before pricing-request status is even
-        // inspected, so it holds at every status — same reasoning as the sibling matrix.
+        // SUBMITTED (not DRAFT — a DRAFT is owner/ceo/sales_manager-only, which would make import's genuine positive
+        // grant on the new chain untestable).
         pricingRequestService.submit(pricingRequestId, salesOwnerActor);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // account: can list deposit notices and attachments, cannot read pricing requests/quotations
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void account_canListDepositNoticesAndAttachmentsForTheTicket_onlyOnceTheDealIsInItsListScope() throws Exception {
@@ -243,54 +192,42 @@ class DealDocumentRegisterAuthzIntegrationTest extends AbstractPostgresIntegrati
         assertForbidden(() -> quotationService.listForPricingRequest(pricingRequestId, accountActor));
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // import: the legacy embedded ticket.quotations field is nulled unconditionally (role-only,
-    // NOT participant-scoped) — the "import cannot list customer quotations" case, at the layer
-    // this register actually reads it from.
-    // ─────────────────────────────────────────────────────────────────────────────────────
+    // import: the legacy embedded ticket.quotations field is nulled unconditionally (role-only, NOT
+    // participant-scoped) — the "import cannot list customer quotations" case, at the layer this register actually
+    // reads it from.
 
     @Test
     void import_cannotSeeTheLegacyEmbeddedQuotationsOnTheTicketDto_evenAsThisDealsAssignee() {
-        // Opus review finding: without a real seeded quotation, "import sees an empty list" was
-        // true only because NO ONE had a quotation on this deal — a green test that could not go
-        // red if `projectForRole` stopped stripping anything. The fixture now seeds exactly one
-        // legacy quotation (QT-2026-DOCREG-0001) as the deal owner — assert the SAME deal both
-        // ways: the owner genuinely sees it, import genuinely does not.
+        // Opus review finding: without a real seeded quotation, "import sees an empty list" was true only because NO
+        // ONE had a quotation on this deal — a green test that could not go red if `projectForRole` stopped stripping
+        // anything.
         TicketDto asOwner = ticketService.get(ticketId, salesOwnerActor);
         assertThat(asOwner.quotations()).extracting(QuotationDto::number).containsExactly("QT-2026-DOCREG-0001");
         assertThat(asOwner.quotation()).isNotNull();
 
-        // import no longer reaches GET /tickets/{id} AT ALL (it has its own per-deal endpoint,
-        // GET /api/import/deals/{id}, which never carries a quotation) — so the strongest form of
-        // "cannot see the embedded quotations" is a refusal, for the assignee and the
-        // non-participant alike. The projection itself is still exercised on the one remaining
-        // ticket-DTO path import can hit (comment), in TicketServiceTest.
+        // import no longer reaches GET /tickets/{id} AT ALL (it has its own per-deal endpoint, GET
+        // /api/import/deals/{id}, which never carries a quotation) — so the strongest form of "cannot see the embedded
+        // quotations" is a refusal, for the assignee and the non-participant alike.
         assertForbidden(() -> ticketService.get(ticketId, importAssigneeActor));
         assertForbidden(() -> ticketService.get(ticketId, importNonParticipantActor));
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // a non-participant sales rep cannot reach another rep's documents (any of the three families)
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void nonParticipantSalesRep_cannotReachAnotherRepsDocuments() throws Exception {
         assertForbidden(() -> ticketService.get(ticketId, salesOtherActor));
         assertForbidden(() -> depositNoticeService.listByTicket(ticketId, salesOtherActor));
-        // O1 (GLA-99 step 2 review-round-1): the stateless getRemainingInvoiceXlsx this used to
-        // also assert here is gone — /options shares the SAME requireTicketViewer gate (finding 4,
-        // still true) and is the one still-live stateless entry point, so it alone still proves
-        // this. The STORED write/read gate (RemainingInvoiceService, package th.co.glr.hr.deposit)
-        // has its own real-DB wrong-way-round coverage in RemainingInvoiceServiceIntegrationTest.
+        // O1 (GLA-99 step 2 review-round-1): the stateless getRemainingInvoiceXlsx this used to also assert here is
+        // gone — /options shares the SAME requireTicketViewer gate (finding 4, still true) and is the one still-live
+        // stateless entry point, so it alone still proves this.
         assertForbidden(() -> depositNoticeService.getRemainingInvoiceOptions(ticketId, salesOtherActor));
         assertForbidden(() -> pricingRequestService.get(pricingRequestId, salesOtherActor));
         assertForbidden(() -> quotationService.listForPricingRequest(pricingRequestId, salesOtherActor));
         assertAttachmentsForbidden(salesOtherActor);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // hr / employee cannot reach any of it
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void hrAndEmployee_cannotReachAnyOfIt() throws Exception {
@@ -304,14 +241,8 @@ class DealDocumentRegisterAuthzIntegrationTest extends AbstractPostgresIntegrati
         }
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // REQUIRED CASE (coordinator addendum): an import rep who IS this deal's assignee is a real
-    // PARTICIPANT — it reaches attachments, but stays refused BOTH quotation families and BOTH
-    // deposit-notice-shaped reads. This is the row where "participant OR canViewTicketDocuments"
-    // (attachments) and "role, unconditional on participation" (deposit/remaining-invoice,
-    // legacy-quotations) visibly disagree — the most likely future regression in this slice if
-    // someone ever collapses the register's three predicates into one.
-    // ─────────────────────────────────────────────────────────────────────────────────────
+    // REQUIRED CASE (coordinator addendum): an import rep who IS this deal's assignee is a real PARTICIPANT — it
+    // reaches attachments, but stays refused BOTH quotation families and BOTH deposit-notice-shaped reads.
 
     @Test
     void importAssignee_reachesAttachmentsAsAParticipant() throws Exception {
@@ -320,49 +251,30 @@ class DealDocumentRegisterAuthzIntegrationTest extends AbstractPostgresIntegrati
 
     @Test
     void importAssignee_seesZeroQuotationRows_bothTheLegacyFieldAndTheFrontendChoiceOnTheNewChain() {
-        // The legacy field: backend-enforced, unconditional on participation. Same seeded deal as
-        // import_cannotSeeTheLegacyEmbeddedQuotationsOnTheTicketDto_evenAsThisDealsAssignee above
-        // (QT-2026-DOCREG-0001, seeded as the owner) — asserting the owner side here too, not just
-        // re-trusting the other test, since Opus review found the un-seeded version of this exact
-        // assertion could not fail (mutating projectForRole's stripping away left it green).
+        // The legacy field: backend-enforced, unconditional on participation.
         assertThat(ticketService.get(ticketId, salesOwnerActor).quotations()).isNotEmpty();
         assertForbidden(() -> ticketService.get(ticketId, importAssigneeActor));
 
-        // The new PricingRequest/CustomerQuotation chain: the backend actually GRANTS import this
-        // read (CustomerQuotationService.VIEW_ROLES includes it, pinned by the sibling matrix's
-        // quotation_salesManagerCeoImportCanAllList) — DealDocumentRegister.jsx hides it anyway, a
-        // documented FRONTEND-ONLY choice (ticketDetailTabs.js's own "KNOWN GAP"), not a backend
-        // refusal. Asserted here, explicitly NOT as `assertForbidden`, so this test cannot be
-        // mistaken for proving a 403 that does not exist.
+        // The new PricingRequest/CustomerQuotation chain: the backend actually GRANTS import this read —
+        // DealDocumentRegister.jsx hides it anyway, a documented FRONTEND-ONLY choice, not a backend refusal.
         assertThatCode(() -> quotationService.listForPricingRequest(pricingRequestId, importAssigneeActor))
             .doesNotThrowAnyException();
     }
 
     @Test
     void importAssignee_stillRefusedTheDepositNoticeAndRemainingInvoice_despiteBeingAParticipant() {
-        // THE DIVERGENCE this test exists to pin: unlike attachments, being this deal's assignee
-        // does not help here — DepositNoticeService#requireTicketViewer 403s import outright,
-        // before it ever asks who created or picked up the ticket.
+        // THE DIVERGENCE this test exists to pin: unlike attachments, being this deal's assignee does not help here —
+        // DepositNoticeService#requireTicketViewer 403s import outright, before it ever asks who created or picked up
+        // the ticket.
         assertForbidden(() -> depositNoticeService.listByTicket(ticketId, importAssigneeActor));
-        // getRemainingInvoiceOptions calls requireTicketViewer FIRST, so this 403s even though the
-        // ticket is nowhere near 'quotation_issued' — the auth check never reaches the status
-        // check for a caller requireTicketViewer already refuses.
+        // getRemainingInvoiceOptions calls requireTicketViewer FIRST, so this 403s even though the ticket is nowhere
+        // near 'quotation_issued' — the auth check never reaches the status check for a caller requireTicketViewer
+        // already refuses.
         assertForbidden(() -> depositNoticeService.getRemainingInvoiceOptions(ticketId, importAssigneeActor));
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // REQUIRED CASE (coordinator addendum): a viewer admitted to none of the three row families
-    // sees NOTHING. Import that has not picked the deal up loses the legacy quotations field
-    // (role-only strip), the new-chain quotations (hidden by frontend choice, not a 403 — see
-    // above) and both deposit-notice-shaped reads (genuinely 403).
-    //
-    // 2026-09-30 owner ruling: the fourth read, the deal's ATTACHMENTS, is no longer refused to
-    // import as such — import may download all four attachment types for a deal inside its own
-    // import scope (TicketRepository#isInImportScope). This deal carries a live (SUBMITTED)
-    // pricing request, so it IS in scope; attachments are therefore granted here and stay 403 only
-    // OUTSIDE the scope (pinned in ImportCommentAndDocumentAuthzIntegrationTest). The deposit
-    // families below are unchanged: still 403.
-    // ─────────────────────────────────────────────────────────────────────────────────────
+    // REQUIRED CASE (coordinator addendum): a viewer admitted to none of the three row families sees NOTHING. The
+    // deposit families below are unchanged: still 403.
 
     @Test
     void nonParticipantImport_seesNoQuotationOrDepositFamily_butMayReadAttachmentsInScope() throws Exception {
@@ -372,44 +284,27 @@ class DealDocumentRegisterAuthzIntegrationTest extends AbstractPostgresIntegrati
         assertAttachmentsOk(importNonParticipantActor);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // REQUIRED CASE (owner ruling A — quotation selection, 2026-09-17): a `quotationId` that does
-    // not belong to (or does not qualify for) THIS ticket must be refused with 400, even for the
-    // deal's own owner — "never allow picking another ticket's quotation" is the load-bearing
-    // guarantee, proven here against the REAL findQualifyingQuotations query on real Postgres, not
-    // a mock that could be made to "pass" while the SQL/lookup did something else.
-    // ─────────────────────────────────────────────────────────────────────────────────────
+    // REQUIRED CASE: a `quotationId` that does not belong to THIS ticket must be refused with 400, even for the
+    // deal's own owner.
 
     @Test
     void ownerCannotPickAQuotationIdThatDoesNotQualifyForThisTicket() {
-        // No CustomerQuotation exists at all yet for this ticket's pricing request (it is still
-        // SUBMITTED, not through PricingDecision/CustomerQuotation issue+accept) — so ANY
-        // quotationId, including one that belongs to a wholly different ticket/pricing request
-        // elsewhere in the same database, is necessarily outside this ticket's qualifying set.
-        // The owner otherwise has full access to this ticket (requireTicketViewer passes) — the
-        // 400 below is entirely the quotationId cross-reference guard, not a viewer-role refusal.
-        //
-        // Ticket status is force-set to quotation_issued directly (fixture-only shortcut, same
-        // pattern as this class's own `assigned_to` UPDATE above) so this test isolates the
-        // quotationId gate from the separate status gate (requireQuotationIssuedForRemainingInvoice)
-        // — driving a real deal all the way to quotation_issued through PricingDecision/
-        // CustomerQuotation/OrderConfirmationService is out of scope for what THIS test needs to
-        // prove, and that status gate already has its own coverage elsewhere.
+        // No CustomerQuotation exists at all yet for this ticket's pricing request — so ANY quotationId, including one
+        // that belongs to a wholly different ticket/pricing request elsewhere in the same database, is necessarily
+        // outside this ticket's qualifying set.
         jdbc.update("UPDATE sales.ticket SET status = 'quotation_issued' WHERE ticket_id = :ticketId",
             Map.of("ticketId", ticketId));
 
-        // getRemainingInvoiceOptions with an explicit invalid quotationId refuses outright
-        // (400) rather than silently falling back to a default — see resolveRemainingInvoice's
-        // own Javadoc: a caller-supplied id always wins or is refused, never ignored.
+        // getRemainingInvoiceOptions with an explicit invalid quotationId refuses outright (400) rather than silently
+        // falling back to a default — see resolveRemainingInvoice's own Javadoc: a caller-supplied id always wins or
+        // is refused, never ignored.
         assertThatThrownBy(() -> depositNoticeService.getRemainingInvoiceOptions(
                 ticketId, 999999L, salesOwnerActor))
             .isInstanceOfSatisfying(ApiException.class, e ->
                 assertThat(e.getStatus()).isEqualTo(org.springframework.http.HttpStatus.BAD_REQUEST));
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // helpers
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     private static void assertForbidden(org.assertj.core.api.ThrowableAssert.ThrowingCallable callable) {
         assertThatThrownBy(callable)

@@ -81,9 +81,9 @@ public class BillingNoteRenderer {
     public byte[] toXlsx(BillingNoteDto doc) throws Exception {
         List<BillingNoteLineRenderDto> lines = doc.lines() != null ? doc.lines() : List.of();
         if (lines.size() > MAX_LINE_ROWS) {
-            // Defensive-only: BillingNoteService gates this BEFORE calling the renderer (409, Thai
-            // message naming the limit — spec: "refuse beyond it ... no silent truncation"). Kept
-            // here so a future direct caller of this class cannot silently drop rows.
+            // Defensive-only: BillingNoteService gates this BEFORE calling the renderer (409, Thai message naming the
+            // limit — spec: "refuse beyond it ... no silent truncation"). Kept here so a future direct caller of this
+            // class cannot silently drop rows.
             throw new IllegalStateException(
                 "billing note needs " + lines.size() + " rows but the template only has " + MAX_LINE_ROWS);
         }
@@ -151,15 +151,13 @@ public class BillingNoteRenderer {
             totalCell.setCellValue(total.doubleValue());
             setStr(sh, TOTAL_ROW, 1, ThaiText.bahtText(total));
 
-            // ── หมายเหตุ footer (single free-text line, not the numbered note block the
-            // remaining-invoice template uses — this template has exactly one) ─────────────────
+            // หมายเหตุ footer (single free-text line, not the numbered note block the remaining-invoice template uses —
+            // this template has exactly one)
             setStr(sh, 32, 2, nullSafe(doc.note()));
 
-            // Force fit-to-one-page explicitly rather than trusting the template's own copied
-            // PrintSetup fidelity (the extraction — see this class's own Javadoc — measured the
-            // source's print area but a programmatic sheet copy does not always reproduce Excel's
-            // own "fit to 1 page" checkbox behaviour bit-for-bit). The whole document is a single
-            // header + up to 15 line rows + one signature block — it must always fit one page.
+            // Force fit-to-one-page explicitly rather than trusting the template's own copied PrintSetup fidelity (the
+            // extraction — see this class's own Javadoc — measured the source's print area but a programmatic sheet copy
+            // does not always reproduce Excel's own "fit to 1 page" checkbox behaviour bit-for-bit).
             sh.setFitToPage(true);
             sh.setAutobreaks(true);
             sh.getPrintSetup().setFitWidth((short) 1);
@@ -178,10 +176,8 @@ public class BillingNoteRenderer {
             .reduce(BigDecimal.ZERO, BigDecimal::add);
     }
 
-    /** ที่อยู่ prints on two lines (spec: "ที่อยู่ (2 lines)") — a stored single-string address is
-     * split on its first newline if it has one, else the whole string goes on line 1 and line 2 is
-     * blank. Mirrors nothing upstream exactly because no existing renderer has a genuinely 2-line
-     * address field; this is the simplest split that never loses text. */
+    /** ที่อยู่ prints on two lines (spec: "ที่อยู่ (2 lines)") — a stored single-string address is split on its
+     * first newline if it has one, else the whole string goes on line 1 and line 2 is blank. */
     private String[] splitAddress(String address) {
         if (address == null || address.isBlank()) return new String[] {"", ""};
         int nl = address.indexOf('\n');
@@ -209,8 +205,8 @@ public class BillingNoteRenderer {
         if (row == null) row = sh.createRow(rowIdx);
         Cell cell = row.getCell(colIdx);
         if (cell == null) cell = row.createCell(colIdx);
-        // A literal write onto a template formula cell must clear the formula first — POI's
-        // setCellValue only sets the cached result, so a later recalculation would discard it.
+        // A literal write onto a template formula cell must clear the formula first — POI's setCellValue only sets the
+        // cached result, so a later recalculation would discard it.
         if (cell.getCellType() == CellType.FORMULA) cell.setBlank();
         return cell;
     }

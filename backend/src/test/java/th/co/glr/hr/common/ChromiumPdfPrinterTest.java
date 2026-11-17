@@ -15,11 +15,8 @@ import th.co.glr.hr.ticket.QuotationRenderModel;
 import th.co.glr.hr.ticket.QuotationRenderModel.RenderItem;
 import th.co.glr.hr.ticket.QuotationRenderModel.Signatories;
 
-/**
- * Guarded by {@link ChromiumTestGate}: skips locally when no Chromium can be launched (the
- * LibreOffice-gated idiom), FAILS under {@code REQUIRE_CHROMIUM=1} (CI) so absence can never turn
- * the gate green.
- */
+/** Guarded by ChromiumTestGate: skips locally when no Chromium can be launched (the LibreOffice-gated idiom),
+ * FAILS under REQUIRE_CHROMIUM=1 (CI) so absence can never turn the gate green. */
 class ChromiumPdfPrinterTest {
 
     @BeforeEach
@@ -50,8 +47,8 @@ class ChromiumPdfPrinterTest {
         for (String line : EIGHT_REMARKS) {
             assertThat(flat).contains(line.replaceAll("\\s+", ""));
         }
-        // The XLS path sets the "หน้า &P/&N" footer only when it paginates; a single-page
-        // LibreOffice render carries no page number, so neither does this one.
+        // The XLS path sets the "หน้า &P/&N" footer only when it paginates; a single-page LibreOffice render carries
+        // no page number, so neither does this one.
         assertThat(flat).doesNotContain("หน้า1/1");
         assertThat(Loader.loadPDF(pdf).getNumberOfPages()).isEqualTo(1);
     }
@@ -85,8 +82,8 @@ class ChromiumPdfPrinterTest {
         return model(itemCount, "QT-TEST-0001");
     }
 
-    /** A small {@code itemCount}-item quotation numbered {@code number} — shared with
-     * {@link ChromiumPdfPrinterConcurrencyTest}, whose renders must be told apart by number. */
+    /** A small itemCount-item quotation numbered number — shared with ChromiumPdfPrinterConcurrencyTest, whose
+     * renders must be told apart by number. */
     static QuotationRenderModel model(int itemCount, String number) {
         List<RenderItem> items = new ArrayList<>();
         for (int i = 1; i <= itemCount; i++) {
@@ -98,12 +95,9 @@ class ChromiumPdfPrinterTest {
         Signatories sig = new Signatories("Printed Name", "Checked Name", "Approved Name", null, null);
         return new QuotationRenderModel(
             LocalDate.of(2026, 9, 10), number, "P003", "D002", "Sales/Test T.000",
-            // The number is repeated in the project name on purpose: I4 (เลขที่อ้างอิง) is a narrow
-            // cell whose left neighbour carries the label, so both engines CLIP it at the cell
-            // edge — and how much survives depends on the digit width of whatever font the host
-            // substitutes (CI's tlwg fonts clipped "QT-PAR-0001" to "QT-PAR-0"). The Project row
-            // is wide and its neighbours are empty, so a marker there is never clipped, and the
-            // concurrency tests read their per-render marker from here.
+            // The number is repeated in the project name on purpose: I4 is a narrow cell whose left neighbour carries the
+            // label, so both engines CLIP it at the cell edge — and how much survives depends on the digit width of
+            // whatever font the host substitutes.
             "คุณทดสอบ", "โทร. 000", "Test Project " + number,
             items, EIGHT_REMARKS, sig, true);
     }

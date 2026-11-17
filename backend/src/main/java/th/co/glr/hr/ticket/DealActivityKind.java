@@ -2,14 +2,9 @@ package th.co.glr.hr.ticket;
 
 import java.util.Set;
 
-/**
- * What kind of follow-up a {@code sales.deal_activity} row records. Backs
- * {@code chk_deal_activity_kind} (V83) — keep in sync with that CHECK constraint.
- *
- * <p>Owner-review assumption (Slice B1, handoff 103): this is a first-pass list, not an
- * owner-confirmed taxonomy of how the sales team actually follows up on a deal. Revisit once B2
- * (the frontend activity log) is in front of real reps.
- */
+/** What kind of follow-up a sales.deal_activity row records. Backs chk_deal_activity_kind (V83) — keep in sync
+ * with that CHECK constraint. Owner-review assumption (Slice B1, handoff 103): this is a first-pass list, not
+ * an owner-confirmed taxonomy of how the sales team actually follows up on a deal. */
 public final class DealActivityKind {
     public static final String CALL              = "CALL";
     public static final String MEETING            = "MEETING";

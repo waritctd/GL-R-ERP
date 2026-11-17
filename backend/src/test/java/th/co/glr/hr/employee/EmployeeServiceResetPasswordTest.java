@@ -27,11 +27,9 @@ import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.payroll.PayrollRepository;
 import th.co.glr.hr.profile.ProfileRequestRepository;
 
-/**
- * Proves the HR reset flow end-to-end at the service layer: a fresh random temp password is issued,
- * BCrypt-hashed, forces a change on next login, authenticates via {@link AuthService}, and the old
- * low-entropy {@code employee_code} no longer authenticates.
- */
+/** Proves the HR reset flow end-to-end at the service layer: a fresh random temp password is issued,
+ * BCrypt-hashed, forces a change on next login, authenticates via AuthService, and the old low-entropy
+ * employee_code no longer authenticates. */
 class EmployeeServiceResetPasswordTest {
     private final EmployeeRepository employees = mock(EmployeeRepository.class);
     private final ProfileRequestRepository profileRequests = mock(ProfileRequestRepository.class);
@@ -68,7 +66,7 @@ class EmployeeServiceResetPasswordTest {
             LocalDate.now(), hash.getValue(), /* mustChangePassword */ true, false);
         when(loginRepo.findByEmail("user@glr.co.th")).thenReturn(Optional.of(record));
         AuthService authService = new AuthService(loginRepo, encoder, org.mockito.Mockito.mock(th.co.glr.hr.audit.AuditService.class),
-            new th.co.glr.hr.auth.ViewAsService(loginRepo, org.mockito.Mockito.mock(th.co.glr.hr.audit.AuditService.class), ""));
+            new th.co.glr.hr.auth.ViewAsService(loginRepo, org.mockito.Mockito.mock(th.co.glr.hr.audit.AuditService.class), ""), org.mockito.Mockito.mock(th.co.glr.hr.peopleinsights.PeopleInsightsService.class));
 
         // The temp password logs in and surfaces mustChangePassword=true.
         AuthResponse ok = authService.login(

@@ -1,23 +1,6 @@
-// Thai display copy for the deal pipeline — and nothing else.
-//
-// WHAT LIVES HERE: labels. Wording is presentation, and moving it to the backend would couple a
-// copy edit to a backend deploy, so it stays.
-//
-// WHAT NO LONGER LIVES HERE, and must never come back:
-//   * the stage list, their numbers, phases and write gates — GET /api/meta/deal-stages, read via
-//     stageCatalog.js. The literal that used to be here was a copy of DealStage.ORDER plus a copy
-//     of TicketService's three target-stage sets, and it had silently gone stale.
-//   * canSetStage / allowedTargetStages / canMarkLost / isDealOwner — those were a second
-//     implementation of TicketService.requireStageWriteAccess and requireDealOwnership. The
-//     backend now ships a verdict per stage on GET /api/tickets/{id}/actions (`stageDecisions`),
-//     and MARK_LOST is already an entry in `availableActions`. A UI that re-derives an
-//     authorization rule is a UI that can disagree with the server, and this one did.
-//   * isRoutineBackwardMove and the `distance > 1` skip test — one decision, DealStage
-//     .requiresJustification, reported per stage as `requiresReason`. The copies here demanded a
-//     written reason for three of the business's four normal routes, which the backend had already
-//     stopped requiring.
-//
-// The rule for anything added below: if the backend also decides it, it does not belong here.
+// Thai display copy for the deal pipeline — and nothing else. WHAT NO LONGER LIVES HERE, and must never come
+// back: the stage list, their numbers, phases and write gates — GET /api/meta/deal-stages, read via
+// stageCatalog.js.
 
 import { entryChannelLabel, hasDealStageLabel } from '../../utils/format.js';
 
@@ -43,23 +26,21 @@ export function manualMoveLabel(salesStage, next, stageLabel) {
     : `เลื่อนไป: ${next.no}. ${stageLabel}`;
 }
 
-/**
- * Thai wording for the auto-advanced stages — "where does this stage come from, if I cannot just
- * click into it?". Keyed by code; the *set* of auto stages is the catalog's `auto` flag, served by
- * the backend, so this map only supplies words for the ones that have it.
- */
+/** Thai wording for the auto-advanced stages — "where does this stage come from, if I cannot just click into
+ * it?". Keyed by code; the *set* of auto stages is the catalog's `auto` flag, served by the backend, so this
+ * map only supplies words for the ones that have it. */
 export const AUTO_STAGE_HINT = {
   // Operational — a transition on the deal itself.
-  ORDER_RECEIVED:    'อัปเดตอัตโนมัติเมื่อฝ่ายขายยืนยันใบสั่งซื้อของดีลนี้',
-  DEPOSIT_RECEIVED:  'อัปเดตอัตโนมัติเมื่อฝ่ายบัญชียืนยันรับมัดจำของดีลนี้',
-  PROCUREMENT:       'อัปเดตอัตโนมัติเมื่อฝ่ายขายออกเลขใบขอซื้อ (IR) ของดีลนี้ · ถ้าสินค้ามาจากสต็อกทั้งหมด จะข้ามไปขั้นนัดส่งสินค้า',
-  CLOSED_PAID:       'อัปเดตอัตโนมัติเมื่อฝ่ายบัญชียืนยันรับเงินครบของดีลนี้',
+  ORDER_RECEIVED:    'อัปเดตอัตโนมัติเมื่อฝ่ายขายยืนยันใบสั่งซื้อของงานนี้',
+  DEPOSIT_RECEIVED:  'อัปเดตอัตโนมัติเมื่อฝ่ายบัญชียืนยันรับมัดจำของงานนี้',
+  PROCUREMENT:       'อัปเดตอัตโนมัติเมื่อฝ่ายขายออกเลขใบขอซื้อ (IR) ของงานนี้ · ถ้าสินค้ามาจากสต็อกทั้งหมด จะข้ามไปขั้นนัดส่งสินค้า',
+  CLOSED_PAID:       'อัปเดตอัตโนมัติเมื่อฝ่ายบัญชียืนยันรับเงินครบของงานนี้',
   // Document-driven (owner ruling 2026-10-16) — a quotation addressed to that party. Each names
   // the DOCUMENT rather than a department, because unlike the four above the way in is something
   // this rep does themselves: the stage arrives when they quote that party.
-  QUOTE_DESIGN_SIDE: 'อัปเดตอัตโนมัติเมื่อสร้างใบเสนอราคาถึงผู้ออกแบบของดีลนี้',
-  QUOTE_OWNER:       'อัปเดตอัตโนมัติเมื่อสร้างใบเสนอราคาถึงเจ้าของโครงการของดีลนี้',
-  QUOTE_BUYER:       'อัปเดตอัตโนมัติเมื่อสร้างใบเสนอราคาถึงผู้ซื้อ / ผู้รับเหมาของดีลนี้',
+  QUOTE_DESIGN_SIDE: 'อัปเดตอัตโนมัติเมื่อสร้างใบเสนอราคาถึงผู้ออกแบบของงานนี้',
+  QUOTE_OWNER:       'อัปเดตอัตโนมัติเมื่อสร้างใบเสนอราคาถึงเจ้าของโครงการของงานนี้',
+  QUOTE_BUYER:       'อัปเดตอัตโนมัติเมื่อสร้างใบเสนอราคาถึงผู้ซื้อ / ผู้รับเหมาของงานนี้',
 };
 
 export const LOST_REASON_LABEL = {
@@ -73,32 +54,37 @@ export const LOST_REASON_LABEL = {
   ALREADY_PURCHASED: 'ลูกค้าสั่งซื้อกระเบื้องไปหมดแล้ว',
 };
 
-/**
- * Why the opportunity went away (V56) — distinct from LOST_REASON_LABEL, which is why we lost a
- * deal we were competing for. The code set comes from the catalog (DealCancelReason.ORDER).
- */
+/** The business's F1–F8 sheet code of each lost reason (DealLostReason.java's own cross-reference). Shown on the
+ * ปิดงาน · เสียงาน chips (drawing m-lost); the stored values are the codes on the left, unchanged. */
+export const LOST_REASON_F_CODE = {
+  PRODUCT_FIT: 'F1',
+  PRICE: 'F2',
+  LEAD_TIME: 'F3',
+  PAYMENT_TERMS: 'F4',
+  RELATIONSHIP: 'F5',
+  PROJECT_ON_HOLD: 'F6',
+  PROJECT_CANCELLED: 'F7',
+  ALREADY_PURCHASED: 'F8',
+};
+
+/** Why a deal was cancelled (V57) — distinct from LOST_REASON_LABEL, which is why we lost a deal we were competing
+ * for. The OFFERED code set comes from the catalog (DealCancelReason.OFFERED); every VALID code — the three retired
+ * on 2026-11-16 included, which already-cancelled deals still carry — is labelled here. Same wording as
+ * DealCancelReason.label (labels say งาน, owner ruling 2026-11-16). */
 export const CANCEL_REASON_LABEL = {
+  DUPLICATE_DEAL:            'เปิดซ้ำกับงานอื่น',
+  WRONG_CUSTOMER_OR_PROJECT: 'เปิดผิดลูกค้า / โครงการ',
+  NO_REAL_PROJECT:           'ไม่มีโครงการจริง',
+  OTHER:                     'อื่น ๆ',
+  // Retired 2026-11-16: no longer offered, still displayed.
   OWNER_CANCELLED:   'เจ้าของยกเลิกโครงการ',
   PROJECT_SUSPENDED: 'โครงการถูกระงับไม่มีกำหนด',
   BUDGET_CANCELLED:  'งบประมาณถูกยกเลิก',
-  OTHER:             'อื่น ๆ (ระบุในหมายเหตุ)',
 };
 
 // Fulfilment sub-steps rendered inside the PROCUREMENT stage — these come from the deal's own
-// fulfillment_status, never separate stages.
-//
-// Deliberately NOT served by /api/meta/deal-stages: FulfilmentStatus.java publishes an import
-// SEQUENCE (IR_ISSUED → IR_SENT → SHIPPING → GOODS_RECEIVED) and a delivery-complete SET, not one
-// ordered whole, so there is no single canonical list for the backend to serve and inventing one
-// would be a new defect rather than the removal of one. Known gap, stated rather than guessed at.
-//
-// The codes below are exactly FulfilmentStatus.java's seven. `PICKED_UP` and `CUSTOMS_CLEARANCE`
-// used to sit at positions 3 and 5 of this list; both were deleted from FulfilmentStatus.java by
-// 7991b9f1 as "dead constants (zero references anywhere)", and no code path has ever written
-// either into sales.ticket.fulfillment_status. Leaving them here was not inert: SubstepChips marks
-// every entry before the current one as done, so a deal on SHIPPING rendered "รับจากผู้ผลิตแล้ว"
-// as a completed step, and one on GOODS_RECEIVED rendered "รอออกของ" as completed — two steps the
-// business never performed and the column cannot express. Keep this list in step with that file.
+// fulfillment_status, never separate stages. Known gap, stated rather than guessed at. The codes below are
+// exactly FulfilmentStatus.java's seven.
 export const PROCUREMENT_SUBSTEPS = [
   { code: 'IR_ISSUED',      label: 'ออกใบขอซื้อ (IR) แล้ว' },
   { code: 'IR_SENT',        label: 'สั่งซื้อไปยังผู้ผลิตแล้ว' },
@@ -109,23 +95,9 @@ export const PROCUREMENT_SUBSTEPS = [
   { code: 'FULLY_DELIVERED', label: 'ส่งมอบครบแล้ว' },
 ];
 
-/**
- * The SAME seven codes, split into the shape FulfilmentStatus.java actually publishes — because
- * the flat list above is a lookup table, not a path, and rendering it as one caused issue #730.
- *
- * `IMPORT_SEQUENCE` (FulfilmentStatus.java:33) is an ordered chain. `FROM_STOCK` is a BRANCH that
- * skips it entirely: a deal declared fully from stock never issues an import request — and cannot,
- * since issueImportRequest's own guard requires fulfillmentStatus == null. Rendering position-as-
- * progress over the flat list therefore painted IR-issued / ordered / shipping / goods-received
- * green on a deal that did none of them. The delivery states are the one segment BOTH journeys
- * end on.
- *
- * `procurementPath(code)` returns the ordered path a deal on `code` is actually walking, so a
- * caller can keep using index-as-progress without that meaning being a lie. This is still a
- * client-side split of a client-side list — the durable fix is the backend serving the path, the
- * way PaymentTrack.path(policy) already does for payments — but it no longer claims milestones
- * that did not happen.
- */
+/** The SAME seven codes, split into the shape FulfilmentStatus.java actually publishes — because the flat list
+ * above is a lookup table, not a path, and rendering it as one caused issue #730. `IMPORT_SEQUENCE`
+ * (FulfilmentStatus.java:33) is an ordered chain. */
 const IMPORT_SEQUENCE = ['IR_ISSUED', 'IR_SENT', 'SHIPPING', 'GOODS_RECEIVED'];
 const DELIVERY_STATES = ['PARTIALLY_DELIVERED', 'FULLY_DELIVERED'];
 
@@ -133,19 +105,13 @@ export function procurementPath(currentCode, fromStock = null) {
   const byCode = (code) => PROCUREMENT_SUBSTEPS.find((s) => s.code === code);
   if (currentCode === 'FROM_STOCK' || fromStock === true) return ['FROM_STOCK', ...DELIVERY_STATES].map(byCode);
   if (fromStock === false) return [...IMPORT_SEQUENCE, ...DELIVERY_STATES].map(byCode);
-  // fromStock unknown AND the deal has moved on to a DELIVERY state: its procurement status has
-  // been overwritten, so fulfillmentStatus alone can no longer say which journey got it here.
-  // Asserting either one would be the same false statement in a new place, so the strip narrows
-  // to the segment that is still true. Callers that can tell (the panel reads the deal's own
-  // qtyFromStock) should pass `fromStock` and get the full path back.
+  // fromStock unknown AND the deal has moved on to a DELIVERY state: its procurement status has been
+  // overwritten, so fulfillmentStatus alone can no longer say which journey got it here.
   if (DELIVERY_STATES.includes(currentCode)) return DELIVERY_STATES.map(byCode);
   return [...IMPORT_SEQUENCE, ...DELIVERY_STATES].map(byCode);
 }
 
 // Payment sub-steps (keyed by paymentStatus) — the inner journey of the back-half stages.
-// Same reason as PROCUREMENT_SUBSTEPS for staying client-side: PaymentTrack.path(policy) returns a
-// DIFFERENT sequence on a deposit-bypass policy, so "the ordered list of payment states" is not a
-// single thing the backend can serve.
 export const PAYMENT_SUBSTEPS = [
   { code: 'CUSTOMER_CONFIRMED',    label: 'ลูกค้ายืนยัน' },
   { code: 'DEPOSIT_NOTICE_ISSUED', label: 'ออกใบแจ้งมัดจำ' },
@@ -159,23 +125,7 @@ export function labelledReasons(codes, labels) {
   return (codes ?? []).map((code) => ({ code, label: labels[code] ?? code }));
 }
 
-/**
- * THE LABEL GUARD.
- *
- * Every stage code the backend serves must have Thai display copy on this side. A code without one
- * is not a cosmetic problem — it is the signal that the backend's pipeline moved and this side did
- * not notice, which is exactly what happened when V143 added QUOTE_OWNER: the stage rendered as
- * the raw string `QUOTE_OWNER` on the deal page and nothing anywhere complained. #704 could not be
- * deployed because of it.
- *
- * Called from stageCatalog.js's `select`, so it runs the instant the catalog lands, on every page
- * that reads it — not only on the one deal that happens to be sitting on the unlabelled stage.
- *
- * Loud means loud, but never at the cost of the page:
- *   * dev/test — throws. A missing label fails the suite and fails a local click-through.
- *   * production — console.error. A shipped build must still render the deal; the fallback in
- *     dealStageLabel shows the raw code, which is ugly on purpose.
- */
+/** Reports backend stage codes missing Thai display labels. */
 export function assertStageLabelsComplete(codes) {
   const missing = (codes ?? []).filter((code) => !hasDealStageLabel(code));
   if (missing.length === 0) return;
@@ -187,27 +137,20 @@ export function assertStageLabelsComplete(codes) {
   console.error(message);
 }
 
-/**
- * Headline overrides for DealStagePanel, for stages whose own label does not say who the stage is
- * dealing with. S4-S8 already do ("เสนอราคาผู้ออกแบบ", "เสนอราคาเจ้าของโครงการ", ...), so only
- * ORDER_RECEIVED needs one. DISPLAY ONLY — the shared label in utils/format.js is unchanged, so
- * lists and history keep saying "ได้รับใบสั่งซื้อ".
- */
+/** Headline overrides for DealStagePanel, for stages whose own label does not say who the stage is dealing
+ * with. S4-S8 already do ("เสนอราคาผู้ออกแบบ", "เสนอราคาเจ้าของโครงการ", ...), so only ORDER_RECEIVED needs
+ * one. */
 export const STAGE_HEADLINE = {
   ORDER_RECEIVED: 'ได้รับใบสั่งซื้อจากผู้รับเหมา/ผู้ซื้อ',
 };
 
-/**
- * The channels that HAVE a route (DealRoute.java's three). UNSPECIFIED, an unknown value and an
- * absent channel have none — every stage is reachable for them — so nothing may name a route for
- * them. Wording only: which stages each route visits is the backend's, served per stage as `onRoute`.
- */
+/** The channels that HAVE a route (DealRoute.java's three). UNSPECIFIED, an unknown value and an absent channel
+ * have none — every stage is reachable for them — so nothing may name a route for them. Wording only: which
+ * stages each route visits is the backend's, served per stage as `onRoute`. */
 const ROUTE_CHANNELS = ['DESIGNER_LED', 'OWNER_DIRECT', 'BUYER_DIRECT'];
 
-/**
- * The Thai name of the deal's route ("เจ้าของติดต่อโดยตรง"), or null when the channel has no route.
- * null means "render nothing": a panel must never invent a route for a deal that has none.
- */
+/** The Thai name of the deal's route ("เจ้าของติดต่อโดยตรง"), or null when the channel has no route. null means
+ * "render nothing": a panel must never invent a route for a deal that has none. */
 export function routeName(entryChannel) {
   return ROUTE_CHANNELS.includes(entryChannel) ? entryChannelLabel(entryChannel).label : null;
 }

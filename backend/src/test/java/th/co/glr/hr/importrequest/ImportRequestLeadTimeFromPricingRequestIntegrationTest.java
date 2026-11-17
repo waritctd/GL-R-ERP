@@ -27,21 +27,9 @@ import th.co.glr.hr.ticket.QuotationRenderer;
 import th.co.glr.hr.ticket.TicketRepository;
 import th.co.glr.hr.ticket.TicketService;
 
-/**
- * CR-1 (GLA-167), part D (owner rulings B-R4 / B-R5) — an ใบขอซื้อ (IR) takes its lead time from the
- * deal's CURRENT QUOTATION ITEMS, never from the pricing-request lines.
- *
- * <p>Current quotation: PRICING_REQUEST route = the ACCEPTED quotation (items reach their factory
- * through {@code pricing_request_item_id}); direct route = the APPROVED DEAL_DIRECT quotation (items
- * reach their factory through {@code catalog_price_id}; hand-typed lines are ignored). The legacy
- * engine ({@code origin IS NULL}) carries no per-item lead time. Per factory:
- * {@code min = max(lead_time_min_days)}, {@code max = max(lead_time_max_days)} over that factory's
- * quotation items that carry a lead time, else {@link LeadTimeDefaults#forCountry}.
- *
- * <p>Every fixture deliberately gives the pricing-request lines a DIFFERENT lead time from the
- * quotation items, so a read from the wrong table cannot pass. Seeded by SQL so the assertion is
- * about {@code createDrafts}/{@code revise}, not about how the deal got to ORDER_RECEIVED.
- */
+/** CR-1 (GLA-167), part D (owner rulings B-R4 / B-R5) — an ใบขอซื้อ (IR) takes its lead time from the deal's
+ * CURRENT QUOTATION ITEMS, never from the pricing-request lines. The legacy engine (origin IS NULL) carries no
+ * per-item lead time. */
 class ImportRequestLeadTimeFromPricingRequestIntegrationTest extends AbstractPostgresIntegrationTest {
     private ImportRequestService service;
     private long ownerId;
@@ -279,11 +267,9 @@ class ImportRequestLeadTimeFromPricingRequestIntegrationTest extends AbstractPos
 
     // ── revise ───────────────────────────────────────────────────────────────────────────────
 
-    /**
-     * An approved lead-time change WITHOUT a new quotation must not reach the IR: the PR line is
-     * edited (what LeadTimeChangeService#approve does), the quotation is untouched, and revise
-     * still shows the quotation's value.
-     */
+    /** An approved lead-time change WITHOUT a new quotation must not reach the IR: the PR line is edited (what
+     * LeadTimeChangeService#approve does), the quotation is untouched, and revise still shows the quotation's
+     * value. */
     @Test
     void revise_anApprovedChangeWithNoNewQuotation_doesNotChangeTheIr() {
         long[] d = issuedPrRouteIr("D4", 40, 60);
@@ -312,10 +298,8 @@ class ImportRequestLeadTimeFromPricingRequestIntegrationTest extends AbstractPos
         assertThat(v2.leadTimeMaxDays()).isEqualTo(120);
     }
 
-    /**
-     * Review finding 9: import's manual post-issue lead time (POST /import-requests/{id}/lead-time)
-     * survives a revise as long as the QUOTATION-derived value the IR was built from is unchanged.
-     */
+    /** Review finding 9: import's manual post-issue lead time (POST /import-requests/{id}/lead-time) survives a
+     * revise as long as the QUOTATION-derived value the IR was built from is unchanged. */
     @Test
     void revise_keepsImportsManualLeadTime_whenTheQuotationIsUnchanged() {
         long[] d = issuedPrRouteIr("D5", 40, 60);
@@ -343,13 +327,8 @@ class ImportRequestLeadTimeFromPricingRequestIntegrationTest extends AbstractPos
 
     // ── revise with no stored derived value (country-default IRs, pre-V198 rows) ─────────────
 
-    /**
-     * (a) An IR first built from the COUNTRY DEFAULT (the quotation had no lead time) must pick up a
-     * quotation lead time that appears later, and keep it on the following revise. The "new quotation"
-     * is SQL-seeded rather than approved through DealQuotationService: that service needs a dozen
-     * collaborators (signatures, approver snapshots, numbering) to approve one, while revise reads
-     * nothing but the sales.quotation / quotation_item rows, which is exactly what is seeded.
-     */
+    /** (a) An IR first built from the COUNTRY DEFAULT (the quotation had no lead time) must pick up a quotation
+     * lead time that appears later, and keep it on the following revise. */
     @Test
     void revise_anIrBuiltFromTheCountryDefault_picksUpALaterQuotationLeadTime_andKeepsItOnTheNextRevise() {
         long[] d = issuedPrRouteIr("D6", null, null); // CN default 30-45

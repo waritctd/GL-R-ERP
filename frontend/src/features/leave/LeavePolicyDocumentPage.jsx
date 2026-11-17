@@ -13,53 +13,13 @@ import { POLICY_PDF_HREF } from './LeavePolicyBar.jsx';
 import { bangkokTodayIso, formatThaiDate } from '../../utils/format.js';
 import { ThaiDateInput } from '../../components/common/ThaiDateInput.jsx';
 
-/**
- * HR/CEO upload surface for the §5 announcement PDF (POST /api/leave/policy-document, issue #744).
- *
- * ── NOBODY HAS EVER UPLOADED ONE ─────────────────────────────────────────────
- * V133 records that rows reach `hr.leave_policy_document` through this endpoint alone, and the
- * endpoint has never had a client. So the table is empty in every environment including production,
- * and "no document stored" is not an edge case to guard — it is the state every real deployment is
- * in right now, and the first thing this page will render for its first user.
- *
- * ── WHAT THIS PAGE HONESTLY IS, AND IS NOT ───────────────────────────────────
- * From 2026-08-11 to 2026-08-14, uploading here did NOT change the PDF employees open from the leave
- * page: that reader (LeavePolicyBar.jsx) served a copy BUNDLED with the frontend at
- * `frontend/public/policy/`, on the reasoning that the Vercel/Render demo "has no backend at all" so
- * an API-served PDF would be permanently unavailable there. That premise was already stale when it
- * was written — both `vercel.json` files rewrite `/api/:path*` to the real Render-hosted Spring
- * backend, and `render.yaml` deploys one there — and once THIS page shipped a real upload workflow
- * (issue #774) the owner reversed the ruling (2026-08-14): LeavePolicyBar.jsx now HEAD-probes this
- * same GET endpoint and PREFERS a confirmed-current uploaded document over the bundled copy. See
- * that file's own header comment for the full four-state table this reversal introduced.
- *
- * So uploading here now DOES eventually change what employees see — once the version's effective
- * date arrives and the reader's probe positively confirms it. The bundled copy is now the FALLBACK
- * for "nothing usable has been uploaded yet" and "could not check right now", not the permanent
- * answer it used to be regardless of what this page held.
- *
- * What it IS, unchanged: the server-side archive of record. Versions are effective-dated and never
- * overwritten, so the announcement in force on a past date stays retrievable — the property V133's
- * schema exists to preserve.
- *
- * ── THE TRAP: A FUTURE EFFECTIVE DATE LOOKS LIKE A FAILED UPLOAD ─────────────
- * "Current" is the latest `effective_from` that is <= today (LeavePolicyDocumentRepository
- * #findCurrent). Upload a document dated next month and the server stores it and answers 200, while
- * the availability probe keeps reporting whatever was current before. Without saying so, that reads
- * as "my upload did nothing". The success panel therefore states when the version takes effect, and
- * calls out the not-yet-in-force case explicitly.
- *
- * ── WHAT THE SERVER ACTUALLY VALIDATES ───────────────────────────────────────
- * `application/pdf` only, and 10 MB. Both are checked against `MultipartFile#getContentType()` —
- * the type the CLIENT declares, not the bytes. The copy here says "ต้องเป็นไฟล์ PDF" (a rule) and
- * never claims the system verifies the file really is a PDF, because it does not. `accept` on the
- * input is a picker filter for convenience, not a guarantee; the server's answer is the one that
- * decides, and its message is surfaced verbatim.
- */
+/** HR/CEO upload surface for the §5 announcement PDF (POST /api/leave/policy-document, issue #744). ── NOBODY
+ * HAS EVER UPLOADED ONE ───────────────────────────────────────────── V133 records that rows reach
+ * `hr.leave_policy_document` through this endpoint alone, and the endpoint has never had a client. */
 
-// Mirrors LeaveController.MAX_POLICY_DOCUMENT_BYTES. A pre-flight size check is honest to mirror —
-// unlike content type, a file's size is not something the client merely asserts — and it saves
-// pushing a large body only to be refused. The server still enforces it regardless.
+// Mirrors LeaveController.MAX_POLICY_DOCUMENT_BYTES. A pre-flight size check is honest to mirror — unlike
+// content type, a file's size is not something the client merely asserts — and it saves pushing a large body
+// only to be refused. The server still enforces it regardless.
 const MAX_POLICY_DOCUMENT_BYTES = 10 * 1024 * 1024;
 
 function formatFileSize(bytes) {
@@ -77,22 +37,17 @@ export function LeavePolicyDocumentPage({ showToast }) {
   const [fileError, setFileError] = useState('');
   const [dateError, setDateError] = useState('');
   const [formError, setFormError] = useState('');
-  // Metadata for the version uploaded in THIS session. The GET returns the file's bytes, not its
-  // metadata, so after a reload the page can only know WHETHER a document is current (the HEAD
-  // probe) — never its name or effective date. There is no metadata endpoint to call; saying less
-  // is better than inventing a field, so the detail panel appears only just after an upload.
+  // Metadata for the version uploaded in THIS session. The GET returns the file's bytes, not its metadata, so
+  // after a reload the page can only know WHETHER a document is current (the HEAD probe) — never its name or
+  // effective date.
   const [justUploaded, setJustUploaded] = useState(null);
-  // Remount key for FileUploadField. Clearing `fileRef.current.value` empties the real input but
-  // NOT the field's own internal `fileNames` display state, so after a successful upload the
-  // control went on showing the filename it had just consumed while the input behind it was empty
-  // — submitting again would then complain "กรุณาเลือกไฟล์ PDF" about a file the user could still
-  // see named on screen. Bumping the key remounts the field and resets both together.
+  // Remount key for FileUploadField. Bumping the key remounts the field and resets both together.
   const [fileFieldKey, setFileFieldKey] = useState(0);
 
   const availabilityQuery = useQuery({
     queryKey: queryKeys.leavePolicyDocumentAvailable(),
-    // Keep `api.leave.policyDocumentAvailable(` contiguous on one line: serverContract.test.js's
-    // reachability scan greps component source for exactly that string.
+    // Keep `api.leave.policyDocumentAvailable(` contiguous on one line: serverContract.test.js's reachability scan
+    // greps component source for exactly that string.
     queryFn: () => api.leave.policyDocumentAvailable(),
   });
 
@@ -109,9 +64,8 @@ export function LeavePolicyDocumentPage({ showToast }) {
       queryClient.invalidateQueries({ queryKey: queryKeys.leavePolicyDocumentAvailable() });
       showToast?.('อัปโหลดเอกสารประกาศแล้ว');
     },
-    // Inline rather than a toast: the backend's own Thai message names which rule was broken
-    // ("รองรับเฉพาะไฟล์ PDF" / "ไฟล์มีขนาดใหญ่เกินไป" / "ไฟล์ว่างเปล่า"), and it belongs beside the
-    // field that has to change.
+    // Inline rather than a toast: the backend's own Thai message names which rule was broken ("รองรับเฉพาะไฟล์
+    // PDF" / "ไฟล์มีขนาดใหญ่เกินไป" / "ไฟล์ว่างเปล่า"), and it belongs beside the field that has to change.
     onError: (error) => setFormError(error?.message || 'อัปโหลดเอกสารประกาศไม่สำเร็จ'),
   });
 
@@ -119,9 +73,9 @@ export function LeavePolicyDocumentPage({ showToast }) {
     const picked = event.target.files?.[0] || null;
     setFile(picked);
     setFormError('');
-    // Size only. There is deliberately no client-side check that the file "is a PDF": the server's
-    // own check reads the same client-declared type this could read, so a check here would add no
-    // protection while implying a verification nobody performs.
+    // Size only. There is deliberately no client-side check that the file "is a PDF": the server's own check reads
+    // the same client-declared type this could read, so a check here would add no protection while implying a
+    // verification nobody performs.
     if (picked && picked.size > MAX_POLICY_DOCUMENT_BYTES) {
       setFileError('ไฟล์มีขนาดใหญ่เกิน 10 MB');
     } else {
@@ -150,11 +104,8 @@ export function LeavePolicyDocumentPage({ showToast }) {
   }
 
   const isAvailable = availabilityQuery.data === 'available';
-  // 'unverified' and 'check-failed' share the retry branch below with a genuine query isError:
-  // with no confirmed server answer, "ยังไม่เคยมีการอัปโหลดไฟล์เข้ามาเลย" (never uploaded) is a claim
-  // this page cannot support -- and unlike LeavePolicyBar.jsx it has no bundled fallback to offer
-  // instead (this page IS the server-side archive), so "could not check, try again" is the only
-  // honest thing left to render.
+  // 'unverified' and 'check-failed' share the retry branch below with a genuine query isError: with no confirmed
+  // server answer, "ยังไม่เคยมีการอัปโหลดไฟล์เข้ามาเลย" is a claim this page cannot support.
   const checkFailed = availabilityQuery.isError
     || availabilityQuery.data === 'unverified'
     || availabilityQuery.data === 'check-failed';
@@ -172,25 +123,23 @@ export function LeavePolicyDocumentPage({ showToast }) {
           <Icon name="info" className="mt-[2px] shrink-0 text-icon-muted" />
           <div className="grid gap-2 text-text-secondary leading-normal">
             <p className="m-0">
-              {/* Explicit {' '}: JSX strips the newline between an element and the following text
-                  line, which would run two Thai SENTENCES together. */}
+              {/* Explicit {' '}: JSX strips the newline between an element and the following text line, which would run two
+               * Thai SENTENCES together. */}
               หน้านี้ใช้เก็บ<strong>ไฟล์ประกาศฉบับจริงไว้บนเซิร์ฟเวอร์</strong>{' '}
               ระบบจะเก็บทุกฉบับที่อัปโหลดไว้ตามวันที่มีผลบังคับใช้ ไม่มีการเขียนทับฉบับเดิม
               ทำให้ย้อนดูได้ว่าวันใดใช้ประกาศฉบับไหน
             </p>
-            {/* The single most important sentence on the page: reversed 2026-08-14. An uploader
-                used to be told nothing changes for employees; now it DOES, once this version's
-                effective date arrives and LeavePolicyBar.jsx's probe can confirm it -- see that
-                file's header comment for the full state table. */}
+            {/* The single most important sentence on the page: reversed 2026-08-14. An uploader used to be told nothing
+             * changes for employees; now it DOES, once this version's effective date arrives and LeavePolicyBar.jsx's
+             * probe can confirm it -- see that file's header comment for the full state table. */}
             <p className="m-0">
               <strong>ไฟล์ที่พนักงานเห็นในหน้า “การลา” จะเปลี่ยนตามฉบับนี้เมื่อถึงวันมีผลบังคับใช้</strong>{' '}
               ลิงก์ในหน้านั้นตรวจสอบกับเซิร์ฟเวอร์ก่อนทุกครั้ง หากพบฉบับปัจจุบันจะแสดงไฟล์ที่อัปโหลดไว้ที่นี่
               หากยังไม่มีฉบับที่ใช้ได้ หรือตรวจสอบกับเซิร์ฟเวอร์ไม่ได้ จะแสดงไฟล์สำรองที่ติดมากับระบบแทน
             </p>
-            {/* The link text below used to assert "the file employees see right now" as an
-                unconditional fact -- true only while the reader had no way to prefer an upload.
-                Reworded to describe the bundled copy for what it now is -- the fallback -- so it
-                does not contradict the paragraph above. */}
+            {/* The link text below used to assert "the file employees see right now" as an unconditional fact -- true only
+             * while the reader had no way to prefer an upload. Reworded to describe the bundled copy for what it now is --
+             * the fallback -- so it does not contradict the paragraph above. */}
             <p className="m-0">
               ไฟล์สำรองที่ติดมากับระบบ (ใช้เมื่อยังไม่มีฉบับอัปโหลดที่ใช้ได้ หรือตรวจสอบกับเซิร์ฟเวอร์ไม่ได้):{' '}
               <a href={POLICY_PDF_HREF} target="_blank" rel="noopener noreferrer" className="font-bold text-primary">
@@ -223,8 +172,8 @@ export function LeavePolicyDocumentPage({ showToast }) {
                   const blob = await api.leave.downloadPolicyDocument();
                   const url = URL.createObjectURL(blob);
                   window.open(url, '_blank', 'noopener');
-                  // Revoked on the next tick, not immediately: the newly opened tab needs the URL to
-                  // still resolve when it starts loading.
+                  // Revoked on the next tick, not immediately: the newly opened tab needs the URL to still resolve when it
+                  // starts loading.
                   window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
                 } catch (error) {
                   showToast?.(error?.message || 'ดาวน์โหลดเอกสารไม่สำเร็จ');
@@ -236,8 +185,8 @@ export function LeavePolicyDocumentPage({ showToast }) {
             </Button>
           </div>
         ) : (
-          // The state EVERY environment is in today, so it is phrased as a normal starting point
-          // rather than a fault, and it does not tell the reader anything is broken.
+          // The state EVERY environment is in today, so it is phrased as a normal starting point rather than a fault,
+          // and it does not tell the reader anything is broken.
           <div className="flex items-start gap-3">
             <Icon name="info" className="mt-[2px] shrink-0 text-icon-muted" />
             <p className="m-0 text-text-secondary leading-normal">
@@ -265,9 +214,8 @@ export function LeavePolicyDocumentPage({ showToast }) {
             </div>
           </dl>
           {notYetInForce ? (
-            // Without this the upload looks like it did nothing: the file is stored, but findCurrent
-            // will not select it until its effective date, so the panel above still shows the
-            // previous state.
+            // Without this the upload looks like it did nothing: the file is stored, but findCurrent will not select it
+            // until its effective date, so the panel above still shows the previous state.
             <p className="m-0 mt-3 rounded-md bg-surface-subtle p-3 text-text-secondary leading-normal">
               ฉบับนี้ตั้งวันที่มีผลไว้<strong>ล่วงหน้า</strong> ระบบจึงเก็บไฟล์ไว้แล้วแต่ยังไม่ถือเป็นฉบับปัจจุบัน
               จนกว่าจะถึงวันที่ {formatThaiDate(justUploaded.effectiveFrom)} — ไม่ใช่ข้อผิดพลาด
@@ -282,8 +230,8 @@ export function LeavePolicyDocumentPage({ showToast }) {
             label="ไฟล์ประกาศ"
             htmlFor="leave-policy-file"
             error={fileError}
-            // States the RULE the server applies. It deliberately does not say the system checks
-            // that the file really is a PDF — the server only reads the type the browser declares.
+            // States the RULE the server applies. It deliberately does not say the system checks that the file really is a
+            // PDF — the server only reads the type the browser declares.
             hint="ต้องเป็นไฟล์ PDF ขนาดไม่เกิน 10 MB"
             required
           >

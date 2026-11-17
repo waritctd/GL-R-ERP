@@ -9,23 +9,9 @@ import java.util.function.IntFunction;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
-/**
- * The shape of mid-year over-withholding — written by review as a DEFECT PIN, RETRACTED once the
- * defect was fixed.
- *
- * <p>The defect: the ภ.ง.ด.91 notice printed unconditionally from the first period the excess went
- * positive, on a figure measured against that period's PROJECTED annual tax. Test 2 below is the case
- * that condemned it — a March commission spike whose mid-year peak exceeds December's actual excess,
- * so an employee was told a named sum was unrecoverable that payroll then returned by withholding less.
- *
- * <p>The notice is now gated on the final period of the year: December states the excess is final and
- * names ภ.ง.ด.91; earlier periods print a ประมาณการ that says later withholding may reduce it. These
- * tests still describe the underlying ARITHMETIC honestly — the excess really does appear in April and
- * really can shrink — which is why they were retracted rather than deleted. What they no longer claim
- * is that the payslip asserts it as final. That boundary is pinned by
- * {@code PayslipRendererTest} and {@code PayslipProvisionalNoticeGeometryReviewTest}, on the RENDERED
- * PDF; these assert on {@code PayrollCalculation} and therefore cannot see the gate at all.
- */
+/** The shape of mid-year over-withholding — written by review as a DEFECT PIN, RETRACTED once the defect was
+ * fixed. The defect: the ภ.ง.ด.91 notice printed unconditionally from the first period the excess went
+ * positive, on a figure measured against that period's PROJECTED annual tax. */
 class PayrollExcessWithheldNoticeReviewTest {
     private final PayrollCalculator calculator = new PayrollCalculator();
 
@@ -61,16 +47,9 @@ class PayrollExcessWithheldNoticeReviewTest {
         return months;
     }
 
-    /**
-     * DEFECT. ฿30,000 salary with a ฿300,000 commission in MARCH and NO commission afterwards. The
-     * March projection annualises the spike, so March over-withholds; from April the projection
-     * collapses and {@code excessWithheldToDate} turns positive.
-     *
-     * <p>The payslip then prints, in April, that the excess "ไม่สามารถคืนผ่านระบบเงินเดือนได้" and that
-     * the employee should reclaim it on their ภ.ง.ด.91. Both statements are premature: the year has
-     * not ended, the projection is still moving, and the figure the employee is told to claim is not
-     * the figure they will actually be owed.
-     */
+    /** DEFECT. ฿30,000 salary with a ฿300,000 commission in MARCH and NO commission afterwards. The March
+     * projection annualises the spike, so March over-withholds; from April the projection collapses and
+     * excessWithheldToDate turns positive. */
     @Test
     @DisplayName("mid-year over-withholding is reported, and reported as provisional")
     void theNoticeFiresMidYearOnAProvisionalFigure() {
@@ -97,12 +76,7 @@ class PayrollExcessWithheldNoticeReviewTest {
             .isEqualTo(4);
     }
 
-    /**
-     * DEFECT, sharper. A commission spike in MARCH followed by a RECOVERY later in the year: the
-     * mid-year "excess" is entirely absorbed by months that withhold nothing, and December's excess
-     * is a different, smaller number. Every notice printed before then was a false alarm about money
-     * that payroll did in fact hand back — by not withholding it.
-     */
+    /** Checks a mid-year excess can be absorbed by later periods with no withholding. */
     @Test
     @DisplayName("a mid-year excess can still be absorbed by later periods")
     void aMidYearExcessIsAbsorbedByLaterPeriods() {
@@ -131,11 +105,9 @@ class PayrollExcessWithheldNoticeReviewTest {
             .isLessThan(peakMidYear);
     }
 
-    /**
-     * The structural invariant the two withholding limbs are documented to satisfy — "regular +
-     * variable = withholding_tax, always" (V92's own COMMENT ON) — held through both scenarios above,
-     * including in the periods where the {@code collectableThisYear} ceiling binds.
-     */
+    /** The structural invariant the two withholding limbs are documented to satisfy — "regular + variable =
+     * withholding_tax, always" (V92's own COMMENT ON) — held through both scenarios above, including in the
+     * periods where the collectableThisYear ceiling binds. */
     @Test
     @DisplayName("the persisted withholding limbs sum to the remitted figure in every period")
     void theWithholdingLimbsAlwaysSumToTheRemittedFigure() {

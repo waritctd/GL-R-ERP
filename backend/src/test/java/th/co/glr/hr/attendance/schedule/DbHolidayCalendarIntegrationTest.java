@@ -8,12 +8,7 @@ import java.util.Set;
 import org.junit.jupiter.api.Test;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
-/**
- * {@code hr.holiday} (V115) seeds zero rows, so every case here inserts its own fixture rows first.
- * Real Postgres, not a mock: {@link DbHolidayCalendar#holidaysBetween} is a {@code BETWEEN} range
- * scan whose boundary behaviour (inclusive both ends) is exactly the kind of thing worth proving
- * against the real driver rather than assuming from the SQL text.
- */
+/** hr.holiday (V115) seeds zero rows, so every case here inserts its own fixture rows first. */
 class DbHolidayCalendarIntegrationTest extends AbstractPostgresIntegrationTest {
 
     private DbHolidayCalendar calendar;

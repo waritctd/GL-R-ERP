@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.doThrow;
@@ -24,12 +25,14 @@ import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.common.ApiException;
+import th.co.glr.hr.peopleinsights.PeopleInsightsService;
 
 class AuthServiceTest {
     private final EmployeeAuthRepository employees = mock(EmployeeAuthRepository.class);
     private final PasswordEncoder encoder = new BCryptPasswordEncoder();
     private final AuditService audit = mock(AuditService.class);
-    private final AuthService service = new AuthService(employees, encoder, audit, new ViewAsService(employees, audit, ""));
+    private final PeopleInsightsService insights = mock(PeopleInsightsService.class);
+    private final AuthService service = new AuthService(employees, encoder, audit, new ViewAsService(employees, audit, ""), insights);
 
     @Test
     void rejectsTheEmployeeCodeAsAPassword() {
@@ -120,6 +123,25 @@ class AuthServiceTest {
             new LoginRequest("hr@glr.co.th", "Str0ngPass!", null), new MockHttpServletRequest());
 
         assertThat(response.canIssueBillingNote()).isTrue();
+    }
+
+    @Test
+    void loginSurfacesCanViewPeopleInsightsForHrAndForATeamHeadButNotForAnEmployee() {
+        // The access rule lives in PeopleInsightsService.mayView; the login response only relays it.
+        when(insights.mayView(argThat(u -> u != null && "hr".equals(u.role())))).thenReturn(true);
+        when(employees.findByEmail("hr@glr.co.th"))
+            .thenReturn(Optional.of(employee(17L, encoder.encode("Str0ngPass!"), false)));
+        assertThat(service.login(new LoginRequest("hr@glr.co.th", "Str0ngPass!", null), new MockHttpServletRequest())
+            .canViewPeopleInsights()).isTrue();
+
+        when(employees.findByEmail("employee@glr.co.th"))
+            .thenReturn(Optional.of(employee(3L, encoder.encode("Str0ngPass!"), false)));
+        assertThat(service.login(new LoginRequest("employee@glr.co.th", "Str0ngPass!", null), new MockHttpServletRequest())
+            .canViewPeopleInsights()).isFalse();
+
+        when(insights.mayView(any())).thenReturn(true);
+        assertThat(service.login(new LoginRequest("employee@glr.co.th", "Str0ngPass!", null), new MockHttpServletRequest())
+            .canViewPeopleInsights()).isTrue();
     }
 
     @Test
@@ -238,16 +260,16 @@ class AuthServiceTest {
             isNull(), details.capture());
         assertThat(actor.getValue().email()).isEqualTo("hr@glr.co.th");
         assertThat(actor.getValue().id()).isEqualTo(42L);
-        // The role is derived from the division at login time and the division can change later,
-        // so capturing it here is a historical record, not something re-derivable from the row.
+        // The role is derived from the division at login time and the division can change later, so capturing it here
+        // is a historical record, not something re-derivable from the row.
         assertThat(details.getValue()).containsEntry("role", "hr");
         assertThat(details.getValue()).containsEntry("mustChangePassword", false);
     }
 
     @Test
     void recordsNoAuditRowWhenTheCredentialsAreRejected() {
-        // Wrong-way-round: the audit trail must not imply a login that never happened. Every
-        // rejection path in login() is exercised, because each returns before the record call.
+        // Wrong-way-round: the audit trail must not imply a login that never happened. Every rejection path in login()
+        // is exercised, because each returns before the record call.
         when(employees.findByEmail("missing@glr.co.th")).thenReturn(Optional.empty());
         when(employees.findByEmail("hr@glr.co.th"))
             .thenReturn(Optional.of(employee(17L, encoder.encode("Str0ngPass!"), false)));
@@ -276,8 +298,8 @@ class AuthServiceTest {
 
     @Test
     void stillLogsInWhenTheAuditWriteFails() {
-        // An audit-table problem must never become a company-wide lockout: a login mutates
-        // nothing, so there is no half-written state to protect by failing the request.
+        // An audit-table problem must never become a company-wide lockout: a login mutates nothing, so there is no
+        // half-written state to protect by failing the request.
         when(employees.findByEmail("hr@glr.co.th"))
             .thenReturn(Optional.of(employee(17L, encoder.encode("Str0ngPass!"), false)));
         doThrow(new RuntimeException("audit_log unavailable"))
@@ -298,8 +320,8 @@ class AuthServiceTest {
     }
 
     private EmployeeLoginRecord employee(long divisionId, String positionName) {
-        // Role-derivation tests log in with "GLR-42"; give them a matching hash so
-        // Wave 1's BCrypt auth lets the login through to the role check.
+        // Role-derivation tests log in with "GLR-42"; give them a matching hash so Wave 1's BCrypt auth lets the login
+        // through to the role check.
         return employee(divisionId, positionName, encoder.encode("GLR-42"), false);
     }
 
@@ -329,8 +351,8 @@ class AuthServiceTest {
         );
     }
 
-    // Maps the legacy division ids used by these tests to the ฝ่าย source_code that the
-    // data-driven DivisionAccessPolicy now keys on (role no longer depends on division_id).
+    // Maps the legacy division ids used by these tests to the ฝ่าย source_code that the data-driven
+    // DivisionAccessPolicy now keys on (role no longer depends on division_id).
     private static String divisionCodeFor(long divisionId) {
         return switch ((int) divisionId) {
             case 17 -> "HR";   // HR-บุคคล

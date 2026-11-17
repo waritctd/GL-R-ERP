@@ -8,8 +8,8 @@ import java.util.List;
 public final class PricingDecisionDtos {
     private PricingDecisionDtos() {}
 
-    /** Full, cost-and-margin-bearing view. Restricted to {@code import}/{@code ceo} — see
-     * {@link PricingDecisionService}'s {@code RAW_DECISION_ROLES}. Never returned to sales. */
+    /** Full, cost-and-margin-bearing view. Restricted to import/ceo — see PricingDecisionService's
+     * RAW_DECISION_ROLES. Never returned to sales. */
     public record PricingDecisionDto(
         long id,
         String decisionCode,
@@ -39,19 +39,16 @@ public final class PricingDecisionDtos {
         String priceMode
     ) {}
 
-    /**
-     * One pricing-request line's cost + CEO decision. Every price/quantity field's name states
-     * which unit basis it is expressed in (design correction 1) — {@code *PerPiece*} fields
-     * mirror the costing engine's own physical basis; {@code *PerRequestedUnit*} fields are the
-     * customer-facing basis ({@link #requestedUnitBasis}).
-     */
+    /** One pricing-request line's cost + CEO decision. Every price/quantity field's name states which unit basis it
+     * is expressed in (design correction 1) — *PerPiece* fields mirror the costing engine's own physical basis;
+     * *PerRequestedUnit* fields are the customer-facing basis (#requestedUnitBasis). */
     public record PricingDecisionItemDto(
         long id,
         long pricingDecisionId,
         long pricingRequestItemId,
         long pricingCostingItemId,
-        // Descriptive fields joined from pricing_request_item / pricing_costing_item at read
-        // time for display — never stored redundantly on this row.
+        // Descriptive fields joined from pricing_request_item / pricing_costing_item at read time for display — never
+        // stored redundantly on this row.
         String brand,
         String model,
         String productDescription,
@@ -79,9 +76,9 @@ public final class PricingDecisionDtos {
         // reused rather than a second dedicated column, mirroring the sibling cost override's
         // overrideReason but without a second column for it.
         BigDecimal manualSellingPricePerRequestedUnit,
-        // Derived, never stored (mirrors PricingCostingItemDto#effectiveLandedCostPerUnitThb) —
-        // recomputed on every read (PricingDecisionRepository#mapItem) so it can never drift out
-        // of sync with the two columns it is derived from.
+        // Derived, never stored (mirrors PricingCostingItemDto#effectiveLandedCostPerUnitThb) — recomputed on every
+        // read (PricingDecisionRepository#mapItem) so it can never drift out of sync with the two columns it is
+        // derived from.
         BigDecimal effectiveSellingPricePerRequestedUnit,
         // ── CEO pricing method ──────────────────────────────────────────────────────────────
         // ตร.ม./แผ่น from the bound pricing_request_item -- NOT new/CEO-only info (Sales
@@ -97,9 +94,9 @@ public final class PricingDecisionDtos {
         BigDecimal specialPriceSqm,
         // ราคาสุทธิต่อแผ่นตรง ๆ, mode DIRECT_NET. CEO-only.
         BigDecimal directNetPrice,
-        // Server-derived net price per requested unit for whichever price_mode is active --
-        // freezes into approvedSellingPricePerRequestedUnit AND
-        // minimumSellingPricePerRequestedUnit on approve() of a new-form decision. CEO-only.
+        // Server-derived net price per requested unit for whichever price_mode is active -- freezes into
+        // approvedSellingPricePerRequestedUnit AND minimumSellingPricePerRequestedUnit on approve() of a new-form
+        // decision. CEO-only.
         BigDecimal netUnitPrice,
         // ── Stock lines, read from the bound pricing_request_item ───────────────────────────
         // null = สั่งนำเข้า; IN_THAILAND / IN_TRANSIT = a stock line (no costing link, no cost).
@@ -132,14 +129,8 @@ public final class PricingDecisionDtos {
         }
     }
 
-    /**
-     * Design correction 2 ("never leak cost to Sales"): the ONLY shape a {@code sales}/
-     * {@code sales_manager} actor can ever receive for a pricing decision. Deliberately has no
-     * cost, margin, or raw-factory field of any kind — this is a distinct query path
-     * ({@link PricingDecisionRepository#findApprovedSalesView}), not a filter applied to
-     * {@link PricingDecisionDto} after the fact, so there is no cost-bearing object in memory on
-     * this path for a filter to forget to strip.
-     */
+    /** Design correction 2 ("never leak cost to Sales"): the ONLY shape a sales/ sales_manager actor can ever
+     * receive for a pricing decision. */
     public record PricingDecisionSalesViewDto(
         long pricingRequestId,
         long pricingDecisionId,

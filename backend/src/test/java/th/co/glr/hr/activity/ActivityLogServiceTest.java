@@ -18,12 +18,9 @@ import org.springframework.http.HttpStatus;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 
-/**
- * Proves the admin gate picks the right branch. This is step 1 of CLAUDE.md's two-step requirement
- * for an authorization change; {@link ActivityLogAuthzIntegrationTest} is step 2, and a mocked
- * repository here cannot stand in for it — a mock happily "passes" while the SQL does something
- * else entirely.
- */
+/** Proves the admin gate picks the right branch. This is step 1 of CLAUDE.md's two-step requirement for an
+ * authorization change; ActivityLogAuthzIntegrationTest is step 2, and a mocked repository here cannot stand
+ * in for it — a mock happily "passes" while the SQL does something else entirely. */
 class ActivityLogServiceTest {
 
     private final ActivityLogRepository repository = mock(ActivityLogRepository.class);
@@ -61,8 +58,8 @@ class ActivityLogServiceTest {
 
     @Test
     void neverConsultsTheDerivedRole() {
-        // Admin is orthogonal to the role. No role may grant it, so a `ceo` who is not flagged is
-        // refused exactly like anyone else — this is what stops the gate drifting into a role check.
+        // Admin is orthogonal to the role. No role may grant it, so a `ceo` who is not flagged is refused exactly like
+        // anyone else — this is what stops the gate drifting into a role check.
         when(repository.isAdmin(7L)).thenReturn(false);
 
         assertThatThrownBy(() -> service.list(principal(7L, "ceo"), null, null, null, null))

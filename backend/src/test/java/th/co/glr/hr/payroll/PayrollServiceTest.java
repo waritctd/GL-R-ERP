@@ -40,9 +40,8 @@ class PayrollServiceTest {
     private final PayrollRepository payrollRepository = mock(PayrollRepository.class);
     private final AuditService auditService = mock(AuditService.class);
     private final PayslipRenderer payslipRenderer = mock(PayslipRenderer.class);
-    // Leave -> payroll unpaid-day deduction (2026-07-23): PayrollService gained a LeaveRepository
-    // dependency for #suggestedInputs; this test class does not exercise that method, so an unused
-    // mock is sufficient here.
+    // Leave -> payroll unpaid-day deduction (2026-07-23): PayrollService gained a LeaveRepository dependency for
+    // #suggestedInputs; this test class does not exercise that method, so an unused mock is sufficient here.
     private final AppProperties appProperties = employerConfig();
     private final PayrollService service = new PayrollService(
         payrollRepository,
@@ -125,8 +124,8 @@ class PayrollServiceTest {
         when(payrollRepository.findLines(99L)).thenReturn(List.of(first, second));
         when(payrollRepository.findDetailIdentity(java.util.Set.of(42L, 43L))).thenReturn(Map.of());
         // The การคำนวณภาษี tab needs each employee's YTD carry-forward (see
-        // PayrollDetailExporter.Ctx#cumulativeIncomeBeforeThisPeriod); buildDetailContent now loads
-        // it for every PAYROLL_DETAIL export regardless of processed/void status.
+        // PayrollDetailExporter.Ctx#cumulativeIncomeBeforeThisPeriod); buildDetailContent now loads it for every
+        // PAYROLL_DETAIL export regardless of processed/void status.
         when(payrollRepository.findYearToDateByEmployee(LocalDate.of(2026, 6, 1))).thenReturn(Map.of());
 
         PayrollExportFile file = service.export(PayrollExportKind.PAYROLL_DETAIL, 99L, LocalDate.of(2026, 6, 26), hrUser());
@@ -137,8 +136,8 @@ class PayrollServiceTest {
 
         try (var workbook = new org.apache.poi.xssf.usermodel.XSSFWorkbook(
                 new java.io.ByteArrayInputStream(file.content()))) {
-            // 3-tab workbook (สรุปเงินเดือน / การคำนวณภาษี / อัตราภาษีและหมายเหตุ) -- see
-            // PayrollDetailExporter's class javadoc for why this replaced the single ~70-column sheet.
+            // 3-tab workbook (สรุปเงินเดือน / การคำนวณภาษี / อัตราภาษีและหมายเหตุ) -- see PayrollDetailExporter's class
+            // javadoc for why this replaced the single ~70-column sheet.
             assertThat(workbook.getNumberOfSheets()).isEqualTo(3);
             assertThat(workbook.getSheetName(0)).isEqualTo("สรุปเงินเดือน");
             assertThat(workbook.getSheetName(1)).isEqualTo("การคำนวณภาษี");
@@ -175,9 +174,7 @@ class PayrollServiceTest {
 
     @Test
     void payrollDetailExportOnAVoidedPeriodRecomputesRatherThanTrustingStaleLinesNo500() {
-        // No lines at all (the empty-employees case, matching hrProcessingPayrollRecordsAuditTrail's
-        // stubbing below) is enough to prove the reconstruct-and-recompute path (see
-        // PayrollService#export's PAYROLL_DETAIL/VOID branch) doesn't 500 -- the meaningful "stale
+        // No lines at all is enough to prove the reconstruct-and-recompute path doesn't 500 -- the meaningful "stale
         // figures get discarded, not trusted" case is covered end-to-end against real Postgres by
         // PayrollDetailExportVoidRecomputeIntegrationTest.
         PayrollPeriodDto voided = new PayrollPeriodDto(
@@ -197,10 +194,8 @@ class PayrollServiceTest {
 
     @Test
     void exportDetailPreviewComputesFromTheSameLivePreviewPathWithNoPersistedPeriod() {
-        // Owner requirement (2026-07-30): July 2026 is live and unprocessed, so HR must be able to
-        // download the detail workbook for a month that has never been saved at all -- no periodId
-        // exists to key a GET off. This goes straight through the private preview() computation, so
-        // stubs mirror hrProcessingPayrollRecordsAuditTrail's (a live preview with zero employees).
+        // Owner requirement (2026-07-30): July 2026 is live and unprocessed, so HR must be able to download the detail
+        // workbook for a month that has never been saved at all -- no periodId exists to key a GET off.
         when(payrollRepository.findActiveEmployees()).thenReturn(List.of());
         when(payrollRepository.findApprovedOvertimePayByEmployee(LocalDate.of(2026, 7, 1))).thenReturn(Map.of());
         when(payrollRepository.findYearToDateByEmployee(LocalDate.of(2026, 7, 1))).thenReturn(Map.of());
@@ -211,11 +206,8 @@ class PayrollServiceTest {
 
         assertThat(file.fileName()).isEqualTo("PayrollDetail260726.xlsx");
         assertThat(file.kind()).isEqualTo(PayrollExportKind.PAYROLL_DETAIL);
-        // No period was ever persisted -- confirms this truly went through preview(), not a
-        // findPeriodById/findLines lookup (verifyNoInteractions would be too strong since
-        // findActiveEmployees/findApprovedOvertimePayByEmployee/findYearToDateByEmployee ARE real
-        // interactions on payrollRepository; this instead asserts the one call that would only ever
-        // happen for a persisted period never happened).
+        // No period was ever persisted -- confirms this truly went through preview, not a findPeriodById/findLines
+        // lookup.
         org.mockito.Mockito.verify(payrollRepository, org.mockito.Mockito.never()).findPeriodById(org.mockito.ArgumentMatchers.anyLong());
     }
 
@@ -231,17 +223,15 @@ class PayrollServiceTest {
         byte[] zipBytes = service.bulkPayslipZip(99L, hrUser());
 
         Map<String, byte[]> entries = readZipEntries(zipBytes);
-        // Both lines share employeeCode "GLR-42" in this fixture (line() hardcodes it), so the
-        // second entry must be disambiguated rather than silently overwriting the first -- exactly
-        // two archive entries, one at the plain name, both PDF bodies present somewhere in the zip.
-        // The exact disambiguation scheme (suffix, counter, ...) is an implementation detail, so it
-        // is not asserted here beyond "a distinct second name exists".
+        // Both lines share employeeCode "GLR-42" in this fixture (line() hardcodes it), so the second entry must be
+        // disambiguated rather than silently overwriting the first -- exactly two archive entries, one at the plain
+        // name, both PDF bodies present somewhere in the zip.
         assertThat(entries).hasSize(2);
         assertThat(entries).containsKey("glr-payslip-GLR-42.pdf");
         assertThat(entries.values()).extracting(String::new).containsExactlyInAnyOrder("%PDF-A", "%PDF-B");
 
-        // Byte-identical to the single-payslip endpoint for the same line -- the whole point of
-        // reusing PayslipRenderer#toPdf rather than a second renderer.
+        // Byte-identical to the single-payslip endpoint for the same line -- the whole point of reusing
+        // PayslipRenderer#toPdf rather than a second renderer.
         byte[] singleA = service.payslipPdf(99L, 123L, hrUser());
         assertThat(singleA).isEqualTo("%PDF-A".getBytes());
     }
@@ -363,9 +353,9 @@ class PayrollServiceTest {
                 assertThat(exception.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
     }
 
-    // ---- Fix B: statutory exports fail closed when employer registration is blank -------------
-    // Wrong-way-round per CLAUDE.md: these prove the export IS refused on a blank field, not merely
-    // that a fully-populated one works (though that positive case is covered too, per kind).
+    // Fix B: statutory exports fail closed when employer registration is blank ------------- Wrong-way-round per
+    // CLAUDE.md: these prove the export IS refused on a blank field, not merely that a fully-populated one works
+    // (though that positive case is covered too, per kind).
 
     @Test
     void kbankExportRefusedWhenDebitAccountBlank() {
@@ -468,12 +458,8 @@ class PayrollServiceTest {
             });
     }
 
-    /**
-     * The SSO workbook (2026-08-31) renders no employer identity at all -- no account number, no
-     * establishment name -- so blanking every one of those fields must NOT block the export. This
-     * is the wrong-way-round half of {@link #ssoExportRefusedWhenBranchBlank}: together they pin
-     * that the guard requires the branch and nothing else.
-     */
+    /** The SSO workbook (2026-08-31) renders no employer identity at all -- no account number, no establishment
+     * name -- so blanking every one of those fields must NOT block the export. */
     @Test
     void ssoExportNotBlockedByBlankEmployerAccountOrEstablishmentName() {
         AppProperties props = fullyConfiguredEmployerProps();
@@ -509,8 +495,8 @@ class PayrollServiceTest {
 
     @Test
     void payrollDetailExportNotBlockedByACompletelyBlankEmployer() {
-        // PAYROLL_DETAIL never reads employer (see PayrollService#export's switch) so the guard
-        // must not gate it at all, even when every employer field is at its blank default.
+        // PAYROLL_DETAIL never reads employer (see PayrollService#export's switch) so the guard must not gate it at
+        // all, even when every employer field is at its blank default.
         PayrollService serviceUnderTest = serviceWithEmployer(new AppProperties());
         when(payrollRepository.findPeriodById(99L)).thenReturn(Optional.of(period()));
         when(payrollRepository.findDetailIdentity(java.util.Set.of(42L))).thenReturn(Map.of());
@@ -521,10 +507,9 @@ class PayrollServiceTest {
         assertThat(file.fileName()).isEqualTo("PayrollDetail260626.xlsx");
     }
 
-    /** Builds a second {@link PayrollService} wired to the same test-scoped mocks as the class-level
-     * {@code service} field, but with a caller-supplied {@link AppProperties} so a single test can
-     * flip one employer field at a time without disturbing the shared fixture every other test in
-     * this class relies on. */
+    /** Builds a second PayrollService wired to the same test-scoped mocks as the class-level service field, but
+     * with a caller-supplied AppProperties so a single test can flip one employer field at a time without
+     * disturbing the shared fixture every other test in this class relies on. */
     private PayrollService serviceWithEmployer(AppProperties props) {
         return new PayrollService(
             payrollRepository,
@@ -542,9 +527,9 @@ class PayrollServiceTest {
         );
     }
 
-    /** Every field Fix B's guard requires (across all three kinds), populated -- so a test that
-     * blanks exactly one field via its own setter is provably testing that ONE field, not
-     * incidentally relying on some other field already being blank. */
+    /** Every field Fix B's guard requires (across all three kinds), populated -- so a test that blanks exactly one
+     * field via its own setter is provably testing that ONE field, not incidentally relying on some other field
+     * already being blank. */
     private static AppProperties fullyConfiguredEmployerProps() {
         AppProperties props = new AppProperties();
         AppProperties.Employer employer = props.getPayroll().getEmployer();

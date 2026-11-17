@@ -37,8 +37,8 @@ import th.co.glr.hr.specialmoney.SpecialMoneyResponses.SpecialMoneyListResponse;
 import th.co.glr.hr.specialmoney.SpecialMoneyResponses.SpecialMoneyTypesResponse;
 import th.co.glr.hr.specialmoney.SpecialMoneyResponses.SpecialMoneyUsageResponse;
 
-/** Modelled on {@code th.co.glr.hr.overtime.OvertimeController}: session-resolved principal, no
- * {@code @PreAuthorize} -- every authorization decision lives in {@link SpecialMoneyService}. */
+/** Modelled on th.co.glr.hr.overtime.OvertimeController: session-resolved principal, no @PreAuthorize -- every
+ * authorization decision lives in SpecialMoneyService. */
 @RestController
 @RequestMapping("/api/special-money")
 public class SpecialMoneyController {
@@ -102,12 +102,8 @@ public class SpecialMoneyController {
         return new SpecialMoneyDetailResponse(specialMoneyService.approve(id, request, user));
     }
 
-    /**
-     * The ceiling the CEO's approve dialog previews before submitting a decision -- read-only, so it
-     * is a {@code GET} rather than sitting alongside {@code /approve}. Authorization (CEO-only) and
-     * the 409-if-already-decided guard live in {@link SpecialMoneyService#approvalPreview}, same as
-     * every other authz decision in this controller.
-     */
+    /** The ceiling the CEO's approve dialog previews before submitting a decision -- read-only, so it is a GET
+     * rather than sitting alongside /approve. */
     @GetMapping("/{id}/approval-preview")
     SpecialMoneyApprovalPreviewResponse approvalPreview(@PathVariable long id, HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
@@ -143,9 +139,7 @@ public class SpecialMoneyController {
         return new SpecialMoneyTypesResponse(options);
     }
 
-    // ---------------------------------------------------------------------
     // Evidence attachments
-    // ---------------------------------------------------------------------
 
     /** Receipts and life-event documents are scans or photos; nothing else is accepted. */
     private static final Set<String> ALLOWED_EVIDENCE_TYPES =
@@ -157,9 +151,9 @@ public class SpecialMoneyController {
             @RequestParam("file") MultipartFile file,
             HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
-        // Authorize BEFORE writing anything to disk. Storing first and letting the service reject
-        // afterwards would leave an orphaned file on every refused upload -- a way for anyone with
-        // a session to fill the uploads volume by POSTing to a request that is not theirs.
+        // Authorize BEFORE writing anything to disk. Storing first and letting the service reject afterwards would
+        // leave an orphaned file on every refused upload -- a way for anyone with a session to fill the uploads volume
+        // by POSTing to a request that is not theirs.
         specialMoneyService.requireCanAttach(id, user);
         FileStorageService.StoredFile stored =
             fileStorage.store("special-money", id, file, ALLOWED_EVIDENCE_TYPES);

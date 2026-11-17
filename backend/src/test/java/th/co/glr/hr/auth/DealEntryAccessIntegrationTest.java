@@ -45,20 +45,9 @@ import th.co.glr.hr.ticket.TicketService;
 import tools.jackson.databind.DeserializationFeature;
 import tools.jackson.databind.json.JsonMapper;
 
-/**
- * Real-DB authz evidence for the deal-entry widening (owner ruling 2026-09-10 — see
- * {@code docs/sales/quotation-v2-plan.md}'s inline-deal-creation addendum and {@link
- * DealEntryAccess}'s own Javadoc): {@code TicketService.create}, {@code
- * CustomerController.create/createContact/createProject}, and {@code CustomerService}'s three
- * reads widened from sales-only to sales / sales_manager / a live {@code canCreateQuotation}
- * grant.
- *
- * <p>Runs the REAL {@code TicketService} and REAL {@code CustomerController} over REAL
- * repositories on REAL Postgres — CLAUDE.md's "Permission changes must ship evidence": a mocked
- * repository (see {@code CustomerControllerTest}) cannot prove the grant survives into the actual
- * SQL/service call. Every denial case is written wrong-way-round: it asks whether a caller who
- * should NOT reach the action can reach it.
- */
+/** Real-DB authz evidence for the deal-entry widening: TicketService.create,
+ * CustomerController.create/createContact/createProject, and CustomerService's three reads widened from
+ * sales-only to sales / sales_manager / a live canCreateQuotation grant. */
 class DealEntryAccessIntegrationTest extends AbstractPostgresIntegrationTest {
 
     private TicketService ticketService;
@@ -85,8 +74,8 @@ class DealEntryAccessIntegrationTest extends AbstractPostgresIntegrationTest {
         CustomerService customerService = new CustomerService(customers, contacts, projects, employeeAuth,
             new DealQuotationRepository(jdbc, new CatalogRepository(jdbc)));
 
-        // pricingRequests (dead-deal cascade only) is never reached by create() -- null is safe,
-        // exactly as DealQuotationIntegrationTest's own wiring already does.
+        // pricingRequests (dead-deal cascade only) is never reached by create() -- null is safe, exactly as
+        // DealQuotationIntegrationTest's own wiring already does.
         ticketService = new TicketService(tickets, notifications, new ObjectMapper(), customers,
             new QuotationRenderer(), (PricingRequestService) null, employeeAuth, new th.co.glr.hr.customer.ContactRepository(jdbc), new th.co.glr.hr.customer.ProjectRepository(jdbc),
             new th.co.glr.hr.dealquotation.DealQuotationRepository(jdbc, new th.co.glr.hr.catalog.CatalogRepository(jdbc)));
@@ -109,8 +98,8 @@ class DealEntryAccessIntegrationTest extends AbstractPostgresIntegrationTest {
         accountUserId = createEmployee(employees, "บัญชี เดี๋ยว", "account-dea@glr.co.th", "ACCT", "ฝ่ายบัญชี");
         employeeUserId = createEmployee(employees, "พนักงาน เดี๋ยว", "employee-dea@glr.co.th", "OTHER", "ฝ่ายอื่น");
 
-        // A project to attach ticket-create calls to (V50 requires one) -- created directly via
-        // repository, not through the gate under test.
+        // A project to attach ticket-create calls to (V50 requires one) -- created directly via repository, not
+        // through the gate under test.
         var customer = customers.create("บริษัท DealEntryAccess ทดสอบ", null, null, "สำนักงานใหญ่", null);
         projectOwnerCustomerId = customer.id();
         ProjectDto project = projects.create(projectOwnerCustomerId, "โครงการทดสอบสิทธิ์ deal-entry");
@@ -194,24 +183,16 @@ class DealEntryAccessIntegrationTest extends AbstractPostgresIntegrationTest {
                     .contentType(MediaType.APPLICATION_JSON).content("{\"name\":\"โครงการ " + role + "\"}"))
                 .andExpect(status().isForbidden());
         }
-        // import/account ARE in TicketAccessPolicy.VIEWER_ROLES (unaffected by this widening --
-        // that read gate was already open to them before this change), so search stays 200 for
-        // them; only plain employee is denied there.
+        // import/account ARE in TicketAccessPolicy.VIEWER_ROLES (unaffected by this widening -- that read gate was
+        // already open to them before this change), so search stays 200 for them; only plain employee is denied there.
         customerMvc.perform(get("/api/customers").session(session(employeeUserId, "employee")))
             .andExpect(status().isForbidden());
     }
 
     // ── update customer (owner feedback F7, 2026-09-10) ───────────────────────────────────
 
-    /**
-     * {@code PUT /api/customers/{id}} is a NEW write endpoint on the customer master, gated by
-     * {@link DealEntryAccess#requireCanEnterDeal} — exactly the gate {@code POST /api/customers}
-     * uses, no wider. CLAUDE.md requires real-DB evidence for any authz change: these run the REAL
-     * controller over the REAL {@code CustomerRepository} on REAL Postgres, and every denial case
-     * is written wrong-way-round — it asks whether a caller who should NOT be able to rewrite
-     * another company's tax id can, asserts 403, AND re-reads the row to prove the value did not
-     * move (a 403 that had already written would still be a real bug).
-     */
+    /** PUT /api/customers/{id} is a NEW write endpoint on the customer master, gated by
+     * DealEntryAccess#requireCanEnterDeal — exactly the gate POST /api/customers uses, no wider. */
     @Test
     void rolesOutsideTheDealEntryGate_cannotUpdateACustomer_andTheRowIsUnchanged() throws Exception {
         long id = seedCustomerForUpdate();
@@ -280,15 +261,8 @@ class DealEntryAccessIntegrationTest extends AbstractPostgresIntegrationTest {
 
     // ── update contact (gap fix, prod QT-2026-0041-1) ─────────────────────────────────────
 
-    /**
-     * {@code PUT /api/customers/{customerId}/contacts/{contactId}} is a NEW write endpoint, gated
-     * by {@link DealEntryAccess#requireCanEnterDeal} — exactly the gate
-     * {@code POST /api/customers/{id}/contacts} uses, no wider. CLAUDE.md requires real-DB evidence
-     * for any authz change: these run the REAL controller over the REAL {@code ContactRepository}
-     * on REAL Postgres, and every denial case is written wrong-way-round — it asks whether a caller
-     * who should NOT be able to rewrite another rep's ผู้สั่งซื้อ can, asserts 403, AND re-reads the
-     * row to prove the value did not move.
-     */
+    /** PUT /api/customers/{customerId/contacts/{contactId}} is a NEW write endpoint, gated by
+     * DealEntryAccess#requireCanEnterDeal — exactly the gate POST /api/customers/{id/contacts} uses, no wider. */
     @Test
     void rolesOutsideTheDealEntryGate_cannotUpdateAContact_andTheRowIsUnchanged() throws Exception {
         long customerId = seedCustomerForUpdate();
@@ -346,12 +320,9 @@ class DealEntryAccessIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(contactFirstNameOf(contactId)).isEqualTo(SEED_CONTACT_FIRST_NAME);
     }
 
-    /**
-     * A contact id that exists but belongs to a DIFFERENT customer must 404, exactly like the
-     * customer-update 404 above — proves {@link th.co.glr.hr.customer.ContactRepository#update}'s
-     * {@code WHERE contact_id = ... AND customer_id = ...} actually filters, not just the ORM
-     * shape. The row must be unchanged, because a 404 that had already written would be a bug too.
-     */
+    /** A contact id that exists but belongs to a DIFFERENT customer must 404, exactly like the customer-update 404
+     * above — proves th.co.glr.hr.customer.ContactRepository#update's WHERE contact_id = ... The row must be
+     * unchanged, because a 404 that had already written would be a bug too. */
     @Test
     void updatingAContactThroughAMismatchedCustomerIdIs404_andTheRowIsUnchanged() throws Exception {
         long customerId = seedCustomerForUpdate();

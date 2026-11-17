@@ -191,11 +191,8 @@ public class BillingNoteService {
         }
     }
 
-    /** Candidate ISSUED remaining invoices / deposit notices for a NEW line on this customer,
-     * split into {@code candidates} (outstanding &gt; 0, not already claimed) and {@code
-     * alreadyBilled} (outstanding &gt; 0 but a DIFFERENT live billing note already holds it — named
-     * so the caller can explain the exclusion, per the plan's own "report which note"). Fully paid
-     * docs are silently excluded from both lists. */
+    /** Candidate ISSUED remaining invoices / deposit notices for a NEW line on this customer, split into candidates
+     * and alreadyBilled. Fully paid docs are silently excluded from both lists. */
     public BillingNoteCandidatesDto candidates(long customerId, UserPrincipal actor) {
         // Role check before requireCustomer — same existence-oracle fix as list()'s
         // own above (no `sales` partial-access branch exists here, so this is a plain reorder).
@@ -264,15 +261,15 @@ public class BillingNoteService {
         LocalDate billDate = req != null && req.billDate() != null ? req.billDate() : existing.billDate();
         String paymentDueNote = req != null && req.paymentDueNote() != null ? req.paymentDueNote() : existing.paymentDueNote();
         String note = req != null && req.note() != null ? req.note() : existing.note();
-        // This guarded UPDATE also holds the parent row lock until the transaction commits.
-        // If issuance won the race after requireDraft, do not replace its now-frozen lines.
+        // This guarded UPDATE also holds the parent row lock until the transaction commits. If issuance won the race
+        // after requireDraft, do not replace its now-frozen lines.
         if (stored.updateDraftFields(id, billDate, paymentDueNote, note) == 0) {
             throw new ApiException(HttpStatus.CONFLICT,
                 "ใบวางบิลนี้ไม่ได้อยู่ในสถานะร่างแล้ว กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
         }
 
-        // Refresh the customer snapshot in case the master record changed since the draft was
-        // created — mirrors RemainingInvoiceService#updateDraft's own re-snapshot discipline.
+        // Refresh the customer snapshot in case the master record changed since the draft was created — mirrors
+        // RemainingInvoiceService#updateDraft's own re-snapshot discipline.
         CustomerDto customer = requireCustomer(existing.customerId());
         stored.updateCustomerSnapshot(id, customer.name(), customer.taxId(), customer.branch(), customer.address());
 
@@ -380,10 +377,9 @@ public class BillingNoteService {
             if (!isDoubleBillingViolation(e)) {
                 throw e;
             }
-            // A concurrent note grabbed one of these sources in the instant between the release
-            // above and this insert — the whole transaction rolls back, which restores the
-            // predecessor's own release too. Same "map the race to 409" discipline
-            // RemainingInvoiceService#createDraft/#revise already follow.
+            // A concurrent note grabbed one of these sources in the instant between the release above and this insert —
+            // the whole transaction rolls back, which restores the predecessor's own release too. Same "map the race to
+            // 409" discipline RemainingInvoiceService#createDraft/#revise already follow.
             throw new ApiException(HttpStatus.CONFLICT,
                 "รายการในใบวางบิลนี้ถูกนำไปใช้ในใบวางบิลอื่นไปแล้วระหว่างการแก้ไข กรุณาลองอีกครั้ง");
         }
@@ -451,10 +447,7 @@ public class BillingNoteService {
     public void deleteDraft(long id, UserPrincipal actor) {
         requireWriteAccess(actor);
         BillingNoteDocumentDto existing = requireDraft(id);
-        // Look up the predecessor (if any) BEFORE deleting — deleteDraft's own cascade removes
-        // this draft's line rows, and only AFTER that happens can the predecessor's own lines be
-        // restored to ISSUED without tripping ux_billing_note_line_source_live against this
-        // draft's own still-existing (note_status = 'DRAFT') claim on the exact same sources.
+        // Look up the predecessor BEFORE deleting.
         Optional<BillingNoteDocumentDto> predecessor = existing.revisionOfId() != null
             ? stored.findById(existing.revisionOfId()) : Optional.empty();
         if (stored.deleteDraft(id) == 0) {
@@ -476,11 +469,8 @@ public class BillingNoteService {
 
     // ── Line resolution ──────────────────────────────────────────────────────────────────────
 
-    /** Resolves every requested line against the customer's live candidate pool (ERP-sourced) or
-     * the request's own fields (MANUAL), enforces the template's row capacity, then persists —
-     * shared by {@link #createDraft} (excludeNoteId {@code null}) and {@link #updateDraft}
-     * (excludeNoteId = the draft's own id, so re-saving a draft's OWN already-claimed lines never
-     * looks like a conflict with itself). */
+    /** Resolves every requested line against the customer's live candidate pool or the request's own fields,
+     * enforces the template's row capacity, then persists — shared by #createDraft and #updateDraft. */
     private void writeLines(long billingNoteId, long customerId, Long excludeNoteId, List<BillingNoteLineSelection> selections) {
         if (selections.size() > BillingNoteRenderer.MAX_LINE_ROWS) {
             throw new ApiException(HttpStatus.CONFLICT,
@@ -553,8 +543,8 @@ public class BillingNoteService {
 
     // ── helpers ──────────────────────────────────────────────────────────────────────────────
 
-    /** Converts a stored snapshot into the shape {@link BillingNoteRenderer} knows how to render —
-     * the one conversion point, mirroring {@code RemainingInvoiceService#toRenderable}. */
+    /** Converts a stored snapshot into the shape BillingNoteRenderer knows how to render — the one conversion
+     * point, mirroring RemainingInvoiceService#toRenderable. */
     private BillingNoteDto toRenderable(BillingNoteDocumentDto doc) {
         List<BillingNoteLineRenderDto> lines = doc.lines().stream()
             .map(l -> new BillingNoteLineRenderDto(l.docNumber(), l.docDate(), l.dueDate(), l.amount(), l.note()))
@@ -601,7 +591,7 @@ public class BillingNoteService {
         return doc;
     }
 
-    /** {@link #file}'s own return shape — bytes plus the doc_number the caller needs for a
-     * filename, so a controller never has to load/authorize the same row twice just to learn it. */
+    /** #file's own return shape — bytes plus the doc_number the caller needs for a filename, so a controller never
+     * has to load/authorize the same row twice just to learn it. */
     public record RenderedFile(byte[] bytes, String docNumber) {}
 }

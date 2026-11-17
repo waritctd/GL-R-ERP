@@ -19,11 +19,9 @@ public final class FactoryQuoteRequests {
         String note
     ) {}
 
-    /**
-     * CR-1 (GLA-167): "ติดต่อโรงงานแล้ว" — records that import (or the CEO) has contacted the
-     * factory. {@code contactedOn} is required and may not be in the future (Asia/Bangkok today);
-     * {@code note} is optional (max 1000 chars, checked in the service). Replaces the old send request.
-     */
+    /** CR-1 (GLA-167): "ติดต่อโรงงานแล้ว" — records that import (or the CEO) has contacted the factory. contactedOn
+     * is required and may not be in the future (Asia/Bangkok today); note is optional (max 1000 chars, checked in
+     * the service). Replaces the old send request. */
     public record MarkFactoryContactedRequest(
         @NotNull LocalDate contactedOn,
         String note

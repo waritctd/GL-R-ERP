@@ -26,18 +26,9 @@ public class CommissionAttachmentRepository {
         this(jdbc, new FileAttachmentBlobRepository(jdbc));
     }
 
-    /**
-     * V134 storage-durability fix -- TRANSITIONAL, commission-invoice ONLY: {@code
-     * CommissionService} dual-writes the SAME uploaded file both here (bytes, via this method) and
-     * to disk via {@code FileStorageService#store}, because that same disk file is ALSO registered
-     * into {@code sales.attachment} under the identical {@code filePath} string -- {@code
-     * sales.attachment} is out of this branch's scope and still disk-only. {@code filePath} here is
-     * therefore still the disk-path-shaped key {@code store} returns, NOT the bare correlation key
-     * the other three {@code hr.file_attachment} domains now use -- it doubles as the legacy
-     * locator {@link AttachmentRepository#backsLiveCommission} joins on. Remove the disk limb (and
-     * make this domain match the other three) once {@code sales.attachment} migrates to
-     * database-backed storage in a follow-up branch.
-     */
+    /** V134 storage-durability fix. filePath here is therefore still the disk-path-shaped key store returns, NOT
+     * the bare correlation key the other three hr.file_attachment domains now use -- it doubles as the legacy
+     * locator AttachmentRepository#backsLiveCommission joins on. */
     public long saveWithContent(long invoiceId, String fileName, String filePath, String mimeType, Long fileSize,
                                 long uploadedBy, byte[] content) {
         long attachmentId = save(invoiceId, fileName, filePath, mimeType, fileSize, uploadedBy);

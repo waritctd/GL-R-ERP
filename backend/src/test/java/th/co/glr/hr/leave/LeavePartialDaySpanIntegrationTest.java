@@ -42,8 +42,8 @@ import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
  */
 class LeavePartialDaySpanIntegrationTest extends AbstractPostgresIntegrationTest {
     private static final ZoneId BUSINESS_ZONE = ZoneId.of("Asia/Bangkok");
-    // Wednesday 2026-07-01 09:00 Asia/Bangkok -- every date below is well past VACATION's 3-day
-    // advance-notice window and LEAVE_WITHOUT_PAY's (0-day) window alike.
+    // Wednesday 2026-07-01 09:00 Asia/Bangkok -- every date below is well past VACATION's 3-day advance-notice
+    // window and LEAVE_WITHOUT_PAY's (0-day) window alike.
     private static final Instant FIXED_NOW = Instant.parse("2026-07-01T02:00:00Z");
 
     private LeaveRepository leaveRepository;
@@ -107,23 +107,17 @@ class LeavePartialDaySpanIntegrationTest extends AbstractPostgresIntegrationTest
         assertThat(result.totalDays()).isEqualByComparingTo("1.50");
         assertThat(result.paidDays()).isEqualByComparingTo("1.50");
         assertThat(result.unpaidDays()).isEqualByComparingTo("0.00");
-        // Persisted, not just returned -- re-read confirms the row the DB constraints actually
-        // accepted (chk_leave_time_order's new row-wise form, chk_leave_time_single_day dropped).
+        // Persisted, not just returned -- re-read confirms the row the DB constraints actually accepted
+        // (chk_leave_time_order's new row-wise form, chk_leave_time_single_day dropped).
         LeaveRequestDto reread = leaveRepository.findById(result.id()).orElseThrow();
         assertThat(reread.totalDays()).isEqualByComparingTo("1.50");
         assertThat(reread.startDate()).isEqualTo(LocalDate.parse("2026-09-11"));
         assertThat(reread.endDate()).isEqualTo(LocalDate.parse("2026-09-12"));
     }
 
-    /**
-     * Regression guard for a defect introduced while building V166 and caught in review: the
-     * CALENDAR_DAYS early-return was placed ABOVE the clock-bound check, so a MATERNITY request
-     * outside working hours stopped being refused.
-     *
-     * <p>Pre-V166 the {@code basis == WORKING_DAYS} condition gated only the working-day COUNT --
-     * the 08:30-17:30 bound below it was ungated and applied to every leave type. Returning early
-     * for CALENDAR_DAYS silently dropped that bound. Only the WORKING-DAY checks are basis-specific.
-     */
+    /** Regression guard for a defect introduced while building V166 and caught in review: the CALENDAR_DAYS
+     * early-return was placed ABOVE the clock-bound check, so a MATERNITY request outside working hours stopped
+     * being refused. */
     @Test
     void aTimedMaternityRequestOutsideWorkingHoursIsStillRefusedEvenThoughItCountsCalendarDays() {
         long officeDept = insertDepartmentOnSchedule("OF-MAT1", "OFFICE_5D");
@@ -140,8 +134,8 @@ class LeavePartialDaySpanIntegrationTest extends AbstractPostgresIntegrationTest
             .isInstanceOf(ApiException.class)
             .hasMessageContaining("ช่วงเวลาทำงาน");
 
-        // Wrong-way-round: the SAME type inside working hours must still be accepted, so the guard
-        // above is refusing the time bound rather than refusing MATERNITY outright.
+        // Wrong-way-round: the SAME type inside working hours must still be accepted, so the guard above is refusing
+        // the time bound rather than refusing MATERNITY outright.
         SubmitLeaveRequest inHours = new SubmitLeaveRequest(
             employeeId, "MATERNITY",
             LocalDate.parse("2026-09-14"), LocalDate.parse("2026-09-14"),

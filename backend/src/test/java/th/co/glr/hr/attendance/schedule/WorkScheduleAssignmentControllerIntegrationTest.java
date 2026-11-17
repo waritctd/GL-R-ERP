@@ -23,16 +23,8 @@ import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.config.AppProperties;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
-/**
- * Real-Postgres coverage of {@link WorkScheduleAssignmentController} /
- * {@link WorkScheduleAssignmentAdminService}: the brand-new write path over {@code
- * hr.work_schedule_assignment}. CLAUDE.md "Permission changes must ship evidence" — every handler
- * gets a wrong-way-round authz case, plus the back-dating / overlap / cache-invalidation behaviours
- * called out in the branch's task description.
- *
- * <p>"Today" is pinned via a fixed {@link Clock} (2026-08-10, a Monday) so back-dating assertions
- * do not race the real wall clock — same seam shape as {@code BotHolidayFetchServiceTest}.
- */
+/** Real-Postgres coverage of WorkScheduleAssignmentController / WorkScheduleAssignmentAdminService: the
+ * brand-new write path over hr.work_schedule_assignment. */
 class WorkScheduleAssignmentControllerIntegrationTest extends AbstractPostgresIntegrationTest {
 
     private static final LocalDate TODAY = LocalDate.of(2026, 8, 10);
@@ -100,13 +92,9 @@ class WorkScheduleAssignmentControllerIntegrationTest extends AbstractPostgresIn
 
     // --- invalidate() wiring -------------------------------------------------------------------
 
-    /**
-     * Proves {@code TieredWorkScheduleResolver.invalidate()} is actually called, not just present:
-     * warms the resolver's cache with an unrelated read FIRST (so a real cached copy exists), then
-     * creates an assignment through the admin write path, then resolves again in the SAME test
-     * without touching the clock or TTL. If invalidate() were not wired, this would still see the
-     * pre-write (stale) result for up to the 5-minute TTL.
-     */
+    /** Proves TieredWorkScheduleResolver.invalidate is actually called, not just present: warms the resolver's
+     * cache with an unrelated read FIRST, then creates an assignment through the admin write path, then resolves
+     * again in the SAME test without touching the clock or TTL. */
     @Test
     void anAssignmentWriteIsVisibleToTheNextResolveWithoutWaitingForTheTtl() {
         long division = insertDivision("WSX3", "ฝ่ายทดสอบแคช");
@@ -171,11 +159,9 @@ class WorkScheduleAssignmentControllerIntegrationTest extends AbstractPostgresIn
 
     // --- overlap: predecessor normalised, successor rejected ------------------------------------
 
-    /**
-     * Assigning a new schedule to a scope that already has an open-ended assignment auto-closes the
-     * old one the day before the new one starts -- the routine "change the schedule going forward"
-     * case V115's own migration comments call out as something a human forgets to do by hand.
-     */
+    /** Assigning a new schedule to a scope that already has an open-ended assignment auto-closes the old one the
+     * day before the new one starts -- the routine "change the schedule going forward" case V115's own migration
+     * comments call out as something a human forgets to do by hand. */
     @Test
     void assigningANewScheduleAutoClosesTheOpenEndedPredecessorForTheSameScope() {
         long division = insertDivision("WSX7", "ฝ่ายทดสอบปกติซ้อนทับ");
@@ -196,11 +182,9 @@ class WorkScheduleAssignmentControllerIntegrationTest extends AbstractPostgresIn
             .isEqualTo(newFrom.minusDays(1));
     }
 
-    /**
-     * A genuinely conflicting FUTURE assignment (starts on/after the new one, still overlapping) is
-     * NOT silently truncated -- that would surprise whoever planned it. The create is rejected
-     * instead, asked-wrong-way-round: can a second, conflicting future assignment be created at all.
-     */
+    /** A genuinely conflicting FUTURE assignment (starts on/after the new one, still overlapping) is NOT silently
+     * truncated -- that would surprise whoever planned it. The create is rejected instead, asked-wrong-way-round:
+     * can a second, conflicting future assignment be created at all. */
     @Test
     void creatingAnAssignmentThatConflictsWithAnAlreadyPlannedFutureAssignmentIsRejected() {
         long division = insertDivision("WSX8", "ฝ่ายทดสอบอนาคตซ้อนทับ");
@@ -210,8 +194,8 @@ class WorkScheduleAssignmentControllerIntegrationTest extends AbstractPostgresIn
         createAssignment(hr(),
             new WorkScheduleAssignmentCreateRequest(ScopeType.DIVISION, division, ops6d, futureFrom, null));
 
-        // A second create, starting before the already-planned future one but still open-ended,
-        // would overlap it -- must be rejected, not silently truncate the existing future plan.
+        // A second create, starting before the already-planned future one but still open-ended, would overlap it --
+        // must be rejected, not silently truncate the existing future plan.
         assertThatThrownBy(() -> createAssignment(hr(),
             new WorkScheduleAssignmentCreateRequest(ScopeType.DIVISION, division, office, TODAY, null)))
             .isInstanceOf(ApiException.class)

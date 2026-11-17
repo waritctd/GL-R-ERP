@@ -1,5 +1,8 @@
-// Central query-key factory for the shared server-state layer. Keeping keys in
-// one place makes invalidation call sites unambiguous and typo-proof.
+// Central query-key factory for the shared server-state layer. Keeping keys in one place makes invalidation
+// call sites unambiguous and typo-proof.
+// The deal-detail key, shared by ticketDetail and documentChain below (the chain is nested under it).
+const queryKeysTicketDetail = (id) => ['tickets', 'detail', id == null ? id : Number(id)];
+
 export const queryKeys = {
   currentEmployee: (id) => ['currentEmployee', id],
   employees: () => ['employees'],
@@ -27,6 +30,11 @@ export const queryKeys = {
   // screen, two different backend tables.
   taxAllowances: (year) => ['taxAllowances', year ?? ''],
   notifications: () => ['notifications'],
+  feedbackMine: () => ['feedback', 'mine'],
+  feedbackAll: () => ['feedback', 'all'],
+  // มีอะไรใหม่ admin: who publish / email would still reach, and each person's email outcome
+  // (POST /api/release-notes/audience). action = 'publish' | 'email' (a confirm) | 'status' (the result panel).
+  releaseNoteAudience: (releaseId, action) => ['releaseNoteAudience', releaseId, action ?? ''],
   leaveRequests: (filters = {}) => ['leave', 'list', filters.from, filters.to, filters.status, filters.employeeId],
   leaveBalances: (employeeId, year) => ['leave', 'balances', employeeId, year],
   // Manager team-quota summary -- TeamLeaveTab.jsx.
@@ -73,8 +81,8 @@ export const queryKeys = {
   // Reserved for a future react-query migration of CommissionPage's payrollReady() read
   // (GET /api/commissions/payroll-ready, the hr-only summary view); nothing constructs this key yet.
   commissionsPayrollReady: (payrollMonth) => ['commissions', 'payrollReady', payrollMonth ?? ''],
-  // Self-service landing (EmployeeSelfService): own attendance.daily() reads. `to` defaults to
-  // "today" server-side when omitted, same as AttendancePage's self view.
+  // Self-service landing (EmployeeSelfService): own attendance.daily() reads. `to` defaults to "today"
+  // server-side when omitted, same as AttendancePage's self view.
   attendanceDaily: (from, to) => ['attendance', 'daily', from ?? '', to ?? ''],
   // AttendancePage's team/company view: scoped by employeeId/divisionId as well as the date
   // range, unlike attendanceDaily above, whose key has neither filter (always "my own"), so it
@@ -88,14 +96,15 @@ export const queryKeys = {
   // Attachment list: mirrors SpecialMoneyController's nested .../{id}/attachments endpoint,
   // same shape as taxAllowanceAttachments above. First caller: AttachmentList.jsx.
   specialMoneyAttachments: (id) => ['specialMoney', 'attachments', id ?? ''],
-  // CEO approve dialog's ceiling preview (GET .../approval-preview) -- keyed on the request id so
-  // opening a different row's dialog re-fetches rather than reusing a stale ceiling.
+  // CEO approve dialog's ceiling preview (GET .../approval-preview) -- keyed on the request id so opening a
+  // different row's dialog re-fetches rather than reusing a stale ceiling.
   specialMoneyApprovalPreview: (id) => ['specialMoney', 'approvalPreview', id ?? ''],
   // ticketDetail/ticketAttachments: used by TicketDetailPage.
   ticketList: (status) => ['tickets', 'list', status ?? ''],
-  // Account role-scoped views: the CLOSED_PAID picker AccountOverview/
-  // AccountFinancePage/CommissionPage's createFromDeal flow all use — same
-  // `salesStage` query param, distinct key from the plain ticketList above.
+  // Deal list with the movement range (inclusive Bangkok days): rows carry stageChangedInRange / activityInRange.
+  ticketListByRange: (from, to) => ['tickets', 'list', 'range', from, to],
+  // Account role-scoped views: the CLOSED_PAID picker AccountOverview/ AccountFinancePage/CommissionPage's
+  // createFromDeal flow all use — same `salesStage` query param, distinct key from the plain ticketList above.
   ticketListBySalesStage: (salesStage) => ['tickets', 'list', 'salesStage', salesStage ?? ''],
   // Coerced to Number: TicketDetailPage reaches this id via useParams() (a STRING), while
   // ImportFulfilmentPage/DealFulfilmentPanel pass the ticket's own numeric `id`/`ticketId`.
@@ -103,15 +112,37 @@ export const queryKeys = {
   // so an invalidation from one surface would miss the other's cached entry. Number(id) on an
   // empty/undefined id is left alone (NaN) rather than defaulted, like every other id-keyed
   // entry below that has no "no id yet" caller.
-  ticketDetail: (id) => ['tickets', 'detail', id == null ? id : Number(id)],
+  ticketDetail: (id) => queryKeysTicketDetail(id),
   // Immutable server enumeration — fetched once, never invalidated. See stageCatalog.js.
   dealStageCatalog: () => ['meta', 'deal-stages'],
+  // Under 'tickets' so every existing ['tickets'] invalidation (an activity, a stage move, a lost deal) refreshes
+  // the boards too.
+  salesBoardMyWork: () => ['tickets', 'salesBoard', 'myWork'],
+  salesBoardTeam: () => ['tickets', 'salesBoard', 'team'],
+  salesBoardTeamBoard: () => ['tickets', 'salesBoard', 'teamBoard'],
+  // The Express upload's last summary + the owner switch; read by the account landing card, the page and the nav.
+  receiptImportLatest: () => ['tickets', 'receiptImports', 'latest'],
+  // Under 'tickets' too: a change to a deal's expected cash refreshes the boards' cash card through the same prefix.
+  expectedPayments: (ticketId) => ['tickets', 'expectedPayments', ticketId == null ? ticketId : Number(ticketId)],
+  // Under 'tickets' so every deal/visit write's ['tickets'] invalidation refreshes them too.
+  salesVisitsOwn: (from, to) => ['tickets', 'salesVisits', 'own', from, to],
+  salesVisitsTeam: (from, to) => ['tickets', 'salesVisits', 'team', from, to],
+  // Slice 6.5: one deal's planned visits (the deal page's history) — under 'salesVisits' so planning, ticking or
+  // cancelling a visit anywhere refreshes it.
+  salesVisitsPlannedOnDeal: (ticketId) => ['tickets', 'salesVisits', 'deal', ticketId == null ? ticketId : Number(ticketId)],
+  // The quiet threshold the deal list's ภาพรวมทีม badge names. Deliberately OUTSIDE 'tickets': it is near-static, so a
+  // ['tickets'] invalidation (an activity, a stage move) must not refetch the whole team overview just to re-read it.
+  salesBoardQuietDays: () => ['salesBoard', 'quietDays'],
+  // The weekly sales-analytics snapshot. Outside 'tickets': no deal write changes it.
+  salesAnalyticsSnapshot: () => ['salesAnalytics', 'snapshot'],
+  // The leave + check-in analytics page, per served scope. No write in the app changes it.
+  peopleInsights: (scope, year) => ['peopleInsights', scope ?? 'default', year ?? 'default'],
   // Same reasoning, for UnitBasis's four codes. See features/pricingRequests/unitBasisCatalog.js.
   unitBasisCatalog: () => ['meta', 'unit-bases'],
   // See ticketDetail's comment above for why Number() matters.
   ticketActions: (id) => ['tickets', 'actions', id == null ? id : Number(id)],
-  // Finance-only read model of one deal (GET /api/finance/deals/{id}), account + ceo. Number()-coerced
-  // for the same route-param-is-a-string reason as ticketDetail above.
+  // Finance-only read model of one deal (GET /api/finance/deals/{id}), account + ceo. Number()-coerced for the
+  // same route-param-is-a-string reason as ticketDetail above.
   financeDeal: (id) => ['finance', 'deal', id == null ? id : Number(id)],
   ticketPayments: (id) => ['tickets', 'payments', id],
   ticketDeliveries: (id) => ['tickets', 'deliveries', id],
@@ -127,8 +158,8 @@ export const queryKeys = {
   // GET /api/tickets/{id}/procurement-source: where each line comes from, and whether the rep has decided.
   procurementSource: (ticketId) => ['tickets', 'procurement-source', ticketId == null ? ticketId : Number(ticketId)],
   storedImportRequestDetail: (id) => ['importRequests', 'detail', id],
-  // The import-only per-deal view (GET /api/import/deals/{id}). Number() for the same route-param
-  // string vs numeric-field reason as ticketDetail above.
+  // The import-only per-deal view (GET /api/import/deals/{id}). Number() for the same route-param string vs
+  // numeric-field reason as ticketDetail above.
   importDeal: (ticketId) => ['importDeal', Number(ticketId)],
   ticketAttachments: (id) => ['tickets', 'attachments', id],
   // Deal parties (deal-party-model.md). Number()-coerced like ticketDetail above: TicketDetailPage
@@ -145,6 +176,11 @@ export const queryKeys = {
   // for one deal. Separate from remainingInvoiceOptions above, which stays the stateless prefill
   // source a new draft snapshots from.
   storedRemainingInvoices: (ticketId) => ['remainingInvoice', 'stored', ticketId],
+  // The deal's document chain summary (GET /tickets/{id}/document-chain): ONE key the quotation page's chain card
+  // and the deal page's เงิน tab share, so an invalidation reaches both. It sits UNDER ticketDetail(id) (fix round 1,
+  // F-1): every mutation that refreshes the deal — invalidateQueries(ticketDetail(id)) or ['tickets'] — refreshes the
+  // chain with it, with no per-site call. Number()-coerced through ticketDetail.
+  documentChain: (ticketId) => [...queryKeysTicketDetail(ticketId), 'documentChain'],
   customersSearch: (q) => ['customers', 'search', q ?? ''],
   // One customer MASTER row by id (quotation editor). There is no GET
   // /api/customers/{id}, so this is resolved through the name search and matched on id (see

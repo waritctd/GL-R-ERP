@@ -24,14 +24,9 @@ import th.co.glr.hr.payroll.PayrollReconciliationDtos.YtdSeedUpsertRequest;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 import th.co.glr.hr.ticket.TicketRepository;
 
-/**
- * P6 + P7: drives {@link PayrollRepository#findYearToDateByEmployee} and the SSO annual-cap logic
- * through the real {@link PayrollService#preview}, against real Postgres -- not by constructing a
- * {@link PayrollYearToDate} object directly and handing it to {@link PayrollCalculator}, which is
- * all the existing unit tests (e.g. {@code PayrollCalculatorTest#ssoStopsContributingOnceYearToDateCapIsNearlyReached})
- * cover. The SQL merge of {@code payroll_year_to_date_seed} with prior {@code payroll_line} rows
- * (a UNION ALL + GROUP BY, equivalent to a FULL OUTER JOIN) is the seam under test.
- */
+/** P6 + P7: drives PayrollRepository#findYearToDateByEmployee and the SSO annual-cap logic through the real
+ * PayrollService#preview, against real Postgres -- not by constructing a PayrollYearToDate object directly and
+ * handing it to PayrollCalculator, which is all the existing unit tests cover. */
 class PayrollYtdAndSsoIntegrationTest extends AbstractPostgresIntegrationTest {
     private PayrollRepository payrollRepository;
     private PayrollService payrollService;
@@ -48,9 +43,8 @@ class PayrollYtdAndSsoIntegrationTest extends AbstractPostgresIntegrationTest {
             mock(NotificationService.class),
             mock(TicketRepository.class),
             mock(AttachmentRepository.class), new CeoApproverRepository(jdbc));
-        // Leave -> payroll unpaid-day deduction (2026-07-23): mechanical constructor-arity fix --
-        // PayrollService gained a LeaveRepository dependency for #suggestedInputs, unrelated to what
-        // this test exercises.
+        // Leave -> payroll unpaid-day deduction (2026-07-23): mechanical constructor-arity fix -- PayrollService
+        // gained a LeaveRepository dependency for #suggestedInputs, unrelated to what this test exercises.
         payrollService = new PayrollService(
             payrollRepository,
             new PayrollCalculator(),
@@ -72,31 +66,7 @@ class PayrollYtdAndSsoIntegrationTest extends AbstractPostgresIntegrationTest {
 
     // ---- P6: YTD merge drives withholding, and an empty YTD under-withholds -------------------
 
-    /**
-     * Salary 100,000/month, previewed for August (monthsRemaining = 5). One employee has real YTD
-     * history: a hand-crafted prior processed line for June (grossTaxableIncome 100,000.00,
-     * socialSecurity 875.00, withholdingTax 2,212.50) PLUS a {@code payroll_year_to_date_seed} row
-     * (pre-system history: taxableIncome 200,000.00, socialSecurity 1,750.00, withholdingTax
-     * 4,000.00) -- {@code findYearToDateByEmployee} must sum both into taxableIncome 300,000.00,
-     * socialSecurity 2,625.00, withholdingTax 6,212.50.
-     *
-     * <p>Trace against {@link PayrollCalculator#calculate}: grossTaxableIncome 100,000.00;
-     * ssoWageBase caps at 17,500 so socialSecurity = 875.00 (remaining annual SSO cap is
-     * 10,500 - 2,625 = 7,875, so the cap doesn't bind here); projectedAnnualIncome =
-     * 300,000 + 100,000 x 5 = 800,000.00; taxExpenseDeduction caps at 100,000.00; the SSO-allowance
-     * component is min(10,500, 2,625 + 875 x 5) = min(10,500, 7,000) = 7,000.00, so taxAllowanceTotal
-     * = 60,000 + 7,000 = 67,000.00; taxableAnnualIncome = 800,000 - 100,000 - 67,000 = 633,000.00;
-     * annualTax = 150,000@5% + 200,000@10% + 133,000@15% = 7,500 + 20,000 + 19,950 = 47,450.00;
-     * remainingAnnualTax = 47,450 - 6,212.50 = 41,237.50; withholdingTax = 41,237.50 / 5 = 8,247.50
-     * exactly.
-     *
-     * <p>A second employee, identical salary and month but with NO YTD data at all, previews
-     * withholdingTax = 2,212.50 (projectedAnnualIncome 500,000; taxExpenseDeduction 100,000;
-     * SSO allowance 4,375; taxableAnnualIncome 335,625; annualTax 11,062.50; /5 = 2,212.50) -- less
-     * than a third of the correctly-YTD-informed figure, demonstrating exactly the under-withholding
-     * C2 exists to prevent: without the backfill, an employee who already earned significantly this
-     * year is projected as if they had not, and pays far too little tax with each remaining payslip.
-     */
+    /** Salary 100,000/month, previewed for August (monthsRemaining = 5). */
     @Test
     void yearToDateMergeDrivesWithholdingAndAnEmptyYearToDateUnderWithholds() {
         LocalDate august = LocalDate.of(2026, 8, 1);
@@ -141,11 +111,8 @@ class PayrollYtdAndSsoIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(line.socialSecurity()).isEqualByComparingTo("875.00");
     }
 
-    /**
-     * 10,200 of the 10,500 annual SSO cap already withheld this year (via a YTD seed row): only
-     * 300.00 remains, so this month's SSO is capped at 300.00 even though the wage base alone would
-     * produce 875.00.
-     */
+    /** 10,200 of the 10,500 annual SSO cap already withheld this year (via a YTD seed row): only 300.00 remains, so
+     * this month's SSO is capped at 300.00 even though the wage base alone would produce 875.00. */
     @Test
     void monthlySocialSecurityThroughPreviewIsLimitedByRemainingAnnualCap() {
         long employeeId = seedEmployee("SSO-002", "เอสเอสโอ", "สอง", new BigDecimal("40000.00"));
@@ -199,19 +166,15 @@ class PayrollYtdAndSsoIntegrationTest extends AbstractPostgresIntegrationTest {
             """,
             Map.of("code", code, "first", firstNameTh, "last", lastNameTh, "salary", salary),
             Long.class);
-        // Task 2 (2026-07-29): SSO inclusion has no calculator-layer default -- seed the real
-        // production defaults so this file's SSO-cap assertions still exercise a non-zero base.
-        // SALARY needs no tax-treatment seed (locked to REGULAR_REPROJECT regardless).
+        // Task 2 (2026-07-29): SSO inclusion has no calculator-layer default -- seed the real production defaults so
+        // this file's SSO-cap assertions still exercise a non-zero base. SALARY needs no tax-treatment seed (locked to
+        // REGULAR_REPROJECT regardless).
         new PayrollRepository(jdbc).seedSsoInclusionDefaults(employeeId, 2026, employeeId);
         return employeeId;
     }
 
-    /**
-     * A hand-crafted "already processed" payroll_line for an earlier month, used only to feed
-     * {@code findYearToDateByEmployee}'s payroll_line half of the UNION ALL. Only
-     * grossTaxableIncome/socialSecurity/withholdingTax matter for that query; the rest are
-     * placeholders, following the same pattern as {@code PayrollRepositoryIntegrationTest#line}.
-     */
+    /** A hand-crafted "already processed" payroll_line for an earlier month, used only to feed
+     * findYearToDateByEmployee's payroll_line half of the UNION ALL. */
     private PayrollLineDto priorLine(long employeeId, String code, String name,
             BigDecimal grossTaxableIncome, BigDecimal socialSecurity, BigDecimal withholdingTax) {
         return new PayrollLineDto(

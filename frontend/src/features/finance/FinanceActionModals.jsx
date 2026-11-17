@@ -4,13 +4,11 @@ import { Icon } from '../../components/common/Icon.jsx';
 import { FormField } from '../../components/common/FormField.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { ThaiDateInput } from '../../components/common/ThaiDateInput.jsx';
+import { formatMoney } from '../../utils/format.js';
 
-// Small money-action forms for the finance deal page. Each one owns only its draft; the page owns
-// the mutation and hands back `busy` (request pending) and `error` (the server's own message), so
-// a failed request stays inside the dialog with the user's input intact. Deliberately NOT a copy of
-// TicketDetailPage's inline modals — those live in a 6,800-line component and extracting them would
-// widen this change; the field set and the request body are the same (RecordPaymentRequest /
-// BillingRequest), which the page's tests pin.
+// Small money-action forms for the finance deal page. Each one owns only its draft; the page owns the mutation
+// and hands back `busy` (request pending) and `error` (the server's own message), so a failed request stays
+// inside the dialog with the user's input intact.
 
 const PAYMENT_KINDS = [
   { value: 'DEPOSIT', label: 'มัดจำ' },
@@ -37,9 +35,12 @@ function Footer({ onClose, busy, submitLabel, onSubmit, tone = 'primary' }) {
   );
 }
 
-export function RecordPaymentModal({ defaultKind, busy, error, onSubmit, onClose }) {
-  const [kind, setKind] = useState(defaultKind);
-  const [amount, setAmount] = useState('');
+// `prefill` is paymentPrefill(deal): { kind, amount, docLabel, basisHint } — the open notice/invoice the form starts
+// from (design m-payment). Every field stays editable.
+export function RecordPaymentModal({ prefill, expressUploadEnabled = false, busy, error, onSubmit, onClose }) {
+  const [kind, setKind] = useState(prefill.kind);
+  const [amount, setAmount] = useState(prefill.amount != null ? String(prefill.amount) : '');
+  const [noteOpen, setNoteOpen] = useState(false);
   const [receivedAt, setReceivedAt] = useState('');
   const [receiptRef, setReceiptRef] = useState('');
   const [note, setNote] = useState('');
@@ -67,18 +68,42 @@ export function RecordPaymentModal({ defaultKind, busy, error, onSubmit, onClose
   return (
     <Modal
       title="บันทึกรับชำระ"
-      subtitle="บันทึกเงินที่รับจริง — รายการนี้ย้อนกลับไม่ได้ ตรวจยอดก่อนบันทึก"
+      // Design m-payment: while the Express upload is on it is the normal path (spec 2026-11-15 §8) and this is the
+      // fallback; with the upload off there is no Express path to fall back from, so the header says nothing of it.
+      subtitle={expressUploadEnabled
+        ? 'ใช้เมื่อรายการจาก Express จับคู่ไม่ได้ หรือรับเงินนอก Express — รายการนี้ย้อนกลับไม่ได้ ตรวจยอดก่อนบันทึก'
+        : 'รายการนี้ย้อนกลับไม่ได้ ตรวจยอดก่อนบันทึก'}
       onClose={busy ? undefined : onClose}
       footer={<Footer onClose={onClose} busy={busy} submitLabel="บันทึกรับชำระ" onSubmit={submit} />}
     >
       <div className="grid gap-3.5">
+        {prefill.docLabel ? (
+          <p
+            className="m-0 flex items-start gap-2 rounded-md bg-surface-muted px-3 py-2.5 text-sm font-bold text-text [overflow-wrap:anywhere]"
+            data-testid="payment-prefill-doc"
+          >
+            <Icon name="fileText" size={16} className="mt-0.5 shrink-0 text-text-muted" />
+            <span className="min-w-0">
+              {prefill.docLabel}
+              {prefill.amount != null ? ` · คงค้าง ${formatMoney(prefill.amount)}` : ''}
+            </span>
+          </p>
+        ) : null}
+        {prefill.whtHint ? (
+          <p className="m-0 flex items-start gap-2 text-sm text-warning-dark" data-testid="payment-wht-hint">
+            {prefill.whtHint}
+          </p>
+        ) : null}
         <FormField label="ประเภท" htmlFor="fin-pay-kind">
           <select id="fin-pay-kind" value={kind} onChange={(e) => setKind(e.target.value)}>
             {PAYMENT_KINDS.map((k) => <option key={k.value} value={k.value}>{k.label}</option>)}
           </select>
         </FormField>
         <div className="grid grid-cols-[repeat(auto-fit,minmax(160px,1fr))] gap-3">
-          <FormField label="จำนวนเงิน" htmlFor="fin-pay-amount" error={amountError}>
+          <FormField
+            label="จำนวนเงิน" htmlFor="fin-pay-amount" error={amountError}
+            hint={prefill.amount != null && amount === String(prefill.amount) ? prefill.basisHint : undefined}
+          >
             <input
               id="fin-pay-amount" type="number" inputMode="decimal" min="0" step="0.01"
               className="tabular-nums" value={amount}
@@ -92,9 +117,15 @@ export function RecordPaymentModal({ defaultKind, busy, error, onSubmit, onClose
         <FormField label="เลขอ้างอิง" htmlFor="fin-pay-ref">
           <input id="fin-pay-ref" value={receiptRef} maxLength={60} onChange={(e) => setReceiptRef(e.target.value)} />
         </FormField>
-        <FormField label="หมายเหตุ" htmlFor="fin-pay-note">
-          <textarea id="fin-pay-note" rows={3} value={note} onChange={(e) => setNote(e.target.value)} />
-        </FormField>
+        {noteOpen ? (
+          <FormField label="หมายเหตุ" htmlFor="fin-pay-note">
+            <textarea id="fin-pay-note" rows={3} value={note} onChange={(e) => setNote(e.target.value)} />
+          </FormField>
+        ) : (
+          <Button type="button" variant="text" className="justify-self-start" onClick={() => setNoteOpen(true)}>
+            + หมายเหตุ
+          </Button>
+        )}
         <label className="flex min-h-11 items-center gap-2 text-sm">
           <input type="checkbox" checked={allowOverpayment} onChange={(e) => setAllowOverpayment(e.target.checked)} />
           ยืนยันรับชำระเกินยอด
@@ -110,7 +141,7 @@ export function RevokeCloseModal({ busy, error, onSubmit, onClose }) {
   return (
     <Modal
       title="ยกเลิกการยืนยันปิดงาน"
-      subtitle="ดีลจะกลับไปรอการยืนยันปิดงานอีกครั้ง"
+      subtitle="งานจะกลับไปรอการยืนยันปิดงานอีกครั้ง"
       onClose={busy ? undefined : onClose}
       footer={(
         <Footer

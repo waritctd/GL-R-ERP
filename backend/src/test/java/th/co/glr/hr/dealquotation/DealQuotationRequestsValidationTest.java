@@ -12,11 +12,9 @@ import org.junit.jupiter.api.Test;
 import th.co.glr.hr.dealquotation.DealQuotationRequests.ItemInput;
 import th.co.glr.hr.dealquotation.DealQuotationRequests.UpsertDealQuotationRequest;
 
-/**
- * M4 — bean-validation bounds on {@link DealQuotationRequests}. Runs the SAME {@code
- * jakarta.validation} validator {@code @Valid @RequestBody} applies at the controller, without a
- * Spring context — same pattern as {@code auth/LoginRequestNormalizationTest}.
- */
+/** bean-validation bounds on DealQuotationRequests. Runs the SAME jakarta.validation validator @Valid
+ * @RequestBody applies at the controller, without a Spring context — same pattern as
+ * auth/LoginRequestNormalizationTest. */
 class DealQuotationRequestsValidationTest {
     private static final ValidatorFactory FACTORY = Validation.buildDefaultValidatorFactory();
     private static final Validator VALIDATOR = FACTORY.getValidator();
@@ -32,20 +30,8 @@ class DealQuotationRequestsValidationTest {
         assertViolated(validItem().discountPct(new BigDecimal("-1")).build());
     }
 
-    /**
-     * Quotation v3: {@code unitPrice} is DELIBERATELY no longer bean-validated. It used to carry
-     * {@code @NotNull @DecimalMin("0.01")}, which could not survive the ADJUSTMENT row type — an
-     * adjustment has no rep-typed price at all, so a blanket annotation would 400 the very row
-     * this pass adds.
-     *
-     * <p>This test asserts the ABSENCE on purpose, so that anyone who "restores" the annotation
-     * (a reasonable-looking fix from the outside) fails here and is sent to read why. The rule
-     * itself did NOT go away — it moved to {@code DealQuotationService#requirePriceValidForType},
-     * where it is type-aware, and is pinned wrong-way-round against the real Java service and a
-     * real Postgres by {@code DealQuotationIntegrationTest}'s v3 price-validation tests. Bean
-     * validation cannot express "positive for TILE and PLAIN, absent for ADJUSTMENT" without a
-     * validation-groups setup this change does not introduce.
-     */
+    /** Quotation v3: unitPrice is DELIBERATELY no longer bean-validated. Bean validation cannot express "positive
+     * for TILE and PLAIN, absent for ADJUSTMENT" without a validation-groups setup this change does not introduce. */
     @Test
     void unitPrice_isNoLongerBeanValidated_becauseTheRuleIsNowTypeAware() {
         assertThat(VALIDATOR.validate(validItem().unitPrice(null).build())).isEmpty();
@@ -80,8 +66,8 @@ class DealQuotationRequestsValidationTest {
 
     @Test
     void modelColorTextureSizeBrand_allowUpTo255Chars_matchingTheLiveColumnWidth() {
-        // V162 widened sales.quotation_item.model/color/texture/size to VARCHAR(255) (brand was
-        // always 255) -- a stale max=80 bound here would 400 a value the column happily stores.
+        // V162 widened sales.quotation_item.model/color/texture/size to VARCHAR(255) (brand was always 255) -- a stale
+        // max=80 bound here would 400 a value the column happily stores.
         String value255 = "x".repeat(255);
         ItemInput item = validItem().model(value255).color(value255).texture(value255)
             .sizeText(value255).brand(value255).build();
@@ -94,23 +80,17 @@ class DealQuotationRequestsValidationTest {
         assertViolated(validItem().brand("x".repeat(256)).build());
     }
 
-    /**
-     * Review fix F4 — {@code @Digits} matching the LIVE column, on the three v3 numeric fields
-     * that lacked it. {@code sales.quotation_item.qty} is NUMERIC(12,2): send 1.005 and the amount
-     * is computed from 1.005 while Postgres stores 1.01, so the printed row stops multiplying out
-     * (จำนวน 1.01 × คงเหลือ X ≠ เป็นเงิน) — an arithmetic error the customer can check.
-     *
-     * <p>{@code unitPrice}/{@code discountPct} deliberately NOT covered here: that instance is
-     * pre-existing, not v3's, and tightening it would be a scope widening.
-     */
+    /** Review fix F4 — @Digits matching the LIVE column, on the three v3 numeric fields that lacked it.
+     * unitPrice/discountPct deliberately NOT covered here: that instance is pre-existing, not v3's, and tightening
+     * it would be a scope widening. */
     @Test
     void quantityBeyondTwoDecimals_isRejected_matchingTheQtyColumn() {
         assertViolated(validItem().quantity(new BigDecimal("1.005")).build());
         assertThat(VALIDATOR.validate(validItem().quantity(new BigDecimal("1.01")).build())).isEmpty();
     }
 
-    /** {@code special_price_sqm} is NUMERIC(12,2), and the value is printed VERBATIM on the
-     * ราคาพิเศษ sub-line — a 3dp input would print one figure and store another. */
+    /** special_price_sqm is NUMERIC(12,2), and the value is printed VERBATIM on the ราคาพิเศษ sub-line — a 3dp
+     * input would print one figure and store another. */
     @Test
     void specialPriceSqmBeyondTwoDecimals_isRejected_matchingTheColumn() {
         assertViolated(validItem().specialPriceSqm(new BigDecimal("1350.005")).build());
@@ -118,8 +98,8 @@ class DealQuotationRequestsValidationTest {
             .isEmpty();
     }
 
-    /** {@code adjustment_pct} is NUMERIC(6,3) — three decimals, not two: an adjustment percent is
-     * applied to a whole-document base where the third place is worth about a baht. */
+    /** adjustment_pct is NUMERIC(6,3) — three decimals, not two: an adjustment percent is applied to a
+     * whole-document base where the third place is worth about a baht. */
     @Test
     void adjustmentPctBeyondThreeDecimals_isRejected_matchingTheColumn() {
         assertViolated(validItem().adjustmentPct(new BigDecimal("3.0005")).build());
@@ -127,21 +107,15 @@ class DealQuotationRequestsValidationTest {
             .isEmpty();
     }
 
-    /**
-     * Review fix F3 (2026-09-16) — {@code sqmPerPiece} now carries the same {@code @Digits}
-     * (integer=4, fraction=6) as {@code sqmPerBox}, matching {@code sales.quotation_item.sqm_per_piece}'s
-     * NUMERIC(10,6) column exactly. Without it, a direct API call could price a line on a
-     * 7-decimal value while the stored (6dp) figure drives the document's own printed quantity
-     * math, so the row stops multiplying out.
-     */
+    /** Review fix F3 (2026-09-16) — sqmPerPiece now carries the same @Digits (integer=4, fraction=6) as sqmPerBox,
+     * matching sales.quotation_item.sqm_per_piece's NUMERIC(10,6) column exactly. */
     @Test
     void sqmPerPieceBeyondSixDecimals_isRejected_matchingTheColumn() {
         assertViolated(validItem().sqmPerPiece(new BigDecimal("0.35983491")).build());
         assertThat(VALIDATOR.validate(validItem().sqmPerPiece(new BigDecimal("0.359835")).build())).isEmpty();
     }
 
-    /** Same column, the upper bound: {@code sqmPerBox} caps at 9999 (4 integer digits); mirrored
-     * here for {@code sqmPerPiece} too. */
+    /** Same column, the upper bound: sqmPerBox caps at 9999 (4 integer digits); mirrored here for sqmPerPiece too. */
     @Test
     void sqmPerPieceOverMax_isRejected() {
         assertViolated(validItem().sqmPerPiece(new BigDecimal("10000")).build());
@@ -161,8 +135,8 @@ class DealQuotationRequestsValidationTest {
     @Test
     void remainderModeMustBeCreditOrOnDelivery() {
         assertViolated(validUpsert().remainderMode("SOMETHING_ELSE").build());
-        // null is allowed -- @Pattern only validates a non-null value (same discipline as
-        // CLAUDE.md's ${VAR:default} note on absent-vs-empty).
+        // null is allowed -- @Pattern only validates a non-null value (same discipline as CLAUDE.md's ${VAR:default}
+        // note on absent-vs-empty).
         assertThat(VALIDATOR.validate(validUpsert().remainderMode(null).build())).isEmpty();
         assertThat(VALIDATOR.validate(validUpsert().remainderMode("CREDIT").build())).isEmpty();
         assertThat(VALIDATOR.validate(validUpsert().remainderMode("ON_DELIVERY").build())).isEmpty();
@@ -180,8 +154,8 @@ class DealQuotationRequestsValidationTest {
         assertViolated(validUpsert().validityDays(366).build());
     }
 
-    /** V178 — the pattern accepts DAYS/DATE and rejects anything else; null is allowed (means
-     * DAYS), same discipline as {@code remainderMode}/{@code priceMode}/{@code documentLanguage}. */
+    /** V178 — the pattern accepts DAYS/DATE and rejects anything else; null is allowed (means DAYS), same
+     * discipline as remainderMode/priceMode/documentLanguage. */
     @Test
     void validityModeMustBeDaysOrDate() {
         assertViolated(validUpsert().validityMode("SOMETHING_ELSE").build());
@@ -191,15 +165,11 @@ class DealQuotationRequestsValidationTest {
         assertThat(VALIDATOR.validate(validUpsert().validityMode("DATE").build())).isEmpty();
     }
 
-    /** Item 4 (V181, "ไม่รับมัดจำ", owner ruling 2026-09-16) — {@code @Pattern} accepts exactly the
-     * three codes and rejects anything else; null is allowed (means "no term chosen yet", which
-     * {@code DealQuotationService#resolveFullPaymentTerm} — not bean validation — enforces only
-     * on a zero-deposit document; see the service-level tests in {@code DealQuotationIntegrationTest}). */
+    /** Item 4 — @Pattern accepts exactly the three codes and rejects anything else; null is allowed. */
     @Test
     void fullPaymentTermMustBeOneOfTheThreeCodes() {
         assertViolated(validUpsert().fullPaymentTerm("SOMETHING_ELSE").build());
-        assertViolated(validUpsert().fullPaymentTerm("before_delivery").build()); // case-sensitive
-        // Owner correction 2026-09-16: the code is ON_OR_BEFORE_DELIVERY, not the earlier
+        assertViolated(validUpsert().fullPaymentTerm("before_delivery").build()); // case-sensitive Owner correction 2026-09-16: the code is ON_OR_BEFORE_DELIVERY, not the earlier
         // BEFORE_OR_ON_DELIVERY -- this pins the RENAMED code is what validates, not the old one.
         assertViolated(validUpsert().fullPaymentTerm("BEFORE_OR_ON_DELIVERY").build());
         assertThat(VALIDATOR.validate(validUpsert().fullPaymentTerm(null).build())).isEmpty();
@@ -220,8 +190,8 @@ class DealQuotationRequestsValidationTest {
         return new UpsertBuilder();
     }
 
-    /** Minimal wither around {@link ItemInput} so each test can mutate one field without
-     * re-listing all 21 positional arguments. */
+    /** Minimal wither around ItemInput so each test can mutate one field without re-listing all 21 positional
+     * arguments. */
     private static final class ItemBuilder {
         private String locationLabel = "ชั้น 1";
         private Long catalogPriceId = null;
@@ -261,8 +231,8 @@ class DealQuotationRequestsValidationTest {
         ItemBuilder specialPriceSqm(BigDecimal v) { specialPriceSqm = v; return this; }
         ItemBuilder adjustmentPct(BigDecimal v) { adjustmentPct = v; return this; }
 
-        // v3 fields, all null on a plain tile row -- the canonical constructor is used (rather
-        // than the 22-argument legacy one) so the v3 bounds are actually reachable from here.
+        // v3 fields, all null on a plain tile row -- the canonical constructor is used (rather than the 22-argument
+        // legacy one) so the v3 bounds are actually reachable from here.
         private BigDecimal quantity = null;
         private BigDecimal specialPriceSqm = null;
         private BigDecimal adjustmentPct = null;
@@ -288,8 +258,8 @@ class DealQuotationRequestsValidationTest {
         private String validityMode = null;
         private LocalDate validityUntil = null;
         private String customerNotes = null;
-        // Item 4 (V181) — null on both by default, meaning "not ticked" / "no term chosen", the
-        // shape every OTHER test in this file (all pre-dating this feature) implicitly means.
+        // Item 4 (V181) — null on both by default, meaning "not ticked" / "no term chosen", the shape every OTHER test
+        // in this file (all pre-dating this feature) implicitly means.
         private String fullPaymentTerm = null;
         private List<ItemInput> items = List.of(new ItemBuilder().build());
 
@@ -302,9 +272,9 @@ class DealQuotationRequestsValidationTest {
         UpsertBuilder fullPaymentTerm(String v) { fullPaymentTerm = v; return this; }
 
         UpsertDealQuotationRequest build() {
-            // The CANONICAL (20-argument) constructor, not the pre-V180/V181 legacy one, so
-            // fullPaymentTerm's own @Pattern bound is actually reachable from here -- same reason
-            // ItemBuilder.build() switched to ItemInput's canonical constructor for its own v3 fields.
+            // The CANONICAL (20-argument) constructor, not the pre-V180/V181 legacy one, so fullPaymentTerm's own @Pattern
+            // bound is actually reachable from here -- same reason ItemBuilder.build() switched to ItemInput's canonical
+            // constructor for its own v3 fields.
             return new UpsertDealQuotationRequest(null, deptCode, unitCode, offerDate, depositPercent, remainderMode,
                 creditDays, validityDays, validityMode, validityUntil, customerNotes, null, null, null,
                 null, null, null, null, fullPaymentTerm, items);

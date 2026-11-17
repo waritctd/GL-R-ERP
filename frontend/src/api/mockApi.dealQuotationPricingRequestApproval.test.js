@@ -1,24 +1,16 @@
 import { describe, it, expect } from 'vitest';
 import { api } from './mockApi.js';
 
-// GLA-123 slice S2, REWORKED (owner reversed the dual-approval design, 2026-09-20): mock coverage
-// for DealQuotationService#approveAndIssuePricingRequestOrigin/#requireCeoApprovalIfChanged — ONE
-// approval (sales_manager OR ceo) issues the document, and a sales_manager is refused once the
-// quotation no longer matches the CEO's own decision. NOT authz/permission evidence — see
-// CLAUDE.md's "Mock API contract": the mock's role gates approximate the Java service and are NOT
-// authoritative. The real-DB test matrix (unchanged/changed x each role, mutation-checked) lives in
-// backend/.../DealQuotationPricingRequestApprovalIntegrationTest — this file only verifies the mock's OWN
-// plumbing stays green for the same happy/unhappy paths a coding agent would drive under
-// VITE_USE_MOCKS=true.
+// GLA-123 slice S2, REWORKED: mock coverage for
+// DealQuotationService#approveAndIssuePricingRequestOrigin/#requireCeoApprovalIfChanged — ONE approval issues
+// the document, and a sales_manager is refused once the quotation no longer matches the CEO's own decision.
 
 function nextClientRequestId() {
   return crypto.randomUUID();
 }
 
-/** Drives a fresh PCR to an APPROVED NET decision, then createFromPricingRequest — the shared
- * starting point (a DRAFT quotation, unchanged from the CEO's decision) every test below builds
- * on. Mirrors mockApi.pricingRequestQuotation.test.js's own `approvedNetPricingRequest` helper,
- * extended one step further (createFromPricingRequest) since this file always needs the row. */
+/** Drives a fresh PCR to an APPROVED NET decision, then createFromPricingRequest — the shared starting point (a
+ * DRAFT quotation, unchanged from the CEO's decision) every test below builds on. */
 async function draftPricingRequestQuotation() {
   await api.auth.login({ role: 'sales' });
   const { customer } = await api.customers.create({
@@ -116,8 +108,8 @@ async function draftPricingRequestQuotation() {
   return { ticketId, prId, quotationId: draftQuotation.id };
 }
 
-/** The shared starting point for the "unchanged" test cases — a submitted, unmodified quotation
- * at PENDING_APPROVAL, whose current price still matches the CEO's decision exactly. */
+/** The shared starting point for the "unchanged" test cases — a submitted, unmodified quotation at
+ * PENDING_APPROVAL, whose current price still matches the CEO's decision exactly. */
 async function pendingApprovalPricingRequestQuotation() {
   const { ticketId, prId, quotationId } = await draftPricingRequestQuotation();
   await api.auth.login({ role: 'sales' });
@@ -125,8 +117,8 @@ async function pendingApprovalPricingRequestQuotation() {
   return { ticketId, prId, quotationId: submitted.id };
 }
 
-/** The starting point for the "changed" test cases — a submitted quotation whose first line's
- * discount no longer matches the CEO's own decision (10%), so `priceChangedFromCeo` is true. */
+/** The starting point for the "changed" test cases — a submitted quotation whose first line's discount no
+ * longer matches the CEO's own decision (10%), so `priceChangedFromCeo` is true. */
 async function changedPendingApprovalPricingRequestQuotation() {
   const { ticketId, prId, quotationId } = await draftPricingRequestQuotation();
   await api.auth.login({ role: 'sales' });
@@ -197,10 +189,9 @@ describe('mockApi dealQuotations approval (GLA-123 slice S2, reworked)', () => {
     expect(quotation.approvalNote).toBe('ราคาไม่เหมาะสม');
   });
 
-  // 'qc' has no dedicated login in this mock's demo user set (src/data/demoData.js seeds it under
-  // role: 'employee' — see that file's own comment); the real qc-role refusal is covered by the
-  // real-DB DealQuotationPricingRequestApprovalIntegrationTest#approve_byQc_forbidden_nothingWritten
-  // instead, per CLAUDE.md's "verify authz against the Java service, never the mock".
+  // 'qc' has no dedicated login in this mock's demo user set; the real qc-role refusal is covered by the real-DB
+  // DealQuotationPricingRequestApprovalIntegrationTest#approve_byQc_forbidden_nothingWritten instead, per
+  // CLAUDE.md's "verify authz against the Java service, never the mock".
   it('a wrong-way-round role (sales, import, account) cannot approve at all', async () => {
     const { quotationId } = await pendingApprovalPricingRequestQuotation();
     for (const role of ['sales', 'import', 'account']) {

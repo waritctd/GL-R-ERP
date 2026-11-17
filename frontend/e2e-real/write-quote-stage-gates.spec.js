@@ -18,7 +18,7 @@ const SHOTS = process.env.E2E_SHOTS_DIR
 
 const STAGE_MESSAGE = 'อัตโนมัติจากขั้นตอนของดีล';
 const REFUSED = /เลื่อนไปขั้นตอน .*ไม่ได้: ยังไม่มีใบเสนอราคาถึง/;
-const REVISION_HINT = 'ฉบับแก้ไขต้องส่งถึงผู้รับเดิม — หากจะเสนอราคาให้ผู้รับรายอื่น ให้สร้างใบเสนอราคาใหม่บนดีลนี้';
+const REVISION_HINT = 'ฉบับแก้ไขต้องส่งถึงผู้รับเดิม — หากจะเสนอราคาให้ผู้รับรายอื่น ให้สร้างใบเสนอราคาใหม่บนงานนี้';
 const LABEL = { DESIGNER: 'ผู้ออกแบบ', OWNER: 'เจ้าของโครงการ', BUYER: 'ผู้ซื้อ / ผู้รับเหมา' };
 
 test.describe.serial('quote stage gates + versioning — real browser walk', () => {
@@ -119,7 +119,9 @@ test.describe.serial('quote stage gates + versioning — real browser walk', () 
   // The stage badge carries the catalogue's absolute number. The route line prints no position;
   // it reads "เส้นทาง · <route> · N ขั้น", and N is the full-spine
   // count until the per-deal route loads, so the badge is the stable assertion.
-  const stageIs = (page, n) => expect(page.getByTestId('deal-stage-no')).toHaveText(String(n));
+  // Deal page redesign (2026-11-16): the numbered pip gave way to the S stepper, so the absolute number is read off
+  // the stage strip's data-stage-no.
+  const stageIs = (page, n) => expect(page.getByTestId('deal-stage-panel')).toHaveAttribute('data-stage-no', String(n));
 
   test.beforeAll(async ({ browser }) => {
     sessions = await apiSessionsFor(['sales', 'sales_manager']);
@@ -144,18 +146,18 @@ test.describe.serial('quote stage gates + versioning — real browser walk', () 
     dealA = await newDeal('A', 'DESIGNER_LED');
     const page = salesPage;
     await page.goto(`/tickets/${dealA}`);
-    for (const n of [2, 3]) {
-      await page.getByRole('button', { name: new RegExp(`^เลื่อนไป: ${n}\\.`) }).first().click();
-      // Ready (gate met) → the main button moves at once; otherwise it opens the follow-up + activity form.
-      const modal = page.getByTestId('guided-advance-modal');
-      if (await modal.waitFor({ state: 'visible', timeout: 3000 }).then(() => true, () => false)) {
-        await page.getByTestId('guided-advance-followup').fill(inDays(7));
-        await page.getByTestId('guided-advance-note').fill(`${tag} โทรติดตามก่อนเลื่อนขั้น ${n}`);
-        await page.getByTestId('guided-advance-submit').click();
-        await expect(modal).toHaveCount(0);
-      }
-      await stageIs(page, n);
-    }
+    // Lifecycle dialogs (2026-11-16, drawing m-stage): on an S1 deal the main button is "ย้ายไป S2 · สเปคผ่าน", one
+    // hand move straight to ขั้น 3 (SPEC_APPROVED), replacing the two "เลื่อนไป: 2./3." steps. The dialog asks for the
+    // follow-up date / a note only when the readiness gate needs them (MoveToS2Modal), so fill whichever it shows.
+    await page.getByRole('button', { name: 'ย้ายไป S2 · สเปคผ่าน' }).first().click();
+    const moveModal = page.getByTestId('move-s2-modal');
+    await expect(moveModal).toBeVisible();
+    const followUp = moveModal.getByLabel(/วันติดตามครั้งถัดไป/);
+    if (await followUp.count()) await followUp.fill(inDays(7));
+    await moveModal.getByPlaceholder('เช่น ผู้ออกแบบเลือก Raku 20×20 สีขาว').fill(`${tag} ผู้ออกแบบตกลงสเปค`);
+    await moveModal.getByRole('button', { name: 'ย้ายไป S2', exact: true }).click();
+    await expect(moveModal).toHaveCount(0);
+    await stageIs(page, 3);
     await shot(page, '01-stage3-deal');
 
     // no primary CTA into 4
@@ -182,9 +184,15 @@ test.describe.serial('quote stage gates + versioning — real browser walk', () 
     }
     await shot(page, '01-stage3-stage-picker');
     await page.keyboard.press('Escape');
-    await page.getByRole('button', { name: 'ยกเลิก' }).first().click({ trial: false }).catch(() => {});
-    // auto hint
-    await expect(page.getByText('อัปเดตอัตโนมัติเมื่อสร้างใบเสนอราคาถึงผู้ออกแบบของดีลนี้')).toBeVisible();
+    // Escape normally closes the picker; if it did not, its own ยกเลิก does. Scoped to the modal: a page-wide
+    // "ยกเลิก" substring match now lands on the ยกเลิกงาน quiet link (deal page redesign, 2026-11-16).
+    if (await modal.isVisible()) await modal.getByRole('button', { name: 'ยกเลิก', exact: true }).click();
+    await expect(modal).toHaveCount(0);
+    // auto hint: since the redesign it is the "ถัดไป:" line of the ขั้นต่อไป card at the top of the page
+    // (NextStageLine, stageMeta AUTO_STAGE_HINT, wording ดีล → งาน). The card folds away while the header is
+    // condensed, and the ⋯ triggers above may have scrolled the page, so return to the top first.
+    await page.getByTestId('deal-chrome-expand-sentinel').scrollIntoViewIfNeeded();
+    await expect(page.getByTestId('next-step-card').getByText('อัปเดตอัตโนมัติเมื่อสร้างใบเสนอราคาถึงผู้ออกแบบของงานนี้')).toBeVisible();
     await shot(page, '01-stage3-auto-hint');
   });
 
@@ -205,7 +213,7 @@ test.describe.serial('quote stage gates + versioning — real browser walk', () 
     await salesPage.goto(`/tickets/${dealA}`);
     await stageIs(salesPage, 4);
     await shot(salesPage, '03-designer-deal-stage4');
-    await salesPage.getByRole('tab', { name: /ประวัติ/ }).click().catch(() => {});
+    await salesPage.getByRole('tab', { name: /ภาพรวม/ }).click().catch(() => {});
     await expect(salesPage.getByText(STAGE_MESSAGE).first()).toBeVisible();
     await shot(salesPage, '03-designer-deal-history');
   });
@@ -305,7 +313,7 @@ test.describe.serial('quote stage gates + versioning — real browser walk', () 
     await expect(sp.locator('main')).toContainText('ฉบับที่ไม่ได้ใช้แล้ว');
     await shot(sp, '06-parent-superseded');
     await sp.goto(`/tickets/${dealA}`);
-    await sp.getByRole('tab', { name: /เอกสาร/ }).click().catch(() => {});
+    await sp.getByRole('tab', { name: /ใบเสนอราคา/ }).click().catch(() => {});
     await expect(sp.locator('main')).toContainText(qt3.number);
     await shot(sp, '06-deal-register');
   });
@@ -324,18 +332,47 @@ test.describe.serial('quote stage gates + versioning — real browser walk', () 
     await salesPage.goto(`/tickets/${deal}`);
     await stageIs(salesPage, 8);
     await shot(salesPage, '07-buyer-deal-stage8');
+
+    // The guided advance, in a real browser (restored, lifecycle dialogs review round 2). Case 1 used to drive it on
+    // its "เลื่อนไป: 2./3." steps. On an S1 deal those are now the "ย้ายไป S2" dialog, but the guided form still runs
+    // every hand move the readiness gate blocks. ขั้น 8 → 9 is one: the quotation just moved the stage, so no activity
+    // has been logged since. Same guarantee as before: the form collects the follow-up date and an activity, then
+    // moves the deal. The form opens from the panel's guided opener or, where the page's main button carries the
+    // move, from that "เลื่อนไป: 9." button. Either way the form itself must open, be filled and move the deal.
+    // Both openers exist only once the page's separate actions query (TicketDetailPage `actionsQuery`:
+    // stageDecisions) has loaded, and stageIs above needs only the summary. So wait, web-first, for either one to be
+    // visible, which proves the actions are in, before choosing (review round 3, M-3: an instant count() raced it).
+    const opener = salesPage.getByTestId('guided-advance-open');
+    const headerMove = salesPage.getByRole('button', { name: /^เลื่อนไป: 9\./ });
+    await expect(opener.or(headerMove).first()).toBeVisible();
+    await ((await opener.isVisible()) ? opener : headerMove).first().click();
+    const guided = salesPage.getByTestId('guided-advance-modal');
+    await expect(guided).toBeVisible();
+    // A date the form must carry through: newDeal already set inDays(7), so asserting that again would pass even if the
+    // form dropped the date (review round 3, M-3).
+    await salesPage.getByTestId('guided-advance-followup').fill(inDays(9));
+    await salesPage.getByTestId('guided-advance-note').fill(`${tag} โทรติดตามก่อนเลื่อนขั้น 9`);
+    await salesPage.getByTestId('guided-advance-submit').click();
+    await expect(guided).toHaveCount(0);
+    await stageIs(salesPage, 9);
+    const after = await ticketOf(deal);
+    expect(after.summary.salesStage).toBe('NEGOTIATION');
+    expect(after.summary.nextFollowUpAt).toBe(inDays(9));
+    const activities = await (await sessions.sales.get(`/api/tickets/${deal}/activities`)).json();
+    expect(activities.items.some((a) => String(a.note).includes(`${tag} โทรติดตามก่อนเลื่อนขั้น 9`))).toBe(true);
+    await shot(salesPage, '07-buyer-guided-advance-stage9');
   });
 
   test('8. a deal born from a quotation starts on the recipient stage', async () => {
     const c2 = await newCustomer('born');
     const page = salesPage;
     await page.goto('/quotations/new');
-    await page.getByRole('button', { name: 'สร้างดีลใหม่' }).click();
+    await page.getByRole('button', { name: 'สร้างงานใหม่' }).click();
     await page.locator('#deal-customer').fill(c2.name);
     await page.getByRole('option', { name: new RegExp(c2.name) }).first().click();
     await page.locator('#deal-project').click();
     await page.getByRole('option', { name: new RegExp(`โครงการ ${tag} born`) }).first().click();
-    await page.getByRole('button', { name: 'ผู้ออกแบบนำดีล' }).click();
+    await page.getByRole('button', { name: 'ผู้ออกแบบนำงานมา' }).click();
     await page.locator('#quotation-recipient-OWNER').click();
     await fillTileLine(page);
     await shot(page, '08-born-editor');
@@ -353,7 +390,7 @@ test.describe.serial('quote stage gates + versioning — real browser walk', () 
   test('9. off-route recipient: the pill is disabled with the route sentence, and the API refuses it 409', async () => {
     const deal = await newDeal('C-offroute', 'OWNER_DIRECT');
     const page = salesPage;
-    const sentence = 'ดีลนี้เป็นเจ้าของติดต่อโดยตรง — ขั้นที่ 4 ไม่อยู่ในเส้นทางของดีลนี้ — แก้ช่องทางดีลก่อน';
+    const sentence = 'ช่องทางรับงานของงานนี้คือเจ้าของติดต่อโดยตรง — ขั้นที่ 4 ไม่อยู่ในเส้นทางนี้ — แก้ช่องทางรับงานก่อน';
     await page.goto(`/quotations/new?ticket=${deal}`);
     // The designer has no place on an owner-direct route: its pill is disabled and says why; the pre-select is
     // the channel's own party (the owner), never the off-route one.

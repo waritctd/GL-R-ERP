@@ -85,11 +85,8 @@ public class AttendanceController {
         return attendanceService.backfillCardNumbers(request);
     }
 
-    /**
-     * The day view. No role gate here on purpose — {@code AttendanceService.resolveScope} decides
-     * what the caller sees (hr/ceo: everyone, ฝ่าย manager: their division, otherwise: themselves),
-     * exactly as {@code /punches} does.
-     */
+    /** The day view. No role gate here on purpose — AttendanceService.resolveScope decides what the caller sees
+     * (hr/ceo: everyone, ฝ่าย manager: their division, otherwise: themselves), exactly as /punches does. */
     @GetMapping("/daily")
     AttendanceDailyResponse listDaily(
             @RequestParam(value = "from", required = false)
@@ -106,26 +103,13 @@ public class AttendanceController {
             attendanceService.listDaily(user, fromDate, toDate, employeeId, divisionId));
     }
 
-    /**
-     * HR's monthly attendance summary workbook (xlsx) -- a pure aggregation over exactly the rows
-     * {@link #listDaily} already returns for this caller with these filters, plus an APPROVED-leave
-     * overlay so ขาดงาน means genuinely unexcused absence rather than conflating it with approved
-     * ลา (see {@link AttendanceMonthlySummaryService}'s javadoc for the full rule set).
-     *
-     * <p><strong>No {@code @PreAuthorize}, no {@code requireAnyRole} -- deliberately, mirroring
-     * {@link #listDaily} above.</strong> {@code AttendanceService.resolveScope} already decides what
-     * this caller may see (hr/ceo: everyone; ฝ่าย manager: their division; everyone else: self only,
-     * with another id 403ing). This endpoint adds ZERO new authorization semantics on top of that:
-     * it can never contain a row {@link #listDaily} would not also hand back for the same caller and
-     * filters, so a separate role gate here would only ever duplicate (and risk drifting from) the
-     * one {@code resolveScope} already enforces.
-     */
+    /** HR's monthly attendance summary workbook -- a pure aggregation over exactly the rows #listDaily already
+     * returns for this caller with these filters, plus an APPROVED-leave overlay so ขาดงาน means genuinely
+     * unexcused absence rather than conflating it with approved ลา. */
     @GetMapping("/monthly-summary.xlsx")
     ResponseEntity<byte[]> monthlySummary(
-            // required = false so a MISSING month reaches parseMonth's own null-check and the Thai
-            // ApiException message below, rather than Spring's generic English
-            // MissingServletRequestParameterException 400 -- "month is required" per the plan means
-            // both the absent and the malformed case get the same, translated error surface.
+            // required = false so a MISSING month reaches parseMonth's own null-check and the Thai ApiException message
+            // below, rather than Spring's generic English MissingServletRequestParameterException 400.
             @RequestParam(value = "month", required = false) String monthParam,
             @RequestParam(value = "employeeId", required = false) Long employeeId,
             @RequestParam(value = "divisionId", required = false) Long divisionId,
@@ -158,10 +142,8 @@ public class AttendanceController {
         return new AttendanceUnmappedResponse(attendanceService.listUnmappedBadges(fromDate, toDate));
     }
 
-    /**
-     * Employees the caller may filter by. Session-scoped rather than role-gated: everyone gets a
-     * list, it is just narrower for non-HR callers.
-     */
+    /** Employees the caller may filter by. Session-scoped rather than role-gated: everyone gets a list, it is just
+     * narrower for non-HR callers. */
     @GetMapping("/employees")
     AttendanceEmployeesResponse listEmployeeOptions(HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
@@ -179,13 +161,9 @@ public class AttendanceController {
             request.fromDate(), request.toDate(), request.employeeId()));
     }
 
-    /**
-     * The CEO/HR stand-up roster: marks everyone in {@code employee_ids} present for
-     * {@code work_date} with no punches (WFH, §76 reporting only — never touches payroll).
-     * Resubmitting for the same date reconciles the roster: anyone left off is un-marked. HR/CEO
-     * only; the ids are still re-validated against the caller's own scope in the service, never
-     * trusted from the request body outright.
-     */
+    /** The CEO/HR stand-up roster: marks everyone in employee_ids present for work_date with no punches (WFH, §76
+     * reporting only — never touches payroll). HR/CEO only; the ids are still re-validated against the caller's
+     * own scope in the service, never trusted from the request body outright. */
     @PostMapping("/daily/mark-present")
     AttendanceMarkPresentResponse markPresent(
             @Valid @RequestBody AttendanceMarkPresentRequest request,
@@ -212,8 +190,8 @@ public class AttendanceController {
         return new AttendancePunchesResponse(attendanceService.listPunches(user, fromDate, toDate, employeeId, limit));
     }
 
-    /** {@code YYYY-MM}, required -- mirrors {@code PayrollController#parseMonth}'s "reject rather
-     * than silently default" stance for a month-scoped export. */
+    /** YYYY-MM, required -- mirrors PayrollController#parseMonth's "reject rather than silently default" stance for
+     * a month-scoped export. */
     private YearMonth parseMonth(String value) {
         if (value == null || value.isBlank()) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุเดือน");

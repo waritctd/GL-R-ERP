@@ -67,8 +67,8 @@ describe('where mixing is offered', () => {
     expect(mixedPriceModeAvailable('TH', 'PRICING_REQUEST')).toBe(false);
   });
 
-  // The three ROW modes are still exactly what availablePriceModes offers — MIXED is a choice
-  // about the document, not a fourth way to price a row, so it is not in that list.
+  // The three ROW modes are still exactly what availablePriceModes offers — MIXED is a choice about the
+  // document, not a fourth way to price a row, so it is not in that list.
   it('MIXED is not one of the row modes', () => {
     expect(availablePriceModes('TH').map((opt) => opt.code)).toEqual(['NET', 'SPECIAL_SQM', 'DIRECT_NET']);
     expect(isMixedPriceMode(PRICE_MODE_MIXED)).toBe(true);
@@ -91,8 +91,8 @@ describe('where mixing is offered', () => {
     expect(priceModeForLanguage('SPECIAL_SQM', 'EN')).toEqual({ priceMode: 'SPECIAL_SQM', moved: false });
   });
 
-  // The owner's "ต้องอธิบายด้วยว่ากรอกวิธีหลายแบบในใบเสนอราคาเดียวกัน": the explanation is part of the
-  // option itself, so it cannot be dropped by a caller that only wanted the label.
+  // The owner's "ต้องอธิบายด้วยว่ากรอกวิธีหลายแบบในใบเสนอราคาเดียวกัน": the explanation is part of the option
+  // itself, so it cannot be dropped by a caller that only wanted the label.
   it('the option explains itself: several methods in one quotation, chosen per row', () => {
     expect(PRICE_MODE_MIXED_OPTION.code).toBe(PRICE_MODE_MIXED);
     expect(PRICE_MODE_MIXED_OPTION.label).toBe('ผสมหลายวิธี');
@@ -129,8 +129,8 @@ describe('what the document prints for a row follows the row\'s mode', () => {
 
   it('…and none when no row has any, each judged by its own mode', () => {
     expect(hasSpecialPricing(PRICE_MODE_MIXED, [net0, directAtList])).toBe(false);
-    // Wrong-way-round: read by the DOCUMENT-level rule, "MIXED" is neither ราคาพิเศษ nor ราคาสุทธิ and
-    // this ราคาพิเศษ row (which carries no percent) would be missed.
+    // Wrong-way-round: read by the DOCUMENT-level rule, "MIXED" is neither ราคาพิเศษ nor ราคาสุทธิ and this
+    // ราคาพิเศษ row (which carries no percent) would be missed.
     expect(hasSpecialPricing(PRICE_MODE_MIXED, [special])).toBe(true);
   });
 });
@@ -164,8 +164,8 @@ describe('itemInputFromRow — a row of a mixed document says which mode it is i
     });
   });
 
-  // Wrong-way-round, and what keeps every single-mode quotation's payload exactly as it was: no
-  // priceMode key at all unless the document is mixed — even if the row object carries one.
+  // Wrong-way-round, and what keeps every single-mode quotation's payload exactly as it was: no priceMode key at
+  // all unless the document is mixed — even if the row object carries one.
   it('says nothing about a mode on a single-mode document', () => {
     expect(itemInputFromRow({ ...typed, priceMode: 'SPECIAL_SQM' }, 'NET')).not.toHaveProperty('priceMode');
     expect(itemInputFromRow({ ...typed, priceMode: 'SPECIAL_SQM' }, 'NET', 'TH', { mixed: false }))
@@ -231,13 +231,13 @@ describe('<QuotationItemRow> on a mixed document', () => {
 
     expect(onChangePriceMode).toHaveBeenCalledTimes(1);
     expect(onChangePriceMode).toHaveBeenCalledWith('DIRECT_NET');
-    // It is the PAGE's to do (carry the net over, drop the stale preview, re-preview) — the row
-    // does not also patch itself, which would race that.
+    // It is the PAGE's to do (carry the net over, drop the stale preview, re-preview) — the row does not also
+    // patch itself, which would race that.
     expect(onChange).not.toHaveBeenCalled();
   });
 
-  // Wrong-way-round: a single-mode document has no per-row choice to offer — one would contradict
-  // the document's own setting.
+  // Wrong-way-round: a single-mode document has no per-row choice to offer — one would contradict the document's
+  // own setting.
   it('is NOT shown on a single-mode document', () => {
     renderRow({ ...complete, priceMode: 'SPECIAL_SQM' });
     expect(picker()).toBeNull();

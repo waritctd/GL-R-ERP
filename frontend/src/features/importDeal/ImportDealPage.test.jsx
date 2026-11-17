@@ -9,10 +9,8 @@ import { queryKeys } from '../../api/queryKeys.js';
 
 globalThis.React = React;
 
-// ImportDealPage is import's OWN per-deal page: it reads GET /api/import/deals/{id}
-// (api.importDeals.get) instead of the whole-deal GET /api/tickets/{id}, which the backend now
-// refuses import. The DTO carries NO price/cost field, so this file also pins that the page never
-// renders one even if a stray field were present (defence in depth, not a claim about the server).
+// ImportDealPage is import's OWN per-deal page: it reads GET /api/import/deals/{id} (api.importDeals.get)
+// instead of the whole-deal GET /api/tickets/{id}, which the backend now refuses import.
 vi.mock('../../api/index.js', async (importOriginal) => {
   const actual = await importOriginal();
   return {
@@ -224,16 +222,17 @@ describe('ImportDealPage', () => {
     expect(screen.queryByLabelText(/ลบไฟล์แนบ/)).toBeNull();
   });
 
-  it('lets import advance a factory step, and refreshes the import deal AND the deal tab / worklist caches (sync)', async () => {
-    const { invalidateSpy } = renderPage();
-    fireEvent.click(await screen.findByTestId('advance-11'));
-
-    await waitFor(() => expect(api.storedImportRequests.advanceStep)
-      .toHaveBeenCalledWith(11, { targetStep: 'PICKED_UP' }));
-    await waitFor(() => expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: queryKeys.importDeal(1) }));
-    // The pre-existing surfaces keep being refreshed alongside it.
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: queryKeys.storedImportRequests(1) });
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: queryKeys.ticketDetail(1) });
+  // Spec 2026-11-15 §7.11 item 3: a step is advanced in ONE place, the /fulfilment card. This page shows the tracker
+  // read-only, even to import and the CEO, and points there. UI narrowing only: the advance endpoint and its
+  // import/ceo gate are unchanged.
+  it.each(['import', 'ceo'])('shows the tracker read-only to %s (no advance control) and points to /fulfilment', async (role) => {
+    renderPage({ role });
+    expect(await screen.findByTestId('factory-progress-11')).not.toBeNull();
+    expect(screen.queryByTestId('advance-11')).toBeNull();
+    expect(screen.queryByTestId('advance-target-11')).toBeNull();
+    expect(screen.getByTestId('ir-step-readonly-11').textContent).toContain('การขนส่ง');
+    expect(screen.getByRole('link', { name: /ไปหน้า การขนส่ง/ }).getAttribute('href')).toBe('/fulfilment');
+    expect(api.storedImportRequests.advanceStep).not.toHaveBeenCalled();
   });
 
   it('gives import no issue / revise / delete control on the factory cards (those are owner/CEO only)', async () => {
@@ -278,7 +277,7 @@ describe('ImportDealPage', () => {
     api.importDeals.get.mockRejectedValue(Object.assign(new Error('ไม่มีสิทธิ์เข้าถึงรายการนี้'), { status: 403 }));
     renderPage();
     expect(await screen.findByTestId('import-deal-forbidden')).not.toBeNull();
-    expect(screen.getByText(/ไม่อยู่ในขอบเขตงานนำเข้า/)).not.toBeNull();
+    expect(screen.getByText(/งานนี้ไม่อยู่ในขอบเขตของฝ่ายนำเข้า/)).not.toBeNull();
     expect(screen.queryByTestId('import-deal-items')).toBeNull();
     expect(api.attachments.list).not.toHaveBeenCalled();
   });
@@ -299,7 +298,7 @@ describe('ImportDealPage', () => {
   it('shows a busy skeleton while loading', () => {
     api.importDeals.get.mockReturnValue(new Promise(() => {}));
     renderPage();
-    expect(screen.getByLabelText('กำลังโหลดดีล')).not.toBeNull();
+    expect(screen.getByLabelText('กำลังโหลดงาน')).not.toBeNull();
   });
 
   it('says so when the deal has no per-factory ใบขอซื้อ yet', async () => {
@@ -307,11 +306,8 @@ describe('ImportDealPage', () => {
     renderPage();
     expect(await screen.findByTestId('import-deal-no-ir')).not.toBeNull();
   });
-  // ── Legacy deal-level actions ────────────────────────────────────────────────────────────────
-  // A LEGACY deal is one that never started per-factory tracking: no live importRequests rows. For
-  // those, nextImportAction still routes issueImportRequest / markShipping / markGoodsReceived to
-  // THIS page (importActions.js), so this page must perform them — DealFulfilmentPanel, where they
-  // used to live, is closed to import (GET /api/tickets/{id} 403s it).
+  // Legacy deal-level actions ──────────────────────────────────────────────────────────────── A LEGACY deal is
+  // one that never started per-factory tracking: no live importRequests rows.
   describe('legacy deal-level actions (deal with no per-factory rows)', () => {
     const legacyDeal = (over = {}) => dealFixture({ importRequests: [], ...over });
     const legacyButtons = () => [
@@ -323,7 +319,7 @@ describe('ImportDealPage', () => {
       const { invalidateSpy, showToast } = renderPage();
 
       const card = await screen.findByTestId('import-deal-legacy-action');
-      expect(card.textContent).toContain('ดำเนินการนำเข้า (ดีลรูปแบบเดิม)');
+      expect(card.textContent).toContain('ดำเนินการนำเข้า (งานรูปแบบเดิม)');
       fireEvent.click(within(card).getByRole('button', { name: 'บันทึกออกเดินทาง' }));
 
       await waitFor(() => expect(api.tickets.markShipping).toHaveBeenCalledWith('1'));

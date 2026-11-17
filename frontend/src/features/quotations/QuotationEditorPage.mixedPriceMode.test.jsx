@@ -8,8 +8,8 @@ import { api } from '../../api/index.js';
 
 globalThis.React = React;
 
-// Whole-editor cases: each mounts the page and drives it through a debounced calculate-line and
-// often a save. Same budget, for the same reason, as QuotationEditorPage.v3.test.jsx.
+// Whole-editor cases: each mounts the page and drives it through a debounced calculate-line and often a save.
+// Same budget, for the same reason, as QuotationEditorPage.v3.test.jsx.
 vi.setConfig({ testTimeout: 15000 });
 
 // Mixed price modes (V192.5), driven through the WHOLE quotation editor.
@@ -229,8 +229,8 @@ describe('one row at a time', () => {
     fireEvent.change(byId('special-1'), { target: { value: '790' } });
     await waitFor(() => expect(api.dealQuotations.calculateLine).toHaveBeenCalled(), { timeout: 1500 });
     const sent = api.dealQuotations.calculateLine.mock.calls.at(-1)[0];
-    // The mode is STATED (calculate-line has no document to read one off) and only this mode's
-    // price travels with it.
+    // The mode is STATED (calculate-line has no document to read one off) and only this mode's price travels with
+    // it.
     expect(sent).toMatchObject({
       priceMode: 'SPECIAL_SQM', specialPriceSqm: 790, listPriceSqm: 1800, discountPct: null, directNetPriceSqm: null,
     });

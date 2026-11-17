@@ -2,32 +2,9 @@ import { useEffect, useRef, useState } from 'react';
 import { cn } from '../../utils/cn.js';
 import { Icon } from './Icon.jsx';
 
-/**
- * Shared worklist filter-chip row — the pattern `/finance` used to use
- * (AccountFinancePage.jsx has since moved to a view switch plus selects): one
- * horizontal row of real buttons, each a label plus an inline count,
- * `aria-pressed` reflecting selection. Factored out here so `/tickets` (and
- * any future worklist) can use the same chip row instead of hand-rolling a
- * second copy that can drift in touch-target size or accessibility.
- *
- * `items`: `{ key, label, count?, dotClassName? }[]`. `count` is optional —
- * omit it (or pass `null`/`undefined`) for a chip that names a filter action
- * rather than a population (e.g. an "everything" chip whose label already
- * says what it does, with no single honest count to attach to it).
- * `dotClassName` is an optional decorative color-dot class (e.g. a phase
- * accent) rendered before the count — purely visual, so it is marked
- * `aria-hidden`.
- *
- * Meets the 44px mobile touch floor via the same `mobile:min-h-[44px]`
- * utility Button.jsx uses, so this row's chips grow exactly like every other
- * touch target in the app once viewport crosses 720px.
- *
- * The row scrolls horizontally instead of clipping when it doesn't fit
- * (the /tickets phase strip used to clip silently at 820px/390px with no
- * indication more chips existed) and shows a small edge affordance — a fading
- * gradient plus a decorative chevron — whenever there is more to scroll to,
- * so the presence of hidden chips is never silent.
- */
+/** Shared worklist filter-chip row — the pattern `/finance` used to use (AccountFinancePage.jsx has since moved
+ * to a view switch plus selects): one horizontal row of real buttons, each a label plus an inline count,
+ * `aria-pressed` reflecting selection. */
 export function WorklistFilters({ items, activeKey, onSelect, ariaLabel }) {
   const scrollRef = useRef(null);
   const [canScrollLeft, setCanScrollLeft] = useState(false);
@@ -57,14 +34,8 @@ export function WorklistFilters({ items, activeKey, onSelect, ariaLabel }) {
         ref={scrollRef}
         role="group"
         aria-label={ariaLabel}
-        // FIX F2 (review-remediation): `overflow-x-auto` forces `overflow-y`
-        // to compute as `auto` too (never `visible`), so the scroller clips
-        // vertically at its own padding box. The old `pb-0.5` (2px) left
-        // ~0px of clearance above a chip and ~2px below — nowhere near the
-        // app's focus ring (`outline: 2px` at `outline-offset: 2px`, i.e.
-        // ~4px total). `py-1` (4px) gives every chip's ring room on top and
-        // bottom; `px-1` + `scroll-px-1` do the same horizontally so the
-        // first/last chip's ring isn't clipped by the scroller edge either.
+        // FIX F2 (review-remediation): `overflow-x-auto` forces `overflow-y` to compute as `auto` too (never
+        // `visible`), so the scroller clips vertically at its own padding box.
         className="flex min-w-0 items-center gap-2 overflow-x-auto scroll-smooth scroll-px-1 px-1 py-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
       >
         {items.map((item) => {

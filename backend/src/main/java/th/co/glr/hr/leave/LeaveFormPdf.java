@@ -5,16 +5,9 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 import th.co.glr.hr.common.ChromiumPdfPrinter;
 
-/**
- * Renders the ใบลา F-HR-020 to PDF bytes, choosing the engine: headless Chromium drawing the HTML
- * replica ({@link LeaveFormHtmlRenderer}) — the same engine the direct-deal quotation uses, and the
- * one that carries the GL&R logo and matches the form's look — with the PDFBox text renderer
- * ({@link LeaveFormRenderer}) as a fallback.
- *
- * <p>Unlike the quotation (which 503s loudly when Chromium is absent), this falls back rather than
- * failing: the leave-submission email is a best-effort after-commit side effect, so a Chromium outage
- * must still produce an attachable form, not drop the email. Which engine ran is logged.
- */
+/** Renders the ใบลา F-HR-020 to PDF bytes, choosing the engine: headless Chromium drawing the HTML replica —
+ * the same engine the direct-deal quotation uses, and the one that carries the GL&R logo and matches the
+ * form's look — with the PDFBox text renderer as a fallback. */
 @Component
 public class LeaveFormPdf {
     private static final Logger log = LoggerFactory.getLogger(LeaveFormPdf.class);

@@ -61,11 +61,9 @@ public class BillingNoteRepository {
         return withLines(rows);
     }
 
-    /** Self-healing read — see {@link #findByCustomer}'s own Javadoc; this is the single-row
-     * equivalent {@link BillingNoteService#get}/{@code #issue}/{@code #revise}/etc. all go
-     * through, so an operation gated on this note's OWN current status (e.g. {@code
-     * requireIssued}) sees a just-settled note as {@code SETTLED} rather than a now-stale
-     * {@code ISSUED}. */
+    /** Self-healing read — see #findByCustomer's own Javadoc; this is the single-row equivalent
+     * BillingNoteService#get/#issue/#revise/etc. all go through, so an operation gated on this note's OWN current
+     * status (e.g. requireIssued) sees a just-settled note as SETTLED rather than a now-stale ISSUED. */
     public Optional<BillingNoteDocumentDto> findById(long id) {
         reconcileSettlementForNote(id);
         List<BillingNoteDocumentDto> rows = jdbc.query(
@@ -74,8 +72,8 @@ public class BillingNoteRepository {
     }
 
     /** At most one live correction DRAFT may exist per predecessor being corrected (V189's own
-     * {@code ux_billing_note_revision_of_draft}) — used by {@link BillingNoteService#revise} to
-     * refuse starting a second one with a clear 409 rather than a raw constraint violation. */
+     * ux_billing_note_revision_of_draft) — used by BillingNoteService#revise to refuse starting a second one with
+     * a clear 409 rather than a raw constraint violation. */
     public Optional<BillingNoteDocumentDto> findLiveDraftForRevision(long revisionOfId) {
         List<BillingNoteDocumentDto> rows = jdbc.query(
             SELECT_BN + " WHERE revision_of_id = :r AND status = 'DRAFT'",
@@ -83,13 +81,8 @@ public class BillingNoteRepository {
         return withLines(rows).stream().findFirst();
     }
 
-    /** One (source_type, source_id)'s currently-live claim, if any — which note holds it and that
-     * note's own doc_number (null while still DRAFT), for {@link BillingNoteService#candidates}'
-     * own "report which note" requirement. Single-row form kept for {@code
-     * BillingNoteService.resolveLine}'s own one-selection-at-a-time check (private method, hence
-     * {@code @code} rather than a broken {@code @link}); {@link
-     * #findLiveClaimsForCustomer} is the batched form {@code candidates()} itself uses (review nit
-     * — this per-row version was an N+1 there). */
+    /** One (source_type, source_id)'s currently-live claim, if any — which note holds it and that note's own
+     * doc_number (null while still DRAFT), for BillingNoteService#candidates' own "report which note" requirement. */
     public Optional<ClaimedBy> findLiveClaim(String sourceType, long sourceId) {
         return jdbc.query("""
             SELECT bn.id, bn.doc_number
@@ -144,8 +137,7 @@ public class BillingNoteRepository {
              WHERE pr.ticket_id = ri.ticket_id AND pr.kind IN ('BALANCE', 'ADJUSTMENT')
         ), 0)""";
 
-    /** The DEPOSIT_NOTICE counterpart of {@link #REMAINING_INVOICE_OUTSTANDING_EXPR} — expects a
-     * {@code dn} alias in scope. */
+    /** The DEPOSIT_NOTICE counterpart of #REMAINING_INVOICE_OUTSTANDING_EXPR — expects a dn alias in scope. */
     private static final String DEPOSIT_NOTICE_OUTSTANDING_EXPR = """
         dn.total_payable - COALESCE((
             SELECT SUM(CASE WHEN pr.kind = 'ADJUSTMENT' THEN -pr.amount ELSE pr.amount END)
@@ -198,9 +190,8 @@ public class BillingNoteRepository {
         return settle(ids);
     }
 
-    /** Single-note form of {@link #reconcileSettlementForCustomer} — used by {@link #findById}
-     * (customerId is not known there without an extra round trip; this scopes by the note's own
-     * id instead, same query shape). */
+    /** Single-note form of #reconcileSettlementForCustomer — used by #findById (customerId is not known there
+     * without an extra round trip; this scopes by the note's own id instead, same query shape). */
     public List<Long> reconcileSettlementForNote(long noteId) {
         List<Long> ids = jdbc.query(
             String.format(SETTLING_NOTE_IDS_SQL, "bn.id = :scope",
@@ -361,8 +352,8 @@ public class BillingNoteRepository {
         // Self-healing first — a document a just-SETTLED note released must be visible as
         // a candidate again in the SAME read that observes the settlement, not one read later.
         reconcileSettlementForCustomer(customerId);
-        // String.format placeholders, not text-block concatenation — see SETTLING_NOTE_IDS_SQL's
-        // own Javadoc for why ("THENri" — adjacent text blocks silently ate a separator once).
+        // String.format placeholders, not text-block concatenation — see SETTLING_NOTE_IDS_SQL's own Javadoc for why
+        // ("THENri" — adjacent text blocks silently ate a separator once).
         return jdbc.query(String.format(CANDIDATES_SQL, REMAINING_INVOICE_OUTSTANDING_EXPR, DEPOSIT_NOTICE_OUTSTANDING_EXPR),
             Map.of("customerId", customerId), (rs, n) -> new CandidateRow(
                 rs.getString("source_type"), rs.getLong("source_id"), rs.getLong("ticket_id"),
@@ -459,16 +450,14 @@ public class BillingNoteRepository {
         return keys.getKey().longValue();
     }
 
-    /** One resolved line ready to insert — {@link BillingNoteService} does the resolving
-     * (candidate lookup / outstanding computation / manual-field validation); this repository only
-     * persists the result. */
+    /** One resolved line ready to insert — BillingNoteService does the resolving (candidate lookup / outstanding
+     * computation / manual-field validation); this repository only persists the result. */
     public record ResolvedLine(String sourceType, Long sourceId, Long ticketId, String docNumber,
         LocalDate docDate, LocalDate dueDate, BigDecimal amount, String note) {}
 
     /** Replaces every line (DRAFT-only by convention — the caller never invokes this on an
-     * ISSUED/SUPERSEDED/CANCELLED row), renumbering {@code seq} from 1, and returns the new sum of
-     * {@code amount} across all of them. New rows start {@code note_status = 'DRAFT'}, matching
-     * the parent's own current status. */
+     * ISSUED/SUPERSEDED/CANCELLED row), renumbering seq from 1, and returns the new sum of amount across all of
+     * them. New rows start note_status = 'DRAFT', matching the parent's own current status. */
     public BigDecimal replaceLines(long billingNoteId, List<ResolvedLine> lines) {
         jdbc.update("DELETE FROM sales.billing_note_line WHERE billing_note_id = :id", Map.of("id", billingNoteId));
         int seq = 1;
@@ -518,10 +507,9 @@ public class BillingNoteRepository {
                 .addValue("customerBranch", customerBranch).addValue("customerAddress", customerAddress));
     }
 
-    /** Compare-and-set DRAFT -> ISSUED, and promotes this note's OWN lines from {@code DRAFT} to
-     * {@code ISSUED} in the same statement set (their claim on their source documents stays live,
-     * just under the ISSUED banner now). Returns rows affected on the parent; 0 means someone else
-     * issued/deleted this DRAFT first. */
+    /** Compare-and-set DRAFT -> ISSUED, and promotes this note's OWN lines from DRAFT to ISSUED in the same
+     * statement set (their claim on their source documents stays live, just under the ISSUED banner now). Returns
+     * rows affected on the parent; 0 means someone else issued/deleted this DRAFT first. */
     public int issue(long id, String baseNumber, int version, String docNumber, LocalDate issueDate,
             long actorId, String actorName) {
         int rows = jdbc.update("""
@@ -548,8 +536,8 @@ public class BillingNoteRepository {
             """, new MapSqlParameterSource().addValue("oldId", oldId).addValue("newId", newId));
     }
 
-    /** ISSUED -> CANCELLED, releasing every one of this note's own lines (note_status ->
-     * 'RELEASED') in the same call — spec: "lines released for re-billing". */
+    /** ISSUED -> CANCELLED, releasing every one of this note's own lines (note_status -> 'RELEASED') in the same
+     * call — spec: "lines released for re-billing". */
     public int cancel(long id, String reason, long actorId, String actorName) {
         int rows = jdbc.update("""
             UPDATE sales.billing_note
@@ -564,10 +552,9 @@ public class BillingNoteRepository {
         return rows;
     }
 
-    /** Releases this note's own lines' live claim (note_status -> 'RELEASED') without changing the
-     * PARENT's own status — used by {@link BillingNoteService#revise} the instant a correction
-     * DRAFT is created, so the predecessor's sources become claimable again by that same new draft
-     * (or by anything else, if the correction is abandoned — see {@link #restoreLinesToIssued}). */
+    /** Releases this note's own lines' live claim without changing the PARENT's own status — used by
+     * BillingNoteService#revise the instant a correction DRAFT is created, so the predecessor's sources become
+     * claimable again by that same new draft. */
     public void releaseLines(long billingNoteId) {
         jdbc.update("UPDATE sales.billing_note_line SET note_status = 'RELEASED' WHERE billing_note_id = :id",
             Map.of("id", billingNoteId));

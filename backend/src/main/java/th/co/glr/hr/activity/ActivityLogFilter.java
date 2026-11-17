@@ -14,15 +14,9 @@ import org.springframework.web.filter.OncePerRequestFilter;
 import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
 
-/**
- * Records one {@link ActivityLogEntry} per {@code /api/} request, so "what did this employee
- * actually do today" is answerable across the whole product rather than only for the handful of
- * actions that happen to write an {@code hr.audit_log} row.
- *
- * <p>Runs at {@code @Order(1)}, immediately after {@code CsrfCookieFilter} ({@code @Order(0)}), so
- * it wraps the entire chain and sees the final status of every request — including the 403s that
- * filter itself rejects and any exception translated further down.
- */
+/** Records one ActivityLogEntry per /api/ request, so "what did this employee actually do today" is answerable
+ * across the whole product rather than only for the handful of actions that happen to write an hr.audit_log
+ * row. */
 @Component
 @Order(1)
 public class ActivityLogFilter extends OncePerRequestFilter {
@@ -45,15 +39,14 @@ public class ActivityLogFilter extends OncePerRequestFilter {
         @NonNull FilterChain filterChain
     ) throws ServletException, IOException {
         long startedNanos = System.nanoTime();
-        // Captured BEFORE the chain as well as after, because logout invalidates the session:
-        // read only afterwards and every logout would be recorded as anonymous.
+        // Captured BEFORE the chain as well as after, because logout invalidates the session: read only afterwards and
+        // every logout would be recorded as anonymous.
         UserPrincipal before = currentUser(request);
         try {
             filterChain.doFilter(request, response);
         } finally {
-            // Preferred AFTER the chain, because login establishes the session during it — this is
-            // what lets POST /api/auth/login be attributed to the employee who just signed in
-            // rather than to nobody.
+            // Preferred AFTER the chain, because login establishes the session during it — this is what lets POST
+            // /api/auth/login be attributed to the employee who just signed in rather than to nobody.
             UserPrincipal actor = firstNonNull(currentUser(request), before);
             record(request, response, actor, startedNanos);
         }
@@ -68,16 +61,15 @@ public class ActivityLogFilter extends OncePerRequestFilter {
                 actor == null ? null : actor.id(),
                 actor == null ? null : actor.email(),
                 request.getMethod(),
-                // getRequestURI() only — never the query string, and never the body. Both carry
-                // credentials and PII; POST /api/auth/login alone would otherwise put every
-                // password in this table in plaintext.
+                // getRequestURI() only — never the query string, and never the body. Both carry credentials and PII; POST
+                // /api/auth/login alone would otherwise put every password in this table in plaintext.
                 request.getRequestURI(),
                 response.getStatus(),
                 durationMs,
                 OffsetDateTime.now()));
         } catch (RuntimeException e) {
-            // Observability must never break the request it is describing. The recorder already
-            // swallows its own failures; this is the belt to that pair of braces.
+            // Observability must never break the request it is describing. The recorder already swallows its own failures;
+            // this is the belt to that pair of braces.
             logger.warn("Could not capture an activity-log entry", e);
         }
     }

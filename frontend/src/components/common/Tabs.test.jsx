@@ -80,11 +80,9 @@ describe('Tabs', () => {
     expect(tablist.scrollLeft).toBe(208);
   });
 
-  // Regression coverage for a real incident: ActivityLogPage.jsx shipped `items: [{ value: 'x',
-  // label }]` instead of `{ id: 'x', label }` (this component reads `item.id`, not `value` — see
-  // fix/activity-log-page-load-failure). Nothing caught it for ~2 weeks. These assert the dev-only
-  // invariant fires loudly and immediately for the mistake it exists to catch, and stays silent for
-  // correctly-shaped items so it never becomes console noise on every other page that uses Tabs.
+  // Regression coverage for a real incident: ActivityLogPage.jsx shipped `items: [{ value: 'x', label }]`
+  // instead of `{ id: 'x', label }` (this component reads `item.id`, not `value` — see
+  // fix/activity-log-page-load-failure).
   describe('dev-only missing/duplicate id invariant', () => {
     let consoleError;
 
@@ -109,10 +107,9 @@ describe('Tabs', () => {
 
       render(<Tabs items={brokenItems} value="summary" onChange={() => {}} ariaLabel="บันทึกการใช้งาน" idPrefix="activity-log" />);
 
-      // Not asserting an exact call count: with every item.id undefined, React ALSO logs its own
-      // "two children with the same key" warning for the duplicate `key={item.id}` — that is a
-      // welcome side effect of the same underlying bug, not noise to suppress. Find our message
-      // among whatever console.error logged.
+      // Not asserting an exact call count: with every item.id undefined, React ALSO logs its own "two children with
+      // the same key" warning for the duplicate `key={item.id}` — that is a welcome side effect of the same
+      // underlying bug, not noise to suppress. Find our message among whatever console.error logged.
       const messages = consoleError.mock.calls.map(([message]) => message);
       const ours = messages.find((message) => message.includes('missing an `id`'));
       expect(ours).toBeDefined();
@@ -128,8 +125,8 @@ describe('Tabs', () => {
 
       render(<Tabs items={duplicateItems} value="overview" onChange={() => {}} ariaLabel="รายละเอียดดีล" idPrefix="ticket-detail" />);
 
-      // Same reasoning as the missing-id case above: React's own duplicate-`key` warning also
-      // fires here, so find our message rather than assume an exact call count.
+      // Same reasoning as the missing-id case above: React's own duplicate-`key` warning also fires here, so find
+      // our message rather than assume an exact call count.
       const messages = consoleError.mock.calls.map(([message]) => message);
       const ours = messages.find((message) => message.includes('duplicate id(s)'));
       expect(ours).toBeDefined();

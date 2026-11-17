@@ -70,45 +70,9 @@ import th.co.glr.hr.ticket.TicketItemRequest;
 import th.co.glr.hr.ticket.TicketRepository;
 import th.co.glr.hr.ticket.TicketService;
 
-/**
- * GLA-32 (owner rulings, GLA-110 Q2 2026-09-18): what a factory-quote carry-forward submit does and
- * does NOT notify, observed through the REAL {@link SalesNotificationMailRouter} chain rather than
- * {@code SalesNotificationMailer.NO_OP}.
- *
- * <p><b>Why this file exists alongside two others that look similar.</b>
- * {@code SalesNotificationEmailRollbackIntegrationTest} already pins the ORDINARY submit path (a
- * request that goes SUBMITTED -> Import) end to end with the real router — see
- * {@code aCommittedPricingRequestSubmissionEmailsImportAndTheCeo}, which asserts the mail lands on
- * exactly {@code import@glr.co.th} and {@code rarm@glr.co.th}, and
- * {@code PricingRequestFlowIntegrationTest#submittingOneRequest_leavesTheOtherUntouchedAndDoesNotMoveTheDeal},
- * which asserts the in-app {@code hr.notification} rows for that same path. Neither test drives a
- * carry-forward submit. {@code ReissueThroughCeoChainIntegrationTest} DOES drive carry-forward
- * submits, repeatedly, but wires {@code NotificationRepository} with
- * {@code SalesNotificationMailer.NO_OP} — a harness that cannot see mail at all, and never asserts
- * an {@code hr.notification} row either; its own {@code
- * carryForward_recordsTheAdvanceAsSubmittedToReadyForCeoReview_withNoImportPickup} test only pins
- * the {@code sales.pricing_request_event} audit trail. This file is the missing intersection: a
- * real carry-forward submit, through the real mail router.
- *
- * <p><b>What the code actually does on a carry-forward submit</b> (read from
- * {@code PricingRequestService.submit} and {@code #carryFactoryQuotesForwardOnSubmit}): the ordinary
- * {@code notifyByRoleForPricingRequest("import", ...)} call sits AFTER the
- * {@code carryFactoryQuotesForwardOnSubmit(...)} early-return, so it is skipped entirely on this
- * path — Import gets neither an in-app row nor mail. The CEO is still told, but through a
- * DIFFERENT call than the ordinary path uses: {@code carryFactoryQuotesForwardOnSubmit} raises its
- * own {@code notifyCeo(..., PRICING_COSTING_SUBMITTED, ...)} rather than falling through to the
- * ordinary path's {@code notifyCeo(..., PRICING_REQUEST_SUBMITTED, ...)}. Both resolve to the same
- * {@link th.co.glr.hr.notification.CeoApproverRule} in-app fan-out and the same hardcoded
- * {@code rarm@glr.co.th} mailbox, so the CEO-side behaviour observed here is: one
- * {@code hr.notification} row, one email, to the hardcoded CEO mailbox.
- *
- * <p>Assertions are baseline-delta rather than absolute counts, because the fixture that reaches a
- * carry-forward-eligible child (create -> submit -> pickup -> factory quote -> CEO decision ->
- * issue -> customer-change revision) itself raises several notifications and emails of its own —
- * asserting a delta of exactly what the CHILD's submit call adds is what isolates the behaviour
- * under test from the fixture's own noise, without resorting to a raw {@code DELETE} against
- * {@code hr.notification}.
- */
+/** GLA-32 (owner rulings, GLA-110 Q2 2026-09-18): what a factory-quote carry-forward submit does and does NOT
+ * notify, observed through the REAL SalesNotificationMailRouter chain rather than
+ * SalesNotificationMailer.NO_OP. */
 class CarryForwardNotificationIntegrationTest extends AbstractPostgresIntegrationTest {
 
     private static final String FACTORY = "Factory Carry-Forward Mail";
@@ -135,9 +99,8 @@ class CarryForwardNotificationIntegrationTest extends AbstractPostgresIntegratio
         mailer = new CapturingMailer();
         NotificationEmailService emailService = new NotificationEmailService(
             mailer, new BrandAssets(), "", "", "https://portal.test.glr");
-        // The real router, not SalesNotificationMailer.NO_OP -- a NO_OP harness cannot see mail at
-        // all, which is exactly the gap this file exists to close relative to
-        // ReissueThroughCeoChainIntegrationTest.
+        // The real router, not SalesNotificationMailer.NO_OP -- a NO_OP harness cannot see mail at all, which is
+        // exactly the gap this file exists to close relative to ReissueThroughCeoChainIntegrationTest.
         NotificationRepository notifications = new NotificationRepository(jdbc,
             new SalesNotificationMailRouter(emailService, new SalesMailRecipientRepository(jdbc)));
 
@@ -177,8 +140,8 @@ class CarryForwardNotificationIntegrationTest extends AbstractPostgresIntegratio
         ceoEmployeeId = createManagingDirector(employees, "ผู้บริหาร เมล์", "ceo-cf-mail@glr.co.th");
         ceoActor = actor(ceoEmployeeId, "ceo");
 
-        // A real, non-all-zero price_calc_config row (seeded by V26 for Thailand-equivalent
-        // origins), same as ReissueThroughCeoChainIntegrationTest -- the carry-forward's own gate is
+        // A real, non-all-zero price_calc_config row (seeded by V26 for Thailand-equivalent origins), same as
+        // ReissueThroughCeoChainIntegrationTest -- the carry-forward's own gate is
         // LandedCostCalculator.isFullyResolvable, so the landed cost here must be real arithmetic.
         catalogProductId = insertCatalogProduct(FACTORY, "IT", "TEST-CF-MAIL-001",
             new BigDecimal("100.00"), "THB", "per_piece");
@@ -192,29 +155,9 @@ class CarryForwardNotificationIntegrationTest extends AbstractPostgresIntegratio
         ticketId = created.summary().id();
     }
 
-    /**
-     * <b>The behaviour GLA-32/GLA-110 asks to have pinned.</b> A commercial-only revision (same
-     * items, same quantities) submitted from a parent that already has an ISSUED quotation carries
-     * the parent's factory quote forward and jumps straight to READY_FOR_CEO_REVIEW -- see
-     * {@code PricingRequestService#carryFactoryQuotesForwardOnSubmit}. On that path:
-     *
-     * <ul>
-     *   <li>Import receives NOTHING -- no {@code hr.notification} row, no mail to
-     *       {@code import@glr.co.th}. The ordinary {@code notifyByRoleForPricingRequest("import", ...)}
-     *       call in {@code submit} sits after the carry-forward early-return, so it is never
-     *       reached.</li>
-     *   <li>The CEO IS still notified -- one {@code hr.notification} row and one email to the
-     *       hardcoded {@code rarm@glr.co.th} mailbox, raised by
-     *       {@code carryFactoryQuotesForwardOnSubmit}'s own {@code notifyCeo} call.</li>
-     * </ul>
-     *
-     * <p>Driven through a real {@code @Transactional} proxy and committed via
-     * {@link #transactionTemplate}, exactly like
-     * {@code SalesNotificationEmailRollbackIntegrationTest#aCommittedPricingRequestSubmissionEmailsImportAndTheCeo}
-     * -- {@code AfterCommit} itself runs the action immediately when no transaction is synchronising,
-     * but committing for real is what actually exercises the after-commit deferral path production
-     * relies on, rather than merely relying on the "no transaction" fallback.
-     */
+    /** The behaviour GLA-32/GLA-110 asks to have pinned. The ordinary notifyByRoleForPricingRequest("import", ...)
+     * call in submit sits after the carry-forward early-return, so it is never reached. On that path: Import
+     * receives NOTHING -- no hr.notification row, no mail to import@glr.co.th. */
     @Test
     void carryForwardSubmit_notifiesNoImport_butStillNotifiesTheCeo() {
         long parentId = approvedPricingRequest(new BigDecimal("10"));
@@ -224,9 +167,8 @@ class CarryForwardNotificationIntegrationTest extends AbstractPostgresIntegratio
             parentId, revisionRequest(new BigDecimal("10")), salesActor);
         long childId = child.summary().id();
 
-        // Baseline AFTER the fixture (parent submit/pickup/factory-quote/CEO-decision/issue/revision
-        // all raise their own notifications and mail), so the deltas below are about ONLY the
-        // child's carry-forward submit.
+        // Baseline AFTER the fixture (parent submit/pickup/factory-quote/CEO-decision/issue/revision all raise their
+        // own notifications and mail), so the deltas below are about ONLY the child's carry-forward submit.
         long importRowsBefore = importDivisionNotificationCount();
         long ceoRowsBefore = notificationCountFor(ceoEmployeeId);
         int mailSentBefore = mailer.sent().size();
@@ -243,8 +185,7 @@ class CarryForwardNotificationIntegrationTest extends AbstractPostgresIntegratio
             .as("a carry-forward submit must not mail the shared import box")
             .doesNotContain("import@glr.co.th");
 
-        // The CEO still hears about it -- exactly one new row, exactly one new mail, to the
-        // hardcoded CEO mailbox.
+        // The CEO still hears about it -- exactly one new row, exactly one new mail, to the hardcoded CEO mailbox.
         assertThat(notificationCountFor(ceoEmployeeId)).isEqualTo(ceoRowsBefore + 1);
         assertThat(mailer.sent().subList(mailSentBefore, mailer.sent().size()))
             .as("a carry-forward submit must still mail the CEO, on the hardcoded rarm@glr.co.th mailbox")
@@ -333,16 +274,9 @@ class CarryForwardNotificationIntegrationTest extends AbstractPostgresIntegratio
             List.of(pricingItem(quantity)));
     }
 
-    // Rebased onto develop @84f4123e (V184): V185/GLA-125 made color/texture/thicknessMm/
-    // sqmPerPiece/piecesPerBox/a quantity/originCountry/leadTimeMin+MaxDays unconditionally
-    // required on every item (PricingRequestService#requireItemFieldsComplete) -- the old
-    // 18-arg compat shape this used to build (requestedQty/requestedQtySqm/requestedUnit/
-    // requestedUnitBasis sent directly, no tile fields at all) now 400s with "ขาด สี, ผิว,
-    // ความหนา, ...". Rebuilt as a complete new-form item: PIECES mode with wastageMode NONE and
-    // roundToFullBox false so the derived requestedQty comes out EXACTLY equal to `quantity`
-    // (piecesFinal == piecesInput, no wastage/box rounding) -- preserving this fixture's original
-    // "requestedQty/quotedQuantity both equal `quantity`" arithmetic, which the parent/child
-    // FactoryQuoteCarryForward equality check and the factory-response quoted amount both rely on.
+    // Rebased onto develop @84f4123e: V185/GLA-125 made color/texture/thicknessMm/ sqmPerPiece/piecesPerBox/a
+    // quantity/originCountry/leadTimeMin+MaxDays unconditionally required on every item -- the old 18-arg compat
+    // shape this used to build now 400s with "ขาด สี, ผิว, ความหนา, ...".
     private PricingRequestRequests.PricingRequestItemRequest pricingItem(BigDecimal quantity) {
         return new PricingRequestRequests.PricingRequestItemRequest(
             null, catalogProductId, null, "SCG", "Tile CF Mail", "SCG Tile CF Mail", "ขาว", "ด้าน",
@@ -373,9 +307,9 @@ class CarryForwardNotificationIntegrationTest extends AbstractPostgresIntegratio
             null, null, null, "ACT", new BigDecimal("30000"), null, null, null, null, null, null, null));
     }
 
-    /** Matches CeoApproverRule.SQL_PREDICATE: กรรมการผู้จัดการ position, so the hr.notification
-     *  fan-out for role "ceo" actually reaches this employee -- same fixture as
-     *  SalesNotificationEmailRollbackIntegrationTest#createManagingDirector. */
+    /** Matches CeoApproverRule.SQL_PREDICATE: กรรมการผู้จัดการ position, so the hr.notification fan-out for role
+     * "ceo" actually reaches this employee -- same fixture as
+     * SalesNotificationEmailRollbackIntegrationTest#createManagingDirector. */
     private long createManagingDirector(EmployeeRepository employees, String nameTh, String email) {
         return employees.create(new UpsertEmployeeRequest(
             null, null, nameTh, null, null, null, null, null, null, null,

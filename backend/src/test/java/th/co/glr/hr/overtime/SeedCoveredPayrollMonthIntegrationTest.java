@@ -30,33 +30,14 @@ import th.co.glr.hr.notification.CeoApproverRepository;
 import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
-/**
- * V114: proves that a payroll month can be closed to overtime WITHOUT ever being marked {@code
- * PROCESSED} in this system -- because it was already paid outside the ERP and is reflected in
- * {@code hr.payroll_year_to_date_seed} (PND1 filed). Drives the real {@link OvertimeService} and
- * {@link OvertimeRepository} against real Postgres, plus the {@code hr.payroll_period} guard
- * trigger directly -- Mockito cannot reach either the repository SQL or the trigger.
- *
- * <p>Written wrong-way-round throughout: every guarded case asserts the write was REFUSED, not
- * that a permitted write succeeded.
- *
- * <p>{@code appProperties.getOvertime().setRetroactiveWindowDays} is widened here on purpose. The
- * 60-day default (see {@link AppProperties.Overtime}) bounds how far back a request may reach and
- * is unrelated to what this class tests; left at 60, dates fixed to the real 2026 seed-coverage
- * boundary (2026-03, 2026-06, 2026-07) would fail with an unrelated BAD_REQUEST ("filed too late")
- * once the suite runs more than 60 days after 2026-06-03, which would make this class rot the
- * moment CI's clock moved past that -- exactly the kind of test that passes for the wrong reason.
- * Widening the window keeps every case here isolated to the one guard it exists to prove.
- */
+/** V114: proves that a payroll month can be closed to overtime WITHOUT ever being marked PROCESSED in this
+ * system -- because it was already paid outside the ERP and is reflected in hr.payroll_year_to_date_seed (PND1
+ * filed). */
 class SeedCoveredPayrollMonthIntegrationTest extends AbstractPostgresIntegrationTest {
 
-    /**
-     * feat/ot-nonworkday-rate-suggestion: this class is about the seed-covered-payroll-month guard,
-     * not the schedule-derived suggestion -- its fixture dates include a dynamic "today", which
-     * carries no guarantee of landing on a weekday. See the identical comment (and the confirmed
-     * failure it documents) on {@code RetroactiveOvertimeReachesPayrollIntegrationTest}'s own copy
-     * of this fake.
-     */
+    /** feat/ot-nonworkday-rate-suggestion: this class is about the seed-covered-payroll-month guard, not the
+     * schedule-derived suggestion -- its fixture dates include a dynamic "today", which carries no guarantee of
+     * landing on a weekday. */
     private static final WorkSchedule ALWAYS_WORKDAY_SCHEDULE = new WorkSchedule(
         ZoneId.of("Asia/Bangkok"), LocalTime.of(8, 30), LocalTime.of(17, 30), 15,
         EnumSet.allOf(DayOfWeek.class));
@@ -104,18 +85,9 @@ class SeedCoveredPayrollMonthIntegrationTest extends AbstractPostgresIntegration
         assertThat(countOvertimeRequestsFor(staff)).isZero();
     }
 
-    /**
-     * Opus review finding F2. {@code requirePayrollMonthOpen} used to sit at the BOTTOM of
-     * {@code validateRetroactiveWindow}, which returns early for a work date that is today or
-     * later -- so a closed month was only ever refused for BACKDATED submissions. Every other case
-     * in this class uses a 2026-03 work date, which is in the past, so the old placement fired and
-     * none of them could detect the gap.
-     *
-     * <p>This one uses TODAY, with coverage recorded through the current month. Under the old
-     * placement the submit succeeded and the request landed in the queue, only to be refused a
-     * stage later at manager approval -- surfacing the error to the wrong person. Under the fix it
-     * is refused at submit and nothing is written.
-     */
+    /** Opus review finding F2. requirePayrollMonthOpen used to sit at the BOTTOM of validateRetroactiveWindow,
+     * which returns early for a work date that is today or later -- so a closed month was only ever refused for
+     * BACKDATED submissions. */
     @Test
     void submitForTODAYInASeedCoveredMonthIsRefusedAtSubmitNotAtApproval() {
         LocalDate today = LocalDate.now(ZoneId.of("Asia/Bangkok"));
@@ -136,8 +108,8 @@ class SeedCoveredPayrollMonthIntegrationTest extends AbstractPostgresIntegration
     @Test
     void managerApprovalIsRefusedWhenCoverageIsRecordedAfterSubmit() {
         LocalDate workDate = LocalDate.parse("2026-03-16");
-        // No coverage row yet -- submit succeeds normally, exactly as it did on prod before the
-        // owner's Mar-Jun close attempt.
+        // No coverage row yet -- submit succeeds normally, exactly as it did on prod before the owner's Mar-Jun close
+        // attempt.
         long id = overtimeService.submit(backdated(workDate), employee(staff)).id();
         assertThat(statusOf(id)).isEqualTo("SUBMITTED");
 
@@ -158,8 +130,8 @@ class SeedCoveredPayrollMonthIntegrationTest extends AbstractPostgresIntegration
         overtimeService.approve(id, new ApproveOvertimeRequest("ok", null), directManager());
         assertThat(statusOf(id)).isEqualTo("MANAGER_APPROVED");
 
-        // Coverage is recorded only now -- after manager approval, before CEO approval. Proves the
-        // guard must run again at the CEO stage, not just at submit/manager-approve.
+        // Coverage is recorded only now -- after manager approval, before CEO approval. Proves the guard must run
+        // again at the CEO stage, not just at submit/manager-approve.
         insertCoverage(2026, "2026-06-01");
 
         assertThatThrownBy(() -> overtimeService.approve(id, new ApproveOvertimeRequest("ok", null), ceo()))
@@ -186,10 +158,9 @@ class SeedCoveredPayrollMonthIntegrationTest extends AbstractPostgresIntegration
 
     @Test
     void submitForMarchSucceedsOnADatabaseWithNoCoverageRow() {
-        // Deliberately no insertCoverage() call: a freshly migrated schema has zero rows in
-        // hr.payroll_seed_coverage (V114's insert is guarded on a 2026 hr.payroll_year_to_date_seed
-        // row, which this schema does not have) -- proving the guard is data-driven, not a
-        // hardcoded date, and that an environment with no seed is not silently closed anyway.
+        // Deliberately no insertCoverage call: a freshly migrated schema has zero rows in hr.payroll_seed_coverage --
+        // proving the guard is data-driven, not a hardcoded date, and that an environment with no seed is not silently
+        // closed anyway.
         LocalDate workDate = LocalDate.parse("2026-03-16");
 
         long id = overtimeService.submit(backdated(workDate), employee(staff)).id();
@@ -329,14 +300,8 @@ class SeedCoveredPayrollMonthIntegrationTest extends AbstractPostgresIntegration
             """, params, Long.class);
     }
 
-    /**
-     * A ผู้จัดการ position is what makes an employee a manager <em>in the database</em>, which is
-     * what {@code ManagerApproverRepository} reads when deciding whether a manager stage exists at
-     * all. It must agree with the {@code manager} flag on the {@link UserPrincipal} used for that
-     * person -- in production both derive from the same position via {@code DivisionAccessPolicy},
-     * so a fixture where they disagree models a state that cannot occur, and would quietly send
-     * requests down the CEO-direct route instead of the manager route under test.
-     */
+    /** A ผู้จัดการ position is what makes an employee a manager in the database, which is what
+     * ManagerApproverRepository reads when deciding whether a manager stage exists at all. */
     private long insertPosition(String code, String nameTh) {
         return jdbc.queryForObject("""
             INSERT INTO hr.position (source_code, name_th, is_active)

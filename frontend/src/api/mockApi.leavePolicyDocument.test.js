@@ -2,18 +2,14 @@ import { describe, it, expect } from 'vitest';
 import { api } from './mockApi.js';
 import { bangkokTodayIso } from '../utils/format.js';
 
-// Guards the §5 announcement PDF endpoints against LeaveController#policyDocument /
-// #uploadPolicyDocument and LeavePolicyDocumentRepository#findCurrent (issue #744).
-//
-// ⚠️ mockApi's `db` is module-level and shared by every test in this file, with no reset hook. Once
-// any test below uploads a document the store is no longer pristine, so every later assertion is
-// written to tolerate that — scoped, or compared relatively. The "starts empty" test cannot
-// tolerate residue and must stay FIRST.
+// Guards the §5 announcement PDF endpoints against LeaveController#policyDocument / #uploadPolicyDocument and
+// LeavePolicyDocumentRepository#findCurrent (issue #744). ⚠️ mockApi's `db` is module-level and shared by
+// every test in this file, with no reset hook.
 
 function pdf(name = 'a.pdf', size = 1024, type = 'application/pdf', content = '%PDF-1.4') {
   const file = new File([content], name, { type });
-  // The declared size drives the mock's cap check; the real byte length is what a served Blob
-  // reports, so the two are deliberately independent here.
+  // The declared size drives the mock's cap check; the real byte length is what a served Blob reports, so the
+  // two are deliberately independent here.
   Object.defineProperty(file, 'size', { value: size });
   return file;
 }
@@ -22,10 +18,8 @@ const YESTERDAY = '2000-01-01';
 const FUTURE = '2099-01-01';
 
 describe('mock leave policy document', () => {
-  // V133 is explicit: rows reach hr.leave_policy_document only through POST
-  // /api/leave/policy-document, which had no client until #744. The table is therefore empty in
-  // EVERY environment, production included — seeding one here would make the fixture more populated
-  // than production and hide the only state a real deployment actually has.
+  // V133 is explicit: rows reach hr.leave_policy_document only through POST /api/leave/policy-document, which
+  // had no client until #744.
   it('starts with no document, exactly as every real environment does', async () => {
     await api.auth.login({ role: 'hr' });
     await expect(api.leave.policyDocumentAvailable()).resolves.toBe('absent');
@@ -33,8 +27,8 @@ describe('mock leave policy document', () => {
       .rejects.toThrow('ยังไม่มีการอัปโหลดเอกสารประกาศฉบับนี้ กรุณาติดต่อฝ่ายบุคคล');
   });
 
-  // requireAnyRole(user, "hr", "ceo") on the upload — NARROWER than the read, which is
-  // sessions.requireUser only (every authenticated employee may read the rules that bind them).
+  // requireAnyRole(user, "hr", "ceo") on the upload — NARROWER than the read, which is sessions.requireUser only
+  // (every authenticated employee may read the rules that bind them).
   it('lets hr and ceo upload', async () => {
     for (const role of ['hr', 'ceo']) {
       await api.auth.login({ role });
@@ -67,9 +61,9 @@ describe('mock leave policy document', () => {
       .rejects.toThrow('ไฟล์มีขนาดใหญ่เกินไป');
   });
 
-  // The content-type check reads the CLIENT-DECLARED type on the real backend too, so the mock must
-  // accept a file that merely CLAIMS to be a PDF. Being stricter here would hide a request
-  // production accepts — the opposite of the usual mock hazard, and just as misleading.
+  // The content-type check reads the CLIENT-DECLARED type on the real backend too, so the mock must accept a
+  // file that merely CLAIMS to be a PDF. Being stricter here would hide a request production accepts — the
+  // opposite of the usual mock hazard, and just as misleading.
   it('accepts a file that only declares application/pdf, exactly as the server does', async () => {
     await api.auth.login({ role: 'hr' });
     const notReallyAPdf = new File(['this is plain text'], 'liar.pdf', { type: 'application/pdf' });
@@ -86,14 +80,12 @@ describe('mock leave policy document', () => {
     expect(document.content).toBeUndefined();
   });
 
-  // ── findCurrent's rule, which is the whole point ──────────────────────────
-  // "Current" is the latest effective_from that is <= today — NOT "most recently uploaded". A
-  // future-dated upload is stored and succeeds while the previous version keeps being served, and
-  // that outcome is exactly what a user would misread as a failed upload.
+  // findCurrent's rule, which is the whole point ────────────────────────── "Current" is the latest
+  // effective_from that is <= today — NOT "most recently uploaded".
   it('does not treat a future-dated upload as current', async () => {
     await api.auth.login({ role: 'hr' });
-    // Distinguishable byte lengths, so the served Blob identifies WHICH version findCurrent chose —
-    // asserting only "a Blob came back" would pass even if the future version were served.
+    // Distinguishable byte lengths, so the served Blob identifies WHICH version findCurrent chose — asserting only
+    // "a Blob came back" would pass even if the future version were served.
     const inForce = 'IN-FORCE-BYTES';
     await api.leave.uploadPolicyDocument(pdf('in-force.pdf', 1024, 'application/pdf', inForce), YESTERDAY);
     const { document } = await api.leave.uploadPolicyDocument(
@@ -114,8 +106,8 @@ describe('mock leave policy document', () => {
     await expect(api.leave.policyDocumentAvailable()).resolves.toBe('available');
   });
 
-  // LeavePolicyDocumentRepository#insert never updates — a superseded version stays retrievable, so
-  // each upload must APPEND a row with its own id rather than replacing one.
+  // LeavePolicyDocumentRepository#insert never updates — a superseded version stays retrievable, so each upload
+  // must APPEND a row with its own id rather than replacing one.
   it('appends a new version instead of overwriting the previous one', async () => {
     await api.auth.login({ role: 'hr' });
     const first = await api.leave.uploadPolicyDocument(pdf('v1.pdf'), YESTERDAY);

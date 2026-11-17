@@ -24,10 +24,8 @@ import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.employee.UpsertEmployeeRequest;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
-/**
- * Exercises TicketRepository's batched item insert, summary/pagination SQL, and the multi-query
- * detail fetch against a real PostgreSQL database (issue #28).
- */
+/** Exercises TicketRepository's batched item insert, summary/pagination SQL, and the multi-query detail fetch
+ * against a real PostgreSQL database (issue #28). */
 class TicketRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
     private TicketRepository tickets;
     private long actorId;
@@ -78,12 +76,9 @@ class TicketRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(persisted.texture()).isNull();
     }
 
-    // ── V110: catalog link (catalog_price_id/catalog_product_code) round-trip ─────────────────
-    // Fix for "สร้างคำขอราคาไม่ควรต้องกรอกหาจาก catalog ซ้ำ": the catalog product picked when a
-    // deal line is created must survive into ticket_item and read back out, through BOTH the
-    // create path (insertItems) and an items edit (replaceItemsPreservingPricing) — a mocked
-    // repository would happily "pass" this while the real FK/columns do something else, so this
-    // needs a real Postgres round-trip, not a Mockito stub.
+    // V110: catalog link round-trip ───────────────── Fix for "สร้างคำขอราคาไม่ควรต้องกรอกหาจาก catalog ซ้ำ": the
+    // catalog product picked when a deal line is created must survive into ticket_item and read back out, through
+    // BOTH the create path and an items edit.
 
     @Test
     void createTicket_persistsCatalogLinkAndReadsItBack() {
@@ -101,8 +96,8 @@ class TicketRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
 
     @Test
     void createTicket_customLineHasNoCatalogLink() {
-        // A hand-typed ("custom") line has no catalog link — must stay valid (nullable columns),
-        // not merely "happens to work because the FK is absent".
+        // A hand-typed ("custom") line has no catalog link — must stay valid (nullable columns), not merely "happens
+        // to work because the FK is absent".
         long ticketId = tickets.create(sampleTicket(
             item("Custom", "Line", "White", "Matte", "L")), tickets.nextTicketCode(), actorId, "พนักงานขาย");
 
@@ -114,8 +109,8 @@ class TicketRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
     @Test
     void editItems_roundTripsCatalogLinkThroughReplaceItemsPreservingPricing() {
         // replaceItemsPreservingPricing is what TicketService.editItems actually calls (see
-        // mergeEditedItemsPreservingPricing) — exercising it directly here proves the SQL this
-        // task changed, without needing to stand up TicketService's full collaborator graph.
+        // mergeEditedItemsPreservingPricing) — exercising it directly here proves the SQL this task changed, without
+        // needing to stand up TicketService's full collaborator graph.
         long priceId = insertCatalogProduct("Cotto Factory", "TH", "CT-200",
             new BigDecimal("300.00"), "THB", "per_piece");
         long ticketId = tickets.create(sampleTicket(
@@ -142,10 +137,9 @@ class TicketRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
 
     @Test
     void editItems_clearingTheLinkPersistsAsNull() {
-        // Mirrors the frontend's own invalidation rule (TicketCreateModal.jsx's updateItem): once
-        // a descriptive field is hand-edited, the catalog link is cleared, not left stale — an
-        // edit that sends null must actually overwrite a previously-linked row, not silently keep
-        // the old value.
+        // Mirrors the frontend's own invalidation rule (TicketCreateModal.jsx's updateItem): once a descriptive field
+        // is hand-edited, the catalog link is cleared, not left stale — an edit that sends null must actually
+        // overwrite a previously-linked row, not silently keep the old value.
         long priceId = insertCatalogProduct("Cotto Factory", "TH", "CT-300",
             new BigDecimal("400.00"), "THB", "per_piece");
         long ticketId = tickets.create(sampleTicket(
@@ -263,9 +257,9 @@ class TicketRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
 
     @Test
     void stockSalePrice_rejectsMismatchWithSourcedFromStockFlag() {
-        // chk_ticket_item_stock_sale_price (V183): sourcedFromStock=false with a non-null price
-        // must be refused at the DB layer, not merely by TicketService's own guard — this proves
-        // the CHECK constraint itself, independent of the service-level validation.
+        // chk_ticket_item_stock_sale_price (V183): sourcedFromStock=false with a non-null price must be refused at the
+        // DB layer, not merely by TicketService's own guard — this proves the CHECK constraint itself, independent of
+        // the service-level validation.
         long ticketId = tickets.create(sampleTicket(
             item("Toyota", "Hilux", "White", "Matte", "L")), tickets.nextTicketCode(), actorId, "พนักงานขาย");
         TicketItemDto existing = tickets.findById(ticketId).orElseThrow().items().get(0);
@@ -303,13 +297,9 @@ class TicketRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
             .isInstanceOf(DataIntegrityViolationException.class);
     }
 
-    // ── Slice F (ticket-workspace IA programme): ราคาตั้ง on the deal's item rows ──────────────
+    // Slice F (ticket-workspace IA programme): ราคาตั้ง on the deal's item rows ──────────────
     // findItemsByTicketId's LEFT JOIN to price_catalog.product_prices resolves catalogPrice/
-    // catalogCurrency/catalogPriceUnit/sqmPerPiece and derives source. Every assertion below reads
-    // a TicketItemDto back from tickets.findById(...).items() -- NOT a constructed fixture -- on
-    // purpose: a fixture built the way the tests above build one carries source/catalogPrice "for
-    // free" (it is just a field on the record), so it would pass whether or not the join exists.
-    // Only a real round trip proves the SELECT actually resolves these fields.
+    // catalogCurrency/catalogPriceUnit/sqmPerPiece and derives source.
 
     @Test
     void findItemsByTicketId_catalogLinkedItem_resolvesCatalogPriceFields() {
@@ -353,9 +343,8 @@ class TicketRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
 
     @Test
     void findItemsByTicketId_freeTextItem_hasNullCatalogFieldsAndStaysInTheList() {
-        // Proves the join is LEFT, not INNER: a custom line has catalog_price_id = NULL and must
-        // still come back in the list -- an INNER JOIN would drop the row entirely rather than
-        // merely leaving the catalog fields null.
+        // Proves the join is LEFT, not INNER: a custom line has catalog_price_id = NULL and must still come back in
+        // the list -- an INNER JOIN would drop the row entirely rather than merely leaving the catalog fields null.
         long ticketId = tickets.create(sampleTicket(
             item("Custom", "Line", "White", "Matte", "L")), tickets.nextTicketCode(), actorId, "พนักงานขาย");
 
@@ -374,9 +363,9 @@ class TicketRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
 
     @Test
     void findItemsByTicketId_retiredCatalogPrice_stillReadsBackWithNullCatalogFields() {
-        // ON DELETE SET NULL (V110): retiring the catalog price a line was linked to must clear
-        // the link, not block or cascade the delete. Reaches the same "must still be in the list"
-        // proof as the free-text case above via retirement instead of "never linked".
+        // ON DELETE SET NULL (V110): retiring the catalog price a line was linked to must clear the link, not block or
+        // cascade the delete. Reaches the same "must still be in the list" proof as the free-text case above via
+        // retirement instead of "never linked".
         long priceId = insertCatalogProduct("Cotto Factory", "TH", "CT-500",
             new BigDecimal("275.00"), "THB", "per_piece");
         long ticketId = tickets.create(sampleTicket(
@@ -458,29 +447,8 @@ class TicketRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(firstPage.get(0).itemCount()).isEqualTo(1);
     }
 
-    /**
-     * Paging must not duplicate or skip a row when the sort key ties.
-     *
-     * <p>The test above only ever fetches page 0, so it cannot see this: it passed throughout the
-     * period when {@code findSummaries} ordered by {@code created_at DESC} alone. Against a
-     * database where every ticket shared one timestamp, paging {@code size=1} returned ticket 1 on
-     * both page 0 and page 1 and never returned ticket 2 — five runs out of five.
-     *
-     * <p>The tie is forced rather than hoped for. Each {@code create} lands in its own transaction,
-     * so the timestamps would otherwise differ by microseconds and the regression would only
-     * reproduce on a machine whose clock resolution happened to be coarse enough — a test that
-     * passes for the wrong reason. Pinning {@code created_at} makes the ordering the only variable.
-     *
-     * <p><b>The row count is load-bearing — do not reduce it.</b> An earlier version of this test
-     * created 3 tickets and passed <em>with the tiebreaker removed</em>: at that size Postgres
-     * plans a trivially stable sort and returns the same arbitrary order every time, so the test
-     * could not fail and guarded nothing. At 25 the planner reorders between OFFSETs and the
-     * mutation is caught — verified by deleting {@code , t.ticket_id DESC} and watching this test,
-     * and only this test, go red with "Found duplicate(s): [24L, 1L]".
-     *
-     * <p>Asserted wrong-way-round: what matters is that no id comes back twice and none goes
-     * missing, not that page 0 has a row.
-     */
+    /** Paging must not duplicate or skip a row when the sort key ties. The test above only ever fetches page 0, so
+     * it cannot see this: it passed throughout the period when findSummaries ordered by created_at DESC alone. */
     @Test
     void summariesDoNotDuplicateOrSkipRowsWhenCreatedAtTies() {
         List<Long> created = new ArrayList<>();
@@ -561,8 +529,8 @@ class TicketRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(row.approvedPrice()).isEqualByComparingTo("100.00");
         assertThat(row.qty()).isEqualByComparingTo("2");
 
-        // amount = unit_price * qty = 200.00; TicketItemDto has no amount field, so read
-        // the stored column directly to confirm it was computed and frozen at insert time.
+        // amount = unit_price * qty = 200.00; TicketItemDto has no amount field, so read the stored column directly to
+        // confirm it was computed and frozen at insert time.
         BigDecimal amount = jdbc.queryForObject(
             "SELECT amount FROM sales.quotation_item WHERE quotation_id = :id",
             Map.of("id", quotation.id()), BigDecimal.class);
@@ -684,8 +652,8 @@ class TicketRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
 
     @Test
     void addEventWithDocument_persistsTheLinkAndRejectsAHalfSetOne() {
-        // Real SQL only: the CHECK enforcing "both columns or neither" and the type
-        // vocabulary cannot fire against a Mockito stub.
+        // Real SQL only: the CHECK enforcing "both columns or neither" and the type vocabulary cannot fire against a
+        // Mockito stub.
         long ticketId = tickets.create(sampleTicket(
             item("Toyota", "Hilux", "White", "Matte", "L")), tickets.nextTicketCode(), actorId, "พนักงานขาย");
 
@@ -729,9 +697,8 @@ class TicketRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(item.texture()).isEqualTo("ด้าน");
         assertThat(item.size()).isEqualTo("60x60");
         assertThat(item.qty()).isEqualByComparingTo("20");
-        // Not a real ticket_item row -- every pricing-approval-history field stays at its
-        // TicketItemDto default, never borrowed from the quotation (see the repository
-        // method's own Javadoc on why).
+        // Not a real ticket_item row -- every pricing-approval-history field stays at its TicketItemDto default, never
+        // borrowed from the quotation (see the repository method's own Javadoc on why).
         assertThat(item.proposedPrice()).isNull();
         assertThat(item.approvedPrice()).isNull();
         assertThat(item.calcedCost()).isNull();
@@ -757,10 +724,8 @@ class TicketRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     // Wrong-way-round: proves the fallback does NOT leak a quotation that has never reached
-    // ISSUED/ACCEPTED/APPROVED -- a rep's in-progress DRAFT must never render as if it were the
-    // deal's committed items. This is the assertion that actually guards the origin/doc_status
-    // filter; a test that only proves the happy path renders would pass even with `doc_status
-    // IN (...)` accidentally widened or dropped.
+    // ISSUED/ACCEPTED/APPROVED -- a rep's in-progress DRAFT must never render as if it were the deal's committed
+    // items.
     @Test
     void findPricingChainFallbackItems_returnsEmpty_whenOnlyDraftQuotationExists() {
         long ticketId = tickets.create(sampleTicket(), tickets.nextTicketCode(), actorId, "พนักงานขาย");
@@ -979,25 +944,16 @@ class TicketRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
             """, Map.of("id", ticketId));
     }
 
-    // sales.quotation.number is VARCHAR(30) NOT NULL UNIQUE. A per-JVM-run counter alone
-    // collides across repeated runs against the same persistent local test DB (this suite has
-    // no @Transactional rollback / truncate-between-runs — see
-    // support/transactional-inert-in-integration-suite note), so this is keyed off `ticketId`
-    // too: ticket_id is a real GENERATED ALWAYS AS IDENTITY column, so it is unique forever
-    // across every run against this database, not just within one JVM.
+    // sales.quotation.number is VARCHAR(30) NOT NULL UNIQUE.
     private static final java.util.concurrent.atomic.AtomicLong TEST_QUOTATION_SEQ =
         new java.util.concurrent.atomic.AtomicLong();
 
     private long insertQuotationWithItem(long ticketId, String origin, String docStatus,
                                          String brand, String model, String color, String texture,
                                          String size, BigDecimal qty) {
-        // ux_quotation_ticket_recipient_version (V52) uniques on (ticket_id, recipient_type,
-        // quotation_version) -- recipient_type defaults 'UNSPECIFIED' for every row this test
-        // inserts, so two quotations on the SAME ticket (deliberate, in the
-        // "prefersAccepted...acrossOrigins" test) need distinct quotation_version too, or the
-        // second insert 409s against the first. A single monotonic counter, reused for both the
-        // `number` suffix and the version, is globally unique per call so it can never collide
-        // with itself OR with another ticket's rows.
+        // ux_quotation_ticket_recipient_version uniques on -- recipient_type defaults 'UNSPECIFIED' for every row this
+        // test inserts, so two quotations on the SAME ticket need distinct quotation_version too, or the second insert
+        // 409s against the first.
         long seq = TEST_QUOTATION_SEQ.incrementAndGet();
         Long quotationId = jdbc.queryForObject("""
             INSERT INTO sales.quotation (ticket_id, number, issued_by, origin, doc_status, quotation_version)

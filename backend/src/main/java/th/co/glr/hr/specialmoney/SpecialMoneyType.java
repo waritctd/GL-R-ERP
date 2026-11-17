@@ -1,14 +1,8 @@
 package th.co.glr.hr.specialmoney;
 
-/**
- * The welfare/special-money request types ("สวัสดิการ", policy signed 2018). This enum owns the
- * RULE SHAPES -- bucket, display label, whether evidence is required, and which cap/claim-window
- * /eligibility rule identity applies. The actual amounts are effective-dated data in
- * {@code hr.special_money_policy} (see {@link PolicyAmounts}), not here.
- *
- * <p>Mirrors {@code chk_smr_type} in {@code V66__special_money_request_schema.sql} -- keep both in
- * sync if a type is added or removed.
- */
+/** The welfare/special-money request types ("สวัสดิการ", policy signed 2018). This enum owns the RULE SHAPES --
+ * bucket, display label, whether evidence is required, and which cap/claim-window /eligibility rule identity
+ * applies. */
 public enum SpecialMoneyType {
     UNIFORM_ANNUAL(
         SpecialMoneyBucket.NON_TAXABLE,

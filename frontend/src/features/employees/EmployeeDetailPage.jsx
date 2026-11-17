@@ -34,9 +34,7 @@ export function EmployeeDetailPage({ user, onUpdateEmployee, showToast }) {
   const [editing, setEditing] = useState(false);
   const [resettingPassword, setResettingPassword] = useState(false);
   // canManageEmployees is ['hr'], which mirrors EmployeeController#resetPassword's
-  // `sessions.requireAnyRole(user, "hr")` exactly. EmployeeDto carries no server-advertised action
-  // list to gate on (the #713 pattern), so this explicit role check is the available option; the
-  // server remains the enforcing gate either way.
+  // `sessions.requireAnyRole(user, "hr")` exactly.
   const canManage = hasPermission(user.role, 'canManageEmployees');
   const canSeeSensitive = hasPermission(user.role, 'canViewSensitiveEmployeeData');
 
@@ -59,8 +57,8 @@ export function EmployeeDetailPage({ user, onUpdateEmployee, showToast }) {
   const visibleTabs = tabDefs.filter((tab) => !tab.restricted || canSeeSensitive);
 
   async function submitEdit(payload) {
-    // Pass the URL id so the query-key invalidated in useHrData
-    // (`employeeDetail(id)`) matches this page's query key exactly.
+    // Pass the URL id so the query-key invalidated in useHrData (`employeeDetail(id)`) matches this page's query
+    // key exactly.
     await onUpdateEmployee(id, payload);
     setEditing(false);
   }
@@ -91,10 +89,9 @@ export function EmployeeDetailPage({ user, onUpdateEmployee, showToast }) {
               <Icon name="pencil" />
               แก้ไข
             </Button>
-            {/* Reset-password sits in the overflow rather than beside แก้ไข: it is destructive
-                (the employee's current password stops working immediately) and rare (onboarding or
-                a lockout), so it gets one deliberate extra step instead of sitting flush against
-                the everyday edit control. */}
+            {/* Reset-password sits in the overflow rather than beside แก้ไข: it is destructive (the employee's current
+             * password stops working immediately) and rare (onboarding or a lockout), so it gets one deliberate extra step
+             * instead of sitting flush against the everyday edit control. */}
             <OverflowMenu
               items={[{
                 key: 'reset-password',
@@ -133,16 +130,16 @@ export function EmployeeDetailPage({ user, onUpdateEmployee, showToast }) {
 
       {editing ? <EmployeeFormModal employee={employee} onClose={() => setEditing(false)} onSubmit={submitEdit} /> : null}
 
-      {/* `canManage &&` is defence in depth: the trigger is already HR-gated above, so this only
-          matters if the menu is ever moved. The server gate is what actually enforces this. */}
+      {/* `canManage &&` is defence in depth: the trigger is already HR-gated above, so this only matters if the menu
+       * is ever moved. The server gate is what actually enforces this. */}
       {resettingPassword && canManage ? (
         <ResetPasswordDialog
           employee={employee}
           onClose={() => setResettingPassword(false)}
           onConfirm={async () => {
             const response = await api.employees.resetPassword(employee.id);
-            // The toast deliberately does NOT carry the password — toast text is retained and
-            // re-rendered by the app shell, well outside this dialog's lifetime.
+            // The toast deliberately does NOT carry the password — toast text is retained and re-rendered by the app
+            // shell, well outside this dialog's lifetime.
             showToast?.('success', `ตั้งรหัสผ่านชั่วคราวให้ ${employee.nameTh} แล้ว`);
             return response.temporaryPassword;
           }}
@@ -203,11 +200,8 @@ function EmploymentTab({ employee, canSeeSalary }) {
         {canSeeSalary ? (
           <>
             <div className="mt-3 text-text text-3xl font-extrabold">{formatMoney(employee.salary)}</div>
-            {/* Finding 6 fix (Opus review, 2026-07-30): "ต่อเดือน" (per month) was hardcoded regardless
-                of pay type, so a daily-rate ('D') employee read as "฿450 / ต่อเดือน · รายวัน" --
-                per month, daily -- contradicting itself. employee.payType is already the backend's
-                Thai label (EmployeeRepository#payTypeLabel: "รายวัน"/"รายเดือน"), so the period label
-                simply follows it. */}
+            {/* "ต่อเดือน" (per month) was hardcoded regardless of pay type, so a daily-rate ('D') employee read as "฿450 /
+             * ต่อเดือน · รายวัน" -- per month, daily -- contradicting itself. */}
             <span className="text-text-secondary text-sm">
               {employee.payType === 'รายวัน' ? 'ต่อวัน' : 'ต่อเดือน'} · {employee.payType}
             </span>
@@ -273,11 +267,9 @@ function SensitiveTab({ employee }) {
         </FieldList>
       </CollapsibleSection>
 
-      {/* ล.ย.01 lives in this tab, not in "การจ้างงาน": a declaration names dependants, health
-          and life insurance, and disability status — the same PDPA-shaped material as the block
-          above, and a stricter audience than the page itself (canViewSensitiveEmployeeData is
-          hr-only, canViewEmployees is too). Reuses TaxAllowanceDrilldown wholesale — the same
-          component PayrollPage embeds — rather than a second copy of status + breakdown. */}
+      {/* ล.ย.01 lives in this tab, not in "การจ้างงาน": a declaration names dependants, health and life insurance,
+       * and disability status — the same PDPA-shaped material as the block above, and a stricter audience than the
+       * page itself (canViewSensitiveEmployeeData is hr-only, canViewEmployees is too). */}
       <CollapsibleSection title="ค่าลดหย่อนภาษี (ล.ย.01)" collapsible={false}>
         <TaxAllowanceDrilldown
           employeeId={employee.id}

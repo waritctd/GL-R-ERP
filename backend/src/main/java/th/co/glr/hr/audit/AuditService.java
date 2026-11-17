@@ -14,12 +14,9 @@ import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 import org.springframework.http.HttpStatus;
 
-/**
- * Writes append-only audit rows for mutating HR actions (issue #4).
- *
- * <p>Intentionally participates in the caller's transaction: if the audit write fails, the mutation
- * it accompanies is rolled back, so no HR/admin change is ever persisted without an audit trail.
- */
+/** Writes append-only audit rows for mutating HR actions (issue #4). Intentionally participates in the caller's
+ * transaction: if the audit write fails, the mutation it accompanies is rolled back, so no HR/admin change is
+ * ever persisted without an audit trail. */
 @Service
 public class AuditService {
     private final AuditLogRepository repository;

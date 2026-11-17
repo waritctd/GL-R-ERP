@@ -22,8 +22,8 @@ vi.mock('../../api/index.js', async (importOriginal) => {
 const HR = { role: 'hr', employeeId: 10 };
 const CEO = { role: 'ceo', employeeId: 1 };
 
-// Field-for-field with DeductionWrittenConsentDto. Only the four CONSENT_APPLICABLE_KINDS can
-// appear — V107's CHECK constraint rejects the rest at the database.
+// Field-for-field with DeductionWrittenConsentDto. Only the four CONSENT_APPLICABLE_KINDS can appear — V107's
+// CHECK constraint rejects the rest at the database.
 const rows = [
   {
     id: 1,
@@ -99,11 +99,8 @@ describe('DeductionConsentsPage', () => {
     expect(screen.queryByText('WARNING_LETTER')).toBeNull();
   });
 
-  // ── The requirement this page exists to satisfy ────────────────────────────
-  // The register records a fact; it gates nothing. These three tests pin the copy that says so,
-  // because the failure mode is silent: nothing breaks if the wording drifts into implying that a
-  // missing consent letter stops a deduction — it just becomes wrong, and a payroll officer acts
-  // on it.
+  // The requirement this page exists to satisfy ──────────────────────────── The register records a fact; it
+  // gates nothing.
   it('states plainly that the record is not a condition on any deduction', async () => {
     renderPage();
 
@@ -118,10 +115,9 @@ describe('DeductionConsentsPage', () => {
     expect(await screen.findByText(/ไม่ได้ระงับหรือหยุดการหักเงินรายการใด/)).not.toBeNull();
   });
 
-  // Mutation-checkable guard: swap the consent cell for a <StatusBadge tone="success"> / red-green
-  // pair and this goes red. In this app a pill badge means a backend lifecycle status or a
-  // work-state, and a success/danger hue means pass/fail — both would assert a consequence the
-  // backend does not implement.
+  // Mutation-checkable guard: swap the consent cell for a <StatusBadge tone="success"> / red-green pair and this
+  // goes red. In this app a pill badge means a backend lifecycle status or a work-state, and a success/danger
+  // hue means pass/fail — both would assert a consequence the backend does not implement.
   it('renders consent state as plain text, with no status pill and no pass/fail colour', async () => {
     const { container } = renderPage();
     await screen.findByText('สมชาย ใจดี');
@@ -156,8 +152,8 @@ describe('DeductionConsentsPage', () => {
     await waitFor(() => expect(api.payroll.getDeductionConsents).toHaveBeenCalledWith({ employeeId: '3' }));
   });
 
-  // `kind` is a SERVER-side filter, not client-side narrowing — the arity contract test cannot see
-  // whether a declared parameter is actually used, so it is asserted here.
+  // `kind` is a SERVER-side filter, not client-side narrowing — the arity contract test cannot see whether a
+  // declared parameter is actually used, so it is asserted here.
   it('sends the chosen deduction kind to the server rather than filtering locally', async () => {
     renderPage();
     await screen.findByText('สมชาย ใจดี');
@@ -173,8 +169,8 @@ describe('DeductionConsentsPage', () => {
     await waitFor(() => expect(api.payroll.getDeductionConsents).toHaveBeenCalledWith({}));
   });
 
-  // The state every real environment is in today: nothing has ever been recorded, because the write
-  // endpoint had no client. The empty copy must not read as "nothing is authorised".
+  // The state every real environment is in today: nothing has ever been recorded, because the write endpoint had
+  // no client. The empty copy must not read as "nothing is authorised".
   it('treats an empty register as the normal state and repeats the non-consequence', async () => {
     api.payroll.getDeductionConsents.mockResolvedValue({ items: [] });
     renderPage();
@@ -198,16 +194,9 @@ describe('DeductionConsentsPage', () => {
     expect(screen.getByRole('button', { name: 'ลองใหม่' })).not.toBeNull();
   });
 
-  // ── The write half: hr only ───────────────────────────────────────────────
-  // DeductionWrittenConsentService.EDIT_ROLES is Set.of("hr"), strictly narrower than VIEW_ROLES
-  // (hr + ceo). A route guard cannot express that — CEO must still reach the page — so the split
-  // lives in the page and is asserted wrong-way-round: what matters is that CEO gets NO control,
-  // not that HR gets one.
-  //
-  // FRONTEND GATING ONLY. This says nothing about what the server would do with a CEO's PUT;
-  // DeductionWrittenConsentService is what enforces that, and it is unverified here.
-  // Every form query is scoped to the dialog: "พนักงาน" and "ประเภทการหัก" are also a table column
-  // header and the toolbar filter's label, so an unscoped getByLabelText matches several elements.
+  // The write half: hr only ───────────────────────────────────────────────
+  // DeductionWrittenConsentService.EDIT_ROLES is Set.of("hr"), strictly narrower than VIEW_ROLES (hr + ceo).
+  // FRONTEND GATING ONLY.
   async function openDialog(name) {
     fireEvent.click(screen.getByRole('button', { name }));
     return within(await screen.findByRole('dialog'));
@@ -255,8 +244,8 @@ describe('DeductionConsentsPage', () => {
       }));
     });
 
-    // (employee, kind) is the table's UNIQUE key and the endpoint upserts on it, so letting either
-    // be changed during an edit would write a DIFFERENT row and silently leave the original.
+    // (employee, kind) is the table's UNIQUE key and the endpoint upserts on it, so letting either be changed
+    // during an edit would write a DIFFERENT row and silently leave the original.
     it('locks employee and deduction kind when editing an existing row', async () => {
       renderPage({ user: HR });
       await screen.findByText('สมชาย ใจดี');
@@ -281,8 +270,8 @@ describe('DeductionConsentsPage', () => {
       expect(kindOptions.sort()).toEqual(['CUSTOMER_RETURN', 'OTHER_POST_TAX', 'OTHER_PRETAX', 'WARNING_LETTER']);
     });
 
-    // The dialog is where the box actually gets ticked, and a modal covers the page's own
-    // explanation while it is open — so the non-consequence has to be restated inside it.
+    // The dialog is where the box actually gets ticked, and a modal covers the page's own explanation while it is
+    // open — so the non-consequence has to be restated inside it.
     it('states inside the dialog that ticking the box changes no deduction', async () => {
       renderPage({ user: HR });
       await screen.findByText('สมชาย ใจดี');

@@ -29,25 +29,9 @@ import th.co.glr.hr.payroll.PayrollClassificationDtos.ComponentTaxTreatmentUpser
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 import th.co.glr.hr.ticket.TicketRepository;
 
-/**
- * REVIEWER-ADDED coverage for V95 (branch feat/payroll-classification-and-hr-declarations), written
- * against a real PostgreSQL database.
- *
- * <p>The implementer's {@link PayrollClassificationAndSsoInclusionIntegrationTest} asserts the
- * SALARY lock only against a <em>wrong non-null</em> treatment
- * ({@code EXTRA_KNOWN_FREQUENCY}). It never tries the one value a SQL {@code CHECK} cannot
- * catch: {@code NULL}. A CHECK constraint is violated only when it evaluates to FALSE — an
- * expression evaluating to NULL passes — so
- * {@code CHECK (component <> 'SALARY' OR tax_treatment = 'REGULAR_REPROJECT')} does NOT block
- * {@code ('SALARY', NULL)}, contradicting V95's own comment ("a SALARY row can never be stored
- * with any other treatment (including NULL)") and the owner's "salary is LOCKED to
- * REGULAR_REPROJECT" decision.
- *
- * <p>{@link #salaryIsRejectedWhenStoredUnclassified()} asserts the intended invariant and is
- * therefore expected to FAIL on the branch as it stands. It should go green once the constraint
- * becomes {@code CHECK (component <> 'SALARY' OR (tax_treatment IS NOT NULL AND tax_treatment =
- * 'REGULAR_REPROJECT'))} (forward-only, in a new migration).
- */
+/** REVIEWER-ADDED coverage for V95 (branch feat/payroll-classification-and-hr-declarations), written against a
+ * real PostgreSQL database. The implementer's PayrollClassificationAndSsoInclusionIntegrationTest asserts the
+ * SALARY lock only against a wrong non-null treatment (EXTRA_KNOWN_FREQUENCY). */
 class PayrollClassificationReviewIntegrationTest extends AbstractPostgresIntegrationTest {
     private PayrollRepository repository;
     private PayrollService payrollService;
@@ -83,18 +67,7 @@ class PayrollClassificationReviewIntegrationTest extends AbstractPostgresIntegra
                 new th.co.glr.hr.payroll.obligation.PayrollDeductionShortfallRepository(jdbc)));
     }
 
-    /**
-     * The SALARY lock must hold against NULL, not only against a wrong non-null treatment.
-     *
-     * <p>Failure scenario: HR classifies เงินเดือน as REGULAR_REPROJECT, then later clears the cell
-     * (the documented "null explicitly resets the component back to not yet classified" affordance
-     * on {@code ComponentTaxTreatmentUpsertRequest}). The ON CONFLICT DO UPDATE writes NULL, the
-     * CHECK evaluates to NULL and passes, and salary is now stored as unclassified — the exact
-     * state the next task's blocker is meant to reject and the exact state the owner said cannot
-     * exist. Every subsequent payroll run for that employee is then blocked on a component that is
-     * supposed to be un-blockable, or (worse, if the blocker only inspects present-and-non-null
-     * keys) salary falls through with no ป.96 limb at all.
-     */
+    /** The SALARY lock must hold against NULL, not only against a wrong non-null treatment. */
     @Test
     void salaryIsRejectedWhenStoredUnclassified() {
         long employee = seedEmployee("EMP-REV-001", "สมชาย", "รีวิว");
@@ -111,10 +84,8 @@ class PayrollClassificationReviewIntegrationTest extends AbstractPostgresIntegra
             .doesNotContainKey(employee);
     }
 
-    /**
-     * The same hole, reached through the ordinary update path rather than a fresh insert: an
-     * already-correct SALARY classification must not be erasable back to unclassified.
-     */
+    /** The same hole, reached through the ordinary update path rather than a fresh insert: an already-correct
+     * SALARY classification must not be erasable back to unclassified. */
     @Test
     void anExistingSalaryClassificationCannotBeErasedBackToUnclassified() {
         long employee = seedEmployee("EMP-REV-002", "สมหญิง", "รีวิว");
@@ -134,15 +105,8 @@ class PayrollClassificationReviewIntegrationTest extends AbstractPostgresIntegra
             .isEqualTo(PayrollTaxTreatment.REGULAR_REPROJECT);
     }
 
-    /**
-     * Regression guard for the SSO-inclusion read path, which still uses {@code
-     * Collectors.groupingBy -> toMap} — the collector that threw NPE on a null VALUE in the
-     * tax-treatment map. This is safe today only because {@code is_included} is {@code BOOLEAN NOT
-     * NULL DEFAULT TRUE}; this test pins that dependency so a future migration relaxing the column
-     * to nullable fails here rather than in production. It also confirms that a partially-ticked
-     * employee (rows for some components, none for others) round-trips with the untouched
-     * components genuinely ABSENT rather than defaulted to any value on read.
-     */
+    /** Regression guard for the SSO-inclusion read path, which still uses Collectors.groupingBy -> toMap — the
+     * collector that threw NPE on a null VALUE in the tax-treatment map. */
     @Test
     void ssoInclusionReadPathSurvivesPartialRowsAndNeverSynthesizesADefault() {
         long employee = seedEmployee("EMP-REV-003", "สมปอง", "รีวิว");
@@ -163,12 +127,9 @@ class PayrollClassificationReviewIntegrationTest extends AbstractPostgresIntegra
         assertThat(inclusion).doesNotContainKey(PayrollComponent.DIRECTOR_REMUNERATION);
     }
 
-    /**
-     * Every {@link PayrollComponent} must exist as a row in {@code hr.payroll_pay_component},
-     * because the two matrices carry a foreign key to it. A value added to the Java enum without
-     * an appended INSERT in a migration would fail only at write time, per component, in
-     * production. Guards the append-only contract in both directions.
-     */
+    /** Every PayrollComponent must exist as a row in hr.payroll_pay_component, because the two matrices carry a
+     * foreign key to it. A value added to the Java enum without an appended INSERT in a migration would fail only
+     * at write time, per component, in production. */
     @Test
     void everyJavaComponentIsStorableAndTheLookupTableHasNoExtraValues() {
         long employee = seedEmployee("EMP-REV-004", "สมศรี", "รีวิว");
@@ -190,22 +151,9 @@ class PayrollClassificationReviewIntegrationTest extends AbstractPostgresIntegra
                 java.util.Arrays.stream(PayrollComponent.values()).map(Enum::name).toList());
     }
 
-    /**
-     * Defect fix (Opus review, 2026-07-29) -- the January cliff, corrected: {@link
-     * PayrollRepository#findComponentTaxTreatmentsByEmployee} and {@link PayrollRepository
-     * #findComponentSsoInclusionByEmployee} used to resolve one effective tax year for the WHOLE
-     * table ({@code SELECT MAX(tax_year) ... WHERE tax_year <= :taxYear}, no employee scoping). The
-     * first employee hired in January of a new tax year (seeded at their hire year by {@code
-     * EmployeeService#create}) flips that single table-wide MAX forward for EVERY employee, so on
-     * the very next payroll run every pre-existing employee's classification map reads back
-     * completely empty: any employee with a non-zero non-salary component gets the run rejected, and
-     * salary-only employees (which pass the classification gate because SALARY is always auto-
-     * REGULAR_REPROJECT) silently get an SSO wage base of zero.
-     *
-     * <p>Reproduces that exact shape: employee A gets a 2027 row (the new hire), employee B has only
-     * a 2026 row (the pre-existing employee) and no 2027 row at all. Reading at {@code taxYear=2027}
-     * must resolve A to 2027 and B to 2026 INDEPENDENTLY -- not collapse to one shared year for both.
-     */
+    /** Defect fix (Opus review, 2026-07-29) -- the January cliff, corrected:
+     * PayrollRepository#findComponentTaxTreatmentsByEmployee and PayrollRepository #findComponentSsoInclusionByEmployee
+     * used to resolve one effective tax year for the WHOLE table (SELECT MAX(tax_year) ... */
     @Test
     void resolvesTheEffectiveTaxYearPerEmployeeNotForTheWholeTable() {
         long employeeA = seedEmployee("EMP-REV-005", "เอ", "รีวิว");
@@ -249,16 +197,8 @@ class PayrollClassificationReviewIntegrationTest extends AbstractPostgresIntegra
         assertThat(ssoInclusionAtRequestedYear2027.get(employeeB).get(PayrollComponent.SALARY)).isTrue();
     }
 
-    /**
-     * D2 (fourth reachability audit, 2026-07-30): a partial save into a new tax year must not strand
-     * an employee's OTHER, already-resolved components. Reproduces exactly the shape {@code
-     * TaxTreatmentMatrixSection.save()} (`PayrollPage.jsx`) produces: it saves only the edited cell
-     * ({@code changes}, the diff), never the full resolved matrix. Before the fix, the single 2027
-     * row this test writes for {@code SPECIAL_PAY_1} flipped {@code findComponentTaxTreatmentsByEmployee
-     * }'s per-EMPLOYEE roll-forward to 2027 for the whole employee, and the JOIN then excluded
-     * {@code SPECIAL_PAY_2}/{@code BONUS_PAY}'s still-valid 2026 rows entirely -- they read back as
-     * "not yet classified" in the very API response the edit's own save renders.
-     */
+    /** D2 (fourth reachability audit, 2026-07-30): a partial save into a new tax year must not strand an employee's
+     * OTHER, already-resolved components. */
     @Test
     void aPartialSaveIntoANewTaxYearDoesNotStrandOtherComponentsAlreadyRolledForward() {
         long employee = seedEmployee("EMP-REV-007", "ดี", "รีวิว");
@@ -273,8 +213,8 @@ class PayrollClassificationReviewIntegrationTest extends AbstractPostgresIntegra
             new ComponentSsoInclusionUpsertRequest(employee, PayrollComponent.SALARY, true)
         ), employee);
 
-        // 2027: HR opens the matrix (which resolves the rolled-forward 2026 values), edits ONE
-        // dropdown, and the frontend's save() sends only that one changed cell.
+        // 2027: HR opens the matrix (which resolves the rolled-forward 2026 values), edits ONE dropdown, and the
+        // frontend's save() sends only that one changed cell.
         repository.upsertComponentTaxTreatment(2027, List.of(
             new ComponentTaxTreatmentUpsertRequest(employee, PayrollComponent.SPECIAL_PAY_1, PayrollTaxTreatment.EXTRA_KNOWN_FREQUENCY)
         ), employee);
@@ -294,13 +234,9 @@ class PayrollClassificationReviewIntegrationTest extends AbstractPostgresIntegra
             .isEqualTo(PayrollTaxTreatment.EXTRA_KNOWN_FREQUENCY);
     }
 
-    /**
-     * D2, end-to-end through the real service: the stranded component from the test above is not
-     * just a map-reading nuisance -- it is exactly what {@link PayrollCalculator#calculateClassified}
-     * 409s a whole payroll run over the moment it carries a non-zero amount. Proves the fix all the
-     * way up: a partial matrix save into a new tax year must not 409 the next run for the untouched
-     * components.
-     */
+    /** D2, end-to-end through the real service: the stranded component from the test above is not just a
+     * map-reading nuisance -- it is exactly what PayrollCalculator#calculateClassified 409s a whole payroll run
+     * over the moment it carries a non-zero amount. */
     @Test
     void payrollRunsForTheFollowingTaxYearAfterOnlyOneComponentWasSavedIntoIt() {
         long employee = seedEmployee("EMP-REV-008", "อี", "รีวิว");
@@ -327,25 +263,15 @@ class PayrollClassificationReviewIntegrationTest extends AbstractPostgresIntegra
             .doesNotThrowAnyException();
     }
 
-    /**
-     * F1 fix (fifth Opus review, 2026-07-30): companion coverage for {@code
-     * PayrollPartialClassificationCliffReviewTest}. That test proves an ABSENT component still gets
-     * a synthesized default after the "partial classification cliff" fix. It never exercises the
-     * other half of the same fix's contract: a component PRESENT in the stored map with a {@code
-     * null} treatment -- HR deliberately choosing "ยังไม่จัดประเภท" through the matrix screen -- must
-     * still 409, not be silently defaulted by {@code PayrollService#mergeWithDefaults}. The whole
-     * point of resolving via {@code containsKey} rather than {@code getOrDefault} is that a present
-     * key always wins over a default, in EITHER direction; this pins the blocking direction so the
-     * merge fix cannot be over-corrected into re-opening the "no silent default" gate it must not
-     * weaken.
-     */
+    /** companion coverage for PayrollPartialClassificationCliffReviewTest. That test proves an ABSENT component
+     * still gets a synthesized default after the "partial classification cliff" fix. */
     @Test
     void aComponentExplicitlyLeftUnclassifiedStillBlocksAfterTheOtherComponentsGetSynthesizedDefaults() {
         long employee = seedEmployee("EMP-REV-010", "จี", "รีวิว");
 
-        // HR opens the matrix, looks at SPECIAL_PAY_1, and explicitly leaves it "ยังไม่จัดประเภท" --
-        // the frontend submits this as taxTreatment: null, which the repository stores as a present
-        // row with a NULL value (see ComponentTaxTreatmentUpsertRequest's own javadoc).
+        // HR opens the matrix, looks at SPECIAL_PAY_1, and explicitly leaves it "ยังไม่จัดประเภท" -- the frontend
+        // submits this as taxTreatment: null, which the repository stores as a present row with a NULL value (see
+        // ComponentTaxTreatmentUpsertRequest's own javadoc).
         repository.upsertComponentTaxTreatment(2026, List.of(
             new ComponentTaxTreatmentUpsertRequest(employee, PayrollComponent.SPECIAL_PAY_1, null)
         ), employee);
@@ -430,12 +356,9 @@ class PayrollClassificationReviewIntegrationTest extends AbstractPostgresIntegra
         return new UserPrincipal(1L, "hr@glr.co.th", "HR", "hr", 1L, true, LocalDate.now(), false, null, false);
     }
 
-    /**
-     * Minor fix (fourth reachability audit, 2026-07-30): {@code @Valid} on the controller's
-     * {@code List<ComponentTaxTreatmentUpsertRequest>} body does not cascade, so {@code @NotNull
-     * employeeId}/{@code component} never fired. Now validated explicitly in {@link
-     * PayrollService#upsertComponentTaxTreatments}, before the repository is ever reached.
-     */
+    /** @Valid on the controller's List<ComponentTaxTreatmentUpsertRequest> body does not cascade, so @NotNull
+     * employeeId/component never fired. Now validated explicitly in PayrollService#upsertComponentTaxTreatments,
+     * before the repository is ever reached. */
     @Test
     void upsertRejectsAMalformedItemWithANullEmployeeIdBeforeWritingAnything() {
         long employee = seedEmployee("EMP-REV-009", "เอฟ", "รีวิว");
@@ -454,8 +377,8 @@ class PayrollClassificationReviewIntegrationTest extends AbstractPostgresIntegra
             .isInstanceOf(ApiException.class)
             .satisfies(ex -> assertThat(((ApiException) ex).getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
 
-        // Wrong-way-round: a batch with ONE malformed item must write NOTHING, not silently apply
-        // the valid items and skip the bad one.
+        // Wrong-way-round: a batch with ONE malformed item must write NOTHING, not silently apply the valid items and
+        // skip the bad one.
         assertThatThrownBy(() -> payrollService.upsertComponentTaxTreatments(2026, List.of(
                 new ComponentTaxTreatmentUpsertRequest(employee, PayrollComponent.SPECIAL_PAY_1, PayrollTaxTreatment.REGULAR_REPROJECT),
                 new ComponentTaxTreatmentUpsertRequest(null, PayrollComponent.SPECIAL_PAY_2, PayrollTaxTreatment.REGULAR_REPROJECT)

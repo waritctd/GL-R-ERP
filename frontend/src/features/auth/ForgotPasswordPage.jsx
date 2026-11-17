@@ -7,17 +7,8 @@ import { SafeForm } from '../../components/common/SafeForm.jsx';
 
 const GENERIC_RETRY_MESSAGE = 'ส่งคำขอไม่สำเร็จ กรุณาลองใหม่อีกครั้ง';
 
-/**
- * Self-service "forgot password" entry (ลืมรหัสผ่าน?) — step 1 of the flow. Reached from
- * {@link LoginPage}'s muted link, rendered by {@code App.jsx}'s logged-out branch alongside
- * {@link LoginPage} and {@link ResetPasswordPage} (see that file: none of these three are wired
- * through {@code <Routes>} — App.jsx switches on `location.pathname` while `user` is falsy).
- *
- * <p>There is deliberately no "email not found" branch: {@code api.auth.forgotPassword} always
- * resolves with the same generic confirmation, whether or not the address matched an employee
- * (AuthController#forgotPassword / PasswordResetService — never reveal account existence). Only a
- * genuine network/unexpected failure (a REJECTED promise) gets a different, retry-shaped message.
- */
+/** Self-service "forgot password" entry (ลืมรหัสผ่าน?) — step 1 of the flow. Only a genuine network/unexpected
+ * failure (a REJECTED promise) gets a different, retry-shaped message. */
 export function ForgotPasswordPage({ onNavigateToLogin }) {
   const [email, setEmail] = useState('');
   const [loading, setLoading] = useState(false);
@@ -30,14 +21,13 @@ export function ForgotPasswordPage({ onNavigateToLogin }) {
     setLoading(true);
     try {
       const response = await api.auth.forgotPassword({ email: email.trim() });
-      // The only shape on success is the generic confirmation - there is no "not found" branch
-      // to handle (see class doc above). Fall back to a sensible default if the shape ever
-      // changes server-side rather than rendering a blank confirmation.
+      // The only shape on success is the generic confirmation - there is no "not found" branch to handle (see class
+      // doc above). Fall back to a sensible default if the shape ever changes server-side rather than rendering a
+      // blank confirmation.
       setSentMessage(response?.message || 'หากอีเมลนี้มีอยู่ในระบบ เราได้ส่งลิงก์สำหรับตั้งรหัสผ่านใหม่ไปให้แล้ว กรุณาตรวจสอบกล่องอีเมลของคุณ');
     } catch {
-      // Deliberately generic and distinct from sentMessage: a thrown error here means the
-      // request itself failed (network, 5xx, validation) - not that the address was unknown,
-      // which never throws.
+      // Deliberately generic and distinct from sentMessage: a thrown error here means the request itself failed
+      // (network, 5xx, validation) - not that the address was unknown, which never throws.
       setError(GENERIC_RETRY_MESSAGE);
     } finally {
       setLoading(false);

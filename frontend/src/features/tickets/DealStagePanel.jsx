@@ -4,16 +4,17 @@ import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { Button } from '../../components/common/Button.jsx';
 import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
-import { Panel } from '../../components/common/Layout.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import {
-  bangkokTodayIso, dealLifecycleLabel, dealLostReasonLabel, dealStageLabel, formatThaiDate, tenderRequirementLabel,
+  bangkokTodayIso, dealStageLabel, tenderRequirementLabel,
 } from '../../utils/format.js';
 import { depositBypassed } from './dealMoneyStatus.js';
 import { ACTIVITY_KINDS, STAGE_ADVANCE_GATE_MESSAGE } from './dealTrackingMeta.js';
 import { goodsArrived, goodsNotArrivedWarning } from '../importProgress/importSteps.js';
 import { DealStageStepper, PhaseSummary, PhaseTracker, skippedStageCodes } from './DealStageStepper.jsx';
 import { MarkLostModal } from './MarkLostModal.jsx';
+import { MoveToS2Modal } from './MoveToS2Modal.jsx';
+import { PauseDealModal } from './PauseDealModal.jsx';
 import {
   EMPTY_STAGE_CATALOG, findStage, nextOnRoute, routePath, stageIndexIn,
 } from './stageCatalog.js';
@@ -23,6 +24,90 @@ import {
 import { UpdateStageModal } from './UpdateStageModal.jsx';
 import { stageForQuotationRecipient } from '../quotations/quotationMeta.js';
 import { ThaiDateInput } from '../../components/common/ThaiDateInput.jsx';
+
+/**
+ * The next stage this deal moves to and the "ถัดไป: …" line that names it (route-aware, deposit-bypass-aware, and
+ * naming the parties' own quote stages while the route choice is the main button). Pure: every gate is read off the
+ * server's own payload (`availableActions`, `stageDecisions`), never re-derived. Shared by DealStagePanel (its gates)
+ * and the deal page (the line, shown in the ขั้นต่อไป card).
+ */
+export function nextStageLine({
+  summary, availableActions = [], stageDecisions = [], catalog = EMPTY_STAGE_CATALOG, quoteParties = null, ctaStage = null,
+}) {
+  const hasAction = (action, targetStage = null) => availableActions.some((item) =>
+    item.action === action && (targetStage == null || item.targetStage === targetStage));
+  // lifecycle, not lostReason — the reason persists after a reopen (V57).
+  const lost = summary.lifecycle === 'CLOSED_LOST';
+  const nextStage = lost ? null : nextOnRoute(catalog, summary.salesStage, stageDecisions);
+  // A no-deposit deal never passes ขั้น 11 (nothing for the account team to confirm): step over it.
+  const next = nextStage?.code === 'DEPOSIT_RECEIVED' && depositBypassed(summary.depositPolicy)
+    ? nextOnRoute(catalog, nextStage.code, stageDecisions)
+    : nextStage;
+  // `next` is on-route by construction; the explicit onRoute check is the belt to that braces — an off-route
+  // stage must never be one click away, whatever else the server listed.
+  const nextDecision = next ? stageDecisions.find((decision) => decision.stage === next.code) : null;
+  const canAdvance = Boolean(next) && !next.auto && nextDecision?.onRoute !== false
+    && hasAction('ADVANCE_STAGE', next.code);
+  // The next stage is reachable EXCEPT the readiness gate (a follow-up date + a logged activity since the last
+  // stage change) is unmet — the ONE block the acting sales rep clears themselves. When true, the guided-advance
+  // flow replaces the dead "อัปเดตโดย…" hint.
+  const readinessBlocked = Boolean(next) && !next.auto && !canAdvance
+    && Boolean(nextDecision) && !nextDecision.allowed
+    && nextDecision.blockedReason === STAGE_ADVANCE_GATE_MESSAGE;
+  // When the next stage isn't one this user can one-click into, explain who or what advances it instead of
+  // showing a dead end. Suppressed while the guided-advance button stands in for it.
+  const nextHint = next && !canAdvance && !readinessBlocked
+    ? (next.auto ? AUTO_STAGE_HINT[next.code] : `ขั้นถัดไปอัปเดตโดย${GATE_LABEL[next.gate]}`)
+    : null;
+  // With the route choice as the main button, ถัดไป names the parties' own quote stages (the first, then "หรือข้ามไป"
+  // the rest) with the first one's auto hint — not the stage after the current one. The first party's stage missing
+  // from the catalog: the plain next-stage line.
+  const [choiceStage, ...skipStages] = (quoteParties ?? []).map((party) => findStage(catalog, stageForQuotationRecipient(party)));
+  const ctaRow = ctaStage ? findStage(catalog, ctaStage) : null;
+  return {
+    next,
+    nextDecision,
+    canAdvance,
+    readinessBlocked,
+    lineStage: choiceStage ?? ctaRow ?? next,
+    lineHint: choiceStage ? AUTO_STAGE_HINT[choiceStage.code] : ctaRow ? AUTO_STAGE_HINT[ctaRow.code] : nextHint,
+    lineSkips: choiceStage ? skipStages.filter(Boolean) : [],
+  };
+}
+
+/** ONE "what happens next, and who moves it" line, from nextStageLine(); nothing when there is no next stage. */
+export function NextStageLine({ line, entryChannel }) {
+  if (!line?.lineStage) return null;
+  return (
+    <div data-testid="deal-stage-next" className="text-sm leading-snug text-text">
+      <span className="font-bold text-text-muted">ถัดไป: </span>
+      <span className="font-extrabold">{line.lineStage.no}. {dealStageLabel(line.lineStage.code, entryChannel).label}</span>
+      {line.lineSkips.map((stage) => (
+        <span key={stage.code}> หรือข้ามไป <span className="font-extrabold">{stage.no}. {dealStageLabel(stage.code, entryChannel).label}</span></span>
+      ))}
+      {line.lineHint ? <span className="text-text-secondary"> — {line.lineHint}</span> : null}
+    </div>
+  );
+}
+
+/** The S1 stages: a rep moves a deal on from here to S2 by hand (spec 2026-11-15 §7.1). */
+export const S1_STAGES = ['LEAD_APPROACH', 'PRESENTATION'];
+
+/**
+ * May this viewer move the deal from S1 to S2 through the ย้ายไป S2 dialog (drawing m-stage)? Read entirely off the
+ * server's per-viewer answer, like every other gate here: the deal is ACTIVE at an S1 stage and its SPEC_APPROVED
+ * decision is on-route and either allowed or blocked ONLY by the readiness gate — the one block the dialog itself
+ * clears. TicketService.stageDecisions runs the stage WRITE gate before the readiness gate, so a readiness-only
+ * block already means "this viewer may write S2": exactly the reach the old เลื่อนไป / guided-advance button had
+ * (`advanceAwaitsReadiness`). The server re-checks on the move. (An allowed decision is itself what makes the server
+ * list ADVANCE_STAGE / UPDATE_STAGE, so no action needs checking on top.)
+ */
+export function canMoveDealToS2({ summary, stageDecisions = [] }) {
+  if ((summary?.lifecycle ?? 'ACTIVE') !== 'ACTIVE' || !S1_STAGES.includes(summary?.salesStage)) return false;
+  const decision = stageDecisions.find((d) => d.stage === 'SPEC_APPROVED');
+  if (!decision || decision.onRoute === false) return false;
+  return decision.allowed || decision.blockedReason === STAGE_ADVANCE_GATE_MESSAGE;
+}
 
 function daysSince(iso) {
   if (!iso) return null;
@@ -35,11 +120,10 @@ function daysSince(iso) {
  * panel is HOW some stages get done, and doc generation surfaces here on exactly the stage it
  * belongs to (docActions is rendered by the parent from its real `can` permission flags).
  *
- * แก้ไขสถานะ… / พักดีลไว้ / พัก dormant / เสียงาน and "เลื่อนไป: <next stage>" live in
- * TicketDetailPage's single header overflow menu and bottom danger zone (see
- * docs/ui-repair/02-information-architecture/TICKET_INFORMATION_ARCHITECTURE.md "Overflow menu ⋯" /
- * "จัดการดีล danger section"), not inline here: the resolver-derived sticky action owns the "one
- * thing to click" slot. The decision of whether each is AVAILABLE stays entirely in this component
+ * แก้ไขสถานะ… / พัก dormant / "เลื่อนไป: <next stage>" live in TicketDetailPage's header ⋯ menu,
+ * พักงาน / ปิดงาน (เสียงาน) in the quiet links at the foot of ภาพรวม, and ดำเนินการต่อ / เปิดงานอีกครั้ง
+ * in the ขั้นต่อไป card (deal page redesign, 2026-11-16) — not inline here: the resolver-derived
+ * action owns the "one thing to click" slot. The decision of whether each is AVAILABLE stays entirely in this component
  * (`canEditStage`/`canLost`/`canHold`/`canDormant`/`canAdvance` below, backed ENTIRELY by the
  * server's own answer: `availableActions` and the per-stage `stageDecisions` payload, with no local
  * re-derivation of who may do what). This forwardRef only exposes WHEN each one is available (so
@@ -51,10 +135,11 @@ function daysSince(iso) {
  * calling `onUpdateStage`). `nextHint`/the "ถัดไป:" line stay in this panel: they are
  * informational, not a second copy of the action.
  *
- * This panel keeps only the stage number/label/phase/gate/days-in-stage, the "ถัดไป:" line, the
- * tender `<select>`, the done banner, and docActions/primaryAction: the pipeline's OWN state, not
- * a rollup of the pricing/payment/import/deal-value statuses the header (DealStateHeader) and the
- * money/pricing/fulfilment tabs already name.
+ * Since the redesign it renders as a slim strip under the header: the "ถัดไป:" line, the guided
+ * advance, the tender `<select>`, docActions, and the route line + "ดูขั้นตอนทั้งหมด" disclosure
+ * (stage owner, phases, the full stepper with its แก้ช่องทาง remedy). The S stepper and the
+ * ขั้นต่อไป card in DealHeader replaced its "สถานะดีล (Pipeline)" title, numbered pip and the
+ * paused / lost banners.
  */
 export const DealStagePanel = forwardRef(function DealStagePanel({
   summary, availableActions = [], stageDecisions = [], catalog = EMPTY_STAGE_CATALOG,
@@ -68,10 +153,21 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
   events = [],
   onUpdateStage, onMarkLost, onReopen, onHold, onDormant, onResume, onSetTenderRequirement,
   onSetEntryChannel,
+  // The deal page shows the "ถัดไป" line in its ขั้นต่อไป card instead (one "what's next" statement); a standalone
+  // panel keeps its own.
+  showNextLine = true,
+  // Whether a deal_activity exists since the last stage change (the page computes it from activities + events); the
+  // ย้ายไป S2 dialog asks for the note as that activity only when this is false. null = not known.
+  hasRecentActivity = null,
 }, ref) {
   const [editOpen, setEditOpen] = useState(false);
   const [lostOpen, setLostOpen] = useState(false);
+  // 'resume' only now: hold / dormant open the one พักงาน dialog (pauseKind) since the m-hold drawing.
   const [noteAction, setNoteAction] = useState(null);
+  const [pauseKind, setPauseKind] = useState(null); // null | 'ON_HOLD' | 'DORMANT' — which choice พักงาน opens on
+  // Fix round 1, ruling 5: true when พักงาน is opened on an already-paused deal to change its return date in place.
+  const [pauseChanging, setPauseChanging] = useState(false);
+  const [moveS2Open, setMoveS2Open] = useState(false);
   const [note, setNote] = useState('');
   const [showSteps, setShowSteps] = useState(false);
   // Guided advance: the readiness gate stays, but instead of a dead hint the
@@ -94,11 +190,13 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
   // this deal's route does not visit. Both are read off the server's answer — `entryChannel` on the
   // summary, `onRoute` on each stage decision — never derived here. Absent => today's behaviour.
   const label = dealStageLabel(summary.salesStage, summary.entryChannel);
-  const nextStage = lost ? null : nextOnRoute(catalog, summary.salesStage, stageDecisions);
-  // A no-deposit deal never passes ขั้น 11 (nothing for the account team to confirm): step over it.
-  const next = nextStage?.code === 'DEPOSIT_RECEIVED' && depositBypassed(summary.depositPolicy)
-    ? nextOnRoute(catalog, nextStage.code, stageDecisions)
-    : nextStage;
+  // The next stage, whether this viewer can one-click into it, and the "ถัดไป" line — one pure computation shared with
+  // the page, which shows the line in the ขั้นต่อไป card (fix round 1, L3: one "what's next" statement on the page).
+  const {
+    next, canAdvance, readinessBlocked, lineStage, lineSkips, lineHint,
+  } = nextStageLine({
+    summary, availableActions, stageDecisions, catalog, quoteParties, ctaStage,
+  });
   const route = routeName(summary.entryChannel);
   const routeStageCount = routePath(catalog, stageDecisions).length;
   const days = daysSince(summary.stageUpdatedAt);
@@ -109,30 +207,25 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
   const canEditStage = hasAction('UPDATE_STAGE')
     && stageDecisions.some((decision) => decision.allowed) && !lost;
   const canLost = hasAction('MARK_LOST') && !lost && summary.salesStage !== 'CLOSED_PAID';
-  // `next` is on-route by construction; the explicit onRoute check is the belt to that braces — an
-  // off-route stage must never be one click away, whatever else the server listed.
-  const nextDecision = next ? stageDecisions.find((decision) => decision.stage === next.code) : null;
-  const canAdvance = Boolean(next) && !next.auto && nextDecision?.onRoute !== false
-    && hasAction('ADVANCE_STAGE', next.code);
-  // The next stage is reachable EXCEPT the readiness gate (a follow-up date + a logged activity
-  // since the last stage change) is unmet — the ONE block the acting sales rep clears themselves.
-  // Detected off the server's own reason (STAGE_ADVANCE_GATE_MESSAGE verbatim) so it can never
-  // disagree with the backend; distinct from an auto stage or a block owned by another role, which
-  // the rep cannot act on. When true, the guided-advance flow replaces the dead "อัปเดตโดย…" hint.
-  const readinessBlocked = Boolean(next) && !next.auto && !canAdvance
-    && Boolean(nextDecision) && !nextDecision.allowed
-    && nextDecision.blockedReason === STAGE_ADVANCE_GATE_MESSAGE;
   // The page's main button carries เลื่อนไป on ขั้น 1–2; one copy on the page.
   // No เลื่อนไป beside a main button that leads elsewhere (ยืนยันคำสั่งซื้อ → 10).
   const showGuidedOpener = readinessBlocked && !advanceInHeader && !(ctaStage === 'ORDER_RECEIVED' && ctaStage !== next?.code);
-  // One click, three writes IN ORDER: set the follow-up date (+ optional win%), log the activity,
-  // then advance through the PARENT's own onUpdateStage so its invalidation + toast still run. The
-  // gate itself is unchanged — this just satisfies it in one place instead of two scattered panels.
+  // One click, three writes IN ORDER: set the follow-up date (+ optional win%), log the activity, then advance
+  // through the PARENT's own onUpdateStage so its invalidation + toast still run. The gate itself is unchanged —
+  // this just satisfies it in one place instead of two scattered panels.
   const guidedAdvance = useMutation({
     mutationFn: async () => {
+      // PUT /tracking REPLACES every column it does not keep (TicketRepository.updateTracking): the fields this form
+      // does not edit — the three party names, and the rep's win% when left blank here — go back as the deal holds
+      // them (fix round 1, ruling 6; this used to erase designer/owner/buyer).
       await api.tickets.updateTracking(summary.id, {
         nextFollowUpAt: guidedDraft.nextFollowUpAt || null,
-        winProbability: guidedDraft.winProbability === '' ? null : Number(guidedDraft.winProbability),
+        winProbability: guidedDraft.winProbability === ''
+          ? (summary.winProbabilityOverride ?? null) : Number(guidedDraft.winProbability),
+        designerName: summary.designerName ?? null,
+        ownerName: summary.ownerName ?? null,
+        buyerName: summary.buyerName ?? null,
+        estimatedValue: summary.estimatedValue ?? null, // V220: absent/null KEEPS it server-side; sent as held anyway
       });
       await api.tickets.addActivity(summary.id, {
         activityDate: bangkokTodayIso(),
@@ -151,9 +244,45 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
   });
   const canHold = hasAction('PLACE_ON_HOLD');
   const canDormant = hasAction('MARK_DORMANT');
+  const canMoveToS2 = canMoveDealToS2({ summary, stageDecisions });
+  // Which half of the readiness gate is missing, when it is the gate that blocks S2.
+  const s2Decision = stageDecisions.find((decision) => decision.stage === 'SPEC_APPROVED');
+  const s2ReadinessBlocked = Boolean(s2Decision) && !s2Decision.allowed
+    && s2Decision.blockedReason === STAGE_ADVANCE_GATE_MESSAGE;
+  const s2NeedsFollowUp = s2ReadinessBlocked && !summary.nextFollowUpAt;
+  const s2NeedsActivity = s2ReadinessBlocked
+    && (hasRecentActivity === false || (hasRecentActivity == null && Boolean(summary.nextFollowUpAt)));
+  // ย้ายไป S2: clear whatever half of the gate is missing, then move through the PARENT's onUpdateStage (its
+  // invalidation and toast still run). The gate itself is unchanged.
+  const moveToS2 = useMutation({
+    mutationFn: async ({ note, nextFollowUpAt }) => {
+      if (s2NeedsFollowUp && nextFollowUpAt) {
+        // PUT /tickets/{id}/tracking REPLACES every tracking column (TicketRepository.updateTracking), so the fields
+        // this dialog does not edit are sent back exactly as the deal holds them.
+        await api.tickets.updateTracking(summary.id, {
+          nextFollowUpAt,
+          designerName: summary.designerName ?? null,
+          ownerName: summary.ownerName ?? null,
+          buyerName: summary.buyerName ?? null,
+          winProbability: summary.winProbabilityOverride ?? null,
+          estimatedValue: summary.estimatedValue ?? null, // V220: absent/null KEEPS it server-side; sent as held anyway
+        });
+      }
+      if (s2NeedsActivity && note) {
+        await api.tickets.addActivity(summary.id, { activityDate: bangkokTodayIso(), kind: 'OTHER', note });
+      }
+      await onUpdateStage({ stage: 'SPEC_APPROVED', note: note || undefined });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.ticketDetail(summary.id) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.ticketActivities(summary.id) });
+      setMoveS2Open(false);
+    },
+  });
   const canResume = hasAction('RESUME');
+  const paused = lifecycle === 'ON_HOLD' || lifecycle === 'DORMANT';
   const canTender = hasAction('SET_TENDER_REQUIREMENT') && summary.salesStage === 'AWAITING_BUYER';
-  // "แก้ช่องทางดีล" is the remedy for a route refusal, not standing chrome (the ช่องทางรับงาน row is
+  // "แก้ช่องทางรับงาน" is the remedy for a route refusal, not standing chrome (the ช่องทางรับงาน row is
   // not on this panel). The server's own advertisement is handed down to the two places a refusal
   // is READ (the stepper's off-route rows, UpdateStageModal's blocked list), which render nothing
   // without it. Its `requiredFields` decides the reason field.
@@ -161,7 +290,7 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
   const isDone = !lost && summary.salesStage === 'CLOSED_PAID';
 
   useImperativeHandle(ref, () => ({
-    canEditStage, canLost, canHold, canDormant,
+    canEditStage, canLost, canHold, canDormant, canMoveToS2,
     // An in-flight mutation must block a second click: the overflow menu item only disables its
     // own click on its OWN precondition (e.g. `!readyToAdvance`) and never re-derives
     // actionLoading, so a stale double-click (⋯ → click, reopen ⋯ while the first mutation is
@@ -171,8 +300,24 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
     // is falsy.
     openEditStage: () => { if (canEditStage && !actionLoading) setEditOpen(true); },
     openMarkLost: () => { if (canLost) setLostOpen(true); },
-    openHold: () => { if (canHold && !actionLoading) setNoteAction('hold'); },
-    openDormant: () => { if (canDormant && !actionLoading) setNoteAction('dormant'); },
+    // The one พักงาน dialog (m-hold): พักชั่วคราว from the quiet link, ไม่เคลื่อนไหว from ⋯ พัก dormant. Same gates.
+    openHold: () => { if (canHold && !actionLoading) { setPauseChanging(false); setPauseKind('ON_HOLD'); } },
+    openDormant: () => { if (canDormant && !actionLoading) { setPauseChanging(false); setPauseKind('DORMANT'); } },
+    // เปลี่ยนวันที่จะกลับมาดู on a paused deal: the same hold / dormant request in the SAME state, which the server
+    // treats as a date-only change. RESUME is listed exactly when the caller may hold / dormant it (canDealOwnership).
+    canChangeReturnDate: paused && canResume,
+    openChangeReturnDate: () => {
+      if (paused && canResume && !actionLoading) { setPauseChanging(true); setPauseKind(lifecycle); }
+    },
+    // ย้ายไป S2 · สเปคผ่าน (m-stage), the ขั้นต่อไป card's button on an S1 deal. Re-checks canMoveDealToS2.
+    openMoveToS2: () => { if (canMoveToS2 && !actionLoading) { moveToS2.reset(); setMoveS2Open(true); } },
+    // The old paused / lost banners' buttons, now in the ขั้นต่อไป card. Same gates as those banners had:
+    // ดำเนินการต่อ on a paused deal with RESUME, เปิดงานอีกครั้ง on a lost deal with REOPEN. The page mirrors
+    // these gates to decide whether to show the button; the re-check here is the guard.
+    openResume: () => {
+      if ((lifecycle === 'ON_HOLD' || lifecycle === 'DORMANT') && canResume && !actionLoading) setNoteAction('resume');
+    },
+    reopen: () => { if (lost && hasAction('REOPEN') && !actionLoading) onReopen(); },
     // Re-checks the real gate (canAdvance), the readiness precondition (advanceReady), AND
     // actionLoading (see the note above).
     openAdvance: () => {
@@ -188,17 +333,6 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
     },
   }));
 
-  // When the next stage isn't one this user can one-click into, explain who or
-  // what advances it instead of showing a dead end.
-  // Suppressed while the guided-advance button stands in for it: that button IS the way forward, so
-  // "อัปเดตโดย<ฝ่าย>" would be a misleading dead end next to it.
-  const nextHint = next && !canAdvance && !readinessBlocked
-    ? (next.auto ? AUTO_STAGE_HINT[next.code] : `ขั้นถัดไปอัปเดตโดย${GATE_LABEL[next.gate]}`)
-    : null;
-  // With the route choice on the sticky bar, ถัดไป names the parties' own quote stages (the first,
-  // then "หรือข้ามไป" the rest) with the first one's auto hint — not the stage after the current one.
-  // The first party's stage missing from the catalog: the plain next-stage line.
-  const [choiceStage, ...skipStages] = (quoteParties ?? []).map((party) => findStage(catalog, stageForQuotationRecipient(party)));
   // A skipped stage is final: แก้ไขสถานะ never offers what the track marks ข้าม.
   // Only a skipped OWNER stage is final; any other never-visited stage (e.g. the routine 4 -> 3) stays offered.
   const skippedAll = skippedStageCodes(catalog, stageIndexIn(catalog, summary.salesStage), events);
@@ -206,10 +340,6 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
     ? new Set(['QUOTE_OWNER', 'OWNER_SIGNOFF', 'AWAITING_BUYER'].filter((code) => skippedAll.has(code)))
     : new Set();
   const showGoodsWarning = summary.salesStage === 'PROCUREMENT' && !goodsArrived(summary.fulfillmentStatus);
-  const ctaRow = ctaStage ? findStage(catalog, ctaStage) : null;
-  const lineStage = choiceStage ?? ctaRow ?? next;
-  const lineHint = choiceStage ? AUTO_STAGE_HINT[choiceStage.code] : ctaRow ? AUTO_STAGE_HINT[ctaRow.code] : nextHint;
-  const lineSkips = choiceStage ? skipStages.filter(Boolean) : [];
 
   async function submitStage(payload) {
     await onUpdateStage(payload);
@@ -223,147 +353,60 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
 
   async function submitNoteAction() {
     const payload = { note: note.trim() || undefined };
-    if (noteAction === 'hold') await onHold(payload);
-    if (noteAction === 'dormant') await onDormant(payload);
     if (noteAction === 'resume') await onResume(payload);
     setNoteAction(null);
     setNote('');
   }
 
+  // พักงาน → the SAME two handlers (and so the same two endpoints) as before, now carrying pauseReturnOn.
+  async function submitPause({ kind, pauseReturnOn, note: pauseNote }) {
+    const payload = { note: pauseNote, pauseReturnOn };
+    if (kind === 'ON_HOLD') await onHold(payload);
+    else await onDormant(payload);
+    setPauseKind(null);
+  }
+
+  // The deal page's S stepper and ขั้นต่อไป card (DealHeader) replaced this panel's "สถานะดีล (Pipeline)" shell, its
+  // numbered pip and its paused / lost banners (their ดำเนินการต่อ / เปิดงานอีกครั้ง now sit in the card, through the
+  // ref above). What stays here is what the card does not say: the exact next stage and who moves it, the guided
+  // advance, the tender select, this stage's documents, and the full 15-stage route behind ดูขั้นตอนทั้งหมด.
   return (
-    <Panel
-      title="สถานะดีล (Pipeline)"
-      data-testid="deal-stage-panel"
-      actions={(
-        <Button
-          type="button"
-          variant="text"
-          className="mobile:min-h-[44px]"
-          style={{ fontSize: 12 }}
-          onClick={() => setShowSteps((v) => !v)}
-        >
-          {showSteps ? 'ซ่อนขั้นตอนทั้งหมด' : `ดูขั้นตอนทั้งหมด (${routeStageCount} ขั้น)`}
-        </Button>
-      )}
-    >
-      <div className="flex flex-col gap-4 px-4 py-4 sm:px-5">
+    // data-stage-no: the catalogue's absolute stage number, which the visible numbered pip used to carry (the e2e
+    // suite pins the 15-stage position through it; the S stepper only shows the rep code).
+    <section data-testid="deal-stage-panel" data-stage-no={meta?.no ?? ''} aria-label="รายละเอียดขั้นตอน" className="rounded-md border border-border bg-surface">
+      <div className="flex flex-col gap-3 px-4 py-3 sm:px-5">
         {/* Closing the deal does NOT create the rep's commission. Only the accountant recording
             the tax invoice does (POST /api/commissions/from-deal, account-only), and that same
             upload is what flips invoiceOnFile. Until then a CLOSED_PAID deal has earned the rep
             nothing, so say so. */}
         {summary.salesStage === 'CLOSED_PAID' && !summary.invoiceOnFile ? (
           <div
-            className="rounded-xl border border-warning-border bg-warning-bg-soft px-4 py-3"
+            className="rounded-md border border-warning-border bg-warning-bg-soft px-4 py-3"
             data-testid="awaiting-invoice-for-commission"
           >
             <div className="text-sm font-extrabold text-text">รอฝ่ายบัญชีบันทึกใบกำกับภาษี</div>
             <div className="mt-0.5 text-xs text-text-muted">
-              ปิดการขายแล้ว แต่ค่าคอมมิชชันของผู้ดูแลดีลจะยังไม่เกิดขึ้น
-              จนกว่าฝ่ายบัญชีจะบันทึกใบกำกับภาษีของดีลนี้
+              ปิดการขายแล้ว แต่ค่าคอมมิชชันของผู้ดูแลงานจะยังไม่เกิดขึ้น
+              จนกว่าฝ่ายบัญชีจะบันทึกใบกำกับภาษีของงานนี้
             </div>
           </div>
         ) : null}
 
-        {lifecycle === 'ON_HOLD' || lifecycle === 'DORMANT' ? (
-          <div className={`flex flex-wrap items-center gap-3 rounded-xl border px-4 py-3 ${
-            lifecycle === 'ON_HOLD'
-              ? 'border-warning-border bg-warning-bg-soft'
-              : 'border-border bg-surface-subtle'
-          }`}>
-            <div className="min-w-0 flex-1">
-              <div className="text-sm font-extrabold text-text">
-                {dealLifecycleLabel(lifecycle).label}
-              </div>
-              <div className="mt-0.5 text-xs text-text-muted">
-                ขั้นเดิมยังอยู่ที่ {meta?.no ?? '-'}. {label.label}
-              </div>
-            </div>
-            {canResume ? (
-              <Button type="button" variant="primary" disabled={actionLoading} onClick={() => setNoteAction('resume')}>
-                ดำเนินการต่อ
-              </Button>
-            ) : null}
-            {canDormant && lifecycle === 'ON_HOLD' ? (
-              <Button type="button" variant="secondary" disabled={actionLoading} onClick={() => setNoteAction('dormant')}>
-                พัก dormant
-              </Button>
-            ) : null}
-          </div>
-        ) : lost ? (
-          <div className="flex flex-wrap items-center gap-3 rounded-xl border border-danger-border bg-danger-bg px-4 py-3">
-            <div className="min-w-0 flex-1">
-              <div className="text-sm font-extrabold text-danger-dark">
-                เสียงาน · {dealLostReasonLabel(summary.lostReason).label}
-              </div>
-              <div className="mt-0.5 text-xs text-danger-dark">
-                ปิดเมื่อ {formatThaiDate(summary.lostAt)} — เปิดดีลใหม่ได้โดยสถานะเดิม (ขั้นที่ {meta?.no ?? '-'}) ยังอยู่
-              </div>
-            </div>
-            {hasAction('REOPEN') ? (
-              <Button type="button" variant="secondary" disabled={actionLoading} onClick={onReopen}>
-                เปิดดีลอีกครั้ง
-              </Button>
-            ) : null}
-          </div>
-        ) : (
+        {lifecycle === 'ON_HOLD' || lifecycle === 'DORMANT' || lost ? null : (
           <div className="flex flex-col gap-3">
-            <div className="flex items-start gap-3">
-              <span data-testid="deal-stage-no" className="grid h-12 w-12 shrink-0 place-items-center rounded-xl bg-info text-lg font-extrabold text-surface">
-                {meta?.no ?? '-'}
-              </span>
-              <div className="min-w-0 flex-1">
-                <div className="text-base font-extrabold leading-snug text-text">{STAGE_HEADLINE[summary.salesStage] ?? label.label}</div>
-                {meta && GATE_LABEL[STAGE_OWNER_DISPLAY[meta.code] ?? meta.gate] ? (
-                  <div data-testid="deal-stage-owner" className="mt-0.5 text-xs font-bold text-text-muted">
-                    {`ผู้รับผิดชอบ: ${GATE_LABEL[STAGE_OWNER_DISPLAY[meta.code] ?? meta.gate]}`}
-                  </div>
-                ) : null}
-                {/* One text line naming the route and its stage count. Nothing at all when
-                    the deal has no route (UNSPECIFIED / unknown / absent channel). */}
-                {route ? (
-                  <div data-testid="deal-route-line" className="mt-0.5 text-xs font-bold text-text-muted">
-                    เส้นทาง · {route} · {routeStageCount} ขั้น
-                  </div>
-                ) : null}
-                <div className="mt-1">
-                  <PhaseSummary catalog={catalog} salesStage={summary.salesStage} lost={lost} stageDecisions={stageDecisions} />
-                </div>
-                {days != null ? (
-                  <div className="mt-1 text-xs text-text-muted">อยู่ในขั้นนี้ {days === 0 ? 'วันนี้' : `${days} วัน`}</div>
-                ) : null}
-              </div>
-            </div>
-
             {/* ONE "what happens next, and who moves it" line: the hint (the only sentence that
                 says whose move it is) must not be the least prominent thing on screen. */}
-            {lineStage && !isDone ? (
-              <div data-testid="deal-stage-next" className="text-sm leading-snug text-text">
-                <span className="font-bold text-text-muted">ถัดไป: </span>
-                <span className="font-extrabold">{lineStage.no}. {dealStageLabel(lineStage.code, summary.entryChannel).label}</span>
-                {lineSkips.map((stage) => (
-                  <span key={stage.code}> หรือข้ามไป <span className="font-extrabold">{stage.no}. {dealStageLabel(stage.code, summary.entryChannel).label}</span></span>
-                ))}
-                {lineHint ? <span className="text-text-secondary"> — {lineHint}</span> : null}
-              </div>
+            {showNextLine && !isDone ? (
+              <NextStageLine line={{ lineStage, lineSkips, lineHint }} entryChannel={summary.entryChannel} />
             ) : null}
 
-            {isDone ? (
-              <div className="flex flex-col gap-2">
-                <div className="rounded-xl bg-success-bg px-4 py-3 text-center text-sm font-extrabold text-success-dark">
-                  ✓ ดีลเสร็จสมบูรณ์ — เก็บเงินครบแล้ว
-                </div>
-                {/* The operational close (ปิดเรื่อง) happens here: the pipeline reaching CLOSED_PAID
-                    doesn't close the ticket itself. */}
-                {primaryAction ? (
-                  <div className="flex flex-wrap items-center gap-2">{primaryAction}</div>
-                ) : null}
-              </div>
-            ) : primaryAction || showGuidedOpener ? (
+            {/* CLOSED_PAID's "done" line is the ขั้นต่อไป card's now. */}
+            {!isDone && (primaryAction || showGuidedOpener) ? (
               <div className="flex flex-wrap items-center gap-2">
                 {primaryAction}
-                {/* Not a dead hint: the rep CAN advance — they just have to log the follow-up + an
-                    activity first, which this button collects and then advances, in one go. The
-                    "who moves it" hint for everyone else is part of the ถัดไป line above. */}
+                {/* Not a dead hint: the rep CAN advance — they just have to log the follow-up + an activity first, which this
+                 * button collects and then advances, in one go. The "who moves it" hint for everyone else is part of the ถัดไป
+                 * line above. */}
                 {showGuidedOpener ? (
                   <Button
                     type="button"
@@ -395,9 +438,8 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
               </div>
             ) : null}
 
-            {/* Stage-gated documents: the doc that belongs to THIS stage of the
-                deal (quotation at the quote stages, deposit notice at order,
-                IR at procurement...) — parent renders them from real `can` flags. */}
+            {/* Stage-gated documents: the doc that belongs to THIS stage of the deal (quotation at the quote stages,
+             * deposit notice at order, IR at procurement...) — parent renders them from real `can` flags. */}
             {docActions ? (
               <div className="flex flex-wrap items-center gap-2">
                 <span className="text-xs font-bold text-text-muted">เอกสารของขั้นนี้:</span>
@@ -407,8 +449,43 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
           </div>
         )}
 
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          {/* One text line naming the route and its stage count. Nothing at all when the deal has no route
+              (UNSPECIFIED / unknown / absent channel). */}
+          {route ? (
+            <span data-testid="deal-route-line" className="text-xs font-bold text-text-muted">
+              เส้นทาง · {route} · {routeStageCount} ขั้น{days != null ? ` · อยู่ในขั้นนี้ ${days === 0 ? 'วันนี้' : `${days} วัน`}` : ''}
+            </span>
+          ) : <span />}
+          <Button
+            type="button"
+            variant="text"
+            className="min-h-[44px] text-xs mobile:min-h-[44px]"
+            aria-expanded={showSteps}
+            onClick={() => setShowSteps((v) => !v)}
+          >
+            {showSteps ? 'ซ่อนขั้นตอนทั้งหมด' : `ดูขั้นตอนทั้งหมด (${routeStageCount} ขั้น)`}
+          </Button>
+        </div>
+
         {showSteps ? (
           <div className="flex flex-col gap-4 border-t border-border pt-4">
+            {/* The current stage by its catalogue number and headline, and the department that owns it — what the
+                old panel's numbered pip block said, one click away now. */}
+            {meta ? (
+              <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 text-sm">
+                <span className="font-extrabold text-text">
+                  <span className="tabular-nums">{meta.no}. </span>
+                  <span data-testid="deal-stage-headline">{STAGE_HEADLINE[summary.salesStage] ?? label.label}</span>
+                </span>
+                {GATE_LABEL[STAGE_OWNER_DISPLAY[meta.code] ?? meta.gate] ? (
+                  <span data-testid="deal-stage-owner" className="text-xs font-bold text-text-muted">
+                    {`ผู้รับผิดชอบ: ${GATE_LABEL[STAGE_OWNER_DISPLAY[meta.code] ?? meta.gate]}`}
+                  </span>
+                ) : null}
+              </div>
+            ) : null}
+            <PhaseSummary catalog={catalog} salesStage={summary.salesStage} lost={lost} stageDecisions={stageDecisions} />
             <PhaseTracker catalog={catalog} salesStage={summary.salesStage} lost={lost} />
             <DealStageStepper
               catalog={catalog}
@@ -444,9 +521,34 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
           onSubmit={submitLost}
         />
       ) : null}
+      {pauseKind ? (
+        <PauseDealModal
+          // Changing the date: staying in the current state is always open to whoever may resume; switching follows
+          // the server's actions as before (ON_HOLD → DORMANT via MARK_DORMANT; DORMANT → ON_HOLD is never offered).
+          canHold={pauseChanging ? lifecycle === 'ON_HOLD' : canHold}
+          canDormant={pauseChanging ? (lifecycle === 'DORMANT' || canDormant) : canDormant}
+          changing={pauseChanging}
+          currentReturnOn={pauseChanging ? (summary.pauseReturnOn ?? null) : null}
+          initialKind={pauseKind}
+          submitting={actionLoading}
+          onClose={() => setPauseKind(null)}
+          onSubmit={submitPause}
+        />
+      ) : null}
+      {moveS2Open ? (
+        <MoveToS2Modal
+          deal={summary}
+          needsFollowUp={s2NeedsFollowUp}
+          needsActivity={s2NeedsActivity}
+          submitting={moveToS2.isPending || actionLoading}
+          error={moveToS2.isError ? (moveToS2.error?.message ?? 'ย้ายไม่สำเร็จ') : null}
+          onClose={() => setMoveS2Open(false)}
+          onSubmit={(values) => moveToS2.mutate(values)}
+        />
+      ) : null}
       {noteAction ? (
         <Modal
-          title={noteAction === 'resume' ? 'ดำเนินการต่อ' : noteAction === 'hold' ? 'พักดีลไว้' : 'พัก dormant'}
+          title="ดำเนินการต่อ"
           onClose={() => { setNoteAction(null); setNote(''); }}
           footer={(
             <>
@@ -545,6 +647,6 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
           </div>
         </Modal>
       ) : null}
-    </Panel>
+    </section>
   );
 });

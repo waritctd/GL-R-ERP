@@ -29,27 +29,9 @@ import th.co.glr.hr.payroll.declaration.TaxAllowanceDeclarationDtos.TaxAllowance
 import th.co.glr.hr.payroll.declaration.loryor01.LorYor01Renderer;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
-/**
- * Owner decision #4: an employee's corrections to the ล.ย.01 header reach the employee master
- * <b>only after HR confirms</b>. This proves that write against real Postgres, through the real
- * {@link TaxAllowanceDeclarationService} and a <b>real {@link EmployeeRepository}</b>.
- *
- * <p><b>Why a new class rather than extending the sibling scope test:</b>
- * {@code TaxAllowanceDeclarationScopeIntegrationTest} wires {@code mock(EmployeeRepository.class)}.
- * A mocked repository would happily "pass" every assertion here while the SQL did something else
- * entirely — exactly the failure mode CLAUDE.md names ("Mockito cannot reach this"). The write-back
- * only means anything if the statements actually execute, so this class uses the real one.
- *
- * <p>Written wrong-way-round throughout: every case asserts a caller <b>cannot</b> reach a master
- * row they should not, and that a refused action leaves the master <b>unchanged</b>. "HR can write
- * their own employee's address" is the uninteresting direction and is asserted only as the control
- * that proves the mechanism works at all.
- *
- * <p>⚠️ This exercises the FIRST production write to {@code hr_restricted} in this codebase. It
- * proves the SQL is correct and that the schema accepts it; it does <b>not</b> prove production's
- * database role holds the grant, because Testcontainers runs as an owner-level role. See the PR
- * body.
- */
+/** Owner decision #4: an employee's corrections to the ล.ย.01 header reach the employee master only after HR
+ * confirms. A mocked repository would happily "pass" every assertion here while the SQL did something else
+ * entirely — exactly the failure mode CLAUDE.md names ("Mockito cannot reach this"). */
 class TaxAllowanceHeaderWriteBackIntegrationTest extends AbstractPostgresIntegrationTest {
     private TaxAllowanceDeclarationRepository repository;
     private TaxAllowanceDeclarationService service;
@@ -71,8 +53,8 @@ class TaxAllowanceHeaderWriteBackIntegrationTest extends AbstractPostgresIntegra
             mock(FileStorageService.class),
             mock(PayrollService.class),
             new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP),
-            // Not under test here — this class is about the write-BACK path (approve -> employee
-            // master), not the submit-side HR notification.
+            // Not under test here — this class is about the write-BACK path (approve -> employee master), not the
+            // submit-side HR notification.
             mock(NotificationService.class),
             new AppProperties(), new LorYor01Renderer());
 
@@ -113,11 +95,9 @@ class TaxAllowanceHeaderWriteBackIntegrationTest extends AbstractPostgresIntegra
 
     // ---- wrong-way-round: refused actions must not touch the master ------------------------------
 
-    /**
-     * THE case that matters. A plain employee cannot approve — and must therefore not be able to
-     * rewrite their own master address by approving their own declaration. Asserting the 403 alone
-     * would be insufficient: the write-back could still have run before the guard.
-     */
+    /** THE case that matters. A plain employee cannot approve — and must therefore not be able to rewrite their own
+     * master address by approving their own declaration. Asserting the 403 alone would be insufficient: the
+     * write-back could still have run before the guard. */
     @Test
     void anEmployeeCannotApproveTheirOwnDeclarationAndTheMasterStaysUntouched() {
         seedExistingAddress(employeeA, "OLD-HOUSE", "OLD-PROVINCE");
@@ -150,10 +130,8 @@ class TaxAllowanceHeaderWriteBackIntegrationTest extends AbstractPostgresIntegra
         assertThat(taxIdOf(employeeA)).isNull();
     }
 
-    /**
-     * The signed ล.ย.01 is the employee's attestation to the header. No signature, no write —
-     * otherwise HR could promote a header nobody stood behind.
-     */
+    /** The signed ล.ย.01 is the employee's attestation to the header. No signature, no write — otherwise HR could
+     * promote a header nobody stood behind. */
     @Test
     void approvingWithoutASignedFormIsRefusedAndWritesNothingToTheMaster() {
         seedExistingAddress(employeeA, "OLD-HOUSE", "OLD-PROVINCE");
@@ -166,11 +144,8 @@ class TaxAllowanceHeaderWriteBackIntegrationTest extends AbstractPostgresIntegra
         assertThat(taxIdOf(employeeA)).isNull();
     }
 
-    /**
-     * The write must land on the declaration's OWNER, never on the HR actor who approved it. The
-     * employee id comes from the stored declaration, not from anything the caller supplies, and this
-     * is what pins that.
-     */
+    /** The write must land on the declaration's OWNER, never on the HR actor who approved it. The employee id comes
+     * from the stored declaration, not from anything the caller supplies, and this is what pins that. */
     @Test
     void theWriteLandsOnTheDeclarationOwnerNotOnTheApprovingHrUser() {
         long declarationId = submitWithHeader(employeeA, fullHeader()).declarationId();
@@ -188,10 +163,8 @@ class TaxAllowanceHeaderWriteBackIntegrationTest extends AbstractPostgresIntegra
 
     // ---- non-destruction and scope limits --------------------------------------------------------
 
-    /**
-     * A blank box means "not answered", not "erase it". A partially-filled header must leave every
-     * unanswered slot as HR already had it.
-     */
+    /** A blank box means "not answered", not "erase it". A partially-filled header must leave every unanswered slot
+     * as HR already had it. */
     @Test
     void blankHeaderFieldsPreserveExistingMasterValuesRatherThanErasingThem() {
         seedExistingAddress(employeeA, "OLD-HOUSE", "OLD-PROVINCE");
@@ -220,11 +193,9 @@ class TaxAllowanceHeaderWriteBackIntegrationTest extends AbstractPostgresIntegra
         assertThat(nameOf(employeeA, "last_name_th")).isEqualTo("นามสกุลเดิม");
     }
 
-    /**
-     * {@code hr.employee.marital_status} holds Thai free text everywhere else in this system, and
-     * has no CHECK constraint to stop an enum token going in. WIDOWED / DIED_DURING_YEAR are
-     * deliberately NOT mapped — see {@code TaxAllowanceDeclarationService#maritalStatusForMaster}.
-     */
+    /** hr.employee.marital_status holds Thai free text everywhere else in this system, and has no CHECK constraint
+     * to stop an enum token going in. WIDOWED / DIED_DURING_YEAR are deliberately NOT mapped — see
+     * TaxAllowanceDeclarationService#maritalStatusForMaster. */
     @Test
     void maritalStatusIsWrittenAsThaiAndUnmappableStatesLeaveTheMasterAlone() {
         jdbc.update("UPDATE hr.employee SET marital_status = 'โสด' WHERE employee_id = :id",
@@ -277,10 +248,8 @@ class TaxAllowanceHeaderWriteBackIntegrationTest extends AbstractPostgresIntegra
             Map.of("id", employeeA), String.class)).isEqualTo("พุทธ");
     }
 
-    /**
-     * V138 widened building/soi/road from VARCHAR(120) to VARCHAR(200) to match the declaration.
-     * Without it this approval fails with SQLSTATE 22001 and rolls the whole thing back.
-     */
+    /** V138 widened building/soi/road from VARCHAR(120) to VARCHAR(200) to match the declaration. Without it this
+     * approval fails with SQLSTATE 22001 and rolls the whole thing back. */
     @Test
     void aTwoHundredCharacterRoadDoesNotOverflowTheMasterColumn() {
         String longRoad = "ถ".repeat(200);

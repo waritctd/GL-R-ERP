@@ -3,14 +3,13 @@ import { DEAL_STAGE_CATALOG } from '../../data/dealStageCatalog.js';
 import { dealInScope, SALES_VIEW_SECTION_IDS, visibleSections } from './salesViewScope.js';
 
 // The stage order/phases dealInScope keys off are the backend's now (GET /api/meta/deal-stages).
-// DEAL_STAGE_CATALOG is the same canned payload mockApi serves, and stageCatalog.test.js proves it
-// matches DealStage.java — so passing it here is not a fixture inventing its own pipeline.
+// DEAL_STAGE_CATALOG is the same canned payload mockApi serves, and stageCatalog.test.js proves it matches
+// DealStage.java — so passing it here is not a fixture inventing its own pipeline.
 const catalog = DEAL_STAGE_CATALOG;
 
-// Presentation-only module — see salesViewScope.js's own doc comment. These
-// tests assert what a role's screen renders, not what the server allows; the
-// wrong-way-round cases below are the ones that matter (a role must NOT see
-// a section it has no business in), not merely that each role sees its own.
+// Presentation-only module — see salesViewScope.js's own doc comment. These tests assert what a role's screen
+// renders, not what the server allows; the wrong-way-round cases below are the ones that matter (a role must
+// NOT see a section it has no business in), not merely that each role sees its own.
 
 describe('visibleSections', () => {
   it('ceo and sales_manager are an unconditional pass-through', () => {
@@ -48,10 +47,9 @@ describe('visibleSections', () => {
     expect(sections.pricingRequest).toBe(false);
   });
 
-  // Phase 3 Slice S4 (handoff 105): account now sees DealFulfilmentPanel too
-  // (read-only — no `can.*` action inside it ever resolves true for
-  // account's role), since the deal's fulfilment progress is exactly what
-  // gates the final-payment confirmation account is waiting to make.
+  // Phase 3 Slice S4 (handoff 105): account now sees DealFulfilmentPanel too (read-only — no `can.*` action
+  // inside it ever resolves true for account's role), since the deal's fulfilment progress is exactly what gates
+  // the final-payment confirmation account is waiting to make.
   it('account DOES see the fulfilment/delivery section', () => {
     const sections = visibleSections('account');
     expect(sections.delivery).toBe(true);

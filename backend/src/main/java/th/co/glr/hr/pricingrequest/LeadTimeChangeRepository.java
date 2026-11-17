@@ -15,12 +15,8 @@ import org.springframework.stereotype.Repository;
 import th.co.glr.hr.pricingrequest.LeadTimeChangeDtos.LeadTimeChangeDto;
 import th.co.glr.hr.pricingrequest.LeadTimeChangeDtos.LeadTimeChangeLineDto;
 
-/**
- * CR-1 (GLA-167): persistence for lead-time change requests (V198). Persistence only -- who may do
- * what, and every validation, lives in {@link LeadTimeChangeService}. State changes are
- * compare-and-set on {@code status = 'PENDING'} and return a row count, so a lost race is a 409 in
- * the service rather than a silent overwrite.
- */
+/** CR-1 (GLA-167): persistence for lead-time change requests (V198). Persistence only -- who may do what, and
+ * every validation, lives in LeadTimeChangeService. */
 @Repository
 public class LeadTimeChangeRepository {
     /** One line to store: the new range plus the old range snapshotted from the item at request time. */
@@ -29,12 +25,9 @@ public class LeadTimeChangeRepository {
     /** Stored as decision_reason when a change is withdrawn by the system because its quote row died. */
     public static final String AUTO_WITHDRAW_REASON = "ใบราคาถูกแก้ไข — คำขอเดิมถูกยกเลิกอัตโนมัติ";
 
-    /**
-     * System withdrawal of PENDING changes matching one predicate ({@code %s}, written against alias
-     * {@code c}) plus one audit event per change, in a single statement. Used by the repositories
-     * that retire a quote row / close a request, so the change can never outlive what it was about.
-     * Binds {@code :autoReason}; the caller binds whatever the predicate names.
-     */
+    /** System withdrawal of PENDING changes matching one predicate (%s, written against alias c) plus one audit
+     * event per change, in a single statement. Used by the repositories that retire a quote row / close a request,
+     * so the change can never outlive what it was about. */
     public static final String AUTO_WITHDRAW_SQL = """
         WITH w AS (
             UPDATE sales.lead_time_change c
@@ -56,11 +49,9 @@ public class LeadTimeChangeRepository {
         this.jdbc = jdbc;
     }
 
-    /**
-     * Inserts the change and its lines. The partial unique index {@code
-     * uq_lead_time_change_one_pending_per_quote} is the authoritative "one PENDING per factory
-     * quote" guard; a violation surfaces as {@link DuplicateKeyException} for the caller to map to 409.
-     */
+    /** Inserts the change and its lines. The partial unique index uq_lead_time_change_one_pending_per_quote is the
+     * authoritative "one PENDING per factory quote" guard; a violation surfaces as DuplicateKeyException for the
+     * caller to map to 409. */
     public long create(long factoryQuoteId, long pricingRequestId, String reason, long requestedBy,
                        List<LineWrite> lines) throws DuplicateKeyException {
         Long id = jdbc.queryForObject("""

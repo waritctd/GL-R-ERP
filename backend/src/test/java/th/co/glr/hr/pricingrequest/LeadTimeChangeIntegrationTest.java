@@ -64,8 +64,8 @@ class LeadTimeChangeIntegrationTest extends Cr1FixtureSupport {
             line("A-3", "Factory A", 10, 10, 20, null, null),
             line("B-1", "Factory B", 10, 5, 8, null, null));
         List<FactoryQuoteDto> drafts = factoryQuoteService.generateDrafts(prId, importActor);
-        // Contacted by forcing the status directly (not via markContacted): these tests are about the
-        // lead-time flow, so they must stay red for THAT reason and not for the A-part stub.
+        // Contacted by forcing the status directly (not via markContacted): these tests are about the lead-time flow,
+        // so they must stay red for THAT reason and not for the A-part stub.
         for (FactoryQuoteDto d : drafts) {
             jdbc.update("UPDATE sales.factory_quote SET status = 'REQUESTED', requested_at = now() WHERE factory_quote_id = :id",
                 java.util.Map.of("id", d.id()));
@@ -491,10 +491,8 @@ class LeadTimeChangeIntegrationTest extends Cr1FixtureSupport {
 
     // ── round 3 ──────────────────────────────────────────────────────────────────────────────
 
-    /**
-     * Cancelling the request withdraws its pending change even when NO quote row is cancelled by that
-     * call (here the only quotes are already NOT_AVAILABLE, so the cancel cascade touches none).
-     */
+    /** Cancelling the request withdraws its pending change even when NO quote row is cancelled by that call (here
+     * the only quotes are already NOT_AVAILABLE, so the cancel cascade touches none). */
     @Test
     void cancellingTheRequestAutoWithdrawsThePendingChange_evenWhenNoQuoteRowWasCancelled() {
         LeadTimeChangeDto change = leadTimeChangeService.create(quoteA.id(), body("r1", line(a1, 100, 120)), importActor);

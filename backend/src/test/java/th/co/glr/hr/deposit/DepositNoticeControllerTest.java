@@ -32,8 +32,8 @@ import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiExceptionHandler;
 
 class DepositNoticeControllerTest {
-    // OLE2/Compound File Binary magic (BIFF8 .xls, per [MS-CFB]) — real HSSFWorkbook output
-    // starts with these bytes, never the ZIP "PK\x03\x04" of an OOXML .xlsx.
+    // OLE2/Compound File Binary magic (BIFF8 .xls, per [MS-CFB]) — real HSSFWorkbook output starts with these
+    // bytes, never the ZIP "PK\x03\x04" of an OOXML .xlsx.
     private static final byte[] OLE2_MAGIC_BYTES =
         {(byte) 0xD0, (byte) 0xCF, 0x11, (byte) 0xE0, (byte) 0xA1, (byte) 0xB1, 0x1A, (byte) 0xE1};
 
@@ -79,16 +79,9 @@ class DepositNoticeControllerTest {
             .andExpect(status().isUnauthorized());
     }
 
-    // Every remainingInvoiceFile* test below this comment (11 tests: content-type/filename,
-    // auth, the four malformed-query-param 400s, and the null/blank/empty reference+noteIds
-    // tri-state tests) was REMOVED here (owner ruling O1, GLA-99 step 2 review-round-1,
-    // 2026-09-20) along with the route and service method they pinned — GET
-    // /api/tickets/{ticketId}/remaining-invoice/file and DepositNoticeService#getRemainingInvoiceXlsx
-    // are both gone. Only an ISSUED/SUPERSEDED STORED remaining invoice is downloadable now, via
-    // RemainingInvoiceController's own GET /api/remaining-invoices/{id}/file (see that class),
-    // which has no query-param tri-state semantics to pin — it renders the row's own frozen
-    // snapshot with no caller-supplied overrides at all. remainingInvoiceOptionsPassesQuotationIdThrough
-    // below is UNCHANGED — /options survives as the create-flow prefill.
+    // Every remainingInvoiceFile* test below this comment was REMOVED here along with the route and service method
+    // they pinned — GET /api/tickets/{ticketId}/remaining-invoice/file and
+    // DepositNoticeService#getRemainingInvoiceXlsx are both gone.
 
     @Test
     void remainingInvoiceOptionsPassesQuotationIdThrough() throws Exception {

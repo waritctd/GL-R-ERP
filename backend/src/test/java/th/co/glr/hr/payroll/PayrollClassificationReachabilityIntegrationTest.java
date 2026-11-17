@@ -26,36 +26,8 @@ import th.co.glr.hr.payroll.PayrollClassificationDtos.ComponentTaxTreatmentUpser
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 import th.co.glr.hr.ticket.TicketRepository;
 
-/**
- * REVIEWER-ADDED (Opus review, 2026-07-30). Every other payroll integration test on this branch
- * seeds {@code hr.payroll_component_tax_treatment} rows through
- * {@link AbstractPostgresIntegrationTest#seedRegularTaxTreatment} before driving
- * {@link PayrollService#preview}/{@code #process}. That helper exists purely for the tests -- it
- * calls {@link PayrollRepository#upsertComponentTaxTreatment} directly. So the whole suite is green
- * over a question none of it asks: <b>how does a row ever get into that table on a real deployment?</b>
- *
- * <p>The answer, as at {@code b5733607}, is that it never does:
- * <ul>
- *   <li>V95 creates the table and seeds only the {@code hr.payroll_pay_component} lookup -- no
- *       classification rows for any employee.
- *   <li>V96 backfills {@code hr.payroll_component_sso_inclusion} for every pre-existing employee
- *       (task 1's known risk 3) but has no counterpart for tax treatment.
- *   <li>{@link PayrollController} exposes no mapping that reaches
- *       {@code upsertComponentTaxTreatment}; {@code EmployeeService} calls only
- *       {@code seedSsoInclusionDefaults}.
- *   <li>The frontend has no matrix screen and {@code hrApi.js} has no method for it.
- * </ul>
- *
- * <p>Meanwhile {@link PayrollCalculator#calculateClassified} -- the only engine
- * {@code PayrollService#calculateLine} calls since task 2 -- rejects the whole run with a 409 for
- * any non-zero component that has no stored treatment. SALARY is exempt (hardcoded to
- * REGULAR_REPROJECT), but every other component is not: a special pay, overtime, a commission feed,
- * or a director fee is enough. Production carries all of those today (handoff section 9d records
- * employee 10012 at {@code special_pay_1 = 407}), and the uat seed's V902 deliberately seeds
- * fully-approved overtime that "feeds payroll".
- *
- * <p>The two tests below are the reachability pair the rest of the suite skips.
- */
+/** REVIEWER-ADDED (Opus review, 2026-07-30). The answer, as at b5733607, is that it never does: V95 creates the
+ * table and seeds only the hr.payroll_pay_component lookup -- no classification rows for any employee. */
 class PayrollClassificationReachabilityIntegrationTest extends AbstractPostgresIntegrationTest {
     private static final int TAX_YEAR = 2026;
 
@@ -93,20 +65,9 @@ class PayrollClassificationReachabilityIntegrationTest extends AbstractPostgresI
                 new th.co.glr.hr.payroll.obligation.PayrollDeductionShortfallRepository(jdbc)));
     }
 
-    /**
-     * The employee is configured through EXACTLY the paths a real deployment has: V96's SSO-inclusion
-     * backfill (reproduced here by its own seeding method, which is what {@code EmployeeService} calls
-     * on the create path) and nothing else. No {@code seedRegularTaxTreatment} -- deliberately, because
-     * nothing in {@code src/main} or in any migration can produce that row.
-     *
-     * <p>HR then does the most ordinary thing possible: types ฿407 of พิเศษ 1 (ค่าครองชีพ), the exact
-     * figure handoff section 9d transcribes for employee 10012 out of the accountant's June sheet.
-     *
-     * <p>Expected: the run previews. Actual at {@code b5733607}: 409, "has a non-zero amount of 407.00
-     * but no withholding-tax classification. HR must classify this component before payroll can run" --
-     * with no screen, endpoint, or migration anywhere that lets HR do that. Payroll is unrunnable for
-     * every employee who receives anything beyond bare salary.
-     */
+    /** The employee is configured through EXACTLY the paths a real deployment has: V96's SSO-inclusion backfill
+     * (reproduced here by its own seeding method, which is what EmployeeService calls on the create path) and
+     * nothing else. */
     @Test
     void payrollRunsForAnEmployeeConfiguredOnlyThroughThePathsAProductionDeploymentActuallyHas() {
         long employeeId = seedEmployee("REACH-001", "มณฑ์ชญา", "รีช", new BigDecimal("30000.00"));
@@ -128,13 +89,8 @@ class PayrollClassificationReachabilityIntegrationTest extends AbstractPostgresI
             .doesNotThrowAnyException();
     }
 
-    /**
-     * The structural half, and the reason the test above is not merely a fixture omission: even given
-     * a willing HR user and a REST client, there is no request that can create the row the engine
-     * demands. Asserted against {@link PayrollController} because that is where every other payroll
-     * declaration surface lives ({@code PUT /api/payroll/tax-allowances}, {@code PUT
-     * /api/payroll/ytd-seed}) -- if the matrix ever gets an endpoint it belongs beside them.
-     */
+    /** The structural half, and the reason the test above is not merely a fixture omission: even given a willing HR
+     * user and a REST client, there is no request that can create the row the engine demands. */
     @Test
     void hrHasSomeHttpWayToClassifyAComponentBeforeTheEngineDemandsIt() {
         List<String> mappingsAcceptingATreatmentUpsert = Arrays.stream(PayrollController.class.getDeclaredMethods())

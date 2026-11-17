@@ -3,46 +3,18 @@ import { Button } from '../../components/common/Button.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { entryChannelLabel } from '../../utils/format.js';
 
-/**
- * The three channels EntryChannel.java accepts as INPUT. UNSPECIFIED is deliberately absent: it is
- * valid as STORED (the V144 column default) but `TicketService.setEntryChannel` 400s on it, because
- * once a channel has been stated it must not be possible to un-state it. Offering it would be
- * offering an action that dies on click.
- */
+/** The three channels EntryChannel.java accepts as INPUT. UNSPECIFIED is deliberately absent: it is valid as
+ * STORED (the V144 column default) but `TicketService.setEntryChannel` 400s on it, because once a channel has
+ * been stated it must not be possible to un-state it. */
 const SETTABLE_ENTRY_CHANNELS = ['DESIGNER_LED', 'OWNER_DIRECT', 'BUYER_DIRECT'];
 
-/**
- * "แก้ช่องทางดีล" — the remedy for the route gate's own refusal.
- *
- * The server refuses a move into a stage that is off the deal's route with a message that ends
- * "— แก้ช่องทางดีลก่อน". GLA-156 deleted the only control that could do that, so a rep was told to
- * fix the channel and could not. This is that control, recovered from the deleted
- * `EntryChannelControl` (issue #740) and re-shaped for where the refusal is READ: an inline
- * disclosure under an off-route row of the stepper, and under a blocked row of UpdateStageModal.
- * Inline, never a modal — UpdateStageModal is itself a dialog, and a dialog inside a dialog is not
- * acceptable; using the same shape in both places keeps them consistent.
- *
- * It is a speed bump with an audit trail, not a wall: a rep who genuinely has a designer on an
- * "owner-direct" deal SHOULD correct the record. The required reason (below) and the server's
- * POLICY_CHANGED event are what make that accountable.
- *
- * This component decides nothing about the rules — the server's own answers are passed in:
- *   • `action` is the `SET_ENTRY_CHANNEL` entry of availableActions. No entry -> nothing renders,
- *     so there is no control to click and no request to make. Permission is the server's
- *     (stageCatalog.js forbids client-side `can*`).
- *   • The reason is required iff that entry's `requiredFields` lists `note`. TicketService
- *     .entryChannelIsStated fills it in, and treats BOTH DESIGNER_LED and UNSPECIFIED as UNSTATED
- *     (after V144's non-backfill an untouched deal reads one or the other purely by age), so a
- *     legacy deal's first correction needs no note. Never computed here from the channel value.
- *   • Only SETTABLE_ENTRY_CHANNELS are offered; the channel the deal is already on is shown as the
- *     current state and cannot be re-picked.
- *
- * `onSubmit({ value, note })` — `note` is the trimmed reason when the server asked for one, else
- * null. The parent owns the request; this collapses when the deal reports a different channel, so a
- * successful save is visibly acknowledged and a failed one keeps the rep's draft.
- */
+/** "แก้ช่องทางรับงาน" — the remedy for the route gate's own refusal. GLA-156 deleted the only control that could
+ * do that, so a rep was told to fix the channel and could not. The server refuses a move into a stage that is
+ * off the deal's route with a message that ends "— แก้ช่องทางรับงานก่อน". */
 export function EntryChannelFix({
   entryChannel, action, onSubmit, disabled = false, context,
+  // Every sales screen says งาน (owner ruling 2026-11-16 for the deal page, extended to the rest 2026-11-17).
+  noun = 'งาน',
 }) {
   const uid = useId();
   const panelId = `${uid}-panel`;
@@ -52,8 +24,8 @@ export function EntryChannelFix({
   const [reason, setReason] = useState('');
   const current = entryChannel ?? 'UNSPECIFIED';
 
-  // The deal now reports a different channel: the save landed (or the deal moved under us). Start
-  // clean either way rather than carrying a stale draft against a channel that no longer applies.
+  // The deal now reports a different channel: the save landed (or the deal moved under us). Start clean either
+  // way rather than carrying a stale draft against a channel that no longer applies.
   useEffect(() => {
     setOpen(false);
     setPicked(null);
@@ -64,11 +36,11 @@ export function EntryChannelFix({
 
   const reasonRequired = action.requiredFields?.includes('note') ?? false;
   const reasonMissing = reasonRequired && reason.trim() === '';
-  // Why Save is dead, said in words — a disabled control must explain itself. First applicable
-  // reason wins, in the order the rep would clear them.
+  // Why Save is dead, said in words — a disabled control must explain itself. First applicable reason wins, in
+  // the order the rep would clear them.
   let hint = null;
   if (picked == null) hint = 'เลือกช่องทางที่ถูกต้องก่อน จึงจะบันทึกได้';
-  else if (reasonMissing) hint = 'ต้องระบุเหตุผลก่อนบันทึก — ดีลนี้ระบุช่องทางไว้แล้ว การแก้ไขต้องมีเหตุผลประกอบ';
+  else if (reasonMissing) hint = `ต้องระบุเหตุผลก่อนบันทึก — ${noun}นี้ระบุช่องทางไว้แล้ว การแก้ไขต้องมีเหตุผลประกอบ`;
   else if (disabled) hint = 'กำลังดำเนินการอื่นอยู่ — รอสักครู่แล้วบันทึกอีกครั้ง';
   const canSave = hint == null;
 
@@ -95,7 +67,7 @@ export function EntryChannelFix({
         data-testid="entry-channel-fix-toggle"
       >
         <span>
-          แก้ช่องทางดีล
+          แก้ช่องทางรับงาน
           {context ? <span className="sr-only">{` เพื่อไปขั้น ${context}`}</span> : null}
         </span>
         <span
@@ -152,14 +124,14 @@ export function EntryChannelFix({
                 data-testid="entry-channel-fix-reason"
                 value={reason}
                 disabled={disabled}
-                placeholder="เช่น มีผู้ออกแบบเข้ามาร่วมดีลจริง"
+                placeholder={`เช่น มีผู้ออกแบบเข้ามาร่วม${noun}จริง`}
                 onChange={(event) => setReason(event.target.value)}
               />
             </label>
           ) : null}
 
           <p className="m-0 text-2xs leading-snug text-text-muted">
-            การแก้ไขนี้เปลี่ยนเส้นทางของดีลทันที และบันทึกไว้ในประวัติดีล
+            {`การแก้ไขนี้เปลี่ยนเส้นทางของ${noun}ทันที และบันทึกไว้ในประวัติ${noun}`}
           </p>
 
           {hint ? (

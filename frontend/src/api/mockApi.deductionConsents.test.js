@@ -3,19 +3,13 @@ import { api } from './mockApi.js';
 import { CONSENT_APPLICABLE_DEDUCTION_KINDS } from '../utils/format.js';
 
 // Guards `payroll.getDeductionConsents()` against DeductionWrittenConsentController +
-// DeductionWrittenConsentService + DeductionWrittenConsentRepository (issue #376, exposed for
-// #744): the read role gate, the employeeId/kind filters, and the repository's ORDER BY.
+// DeductionWrittenConsentService + DeductionWrittenConsentRepository (issue #376, exposed for #744): the read
+// role gate, the employeeId/kind filters, and the repository's ORDER BY.
 
 describe('mock getDeductionConsents', () => {
-  // THE fixture-honesty assertion for this feature. hr.deduction_written_consent is written by
-  // exactly one path — the register's own PUT, which had no client until #744 — so the table is
-  // necessarily empty in every environment, production included. A seeded mock would make the
-  // fixture more populated than production and would mean the EMPTY state (the only state any real
-  // deployment has today) never renders in a default mock session.
-  //
-  // ⚠️ Must stay the FIRST test in this file. mockApi's `db` is module-level and shared by every
-  // test here, and there is no reset hook — once any test below records a row, the store is no
-  // longer pristine. Every later assertion is written to tolerate that residue; this one cannot be.
+  // THE fixture-honesty assertion for this feature. A seeded mock would make the fixture more populated than
+  // production and would mean the EMPTY state (the only state any real deployment has today) never renders in a
+  // default mock session. ⚠️ Must stay the FIRST test in this file.
   it('starts empty, exactly as the table does in every real environment', async () => {
     await api.auth.login({ role: 'hr' });
     const { items } = await api.payroll.getDeductionConsents();
@@ -30,8 +24,8 @@ describe('mock getDeductionConsents', () => {
     }
   });
 
-  // Mirrors DeductionWrittenConsentService.VIEW_ROLES = Set.of("hr", "ceo") exactly — every other
-  // seeded role must be refused, not merely "some other role".
+  // Mirrors DeductionWrittenConsentService.VIEW_ROLES = Set.of("hr", "ceo") exactly — every other seeded role
+  // must be refused, not merely "some other role".
   it('rejects every role outside hr/ceo with the exact backend message', async () => {
     for (const role of ['employee', 'sales', 'sales_manager', 'import', 'account']) {
       await api.auth.login({ role });
@@ -39,10 +33,8 @@ describe('mock getDeductionConsents', () => {
     }
   });
 
-  // A value mirrored into mockApi.js has NO automatic guard: contract.test.js compares method names
-  // and PARAMETER COUNTS, never values. The kinds the UI offers and the kinds the mock accepts must
-  // stay the same set as DeductionWrittenConsentService.CONSENT_APPLICABLE_KINDS / V107's CHECK
-  // constraint, so the list is pinned literally here rather than derived from itself.
+  // A value mirrored into mockApi.js has NO automatic guard: contract.test.js compares method names and
+  // PARAMETER COUNTS, never values.
   it('pins the consent-applicable kinds to V107s CHECK constraint', () => {
     expect([...CONSENT_APPLICABLE_DEDUCTION_KINDS].sort()).toEqual(
       ['CUSTOMER_RETURN', 'OTHER_POST_TAX', 'OTHER_PRETAX', 'WARNING_LETTER'],
@@ -73,9 +65,9 @@ describe('mock getDeductionConsents', () => {
     await api.payroll.upsertDeductionConsent({ employeeId: 3, deductionKind: 'CUSTOMER_RETURN', consentOnFile: false });
 
     const { items } = await api.payroll.getDeductionConsents();
-    // The mock's `db` is module-level and shared by every test in this file, so the register also
-    // holds whatever earlier tests wrote. Narrowing to the three pairs under test — while KEEPING
-    // the server's returned order — pins the sort exactly without depending on a clean store.
+    // The mock's `db` is module-level and shared by every test in this file, so the register also holds whatever
+    // earlier tests wrote. Narrowing to the three pairs under test — while KEEPING the server's returned order —
+    // pins the sort exactly without depending on a clean store.
     const written = ['GLR-1003 CUSTOMER_RETURN', 'GLR-1003 WARNING_LETTER', 'GLR-1020 OTHER_PRETAX'];
     const observed = items
       .map((row) => `${row.employeeCode} ${row.deductionKind}`)
@@ -86,10 +78,8 @@ describe('mock getDeductionConsents', () => {
 });
 
 describe('mock upsertDeductionConsent', () => {
-  // The asymmetry that matters: CEO READS this register and may write NONE of it
-  // (VIEW_ROLES = {hr, ceo}, EDIT_ROLES = {hr}). A mock more permissive than production is the
-  // dangerous direction — issue #199 was exactly that — so CEO is asserted to be refused here even
-  // though CEO is allowed on the GET above.
+  // The asymmetry that matters: CEO READS this register and may write NONE of it (VIEW_ROLES = {hr, ceo},
+  // EDIT_ROLES = {hr}).
   it('refuses the CEO, who may read the same rows', async () => {
     await api.auth.login({ role: 'ceo' });
     await expect(api.payroll.getDeductionConsents()).resolves.toBeTruthy();
@@ -107,8 +97,8 @@ describe('mock upsertDeductionConsent', () => {
     }
   });
 
-  // V107's CHECK constraint / CONSENT_APPLICABLE_KINDS. The mock must refuse what the database
-  // would refuse, or a form could look like it saved something the real backend 400s on.
+  // V107's CHECK constraint / CONSENT_APPLICABLE_KINDS. The mock must refuse what the database would refuse, or
+  // a form could look like it saved something the real backend 400s on.
   it('rejects a deduction kind where consent is not a question', async () => {
     await api.auth.login({ role: 'hr' });
     for (const kind of ['WITHHOLDING_TAX', 'SOCIAL_SECURITY', 'STUDENT_LOAN', 'LEGAL_EXECUTION_GARNISHMENT']) {
@@ -125,8 +115,8 @@ describe('mock upsertDeductionConsent', () => {
     ).rejects.toThrow('ไม่พบข้อมูลพนักงาน');
   });
 
-  // UNIQUE (employee_id, deduction_kind) + ON CONFLICT DO UPDATE: the same pair overwrites, never
-  // appends. A mock that appended would show two rows where the database holds one.
+  // UNIQUE (employee_id, deduction_kind) + ON CONFLICT DO UPDATE: the same pair overwrites, never appends. A
+  // mock that appended would show two rows where the database holds one.
   it('overwrites the same (employee, kind) pair instead of appending a second row', async () => {
     await api.auth.login({ role: 'hr' });
     await api.payroll.upsertDeductionConsent({
@@ -144,8 +134,8 @@ describe('mock upsertDeductionConsent', () => {
   });
 
   // ⚠️ The response is the ONE row written, not the register — mirrored from
-  // DeductionWrittenConsentService#upsert's `return findAll(employeeId, deductionKind)`. A caller
-  // that assigned this over its list state would blank the table, so the shape is pinned.
+  // DeductionWrittenConsentService#upsert's `return findAll(employeeId, deductionKind)`. A caller that assigned
+  // this over its list state would blank the table, so the shape is pinned.
   it('returns only the row just written, not the whole register', async () => {
     await api.auth.login({ role: 'hr' });
     await api.payroll.upsertDeductionConsent({ employeeId: 20, deductionKind: 'CUSTOMER_RETURN', consentOnFile: true });
@@ -155,8 +145,8 @@ describe('mock upsertDeductionConsent', () => {
 
     expect(response.items.length).toBe(1);
     expect(response.items[0].employeeId).toBe(3);
-    // ...while the register itself holds strictly more than the write returned, including the other
-    // pair. Compared relatively rather than to a fixed count: `db` is shared across this file.
+    // ...while the register itself holds strictly more than the write returned, including the other pair. Compared
+    // relatively rather than to a fixed count: `db` is shared across this file.
     const register = (await api.payroll.getDeductionConsents()).items;
     expect(register.length).toBeGreaterThan(response.items.length);
     expect(register.some((row) => row.employeeId === 20 && row.deductionKind === 'CUSTOMER_RETURN')).toBe(true);

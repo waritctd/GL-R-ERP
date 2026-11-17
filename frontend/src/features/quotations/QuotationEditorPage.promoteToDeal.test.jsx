@@ -8,15 +8,8 @@ import { api } from '../../api/index.js';
 
 globalThis.React = React;
 
-// GLA-136 → slice 1/2 (IA §7/§8, decision D3): "ยืนยันคำสั่งซื้อ" on an APPROVED direct quotation
-// (was "สร้างดีลจากใบเสนอราคา"). The gate here is DISPLAY-only (quotationMeta.
-// canPromoteDealQuotationToDeal); who may actually confirm is enforced and proven server-side in
-// DealQuotationPromoteIntegrationTest / DealQuotationConfirmOrderIntegrationTest, never here.
-//
-// Whether the order is still confirmable is the deal's `status === 'draft'` — the backend's own
-// precondition (DealQuotationService#confirmOrderFromDirectQuotation 409s otherwise; confirming
-// flips it to 'quotation_issued'). `quotationOnly` is provenance only since #1086 and must NOT
-// decide it: every deal created on the deal page (flow B) carries quotationOnly=false.
+// GLA-136 → slice 1/2 (IA §7/§8, decision D3): "ยืนยันคำสั่งซื้อ" on an APPROVED direct quotation (was
+// "สร้างดีลจากใบเสนอราคา"). The gate here is DISPLAY-only (quotationMeta.
 vi.mock('../../api/index.js', async (importOriginal) => {
   const actual = await importOriginal();
   return {
@@ -95,7 +88,7 @@ describe('QuotationEditorPage — ยืนยันคำสั่งซื้�
     api.dealQuotations.get.mockResolvedValue({ quotation: quotation() });
     renderEditor();
     expect(await screen.findByRole('button', { name: PROMOTE })).not.toBeNull();
-    expect(screen.queryByRole('link', { name: /ไปที่ดีล/ })).toBeNull();
+    expect(screen.queryByTestId('quotation-go-to-deal')).toBeNull();
   });
 
   it.each([
@@ -137,14 +130,15 @@ describe('QuotationEditorPage — ยืนยันคำสั่งซื้�
     api.tickets.get.mockResolvedValue(ticketSummary({ quotationOnly: false, status: 'draft' }));
     renderEditor();
     expect(await screen.findByRole('button', { name: PROMOTE })).not.toBeNull();
-    expect(screen.queryByRole('link', { name: /ไปที่ดีล/ })).toBeNull();
+    expect(screen.queryByTestId('quotation-go-to-deal')).toBeNull();
   });
 
-  it.each([[true], [false]])('(b) once the order is confirmed (status quotation_issued, quotationOnly=%s): "ไปที่ดีล", no confirm', async (quotationOnly) => {
+  it.each([[true], [false]])('(b) once the order is confirmed (status quotation_issued, quotationOnly=%s): "เปิดงาน", no confirm', async (quotationOnly) => {
     api.dealQuotations.get.mockResolvedValue({ quotation: quotation() });
     api.tickets.get.mockResolvedValue(ticketSummary({ quotationOnly, status: 'quotation_issued' }));
     renderEditor();
-    const link = await screen.findByRole('link', { name: /ไปที่ดีล/ });
+    const link = await screen.findByTestId('quotation-go-to-deal');
+    expect(link.textContent).toContain('เปิดงาน');
     expect(link.getAttribute('href')).toBe('/tickets/18');
     expect(screen.queryByRole('button', { name: PROMOTE })).toBeNull();
   });
@@ -154,7 +148,7 @@ describe('QuotationEditorPage — ยืนยันคำสั่งซื้�
     api.tickets.get.mockRejectedValue(Object.assign(new Error('ไม่มีสิทธิ์เข้าถึงรายการนี้'), { status: 403 }));
     renderEditor();
     expect(await screen.findByRole('button', { name: PROMOTE })).not.toBeNull();
-    expect(screen.queryByRole('link', { name: /ไปที่ดีล/ })).toBeNull();
+    expect(screen.queryByTestId('quotation-go-to-deal')).toBeNull();
   });
 
   it('(d) confirms first (dialog titled ยืนยันคำสั่งซื้อ), then confirms the order, toasts "ยืนยันคำสั่งซื้อแล้ว" and navigates to the deal', async () => {
@@ -169,7 +163,7 @@ describe('QuotationEditorPage — ยืนยันคำสั่งซื้�
     const dialogEl = screen.getByRole('dialog');
     const dialog = within(dialogEl);
     expect(dialog.getByRole('heading', { name: 'ยืนยันคำสั่งซื้อ' })).not.toBeNull();
-    expect(dialogEl.textContent).not.toMatch(/สร้างดีล/);
+    expect(dialogEl.textContent).not.toMatch(/สร้าง(ดีล|งาน)/);
     expect(dialog.getByText(/ได้รับคำสั่งซื้อ/)).not.toBeNull();
     expect(dialog.getByText(/ย้อนกลับไม่ได้/)).not.toBeNull();
 
@@ -194,7 +188,7 @@ describe('QuotationEditorPage — ยืนยันคำสั่งซื้�
   });
 
   it.each([
-    [409, 'สร้างดีลได้เฉพาะใบเสนอราคาที่อนุมัติแล้วเท่านั้น (ปัจจุบัน: SUPERSEDED)'],
+    [409, 'สร้างงานได้เฉพาะใบเสนอราคาที่อนุมัติแล้วเท่านั้น (ปัจจุบัน: SUPERSEDED)'],
     [403, 'ไม่มีสิทธิ์เข้าถึงรายการนี้'],
   ])('a %s surfaces the server\'s own Thai message and stays on the quotation', async (status, message) => {
     api.dealQuotations.get.mockResolvedValue({ quotation: quotation() });

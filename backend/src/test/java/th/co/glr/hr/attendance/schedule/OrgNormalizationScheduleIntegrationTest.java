@@ -12,27 +12,9 @@ import org.junit.jupiter.api.Test;
 import th.co.glr.hr.config.AppProperties;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
-/**
- * Real-Postgres coverage of V121's Part B (แม่บ้าน department creation + moving employee 10051 into
- * it) and Part C (แม่บ้าน onto the six-day OPS_6D schedule, removing V115's now-redundant
- * EMPLOYEE-scope override for 10051, and raising the company-wide grace period from 5 to 15
- * minutes). Sales Support 1/2 were considered for OPS_6D during review and the owner REVERSED that
- * ruling -- they stay on OFFICE_5D -- so this class deliberately asserts they are UNCHANGED by the
- * migration rather than asserting they moved.
- *
- * <p><b>V160 later moved Sales Support to a six-day week anyway</b> (all of ฝ่ายขาย, effective
- * 2026-09-01 -- see {@code V160__sales_division_saturday_workday.sql} and
- * {@link SalesDivisionSaturdayWorkdayIntegrationTest}). That does not weaken anything asserted here:
- * this class replays V121 in isolation and its {@code SATURDAY} constant is 2026-08-01, before
- * V160's effective date, so "Sales Support stays OFFICE_5D" remains true of the window V121 governs.
- * Read the claim as scoped to V121, not as the current state of the schedule table.
- *
- * <p>Same technique as {@code LeaveApproverOrgNormalizationIntegrationTest} and
- * {@code PayrollComponentTaxTreatmentBackfillIntegrationTest}: V121's own SQL text is read verbatim
- * from the classpath and replayed against fixture rows carrying the real production codes ('SALES',
- * 'SALES2', '10051', ...) that a freshly-migrated golden-template database does not have. This
- * proves the ACTUAL shipped migration statements, not a hand-typed re-implementation of them.
- */
+/** Real-Postgres coverage of V121's Part B (แม่บ้าน department creation + moving employee 10051 into it) and
+ * Part C (แม่บ้าน onto the six-day OPS_6D schedule, removing V115's now-redundant EMPLOYEE-scope override for
+ * 10051, and raising the company-wide grace period from 5 to 15 minutes). */
 class OrgNormalizationScheduleIntegrationTest extends AbstractPostgresIntegrationTest {
 
     private static final LocalDate SATURDAY = LocalDate.of(2026, 8, 1);
@@ -59,16 +41,11 @@ class OrgNormalizationScheduleIntegrationTest extends AbstractPostgresIntegratio
         long showroomDivision = insertDivision("SRX", "โชว์รูม (test division)");
         long showroomDept = insertDepartment("SRX", "โชว์รูม (test)", showroomDivision);
         long jamnian = insertEmployee("10051", showroomDivision, showroomDept);
-        // ราม (10009) must exist so V121's Part A UPDATE for the new HK department -- and its
-        // "nobody left without an approver" post-condition guard -- can actually assign her one;
-        // without this row the department UPDATE would no-op (nothing to join against) and the
-        // guard would (correctly) reject the whole replay. This test is about Part B/C's schedule
-        // wiring, not Part A, so ราม is fixture setup, not the point under test.
+        // ราม must exist so V121's Part A UPDATE for the new HK department -- and its "nobody left without an
+        // approver" post-condition guard -- can actually assign her one; without this row the department UPDATE would
+        // no-op and the guard would reject the whole replay.
         insertEmployee("10009", null, null);
-        // V115's shape: an EMPLOYEE-scope OPS_6D override, same effective_from V121 targets for
-        // removal. A fresh test DB never had this row (V115's own seed is a no-op here, same reason
-        // documented in WorkScheduleAssignmentRepositoryIntegrationTest), so it is seeded by hand to
-        // prove V121's DELETE genuinely removes a REAL row, not just no-ops against nothing.
+        // V115's shape: an EMPLOYEE-scope OPS_6D override, same effective_from V121 targets for removal.
         assignEmployee(jamnian, "OPS_6D", LocalDate.of(2024, 10, 1), null);
 
         executeStatements(migrationSql);
@@ -97,28 +74,25 @@ class OrgNormalizationScheduleIntegrationTest extends AbstractPostgresIntegratio
 
     @Test
     void salesSupportStaysOnOfficeFiveDayAndAMaebanEmployeesSameSaturdayIsAWorkday() {
-        // The owner REVERSED the ruling that would have moved Sales Support to OPS_6D -- this test
-        // exists to pin that reversal, not the original plan. Both sides on ONE fixture (CLAUDE.md's
-        // testing rule): a one-sided assertion ("Sales Support stays OFFICE_5D") would also pass if
-        // V121 accidentally left EVERY department alone, including the new แม่บ้าน department that
-        // genuinely must become OPS_6D. Checking both on the SAME Saturday rules that out.
+        // The owner REVERSED the ruling that would have moved Sales Support to OPS_6D -- this test exists to pin that
+        // reversal, not the original plan. Checking both on the SAME Saturday rules that out.
         long salesSupport1 = insertDepartment("SALES", "ฝ่ายสนับสนุนการขาย 1", null);
-        // จินตนา (10049) and ราม (10009) must exist so Part A's UPDATEs -- and the no-orphan-approver
-        // guard -- can actually assign the employees below an approver; this test is about Part C's
-        // schedule wiring, not Part A, so both are fixture setup, not the point under test.
+        // จินตนา (10049) and ราม (10009) must exist so Part A's UPDATEs -- and the no-orphan-approver guard -- can
+        // actually assign the employees below an approver; this test is about Part C's schedule wiring, not Part A, so
+        // both are fixture setup, not the point under test.
         insertEmployee("10049", null, null);
         insertEmployee("10009", null, null);
-        // V115's shape: DEPARTMENT-scope OFFICE_5D, effective_from 2024-10-01. A fresh test DB never
-        // had this row (same reason as elsewhere in this class), so it is seeded by hand -- this also
-        // proves V121 genuinely leaves a REAL pre-existing SALES row alone, not an absent one.
+        // V115's shape: DEPARTMENT-scope OFFICE_5D, effective_from 2024-10-01. A fresh test DB never had this row
+        // (same reason as elsewhere in this class), so it is seeded by hand -- this also proves V121 genuinely leaves
+        // a REAL pre-existing SALES row alone, not an absent one.
         assignDepartment(salesSupport1, "OFFICE_5D", LocalDate.of(2024, 10, 1), null);
         long salesSupportEmployee = insertEmployee("EMP-SALES-1", null, salesSupport1);
         long maebanEmployeeSeed = insertEmployee("10051", null, null);
 
         executeStatements(migrationSql);
 
-        // Exactly the ONE row seeded above -- V121 must not delete it, and must not add a second row
-        // for this scope either (which would also change what the resolver returns).
+        // Exactly the ONE row seeded above -- V121 must not delete it, and must not add a second row for this scope
+        // either (which would also change what the resolver returns).
         int salesSupportScheduleRows = jdbc.queryForObject("""
             SELECT count(*) FROM hr.work_schedule_assignment a
              WHERE a.scope_type = 'DEPARTMENT' AND a.scope_id = :deptId
@@ -144,8 +118,8 @@ class OrgNormalizationScheduleIntegrationTest extends AbstractPostgresIntegratio
 
     @Test
     void everySeededScheduleGetsTheFifteenMinuteGracePeriod() {
-        // Owner ruling: the late-arrival grace period rises from 5 to 15 minutes, company-wide,
-        // across every seeded schedule -- not just the ones this migration otherwise touches.
+        // Owner ruling: the late-arrival grace period rises from 5 to 15 minutes, company-wide, across every seeded
+        // schedule -- not just the ones this migration otherwise touches.
         executeStatements(migrationSql);
 
         Map<String, Object> graceByCode = new java.util.HashMap<>();
@@ -167,8 +141,8 @@ class OrgNormalizationScheduleIntegrationTest extends AbstractPostgresIntegratio
     @Test
     void theNewMaebanDepartmentItselfResolvesOps6dForAnyEmployeeFiledUnderIt() {
         long maebanEmployeeSeed = insertEmployee("10051", null, null);
-        // ราม (10009): see the identical note in the test above -- required for Part A's UPDATE and
-        // the no-orphan-approver guard, not the point under test here.
+        // ราม (10009): see the identical note in the test above -- required for Part A's UPDATE and the
+        // no-orphan-approver guard, not the point under test here.
         insertEmployee("10009", null, null);
         assignEmployee(maebanEmployeeSeed, "OPS_6D", LocalDate.of(2024, 10, 1), null);
 
@@ -178,8 +152,8 @@ class OrgNormalizationScheduleIntegrationTest extends AbstractPostgresIntegratio
             "SELECT department_id FROM hr.department WHERE source_code = 'HK'", Map.of(), Long.class);
         assertThat(maebanDeptId).isNotNull();
 
-        // A SECOND, unrelated employee filed under แม่บ้าน after the migration also resolves OPS_6D
-        // -- proving the department itself carries the schedule, not something specific to 10051.
+        // A SECOND, unrelated employee filed under แม่บ้าน after the migration also resolves OPS_6D -- proving the
+        // department itself carries the schedule, not something specific to 10051.
         long anotherHousekeepingEmployee = insertEmployee("HK-TEST-2", null, maebanDeptId);
         WorkSchedule resolved = resolver.resolve(anotherHousekeepingEmployee, null, maebanDeptId, SATURDAY);
         assertThat(resolved.isWorkday(SATURDAY))
@@ -189,13 +163,9 @@ class OrgNormalizationScheduleIntegrationTest extends AbstractPostgresIntegratio
 
     // --- helpers --------------------------------------------------------------------------------
 
-    /**
-     * Strips {@code --} line comments first, then splits into statements on {@code ;} -- mirrors
-     * PayrollComponentTaxTreatmentBackfillIntegrationTest#executeStatements, EXTENDED to be
-     * dollar-quote aware: V121 contains a {@code DO $$ ... $$} block whose body contains its own
-     * {@code ;} terminators that must NOT split the block apart. A semicolon is only a statement
-     * boundary when it appears OUTSIDE a {@code $$ ... $$} region.
-     */
+    /** Strips -- line comments first, then splits into statements on ; -- mirrors
+     * PayrollComponentTaxTreatmentBackfillIntegrationTest#executeStatements, EXTENDED to be dollar-quote aware: V121
+     * contains a DO $$ ... $$ block whose body contains its own ; terminators that must NOT split the block apart. */
     private void executeStatements(String sql) {
         StringBuilder withoutComments = new StringBuilder();
         for (String line : sql.split("\n")) {

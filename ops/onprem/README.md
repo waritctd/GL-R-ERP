@@ -90,6 +90,10 @@ Either way works; the second is what we used on cutover night.
 Then check it on the server with the same `docker image inspect` line as in step 2: `amd64` and
 the right commit.
 
+If the Mac's push to ghcr is refused (`denied`), copy the image over SSH as above and push it from
+the server, whose login can write: `docker push ghcr.io/waritctd/glr-hr-backend:v2026-11-20`. An
+image that is only on the server cannot be rolled back to from the registry.
+
 ### 4. Deploy the backend (on the server)
 
 Do it outside working hours: **restarting the backend logs everyone out**, because sessions live in

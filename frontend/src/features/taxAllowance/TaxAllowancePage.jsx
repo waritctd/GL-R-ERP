@@ -14,9 +14,7 @@ import { buildAllowanceSubmitBody, defaultAllowanceValues, SIGNED_FORM_EVIDENCE_
 import { selectCurrentDeclaration, selectResumableDeclaration, taxAllowanceStatusInfo } from './taxAllowanceStatus.js';
 
 // Editable directly (or via "แก้ไข / ยื่นฉบับใหม่"): no declaration yet, or the current one was
-// rejected/expired. PENDING stays read-only — its way out is withdrawal, not editing (see the
-// withdraw action below), because a second submission would collide with
-// `submitMyTaxAllowanceDeclaration`'s "already pending" 409.
+// rejected/expired.
 const EDITABLE_STATUS_KEYS = new Set(['NONE', 'REJECTED', 'EXPIRED']);
 
 /**
@@ -58,8 +56,8 @@ export function TaxAllowancePage({ user, showToast }) {
   const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
   const currentYear = new Date().getFullYear();
-  // Past years are viewable but never editable: submitting always targets the year in the body,
-  // and there is no product story for filing a fresh ล.ย.01 against a closed tax year.
+  // Past years are viewable but never editable: submitting always targets the year in the body, and there is no
+  // product story for filing a fresh ล.ย.01 against a closed tax year.
   const yearOptions = useMemo(
     () => [currentYear, currentYear - 1, currentYear - 2],
     [currentYear],
@@ -68,8 +66,8 @@ export function TaxAllowancePage({ user, showToast }) {
   // `year`/`view` live in the URL (same `updateParams` idiom as TaxAllowanceReviewPage.jsx's
   // register): shareable, survives a reload, and gives HUB/SECTION/REVIEW a real address.
   const requestedYear = Number(searchParams.get('year'));
-  // An out-of-range or garbage `?year=` falls back to the current year rather than leaving the
-  // <select> on a blank option that matches nothing in the list.
+  // An out-of-range or garbage `?year=` falls back to the current year rather than leaving the <select> on a
+  // blank option that matches nothing in the list.
   const taxYear = yearOptions.includes(requestedYear) ? requestedYear : currentYear;
   const isCurrentYear = taxYear === currentYear;
 
@@ -93,18 +91,16 @@ export function TaxAllowancePage({ user, showToast }) {
   const [withdrawing, setWithdrawing] = useState(false);
   // True while the employee is being asked to confirm abandoning a revision that has unsaved work.
   const [cancellingRevision, setCancellingRevision] = useState(false);
-  // Set from TaxAllowanceForm's own `formState.isDirty` via `onDirtyChange` below — guards the year
-  // switch against silently discarding unsaved edits, the same way `hasStagedEvidence` guards it
-  // against silently discarding staged-but-unsent files.
+  // Set from TaxAllowanceForm's own `formState.isDirty` via `onDirtyChange` below — guards the year switch
+  // against silently discarding unsaved edits, the same way `hasStagedEvidence` guards it against silently
+  // discarding staged-but-unsent files.
   const [formDirty, setFormDirty] = useState(false);
-  // The year the employee picked while a switch is blocked on confirmation; null means none is
-  // pending. Kept separate from `taxYear` itself so the <select> (`value={taxYear}`) keeps showing
-  // the OLD year until the switch is actually confirmed — that "don't commit yet" is the point.
+  // The year the employee picked while a switch is blocked on confirmation; null means none is pending. Kept
+  // separate from `taxYear` itself so the <select> (`value={taxYear}`) keeps showing the OLD year until the
+  // switch is actually confirmed — that "don't commit yet" is the point.
   const [pendingYearChange, setPendingYearChange] = useState(null);
-  // The values a submit event asked to file, held while the employee confirms; null means no
-  // confirmation is open. Holding the VALUES rather than a bare boolean is what makes the dialog a
-  // gate instead of a decoration — there is nothing to file until this is set, so a submit that
-  // never reaches the confirm button cannot reach the API either. See `handleSubmit` below.
+  // The values a submit event asked to file, held while the employee confirms; null means no confirmation is
+  // open. See `handleSubmit` below.
   const [pendingSubmitValues, setPendingSubmitValues] = useState(null);
 
   // Staged (not-yet-uploaded) evidence, keyed by TAX_ALLOWANCE_GROUPS' `key` (the null key holds
@@ -178,16 +174,15 @@ export function TaxAllowancePage({ user, showToast }) {
   const declarations = useMemo(() => declarationsQuery.data?.items ?? [], [declarationsQuery.data]);
   const headerPrefill = declarationsQuery.data?.headerPrefill ?? null;
   const current = useMemo(() => selectCurrentDeclaration(declarations), [declarations]);
-  // Feeds ONLY the form's prefill (`defaultValues` below) when there is no current declaration for
-  // this tax year -- see selectResumableDeclaration's own doc comment for why WITHDRAWN specifically
-  // and why this must never feed statusInfo/canStartEdit/evidenceMode, all of which stay keyed on
-  // `current` alone below.
+  // Feeds ONLY the form's prefill when there is no current declaration for this tax year -- see
+  // selectResumableDeclaration's own doc comment for why WITHDRAWN specifically and why this must never feed
+  // statusInfo/canStartEdit/evidenceMode, all of which stay keyed on `current` alone below.
   const resumable = useMemo(() => selectResumableDeclaration(declarations), [declarations]);
   const statusInfo = useMemo(() => taxAllowanceStatusInfo(current), [current]);
   const canStartEdit = EDITABLE_STATUS_KEYS.has(statusInfo.key) && isCurrentYear;
-  // Kept SEPARATE from `canStartEdit` rather than folded into it, because the two differ in what
-  // they mean for the prefill below: a revisable declaration is one HR has already accepted, so it
-  // must keep showing what was filed until the employee actually asks to revise it.
+  // Kept SEPARATE from `canStartEdit` rather than folded into it, because the two differ in what they mean for
+  // the prefill below: a revisable declaration is one HR has already accepted, so it must keep showing what was
+  // filed until the employee actually asks to revise it.
   const canRevise = REVISABLE_STATUS_KEYS.has(statusInfo.key) && isCurrentYear;
 
   // Three-way evidence mode -- see TaxAllowanceEvidencePanel's own
@@ -206,9 +201,9 @@ export function TaxAllowancePage({ user, showToast }) {
     // `isLoading` rather than `isPending`: a disabled query stays pending forever.
     if (declarationsQuery.isLoading) return;
     setEditing(statusInfo.key === 'NONE' && isCurrentYear);
-    // A different declaration (or none) is now current -- any staged-but-unsent evidence belonged
-    // to whatever was being edited a moment ago; carrying it forward across an identity change
-    // would attach it to the wrong declaration once flushed.
+    // A different declaration (or none) is now current -- any staged-but-unsent evidence belonged to whatever was
+    // being edited a moment ago; carrying it forward across an identity change would attach it to the wrong
+    // declaration once flushed.
     setStagedEvidence({});
   }, [statusInfo.key, current?.declarationId, isCurrentYear, declarationsQuery.isLoading]);
 
@@ -253,8 +248,8 @@ export function TaxAllowancePage({ user, showToast }) {
   // `defaultAllowanceValues` composes them per slot: anything the declaration already holds wins,
   // and the prefill only reaches slots the employee left blank.
   const headerPrefillAllowed = canStartEdit || editing;
-  // The disable below has to sit immediately above the DEPENDENCY ARRAY, not above the `useMemo`
-  // call: exhaustive-deps reports on the array's own line, and this call no longer fits on one.
+  // The disable below has to sit immediately above the DEPENDENCY ARRAY, not above the `useMemo` call:
+  // exhaustive-deps reports on the array's own line, and this call no longer fits on one.
   const defaultValues = useMemo(
     () => defaultAllowanceValues(current ?? resumable, headerPrefillAllowed ? headerPrefill : null),
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -284,10 +279,8 @@ export function TaxAllowancePage({ user, showToast }) {
     URL.revokeObjectURL(url);
   }
 
-  /**
-   * Renders the filled ล.ย.01 from the CURRENT, unsaved values and hands it to the browser to
-   * download. Nothing is persisted — the employee prints it, signs it, and attaches the scan back.
-   */
+  /** Renders the filled ล.ย.01 from the CURRENT, unsaved values and hands it to the browser to download. Nothing
+   * is persisted — the employee prints it, signs it, and attaches the scan back. */
   const pdfMutation = useMutation({
     mutationFn: (body) => api.payroll.renderMyTaxAllowanceForm(body),
     onSuccess: (blob) => {
@@ -331,30 +324,26 @@ export function TaxAllowancePage({ user, showToast }) {
     onSuccess: async (created) => {
       queryClient.invalidateQueries({ queryKey: queryKeys.taxAllowanceDeclarationsMe(taxYear) });
       showToast?.('success', 'ยื่นแบบแจ้งเรียบร้อย รอ HR ตรวจสอบ');
-      // Closes the confirmation. Deliberately here and in onError rather than immediately after
-      // `mutate`, so the dialog stays up showing its busy state for the whole round trip — that is
-      // also what stops a second confirm click firing a duplicate filing.
+      // Closes the confirmation. Deliberately here and in onError rather than immediately after `mutate`, so the
+      // dialog stays up showing its busy state for the whole round trip — that is also what stops a second confirm
+      // click firing a duplicate filing.
       setPendingSubmitValues(null);
       setEditing(false);
-      // Land back on the hub -- REVIEW's own submit button is about to disappear under the
-      // now-PENDING declaration's `readOnly`, and leaving the employee stranded there with the
-      // control they just used suddenly gone would read as broken, not successful.
+      // Land back on the hub -- REVIEW's own submit button is about to disappear under the now-PENDING declaration's
+      // `readOnly`, and leaving the employee stranded there with the control they just used suddenly gone would read
+      // as broken, not successful.
       await flushStagedEvidence(created.declarationId);
     },
     onError: (error) => {
-      // The dialog closes on failure too, and the form stays editable underneath with everything
-      // still typed — the employee can fix whatever the server objected to and file again.
+      // The dialog closes on failure too, and the form stays editable underneath with everything still typed — the
+      // employee can fix whatever the server objected to and file again.
       setPendingSubmitValues(null);
       showToast?.('error', error.message || 'ยื่นแบบแจ้งไม่สำเร็จ');
     },
   });
 
-  // Sends every staged file (see the `stagedEvidence` state's own comment above) against the
-  // declarationId the submit above JUST created -- the earliest point a real one exists. Runs
-  // sequentially rather than Promise.all so one failure does not abort files already in flight, and
-  // reports a single summary toast rather than one per file. The declaration itself is ALREADY
-  // submitted by the time this runs (submitMutation's onSuccess already fired) -- an attachment
-  // failure here is reported separately and never rolls back or blocks the submission.
+  // Sends every staged file (see the `stagedEvidence` state's own comment above) against the declarationId the
+  // submit above JUST created -- the earliest point a real one exists.
   async function flushStagedEvidence(declarationId) {
     const entries = Object.entries(stagedEvidence).flatMap(([key, files]) =>
       files.map((item) => ({ sectionKey: key === UNCATEGORIZED_EVIDENCE_KEY ? null : key, item })));
@@ -362,8 +351,8 @@ export function TaxAllowancePage({ user, showToast }) {
     let failureCount = 0;
     for (const { sectionKey, item } of entries) {
       try {
-        // Sequential by design, see the comment above -- no-await-in-loop isn't enabled in this
-        // project's ESLint config, so no disable directive is needed here.
+        // Sequential by design, see the comment above -- no-await-in-loop isn't enabled in this project's ESLint
+        // config, so no disable directive is needed here.
         await api.payroll.uploadTaxAllowanceAttachment(declarationId, item.file, sectionKey ?? undefined);
       } catch {
         failureCount += 1;
@@ -426,8 +415,8 @@ export function TaxAllowancePage({ user, showToast }) {
     ? `กำลังดูข้อมูลย้อนหลังของปีภาษี ${taxYear} — ยื่นหรือแก้ไขได้เฉพาะปีภาษี ${currentYear}`
     : STATUS_EXPLANATIONS[statusInfo.key] ?? null;
 
-  // One string for the form's submit button AND the confirmation's confirm button. Extracted so the
-  // dialog cannot end up promising a different action from the control that opened it.
+  // One string for the form's submit button AND the confirmation's confirm button. Extracted so the dialog
+  // cannot end up promising a different action from the control that opened it.
   const submitLabel = statusInfo.key === 'NONE' ? 'ยื่นแบบแจ้ง' : 'ยื่นฉบับใหม่';
 
   /**
@@ -449,15 +438,14 @@ export function TaxAllowancePage({ user, showToast }) {
 
   const statusAction = statusInfo.key === 'PENDING' && isCurrentYear
     ? { label: 'ยกเลิกการยื่น', variant: 'danger', onClick: () => setWithdrawing(true) }
-    // A revision in progress owns the slot: the way OUT of it is the only action that still makes
-    // sense there, and it keeps the region's one-action rule intact.
+    // A revision in progress owns the slot: the way OUT of it is the only action that still makes sense there, and
+    // it keeps the region's one-action rule intact.
     : (editing && canRevise
       ? { label: 'ยกเลิกการแก้ไข', variant: 'secondary', onClick: requestCancelRevision }
       : (!editing && (canStartEdit || canRevise)
         ? {
-          // Different words for a different act. "แก้ไข / ยื่นฉบับใหม่" answers a rejected or
-          // expired filing; this one replaces a declaration that is already in force, and the label
-          // should not pretend those are the same thing.
+          // Different words for a different act. "แก้ไข / ยื่นฉบับใหม่" answers a rejected or expired filing; this one
+          // replaces a declaration that is already in force, and the label should not pretend those are the same thing.
           label: canRevise ? 'ยื่นฉบับแก้ไข' : 'แก้ไข / ยื่นฉบับใหม่',
           variant: 'secondary',
           onClick: () => setEditing(true),
@@ -522,8 +510,8 @@ export function TaxAllowancePage({ user, showToast }) {
           onDirtyChange={setFormDirty}
           onGeneratePdf={handleGeneratePdf}
           generatingPdf={pdfMutation.isPending}
-          // Only offered once a declaration actually exists to fetch — there is no saved row to ask
-          // the server for on a year that was never filed.
+          // Only offered once a declaration actually exists to fetch — there is no saved row to ask the server for on a
+          // year that was never filed.
           onDownloadFiledForm={current?.declarationId
             ? () => downloadFiledFormMutation.mutate(current.declarationId)
             : undefined}
@@ -544,10 +532,8 @@ export function TaxAllowancePage({ user, showToast }) {
       <ConfirmDialog
         open={pendingSubmitValues != null}
         title={canRevise ? 'ยื่นแบบแจ้ง ล.ย.01 ฉบับแก้ไข' : 'ยื่นแบบแจ้ง ล.ย.01'}
-        // A revision needs its own sentence, because the consequence differs in the way that
-        // worries people: the declaration already applying to their payroll is NOT switched off by
-        // filing this. `supersedeApproved` runs inside TaxAllowanceDeclarationService#approve, not
-        // at submit, so the old one keeps applying until HR accepts the new one.
+        // A revision needs its own sentence, because the consequence differs in the way that worries people: the
+        // declaration already applying to their payroll is NOT switched off by filing this.
         message={canRevise
           ? 'แบบแจ้งฉบับแก้ไขจะถูกส่งให้ฝ่ายบุคคลตรวจสอบ ฉบับที่ใช้อยู่ปัจจุบันจะยังมีผลกับเงินเดือนต่อไปจนกว่าฝ่ายบุคคลจะอนุมัติฉบับใหม่ ต้องการยื่นหรือไม่'
           : 'แบบแจ้งฉบับนี้จะถูกส่งให้ฝ่ายบุคคลตรวจสอบ และแบบฟอร์มจะถูกล็อกไม่ให้แก้ไขจนกว่าจะยกเลิกการยื่น ต้องการยื่นหรือไม่'}

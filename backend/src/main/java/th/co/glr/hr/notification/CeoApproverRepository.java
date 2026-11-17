@@ -5,21 +5,8 @@ import java.util.Map;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
 
-/**
- * Centralizes the CEO-notification recipient lookup that used to be copy-pasted across {@code
- * OvertimeRepository}, {@code SpecialMoneyRepository}, {@code CommissionRepository} and {@code
- * AttendanceCorrectionRepository} -- each an identical {@code MD%}/{@code MN%} division-prefix
- * query -- plus a fifth inline copy in {@code NotificationRepository#notifyByRoleInternal}'s
- * {@code "ceo"} case. Every one of those five call sites lived inside a {@code notify*} method;
- * none was a permission gate, and this class is not one either -- see {@link CeoApproverRule}.
- *
- * <p>Consolidation (2026-08-16): the four repository methods (already byte-identical -- each
- * ported to {@link CeoApproverRule#SQL_PREDICATE} in an earlier change) are gone, not just
- * synchronized. {@code CommissionService}, {@code OvertimeService}, {@code SpecialMoneyService}
- * and {@code AttendanceCorrectionService} now depend on this class directly (a constructor-injected
- * {@code ceoApprovers} field) instead of on their own repository's copy, so there is exactly one
- * SQL statement backing this rule -- nothing left to drift.
- */
+/** Centralizes the CEO-notification recipient lookup that used to be copy-pasted across OvertimeRepository,
+ * SpecialMoneyRepository, CommissionRepository and AttendanceCorrectionRepository. */
 @Repository
 public class CeoApproverRepository {
     private final NamedParameterJdbcTemplate jdbc;
@@ -28,11 +15,9 @@ public class CeoApproverRepository {
         this.jdbc = jdbc;
     }
 
-    /**
-     * Active employees who should be notified about a CEO-stage approval, per {@link
-     * CeoApproverRule#SQL_PREDICATE}. Ordered by {@code employee_id} -- kept from the four
-     * repository methods this replaces, so notification order stays deterministic.
-     */
+    /** Active employees who should be notified about a CEO-stage approval, per CeoApproverRule#SQL_PREDICATE.
+     * Ordered by employee_id -- kept from the four repository methods this replaces, so notification order stays
+     * deterministic. */
     public List<Long> findEmployeeIds() {
         return jdbc.query("""
             SELECT e.employee_id

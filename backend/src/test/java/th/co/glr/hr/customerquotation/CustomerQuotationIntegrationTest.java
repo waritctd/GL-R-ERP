@@ -136,8 +136,8 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         FxRateRepository fxRates = new FxRateRepository(jdbc);
         th.co.glr.hr.pricingcosting.PricingFormulaEngine formulaEngine =
             new th.co.glr.hr.pricingcosting.PricingFormulaEngine(new PricingFormulaConfigRepository(jdbc));
-        // V152 (V109 engine wiring): shared by FactoryQuoteService's markReadyForCosting
-        // auto-advance check and PricingDecisionService's startReview/recalculateCost.
+        // V152 (V109 engine wiring): shared by FactoryQuoteService's markReadyForCosting auto-advance check and
+        // PricingDecisionService's startReview/recalculateCost.
         th.co.glr.hr.pricingcosting.LandedCostCalculator landedCostCalculator =
             new th.co.glr.hr.pricingcosting.LandedCostCalculator(factoryQuotes, pricingRequests, fxRates,
                 new FactoryConfigRepository(jdbc), new CatalogRepository(jdbc), formulaEngine);
@@ -145,8 +145,8 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             new FactoryConfigRepository(jdbc), notifications, fileStorage,
             landedCostCalculator);
         costingRepository = new PricingCostingRepository(jdbc);
-        // V141: PricingCostingService is READ-ONLY now (list/get) — Import's costing
-        // create/recalculate/submit is gone; the CEO computes it via PricingDecisionService.
+        // V141: PricingCostingService is READ-ONLY now (list/get) — Import's costing create/recalculate/submit is
+        // gone; the CEO computes it via PricingDecisionService.
         costingService = new PricingCostingService(costingRepository, pricingRequests, tickets);
         decisionRepository = new PricingDecisionRepository(jdbc);
         decisionService = new PricingDecisionService(decisionRepository, pricingRequests, costingRepository,
@@ -171,12 +171,9 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         accountActor = actor(accountUserId, "account");
         salesManagerActor = actor(salesManagerUserId, "sales_manager");
 
-        // V152 (V109 engine wiring): factory country must be one of V109's seeded origin
-        // countries (Italy/Spain/China) or LandedCostCalculator's freight lookup 422s ("ไม่พบ
-        // อัตราค่าขนส่ง") — 'Thailand'/'TestLand4' (pre-V109) are no longer costable. Every
-        // catalogProductIdFactory* below uses insertCatalogProduct's 6-arg overload, which
-        // defaults thickness_mm to 10 (inside Italy's seeded [8,12) band, whose top band is
-        // open-ended, so ANY quantity resolves — see that helper's own comment).
+        // V152 (V109 engine wiring): factory country must be one of V109's seeded origin countries (Italy/Spain/China)
+        // or LandedCostCalculator's freight lookup 422s ("ไม่พบ อัตราค่าขนส่ง") — 'Thailand'/'TestLand4' (pre-V109)
+        // are no longer costable.
         catalogProductIdFactoryA = insertCatalogProduct("Factory A4", "IT", "TEST-A4-001",
             new BigDecimal("100.00"), "THB", "per_piece");
         catalogProductIdFactoryB = insertCatalogProduct("Factory B4", "IT", "TEST-B4-001",
@@ -195,9 +192,7 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         ticketId = created.summary().id();
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Acceptance scenario (end to end, real Postgres)
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void acceptanceScenario_draftDiscountPreviewIssue() {
@@ -210,8 +205,8 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(draft.docStatus()).isEqualTo(QuotationStatus.DRAFT);
         assertThat(draft.quotationRevisionNo()).isEqualTo(1);
         assertThat(draft.items()).hasSize(2);
-        // No cost/margin/FX field anywhere on the DTO — structural, not just tested (see the
-        // record definition itself), re-confirmed here defensively.
+        // No cost/margin/FX field anywhere on the DTO — structural, not just tested (see the record definition
+        // itself), re-confirmed here defensively.
         for (CustomerQuotationItemDto item : draft.items()) {
             assertThat(item.approvedUnitPrice()).isNotNull();
             assertThat(item.finalUnitPrice()).isEqualByComparingTo(item.approvedUnitPrice());
@@ -286,9 +281,7 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             """, Map.of("id", ticketId), Long.class)).isEqualTo(1L);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Legacy render columns (model/color/texture/size) — bug fix regression coverage
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     /**
      * Regression test for "สร้างใบเสนอราคาแล้ว รายละเอียดสินค้าไม่ขึ้น ทั้ง excel และ pdf": before
@@ -323,9 +316,9 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(row.get("texture")).isEqualTo("ผิวมัน");
         assertThat(row.get("size")).isEqualTo("60x60-Render4");
 
-        // 2. TicketRepository.findQuotationItemsByQuotationId is exactly what
-        // QuotationRenderer#buildDesc reads at render time (CustomerQuotationService's own
-        // loadRenderContext calls this, unmodified) — confirm the four values survive that read.
+        // 2. TicketRepository.findQuotationItemsByQuotationId is exactly what QuotationRenderer#buildDesc reads at
+        // render time (CustomerQuotationService's own loadRenderContext calls this, unmodified) — confirm the four
+        // values survive that read.
         List<TicketItemDto> renderItems = tickets.findQuotationItemsByQuotationId(draft.id(), ticketId);
         assertThat(renderItems).hasSize(1);
         TicketItemDto renderItem = renderItems.get(0);
@@ -334,12 +327,7 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(renderItem.texture()).isEqualTo("ผิวมัน");
         assertThat(renderItem.size()).isEqualTo("60x60-Render4");
 
-        // 3. End to end: renderXlsx -> QuotationRenderer.toXlsx (reused as-is, never modified —
-        // the bug was never in this class) actually prints รุ่น/สี/ขนาด/พื้นผิว, not the bare
-        // "กระเบื้อง" the user reported. No LibreOffice needed here — toXlsx (unlike toPdf) is
-        // pure POI. Row/column layout per QuotationRendererTest's own
-        // xlsxSubtotalCellSumsAllPricedItemsNotJustTheRenderedFifteen comment: items start at
-        // 0-based row 9 in the flow layout; column B (description) is index 1.
+        // Check the XLSX renderer prints the full item description from the stored quotation.
         byte[] xlsx = quotationService.renderXlsx(draft.id(), salesActor);
         try (var wb = org.apache.poi.ss.usermodel.WorkbookFactory.create(new java.io.ByteArrayInputStream(xlsx))) {
             var sheet = wb.getSheet("Update") != null ? wb.getSheet("Update") : wb.getSheetAt(0);
@@ -351,9 +339,7 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         }
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Unit basis (highest financial risk)
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void unitBasis_perBoxAndPerPieceRequests_atSamePhysicalQuantity_produceTheSameLineTotal() {
@@ -416,10 +402,8 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         CustomerQuotationDto draft = quotationService.create(pricingRequestId,
             new CreateCustomerQuotationRequest(null, null, null, null, null, null), salesActor);
         CustomerQuotationItemDto item = draft.items().get(0);
-        // approvedPricingRequest() sets an EXPLICIT CEO minimum of ฿50.00 per item (well below
-        // its own approved price) — mirrors the original test's own "just past the floor" discount
-        // rather than assuming Phase 1 auto-population (that fixture is
-        // PricingDecisionMinimumPriceAutoPopulationIntegrationTest's, not this one).
+        // approvedPricingRequest sets an EXPLICIT CEO minimum of ฿50.00 per item — mirrors the original test's own
+        // "just past the floor" discount rather than assuming Phase 1 auto-population.
         BigDecimal discount = item.approvedUnitPrice().subtract(item.minimumSellingPricePerRequestedUnit())
             .add(new BigDecimal("1.00"));
         BigDecimal belowMinimumPrice = item.approvedUnitPrice().subtract(discount);
@@ -433,8 +417,8 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(discountedItem.salesDiscount()).isEqualByComparingTo(discount);
         assertThat(discountedItem.finalUnitPrice()).isEqualByComparingTo(belowMinimumPrice);
 
-        // A pending discount-approval request now exists for exactly this line, at exactly this
-        // price, and the CEO was notified.
+        // A pending discount-approval request now exists for exactly this line, at exactly this price, and the CEO was
+        // notified.
         assertThat(jdbc.queryForObject("""
             SELECT COUNT(*) FROM sales.quotation_item_discount_approval
              WHERE quotation_item_id = :itemId AND status = 'PENDING' AND requested_final_unit_price = :price
@@ -443,8 +427,8 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             SELECT COUNT(*) FROM hr.notification WHERE type = 'DISCOUNT_APPROVAL_REQUESTED'
             """, Map.of(), Long.class)).isEqualTo(1L);
 
-        // Site ~306 (issue()'s own gate): STILL refuses — now because the line is below minimum
-        // AND not yet CEO-approved, rather than merely below minimum.
+        // Site ~306 (issue()'s own gate): STILL refuses — now because the line is below minimum AND not yet
+        // CEO-approved, rather than merely below minimum.
         assertThatThrownBy(() -> quotationService.issue(discounted.id(), new IssueCustomerQuotationRequest(null), salesActor))
             .isInstanceOfSatisfying(ApiException.class,
                 e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_CONTENT));
@@ -453,9 +437,7 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(quotationService.get(discounted.id(), salesActor).docStatus()).isEqualTo(QuotationStatus.DRAFT);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Revisions
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void correctionAfterIssue_createsRevision2_andLeavesRevision1Readable() {
@@ -498,8 +480,8 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         long pricingRequestId = approvedPricingRequest();
         CustomerQuotationDto draft = quotationService.create(pricingRequestId,
             new CreateCustomerQuotationRequest(null, null, null, null, null, null), salesActor);
-        // "QT-<year>-<4-digit seq>-1" -- the suffix from the very first document, not a bare
-        // number. Regex (not a literal seq value) because the sequence is shared, real-DB state.
+        // "QT-<year>-<4-digit seq>-1" -- the suffix from the very first document, not a bare number. Regex (not a
+        // literal seq value) because the sequence is shared, real-DB state.
         assertThat(draft.number()).matches("QT-\\d{4}-\\d{4}-1");
     }
 
@@ -539,8 +521,8 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
 
         CustomerQuotationDto rev2 = quotationService.createRevision(issued.id(),
             new CreateRevisionRequest(null, UUID.randomUUID().toString()), salesActor);
-        // {bare}-2 -- treating the bare original as version 1. NOT {bare}-1 (would collide
-        // conceptually with the original) and NOT a freshly-minted, unrelated code.
+        // {bare}-2 -- treating the bare original as version 1. NOT {bare}-1 (would collide conceptually with the
+        // original) and NOT a freshly-minted, unrelated code.
         assertThat(rev2.number()).isEqualTo(bareNumber + "-2");
     }
 
@@ -559,17 +541,15 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         List<String> numbers = List.of(rev1.number(), rev2.number(), rev3.number());
         assertThat(numbers).doesNotHaveDuplicates();
 
-        // The UNIQUE constraint (V6 sales.quotation.number) is the real enforcement -- confirm the
-        // three rows actually persisted three distinct strings, not just three distinct DTOs.
+        // The UNIQUE constraint (V6 sales.quotation.number) is the real enforcement -- confirm the three rows actually
+        // persisted three distinct strings, not just three distinct DTOs.
         Long distinctCount = jdbc.queryForObject(
             "SELECT COUNT(DISTINCT number) FROM sales.quotation WHERE quotation_id IN (:ids)",
             Map.of("ids", List.of(rev1.id(), rev2.id(), rev3.id())), Long.class);
         assertThat(distinctCount).isEqualTo(3L);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Immutability
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void issuedQuotation_cannotBeEdited() {
@@ -591,9 +571,7 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(itemById(reread, item.id()).finalUnitPrice()).isEqualByComparingTo(item.finalUnitPrice());
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Authorization — wrong-way-round
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void nonOwningSalesRep_cannotReadEditOrIssueAnotherRepsQuotation() {
@@ -682,9 +660,7 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Input gate
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void create_rejectedWhenPricingRequestNotYetApprovedForQuotation() {
@@ -778,8 +754,8 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(rev2.quotationRevisionNo()).isEqualTo(2);
         assertThat(rev2.parentQuotationId()).isEqualTo(revisionRequested.id());
 
-        // createRevision still supersedes its source after the guard widening (confirmed, not
-        // assumed — supersede()'s own WHERE clause needed widening too, see the repository).
+        // createRevision still supersedes its source after the guard widening (confirmed, not assumed — supersede()'s
+        // own WHERE clause needed widening too, see the repository).
         CustomerQuotationDto oldAfter = quotationService.get(revisionRequested.id(), salesActor);
         assertThat(oldAfter.docStatus()).isEqualTo(QuotationStatus.SUPERSEDED);
     }
@@ -813,8 +789,8 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             "SELECT status FROM sales.pricing_decision WHERE pricing_request_id = :id",
             Map.of("id", pricingRequestId), String.class)).isEqualTo("APPROVED");
 
-        // Cost-affecting path: PricingRequestService.createCustomerChangeRevision (a
-        // product/quantity change — the mechanism createRevision structurally cannot do).
+        // Cost-affecting path: PricingRequestService.createCustomerChangeRevision (a product/quantity change — the
+        // mechanism createRevision structurally cannot do).
         var parentSummary = pricingRequestService.get(pricingRequestId, salesActor).summary();
         PricingRequestRequests.CustomerChangeRevisionRequest changeRequest = new PricingRequestRequests.CustomerChangeRevisionRequest(
             "ลูกค้าขอเปลี่ยนจำนวนสินค้า", UUID.randomUUID().toString(), parentSummary.recipientType(), null, "Designer Co.",
@@ -822,15 +798,15 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             List.of(pricingItem("SCG", "Tile A4", "Factory A4", new BigDecimal("99"))));
         var revisionDetail = pricingRequestService.createCustomerChangeRevision(pricingRequestId, changeRequest, salesActor);
 
-        // Design correction 1, still in force for the INTERNAL state: the OLD pricing request and
-        // OLD decision are SUPERSEDED — neither silently reads as current any more.
+        // Design correction 1, still in force for the INTERNAL state: the OLD pricing request and OLD decision are
+        // SUPERSEDED — neither silently reads as current any more.
         assertThat(pricingRequestService.get(pricingRequestId, salesActor).summary().status())
             .isEqualTo(PricingRequestStatus.SUPERSEDED);
         assertThat(jdbc.queryForObject(
             "SELECT status FROM sales.pricing_decision WHERE pricing_request_id = :id",
             Map.of("id", pricingRequestId), String.class)).isEqualTo("SUPERSEDED");
-        // Reissue-through-CEO-chain: the CUSTOMER-FACING document is deliberately NOT retired here.
-        // The customer's offer stays exactly as it was until a replacement actually issues.
+        // Reissue-through-CEO-chain: the CUSTOMER-FACING document is deliberately NOT retired here. The customer's
+        // offer stays exactly as it was until a replacement actually issues.
         CustomerQuotationDto oldQuotation = quotationService.get(revisionRequested.id(), salesActor);
         assertThat(oldQuotation.docStatus()).isEqualTo(QuotationStatus.REVISION_REQUESTED);
 
@@ -839,18 +815,9 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(revisionDetail.summary().parentPricingRequestId()).isEqualTo(pricingRequestId);
     }
 
-    /**
-     * Review follow-up to design correction 1: {@code cancelOpenStep2Children}'s other caller,
-     * {@code cancelOpenForTicket} (the deal-lost/deal-cancelled cascade from {@code
-     * TicketService}), had exactly the same gap as {@code createCustomerChangeRevision} did
-     * before this fix — it cancels the pricing request but never touched a DRAFT/APPROVED
-     * decision or a non-terminal quotation. Unlike {@code PricingRequestService.cancel} (whose
-     * own {@code canTransition}-gated statuses can never co-exist with an open decision, so the
-     * equivalent fix there is defensive-only — see that method's comment), this path uses {@code
-     * cancelForDeadDeal}, which deliberately bypasses {@code canTransition} to cancel from ANY
-     * open status once the deal itself goes terminal — so it genuinely CAN reach a pricing
-     * request with an APPROVED decision and an ISSUED quotation, exactly this scenario.
-     */
+    /** Review follow-up to design correction 1: cancelOpenStep2Children's other caller, cancelOpenForTicket, had
+     * exactly the same gap as createCustomerChangeRevision did before this fix — it cancels the pricing request
+     * but never touched a DRAFT/APPROVED decision or a non-terminal quotation. */
     @Test
     void ticketMarkLost_cascadesToSupersedeAnOpenPricingDecisionAndQuotation() {
         long pricingRequestId = approvedPricingRequest();
@@ -882,11 +849,9 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(rev2.docStatus()).isEqualTo(QuotationStatus.DRAFT);
     }
 
-    /**
-     * Negative space for design correction 3's widened guard: EVERY status other than ISSUED and
-     * REVISION_REQUESTED must still be rejected — proves the widening did not silently become
-     * "any status", per the task's explicit instruction to test both directions.
-     */
+    /** Negative space for design correction 3's widened guard: EVERY status other than ISSUED and
+     * REVISION_REQUESTED must still be rejected — proves the widening did not silently become "any status", per
+     * the task's explicit instruction to test both directions. */
     @Test
     void createRevision_widenedGuard_stillRejectsEveryOtherStatus() {
         // DRAFT: never issued.
@@ -1019,8 +984,8 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThatThrownBy(() -> quotationService.recordOutcome(issued.id(),
             new RecordQuotationOutcomeRequest("EXPIRED", null, UUID.randomUUID().toString()), salesActor))
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
-        // Still rejected for a role that also has no other access to this aggregate — proves
-        // EXPIRED is refused unconditionally, not merely "not an owner".
+        // Still rejected for a role that also has no other access to this aggregate — proves EXPIRED is refused
+        // unconditionally, not merely "not an owner".
         assertThatThrownBy(() -> quotationService.recordOutcome(issued.id(),
             new RecordQuotationOutcomeRequest("EXPIRED", null, UUID.randomUUID().toString()), ceoActor))
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isIn(HttpStatus.BAD_REQUEST, HttpStatus.FORBIDDEN));
@@ -1084,18 +1049,9 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     // Quotation arithmetic reconciliation: document-level VAT/grand total
     // ─────────────────────────────────────────────────────────────────────────────────────
 
-    /**
-     * {@code vatAmount}/{@code grandTotal} must be {@code round2(subtotal × 7%)} /
-     * {@code subtotal + vatAmount} — a SINGLE document-level rounding — never
-     * {@code Σ item.vat}/{@code Σ item.lineTotal}, which double-rounds through each already-2dp
-     * per-line figure and can drift a satang from the document-level rounding. Three real
-     * QN6900971-4 line amounts (47,111.78 / 9,715.14 / 35,799.63) are used here specifically
-     * because their per-line VAT sums to 6,483.85 while round2(their subtotal × 7%) is 6,483.86 —
-     * hand-verified before writing this test, not asserted on faith. Each item is priced via the
-     * CEO's "ปรับราคาเอง" selling-price override at quantity 1, so
-     * {@code lineSubtotal == finalUnitPrice == the override value} exactly, with no discount or
-     * quantity multiplication in the way of hitting these figures to the satang.
-     */
+    /** vatAmount/grandTotal must be round2(subtotal × 7%) / subtotal + vatAmount — a SINGLE document-level rounding
+     * — never Σ item.vat/Σ item.lineTotal, which double-rounds through each already-2dp per-line figure and can
+     * drift a satang from the document-level rounding. */
     @Test
     void vatAndGrandTotal_areDocumentLevelRounding_notTheSumOfPerLineFigures() {
         long pricingRequestId = threeItemSubmittedCosting();
@@ -1125,9 +1081,9 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         BigDecimal expectedSubtotal = new BigDecimal("92626.55");
         BigDecimal expectedVat = new BigDecimal("6483.86");
         BigDecimal expectedGrandTotal = new BigDecimal("99110.41");
-        // Guard the fixture's own premise: the naive Σ per-line VAT this test exists to catch
-        // really does diverge from the document-level figure on these three lines — otherwise the
-        // test could pass on either implementation and prove nothing.
+        // Guard the fixture's own premise: the naive Σ per-line VAT this test exists to catch really does diverge from
+        // the document-level figure on these three lines — otherwise the test could pass on either implementation and
+        // prove nothing.
         BigDecimal sumOfPerLineVat = draft.items().stream()
             .map(CustomerQuotationItemDto::vat).reduce(BigDecimal.ZERO, BigDecimal::add);
         assertThat(sumOfPerLineVat).isEqualByComparingTo(new BigDecimal("6483.85"))
@@ -1138,16 +1094,14 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(draft.vatAmount()).isEqualByComparingTo(expectedVat);
         assertThat(draft.grandTotal()).isEqualByComparingTo(expectedGrandTotal);
 
-        // Re-read from the DB (not just the create() response) — mapQuotation is exercised on
-        // every read path, not only the one right after INSERT.
+        // Re-read from the DB (not just the create() response) — mapQuotation is exercised on every read path, not
+        // only the one right after INSERT.
         CustomerQuotationDto reloaded = quotationService.get(draft.id(), salesActor);
         assertThat(reloaded.vatAmount()).isEqualByComparingTo(expectedVat);
         assertThat(reloaded.grandTotal()).isEqualByComparingTo(expectedGrandTotal);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Helpers
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     private CustomerQuotationItemDto itemById(CustomerQuotationDto quotation, long itemId) {
         return quotation.items().stream().filter(i -> i.id() == itemId).findFirst().orElseThrow();
@@ -1182,20 +1136,15 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         return pricingRequestId;
     }
 
-    /** Like {@link #approvedSingleItemPricingRequest} but lets the caller set
-     * model/color/texture/size explicitly — every other helper in this class always passes
-     * color=null/texture=null (see {@link #pricingItem}, {@link #singleItemSubmittedCosting}),
-     * which is exactly why the legacy-render-column bug went unnoticed by every other test here.
-     * Drives the same real chain (submit → pickup → factory quote → costing → CEO decision →
-     * approve) as {@link #singleItemSubmittedCosting}, just inlined so it can carry its own item
-     * fields through to the pricing request item. */
+    /** Like #approvedSingleItemPricingRequest but lets the caller set model/color/texture/size explicitly — every
+     * other helper in this class always passes color=null/texture=null, which is exactly why the
+     * legacy-render-column bug went unnoticed by every other test here. */
     private long approvedSingleItemPricingRequestWithRenderFields(
         String model, String color, String texture, String size
     ) {
-        // V185 (direct-deal-form parity): thicknessMm/sqmPerPiece/piecesPerBox/a quantity are now
-        // required on every item PricingRequestService#createDraft persists — requestedQty/
-        // requestedUnit/requestedUnitBasis are derived instead. color/texture/size are the values
-        // this test itself is exercising, so they still flow through untouched.
+        // V185 (direct-deal-form parity): thicknessMm/sqmPerPiece/piecesPerBox/a quantity are now required on every
+        // item PricingRequestService#createDraft persists — requestedQty/ requestedUnit/requestedUnitBasis are derived
+        // instead.
         PricingRequestRequests.PricingRequestItemRequest item = new PricingRequestRequests.PricingRequestItemRequest(
             null, catalogProductIdFactoryC, null, "RenderBrand4", model, "RenderBrand4 " + model,
             color, texture, size, "Factory C4", null, null, null, null,
@@ -1239,9 +1188,9 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
                 importActor);
             factoryQuoteService.markReadyForCosting(responded.id(), importActor);
         }
-        // V141 ("CEO owns costing"): markReadyForCosting auto-advances the request straight to
-        // READY_FOR_CEO_REVIEW the moment the LAST factory quote is ready — Import no longer
-        // creates/recalculates/submits a costing of its own; the CEO's startReview computes it.
+        // V141 ("CEO owns costing"): markReadyForCosting auto-advances the request straight to READY_FOR_CEO_REVIEW
+        // the moment the LAST factory quote is ready — Import no longer creates/recalculates/submits a costing of its
+        // own; the CEO's startReview computes it.
         return pricingRequestId;
     }
 
@@ -1256,10 +1205,9 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         PricingRequestRequests.CreatePricingRequestRequest request = new PricingRequestRequests.CreatePricingRequestRequest(
             PricingRequestRecipient.DESIGNER, null, "Designer Co.", LocalDate.now().plusDays(14),
             null, "THB", "step 4 unit test", UUID.randomUUID().toString(), List.of(item));
-        // V185: bypasses PricingRequestService.createDraft on purpose -- that method now forces every
-        // item's requestedUnitBasis to PER_PIECE, which would make it impossible to construct the
-        // non-PER_PIECE requestedUnitBasis this unit-conversion matrix exists to test.
-        // PricingRequestRepository.create performs the exact same DB write createDraft would.
+        // V185: bypasses PricingRequestService.createDraft on purpose -- that method now forces every item's
+        // requestedUnitBasis to PER_PIECE, which would make it impossible to construct the non-PER_PIECE
+        // requestedUnitBasis this unit-conversion matrix exists to test.
         long pricingRequestId = pricingRequests.create(ticketId, pricingRequests.nextRequestCode(), request, salesRepId);
         pricingRequestService.submit(pricingRequestId, salesActor);
         pricingRequestService.pickup(pricingRequestId, importActor);
@@ -1274,9 +1222,9 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             java.time.LocalDate.now(java.time.ZoneId.of("Asia/Bangkok")), null), importActor);
         FactoryQuoteDto responded = factoryQuoteService.receive(draft.id(), response, importActor);
         factoryQuoteService.markReadyForCosting(responded.id(), importActor);
-        // V141 ("CEO owns costing"): markReadyForCosting auto-advances the request straight to
-        // READY_FOR_CEO_REVIEW the moment the (only, here) factory quote is ready — Import no
-        // longer creates/recalculates/submits a costing of its own; the CEO's startReview computes it.
+        // V141 ("CEO owns costing"): markReadyForCosting auto-advances the request straight to READY_FOR_CEO_REVIEW
+        // the moment the (only, here) factory quote is ready — Import no longer creates/recalculates/submits a costing
+        // of its own; the CEO's startReview computes it.
         return pricingRequestId;
     }
 
@@ -1338,10 +1286,9 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         Long productId = "Factory A4".equals(factory) ? catalogProductIdFactoryA
             : "Factory B4".equals(factory) ? catalogProductIdFactoryB
             : "Factory C4".equals(factory) ? catalogProductIdFactoryC : null;
-        // V185 (direct-deal-form parity): color/texture/thicknessMm/sqmPerPiece/piecesPerBox/a
-        // quantity are now required on every item PricingRequestService#createDraft persists —
-        // requestedQty/requestedUnit/requestedUnitBasis are derived instead. roundToFullBox=false +
-        // piecesInput=qty keeps the derived requestedQty byte-identical to `qty`.
+        // V185 (direct-deal-form parity): color/texture/thicknessMm/sqmPerPiece/piecesPerBox/a quantity are now
+        // required on every item PricingRequestService#createDraft persists —
+        // requestedQty/requestedUnit/requestedUnitBasis are derived instead.
         return new PricingRequestRequests.PricingRequestItemRequest(null, productId, null, brand, model,
             brand + " " + model, "White", "Matte", "60x60", factory, null, null, null, null,
             QuantityType.CONFIRMED, null, null, null,

@@ -23,29 +23,7 @@ import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
-/**
- * §5.1 SICK certificate filing-window + no-certificate monthly tolerance (V124): real-Postgres
- * coverage of {@code hr.leave_type.certificate_filing_window_days} /
- * {@code no_certificate_monthly_tolerance}, {@link LeaveRepository#countNoCertificateRequestsInMonth}'s
- * real SQL (the {@code attachment_id IS NULL} predicate and the {@code start_date BETWEEN} month
- * range), and {@link LeaveService#sickCertificateRuleOutcome}'s combined decision through the real V124
- * schema. {@code LeaveServiceTest} covers the same decision table against a Mockito-faked
- * repository; this class proves the real SQL -- a mocked repository would happily "pass" while the
- * SQL counted the wrong month, the wrong status set, or ignored {@code attachment_id} entirely.
- *
- * <p>Unlike {@link LeaveTypeRuleIntegrationTest} (which mocks {@link LeaveAttachmentRepository}/
- * {@link FileStorageService} since it never submits WITH a real attachment), this class wires a REAL
- * {@link LeaveAttachmentRepository} against {@code jdbc} -- {@code hr.leave_request.attachment_id}
- * must be genuinely set (or genuinely NULL) in the database for
- * {@code countNoCertificateRequestsInMonth}'s {@code attachment_id IS NULL} predicate to mean
- * anything real. {@link FileStorageService} itself stays mocked (no real disk I/O needed to prove
- * the SQL/decision logic under test here).
- *
- * <p><b>Money note:</b> every test in this class that asserts APPROVED on a certificate-less request
- * is, directly, a claim about SICK leave that today's production code auto-rejects outright (no
- * leave, no pay) now being granted and paid instead. See the branch's PR body for the plain
- * statement of this effect.
- */
+/** Verifies sick-leave certificate windows and monthly no-certificate tolerance against PostgreSQL. */
 class LeaveSickCertificateIntegrationTest extends AbstractPostgresIntegrationTest {
     private static final ZoneId BUSINESS_ZONE = ZoneId.of("Asia/Bangkok");
     // Wednesday 2026-07-01 09:00 Asia/Bangkok -- matches every other leave integration test's fixed
@@ -64,8 +42,8 @@ class LeaveSickCertificateIntegrationTest extends AbstractPostgresIntegrationTes
     @BeforeEach
     void wireRealCollaborators() {
         leaveRepository = new LeaveRepository(jdbc);
-        // REAL attachment repository (unlike LeaveTypeRuleIntegrationTest): attachment_id must be
-        // genuinely persisted for countNoCertificateRequestsInMonth's SQL to be under real test.
+        // REAL attachment repository (unlike LeaveTypeRuleIntegrationTest): attachment_id must be genuinely persisted
+        // for countNoCertificateRequestsInMonth's SQL to be under real test.
         leaveAttachments = new LeaveAttachmentRepository(jdbc);
         fileStorage = mock(FileStorageService.class);
         leaveService = new LeaveService(
@@ -78,20 +56,16 @@ class LeaveSickCertificateIntegrationTest extends AbstractPostgresIntegrationTes
             Clock.fixed(FIXED_NOW, BUSINESS_ZONE));
     }
 
-    // ─────────────────────────────────────────────────────────────────────
-    // No-certificate monthly tolerance: real SQL proof that occasions 1-3 are ALLOWED and the 4th is
-    // REJECTED -- and that the count resets at a calendar-month boundary. Each request here is a
-    // REAL leave_request row (not a stubbed count), so LeaveRepository#countNoCertificateRequestsInMonth's
-    // actual SQL (attachment_id IS NULL, start_date BETWEEN, status IN) is what decides the outcome.
-    // ─────────────────────────────────────────────────────────────────────
+    // No-certificate monthly tolerance: real SQL proof that occasions 1-3 are ALLOWED and the 4th is REJECTED --
+    // and that the count resets at a calendar-month boundary.
 
     @Test
     void firstThreeCertificatelessSickRequestsInACalendarMonthAreApprovedButTheFourthWarnsUnpaid() {
         long employeeId = insertEmployee("SICK-TOL-001");
 
-        // Mon 2026-07-06, Wed 2026-07-08, Fri 2026-07-10, Mon 2026-07-13 -- four distinct working
-        // days, all in July 2026, all certificate-less. The boundary is asserted from BOTH sides in
-        // one flow: the 3rd is still allowed, the 4th (same employee, same month, same shape) is not.
+        // Mon 2026-07-06, Wed 2026-07-08, Fri 2026-07-10, Mon 2026-07-13 -- four distinct working days, all in July
+        // 2026, all certificate-less. The boundary is asserted from BOTH sides in one flow: the 3rd is still allowed,
+        // the 4th (same employee, same month, same shape) is not.
         LeaveRequestDto first = leaveService.submit(sickRequest(employeeId, "2026-07-06"), employee(employeeId));
         LeaveRequestDto second = leaveService.submit(sickRequest(employeeId, "2026-07-08"), employee(employeeId));
         LeaveRequestDto third = leaveService.submit(sickRequest(employeeId, "2026-07-10"), employee(employeeId));
@@ -108,8 +82,8 @@ class LeaveSickCertificateIntegrationTest extends AbstractPostgresIntegrationTes
             .containsExactly("SICK_NO_CERT_TOLERANCE_EXHAUSTED");
         assertThat(fourth.ruleWarnings().get(0).messageTh()).isNotBlank();
         assertThat(fourth.unpaidByRuleDays()).isEqualByComparingTo("1.00");
-        // Money-effect pin: the first three each granted a paid day (paid_days_cap is NULL for SICK,
-        // well within the 30-day quota) -- today's pre-V124 code would have auto-rejected ALL FOUR.
+        // Money-effect pin: the first three each granted a paid day (paid_days_cap is NULL for SICK, well within the
+        // 30-day quota) -- today's pre-V124 code would have auto-rejected ALL FOUR.
         assertThat(first.paidDays()).isEqualByComparingTo("1.00");
         assertThat(second.paidDays()).isEqualByComparingTo("1.00");
         assertThat(third.paidDays()).isEqualByComparingTo("1.00");
@@ -120,8 +94,7 @@ class LeaveSickCertificateIntegrationTest extends AbstractPostgresIntegrationTes
     void theNoCertificateOccasionCountResetsAtACalendarMonthBoundary() {
         long employeeId = insertEmployee("SICK-TOL-RESET-001");
 
-        // Three certificate-less occasions in JUNE (Mon 22nd, Tue 23rd, Wed 24th 2026) exhaust June's
-        // tolerance...
+        // Three certificate-less occasions in JUNE (Mon 22nd, Tue 23rd, Wed 24th 2026) exhaust June's tolerance...
         LeaveRequestDto juneFirst = leaveService.submit(sickRequest(employeeId, "2026-06-22"), employee(employeeId));
         LeaveRequestDto juneSecond = leaveService.submit(sickRequest(employeeId, "2026-06-23"), employee(employeeId));
         LeaveRequestDto juneThird = leaveService.submit(sickRequest(employeeId, "2026-06-24"), employee(employeeId));
@@ -137,25 +110,16 @@ class LeaveSickCertificateIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(juneFourth.ruleWarnings()).extracting(LeaveRuleWarningDto::code)
             .containsExactly("SICK_NO_CERT_TOLERANCE_EXHAUSTED");
 
-        // ...but a request starting in JULY is a NEW calendar month: the counter must have reset, not
-        // carried the exhausted June count forward. Wed 2026-07-01 is FIXED_NOW itself, a working day,
-        // SICK requires zero advance notice.
+        // ...but a request starting in JULY is a NEW calendar month: the counter must have reset, not carried the
+        // exhausted June count forward. Wed 2026-07-01 is FIXED_NOW itself, a working day, SICK requires zero advance
+        // notice.
         LeaveRequestDto julyFirst = leaveService.submit(sickRequest(employeeId, "2026-07-01"), employee(employeeId));
         assertThat(julyFirst.status()).isEqualTo("SUBMITTED");
     }
 
     @Test
     void certifiedSickRequestsDoNotCountAgainstTheNoCertificateMonthlyTolerance() {
-        // MUTATION-CHECK NOTE: this is the ONE test in this class that only the real SQL can prove --
-        // every other tolerance test in this class happens to submit only certificate-less requests,
-        // so a query that (wrongly) dropped the "attachment_id IS NULL" predicate from
-        // LeaveRepository#countNoCertificateRequestsInMonth would still pass them all (a
-        // Mockito-mocked repository can never expose this: it would just return whatever count a test
-        // stubs, regardless of what the real WHERE clause says). Three CERTIFIED SICK requests this
-        // month, then ONE certificate-less request in the SAME month: if the predicate is real, the
-        // certificate-less request is occasion #1 of the no-certificate count (APPROVED) -- the three
-        // certified ones must NOT be counted against it, even though they are also SICK requests in
-        // the same month for the same employee.
+        // MUTATION-CHECK NOTE: this is the ONE test in this class that only the real SQL can prove.
         long employeeId = insertEmployee("SICK-NOCT-001");
         stubFileStorage();
 
@@ -176,17 +140,13 @@ class LeaveSickCertificateIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(uncertifiedFourth.paidDays()).isEqualByComparingTo("1.00");
     }
 
-    // ─────────────────────────────────────────────────────────────────────
-    // Certificate filing window: real submit() calls WITH a real MultipartFile, so
-    // hr.leave_request.attachment_id is genuinely populated (or, for the rejected case, still
-    // populated -- see LeaveService#submit's unconditional post-create attach block) through the
-    // real LeaveAttachmentRepository/hr.file_attachment schema.
-    // ─────────────────────────────────────────────────────────────────────
+    // Certificate filing window: real submit calls WITH a real MultipartFile, so hr.leave_request.attachment_id is
+    // genuinely populated through the real LeaveAttachmentRepository/hr.file_attachment schema.
 
     @Test
     void aSickRequestWithACertificateFiledWithinTheWorkingDayWindowIsApproved() {
-        // FIXED_NOW = Wed 2026-07-01. Start Mon 2026-06-29: addWorkingDays(Mon, 3) = Thu 2026-07-02
-        // -- "today" (2026-07-01) is on/before that deadline -> ON TIME.
+        // FIXED_NOW = Wed 2026-07-01. Start Mon 2026-06-29: addWorkingDays(Mon, 3) = Thu 2026-07-02 -- "today"
+        // (2026-07-01) is on/before that deadline -> ON TIME.
         long employeeId = insertEmployee("SICK-WIN-OK-001");
         stubFileStorage();
 
@@ -216,18 +176,14 @@ class LeaveSickCertificateIntegrationTest extends AbstractPostgresIntegrationTes
             .containsExactly("SICK_CERTIFICATE_WINDOW");
         assertThat(result.unpaidByRuleDays()).isEqualByComparingTo("1.00");
         assertThat(result.paidDays()).isEqualByComparingTo("0.00");
-        // The late certificate is still recorded (LeaveService#submit's attach block is unconditional
-        // on hasAttachment, not on the outcome) -- it just did not buy approval.
+        // The late certificate is still recorded (LeaveService#submit's attach block is unconditional on
+        // hasAttachment, not on the outcome) -- it just did not buy approval.
         assertRealAttachmentPersisted(result.id());
     }
 
-    // ─────────────────────────────────────────────────────────────────────
-    // THE combined case the task calls out explicitly: no certificate AND beyond the 3-working-day
-    // window, with tolerance still available -> ALLOWED. The filing-window clause governs the
-    // certificate path only; it must never gate the no-certificate tolerance path. Proven with the
-    // EXACT SAME start date as the "filed late" test above (which IS rejected when a certificate is
-    // attached), through the real service/SQL this time.
-    // ─────────────────────────────────────────────────────────────────────
+    // THE combined case the task calls out explicitly: no certificate AND beyond the 3-working-day window, with
+    // tolerance still available -> ALLOWED. The filing-window clause governs the certificate path only; it must
+    // never gate the no-certificate tolerance path.
 
     @Test
     void aCertificatelessSickRequestFiledLongAfterItsStartDateIsStillApprovedWhenToleranceRemains() {

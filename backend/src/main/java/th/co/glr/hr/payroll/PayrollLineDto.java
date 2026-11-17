@@ -84,15 +84,10 @@ public record PayrollLineDto(
     BigDecimal taxableIncomeCumulativeLimb,
     BigDecimal withholdingTaxRegularLimb,
     BigDecimal withholdingTaxCumulativeLimb,
-    // ลูกค้าคืนสินค้า earned/unearned flag (handoff section 6): true = already earned and paid, so
-    // customerReturnDeduction above is a POST-TAX clawback that does not reduce taxable income; false
-    // (default) = not yet earned, already netted OUT of commissionPay pre-tax by the service layer, so
-    // customerReturnDeduction is 0 in that case and this flag is purely a record of which treatment
-    // applied.
+    // Earned customer returns are post-tax clawbacks; unearned returns are netted from commission before tax.
     boolean customerReturnAlreadyEarned,
-    // PayrollGarnishmentType name (handoff section 7). Nullable in memory; persisted with the V96
-    // column default 'SALARY' when null, which reproduces the pre-existing single 30%-plus-฿20,000-
-    // floor rule exactly.
+    // PayrollGarnishmentType name (handoff section 7). Nullable in memory; persisted with the V96 column default
+    // 'SALARY' when null, which reproduces the pre-existing single 30%-plus-฿20,000- floor rule exactly.
     String garnishmentType,
     // V97's four columns (mealAllowance/perDiem*) are echoed back rather than dropped after the tax/SSO
     // arithmetic. Appended last so every prior positional call site keeps compiling via the legacy
@@ -104,8 +99,8 @@ public record PayrollLineDto(
     BigDecimal mealAllowance,
     BigDecimal perDiemExempt,
     BigDecimal perDiemTaxable,
-    // PerDiemBasis name, or null when no per-diem was paid this line (matches the DB CHECK: a basis
-    // is required only when perDiemExempt/perDiemTaxable are non-zero).
+    // PerDiemBasis name, or null when no per-diem was paid this line (matches the DB CHECK: a basis is required
+    // only when perDiemExempt/perDiemTaxable are non-zero).
     String perDiemBasis,
     // What HR actually TYPED this run, verbatim, regardless of customerReturnAlreadyEarned --
     // distinct from customerReturnDeduction above, which is the POST-TAX bookkeeping figure (0 in
@@ -128,17 +123,9 @@ public record PayrollLineDto(
     // PayrollPage.jsx.
     BigDecimal daysWorked,
     String payType,
-    // Uncapped SSO wage base (V123, defect-2 fix): PayrollCalculator#calculateClassified's own
-    // ssoWageBaseRaw, computed but previously discarded -- ssoWageBase above is that same figure
-    // clamped to [1,650, 17,500], which is what payroll_line.sso_wage_base has always stored and
-    // what tax/contribution math still uses (UNCHANGED by this field). This is purely an additional
-    // persisted figure so SsoExporter can report the real เงินค่าจ้างทั้งสิ้น. Nullable: null means "not
-    // recorded" (every row processed before V123), distinct from a genuine ฿0.00 wage -- see that
-    // migration's column comment and SsoExporter's fallback to ssoWageBase when this is null.
-    // Placed here (not next to ssoWageBase above) so every legacy constructor below except the
-    // 61-arg one is untouched -- only that one forwarding call needed a second trailing null added
-    // (for this field, alongside legalExecutionRequested's existing one) to keep reaching the
-    // canonical constructor.
+    // Uncapped SSO wage base: PayrollCalculator#calculateClassified's own ssoWageBaseRaw, computed but previously
+    // discarded -- ssoWageBase above is that same figure clamped to [1,650, 17,500], which is what
+    // payroll_line.sso_wage_base has always stored and what tax/contribution math still uses.
     BigDecimal ssoWageGross,
     // The ป.วิ.พ. ม.302 "requested" figure -- the monthly amount actually fed into
     // PayrollCalculator as garnishmentRequested THIS run (DeductionObligationService
@@ -154,14 +141,9 @@ public record PayrollLineDto(
     // hr.payroll_line (no column, no INSERT/SELECT reference) -- it is consumed once, in the same
     // #process() transaction, from the same in-memory PayrollLineDto list #preview() already built.
     BigDecimal legalExecutionRequested,
-    // V128: approved สวัสดิการ pulled in for this payroll month. Appended last, following the same
-    // rule every field above it followed -- every existing positional call site keeps compiling
-    // through the legacy constructors below, which pass null here.
-    //
-    // Persisted (unlike legalExecutionRequested directly above): without a column the figure would
-    // still be paid, because PayrollCalculator derives gross from componentAmounts and never needs
-    // this field -- but the breakdown would vanish the moment the period was re-read, leaving HR a
-    // gross they cannot reconcile against the welfare claims that produced it.
+    // V128: approved สวัสดิการ pulled in for this payroll month. Appended last, following the same rule every
+    // field above it followed -- every existing positional call site keeps compiling through the legacy
+    // constructors below, which pass null here.
     BigDecimal welfarePay
 ) {
     /**
@@ -250,22 +232,14 @@ public record PayrollLineDto(
             customerReturnAlreadyEarned, garnishmentType,
             mealAllowance, perDiemExempt, perDiemTaxable, perDiemBasis,
             customerReturnRequested, daysWorked, payType,
-            // legalExecutionRequested: never derivable from this arity (see that field's own
-            // javadoc). ssoWageGross: this constructor predates V123 entirely -- every caller at
-            // this arity is a pre-existing test fixture with no SSO-wage-gross concept, so null
-            // (falls back to ssoWageBase in SsoExporter) is correct, not just convenient.
-            // welfarePay: V128 postdates this arity too -- no fixture at this size knows about
-            // welfare, and null reads as "not recorded" rather than a fabricated ฿0.
+            // legalExecutionRequested: never derivable from this arity (see that field's own javadoc). welfarePay: V128
+            // postdates this arity too -- no fixture at this size knows about welfare, and null reads as "not recorded"
+            // rather than a fabricated ฿0.
             null, null, null
         );
     }
 
-    /**
-     * As the constructor above, plus V128's welfarePay. Exists so {@code PayrollRepository#mapLine}
-     * can carry the persisted welfare figure back out of {@code payroll_line} without restating all
-     * sixty-odd canonical arguments; every other caller at the shorter arity is a fixture that
-     * predates welfare entirely and correctly gets null.
-     */
+    /** As the constructor above, plus V128's welfarePay. */
     public PayrollLineDto(
         Long id,
         long employeeId,
@@ -346,12 +320,9 @@ public record PayrollLineDto(
             customerReturnAlreadyEarned, garnishmentType,
             mealAllowance, perDiemExempt, perDiemTaxable, perDiemBasis,
             customerReturnRequested, daysWorked, payType,
-            // legalExecutionRequested: never derivable from this arity (see that field's own
-            // javadoc). ssoWageGross: this constructor predates V123 entirely -- every caller at
-            // this arity is a pre-existing test fixture with no SSO-wage-gross concept, so null
-            // (falls back to ssoWageBase in SsoExporter) is correct, not just convenient.
-            // welfarePay: V128 postdates this arity too -- no fixture at this size knows about
-            // welfare, and null reads as "not recorded" rather than a fabricated ฿0.
+            // legalExecutionRequested: never derivable from this arity (see that field's own javadoc). welfarePay: V128
+            // postdates this arity too -- no fixture at this size knows about welfare, and null reads as "not recorded"
+            // rather than a fabricated ฿0.
             null, null, welfarePay
         );
     }
@@ -531,15 +502,8 @@ public record PayrollLineDto(
         );
     }
 
-    /**
-     * Legacy 49-arg constructor: the full signature as it stood right before the V97
-     * meal-allowance/per-diem fields existed (i.e. through {@code garnishmentType}). Keeps every
-     * 49-arg positional call site compiling unchanged (including the 40-arg legacy constructor below,
-     * which terminates here); the four new V97 fields default to zero/null (no meal allowance or
-     * per-diem on the line). The V92 two-limb fields (added in parallel by branch 117, unknown at this
-     * arity) default the same way the 40-arg legacy constructor below does -- everything attributed to
-     * the regular limb, nothing to the variable limb.
-     */
+    /** Legacy 49-arg constructor: the full signature as it stood right before the V97 meal-allowance/per-diem
+     * fields existed (i.e. through garnishmentType). */
     public PayrollLineDto(
         Long id,
         long employeeId,
@@ -600,8 +564,8 @@ public record PayrollLineDto(
             otherPostTaxDeductions, totalDeductions, netPay, calculationNote,
             directorRemuneration, warningLetterDeduction, customerReturnDeduction, otherPretaxDeduction,
             leaveRefundDays, leaveDeductionRefund, withholdingTaxOverride,
-            // V92 two-limb fields (branch 117, unknown at this arity): backfilled the same way as the
-            // 40-arg legacy constructor below -- everything regular, nothing variable.
+            // V92 two-limb fields (branch 117, unknown at this arity): backfilled the same way as the 40-arg legacy
+            // constructor below -- everything regular, nothing variable.
             grossTaxableIncome == null ? BigDecimal.ZERO : grossTaxableIncome, BigDecimal.ZERO,
             withholdingTax == null ? BigDecimal.ZERO : withholdingTax, BigDecimal.ZERO,
             bonusPay, otherOneOffPay, BigDecimal.ZERO,
@@ -612,13 +576,8 @@ public record PayrollLineDto(
         );
     }
 
-    /**
-     * Legacy 37-arg constructor: the full signature as it stood right before {@code
-     * leaveRefundDays}/{@code leaveDeductionRefund} existed. Several test files (including {@code
-     * PayrollServiceTest} and {@code PayrollRepositoryIntegrationTest}, which must not be edited)
-     * construct this record positionally at that arity; both new fields default to zero, which is a
-     * no-op on every downstream figure (see {@link PayrollCalculator}).
-     */
+    /** Legacy 37-arg constructor: the full signature as it stood right before leaveRefundDays/leaveDeductionRefund
+     * existed. */
     public PayrollLineDto(
         Long id,
         long employeeId,
@@ -670,12 +629,8 @@ public record PayrollLineDto(
         );
     }
 
-    /**
-     * Legacy 39-arg constructor: the full signature as it stood right before {@code
-     * withholdingTaxOverride} existed (i.e. through {@code leaveDeductionRefund}). Keeps every 39-arg
-     * positional call site compiling unchanged; {@code withholdingTaxOverride} defaults to {@code null}
-     * ("no per-run override typed"), a no-op on every stored/displayed figure.
-     */
+    /** Legacy 39-arg constructor: the full signature as it stood right before withholdingTaxOverride existed (i.e.
+     * through leaveDeductionRefund). */
     public PayrollLineDto(
         Long id,
         long employeeId,
@@ -729,24 +684,9 @@ public record PayrollLineDto(
         );
     }
 
-    /**
-     * Legacy 40-arg constructor: the full signature as it stood right before the task-2 classified-
-     * engine fields existed (i.e. through {@code withholdingTaxOverride}). Keeps every 40-arg
-     * positional call site compiling unchanged -- including the two legacy constructors above, which
-     * both terminate here.
-     *
-     * <p>{@code taxableIncomeRegularLimb}/{@code withholdingTaxRegularLimb} default to {@code
-     * grossTaxableIncome}/{@code withholdingTax} -- NOT zero -- mirroring V96's one-time backfill of
-     * every pre-existing processed row (a caller using this constructor is, by definition, describing
-     * a line with no concept of limbs, i.e. 100% regular limb, exactly like every payroll_line row
-     * that predates task 2). Defaulting these to zero instead would silently erase that history from
-     * next period's year-to-date reprojection (see PayrollRepository#findYearToDateByEmployee) --
-     * this bit a real test (PayrollYtdAndSsoIntegrationTest, which hand-crafts a prior processed line
-     * via this constructor and asserts the next period's withholding against it) before it was fixed
-     * here. {@code taxableIncomeKnownLimb}/{@code taxableIncomeCumulativeLimb}/{@code
-     * withholdingTaxCumulativeLimb} stay zero correctly -- those limbs genuinely did not exist before
-     * task 2.
-     */
+    /** Legacy 40-arg constructor: the full signature as it stood right before the task-2 classified- engine fields
+     * existed (i.e. through withholdingTaxOverride). Keeps every 40-arg positional call site compiling unchanged
+     * -- including the two legacy constructors above, which both terminate here. */
     public PayrollLineDto(
         Long id,
         long employeeId,
@@ -804,19 +744,8 @@ public record PayrollLineDto(
         );
     }
 
-    /**
-     * Legacy 47-arg constructor: branch 117's own full canonical signature (V92 two-limb split +
-     * V94 bonus/one-off pay + excessWithheldToDate), before the task-2 three-limb fields existed.
-     * Kept so pre-merge branch-117 call sites that construct the two-limb fields explicitly --
-     * including {@code PayslipRendererTest}/{@code PayslipMaximalLayoutReviewTest}/{@code
-     * PayslipProvisionalNoticeGeometryReviewTest} -- still compile.
-     *
-     * <p>The task-2-only fields are backfilled from these two-limb figures the same way the 40-arg
-     * legacy constructor above already backfills them from grossTaxableIncome/withholdingTax: the
-     * regular limb takes the caller's regular-limb figures, the known/cumulative limbs stay zero
-     * (this caller has no concept of them), and the V97 meal/per-diem/garnishment/customer-return
-     * fields default the same as every other legacy arity in this file.
-     */
+    /** Legacy 47-arg constructor: branch 117's own full canonical signature (V92 two-limb split + V94 bonus/one-off
+     * pay + excessWithheldToDate), before the task-2 three-limb fields existed. */
     public PayrollLineDto(
         Long id,
         long employeeId,
@@ -884,16 +813,9 @@ public record PayrollLineDto(
         );
     }
 
-    /**
-     * Legacy 53-arg constructor: branch 118's own original full canonical signature (V96 three-limb
-     * split + V97 meal/per-diem + garnishment/customer-return, no V92 two-limb fields at all), before
-     * the rebase merged branch 117's V92 fields in. Kept so pre-merge task-2 call sites that construct
-     * the FULL V96/V97 tail explicitly -- including {@code PayrollCarryForwardSuggestionsIntegrationTest}
-     * and {@code PayrollMealAndPerDiemIntegrationTest} -- still compile.
-     *
-     * <p>The V92 two-limb fields (unknown to this arity) are backfilled from grossTaxableIncome /
-     * withholdingTax, the same way the 40-arg legacy constructor above backfills them.
-     */
+    /** Legacy 53-arg constructor: branch 118's own original full canonical signature (V96 three-limb split + V97
+     * meal/per-diem + garnishment/customer-return, no V92 two-limb fields at all), before the rebase merged branch
+     * 117's V92 fields in. */
     public PayrollLineDto(
         Long id,
         long employeeId,

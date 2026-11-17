@@ -27,8 +27,8 @@ public final class TicketEventKind {
     public static final String FULLY_PAID            = "FULLY_PAID";
     // CEO manual price override on a ticket item (chk_event_kind extended in V48).
     public static final String PRICE_OVERRIDDEN      = "PRICE_OVERRIDDEN";
-    // Deal pipeline events (V50) — from_status/to_status carry DealStage codes.
-    // chk_event_kind was re-declared for these in V50.
+    // Deal pipeline events (V50) — from_status/to_status carry DealStage codes. chk_event_kind was re-declared for
+    // these in V50.
     public static final String STAGE_CHANGED         = "STAGE_CHANGED";
     public static final String MARKED_LOST           = "MARKED_LOST";
     public static final String REOPENED              = "REOPENED";
@@ -58,14 +58,9 @@ public final class TicketEventKind {
     // payment pipeline.
     public static final String ORDER_CONFIRMED_FROM_QUOTATION = "ORDER_CONFIRMED_FROM_QUOTATION";
 
-    // Quotation v2 (direct deal quotation, V165): NOTIFICATION `type` values only (hr.notification.
-    // type), NOT sales.ticket_event.kind values -- never pass these into TicketRepository#addEvent*,
-    // whose `kind` column is DB-constrained by chk_event_kind (V78) and does not list these three.
-    // Plain ticket events for this feature reuse existing, already-valid kinds instead (SUBMITTED/
-    // REJECTED/CANCELLED/REVISION_REQUESTED/QUOTATION_ISSUED) -- see DealQuotationService. Declared
-    // here anyway, alongside every other event/notification vocabulary this class already holds
-    // (e.g. PricingRequestEventKind's identical dual use), with Thai titles in
-    // NotificationRepository.TICKET_EVENT_TITLES.
+    // Quotation v2 (direct deal quotation, V165): NOTIFICATION `type` values only (hr.notification. type), NOT
+    // sales.ticket_event.kind values -- never pass these into TicketRepository#addEvent*, whose `kind` column is
+    // DB-constrained by chk_event_kind (V78) and does not list these three.
     public static final String DEAL_QUOTATION_SUBMITTED = "DEAL_QUOTATION_SUBMITTED";
     public static final String DEAL_QUOTATION_APPROVED  = "DEAL_QUOTATION_APPROVED";
     public static final String DEAL_QUOTATION_REJECTED  = "DEAL_QUOTATION_REJECTED";
@@ -95,6 +90,7 @@ public final class TicketEventKind {
     public static final String PAYMENT_RECEIVED = "PAYMENT_RECEIVED";
     public static final String PAYMENT_FULLY_PAID = "PAYMENT_FULLY_PAID";
     public static final String DEAL_CLOSED = "DEAL_CLOSED";
+    public static final String DEAL_OWNER_CHANGED = "DEAL_OWNER_CHANGED";
     public static final String CLOSE_CONFIRMATION_REVOKED = "CLOSE_CONFIRMATION_REVOKED";
     public static final String DEAL_LOST = "DEAL_LOST";
     public static final String DEAL_CANCELLED = "DEAL_CANCELLED";

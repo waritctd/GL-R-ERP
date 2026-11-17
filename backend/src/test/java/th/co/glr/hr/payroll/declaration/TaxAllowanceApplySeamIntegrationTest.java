@@ -39,24 +39,8 @@ import th.co.glr.hr.payroll.declaration.TaxAllowanceDeclarationDtos.TaxAllowance
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 import th.co.glr.hr.ticket.TicketRepository;
 
-/**
- * Pins the APPROVAL seam — through the REAL {@code PayrollRepository#findTaxAllowancesByEmployee}
- * SQL and the REAL {@code PayrollService#preview}, never a unit-test stand-in.
- *
- * <p><b>Decision #2 was reversed by the owner on 2026-08-31.</b> It used to read "a declaration must
- * not affect payroll until HR explicitly applies it", and this file pinned that: approval moved
- * nothing, a separate per-employee Apply (with its own งวดเดือน) did. The rule now is that HR's
- * APPROVAL is go-live, for the declaration's whole tax year. The tests below were rewritten in that
- * direction rather than deleted, because the half that still matters is unchanged — SUBMITTING must
- * still move nothing, and the parent table must still end VERIFIED with exactly one row.
- *
- * <p>Also pins the single most likely way this feature ships a silent tax error (plan doc, "the
- * DISTINCT ON expiry trap"): {@code findTaxAllowancesByEmployee} is {@code SELECT DISTINCT ON
- * (employee_id) ... ORDER BY employee_id, effective_month DESC}, so expiring only the LATEST dated
- * row would make it silently fall back to an OLDER dated row for the same year. That is why {@code
- * expireTaxAllowanceVerification(employeeId, taxYear)} takes no {@code effective_month} — it expires
- * every dated row for the year at once.
- */
+/** Pins the APPROVAL seam — through the REAL PayrollRepository#findTaxAllowancesByEmployee SQL and the REAL
+ * PayrollService#preview, never a unit-test stand-in. Decision #2 was reversed by the owner on 2026-08-31. */
 import th.co.glr.hr.config.AppProperties;
 import th.co.glr.hr.notification.CeoApproverRepository;
 
@@ -111,8 +95,8 @@ class TaxAllowanceApplySeamIntegrationTest extends AbstractPostgresIntegrationTe
             mock(AuditService.class),
             // Evidence upload is not exercised here — a mock is enough.
             mock(FileStorageService.class),
-            // The REAL PayrollService, wired above — this class's byte-for-byte pinning test needs
-            // estimateAllowanceEffect to run the SAME calculator instance #preview does.
+            // The REAL PayrollService, wired above — this class's byte-for-byte pinning test needs estimateAllowanceEffect
+            // to run the SAME calculator instance #preview does.
             payrollService,
             new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP),
             // Not under test here — this class is about the apply() seam / byte-for-byte pinning.
@@ -165,24 +149,18 @@ class TaxAllowanceApplySeamIntegrationTest extends AbstractPostgresIntegrationTe
         assertThat(resolved.get(employeeId).spouseAllowance()).isEqualByComparingTo("60000.00");
     }
 
-    /**
-     * Regression guard for the reset-on-overwrite fix (PayrollRepository#upsertTaxAllowances,
-     * 2026-08-08): that fix makes upsertTaxAllowances itself downgrade an already-VERIFIED row back
-     * to GRANDFATHERED_UNVERIFIED when its content changes -- exactly the ON CONFLICT DO UPDATE
-     * branch a SECOND apply() over the same employee/year/effective-month drives. apply() must still
-     * end VERIFIED regardless, because it calls markTaxAllowanceVerified +
-     * setTaxAllowanceVerificationDeadline in the SAME transaction right after upsertTaxAllowances --
-     * this pins that ordering never regresses.
-     */
+    /** Regression guard for the reset-on-overwrite fix: that fix makes upsertTaxAllowances itself downgrade an
+     * already-VERIFIED row back to GRANDFATHERED_UNVERIFIED when its content changes -- exactly the ON CONFLICT DO
+     * UPDATE branch a SECOND apply over the same employee/year/effective-month drives. */
     @Test
     void approvingASecondDeclarationOverAnAlreadyVerifiedRowStillEndsVerified() {
         TaxAllowanceDeclarationDto first = submit(new BigDecimal("60000"));
         approveSigned(first.declarationId());
         assertThat(verificationStatusOf(employeeId)).isEqualTo("VERIFIED");
 
-        // A second declaration for the SAME employee/year, with a DIFFERENT amount -- its promotion
-        // drives upsertTaxAllowances down the ON CONFLICT DO UPDATE branch over a row that is
-        // currently VERIFIED, the exact interaction the reset-on-overwrite fix touches.
+        // A second declaration for the SAME employee/year, with a DIFFERENT amount -- its promotion drives
+        // upsertTaxAllowances down the ON CONFLICT DO UPDATE branch over a row that is currently VERIFIED, the exact
+        // interaction the reset-on-overwrite fix touches.
         TaxAllowanceDeclarationDto second = submit(new BigDecimal("90000"));
         approveSigned(second.declarationId());
 
@@ -208,16 +186,9 @@ class TaxAllowanceApplySeamIntegrationTest extends AbstractPostgresIntegrationTe
             .isEqualByComparingTo("90000.00");
     }
 
-    /**
-     * The PROCESSED-month guard is GONE, and this pins that deliberately rather than leaving its
-     * absence to be re-added by someone reading the old comment. It refused a promotion whose target
-     * month was already {@code PROCESSED}, which made sense while HR picked the month. The whole-year
-     * rule makes the target ALWAYS January, so keeping it would refuse every approval from February
-     * onward — it would not protect a filed month, it would break the feature for eleven of twelve.
-     *
-     * <p>Nothing here retro-alters January: the seeded PROCESSED period's own {@code hr.payroll_line}
-     * rows are never touched by any statement the promotion runs.
-     */
+    /** The PROCESSED-month guard is GONE, and this pins that deliberately rather than leaving its absence to be
+     * re-added by someone reading the old comment. Nothing here retro-alters January: the seeded PROCESSED
+     * period's own hr.payroll_line rows are never touched by any statement the promotion runs. */
     @Test
     void approvingIsNotBlockedByAnAlreadyProcessedMonth() {
         seedProcessedPeriod(LocalDate.of(2026, 1, 1));
@@ -230,17 +201,9 @@ class TaxAllowanceApplySeamIntegrationTest extends AbstractPostgresIntegrationTe
             .isNotNull();
     }
 
-    /**
-     * THE trap the whole-year rule introduces, and the reason {@code
-     * PayrollRepository#deleteMidYearTaxAllowances} exists. {@code findTaxAllowancesByEmployee} is
-     * {@code ORDER BY effective_month DESC}: a whole-year row at month 1 LOSES to any surviving
-     * mid-year row. Without the delete, this employee's September payroll would keep computing on
-     * the ฿30,000 July row while the register showed the ฿90,000 declaration as applied — a silent
-     * wrong tax, invisible from every screen.
-     *
-     * <p>Written wrong-way-round on purpose: the assertion that matters is that the OLD figure is
-     * gone, not that the new one is present.
-     */
+    /** THE trap the whole-year rule introduces, and the reason PayrollRepository#deleteMidYearTaxAllowances exists.
+     * findTaxAllowancesByEmployee is ORDER BY effective_month DESC: a whole-year row at month 1 LOSES to any
+     * surviving mid-year row. */
     @Test
     void approvingClearsAStaleMidYearRowInsteadOfLosingToItOnEffectiveMonthDesc() {
         jdbc.update("""
@@ -268,12 +231,9 @@ class TaxAllowanceApplySeamIntegrationTest extends AbstractPostgresIntegrationTe
             .isEqualByComparingTo("90000.00");
     }
 
-    /**
-     * The backlog drain {@link TaxAllowanceDeclarationService#apply} still exists for: a row approved
-     * BEFORE the ruling, when approval did not promote. That state can no longer be produced through
-     * the service, so it is built through the repository — the same two calls the pre-ruling
-     * {@code approve} made.
-     */
+    /** The backlog drain TaxAllowanceDeclarationService#apply still exists for: a row approved BEFORE the ruling,
+     * when approval did not promote. That state can no longer be produced through the service, so it is built
+     * through the repository — the same two calls the pre-ruling approve made. */
     @Test
     void applyStillDrainsADeclarationApprovedBeforeTheRulingWithNoMonthArgument() {
         TaxAllowanceDeclarationDto declaration = submit(new BigDecimal("60000"));
@@ -291,13 +251,7 @@ class TaxAllowanceApplySeamIntegrationTest extends AbstractPostgresIntegrationTe
             .appliedEffectiveMonth()).isEqualTo(1);
     }
 
-    /**
-     * THE trap. Two VERIFIED dated rows (months 1 and 7) directly in {@code
-     * hr.employee_tax_allowance} — the parent table, seeded straight via SQL to isolate the
-     * repository's own SQL from the declaration workflow above. {@code
-     * expireTaxAllowanceVerification} must flip BOTH to {@code EXPIRED_UNVERIFIED}, or the July
-     * query would silently fall back to the January row instead of returning nothing.
-     */
+    /** Expire every dated declaration for the year so the lookup cannot fall back to an older verified row. */
     @Test
     void expiringDoesNotFallBackToAnOlderDatedRowForTheSameYear() {
         jdbc.update("""
@@ -320,9 +274,8 @@ class TaxAllowanceApplySeamIntegrationTest extends AbstractPostgresIntegrationTe
         assertThat(payrollRepository.findTaxAllowancesByEmployee(LocalDate.of(2026, 7, 1)))
             .as("must NOT fall back to the January row now that both are EXPIRED_UNVERIFIED")
             .doesNotContainKey(employeeId);
-        // The DEFECT this pins: expiring only the July row would leave January VERIFIED, and July's
-        // query (ORDER BY effective_month DESC, excluding only EXPIRED_UNVERIFIED) would silently
-        // resolve January instead of nothing.
+        // The DEFECT this pins: expiring only the July row would leave January VERIFIED, and July's query (ORDER BY
+        // effective_month DESC, excluding only EXPIRED_UNVERIFIED) would silently resolve January instead of nothing.
         assertThat(jdbc.queryForObject(
             "SELECT COUNT(*) FROM hr.employee_tax_allowance WHERE employee_id = :id AND verification_status = 'EXPIRED_UNVERIFIED'",
             Map.of("id", employeeId), Integer.class))
@@ -334,8 +287,8 @@ class TaxAllowanceApplySeamIntegrationTest extends AbstractPostgresIntegrationTe
         TaxAllowanceDeclarationDto first = submit(new BigDecimal("60000"));
         approveSigned(first.declarationId());
 
-        // A second declaration for the same employee/year — allowed once the first is no longer
-        // PENDING (uq_tad_one_pending_per_employee_year only blocks a SECOND concurrent PENDING).
+        // A second declaration for the same employee/year — allowed once the first is no longer PENDING
+        // (uq_tad_one_pending_per_employee_year only blocks a SECOND concurrent PENDING).
         TaxAllowanceDeclarationDto second = submit(new BigDecimal("90000"));
         approveSigned(second.declarationId());
 
@@ -443,11 +396,9 @@ class TaxAllowanceApplySeamIntegrationTest extends AbstractPostgresIntegrationTe
         return hrActor();
     }
 
-    /**
-     * Approves the way HR now has to: the signed ล.ย.01 must be attached first (owner decision #3).
-     * The failure cases below deliberately do NOT use this — they assert on the role and status
-     * checks, which both run before the signed-form check and so are unaffected by it.
-     */
+    /** Approves the way HR now has to: the signed ล.ย.01 must be attached first (owner decision #3). The failure
+     * cases below deliberately do NOT use this — they assert on the role and status checks, which both run before
+     * the signed-form check and so are unaffected by it. */
     private void approveSigned(long declarationId) {
         TaxAllowanceTestSupport.attachSignedForm(jdbc, declarationId);
         service.approve(declarationId, null, hrActor());

@@ -94,9 +94,9 @@ class DivisionAccessPolicyTest {
 
     @Test
     void canonicalManagerTitleDerivesSameRolesAsBakedFormAfterV30() {
-        // V30 collapses ฝ่าย-baked titles (ผู้จัดการฝ่ายขาย/ผู้จัดการฝ่ายผลิต) to canonical "ผู้จัดการ".
-        // Scope/role must stay division-driven and unchanged for every affected employee.
-        // Sales manager: was ผู้จัดการฝ่ายขาย → now ผู้จัดการ, still sales_manager.
+        // V30 collapses ฝ่าย-baked titles (ผู้จัดการฝ่ายขาย/ผู้จัดการฝ่ายผลิต) to canonical "ผู้จัดการ". Scope/role
+        // must stay division-driven and unchanged for every affected employee. Sales manager: was ผู้จัดการฝ่ายขาย →
+        // now ผู้จัดการ, still sales_manager.
         assertThat(DivisionAccessPolicy.roleFor(record("SA", "SA-ฝ่ายขาย", "ผู้จัดการ"))).isEqualTo("sales_manager");
         assertThat(DivisionAccessPolicy.isManager(record("SA", "SA-ฝ่ายขาย", "ผู้จัดการ"))).isTrue();
         // Production manager: was ผู้จัดการฝ่ายผลิต → now ผู้จัดการ, base role employee but still a manager.

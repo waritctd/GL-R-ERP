@@ -52,16 +52,9 @@ public class AppProperties {
         return payroll;
     }
 
-    /**
-     * BOT issues a <strong>separate API key per API</strong> — there is no shared credential. This
-     * class used to expose a single {@code apiToken} that both {@code BotFxFetchService} and {@code
-     * BotHolidayFetchService} read; that was wrong (one of the two was always sending a key invalid
-     * for the API it called) and the failure was invisible — a bad key 401s, the caller logs and
-     * returns, and the only symptom is silently stale data. Each fetcher now has its own property
-     * and its own env var, with <strong>no fallback between them</strong>: a missing key must be
-     * loudly absent (a WARN naming exactly which env var to set), never quietly substituted with the
-     * other API's key.
-     */
+    /** BOT issues a separate API key per API — there is no shared credential. Each fetcher now has its own property
+     * and its own env var, with no fallback between them: a missing key must be loudly absent (a WARN naming
+     * exactly which env var to set), never quietly substituted with the other API's key. */
     public static class Bot {
         private String holidayApiToken = "";
         private String fxApiToken = "";
@@ -121,40 +114,21 @@ public class AppProperties {
         }
     }
 
-    /**
-     * The company-wide standard working day used to derive late / early-leave minutes — the
-     * fallback schedule for any employee with no {@code hr.work_schedule_assignment} row (V115).
-     * Read this through {@code WorkScheduleResolver} (see {@code TieredWorkScheduleResolver} /
-     * {@code CompanyWideWorkScheduleResolver}) rather than injecting it into calculation code
-     * directly, so schedule tiering stays a resolver concern instead of a rewrite.
-     */
+    /** The company-wide standard working day used to derive late / early-leave minutes — the fallback schedule for
+     * any employee with no hr.work_schedule_assignment row (V115). */
     public static class Schedule {
         private String zone = "Asia/Bangkok";
         private String workStart = "08:30";
         private String workEnd = "17:30";
-        /**
-         * Minutes after {@code workStart} before a check-in counts as late. This is a
-         * <strong>threshold, not an allowance</strong>: with a 15-minute grace, arriving 08:44 is 0
-         * late minutes, but arriving 08:46 is <em>16</em> late minutes measured from 08:30 — not 1.
-         * Owner ruling 2026-08-02 (V121__org_normalize_approvers_and_schedules.sql) raised this from
-         * 5 to 15 to match hr.work_schedule.grace_minutes for every seeded schedule, so an employee
-         * with no {@code hr.work_schedule_assignment} row (falling through to this default) gets the
-         * same grace as an assigned one.
-         */
+        /** Minutes after workStart before a check-in counts as late. This is a threshold, not an allowance: with a
+         * 15-minute grace, arriving 08:44 is 0 late minutes, but arriving 08:46 is 16 late minutes measured from 08:30
+         * — not 1. */
         private int graceMinutes = 15;
         private List<String> workdays = new ArrayList<>(
             List.of("MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY")
         );
-        /**
-         * How long {@code TieredWorkScheduleResolver} may serve a cached copy of
-         * {@code hr.work_schedule_assignment} before reloading it from the database. Assignments are
-         * edited by hand-written SQL today (there is deliberately no admin CRUD UI in this branch —
-         * see {@code WorkScheduleAssignmentRepository}'s javadoc), so a TTL is the only mechanism
-         * that reliably makes such a change take effect without an application restart: an explicit
-         * invalidation hook only helps callers that go through the app, and today none do. Five
-         * minutes balances staleness (acceptable for an HR-edited config table that changes rarely)
-         * against reload cost (the assignment table is small, so even a full reload is cheap).
-         */
+        /** How long TieredWorkScheduleResolver may serve a cached copy of hr.work_schedule_assignment before reloading
+         * it from the database. */
         private long assignmentCacheTtlMs = 300_000;
 
         public String getZone() {
@@ -240,11 +214,9 @@ public class AppProperties {
     }
 
     public static class Overtime {
-        /**
-         * How far back a request may reach. The advance-notice rule it replaced was removed on CEO
-         * instruction: overtime may now be filed same-day or retroactively, provided the reason
-         * explains why. This bound only stops claims arriving so late they can no longer be paid.
-         */
+        /** How far back a request may reach. The advance-notice rule it replaced was removed on CEO instruction:
+         * overtime may now be filed same-day or retroactively, provided the reason explains why. This bound only stops
+         * claims arriving so late they can no longer be paid. */
         private int retroactiveWindowDays = 60;
 
         public int getRetroactiveWindowDays() {
@@ -256,15 +228,8 @@ public class AppProperties {
         }
     }
 
-    /**
-     * Tuning for {@code QuotationExpiryWorker} (Step 5, V75) — a small scheduled sweep that flips
-     * ISSUED customer quotations whose validity_date has passed to EXPIRED. This isn't calling an
-     * external system, so it needs no claim/reclaim/backoff — a single guarded UPDATE on each tick
-     * is sufficient. (The factory-quote email outbox worker this comment used to contrast with —
-     * {@code FactoryQuoteEmailDispatchWorker}, tuned by a since-deleted {@code FactoryQuoteDispatch}
-     * nested class here — was deleted when factory RFQ email became manual-only; see
-     * {@code FactoryQuoteService#send}.)
-     */
+    /** Tuning for QuotationExpiryWorker (Step 5, V75) — a small scheduled sweep that flips ISSUED customer
+     * quotations whose validity_date has passed to EXPIRED. */
     public static class QuotationExpiry {
         /** How often the worker sweeps for overdue ISSUED quotations. */
         private long sweepIntervalMs = 3_600_000;
@@ -280,11 +245,9 @@ public class AppProperties {
 
     /** Authentication/onboarding toggles. */
     public static class Auth {
-        /**
-         * When true, {@code PasswordBackfillRunner} seeds each password-less active employee's
-         * {@code employee_code} as a temporary login password on startup. OFF by default because
-         * the low-entropy code is guessable before first login; opt in for local dev only.
-         */
+        /** When true, PasswordBackfillRunner seeds each password-less active employee's employee_code as a temporary
+         * login password on startup. OFF by default because the low-entropy code is guessable before first login; opt
+         * in for local dev only. */
         private boolean seedEmployeeCodePasswords = false;
 
         public boolean isSeedEmployeeCodePasswords() {
@@ -297,12 +260,9 @@ public class AppProperties {
     }
 
     public static class SpecialMoney {
-        /**
-         * The 25th-of-month payroll cutoff: a special-money request approved on/before this day of
-         * the month lands in that same month's payroll_month; approved after, it rolls to next
-         * month. See {@code SpecialMoneyService#ceoApprove} for why it then rolls further forward
-         * past any already-PROCESSED month.
-         */
+        /** The 25th-of-month payroll cutoff: a special-money request approved on/before this day of the month lands in
+         * that same month's payroll_month; approved after, it rolls to next month. See SpecialMoneyService#ceoApprove
+         * for why it then rolls further forward past any already-PROCESSED month. */
         private int payrollCutoffDay = 25;
 
         public int getPayrollCutoffDay() {
@@ -323,14 +283,9 @@ public class AppProperties {
         }
     }
 
-    /**
-     * Employer-level constants stamped into the KBank PCT, PND1 and SSO สปส.1-10 files that cannot be
-     * derived from per-employee payroll data. Held in config (env-overridable) rather than a table:
-     * these change only when the company's bank/tax/SSO registrations change, i.e. essentially never.
-     * The values are the employer's real registration numbers — set them per environment; the code
-     * ships with blanks (and demo values in application-demo.yml) so nothing bogus reaches a real
-     * filing by accident.
-     */
+    /** Employer-level constants stamped into the KBank PCT, PND1 and SSO สปส.1-10 files that cannot be derived from
+     * per-employee payroll data. Held in config (env-overridable) rather than a table: these change only when the
+     * company's bank/tax/SSO registrations change, i.e. essentially never. */
     public static class Employer {
         /** Company legal name (Thai), KBank Header + SSO establishment name fallback. */
         private String companyNameTh = "";
@@ -340,10 +295,8 @@ public class AppProperties {
         private String pnd1Branch = "0000";
         /** 10-digit KBank company debit account funds are drawn from. */
         private String kbankDebitAccount = "";
-        /**
-         * KBank Header batch reference (≤16 chars). Blank → derived as the effective date in
-         * yyyyMMdd, matching the golden GL&R file's "20260629".
-         */
+        /** KBank Header batch reference (≤16 chars). Blank → derived as the effective date in yyyyMMdd, matching the
+         * golden GL&R file's "20260629". */
         private String kbankBatchRef = "";
         /** SSO employer account number (เลขที่บัญชีนายจ้าง), 10 digits. */
         private String ssoEmployerAccount = "";
@@ -353,10 +306,8 @@ public class AppProperties {
         private String ssoRatePercent = "5";
         /** SSO establishment name (ชื่อสถานประกอบการ). Blank → falls back to companyNameTh. */
         private String establishmentName = "";
-        /**
-         * Default day-of-month for the KBank transfer effective date (and PND1/SSO pay date) when HR
-         * does not pick one. GL&R pays on the 26th.
-         */
+        /** Default day-of-month for the KBank transfer effective date (and PND1/SSO pay date) when HR does not pick
+         * one. GL&R pays on the 26th. */
         private int defaultTransferDay = 26;
 
         public String getCompanyNameTh() {

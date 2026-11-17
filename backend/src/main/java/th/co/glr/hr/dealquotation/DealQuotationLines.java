@@ -96,31 +96,18 @@ public final class DealQuotationLines {
         + "(?:[x×*]\\s*+\\d+(?:[.,]\\d+)?\\s*+(?:(?:" + UNIT_ALTERNATION + ")\\s*+)?)?"
         + "(?:\\([^)]*\\))?\\s*+$");
 
-    /** The unit a typed size pair states — {@code null} reads as "unspecified" (today's ambiguous
-     * rule: compare the catalogue in BOTH cm and mm readings; see {@link #matchesCatalogFaceSize}).
-     * An explicit unit is load-bearing: known "60x120 typed as cm vs a 60x120 MILLIMETRE catalogue
-     * row" ambiguity aside (a real, tiny tile that genuinely reads "60x120mm" — nothing in free text
-     * can distinguish that from "60x120cm" typed with the unit omitted; this grammar does not try),
-     * an EXPLICIT unit token means only that reading is checked, never the other — so "300x600mm"
-     * against a 60x60cm/600x600mm catalogue row reads as a DIFFERENT tile (300mm x 600mm), never as
-     * "matches once you also allow the cm reading". */
+    /** The unit a typed size pair states — null reads as "unspecified" (today's ambiguous rule: compare the
+     * catalogue in BOTH cm and mm readings; see #matchesCatalogFaceSize). */
     enum SizeUnit { CM, MM }
 
-    /** A parsed {@code {width, height}} pair plus its resolved unit — {@code null} unit means
-     * "unspecified" (see {@link SizeUnit}). Digits only, never rounded or unit-converted here. */
+    /** A parsed {width, height} pair plus its resolved unit — null unit means "unspecified" (see SizeUnit). Digits
+     * only, never rounded or unit-converted here. */
     record ParsedSize(BigDecimal width, BigDecimal height, SizeUnit unit) {}
 
     private DealQuotationLines() {}
 
-    /** {@code กระเบื้อง รุ่น {model} สี {color} ผิว {texture}}, plus {@code No.{productCode}}
-     * when present. Blank components are simply omitted (never printed as "null" or an empty
-     * "รุ่น "/"สี "/"ผิว " fragment).
-     *
-     * <p>docs/sales/quotation-v2-plan.md §"Printed lines" item 6 / layout-spec §2: when {@code thicknessMm}
-     * is null there is no separate {@link #sizeLine} row at all — the size goes INLINE on this
-     * line instead, between ผิว and No.{@code productCode} (e.g. {@code "กระเบื้อง รุ่น Reverso
-     * Cement สี Grigio ขนาด 60x60 cm. No.BS66R13GP"}). When thickness IS present, {@link
-     * #sizeLine} prints it on its own row and this line stays exactly as before. */
+    /** กระเบื้อง รุ่น {model สี {color} ผิว {texture}}, plus No.{productCode} when present. Blank components are
+     * simply omitted (never printed as "null" or an empty "รุ่น "/"สี "/"ผิว " fragment). No.BS66R13GP"). */
     public static String descriptionLine(String model, String color, String texture, String productCode,
                                          String sizeText, BigDecimal thicknessMm) {
         return descriptionLine(WastageCalculator.DOCUMENT_LANGUAGE_TH, model, color, texture, productCode,
@@ -261,17 +248,8 @@ public final class DealQuotationLines {
         return label + facePart + " x " + thicknessPart + approx;
     }
 
-    /**
-     * The shared size grammar — see {@link #TWO_DIMENSIONS}'s Javadoc for the full spec (separators,
-     * per-number/trailing units, decimal comma, ignored third dimension, ignored trailing
-     * parenthetical). Package-private (not {@code private}) so {@code DealQuotationLinesTest} can
-     * pin the shared vector table directly against the parse RESULT, not just against {@link
-     * #sizeLine}'s printed string.
-     *
-     * @return the parsed {@link ParsedSize}, or {@code null} when {@code sizeText} is blank, exceeds
-     *     {@link #MAX_SIZE_TEXT_LENGTH}, does not match the grammar, or either number is not
-     *     strictly positive.
-     */
+    /** The shared size grammar — see #TWO_DIMENSIONS's Javadoc for the full spec (separators, per-number/trailing
+     * units, decimal comma, ignored third dimension, ignored trailing parenthetical). */
     static ParsedSize parseTwoDimensions(String sizeText) {
         if (blank(sizeText)) {
             return null;
@@ -292,10 +270,7 @@ public final class DealQuotationLines {
         }
         SizeUnit widthUnit = unitFamily(m.group(2));
         SizeUnit heightUnit = unitFamily(m.group(4));
-        // Unit resolution: an explicit unit on EITHER number wins outright. When both numbers carry
-        // one and they genuinely conflict (a shape no real rep types, and not in the vector table --
-        // e.g. "30cm x 60mm") there is no sane single reading, so this falls back to "unspecified"
-        // rather than silently preferring one side.
+        // Unit resolution: an explicit unit on EITHER number wins outright.
         SizeUnit unit = widthUnit != null ? widthUnit : heightUnit;
         if (widthUnit != null && heightUnit != null && widthUnit != heightUnit) {
             unit = null;
@@ -326,9 +301,8 @@ public final class DealQuotationLines {
         return SIZE_TEXT_WHITESPACE.matcher(sizeText).replaceAll(" ").trim();
     }
 
-    /** {@code cm}/{@code cm.}/{@code ซม}/{@code ซม.}/{@code ซ.ม.} → {@link SizeUnit#CM};
-     * {@code mm}/{@code mm.}/{@code มม}/{@code มม.}/{@code ม.ม.} → {@link SizeUnit#MM};
-     * {@code null} (no unit token captured) → {@code null} ("unspecified"). */
+    /** cm/cm./ซม/ซม./ซ.ม. → SizeUnit#CM; mm/mm./มม/มม./ม.ม. → SizeUnit#MM; null (no unit token captured) → null
+     * ("unspecified"). */
     private static SizeUnit unitFamily(String token) {
         if (token == null) {
             return null;
@@ -340,8 +314,8 @@ public final class DealQuotationLines {
         if (t.startsWith("mm")) {
             return SizeUnit.MM;
         }
-        // Thai: ซ (cm) and ม (mm) never share a leading character, so a plain startsWith is
-        // unambiguous -- "ซม."/"ซม"/"ซ.ม." all start with ซ; "มม."/"มม"/"ม.ม." all start with ม.
+        // Thai: ซ (cm) and ม (mm) never share a leading character, so a plain startsWith is unambiguous --
+        // "ซม."/"ซม"/"ซ.ม." all start with ซ; "มม."/"มม"/"ม.ม." all start with ม.
         if (t.startsWith("ซ")) {
             return SizeUnit.CM;
         }
@@ -382,15 +356,9 @@ public final class DealQuotationLines {
         return (a.compareTo(w) == 0 && b.compareTo(h) == 0) || (a.compareTo(h) == 0 && b.compareTo(w) == 0);
     }
 
-    /**
-     * {@code "{width} cm x {height} cm"} from the catalogue's OWN {@code width_mm}/{@code
-     * height_mm} — always millimetres, never inferred from free text — divided by 10 into
-     * centimetres via {@link BigDecimal#movePointLeft}, which is an exact decimal shift (no
-     * division rounding to worry about).
-     *
-     * @return {@code null} when either dimension is missing or non-positive, so {@link #sizeLine}
-     *     falls back to the rep's typed text rather than printing a bogus "0 cm x 0 cm".
-     */
+    /** "{width cm x {height} cm"} from the catalogue's OWN width_mm/height_mm — always millimetres, never inferred
+     * from free text — divided by 10 into centimetres via BigDecimal#movePointLeft, which is an exact decimal
+     * shift (no division rounding to worry about). */
     private static String faceSizeFromCatalogMm(BigDecimal widthMm, BigDecimal heightMm) {
         if (widthMm == null || heightMm == null || widthMm.signum() <= 0 || heightMm.signum() <= 0) {
             return null;
@@ -678,13 +646,9 @@ public final class DealQuotationLines {
         return sb.toString();
     }
 
-    /**
-     * The English per-sqm box sub-line, exactly her QN6900933's shape: {@code (1 box = 28 pcs =
-     * 0.6 sqm)}, {@code (1 box = 66 pcs = 0.495 sqm)} — the box area as the supplier states it,
-     * trailing zeros dropped (up to the column's 6 decimals). The LEADING "1 box" is always
-     * singular and literal — it is not a count, it names ONE box's own contents — but the piece
-     * count inside it is a genuine count and is pluralized accordingly (wording-scan fix 7).
-     */
+    /** The English per-sqm box sub-line, exactly her QN6900933's shape: (1 box = 28 pcs = 0.6 sqm), (1 box = 66 pcs
+     * = 0.495 sqm) — the box area as the supplier states it, trailing zeros dropped (up to the column's 6
+     * decimals). */
     public static String boxLine(Integer piecesPerBox, BigDecimal sqmPerBox) {
         if (piecesPerBox == null || piecesPerBox <= 0 || sqmPerBox == null || sqmPerBox.signum() <= 0) {
             return null;
@@ -710,23 +674,21 @@ public final class DealQuotationLines {
         return count == 1 ? singular : pluralWord;
     }
 
-    /** {@link #plural(int, String, String)} for a {@link BigDecimal} count (the wastage-allowance
-     * piece count, which is user-typed and so arrives as a decimal even though fix 5 requires it be
-     * a whole number in PIECES mode) — compared with {@link BigDecimal#compareTo} so "1.00" reads
-     * as singular exactly like {@code 1}. */
+    /** #plural(int, String, String) for a BigDecimal count (the wastage-allowance piece count, which is user-typed
+     * and so arrives as a decimal even though fix 5 requires it be a whole number in PIECES mode) — compared with
+     * BigDecimal#compareTo so "1.00" reads as singular exactly like 1. */
     static String plural(BigDecimal count, String singular, String pluralWord) {
         return count != null && count.compareTo(BigDecimal.ONE) == 0 ? singular : pluralWord;
     }
 
-    /** {@code "pc"}/{@code "pcs"} via {@link #plural(int, String, String)} — the single most common
-     * shape this document prints, given its own tiny helper so call sites read as one word rather
-     * than a three-argument call. */
+    /** "pc"/"pcs" via #plural(int, String, String) — the single most common shape this document prints, given its
+     * own tiny helper so call sites read as one word rather than a three-argument call. */
     private static String pluralPcs(int count) {
         return plural(count, "pc", "pcs");
     }
 
-    /** {@link #pluralPcs(int)} for a {@link BigDecimal}-typed count (the wastage allowance and the
-     * per-sqm rate, e.g. "@ 1 pc/sqm"). */
+    /** #pluralPcs(int) for a BigDecimal-typed count (the wastage allowance and the per-sqm rate, e.g. "@ 1
+     * pc/sqm"). */
     private static String pluralPcs(BigDecimal count) {
         return plural(count, "pc", "pcs");
     }
@@ -736,8 +698,8 @@ public final class DealQuotationLines {
         return plural(count, "box", "boxes");
     }
 
-    /** What a TILE row prints in the quantity/unit cells and under its description, decided in ONE
-     * place for both the stored-row mapping and the calculate-line preview. */
+    /** What a TILE row prints in the quantity/unit cells and under its description, decided in ONE place for both
+     * the stored-row mapping and the calculate-line preview. */
     public record TilePrint(String calculationLine, BigDecimal quantity, String unit, String subLine) {}
 
     /**
@@ -820,26 +782,14 @@ public final class DealQuotationLines {
 
     // ── quotation v3 ─────────────────────────────────────
 
-    /**
-     * The SPECIAL_SQM sub-line the owner's documents carry under a ราคาพิเศษ tile row:
-     * {@code (ราคาพิเศษ 1,350 บาท/ตรม ราคารวมภาษีมูลค่าเพิ่ม)}.
-     *
-     * <p>"ตรม" without full stops, and no space before "บาท/ตรม" beyond the single one — copied
-     * from her documents rather than normalised to the "ตร.ม." this file uses elsewhere, because
-     * this string is customer-facing text she has already approved in print.
-     *
-     * @return {@code null} when there is no ราคาพิเศษ, so the caller omits the row entirely rather
-     *     than printing an empty one (same contract as {@link #sizeLine}).
-     */
+    /** The SPECIAL_SQM sub-line the owner's documents carry under a ราคาพิเศษ tile row:. "ตรม" without full stops,
+     * and no space before "บาท/ตรม" beyond the single one. */
     public static String specialPriceLine(BigDecimal specialPriceSqm) {
         return specialPriceLine(WastageCalculator.DOCUMENT_LANGUAGE_TH, specialPriceSqm);
     }
 
-    /**
-     * ⚠️ English: ALWAYS {@code null}. The Thai sub-line states a VAT-inclusive baht price, which
-     * is false on a USD/no-VAT document. The English per-sqm row prints {@link #boxLine} in this
-     * slot instead — see {@link #tilePrint}.
-     */
+    /** ⚠️ English: ALWAYS null. The Thai sub-line states a VAT-inclusive baht price, which is false on a USD/no-VAT
+     * document. The English per-sqm row prints #boxLine in this slot instead — see #tilePrint. */
     public static String specialPriceLine(String documentLanguage, BigDecimal specialPriceSqm) {
         if (english(documentLanguage)) {
             return null;

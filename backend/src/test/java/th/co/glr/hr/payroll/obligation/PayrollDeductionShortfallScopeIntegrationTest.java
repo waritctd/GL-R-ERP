@@ -16,12 +16,8 @@ import th.co.glr.hr.payroll.PayrollDeductionKind;
 import th.co.glr.hr.payroll.obligation.PayrollDeductionShortfallDtos.PayrollDeductionShortfallDto;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
-/**
- * Confirms shortfall-ledger read authorization against the real service and real SQL (issue #376)
- * -- the gap Mockito-based unit tests ({@link PayrollDeductionShortfallServiceTest}) cannot cover.
- * Copy of {@link DeductionObligationScopeIntegrationTest}'s shape, written wrong-way-round per
- * CLAUDE.md's requirement for any role-gated read/write.
- */
+/** Confirms shortfall-ledger read authorization against the real service and real SQL (issue #376) -- the gap
+ * Mockito-based unit tests (PayrollDeductionShortfallServiceTest) cannot cover. */
 class PayrollDeductionShortfallScopeIntegrationTest extends AbstractPostgresIntegrationTest {
     private PayrollDeductionShortfallRepository repository;
     private PayrollDeductionShortfallService service;

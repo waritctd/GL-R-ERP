@@ -35,6 +35,7 @@ import Save from 'lucide-react/dist/esm/icons/save.mjs';
 import Search from 'lucide-react/dist/esm/icons/search.mjs';
 import ShieldCheck from 'lucide-react/dist/esm/icons/shield-check.mjs';
 import SlidersHorizontal from 'lucide-react/dist/esm/icons/sliders-horizontal.mjs';
+import Sparkles from 'lucide-react/dist/esm/icons/sparkles.mjs';
 import TriangleAlert from 'lucide-react/dist/esm/icons/triangle-alert.mjs';
 import Upload from 'lucide-react/dist/esm/icons/upload.mjs';
 import Paperclip from 'lucide-react/dist/esm/icons/paperclip.mjs';
@@ -63,10 +64,9 @@ const icons = {
   clipboard: ClipboardCheck,
   clock: Clock3,
   close: X,
-  // "void / withdraw", NOT "reject". Added 2026-08-10 because the leave review queue rendered
-  // ปฏิเสธ (reject a pending request) and ยกเลิก (void an already-decided one) as two IDENTICAL
-  // `close` ✕ glyphs side by side, told apart only by border colour and a tooltip -- owner-reported
-  // as confusing. `close` stays reject; `ban` (circle-with-slash) is cancel.
+  // "void / withdraw", NOT "reject". Added 2026-08-10 because the leave review queue rendered ปฏิเสธ (reject a
+  // pending request) and ยกเลิก (void an already-decided one) as two IDENTICAL `close` ✕ glyphs side by side,
+  // told apart only by border colour and a tooltip -- owner-reported as confusing.
   ban: Ban,
   moreHorizontal: Ellipsis,
   externalLink: ExternalLink,
@@ -85,6 +85,7 @@ const icons = {
   save: Save,
   search: Search,
   setting: SlidersHorizontal,
+  sparkles: Sparkles,
   shield: ShieldCheck,
   triangleAlert: TriangleAlert,
   upload: Upload,

@@ -41,32 +41,16 @@ import th.co.glr.hr.ticket.TicketEventKind;
 import th.co.glr.hr.ticket.TicketRepository;
 import th.co.glr.hr.ticket.TicketService;
 
-/**
- * Authorization evidence for the per-deal IMPORT view (owner-confirmed scope, mirrors the account
- * finance-view ruling): {@code GET /api/import/deals/{id}} + the paired 403 of import on
- * {@code GET /api/tickets/{id}}.
- *
- * <p>Real Postgres, real {@link ImportDealService}/{@link TicketService}/{@link
- * ImportRequestService} and real repositories — Mockito cannot show that the row-scope predicate
- * survives into the WHERE clause. Every case is written wrong-way-round: what the caller CANNOT
- * reach, not what they can.
- *
- * <p>{@code @EnabledIf} is declared HERE, not inherited from the base class — JUnit's {@code
- * @EnabledIf} is not {@code @Inherited} (see {@link AbstractPostgresIntegrationTest}).
- *
- * <p>NOT covered, deliberately: the frontend page and its wiring (a later slice); a cross-deal
- * import list endpoint (out of scope — /fulfilment keeps its client-side per-deal fetch); document
- * attachment reads for import (an open owner question, see the branch report — {@code
- * TicketAccessPolicy#canViewDocuments} is unchanged and pinned by its own tests).
- */
+/** Authorization evidence for the per-deal IMPORT view (owner-confirmed scope, mirrors the account finance-view
+ * ruling): GET /api/import/deals/{id} + the paired 403 of import on GET /api/tickets/{id}. */
 @EnabledIf(
     value = "th.co.glr.hr.support.PostgresTestSupport#isAvailable",
     disabledReason = "No TEST_DB_URL and no Docker available for Testcontainers Postgres")
 class ImportDealAuthzIntegrationTest extends AbstractPostgresIntegrationTest {
 
-    // Sentinel values planted in every cost-bearing column of the fixture item. If any of them
-    // shows up anywhere in the serialized response, a price/cost field leaked — and because they
-    // are planted (not null), an accidentally-empty DTO cannot make the absence check vacuous.
+    // Sentinel values planted in every cost-bearing column of the fixture item. If any of them shows up anywhere
+    // in the serialized response, a price/cost field leaked — and because they are planted (not null), an
+    // accidentally-empty DTO cannot make the absence check vacuous.
     private static final String RAW_PRICE = "987654.32";
     private static final String PROPOSED_PRICE = "876543.21";
     private static final String APPROVED_PRICE = "765432.10";
@@ -129,8 +113,8 @@ class ImportDealAuthzIntegrationTest extends AbstractPostgresIntegrationTest {
         ticketId = insertTicket("IMPDEAL-1", "บริษัท ทดสอบนำเข้า จำกัด", DealStage.ORDER_RECEIVED);
         insertCostBearingItem(ticketId, "Padana Import Deal Test", "Lithos Nero Nat", "60x60 cm", "308", 0);
         insertCostBearingItem(ticketId, "Padana Import Deal Test", "Terrazzo White Nat", "30x60 cm", "120", 1);
-        // A price-bearing event (its note quotes a price) and a real comment — only the comment
-        // may ever surface in the import view.
+        // A price-bearing event (its note quotes a price) and a real comment — only the comment may ever surface in
+        // the import view.
         tickets.addEvent(ticketId, ownerId, "พนักงานขาย", TicketEventKind.PRICE_OVERRIDDEN, null, null,
             OVERRIDE_NOTE);
         tickets.addEvent(ticketId, ownerId, "พนักงานขาย", TicketEventKind.COMMENTED, null, null,
@@ -311,8 +295,8 @@ class ImportDealAuthzIntegrationTest extends AbstractPostgresIntegrationTest {
     @Test
     void ceoIsNotRowScoped_canReadADealOutsideImportsScope() {
         long lead = insertTicket("IMPDEAL-CEOLEAD", "ลูกค้าใหม่", DealStage.LEAD_APPROACH);
-        // Positive control: import is refused this very deal, so the ceo's success is the scope
-        // difference, not an accident of the fixture.
+        // Positive control: import is refused this very deal, so the ceo's success is the scope difference, not an
+        // accident of the fixture.
         assertForbidden(() -> service.get(lead, importUser));
 
         ImportDealDto deal = service.get(lead, ceoUser);

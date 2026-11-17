@@ -83,30 +83,9 @@ import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 import th.co.glr.hr.support.RecordingSalesMailer;
 import th.co.glr.hr.pricingcosting.LandedCostCalculator;
 
-/**
- * Real-Postgres proof for {@link PaymentTrack} + {@code TicketRepository.advancePaymentStatus} +
- * the 7 migrated write sites. {@code PaymentTrackTest} covers the pure state machine in isolation;
- * this class covers (a) the repository's compare-and-set actually enforces it against a real row,
- * and (b) the SERVICE-layer composition ({@code TicketService.confirmCustomer},
- * {@code DepositNoticeService.issue}, {@code reconcilePaymentStatus}, {@code waiveDeposit},
- * {@code issueImportRequest}) walks/refuses correctly through real production code paths, never a
- * mock.
- *
- * <p>Deliberately does NOT extend {@code DepositNoticeIssueGuardIntegrationTest} — the ceo-costing
- * agent may be touching the pricing services it wires. Wiring and the fixture-building approach
- * (drive a deal through the REAL Steps 1-6 services, no shortcuts) are modeled on that class
- * instead — see its own Javadoc — plus its
- * {@code buildTicketWithIssuedDepositNotice}/{@code driveDraftPricingRequestToQuotationAccepted}
- * helpers.
- *
- * <p>Two fixture tiers are used deliberately: the "bare ticket" helpers ({@link #createBareTicket}
- * + {@link TicketRepository#updatePaymentStatusUnchecked}/{@code updateDepositPolicy}) seed a real
- * Postgres row directly for the wrong-way-round repository-level tests, where the fact under test
- * is the GUARD itself, not how the ticket arrived at that state. The heavier
- * {@link #buildDealToQuotationAccepted} fixture drives a full pricing-request chain through the
- * real services for the positive end-to-end walks and the authz-visible test, where the SERVICE
- * composition is exactly what is being proven.
- */
+/** Real-Postgres proof for PaymentTrack + TicketRepository.advancePaymentStatus + the 7 migrated write sites.
+ * Deliberately does NOT extend DepositNoticeIssueGuardIntegrationTest — the ceo-costing agent may be touching
+ * the pricing services it wires. */
 class PaymentTrackIntegrationTest extends AbstractPostgresIntegrationTest {
     private TicketRepository tickets;
     private RecordingSalesMailer mailer;
@@ -196,16 +175,14 @@ class PaymentTrackIntegrationTest extends AbstractPostgresIntegrationTest {
     private void insertFactory(String name) {
     }
 
-    // ═══════════════════════════════════════════════════════════════════════════════════════
     // POSITIVE — full end-to-end walks (plan scenarios 6, 7), revision (8), authz-visible (9)
-    // ═══════════════════════════════════════════════════════════════════════════════════════
 
     @Test
     void requiredPath_walksEndToEnd_nullThroughDepositNoticeIssuedThroughFullyPaid() {
         Deal deal = buildDealToQuotationAccepted("required");
 
-        // site 1: null -> CUSTOMER_CONFIRMED. confirmOrder delegates to TicketService.confirmCustomer
-        // since paymentStatus is still null when it runs.
+        // site 1: null -> CUSTOMER_CONFIRMED. confirmOrder delegates to TicketService.confirmCustomer since
+        // paymentStatus is still null when it runs.
         orderConfirmation.confirmOrder(
             deal.pricingRequestId(), new ConfirmOrderRequest(UUID.randomUUID().toString()), salesActor);
         assertThat(paymentStatusOf(deal.ticketId())).isEqualTo(PaymentTrack.CUSTOMER_CONFIRMED);
@@ -216,14 +193,14 @@ class PaymentTrackIntegrationTest extends AbstractPostgresIntegrationTest {
         DepositNoticeDto issuedNotice = depositNoticeService.issue(draft.id(), salesActor);
         assertThat(paymentStatusOf(deal.ticketId())).isEqualTo(PaymentTrack.DEPOSIT_NOTICE_ISSUED);
 
-        // site 6 (REQUIRED branch, via reconcilePaymentStatus): DEPOSIT_NOTICE_ISSUED -> DEPOSIT_PAID,
-        // triggered by a real ~50% deposit receipt.
+        // site 6 (REQUIRED branch, via reconcilePaymentStatus): DEPOSIT_NOTICE_ISSUED -> DEPOSIT_PAID, triggered by a
+        // real ~50% deposit receipt.
         ticketService.confirmDepositPaid(deal.ticketId(), accountActor);
         assertThat(paymentStatusOf(deal.ticketId())).isEqualTo(PaymentTrack.DEPOSIT_PAID);
 
-        // Fulfilment track (unrelated to payment_status except for site 3's side effect below) —
-        // no live sales.factory_purchase_order rows exist for this deal, so the ticket-level
-        // setters are not refused by the PO-tracked guard.
+        // Fulfilment track (unrelated to payment_status except for site 3's side effect below) — no live
+        // sales.factory_purchase_order rows exist for this deal, so the ticket-level setters are not refused by the
+        // PO-tracked guard.
         ticketService.recordFirstImportRequestIssued(deal.ticketId(), 0L, importActor); // pre-V184 shape: IR_ISSUED, no rows
         ticketService.markIrSent(deal.ticketId(), importActor);
         ticketService.markShipping(deal.ticketId(), importActor);
@@ -232,8 +209,8 @@ class PaymentTrackIntegrationTest extends AbstractPostgresIntegrationTest {
         ticketService.markGoodsReceived(deal.ticketId(), importActor);
         assertThat(paymentStatusOf(deal.ticketId())).isEqualTo(PaymentTrack.AWAITING_FINAL_PAYMENT);
 
-        // site 5 (via confirmFinalPayment -> recordPaymentInternal -> reconcilePaymentStatus, since
-        // the remaining ~50% is still outstanding): AWAITING_FINAL_PAYMENT -> FULLY_PAID.
+        // site 5 (via confirmFinalPayment -> recordPaymentInternal -> reconcilePaymentStatus, since the remaining ~50%
+        // is still outstanding): AWAITING_FINAL_PAYMENT -> FULLY_PAID.
         ticketService.confirmFinalPayment(deal.ticketId(), accountActor);
         assertThat(paymentStatusOf(deal.ticketId())).isEqualTo(PaymentTrack.FULLY_PAID);
         // The DEPOSIT receipt is the notice's VAT-inclusive totalPayable, not pre-VAT.
@@ -258,21 +235,19 @@ class PaymentTrackIntegrationTest extends AbstractPostgresIntegrationTest {
             deal.pricingRequestId(), new ConfirmOrderRequest(UUID.randomUUID().toString()), salesActor);
         assertThat(paymentStatusOf(deal.ticketId())).isEqualTo(PaymentTrack.CUSTOMER_CONFIRMED);
 
-        // site 8 (no write, rule 5): eligible with no deposit notice at all — CUSTOMER_CONFIRMED
-        // plus a bypass policy is sufficient.
+        // site 8 (no write, rule 5): eligible with no deposit notice at all — CUSTOMER_CONFIRMED plus a bypass policy
+        // is sufficient.
         ticketService.recordFirstImportRequestIssued(deal.ticketId(), 0L, importActor); // pre-V184 shape: IR_ISSUED, no rows
         ticketService.markIrSent(deal.ticketId(), importActor);
         ticketService.markShipping(deal.ticketId(), importActor);
         ticketService.markGoodsReceived(deal.ticketId(), importActor);
-        // applyGoodsReceived's site-3 write is guarded on DEPOSIT_PAID specifically — a bypass
-        // deal is never DEPOSIT_PAID, so it must NOT fire here.
+        // applyGoodsReceived's site-3 write is guarded on DEPOSIT_PAID specifically — a bypass deal is never
+        // DEPOSIT_PAID, so it must NOT fire here.
         assertThat(paymentStatusOf(deal.ticketId())).isEqualTo(PaymentTrack.CUSTOMER_CONFIRMED);
 
-        // site 4/5 MULTI-HOP WALK in one call: CUSTOMER_CONFIRMED -> AWAITING_FINAL_PAYMENT ->
-        // FULLY_PAID, since nothing has been paid yet (confirmFinalPayment's outstanding = the
-        // full payable, so it delegates to recordPaymentInternal -> reconcilePaymentStatus, which
-        // walks both hops in the ONE compare-and-set). This is the "walk, don't skip" central
-        // design decision exercised through a real, unmodified production code path.
+        // site 4/5 MULTI-HOP WALK in one call: CUSTOMER_CONFIRMED -> AWAITING_FINAL_PAYMENT -> FULLY_PAID, since
+        // nothing has been paid yet. This is the "walk, don't skip" central design decision exercised through a real,
+        // unmodified production code path.
         ticketService.confirmFinalPayment(deal.ticketId(), accountActor);
         assertThat(paymentStatusOf(deal.ticketId())).isEqualTo(PaymentTrack.FULLY_PAID);
     }
@@ -333,8 +308,8 @@ class PaymentTrackIntegrationTest extends AbstractPostgresIntegrationTest {
                 "ชำระบางส่วน", null, null, false),
             accountActor);
 
-        // Site 6, bypass branch: CUSTOMER_CONFIRMED -> AWAITING_FINAL_PAYMENT, never DEPOSIT_PAID
-        // (which PaymentTrack refuses entirely for a bypass policy).
+        // Site 6, bypass branch: CUSTOMER_CONFIRMED -> AWAITING_FINAL_PAYMENT, never DEPOSIT_PAID (which PaymentTrack
+        // refuses entirely for a bypass policy).
         assertThat(paymentStatusOf(deal.ticketId())).isEqualTo(PaymentTrack.AWAITING_FINAL_PAYMENT);
 
         // AFTER: the real repository list query through the real service (TicketService.listPage
@@ -438,14 +413,9 @@ class PaymentTrackIntegrationTest extends AbstractPostgresIntegrationTest {
             .stream().map(TicketSummaryDto::id).toList();
     }
 
-    // ═══════════════════════════════════════════════════════════════════════════════════════
-    // WRONG-WAY-ROUND #1 (skip/off-path) — repository level. The MACHINE-level half (canTransition
-    // itself returning false for a skip pair, e.g. CUSTOMER_CONFIRMED -> DEPOSIT_PAID) is
-    // exhaustively covered by PaymentTrackTest's everySkip_*_isRefusedAtTheMachineLevel tests —
-    // duplicating that pure-function assertion here would add a real Postgres round-trip with no
-    // new evidence. This proves the SAME refusal survives into advancePaymentStatus against a
-    // real row: an off-path target throws BEFORE any SQL executes, not after a partial write.
-    // ═══════════════════════════════════════════════════════════════════════════════════════
+    // WRONG-WAY-ROUND #1 (skip/off-path) — repository level. This proves the SAME refusal survives into
+    // advancePaymentStatus against a real row: an off-path target throws BEFORE any SQL executes, not after a
+    // partial write.
 
     @Test
     void advancePaymentStatus_targetNotARealStatus_throwsBeforeAnySql_rowUnchanged() {
@@ -454,18 +424,16 @@ class PaymentTrackIntegrationTest extends AbstractPostgresIntegrationTest {
 
         assertThatThrownBy(() -> tickets.advancePaymentStatus(
                 ticketId, DepositPolicy.REQUIRED, PaymentTrack.CUSTOMER_CONFIRMED, "NOT_A_REAL_STATUS"))
-            // Converted from IllegalStateException to a 409 at the source: an illegal edge is a
-            // conflict the caller can act on, not an opaque 500. The row must still be untouched,
-            // which is what the assertion below proves — the throw happens before any SQL.
+            // Converted from IllegalStateException to a 409 at the source: an illegal edge is a conflict the caller can
+            // act on, not an opaque 500. The row must still be untouched, which is what the assertion below proves — the
+            // throw happens before any SQL.
             .isInstanceOf(ApiException.class)
             .extracting(e -> ((ApiException) e).getStatus()).isEqualTo(HttpStatus.CONFLICT);
 
         assertThat(paymentStatusOf(ticketId)).isEqualTo(PaymentTrack.CUSTOMER_CONFIRMED);
     }
 
-    // ═══════════════════════════════════════════════════════════════════════════════════════
     // WRONG-WAY-ROUND #2: reverse
-    // ═══════════════════════════════════════════════════════════════════════════════════════
 
     @Test
     void advancePaymentStatus_reverse_throwsBeforeAnySql_rowUnchanged() {
@@ -474,30 +442,27 @@ class PaymentTrackIntegrationTest extends AbstractPostgresIntegrationTest {
 
         assertThatThrownBy(() -> tickets.advancePaymentStatus(
                 ticketId, DepositPolicy.REQUIRED, PaymentTrack.FULLY_PAID, PaymentTrack.DEPOSIT_PAID))
-            // Converted from IllegalStateException to a 409 at the source: an illegal edge is a
-            // conflict the caller can act on, not an opaque 500. The row must still be untouched,
-            // which is what the assertion below proves — the throw happens before any SQL.
+            // Converted from IllegalStateException to a 409 at the source: an illegal edge is a conflict the caller can
+            // act on, not an opaque 500. The row must still be untouched, which is what the assertion below proves — the
+            // throw happens before any SQL.
             .isInstanceOf(ApiException.class)
             .extracting(e -> ((ApiException) e).getStatus()).isEqualTo(HttpStatus.CONFLICT);
 
         assertThat(paymentStatusOf(ticketId)).isEqualTo(PaymentTrack.FULLY_PAID);
     }
 
-    // ═══════════════════════════════════════════════════════════════════════════════════════
-    // EXTRA (not one of the plan's 5 named wrong-way-round scenarios, but required to precisely
-    // mutation-check guard (b), the compare-and-set clause itself): a stale "expected" — a
-    // concurrent-writer race — and the null-entry IS NOT DISTINCT FROM correctness. See the
-    // branch report.
-    // ═══════════════════════════════════════════════════════════════════════════════════════
+    // EXTRA (not one of the plan's 5 named wrong-way-round scenarios, but required to precisely mutation-check
+    // guard (b), the compare-and-set clause itself): a stale "expected" — a concurrent-writer race — and the
+    // null-entry IS NOT DISTINCT FROM correctness. See the branch report.
 
     @Test
     void advancePaymentStatus_staleExpected_returnsZeroRows_rowUnchanged() {
         long ticketId = createBareTicket();
         tickets.updatePaymentStatusUnchecked(ticketId, PaymentTrack.DEPOSIT_PAID);
 
-        // A LOGICALLY legal single hop (CUSTOMER_CONFIRMED -> DEPOSIT_NOTICE_ISSUED) — but the row
-        // is actually at DEPOSIT_PAID, not CUSTOMER_CONFIRMED. PaymentTrack alone cannot see this
-        // (it only validates the edge, not the row); only the SQL compare-and-set can.
+        // A LOGICALLY legal single hop (CUSTOMER_CONFIRMED -> DEPOSIT_NOTICE_ISSUED) — but the row is actually at
+        // DEPOSIT_PAID, not CUSTOMER_CONFIRMED. PaymentTrack alone cannot see this (it only validates the edge, not
+        // the row); only the SQL compare-and-set can.
         int rows = tickets.advancePaymentStatus(
             ticketId, DepositPolicy.REQUIRED, PaymentTrack.CUSTOMER_CONFIRMED, PaymentTrack.DEPOSIT_NOTICE_ISSUED);
 
@@ -517,9 +482,7 @@ class PaymentTrackIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(paymentStatusOf(ticketId)).isEqualTo(PaymentTrack.CUSTOMER_CONFIRMED);
     }
 
-    // ═══════════════════════════════════════════════════════════════════════════════════════
     // WRONG-WAY-ROUND #3: late waiveDeposit (guard c)
-    // ═══════════════════════════════════════════════════════════════════════════════════════
 
     @Test
     void waiveDeposit_afterDepositNoticeIssued_isRefused_depositPolicyUnchanged() {
@@ -538,9 +501,7 @@ class PaymentTrackIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(depositPolicyOf(ticketId)).isEqualTo(DepositPolicy.REQUIRED);
     }
 
-    // ═══════════════════════════════════════════════════════════════════════════════════════
     // WRONG-WAY-ROUND #4: issueImportRequest with NULL payment status on a bypass policy (guard d)
-    // ═══════════════════════════════════════════════════════════════════════════════════════
 
     @Test
     void issueImportRequest_nullPaymentStatusOnBypassPolicy_isRefused_fulfillmentStatusStaysNull() {
@@ -557,9 +518,7 @@ class PaymentTrackIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(fulfillmentStatusOf(ticketId)).isNull();
     }
 
-    // ═══════════════════════════════════════════════════════════════════════════════════════
     // WRONG-WAY-ROUND #5: off-path — a WAIVED deal cannot reach DEPOSIT_NOTICE_ISSUED
-    // ═══════════════════════════════════════════════════════════════════════════════════════
 
     @Test
     void advancePaymentStatus_waivedPolicyCannotReachDepositNoticeIssued_repositoryLevel() {
@@ -569,9 +528,9 @@ class PaymentTrackIntegrationTest extends AbstractPostgresIntegrationTest {
 
         assertThatThrownBy(() -> tickets.advancePaymentStatus(
                 ticketId, DepositPolicy.WAIVED, PaymentTrack.CUSTOMER_CONFIRMED, PaymentTrack.DEPOSIT_NOTICE_ISSUED))
-            // Converted from IllegalStateException to a 409 at the source: an illegal edge is a
-            // conflict the caller can act on, not an opaque 500. The row must still be untouched,
-            // which is what the assertion below proves — the throw happens before any SQL.
+            // Converted from IllegalStateException to a 409 at the source: an illegal edge is a conflict the caller can
+            // act on, not an opaque 500. The row must still be untouched, which is what the assertion below proves — the
+            // throw happens before any SQL.
             .isInstanceOf(ApiException.class)
             .extracting(e -> ((ApiException) e).getStatus()).isEqualTo(HttpStatus.CONFLICT);
 
@@ -650,10 +609,8 @@ class PaymentTrackIntegrationTest extends AbstractPostgresIntegrationTest {
         mailer.assertNoNotice("ORDER_CONFIRMED_NO_DEPOSIT", NO_DEPOSIT_TITLE);
     }
 
-    // ═══════════════════════════════════════════════════════════════════════════════════════
-    // Bare-ticket fixture helpers — for the repository-level / wrong-way-round tests, where the
-    // fact under test is the GUARD, not how the ticket got there.
-    // ═══════════════════════════════════════════════════════════════════════════════════════
+    // Bare-ticket fixture helpers — for the repository-level / wrong-way-round tests, where the fact under test is
+    // the GUARD, not how the ticket got there.
 
     private long createBareTicket() {
         return tickets.create(sampleTicketRequest(), tickets.nextTicketCode(), salesRepId, "พนักงานขาย เพย์เมนต์");
@@ -685,11 +642,9 @@ class PaymentTrackIntegrationTest extends AbstractPostgresIntegrationTest {
         return tickets.findById(ticketId).orElseThrow().summary().fulfillmentStatus();
     }
 
-    // ═══════════════════════════════════════════════════════════════════════════════════════
-    // Heavy fixture — mirrors DepositNoticeIssueGuardIntegrationTest's approach for driving a
-    // deal through the real Steps 1-6 services up to QUOTATION_ACCEPTED, WITHOUT calling
-    // confirmOrder (so each positive test controls exactly when site 1 fires itself).
-    // ═══════════════════════════════════════════════════════════════════════════════════════
+    // Heavy fixture — mirrors DepositNoticeIssueGuardIntegrationTest's approach for driving a deal through the
+    // real Steps 1-6 services up to QUOTATION_ACCEPTED, WITHOUT calling confirmOrder (so each positive test
+    // controls exactly when site 1 fires itself).
 
     private record Deal(long ticketId, long pricingRequestId) {}
 
@@ -710,10 +665,9 @@ class PaymentTrackIntegrationTest extends AbstractPostgresIntegrationTest {
         long ticketItemId = created.items().get(0).id();
 
         BigDecimal quantity = new BigDecimal("10");
-        // V185 (direct-deal-form parity): color/texture/thicknessMm/sqmPerPiece/piecesPerBox/a
-        // quantity are now required on every item PricingRequestService#createDraft persists —
-        // requestedQty/requestedUnit/requestedUnitBasis are derived instead. roundToFullBox=false +
-        // piecesInput=quantity keeps the derived requestedQty byte-identical to `quantity`.
+        // V185 (direct-deal-form parity): color/texture/thicknessMm/sqmPerPiece/piecesPerBox/a quantity are now
+        // required on every item PricingRequestService#createDraft persists —
+        // requestedQty/requestedUnit/requestedUnitBasis are derived instead.
         PricingRequestRequests.PricingRequestItemRequest item = new PricingRequestRequests.PricingRequestItemRequest(
             ticketItemId, catalogProductId, null, "SCG", "Tile PaymentTrack", "SCG Tile PaymentTrack",
             "White", "Matte", "60x60", FACTORY, null, null, null, null,
@@ -776,10 +730,9 @@ class PaymentTrackIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     private void drainDispatches() {
-        // No-op now: FactoryQuoteService.send is synchronous (manual-RFQ redesign) --
-        // there is no dispatch/worker queue left to drain. Kept (rather than removing
-        // every call site) so this helper's callers do not all need to be revisited
-        // individually.
+        // No-op now: FactoryQuoteService.send is synchronous (manual-RFQ redesign) -- there is no dispatch/worker
+        // queue left to drain. Kept (rather than removing every call site) so this helper's callers do not all need to
+        // be revisited individually.
     }
 
     private TicketItemRequest ticketItem(String brand, String model, String factory) {

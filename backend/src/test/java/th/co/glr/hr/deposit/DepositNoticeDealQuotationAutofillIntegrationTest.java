@@ -66,13 +66,9 @@ class DepositNoticeDealQuotationAutofillIntegrationTest extends AbstractPostgres
 
     // ── (b) NEGATIVE, wrong-way-round: nothing in a live status -> empty list ───────────────────
 
-    /**
-     * Written wrong-way-round per CLAUDE.md's "Permission changes must ship evidence" guidance,
-     * applied here to the status filter: a ticket whose ONLY quotations sit in every non-live
-     * status (DRAFT, CANCELLED, SUPERSEDED, PENDING_APPROVAL) must autofill EMPTY, never one of
-     * them. This is the test that must go red if someone widens {@code IN
-     * ('ACCEPTED','ISSUED','APPROVED')} to include any of these.
-     */
+    /** Written wrong-way-round per CLAUDE.md's "Permission changes must ship evidence" guidance, applied here to
+     * the status filter: a ticket whose ONLY quotations sit in every non-live status (DRAFT, CANCELLED,
+     * SUPERSEDED, PENDING_APPROVAL) must autofill EMPTY, never one of them. */
     @Test
     void onlyNonLiveStatusQuotations_returnsEmptyList() {
         long ticketId = insertTicket("DEPNOT-D");
@@ -120,10 +116,9 @@ class DepositNoticeDealQuotationAutofillIntegrationTest extends AbstractPostgres
     }
 
     private long insertQuotation(long ticketId, String origin, String docStatus) {
-        // ux_quotation_ticket_recipient_version is unique on (ticket_id, recipient_type,
-        // quotation_version); recipient_type defaults to 'UNSPECIFIED' for every row here, so a
-        // second quotation on the SAME ticket needs a distinct quotation_version or the insert
-        // collides — increment the shared counter rather than defaulting to 1 every time.
+        // ux_quotation_ticket_recipient_version is unique on; recipient_type defaults to 'UNSPECIFIED' for every row
+        // here, so a second quotation on the SAME ticket needs a distinct quotation_version or the insert collides —
+        // increment the shared counter rather than defaulting to 1 every time.
         int version = ++quotationSeq;
         String number = "QN-DEPNOT-" + version;
         return jdbc.queryForObject("""

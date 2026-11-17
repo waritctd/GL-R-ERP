@@ -93,12 +93,7 @@ import th.co.glr.hr.ticket.TicketItemRequest;
 import th.co.glr.hr.ticket.TicketRepository;
 import th.co.glr.hr.ticket.TicketService;
 
-/**
- * Real-DB acceptance + authz + cross-tenant coverage for Step 7 (Factory Purchase Order and
- * Import Execution). Drives a deal through the REAL Steps 1-6 services (no shortcuts) to a
- * deposit-paid, import-request-issued deal at {@code DealStage.PROCUREMENT}, then exercises
- * {@link ProcurementService} against that real state.
- */
+/** Real-DB acceptance + authz + cross-tenant coverage for Step 7 (Factory Purchase Order and Import Execution). */
 class ProcurementServiceIntegrationTest extends AbstractPostgresIntegrationTest {
     private TicketRepository tickets;
     private PricingRequestRepository pricingRequests;
@@ -148,8 +143,8 @@ class ProcurementServiceIntegrationTest extends AbstractPostgresIntegrationTest 
         factoryQuoteRepository = factoryQuotes;
         FxRateRepository fxRates = new FxRateRepository(jdbc);
         PricingFormulaEngine formulaEngine = new PricingFormulaEngine(new PricingFormulaConfigRepository(jdbc));
-        // V141 ("CEO owns costing"): shared by FactoryQuoteService's markReadyForCosting
-        // auto-advance check and PricingDecisionService's startReview/recalculateCost.
+        // V141 ("CEO owns costing"): shared by FactoryQuoteService's markReadyForCosting auto-advance check and
+        // PricingDecisionService's startReview/recalculateCost.
         th.co.glr.hr.pricingcosting.LandedCostCalculator landedCostCalculator =
             new th.co.glr.hr.pricingcosting.LandedCostCalculator(factoryQuotes, pricingRequests, fxRates,
                 new FactoryConfigRepository(jdbc), new CatalogRepository(jdbc), formulaEngine);
@@ -158,8 +153,8 @@ class ProcurementServiceIntegrationTest extends AbstractPostgresIntegrationTest 
             landedCostCalculator);
 
         costingRepository = new PricingCostingRepository(jdbc);
-        // V141: PricingCostingService is READ-ONLY now (list/get) — Import's costing
-        // create/recalculate/submit is gone; the CEO computes it via PricingDecisionService.
+        // V141: PricingCostingService is READ-ONLY now (list/get) — Import's costing create/recalculate/submit is
+        // gone; the CEO computes it via PricingDecisionService.
         costingService = new PricingCostingService(costingRepository, pricingRequests, tickets);
 
         decisionRepository = new PricingDecisionRepository(jdbc);
@@ -200,11 +195,8 @@ class ProcurementServiceIntegrationTest extends AbstractPostgresIntegrationTest 
     private void insertFactory(String name) {
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // Acceptance scenario (end to end, real Postgres) — 2 factories -> 2 POs, traced items,
-    // detail recording, and composition with the existing markIrSent/markShipping/
-    // markGoodsReceived ticket-level flow.
-    // ─────────────────────────────────────────────────────────────────────────────────────
+    // Acceptance scenario (end to end, real Postgres) — 2 factories -> 2 POs, traced items, detail recording, and
+    // composition with the existing markIrSent/markShipping/ markGoodsReceived ticket-level flow.
 
     @Test
     void fullChain_quotationAcceptedThroughGoodsReceived_sourcesFromCostingAndComposesWithTicketFlow() {
@@ -263,9 +255,8 @@ class ProcurementServiceIntegrationTest extends AbstractPostgresIntegrationTest 
         assertThat(afterShipping.containerRef()).isEqualTo("CONT-1234567");
         assertThat(afterShipping.customsStatus()).isEqualTo("AWAITING_CLEARANCE");
 
-        // Step 8: no per-item receipt supplied — the backward-compatible default fills
-        // qtyReceived from each line's own ordered quantity (zero discrepancy), so the unmodified
-        // Step 7 caller shape keeps working unchanged.
+        // Step 8: no per-item receipt supplied — the backward-compatible default fills qtyReceived from each line's
+        // own ordered quantity (zero discrepancy), so the unmodified Step 7 caller shape keeps working unchanged.
         FactoryPurchaseOrderDto afterReceived = procurement.recordGoodsReceived(poA.id(),
             new RecordGoodsReceivedRequest(new BigDecimal("12345.6789"), null), importActor);
         assertThat(afterReceived.status()).isEqualTo(FactoryPurchaseOrderStatus.RECEIVED);
@@ -284,33 +275,22 @@ class ProcurementServiceIntegrationTest extends AbstractPostgresIntegrationTest 
             new RecordGoodsReceivedRequest(BigDecimal.TEN, null), importActor))
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
 
-        // ── Composes with the ticket-level fulfillment flow — but, as of the derived-fulfilment-
-        //    status branch, no longer INDEPENDENTLY of it. The PO rollup (TicketService
-        //    #applyPurchaseOrderRollup, called from every PO-progressing method above) is now the
-        //    source of truth for a PO-tracked deal's import axis: factory A's recordShippingDetail
-        //    + recordGoodsReceived already rolled the ticket forward to SHIPPING (one live PO past
-        //    OPEN, but factory B is still OPEN so not every live PO is RECEIVED yet), and the
-        //    ticket-level markShipping/markGoodsReceived setters now REFUSE (409) on any deal with
-        //    a live PO rather than risk a write that could disagree with the PO record — see those
-        //    two methods' own comments in TicketService for the refuse-not-delegate reasoning, and
-        //    DerivedFulfilmentRollupIntegrationTest for the dedicated coverage of the rollup itself
-        //    (this assertion only pins that the two compose as designed, not the rollup rules) ────
+        // Composes with the ticket-level fulfillment flow — but, as of the derived-fulfilment- status branch, no
+        // longer INDEPENDENTLY of it.
         assertThat(tickets.findById(deal.ticketId).orElseThrow().summary().fulfillmentStatus())
             .isEqualTo(FulfilmentStatus.SHIPPING);
         assertThatThrownBy(() -> ticketService.markShipping(deal.ticketId, importActor))
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
         assertThatThrownBy(() -> ticketService.markGoodsReceived(deal.ticketId, importActor))
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
-        // The OTHER PO (factory B) is still OPEN — receiving IT is what completes the rollup to
-        // GOODS_RECEIVED (see DerivedFulfilmentRollupIntegrationTest
-        // #rollupMovesTicketToGoodsReceivedOnlyWhenEveryLivePoIsReceived), not a ticket-level call.
+        // The OTHER PO (factory B) is still OPEN — receiving IT is what completes the rollup to GOODS_RECEIVED (see
+        // DerivedFulfilmentRollupIntegrationTest #rollupMovesTicketToGoodsReceivedOnlyWhenEveryLivePoIsReceived), not
+        // a ticket-level call.
         FactoryPurchaseOrderDto poB = created.stream().filter(po -> FACTORY_B.equals(po.factoryName())).findFirst().orElseThrow();
         assertThat(procurement.get(poB.id(), importActor).status()).isEqualTo(FactoryPurchaseOrderStatus.OPEN);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Step 8: Receiving — per-item actual quantity vs ordered, discrepancy, QC/damage note.
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void recordGoodsReceived_withExplicitItemReceipt_recordsQtyReceivedDiscrepancyAndQcNote() {
@@ -321,8 +301,8 @@ class ProcurementServiceIntegrationTest extends AbstractPostgresIntegrationTest 
         long itemId = poA.items().get(0).id();
         BigDecimal ordered = poA.items().get(0).quantity();
 
-        // Ordered 10 (see driveToQuotationIssuedNotYetAccepted's own itemA), only 8 physically
-        // counted on arrival — a real shortage, with a damage note.
+        // Ordered 10 (see driveToQuotationIssuedNotYetAccepted's own itemA), only 8 physically counted on arrival — a
+        // real shortage, with a damage note.
         FactoryPurchaseOrderDto afterReceived = procurement.recordGoodsReceived(poA.id(),
             new RecordGoodsReceivedRequest(new BigDecimal("999.99"),
                 List.of(new ProcurementRequests.ItemReceiptRequest(itemId, new BigDecimal("8"), "กล่องเสียหาย 2 กล่อง"))),
@@ -339,8 +319,8 @@ class ProcurementServiceIntegrationTest extends AbstractPostgresIntegrationTest 
 
     @Test
     void recordGoodsReceived_omittingItems_defaultsEveryLineToOrderedQtyWithZeroDiscrepancy() {
-        // Backward compatibility: the unmodified Step 7 caller shape (no items array) must keep
-        // working exactly as before — every line defaults to "received exactly as ordered."
+        // Backward compatibility: the unmodified Step 7 caller shape (no items array) must keep working exactly as
+        // before — every line defaults to "received exactly as ordered."
         DealFixture deal = driveToProcurement(true);
         List<FactoryPurchaseOrderDto> created = procurement.createPurchaseOrders(deal.pricingRequestId,
             new CreateFactoryPurchaseOrdersRequest(null), importActor);
@@ -357,11 +337,8 @@ class ProcurementServiceIntegrationTest extends AbstractPostgresIntegrationTest 
 
     @Test
     void recordGoodsReceived_partialItemList_isRejected_notSilentlyLeavingLinesUnset() {
-        // A PO with 1 item here (single-factory fixture below), but the guard is exercised via
-        // an explicitly EMPTY-vs-partial distinction: supplying an item list that omits a real
-        // line must be rejected outright, per RecordGoodsReceivedRequest's own Javadoc — a PO
-        // moving to the terminal RECEIVED status while a line keeps qty_received=NULL forever is
-        // worse than not reporting a discrepancy at all.
+        // A PO with 1 item here, but the guard is exercised via an explicitly EMPTY-vs-partial distinction: supplying
+        // an item list that omits a real line must be rejected outright, per RecordGoodsReceivedRequest's own Javadoc.
         DealFixture deal = driveToProcurement(true);
         List<FactoryPurchaseOrderDto> created = procurement.createPurchaseOrders(deal.pricingRequestId,
             new CreateFactoryPurchaseOrdersRequest(null), importActor);
@@ -376,8 +353,8 @@ class ProcurementServiceIntegrationTest extends AbstractPostgresIntegrationTest 
 
     @Test
     void recordGoodsReceived_itemIdFromAnotherPo_isRejected() {
-        // Cross-PO guard: an itemId that legitimately belongs to a DIFFERENT PO (factory B here,
-        // same pricing request even) must not be accepted for factory A's receiving call.
+        // Cross-PO guard: an itemId that legitimately belongs to a DIFFERENT PO (factory B here, same pricing request
+        // even) must not be accepted for factory A's receiving call.
         DealFixture deal = driveToProcurement(true);
         List<FactoryPurchaseOrderDto> created = procurement.createPurchaseOrders(deal.pricingRequestId,
             new CreateFactoryPurchaseOrdersRequest(null), importActor);
@@ -393,10 +370,8 @@ class ProcurementServiceIntegrationTest extends AbstractPostgresIntegrationTest 
         assertThat(procurement.get(poA.id(), importActor).status()).isNotEqualTo(FactoryPurchaseOrderStatus.RECEIVED);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // Gate: reachable only from QUOTATION_ACCEPTED + DealStage.PROCUREMENT (as strict as
-    // issueImportRequest's own precondition, not weaker).
-    // ─────────────────────────────────────────────────────────────────────────────────────
+    // Gate: reachable only from QUOTATION_ACCEPTED + DealStage.PROCUREMENT (as strict as issueImportRequest's own
+    // precondition, not weaker).
 
     @Test
     void createPurchaseOrders_beforeQuotationAccepted_isRejected() {
@@ -409,28 +384,14 @@ class ProcurementServiceIntegrationTest extends AbstractPostgresIntegrationTest 
             """, Map.of("id", deal.pricingRequestId), Long.class)).isZero();
     }
 
-    /**
-     * Isolates the {@code PricingRequestStatus.QUOTATION_ACCEPTED} guard specifically from the
-     * {@code DealStage.PROCUREMENT} guard, since a deal driven by a SINGLE pricing request can
-     * never exercise them independently (the ticket cannot reach {@code DealStage.PROCUREMENT}
-     * without first going through {@code confirmOrder}, which itself requires {@code
-     * QUOTATION_ACCEPTED} — so "before QUOTATION_ACCEPTED" and "before PROCUREMENT" are always
-     * true together on a single-pricing-request deal; disabling either guard alone left {@code
-     * createPurchaseOrders_beforeQuotationAccepted_isRejected} above green during mutation-check,
-     * see the branch handoff's own Authz Evidence table). CLAUDE.md's own model — 1 Deal -&gt; 0..N
-     * Pricing Requests — makes the real isolating scenario reachable: a SECOND pricing request on
-     * the SAME ticket, left at SUBMITTED (never accepted), while the FIRST pricing request drives
-     * the ticket all the way to DealStage.PROCUREMENT. Calling createPurchaseOrders with the
-     * second (wrong, non-accepted) pricing request id must be rejected by the QUOTATION_ACCEPTED
-     * check alone, even though the ticket itself genuinely sits at PROCUREMENT.
-     */
+    /** Isolates the PricingRequestStatus.QUOTATION_ACCEPTED guard specifically from the DealStage.PROCUREMENT
+     * guard, since a deal driven by a SINGLE pricing request can never exercise them independently. */
     @Test
     void createPurchaseOrders_ticketAtProcurementButThisPricingRequestNotAccepted_isRejected() {
         DealFixture deal = driveToProcurement(true, true);
-        // The second pricing request is driven all the way to QUOTATION_ISSUED — it DOES have its
-        // own APPROVED decision and its own real pricing_costing_item rows, so
-        // findApprovedPricingCostingId succeeds and cannot be the thing that blocks this call.
-        // Only status != QUOTATION_ACCEPTED (the customer has not yet accepted THIS quotation) can.
+        // The second pricing request is driven all the way to QUOTATION_ISSUED — it DOES have its own APPROVED
+        // decision and its own real pricing_costing_item rows, so findApprovedPricingCostingId succeeds and cannot be
+        // the thing that blocks this call.
         long otherPricingRequestId = siblingPricingRequestId;
         assertThat(pricingRequestService.get(otherPricingRequestId, importActor).summary().status())
             .isEqualTo(PricingRequestStatus.QUOTATION_ISSUED);
@@ -445,8 +406,8 @@ class ProcurementServiceIntegrationTest extends AbstractPostgresIntegrationTest 
 
     @Test
     void createPurchaseOrders_quotationAcceptedButImportRequestNotYetIssued_isRejected() {
-        // Reaches QUOTATION_ACCEPTED and even DEPOSIT_PAID, but deliberately stops short of
-        // calling issueImportRequest — the deal never reaches DealStage.PROCUREMENT.
+        // Reaches QUOTATION_ACCEPTED and even DEPOSIT_PAID, but deliberately stops short of calling issueImportRequest
+        // — the deal never reaches DealStage.PROCUREMENT.
         DealFixture deal = driveToProcurement(false);
         assertThatThrownBy(() -> procurement.createPurchaseOrders(deal.pricingRequestId,
             new CreateFactoryPurchaseOrdersRequest(null), importActor))
@@ -456,9 +417,7 @@ class ProcurementServiceIntegrationTest extends AbstractPostgresIntegrationTest 
             """, Map.of("id", deal.pricingRequestId), Long.class)).isZero();
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Authorization — Import/CEO only, Sales/account excluded entirely.
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void createPurchaseOrders_salesActor_cannotCreate() {
@@ -498,11 +457,9 @@ class ProcurementServiceIntegrationTest extends AbstractPostgresIntegrationTest 
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // Guard: a PO cannot reference a factory-quote/costing item from a DIFFERENT pricing
-    // request — cross-tenant/cross-request reference guard, tested directly at the repository
-    // layer (the only way to reach it: the service never accepts a caller-supplied item id).
-    // ─────────────────────────────────────────────────────────────────────────────────────
+    // Guard: a PO cannot reference a factory-quote/costing item from a DIFFERENT pricing request —
+    // cross-tenant/cross-request reference guard, tested directly at the repository layer (the only way to reach
+    // it: the service never accepts a caller-supplied item id).
 
     @Test
     void insertItems_rejectsCostingItemFromADifferentPricingRequest() {
@@ -511,8 +468,8 @@ class ProcurementServiceIntegrationTest extends AbstractPostgresIntegrationTest 
             new CreateFactoryPurchaseOrdersRequest(null), importActor);
         long poAId = poAList.get(0).id();
 
-        // A second, wholly distinct deal/pricing request/costing — only driven far enough
-        // (Steps 1-2) to have its own real pricing_costing_item rows.
+        // A second, wholly distinct deal/pricing request/costing — only driven far enough (Steps 1-2) to have its own
+        // real pricing_costing_item rows.
         long foreignCostingItemId = createSecondPricingRequestCostingItem();
 
         int inserted = purchaseOrders.insertItems(poAId, dealA.pricingRequestId, List.of(foreignCostingItemId));
@@ -523,34 +480,15 @@ class ProcurementServiceIntegrationTest extends AbstractPostgresIntegrationTest 
             """, Map.of("poId", poAId, "itemId", foreignCostingItemId), Long.class)).isZero();
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // Mutation-check evidence (verbatim red output recorded in the branch handoff) — see
-    // docs/agent-handoffs/96_feat-procurement-factory-order.md "Authz Evidence" for the
-    // mutation-check narrative against these tests:
-    //   insertItems_rejectsCostingItemFromADifferentPricingRequest  (cross-tenant guard)
-    //   createPurchaseOrders_salesActor_cannotCreate / salesActor_cannotReadPurchaseOrders
-    //   createPurchaseOrders_ticketAtProcurementButThisPricingRequestNotAccepted_isRejected
-    //       (the QUOTATION_ACCEPTED guard, isolated from DealStage.PROCUREMENT — see this test's
-    //       own Javadoc: createPurchaseOrders_beforeQuotationAccepted_isRejected above stays GREEN
-    //       even with the QUOTATION_ACCEPTED check fully disabled, because on a single-pricing-
-    //       request deal the DealStage.PROCUREMENT guard alone already catches the same case; the
-    //       two guards are redundant on that fixture, exactly the trap CLAUDE.md warns about, so
-    //       it is NOT listed as evidence for the QUOTATION_ACCEPTED guard — only the isolated test
-    //       above is)
-    //   createPurchaseOrders_quotationAcceptedButImportRequestNotYetIssued_isRejected
-    //       (the DealStage.PROCUREMENT guard, independently confirmed red when disabled alone)
+    // Mutation-check evidence.
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Fixture helpers.
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     private record DealFixture(long ticketId, long pricingRequestId) {}
 
-    /** Drives a brand-new deal all the way to {@code DealStage.PROCUREMENT} via the REAL
-     * Steps 1-6 services: QUOTATION_ACCEPTED -&gt; confirmOrder -&gt; deposit notice issued -&gt;
-     * confirmDepositPaid -&gt; (optionally) issueImportRequest. Two items, two distinct
-     * factories, so downstream tests can assert "2 factories -&gt; 2 POs" without a second
-     * fixture. */
+    /** Drives a brand-new deal all the way to DealStage.PROCUREMENT via the REAL Steps 1-6 services:
+     * QUOTATION_ACCEPTED -> confirmOrder -> deposit notice issued -> confirmDepositPaid -> (optionally)
+     * issueImportRequest. */
     private DealFixture driveToProcurement(boolean issueImportRequest) {
         return driveToProcurement(issueImportRequest, false);
     }
@@ -614,8 +552,8 @@ class ProcurementServiceIntegrationTest extends AbstractPostgresIntegrationTest 
             salesActor);
         long ticketId = created.summary().id();
 
-        // V185 (direct-deal-form parity): color/texture/thicknessMm/sqmPerPiece/piecesPerBox/a
-        // quantity are now required on every item PricingRequestService#createDraft persists —
+        // V185 (direct-deal-form parity): color/texture/thicknessMm/sqmPerPiece/piecesPerBox/a quantity are now
+        // required on every item PricingRequestService#createDraft persists —
         // requestedQty/requestedUnit/requestedUnitBasis are derived instead.
         PricingRequestRequests.PricingRequestItemRequest itemA = new PricingRequestRequests.PricingRequestItemRequest(
             null, catalogProductIdA, null, "SCG", "Tile PO A", "SCG Tile PO A",
@@ -656,9 +594,9 @@ class ProcurementServiceIntegrationTest extends AbstractPostgresIntegrationTest 
             FactoryQuoteDto responded = factoryQuoteService.receive(draft.id(), response, importActor);
             factoryQuoteService.markReadyForCosting(responded.id(), importActor);
         }
-        // V141 ("CEO owns costing"): markReadyForCosting auto-advances the request straight to
-        // READY_FOR_CEO_REVIEW the moment the LAST factory quote is ready — Import no longer
-        // creates/recalculates/submits a costing of its own; the CEO's startReview below computes it.
+        // V141 ("CEO owns costing"): markReadyForCosting auto-advances the request straight to READY_FOR_CEO_REVIEW
+        // the moment the LAST factory quote is ready — Import no longer creates/recalculates/submits a costing of its
+        // own; the CEO's startReview below computes it.
 
         PricingDecisionDto decision = decisionService.startReview(pricingRequestId,
             new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, UUID.randomUUID().toString()), ceoActor);
@@ -677,9 +615,9 @@ class ProcurementServiceIntegrationTest extends AbstractPostgresIntegrationTest 
         return new DealFixture(ticketId, pricingRequestId);
     }
 
-    /** A wholly separate deal, driven only through Steps 1-2 (far enough to produce real
-     * pricing_costing_item rows) — used solely to obtain a costing-item id that legitimately
-     * belongs to a DIFFERENT pricing request, for the cross-tenant guard test. */
+    /** A wholly separate deal, driven only through Steps 1-2 (far enough to produce real pricing_costing_item rows)
+     * — used solely to obtain a costing-item id that legitimately belongs to a DIFFERENT pricing request, for the
+     * cross-tenant guard test. */
     private long createSecondPricingRequestCostingItem() {
         String factory = "Factory PO Foreign";
         insertFactory(factory);
@@ -696,8 +634,8 @@ class ProcurementServiceIntegrationTest extends AbstractPostgresIntegrationTest 
             salesActor);
         long ticketId = created.summary().id();
 
-        // V185 (direct-deal-form parity): color/texture/thicknessMm/sqmPerPiece/piecesPerBox/a
-        // quantity are now required on every item PricingRequestService#createDraft persists —
+        // V185 (direct-deal-form parity): color/texture/thicknessMm/sqmPerPiece/piecesPerBox/a quantity are now
+        // required on every item PricingRequestService#createDraft persists —
         // requestedQty/requestedUnit/requestedUnitBasis are derived instead.
         PricingRequestRequests.PricingRequestItemRequest item = new PricingRequestRequests.PricingRequestItemRequest(
             null, catalogProductId, null, "SCG", "Tile Foreign", "SCG Tile Foreign",
@@ -727,26 +665,23 @@ class ProcurementServiceIntegrationTest extends AbstractPostgresIntegrationTest 
             UUID.randomUUID().toString());
         FactoryQuoteDto responded = factoryQuoteService.receive(draft.id(), response, importActor);
         factoryQuoteService.markReadyForCosting(responded.id(), importActor);
-        // V141 ("CEO owns costing"): markReadyForCosting auto-advances the request straight to
-        // READY_FOR_CEO_REVIEW — the CEO's startReview computes+persists the costing itself, so
-        // that is now how this fixture gets a real pricing_costing_item id to return.
+        // V141 ("CEO owns costing"): markReadyForCosting auto-advances the request straight to READY_FOR_CEO_REVIEW —
+        // the CEO's startReview computes+persists the costing itself, so that is now how this fixture gets a real
+        // pricing_costing_item id to return.
         PricingDecisionDto decision = decisionService.startReview(pricingRequestId,
             new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, UUID.randomUUID().toString()), ceoActor);
         return decision.items().get(0).pricingCostingItemId();
     }
 
-    /** A second pricing request on an EXISTING ticket (CLAUDE.md's own "1 Deal -&gt; 0..N Pricing
-     * Requests" model), driven all the way through Steps 1-4 to QUOTATION_ISSUED — it has its own
-     * real APPROVED pricing_decision and its own pricing_costing_item rows, so it is NOT missing
-     * anything createPurchaseOrders' costing lookup needs. Only the customer's ACCEPTED outcome
-     * (Step 5) is deliberately withheld, isolating the QUOTATION_ACCEPTED status guard (see the
-     * test that calls this for the full reasoning). */
+    /** A second pricing request on an EXISTING ticket, driven all the way through Steps 1-4 to QUOTATION_ISSUED —
+     * it has its own real APPROVED pricing_decision and its own pricing_costing_item rows, so it is NOT missing
+     * anything createPurchaseOrders' costing lookup needs. */
     private long addSecondPricingRequestDrivenToQuotationIssued(long ticketId) {
         String factory = FACTORY_A;
         long catalogProductId = insertCatalogProduct(factory, "IT",
             "TEST-PO-2ND-" + UUID.randomUUID().toString().substring(0, 8), new BigDecimal("100.00"), "THB", "per_piece");
-        // V185 (direct-deal-form parity): color/texture/thicknessMm/sqmPerPiece/piecesPerBox/a
-        // quantity are now required on every item PricingRequestService#createDraft persists —
+        // V185 (direct-deal-form parity): color/texture/thicknessMm/sqmPerPiece/piecesPerBox/a quantity are now
+        // required on every item PricingRequestService#createDraft persists —
         // requestedQty/requestedUnit/requestedUnitBasis are derived instead.
         PricingRequestRequests.PricingRequestItemRequest item = new PricingRequestRequests.PricingRequestItemRequest(
             null, catalogProductId, null, "SCG", "Tile 2nd PR", "SCG Tile 2nd PR",
@@ -777,8 +712,8 @@ class ProcurementServiceIntegrationTest extends AbstractPostgresIntegrationTest 
             UUID.randomUUID().toString());
         FactoryQuoteDto responded = factoryQuoteService.receive(draft.id(), response, importActor);
         factoryQuoteService.markReadyForCosting(responded.id(), importActor);
-        // V141 ("CEO owns costing"): markReadyForCosting auto-advances the request straight to
-        // READY_FOR_CEO_REVIEW — the CEO's startReview below computes+persists the costing itself.
+        // V141 ("CEO owns costing"): markReadyForCosting auto-advances the request straight to READY_FOR_CEO_REVIEW —
+        // the CEO's startReview below computes+persists the costing itself.
 
         PricingDecisionDto decision = decisionService.startReview(pricingRequestId,
             new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, UUID.randomUUID().toString()), ceoActor);
@@ -796,10 +731,9 @@ class ProcurementServiceIntegrationTest extends AbstractPostgresIntegrationTest 
     }
 
     private void drainDispatches() {
-        // No-op now: FactoryQuoteService.send is synchronous (manual-RFQ redesign) --
-        // there is no dispatch/worker queue left to drain. Kept (rather than removing
-        // every call site) so this helper's callers do not all need to be revisited
-        // individually.
+        // No-op now: FactoryQuoteService.send is synchronous (manual-RFQ redesign) -- there is no dispatch/worker
+        // queue left to drain. Kept (rather than removing every call site) so this helper's callers do not all need to
+        // be revisited individually.
     }
 
     private TicketItemRequest ticketItem(String brand, String model, String factory) {

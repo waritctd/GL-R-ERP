@@ -9,13 +9,9 @@ import java.time.LocalTime;
 import java.nio.charset.StandardCharsets;
 import org.junit.jupiter.api.Test;
 
-/**
- * The ใบลา F-HR-020 renderer is a pure PDFBox writer -- these are content-free smoke tests that it
- * produces a valid, non-trivial PDF for the shapes that actually reach it (whole-day, sub-day, a
- * non-form leave type, and missing optional fields), without a database. Field-level correctness is
- * covered where the data is assembled ({@link LeaveSubmissionMailer}); a byte-level assertion on Thai
- * glyphs in a compressed PDF stream would be brittle and prove little.
- */
+/** The ใบลา F-HR-020 renderer is a pure PDFBox writer -- these are content-free smoke tests that it produces a
+ * valid, non-trivial PDF for the shapes that actually reach it (whole-day, sub-day, a non-form leave type, and
+ * missing optional fields), without a database. */
 class LeaveFormRendererTest {
     private final LeaveFormRenderer renderer = new LeaveFormRenderer();
 
@@ -64,8 +60,8 @@ class LeaveFormRendererTest {
 
     @Test
     void rendersAMultiDaySubDaySpan() {
-        // 28 ก.ย. 13:30 -> 1 ต.ค. 17:30 = 3.5 วัน: the date line binds each time to its own date and
-        // the total prints "3 วัน 4 ชม." rather than a bare 3.5 with a contradictory 4-hour clause.
+        // 28 ก.ย. 13:30 -> 1 ต.ค. 17:30 = 3.5 วัน: the date line binds each time to its own date and the total prints
+        // "3 วัน 4 ชม." rather than a bare 3.5 with a contradictory 4-hour clause.
         LeaveFormData span = new LeaveFormData(
             "GLR-1001", "วริศรา จันทเดช", "พลอย",
             "พนักงาน", "ทีมขาย", "ฝ่ายขาย",
@@ -105,8 +101,8 @@ class LeaveFormRendererTest {
 
     @Test
     void rendersANonFormLeaveTypeAndToleratesMissingOptionalFields() {
-        // MATERNITY has no checkbox on the paper form (rendered as "อื่นๆ"); nulls in the contact
-        // block and history must not throw.
+        // MATERNITY has no checkbox on the paper form (rendered as "อื่นๆ"); nulls in the contact block and history
+        // must not throw.
         LeaveFormData maternity = new LeaveFormData(
             "EMP003", "สมหญิง รักดี", null,
             null, null, null,

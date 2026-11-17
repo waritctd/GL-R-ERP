@@ -9,30 +9,9 @@ import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 
-/**
- * Manual HR/CEO CRUD over {@code hr.holiday} — the write path this branch adds so HR no longer
- * needs a developer to add next year's holidays or a one-off company day. Role gate lives in
- * {@link HolidayController} (matches the existing {@code /api/holidays/fetch} pattern); this class
- * owns validation, the {@code source = 'COMPANY'} guarantee (delegated to {@link HolidayRepository},
- * which is the one place that ever writes {@code source}), and the audit trail.
- *
- * <p>Every write is audited via {@code auditService.record(...)} with {@code entity = "holiday"}.
- * {@code hr.holiday}'s primary key is {@code holiday_date} (a {@link LocalDate}), not the numeric
- * id {@link AuditService#record} expects, so {@code entityId} is {@link LocalDate#toEpochDay()} —
- * a stable, collision-free numeric surrogate — rather than {@code null}, so every audit row for one
- * holiday date is still findable via {@code hr.audit_log}'s {@code (entity, entity_id)} index. The
- * date itself also travels in the before/after payload for readability.
- *
- * <p><strong>{@code nameTh} length bound ({@link #MAX_NAME_LENGTH})</strong>: V129 widened {@code
- * hr.holiday.name_th} from {@code VARCHAR(120)} to {@code TEXT} (production BOT names routinely
- * exceed 120 chars — a substitution-day prefix plus a full royal title measured at 137 chars for a
- * real 2026 entry), which removed the database's own length guard entirely. Without an
- * application-level bound, a manual create/update of any length now succeeds silently instead of
- * failing loudly, which is worse than the pre-V129 500. {@code MAX_NAME_LENGTH = 500} is chosen to
- * sit comfortably above every genuine name this system has ever produced (137, with headroom for a
- * longer future title/prefix combination) while still catching a paste accident or abuse — it is a
- * guard against those, not a style rule, so it stays generous rather than tight.
- */
+/** Manual HR/CEO CRUD over hr.holiday — the write path this branch adds so HR no longer needs a developer to
+ * add next year's holidays or a one-off company day. Every write is audited via auditService.record(...) with
+ * entity = "holiday". */
 @Service
 public class HolidayAdminService {
 
@@ -83,8 +62,8 @@ public class HolidayAdminService {
 
         boolean updated = repository.updateManual(holidayDate, trimmedName);
         if (!updated) {
-            // Deleted between the findByDate above and this UPDATE (concurrent request) — 404 rather
-            // than reporting a phantom success.
+            // Deleted between the findByDate above and this UPDATE (concurrent request) — 404 rather than reporting a
+            // phantom success.
             throw new ApiException(HttpStatus.NOT_FOUND, "ไม่พบข้อมูลวันหยุดสำหรับวันที่ " + holidayDate);
         }
         HolidayDto after = new HolidayDto(holidayDate, trimmedName, "COMPANY");
@@ -106,12 +85,9 @@ public class HolidayAdminService {
         auditService.record(actor, "DELETE_HOLIDAY", "holiday", holidayDate.toEpochDay(), HolidayDto.from(before), null);
     }
 
-    /**
-     * Trims {@code value}, rejects blank (400, existing behaviour), and rejects anything over
-     * {@link #MAX_NAME_LENGTH} characters (400) — the guard V129 removed at the database layer.
-     * Length is checked against the trimmed value, so surrounding whitespace never counts against
-     * the limit or masks an otherwise-valid name.
-     */
+    /** Trims value, rejects blank (400, existing behaviour), and rejects anything over #MAX_NAME_LENGTH characters
+     * (400) — the guard V129 removed at the database layer. Length is checked against the trimmed value, so
+     * surrounding whitespace never counts against the limit or masks an otherwise-valid name. */
     private static String requireValidName(String value) {
         String trimmed = value == null ? null : value.trim();
         if (trimmed == null || trimmed.isEmpty()) {

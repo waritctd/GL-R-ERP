@@ -105,14 +105,13 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
     private UserPrincipal accountActor;
     private UserPrincipal salesManagerActor;
     private long ticketId;
-    // Financial-integrity review Finding A (commit 3): submit() now requires every item's
-    // catalog snapshot to be fully resolved — see pricingItem() below.
+    // Financial-integrity review Finding A (commit 3): submit() now requires every item's catalog snapshot to be
+    // fully resolved — see pricingItem() below.
     private long catalogProductIdFactoryA;
     private long catalogProductIdFactoryB;
-    // "Factory C" / "TestLand" carries an all-zero price_calc_config (freight/insurance/inland/
-    // duty all 0), so landedCostPerUnitThb == goodsCostThb exactly for every line costed
-    // against it — used by the unit-normalization test matrix below so those assertions are
-    // not diluted by unrelated cost components.
+    // "Factory C" / "TestLand" carries an all-zero price_calc_config (freight/insurance/inland/ duty all 0), so
+    // landedCostPerUnitThb == goodsCostThb exactly for every line costed against it — used by the
+    // unit-normalization test matrix below so those assertions are not diluted by unrelated cost components.
     private long catalogProductIdFactoryC;
 
     @BeforeEach
@@ -134,16 +133,16 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
         notificationRepository = notifications;
         FxRateRepository fxRates = new FxRateRepository(jdbc);
         PricingFormulaEngine formulaEngine = new PricingFormulaEngine(new PricingFormulaConfigRepository(jdbc));
-        // V152 (V109 engine wiring): shared by FactoryQuoteService's markReadyForCosting
-        // auto-advance check and PricingDecisionService's startReview/recalculateCost.
+        // V152 (V109 engine wiring): shared by FactoryQuoteService's markReadyForCosting auto-advance check and
+        // PricingDecisionService's startReview/recalculateCost.
         landedCostCalculator = new LandedCostCalculator(factoryQuotes, pricingRequests, fxRates,
             new FactoryConfigRepository(jdbc), new CatalogRepository(jdbc), formulaEngine);
         factoryQuoteService = new FactoryQuoteService(factoryQuotes, pricingRequests, tickets,
             new FactoryConfigRepository(jdbc), notifications,
             new FileStorageService("/tmp/glr-pricing-test-uploads"), landedCostCalculator);
         PricingCostingRepository costingRepository = new PricingCostingRepository(jdbc);
-        // V141: PricingCostingService is READ-ONLY now (list/get) — Import's costing
-        // create/recalculate/submit is gone; the CEO computes it via PricingDecisionService.
+        // V141: PricingCostingService is READ-ONLY now (list/get) — Import's costing create/recalculate/submit is
+        // gone; the CEO computes it via PricingDecisionService.
         costingService = new PricingCostingService(costingRepository, pricingRequests, tickets);
         pricingDecisionService = new PricingDecisionService(new PricingDecisionRepository(jdbc), pricingRequests,
             costingRepository, tickets, fxRates, notifications, landedCostCalculator, formulaEngine);
@@ -163,16 +162,9 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
         ceoActor = actor(ceoUserId, "ceo");
         accountActor = actor(accountUserId, "account");
         salesManagerActor = actor(salesManagerUserId, "sales_manager");
-        // V152 (V109 engine wiring): factory country must be one of V109's seeded origin
-        // countries (Italy/Spain/China) or LandedCostCalculator's freight lookup 422s ("ไม่พบ
-        // อัตราค่าขนส่ง") — 'Thailand'/'TestLand' (pre-V109) are no longer costable. Every
-        // catalogProductIdFactory* below uses insertCatalogProduct's 6-arg overload, which
-        // defaults thickness_mm to 10 (inside Italy's seeded [8,12) band, whose top band is
-        // open-ended, so ANY quantity resolves — see that helper's own comment).
-        //
-        // V163 merged sales.factory_config (email/unit) onto price_catalog.factories and dropped
-        // the former table, so the RFQ email/unit fixture is now an UPDATE on the row
-        // insertCatalogProduct creates (by name), run right after it, instead of a separate INSERT.
+        // V152 (V109 engine wiring): factory country must be one of V109's seeded origin countries (Italy/Spain/China)
+        // or LandedCostCalculator's freight lookup 422s ("ไม่พบ อัตราค่าขนส่ง") — 'Thailand'/'TestLand' (pre-V109) are
+        // no longer costable.
         catalogProductIdFactoryA = insertCatalogProduct("Factory A", "IT", "TEST-A-001",
             new BigDecimal("100.00"), "THB", "per_piece");
         catalogProductIdFactoryB = insertCatalogProduct("Factory B", "IT", "TEST-B-001",
@@ -239,8 +231,8 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
         assertThat(factoryQuoteService.list(pricingRequestId, importActor))
             .filteredOn(q -> "Factory A".equals(q.factoryName()))
             .hasSize(1);
-        // Factory B has not answered yet: the request must still read as awaiting factory
-        // response, not costing-in-progress, even though Factory A already responded.
+        // Factory B has not answered yet: the request must still read as awaiting factory response, not
+        // costing-in-progress, even though Factory A already responded.
         assertThat(pricingRequestService.get(pricingRequestId, importActor).summary().status())
             .isEqualTo(PricingRequestStatus.AWAITING_FACTORY_RESPONSE);
 
@@ -259,45 +251,42 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
         assertThat(factoryARevision2.status()).isEqualTo(FactoryQuoteStatus.RESPONSE_RECEIVED);
 
         factoryQuoteService.markReadyForCosting(factoryARevision2.id(), importActor);
-        // V141 ("CEO owns costing"): Factory A alone being ready must not advance the request —
-        // Factory B has not answered at all yet, so LandedCostCalculator.isFullyResolvable is
-        // false and markReadyForCosting's auto-advance does not fire.
+        // V141 ("CEO owns costing"): Factory A alone being ready must not advance the request — Factory B has not
+        // answered at all yet, so LandedCostCalculator.isFullyResolvable is false and markReadyForCosting's
+        // auto-advance does not fire.
         assertThat(pricingRequestService.get(pricingRequestId, importActor).summary().status())
             .isEqualTo(PricingRequestStatus.AWAITING_FACTORY_RESPONSE);
         FactoryQuoteDto factoryBResponse = factoryQuoteService.receive(factoryB.id(),
             response("REF-B-1", "THB", "200.00", factoryB.items().get(0).pricingRequestItemId()), importActor);
         factoryQuoteService.markReadyForCosting(factoryBResponse.id(), importActor);
-        // The LAST factory quote becoming ready auto-advances the request straight to
-        // READY_FOR_CEO_REVIEW — there is no Import-driven costing draft/recalculate/submit step
-        // any more (PricingCostingService is read-only; see its own javadoc).
+        // The LAST factory quote becoming ready auto-advances the request straight to READY_FOR_CEO_REVIEW — there is
+        // no Import-driven costing draft/recalculate/submit step any more (PricingCostingService is read-only; see its
+        // own javadoc).
         assertThat(pricingRequestService.get(pricingRequestId, importActor).summary().status())
             .isEqualTo(PricingRequestStatus.READY_FOR_CEO_REVIEW);
 
         // A mid-flight revision arriving while READY_FOR_CEO_REVIEW pulls the REQUEST back to
-        // AWAITING_FACTORY_RESPONSE — the direct replacement for the old "costing goes stale"
-        // assertion: there is no submitted-costing row sitting around any more to go stale, since
-        // the cost is computed fresh, once, at CEO-review time (see PricingRequestStatus's
-        // READY_FOR_CEO_REVIEW -> AWAITING_FACTORY_RESPONSE back-edge).
+        // AWAITING_FACTORY_RESPONSE.
         FactoryQuoteDto factoryARevision3 = factoryQuoteService.receive(factoryARevision2.id(),
             response("REF-A-3", "THB", "100.00", factoryARevision2.items().get(0).pricingRequestItemId()), importActor);
         assertThat(factoryARevision3.status()).isEqualTo(FactoryQuoteStatus.RESPONSE_RECEIVED);
         assertThat(factoryARevision3.revisionNo()).isEqualTo(3);
         assertThat(pricingRequestService.get(pricingRequestId, importActor).summary().status())
             .isEqualTo(PricingRequestStatus.AWAITING_FACTORY_RESPONSE);
-        // The CEO cannot open a review whose price is about to change under them until Import
-        // re-marks this revision ready.
+        // The CEO cannot open a review whose price is about to change under them until Import re-marks this revision
+        // ready.
         assertThatThrownBy(() -> pricingDecisionService.startReview(pricingRequestId,
                 new StartPricingDecisionRequest(null, "THB", null, UUID.randomUUID().toString()), ceoActor))
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
 
         factoryQuoteService.markReadyForCosting(factoryARevision3.id(), importActor);
-        // Factory B's quote was untouched by A's revision and is still READY_FOR_COSTING, so
-        // re-marking A ready re-advances the request straight back to READY_FOR_CEO_REVIEW.
+        // Factory B's quote was untouched by A's revision and is still READY_FOR_COSTING, so re-marking A ready
+        // re-advances the request straight back to READY_FOR_CEO_REVIEW.
         assertThat(pricingRequestService.get(pricingRequestId, importActor).summary().status())
             .isEqualTo(PricingRequestStatus.READY_FOR_CEO_REVIEW);
 
-        // CEO opens review — computes + persists the costing itself, from whichever factory
-        // quote is CURRENT right now (Factory A's rev 3 at 100.00, Factory B's rev 1 at 200.00).
+        // CEO opens review — computes + persists the costing itself, from whichever factory quote is CURRENT right now
+        // (Factory A's rev 3 at 100.00, Factory B's rev 1 at 200.00).
         PricingDecisionDto decision = pricingDecisionService.startReview(pricingRequestId,
             new StartPricingDecisionRequest(null, "THB", null, UUID.randomUUID().toString()), ceoActor);
         assertThat(pricingRequestService.get(pricingRequestId, importActor).summary().status())
@@ -336,8 +325,7 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
     @Test
     void startReviewRejectsClientRequestReplayAcrossPricingRequests() {
         // V141 ("CEO owns costing"): the clientRequestId idempotency guard moves onto
-        // PricingDecisionService#startReview — Import's costing createDraft (the old home of this
-        // guard) is gone.
+        // PricingDecisionService#startReview — Import's costing createDraft (the old home of this guard) is gone.
         long firstPricingRequestId = pricingRequestService.createDraft(ticketId,
             pricingRequest("11111111-1111-4111-8111-111111111111"), salesActor).summary().id();
         pricingRequestService.submit(firstPricingRequestId, salesActor);
@@ -358,8 +346,8 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
         assertThatThrownBy(() -> pricingDecisionService.startReview(secondPricingRequestId,
                 new StartPricingDecisionRequest(null, "THB", null, startReviewClientRequestId), ceoActor))
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
-        // Assert absence, not merely the status code: the second pricing request gained no
-        // decision (and therefore no costing) from the rejected replay attempt.
+        // Assert absence, not merely the status code: the second pricing request gained no decision (and therefore no
+        // costing) from the rejected replay attempt.
         assertThat(pricingDecisionService.list(secondPricingRequestId, importActor)).isEmpty();
         assertThat(pricingRequestService.get(secondPricingRequestId, importActor).summary().status())
             .isEqualTo(PricingRequestStatus.READY_FOR_CEO_REVIEW);
@@ -395,9 +383,9 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
 
     @Test
     void bothFactoriesReadyThenAutoAdvanceToReadyForCeoReview() {
-        // V141 ("CEO owns costing"): the LAST factory quote becoming ready auto-advances the
-        // request straight to READY_FOR_CEO_REVIEW — there is no Import-driven "create a costing
-        // draft" step any more to separately trigger the old COSTING_IN_PROGRESS transition.
+        // V141 ("CEO owns costing"): the LAST factory quote becoming ready auto-advances the request straight to
+        // READY_FOR_CEO_REVIEW — there is no Import-driven "create a costing draft" step any more to separately
+        // trigger the old COSTING_IN_PROGRESS transition.
         long pricingRequestId = pricingRequestService.createDraft(ticketId,
             pricingRequest("aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa"), salesActor).summary().id();
         pricingRequestService.submit(pricingRequestId, salesActor);
@@ -425,57 +413,13 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
         assertThat(title).isEqualTo("รอ CEO ตั้งราคา");
     }
 
-    /**
-     * How long a racer waits at the rendezvous below for the other one to reach the same point.
-     * Paid ONCE, and only on the correct (serialized) path — see the test's javadoc.
-     */
+    /** How long a racer waits at the rendezvous below for the other one to reach the same point. Paid ONCE, and
+     * only on the correct (serialized) path — see the test's javadoc. */
     private static final long MARK_READY_RENDEZVOUS_MILLIS = 3_000;
 
-    /**
-     * THE GAP THIS TEST CLOSES: {@code FactoryQuoteService#markReadyForCosting} takes a
-     * {@code pg_advisory_xact_lock} on the pricing request (via {@code
-     * PricingRequestRepository#lockPricingRequest}) and its own comment explains exactly what that
-     * lock is for — "two Import users marking the LAST two factories ready simultaneously would
-     * BOTH evaluate isFullyResolvable to false under READ COMMITTED, neither would advance, and
-     * the request would sit at AWAITING_FACTORY_RESPONSE with every quote ready". Nothing
-     * exercised two callers racing, so that lock was unguarded: delete it and every existing test
-     * stays green while production acquires a stuck pricing request recoverable only by
-     * re-negotiating a quote back out of READY_FOR_COSTING.
-     *
-     * <h2>Two traps this test has to dodge, or it would be theatre</h2>
-     *
-     * <p><b>1. The lock has to actually be held.</b> {@link AbstractPostgresIntegrationTest} has no
-     * Spring context and hand-wires every service with {@code new}, so {@code @Transactional} is
-     * inert and {@code pg_advisory_xact_lock} — which is transaction-scoped — would be released at
-     * the end of its own auto-committed {@code SELECT} instead of spanning the call. A racing test
-     * written the obvious way would therefore pass with or without the lock, proving nothing. Both
-     * racers here go through {@link AbstractPostgresIntegrationTest#transactional}, the real AOP
-     * proxy built from the production annotation, so the lock genuinely spans
-     * {@code markReadyForCosting}. {@code TransactionalHarnessIntegrationTest} pins that
-     * distinction directly.
-     *
-     * <p><b>2. A bare race is not reproducible.</b> Two threads launched at the same instant only
-     * <i>sometimes</i> interleave the damaging way, so a red would be a coin flip and a green would
-     * mean nothing. The {@link CountDownLatch} rendezvous inside the spied {@code markReady} forces
-     * the interleaving instead of hoping for it: each racer, having written its own
-     * {@code READY_FOR_COSTING} but not yet committed it, waits for the other to reach the same
-     * point before evaluating {@code isFullyResolvable}.
-     *
-     * <ul>
-     *   <li><b>Lock present (production):</b> the second racer is still blocked in
-     *       {@code pg_advisory_xact_lock} and never reaches the rendezvous, so the first times out
-     *       after {@link #MARK_READY_RENDEZVOUS_MILLIS}, commits, and releases the lock; the second
-     *       then runs with the first's write COMMITTED and visible, sees every quote ready, and
-     *       advances. Cost: one bounded wait.</li>
-     *   <li><b>Lock removed (the mutation):</b> both reach the rendezvous, both proceed with the
-     *       other's write still uncommitted and invisible under READ COMMITTED, both evaluate
-     *       {@code isFullyResolvable} to false, neither advances — and the status assertion below
-     *       goes red deterministically rather than occasionally.</li>
-     * </ul>
-     *
-     * <p>The spy is a <b>rendezvous point, not the system under test</b>: it delegates to the real
-     * {@code markReady} and returns its real row count. Everything asserted is real Postgres state.
-     */
+    /** THE GAP THIS TEST CLOSES: FactoryQuoteService#markReadyForCosting takes a pg_advisory_xact_lock on the
+     * pricing request and its own comment explains exactly what that lock is for. Two traps this test has to
+     * dodge, or it would be theatre 1. */
     @Test
     void markReadyForCostingSerializesConcurrentCallersOnTheLastTwoQuotes_soTheAutoAdvanceIsNotMissed()
             throws Exception {
@@ -495,8 +439,8 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
             java.time.LocalDate.now(java.time.ZoneId.of("Asia/Bangkok")), null), importActor);
         FactoryQuoteDto respondedB = factoryQuoteService.receive(draftB.id(),
             response("REF-RACE-B", "THB", "200.00", draftB.items().get(0).pricingRequestItemId()), importActor);
-        // Neither quote is ready yet, so from its own transaction's point of view EACH racer is
-        // marking "the last outstanding factory" ready — the exact situation the lock exists for.
+        // Neither quote is ready yet, so from its own transaction's point of view EACH racer is marking "the last
+        // outstanding factory" ready — the exact situation the lock exists for.
         assertThat(pricingRequestService.get(pricingRequestId, importActor).summary().status())
             .isEqualTo(PricingRequestStatus.AWAITING_FACTORY_RESPONSE);
 
@@ -508,8 +452,8 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
             bothMarkedReady.await(MARK_READY_RENDEZVOUS_MILLIS, TimeUnit.MILLISECONDS);
             return rowsUpdated;
         }).when(racingQuotes).markReady(ArgumentMatchers.anyLong());
-        // landedCostCalculator is deliberately the UNSPIED one: isFullyResolvable must read the
-        // database exactly as production does, through this thread's own transaction.
+        // landedCostCalculator is deliberately the UNSPIED one: isFullyResolvable must read the database exactly as
+        // production does, through this thread's own transaction.
         FactoryQuoteService racing = transactional(new FactoryQuoteService(racingQuotes, pricingRequests, tickets,
             new FactoryConfigRepository(jdbc), notificationRepository,
             new FileStorageService("/tmp/glr-pricing-test-uploads"), landedCostCalculator));
@@ -579,9 +523,9 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
         pricingRequestService.submit(pricingRequestId, salesActor);
         pricingRequestService.pickup(pricingRequestId, importActor);
         markAllFactoriesReady(pricingRequestId);
-        // V141 ("CEO owns costing"): markAllFactoriesReady auto-advances the request all the way
-        // to READY_FOR_CEO_REVIEW (both quotes ready) — there is no standalone Import costing to
-        // build as scaffolding any more.
+        // V141 ("CEO owns costing"): markAllFactoriesReady auto-advances the request all the way to
+        // READY_FOR_CEO_REVIEW (both quotes ready) — there is no standalone Import costing to build as scaffolding any
+        // more.
         assertThat(pricingRequestService.get(pricingRequestId, importActor).summary().status())
             .isEqualTo(PricingRequestStatus.READY_FOR_CEO_REVIEW);
         FactoryQuoteDto factoryA = quoteFor(factoryQuoteService.list(pricingRequestId, importActor), "Factory A");
@@ -592,14 +536,14 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
             importActor);
         assertThat(firstAttempt.status()).isEqualTo(FactoryQuoteStatus.RESPONSE_RECEIVED);
         assertThat(firstAttempt.revisionNo()).isEqualTo(2);
-        // V141: a revision arriving while READY_FOR_CEO_REVIEW pulls the REQUEST back to
-        // AWAITING_FACTORY_RESPONSE — the replacement for the old markOpenCostingsStale side
-        // effect (there is no costing row sitting around any more to mark stale).
+        // V141: a revision arriving while READY_FOR_CEO_REVIEW pulls the REQUEST back to AWAITING_FACTORY_RESPONSE —
+        // the replacement for the old markOpenCostingsStale side effect (there is no costing row sitting around any
+        // more to mark stale).
         assertThat(pricingRequestService.get(pricingRequestId, importActor).summary().status())
             .isEqualTo(PricingRequestStatus.AWAITING_FACTORY_RESPONSE);
 
-        // Simulate the HTTP response for the call above being lost: Import retries with the
-        // exact same request against the same (now-superseded) factoryQuoteId.
+        // Simulate the HTTP response for the call above being lost: Import retries with the exact same request against
+        // the same (now-superseded) factoryQuoteId.
         FactoryQuoteDto replay = factoryQuoteService.receive(factoryA.id(),
             response("REF-REVISED", "THB", "90.00", factoryA.items().get(0).pricingRequestItemId(), replayClientRequestId),
             importActor);
@@ -633,8 +577,8 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
               FROM sales.factory_quote_response_receipt
              WHERE client_request_id = CAST(:clientRequestId AS uuid)
             """, Map.of("clientRequestId", replayClientRequestId), Long.class)).isEqualTo(1L);
-        // The replay must not have re-triggered the pull-back a second time: the request must
-        // still read exactly AWAITING_FACTORY_RESPONSE, not have bounced status again.
+        // The replay must not have re-triggered the pull-back a second time: the request must still read exactly
+        // AWAITING_FACTORY_RESPONSE, not have bounced status again.
         assertThat(pricingRequestService.get(pricingRequestId, importActor).summary().status())
             .isEqualTo(PricingRequestStatus.AWAITING_FACTORY_RESPONSE);
     }
@@ -650,16 +594,8 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
         String raceClientRequestId = "eeeeeeee-5555-4555-8555-eeeeeeeeeeee";
         long itemId = draft.items().get(0).pricingRequestItemId();
 
-        // AbstractPostgresIntegrationTest wires FactoryQuoteService directly with `new`, so there
-        // is no Spring ApplicationContext/proxy and @Transactional is never applied here — every
-        // JDBC call the repository makes would otherwise auto-commit individually, which means
-        // lockResponseIdempotencyKey's pg_advisory_xact_lock would be acquired and released
-        // within its own single-statement transaction, serializing nothing. To get REAL
-        // transactional coverage for that lock (matching what Spring's @Transactional proxy does
-        // in production — one connection, one transaction, held for the whole method), each
-        // racing call below is wrapped in an explicit TransactionTemplate bound to the same
-        // DataSource the test's `jdbc` uses, so the advisory lock genuinely spans the whole
-        // receive() call and the second caller really blocks on it.
+        // AbstractPostgresIntegrationTest wires FactoryQuoteService directly with `new`, so there is no Spring
+        // ApplicationContext/proxy and @Transactional is never applied here.
         var txManager = new org.springframework.jdbc.datasource.DataSourceTransactionManager(
             jdbc.getJdbcTemplate().getDataSource());
         var txTemplate = new org.springframework.transaction.support.TransactionTemplate(txManager);
@@ -676,9 +612,9 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
             FactoryQuoteDto firstResult = first.get(10, TimeUnit.SECONDS);
             FactoryQuoteDto secondResult = second.get(10, TimeUnit.SECONDS);
 
-            // Both callers succeed (a lost-response retry must never surface a 409 to Import) and
-            // resolve to the exact same response — one of them raced into the receipt lookup after
-            // blocking on the advisory lock and returned the winner's already-recorded result.
+            // Both callers succeed (a lost-response retry must never surface a 409 to Import) and resolve to the exact
+            // same response — one of them raced into the receipt lookup after blocking on the advisory lock and returned
+            // the winner's already-recorded result.
             assertThat(firstResult.status()).isEqualTo(FactoryQuoteStatus.RESPONSE_RECEIVED);
             assertThat(secondResult.id()).isEqualTo(firstResult.id());
             assertThat(secondResult.status()).isEqualTo(FactoryQuoteStatus.RESPONSE_RECEIVED);
@@ -713,13 +649,9 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
 
     @Test
     void factoryQuoteReceiveConcurrentRevisionRetryWithSameClientRequestIdCreatesExactlyOneRevision() throws Exception {
-        // The first-response path is safe from a concurrent retry even without the advisory
-        // lock: it UPDATEs an existing row, so Postgres row locking on that row alone forces
-        // the loser to block, see the winner's committed receipt, and return it gracefully.
-        // The REVISION path has no such row to block on — supersede()+createRevision() INSERTs
-        // a brand-new row — so lockResponseIdempotencyKey is the ONLY thing preventing two
-        // racing retries of the same clientRequestId from both creating a new revision. This
-        // test targets exactly that path.
+        // The first-response path is safe from a concurrent retry even without the advisory lock: it UPDATEs an
+        // existing row, so Postgres row locking on that row alone forces the loser to block, see the winner's
+        // committed receipt, and return it gracefully.
         long pricingRequestId = pricingRequestService.createDraft(ticketId,
             pricingRequest("aaaaaaaa-7777-4777-8777-aaaaaaaaaaaa"), salesActor).summary().id();
         pricingRequestService.submit(pricingRequestId, salesActor);
@@ -727,8 +659,8 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
         FactoryQuoteDto draft = quoteFor(factoryQuoteService.generateDrafts(pricingRequestId, importActor), "Factory A");
         long itemId = draft.items().get(0).pricingRequestItemId();
 
-        // Move the quote to RESPONSE_RECEIVED first (a first response, not part of the race) so
-        // the two racing calls below land on the revision branch.
+        // Move the quote to RESPONSE_RECEIVED first (a first response, not part of the race) so the two racing calls
+        // below land on the revision branch.
         factoryQuoteService.markContacted(draft.id(), new MarkFactoryContactedRequest(
             java.time.LocalDate.now(java.time.ZoneId.of("Asia/Bangkok")), null), importActor);
         FactoryQuoteDto firstResponse = factoryQuoteService.receive(draft.id(),
@@ -736,10 +668,7 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
         assertThat(firstResponse.status()).isEqualTo(FactoryQuoteStatus.RESPONSE_RECEIVED);
 
         String raceClientRequestId = "bbbbbbbb-8888-4888-8888-bbbbbbbbbbbb";
-        // Same real-transaction rationale as the first-response concurrency test above: this
-        // test harness has no Spring proxy, so each racing call is wrapped in its own explicit
-        // transaction bound to the same DataSource `jdbc` uses, giving the advisory lock genuine
-        // cross-statement coverage for the whole receive() call.
+        // Wrap each racing call in a real transaction so the advisory lock covers the entire receive operation.
         var txManager = new org.springframework.jdbc.datasource.DataSourceTransactionManager(
             jdbc.getJdbcTemplate().getDataSource());
         var txTemplate = new org.springframework.transaction.support.TransactionTemplate(txManager);
@@ -835,9 +764,8 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
         assertThat(factoryQuoteService.get(draft.id(), ceoActor).attachments())
             .extracting(FactoryQuoteAttachmentDto::id)
             .contains(attachment.id());
-        // Wrong-way-round: raw supplier evidence stays Import/CEO only — Sales and Sales Manager
-        // (who both otherwise have oversight visibility on the pricing request itself) must not
-        // be able to reach it via list/get/download.
+        // Wrong-way-round: raw supplier evidence stays Import/CEO only — Sales and Sales Manager (who both otherwise
+        // have oversight visibility on the pricing request itself) must not be able to reach it via list/get/download.
         assertThatThrownBy(() -> factoryQuoteService.getAttachment(attachment.id(), salesActor))
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
         assertThatThrownBy(() -> factoryQuoteService.getAttachment(attachment.id(), salesManagerActor))
@@ -866,8 +794,8 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
         FactoryQuoteAttachmentDto attachment = factoryQuoteService.uploadAttachment(draft.id(),
             new MockMultipartFile("file", "factory-a.pdf", "application/pdf", "quote".getBytes()), importActor);
         // V134 storage-durability fix: factory-quote attachments are database-backed now (see
-        // FactoryQuoteService#uploadAttachment) -- the old "file survives a tombstone" assertion
-        // checked disk existence; the equivalent check is now that the blob row survives.
+        // FactoryQuoteService#uploadAttachment) -- the old "file survives a tombstone" assertion checked disk
+        // existence; the equivalent check is now that the blob row survives.
         assertThat(new th.co.glr.hr.attachment.FileAttachmentBlobRepository(jdbc).findContent(attachment.id()))
             .as("the attachment's bytes must exist right after upload")
             .isPresent();
@@ -888,14 +816,8 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
     }
 
-    /**
-     * MUTATION-CHECKABLE GUARD 1: {@code FactoryQuoteService.ATTACHMENT_DELETE_STATUSES}
-     * deliberately excludes READY_FOR_CEO_REVIEW (unlike the broader upload-time
-     * MUTABLE_STATUSES). Isolated from the other two guards by attaching to an OLD quote
-     * revision that was superseded BEFORE ever being marked ready or used by any costing — so
-     * neither "quote is READY_FOR_COSTING" nor "referenced by a SUBMITTED costing" can
-     * coincidentally also be why deletion is refused.
-     */
+    /** MUTATION-CHECKABLE GUARD 1: FactoryQuoteService.ATTACHMENT_DELETE_STATUSES deliberately excludes
+     * READY_FOR_CEO_REVIEW (unlike the broader upload-time MUTABLE_STATUSES). */
     @Test
     void factoryQuoteAttachmentDeletion_isRefusedOncePricingRequestReachesReadyForCeoReview() {
         long pricingRequestId = pricingRequestService.createDraft(ticketId,
@@ -910,14 +832,14 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
             response("REF-A-1", "THB", "100.00", draft.items().get(0).pricingRequestItemId()), importActor);
         FactoryQuoteAttachmentDto attachmentOnRevision1 = factoryQuoteService.uploadAttachment(revision1.id(),
             new MockMultipartFile("file", "revision1.pdf", "application/pdf", "quote".getBytes()), importActor);
-        // Revise BEFORE marking ready: revision1 becomes SUPERSEDED, never READY_FOR_COSTING,
-        // never referenced by any costing (only revision2 is).
+        // Revise BEFORE marking ready: revision1 becomes SUPERSEDED, never READY_FOR_COSTING, never referenced by any
+        // costing (only revision2 is).
         FactoryQuoteDto revision2 = factoryQuoteService.receive(revision1.id(),
             response("REF-A-2", "THB", "95.00", revision1.items().get(0).pricingRequestItemId()), importActor);
         assertThat(factoryQuoteService.get(revision1.id(), importActor).status()).isEqualTo(FactoryQuoteStatus.SUPERSEDED);
-        // V141 ("CEO owns costing"): this is the ONLY factory quote on this (single-factory)
-        // pricing request, so marking it ready auto-advances the request straight to
-        // READY_FOR_CEO_REVIEW — there is no separate Import costing draft/submit step any more.
+        // V141 ("CEO owns costing"): this is the ONLY factory quote on this (single-factory) pricing request, so
+        // marking it ready auto-advances the request straight to READY_FOR_CEO_REVIEW — there is no separate Import
+        // costing draft/submit step any more.
         factoryQuoteService.markReadyForCosting(revision2.id(), importActor);
         assertThat(pricingRequestService.get(pricingRequestId, importActor).summary().status())
             .isEqualTo(PricingRequestStatus.READY_FOR_CEO_REVIEW);
@@ -932,19 +854,9 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
     }
 
-    /**
-     * MUTATION-CHECKABLE GUARD 2: the quote ITSELF has reached READY_FOR_COSTING. Isolated from
-     * the other two guards: no costing has ever been created for this pricing request, so guard
-     * 3 cannot fire, and the pricing request's own status stays within ATTACHMENT_DELETE_STATUSES
-     * so guard 1 cannot fire either. V141 ("CEO owns costing") forces this test onto the
-     * TWO-factory {@code pricingRequest()} fixture (not the single-factory one the other two
-     * guard tests use): marking the ONLY factory on a single-factory request ready would
-     * auto-advance the request straight to READY_FOR_CEO_REVIEW — which is NOT in
-     * ATTACHMENT_DELETE_STATUSES, so guard 1 would fire too and the isolation this test exists
-     * for would break. Leaving Factory B unanswered here keeps
-     * LandedCostCalculator.isFullyResolvable false, so the auto-advance never fires and the
-     * request stays at AWAITING_FACTORY_RESPONSE while Factory A alone reaches READY_FOR_COSTING.
-     */
+    /** MUTATION-CHECKABLE GUARD 2: the quote ITSELF has reached READY_FOR_COSTING. Leaving Factory B unanswered
+     * here keeps LandedCostCalculator.isFullyResolvable false, so the auto-advance never fires and the request
+     * stays at AWAITING_FACTORY_RESPONSE while Factory A alone reaches READY_FOR_COSTING. */
     @Test
     void factoryQuoteAttachmentDeletion_isRefusedOnceTheQuoteItselfIsReadyForCosting() {
         long pricingRequestId = pricingRequestService.createDraft(ticketId,
@@ -991,31 +903,29 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
             java.time.LocalDate.now(java.time.ZoneId.of("Asia/Bangkok")), null), importActor);
         FactoryQuoteDto revision1 = factoryQuoteService.receive(draft.id(),
             response("REF-A-1", "THB", "100.00", draft.items().get(0).pricingRequestItemId()), importActor);
-        // Single-factory request: marking revision1 ready auto-advances straight to
-        // READY_FOR_CEO_REVIEW (still inside MUTABLE_STATUSES, so uploading below is unaffected).
+        // Single-factory request: marking revision1 ready auto-advances straight to READY_FOR_CEO_REVIEW (still inside
+        // MUTABLE_STATUSES, so uploading below is unaffected).
         factoryQuoteService.markReadyForCosting(revision1.id(), importActor);
         FactoryQuoteAttachmentDto attachmentOnRevision1 = factoryQuoteService.uploadAttachment(revision1.id(),
             new MockMultipartFile("file", "revision1.pdf", "application/pdf", "quote".getBytes()), importActor);
 
-        // CEO opens review — computes + persists a SUBMITTED costing referencing revision1 in
-        // the same action that creates the decision.
+        // CEO opens review — computes + persists a SUBMITTED costing referencing revision1 in the same action that
+        // creates the decision.
         PricingDecisionDto decision = pricingDecisionService.startReview(pricingRequestId,
             new StartPricingDecisionRequest(null, "THB", null, UUID.randomUUID().toString()), ceoActor);
         assertThat(factoryQuoteRepository.existsSubmittedCostingReferencingQuote(revision1.id())).isTrue();
 
-        // CEO returns the request — the ONE named reopen path now — sending it to
-        // AWAITING_FACTORY_RESPONSE, which puts revision1 back within RESPONSE_STATUSES for a
-        // new revision AND within ATTACHMENT_DELETE_STATUSES (isolating guard 1).
+        // CEO returns the request — the ONE named reopen path now — sending it to AWAITING_FACTORY_RESPONSE, which
+        // puts revision1 back within RESPONSE_STATUSES for a new revision AND within ATTACHMENT_DELETE_STATUSES
+        // (isolating guard 1).
         pricingDecisionService.returnToImport(decision.id(),
             new th.co.glr.hr.pricingdecision.PricingDecisionRequests.ReturnPricingDecisionRequest("ราคาคลาดเคลื่อน"),
             ceoActor);
         assertThat(pricingRequestService.get(pricingRequestId, importActor).summary().status())
             .isEqualTo(PricingRequestStatus.AWAITING_FACTORY_RESPONSE);
 
-        // Revise AGAIN: revision1 (the already-costed one) becomes SUPERSEDED — not
-        // READY_FOR_COSTING, so guard 2 cannot fire either. The SUBMITTED costing from startReview
-        // above is untouched by both the return and this new revision — it still references
-        // revision1's factory_quote_id, which is exactly what guard 3 checks.
+        // Revise AGAIN: revision1 (the already-costed one) becomes SUPERSEDED — not READY_FOR_COSTING, so guard 2
+        // cannot fire either.
         factoryQuoteService.receive(revision1.id(),
             response("REF-A-2", "THB", "90.00", revision1.items().get(0).pricingRequestItemId()), importActor);
         assertThat(factoryQuoteService.get(revision1.id(), importActor).status()).isEqualTo(FactoryQuoteStatus.SUPERSEDED);
@@ -1026,13 +936,9 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
     }
 
-    // factoryEmailDispatch_attachesPricingRequestAttachmentsMarkedIncludeInFactoryEmail was
-    // removed: it pinned that Pricing Request attachments marked include-in-factory-email were
-    // threaded onto the mail provider call FactoryQuoteService.attemptSend made. That whole path
-    // (dispatch, FactoryEmailService, attachment-forwarding) was deleted when factory RFQ email
-    // became manual-only — the human composing the email now attaches whatever they choose
-    // themselves, in their own mail client, so there is nothing left in this service for that
-    // behaviour to live in.
+    // factoryEmailDispatch_attachesPricingRequestAttachmentsMarkedIncludeInFactoryEmail was removed: it pinned
+    // that Pricing Request attachments marked include-in-factory-email were threaded onto the mail provider call
+    // FactoryQuoteService.attemptSend made.
 
     @Test
     void unitConversionRejectsMissingBoxConversionBeforeCosting() {
@@ -1055,15 +961,9 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_CONTENT));
     }
 
-    // The seed bug (PricingRequestDetailPage.jsx's defaultResponseItems used ONE variable to seed
-    // both quotedUnit and unitBasis) had a backend-side twin: validateAndNormalizeResponseItems
-    // ran quotedUnit through the SAME UnitBasis.canonicalize as unitBasis, which forces its input
-    // onto one of the four PER_ codes and 422s on anything else. That meant a real display unit
-    // (ตร.ม., which is exactly what FactoryQuoteRepository.insertDraftItems seeds quoted_unit with
-    // from the request's own requested_unit) could never actually be SAVED as quotedUnit — only a
-    // basis code, or an English synonym that happens to canonicalize to one, could pass. Fixing the
-    // frontend seed alone would have turned "silently stores the wrong thing" into "422s on save"
-    // for the common case, not fixed it. This pins the fix: a real unit string round-trips as-is.
+    // The seed bug had a backend-side twin: validateAndNormalizeResponseItems ran quotedUnit through the SAME
+    // UnitBasis.canonicalize as unitBasis, which forces its input onto one of the four PER_ codes and 422s on
+    // anything else.
     @Test
     void receiveFactoryQuote_storesQuotedUnitAsTheRealDisplayTextNotForcedOntoABasisCode() {
         long pricingRequestId = pricingRequestService.createDraft(ticketId,
@@ -1143,8 +1043,8 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
             "SELECT status FROM sales.pricing_request WHERE pricing_request_id = :id",
             Map.of("id", pricingRequestId), String.class))
             .isEqualTo(PricingRequestStatus.SUBMITTED);
-        // The line reaches Import with a NULL catalog snapshot — stated explicitly, because it is
-        // the deliberate cost of the removal: Import receives this item un-anchored to any price.
+        // The line reaches Import with a NULL catalog snapshot — stated explicitly, because it is the deliberate cost
+        // of the removal: Import receives this item un-anchored to any price.
         assertThat(jdbc.queryForObject("""
             SELECT COUNT(*) FROM sales.pricing_request_item
              WHERE pricing_request_id = :id AND catalog_price_id IS NULL AND catalog_base_price IS NULL
@@ -1205,10 +1105,8 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
         assertThat(row.get("resolved_factory_name")).isEqualTo("Factory A");
     }
 
-    // Was submitCatalogGate_reportsEveryFailingLineNumberAcrossMultipleItems, which asserted
-    // "รายการที่ 2, 3" and a blocked submit. A mixed request — one catalog-backed line plus two
-    // free-text ones — is now valid, and the catalog-backed line must STILL get its snapshot:
-    // removing the gate must not have disturbed snapshotCatalogSelections itself.
+    // Was submitCatalogGate_reportsEveryFailingLineNumberAcrossMultipleItems, which asserted "รายการที่ 2, 3" and
+    // a blocked submit.
     @Test
     void submitCatalogGate_acceptsAMixOfCatalogBackedAndFreeTextItemsAndStillSnapshotsTheCatalogLine() {
         long pricingRequestId = pricingRequestService.createDraft(ticketId,
@@ -1273,8 +1171,8 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
         assertThat(jdbc.queryForObject(
             "SELECT resolved_factory_id FROM sales.pricing_request_item WHERE pricing_request_item_id = :id",
             Map.of("id", blankItemId), Long.class)).isEqualTo(factoryBId);
-        // resolved_factory_name is the CATALOG snapshot and must stay untouched: a master-resolved
-        // manual pick is still not a catalog PRODUCT resolution.
+        // resolved_factory_name is the CATALOG snapshot and must stay untouched: a master-resolved manual pick is
+        // still not a catalog PRODUCT resolution.
         assertThat(jdbc.queryForObject(
             "SELECT resolved_factory_name FROM sales.pricing_request_item WHERE pricing_request_item_id = :id",
             Map.of("id", blankItemId), String.class)).isNull();
@@ -1295,9 +1193,9 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
         long blankItemId = blankFactoryItemId(pricingRequestId);
 
         long factoryBId = factoryIdByName("Factory B");
-        // Wrong-way-round: the two roles that can otherwise READ this request in full — its own
-        // sales rep, and the CEO — must not be able to write this field. Import owns the routing
-        // decision because Import is who emails the factory.
+        // Wrong-way-round: the two roles that can otherwise READ this request in full — its own sales rep, and the CEO
+        // — must not be able to write this field. Import owns the routing decision because Import is who emails the
+        // factory.
         assertThatThrownBy(() -> pricingRequestService.setItemFactory(pricingRequestId, blankItemId,
             new PricingRequestRequests.SetItemFactoryRequest(factoryBId), salesActor))
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
@@ -1321,8 +1219,8 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
              WHERE pricing_request_id = :id AND resolved_factory_name = 'Factory A'
             """, Map.of("id", pricingRequestId), Long.class);
 
-        // A fill, never a re-route: sales.factory_quote rows are grouped by factory NAME, so
-        // moving a line after its quote exists would strand that quote's item list.
+        // A fill, never a re-route: sales.factory_quote rows are grouped by factory NAME, so moving a line after its
+        // quote exists would strand that quote's item list.
         assertThatThrownBy(() -> pricingRequestService.setItemFactory(pricingRequestId, catalogBackedItemId,
             new PricingRequestRequests.SetItemFactoryRequest(factoryIdByName("Factory B")), importActor))
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
@@ -1364,8 +1262,8 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
         pricingRequestService.submit(pricingRequestId, salesActor);
         long blankItemId = blankFactoryItemId(pricingRequestId);
 
-        // SUBMITTED, not yet picked up — outside FACTORY_ROUTING_STATUSES, so no Import user may
-        // start editing a request nobody has taken responsibility for.
+        // SUBMITTED, not yet picked up — outside FACTORY_ROUTING_STATUSES, so no Import user may start editing a
+        // request nobody has taken responsibility for.
         assertThatThrownBy(() -> pricingRequestService.setItemFactory(pricingRequestId, blankItemId,
             new PricingRequestRequests.SetItemFactoryRequest(factoryIdByName("Factory B")), importActor))
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
@@ -1386,9 +1284,9 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
             new PricingRequestRequests.SetItemFactoryRequest(factoryBId), importActor))
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.NOT_FOUND));
 
-        // And the same scoping again at the REPOSITORY level, bypassing the service's own check —
-        // this is the half a mocked repository could never prove: that pricing_request_id really
-        // reaches the WHERE clause and no row is written.
+        // And the same scoping again at the REPOSITORY level, bypassing the service's own check — this is the half a
+        // mocked repository could never prove: that pricing_request_id really reaches the WHERE clause and no row is
+        // written.
         assertThat(pricingRequests.fillItemFactory(targetRequestId, victimItemId, factoryBId, "Factory B")).isZero();
         assertThat(jdbc.queryForObject(
             "SELECT factory FROM sales.pricing_request_item WHERE pricing_request_item_id = :id",
@@ -1423,8 +1321,8 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
             "SELECT factory FROM sales.pricing_request_item WHERE pricing_request_item_id = :id",
             Map.of("id", blankItemId), String.class)).isNull();
 
-        // The guard is per-factory, not a blanket refusal the moment ANY quote on the request has
-        // been sent: a factory with no current quote at all must still be fillable.
+        // The guard is per-factory, not a blanket refusal the moment ANY quote on the request has been sent: a factory
+        // with no current quote at all must still be fillable.
         pricingRequestService.setItemFactory(pricingRequestId, blankItemId,
             new PricingRequestRequests.SetItemFactoryRequest(factoryIdByName("Factory C")), importActor);
         assertThat(jdbc.queryForObject(
@@ -1541,8 +1439,8 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
              WHERE pricing_request_id = :id AND event_kind = 'FACTORY_EMAIL_READY'
             """, Map.of("id", pricingRequestId), Long.class)).isEqualTo(2L);
 
-        // Proves the previously-stranded line is genuinely reachable, not merely listed: a
-        // response covering BOTH items is accepted, and the request can proceed.
+        // Proves the previously-stranded line is genuinely reachable, not merely listed: a response covering BOTH
+        // items is accepted, and the request can proceed.
         factoryQuoteService.markContacted(updated.id(), new MarkFactoryContactedRequest(
             java.time.LocalDate.now(java.time.ZoneId.of("Asia/Bangkok")), null), importActor);
         FactoryQuoteDto received = factoryQuoteService.receive(updated.id(), new ReceiveFactoryQuoteRequest(
@@ -1560,15 +1458,9 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
         assertThat(received.items()).hasSize(2);
     }
 
-    /**
-     * A re-run must still leave a factory's quote ALONE once it has advanced past DRAFT — this is
-     * the other half of the same invariant {@link
-     * #setItemFactory_refusesWhenTheTargetFactorysQuoteHasAlreadyAdvancedPastDraft} pins from the
-     * write side. {@code setItemFactory} normally prevents this situation from arising at all, so
-     * this test reaches the item straight through the repository (bypassing that guard) to prove
-     * {@code generateDrafts} itself is defensive here too, and does not mutate a REQUESTED quote's
-     * item set even if a line somehow ends up routed to it.
-     */
+    /** A re-run must still leave a factory's quote ALONE once it has advanced past DRAFT — this is the other half
+     * of the same invariant #setItemFactory_refusesWhenTheTargetFactorysQuoteHasAlreadyAdvancedPastDraft pins from
+     * the write side. */
     @Test
     void generateDrafts_reRunNeverTouchesAFactoryQuoteThatHasAlreadyBeenSent() {
         long pricingRequestId = pricingRequestWithOneBlankFactoryLine();
@@ -1591,12 +1483,9 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
             .isEqualTo(factoryADraft.items().get(0).pricingRequestItemId());
     }
 
-    /**
-     * HIGH 4 (review remediation): {@code include_in_factory_email} had no caller since {@code
-     * attemptSend} (the old dispatch worker) was deleted — Import could still tick "include this
-     * attachment in the factory email" and nothing would ever attach it. The fix appends a short
-     * plain list of the marked attachments' file names to the generated draft body.
-     */
+    /** HIGH 4 (review remediation): include_in_factory_email had no caller since attemptSend (the old dispatch
+     * worker) was deleted — Import could still tick "include this attachment in the factory email" and nothing
+     * would ever attach it. */
     @Test
     void generateDrafts_listsAttachmentsMarkedIncludeInFactoryEmailInTheDraftBody() {
         long pricingRequestId = pricingRequestService.createDraft(ticketId,
@@ -1614,9 +1503,9 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
         assertThat(draft.emailBody()).contains("spec-sheet.pdf");
     }
 
-    /** The companion case: an attachment exists but was never marked, so the generated draft must
-     * carry no attachment section referencing it at all — the feature must stay invisible until
-     * Import deliberately opts an attachment in. */
+    /** The companion case: an attachment exists but was never marked, so the generated draft must carry no
+     * attachment section referencing it at all — the feature must stay invisible until Import deliberately opts an
+     * attachment in. */
     @Test
     void generateDrafts_omitsTheAttachmentSectionEntirelyWhenNothingIsMarkedForInclusion() {
         long pricingRequestId = pricingRequestService.createDraft(ticketId,
@@ -1731,11 +1620,9 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
             Map.of("name", name), Long.class);
     }
 
-    /**
-     * Unlike {@link #freeTextPricingItem}, which names "Free Text Factory", this line has NO
-     * factory on EITHER side — no catalog product to snapshot one from, and no free text. That is
-     * the shape the whole section above is about, and nothing else in this file produced it.
-     */
+    /** Unlike #freeTextPricingItem, which names "Free Text Factory", this line has NO factory on EITHER side — no
+     * catalog product to snapshot one from, and no free text. That is the shape the whole section above is about,
+     * and nothing else in this file produced it. */
     // Model is unconditionally required, independent of whether the item
     // has a catalog link — "free text" here means no catalog PRODUCT, not no model. Both helpers
     // pass `description` itself as the model so they (a) reach resolveItems' happy path
@@ -1762,19 +1649,9 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
             false, "ไทย-สต็อก", 3, 7, null, null, null);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // Finding B (financial-integrity review, commit 3): unit-normalization test matrix.
-    //
-    // All five "should succeed" cases below are built so the SAME physical quantity (200
-    // pieces) at the SAME per-piece price (50 THB/piece) is expressed through five different
-    // quote-basis / request-basis combinations. Every one of them must land on the exact same
-    // total: 10,000.0000 THB — that identity IS the correctness property being tested: the
-    // total must depend only on the physical quantity and price, never on which unit either
-    // side happened to be expressed in. This is also the review's own worked example (case 1
-    // below): factory quotes 1,000 THB/box, 20 pieces/box, customer wants 10 boxes -> the
-    // pre-fix code computed 1000/20*10 = 500 (treating "10" as if it were already a piece
-    // count); the fix computes 1000/20*(10*20) = 10,000.
-    // ─────────────────────────────────────────────────────────────────────────────────────
+    // Finding B (financial-integrity review, commit 3): unit-normalization test matrix. All five "should succeed"
+    // cases below are built so the SAME physical quantity (200 pieces) at the SAME per-piece price (50 THB/piece)
+    // is expressed through five different quote-basis / request-basis combinations.
 
     @Test
     void unitConversion_quotePerBoxRequestInBoxes_worksedExampleGoodsComponentIs10000NotThe500ThePreFixCodeProduced() {
@@ -1785,14 +1662,9 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
 
         assertThat(line.goodsCostThb()).isEqualByComparingTo("50.0000");
         assertThat(line.normalizedQuantityPieces()).isEqualByComparingTo("200.000000");
-        // V152 (V109 engine wiring): 200 pieces / 100 sqm total at Italy [8,12)mm — hand-verified
-        // (see PricingFormulaEngineTest and LandedCostCalculatorFormulaIntegrationTest for the
-        // full step-by-step derivation): C=10000, i=55.3725, F=50000 (qty band [1,101)),
-        // cif=60055.3725, duty(TILE 30%)=18016.6118, (cif+duty)*1.07=83537.0232,
-        // +clearance(qty band [1,101))=8000 => TC=91537.0232, rounding through the per-piece
-        // column back to 91537.0200 total. goodsCostThb (per piece, "50.0000" above) is
-        // UNCHANGED by the V109 buffers — it never was affected by freight/insurance/duty/
-        // clearance, only totalLandedCostThb (which now includes all of them) moved.
+        // V152: 200 pieces / 100 sqm total at Italy [8,12)mm — hand-verified: C=10000, i=55.3725, F=50000),
+        // cif=60055.3725, duty=18016.6118,*1.07=83537.0232, +clearance)=8000 => TC=91537.0232, rounding through the
+        // per-piece column back to 91537.0200 total.
         assertThat(line.totalLandedCostThb()).isEqualByComparingTo("91537.0200");
     }
 
@@ -1805,14 +1677,9 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
 
         assertThat(line.goodsCostThb()).isEqualByComparingTo("50.0000");
         assertThat(line.normalizedQuantityPieces()).isEqualByComparingTo("200");
-        // V152 (V109 engine wiring): 200 pieces / 100 sqm total at Italy [8,12)mm — hand-verified
-        // (see PricingFormulaEngineTest and LandedCostCalculatorFormulaIntegrationTest for the
-        // full step-by-step derivation): C=10000, i=55.3725, F=50000 (qty band [1,101)),
-        // cif=60055.3725, duty(TILE 30%)=18016.6118, (cif+duty)*1.07=83537.0232,
-        // +clearance(qty band [1,101))=8000 => TC=91537.0232, rounding through the per-piece
-        // column back to 91537.0200 total. goodsCostThb (per piece, "50.0000" above) is
-        // UNCHANGED by the V109 buffers — it never was affected by freight/insurance/duty/
-        // clearance, only totalLandedCostThb (which now includes all of them) moved.
+        // V152: 200 pieces / 100 sqm total at Italy [8,12)mm — hand-verified: C=10000, i=55.3725, F=50000),
+        // cif=60055.3725, duty=18016.6118,*1.07=83537.0232, +clearance)=8000 => TC=91537.0232, rounding through the
+        // per-piece column back to 91537.0200 total.
         assertThat(line.totalLandedCostThb()).isEqualByComparingTo("91537.0200");
     }
 
@@ -1825,14 +1692,9 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
 
         assertThat(line.goodsCostThb()).isEqualByComparingTo("50.0000");
         assertThat(line.normalizedQuantityPieces()).isEqualByComparingTo("200.000000");
-        // V152 (V109 engine wiring): 200 pieces / 100 sqm total at Italy [8,12)mm — hand-verified
-        // (see PricingFormulaEngineTest and LandedCostCalculatorFormulaIntegrationTest for the
-        // full step-by-step derivation): C=10000, i=55.3725, F=50000 (qty band [1,101)),
-        // cif=60055.3725, duty(TILE 30%)=18016.6118, (cif+duty)*1.07=83537.0232,
-        // +clearance(qty band [1,101))=8000 => TC=91537.0232, rounding through the per-piece
-        // column back to 91537.0200 total. goodsCostThb (per piece, "50.0000" above) is
-        // UNCHANGED by the V109 buffers — it never was affected by freight/insurance/duty/
-        // clearance, only totalLandedCostThb (which now includes all of them) moved.
+        // V152: 200 pieces / 100 sqm total at Italy [8,12)mm — hand-verified: C=10000, i=55.3725, F=50000),
+        // cif=60055.3725, duty=18016.6118,*1.07=83537.0232, +clearance)=8000 => TC=91537.0232, rounding through the
+        // per-piece column back to 91537.0200 total.
         assertThat(line.totalLandedCostThb()).isEqualByComparingTo("91537.0200");
     }
 
@@ -1845,14 +1707,9 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
 
         assertThat(line.goodsCostThb()).isEqualByComparingTo("50.0000");
         assertThat(line.normalizedQuantityPieces()).isEqualByComparingTo("200");
-        // V152 (V109 engine wiring): 200 pieces / 100 sqm total at Italy [8,12)mm — hand-verified
-        // (see PricingFormulaEngineTest and LandedCostCalculatorFormulaIntegrationTest for the
-        // full step-by-step derivation): C=10000, i=55.3725, F=50000 (qty band [1,101)),
-        // cif=60055.3725, duty(TILE 30%)=18016.6118, (cif+duty)*1.07=83537.0232,
-        // +clearance(qty band [1,101))=8000 => TC=91537.0232, rounding through the per-piece
-        // column back to 91537.0200 total. goodsCostThb (per piece, "50.0000" above) is
-        // UNCHANGED by the V109 buffers — it never was affected by freight/insurance/duty/
-        // clearance, only totalLandedCostThb (which now includes all of them) moved.
+        // V152: 200 pieces / 100 sqm total at Italy [8,12)mm — hand-verified: C=10000, i=55.3725, F=50000),
+        // cif=60055.3725, duty=18016.6118,*1.07=83537.0232, +clearance)=8000 => TC=91537.0232, rounding through the
+        // per-piece column back to 91537.0200 total.
         assertThat(line.totalLandedCostThb()).isEqualByComparingTo("91537.0200");
     }
 
@@ -1865,24 +1722,15 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
 
         assertThat(line.goodsCostThb()).isEqualByComparingTo("50.0000");
         assertThat(line.normalizedQuantityPieces()).isEqualByComparingTo("200.000000");
-        // V152 (V109 engine wiring): 200 pieces / 100 sqm total at Italy [8,12)mm — hand-verified
-        // (see PricingFormulaEngineTest and LandedCostCalculatorFormulaIntegrationTest for the
-        // full step-by-step derivation): C=10000, i=55.3725, F=50000 (qty band [1,101)),
-        // cif=60055.3725, duty(TILE 30%)=18016.6118, (cif+duty)*1.07=83537.0232,
-        // +clearance(qty band [1,101))=8000 => TC=91537.0232, rounding through the per-piece
-        // column back to 91537.0200 total. goodsCostThb (per piece, "50.0000" above) is
-        // UNCHANGED by the V109 buffers — it never was affected by freight/insurance/duty/
-        // clearance, only totalLandedCostThb (which now includes all of them) moved.
+        // V152: 200 pieces / 100 sqm total at Italy [8,12)mm — hand-verified: C=10000, i=55.3725, F=50000),
+        // cif=60055.3725, duty=18016.6118,*1.07=83537.0232, +clearance)=8000 => TC=91537.0232, rounding through the
+        // per-piece column back to 91537.0200 total.
         assertThat(line.totalLandedCostThb()).isEqualByComparingTo("91537.0200");
     }
 
-    // The gap the review specifically called out: FactoryQuoteService.receive()'s own
-    // per-basis validation only requires piecesPerBox when the QUOTE's own unitBasis is
-    // PER_BOX (see unitConversionRejectsMissingBoxConversionBeforeCosting above) — it has no
-    // way to know the REQUEST is PER_BOX, since that lives on a different aggregate. A
-    // PER_PIECE quote with no piecesPerBox therefore sails through receive() even when the
-    // request itself is in boxes; PricingCostingService.calculate() must be the one place that
-    // catches this, since it is the only place both bases are known at once.
+    // The gap the review specifically called out: FactoryQuoteService.receive's own per-basis validation only
+    // requires piecesPerBox when the QUOTE's own unitBasis is PER_BOX — it has no way to know the REQUEST is
+    // PER_BOX, since that lives on a different aggregate.
     @Test
     void unitConversion_missingPiecesPerBoxForBoxRequestAgainstAPerPieceQuoteIs422() {
         assertThatThrownBy(() -> singleItemCosting(
@@ -1917,12 +1765,9 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
         PricingRequestRequests.CreatePricingRequestRequest request = new PricingRequestRequests.CreatePricingRequestRequest(
             PricingRequestRecipient.DESIGNER, null, "Designer Co.", LocalDate.now().plusDays(14),
             null, "THB", "unit conversion test", UUID.randomUUID().toString(), List.of(item));
-        // V185: bypasses PricingRequestService.createDraft on purpose -- that method now forces
-        // every item's requestedUnitBasis to PER_PIECE (the new sales form never types a unit/basis
-        // directly), which would make it impossible to construct the PER_SQM/PER_BOX/PER_LINEAR_M
-        // requestedUnitBasis this whole unit-conversion matrix exists to test.
-        // PricingRequestRepository.create performs the exact same DB write createDraft would
-        // (persistence only, per that class's own header Javadoc).
+        // V185: bypasses PricingRequestService.createDraft on purpose -- that method now forces every item's
+        // requestedUnitBasis to PER_PIECE, which would make it impossible to construct the
+        // PER_SQM/PER_BOX/PER_LINEAR_M requestedUnitBasis this whole unit-conversion matrix exists to test.
         long pricingRequestId = pricingRequests.create(ticketId, pricingRequests.nextRequestCode(), request, salesRepId);
         pricingRequestService.submit(pricingRequestId, salesActor);
         pricingRequestService.pickup(pricingRequestId, importActor);
@@ -1968,13 +1813,8 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
         assertThat(result.draftItem().unitBasis()).isNotEqualTo(UnitBasis.PER_PIECE);
     }
 
-    /**
-     * Builds a fresh single-item pricing request against "Factory C" with the given
-     * requestedUnitBasis, drives it through submit -> pickup -> generateDrafts — same pipeline as
-     * {@link #singleItemCosting}, truncated right after generateDrafts and deliberately never
-     * reaching receive() — and returns the resulting draft item alongside the persisted request
-     * item it was seeded from.
-     */
+    /** Builds a fresh single-item pricing request against "Factory C" with the given requestedUnitBasis, drives it
+     * through submit -> pickup -> generateDrafts. */
     private DraftAndRequestItem draftItemForRequestedBasis(String requestedUnitBasis) {
         PricingRequestRequests.PricingRequestItemRequest item = new PricingRequestRequests.PricingRequestItemRequest(
             null, catalogProductIdFactoryC, null, "TestBrand", "TestModel", "TestBrand TestModel",
@@ -1983,8 +1823,8 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
         PricingRequestRequests.CreatePricingRequestRequest request = new PricingRequestRequests.CreatePricingRequestRequest(
             PricingRequestRecipient.DESIGNER, null, "Designer Co.", LocalDate.now().plusDays(14),
             null, "THB", "unit basis draft seed test", UUID.randomUUID().toString(), List.of(item));
-        // V185: see singleItemCosting's identical comment -- this test specifically asserts the
-        // draft's seeded unitBasis is NOT PER_PIECE, which createDraft can no longer produce.
+        // V185: see singleItemCosting's identical comment -- this test specifically asserts the draft's seeded
+        // unitBasis is NOT PER_PIECE, which createDraft can no longer produce.
         long pricingRequestId = pricingRequests.create(ticketId, pricingRequests.nextRequestCode(), request, salesRepId);
         pricingRequestService.submit(pricingRequestId, salesActor);
         pricingRequestService.pickup(pricingRequestId, importActor);
@@ -2031,15 +1871,8 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
             pricingRequest("aaaaaaaa-9999-4999-8999-aaaaaaaaaaaa"), salesActor).summary().id();
         pricingRequestService.submit(pricingRequestId, salesActor);
 
-        // This test harness (AbstractPostgresIntegrationTest) wires PricingRequestService with
-        // `new`, so there is no Spring proxy and @Transactional is inert here -- without an
-        // explicit transaction, each JDBC call from the repository would auto-commit individually
-        // and the advisory lock (scoped to the current transaction via pg_advisory_XACT_lock)
-        // would not span the whole createCustomerChangeRevision call the way it does in
-        // production. Same pattern as
-        // PricingFactoryQuoteCostingIntegrationTest's own
-        // factoryQuoteReceiveConcurrentRevisionRetryWithSameClientRequestIdCreatesExactlyOneRevision:
-        // wrap each racing call in an explicit transaction bound to the same DataSource `jdbc` uses.
+        // This test harness wires PricingRequestService with `new`, so there is no Spring proxy and @Transactional is
+        // inert here.
         var txManager = new org.springframework.jdbc.datasource.DataSourceTransactionManager(
             jdbc.getJdbcTemplate().getDataSource());
         var txTemplate = new org.springframework.transaction.support.TransactionTemplate(txManager);
@@ -2081,13 +1914,7 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
             executor.shutdownNow();
         }
 
-        // Exactly one racer wins (creates the revision); the other is refused cleanly, not left
-        // dangling. Its failure is the CLEAN outcome (PricingRequestRepository serialized the two
-        // computations so no revision_no ever collided at INSERT time; the loser fails later, at
-        // supersedeForCustomerRevision's own compare-and-set, once it sees the parent already
-        // SUPERSEDED) -- proving the advisory lock actually serialized this, rather than the two
-        // racers colliding on the DB unique index and one surfacing a raw, uncaught
-        // DataIntegrityViolationException instead.
+        // Exactly one racer wins (creates the revision); the other is refused cleanly, not left dangling.
         assertThat(successes).hasSize(1);
         assertThat(failures).hasSize(1);
         assertThat(failures.get(0)).isInstanceOfSatisfying(ApiException.class,
@@ -2116,10 +1943,9 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
 
     /** Simulates one outbox worker tick draining everything currently claimable. */
     private void drainDispatches() {
-        // No-op now: FactoryQuoteService.send is synchronous (manual-RFQ redesign) --
-        // there is no dispatch/worker queue left to drain. Kept (rather than removing
-        // every call site) so this helper's callers do not all need to be revisited
-        // individually.
+        // No-op now: FactoryQuoteService.send is synchronous (manual-RFQ redesign) -- there is no dispatch/worker
+        // queue left to drain. Kept (rather than removing every call site) so this helper's callers do not all need to
+        // be revisited individually.
     }
 
     private void markAllFactoriesReady(long pricingRequestId) {
@@ -2155,12 +1981,9 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
             clientRequestId);
     }
 
-    /**
-     * Finding B (financial-integrity review, commit 3) test helper: lets a test specify exactly
-     * the QUOTE's unit basis, quoted quantity, and every conversion factor — for the
-     * unit-normalization test matrix, where the quote's basis and the request's basis are
-     * deliberately varied independently of each other.
-     */
+    /** Finding B test helper: lets a test specify exactly the QUOTE's unit basis, quoted quantity, and every
+     * conversion factor — for the unit-normalization test matrix, where the quote's basis and the request's basis
+     * are deliberately varied independently of each other. */
     private ReceiveFactoryQuoteRequest responseWithUnit(String ref, String currency, String price,
                                                         long pricingRequestItemId, String quotedUnitBasis,
                                                         BigDecimal quotedQuantity, BigDecimal sqmPerUnit,
@@ -2173,12 +1996,9 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
             UUID.randomUUID().toString());
     }
 
-    /**
-     * Single-item, single-factory (Factory A only) variant of {@link #pricingRequest()} — used by
-     * the attachment-immutability tests below, which need fine-grained control over exactly one
-     * quote's revision history without a second factory's quote also needing to reach
-     * READY_FOR_COSTING before a costing draft can be created.
-     */
+    /** Single-item, single-factory variant of #pricingRequest — used by the attachment-immutability tests below,
+     * which need fine-grained control over exactly one quote's revision history without a second factory's quote
+     * also needing to reach READY_FOR_COSTING before a costing draft can be created. */
     private PricingRequestRequests.CreatePricingRequestRequest singleFactoryPricingRequest(String clientRequestId) {
         return new PricingRequestRequests.CreatePricingRequestRequest(
             PricingRequestRecipient.DESIGNER, null, "Designer Co.", LocalDate.now().plusDays(14),
@@ -2202,19 +2022,13 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
     private PricingRequestRequests.PricingRequestItemRequest pricingItem(
         String brand, String model, String factory, BigDecimal qty
     ) {
-        // Financial-integrity review Finding A (commit 3): submit() now requires every item's
-        // catalog snapshot to be fully resolved, so this must reference a real, ACTIVE catalog
-        // product — one dedicated catalog product per factory, created in wireServicesAndCreateDeal.
+        // Financial-integrity review Finding A (commit 3): submit() now requires every item's catalog snapshot to be
+        // fully resolved, so this must reference a real, ACTIVE catalog product — one dedicated catalog product per
+        // factory, created in wireServicesAndCreateDeal.
         Long productId = "Factory A".equals(factory) ? catalogProductIdFactoryA
             : "Factory B".equals(factory) ? catalogProductIdFactoryB : null;
-        // V185 (direct-deal-form parity): color/texture/thicknessMm/sqmPerPiece/piecesPerBox/a
-        // quantity are now required on every item PricingRequestService#createDraft persists (see
-        // PricingRequestService#resolveItems). requestedQty/requestedUnit/requestedUnitBasis are no
-        // longer client-sent — resolveItems DERIVES them via WastageCalculator instead, and this
-        // whole file's exact-quantity assertions depend on that derivation reproducing `qty`
-        // BYTE-FOR-BYTE: quantityMode PIECES with piecesInput = qty, no wastage, and
-        // roundToFullBox = false so piecesPerBox (required, but otherwise irrelevant here) can
-        // never round `qty` up to some other number the rest of this file does not expect.
+        // V185 (direct-deal-form parity): color/texture/thicknessMm/sqmPerPiece/piecesPerBox/a quantity are now
+        // required on every item PricingRequestService#createDraft persists (see PricingRequestService#resolveItems).
         return new PricingRequestRequests.PricingRequestItemRequest(null, productId, null, brand, model,
             brand + " " + model, "White", "Matte", "60x60", factory, null, null, null, null,
             QuantityType.CONFIRMED, null, null, null,
@@ -2236,10 +2050,9 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
             null, null, null, "ACT", new BigDecimal("30000"), null, null, null, null, null, null, null));
     }
 
-    /** The CEO fixture -- needs a real position, see CustomerQuotationIntegrationTest for why:
-     *  CeoApproverRule keys the notified set on position กรรมการผู้จัดการ alone, and
-     *  {@link #createEmployee} leaves positionTh null. Division stays MD, so the `ceo` role and
-     *  every authz assertion here are unchanged. */
+    /** The CEO fixture -- needs a real position, see CustomerQuotationIntegrationTest for why: CeoApproverRule keys
+     * the notified set on position กรรมการผู้จัดการ alone, and #createEmployee leaves positionTh null. Division
+     * stays MD, so the `ceo` role and every authz assertion here are unchanged. */
     private long createManagingDirector(EmployeeRepository employees, String nameTh, String email) {
         return employees.create(new UpsertEmployeeRequest(
             null, null, nameTh, null, null, null, null, null, null, null,

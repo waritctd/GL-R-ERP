@@ -14,12 +14,9 @@ import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.transaction.PlatformTransactionManager;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
-/**
- * V134 storage-durability fix, step 3: real-Postgres coverage of {@link
- * FileAttachmentDiskBackfillRunner} -- the one-shot Java migrator that moves {@code DISK_LEGACY}
- * rows' bytes into {@code hr.file_attachment_blob} because Flyway/pg_read_binary_file cannot reach
- * the app container's filesystem from the database server.
- */
+/** V134 storage-durability fix, step 3: real-Postgres coverage of FileAttachmentDiskBackfillRunner -- the
+ * one-shot Java migrator that moves DISK_LEGACY rows' bytes into hr.file_attachment_blob because
+ * Flyway/pg_read_binary_file cannot reach the app container's filesystem from the database server. */
 class FileAttachmentDiskBackfillRunnerIntegrationTest extends AbstractPostgresIntegrationTest {
 
     @TempDir
@@ -73,9 +70,9 @@ class FileAttachmentDiskBackfillRunnerIntegrationTest extends AbstractPostgresIn
         runner().run(null);
         assertThat(stateOf(attachmentId)).isEqualTo("DATABASE");
 
-        // Second run: the row is no longer DISK_LEGACY, so it is not touched again -- re-running
-        // changes nothing, even if the underlying file were deleted in between (simulating exactly
-        // that by removing it, to prove the second run never even looks).
+        // Second run: the row is no longer DISK_LEGACY, so it is not touched again -- re-running changes nothing, even
+        // if the underlying file were deleted in between (simulating exactly that by removing it, to prove the second
+        // run never even looks).
         Files.delete(leafFile);
         runner().run(null);
 
@@ -99,12 +96,9 @@ class FileAttachmentDiskBackfillRunnerIntegrationTest extends AbstractPostgresIn
 
     @Test
     void unexpectedFailureAfterFileIsConfirmedPresentLeavesRowDiskLegacyNotMissing() throws Exception {
-        // The bug this guards against: a file that genuinely exists and is readable on disk must
-        // never be marked MISSING just because persisting its bytes failed for an unrelated reason
-        // (a DB timeout, a transient connection failure, ...). Simulated here by a saveContent that
-        // always throws, standing in for that class of failure -- migrateOne has already confirmed
-        // the file is present and readable by the time this fires, exactly like the real failure
-        // mode (blobs.saveContent's INSERT itself failing after a successful disk read).
+        // The bug this guards against: a file that genuinely exists and is readable on disk must never be marked
+        // MISSING just because persisting its bytes failed for an unrelated reason (a DB timeout, a transient
+        // connection failure, ...).
         byte[] content = "content that genuinely exists on disk".getBytes(StandardCharsets.UTF_8);
         Path file = uploadsDir.resolve("leave").resolve("4");
         Files.createDirectories(file);
@@ -129,8 +123,8 @@ class FileAttachmentDiskBackfillRunnerIntegrationTest extends AbstractPostgresIn
 
     @Test
     void oversizedFileIsSkippedAndLeftDiskLegacyNotReadIntoMemory() throws Exception {
-        // Cap tiny on purpose so a small file still counts as "oversized" without allocating a
-        // large buffer in this test.
+        // Cap tiny on purpose so a small file still counts as "oversized" without allocating a large buffer in this
+        // test.
         FileStorageService tinyCapFileStorage = new FileStorageService(uploadsDir.toString(), 4L);
         Path file = uploadsDir.resolve("leave").resolve("3");
         Files.createDirectories(file);

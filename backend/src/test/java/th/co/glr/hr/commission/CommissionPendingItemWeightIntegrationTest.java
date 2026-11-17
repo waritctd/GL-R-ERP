@@ -38,16 +38,9 @@ import th.co.glr.hr.ticket.TicketItemDto;
 import th.co.glr.hr.ticket.TicketItemRequest;
 import th.co.glr.hr.ticket.TicketRepository;
 
-/**
- * The sales-manager "รออนุมัติ" view ({@link CommissionService#listPendingApproval}) and the
- * per-item weight adjustment ({@link CommissionService#adjustItemWeights}), against real Postgres
- * through the real service and repositories. Records are created the production way
- * ({@code createFromDeal} as the accountant), so {@code effective_weight_multiplier} is frozen by
- * the real freeze, and the estimate / recompute assertions are computed here from the REAL
- * {@link CommissionCalculator} -- this test never re-derives commission math by hand.
- *
- * <p>Every authz case is written wrong-way-round: the caller CANNOT, and nothing changed.
- */
+/** The sales-manager "รออนุมัติ" view (CommissionService#listPendingApproval) and the per-item weight
+ * adjustment (CommissionService#adjustItemWeights), against real Postgres through the real service and
+ * repositories. */
 class CommissionPendingItemWeightIntegrationTest extends AbstractPostgresIntegrationTest {
     private static final LocalDate JUNE_INVOICE = LocalDate.of(2026, 6, 15);   // -> payroll month 2026-07-01
     private static final LocalDate JULY_INVOICE = LocalDate.of(2026, 7, 15);   // -> payroll month 2026-08-01
@@ -96,14 +89,12 @@ class CommissionPendingItemWeightIntegrationTest extends AbstractPostgresIntegra
         employeeActor = principal(createEmployee(employees, "พนักงาน รออนุมัติ", "pw-emp@glr.co.th", "OP", "เจ้าหน้าที่"), "employee");
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // GET pending-approval
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void pendingList_managerSeesOnlySubmitted_acrossMonths() {
-        // Six records for ONE rep across two payroll months. Item shapes differ so each frozen
-        // effective weight differs (and the estimate is non-trivial: the rep's month totals add up).
+        // Six records for ONE rep across two payroll months. Item shapes differ so each frozen effective weight
+        // differs (and the estimate is non-trivial: the rep's month totals add up).
         long r1 = createRecord(dealWithItems(itemSpec(10, 4, 1000, 2), itemSpec(5, 0, 2000, 1)), JUNE_INVOICE, "300000.00"); // Jul, stays SUBMITTED
         long r2 = createRecord(dealWithItems(itemSpec(8, 8, 1500, 3)), JUNE_INVOICE, "250000.00");                          // Jul -> MANAGER_APPROVED
         long r3 = createRecord(dealWithItems(itemSpec(4, 2, 5000, 2), itemSpec(6, 6, 700, 1)), JULY_INVOICE, "400000.00");  // Aug, stays SUBMITTED
@@ -192,9 +183,7 @@ class CommissionPendingItemWeightIntegrationTest extends AbstractPostgresIntegra
         }
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // POST {id}/item-weights
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void managerAdjust_recomputesEffectiveWeight_exactlyAsCalculatorItemDerivedWeight() {
@@ -276,8 +265,8 @@ class CommissionPendingItemWeightIntegrationTest extends AbstractPostgresIntegra
         Snapshot beforeA = snapshot(ticketA, commissionA);
         Snapshot beforeB = snapshot(ticketB, commissionB);
 
-        // Mixed request: one legitimate line plus one from another deal -- the whole call is refused,
-        // the legitimate line must not have been applied either.
+        // Mixed request: one legitimate line plus one from another deal -- the whole call is refused, the legitimate
+        // line must not have been applied either.
         assertThatThrownBy(() -> commissionService.adjustItemWeights(
                 commissionA,
                 weights(new ItemWeightMultiplierRequest.Line(ownItem, 3),
@@ -290,9 +279,7 @@ class CommissionPendingItemWeightIntegrationTest extends AbstractPostgresIntegra
         assertThat(snapshot(ticketB, commissionB)).isEqualTo(beforeB);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // fixtures
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     /** qty / qty_from_stock / approved price / starting per-item weight multiplier. */
     private record ItemSpec(int qty, int qtyFromStock, int price, int weight) {}

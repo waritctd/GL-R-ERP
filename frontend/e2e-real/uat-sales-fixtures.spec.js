@@ -10,24 +10,9 @@ import {
   stageHistory,
 } from './helpers/sales.js';
 
-// ─────────────────────────────────────────────────────────────────────────────────────────────
-// SLICE 2 — the first WRITE against deployed UAT, and its cleanup.
-//
-// Deliberately one deal and one cancel, before any journey exists. Two things have to be proven
-// on a shared database before creating anything that cannot be cleaned up:
-//
-//   1. A deal can be created at all. `projectId` is @NotNull on CreateTicketRequest and
-//      TicketService.create 400s without one — and the fixture DISCOVERS it rather than
-//      hardcoding, because UAT's customer master was rebuilt from production once already.
-//   2. Cleanup works. `cancel` is owner-only (TicketService compares createdById to the actor);
-//      if it did not work, every later slice would leave live deals in a database human testers
-//      navigate, with no way to take them back.
-//
-// The empty-stage-history assertion looks trivial and is not: it is the baseline that makes
-// Case C's "starts at S8" falsifiable later. Without knowing a fresh deal has ZERO STAGE_CHANGED
-// events, "it started at S8" is unprovable — any assertion about the first hop would be
-// satisfied by a deal that had already moved.
-// ─────────────────────────────────────────────────────────────────────────────────────────────
+// SLICE 2 — the first WRITE against deployed UAT, and its cleanup. Two things have to be proven on a shared
+// database before creating anything that cannot be cleaned up: 1. Deliberately one deal and one cancel, before
+// any journey exists.
 
 test.describe('@uat-sales sales fixtures — create and cancel a deal', () => {
   /** @type {Record<string, import('@playwright/test').APIRequestContext>} */
@@ -42,13 +27,13 @@ test.describe('@uat-sales sales fixtures — create and cancel a deal', () => {
   });
 
   test.afterAll(async () => {
-    // Hooks carry their own timeout and test.setTimeout() on a TEST does not extend it. Teardown
-    // cancels one deal at a time against a Render `starter` instance; the refusal spec hit the
-    // 30s default at 12 deals with every assertion passing. Budget here before this file grows.
+    // Hooks carry their own timeout and test.setTimeout() on a TEST does not extend it. Teardown cancels one deal
+    // at a time against a Render `starter` instance; the refusal spec hit the 30s default at 12 deals with every
+    // assertion passing. Budget here before this file grows.
     test.setTimeout(180_000);
 
-    // Best-effort, and outside any expect(): teardown must never turn a passing assertion red,
-    // and must never mask a real failure with a second one.
+    // Best-effort, and outside any expect(): teardown must never turn a passing assertion red, and must never mask
+    // a real failure with a second one.
     for (const ticketId of created) {
       await cancelDeal(sessions, ticketId);
     }
@@ -81,9 +66,9 @@ test.describe('@uat-sales sales fixtures — create and cancel a deal', () => {
 
     const ticket = await readDeal(sessions, 'sales', deal.id);
 
-    // sales.ticket.code is server-generated (tickets.nextTicketCode()), so the title is the only
-    // handle a human has for "what did that run leave behind". If this ever stops holding, the
-    // documented manual sweep (WHERE title LIKE 'E2E-%') stops finding anything.
+    // sales.ticket.code is server-generated (tickets.nextTicketCode()), so the title is the only handle a human
+    // has for "what did that run leave behind". If this ever stops holding, the documented manual sweep (WHERE
+    // title LIKE 'E2E-%') stops finding anything.
     expect(ticket.summary.title, 'the run id must lead the title').toContain(runId());
     expect(ticket.summary.title).toMatch(/^E2E-\d{8}T\d{6}Z-[0-9a-f]{4} /);
   });
@@ -94,20 +79,17 @@ test.describe('@uat-sales sales fixtures — create and cancel a deal', () => {
 
     await cancelDeal(sessions, deal.id);
 
-    // Re-READ rather than trusting the response body: the question is what the database holds,
-    // not what the write echoed back.
-    //
-    // Note the two cases. `lifecycle` is UPPERCASE (DealLifecycle) and `status` is lowercase
-    // (TicketStatus) — on the same row, in the same response. See TICKET_STATUS in helpers/sales.js;
-    // this exact pair is what surfaced it.
+    // Re-READ rather than trusting the response body: the question is what the database holds, not what the write
+    // echoed back. Note the two cases. `lifecycle` is UPPERCASE (DealLifecycle) and `status` is lowercase
+    // (TicketStatus) — on the same row, in the same response.
     const ticket = await readDeal(sessions, 'sales', deal.id);
     expect(ticket.summary.lifecycle, 'cancel must set lifecycle CANCELLED').toBe('CANCELLED');
     expect(ticket.summary.status, 'cancel must set status cancelled (lowercase)').toBe(
       TICKET_STATUS.CANCELLED
     );
 
-    // Cancel is terminal. Asserting it here is what lets afterAll cancel unconditionally without
-    // caring whether a test already did — the second call is a no-op, not an error path.
+    // Cancel is terminal. Asserting it here is what lets afterAll cancel unconditionally without caring whether a
+    // test already did — the second call is a no-op, not an error path.
     const again = await readDeal(sessions, 'sales', deal.id);
     expect(again.summary.lifecycle).toBe('CANCELLED');
   });

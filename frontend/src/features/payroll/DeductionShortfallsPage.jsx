@@ -17,42 +17,31 @@ import {
 } from '../../utils/format.js';
 import { EMPLOYEE_COLUMN, expandColumn } from './deductionColumns.jsx';
 
-/**
- * HR/CEO read view of the garnishment shortfall ledger (issue #376, exposed for #744).
- *
- * Rows are written only by `DeductionObligationService#recordGarnishmentShortfalls` as a side
- * effect of a payroll run, and the endpoint is read-only — there is deliberately no write half
- * here. A row means the amount ordered under a หมายบังคับคดี could not be withheld in full because
- * the ป.วิ.พ. ม.302 cap applied, so the difference never reached the creditor. Nothing on this page
- * computes any of that: every figure is rendered straight from the DTO.
- *
- * This is a route of its own rather than a section of PayrollPage because the ledger is
- * cross-month by nature — the endpoint takes no month parameter and orders `payroll_month DESC`
- * across every period, while PayrollPage is organised around one selected month. Same audience
- * shape and same precedent as `/tax-allowance-review`.
- */
+/** HR/CEO read view of the garnishment shortfall ledger (issue #376, exposed for #744). Rows are written only
+ * by `DeductionObligationService#recordGarnishmentShortfalls` as a side effect of a payroll run, and the
+ * endpoint is read-only — there is deliberately no write half here. */
 function monthLabel(payrollMonth) {
   if (!payrollMonth) return '-';
-  // payrollMonth is a LocalDate on the wire ("YYYY-MM-DD", always the 1st of the month), so it is
-  // narrowed to the "YYYY-MM" shape formatThaiMonthYearFromMonthInputValue expects.
+  // payrollMonth is a LocalDate on the wire ("YYYY-MM-DD", always the 1st of the month), so it is narrowed to
+  // the "YYYY-MM" shape formatThaiMonthYearFromMonthInputValue expects.
   return formatThaiMonthYearFromMonthInputValue(payrollMonth.slice(0, 7));
 }
 
-// No `user` prop: the page has no gate of its own beyond the route's own PATH_GUARDS entry
-// (canViewPayroll = hr + ceo), which mirrors the endpoint's @PreAuthorize("hasAnyRole('HR','CEO')").
+// No `user` prop: the page has no gate of its own beyond the route's own PATH_GUARDS entry (canViewPayroll =
+// hr + ceo), which mirrors the endpoint's @PreAuthorize("hasAnyRole('HR','CEO')").
 export function DeductionShortfallsPage() {
   const [searchParams] = useSearchParams();
   const employeeId = searchParams.get('employeeId') || '';
-  // DataTable's `renderExpanded` is caller-driven: the page owns the open row and returns null when
-  // collapsed (same shape as CommissionPage and the leave tables). shortfallReason is a paragraph
-  // of legal Thai, so it must never sit inline in a cell — DESIGN.md §13.
+  // DataTable's `renderExpanded` is caller-driven: the page owns the open row and returns null when collapsed
+  // (same shape as CommissionPage and the leave tables). shortfallReason is a paragraph of legal Thai, so it
+  // must never sit inline in a cell — DESIGN.md §13.
   const [expandedId, setExpandedId] = useState(null);
 
   const shortfallsQuery = useQuery({
     queryKey: queryKeys.deductionShortfalls(employeeId),
-    // Keep `api.payroll.getDeductionShortfalls(` contiguous on one line: serverContract.test.js's
-    // reachability scan greps component source for exactly that string, so wrapping the member
-    // access across lines makes the endpoint look unreachable from any screen.
+    // Keep `api.payroll.getDeductionShortfalls(` contiguous on one line: serverContract.test.js's reachability
+    // scan greps component source for exactly that string, so wrapping the member access across lines makes the
+    // endpoint look unreachable from any screen.
     queryFn: () => api.payroll.getDeductionShortfalls(employeeId ? { employeeId } : {}).then((response) => response.items ?? []),
   });
   const rows = useMemo(() => shortfallsQuery.data ?? [], [shortfallsQuery.data]);
@@ -99,11 +88,9 @@ export function DeductionShortfallsPage() {
       align: 'right',
       sortable: true,
       sortAccessor: (row) => Number(row.shortfallAmount ?? 0),
-      // Bold only, NOT text-danger: every row in this ledger is already a realised shortfall by
-      // construction (only shortfall > 0 rows are ever written), so colouring every single one
-      // "danger" red carries no differentiating information within this table — it would be
-      // decoration/alarm, not signal, which DESIGN.md's colour-rationing rule (§5, "never from
-      // alarm") rules out. Emphasis comes from weight instead.
+      // Bold only, NOT text-danger: every row in this ledger is already a realised shortfall by construction, so
+      // colouring every single one "danger" red carries no differentiating information within this table — it would
+      // be decoration/alarm, not signal, which DESIGN.md's colour-rationing rule rules out.
       render: (row) => (
         <strong className="font-mono font-extrabold text-text">{formatMoney(row.shortfallAmount)}</strong>
       ),
@@ -150,8 +137,8 @@ export function DeductionShortfallsPage() {
         items={[
           { key: 'rows', label: 'รายการค้างหัก', value: totals.rows, helper: 'Shortfall records' },
           { key: 'employees', label: 'พนักงานที่เกี่ยวข้อง', value: totals.employees, helper: 'Employees affected' },
-          // Labelled "ที่แสดง" on purpose: this is a sum of the rows currently loaded, not a
-          // backend-authoritative outstanding balance.
+          // Labelled "ที่แสดง" on purpose: this is a sum of the rows currently loaded, not a backend-authoritative
+          // outstanding balance.
           { key: 'shortfall', label: 'รวมส่วนต่างที่แสดง', value: formatMoney(totals.shortfall), helper: 'Total shown' },
         ]}
       />
@@ -160,11 +147,9 @@ export function DeductionShortfallsPage() {
         columns={columns}
         rows={rows}
         getRowKey={(row) => row.id}
-        // `nav-drawer:min-w-[860px] reflow-cards`: the 721-1040px tablet band is not covered by
-        // `mobileCard` (useIsMobile's breakpoint is 720px), so without this the grid's own
-        // minmax() floors (804px combined) would force a bare horizontal scroll instead of the
-        // stacked, data-label-prefixed reflow every other DataTable page in this app gets at that
-        // width — see CLAUDE.md's "tablet band hides data two opposite ways" note.
+        // `nav-drawer:min-w-[860px] reflow-cards`: the 721-1040px tablet band is not covered by `mobileCard`, so
+        // without this the grid's own minmax floors would force a bare horizontal scroll instead of the stacked,
+        // data-label-prefixed reflow every other DataTable page in this app gets at that width.
         gridClassName="grid-cols-[minmax(110px,0.8fr)_minmax(160px,1.4fr)_minmax(150px,1.2fr)_minmax(110px,0.8fr)_minmax(110px,0.8fr)_minmax(120px,0.9fr)_44px] nav-drawer:min-w-[860px] reflow-cards"
         loading={shortfallsQuery.isLoading}
         error={shortfallsQuery.isError}
@@ -173,13 +158,13 @@ export function DeductionShortfallsPage() {
         onRetry={() => shortfallsQuery.refetch()}
         searchable
         searchPlaceholder="ค้นหาชื่อหรือรหัสพนักงาน..."
-        // `dir`, NOT `direction` — DataTable reads `initialSort.dir === 'desc'`. The wrong key
-        // fails silently into ascending order, contradicting the server's own ORDER BY.
+        // `dir`, NOT `direction` — DataTable reads `initialSort.dir === 'desc'`. The wrong key fails silently into
+        // ascending order, contradicting the server's own ORDER BY.
         initialSort={{ key: 'payrollMonth', dir: 'desc' }}
         caption="ยอดค้างหักตามหมายบังคับคดี"
-        // Empty is the GOOD outcome here — every ordered garnishment was withheld in full — so the
-        // copy says that rather than reading like a failed load. DataTable renders the error and
-        // loading states separately, so this can be unambiguous.
+        // Empty is the GOOD outcome here — every ordered garnishment was withheld in full — so the copy says that
+        // rather than reading like a failed load. DataTable renders the error and loading states separately, so this
+        // can be unambiguous.
         emptyState={{
           icon: 'badgeCheck',
           title: 'ไม่มียอดค้างหัก',
@@ -219,8 +204,8 @@ export function DeductionShortfallsPage() {
                 {/* Bold only — see the desktop column's own comment on why not text-danger here. */}
                 <dd className="font-mono font-extrabold text-text">{formatMoney(row.shortfallAmount)}</dd>
               </div>
-              {/* The reason is the operative content of a row — a mobile card that drops it would
-                  leave the reader with numbers and no instruction on what to do about them. */}
+              {/* The reason is the operative content of a row — a mobile card that drops it would leave the reader with
+               * numbers and no instruction on what to do about them. */}
               <div><dt>เหตุผลที่หักไม่ครบ</dt><dd className="leading-normal">{row.shortfallReason || '-'}</dd></div>
             </FieldList>
           </div>

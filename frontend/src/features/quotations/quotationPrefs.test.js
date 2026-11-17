@@ -4,9 +4,9 @@ import {
   writeQuotationDefaults,
 } from './quotationPrefs.js';
 
-// This repo's Node ships a BROKEN built-in global `localStorage` (it needs --localstorage-file and
-// shadows jsdom's — `clear` is not even a function on it; see TicketCreateModal.test.jsx's own
-// note). So every test here stubs the global outright rather than clearing it.
+// This repo's Node ships a BROKEN built-in global `localStorage` (it needs --localstorage-file and shadows
+// jsdom's — `clear` is not even a function on it; see TicketCreateModal.test.jsx's own note). So every test
+// here stubs the global outright rather than clearing it.
 function memoryStorage() {
   const map = new Map();
   return {
@@ -42,17 +42,16 @@ describe('quotationPrefs', () => {
     });
   });
 
-  // V178: the MODE is remembered (a rep who dates their validity keeps starting there); the DATE
-  // itself never is — a remembered calendar date would be a date in the past, or simply the
-  // wrong one, on every quotation after the first.
+  // V178: the MODE is remembered (a rep who dates their validity keeps starting there); the DATE itself never is
+  // — a remembered calendar date would be a date in the past, or simply the wrong one, on every quotation after
+  // the first.
   it('remembers validityMode but never validityUntil, even when both are passed', () => {
     writeQuotationDefaults(6, { validityMode: 'DATE', validityUntil: '2026-12-31' });
     expect(readQuotationDefaults(6)).toEqual({ validityMode: 'DATE' });
   });
 
-  // Item 4 ("ไม่รับมัดจำ", V181, owner ruling 2026-09-16, REVERSED same day): unlike every other
-  // field above, noDeposit/fullPaymentTerm must NEVER round-trip — remembering noDeposit would
-  // make every LATER new quotation start with no deposit, which is exactly the accidental-no-
+  // Item 4: unlike every other field above, noDeposit/fullPaymentTerm must NEVER round-trip — remembering
+  // noDeposit would make every LATER new quotation start with no deposit, which is exactly the accidental-no-
   // deposit-quotation risk the reversal exists to prevent.
   it('never remembers noDeposit or fullPaymentTerm, even alongside fields that DO round-trip', () => {
     writeQuotationDefaults(6, {
@@ -61,9 +60,9 @@ describe('quotationPrefs', () => {
     expect(readQuotationDefaults(6)).toEqual({ depositPercent: 50 });
   });
 
-  // A stale blob is exactly what a rep who used the checkbox during the brief window this shipped
-  // (2026-09-16, before the reversal) may already have sitting in their browser's localStorage.
-  // Reading it back must silently drop the stale keys rather than warn, crash, or apply them.
+  // A stale blob is exactly what a rep who used the checkbox during the brief window this shipped (2026-09-16,
+  // before the reversal) may already have sitting in their browser's localStorage. Reading it back must silently
+  // drop the stale keys rather than warn, crash, or apply them.
   it('ignores a stale stored noDeposit/fullPaymentTerm from before the reversal', () => {
     // Simulates the OLD writer, which used to include these two keys.
     writeQuotationDefaults(6, { depositPercent: 0 }); // depositPercent 0 alone is not "no deposit"
@@ -77,8 +76,8 @@ describe('quotationPrefs', () => {
     expect(defaults.fullPaymentTerm).toBeUndefined();
   });
 
-  // A shared sales machine is the normal case in this office — two reps on one browser must not
-  // inherit each other's terms.
+  // A shared sales machine is the normal case in this office — two reps on one browser must not inherit each
+  // other's terms.
   it('keys defaults per user, so one rep never inherits another\'s', () => {
     writeQuotationDefaults(6, { depositPercent: 50 });
     expect(readQuotationDefaults(9)).toBeNull();
@@ -115,8 +114,8 @@ describe('quotationPrefs', () => {
     expect(stored[0].priceId).toBe(RECENT_PRODUCT_LIMIT + 4);
   });
 
-  // Only the fields the item editor consumes are cached — a catalog schema change must not be
-  // able to bloat or poison this key.
+  // Only the fields the item editor consumes are cached — a catalog schema change must not be able to bloat or
+  // poison this key.
   it('stores only the whitelisted catalog fields', () => {
     pushRecentCatalogPick(6, {
       priceId: 1, collection: 'A', originCountryCode: 'IT', thicknessMm: 10,
@@ -126,8 +125,8 @@ describe('quotationPrefs', () => {
     expect(entry).toEqual({ priceId: 1, collection: 'A', originCountryCode: 'IT', thicknessMm: 10 });
   });
 
-  // The case this module exists for: in a private window the ACCESSOR ITSELF throws, so an
-  // unguarded read would take the editor down rather than starting from the app defaults.
+  // The case this module exists for: in a private window the ACCESSOR ITSELF throws, so an unguarded read would
+  // take the editor down rather than starting from the app defaults.
   describe('when localStorage throws on every access', () => {
     beforeEach(() => vi.stubGlobal('localStorage', throwingStorage()));
 

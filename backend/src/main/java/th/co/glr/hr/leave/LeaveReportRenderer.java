@@ -9,26 +9,9 @@ import org.apache.pdfbox.pdmodel.font.PDFont;
 import org.springframework.stereotype.Component;
 import th.co.glr.hr.common.PdfDocumentWriter;
 
-/**
- * Printable leave-records report (รายงานสรุปใบลางาน, 2026-09) -- an employee's own leave history for
- * a chosen year (optionally narrowed to a month), or a manager's ONE grouped PDF covering every
- * direct report for the same period (owner ruling: one document, grouped per employee with running
- * row numbers restarting per employee -- NOT one PDF per person).
- *
- * <p><b>Readability over fidelity (owner ruling, 2026-09-10):</b> modelled on TigerSoft's
- * {@code TA TAR10_1}/{@code rptLeaveByEmp.rpt} as a CONTENT reference only -- which facts belong on
- * the page -- never as a visual template. TigerSoft's dense 13-column management print is cut down
- * to the columns a reader actually asks about (ประเภทการลา · ช่วงวันที่ · เวลา · รวม · สถานะ ·
- * หักเงิน · เหตุผล), which is what lets this fit A4 PORTRAIT on {@link PdfDocumentWriter} unchanged
- * -- no orientation parameter, no risk to the six other renderers that share that class.
- *
- * <p>This class only RENDERS. Every figure comes off the already-computed {@link
- * LeaveReportEmployeeDto}/{@link LeaveBalanceDto}/{@link LeaveRequestDto} -- no query, no leave-day
- * math happens here (see {@link LeaveService#ownLeaveReport}/{@link LeaveService#teamLeaveReport}
- * for the data assembly, and {@link LeaveDayMath#formatDuration} for the day-count -&gt; "1 วัน 4
- * ชม. 30 น." formatting, which is a PORT of the frontend's {@code leaveFormatting.js}, not a second
- * rule). Follows {@link th.co.glr.hr.payroll.PayslipRenderer}'s shape for that division of labour.
- */
+/** Printable leave-records report -- an employee's own leave history for a chosen year, or a manager's ONE
+ * grouped PDF covering every direct report for the same period. This class only RENDERS. 30 น." formatting,
+ * which is a PORT of the frontend's leaveFormatting.js, not a second rule). */
 @Component
 public class LeaveReportRenderer {
     private static final String COMPANY_NAME = "บริษัท จีแอลแอนด์อาร์แทปส์แอนด์ไทลส์ จำกัด";
@@ -43,9 +26,9 @@ public class LeaveReportRenderer {
         "กรกฎาคม", "สิงหาคม", "กันยายน", "ตุลาคม", "พฤศจิกายน", "ธันวาคม"
     };
 
-    // Mirrors frontend/src/utils/format.js's LEAVE_STATUS_LABELS wording verbatim, so the printed
-    // page and the portal's StatusBadge never disagree on what a status is CALLED, the same
-    // "cannot disagree" concern the quota block above already applies to the NUMBERS.
+    // Mirrors frontend/src/utils/format.js's LEAVE_STATUS_LABELS wording verbatim, so the printed page and the
+    // portal's StatusBadge never disagree on what a status is CALLED, the same "cannot disagree" concern the quota
+    // block above already applies to the NUMBERS.
     private static final Map<String, String> STATUS_LABELS_TH = Map.of(
         "SUBMITTED", "รออนุมัติ",
         "APPROVED", "อนุมัติแล้ว",
@@ -60,8 +43,8 @@ public class LeaveReportRenderer {
     private static final float BODY_SIZE = 10f;
     private static final float SMALL_SIZE = 9f;
 
-    // Quota table column boundaries, relative to the printable width -- entitlement/used/pending
-    // right-aligned before คงเหลือ, which ends flush with the right margin.
+    // Quota table column boundaries, relative to the printable width -- entitlement/used/pending right-aligned
+    // before คงเหลือ, which ends flush with the right margin.
     private static final float QUOTA_COL1_OFFSET = 230f;
     private static final float QUOTA_COL2_OFFSET = 320f;
     private static final float QUOTA_COL3_OFFSET = 405f;
@@ -182,9 +165,9 @@ public class LeaveReportRenderer {
         pdf.gap(6);
     }
 
-    /** Wraps {@code value} to the printable width less {@code indent} and draws it left-indented,
-     * paginating per line -- {@link PdfDocumentWriter#text} cannot do this itself (it always starts
-     * at the bare left margin), so wrap+draw is composed by hand from {@code wrap}/{@code textAt}. */
+    /** Wraps value to the printable width less indent and draws it left-indented, paginating per line --
+     * PdfDocumentWriter#text cannot do this itself (it always starts at the bare left margin), so wrap+draw is
+     * composed by hand from wrap/textAt. */
     private void wrappedIndented(PdfDocumentWriter pdf, PDFont font, float size, float indent, String value)
             throws IOException {
         float x = pdf.left() + indent;
@@ -214,8 +197,8 @@ public class LeaveReportRenderer {
         return thaiDate(start) + " - " + thaiDate(end);
     }
 
-    // Whole-day requests (startTime == null) print no time at all -- see the brief's content table
-    // ("เวลา ... omit entirely for whole-day").
+    // Whole-day requests (startTime == null) print no time at all -- see the brief's content table ("เวลา ... omit
+    // entirely for whole-day").
     private String timeSuffix(LeaveRequestDto request) {
         if (request.startTime() == null) {
             return "";
@@ -253,27 +236,9 @@ public class LeaveReportRenderer {
         return value == null ? BigDecimal.ZERO : value;
     }
 
-    /**
-     * Whether a quota row earns its line on the page. A row is dropped ONLY when it is completely
-     * inert for this employee in this period -- no entitlement, nothing carried in, nothing used,
-     * nothing pending -- which is a row that can tell the reader nothing at all (LEAVE_WITHOUT_PAY
-     * is the standing example: a 0-day statutory quota that prints "0 วัน" four times).
-     *
-     * <p>Deliberately NOT filtered: a type the employee holds an entitlement for but has not used.
-     * "ลาพักร้อน · 12 วัน · เหลือ 12 วัน" is the single most useful line on the page for a reader who
-     * has taken none of it, and dropping unused entitlements would turn a leave STATEMENT into a
-     * mere list of what already happened.
-     *
-     * <p>Also deliberately NOT filtered: event-driven types the reader may never qualify for
-     * (MATERNITY/MILITARY/ORDINATION). Suppressing those needs a business rule this renderer has no
-     * right to invent -- MATERNITY would have to key off gender, which the leave module does not
-     * gate on ANYWHERE else and which adoption/surrogacy cases make wrong anyway. No existing
-     * leave_type column separates them either: {@code once_per_employment} is TRUE for ORDINATION
-     * alone, and {@code requires_attachment} is TRUE for SICK as well, so neither flag (nor the
-     * pair) identifies that set. A display filter that hid an entitlement the employee legally holds
-     * would be a policy decision wearing a formatting disguise. If HR wants them hidden, that is an
-     * owner ruling plus a leave_type column, not a predicate here.
-     */
+    /** Whether a quota row earns its line on the page. Also deliberately NOT filtered: event-driven types the
+     * reader may never qualify for (MATERNITY/MILITARY/ORDINATION). A display filter that hid an entitlement the
+     * employee legally holds would be a policy decision wearing a formatting disguise. */
     private static boolean isMeaningfulQuotaRow(LeaveBalanceDto balance) {
         return isPositive(balance.annualQuotaDays())
             || isPositive(balance.carriedInDays())

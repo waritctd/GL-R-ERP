@@ -38,22 +38,9 @@ import th.co.glr.hr.ticket.TicketItemRequest;
 import th.co.glr.hr.ticket.TicketRepository;
 import th.co.glr.hr.ticket.TicketService;
 
-/**
- * Change 2 (guard hardening plan): {@code FactoryQuoteRepository.supersede} must refuse to
- * supersede a quote that has already left the live/negotiable lifecycle ({@code NOT_AVAILABLE},
- * {@code SUPERSEDED}, {@code CANCELLED} — all terminal), rather than silently flipping a dead row
- * to SUPERSEDED. {@code FactoryQuoteService} already restricts its one call site to
- * {@code RESPONSE_RECEIVED}/{@code NEGOTIATING}/{@code READY_FOR_COSTING}, so these tests exercise
- * {@link FactoryQuoteRepository} directly — the layer any future, unguarded caller would actually
- * reach.
- *
- * <p>Each test drives exactly ONE {@code factory_quote} row within its own, freshly created
- * pricing request (a fresh one per {@code @Test} thanks to {@code AbstractPostgresIntegrationTest}
- * resetting the schema before every test method), so the {@code uq_factory_quote_current_factory}
- * partial unique index (V61: {@code (pricing_request_id, factory_name_snapshot) WHERE is_current =
- * TRUE AND status <> 'CANCELLED'}) never has a second row to collide with — see the plan's FIXTURE
- * TRAP note.
- */
+/** Change 2 (guard hardening plan): FactoryQuoteRepository.supersede must refuse to supersede a quote that has
+ * already left the live/negotiable lifecycle (NOT_AVAILABLE, SUPERSEDED, CANCELLED — all terminal), rather
+ * than silently flipping a dead row to SUPERSEDED. */
 class FactoryQuoteSupersedeGuardIntegrationTest extends AbstractPostgresIntegrationTest {
     private FactoryQuoteRepository factoryQuotes;
     private long salesRepId;
@@ -91,15 +78,13 @@ class FactoryQuoteSupersedeGuardIntegrationTest extends AbstractPostgresIntegrat
             salesActor);
         long ticketId = ticketDto.summary().id();
 
-        // A DRAFT pricing request is enough — the repository methods under test here have no
-        // pricing-request-status gate of their own (only sales.factory_quote's own status column
-        // and the FK to pricing_request_id matter), so submit()/pickup() would be unused ceremony.
+        // A DRAFT pricing request is enough — the repository methods under test here have no pricing-request-status
+        // gate of their own (only sales.factory_quote's own status column and the FK to pricing_request_id matter), so
+        // submit()/pickup() would be unused ceremony.
         pricingRequestId = pricingRequestService.createDraft(ticketId, pricingRequest(), salesActor).summary().id();
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Change 2 tests
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void supersede_refusesCancelledQuote_rowUnchanged() {
@@ -160,9 +145,7 @@ class FactoryQuoteSupersedeGuardIntegrationTest extends AbstractPostgresIntegrat
         assertThat(isCurrentOf(quoteId)).isFalse();
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Fixture helpers
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     private long createDraftQuote(String factoryName) {
         return factoryQuotes.createDraft(pricingRequestId, null, factoryName,
@@ -180,11 +163,9 @@ class FactoryQuoteSupersedeGuardIntegrationTest extends AbstractPostgresIntegrat
     }
 
     private PricingRequestRequests.CreatePricingRequestRequest pricingRequest() {
-        // Free-text item: no catalog product needed since these tests never call submit() (the
-        // catalog-completeness gate lives on submit(), not createDraft()) — see
-        // PricingFactoryQuoteCostingIntegrationTest#freeTextPricingItem's own comment. V185: model
-        // is now unconditionally required by createDraft's own resolveItems, so this passes the
-        // description itself as model (same fix, same reasoning, as freeTextPricingItem).
+        // Free-text item: no catalog product needed since these tests never call submit() (the catalog-completeness
+        // gate lives on submit(), not createDraft()) — see
+        // PricingFactoryQuoteCostingIntegrationTest#freeTextPricingItem's own comment.
         PricingRequestRequests.PricingRequestItemRequest item = new PricingRequestRequests.PricingRequestItemRequest(
             null, null, null, null, "Free text item", "Free text item", "White", "Matte", "60x60",
             "Free Text Factory", null, null, null, null,

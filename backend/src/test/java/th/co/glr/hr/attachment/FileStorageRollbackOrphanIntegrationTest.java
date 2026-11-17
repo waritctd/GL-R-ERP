@@ -51,41 +51,9 @@ import th.co.glr.hr.ticket.CreateTicketRequest;
 import th.co.glr.hr.ticket.DealStage;
 import th.co.glr.hr.ticket.TicketRepository;
 
-/**
- * {@link FileStorageService#store} copies bytes to disk the instant it is called. Postgres knows
- * nothing about that copy, so when the {@code @Transactional} method around it rolls back, the row
- * that referenced the file vanishes and <b>the file stays on disk forever</b> — an orphan nothing
- * references and no sweeper collects. Over time that is unbounded growth on the uploads volume plus
- * a quiet data-leak surface, because the stranded bytes are customer invoices and pricing
- * attachments.
- *
- * <p>Three production call sites stored inside a transaction:
- * {@code CommissionService#submit}, {@code CommissionService#createFromDeal}, and
- * {@code PricingRequestService#uploadAttachment}. This class pins all three, in both directions —
- * a rollback must leave the uploads directory empty, and a commit must leave the file in place and
- * referenced.
- *
- * <p><b>Why these tests are not vacuous.</b> {@link AbstractPostgresIntegrationTest} runs with no
- * Spring context: every integration test in this suite hand-wires its services with {@code new}, so
- * there is no AOP proxy and a bare {@code @Transactional} does nothing at all. A rollback test
- * written the obvious way would therefore never roll anything back and would pass for a reason that
- * has nothing to do with the code under test. Every rollback test below is driven through {@link
- * AbstractPostgresIntegrationTest#transactional} (PR #695), which builds a REAL Spring AOP proxy
- * from {@link org.springframework.transaction.annotation.AnnotationTransactionAttributeSource} — so
- * the transaction genuinely comes from the production {@code @Transactional} annotation, and
- * {@code TransactionSynchronizationManager} is genuinely active inside the call.
- * {@link #commissionSubmit_withoutTheProxy_neverRollsBackSoTheHookNeverFires()} is the control that
- * proves the proxy is what makes the difference.
- *
- * <p>Each test gets its OWN uploads root (a fresh UUID directory), so "how many regular files exist
- * under this root" is an exact, unambiguous count of what the call under test left behind — not a
- * guess filtered out of a shared directory.
- *
- * <p>The Mockito {@link AuditService} and {@link PricingRequestRepository} stubs are <b>fault
- * injectors</b>, not the system under test: they fail the LAST write in each method's sequence, so
- * by the time they throw the file has really been written to a real disk and every row before them
- * has really been inserted into a real Postgres. Everything asserted below is real state.
- */
+/** FileStorageService#store copies bytes to disk the instant it is called. This class pins all three, in both
+ * directions — a rollback must leave the uploads directory empty, and a commit must leave the file in place
+ * and referenced. */
 class FileStorageRollbackOrphanIntegrationTest extends AbstractPostgresIntegrationTest {
     private static final MultipartFile PDF =
         new MockMultipartFile("invoiceAttachment", "invoice.pdf", "application/pdf", "pdf-bytes".getBytes());
@@ -104,9 +72,7 @@ class FileStorageRollbackOrphanIntegrationTest extends AbstractPostgresIntegrati
         fileStorage = new FileStorageService(uploadsRoot.toString());
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // CommissionService#submit
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void commissionSubmit_rollingBackAfterTheFileLands_leavesNoOrphanOnDisk() {
@@ -152,17 +118,9 @@ class FileStorageRollbackOrphanIntegrationTest extends AbstractPostgresIntegrati
             .isEqualTo(storedFiles().get(0).toString());
     }
 
-    /**
-     * The vacuity control. Identical injected failure, but the RAW un-proxied service — how ~123
-     * other integration tests in this suite are driven. Without a proxy {@code @Transactional} is
-     * inert, so nothing rolls back, no synchronization is ever active, and the cleanup hook cannot
-     * fire. The orphan therefore survives here BY DESIGN.
-     *
-     * <p>This asserts today's harness defect, not a desired outcome. Its job is to prove that the
-     * two tests above are discriminating: if this one ever starts finding zero files, the proxy is
-     * no longer what makes the difference and the rollback evidence above has quietly become
-     * vacuous. Delete it the day the harness runs inside a real Spring context with proxied beans.
-     */
+    /** The vacuity control. Without a proxy @Transactional is inert, so nothing rolls back, no synchronization is
+     * ever active, and the cleanup hook cannot fire. Identical injected failure, but the RAW un-proxied service —
+     * how ~123 other integration tests in this suite are driven. */
     @Test
     void commissionSubmit_withoutTheProxy_neverRollsBackSoTheHookNeverFires() {
         CommissionService rawService = commissionService(failingAudit());
@@ -183,9 +141,7 @@ class FileStorageRollbackOrphanIntegrationTest extends AbstractPostgresIntegrati
             .hasSize(1);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // CommissionService#createFromDeal — stores the same file_path into sales.attachment too
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void createFromDeal_rollingBackAfterTheFileLands_leavesNoOrphanOnDisk() {
@@ -233,9 +189,7 @@ class FileStorageRollbackOrphanIntegrationTest extends AbstractPostgresIntegrati
         assertThat(storedFiles()).hasSize(1);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // PricingRequestService#uploadAttachment
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void uploadAttachment_rollingBackAfterTheFileLands_leavesNoOrphanOnDisk() {
@@ -243,8 +197,8 @@ class FileStorageRollbackOrphanIntegrationTest extends AbstractPostgresIntegrati
         UserPrincipal sales = actor(salesRepId, "sales");
         long pricingRequestId = draftPricingRequest(salesRepId, sales);
 
-        // Fault injector: everything real except addEvent — uploadAttachment's LAST write, so the
-        // file and the sales.pricing_request_attachment row both really exist when it throws.
+        // Fault injector: everything real except addEvent — uploadAttachment's LAST write, so the file and the
+        // sales.pricing_request_attachment row both really exist when it throws.
         PricingRequestRepository faulty = org.mockito.Mockito.spy(new PricingRequestRepository(jdbc));
         doThrow(new DataIntegrityViolationException("injected failure after the attachment row"))
             .when(faulty).addEvent(anyLong(), anyLong(), any(), any(), any(), any(), any(), any(), any());
@@ -279,9 +233,7 @@ class FileStorageRollbackOrphanIntegrationTest extends AbstractPostgresIntegrati
             .hasSize(1);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Wiring helpers
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     private CommissionService commissionService(AuditService audit) {
         return new CommissionService(
@@ -312,8 +264,7 @@ class FileStorageRollbackOrphanIntegrationTest extends AbstractPostgresIntegrati
         long ticketId = tickets.create(
             new CreateTicketRequest("ดีล Orphan File", "NORMAL", null, null, null, null, null, null, null),
             tickets.nextTicketCode(), salesRepId, "พนักงานขาย ดีล");
-        // createFromDeal's resolveDealLinkage requires CLOSED_PAID; a new ticket starts at V50's
-        // lead-stage default.
+        // createFromDeal's resolveDealLinkage requires CLOSED_PAID; a new ticket starts at V50's lead-stage default.
         tickets.updateSalesStage(ticketId, DealStage.CLOSED_PAID);
         return ticketId;
     }
@@ -329,11 +280,9 @@ class FileStorageRollbackOrphanIntegrationTest extends AbstractPostgresIntegrati
             .createDraft(ticketId, new PricingRequestRequests.CreatePricingRequestRequest(
                 PricingRequestRecipient.DESIGNER, null, "Designer Co.", LocalDate.now().plusDays(14),
                 new BigDecimal("1000.00"), "THB", "orphan-file test request", UUID.randomUUID().toString(),
-                // V185 (direct-deal-form parity): color/texture/thicknessMm/sqmPerPiece/piecesPerBox/a
-                // quantity are now required on every item PricingRequestService#createDraft persists —
-                // requestedQty/requestedUnit/requestedUnitBasis are derived instead, so this fixture
-                // supplies the tile fields directly (PIECES mode, 10 pieces, no wastage, no box
-                // rounding) rather than the pre-V185 bare shape.
+                // V185: color/texture/thicknessMm/sqmPerPiece/piecesPerBox/a quantity are now required on every item
+                // PricingRequestService#createDraft persists — requestedQty/requestedUnit/requestedUnitBasis are derived
+                // instead, so this fixture supplies the tile fields directly rather than the pre-V185 bare shape.
                 List.of(new PricingRequestRequests.PricingRequestItemRequest(null, productId, null, "SCG",
                     "Tile Orphan", "SCG Tile Orphan", "White", "Matte", "60x60", "Factory Orphan",
                     null, null, null, null,
@@ -349,9 +298,7 @@ class FileStorageRollbackOrphanIntegrationTest extends AbstractPostgresIntegrati
         return new MockMultipartFile("file", "spec.pdf", "application/pdf", "spec-bytes".getBytes());
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Assertion helpers
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     /** Every regular file under this test's private uploads root. */
     private List<Path> storedFiles() {

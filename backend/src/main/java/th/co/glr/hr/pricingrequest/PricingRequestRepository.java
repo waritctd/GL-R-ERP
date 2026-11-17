@@ -25,21 +25,9 @@ import th.co.glr.hr.pricingrequest.PricingRequestRequests.CustomerChangeRevision
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.PricingRequestItemRequest;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.UpdatePricingRequestRequest;
 
-/**
- * Persistence for the PricingRequest aggregate (V59): {@code sales.pricing_request},
- * {@code sales.pricing_request_item}, {@code sales.pricing_request_event}.
- *
- * <p><strong>CRITICAL INVARIANT:</strong> this repository must NEVER call
- * {@code th.co.glr.hr.ticket.TicketRepository}, nor write to {@code sales.ticket} /
- * {@code sales.ticket_event}. Reason: {@code TicketRepository.addEventInternal} writes
- * {@code assigned_to = CASE WHEN :isPickup THEN :actorId ELSE assigned_to END} as a
- * side-effect of any PICKED_UP event. Pricing-request pickup must assign the Import
- * employee to the *pricing request only*, never to the whole deal. Routing
- * pricing-request events through TicketRepository would silently reassign the ticket.
- *
- * <p>Persistence only — no permission checks, no workflow validation, no Jackson.
- * Those belong in the service layer.
- */
+/** Persistence for the PricingRequest aggregate (V59): sales.pricing_request, sales.pricing_request_item,
+ * sales.pricing_request_event. CRITICAL INVARIANT: this repository must NEVER call
+ * th.co.glr.hr.ticket.TicketRepository, nor write to sales.ticket / sales.ticket_event. */
 @Repository
 public class PricingRequestRepository {
     private static final String SUMMARY_SELECT = """
@@ -57,16 +45,9 @@ public class PricingRequestRepository {
         """;
 
     private final NamedParameterJdbcTemplate jdbc;
-    /**
-     * Owns the {@code sales.factory_quote} half of {@link #cancelOpenChildrenForDeadRequest}.
-     * Constructed here rather than injected so the 25-odd hand-wired {@code new
-     * PricingRequestRepository(jdbc)} call sites across the integration suite keep compiling
-     * unchanged — the same reason (and the same pattern) as {@code FactoryQuoteRepository}'s own
-     * single-argument constructor, which builds its {@code FileAttachmentBlobRepository} the same
-     * way. Both are stateless JDBC data-access objects over the one template, so there is nothing
-     * to share and nothing to configure; keeping ONE constructor also avoids handing Spring an
-     * ambiguous choice.
-     */
+    /** Owns the sales.factory_quote half of #cancelOpenChildrenForDeadRequest. Both are stateless JDBC data-access
+     * objects over the one template, so there is nothing to share and nothing to configure; keeping ONE
+     * constructor also avoids handing Spring an ambiguous choice. */
     private final FactoryQuoteRepository factoryQuotes;
 
     public PricingRequestRepository(NamedParameterJdbcTemplate jdbc) {
@@ -172,11 +153,7 @@ public class PricingRequestRepository {
                 .addValue("deliveryLocation", item.deliveryLocation())
                 .addValue("specialRequirement", item.specialRequirement())
                 .addValue("sortOrder", i)
-                // V185 (direct-deal-form parity) — see PricingRequestItemRequest's own class-level
-                // Javadoc. requestedQty/requestedQtySqm/requestedUnit/requestedUnitBasis above are
-                // whatever PricingRequestService#resolveItems already derived onto this same
-                // `item` before this method was ever called (this repository does no derivation
-                // itself — persistence only, per this class's header Javadoc).
+                // V185 (direct-deal-form parity) — see PricingRequestItemRequest's own class-level Javadoc.
                 .addValue("productCode", item.productCode())
                 .addValue("thicknessMm", item.thicknessMm())
                 .addValue("sqmPerPiece", item.sqmPerPiece())
@@ -190,9 +167,8 @@ public class PricingRequestRepository {
                 .addValue("piecesBeforeWastage", item.piecesBeforeWastage())
                 .addValue("piecesAfterWastage", item.piecesAfterWastage())
                 .addValue("boxes", item.boxes())
-                // Mirrors sales.quotation_item.round_to_full_box's own NOT NULL DEFAULT TRUE — a
-                // null input (never sent by resolveItems, but defensive for any other caller)
-                // reads as true, today's only pre-V185 behaviour.
+                // Mirrors sales.quotation_item.round_to_full_box's own NOT NULL DEFAULT TRUE — a null input (never sent by
+                // resolveItems, but defensive for any other caller) reads as true, today's only pre-V185 behaviour.
                 .addValue("roundToFullBox", item.roundToFullBox() == null || item.roundToFullBox())
                 .addValue("originCountry", item.originCountry())
                 .addValue("leadTimeMinDays", item.leadTimeMinDays())
@@ -201,8 +177,8 @@ public class PricingRequestRepository {
                 // (null unless originCountry = "อื่นๆ") — this repository does no normalization
                 // itself, matching every other derived/validated item field on this same batch.
                 .addValue("originCountryOther", item.originCountryOther())
-                // Slice 1 stock-line scaffolding (V194): persisted exactly as sent; no validation
-                // or routing here (persistence only, per this class's header Javadoc).
+                // Slice 1 stock-line scaffolding (V194): persisted exactly as sent; no validation or routing here (persistence
+                // only, per this class's header Javadoc).
                 .addValue("stockSource", item.stockSource())
                 // Terms Sales fixes on the line; already normalized by the service.
                 .addValue("requestedCurrency", item.requestedCurrency())
@@ -232,34 +208,9 @@ public class PricingRequestRepository {
             """, batch);
     }
 
-    /**
-     * Compare-and-set status transition. Returns the rowcount (0 or 1); the caller
-     * (service) must throw a 409 when it returns 0 rather than following up with a
-     * SELECT to build a nicer error message — that would reintroduce the race this
-     * WHERE status = :expected clause exists to close.
-     *
-     * <p><strong>Review remediation (COMMIT 5):</strong> {@code expected -> next} is now asserted
-     * against {@link PricingRequestStatus#canTransition} before the UPDATE runs — previously
-     * {@link PricingRequestStatus#ALLOWED} was decorative (nothing consulted it outside {@code
-     * cancel()}'s own pre-check), so {@code PricingCostingService.createDraft()} could freely move
-     * a {@code READY_FOR_CEO_REVIEW} request back to {@code COSTING_IN_PROGRESS} even though the
-     * canonical map only listed {@code SUPERSEDED} as reachable from there. This throws {@link
-     * IllegalStateException}, not an {@code ApiException} 409: an illegal {@code expected -> next}
-     * pair means the CALLING CODE asked for a transition the state machine does not recognise —
-     * a programming error to catch at the source, not a normal concurrent-user race (that case is
-     * what the {@code WHERE status = :expected} compare-and-set above already handles via a 0
-     * rowcount, which the service layer turns into a 409). This class's own Javadoc says
-     * persistence code should not carry workflow validation; this is the one deliberate exception,
-     * treated as a repository-level invariant guard (the state machine must be authoritative
-     * everywhere `transition` is called), not as business-rule validation belonging in the service.
-     *
-     * <p>The one intentional bypass of this assertion is {@link #cancelForDeadDeal} — used
-     * exclusively by {@code PricingRequestService#cancelOpenForTicket}'s dead-deal cascade, which
-     * must be able to cancel a request from ANY open status (including one, like {@code
-     * QUOTATION_ISSUED}, that a live user action may NOT cancel from — see the cancel cutoff in
-     * {@link PricingRequestStatus}) once the deal itself has gone terminal. Use that method, never
-     * this one, for that cascade.
-     */
+    /** Compare-and-set status transition. Returns the rowcount (0 or 1); the caller (service) must throw a 409 when
+     * it returns 0 rather than following up with a SELECT to build a nicer error message — that would reintroduce
+     * the race this WHERE status = :expected clause exists to close. */
     public int transition(long id, String expected, String next, Long assignImportId, Long cancelledBy) {
         if (!PricingRequestStatus.canTransition(expected, next)) {
             throw new IllegalStateException(
@@ -327,24 +278,9 @@ public class PricingRequestRepository {
                 .addValue("cancelledBy", cancelledBy));
     }
 
-    /**
-     * Full-replacement update of a DRAFT's editable fields (review-remediation
-     * plan, Fix 2). Used to COALESCE(:x, col) every scalar column, which meant
-     * a {@code null} in the request could never clear a field — there was no
-     * way for a client to express "remove the target price / required date /
-     * contact / note", only "leave it" or "overwrite it with a non-null
-     * value". Now that {@code PricingRequestCreateModal} (edit mode) submits
-     * the *entire* editable representation on every PUT, a {@code null} means
-     * exactly what it says: clear this field. {@code recipient_type} is
-     * NOT NULL in the DB, so {@link PricingRequestService#updateDraft} must
-     * validate it unconditionally before this method is ever called — a null
-     * here would otherwise surface as a raw constraint violation (500)
-     * instead of a 400. {@code items} keeps its own "provide to replace,
-     * omit to leave untouched" behavior (see the {@code rows == 1 &&
-     * request.items() != null} guard below) — unrelated to this change,
-     * since it was already a full delete+reinsert via {@link #replaceItems}
-     * whenever a list was supplied.
-     */
+    /** Full-replacement update of a DRAFT's editable fields (review-remediation plan, Fix 2). Now that
+     * PricingRequestCreateModal (edit mode) submits the *entire* editable representation on every PUT, a null
+     * means exactly what it says: clear this field. */
     public boolean updateDraft(long id, UpdatePricingRequestRequest request) {
         int rows = jdbc.update("""
             UPDATE sales.pricing_request
@@ -563,12 +499,9 @@ public class PricingRequestRepository {
                 .addValue("metadata", metadataJson));
     }
 
-    /**
-     * True if an event of {@code eventKind} tagged with {@code "dispatchId": <dispatchId>} in its
-     * {@code metadata} already exists for this pricing request. Used by {@code
-     * FactoryQuoteService.finalizeDispatch} as defense-in-depth against duplicating the
-     * factory-email-sent event/notification on a re-run — see that method's javadoc.
-     */
+    /** True if an event of eventKind tagged with "dispatchId": <dispatchId> in its metadata already exists for this
+     * pricing request. Used by FactoryQuoteService.finalizeDispatch as defense-in-depth against duplicating the
+     * factory-email-sent event/notification on a re-run — see that method's javadoc. */
     public boolean existsEventForDispatch(long pricingRequestId, String eventKind, long dispatchId) {
         Integer count = jdbc.queryForObject("""
             SELECT COUNT(*)
@@ -637,14 +570,9 @@ public class PricingRequestRepository {
             (rs, rowNum) -> mapItem(rs));
     }
 
-    /**
-     * V152 (V109 engine wiring): the CEO's per-item duty product_type override. {@code
-     * productType == null} clears the override (back to LandedCostCalculator's TILE default) —
-     * mirrors {@code PricingCostingRepository#applyOverride}/{@code clearOverride}'s own
-     * null-means-clear convention for the sibling cost override. Caller
-     * ({@code PricingDecisionService#overrideItemProductType}) validates the value against the
-     * CURRENT pricing_formula_config's duty rates before calling; this method trusts it.
-     */
+    /** V152 (V109 engine wiring): the CEO's per-item duty product_type override. productType == null clears the override
+     * (back to LandedCostCalculator's TILE default) — mirrors PricingCostingRepository#applyOverride/clearOverride's
+     * own null-means-clear convention for the sibling cost override. */
     public int updateItemProductTypeOverride(long pricingRequestItemId, String productType) {
         return jdbc.update("""
             UPDATE sales.pricing_request_item
@@ -922,14 +850,9 @@ public class PricingRequestRepository {
         if (activeDealsOnly) {
             sql.append(" AND t.lifecycle = 'ACTIVE' ");
         }
-        // A DRAFT is the owning rep's private scratchpad (see PricingRequestService's
-        // class Javadoc) — it must never surface in any list for anyone else, no
-        // matter what status/assignedImportId/createdByFilter/activeDealsOnly the
-        // caller passed. draftOversight is true only for ceo/sales_manager (managerial
-        // oversight); everyone else only sees a DRAFT row when they are its owner
-        // (t.created_by = draftOwnerId, which the service always sets to the caller's
-        // own id). This is independent of createdByFilter above, which only applies to
-        // the "sales" role and is a distinct concern (own-deals-only scoping).
+        // A DRAFT is the owning rep's private scratchpad (see PricingRequestService's class Javadoc) — it must never
+        // surface in any list for anyone else, no matter what status/assignedImportId/createdByFilter/activeDealsOnly
+        // the caller passed.
         sql.append(" AND (pr.status <> 'DRAFT' OR :draftOversight = TRUE OR t.created_by = :draftOwnerId OR t.keyed_by = :draftOwnerId) ");
         params.addValue("draftOversight", draftOversight);
         params.addValue("draftOwnerId", draftOwnerId);
@@ -991,22 +914,9 @@ public class PricingRequestRepository {
             """, Map.of("pricingRequestId", pricingRequestId));
     }
 
-    /**
-     * The REVISION cascade: a customer-change revision has just superseded this request, so its
-     * not-yet-answered factory quotes are tidied away. Sole caller is
-     * {@code PricingRequestService#createCustomerChangeRevision}.
-     *
-     * <p><strong>The narrow {@code ('DRAFT','REQUESTED')} predicate is load-bearing — do not widen
-     * it to match {@link #cancelOpenChildrenForDeadRequest}.</strong> When the revision's items are
-     * identical to this parent's, {@code FactoryQuoteCarryForward} copies the parent's quotes onto
-     * the child at submit time, and {@code FactoryQuoteRepository#copyReadyQuotesToRevision} reads
-     * them {@code WHERE status = 'READY_FOR_COSTING'}. Cancelling those here would leave the copy
-     * nothing to find, and because the shortcut deliberately FAILS OPEN (every "no" quietly falls
-     * back to the ordinary Import path) the damage would not surface as a failure — the feature
-     * would simply stop happening, and every revision would take an Import round-trip for prices
-     * nobody disputed. A quote the factory has already answered still means something to the
-     * revision; one it has not answered does not.
-     */
+    /** The REVISION cascade: a customer-change revision has just superseded this request, so its not-yet-answered
+     * factory quotes are tidied away. The narrow ('DRAFT','REQUESTED') predicate is load-bearing — do not widen it
+     * to match #cancelOpenChildrenForDeadRequest. */
     public void cancelOpenStep2Children(long pricingRequestId, String reason, long actorId) {
         MapSqlParameterSource params = new MapSqlParameterSource()
             .addValue("pricingRequestId", pricingRequestId)
@@ -1023,10 +933,9 @@ public class PricingRequestRepository {
              WHERE pricing_request_id = :pricingRequestId
                AND status IN ('DRAFT', 'REQUESTED')
             """, params);
-        // V141: stale/stale_reason are retired (dropped from sales.pricing_costing) along with
-        // Import's costing-draft step — see PricingRequestStatus / V141's own header. A costing
-        // reachable from here is CANCELLED outright, same as before, just without the two columns
-        // that no longer exist.
+        // V141: stale/stale_reason are retired (dropped from sales.pricing_costing) along with Import's costing-draft
+        // step — see PricingRequestStatus / V141's own header. A costing reachable from here is CANCELLED outright,
+        // same as before, just without the two columns that no longer exist.
         jdbc.update("""
             UPDATE sales.pricing_costing
                SET status = 'CANCELLED',
@@ -1199,13 +1108,8 @@ public class PricingRequestRepository {
                 .addValue("clientRequestId", clientRequestId));
     }
 
-    /**
-     * The ticket_item ids that legally belong to this ticket — used by the
-     * service layer to validate a pricing-request item's sourceTicketItemId
-     * before persisting (commit 3). Lives here rather than on TicketRepository
-     * because this repository's only consumer for the query is PricingRequest
-     * validation; no ticket workflow needs it.
-     */
+    /** The ticket_item ids that legally belong to this ticket — used by the service layer to validate a
+     * pricing-request item's sourceTicketItemId before persisting (commit 3). */
     public List<Long> findItemIdsForTicket(long ticketId) {
         return jdbc.query(
             "SELECT item_id FROM sales.ticket_item WHERE ticket_id = :ticketId",
@@ -1475,8 +1379,8 @@ public class PricingRequestRepository {
     }
 
     // V185 (direct-deal-form parity): pieces_input/pieces_per_box/pieces_before_wastage/
-    // pieces_after_wastage/boxes/lead_time_min_days/lead_time_max_days are all nullable INTEGER/
-    // SMALLINT columns — mirrors nullableLong's own pattern for the int-width equivalent.
+    // pieces_after_wastage/boxes/lead_time_min_days/lead_time_max_days are all nullable INTEGER/ SMALLINT columns
+    // — mirrors nullableLong's own pattern for the int-width equivalent.
     private Integer nullableInt(ResultSet rs, String column) throws SQLException {
         int value = rs.getInt(column);
         return rs.wasNull() ? null : value;

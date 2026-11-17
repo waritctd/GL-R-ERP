@@ -9,17 +9,9 @@ import java.util.Locale;
 import org.springframework.stereotype.Component;
 import th.co.glr.hr.config.AppProperties;
 
-/**
- * Builds the KBank K Cash Connect Plus payroll transfer file (product code <b>PCT</b>): a fixed-width
- * CP874 file with a 178-byte {@code H} header and one 487-byte {@code D} record per employee, uploaded
- * to move salaries into employees' KBank accounts.
- *
- * <p>Layout and byte offsets are taken from the KBank Excel Template V2.5.5 macro and verified against
- * a real GL&amp;R {@code PCTNew*.txt} file (see {@code KBankPctExporterGoldenTest}). Amounts are stored
- * as satang (baht×100) with no decimal point; dates are {@code YYMMDD}; text is space-padded right and
- * numbers zero-padded left — all measured in CP874 bytes. This class only <em>renders</em> the already
- * computed {@code net_amount}; it performs no payroll math.
- */
+/** Builds the KBank K Cash Connect Plus payroll transfer file (product code PCT): a fixed-width CP874 file with
+ * a 178-byte H header and one 487-byte D record per employee, uploaded to move salaries into employees' KBank
+ * accounts. */
 @Component
 public class KBankPctExporter {
     private static final int HEADER_WIDTH = 178;
@@ -27,22 +19,14 @@ public class KBankPctExporter {
     private static final DateTimeFormatter YYMMDD = DateTimeFormatter.ofPattern("yyMMdd", Locale.US);
     private static final DateTimeFormatter YYYYMMDD = DateTimeFormatter.ofPattern("yyyyMMdd", Locale.US);
 
-    /**
-     * @param rows          the period's payroll lines
-     * @param employer      employer/bank registration constants
-     * @param effectiveDate the transfer effective date HR picked (funds move on this day). The
-     *                      transaction date is set equal to it; the sample file's one-day gap between
-     *                      the two is cosmetic and not required by the bank.
-     */
+    /** Selects affected frontend tests, including readers outside the import graph. */
     public byte[] export(List<PayrollExportRow> rows, AppProperties.Employer employer, LocalDate effectiveDate) {
         return export(rows, employer, effectiveDate, effectiveDate);
     }
 
-    /**
-     * Full form with a distinct transaction (file/submission) date and effective (funds-move) date —
-     * the layout the real GL&amp;R file uses (txn 28th, effective 29th). Production calls the single-date
-     * overload above; the golden-file test uses this to reproduce the sample byte-for-byte.
-     */
+    /** Full form with a distinct transaction (file/submission) date and effective (funds-move) date — the layout
+     * the real GL&R file uses (txn 28th, effective 29th). Production calls the single-date overload above; the
+     * golden-file test uses this to reproduce the sample byte-for-byte. */
     public byte[] export(List<PayrollExportRow> rows, AppProperties.Employer employer,
                          LocalDate transactionDate, LocalDate effectiveDate) {
         String txnDate = transactionDate.format(YYMMDD);
@@ -121,10 +105,8 @@ public class KBankPctExporter {
             Cp874.rpad("", 30));                       // address 4
     }
 
-    /**
-     * Beneficiary reference (required, ≤16 chars, {@code [A-Za-z0-9-/_]}). GL&amp;R uses the employee's
-     * lowercased English first name; falls back to the employee code so the field is never empty.
-     */
+    /** Beneficiary reference (required, ≤16 chars, [A-Za-z0-9-/_]). GL&R uses the employee's lowercased English
+     * first name; falls back to the employee code so the field is never empty. */
     private String beneficiaryRef(PayrollExportRow row) {
         String base = row.firstNameEn() != null && !row.firstNameEn().isBlank()
             ? row.firstNameEn()

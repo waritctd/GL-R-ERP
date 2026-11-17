@@ -16,11 +16,9 @@ import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.dealquotation.EmployeeSignatureRepository.SignatureImage;
 
-/**
- * Quotation v2 (direct deal quotation, V165) — see {@link EmployeeSignatureService} for the
- * authz rule this controller only delegates to ({@code sessions.requireUser} + pass-through,
- * per this codebase's convention that every authz decision lives in the service).
- */
+/** Quotation v2 (direct deal quotation, V165) — see EmployeeSignatureService for the authz rule this controller
+ * only delegates to (sessions.requireUser + pass-through, per this codebase's convention that every authz
+ * decision lives in the service). */
 @RestController
 @RequestMapping("/api/employees/{id}/signature")
 public class EmployeeSignatureController {

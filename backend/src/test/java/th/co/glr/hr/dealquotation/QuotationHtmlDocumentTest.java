@@ -10,11 +10,9 @@ import th.co.glr.hr.ticket.QuotationRenderModel;
 import th.co.glr.hr.ticket.QuotationRenderModel.RenderItem;
 import th.co.glr.hr.ticket.QuotationRenderModel.Signatories;
 
-/**
- * Pure HTML assertions on {@link QuotationHtmlDocument#render(QuotationRenderModel)} — no
- * browser involved (that's {@code ChromiumPdfPrinterTest}, guarded on Chromium being present;
- * the pixel-level agreement with the LibreOffice render is {@code HtmlXlsFidelityTest}).
- */
+/** Pure HTML assertions on QuotationHtmlDocument#render(QuotationRenderModel) — no browser involved (that's
+ * ChromiumPdfPrinterTest, guarded on Chromium being present; the pixel-level agreement with the LibreOffice
+ * render is HtmlXlsFidelityTest). */
 class QuotationHtmlDocumentTest {
 
     private static final List<String> EIGHT_REMARKS = List.of(
@@ -23,8 +21,8 @@ class QuotationHtmlDocumentTest {
 
     @Test
     void rendersAllFourSignatureLabelsInOrder() {
-        // Owner ruling 2026-09-10: the template's own original four labels, matching
-        // QuotationRenderer's SIG_LABELS (the XLS path) exactly.
+        // Owner ruling 2026-09-10: the template's own original four labels, matching QuotationRenderer's SIG_LABELS
+        // (the XLS path) exactly.
         String html = QuotationHtmlDocument.render(baseModel(null, null, null, null, null));
         int printed = html.indexOf("ผู้พิมพ์");
         int checked = html.indexOf("พนักงานขาย");
@@ -113,17 +111,14 @@ class QuotationHtmlDocumentTest {
 
     @Test
     void logoAlwaysEmbeddedAsDataUri() {
-        // The template's own GL&R wordmark picture is a JPEG (TemplateMetricsDump dumps it as
-        // src/test/resources/static/brand/template/pic-0.jpeg for humans to look at), not the
-        // generic app-wide PNG brand asset; the renderer takes it from the live workbook
-        // (SheetPlan#readPictures), which is why it matches the XLS render exactly.
+        // The template's own GL&R wordmark picture is a JPEG, not the generic app-wide PNG brand asset; the renderer
+        // takes it from the live workbook, which is why it matches the XLS render exactly.
         String html = QuotationHtmlDocument.render(baseModel(null, null, null, null, null));
         assertThat(html).contains("class=\"p logo\" src=\"data:image/jpeg;base64,");
     }
 
-    /** Sales feedback Admin #6 (2026-10-06): the Thai form's ISO number prints. The HTML engine
-     * lays out the SAME filled workbook, so it must carry the number too — once, and never the
-     * English form's. */
+    /** Sales feedback Admin #6 (2026-10-06): the Thai form's ISO number prints. The HTML engine lays out the SAME
+     * filled workbook, so it must carry the number too — once, and never the English form's. */
     @Test
     void aThaiDocument_carriesItsIsoFormNumber_once() {
         String html = QuotationHtmlDocument.render(baseModel(null, null, null, null, null));
@@ -131,9 +126,9 @@ class QuotationHtmlDocumentTest {
         assertThat(html).doesNotContain("F-SM-008");
     }
 
-    /** "remove ฝ่าย field completely" (owner, 2026-10-06): baseModel carries the department
-     * "P003"; neither it nor a bare ฝ่าย label reaches the HTML. (A plain contains("ฝ่าย") would
-     * be wrong here — the signature label ผู้จัดการฝ่ายขาย legitimately contains the word.) */
+    /** "remove ฝ่าย field completely" (owner, 2026-10-06): baseModel carries the department "P003"; neither it nor
+     * a bare ฝ่าย label reaches the HTML. (A plain contains("ฝ่าย") would be wrong here — the signature label
+     * ผู้จัดการฝ่ายขาย legitimately contains the word.) */
     @Test
     void theDepartmentLine_isNotInTheHtml() {
         String html = QuotationHtmlDocument.render(baseModel(null, null, null, null, null));
@@ -145,9 +140,9 @@ class QuotationHtmlDocumentTest {
 
     @Test
     void letterheadRowsRepeatOnEveryPageOfAPaginatedDocument() {
-        // 30 three-line items paginate through the XLS path (repeating rows A1:I7, explicit
-        // no-split row breaks); the plan must put those seven rows at the top of every page
-        // after the first, and the HTML must carry one page box per plan page.
+        // 30 three-line items paginate through the XLS path (repeating rows A1:I7, explicit no-split row breaks); the
+        // plan must put those seven rows at the top of every page after the first, and the HTML must carry one page
+        // box per plan page.
         List<RenderItem> items = new java.util.ArrayList<>();
         for (int i = 1; i <= 30; i++) {
             items.add(new RenderItem("โซน " + i,

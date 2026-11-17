@@ -57,10 +57,9 @@ public record PayrollCalculation(
     BigDecimal variableTaxableIncome,
     BigDecimal regularWithholdingTax,
     BigDecimal variableWithholdingTax,
-    // Reported for the payslip and for the ภ.ง.ด.1 working papers: the annualised regular figure
-    // (ข้อ 2.1), the cumulative เงินพิเศษ (ข้อ 2.5), the tax on regular pay alone, and the ข้อ 2.5
-    // difference attributable to the เงินพิเศษ. projectedAnnualIncome == annualRegularIncome +
-    // annualVariableIncome and annualTax == regularAnnualTax + variableAnnualTax.
+    // Reported for the payslip and for the ภ.ง.ด.1 working papers: the annualised regular figure (ข้อ 2.1), the
+    // cumulative เงินพิเศษ (ข้อ 2.5), the tax on regular pay alone, and the ข้อ 2.5 difference attributable to the
+    // เงินพิเศษ.
     BigDecimal annualRegularIncome,
     BigDecimal annualVariableIncome,
     BigDecimal regularAnnualTax,
@@ -70,11 +69,9 @@ public record PayrollCalculation(
     // ข้อ 2.10 is a known gap (no production caller supplies it; the calculator uses 13 - month), so
     // nothing in production ever lands on 1 for that reason.
     int remainingPayPeriods,
-    // Withholding already remitted this tax year IN EXCESS of the year's assessed liability, as at
-    // this period. Normally zero. Non-zero means an earlier period over-withheld and payroll cannot
-    // give it back -- tax remitted to the RD is reclaimed by the employee on their ภ.ง.ด.91, not by a
-    // negative withholding. Reported so the condition is visible: withholdingTax on its own reads
-    // 0.00, which is indistinguishable from "nothing was due this period".
+    // Withholding already remitted this tax year IN EXCESS of the year's assessed liability, as at this period.
+    // Non-zero means an earlier period over-withheld and payroll cannot give it back -- tax remitted to the RD is
+    // reclaimed by the employee on their ภ.ง.ด.91, not by a negative withholding.
     BigDecimal excessWithheldToDate,
     // Dedicated one-off pay, both inside the ข้อ 2.5 variable limb.
     BigDecimal bonusPay,

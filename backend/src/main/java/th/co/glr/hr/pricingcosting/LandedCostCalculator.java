@@ -183,10 +183,7 @@ public class LandedCostCalculator {
             writeItems.addAll(costShipment(shipment, formulaConfig, calculatedAt, freightGapItemIds, tableFreightItemIds));
         }
 
-        // V156: an uncostable line contributes NOTHING to the costing total — it has no computed
-        // cost to contribute. The total therefore covers only the lines that could be costed, and
-        // is knowingly incomplete until the CEO supplies the missing ones; approve() is what
-        // refuses to let an incomplete costing become an approved price.
+        // V156: an uncostable line contributes NOTHING to the costing total — it has no computed cost to contribute.
         BigDecimal total = ZERO;
         for (PricingCostingWriteItem item : writeItems) {
             if (item.totalLandedCostThb() != null) {
@@ -196,13 +193,8 @@ public class LandedCostCalculator {
         return new CalculationResult(writeItems, money4(total), freightGapItemIds, tableFreightItemIds);
     }
 
-    /**
-     * Every problem collected during {@link #resolveSources} or the physicals-resolution pass in
-     * {@link #calculate}, as ONE 422 — never the first problem alone. A heading line then one
-     * bullet per problem (a {@link Set} so an identical message from more than one item, e.g. "no
-     * factory quote yet" affecting every item sourced from the same unresolved factory, collapses
-     * to a single bullet instead of repeating itself once per affected item).
-     */
+    /** Every problem collected during #resolveSources or the physicals-resolution pass in #calculate, as ONE 422 —
+     * never the first problem alone. */
     private ApiException aggregateProblems(Set<String> problems) {
         StringBuilder message = new StringBuilder("ไม่สามารถคำนวณต้นทุนได้ เนื่องจากพบปัญหาดังนี้:");
         for (String problem : problems) {
@@ -224,9 +216,9 @@ public class LandedCostCalculator {
         return catalog.findPricingKeys(priceIds);
     }
 
-    /** The catalog link a pricing-request item resolves through — the submit-time snapshot when
-     * one was taken, falling back to the live product id (see {@link #resolveThicknessMm}'s
-     * Javadoc for why both point at the same {@code price_catalog.product_prices.price_id}). */
+    /** The catalog link a pricing-request item resolves through — the submit-time snapshot when one was taken,
+     * falling back to the live product id (see #resolveThicknessMm's Javadoc for why both point at the same
+     * price_catalog.product_prices.price_id). */
     private Long catalogPriceId(PricingRequestItemDto requestItem) {
         return requestItem.catalogPriceId() != null ? requestItem.catalogPriceId() : requestItem.productId();
     }
@@ -251,17 +243,9 @@ public class LandedCostCalculator {
                 "ไม่พบ factory config สำหรับโรงงาน: " + factoryName));
         String shipmentLabel = "ใบเสนอราคาโรงงาน " + factoryName + " (" + quote.quoteCode() + ")";
 
-        // V156: an item whose catalogue row carries no freight-lookup key (thickness or origin
-        // country) cannot be costed at all. It is set ASIDE here rather than aborting the whole
-        // shipment, and is written below with NULL costs and a stated reason.
-        //
-        // Excluding it from BOTH the freight grouping and the clearance allocation is deliberate.
-        // It has no freight band to join, and letting it dilute the clearance denominator would
-        // push part of a real, already-incurred cost onto a line nobody can price — the cost would
-        // simply vanish from the quotation. The costable lines therefore absorb the entire
-        // clearance fee, which OVER-allocates to them. That is the safe direction: it over-costs
-        // rather than under-costs, and it is corrected the moment the CEO supplies the missing
-        // line's own cost and the costing is recalculated.
+        // V156: an item whose catalogue row carries no freight-lookup key (thickness or origin country) cannot be
+        // costed at all. It is set ASIDE here rather than aborting the whole shipment, and is written below with NULL
+        // costs and a stated reason.
         List<ItemPhysicals> items = new ArrayList<>();
         List<ItemPhysicals> uncostable = new ArrayList<>();
         // ไทย-สต็อก lines are costed domestically and kept OUT of everything below: not in the freight
@@ -293,9 +277,8 @@ public class LandedCostCalculator {
         items.stream().filter(i -> !plan.manual().contains(i))
             .forEach(i -> tableFreightItemIds.add(i.source().requestItem().id()));
         if (items.isEmpty()) {
-            // Every line in this shipment is uncostable — there is no freight band and no
-            // clearance denominator to compute at all. Emit the placeholders and stop, rather
-            // than dividing by a zero shipment quantity.
+            // Every line in this shipment is uncostable — there is no freight band and no clearance denominator to compute
+            // at all. Emit the placeholders and stop, rather than dividing by a zero shipment quantity.
             List<PricingCostingWriteItem> onlyUncostable = new ArrayList<>(domesticWrites);
             for (ItemPhysicals item : uncostable) {
                 onlyUncostable.add(uncostableWriteItem(item, formulaConfig));
@@ -369,11 +352,8 @@ public class LandedCostCalculator {
                 cifTotal, dutyAmountTotal, formulaConfig.costBuffer(), clearanceShareTotal);
             BigDecimal unitCostPerSqm = formulaEngine.unitCostPerSqm(totalLandedCostThb, item.qtySqm());
             BigDecimal landedCostPerUnitThb = money4(unitCostPerSqm.multiply(item.sqmPerPiece()));
-            // Re-derive the total from the ROUNDED per-piece figure (not unitCostPerSqm/qtySqm
-            // directly) so total_landed_cost_thb = landed_cost_per_unit_thb x
-            // normalized_quantity_pieces holds EXACTLY — the invariant
-            // PricingCostingRepository#mapItem's overrideStale/effective* derivations, and
-            // PricingDecisionService's frozenPerRequestedUnit computation, both rely on.
+            // Re-derive the total from the ROUNDED per-piece figure so total_landed_cost_thb = landed_cost_per_unit_thb x
+            // normalized_quantity_pieces holds EXACTLY.
             BigDecimal lineTotal = money4(landedCostPerUnitThb.multiply(item.qtyPieces()));
 
             // "Breakdown" columns (goods/freight/insurance/duty/cif/clearance) are stored PER
@@ -549,16 +529,9 @@ public class LandedCostCalculator {
             item.productType(), snapshot, null, null);
     }
 
-    /**
-     * A costing row for an item that cannot be costed (V156): every freight-dependent figure is
-     * NULL and {@code uncostableReason} says why, enforced as an XOR by
-     * {@code chk_pricing_costing_item_uncostable_xor}.
-     *
-     * <p>The non-freight facts are still recorded — goods cost, insurance, FX snapshot, quantities,
-     * the catalogue link. They are computable without a thickness, and keeping them means the CEO
-     * sees a real line with a real supplier price to judge the missing cost against, rather than an
-     * empty placeholder.
-     */
+    /** A costing row for an item that cannot be costed (V156): every freight-dependent figure is NULL and
+     * uncostableReason says why, enforced as an XOR by chk_pricing_costing_item_uncostable_xor. The non-freight
+     * facts are still recorded — goods cost, insurance, FX snapshot, quantities, the catalogue link. */
     private PricingCostingWriteItem uncostableWriteItem(ItemPhysicals item, PricingFormulaConfigDto formulaConfig) {
         return uncostableWriteItem(item, formulaConfig, uncostableReason(item), uncostableCode(item));
     }
@@ -951,15 +924,8 @@ public class LandedCostCalculator {
         return result;
     }
 
-    /**
-     * True when {@link #resolveSources} would succeed — the single definition of "ready to cost".
-     * {@code FactoryQuoteService.markReadyForCosting} calls this to decide whether the LAST
-     * outstanding factory quote just became ready (and therefore whether the pricing request
-     * should auto-advance to {@code READY_FOR_CEO_REVIEW}); {@link #calculate} 422s via the same
-     * {@link #resolveSources} check if it is ever called when this would return false. Sharing
-     * one predicate for both is deliberate — "we said ready" and "the calculator can run" must
-     * never be able to drift apart.
-     */
+    /** True when #resolveSources would succeed — the single definition of "ready to cost". Sharing one predicate
+     * for both is deliberate — "we said ready" and "the calculator can run" must never be able to drift apart. */
     public boolean isFullyResolvable(PricingRequestSummaryDto summary) {
         try {
             resolveSources(summary);
@@ -1031,11 +997,9 @@ public class LandedCostCalculator {
         return null;
     }
 
-    /**
-     * Converts a factory-quoted price (already in THB) to a per-PIECE THB figure, using
-     * whichever unit basis the QUOTE itself was expressed in — independent of the basis the
-     * requested quantity is expressed in (see {@link #quantityToPieces}).
-     */
+    /** Converts a factory-quoted price (already in THB) to a per-PIECE THB figure, using whichever unit basis the
+     * QUOTE itself was expressed in — independent of the basis the requested quantity is expressed in (see
+     * #quantityToPieces). */
     private BigDecimal pricePerPiece(BigDecimal rawThb, String quoteUnitBasis, BigDecimal sqmPerPiece,
                                      BigDecimal piecesPerBox, BigDecimal linearMPerUnit,
                                      PricingRequestItemDto requestItem) {
@@ -1050,11 +1014,9 @@ public class LandedCostCalculator {
         };
     }
 
-    /**
-     * Converts a requested quantity to a PIECE count, using whichever unit basis the REQUEST
-     * itself was expressed in ({@code sales.pricing_request_item.requested_unit_basis}, V68) —
-     * independent of the basis the factory's price was quoted in (see {@link #pricePerPiece}).
-     */
+    /** Converts a requested quantity to a PIECE count, using whichever unit basis the REQUEST itself was expressed
+     * in (sales.pricing_request_item.requested_unit_basis, V68) — independent of the basis the factory's price was
+     * quoted in (see #pricePerPiece). */
     private BigDecimal quantityToPieces(BigDecimal requestedQty, String requestedUnitBasis, BigDecimal sqmPerPiece,
                                         BigDecimal piecesPerBox, BigDecimal linearMPerUnit,
                                         PricingRequestItemDto requestItem) {
@@ -1077,12 +1039,8 @@ public class LandedCostCalculator {
         return value;
     }
 
-    /**
-     * Thai label for a physical conversion-factor field, alongside its own technical identifier
-     * so the message stays greppable back to the code/schema for an engineer while still reading
-     * naturally for the CEO. Falls back to the bare identifier for any factor name not in this
-     * map (defensive only — every caller today passes one of the three below).
-     */
+    /** Thai label for a physical conversion-factor field, alongside its own technical identifier so the message
+     * stays greppable back to the code/schema for an engineer while still reading naturally for the CEO. */
     private String factorLabelTh(String factorName) {
         return switch (factorName) {
             case "sqmPerUnit" -> "ตร.ม. ต่อหน่วย (sqmPerUnit)";
@@ -1127,14 +1085,8 @@ public class LandedCostCalculator {
         }
     }
 
-    /** Per-item resolution pass, before shipment-level F/S lookup/allocation — see
-     * {@link #costShipment}. {@code goodsCostPerPiece} and {@code goodsCostThb} (== C, the
-     * TOTAL for this item's full requested quantity) are both kept: the formula pipeline
-     * (C/i/F/T/S/TC/UC) runs in totals, but the stored "breakdown" columns report per-piece
-     * (see {@link #costShipment}'s own comment) — keeping the direct per-piece value here avoids
-     * re-deriving it by dividing the total back down, which would compound a second rounding.
-     * {@code originCountryCode} is the catalog-sourced ISO 3166-1 alpha-2 code (V151) — see
-     * {@link #resolveOriginCountryCode}. */
+    /** Per-item resolution pass, before shipment-level F/S lookup/allocation — see #costShipment. originCountryCode
+     * is the catalog-sourced ISO 3166-1 alpha-2 code (V151) — see #resolveOriginCountryCode. */
     private record ItemPhysicals(ResolvedSource source, BigDecimal sqmPerPiece, BigDecimal qtyPieces,
                                  BigDecimal qtySqm, BigDecimal goodsCostPerPiece, BigDecimal goodsCostThb,
                                  BigDecimal insuranceThb, BigDecimal thicknessMm, String originCountryCode,

@@ -16,15 +16,9 @@ import {
   LIVE_PRICING_REQUEST_BLOCK_MESSAGE,
 } from './quotationMeta.js';
 
-/**
- * One pricing route per deal (owner ruling 2026-09-30): does the deal `ticketId` hold a LIVE pricing
- * request (quotationMeta.hasLivePricingRequest — any status but CANCELLED / SUPERSEDED)? Reads the
- * deal's own requests through the existing api.pricingRequests.listForTicket (the same read the deal
- * page makes; ticket list rows carry no pricing-request info, and one deal's list is exact where the
- * rep-wide queue would be N rows to filter). Shared by DealPicker's notice and the editor's checklist
- * under one query key, so it is one request. retry:false — a role that cannot read pricing requests
- * (403) reads as "none known", and DealQuotationService#create's own 409 is the backstop.
- */
+/** One pricing route per deal (owner ruling 2026-09-30): does the deal `ticketId` hold a LIVE pricing request
+ * (quotationMeta.hasLivePricingRequest — any status but CANCELLED / SUPERSEDED)? Shared by DealPicker's notice
+ * and the editor's checklist under one query key, so it is one request. */
 export function useDealHasLivePricingRequest(ticketId, enabled = true) {
   const query = useQuery({
     queryKey: queryKeys.pricingRequestsByTicket(ticketId),
@@ -47,14 +41,14 @@ function matches(deal, needle) {
     .some((value) => value && String(value).toLowerCase().includes(needle));
 }
 
-/** One deal's identity, used by both the option rows and the picked chip so the two always read
- * the same: code (mono) · customer (bold) · project (muted), with the stage as a Thai badge. */
+/** One deal's identity, used by both the option rows and the picked chip so the two always read the same: code
+ * (mono) · customer (bold) · project (muted), with the stage as a Thai badge. */
 function DealIdentity({ deal }) {
   const stage = dealStageLabel(deal.salesStage);
   return (
     <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-      {/* Wraps (never collides) on a narrow phone: the badge drops under the code rather than
-          overlapping whatever sits beside this identity block. */}
+      {/* Wraps (never collides) on a narrow phone: the badge drops under the code rather than overlapping whatever
+       * sits beside this identity block. */}
       <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
         <code className="shrink-0 font-mono text-xs text-text-muted">{deal.code ?? `#${deal.id}`}</code>
         <StatusBadge tone={stage.tone}>{stage.label}</StatusBadge>
@@ -74,8 +68,9 @@ function DealIdentity({ deal }) {
  * api.tickets.list() already returns (server-scoped: a sales rep only ever receives their own
  * deals), narrowed here to the ACTIVE deals this user may start a quotation on
  * (canCreateDealQuotation — the same gate the editor itself uses) and filtered client-side on
- * code · customer · project. No per-keystroke request: the list is already in memory, and shares
- * its cache entry (queryKeys.ticketList('')) with every overview that reads the same list.
+ * code · customer · project. No per-keystroke request: the list is already in memory. Its cache entry
+ * (queryKeys.ticketList('')) is shared with the other plain-list readers, but NOT with the sales /
+ * sales_manager / ceo list and overviews, which read the range-keyed list (queryKeys.ticketListByRange).
  *
  * Picking a deal sets `?ticket=<id>` and nothing else — the editor's EXISTING ?ticket= path takes
  * over from there (deal summary, customer record, recipient preselect), so there is no second code
@@ -181,11 +176,11 @@ export function DealPicker({
   if (selected) {
     return (
       <div className="grid gap-2">
-        <span className="text-sm font-bold text-text-secondary">ดีล</span>
+        <span className="text-sm font-bold text-text-secondary">งาน</span>
         <div className="flex items-center gap-3 rounded-md border border-border-muted bg-surface-muted px-3 py-2">
           <DealIdentity deal={selected} />
           <Button variant="text" className="shrink-0 px-1 text-sm mobile:min-h-[44px]" onClick={clearPick}>
-            เปลี่ยนดีล
+            เปลี่ยนงาน
           </Button>
         </div>
         {live ? (
@@ -198,12 +193,12 @@ export function DealPicker({
             <div className="flex min-w-0 flex-1 flex-col gap-2">
               <div className="flex flex-col gap-0.5">
                 <strong className="break-words">
-                  {`ดีลนี้มีใบเสนอราคาที่ใช้งานอยู่ — ${live.number} · ${dealQuotationStatusLabel(live.docStatus).label}`}
+                  {`งานนี้มีใบเสนอราคาที่ใช้งานอยู่ — ${live.number} · ${dealQuotationStatusLabel(live.docStatus).label}`}
                 </strong>
                 <span className="text-xs">
                   {live.docStatus === 'APPROVED'
-                    ? 'สร้างใบเสนอราคาใหม่บนดีลนี้ไม่ได้ — สร้างฉบับแก้ไขจากฉบับที่อนุมัติแล้วแทน เลขที่จะต่อจากเดิม'
-                    : 'สร้างใบเสนอราคาใหม่บนดีลนี้ไม่ได้ — แก้ไขฉบับนั้นแทน'}
+                    ? 'สร้างใบเสนอราคาใหม่บนงานนี้ไม่ได้ — สร้างฉบับแก้ไขจากฉบับที่อนุมัติแล้วแทน เลขที่จะต่อจากเดิม'
+                    : 'สร้างใบเสนอราคาใหม่บนงานนี้ไม่ได้ — แก้ไขฉบับนั้นแทน'}
                 </span>
               </div>
               <div className="flex flex-wrap gap-2">
@@ -226,9 +221,9 @@ export function DealPicker({
           </div>
         ) : null}
         {livePricingRequest ? (
-          // One pricing route per deal (owner ruling 2026-09-30) — the same inline-notice pattern as
-          // the live direct quotation above: never a modal (DESIGN.md §16), and the editor disables
-          // บันทึกร่าง with this exact sentence (DESIGN.md §14).
+          // One pricing route per deal (owner ruling 2026-09-30) — the same inline-notice pattern as the live direct
+          // quotation above: never a modal (DESIGN.md §16), and the editor disables บันทึกร่าง with this exact sentence
+          // (DESIGN.md §14).
           <div
             role="status"
             data-testid="deal-picker-live-pricing-request"
@@ -247,13 +242,13 @@ export function DealPicker({
   return (
     <div className="relative">
       <FormField
-        label="ดีล"
+        label="งาน"
         htmlFor="deal-picker"
         required
         error={error}
-        // A list this role cannot read (e.g. a quotation grant-holder with no deal pipeline access)
-        // is said up front, beside the field, with the way round it — not discovered on focus.
-        hint={dealsQuery.isError ? 'โหลดรายการดีลไม่ได้ — เลือก “สร้างดีลใหม่” แทน' : undefined}
+        // A list this role cannot read (e.g. a quotation grant-holder with no deal pipeline access) is said up front,
+        // beside the field, with the way round it — not discovered on focus.
+        hint={dealsQuery.isError ? 'โหลดรายการงานไม่ได้ — เลือก “สร้างงานใหม่” แทน' : undefined}
       >
         <input
           id="deal-picker"
@@ -263,7 +258,7 @@ export function DealPicker({
           aria-controls={LIST_ID}
           aria-autocomplete="list"
           aria-activedescendant={activeOption ? optionId(activeOption) : undefined}
-          placeholder="ค้นหา รหัสดีล / ลูกค้า / โครงการ…"
+          placeholder="ค้นหา เลขที่งาน / ลูกค้า / โครงการ…"
           value={search}
           onChange={(event) => { setSearch(event.target.value); setActiveIndex(-1); setOpen(true); }}
           onFocus={() => setOpen(true)}
@@ -275,30 +270,29 @@ export function DealPicker({
         <ul
           id={LIST_ID}
           role="listbox"
-          aria-label="ผลการค้นหาดีล"
-          // Same popup voice as the ลูกค้า/โครงการ typeaheads beside it. `max-h` in viewport units so
-          // the list never runs off a short phone screen; `w-full` of the field keeps it inside the
-          // 16px page gutter at 320px.
+          aria-label="ผลการค้นหางาน"
+          // Same popup voice as the ลูกค้า/โครงการ typeaheads beside it. `max-h` in viewport units so the list never
+          // runs off a short phone screen; `w-full` of the field keeps it inside the 16px page gutter at 320px.
           className="absolute z-10 mt-1 max-h-[min(20rem,60vh)] w-full list-none overflow-auto rounded-md border border-border bg-surface pl-0 shadow-[var(--shadow-lg-heavy)]"
         >
           {dealsQuery.isLoading ? (
             <li role="presentation" className="px-3 py-2 text-xs text-text-muted">กำลังโหลด…</li>
           ) : dealsQuery.isError ? null : eligible.length === 0 ? (
-            <li role="presentation" className="px-3 py-2 text-xs text-text-muted">ยังไม่มีดีลที่สร้างใบเสนอราคาได้ — เลือก “สร้างดีลใหม่” แทน</li>
+            <li role="presentation" className="px-3 py-2 text-xs text-text-muted">ยังไม่มีงานที่สร้างใบเสนอราคาได้ — เลือก “สร้างงานใหม่” แทน</li>
           ) : filtered.length === 0 ? (
-            <li role="presentation" className="px-3 py-2 text-xs text-text-muted">ไม่พบดีลที่ตรงกับคำค้น</li>
+            <li role="presentation" className="px-3 py-2 text-xs text-text-muted">ไม่พบงานที่ตรงกับคำค้น</li>
           ) : null}
           {filtered.map((deal, index) => (
-            // The OPTION is the button, not the <li> — same reasoning as DealCustomerCard's own
-            // listboxes: a listbox child must be an option, never a wrapper around a control.
+            // The OPTION is the button, not the — same reasoning as DealCustomerCard's own listboxes: a listbox child must
+            // be an option, never a wrapper around a control.
             <li key={deal.id} role="presentation" className="border-b border-border-subtle last:border-b-0">
               <button
                 type="button"
                 id={optionId(deal)}
                 role="option"
                 aria-selected={index === activeIndex}
-                // Explicit flat row (surface, no border, no radius): a bare <button> otherwise picks
-                // up the legacy global button chrome, which drew every option as a grey card.
+                // Explicit flat row (surface, no border, no radius): a bare <button> otherwise picks up the legacy global
+                // button chrome, which drew every option as a grey card.
                 className={cn(
                   'flex min-h-11 w-full items-start gap-2 rounded-none border-0 bg-surface px-3 py-2 text-left font-normal hover:bg-surface-hover',
                   index === activeIndex && 'bg-surface-hover',

@@ -20,12 +20,8 @@ import th.co.glr.hr.payroll.obligation.DeductionWrittenConsentDtos.DeductionWrit
 import th.co.glr.hr.payroll.obligation.DeductionWrittenConsentDtos.DeductionWrittenConsentUpsertRequest;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
-/**
- * Confirms written-consent authorization against the real service and the real SQL (issue #376) --
- * the gap Mockito-based unit tests ({@link DeductionWrittenConsentServiceTest}) cannot cover. Copy
- * of {@link DeductionObligationScopeIntegrationTest}'s shape, per CLAUDE.md's requirement that a
- * role-gate change ships a real-Postgres integration test, written wrong-way-round.
- */
+/** Confirms written-consent authorization against the real service and the real SQL (issue #376) -- the gap
+ * Mockito-based unit tests (DeductionWrittenConsentServiceTest) cannot cover. */
 class DeductionWrittenConsentScopeIntegrationTest extends AbstractPostgresIntegrationTest {
     private DeductionWrittenConsentRepository repository;
     private DeductionWrittenConsentService service;

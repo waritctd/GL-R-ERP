@@ -20,17 +20,8 @@ import th.co.glr.hr.common.ApiException;
 public class PriceCalcConfigController {
     private static final Set<String> CEO_ROLES = Set.of("ceo");
 
-    /**
-     * Read gate, issue #388. This configuration <em>is</em> the margin policy — {@code marginPct},
-     * {@code importDutyPct}, and every landed-cost component (freight/insurance/inland per sqm).
-     * The read previously gated on authentication alone, so any session could pull it and, with
-     * {@code /api/catalog/prices} and {@code /api/fx-rates}, reconstruct the whole cost→price model.
-     *
-     * <p>Scoped to {@code PricingCostingService.RAW_COSTING_ROLES} ({@code import}, {@code ceo}) —
-     * the audience already trusted with raw landed cost inside the pricing chain. {@code import}
-     * grants nothing it cannot already derive there; {@code sales} is deliberately excluded, since
-     * a rep works from the approved selling price and never the cost side. Writes stay CEO-only.
-     */
+    /** Read gate, issue #388. import grants nothing it cannot already derive there; sales is deliberately excluded,
+     * since a rep works from the approved selling price and never the cost side. Writes stay CEO-only. */
     private static final Set<String> READ_ROLES = Set.of("ceo", "import");
 
     private final PriceCalcConfigRepository priceConfigs;

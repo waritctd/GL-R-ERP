@@ -22,22 +22,9 @@ import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 import th.co.glr.hr.ticket.TicketRepository;
 
-/**
- * Defect fix (Opus review, 2026-07-29): {@link PayrollService#specialPayDtos} (consulted when a
- * period is PREVIEWED) and {@link PayrollRepository}'s private {@code specialPays(ResultSet)}
- * (consulted when a PROCESSED period is READ BACK from {@code hr.payroll_line}) each hardcode their
- * own copy of the พิเศษ slot -> Thai label mapping — the database stores only the nine numeric
- * amounts, never a label. When the 2026-07-29 workbook realignment (V95/V97, see {@code
- * PayrollService#specialPayDtos}'s javadoc) moved {@code PayrollService}'s labels to the new
- * numbering, {@code PayrollRepository}'s copy was left on the OLD numbering: an employee's payslip
- * PDF and every HR screen printed the wrong Thai label for every slot from 2 through 9 on any
- * ALREADY-PROCESSED period, while a fresh PREVIEW (which never round-trips through the database)
- * showed the correct label for the exact same money.
- *
- * <p>This test proves the two never drift apart again by comparing the labels a PREVIEW returns
- * against the labels the SAME period returns after being PROCESSED and read back — driven entirely
- * through the real {@link PayrollService} and {@link PayrollRepository}, per CLAUDE.md.
- */
+/** Defect fix: PayrollService#specialPayDtos and PayrollRepository's private specialPays each hardcode their
+ * own copy of the พิเศษ slot -> Thai label mapping — the database stores only the nine numeric amounts, never
+ * a label. */
 class PayrollSlotLabelAlignmentIntegrationTest extends AbstractPostgresIntegrationTest {
     private PayrollRepository payrollRepository;
     private PayrollService payrollService;
@@ -78,8 +65,8 @@ class PayrollSlotLabelAlignmentIntegrationTest extends AbstractPostgresIntegrati
         long employeeId = seedEmployee("LABEL-001", "ป้าย", "ทดสอบ", new BigDecimal("30000.00"));
         LocalDate month = LocalDate.of(2026, 4, 1);
 
-        // Amounts are irrelevant to this test (specialPayDtos/specialPays always emit all nine
-        // labels regardless of amount) -- zero is fine and needs no tax-treatment classification.
+        // Amounts are irrelevant to this test (specialPayDtos/specialPays always emit all nine labels regardless of
+        // amount) -- zero is fine and needs no tax-treatment classification.
         List<PayrollSpecialPayDto> previewLabels = onlyLine(
             payrollService.preview(new ProcessPayrollRequest(month, List.of()), hr()), employeeId)
             .specialPays();
@@ -104,8 +91,8 @@ class PayrollSlotLabelAlignmentIntegrationTest extends AbstractPostgresIntegrati
                 .isEqualTo(previewed.label());
         }
 
-        // Pin the actual accountant's-workbook labels, not just internal agreement, so a future
-        // edit that moves BOTH copies together in the same wrong direction still fails here.
+        // Pin the actual accountant's-workbook labels, not just internal agreement, so a future edit that moves BOTH
+        // copies together in the same wrong direction still fails here.
         assertThat(readBackLabels.get(0).label()).isEqualTo("พิเศษ 1 (ค่าครองชีพ)");
         assertThat(readBackLabels.get(1).label()).isEqualTo("พิเศษ 2 (ค่าเช่าบ้าน)");
         assertThat(readBackLabels.get(2).label()).isEqualTo("พิเศษ 3 (เบี้ยเลี้ยงประจำ)");

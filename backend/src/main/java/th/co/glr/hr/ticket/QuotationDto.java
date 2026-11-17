@@ -38,10 +38,9 @@ public record QuotationDto(
             null, null, null, null, null, null, null, null);
     }
 
-    // 21-arg overload used by the pricing-chain customer-quotation path
-    // (CustomerQuotationService), which carries recipient/terms/validity but not the three
-    // template remark fields (offerDate / depositPercent / deliveryLeadDays) — those are
-    // populated only by the ticket-level generate-quotation form, so they default to null here.
+    // 21-arg overload used by the pricing-chain customer-quotation path, which carries recipient/terms/validity
+    // but not the three template remark fields — those are populated only by the ticket-level generate-quotation
+    // form, so they default to null here.
     public QuotationDto(long id, long ticketId, String number, long issuedById, String issuedByName,
                         Instant issuedAt, String pdfPath, BigDecimal totalAmount, String currency,
                         int quotationVersion, String docStatus, String recipientType, String recipientLabel,

@@ -37,8 +37,8 @@ public class DepositNoticeController {
         return Map.of("templates", service.getNoteTemplates());
     }
 
-    // Revision request (moved verbatim from the retired document/ module — the deposit
-    // twin service method was already identical, previously unmapped)
+    // Revision request (moved verbatim from the retired document/ module — the deposit twin service method was
+    // already identical, previously unmapped)
     @PostMapping("/tickets/{ticketId}/revision")
     Map<String, Object> requestRevision(
         @PathVariable long ticketId,
@@ -132,12 +132,9 @@ public class DepositNoticeController {
             .body(bytes);
     }
 
-    // Remaining invoice: prefill + preview for the download dialog (ข้อ 13.5). Same viewer gate
-    // and status check as the /file download below (service enforces both) — this never throws
-    // for an over-capacity item list, only reports itemCount/maxItems, so the dialog can always
-    // render a preview alongside a capacity refusal instead of a failed round trip.
-    // `quotationId` is optional — see DepositNoticeService#getRemainingInvoiceOptions's own
-    // Javadoc: lets the dialog live-preview a specific qualifying quotation when several exist.
+    // Remaining invoice: prefill + preview for the download dialog (ข้อ 13.5). `quotationId` is optional — see
+    // DepositNoticeService#getRemainingInvoiceOptions's own Javadoc: lets the dialog live-preview a specific
+    // qualifying quotation when several exist.
     @GetMapping("/tickets/{ticketId}/remaining-invoice/options")
     Map<String, RemainingInvoiceOptionsDto> remainingInvoiceOptions(
         @PathVariable long ticketId,
@@ -148,12 +145,5 @@ public class DepositNoticeController {
         return Map.of("options", service.getRemainingInvoiceOptions(ticketId, quotationId, user));
     }
 
-    // The stateless GET /tickets/{ticketId}/remaining-invoice/file download route was REMOVED
-    // here (owner ruling O1, GLA-99 step 2 review-round-1, 2026-09-20): only an ISSUED/SUPERSEDED
-    // STORED remaining invoice is downloadable now, via RemainingInvoiceController's own
-    // GET /remaining-invoices/{id}/file, which renders the document's own frozen snapshot rather
-    // than recomputing it live on every call. /options above is UNCHANGED and stays — it is still
-    // how the create-flow dialog prefills a NEW draft before RemainingInvoiceController#createDraft
-    // stores it. requireReasonableLength/parseIssueDate/parseNoteIds, which existed only to parse
-    // this route's own query params, were removed with it.
+    // Remaining invoices download through RemainingInvoiceController from issued or superseded stored snapshots.
 }

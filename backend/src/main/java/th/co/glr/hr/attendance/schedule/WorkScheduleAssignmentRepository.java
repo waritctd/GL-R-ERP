@@ -16,22 +16,8 @@ import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
 import th.co.glr.hr.config.AppProperties;
 
-/**
- * Reads {@code hr.work_schedule} / {@code hr.work_schedule_day} / {@code hr.work_schedule_assignment}
- * (V115).
- *
- * <p>{@link #findAllAssignments()} loads the <strong>entire</strong> assignment table in one query
- * rather than resolving per employee-day. That table is a small, HR-edited configuration table
- * (one row per scope — a handful of divisions/departments plus occasional employee overrides), not
- * one that scales with attendance volume, so a full read is cheap and — critically — bounded,
- * unlike a query issued once per employee-day would be. {@link TieredWorkScheduleResolver} caches
- * the result for a bounded TTL rather than the lifetime of the bean — today's assignments are edited
- * only via a forward-only migration or direct SQL (there is deliberately no admin CRUD UI in this
- * branch), so a restart is not guaranteed after a change, and the TTL is what makes such a change
- * take effect on its own. See {@link TieredWorkScheduleResolver}'s class javadoc for the full design
- * (including {@link TieredWorkScheduleResolver#invalidate()}, the seam a future admin UI should use
- * for immediate effect).
- */
+/** Reads hr.work_schedule / hr.work_schedule_day / hr.work_schedule_assignment (V115). #findAllAssignments()
+ * loads the entire assignment table in one query rather than resolving per employee-day. */
 @Repository
 public class WorkScheduleAssignmentRepository {
 
@@ -43,22 +29,9 @@ public class WorkScheduleAssignmentRepository {
         this.zone = parseZone(properties.getAttendance().getSchedule().getZone());
     }
 
-    /**
-     * Every assignment row, joined to its schedule and that schedule's workdays, ordered
-     * <strong>most recent {@code effective_from} first, ties broken by {@code assignment_id}
-     * descending</strong> — this is part of this method's contract, not an incidental detail.
-     *
-     * <p>Nothing in the V115 schema stops two rows existing for the same
-     * {@code (scope_type, scope_id)} with overlapping effective ranges — there is deliberately no
-     * admin UI in this branch, so a corrected schedule is added by hand-written SQL, and closing
-     * out the previous row is a step a human can forget. {@link TieredWorkScheduleResolver}'s
-     * per-tier loop returns the <em>first</em> row that matches scope and covers the date, so
-     * without an explicit order here, an overlap's winner would depend on Postgres's physical row
-     * order — which can change after a {@code VACUUM} or a plan change, with no error and no signal
-     * that anything was wrong. The ordering below makes the newest {@code effective_from} win, and
-     * {@code assignment_id DESC} makes the most recently inserted row win a same-day tie — i.e.
-     * last-write-wins, deterministically, regardless of physical storage order.
-     */
+    /** Every assignment row, joined to its schedule and that schedule's workdays, ordered most recent
+     * effective_from first, ties broken by assignment_id descending — this is part of this method's contract, not
+     * an incidental detail. */
     public List<ScheduleAssignment> findAllAssignments() {
         List<ScheduleAssignment> assignments = new ArrayList<>();
         jdbc.query("""
@@ -91,13 +64,11 @@ public class WorkScheduleAssignmentRepository {
         return assignments;
     }
 
-    // ---------------------------------------------------------------------------------------
-    // Admin CRUD: catalogue read + assignment list/create/end. See WorkScheduleAssignmentAdminService
-    // for the validation/authorization/audit/cache-invalidation this layer deliberately does not do.
-    // ---------------------------------------------------------------------------------------
+    // Admin CRUD: catalogue read + assignment list/create/end. See WorkScheduleAssignmentAdminService for the
+    // validation/authorization/audit/cache-invalidation this layer deliberately does not do.
 
-    /** Every {@code hr.work_schedule} row, for a future admin UI's picker. Creating new schedules is
-     * out of scope for this branch — this is read-only. */
+    /** Every hr.work_schedule row, for a future admin UI's picker. Creating new schedules is out of scope for this
+     * branch — this is read-only. */
     public List<WorkScheduleSummaryDto> listSchedules() {
         List<WorkScheduleSummaryDto> result = new ArrayList<>();
         jdbc.query("""
@@ -124,9 +95,9 @@ public class WorkScheduleAssignmentRepository {
         return result;
     }
 
-    /** Every {@code hr.work_schedule_assignment} row, joined to its schedule's {@code code}, for the
-     * admin list view — unlike {@link #findAllAssignments()} this exposes {@code assignment_id} (so
-     * a caller can end a specific row) and is ordered for human reading, not resolver precedence. */
+    /** Every hr.work_schedule_assignment row, joined to its schedule's code, for the admin list view — unlike
+     * #findAllAssignments() this exposes assignment_id (so a caller can end a specific row) and is ordered for
+     * human reading, not resolver precedence. */
     public List<WorkScheduleAssignmentDto> listAssignments() {
         List<WorkScheduleAssignmentDto> result = new ArrayList<>();
         jdbc.query("""
@@ -150,8 +121,8 @@ public class WorkScheduleAssignmentRepository {
         return rows.stream().findFirst();
     }
 
-    /** Bare row (no schedule join), for {@link WorkScheduleAssignmentAdminService#end} to validate
-     * the target exists and read its current {@code effective_from}/{@code effective_to}. */
+    /** Bare row (no schedule join), for WorkScheduleAssignmentAdminService#end to validate the target exists and
+     * read its current effective_from/effective_to. */
     public Optional<AssignmentWindow> findWindowById(int assignmentId) {
         List<AssignmentWindow> rows = jdbc.query("""
             SELECT assignment_id, scope_type, scope_id, effective_from, effective_to
@@ -175,8 +146,8 @@ public class WorkScheduleAssignmentRepository {
         return Boolean.TRUE.equals(exists);
     }
 
-    /** {@code scopeType} comes from a closed Java enum (never string-concatenated), so branching the
-     * table/column name per scope is not an injection risk. */
+    /** scopeType comes from a closed Java enum (never string-concatenated), so branching the table/column name per
+     * scope is not an injection risk. */
     public boolean scopeExists(ScopeType scopeType, long scopeId) {
         String sql = switch (scopeType) {
             case EMPLOYEE -> "SELECT EXISTS(SELECT 1 FROM hr.employee WHERE employee_id = :id)";
@@ -187,15 +158,9 @@ public class WorkScheduleAssignmentRepository {
         return Boolean.TRUE.equals(exists);
     }
 
-    /**
-     * True when an assignment already exists for this scope starting on or after
-     * {@code newEffectiveFrom} that would still overlap the new window
-     * [{@code newEffectiveFrom}, {@code newEffectiveTo}] — i.e. a genuinely conflicting, separately
-     * planned future change. {@link WorkScheduleAssignmentAdminService#create} rejects the create
-     * when this is true rather than silently truncating someone else's already-planned assignment;
-     * see that method's javadoc for the full overlap policy (predecessors ARE auto-closed, successors
-     * are NOT).
-     */
+    /** True when an assignment already exists for this scope starting on or after newEffectiveFrom that would still
+     * overlap the new window [newEffectiveFrom, newEffectiveTo] — i.e. a genuinely conflicting, separately planned
+     * future change. */
     public boolean hasConflictingSuccessor(
             ScopeType scopeType, long scopeId, LocalDate newEffectiveFrom, LocalDate newEffectiveTo) {
         Boolean exists = jdbc.queryForObject("""
@@ -216,15 +181,9 @@ public class WorkScheduleAssignmentRepository {
         return Boolean.TRUE.equals(exists);
     }
 
-    /**
-     * Closes (sets {@code effective_to = newEffectiveFrom - 1}) every predecessor assignment for
-     * this scope that is still live at {@code newEffectiveFrom} — i.e. {@code effective_from <
-     * newEffectiveFrom} and ({@code effective_to IS NULL} or {@code effective_to >= newEffectiveFrom}).
-     * This is the "normalise" half of the overlap policy: a routine schedule change (assign a new
-     * schedule, the old one closes automatically) is exactly the step V115's own migration comments
-     * call out as one a human can forget to do by hand. Returns the closed {@code assignment_id}s for
-     * the audit trail.
-     */
+    /** Closes (sets effective_to = newEffectiveFrom - 1) every predecessor assignment for this scope that is still
+     * live at newEffectiveFrom — i.e. effective_from < newEffectiveFrom and (effective_to IS NULL or effective_to
+     * >= newEffectiveFrom). */
     public List<Integer> closeOverlappingPredecessors(ScopeType scopeType, long scopeId, LocalDate newEffectiveFrom) {
         return jdbc.query("""
             UPDATE hr.work_schedule_assignment
@@ -286,9 +245,9 @@ public class WorkScheduleAssignmentRepository {
         int assignmentId, ScopeType scopeType, long scopeId, LocalDate effectiveFrom, LocalDate effectiveTo
     ) {}
 
-    /** Same element-by-{@link Number} defensiveness as {@link #workdaysOf}, but returning the raw ISO
-     * day-of-week ints the catalogue DTO exposes rather than {@link DayOfWeek} — a future admin UI
-     * reads these directly, no {@code java.time} translation needed on either side. */
+    /** Same element-by-Number defensiveness as #workdaysOf, but returning the raw ISO day-of-week ints the
+     * catalogue DTO exposes rather than DayOfWeek — a future admin UI reads these directly, no java.time
+     * translation needed on either side. */
     private static List<Integer> workdaysAsIsoInts(Array sqlArray) {
         List<Integer> days = new ArrayList<>();
         if (sqlArray == null) {
@@ -307,12 +266,9 @@ public class WorkScheduleAssignmentRepository {
         return days;
     }
 
-    /**
-     * {@code day_of_week} is SMALLINT, so pgjdbc materialises {@code array_agg(...)} as
-     * {@code Short[]} — but read every element through {@link Number} rather than casting the array
-     * itself, so a driver returning {@code Integer[]} (as some do for other integer array widths)
-     * does not throw a {@link ClassCastException} here.
-     */
+    /** day_of_week is SMALLINT, so pgjdbc materialises array_agg(...) as Short[] — but read every element through
+     * Number rather than casting the array itself, so a driver returning Integer[] (as some do for other integer
+     * array widths) does not throw a ClassCastException here. */
     private static Set<DayOfWeek> workdaysOf(Array sqlArray) {
         Set<DayOfWeek> days = new LinkedHashSet<>();
         if (sqlArray == null) {

@@ -50,9 +50,9 @@ class FileStorageServiceTest {
             .isEqualTo(HttpStatus.BAD_REQUEST);
     }
 
-    // --- V134 storage-durability fix: explicit app.uploads-max-bytes cap, checked before any byte
-    // is read into memory (see FileStorageService's constructor javadoc for why this is separate
-    // from spring.servlet.multipart.max-file-size). -----------------------------------------------
+    // V134 storage-durability fix: explicit app.uploads-max-bytes cap, checked before any byte is read into memory
+    // (see FileStorageService's constructor javadoc for why this is separate from
+    // spring.servlet.multipart.max-file-size).
 
     @Test
     void storeRejectsAFileOverTheConfiguredCap() {
@@ -105,11 +105,9 @@ class FileStorageServiceTest {
 
     // ---- 2026-08-31: a storage failure must say it is a storage failure -----------------------
 
-    /**
-     * An uploads dir whose PARENT is a regular file: {@code Files.createDirectories} fails on it
-     * for every user, root included. Deliberately not a {@code chmod}-based fixture -- that one is
-     * satisfiable by privilege and would silently stop testing anything under a root container.
-     */
+    /** An uploads dir whose PARENT is a regular file: Files.createDirectories fails on it for every user, root
+     * included. Deliberately not a chmod-based fixture -- that one is satisfiable by privilege and would silently
+     * stop testing anything under a root container. */
     private Path uncreatableUploadsDir() throws IOException {
         Path blocker = uploadsDir.resolve("not-a-directory");
         Files.writeString(blocker, "x");
@@ -122,10 +120,9 @@ class FileStorageServiceTest {
         MockMultipartFile file = new MockMultipartFile(
             "file", "receipt.pdf", "application/pdf", "pdf".getBytes());
 
-        // Before this, the IOException escaped as an UncheckedIOException that no handler in
-        // ApiExceptionHandler claims, so the caller was told 500 "เกิดข้อผิดพลาดภายในระบบ" -- the
-        // same message every unhandled bug in the application produces. On production 2026-08-31
-        // that is exactly what every welfare evidence upload returned, and it pointed at nothing.
+        // Before this, the IOException escaped as an UncheckedIOException that no handler in ApiExceptionHandler
+        // claims, so the caller was told 500 "เกิดข้อผิดพลาดภายในระบบ" -- the same message every unhandled bug in the
+        // application produces.
         assertThatThrownBy(() -> service.store("special-money", 1L, file, BUSINESS_ATTACHMENT_MIME_TYPES))
             .isInstanceOf(ApiException.class)
             .hasMessageContaining("APP_UPLOADS_DIR")
@@ -133,12 +130,7 @@ class FileStorageServiceTest {
             .isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
     }
 
-    /**
-     * The mime and size gates must still answer BEFORE the storage gate. A caller who sent a .exe
-     * to a broken server has two problems, and the one they can act on is the file they chose --
-     * telling them the server's disk is misconfigured would send them to an administrator over
-     * something they can fix themselves in a second.
-     */
+    /** The mime and size gates must still answer BEFORE the storage gate. */
     @Test
     void aRejectedFileTypeStillReportsTheFileTypeEvenWhenStorageIsAlsoBroken() throws IOException {
         FileStorageService service = new FileStorageService(uncreatableUploadsDir().toString());

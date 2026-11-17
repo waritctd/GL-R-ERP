@@ -25,39 +25,13 @@ import th.co.glr.hr.payroll.declaration.loryor01.LorYor01FormData.LorYor01Addres
 import th.co.glr.hr.payroll.declaration.loryor01.LorYor01FormData.MaritalState;
 import th.co.glr.hr.payroll.declaration.loryor01.LorYor01FormData.SpousalStatus;
 
-/**
- * Guards the one promise this feature makes: the generated ล.ย.01 is the Revenue Department's own
- * document with the employee's data in it — not a replica, not a shifted copy, and not a page with
- * values in the wrong boxes.
- *
- * <p>Three checks carry the weight, because each catches a failure the others cannot see:
- *
- * <ol>
- *   <li>{@link #fillingTheFormDestroysNoneOfTheOfficialArtwork()} — no pixel of the template's own
- *       ink disappears. Catches a coordinate covering a printed label, or a rewritten template
- *       shifting the page.</li>
- *   <li>{@link #nothingIsPrintedOutsideASlotTheFormProvides()} — no pixel of <em>our</em> ink lands
- *       outside a real field or tick box. Catches text drawn at a wrong coordinate, which check 1
- *       would happily allow as long as it landed on blank paper.</li>
- *   <li>{@link #theFieldMappingIsExactlyThis()} — the right datum in the right named field. Catches
- *       a swap between two adjacent boxes, which both pixel checks would pass.</li>
- * </ol>
- *
- * <p>Deliberately NOT the primary check: reading values back with {@code PDFTextStripper}. The
- * template's dot-leaders interleave with field text, so {@code สมชาย} extracts as
- * {@code ส...ม....ช...า...ย} — fuzzy exactly where this needs to be exact.
- */
+/** Guards the one promise this feature makes: the generated ล.ย.01 is the Revenue Department's own document
+ * with the employee's data in it — not a replica, not a shifted copy, and not a page with values in the wrong
+ * boxes. */
 class LorYor01RendererTest {
 
-    /**
-     * sha256 of the file as downloaded from
-     * {@code https://www.rd.go.th/fileadmin/tax_pdf/withhold/loryor01_290362.pdf}.
-     *
-     * <p>Pinned because every coordinate and field name in {@link LorYor01Renderer} was measured
-     * against these exact bytes. If someone re-saves the template through a PDF editor — which
-     * silently renumbers fields and nudges widget rectangles — this fails first and explains why,
-     * instead of the output quietly drifting off the boxes.
-     */
+    /** sha256 of the file as downloaded from https://www.rd.go.th/fileadmin/tax_pdf/withhold/loryor01_290362.pdf.
+     * Pinned because every coordinate and field name in LorYor01Renderer was measured against these exact bytes. */
     private static final String TEMPLATE_SHA256 =
             "5bde6321f7f53a4cfdf07ca9ab2637f7b6718561a6bae4a738c92adea42e40ab";
 
@@ -86,11 +60,9 @@ class LorYor01RendererTest {
         }
     }
 
-    /**
-     * Pins the widget order inside each tick group, because the renderer selects a box by INDEX.
-     * An index is the cheapest possible way to get this silently wrong: swap two widgets and
-     * "โสด" quietly becomes "หม้าย" on a tax filing, with every other test still green.
-     */
+    /** Pins the widget order inside each tick group, because the renderer selects a box by INDEX. An index is the
+     * cheapest possible way to get this silently wrong: swap two widgets and "โสด" quietly becomes "หม้าย" on a
+     * tax filing, with every other test still green. */
     @Test
     void tickWidgetsAreInTheDocumentedPrintedOrder() throws Exception {
         try (PDDocument doc = Loader.loadPDF(LorYor01Renderer.templateBytes())) {
@@ -122,18 +94,9 @@ class LorYor01RendererTest {
         }
     }
 
-    /**
-     * Every digit of เลขประจำตัวผู้เสียภาษีอากร and รหัสไปรษณีย์ must sit inside its own printed box,
-     * touching no cell divider.
-     *
-     * <p>This is the guard for drawing the comb rows per-cell. It replaced an earlier approach that
-     * fed the AcroForm comb a space-padded string matching the field's own
-     * {@code AFSpecial_KeystrokeEx("9 9999 99999 99 9")} mask. That looked right in code and was
-     * wrong on paper: a comb divides the widget into cells of EQUAL width, while the printed tax-ID
-     * boxes run 1-4-5-2-1 with uneven gaps, so the digits drifted further off their boxes across the
-     * row. Nothing in the test suite noticed — it was caught by eye. Hence a check that measures the
-     * dividers themselves.
-     */
+    /** Every digit of เลขประจำตัวผู้เสียภาษีอากร and รหัสไปรษณีย์ must sit inside its own printed box, touching no
+     * cell divider. This is the guard for drawing the comb rows per-cell. Nothing in the test suite noticed — it
+     * was caught by eye. */
     @Test
     void everyCombDigitSitsInsideItsOwnPrintedBox() throws Exception {
         BufferedImage blank = rasterise(LorYor01Renderer.templateBytes());
@@ -220,36 +183,23 @@ class LorYor01RendererTest {
                 entry("Text1.1", "บริษัท ทดสอบ จำกัด"));
     }
 
-    /**
-     * สตางค์ are printed into the สตางค์ column, not tacked onto the บาท figure.
-     *
-     * <p>The amount box is two printed cells. Left as the template ships it, the field is
-     * right-aligned and overhangs the divider, so a browser prints "45,000.50" straddling the rule —
-     * the decimals land in the satang column but as part of the baht string, and the figure reads as
-     * though it has burst its box. Splitting them is what makes the two printed columns mean what
-     * they say.
-     */
+    /** สตางค์ are printed into the สตางค์ column, not tacked onto the บาท figure. The amount box is two printed
+     * cells. Splitting them is what makes the two printed columns mean what they say. */
     @Test
     void satangArePrintedSeparatelyFromBaht() {
         assertThat(LorYor01Renderer.satangOf(new BigDecimal("45000.50"))).isEqualTo("50");
         assertThat(LorYor01Renderer.satangOf(new BigDecimal("45000.05"))).isEqualTo("05");
-        // A whole-baht amount still shows "00": the box is a currency field, and a blank satang cell
-        // beside a filled baht cell reads as an unfinished form.
+        // A whole-baht amount still shows "00": the box is a currency field, and a blank satang cell beside a filled
+        // baht cell reads as an unfinished form.
         assertThat(LorYor01Renderer.satangOf(new BigDecimal("90000"))).isEqualTo("00");
         assertThat(LorYor01Renderer.satangOf(BigDecimal.ZERO)).isEqualTo("00");
         // No amount at all means no mark — a blank row stays blank.
         assertThat(LorYor01Renderer.satangOf(null)).isNull();
     }
 
-    /**
-     * No printed figure may straddle the บาท/สตางค์ rule.
-     *
-     * <p>This is the guard for {@code confineToBahtCell}. The mapping test only sees strings, and
-     * both whole-page pixel tests are satisfied by a figure lying across the divider — it destroys
-     * no artwork, and it stays inside the (overhanging) field rectangle the template declares. Only
-     * measuring the divider column itself catches it, which is precisely the defect that shipped in
-     * the first draft of this renderer and was spotted by eye, not by a test.
-     */
+    /** No printed figure may straddle the บาท/สตางค์ rule. The mapping test only sees strings, and both whole-page
+     * pixel tests are satisfied by a figure lying across the divider — it destroys no artwork, and it stays inside
+     * the (overhanging) field rectangle the template declares. */
     @Test
     void noFigureStraddlesTheBahtSatangRule() throws Exception {
         BufferedImage blank = rasterise(LorYor01Renderer.templateBytes());
@@ -268,14 +218,8 @@ class LorYor01RendererTest {
         assertThat(straddling).as("added ink sitting on the บาท/สตางค์ divider").isZero();
     }
 
-    /**
-     * THE structural test. Rasterises the blank template and a filled document at the same
-     * resolution and asserts no dark pixel survives only in the blank one.
-     *
-     * <p>Written this way round on purpose: "the filled page has more ink" is trivially true and
-     * proves nothing. "The filled page lost none of the original ink" catches a mis-measured
-     * coordinate covering a printed label, a flatten step dropping artwork, or a swapped template.
-     */
+    /** THE structural test. Rasterises the blank template and a filled document at the same resolution and asserts
+     * no dark pixel survives only in the blank one. */
     @Test
     void fillingTheFormDestroysNoneOfTheOfficialArtwork() throws Exception {
         BufferedImage blank = rasterise(LorYor01Renderer.templateBytes());
@@ -301,11 +245,9 @@ class LorYor01RendererTest {
         assertThat(added).as("filling must actually put data on the page").isGreaterThan(5_000);
     }
 
-    /**
-     * The complement of the check above, and the one that catches a wrong coordinate. Losing no
-     * artwork is easy if you print in the margin; this asserts every pixel we add lands inside a
-     * slot the template actually provides — a text field, a tick box, or the วัน/เดือน/ปี rule.
-     */
+    /** The complement of the check above, and the one that catches a wrong coordinate. Losing no artwork is easy if
+     * you print in the margin; this asserts every pixel we add lands inside a slot the template actually provides
+     * — a text field, a tick box, or the วัน/เดือน/ปี rule. */
     @Test
     void nothingIsPrintedOutsideASlotTheFormProvides() throws Exception {
         List<PDRectangle> slots = templateSlots();
@@ -329,12 +271,9 @@ class LorYor01RendererTest {
         assertThat(strays).as("ink printed outside every field, tick box and dated rule").isEmpty();
     }
 
-    /**
-     * ข้อ 4 and ข้อ 6 print "หักได้คนละ 30,000 บาท" and "รวมกันแล้วไม่เกิน 15,000 บาท" — wording that
-     * only works if บิดา and มารดา can both be ticked. The template wires each pair as a single radio
-     * group, which would allow only one; the renderer follows the printed form instead. This pins
-     * that: ticking มารดา as well must actually add a second mark.
-     */
+    /** ข้อ 4 and ข้อ 6 print "หักได้คนละ 30,000 บาท" and "รวมกันแล้วไม่เกิน 15,000 บาท" — wording that only works
+     * if บิดา and มารดา can both be ticked. The template wires each pair as a single radio group, which would
+     * allow only one; the renderer follows the printed form instead. */
     @Test
     void bothParentsCanBeTickedEvenThoughTheTemplateWiresThemAsRadios() throws Exception {
         int both = countInk(renderer.render(withOwnParentTicks(true, true)));
@@ -346,16 +285,9 @@ class LorYor01RendererTest {
                 .isGreaterThan(fatherOnly);
     }
 
-    /**
-     * The ล้างข้อมูล push button must never reach paper.
-     *
-     * <p>Its annotation flags are {@code 0}, so the Print bit is clear and a viewer omits it — which
-     * is exactly why this needs its own test. Both sides of the artwork comparison rasterise for
-     * PRINT and therefore agree the button is absent, so that check stays green whether or not the
-     * renderer removes it (confirmed by mutation). But {@code PDAcroForm.flatten()} does not consult
-     * the Print bit: leave the button in and its grey appearance is baked into the page content,
-     * where it prints like any other artwork. This asserts the region is blank in the output.
-     */
+    /** The ล้างข้อมูล push button must never reach paper. Its annotation flags are 0, so the Print bit is clear and
+     * a viewer omits it — which is exactly why this needs its own test. This asserts the region is blank in the
+     * output. */
     @Test
     void theClearDataButtonNeverAppearsOnAPrintedForm() throws Exception {
         PDRectangle button;
@@ -387,9 +319,9 @@ class LorYor01RendererTest {
         try (PDDocument doc = Loader.loadPDF(LorYor01Renderer.templateBytes())) {
             PDAcroForm form = doc.getDocumentCatalog().getAcroForm();
             for (PDField field : form.getFieldTree()) {
-                // Button1 (ล้างข้อมูล) is deliberately excluded: it is a slot the template offers
-                // but never a place a printed form may carry ink. Including it here would let a
-                // flattened clear-button slip past this check as "inside a slot".
+                // Button1 (ล้างข้อมูล) is deliberately excluded: it is a slot the template offers but never a place a printed
+                // form may carry ink. Including it here would let a flattened clear-button slip past this check as "inside a
+                // slot".
                 if ("Button1".equals(field.getFullyQualifiedName())) {
                     continue;
                 }
@@ -401,12 +333,9 @@ class LorYor01RendererTest {
         return slots;
     }
 
-    /**
-     * Thai renders marks above and below the base glyph, and auto-sized field text sits on the
-     * baseline rather than inside the widget box, so a couple of points of slop either way is
-     * normal typography — not a misplaced value. Anything genuinely in the wrong place misses its
-     * slot by tens of points.
-     */
+    /** Thai renders marks above and below the base glyph, and auto-sized field text sits on the baseline rather
+     * than inside the widget box, so a couple of points of slop either way is normal typography — not a misplaced
+     * value. Anything genuinely in the wrong place misses its slot by tens of points. */
     private static boolean contains(PDRectangle r, float x, float y) {
         float pad = 4f;
         return x >= r.getLowerLeftX() - pad && x <= r.getUpperRightX() + pad
@@ -417,15 +346,8 @@ class LorYor01RendererTest {
         return (rgb & 0xFF) < 128;
     }
 
-    /**
-     * Rasterises as a PRINTER would, not as a screen would.
-     *
-     * <p>{@link RenderDestination#PRINT} honours each annotation's Print flag. That matters for
-     * exactly one object: the template's ล้างข้อมูล push button has annotation flags {@code 0}, so no
-     * printed copy of this form has ever shown it — and the renderer removes it. Rendering for
-     * SCREEN would draw the button on the blank side of the comparison only, and report its
-     * deliberate removal as 857 pixels of destroyed artwork.
-     */
+    /** Rasterises as a PRINTER would, not as a screen would. Rendering for SCREEN would draw the button on the
+     * blank side of the comparison only, and report its deliberate removal as 857 pixels of destroyed artwork. */
     private static BufferedImage rasterise(byte[] pdf) throws IOException {
         try (PDDocument doc = Loader.loadPDF(pdf)) {
             return new PDFRenderer(doc).renderImage(0, PX_PER_PT, ImageType.RGB,

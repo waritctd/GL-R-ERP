@@ -8,21 +8,9 @@ import org.junit.jupiter.api.Test;
 import th.co.glr.hr.dealquotation.WastageCalculator.Input;
 import th.co.glr.hr.dealquotation.WastageCalculator.Result;
 
-/**
- * Quotation arithmetic reconciliation (2026-09-15) — pure unit test, no DB, driving
- * {@link WastageCalculator} directly against nine real, owner-supplied, declared-100%-correct
- * printed GL&amp;R quotations. Every printed net/amount/pieces figure and every document's
- * subtotal/VAT/total is asserted to the satang. See the reconciliation plan for the source
- * document tables (QN6900971-4, QN6900971 ใบสรุป, QN6900981-1, QN6900902-6, QN6900704-2,
- * QN6900933, QN6900648, QN6900782-2, QN6900595-3) and the derived rules R-A through R-H.
- *
- * <p>A PLAIN row (list price × qty × (1 − discount), no wastage, no box rounding) is driven
- * through {@link WastageCalculator#calculate} with {@code QUANTITY_MODE_PIECES},
- * {@code piecesInput = quantity}, {@code WASTAGE_MODE_NONE} and no {@code piecesPerBox} — that
- * combination makes {@code piecesFinal == quantity} exactly, so {@code calculate}'s R-D line
- * amount formula reproduces {@code DealQuotationService#buildPlainItem} exactly without needing a
- * Spring context.
- */
+/** Quotation arithmetic reconciliation (2026-09-15) — pure unit test, no DB, driving WastageCalculator directly
+ * against nine real, owner-supplied, declared-100%-correct printed GL&R quotations. Every printed
+ * net/amount/pieces figure and every document's subtotal/VAT/total is asserted to the satang. */
 class QuotationGoldenDocumentsTest {
 
     private static Result plainRow(BigDecimal listPrice, int qty, BigDecimal discountPct) {
@@ -46,9 +34,8 @@ class QuotationGoldenDocumentsTest {
             new Row(new BigDecimal("35433.64"), 2, "28346.91", "56693.82"),
             new Row(new BigDecimal("45581.31"), 2, "36465.05", "72930.10"),
             new Row(new BigDecimal("36764.49"), 2, "29411.59", "58823.18"),
-            // Bold rows in the plan: prove amount = round2(list × qty × (1 − pct/100)), NOT
-            // round2(round2(net) × qty) — that double-rounded formula gives 35,799.64 /
-            // 16,502.44 / 11,445.24 / 16,502.44 / 11,445.24 here instead.
+            // Bold rows in the plan: prove amount = round2(list × qty × (1 − pct/100)), NOT round2(round2(net) × qty) —
+            // that double-rounded formula gives 35,799.64 / 16,502.44 / 11,445.24 / 16,502.44 / 11,445.24 here instead.
             new Row(new BigDecimal("22374.77"), 2, "17899.82", "35799.63"),
             new Row(new BigDecimal("10314.02"), 2, "8251.22", "16502.43"),
             new Row(new BigDecimal("7153.27"), 2, "5722.62", "11445.23"),
@@ -79,8 +66,8 @@ class QuotationGoldenDocumentsTest {
             plainRow(new BigDecimal("93225.42"), 1, BigDecimal.ZERO).lineAmount(),
             plainRow(new BigDecimal("93225.42"), 1, BigDecimal.ZERO).lineAmount(),
             plainRow(new BigDecimal("140337.19"), 1, BigDecimal.ZERO).lineAmount(),
-            // The summary document's own fifth line IS D1's document total — an intentional
-            // real-world coincidence in the owner's data, not a test artifact.
+            // The summary document's own fifth line IS D1's document total — an intentional real-world coincidence in the
+            // owner's data, not a test artifact.
             plainRow(new BigDecimal("373367.47"), 1, BigDecimal.ZERO).lineAmount());
 
         BigDecimal subtotal = WastageCalculator.subtotal(amounts);
@@ -90,8 +77,8 @@ class QuotationGoldenDocumentsTest {
         assertThat(WastageCalculator.grandTotal(subtotal, vat)).isEqualByComparingTo("848917.58");
     }
 
-    // ── D3 — QN6900981-1 (TH, TILE, AREA mode, SPECIAL_SQM 790 บาท/ตร.ม., 60x120 → 0.72, ────────
-    // ── 2 pcs/box, no wastage) ───────────────────────────────────────────────────────────────
+    // D3 — QN6900981-1 (TH, TILE, AREA mode, SPECIAL_SQM 790 บาท/ตร.ม., 60x120 → 0.72, ──────── ── 2 pcs/box, no
+    // wastage)
 
     @Test
     void D3_QN6900981_1_areaModeSpecialSqm_everyRowAndTotal() {
@@ -316,9 +303,9 @@ class QuotationGoldenDocumentsTest {
         assertThat(WastageCalculator.grandTotal(subtotal, vat)).isEqualByComparingTo("64649.40");
     }
 
-    // ── D9 — QN6900595-3 (the spec's own recorded reference; R-B/R-C evidence, no VAT/total ────
-    // ── figures were recorded for this one — see WastageCalculatorTest for the same pieces ─────
-    // ── figures pinned with full Javadoc on the rounding order) ─────────────────────────────────
+    // D9 — QN6900595-3 (the spec's own recorded reference; R-B/R-C evidence, no VAT/total ──── ── figures were
+    // recorded for this one — see WastageCalculatorTest for the same pieces ───── ── figures pinned with full
+    // Javadoc on the rounding order)
 
     @Test
     void D9_QN6900595_3_areaModePercentWastage_piecesOnly() {
@@ -337,12 +324,7 @@ class QuotationGoldenDocumentsTest {
             new BigDecimal("100"), null));
         assertThat(item3.piecesFinal()).isEqualTo(268);
 
-        // item5: 124 ตร.ม., sqmPerPiece 0.36, +10% wastage, 4/box → printed 380. The intermediate
-        // 124 × 2.78 = 344.72 → HALF_UP 345, then 345 × 1.10 = 379.5 → HALF_UP 380 (already an
-        // even multiple of 4, so box-rounding is a no-op) — asserted explicitly because 345 → 380
-        // happens to come out the same under CEILING too (379.5 ceils to 380 as well), so this
-        // line alone does not discriminate R-C; it is regression coverage, not R-C's evidence
-        // (that is QN6900595-3 item1 alone — see WastageCalculator's class Javadoc).
+        // item5: 124 ตร.ม., sqmPerPiece 0.36, +10% wastage, 4/box → printed 380.
         Result item5 = WastageCalculator.calculate(new Input(
             new BigDecimal("0.36"), WastageCalculator.QUANTITY_MODE_AREA, new BigDecimal("124"), null,
             WastageCalculator.WASTAGE_MODE_PERCENT, new BigDecimal("10"), 4,

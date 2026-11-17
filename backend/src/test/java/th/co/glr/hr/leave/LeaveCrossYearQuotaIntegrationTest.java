@@ -37,8 +37,8 @@ import static org.mockito.Mockito.mock;
  */
 class LeaveCrossYearQuotaIntegrationTest extends AbstractPostgresIntegrationTest {
     private static final ZoneId BUSINESS_ZONE = ZoneId.of("Asia/Bangkok");
-    // Wednesday 2026-07-01 09:00 Asia/Bangkok -- every leave date used below is comfortably past
-    // every seeded advance-notice value (VACATION=3, MATERNITY=0).
+    // Wednesday 2026-07-01 09:00 Asia/Bangkok -- every leave date used below is comfortably past every seeded
+    // advance-notice value (VACATION=3, MATERNITY=0).
     private static final Instant FIXED_NOW = Instant.parse("2026-07-01T02:00:00Z");
 
     private LeaveRepository leaveRepository;
@@ -59,8 +59,8 @@ class LeaveCrossYearQuotaIntegrationTest extends AbstractPostgresIntegrationTest
 
     @Test
     void aRequestSpanningThirtyFirstDecemberToFirstJanuaryConsumesBothYearsQuotasInTheRightProportion() {
-        // Thu 2026-12-31 (working day) .. Fri 2027-01-01 (working day, no holiday calendar in v1): 1
-        // day in each year, both years fresh (6-day VACATION quota) -- entirely paid on both sides.
+        // Thu 2026-12-31 (working day) .. Fri 2027-01-01 (working day, no holiday calendar in v1): 1 day in each year,
+        // both years fresh (6-day VACATION quota) -- entirely paid on both sides.
         long employeeId = insertEmployee("BOUNDARY-001");
 
         LeaveRequestDto result = leaveService.submit(
@@ -89,10 +89,9 @@ class LeaveCrossYearQuotaIntegrationTest extends AbstractPostgresIntegrationTest
 
     @Test
     void aCrossYearRequestSplitsPaidAndUnpaidCorrectlyWhenTheLaterYearsQuotaIsAlreadyExhausted() {
-        // Wrong-way-round-flavoured complement to the boundary test above: year 2026 has quota left,
-        // year 2027 has NONE (already fully consumed by an earlier, unrelated single-year request) --
-        // proves the per-year split reads each year's OWN remaining quota independently, not a single
-        // shared figure.
+        // Wrong-way-round-flavoured complement to the boundary test above: year 2026 has quota left, year 2027 has
+        // NONE (already fully consumed by an earlier, unrelated single-year request) -- proves the per-year split
+        // reads each year's OWN remaining quota independently, not a single shared figure.
         long employeeId = insertEmployee("EXHAUSTED-001");
 
         LeaveRequestDto priorRequest = leaveService.submit(
@@ -101,9 +100,9 @@ class LeaveCrossYearQuotaIntegrationTest extends AbstractPostgresIntegrationTest
         assertThat(priorRequest.status()).isEqualTo("SUBMITTED");
         assertThat(priorRequest.paidDays()).isEqualByComparingTo("6.00");
 
-        // Mon 2026-12-28 .. Fri 2027-01-01: working days 12/28, 12/29, 12/30, 12/31 (4, all 2026),
-        // then 1/1 (1, 2027) -- 5 total. 2026 has its full 6-day quota available -> all 4 of its days
-        // paid. 2027 has 0 remaining (consumed above) -> its 1 day is entirely unpaid.
+        // Mon 2026-12-28 .. Fri 2027-01-01: working days 12/28, 12/29, 12/30, 12/31 (4, all 2026), then 1/1 (1, 2027)
+        // -- 5 total. 2026 has its full 6-day quota available -> all 4 of its days paid. 2027 has 0 remaining
+        // (consumed above) -> its 1 day is entirely unpaid.
         LeaveRequestDto result = leaveService.submit(
             submitRequest(employeeId, "VACATION", "2026-12-28", "2027-01-01"),
             employee(employeeId));
@@ -159,10 +158,8 @@ class LeaveCrossYearQuotaIntegrationTest extends AbstractPostgresIntegrationTest
         assertThat(splits.get(1).paidDays()).isEqualByComparingTo("6.00");
         assertThat(splits.get(1).unpaidDays()).isEqualByComparingTo("0.00");
 
-        // Parent quota_remaining_before/after reflect ONLY the start year (2026) -- see
-        // hr.leave_request's V118 column comments. 2026's own 98-day quota had all 92 requested days
-        // consumed from it (paid_days_cap bounds PAYMENT, not quota consumption) -> 98 - 92 = 6
-        // remaining, NOT a number derived from the 2027 figures at all.
+        // Parent quota_remaining_before/after reflect ONLY the start year (2026) -- see hr.leave_request's V118 column
+        // comments.
         assertThat(result.quotaRemainingAfter()).isEqualByComparingTo("6.00");
     }
 
@@ -196,8 +193,8 @@ class LeaveCrossYearQuotaIntegrationTest extends AbstractPostgresIntegrationTest
         Map<Long, BigDecimal> januaryDeduction =
             leaveRepository.findUnpaidLeaveDaysByEmployeeForMonth(LocalDate.parse("2027-01-01"));
 
-        // 16.00 (Nov 15-30) includes two full weekends inside it -- weekend days a WORKING_DAYS
-        // reading would have excluded from the deduction entirely.
+        // 16.00 (Nov 15-30) includes two full weekends inside it -- weekend days a WORKING_DAYS reading would have
+        // excluded from the deduction entirely.
         assertThat(novemberDeduction).containsEntry(employeeId, new BigDecimal("16.00"));
         assertThat(decemberDeduction).containsEntry(employeeId, new BigDecimal("31.00"));
         // 2027's 6 days were all paid (fresh cap) -- nothing unpaid, nothing to deduct.
@@ -242,10 +239,7 @@ class LeaveCrossYearQuotaIntegrationTest extends AbstractPostgresIntegrationTest
 
     @Test
     void cancellingACrossYearLeaveAfterOnlyDecemberPayrollIsProcessedRefundsOnlyDecember() {
-        // Same fixture and reasoning as the test above, now through LeaveService#cancel's
-        // cancel-after-close reversal. Only December 2026 payroll has been PROCESSED -- the
-        // correction must land there (3.00 days), and NOT in January (nothing was ever deducted there
-        // under the correct per-year model, so there is nothing to refund).
+        // Same fixture and reasoning as the test above, now through LeaveService#cancel's cancel-after-close reversal.
         long employeeId = insertEmployee("CANCEL-CROSSYEAR-001");
         LeaveRequestDto approved = leaveService.submit(
             submitRequest(employeeId, "VACATION", "2026-12-21", "2027-01-05"),
@@ -309,12 +303,8 @@ class LeaveCrossYearQuotaIntegrationTest extends AbstractPostgresIntegrationTest
 
     @Test
     void backfillSqlReproducesTheParentRowsFiguresExactlyForALegacySingleYearRow() {
-        // V118 backfill correctness: this is V118__leave_request_quota_year_split.sql's own
-        // backfill INSERT-SELECT, copied here verbatim, run against a "legacy" row -- one inserted
-        // directly (mirroring every hr.leave_request row that predates this migration, none of which
-        // were ever written through LeaveService#submit's new insertQuotaYearSplits path). No
-        // historical request's meaning should change: the resulting child row must carry EXACTLY the
-        // parent's own total_days/paid_days/unpaid_days/quota_year/quota_remaining_before/after.
+        // V118 backfill correctness: this is V118__leave_request_quota_year_split.sql's own backfill INSERT-SELECT,
+        // copied here verbatim, run against a "legacy" row -- one inserted directly.
         long employeeId = insertEmployee("BACKFILL-001");
         long leaveRequestId = jdbc.queryForObject("""
             INSERT INTO hr.leave_request (
@@ -328,8 +318,8 @@ class LeaveCrossYearQuotaIntegrationTest extends AbstractPostgresIntegrationTest
             RETURNING leave_request_id
             """, new MapSqlParameterSource("employeeId", employeeId), Long.class);
 
-        // Confirm the starting state really is "no child row yet" -- this row was inserted directly,
-        // bypassing LeaveService, so nothing else in this test class could have created one.
+        // Confirm the starting state really is "no child row yet" -- this row was inserted directly, bypassing
+        // LeaveService, so nothing else in this test class could have created one.
         assertThat(leaveRepository.findQuotaYearSplits(leaveRequestId)).isEmpty();
 
         jdbc.update("""
@@ -377,9 +367,9 @@ class LeaveCrossYearQuotaIntegrationTest extends AbstractPostgresIntegrationTest
         return new UserPrincipal(1L, "hr@glr.co.th", "HR", "hr", 1L, true, LocalDate.now(), false, null, false);
     }
 
-    // Hired 2015-01-01: comfortably clears every seeded min_service_months floor (VACATION=12,
-    // ORDINATION=12) for every test in this class -- none of them are ABOUT eligibility, they are
-    // about quota attribution once a request is already eligible.
+    // Hired 2015-01-01: comfortably clears every seeded min_service_months floor (VACATION=12, ORDINATION=12) for
+    // every test in this class -- none of them are ABOUT eligibility, they are about quota attribution once a
+    // request is already eligible.
     private long insertEmployee(String code) {
         long employeeId = jdbc.queryForObject("""
             INSERT INTO hr.employee (employee_code, first_name_th, last_name_th, current_salary, is_active, hire_date)

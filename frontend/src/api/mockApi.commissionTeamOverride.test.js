@@ -1,14 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { api } from './mockApi.js';
 
-// Commission page redesign: the real monthly-summary / payroll-ready DTOs grew new fields
-// (rawCommissionableBase, weightUpliftBase, stockBonusAmount, teamOverrideAmount,
-// companyCommissionableBase, teamOverrideThresholdBase, teamOverrideRatePercent; payroll-ready:
-// per-rep teamOverrideAmount, totalTeamOverrideAmount, companyCommissionableBase). The mock mirrors
-// the SHAPE so CommissionPage renders under VITE_USE_MOCKS=true, and deliberately invents nothing:
-// it has no tier config, no stock uplift and no override-recipient list, so a mock rep is never a
-// team-override recipient (company base null, amount 0) and no uplift/stock bonus is fabricated.
-// This proves the shape only -- the maths is CommissionService's, proven against real Postgres.
+// Commission page redesign: the real monthly-summary / payroll-ready DTOs grew new fields. This proves the
+// shape only -- the maths is CommissionService's, proven against real Postgres.
 describe('mock commission DTOs carry the new team-override / weighting fields honestly', () => {
   it('monthlySummary: new fields present; a non-recipient gets company base null and team override 0', async () => {
     await api.auth.login({ role: 'sales' });

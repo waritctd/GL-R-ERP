@@ -38,18 +38,15 @@ import th.co.glr.hr.ticket.TicketSummaryDto;
 
 @Service
 public class DepositNoticeService {
-    // No PREPARER constant here. One existed, holding a hardcoded staff name, and nothing read it:
-    // the preparer's name reaches a deposit notice from the DB instead, as the NOT NULL DEFAULT on
-    // sales.deposit_notice.preparer_name (V12). Deleting the Java copy leaves that default — the
-    // only live source — untouched; re-adding it would just create a second place to change a
-    // person's name and a silent way for the two to disagree.
+    // No PREPARER constant here. Deleting the Java copy leaves that default — the only live source — untouched;
+    // re-adding it would just create a second place to change a person's name and a silent way for the two to
+    // disagree.
     private static final java.util.Set<String> SALES_ROLES  = java.util.Set.of("sales");
     private static final java.util.Set<String> CEO_ROLES    = java.util.Set.of("ceo");
     private static final java.util.Set<String> IMPORT_ROLES = java.util.Set.of("import");
-    // Same read rule as TicketService.VIEWER_ROLES: deposit notices are customer
-    // financial documents — hr/employee have no business downloading them.
-    // sales_manager is read-only oversight here too — never add it to SALES_ROLES/
-    // CEO_ROLES/IMPORT_ROLES.
+    // Same read rule as TicketService.VIEWER_ROLES: deposit notices are customer financial documents — hr/employee
+    // have no business downloading them. sales_manager is read-only oversight here too — never add it to
+    // SALES_ROLES/ CEO_ROLES/IMPORT_ROLES.
     private static final java.util.Set<String> VIEWER_ROLES =
         java.util.Set.of("sales", "import", "ceo", "account", "sales_manager");
 
@@ -107,14 +104,14 @@ public class DepositNoticeService {
         // the quotation and, once issued, silently supersede the customer's document.
         docs.findByTicket(ticketId).stream().filter(d -> "ISSUED".equals(d.status())).findFirst().ifPresent(d -> {
             throw new ApiException(HttpStatus.CONFLICT,
-                "ดีลนี้ออกใบแจ้งรับมัดจำเลขที่ " + d.docNumber() + " แล้ว จึงสร้างฉบับร่างใหม่ไม่ได้");
+                "งานนี้ออกใบแจ้งรับมัดจำเลขที่ " + d.docNumber() + " แล้ว จึงสร้างฉบับร่างใหม่ไม่ได้");
         });
         TicketSummaryDto s = requireApprovedTicket(ticketId, actor);
         requireActiveLifecycle(s);
         // Both routes: a deal off the deposit path (a ไม่รับมัดจำ quotation, a waiver, a credit
         // customer) has no deposit to bill, and issue() would refuse the draft anyway.
         if (DepositPolicy.bypassesDepositNotice(s.depositPolicy())) {
-            throw new ApiException(HttpStatus.CONFLICT, "ดีลนี้ไม่ต้องเก็บมัดจำ (นโยบายมัดจำ "
+            throw new ApiException(HttpStatus.CONFLICT, "งานนี้ไม่ต้องเก็บมัดจำ (นโยบายมัดจำ "
                 + s.depositPolicy() + ") จึงสร้างใบแจ้งรับมัดจำไม่ได้");
         }
 
@@ -135,17 +132,8 @@ public class DepositNoticeService {
                 .map(DocumentNoteTemplateDto::text)
                 .toList();
 
-        // Header autofill (this branch's fix): customerTaxId/customerAddress/projectName were
-        // never populated for a deal created through the pricing-request chain — only
-        // customerName had a ticket-summary fallback. Sourced from the customer master via the
-        // ticket's own customerId (address = "address branch", matching
-        // DepositNoticePage.selectCustomer's own [address, branch].filter(Boolean).join(' ')
-        // convention on the frontend) and, for projectName, the ticket summary itself. A caller-
-        // supplied non-blank value always wins; a null customerId (never linked to a customer
-        // master row) safely leaves these fields blank rather than throwing. Shared with
-        // getRemainingInvoiceOptions below and RemainingInvoiceService's own stored snapshot
-        // (resolveCustomerHeader) so no remaining-invoice document can ever source a customer's
-        // address/tax id differently.
+        // Header autofill (this branch's fix): customerTaxId/customerAddress/projectName were never populated for a
+        // deal created through the pricing-request chain — only customerName had a ticket-summary fallback.
         CustomerHeaderInfo header = resolveCustomerHeader(s, req.customerTaxId(), req.customerAddress(), req.projectName());
 
         // The deposit percent is the one the
@@ -244,7 +232,7 @@ public class DepositNoticeService {
         // status at quotation_issued. It must not flip the ticket to document_issued —
         // that side effect kills the dual-track UI and lets unpaid tickets close.
         TicketSummaryDto s = tickets.findById(doc.ticketId())
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบดีลนี้"))
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบงานนี้"))
             .summary();
         // A deposit notice may be
         // (re-)issued from CUSTOMER_CONFIRMED (first issue) OR from DEPOSIT_NOTICE_ISSUED itself
@@ -279,41 +267,22 @@ public class DepositNoticeService {
         docs.findByTicket(doc.ticketId()).stream()
             .filter(d -> d.id() != docId && "ISSUED".equals(d.status())).findFirst().ifPresent(d -> {
                 throw new ApiException(HttpStatus.CONFLICT,
-                    "ดีลนี้ออกใบแจ้งรับมัดจำเลขที่ " + d.docNumber() + " แล้ว จึงออกฉบับร่างนี้ไม่ได้");
+                    "งานนี้ออกใบแจ้งรับมัดจำเลขที่ " + d.docNumber() + " แล้ว จึงออกฉบับร่างนี้ไม่ได้");
             });
-        // Issuing advances the payment track — a paused/terminal deal must not move
-        // (Phase 1 lifecycle gate; mirrors TicketService.requireActive).
+        // Issuing advances the payment track — a paused/terminal deal must not move (Phase 1 lifecycle gate; mirrors
+        // TicketService.requireActive).
         requireActiveLifecycle(s);
 
         String docNumber = docs.issue(docId, actor.id(), actor.name(), expectedUpdatedAt)
             .orElseThrow(() -> new ApiException(HttpStatus.CONFLICT,
                 "ใบแจ้งรับมัดจำนี้ถูกออกไปแล้วโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง"));
 
-        // Render downloadable files at issue time — but AFTER this transaction commits, never
-        // inside it. toPdf shells out to LibreOffice (LibreOfficePdfConverter forks soffice and
-        // blocks on proc.waitFor(120, SECONDS)), and at this point the transaction is holding a
-        // pooled connection plus a row lock on the single sales.document_sequence row for
-        // (DEPOSIT_NOTICE, this Thai year) that nextDocNumber incremented inside docs.issue above.
-        // That row is the serialization point for EVERY deposit notice issued in the whole year, so
-        // holding it across an external process turns one slow render into a queue nobody can see:
-        // the next rep to issue simply blocks until the first rep's soffice exits.
-        //
-        // Safe to defer because the render participates in no invariant here. Both renders return
-        // byte[] that this method DISCARDS, nothing durable is written (LibreOfficePdfConverter
-        // deletes its temp files in a finally), and setFilePaths only stores the literal flags
-        // "rendered"/"rendered" — surfacing as DepositNoticeDto.hasPdf/hasXlsx, which no production
-        // frontend code reads; getPdf/getXlsx re-render from the persisted snapshot and never
-        // consult those columns. The doc number and the DRAFT->ISSUED compare-and-set both stay
-        // exactly where they were, in this transaction, so neither the sequence race nor the
-        // double-issue race DepositNoticeRepository#issue guards is affected.
-        //
-        // One deliberate, API-observable consequence: the DTO returned below is built before this
-        // runs, so an issue() response now reports hasPdf/hasXlsx false and a subsequent read
-        // reports them true.
+        // Render downloadable files at issue time — but AFTER this transaction commits, never inside it. Safe to defer
+        // because the render participates in no invariant here.
         renderAfterCommit(docId);
 
-        // expected = s.paymentStatus(), which by the guard above is exactly CUSTOMER_CONFIRMED
-        // (first issue, single hop) or DEPOSIT_NOTICE_ISSUED (revision, the one legal self-loop).
+        // expected = s.paymentStatus(), which by the guard above is exactly CUSTOMER_CONFIRMED (first issue, single
+        // hop) or DEPOSIT_NOTICE_ISSUED (revision, the one legal self-loop).
         int rows = tickets.advancePaymentStatus(doc.ticketId(), s.depositPolicy(), s.paymentStatus(),
             PaymentTrack.DEPOSIT_NOTICE_ISSUED);
         if (rows == 0) {
@@ -480,26 +449,14 @@ public class DepositNoticeService {
         return new RemainingInvoiceMoney(netAmount, vatAmount, grandTotal);
     }
 
-    /** Prefill + preview for the download dialog. Never throws for an over-capacity item list, a
-     * negative net amount, or a not-yet-issued deposit notice — those are all reported via
-     * {@code blockingReason} (and itemCount/maxItems for capacity), so
-     * the dialog can render a clear refusal instead of a failed round trip. DOES throw
-     * (404/403/409) for the same gates {@link RemainingInvoiceService#createDraft}/{@link
-     * RemainingInvoiceService#updateDraft}/{@link RemainingInvoiceService#issue} enforce (via this
-     * class's own {@link #resolveRemainingInvoiceSnapshot}): viewer role, ticket status, and "no
-     * priceable source at all" — a preview for a deal with nothing to preview is not useful, and
-     * hiding that behind zeros would misinform the caller. */
+    /** Prefill + preview for the download dialog. */
     public RemainingInvoiceOptionsDto getRemainingInvoiceOptions(long ticketId, UserPrincipal actor) {
         return getRemainingInvoiceOptions(ticketId, null, actor);
     }
 
-    /** {@code quotationId}: optional live-preview selector — when several quotations qualify, the
-     * caller may ask for a specific one's preview (must be one of THIS ticket's qualifying
-     * quotations; {@code null} previews the newest qualifying quotation, i.e. {@code
-     * defaultQuotationId}). Never allows previewing another ticket's quotation — an id outside
-     * this ticket's own qualifying set is refused with 400, the same as {@link
-     * #resolveRemainingInvoiceSnapshot}'s own {@code quotationId} gate (used by {@link
-     * RemainingInvoiceService}'s create/update/issue). */
+    /** quotationId: optional live-preview selector — when several quotations qualify, the caller may ask for a
+     * specific one's preview (must be one of THIS ticket's qualifying quotations; null previews the newest
+     * qualifying quotation, i.e. defaultQuotationId). */
     public RemainingInvoiceOptionsDto getRemainingInvoiceOptions(long ticketId, Long quotationId, UserPrincipal actor) {
         TicketDto ticket = requireTicketViewer(ticketId, actor);
         TicketSummaryDto s = ticket.summary();
@@ -588,7 +545,7 @@ public class DepositNoticeService {
 
     private void requireQuotationIssuedForRemainingInvoice(TicketSummaryDto s) {
         if (!"quotation_issued".equals(s.status())) {
-            throw new ApiException(HttpStatus.CONFLICT, "ออกใบกำกับภาษีส่วนที่เหลือได้เฉพาะดีลที่อยู่ในสถานะ quotation_issued เท่านั้น");
+            throw new ApiException(HttpStatus.CONFLICT, "ออกใบกำกับภาษีส่วนที่เหลือได้เฉพาะงานที่อยู่ในสถานะ quotation_issued เท่านั้น");
         }
     }
 
@@ -603,20 +560,8 @@ public class DepositNoticeService {
         return LocalDate.now(clock.withZone(ZoneId.of("Asia/Bangkok")));
     }
 
-    /**
-     * One resolved bundle: the priced items, the deposit amount/reference defaults, both dialog
-     * suggestion lists, the quotation-picker options, and (when the deal cannot be safely priced
-     * right now) a human {@code blockingReason} — computed together so this class's own {@link
-     * #getRemainingInvoiceOptions} and {@code RemainingInvoiceService}'s create/update/issue (via
-     * {@link #resolveRemainingInvoiceSnapshot}) can never disagree on what "the default"/"the
-     * block" is. {@code blockingReason != null} means {@code items}/{@code depositAmount} are NOT
-     * safe to render (empty/zero) — {@code RemainingInvoiceService}'s own create/update/issue turn
-     * it straight into a 409; {@link #getRemainingInvoiceOptions} surfaces it as-is so the
-     * dialog can disable the download button instead of failing a round trip. The one exception is
-     * the negative-net case (rule C): items/depositAmount ARE both individually valid there — it
-     * is only their difference that is wrong — so both are still returned alongside the reason, to
-     * give the dialog something to explain the block with.
-     */
+    /** One resolved bundle: the priced items, the deposit amount/reference defaults, both dialog suggestion lists,
+     * the quotation-picker options, and a human blockingReason. */
     // Package-private (not private) — reused verbatim by RemainingInvoiceService
     // to snapshot a STORED remaining invoice off the exact same resolution this stateless preview
     // uses. matchedDepositNoticeId is the deposit_notice_id FK a
@@ -658,10 +603,9 @@ public class DepositNoticeService {
         }
     }
 
-    /** One quotation this ticket's remaining invoice COULD be sourced from, paired with the
-     * deposit notice it matched to (see this section's header comment for the matching rule) —
-     * {@code null} when the ticket's deposit policy bypasses the deposit notice entirely, meaning
-     * this quotation qualifies with no deduction at all. */
+    /** One quotation this ticket's remaining invoice COULD be sourced from, paired with the deposit notice it
+     * matched to — null when the ticket's deposit policy bypasses the deposit notice entirely, meaning this
+     * quotation qualifies with no deduction at all. */
     private record QualifyingQuotation(CustomerQuotationDto quotation, DepositNoticeDto matchedNotice) {}
 
     private List<QualifyingQuotation> findQualifyingQuotations(List<CustomerQuotationDto> candidates,
@@ -674,8 +618,8 @@ public class DepositNoticeService {
                 out.add(new QualifyingQuotation(q, null));
                 continue;
             }
-            // notices is already DESC by version (DepositNoticeRepository#findByTicket) — the
-            // first ISSUED hit whose reference matches is the latest matching one.
+            // notices is already DESC by version (DepositNoticeRepository#findByTicket) — the first ISSUED hit whose
+            // reference matches is the latest matching one.
             DepositNoticeDto matched = notices.stream()
                 .filter(n -> "ISSUED".equals(n.status()) && q.number().equals(n.reference()))
                 .findFirst().orElse(null);
@@ -685,23 +629,8 @@ public class DepositNoticeService {
         return out;
     }
 
-    /**
-     * The single entry point both this class's own getRemainingInvoiceOptions and
-     * RemainingInvoiceService's create/update/issue (via resolveRemainingInvoiceSnapshot) route
-     * through. Resolution order:
-     * <ol>
-     *   <li>a caller-supplied {@code quotationId} always wins, but MUST be one of this ticket's
-     *       own qualifying quotations (400 otherwise — never another ticket's quotation, and
-     *       never one that failed to qualify);</li>
-     *   <li>else the newest qualifying quotation, if any qualify;</li>
-     *   <li>else, if an ACCEPTED quotation exists but none qualifies under a deposit-required
-     *       policy (the deposit notice for it was never issued) — blocked, not a silent
-     *       fallback;</li>
-     *   <li>else the pre-PCR-chain legacy fallbacks (issued deposit-notice item snapshot, then
-     *       {@code ticket_item.approved_price}) — back-compat for a deal that predates the
-     *       pricing-request chain and never had a CustomerQuotation at all.</li>
-     * </ol>
-     */
+    /** The single entry point both this class's own getRemainingInvoiceOptions and RemainingInvoiceService's
+     * create/update/issue (via resolveRemainingInvoiceSnapshot) route through. */
     // Package-private (not private) — RemainingInvoiceService's own resolveRemainingInvoiceSnapshot
     // wrapper below calls this directly.
     ResolvedRemainingInvoice resolveRemainingInvoice(long ticketId, TicketDto ticket, TicketSummaryDto s,
@@ -719,7 +648,7 @@ public class DepositNoticeService {
                 .filter(qq -> qq.quotation().id() == quotationId)
                 .findFirst()
                 .orElseThrow(() -> new ApiException(HttpStatus.BAD_REQUEST,
-                    "ใบเสนอราคาที่เลือกไม่ผ่านเงื่อนไข หรือไม่ใช่ของดีลนี้"));
+                    "ใบเสนอราคาที่เลือกไม่ผ่านเงื่อนไข หรือไม่ใช่ของงานนี้"));
             return resolveFromQuotation(ticketId, chosen, quotationCandidates, quotationOptions, defaultQuotationId);
         }
         if (!qualifying.isEmpty()) {
@@ -809,9 +738,9 @@ public class DepositNoticeService {
             defaultDepositReference = refs.defaultRef();
             depositReferenceOptions = refs.options();
         } else {
-            // Bypass-policy case only (see findQualifyingQuotations/this section's header
-            // comment): no deposit notice exists to source from, so items come from the accepted
-            // quotation itself — the one case items are still quotation-sourced.
+            // Bypass-policy case only (see findQualifyingQuotations/this section's header comment): no deposit notice
+            // exists to source from, so items come from the accepted quotation itself — the one case items are still
+            // quotation-sourced.
             items = itemsFromQuotationForRemainingInvoice(q.items());
         }
         BigDecimal itemsTotal = sumAmounts(items);
@@ -848,7 +777,7 @@ public class DepositNoticeService {
             items = legacyRemainingInvoiceItems(ticket);
             if (items.isEmpty()) {
                 throw new ApiException(HttpStatus.CONFLICT,
-                    "ไม่พบใบเสนอราคาที่ลูกค้ายอมรับ หรือใบแจ้งยอดมัดจำที่ออกแล้วสำหรับดีลนี้ จึงไม่สามารถออกใบแจ้งหนี้ส่วนที่เหลือได้");
+                    "ไม่พบใบเสนอราคาที่ลูกค้ายอมรับ หรือใบแจ้งยอดมัดจำที่ออกแล้วสำหรับงานนี้ จึงไม่สามารถออกใบแจ้งหนี้ส่วนที่เหลือได้");
             }
         }
         BigDecimal depositAmount = latestIssued != null && latestIssued.depositAmount() != null
@@ -909,10 +838,8 @@ public class DepositNoticeService {
         return String.format(java.util.Locale.US, "%,.2f", v != null ? v : BigDecimal.ZERO);
     }
 
-    /** H9 (reference) suggestion list: ACCEPTED quotations first (latest first), then ISSUED
-     * (latest first) — a free-text datalist, so this stays the FULL candidate list regardless of
-     * which one the deposit deduction actually came from (never "mixed", since the deposit itself
-     * is scoped elsewhere — see resolveFromQuotation). */
+    /** H9 suggestion list: ACCEPTED quotations first, then ISSUED — a free-text datalist, so this stays the FULL
+     * candidate list regardless of which one the deposit deduction actually came from. */
     private record QuotationReferenceOptions(List<RemainingInvoiceOptionsDto.ReferenceOption> referenceOptions) {}
 
     private QuotationReferenceOptions buildQuotationReferenceOptions(List<CustomerQuotationDto> candidates) {
@@ -930,11 +857,9 @@ public class DepositNoticeService {
         return new QuotationReferenceOptions(referenceOptions);
     }
 
-    /** Rule D: deposit-reference dropdown = receipt_refs of DEPOSIT payment_receipt rows LINKED to
-     * the matched notice ({@code deposit_notice_id}) — falling back to ALL DEPOSIT receipts on the
-     * ticket only when none are linked — plus the matched notice's own number, plus a blank
-     * option. Default = the linked/fallback list's own latest receipt_ref, else the notice's
-     * docNumber. */
+    /** Rule D: deposit-reference dropdown = receipt_refs of DEPOSIT payment_receipt rows LINKED to the matched
+     * notice (deposit_notice_id) — falling back to ALL DEPOSIT receipts on the ticket only when none are linked —
+     * plus the matched notice's own number, plus a blank option. */
     private record DepositRefBundle(String defaultRef, List<RemainingInvoiceOptionsDto.ReferenceOption> options) {}
 
     private DepositRefBundle resolveDepositReferenceOptions(long ticketId, DepositNoticeDto matched) {
@@ -1011,8 +936,8 @@ public class DepositNoticeService {
             out.add(new RemainingInvoiceItemDto(
                 item.seq(), description, item.requestedQuantity(), unitLabel(item.requestedUnitBasis()),
                 item.approvedUnitPrice(), shortDiscountLabel(item.salesDiscount()), item.finalUnitPrice(),
-                // The customer's own accepted subtotal — never recomputed as finalUnitPrice*qty
-                // outright (see quotationLineAmount's own Javadoc for the null-handling rule).
+                // The customer's own accepted subtotal — never recomputed as finalUnitPrice*qty outright (see
+                // quotationLineAmount's own Javadoc for the null-handling rule).
                 quotationLineAmount(item)));
         }
         return out;
@@ -1046,9 +971,9 @@ public class DepositNoticeService {
         return out;
     }
 
-    /** Legacy back-compat path — same shape {@code getRemainingInvoiceXlsx} always used before
-     * this branch, kept for any ticket manually approved before the pricing-request chain
-     * existed (approved_price set directly on ticket_item, no quotation ever created). */
+    /** Legacy back-compat path — same shape getRemainingInvoiceXlsx always used before this branch, kept for any
+     * ticket manually approved before the pricing-request chain existed (approved_price set directly on
+     * ticket_item, no quotation ever created). */
     private List<RemainingInvoiceItemDto> legacyRemainingInvoiceItems(TicketDto ticket) {
         int[] seq = {1};
         return ticket.items().stream()
@@ -1075,7 +1000,7 @@ public class DepositNoticeService {
     public TicketDto requestRevision(long ticketId, RevisionRequest req, UserPrincipal actor) {
         requireRole(actor, SALES_ROLES);
         TicketDto ticket = tickets.findById(ticketId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบดีลนี้"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบงานนี้"));
         TicketSummaryDto s = ticket.summary();
         String st = s.status();
         requireActiveLifecycle(s);
@@ -1084,7 +1009,7 @@ public class DepositNoticeService {
             throw new ApiException(HttpStatus.CONFLICT, "ขอแก้ไข revision ได้เฉพาะจากสถานะ approved หรือ document_issued เท่านั้น");
         }
         if (!DealOwnership.isOwnerOrKeyer(s, actor.id())) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "เฉพาะเจ้าของดีลเท่านั้นที่สามารถขอแก้ไขใบเสนอราคาได้");
+            throw new ApiException(HttpStatus.FORBIDDEN, "เฉพาะเจ้าของงานเท่านั้นที่สามารถขอแก้ไขใบเสนอราคาได้");
         }
 
         String toStatus = switch (req.scope()) {
@@ -1103,11 +1028,10 @@ public class DepositNoticeService {
         // above are declared in TicketStatus.ALLOWED as intentional.
         int rows = tickets.transitionStatus(ticketId, st, toStatus);
         if (rows == 0) {
-            // Lost compare-and-set: another writer moved sales.ticket.status between the read above
-            // and this write. A conflict, never a re-SELECT for a nicer message — see
-            // TicketRepository.transitionStatus's own Javadoc.
+            // Lost compare-and-set: another writer moved sales.ticket.status between the read above and this write. A
+            // conflict, never a re-SELECT for a nicer message — see TicketRepository.transitionStatus's own Javadoc.
             throw new ApiException(HttpStatus.CONFLICT,
-                "สถานะดีลถูกเปลี่ยนโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
+                "สถานะงานถูกเปลี่ยนโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
         }
 
         tickets.addEvent(ticketId, actor.id(), actor.name(),
@@ -1127,24 +1051,8 @@ public class DepositNoticeService {
 
     // ── helpers ───────────────────────────────────────────────────────────────
 
-    /**
-     * Renders the issued document once the transaction that issued it has COMMITTED — or
-     * immediately when no transaction is active. See {@link #issue}'s own comment for why the
-     * render must not run inside the transaction.
-     *
-     * <p>Follows {@code FileStorageService#deleteOnCommit} and {@code
-     * NotificationService#sendEmailAfterCommit}, the codebase's existing answer to "a non-database
-     * side effect inside a {@code @Transactional} method", including the asymmetry: with no
-     * transaction active there is no commit to wait for, so deferring would mean never rendering at
-     * all. Both branches resolve to "do the work, unless a rollback could still take the row away".
-     *
-     * <p><b>The try/catch has to live in here, not around the call site.</b> An exception escaping a
-     * {@link TransactionSynchronization#afterCommit} callback propagates to whoever called {@code
-     * commit} — so a LibreOffice timeout would start failing an {@code issue()} that had already
-     * durably succeeded. The swallow is therefore load-bearing now in a way it was not before, and
-     * it preserves the pre-existing contract exactly: rendering is non-fatal, the flags are left
-     * unset, and the bytes are regenerable on download.
-     */
+    /** Renders the issued document once the transaction that issued it has COMMITTED — or immediately when no
+     * transaction is active. See #issue's own comment for why the render must not run inside the transaction. */
     private void renderAfterCommit(long docId) {
         if (!TransactionSynchronizationManager.isSynchronizationActive()) {
             renderIssuedDocuments(docId);
@@ -1173,11 +1081,11 @@ public class DepositNoticeService {
 
     private TicketSummaryDto requireApprovedTicket(long ticketId, UserPrincipal actor) {
         TicketDto t = tickets.findById(ticketId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบดีลนี้"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบงานนี้"));
         String st = t.summary().status();
         if (!TicketStatus.APPROVED.equals(st) && !TicketStatus.QUOTATION_ISSUED.equals(st)
                 && !TicketStatus.DOCUMENT_ISSUED.equals(st)) {
-            throw new ApiException(HttpStatus.CONFLICT, "สร้างใบแจ้งรับมัดจำได้เฉพาะดีลที่อนุมัติแล้วเท่านั้น");
+            throw new ApiException(HttpStatus.CONFLICT, "สร้างใบแจ้งรับมัดจำได้เฉพาะงานที่อนุมัติแล้วเท่านั้น");
         }
         return t.summary();
     }
@@ -1190,7 +1098,7 @@ public class DepositNoticeService {
     void requireActiveLifecycle(TicketSummaryDto summary) {
         if (!DealLifecycle.ACTIVE.equals(summary.lifecycle())) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "ดีลไม่ได้อยู่ในสถานะ ACTIVE (" + summary.lifecycle() + ") จึงแก้ไขขั้นตอนนี้ไม่ได้");
+                "งานไม่ได้อยู่ในสถานะ ACTIVE (" + summary.lifecycle() + ") จึงแก้ไขขั้นตอนนี้ไม่ได้");
         }
     }
 
@@ -1219,30 +1127,71 @@ public class DepositNoticeService {
     TicketDto requireTicketViewer(long ticketId, UserPrincipal actor) {
         requireRole(actor, VIEWER_ROLES);
         TicketDto t = tickets.findById(ticketId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบดีลนี้"));
-        if ("sales".equals(actor.role()) && !DealOwnership.isOwnerOrKeyer(t.summary(), actor.id())) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
-        }
-        if (IMPORT_ROLES.contains(actor.role())) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
-        }
-        // account is ROW-scoped -- it reads a deal's deposit notices / remaining invoices only
-        // when the deal is inside its list scope (the same predicate that filters GET /api/tickets).
-        // Every deposit-notice and remaining-invoice read funnels through this method.
-        // Read gate only (deposit-notice writes use requireTicketOwner): also a lost/cancelled deal that still has an
-        // issued deposit notice, so the finance page can show its documents. This method is
-        // also reached on remaining-invoice writes via resolveRemainingInvoiceSnapshot; those are blocked for a dead
-        // deal by requireDepositNoticeIssueGate + requireActiveLifecycle, so the widening never lets one through.
-        if ("account".equals(actor.role()) && !tickets.isInAccountScope(ticketId)
-                && !tickets.isDeadDealWithIssuedDepositNotice(ticketId)) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบงานนี้"));
+        // The per-role half is dealDocumentScope (below), which the document chain's list mark applies in SQL too.
+        switch (dealDocumentScope(actor.role())) {
+            case ALL -> { }
+            case OWNER_OR_KEYER -> {
+                if (!DealOwnership.isOwnerOrKeyer(t.summary(), actor.id())) {
+                    throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
+                }
+            }
+            // account is ROW-scoped -- it reads a deal's deposit notices / remaining invoices only
+            // when the deal is inside its list scope (the same predicate that filters GET /api/tickets).
+            // Every deposit-notice and remaining-invoice read funnels through this method.
+            // Read gate only (deposit-notice writes use requireTicketOwner): also a lost/cancelled deal that still has an
+            // issued deposit notice, so the finance page can show its documents. This method is
+            // also reached on remaining-invoice writes via resolveRemainingInvoiceSnapshot; those are blocked for a dead
+            // deal by requireDepositNoticeIssueGate + requireActiveLifecycle, so the widening never lets one through.
+            case ACCOUNT -> {
+                if (!tickets.isInAccountScope(ticketId) && !tickets.isDeadDealWithIssuedDepositNotice(ticketId)) {
+                    throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
+                }
+            }
+            case NONE -> throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
         return t;
     }
 
+    /** Which deals' documents (deposit notices, remaining invoices) a role may read — the per-role half of
+     * {@link #requireTicketViewer}, which applies it to one deal. */
+    public enum DealDocumentScope {
+        /** every deal: ceo, sales_manager (read-only oversight) */
+        ALL,
+        /** deals the viewer owns or keyed: sales */
+        OWNER_OR_KEYER,
+        /** deals inside account's list scope (plus a dead deal with an issued notice): account */
+        ACCOUNT,
+        /** none: import (a deposit notice is a customer financial document end to end), and every non-viewer role */
+        NONE
+    }
+
+    public static DealDocumentScope dealDocumentScope(String role) {
+        if (role == null || !VIEWER_ROLES.contains(role) || IMPORT_ROLES.contains(role)) {
+            return DealDocumentScope.NONE;
+        }
+        return switch (role) {
+            case "sales" -> DealDocumentScope.OWNER_OR_KEYER;
+            case "account" -> DealDocumentScope.ACCOUNT;
+            default -> DealDocumentScope.ALL;
+        };
+    }
+
+    /** {@link #requireTicketViewer} for callers outside this package (the document chain summary). */
+    public void requireDealDocumentViewer(long ticketId, UserPrincipal actor) {
+        requireTicketViewer(ticketId, actor);
+    }
+
+    /** The identity half of every deposit-notice and remaining-invoice WRITE: {@link #requireDepositNoticeIssueGate}
+     * (and createDraft/update/issue's own requireRole(SALES_ROLES) + requireTicketOwner) as a yes/no, for the document
+     * chain's "may this viewer act" flags. */
+    public boolean mayWriteDealDocuments(TicketSummaryDto summary, UserPrincipal actor) {
+        return SALES_ROLES.contains(actor.role()) && DealOwnership.isOwnerOrKeyer(summary, actor.id());
+    }
+
     private void requireTicketOwner(long ticketId, UserPrincipal actor) {
         TicketDto t = tickets.findById(ticketId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบดีลนี้"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบงานนี้"));
         if (!DealOwnership.isOwnerOrKeyer(t.summary(), actor.id())) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
@@ -1322,9 +1271,9 @@ public class DepositNoticeService {
     private List<DepositNoticeItemRequest> buildItemsFromRequest(DepositNoticeDraftRequest req, long ticketId) {
         if (req.items() != null && !req.items().isEmpty()) return req.items();
 
-        // Legacy path: sales.ticket_item.approved_price, written only by the @Deprecated
-        // TicketService.approve (no controller route) — kept working for any ticket that still
-        // carries it, e.g. one manually approved before the pricing-request chain existed.
+        // Legacy path: sales.ticket_item.approved_price, written only by the @Deprecated TicketService.approve (no
+        // controller route) — kept working for any ticket that still carries it, e.g. one manually approved before the
+        // pricing-request chain existed.
         return buildLegacyItems(ticketId);
     }
 

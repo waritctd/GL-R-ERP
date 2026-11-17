@@ -20,20 +20,8 @@ const RAW_FORM_RULE = {
     'default.',
 };
 
-// #exclusive-breakpoint-variant: Tailwind's arbitrary `max-[Npx]:` variant is EXCLUSIVE of
-// its own boundary -- it compiles to `(width < Npx)`, which the production build ships as
-// `not all and (width>=Npx)`. Both are FALSE at exactly Npx. This app reads the same bands
-// INCLUSIVELY everywhere else: useIsMobile.js's MOBILE_QUERY is `(max-width: 720px)` and
-// styles.css uses `@media (max-width: 720px)`. So a `max-[720px]:` utility disagreed with
-// the app's own JS at exactly 720px, and `grid-cols-2 max-[720px]:grid-cols-1` fell through
-// to the 2-column base there. Measured on the real bundle before the 2026-08-08 migration:
-// AccountOverview's stat grid went 2 cols at 719px -> 3 at 720px, 3 at 1039px -> 5 at 1040px,
-// and every Button lost its 44px mobile touch target at exactly 720px. This is invisible to
-// jsdom (no layout engine, no media-query evaluation) and invisible to normal browser
-// testing, which never lands on the exact boundary pixel -- so a lint rule is the only thing
-// that reliably stops it coming back. Use the inclusive named variants declared in
-// src/index.css: nav-drawer: (<=1040) attendance-scroll: (<=900) tablet: (721-1040)
-// mobile: (<=720) mobile-sm: (<=560) mobile-xs: (<=520).
+// #exclusive-breakpoint-variant: Tailwind's arbitrary `max-[Npx]:` variant is EXCLUSIVE of its own boundary --
+// it compiles to `(width < Npx)`, which the production build ships as `not all and (width>=Npx)`.
 const INCLUSIVE_BREAKPOINT_MESSAGE =
   "Tailwind's `max-[Npx]:` is EXCLUSIVE of its own boundary -- it compiles to `(width < Npx)` " +
   'and is false at exactly Npx, while this app reads the same bands inclusively in JS ' +
@@ -82,11 +70,9 @@ export default [
     languageOptions: {
       ecmaVersion: 2022,
       sourceType: 'module',
-      // Node globals alongside the browser ones: a handful of *.test.js files run under vitest's
-      // node environment and legitimately reach the filesystem — stageCatalog.test.js reads
-      // DealStage.java out of the backend source tree to prove the frontend's stage catalog and
-      // Thai labels still match the Java (see its own header). Without `process` here that guard
-      // cannot be written at all.
+      // Node globals alongside the browser ones: a handful of *.test.js files run under vitest's node environment
+      // and legitimately reach the filesystem — stageCatalog.test.js reads DealStage.java out of the backend source
+      // tree to prove the frontend's stage catalog and Thai labels still match the Java.
       globals: { ...globals.browser, ...globals.node },
       parserOptions: { ecmaFeatures: { jsx: true } },
     },
@@ -105,32 +91,14 @@ export default [
       'react/prop-types': 'off',
       // Allow the "strip a field via rest" idiom, e.g. const { password, ...safe } = user.
       'no-unused-vars': ['error', { ignoreRestSiblings: true }],
-      // react-hooks v7 added Compiler-oriented rules; this one flags the standard
-      // fetch-on-mount pattern (calling a setState-bearing function from useEffect)
-      // used throughout this codebase, which is not a bug here.
+      // react-hooks v7 added Compiler-oriented rules; this one flags the standard fetch-on-mount pattern (calling a
+      // setState-bearing function from useEffect) used throughout this codebase, which is not a bug here.
       'react-hooks/set-state-in-effect': 'off',
       // ThaiDateInput renders the <input> itself, so a <label> wrapping it does have a control.
       'jsx-a11y/label-has-associated-control': ['error', { controlComponents: ['ThaiDateInput', 'ThaiDateController'] }],
-      // #safe-form-primitive (RAW_FORM_RULE, declared above): a raw <form> is how implicit submission -- Enter in a lone
-      // text field, when the form has no submit button anywhere in the DOM, submits the form
-      // directly with no button ever clicked -- shipped to production TWICE: a real tax
-      // declaration (#tax-allowance-ia-hub-review) and a real CRM deal
-      // (fix/form-enter-submits-real-records). Both were silent and both were invisible to
-      // jsdom, which does not implement the browser's implicit-submission algorithm at all --
-      // only e2e/implicit-submission.spec.js can catch this class of bug, and it only runs once
-      // per PR, not on every edit. `<FormGrid as="form">` used to be a second, unguarded way to
-      // put a `<form>` on the page that this selector could never see (it matches the JSX tag
-      // name literally, not what a component renders at runtime) -- FormGrid dropped that `as`
-      // prop for exactly this reason (see Layout.jsx), so this rule now catches every literal
-      // `<form>` JSX element in `src/` -- which is the shape both historical incidents actually
-      // were, and the shape a developer reaches for by default. It is not unconditional: an
-      // `eslint-disable` comment, `React.createElement('form', ...)`, or a variable used as a
-      // dynamic JSX tag name (`const Tag = 'form'; <Tag ... />`) all still compile, all still ship
-      // a real `<form>`, and none of them trip this selector. Each is visible in a diff and each
-      // is a deliberate step out of the normal path, unlike the two incidents this rule exists
-      // to prevent a repeat of -- but "every `<form>`" would overstate what a lint rule can
-      // actually promise. SafeForm.jsx itself is exempted below; it is the one place a raw
-      // `<form>` is correct, because it IS the primitive.
+      // #safe-form-primitive: a raw <form> is how implicit submission -- Enter in a lone text field, when the form
+      // has no submit button anywhere in the DOM, submits the form directly with no button ever clicked -- shipped
+      // to production TWICE: a real tax declaration and a real CRM deal.
       'no-restricted-syntax': ['error', RAW_FORM_RULE, ...INCLUSIVE_BREAKPOINT_RULES, ...BUTTON_VARIANT_RULES],
     },
   },

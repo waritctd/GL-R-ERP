@@ -54,45 +54,9 @@ import th.co.glr.hr.procurement.ProcurementRepository;
 import th.co.glr.hr.procurement.ProcurementService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
-/**
- * Pins the role -&gt; data gate for every tab the redesigned ticket-detail IA
- * (docs/ui-repair/02-information-architecture/TICKET_INFORMATION_ARCHITECTURE.md) will project,
- * against the REAL services and REAL repositories on REAL Postgres. This exists so the coming UI
- * rebuild can trust "the backend would 403" without re-auditing the Java on every PR.
- *
- * <p>Every case below asks the question the wrong way round — can this caller reach data they
- * should not — per CLAUDE.md's "Permission changes must ship evidence" section, which names
- * {@code AttendanceScopeIntegrationTest} as the reference shape this test follows. This test
- * changes no production behaviour: every assertion pins what the code already does today.
- *
- * <p>Three places diverge from the surface-level IA doc / the briefed role matrix, confirmed by
- * reading the source (not inferred from the mock or the frontend):
- * <ul>
- *   <li>{@link TicketService#listActivities} gates on {@code requireDealOwnership} (deal owner /
- *       sales_manager / ceo only) — import and account are refused the activity feed, not just
- *       hr/employee. Comment at {@code TicketService.requireDealOwnership}: "Lost/reopen belong
- *       to the sales side."</li>
- *   <li>{@link AttachmentController} used to gate a deal's documents on its own private
- *       {@code MANAGER_ROLES = {hr, sales_manager, ceo}} — so hr, which cannot read a ticket
- *       anywhere else in this matrix, could read/upload/delete its attachments, while account,
- *       the role that confirms money against those very files, could not read them. Earlier
- *       revisions of this file pinned that as a known wider path under separate review; issue
- *       #389 closed it, and document reads now go through
- *       {@code TicketAccessPolicy.canViewDocuments}, which shares one {@code VIEWER_ROLES}
- *       constant with {@link TicketService}. Document reads remain NARROWER than deal reads for
- *       {@code import} — see {@code attachments_importCanReadTheDealShellButNotItsCustomerFacing
- *       Documents} below, which is of a piece with the {@code projectForRole}/quotation-file/
- *       ledger/deposit-notice refusals this matrix already pins for that role.</li>
- *   <li>{@link th.co.glr.hr.deposit.DepositNoticeService#listByTicket} denies import too, despite
- *       its own {@code VIEWER_ROLES} {@code Set.of(...)} literal still listing {@code "import"}
- *       as a member — {@code requireTicketViewer} has a second, explicit import check right after
- *       the role check that the constant name doesn't advertise. A briefed version of this matrix
- *       claimed deposit notices were the one financial document import COULD read (unlike the
- *       payment ledger); that claim does not survive reading the method body. Both financial reads
- *       deny import, by two separate mechanisms — see the tab table correction this test file's
- *       Javadoc feeds into.</li>
- * </ul>
- */
+/** Pins the role -> data gate for every tab the redesigned ticket-detail IA
+ * (docs/ui-repair/02-information-architecture/TICKET_INFORMATION_ARCHITECTURE.md) will project, against the
+ * REAL services and REAL repositories on REAL Postgres. */
 class TicketIaAuthzMatrixIntegrationTest extends AbstractPostgresIntegrationTest {
 
     private TicketRepository tickets;
@@ -146,12 +110,8 @@ class TicketIaAuthzMatrixIntegrationTest extends AbstractPostgresIntegrationTest
 
         attachmentController = new AttachmentController(new AttachmentRepository(jdbc), new SessionContext(), tickets,
             new AuditService(new AuditLogRepository(jdbc), objectMapper), fileStorage);
-        // AttachmentController#list has package-private (not public) visibility — it can only be
-        // invoked directly from within th.co.glr.hr.attachment. Going through MockMvc against the
-        // real HTTP route is not a workaround for that: it is the actually-correct shape anyway,
-        // since a plain UserPrincipal call would skip SessionContext.requireUser entirely, and
-        // AttachmentControllerTest (the existing unit test for this controller) uses the identical
-        // pattern.
+        // AttachmentController#list has package-private (not public) visibility — it can only be invoked directly from
+        // within th.co.glr.hr.attachment.
         mvc = MockMvcBuilders.standaloneSetup(attachmentController)
             .setControllerAdvice(new ApiExceptionHandler())
             .build();
@@ -188,16 +148,16 @@ class TicketIaAuthzMatrixIntegrationTest extends AbstractPostgresIntegrationTest
             salesOwnerActor);
         ticketId = created.summary().id();
 
-        // assignedToId is normally set by the deprecated import pickup() flow; set directly here
-        // (fixture only, not the code path under test) so the attachment participant grant has a
-        // second identity besides the ticket creator to prove against.
+        // assignedToId is normally set by the deprecated import pickup() flow; set directly here (fixture only, not
+        // the code path under test) so the attachment participant grant has a second identity besides the ticket
+        // creator to prove against.
         jdbc.update("UPDATE sales.ticket SET assigned_to = :assigneeId WHERE ticket_id = :ticketId",
             Map.of("assigneeId", assigneeId, "ticketId", ticketId));
 
         long catalogPriceId = insertCatalogProduct("Factory IA Matrix", "TH", "IAMX-001",
             new BigDecimal("100.00"), "THB", "per_piece");
-        // V185 (direct-deal-form parity): color/texture/thicknessMm/sqmPerPiece/piecesPerBox/a
-        // quantity are now required on every item PricingRequestService#createDraft persists —
+        // V185 (direct-deal-form parity): color/texture/thicknessMm/sqmPerPiece/piecesPerBox/a quantity are now
+        // required on every item PricingRequestService#createDraft persists —
         // requestedQty/requestedUnit/requestedUnitBasis are derived instead.
         var item = new PricingRequestRequests.PricingRequestItemRequest(null, catalogPriceId, null,
             "Brand", "Model", "Brand Model", "White", "Matte", "60x60", "Factory IA Matrix",
@@ -211,22 +171,16 @@ class TicketIaAuthzMatrixIntegrationTest extends AbstractPostgresIntegrationTest
             null, "THB", "ia matrix authz test", UUID.randomUUID().toString(), List.of(item));
         pricingRequestId = pricingRequestService.createDraft(ticketId, createPrRequest, salesOwnerActor)
             .summary().id();
-        // SUBMITTED (not DRAFT): a DRAFT is only visible to its owner + ceo/sales_manager (a
-        // separate, already-documented oddity — handoff 85) which would make import's POSITIVE
-        // grant untestable here. The refusals under test (account/hr/employee) fire on the role
-        // gate itself, before status is even inspected, so they hold at every status.
+        // SUBMITTED (not DRAFT): a DRAFT is only visible to its owner + ceo/sales_manager (a separate,
+        // already-documented oddity — handoff 85) which would make import's POSITIVE grant untestable here.
         pricingRequestService.submit(pricingRequestId, salesOwnerActor);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // ภาพรวม — TicketService.get() / requireViewAccess (VIEWER_ROLES + sales-owner-only)
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
-    /**
-     * import has its OWN per-deal endpoint (GET /api/import/deals/{id}, ImportDealService — see
-     * ImportDealAuthzIntegrationTest) and is refused the whole-deal read, mirroring the account
-     * finance-view ruling. Pinned here beside the rows it differs from.
-     */
+    /** import has its OWN per-deal endpoint (GET /api/import/deals/{id}, ImportDealService — see
+     * ImportDealAuthzIntegrationTest) and is refused the whole-deal read, mirroring the account finance-view
+     * ruling. Pinned here beside the rows it differs from. */
     @Test
     void overview_importCannotReadTheWholeDeal() {
         assertForbidden(() -> ticketService.get(ticketId, importActor));
@@ -254,9 +208,9 @@ class TicketIaAuthzMatrixIntegrationTest extends AbstractPostgresIntegrationTest
         assertThatCode(() -> ticketService.get(ticketId, salesManagerActor)).doesNotThrowAnyException();
     }
 
-    // H1 lockdown: account no longer reads a deal through GET /tickets/{id} at ALL -- not even one inside
-    // its list scope (it reads the finance view, GET /api/finance/deals/{id}). This row used to be in the
-    // "can all read it" list above.
+    // H1 lockdown: account no longer reads a deal through GET /tickets/{id} at ALL -- not even one inside its list
+    // scope (it reads the finance view, GET /api/finance/deals/{id}). This row used to be in the "can all read it"
+    // list above.
     @Test
     void overview_accountCannotReadTheTicket_evenInsideItsListScope() {
         assertForbidden(() -> ticketService.get(ticketId, accountActor));
@@ -270,9 +224,7 @@ class TicketIaAuthzMatrixIntegrationTest extends AbstractPostgresIntegrationTest
             new org.springframework.jdbc.core.namedparam.MapSqlParameterSource("id", ticketId));
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // ราคา — PricingRequestService.get() / requireViewable (VIEWER_ROLES excludes account)
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void pricing_accountCannotReadAPricingRequest() {
@@ -297,15 +249,8 @@ class TicketIaAuthzMatrixIntegrationTest extends AbstractPostgresIntegrationTest
         assertThatCode(() -> pricingRequestService.get(pricingRequestId, salesManagerActor)).doesNotThrowAnyException();
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // ใบเสนอราคา — CustomerQuotationService.listForPricingRequest() / VIEW_ROLES excludes account
-    //
-    // Exercised via listForPricingRequest rather than get(quotationId, ...) because both share
-    // the identical VIEW_ROLES gate (requireRole is checked first in both), and
-    // listForPricingRequest needs only the pricing request this fixture already builds — not the
-    // full submit -> factory-quote -> costing -> pricing-decision -> quotation chain that get()
-    // would additionally require just to have a row to look up.
-    // ─────────────────────────────────────────────────────────────────────────────────────
+    // Exercise the shared quotation view gate through listing, avoiding an unrelated full quotation lifecycle
+    // fixture.
 
     @Test
     void quotation_accountCannotListCustomerQuotations() {
@@ -335,10 +280,7 @@ class TicketIaAuthzMatrixIntegrationTest extends AbstractPostgresIntegrationTest
         assertThatCode(() -> quotationService.listForPricingRequest(pricingRequestId, importActor)).doesNotThrowAnyException();
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // การเงิน (payment ledger) — TicketService.listPayments() / requireViewAccess + explicit
-    // IMPORT_ROLES 403
-    // ─────────────────────────────────────────────────────────────────────────────────────
+    // การเงิน (payment ledger) — TicketService.listPayments() / requireViewAccess + explicit IMPORT_ROLES 403
 
     @Test
     void ledger_importCannotReadThePaymentLedger() {
@@ -369,17 +311,9 @@ class TicketIaAuthzMatrixIntegrationTest extends AbstractPostgresIntegrationTest
         assertForbidden(() -> ticketService.listPayments(ticketId, accountActor));
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // การเงิน (deposit notice) — DepositNoticeService.listByTicket() / requireTicketViewer
-    //
-    // ⚠ CORRECTS THE BRIEFED MATRIX: the source (and its own comment — "Phase B: import is
-    // denied outright, unlike TicketService.requireViewAccess... every read here... is
-    // off-limits") explicitly 403s import here too. The briefed claim that "import IS allowed
-    // here" is wrong; both financial gates deny import, they just deny it through two different
-    // mechanisms (an inline IMPORT_ROLES check in TicketService.listPayments, and the same check
-    // baked into DepositNoticeService.requireTicketViewer itself, despite the VIEWER_ROLES
-    // constant's Set.of(...) literal still listing "import" as a member).
-    // ─────────────────────────────────────────────────────────────────────────────────────
+    // การเงิน (deposit notice) — DepositNoticeService.listByTicket() / requireTicketViewer ⚠ CORRECTS THE BRIEFED
+    // MATRIX: the source (and its own comment — "Phase B: import is denied outright, unlike
+    // TicketService.requireViewAccess... every read here...
 
     @Test
     void depositNotice_importCannotListDepositNoticesEitherDespiteBeingInTheViewerRolesConstant() {
@@ -403,8 +337,8 @@ class TicketIaAuthzMatrixIntegrationTest extends AbstractPostgresIntegrationTest
         assertThatCode(() -> depositNoticeService.listByTicket(ticketId, salesManagerActor)).doesNotThrowAnyException();
     }
 
-    // H1 lockdown: account is ROW-SCOPED here -- refused on a deal outside its list scope (this deal is
-    // still at the lead stage), allowed once the deal is inside it.
+    // H1 lockdown: account is ROW-SCOPED here -- refused on a deal outside its list scope (this deal is still at
+    // the lead stage), allowed once the deal is inside it.
     @Test
     void depositNotice_accountIsRowScoped() {
         assertForbidden(() -> depositNoticeService.listByTicket(ticketId, accountActor));
@@ -412,10 +346,8 @@ class TicketIaAuthzMatrixIntegrationTest extends AbstractPostgresIntegrationTest
         assertThatCode(() -> depositNoticeService.listByTicket(ticketId, accountActor)).doesNotThrowAnyException();
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // จัดซื้อ-ส่งมอบ (deliveries) — TicketService.listDeliveries() / requireViewAccess ONLY
-    // (no extra IMPORT_ROLES-style carve-out, unlike listPayments)
-    // ─────────────────────────────────────────────────────────────────────────────────────
+    // จัดซื้อ-ส่งมอบ (deliveries) — TicketService.listDeliveries() / requireViewAccess ONLY (no extra
+    // IMPORT_ROLES-style carve-out, unlike listPayments)
 
     @Test
     void deliveries_hrCannotReadDeliveries() {
@@ -438,9 +370,7 @@ class TicketIaAuthzMatrixIntegrationTest extends AbstractPostgresIntegrationTest
         assertForbidden(() -> ticketService.listDeliveries(ticketId, accountActor));
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // จัดซื้อ-ส่งมอบ (raw factory PO) — ProcurementService.list() / RAW_PO_ROLES = {import, ceo}
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void rawPo_salesManagerCannotReadRawFactoryPurchaseOrders() {
@@ -473,10 +403,8 @@ class TicketIaAuthzMatrixIntegrationTest extends AbstractPostgresIntegrationTest
         assertThatCode(() -> procurementService.list(null, ceoActor)).doesNotThrowAnyException();
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // กิจกรรม — TicketService.listActivities() / requireDealOwnership (owner + sales_manager +
-    // ceo ONLY — the oddity: import and account are refused, unlike every other viewer-role tab)
-    // ─────────────────────────────────────────────────────────────────────────────────────
+    // กิจกรรม — TicketService.listActivities() / requireDealOwnership (owner + sales_manager + ceo ONLY — the
+    // oddity: import and account are refused, unlike every other viewer-role tab)
 
     @Test
     void activities_importCannotReadTheActivityFeed() {
@@ -510,38 +438,13 @@ class TicketIaAuthzMatrixIntegrationTest extends AbstractPostgresIntegrationTest
         assertThatCode(() -> ticketService.listActivities(ticketId, ceoActor)).doesNotThrowAnyException();
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // เอกสาร (attachments) — AttachmentController.requireTicketReadAccess() /
-    // TicketAccessPolicy.canViewDocuments: participant (createdById or assignedToId) OR a deal
-    // VIEWER_ROLE, with sales AND import both scoped to deals they participate in. Issue #389
-    // replaced the old blanket MANAGER_ROLES = {hr, sales_manager, ceo}, which was too wide (hr
-    // read every deal's documents while being refused the deal itself) and too narrow (account,
-    // the role that confirms money against these files, was refused them). import stays refused
-    // as a non-participant — see the pin below for why that is narrower than the deal read.
-    // Writing is the separate canManageDocuments question, covered by
-    // AttachmentTicketAccessIntegrationTest; this matrix only pins the read.
-    //
-    // Exercised through MockMvc against the real HTTP route (GET /api/tickets/{id}/attachments)
-    // rather than by calling attachmentController.list(...) directly: that method is
-    // package-private (visible only inside th.co.glr.hr.attachment, and this test must not touch
-    // production code to relax that), and going through the real endpoint is the more faithful
-    // shape anyway — a plain UserPrincipal call would skip SessionContext.requireUser entirely.
-    // Same pattern AttachmentControllerTest already uses for this controller.
-    // ─────────────────────────────────────────────────────────────────────────────────────
+    // เอกสาร (attachments) — AttachmentController.requireTicketReadAccess() / TicketAccessPolicy.canViewDocuments:
+    // participant (createdById or assignedToId) OR a deal VIEWER_ROLE, with sales AND import both scoped to deals
+    // they participate in.
 
-    /**
-     * Import's document access is ROW-SCOPED (owner ruling 2026-09-30, superseding the blanket
-     * refusal that issue #389's review pinned here). It may read every attachment type
-     * ({@code PO, SIGNED_QUOTATION, INVOICE, OTHER}) of a deal inside its own import scope
-     * ({@code TicketRepository#isInImportScope} — the same predicate as its worklist) and is still
-     * refused a deal outside it. This matrix deal carries a live SUBMITTED pricing request, so it is
-     * in scope; the out-of-scope refusal is proven against a second, pipeline-early deal.
-     *
-     * <p>Widening the DOCUMENT read does not widen anything import is refused elsewhere: the
-     * quotation FILE, the payment ledger and deposit notices stay 403 (pinned by their own cases
-     * in this class). Per-type coverage of the download is in
-     * {@code ImportCommentAndDocumentAuthzIntegrationTest}.
-     */
+    /** Import's document access is ROW-SCOPED (owner ruling 2026-09-30, superseding the blanket refusal that issue
+     * #389's review pinned here). This matrix deal carries a live SUBMITTED pricing request, so it is in scope;
+     * the out-of-scope refusal is proven against a second, pipeline-early deal. */
     @Test
     void attachments_importReadsAnInScopeDealsDocumentsButNotAnOutOfScopeDeals() throws Exception {
         assertAttachmentsOk(importActor);
@@ -555,8 +458,8 @@ class TicketIaAuthzMatrixIntegrationTest extends AbstractPostgresIntegrationTest
             .andExpect(status().isForbidden());
     }
 
-    // H1 lockdown: account reads the documents only on a deal inside its list scope (row-scoped); the
-    // ticket read itself is refused. This used to assert account reads both, on any deal.
+    // H1 lockdown: account reads the documents only on a deal inside its list scope (row-scoped); the ticket read
+    // itself is refused. This used to assert account reads both, on any deal.
     @Test
     void attachments_accountReadsTheDocumentsItMustConfirmMoneyAgainst_onlyInsideItsListScope() throws Exception {
         assertAttachmentsForbidden(accountActor);
@@ -580,13 +483,7 @@ class TicketIaAuthzMatrixIntegrationTest extends AbstractPostgresIntegrationTest
         assertAttachmentsOk(assigneeActor);
     }
 
-    /**
-     * The wider path this matrix used to pin as a known divergence is CLOSED (issue #389). hr
-     * cannot read a ticket, its pricing, its quotations, its ledger, its deposit notices or its
-     * activity feed anywhere else in this matrix, and it can no longer read that ticket's
-     * documents either — the lone {@code MANAGER_ROLES} constant that granted it was the only
-     * sales access hr held anywhere in the system, and it was unintended.
-     */
+    /** The wider path this matrix used to pin as a known divergence is CLOSED (issue #389). */
     @Test
     void attachments_hrCannotReadThemAnyMoreThanItCanReadTheTicketItself() throws Exception {
         assertForbidden(() -> ticketService.get(ticketId, hrActor));
@@ -600,9 +497,7 @@ class TicketIaAuthzMatrixIntegrationTest extends AbstractPostgresIntegrationTest
         assertAttachmentsOk(ceoActor);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // helpers
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     private static void assertForbidden(org.assertj.core.api.ThrowableAssert.ThrowingCallable callable) {
         assertThatThrownBy(callable)

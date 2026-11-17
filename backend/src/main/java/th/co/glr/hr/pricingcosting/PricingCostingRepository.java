@@ -17,13 +17,7 @@ import org.springframework.stereotype.Repository;
 import th.co.glr.hr.pricingcosting.PricingCostingDtos.PricingCostingDto;
 import th.co.glr.hr.pricingcosting.PricingCostingDtos.PricingCostingItemDto;
 
-/**
- * V141 ("CEO owns costing"): this is now a WRITER surface for {@code
- * th.co.glr.hr.pricingdecision.PricingDecisionService} only — {@link PricingCostingService} is
- * read-only (see its own javadoc). {@link #createComputed}/{@link #replaceItemsPreservingOverrides}
- * are called from {@code PricingDecisionService#startReview}/{@code #recalculateCost}; {@link
- * #applyOverride}/{@link #clearOverride} from {@code PricingDecisionService#overrideItemCost}.
- */
+/** V141: this is now a WRITER surface for th.co.glr.hr.pricingdecision.PricingDecisionService only. */
 @Repository
 public class PricingCostingRepository {
     private final NamedParameterJdbcTemplate jdbc;
@@ -37,19 +31,8 @@ public class PricingCostingRepository {
         return "PCO-" + Year.now() + "-" + String.format("%04d", seq == null ? 0 : seq);
     }
 
-    /**
-     * Creates a costing straight at {@code SUBMITTED} — there is no DRAFT/CALCULATED stage any
-     * more, since the CEO computes and freezes the cost in the same breath (plan 2.5). Landing
-     * directly at SUBMITTED keeps {@code FactoryQuoteRepository#existsSubmittedCostingReferencingQuote}
-     * (the attachment-deletion guard) working unchanged, and sidesteps {@code
-     * uq_pricing_costing_open_draft} (a partial unique index on DRAFT/CALCULATED — never matched by
-     * a row that is born SUBMITTED). {@code created_by}/{@code submitted_by} are both the CEO
-     * ({@code actorId}) since one action does both here; {@code calculated_at}/{@code submitted_at}
-     * are both {@code now()} for the same reason. Caller must hold {@link
-     * th.co.glr.hr.pricingdecision.PricingDecisionRepository#lockPricingRequest} for the current
-     * transaction (mirrors the old {@code createDraft}'s own contract) — no advisory lock is taken
-     * here.
-     */
+    /** Creates a costing straight at SUBMITTED — there is no DRAFT/CALCULATED stage any more, since the CEO
+     * computes and freezes the cost in the same breath (plan 2.5). */
     public long createComputed(long pricingRequestId, String note, long actorId, BigDecimal totalThb) {
         Integer nextVersion = jdbc.queryForObject("""
             SELECT COALESCE(MAX(version_no), 0) + 1
@@ -76,39 +59,9 @@ public class PricingCostingRepository {
         return id == null ? 0L : id;
     }
 
-    /**
-     * Writes the freshly computed rows for {@code costingId} as an UPSERT keyed on
-     * {@code uq_pricing_costing_item_request_item (pricing_costing_id, pricing_request_item_id)}
-     * (V62) — deliberately NOT delete-and-reinsert.
-     *
-     * <p><strong>Why an UPSERT and not a delete+reinsert:</strong> {@code
-     * sales.pricing_decision_item.pricing_costing_item_id} is a {@code NOT NULL ... ON DELETE
-     * RESTRICT} foreign key into these very rows (V72 L110), written once by {@code
-     * PricingDecisionService#startReview} and never repointed; {@code
-     * sales.factory_purchase_order_item} (V77) carries the identical restricted FK. Deleting the
-     * item rows therefore ALWAYS violates that constraint the moment a decision exists — which,
-     * for {@code recalculateCost}, is by construction every time. An UPSERT keeps each
-     * {@code pricing_costing_item_id} PK stable, so every inbound FK stays valid across any number
-     * of recalculations.
-     *
-     * <p><strong>How the override survives:</strong> structurally, not by copying. The
-     * {@code DO UPDATE SET} list below names only the 34 COMPUTED columns and deliberately omits
-     * all six override columns ({@code manual_landed_cost_per_unit_thb}, {@code override_reason},
-     * {@code overridden_by}, {@code overridden_at}, {@code override_fx_rate},
-     * {@code override_calc_config_version}), so an existing override is carried forward untouched
-     * by the same statement that refreshes the computed figures — there is no snapshot/restore step
-     * to forget or get wrong. Owner ruling (plan section 0): do NOT clear an override on
-     * recalculate; preserve it and let the derived {@code overrideStale} (see {@link #mapItem})
-     * make the drift loud instead. Because {@code fx_rate} and
-     * {@code calculation_config_version} ARE refreshed here while {@code override_fx_rate} and
-     * {@code override_calc_config_version} are not, an override whose world has moved becomes
-     * stale automatically, with no extra bookkeeping.
-     *
-     * <p>Called for a brand-new costing (from {@code startReview}, where every row is an INSERT and
-     * nothing has been overridden yet) and for an existing one being recalculated in place (from
-     * {@code recalculateCost}, where every row is an UPDATE), so both call sites get the same
-     * guarantee automatically.
-     */
+    /** Writes the freshly computed rows for costingId as an UPSERT keyed on uq_pricing_costing_item_request_item
+     * (pricing_costing_id, pricing_request_item_id) (V62) — deliberately NOT delete-and-reinsert. How the override
+     * survives: structurally, not by copying. */
     public void replaceItemsPreservingOverrides(long costingId, List<PricingCostingWriteItem> items) {
         MapSqlParameterSource[] batch = new MapSqlParameterSource[items.size()];
         for (int i = 0; i < items.size(); i++) {
@@ -177,11 +130,8 @@ public class PricingCostingRepository {
                  uncostable_code = EXCLUDED.uncostable_code
             """, batch);
 
-        // Drop any line the recalculation no longer produces (the pricing request lost an item
-        // between two costings of the same request). Deliberately NOT swallowed: if a
-        // pricing_decision_item or factory_purchase_order_item still points at such a row, the
-        // restricted FK refuses the delete and the whole transaction rolls back — which is the
-        // correct outcome. Silently orphaning a priced line would be worse than a loud 500.
+        // Drop any line the recalculation no longer produces (the pricing request lost an item between two costings of
+        // the same request). Silently orphaning a priced line would be worse than a loud 500.
         List<Long> keptRequestItemIds = items.stream()
             .map(PricingCostingWriteItem::pricingRequestItemId)
             .toList();
@@ -196,15 +146,9 @@ public class PricingCostingRepository {
                 .addValue("keptRequestItemIds", keptRequestItemIds.isEmpty() ? List.of(-1L) : keptRequestItemIds));
     }
 
-    /**
-     * Writes the manual cost override plus its full provenance, stamped from the CALLER-supplied
-     * {@code fxRate}/{@code configVersion} — the caller ({@code PricingDecisionService}) reads
-     * these off the SAME item's current computed {@code fxRate}/{@code calculationConfigVersion}
-     * before calling, so "override_fx_rate = fx_rate at the moment of override" holds by
-     * construction. Re-confirming the same manual value after a recalculate re-stamps these to
-     * whatever is current THEN, which is exactly how {@code overrideStale} clears — the CEO's
-     * escape hatch.
-     */
+    /** Writes the manual cost override plus its full provenance, stamped from the CALLER-supplied
+     * fxRate/configVersion. Re-confirming the same manual value after a recalculate re-stamps these to whatever is
+     * current THEN, which is exactly how overrideStale clears — the CEO's escape hatch. */
     public int applyOverride(long costingItemId, BigDecimal manualCost, String reason, long actorId,
                              BigDecimal fxRate, int configVersion) {
         return jdbc.update("""
@@ -226,14 +170,9 @@ public class PricingCostingRepository {
                 .addValue("configVersion", configVersion));
     }
 
-    /**
-     * Clears an override back to "no override, use the computed figure" — nulls ALL SIX override
-     * columns, not just the manual value itself, so the row returns to exactly the state it would
-     * be in had it never been overridden (no leftover provenance for a since-cleared override to
-     * be confused with). The CEO's reason for clearing is recorded in the {@code
-     * pricing_request_event} trail by the caller, not on this row — a cleared override, by
-     * definition, has no active override to attach a reason to.
-     */
+    /** Clears an override back to "no override, use the computed figure" — nulls ALL SIX override columns, not just
+     * the manual value itself, so the row returns to exactly the state it would be in had it never been overridden
+     * (no leftover provenance for a since-cleared override to be confused with). */
     public int clearOverride(long costingItemId, long actorId) {
         return jdbc.update("""
             UPDATE sales.pricing_costing_item
@@ -325,24 +264,18 @@ public class PricingCostingRepository {
         BigDecimal fxRate = rs.getBigDecimal("fx_rate");
         int calculationConfigVersion = rs.getInt("calculation_config_version");
 
-        // Both computed columns (landedCostPerUnitThb, totalLandedCostThb) are already at their
-        // own correct scale — landedCostPerUnitThb straight from a NUMERIC(18,4) column,
-        // totalLandedCostThb via LandedCostCalculator's own money4(landedPerUnit * qtyPieces).
-        // effectiveLandedCostPerUnitThb is a straight passthrough of one of two already-scale-4
-        // values (manual or computed), so no further rounding applies to it — but
-        // effectiveTotalLandedCostThb IS a fresh multiplication (scale 4 x scale 6), so it must be
-        // rounded the SAME way totalLandedCostThb was, or the two would use inconsistent
-        // precision for what is meant to be the same "per-line total" concept.
+        // Both computed columns (landedCostPerUnitThb, totalLandedCostThb) are already at their own correct scale —
+        // landedCostPerUnitThb straight from a NUMERIC(18,4) column, totalLandedCostThb via LandedCostCalculator's own
+        // money4(landedPerUnit * qtyPieces).
         BigDecimal effectiveLandedCostPerUnitThb = manualLandedCostPerUnitThb != null
             ? manualLandedCostPerUnitThb : landedCostPerUnitThb;
-        // V156: effectiveLandedCostPerUnitThb is null on an UNCOSTABLE row with no override yet —
-        // there is no cost to scale up, so the effective total is null too rather than an NPE.
+        // V156: effectiveLandedCostPerUnitThb is null on an UNCOSTABLE row with no override yet — there is no cost to
+        // scale up, so the effective total is null too rather than an NPE.
         BigDecimal effectiveTotalLandedCostThb = normalizedQuantityPieces == null
                 || effectiveLandedCostPerUnitThb == null
             ? null : effectiveLandedCostPerUnitThb.multiply(normalizedQuantityPieces).setScale(4, RoundingMode.HALF_UP);
-        // Defensive on a missing provenance value too (the migration's CHECK constraint should
-        // never allow that combination, but a comparison that cannot evaluate is treated as
-        // stale, not silently "not stale").
+        // Defensive on a missing provenance value too (the migration's CHECK constraint should never allow that
+        // combination, but a comparison that cannot evaluate is treated as stale, not silently "not stale").
         boolean overrideStale = manualLandedCostPerUnitThb != null
             && (overrideFxRate == null || overrideCalcConfigVersion == null
                 || overrideFxRate.compareTo(fxRate) != 0
@@ -449,8 +382,8 @@ public class PricingCostingRepository {
         BigDecimal clearanceFeeThb,
         String productType,
         String calculationSnapshot,
-        /** V156: non-null when the freight table could not be looked up; every shipment-derived
-         *  cost above is then null. Enforced as an XOR by chk_pricing_costing_item_uncostable_xor. */
+        /** V156: non-null when the freight table could not be looked up; every shipment-derived cost above is then
+         * null. Enforced as an XOR by chk_pricing_costing_item_uncostable_xor. */
         String uncostableReason,
         String uncostableCode
     ) {

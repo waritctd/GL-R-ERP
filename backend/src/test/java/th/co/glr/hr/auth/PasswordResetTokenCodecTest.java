@@ -8,13 +8,7 @@ import java.util.Set;
 import java.util.regex.Pattern;
 import org.junit.jupiter.api.Test;
 
-/**
- * Pure unit coverage for {@link PasswordResetTokenCodec} — no DB, no Spring context. Pins exactly
- * the two properties a lookup-by-hash design depends on: hashing is deterministic (the same raw
- * token always produces the same hash, or {@code findValidByTokenHash} could never match a token
- * that was hashed identically at issuance and again at redemption) and generated tokens are
- * high-entropy enough not to collide in practice.
- */
+/** Pure unit coverage for PasswordResetTokenCodec — no DB, no Spring context. */
 class PasswordResetTokenCodecTest {
 
     private static final Pattern URL_SAFE_BASE64_NO_PADDING = Pattern.compile("^[A-Za-z0-9_-]+$");
@@ -54,12 +48,9 @@ class PasswordResetTokenCodecTest {
 
     @Test
     void generatedTokenDecodesToExactlyThirtyTwoBytes() {
-        // Proven by mutation, not assumed: shrinking generateRawToken's source to `new byte[4]`
-        // still passes every other test in this class (uniqueness and URL-safe-format checks
-        // don't care how many bytes back the string), so none of them actually pins the entropy
-        // budget the design depends on. This is the one assertion that does - it decodes the
-        // token back to bytes and asserts the count directly, so a future shrink cannot land
-        // silently.
+        // Proven by mutation, not assumed: shrinking generateRawToken's source to `new byte[4]` still passes every
+        // other test in this class (uniqueness and URL-safe-format checks don't care how many bytes back the string),
+        // so none of them actually pins the entropy budget the design depends on.
         String rawToken = PasswordResetTokenCodec.generateRawToken();
 
         byte[] decoded = Base64.getUrlDecoder().decode(rawToken);

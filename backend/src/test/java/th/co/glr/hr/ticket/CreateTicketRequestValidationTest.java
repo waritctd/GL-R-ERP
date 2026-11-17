@@ -11,18 +11,9 @@ import java.util.Set;
 import java.util.stream.Collectors;
 import org.junit.jupiter.api.Test;
 
-/**
- * The API-boundary half of "a new deal must state a real ช่องทางดีล" (owner ruling 2026-09-30).
- *
- * <p>{@code TicketController.create} takes {@code @Valid @RequestBody CreateTicketRequest}, so a
- * violation here is a 400 before {@link TicketService#create} is reached. The service deliberately
- * still tolerates a null channel (see {@code TicketServiceTest#create_stillToleratesNullEntryChannelAtServiceLevel}),
- * which is why the absent/blank rule lives on the DTO and not in the service.
- *
- * <p>There is no {@code TicketController} MVC test in this repo to extend; this follows
- * {@code LoginRequestNormalizationTest}'s pattern of running the real {@code Validator} over the
- * real record, which is exactly what {@code @Valid} does at request time.
- */
+/** The API-boundary half of "a new deal must state a real ช่องทางดีล" (owner ruling 2026-09-30).
+ * TicketController.create takes @Valid @RequestBody CreateTicketRequest, so a violation here is a 400 before
+ * TicketService#create is reached. */
 class CreateTicketRequestValidationTest {
 
     private static final ValidatorFactory FACTORY = Validation.buildDefaultValidatorFactory();
@@ -63,15 +54,38 @@ class CreateTicketRequestValidationTest {
         }
     }
 
-    /**
-     * The asymmetry is the design, not an oversight: {@code @NotBlank} only asks "was a channel
-     * sent?", and {@code UNSPECIFIED} is a non-blank string, so it passes here. Refusing it is the
-     * SERVICE's job ({@code TicketServiceTest#create_rejectsUnspecifiedEntryChannel}) because the
-     * value check belongs next to {@link EntryChannel}. Do not "fix" this by adding a pattern to the
-     * DTO without moving that test with it.
-     */
+    /** The asymmetry is the design, not an oversight: @NotBlank only asks "was a channel sent?", and UNSPECIFIED is
+     * a non-blank string, so it passes here. Do not "fix" this by adding a pattern to the DTO without moving that
+     * test with it. */
     @Test
     void unspecifiedPassesBeanValidationBecauseTheServiceOwnsThatRefusal() {
         assertThat(violatedFields(withChannel(EntryChannel.UNSPECIFIED))).isEmpty();
+    }
+
+    // The short create form's optional fields (2026-11-16; see DealLifecycleDialogsIntegrationTest). A channel is
+    // stated in each, so the only violation is the field under test.
+    private static CreateTicketRequest shortForm(String designerName, java.math.BigDecimal estimatedValue) {
+        return new CreateTicketRequest("Test deal", "NORMAL", "ลูกค้า", null, 77L, null, null,
+            EntryChannel.DESIGNER_LED, List.of(), null, null, null, designerName, estimatedValue, null);
+    }
+
+    @Test
+    void anEstimateMustBePositive() {
+        assertThat(violatedFields(shortForm(null, new java.math.BigDecimal("-1")))).containsExactly("estimatedValue");
+        assertThat(violatedFields(shortForm(null, java.math.BigDecimal.ZERO))).containsExactly("estimatedValue");
+        assertThat(violatedFields(shortForm(null, new java.math.BigDecimal("0.01")))).isEmpty();
+    }
+
+    /** The ceiling is the column's: NUMERIC(14,2), the same precision as imported_value (V215). */
+    @Test
+    void anEstimateMustFitTheColumn() {
+        assertThat(violatedFields(shortForm(null, new java.math.BigDecimal("999999999999.99")))).isEmpty();
+        assertThat(violatedFields(shortForm(null, new java.math.BigDecimal("1000000000000")))).containsExactly("estimatedValue");
+        assertThat(violatedFields(shortForm(null, new java.math.BigDecimal("1.005")))).containsExactly("estimatedValue");
+    }
+
+    @Test
+    void anOverlongDesignerNameIsRejected() {
+        assertThat(violatedFields(shortForm("ก".repeat(201), null))).containsExactly("designerName");
     }
 }

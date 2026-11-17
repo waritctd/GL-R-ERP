@@ -34,37 +34,9 @@ import th.co.glr.hr.notification.SalesNotificationMailer;
 import th.co.glr.hr.pricingrequest.PricingRequestService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
-/**
- * Owner ruling 2026-08-13 — <b>the supervision half of "Sales declares, Import can correct."</b>
- * PR #706 let the deal owner declare {@code qty_from_stock}; the stated mitigation for an
- * uncorroborated number feeding that same rep's STOCK_BONUS was "Import can correct it", and
- * nothing told anyone to look. {@link TicketService#reserveStock} now raises a notification to
- * ฝ่ายขาย's ผู้จัดการ. This class is the real-DB evidence for all three things that can go wrong
- * with it, none of which Mockito can reach:
- *
- * <ol>
- *   <li><b>Recipient resolution</b> — {@code notifyByRole("sales_manager", ...)} is a {@code WHERE}
- *       clause over {@code hr.employee}/{@code hr.division}/{@code hr.position}, so only real rows
- *       can say who it selects. A mocked repository "passes" while the SQL picks the whole ฝ่าย, or
- *       nobody. Written wrong-way-round: the assertions that matter are the six people who must
- *       NOT receive it.</li>
- *   <li><b>Rollback</b> — {@code @Transactional} is inert across this suite (services hand-wired
- *       with {@code new}, no Spring context, no AOP), so a test that merely calls the service
- *       proves nothing about transactional behaviour. The rollback case below goes through {@link
- *       AbstractPostgresIntegrationTest#transactional} so the annotation itself supplies the
- *       transaction, and is built so it cannot pass vacuously — see its own comment.</li>
- *   <li><b>Trigger</b> — an import/ceo correction must stay silent. That is the control working,
- *       not the risk, and notifying on it would bury the case that matters.</li>
- * </ol>
- *
- * <p><b>Commission math is untouched and is not exercised here.</b> The notification quotes two
- * quantities read off the deal; {@code CommissionRepository} is not on this class's wiring at all.
- * {@code StockDeclarationAuthzIntegrationTest} owns the "declaration really does land in the real
- * STOCK_BONUS input" loop, through the real, unmodified commission SQL.
- *
- * <p><b>MUTATION-CHECK RECORD</b> — see this class's PR body; each mutation was run with
- * {@code rm -rf backend/target/classes} first and restored to a byte-identical file after.
- */
+/** Owner ruling 2026-08-13 — the supervision half of "Sales declares, Import can correct." PR #706 let the deal
+ * owner declare qty_from_stock; the stated mitigation for an uncorroborated number feeding that same rep's
+ * STOCK_BONUS was "Import can correct it", and nothing told anyone to look. */
 class StockDeclarationNotificationIntegrationTest extends AbstractPostgresIntegrationTest {
 
     /** The one used by the notification; anything else must not be selected. */
@@ -97,14 +69,13 @@ class StockDeclarationNotificationIntegrationTest extends AbstractPostgresIntegr
         EmployeeRepository employees = new EmployeeRepository(
             jdbc, new EmployeeReferenceRepository(jdbc), new EmployeeCodeGenerator(jdbc));
 
-        // The declaring rep. A plain ฝ่ายขาย position, so DivisionAccessPolicy would derive
-        // "sales" — not "sales_manager" — for them, which is what makes them a non-recipient of
-        // their own notification.
+        // The declaring rep. A plain ฝ่ายขาย position, so DivisionAccessPolicy would derive "sales" — not
+        // "sales_manager" — for them, which is what makes them a non-recipient of their own notification.
         ownerId = employee(employees, "เจ้าของดีล ทดสอบ", "notif-owner", SALES_DIVISION, "พนักงานขาย");
         owner = principal(ownerId, "เจ้าของดีล ทดสอบ", "sales");
 
-        // The intended recipient, and the assistant that DivisionAccessPolicy documents as also
-        // being a sales_manager ("ผู้ช่วยผู้จัดการ" contains "ผู้จัดการ").
+        // The intended recipient, and the assistant that DivisionAccessPolicy documents as also being a sales_manager
+        // ("ผู้ช่วยผู้จัดการ" contains "ผู้จัดการ").
         salesManagerId = employee(employees, "ผู้จัดการ ฝ่ายขาย", "notif-sm", SALES_DIVISION, "ผู้จัดการฝ่ายขาย");
         assistantSalesManagerId = employee(employees, "ผู้ช่วย ฝ่ายขาย", "notif-asm",
             SALES_DIVISION, "ผู้ช่วยผู้จัดการฝ่ายขาย");
@@ -126,12 +97,8 @@ class StockDeclarationNotificationIntegrationTest extends AbstractPostgresIntegr
 
     // ── recipient resolution: the refusals are the evidence ──────────────────
 
-    /**
-     * The whole point of not reusing {@code notifyByRole("sales")}: that branch selects the entire
-     * ฝ่าย, which would hand the notification to the rep who just declared and to every one of
-     * their peers. Six people are pinned as non-recipients here, each for a different reason, and
-     * the set assertion catches anyone this test did not think to name.
-     */
+    /** The whole point of not reusing notifyByRole("sales"): that branch selects the entire ฝ่าย, which would hand
+     * the notification to the rep who just declared and to every one of their peers. */
     @Test
     void onlyActiveSalesManagersAreNotified_andTheDeclaringRepIsNot() {
         long ticketId = createLegacyTicketWithTwoItems();
@@ -163,22 +130,9 @@ class StockDeclarationNotificationIntegrationTest extends AbstractPostgresIntegr
             .isEmpty();
     }
 
-    /**
-     * The predicate behind {@code notifyByRole("sales_manager", ...)} is a hand-copy of
-     * {@code CommissionRepository#findSalesManagerApproverEmployeeIds} — deliberately, so that "who
-     * supervises a rep's commission INPUT" and "who signs a rep's commission OFF" cannot become two
-     * different people. A hand-copy with nothing checking it is the unguarded-mirror family this
-     * repo keeps getting bitten by (#714, PR #717), so this runs both against the same rows and
-     * requires them to agree. Read-only: {@code CommissionRepository} is not modified by this
-     * change and the commission math is not exercised.
-     *
-     * <p>Known and deliberate divergence from {@link th.co.glr.hr.auth.DivisionAccessPolicy#roleFor},
-     * which is a third answer to a similar question: {@code roleFor} tests executives FIRST, so a ฝ่ายขาย
-     * member whose position contains "กรรมการ" logs in as {@code ceo} while both predicates here
-     * would still select them. Inherited from the commission predicate on purpose — agreeing with
-     * the approver list matters more than agreeing with the login derivation, and no such person
-     * exists in the personnel data. Do not "fix" one of the two in isolation.
-     */
+    /** The predicate behind notifyByRole("sales_manager", ...) is a hand-copy of
+     * CommissionRepository#findSalesManagerApproverEmployeeIds — deliberately, so that "who supervises a rep's
+     * commission INPUT" and "who signs a rep's commission OFF" cannot become two different people. */
     @Test
     void theNotifiedSetMatchesTheCommissionApproverPredicateItMirrors() {
         long ticketId = createLegacyTicketWithTwoItems();
@@ -220,11 +174,9 @@ class StockDeclarationNotificationIntegrationTest extends AbstractPostgresIntegr
             .doesNotContain("ครบทั้งดีล");
     }
 
-    /**
-     * Full coverage is the case that also reroutes the deal (FROM_STOCK, skipping the entire import
-     * journey), so the message has to say so — that is the difference between "worth a look
-     * eventually" and "this deal just stopped being an import".
-     */
+    /** Full coverage is the case that also reroutes the deal (FROM_STOCK, skipping the entire import journey), so
+     * the message has to say so — that is the difference between "worth a look eventually" and "this deal just
+     * stopped being an import". */
     @Test
     void fullCoverageIsCalledOutBecauseItReroutesTheDeal() {
         long ticketId = createLegacyTicket(List.of(item("100.00")));
@@ -241,20 +193,15 @@ class StockDeclarationNotificationIntegrationTest extends AbstractPostgresIntegr
 
     // ── trigger: only the rep's own declaration ──────────────────────────────
 
-    /**
-     * The CEO is the correction/override path — a CEO declaring is the mitigation working, not the
-     * risk. Notifying on it would double the volume with the half that needs no supervision. Pinned
-     * rather than left implicit, because "notify on every declaration" is the obvious-looking change
-     * a future reader might make by accident. (Import used to share this correction ability; the
-     * 2026-09-28 S18 decision removed it, so only a CEO correction is exercised here now.)
-     */
+    /** The CEO is the correction/override path — a CEO declaring is the mitigation working, not the risk. Notifying
+     * on it would double the volume with the half that needs no supervision. */
     @Test
     void aCeoCorrectionNotifiesNobody() {
         long ticketId = createTicketWithOneItem();
         long itemId = onlyItemId(ticketId);
 
-        // Both declarations are the CEO's (never the owning rep's), so neither is the rep's own
-        // declaration that would notify the sales manager.
+        // Both declarations are the CEO's (never the owning rep's), so neither is the rep's own declaration that would
+        // notify the sales manager.
         ticketService.reserveStock(ticketId, declare(itemId, "25.00"), ceoUser);
         ticketService.reserveStock(ticketId, declare(itemId, "30.00"), ceoUser);
 
@@ -266,28 +213,9 @@ class StockDeclarationNotificationIntegrationTest extends AbstractPostgresIntegr
 
     // ── rollback ─────────────────────────────────────────────────────────────
 
-    /**
-     * The defect class PR #708 fixed for files: a side effect that outlives the transaction that
-     * caused it. Here it would be a notification telling a manager to review a declaration that
-     * never happened.
-     *
-     * <p><b>Why this cannot pass vacuously.</b> The failure is armed BY the notification: the
-     * {@code TicketRepository} spy throws from {@code findById} only once {@code notifyByRole} has
-     * been observed, and the only {@code findById} after that point is {@code reserveStock}'s
-     * closing re-read. So if the notification were never issued, nothing would throw,
-     * {@code reserveStock} would return normally and {@code assertThatThrownBy} would fail. "No
-     * notification row" can therefore only be reached through a path that really did insert one.
-     * The spy delegates to the real repository, so the real {@code INSERT} really runs.
-     *
-     * <p>The declaration itself is asserted rolled back too. Without that, "no notification row"
-     * would also be satisfied by an insert that silently matched nobody — a green for the wrong
-     * reason.
-     *
-     * <p>Called through {@link AbstractPostgresIntegrationTest#transactional}, so the transaction
-     * comes from {@code reserveStock}'s own {@code @Transactional} and not from the test. Deleting
-     * that annotation turns this test red (both the row and the declaration survive), which is what
-     * makes it evidence about the annotation rather than about {@code transactionTemplate}.
-     */
+    /** The defect class PR #708 fixed for files: a side effect that outlives the transaction that caused it. Here
+     * it would be a notification telling a manager to review a declaration that never happened. Why this cannot
+     * pass vacuously. */
     @Test
     void aRolledBackDeclarationTakesItsNotificationWithIt() {
         long ticketId = createLegacyTicket(List.of(item("100.00")));
@@ -412,9 +340,9 @@ class StockDeclarationNotificationIntegrationTest extends AbstractPostgresIntegr
 
     private TicketService newTicketService(TicketRepository ticketRepository,
                                            NotificationRepository notificationRepository) {
-        // PricingRequestService is mocked exactly as in StockDeclarationAuthzIntegrationTest:
-        // reserveStock never calls it. The stub exists only so a future edit routing through
-        // markLost/cancel cannot NPE on Mockito's default null.
+        // PricingRequestService is mocked exactly as in StockDeclarationAuthzIntegrationTest: reserveStock never calls
+        // it. The stub exists only so a future edit routing through markLost/cancel cannot NPE on Mockito's default
+        // null.
         PricingRequestService pricingRequests = mock(PricingRequestService.class);
         when(pricingRequests.cancelOpenForTicket(anyLong(), anyString(), any(), any()))
             .thenReturn(new PricingRequestService.CancelOpenForTicketResult(0, List.of()));
@@ -541,11 +469,8 @@ class StockDeclarationNotificationIntegrationTest extends AbstractPostgresIntegr
             new MapSqlParameterSource().addValue("id", employeeId));
     }
 
-    /**
-     * {@code name} is the real employee name, not the role: the notification quotes
-     * {@code actor.name()}, and a principal whose name were "sales" would let the message
-     * assertions pass while saying nothing about which rep declared.
-     */
+    /** name is the real employee name, not the role: the notification quotes actor.name(), and a principal whose
+     * name were "sales" would let the message assertions pass while saying nothing about which rep declared. */
     private static UserPrincipal principal(long employeeId, String name, String role) {
         return new UserPrincipal(employeeId, role + "-notif@glr.co.th", name, role, employeeId, true,
             LocalDate.of(2020, 1, 1), false, null, false);

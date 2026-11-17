@@ -2,24 +2,9 @@ import { Icon } from '../../components/common/Icon.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { evidenceLabel, ruleCardFor, taxChip } from './specialMoneyRules.js';
 
-/**
- * RuleCard — the redesign's core anti-cognitive-overload move (plan §"The rule card"): once a
- * type is chosen, restate ONLY that type's rules, generated from the single RULE_CARD table in
- * specialMoneyRules.js so the copy here cannot drift from that table independently. The employee
- * never has to read all twelve types' rules to find their own — and this same component is
- * reused, unchanged, in a rejected request's row (plan §"Rejection": note + rule + evidence).
- *
- * Renders nothing for a type the table has no entry for (defensive — every SpecialMoneyType is
- * covered today, see specialMoneyRules.js's own comment on TYPE_GROUPS).
- *
- * No border/background of its own (card-diet rule, plan §"Craft rules": "no nested cards" --
- * this used to be its own bordered box sitting inside the Request Panel, one card inside
- * another). Typography + a heading carry the grouping instead; a caller that needs a divider
- * above it (separating it from whatever precedes it) applies that divider itself via
- * `className`, e.g. `border-t border-border pt-3`, so nothing here ever hard-codes spacing that
- * would double up when a caller (a rejected row's already-bordered expansion area) supplies its
- * own separator.
- */
+/** RuleCard — the redesign's core anti-cognitive-overload move (plan §"The rule card"): once a type is chosen,
+ * restate ONLY that type's rules, generated from the single RULE_CARD table in specialMoneyRules.js so the
+ * copy here cannot drift from that table independently. */
 export function RuleCard({ requestType, typeMeta, className }) {
   const rule = ruleCardFor(requestType);
   if (!rule) return null;

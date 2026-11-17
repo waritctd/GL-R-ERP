@@ -116,13 +116,8 @@ class FxRateControllerTest {
             .andExpect(status().is2xxSuccessful());
     }
 
-    /**
-     * B1 (review fix, 2026-09-28): {@code BotFxFetchService.fetchNow()} now throws a 429 {@link
-     * ApiException} when the CEO console's manual-fetch cooldown is still active. This proves the
-     * controller layer propagates that status verbatim rather than translating it into something
-     * else — {@code ApiExceptionHandler} is wired into this class's {@code mvc} exactly as
-     * production wires it, so a mismatch here would be a real regression, not a test artifact.
-     */
+    /** BotFxFetchService.fetchNow() now throws a 429 ApiException when the CEO console's manual-fetch cooldown is
+     * still active. */
     @Test
     void manualFxFetchPropagatesA429FromTheServiceAsIs() throws Exception {
         when(botFx.fetchNow()).thenThrow(new ApiException(HttpStatus.TOO_MANY_REQUESTS,

@@ -1,14 +1,5 @@
-// Shared helper for triggering a browser download from a Blob API response.
-//
-// The file extension is derived from the blob's actual MIME type rather than
-// trusted from the requested format. In VITE_USE_MOCKS=true mode every
-// document endpoint returns a demo placeholder blob (text/plain for
-// "xlsx" requests, text/html for "pdf" requests — see src/api/mockApi.js
-// mockDocPlaceholderBlob/buildMockQuotationHtml) instead of a real xlsx/pdf,
-// so trusting the requested format produced files like "quotation.xlsx"
-// that were actually plain text. Falls back to the requested format when the
-// MIME type isn't one we recognize (e.g. a real server content-type we
-// haven't listed here).
+// Shared helper for triggering a browser download from a Blob API response. The file extension is derived from
+// the blob's actual MIME type rather than trusted from the requested format.
 import { API_BASE_URL } from '../api/client.js';
 
 const EXTENSION_BY_MIME = {
@@ -24,9 +15,8 @@ function extensionForBlob(blob, requestedFormat) {
   return EXTENSION_BY_MIME[type] ?? requestedFormat;
 }
 
-// Downloads `blob` as `${filenameBase}.<ext>`, picking <ext> via
-// `extensionForBlob`. `requestedFormat` (e.g. 'xlsx' | 'pdf') is the fallback
-// extension when the blob's MIME type isn't recognized.
+// Downloads `blob` as `${filenameBase}.<ext>`, picking <ext> via `extensionForBlob`. `requestedFormat` (e.g.
+// 'xlsx' | 'pdf') is the fallback extension when the blob's MIME type isn't recognized.
 export function downloadBlob(blob, filenameBase, requestedFormat) {
   const ext = extensionForBlob(blob, requestedFormat);
   const url = URL.createObjectURL(blob);
@@ -37,22 +27,14 @@ export function downloadBlob(blob, filenameBase, requestedFormat) {
   URL.revokeObjectURL(url);
 }
 
-/**
- * Fetches a document the server pointed us at by path (e.g. a FinanceDealDto `downloadPath`, which
- * targets the EXISTING per-document file endpoint — that endpoint enforces its own authz). Plain GET
- * with the session cookie, like the typed hrApi downloads. Only same-origin `/api/` paths are followed (checked
- * by resolving the URL, not by pattern), so the session cookie can never go elsewhere.
- *
- * Lives here rather than as an hrApi method on purpose: it is not one endpoint, and
- * serverContract.test.js pins every hrApi method to a served route. In mock mode there may be no
- * backend to fetch from, so it falls back to a labelled demo blob (same stance as the mock's own
- * document downloads).
- */
+/** Fetches a document the server pointed us at by path (e.g. a FinanceDealDto `downloadPath`, which targets the
+ * EXISTING per-document file endpoint — that endpoint enforces its own authz). Plain GET with the session
+ * cookie, like the typed hrApi downloads. */
 export async function fetchDocumentBlob(path) {
   const refused = () => new Error('ดาวน์โหลดไม่สำเร็จ');
   if (typeof path !== 'string' || !path) throw refused();
-  // Resolve exactly as the browser will, then compare origins: a hand-rolled regex misses browser
-  // URL normalisation ('/\\evil.com/x', '\\\\evil.com/x' and '/\t/evil.com/x' all resolve cross-origin).
+  // Resolve exactly as the browser will, then compare origins: a hand-rolled regex misses browser URL
+  // normalisation ('/\\evil.com/x', '\\\\evil.com/x' and '/\t/evil.com/x' all resolve cross-origin).
   let url;
   try {
     url = new URL(path, window.location.origin);

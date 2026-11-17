@@ -28,13 +28,9 @@ import th.co.glr.hr.pricing.PricingFormulaConfigDtos.PricingDutyRateDto;
 import th.co.glr.hr.pricing.PricingFormulaConfigDtos.PricingFormulaConfigDto;
 import th.co.glr.hr.pricing.PricingFormulaConfigDtos.PricingFreightRateDto;
 
-/**
- * BRANCH 1 -- config storage + CEO editing UI only. This is a NEW endpoint (not a change to
- * {@code /api/price-calc-configs}); its read gate mirrors that endpoint's #388 precedent
- * (ceo/import may read the cost model, everyone else denied), and writes stay CEO-only. Cases are
- * written the wrong way round: denial is asserted for every non-costing role, not just presence
- * for the allowed ones.
- */
+/** BRANCH 1 -- config storage + CEO editing UI only. This is a NEW endpoint (not a change to
+ * /api/price-calc-configs); its read gate mirrors that endpoint's #388 precedent (ceo/import may read the cost
+ * model, everyone else denied), and writes stay CEO-only. */
 class PricingFormulaConfigControllerTest {
     private static final List<String> DENIED_ROLES =
         List.of("employee", "warehouse", "qc", "hr", "sales", "sales_manager", "account");
@@ -234,14 +230,9 @@ class PricingFormulaConfigControllerTest {
             .andExpect(status().is2xxSuccessful());
     }
 
-    /**
-     * Regression test for the gap that let two DIFFERENT, overlapping thickness bands for the same
-     * country save happily: the old validation grouped by (country, thickness) and only compared
-     * quantity bands WITHIN an identical thickness group, so Italy [3,8) and Italy [5,10) -- which
-     * never share a group key -- were never compared against each other at all, even though their
-     * quantity bands also overlap. That leaves the freight lookup ambiguous for e.g. a 6mm-thick
-     * order, which the country-level pairwise check now catches.
-     */
+    /** Regression test for the gap that let two DIFFERENT, overlapping thickness bands for the same country save
+     * happily: the old validation grouped by and only compared quantity bands WITHIN an identical thickness group,
+     * so Italy [3,8) and Italy [5,10). */
     @Test
     void rejectsOverlappingThicknessBandsForTheSameCountry() throws Exception {
         String body = """
@@ -268,13 +259,8 @@ class PricingFormulaConfigControllerTest {
             .andExpect(status().isBadRequest());
     }
 
-    /**
-     * Guards against over-rejecting: adjacent HALF-OPEN thickness bands (e.g. [3,8) then [8,12)) do
-     * not overlap even though their quantity bands are identical -- 8mm belongs to the second band
-     * only. This mirrors the real V109 seed shape (contiguous thickness bands per country, each with
-     * the same contiguous quantity bands), so it also guards against the fix over-rejecting the
-     * legitimate seeded configuration.
-     */
+    /** Guards against over-rejecting: adjacent HALF-OPEN thickness bands (e.g. [3,8) then [8,12)) do not overlap
+     * even though their quantity bands are identical -- 8mm belongs to the second band only. */
     @Test
     void allowsAdjacentNonOverlappingThicknessBandsWithTheSameQuantityBands() throws Exception {
         when(formulaConfigs.createNewVersion(any(), anyLong())).thenReturn(sampleConfig());
@@ -307,11 +293,9 @@ class PricingFormulaConfigControllerTest {
             .andExpect(status().is2xxSuccessful());
     }
 
-    // ============================================================================================
-    // Issue #436 -- add / remove a freight row. Decision-level cases only; the enforcement evidence
-    // (that the guard runs BEFORE the SQL, and that the row really does not land) is in
+    // Issue #436 -- add / remove a freight row. Decision-level cases only; the enforcement evidence (that the
+    // guard runs BEFORE the SQL, and that the row really does not land) is in
     // PricingFormulaConfigFreightRowIntegrationTest against real Postgres, per CLAUDE.md.
-    // ============================================================================================
 
     /** The read gate must not leak into these new writes either -- {ceo} only, import included. */
     @Test

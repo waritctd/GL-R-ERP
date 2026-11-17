@@ -177,9 +177,7 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
         salesManagerActor = actor(salesManagerUserId, "sales_manager");
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Lifecycle + numbering
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     /**
      * Each tax invoice's VAT is rounded on its own net, so deposit + remaining can
@@ -416,8 +414,8 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
 
         assertThat(issuedA.baseNumber()).isNotEqualTo(issuedB.baseNumber());
 
-        // Both numbers were minted from the SAME sales.document_sequence row (doc_type 'AR_GLR') —
-        // the shared sequence the future ใบวางบิล (V189) will also draw from, per the plan.
+        // Both numbers were minted from the SAME sales.document_sequence row (doc_type 'AR_GLR') — the shared sequence
+        // the future ใบวางบิล (V189) will also draw from, per the plan.
         Integer lastSeq = jdbc.queryForObject(
             "SELECT last_seq FROM sales.document_sequence WHERE doc_type = 'AR_GLR' AND year_th = :y",
             Map.of("y", LocalDate.now(java.time.ZoneId.of("Asia/Bangkok")).getYear() + 543), Integer.class);
@@ -433,11 +431,9 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
         BigDecimal originalNet = issued.netAmount();
         byte[] originalFile = remainingInvoiceService.file(issued.id(), salesActor);
 
-        // Mutate the SOURCE deposit notice's already-issued deposit amount directly (an issued
-        // deposit notice cannot be edited through DepositNoticeService.update — DRAFT only — so
-        // this reaches straight for the row, the same way this test's own negative-net sibling
-        // does) — the remaining invoice was already ISSUED before this happened, and per this
-        // document's own "always rendered from the snapshot" rule must not move.
+        // Mutate the SOURCE deposit notice's already-issued deposit amount directly — the remaining invoice was
+        // already ISSUED before this happened, and per this document's own "always rendered from the snapshot" rule
+        // must not move.
         jdbc.update("UPDATE sales.deposit_notice SET deposit_amount = :amt WHERE deposit_notice_id = :id",
             Map.of("amt", new BigDecimal("1.00"), "id", fixture.depositNoticeId()));
 
@@ -472,13 +468,12 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
             remainingInvoiceService.createDraft(fixtureA.ticketId(), null, salesActor).id(), salesActor);
         assertThat(issuedA.status()).isEqualTo("ISSUED");
 
-        // A wholly SEPARATE pricing-request chain on the SAME ticket, driven to its own accepted
-        // quotation + issued deposit notice — a real shape (a later revision/re-quote on the same
-        // deal), not merely a synthetic id swap.
+        // A wholly SEPARATE pricing-request chain on the SAME ticket, driven to its own accepted quotation + issued
+        // deposit notice — a real shape (a later revision/re-quote on the same deal), not merely a synthetic id swap.
         acceptPreparedSecondChain(fixtureA.ticketId(), salesActor);
         RemainingInvoiceDocumentDto draftB = remainingInvoiceService.createDraft(fixtureA.ticketId(), null, salesActor);
-        // The newest qualifying quotation is chain B's — never chain A's (which already has its
-        // own ISSUED remaining invoice), proving this draft is genuinely a different chain.
+        // The newest qualifying quotation is chain B's — never chain A's (which already has its own ISSUED remaining
+        // invoice), proving this draft is genuinely a different chain.
         assertThat(draftB.customerQuotationId()).isNotEqualTo(issuedA.customerQuotationId());
 
         RemainingInvoiceDocumentDto issuedB = remainingInvoiceService.issue(draftB.id(), salesActor);
@@ -645,9 +640,7 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
         assertThat(remainingInvoiceService.get(draftB.id(), salesActor).status()).isEqualTo("DRAFT");
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Authz — WRONG-WAY-ROUND (CLAUDE.md requirement): reused DepositNoticeService predicate
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void createDraft_nonOwningSalesRep_isRefused() {
@@ -659,8 +652,8 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
 
     @Test
     void createDraft_ceo_isRefused_theGateHasNoCeoException() {
-        // Deliberate: EXACTLY the deposit-notice issue gate (sales-role + ticket-ownership), which
-        // has no CEO carve-out — unlike ImportRequestService's own FULL_WRITE_ROLES (sales+ceo).
+        // Deliberate: EXACTLY the deposit-notice issue gate (sales-role + ticket-ownership), which has no CEO
+        // carve-out — unlike ImportRequestService's own FULL_WRITE_ROLES (sales+ceo).
         DealFixture fixture = buildAcceptedDeal(salesActor, "AuthzCreate2");
         assertThatThrownBy(() -> remainingInvoiceService.createDraft(fixture.ticketId(), null, ceoActor))
             .isInstanceOfSatisfying(ApiException.class,
@@ -870,8 +863,8 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
             new RemainingInvoiceDraftRequest(null, "PO-KEEP-ME", null, null, null), salesActor);
         assertThat(firstEdit.reference()).isEqualTo("PO-KEEP-ME");
 
-        // A second update touching only docDate — reference must survive untouched (PATCH-shaped,
-        // not a full overwrite), per RemainingInvoiceDraftRequest's own Javadoc.
+        // A second update touching only docDate — reference must survive untouched (PATCH-shaped, not a full
+        // overwrite), per RemainingInvoiceDraftRequest's own Javadoc.
         RemainingInvoiceDocumentDto secondEdit = remainingInvoiceService.updateDraft(draft.id(),
             new RemainingInvoiceDraftRequest(null, null, null, LocalDate.of(2026, 10, 1), null), salesActor);
         assertThat(secondEdit.reference()).isEqualTo("PO-KEEP-ME");
@@ -986,11 +979,8 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
         assertThat(remainingInvoiceService.get(issued.id(), salesActor).status()).isEqualTo("ISSUED");
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // Fixture helpers — adapted from DepositNoticeIssueGuardIntegrationTest's own approach for
-    // driving a deal through the real Steps 1-6 services to an accepted quotation + issued
-    // deposit notice.
-    // ─────────────────────────────────────────────────────────────────────────────────────
+    // Fixture helpers — adapted from DepositNoticeIssueGuardIntegrationTest's own approach for driving a deal
+    // through the real Steps 1-6 services to an accepted quotation + issued deposit notice.
 
     private record DealFixture(long ticketId, long pricingRequestId, long depositNoticeId) {}
 
@@ -1106,9 +1096,9 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
         long pricingRequestId = preparedSecondPricingRequestId;
         jdbc.update("UPDATE sales.quotation SET doc_status = 'ACCEPTED', accepted_at = now() WHERE quotation_id = :id",
             Map.of("id", preparedSecondIssuedQuotationId));
-        // recordOutcome ALSO transitions the pricing request's own status (QUOTATION_ISSUED ->
-        // QUOTATION_ACCEPTED) — the confirmOrder call right below gates on THIS column, not
-        // sales.quotation.doc_status, so the raw-SQL bypass above must carry that write too.
+        // recordOutcome ALSO transitions the pricing request's own status (QUOTATION_ISSUED -> QUOTATION_ACCEPTED) —
+        // the confirmOrder call right below gates on THIS column, not sales.quotation.doc_status, so the raw-SQL
+        // bypass above must carry that write too.
         jdbc.update("UPDATE sales.pricing_request SET status = 'QUOTATION_ACCEPTED' WHERE pricing_request_id = :id",
             Map.of("id", pricingRequestId));
 

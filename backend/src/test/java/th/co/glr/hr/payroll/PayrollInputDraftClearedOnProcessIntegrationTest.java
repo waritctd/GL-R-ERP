@@ -16,15 +16,9 @@ import th.co.glr.hr.commission.CommissionService;
 import th.co.glr.hr.leave.LeaveRepository;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
-/**
- * Payroll input draft (2026-07-30): a stale draft must never resurrect over real submitted values
- * once a month is actually processed -- {@link PayrollService#process} clears
- * {@code hr.payroll_input_draft} for that month in the same transaction it saves the processed
- * {@code payroll_line} rows (see {@link PayrollRepository#deleteInputDrafts}). Driven through the
- * real {@link PayrollService} + real Postgres, same wiring as {@code PayrollDailyRateIntegrationTest}
- * -- a mocked repository would "pass" this regardless of whether the delete SQL, and its placement
- * inside the transaction, actually do anything.
- */
+/** Payroll input draft: a stale draft must never resurrect over real submitted values once a month is actually
+ * processed -- PayrollService#process clears hr.payroll_input_draft for that month in the same transaction it
+ * saves the processed payroll_line rows. */
 class PayrollInputDraftClearedOnProcessIntegrationTest extends AbstractPostgresIntegrationTest {
     private PayrollRepository payrollRepository;
     private PayrollService payrollService;

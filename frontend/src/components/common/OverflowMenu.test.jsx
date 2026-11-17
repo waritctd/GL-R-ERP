@@ -15,8 +15,8 @@ function items(overrides = []) {
   ];
 }
 
-// Matches useIsMobile.test.js's own mock shape — OverflowMenu's mobile flip
-// is backed by that same shared `useIsMobile` hook.
+// Matches useIsMobile.test.js's own mock shape — OverflowMenu's mobile flip is backed by that same shared
+// `useIsMobile` hook.
 function mockMobileMatchMedia() {
   window.matchMedia = vi.fn().mockReturnValue({
     matches: true,
@@ -96,9 +96,8 @@ describe('OverflowMenu', () => {
     render(<OverflowMenu items={items()} mobilePlacement="up" />);
     fireEvent.click(screen.getByRole('button', { name: 'การดำเนินการเพิ่มเติม' }));
 
-    // Position moved from the `mobile:` Tailwind variant to a JS-computed
-    // inline style (see OverflowMenu.jsx's doc comment on `createPortal`) —
-    // flipping up now means `bottom` is set and `top` isn't, rather than a
+    // Position moved from the `mobile:` Tailwind variant to a JS-computed inline style (see OverflowMenu.jsx's doc
+    // comment on `createPortal`) — flipping up now means `bottom` is set and `top` isn't, rather than a
     // `mobile:bottom-full` class.
     const menu = screen.getByRole('menu');
     expect(menu.style.bottom).not.toBe('');
@@ -225,13 +224,9 @@ describe('OverflowMenu', () => {
     expect(document.activeElement).toBe(screen.getAllByRole('menuitem')[0]);
   });
 
-  // P3 (review round 2): every item is tabIndex={-1} (reachable only via
-  // Arrow/Home/End, see the component's own doc comment on the button
-  // element) so a plain Tab from within the menu skips every OTHER item and
-  // lands on whatever follows this component in the DOM. Before this fix
-  // there was no roving tabindex at all AND nothing closed the menu on
-  // Tab-out, so an open menu stayed open, still interactive, while focus
-  // moved into the page behind it — an orphaned popover.
+  // every item is tabIndex={-1} (reachable only via Arrow/Home/End, see the component's own doc comment on the
+  // button element) so a plain Tab from within the menu skips every OTHER item and lands on whatever follows
+  // this component in the DOM.
   it('items are out of the normal Tab order (tabIndex -1), and Tab closes the menu', () => {
     render(<OverflowMenu items={items()} />);
     fireEvent.click(screen.getByRole('button', { name: 'การดำเนินการเพิ่มเติม' }));
@@ -253,17 +248,8 @@ describe('OverflowMenu', () => {
     expect(screen.queryByRole('menu')).toBeNull();
   });
 
-  // P3 (review round 2): a disabled item is deliberately NOT given the native
-  // `disabled` attribute (see the component's own doc comment — it has to
-  // stay in the roving-focus set), so its no-op guard lives entirely in the
-  // onClick handler. Per the HTML button-activation spec, Enter/Space on a
-  // focused native <button> dispatch a 'click' event — the same event this
-  // handler already gates on `item.disabled` — so a click event is the
-  // faithful jsdom stand-in for "activated via keyboard" here (jsdom does
-  // not itself synthesize that native keyboard-to-click translation the way
-  // a real browser does, so firing 'click' directly is the correct way to
-  // exercise it under fireEvent, same convention already used elsewhere in
-  // this codebase — see TicketDetailPage.test.jsx's own "disabled item" note).
+  // a disabled item is deliberately NOT given the native `disabled` attribute (see the component's own doc
+  // comment — it has to stay in the roving-focus set), so its no-op guard lives entirely in the onClick handler.
   it('a disabled item no-ops on keyboard activation (Enter/Space), same as a mouse click', () => {
     const onSelect = vi.fn();
     const list = items([{ key: 'd', label: 'เลื่อนไป: ถัดไป', disabled: true, disabledReason: 'ยังไม่พร้อม', onSelect }]);
@@ -275,9 +261,8 @@ describe('OverflowMenu', () => {
     fireEvent.click(disabledItem);
 
     expect(onSelect).not.toHaveBeenCalled();
-    // Present-but-inert, not silently gone — the menu stays open and the
-    // item stays visible with its reason, per the IA rule an unavailable
-    // action must say why rather than vanish.
+    // Present-but-inert, not silently gone — the menu stays open and the item stays visible with its reason, per
+    // the IA rule an unavailable action must say why rather than vanish.
     expect(screen.getByRole('menu')).not.toBeNull();
   });
 });

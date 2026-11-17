@@ -6,17 +6,8 @@ import { SafeForm } from '../../components/common/SafeForm.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { ThaiDateInput } from '../../components/common/ThaiDateInput.jsx';
 
-/**
- * Create/edit modal for one hr.holiday row. In edit mode the date is read-only (PUT is keyed on the
- * path-variable date — HolidayController#update — there is no rename-the-date operation), and the
- * row's current `source` is shown as a badge so the BANK->COMPANY reclassification confirm (owned
- * by the caller, HolidaysTab.jsx) makes sense in context.
- *
- * `formError` is a server-side error the caller wants surfaced inline (409 duplicate date on
- * create, or any other 400 the backend raises) rather than a passing toast — the modal stays open
- * so the field is fixable without re-opening it. `onUseExisting` is present only for the 409 case:
- * it lets the caller offer "แก้ไขรายการเดิม" right where the conflict was discovered.
- */
+/** Create/edit modal for one hr.holiday row. `onUseExisting` is present only for the 409 case: it lets the
+ * caller offer "แก้ไขรายการเดิม" right where the conflict was discovered. */
 export function HolidayFormModal({
   mode, // 'create' | 'edit'
   initialDate,
@@ -49,8 +40,8 @@ export function HolidayFormModal({
       setNameError('กรุณาระบุชื่อวันหยุด');
       hasError = true;
     } else if (trimmedName.length > 500) {
-      // Mirrors HolidayAdminService.MAX_NAME_LENGTH — a client-side echo of the same 500-char
-      // bound the server enforces, so a paste accident is caught before the round trip.
+      // Mirrors HolidayAdminService.MAX_NAME_LENGTH — a client-side echo of the same 500-char bound the server
+      // enforces, so a paste accident is caught before the round trip.
       setNameError('ชื่อวันหยุดยาวเกินไป (สูงสุด 500 ตัวอักษร)');
       hasError = true;
     } else {

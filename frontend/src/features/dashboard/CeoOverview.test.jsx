@@ -5,21 +5,16 @@ import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { CeoOverview } from './CeoOverview.jsx';
 import { api } from '../../api/index.js';
-import { bangkokMonthStartIso } from '../../utils/format.js';
+import { bangkokMonthStartIso, bangkokTodayIso, formatThaiDate } from '../../utils/format.js';
 import {
   CASH_BY_REP, CASH_RECEIVED_THIS_MONTH, EXPECTED, SERVER_TOTALS, expectFigure, figureRows,
 } from '../../test/fixtures/dashboardMoney.js';
 
 globalThis.React = React;
 
-// This component reads five endpoints the CEO already has full access to
-// (see routes.js: canViewTickets/canViewCommissions/canViewPricingRequestQueue/
-// canViewAllOvertime/canViewAllLeave all include 'ceo') and never calls a
-// mutation itself — every row's CTA is a route change, asserted below via a
-// real MemoryRouter navigation, not a mocked useNavigate. Per CLAUDE.md, this
-// is UI-level only: it proves the component derives the right rows/routes
-// from a given API response shape, not that the Java service enforces
-// anything — there is no authz change in this branch to verify.
+// This component reads five endpoints the CEO already has full access to and never calls a mutation itself —
+// every row's CTA is a route change, asserted below via a real MemoryRouter navigation, not a mocked
+// useNavigate.
 vi.mock('../../api/index.js', () => ({
   api: {
     tickets: { list: vi.fn() },
@@ -27,9 +22,18 @@ vi.mock('../../api/index.js', () => ({
     commissions: { list: vi.fn(), pendingApproval: vi.fn() },
     overtime: { list: vi.fn() },
     leave: { list: vi.fn() },
+    salesBoard: { teamOverview: vi.fn() },
+    salesAnalytics: { snapshot: vi.fn() },
   },
 }));
 
+const linkTo = (row, href) => [...row.querySelectorAll('a')].find((a) => a.getAttribute('href') === href);
+const TODAY = bangkokTodayIso();
+function addDays(iso, delta) {
+  const d = new Date(`${iso}T00:00:00.000Z`);
+  d.setUTCDate(d.getUTCDate() + delta);
+  return d.toISOString().slice(0, 10);
+}
 const monthStart = bangkokMonthStartIso();
 const THIS_MONTH = monthStart.slice(0, 7);
 
@@ -56,6 +60,11 @@ function leaveRequest(id) {
 }
 
 function mockAllData() {
+  api.salesBoard.teamOverview.mockResolvedValue({
+    quietDays: 14,
+    reps: [{ employeeId: 21, name: 'สมชาย ขายดี', openDeals: 3, openValue: 450000, quietDeals: 1, lastUpdateAt: null }],
+    stale: [],
+  });
   api.pricingRequests.queue.mockResolvedValue({
     items: [
       { id: 501, status: 'READY_FOR_CEO_REVIEW', customerName: 'บริษัท ทดสอบราคา', requestCode: 'PR-501', ticketCode: 'TK-501' },
@@ -116,12 +125,12 @@ function mockAllData() {
     if (params.status === 'SUBMITTED') {
       return Promise.resolve({
         requests: [
-          // No manager stage at all -> the CEO reviews it directly. Note reports_to (55) is NOT the
-          // CEO: under the old reports_to-based rule this row was invisible to them, which is the
-          // regression the server-side routing change would otherwise have left in place.
+          // No manager stage at all -> the CEO reviews it directly. Note reports_to (55) is NOT the CEO: under the old
+          // reports_to-based rule this row was invisible to them, which is the regression the server-side routing change
+          // would otherwise have left in place.
           { id: 202, employeeName: 'พนักงาน ไม่มีผู้จัดการ', workDate: '2026-07-21', managerEmployeeId: 55, hasManagerApprover: false },
-          // Has a ผู้จัดการ, so it is the manager's to review first — must stay off the CEO's list
-          // even though reports_to happens to point straight at the CEO.
+          // Has a ผู้จัดการ, so it is the manager's to review first — must stay off the CEO's list even though
+          // reports_to happens to point straight at the CEO.
           { id: 203, employeeName: 'พนักงาน มีผู้จัดการอื่น', workDate: '2026-07-21', managerEmployeeId: 999, hasManagerApprover: true },
         ],
       });
@@ -150,9 +159,13 @@ function LocationProbe() {
   return <div data-testid="location-probe">{location.pathname}{location.search}</div>;
 }
 
+function SearchProbe() {
+  return <div data-testid="search-probe">{useLocation().search}</div>;
+}
+
 let lastClient;
 
-function renderOverview(summary = dashboardSummary) {
+function renderOverview(summary = dashboardSummary, entry = '/') {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
@@ -160,12 +173,15 @@ function renderOverview(summary = dashboardSummary) {
 
   return render(
     <QueryClientProvider client={queryClient}>
-      <MemoryRouter initialEntries={['/']}>
+      <MemoryRouter initialEntries={[entry]}>
         <Routes>
           <Route
             path="/"
             element={(
-              <CeoOverview user={ceoUser} employee={ceoEmployee} dashboardSummary={summary} showToast={vi.fn()} />
+              <>
+                <CeoOverview user={ceoUser} employee={ceoEmployee} dashboardSummary={summary} showToast={vi.fn()} />
+                <SearchProbe />
+              </>
             )}
           />
           <Route path="*" element={<LocationProbe />} />
@@ -175,9 +191,8 @@ function renderOverview(summary = dashboardSummary) {
   );
 }
 
-// No @testing-library/jest-dom in this project (see src/test/setup.js) — plain
-// .textContent assertions instead of toHaveTextContent, matching every other
-// test file in this repo.
+// No @testing-library/jest-dom in this project (see src/test/setup.js) — plain .textContent assertions instead
+// of toHaveTextContent, matching every other test file in this repo.
 function probeText() {
   return screen.getByTestId('location-probe').textContent;
 }
@@ -191,12 +206,71 @@ describe('CeoOverview', () => {
     mockAllData();
   });
 
+  describe('ความเคลื่อนไหวของทีม panel', () => {
+    const mv = (id, ownerId, ownerName, extra = {}) => ({
+      id, code: `TK-${id}`, customerName: `ลูกค้า ${id}`, title: `โครงการ ${id}`, status: 'quotation_issued',
+      lifecycle: 'ACTIVE', salesStage: 'NEGOTIATION', createdById: ownerId, createdByName: ownerName,
+      amountPayable: 100, amountPaid: 0, amountOutstanding: 0, overdue: false, nextFollowUpAt: null,
+      stageChangedInRange: false, activityInRange: false, ...extra,
+    });
+    const TEAM = [
+      mv(801, 21, 'สมชาย ขายดี', { stageChangedInRange: true }),
+      mv(802, 21, 'สมชาย ขายดี', { nextFollowUpAt: '2020-01-01' }),
+      mv(803, 22, 'สมหญิง ขายเก่ง'),
+      mv(804, 22, 'สมหญิง ขายเก่ง'),
+      mv(805, 22, 'สมหญิง ขายเก่ง', { activityInRange: true }),
+      mv(806, 23, 'ไม่มีงานเปิด', { lifecycle: 'CLOSED_LOST' }),
+      mv(807, 21, 'สมชาย ขายดี', { lifecycle: 'ON_HOLD', stageChangedInRange: true, activityInRange: true }),
+    ];
+
+    beforeEach(() => {
+      api.tickets.list.mockResolvedValue({ tickets: TEAM });
+    });
+
+    it('renders one row per owner (no client-side role filter), ไม่เคลื่อนไหว desc, default range in the header', async () => {
+      renderOverview();
+      const panel = (await screen.findByRole('heading', { name: 'ความเคลื่อนไหวของทีม' })).closest('section');
+      await within(panel).findByTestId('team-row-22');
+      const ids = [...panel.querySelectorAll('[data-testid^="team-row-"]')].map((el) => el.dataset.testid);
+      expect(ids).toEqual(['team-row-22', 'team-row-21']); // สมหญิง has 2 silent, สมชาย 1; 23 has no open deal
+      for (const h of ['ผู้ดูแล', 'งานที่เปิดอยู่', 'ขยับขั้น', 'มีกิจกรรม', 'เลยนัด', 'ไม่เคลื่อนไหว', 'ยอดที่สั่งซื้อแล้ว', 'ยอดคาดหวัง']) {
+        expect(panel.textContent).toContain(h);
+      }
+      expect(panel.textContent).toContain(formatThaiDate(addDays(TODAY, -6)));
+      expect(panel.textContent).toContain(formatThaiDate(TODAY));
+      const row = within(panel).getByTestId('team-row-21');
+      expect(linkTo(row, `/tickets?owner=21&week=silent&from=${addDays(TODAY, -6)}&to=${TODAY}`).textContent.trim()).toBe('1');
+      expect(linkTo(row, '/tickets?owner=21')).toBeUndefined(); // plain number, not a link
+      expect(row.querySelectorAll('td')[0].textContent.trim()).toBe('2');
+      expect(linkTo(row, `/tickets?owner=21&week=overdue&from=${addDays(TODAY, -6)}&to=${TODAY}`).textContent.trim()).toBe('1');
+    });
+
+    it('a count links to /tickets?owner=<id>&week=<key>', async () => {
+      renderOverview();
+      const row = await screen.findByTestId('team-row-22');
+      fireEvent.click(linkTo(row, `/tickets?owner=22&week=silent&from=${addDays(TODAY, -6)}&to=${TODAY}`));
+      expect(await screen.findByTestId('location-probe')).toBeTruthy();
+      expect(probeText()).toBe(`/tickets?owner=22&week=silent&from=${addDays(TODAY, -6)}&to=${TODAY}`);
+    });
+  });
+
+  // Spec 2026-11-15 §7.4: the CEO sees ภาพรวมทีมขาย first (SALES_ENABLED is on in the test env).
+  it('opens with ภาพรวมทีมขาย, before the company money band', async () => {
+    renderOverview();
+
+    const team = await screen.findByRole('region', { name: 'ภาพรวมทีมขาย' });
+    await within(team).findByTestId('tile-held');
+    expect(api.salesBoard.teamOverview).toHaveBeenCalledTimes(1);
+    const money = screen.getByRole('region', { name: 'ผลบริษัทเดือนนี้' });
+    expect(team.compareDocumentPosition(money) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it('fetches each worklist source once, with the same filters as before', async () => {
     renderOverview();
     await findGroup('price');
 
     expect(api.pricingRequests.queue).toHaveBeenCalledWith({ activeOnly: true });
-    expect(api.tickets.list).toHaveBeenCalledWith({});
+    expect(api.tickets.list).toHaveBeenCalledWith({ movementFrom: addDays(TODAY, -6), movementTo: TODAY });
     // Only the CEO's own queue, never the whole commission history.
     expect(api.commissions.pendingApproval).toHaveBeenCalledTimes(1);
     expect(api.commissions.list).toHaveBeenCalledTimes(1);
@@ -455,6 +529,59 @@ describe('CeoOverview', () => {
 
       expectFigure('กำลังพล', '42 คน');
       expectFigure('มาสายวันนี้', '3 คน');
+    });
+  });
+  // Sales insights (spec 2026-11-16): the landing page is a two-way switch, state in ?view=insight. The insight body
+  // itself is pinned in SalesInsights.test.jsx; here only the wiring.
+  describe('มุมมอง: งานวันนี้ / วิเคราะห์ยอดขาย', () => {
+    beforeEach(() => api.salesAnalytics.snapshot.mockResolvedValue({ snapshot: null }));
+
+    it('defaults to today\'s dashboard, with the switch showing งานวันนี้ selected and no insight view', async () => {
+      renderOverview();
+
+      expect(screen.getByRole('tab', { name: 'งานวันนี้' }).getAttribute('aria-selected')).toBe('true');
+      expect(screen.getByRole('tab', { name: 'วิเคราะห์ยอดขาย' }).getAttribute('aria-selected')).toBe('false');
+      expect(screen.getByText('รอคุณตัดสินใจ')).toBeTruthy();
+      expect(screen.queryByTestId('sales-insights')).toBeNull();
+      expect(screen.getByRole('tabpanel').getAttribute('aria-labelledby')).toBe('landing-view-tab-today');
+      expect(api.salesAnalytics.snapshot).not.toHaveBeenCalled();
+    });
+
+    it('keeps the tablist OUTSIDE the tabpanel, which wraps only the content below the header, in both views', async () => {
+      const { unmount } = renderOverview();
+      let panel = screen.getByRole('tabpanel');
+      expect(panel.contains(screen.getByRole('tablist'))).toBe(false);
+      expect(panel.getAttribute('aria-labelledby')).toBe('landing-view-tab-today');
+      expect(panel.textContent).toContain('รอคุณตัดสินใจ');
+      expect(panel.textContent).not.toContain('ภาพรวมผู้บริหาร');
+      unmount();
+
+      renderOverview(dashboardSummary, '/?view=insight');
+      await screen.findByTestId('sales-insights');
+      panel = screen.getByRole('tabpanel');
+      expect(panel.contains(screen.getByRole('tablist'))).toBe(false);
+      expect(panel.getAttribute('aria-labelledby')).toBe('landing-view-tab-insight');
+      expect(panel.contains(screen.getByTestId('sales-insights'))).toBe(true);
+    });
+
+    it('?view=insight shows the insight view instead of the worklist', async () => {
+      renderOverview(dashboardSummary, '/?view=insight');
+
+      expect(await screen.findByTestId('sales-insights')).toBeTruthy();
+      expect(screen.getByRole('tab', { name: 'วิเคราะห์ยอดขาย' }).getAttribute('aria-selected')).toBe('true');
+      expect(screen.queryByText('รอคุณตัดสินใจ')).toBeNull();
+    });
+
+    it('clicking the switch writes the view to the URL and back again', async () => {
+      renderOverview();
+
+      fireEvent.click(screen.getByRole('tab', { name: 'วิเคราะห์ยอดขาย' }));
+      expect(await screen.findByTestId('sales-insights')).toBeTruthy();
+      expect(screen.getByTestId('search-probe').textContent).toContain('view=insight');
+
+      fireEvent.click(screen.getByRole('tab', { name: 'งานวันนี้' }));
+      expect(screen.queryByTestId('sales-insights')).toBeNull();
+      expect(screen.getByTestId('search-probe').textContent).not.toContain('view=insight');
     });
   });
 });

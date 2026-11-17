@@ -7,18 +7,7 @@ import { todayIso } from './dateHelpers.js';
 import { SCOPE_TYPES, scopeIdLabel } from './scopeTypes.js';
 import { ThaiDateInput } from '../../components/common/ThaiDateInput.jsx';
 
-/**
- * Create modal for one hr.work_schedule_assignment row. `min={todayIso()}` on effectiveFrom is the
- * CLIENT-SIDE half of the back-dating guard — WorkScheduleAssignmentAdminService#create is the
- * authority (a 400 comes back regardless of what the client allowed to be typed/pasted), so
- * `formError` always carries the exact server message when the server rejects it anyway; the `min`
- * attribute is a courtesy that stops most attempts before the round trip, not the enforcement.
- *
- * `formError` covers both the 400 back-dating rejection and the 409 conflicting-successor case
- * (WorkScheduleAssignmentAdminService#create's own two failure modes) — both render as one inline
- * banner near the date fields since either can only be understood in the context of the dates just
- * entered, exactly where the user is already looking.
- */
+/** Create modal for one hr.work_schedule_assignment row. */
 export function AssignmentFormModal({ schedules, busy, formError, onClose, onSubmit }) {
   const [scopeType, setScopeType] = useState('EMPLOYEE');
   const [scopeId, setScopeId] = useState('');
@@ -37,10 +26,9 @@ export function AssignmentFormModal({ schedules, busy, formError, onClose, onSub
     if (!effectiveFrom) {
       errors.effectiveFrom = 'กรุณาระบุวันที่เริ่มมีผล';
     } else if (effectiveFrom < today) {
-      // Client-side echo of WorkScheduleAssignmentAdminService#create's own rule — same reasoning
-      // as HolidayFormModal's 500-char echo: catch the obvious case before the round trip, but the
-      // server's own message (via `formError`, on a 400 that slips past this) is what's actually
-      // authoritative.
+      // Client-side echo of WorkScheduleAssignmentAdminService#create's own rule — same reasoning as
+      // HolidayFormModal's 500-char echo: catch the obvious case before the round trip, but the server's own message
+      // (via `formError`, on a 400 that slips past this) is what's actually authoritative.
       errors.effectiveFrom = `ไม่สามารถกำหนดวันที่เริ่มมีผลย้อนหลังได้ (ต้องไม่ก่อนวันที่ ${today})`;
     }
     if (effectiveTo && effectiveFrom && effectiveTo < effectiveFrom) {

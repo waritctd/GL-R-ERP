@@ -33,18 +33,8 @@ import th.co.glr.hr.payroll.obligation.PayrollDeductionShortfallDtos.PayrollDedu
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 import th.co.glr.hr.ticket.TicketRepository;
 
-/**
- * Real-Postgres coverage of issue #376's shortfall tracking: generalising #373's requested/actual/
- * shortfall triple to the ALREADY-enforced ป.วิ.พ. ม.302 garnishment cap. Every case here reprocesses
- * through the real {@link PayrollService#process}, exactly like {@link
- * DeductionObligationPayrollEngineIntegrationTest} -- a mocked repository cannot prove the ledger
- * self-corrects on a real re-run.
- *
- * <p><b>This is pure record-keeping.</b> No test here asserts a DIFFERENT {@code
- * legalExecutionDeduction} than {@link DeductionObligationPayrollEngineIntegrationTest} already
- * asserts for the equivalent scenario -- the shortfall ledger only ever reads back what {@code
- * PayrollCalculator} already computed and {@code hr.payroll_line} already persisted.
- */
+/** Real-Postgres coverage of issue #376's shortfall tracking: generalising #373's requested/actual/ shortfall
+ * triple to the ALREADY-enforced ป.วิ.พ. ม.302 garnishment cap. This is pure record-keeping. */
 class PayrollDeductionShortfallIntegrationTest extends AbstractPostgresIntegrationTest {
     private PayrollRepository payrollRepository;
     private PayrollService payrollService;
@@ -83,13 +73,9 @@ class PayrollDeductionShortfallIntegrationTest extends AbstractPostgresIntegrati
             obligationService);
     }
 
-    /**
-     * The obligation's own instructed monthly figure (฿20,000) is well above what ป.วิ.พ. ม.302's
-     * default SALARY rule (30% of gross taxable income, ~฿30,000 salary) allows -- the exact
-     * scenario {@link DeductionObligationPayrollEngineIntegrationTest
-     * #theStatutoryGarnishmentCapCanBindTighterThanTheObligationsOwnMonthlyFigure} already proves
-     * changes no persisted amount. This test additionally proves the shortfall ledger records it.
-     */
+    /** The obligation's own instructed monthly figure is well above what ป.วิ.พ. ม.302's default SALARY rule allows -- the
+     * exact scenario DeductionObligationPayrollEngineIntegrationTest
+     * #theStatutoryGarnishmentCapCanBindTighterThanTheObligationsOwnMonthlyFigure already proves changes no persisted amount. */
     @Test
     void aStatutoryCapShortfallIsRecordedWithRequestedActualAndAReason() {
         LocalDate month = LocalDate.of(2026, 1, 1);
@@ -113,34 +99,16 @@ class PayrollDeductionShortfallIntegrationTest extends AbstractPostgresIntegrati
         assertThat(row.payrollMonth()).isEqualTo(month);
     }
 
-    /**
-     * D-376-1 regression (Opus review): reproduces the reviewer's exact probe. An employee has TWO
-     * LEGAL_EXECUTION obligations -- an OLDER-by-insertion-order but LATER-start-date one that is
-     * already COMPLETED with an HR override (monthly ฿5,000), and a NEWER-by-insertion-order but
-     * EARLIER-start-date one that is still ACTIVE and genuinely drives this run (monthly ฿100, total
-     * ฿100). Processing this month satisfies the ACTIVE obligation's total in full (deducts exactly
-     * its own requested ฿100) and, as a side effect, flips ITS OWN status to COMPLETED.
-     *
-     * <p>Before the fix, {@code recordGarnishmentShortfalls} re-resolved "requested" via {@code
-     * resolveMonthlyAmount} AFTER that flip. With both obligations now COMPLETED,
-     * {@code findDrivingObligation}'s {@code ORDER BY (status='ACTIVE') DESC, start_date DESC} then
-     * picked the OTHER obligation (later start_date, override set) -- ฿5,000 -- and fabricated a
-     * ฿4,900 shortfall against a court order that was satisfied in full at ฿100. A single-obligation
-     * test cannot reach this: the flip only matters when a SECOND obligation exists to be picked up
-     * by the changed ordering.
-     *
-     * <p>After the fix, "requested" is read from {@code PayrollLineDto#legalExecutionRequested()},
-     * frozen at the point {@code calculateLine} actually resolved it (the ACTIVE obligation, ฿100,
-     * BEFORE any status flip) -- so requested == actual == ฿100 and no shortfall row is written.
-     */
+    /** D-376-1 regression (Opus review): reproduces the reviewer's exact probe. A single-obligation test cannot
+     * reach this: the flip only matters when a SECOND obligation exists to be picked up by the changed ordering. */
     @Test
     void aSecondObligationCompletingDuringThisRunDoesNotFabricateAShortfallOnAnUnrelatedObligation() {
         LocalDate month = LocalDate.of(2026, 1, 1);
         long employeeId = seedEmployee("SHORTFALL-TWOOBLIG", new BigDecimal("30000.00"));
 
-        // The LATER-start-date obligation, already fully paid off and COMPLETED before this run even
-        // starts, with an HR override recorded (so #resolveMonthlyAmount would return its full ฿5,000
-        // monthly figure if it were ever picked as driving).
+        // The LATER-start-date obligation, already fully paid off and COMPLETED before this run even starts, with an
+        // HR override recorded (so #resolveMonthlyAmount would return its full ฿5,000 monthly figure if it were ever
+        // picked as driving).
         long olderCompletedObligationId = obligationRepository.insert(new DeductionObligationCreateRequest(
             employeeId, DeductionObligationKind.LEGAL_EXECUTION, new BigDecimal("5000.00"),
             new BigDecimal("60000.00"), "LED-TWOOBLIG-COMPLETED", LocalDate.of(2025, 6, 1), null), employeeId);
@@ -151,8 +119,8 @@ class PayrollDeductionShortfallIntegrationTest extends AbstractPostgresIntegrati
         assertThat(obligationRepository.findById(olderCompletedObligationId).orElseThrow().status())
             .isEqualTo(DeductionObligationStatus.COMPLETED);
 
-        // The EARLIER-start-date obligation, still ACTIVE going into this run -- the one that
-        // actually drives it (ORDER BY (status='ACTIVE') DESC ranks it first regardless of start_date).
+        // The EARLIER-start-date obligation, still ACTIVE going into this run -- the one that actually drives it
+        // (ORDER BY (status='ACTIVE') DESC ranks it first regardless of start_date).
         long activeObligationId = obligationRepository.insert(new DeductionObligationCreateRequest(
             employeeId, DeductionObligationKind.LEGAL_EXECUTION, new BigDecimal("100.00"),
             new BigDecimal("100.00"), "LED-TWOOBLIG-ACTIVE", LocalDate.of(2025, 1, 1), null), employeeId);
@@ -160,20 +128,18 @@ class PayrollDeductionShortfallIntegrationTest extends AbstractPostgresIntegrati
         PayrollPeriodDto period = payrollService.process(new ProcessPayrollRequest(month, List.of()), hr());
         PayrollLineDto line = lineFor(period, employeeId);
 
-        // The court order behind the ACTIVE obligation was satisfied in full at its own requested
-        // figure -- no statutory cap came anywhere near binding (30% of ~30,000 is ~9,000).
+        // The court order behind the ACTIVE obligation was satisfied in full at its own requested figure -- no
+        // statutory cap came anywhere near binding (30% of ~30,000 is ~9,000).
         assertThat(line.legalExecutionDeduction()).isEqualByComparingTo("100.00");
-        // This run's own remittance completed the ACTIVE obligation -- the state transition that
-        // exposed the bug.
+        // This run's own remittance completed the ACTIVE obligation -- the state transition that exposed the bug.
         assertThat(obligationRepository.findById(activeObligationId).orElseThrow().status())
             .isEqualTo(DeductionObligationStatus.COMPLETED);
         // The OTHER (unrelated, already-completed) obligation must be completely untouched by this run.
         assertThat(obligationRepository.findById(olderCompletedObligationId).orElseThrow().status())
             .isEqualTo(DeductionObligationStatus.COMPLETED);
 
-        // THE regression assertion: no phantom ฿4,900 shortfall against a court order that was paid
-        // in full. Before the fix this returned one row: requested=5000.00, actual=100.00,
-        // shortfall=4900.00.
+        // THE regression assertion: no phantom ฿4,900 shortfall against a court order that was paid in full. Before
+        // the fix this returned one row: requested=5000.00, actual=100.00, shortfall=4900.00.
         assertThat(shortfallRepository.findAll(employeeId, PayrollDeductionKind.LEGAL_EXECUTION_GARNISHMENT)).isEmpty();
     }
 
@@ -210,10 +176,8 @@ class PayrollDeductionShortfallIntegrationTest extends AbstractPostgresIntegrati
         assertThat(rows).hasSize(1);
     }
 
-    /**
-     * A correction that removes the shortfall (HR lowers the instructed monthly figure to something
-     * the statutory cap no longer binds) must DELETE the stale row on reprocess, not strand it.
-     */
+    /** A correction that removes the shortfall (HR lowers the instructed monthly figure to something the statutory
+     * cap no longer binds) must DELETE the stale row on reprocess, not strand it. */
     @Test
     void aShortfallThatDisappearsOnCorrectionIsDeletedOnReprocess() {
         LocalDate month = LocalDate.of(2026, 1, 1);
@@ -232,12 +196,9 @@ class PayrollDeductionShortfallIntegrationTest extends AbstractPostgresIntegrati
         assertThat(shortfallRepository.findAll(employeeId, PayrollDeductionKind.LEGAL_EXECUTION_GARNISHMENT)).isEmpty();
     }
 
-    /**
-     * STUDENT_LOAN is never capped by anything today (item (1), cap_group NONE -- see
-     * PayrollDeductionClassification), so completion (the final instalment, then auto-stop at zero)
-     * must never be mistaken for a shortfall -- it is the obligation being satisfied correctly,
-     * already fully visible via #373's own remittance ledger and status column.
-     */
+    /** STUDENT_LOAN is never capped by anything today (item, cap_group NONE -- see PayrollDeductionClassification),
+     * so completion must never be mistaken for a shortfall -- it is the obligation being satisfied correctly,
+     * already fully visible via #373's own remittance ledger and status column. */
     @Test
     void studentLoanNeverProducesAShortfallRowEvenAtCompletion() {
         long employeeId = seedEmployee("SHORTFALL-STULOAN", new BigDecimal("30000.00"));

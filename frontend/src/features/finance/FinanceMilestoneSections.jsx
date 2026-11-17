@@ -1,6 +1,7 @@
 /* Hallmark · genre: modern-minimal · macrostructure: Feature Stack (scrolling pane) · tone: utilitarian · theme: project system (Sarabun + indigo, owner-locked) · redesign */
 /* Hallmark · pre-emit critique: P4 H4 E4 S4 R4 V4 (rows and item table respond to the pane's own width via container queries, not the viewport) */
 import { useState } from 'react';
+import { ReceiptSourceChip } from './ReceiptSourceChip.jsx';
 import { Button } from '../../components/common/Button.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
@@ -11,9 +12,9 @@ import {
   depositPolicyLabel, quotationStatusLabel, PAYMENT_KIND_LABEL,
 } from '../../utils/format.js';
 
-// The five milestone sections of a finance deal, in order. Every figure, label and document comes
-// from the server's FinanceDealDto (its `milestoneTrack` decides which section is current/skipped);
-// nothing here derives a milestone from a stage.
+// The five milestone sections of a finance deal, in order. Every figure, label and document comes from the
+// server's FinanceDealDto (its `milestoneTrack` decides which section is current/skipped); nothing here
+// derives a milestone from a stage.
 
 export function vatCaption(basis) {
   if (basis === 'EXCLUDING_VAT') return 'ไม่รวม VAT';
@@ -64,10 +65,9 @@ function DownloadButton({ path, name, filenameBase, format = 'pdf', onError }) {
   );
 }
 
-// ONE row layout for every document/payment row in every panel: title line (+ badge) with a meta line
-// on the left, a fixed-width amount column, a fixed-width button column. Because the tracks are
-// fixed-width and right-anchored, amounts and buttons share the same right edges across all panels.
-// Compact (mobile): title + meta full width, then amount (left) and button (right) on one row.
+// ONE row layout for every document/payment row in every panel: title line (+ badge) with a meta line on the
+// left, a fixed-width amount column, a fixed-width button column. Because the tracks are fixed-width and
+// right-anchored, amounts and buttons share the same right edges across all panels.
 const DOC_ROW_GRID = 'grid grid-cols-[minmax(0,1fr)_9rem_7rem] items-center gap-x-4 gap-y-2 py-3 @max-[34rem]:grid-cols-[minmax(0,1fr)_auto]';
 
 function DocRow({ title, meta, badge, amount, basis, download }) {
@@ -124,6 +124,7 @@ function PaymentRows({ payments }) {
         <DocRow
           key={p.id}
           title={`รับ${PAYMENT_KIND_LABEL[p.kind] ?? p.kind ?? 'ชำระ'}`}
+          badge={<ReceiptSourceChip source={p.source} />}
           meta={[
             p.receivedAt ? formatThaiDate(p.receivedAt) : null,
             p.receiptRef ? `อ้างอิง ${p.receiptRef}` : null,
@@ -143,7 +144,7 @@ function ItemsTable({ items }) {
   const cell = 'py-2 pl-3 first:pl-0 @max-[34rem]:flex @max-[34rem]:items-baseline @max-[34rem]:justify-between @max-[34rem]:gap-3 @max-[34rem]:py-0.5 @max-[34rem]:pl-0 @max-[34rem]:before:text-sm @max-[34rem]:before:text-text-muted @max-[34rem]:before:content-[attr(data-label)]';
   return (
     <table className="w-full border-collapse text-sm @max-[34rem]:block">
-      <caption className="sr-only">รายการสินค้าในดีล</caption>
+      <caption className="sr-only">รายการสินค้าในงาน</caption>
       <thead className="@max-[34rem]:sr-only">
         <tr className="border-b border-border text-sm text-text-muted">
           <th scope="col" className="py-1.5 text-left font-bold">รายการ</th>
@@ -202,7 +203,7 @@ function DepositBody({ deal, skipped, awaiting, onError }) {
     <>
       {skipped ? (
         <p className="m-0 py-1 text-sm text-text-muted">
-          ดีลนี้ไม่ต้องเก็บมัดจำ
+          งานนี้ไม่ต้องเก็บมัดจำ
           {deal.money.depositPolicy ? <span> · {depositPolicyLabel(deal.money.depositPolicy).label}</span> : null}
         </p>
       ) : null}
@@ -290,8 +291,9 @@ function DeliveryBody({ deal, awaiting, onError }) {
   );
 }
 
-// Where the recorded tax invoice's commission request stands (FinanceDealDto.CommissionInvoice.approvalStatus).
-// Status only -- finance never sees a commission amount, weight or approver.
+// Where the recorded tax invoice's commission request stands
+// (FinanceDealDto.CommissionInvoice.approvalStatus). Status only -- finance never sees a commission amount,
+// weight or approver.
 const COMMISSION_APPROVAL = {
   SUBMITTED: { label: 'รอผู้จัดการฝ่ายขายอนุมัติ', tone: 'warning' },
   MANAGER_APPROVED: { label: 'รอ CEO อนุมัติ', tone: 'info' },
@@ -397,8 +399,8 @@ function MilestoneSection({ step, position, subject, deal, onError }) {
   const state = step.skipped ? 'skipped' : position === 'past' ? 'done' : position;
   // Upcoming panels collapse to the header row unless they already hold data — data wins.
   const collapsed = position === 'upcoming' && !data && !step.skipped;
-  // A panel holding the subject of an available action gets the current panel's emphasis, without
-  // taking the server's current marker.
+  // A panel holding the subject of an available action gets the current panel's emphasis, without taking the
+  // server's current marker.
   const emphasised = position === 'current' || subject;
   // A non-current panel that holds an action's subject is waiting on finance, not "not yet": say so.
   const status = subject && position !== 'current' && state !== 'skipped'
@@ -450,9 +452,9 @@ function MilestoneSection({ step, position, subject, deal, onError }) {
   );
 }
 
-// Which milestone holds the subject of an available action (no invented rules: only the two actions
-// whose object is a specific issued document): DEPOSIT_PAID -> the deposit notice, FINAL_PAYMENT ->
-// the remaining invoice.
+// Which milestone holds the subject of an available action (no invented rules: only the two actions whose
+// object is a specific issued document): DEPOSIT_PAID -> the deposit notice, FINAL_PAYMENT -> the remaining
+// invoice.
 const ACTION_SUBJECT_MILESTONE = { DEPOSIT_PAID: 2, FINAL_PAYMENT: 4 };
 
 export function MilestoneSections({ deal, onError }) {

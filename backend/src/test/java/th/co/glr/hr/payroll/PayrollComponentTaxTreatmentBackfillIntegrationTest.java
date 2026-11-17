@@ -12,20 +12,9 @@ import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
-/**
- * P0 fix (Opus review, 2026-07-30): replays {@code V100__payroll_component_tax_treatment_backfill
- * .sql}'s EXACT SQL (read verbatim from the classpath, never re-typed here, so this test cannot drift
- * from the real migration) against a freshly-inserted employee, to prove the backfill logic itself is
- * correct -- not just that some default eventually reaches the calculator (that half is covered by
- * {@link PayrollClassificationReachabilityIntegrationTest}).
- *
- * <p>The Testcontainers golden-template migrates ONCE against an empty {@code hr.employee}, so V100
- * genuinely backfills nothing during that one real run (there is nobody to backfill). Every test in
- * this suite inserts its own employees AFTER that point. Re-running V100's own idempotent SQL
- * (guarded by {@code ON CONFLICT DO NOTHING} / an {@code IS DISTINCT FROM} guard) against a
- * freshly-inserted employee is therefore the only way to exercise the ACTUAL migration statements
- * against realistic data without rebuilding the golden template per test.
- */
+/** replays V100__payroll_component_tax_treatment_backfill .sql's EXACT SQL against a freshly-inserted employee,
+ * to prove the backfill logic itself is correct -- not just that some default eventually reaches the
+ * calculator. */
 class PayrollComponentTaxTreatmentBackfillIntegrationTest extends AbstractPostgresIntegrationTest {
     private PayrollRepository repository;
     private String backfillSql;
@@ -44,8 +33,8 @@ class PayrollComponentTaxTreatmentBackfillIntegrationTest extends AbstractPostgr
     void replayingV100ClassifiesAPreExistingEmployeeFromCarryForwardEvidenceAndSafeDefaults() {
         long employeeId = seedEmployee("EMP-V100-001", "มณฑ์ชญา", "รีเพลย์");
 
-        // Mimics V98's real evidence for employee 10012 (handoff section 9d): SPECIAL_PAY_1 recurs
-        // every sampled month for this employee, so V100 must promote it to REGULAR_REPROJECT.
+        // Mimics V98's real evidence for employee 10012 (handoff section 9d): SPECIAL_PAY_1 recurs every sampled month
+        // for this employee, so V100 must promote it to REGULAR_REPROJECT.
         jdbc.update("""
             INSERT INTO hr.payroll_component_carry_forward (employee_id, tax_year, component, carry_forward, updated_at)
             VALUES (:employeeId, 2026, 'SPECIAL_PAY_1', TRUE, now())
@@ -69,14 +58,11 @@ class PayrollComponentTaxTreatmentBackfillIntegrationTest extends AbstractPostgr
         assertThat(treatments.get(PayrollComponent.OVERTIME_PAY)).isEqualTo(PayrollTaxTreatment.EXTRA_CUMULATIVE_ACTUAL);
         assertThat(treatments.get(PayrollComponent.COMMISSION_PAY)).isEqualTo(PayrollTaxTreatment.EXTRA_CUMULATIVE_ACTUAL);
 
-        // No carry-forward evidence for SPECIAL_PAY_2 -- must land on the safe unknown-recurrence
-        // default, NOT be promoted to REGULAR_REPROJECT just because SPECIAL_PAY_1 was.
+        // No carry-forward evidence for SPECIAL_PAY_2 -- must land on the safe unknown-recurrence default, NOT be
+        // promoted to REGULAR_REPROJECT just because SPECIAL_PAY_1 was.
         assertThat(treatments.get(PayrollComponent.SPECIAL_PAY_2)).isEqualTo(PayrollTaxTreatment.EXTRA_CUMULATIVE_ACTUAL);
-        // Correction (owner, 2026-07-29, caught in review before merge): DIRECTOR_REMUNERATION is
-        // RESOLVED, not defaulted -- "director remuneration is every month but the pay may change once
-        // in a while" (owner). Paid every คราว => ป.96/2543 ข้อ 2.1/2.4 => REGULAR_REPROJECT, matching
-        // PayrollCalculator's legacy calculate() engine, which hardcodes it into the REGULAR limb. See
-        // PayrollRepository#defaultTaxTreatment's javadoc for the full correction history.
+        // Correction (owner, 2026-07-29, caught in review before merge): DIRECTOR_REMUNERATION is RESOLVED, not
+        // defaulted -- "director remuneration is every month but the pay may change once in a while" (owner).
         assertThat(treatments.get(PayrollComponent.DIRECTOR_REMUNERATION)).isEqualTo(PayrollTaxTreatment.REGULAR_REPROJECT);
 
         // SALARY / NON_TAXABLE_INCOME are deliberately never backfilled.
@@ -87,8 +73,8 @@ class PayrollComponentTaxTreatmentBackfillIntegrationTest extends AbstractPostgr
     @Test
     void replayingV100NeverOverwritesAnHrClassificationMadeBeforeItRuns() {
         long employeeId = seedEmployee("EMP-V100-002", "กันตินันท์", "รีเพลย์");
-        // HR has ALREADY classified SPECIAL_PAY_1 to EXTRA_KNOWN_FREQUENCY (a deliberate choice
-        // diverging from what V100's own default/carry-forward promotion would pick).
+        // HR has ALREADY classified SPECIAL_PAY_1 to EXTRA_KNOWN_FREQUENCY (a deliberate choice diverging from what
+        // V100's own default/carry-forward promotion would pick).
         repository.upsertComponentTaxTreatment(2026, java.util.List.of(
             new PayrollClassificationDtos.ComponentTaxTreatmentUpsertRequest(
                 employeeId, PayrollComponent.SPECIAL_PAY_1, PayrollTaxTreatment.EXTRA_KNOWN_FREQUENCY)
@@ -108,11 +94,9 @@ class PayrollComponentTaxTreatmentBackfillIntegrationTest extends AbstractPostgr
             .isEqualTo(PayrollTaxTreatment.EXTRA_KNOWN_FREQUENCY);
     }
 
-    /**
-     * Strips {@code --} line comments FIRST, then splits on {@code ;} -- splitting on {@code ;}
-     * before stripping comments would fold each statement's leading comment block into the same chunk
-     * as the statement text, making every chunk "start with a comment" and silently skip real SQL.
-     */
+    /** Strips -- line comments FIRST, then splits on ; -- splitting on ; before stripping comments would fold each
+     * statement's leading comment block into the same chunk as the statement text, making every chunk "start with
+     * a comment" and silently skip real SQL. */
     private void executeStatements(String sql) {
         StringBuilder withoutComments = new StringBuilder();
         for (String line : sql.split("\n")) {

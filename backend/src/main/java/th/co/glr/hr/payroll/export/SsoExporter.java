@@ -80,16 +80,11 @@ public class SsoExporter {
     private static final String ID_FORMAT = "0000000000000";
     private static final String MONEY_FORMAT = "0.00";
 
-    /**
-     * @param rows     the period's payroll lines
-     * @param employer employer SSO registration — only {@code ssoBranch} is read, as the fallback
-     *                 sheet for employees with no {@code sso_branch_code} of their own
-     */
+    /** Selects affected frontend tests, including readers outside the import graph. */
     public byte[] export(List<PayrollExportRow> rows, AppProperties.Employer employer) {
-        // TreeMap: sheets in ascending branch order. Within a branch, order by national id ascending
-        // to match the reference filing (findExportRows' own ORDER BY is employee_code, which is a
-        // different order — the workbook is re-sorted here rather than at the query, so this class
-        // owns its layout end to end).
+        // TreeMap: sheets in ascending branch order. Within a branch, order by national id ascending to match the
+        // reference filing (findExportRows' own ORDER BY is employee_code, which is a different order — the workbook
+        // is re-sorted here rather than at the query, so this class owns its layout end to end).
         Map<String, List<PayrollExportRow>> byBranch = new TreeMap<>();
         for (PayrollExportRow row : rows) {
             if (!isPositive(row.socialSecurity())) {
@@ -98,8 +93,8 @@ public class SsoExporter {
             byBranch.computeIfAbsent(branchOf(row, employer), key -> new ArrayList<>()).add(row);
         }
         if (byBranch.isEmpty()) {
-            // Nobody insured this period. Emit a single header-only sheet at the employer's own
-            // branch rather than a workbook with no sheets at all, which Excel refuses to open.
+            // Nobody insured this period. Emit a single header-only sheet at the employer's own branch rather than a
+            // workbook with no sheets at all, which Excel refuses to open.
             byBranch.put(digits(employer.getSsoBranch()), List.of());
         }
 
@@ -118,8 +113,8 @@ public class SsoExporter {
 
                 int rowIndex = 1;
                 for (PayrollExportRow row : insured) {
-                    // ค่าจ้าง is the uncapped wage actually paid, falling back to the capped base for
-                    // pre-V123 rows; both figures round to whole baht PER PERSON (see the javadoc).
+                    // ค่าจ้าง is the uncapped wage actually paid, falling back to the capped base for pre-V123 rows; both figures
+                    // round to whole baht PER PERSON (see the javadoc).
                     BigDecimal wage =
                         wholeBaht(row.ssoWageGross() != null ? row.ssoWageGross() : row.ssoWageBase());
                     BigDecimal contribution = wholeBaht(row.socialSecurity());
@@ -150,8 +145,8 @@ public class SsoExporter {
         String id = ssn(source);
         Cell idCell = row.createCell(0);
         if (id.isEmpty()) {
-            // No national id AND no social_security_no. Leave the cell blank rather than writing a
-            // fabricated 0, so the e-service rejects the row instead of filing it under id zero.
+            // No national id AND no social_security_no. Leave the cell blank rather than writing a fabricated 0, so the
+            // e-service rejects the row instead of filing it under id zero.
             idCell.setBlank();
         } else {
             idCell.setCellValue(Double.parseDouble(id));
@@ -171,21 +166,15 @@ public class SsoExporter {
         contributionCell.setCellStyle(moneyStyle);
     }
 
-    /**
-     * The employee's own SSO branch, falling back to the employer default when unset — so an
-     * installation that has never assigned branches keeps producing exactly one sheet.
-     */
+    /** The employee's own SSO branch, falling back to the employer default when unset — so an installation that has
+     * never assigned branches keeps producing exactly one sheet. */
     private String branchOf(PayrollExportRow row, AppProperties.Employer employer) {
         String branch = digits(row.ssoBranchCode());
         return branch.isEmpty() ? digits(employer.getSsoBranch()) : branch;
     }
 
-    /**
-     * Excel refuses a blank sheet name, so an employer whose fallback branch is itself unset (or
-     * non-numeric) would otherwise blow up here rather than at the export guard. {@code
-     * PayrollService} already refuses the export when {@code sso-branch} is blank; this is the
-     * belt-and-braces so a future caller that skips that guard still produces a valid workbook.
-     */
+    /** Excel refuses a blank sheet name, so an employer whose fallback branch is itself unset (or non-numeric)
+     * would otherwise blow up here rather than at the export guard. */
     private String sheetName(String branch) {
         return branch.isEmpty() ? "000000" : branch;
     }
@@ -228,12 +217,8 @@ public class SsoExporter {
         return value == null ? BigDecimal.ZERO : value;
     }
 
-    /**
-     * Rounds to whole baht, {@link RoundingMode#HALF_UP} — มาตรา 46 วรรคท้าย for เงินสมทบ (rounding is
-     * explicit in the statute); inferred from the reference filing for ค่าจ้าง (see this class's
-     * javadoc). Applied PER PERSON: the e-service totals the column itself, so what it sums must be
-     * the already-rounded per-person figures, never a rounded grand total — the two can differ.
-     */
+    /** Rounds to whole baht, RoundingMode#HALF_UP — มาตรา 46 วรรคท้าย for เงินสมทบ (rounding is explicit in the
+     * statute); inferred from the reference filing for ค่าจ้าง (see this class's javadoc). */
     private BigDecimal wholeBaht(BigDecimal value) {
         return orZero(value).setScale(0, RoundingMode.HALF_UP);
     }

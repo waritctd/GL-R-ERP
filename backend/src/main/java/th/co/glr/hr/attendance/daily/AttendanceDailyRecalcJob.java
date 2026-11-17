@@ -10,19 +10,8 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import th.co.glr.hr.config.AppProperties;
 
-/**
- * Keeps {@code hr.attendance_daily} honest without anyone asking.
- *
- * <p>Two jobs in one place:
- * <ul>
- *   <li>a nightly sweep of the last few days, which heals rows whose punches arrived late (a device
- *       catch-up pull can deliver yesterday's scans this morning, after the day was rolled up);
- *   <li>an optional one-shot historical backfill on startup, off by default.
- * </ul>
- *
- * <p>Both are safe to run repeatedly: the upsert is idempotent and refuses to overwrite rows HR has
- * marked as manually overridden.
- */
+/** Keeps hr.attendance_daily honest without anyone asking. Both are safe to run repeatedly: the upsert is
+ * idempotent and refuses to overwrite rows HR has marked as manually overridden. */
 @Component
 public class AttendanceDailyRecalcJob implements ApplicationRunner {
     private static final Logger log = LoggerFactory.getLogger(AttendanceDailyRecalcJob.class);
@@ -49,12 +38,9 @@ public class AttendanceDailyRecalcJob implements ApplicationRunner {
         log.info("Attendance daily recalc {} to {} wrote {} rows", from, today, written);
     }
 
-    /**
-     * One-shot historical roll-up, for activating this feature against an existing punch ledger.
-     *
-     * <p>Off by default: it walks the whole of history, so it should be a deliberate act. The HR
-     * endpoint {@code POST /api/attendance/daily/recalculate} is the normal way in.
-     */
+    /** One-shot historical roll-up, for activating this feature against an existing punch ledger. Off by default:
+     * it walks the whole of history, so it should be a deliberate act. The HR endpoint POST
+     * /api/attendance/daily/recalculate is the normal way in. */
     @Override
     public void run(ApplicationArguments args) {
         if (!properties.getAttendance().getDaily().isBackfillOnStartup()) {

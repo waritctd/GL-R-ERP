@@ -99,20 +99,13 @@ public class AttendanceRepository {
             .orElse(null);
     }
 
-    // Chunk size for the bulk import: keeps each multi-row INSERT well under
-    // PostgreSQL's 65535-parameter limit (13 params/row) and the statement a
-    // reasonable size.
+    // Chunk size for the bulk import: keeps each multi-row INSERT well under PostgreSQL's 65535-parameter limit
+    // (13 params/row) and the statement a reasonable size.
     private static final int IMPORT_INSERT_CHUNK = 500;
 
-    /**
-     * Bulk-inserts a whole .dat import's punches. Resolves the device once and
-     * every employee in a single query, then inserts in chunked multi-row
-     * statements instead of one round trip per punch — the per-row path is far
-     * too slow for tens of thousands of rows over a high-latency DB link.
-     *
-     * @return the number of newly inserted rows (conflicts / already-present
-     *         punches are skipped via ON CONFLICT DO NOTHING).
-     */
+    /** Bulk-inserts a whole .dat import's punches. Resolves the device once and every employee in a single query,
+     * then inserts in chunked multi-row statements instead of one round trip per punch — the per-row path is far
+     * too slow for tens of thousands of rows over a high-latency DB link. */
     public int batchInsertPunches(List<NormalizedAttendancePunch> punches) {
         if (punches.isEmpty()) {
             return 0;
@@ -281,8 +274,8 @@ public class AttendanceRepository {
     }
 
     public List<AttendancePunchDto> findPunches(AttendancePunchFilter filter) {
-        // Badge resolution lives in AttendanceSql so the daily roll-up resolves punches identically;
-        // see the javadoc there for why the COALESCE fallback is needed.
+        // Badge resolution lives in AttendanceSql so the daily roll-up resolves punches identically; see the javadoc
+        // there for why the COALESCE fallback is needed.
         StringBuilder sql = new StringBuilder("""
             SELECT p.punch_id,
                    COALESCE(p.employee_id, e.employee_id) AS employee_id,
@@ -326,13 +319,13 @@ public class AttendanceRepository {
             params.addValue("divisionId", filter.divisionId());
         }
 
-        // Take the most-recent :limit punches for the window (DESC + LIMIT in the inner query so the
-        // recency cap stays meaningful for a wide date range)...
+        // Take the most-recent :limit punches for the window (DESC + LIMIT in the inner query so the recency cap stays
+        // meaningful for a wide date range)...
         sql.append(" ORDER BY p.punch_time DESC, p.punch_id DESC LIMIT :limit");
 
-        // ...then hand them back oldest-first. Every consumer treats the first punch as the clock-in
-        // and the last as the clock-out (the drill-down's เข้า/ออก labels, and the daily roll-up's
-        // MIN/MAX derivation), so chronological order is the contract — not newest-first.
+        // ...then hand them back oldest-first. Every consumer treats the first punch as the clock-in and the last as
+        // the clock-out (the drill-down's เข้า/ออก labels, and the daily roll-up's MIN/MAX derivation), so
+        // chronological order is the contract — not newest-first.
         String ordered = "SELECT * FROM (\n" + sql + "\n) recent ORDER BY recent.punch_time, recent.punch_id";
 
         return jdbc.query(ordered, params, (rs, rowNum) -> new AttendancePunchDto(
@@ -359,10 +352,8 @@ public class AttendanceRepository {
         ));
     }
 
-    /**
-     * Points an employee's badge_card_no at the card number the device holds for them, matched by
-     * employee_code = device User ID (Pin). Returns rows updated (0 = no employee with that code).
-     */
+    /** Points an employee's badge_card_no at the card number the device holds for them, matched by employee_code =
+     * device User ID (Pin). Returns rows updated (0 = no employee with that code). */
     public int updateEmployeeBadgeByCode(String employeeCode, String cardNo) {
         return jdbc.update("""
             UPDATE hr.employee
@@ -408,8 +399,8 @@ public class AttendanceRepository {
     }
 
     private Long findEmployeeIdByBadge(String badgeCode) {
-        // The device reports the card number for card punches and the employee_code for fingerprint/PIN
-        // punches; match either so both resolve to the right employee.
+        // The device reports the card number for card punches and the employee_code for fingerprint/PIN punches; match
+        // either so both resolve to the right employee.
         return jdbc.query("""
             SELECT employee_id
               FROM hr.employee

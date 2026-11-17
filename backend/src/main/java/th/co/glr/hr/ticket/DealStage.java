@@ -133,13 +133,9 @@ public final class DealStage {
     public static final String GATE_ACCOUNT = "account";
     public static final String GATE_IMPORT = "import";
 
-    /**
-     * Which department owns the manual fallback for {@code stage} — read straight off the three
-     * target sets above, never a second literal. Null for an unknown code.
-     *
-     * <p>The three sets partition {@link #ORDER} exactly (12 + 2 + 1 = 15), a property
-     * {@code DealStageTest} asserts, so every real stage has exactly one gate.
-     */
+    /** Which department owns the manual fallback for stage — read straight off the three target sets above, never a
+     * second literal. Null for an unknown code. The three sets partition #ORDER exactly (12 + 2 + 1 = 15), a
+     * property DealStageTest asserts, so every real stage has exactly one gate. */
     public static String gateOf(String stage) {
         if (SALES_TARGET_STAGES.contains(stage)) return GATE_SALES;
         if (ACCOUNT_TARGET_STAGES.contains(stage)) return GATE_ACCOUNT;
@@ -226,9 +222,40 @@ public final class DealStage {
     }
 
     /**
-     * The 1-based DISPLAY sequence — what a stepper prints beside a stage. See
-     * {@link #BUSINESS_CODE} for why this is not the S-number. 0 for an unknown code.
+     * The reps' own workbook code (S1–S9) for each stage — what the "My work" board prints. Distinct from
+     * {@link #BUSINESS_CODE}'s S1–S20 sheet numbers, which stay in the API untouched. S4 appears in no rep
+     * workbook, so no stage maps to it. Spec 2026-11-15 §7.1.
      */
+    private static final Map<String, String> REP_CODE = Map.ofEntries(
+        Map.entry(LEAD_APPROACH, "S1"), Map.entry(PRESENTATION, "S1"),
+        Map.entry(SPEC_APPROVED, "S2"),
+        Map.entry(QUOTE_DESIGN_SIDE, "S3"), Map.entry(QUOTE_OWNER, "S3"), Map.entry(OWNER_SIGNOFF, "S3"),
+        Map.entry(AWAITING_BUYER, "S5"),
+        Map.entry(QUOTE_BUYER, "S6"), Map.entry(NEGOTIATION, "S6"), Map.entry(ORDER_RECEIVED, "S6"),
+        Map.entry(DEPOSIT_RECEIVED, "S7"), Map.entry(PROCUREMENT, "S7"),
+        Map.entry(DELIVERY_SCHEDULING, "S8"),
+        Map.entry(DELIVERED, "S9"), Map.entry(CLOSED_PAID, "S9"));
+
+    /** The five display columns, keyed by rep code: เสนอสินค้า, สเปคผ่าน, เสนอราคาแล้ว, รอมัดจำ, ส่งของ · เก็บเงิน. */
+    private static final Map<String, Integer> BOARD_COLUMN = Map.of(
+        "S1", 1, "S2", 2, "S3", 3, "S5", 3, "S6", 4, "S7", 5, "S8", 5, "S9", 5);
+
+    /** The reps' S1–S9 code, or null for an unknown (or null) code. */
+    public static String repCodeOf(String stage) {
+        return stage == null ? null : REP_CODE.get(stage);
+    }
+
+    /** The 1-based board column (1..5), or 0 for an unknown code. Column 5 is deliver &amp; collect. */
+    public static int boardColumnOf(String stage) {
+        String code = repCodeOf(stage);
+        return code == null ? 0 : BOARD_COLUMN.get(code);
+    }
+
+    /** The deliver &amp; collect column — deals here are never "quiet". */
+    public static final int DELIVER_AND_COLLECT_COLUMN = 5;
+
+    /** The 1-based DISPLAY sequence — what a stepper prints beside a stage. See #BUSINESS_CODE for why this is not
+     * the S-number. 0 for an unknown code. */
     public static int displayNoOf(String stage) {
         int idx = indexOf(stage);
         return idx < 0 ? 0 : idx + 1;
@@ -304,8 +331,8 @@ public final class DealStage {
         if (to < from) {
             return !isRoutineBackwardMove(fromStage, toStage);
         }
-        // Strictly between: the stages the deal steps OVER. `to` itself is being landed on, not
-        // skipped, and `from` has already happened.
+        // Strictly between: the stages the deal steps OVER. `to` itself is being landed on, not skipped, and `from`
+        // has already happened.
         return ORDER.subList(from + 1, to).stream().anyMatch(MANDATORY::contains);
     }
 

@@ -16,34 +16,9 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.ConnectionCallback;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
-/**
- * V147 restored three foreign keys on {@code hr.employee} (division_id -> hr.division,
- * department_id -> hr.department, position_id -> hr.position) that
- * {@code V1__employee_master_schema.sql} declares but that production's database had been missing
- * -- almost certainly dropped by hand during the original ETL import, and never restored (issue
- * #779).
- *
- * <p><b>Two genuinely different things are being tested here, and the split matters.</b>
- *
- * <ul>
- *   <li><b>Part 1, schema backstop</b> ({@link #allThreeForeignKeysExistByColumnAndReferencedTable_notJustByName()}
- *       and the behavioural probes after it) runs against this suite's normal, fully-migrated
- *       database, where {@code V1} already created all three constraints. It is real, useful
- *       regression coverage — it catches a future hand-drop, or a bad migration that removes one of
- *       these again — but on every database these tests touch, V147's own {@code IF NOT EXISTS}
- *       guards see the constraint already present and skip. <b>These tests pin the final schema
- *       shape. They are not evidence that V147's own restore logic works</b>, because V147 never
- *       does anything on the database they run against — an earlier version of this file's Javadoc
- *       implied otherwise, and a mutation check proved that wrong: replacing V147's entire body with
- *       {@code SELECT 1;} left every Part 1 test green.
- *   <li><b>Part 2, V147 itself</b> ({@link #v147RestoresAllThreeForeignKeysOverProdsShape()} and the
- *       dangling-row tests after it) builds the state V147 actually has to handle — the constraint
- *       missing, prod's real shape, exactly as issue #779 describes it — and then runs V147's own
- *       SQL, read live off the classpath rather than re-typed here (a copy would drift, and a test
- *       asserting against its own stale copy of a migration is the same vacuity one level up). This
- *       is the part that goes red when V147 is broken.
- * </ul>
- */
+/** V147 restored three foreign keys on hr.employee that V1__employee_master_schema.sql declares but that
+ * production's database had been missing -- almost certainly dropped by hand during the original ETL import,
+ * and never restored. */
 class EmployeeReferenceForeignKeyIntegrationTest extends AbstractPostgresIntegrationTest {
 
     private static final String V147_RESOURCE =
@@ -58,20 +33,11 @@ class EmployeeReferenceForeignKeyIntegrationTest extends AbstractPostgresIntegra
         new ExpectedForeignKey("employee_department_id_fkey", "department_id", "hr.department"),
         new ExpectedForeignKey("employee_position_id_fkey", "position_id", "hr.position"));
 
-    // ═════════════════════════════════════════════════════════════════════════════════════════
     // PART 1 — schema backstop (see class Javadoc: real coverage, but NOT evidence about V147).
-    // ═════════════════════════════════════════════════════════════════════════════════════════
 
-    /**
-     * Matched the same way V147's own guard matches it: column + referenced table via
-     * {@code pg_constraint}/{@code pg_attribute}, never by {@code conname} alone (a differently
-     * -named FK on the same column would enforce the identical rule, and this test must recognise
-     * that too, not just V147's SQL). {@code cardinality(conkey) = 1} excludes a hypothetical
-     * composite FK that merely includes this column without enforcing the same single-column rule.
-     *
-     * <p>Runs against the suite's normal fully-migrated database, where V1 already created all
-     * three -- see the class Javadoc's Part 1/Part 2 split.
-     */
+    /** Matched the same way V147's own guard matches it: column + referenced table via pg_constraint/pg_attribute,
+     * never by conname alone (a differently -named FK on the same column would enforce the identical rule, and
+     * this test must recognise that too, not just V147's SQL). */
     @Test
     void allThreeForeignKeysExistByColumnAndReferencedTable_notJustByName() {
         for (ExpectedForeignKey fk : EXPECTED) {
@@ -139,12 +105,9 @@ class EmployeeReferenceForeignKeyIntegrationTest extends AbstractPostgresIntegra
             .isInstanceOf(DataIntegrityViolationException.class);
     }
 
-    /**
-     * ANTI-VACUITY, from the other direction: these three columns are nullable by design (V147's
-     * migration comment explains why NULL is never treated as "dangling"), so a constraint that
-     * were somehow tightened into rejecting a legitimate NULL would not be caught by any assertion
-     * above -- every one of them exercises a non-NULL value.
-     */
+    /** ANTI-VACUITY, from the other direction: these three columns are nullable by design, so a constraint that
+     * were somehow tightened into rejecting a legitimate NULL would not be caught by any assertion above -- every
+     * one of them exercises a non-NULL value. */
     @Test
     void anEmployeeCanStillLeaveAllThreeColumnsNull_theyAreNotRequired() {
         long employeeId = insertEmployee("FKIT-NULLOK", null, null, null);
@@ -158,17 +121,11 @@ class EmployeeReferenceForeignKeyIntegrationTest extends AbstractPostgresIntegra
         assertThat(row.get("position_id")).isNull();
     }
 
-    // ═════════════════════════════════════════════════════════════════════════════════════════
-    // PART 2 — V147 itself. Each test below builds the "constraint missing" state (prod's real
-    // shape) and then runs V147's own SQL, read live off the classpath. Mutation-checked: replacing
-    // V147's body with `SELECT 1;` turns every test in this part red (the restore test because
-    // nothing gets restored; the dangling-row tests because a no-op raises nothing).
-    // ═════════════════════════════════════════════════════════════════════════════════════════
+    // PART 2 — V147 itself. Each test below builds the "constraint missing" state (prod's real shape) and then
+    // runs V147's own SQL, read live off the classpath.
 
-    /**
-     * The normal path: prod's actual shape (valid, fully-resolved employee data, constraint simply
-     * absent) restored correctly by running V147 for real.
-     */
+    /** The normal path: prod's actual shape (valid, fully-resolved employee data, constraint simply absent)
+     * restored correctly by running V147 for real. */
     @Test
     void v147RestoresAllThreeForeignKeysOverProdsShape() {
         long divisionId = insertDivision("V147-DIV");
@@ -186,10 +143,6 @@ class EmployeeReferenceForeignKeyIntegrationTest extends AbstractPostgresIntegra
             assertForeignKeyIsCorrectlyShaped(fk);
         }
         // V147 restores a constraint; it must not have touched the data it now protects.
-        // The columns are SMALLINT, so the driver hands back Integer, not Long -- compare via
-        // Number#longValue() rather than Object#equals(), which would fail on boxed-type mismatch
-        // alone even when the underlying value is identical (Integer.valueOf(1).equals(1L) is
-        // false).
         Map<String, Object> row = jdbc.queryForMap(
             "SELECT division_id, department_id, position_id FROM hr.employee WHERE employee_id = :id",
             Map.of("id", employeeId));
@@ -198,15 +151,8 @@ class EmployeeReferenceForeignKeyIntegrationTest extends AbstractPostgresIntegra
         assertThat(((Number) row.get("position_id")).longValue()).isEqualTo(positionId);
     }
 
-    /**
-     * Guard 3, exercised for real, with TWO dangling rows so both the count and the capped id list
-     * are checked, not just the fact that something was reported.
-     *
-     * <p>Built the way issue #779 itself describes the exposure: a real employee pointing at a real
-     * division, the FK dropped (prod's shape), then the division deleted -- which succeeds only
-     * because the FK is gone, exactly the silent-orphaning failure mode V147 exists to close off
-     * going forward. That leaves a genuinely dangling {@code hr.employee.division_id}.
-     */
+    /** Guard 3, exercised for real, with TWO dangling rows so both the count and the capped id list are checked,
+     * not just the fact that something was reported. That leaves a genuinely dangling hr.employee.division_id. */
     @Test
     void v147RefusesAndNamesTheOffendingEmployees_whenDivisionRowsAreDangling() {
         long divisionId = insertDivision("DANG-DIV");
@@ -327,18 +273,7 @@ class EmployeeReferenceForeignKeyIntegrationTest extends AbstractPostgresIntegra
 
     // ── running V147's own SQL, read live off the classpath ─────────────────────────────────────
 
-    /**
-     * Executes V147's real file contents against the test database, exactly as Flyway would (one
-     * multi-statement call; the PostgreSQL simple-query protocol splits on real statement
-     * boundaries itself, respecting the {@code DO $$ ... $$} dollar-quoting, so the three DO blocks
-     * and their internal semicolons are handled correctly in one round trip and one implicit
-     * transaction -- consistent with Flyway wrapping the whole file in a single transaction).
-     *
-     * <p>Deliberately NOT a copy of the SQL pasted into this test: a pasted copy would drift from
-     * the real file the moment either one changed, and a test asserting against its own stale copy
-     * of a migration proves nothing about the migration -- the same vacuity this class exists to
-     * fix, one level up.
-     */
+    /** Executes V147's real file contents against the test database, exactly as Flyway would. */
     private void executeV147() {
         String sql = readV147Sql();
         jdbc.getJdbcTemplate().execute((ConnectionCallback<Void>) connection -> {
@@ -368,8 +303,8 @@ class EmployeeReferenceForeignKeyIntegrationTest extends AbstractPostgresIntegra
     // ── fixtures ─────────────────────────────────────────────────────────────────────────────
 
     private void dropForeignKey(String constraintName) {
-        // Constant, hardcoded constraint names only (see EXPECTED above) -- never caller-supplied,
-        // so string concatenation here is not an injection surface.
+        // Constant, hardcoded constraint names only (see EXPECTED above) -- never caller-supplied, so string
+        // concatenation here is not an injection surface.
         jdbc.getJdbcTemplate().execute("ALTER TABLE hr.employee DROP CONSTRAINT " + constraintName);
     }
 

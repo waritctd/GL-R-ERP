@@ -9,13 +9,9 @@ import org.springframework.stereotype.Service;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 
-/**
- * Serves the cross-employee activity log to admins only.
- *
- * <p>This reads every employee's movements through the portal, so the gate is the whole point of
- * the class. It is enforced here rather than in the controller so that no future caller can reach
- * the repository without passing it.
- */
+/** Serves the cross-employee activity log to admins only. This reads every employee's movements through the
+ * portal, so the gate is the whole point of the class. It is enforced here rather than in the controller so
+ * that no future caller can reach the repository without passing it. */
 @Service
 public class ActivityLogService {
 
@@ -49,24 +45,16 @@ public class ActivityLogService {
         return repository.findAuditEvents(startOf(from), endOf(to), employeeId, clampLimit(limit));
     }
 
-    /**
-     * WARN/ERROR events and scheduled-job runs — the half of the Render log a request log cannot
-     * see. Same gate as everything else here.
-     */
+    /** WARN/ERROR events and scheduled-job runs — the half of the Render log a request log cannot see. Same gate as
+     * everything else here. */
     public List<AppEventDto> appEvents(UserPrincipal actor, LocalDate from, LocalDate to,
                                        String kind, Integer limit) {
         requireAdmin(actor);
         return repository.findAppEvents(startOf(from), endOf(to), kind, clampLimit(limit));
     }
 
-    /**
-     * The gate.
-     *
-     * <p>Checks {@code hr.employee.is_admin} live rather than trusting anything on the session
-     * principal, so revoking the capability takes effect on the next request instead of at the
-     * holder's next login. Deliberately does <em>not</em> consult {@code UserPrincipal.role()} —
-     * admin is orthogonal to the derived role (see V157), and no role grants it.
-     */
+    /** Checks the live admin capability on every call so revocation takes effect immediately; roles do not grant
+     * it. */
     void requireAdmin(UserPrincipal actor) {
         if (actor == null || !repository.isAdmin(actor.id())) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");

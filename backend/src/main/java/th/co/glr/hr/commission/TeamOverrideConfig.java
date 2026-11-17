@@ -3,10 +3,8 @@ package th.co.glr.hr.commission;
 import java.math.BigDecimal;
 import java.util.List;
 
-/**
- * The manager TEAM OVERRIDE generation active for a payroll month (V199). STEP-1 COMPILE STUB:
- * shape only, no behaviour yet.
- */
+/** The manager TEAM OVERRIDE generation active for a payroll month (V199). STEP-1 COMPILE STUB: shape only, no
+ * behaviour yet. */
 public record TeamOverrideConfig(
     boolean enabled,
     BigDecimal thresholdBase,

@@ -17,13 +17,9 @@ const VARIANT_CLASSES = {
   icon: 'w-11 min-h-[44px] p-0 bg-surface text-icon-muted border-border-input',
 };
 
-// Touch targets: DESIGN.md documents 38-44px as the button height range, and
-// Fitts's-law/touch ergonomics only matter where input is actually touch — so
-// the base/default size is 38px (desktop mouse) and grows to 44px only at
-// <=720px (the app's mobile breakpoint, see useIsMobile.js). Desktop stays
-// visually unchanged from before. The `text` variant (borderless inline link,
-// padding:0 per DESIGN.md) is intentionally excluded: forcing it to 44px would
-// pad prose links into ugly tap boxes that break inline text flow.
+// Touch targets: DESIGN.md documents 38-44px as the button height range, and Fitts's-law/touch ergonomics only
+// matter where input is actually touch — so the base/default size is 38px (desktop mouse) and grows to 44px
+// only at <=720px (the app's mobile breakpoint, see useIsMobile.js).
 const buttonClasses = cva(
   [
     'inline-flex',
@@ -77,19 +73,8 @@ function reportMisuse(message) {
   console.error(message);
 }
 
-/**
- * Exported because some controls that must LOOK like a button cannot BE one.
- * A react-router `<Link>` and an `<a href>` render anchors, and `<Button>`
- * renders a `<button>`, which has no `href` and cannot navigate. A `<label>`
- * wrapping a hidden file input must stay a `<label>` — a `<button>` cannot
- * open a file picker. Those call sites previously carried the legacy
- * `.primary-button` / `.secondary-button` classes, which is the only reason
- * those rules could not be deleted; `buttonVariants({ variant })` gives them
- * the identical class string without pretending they are buttons.
- *
- * Use `<Button>` for anything that IS a button. This is the escape hatch, not
- * an alternative.
- */
+/** Exported because some controls that must LOOK like a button cannot BE one. A react-router `<Link>` and an ``
+ * render anchors, and `<Button>` renders a `<button>`, which has no `href` and cannot navigate. */
 export function buttonVariants(props) {
   const variant = props?.variant;
   if (variant !== undefined && !Object.hasOwn(VARIANT_CLASSES, variant)) {

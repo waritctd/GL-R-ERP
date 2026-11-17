@@ -14,20 +14,7 @@ import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 
-/**
- * C2/C3/C4 import endpoints:
- *   GET  /api/price-import/factories               — list factories with profiles
- *   POST /api/price-import/factories                — create a factory (name + REQUIRED country)
- *   PUT  /api/price-import/factories/{factoryId}    — update a factory's master data
- *   GET  /api/price-import/countries                — country picker for the factory editor
- *   GET  /api/price-import/versions?factoryId=     — list versions for factory
- *   GET  /api/price-import/profile/{factoryId}     — get raw profile JSON
- *   PUT  /api/price-import/profile/{factoryId}     — update profile JSON (saved to DB)
- *   POST /api/price-import/upload                  — parse file → staging → UploadReport
- *   POST /api/price-import/validate/{versionId}    — mark duplicates + invalid rows
- *   GET  /api/price-import/staging/{versionId}     — staging report + diff
- *   POST /api/price-import/commit/{versionId}      — staging → product_prices, ACTIVE
- */
+/** C2/C3/C4 import endpoints: GET /api/price-import/factories. */
 @RestController
 @RequestMapping("/api/price-import")
 public class PriceImportController {
@@ -46,15 +33,9 @@ public class PriceImportController {
         return user;
     }
 
-    /**
-     * PR-B REVIEW ROUND 1, B2: the owning sales rep hitting {@code ImportRequestFactoryCard}'s
-     * new-factory country picker (V184 createDrafts auto-create path, DealFulfilmentPanel.jsx) has
-     * no other way to read this list — {@link #requireImporter} left them 403'd and the picker
-     * rendered permanently empty. Country codes/names are not sensitive (unlike factory pricing),
-     * so READ widens to sales + sales_manager; every write on this controller (createFactory,
-     * updateFactory, and the factories list itself) stays import/ceo-only via
-     * {@link #requireImporter} above, unchanged.
-     */
+    /** PR-B REVIEW ROUND 1, B2: the owning sales rep hitting ImportRequestFactoryCard's new-factory country picker
+     * (V184 createDrafts auto-create path, DealFulfilmentPanel.jsx) has no other way to read this list —
+     * #requireImporter left them 403'd and the picker rendered permanently empty. */
     private UserPrincipal requireCountriesReader(HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
         sessions.requireAnyRole(user, "ceo", "import", "sales", "sales_manager");
@@ -77,9 +58,9 @@ public class PriceImportController {
             body.get("defaultCurrency"), body.get("email"), body.get("unit"));
     }
 
-    /** Country is REQUIRED and validated — see {@code PriceImportService#createFactory}'s javadoc
-     * for the 500 this replaces. {@code countryOther} (V184) follows the same {@code 'ZZ'}-pairing
-     * rule — see {@code PriceImportService#requireValidCountryOther}. */
+    /** Country is REQUIRED and validated — see PriceImportService#createFactory's javadoc for the 500 this
+     * replaces. countryOther (V184) follows the same 'ZZ'-pairing rule — see
+     * PriceImportService#requireValidCountryOther. */
     @PutMapping("/factories/{factoryId}")
     Map<String, Object> updateFactory(
         @PathVariable long factoryId,
@@ -94,9 +75,9 @@ public class PriceImportController {
             body.get("defaultCurrency"), body.get("email"), body.get("unit"));
     }
 
-    /** Backs the factory editor's country select, so a typo/unseeded free-text country can no
-     * longer reach {@code createFactory}/{@code updateFactory} and 500. Also backs the STORED
-     * ใบขอซื้อ new-factory country picker (V184, PR-B) — see {@link #requireCountriesReader}. */
+    /** Backs the factory editor's country select, so a typo/unseeded free-text country can no longer reach
+     * createFactory/updateFactory and 500. Also backs the STORED ใบขอซื้อ new-factory country picker (V184, PR-B)
+     * — see #requireCountriesReader. */
     @GetMapping("/countries")
     List<Map<String, Object>> countries(HttpSession session) {
         requireCountriesReader(session);
@@ -107,9 +88,9 @@ public class PriceImportController {
     PriceImportService.UploadCommitResult uploadAndCommit(
         @RequestParam("factoryId") long factoryId,
         @RequestParam("file") MultipartFile file,
-        // OPTIONAL — the SEPARATE thickness workbook required by any profile that declares
-        // thickness_sidecar (Vives). Absent for every other factory; svc.uploadAndCommit passes
-        // null straight through to ImportEngine, which fails loudly if the profile needed one.
+        // OPTIONAL — the SEPARATE thickness workbook required by any profile that declares thickness_sidecar (Vives).
+        // Absent for every other factory; svc.uploadAndCommit passes null straight through to ImportEngine, which
+        // fails loudly if the profile needed one.
         @RequestParam(value = "thicknessFile", required = false) MultipartFile thicknessFile,
         @RequestParam(value = "label", required = false) String label,
         HttpSession session

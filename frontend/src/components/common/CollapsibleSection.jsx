@@ -2,28 +2,9 @@ import { useId, useState } from 'react';
 import { Icon } from './Icon.jsx';
 import { cn } from '../../utils/cn.js';
 
-/**
- * Accessible titled section for progressive disclosure of long forms.
- *
- * The header is a native `<button>` (space/enter toggle for free, focusable
- * without extra tabindex wiring) that controls a `role="region"` body via
- * `aria-expanded`/`aria-controls`/`aria-labelledby`. When collapsed, the body
- * is not rendered at all rather than hidden with CSS: callers pass controlled
- * inputs whose values live in the PARENT's state, so unmounting the section's
- * children here is safe (nothing is lost) and keeps the DOM light.
- *
- * Example:
- *   <CollapsibleSection title="ที่อยู่จัดส่ง" subtitle="ไม่บังคับ">
- *     <input value={address} onChange={(e) => setAddress(e.target.value)} />
- *   </CollapsibleSection>
- *
- * `collapsible={false}` drops the disclosure entirely: a plain heading, no
- * chevron, body always rendered. Read-only record views (EmployeeDetailPage)
- * want the grouping and the surface but have nothing to progressively disclose
- * — a chevron there promises hidden content that doesn't exist. The `is-static`
- * modifier also tightens the padding, since a heading needs less room than a
- * 44px-target button.
- */
+/** Accessible titled section for progressive disclosure of long forms. Read-only record views
+ * (EmployeeDetailPage) want the grouping and the surface but have nothing to progressively disclose — a
+ * chevron there promises hidden content that doesn't exist. */
 export function CollapsibleSection({
   title,
   subtitle,
@@ -61,29 +42,12 @@ export function CollapsibleSection({
 
   return (
     <section className="collapsible-section border border-border rounded-md bg-surface [&+&]:mt-4">
-      {/*
-        `mobile:flex-wrap` — at ≤720px the title and `headerRight` stop competing for one row.
-        Measured at 390px with a badge + a refresh button in headerRight: the disclosure button was
-        squeezed to ~200px, which wrapped "คำขอแก้ไขเวลาเข้า-ออกงาน" onto three lines and its
-        subtitle onto eight — a wall of text where a section heading should be. Wrapping gives the
-        heading the full width and drops the controls onto their own row beneath it.
-      */}
+      {/* `mobile:flex-wrap` — at ≤720px the title and `headerRight` stop competing for one row. Wrapping gives the
+       * heading the full width and drops the controls onto their own row beneath it. */}
       <div className="collapsible-header flex items-center justify-between gap-3 mobile:flex-wrap mobile:gap-0">
-        {/*
-          The button is WRAPPED IN A HEADING, per the ARIA APG accordion pattern
-          (`<h3><button aria-expanded>`). Without it this variant rendered its title inside a bare
-          <button> and the section vanished from the page's heading outline — while the
-          `collapsible={false}` variant twenty lines above used a real <h2> for the same title.
-          So making a section collapsible silently cost a heading, which is backwards: the more
-          content a section hides, the more its title matters for navigating by heading.
-
-          Caught by AttendancePage.test.jsx's `getByRole('heading', { name: ... })` when the
-          attendance-correction section became collapsible — the test was right and the component
-          was wrong.
-
-          `flex-1` moves to the heading (the flex child now) and the button takes `w-full`, so the
-          rendered layout is unchanged for every existing caller.
-        */}
+        {/* The button is WRAPPED IN A HEADING, per the ARIA APG accordion pattern (` <button aria-expanded>`). So
+         * making a section collapsible silently cost a heading, which is backwards: the more content a section hides,
+         * the more its title matters for navigating by heading. */}
         <h2 id={`${headerId}-heading`} className="collapsible-title-heading m-0 min-w-0 flex-1 text-[length:var(--text-lg)] font-bold mobile:basis-full">
         <button
           type="button"

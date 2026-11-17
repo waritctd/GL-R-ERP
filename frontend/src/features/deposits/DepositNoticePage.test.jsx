@@ -68,9 +68,8 @@ describe('DepositNoticePage', () => {
         projectName: '', reference: '', depositPercent: 0.5, notes: [], items: [],
       },
     });
-    // Default: no pricing requests on this ticket at all — every existing (pre-chain) test
-    // below relies on the legacy ticket-level createDraft path, which is exactly the fallback
-    // this resolution degrades to.
+    // Default: no pricing requests on this ticket at all — every existing (pre-chain) test below relies on the
+    // legacy ticket-level createDraft path, which is exactly the fallback this resolution degrades to.
     api.pricingRequests.listForTicket.mockResolvedValue({ items: [] });
     // QA-32: the page reads the deal's quotations for its non-blocking "% differs" hint.
     api.dealQuotations.listForTicket.mockResolvedValue({ items: [] });
@@ -87,9 +86,8 @@ describe('DepositNoticePage', () => {
     });
   });
 
-  // Shared fixture for the UX-03 issue-validation tests below: a DRAFT with
-  // one fully-valid line item (subtotal 500 -> deposit 250 -> vat 17.5 ->
-  // total 267.5, all > 0), so each test only has to break the ONE rule it's
+  // Shared fixture for the UX-03 issue-validation tests below: a DRAFT with one fully-valid line item (subtotal
+  // 500 -> deposit 250 -> vat 17.5 -> total 267.5, all > 0), so each test only has to break the ONE rule it's
   // asserting on.
   const validDraftDoc = {
     id: 9002, ticketId: 701, version: 1, status: 'DRAFT', docNumber: null,
@@ -100,9 +98,8 @@ describe('DepositNoticePage', () => {
     ],
   };
 
-  // UX-03: an empty customerName (its label already carries a `*`) must be
-  // flagged inline on that field, must not open the confirm dialog, and must
-  // never reach api.depositNotices.issue.
+  // UX-03: an empty customerName (its label already carries a `*`) must be flagged inline on that field, must
+  // not open the confirm dialog, and must never reach api.depositNotices.issue.
   it('blocks issue with an empty customer name, flags it inline, and never opens the confirm dialog', async () => {
     api.depositNotices.listByTicket.mockResolvedValue({ depositNotices: [validDraftDoc] });
     renderDepositNoticePage();
@@ -119,9 +116,8 @@ describe('DepositNoticePage', () => {
     expect(api.depositNotices.issue).not.toHaveBeenCalled();
   });
 
-  // UX-03: a line item missing its description must flag THAT item's
-  // description field specifically — not the whole form, not the other
-  // (valid) item's fields.
+  // UX-03: a line item missing its description must flag THAT item's description field specifically — not the
+  // whole form, not the other (valid) item's fields.
   it('blocks issue when a line item is missing its description, flagging that item specifically', async () => {
     api.depositNotices.listByTicket.mockResolvedValue({
       depositNotices: [{
@@ -187,10 +183,9 @@ describe('DepositNoticePage', () => {
     expect(api.depositNotices.issue).not.toHaveBeenCalled();
   });
 
-  // Regression guard for the SCOPING DECISION: this is a draft editor and
-  // "บันทึก" must stay fully permissive — saving an incomplete draft (no
-  // customer name, no items) is a legitimate workflow and must never be
-  // blocked by the issue-time validation added above.
+  // Regression guard for the SCOPING DECISION: this is a draft editor and "บันทึก" must stay fully permissive —
+  // saving an incomplete draft (no customer name, no items) is a legitimate workflow and must never be blocked
+  // by the issue-time validation added above.
   it('still saves an incomplete draft (no customer name, no items) via บันทึก', async () => {
     api.depositNotices.listByTicket.mockResolvedValue({
       depositNotices: [{ ...validDraftDoc, customerName: '', items: [] }],
@@ -313,8 +308,8 @@ describe('DepositNoticePage', () => {
     expect(api.depositNotices.update.mock.calls[1][1]).toMatchObject({ depositPercent: 0.4, expectedUpdatedAt: 'T2' });
   });
 
-  // A fully valid document opens the confirm dialog, and confirming it calls
-  // api.depositNotices.issue for that document.
+  // A fully valid document opens the confirm dialog, and confirming it calls api.depositNotices.issue for that
+  // document.
   it('opens the confirm dialog for a valid document and issues it on confirm, with the stamp its own save returned', async () => {
     api.depositNotices.listByTicket.mockResolvedValue({ depositNotices: [{ ...validDraftDoc, updatedAt: 'T1' }] });
     api.depositNotices.update.mockResolvedValue({ depositNotice: { updatedAt: 'T2' } });
@@ -336,7 +331,7 @@ describe('DepositNoticePage', () => {
 
     expect(await screen.findByText('ยังไม่มีใบแจ้งยอดเงินรับมัดจำ')).not.toBeNull();
     // A deal document: the helper says ดีล, not คำขอราคา.
-    expect(screen.getByText('สร้างเอกสารฉบับร่างเพื่อเริ่มกรอกรายละเอียดใบแจ้งยอดมัดจำสำหรับดีลนี้')).not.toBeNull();
+    expect(screen.getByText('สร้างเอกสารฉบับร่างเพื่อเริ่มกรอกรายละเอียดใบแจ้งยอดมัดจำสำหรับงานนี้')).not.toBeNull();
 
     const createButton = screen.getByRole('button', { name: /สร้างเอกสารฉบับร่าง/ });
     fireEvent.click(createButton);
@@ -348,14 +343,14 @@ describe('DepositNoticePage', () => {
       notes: ['หมายเหตุมาตรฐาน'],
     });
 
-    // Mutation succeeding invalidates depositNotices(ticketId), which refetches
-    // listByTicket — the second call is that background refetch.
+    // Mutation succeeding invalidates depositNotices(ticketId), which refetches listByTicket — the second call is
+    // that background refetch.
     await waitFor(() => expect(api.depositNotices.listByTicket).toHaveBeenCalledTimes(2));
   });
 
-  // Branch fix (deposit-notice autofill): a chain deal — one of this ticket's pricing requests
-  // has an accepted customer quotation (status QUOTATION_ACCEPTED) — must use the correct
-  // endpoint instead of the legacy ticket-level route.
+  // Branch fix (deposit-notice autofill): a chain deal — one of this ticket's pricing requests has an accepted
+  // customer quotation (status QUOTATION_ACCEPTED) — must use the correct endpoint instead of the legacy
+  // ticket-level route.
   it('uses the pricing-request quotation endpoint when the ticket has an accepted quotation', async () => {
     api.pricingRequests.listForTicket.mockResolvedValue({
       items: [
@@ -374,9 +369,9 @@ describe('DepositNoticePage', () => {
     expect(api.depositNotices.createDraft).not.toHaveBeenCalled();
   });
 
-  // No pricing request on this ticket has an accepted quotation (e.g. still mid-negotiation,
-  // or a legacy ticket with pricing requests that never went through the chain) — must fall
-  // back to today's ticket-level route rather than erroring.
+  // No pricing request on this ticket has an accepted quotation (e.g. still mid-negotiation, or a legacy ticket
+  // with pricing requests that never went through the chain) — must fall back to today's ticket-level route
+  // rather than erroring.
   it('falls back to the ticket-level route when no pricing request has an accepted quotation', async () => {
     api.pricingRequests.listForTicket.mockResolvedValue({
       items: [{ id: 501, status: 'QUOTATION_ISSUED' }],
@@ -425,7 +420,7 @@ describe('DepositNoticePage', () => {
     // QA-32: this is a DEAL document, so the trail says ดีล — never คำขอราคา — and the issue
     // helper no longer talks about a คำขอราคา status change.
     const trail = within(screen.getByRole('navigation', { name: 'breadcrumb' }));
-    expect(trail.getByText('ดีล')).not.toBeNull();
+    expect(trail.getByText('งานทั้งหมด')).not.toBeNull();
     expect(trail.getByText('บริษัท ทดสอบ จำกัด')).not.toBeNull();
     expect(trail.getByText('ใบแจ้งยอดเงินรับมัดจำ')).not.toBeNull();
     expect(trail.queryByText('คำขอราคา')).toBeNull();
@@ -529,12 +524,9 @@ describe('DepositNoticePage', () => {
     expect(percentInput.value).toBe('30');
   });
 
-  // Issue #756: the VAT rate must come from the served document's vatPercent, not a
-  // hardcoded 0.07 literal — DepositNoticeDto.vatPercent (backend/src/main/java/th/co/glr/hr/
-  // deposit/DepositNoticeDto.java:25) is the authoritative source once a document exists.
-  // subtotal 500 -> deposit(50%) 250 -> VAT at 10% = 25.00 / at 7% = 17.50 — chosen so the two
-  // rates produce clearly different, unambiguous money strings (no shared substring) and the
-  // assertion cannot pass by coincidence.
+  // the VAT rate must come from the served document's vatPercent, not a hardcoded 0.07 literal —
+  // DepositNoticeDto.vatPercent (backend/src/main/java/th/co/glr/hr/ deposit/DepositNoticeDto.java:25) is the
+  // authoritative source once a document exists.
   it('uses the served document vatPercent (10%) in the VAT label and amount, not the 7% fallback', async () => {
     api.depositNotices.listByTicket.mockResolvedValue({
       depositNotices: [{ ...validDraftDoc, vatPercent: 0.10 }],
@@ -543,20 +535,105 @@ describe('DepositNoticePage', () => {
 
     await screen.findByDisplayValue('บริษัท ทดสอบ จำกัด');
 
-    // Summary panel: label carries the served 10% rate, not a hardcoded "7%" — and the VAT
-    // amount is deposit(250) * 0.10 = 25.00, not deposit * 0.07 = 17.50.
+    // Summary panel: label carries the served 10% rate, not a hardcoded "7%" — and the VAT amount is deposit(250)
+    // * 0.10 = 25.00, not deposit * 0.07 = 17.50.
     expect(screen.getByText('ภาษีมูลค่าเพิ่ม 10% (คิดจากมัดจำ)')).not.toBeNull();
     expect(screen.queryByText(/ภาษีมูลค่าเพิ่ม 7%/)).toBeNull();
     expect(screen.getByText('25.00 บาท')).not.toBeNull();
     expect(screen.queryByText('17.50 บาท')).toBeNull();
 
-    // ConfirmDialog carries the same served rate + amount (validDraftDoc is a fully valid
-    // document, so "ออกเอกสาร" opens the dialog with no issue-validation errors in the way).
+    // ConfirmDialog carries the same served rate + amount (validDraftDoc is a fully valid document, so "ออกเอกสาร"
+    // opens the dialog with no issue-validation errors in the way).
     fireEvent.click(screen.getByRole('button', { name: /ออกเอกสาร/ }));
     const dialog = await screen.findByRole('dialog');
-    expect(within(dialog).getByText('ภาษีมูลค่าเพิ่ม 10%')).not.toBeNull();
-    expect(within(dialog).queryByText(/ภาษีมูลค่าเพิ่ม 7%$/)).toBeNull();
+    // Drawing m-deposit-issue labels the row "VAT n%" (was "ภาษีมูลค่าเพิ่ม n%"); the rate is still the served one.
+    expect(within(dialog).getByText('VAT 10%')).not.toBeNull();
+    expect(within(dialog).queryByText(/VAT 7%$/)).toBeNull();
     expect(within(dialog).getByText('25.00 บาท')).not.toBeNull();
     expect(within(dialog).queryByText('17.50 บาท')).toBeNull();
+  });
+
+  // Drawing m-deposit-issue (2026-11-16): the confirm body is rebuilt; the requests it sends are not.
+  describe('issue confirm (drawing m-deposit-issue)', () => {
+    // subtotal 3 x 1,234.57 = 3,703.71; 40% -> 1,481.48 deposit; 7% -> 103.70 VAT; 1,585.18 total. All differ.
+    const doc = {
+      ...validDraftDoc, customerName: 'บริษัท ลุมพินี จำกัด', customerTaxId: '0105551234567', customerAddress: 'กรุงเทพฯ',
+      projectName: 'บ้านชะอำ', reference: 'QT-2026-0201', depositPercent: 0.4, notes: ['หมายเหตุมาตรฐาน'], updatedAt: 'T1',
+      items: [{ seq: 1, description: 'กระเบื้อง Raku', qty: 3, unit: 'ตร.ม.', unitPrice: 1500, discountLabel: '-', netUnitPrice: 1234.57 }],
+    };
+
+    // Payload identity — captured against the pre-rebuild dialog and kept green through it.
+    it('confirm saves the form, then issues with the stamp that save returned — byte-for-byte as before', async () => {
+      api.depositNotices.listByTicket.mockResolvedValue({ depositNotices: [doc] });
+      api.depositNotices.update.mockResolvedValue({ depositNotice: { updatedAt: 'T2' } });
+      renderDepositNoticePage();
+
+      await screen.findByDisplayValue('บริษัท ลุมพินี จำกัด');
+      fireEvent.click(screen.getByRole('button', { name: /ออกเอกสาร/ }));
+      fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'ออกเอกสาร' }));
+
+      await waitFor(() => expect(api.depositNotices.issue).toHaveBeenCalledTimes(1));
+      expect(api.depositNotices.update.mock.calls).toEqual([[9002, {
+        customerName: 'บริษัท ลุมพินี จำกัด', customerTaxId: '0105551234567', customerAddress: 'กรุงเทพฯ',
+        projectName: 'บ้านชะอำ', reference: 'QT-2026-0201', depositPercent: 0.4, notes: ['หมายเหตุมาตรฐาน'],
+        expectedUpdatedAt: 'T1',
+        items: [{ seq: 1, description: 'กระเบื้อง Raku', qty: 3, unit: 'ตร.ม.', unitPrice: 1500, discountLabel: '-', netUnitPrice: 1234.57 }],
+      }]]);
+      expect(api.depositNotices.issue.mock.calls).toEqual([[9002, { expectedUpdatedAt: 'T2' }]]);
+      expect(api.depositNotices.update.mock.invocationCallOrder[0])
+        .toBeLessThan(api.depositNotices.issue.mock.invocationCallOrder[0]);
+    });
+
+    it('cancel closes the confirm and sends nothing', async () => {
+      api.depositNotices.listByTicket.mockResolvedValue({ depositNotices: [doc] });
+      renderDepositNoticePage();
+
+      await screen.findByDisplayValue('บริษัท ลุมพินี จำกัด');
+      fireEvent.click(screen.getByRole('button', { name: /ออกเอกสาร/ }));
+      fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'ยกเลิก' }));
+
+      await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+      expect(api.depositNotices.update).not.toHaveBeenCalled();
+      expect(api.depositNotices.issue).not.toHaveBeenCalled();
+    });
+
+    // Fix round 1, F2: this page's figures are computed in the browser (round2 on floats) and the server
+    // recomputes them on save, so they can be a satang off the issued document. The confirm shows the old
+    // confirm's figures only (deposit, VAT, total) under an estimate line — no subtotal row, no bold
+    // "X บาท รวม VAT" summary presenting them as the document's content.
+    it('shows the old figures as an estimate: estimate line, no summary line, no subtotal row', async () => {
+      api.depositNotices.listByTicket.mockResolvedValue({ depositNotices: [doc] });
+      renderDepositNoticePage();
+
+      await screen.findByDisplayValue('บริษัท ลุมพินี จำกัด');
+      fireEvent.click(screen.getByRole('button', { name: /ออกเอกสาร/ }));
+      const dialogEl = await screen.findByRole('dialog');
+      const dialog = within(dialogEl);
+      expect(dialog.getByTestId('deposit-issue-estimate').textContent).toBe('ยอดโดยประมาณ · ยอดจริงตามเอกสารที่ระบบออก');
+      expect(dialog.queryByTestId('deposit-issue-summary')).toBeNull();
+      expect(dialogEl.textContent).not.toContain('รวม VAT');
+      expect(dialogEl.textContent).not.toContain('มูลค่าสินค้า');
+      expect(dialogEl.textContent).not.toContain('3,703.71');
+      const row = (label) => dialog.getByText(label, { exact: false }).closest('tr');
+      expect(row('มัดจำ 40% (ก่อน VAT)').textContent).toContain('1,481.48');
+      expect(row('VAT 7%').textContent).toContain('103.70');
+      expect(row('ยอดที่ลูกค้าต้องชำระ').textContent).toContain('1,585.18');
+      expect(dialogEl.textContent).not.toContain('ดีล');
+    });
+
+    // Fix round 1, F4: the warning is the first thing in the scrolling body, so a short phone screen shows it
+    // together with the footer's ออกเอกสาร.
+    it('puts the irreversibility warning first in the scrolling body', async () => {
+      api.depositNotices.listByTicket.mockResolvedValue({ depositNotices: [doc] });
+      renderDepositNoticePage();
+
+      await screen.findByDisplayValue('บริษัท ลุมพินี จำกัด');
+      fireEvent.click(screen.getByRole('button', { name: /ออกเอกสาร/ }));
+      const dialogEl = await screen.findByRole('dialog');
+      const body = dialogEl.querySelector('.modal-body');
+      const warning = within(dialogEl).getByTestId('deposit-issue-warning');
+      expect(warning.textContent).toMatch(/หลังจากนี้จะไม่สามารถแก้ไขได้/);
+      expect(body.firstElementChild.firstElementChild).toBe(warning);
+    });
   });
 });

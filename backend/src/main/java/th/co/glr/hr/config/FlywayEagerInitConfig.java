@@ -6,15 +6,9 @@ import org.springframework.boot.flyway.autoconfigure.FlywayMigrationInitializer;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
-/**
- * Keeps Flyway eager even when {@code spring.main.lazy-initialization=true} (prod profile).
- *
- * <p>Global lazy initialization defers every bean until first use. That speeds up startup so the
- * Tomcat port opens in time for Render's port scan, but it would also defer the Flyway migration
- * initializer — meaning the schema might not be migrated until the first request, or not at all.
- * This filter excludes Flyway's beans from lazy init so migrations run during startup, before the
- * app accepts traffic, exactly as they do without lazy init.
- */
+/** Keeps Flyway eager even when spring.main.lazy-initialization=true (prod profile). Global lazy initialization
+ * defers every bean until first use. This filter excludes Flyway's beans from lazy init so migrations run
+ * during startup, before the app accepts traffic, exactly as they do without lazy init. */
 @Configuration
 public class FlywayEagerInitConfig {
 

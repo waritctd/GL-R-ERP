@@ -34,37 +34,9 @@ import th.co.glr.hr.ticket.TicketResponses.StageDecisionDto;
 import th.co.glr.hr.ticket.TicketResponses.TicketActionDto;
 import th.co.glr.hr.ticket.TicketResponses.TicketActionsResponse;
 
-/**
- * Real-Postgres proof that the per-stage decisions {@code TicketService.actions} ships to a client
- * say the same thing {@code TicketService.updateStage} would do if the client acted on them.
- *
- * <p><b>Why this test exists.</b> The frontend used to answer "which stages may I move this deal
- * to?" from its own copy of the write gate, held in {@code features/tickets/stageMeta.js}. A copy
- * of an authorization rule has no guard — nothing compared it to the Java service — and it had
- * gone stale in both directions by the time it was found. {@code actions} now answers the question
- * server-side and the copy is deleted, so this class is what stands behind every option the update-
- * stage modal offers. <b>Nothing here may be inferred from {@code mockApi.js}</b>, whose stage
- * gates are an explicit approximation.
- *
- * <p><b>Written wrong-way-round.</b> Every part below leads with what a role must <em>not</em>
- * reach. "The owner may set their own sales stages" is not evidence; "a second sales rep is
- * offered nothing at all on someone else's deal, and is refused when they try anyway" is.
- *
- * <p><b>The decision and the enforcement are asserted together, on the same deal, in every
- * case.</b> That pairing is the whole point: a decision payload that is merely self-consistent
- * would be a second implementation of the gate, which is the defect this replaces. Each refusal
- * therefore also calls {@code updateStage} and asserts the real 403/409/400 — and then re-reads
- * {@code sales.ticket} to prove the row did not move, because an exception thrown after a write
- * has landed is the failure mode Mockito cannot see.
- *
- * <p><b>Trap, per {@link AbstractPostgresIntegrationTest}:</b> services here are hand-wired with
- * {@code new}, so {@code @Transactional} is inert and no rollback is ever exercised. Nothing below
- * asserts a rollback; the "did not move" assertions hold because each guard throws before any
- * write.
- *
- * <p>Modelled on {@link StageFactGateIntegrationTest} and
- * {@link DealStageQuoteOwnerAndRouteIntegrationTest}.
- */
+/** Real-Postgres proof that the per-stage decisions TicketService.actions ships to a client say the same thing
+ * TicketService.updateStage would do if the client acted on them. Why this test exists. Nothing here may be
+ * inferred from mockApi.js, whose stage gates are an explicit approximation. */
 class StageDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
 
     private TicketRepository tickets;
@@ -83,9 +55,8 @@ class StageDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
         tickets = new TicketRepository(jdbc);
         NotificationRepository notifications = new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP);
         CustomerRepository customers = new CustomerRepository(jdbc);
-        // PricingRequestService is mocked exactly as in the sibling stage classes: nothing
-        // exercised here calls it. The two things under test — TicketService's gates and
-        // TicketRepository's SQL — are both real.
+        // PricingRequestService is mocked exactly as in the sibling stage classes: nothing exercised here calls it.
+        // The two things under test — TicketService's gates and TicketRepository's SQL — are both real.
         PricingRequestService pricingRequests = mock(PricingRequestService.class);
         when(pricingRequests.cancelOpenForTicket(anyLong(), anyString(), any(), any()))
             .thenReturn(new PricingRequestService.CancelOpenForTicketResult(0, List.of()));
@@ -106,19 +77,9 @@ class StageDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
 
     // ═══ Part A — the role gate: what each role may NOT reach ════════════════
 
-    /**
-     * The headline refusal, and the one the deleted frontend copy was responsible for.
-     *
-     * <p>A sales rep who did not create the deal never receives a decision payload at all:
-     * {@code actions} runs {@code requireViewAccess} first, and a sales rep is scoped to their own
-     * rows, so the whole endpoint 403s. That is a <em>stronger</em> guarantee than an all-blocked
-     * list, and it is worth pinning explicitly because the frontend's deleted copy answered this
-     * question locally — it would happily have computed and rendered an option list for a deal the
-     * server refuses to describe.
-     *
-     * <p>The write is refused independently, at {@code requireStageWriteAccess}, so removing the
-     * view gate alone would not open it.
-     */
+    /** The headline refusal, and the one the deleted frontend copy was responsible for. A sales rep who did not
+     * create the deal never receives a decision payload at all: actions runs requireViewAccess first, and a sales
+     * rep is scoped to their own rows, so the whole endpoint 403s. */
     @Test
     void aSalesRepOnSomeoneElsesDeal_cannotEvenAskForTheDecisions_andTheWriteIsRefusedToo() {
         long ticketId = readyToAdvanceFrom(DealStage.PRESENTATION);
@@ -134,12 +95,8 @@ class StageDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(stageChangedEvents(ticketId)).isZero();
     }
 
-    /**
-     * The deal owner must not reach the money stages or the import stage — those belong to
-     * ฝ่ายบัญชี and ฝ่ายนำเข้า. Asserted as an exact set so a widening of
-     * {@code DealStage.SALES_TARGET_STAGES} cannot slip past: the sales rep's offer is exactly the
-     * twelve sales-gated stages, minus the one the deal is already on.
-     */
+    /** The deal owner must not reach the money stages or the import stage — those belong to ฝ่ายบัญชี and
+     * ฝ่ายนำเข้า. */
     @Test
     void theDealOwner_isNeverOfferedTheMoneyOrImportStages_andIsRefusedOnEachOfThem() {
         long ticketId = readyToAdvanceFrom(DealStage.PRESENTATION);
@@ -174,13 +131,13 @@ class StageDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
     @Test
     void accountAndImport_areEachConfinedToTheirOwnStages() {
         long ticketId = readyToAdvanceFrom(DealStage.PRESENTATION);
-        // H1 lockdown: account only reaches a deal inside its list scope, so its half of this test runs on
-        // its own deal at ORDER_RECEIVED (S10). Import keeps the original PRESENTATION deal.
+        // H1 lockdown: account only reaches a deal inside its list scope, so its half of this test runs on its own
+        // deal at ORDER_RECEIVED (S10). Import keeps the original PRESENTATION deal.
         long accountTicketId = readyToAdvanceFrom(DealStage.ORDER_RECEIVED);
 
-        // account: DEPOSIT_RECEIVED and CLOSED_PAID are both fact-gated and the facts do not hold,
-        // so what account is OFFERED here is nothing — but the reason must be the fact, not a 403,
-        // and every sales stage must still be a 403.
+        // account: DEPOSIT_RECEIVED and CLOSED_PAID are both fact-gated and the facts do not hold, so what account is
+        // OFFERED here is nothing — but the reason must be the fact, not a 403, and every sales stage must still be a
+        // 403.
         List<StageDecisionDto> accountDecisions = decisionsFor(accountTicketId, accountActor);
         assertThat(allowedStages(accountDecisions)).isEmpty();
         assertThat(reasonFor(accountDecisions, DealStage.SPEC_APPROVED)).isEqualTo("ไม่มีสิทธิ์เข้าถึงรายการนี้");
@@ -203,11 +160,9 @@ class StageDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(stageChangedEvents(accountTicketId)).isZero();
     }
 
-    /**
-     * sales_manager passes the sales-gated stages on a deal it does not own (the deliberate,
-     * user-approved exception noted on {@code TicketService}'s pipeline section) but must still be
-     * refused the money and import stages. ceo passes everything the facts allow.
-     */
+    /** sales_manager passes the sales-gated stages on a deal it does not own (the deliberate, user-approved
+     * exception noted on TicketService's pipeline section) but must still be refused the money and import stages.
+     * ceo passes everything the facts allow. */
     @Test
     void salesManagerPassesSalesStagesOnAnotherRepsDeal_butStillNotTheMoneyOrImportOnes() {
         long ticketId = readyToAdvanceFrom(DealStage.PRESENTATION);
@@ -228,14 +183,9 @@ class StageDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
 
     // ═══ Part B — the fact gates (#710) reach the decision, not just the write ═
 
-    /**
-     * The four fact-gated stages come back not-allowed with the fact as the reason, for the role
-     * that <em>does</em> hold the write permission — so the client can say "you may, but the deal
-     * cannot yet" instead of hiding the stage or offering a click that 409s.
-     *
-     * <p>This is the case a role-only decision payload would have got wrong, and the case the
-     * previous {@code addStageActions} did get wrong: it advertised ADVANCE_STAGE into all four.
-     */
+    /** The four fact-gated stages come back not-allowed with the fact as the reason, for the role that does hold
+     * the write permission — so the client can say "you may, but the deal cannot yet" instead of hiding the stage
+     * or offering a click that 409s. */
     @Test
     void theFourFactGatedStages_areBlockedWithTheFactAsTheReason_forTheRoleThatMayWriteThem() {
         long ticketId = readyToAdvanceFrom(DealStage.NEGOTIATION);
@@ -276,11 +226,8 @@ class StageDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(stageChangedEvents(accountTicketId)).isZero();
     }
 
-    /**
-     * Once the fact holds, the same stage flips to allowed and the write goes through — the
-     * decision tracks state, not just role. Without this the test above would pass on a payload
-     * that simply always said no.
-     */
+    /** Once the fact holds, the same stage flips to allowed and the write goes through — the decision tracks state,
+     * not just role. Without this the test above would pass on a payload that simply always said no. */
     @Test
     void aFactGatedStageFlipsToAllowedOnceTheFactHolds_andTheWriteThenSucceeds() {
         long ticketId = readyToAdvanceFrom(DealStage.NEGOTIATION);
@@ -296,15 +243,9 @@ class StageDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
 
     // ═══ Part C — the note rule, and the routes it must not tax ══════════════
 
-    /**
-     * The bug this whole change removes, pinned on a real deal.
-     *
-     * <p>Case C (a contractor arrives with a BOQ and spec in hand, so the deal opens at S8) skips
-     * only route-dependent stages, and must be offered with {@code requiresReason: false} — the
-     * frontend's stale copy demanded a written reason for exactly this move. Skipping a MANDATORY
-     * stage still carries {@code requiresReason: true}, and the write really is refused without
-     * one.
-     */
+    /** The bug this whole change removes, pinned on a real deal. Case C (a contractor arrives with a BOQ and spec
+     * in hand, so the deal opens at S8) skips only route-dependent stages, and must be offered with
+     * requiresReason: false — the frontend's stale copy demanded a written reason for exactly this move. */
     @Test
     void skippingOnlyRouteDependentStagesNeedsNoReason_whileSkippingAMandatoryOneStillDoes() {
         long ticketId = readyToAdvanceFrom(DealStage.LEAD_APPROACH);
@@ -343,17 +284,15 @@ class StageDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(stageOf(ticketId)).isEqualTo(DealStage.AWAITING_BUYER);
     }
 
-    /**
-     * {@code requiresReason} is reported for blocked stages too. It answers "what would this move
-     * cost?", which does not depend on whether the move is currently permitted — suppressing it
-     * would make the field mean different things in different rows.
-     */
+    /** requiresReason is reported for blocked stages too. It answers "what would this move cost?", which does not
+     * depend on whether the move is currently permitted — suppressing it would make the field mean different
+     * things in different rows. */
     @Test
     void requiresReasonIsReportedEvenForAStageTheCallerMayNotReach() {
         long ticketId = readyToAdvanceFrom(DealStage.DELIVERY_SCHEDULING);
 
-        // import may view the deal but may not write a sales stage, so LEAD_APPROACH is blocked —
-        // and moving there from S18 is a backward move, which would need a written reason.
+        // import may view the deal but may not write a sales stage, so LEAD_APPROACH is blocked — and moving there
+        // from S18 is a backward move, which would need a written reason.
         List<StageDecisionDto> decisions = decisionsFor(ticketId, importActor);
         assertThat(allowedFor(decisions, DealStage.LEAD_APPROACH)).isFalse();
         assertThat(reasonFor(decisions, DealStage.LEAD_APPROACH)).isEqualTo("ไม่มีสิทธิ์เข้าถึงรายการนี้");
@@ -362,12 +301,9 @@ class StageDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
 
     // ═══ Part D — lifecycle, current stage, and the readiness gate ═══════════
 
-    /**
-     * A deal that is not ACTIVE, or is CLOSED_LOST, offers nothing — with the lifecycle as the
-     * reason rather than a permission one, so the UI can say why instead of showing an empty list.
-     * The current stage is likewise never on offer, and carries the same 409 copy
-     * {@code updateStage} throws.
-     */
+    /** A deal that is not ACTIVE, or is CLOSED_LOST, offers nothing — with the lifecycle as the reason rather than
+     * a permission one, so the UI can say why instead of showing an empty list. The current stage is likewise
+     * never on offer, and carries the same 409 copy updateStage throws. */
     @Test
     void aNonActiveDealOffersNothing_andTheCurrentStageIsNeverOnOffer() {
         long ticketId = readyToAdvanceFrom(DealStage.NEGOTIATION);
@@ -387,15 +323,9 @@ class StageDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(stageOf(ticketId)).isEqualTo(DealStage.NEGOTIATION);
     }
 
-    /**
-     * The Slice B1 readiness gate is a forward-only gate, and the decision reflects that
-     * asymmetry: with no follow-up date and no logged activity, every forward stage is blocked on
-     * the tracking message while backward ones stay open.
-     *
-     * <p>The asymmetry is the assertion that matters. A decision builder that ran the readiness
-     * gate unconditionally would look right on the forward half and would wrongly close the
-     * backward half — which is exactly how a rep walks a deal back out of a wrong stage.
-     */
+    /** The Slice B1 readiness gate is a forward-only gate, and the decision reflects that asymmetry: with no
+     * follow-up date and no logged activity, every forward stage is blocked on the tracking message while backward
+     * ones stay open. The asymmetry is the assertion that matters. */
     @Test
     void withoutFollowUpOrActivity_forwardStagesAreBlockedOnTheTrackingGate_butBackwardOnesAreNot() {
         long ticketId = createDealWithOneItem();
@@ -413,8 +343,8 @@ class StageDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
                 e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
         assertThat(stageOf(ticketId)).isEqualTo(DealStage.NEGOTIATION);
 
-        // The backward move the decision said was open really is open, and needs no note (the one
-        // routine pair) — proving the readiness gate was not applied to it.
+        // The backward move the decision said was open really is open, and needs no note (the one routine pair) —
+        // proving the readiness gate was not applied to it.
         tickets.updateSalesStage(ticketId, DealStage.QUOTE_DESIGN_SIDE);
         ticketService.updateStage(ticketId, DealStage.SPEC_APPROVED, null, ownerRep);
         assertThat(stageOf(ticketId)).isEqualTo(DealStage.SPEC_APPROVED);
@@ -422,16 +352,9 @@ class StageDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
 
     // ═══ Part E — the walk: every allowed decision is actually writable ══════
 
-    /**
-     * The cross-check that makes the rest of this class mean something: for the deal owner, on a
-     * fresh deal, <b>every</b> stage the payload marks allowed is accepted by {@code updateStage},
-     * and every stage it marks blocked is refused. Run over all fifteen, on a fresh deal each time
-     * so one move cannot mask the next.
-     *
-     * <p>Without this, a payload that under-offered (say, one that dropped a stage the service
-     * would have accepted) would sail through every other test here. That direction is the one
-     * that silently breaks a real business route.
-     */
+    /** The cross-check that makes the rest of this class mean something: for the deal owner, on a fresh deal, every
+     * stage the payload marks allowed is accepted by updateStage, and every stage it marks blocked is refused. Run
+     * over all fifteen, on a fresh deal each time so one move cannot mask the next. */
     @Test
     void everyAllowedDecisionIsAccepted_andEveryBlockedOneIsRefused() {
         for (String target : DealStage.ORDER) {
@@ -509,8 +432,8 @@ class StageDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
 
     // ── helpers ──────────────────────────────────────────────────────────────
 
-    // H1 lockdown: account reads its stage decisions through financeActions (same gates, no /tickets view
-    // check) and writes a money stage through financeUpdateStage; every other role is unchanged.
+    // H1 lockdown: account reads its stage decisions through financeActions (same gates, no /tickets view check)
+    // and writes a money stage through financeUpdateStage; every other role is unchanged.
     private List<StageDecisionDto> decisionsFor(long ticketId, UserPrincipal actor) {
         return actionsFor(ticketId, actor).stageDecisions();
     }

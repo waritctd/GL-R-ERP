@@ -4,8 +4,8 @@ import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { hasPermission } from '../../app/permissions.js';
 import { CompactStatRow } from '../../components/common/CompactStatRow.jsx';
-// FilterField (#638) for the employee select this tab passes into LeaveFilterBar as a child --
-// see that component's own comment on why a hand-rolled `<label>` here is the bug, not a shortcut.
+// FilterField (#638) for the employee select this tab passes into LeaveFilterBar as a child -- see that
+// component's own comment on why a hand-rolled `<label>` here is the bug, not a shortcut.
 import { FilterField, Panel } from '../../components/common/Layout.jsx';
 import { StatePanel } from '../../components/common/StatePanel.jsx';
 import { addDaysIso } from '../../utils/format.js';
@@ -19,32 +19,18 @@ import { summarizeLeaveRequests, useCancelLeave, useLeaveFilters } from './useLe
 import { TeamQuotaSummary } from './TeamQuotaSummary.jsx';
 import { UpcomingLeaveList } from './UpcomingLeaveList.jsx';
 
-// Same forward horizon MyLeaveTab.jsx uses for its own "วันลาที่กำลังจะถึง" panel -- the team and
-// personal views must not disagree about how far "coming up" reaches.
+// Same forward horizon MyLeaveTab.jsx uses for its own "วันลาที่กำลังจะถึง" panel -- the team and personal
+// views must not disagree about how far "coming up" reaches.
 const UPCOMING_LEAVE_WINDOW_DAYS = 90;
 
-// Bugfix (2026-08): this tab is the correctly-labelled, correctly-scoped home for what
-// used to leak into MyLeaveTab.jsx's "ของฉัน" tab. LeaveService#list -- for any actor
-// outside VIEW_ALL_ROLES (hr/ceo) -- treats an omitted `employeeId` as "self OR
-// reports_to_employee_id = actor" (LeaveRepository#findRequests' `filter.managerEmployeeId()`
-// branch), so this tab's UNFILTERED query already returns exactly "me and my direct
-// reports" -- team-wide leave, as advertised. MyLeaveTab.jsx now always scopes its own
-// query to the actor's own employeeId; nothing here changed on the backend, only where
-// the (always-correct) response gets labelled and shown. See leaveSurfaceTabs.js's
-// `team` tab entry (hasTeamMembers) for the visibility gate.
-//
-// Same filter bar / upcoming-leave / table shape MyLeaveTab.jsx carries -- and as of the
-// 2026-08-10 IA restructure that is literal shared code, not a port: LeaveFilterBar.jsx and
-// UpcomingLeaveList.jsx replaced what were two verbatim copies in this file and MyLeaveTab.jsx
-// (the filter bar down to its own duplicated `items-end` rationale comment, the list panel down to
-// the byte). Both tabs already shared their row rendering via leaveRequestTable.jsx; this closes
-// the remaining duplication so a change lands on both surfaces at once.
+// Bugfix (2026-08): this tab is the correctly-labelled, correctly-scoped home for what used to leak into
+// MyLeaveTab.jsx's "ของฉัน" tab. See leaveSurfaceTabs.js's `team` tab entry (hasTeamMembers) for the
+// visibility gate.
 
 export function TeamLeaveTab({ user, showToast }) {
-  // Empty dates by default -- same change and same reasoning as MyLeaveTab.jsx's own
-  // `initialFilters` (see its comment): `to: todayIso()` made future team leave unreachable, and
-  // `from: monthStartIso()` emptied the tab on the 1st of each month. hrApi.js's `withQuery` drops
-  // '' so no date parameter is sent, and LeaveService#list applies its +/-12-month default.
+  // Empty dates by default -- same change and same reasoning as MyLeaveTab.jsx's own `initialFilters` (see its
+  // comment): `to: todayIso()` made future team leave unreachable, and `from: monthStartIso()` emptied the tab
+  // on the 1st of each month.
   const initialFilters = {
     from: '',
     to: '',
@@ -61,24 +47,21 @@ export function TeamLeaveTab({ user, showToast }) {
   const canViewAllLeave = hasPermission(user?.role, 'canViewAllLeave');
 
   // Shares its cache key with LeaveSurfacePage.jsx's own `teamSignalQuery` (both read
-  // `queryKeys.leaveEmployees()`), so mounting this tab costs no extra request once that
-  // one has already landed -- same convention ReviewQueueTab.jsx/reviewSignalQuery use
-  // for `queryKeys.leaveRequests({})`.
+  // `queryKeys.leaveEmployees()`), so mounting this tab costs no extra request once that one has already landed
+  // -- same convention ReviewQueueTab.jsx/reviewSignalQuery use for `queryKeys.leaveRequests({})`.
   const employeesQuery = useQuery({
     queryKey: queryKeys.leaveEmployees(),
     queryFn: () => api.leave.employees().then((response) => response.employees || []),
   });
   const employeeOptions = useMemo(() => employeesQuery.data ?? [], [employeesQuery.data]);
-  // Same "does this actor have a team at all" signal leaveSurfaceTabs.js's `team` tab
-  // isVisible reuses (hasTeamMembers) -- kept in sync deliberately: if this filter has
-  // nothing to offer beyond "ทุกคน" == "just me", the tab itself is already hidden.
+  // Same "does this actor have a team at all" signal leaveSurfaceTabs.js's `team` tab isVisible reuses
+  // (hasTeamMembers) -- kept in sync deliberately: if this filter has nothing to offer beyond "ทุกคน" == "just
+  // me", the tab itself is already hidden.
   const hasMultipleEmployeeOptions = employeeOptions.length > 1;
 
-  // Unfiltered by default, this already returns exactly "me and my direct reports" for
-  // any non-hr/ceo actor (LeaveService#list's own default scoping -- see this file's
-  // header comment) -- the correct team-wide data the pre-fix "ของฉัน" tab used to show
-  // under the wrong label. `appliedFilters.employeeId`, when set, narrows to one team
-  // member (still constrained server-side to self-or-report).
+  // Unfiltered by default, this already returns exactly "me and my direct reports" for any non-hr/ceo actor
+  // (LeaveService#list's own default scoping -- see this file's header comment) -- the correct team-wide data
+  // the pre-fix "ของฉัน" tab used to show under the wrong label.
   const requestsQuery = useQuery({
     queryKey: queryKeys.leaveRequests(appliedFilters),
     queryFn: () => api.leave.list({
@@ -93,11 +76,8 @@ export function TeamLeaveTab({ user, showToast }) {
   const requests = useMemo(() => requestsQuery.data ?? [], [requestsQuery.data]);
   const refreshing = requestsQuery.isFetching && !requestsQuery.isPending;
 
-  // Own forward window, independent of the filter above -- see UpcomingLeaveList.jsx's own doc
-  // comment for why this is a second query rather than a `.filter()` over `requests` (defect D1).
-  // Deliberately NOT scoped to `appliedFilters.employeeId`: this panel answers "who on my team is
-  // away soon", which is a question about the whole team even while the table below is narrowed to
-  // one person.
+  // Own forward window, independent of the filter above -- see UpcomingLeaveList.jsx's own doc comment for why
+  // this is a second query rather than a `.filter()` over `requests` (defect D1).
   const upcomingFrom = todayIso();
   const upcomingTo = addDaysIso(upcomingFrom, UPCOMING_LEAVE_WINDOW_DAYS);
   const upcomingQuery = useQuery({
@@ -107,9 +87,9 @@ export function TeamLeaveTab({ user, showToast }) {
   });
   const upcomingRequests = useMemo(() => upcomingQuery.data ?? [], [upcomingQuery.data]);
 
-  // Stat-row parity with the other two tabs (owner ruling, 2026-08-10). The four numbers are
-  // chosen for what THIS tab is for -- a manager scanning their team, not an employee tracking
-  // their own quota, so the fourth slot counts PEOPLE away rather than a personal quota balance.
+  // Stat-row parity with the other two tabs (owner ruling, 2026-08-10). The four numbers are chosen for what
+  // THIS tab is for -- a manager scanning their team, not an employee tracking their own quota, so the fourth
+  // slot counts PEOPLE away rather than a personal quota balance.
   const totals = useMemo(() => {
     const { submitted, approved, approvedDays } = summarizeLeaveRequests(requests);
     // Distinct employees with any non-cancelled/non-rejected leave in the visible range.
@@ -141,9 +121,9 @@ export function TeamLeaveTab({ user, showToast }) {
         emptyDescription="วันลาที่อนุมัติแล้วหรือรออนุมัติในช่วง 90 วันข้างหน้าจะแสดงที่นี่"
       />
 
-      {/* Owner ask: "there is no summary of like how much each employee have left" -- direct
-          reports only (LeaveService#teamBalances), never the whole division. Its own query, so a
-          slow/failed quota fetch never blocks the request table below it. */}
+      {/* Owner ask: "there is no summary of like how much each employee have left" -- direct reports only
+       * (LeaveService#teamBalances), never the whole division. Its own query, so a slow/failed quota fetch never
+       * blocks the request table below it. */}
       <TeamQuotaSummary
         title={canViewAllLeave ? 'โควตาวันลาคงเหลือของพนักงานทั้งหมด' : 'โควตาวันลาคงเหลือของทีม'}
         emptyDescription={canViewAllLeave

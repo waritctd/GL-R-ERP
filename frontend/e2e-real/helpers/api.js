@@ -40,15 +40,9 @@ export function anonApi() {
   return playwrightRequest.newContext({ baseURL: BACKEND_URL });
 }
 
-/**
- * Logs in as the seeded persona for `role` and returns its authenticated request context.
- *
- * Throws — rather than returning a half-usable context — if login fails OR if the backend
- * resolves a different role than the one asked for. That second check is the guard against
- * silent seed drift: DivisionAccessPolicy.roleFor derives the role from the employee's
- * division, so a seed edit that moved demo.hr@ into another division would otherwise leave
- * every "hr may do X" assertion below quietly asserting something else's permissions.
- */
+/** Logs in as the seeded persona for `role` and returns its authenticated request context. Throws — rather than
+ * returning a half-usable context — if login fails OR if the backend resolves a different role than the one
+ * asked for. */
 export async function apiSessionFor(role) {
   const persona = personaFor(role);
   const context = await playwrightRequest.newContext({ baseURL: BACKEND_URL });
@@ -78,22 +72,9 @@ export async function apiSessionFor(role) {
 }
 
 /** Opens one authenticated context per role, keyed by role. Dispose with `disposeSessions`. */
-/**
- * A request context rehydrated from the session global-setup captured for `role` — performs NO
- * login of its own.
- *
- * This exists because `apiSessionFor` logs in on every call, and against a shared deployment every
- * login is a real hit on LoginRateLimitFilter's 20-per-IP / 900s budget. Four journey specs each
- * opening five sessions in `beforeAll` is twenty logins per run, and more on a retry — enough to
- * lock out the real testers using that environment. Capturing once in globalSetup makes the cost
- * five, flat, regardless of how many specs are added later.
- *
- * The role assertion `apiSessionFor` makes at login time is not skipped, only moved: globalSetup
- * makes it once, against the very session this file was written from.
- *
- * Do not "unify" this with apiSessionFor. That function's login-per-call behaviour is depended on
- * by auth.spec.js and the write specs, and is correct for a local stack where a lockout is free.
- */
+/** A request context rehydrated from the session global-setup captured for `role` — performs NO login of its
+ * own. The role assertion `apiSessionFor` makes at login time is not skipped, only moved: globalSetup makes it
+ * once, against the very session this file was written from. */
 export async function uatSessionFor(role) {
   const { statePathFor } = await import('./uat-accounts.js');
   const path = statePathFor(role);
@@ -121,15 +102,8 @@ export async function disposeSessions(sessions) {
 
 // ── Writes ───────────────────────────────────────────────────────────────────
 
-/**
- * The CSRF header a state-changing request needs, read from the context's own cookie jar.
- *
- * Deliberately re-read per call rather than captured at login: `CsrfCookieFilter` issues a fresh
- * token to any caller that arrives without one, so a stale captured value would start failing
- * the moment a context lost or rotated its cookie — and it would fail as a 403, which looks
- * exactly like an authorization result. That confusion is worth designing out of a suite whose
- * whole job is telling real 403s from noise.
- */
+/** The CSRF header a state-changing request needs, read from the context's own cookie jar. That confusion is
+ * worth designing out of a suite whose whole job is telling real 403s from noise. */
 export async function writeHeaders(context) {
   const { cookies } = await context.storageState();
   const token = cookies.find((cookie) => cookie.name === 'XSRF-TOKEN')?.value;
@@ -142,10 +116,8 @@ export async function writeHeaders(context) {
   return { 'X-XSRF-TOKEN': token };
 }
 
-/**
- * POST/PUT/PATCH/DELETE with the CSRF header attached. Never throws on a non-2xx — the status
- * IS the assertion in most of this suite.
- */
+/** POST/PUT/PATCH/DELETE with the CSRF header attached. Never throws on a non-2xx — the status IS the assertion
+ * in most of this suite. */
 export async function apiWrite(context, method, path, data) {
   const headers = await writeHeaders(context);
   return context.fetch(path, {

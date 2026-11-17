@@ -5,7 +5,7 @@ import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { QuotationListPage, groupQuotationRows, quotationRowClassName } from './QuotationListPage.jsx';
 import { api } from '../../api/index.js';
 import { bangkokTodayIso } from '../../utils/format.js';
@@ -44,8 +44,27 @@ function row(overrides = {}) {
   };
 }
 
-// Prints the current search string so a test can assert the tab actually travels in the URL
-// (owner feedback F5: "driven by the URL (`?status=`)") rather than only in component state.
+// Prints the current search string so a test can assert the tab actually travels in the URL (owner feedback
+// F5: "driven by the URL (`?status=`)") rather than only in component state.
+// The list opens flat (sales request 2026-11-16). The grouped describes below opt in the way a rep would have:
+// the view they last chose, remembered per user in this browser.
+const LIST_VIEW_KEY = 'glr.quotation.listView.v1';
+function showGroupedView(user = salesUser) {
+  globalThis.localStorage.setItem(`${LIST_VIEW_KEY}:${user.id}`, JSON.stringify('grouped'));
+}
+// This repo's Node ships a broken built-in `localStorage` (see quotationPrefs.test.js), so each test gets a
+// fresh in-memory one.
+function memoryStorage() {
+  const map = new Map();
+  return {
+    getItem: (key) => (map.has(key) ? map.get(key) : null),
+    setItem: (key, value) => { map.set(key, String(value)); },
+    removeItem: (key) => { map.delete(key); },
+    clear: () => map.clear(),
+  };
+}
+beforeEach(() => vi.stubGlobal('localStorage', memoryStorage()));
+
 function LocationProbe() {
   const location = useLocation();
   return <p data-testid="location-search">{location.search}</p>;
@@ -71,10 +90,8 @@ describe('QuotationListPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     api.dealQuotations.list.mockResolvedValue({ items: [row()] });
-    // BARE, no `{ counts: ... }` envelope — DealQuotationController#counts returns the
-    // DealQuotationCountsDto record itself (review finding MED-3). This fixture wrapped it while
-    // the page still read `r?.counts ?? r`, so it passed on the tolerance rather than on the
-    // contract; with the tolerance gone the fixture has to match the controller.
+    // BARE, no `{ counts: ... }` envelope — DealQuotationController#counts returns the DealQuotationCountsDto
+    // record itself (review finding MED-3). This fixture wrapped it while the page still read `r?.counts ??
     api.dealQuotations.counts.mockResolvedValue({ all: 7, pendingApproval: 2, needsRework: 3, cancelled: 1, approved: 4 });
   });
 
@@ -105,8 +122,8 @@ describe('QuotationListPage', () => {
 
     const labels = screen.getAllByRole('tab').map((tab) => tab.textContent.replace(/\d+$/, ''));
     expect(labels).toEqual(['ทั้งหมด', 'รออนุมัติ', 'ฉบับแก้', 'ยกเลิก', 'อนุมัติแล้ว']);
-    // Owner rewording (2026-09-15): the SUPERSEDED status label is now "ฉบับที่ไม่ได้ใช้แล้ว" --
-    // still no tab of its own (unchanged decision; see QuotationListPage.jsx's own comment).
+    // Owner rewording (2026-09-15): the SUPERSEDED status label is now "ฉบับที่ไม่ได้ใช้แล้ว" -- still no tab of
+    // its own (unchanged decision; see QuotationListPage.jsx's own comment).
     expect(screen.queryByRole('tab', { name: /ฉบับที่ไม่ได้ใช้แล้ว/ })).toBeNull();
   });
 
@@ -191,9 +208,9 @@ describe('QuotationListPage', () => {
     await waitFor(() => expect(api.dealQuotations.list).toHaveBeenCalledWith({ status: 'PENDING_APPROVAL' }));
   });
 
-  // Regression: an approver's default tab is รออนุมัติ, and "no ?status=" MEANS that default —
-  // so ทั้งหมด has to write its own key. Clearing the param instead bounced the CEO straight back
-  // to รออนุมัติ, making ทั้งหมด unreachable for the one role whose default is not it.
+  // Regression: an approver's default tab is รออนุมัติ, and "no ?status=" MEANS that default — so ทั้งหมด has to
+  // write its own key. Clearing the param instead bounced the CEO straight back to รออนุมัติ, making ทั้งหมด
+  // unreachable for the one role whose default is not it.
   it('lets an approver actually reach ทั้งหมด, writing status=all to the URL', async () => {
     renderListPage(ceoUser);
     await screen.findByText('QD69-0001');
@@ -215,9 +232,9 @@ describe('QuotationListPage', () => {
     expect(screen.getByText('ร่าง')).not.toBeNull();
   });
 
-  // Owner ruling 2026-09-24: only sales_manager/ceo (whose global list already contains every
-  // deal) get a rep filter — everyone else's rows are already scoped to their own deals
-  // server-side, so a per-rep filter over one rep's own rows is pointless chrome.
+  // Owner ruling 2026-09-24: only sales_manager/ceo (whose global list already contains every deal) get a rep
+  // filter — everyone else's rows are already scoped to their own deals server-side, so a per-rep filter over
+  // one rep's own rows is pointless chrome.
   it('sales_manager sees the rep dropdown and selecting a rep narrows the rows', async () => {
     api.dealQuotations.list.mockResolvedValue({
       items: [
@@ -329,7 +346,7 @@ describe('QuotationListPage', () => {
     await screen.findByText('QD69-0001');
 
     expect(screen.queryByRole('combobox', { name: 'กรองตามพนักงานขาย' })).toBeNull();
-    expect(screen.getByPlaceholderText('ค้นหาลูกค้า / โครงการ')).not.toBeNull();
+    expect(screen.getByPlaceholderText('ค้นหาลูกค้า / โครงการ / ยอดรวม')).not.toBeNull();
   });
 });
 
@@ -342,6 +359,7 @@ describe('QuotationListPage — จัดกลุ่มตามโครงก
   beforeEach(() => {
     vi.clearAllMocks();
     api.dealQuotations.counts.mockResolvedValue({});
+    showGroupedView();
     api.dealQuotations.list.mockResolvedValue({
       items: [
         bid({ id: 3, number: 'QT-2026-0280-2', customerName: 'บจก.สมมติ ก่อสร้าง', partyStatus: 'QUOTED', grandTotal: 491400.03 }),
@@ -357,13 +375,13 @@ describe('QuotationListPage — จัดกลุ่มตามโครงก
   it('always on: every deal gets a group row led by the deal, its quotations beneath it', async () => {
     const { container } = renderListPage(salesUser);
     const group = await s26Group();
-    expect(within(group).getByTestId('quotation-group-deal').textContent).toContain('ดีล DL-2026-0280');
+    expect(within(group).getByTestId('quotation-group-deal').textContent).toContain('งาน DL-2026-0280');
     expect(group.textContent).toContain('S26 HOTEL');
     const summary = within(group).getByTestId('quotation-group-summary').textContent;
     expect(summary).toContain('ใบเสนอราคา 3 รายการ');
     expect(summary).toContain('ผู้รับเหมา×3');
     expect(summary).toContain('รอผลประมูล · ยอดหลัก');
-    expect(within(group).getByRole('link', { name: 'เปิดดีล DL-2026-0280' }).getAttribute('href')).toBe('/tickets/18');
+    expect(within(group).getByRole('link', { name: 'เปิดงาน DL-2026-0280' }).getAttribute('href')).toBe('/tickets/18');
     // Order: each group header where its newest row was, then its quotations; the single-quotation deal too.
     const numbers = [...container.querySelectorAll('tbody tr')].map((tr) => tr.textContent);
     expect(numbers[0]).toContain('S26 HOTEL');
@@ -486,12 +504,15 @@ describe('QuotationListPage — จัดกลุ่มตามโครงก
     expect(circles).toEqual(['1', '2', '3']);
   });
 
-  it('has no grouping switch and no expand-all switch: grouping is always on', async () => {
+  it('the view switch leaves the grouped view for the flat list; there is no expand-all switch', async () => {
     renderListPage(salesUser);
     await s26Group();
-    expect(screen.queryByTestId('quotation-group-toggle')).toBeNull();
     expect(screen.queryByTestId('quotation-expand-toggle')).toBeNull();
-    expect(screen.queryByText('จัดกลุ่มตามโครงการ')).toBeNull();
+    const flat = screen.getByRole('button', { name: 'เรียงตามเลขที่' });
+    expect(flat.getAttribute('aria-pressed')).toBe('false');
+    fireEvent.click(flat);
+    await waitFor(() => expect(screen.queryByTestId('quotation-group-row')).toBeNull());
+    expect(screen.getByText('QT-2026-0280-2')).toBeTruthy();
   });
 
   it('on a phone a member card is indented behind a connector line; an older version one step further', () => {
@@ -521,6 +542,7 @@ describe('QuotationListPage — revisions of one document fold into the version 
   beforeEach(() => {
     vi.clearAllMocks();
     api.dealQuotations.counts.mockResolvedValue({});
+    showGroupedView();
     api.dealQuotations.list.mockResolvedValue({ items: chain });
   });
 
@@ -599,6 +621,7 @@ describe('QuotationListPage — who each quotation is for', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     api.dealQuotations.counts.mockResolvedValue({});
+    showGroupedView();
     api.dealQuotations.list.mockResolvedValue({ items });
   });
 
@@ -647,6 +670,7 @@ describe('QuotationListPage — contractor bids from before the recipient was re
   beforeEach(() => {
     vi.clearAllMocks();
     api.dealQuotations.counts.mockResolvedValue({});
+    showGroupedView();
     api.dealQuotations.list.mockResolvedValue({ items });
   });
 
@@ -662,26 +686,9 @@ describe('QuotationListPage — contractor bids from before the recipient was re
 });
 
 describe('QuotationListPage column floors (responsive review, 2026-09-10)', () => {
-  // ⚠️ WHAT THIS CAN AND CANNOT PROVE. jsdom does no grid layout and no text measurement, so it
-  // cannot observe the defect this pins: at a 721px viewport the six `minmax(0, …)` tracks were
-  // shrunk below their own text and the cells clip rather than overflow, so `QT-2026-0005-2`
-  // rendered `QT-2026-000…` — losing the `-N` suffix that is the only thing distinguishing a
-  // revision from the document it replaces. That was measured in a real browser and can only be
-  // RE-measured in one. This is a TEXT guard on the decisions that fix it:
-  //
-  //   1. FIXED floors on the four columns that cannot wrap (เลขที่, ยอดรวม, สถานะ, วันที่) plus a
-  //      smaller one on พนักงานขาย. Fixed, never `min-content` — the head row and each data row are
-  //      separate grid containers, so `min-content` sizes each row from its own content and the
-  //      columns stagger row to row.
-  //   2. ลูกค้า / โครงการ keeps `minmax(0, …)` and stays the SECOND track: it is the designated
-  //      absorber, the one column of free text that can give up width without losing anything.
-  //   3. Both free-text cells render a <span> wrapper, because styles.css's wrap escape hatch
-  //      (`.data-row > td > strong | small | span`) reaches nothing else — a <div> child, or a bare
-  //      string with no child element at all, inherits the cell's `nowrap` and is truncated.
-  //
-  // The MAGNITUDES are pinned literally, not merely counted. Shrinking every floor, or permuting
-  // them so ยอดรวม inherits สถานะ's, would keep any count-based assertion green while silently
-  // clipping the money again — that exact escape was found on the sibling page's guard.
+  // ⚠️ WHAT THIS CAN AND CANNOT PROVE. That was measured in a real browser and can only be RE-measured in one.
+  // FIXED floors on the four columns that cannot wrap (เลขที่, ยอดรวม, สถานะ, วันที่) plus a smaller one on
+  // พนักงานขาย.
   function gridClasses(el, what) {
     expect(el, `no ${what} to read the grid classes from`).toBeTruthy();
     return el.className;
@@ -692,9 +699,9 @@ describe('QuotationListPage column floors (responsive review, 2026-09-10)', () =
     const { container } = renderListPage(salesUser);
     await screen.findByText('QD69-0001');
 
-    // Asserted on the head row AND a data row. They share one constant today, so this cannot
-    // diverge — but splitting the grid and flooring only one is exactly how the header would stop
-    // lining up with the body, and a guard that reads only the head row would stay green.
+    // Asserted on the head row AND a data row. They share one constant today, so this cannot diverge — but
+    // splitting the grid and flooring only one is exactly how the header would stop lining up with the body, and a
+    // guard that reads only the head row would stay green.
     for (const [el, what] of [
       [container.querySelector('.table-head'), '.table-head'],
       [container.querySelector('.data-row'), '.data-row'],
@@ -705,17 +712,14 @@ describe('QuotationListPage column floors (responsive review, 2026-09-10)', () =
       expect(classes, `${what}: min-content floors stagger the columns row to row`)
         .not.toContain('min-content');
 
-      // Two shrinkable tracks — ลูกค้า / โครงการ and พนักงานขาย, the two free-text columns that
-      // wrap — and they are tracks TWO and THREE.
+      // Two shrinkable tracks — ลูกค้า / โครงการ and พนักงานขาย, the two free-text columns that wrap — and they are
+      // tracks TWO and THREE.
       const shrinkable = classes.match(/minmax\(0,/g) ?? [];
       expect(shrinkable, `${what}: only the two free-text columns may shrink below their content`)
         .toHaveLength(2);
 
-      // The whole track list, pinned literally. The values are each column's widest realistic
-      // value measured in the live cell typography and rounded up; ยอดรวม and วันที่ are sized
-      // against the FALLBACK font, not Sarabun, because Sarabun is swap-loaded from Google Fonts
-      // and absent entirely on an on-prem host that cannot reach them. Re-measure before changing
-      // any of these — see the source comment beside LIST_TABLE_GRID.
+      // The whole track list, pinned literally. Re-measure before changing any of these — see the source comment
+      // beside LIST_TABLE_GRID.
       expect(classes).toContain(
         'grid-cols-[minmax(6.875rem,1fr)_minmax(0,2.2fr)_minmax(0,1.3fr)'
         + '_minmax(8.25rem,1.1fr)_minmax(4.75rem,1fr)_minmax(6.5rem,1fr)]',
@@ -724,20 +728,9 @@ describe('QuotationListPage column floors (responsive review, 2026-09-10)', () =
   });
 
   it('keeps LIST_TABLE_GRID as ONE unbroken literal so Tailwind can see it', () => {
-    // Reading this component's own SOURCE, not its rendered output, and that is the point.
-    // Tailwind's scanner matches whole class strings in the source text; splitting the literal
-    // across a `+` concatenation — which looks like a harmless tidy-up, and is exactly what the
-    // assertion above does to itself — leaves the arbitrary value unseen, so the rule is NEVER
-    // EMITTED. `grid-template-columns` then goes unset, `.table-head`/`.data-row` supply
-    // `display:grid` with no columns of their own, and every row collapses to one implicit track
-    // (measured: 63.5px tall becomes 242px, all six cells stacked).
-    //
-    // Nothing else catches it: lint passes, this suite passes, `npm run build` exits 0 with no
-    // warning, and the dev server keeps rendering correctly from Tailwind's cache. The only
-    // evidence is that `dist/assets/*.css` stops containing the value. A source-text assertion is
-    // the cheapest guard that fails in CI instead.
-    // `import.meta.url` is not a file: URL under vitest's transform, so resolve from the runner's
-    // root (frontend/) instead.
+    // Reading this component's own SOURCE, not its rendered output, and that is the point. The only evidence is
+    // that `dist/assets/*.css` stops containing the value. A source-text assertion is the cheapest guard that
+    // fails in CI instead.
     const source = readFileSync(
       resolve(process.cwd(), 'src/features/quotations/QuotationListPage.jsx'), 'utf8',
     );
@@ -754,11 +747,8 @@ describe('QuotationListPage column floors (responsive review, 2026-09-10)', () =
   });
 
   it('pins the COLUMNS order the track list is measured against', async () => {
-    // The grid string and the COLUMNS array are two halves of one contract, and pinning only the
-    // string leaves the other half free. Swapping the ยอดรวม and สถานะ entries in COLUMNS, with the
-    // grid untouched, puts a grand total in the 76px status track: measured at 721px,
-    // `฿600,616.00` breaks across two lines mid-number while สถานะ sits in 132px. That is the same
-    // defect the permuted-floors mutation covers, reached from the other side.
+    // The grid string and the COLUMNS array are two halves of one contract, and pinning only the string leaves the
+    // other half free. That is the same defect the permuted-floors mutation covers, reached from the other side.
     api.dealQuotations.list.mockResolvedValue({ items: [row()] });
     const { container } = renderListPage(salesUser);
     await screen.findByText('QD69-0001');
@@ -766,7 +756,7 @@ describe('QuotationListPage column floors (responsive review, 2026-09-10)', () =
     const headers = [...container.querySelector('.table-head').children]
       .map((cell) => cell.textContent.replace(/[▲▼↑↓]/g, '').trim());
     expect(headers).toEqual([
-      'เลขที่', 'ลูกค้า / ผู้รับใบเสนอราคา', 'พนักงานขาย', 'ยอดรวม', 'สถานะ', 'วันที่',
+      'เลขที่', 'ลูกค้า / ผู้รับใบเสนอราคา', 'พนักงานขาย', 'ยอดรวม', 'สถานะ', 'วันที่อนุมัติ',
     ]);
   });
 
@@ -779,8 +769,8 @@ describe('QuotationListPage column floors (responsive review, 2026-09-10)', () =
 
     const cells = [...container.querySelector('.data-row').children];
 
-    // ลูกค้า / โครงการ — the wrapper must be a <span>. A <div> here inherits the cell's nowrap,
-    // which is what stopped the absorber absorbing anything.
+    // ลูกค้า / โครงการ — the wrapper must be a <span>. A <div> here inherits the cell's nowrap, which is what
+    // stopped the absorber absorbing anything.
     const customerCell = cells[1];
     const customerWrapper = customerCell.firstElementChild;
     expect(customerWrapper?.tagName, 'ลูกค้า / โครงการ wrapper must be a <span>, not a <div>')
@@ -793,5 +783,262 @@ describe('QuotationListPage column floors (responsive review, 2026-09-10)', () =
     expect(repCell.firstElementChild?.tagName, 'พนักงานขาย must render inside a <span>')
       .toBe('SPAN');
     expect(repCell.textContent).toBe('คุณสมหมาย ขายดี');
+  });
+});
+
+// Sales request 2026-11-16 (annotated screenshot from the sales manager): no deal grouping by default, newest
+// number on top; search by the quotation total; the date column is the approval date.
+describe('QuotationListPage — flat list by number (sales request 2026-11-16)', () => {
+  const items = [
+    row({ id: 11, number: 'QT-2026-0119-1', customerName: 'บริษัท ไวท์ วูด กรีน จำกัด', projectName: 'บ้านคุณปองพล', ticketId: 114, ticketCode: 'PR-2026-0114', docStatus: 'SUPERSEDED', grandTotal: 40449.21, quotationDate: '2026-07-24' }),
+    row({ id: 31, number: 'QT-2026-0141-2', customerName: 'คุณรมิตา เกรียงไกรรัตน์', projectName: 'บ้านคุณรมิตา', ticketId: 136, ticketCode: 'PR-2026-0136', docStatus: 'APPROVED', grandTotal: 7198.45, quotationDate: '2026-07-29', approvedAt: '2026-07-29T03:00:00Z' }),
+    row({ id: 12, number: 'QT-2026-0119-2', customerName: 'บริษัท ไวท์ วูด กรีน จำกัด', projectName: 'บ้านคุณปองพล', ticketId: 114, ticketCode: 'PR-2026-0114', docStatus: 'APPROVED', grandTotal: 5444.8, quotationDate: '2026-07-24',
+      // 18:30 UTC on the 15th is already the 16th in Bangkok: the cell must show the Bangkok day.
+      approvedAt: '2026-11-15T18:30:00Z' }),
+    row({ id: 32, number: 'QT-2026-0141-3', customerName: 'คุณรมิตา เกรียงไกรรัตน์', projectName: 'บ้านคุณรมิตา', ticketId: 136, ticketCode: 'PR-2026-0136', docStatus: 'DRAFT', grandTotal: 6406.61, quotationDate: '2026-11-13', approvedAt: null }),
+    row({ id: 13, number: 'QT-2026-0120-1', customerName: 'บริษัท ไวท์ วูด กรีน จำกัด', projectName: 'บ้านคุณปองพล', ticketId: 114, ticketCode: 'PR-2026-0114', docStatus: 'SUPERSEDED', grandTotal: 9188.14, quotationDate: '2026-07-24' }),
+  ];
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.dealQuotations.counts.mockResolvedValue({});
+    api.dealQuotations.list.mockResolvedValue({ items });
+  });
+  const bodyRows = (container) => [...container.querySelectorAll('tbody tr')];
+
+  it('opens flat: no deal header rows, no เปิดดีล link, every quotation is its own row', async () => {
+    const { container } = renderListPage(salesManagerUser);
+    await screen.findByText('QT-2026-0141-3');
+    expect(screen.queryByTestId('quotation-group-row')).toBeNull();
+    expect(screen.queryByRole('link', { name: /เปิดงาน/ })).toBeNull();
+    expect(screen.queryByTestId('quotation-versions-toggle')).toBeNull();
+    expect(bodyRows(container)).toHaveLength(5);
+    expect(screen.getByRole('button', { name: 'เรียงตามเลขที่' }).getAttribute('aria-pressed')).toBe('true');
+  });
+
+  it('orders by quotation number, newest on top, a later revision above its earlier one', async () => {
+    const { container } = renderListPage(salesManagerUser);
+    await screen.findByText('QT-2026-0141-3');
+    const numbers = bodyRows(container).map((tr) => /QT-2026-\d{4}-\d+/.exec(tr.textContent)?.[0]);
+    expect(numbers).toEqual(['QT-2026-0141-3', 'QT-2026-0141-2', 'QT-2026-0120-1', 'QT-2026-0119-2', 'QT-2026-0119-1']);
+  });
+
+  it('a flat row still names its project under the customer', async () => {
+    renderListPage(salesManagerUser);
+    const tr = (await screen.findByText('QT-2026-0120-1')).closest('tr');
+    expect(tr.textContent).toContain('บริษัท ไวท์ วูด กรีน จำกัด');
+    expect(tr.textContent).toContain('บ้านคุณปองพล');
+  });
+
+  it.each([
+    ['as printed, with the comma', '5,444.80'],
+    ['digits only', '5444.8'],
+    ['a leading fragment', '5,444'],
+  ])('search finds a quotation by its total (%s)', async (_label, typed) => {
+    const { container } = renderListPage(salesManagerUser);
+    await screen.findByText('QT-2026-0141-3');
+    fireEvent.change(screen.getByPlaceholderText('ค้นหาลูกค้า / โครงการ / ยอดรวม'), { target: { value: typed } });
+    await waitFor(() => expect(bodyRows(container)).toHaveLength(1));
+    expect(bodyRows(container)[0].textContent).toContain('QT-2026-0119-2');
+  });
+
+  it('a total that matches nothing empties the list instead of matching everything', async () => {
+    renderListPage(salesManagerUser);
+    await screen.findByText('QT-2026-0141-3');
+    fireEvent.change(screen.getByPlaceholderText('ค้นหาลูกค้า / โครงการ / ยอดรวม'), { target: { value: '999,999.99' } });
+    await waitFor(() => expect(screen.queryByText('QT-2026-0141-3')).toBeNull());
+    expect(screen.getByText('ไม่มีใบเสนอราคาในเงื่อนไขนี้')).toBeTruthy();
+  });
+
+  it('the date column is the approval date in Bangkok time; an unapproved row shows a dash, not its document date', async () => {
+    renderListPage(salesManagerUser);
+    const approved = (await screen.findByText('QT-2026-0119-2')).closest('tr');
+    expect(within(approved).getByTestId('quotation-approved-date').textContent).toBe('16 พ.ย. 2569');
+    const draft = screen.getByText('QT-2026-0141-3').closest('tr');
+    expect(within(draft).getByTestId('quotation-approved-date').textContent).toBe('—');
+    expect(draft.textContent).not.toContain('13 พ.ย. 2569');
+  });
+
+  it('จัดกลุ่มตามดีล brings the deal headers back, and the choice is remembered for that user', async () => {
+    const first = renderListPage(salesManagerUser);
+    await screen.findByText('QT-2026-0141-3');
+    fireEvent.click(screen.getByRole('button', { name: 'จัดกลุ่มตามงาน' }));
+    expect(await screen.findAllByTestId('quotation-group-row')).toHaveLength(2);
+    first.unmount();
+
+    renderListPage(salesManagerUser);
+    expect(await screen.findAllByTestId('quotation-group-row')).toHaveLength(2);
+    expect(screen.getByRole('button', { name: 'จัดกลุ่มตามงาน' }).getAttribute('aria-pressed')).toBe('true');
+  });
+
+  it('one user choosing the grouped view does not change the list of another user', async () => {
+    showGroupedView(salesManagerUser);
+    renderListPage(ceoUser);
+    await screen.findByText('QT-2026-0141-3');
+    expect(screen.queryByTestId('quotation-group-row')).toBeNull();
+  });
+
+  it('grouped view: a search by total still keeps the whole deal together', async () => {
+    showGroupedView(salesManagerUser);
+    renderListPage(salesManagerUser);
+    await screen.findAllByTestId('quotation-group-row');
+    fireEvent.change(screen.getByPlaceholderText('ค้นหาลูกค้า / โครงการ / ยอดรวม'), { target: { value: '5,444.80' } });
+    await waitFor(() => expect(screen.getAllByTestId('quotation-group-row')).toHaveLength(1));
+    expect(screen.getByText('QT-2026-0120-1')).toBeTruthy();
+    expect(screen.queryByText('QT-2026-0141-3')).toBeNull();
+  });
+});
+
+// Adversarial review of the flat list (#1314): sorting, search and the Bangkok day, each pinned so the mutation
+// that slipped through (a column that renders but sorts nothing, a non-numeric number sort, a timezone that
+// only works on one machine) goes red.
+describe('QuotationListPage — flat list: header sorting, search and Bangkok day (review fixes)', () => {
+  const SEARCH = 'ค้นหาลูกค้า / โครงการ / ยอดรวม';
+  const bodyRows = (container) => [...container.querySelectorAll('tbody tr')];
+  const numbersOf = (container) => bodyRows(container).map((tr) => /QT-2026-\d{4}-\d+/.exec(tr.textContent)?.[0]);
+  const customersOf = (container) => bodyRows(container).map((tr) => /ลูกค้า-(?:มีนา|มกรา|ร่าง|กุมภา|ใหม่|เก่า)/.exec(tr.textContent)?.[0]);
+  const header = (name) => screen.getByRole('button', { name: new RegExp(`^${name}`) });
+  const search = (value) => fireEvent.change(screen.getByPlaceholderText(SEARCH), { target: { value } });
+  const setItems = (items) => {
+    vi.clearAllMocks();
+    api.dealQuotations.counts.mockResolvedValue({});
+    api.dealQuotations.list.mockResolvedValue({ items });
+  };
+  const processEnv = globalThis.process.env;
+  const originalTz = processEnv.TZ;
+  afterEach(() => {
+    if (originalTz === undefined) delete processEnv.TZ; else processEnv.TZ = originalTz;
+  });
+
+  const approvals = [
+    row({ id: 1, number: 'QT-2026-0001-1', customerName: 'ลูกค้า-มีนา', grandTotal: 1300, docStatus: 'APPROVED', approvedAt: '2026-03-10T03:00:00Z' }),
+    row({ id: 2, number: 'QT-2026-0002-1', customerName: 'ลูกค้า-มกรา', grandTotal: 100, docStatus: 'APPROVED', approvedAt: '2026-01-10T03:00:00Z' }),
+    row({ id: 3, number: 'QT-2026-0003-1', customerName: 'ลูกค้า-ร่าง', grandTotal: 200, docStatus: 'DRAFT', approvedAt: null }),
+    row({ id: 4, number: 'QT-2026-0004-1', customerName: 'ลูกค้า-กุมภา', grandTotal: 50, docStatus: 'APPROVED', approvedAt: '2026-02-10T03:00:00Z' }),
+  ];
+
+  it('sorting วันที่อนุมัติ orders by the approval instant, the unapproved row together at one end', async () => {
+    setItems(approvals);
+    const { container } = renderListPage(salesManagerUser);
+    await screen.findByText('QT-2026-0004-1');
+    fireEvent.click(header('วันที่อนุมัติ'));
+    await waitFor(() => expect(customersOf(container)).toEqual(['ลูกค้า-ร่าง', 'ลูกค้า-มกรา', 'ลูกค้า-กุมภา', 'ลูกค้า-มีนา']));
+    fireEvent.click(header('วันที่อนุมัติ'));
+    await waitFor(() => expect(customersOf(container)).toEqual(['ลูกค้า-มีนา', 'ลูกค้า-กุมภา', 'ลูกค้า-มกรา', 'ลูกค้า-ร่าง']));
+  });
+
+  it('sorting ยอดรวม orders by the amount shown', async () => {
+    setItems(approvals);
+    const { container } = renderListPage(salesManagerUser);
+    await screen.findByText('QT-2026-0004-1');
+    fireEvent.click(header('ยอดรวม'));
+    await waitFor(() => expect(customersOf(container)).toEqual(['ลูกค้า-กุมภา', 'ลูกค้า-มกรา', 'ลูกค้า-ร่าง', 'ลูกค้า-มีนา']));
+    fireEvent.click(header('ยอดรวม'));
+    await waitFor(() => expect(customersOf(container)).toEqual(['ลูกค้า-มีนา', 'ลูกค้า-ร่าง', 'ลูกค้า-มกรา', 'ลูกค้า-กุมภา']));
+  });
+
+  it('sorting สถานะ keeps the rows of one label together', async () => {
+    setItems(approvals);
+    const { container } = renderListPage(salesManagerUser);
+    await screen.findByText('QT-2026-0004-1');
+    fireEvent.click(header('สถานะ'));
+    await waitFor(() => {
+      const labels = bodyRows(container).map((tr) => (tr.textContent.includes('อนุมัติแล้ว') ? 'approved' : 'draft'));
+      expect(labels.join(',')).toMatch(/^(draft,approved,approved,approved|approved,approved,approved,draft)$/);
+    });
+  });
+
+  const revisions = [
+    row({ id: 1, number: 'QT-2026-0500-2', customerName: 'ลูกค้า-สอง' }),
+    row({ id: 2, number: 'QT-2026-0500-10', customerName: 'ลูกค้า-สิบ' }),
+    row({ id: 3, number: 'QT-2026-0500-9', customerName: 'ลูกค้า-เก้า' }),
+  ];
+
+  it('the default order is numeric: -10 above -9 above -2', async () => {
+    setItems(revisions);
+    const { container } = renderListPage(salesManagerUser);
+    await screen.findByText('QT-2026-0500-10');
+    expect(numbersOf(container)).toEqual(['QT-2026-0500-10', 'QT-2026-0500-9', 'QT-2026-0500-2']);
+  });
+
+  it('the เลขที่ header sorts numerically too, and agrees with the default order', async () => {
+    setItems(revisions);
+    const { container } = renderListPage(salesManagerUser);
+    await screen.findByText('QT-2026-0500-10');
+    fireEvent.click(header('เลขที่'));
+    await waitFor(() => expect(numbersOf(container)).toEqual(['QT-2026-0500-2', 'QT-2026-0500-9', 'QT-2026-0500-10']));
+    fireEvent.click(header('เลขที่'));
+    await waitFor(() => expect(numbersOf(container)).toEqual(['QT-2026-0500-10', 'QT-2026-0500-9', 'QT-2026-0500-2']));
+  });
+
+  it('two rows with the same number fall back to the newer id on top', async () => {
+    setItems([
+      row({ id: 5, number: 'QT-2026-0700-1', customerName: 'ลูกค้า-เก่า' }),
+      row({ id: 7, number: 'QT-2026-0700-1', customerName: 'ลูกค้า-ใหม่' }),
+    ]);
+    const { container } = renderListPage(salesManagerUser);
+    await screen.findByText('ลูกค้า-ใหม่');
+    await waitFor(() => expect(customersOf(container)).toEqual(['ลูกค้า-ใหม่', 'ลูกค้า-เก่า']));
+  });
+
+  it('the flat footer says how many rows the search hid, counting every row once', async () => {
+    setItems(approvals);
+    renderListPage(salesManagerUser);
+    await screen.findByText('QT-2026-0004-1');
+    search('มกรา');
+    expect((await screen.findAllByText(/\(กรองจาก 4\)/)).length).toBeGreaterThan(0);
+  });
+
+  it('an instant just after Bangkok midnight shows the Bangkok day from a zone behind Bangkok', async () => {
+    processEnv.TZ = 'Pacific/Honolulu';
+    setItems([row({ id: 1, number: 'QT-2026-0800-1', docStatus: 'APPROVED', approvedAt: '2026-11-15T18:30:00Z' })]);
+    renderListPage(salesManagerUser);
+    const cell = await screen.findByTestId('quotation-approved-date');
+    expect(cell.textContent).toBe('16 พ.ย. 2569');
+  });
+
+  it('an instant just before Bangkok midnight shows the Bangkok day from a zone ahead of Bangkok', async () => {
+    processEnv.TZ = 'Asia/Tokyo';
+    setItems([row({ id: 1, number: 'QT-2026-0800-1', docStatus: 'APPROVED', approvedAt: '2026-11-15T16:30:00Z' })]);
+    renderListPage(salesManagerUser);
+    const cell = await screen.findByTestId('quotation-approved-date');
+    expect(cell.textContent).toBe('15 พ.ย. 2569');
+  });
+
+  it('search finds a quotation by its total pasted with the currency sign', async () => {
+    setItems([
+      row({ id: 1, number: 'QT-2026-0900-1', customerName: 'ลูกค้า-เป้า', grandTotal: 5444.8 }),
+      row({ id: 2, number: 'QT-2026-0901-1', customerName: 'ลูกค้า-อื่น', grandTotal: 9100 }),
+    ]);
+    const { container } = renderListPage(salesManagerUser);
+    await screen.findByText('QT-2026-0901-1');
+    search('฿5,444.80');
+    await waitFor(() => expect(bodyRows(container)).toHaveLength(1));
+    expect(bodyRows(container)[0].textContent).toContain('QT-2026-0900-1');
+  });
+
+  it.each([['.'], [','], ['฿']])('a search of only punctuation (%s) does not match every row through the total', async (typed) => {
+    setItems(approvals);
+    renderListPage(salesManagerUser);
+    await screen.findByText('QT-2026-0004-1');
+    search(typed);
+    await waitFor(() => expect(screen.queryByText('QT-2026-0004-1')).toBeNull());
+    expect(screen.getByText('ไม่มีใบเสนอราคาในเงื่อนไขนี้')).toBeTruthy();
+  });
+
+  it('grouped view: a search of only punctuation does not match every deal either', async () => {
+    showGroupedView(salesManagerUser);
+    setItems(approvals.map((r) => ({ ...r, ticketId: r.id, ticketCode: `PR-${r.id}` })));
+    renderListPage(salesManagerUser);
+    await screen.findAllByTestId('quotation-group-row');
+    search('.');
+    await waitFor(() => expect(screen.queryAllByTestId('quotation-group-row')).toHaveLength(0));
+  });
+
+  it('an ordinary digit search still finds the number it names', async () => {
+    setItems(approvals);
+    const { container } = renderListPage(salesManagerUser);
+    await screen.findByText('QT-2026-0004-1');
+    search('0003');
+    await waitFor(() => expect(bodyRows(container)).toHaveLength(1));
   });
 });

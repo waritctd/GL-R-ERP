@@ -13,31 +13,9 @@ import {
   waiveDeposit,
 } from './helpers/sales.js';
 
-// ─────────────────────────────────────────────────────────────────────────────────────────────
-// COMMISSION INVOICE -> MANAGER WEIGHT REVIEW -> CEO QUEUE, driven end to end through the REAL
-// stack (browser -> Vite -> Spring -> Postgres). No mock anywhere in the path.
-//
-//   account     opens /finance/deals/:id of a CLOSED_PAID deal, records the tax invoice
-//               (RECORD_INVOICE -> POST /api/commissions/from-deal, multipart)
-//   sales_mgr   is notified (COMMISSION_PENDING_MANAGER -> /commissions?view=pending), sees the
-//               invoice's lines, re-weights one (POST /api/commissions/{id}/item-weights) and
-//               approves
-//   account     sees the deal's milestone 5 move to "รอ CEO อนุมัติ"
-//
-// FIXTURE. The demo seed's only CLOSED_PAID deal (DEMO-TKT-05) already carries a live commission,
-// so it cannot be reused, and the PricingRequest chain the UAT journeys use needs factory /
-// price-calc master data the demo seed lacks. This test builds its OWN deal through the real API on
-// the direct-quotation route (write-quotation.spec.js). No SQL fixture, no pg connection.
-// confirm-order turns the quotation's goods lines into ticket items, so the weight view has lines.
-//
-// RE-RUNNABILITY. Every run creates a fresh deal + commission with a unique invoice number. A
-// CLOSED_PAID deal cannot be cancelled, so the row remains (same accepted residue as the other
-// write specs); nothing here reads a global count or a row it did not create.
-//
-// AUTHZ. Everything asserted about 403/409 here was produced by the real service over real HTTP
-// (incl. @PreAuthorize). It is observed behaviour, not a scope-filter proof: requirement 2 of
-// CLAUDE.md (real-DB integration test through the Java service) is still the evidence for that.
-// ─────────────────────────────────────────────────────────────────────────────────────────────
+// COMMISSION INVOICE -> MANAGER WEIGHT REVIEW -> CEO QUEUE, driven end to end through the REAL stack (browser
+// -> Vite -> Spring -> Postgres). No mock anywhere in the path. This test builds its OWN deal through the real
+// API on the direct-quotation route (write-quotation.spec.js).
 
 const SHOT_DIR =
   process.env.E2E_SHOT_DIR ||
@@ -123,14 +101,9 @@ async function buildClosedPaidDeal(sessions) {
   await waiveDeposit(sessions, ticketId, { reason: 'e2e commission-invoice: no deposit document needed' });
   const read = await readDeal(sessions, 'sales', ticketId);
   expect(read.items.length, 'confirm-order must have created ticket items from the quotation').toBeGreaterThan(0);
-  // SQL FIXTURE (the one thing this spec cannot do through the API): the direct-quotation route copies
-  // NO price onto ticket_item (DealQuotationService#ticketItemsFromQuotation: "NO pricing field is
-  // copied"), and no accepted sales.quotation exists on that route, so the deal's payable is 0 and
-  // CommissionCalculator#itemDerivedWeight (price = COALESCE(approved, proposed, 0)) has zero item
-  // value to weight. The only API that sets approved_price is the PricingRequest chain, which needs
-  // factory/country master data the demo seed lacks. So price the confirmed order's lines directly,
-  // via psql with the same PG* env the backend launcher uses. See the report: on the shipped route
-  // the manager's weight control is inert without this.
+  // SQL FIXTURE: the direct-quotation route copies NO price onto ticket_item, and no accepted sales.quotation
+  // exists on that route, so the deal's payable is 0 and CommissionCalculator#itemDerivedWeight (price =
+  // COALESCE) has zero item value to weight.
   psql(`UPDATE sales.ticket_item SET approved_price = 920 WHERE ticket_id = ${Number(ticketId)}`);
   await declareStockCoverage(sessions, 'ceo', ticketId, read.items.map((item) => ({ itemId: item.id, qtyFromStock: item.qty })));
   await completeDelivery(sessions, ticketId);
@@ -158,8 +131,8 @@ test.describe('commission invoice approval journey (real stack)', () => {
 
   test.afterAll(async () => {
     test.setTimeout(60_000);
-    // CLOSED_PAID is terminal for cancel, so this is a best-effort no-op kept for symmetry with the
-    // other sales specs; it never throws.
+    // CLOSED_PAID is terminal for cancel, so this is a best-effort no-op kept for symmetry with the other sales
+    // specs; it never throws.
     if (deal) await cancelDeal(sessions, deal.id);
     await disposeSessions(sessions);
   });

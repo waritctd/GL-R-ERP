@@ -10,6 +10,11 @@ import { expectFigure, figureRows } from '../../test/fixtures/dashboardMoney.js'
 
 globalThis.React = React;
 
+// Review H3: the rep landing is งานของฉัน (MyWork) with what this page already did put back above it — the money
+// band and the next-action worklist. The worklist's quiet group is gone (ควรตามต่อ, the 14-day QuietRule, covers
+// a deal whose only action is "log an activity"), its follow group reads ถึงกำหนดตาม, and the rep's 7-day tile
+// panel was not restored (the manager/CEO landings keep theirs).
+
 vi.mock('../../api/index.js', async (importOriginal) => {
   const actual = await importOriginal();
   // Imported inside the factory: vi.mock is hoisted above every import.
@@ -17,7 +22,11 @@ vi.mock('../../api/index.js', async (importOriginal) => {
   return {
     ...actual,
     api: {
-      tickets: { list: vi.fn(), getProcurementSource: vi.fn() },
+      tickets: {
+        list: vi.fn(), getProcurementSource: vi.fn(), addActivity: vi.fn(), markLost: vi.fn(), create: vi.fn(),
+      },
+      // งานของฉัน's own read (MyWork): ควรตามต่อ + the board, pinned in salesBoard/MyWork.test.jsx.
+      salesBoard: { myWork: vi.fn() },
       pricingRequests: { queue: vi.fn() },
       commissions: { monthlySummary: vi.fn() },
       // Each quoted deal's quotation list (the same call the deal page makes) — none by default.
@@ -33,12 +42,8 @@ vi.mock('../../api/index.js', async (importOriginal) => {
 const salesUser = { employeeId: 1, name: 'Sales Test', role: 'sales' };
 const employee = { nameTh: 'สมชาย ใจดี' };
 
-// Dates are derived from the REAL `bangkokTodayIso()` (never faked/frozen) so
-// the fixtures always agree with what the component itself computes at
-// render time — see the repo's Bangkok-timezone memory note: a bare
-// `new Date()`/fake-timer comparison can disagree with the Asia/Bangkok
-// calendar day, and faking the clock here would also stall
-// @testing-library's setTimeout-based `waitFor`/`findBy*` polling.
+// Dates are derived from the REAL `bangkokTodayIso` so the fixtures always agree with what the component
+// itself computes at render time.
 function addDays(isoDate, delta) {
   const date = new Date(`${isoDate}T00:00:00.000Z`);
   date.setUTCDate(date.getUTCDate() + delta);
@@ -48,10 +53,9 @@ const TODAY = bangkokTodayIso();
 const OVERDUE_DATE = addDays(TODAY, -5);
 const THIS_MONTH = `${TODAY.slice(0, 7)}-01`;
 
-// One deal per next-action bucket (now including RECORD_DELIVERY — deal I —
-// and RECORD_QUOTATION_OUTCOME — deal J), plus a "nothing to do" deal (G)
-// and a non-ACTIVE deal (H) that must be excluded from both the pulse and
-// the worklist entirely.
+// One deal per next-action bucket (now including RECORD_DELIVERY — deal I — and RECORD_QUOTATION_OUTCOME —
+// deal J), plus a "nothing to do" deal (G) and a non-ACTIVE deal (H) that must be excluded from both the pulse
+// and the worklist entirely.
 const deals = [
   { id: 601, code: 'PR-2026-0601', customerName: 'บริษัท เอ จำกัด', title: 'ดีลเอ', lifecycle: 'ACTIVE', amountPayable: 100000, stale: false, nextFollowUpAt: null, stageUpdatedAt: '2026-07-01T00:00:00.000Z' },
   { id: 602, code: 'PR-2026-0602', customerName: 'บริษัท บี จำกัด', title: 'ดีลบี', lifecycle: 'ACTIVE', amountPayable: 200000, stale: false, nextFollowUpAt: null, stageUpdatedAt: '2026-07-01T00:00:00.000Z' },
@@ -61,16 +65,11 @@ const deals = [
   { id: 606, code: 'PR-2026-0606', customerName: 'บริษัท เอฟ จำกัด', title: 'ดีลเอฟ', lifecycle: 'ACTIVE', amountPayable: 25000, stale: true, nextFollowUpAt: null, stageUpdatedAt: '2026-07-01T00:00:00.000Z' },
   { id: 607, code: 'PR-2026-0607', customerName: 'บริษัท จี จำกัด', title: 'ดีลจี', lifecycle: 'ACTIVE', amountPayable: 10000, stale: false, nextFollowUpAt: null, stageUpdatedAt: '2026-07-01T00:00:00.000Z' },
   { id: 608, code: 'PR-2026-0608', customerName: 'บริษัท เอช จำกัด', title: 'ดีลเอช (ปิดแล้ว)', lifecycle: 'CLOSED_LOST', amountPayable: 999999, stale: false, nextFollowUpAt: OVERDUE_DATE, stageUpdatedAt: '2026-07-01T00:00:00.000Z' },
-  // Deal I: stages 13-14 (ส่งมอบสินค้า) handoff to sales, owner ruling 2026-08-17 — delivery-ready
-  // (GOODS_RECEIVED) with ZERO pricing requests but a non-null paymentStatus, the exact "priced
-  // outside the PCR chain" shape of demoData.js tickets 13/14 (Mega Bangna Retail / IconSiam
-  // Riverside) — bucket 1's pricedOutsidePcrChain guard must let RECORD_DELIVERY through rather
-  // than parking this on CREATE_PCR (see salesActions.js bucket 1's own comment, and
-  // salesActions.test.js's dedicated bucket-1-interaction cases).
+  // Deal I: stages 13-14 handoff to sales, owner ruling 2026-08-17.
   { id: 609, code: 'PR-2026-0609', customerName: 'บริษัท ไอ จำกัด', title: 'ดีลไอ', lifecycle: 'ACTIVE', amountPayable: 300000, stale: false, nextFollowUpAt: null, stageUpdatedAt: '2026-07-01T00:00:00.000Z', status: 'quotation_issued', fulfillmentStatus: 'GOODS_RECEIVED', paymentStatus: 'AWAITING_FINAL_PAYMENT' },
-  // Deal J: the quotation was issued to the customer but nobody has recorded the outcome yet
-  // (deal-page discoverability fix — this used to fall through to follow-up/log-activity; see
-  // salesActions.js bucket 4's own comment, and salesActions.test.js's dedicated cases).
+  // Deal J: the quotation was issued to the customer but nobody has recorded the outcome yet (deal-page
+  // discoverability fix — this used to fall through to follow-up/log-activity; see salesActions.js bucket 4's
+  // own comment, and salesActions.test.js's dedicated cases).
   { id: 610, code: 'PR-2026-0610', customerName: 'บริษัท เจ จำกัด', title: 'ดีลเจ', lifecycle: 'ACTIVE', amountPayable: 120000, stale: false, nextFollowUpAt: null, stageUpdatedAt: '2026-07-01T00:00:00.000Z' },
 ];
 
@@ -79,17 +78,17 @@ const pricingRequests = [
   { id: 2, ticketId: 603, status: 'QUOTATION_ACCEPTED', orderConfirmedAt: null },
   { id: 3, ticketId: 604, status: 'SUBMITTED', orderConfirmedAt: null },
   { id: 4, ticketId: 605, status: 'IMPORT_REVIEWING', orderConfirmedAt: null },
-  // CEO_REVIEWING, not QUOTATION_ISSUED: deal F is the dedicated "stale, nothing else pending"
-  // LOG_ACTIVITY fixture below, and QUOTATION_ISSUED now has its own bucket (see deal J's PR
-  // below) — a live-but-unmatched status keeps deal F actually exercising the fall-through path.
+  // CEO_REVIEWING, not QUOTATION_ISSUED: deal F is the dedicated "stale, nothing else pending" LOG_ACTIVITY
+  // fixture below, and QUOTATION_ISSUED now has its own bucket (see deal J's PR below) — a live-but-unmatched
+  // status keeps deal F actually exercising the fall-through path.
   { id: 5, ticketId: 606, status: 'CEO_REVIEWING', orderConfirmedAt: null },
   { id: 6, ticketId: 607, status: 'IMPORT_REVIEWING', orderConfirmedAt: null },
   { id: 7, ticketId: 610, status: 'QUOTATION_ISSUED', orderConfirmedAt: null },
   // Deal 601 deliberately has no pricing request at all.
 ];
 
-// Default monthlySummary fixture for tests that don't care about the commission KPI figures —
-// see the two dedicated cases below for the ones that do.
+// Default monthlySummary fixture for tests that don't care about the commission KPI figures — see the two
+// dedicated cases below for the ones that do.
 const defaultCommissionSummary = {
   payrollMonth: null,
   salesRepId: 1,
@@ -123,7 +122,12 @@ function renderOverview() {
 
 function LocationProbe() {
   const location = useLocation();
-  return <div data-testid="location-probe">{location.pathname}</div>;
+  return (
+    <>
+      <div data-testid="location-probe">{location.pathname}</div>
+      <div data-testid="location-search">{location.search}</div>
+    </>
+  );
 }
 
 function worklistSection() {
@@ -140,12 +144,37 @@ describe('SalesOverview', () => {
     api.tickets.list.mockResolvedValue({ tickets: deals });
     api.pricingRequests.queue.mockResolvedValue({ items: pricingRequests });
     api.commissions.monthlySummary.mockResolvedValue({ summary: defaultCommissionSummary });
+    api.salesBoard.myWork.mockResolvedValue({ followUp: [], board: [], quietDays: 14 });
+  });
+
+  it('is งานของฉัน: money band and worklist above ควรตามต่อ and the board', async () => {
+    renderOverview();
+    expect(screen.getByRole('heading', { name: 'งานของฉัน' })).toBeTruthy();
+    await screen.findByTestId('sales-group-follow');
+    const order = ['ตัวเลขเดือนนี้', 'สิ่งที่ต้องทำ', 'ควรตามต่อ'].map((name) => (name === 'ตัวเลขเดือนนี้'
+      ? screen.getByRole('region', { name })
+      : screen.getByText(name).closest('section')));
+     
+    expect(order[0].compareDocumentPosition(order[1]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+     
+    expect(order[1].compareDocumentPosition(order[2]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(api.salesBoard.myWork).toHaveBeenCalledTimes(1);
+  });
+
+  it('an overdue follow-up shows under ถึงกำหนดตาม even though the deal is not quiet', async () => {
+    renderOverview();
+    const group = await screen.findByTestId('sales-group-follow');
+    expect(group.textContent).toContain('ถึงกำหนดตาม');
+    // Deal D: stale === false, nextFollowUpAt five days ago.
+    expect(deals.find((d) => d.id === 604).stale).toBe(false);
+    expect(within(group).getByTestId('sales-row-604')).toBeTruthy();
   });
 
   it('greets the rep and requests an own-scoped deal list', async () => {
     renderOverview();
     expect(await screen.findByText(/สวัสดี, คุณสมชาย ใจดี/)).not.toBeNull();
-    expect(api.tickets.list).toHaveBeenCalledWith({});
+    // own-scoped (the server scopes sales), plus the default 7-day movement range
+    expect(api.tickets.list).toHaveBeenCalledWith({ movementFrom: addDays(TODAY, -6), movementTo: TODAY });
     expect(api.commissions.monthlySummary).toHaveBeenCalledWith({ payrollMonth: THIS_MONTH });
   });
 
@@ -157,7 +186,8 @@ describe('SalesOverview', () => {
       renderOverview();
 
       await waitFor(() => expectFigure('ค่าคอมประมาณการ (เดือนนี้)', '฿250.00'));
-      expectFigure('ฐานคิดค่าคอม', '฿100,000.00');
+      // the base now sits in the commission figure's caption
+      expectFigure('ค่าคอมประมาณการ (เดือนนี้)', '฿100,000.00');
     });
 
     // fix/commission-figures-from-backend (#548-style V81 regression guard): the commission figures
@@ -172,13 +202,14 @@ describe('SalesOverview', () => {
       renderOverview();
 
       await waitFor(() => expectFigure('ค่าคอมประมาณการ (เดือนนี้)', '฿99,999.99'));
-      expectFigure('ฐานคิดค่าคอม', '฿1,200,000.00');
+      expectFigure('ค่าคอมประมาณการ (เดือนนี้)', '฿1,200,000.00');
     });
 
-    it('sums the open-deal value over ACTIVE deals only', async () => {
+    it('sums ยอดคาดหวัง over ACTIVE deals only (nothing here is at ORDER_RECEIVED yet)', async () => {
       renderOverview();
       // 610,000 + deal I's 300,000 + deal J's 120,000; deal H (CLOSED_LOST, 999,999) is excluded.
-      await waitFor(() => expectFigure('มูลค่าดีลที่เปิดอยู่', '฿1,030,000.00'));
+      await waitFor(() => expectFigure('ยอดคาดหวัง', '฿1,030,000.00'));
+      expectFigure('ยอดที่สั่งซื้อแล้ว', '฿0.00');
     });
 
     it('shows the commission while the deal list is still loading, and the deal value waits', async () => {
@@ -189,7 +220,7 @@ describe('SalesOverview', () => {
       renderOverview();
 
       await waitFor(() => expectFigure('ค่าคอมประมาณการ (เดือนนี้)', '฿250.00'));
-      expect(figureRows('มูลค่าดีลที่เปิดอยู่')[0]).not.toContain('฿');
+      expect(figureRows('ยอดคาดหวัง')[0]).not.toContain('฿');
       expect(worklistSection().querySelector('[aria-busy="true"]')).not.toBeNull();
     });
 
@@ -216,7 +247,8 @@ describe('SalesOverview', () => {
       expect(badgeOf('บริษัท ซี จำกัด')).toBe('ยืนยันคำสั่งซื้อ'); // QUOTATION_ACCEPTED, not confirmed
       expect(badgeOf('บริษัท ดี จำกัด')).toBe('ติดตามลูกค้า'); // follow-up overdue
       expect(badgeOf('บริษัท อี จำกัด')).toBe('ติดตามลูกค้า'); // follow-up due today
-      expect(badgeOf('บริษัท เอฟ จำกัด')).toBe('บันทึกกิจกรรม'); // stale, no follow-up
+      // F (stale, nothing else to do) is ควรตามต่อ's, not a worklist row any more.
+      expect(worklist.queryByText('บริษัท เอฟ จำกัด')).toBeNull();
       expect(badgeOf('บริษัท ไอ จำกัด')).toBe('บันทึกส่งมอบ'); // GOODS_RECEIVED, priced outside the PCR chain
       expect(badgeOf('บริษัท เจ จำกัด')).toBe('บันทึกผลใบเสนอราคา'); // QUOTATION_ISSUED, outcome not recorded yet
 
@@ -225,19 +257,18 @@ describe('SalesOverview', () => {
       expect(worklist.queryByText('บริษัท เอช จำกัด')).toBeNull();
     });
 
-    it('groups ติดตามลูกค้า → ต้องทำต่อ → ไม่มีความเคลื่อนไหว, keeping the worklist order inside each group', async () => {
+    it('groups ถึงกำหนดตาม → ต้องทำต่อ, keeping the worklist order inside each group', async () => {
       renderOverview();
       await screen.findByTestId('sales-group-follow');
 
       const order = [...document.querySelectorAll('[data-testid^="sales-group-"]')].map((el) => el.dataset.testid.replace('sales-group-', ''));
-      expect(order).toEqual(['follow', 'next', 'quiet']);
+      expect(order).toEqual(['follow', 'next']);
       // Overdue first within ติดตามลูกค้า; the action cascade within ต้องทำต่อ (same order sortWorklist gives).
       expect(groupNames('follow')).toEqual(['บริษัท ดี จำกัด', 'บริษัท อี จำกัด']);
       expect(groupNames('next')).toEqual(['บริษัท ซี จำกัด', 'บริษัท บี จำกัด', 'บริษัท เจ จำกัด', 'บริษัท เอ จำกัด', 'บริษัท ไอ จำกัด']);
-      expect(groupNames('quiet')).toEqual(['บริษัท เอฟ จำกัด']);
-      expect(screen.getByTestId('sales-group-follow').textContent).toContain('2 ดีล');
-      expect(screen.getByTestId('worklist-total').textContent).toBe('8');
-      expect(screen.getByText('รวม 8 ดีล').className).toContain('sr-only');
+      expect(screen.getByTestId('sales-group-follow').textContent).toContain('2 งาน');
+      expect(screen.getByTestId('worklist-total').textContent).toBe('7');
+      expect(screen.getByText('รวม 7 งาน').className).toContain('sr-only');
     });
 
     it('puts the follow-up date on the row: เลยนัด for overdue, นัดวันนี้ for today', async () => {
@@ -249,27 +280,18 @@ describe('SalesOverview', () => {
       expect(screen.getByTestId('sales-row-601').textContent).not.toMatch(/เลยนัด|นัดวันนี้/);
     });
 
-    it('shows three quiet deals and expands the rest in place', async () => {
+    it('leaves a quiet deal with nothing else to do to ควรตามต่อ', async () => {
       const quiet = Array.from({ length: 5 }, (_, i) => ({
         ...deals[5], id: 900 + i, code: `PR-2026-09${i}`, customerName: `บริษัท เงียบ ${i}`,
       }));
       api.tickets.list.mockResolvedValue({ tickets: quiet });
-      // Each sits with the CEO, like deal F: stale with nothing for the rep to do -> บันทึกกิจกรรม.
       api.pricingRequests.queue.mockResolvedValue({
         items: quiet.map((d, i) => ({ id: 50 + i, ticketId: d.id, status: 'CEO_REVIEWING', orderConfirmedAt: null })),
       });
       renderOverview();
-      await screen.findByTestId('sales-group-quiet');
 
-      expect(groupNames('quiet')).toHaveLength(3);
-      const toggle = screen.getByRole('button', { name: 'แสดงอีก 2 ดีล' });
-      fireEvent.click(toggle);
-      expect(groupNames('quiet')).toHaveLength(5);
-      // The same button stays (keyboard focus is not dropped) and folds the group back.
-      expect(toggle.textContent).toBe('แสดงน้อยลง');
-      expect(toggle.getAttribute('aria-expanded')).toBe('true');
-      fireEvent.click(toggle);
-      expect(groupNames('quiet')).toHaveLength(3);
+      expect(await screen.findByText('ไม่มีสิ่งที่ต้องดำเนินการตอนนี้')).toBeTruthy();
+      expect(screen.queryByTestId('sales-group-quiet')).toBeNull();
     });
 
     it('opens the deal from its row', async () => {
@@ -307,7 +329,7 @@ describe('SalesOverview', () => {
       api.commissions.monthlySummary.mockRejectedValue(new Error('offline'));
       renderOverview();
       await waitFor(() => expectFigure('ค่าคอมประมาณการ (เดือนนี้)', '—'));
-      expectFigure('ฐานคิดค่าคอม', '—');
+      expectFigure('ค่าคอมประมาณการ (เดือนนี้)', '—');
     });
 
     it('says the list failed when the first load fails', async () => {
@@ -318,9 +340,9 @@ describe('SalesOverview', () => {
   });
 });
 
-// Slice 2 — flow A (SLICE-2-FLOW-A.md §E, DESIGN.md §15): the three live-direct-quotation buckets
-// reach the worklist, and their badge tone says whose move it is — SUBMIT / CONFIRM are the rep's
-// own (warning), AWAIT is waiting on ผจก.ขาย/CEO (neutral), never the same tone as a task.
+// Slice 2 — flow A (SLICE-2-FLOW-A.md §E, DESIGN.md §15): the three live-direct-quotation buckets reach the
+// worklist, and their badge tone says whose move it is — SUBMIT / CONFIRM are the rep's own (warning), AWAIT
+// is waiting on ผจก.ขาย/CEO (neutral), never the same tone as a task.
 describe('SalesOverview — live direct quotation worklist tones (slice 2)', () => {
   const liveDeals = [
     { id: 701, code: 'DL-2026-0701', customerName: 'บริษัท ร่าง จำกัด', title: 'ร่าง', lifecycle: 'ACTIVE', amountPayable: 0, stale: false, nextFollowUpAt: null, stageUpdatedAt: '2026-07-01T00:00:00.000Z',
@@ -443,5 +465,57 @@ describe('SalesOverview — the procurement-source decision shows in the worklis
     });
     expect(api.tickets.getProcurementSource).toHaveBeenCalledTimes(2);
     expect(api.tickets.getProcurementSource).not.toHaveBeenCalledWith(823);
+  });
+
+  describe('money band and worklist amounts', () => {
+    const mv = (id, extra) => ({
+      id, code: `PR-2026-09${id}`, customerName: `ลูกค้า ${id}`, title: `ดีล ${id}`, lifecycle: 'ACTIVE',
+      salesStage: 'NEGOTIATION', amountPayable: 100, stale: false, nextFollowUpAt: null,
+      stageUpdatedAt: '2026-07-01T00:00:00.000Z', stageChangedInRange: false, activityInRange: false, ...extra,
+    });
+    const movementDeals = [
+      mv(1, { stageChangedInRange: true, amountPayable: 100 }),
+      mv(2, { activityInRange: true, amountPayable: 200 }),
+      mv(3, { nextFollowUpAt: TODAY, amountPayable: 300 }),
+      mv(4, { nextFollowUpAt: OVERDUE_DATE, amountPayable: 400 }),
+      mv(5, { lifecycle: 'CLOSED_LOST', amountPayable: 5000 }),
+      mv(6, { salesStage: 'ORDER_RECEIVED', stageChangedInRange: true, amountPayable: 4000 }),
+      // a paused deal is flagged on every signal but counts on none of the tiles
+      mv(7, { lifecycle: 'ON_HOLD', stageChangedInRange: true, activityInRange: true, nextFollowUpAt: OVERDUE_DATE }),
+    ];
+
+    beforeEach(() => {
+      api.tickets.list.mockResolvedValue({ tickets: movementDeals });
+    });
+
+    it('money band: ยอดที่สั่งซื้อแล้ว / ยอดคาดหวัง / ค่าคอมประมาณการ (เดือนนี้)', async () => {
+      api.commissions.monthlySummary.mockResolvedValue({
+        summary: { ...defaultCommissionSummary, totalCommission: 250 },
+      });
+      renderOverview();
+      await waitFor(() => expectFigure('ยอดที่สั่งซื้อแล้ว', '฿4,000.00'));
+      expectFigure('ยอดคาดหวัง', '฿1,000.00');
+      expectFigure('ค่าคอมประมาณการ (เดือนนี้)', '฿250.00');
+    });
+
+    it('shows — for both value figures until the stage catalog has loaded', async () => {
+      api.meta.dealStages.mockImplementation(() => new Promise(() => {}));
+      renderOverview();
+      await screen.findByRole('region', { name: 'ตัวเลขเดือนนี้' });
+      await waitFor(() => expect(figureRows('ยอดคาดหวัง')[0]).toContain('—'));
+      expect(figureRows('ยอดที่สั่งซื้อแล้ว')[0]).toContain('—');
+      expect(figureRows('ยอดที่สั่งซื้อแล้ว')[0]).not.toContain('฿');
+      expect(figureRows('ยอดคาดหวัง')[0]).not.toContain('฿');
+    });
+
+    it('every worklist row shows the deal amount', async () => {
+      renderOverview();
+      const rows = await waitFor(() => {
+        const found = [...document.querySelectorAll('[data-testid^="sales-row-"]')];
+        expect(found.length).toBeGreaterThan(0);
+        return found;
+      });
+      rows.forEach((row) => expect(row.textContent).toContain('฿'));
+    });
   });
 });

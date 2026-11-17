@@ -1,0 +1,309 @@
+package th.co.glr.hr.salesboard;
+
+import java.math.BigDecimal;
+import java.time.Clock;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.YearMonth;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpStatus;
+import org.springframework.stereotype.Service;
+import th.co.glr.hr.auth.UserPrincipal;
+import th.co.glr.hr.common.ApiException;
+import th.co.glr.hr.salesboard.SalesBoardDtos.BoardDeal;
+import th.co.glr.hr.salesboard.SalesBoardDtos.CashMonth;
+import th.co.glr.hr.salesboard.SalesBoardDtos.MyWork;
+import th.co.glr.hr.salesboard.SalesBoardDtos.RepRow;
+import th.co.glr.hr.salesboard.SalesBoardDtos.TeamOverview;
+import th.co.glr.hr.ticket.QuietRule;
+
+/**
+ * งานของฉัน (rep) and ภาพรวมทีมขาย (manager/CEO), spec 2026-11-15 §7.3/§7.4. The role decision lives here; the
+ * own-deals scope lives in {@link SalesBoardRepository}'s WHERE clause.
+ */
+@Service
+public class SalesBoardService {
+    static final Set<String> MY_WORK_ROLES = Set.of("sales", "sales_manager", "ceo");
+    static final Set<String> TEAM_ROLES = Set.of("sales_manager", "ceo");
+    static final int FOLLOW_UP_LIMIT = 5;
+    static final int STALE_LIMIT = 20;
+
+    /** daysQuiet × THB value desc, then daysQuiet desc, then ticket id for a stable order. Only THB is weighted (a null
+     * currency is THB, as in repRows): amounts in different currencies are not comparable, so a non-THB deal's value
+     * counts as 0 and it ranks by days alone. */
+    static final Comparator<BoardDeal> QUIET_RANK = Comparator
+        .comparing((BoardDeal d) -> BigDecimal.valueOf(d.daysQuiet())
+            .multiply(d.value() == null || !isThb(d.currency()) ? BigDecimal.ZERO : d.value())).reversed()
+        .thenComparing(Comparator.comparingInt(BoardDeal::daysQuiet).reversed())
+        .thenComparingLong(BoardDeal::ticketId);
+
+    private static final String FORBIDDEN = "ไม่มีสิทธิ์เข้าถึงรายการนี้";
+
+    private final SalesBoardRepository repository;
+    private final QuietRule quietRule;
+
+    private final th.co.glr.hr.auth.EmployeeAuthRepository employees;
+    private final VisitService visits;
+    private final CashRepository cash;
+    private final Clock clock;
+
+    @Autowired
+    public SalesBoardService(SalesBoardRepository repository, QuietRule quietRule,
+                             th.co.glr.hr.auth.EmployeeAuthRepository employees, VisitService visits,
+                             CashRepository cash) {
+        this(repository, quietRule, employees, visits, cash, Clock.system(VisitService.BANGKOK));
+    }
+
+    SalesBoardService(SalesBoardRepository repository, QuietRule quietRule,
+                      th.co.glr.hr.auth.EmployeeAuthRepository employees, VisitService visits,
+                      CashRepository cash, Clock clock) {
+        this.repository = repository;
+        this.quietRule = quietRule;
+        this.employees = employees;
+        this.visits = visits;
+        this.cash = cash;
+        this.clock = clock;
+    }
+
+    /** The current calendar month on the Asia/Bangkok clock. */
+    YearMonth thisMonth() {
+        return YearMonth.now(clock.withZone(VisitService.BANGKOK));
+    }
+
+    /** Cash for {@code month}: one owner's ({@code ownerId}) or, when null, the whole team's. See {@link CashMonth}. */
+    public CashMonth cashForMonth(Long ownerId, YearMonth month) {
+        LocalDate first = month.atDay(1);
+        LocalDate last = month.atEndOfMonth();
+        // Expected rows by their week's Thursday; receipts by their own Bangkok calendar date.
+        return assemble(month, cash.expectedByWeek(ownerId, first, last), cash.receivedByDay(ownerId, first, last));
+    }
+
+    /** Each owner's month: {@code [forecast, received]} for the team overview's per-rep columns. */
+    private Map<Long, CashMonth> cashByOwner(YearMonth month) {
+        LocalDate first = month.atDay(1);
+        LocalDate last = month.atEndOfMonth();
+        Map<Long, List<CashRepository.ExpectedWeekRow>> expected = new LinkedHashMap<>();
+        Map<Long, List<CashRepository.ReceivedDayRow>> received = new LinkedHashMap<>();
+        cash.expectedByWeek(null, first, last)
+            .forEach(r -> expected.computeIfAbsent(r.ownerId(), k -> new ArrayList<>()).add(r));
+        cash.receivedByDay(null, first, last)
+            .forEach(r -> received.computeIfAbsent(r.ownerId(), k -> new ArrayList<>()).add(r));
+        Map<Long, CashMonth> out = new LinkedHashMap<>();
+        java.util.Set<Long> owners = new java.util.LinkedHashSet<>(expected.keySet());
+        owners.addAll(received.keySet());
+        owners.forEach(o -> out.put(o, assemble(month, expected.getOrDefault(o, List.of()),
+            received.getOrDefault(o, List.of()))));
+        return out;
+    }
+
+    /**
+     * Folds the repository rows into the month. The month's weeks are the ISO weeks whose THURSDAY is in it (review
+     * M6: Mon 30 Nov – Fri 4 Dec is December's). Receipts stay calendar-month cash: one dated before the first week
+     * (the 1st falling late in a week) folds into the first week, one after the last week (30 Nov) into the last, so
+     * the weeks always add up to the month.
+     */
+    static CashMonth assemble(YearMonth month, List<CashRepository.ExpectedWeekRow> expected,
+                              List<CashRepository.ReceivedDayRow> received) {
+        List<LocalDate> mondays = new ArrayList<>();
+        LocalDate monday = month.atDay(1).with(java.time.temporal.TemporalAdjusters.previousOrSame(
+            java.time.DayOfWeek.MONDAY));
+        for (; !monday.isAfter(month.atEndOfMonth()); monday = monday.plusWeeks(1)) {
+            if (YearMonth.from(monday.plusDays(3)).equals(month)) {
+                mondays.add(monday);
+            }
+        }
+        int n = mondays.size();
+        BigDecimal[] delivered = zeros(n);
+        BigDecimal[] scheduled = zeros(n);
+        BigDecimal[] deposits = zeros(n);
+        BigDecimal[] got = zeros(n);
+        BigDecimal forecast = BigDecimal.ZERO;
+        for (CashRepository.ExpectedWeekRow r : expected) {
+            int i = mondays.indexOf(r.week());
+            if (i < 0) {
+                continue;
+            }
+            forecast = forecast.add(r.forecast());
+            delivered[i] = delivered[i].add(r.deliveredAwaiting());
+            scheduled[i] = scheduled[i].add(r.deliveriesScheduled());
+            deposits[i] = deposits[i].add(r.depositsExpected());
+        }
+        BigDecimal receivedTotal = BigDecimal.ZERO;
+        for (CashRepository.ReceivedDayRow r : received) {
+            if (!YearMonth.from(r.day()).equals(month) || n == 0) {
+                continue;
+            }
+            int i = 0;
+            while (i + 1 < n && !r.day().isBefore(mondays.get(i + 1))) {
+                i++;
+            }
+            got[i] = got[i].add(r.received());
+            receivedTotal = receivedTotal.add(r.received());
+        }
+        List<SalesBoardDtos.CashWeek> weeks = new ArrayList<>();
+        for (int i = 0; i < n; i++) {
+            weeks.add(new SalesBoardDtos.CashWeek(mondays.get(i), delivered[i], scheduled[i], deposits[i], got[i]));
+        }
+        return new CashMonth(month.toString(), forecast, receivedTotal, sum(delivered), sum(scheduled), sum(deposits),
+            weeks);
+    }
+
+    private static BigDecimal[] zeros(int n) {
+        BigDecimal[] a = new BigDecimal[n];
+        java.util.Arrays.fill(a, BigDecimal.ZERO);
+        return a;
+    }
+
+    private static BigDecimal sum(BigDecimal[] values) {
+        return java.util.Arrays.stream(values).reduce(BigDecimal.ZERO, BigDecimal::add);
+    }
+
+    public MyWork myWork(UserPrincipal actor) {
+        if (!MY_WORK_ROLES.contains(actor.role())) {
+            throw new ApiException(HttpStatus.FORBIDDEN, FORBIDDEN);
+        }
+        List<BoardDeal> board = repository.activeDealsOwnedBy(actor.id());
+        // ควรตามต่อ also takes the caller's OWN paused deals whose วันที่จะกลับมาดู has arrived (V220); the board does not.
+        List<BoardDeal> returning = repository.returningPausedDealsOwnedBy(actor.id());
+        List<BoardDeal> followUp = rankFollowUp(board, returning, FOLLOW_UP_LIMIT);
+        // The due state goes on every row a screen shows as a DealBoard card (fix round 2, NEW-1): the board, and the
+        // RETURNING rows of ควรตามต่อ, which งานของฉัน's "เฉพาะงานเงียบ" view renders as cards. One statement for both.
+        // The ACTIVE followUp rows stay without it: they are shown only in the ควรตามต่อ list (the quiet view takes those
+        // deals from the board).
+        Map<Long, th.co.glr.hr.ticket.TicketRepository.PaymentDueState> due =
+            repository.paymentDueOf(java.util.stream.Stream.concat(board.stream(), returning.stream()).toList());
+        List<BoardDeal> shownFollowUp = followUp.stream()
+            .map(d -> d.returning() ? SalesBoardRepository.withPaymentDue(d, due) : d).toList();
+        return new MyWork(shownFollowUp, SalesBoardRepository.withPaymentDue(board, due), quietRule.quietDays(),
+            visits.ownThisWeek(actor),
+            cashForMonth(actor.id(), thisMonth()));
+    }
+
+    public TeamOverview teamOverview(UserPrincipal actor) {
+        if (!TEAM_ROLES.contains(actor.role())) {
+            throw new ApiException(HttpStatus.FORBIDDEN, FORBIDDEN);
+        }
+        List<BoardDeal> deals = repository.activeDealsAllReps();
+        // Returning paused deals (V220) count in the quiet figures — each rep's quietDeals and the stale list — the
+        // way a quiet deal does, and nowhere else: they are not open deals and add no open value.
+        List<BoardDeal> returning = repository.returningPausedDealsAllReps();
+        List<VisitDtos.VisitDto> weekVisits = visits.teamThisWeek(actor);
+        YearMonth month = thisMonth();
+        return new TeamOverview(repRows(deals, returning, weekVisits, cashByOwner(month)),
+            rankFollowUp(deals, returning, STALE_LIMIT), quietRule.quietDays(), weekVisits, cashForMonth(null, month));
+    }
+
+    /** Every rep's open deals for the sales_manager / ceo งานทั้งหมด board — the same gate and the same
+     * {@link SalesBoardRepository#activeDealsAllReps()} rows {@link #teamOverview} already reads, served whole so the
+     * team overview's payload stays as it is. */
+    public SalesBoardDtos.TeamBoard teamBoard(UserPrincipal actor) {
+        if (!TEAM_ROLES.contains(actor.role())) {
+            throw new ApiException(HttpStatus.FORBIDDEN, FORBIDDEN);
+        }
+        // DealBoard renders this list, so it — and only it among the team reads — carries the due state.
+        return new SalesBoardDtos.TeamBoard(repository.withPaymentDue(repository.activeDealsAllReps()),
+            quietRule.quietDays());
+    }
+
+    /**
+     * Every returning paused deal first (ranked by {@link #QUIET_RANK} among themselves), then the top {@code limit}
+     * quiet ACTIVE deals. Fix round 1, ruling 4: the returning ones are never cut by the cap — each was scheduled by
+     * the rep, they are few, and with no value they would otherwise rank below every valued quiet deal and vanish (the
+     * board never carries a paused deal). The rep's quiet + returning count therefore equals the manager's
+     * {@code quietDeals} for the same rep.
+     */
+    private static List<BoardDeal> rankFollowUp(List<BoardDeal> active, List<BoardDeal> returning, int limit) {
+        return java.util.stream.Stream.concat(
+                returning.stream().sorted(QUIET_RANK),
+                active.stream().filter(BoardDeal::quiet).sorted(QUIET_RANK).limit(limit))
+            .toList();
+    }
+
+    static final String THB = "THB";
+
+    private static boolean isThb(String currency) {
+        return currency == null || THB.equals(currency);
+    }
+
+    /**
+     * One row per owner, ordered by THB open value desc, then employee id. Only THB values are added into
+     * {@code openValue}; other currencies are summed per code. Each owner's role comes from the same derivation
+     * login uses (DivisionAccessPolicy#roleFor), so a manager's or the CEO's own deals are labelled, not dropped.
+     * An owner with visits this week but no open deal still gets a row (0 deals), so the week grid has their name.
+     */
+    private List<RepRow> repRows(List<BoardDeal> deals, List<BoardDeal> returning,
+                                 List<VisitDtos.VisitDto> weekVisits, Map<Long, CashMonth> cashByOwner) {
+        Map<Long, List<BoardDeal>> byOwner = new LinkedHashMap<>();
+        Map<Long, String> names = new LinkedHashMap<>();
+        deals.forEach(d -> {
+            byOwner.computeIfAbsent(d.ownerId(), k -> new ArrayList<>()).add(d);
+            names.putIfAbsent(d.ownerId(), d.ownerName());
+        });
+        // A returning paused deal adds to its owner's quiet count only (V220); an owner whose only such deal it is
+        // still gets a row (0 open deals).
+        Map<Long, Integer> returningByOwner = new LinkedHashMap<>();
+        returning.forEach(d -> {
+            byOwner.computeIfAbsent(d.ownerId(), k -> new ArrayList<>());
+            names.putIfAbsent(d.ownerId(), d.ownerName());
+            returningByOwner.merge(d.ownerId(), 1, Integer::sum);
+        });
+        // Only a booked (not cancelled) visit earns a deal-less owner a row; cancelled-only is nothing to show.
+        weekVisits.stream().filter(v -> !VisitDtos.CANCELLED.equals(v.status())).forEach(v -> {
+            byOwner.computeIfAbsent(v.ownerId(), k -> new ArrayList<>());
+            names.putIfAbsent(v.ownerId(), v.ownerName());
+        });
+        // An owner with cash this month but no open deal and no visit (every deal closed) still gets a row.
+        cashByOwner.keySet().forEach(ownerId -> byOwner.computeIfAbsent(ownerId, k -> new ArrayList<>()));
+        // One query for every rep's role (and the name of an owner no deal/visit row named), not one per rep.
+        Map<Long, th.co.glr.hr.auth.EmployeeLoginRecord> owners =
+            employees == null ? Map.of() : employees.findByEmployeeIds(byOwner.keySet());
+        owners.forEach((id, o) -> names.putIfAbsent(id, o.name()));
+        List<RepRow> rows = new ArrayList<>();
+        byOwner.forEach((ownerId, own) -> {
+            BigDecimal thb = BigDecimal.ZERO;
+            Map<String, BigDecimal> other = new java.util.TreeMap<>();
+            Instant last = null;
+            int quiet = returningByOwner.getOrDefault(ownerId, 0);
+            for (BoardDeal d : own) {
+                if (d.value() != null) {
+                    String currency = d.currency() == null ? THB : d.currency();
+                    if (THB.equals(currency)) {
+                        thb = thb.add(d.value());
+                    } else {
+                        other.merge(currency, d.value(), BigDecimal::add);
+                    }
+                }
+                if (d.quiet()) {
+                    quiet++;
+                }
+                if (d.lastTouchedAt() != null && (last == null || d.lastTouchedAt().isAfter(last))) {
+                    last = d.lastTouchedAt();
+                }
+            }
+            th.co.glr.hr.auth.EmployeeLoginRecord owner = owners.get(ownerId);
+            String role = owner == null ? null : th.co.glr.hr.auth.DivisionAccessPolicy.roleFor(owner);
+            int done = 0;
+            int booked = 0;
+            for (VisitDtos.VisitDto v : weekVisits) {
+                if (v.ownerId() == ownerId && !VisitDtos.CANCELLED.equals(v.status())) {
+                    booked++;
+                    if (VisitDtos.DONE.equals(v.status())) {
+                        done++;
+                    }
+                }
+            }
+            CashMonth ownCash = cashByOwner.get(ownerId);
+            rows.add(new RepRow(ownerId, names.get(ownerId), role, own.size(), thb, other, quiet, last, done, booked,
+                ownCash == null ? BigDecimal.ZERO : ownCash.forecast(),
+                ownCash == null ? BigDecimal.ZERO : ownCash.received()));
+        });
+        rows.sort(Comparator.comparing(RepRow::openValue).reversed().thenComparingLong(RepRow::employeeId));
+        return rows;
+    }
+}

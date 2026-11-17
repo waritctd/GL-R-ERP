@@ -8,26 +8,15 @@ import { cn } from '../../utils/cn.js';
 const MAX_SIGNATURE_BYTES = 1024 * 1024;
 const ACCEPTED_TYPES = ['image/png', 'image/jpeg'];
 
-/**
- * "ลายเซ็นสำหรับใบเสนอราคา" -- Quotation v2's approver signature (hr.employee_signature, V166,
- * QUOTATION-V2-PLAN.md), anchored into the approved PDF's ผู้จัดการฝ่ายขาย box (owner ruling 2026-09-10: the form's standard labels). Visible only to the
- * user themself, and only when their role is ceo or sales_manager (the plan's approver roles) --
- * see ProfilePage.jsx's own gate before mounting this; there is no separate read-gate here
- * because `getSignature` returns a URL to render, not data this component fetches and could leak.
- *
- * #M1: whether a signature exists is a PROBE (`hasSignature`), never inferred from `getSignature`
- * being truthy -- `getSignature` is only a URL builder and is always truthy under mockApi's own
- * placeholder-anchor idiom, and even against the real backend an `<img>` never existing at all
- * was already a valid state the old code rendered unconditionally, showing a broken-image box
- * until the browser's own onError fired reactively. `exists` starts `null` (unknown/loading)
- * rather than assuming either way.
- */
+/** "ลายเซ็นสำหรับใบเสนอราคา" -- Quotation v2's approver signature (hr.employee_signature, V166,
+ * QUOTATION-V2-PLAN.md), anchored into the approved PDF's ผู้จัดการฝ่ายขาย box (owner ruling 2026-09-10: the
+ * form's standard labels). */
 export function SignatureCard({ user }) {
   const employeeId = user.employeeId;
   const [exists, setExists] = useState(null);
-  // Bumped after a successful upload/delete so the `<img>` src carries a fresh `?t=` -- without
-  // it, a REPLACED signature at the same URL can keep showing the browser's cached copy of the
-  // OLD image (#M1). getSignature(id) itself never changes.
+  // Bumped after a successful upload/delete so the `<img>` src carries a fresh `?t=` -- without it, a REPLACED
+  // signature at the same URL can keep showing the browser's cached copy of the OLD image (#M1).
+  // getSignature(id) itself never changes.
   const [cacheBust, setCacheBust] = useState(0);
   const [error, setError] = useState(null);
 

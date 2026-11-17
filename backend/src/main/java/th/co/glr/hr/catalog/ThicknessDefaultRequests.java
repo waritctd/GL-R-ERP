@@ -16,12 +16,7 @@ public final class ThicknessDefaultRequests {
         @NotEmpty @Valid List<ThicknessDefaultEntry> entries
     ) {}
 
-    /**
-     * @param thicknessMm null CLEARS this collection's default. The upper bound is deliberately
-     *        generous rather than pinned to the seeded freight bands [3,21): a slab thicker than
-     *        that is a real product, and it should surface as THICKNESS_OUT_OF_BAND -- a visible,
-     *        explainable state -- rather than be rejected at entry as if it were a typo.
-     */
+    /** Selects affected frontend tests, including readers outside the import graph. */
     public record ThicknessDefaultEntry(
         @NotNull Long factoryId,
         String collection,

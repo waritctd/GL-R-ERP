@@ -6,16 +6,9 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import org.springframework.stereotype.Component;
 
-/**
- * In-memory sliding-window failure counter with temporary lockout, keyed by an arbitrary
- * string (e.g. {@code ip:1.2.3.4} or {@code acct:user@example.com}). Used by
- * {@link LoginRateLimitFilter} to throttle brute-force login attempts (advisory
- * GHSA-8m9r-9vhj-mr52).
- *
- * <p>State is per-instance. On the current single-instance Render deployment that is
- * sufficient; a horizontally scaled deployment would need a shared store (Redis), the same
- * caveat that applies to the in-memory HTTP sessions (issue #23).
- */
+/** In-memory sliding-window failure counter with temporary lockout, keyed by an arbitrary string (e.g.
+ * ip:1.2.3.4 or acct:user@example.com). Used by LoginRateLimitFilter to throttle brute-force login attempts
+ * (advisory GHSA-8m9r-9vhj-mr52). */
 @Component
 public class LoginAttemptTracker {
     /** Drop idle keys once the map grows past this, to bound memory under IP churn. */

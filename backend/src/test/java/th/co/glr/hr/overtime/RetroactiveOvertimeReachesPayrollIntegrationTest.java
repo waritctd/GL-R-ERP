@@ -46,33 +46,15 @@ import th.co.glr.hr.payroll.ProcessPayrollRequest;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 import th.co.glr.hr.ticket.TicketRepository;
 
-/**
- * Proves that overtime filed under the new retroactive rules actually reaches payroll.
- *
- * <p>Removing advance notice was only half the job: overtime is worth nothing until payroll pays
- * it. Payroll picks overtime up by {@code payroll_month} and only in status {@code APPROVED}
- * (`PayrollRepository#findApprovedOvertimePayByEmployee`), and both of those are set by
- * {@link OvertimeService} — so the seam between the two services is exactly where a backdated
- * request could be accepted and then quietly never paid.
- *
- * <p>This drives the real chain end to end against real Postgres: submit → manager approve → CEO
- * approve → payroll preview. Mockito cannot reach this; the join and the WHERE clause are the
- * thing under test.
- */
+/** Proves that overtime filed under the new retroactive rules actually reaches payroll. Removing advance notice
+ * was only half the job: overtime is worth nothing until payroll pays it. Mockito cannot reach this; the join
+ * and the WHERE clause are the thing under test. */
 class RetroactiveOvertimeReachesPayrollIntegrationTest extends AbstractPostgresIntegrationTest {
 
     private static final BigDecimal SALARY = new BigDecimal("30000.00");
-    /**
-     * feat/ot-nonworkday-rate-suggestion: this class's fixed pay figures (375.00, 750.00) assume
-     * every fixture date resolves to WORKDAY/1.50x. {@link #backdatedWorkDateInCurrentMonth}
-     * derives its date from "today", which carries no guarantee of landing on a weekday -- a real
-     * Mon-Fri resolver would make this class's money assertions depend on which day of the week the
-     * suite happens to run on (confirmed: it fails outright when run on a Saturday/Sunday). This
-     * class is about the retroactive-window/payroll-integration seam, not the schedule-derived
-     * suggestion, so a fake that keeps every day a workday is the correct scope, not a shortcut --
-     * see {@code OvertimeDayTypeDerivedFromCalendarIntegrationTest} for the real schedule-aware
-     * coverage.
-     */
+    /** feat/ot-nonworkday-rate-suggestion: this class's fixed pay figures assume every fixture date resolves to
+     * WORKDAY/1.50x. #backdatedWorkDateInCurrentMonth derives its date from "today", which carries no guarantee of
+     * landing on a weekday. */
     private static final WorkSchedule ALWAYS_WORKDAY_SCHEDULE = new WorkSchedule(
         ZoneId.of("Asia/Bangkok"), LocalTime.of(8, 30), LocalTime.of(17, 30), 15,
         EnumSet.allOf(DayOfWeek.class));
@@ -104,10 +86,9 @@ class RetroactiveOvertimeReachesPayrollIntegrationTest extends AbstractPostgresI
             mock(NotificationService.class),
             mock(TicketRepository.class),
             mock(AttachmentRepository.class), new CeoApproverRepository(jdbc));
-        // Leave -> payroll unpaid-day deduction (2026-07-23): mechanical constructor-arity fix only --
-        // PayrollService gained a LeaveRepository dependency for #suggestedInputs (see
-        // PayrollService.java), unrelated to what this test exercises (overtime -> preview). A real
-        // repo against the same `jdbc` matches this test's existing style for its other collaborators.
+        // Leave -> payroll unpaid-day deduction (2026-07-23): mechanical constructor-arity fix only -- PayrollService
+        // gained a LeaveRepository dependency for #suggestedInputs (see PayrollService.java), unrelated to what this
+        // test exercises (overtime -> preview).
         payrollService = new PayrollService(
             new PayrollRepository(jdbc),
             new PayrollCalculator(),
@@ -131,12 +112,8 @@ class RetroactiveOvertimeReachesPayrollIntegrationTest extends AbstractPostgresI
         staff = insertEmployee("S001", manager);
     }
 
-    /**
-     * The headline case. Two hours of workday overtime on a past date, self-filed, must show up in
-     * the payroll preview for the month the work happened in.
-     *
-     * <p>Expected pay: 2 h x (30,000 / 30 / 8) x 1.5 = 375.00.
-     */
+    /** The headline case. Two hours of workday overtime on a past date, self-filed, must show up in the payroll
+     * preview for the month the work happened in. Expected pay: 2 h x (30,000 / 30 / 8) x 1.5 = 375.00. */
     @Test
     void backdatedOvertimeIsPaidInThePayrollMonthOfTheWorkDate() {
         LocalDate workDate = backdatedWorkDateInCurrentMonth();
@@ -148,11 +125,9 @@ class RetroactiveOvertimeReachesPayrollIntegrationTest extends AbstractPostgresI
             .isEqualByComparingTo(new BigDecimal("375.00"));
     }
 
-    /**
-     * Overtime only becomes payable at the second approval stage. A request stuck at
-     * MANAGER_APPROVED must not be paid — payroll filters on status, and this proves the filter is
-     * in the SQL rather than only in the service's head.
-     */
+    /** Overtime only becomes payable at the second approval stage. A request stuck at MANAGER_APPROVED must not be
+     * paid — payroll filters on status, and this proves the filter is in the SQL rather than only in the service's
+     * head. */
     @Test
     void managerApprovedOvertimeIsNotYetPaid() {
         LocalDate workDate = backdatedWorkDateInCurrentMonth();
@@ -175,19 +150,16 @@ class RetroactiveOvertimeReachesPayrollIntegrationTest extends AbstractPostgresI
         assertThat(overtimePayFor(workDate.withDayOfMonth(1), staff)).isEqualByComparingTo(BigDecimal.ZERO);
     }
 
-    /**
-     * The gross figure on the payroll line has to move, not just the overtime column — otherwise the
-     * money is visible in a report and absent from the payslip.
-     */
+    /** The gross figure on the payroll line has to move, not just the overtime column — otherwise the money is
+     * visible in a report and absent from the payslip. */
     @Test
     void backdatedOvertimeRaisesGrossAndNetOnThePayrollLine() {
         LocalDate workDate = backdatedWorkDateInCurrentMonth();
         LocalDate payrollMonth = workDate.withDayOfMonth(1);
 
-        // Task 2 (2026-07-29): a non-zero component with no withholding-tax classification rejects
-        // the run. This test's whole point is that backdated OT reaches the payroll line, so the OT
-        // it files IS non-zero and must be classified first -- exactly as HR would have to. Without
-        // this the run 409s on the second preview and the assertion below never runs.
+        // Task 2 (2026-07-29): a non-zero component with no withholding-tax classification rejects the run. This
+        // test's whole point is that backdated OT reaches the payroll line, so the OT it files IS non-zero and must be
+        // classified first -- exactly as HR would have to.
         seedRegularTaxTreatment(staff, payrollMonth.getYear(), PayrollComponent.OVERTIME_PAY);
 
         PayrollLineDto before = previewLineFor(payrollMonth, staff);
@@ -200,11 +172,9 @@ class RetroactiveOvertimeReachesPayrollIntegrationTest extends AbstractPostgresI
         assertThat(after.netPay()).isGreaterThan(before.netPay());
     }
 
-    /**
-     * The guard that makes the whole thing safe. Without it a request could be filed into a month
-     * payroll had already closed, be approved, and then never appear in any payroll run — because
-     * {@code saveProcessedPeriod} writes a period once.
-     */
+    /** The guard that makes the whole thing safe. Without it a request could be filed into a month payroll had
+     * already closed, be approved, and then never appear in any payroll run — because saveProcessedPeriod writes a
+     * period once. */
     @Test
     void overtimeCannotBeFiledIntoAnAlreadyProcessedPayrollMonth() {
         LocalDate workDate = backdatedWorkDateInCurrentMonth();
@@ -216,11 +186,9 @@ class RetroactiveOvertimeReachesPayrollIntegrationTest extends AbstractPostgresI
             .isEqualTo(HttpStatus.CONFLICT);
     }
 
-    /**
-     * The same guard at the far end of the workflow: a request filed while the month was open can
-     * still reach CEO approval after payroll has run. It must be refused there too, or it lands in
-     * a closed month and is never paid.
-     */
+    /** The same guard at the far end of the workflow: a request filed while the month was open can still reach CEO
+     * approval after payroll has run. It must be refused there too, or it lands in a closed month and is never
+     * paid. */
     @Test
     void ceoApprovalIsRefusedOnceThePayrollMonthClosesUnderneathTheRequest() {
         LocalDate workDate = backdatedWorkDateInCurrentMonth();
@@ -238,14 +206,7 @@ class RetroactiveOvertimeReachesPayrollIntegrationTest extends AbstractPostgresI
         assertThat(statusOf(id)).isEqualTo("MANAGER_APPROVED");
     }
 
-    /**
-     * REGRESSION TEST for the fix, not a characterization of a defect anymore. Overtime is priced
-     * from {@code hr.overtime_request.salary_basis}, frozen at manager approval time from the
-     * salary effective on the work date ({@code OvertimeRepository#findSalaryBasisAsOf}) —
-     * {@code findApprovedOvertimePayByEmployee} no longer re-reads {@code hr.employee.current_salary}
-     * as the primary source, so a salary change after approval must not move an already-approved
-     * figure.
-     */
+    /** REGRESSION TEST for the fix, not a characterization of a defect anymore. */
     @Test
     void overtimeIsNotRepricedByALaterSalaryChange() {
         LocalDate workDate = backdatedWorkDateInCurrentMonth();
@@ -262,12 +223,9 @@ class RetroactiveOvertimeReachesPayrollIntegrationTest extends AbstractPostgresI
             .isEqualByComparingTo(new BigDecimal("375.00"));
     }
 
-    /**
-     * Overtime worked before a raise is paid at the old rate, even though by the time it is filed
-     * and approved the employee's {@code current_salary} is already the new one. The raise is
-     * recorded in {@code hr.salary_history} with an {@code effective_date} after the work date, so
-     * {@code findSalaryBasisAsOf} must not pick it up.
-     */
+    /** Overtime worked before a raise is paid at the old rate, even though by the time it is filed and approved the
+     * employee's current_salary is already the new one. The raise is recorded in hr.salary_history with an
+     * effective_date after the work date, so findSalaryBasisAsOf must not pick it up. */
     @Test
     void overtimeWorkedBeforeARaiseIsPaidAtTheOldRate() {
         LocalDate workDate = backdatedWorkDateInCurrentMonth();
@@ -281,10 +239,8 @@ class RetroactiveOvertimeReachesPayrollIntegrationTest extends AbstractPostgresI
             .isEqualByComparingTo(new BigDecimal("375.00"));
     }
 
-    /**
-     * The counterpart case: when salary_history has an entry effective on or before the work date,
-     * that historical amount is the basis, not whatever current_salary happens to hold.
-     */
+    /** The counterpart case: when salary_history has an entry effective on or before the work date, that historical
+     * amount is the basis, not whatever current_salary happens to hold. */
     @Test
     void overtimeUsesTheSalaryHistoryRowEffectiveOnOrBeforeTheWorkDate() {
         LocalDate workDate = backdatedWorkDateInCurrentMonth();
@@ -322,31 +278,9 @@ class RetroactiveOvertimeReachesPayrollIntegrationTest extends AbstractPostgresI
         return id;
     }
 
-    /**
-     * A work date that is GENUINELY BACKDATED — strictly before today — whatever day the suite runs
-     * on. Every test in this class derives its payroll month from {@code workDate.withDayOfMonth(1)},
-     * so the date may land in the previous month without disturbing any of them; what they all need
-     * is that it is in the past.
-     *
-     * <p>The previous version returned {@code today} itself on the 1st, on the assumption that this
-     * "still exercis[ed] the same path". It does not — it exercises the opposite branch.
-     * {@code OvertimeService#validateRetroactiveWindow} opens with
-     * {@code if (!request.workDate().isBefore(today)) return;}, so a same-day date short-circuits
-     * out before reaching {@code requirePayrollMonthOpen}. On the 1st of any month that silently
-     * turned {@code overtimeCannotBeFiledIntoAnAlreadyProcessedPayrollMonth} into a test of nothing:
-     * no exception was thrown because the guard under test was never reached, and the suite went red
-     * on a real assertion about behaviour that had not actually been invoked. Confirmed on
-     * 2026-08-01 against a clean checkout of origin/main.
-     *
-     * <p>Stepping back one day is the smallest change that makes the date unconditionally
-     * retroactive: it is always within {@code app.overtime.retroactive-window-days} (60), and it
-     * keeps every assertion in this class keyed off the same {@code workDate}.
-     *
-     * <p>This is a TEST-side fix. {@code OvertimeService} is deliberately untouched: the submit-time
-     * skip for same-day dates is bounded by design (the method bounds a <em>retroactive</em>
-     * request), and {@code requirePayrollMonthOpen} still runs unconditionally on the approve and
-     * update paths, which is where a closed month would otherwise let money move.
-     */
+    /** A work date that is GENUINELY BACKDATED — strictly before today — whatever day the suite runs on. The
+     * previous version returned today itself on the 1st, on the assumption that this "still exercis[ed] the same
+     * path". */
     private LocalDate backdatedWorkDateInCurrentMonth() {
         // Bangkok zone to match OvertimeService.BUSINESS_ZONE; the JVM default zone flakes in UTC CI.
         LocalDate today = LocalDate.now(java.time.ZoneId.of("Asia/Bangkok"));
@@ -360,11 +294,9 @@ class RetroactiveOvertimeReachesPayrollIntegrationTest extends AbstractPostgresI
             "Urgent customer escalation, filed after the shift ended");
     }
 
-    /**
-     * Payable minutes are derived at manager approval from the overlap between the approved window
-     * and the employee's first/last punch, so the punches are the real input — clocking in at 08:00
-     * and out at 20:30 covers the whole 18:00-20:00 window and yields 120 payable minutes.
-     */
+    /** Payable minutes are derived at manager approval from the overlap between the approved window and the
+     * employee's first/last punch, so the punches are the real input — clocking in at 08:00 and out at 20:30
+     * covers the whole 18:00-20:00 window and yields 120 payable minutes. */
     private void insertPunchesCovering(LocalDate workDate) {
         insertPunch(workDate.atTime(8, 0).atOffset(ZoneOffset.ofHours(7)), workDate);
         insertPunch(workDate.atTime(20, 30).atOffset(ZoneOffset.ofHours(7)), workDate);
@@ -459,14 +391,8 @@ class RetroactiveOvertimeReachesPayrollIntegrationTest extends AbstractPostgresI
             """, params, Long.class);
     }
 
-    /**
-     * A ผู้จัดการ position is what makes an employee a manager <em>in the database</em>, which is
-     * what {@code ManagerApproverRepository} reads when deciding whether a manager stage exists at
-     * all. It must agree with the {@code manager} flag on the {@link UserPrincipal} used for that
-     * person -- in production both derive from the same position via {@code DivisionAccessPolicy},
-     * so a fixture where they disagree models a state that cannot occur, and would quietly send
-     * requests down the CEO-direct route instead of the manager route under test.
-     */
+    /** A ผู้จัดการ position is what makes an employee a manager in the database, which is what
+     * ManagerApproverRepository reads when deciding whether a manager stage exists at all. */
     private long insertPosition(String code, String nameTh) {
         return jdbc.queryForObject("""
             INSERT INTO hr.position (source_code, name_th, is_active)

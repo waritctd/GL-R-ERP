@@ -3,32 +3,9 @@ import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { cn } from '../../utils/cn.js';
 import { Panel } from '../../components/common/Layout.jsx';
 
-/**
- * "ต้องดำเนินการ" needs-action panel — ui-responsive-repair-plan.md Step 7.
- *
- * Built ONLY from counts the dashboards already fetch (dashboardSummary.pendingApprovals,
- * dashboardSummary.notifications, ticket status counts). No new data, no invented
- * urgency/SLA/priority — items are just filtered to value > 0 and rendered in the
- * order the caller passes them.
- *
- * `items`: [{ key, label, value, to?: () => void }]
- *   - `to` present  -> row is a real <button>, navigates, gets hover/focus affordance.
- *   - `to` omitted  -> row is informational only (e.g. unread notifications has no
- *     route — the bell dropdown is the only UI for it), so it must NOT look clickable.
- *
- * Callers (EmployeeDashboard.actionQueueItems) are expected to have already dropped any
- * item the viewer has no way to act on at all (UX-04) — this panel is titled "ต้องดำเนินการ"
- * (requires action), so an item with no `to` AND no other affordance must never reach here.
- * `to` omitted still means "actionable elsewhere" for `notifications`, never "unreachable".
- *
- * Desktop/tablet only (`mobile:hidden`): ui-responsive-repair-plan.md Step 7's
- * item 10 ("mobile dashboard must not become too tall") is explicit, and Step 4
- * already fought hard to cut the mobile stat block from 1541px to 661px — this
- * panel measured +130-200px depending on how many items are active, which would
- * regress that. Mobile still gets the "needs action" signal for free: the
- * StatCard entries these dashboards already render become tappable (Step 7 item 3)
- * with zero added height, since only hover/focus/cursor styling changed.
- */
+/** "ต้องดำเนินการ" needs-action panel — ui-responsive-repair-plan.md Step 7. Built ONLY from counts the
+ * dashboards already fetch (dashboardSummary.pendingApprovals, dashboardSummary.notifications, ticket status
+ * counts). */
 export function ActionQueue({ items }) {
   const active = items.filter((item) => Number(item.value) > 0);
 

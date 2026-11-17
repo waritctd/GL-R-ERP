@@ -1,16 +1,15 @@
 import { describe, it, expect } from 'vitest';
 import { api } from './mockApi.js';
 
-// Mirrors TicketService.waiveDeposit Rule 4 (FR-A-05): once a deposit notice has been issued
-// (payment track past CUSTOMER_CONFIRMED) the deposit policy can no longer be changed — the fix is
-// a credit note, not a policy flip. The mock used to accept it silently, which made it more
-// permissive than production. Written wrong-way-round: the refusal must leave the deal untouched.
+// Mirrors TicketService.waiveDeposit Rule 4 (FR-A-05): once a deposit notice has been issued (payment track
+// past CUSTOMER_CONFIRMED) the deposit policy can no longer be changed — the fix is a credit note, not a
+// policy flip. Written wrong-way-round: the refusal must leave the deal untouched.
 
 const RULE4_MESSAGE =
   'ยกเลิกนโยบายมัดจำไม่ได้: มีการออกใบแจ้งรับมัดจำแล้ว — การแก้ไขต้องออกเป็นใบลดหนี้ ไม่ใช่การเปลี่ยนนโยบาย';
 
-// Seed deal 19 (demoSales.js) is owned by the `sales` quick-login rep and sits at
-// DEPOSIT_NOTICE_ISSUED, so the owner check passes and only Rule 4 can refuse.
+// Seed deal 19 (demoSales.js) is owned by the `sales` quick-login rep and sits at DEPOSIT_NOTICE_ISSUED, so
+// the owner check passes and only Rule 4 can refuse.
 const NOTICE_ISSUED_TICKET_ID = 19;
 
 describe('mockApi.tickets.setDepositPolicy — Rule 4 (FR-A-05)', () => {

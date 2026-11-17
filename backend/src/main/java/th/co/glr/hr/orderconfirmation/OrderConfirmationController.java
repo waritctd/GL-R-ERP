@@ -15,13 +15,9 @@ import th.co.glr.hr.orderconfirmation.OrderConfirmationDtos.OrderConfirmationRes
 import th.co.glr.hr.orderconfirmation.OrderConfirmationRequests.ConfirmOrderRequest;
 import th.co.glr.hr.orderconfirmation.OrderConfirmationRequests.CreateDepositNoticeFromQuotationRequest;
 
-/**
- * Step 6 endpoints, both keyed by pricing request id (mirroring
- * {@code CustomerQuotationController}'s own {@code /pricing-requests/{id}/...} create route) —
- * see {@link OrderConfirmationService}'s class Javadoc for why this lives as its own small
- * orchestration class rather than on {@code PricingRequestController}/{@code
- * DepositNoticeController}.
- */
+/** Step 6 endpoints, both keyed by pricing request id — see OrderConfirmationService's class Javadoc for why
+ * this lives as its own small orchestration class rather than on
+ * PricingRequestController/DepositNoticeController. */
 @RestController
 @RequestMapping("/api")
 public class OrderConfirmationController {

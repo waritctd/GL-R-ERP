@@ -1,20 +1,9 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { api } from './mockApi.js';
 
-// Guards `specialMoney.list()` against SpecialMoneyService.list() + SpecialMoneyRepository
-// .findRequests(). Three things that mock diverged on, all in the direction that hides bugs:
-//
-//   1. The date window is NOT optional. Omitting from/to does not mean "everything"; the service
-//      computes `effectiveTo = to ?? today(Asia/Bangkok)` and `effectiveFrom = from ?? first of
-//      that month`, and the repository filters `event_date BETWEEN`. The mock applied no window at
-//      all, so it returned MORE rows than production -- a screen depending on the scoping looked
-//      right in mock mode and came up empty in prod.
-//   2. Ordering. `contract.test.js` compares parameter COUNTS only and cannot see an ORDER BY.
-//      Same rows in a different order is the mechanism behind #434.
-//   3. `to` before `from` is a 400 from the service, before the repository is reached.
-//
-// These call the mock through its public surface rather than reaching into `db`, so they also fail
-// if the seed's shape changes underneath them.
+// Guards `specialMoney.list()` against SpecialMoneyService.list() + SpecialMoneyRepository .findRequests().
+// `contract.test.js` compares parameter COUNTS only and cannot see an ORDER BY. Three things that mock
+// diverged on, all in the direction that hides bugs: 1.
 
 const THIS_YEAR = new Date().getFullYear();
 
@@ -29,8 +18,8 @@ describe('mockApi specialMoney.list — window, ordering, validation', () => {
   });
 
   it('defaults to the current calendar month rather than returning everything', async () => {
-    // A window wide enough to contain the whole seed. If this is empty the assertions below are
-    // vacuous -- there would be nothing for the default window to exclude.
+    // A window wide enough to contain the whole seed. If this is empty the assertions below are vacuous -- there
+    // would be nothing for the default window to exclude.
     const everything = await listAll({ from: '2000-01-01', to: '2999-12-31' });
     expect(everything.length).toBeGreaterThan(0);
 

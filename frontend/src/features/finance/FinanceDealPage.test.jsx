@@ -7,6 +7,7 @@ import { FinanceDealPage } from './FinanceDealPage.jsx';
 import { makeFinanceDeal, makeTrack } from '../../test/fixtures/financeDeal.js';
 import { api } from '../../api/index.js';
 import { ApiError } from '../../api/client.js';
+import { queryKeys } from '../../api/queryKeys.js';
 import { fetchDocumentBlob } from '../../utils/download.js';
 
 globalThis.React = React;
@@ -212,7 +213,7 @@ describe('FinanceDealPage', () => {
     it('the separate horizontal milestone track is gone (the panels are the only milestone display)', async () => {
       renderPage();
       await screen.findByRole('heading', { level: 1, name: /PR-2026-0501/ });
-      expect(screen.queryByRole('list', { name: 'ความคืบหน้าการเงินของดีล' })).toBeNull();
+      expect(screen.queryByRole('list', { name: /^ความคืบหน้าการเงินของ(ดีล|งาน)$/ })).toBeNull();
     });
 
     it('document rows in different panels share one row layout (same grid template) so amounts and buttons line up', async () => {
@@ -230,8 +231,8 @@ describe('FinanceDealPage', () => {
       expect(section(/^4 ส่งมอบ/).getAttribute('aria-current')).toBe('step');
       expect(section(/^4 ส่งมอบ/).getAttribute('data-state')).toBe('current');
       expect(section(/^3 รอสินค้า/).getAttribute('aria-current')).toBeNull();
-      // milestone 5 is upcoming and holds no data: collapsed to the one-liner
-      // upcoming with no data: header row only — the status text says it, there is no body at all
+      // milestone 5 is upcoming and holds no data: collapsed to the one-liner upcoming with no data: header row only
+      // — the status text says it, there is no body at all
       expect(section(/^5 ชำระครบ/).getAttribute('data-state')).toBe('upcoming');
       expect(within(section(/^5 ชำระครบ/)).getByText('ยังไม่ถึง')).not.toBeNull();
       expect(section(/^5 ชำระครบ/).querySelector('[data-panel-body]')).toBeNull();
@@ -247,7 +248,7 @@ describe('FinanceDealPage', () => {
       api.finance.getDeal.mockResolvedValue({ deal });
       renderPage();
       await screen.findByRole('heading', { level: 1, name: /PR-2026-0501/ });
-      expect(within(section(/^2 ได้รับมัดจำ/)).getByText('ดีลนี้ไม่ต้องเก็บมัดจำ')).not.toBeNull();
+      expect(within(section(/^2 ได้รับมัดจำ/)).getByText('งานนี้ไม่ต้องเก็บมัดจำ')).not.toBeNull();
     });
 
     it('past milestones stay visible with their content, and an upcoming milestone that already holds data shows it', async () => {
@@ -432,8 +433,8 @@ describe('FinanceDealPage', () => {
       fireEvent.change(screen.getByLabelText(/หัก ณ ที่จ่าย/), { target: { value: '3000' } });
       fireEvent.change(screen.getByLabelText(/รับเงินเกิน/), { target: { value: '5' } });
       const callsBefore = api.finance.getDeal.mock.calls.length;
-      // submit the form directly: jsdom does not treat a synthetic file change as satisfying `required`
-      // (same reason CommissionPage.test.jsx dispatches submit on the form).
+      // submit the form directly: jsdom does not treat a synthetic file change as satisfying `required` (same reason
+      // CommissionPage.test.jsx dispatches submit on the form).
       fireEvent.submit(screen.getByLabelText(/เลขที่ใบกำกับ/).closest('form'));
 
       await waitFor(() => expect(api.commissions.createFromDeal).toHaveBeenCalledTimes(1));
@@ -608,6 +609,23 @@ describe('FinanceDealPage', () => {
   });
 
   describe('money actions', () => {
+    // Document chain (2026-11-17): ยืนยันรับมัดจำ here must reach a rep who has the quotation page or the deal page
+    // open on the same client — the keys those pages read are invalidated with the deal.
+    it('DEPOSIT_PAID invalidates the document chain keys the deal page and the quotation page read', async () => {
+      const before = makeFinanceDeal({ availableActions: [action('DEPOSIT_PAID', 'รับมัดจำ')] });
+      api.finance.getDeal.mockResolvedValue({ deal: before });
+      api.finance.confirmDepositPaid.mockResolvedValue({ deal: makeFinanceDeal({ availableActions: [] }) });
+      const { queryClient } = renderPage();
+      const keys = [queryKeys.documentChain(501), queryKeys.depositNotices(501), queryKeys.storedRemainingInvoices(501)];
+      for (const key of keys) queryClient.setQueryData(key, { seeded: true });
+      fireEvent.click(await screen.findByRole('button', { name: 'ยืนยันรับมัดจำ' }));
+      fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'ยืนยันรับมัดจำ' }));
+      await waitFor(() => expect(api.finance.confirmDepositPaid).toHaveBeenCalledWith(501));
+      await waitFor(() => {
+        for (const key of keys) expect(queryClient.getQueryState(key).isInvalidated, JSON.stringify(key)).toBe(true);
+      });
+    });
+
     it('DEPOSIT_PAID asks for an explicit confirmation, then posts and updates the view from the returned deal', async () => {
       const before = makeFinanceDeal({ availableActions: [action('DEPOSIT_PAID', 'รับมัดจำ')] });
       const after = makeFinanceDeal({ availableActions: [] });
@@ -640,6 +658,8 @@ describe('FinanceDealPage', () => {
       fireEvent.change(within(dialog).getByLabelText('ประเภท'), { target: { value: 'BALANCE' } });
       fireEvent.change(within(dialog).getByLabelText('จำนวนเงิน'), { target: { value: '60000' } });
       fireEvent.change(within(dialog).getByLabelText('เลขอ้างอิง'), { target: { value: ' RC-999 ' } });
+      // The note is collapsed behind "+ หมายเหตุ" (design m-payment).
+      fireEvent.click(within(dialog).getByRole('button', { name: '+ หมายเหตุ' }));
       fireEvent.change(within(dialog).getByLabelText('หมายเหตุ'), { target: { value: 'โอนเข้าบัญชี' } });
       fireEvent.click(within(dialog).getByRole('button', { name: 'บันทึกรับชำระ' }));
       await waitFor(() => expect(api.finance.recordPayment).toHaveBeenCalledTimes(1));
@@ -658,6 +678,8 @@ describe('FinanceDealPage', () => {
       renderPage();
       fireEvent.click(await screen.findByRole('button', { name: 'บันทึกรับชำระ' }));
       const dialog = await screen.findByRole('dialog');
+      // The fixture's open invoice prefills the outstanding amount; clearing it is what this test is about.
+      fireEvent.change(within(dialog).getByLabelText('จำนวนเงิน'), { target: { value: '' } });
       fireEvent.click(within(dialog).getByRole('button', { name: 'บันทึกรับชำระ' }));
       expect(await within(dialog).findByRole('alert')).not.toBeNull();
       expect(api.finance.recordPayment).not.toHaveBeenCalled();
@@ -715,9 +737,28 @@ describe('FinanceDealPage', () => {
       return d;
     };
 
-    it('payment kind defaults to DEPOSIT when nothing has been paid on a deposit deal', async () => {
-      const dialog = await openPaymentDialog(payDeal({}, { amountPaid: 0 }));
+    it('payment kind defaults to DEPOSIT when nothing has been paid on a deposit deal with no open document', async () => {
+      const d = payDeal({}, { amountPaid: 0, paymentStatus: 'UNPAID' });
+      d.documents = { ...d.documents, depositNotices: [], remainingInvoices: [] };
+      const dialog = await openPaymentDialog(d);
       expect(within(dialog).getByLabelText('ประเภท').value).toBe('DEPOSIT');
+      expect(within(dialog).getByLabelText('จำนวนเงิน').value).toBe('');
+    });
+
+    it('an open deposit notice prefills DEPOSIT and the notice total (design m-payment)', async () => {
+      const d = payDeal({}, { amountPaid: 0, paymentStatus: 'DEPOSIT_NOTICE_ISSUED', payments: [] });
+      d.documents = { ...d.documents, remainingInvoices: [] };
+      const dialog = await openPaymentDialog(d);
+      expect(within(dialog).getByLabelText('ประเภท').value).toBe('DEPOSIT');
+      expect(within(dialog).getByLabelText('จำนวนเงิน').value).toBe('42800');
+      expect(within(dialog).getByTestId('payment-prefill-doc').textContent).toContain('ใบแจ้งมัดจำ DN-2026-0007');
+    });
+
+    it('an issued remaining invoice prefills BALANCE and THAT invoice’s outstanding (its total less balance taken)', async () => {
+      const dialog = await openPaymentDialog(payDeal());
+      expect(within(dialog).getByLabelText('ประเภท').value).toBe('BALANCE');
+      expect(within(dialog).getByLabelText('จำนวนเงิน').value).toBe('85600');
+      expect(within(dialog).getByTestId('payment-prefill-doc').textContent).toContain('ใบแจ้งหนี้ส่วนที่เหลือ RI-2026-0012 · คงค้าง ฿85,600.00');
     });
 
     it('payment kind defaults to BALANCE once something has been paid', async () => {
@@ -837,20 +878,22 @@ describe('FinanceDealPage', () => {
     it('shows a layout-shaped skeleton while loading', async () => {
       api.finance.getDeal.mockReturnValue(new Promise(() => {}));
       renderPage();
-      expect(await screen.findByLabelText('กำลังโหลดดีล')).not.toBeNull();
+      expect(await screen.findByLabelText('กำลังโหลดงาน')).not.toBeNull();
     });
 
     it('403 shows access-denied with a link back to /finance', async () => {
       api.finance.getDeal.mockRejectedValue(new ApiError('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403));
       renderPage();
-      expect(await screen.findByText(/ไม่มีสิทธิ์เข้าถึงดีลนี้/)).not.toBeNull();
+      expect(await screen.findByText(/ไม่มีสิทธิ์เข้าถึงงานนี้/)).not.toBeNull();
+      // fix round 1: not "งานนี้อยู่นอกขอบเขตงานการเงิน" (งาน twice, two meanings).
+      expect(screen.getByText('งานนี้อยู่นอกขอบเขตของฝ่ายบัญชี')).not.toBeNull();
       expect(screen.getByRole('link', { name: /กลับไปงานการเงิน/ }).getAttribute('href')).toBe('/finance');
     });
 
     it('404 shows not-found with a link back to /finance', async () => {
       api.finance.getDeal.mockRejectedValue(new ApiError('ไม่พบดีลนี้', 404));
       renderPage();
-      expect(await screen.findByText(/ไม่พบดีลนี้/)).not.toBeNull();
+      expect(await screen.findByText(/ไม่พบงานนี้/)).not.toBeNull();
       expect(screen.getByRole('link', { name: /กลับไปงานการเงิน/ }).getAttribute('href')).toBe('/finance');
     });
   });

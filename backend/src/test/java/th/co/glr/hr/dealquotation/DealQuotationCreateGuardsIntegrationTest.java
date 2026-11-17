@@ -17,33 +17,13 @@ import th.co.glr.hr.ticket.EntryChannel;
 import th.co.glr.hr.ticket.QuotationStatus;
 import th.co.glr.hr.ticket.TicketEventKind;
 
-/**
- * Quotation ↔ deal linking slice 2 — the two refusals on CREATING a direct quotation, through the
- * real {@link DealQuotationService#create} against real Postgres:
- *
- * <ul>
- *   <li><b>One pricing route per deal</b> (owner ruling 2026-09-30, the reverse of slice 1's
- *       {@link DirectQuotationLocks#requireNoLiveDirectQuotation}): a deal with ANY pricing request
- *       not CANCELLED / SUPERSEDED — a private DRAFT and a finished QUOTATION_ACCEPTED included —
- *       refuses a new direct quotation, 409 {@link DirectQuotationLocks#LIVE_PRICING_REQUEST_MESSAGE}.</li>
- *   <li><b>N6</b> (S2-B3): a deal already holding a live DEAL_DIRECT quotation (DRAFT /
- *       PENDING_APPROVAL / APPROVED) refuses a second one, 409 naming the NEWEST live one in the
- *       exception's details ({@code liveQuotationId}, {@code number}, {@code docStatus}) — rendered
- *       as top-level JSON fields by {@code ApiExceptionHandler} (pinned over HTTP by
- *       {@code DealQuotationSlice2HttpIntegrationTest}).</li>
- * </ul>
- *
- * <p>Precedence (mirrors {@code mockApi.dealQuotations.create}): authz 403 → recipient 400 →
- * live-pricing-request 409 → N6 409. Scope: ONLY {@code create}; a revision or reorder of an existing
- * direct quotation is not a new route choice and is pinned here as unaffected.
- *
- * <p>Written wrong-way-round: dead pricing requests, a pricing request on ANOTHER deal, and
- * dead/non-direct quotations must NOT block; every refusal asserts nothing was written.
- */
+/** Quotation ↔ deal linking slice 2. Scope: ONLY create; a revision or reorder of an existing direct quotation
+ * is not a new route choice and is pinned here as unaffected. Precedence (mirrors
+ * mockApi.dealQuotations.create): authz 403 → recipient 400 → live-pricing-request 409 → N6 409. */
 class DealQuotationCreateGuardsIntegrationTest extends AbstractDealQuotationSlice2IntegrationTest {
 
-    /** Every status chk_pricing_request_status (as last re-declared, V141) allows — i.e. every
-     * {@code PricingRequestStatus} constant — minus the two dead ends. */
+    /** Every status chk_pricing_request_status (as last re-declared, V141) allows — i.e. every PricingRequestStatus
+     * constant — minus the two dead ends. */
     private static final List<String> LIVE_PRICING_REQUEST_STATUSES = List.of(
         "DRAFT", "SUBMITTED", "IMPORT_REVIEWING", "AWAITING_FACTORY_RESPONSE", "READY_FOR_CEO_REVIEW",
         "CEO_REVIEWING", "APPROVED_FOR_QUOTATION", "QUOTATION_ISSUED", "QUOTATION_ACCEPTED");
@@ -61,7 +41,7 @@ class DealQuotationCreateGuardsIntegrationTest extends AbstractDealQuotationSlic
 
             assertThat(e.getMessage()).as(status).isEqualTo(DirectQuotationLocks.LIVE_PRICING_REQUEST_MESSAGE);
             assertThat(e.getMessage()).isEqualTo(
-                "ดีลนี้มีคำขอราคาที่ยังดำเนินการอยู่ — ใช้ใบเสนอราคาจากคำขอราคา หรือยกเลิกคำขอราคาก่อน");
+                "งานนี้มีคำขอราคาที่ยังดำเนินการอยู่ — ใช้ใบเสนอราคาจากคำขอราคา หรือยกเลิกคำขอราคาก่อน");
             assertThat(e.getDetails()).as("the one-route refusal carries no structured body").isEmpty();
             assertThat(quotationCount(ticket)).as(status).isZero();
         }
@@ -101,9 +81,9 @@ class DealQuotationCreateGuardsIntegrationTest extends AbstractDealQuotationSlic
             .isEqualTo(QuotationStatus.DRAFT);
     }
 
-    /** Scope: a revision / reorder of an EXISTING direct quotation is not a new route choice. The two
-     * can only coexist with a live pricing request through legacy data (slice 1 refuses the request
-     * while the direct quotation is live), so the request is inserted behind the lock's back. */
+    /** Scope: a revision / reorder of an EXISTING direct quotation is not a new route choice. The two can only
+     * coexist with a live pricing request through legacy data (slice 1 refuses the request while the direct
+     * quotation is live), so the request is inserted behind the lock's back. */
     @Test
     void revisionAndReorderOfAnExistingDirectQuotation_areNotRefusedByALivePricingRequest() {
         long ticket = deal(salesActor);
@@ -148,7 +128,7 @@ class DealQuotationCreateGuardsIntegrationTest extends AbstractDealQuotationSlic
         ApiException e = refusal(() -> quotationService.create(ticket, draft("DESIGNER"), salesActor),
             HttpStatus.CONFLICT);
 
-        assertThat(e.getMessage()).isEqualTo("ดีลนี้มีใบเสนอราคาที่ใช้งานอยู่ (" + first.number()
+        assertThat(e.getMessage()).isEqualTo("งานนี้มีใบเสนอราคาที่ใช้งานอยู่ (" + first.number()
             + ") — แก้ไขฉบับนั้น หรือสร้างฉบับแก้ไขแทนการออกเลขใหม่");
         assertThat(e.getDetails()).containsExactly(
             Map.entry("liveQuotationId", first.id()),
@@ -175,8 +155,8 @@ class DealQuotationCreateGuardsIntegrationTest extends AbstractDealQuotationSlic
             .containsEntry("docStatus", QuotationStatus.APPROVED);
     }
 
-    /** An APPROVED parent with its DRAFT revision: two live rows — N6 names the newest (the one being
-     * worked on), the same row TicketSummaryDto.liveDirectQuotation serves. */
+    /** An APPROVED parent with its DRAFT revision: two live rows — N6 names the newest (the one being worked on),
+     * the same row TicketSummaryDto.liveDirectQuotation serves. */
     @Test
     void n6_withTwoLiveRows_namesTheNewest() {
         long ticket = deal(salesActor);
@@ -324,8 +304,8 @@ class DealQuotationCreateGuardsIntegrationTest extends AbstractDealQuotationSlic
         setDocStatus(quotationService.create(rejected, draft("OWNER"), salesActor).id(), "REJECTED");
         assertThat(quotationService.create(rejected, draft("OWNER"), salesActor).docStatus()).isEqualTo("DRAFT");
 
-        // A PRICING_REQUEST-origin DRAFT is not a direct quotation (its request is cancelled here, so
-        // the one-route rule is out of the way and only N6 is under test).
+        // A PRICING_REQUEST-origin DRAFT is not a direct quotation (its request is cancelled here, so the one-route
+        // rule is out of the way and only N6 is under test).
         long prOrigin = deal(salesActor);
         long pr = insertPricingRequest(prOrigin, salesActor.id(), "CANCELLED");
         long prRow = quotationService.create(prOrigin, draft("OWNER"), salesActor).id();
@@ -334,8 +314,8 @@ class DealQuotationCreateGuardsIntegrationTest extends AbstractDealQuotationSlic
         assertThat(quotationService.create(prOrigin, draft("OWNER"), salesActor).docStatus()).isEqualTo("DRAFT");
     }
 
-    /** Approving the revision supersedes the parent: the deal then holds exactly one live row (the
-     * revision) and N6 still refuses — naming the revision, never the superseded parent. */
+    /** Approving the revision supersedes the parent: the deal then holds exactly one live row (the revision) and N6
+     * still refuses — naming the revision, never the superseded parent. */
     @Test
     void n6_afterARevisionIsApproved_namesTheRevision() {
         long ticket = deal(salesActor);
@@ -356,7 +336,7 @@ class DealQuotationCreateGuardsIntegrationTest extends AbstractDealQuotationSlic
     //    and owner; UNSPECIFIED / unknown has no route => allowed). BUYER -> QUOTE_BUYER is on EVERY route. ────
 
     private static final String OWNER_DIRECT_DESIGNER_SENTENCE =
-        "ดีลนี้เป็นเจ้าของติดต่อโดยตรง — ขั้นที่ 4 ไม่อยู่ในเส้นทางของดีลนี้ — แก้ช่องทางดีลก่อน";
+        "ช่องทางรับงานของงานนี้คือเจ้าของติดต่อโดยตรง — ขั้นที่ 4 ไม่อยู่ในเส้นทางนี้ — แก้ช่องทางรับงานก่อน";
 
     private void assertRouteRefused(long ticket, String recipient, String channel, String stage) {
         ApiException e = refusal(() -> quotationService.create(ticket, draft(recipient), salesActor), HttpStatus.CONFLICT);
@@ -398,7 +378,7 @@ class DealQuotationCreateGuardsIntegrationTest extends AbstractDealQuotationSlic
         assertRouteRefused(deal(salesActor, EntryChannel.BUYER_DIRECT), "OWNER", EntryChannel.BUYER_DIRECT,
             DealStage.QUOTE_OWNER);
         assertThat(DealRoute.refusalMessage(EntryChannel.BUYER_DIRECT, DealStage.QUOTE_OWNER))
-            .isEqualTo("ดีลนี้เป็นผู้ซื้อ/ผู้รับเหมาติดต่อโดยตรง — ขั้นที่ 5 ไม่อยู่ในเส้นทางของดีลนี้ — แก้ช่องทางดีลก่อน");
+            .isEqualTo("ช่องทางรับงานของงานนี้คือผู้ซื้อ/ผู้รับเหมาติดต่อโดยตรง — ขั้นที่ 5 ไม่อยู่ในเส้นทางนี้ — แก้ช่องทางรับงานก่อน");
 
         long buyer = deal(salesActor, EntryChannel.BUYER_DIRECT);
         assertThat(quotationService.create(buyer, draft("BUYER"), salesActor).recipientType()).isEqualTo("BUYER");

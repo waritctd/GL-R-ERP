@@ -6,8 +6,8 @@ import java.util.List;
 public final class PricingDecisionRequests {
     private PricingDecisionRequests() {}
 
-    /** Starts CEO review: creates a DRAFT pricing_decision against the request's current
-     * SUBMITTED costing and moves the pricing request READY_FOR_CEO_REVIEW -> CEO_REVIEWING. */
+    /** Starts CEO review: creates a DRAFT pricing_decision against the request's current SUBMITTED costing and
+     * moves the pricing request READY_FOR_CEO_REVIEW -> CEO_REVIEWING. */
     public record StartPricingDecisionRequest(
         BigDecimal defaultMarginPct, String currency, String ceoNote, String clientRequestId) {}
 
@@ -24,12 +24,9 @@ public final class PricingDecisionRequests {
      * {@link PricingDecisionService#requireNewFormEligible}. */
     public record UpdatePricingDecisionRequest(
         String ceoNote, String priceMode, List<UpdatePricingDecisionItemRequest> items) {
-        /** The pre-Phase-2 shape (no {@code priceMode}) — every call site before this feature,
-         * including ~40 integration tests across other packages that construct this positionally.
-         * Defaults {@code priceMode} to null (COALESCE "unchanged"/"still legacy"), so every
-         * existing caller compiles and behaves byte-for-byte as before. Mirrors the same
-         * legacy-constructor device {@code DealQuotationRequests} and
-         * {@code WastageCalculator.Input} already use on this codebase for an added field. */
+        /** The pre-Phase-2 shape (no priceMode) — every call site before this feature, including ~40 integration tests
+         * across other packages that construct this positionally. Defaults priceMode to null (COALESCE
+         * "unchanged"/"still legacy"), so every existing caller compiles and behaves byte-for-byte as before. */
         public UpdatePricingDecisionRequest(String ceoNote, List<UpdatePricingDecisionItemRequest> items) {
             this(ceoNote, null, items);
         }
@@ -119,8 +116,8 @@ public final class PricingDecisionRequests {
         // this for an IMPORT line must be refused (list_unit_price stays server-maintained for
         // costed lines - see the Javadoc above).
         BigDecimal listUnitPrice) {
-        /** Absent (null) {@code clear*} flags normalise to {@code false}, so every accessor is
-         * non-null and the service's {@code ||}/{@code &&} call sites unbox safely. */
+        /** Absent (null) clear* flags normalise to false, so every accessor is non-null and the service's ||/&& call
+         * sites unbox safely. */
         public UpdatePricingDecisionItemRequest {
             clearSellingPriceOverride = Boolean.TRUE.equals(clearSellingPriceOverride);
             clearDiscountPct = Boolean.TRUE.equals(clearDiscountPct);
@@ -128,8 +125,8 @@ public final class PricingDecisionRequests {
             clearDirectNetPrice = Boolean.TRUE.equals(clearDirectNetPrice);
         }
 
-        /** The pre-stock-line shape - the 12-field constructor that existed before listUnitPrice
-         * was appended. Defaults it to null (leave untouched). */
+        /** The pre-stock-line shape - the 12-field constructor that existed before listUnitPrice was appended. Defaults
+         * it to null (leave untouched). */
         public UpdatePricingDecisionItemRequest(
             long pricingDecisionItemId, BigDecimal marginPct,
             BigDecimal minimumSellingPrice, String decisionNote,
@@ -143,11 +140,9 @@ public final class PricingDecisionRequests {
                 directNetPrice, clearDirectNetPrice, null);
         }
 
-        /** The pre-Phase-2 shape (no price-mode fields at all) — every call site before this
-         * feature, including ~40 integration tests across other packages that construct this
-         * positionally. Defaults every new field to null/false (COALESCE "unchanged"/"do not
-         * clear"), so every existing caller compiles and behaves byte-for-byte as before. See
-         * {@link UpdatePricingDecisionRequest}'s own matching legacy constructor. */
+        /** The pre-Phase-2 shape (no price-mode fields at all) — every call site before this feature, including ~40
+         * integration tests across other packages that construct this positionally. See UpdatePricingDecisionRequest's
+         * own matching legacy constructor. */
         public UpdatePricingDecisionItemRequest(
             long pricingDecisionItemId, BigDecimal marginPct,
             BigDecimal minimumSellingPrice, String decisionNote,
@@ -158,18 +153,15 @@ public final class PricingDecisionRequests {
         }
     }
 
-    /** No selling-price or margin field on purpose (design correction 7): approval always
-     * freezes whatever proposedMarginPct each item currently holds into approvedMarginPct and
-     * recomputes approvedSellingPricePerRequestedUnit server-side — the CEO edits margins via
-     * {@link UpdatePricingDecisionItemRequest} beforehand, not at approval time. */
+    /** No selling-price or margin field on purpose: approval always freezes whatever proposedMarginPct each item
+     * currently holds into approvedMarginPct and recomputes approvedSellingPricePerRequestedUnit server-side. */
     public record ApprovePricingDecisionRequest(String ceoNote, String clientRequestId) {}
 
     public record ReturnPricingDecisionRequest(String returnReason) {}
 
-    /** V141 ("CEO owns costing"): {@code manualLandedCostPerUnitThb} null CLEARS the override
-     * (back to "use the computed figure"). {@code reason} is mandatory in BOTH directions —
-     * clearing is money-affecting too, exactly like setting one (mirrors {@link
-     * ReturnPricingDecisionRequest}'s own mandatory-reason precedent). */
+    /** V141 ("CEO owns costing"): manualLandedCostPerUnitThb null CLEARS the override (back to "use the computed
+     * figure"). reason is mandatory in BOTH directions — clearing is money-affecting too, exactly like setting one
+     * (mirrors ReturnPricingDecisionRequest's own mandatory-reason precedent). */
     public record CostOverrideRequest(BigDecimal manualLandedCostPerUnitThb, String reason) {}
 
     /** V152 (V109 engine wiring): the CEO's per-item duty product_type

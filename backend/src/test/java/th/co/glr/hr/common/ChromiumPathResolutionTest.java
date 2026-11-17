@@ -5,13 +5,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 
-/**
- * The image's Chromium path is a deploy-time fact, and getting it wrong is silent: the first build
- * of the Dockerfile set CHROMIUM_PATH=/usr/bin/chromium while the package installed
- * /usr/bin/chromium-browser, so nothing failed until a PDF was requested. These pin the two halves
- * of the fix — the candidate list covers both package layouts, and the Dockerfile's value is one
- * of them.
- */
+/** The image's Chromium path is a deploy-time fact, and getting it wrong is silent: the first build of the
+ * Dockerfile set CHROMIUM_PATH=/usr/bin/chromium while the package installed /usr/bin/chromium-browser, so
+ * nothing failed until a PDF was requested. */
 class ChromiumPathResolutionTest {
 
     @Test

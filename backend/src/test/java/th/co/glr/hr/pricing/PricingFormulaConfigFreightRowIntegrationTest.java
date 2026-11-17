@@ -25,52 +25,28 @@ import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 import tools.jackson.databind.DeserializationFeature;
 import tools.jackson.databind.json.JsonMapper;
 
-/**
- * Real-DB evidence for issue #436's two NEW write endpoints -- {@code POST
- * /api/pricing-formula-config/freight-rates} and {@code DELETE
- * /api/pricing-formula-config/freight-rates/{id}} -- per CLAUDE.md's "Permission changes must ship
- * evidence". This runs the REAL controller over the REAL repository against REAL Postgres, the same
- * shape as {@code AttendanceScopeIntegrationTest} (CLAUDE.md's canonical reference implementation)
- * and, in this same pricing domain, {@code CatalogPricingReadAuthzIntegrationTest}. The second
- * citation used to be {@code DealEstimateMarkupAuthzIntegrationTest}, deleted with the rest of the
- * deal-estimate-markup surface by issue #748; it is repointed rather than dropped so this class
- * still names a reader can open.
- *
- * <p>Mockito cannot stand in here for two separate reasons. First, a mocked repository would let a
- * 403 assertion "pass" while the SQL happily wrote the row anyway -- so every denial case below also
- * asserts the STORED state is unchanged (version still 2 -- V109 seed v1, V197 margin-30% republish v2, target row still present), which is the
- * assertion that actually proves the guard runs before the write. Second, the add/delete paths
- * derive the whole new version from {@code findCurrent()}, so the V109 seed itself -- 39 freight
- * rows, six deliberately-blank cells, half-open contiguous bands -- is the fixture under test.
- *
- * <p>Cases are written wrong way round: the roles asserted at length are the ones that must NOT be
- * able to write, {@code import} first, since it is the one non-CEO role that CAN read this config
- * and is therefore the realistic privilege-escalation target.
- */
+/** Real-DB evidence for issue #436's two NEW write endpoints -- POST /api/pricing-formula-config/freight-rates
+ * and DELETE /api/pricing-formula-config/freight-rates/{id} -- per CLAUDE.md's "Permission changes must ship
+ * evidence". Mockito cannot stand in here for two separate reasons. */
 class PricingFormulaConfigFreightRowIntegrationTest extends AbstractPostgresIntegrationTest {
 
-    /**
-     * Every role that must be refused. {@code import} leads deliberately: it holds the read gate on
-     * this same controller, so "can read the cost model" leaking into "can edit the freight matrix"
-     * is the specific regression these cases exist to catch.
-     */
+    /** Every role that must be refused. import leads deliberately: it holds the read gate on this same controller,
+     * so "can read the cost model" leaking into "can edit the freight matrix" is the specific regression these
+     * cases exist to catch. */
     private static final List<String> DENIED_ROLES =
         List.of("import", "sales", "sales_manager", "account", "hr", "employee", "warehouse", "qc");
 
     private MockMvc mvc;
     private PricingFormulaConfigRepository formulaConfigs;
-    // sales.pricing_formula_config.updated_by is a BIGINT REFERENCES hr.employee(employee_id), so a
-    // CEO write whose caller id has no matching row is rejected by the FK, not by authz.
+    // sales.pricing_formula_config.updated_by is a BIGINT REFERENCES hr.employee(employee_id), so a CEO write
+    // whose caller id has no matching row is rejected by the FK, not by authz.
     private long employeeId;
 
     @BeforeEach
     void wireRealCollaborators() {
-        // Real HTTP responses go through Boot's Jackson-3-backed JacksonJsonHttpMessageConverter
-        // (JacksonAutoConfiguration), so the MockMvc layer is wired with the same converter type.
-        // PricingFormulaConfigDto carries an Instant (updatedAt); Jackson 3 handles it natively (no
-        // module registration needed, unlike the old Jackson 2 ObjectMapper this replaced).
-        // accept-empty-string-as-null-object mirrors the one Jackson property this app sets
-        // (src/main/resources/application.yml).
+        // Real HTTP responses go through Boot's Jackson-3-backed JacksonJsonHttpMessageConverter (JacksonAutoConfiguration),
+        // so the MockMvc layer is wired with the same converter type. accept-empty-string-as-null-object mirrors the one
+        // Jackson property this app sets (src/main/resources/application.yml).
         JsonMapper jsonMapper = JsonMapper.builder()
             .configure(DeserializationFeature.ACCEPT_EMPTY_STRING_AS_NULL_OBJECT, true)
             .build();
@@ -94,9 +70,7 @@ class PricingFormulaConfigFreightRowIntegrationTest extends AbstractPostgresInte
             """, Map.of("divisionId", divisionId, "hireDate", LocalDate.of(2020, 1, 1)), Long.class);
     }
 
-    // ============================================================================================
     // Denial -- the cases that matter
-    // ============================================================================================
 
     @Test
     void nonCeoRolesCannotAddAFreightRowAndNothingIsWritten() throws Exception {
@@ -109,8 +83,8 @@ class PricingFormulaConfigFreightRowIntegrationTest extends AbstractPostgresInte
                     .content(newRowBody("TR", 3, 8, 1, 101, 70000)))
                 .andExpect(status().isForbidden());
 
-            // The 403 is worthless if the row landed anyway: no new version, no new row, and
-            // Turkey must not exist anywhere in the table (not merely in the current version).
+            // The 403 is worthless if the row landed anyway: no new version, no new row, and Turkey must not exist
+            // anywhere in the table (not merely in the current version).
             assertThat(currentConfig().version()).as("version after %s attempted a write", role).isEqualTo(2);
             assertThat(totalFreightRowCount()).as("row count after %s attempted a write", role).isEqualTo(seededRowCount);
             assertThat(countryRowCountAcrossAllVersions("TR")).as("Turkey rows after %s", role).isZero();
@@ -150,17 +124,10 @@ class PricingFormulaConfigFreightRowIntegrationTest extends AbstractPostgresInte
         assertThat(countryRowCountAcrossAllVersions("TR")).isZero();
     }
 
-    // ============================================================================================
     // The CEO can do the thing the issue was filed about
-    // ============================================================================================
 
-    /**
-     * The headline case: Italy [12,17)mm x [801,+inf) sqm is one of V109's deliberately-blank
-     * cells, and before #436 there was no way to fill it short of a Flyway migration. A 900 sqm
-     * order of 14 mm Italian tile matched ZERO freight bands; after the CEO adds the row it matches
-     * EXACTLY ONE -- "exactly one", not "at least one", so the assertion fails on an overlap as
-     * loudly as it does on a gap.
-     */
+    /** The headline case: Italy [12,17)mm x [801,+inf) sqm is one of V109's deliberately-blank cells, and before
+     * #436 there was no way to fill it short of a Flyway migration. */
     @Test
     void ceoCanFillADeliberatelyBlankCellAndTheOrderBecomesPriceable() throws Exception {
         BigDecimal thickness = new BigDecimal("14");
@@ -218,15 +185,13 @@ class PricingFormulaConfigFreightRowIntegrationTest extends AbstractPostgresInte
             .noneMatch(rate -> "IT".equals(rate.originCountryCode())
                 && rate.thicknessMinMm().compareTo(new BigDecimal("12")) == 0
                 && rate.qtyMinSqm().compareTo(target.qtyMinSqm()) == 0);
-        // Trimming the top of a ladder is allowed, and the row below it still covers its own range
-        // exactly once -- the delete narrowed coverage without disturbing what remains.
+        // Trimming the top of a ladder is allowed, and the row below it still covers its own range exactly once -- the
+        // delete narrowed coverage without disturbing what remains.
         assertThat(matchingBands(after, "IT", new BigDecimal("14"), new BigDecimal("300"))).isEqualTo(1);
         assertThat(freightRowCountForVersion(2)).isEqualTo(39);
     }
 
-    // ============================================================================================
     // Validation holds on INSERT, and a delete cannot punch a hole
-    // ============================================================================================
 
     @Test
     void ceoCannotAddAnOverlappingFreightRow() throws Exception {
@@ -265,11 +230,9 @@ class PricingFormulaConfigFreightRowIntegrationTest extends AbstractPostgresInte
         assertThat(currentConfig().version()).isEqualTo(2);
     }
 
-    /**
-     * The gap rule. Italy [12,17)mm is seeded [1,101) / [101,451) / [451,801); dropping the middle
-     * band would leave 101-451 sqm unpriceable while the orders either side still price fine --
-     * silent mis-coverage. Deleting an edge is a deliberate trim; deleting a middle band is a hole.
-     */
+    /** The gap rule. Italy [12,17)mm is seeded [1,101) / [101,451) / [451,801); dropping the middle band would
+     * leave 101-451 sqm unpriceable while the orders either side still price fine -- silent mis-coverage. Deleting
+     * an edge is a deliberate trim; deleting a middle band is a hole. */
     @Test
     void ceoCannotDeleteAMiddleQuantityBand() throws Exception {
         PricingFreightRateDto middle = currentConfig().freightRates().stream()
@@ -288,11 +251,9 @@ class PricingFormulaConfigFreightRowIntegrationTest extends AbstractPostgresInte
         assertThat(matchingBands(currentConfig(), "IT", new BigDecimal("14"), new BigDecimal("300"))).isEqualTo(1);
     }
 
-    /**
-     * Same rule one level up: emptying a MIDDLE thickness band is a hole in the thickness ladder.
-     * Italy [8,12)mm is reduced to a single row first (deleting from its edges inward, which is
-     * allowed), and the final row -- the one whose removal would empty the band -- is refused.
-     */
+    /** Same rule one level up: emptying a MIDDLE thickness band is a hole in the thickness ladder. Italy [8,12)mm
+     * is reduced to a single row first (deleting from its edges inward, which is allowed), and the final row --
+     * the one whose removal would empty the band -- is refused. */
     @Test
     void ceoCannotEmptyAMiddleThicknessBand() throws Exception {
         deleteAsCeoExpectingOk(quantityBandOf("IT", "8", "12", "801").freightRateId());
@@ -331,12 +292,9 @@ class PricingFormulaConfigFreightRowIntegrationTest extends AbstractPostgresInte
         assertThat(currentConfig().version()).isEqualTo(2);
     }
 
-    /**
-     * The whole matrix stays coherent after a real add + a real delete: for every distinct
-     * (country, thickness-band) group, a quantity that the group covers falls in EXACTLY one band.
-     * "Exactly one" catches an overlap the add might have introduced as well as a gap the delete
-     * might have opened.
-     */
+    /** The whole matrix stays coherent after a real add + a real delete: for every distinct (country,
+     * thickness-band) group, a quantity that the group covers falls in EXACTLY one band. "Exactly one" catches an
+     * overlap the add might have introduced as well as a gap the delete might have opened. */
     @Test
     void everyCoveredQuantityStillMatchesExactlyOneBandAfterAnAddAndADelete() throws Exception {
         mvc.perform(post("/api/pricing-formula-config/freight-rates")
@@ -368,9 +326,7 @@ class PricingFormulaConfigFreightRowIntegrationTest extends AbstractPostgresInte
         }
     }
 
-    // ============================================================================================
     // helpers
-    // ============================================================================================
 
     private void deleteAsCeoExpectingOk(long freightRateId) throws Exception {
         mvc.perform(delete("/api/pricing-formula-config/freight-rates/{id}", freightRateId)

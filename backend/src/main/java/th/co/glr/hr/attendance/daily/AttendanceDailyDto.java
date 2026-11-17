@@ -5,14 +5,9 @@ import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.List;
 
-/**
- * One day of one employee's attendance, as served to the UI.
- *
- * <p>snake_case over the wire to match the rest of the attendance API.
- *
- * <p><strong>§76:</strong> {@code late_minutes} / {@code early_leave_minutes} are for display only.
- * Thai Labour Protection Act §76 forbids deducting wages as a penalty for lateness or absence.
- */
+/** One day of one employee's attendance, as served to the UI. snake_case over the wire to match the rest of the
+ * attendance API. §76: late_minutes / early_leave_minutes are for display only. Thai Labour Protection Act §76
+ * forbids deducting wages as a penalty for lateness or absence. */
 public record AttendanceDailyDto(
     @JsonProperty("employee_id") long employeeId,
     @JsonProperty("employee_code") String employeeCode,

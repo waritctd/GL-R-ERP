@@ -13,14 +13,9 @@ import th.co.glr.hr.pricing.PricingFormulaConfigRequests.DutyRateRequest;
 import th.co.glr.hr.pricing.PricingFormulaConfigRequests.FreightRateRequest;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
-/**
- * Exercises PricingFormulaConfigRepository's versioned parent+children SQL against a real
- * PostgreSQL database -- Mockito cannot cover the CHECK constraints, the singleton
- * {@code is_current} partial unique index, or that a new version's INSERTs actually land as a
- * full, ordered snapshot.
- *
- * <p>BRANCH 1 scope: config storage only. This does not exercise any pricing calculation.
- */
+/** Exercises PricingFormulaConfigRepository's versioned parent+children SQL against a real PostgreSQL database
+ * -- Mockito cannot cover the CHECK constraints, the singleton is_current partial unique index, or that a new
+ * version's INSERTs actually land as a full, ordered snapshot. */
 class PricingFormulaConfigRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
     private PricingFormulaConfigRepository formulaConfigs;
 
@@ -33,8 +28,8 @@ class PricingFormulaConfigRepositoryIntegrationTest extends AbstractPostgresInte
     void findCurrent_returnsTheV109SeedCarriedForwardByV197WithAllChildren() {
         PricingFormulaConfigDto config = formulaConfigs.findCurrent().orElseThrow();
 
-        // V109 seeded version 1 (margin 20%); V197 (owner ruling 2026-10-01) published version 2
-        // as the current row with the default margin raised to 30%, copying every other value.
+        // V109 seeded version 1 (margin 20%); V197 (owner ruling 2026-10-01) published version 2 as the current row
+        // with the default margin raised to 30%, copying every other value.
         assertThat(config.version()).isEqualTo(2);
         assertThat(config.isCurrent()).isTrue();
         assertThat(config.insuranceValueFactor()).isEqualByComparingTo("1.150000");
@@ -45,8 +40,8 @@ class PricingFormulaConfigRepositoryIntegrationTest extends AbstractPostgresInte
         assertThat(config.defaultMarginPct()).isEqualByComparingTo("0.300000");
         assertThat(config.sellingPriceRoundUpTo()).isEqualByComparingTo("10.0000");
 
-        // Italy + Spain: 4 thickness bands x (4,4,3,2) qty bands = 13 rows each. China: same
-        // shape = 13 rows. 13*3 = 39.
+        // Italy + Spain: 4 thickness bands x (4,4,3,2) qty bands = 13 rows each. China: same shape = 13 rows. 13*3 =
+        // 39.
         assertThat(config.freightRates()).hasSize(39);
 
         assertThat(config.dutyRates()).hasSize(2);
@@ -76,15 +71,9 @@ class PricingFormulaConfigRepositoryIntegrationTest extends AbstractPostgresInte
         assertThat(hasFreightRow(config, "CN", "3", "8", "1")).isTrue();
     }
 
-    /**
-     * Defect 1 regression: the bands used to be seeded as CLOSED intervals (1-100, 101-450, ...),
-     * which left no row matching a fractional value exactly at a boundary -- e.g. 100.5 sqm or
-     * 7.5 mm matched nothing at all, so an ordinary fractional-sqm tile order could not be priced.
-     * V109 now seeds HALF-OPEN bands [min, max) that are contiguous (band N's max == band N+1's
-     * min), so every quantity/thickness value falls in EXACTLY one band -- asserting "exactly one"
-     * (not "at least one") catches both a gap (falls in zero bands) and an overlap (falls in more
-     * than one).
-     */
+    /** Defect 1 regression: the bands used to be seeded as CLOSED intervals (1-100, 101-450, ...), which left no
+     * row matching a fractional value exactly at a boundary -- e.g. 100.5 sqm or 7.5 mm matched nothing at all, so
+     * an ordinary fractional-sqm tile order could not be priced. */
     @Test
     void findCurrent_fractionalQuantityAndThicknessEachFallInExactlyOneContiguousBand() {
         PricingFormulaConfigDto config = formulaConfigs.findCurrent().orElseThrow();
@@ -105,8 +94,8 @@ class PricingFormulaConfigRepositoryIntegrationTest extends AbstractPostgresInte
             .count();
         assertThat(matchingFreightBands).isEqualTo(1);
 
-        // Also true of every distinct (country, thickness-band) combination for this quantity --
-        // not just China's: exactly one qty band per thickness band matches 100.5 sqm.
+        // Also true of every distinct (country, thickness-band) combination for this quantity -- not just China's:
+        // exactly one qty band per thickness band matches 100.5 sqm.
         record ThicknessBand(String country, BigDecimal min, BigDecimal max) {}
         List<ThicknessBand> thicknessBands = config.freightRates().stream()
             .map(rate -> new ThicknessBand(rate.originCountryCode(), rate.thicknessMinMm(), rate.thicknessMaxMm()))

@@ -5,17 +5,15 @@ import static org.assertj.core.api.Assertions.assertThat;
 import jakarta.servlet.http.Cookie;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.mock.web.MockFilterChain;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
 
-/**
- * Locks in the OWASP double-submit CSRF enforcement of {@link CsrfCookieFilter} (audit P0-3
- * "verify CsrfCookieFilter rejects mismatches"): safe methods pass and receive a token cookie,
- * state-changing requests are rejected unless the {@code X-XSRF-TOKEN} header matches the
- * {@code XSRF-TOKEN} cookie, and the login/punch bootstrap paths are exempt from the check.
- */
+/** Locks in the OWASP double-submit CSRF enforcement of CsrfCookieFilter: safe methods pass and receive a token
+ * cookie, state-changing requests are rejected unless the X-XSRF-TOKEN header matches the XSRF-TOKEN cookie,
+ * and the login/punch bootstrap paths are exempt from the check. */
 class CsrfCookieFilterTest {
     private static final String COOKIE = "XSRF-TOKEN";
     private static final String HEADER = "X-XSRF-TOKEN";
@@ -87,44 +85,25 @@ class CsrfCookieFilterTest {
         assertThat(response.getHeader("Set-Cookie")).as("login response bootstraps the token cookie").contains(COOKIE + "=");
     }
 
-    @Test
-    void attendancePunchPathIsExemptFromTheCheck() throws Exception {
-        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/api/attendance/punch");
+    // Columns: case name, exempt path, assertion description. The login exemption above stays separate because
+    // it also asserts the bootstrapped token cookie.
+    @ParameterizedTest(name = "{0}")
+    @CsvSource({
+        "attendancePunchPathIsExemptFromTheCheck, /api/attendance/punch,      device punch is reachable without a session token",
+        // Self-service forgot-password: same rationale as the login bootstrap exemption above - a client landing
+        // fresh on /forgot-password, or arriving via an emailed /reset-password?token=... link, has made no prior
+        // /api/** call and so holds no CSRF cookie/header pair yet either.
+        "forgotPasswordPathIsExemptFromTheCheck,  /api/auth/forgot-password,  forgot-password is reachable without a prior token",
+        "resetPasswordPathIsExemptFromTheCheck,   /api/auth/reset-password,   reset-password is reachable without a prior token",
+    })
+    void tokenlessPostToAnExemptPathReachesTheChain(String caseName, String path, String description) throws Exception {
+        MockHttpServletRequest request = new MockHttpServletRequest("POST", path);
         MockHttpServletResponse response = new MockHttpServletResponse();
         MockFilterChain chain = new MockFilterChain();
 
         filter.doFilter(request, response, chain);
 
-        assertThat(chain.getRequest()).as("device punch is reachable without a session token").isNotNull();
-    }
-
-    // Self-service forgot-password: same rationale as the login bootstrap exemption above - a
-    // client landing fresh on /forgot-password, or arriving via an emailed
-    // /reset-password?token=... link, has made no prior /api/** call and so holds no CSRF
-    // cookie/header pair yet either. See PasswordResetSecurityIntegrationTest (th.co.glr.hr.auth)
-    // for the heavier companion that proves this AND SecurityConfig's permitAll clear together
-    // through the real filter chain - this unit test isolates the CsrfCookieFilter half alone,
-    // same division of labour the login/punch tests above already establish.
-    @Test
-    void forgotPasswordPathIsExemptFromTheCheck() throws Exception {
-        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/api/auth/forgot-password");
-        MockHttpServletResponse response = new MockHttpServletResponse();
-        MockFilterChain chain = new MockFilterChain();
-
-        filter.doFilter(request, response, chain);
-
-        assertThat(chain.getRequest()).as("forgot-password is reachable without a prior token").isNotNull();
-    }
-
-    @Test
-    void resetPasswordPathIsExemptFromTheCheck() throws Exception {
-        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/api/auth/reset-password");
-        MockHttpServletResponse response = new MockHttpServletResponse();
-        MockFilterChain chain = new MockFilterChain();
-
-        filter.doFilter(request, response, chain);
-
-        assertThat(chain.getRequest()).as("reset-password is reachable without a prior token").isNotNull();
+        assertThat(chain.getRequest()).as(description).isNotNull();
     }
 
     @Test

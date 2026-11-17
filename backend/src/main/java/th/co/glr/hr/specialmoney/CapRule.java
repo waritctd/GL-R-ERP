@@ -1,11 +1,6 @@
 package th.co.glr.hr.specialmoney;
 
-/**
- * Identity of the amount-capping rule a {@link SpecialMoneyType} uses. This does not carry the
- * numbers (those live in {@code hr.special_money_policy} / {@link PolicyAmounts}) -- it is a tag
- * {@link SpecialMoneyPolicyEvaluator} switches on so that adding a new {@link SpecialMoneyType}
- * forces a deliberate choice of cap shape rather than silently falling through.
- */
+/** Identity of the amount-capping rule a SpecialMoneyType uses. */
 public enum CapRule {
     /** Flat amount, e.g. the 5,000 THB life-event aid types. */
     FIXED_AID,

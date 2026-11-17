@@ -1,102 +1,79 @@
 import { describe, expect, it } from 'vitest';
 import {
-  DEFAULT_TICKET_DETAIL_TAB_ID, resolveTicketDetailTab, TICKET_DETAIL_TABS, visibleTicketDetailTabIds,
+  DEFAULT_TICKET_DETAIL_TAB_ID, LEGACY_TICKET_DETAIL_TAB_IDS, resolveTicketDetailTab, TICKET_DETAIL_TABS,
+  visibleTicketDetailTabIds,
 } from './ticketDetailTabs.js';
 
-describe('visibleTicketDetailTabIds', () => {
-  it('sales (deal owner) sees every tab', () => {
-    expect(visibleTicketDetailTabIds('sales')).toEqual([
-      'deal', 'items', 'documents', 'money', 'fulfilment', 'history',
+// The deal page's five tabs (drawing a-deal, 2026-11-16): ภาพรวม · ใบเสนอราคา · เงิน · ส่งของ · ไฟล์.
+describe('TICKET_DETAIL_TABS', () => {
+  it('is the five drawn tabs, in the drawn order, with the drawn labels', () => {
+    expect(TICKET_DETAIL_TABS.map(({ id, label }) => [id, label])).toEqual([
+      ['overview', 'ภาพรวม'],
+      ['quote', 'ใบเสนอราคา'],
+      ['money', 'เงิน'],
+      ['ship', 'ส่งของ'],
+      ['files', 'ไฟล์'],
     ]);
   });
 
-  it('ceo and sales_manager see every tab (oversight roles — unconditional pass-through)', () => {
-    expect(visibleTicketDetailTabIds('ceo')).toEqual(visibleTicketDetailTabIds('sales'));
-    expect(visibleTicketDetailTabIds('sales_manager')).toEqual(visibleTicketDetailTabIds('sales'));
+  it('carries no English/secondary helper line (the drawn tab bar has none)', () => {
+    expect(TICKET_DETAIL_TABS.every((tab) => tab.helper == null)).toBe(true);
   });
 
-  // Slice D ("the เอกสาร document register") widens `documents` to
-  // `() => true` — account now sees the TAB (it is the intended,
-  // owner-authorised widening: account confirms money against the
-  // deposit-notice/attachment rows the register now lists) even though it
-  // still cannot reach a single quotation ROW inside it — see
-  // DealDocumentRegister's own per-row gates and
-  // TicketDetailPage.test.jsx's content-level proof.
-  it('account sees every one of the 6 tabs (documents included, since Slice D)', () => {
-    const tabs = visibleTicketDetailTabIds('account');
-    expect(tabs).toEqual(['deal', 'items', 'documents', 'money', 'fulfilment', 'history']);
-  });
-
-  // ledger_importCannotReadThePaymentLedger / depositNotice_import...Refused —
-  // import still loses money. It now sees the `documents` TAB too (Slice D's
-  // `() => true` widening), but — per the KNOWN GAP this file's own header
-  // still documents — reaches zero quotation rows inside it, and (per
-  // DepositNoticeService#requireTicketViewer) zero deposit-notice/
-  // remaining-invoice rows either; only an attachments roll-up appears, and
-  // only once import is this deal's assignee. See
-  // DealDocumentRegister.test.jsx for that content-level proof.
-  it('import loses money but now sees documents too (Slice D widening) — keeps deal/items/documents/fulfilment/history', () => {
-    const tabs = visibleTicketDetailTabIds('import');
-    expect(tabs).toEqual(['deal', 'items', 'documents', 'fulfilment', 'history']);
-  });
-
-  // deliveries_hrCannotReadDeliveries / overview_hrCannotReadTheTicket — hr
-  // never actually reaches this page (route-gated) but the function must not
-  // leak a section-gated tab to an unknown role if it somehow did. `history`
-  // and (since Slice D) `documents` join `deal`/`items` as role-unconditional
-  // tabs — hr/employee never reach this component in practice (the ticket
-  // fetch itself 403s them upstream), so this only pins that the FUNCTION
-  // itself degrades safely if it somehow were called for one.
-  it('an unknown/unreachable role (hr, employee) only gets the four ungated tabs', () => {
-    expect(visibleTicketDetailTabIds('hr')).toEqual(['deal', 'items', 'documents', 'history']);
-    expect(visibleTicketDetailTabIds('employee')).toEqual(['deal', 'items', 'documents', 'history']);
-  });
-
-  it('every tab id in the visibility list is a real TICKET_DETAIL_TABS id, in the table\'s declared order', () => {
-    const allIds = TICKET_DETAIL_TABS.map((t) => t.id);
-    for (const role of ['sales', 'ceo', 'sales_manager', 'import', 'account']) {
-      const visible = visibleTicketDetailTabIds(role);
-      expect(visible.every((id) => allIds.includes(id))).toBe(true);
-      expect(visible).toEqual(allIds.filter((id) => visible.includes(id)));
-    }
+  it('the default tab is ภาพรวม', () => {
+    expect(DEFAULT_TICKET_DETAIL_TAB_ID).toBe('overview');
   });
 });
 
-describe('TICKET_DETAIL_TABS display copy', () => {
-  it('uses concise Thai helper labels for compact tabs', () => {
-    expect(TICKET_DETAIL_TABS.map(({ helper }) => helper)).toEqual([
-      'ข้อมูลดีล',
-      'รายการและราคา',
-      // Slice D: was "เอกสารลูกค้า" (customer documents) — the tab now also
-      // rolls up the deposit notice, remaining invoice, and internal
-      // attachments (PO/other), not just customer-facing quotations.
-      'เอกสารของดีล',
-      'ยอดชำระ',
-      'นำเข้าและจัดส่ง',
-      'กิจกรรมและไฟล์แนบ',
-    ]);
+describe('visibleTicketDetailTabIds', () => {
+  it('sales, sales_manager and ceo see all five tabs', () => {
+    for (const role of ['sales', 'sales_manager', 'ceo']) {
+      expect(visibleTicketDetailTabIds(role)).toEqual(['overview', 'quote', 'money', 'ship', 'files']);
+    }
+  });
+
+  // The money and ship tabs keep the gates the old การเงิน / จัดซื้อ-ส่งมอบ tabs had (sections.payment ||
+  // sections.depositNotice, and sections.delivery); the rest were role-unconditional before and still are.
+  it('account (redirected off this page by the route) would still keep every tab', () => {
+    expect(visibleTicketDetailTabIds('account')).toEqual(['overview', 'quote', 'money', 'ship', 'files']);
+  });
+
+  it('import (redirected off this page by the route) loses เงิน, exactly as it lost การเงิน', () => {
+    expect(visibleTicketDetailTabIds('import')).toEqual(['overview', 'quote', 'ship', 'files']);
+  });
+
+  it('an unknown role only gets the ungated tabs (wrong-way-round: no money, no ship)', () => {
+    expect(visibleTicketDetailTabIds('hr')).toEqual(['overview', 'quote', 'files']);
+    expect(visibleTicketDetailTabIds('employee')).toEqual(['overview', 'quote', 'files']);
   });
 });
 
 describe('resolveTicketDetailTab', () => {
-  it('keeps a tab id the role may see', () => {
-    expect(resolveTicketDetailTab('items', 'sales')).toBe('items');
-    expect(resolveTicketDetailTab('money', 'account')).toBe('money');
-    // "history" is role-unconditional (the follow-up-feed sub-gate moved
-    // inside the tab), so account keeps it too.
-    expect(resolveTicketDetailTab('history', 'account')).toBe('history');
+  it('keeps a new tab id the role may see', () => {
+    expect(resolveTicketDetailTab('quote', 'sales')).toBe('quote');
+    expect(resolveTicketDetailTab('money', 'ceo')).toBe('money');
+    expect(resolveTicketDetailTab('files', 'sales_manager')).toBe('files');
   });
 
-  it('falls back to deal for a tab the role may NOT see', () => {
-    expect(resolveTicketDetailTab('money', 'import')).toBe(DEFAULT_TICKET_DETAIL_TAB_ID);
+  // Old ?tab= keys keep working: bookmarks, shared links and the e2e suite still carry them.
+  it.each([
+    ['deal', 'overview'],
+    ['history', 'overview'],
+    ['items', 'quote'],
+    ['documents', 'files'],
+    ['money', 'money'],
+    ['fulfilment', 'ship'],
+  ])('old key ?tab=%s lands on %s', (oldKey, newKey) => {
+    expect(LEGACY_TICKET_DETAIL_TAB_IDS[oldKey] ?? oldKey).toBe(newKey);
+    expect(resolveTicketDetailTab(oldKey, 'sales')).toBe(newKey);
   });
 
-  it('keeps "documents" for account and import too — Slice D made the tab role-unconditional', () => {
-    expect(resolveTicketDetailTab('documents', 'account')).toBe('documents');
-    expect(resolveTicketDetailTab('documents', 'import')).toBe('documents');
+  it('an old key whose new tab the role may NOT see still falls back to ภาพรวม', () => {
+    expect(resolveTicketDetailTab('money', 'import')).toBe('overview');
+    expect(resolveTicketDetailTab('fulfilment', 'hr')).toBe('overview');
   });
 
-  it('falls back to deal for an absent or unknown tab id', () => {
+  it('falls back to ภาพรวม for an absent or unknown tab id', () => {
     expect(resolveTicketDetailTab(null, 'sales')).toBe(DEFAULT_TICKET_DETAIL_TAB_ID);
     expect(resolveTicketDetailTab(undefined, 'sales')).toBe(DEFAULT_TICKET_DETAIL_TAB_ID);
     expect(resolveTicketDetailTab('not-a-real-tab', 'sales')).toBe(DEFAULT_TICKET_DETAIL_TAB_ID);

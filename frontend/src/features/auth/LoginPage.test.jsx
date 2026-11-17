@@ -8,8 +8,8 @@ import { LoginPage } from './LoginPage.jsx';
 
 globalThis.React = React;
 
-// LoginPage now calls useNavigate() (the ลืมรหัสผ่าน? link), so every render needs a Router
-// context - same MemoryRouter pattern used elsewhere in this suite (e.g. CommissionPage's tests).
+// LoginPage now calls useNavigate() (the ลืมรหัสผ่าน? link), so every render needs a Router context - same
+// MemoryRouter pattern used elsewhere in this suite (e.g. CommissionPage's tests).
 function renderLoginPage(props) {
   return render(
     <MemoryRouter initialEntries={['/login']}>
@@ -21,22 +21,14 @@ function renderLoginPage(props) {
   );
 }
 
-// The demo row only renders under VITE_USE_MOCKS — it is a mock-mode affordance, never shipped to
-// a real login. Without this stub every case below fails on a missing button rather than on the
-// behaviour it is testing.
+// The demo row only renders under VITE_USE_MOCKS — it is a mock-mode affordance, never shipped to a real
+// login. Without this stub every case below fails on a missing button rather than on the behaviour it is
+// testing.
 beforeEach(() => vi.stubEnv('VITE_USE_MOCKS', 'true'));
 afterEach(() => vi.unstubAllEnvs());
 
-// The demo quick-login row is the only way most of these personas are ever reached in mock mode,
-// so what each button SENDS is behaviour, not decoration.
-//
-// Why this file exists at all: a division manager is not a role. It is `role: 'employee'` plus
-// direct reports (permissions.js `isDivisionManager`, driven by the org chart). The mock resolves
-// `{ role }` with `db.users.find(u => u.role === r && u.active)` — the FIRST match — so
-// `{ role: 'employee' }` always lands on the plain employee and `warehouse.manager@glr.co.th`
-// was unreachable. That left the entire "ทีมของฉัน" nav group and every team-scoped self-service
-// view with no way to be opened, which is how a 238px unreachable column on the OT table survived
-// in the manager view: no persona could render it.
+// The demo quick-login row is the only way most of these personas are ever reached in mock mode, so what each
+// button SENDS is behaviour, not decoration. Why this file exists at all: a division manager is not a role.
 describe('LoginPage demo quick-login', () => {
   it('sends a role for the personas that ARE a role', () => {
     const onLogin = vi.fn();
@@ -53,8 +45,8 @@ describe('LoginPage demo quick-login', () => {
 
     fireEvent.click(screen.getByTestId('login-role-division_manager'));
 
-    // Email+password, not `{ role: 'division_manager' }` — no such role exists. This is an
-    // ordinary credential login, which is also why it behaves the same against the real backend.
+    // Email+password, not `{ role: 'division_manager' }` — no such role exists. This is an ordinary credential
+    // login, which is also why it behaves the same against the real backend.
     expect(onLogin).toHaveBeenCalledWith({
       email: 'warehouse.manager@glr.co.th',
       password: 'demo1234',
@@ -67,23 +59,16 @@ describe('LoginPage demo quick-login', () => {
 
     fireEvent.click(screen.getByTestId('login-role-division_manager'));
 
-    // Wrong-way-round on purpose: the failure mode is the manager button quietly logging in as
-    // the plain employee, which looks like a working button and shows the wrong person's data.
+    // Wrong-way-round on purpose: the failure mode is the manager button quietly logging in as the plain employee,
+    // which looks like a working button and shows the wrong person's data.
     expect(onLogin).not.toHaveBeenCalledWith({ role: 'employee' });
     expect(onLogin.mock.calls[0][0].role).toBeUndefined();
   });
 });
 
-// ── THE TYPED LOGIN, NOT THE DEMO ROW ────────────────────────────────────────
-// Case has never decided a login: EmployeeAuthRepository#findByEmail compares
-// LOWER(btrim(e.email)) = LOWER(:email). Whitespace is the half that actually failed —
-// AuthController#login is @Valid, and LoginRequest's @Email rejects a leading or trailing
-// space, so a pasted or phone-autocorrected address 400'd before the lookup ever ran.
-//
-// This is trimmed on the client as WELL as in LoginRequest's constructor because the two
-// halves ship on different clocks: merging to `main` deploys this bundle immediately, while
-// the backend runs a pinned pre-built image that changes only when someone builds and deploys
-// a new tag. Client-side trimming is what makes the fix real before that image bump.
+// THE TYPED LOGIN, NOT THE DEMO ROW ──────────────────────────────────────── Case has never decided a login:
+// EmployeeAuthRepository#findByEmail compares LOWER(btrim(e.email)) = LOWER(:email). Client-side trimming is
+// what makes the fix real before that image bump.
 describe('LoginPage credential submit', () => {
   it('trims surrounding whitespace off the email before submitting', () => {
     const onLogin = vi.fn();
@@ -95,8 +80,8 @@ describe('LoginPage credential submit', () => {
     fireEvent.change(screen.getByTestId('login-password'), { target: { value: 'pw' } });
     fireEvent.click(screen.getByTestId('login-submit'));
 
-    // Trimmed, but NOT lowercased here: the server folds case, and rewriting what the user
-    // typed would make the field disagree with the value on screen for no benefit.
+    // Trimmed, but NOT lowercased here: the server folds case, and rewriting what the user typed would make the
+    // field disagree with the value on screen for no benefit.
     expect(onLogin).toHaveBeenCalledWith({
       email: 'Suneesllim.1977@gmail.com',
       password: 'pw',
@@ -119,9 +104,9 @@ describe('LoginPage credential submit', () => {
     renderLoginPage({ onLogin: vi.fn(), loading: false, error: null });
     const input = screen.getByTestId('login-email');
 
-    // Without these a mobile keyboard capitalises the first letter and autocorrects the
-    // address — and an accepted correction is what appends the trailing space above.
-    // getAttribute, not toHaveAttribute — this project does not wire up jest-dom's matchers.
+    // Without these a mobile keyboard capitalises the first letter and autocorrects the address — and an accepted
+    // correction is what appends the trailing space above. getAttribute, not toHaveAttribute — this project does
+    // not wire up jest-dom's matchers.
     expect(input.getAttribute('autocapitalize')).toBe('none');
     expect(input.getAttribute('autocorrect')).toBe('off');
     expect(input.getAttribute('spellcheck')).toBe('false');
@@ -144,15 +129,9 @@ describe('LoginPage forgot-password link', () => {
     expect(screen.getByText('forgot-password-page')).not.toBeNull();
   });
 
-  // Regression guard: the link used to be nested INSIDE the password <label>, which is invalid
-  // HTML (an interactive element inside a label) and, measured with dom-accessibility-api, gave
-  // the input the accessible name "รหัสผ่าน ลืมรหัสผ่าน?" instead of just "รหัสผ่าน" - the label's
-  // implicit text-content association swept up the link's own text too. getByLabelText resolves
-  // an element strictly by its OWN accessible name matching the query, so it only finds the
-  // password input here if that name is exactly "รหัสผ่าน" with nothing appended - a return of the
-  // bug (moving the link back inside the label, or reintroducing the label-wraps-button shape some
-  // other way) makes this throw "Unable to find a label with the text of: รหัสผ่าน" instead of
-  // silently passing.
+  // Regression guard: the link used to be nested INSIDE the password <label>, which is invalid HTML and,
+  // measured with dom-accessibility-api, gave the input the accessible name "รหัสผ่าน ลืมรหัสผ่าน?" instead of
+  // just "รหัสผ่าน".
   it('does not pollute the password field\'s accessible name with the link text', () => {
     renderLoginPage({ onLogin: vi.fn(), loading: false, error: null });
 
@@ -165,8 +144,8 @@ describe('LoginPage forgot-password link', () => {
 
     const label = screen.getByText('รหัสผ่าน');
     expect(label.tagName).toBe('LABEL');
-    // The link must not be inside the <label> element at all - nesting an interactive control
-    // inside a <label> is invalid HTML and is exactly what caused the accessible-name bug above.
+    // The link must not be inside the <label> element at all - nesting an interactive control inside a <label> is
+    // invalid HTML and is exactly what caused the accessible-name bug above.
     expect(label.contains(screen.getByTestId('login-forgot-password'))).toBe(false);
   });
 });

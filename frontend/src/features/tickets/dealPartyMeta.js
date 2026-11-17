@@ -25,7 +25,7 @@ const STATUS_META = {
   QUOTED: { label: 'เสนอราคาแล้ว', tone: 'neutral' },
   NEGOTIATING: { label: 'กำลังต่อรอง', tone: 'warning' },
   AWARDED: { label: 'ได้งาน', tone: 'success' },
-  AWARDED_SPLIT: { label: 'ได้งาน · แยกดีล', tone: 'success' },
+  AWARDED_SPLIT: { label: 'ได้งาน · แยกงาน', tone: 'success' },
   NOT_AWARDED: { label: 'ไม่ได้งาน', tone: 'neutral' },
   WITHDRAWN: { label: 'ถอนตัว', tone: 'neutral' },
 };

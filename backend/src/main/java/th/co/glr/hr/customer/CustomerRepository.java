@@ -88,17 +88,9 @@ public class CustomerRepository {
         return new CustomerDto(id, name, taxId, address, branch, phone);
     }
 
-    /**
-     * PATCH-shaped update (owner feedback F7, 2026-09-10): only the fields the caller actually
-     * sent are written — a {@code null} argument means "leave this column alone", which is what
-     * {@code COALESCE(:x, column)} expresses in one statement without a read-modify-write race.
-     * A non-null BLANK is a real value and DOES overwrite (that is how a rep clears a wrong tax id
-     * or phone); {@code name} and {@code branch} are {@code NOT NULL} in V16's DDL, so
-     * {@code CustomerController} rejects a blank for those two before reaching this method.
-     *
-     * <p>Returns {@link Optional#empty()} when no row matched, so the controller can answer 404
-     * rather than a silent 200 on a customer id that does not exist.
-     */
+    /** PATCH-shaped update (owner feedback F7, 2026-09-10): only the fields the caller actually sent are written —
+     * a null argument means "leave this column alone", which is what COALESCE(:x, column) expresses in one
+     * statement without a read-modify-write race. */
     public Optional<CustomerDto> update(long id, String name, String taxId, String address,
                                         String branch, String phone) {
         int updated = jdbc.update("""

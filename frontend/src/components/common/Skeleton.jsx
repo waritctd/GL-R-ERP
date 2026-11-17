@@ -1,12 +1,6 @@
 import React from 'react';
 
-/**
- * Layout-preserving loading placeholders. Purely decorative — always
- * `aria-hidden`. The caller is responsible for labeling the surrounding
- * container (e.g. `<div aria-busy="true" aria-label="กำลังโหลดข้อมูลพนักงาน">`)
- * so assistive tech announces the loading state; the shimmer blocks
- * themselves carry no semantics.
- */
+/** Layout-preserving loading placeholders. Purely decorative — always `aria-hidden`. */
 export function Skeleton({ width = '100%', height = 16, radius = 'var(--radius-md)', className = '' }) {
   return (
     <span
