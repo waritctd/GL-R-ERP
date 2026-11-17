@@ -1658,7 +1658,7 @@ describe('buildQuotationChecklist', () => {
   it('slice 2: no deal picked yet blocks with "ต้องเลือกดีล…" and skips the new-deal customer/project checks', () => {
     const entries = meta.buildQuotationChecklist({ ...complete, isInlineCreate: true, customer: null, needsDeal: true });
     expect(entries.map((e) => [e.check, e.blocking])).toEqual([['deal', true]]);
-    expect(entries[0].message).toBe('ต้องเลือกดีลก่อนบันทึกร่าง');
+    expect(entries[0].message).toBe('ต้องเลือกงานก่อนบันทึกร่าง');
     expect(entries[0].targetId).toBe('deal-picker');
   });
 
@@ -1680,7 +1680,7 @@ describe('buildQuotationChecklist', () => {
     expect(meta.buildQuotationChecklist({ ...complete, liveDirectQuotation: live })).toEqual([expect.objectContaining({
       check: 'liveDirectQuotation',
       blocking: true,
-      message: 'ดีลนี้มีใบเสนอราคาที่ใช้งานอยู่ (QT-2026-0077-1) — แก้ไขฉบับนั้น หรือสร้างฉบับแก้ไขแทนการออกเลขใหม่',
+      message: 'งานนี้มีใบเสนอราคาที่ใช้งานอยู่ (QT-2026-0077-1) — แก้ไขฉบับนั้น หรือสร้างฉบับแก้ไขแทนการออกเลขใหม่',
     })]);
     expect(meta.buildQuotationChecklist({ ...complete, liveDirectQuotation: { ...live, docStatus: 'CANCELLED' } })).toEqual([]);
   });
@@ -1741,9 +1741,9 @@ describe('buildQuotationChecklist', () => {
     expect(blocks(ownerDraft, 'BUYER')).toBe(true);
 
     expect(messages([row(79, 'APPROVED', 'DESIGNER'), ownerPending], 'BUYER'))
-      .toEqual(['ดีลนี้มีใบเสนอราคาที่ใช้งานอยู่ (QT-2026-0078-1) — แก้ไขฉบับนั้น หรือสร้างฉบับแก้ไขแทนการออกเลขใหม่']);
+      .toEqual(['งานนี้มีใบเสนอราคาที่ใช้งานอยู่ (QT-2026-0078-1) — แก้ไขฉบับนั้น หรือสร้างฉบับแก้ไขแทนการออกเลขใหม่']);
     // Two blockers: the newest (highest id) is named, whatever the list order.
-    const newestNamed = ['ดีลนี้มีใบเสนอราคาที่ใช้งานอยู่ (QT-2026-0081-1) — แก้ไขฉบับนั้น หรือสร้างฉบับแก้ไขแทนการออกเลขใหม่'];
+    const newestNamed = ['งานนี้มีใบเสนอราคาที่ใช้งานอยู่ (QT-2026-0081-1) — แก้ไขฉบับนั้น หรือสร้างฉบับแก้ไขแทนการออกเลขใหม่'];
     expect(messages([row(81, 'DRAFT', 'OWNER'), row(79, 'PENDING_APPROVAL', 'DESIGNER')], 'BUYER')).toEqual(newestNamed);
     expect(messages([row(79, 'PENDING_APPROVAL', 'DESIGNER'), row(81, 'DRAFT', 'OWNER')], 'BUYER')).toEqual(newestNamed);
     expect(messages([approvedDesigner], 'BUYER')).toEqual([]);
@@ -1769,14 +1769,14 @@ describe('buildQuotationChecklist', () => {
     expect(meta.hasLivePricingRequest([pr('DRAFT')], '18')).toBe(true);
     expect(meta.hasLivePricingRequest(null, 18)).toBe(false);
     expect(meta.LIVE_PRICING_REQUEST_BLOCK_MESSAGE)
-      .toBe('ดีลนี้มีคำขอราคาที่ยังดำเนินการอยู่ — ใช้ใบเสนอราคาจากคำขอราคา หรือยกเลิกคำขอราคาก่อน');
+      .toBe('งานนี้มีคำขอราคาที่ยังดำเนินการอยู่ — ใช้ใบเสนอราคาจากคำขอราคา หรือยกเลิกคำขอราคาก่อน');
   });
 
   it('the checklist blocks a NEW quotation on a deal with a live pricing request, with that sentence', () => {
     expect(meta.buildQuotationChecklist({ ...complete, livePricingRequest: true })).toEqual([expect.objectContaining({
       check: 'livePricingRequest',
       blocking: true,
-      message: 'ดีลนี้มีคำขอราคาที่ยังดำเนินการอยู่ — ใช้ใบเสนอราคาจากคำขอราคา หรือยกเลิกคำขอราคาก่อน',
+      message: 'งานนี้มีคำขอราคาที่ยังดำเนินการอยู่ — ใช้ใบเสนอราคาจากคำขอราคา หรือยกเลิกคำขอราคาก่อน',
     })]);
     expect(meta.buildQuotationChecklist({ ...complete, livePricingRequest: false })).toEqual([]);
   });
@@ -1786,7 +1786,7 @@ describe('buildQuotationChecklist', () => {
   // find out from the 409. The caller (the editor) passes the sentence ONLY for a NEW or CHANGED recipient: an
   // unchanged stored recipient on a legacy draft still saves (the server only refuses a change), so it passes none.
   it('the checklist blocks the save with the route sentence when an off-route party is chosen', () => {
-    const sentence = 'ดีลนี้เป็นเจ้าของติดต่อโดยตรง — ขั้นที่ 4 ไม่อยู่ในเส้นทางของดีลนี้ — แก้ช่องทางดีลก่อน';
+    const sentence = 'ช่องทางรับงานของงานนี้คือเจ้าของติดต่อโดยตรง — ขั้นที่ 4 ไม่อยู่ในเส้นทางนี้ — แก้ช่องทางรับงานก่อน';
     const entries = meta.buildQuotationChecklist({ ...complete, recipientRequired: true, recipientType: 'DESIGNER',
       offRouteRecipientMessage: sentence });
     expect(entries).toEqual([expect.objectContaining({ message: sentence, blocking: true })]);
@@ -1872,7 +1872,7 @@ describe('buildQuotationChecklist', () => {
 
   it('on a deal with no โครงการ only WARNS — the quotation service does not refuse it, and it is not editable here', () => {
     const entries = meta.buildQuotationChecklist({ ...complete, projectName: null });
-    expect(entries).toEqual([{ check: 'dealProject', message: 'ดีลนี้ยังไม่มีโครงการ (แก้ได้ที่หน้ารายละเอียดดีล)', targetId: null, blocking: false, submitBlocking: false }]);
+    expect(entries).toEqual([{ check: 'dealProject', message: 'งานนี้ยังไม่มีโครงการ (แก้ได้ที่หน้ารายละเอียดงาน)', targetId: null, blocking: false, submitBlocking: false }]);
   });
 
   it('BLOCKS on an incomplete row and targets its FIRST missing field', () => {
@@ -2087,7 +2087,7 @@ describe('acceptOutcomeConfirmCopy', () => {
   it('DESIGNER and OWNER keep the skip-the-later-parties copy', () => {
     expect(meta.acceptOutcomeConfirmCopy('DESIGNER')).toEqual({
       title: 'ยืนยันว่าลูกค้ายอมรับใบเสนอราคานี้',
-      message: 'ใบเสนอราคานี้ส่งถึงผู้ออกแบบ ถ้าลูกค้ายอมรับ ดีลจะใช้ใบนี้ยืนยันคำสั่งซื้อและข้ามผู้รับรายถัดไป',
+      message: 'ใบเสนอราคานี้ส่งถึงผู้ออกแบบ ถ้าลูกค้ายอมรับ งานจะใช้ใบนี้ยืนยันคำสั่งซื้อและข้ามผู้รับรายถัดไป',
     });
     expect(meta.acceptOutcomeConfirmCopy('OWNER').message).toContain('เจ้าของโครงการ');
   });
@@ -2106,12 +2106,12 @@ describe('acceptOutcomeConfirmCopy', () => {
 describe('CONFIRM_ORDER_FROM_QUOTATION_COPY.lead', () => {
   it('names the quotation number when there is one', () => {
     expect(meta.CONFIRM_ORDER_FROM_QUOTATION_COPY.lead('QT-2026-0101-1'))
-      .toBe('ระบบจะนำดีลของใบเสนอราคา QT-2026-0101-1 เข้าสู่ขั้นตอนการขาย ที่ขั้น');
+      .toBe('ระบบจะนำงานของใบเสนอราคา QT-2026-0101-1 เข้าสู่ขั้นตอนการขาย ที่ขั้น');
   });
 
   it.each([undefined, null, ''])('falls back to ใบเสนอราคานี้ with no stray double space when the number is %j', (number) => {
     const lead = meta.CONFIRM_ORDER_FROM_QUOTATION_COPY.lead(number);
-    expect(lead).toBe('ระบบจะนำดีลของใบเสนอราคานี้ เข้าสู่ขั้นตอนการขาย ที่ขั้น');
+    expect(lead).toBe('ระบบจะนำงานของใบเสนอราคานี้ เข้าสู่ขั้นตอนการขาย ที่ขั้น');
     expect(lead).not.toMatch(/\s{2,}/);
   });
 });

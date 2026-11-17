@@ -114,6 +114,19 @@ describe('2026-11-16 audiences (unlocked, as the test env runs)', () => {
     expect(idsFor(user('import'))).toEqual(['address', 'import-home', 'fulfilment', 'import-deal', 'pricing-request']);
   });
 
+  // Fix round 1 of the ดีล → งาน sweep (owner ruling): staff following the notice must find the labels it names, so
+  // the two entries about ภาพรวมทีมขาย quote today's labels, and those labels are on that screen.
+  it('the ภาพรวมทีมขาย entries name today\'s labels, not the old ดีล ones', () => {
+    const teamOverviewSrc = readFileSync(resolve(process.cwd(), 'src/features/salesBoard/TeamOverview.jsx'), 'utf8');
+    const text = (id) => JSON.stringify(release.entries.find((entry) => entry.id === id));
+    for (const id of ['team-overview', 'ceo-home']) expect(text(id), id).not.toContain('ดีล');
+    for (const label of ['งานที่ถืออยู่', 'งานเงียบเกิน', 'งานที่ควรโทรตาม', 'งานเงียบ']) {
+      expect(text('team-overview'), label).toContain(label);
+      expect(teamOverviewSrc, label).toContain(label);
+    }
+    expect(text('ceo-home')).toContain('งานที่ควรโทรตาม');
+  });
+
   it('every step of the published release keeps its screenshot', () => {
     for (const entry of release.entries) {
       entry.steps.forEach((step, index) => expect(step.image, `${entry.id} step ${index + 1}`).toBe(

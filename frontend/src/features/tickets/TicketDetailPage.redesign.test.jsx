@@ -922,8 +922,8 @@ describe('fix round 1', () => {
     fireEvent.click(await screen.findByRole('button', { name: /ดูขั้นตอนทั้งหมด/ }));
     const panel = screen.getByTestId('deal-stage-panel');
     await waitFor(() => expect(panel.textContent).toContain('ไม่อยู่ในเส้นทาง'));
-    // The entry-channel names ("เจ้าของติดต่อโดยตรง", "ผู้ออกแบบนำดีล") are the app-wide enum labels — allowed.
-    const text = panel.textContent.split('ผู้ออกแบบนำดีล').join('·');
+    // The entry-channel names are งาน too since 2026-11-17 ("ผู้ออกแบบนำงานมา"): nothing is allowed.
+    const text = panel.textContent;
     expect([...text.matchAll(/ดีล/g)].map((m) => text.slice(Math.max(0, m.index - 20), m.index + 20))).toEqual([]);
   });
 });
@@ -942,10 +942,8 @@ describe('ไฟล์ tab', () => {
 
 describe('wording: งาน, not ดีล', () => {
   // Deal DATA (names, codes) and the dialogs (redesigned in a later task) are allowed; this page's own labels are not.
-  // One enum display label is allowed too: the entry channel's name "ผู้ออกแบบนำดีล" (format.js entryChannelLabel,
-  // DealRoute's DESIGNER_LED) is the app-wide name of a route, shown on the list, the create dialog and here alike —
-  // renaming it is not this page's call.
-  const ALLOWED = ['ผู้ออกแบบนำดีล'];
+  // No enum label is allowed any more: the entry channel's name is "ผู้ออกแบบนำงานมา" since 2026-11-17.
+  const ALLOWED = [];
   function visibleText() {
     const clone = document.body.cloneNode(true);
     clone.querySelectorAll('[role="dialog"], [data-testid="location-probe"]').forEach((node) => node.remove());

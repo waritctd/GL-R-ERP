@@ -35,7 +35,7 @@ export function ProjectNamePrintToggle({ id, checked, onChange }) {
       <span className="text-xs">
         ไม่แสดงชื่อโครงการในใบเสนอราคา
         <span className="mt-0.5 block text-2xs text-text-muted">
-          ชื่อโครงการยังอยู่ในดีล แต่จะไม่พิมพ์ลงเอกสารที่ส่งให้ลูกค้า
+          ชื่อโครงการยังบันทึกไว้ในงาน แต่จะไม่พิมพ์ลงเอกสารที่ส่งให้ลูกค้า
         </span>
       </span>
     </label>

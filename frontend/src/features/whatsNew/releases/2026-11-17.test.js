@@ -571,7 +571,7 @@ describe('2026-11-17 wording matches the screens', () => {
     }
     // The quotation list's view switch.
     for (const id of ['quotation-list', 'quotation-list-approver', 'quotation-list-view']) {
-      expect(quotedLabels(byId(id)), id).toEqual(expect.arrayContaining(['มุมมอง', 'จัดกลุ่มตามดีล', 'วันที่อนุมัติ']));
+      expect(quotedLabels(byId(id)), id).toEqual(expect.arrayContaining(['มุมมอง', 'จัดกลุ่มตามงาน', 'วันที่อนุมัติ']));
     }
   });
 
@@ -684,7 +684,12 @@ describe('2026-11-17 wording matches the screens', () => {
     // A remembered view is per browser (localStorage), not "the system".
     for (const entry of release.entries) for (const text of allText(entry)) expect(text, entry.id).not.toContain('ระบบจำ');
     expect(stepText('all-deals', 4)).toContain('เบราว์เซอร์นี้');
-    // ดีล → งาน is true on the board and the deal page, not on the quotation list ("จัดกลุ่มตามดีล", "เปิดดีล").
+    // ดีล → งาน holds on every sales screen since the 2026-11-17 sweep: no on-screen label in this notice says ดีล, and
+    // the deal page is หน้ารายละเอียดงาน (หน้างาน is the job SITE).
+    for (const entry of release.entries) {
+      for (const label of quotedLabels(entry)) expect(label, entry.id).not.toContain('ดีล');
+      for (const text of allText(entry)) expect(text, entry.id).not.toMatch(/หน้างาน(?!ทั้งหมด|การเงิน|ของฉัน)/);
+    }
     for (const entry of release.entries) {
       for (const text of allText(entry)) {
         expect(text, entry.id).not.toContain('หน้าจอฝ่ายขายเรียก');
@@ -892,7 +897,7 @@ describe('2026-11-17 lifecycle dialogs and document chain (17d)', () => {
     expect(quotedLabels(byId('deal-lifecycle'))).toEqual(expect.arrayContaining(['ควรตามต่อ', 'งานของฉัน']));
     // The team: first in ดีลที่ควรโทรตาม on ภาพรวมทีมขาย, counted in ดีลเงียบ (TeamOverview).
     expect(teamOverviewSrc).toContain('งานที่ถึงวันกลับมาดูขึ้นก่อน');
-    expect(quotedLabels(byId('deal-lifecycle-team'))).toEqual(expect.arrayContaining(['ภาพรวมทีมขาย', 'ดีลที่ควรโทรตาม', 'ดีลเงียบ']));
+    expect(quotedLabels(byId('deal-lifecycle-team'))).toEqual(expect.arrayContaining(['ภาพรวมทีมขาย', 'งานที่ควรโทรตาม', 'งานเงียบ']));
   });
 
   it('the lost and cancel reasons are the ones the dialogs offer today', () => {

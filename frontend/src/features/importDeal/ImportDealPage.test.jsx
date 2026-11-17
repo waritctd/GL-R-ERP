@@ -277,7 +277,7 @@ describe('ImportDealPage', () => {
     api.importDeals.get.mockRejectedValue(Object.assign(new Error('ไม่มีสิทธิ์เข้าถึงรายการนี้'), { status: 403 }));
     renderPage();
     expect(await screen.findByTestId('import-deal-forbidden')).not.toBeNull();
-    expect(screen.getByText(/ไม่อยู่ในขอบเขตงานนำเข้า/)).not.toBeNull();
+    expect(screen.getByText(/งานนี้ไม่อยู่ในขอบเขตของฝ่ายนำเข้า/)).not.toBeNull();
     expect(screen.queryByTestId('import-deal-items')).toBeNull();
     expect(api.attachments.list).not.toHaveBeenCalled();
   });
@@ -298,7 +298,7 @@ describe('ImportDealPage', () => {
   it('shows a busy skeleton while loading', () => {
     api.importDeals.get.mockReturnValue(new Promise(() => {}));
     renderPage();
-    expect(screen.getByLabelText('กำลังโหลดดีล')).not.toBeNull();
+    expect(screen.getByLabelText('กำลังโหลดงาน')).not.toBeNull();
   });
 
   it('says so when the deal has no per-factory ใบขอซื้อ yet', async () => {
@@ -319,7 +319,7 @@ describe('ImportDealPage', () => {
       const { invalidateSpy, showToast } = renderPage();
 
       const card = await screen.findByTestId('import-deal-legacy-action');
-      expect(card.textContent).toContain('ดำเนินการนำเข้า (ดีลรูปแบบเดิม)');
+      expect(card.textContent).toContain('ดำเนินการนำเข้า (งานรูปแบบเดิม)');
       fireEvent.click(within(card).getByRole('button', { name: 'บันทึกออกเดินทาง' }));
 
       await waitFor(() => expect(api.tickets.markShipping).toHaveBeenCalledWith('1'));

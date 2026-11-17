@@ -16,7 +16,7 @@ const STATUS_TONE = { DRAFT: 'info', ISSUED: 'success', SUPERSEDED: 'neutral' };
 // Both sentences hold whatever else is true of the deal, so neither needs the deal's state: a row
 // gets its import step at issue, and the server refuses the deal-level chain from the first ISSUED
 // row on (TicketRepository#hasLiveImportRequests).
-// `noun`: the deal page says งาน (owner ruling 2026-11-16, that page only); import's own page keeps ดีล.
+// `noun`: งาน everywhere since 2026-11-17 (owner ruling: sales screens say งาน, not ดีล).
 const firstDraftHint = (noun) => `ยังเป็นร่าง — ยังไม่มีขั้นนำเข้าให้เลื่อน เมื่อฝ่ายขายเจ้าของ${noun}หรือ CEO ออกเลขแล้ว จะติดตามการนำเข้ารายโรงงาน (S12–S17) แทนการเลื่อนสถานะทั้ง${noun}`;
 // revise() leaves the ISSUED predecessor live until this draft is issued; issue() then supersedes
 // it, carries its step forward and resets the order e-mail to unsent (ImportRequestRepository#issue).
@@ -56,8 +56,8 @@ function downloadBlob(blob, filename) {
 export function ImportRequestFactoryCard({
   row, ticketId, canFullWrite, canFooterWrite, canSetLeadTime, canEmailWrite, showToast,
   showInlineDownload = false, showOrderEmail = false,
-  // Deal page only (redesign 2026-11-16): its own noun, and the "ดูอย่างเดียว" chip on a card this viewer cannot edit.
-  dealNoun = 'ดีล', showReadOnlyChip = false,
+  // Deal page only (redesign 2026-11-16): the "ดูอย่างเดียว" chip on a card this viewer cannot edit.
+  dealNoun = 'งาน', showReadOnlyChip = false,
 }) {
   const queryClient = useQueryClient();
   const [leadTimeDraft, setLeadTimeDraft] = useState({ min: row.leadTimeMinDays ?? '', max: row.leadTimeMaxDays ?? '' });

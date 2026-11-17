@@ -376,7 +376,7 @@ describe('CeoSettingsPage', () => {
     it('renders the section with version/effective date and displays multipliers RAW (not scaled) alongside percent fields scaled', async () => {
       renderCeoSettingsPage();
 
-      const heading = await screen.findByText('สูตรคำนวณราคาขาย (ดีล)');
+      const heading = await screen.findByText('สูตรคำนวณราคาขายของงาน');
       // Scoped to this new section -- "เวอร์ชัน 1" / "20.00%"-shaped text also appears in the pre-existing
       // price-calc-config table above it, on the same page.
       const section = within(heading.closest('section'));
@@ -402,7 +402,7 @@ describe('CeoSettingsPage', () => {
     it('opens the formula editor as a real dialog with multiplier defaults unscaled and percent defaults scaled', async () => {
       renderCeoSettingsPage();
 
-      await screen.findByText('สูตรคำนวณราคาขาย (ดีล)');
+      await screen.findByText('สูตรคำนวณราคาขายของงาน');
       fireEvent.click(screen.getByRole('button', { name: 'แก้ไขสูตรคำนวณราคาขาย' }));
 
       const dialog = await screen.findByRole('dialog');
@@ -419,7 +419,7 @@ describe('CeoSettingsPage', () => {
     it('rejects a blank multiplier field inline and never calls pricingFormulaConfig.update', async () => {
       renderCeoSettingsPage();
 
-      await screen.findByText('สูตรคำนวณราคาขาย (ดีล)');
+      await screen.findByText('สูตรคำนวณราคาขายของงาน');
       fireEvent.click(screen.getByRole('button', { name: 'แก้ไขสูตรคำนวณราคาขาย' }));
       await screen.findByRole('dialog');
 
@@ -435,7 +435,7 @@ describe('CeoSettingsPage', () => {
     it('saves with the exact payload, including the multiplier passthrough and the percent round-trip', async () => {
       renderCeoSettingsPage();
 
-      await screen.findByText('สูตรคำนวณราคาขาย (ดีล)');
+      await screen.findByText('สูตรคำนวณราคาขายของงาน');
       fireEvent.click(screen.getByRole('button', { name: 'แก้ไขสูตรคำนวณราคาขาย' }));
       await screen.findByRole('dialog');
 
@@ -471,7 +471,7 @@ describe('CeoSettingsPage', () => {
       api.pricingFormulaConfig.get.mockResolvedValue({ formulaConfig: sampleFormulaConfigWithBlankCell() });
       renderCeoSettingsPage();
 
-      await screen.findByText('สูตรคำนวณราคาขาย (ดีล)');
+      await screen.findByText('สูตรคำนวณราคาขายของงาน');
       const addCellButton = await screen.findByRole(
         'button',
         { name: 'เพิ่มค่าขนส่ง จีน หนา 7 – <12 มม. ช่วง ≥100 ตร.ม.' },
@@ -490,7 +490,7 @@ describe('CeoSettingsPage', () => {
 
     it('submits with the right types, sending qtyMaxSqm: null when the field is left blank', async () => {
       renderCeoSettingsPage();
-      await screen.findByText('สูตรคำนวณราคาขาย (ดีล)');
+      await screen.findByText('สูตรคำนวณราคาขายของงาน');
 
       fireEvent.click(screen.getByRole('button', { name: '+ เพิ่มค่าขนส่ง' }));
       const dialog = await screen.findByRole('dialog', { name: 'เพิ่มค่าขนส่ง' });
@@ -515,7 +515,7 @@ describe('CeoSettingsPage', () => {
 
     it('rejects a blank required field inline and never calls addFreightRate', async () => {
       renderCeoSettingsPage();
-      await screen.findByText('สูตรคำนวณราคาขาย (ดีล)');
+      await screen.findByText('สูตรคำนวณราคาขายของงาน');
 
       fireEvent.click(screen.getByRole('button', { name: '+ เพิ่มค่าขนส่ง' }));
       const dialog = await screen.findByRole('dialog', { name: 'เพิ่มค่าขนส่ง' });
@@ -531,7 +531,7 @@ describe('CeoSettingsPage', () => {
         new Error('ช่วงความหนาและช่วงจำนวน (ตร.ม.) ซ้อนทับกัน: China หนา 3-7 มม. (1-100 ตร.ม.) กับ 3-7 มม. (1-100 ตร.ม.)'),
       );
       renderCeoSettingsPage(showToast);
-      await screen.findByText('สูตรคำนวณราคาขาย (ดีล)');
+      await screen.findByText('สูตรคำนวณราคาขายของงาน');
 
       fireEvent.click(screen.getByRole('button', { name: '+ เพิ่มค่าขนส่ง' }));
       const dialog = await screen.findByRole('dialog', { name: 'เพิ่มค่าขนส่ง' });
@@ -556,7 +556,7 @@ describe('CeoSettingsPage', () => {
 
     it('renders a delete control on a populated cell; clicking it opens a confirmation naming that row', async () => {
       renderCeoSettingsPage();
-      await screen.findByText('สูตรคำนวณราคาขาย (ดีล)');
+      await screen.findByText('สูตรคำนวณราคาขายของงาน');
 
       const dialog = await openDeleteConfirm();
       expect(within(dialog).getByText(/จีน/)).not.toBeNull();
@@ -565,7 +565,7 @@ describe('CeoSettingsPage', () => {
 
     it("confirming calls deleteFreightRate with that row's freightRateId exactly once", async () => {
       renderCeoSettingsPage();
-      await screen.findByText('สูตรคำนวณราคาขาย (ดีล)');
+      await screen.findByText('สูตรคำนวณราคาขายของงาน');
 
       const dialog = await openDeleteConfirm();
       fireEvent.click(within(dialog).getByRole('button', { name: 'ลบค่าขนส่ง' }));
@@ -576,7 +576,7 @@ describe('CeoSettingsPage', () => {
 
     it('cancelling the confirmation calls nothing', async () => {
       renderCeoSettingsPage();
-      await screen.findByText('สูตรคำนวณราคาขาย (ดีล)');
+      await screen.findByText('สูตรคำนวณราคาขายของงาน');
 
       const dialog = await openDeleteConfirm();
       fireEvent.click(within(dialog).getByRole('button', { name: 'ยกเลิก' }));
@@ -591,7 +591,7 @@ describe('CeoSettingsPage', () => {
         'ลบไม่ได้: จะทำให้ช่วงจำนวน (ตร.ม.) ขาดตอนตรงกลาง — China หนา 3-7 มม. ช่วง 1-100 ตร.ม. ลบได้เฉพาะช่วงบนสุดหรือล่างสุด',
       ));
       renderCeoSettingsPage(showToast);
-      await screen.findByText('สูตรคำนวณราคาขาย (ดีล)');
+      await screen.findByText('สูตรคำนวณราคาขายของงาน');
 
       const dialog = await openDeleteConfirm();
       fireEvent.click(within(dialog).getByRole('button', { name: 'ลบค่าขนส่ง' }));

@@ -32,7 +32,7 @@ export function FollowUpList({
     return (
       <div className="flex items-center gap-3 px-5 py-4 text-text-muted mobile:px-3.5">
         <Icon name="check" size={18} />
-        <span className="text-sm font-bold">ไม่มีดีลค้าง — ทุกดีลมีความเคลื่อนไหวใน {quietDays} วันที่ผ่านมา</span>
+        <span className="text-sm font-bold">ไม่มีงานค้าง — ทุกงานมีความเคลื่อนไหวใน {quietDays} วันที่ผ่านมา</span>
       </div>
     );
   }

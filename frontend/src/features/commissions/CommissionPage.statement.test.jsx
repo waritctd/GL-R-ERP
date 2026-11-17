@@ -569,7 +569,7 @@ describe('rep receipt ledger — why a receipt is weighted, and the rounding cav
   it('an item-derived weight (effectiveWeightMultiplier non-null) is explained as stock-weighted, import lines at ×1', async () => {
     await openAugust();
     const chain = await expand(503);
-    expect(text(chain)).toContain('น้ำหนักถ่วงจากรายการสต็อกของดีล (ของสั่งคิด ×1)');
+    expect(text(chain)).toContain('น้ำหนักถ่วงจากรายการสต็อกของงาน (ของสั่งคิด ×1)');
     expect(text(chain)).not.toContain('น้ำหนักที่ผู้จัดการกำหนด');
   });
 
@@ -577,13 +577,13 @@ describe('rep receipt ledger — why a receipt is weighted, and the rounding cav
     await openAugust();
     const chain = await expand(504);
     expect(text(chain)).toContain('น้ำหนักที่ผู้จัดการกำหนด');
-    expect(text(chain)).not.toContain('น้ำหนักถ่วงจากรายการสต็อกของดีล');
+    expect(text(chain)).not.toContain('น้ำหนักถ่วงจากรายการสต็อกของงาน');
   });
 
   it('a weight-1 receipt carries no weight explanation at all', async () => {
     await openAugust();
     const chain = await expand(501);
-    expect(text(chain)).not.toContain('น้ำหนักถ่วงจากรายการสต็อกของดีล');
+    expect(text(chain)).not.toContain('น้ำหนักถ่วงจากรายการสต็อกของงาน');
     expect(text(chain)).not.toContain('น้ำหนักที่ผู้จัดการกำหนด');
   });
 

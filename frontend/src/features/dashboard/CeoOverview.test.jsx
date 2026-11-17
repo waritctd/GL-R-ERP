@@ -219,7 +219,7 @@ describe('CeoOverview', () => {
       mv(803, 22, 'สมหญิง ขายเก่ง'),
       mv(804, 22, 'สมหญิง ขายเก่ง'),
       mv(805, 22, 'สมหญิง ขายเก่ง', { activityInRange: true }),
-      mv(806, 23, 'ไม่มีดีลเปิด', { lifecycle: 'CLOSED_LOST' }),
+      mv(806, 23, 'ไม่มีงานเปิด', { lifecycle: 'CLOSED_LOST' }),
       mv(807, 21, 'สมชาย ขายดี', { lifecycle: 'ON_HOLD', stageChangedInRange: true, activityInRange: true }),
     ];
 
@@ -233,7 +233,7 @@ describe('CeoOverview', () => {
       await within(panel).findByTestId('team-row-22');
       const ids = [...panel.querySelectorAll('[data-testid^="team-row-"]')].map((el) => el.dataset.testid);
       expect(ids).toEqual(['team-row-22', 'team-row-21']); // สมหญิง has 2 silent, สมชาย 1; 23 has no open deal
-      for (const h of ['ผู้ดูแล', 'ดีลที่เปิดอยู่', 'ขยับขั้น', 'มีกิจกรรม', 'เลยนัด', 'ไม่เคลื่อนไหว', 'ยอดที่สั่งซื้อแล้ว', 'ยอดคาดหวัง']) {
+      for (const h of ['ผู้ดูแล', 'งานที่เปิดอยู่', 'ขยับขั้น', 'มีกิจกรรม', 'เลยนัด', 'ไม่เคลื่อนไหว', 'ยอดที่สั่งซื้อแล้ว', 'ยอดคาดหวัง']) {
         expect(panel.textContent).toContain(h);
       }
       expect(panel.textContent).toContain(formatThaiDate(addDays(TODAY, -6)));

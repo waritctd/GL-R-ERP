@@ -48,18 +48,18 @@ function DealPicker({ row, busy, onResolve }) {
   return (
     <div className="grid gap-2 rounded-md border border-border bg-surface-muted p-3">
       <div className="flex flex-wrap items-center gap-2">
-        <label htmlFor={`${ids}-q`} className="sr-only">ค้นหาดีล</label>
+        <label htmlFor={`${ids}-q`} className="sr-only">ค้นหางาน</label>
         <input
           id={`${ids}-q`}
           value={q}
           onChange={(e) => setQ(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter') search(); }}
-          placeholder="ชื่อลูกค้า เลขดีล หรือชื่อโครงการ"
+          placeholder="ชื่อลูกค้า เลขที่งาน หรือชื่อโครงการ"
           className={`${INPUT} min-w-0 flex-1 basis-[200px]`}
         />
         <Button type="button" size="sm" variant="secondary" onClick={search}>ค้นหา</Button>
       </div>
-      {results && results.length === 0 ? <p className="m-0 text-sm text-text-muted">ไม่พบดีลในงานของฝ่ายบัญชี</p> : null}
+      {results && results.length === 0 ? <p className="m-0 text-sm text-text-muted">ไม่พบงานที่ตรงกันในขอบเขตของฝ่ายบัญชี</p> : null}
       {results?.length ? (
         <ul className="m-0 grid list-none gap-1.5 p-0">
           {results.map((d) => (
@@ -68,9 +68,9 @@ function DealPicker({ row, busy, onResolve }) {
                 <b>{d.title || d.code}</b>
                 <small className="block text-xs text-text-muted">{[d.code, d.customerName, d.ownerName].filter(Boolean).join(' · ')}</small>
               </span>
-              <Button type="button" size="sm" disabled={busy} aria-label={`จับคู่กับดีลนี้ ${d.title ?? ''}`}
+              <Button type="button" size="sm" disabled={busy} aria-label={`จับคู่กับงานนี้ ${d.title ?? ''}`}
                 onClick={() => onResolve({ ticketId: d.ticketId })}>
-                จับคู่กับดีลนี้
+                จับคู่กับงานนี้
               </Button>
               <Button type="button" size="sm" variant="secondary" aria-label={`แบ่งยอด ${d.title ?? ''}`}
                 disabled={split.some((l) => l.deal.ticketId === d.ticketId)}
@@ -218,15 +218,15 @@ export function UnmatchedReceipts({ showToast = () => {} }) {
                       <span className={`whitespace-nowrap rounded-full px-2 py-px text-2xs font-bold ${HINT_TONE[c.hint] ?? 'bg-surface-subtle text-text-muted'}`}>
                         {c.hint}
                       </span>
-                      <Button type="button" size="sm" disabled={busy} aria-label={`จับคู่กับดีลนี้ ${c.title ?? ''}`}
+                      <Button type="button" size="sm" disabled={busy} aria-label={`จับคู่กับงานนี้ ${c.title ?? ''}`}
                         onClick={() => run(resolve, { row, body: { ticketId: c.ticketId } }, 'จับคู่แล้ว')}>
-                        จับคู่กับดีลนี้
+                        จับคู่กับงานนี้
                       </Button>
                     </li>
                   ))}
                 </ul>
               ) : row.reason === 'POSSIBLE_MANUAL_DUPLICATE' ? null : (
-                <p className="m-0 text-sm text-text-muted">ไม่พบดีลที่ตรง — เลือกดีลเอง ส่งให้ผู้จัดการขายดู หรือข้ามไป</p>
+                <p className="m-0 text-sm text-text-muted">ไม่พบงานที่ตรง — เลือกงานเอง ส่งให้ผู้จัดการขายดู หรือข้ามไป</p>
               )}
               {picking === row.rowId ? (
                 <DealPicker row={row} busy={busy}
@@ -235,7 +235,7 @@ export function UnmatchedReceipts({ showToast = () => {} }) {
               <div className="flex flex-wrap gap-1">
                 <Button type="button" size="sm" variant="secondary"
                   onClick={() => setPicking(picking === row.rowId ? null : row.rowId)}>
-                  เลือกดีลเอง
+                  เลือกงานเอง
                 </Button>
                 <Button type="button" size="sm" variant="text" disabled={busy || Boolean(row.managerFlaggedAt)}
                   onClick={() => run(flag, row, 'ส่งให้ผู้จัดการขายดูแล้ว')}>
@@ -297,7 +297,7 @@ export function UnmatchedReceiptsSummary() {
           ))}
         </ul>
       ) : null}
-      <p className="m-0 text-xs text-text-muted">ฝ่ายบัญชีส่งรายการเหล่านี้มาให้ดู — บอกฝ่ายบัญชีว่าเป็นของดีลใด</p>
+      <p className="m-0 text-xs text-text-muted">ฝ่ายบัญชีส่งรายการเหล่านี้มาให้ดู — บอกฝ่ายบัญชีว่าเป็นของงานใด</p>
     </section>
   );
 }

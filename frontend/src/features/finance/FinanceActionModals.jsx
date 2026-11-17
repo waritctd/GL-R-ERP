@@ -141,7 +141,7 @@ export function RevokeCloseModal({ busy, error, onSubmit, onClose }) {
   return (
     <Modal
       title="ยกเลิกการยืนยันปิดงาน"
-      subtitle="ดีลจะกลับไปรอการยืนยันปิดงานอีกครั้ง"
+      subtitle="งานจะกลับไปรอการยืนยันปิดงานอีกครั้ง"
       onClose={busy ? undefined : onClose}
       footer={(
         <Footer

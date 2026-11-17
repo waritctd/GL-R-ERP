@@ -1307,7 +1307,7 @@ describe('TicketListPage', () => {
     const OWNER_S3 = 'เจ้าของตกลงตามสเปคแล้ว';
     const BUYER_S3 = 'ผู้ซื้อ/ผู้รับเหมาตกลงตามสเปคแล้ว';
     const DESIGNER_S3 = 'ผู้ออกแบบอนุมัติสเปค';
-    const ROUTE_NAMES = ['ผู้ออกแบบนำดีล', 'เจ้าของติดต่อโดยตรง', 'ผู้ซื้อ/ผู้รับเหมาติดต่อโดยตรง'];
+    const ROUTE_NAMES = ['ผู้ออกแบบนำงานมา', 'เจ้าของติดต่อโดยตรง', 'ผู้ซื้อ/ผู้รับเหมาติดต่อโดยตรง'];
 
     function routeDeal(id, name, salesStage, entryChannel) {
       const deal = {
@@ -1387,7 +1387,7 @@ describe('TicketListPage', () => {
     });
 
     it.each([
-      ['DESIGNER_LED', 'ผู้ออกแบบนำดีล'],
+      ['DESIGNER_LED', 'ผู้ออกแบบนำงานมา'],
       ['OWNER_DIRECT', 'เจ้าของติดต่อโดยตรง'],
       ['BUYER_DIRECT', 'ผู้ซื้อ/ผู้รับเหมาติดต่อโดยตรง'],
     ])('a ROW shows the Thai route name for %s', async (channel, routeName) => {
@@ -1397,7 +1397,7 @@ describe('TicketListPage', () => {
     });
 
     it.each([
-      ['DESIGNER_LED', 'ผู้ออกแบบนำดีล'],
+      ['DESIGNER_LED', 'ผู้ออกแบบนำงานมา'],
       ['OWNER_DIRECT', 'เจ้าของติดต่อโดยตรง'],
       ['BUYER_DIRECT', 'ผู้ซื้อ/ผู้รับเหมาติดต่อโดยตรง'],
     ])('a mobile CARD shows the Thai route name for %s', async (channel, routeName) => {
@@ -1441,7 +1441,7 @@ describe('TicketListPage', () => {
       const withRoute = stageCellOfRow(container, 'ลูกค้าดีไซเนอร์เทียบ').textContent;
       const withoutRoute = stageCellOfRow(container, 'ลูกค้าไม่มีช่องทางเทียบ').textContent;
       expect(withoutRoute).toContain('4. เสนอราคาผู้ออกแบบ');
-      expect(withRoute.replace('ผู้ออกแบบนำดีล', '')).toBe(withoutRoute);
+      expect(withRoute.replace('ผู้ออกแบบนำงานมา', '')).toBe(withoutRoute);
     });
 
     it('a CLOSED_LOST row keeps its เสียงาน badge and shows no route marker', async () => {

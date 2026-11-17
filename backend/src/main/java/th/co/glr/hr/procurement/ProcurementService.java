@@ -82,7 +82,7 @@ public class ProcurementService {
         TicketSummaryDto ticket = requireTicketSummary(summary.ticketId());
         if (!DealStage.PROCUREMENT.equals(ticket.salesStage())) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "สร้างใบสั่งซื้อโรงงานได้หลังจากออกคำขอนำเข้า (Import Request) แล้วเท่านั้น (สถานะดีลปัจจุบัน: " + ticket.salesStage() + ")");
+                "สร้างใบสั่งซื้อโรงงานได้หลังจากออกคำขอนำเข้า (Import Request) แล้วเท่านั้น (สถานะงานปัจจุบัน: " + ticket.salesStage() + ")");
         }
 
         long pricingCostingId = purchaseOrders.findApprovedPricingCostingId(pricingRequestId)
@@ -255,7 +255,7 @@ public class ProcurementService {
 
     private TicketSummaryDto requireTicketSummary(long ticketId) {
         return tickets.findById(ticketId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบดีลนี้"))
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบงานนี้"))
             .summary();
     }
 

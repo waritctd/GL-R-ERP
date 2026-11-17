@@ -144,7 +144,7 @@ function ItemsTable({ items }) {
   const cell = 'py-2 pl-3 first:pl-0 @max-[34rem]:flex @max-[34rem]:items-baseline @max-[34rem]:justify-between @max-[34rem]:gap-3 @max-[34rem]:py-0.5 @max-[34rem]:pl-0 @max-[34rem]:before:text-sm @max-[34rem]:before:text-text-muted @max-[34rem]:before:content-[attr(data-label)]';
   return (
     <table className="w-full border-collapse text-sm @max-[34rem]:block">
-      <caption className="sr-only">รายการสินค้าในดีล</caption>
+      <caption className="sr-only">รายการสินค้าในงาน</caption>
       <thead className="@max-[34rem]:sr-only">
         <tr className="border-b border-border text-sm text-text-muted">
           <th scope="col" className="py-1.5 text-left font-bold">รายการ</th>
@@ -203,7 +203,7 @@ function DepositBody({ deal, skipped, awaiting, onError }) {
     <>
       {skipped ? (
         <p className="m-0 py-1 text-sm text-text-muted">
-          ดีลนี้ไม่ต้องเก็บมัดจำ
+          งานนี้ไม่ต้องเก็บมัดจำ
           {deal.money.depositPolicy ? <span> · {depositPolicyLabel(deal.money.depositPolicy).label}</span> : null}
         </p>
       ) : null}

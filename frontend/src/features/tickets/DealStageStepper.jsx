@@ -130,7 +130,7 @@ function OffRouteGroup({
               </span>
               <span className="block text-2xs leading-snug text-text-muted [overflow-wrap:anywhere]">
                 {decisionByCode.get(step.code)?.blockedReason
-                  ?? 'ไม่อยู่ในเส้นทางของงานนี้ — แก้ช่องทางงานก่อน'}
+                  ?? 'ไม่อยู่ในเส้นทางนี้ — แก้ช่องทางรับงานก่อน'}
               </span>
               {/* The remedy for the sentence above, where it is read. Renders nothing unless the server advertised
                * SET_ENTRY_CHANNEL (and a handler is wired). */}

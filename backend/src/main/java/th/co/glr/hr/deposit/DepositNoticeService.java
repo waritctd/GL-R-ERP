@@ -104,14 +104,14 @@ public class DepositNoticeService {
         // the quotation and, once issued, silently supersede the customer's document.
         docs.findByTicket(ticketId).stream().filter(d -> "ISSUED".equals(d.status())).findFirst().ifPresent(d -> {
             throw new ApiException(HttpStatus.CONFLICT,
-                "ดีลนี้ออกใบแจ้งรับมัดจำเลขที่ " + d.docNumber() + " แล้ว จึงสร้างฉบับร่างใหม่ไม่ได้");
+                "งานนี้ออกใบแจ้งรับมัดจำเลขที่ " + d.docNumber() + " แล้ว จึงสร้างฉบับร่างใหม่ไม่ได้");
         });
         TicketSummaryDto s = requireApprovedTicket(ticketId, actor);
         requireActiveLifecycle(s);
         // Both routes: a deal off the deposit path (a ไม่รับมัดจำ quotation, a waiver, a credit
         // customer) has no deposit to bill, and issue() would refuse the draft anyway.
         if (DepositPolicy.bypassesDepositNotice(s.depositPolicy())) {
-            throw new ApiException(HttpStatus.CONFLICT, "ดีลนี้ไม่ต้องเก็บมัดจำ (นโยบายมัดจำ "
+            throw new ApiException(HttpStatus.CONFLICT, "งานนี้ไม่ต้องเก็บมัดจำ (นโยบายมัดจำ "
                 + s.depositPolicy() + ") จึงสร้างใบแจ้งรับมัดจำไม่ได้");
         }
 
@@ -232,7 +232,7 @@ public class DepositNoticeService {
         // status at quotation_issued. It must not flip the ticket to document_issued —
         // that side effect kills the dual-track UI and lets unpaid tickets close.
         TicketSummaryDto s = tickets.findById(doc.ticketId())
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบดีลนี้"))
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบงานนี้"))
             .summary();
         // A deposit notice may be
         // (re-)issued from CUSTOMER_CONFIRMED (first issue) OR from DEPOSIT_NOTICE_ISSUED itself
@@ -267,7 +267,7 @@ public class DepositNoticeService {
         docs.findByTicket(doc.ticketId()).stream()
             .filter(d -> d.id() != docId && "ISSUED".equals(d.status())).findFirst().ifPresent(d -> {
                 throw new ApiException(HttpStatus.CONFLICT,
-                    "ดีลนี้ออกใบแจ้งรับมัดจำเลขที่ " + d.docNumber() + " แล้ว จึงออกฉบับร่างนี้ไม่ได้");
+                    "งานนี้ออกใบแจ้งรับมัดจำเลขที่ " + d.docNumber() + " แล้ว จึงออกฉบับร่างนี้ไม่ได้");
             });
         // Issuing advances the payment track — a paused/terminal deal must not move (Phase 1 lifecycle gate; mirrors
         // TicketService.requireActive).
@@ -545,7 +545,7 @@ public class DepositNoticeService {
 
     private void requireQuotationIssuedForRemainingInvoice(TicketSummaryDto s) {
         if (!"quotation_issued".equals(s.status())) {
-            throw new ApiException(HttpStatus.CONFLICT, "ออกใบกำกับภาษีส่วนที่เหลือได้เฉพาะดีลที่อยู่ในสถานะ quotation_issued เท่านั้น");
+            throw new ApiException(HttpStatus.CONFLICT, "ออกใบกำกับภาษีส่วนที่เหลือได้เฉพาะงานที่อยู่ในสถานะ quotation_issued เท่านั้น");
         }
     }
 
@@ -648,7 +648,7 @@ public class DepositNoticeService {
                 .filter(qq -> qq.quotation().id() == quotationId)
                 .findFirst()
                 .orElseThrow(() -> new ApiException(HttpStatus.BAD_REQUEST,
-                    "ใบเสนอราคาที่เลือกไม่ผ่านเงื่อนไข หรือไม่ใช่ของดีลนี้"));
+                    "ใบเสนอราคาที่เลือกไม่ผ่านเงื่อนไข หรือไม่ใช่ของงานนี้"));
             return resolveFromQuotation(ticketId, chosen, quotationCandidates, quotationOptions, defaultQuotationId);
         }
         if (!qualifying.isEmpty()) {
@@ -777,7 +777,7 @@ public class DepositNoticeService {
             items = legacyRemainingInvoiceItems(ticket);
             if (items.isEmpty()) {
                 throw new ApiException(HttpStatus.CONFLICT,
-                    "ไม่พบใบเสนอราคาที่ลูกค้ายอมรับ หรือใบแจ้งยอดมัดจำที่ออกแล้วสำหรับดีลนี้ จึงไม่สามารถออกใบแจ้งหนี้ส่วนที่เหลือได้");
+                    "ไม่พบใบเสนอราคาที่ลูกค้ายอมรับ หรือใบแจ้งยอดมัดจำที่ออกแล้วสำหรับงานนี้ จึงไม่สามารถออกใบแจ้งหนี้ส่วนที่เหลือได้");
             }
         }
         BigDecimal depositAmount = latestIssued != null && latestIssued.depositAmount() != null
@@ -1000,7 +1000,7 @@ public class DepositNoticeService {
     public TicketDto requestRevision(long ticketId, RevisionRequest req, UserPrincipal actor) {
         requireRole(actor, SALES_ROLES);
         TicketDto ticket = tickets.findById(ticketId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบดีลนี้"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบงานนี้"));
         TicketSummaryDto s = ticket.summary();
         String st = s.status();
         requireActiveLifecycle(s);
@@ -1009,7 +1009,7 @@ public class DepositNoticeService {
             throw new ApiException(HttpStatus.CONFLICT, "ขอแก้ไข revision ได้เฉพาะจากสถานะ approved หรือ document_issued เท่านั้น");
         }
         if (!DealOwnership.isOwnerOrKeyer(s, actor.id())) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "เฉพาะเจ้าของดีลเท่านั้นที่สามารถขอแก้ไขใบเสนอราคาได้");
+            throw new ApiException(HttpStatus.FORBIDDEN, "เฉพาะเจ้าของงานเท่านั้นที่สามารถขอแก้ไขใบเสนอราคาได้");
         }
 
         String toStatus = switch (req.scope()) {
@@ -1031,7 +1031,7 @@ public class DepositNoticeService {
             // Lost compare-and-set: another writer moved sales.ticket.status between the read above and this write. A
             // conflict, never a re-SELECT for a nicer message — see TicketRepository.transitionStatus's own Javadoc.
             throw new ApiException(HttpStatus.CONFLICT,
-                "สถานะดีลถูกเปลี่ยนโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
+                "สถานะงานถูกเปลี่ยนโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
         }
 
         tickets.addEvent(ticketId, actor.id(), actor.name(),
@@ -1081,11 +1081,11 @@ public class DepositNoticeService {
 
     private TicketSummaryDto requireApprovedTicket(long ticketId, UserPrincipal actor) {
         TicketDto t = tickets.findById(ticketId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบดีลนี้"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบงานนี้"));
         String st = t.summary().status();
         if (!TicketStatus.APPROVED.equals(st) && !TicketStatus.QUOTATION_ISSUED.equals(st)
                 && !TicketStatus.DOCUMENT_ISSUED.equals(st)) {
-            throw new ApiException(HttpStatus.CONFLICT, "สร้างใบแจ้งรับมัดจำได้เฉพาะดีลที่อนุมัติแล้วเท่านั้น");
+            throw new ApiException(HttpStatus.CONFLICT, "สร้างใบแจ้งรับมัดจำได้เฉพาะงานที่อนุมัติแล้วเท่านั้น");
         }
         return t.summary();
     }
@@ -1098,7 +1098,7 @@ public class DepositNoticeService {
     void requireActiveLifecycle(TicketSummaryDto summary) {
         if (!DealLifecycle.ACTIVE.equals(summary.lifecycle())) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "ดีลไม่ได้อยู่ในสถานะ ACTIVE (" + summary.lifecycle() + ") จึงแก้ไขขั้นตอนนี้ไม่ได้");
+                "งานไม่ได้อยู่ในสถานะ ACTIVE (" + summary.lifecycle() + ") จึงแก้ไขขั้นตอนนี้ไม่ได้");
         }
     }
 
@@ -1127,7 +1127,7 @@ public class DepositNoticeService {
     TicketDto requireTicketViewer(long ticketId, UserPrincipal actor) {
         requireRole(actor, VIEWER_ROLES);
         TicketDto t = tickets.findById(ticketId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบดีลนี้"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบงานนี้"));
         // The per-role half is dealDocumentScope (below), which the document chain's list mark applies in SQL too.
         switch (dealDocumentScope(actor.role())) {
             case ALL -> { }
@@ -1191,7 +1191,7 @@ public class DepositNoticeService {
 
     private void requireTicketOwner(long ticketId, UserPrincipal actor) {
         TicketDto t = tickets.findById(ticketId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบดีลนี้"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบงานนี้"));
         if (!DealOwnership.isOwnerOrKeyer(t.summary(), actor.id())) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }

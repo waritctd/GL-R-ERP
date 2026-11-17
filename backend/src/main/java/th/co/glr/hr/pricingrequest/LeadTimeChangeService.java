@@ -293,7 +293,7 @@ public class LeadTimeChangeService {
     /** B-R3: the owning rep or a sales manager -- NOT the CEO, import, account or another rep. */
     private void requireDecider(PricingRequestSummaryDto summary, UserPrincipal actor) {
         if (!isOwningRep(summary, actor) && !"sales_manager".equals(actor.role())) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "เฉพาะพนักงานขายเจ้าของดีลหรือผู้จัดการฝ่ายขายเท่านั้นที่อนุมัติได้");
+            throw new ApiException(HttpStatus.FORBIDDEN, "เฉพาะพนักงานขายเจ้าของงานหรือผู้จัดการฝ่ายขายเท่านั้นที่อนุมัติได้");
         }
     }
 
@@ -325,7 +325,7 @@ public class LeadTimeChangeService {
         boolean active = tickets.findById(ticketId)
             .map(t -> DealLifecycle.ACTIVE.equals(t.summary().lifecycle())).orElse(false);
         if (!active) {
-            throw new ApiException(HttpStatus.CONFLICT, "ดีลต้นทางต้องอยู่ในสถานะ ACTIVE");
+            throw new ApiException(HttpStatus.CONFLICT, "งานต้นทางต้องอยู่ในสถานะ ACTIVE");
         }
     }
 

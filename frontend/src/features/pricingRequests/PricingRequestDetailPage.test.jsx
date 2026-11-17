@@ -3419,7 +3419,7 @@ describe('PricingRequestDetailPage GLA-123 slice S3: new-engine (dealQuotationFo
     fireEvent.click(await screen.findByRole('button', { name: 'ลูกค้ายอมรับ' }));
 
     const dialog = within(await screen.findByRole('dialog', { name: 'ยืนยันว่าลูกค้ายอมรับใบเสนอราคานี้' }));
-    expect(dialog.getByText('ใบเสนอราคานี้ส่งถึงผู้ออกแบบ ถ้าลูกค้ายอมรับ ดีลจะใช้ใบนี้ยืนยันคำสั่งซื้อและข้ามผู้รับรายถัดไป')).not.toBeNull();
+    expect(dialog.getByText('ใบเสนอราคานี้ส่งถึงผู้ออกแบบ ถ้าลูกค้ายอมรับ งานจะใช้ใบนี้ยืนยันคำสั่งซื้อและข้ามผู้รับรายถัดไป')).not.toBeNull();
     expect(api.dealQuotations.recordOutcome).not.toHaveBeenCalled();
     fireEvent.click(dialog.getByRole('button', { name: 'ยืนยัน' }));
 
@@ -3440,7 +3440,7 @@ describe('PricingRequestDetailPage GLA-123 slice S3: new-engine (dealQuotationFo
     fireEvent.click(await screen.findByRole('button', { name: 'ลูกค้ายอมรับ' }));
 
     const dialog = within(await screen.findByRole('dialog', { name: 'ยืนยันว่าลูกค้ายอมรับใบเสนอราคานี้' }));
-    expect(dialog.getByText('ใบเสนอราคานี้ส่งถึงเจ้าของโครงการ ถ้าลูกค้ายอมรับ ดีลจะใช้ใบนี้ยืนยันคำสั่งซื้อและข้ามผู้รับรายถัดไป')).not.toBeNull();
+    expect(dialog.getByText('ใบเสนอราคานี้ส่งถึงเจ้าของโครงการ ถ้าลูกค้ายอมรับ งานจะใช้ใบนี้ยืนยันคำสั่งซื้อและข้ามผู้รับรายถัดไป')).not.toBeNull();
     fireEvent.click(dialog.getByRole('button', { name: 'ยกเลิก' }));
 
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
@@ -3641,7 +3641,7 @@ describe('PricingRequestDetailPage Step 5: Customer Decision and Commercial Revi
     fireEvent.click(await screen.findByRole('button', { name: 'ลูกค้ายอมรับ' }));
 
     const dialog = within(await screen.findByRole('dialog', { name: 'ยืนยันว่าลูกค้ายอมรับใบเสนอราคานี้' }));
-    expect(dialog.getByText('ใบเสนอราคานี้ส่งถึงผู้ออกแบบ ถ้าลูกค้ายอมรับ ดีลจะใช้ใบนี้ยืนยันคำสั่งซื้อและข้ามผู้รับรายถัดไป')).not.toBeNull();
+    expect(dialog.getByText('ใบเสนอราคานี้ส่งถึงผู้ออกแบบ ถ้าลูกค้ายอมรับ งานจะใช้ใบนี้ยืนยันคำสั่งซื้อและข้ามผู้รับรายถัดไป')).not.toBeNull();
     fireEvent.click(dialog.getByRole('button', { name: 'ยืนยัน' }));
 
     await waitFor(() => expect(api.pricingRequests.recordCustomerQuotationOutcome).toHaveBeenCalledWith(
@@ -4038,7 +4038,7 @@ describe('PricingRequestDetailPage Step 6: Deposit, Payment, and Order Confirmat
 
     expect(screen.queryByRole('button', { name: 'ยืนยันคำสั่งซื้อ' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'สร้างใบแจ้งยอดเงินรับมัดจำ' })).toBeNull();
-    expect(screen.getByText('ยืนยันคำสั่งซื้อได้เฉพาะเจ้าของดีล (sales)')).not.toBeNull();
+    expect(screen.getByText('ยืนยันคำสั่งซื้อได้เฉพาะเจ้าของงาน (sales)')).not.toBeNull();
   });
 
   it('hides the whole Step 6 section before QUOTATION_ACCEPTED', async () => {

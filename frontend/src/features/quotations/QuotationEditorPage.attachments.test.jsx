@@ -399,7 +399,7 @@ describe('files picked before the first บันทึกร่าง', () => {
     fireEvent.mouseDown(await screen.findByRole('option', { name: new RegExp(project.name) }));
     // Slice 2 (S2-B1) + #1085: a new deal's recipient and a real ช่องทางรับงาน gate บันทึกร่าง.
     fireEvent.click(screen.getByRole('radio', { name: 'ผู้ออกแบบ' }));
-    fireEvent.click(screen.getByRole('button', { name: /ผู้ออกแบบนำดีล/ }));
+    fireEvent.click(screen.getByRole('button', { name: /ผู้ออกแบบนำงานมา/ }));
   }
 
   const pick = (...files) => files.forEach((file) => fireEvent.change(attachInput(), { target: { files: [file] } }));
@@ -459,7 +459,7 @@ describe('files picked before the first บันทึกร่าง', () => {
     api.tickets.create.mockResolvedValue({ ticket: { summary: { id: 42 } } });
     openNew('/quotations/new');
     // Slice 2 flow A: /quotations/new opens on เลือกดีลที่มีอยู่; the inline card is the other branch.
-    fireEvent.click(await screen.findByRole('button', { name: 'สร้างดีลใหม่' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'สร้างงานใหม่' }));
     await selectCustomerAndProject();
     await fillOneValidItem();
     pick(fileA, fileB);

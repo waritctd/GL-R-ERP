@@ -208,7 +208,7 @@ describe('ผู้ติดต่อ — the customer phone and email, directly
   it('a quotation that creates its deal inline: the same two inputs, in the same place', async () => {
     renderEditor('/quotations/new');
     // /quotations/new opens on เลือกดีลที่มีอยู่; the inline card is the other branch.
-    fireEvent.click(await screen.findByRole('button', { name: 'สร้างดีลใหม่' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'สร้างงานใหม่' }));
 
     await screen.findByLabelText(/^ลูกค้า/);
     const picker = screen.getByLabelText(/^ผู้ติดต่อ/);
@@ -234,7 +234,7 @@ describe('ผู้ติดต่อ — the customer phone and email, directly
 
     renderEditor('/quotations/new');
     // /quotations/new opens on เลือกดีลที่มีอยู่; the inline card is the other branch.
-    fireEvent.click(await screen.findByRole('button', { name: 'สร้างดีลใหม่' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'สร้างงานใหม่' }));
     await screen.findByLabelText(/^ลูกค้า/);
     expect([describedBy(screen.getByLabelText(PHONE_LABEL, BOX)), describedBy(screen.getByLabelText(EMAIL_LABEL, BOX))]).toEqual(['', '']);
     expect(screen.queryByText(new RegExp(PRINTED_WHEN_FILLED))).toBeNull();
@@ -300,7 +300,7 @@ describe('ผู้ติดต่อ — what the editor saves', () => {
     api.customers.contacts.mockResolvedValue({ contacts: [SOMCHAI] });
     renderEditor('/quotations/new');
     // /quotations/new opens on เลือกดีลที่มีอยู่; the inline card is the other branch.
-    fireEvent.click(await screen.findByRole('button', { name: 'สร้างดีลใหม่' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'สร้างงานใหม่' }));
 
     fireEvent.change(await screen.findByLabelText(/^ลูกค้า/), { target: { value: 'แฟชั่น' } });
     fireEvent.mouseDown(await screen.findByRole('option', { name: new RegExp(CUSTOMER.name) }));
@@ -309,7 +309,7 @@ describe('ผู้ติดต่อ — what the editor saves', () => {
     fireEvent.mouseDown(await screen.findByRole('option', { name: new RegExp(PROJECT.name) }));
     // A new deal's recipient and a real ช่องทางรับงาน gate บันทึกร่าง.
     fireEvent.click(screen.getByRole('radio', { name: 'ผู้ออกแบบ' }));
-    fireEvent.click(screen.getByRole('button', { name: /ผู้ออกแบบนำดีล/ }));
+    fireEvent.click(screen.getByRole('button', { name: /ผู้ออกแบบนำงานมา/ }));
     // The picker lists the contacts of the customer just chosen, before any deal exists.
     await pickContact('สมชาย');
     expect(api.customers.contacts).toHaveBeenCalledWith(CUSTOMER.id);

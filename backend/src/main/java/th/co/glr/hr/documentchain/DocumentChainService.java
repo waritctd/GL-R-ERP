@@ -61,7 +61,7 @@ public class DocumentChainService {
     public DocumentChainDto forTicket(long ticketId, UserPrincipal actor) {
         depositNoticeService.requireDealDocumentViewer(ticketId, actor);
         TicketSummaryDto s = tickets.findSummaryById(ticketId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบดีลนี้"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบงานนี้"));
         List<DepositNoticeDto> notices = depositNotices.findByTicket(ticketId);
         List<RemainingInvoiceDocumentDto> invoices = remainingInvoices.findByTicket(ticketId);
 

@@ -124,7 +124,7 @@ export function buildRecommendations(K) {
   const out = [];
   if (obj(K.pipe) && lowFill(K.pipe.fill)) {
     const f = K.pipe.fill;
-    out.push(['ให้ "จะขายได้ %", ไตรมาส และขั้นงานขาย เป็นช่องบังคับในดีล',
+    out.push(['ให้ "จะขายได้ %", ไตรมาส และขั้นงานขาย เป็นช่องที่ต้องกรอกในทุกงาน',
       `ตอนนี้กรอก ${num(f.prob, '%')} / ${num(f.q, '%')} / ${num(f.stage, '%')} จึงถ่วงน้ำหนักยอดคาดหวังไม่ได้`]);
   }
   if (obj(K.pipe) && isNum(K.pipe.top10)) out.push(['ทบทวน 10 งานใหญ่ทุกสัปดาห์', `10 งานนี้คือ ${K.pipe.top10}% ของงานคาดหวังทั้งหมด`]);

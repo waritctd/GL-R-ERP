@@ -177,7 +177,7 @@ describe('DealStagePanel imperative handle (overflow menu / danger zone triggers
 
   it('openEditStage() keeps an off-route stage in the blocked list with its reason, even though the deal never sat on it', () => {
     const offRoute = allAllowed.map((d) => (d.stage === 'QUOTE_OWNER'
-      ? { ...d, allowed: false, onRoute: false, blockedReason: 'ขั้นนี้ไม่อยู่ในเส้นทางของดีลนี้' } : d));
+      ? { ...d, allowed: false, onRoute: false, blockedReason: 'ขั้นนี้ไม่อยู่ในเส้นทางนี้' } : d));
     const { ref } = renderPanelWithRef({
       summary: baseSummary({ salesStage: 'QUOTE_BUYER' }),
       availableActions: [{ action: 'UPDATE_STAGE' }],
@@ -186,7 +186,7 @@ describe('DealStagePanel imperative handle (overflow menu / danger zone triggers
     });
     act(() => ref.current.openEditStage());
     fireEvent.click(screen.getByTestId('update-stage-blocked-toggle'));
-    expect(screen.getByTestId('update-stage-blocked-list').textContent).toContain('ขั้นนี้ไม่อยู่ในเส้นทางของดีลนี้');
+    expect(screen.getByTestId('update-stage-blocked-list').textContent).toContain('ขั้นนี้ไม่อยู่ในเส้นทางนี้');
   });
 
   it('openEditStage() offers every stage when the deal skipped none (no STAGE_CHANGED events)', () => {
@@ -866,7 +866,7 @@ describe('DealStagePanel guided advance (readiness gate)', () => {
     const otherBlock = allAllowed.map((decision) => (
       decision.stage === 'SPEC_APPROVED'
         ? {
-          ...decision, allowed: false, requiresReason: false, blockedReason: 'ดีลถูกพักไว้',
+          ...decision, allowed: false, requiresReason: false, blockedReason: 'งานถูกพักไว้',
         }
         : decision
     ));
@@ -892,7 +892,7 @@ describe('DealStagePanel route awareness', () => {
     allowed: !off.includes(stage.code),
     requiresReason: false,
     blockedReason: off.includes(stage.code)
-      ? `ดีลนี้ไม่ผ่านเส้นทาง — ขั้นที่ ${index + 1} ไม่อยู่ในเส้นทางของดีลนี้ — แก้ช่องทางดีลก่อน`
+      ? `งานนี้ไม่ผ่านเส้นทาง — ขั้นที่ ${index + 1} ไม่อยู่ในเส้นทางนี้ — แก้ช่องทางรับงานก่อน`
       : null,
     onRoute: !off.includes(stage.code),
   }));
@@ -900,7 +900,7 @@ describe('DealStagePanel route awareness', () => {
 
   describe('route line', () => {
     it.each([
-      ['DESIGNER_LED', [], 'QUOTE_BUYER', 'เส้นทาง · ผู้ออกแบบนำดีล', '15 ขั้น'],
+      ['DESIGNER_LED', [], 'QUOTE_BUYER', 'เส้นทาง · ผู้ออกแบบนำงานมา', '15 ขั้น'],
       ['OWNER_DIRECT', OWNER_OFF, 'SPEC_APPROVED', 'เส้นทาง · เจ้าของติดต่อโดยตรง', '14 ขั้น'],
       ['BUYER_DIRECT', BUYER_OFF, 'QUOTE_BUYER', 'เส้นทาง · ผู้ซื้อ/ผู้รับเหมาติดต่อโดยตรง', '11 ขั้น'],
     ])('%s names the route and its stage count, never a route position (W5-02)', (channel, off, salesStage, name, total) => {
@@ -1187,7 +1187,7 @@ describe('DealStagePanel แก้ช่องทางดีล wiring', () => 
     allowed: !off.includes(stage.code),
     requiresReason: false,
     blockedReason: off.includes(stage.code)
-      ? `ดีลนี้เป็นเจ้าของติดต่อโดยตรง — ขั้นที่ ${index + 1} ไม่อยู่ในเส้นทางของดีลนี้ — แก้ช่องทางดีลก่อน`
+      ? `ช่องทางรับงานของงานนี้คือเจ้าของติดต่อโดยตรง — ขั้นที่ ${index + 1} ไม่อยู่ในเส้นทางนี้ — แก้ช่องทางรับงานก่อน`
       : null,
     onRoute: !off.includes(stage.code),
   }));
@@ -1225,7 +1225,7 @@ describe('DealStagePanel แก้ช่องทางดีล wiring', () => 
     showSteps();
     expect(within(screen.getByTestId('off-route-group')).getAllByRole('button', { name: /แก้ช่องทาง/ })).toHaveLength(1);
     fireEvent.click(firstToggle());
-    fireEvent.click(screen.getByRole('radio', { name: /ผู้ออกแบบนำดีล/ }));
+    fireEvent.click(screen.getByRole('radio', { name: /ผู้ออกแบบนำงานมา/ }));
     fireEvent.click(screen.getByRole('button', { name: 'บันทึกช่องทางใหม่' }));
     expect(onSetEntryChannel).toHaveBeenCalledWith({ value: 'DESIGNER_LED', note: null });
   });
@@ -1275,9 +1275,9 @@ describe('DealStagePanel แก้ช่องทางดีล wiring', () => 
     });
     act(() => ref.current.openEditStage());
     fireEvent.click(screen.getByTestId('update-stage-blocked-toggle'));
-    fireEvent.click(within(screen.getByTestId('update-stage-blocked-list')).getByRole('button', { name: /แก้ช่องทางดีล/ }));
+    fireEvent.click(within(screen.getByTestId('update-stage-blocked-list')).getByRole('button', { name: /แก้ช่องทางรับงาน/ }));
     expect(screen.getAllByRole('dialog')).toHaveLength(1);
-    fireEvent.click(screen.getByRole('radio', { name: /ผู้ออกแบบนำดีล/ }));
+    fireEvent.click(screen.getByRole('radio', { name: /ผู้ออกแบบนำงานมา/ }));
     fireEvent.change(screen.getByTestId('entry-channel-fix-reason'), { target: { value: 'มีผู้ออกแบบจริง' } });
     fireEvent.click(screen.getByRole('button', { name: 'บันทึกช่องทางใหม่' }));
     expect(onSetEntryChannel).toHaveBeenCalledWith({ value: 'DESIGNER_LED', note: 'มีผู้ออกแบบจริง' });

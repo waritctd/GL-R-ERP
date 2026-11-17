@@ -8,13 +8,13 @@ import { entryChannelLabel } from '../../utils/format.js';
  * been stated it must not be possible to un-state it. */
 const SETTABLE_ENTRY_CHANNELS = ['DESIGNER_LED', 'OWNER_DIRECT', 'BUYER_DIRECT'];
 
-/** "แก้ช่องทางดีล" — the remedy for the route gate's own refusal. GLA-156 deleted the only control that could
+/** "แก้ช่องทางรับงาน" — the remedy for the route gate's own refusal. GLA-156 deleted the only control that could
  * do that, so a rep was told to fix the channel and could not. The server refuses a move into a stage that is
- * off the deal's route with a message that ends "— แก้ช่องทางดีลก่อน". */
+ * off the deal's route with a message that ends "— แก้ช่องทางรับงานก่อน". */
 export function EntryChannelFix({
   entryChannel, action, onSubmit, disabled = false, context,
-  // The deal page's stepper says งาน (owner ruling 2026-11-16, that page only); UpdateStageModal keeps ดีล.
-  noun = 'ดีล',
+  // Every sales screen says งาน (owner ruling 2026-11-16 for the deal page, extended to the rest 2026-11-17).
+  noun = 'งาน',
 }) {
   const uid = useId();
   const panelId = `${uid}-panel`;
@@ -67,7 +67,7 @@ export function EntryChannelFix({
         data-testid="entry-channel-fix-toggle"
       >
         <span>
-          {`แก้ช่องทาง${noun}`}
+          แก้ช่องทางรับงาน
           {context ? <span className="sr-only">{` เพื่อไปขั้น ${context}`}</span> : null}
         </span>
         <span

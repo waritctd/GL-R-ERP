@@ -168,7 +168,7 @@ export const QuotationContactPicker = forwardRef(function QuotationContactPicker
     // the catch block below, do NOT revert `contactEdits`: no request was sent, so there is nothing
     // to roll back to and reverting would discard what the rep just typed.
     if (!customerId) {
-      showToast?.('error', 'แก้ไขข้อมูลผู้ติดต่อไม่ได้ — ไม่พบข้อมูลลูกค้าของดีลนี้');
+      showToast?.('error', 'แก้ไขข้อมูลผู้ติดต่อไม่ได้ — ไม่พบข้อมูลลูกค้าของงานนี้');
       return;
     }
     const previous = (selected[field] ?? '').toString();

@@ -33,7 +33,7 @@ export function CeoPricingHeader({ summary, status, actions }) {
         </div>
         <p className="m-0 mt-0.5 text-text-muted">{summary.customerName ?? '-'}</p>
         <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 text-sm text-text-muted">
-          <span>ดีล <Link to={`/tickets/${summary.ticketId}`} className="text-info underline">{summary.ticketCode}</Link></span>
+          <span>งาน <Link to={`/tickets/${summary.ticketId}`} className="text-info underline">{summary.ticketCode}</Link></span>
           <span>ผู้รับ: {pricingRequestRecipientLabel(summary.recipientType)}{summary.recipientLabel ? ` · ${summary.recipientLabel}` : ''}</span>
           <span>ต้องการภายใน {formatThaiDate(summary.requiredDate)}</span>
           <span>ฝ่ายนำเข้า: ผู้รับเรื่องและประสานราคาโรงงาน</span>

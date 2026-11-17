@@ -66,13 +66,13 @@ function location() {
 }
 
 async function openList() {
-  const input = await screen.findByRole('combobox', { name: /ดีล/ });
+  const input = await screen.findByRole('combobox', { name: /^งาน/ });
   fireEvent.focus(input);
   return input;
 }
 
 function optionTexts() {
-  return within(screen.getByRole('listbox', { name: 'ผลการค้นหาดีล' }))
+  return within(screen.getByRole('listbox', { name: 'ผลการค้นหางาน' }))
     .getAllByRole('option').map((o) => o.textContent);
 }
 
@@ -127,8 +127,8 @@ describe('DealPicker — เลือกดีลที่มีอยู่ (sl
     expect(optionTexts()[0]).toContain('DL-2026-0012');
 
     fireEvent.change(input, { target: { value: 'ไม่มีดีลนี้' } });
-    expect(within(screen.getByRole('listbox', { name: 'ผลการค้นหาดีล' })).queryAllByRole('option')).toHaveLength(0);
-    expect(screen.getByText('ไม่พบดีลที่ตรงกับคำค้น')).not.toBeNull();
+    expect(within(screen.getByRole('listbox', { name: 'ผลการค้นหางาน' })).queryAllByRole('option')).toHaveLength(0);
+    expect(screen.getByText('ไม่พบงานที่ตรงกับคำค้น')).not.toBeNull();
 
     expect(api.tickets.list).toHaveBeenCalledTimes(1);
   });
@@ -152,7 +152,7 @@ describe('DealPicker — เลือกดีลที่มีอยู่ (sl
     const input = await openList();
     await waitFor(() => expect(optionTexts()).toHaveLength(2));
     fireEvent.keyDown(input, { key: 'Escape' });
-    expect(screen.queryByRole('listbox', { name: 'ผลการค้นหาดีล' })).toBeNull();
+    expect(screen.queryByRole('listbox', { name: 'ผลการค้นหางาน' })).toBeNull();
     expect(input.getAttribute('aria-expanded')).toBe('false');
     expect(location()).toBe('/quotations/new');
   });
@@ -166,18 +166,18 @@ describe('DealPicker — เลือกดีลที่มีอยู่ (sl
 
   it('a selected deal renders as a chip; "เปลี่ยนดีล" drops ?ticket= and brings the search back', async () => {
     renderPicker({ selected: DEALS[1], initialPath: '/quotations/new?ticket=12' });
-    expect(screen.queryByRole('combobox', { name: /ดีล/ })).toBeNull();
+    expect(screen.queryByRole('combobox', { name: /^งาน/ })).toBeNull();
     expect(screen.getByText('DL-2026-0012')).not.toBeNull();
     expect(screen.getByText('บริษัท บางนา จำกัด')).not.toBeNull();
 
-    fireEvent.click(screen.getByRole('button', { name: 'เปลี่ยนดีล' }));
+    fireEvent.click(screen.getByRole('button', { name: 'เปลี่ยนงาน' }));
     await waitFor(() => expect(location()).toBe('/quotations/new'));
   });
 
   it('a deal list the role cannot read degrades to a calm Thai message, not a crash', async () => {
     api.tickets.list.mockRejectedValue(Object.assign(new Error('ไม่มีสิทธิ์เข้าถึงรายการนี้'), { status: 403 }));
     renderPicker();
-    expect(await screen.findByText(/โหลดรายการดีลไม่ได้/)).not.toBeNull();
+    expect(await screen.findByText(/โหลดรายการงานไม่ได้/)).not.toBeNull();
   });
 });
 
@@ -194,9 +194,9 @@ describe('DealPicker — the picked deal already has a live direct quotation (N6
   it('DRAFT: an inline notice (not a dialog) naming the quotation and its status, with เปิดใบเสนอราคา and the reason a new one cannot be made', () => {
     renderPicker({ selected: withLive('DRAFT'), initialPath: '/quotations/new?ticket=12' });
     const notice = screen.getByTestId('deal-picker-live-quotation');
-    expect(notice.textContent).toContain('ดีลนี้มีใบเสนอราคาที่ใช้งานอยู่ — QT-2026-0077-1 · ร่าง');
+    expect(notice.textContent).toContain('งานนี้มีใบเสนอราคาที่ใช้งานอยู่ — QT-2026-0077-1 · ร่าง');
     // The disabled-with-reason half (DESIGN.md §14): the SAME reason the editor's บันทึกร่าง carries.
-    expect(notice.textContent).toContain('สร้างใบเสนอราคาใหม่บนดีลนี้ไม่ได้');
+    expect(notice.textContent).toContain('สร้างใบเสนอราคาใหม่บนงานนี้ไม่ได้');
     expect(within(notice).getByRole('link', { name: 'เปิดใบเสนอราคา' }).getAttribute('href')).toBe('/quotations/77');
     expect(within(notice).queryByRole('button', { name: 'สร้างฉบับแก้ไข' })).toBeNull();
     expect(screen.queryByRole('dialog')).toBeNull();

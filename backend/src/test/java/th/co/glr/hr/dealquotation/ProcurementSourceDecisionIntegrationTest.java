@@ -147,7 +147,7 @@ class ProcurementSourceDecisionIntegrationTest extends AbstractPostgresIntegrati
         addPromotion(deal, newQt, "2026-11-08 11:00:00+07");
         assertThat(ticketService.getProcurementSource(deal, salesActor).legacy()).isFalse();
         assertConflict(() -> ticketService.decideProcurementSource(deal, split(itemIds(deal), true, true), salesActor),
-            "ดีลนี้ใช้ที่มาสินค้าตามใบเสนอราคา แก้ไขไม่ได้");
+            "งานนี้ใช้ที่มาสินค้าตามใบเสนอราคา แก้ไขไม่ได้");
 
         long reversed = confirmedDeal(OLD, false, false);
         long oldQt2 = promotedQuotationId(reversed);
@@ -295,7 +295,7 @@ class ProcurementSourceDecisionIntegrationTest extends AbstractPostgresIntegrati
         ticketService.decideProcurementSource(deal, split(ids, false, true), salesActor);
 
         assertConflict(() -> ticketService.decideProcurementSource(deal, split(ids, true, true), salesActor),
-            "เลือกที่มาสินค้าของดีลนี้แล้ว แก้ไขไม่ได้");
+            "เลือกที่มาสินค้าของงานนี้แล้ว แก้ไขไม่ได้");
 
         assertThat(ticketService.getProcurementSource(deal, salesActor).lines()).extracting(
             ProcurementSourceDto.Line::fromStock).containsExactly(false, true);
@@ -322,7 +322,7 @@ class ProcurementSourceDecisionIntegrationTest extends AbstractPostgresIntegrati
         List<Map<String, Object>> before = stockRows(deal);
 
         assertConflict(() -> ticketService.decideProcurementSource(deal, split(itemIds(deal), true, true), salesActor),
-            "ดีลนี้ใช้ที่มาสินค้าตามใบเสนอราคา แก้ไขไม่ได้");
+            "งานนี้ใช้ที่มาสินค้าตามใบเสนอราคา แก้ไขไม่ได้");
 
         assertThat(stockRows(deal)).isEqualTo(before);
         assertThat(ticketService.getProcurementSource(deal, salesActor).decidedAt()).isNull();

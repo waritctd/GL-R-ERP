@@ -117,7 +117,7 @@ describe('UnmatchedReceipts — account works the queue', () => {
     wrap(<UnmatchedReceipts showToast={vi.fn()} />);
     const row = await screen.findByTestId('unmatched-11');
     expect(within(row).getByText('ลูกค้า + ยอดตรง')).toBeTruthy();
-    fireEvent.click(within(row).getAllByRole('button', { name: /^จับคู่กับดีลนี้/ })[0]);
+    fireEvent.click(within(row).getAllByRole('button', { name: /^จับคู่กับงานนี้/ })[0]);
     await waitFor(() => expect(api.receiptImports.resolve).toHaveBeenCalledWith(11, { ticketId: 31 }));
   });
 
@@ -125,11 +125,11 @@ describe('UnmatchedReceipts — account works the queue', () => {
     api.receiptImports.unmatched.mockResolvedValue([queued({ candidates: [], reason: 'NO_CANDIDATE' })]);
     wrap(<UnmatchedReceipts showToast={vi.fn()} />);
     const row = await screen.findByTestId('unmatched-11');
-    fireEvent.click(within(row).getByRole('button', { name: 'เลือกดีลเอง' }));
-    fireEvent.change(within(row).getByLabelText('ค้นหาดีล'), { target: { value: 'ค้นเจอ' } });
+    fireEvent.click(within(row).getByRole('button', { name: 'เลือกงานเอง' }));
+    fireEvent.change(within(row).getByLabelText('ค้นหางาน'), { target: { value: 'ค้นเจอ' } });
     fireEvent.click(within(row).getByRole('button', { name: 'ค้นหา' }));
     await waitFor(() => expect(api.receiptImports.deals).toHaveBeenCalledWith('ค้นเจอ'));
-    fireEvent.click(await within(row).findByRole('button', { name: 'จับคู่กับดีลนี้ ดีลที่ค้นเจอ' }));
+    fireEvent.click(await within(row).findByRole('button', { name: 'จับคู่กับงานนี้ ดีลที่ค้นเจอ' }));
     await waitFor(() => expect(api.receiptImports.resolve).toHaveBeenCalledWith(11, { ticketId: 40 }));
   });
 
@@ -137,8 +137,8 @@ describe('UnmatchedReceipts — account works the queue', () => {
     api.receiptImports.unmatched.mockResolvedValue([queued({ amount: 3000, candidates: [], reason: 'NO_CANDIDATE' })]);
     wrap(<UnmatchedReceipts showToast={vi.fn()} />);
     const row = await screen.findByTestId('unmatched-11');
-    fireEvent.click(within(row).getByRole('button', { name: 'เลือกดีลเอง' }));
-    fireEvent.change(within(row).getByLabelText('ค้นหาดีล'), { target: { value: 'ดีล' } });
+    fireEvent.click(within(row).getByRole('button', { name: 'เลือกงานเอง' }));
+    fireEvent.change(within(row).getByLabelText('ค้นหางาน'), { target: { value: 'ดีล' } });
     fireEvent.click(within(row).getByRole('button', { name: 'ค้นหา' }));
     fireEvent.click(await within(row).findByRole('button', { name: 'แบ่งยอด ดีลที่ค้นเจอ' }));
     fireEvent.click(within(row).getByRole('button', { name: 'แบ่งยอด ดีลที่สอง' }));

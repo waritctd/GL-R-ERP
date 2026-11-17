@@ -115,7 +115,7 @@ describe('mockApi procurement-source (mirrors TicketService.decideProcurementSou
     expect(events.findLast((e) => e.kind === 'PROCUREMENT_SOURCE_DECIDED').message)
       .toBe('เลือกที่มาสินค้า: นำเข้า 0 รายการ · จากสต็อก 1 รายการ');
     await expect(api.tickets.decideProcurementSource(OLD_DEAL, lines(true)))
-      .rejects.toMatchObject({ status: 409, message: 'เลือกที่มาสินค้าของดีลนี้แล้ว แก้ไขไม่ได้' });
+      .rejects.toMatchObject({ status: 409, message: 'เลือกที่มาสินค้าของงานนี้แล้ว แก้ไขไม่ได้' });
   });
 
   it('a fully covered line the rep marks import goes back to 0; a partial one is kept', async () => {
@@ -142,7 +142,7 @@ describe('mockApi procurement-source (mirrors TicketService.decideProcurementSou
     await api.auth.login(SALES);
     expect(await api.tickets.getProcurementSource(OLD_DEAL)).toMatchObject({ legacy: false, editable: false });
     await expect(api.tickets.decideProcurementSource(OLD_DEAL, lines(true)))
-      .rejects.toMatchObject({ status: 409, message: 'ดีลนี้ใช้ที่มาสินค้าตามใบเสนอราคา แก้ไขไม่ได้' });
+      .rejects.toMatchObject({ status: 409, message: 'งานนี้ใช้ที่มาสินค้าตามใบเสนอราคา แก้ไขไม่ได้' });
     await api.tickets.decideProcurementSource(OLD_DEAL, lines(false));
     expect((await api.tickets.getProcurementSource(OLD_DEAL)).decidedAt).toBeTruthy();
   });

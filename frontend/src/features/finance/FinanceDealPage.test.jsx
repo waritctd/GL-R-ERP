@@ -213,7 +213,7 @@ describe('FinanceDealPage', () => {
     it('the separate horizontal milestone track is gone (the panels are the only milestone display)', async () => {
       renderPage();
       await screen.findByRole('heading', { level: 1, name: /PR-2026-0501/ });
-      expect(screen.queryByRole('list', { name: 'ความคืบหน้าการเงินของดีล' })).toBeNull();
+      expect(screen.queryByRole('list', { name: /^ความคืบหน้าการเงินของ(ดีล|งาน)$/ })).toBeNull();
     });
 
     it('document rows in different panels share one row layout (same grid template) so amounts and buttons line up', async () => {
@@ -248,7 +248,7 @@ describe('FinanceDealPage', () => {
       api.finance.getDeal.mockResolvedValue({ deal });
       renderPage();
       await screen.findByRole('heading', { level: 1, name: /PR-2026-0501/ });
-      expect(within(section(/^2 ได้รับมัดจำ/)).getByText('ดีลนี้ไม่ต้องเก็บมัดจำ')).not.toBeNull();
+      expect(within(section(/^2 ได้รับมัดจำ/)).getByText('งานนี้ไม่ต้องเก็บมัดจำ')).not.toBeNull();
     });
 
     it('past milestones stay visible with their content, and an upcoming milestone that already holds data shows it', async () => {
@@ -878,20 +878,22 @@ describe('FinanceDealPage', () => {
     it('shows a layout-shaped skeleton while loading', async () => {
       api.finance.getDeal.mockReturnValue(new Promise(() => {}));
       renderPage();
-      expect(await screen.findByLabelText('กำลังโหลดดีล')).not.toBeNull();
+      expect(await screen.findByLabelText('กำลังโหลดงาน')).not.toBeNull();
     });
 
     it('403 shows access-denied with a link back to /finance', async () => {
       api.finance.getDeal.mockRejectedValue(new ApiError('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403));
       renderPage();
-      expect(await screen.findByText(/ไม่มีสิทธิ์เข้าถึงดีลนี้/)).not.toBeNull();
+      expect(await screen.findByText(/ไม่มีสิทธิ์เข้าถึงงานนี้/)).not.toBeNull();
+      // fix round 1: not "งานนี้อยู่นอกขอบเขตงานการเงิน" (งาน twice, two meanings).
+      expect(screen.getByText('งานนี้อยู่นอกขอบเขตของฝ่ายบัญชี')).not.toBeNull();
       expect(screen.getByRole('link', { name: /กลับไปงานการเงิน/ }).getAttribute('href')).toBe('/finance');
     });
 
     it('404 shows not-found with a link back to /finance', async () => {
       api.finance.getDeal.mockRejectedValue(new ApiError('ไม่พบดีลนี้', 404));
       renderPage();
-      expect(await screen.findByText(/ไม่พบดีลนี้/)).not.toBeNull();
+      expect(await screen.findByText(/ไม่พบงานนี้/)).not.toBeNull();
       expect(screen.getByRole('link', { name: /กลับไปงานการเงิน/ }).getAttribute('href')).toBe('/finance');
     });
   });

@@ -90,6 +90,19 @@ describe('quotationChainView — which quotation carries the chain, and the one 
     expect(quotationChainView(q(), confirmedHere({ lifecycle: 'ON_HOLD' }), { dealHref: DEAL }).reason).toBe('DEAL_PAUSED');
   });
 
+  it('names the deal page หน้ารายละเอียดงาน, never หน้างาน (the job site) — fix round 1', () => {
+    const texts = [
+      quotationChainView(q({ docStatus: 'SUPERSEDED' }), chain(), { dealHref: DEAL }).text,
+      quotationChainView(q(), chain({ lifecycle: 'ON_HOLD', order: { confirmable: false } }), { dealHref: DEAL }).text,
+      quotationChainView(q(), confirmedHere({ order: { confirmedFromQuotationId: null, confirmedFromQuotationNumber: null } }), { dealHref: DEAL }).text,
+      quotationChainView(q(), chain({ order: { confirmable: false } }), { dealHref: DEAL }).text,
+    ];
+    for (const text of texts) {
+      expect(text).toContain('หน้ารายละเอียดงาน');
+      expect(text).not.toMatch(/ที่หน้างาน/);
+    }
+  });
+
   it('confirmed some other way (no quotation named, or not one this viewer may see): one line to the deal', () => {
     const view = quotationChainView(q(), confirmedHere({ order: { confirmedFromQuotationId: null, confirmedFromQuotationNumber: null } }), { dealHref: DEAL });
     expect(view).toMatchObject({ mode: 'notice', reason: 'CONFIRMED_ELSEWHERE', link: { to: DEAL } });

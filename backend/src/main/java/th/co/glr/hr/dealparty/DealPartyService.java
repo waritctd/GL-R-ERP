@@ -77,7 +77,7 @@ public class DealPartyService {
             .orElseThrow(() -> new ApiException(HttpStatus.BAD_REQUEST, "ไม่พบลูกค้า"));
         Long contactId = requireContactOf(customer.id(), request.contactId());
         if (parties.findByTicketCustomerRole(ticketId, customer.id(), role).isPresent()) {
-            throw new ApiException(HttpStatus.CONFLICT, "ลูกค้ารายนี้อยู่ในดีลในบทบาทนี้แล้ว");
+            throw new ApiException(HttpStatus.CONFLICT, "ลูกค้ารายนี้อยู่ในงานนี้ด้วยบทบาทเดียวกันแล้ว");
         }
         // The first party on a deal (one that pre-dates V204 and had no customer, or whose backfill found none) is
         // the headline by definition; later parties are not until the rep says so.
@@ -128,7 +128,7 @@ public class DealPartyService {
             throw new ApiException(HttpStatus.CONFLICT, "ลบได้เฉพาะผู้เกี่ยวข้องที่ยังไม่มีใบเสนอราคา");
         }
         if (party.headline() && parties.findByTicket(ticketId).size() > 1) {
-            throw new ApiException(HttpStatus.CONFLICT, "ตั้งยอดหลักของดีลเป็นรายอื่นก่อนลบรายนี้");
+            throw new ApiException(HttpStatus.CONFLICT, "ตั้งยอดหลักของงานเป็นรายอื่นก่อนลบรายนี้");
         }
         parties.delete(partyId);
     }
@@ -166,7 +166,7 @@ public class DealPartyService {
         for (Long id : awardedIds) {
             DealPartyDto p = buyers.get(id);
             if (p == null) {
-                throw new ApiException(HttpStatus.BAD_REQUEST, "ไม่พบผู้รับเหมารายนี้ในดีล");
+                throw new ApiException(HttpStatus.BAD_REQUEST, "ไม่พบผู้รับเหมารายนี้ในงาน");
             }
             if (!DealPartyDtos.IN_RUNNING.contains(p.status())) {
                 throw new ApiException(HttpStatus.CONFLICT, p.customerName() + " มีผลแล้ว (" + p.status() + ")");
@@ -178,7 +178,7 @@ public class DealPartyService {
         if (!alreadyAwarded) {
             Long primaryId = request.primaryPartyId() != null ? request.primaryPartyId() : winners.get(0).id();
             primary = winners.stream().filter(p -> p.id() == primaryId).findFirst()
-                .orElseThrow(() -> new ApiException(HttpStatus.BAD_REQUEST, "ดีลหลักต้องเป็นหนึ่งในผู้รับเหมาที่ได้งาน"));
+                .orElseThrow(() -> new ApiException(HttpStatus.BAD_REQUEST, "ผู้รับเหมาของงานหลักต้องเป็นหนึ่งในผู้ที่ชนะ"));
         }
         // Every winner needs an APPROVED document before anything is written.
         Map<Long, Long> approvedQuotationByParty = new java.util.HashMap<>();
@@ -221,7 +221,7 @@ public class DealPartyService {
             parties.markAwardedSplit(w.id(), childId);
             tickets.addEvent(childId, actor.id(), actor.name(), TicketEventKind.CREATED, null, "draft", null);
             tickets.addEvent(childId, actor.id(), actor.name(), TicketEventKind.DEAL_SPLIT_FROM_PARENT, null, null,
-                "แยกจากดีล " + summary.code() + " — " + w.customerName() + " ได้งานส่วนของตน");
+                "แยกจากงาน " + summary.code() + " — " + w.customerName() + " ได้งานส่วนของตน");
             dealQuotations.confirmOrderFromDirectQuotation(approvedQuotationByParty.get(w.id()), actor, Set.of());
             childTicketIds.add(childId);
             childLines.add(code + " → " + w.customerName());
@@ -246,7 +246,7 @@ public class DealPartyService {
         StringBuilder message = new StringBuilder("บันทึกผลประมูล: ได้งาน ")
             .append(winners.stream().map(DealPartyDto::customerName).collect(Collectors.joining(", ")));
         if (!childLines.isEmpty()) {
-            message.append(" · แยกดีล ").append(String.join(", ", childLines));
+            message.append(" · แยกงาน ").append(String.join(", ", childLines));
         }
         if (!others.isEmpty()) {
             message.append(DealPartyDtos.OTHERS_KEEP_WAITING.equals(othersOutcome) ? " · ยังรอผล " : " · ไม่ได้งาน ")
@@ -271,18 +271,18 @@ public class DealPartyService {
 
     private TicketSummaryDto requireSummary(long ticketId) {
         return tickets.findSummaryById(ticketId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบดีล"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบงาน"));
     }
 
     private DealPartyDto requireParty(long partyId) {
         return parties.findById(partyId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบผู้เกี่ยวข้องในดีล"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบผู้เกี่ยวข้องในงาน"));
     }
 
     private DealPartyDto requirePartyOnTicket(long ticketId, long partyId) {
         DealPartyDto party = requireParty(partyId);
         if (party.ticketId() != ticketId) {
-            throw new ApiException(HttpStatus.NOT_FOUND, "ไม่พบผู้เกี่ยวข้องในดีล");
+            throw new ApiException(HttpStatus.NOT_FOUND, "ไม่พบผู้เกี่ยวข้องในงาน");
         }
         return party;
     }
@@ -303,7 +303,7 @@ public class DealPartyService {
 
     private static void requireActive(TicketSummaryDto summary) {
         if (!DealLifecycle.ACTIVE.equals(summary.lifecycle())) {
-            throw new ApiException(HttpStatus.CONFLICT, "ดีลไม่ได้อยู่ในสถานะ ACTIVE (" + summary.lifecycle() + ")");
+            throw new ApiException(HttpStatus.CONFLICT, "งานไม่ได้อยู่ในสถานะ ACTIVE (" + summary.lifecycle() + ")");
         }
     }
 
