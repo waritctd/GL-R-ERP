@@ -2604,14 +2604,20 @@ public class TicketRepository {
                             boolean remainingInvoice, boolean importRequest, boolean deliveryRecord,
                             boolean manualStockDecision) {}
 
-    /** One read of every downstream row an undo must not orphan. "Manual stock decision" = a STOCK_RESERVED or
+    /** One read of every downstream row an undo must not orphan. "Bid or split" = the bid path wrote its
+     * BID_OUTCOME_RECORDED right AFTER the promotion event in the same transaction (DealPartyService#recordBidOutcome),
+     * so an outcome recorded EARLIER on the deal does not count; or the deal is a split child (DEAL_SPLIT_FROM_PARENT)
+     * or has split children. "Manual stock decision" = a STOCK_RESERVED or
      * PROCUREMENT_SOURCE_DECIDED event after the (latest) promotion event, or the V208 latch; the confirmation's own
      * cover of จากสต็อก lines writes neither. */
     public UndoFacts undoConfirmationFacts(long ticketId) {
         return jdbc.queryForObject("""
             SELECT
-              EXISTS(SELECT 1 FROM sales.ticket_event WHERE ticket_id = :t
-                      AND kind IN ('BID_OUTCOME_RECORDED', 'DEAL_SPLIT_FROM_PARENT')) AS bid_or_split,
+              (EXISTS(SELECT 1 FROM sales.ticket_event WHERE ticket_id = :t AND kind = 'BID_OUTCOME_RECORDED'
+                        AND event_id > COALESCE((SELECT MAX(event_id) FROM sales.ticket_event
+                                                  WHERE ticket_id = :t AND kind = 'DEAL_PROMOTED_FROM_QUOTATION'), 0))
+               OR EXISTS(SELECT 1 FROM sales.ticket_event WHERE ticket_id = :t AND kind = 'DEAL_SPLIT_FROM_PARENT')
+               OR EXISTS(SELECT 1 FROM sales.ticket WHERE parent_ticket_id = :t)) AS bid_or_split,
               EXISTS(SELECT 1 FROM sales.deposit_notice WHERE ticket_id = :t AND status <> 'DRAFT') AS notice,
               EXISTS(SELECT 1 FROM sales.payment_receipt WHERE ticket_id = :t) AS receipt,
               EXISTS(SELECT 1 FROM sales.remaining_invoice WHERE ticket_id = :t) AS invoice,
@@ -2659,13 +2665,39 @@ public class TicketRepository {
             (rs, n) -> rs.getTimestamp("created_at").toInstant()).stream().findFirst();
     }
 
+    // The system's deposit-policy flip (TicketService#followQuotationDepositPolicy) writes its POLICY_CHANGED note and the
+    // undo finds it again: both build the text HERE, so the writer and the matcher cannot drift.
+    /** The reason (also stored in {@code deposit_policy_reason}) of a policy that follows a quotation's deposit percent. */
+    public static String followedPolicyReason(String quotationNumber, Integer depositPercent) {
+        return "ใบเสนอราคา " + quotationNumber
+            + (depositPercent != null && depositPercent == 0 ? " ระบุไม่รับมัดจำ (ชำระเต็มจำนวน)" : " ระบุมัดจำ " + depositPercent + "%");
+    }
+
+    /** The POLICY_CHANGED note of that flip. */
+    public static String followedPolicyNote(String policy, String reason) {
+        return "deposit_policy → " + policy + " — " + reason;
+    }
+
+    private static final String FOLLOWED_POLICY_NOTE_MATCH = "(message = :noDepositNote OR message LIKE :depositNoteLike ESCAPE '\\')";
+
+    /** Binds {@link #FOLLOWED_POLICY_NOTE_MATCH} for this quotation: the exact no-deposit note, or the deposit note up to
+     * its percent, with {@code %}, {@code _} and {@code \} in the number matched literally. */
+    private static MapSqlParameterSource followedPolicyNoteParams(MapSqlParameterSource params, String quotationNumber) {
+        String withOnePercent = followedPolicyNote(DepositPolicy.REQUIRED, followedPolicyReason(quotationNumber, 1));
+        String upToPercent = withOnePercent.substring(0, withOnePercent.length() - "1%".length());
+        return params
+            .addValue("noDepositNote", followedPolicyNote(DepositPolicy.NOT_REQUIRED, followedPolicyReason(quotationNumber, 0)))
+            .addValue("depositNoteLike", upToPercent.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%");
+    }
+
     /** A system POLICY_CHANGED written after the promotion, for this quotation (a person's waiver has another note). */
     public boolean hasSystemPolicyChangeAfter(long ticketId, long afterEventId, String quotationNumber) {
         return Boolean.TRUE.equals(jdbc.queryForObject("""
             SELECT EXISTS(SELECT 1 FROM sales.ticket_event WHERE ticket_id = :t AND kind = 'POLICY_CHANGED'
-                           AND event_id > :after AND message LIKE :like)
-            """, Map.of("t", ticketId, "after", afterEventId, "like", "deposit_policy → %— ใบเสนอราคา " + quotationNumber + " %"),
-            Boolean.class));
+                           AND event_id > :after AND
+            """ + FOLLOWED_POLICY_NOTE_MATCH + ")",
+            followedPolicyNoteParams(new MapSqlParameterSource().addValue("t", ticketId).addValue("after", afterEventId),
+                quotationNumber), Boolean.class));
     }
 
     /** Deletes the deal's DRAFT deposit notices and their items (no ON DELETE CASCADE); returns the notices deleted. */
@@ -2706,10 +2738,10 @@ public class TicketRepository {
                AND (event_id = :promo
                     OR (event_id > :promo AND (kind = 'CUSTOMER_CONFIRMED'
                         OR (kind = 'STAGE_CHANGED' AND message = :note)
-                        OR (kind = 'POLICY_CHANGED' AND message LIKE :like))))
-            """, new MapSqlParameterSource().addValue("t", ticketId).addValue("promo", promotionEventId)
-                .addValue("note", AUTO_STAGE_NOTE)
-                .addValue("like", "deposit_policy → %— ใบเสนอราคา " + quotationNumber + " %"));
+                        OR (kind = 'POLICY_CHANGED' AND
+            """ + FOLLOWED_POLICY_NOTE_MATCH + "))))",
+            followedPolicyNoteParams(new MapSqlParameterSource().addValue("t", ticketId).addValue("promo", promotionEventId)
+                .addValue("note", AUTO_STAGE_NOTE), quotationNumber));
     }
 
     /** An ORDER_CONFIRMATION_UNDONE event naming this quotation exists (the undo's idempotent replay). */

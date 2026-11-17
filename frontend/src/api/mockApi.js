@@ -4256,17 +4256,34 @@ function mockListChainStage(row, viewer) {
   return chainListStage(mockChainFacts(ticket), promoted, ticket.orderConfirmedQuotationId ?? null, row.id);
 }
 
-// Mirrors DealQuotationService#undoRefusal as far as this mock models the downstream documents: a non-draft deposit
-// notice, a payment, a remaining invoice, or a fulfilment step blocks the undo. Returns the Thai refusal or null.
+// Mirrors DealQuotationService#undoRefusal as far as this mock models the downstream facts: a deal no longer ACTIVE, a
+// non-draft deposit notice, a payment, a remaining invoice, a bid outcome written after the confirmation (or a split
+// deal), an import request, a delivery record, a manual stock / procurement decision, or a fulfilment step blocks the
+// undo. Returns the Thai refusal or null.
 function mockUndoRefusal(ticket) {
+  if ((ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE') return 'ยกเลิกไม่ได้ — ดีลไม่ได้อยู่ในสถานะ ACTIVE';
   if (mockDepositNotices.some((d) => d.ticketId === ticket.id && d.status !== 'DRAFT')) {
     return 'ยกเลิกไม่ได้ — ออกใบแจ้งยอดเงินรับมัดจำแล้ว';
   }
   if (ticket.paymentStatus != null && ticket.paymentStatus !== 'CUSTOMER_CONFIRMED') {
     return 'ยกเลิกไม่ได้ — มีการรับชำระเงินแล้ว';
   }
+  // Only the bid path writes BID_OUTCOME_RECORDED right AFTER the confirmation; an older outcome does not block.
+  const promotionId = mockConfirmedQuotationEvent(ticket)?.id ?? 0;
+  const after = (kinds) => ticket.events.some((e) => kinds.includes(e.kind) && e.id > promotionId);
+  if (after(['BID_OUTCOME_RECORDED']) || ticket.events.some((e) => e.kind === 'DEAL_SPLIT_FROM_PARENT')
+    || db.tickets.some((t) => t.parentTicketId === ticket.id)) {
+    return 'ยกเลิกไม่ได้ — คำสั่งซื้อนี้มาจากการบันทึกผลประมูลหรือการแยกดีล';
+  }
   if (mockRemainingInvoices.some((r) => r.ticketId === ticket.id)) return 'ยกเลิกไม่ได้ — ออกใบแจ้งหนี้ส่วนที่เหลือแล้ว';
-  if (ticket.fulfillmentStatus != null) return 'ยกเลิกไม่ได้ — ดีลดำเนินการต่อจากการยืนยันแล้ว';
+  if (mockImportRequests.some((r) => r.ticketId === ticket.id)) return 'ยกเลิกไม่ได้ — มีใบขอซื้อ (นำเข้า) แล้ว';
+  if ((db.deliveryRecords ?? []).some((d) => d.ticketId === ticket.id)) return 'ยกเลิกไม่ได้ — มีการบันทึกส่งสินค้าแล้ว';
+  if (after(['STOCK_RESERVED', 'PROCUREMENT_SOURCE_DECIDED']) || ticket.procurementDecidedAt != null) {
+    return 'ยกเลิกไม่ได้ — มีการระบุที่มาสินค้าหลังยืนยันคำสั่งซื้อแล้ว';
+  }
+  if (ticket.fulfillmentStatus != null && ticket.fulfillmentStatus !== 'FROM_STOCK') {
+    return 'ยกเลิกไม่ได้ — ดีลดำเนินการต่อจากการยืนยันแล้ว';
+  }
   return null;
 }
 
@@ -4849,6 +4866,19 @@ export function patchTicketForTests(ticketId, patch) {
  * which no create path accepts any more). */
 export function patchDealQuotationForTests(quotationId, patch) {
   Object.assign(mockDealQuotations.find((q) => q.id === Number(quotationId)), patch);
+}
+
+/** TEST-ONLY seam — not part of `api`. Writes one downstream fact an undo of the order confirmation must not orphan:
+ * bidOutcome / stockDecision / splitChild (an event, or a child deal) or importRequest / deliveryRecord (a row). */
+export function addUndoBlockerForTests(ticketId, kind) {
+  const ticket = findTicketRaw(Number(ticketId));
+  const actor = { id: 0, name: 'test' };
+  if (kind === 'bidOutcome') pushEvent(ticket, actor, 'BID_OUTCOME_RECORDED', ticket.status, ticket.status, 'test');
+  else if (kind === 'splitChild') pushEvent(ticket, actor, 'DEAL_SPLIT_FROM_PARENT', null, null, 'test');
+  else if (kind === 'stockDecision') pushEvent(ticket, actor, 'PROCUREMENT_SOURCE_DECIDED', ticket.status, ticket.status, 'test');
+  else if (kind === 'importRequest') mockImportRequests.push({ id: 990000 + mockImportRequests.length, ticketId: ticket.id, status: 'DRAFT', items: [] });
+  else if (kind === 'deliveryRecord') db.deliveryRecords.push({ deliveryId: 990000 + db.deliveryRecords.length, ticketId: ticket.id, items: [] });
+  else throw new Error(`unknown blocker ${kind}`);
 }
 
 /** TEST-ONLY seam — not part of `api`. Sets a ticket line's qtyFromStock (a legacy reserve). */
@@ -6864,6 +6894,9 @@ function applyMockOrderConfirmation(ticket, row, user, fromStatus = ticket.statu
   // deal page offered บันทึกผลประมูล after a confirm the real service had already awarded (document chain, 2026-11-17).
   const awardedParty = row.partyId != null ? mockDealParties.find((p) => p.id === row.partyId) : null;
   if (awardedParty && awardedParty.status !== 'AWARDED') {
+    // mock-internal: what the undo restores (markPartyAwarded's status_before_award columns)
+    awardedParty.statusBeforeAward = awardedParty.status;
+    awardedParty.notAwardedReasonBeforeAward = awardedParty.notAwardedReason ?? null;
     awardedParty.status = 'AWARDED';
     awardedParty.notAwardedReason = null;
     awardedParty.updatedAt = new Date().toISOString();
@@ -19616,7 +19649,19 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       }
       const before = ticket.preConfirmation ?? { status: 'draft', salesStage: ticket.salesStage };
       const reason = String(payload?.reason ?? '').trim();
-      ticket.events = ticket.events.filter((e) => e.kind !== 'DEAL_PROMOTED_FROM_QUOTATION');
+      // The confirmation's own events: the promotion, then CUSTOMER_CONFIRMED, its automatic stage moves and its system
+      // POLICY_CHANGED (the auto-cancel CANCELLED events stay).
+      const promotionId = mockConfirmedQuotationEvent(ticket).id;
+      ticket.events = ticket.events.filter((e) => e.id !== promotionId && !(e.id > promotionId && (e.kind === 'CUSTOMER_CONFIRMED'
+        || (e.kind === 'STAGE_CHANGED' && e.message === 'อัตโนมัติจากขั้นตอนของดีล')
+        || (e.kind === 'POLICY_CHANGED' && String(e.message).includes(`ใบเสนอราคา ${row.number} `)))));
+      const party = row.partyId != null ? mockDealParties.find((p) => p.id === row.partyId) : null;
+      if (party?.status === 'AWARDED') {
+        Object.assign(party, {
+          status: party.statusBeforeAward ?? 'QUOTED', notAwardedReason: party.notAwardedReasonBeforeAward ?? null,
+          statusBeforeAward: null, notAwardedReasonBeforeAward: null, updatedAt: new Date().toISOString(),
+        });
+      }
       Object.assign(ticket, {
         status: before.status, salesStage: before.salesStage, stageUpdatedAt: before.stageUpdatedAt,
         depositPolicy: before.depositPolicy, items: before.items, quotationOnly: before.quotationOnly,

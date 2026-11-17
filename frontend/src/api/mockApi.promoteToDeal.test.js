@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { api } from './mockApi.js';
+import { addUndoBlockerForTests, api, patchTicketForTests } from './mockApi.js';
 
 // Checks mock quotation-to-deal promotion and the live-direct-quotation locks retained by the backend.
 
@@ -314,5 +314,87 @@ describe('mock dealQuotations.undoConfirmOrder', () => {
     await asRole('import');
     await expect(api.dealQuotations.undoConfirmOrder(approved.id)).rejects.toMatchObject({ status: 403 });
     await expect(api.dealQuotations.undoConfirmOrder(987654)).rejects.toMatchObject({ status: 404 });
+  });
+});
+
+// The mock's undo must refuse and restore as the server does (DealQuotationService#undoRefusal / #undoOrderConfirmation).
+describe('mock dealQuotations.undoConfirmOrder — refusals and restore parity', () => {
+  const chainOf = async (ticketId) => (await api.documentChain.get(ticketId)).documentChain;
+  const confirmed = async () => {
+    const ghost = await quotationOnlyTicket();
+    const approved = await approvedQuotation(ghost);
+    return { ghost, approved };
+  };
+
+  it.each([
+    ['a deal that is no longer ACTIVE', (t) => patchTicketForTests(t, { lifecycle: 'ON_HOLD' })],
+    ['a bid outcome recorded with the confirmation', (t) => addUndoBlockerForTests(t, 'bidOutcome')],
+    ['a split child deal', (t) => addUndoBlockerForTests(t, 'splitChild')],
+    ['an import request', (t) => addUndoBlockerForTests(t, 'importRequest')],
+    ['a delivery record', (t) => addUndoBlockerForTests(t, 'deliveryRecord')],
+    ['a manual stock / procurement decision', (t) => addUndoBlockerForTests(t, 'stockDecision')],
+  ])('refuses with 409 (and the chain says not undoable) for %s', async (_name, block) => {
+    const { ghost, approved } = await confirmed();
+    await api.dealQuotations.promoteToDeal(approved.id);
+    expect((await chainOf(ghost)).order.undoable).toBe(true);
+    block(ghost);
+    expect((await chainOf(ghost)).order.undoable).toBe(false);
+    await expect(api.dealQuotations.undoConfirmOrder(approved.id)).rejects.toMatchObject({ status: 409 });
+    expect((await chainOf(ghost)).order.confirmed).toBe(true);
+  });
+
+  it('a bid outcome recorded BEFORE a plain manual confirmation does not block the undo', async () => {
+    const { ghost, approved } = await confirmed();
+    addUndoBlockerForTests(ghost, 'bidOutcome');
+    await api.dealQuotations.promoteToDeal(approved.id);
+    expect((await chainOf(ghost)).order.undoable).toBe(true);
+    await expect(api.dealQuotations.undoConfirmOrder(approved.id)).resolves.toBeTruthy();
+  });
+
+  it('removes the confirmation\'s CUSTOMER_CONFIRMED and automatic STAGE_CHANGED events, not only the promotion event', async () => {
+    const { ghost, approved } = await confirmed();
+    await api.dealQuotations.promoteToDeal(approved.id);
+    const before = (await api.tickets.get(ghost)).ticket.events;
+    const promotionId = before.find((e) => e.kind === 'DEAL_PROMOTED_FROM_QUOTATION').id;
+    const auto = (e) => e.kind === 'STAGE_CHANGED' && e.message === 'อัตโนมัติจากขั้นตอนของดีล';
+    expect(before.some((e) => e.kind === 'CUSTOMER_CONFIRMED')).toBe(true);
+    expect(before.some((e) => auto(e) && e.id > promotionId)).toBe(true);
+
+    await api.dealQuotations.undoConfirmOrder(approved.id);
+
+    const after = (await api.tickets.get(ghost)).ticket.events;
+    expect(after.filter((e) => e.kind === 'CUSTOMER_CONFIRMED')).toHaveLength(0);
+    expect(after.filter((e) => auto(e) && e.id > promotionId)).toHaveLength(0);
+    expect(after.filter((e) => e.kind === 'DEAL_PROMOTED_FROM_QUOTATION')).toHaveLength(0);
+    // the stage move the QUOTATION caused (before the confirmation) is not the confirmation's: it stays
+    expect(after.filter(auto).length).toBe(before.filter((e) => auto(e) && e.id < promotionId).length);
+  });
+
+  it('the history is exactly what it was before the confirmation, plus the one undo event', async () => {
+    const { ghost, approved } = await confirmed();
+    const beforeKinds = (await api.tickets.get(ghost)).ticket.events.map((e) => e.kind);
+    await api.dealQuotations.promoteToDeal(approved.id);
+    await api.dealQuotations.undoConfirmOrder(approved.id);
+    const afterKinds = (await api.tickets.get(ghost)).ticket.events.map((e) => e.kind);
+    expect(afterKinds).toEqual([...beforeKinds, 'ORDER_CONFIRMATION_UNDONE']);
+  });
+
+  it.each(['QUOTED', 'NEGOTIATING'])('the awarded party goes back to the status it had (%s)', async (status) => {
+    await asRole('sales');
+    const { ticket } = await api.tickets.create({
+      entryChannel: 'DESIGNER_LED', title: 'ดีลมีผู้รับเหมา', customerName: 'ลูกค้า', customerId: 5, projectId: 1, contactId: null,
+      priority: 'NORMAL', items: [], nextFollowUpAt: '2026-10-07', quotationOnly: true,
+    });
+    const deal = ticket.summary.id;
+    const approved = await approvedQuotation(deal);
+    const party = (await api.tickets.parties(deal)).parties.find((p) => p.customerId === 5);
+    expect(party.status).toBe('QUOTED');
+    if (status === 'NEGOTIATING') await api.tickets.updateParty(deal, party.id, { status });
+    await api.dealQuotations.promoteToDeal(approved.id);
+    expect((await api.tickets.parties(deal)).parties.find((p) => p.id === party.id).status).toBe('AWARDED');
+
+    await api.dealQuotations.undoConfirmOrder(approved.id);
+
+    expect((await api.tickets.parties(deal)).parties.find((p) => p.id === party.id).status).toBe(status);
   });
 });

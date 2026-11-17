@@ -277,8 +277,12 @@ public class ImportRequestService {
     @Transactional
     public List<ImportRequestDto> createDrafts(long ticketId, CreateImportRequestsRequest request,
                                                UserPrincipal actor) {
-        TicketSnapshot snapshot = requireTicket(ticketId);
+        requireTicket(ticketId); // 404 first
         requireFullWrite(ticketId, actor);
+        // Row lock, then re-read the deal: an undo of the order confirmation (DealQuotationService#undoOrderConfirmation)
+        // holds this lock, so a create that checked the state without it could survive the undo. Row lock only.
+        tickets.lockTicketForUpdate(ticketId);
+        TicketSnapshot snapshot = requireTicket(ticketId);
         requireDealActive(snapshot);
         if (!repository.stageAtLeastOrderReceived(ticketId)) {
             throw new ApiException(HttpStatus.CONFLICT,

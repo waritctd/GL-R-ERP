@@ -1862,7 +1862,7 @@ public class DealQuotationService {
      * {@code quotation_issued -> draft}, {@code payment_status} NULL, {@code sales_stage} back to the {@code from} of
      * the earliest automatic stage move after the promotion (unchanged if none), {@code stage_updated_at} to the time of
      * the last earlier stage move (best effort: left alone if there was none), fulfilment NULL if it was FROM_STOCK;
-     * the party AWARDED goes back to QUOTED; the confirmation's events are DELETED (promotion, CUSTOMER_CONFIRMED,
+     * the party AWARDED goes back to the status and not-awarded reason it had before (V222; QUOTED if none was remembered); the confirmation's events are DELETED (promotion, CUSTOMER_CONFIRMED,
      * its automatic stage moves, its system POLICY_CHANGED: SQL readers treat the promotion event's existence as
      * "order confirmed"; the auto-cancel CANCELLED events stay); ONE {@code ORDER_CONFIRMATION_UNDONE} event records
      * who had confirmed and when, the reason, and a deleted draft deposit notice. NO notification of any kind.
@@ -1871,6 +1871,14 @@ public class DealQuotationService {
      * deal's lines from before the confirmation (replaced by the quotation's, by owner ruling); sibling quotations the
      * confirmation auto-cancelled (they stay cancelled); the notifications the confirmation sent. Afterwards the
      * quotation can be revised again and the order confirmed again.
+     *
+     * <p><strong>Stage and its timestamp</strong>: {@code sales_stage} is restored only from an automatic stage move the
+     * confirmation wrote; if it wrote none, the stage is left as it is. That is the correct restore, not a gap: a deal
+     * cannot be moved to ORDER_RECEIVED by hand before the confirmation ({@code TicketService#requireStageFactsHold}
+     * refuses it without a payment status; pinned by {@code StageFactGateIntegrationTest
+     * #orderReceived_withNoVerifiedCustomerOrder_isRefused_andTheDealDoesNotMove}), so a deal past that point reached it
+     * through the confirmation. The {@code stage_updated_at} restore reads STAGE_CHANGED events only, so a deal with no
+     * earlier stage move keeps the confirm-time stamp.
      */
     @Transactional
     public PromoteToDealResultDto undoOrderConfirmation(long quotationId, String reason, UserPrincipal actor) {
@@ -1917,7 +1925,7 @@ public class DealQuotationService {
                 "สถานะดีลถูกเปลี่ยนโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
         }
         if (quotation.partyId() != null) {
-            quotations.markPartyQuotedAgain(quotation.partyId());
+            quotations.restorePartyBeforeAward(quotation.partyId());
         }
         tickets.deleteConfirmationEvents(ticketId, promotion.eventId(), quotation.number());
 
@@ -1937,16 +1945,13 @@ public class DealQuotationService {
 
     /**
      * Read-only twin of {@link #undoOrderConfirmation}'s state checks, for {@code DocumentChainDto.Order#undoable}:
-     * the order was confirmed from a direct quotation and {@link #undoRefusal} finds nothing in the way. No lock, no
-     * authz (the identity half is {@link #hasEditAccess}).
+     * {@link #undoRefusal} finds nothing in the way of the deal {@code summary} describes. The caller calls it only for a
+     * deal whose confirmation event exists (the chain's {@code promoted} flag): that event is written only by
+     * {@link #confirmOrderFromDirectQuotation} and names the direct quotation, so no origin lookup is repeated here. No
+     * lock, no authz (the identity half is {@link #hasEditAccess}).
      */
-    public boolean isOrderConfirmationUndoable(long ticketId) {
-        Long quotationId = tickets.findOrderConfirmedQuotationId(ticketId).orElse(null);
-        if (quotationId == null
-                || !DealQuotationRepository.ORIGIN_DEAL_DIRECT.equals(requireQuotation(quotationId).origin())) {
-            return false;
-        }
-        return undoRefusal(requireTicketSummary(ticketId)) == null;
+    public boolean isOrderConfirmationUndoable(TicketSummaryDto summary) {
+        return undoRefusal(summary) == null;
     }
 
     /**

@@ -1048,13 +1048,12 @@ public class TicketService {
         }
         boolean noDeposit = depositPercent == 0;
         String policy = noDeposit ? DepositPolicy.NOT_REQUIRED : DepositPolicy.REQUIRED;
-        String reason = "ใบเสนอราคา " + quotationNumber
-            + (noDeposit ? " ระบุไม่รับมัดจำ (ชำระเต็มจำนวน)" : " ระบุมัดจำ " + depositPercent + "%");
+        String reason = TicketRepository.followedPolicyReason(quotationNumber, depositPercent);
         String expected = noDeposit ? DepositPolicy.REQUIRED : DepositPolicy.NOT_REQUIRED;
         if (tickets.syncDepositPolicyFromQuotation(ticketId, expected, policy, reason) == 1) {
             String stage = requireTicket(ticketId).summary().salesStage();
             tickets.addEvent(ticketId, actor.id(), actor.name(),
-                TicketEventKind.POLICY_CHANGED, stage, stage, "deposit_policy → " + policy + " — " + reason);
+                TicketEventKind.POLICY_CHANGED, stage, stage, TicketRepository.followedPolicyNote(policy, reason));
         }
     }
 

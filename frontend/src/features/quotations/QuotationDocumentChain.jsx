@@ -18,7 +18,7 @@ import { DepositIssueSummary } from '../deposits/DepositNoticePage.jsx';
 import { invalidateDealDocuments } from '../documentChain/documentChain.js';
 import { chainNextStep } from '../documentChain/documentChainText.js';
 import { RemainingInvoiceDialog } from '../tickets/RemainingInvoiceDialog.jsx';
-import { quotationChainSteps } from './quotationChain.js';
+import { CONFIRM_ORDER_STEP_KEY, quotationChainSteps } from './quotationChain.js';
 
 /** The step marker — DealStepper's visual language: check (done), filled ring (the viewer's turn), outlined number. */
 function Marker({ state, n }) {
@@ -55,6 +55,7 @@ function Step({ index, step, last, railDone, onAction, actionBusy, download, onU
   return (
     <li
       data-step={index + 1}
+      data-step-key={step.key}
       data-state={step.state}
       aria-current={step.state === 'current' ? 'step' : undefined}
       className="relative grid min-w-0 grid-cols-1 content-start gap-y-1.5 pr-5 mobile:grid-cols-[1.25rem_minmax(0,1fr)_auto] mobile:items-center mobile:gap-x-2.5 mobile:gap-y-0 mobile:pr-0"
@@ -247,7 +248,7 @@ export function QuotationDocumentChain({ quotation, chain, onConfirmOrder, onUnd
               onAction={action?.onClick}
               actionBusy={action?.busy ?? false}
               download={step.download ? downloads[step.download] : null}
-              onUndo={canUndo && index === 1 ? onUndoConfirm : null}
+              onUndo={canUndo && step.key === CONFIRM_ORDER_STEP_KEY ? onUndoConfirm : null}
             />
           );
         })}

@@ -295,6 +295,8 @@ describe('QuotationEditorPage — the document chain card', () => {
       await (await card()).findByRole('button', { name: 'สร้างใบแจ้งยอดเงินรับมัดจำ' });
       expect(undoBtn()).toBeTruthy();
       expect(undoBtn().textContent).toContain('ยกเลิกการยืนยันคำสั่งซื้อ');
+      // Keyed to the confirm-order step's own identity, not to its position.
+      expect(undoBtn().closest('li').getAttribute('data-step-key')).toBe('confirm-order');
       expect(primaryButtons(screen.getByTestId('quotation-document-chain'))).toHaveLength(1);
     });
 
@@ -354,11 +356,24 @@ describe('QuotationEditorPage — the document chain card', () => {
       await waitFor(() => expect(api.dealQuotations.undoConfirmOrder).toHaveBeenCalledWith('5', {}));
     });
 
-    it('shows the server message on error and leaves the page as it was', async () => {
+    it('a 409 closes the dialog, shows the server message and re-reads the chain', async () => {
       api.dealQuotations.undoConfirmOrder.mockRejectedValue(Object.assign(new Error('ยกเลิกไม่ได้ — ออกใบแจ้งยอดเงินรับมัดจำแล้ว'), { status: 409 }));
       const { showToast } = await openDialog();
+      const callsBefore = api.documentChain.get.mock.calls.length;
       fireEvent.click(screen.getByTestId('quotation-undo-confirm-submit'));
       await waitFor(() => expect(showToast).toHaveBeenCalledWith('error', 'ยกเลิกไม่ได้ — ออกใบแจ้งยอดเงินรับมัดจำแล้ว'));
+      await waitFor(() => expect(screen.queryByTestId('quotation-undo-confirm-dialog')).toBeNull());
+      await waitFor(() => expect(api.documentChain.get.mock.calls.length).toBeGreaterThan(callsBefore));
+    });
+
+    it('any other error (network, 500) keeps the dialog open with the typed reason, so the rep can retry', async () => {
+      api.dealQuotations.undoConfirmOrder.mockRejectedValue(Object.assign(new Error('เซิร์ฟเวอร์ขัดข้อง'), { status: 500 }));
+      const { dialog, showToast } = await openDialog();
+      fireEvent.change(dialog.getByRole('textbox'), { target: { value: 'กดผิดดีล' } });
+      fireEvent.click(screen.getByTestId('quotation-undo-confirm-submit'));
+      await waitFor(() => expect(showToast).toHaveBeenCalledWith('error', 'เซิร์ฟเวอร์ขัดข้อง'));
+      expect(screen.getByTestId('quotation-undo-confirm-dialog')).toBeTruthy();
+      expect(dialog.getByRole('textbox').value).toBe('กดผิดดีล');
     });
   });
 });

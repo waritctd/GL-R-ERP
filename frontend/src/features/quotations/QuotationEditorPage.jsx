@@ -1942,8 +1942,8 @@ export function QuotationEditorPage({ user, showToast }) {
         quotationQuery.refetch();
         promotionTicketQuery.refetch();
         invalidateDealDocuments(queryClient, quotation?.ticketId);
+        setUndoOpen(false); // the state moved on: nothing left to retry. Any other error keeps the dialog and the typed reason.
       }
-      setUndoOpen(false);
       showToast('error', error.message || 'ยกเลิกการยืนยันคำสั่งซื้อไม่สำเร็จ');
     },
   });
@@ -3510,7 +3510,7 @@ export function QuotationEditorPage({ user, showToast }) {
               same thing (TicketDetailPage renders the same three parts). */}
           <p className="m-0">
             {CONFIRM_ORDER_FROM_QUOTATION_COPY.lead(quotation?.number)} <strong>{CONFIRM_ORDER_FROM_QUOTATION_COPY.stage}</strong>
-            {' '}{CONFIRM_ORDER_FROM_QUOTATION_COPY.tail(quotation?.depositPercent)}
+            {' '}{CONFIRM_ORDER_FROM_QUOTATION_COPY.tail(quotation?.depositPercent, true)}
           </p>
         </Modal>
       ) : null}

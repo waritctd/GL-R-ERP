@@ -36,7 +36,7 @@ public record DocumentChainDto(
      *                                 that quotation (DealQuotationService#orderConfirmedQuotationId)
      * @param confirmedAt when; null for {@code account}, which reads no ticket events
      * @param undoable the state half of "ยกเลิกการยืนยันคำสั่งซื้อ": the order was confirmed from a direct quotation and
-     *                 nothing downstream stops it (DealQuotationService#isOrderConfirmationUndoable, the very rule the
+     *                 nothing downstream stops it (DealQuotationService#isOrderConfirmationUndoable, only ever true once the order is confirmed, the very rule the
      *                 undo endpoint's 409s come from); who may press it is {@code viewer.mayConfirmOrder}
      */
     public record Order(boolean confirmed, boolean confirmable, Long confirmedFromQuotationId,

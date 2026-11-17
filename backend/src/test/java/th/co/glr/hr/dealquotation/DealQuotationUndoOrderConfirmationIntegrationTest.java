@@ -19,6 +19,7 @@ import th.co.glr.hr.dealquotation.DealQuotationDtos.DealQuotationDto;
 import th.co.glr.hr.dealquotation.DealQuotationDtos.PromoteToDealResultDto;
 import th.co.glr.hr.deposit.DepositNoticeDraftRequest;
 import th.co.glr.hr.deposit.DepositNoticeDto;
+import th.co.glr.hr.deposit.DepositNoticeService;
 import th.co.glr.hr.ticket.DealLifecycle;
 import th.co.glr.hr.ticket.DealStage;
 import th.co.glr.hr.ticket.DepositPolicy;
@@ -472,6 +473,40 @@ class DealQuotationUndoOrderConfirmationIntegrationTest extends DirectQuotationD
         assertRefusedAndNothingWritten(c);
     }
 
+    /** The bid path writes BID_OUTCOME_RECORDED right AFTER the confirmation (DealPartyService#recordBidOutcome); an outcome
+     * recorded earlier on the deal has nothing to do with a later plain, manual confirmation. */
+    @Test
+    void anOlderBidOutcome_doesNotBlockTheUndoOfALaterPlainManualConfirmation() {
+        long deal = pipelineTicket(salesActor);
+        tickets.addEvent(deal, salesActor.id(), salesActor.name(), TicketEventKind.BID_OUTCOME_RECORDED, null, null, "older outcome");
+        DealQuotationDto approved = approvedDirectQuotation(deal, salesActor);
+        confirmer.confirmOrderFromDirectQuotation(approved.id(), salesActor);
+
+        confirmer.undoOrderConfirmation(approved.id(), null, salesActor);
+
+        assertThat(summary(deal).status()).isEqualTo(TicketStatus.DRAFT);
+        assertThat(eventCount(deal, TicketEventKind.BID_OUTCOME_RECORDED)).as("the older outcome stays").isEqualTo(1);
+    }
+
+    @Test
+    void cutOff_aSplitChildDeal_whoseSplitEventPredatesTheConfirmation() {
+        long deal = pipelineTicket(salesActor);
+        tickets.addEvent(deal, salesActor.id(), salesActor.name(), TicketEventKind.DEAL_SPLIT_FROM_PARENT, null, null, "split");
+        DealQuotationDto approved = approvedDirectQuotation(deal, salesActor);
+        confirmer.confirmOrderFromDirectQuotation(approved.id(), salesActor);
+
+        assertRefusedAndNothingWritten(new Confirmed(deal, approved));
+    }
+
+    @Test
+    void cutOff_aDealThatHasSplitChildren() {
+        Confirmed c = confirmedDeal();
+        long child = pipelineTicket(salesActor);
+        jdbc.update("UPDATE sales.ticket SET parent_ticket_id = :p WHERE ticket_id = :c", Map.of("p", c.deal(), "c", child));
+
+        assertRefusedAndNothingWritten(c);
+    }
+
     @Test
     void cutOff_aPersonReservedStockAfterTheConfirmation_partial() {
         Confirmed c = confirmedDeal();
@@ -659,6 +694,155 @@ class DealQuotationUndoOrderConfirmationIntegrationTest extends DirectQuotationD
             .hasMessageContaining("injected undo failure");
 
         assertThat(state(deal)).as("nothing of the undo survived").isEqualTo(before);
+    }
+
+    // ───────────────────────────────────────────────────────────────────────────────────
+    // 12. The awarded party goes back to the status (and reason) it had before the award
+    // ───────────────────────────────────────────────────────────────────────────────────
+
+    @Test
+    void party_negotiatingBeforeTheConfirmation_isNegotiatingAfterTheUndo() {
+        long deal = pipelineTicket(salesActor);
+        DealQuotationDto approved = approvedDirectQuotation(deal, salesActor);
+        long party = partyOf(deal, approved.id());
+        jdbc.update("UPDATE sales.deal_party SET status = 'NEGOTIATING' WHERE party_id = :id", Map.of("id", party));
+        confirmer.confirmOrderFromDirectQuotation(approved.id(), salesActor);
+        assertThat(partyStatus(party)).as("fixture").isEqualTo("AWARDED");
+
+        confirmer.undoOrderConfirmation(approved.id(), null, salesActor);
+
+        assertThat(partyStatus(party)).isEqualTo("NEGOTIATING");
+    }
+
+    @Test
+    void party_notAwardedWithAReasonBeforeTheConfirmation_comesBackWithItsReason() {
+        long deal = pipelineTicket(salesActor);
+        DealQuotationDto approved = approvedDirectQuotation(deal, salesActor);
+        long party = partyOf(deal, approved.id());
+        jdbc.update("UPDATE sales.deal_party SET status = 'NOT_AWARDED', not_awarded_reason = 'PRICE' WHERE party_id = :id",
+            Map.of("id", party));
+        confirmer.confirmOrderFromDirectQuotation(approved.id(), salesActor);
+        assertThat(jdbc.queryForObject("SELECT not_awarded_reason FROM sales.deal_party WHERE party_id = :id",
+            Map.of("id", party), String.class)).as("fixture: the award cleared the reason").isNull();
+
+        confirmer.undoOrderConfirmation(approved.id(), null, salesActor);
+
+        assertThat(partyStatus(party)).isEqualTo("NOT_AWARDED");
+        assertThat(jdbc.queryForObject("SELECT not_awarded_reason FROM sales.deal_party WHERE party_id = :id",
+            Map.of("id", party), String.class)).isEqualTo("PRICE");
+    }
+
+    /** A party awarded before this shipped has no remembered status: QUOTED, as the undo always did. */
+    @Test
+    void party_awardedBeforeTheStatusWasRemembered_goesBackToQuoted() {
+        long deal = pipelineTicket(salesActor);
+        DealQuotationDto approved = approvedDirectQuotation(deal, salesActor);
+        long party = partyOf(deal, approved.id());
+        jdbc.update("UPDATE sales.deal_party SET status = 'NEGOTIATING' WHERE party_id = :id", Map.of("id", party));
+        confirmer.confirmOrderFromDirectQuotation(approved.id(), salesActor);
+        jdbc.update("UPDATE sales.deal_party SET status_before_award = NULL, not_awarded_reason_before_award = NULL"
+            + " WHERE party_id = :id", Map.of("id", party));
+
+        confirmer.undoOrderConfirmation(approved.id(), null, salesActor);
+
+        assertThat(partyStatus(party)).isEqualTo("QUOTED");
+    }
+
+    /** A party that was already AWARDED when the confirmation ran (the bid path awards first) changes nothing, so the
+     * confirmation remembers nothing; the memory is also cleared by the undo, so a re-confirm starts clean. */
+    @Test
+    void party_theRememberedStatusIsClearedByTheUndo() {
+        long deal = pipelineTicket(salesActor);
+        DealQuotationDto approved = approvedDirectQuotation(deal, salesActor);
+        long party = partyOf(deal, approved.id());
+        confirmer.confirmOrderFromDirectQuotation(approved.id(), salesActor);
+        assertThat(jdbc.queryForObject("SELECT status_before_award FROM sales.deal_party WHERE party_id = :id",
+            Map.of("id", party), String.class)).as("fixture: remembered").isEqualTo("QUOTED");
+
+        confirmer.undoOrderConfirmation(approved.id(), null, salesActor);
+
+        assertThat(jdbc.queryForObject("SELECT status_before_award FROM sales.deal_party WHERE party_id = :id",
+            Map.of("id", party), String.class)).isNull();
+    }
+
+    // ───────────────────────────────────────────────────────────────────────────────────
+    // 13. The deposit-policy note the undo looks for is exactly the one the confirmation writes
+    // ───────────────────────────────────────────────────────────────────────────────────
+
+    /** A person's waiver whose typed reason happens to contain the quotation phrase is not the system's flip. */
+    @Test
+    void aWaiverWhoseReasonContainsTheQuotationPhrase_survivesTheUndo() {
+        Confirmed c = confirmedDeal();
+        ticketService.waiveDeposit(c.deal(), DepositPolicy.WAIVED,
+            "ใบเสนอราคา " + c.quotation().number() + " ตกลงยกเว้นมัดจำแล้ว", salesManagerActor);
+        assertThat(eventCount(c.deal(), TicketEventKind.POLICY_CHANGED)).as("fixture").isEqualTo(1);
+
+        confirmer.undoOrderConfirmation(c.quotation().id(), null, salesActor);
+
+        assertThat(eventCount(c.deal(), TicketEventKind.POLICY_CHANGED)).as("the person's waiver event is kept").isEqualTo(1);
+        assertThat(summary(c.deal()).depositPolicy()).isEqualTo(DepositPolicy.WAIVED);
+        assertThat(summary(c.deal()).status()).as("the undo itself happened").isEqualTo(TicketStatus.DRAFT);
+    }
+
+    /** The quotation number is matched literally: LIKE wildcards in it match nothing else. */
+    @Test
+    void systemPolicyNoteMatch_isLiteral_notAWildcard() {
+        long deal = pipelineTicket(salesActor);
+        tickets.addEvent(deal, salesActor.id(), salesActor.name(), TicketEventKind.POLICY_CHANGED, null, null,
+            "deposit_policy → REQUIRED — ใบเสนอราคา QT-9-1 ระบุมัดจำ 50%");
+        tickets.addEvent(deal, salesActor.id(), salesActor.name(), TicketEventKind.POLICY_CHANGED, null, null,
+            "deposit_policy → NOT_REQUIRED — ใบเสนอราคา QT-8-1 ระบุไม่รับมัดจำ (ชำระเต็มจำนวน)");
+
+        assertThat(tickets.hasSystemPolicyChangeAfter(deal, 0, "QT-9-1")).as("exact number, deposit note").isTrue();
+        assertThat(tickets.hasSystemPolicyChangeAfter(deal, 0, "QT-8-1")).as("exact number, no-deposit note").isTrue();
+        assertThat(tickets.hasSystemPolicyChangeAfter(deal, 0, "QT-_-1")).as("underscore is not a wildcard").isFalse();
+        assertThat(tickets.hasSystemPolicyChangeAfter(deal, 0, "%")).as("percent is not a wildcard").isFalse();
+        assertThat(tickets.hasSystemPolicyChangeAfter(deal, 0, "QT-9-")).as("not a prefix match").isFalse();
+    }
+
+    // ───────────────────────────────────────────────────────────────────────────────────
+    // 14. Concurrency: a draft cannot be created behind an undo's back
+    // ───────────────────────────────────────────────────────────────────────────────────
+
+    /**
+     * The undo holds the ticket row lock while it deletes the draft deposit notices. A deposit-notice creator that did its
+     * state check WITHOUT that lock could insert a draft after the delete and survive the undo. So creation waits on the
+     * row lock, then re-reads the deal: after an undo commits first it is refused 409 and no draft row exists.
+     */
+    @Test
+    void depositDraftCreation_waitsForTheTicketRowLock_andIsRefusedOnceAnUndoCommitted() throws Exception {
+        Confirmed c = confirmedDeal();
+        DepositNoticeService creator = transactional(depositNoticeService);
+        javax.sql.DataSource ds = ((org.springframework.jdbc.datasource.DataSourceTransactionManager) transactionManager)
+            .getDataSource();
+        java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newSingleThreadExecutor();
+        try (java.sql.Connection holder = ds.getConnection()) {
+            holder.setAutoCommit(false);
+            try (java.sql.PreparedStatement ps = holder.prepareStatement(
+                    "SELECT 1 FROM sales.ticket WHERE ticket_id = ? FOR UPDATE")) {
+                ps.setLong(1, c.deal());
+                ps.execute();
+            }
+            java.util.concurrent.Future<DepositNoticeDto> create = pool.submit(() -> creator.createDraft(c.deal(),
+                new DepositNoticeDraftRequest(null, null, null, null, null, null, null, null), salesActor));
+            assertThatThrownBy(() -> create.get(2, java.util.concurrent.TimeUnit.SECONDS))
+                .as("creation must wait on the ticket row lock another transaction holds")
+                .isInstanceOf(java.util.concurrent.TimeoutException.class);
+            // What the undo commits under that lock: the deal goes back to draft.
+            try (java.sql.PreparedStatement ps = holder.prepareStatement(
+                    "UPDATE sales.ticket SET status = 'draft', payment_status = NULL WHERE ticket_id = ?")) {
+                ps.setLong(1, c.deal());
+                ps.executeUpdate();
+            }
+            holder.commit();
+            assertThatThrownBy(() -> create.get(20, java.util.concurrent.TimeUnit.SECONDS))
+                .isInstanceOf(java.util.concurrent.ExecutionException.class)
+                .cause().isInstanceOfSatisfying(ApiException.class,
+                    e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+        } finally {
+            pool.shutdownNow();
+        }
+        assertThat(count("SELECT COUNT(*) FROM sales.deposit_notice WHERE ticket_id = :id", c.deal())).isZero();
     }
 
     // ───────────────────────────────────────────────────────────────────────────────────

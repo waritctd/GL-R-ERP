@@ -60,6 +60,7 @@ abstract class DirectQuotationDealTestBase extends AbstractPostgresIntegrationTe
     protected TicketService ticketService;
     protected DealQuotationService quotationService;
     protected DealQuotationService confirmer; // quotationService behind a real @Transactional proxy
+    protected PricingRequestService pricingRequestService;
     protected DepositNoticeService depositNoticeService;
     protected CustomerRepository customers;
     protected EmployeeRepository employees;
@@ -85,7 +86,7 @@ abstract class DirectQuotationDealTestBase extends AbstractPostgresIntegrationTe
         ProjectRepository projects = new ProjectRepository(jdbc);
         employees = new EmployeeRepository(jdbc, new EmployeeReferenceRepository(jdbc), new EmployeeCodeGenerator(jdbc));
         PricingRequestRepository pricingRequests = new PricingRequestRepository(jdbc);
-        PricingRequestService pricingRequestService = new PricingRequestService(pricingRequests, tickets, notifications,
+        pricingRequestService = new PricingRequestService(pricingRequests, tickets, notifications,
             objectMapper, new ContactRepository(jdbc), new FileStorageService("/tmp/glr-undo-confirm-test-uploads"),
             factoryQuoteCarryForward());
         ticketService = new TicketService(tickets, notifications, objectMapper, customers, new QuotationRenderer(),
@@ -221,12 +222,17 @@ abstract class DirectQuotationDealTestBase extends AbstractPostgresIntegrationTe
     }
 
     protected ItemInput stockTile(String model, boolean stock) {
+        return stockTile(model, stock, null);
+    }
+
+    /** {@code id} non-null is a row the editor already saved, which update rewrites in place. */
+    protected ItemInput stockTile(String model, boolean stock, Long id) {
         return new ItemInput(
             null, null, null, "SCG", model, "White", "Matte", "60x60", new BigDecimal("10.00"),
             new BigDecimal("0.36"), WastageCalculator.QUANTITY_MODE_PIECES, null, 10,
             WastageCalculator.WASTAGE_MODE_NONE, null, 4, new BigDecimal("100.00"), BigDecimal.ZERO, "ไทย-สต็อก",
             3, 7, null, WastageCalculator.LINE_TYPE_TILE, null, null, null, null, null, null, null, null,
-            null, null, false).withStockSource(stock ? "IN_THAILAND" : null);
+            id, null, false).withStockSource(stock ? "IN_THAILAND" : null);
     }
 
     // Reads and assertions
