@@ -70,6 +70,9 @@ class ViewAsReadOnlyFilterTest {
         "POST,   /api/payroll/preview/other",
         "POST,   /api/payroll/tax-allowances/declarations/me/form.pdf/x",
         "DELETE, /api/auth/logout",
+        "POST,   /api/feedback",
+        "POST,   /api/feedback/12/decision",
+        "PATCH,  /api/feedback/12",
     })
     void whileViewing_writesAreRefused(String method, String path) throws Exception {
         MockFilterChain chain = new MockFilterChain();

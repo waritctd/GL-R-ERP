@@ -13,6 +13,7 @@ import { SALES_ENABLED } from './app/features.js';
 import { hasPermission, isDivisionManager, isSelfServiceLocked } from './app/permissions.js';
 import { RequireAccess } from './app/RequireAccess.jsx';
 import { userFromAuthResponse } from './app/authUser.js';
+import { clearLastPage, recordPage } from './features/whatsNew/lastPage.js';
 
 // Route pages are code-split: each import() becomes its own chunk, loaded on navigation. This keeps the entry
 // bundle lean (heavy deps like zod, react-hook-form, and @tanstack/react-table travel with the pages that use
@@ -105,6 +106,12 @@ export function App() {
   const navigate = useNavigate();
   const location = useLocation();
   const { toast, showToast, dismissToast } = useToast();
+  // Remembered for the แจ้งปัญหา form (area pre-select); /whats-new itself is ignored by recordPage.
+  // Signed out (or a different user) = nothing remembered, so the next user never inherits the previous page.
+  useEffect(() => {
+    if (!user) { clearLastPage(); return; }
+    recordPage(`${location.pathname}${location.search}`);
+  }, [user, location.pathname, location.search]);
   // A session that still owes a password change is confined by the backend to /api/auth/{me,
   // logout,change-password} (MustChangePasswordFilter) — every other endpoint 403s. They start the moment
   // handleChangePassword clears the flag.

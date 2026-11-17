@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
@@ -8,6 +8,8 @@ import { PageStack } from '../../components/common/Layout.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { TabPanel, Tabs } from '../../components/common/Tabs.jsx';
 import { ROLE_LABEL, allTabSections, canManageReleaseNotes, entriesForViewer } from './audiences.js';
+import { FeedbackInbox, useFeedbackInbox } from './FeedbackInbox.jsx';
+import { FeedbackTab } from './FeedbackTab.jsx';
 import { ChangeCard } from './ChangeCard.jsx';
 import { ReleaseNoticeAdmin } from './ReleaseNoticeAdmin.jsx';
 import { releaseLink, unreadReleaseNotices, useNotifications } from './releaseNoticeHooks.js';
@@ -96,7 +98,14 @@ function ChangeList({ release, groups, note = null }) {
 export function WhatsNewPage({ user, showToast }) {
   const { releaseId } = useParams();
   const release = releaseId ? findRelease(releaseId) : latestRelease();
-  const [tab, setTab] = useState('mine');
+  const [searchParams] = useSearchParams();
+  // The feedback bell rows link to ?tab=feedback.
+  const [tab, setTab] = useState(searchParams.get('tab') === 'feedback' ? 'feedback' : 'mine');
+  const urlTab = searchParams.get('tab');
+  // Same component serves every /whats-new URL, so a bell link clicked while open only changes the query.
+  useEffect(() => { if (urlTab === 'feedback') setTab('feedback'); }, [urlTab]);
+  const isAdmin = Boolean(user?.admin);
+  const inbox = useFeedbackInbox(isAdmin);
   useMarkReleaseRead(release);
 
   if (!release) {
@@ -123,6 +132,12 @@ export function WhatsNewPage({ user, showToast }) {
   const tabs = [
     { id: 'mine', label: `สำหรับแผนกของคุณ (${mine.length})` },
     { id: 'all', label: `ทั้งหมด (${release.entries.length})` },
+    {
+      id: 'feedback',
+      label: isAdmin
+        ? `เรื่องที่แจ้งเข้ามา (${(inbox.data ?? []).filter((f) => f.status === 'PENDING').length} รอพิจารณา)`
+        : 'แจ้งปัญหา / ขอฟีเจอร์',
+    },
   ];
 
   return (
@@ -139,7 +154,9 @@ export function WhatsNewPage({ user, showToast }) {
           <TabPanel key={item.id} id={item.id} idPrefix={TAB_PREFIX} active={tab === item.id}>
             {/* Keyed by tab: the incoming panel fades in, so a switch reads as a cross-fade, not a jump. */}
             <div key={item.id} className="motion-safe:animate-wn-fade">
-              {item.id === 'mine' ? (
+              {item.id === 'feedback' ? (
+                isAdmin ? <FeedbackInbox showToast={showToast} /> : <FeedbackTab showToast={showToast} />
+              ) : item.id === 'mine' ? (
                 mine.length > 0 ? <ChangeList release={release} groups={mineGroups} /> : (
                   <EmptyState icon="info" title="ฉบับนี้ไม่มีเรื่องเฉพาะแผนกของคุณ" description="ดูทุกเรื่องได้ที่แท็บ ทั้งหมด" />
                 )
