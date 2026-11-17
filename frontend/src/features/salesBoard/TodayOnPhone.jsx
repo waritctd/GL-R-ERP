@@ -227,7 +227,7 @@ function upcoming(work, ahead) {
  * นัดถัดไป reads this week's visits plus `ahead` — GET /api/sales/visits from today to `aheadTo` (today + 7) — so a
  * Monday visit is "next" on a Sunday. `carriedOver` is MyWork's ค้างจากสัปดาห์ก่อน query (the 31 days before Monday).
  *
- * ส่งตัวอย่าง (slice 6d): built now that a sample sent is a deal activity of its own (SAMPLE_SENT, V225) — it opens
+ * ส่งตัวอย่าง (slice 6d): built now that a sample sent is a deal activity of its own (SAMPLE_SENT, V224) — it opens
  * MyWork's SampleSentModal, one sheet: pick the งาน (the same groups โทรแล้ว's picker offers) · what was sent · ตามต่อ.
  * Offered exactly when โทรแล้ว is: both need one of the rep's open งาน.
  */

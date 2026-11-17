@@ -1,15 +1,13 @@
--- V225: ส่งตัวอย่าง (sample sent) becomes a deal activity of its own kind — slice 6d, the owner-approved prototype's
+-- V224: ส่งตัวอย่าง (sample sent) becomes a deal activity of its own kind — slice 6d, the owner-approved prototype's
 -- item 6.7, owner answer 1 (2026-11-17). Additive only.
 --
--- MIGRATION NUMBERING: V225. Written as V223 (free when first checked on 2026-11-17: highest everywhere was V222);
--- renumbered the same day before merge, by controller ruling, because two other open PRs pushed their own V223 in the
--- meantime — #1350 claude/analytics-phase1-schema (V223__analytics_schema_phase1) and #1351
--- feat/undo-order-confirmation (V223__order_confirmation_undone_event_kind). V223 and V224 are left to those two;
--- this one goes above both. Re-checked on 2026-11-17 after a fresh fetch: origin/develop's highest is V222, every
--- other remote branch and open PR (#1350, #1351, #1300, #1299) is at or below V223, and no branch carries a V224 or
--- V225. This file had not been applied to any database outside the integration tests.
--- Flyway out-of-order is off and validate-on-migrate is false on prod (CLAUDE.md), so the IMAGE that carries this must
--- also carry every lower pending migration (V223, V224), or those are silently skipped.
+-- MIGRATION NUMBERING: V224 (final, controller ruling 2026-11-17). Written as V223, briefly renumbered V225 while two
+-- open PRs also held a V223; since then #1350 merged to develop with V223__analytics_schema_phase1, so develop's
+-- highest is V223 and V224 is the next free number. #1351 (V223__order_confirmation_undone_event_kind, still open) is
+-- asked to take V225, above this one. Production must never be handed a number above an unapplied one: with
+-- out-of-order off and validate-on-migrate false (CLAUDE.md), a lower version deployed after a higher one is silently
+-- skipped, so the image that carries this must also carry V223. This file had not been applied to any database
+-- outside the integration tests.
 --
 -- chk_deal_activity_kind (V83) is re-declared with one more value, SAMPLE_SENT, and every V83 value kept: no row is
 -- rewritten and no code is removed. th.co.glr.hr.ticket.DealActivityKind#VALID is the Java side and must name the
