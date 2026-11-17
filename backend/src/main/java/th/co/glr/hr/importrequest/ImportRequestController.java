@@ -82,11 +82,45 @@ public class ImportRequestController {
         return Map.of("importRequests", service.list(ticketId, user));
     }
 
-    /** Read-only: does any factory on the deal still need an IR? Its own route so the list stays cheap. */
+    /** Read-only: does any factory on the deal still need an IR? Its own route so the list stays cheap.
+     *
+     * <p>Slice 6c: {@code itemFactory} (optional, repeatable, {@code <ticketItemId>:<factoryId>}) carries the factory
+     * the rep has picked, but not yet saved, for a line with none — the same pairs the confirm will send as
+     * {@code itemFactories} — so the response's split preview places those lines where the create will. Ignored
+     * for a caller who gets no preview. A pair that is not two numbers is a 400. */
     @GetMapping("/tickets/{ticketId}/import-requests/coverage")
-    ImportRequestCoverageResponse coverage(@PathVariable long ticketId, HttpSession session) {
+    ImportRequestCoverageResponse coverage(@PathVariable long ticketId,
+            @RequestParam(name = "itemFactory", required = false) List<String> itemFactory, HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
-        return service.coverage(ticketId, user);
+        return service.coverage(ticketId, parseItemFactories(itemFactory), user);
+    }
+
+    /** More pairs than any deal has factory-less lines is a client bug or abuse, and each pair costs a factory read. */
+    static final int MAX_ITEM_FACTORY_PAIRS = 500;
+
+    static List<ImportRequestRequests.ItemFactoryInput> parseItemFactories(List<String> raw) {
+        if (raw == null || raw.isEmpty()) {
+            return List.of();
+        }
+        if (raw.size() > MAX_ITEM_FACTORY_PAIRS) {
+            throw new th.co.glr.hr.common.ApiException(org.springframework.http.HttpStatus.BAD_REQUEST,
+                "itemFactory มากเกินไป");
+        }
+        List<ImportRequestRequests.ItemFactoryInput> out = new java.util.ArrayList<>();
+        for (String pair : raw) {
+            String[] parts = pair == null ? new String[0] : pair.split(":", -1);
+            try {
+                if (parts.length != 2) {
+                    throw new NumberFormatException();
+                }
+                out.add(new ImportRequestRequests.ItemFactoryInput(
+                    Long.parseLong(parts[0].strip()), Long.parseLong(parts[1].strip())));
+            } catch (NumberFormatException e) {
+                throw new th.co.glr.hr.common.ApiException(org.springframework.http.HttpStatus.BAD_REQUEST,
+                    "รูปแบบ itemFactory ไม่ถูกต้อง (ต้องเป็น รหัสรายการ:รหัสโรงงาน)");
+            }
+        }
+        return out;
     }
 
     @GetMapping("/import-requests/{id}")

@@ -125,7 +125,7 @@ On the day:
    mkdir -m 700 ~/cutover && cd ~/glr/ops/onprem     # the dump is full PII: owner-only
    read -rs SUPABASE_URI && export SUPABASE_URI
    docker run --rm --user "$(id -u):$(id -g)" -e SUPABASE_URI -v ~/cutover:/out postgres:17 sh -c \
-     'pg_dump "$SUPABASE_URI" -Fc -n hr -n hr_restricted -n sales -n customers -n price_catalog -f /out/supabase-final.dump'
+     'pg_dump "$SUPABASE_URI" -Fc -n hr -n hr_restricted -n sales -n customers -n price_catalog -n analytics -f /out/supabase-final.dump'
    docker run --rm -i -e SUPABASE_URI postgres:17 sh -c 'psql "$SUPABASE_URI" -At' < counts.sql > ~/cutover/counts-supabase.txt
    unset SUPABASE_URI
    ```

@@ -85,6 +85,7 @@ function renderPanel(user, rows = [draftRow()], {
   uncoveredFactoryNames = undefined, // undefined = an older backend that sends no names
   procurementSource = undefined,
   events = undefined,
+  splitPreview = undefined, // undefined = a backend before slice 6c (no split preview on coverage)
 } = {}) {
   if (rows instanceof Error) api.storedImportRequests.listForTicket.mockRejectedValue(rows);
   else {
@@ -95,6 +96,7 @@ function renderPanel(user, rows = [draftRow()], {
   else {
     api.storedImportRequests.coverage.mockResolvedValue({
       hasUncoveredFactories, ...(uncoveredFactoryNames === undefined ? {} : { uncoveredFactoryNames }),
+      ...(splitPreview === undefined ? {} : { splitPreview }),
     });
   }
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
@@ -1452,6 +1454,139 @@ describe('DealFulfilmentPanel — ยืนยันการออกใบข�
       expect(screen.queryByTestId('deal-fulfilment-create-ir-drafts')).toBeNull();
       view.unmount();
     }
+  });
+});
+
+// Slice 6c (prototype item 6.6): the confirm shows, per factory, how many items it gets and the expected lead time,
+// from the coverage route's `splitPreview` — ImportRequestService's dry run of createDrafts' own split. The panel only
+// renders what the server sent; it computes no split and no lead time of its own.
+describe('DealFulfilmentPanel — ยืนยันออกใบขอซื้อ: รายการและระยะเวลานำเข้าต่อโรงงาน (slice 6c)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.storedImportRequests.createDrafts.mockReset();
+    api.storedImportRequests.createDrafts.mockResolvedValue({ importRequests: [] });
+  });
+  const PREVIEW = {
+    factories: [
+      { factoryName: 'Cotto Industry', newFactory: false, itemCount: 3, leadTimeMinDays: 100, leadTimeMaxDays: 120, leadTimeSource: 'QUOTATION' },
+      { factoryName: 'Rex Ceramics', newFactory: false, itemCount: 1, leadTimeMinDays: 75, leadTimeMaxDays: 90, leadTimeSource: 'COUNTRY_DEFAULT' },
+      { factoryName: 'Polska Tile', newFactory: false, itemCount: 2, leadTimeMinDays: null, leadTimeMaxDays: null, leadTimeSource: null },
+      { factoryName: 'Brand New Co', newFactory: true, itemCount: 1, leadTimeMinDays: null, leadTimeMaxDays: null, leadTimeSource: null },
+    ],
+    linesWithoutFactory: [],
+  };
+  const NAMES = PREVIEW.factories.map((f) => f.factoryName);
+  const blocks = (dialog) => within(within(dialog).getByRole('list', { name: 'โรงงานที่จะออกใบขอซื้อ' })).getAllByRole('listitem');
+
+  it('one block per factory the server previewed: name, n รายการ and นำเข้าประมาณ min–max วัน with its source', async () => {
+    renderPanel(OWNER, [], { hasUncoveredFactories: true, uncoveredFactoryNames: NAMES, splitPreview: PREVIEW });
+    const dialog = await openIrConfirm();
+
+    expect(within(dialog).getByTestId('ir-confirm-summary').textContent).toBe('4 โรงงาน · ส่งถึงฝ่ายนำเข้าทันที');
+    const [cotto, rex] = blocks(dialog);
+    expect(within(cotto).getByTestId('ir-confirm-factory-name').textContent).toBe('Cotto Industry');
+    expect(within(cotto).getByTestId('ir-confirm-factory-count').textContent).toBe('3 รายการ');
+    expect(within(cotto).getByTestId('ir-confirm-factory-lead').textContent).toBe('นำเข้าประมาณ 100–120 วัน');
+    expect(within(cotto).getByTestId('ir-confirm-factory-source').textContent).toBe('ตามใบเสนอราคา');
+    expect(within(rex).getByTestId('ir-confirm-factory-lead').textContent).toBe('นำเข้าประมาณ 75–90 วัน');
+    expect(within(rex).getByTestId('ir-confirm-factory-source').textContent).toBe('ค่าเริ่มต้นของประเทศ');
+    // The names-only table and its "shown after issuing" note are replaced, not shown alongside.
+    expect(within(dialog).queryByRole('table', { name: 'โรงงานที่จะออกใบขอซื้อ' })).toBeNull();
+    expect(dialog.textContent).not.toContain('จะแสดงในใบขอซื้อแต่ละใบหลังออก');
+  });
+
+  it('no lead time yet: says it will be asked before issuing; a new factory is tagged and says its country comes first', async () => {
+    renderPanel(OWNER, [], { hasUncoveredFactories: true, uncoveredFactoryNames: NAMES, splitPreview: PREVIEW });
+    const [, , polska, brandNew] = blocks(await openIrConfirm());
+
+    expect(within(polska).getByTestId('ir-confirm-factory-lead').textContent).toBe('ยังไม่มีระยะเวลานำเข้า · จะให้ระบุก่อนออก');
+    expect(within(polska).queryByTestId('ir-confirm-factory-source')).toBeNull();
+    expect(within(polska).queryByTestId('ir-confirm-factory-new')).toBeNull();
+    expect(within(brandNew).getByTestId('ir-confirm-factory-new').textContent).toBe('โรงงานใหม่');
+    expect(within(brandNew).getByTestId('ir-confirm-factory-lead').textContent)
+      .toBe('ยังไม่มีระยะเวลานำเข้า · จะให้เลือกประเทศของโรงงานก่อนออก');
+  });
+
+  // Fix round L5: the warning says the IR cannot be issued, so the button agrees — disabled, described by the warning.
+  // The server's 409 stays the backstop; this only stops the button contradicting the copy beside it.
+  it('a line the split cannot place disables ออกใบขอซื้อ, with the warning as its stated reason, and sends nothing', async () => {
+    renderPanel(OWNER, [], {
+      hasUncoveredFactories: true,
+      uncoveredFactoryNames: ['Cotto Industry'],
+      splitPreview: {
+        factories: [PREVIEW.factories[0]],
+        linesWithoutFactory: [
+          { ticketItemId: 31, code: 'Free Text One', size: '10x10 cm' },
+          { ticketItemId: 32, code: 'Grout', size: null },
+        ],
+      },
+    });
+    const dialog = await openIrConfirm();
+
+    expect(within(dialog).getByTestId('ir-confirm-unplaced').textContent)
+      .toBe('2 รายการยังไม่มีโรงงาน — ออกใบขอซื้อไม่ได้จนกว่าจะระบุโรงงาน: Free Text One (10x10 cm), Grout');
+    expect(within(dialog).getByTestId('ir-confirm-unplaced').getAttribute('role')).toBe('note');
+    const confirm = within(dialog).getByRole('button', { name: 'ออกใบขอซื้อ' });
+    expect(confirm.disabled).toBe(true);
+    const reasonId = confirm.getAttribute('aria-describedby');
+    expect(reasonId).toBeTruthy();
+    expect(document.getElementById(reasonId)).toBe(within(dialog).getByTestId('ir-confirm-unplaced'));
+    fireEvent.click(confirm);
+    await act(async () => {});
+    expect(api.storedImportRequests.createDrafts).not.toHaveBeenCalled();
+  });
+
+  it('every line placed: ออกใบขอซื้อ stays enabled and carries no disabled reason', async () => {
+    renderPanel(OWNER, [], { hasUncoveredFactories: true, uncoveredFactoryNames: NAMES, splitPreview: PREVIEW });
+    const confirm = within(await openIrConfirm()).getByRole('button', { name: 'ออกใบขอซื้อ' });
+    expect(confirm.disabled).toBe(false);
+    expect(confirm.getAttribute('aria-describedby')).toBeNull();
+  });
+
+  it('asks the server with the rep\'s unsaved factory pick, and shows the server\'s split instead of adding the pick by name', async () => {
+    const directSummary = { ...summary, liveDirectQuotation: { id: 5, docStatus: 'APPROVED' } };
+    const lines = [
+      { id: 1, brand: 'SCG', model: 'Catalogue', factory: 'Cotto', catalogPriceId: 90, qty: 10 },
+      { id: 3, brand: 'ค่าติดตั้ง', model: 'Free text', factory: null, catalogPriceId: null, qty: 10, qtyFromStock: 0 },
+    ];
+    renderPanel(OWNER, [], {
+      summary: directSummary, items: lines, hasUncoveredFactories: true, uncoveredFactoryNames: ['Cotto'],
+      splitPreview: { factories: [{ ...PREVIEW.factories[0], factoryName: 'Cotto', itemCount: 2 }], linesWithoutFactory: [] },
+    });
+    await waitFor(() => expect(api.storedImportRequests.coverage).toHaveBeenCalledWith(1, undefined));
+    const button = await screen.findByTestId('deal-fulfilment-create-ir-drafts');
+    const select = await screen.findByTestId('ir-line-factory-3');
+    await waitFor(() => expect(within(select).getByRole('option', { name: 'Rex Ceramics' })).not.toBeNull());
+    fireEvent.change(select, { target: { value: '7' } });
+    await waitFor(() => expect(api.storedImportRequests.coverage)
+      .toHaveBeenCalledWith(1, [{ ticketItemId: 3, factoryId: 7 }]));
+    await waitFor(() => expect(button.disabled).toBe(false));
+
+    const dialog = await openIrConfirm(button);
+    // The server's answer is the whole truth: Rex Ceramics is not added on top of it by the client.
+    expect(blocks(dialog).map((li) => within(li).getByTestId('ir-confirm-factory-name').textContent)).toEqual(['Cotto']);
+    expect(within(dialog).getByTestId('ir-confirm-summary').textContent).toBe('1 โรงงาน · ส่งถึงฝ่ายนำเข้าทันที');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'ออกใบขอซื้อ' }));
+    await waitFor(() => expect(api.storedImportRequests.createDrafts).toHaveBeenCalledTimes(1));
+    expect(api.storedImportRequests.createDrafts.mock.calls).toEqual([[1, { itemFactories: [{ ticketItemId: 3, factoryId: 7 }] }]]);
+  });
+
+  it('keeps the warning first and never says ดีล', async () => {
+    renderPanel(OWNER, [], {
+      hasUncoveredFactories: true, uncoveredFactoryNames: NAMES,
+      splitPreview: { ...PREVIEW, linesWithoutFactory: [{ ticketItemId: 31, code: 'X', size: null }] },
+    });
+    const dialog = await openIrConfirm();
+    expect(dialog.querySelector('.modal-body').firstElementChild.firstElementChild)
+      .toBe(within(dialog).getByTestId('ir-confirm-warning'));
+    expect(dialog.textContent).not.toContain('ดีล');
+  });
+
+  it('a null splitPreview (what import and sales_manager receive) falls back to the names-only table', async () => {
+    renderPanel(CEO, [], { hasUncoveredFactories: true, uncoveredFactoryNames: ['Cotto Industry'], splitPreview: null });
+    const dialog = await openIrConfirm();
+    expect(irConfirmFactories(dialog)).toEqual({ summary: '1 โรงงาน · ส่งถึงฝ่ายนำเข้าทันที', names: ['Cotto Industry'] });
+    expect(within(dialog).queryByRole('list', { name: 'โรงงานที่จะออกใบขอซื้อ' })).toBeNull();
   });
 });
 

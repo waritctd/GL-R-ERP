@@ -24,9 +24,10 @@ const CALLOUT_TONE = {
 };
 
 /** The drawing's `.warn` / `.info`: a left-ruled note. */
-export function DialogCallout({ tone = 'info', testId, children }) {
+export function DialogCallout({ tone = 'info', testId, id, children }) {
   return (
     <p
+      id={id}
       data-testid={testId}
       role={tone === 'warn' ? 'note' : undefined}
       className={cn('m-0 rounded-r-md border-l-[3px] px-3 py-2 text-sm leading-normal', CALLOUT_TONE[tone])}

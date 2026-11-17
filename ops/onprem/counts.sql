@@ -7,5 +7,5 @@ SELECT format('%s.%s|%s', table_schema, table_name,
                              false, true, '')))[1]::text)
 FROM information_schema.tables
 WHERE table_type = 'BASE TABLE'
-  AND table_schema IN ('hr', 'hr_restricted', 'sales', 'customers', 'price_catalog')
+  AND table_schema IN ('hr', 'hr_restricted', 'sales', 'customers', 'price_catalog', 'analytics')
 ORDER BY table_schema::text COLLATE "C", table_name::text COLLATE "C";

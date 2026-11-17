@@ -1,5 +1,5 @@
 import { forwardRef, useEffect, useImperativeHandle, useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, ROLE_PERMISSIONS } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { Button } from '../../components/common/Button.jsx';
@@ -33,6 +33,83 @@ function parseFactoryNames(message, prefix) {
   return message.slice(prefix.length).split(',')
     .map((s) => s.trim().replace(/\s+/g, ' '))
     .filter(Boolean);
+}
+
+// Slice 6c (prototype item 6.6): the confirm's per-factory preview. Every figure is the server's
+// (ImportRequestService's dry run of createDrafts' split, ImportRequestSplitPreview); this only words it. The
+// lead time reads like ImportRequestFactoryCard's "ระยะเวลานำเข้า min–max วัน".
+const LEAD_TIME_SOURCE_LABEL = { QUOTATION: 'ตามใบเสนอราคา', COUNTRY_DEFAULT: 'ค่าเริ่มต้นของประเทศ' };
+// The unplaced-lines warning doubles as the disabled confirm's stated reason (aria-describedby), fix round L5.
+const IR_UNPLACED_REASON_ID = 'ir-confirm-unplaced-reason';
+
+function irPreviewLeadLine(factory) {
+  if (factory.leadTimeMinDays != null && factory.leadTimeMaxDays != null) {
+    return `นำเข้าประมาณ ${factory.leadTimeMinDays}–${factory.leadTimeMaxDays} วัน`;
+  }
+  // createDrafts refuses with the country (new factory) or the lead-time 409 and the panel's popup asks — before
+  // anything is issued.
+  return factory.newFactory
+    ? 'ยังไม่มีระยะเวลานำเข้า · จะให้เลือกประเทศของโรงงานก่อนออก'
+    : 'ยังไม่มีระยะเวลานำเข้า · จะให้ระบุก่อนออก';
+}
+
+function IrSplitPreview({ preview }) {
+  const factories = preview.factories ?? [];
+  const unplaced = preview.linesWithoutFactory ?? [];
+  return (
+    <>
+      {factories.length > 0 ? (
+        <>
+          <DialogSummary icon="truck" testId="ir-confirm-summary">
+            {`${factories.length} โรงงาน · ส่งถึงฝ่ายนำเข้าทันที`}
+          </DialogSummary>
+          <ul aria-label="โรงงานที่จะออกใบขอซื้อ" className="m-0 list-none border-t border-border p-0" data-testid="ir-confirm-factories">
+            {factories.map((f, i) => {
+              const source = f.leadTimeMinDays != null ? LEAD_TIME_SOURCE_LABEL[f.leadTimeSource] : null;
+              return (
+                // A name may repeat only if the server sent it twice; the index keeps keys unique regardless.
+                <li key={`${f.factoryName}-${i}`} className="flex flex-col gap-0.5 border-b border-border px-1 py-2">
+                  <div className="flex items-baseline justify-between gap-3">
+                    <span className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                      <strong className="text-sm text-text [overflow-wrap:anywhere]" data-testid="ir-confirm-factory-name">
+                        {f.factoryName?.trim() ? f.factoryName : 'โรงงานไม่มีชื่อ'}
+                      </strong>
+                      {f.newFactory ? (
+                        <span className="rounded-sm bg-info-bg-alt px-1.5 text-2xs font-bold text-info" data-testid="ir-confirm-factory-new">
+                          โรงงานใหม่
+                        </span>
+                      ) : null}
+                    </span>
+                    <span className="shrink-0 text-sm font-bold tabular-nums text-text-secondary" data-testid="ir-confirm-factory-count">
+                      {`${f.itemCount} รายการ`}
+                    </span>
+                  </div>
+                  <p className="m-0 text-xs text-text-secondary">
+                    <span data-testid="ir-confirm-factory-lead">{irPreviewLeadLine(f)}</span>
+                    {source ? (
+                      <>
+                        <span aria-hidden="true" className="text-text-muted"> · </span>
+                        <span className="text-2xs text-text-muted" data-testid="ir-confirm-factory-source">{source}</span>
+                      </>
+                    ) : null}
+                  </p>
+                </li>
+              );
+            })}
+          </ul>
+        </>
+      ) : null}
+      {unplaced.length > 0 ? (
+        <DialogCallout tone="warn" testId="ir-confirm-unplaced" id={IR_UNPLACED_REASON_ID}>
+          {`${unplaced.length} รายการยังไม่มีโรงงาน — ออกใบขอซื้อไม่ได้จนกว่าจะระบุโรงงาน: ${unplaced
+            .map((l) => {
+              const label = l.code || `รายการ ${l.ticketItemId}`;
+              return l.size ? `${label} (${l.size})` : label;
+            }).join(', ')}`}
+        </DialogCallout>
+      ) : null}
+    </>
+  );
 }
 
 // One factory NAME's country pick, for the createDrafts auto-create path: a real country, or 'ZZ'
@@ -329,15 +406,6 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
     queryFn: () => api.storedImportRequests.listForTicket(ticketId).then((r) => r.importRequests ?? []),
     enabled: !!ticketId && canReadStoredIr,
   });
-  // Read-only server flag from its own endpoint (the list stays rows-only for the import pages). Under the
-  // rows key's prefix, so invalidating the rows refreshes it too. Only an explicit `false` hides the create controls — an older
-  // backend that omits it (undefined) keeps them. `uncoveredFactoryNames` feeds the create confirm; an older backend omits it.
-  const coverageQuery = useQuery({
-    queryKey: [...queryKeys.storedImportRequests(ticketId), 'coverage'],
-    queryFn: () => api.storedImportRequests.coverage(ticketId),
-    enabled: !!ticketId && canReadStoredIr,
-  });
-  const allFactoriesCovered = coverageQuery.data?.hasUncoveredFactories === false;
   const storedIrRows = storedIrQuery.data ?? [];
   const liveStoredIrRows = storedIrRows
     .filter((r) => r.status !== 'SUPERSEDED')
@@ -396,6 +464,24 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
     : [];
   const [lineFactories, setLineFactories] = useState({});
   const allLinesPicked = factorylessLines.every((l) => lineFactories[l.id]);
+  // The picks made so far, in the createDrafts `itemFactories` shape (buildCreatePayload below sends the same pairs).
+  const pickedItemFactories = factorylessLines
+    .filter((l) => lineFactories[l.id])
+    .map((l) => ({ ticketItemId: Number(l.id), factoryId: Number(lineFactories[l.id]) }));
+  // Read-only server flag from its own endpoint (the list stays rows-only for the import pages). Under the
+  // rows key's prefix, so invalidating the rows refreshes it too. Only an explicit `false` hides the create controls — an older
+  // backend that omits it (undefined) keeps them. `uncoveredFactoryNames` feeds the create confirm; an older backend omits it.
+  // Slice 6c: `splitPreview` is ImportRequestService's dry run of createDrafts' per-factory split (null for import and
+  // sales_manager, absent on an older backend). The unsaved picks go with the read so the preview places those lines
+  // where the create will; they are in the key, and the previous answer stays shown while a new pick is re-checked.
+  const coverageQuery = useQuery({
+    queryKey: [...queryKeys.storedImportRequests(ticketId), 'coverage', pickedItemFactories],
+    queryFn: () => api.storedImportRequests.coverage(ticketId,
+      pickedItemFactories.length > 0 ? pickedItemFactories : undefined),
+    enabled: !!ticketId && canReadStoredIr,
+    placeholderData: keepPreviousData,
+  });
+  const allFactoriesCovered = coverageQuery.data?.hasUncoveredFactories === false;
   const factoryNamesQuery = useQuery({
     queryKey: queryKeys.factoryNames(),
     queryFn: () => api.factoryConfigs.names().then((r) => r?.factories ?? []),
@@ -718,12 +804,18 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
     .map((f) => f.factoryName);
   const serverNames = coverageQuery.isError ? undefined : coverageQuery.data?.uncoveredFactoryNames;
   const confirmNames = serverNames ? [...new Set([...serverNames, ...pickedNames])] : [];
+  // Slice 6c: the server's dry run of the split, already including the picks (they went with the read). When it is
+  // there it is the whole answer — nothing is added to it by name on this side.
+  const splitPreview = coverageQuery.isError ? null : (coverageQuery.data?.splitPreview ?? null);
+  // Fix round L5: the warning says the IR cannot be issued while a line has no factory, so the button agrees. The
+  // server's 409 (ImportRequestService#resolveFactoryGroups) stays the backstop.
+  const hasUnplacedLines = (splitPreview?.linesWithoutFactory?.length ?? 0) > 0;
   const coverageLoading = coverageQuery.isFetching;
   // Drawing m-ir (2026-11-16): "N โรงงาน" and a โรงงาน table. The factories are the same `confirmNames` the old
   // one-line confirm named (the server's coverage names plus the rep's picks). The drawing's per-factory รายการ count
-  // and ระยะเวลานำเข้า columns are not built: coverage returns names only (ImportRequestCoverageResponse), and the
-  // server's line-to-factory cascade and lead times are resolved inside createDrafts, so the panel cannot show them
-  // without guessing. "ส่งถึงฝ่ายนำเข้าทันที" is what createDrafts does: each new row is issued at once and
+  // and ระยะเวลานำเข้า were not built then because coverage returned names only; slice 6c adds them from
+  // `splitPreview` (IrSplitPreview above), and the names-only table stays as the fallback for a backend without it.
+  // "ส่งถึงฝ่ายนำเข้าทันที" is what createDrafts does: each new row is issued at once and
   // ImportRequestService#notifyImportOfIssuedIr notifies the import role.
   let createConfirmMessage = 'กำลังตรวจสอบโรงงาน…';
   if (!coverageLoading && allFactoriesCovered) {
@@ -739,7 +831,9 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
         <DialogCallout tone="warn" testId="ir-confirm-warning">
           ออกเลข IR แล้วลบไม่ได้ · แก้ได้ด้วยการออกฉบับแก้ไขเท่านั้น
         </DialogCallout>
-        {confirmNames.length > 0 ? (
+        {splitPreview ? (
+          <IrSplitPreview preview={splitPreview} />
+        ) : confirmNames.length > 0 ? (
           <>
             <DialogSummary icon="truck" testId="ir-confirm-summary">
               {`${confirmNames.length} โรงงาน · ส่งถึงฝ่ายนำเข้าทันที`}
@@ -1369,7 +1463,8 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
         message={createConfirmMessage}
         confirmLabel="ออกใบขอซื้อ"
         busy={createDraftsMutation.isPending}
-        confirmDisabled={coverageLoading || allFactoriesCovered}
+        confirmDisabled={coverageLoading || allFactoriesCovered || hasUnplacedLines}
+        confirmDescribedBy={!coverageLoading && hasUnplacedLines ? IR_UNPLACED_REASON_ID : undefined}
         // Close first: a second click on the open dialog would send twice.
         onConfirm={() => { setConfirmingCreate(false); createDraftsMutation.mutate(buildCreatePayload()); }}
         onCancel={() => setConfirmingCreate(false)}
