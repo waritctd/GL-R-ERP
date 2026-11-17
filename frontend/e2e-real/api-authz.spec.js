@@ -355,3 +355,97 @@ test.describe('follow-up date writes — refused before anything is written', ()
     expect(await nextFollowUpOf(deal.id), 'the deal\'s follow-up date is untouched').toBe(before);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /api/tickets/{id}/import-requests/coverage — the stored ใบขอซื้อ coverage read, and (slice 6c) its
+// `splitPreview`, the dry run of createDrafts' per-factory split shown in the "ยืนยันออกใบขอซื้อ" confirm.
+// ImportRequestService#coverage:
+//   1. the deal must exist — 404 for EVERY role (requireTicket runs before the role check);
+//   2. requireRead: ceo / import / sales_manager every deal; sales only a deal it owns or keyed; everyone else 403;
+//   3. splitPreview: an object only for createDrafts' own gate (ceo, the owning/keying rep); null for import and
+//      sales_manager, who read this route for the covered flag only.
+//   4. `itemFactory` must be `<ticketItemId>:<factoryId>` — anything else is a 400 (ImportRequestController).
+// The split itself, the no-write guarantee and the gate's SQL are proven by ImportRequestSplitPreviewIntegrationTest
+// (real Postgres, wrong-way-round, mutation-checked). Read-only: every request here is a GET.
+// ─────────────────────────────────────────────────────────────────────────────
+test.describe('stored IR coverage + split preview — ImportRequestService#coverage', () => {
+  /** @type {Record<string, import('@playwright/test').APIRequestContext>} */
+  let sessions;
+  const NO_READ = except('ceo', 'import', 'sales_manager', 'sales');
+  const coveragePath = (id, query = '') => `/api/tickets/${id}/import-requests/coverage${query}`;
+  const MISSING = 2147480000;
+
+  test.beforeAll(async () => { sessions = await apiSessionsFor(ALL); });
+  test.afterAll(async () => { await disposeSessions(sessions); });
+
+  async function dealsOf(role) {
+    const response = await sessions[role].get('/api/tickets?size=50');
+    expect(response.status(), `${role} lists its deals`).toBe(200);
+    return (await response.json()).tickets ?? [];
+  }
+
+  test('every role gets 404 for a deal that does not exist — the deal is looked up before the role', async () => {
+    for (const role of ALL) {
+      expect((await sessions[role].get(coveragePath(MISSING))).status(), `${role} on a missing deal`).toBe(404);
+    }
+  });
+
+  test('wrong-way-round: import and sales_manager get the covered flag but a null splitPreview; the rest are refused', async () => {
+    const [deal] = await dealsOf('ceo');
+    test.skip(!deal, 'the seed has no deal the ceo can list');
+    for (const role of ['import', 'sales_manager']) {
+      const response = await sessions[role].get(coveragePath(deal.id));
+      expect(response.status(), `${role} on deal ${deal.id}`).toBe(200);
+      const body = await response.json();
+      expect(typeof body.hasUncoveredFactories, `${role} gets the covered flag`).toBe('boolean');
+      expect(body.splitPreview, `${role} must NOT get the split preview`).toBeNull();
+    }
+    for (const role of NO_READ) {
+      expect((await sessions[role].get(coveragePath(deal.id))).status(), `${role} on deal ${deal.id}`).toBe(403);
+    }
+    const ceo = await (await sessions.ceo.get(coveragePath(deal.id))).json();
+    expect(Array.isArray(ceo.splitPreview?.factories), 'ceo gets the split preview').toBe(true);
+    expect(Array.isArray(ceo.splitPreview?.linesWithoutFactory), 'ceo gets the unplaced lines').toBe(true);
+  });
+
+  /** Every deal id `role` can list, all pages (TicketService#list scopes sales to created_by OR keyed_by in SQL, so
+   * this set IS "owns or keyed" without reading keyedById off a row, which a summary may omit). */
+  async function allDealIdsOf(role) {
+    const ids = new Set();
+    for (let page = 0; ; page += 1) {
+      const response = await sessions[role].get(`/api/tickets?size=500&page=${page}`);
+      expect(response.status(), `${role} lists its deals (page ${page})`).toBe(200);
+      const body = await response.json();
+      (body.tickets ?? []).forEach((deal) => ids.add(Number(deal.id)));
+      if ((body.tickets ?? []).length === 0 || ids.size >= Number(body.total ?? 0)) return ids;
+    }
+  }
+
+  test('the owning rep gets the preview on its own deal and is refused a foreign one', async () => {
+    // Fix round (review e2e risk): ownership comes from the server's own scope, never from createdById/keyedById on a
+    // row, so a deal the persona only KEYED can never be mistaken for a foreign one.
+    const ownIds = await allDealIdsOf('sales');
+    const own = (await dealsOf('sales'))[0];
+    if (own) {
+      const response = await sessions.sales.get(coveragePath(own.id));
+      expect(response.status(), `sales on its own deal ${own.id}`).toBe(200);
+      expect(Array.isArray((await response.json()).splitPreview?.factories), 'owner gets the split preview').toBe(true);
+    }
+    const foreign = (await dealsOf('ceo')).find((deal) => !ownIds.has(Number(deal.id)));
+    if (foreign) {
+      expect((await sessions.sales.get(coveragePath(foreign.id))).status(), `sales on deal ${foreign.id}`).toBe(403);
+    }
+    test.skip(!own && !foreign, 'the seed gives the sales persona neither an own nor a foreign deal');
+  });
+
+  test('a malformed itemFactory pair is a 400, a well-formed one is read', async () => {
+    const [deal] = await dealsOf('ceo');
+    test.skip(!deal, 'the seed has no deal the ceo can list');
+    for (const bad of ['12', 'a:b', '1:2:3']) {
+      const response = await sessions.ceo.get(coveragePath(deal.id, `?itemFactory=${encodeURIComponent(bad)}`));
+      expect(response.status(), `itemFactory=${bad}`).toBe(400);
+    }
+    // An unknown factory / a line not on this deal is ignored by the preview, never an error.
+    expect((await sessions.ceo.get(coveragePath(deal.id, '?itemFactory=2147480000:2147480000'))).status()).toBe(200);
+  });
+});

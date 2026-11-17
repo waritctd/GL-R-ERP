@@ -255,7 +255,14 @@ export const API_ROUTES = {
   // `importRequests` above, the legacy read-only preview-per-brand family.
   storedImportRequests: {
     forTicket: (ticketId) => `/api/tickets/${ticketId}/import-requests`,
-    coverage: (ticketId) => `/api/tickets/${ticketId}/import-requests/coverage`,
+    // `itemFactories` (slice 6c, optional): the rep's unsaved picks for factory-less lines, sent as repeatable
+    // `itemFactory=<ticketItemId>:<factoryId>` so the split preview places them (ImportRequestController#coverage).
+    coverage: (ticketId, itemFactories) => {
+      const p = new URLSearchParams();
+      (Array.isArray(itemFactories) ? itemFactories : [])
+        .forEach((f) => p.append('itemFactory', `${f.ticketItemId}:${f.factoryId}`));
+      return `/api/tickets/${ticketId}/import-requests/coverage${p.toString() ? `?${p}` : ''}`;
+    },
     get: (id) => `/api/import-requests/${id}`,
     issue: (id) => `/api/import-requests/${id}/issue`,
     revise: (id) => `/api/import-requests/${id}/revise`,

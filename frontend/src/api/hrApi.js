@@ -573,8 +573,10 @@ export const api = {
     createDrafts: (ticketId, payload) =>
       apiRequest(API_ROUTES.storedImportRequests.forTicket(ticketId), { method: 'POST', body: payload }),
     listForTicket: (ticketId) => apiRequest(API_ROUTES.storedImportRequests.forTicket(ticketId)),
-    // `{ hasUncoveredFactories }` — read-only; kept off the list so the import pages do not pay for it.
-    coverage: (ticketId) => apiRequest(API_ROUTES.storedImportRequests.coverage(ticketId)),
+    // `{ hasUncoveredFactories, uncoveredFactoryNames, splitPreview }` — read-only; kept off the list so the import
+    // pages do not pay for it. `itemFactories` (optional) are the unsaved picks the split preview should apply.
+    coverage: (ticketId, itemFactories) =>
+      apiRequest(API_ROUTES.storedImportRequests.coverage(ticketId, itemFactories)),
     get: (id) => apiRequest(API_ROUTES.storedImportRequests.get(id)),
     // PATCH: an absent field is left alone, never blanked — see ImportRequestRequests.
     // UpdateImportRequestRequest's own Javadoc.

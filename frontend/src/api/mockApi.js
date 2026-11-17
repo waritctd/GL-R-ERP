@@ -2788,53 +2788,131 @@ function mockBuildImportRequestEmailDraft(row, docNumber, issueDateIso, firstIss
 // Mirrors ImportRequestService#applyItemFactoryChoices: sales' pick for a line with no factory at all
 // (no resolvedFactoryId, no catalogue factory, no typed name). Validated first; a line that already
 // has a factory is never overwritten.
+// Slice 6c: one pick's outcome, shared by the write above and the coverage split preview (in memory) — mirrors
+// ImportRequestService#itemFactoryChoice. The factory name to apply, or null; `refuseInvalid` is the create's 400s.
+function mockItemFactoryChoice(ticket, choice, refuseInvalid) {
+  const factory = mockPriceImportFactories.find((f) => f.factoryId === Number(choice.factoryId));
+  if (!factory) {
+    if (refuseInvalid) fail('ไม่พบโรงงานที่เลือก', 400);
+    return null;
+  }
+  const item = (ticket.items ?? []).find((i) => Number(i.id) === Number(choice.ticketItemId));
+  if (!item) {
+    if (refuseInvalid) fail('รายการที่เลือกไม่ได้อยู่ในงานนี้', 400);
+    return null;
+  }
+  const hasFactory = item.resolvedFactoryId != null
+    || (item.catalogPriceId != null && mockProductPrices.some((p) => p.priceId === Number(item.catalogPriceId)))
+    || (item.factory && String(item.factory).trim());
+  return hasFactory ? null : factory.name;
+}
+
 function mockApplyItemFactoryChoices(ticket, request) {
   for (const choice of request?.itemFactories ?? []) {
-    const factory = mockPriceImportFactories.find((f) => f.factoryId === Number(choice.factoryId));
-    if (!factory) fail('ไม่พบโรงงานที่เลือก', 400);
-    const item = (ticket.items ?? []).find((i) => Number(i.id) === Number(choice.ticketItemId));
-    if (!item) fail('รายการที่เลือกไม่ได้อยู่ในงานนี้', 400);
-    const hasFactory = item.resolvedFactoryId != null
-      || (item.catalogPriceId != null && mockProductPrices.some((p) => p.priceId === Number(item.catalogPriceId)))
-      || (item.factory && String(item.factory).trim());
-    if (!hasFactory) item.factory = factory.name;
+    const name = mockItemFactoryChoice(ticket, choice, true);
+    if (name) (ticket.items ?? []).find((i) => Number(i.id) === Number(choice.ticketItemId)).factory = name;
   }
 }
 
-function mockResolveFactoryGroups(ticket, request) {
+// Slice 6c: phase 1 of the cascade below, READ-ONLY and non-throwing — mirrors ImportRequestService#splitCandidates.
+// Shared by mockResolveFactoryGroups (which then refuses an unplaced line and creates pending factories) and the
+// coverage split preview (which reports both instead). `pickedNameByItemId`: the preview's in-memory picks, used
+// exactly where mockApplyItemFactoryChoices would have written item.factory.
+function mockSplitFactoryCandidates(ticket, pickedNameByItemId = new Map()) {
   const lines = (ticket.items ?? [])
     .map((item) => ({ item, remainingQty: moneyValue(Number(item.qty || 0) - Number(item.qtyFromStock || 0)) }))
     .filter(({ remainingQty }) => remainingQty > 0);
-  if (lines.length === 0) return [];
-
   const byFactory = new Map(); // factoryId -> { items: [{item, remainingQty}], brands: Set }
   const pendingByNormalized = new Map(); // normalized name -> { displayName, lines: [...] }
-
-  const addToFactory = (factoryId, item, remainingQty) => {
-    const bucket = byFactory.get(factoryId) ?? { items: [], brands: new Set() };
-    bucket.items.push({ item, remainingQty });
-    if (item.brand) bucket.brands.add(item.brand);
-    byFactory.set(factoryId, bucket);
-  };
-
+  const unplaced = []; // [{ item, remainingQty }]
   for (const { item, remainingQty } of lines) {
     let factoryId = item.resolvedFactoryId != null ? Number(item.resolvedFactoryId) : null;
     if (factoryId == null && item.catalogPriceId != null) {
       const product = mockProductPrices.find((p) => p.priceId === Number(item.catalogPriceId));
       factoryId = product ? product.factoryId : null;
     }
-    if (factoryId != null) { addToFactory(factoryId, item, remainingQty); continue; }
-    const candidateName = item.factory && String(item.factory).trim() ? String(item.factory).trim() : null;
-    if (!candidateName) {
-      fail(`รายการนี้ยังไม่ได้ระบุโรงงาน กรุณาระบุโรงงานก่อน: ${item.model || item.brand || `รายการ ${item.id}`}`, 409);
-    }
+    if (factoryId != null) { mockAddToFactoryBucket(byFactory, factoryId, item, remainingQty); continue; }
+    const candidateName = (item.factory && String(item.factory).trim() ? String(item.factory).trim() : null)
+      ?? pickedNameByItemId.get(Number(item.id)) ?? null;
+    if (!candidateName) { unplaced.push({ item, remainingQty }); continue; }
     const normalized = mockNormalizeFactoryName(candidateName);
     const existing = mockPriceImportFactories.find((f) => mockNormalizeFactoryName(f.name) === normalized);
-    if (existing) { addToFactory(existing.factoryId, item, remainingQty); continue; }
+    if (existing) { mockAddToFactoryBucket(byFactory, existing.factoryId, item, remainingQty); continue; }
     const pending = pendingByNormalized.get(normalized) ?? { displayName: candidateName, lines: [] };
     pending.lines.push({ item, remainingQty });
     pendingByNormalized.set(normalized, pending);
   }
+  return { lines, byFactory, pendingByNormalized, unplaced };
+}
+
+function mockAddToFactoryBucket(byFactory, factoryId, item, remainingQty) {
+  const bucket = byFactory.get(factoryId) ?? { items: [], brands: new Set() };
+  bucket.items.push({ item, remainingQty });
+  if (item.brand) bucket.brands.add(item.brand);
+  byFactory.set(factoryId, bucket);
+}
+
+// The IR line code: catalogue code, else model, else brand — ImportRequestLinePrefill.firstNonBlank's order here.
+function mockImportLineCode(item) {
+  const product = item.catalogPriceId != null
+    ? mockProductPrices.find((p) => p.priceId === Number(item.catalogPriceId)) : null;
+  return product?.productCode || item.model || item.brand || `รายการ ${item.id}`;
+}
+
+// Slice 6c: the coverage route's `splitPreview` — mirrors ImportRequestService#splitPreview's SHAPE and its gate
+// (ceo, or the owning/keying sales rep — createDrafts' requireFullWrite; null for import and sales_manager). It
+// places lines with the same simplified cascade the mock's createDrafts uses (mockSplitFactoryCandidates), and its
+// lead time is the country default ONLY: the mock's createDrafts mirrors no quotation lead time, so 'QUOTATION' never
+// appears in mock mode and a deal whose real IR would take the quotation's lead time shows the country default
+// here. Mock-driven results are therefore plumbing evidence, not evidence about the real split, lead time or gate.
+function mockSplitPreview(ticket, user, itemFactories) {
+  const mayIssue = user.role === 'ceo' || (user.role === 'sales' && isOwnerOrKeyer(ticket, user.id));
+  if (!mayIssue) return null;
+  const picked = new Map();
+  // Fix round L1 — mirrors ImportRequestService#splitPreview: picks count only on a deal whose confirm shows the
+  // picker (a live direct quotation, DealFulfilmentPanel's factorylessLines condition).
+  const pickerShown = mockLiveDirectQuotation(ticket.id) != null;
+  for (const choice of pickerShown ? (itemFactories ?? []) : []) {
+    const name = mockItemFactoryChoice(ticket, choice, false);
+    if (name && !picked.has(Number(choice.ticketItemId))) picked.set(Number(choice.ticketItemId), name);
+  }
+  const { byFactory, pendingByNormalized, unplaced } = mockSplitFactoryCandidates(ticket, picked);
+  const live = new Set(mockImportRequests
+    .filter((r) => r.ticketId === ticket.id && (r.status === 'DRAFT' || r.status === 'ISSUED'))
+    .map((r) => r.factoryId));
+  const factories = [];
+  for (const [factoryId, bucket] of byFactory) {
+    if (live.has(factoryId)) continue;
+    const factory = mockPriceImportFactories.find((f) => f.factoryId === factoryId);
+    const leadTime = mockLeadTimeDefaults(factory?.country ?? null);
+    factories.push({
+      factoryName: factory?.name ?? null, newFactory: false, itemCount: bucket.items.length,
+      leadTimeMinDays: leadTime?.min ?? null, leadTimeMaxDays: leadTime?.max ?? null,
+      leadTimeSource: leadTime ? 'COUNTRY_DEFAULT' : null,
+    });
+  }
+  for (const pending of pendingByNormalized.values()) {
+    factories.push({
+      factoryName: pending.displayName, newFactory: true, itemCount: pending.lines.length,
+      leadTimeMinDays: null, leadTimeMaxDays: null, leadTimeSource: null,
+    });
+  }
+  return {
+    factories,
+    linesWithoutFactory: unplaced.map(({ item }) => ({
+      ticketItemId: item.id, code: mockImportLineCode(item), size: item.size ?? null,
+    })),
+  };
+}
+
+function mockResolveFactoryGroups(ticket, request) {
+  const { lines, byFactory, pendingByNormalized, unplaced } = mockSplitFactoryCandidates(ticket);
+  if (lines.length === 0) return [];
+  if (unplaced.length > 0) {
+    const { item } = unplaced[0];
+    fail(`รายการนี้ยังไม่ได้ระบุโรงงาน กรุณาระบุโรงงานก่อน: ${item.model || item.brand || `รายการ ${item.id}`}`, 409);
+  }
+  const addToFactory = (factoryId, item, remainingQty) => mockAddToFactoryBucket(byFactory, factoryId, item, remainingQty);
 
   if (pendingByNormalized.size > 0) {
     const supplied = new Map();
@@ -2872,11 +2950,9 @@ function mockResolveFactoryGroups(ticket, request) {
       countryCode: factory?.country ?? null,
       brandLabel: [...bucket.brands].join(', ') || null,
       items: bucket.items.map(({ item, remainingQty }) => {
-        const product = item.catalogPriceId != null
-          ? mockProductPrices.find((p) => p.priceId === Number(item.catalogPriceId)) : null;
         return {
           ticketItemId: item.id,
-          code: product?.productCode || item.model || item.brand || `รายการ ${item.id}`,
+          code: mockImportLineCode(item),
           size: item.size ?? null,
           qty: remainingQty,
           unit: item.unit ?? null,
@@ -4744,6 +4820,17 @@ function mockLivePartyDirectQuotation(ticketId, partyId) {
   return live
     ? { id: live.id, number: live.number, docStatus: live.docStatus, recipientType: live.recipientType ?? 'UNSPECIFIED' }
     : null;
+}
+
+/** TEST-ONLY seam — not part of `api`. Adds a bare live (APPROVED) DEAL_DIRECT quotation row to a deal, the state in
+ * which the IR confirm shows its factory picker (slice 6c fix round L1). No items, so it carries no lead time. */
+export function addLiveDirectQuotationForTests(ticketId) {
+  const id = Math.max(0, ...mockDealQuotations.map((q) => Number(q.id) || 0)) + 1;
+  mockDealQuotations.push({
+    id, ticketId: Number(ticketId), origin: 'DEAL_DIRECT', docStatus: 'APPROVED', number: `QT-TEST-${id}`,
+    recipientType: 'OWNER', items: [],
+  });
+  return id;
 }
 
 function mockLiveDirectQuotation(ticketId) {
@@ -13693,9 +13780,10 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       requireStoredIrRead(ticket, requireSession());
       return delay({ importRequests: mockImportRequestsForTicket(ticket.id) });
     },
-    async coverage(ticketId) {
+    async coverage(ticketId, itemFactories) {
       const ticket = findTicketRaw(Number(ticketId));
-      requireStoredIrRead(ticket, requireSession());
+      const user = requireSession();
+      requireStoredIrRead(ticket, user);
       // Mirrors ImportRequestService#coverage: read-only; an unresolved/unknown factory
       // (the resolver refuses without a country for a new name) counts as uncovered; only a live row covers.
       let hasUncoveredFactories = true;
@@ -13708,7 +13796,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
         hasUncoveredFactories = uncovered.length > 0;
         uncoveredFactoryNames = uncovered.map((g) => g.factoryName);
       } catch { /* unresolved factory -> uncovered (no names in the mock) */ }
-      return delay({ hasUncoveredFactories, uncoveredFactoryNames });
+      return delay({ hasUncoveredFactories, uncoveredFactoryNames, splitPreview: mockSplitPreview(ticket, user, itemFactories) });
     },
     async get(id) {
       const row = findStoredImportRequestRaw(id);

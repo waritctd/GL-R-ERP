@@ -55,6 +55,15 @@ class ImportRequestDtosNoPricingFieldsTest {
         assertNoForbiddenComponents(UpdateEmailDraftRequest.class);
     }
 
+    /** Slice 6c: the coverage route's split preview reaches the owning rep's confirm dialog — no money either. */
+    @Test
+    void coverageSplitPreviewCarriesNoPricingFields() {
+        assertNoForbiddenComponents(ImportRequestDtos.ImportRequestCoverageResponse.class);
+        assertNoForbiddenComponents(ImportRequestDtos.ImportRequestSplitPreview.class);
+        assertNoForbiddenComponents(ImportRequestDtos.SplitPreviewFactory.class);
+        assertNoForbiddenComponents(ImportRequestDtos.SplitPreviewLine.class);
+    }
+
     private static void assertNoForbiddenComponents(Class<?> record) {
         assertThat(record.isRecord()).as(record.getName() + " must be a record").isTrue();
         RecordComponent[] components = record.getRecordComponents();
