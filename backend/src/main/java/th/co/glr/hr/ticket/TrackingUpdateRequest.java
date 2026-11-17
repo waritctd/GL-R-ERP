@@ -10,8 +10,10 @@ import java.time.LocalDate;
  * merge — a field left null clears that field (for winProbability, null means "fall back to the stage
  * default", which is the intended way to clear a rep's override).
  *
- * <p>Exception: {@code expectedQuarter} (V209, {@code YYYY-Qn}) is KEPT when null/absent, because the existing
- * tracking form does not send it; an empty string clears it. */
+ * <p>Exceptions: {@code expectedQuarter} (V209, {@code YYYY-Qn}) is KEPT when null/absent, because the existing
+ * tracking form does not send it; an empty string clears it. {@code nextFollowUpAt} is likewise KEPT when null/absent
+ * (a call or visit may have set it since the form loaded) and set when sent; {@code clearNextFollowUpAt=true} clears
+ * it and wins. */
 public record TrackingUpdateRequest(
     @Min(0) @Max(100) Integer winProbability,
     @Size(max = 200) String designerName,
@@ -30,17 +32,27 @@ public record TrackingUpdateRequest(
     java.math.BigDecimal estimatedValue,
     /** {@code true} clears the estimate (a number cannot carry expectedQuarter's "empty means clear"). Wins over
      * {@code estimatedValue}. */
-    Boolean clearEstimatedValue
+    Boolean clearEstimatedValue,
+    /** {@code true} clears the next follow-up date. Wins over {@code nextFollowUpAt}. */
+    Boolean clearNextFollowUpAt
 ) {
+    /** The shape before the follow-up clear flag. */
+    public TrackingUpdateRequest(Integer winProbability, String designerName, String ownerName, String buyerName,
+                                 LocalDate nextFollowUpAt, String expectedQuarter, java.math.BigDecimal estimatedValue,
+                                 Boolean clearEstimatedValue) {
+        this(winProbability, designerName, ownerName, buyerName, nextFollowUpAt, expectedQuarter, estimatedValue,
+            clearEstimatedValue, null);
+    }
+
     /** The shape before the estimate (V220): the estimate is kept. */
     public TrackingUpdateRequest(Integer winProbability, String designerName, String ownerName, String buyerName,
                                  LocalDate nextFollowUpAt, String expectedQuarter) {
-        this(winProbability, designerName, ownerName, buyerName, nextFollowUpAt, expectedQuarter, null, null);
+        this(winProbability, designerName, ownerName, buyerName, nextFollowUpAt, expectedQuarter, null, null, null);
     }
 
     /** The pre-V209 shape: expectedQuarter absent, i.e. kept. */
     public TrackingUpdateRequest(Integer winProbability, String designerName, String ownerName, String buyerName,
                                  LocalDate nextFollowUpAt) {
-        this(winProbability, designerName, ownerName, buyerName, nextFollowUpAt, null, null, null);
+        this(winProbability, designerName, ownerName, buyerName, nextFollowUpAt, null, null, null, null);
     }
 }

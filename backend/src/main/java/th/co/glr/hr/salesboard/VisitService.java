@@ -133,7 +133,7 @@ public class VisitService {
             // takes KEY SHARE on the deal row and recordVisitActivity then asks for FOR UPDATE on it, so two of these
             // logs at once (a double submit) deadlocked. One order — deal, then visit — and the second request waits
             // here, then finds the first in the de-duplication below. Held to the end of this transaction.
-            tickets.lockDealForFollowUp(request.ticketId());
+            // requireVisitFollowUpWritable (next line) takes that deal lock before the visit insert.
             tickets.requireVisitFollowUpWritable(request.ticketId(), actor.id(), nextFollowUpAt, today(), actor);
         }
         if (done) {
