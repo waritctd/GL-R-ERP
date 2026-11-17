@@ -439,7 +439,7 @@ function financeDeal(overrides = {}) {
 }
 
 async function loadEligibleDeal(ticketId = '42') {
-  fireEvent.change(screen.getByLabelText(/เลขที่ Ticket ID/), { target: { value: ticketId } });
+  fireEvent.change(screen.getByLabelText(/เลขที่งาน \(ID\)/), { target: { value: ticketId } });
   fireEvent.click(screen.getByRole('button', { name: /โหลดข้อมูลงาน/ }));
   await screen.findByText('TCK-0042');
 }
@@ -487,7 +487,7 @@ describe('CommissionPage — account create-from-deal tax invoice upload', () =>
   it('a finance-view deal that has not reached CLOSED_PAID is refused with the stage in the message', async () => {
     api.finance.getDeal.mockResolvedValue({ deal: financeDeal({ salesStage: 'DELIVERY_SCHEDULING' }) });
     renderAccountPage();
-    fireEvent.change(screen.getByLabelText(/เลขที่ Ticket ID/), { target: { value: '42' } });
+    fireEvent.change(screen.getByLabelText(/เลขที่งาน \(ID\)/), { target: { value: '42' } });
     fireEvent.click(screen.getByRole('button', { name: /โหลดข้อมูลงาน/ }));
     const msg = (await screen.findByText(/ยังไม่ถึงขั้นตอนปิดงาน/)).textContent;
     // dealStageLabel() returns { label, tone }, never a string: interpolating the call itself renders "[object
@@ -501,7 +501,7 @@ describe('CommissionPage — account create-from-deal tax invoice upload', () =>
     // "[object Object]" here.
     api.finance.getDeal.mockResolvedValue({ deal: financeDeal({ salesStage: 'FUTURE_STAGE' }) });
     renderAccountPage();
-    fireEvent.change(screen.getByLabelText(/เลขที่ Ticket ID/), { target: { value: '42' } });
+    fireEvent.change(screen.getByLabelText(/เลขที่งาน \(ID\)/), { target: { value: '42' } });
     fireEvent.click(screen.getByRole('button', { name: /โหลดข้อมูลงาน/ }));
     const msg = (await screen.findByText(/ยังไม่ถึงขั้นตอนปิดงาน/)).textContent;
     expect(msg).toContain('FUTURE_STAGE');

@@ -131,10 +131,10 @@ export function ImportDealPage({ user, showToast }) {
         <Panel data-testid={status === 403 ? 'import-deal-forbidden' : status === 404 ? 'import-deal-not-found' : 'import-deal-error'}>
           <EmptyState
             icon="search"
-            title={status === 403 ? 'งานนี้ไม่อยู่ในขอบเขตงานนำเข้าของคุณ'
+            title={status === 403 ? 'งานนี้ไม่อยู่ในขอบเขตของฝ่ายนำเข้า'
               : status === 404 ? 'ไม่พบงานนี้'
                 : 'โหลดงานไม่สำเร็จ'}
-            description={status === 403 ? 'งานที่ยังไม่ถึงขั้นจัดซื้อและนำเข้าจะยังไม่ปรากฏในงานนำเข้า — กลับไปเลือกจากรายการงานนำเข้า'
+            description={status === 403 ? 'งานที่ยังไม่ถึงขั้นจัดซื้อและนำเข้าจะยังไม่ปรากฏในรายการงานนำเข้า — กลับไปเลือกจากรายการนั้น'
               : status === 404 ? 'ตรวจสอบลิงก์อีกครั้ง หรือกลับไปเลือกจากรายการงานนำเข้า'
                 : (dealQuery.error?.message || 'ลองใหม่อีกครั้ง')}
           />

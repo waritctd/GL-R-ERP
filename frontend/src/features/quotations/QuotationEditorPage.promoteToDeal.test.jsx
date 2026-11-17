@@ -88,7 +88,7 @@ describe('QuotationEditorPage — ยืนยันคำสั่งซื้�
     api.dealQuotations.get.mockResolvedValue({ quotation: quotation() });
     renderEditor();
     expect(await screen.findByRole('button', { name: PROMOTE })).not.toBeNull();
-    expect(screen.queryByRole('link', { name: /ไปที่งาน/ })).toBeNull();
+    expect(screen.queryByTestId('quotation-go-to-deal')).toBeNull();
   });
 
   it.each([
@@ -130,14 +130,15 @@ describe('QuotationEditorPage — ยืนยันคำสั่งซื้�
     api.tickets.get.mockResolvedValue(ticketSummary({ quotationOnly: false, status: 'draft' }));
     renderEditor();
     expect(await screen.findByRole('button', { name: PROMOTE })).not.toBeNull();
-    expect(screen.queryByRole('link', { name: /ไปที่งาน/ })).toBeNull();
+    expect(screen.queryByTestId('quotation-go-to-deal')).toBeNull();
   });
 
-  it.each([[true], [false]])('(b) once the order is confirmed (status quotation_issued, quotationOnly=%s): "ไปที่งาน", no confirm', async (quotationOnly) => {
+  it.each([[true], [false]])('(b) once the order is confirmed (status quotation_issued, quotationOnly=%s): "เปิดงาน", no confirm', async (quotationOnly) => {
     api.dealQuotations.get.mockResolvedValue({ quotation: quotation() });
     api.tickets.get.mockResolvedValue(ticketSummary({ quotationOnly, status: 'quotation_issued' }));
     renderEditor();
-    const link = await screen.findByRole('link', { name: /ไปที่งาน/ });
+    const link = await screen.findByTestId('quotation-go-to-deal');
+    expect(link.textContent).toContain('เปิดงาน');
     expect(link.getAttribute('href')).toBe('/tickets/18');
     expect(screen.queryByRole('button', { name: PROMOTE })).toBeNull();
   });
@@ -147,7 +148,7 @@ describe('QuotationEditorPage — ยืนยันคำสั่งซื้�
     api.tickets.get.mockRejectedValue(Object.assign(new Error('ไม่มีสิทธิ์เข้าถึงรายการนี้'), { status: 403 }));
     renderEditor();
     expect(await screen.findByRole('button', { name: PROMOTE })).not.toBeNull();
-    expect(screen.queryByRole('link', { name: /ไปที่งาน/ })).toBeNull();
+    expect(screen.queryByTestId('quotation-go-to-deal')).toBeNull();
   });
 
   it('(d) confirms first (dialog titled ยืนยันคำสั่งซื้อ), then confirms the order, toasts "ยืนยันคำสั่งซื้อแล้ว" and navigates to the deal', async () => {

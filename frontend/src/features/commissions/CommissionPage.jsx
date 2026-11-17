@@ -332,7 +332,7 @@ export function CommissionPage({ user, showToast }) {
   async function lookupTicket(rawTicketId) {
     const ticketId = Number(rawTicketId);
     if (!ticketId || Number.isNaN(ticketId)) {
-      setTicketLookupError('กรุณาระบุเลขที่ Ticket ID ที่ถูกต้อง');
+      setTicketLookupError('กรุณาระบุเลขที่งาน (ID) ที่ถูกต้อง');
       setLoadedTicket(null);
       return;
     }
@@ -824,7 +824,7 @@ function AccountCreateFromDeal({
             <h3 className="m-0 text-md font-extrabold text-text">งานที่จะบันทึกใบกำกับ</h3>
             <div className="grid gap-2">
               <label htmlFor="commission-ticket-lookup" className="text-sm font-bold">
-                เลขที่ Ticket ID ของงานที่ปิดงาน/รับเงินครบแล้ว (CLOSED_PAID)
+                เลขที่งาน (ID) ของงานที่อยู่ขั้นปิดงาน/รับเงินครบแล้ว (CLOSED_PAID)
               </label>
               <div className="flex flex-wrap items-center gap-2">
                 <input
@@ -855,7 +855,7 @@ function AccountCreateFromDeal({
                 </label>
               ) : (
                 <p className="m-0 text-xs text-text-muted">
-                  งานที่ปิดงาน/รับเงินครบแล้วอาจไม่ปรากฏในรายการอัตโนมัติ (รายการนี้แสดงเฉพาะงานที่ยังรอดำเนินการด้านการเงิน) — กรอกเลขที่ Ticket ID ด้วยตนเองด้านบนได้เสมอ
+                  งานที่อยู่ขั้นปิดงาน/รับเงินครบแล้วอาจไม่ปรากฏในรายการอัตโนมัติ (รายการนี้แสดงเฉพาะงานที่ยังรอดำเนินการด้านการเงิน) — กรอกเลขที่งาน (ID) ด้วยตนเองด้านบนได้เสมอ
                 </p>
               )}
               {ticketLookupError ? <StatusBadge tone="danger">{ticketLookupError}</StatusBadge> : null}

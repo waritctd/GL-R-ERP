@@ -167,9 +167,9 @@ export function BidOutcomeModal({
         </Fieldset>
 
         {won.length >= 2 && !alreadyAwarded ? (
-          <Fieldset legend="ได้งานมากกว่า 1 ราย · แยกงาน">
+          <Fieldset legend="ชนะมากกว่า 1 ราย · แยกงาน">
             <p className="m-0 text-xs text-text-muted">
-              ใบแจ้งหนี้ มัดจำ และคอมมิชชั่นคิดต่อลูกค้า ระบบจึงแยกเป็นหนึ่งงานต่อผู้รับเหมาที่ได้งาน ทุกงานยังอยู่ใต้โครงการเดียวกันและนับผลชนะครั้งเดียว
+              ใบแจ้งหนี้ มัดจำ และคอมมิชชั่นคิดต่อลูกค้า ระบบจึงแยกงานให้ผู้รับเหมาที่ชนะรายละหนึ่งงาน ทุกงานยังอยู่ใต้โครงการเดียวกันและนับผลชนะครั้งเดียว
             </p>
             <div role="radiogroup" aria-label="งานหลัก" className="grid gap-2">
               {destinations.map(({ party, code: dest }) => {
@@ -224,10 +224,10 @@ export function BidOutcomeModal({
         >
           <Icon name={won.length === 0 ? 'triangleAlert' : 'check'} size={16} className="mt-0.5 shrink-0" />
           {won.length === 0 ? (
-            <span>ยังไม่ได้เลือกผู้รับเหมาที่ได้งาน · ถ้าแพ้ทั้งโครงการ ให้ใช้ &quot;เสียงาน&quot; ที่ท้ายหน้ารายละเอียดงานแทน</span>
+            <span>ยังไม่ได้เลือกผู้รับเหมาที่ชนะ · ถ้าแพ้ทั้งโครงการ ให้ใช้ &quot;เสียงาน&quot; ที่ท้ายหน้ารายละเอียดงานแทน</span>
           ) : (
             <span className="flex flex-col gap-0.5">
-              <span><strong>{`ได้งาน ${won.length} ราย`}</strong> · ทุกงานย้ายไปขั้น S10 รับคำสั่งซื้อ</span>
+              <span><strong>{`ชนะ ${won.length} ราย`}</strong> · ทุกงานย้ายไปขั้น S10 รับคำสั่งซื้อ</span>
               {destinations.map(({ party, code: dest }) => (
                 <span key={party.id}>{`${dest} → ${party.customerName} (${party.latestQuotationAmount != null ? formatMoney(party.latestQuotationAmount) : '—'})`}</span>
               ))}

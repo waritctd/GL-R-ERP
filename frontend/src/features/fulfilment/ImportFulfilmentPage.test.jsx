@@ -162,6 +162,7 @@ describe('ImportFulfilmentPage (per-factory, stored aggregate)', () => {
       await screen.findByTestId('fulfilment-deal');
       expect(screen.getByRole('heading', { name: 'การขนส่ง' })).not.toBeNull();
       expect(screen.getByText(/ที่เดียวที่เลื่อนขั้นตอนการนำเข้าได้/)).not.toBeNull();
+      expect(screen.getByText(/ฝ่ายขายเห็นขั้นตอนเดียวกันในหน้ารายละเอียดงาน \(ดูอย่างเดียว\)/)).not.toBeNull();
     });
 
     it('an advance shows "เลื่อนเป็น … · IR · เลิกทำ"; เลิกทำ undoes THAT advance (expectedStep = its target)', async () => {

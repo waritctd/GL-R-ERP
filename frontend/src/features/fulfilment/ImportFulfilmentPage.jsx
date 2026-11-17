@@ -446,7 +446,7 @@ export function ImportFulfilmentPage({ user, showToast }) {
     <PageStack>
       <PageHeader
         title="การขนส่ง"
-        subtitle="ที่เดียวที่เลื่อนขั้นตอนการนำเข้าได้ — ส่ง IR ให้จัดซื้อ → สั่งซื้อผู้ผลิต → ขนส่งรับของ → กำลังเดินทาง → ถึงไทย รอออกของ → ถึงโกดัง · ฝ่ายขายเห็นขั้นตอนเดียวกันในงาน (ดูอย่างเดียว)"
+        subtitle="ที่เดียวที่เลื่อนขั้นตอนการนำเข้าได้ — ส่ง IR ให้จัดซื้อ → สั่งซื้อผู้ผลิต → ขนส่งรับของ → กำลังเดินทาง → ถึงไทย รอออกของ → ถึงโกดัง · ฝ่ายขายเห็นขั้นตอนเดียวกันในหน้ารายละเอียดงาน (ดูอย่างเดียว)"
         actions={(
           <Button
             type="button"
@@ -622,7 +622,7 @@ export function ImportFulfilmentPage({ user, showToast }) {
 
           {visibleActive.length === 0 ? (
             <p className="rounded-lg border border-dashed border-border px-4 py-6 text-center text-xs text-text-muted">
-              ไม่มีงานนำเข้าที่ตรงกับตัวกรองนี้ — ดูงานที่รับครบแล้วด้านล่าง
+              ไม่มีงานนำเข้าที่ตรงกับตัวกรองนี้ — ดูรายการงานที่รับของครบแล้วด้านล่าง
             </p>
           ) : null}
 

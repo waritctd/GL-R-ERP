@@ -274,7 +274,7 @@ export function FinanceDealPage({ user }) {
   if (dealQuery.error) {
     const status = dealQuery.error.status;
     if (status === 403) {
-      return <BlockedState icon="lock" title="ไม่มีสิทธิ์เข้าถึงงานนี้" description="งานนี้อยู่นอกขอบเขตงานการเงินของคุณ" />;
+      return <BlockedState icon="lock" title="ไม่มีสิทธิ์เข้าถึงงานนี้" description="งานนี้อยู่นอกขอบเขตของฝ่ายบัญชี" />;
     }
     if (status === 404) {
       return <BlockedState icon="search" title="ไม่พบงานนี้" description="งานอาจถูกลบไป หรือเลขที่ในลิงก์ไม่ถูกต้อง" />;

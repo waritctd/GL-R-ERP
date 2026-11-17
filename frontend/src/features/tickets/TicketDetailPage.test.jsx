@@ -5776,7 +5776,10 @@ describe('TicketDetailPage', () => {
 
       fireEvent.click(within(dialog.getByTestId('bid-winner-1')).getByRole('checkbox'));
       fireEvent.click(within(dialog.getByTestId('bid-winner-2')).getByRole('checkbox'));
-      expect(dialog.getByText('ได้งานมากกว่า 1 ราย · แยกงาน')).toBeTruthy();
+      expect(dialog.getByText('ชนะมากกว่า 1 ราย · แยกงาน')).toBeTruthy();
+      // fix round 1: งาน (the deal) and ได้งาน (won) never share a sentence; "won" reads ชนะ where both meet.
+      expect(dialog.getByText(/ระบบจึงแยกงานให้ผู้รับเหมาที่ชนะรายละหนึ่งงาน/)).toBeTruthy();
+      expect(dialog.getByText(/ชนะ 2 ราย/)).toBeTruthy();
       expect(dialog.getAllByText('DL-2026-0280-A').length).toBeGreaterThan(0);
       // Make the second winner the primary: the first becomes -A.
       fireEvent.click(dialog.getAllByRole('radio', { name: /บจก.สมมติ ก่อสร้าง/ })[0]);

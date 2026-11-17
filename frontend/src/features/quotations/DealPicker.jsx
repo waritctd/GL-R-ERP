@@ -258,7 +258,7 @@ export function DealPicker({
           aria-controls={LIST_ID}
           aria-autocomplete="list"
           aria-activedescendant={activeOption ? optionId(activeOption) : undefined}
-          placeholder="ค้นหา รหัสงาน / ลูกค้า / โครงการ…"
+          placeholder="ค้นหา เลขที่งาน / ลูกค้า / โครงการ…"
           value={search}
           onChange={(event) => { setSearch(event.target.value); setActiveIndex(-1); setOpen(true); }}
           onFocus={() => setOpen(true)}

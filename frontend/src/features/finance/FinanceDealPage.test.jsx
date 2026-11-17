@@ -885,6 +885,8 @@ describe('FinanceDealPage', () => {
       api.finance.getDeal.mockRejectedValue(new ApiError('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403));
       renderPage();
       expect(await screen.findByText(/ไม่มีสิทธิ์เข้าถึงงานนี้/)).not.toBeNull();
+      // fix round 1: not "งานนี้อยู่นอกขอบเขตงานการเงิน" (งาน twice, two meanings).
+      expect(screen.getByText('งานนี้อยู่นอกขอบเขตของฝ่ายบัญชี')).not.toBeNull();
       expect(screen.getByRole('link', { name: /กลับไปงานการเงิน/ }).getAttribute('href')).toBe('/finance');
     });
 

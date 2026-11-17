@@ -2239,7 +2239,7 @@ export function QuotationEditorPage({ user, showToast }) {
                   data-testid="quotation-go-to-deal"
                 >
                   <Icon name="chevronRight" size={14} />
-                  ไปที่งาน
+                  เปิดงาน
                 </Link>
               ) : (
                 <Button

@@ -59,7 +59,7 @@ function DealPicker({ row, busy, onResolve }) {
         />
         <Button type="button" size="sm" variant="secondary" onClick={search}>ค้นหา</Button>
       </div>
-      {results && results.length === 0 ? <p className="m-0 text-sm text-text-muted">ไม่พบงานในขอบเขตงานของฝ่ายบัญชี</p> : null}
+      {results && results.length === 0 ? <p className="m-0 text-sm text-text-muted">ไม่พบงานที่ตรงกันในขอบเขตของฝ่ายบัญชี</p> : null}
       {results?.length ? (
         <ul className="m-0 grid list-none gap-1.5 p-0">
           {results.map((d) => (

@@ -1846,7 +1846,7 @@ describe('QuotationEditorPage ไม่แสดงชื่อโครงก�
     expect(nextFormControlAfter(screen.getByLabelText(/^โครงการ/))).toBe(box);
     expect(follows(box, document.getElementById('salesRepDisplayIdCard'))).toBe(true);
     // The consequence is on screen, not left to be discovered on the PDF.
-    expect(screen.getByText(/ชื่อโครงการยังอยู่ในงาน/)).not.toBeNull();
+    expect(screen.getByText(/ชื่อโครงการยังบันทึกไว้ในงาน/)).not.toBeNull();
   });
 
   // The wrong-way-round case: a document that already hides its project must not start printing it again just

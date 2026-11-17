@@ -277,7 +277,7 @@ describe('ImportDealPage', () => {
     api.importDeals.get.mockRejectedValue(Object.assign(new Error('ไม่มีสิทธิ์เข้าถึงรายการนี้'), { status: 403 }));
     renderPage();
     expect(await screen.findByTestId('import-deal-forbidden')).not.toBeNull();
-    expect(screen.getByText(/ไม่อยู่ในขอบเขตงานนำเข้า/)).not.toBeNull();
+    expect(screen.getByText(/งานนี้ไม่อยู่ในขอบเขตของฝ่ายนำเข้า/)).not.toBeNull();
     expect(screen.queryByTestId('import-deal-items')).toBeNull();
     expect(api.attachments.list).not.toHaveBeenCalled();
   });
