@@ -185,6 +185,54 @@ class SalesBoardScopeIntegrationTest extends AbstractDealQuotationSlice2Integrat
         assertThat(work.get("board")).hasSize(7);
     }
 
+    // ── days quiet reads ONE clock (review round 2, L-1) ─────────────────────
+
+    /** A deal last touched exactly N days before the read reads N days quiet — every time. daysQuiet used to be the
+     * JVM clock minus a Postgres-written timestamp; with the JVM clock lagging Postgres by up to ~16 ms, about 40% of
+     * such reads gave N-1, which tied an N-day deal with an (N-1)-day one and reordered ควรตามต่อ. Thirty reads, each
+     * straight after an exact backdate. */
+    @Test
+    void aDealTouchedExactlyNDaysAgoReadsNDaysQuiet_everyTime() {
+        long id = deal(salesActor);
+        SalesBoardRepository repo = new SalesBoardRepository(jdbc, new QuietRule(jdbc, 14));
+        List<Integer> reads = new ArrayList<>();
+        for (int i = 0; i < 30; i++) {
+            backdate(id, 19);
+            reads.add(repo.activeDealsOwnedBy(salesActor.id()).stream().filter(d -> d.ticketId() == id)
+                .findFirst().orElseThrow().daysQuiet());
+        }
+        assertThat(reads).containsOnly(19);
+    }
+
+    /** The days figure and the quiet flag come from the SAME clock: the statement's own now(). Inside one transaction
+     * now() is fixed at its start, so a deal touched 15 days less one second before it is 14 whole days quiet (and
+     * quiet, past the 14-day threshold) however much wall-clock time passes before the read. A days figure taken from
+     * the application clock reads 15 here, disagreeing with the clock that set the flag. Deterministic. */
+    @Test
+    void daysQuietAndTheQuietFlagReadOneClock() {
+        long id = deal(salesActor);
+        SalesBoardRepository repo = new SalesBoardRepository(jdbc, new QuietRule(jdbc, 14));
+        var tx = new org.springframework.transaction.support.TransactionTemplate(
+            new org.springframework.jdbc.datasource.DataSourceTransactionManager(jdbc.getJdbcTemplate().getDataSource()));
+        th.co.glr.hr.salesboard.SalesBoardDtos.BoardDeal row = tx.execute(status -> {
+            status.setRollbackOnly();
+            Map<String, Object> p = Map.of("id", id);
+            String at = "now() - interval '15 days' + interval '1 second'";
+            jdbc.update("UPDATE sales.ticket SET created_at = " + at + " WHERE ticket_id = :id", p);
+            jdbc.update("UPDATE sales.ticket_event SET created_at = " + at + " WHERE ticket_id = :id", p);
+            jdbc.update("UPDATE sales.deal_activity SET created_at = " + at + " WHERE ticket_id = :id", p);
+            try {
+                Thread.sleep(1500);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            return repo.activeDealsOwnedBy(salesActor.id()).stream().filter(d -> d.ticketId() == id)
+                .findFirst().orElseThrow();
+        });
+        assertThat(row.quiet()).isTrue();
+        assertThat(row.daysQuiet()).isEqualTo(14);
+    }
+
     @Test
     void valueIsLatestApprovedQuotationTotal_nullWhenNone() throws Exception {
         long quoted = deal(salesActor);

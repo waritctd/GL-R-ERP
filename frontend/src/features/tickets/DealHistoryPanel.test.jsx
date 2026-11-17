@@ -185,4 +185,34 @@ describe('DealHistoryPanel', () => {
       expect(screen.getByRole('listitem').textContent).toContain('รับโอนเพิ่มเติมจากลูกค้า');
     });
   });
+
+  // TicketService.cancel / markLost write "ยกเลิกดีล (CODE) — note" / "เสียงาน (CODE) — note". The reason code is the
+  // only place a cancelled deal's reason is displayed, so it reads as its label — the drawn new codes AND the three
+  // retired on 2026-11-16 that already-cancelled deals carry. An unknown code is shown as written.
+  describe('cancel / lost reason in the message', () => {
+    const one = (kind, message) => render(
+      <DealHistoryPanel events={[{ id: 1, kind, actorName: 'พนักงานขาย', message, createdAt: '2026-11-16T09:00:00.000Z' }]} activities={[]} />,
+    );
+
+    it.each([
+      ['ยกเลิกดีล (DUPLICATE_DEAL) — ซ้ำกับ PR-2026-0028', 'เปิดซ้ำกับงานอื่น — ซ้ำกับ PR-2026-0028'],
+      ['ยกเลิกดีล (OWNER_CANCELLED)', 'เจ้าของยกเลิกโครงการ'],
+      ['ยกเลิกดีล (BUDGET_CANCELLED)', 'งบประมาณถูกยกเลิก'],
+    ])('a CANCELLED message "%s" reads its label', (message, expected) => {
+      one('CANCELLED', message);
+      const text = screen.getByRole('listitem').textContent;
+      expect(text).toContain(expected);
+      expect(text).not.toMatch(/[A-Z]{3,}_[A-Z]/);
+    });
+
+    it('a MARKED_LOST message reads its F-code and label', () => {
+      one('MARKED_LOST', 'เสียงาน (PRICE) — คู่แข่งถูกกว่า');
+      expect(screen.getByRole('listitem').textContent).toContain('F2 ราคา — คู่แข่งถูกกว่า');
+    });
+
+    it('an unknown code or free text is shown as written', () => {
+      one('CANCELLED', 'ลูกค้าแจ้งยกเลิก');
+      expect(screen.getByRole('listitem').textContent).toContain('ลูกค้าแจ้งยกเลิก');
+    });
+  });
 });

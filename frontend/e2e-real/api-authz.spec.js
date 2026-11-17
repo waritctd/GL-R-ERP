@@ -155,3 +155,67 @@ test.describe('backend authorization (real Java services)', () => {
     expect(await response.text()).toContain('ไม่มีสิทธิ์เข้าถึงรายการนี้');
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /api/tickets/{id}/document-chain — the document chain summary (2026-11-17). Its gate IS the deposit-notice read
+// gate, DepositNoticeService#requireTicketViewer (DocumentChainService#forTicket calls it first):
+//   1. requireRole(VIEWER_ROLES = sales, import, ceo, account, sales_manager) — everyone else 403, before any lookup;
+//   2. the deal must exist — 404;
+//   3. per role (dealDocumentScope): ceo / sales_manager every deal; sales only a deal it owns or keyed; account only a
+//      deal inside its list scope; import never (403, after the 404).
+// Pinned against real deals discovered from each role's own deal list, so no seed id is hard-coded. The scope SQL
+// itself is proven by DocumentChainIntegrationTest (real Postgres, wrong-way-round, mutation-checked).
+// ─────────────────────────────────────────────────────────────────────────────
+test.describe('document chain summary — DepositNoticeService#requireTicketViewer', () => {
+  /** @type {Record<string, import('@playwright/test').APIRequestContext>} */
+  let sessions;
+  const READERS = ['sales', 'sales_manager', 'ceo', 'account'];
+  const NON_VIEWERS = except('sales', 'sales_manager', 'ceo', 'account', 'import');
+  const chainPath = (id) => `/api/tickets/${id}/document-chain`;
+  const MISSING = 2147480000;
+
+  test.beforeAll(async () => { sessions = await apiSessionsFor(ALL); });
+  test.afterAll(async () => { await disposeSessions(sessions); });
+
+  /** The deals `role` itself can list (GET /api/tickets applies the same per-role scope). */
+  async function dealsOf(role) {
+    const response = await sessions[role].get('/api/tickets?size=50');
+    expect(response.status(), `${role} lists its deals`).toBe(200);
+    return (await response.json()).tickets ?? [];
+  }
+
+  test('roles that read no deal documents get 403 — before the deal is even looked up', async () => {
+    for (const role of NON_VIEWERS) {
+      expect((await sessions[role].get(chainPath(MISSING))).status(), `${role} on a missing deal`).toBe(403);
+    }
+  });
+
+  test('every role that passes the role gate gets 404 for a deal that does not exist', async () => {
+    for (const role of [...READERS, 'import']) {
+      expect((await sessions[role].get(chainPath(MISSING))).status(), `${role} on a missing deal`).toBe(404);
+    }
+  });
+
+  test('each reader gets 200 on a deal from its own list; import, hr and the rest get 403 on the same deal', async () => {
+    let checked = 0;
+    for (const role of READERS) {
+      const [deal] = await dealsOf(role);
+      if (!deal) continue; // nothing in this persona's scope on this seed
+      checked += 1;
+      expect((await sessions[role].get(chainPath(deal.id))).status(), `${role} on its own deal ${deal.id}`).toBe(200);
+      for (const denied of ['import', ...NON_VIEWERS]) {
+        expect((await sessions[denied].get(chainPath(deal.id))).status(), `${denied} on deal ${deal.id}`).toBe(403);
+      }
+    }
+    test.skip(checked === 0, 'the seed has no deal any reader can list');
+  });
+
+  test('a sales rep is refused a deal it neither owns nor keyed (wrong-way-round)', async () => {
+    const me = (await (await sessions.sales.get('/api/auth/me')).json()).user;
+    const foreign = (await dealsOf('ceo')).find((deal) => Number(deal.createdById) !== Number(me.id)
+      && Number(deal.keyedById) !== Number(me.id));
+    test.skip(!foreign, 'every seeded deal belongs to the sales persona');
+    expect((await sessions.sales.get(chainPath(foreign.id))).status(), `sales on deal ${foreign.id}`).toBe(403);
+    expect((await sessions.ceo.get(chainPath(foreign.id))).status(), `ceo on deal ${foreign.id}`).toBe(200);
+  });
+});

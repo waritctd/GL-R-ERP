@@ -47,7 +47,9 @@ import {
   canReviseDealQuotation, orderConfirmationOf, canViewDealQuotation, newestQuotationByRequest,
   DEAD_PRICING_REQUEST_STATUSES, stageForQuotationRecipient,
 } from '../quotations/quotationMeta.js';
-import { DealStagePanel, NextStageLine, nextStageLine } from './DealStagePanel.jsx';
+import {
+  canMoveDealToS2, DealStagePanel, NextStageLine, nextStageLine,
+} from './DealStagePanel.jsx';
 import { DealHeader } from './DealHeader.jsx';
 import { DealInfoCard } from './DealInfoCard.jsx';
 import { DealItemsPanel, useDealItemsEdit } from './DealItemsPanel.jsx';
@@ -75,6 +77,7 @@ import {
 } from './ticketDetailTabs.js';
 import { isRemainingInvoiceReady, pickRemainingInvoice } from './remainingInvoiceReadiness.js';
 import { isOwnerOrKeyer } from './dealOwnership.js';
+import { invalidateDealDocuments, useDocumentChain } from '../documentChain/documentChain.js';
 import { manualMoveLabel } from './stageMeta.js';
 import { quoteNextPartyBanner, resolveWorkState, secondaryWorkActions } from './workState.js';
 
@@ -478,6 +481,10 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   });
   const procurementSource = procurementSourceQuery.data;
   const depositNotice = pickDepositNotice(depositNoticesQuery.data);
+  // The deal's document chain summary: the SAME server source as the quotation page's chain card. The เงิน tab's steps
+  // read it (DealPaymentSection, same key: one fetch) and so does the ขั้นต่อไป card at the money stages.
+  const documentChainQuery = useDocumentChain(ticketId, { enabled: !!ticketId && !!ticket && sections.depositNotice });
+  const documentChain = documentChainQuery.data ?? null;
   // undefined until the list is read: nextSalesAction then never offers the invoice.
   const remainingInvoice = remainingInvoicesQuery.data === undefined ? undefined : pickRemainingInvoice(remainingInvoicesQuery.data);
   const createDepositNoticeMutation = useMutation({
@@ -487,9 +494,8 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       return pickDepositNotice(docs)?.status === 'DRAFT' ? null : createDepositNoticeDraft(ticketId);
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.depositNotices(ticketId) });
-      queryClient.invalidateQueries({ queryKey: queryKeys.ticketDetail(ticketId) });
-      queryClient.invalidateQueries({ queryKey: queryKeys.ticketActions(ticketId) });
+      // The chain's keys (the quotation page's card reads them too).
+      invalidateDealDocuments(queryClient, ticketId);
       navigate(`/tickets/${ticketId}/deposit`);
     },
     onError: (err) => showToast('error', err.message || 'สร้างเอกสารฉบับร่างไม่สำเร็จ'),
@@ -521,6 +527,10 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   function applyTicketUpdate(updatedTicket) {
     if (updatedTicket) {
       queryClient.setQueryData(queryKeys.ticketDetail(ticketId), updatedTicket);
+      // The fast path writes the deal itself, so the chain (nested under ticketDetail) is not reached by it: every action
+      // through here (ลูกค้ายืนยัน, final payment, hold / dormant / resume / lost / reopen, cancel, close, procurement)
+      // can move the document chain, so it is re-read (fix round 1, F-1).
+      queryClient.invalidateQueries({ queryKey: queryKeys.documentChain(ticketId) });
     } else {
       // The re-pointed money calls (recordPayment / confirmFinalPayment / confirmCloseReady) answer with the finance
       // view `{ deal }`, which carries no ticket — writing `undefined` into the cache would blank the page, so
@@ -582,7 +592,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       setConfirm(null);
       showToast('success', 'ยืนยันคำสั่งซื้อแล้ว');
       queryClient.invalidateQueries({ queryKey: ['tickets'] });
-      queryClient.invalidateQueries({ queryKey: ['dealQuotations'] });
+      invalidateDealDocuments(queryClient, ticketId);
     },
     onError: (error) => {
       setConfirm(null);
@@ -1145,6 +1155,10 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   let routeChoiceSecondTrigger = null;
   let stickyPrimaryLabel = nextAction;
   let stickyPrimaryAction = primaryAction;
+  // True only when the button the page SHOWS is สร้าง/ออกใบแจ้งยอดเงินรับมัดจำ (not merely when the resolver proposed
+  // it: บันทึกผลประมูล and the money/close buttons outrank it). The เงิน tab then points at it instead of offering a
+  // second copy; before 2026-11-17 this read workStateAction, and the tab pointed at a button that was not there.
+  let stickyCreatesNotice = false;
   // The เสนอราคา<party> line, minus a skip this viewer cannot take (set below).
   let quoteBannerText = workState.bannerText;
   // "บันทึกผลประมูล" (deal-party-model.md): offered to the deal's editors (owner/keyer sales,
@@ -1273,6 +1287,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       stickyPrimaryLabel = workStateAction.label;
     } else if (actionKey === 'create_deposit_notice') {
       // DRAFT already made: just open it; else make it (same path as DepositNoticePage's สร้าง) and open it.
+      stickyCreatesNotice = true;
       stickyPrimaryAction = (
         <Button type="button" variant="primary" data-testid="ticket-primary-action" data-action={actionKey}
           disabled={createDepositNoticeMutation.isPending}
@@ -1362,9 +1377,21 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       );
       stickyPrimaryLabel = workStateAction.label;
     } else if (actionKey === 'advance_stage') {
-      // ขั้น 1–2 are moved by hand. Offered only when the rep can move: DealStagePanel's startAdvance
-      // moves at once when ready, else opens its follow-up + activity form.
-      if (canAdvance || advanceAwaitsReadiness) {
+      // ขั้น 1–2 are moved by hand. On an S1 deal the one manual move is to S2 (drawing m-stage, 2026-11-16):
+      // "ย้ายไป S2 · สเปคผ่าน" opens that dialog, for exactly the viewers whose แก้ไขสถานะ… could pick S2
+      // (canMoveDealToS2). The step inside S1 (LEAD_APPROACH → PRESENTATION) stays reachable in ⋯ as
+      // "เลื่อนไป: 2. …" and "แก้ไขสถานะ…" — secondary, not removed. Elsewhere: DealStagePanel's startAdvance moves
+      // at once when ready, else opens its follow-up + activity form, as before.
+      if (canMoveDealToS2({ summary, stageDecisions })) {
+        advanceInHeader = true;
+        stickyPrimaryLabel = 'ย้ายไป S2 · สเปคผ่าน';
+        stickyPrimaryAction = (
+          <Button type="button" variant="primary" data-testid="ticket-primary-action" data-action={actionKey} disabled={actionLoading} onClick={() => dealStagePanelRef.current?.openMoveToS2()}>
+            {stickyPrimaryLabel}
+            <Icon name="chevronRight" size={14} />
+          </Button>
+        );
+      } else if (canAdvance || advanceAwaitsReadiness) {
         advanceInHeader = true;
         stickyPrimaryLabel = `เลื่อนไป: ${next.no}. ${dealStageLabel(next.code, summary.entryChannel).label}`;
         stickyPrimaryAction = (
@@ -1435,6 +1462,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // for an ACTIVE deal whose step this viewer has no button for — a switch to the tab that holds that stage's work.
   const nextStep = nextStepFor({
     salesStage: summary.salesStage, lifecycle: summary.lifecycle ?? 'ACTIVE', depositPolicy: summary.depositPolicy,
+    chain: documentChain,
   });
   let cardAction = stickyPrimaryAction;
   // Fix round 1 (L1): the title names what the button does. With the page's own resolved action that is the action's
@@ -1447,10 +1475,18 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       : (stickyPrimaryLabel ?? nextStep.title);
   if (!cardAction && nextStep.kind === 'resume' && canResumeDeal) {
     cardAction = (
-      <Button type="button" variant="primary" data-testid="ticket-primary-action" data-action="resume" disabled={actionLoading}
-        onClick={() => dealStagePanelRef.current?.openResume()}>
-        ดำเนินการต่อ
-      </Button>
+      <span className="flex flex-wrap items-center gap-2">
+        <Button type="button" variant="primary" data-testid="ticket-primary-action" data-action="resume" disabled={actionLoading}
+          onClick={() => dealStagePanelRef.current?.openResume()}>
+          ดำเนินการต่อ
+        </Button>
+        {/* Fix round 1, ruling 5: change (or clear) the วันที่จะกลับมาดู without leaving the pause — same gate as
+            ดำเนินการต่อ (RESUME is listed exactly when the caller may hold / dormant the deal). */}
+        <Button type="button" variant="secondary" data-testid="change-return-date" disabled={actionLoading}
+          onClick={() => dealStagePanelRef.current?.openChangeReturnDate()}>
+          เปลี่ยนวันที่จะกลับมาดู
+        </Button>
+      </span>
     );
   } else if (!cardAction && nextStep.kind === 'reopen' && canReopenDeal) {
     cardAction = (
@@ -1519,6 +1555,9 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // while loading.
   const readyToAdvance = activitiesQuery.isLoading
     || isReadyToAdvance(summary, hasActivitySince(activities, lastStageChangeAt(events, summary.createdAt)));
+  // The ย้ายไป S2 dialog asks for its note as the activity only when there is none since the last stage change.
+  const hasRecentActivity = activitiesQuery.isLoading
+    ? null : hasActivitySince(activities, lastStageChangeAt(events, summary.createdAt));
 
   // Named handlers (not inline closures in the array below) so each ref read happens inside an ordinary
   // event-handler function, not lexically inside an object/array literal being built during render.
@@ -1674,7 +1713,9 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
             stepIndex={repStepIndex(stageCatalog, summary.salesStage)}
             nextStep={{ ...nextStep, title: cardTitle }}
             facts={cardFacts}
-            nextLine={nextLine?.lineStage ? <NextStageLine line={nextLine} entryChannel={summary.entryChannel} /> : null}
+            // At a money stage the line under the title is the document chain's next step (nextStep.fromChain), the
+            // same sentence the quotation page's chain card prints; elsewhere it is the stage line, as before.
+            nextLine={!nextStep.fromChain && nextLine?.lineStage ? <NextStageLine line={nextLine} entryChannel={summary.entryChannel} /> : null}
             bannerText={bannerText}
             primaryAction={cardAction}
             overflowItems={overflowItems}
@@ -1730,6 +1771,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
         showNextLine={false}
         // primaryAction lives solely in the ขั้นต่อไป card ("one primary CTA"); not passed here too.
         advanceReady={readyToAdvance}
+        hasRecentActivity={hasRecentActivity}
         advanceInHeader={advanceInHeader}
         actionLoading={actionLoading}
         onUpdateStage={(payload) => doAction(() => api.tickets.updateStage(ticketId, payload), 'อัปเดตสถานะงานแล้ว')}
@@ -1928,7 +1970,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
               canReadDepositNotices={sections.depositNotice}
               canManageRemainingInvoice={can.downloadRemainingInvoice}
               onManageRemainingInvoice={() => setRemainingInvoiceDialogOpen(true)}
-              mainButtonCreatesNotice={workStateAction?.key === 'create_deposit_notice'}
+              mainButtonCreatesNotice={stickyCreatesNotice}
               onCreateDepositNotice={() => createDepositNoticeMutation.mutate()}
               actionLoading={actionLoading || createDepositNoticeMutation.isPending}
               showToast={showToast}

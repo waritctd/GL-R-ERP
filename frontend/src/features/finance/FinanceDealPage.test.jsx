@@ -7,6 +7,7 @@ import { FinanceDealPage } from './FinanceDealPage.jsx';
 import { makeFinanceDeal, makeTrack } from '../../test/fixtures/financeDeal.js';
 import { api } from '../../api/index.js';
 import { ApiError } from '../../api/client.js';
+import { queryKeys } from '../../api/queryKeys.js';
 import { fetchDocumentBlob } from '../../utils/download.js';
 
 globalThis.React = React;
@@ -608,6 +609,23 @@ describe('FinanceDealPage', () => {
   });
 
   describe('money actions', () => {
+    // Document chain (2026-11-17): ยืนยันรับมัดจำ here must reach a rep who has the quotation page or the deal page
+    // open on the same client — the keys those pages read are invalidated with the deal.
+    it('DEPOSIT_PAID invalidates the document chain keys the deal page and the quotation page read', async () => {
+      const before = makeFinanceDeal({ availableActions: [action('DEPOSIT_PAID', 'รับมัดจำ')] });
+      api.finance.getDeal.mockResolvedValue({ deal: before });
+      api.finance.confirmDepositPaid.mockResolvedValue({ deal: makeFinanceDeal({ availableActions: [] }) });
+      const { queryClient } = renderPage();
+      const keys = [queryKeys.documentChain(501), queryKeys.depositNotices(501), queryKeys.storedRemainingInvoices(501)];
+      for (const key of keys) queryClient.setQueryData(key, { seeded: true });
+      fireEvent.click(await screen.findByRole('button', { name: 'ยืนยันรับมัดจำ' }));
+      fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'ยืนยันรับมัดจำ' }));
+      await waitFor(() => expect(api.finance.confirmDepositPaid).toHaveBeenCalledWith(501));
+      await waitFor(() => {
+        for (const key of keys) expect(queryClient.getQueryState(key).isInvalidated, JSON.stringify(key)).toBe(true);
+      });
+    });
+
     it('DEPOSIT_PAID asks for an explicit confirmation, then posts and updates the view from the returned deal', async () => {
       const before = makeFinanceDeal({ availableActions: [action('DEPOSIT_PAID', 'รับมัดจำ')] });
       const after = makeFinanceDeal({ availableActions: [] });

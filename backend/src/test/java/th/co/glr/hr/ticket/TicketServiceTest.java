@@ -1725,6 +1725,23 @@ class TicketServiceTest {
 
     // ── deal lifecycle + policies (V51) ──────────────────────────────────
 
+    /** Fix round 1, ruling 8 (V220 วันที่จะกลับมาดู): "not in the past" is judged on the Asia/Bangkok date. At
+     * 2026-11-18 03:00 Bangkok the UTC date is still the 17th; a return date of the 17th is already past in Bangkok and
+     * must be refused, the 18th accepted. Judging in UTC would accept the 17th. */
+    @Test
+    void pauseReturnDate_isJudgedOnTheBangkokDate_atTheHoursWhenUtcIsStillYesterday() {
+        service.useClock(java.time.Clock.fixed(java.time.Instant.parse("2026-11-17T20:00:00Z"), java.time.ZoneOffset.UTC));
+        stubDeal(10L, 1L, TicketStatus.DRAFT, List.of(), null, null, DealStage.NEGOTIATION, null);
+
+        ApiException refused = org.assertj.core.api.Assertions.catchThrowableOfType(ApiException.class,
+            () -> service.placeOnHold(10L, null, java.time.LocalDate.of(2026, 11, 17), salesActor));
+        assertThat(refused.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST);
+        verify(ticketRepo, never()).updateLifecycle(10L, DealLifecycle.ON_HOLD);
+
+        service.placeOnHold(10L, null, java.time.LocalDate.of(2026, 11, 18), salesActor);
+        verify(ticketRepo).updatePauseReturnOn(10L, java.time.LocalDate.of(2026, 11, 18));
+    }
+
     @Test
     void lifecycle_holdDormantResume_preserveStageAndAudit() {
         stubDeal(10L, 1L, TicketStatus.DRAFT, List.of(), null, null, DealStage.NEGOTIATION, null);

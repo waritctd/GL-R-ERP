@@ -1,0 +1,173 @@
+{
+  "_comment": "The document chain's state table, read by BOTH DocumentChainRulesTest (Java, the server's rules) and documentChainCases.test.js (the mock's mirror in mockApi.js). One table, two implementations, each pinned to it: a rule changed on one side only fails a test. Facts are a deal's own columns (status, lifecycle, depositPolicy, paymentStatus, fulfillmentStatus) plus which deposit-notice / remaining-invoice rows exist.",
+  "chain": [
+    {
+      "name": "approved quotation, order not confirmed",
+      "facts": { "status": "draft", "lifecycle": "ACTIVE", "depositPolicy": "REQUIRED", "paymentStatus": null, "fulfillmentStatus": null },
+      "depositState": "NOT_YET", "depositBlockedReason": null,
+      "remainingState": "WAITING", "remainingBlockedReason": "ORDER_NOT_CONFIRMED"
+    },
+    {
+      "name": "unconfirmed deal on a no-deposit policy: nothing to wait for but the order (status draft: requireQuotationIssued refuses)",
+      "facts": { "status": "draft", "lifecycle": "ACTIVE", "depositPolicy": "CREDIT_CUSTOMER", "paymentStatus": null, "fulfillmentStatus": null },
+      "depositState": "NOT_REQUIRED", "depositBlockedReason": null,
+      "remainingState": "TO_CREATE", "remainingBlockedReason": "ORDER_NOT_CONFIRMED"
+    },
+    {
+      "name": "pricing-request deal at quotation_issued, order not yet confirmed, no-deposit policy: createDraft does not refuse the order, only the goods",
+      "facts": { "status": "quotation_issued", "lifecycle": "ACTIVE", "depositPolicy": "WAIVED", "paymentStatus": null, "fulfillmentStatus": null },
+      "depositState": "NOT_REQUIRED", "depositBlockedReason": null,
+      "remainingState": "TO_CREATE", "remainingBlockedReason": "GOODS_NOT_READY"
+    },
+    {
+      "name": "deposit notice drafted on a paused deal: issue requires an ACTIVE deal",
+      "facts": { "status": "quotation_issued", "lifecycle": "ON_HOLD", "depositPolicy": "REQUIRED", "paymentStatus": "CUSTOMER_CONFIRMED", "fulfillmentStatus": null, "noticeDraft": true },
+      "depositState": "DRAFT", "depositBlockedReason": "DEAL_NOT_ACTIVE",
+      "remainingState": "WAITING", "remainingBlockedReason": "DEPOSIT_NOT_RECEIVED"
+    },
+    {
+      "name": "remaining invoice drafted on a paused deal: issue requires an ACTIVE deal",
+      "facts": { "status": "quotation_issued", "lifecycle": "ON_HOLD", "depositPolicy": "REQUIRED", "paymentStatus": "DEPOSIT_PAID", "fulfillmentStatus": "GOODS_RECEIVED", "noticeIssued": true, "invoiceDraft": true },
+      "depositState": "PAID", "depositBlockedReason": null,
+      "remainingState": "DRAFT", "remainingBlockedReason": "DEAL_NOT_ACTIVE"
+    },
+    {
+      "name": "legacy status cancelled on an ACTIVE lifecycle, order confirmed, no notice: dead, nothing may be created",
+      "facts": { "status": "cancelled", "lifecycle": "ACTIVE", "depositPolicy": "REQUIRED", "paymentStatus": "CUSTOMER_CONFIRMED", "fulfillmentStatus": null },
+      "depositState": "TO_CREATE", "depositBlockedReason": "DEAL_NOT_ACTIVE",
+      "remainingState": "WAITING", "remainingBlockedReason": "DEAL_NOT_ACTIVE"
+    },
+    {
+      "name": "legacy status cancelled on an ACTIVE lifecycle, deposit received, goods in: dead, no invoice",
+      "facts": { "status": "cancelled", "lifecycle": "ACTIVE", "depositPolicy": "REQUIRED", "paymentStatus": "DEPOSIT_PAID", "fulfillmentStatus": "GOODS_RECEIVED", "noticeIssued": true },
+      "depositState": "PAID", "depositBlockedReason": null,
+      "remainingState": "TO_CREATE", "remainingBlockedReason": "DEAL_NOT_ACTIVE"
+    },
+    {
+      "name": "order confirmed, no deposit notice yet",
+      "facts": { "status": "quotation_issued", "lifecycle": "ACTIVE", "depositPolicy": "REQUIRED", "paymentStatus": "CUSTOMER_CONFIRMED", "fulfillmentStatus": null },
+      "depositState": "TO_CREATE", "depositBlockedReason": null,
+      "remainingState": "WAITING", "remainingBlockedReason": "DEPOSIT_NOT_RECEIVED"
+    },
+    {
+      "name": "order confirmed on a paused deal: the notice cannot be made until it resumes",
+      "facts": { "status": "quotation_issued", "lifecycle": "ON_HOLD", "depositPolicy": "REQUIRED", "paymentStatus": "CUSTOMER_CONFIRMED", "fulfillmentStatus": null },
+      "depositState": "TO_CREATE", "depositBlockedReason": "DEAL_NOT_ACTIVE",
+      "remainingState": "WAITING", "remainingBlockedReason": "DEPOSIT_NOT_RECEIVED"
+    },
+    {
+      "name": "deposit notice drafted",
+      "facts": { "status": "quotation_issued", "lifecycle": "ACTIVE", "depositPolicy": "REQUIRED", "paymentStatus": "CUSTOMER_CONFIRMED", "fulfillmentStatus": null, "noticeDraft": true },
+      "depositState": "DRAFT", "depositBlockedReason": null,
+      "remainingState": "WAITING", "remainingBlockedReason": "DEPOSIT_NOT_RECEIVED"
+    },
+    {
+      "name": "deposit notice issued, awaiting ฝ่ายบัญชี",
+      "facts": { "status": "quotation_issued", "lifecycle": "ACTIVE", "depositPolicy": "REQUIRED", "paymentStatus": "DEPOSIT_NOTICE_ISSUED", "fulfillmentStatus": null, "noticeIssued": true },
+      "depositState": "ISSUED", "depositBlockedReason": null,
+      "remainingState": "WAITING", "remainingBlockedReason": "DEPOSIT_NOT_RECEIVED"
+    },
+    {
+      "name": "payment track says issued with no notice row (legacy)",
+      "facts": { "status": "quotation_issued", "lifecycle": "ACTIVE", "depositPolicy": "REQUIRED", "paymentStatus": "DEPOSIT_NOTICE_ISSUED", "fulfillmentStatus": null },
+      "depositState": "ISSUED", "depositBlockedReason": null,
+      "remainingState": "WAITING", "remainingBlockedReason": "DEPOSIT_NOT_RECEIVED"
+    },
+    {
+      "name": "a revision draft beside the issued notice: the issued one is the state until it is reissued",
+      "facts": { "status": "quotation_issued", "lifecycle": "ACTIVE", "depositPolicy": "REQUIRED", "paymentStatus": "DEPOSIT_NOTICE_ISSUED", "fulfillmentStatus": null, "noticeDraft": true, "noticeIssued": true },
+      "depositState": "ISSUED", "depositBlockedReason": null,
+      "remainingState": "WAITING", "remainingBlockedReason": "DEPOSIT_NOT_RECEIVED"
+    },
+    {
+      "name": "deposit received, goods not yet in",
+      "facts": { "status": "quotation_issued", "lifecycle": "ACTIVE", "depositPolicy": "REQUIRED", "paymentStatus": "DEPOSIT_PAID", "fulfillmentStatus": null, "noticeIssued": true },
+      "depositState": "PAID", "depositBlockedReason": null,
+      "remainingState": "TO_CREATE", "remainingBlockedReason": "GOODS_NOT_READY"
+    },
+    {
+      "name": "deposit received, goods received",
+      "facts": { "status": "quotation_issued", "lifecycle": "ACTIVE", "depositPolicy": "REQUIRED", "paymentStatus": "DEPOSIT_PAID", "fulfillmentStatus": "GOODS_RECEIVED", "noticeIssued": true },
+      "depositState": "PAID", "depositBlockedReason": null,
+      "remainingState": "TO_CREATE", "remainingBlockedReason": null
+    },
+    {
+      "name": "deposit received, from stock",
+      "facts": { "status": "quotation_issued", "lifecycle": "ACTIVE", "depositPolicy": "REQUIRED", "paymentStatus": "DEPOSIT_PAID", "fulfillmentStatus": "FROM_STOCK", "noticeIssued": true },
+      "depositState": "PAID", "depositBlockedReason": null,
+      "remainingState": "TO_CREATE", "remainingBlockedReason": null
+    },
+    {
+      "name": "deposit received, partly delivered",
+      "facts": { "status": "quotation_issued", "lifecycle": "ACTIVE", "depositPolicy": "REQUIRED", "paymentStatus": "DEPOSIT_PAID", "fulfillmentStatus": "PARTIALLY_DELIVERED", "noticeIssued": true },
+      "depositState": "PAID", "depositBlockedReason": null,
+      "remainingState": "TO_CREATE", "remainingBlockedReason": null
+    },
+    {
+      "name": "deposit received, goods ready, but the deal is paused",
+      "facts": { "status": "quotation_issued", "lifecycle": "ON_HOLD", "depositPolicy": "REQUIRED", "paymentStatus": "DEPOSIT_PAID", "fulfillmentStatus": "GOODS_RECEIVED", "noticeIssued": true },
+      "depositState": "PAID", "depositBlockedReason": null,
+      "remainingState": "TO_CREATE", "remainingBlockedReason": "DEAL_NOT_ACTIVE"
+    },
+    {
+      "name": "remaining invoice drafted",
+      "facts": { "status": "quotation_issued", "lifecycle": "ACTIVE", "depositPolicy": "REQUIRED", "paymentStatus": "DEPOSIT_PAID", "fulfillmentStatus": "GOODS_RECEIVED", "noticeIssued": true, "invoiceDraft": true },
+      "depositState": "PAID", "depositBlockedReason": null,
+      "remainingState": "DRAFT", "remainingBlockedReason": null
+    },
+    {
+      "name": "remaining invoice issued, awaiting payment",
+      "facts": { "status": "quotation_issued", "lifecycle": "ACTIVE", "depositPolicy": "REQUIRED", "paymentStatus": "AWAITING_FINAL_PAYMENT", "fulfillmentStatus": "FULLY_DELIVERED", "noticeIssued": true, "invoiceIssued": true },
+      "depositState": "PAID", "depositBlockedReason": null,
+      "remainingState": "ISSUED", "remainingBlockedReason": null
+    },
+    {
+      "name": "remaining invoice issued and paid in full",
+      "facts": { "status": "quotation_issued", "lifecycle": "ACTIVE", "depositPolicy": "REQUIRED", "paymentStatus": "FULLY_PAID", "fulfillmentStatus": "FULLY_DELIVERED", "noticeIssued": true, "invoiceIssued": true },
+      "depositState": "PAID", "depositBlockedReason": null,
+      "remainingState": "PAID", "remainingBlockedReason": null
+    },
+    {
+      "name": "paid in full by the deposit (100%): no remaining invoice is needed",
+      "facts": { "status": "quotation_issued", "lifecycle": "ACTIVE", "depositPolicy": "REQUIRED", "paymentStatus": "FULLY_PAID", "fulfillmentStatus": null, "noticeIssued": true },
+      "depositState": "PAID", "depositBlockedReason": null,
+      "remainingState": "NOT_NEEDED", "remainingBlockedReason": null
+    },
+    {
+      "name": "no deposit (0% quotation), stock goods: the invoice is next",
+      "facts": { "status": "quotation_issued", "lifecycle": "ACTIVE", "depositPolicy": "NOT_REQUIRED", "paymentStatus": "CUSTOMER_CONFIRMED", "fulfillmentStatus": "FROM_STOCK" },
+      "depositState": "NOT_REQUIRED", "depositBlockedReason": null,
+      "remainingState": "TO_CREATE", "remainingBlockedReason": null
+    },
+    {
+      "name": "deposit waived, goods not yet in",
+      "facts": { "status": "quotation_issued", "lifecycle": "ACTIVE", "depositPolicy": "WAIVED", "paymentStatus": "CUSTOMER_CONFIRMED", "fulfillmentStatus": null },
+      "depositState": "NOT_REQUIRED", "depositBlockedReason": null,
+      "remainingState": "TO_CREATE", "remainingBlockedReason": "GOODS_NOT_READY"
+    },
+    {
+      "name": "a deal past quotation_issued (closed) with goods delivered: not ready by status",
+      "facts": { "status": "closed", "lifecycle": "COMPLETED", "depositPolicy": "REQUIRED", "paymentStatus": "DEPOSIT_PAID", "fulfillmentStatus": "FULLY_DELIVERED", "noticeIssued": true },
+      "depositState": "PAID", "depositBlockedReason": null,
+      "remainingState": "TO_CREATE", "remainingBlockedReason": "DEAL_NOT_ACTIVE"
+    }
+  ],
+  "listStage": [
+    { "name": "approved, deal still open: awaiting the order", "facts": { "status": "draft", "lifecycle": "ACTIVE", "depositPolicy": "REQUIRED", "paymentStatus": null, "fulfillmentStatus": null }, "promoted": false, "confirmedQuotationId": null, "quotationId": 10, "stage": "AWAITING_ORDER" },
+    { "name": "approved, but the deal is paused: no mark", "facts": { "status": "draft", "lifecycle": "ON_HOLD", "depositPolicy": "REQUIRED", "paymentStatus": null, "fulfillmentStatus": null }, "promoted": false, "confirmedQuotationId": null, "quotationId": 10, "stage": null },
+    { "name": "approved, deal lost: no mark", "facts": { "status": "draft", "lifecycle": "CLOSED_LOST", "depositPolicy": "REQUIRED", "paymentStatus": null, "fulfillmentStatus": null }, "promoted": false, "confirmedQuotationId": null, "quotationId": 10, "stage": null },
+    { "name": "deal confirmed some other way (pricing-request route): no mark", "facts": { "status": "quotation_issued", "lifecycle": "ACTIVE", "depositPolicy": "REQUIRED", "paymentStatus": "CUSTOMER_CONFIRMED", "fulfillmentStatus": null }, "promoted": false, "confirmedQuotationId": null, "quotationId": 10, "stage": null },
+    { "name": "confirmed from this quotation, no notice", "facts": { "status": "quotation_issued", "lifecycle": "ACTIVE", "depositPolicy": "REQUIRED", "paymentStatus": "CUSTOMER_CONFIRMED", "fulfillmentStatus": null }, "promoted": true, "confirmedQuotationId": 10, "quotationId": 10, "stage": "AWAITING_DEPOSIT_NOTICE" },
+    { "name": "confirmed from this quotation, notice drafted", "facts": { "status": "quotation_issued", "lifecycle": "ACTIVE", "depositPolicy": "REQUIRED", "paymentStatus": "CUSTOMER_CONFIRMED", "fulfillmentStatus": null, "noticeDraft": true }, "promoted": true, "confirmedQuotationId": 10, "quotationId": 10, "stage": "AWAITING_DEPOSIT_NOTICE" },
+    { "name": "confirmed from this quotation, notice issued", "facts": { "status": "quotation_issued", "lifecycle": "ACTIVE", "depositPolicy": "REQUIRED", "paymentStatus": "DEPOSIT_NOTICE_ISSUED", "fulfillmentStatus": null, "noticeIssued": true }, "promoted": true, "confirmedQuotationId": 10, "quotationId": 10, "stage": "DEPOSIT_NOTICE_ISSUED" },
+    { "name": "confirmed from this quotation, deposit received", "facts": { "status": "quotation_issued", "lifecycle": "ACTIVE", "depositPolicy": "REQUIRED", "paymentStatus": "DEPOSIT_PAID", "fulfillmentStatus": null, "noticeIssued": true }, "promoted": true, "confirmedQuotationId": 10, "quotationId": 10, "stage": "DEPOSIT_NOTICE_ISSUED" },
+    { "name": "confirmed from this quotation, paused after the notice: still true", "facts": { "status": "quotation_issued", "lifecycle": "ON_HOLD", "depositPolicy": "REQUIRED", "paymentStatus": "DEPOSIT_NOTICE_ISSUED", "fulfillmentStatus": null, "noticeIssued": true }, "promoted": true, "confirmedQuotationId": 10, "quotationId": 10, "stage": "DEPOSIT_NOTICE_ISSUED" },
+    { "name": "confirmed from this quotation, no deposit", "facts": { "status": "quotation_issued", "lifecycle": "ACTIVE", "depositPolicy": "NOT_REQUIRED", "paymentStatus": "CUSTOMER_CONFIRMED", "fulfillmentStatus": null }, "promoted": true, "confirmedQuotationId": 10, "quotationId": 10, "stage": "NO_DEPOSIT" },
+    { "name": "confirmed from this quotation, remaining invoice issued", "facts": { "status": "quotation_issued", "lifecycle": "ACTIVE", "depositPolicy": "REQUIRED", "paymentStatus": "AWAITING_FINAL_PAYMENT", "fulfillmentStatus": "FULLY_DELIVERED", "noticeIssued": true, "invoiceIssued": true }, "promoted": true, "confirmedQuotationId": 10, "quotationId": 10, "stage": "REMAINING_INVOICE_ISSUED" },
+    { "name": "no deposit, remaining invoice issued", "facts": { "status": "quotation_issued", "lifecycle": "ACTIVE", "depositPolicy": "NOT_REQUIRED", "paymentStatus": "CUSTOMER_CONFIRMED", "fulfillmentStatus": "FROM_STOCK", "invoiceIssued": true }, "promoted": true, "confirmedQuotationId": 10, "quotationId": 10, "stage": "REMAINING_INVOICE_ISSUED" },
+    { "name": "confirmed from ANOTHER quotation: no mark on this one", "facts": { "status": "quotation_issued", "lifecycle": "ACTIVE", "depositPolicy": "REQUIRED", "paymentStatus": "DEPOSIT_NOTICE_ISSUED", "fulfillmentStatus": null, "noticeIssued": true }, "promoted": true, "confirmedQuotationId": 11, "quotationId": 10, "stage": null },
+    { "name": "confirmed from this quotation, deal lost since: no mark", "facts": { "status": "quotation_issued", "lifecycle": "CLOSED_LOST", "depositPolicy": "REQUIRED", "paymentStatus": "DEPOSIT_NOTICE_ISSUED", "fulfillmentStatus": null, "noticeIssued": true }, "promoted": true, "confirmedQuotationId": 10, "quotationId": 10, "stage": null },
+    { "name": "confirmed from this quotation, deal cancelled since: no mark", "facts": { "status": "cancelled", "lifecycle": "CANCELLED", "depositPolicy": "REQUIRED", "paymentStatus": "CUSTOMER_CONFIRMED", "fulfillmentStatus": null }, "promoted": true, "confirmedQuotationId": 10, "quotationId": 10, "stage": null },
+    { "name": "status cancelled on a still-ACTIVE lifecycle (legacy): dead, no mark", "facts": { "status": "cancelled", "lifecycle": "ACTIVE", "depositPolicy": "REQUIRED", "paymentStatus": "CUSTOMER_CONFIRMED", "fulfillmentStatus": null }, "promoted": true, "confirmedQuotationId": 10, "quotationId": 10, "stage": null }
+  ]
+}

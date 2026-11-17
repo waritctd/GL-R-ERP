@@ -490,6 +490,12 @@ export const api = {
   // to snapshot the newest qualifying quotation, the same default the stateless preview
   // (`tickets.remainingInvoiceOptions`) uses. Authorisation is enforced entirely in
   // RemainingInvoiceService; these methods carry no gate of their own.
+  // Mirrors DocumentChainController: `{ documentChain }` — where the deal stands in ใบเสนอราคา → ยืนยันคำสั่งซื้อ →
+  // ใบแจ้งยอดเงินรับมัดจำ → ใบแจ้งหนี้ส่วนที่เหลือ, computed by the server (DocumentChainService) so the quotation
+  // page's chain card and the deal page's เงิน tab read one source. Read scope = the deposit-notice read gate.
+  documentChain: {
+    get: (ticketId) => apiRequest(API_ROUTES.documentChain.forTicket(ticketId)),
+  },
   storedRemainingInvoices: {
     listForTicket: (ticketId) => apiRequest(API_ROUTES.storedRemainingInvoices.forTicket(ticketId)),
     createDraft: (ticketId, payload) =>

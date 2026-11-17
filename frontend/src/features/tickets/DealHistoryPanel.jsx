@@ -9,6 +9,7 @@ import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { bangkokTodayIso, formatMoney, formatThaiDate, PAYMENT_KIND_LABEL } from '../../utils/format.js';
 import { ACTIVITY_KINDS, activityKindLabel } from './dealTrackingMeta.js';
 import { TIMELINE_FILTERS, timelineRowMatches } from './dealTimeline.js';
+import { CANCEL_REASON_LABEL, LOST_REASON_F_CODE, LOST_REASON_LABEL } from './stageMeta.js';
 import { ThaiDateInput } from '../../components/common/ThaiDateInput.jsx';
 
 // Moved verbatim from TicketDetailPage.jsx (IA rebuild — see docs/ui-repair/02-information-architecture/):
@@ -85,7 +86,24 @@ export const EVENT_KIND_LABEL = {
 
 // The backend writes "kind=…, amount=…, paid=…, payable=… — note" (TicketService#recordPayment); old rows
 // keep it, so it is formatted here. Anything not in that shape is shown as written.
+// TicketService.cancel / markLost write "ยกเลิกดีล (CODE)[ — note]" / "เสียงาน (CODE)[ — note]". This is the one place
+// a cancelled or lost deal's reason is displayed, so the code reads as its label: the cancel codes offered since
+// 2026-11-16 and the retired ones already-cancelled deals carry (CANCEL_REASON_LABEL holds both), and the lost codes
+// with their F1–F8 tag. A message not in that shape, or an unknown code, is shown as written.
+const REASON_MESSAGE = /^(ยกเลิกดีล|เสียงาน) \(([A-Z_]+)\)(?: — (.*))?$/s;
+
+function reasonMessage(event) {
+  const m = REASON_MESSAGE.exec(event.message ?? '');
+  if (!m) return event.message;
+  const label = event.kind === 'CANCELLED'
+    ? CANCEL_REASON_LABEL[m[2]]
+    : (LOST_REASON_LABEL[m[2]] ? `${LOST_REASON_F_CODE[m[2]] ?? ''} ${LOST_REASON_LABEL[m[2]]}`.trim() : null);
+  if (!label) return event.message;
+  return m[3] ? `${label} — ${m[3]}` : label;
+}
+
 function eventMessage(event) {
+  if (event.kind === 'CANCELLED' || event.kind === 'MARKED_LOST') return reasonMessage(event);
   if (event.kind !== 'PAYMENT_RECORDED') return event.message;
   const m = /^kind=(\w+), amount=(-?[\d.]+), paid=([-\d.]+), payable=([-\d.]+)(?: — (.*))?$/s.exec(event.message ?? '');
   if (!m || !PAYMENT_KIND_LABEL[m[1]]) return event.message;

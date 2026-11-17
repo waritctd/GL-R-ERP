@@ -127,6 +127,34 @@ class DealQuotationControllerTest {
         verify(service).search(any(), eq(false), eq("LEGACY"), any(UserPrincipal.class));
     }
 
+    /** Document chain (2026-11-17): each list row is the quotation's own fields, unwrapped, plus its
+     * {@code chainStage} — the per-row field the list's chain mark reads, so the page makes no per-row request. */
+    @Test
+    void searchRowsCarryTheirChainStageBesideTheQuotationsOwnFields() throws Exception {
+        th.co.glr.hr.documentchain.DocumentChainService chain = mock(th.co.glr.hr.documentchain.DocumentChainService.class);
+        MockMvc withChain = MockMvcBuilders
+            .standaloneSetup(new DealQuotationController(service, new SessionContext(), chain))
+            .setControllerAdvice(new ApiExceptionHandler())
+            .build();
+        List<DealQuotationDto> rows = List.of(quotation(42L, "QT-2026-0042-1"), quotation(43L, "QT-2026-0043-1"));
+        when(service.search(any(), eq(false), isNull(), any(UserPrincipal.class))).thenReturn(rows);
+        when(chain.listStages(eq(rows), any(UserPrincipal.class))).thenReturn(java.util.Map.of(42L, "AWAITING_ORDER"));
+
+        withChain.perform(get("/api/deal-quotations").session(session()))
+            .andExpect(status().isOk())
+            .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.items[0].id").value(42))
+            .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.items[0].number")
+                .value("QT-2026-0042-1"))
+            .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.items[0].chainStage")
+                .value("AWAITING_ORDER"))
+            .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.items[0].quotation")
+                .doesNotExist())
+            .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.items[1].number")
+                .value("QT-2026-0043-1"))
+            .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.items[1].chainStage")
+                .isEmpty());
+    }
+
     private MockHttpSession session() {
         MockHttpSession session = new MockHttpSession();
         session.setAttribute(SessionContext.SESSION_USER_KEY,

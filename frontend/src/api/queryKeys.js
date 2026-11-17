@@ -1,5 +1,8 @@
 // Central query-key factory for the shared server-state layer. Keeping keys in one place makes invalidation
 // call sites unambiguous and typo-proof.
+// The deal-detail key, shared by ticketDetail and documentChain below (the chain is nested under it).
+const queryKeysTicketDetail = (id) => ['tickets', 'detail', id == null ? id : Number(id)];
+
 export const queryKeys = {
   currentEmployee: (id) => ['currentEmployee', id],
   employees: () => ['employees'],
@@ -108,7 +111,7 @@ export const queryKeys = {
   // so an invalidation from one surface would miss the other's cached entry. Number(id) on an
   // empty/undefined id is left alone (NaN) rather than defaulted, like every other id-keyed
   // entry below that has no "no id yet" caller.
-  ticketDetail: (id) => ['tickets', 'detail', id == null ? id : Number(id)],
+  ticketDetail: (id) => queryKeysTicketDetail(id),
   // Immutable server enumeration — fetched once, never invalidated. See stageCatalog.js.
   dealStageCatalog: () => ['meta', 'deal-stages'],
   // Under 'tickets' so every existing ['tickets'] invalidation (an activity, a stage move, a lost deal) refreshes
@@ -169,6 +172,11 @@ export const queryKeys = {
   // for one deal. Separate from remainingInvoiceOptions above, which stays the stateless prefill
   // source a new draft snapshots from.
   storedRemainingInvoices: (ticketId) => ['remainingInvoice', 'stored', ticketId],
+  // The deal's document chain summary (GET /tickets/{id}/document-chain): ONE key the quotation page's chain card
+  // and the deal page's เงิน tab share, so an invalidation reaches both. It sits UNDER ticketDetail(id) (fix round 1,
+  // F-1): every mutation that refreshes the deal — invalidateQueries(ticketDetail(id)) or ['tickets'] — refreshes the
+  // chain with it, with no per-site call. Number()-coerced through ticketDetail.
+  documentChain: (ticketId) => [...queryKeysTicketDetail(ticketId), 'documentChain'],
   customersSearch: (q) => ['customers', 'search', q ?? ''],
   // One customer MASTER row by id (quotation editor). There is no GET
   // /api/customers/{id}, so this is resolved through the name search and matched on id (see

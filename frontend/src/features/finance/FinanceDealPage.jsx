@@ -21,6 +21,7 @@ import {
 import { MilestoneSections, money, vatCaption } from './FinanceMilestoneSections.jsx';
 import { orderActions, pickPrimaryAction } from './financeDealActions.js';
 import { paymentPrefill } from './paymentPrefill.js';
+import { invalidateDealDocuments } from '../documentChain/documentChain.js';
 
 const ACTION_LABEL = {
   DEPOSIT_PAID: 'ยืนยันรับมัดจำ',
@@ -226,6 +227,9 @@ export function FinanceDealPage({ user }) {
     queryClient.invalidateQueries({ queryKey: ['tickets'] });
     queryClient.invalidateQueries({ queryKey: queryKeys.dashboardSummary() });
     queryClient.invalidateQueries({ queryKey: queryKeys.notifications() });
+    // ยืนยันรับมัดจำ / รับชำระ move the document chain (deposit received, the remaining invoice unlocking): the deal
+    // page's เงิน tab and the quotation page's chain card read those keys.
+    if (deal?.id != null) invalidateDealDocuments(queryClient, deal.id);
   }
 
   const actionMutation = useMutation({

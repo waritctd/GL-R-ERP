@@ -46,6 +46,9 @@ import { OrderedByContactFields, ProjectNamePrintToggle, QuotationDealFields } f
 import { focusQuotationField, QuotationChecklist } from './QuotationChecklist.jsx';
 import { QuotationContactPicker } from './QuotationContactPicker.jsx';
 import { QuotationDocumentView } from './QuotationDocumentView.jsx';
+import { QuotationChainNotice, QuotationDocumentChain } from './QuotationDocumentChain.jsx';
+import { quotationChainView } from './quotationChain.js';
+import { invalidateDealDocuments, useDocumentChain } from '../documentChain/documentChain.js';
 import { QuotationAttachmentsLink, QuotationAttachmentsPanel } from './QuotationAttachmentsPanel.jsx';
 import { copyFromQuotation, editorStateFromQuotation } from './quotationCopy.js';
 import {
@@ -280,6 +283,13 @@ export function QuotationEditorPage({ user, showToast }) {
     retry: false,
   });
   const promotionDealStatus = promotionTicketQuery.data?.status ?? null;
+  // The document chain card ("เอกสารต่อจากใบเสนอราคานี้"): read for a saved direct quotation that can have a chain
+  // story (APPROVED, or a SUPERSEDED / CANCELLED one that points at where the chain lives). The server's summary is
+  // the deal page's too. A viewer the document gate refuses (403) gets no card and the header exactly as before.
+  const chainCandidate = Boolean(id) && quotation?.ticketId != null
+    && (quotation?.origin ?? 'DEAL_DIRECT') === 'DEAL_DIRECT'
+    && ['APPROVED', 'SUPERSEDED', 'CANCELLED'].includes(quotation?.docStatus);
+  const chainQuery = useDocumentChain(quotation?.ticketId, { enabled: chainCandidate });
   const promotedDealId = promotionDealStatus != null && promotionDealStatus !== 'draft' ? quotation?.ticketId ?? null : null;
 
   // The deal's customer MASTER row: on the ?ticket= and existing-draft paths the rep can edit ที่อยู่ /
@@ -1874,12 +1884,17 @@ export function QuotationEditorPage({ user, showToast }) {
     mutationFn: () => api.dealQuotations.promoteToDeal(id),
     onSuccess: (res) => {
       const dealId = res?.result?.ticketId ?? quotation?.ticketId;
-      queryClient.removeQueries({ queryKey: queryKeys.ticketDetail(dealId) });
+      // exact: only the bare deal key held this page's summary shape. The document chain the card observes is nested
+      // under it (queryKeys.documentChain) and must be refetched, not dropped from under its observer.
+      queryClient.removeQueries({ queryKey: queryKeys.ticketDetail(dealId), exact: true });
       queryClient.invalidateQueries({ queryKey: ['tickets'] });
-      queryClient.invalidateQueries({ queryKey: ['dealQuotations'] });
+      // The chain's keys (both pages read them): the card moves on to the deposit notice right here.
+      invalidateDealDocuments(queryClient, dealId);
       setPromoteConfirmOpen(false);
       showToast('success', 'ยืนยันคำสั่งซื้อแล้ว');
-      navigate(`/tickets/${dealId}`);
+      // With the chain card on this page the rep stays: the next step (the deposit notice) is in the card. Without it
+      // (a viewer the document gate refuses) the deal page is still where the next step lives.
+      if (chainView.mode !== 'chain') navigate(`/tickets/${dealId}`);
     },
     onError: (error) => {
       if (error.status === 409) {
@@ -2098,6 +2113,15 @@ export function QuotationEditorPage({ user, showToast }) {
     : (ticket ?? promotionTicketQuery.data ?? null);
   const stripDealId = stripDeal?.id ?? effectiveTicketId;
   const canOpenStripDeal = stripDealId != null && canAccessPath(`/tickets/${stripDealId}`, user);
+
+  // The document chain card ("เอกสารต่อจากใบเสนอราคานี้"); its read (chainQuery) sits above the early returns.
+  const chainView = quotationChainView(chainCandidate ? quotation : null, chainQuery.data ?? null, {
+    dealHref: canOpenStripDeal ? `/tickets/${stripDealId}` : null,
+  });
+  // While the chain card (or its one line) shows, ยืนยันคำสั่งซื้อ / ไปที่ดีล leave the header: the card carries the
+  // confirm and the line carries the link. Hidden while the summary loads, so the header never flashes a button the
+  // card then replaces.
+  const chainOwnsHeaderSlot = chainView.mode !== 'none' || (chainCandidate && chainQuery.isLoading);
   const stripStage = stripDeal?.salesStage ? dealStageLabel(stripDeal.salesStage) : null;
 
   return (
@@ -2207,7 +2231,7 @@ export function QuotationEditorPage({ user, showToast }) {
             {/* ยืนยันคำสั่งซื้อ, same words as the deal page's sticky CTA. Primary: on an APPROVED
                 direct quotation it is the rep's next step once the customer orders. Once the deal
                 has left 'draft' the slot becomes a plain link to the deal, so it is never offered twice. */}
-            {canPromoteToDeal ? (
+            {canPromoteToDeal && !chainOwnsHeaderSlot ? (
               promotedDealId != null ? (
                 <Link
                   to={`/tickets/${promotedDealId}`}
@@ -2260,6 +2284,18 @@ export function QuotationEditorPage({ user, showToast }) {
             </Link>
           ) : null}
         </div>
+      ) : null}
+
+      {chainView.mode === 'chain' ? (
+        <QuotationDocumentChain
+          quotation={quotation}
+          chain={chainQuery.data}
+          onConfirmOrder={() => setPromoteConfirmOpen(true)}
+          confirmBusy={promoteMutation.isPending}
+          showToast={showToast}
+        />
+      ) : chainView.mode === 'notice' ? (
+        <QuotationChainNotice view={chainView} />
       ) : null}
 
       {wasRejected ? (

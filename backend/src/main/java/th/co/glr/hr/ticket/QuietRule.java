@@ -24,17 +24,32 @@ import org.springframework.stereotype.Component;
 public class QuietRule {
     public static final int DEFAULT_QUIET_DAYS = 14;
 
+    private static final java.time.ZoneId BANGKOK = java.time.ZoneId.of("Asia/Bangkok");
+
     private final NamedParameterJdbcTemplate jdbc;
     private final int quietDays;
+    private final java.time.Clock clock;
 
     @Autowired
     public QuietRule(NamedParameterJdbcTemplate jdbc,
                      @Value("${app.sales.quiet-days:" + DEFAULT_QUIET_DAYS + "}") int quietDays) {
+        this(jdbc, quietDays, java.time.Clock.systemUTC());
+    }
+
+    /** Tests fix the clock to an instant at which the Bangkok and UTC calendar dates differ. */
+    public QuietRule(NamedParameterJdbcTemplate jdbc, int quietDays, java.time.Clock clock) {
         this.jdbc = jdbc;
         this.quietDays = quietDays;
+        this.clock = clock;
     }
 
     public int quietDays() { return quietDays; }
+
+    /** Today on the Asia/Bangkok calendar, whatever zone the clock carries — the {@code :returnToday} bind parameter
+     * {@link #returningSql} needs. Computed here (not in SQL) so the day boundary is testable. */
+    public java.time.LocalDate bangkokToday() {
+        return java.time.LocalDate.ofInstant(clock.instant(), BANGKOK);
+    }
 
     /** SQL {@code timestamptz} expression: when the deal aliased {@code t} was last touched. */
     public static String lastTouchedSql(String t) {
@@ -55,6 +70,23 @@ public class QuietRule {
              AND NOT %5$s)
             """.formatted(t, DealLifecycle.ACTIVE, deliverAndCollectStagesSql(), lastTouchedSql(t),
                 upcomingVisitSql(t));
+    }
+
+    /**
+     * SQL boolean: the deal aliased {@code t} is a PAUSED deal coming back — {@code ON_HOLD} or {@code DORMANT} with a
+     * วันที่จะกลับมาดู ({@code pause_return_on}, V220) on or before today (Asia/Bangkok). Owner ruling 2026-11-16:
+     * such a deal shows in its owner's ควรตามต่อ and counts in the manager's quiet figures the way a quiet deal does,
+     * until the rep resumes it (which clears the date) or re-pauses it with a later one. A pause with no date never
+     * matches, exactly as before V220. Deliberately NOT part of {@link #quietSql}: the board, the deal summary's
+     * {@code stale} flag and every other quiet reader stay ACTIVE-only. Needs {@code :returnToday} bound to
+     * {@link #bangkokToday()}.
+     */
+    public static String returningSql(String t) {
+        return """
+            (%1$s.lifecycle IN ('%2$s', '%3$s')
+             AND %1$s.pause_return_on IS NOT NULL
+             AND %1$s.pause_return_on <= CAST(:returnToday AS date))
+            """.formatted(t, DealLifecycle.ON_HOLD, DealLifecycle.DORMANT);
     }
 
     /**
