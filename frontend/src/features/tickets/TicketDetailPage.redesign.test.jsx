@@ -17,6 +17,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { TicketDetailPage } from './TicketDetailPage.jsx';
 import { TicketDetailRoute } from './TicketDetailRoute.jsx';
 import { api } from '../../api/index.js';
+import { addDaysIso, bangkokTodayIso } from '../../utils/format.js';
+import { weekStartIso } from '../salesBoard/visitWeek.js';
 
 globalThis.React = React;
 
@@ -69,7 +71,7 @@ vi.mock('../../api/index.js', async (importOriginal) => {
       importRequests: { brands: vi.fn().mockResolvedValue({ brands: [] }), pages: vi.fn() },
       fxRates: { list: vi.fn() },
       expectedPayments: { list: vi.fn() },
-      salesVisits: { create: vi.fn() },
+      salesVisits: { create: vi.fn(), plannedOnDeal: vi.fn() },
       priceImport: { countries: vi.fn().mockResolvedValue([]) },
       catalog: { prices: vi.fn() },
     },
@@ -173,6 +175,7 @@ beforeEach(() => {
   api.fxRates.list.mockResolvedValue({ fxRates: [] });
   api.expectedPayments.list.mockResolvedValue([]);
   api.salesVisits.create.mockResolvedValue({ id: 5, ticketId: 701 });
+  api.salesVisits.plannedOnDeal.mockResolvedValue([]);
   api.catalog.prices.mockResolvedValue({ items: [] });
 });
 
@@ -347,6 +350,31 @@ describe('header quick actions โทรแล้ว / นัดเข้าพ�
     })));
   });
 
+  // Slice 6.4: the header's โทรแล้ว carries ตามครั้งถัดไป too; unused, the CALL is exactly the old request.
+  it('โทรแล้ว with ตามครั้งถัดไป sends the deal’s next follow-up date; without it, exactly the old CALL', async () => {
+    renderPage();
+    await pageReady();
+    fireEvent.click(await screen.findByRole('button', { name: 'โทรแล้ว' }));
+    let dialog = await screen.findByRole('dialog', { name: 'โทรแล้ว' });
+    fireEvent.click(within(dialog).getByRole('radio', { name: 'ไม่รับสาย' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'บันทึก' }));
+    await waitFor(() => expect(api.tickets.addActivity).toHaveBeenCalledTimes(1));
+    expect(api.tickets.addActivity.mock.calls[0]).toStrictEqual([701,
+      { kind: 'CALL', activityDate: bangkokTodayIso(), note: 'ไม่รับสาย' }]);
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'โทรแล้ว' })).toBeNull());
+
+    fireEvent.click(screen.getByRole('button', { name: 'โทรแล้ว' }));
+    dialog = await screen.findByRole('dialog', { name: 'โทรแล้ว' });
+    fireEvent.click(within(dialog).getByRole('radio', { name: 'คุยแล้ว ยังสนใจ' }));
+    fireEvent.click(within(dialog).getByRole('radio', { name: '1 สัปดาห์' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'บันทึก' }));
+    await waitFor(() => expect(api.tickets.addActivity).toHaveBeenCalledTimes(2));
+    expect(api.tickets.addActivity.mock.calls[1]).toStrictEqual([701, {
+      kind: 'CALL', activityDate: bangkokTodayIso(), note: 'คุยแล้ว ยังสนใจ',
+      nextFollowUpAt: addDaysIso(bangkokTodayIso(), 7),
+    }]);
+  });
+
   it('นัดเข้าพบ opens the board’s plan-visit dialog with this deal chosen', async () => {
     renderPage();
     await pageReady();
@@ -372,6 +400,22 @@ describe('header quick actions โทรแล้ว / นัดเข้าพ�
     await settle();
     expect(screen.queryByRole('button', { name: 'โทรแล้ว' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'นัดเข้าพบ' })).toBeNull();
+  });
+
+  // Fix round 1 (M1): the server refuses a follow-up date on a non-ACTIVE deal, so the dialog does not offer one, and
+  // the call on a paused deal is recorded exactly as before this slice.
+  it('on a paused deal โทรแล้ว offers no ตามครั้งถัดไป and sends exactly the old CALL', async () => {
+    setDeal({ lifecycle: 'ON_HOLD' }, []);
+    renderPage();
+    await pageReady();
+    fireEvent.click(await screen.findByRole('button', { name: 'โทรแล้ว' }));
+    const dialog = await screen.findByRole('dialog', { name: 'โทรแล้ว' });
+    expect(within(dialog).queryByRole('radiogroup', { name: 'ตามครั้งถัดไป' })).toBeNull();
+    fireEvent.click(within(dialog).getByRole('radio', { name: 'ไม่รับสาย' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'บันทึก' }));
+    await waitFor(() => expect(api.tickets.addActivity).toHaveBeenCalledTimes(1));
+    expect(api.tickets.addActivity.mock.calls[0]).toStrictEqual([701,
+      { kind: 'CALL', activityDate: bangkokTodayIso(), note: 'ไม่รับสาย' }]);
   });
 
   it('wrong-way-round: a paused deal keeps โทรแล้ว but not นัดเข้าพบ (a visit needs an open deal)', async () => {
@@ -428,6 +472,27 @@ describe('ภาพรวม: ข้อมูลงาน + one merged timeline'
     fireEvent.click(within(filters).getByRole('button', { name: 'ทั้งหมด' }));
     expect(within(timeline).getByText('โทรถามราคา')).toBeTruthy();
     expect(within(timeline).getByText('QT-2026-0201')).toBeTruthy();
+  });
+
+  // Slice 6.5: the deal's planned visits, as served to THIS viewer by GET /api/sales/visits/deal/{id}/planned (the
+  // server narrows them; the page shows what it is given). Mock-driven: not evidence of the server's scope.
+  it('planned visits lead the ประวัติ timeline, each linking to นัดเข้าพบ', async () => {
+    const day = addDaysIso(bangkokTodayIso(), 2);
+    api.salesVisits.plannedOnDeal.mockResolvedValue([{
+      id: 41, ownerId: 1, ownerName: 'สมชาย ใจดี', ticketId: 701, ticketTitle: 'โครงการบ้านสวน',
+      contactName: 'คุณอรุณ', plannedDate: day, plannedTime: '10:00:00', status: 'PLANNED', doneAt: null,
+      note: 'นำตัวอย่างไปเทียบสี', dealMovedToName: null, dealMoved: false,
+    }]);
+    setDeal({}, [], { events });
+    renderPage();
+    await pageReady();
+    const timeline = await screen.findByTestId('deal-timeline');
+    const row = await within(timeline).findByTestId('timeline-planned-visit');
+
+    expect(api.salesVisits.plannedOnDeal).toHaveBeenCalledWith(701);
+    expect(within(timeline).getAllByRole('listitem')[0]).toBe(row);
+    expect(within(row).getByText('นัดไว้')).toBeTruthy();
+    expect(within(row).getByRole('link').getAttribute('href')).toBe(`/visits?week=${weekStartIso(day)}`);
   });
 
   it('the old always-open activity form is gone; "+ บันทึก" opens the note composer', async () => {

@@ -1,6 +1,9 @@
 package th.co.glr.hr.salesboard;
 
 import jakarta.servlet.http.HttpSession;
+import java.util.function.Supplier;
+import org.springframework.dao.ConcurrencyFailureException;
+import org.springframework.http.HttpStatus;
 import java.time.LocalDate;
 import java.util.List;
 import org.springframework.format.annotation.DateTimeFormat;
@@ -12,6 +15,8 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import th.co.glr.hr.auth.SessionContext;
+import th.co.glr.hr.auth.UserPrincipal;
+import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.salesboard.VisitDtos.CreateVisitRequest;
 import th.co.glr.hr.salesboard.VisitDtos.VisitDoneRequest;
 import th.co.glr.hr.salesboard.VisitDtos.VisitDto;
@@ -47,13 +52,39 @@ public class VisitController {
 
     @PostMapping
     VisitDto create(@RequestBody CreateVisitRequest request, HttpSession session) {
-        return service.create(request, sessions.requireUser(session));
+        UserPrincipal user = sessions.requireUser(session);
+        return asConflict(() -> service.create(request, user));
     }
 
     @PostMapping("/{id}/done")
     VisitDto done(@PathVariable long id, @RequestBody(required = false) VisitDoneRequest request,
                   HttpSession session) {
-        return service.markDone(id, request == null ? null : request.note(), sessions.requireUser(session));
+        UserPrincipal user = sessions.requireUser(session);
+        return asConflict(() -> service.markDone(id, request == null ? null : request.note(),
+            request == null ? null : request.nextFollowUpAt(), user));
+    }
+
+    /**
+     * Slice 6b fix round 2: a deadlock / lock-timeout / serialization victim (two saves on one deal at the same moment)
+     * is a Thai 409 asking to try again, never a 500 carrying the driver's message. Caught here, outside the service's
+     * @Transactional proxy, because such a failure can surface at commit — as ImportRequestController#asConflict.
+     */
+    private static VisitDto asConflict(Supplier<VisitDto> call) {
+        try {
+            return call.get();
+        } catch (ConcurrencyFailureException e) {
+            throw new ApiException(HttpStatus.CONFLICT, "มีการบันทึกพร้อมกัน กรุณาลองอีกครั้ง");
+        }
+    }
+
+    /**
+     * The deal's PLANNED visits that the caller could already read through this controller's lists (slice 6.5): their
+     * own on a deal they may open; every owner's for sales_manager / ceo. Scope lives in {@link VisitService} and the
+     * repository's WHERE.
+     */
+    @GetMapping("/deal/{ticketId}/planned")
+    List<VisitDto> plannedOnDeal(@PathVariable long ticketId, HttpSession session) {
+        return service.plannedOnDeal(ticketId, sessions.requireUser(session));
     }
 
     @PostMapping("/{id}/cancel")

@@ -30,7 +30,11 @@ import th.co.glr.hr.ticket.TicketSummaryDto;
  *       its owner/keyer, or sales_manager / ceo);</li>
  *   <li>done / cancel — the visit's owner (even after the deal moved to another rep), or sales_manager / ceo;
  *       done never ahead of the planned date;</li>
- *   <li>team list — sales_manager, ceo.</li>
+ *   <li>team list — sales_manager, ceo;</li>
+ *   <li>a deal's planned visits (slice 6.5) — whoever may open the deal, narrowed to the visits their own list or the
+ *       team list already shows them;</li>
+ *   <li>ตามต่อ on a done visit (slice 6.4) — sets the deal's next follow-up date only where the visit's activity
+ *       lands on the deal ({@link TicketService#requireVisitFollowUpWritable}).</li>
  * </ul>
  * Marking a visit done on a deal writes {@code deal_activity(SITE_VISIT, today)} attributed to the visit's owner
  * through {@link TicketService#recordVisitActivity}, which resets the {@link QuietRule} clock; until then a PLANNED
@@ -117,11 +121,32 @@ public class VisitService {
                 throw new ApiException(HttpStatus.BAD_REQUEST, "งานนี้ไม่ได้เปิดอยู่ จึงนัดเข้าพบในงานนี้ไม่ได้");
             }
         }
+        LocalDate nextFollowUpAt = request.nextFollowUpAt();
+        if (nextFollowUpAt != null) {
+            // Slice 6.4: ตามต่อ belongs to a visit that happened (the log dialog), on a deal, and only where the visit's
+            // activity lands on that deal. All checked before anything is written.
+            if (!done) {
+                throw new ApiException(HttpStatus.BAD_REQUEST, "ตั้งวันตามต่อได้เมื่อบันทึกว่าเข้าพบแล้วเท่านั้น");
+            }
+            requireFollowUpTarget(request.ticketId());
+            // Fix round 2 (deadlock): take the deal's row lock BEFORE the visit is inserted. The insert's foreign key
+            // takes KEY SHARE on the deal row and recordVisitActivity then asks for FOR UPDATE on it, so two of these
+            // logs at once (a double submit) deadlocked. One order — deal, then visit — and the second request waits
+            // here, then finds the first in the de-duplication below. Held to the end of this transaction.
+            tickets.lockDealForFollowUp(request.ticketId());
+            tickets.requireVisitFollowUpWritable(request.ticketId(), actor.id(), nextFollowUpAt, today(), actor);
+        }
         if (done) {
             // A double tap or a retried request on a slow phone must not log the same visit twice (review LOW).
             Optional<VisitDto> same = visits.findRecentDoneLog(actor.id(), request.ticketId(), contact,
                 request.plannedDate(), DUPLICATE_LOG_SECONDS);
             if (same.isPresent()) {
+                // Fix round 1 (M3): a duplicate is still the same visit, but a date it carries is never dropped — it
+                // has passed the same checks as a fresh log (above) and is written now, without a second activity.
+                if (nextFollowUpAt != null) {
+                    tickets.recordVisitFollowUp(request.ticketId(), actor.id(), nextFollowUpAt);
+                    return require(same.get().id());
+                }
                 return same.get();
             }
         }
@@ -130,18 +155,48 @@ public class VisitService {
         if (done && request.ticketId() != null) {
             // Same rule as a tick (review NEW-A): only the deal's current owner's visit goes onto the deal. A keyer,
             // or a manager logging their own visit on a rep's deal, keeps it on the visit (dealMovedToName says so).
-            tickets.recordVisitActivity(request.ticketId(), today(), note, actor.id(), true);
+            tickets.recordVisitActivity(request.ticketId(), today(), note, actor.id(), true, nextFollowUpAt);
         }
         return require(id);
     }
 
+    /**
+     * Slice 6.5: the deal's PLANNED visits for the deal page's history — the intersection of two existing rules, so it
+     * exposes no visit its caller cannot already read: the caller must be able to open the deal
+     * ({@link TicketService#requireDealReadAccess}, the rule of GET /api/tickets/{id}), and the rows are scoped exactly
+     * as this service's lists are — every owner's for sales_manager / ceo ({@link #listTeam}), the caller's own for
+     * sales ({@link #listOwn}). The owner scope is in the repository's WHERE. A visit outside it is absent, not
+     * redacted. Order: {@link VisitRepository}'s list ORDER BY; no LIMIT (the lists have none either).
+     */
+    public List<VisitDto> plannedOnDeal(long ticketId, UserPrincipal actor) {
+        requireRole(actor, VISIT_ROLES);
+        tickets.requireDealReadAccess(ticketId, actor);
+        return TEAM_ROLES.contains(actor.role())
+            ? visits.findPlannedOnDeal(ticketId)
+            : visits.findPlannedOnDealOwnedBy(ticketId, actor.id());
+    }
+
     @Transactional
     public VisitDto markDone(long visitId, String note, UserPrincipal actor) {
+        return markDone(visitId, note, null, actor);
+    }
+
+    /**
+     * Ticks a visit done. Slice 6.4: an optional {@code nextFollowUpAt} (ตามต่อ) also sets the visit's deal's next
+     * follow-up date — refused (400) on a visit with no deal, and otherwise only where
+     * {@link TicketService#requireVisitFollowUpWritable} allows it. Checked before the tick, so a refusal writes nothing.
+     */
+    @Transactional
+    public VisitDto markDone(long visitId, String note, LocalDate nextFollowUpAt, UserPrincipal actor) {
         requireRole(actor, VISIT_ROLES);
         VisitDto visit = requireWritable(visitId, actor);
         String cleaned = cleanNote(note);
         if (VisitDtos.PLANNED.equals(visit.status()) && visit.plannedDate().isAfter(today())) {
             throw new ApiException(HttpStatus.CONFLICT, "ยังไม่ถึงวันนัด จึงบันทึกว่าเข้าพบแล้วไม่ได้");
+        }
+        if (nextFollowUpAt != null) {
+            requireFollowUpTarget(visit.ticketId());
+            tickets.requireVisitFollowUpWritable(visit.ticketId(), visit.ownerId(), nextFollowUpAt, today(), actor);
         }
         if (visits.markDone(visitId, cleaned) == 0) {
             throw notPlanned(visit);
@@ -154,9 +209,16 @@ public class VisitService {
             }
             // Written only while the visit's owner still holds the deal (review NEW-2); otherwise the response's
             // dealMovedToName tells the UI the tick stayed on the visit.
-            tickets.recordVisitActivity(visit.ticketId(), today(), activityNote, visit.ownerId(), true);
+            tickets.recordVisitActivity(visit.ticketId(), today(), activityNote, visit.ownerId(), true, nextFollowUpAt);
         }
         return require(visitId);
+    }
+
+    /** A follow-up date is the deal's; a visit with no deal has nowhere to put it (slice 6.4: refused, not ignored). */
+    private static void requireFollowUpTarget(Long ticketId) {
+        if (ticketId == null) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "การเข้าพบนี้ไม่ได้อยู่ในงาน จึงตั้งวันตามต่อไม่ได้");
+        }
     }
 
     @Transactional
