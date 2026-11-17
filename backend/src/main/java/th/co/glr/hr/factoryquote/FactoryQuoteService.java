@@ -750,10 +750,10 @@ public class FactoryQuoteService {
 
     private void requireActiveDeal(long ticketId) {
         TicketSummaryDto ticket = tickets.findById(ticketId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบดีลนี้"))
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบงานนี้"))
             .summary();
         if (!DealLifecycle.ACTIVE.equals(ticket.lifecycle())) {
-            throw new ApiException(HttpStatus.CONFLICT, "ดีลต้นทางต้องอยู่ในสถานะ ACTIVE");
+            throw new ApiException(HttpStatus.CONFLICT, "งานต้นทางต้องอยู่ในสถานะ ACTIVE");
         }
     }
 

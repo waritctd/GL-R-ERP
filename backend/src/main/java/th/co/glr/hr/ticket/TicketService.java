@@ -387,7 +387,7 @@ public class TicketService {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
         if (request.ownerEmployeeId() == null) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุเจ้าของงานของดีลที่นำเข้า");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุเจ้าของงานที่นำเข้า");
         }
         return createDeal(request, actor);
     }
@@ -396,7 +396,7 @@ public class TicketService {
         // V50: every new deal belongs to a โครงการ (one deal = one ticket; a project can hold many deals over time).
         // Pre-existing project-less tickets stay valid.
         if (request.projectId() == null) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องเลือกโครงการก่อนสร้างดีล");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องเลือกโครงการก่อนสร้างงาน");
         }
         // A NEW deal must state a real channel -- it decides the deal's
         // route (DealRoute). The split is deliberate: "absent/blank" is refused at the API boundary
@@ -411,7 +411,7 @@ public class TicketService {
                     || EntryChannel.UNSPECIFIED.equals(request.entryChannel()))) {
             throw new ApiException(HttpStatus.BAD_REQUEST,
                 EntryChannel.UNSPECIFIED.equals(request.entryChannel())
-                    ? "ต้องระบุช่องทางดีลที่แท้จริง (ออกแบบนำ / เจ้าของโครงการ / ผู้ซื้อตรง) ก่อนสร้างดีล"
+                    ? "ต้องระบุช่องทางรับงานที่แท้จริง (ออกแบบนำ / เจ้าของโครงการ / ผู้ซื้อตรง) ก่อนสร้างงาน"
                     : "ไม่รองรับช่องทางรับงาน '" + request.entryChannel() + "'");
         }
         // Guard priority the same way as entryChannel: an unvalidated value hits the chk_ticket_priority CHECK column
@@ -440,7 +440,7 @@ public class TicketService {
             // division members + can_create_quotation holders).
             boolean eligible = tickets.isEligibleDealOwner(ownerId);
             if (!eligible) {
-                throw new ApiException(HttpStatus.BAD_REQUEST, "เจ้าของงานที่เลือกไม่สามารถเป็นเจ้าของดีลได้");
+                throw new ApiException(HttpStatus.BAD_REQUEST, "ผู้ที่เลือกไม่สามารถเป็นเจ้าของงานได้");
             }
         }
         String code = tickets.nextTicketCode();
@@ -450,7 +450,7 @@ public class TicketService {
         // The readiness gate has TWO halves — next_follow_up_at (collected on the request now) and "at least one
         // activity since the last stage change". A brand-new deal satisfied neither, so the rep's first forward move
         // always 400'd and the message was the first they heard of it.
-        tickets.insertDealActivity(id, LocalDate.now(), "OTHER", "สร้างดีล", actor.id());
+        tickets.insertDealActivity(id, LocalDate.now(), "OTHER", "สร้างงาน", actor.id());
         if (DealStage.SPEC_APPROVED.equals(startStage)) {
             // Starting at S2 is allowed to exactly the people who may move a deal to S2 by hand: the SAME write gate
             // updateStage runs (requireStageWriteAccess, unchanged). A refusal throws inside this transaction, so the
@@ -474,7 +474,7 @@ public class TicketService {
     @Deprecated
     public TicketDto submit(long ticketId, UserPrincipal actor) {
         throw new ApiException(HttpStatus.CONFLICT,
-            "การส่งขอราคาย้ายไปอยู่ที่คำขอราคา (PCR) แล้ว — กรุณาสร้างคำขอราคาจากหน้าดีลแทน");
+            "การส่งขอราคาย้ายไปอยู่ที่คำขอราคา (PCR) แล้ว — กรุณาสร้างคำขอราคาจากหน้ารายละเอียดงานแทน");
     }
 
     /** Deprecated: intake pickup for the legacy submit → pickup → propose-price loop that #submit permanently
@@ -508,7 +508,7 @@ public class TicketService {
         String currentStatus = s.status();
         if (!PROPOSE_ALLOWED_STATUSES.contains(currentStatus)) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "เสนอราคาไม่ได้เมื่อดีลอยู่ในสถานะ '" + currentStatus + "'");
+                "เสนอราคาไม่ได้เมื่องานอยู่ในสถานะ '" + currentStatus + "'");
         }
         tickets.replaceItems(ticketId, request.items());
         String snapshot = buildItemSnapshot(request.items());
@@ -597,10 +597,10 @@ public class TicketService {
         String fromStatus = s.status();
         if (!QUOTATION_ALLOWED_STATUSES.contains(fromStatus)) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "ออกใบเสนอราคาได้เฉพาะดีลที่อยู่ในสถานะ 'approved' หรือ 'quotation_issued' เท่านั้น (สถานะปัจจุบัน: '" + fromStatus + "')");
+                "ออกใบเสนอราคาได้เฉพาะงานที่อยู่ในสถานะ 'approved' หรือ 'quotation_issued' เท่านั้น (สถานะปัจจุบัน: '" + fromStatus + "')");
         }
         if (!DealOwnership.isOwnerOrKeyer(s, actor.id())) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "เฉพาะเจ้าของดีลเท่านั้นที่สามารถออกใบเสนอราคาได้");
+            throw new ApiException(HttpStatus.FORBIDDEN, "เฉพาะเจ้าของงานเท่านั้นที่สามารถออกใบเสนอราคาได้");
         }
         boolean acceptedInChain = full.quotations().stream()
             .anyMatch(q -> recipientType.equals(q.recipientType()) && QuotationStatus.ACCEPTED.equals(q.docStatus()));
@@ -873,7 +873,7 @@ public class TicketService {
         TicketSummaryDto s = requireTicket(ticketId).summary();
         requireActive(s);
         if (s.closeConfirmedAt() == null) {
-            throw new ApiException(HttpStatus.CONFLICT, "ดีลนี้ยังไม่ได้ยืนยันปิดงาน");
+            throw new ApiException(HttpStatus.CONFLICT, "งานนี้ยังไม่ได้ยืนยันปิดงาน");
         }
         tickets.clearCloseConfirmation(ticketId);
         tickets.addEvent(ticketId, actor.id(), actor.name(),
@@ -1070,7 +1070,7 @@ public class TicketService {
     private void requireStatusAdvanced(int rows) {
         if (rows == 0) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "สถานะดีลถูกเปลี่ยนโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
+                "สถานะงานถูกเปลี่ยนโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
         }
     }
 
@@ -1181,7 +1181,7 @@ public class TicketService {
         requireRole(actor, FULFILMENT_ROLES);
         requireTicket(ticketId);
         throw new ApiException(HttpStatus.CONFLICT,
-            "ออกคำขอนำเข้าทั้งดีลไม่ได้แล้ว — ให้ฝ่ายขายสร้างและออกเลขใบขอซื้อรายโรงงานแทน");
+            "ออกคำขอนำเข้าทั้งงานไม่ได้แล้ว — ให้ฝ่ายขายสร้างและออกเลขใบขอซื้อรายโรงงานแทน");
     }
 
     /** The DEAL-level side effects of a per-factory ใบขอซื้อ's FIRST issue for this deal: fulfillment_status ->
@@ -1277,7 +1277,7 @@ public class TicketService {
         // ticket-level IR_SENT can never contradict the PO rollup.
         if (tickets.hasLiveImportRequests(ticketId)) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "ดีลนี้ติดตามการนำเข้าด้วยใบขอซื้อรายโรงงาน — ต้องบันทึกความคืบหน้าที่ใบขอซื้อของแต่ละโรงงาน");
+                "งานนี้ติดตามการนำเข้าด้วยใบขอซื้อรายโรงงาน — ต้องบันทึกความคืบหน้าที่ใบขอซื้อของแต่ละโรงงาน");
         }
         if (!FulfilmentStatus.IR_ISSUED.equals(s.fulfillmentStatus())) {
             throw new ApiException(HttpStatus.CONFLICT, "ต้องออกใบขอซื้อ (IR) ก่อนจึงจะทำเครื่องหมายว่าส่ง IR แล้วได้");
@@ -1298,13 +1298,13 @@ public class TicketService {
         // "delegating" this click would mean fabricating that detail.
         if (tickets.hasLivePurchaseOrders(ticketId)) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "ดีลนี้ติดตามการนำเข้าด้วยใบสั่งซื้อโรงงาน — ต้องบันทึกการขนส่งที่ใบสั่งซื้อของแต่ละโรงงาน");
+                "งานนี้ติดตามการนำเข้าด้วยใบสั่งซื้อโรงงาน — ต้องบันทึกการขนส่งที่ใบสั่งซื้อของแต่ละโรงงาน");
         }
         // IR-tracked refusal (V184) — same reasoning as the PO guard immediately above, for the per-factory ใบขอซื้อ
         // aggregate instead of the (dormant) PO one.
         if (tickets.hasLiveImportRequests(ticketId)) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "ดีลนี้ติดตามการนำเข้าด้วยใบขอซื้อรายโรงงาน — ต้องบันทึกความคืบหน้าที่ใบขอซื้อของแต่ละโรงงาน");
+                "งานนี้ติดตามการนำเข้าด้วยใบขอซื้อรายโรงงาน — ต้องบันทึกความคืบหน้าที่ใบขอซื้อของแต่ละโรงงาน");
         }
         if (!FulfilmentStatus.IR_SENT.equals(s.fulfillmentStatus())) {
             throw new ApiException(HttpStatus.CONFLICT, "ต้องส่งใบขอนำเข้า (IR) ก่อนจึงจะทำเครื่องหมายว่าเริ่มจัดส่งได้");
@@ -1323,15 +1323,15 @@ public class TicketService {
         // axis, not this button.
         if (tickets.hasLivePurchaseOrders(ticketId)) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "ดีลนี้ติดตามการนำเข้าด้วยใบสั่งซื้อโรงงาน — ต้องบันทึกรับสินค้าที่ใบสั่งซื้อของแต่ละโรงงาน");
+                "งานนี้ติดตามการนำเข้าด้วยใบสั่งซื้อโรงงาน — ต้องบันทึกรับสินค้าที่ใบสั่งซื้อของแต่ละโรงงาน");
         }
         // IR-tracked refusal (V184) — same reasoning, for the per-factory ใบขอซื้อ aggregate.
         if (tickets.hasLiveImportRequests(ticketId)) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "ดีลนี้ติดตามการนำเข้าด้วยใบขอซื้อรายโรงงาน — ต้องบันทึกความคืบหน้าที่ใบขอซื้อของแต่ละโรงงาน");
+                "งานนี้ติดตามการนำเข้าด้วยใบขอซื้อรายโรงงาน — ต้องบันทึกความคืบหน้าที่ใบขอซื้อของแต่ละโรงงาน");
         }
         if (!FulfilmentStatus.SHIPPING.equals(s.fulfillmentStatus())) {
-            throw new ApiException(HttpStatus.CONFLICT, "ดีลต้องอยู่ในขั้นตอนจัดส่งก่อนจึงจะทำเครื่องหมายว่าได้รับสินค้าได้");
+            throw new ApiException(HttpStatus.CONFLICT, "งานต้องอยู่ในขั้นตอนจัดส่งก่อนจึงจะทำเครื่องหมายว่าได้รับสินค้าได้");
         }
         applyGoodsReceived(s, actor);
         return requireTicket(ticketId);
@@ -1519,7 +1519,7 @@ public class TicketService {
                 "เลือกที่มาสินค้าได้หลังจากยืนยันคำสั่งซื้อของลูกค้าแล้วเท่านั้น (ตั้งแต่ขั้นตอน ORDER_RECEIVED)");
         }
         if (s.fulfillmentStatus() != null) {
-            throw new ApiException(HttpStatus.CONFLICT, "เลือกที่มาสินค้าของดีลนี้แล้ว แก้ไขไม่ได้");
+            throw new ApiException(HttpStatus.CONFLICT, "เลือกที่มาสินค้าของงานนี้แล้ว แก้ไขไม่ได้");
         }
         Map<Long, Boolean> wanted = new LinkedHashMap<>();
         for (ProcurementSourceRequest.Line line : req.lines()) {
@@ -1533,12 +1533,12 @@ public class TicketService {
         }
         // Cheap pre-check so a second decision never writes; the latch below stays as the race guard.
         if (tickets.findProcurementSourceDecidedAt(ticketId).isPresent()) {
-            throw new ApiException(HttpStatus.CONFLICT, "เลือกที่มาสินค้าของดีลนี้แล้ว แก้ไขไม่ได้");
+            throw new ApiException(HttpStatus.CONFLICT, "เลือกที่มาสินค้าของงานนี้แล้ว แก้ไขไม่ได้");
         }
         if (!tickets.isLegacyStockSourceDeal(ticketId)) {
             boolean changes = ticket.items().stream().anyMatch(i -> wanted.get(i.id()) != isFromStock(i));
             if (changes) {
-                throw new ApiException(HttpStatus.CONFLICT, "ดีลนี้ใช้ที่มาสินค้าตามใบเสนอราคา แก้ไขไม่ได้");
+                throw new ApiException(HttpStatus.CONFLICT, "งานนี้ใช้ที่มาสินค้าตามใบเสนอราคา แก้ไขไม่ได้");
             }
         } else {
             List<StockReservationRequest.Line> lines = ticket.items().stream()
@@ -1554,7 +1554,7 @@ public class TicketService {
             }
         }
         if (!tickets.markProcurementSourceDecided(ticketId, actor.id())) {
-            throw new ApiException(HttpStatus.CONFLICT, "เลือกที่มาสินค้าของดีลนี้แล้ว แก้ไขไม่ได้");
+            throw new ApiException(HttpStatus.CONFLICT, "เลือกที่มาสินค้าของงานนี้แล้ว แก้ไขไม่ได้");
         }
         long stock = wanted.values().stream().filter(Boolean::booleanValue).count();
         tickets.addEvent(ticketId, actor.id(), actor.name(), TicketEventKind.PROCUREMENT_SOURCE_DECIDED,
@@ -1878,7 +1878,7 @@ public class TicketService {
         requireActive(s);
         if (!canConfirmFinalPaymentNow(s)) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "ต้องรับชำระมัดจำแล้วหรือรอชำระเงินงวดสุดท้าย (หรือดีลนี้ได้รับการยกเว้นมัดจำ) และดีลต้องถึงขั้นส่งมอบ (รอสินค้า/นำเข้าเสร็จสิ้น) ก่อนจึงจะยืนยันรับชำระเงินครบถ้วนได้");
+                "ต้องรับชำระมัดจำแล้วหรือรอชำระเงินงวดสุดท้าย (หรืองานนี้ได้รับการยกเว้นมัดจำ) และงานต้องถึงขั้นส่งมอบ (รอสินค้า/นำเข้าเสร็จสิ้น) ก่อนจึงจะยืนยันรับชำระเงินครบถ้วนได้");
         }
         BigDecimal outstanding = payableAmount(ticket).subtract(nullToZero(tickets.sumPaid(ticketId)));
         if (outstanding.signum() <= 0) {
@@ -1955,13 +1955,13 @@ public class TicketService {
         TicketSummaryDto s = ticket.summary();
         if (!DealLifecycle.ACTIVE.equals(s.lifecycle())) {
             throw new ExpressReceiptRefusal(ExpressReceiptRefusal.Reason.DEAL_NOT_ACTIVE,
-                "ดีลไม่ได้อยู่ในสถานะ ACTIVE จึงบันทึกรับเงินไม่ได้");
+                "งานไม่ได้อยู่ในสถานะ ACTIVE จึงบันทึกรับเงินไม่ได้");
         }
         BigDecimal payable = payableAmount(ticket);
         BigDecimal paid = nullToZero(tickets.sumPaid(ticketId));
         if (paid.add(amount).compareTo(payable) > 0) {
             throw new ExpressReceiptRefusal(ExpressReceiptRefusal.Reason.OVERPAYMENT,
-                "ยอดนี้เกินยอดที่ดีลต้องชำระ ให้ฝ่ายบัญชีตรวจสอบ");
+                "ยอดนี้เกินยอดที่งานต้องชำระ ให้ฝ่ายบัญชีตรวจสอบ");
         }
         boolean depositWasSettled = depositSettled(s);
         String kind = expressReceiptKind(ticketId, s, depositWasSettled);
@@ -2250,7 +2250,7 @@ public class TicketService {
 
     private TicketItemDto requireLineItem(Map<Long, TicketItemDto> itemsById, Long itemId) {
         if (itemId == null || !itemsById.containsKey(itemId)) {
-            throw new ApiException(HttpStatus.NOT_FOUND, "ไม่พบรายการนี้ในดีล");
+            throw new ApiException(HttpStatus.NOT_FOUND, "ไม่พบรายการนี้ในงาน");
         }
         return itemsById.get(itemId);
     }
@@ -2403,11 +2403,11 @@ public class TicketService {
         // still carries one. Checked before requireActive so a lost deal gets this specific message.
         if (DealLifecycle.CLOSED_LOST.equals(s.lifecycle())) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "ดีลถูกทำเครื่องหมายเสียงานแล้ว — เปิดดีลใหม่ก่อนแก้ไขสถานะ");
+                "งานถูกทำเครื่องหมายเสียงานแล้ว — เปิดงานอีกครั้งก่อนแก้ไขสถานะ");
         }
         requireActive(s);
         if (targetStage.equals(s.salesStage())) {
-            throw new ApiException(HttpStatus.CONFLICT, "ดีลนี้อยู่ในขั้นตอน " + targetStage + " อยู่แล้ว");
+            throw new ApiException(HttpStatus.CONFLICT, "งานนี้อยู่ในขั้นตอน " + targetStage + " อยู่แล้ว");
         }
         // Once the order is confirmed (the deal is at or past ขั้น 10) a manual
         // move may not rewind below ORDER_RECEIVED. Keyed on the CURRENT stage only: no repository call here.
@@ -2733,7 +2733,7 @@ public class TicketService {
                 "เปลี่ยนลูกค้าไม่ได้ เนื่องจากมีใบเสนอราคาที่ส่งขออนุมัติแล้ว");
         }
         if (pricingRequests.hasOpenForTicket(ticketId)) {
-            throw new ApiException(HttpStatus.CONFLICT, "เปลี่ยนลูกค้าไม่ได้ เนื่องจากดีลนี้มีคำขอราคาอยู่");
+            throw new ApiException(HttpStatus.CONFLICT, "เปลี่ยนลูกค้าไม่ได้ เนื่องจากงานนี้มีคำขอราคาอยู่");
         }
         CustomerDto customer = customers.findById(request.customerId())
             .orElseThrow(() -> new ApiException(HttpStatus.BAD_REQUEST, "ไม่พบลูกค้าที่เลือก"));
@@ -2769,7 +2769,7 @@ public class TicketService {
         // Lifecycle, not lost_reason — a reopened deal is ACTIVE and still carries the reason it was lost for last
         // time; it must be losable again.
         if (DealLifecycle.CLOSED_LOST.equals(s.lifecycle())) {
-            throw new ApiException(HttpStatus.CONFLICT, "ดีลนี้ถูกทำเครื่องหมายเสียงานไปแล้ว");
+            throw new ApiException(HttpStatus.CONFLICT, "งานนี้ถูกทำเครื่องหมายเสียงานไปแล้ว");
         }
         tickets.markDealLost(ticketId, reason);
         // Stage untouched by design: reopening resumes exactly where the deal was.
@@ -2798,7 +2798,7 @@ public class TicketService {
         TicketSummaryDto s = requireTicket(ticketId).summary();
         requireDealOwnership(s, actor);
         if (!DealLifecycle.CLOSED_LOST.equals(s.lifecycle()) || s.lostReason() == null) {
-            throw new ApiException(HttpStatus.CONFLICT, "ดีลนี้ยังไม่ได้ถูกทำเครื่องหมายเสียงาน");
+            throw new ApiException(HttpStatus.CONFLICT, "งานนี้ยังไม่ได้ถูกทำเครื่องหมายเสียงาน");
         }
         tickets.clearDealLost(ticketId);
         tickets.addEvent(ticketId, actor.id(), actor.name(),
@@ -3049,7 +3049,7 @@ public class TicketService {
             return changePauseReturnOn(s, note, pauseReturnOn, actor);
         }
         if (!DealLifecycle.ACTIVE.equals(s.lifecycle()) && !DealLifecycle.ON_HOLD.equals(s.lifecycle())) {
-            throw new ApiException(HttpStatus.CONFLICT, "พัก dormant ได้เฉพาะดีลที่ active หรือ on hold");
+            throw new ApiException(HttpStatus.CONFLICT, "พัก dormant ได้เฉพาะงานที่ active หรือ on hold");
         }
         requireReturnDateNotPast(pauseReturnOn);
         tickets.updateLifecycle(ticketId, DealLifecycle.DORMANT);
@@ -3068,7 +3068,7 @@ public class TicketService {
         TicketSummaryDto s = requireTicket(ticketId).summary();
         requireDealOwnership(s, actor);
         if (!DealLifecycle.ON_HOLD.equals(s.lifecycle()) && !DealLifecycle.DORMANT.equals(s.lifecycle())) {
-            throw new ApiException(HttpStatus.CONFLICT, "ดำเนินการต่อได้เฉพาะดีลที่พักไว้");
+            throw new ApiException(HttpStatus.CONFLICT, "ดำเนินการต่อได้เฉพาะงานที่พักไว้");
         }
         tickets.updateLifecycle(ticketId, DealLifecycle.ACTIVE);
         // V220: a resumed deal has no return date to come back on.
@@ -3289,7 +3289,7 @@ public class TicketService {
         TicketDto ticket = requireTicket(ticketId);
         String currentStatus = ticket.summary().status();
         if (TicketStatus.CLOSED.equals(currentStatus) || TicketStatus.CANCELLED.equals(currentStatus)) {
-            throw new ApiException(HttpStatus.CONFLICT, "ไม่สามารถยกเลิกดีลที่ปิดหรือถูกยกเลิกไปแล้วได้");
+            throw new ApiException(HttpStatus.CONFLICT, "ไม่สามารถยกเลิกงานที่ปิดหรือถูกยกเลิกไปแล้วได้");
         }
         if (!DealOwnership.isOwnerOrKeyer(ticket.summary(), actor.id())) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
@@ -3452,7 +3452,7 @@ public class TicketService {
         boolean itemExists = requireTicket(ticketId).items().stream()
             .anyMatch(it -> it.id() == itemId);
         if (!itemExists) {
-            throw new ApiException(HttpStatus.NOT_FOUND, "ไม่พบรายการนี้ในดีล");
+            throw new ApiException(HttpStatus.NOT_FOUND, "ไม่พบรายการนี้ในงาน");
         }
         tickets.updateItemManualPrice(itemId, request.manualPrice(), request.reason());
         // Audit trail: an override must not silently change an item's price with no
@@ -3506,7 +3506,7 @@ public class TicketService {
             // CustomerQuotationService replacement.
             if (canDealOwnership(s, actor)) {
                 actions.add(new TicketActionDto("MARK_LOST", "lifecycle", "เสียงาน", List.of("reason")));
-                actions.add(new TicketActionDto("PLACE_ON_HOLD", "lifecycle", "พักดีลไว้"));
+                actions.add(new TicketActionDto("PLACE_ON_HOLD", "lifecycle", "พักงานไว้"));
                 actions.add(new TicketActionDto("MARK_DORMANT", "lifecycle", "พัก dormant"));
             }
         } else if ((DealLifecycle.ON_HOLD.equals(s.lifecycle()) || DealLifecycle.DORMANT.equals(s.lifecycle()))
@@ -3516,7 +3516,7 @@ public class TicketService {
                 actions.add(new TicketActionDto("MARK_DORMANT", "lifecycle", "พัก dormant"));
             }
         } else if (DealLifecycle.CLOSED_LOST.equals(s.lifecycle()) && canDealOwnership(s, actor)) {
-            actions.add(new TicketActionDto("REOPEN", "lifecycle", "เปิดดีลใหม่"));
+            actions.add(new TicketActionDto("REOPEN", "lifecycle", "เปิดงานอีกครั้ง"));
         }
         TicketActionState state = new TicketActionState(s.lifecycle(), s.salesStage(), s.paymentStatus(),
             s.fulfillmentStatus(), s.status());
@@ -3876,14 +3876,14 @@ public class TicketService {
 
     private TicketDto requireTicket(long id) {
         return tickets.findById(id)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบดีลนี้"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบงานนี้"));
     }
 
     private TicketSummaryDto loadAndVerifyStatus(long ticketId, String expectedStatus) {
         TicketSummaryDto s = requireTicket(ticketId).summary();
         if (!expectedStatus.equals(s.status())) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "ต้องการสถานะ '" + expectedStatus + "' แต่ดีลนี้อยู่ในสถานะ '" + s.status() + "'");
+                "ต้องการสถานะ '" + expectedStatus + "' แต่งานนี้อยู่ในสถานะ '" + s.status() + "'");
         }
         return s;
     }
@@ -3921,7 +3921,7 @@ public class TicketService {
     private void requireActive(TicketSummaryDto summary) {
         if (!DealLifecycle.ACTIVE.equals(summary.lifecycle())) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "ดีลไม่ได้อยู่ในสถานะ ACTIVE (" + summary.lifecycle() + ") จึงแก้ไขขั้นตอนนี้ไม่ได้");
+                "งานไม่ได้อยู่ในสถานะ ACTIVE (" + summary.lifecycle() + ") จึงแก้ไขขั้นตอนนี้ไม่ได้");
         }
     }
 

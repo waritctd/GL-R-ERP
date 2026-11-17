@@ -149,7 +149,7 @@ export function offRoutePartiesFor(catalog, entryChannel) {
 export function recipientRouteRefusal(catalog, entryChannel, recipientCode) {
   const option = QUOTATION_RECIPIENT_OPTIONS.find((o) => o.code === recipientCode);
   if (!option || !offRoutePartiesFor(catalog, entryChannel)?.has(recipientCode)) return null;
-  return `ดีลนี้เป็น${entryChannelLabel(entryChannel).label} — ขั้นที่ ${findStage(catalog, option.stage)?.no} ไม่อยู่ในเส้นทางของดีลนี้ — แก้ช่องทางดีลก่อน`;
+  return `งานนี้เป็น${entryChannelLabel(entryChannel).label} — ขั้นที่ ${findStage(catalog, option.stage)?.no} ไม่อยู่ในเส้นทางของงานนี้ — แก้ช่องทางงานก่อน`;
 }
 
 /** "Which step of how many, on this CHANNEL's route" — routePosition's contract, keyed by channel instead of

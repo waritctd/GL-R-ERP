@@ -1680,7 +1680,7 @@ describe('buildQuotationChecklist', () => {
     expect(meta.buildQuotationChecklist({ ...complete, liveDirectQuotation: live })).toEqual([expect.objectContaining({
       check: 'liveDirectQuotation',
       blocking: true,
-      message: 'ดีลนี้มีใบเสนอราคาที่ใช้งานอยู่ (QT-2026-0077-1) — แก้ไขฉบับนั้น หรือสร้างฉบับแก้ไขแทนการออกเลขใหม่',
+      message: 'งานนี้มีใบเสนอราคาที่ใช้งานอยู่ (QT-2026-0077-1) — แก้ไขฉบับนั้น หรือสร้างฉบับแก้ไขแทนการออกเลขใหม่',
     })]);
     expect(meta.buildQuotationChecklist({ ...complete, liveDirectQuotation: { ...live, docStatus: 'CANCELLED' } })).toEqual([]);
   });
@@ -1741,9 +1741,9 @@ describe('buildQuotationChecklist', () => {
     expect(blocks(ownerDraft, 'BUYER')).toBe(true);
 
     expect(messages([row(79, 'APPROVED', 'DESIGNER'), ownerPending], 'BUYER'))
-      .toEqual(['ดีลนี้มีใบเสนอราคาที่ใช้งานอยู่ (QT-2026-0078-1) — แก้ไขฉบับนั้น หรือสร้างฉบับแก้ไขแทนการออกเลขใหม่']);
+      .toEqual(['งานนี้มีใบเสนอราคาที่ใช้งานอยู่ (QT-2026-0078-1) — แก้ไขฉบับนั้น หรือสร้างฉบับแก้ไขแทนการออกเลขใหม่']);
     // Two blockers: the newest (highest id) is named, whatever the list order.
-    const newestNamed = ['ดีลนี้มีใบเสนอราคาที่ใช้งานอยู่ (QT-2026-0081-1) — แก้ไขฉบับนั้น หรือสร้างฉบับแก้ไขแทนการออกเลขใหม่'];
+    const newestNamed = ['งานนี้มีใบเสนอราคาที่ใช้งานอยู่ (QT-2026-0081-1) — แก้ไขฉบับนั้น หรือสร้างฉบับแก้ไขแทนการออกเลขใหม่'];
     expect(messages([row(81, 'DRAFT', 'OWNER'), row(79, 'PENDING_APPROVAL', 'DESIGNER')], 'BUYER')).toEqual(newestNamed);
     expect(messages([row(79, 'PENDING_APPROVAL', 'DESIGNER'), row(81, 'DRAFT', 'OWNER')], 'BUYER')).toEqual(newestNamed);
     expect(messages([approvedDesigner], 'BUYER')).toEqual([]);
@@ -1769,14 +1769,14 @@ describe('buildQuotationChecklist', () => {
     expect(meta.hasLivePricingRequest([pr('DRAFT')], '18')).toBe(true);
     expect(meta.hasLivePricingRequest(null, 18)).toBe(false);
     expect(meta.LIVE_PRICING_REQUEST_BLOCK_MESSAGE)
-      .toBe('ดีลนี้มีคำขอราคาที่ยังดำเนินการอยู่ — ใช้ใบเสนอราคาจากคำขอราคา หรือยกเลิกคำขอราคาก่อน');
+      .toBe('งานนี้มีคำขอราคาที่ยังดำเนินการอยู่ — ใช้ใบเสนอราคาจากคำขอราคา หรือยกเลิกคำขอราคาก่อน');
   });
 
   it('the checklist blocks a NEW quotation on a deal with a live pricing request, with that sentence', () => {
     expect(meta.buildQuotationChecklist({ ...complete, livePricingRequest: true })).toEqual([expect.objectContaining({
       check: 'livePricingRequest',
       blocking: true,
-      message: 'ดีลนี้มีคำขอราคาที่ยังดำเนินการอยู่ — ใช้ใบเสนอราคาจากคำขอราคา หรือยกเลิกคำขอราคาก่อน',
+      message: 'งานนี้มีคำขอราคาที่ยังดำเนินการอยู่ — ใช้ใบเสนอราคาจากคำขอราคา หรือยกเลิกคำขอราคาก่อน',
     })]);
     expect(meta.buildQuotationChecklist({ ...complete, livePricingRequest: false })).toEqual([]);
   });
@@ -1786,7 +1786,7 @@ describe('buildQuotationChecklist', () => {
   // find out from the 409. The caller (the editor) passes the sentence ONLY for a NEW or CHANGED recipient: an
   // unchanged stored recipient on a legacy draft still saves (the server only refuses a change), so it passes none.
   it('the checklist blocks the save with the route sentence when an off-route party is chosen', () => {
-    const sentence = 'ดีลนี้เป็นเจ้าของติดต่อโดยตรง — ขั้นที่ 4 ไม่อยู่ในเส้นทางของดีลนี้ — แก้ช่องทางดีลก่อน';
+    const sentence = 'งานนี้เป็นเจ้าของติดต่อโดยตรง — ขั้นที่ 4 ไม่อยู่ในเส้นทางของงานนี้ — แก้ช่องทางงานก่อน';
     const entries = meta.buildQuotationChecklist({ ...complete, recipientRequired: true, recipientType: 'DESIGNER',
       offRouteRecipientMessage: sentence });
     expect(entries).toEqual([expect.objectContaining({ message: sentence, blocking: true })]);

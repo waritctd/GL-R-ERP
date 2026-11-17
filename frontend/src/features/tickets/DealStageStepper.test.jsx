@@ -13,7 +13,7 @@ const OWNER_OFF = ['QUOTE_DESIGN_SIDE'];
 const BUYER_OFF = ['QUOTE_DESIGN_SIDE', 'QUOTE_OWNER', 'OWNER_SIGNOFF', 'AWAITING_BUYER'];
 // The server's own refusal, one distinct sentence per stage so a test can prove it is rendered VERBATIM per
 // row (DealRoute.refusalMessage's shape).
-const reasonFor = (stage) => `ดีลนี้เป็นผู้ซื้อ/ผู้รับเหมาติดต่อโดยตรง — ขั้นที่ ${stage.no} ไม่อยู่ในเส้นทางของดีลนี้ — แก้ช่องทางดีลก่อน`;
+const reasonFor = (stage) => `งานนี้เป็นผู้ซื้อ/ผู้รับเหมาติดต่อโดยตรง — ขั้นที่ ${stage.no} ไม่อยู่ในเส้นทางของงานนี้ — แก้ช่องทางงานก่อน`;
 
 // ⚠️ Built here and passed DIRECTLY as props. mockApi.js does not emit `onRoute`, so driving these through the
 // mock would see every stage on-route and pass vacuously.
@@ -346,7 +346,7 @@ describe('DealStageStepper off-route rows — แก้ช่องทางด�
     const { unmount } = renderBuyer({ entryChannelAction: FIRST, onSetEntryChannel });
     fireEvent.click(firstToggle());
     expect(screen.queryByTestId('entry-channel-fix-reason')).toBeNull();
-    fireEvent.click(screen.getByRole('radio', { name: /ผู้ออกแบบนำดีล/ }));
+    fireEvent.click(screen.getByRole('radio', { name: /ผู้ออกแบบนำงานมา/ }));
     fireEvent.click(screen.getByRole('button', { name: 'บันทึกช่องทางใหม่' }));
     expect(onSetEntryChannel).toHaveBeenCalledWith({ value: 'DESIGNER_LED', note: null });
     unmount();
@@ -354,7 +354,7 @@ describe('DealStageStepper off-route rows — แก้ช่องทางด�
     const stated = vi.fn();
     renderBuyer({ entryChannelAction: STATED, onSetEntryChannel: stated });
     fireEvent.click(firstToggle());
-    fireEvent.click(screen.getByRole('radio', { name: /ผู้ออกแบบนำดีล/ }));
+    fireEvent.click(screen.getByRole('radio', { name: /ผู้ออกแบบนำงานมา/ }));
     expect(screen.getByRole('button', { name: 'บันทึกช่องทางใหม่' }).disabled).toBe(true);
     fireEvent.change(screen.getByTestId('entry-channel-fix-reason'), { target: { value: 'มีผู้ออกแบบจริง' } });
     fireEvent.click(screen.getByRole('button', { name: 'บันทึกช่องทางใหม่' }));
@@ -364,7 +364,7 @@ describe('DealStageStepper off-route rows — แก้ช่องทางด�
   it('disables saving while an action is in flight', () => {
     renderBuyer({ actionLoading: true });
     fireEvent.click(firstToggle());
-    fireEvent.click(screen.getByRole('radio', { name: /ผู้ออกแบบนำดีล/ }));
+    fireEvent.click(screen.getByRole('radio', { name: /ผู้ออกแบบนำงานมา/ }));
     expect(screen.getByRole('button', { name: 'บันทึกช่องทางใหม่' }).disabled).toBe(true);
   });
 });

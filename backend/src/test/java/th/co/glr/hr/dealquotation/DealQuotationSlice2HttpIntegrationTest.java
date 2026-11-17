@@ -118,7 +118,7 @@ class DealQuotationSlice2HttpIntegrationTest extends AbstractDealQuotationSlice2
         assertThat(error.get("liveQuotationId").asLong()).isEqualTo(first.get("id").asLong());
         assertThat(error.get("number").asText()).isEqualTo(first.get("number").asText());
         assertThat(error.get("docStatus").asText()).isEqualTo("DRAFT");
-        assertThat(error.get("message").asText()).isEqualTo("ดีลนี้มีใบเสนอราคาที่ใช้งานอยู่ ("
+        assertThat(error.get("message").asText()).isEqualTo("งานนี้มีใบเสนอราคาที่ใช้งานอยู่ ("
             + first.get("number").asText() + ") — แก้ไขฉบับนั้น หรือสร้างฉบับแก้ไขแทนการออกเลขใหม่");
     }
 

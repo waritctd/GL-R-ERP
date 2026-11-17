@@ -238,10 +238,10 @@ public class CommissionService {
             throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องแนบไฟล์ใบกำกับภาษี");
         }
         TicketDto ticket = tickets.findById(ticketId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบดีลนี้"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบงานนี้"));
         long salesRepId = ticket.summary().createdById();
         if (commissions.hasActiveCommissionForTicket(ticketId)) {
-            throw new ApiException(HttpStatus.CONFLICT, "มีรายการค่าคอมมิชชั่นสำหรับดีลนี้อยู่แล้ว");
+            throw new ApiException(HttpStatus.CONFLICT, "มีรายการค่าคอมมิชชั่นสำหรับงานนี้อยู่แล้ว");
         }
         BigDecimal effectiveGrossAmount = grossAmount != null ? grossAmount : tickets.payableAmount(ticketId);
 
@@ -356,10 +356,10 @@ public class CommissionService {
             return new DealLinkage(null, false);
         }
         String salesStage = tickets.findSalesStage(ticketId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบดีลนี้"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบงานนี้"));
         if (!DealStage.CLOSED_PAID.equals(salesStage)) {
             throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
-                "ดีลนี้ยังไม่ถึงขั้นตอนรับชำระเงินครบถ้วน (CLOSED_PAID) จึงยังยื่นค่าคอมมิชชั่นไม่ได้");
+                "งานนี้ยังไม่ถึงขั้นตอนรับชำระเงินครบถ้วน (CLOSED_PAID) จึงยังยื่นค่าคอมมิชชั่นไม่ได้");
         }
         BigDecimal payable = tickets.payableAmount(ticketId);
         boolean mismatch = isMismatch(request.grossAmount(), payable);
@@ -450,7 +450,7 @@ public class CommissionService {
         commissions.lockRecordForUpdate(id);
         CommissionRecord existing = requireRecord(id);
         if (!CommissionKind.SALE.equals(existing.kind()) || existing.sourceTicketId() == null) {
-            throw new ApiException(HttpStatus.CONFLICT, "ปรับน้ำหนักได้เฉพาะรายการค่าคอมจากดีลขาย");
+            throw new ApiException(HttpStatus.CONFLICT, "ปรับน้ำหนักได้เฉพาะรายการค่าคอมจากงานขาย");
         }
         if (!CommissionStatus.SUBMITTED.equals(existing.status())) {
             throw new ApiException(HttpStatus.CONFLICT, "ปรับน้ำหนักได้เฉพาะรายการที่รอผู้จัดการฝ่ายขายอนุมัติ");
@@ -470,7 +470,7 @@ public class CommissionService {
             if (line == null || line.itemId() == null || line.weightMultiplier() == null
                     || line.weightMultiplier() < 1 || line.weightMultiplier() > 3
                     || !ownItemIds.contains(line.itemId())) {
-                throw new ApiException(HttpStatus.BAD_REQUEST, "รายการสินค้าไม่อยู่ในดีลนี้");
+                throw new ApiException(HttpStatus.BAD_REQUEST, "รายการสินค้าไม่อยู่ในงานนี้");
             }
         }
 

@@ -249,7 +249,7 @@ class DepositNoticeIssueGuardIntegrationTest extends AbstractPostgresIntegration
         // supersede the customer's document): 409, the draft keeps no number, the first stays ISSUED.
         depositNoticeService.update(secondDocId, secondDraftHeader(), salesActor);
         assertIssueRefusedAndNothingChanged(fixture, secondDocId,
-            "ดีลนี้ออกใบแจ้งรับมัดจำเลขที่ " + fixture.docNumber() + " แล้ว จึงออกฉบับร่างนี้ไม่ได้");
+            "งานนี้ออกใบแจ้งรับมัดจำเลขที่ " + fixture.docNumber() + " แล้ว จึงออกฉบับร่างนี้ไม่ได้");
     }
 
     // Owner ruling 2026-10-23: one deposit notice per deal. While one is ISSUED, neither create route
@@ -258,7 +258,7 @@ class DepositNoticeIssueGuardIntegrationTest extends AbstractPostgresIntegration
     @Test
     void createDraft_isRefusedOnBothRoutesWhileAnIssuedNoticeExists_noNewRow() {
         IssuedNoticeFixture fixture = buildTicketWithIssuedDepositNotice();
-        String message = "ดีลนี้ออกใบแจ้งรับมัดจำเลขที่ " + fixture.docNumber() + " แล้ว จึงสร้างฉบับร่างใหม่ไม่ได้";
+        String message = "งานนี้ออกใบแจ้งรับมัดจำเลขที่ " + fixture.docNumber() + " แล้ว จึงสร้างฉบับร่างใหม่ไม่ได้";
 
         assertThatThrownBy(() -> depositNoticeService.createDraft(fixture.ticketId(),
                 new DepositNoticeDraftRequest(null, null, null, null, null, null, null, null), salesActor))

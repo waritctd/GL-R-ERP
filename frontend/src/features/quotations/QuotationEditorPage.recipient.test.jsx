@@ -226,7 +226,7 @@ describe('/quotations/new — step 1 is "ดีล" (slice 2 §A)', () => {
     fireEvent.focus(await screen.findByLabelText(/^โครงการ/));
     fireEvent.mouseDown(await screen.findByRole('option', { name: /โครงการ B1/ }));
     // A NEW deal needs a real ช่องทางรับงาน too.
-    fireEvent.click(screen.getByRole('button', { name: 'ผู้ออกแบบนำดีล' }));
+    fireEvent.click(screen.getByRole('button', { name: 'ผู้ออกแบบนำงานมา' }));
     fireEvent.click(screen.getByRole('radio', { name: 'ผู้ซื้อ / ผู้รับเหมา' }));
     await fillCompleteQuotationItem();
 
@@ -297,7 +297,7 @@ describe('/quotations/new?ticket= — recipient preselected from the deal stage 
     await waitFor(() => expect(screen.getByRole('radio', { name: 'เจ้าของโครงการ' }).getAttribute('aria-checked')).toBe('true'));
     await fillCompleteQuotationItem();
     await waitFor(() => expect(saveButton().disabled).toBe(true));
-    expect(saveButton().title).toContain('ดีลนี้มีใบเสนอราคาที่ใช้งานอยู่ (QT-2026-0077-1)');
+    expect(saveButton().title).toContain('งานนี้มีใบเสนอราคาที่ใช้งานอยู่ (QT-2026-0077-1)');
   }, 10000);
 
   // The summary serves only the NEWEST live direct quotation; the server (DirectQuotationLocks) checks every live
@@ -318,7 +318,7 @@ describe('/quotations/new?ticket= — recipient preselected from the deal stage 
     await fillCompleteQuotationItem();
     await waitFor(() => expect(api.dealQuotations.listForTicket).toHaveBeenCalledWith(18));
     await waitFor(() => expect(saveButton().disabled).toBe(true));
-    expect(saveButton().title).toContain('ดีลนี้มีใบเสนอราคาที่ใช้งานอยู่ (QT-2026-0002-1)');
+    expect(saveButton().title).toContain('งานนี้มีใบเสนอราคาที่ใช้งานอยู่ (QT-2026-0002-1)');
   }, 10000);
 
   it('?recipient=BUYER: only an APPROVED designer row (plus a cancelled one) -> บันทึกร่าง stays enabled and the create goes out', async () => {
@@ -355,7 +355,7 @@ describe('/quotations/new?ticket= — recipient preselected from the deal stage 
     expect(within(notice).getByRole('link', { name: 'เปิดใบเสนอราคา' }).getAttribute('href')).toBe('/quotations/77');
     await fillCompleteQuotationItem();
     expect(saveButton().disabled).toBe(true);
-    expect(saveButton().title).toContain('ดีลนี้มีใบเสนอราคาที่ใช้งานอยู่ (QT-2026-0077-1)');
+    expect(saveButton().title).toContain('งานนี้มีใบเสนอราคาที่ใช้งานอยู่ (QT-2026-0077-1)');
   }, 10000);
 });
 
@@ -533,7 +533,7 @@ describe('a direct-quotation status change refreshes the deal (liveDirectQuotati
 // inline-notice pattern as a live direct quotation, and บันทึกร่าง is disabled with the reason
 // (DESIGN.md §14).
 describe('/quotations/new?ticket= — a deal with a live pricing request (one pricing route per deal)', () => {
-  const LIVE_PR_MESSAGE = 'ดีลนี้มีคำขอราคาที่ยังดำเนินการอยู่ — ใช้ใบเสนอราคาจากคำขอราคา หรือยกเลิกคำขอราคาก่อน';
+  const LIVE_PR_MESSAGE = 'งานนี้มีคำขอราคาที่ยังดำเนินการอยู่ — ใช้ใบเสนอราคาจากคำขอราคา หรือยกเลิกคำขอราคาก่อน';
   const pr = (status) => ({ id: 501, requestCode: 'PCR-2026-0501', ticketId: 18, status });
 
   it.each([['DRAFT'], ['SUBMITTED'], ['QUOTATION_ACCEPTED']])('%s: inline notice + บันทึกร่าง disabled with the reason', async (status) => {
@@ -561,7 +561,7 @@ describe('/quotations/new?ticket= — a deal with a live pricing request (one pr
 });
 
 // Owner ruling 2026-11-07: DealRoute.refusalMessage's sentence (the server's 409), shown beside a disabled off-route pill.
-const routeSentence = (channelPhrase, no) => `ดีลนี้เป็น${channelPhrase} — ขั้นที่ ${no} ไม่อยู่ในเส้นทางของดีลนี้ — แก้ช่องทางดีลก่อน`;
+const routeSentence = (channelPhrase, no) => `งานนี้เป็น${channelPhrase} — ขั้นที่ ${no} ไม่อยู่ในเส้นทางของงานนี้ — แก้ช่องทางงานก่อน`;
 const isDisabled = (el) => el.disabled || el.getAttribute('aria-disabled') === 'true';
 const checkedRecipients = () => within(recipientGroup()).getAllByRole('radio').map((r) => r.getAttribute('aria-checked'));
 
@@ -576,7 +576,7 @@ describe('new-deal card — ช่องทางรับงาน pre-fills �
   }
 
   it.each([
-    ['ผู้ออกแบบนำดีล', ['true', 'false', 'false']],
+    ['ผู้ออกแบบนำงานมา', ['true', 'false', 'false']],
     ['เจ้าของติดต่อโดยตรง', ['false', 'true', 'false']],
     ['ผู้ซื้อ/ผู้รับเหมาติดต่อโดยตรง', ['false', 'false', 'true']],
   ])('choosing %s pre-fills the matching recipient', async (channel, expected) => {
@@ -590,7 +590,7 @@ describe('new-deal card — ช่องทางรับงาน pre-fills �
 
   it('while the rep has not picked a recipient, changing the channel re-fills it', async () => {
     await openCreateCard();
-    fireEvent.click(screen.getByRole('button', { name: 'ผู้ออกแบบนำดีล' }));
+    fireEvent.click(screen.getByRole('button', { name: 'ผู้ออกแบบนำงานมา' }));
     await waitFor(() => expect(checkedRecipients()).toEqual(['true', 'false', 'false']));
     fireEvent.click(screen.getByRole('button', { name: 'เจ้าของติดต่อโดยตรง' }));
     await waitFor(() => expect(checkedRecipients()).toEqual(['false', 'true', 'false']));
@@ -598,7 +598,7 @@ describe('new-deal card — ช่องทางรับงาน pre-fills �
 
   it('doesn\'t overwrite a deliberate pick: a later channel change leaves the rep\'s recipient — now off-route, so the route sentence says so', async () => {
     await openCreateCard();
-    fireEvent.click(screen.getByRole('button', { name: 'ผู้ออกแบบนำดีล' }));
+    fireEvent.click(screen.getByRole('button', { name: 'ผู้ออกแบบนำงานมา' }));
     await waitFor(() => expect(checkedRecipients()).toEqual(['true', 'false', 'false']));
     // The rep deliberately picks เจ้าของโครงการ…
     fireEvent.click(screen.getByRole('radio', { name: 'เจ้าของโครงการ' }));

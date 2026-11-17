@@ -673,7 +673,7 @@ describe('QuotationEditorPage inline deal creation', () => {
   // ช่องทางรับงาน is required to save (UNSPECIFIED is never a choice), so the helper picks one unless a test is
   // specifically about the gate.
   function pickEntryChannel() {
-    fireEvent.click(screen.getByRole('button', { name: /ผู้ออกแบบนำดีล/ }));
+    fireEvent.click(screen.getByRole('button', { name: /ผู้ออกแบบนำงานมา/ }));
   }
 
   async function selectCustomerAndProject({ channel = true } = {}) {
@@ -810,7 +810,7 @@ describe('QuotationEditorPage inline deal creation', () => {
   }, 10000);
 
   it('a tickets.create failure leaves the form intact and toasts the backend\'s Thai message, without ever calling dealQuotations.create', async () => {
-    const backendError = new Error('สร้างดีลไม่สำเร็จ: ชื่อลูกค้าซ้ำในระบบ');
+    const backendError = new Error('สร้างงานไม่สำเร็จ: ชื่อลูกค้าซ้ำในระบบ');
     api.tickets.create.mockRejectedValueOnce(backendError);
 
     const { showToast } = renderInlineCreate();
@@ -906,7 +906,7 @@ describe('QuotationEditorPage inline deal creation', () => {
     it('when the deal refuses the quotation, the party this save added is taken back', async () => {
       api.tickets.addParty.mockResolvedValue({ party: { id: 33 } });
       api.tickets.removeParty.mockResolvedValue(null);
-      api.dealQuotations.create.mockRejectedValueOnce(Object.assign(new Error('ผู้รับนี้ไม่ตรงช่องทางของดีล'), { status: 409 }));
+      api.dealQuotations.create.mockRejectedValueOnce(Object.assign(new Error('ผู้รับนี้ไม่ตรงช่องทางของงาน'), { status: 409 }));
       renderInlineCreate();
       await selectCustomerAndProject({ channel: false });
       await screen.findByTestId('existing-deal-notice');
@@ -917,7 +917,7 @@ describe('QuotationEditorPage inline deal creation', () => {
     });
 
     it('a customer already bidding on the deal is reused, not refused', async () => {
-      api.tickets.addParty.mockRejectedValue(Object.assign(new Error('อยู่ในดีลนี้แล้ว'), { status: 409 }));
+      api.tickets.addParty.mockRejectedValue(Object.assign(new Error('อยู่ในงานนี้แล้ว'), { status: 409 }));
       api.tickets.parties.mockResolvedValue({ parties: [
         { id: 43, customerId: testCustomer.id, role: 'BUYER' },
         { id: 44, customerId: testCustomer.id, role: 'DESIGNER' },
@@ -1611,7 +1611,7 @@ describe('QuotationEditorPage ผู้ติดต่อ picker (owner rulings 
   // customer id for the picker — the editor must still render, with the picker in its own
   // "pick a customer first" state rather than a control that fails on use.
   it('a draft whose deal could not be loaded still renders, with the picker disabled', async () => {
-    api.tickets.get.mockRejectedValue(new Error('ไม่มีสิทธิ์เข้าถึงดีลนี้'));
+    api.tickets.get.mockRejectedValue(new Error('ไม่มีสิทธิ์เข้าถึงงานนี้'));
     api.dealQuotations.get.mockResolvedValue({ quotation: baseQuotation() });
     renderEditor('/quotations/5');
 

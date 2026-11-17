@@ -225,7 +225,7 @@ async function chooseTheNewCustomer() {
 // บันทึกร่าง is enabled. A copy is a new quotation on a new deal, so both are the rep's to choose.
 function chooseRecipientAndChannel() {
   fireEvent.click(screen.getByRole('radio', { name: 'ผู้ออกแบบ' }));
-  fireEvent.click(screen.getByRole('button', { name: /ผู้ออกแบบนำดีล/ }));
+  fireEvent.click(screen.getByRole('button', { name: /ผู้ออกแบบนำงานมา/ }));
 }
 async function chooseItsProject() {
   fireEvent.focus(screen.getByLabelText(/^โครงการ/));

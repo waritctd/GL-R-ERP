@@ -94,7 +94,7 @@ public class ExpectedPaymentService {
     private static void requireActive(TicketSummaryDto s) {
         if (!DealLifecycle.ACTIVE.equals(s.lifecycle())) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "ดีลนี้ไม่ได้อยู่ระหว่างดำเนินการ จึงแก้ไขเงินที่คาดว่าจะเข้าไม่ได้");
+                "งานนี้ไม่ได้อยู่ระหว่างดำเนินการ จึงแก้ไขเงินที่คาดว่าจะเข้าไม่ได้");
         }
     }
 
@@ -128,7 +128,7 @@ public class ExpectedPaymentService {
     /** 404 when the deal does not exist; 403 unless a writer, or account with the deal inside its finance scope. */
     private void requireReadAccess(long ticketId, UserPrincipal actor) {
         if (READ_ONLY_ROLES.contains(actor.role())) {
-            ticketRows.findById(ticketId).orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบดีลนี้"));
+            ticketRows.findById(ticketId).orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบงานนี้"));
             if (!ticketRows.isInAccountScope(ticketId)) {
                 throw new ApiException(HttpStatus.FORBIDDEN, FORBIDDEN);
             }

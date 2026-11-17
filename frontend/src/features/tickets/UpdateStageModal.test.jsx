@@ -17,7 +17,7 @@ function decision(stage, no, overrides = {}) {
 const decisions = [
   decision('SPEC_APPROVED', 3),
   decision('QUOTE_OWNER', 5),
-  decision('NEGOTIATION', 9, { allowed: false, blockedReason: 'ดีลนี้อยู่ในขั้นตอน NEGOTIATION อยู่แล้ว' }),
+  decision('NEGOTIATION', 9, { allowed: false, blockedReason: 'งานนี้อยู่ในขั้นตอน NEGOTIATION อยู่แล้ว' }),
   decision('ORDER_RECEIVED', 10, {
     allowed: false,
     blockedReason: 'เลื่อนไปขั้นตอน ORDER_RECEIVED ไม่ได้: ยังไม่ได้ยืนยันคำสั่งซื้อของลูกค้า',
@@ -134,7 +134,7 @@ describe('UpdateStageModal renders the backend decision', () => {
 describe('UpdateStageModal blocked rows — แก้ช่องทางดีล', () => {
   const FIRST = { action: 'SET_ENTRY_CHANNEL', kind: 'policy', requiredFields: ['value'] };
   const STATED = { action: 'SET_ENTRY_CHANNEL', kind: 'policy', requiredFields: ['value', 'note'] };
-  const OFF_REASON = 'ดีลนี้เป็นเจ้าของติดต่อโดยตรง — ขั้นที่ 4 ไม่อยู่ในเส้นทางของดีลนี้ — แก้ช่องทางดีลก่อน';
+  const OFF_REASON = 'งานนี้เป็นเจ้าของติดต่อโดยตรง — ขั้นที่ 4 ไม่อยู่ในเส้นทางของงานนี้ — แก้ช่องทางงานก่อน';
   const routed = [
     decision('SPEC_APPROVED', 3, { onRoute: true }),
     decision('QUOTE_DESIGN_SIDE', 4, { allowed: false, onRoute: false, blockedReason: OFF_REASON }),
@@ -175,7 +175,7 @@ describe('UpdateStageModal blocked rows — แก้ช่องทางดี
     const rows = Array.from(list.querySelectorAll('li'));
     const withRemedy = rows.filter((row) => within(row).queryByRole('button', { name: /แก้ช่องทางงาน/ }));
     expect(withRemedy).toHaveLength(1);
-    expect(withRemedy[0].textContent).toContain('ไม่อยู่ในเส้นทางของดีลนี้');
+    expect(withRemedy[0].textContent).toContain('ไม่อยู่ในเส้นทางของงานนี้');
   });
 
   it('renders no remedy when SET_ENTRY_CHANNEL is not advertised, even with a handler and an off-route row', () => {
@@ -205,7 +205,7 @@ describe('UpdateStageModal blocked rows — แก้ช่องทางดี
     const onSubmit = vi.fn();
     renderRouted({ onSetEntryChannel, onSubmit });
     fireEvent.click(firstToggle());
-    fireEvent.click(screen.getByRole('radio', { name: /ผู้ออกแบบนำดีล/ }));
+    fireEvent.click(screen.getByRole('radio', { name: /ผู้ออกแบบนำงานมา/ }));
     fireEvent.click(screen.getByRole('button', { name: 'บันทึกช่องทางใหม่' }));
     expect(onSetEntryChannel).toHaveBeenCalledWith({ value: 'DESIGNER_LED', note: null });
     expect(onSubmit).not.toHaveBeenCalled();
@@ -220,7 +220,7 @@ describe('UpdateStageModal blocked rows — แก้ช่องทางดี
     renderRouted({ entryChannelAction: STATED });
     fireEvent.click(firstToggle());
     expect(screen.getByTestId('entry-channel-fix-reason')).toBeTruthy();
-    fireEvent.click(screen.getByRole('radio', { name: /ผู้ออกแบบนำดีล/ }));
+    fireEvent.click(screen.getByRole('radio', { name: /ผู้ออกแบบนำงานมา/ }));
     expect(screen.getByRole('button', { name: 'บันทึกช่องทางใหม่' }).disabled).toBe(true);
   });
 });

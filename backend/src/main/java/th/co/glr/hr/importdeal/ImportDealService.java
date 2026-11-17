@@ -41,7 +41,7 @@ public class ImportDealService {
             throw forbidden();
         }
         TicketDto ticket = tickets.findById(ticketId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบดีลนี้"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบงานนี้"));
         TicketSummaryDto s = ticket.summary();
 
         // Same display-only fallback TicketService#get applies: sales.ticket_item stays empty until order

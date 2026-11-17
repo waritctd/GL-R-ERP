@@ -506,7 +506,7 @@ class DealQuotationPricingRequestRevisionIntegrationTest extends AbstractPostgre
                 assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
                 assertThat(e.getMessage()).isEqualTo("ฉบับแก้ไขต้องส่งถึงผู้รับเดิม ("
                     + th.co.glr.hr.ticket.QuotationRecipient.thaiLabel("DESIGNER")
-                    + ") — หากจะเสนอราคาให้ผู้รับรายอื่น ให้สร้างใบเสนอราคาใหม่บนดีลนี้");
+                    + ") — หากจะเสนอราคาให้ผู้รับรายอื่น ให้สร้างใบเสนอราคาใหม่บนงานนี้");
             });
 
         assertThat(quotationService.get(revision.id(), salesActor).recipientType()).isEqualTo("DESIGNER");

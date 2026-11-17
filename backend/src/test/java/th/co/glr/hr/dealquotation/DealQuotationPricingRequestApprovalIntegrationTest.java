@@ -793,7 +793,7 @@ class DealQuotationPricingRequestApprovalIntegrationTest extends AbstractPostgre
         assertThatThrownBy(() -> quotationService.createFromPricingRequest(p1, salesActor))
             .isInstanceOfSatisfying(ApiException.class, e -> {
                 assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
-                assertThat(e.getMessage()).isEqualTo("คำขอราคานี้ถูกแทนที่ด้วยใบเสนอราคาฉบับใหม่ของดีลแล้ว — ออกใบเสนอราคาจากคำขอราคาล่าสุด หรือสร้างคำขอราคาใหม่");
+                assertThat(e.getMessage()).isEqualTo("คำขอราคานี้ถูกแทนที่ด้วยใบเสนอราคาฉบับใหม่ของงานแล้ว — ออกใบเสนอราคาจากคำขอราคาล่าสุด หรือสร้างคำขอราคาใหม่");
             });
         assertThat(quotationIdsOnTicket()).hasSize(before);
     }

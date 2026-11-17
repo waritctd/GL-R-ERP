@@ -513,7 +513,7 @@ public class PricingRequestService {
     private static void requireOrderNotConfirmed(TicketSummaryDto ticket) {
         if (ticket.paymentStatus() != null) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "ยืนยันคำสั่งซื้อของดีลนี้แล้ว จึงเริ่มรอบราคาใหม่ไม่ได้ — การเปลี่ยนแปลงหลังยืนยันต้องทำเป็นการแก้ไขคำสั่งซื้อ");
+                "ยืนยันคำสั่งซื้อของงานนี้แล้ว จึงเริ่มรอบราคาใหม่ไม่ได้ — การเปลี่ยนแปลงหลังยืนยันต้องทำเป็นการแก้ไขคำสั่งซื้อ");
         }
     }
 
@@ -968,14 +968,14 @@ public class PricingRequestService {
 
     private TicketSummaryDto requireTicket(long ticketId) {
         return tickets.findById(ticketId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบดีลนี้"))
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบงานนี้"))
             .summary();
     }
 
     private void requireActive(TicketSummaryDto ticket) {
         if (!DealLifecycle.ACTIVE.equals(ticket.lifecycle())) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "ดีลไม่ได้อยู่ในสถานะ ACTIVE (" + ticket.lifecycle() + ") จึงสร้าง/แก้ไขคำขอราคาไม่ได้");
+                "งานไม่ได้อยู่ในสถานะ ACTIVE (" + ticket.lifecycle() + ") จึงสร้าง/แก้ไขคำขอราคาไม่ได้");
         }
     }
 
@@ -1367,7 +1367,7 @@ public class PricingRequestService {
     private PricingRequestSummaryDto requireSameTicket(PricingRequestSummaryDto existing, long ticketId) {
         if (existing.ticketId() != ticketId) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "clientRequestId นี้ถูกใช้ไปแล้วกับดีลอื่น");
+                "clientRequestId นี้ถูกใช้ไปแล้วกับงานอื่น");
         }
         return existing;
     }
@@ -1378,7 +1378,7 @@ public class PricingRequestService {
 
     private static String identityErrorMessage(int zeroBasedIndex) {
         return "รายการที่ " + (zeroBasedIndex + 1)
-            + ": ต้องระบุสินค้าที่ต้องการเสนอราคา (เลือกจากรายการในดีล หรือระบุรุ่น/รายละเอียด)";
+            + ": ต้องระบุสินค้าที่ต้องการเสนอราคา (เลือกจากรายการในงาน หรือระบุรุ่น/รายละเอียด)";
     }
 
     /** Part 2 of the review-remediation plan: a recipientContactId must belong to the SAME customer as the deal
@@ -1390,7 +1390,7 @@ public class PricingRequestService {
         }
         ContactDto contact = contacts.findById(recipientContactId).orElse(null);
         if (contact == null || contact.customerId() != ticket.customerId()) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "ผู้รับที่เลือกไม่ได้อยู่ในลูกค้าของดีลนี้");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ผู้รับที่เลือกไม่ได้อยู่ในลูกค้าของงานนี้");
         }
     }
 
@@ -1416,7 +1416,7 @@ public class PricingRequestService {
             Long sourceTicketItemId = item.sourceTicketItemId();
             if (sourceTicketItemId != null && !validItemIds.contains(sourceTicketItemId)) {
                 throw new ApiException(HttpStatus.BAD_REQUEST,
-                    "sourceTicketItemId " + sourceTicketItemId + " ไม่ได้เป็นของดีล " + ticketId);
+                    "sourceTicketItemId " + sourceTicketItemId + " ไม่ได้เป็นของงาน " + ticketId);
             }
         }
     }

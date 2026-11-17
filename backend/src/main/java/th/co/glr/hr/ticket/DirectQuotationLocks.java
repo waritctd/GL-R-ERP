@@ -9,7 +9,7 @@ public final class DirectQuotationLocks {
 
     /** Shown verbatim to the rep (409). Says what to do, not only what is wrong. */
     public static final String REFUSAL_MESSAGE =
-        "ดีลนี้มีใบเสนอราคาที่ยังใช้งานอยู่ — แก้ไขรายการที่ใบเสนอราคา หรือยกเลิกใบเสนอราคาก่อน";
+        "งานนี้มีใบเสนอราคาที่ยังใช้งานอยู่ — แก้ไขรายการที่ใบเสนอราคา หรือยกเลิกใบเสนอราคาก่อน";
 
     private DirectQuotationLocks() {}
 
@@ -27,7 +27,7 @@ public final class DirectQuotationLocks {
      * quotationMeta.LIVE_PRICING_REQUEST_BLOCK_MESSAGE, which disables บันทึกร่าง with it before the rep ever
      * reaches this refusal. */
     public static final String LIVE_PRICING_REQUEST_MESSAGE =
-        "ดีลนี้มีคำขอราคาที่ยังดำเนินการอยู่ — ใช้ใบเสนอราคาจากคำขอราคา หรือยกเลิกคำขอราคาก่อน";
+        "งานนี้มีคำขอราคาที่ยังดำเนินการอยู่ — ใช้ใบเสนอราคาจากคำขอราคา หรือยกเลิกคำขอราคาก่อน";
 
     /** One pricing route per deal, the REVERSE direction of #requireNoLiveDirectQuotation (owner ruling
      * 2026-09-30): 409 when ticketId has a live pricing request (TicketRepository#hasLivePricingRequest — any
@@ -41,7 +41,7 @@ public final class DirectQuotationLocks {
     /** N6's sentence, with the live quotation's number filled in — word for word the frontend's
      * quotationMeta.liveDirectQuotationBlockMessage. */
     public static String liveDirectQuotationMessage(String number) {
-        return "ดีลนี้มีใบเสนอราคาที่ใช้งานอยู่ (" + number + ") — แก้ไขฉบับนั้น หรือสร้างฉบับแก้ไขแทนการออกเลขใหม่";
+        return "งานนี้มีใบเสนอราคาที่ใช้งานอยู่ (" + number + ") — แก้ไขฉบับนั้น หรือสร้างฉบับแก้ไขแทนการออกเลขใหม่";
     }
 
     /**

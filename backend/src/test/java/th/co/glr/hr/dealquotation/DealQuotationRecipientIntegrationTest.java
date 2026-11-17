@@ -222,7 +222,7 @@ class DealQuotationRecipientIntegrationTest extends AbstractDealQuotationSlice2I
         ApiException e = refusal(() -> quotationService.update(draft.id(), draft("DESIGNER"), salesActor), HttpStatus.CONFLICT);
 
         assertThat(e.getMessage()).isEqualTo(
-            "ดีลนี้เป็นเจ้าของติดต่อโดยตรง — ขั้นที่ 4 ไม่อยู่ในเส้นทางของดีลนี้ — แก้ช่องทางดีลก่อน");
+            "งานนี้เป็นเจ้าของติดต่อโดยตรง — ขั้นที่ 4 ไม่อยู่ในเส้นทางของงานนี้ — แก้ช่องทางงานก่อน");
         assertThat(e.getMessage()).isEqualTo(DealRoute.refusalMessage(EntryChannel.OWNER_DIRECT, DealStage.QUOTE_DESIGN_SIDE));
         assertThat(recipientColumns(draft.id())).containsEntry("recipient_type", "OWNER");
         assertThat(summary(owner).salesStage()).isEqualTo(DealStage.QUOTE_OWNER);
@@ -232,8 +232,8 @@ class DealQuotationRecipientIntegrationTest extends AbstractDealQuotationSlice2I
         DealQuotationDto buyerDraft = quotationService.create(buyerDirect, draft("BUYER"), salesActor);
         for (String off : new String[] {"DESIGNER", "OWNER"}) {
             ApiException b = refusal(() -> quotationService.update(buyerDraft.id(), draft(off), salesActor), HttpStatus.CONFLICT);
-            assertThat(b.getMessage()).as(off).startsWith("ดีลนี้เป็นผู้ซื้อ/ผู้รับเหมาติดต่อโดยตรง — ขั้นที่ ");
-            assertThat(b.getMessage()).as(off).endsWith(" ไม่อยู่ในเส้นทางของดีลนี้ — แก้ช่องทางดีลก่อน");
+            assertThat(b.getMessage()).as(off).startsWith("งานนี้เป็นผู้ซื้อ/ผู้รับเหมาติดต่อโดยตรง — ขั้นที่ ");
+            assertThat(b.getMessage()).as(off).endsWith(" ไม่อยู่ในเส้นทางของงานนี้ — แก้ช่องทางงานก่อน");
         }
         assertThat(recipientColumns(buyerDraft.id())).containsEntry("recipient_type", "BUYER");
     }

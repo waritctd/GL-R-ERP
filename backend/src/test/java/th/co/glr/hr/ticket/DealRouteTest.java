@@ -156,13 +156,13 @@ class DealRouteTest {
         assertThat(owner).contains("เจ้าของติดต่อโดยตรง")
             .contains(DealRoute.stagePhrase(DealStage.QUOTE_DESIGN_SIDE))
             .doesNotContain(DealStage.QUOTE_DESIGN_SIDE)
-            .contains("แก้ช่องทางดีล");
+            .contains("แก้ช่องทางงาน");
 
         String buyer = DealRoute.refusalMessage(EntryChannel.BUYER_DIRECT, DealStage.AWAITING_BUYER);
         assertThat(buyer).contains("ผู้ซื้อ/ผู้รับเหมาติดต่อโดยตรง")
             .contains(DealRoute.stagePhrase(DealStage.AWAITING_BUYER))
             .doesNotContain(DealStage.AWAITING_BUYER)
-            .contains("แก้ช่องทางดีล");
+            .contains("แก้ช่องทางงาน");
 
         assertThat(owner).isNotEqualTo(buyer);
         assertThat(buyer).doesNotContain("เจ้าของติดต่อโดยตรง");

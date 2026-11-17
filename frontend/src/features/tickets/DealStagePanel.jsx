@@ -282,7 +282,7 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
   const canResume = hasAction('RESUME');
   const paused = lifecycle === 'ON_HOLD' || lifecycle === 'DORMANT';
   const canTender = hasAction('SET_TENDER_REQUIREMENT') && summary.salesStage === 'AWAITING_BUYER';
-  // "แก้ช่องทางดีล" is the remedy for a route refusal, not standing chrome (the ช่องทางรับงาน row is
+  // "แก้ช่องทางงาน" is the remedy for a route refusal, not standing chrome (the ช่องทางรับงาน row is
   // not on this panel). The server's own advertisement is handed down to the two places a refusal
   // is READ (the stepper's off-route rows, UpdateStageModal's blocked list), which render nothing
   // without it. Its `requiredFields` decides the reason field.

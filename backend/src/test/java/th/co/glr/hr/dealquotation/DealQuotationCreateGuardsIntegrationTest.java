@@ -41,7 +41,7 @@ class DealQuotationCreateGuardsIntegrationTest extends AbstractDealQuotationSlic
 
             assertThat(e.getMessage()).as(status).isEqualTo(DirectQuotationLocks.LIVE_PRICING_REQUEST_MESSAGE);
             assertThat(e.getMessage()).isEqualTo(
-                "ดีลนี้มีคำขอราคาที่ยังดำเนินการอยู่ — ใช้ใบเสนอราคาจากคำขอราคา หรือยกเลิกคำขอราคาก่อน");
+                "งานนี้มีคำขอราคาที่ยังดำเนินการอยู่ — ใช้ใบเสนอราคาจากคำขอราคา หรือยกเลิกคำขอราคาก่อน");
             assertThat(e.getDetails()).as("the one-route refusal carries no structured body").isEmpty();
             assertThat(quotationCount(ticket)).as(status).isZero();
         }
@@ -128,7 +128,7 @@ class DealQuotationCreateGuardsIntegrationTest extends AbstractDealQuotationSlic
         ApiException e = refusal(() -> quotationService.create(ticket, draft("DESIGNER"), salesActor),
             HttpStatus.CONFLICT);
 
-        assertThat(e.getMessage()).isEqualTo("ดีลนี้มีใบเสนอราคาที่ใช้งานอยู่ (" + first.number()
+        assertThat(e.getMessage()).isEqualTo("งานนี้มีใบเสนอราคาที่ใช้งานอยู่ (" + first.number()
             + ") — แก้ไขฉบับนั้น หรือสร้างฉบับแก้ไขแทนการออกเลขใหม่");
         assertThat(e.getDetails()).containsExactly(
             Map.entry("liveQuotationId", first.id()),
@@ -336,7 +336,7 @@ class DealQuotationCreateGuardsIntegrationTest extends AbstractDealQuotationSlic
     //    and owner; UNSPECIFIED / unknown has no route => allowed). BUYER -> QUOTE_BUYER is on EVERY route. ────
 
     private static final String OWNER_DIRECT_DESIGNER_SENTENCE =
-        "ดีลนี้เป็นเจ้าของติดต่อโดยตรง — ขั้นที่ 4 ไม่อยู่ในเส้นทางของดีลนี้ — แก้ช่องทางดีลก่อน";
+        "งานนี้เป็นเจ้าของติดต่อโดยตรง — ขั้นที่ 4 ไม่อยู่ในเส้นทางของงานนี้ — แก้ช่องทางงานก่อน";
 
     private void assertRouteRefused(long ticket, String recipient, String channel, String stage) {
         ApiException e = refusal(() -> quotationService.create(ticket, draft(recipient), salesActor), HttpStatus.CONFLICT);
@@ -378,7 +378,7 @@ class DealQuotationCreateGuardsIntegrationTest extends AbstractDealQuotationSlic
         assertRouteRefused(deal(salesActor, EntryChannel.BUYER_DIRECT), "OWNER", EntryChannel.BUYER_DIRECT,
             DealStage.QUOTE_OWNER);
         assertThat(DealRoute.refusalMessage(EntryChannel.BUYER_DIRECT, DealStage.QUOTE_OWNER))
-            .isEqualTo("ดีลนี้เป็นผู้ซื้อ/ผู้รับเหมาติดต่อโดยตรง — ขั้นที่ 5 ไม่อยู่ในเส้นทางของดีลนี้ — แก้ช่องทางดีลก่อน");
+            .isEqualTo("งานนี้เป็นผู้ซื้อ/ผู้รับเหมาติดต่อโดยตรง — ขั้นที่ 5 ไม่อยู่ในเส้นทางของงานนี้ — แก้ช่องทางงานก่อน");
 
         long buyer = deal(salesActor, EntryChannel.BUYER_DIRECT);
         assertThat(quotationService.create(buyer, draft("BUYER"), salesActor).recipientType()).isEqualTo("BUYER");

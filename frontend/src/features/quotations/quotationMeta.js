@@ -327,13 +327,13 @@ export function recipientForEntryChannel(entryChannel) {
 export const DEAD_PRICING_REQUEST_STATUSES = Object.freeze(new Set(['CANCELLED', 'SUPERSEDED']));
 
 export const LIVE_PRICING_REQUEST_BLOCK_MESSAGE =
-  'ดีลนี้มีคำขอราคาที่ยังดำเนินการอยู่ — ใช้ใบเสนอราคาจากคำขอราคา หรือยกเลิกคำขอราคาก่อน';
+  'งานนี้มีคำขอราคาที่ยังดำเนินการอยู่ — ใช้ใบเสนอราคาจากคำขอราคา หรือยกเลิกคำขอราคาก่อน';
 
 // A revision keeps its parent's recipient. The editor's picker hint and the 409
 // DealQuotationService#update / mockApi return are ONE sentence; the 409 names the stored party
 // between the two halves, the hint does not.
 const REVISION_RECIPIENT_LOCKED_HEAD = 'ฉบับแก้ไขต้องส่งถึงผู้รับเดิม';
-const REVISION_RECIPIENT_LOCKED_TAIL = 'หากจะเสนอราคาให้ผู้รับรายอื่น ให้สร้างใบเสนอราคาใหม่บนดีลนี้';
+const REVISION_RECIPIENT_LOCKED_TAIL = 'หากจะเสนอราคาให้ผู้รับรายอื่น ให้สร้างใบเสนอราคาใหม่บนงานนี้';
 export const REVISION_RECIPIENT_LOCKED_MESSAGE =
   `${REVISION_RECIPIENT_LOCKED_HEAD} — ${REVISION_RECIPIENT_LOCKED_TAIL}`;
 export const revisionRecipientRefusal = (storedLabel) =>
@@ -417,7 +417,7 @@ export function blocksNewDirectQuotation(live, recipientType, dealStatus = 'draf
 /** N6's reason, word for word the server's 409: the editor disables บันทึกร่าง with it BEFORE the rep
  * reaches that refusal (DESIGN.md §14: a disabled action says why). */
 function liveDirectQuotationBlockMessage(live) {
-  return `ดีลนี้มีใบเสนอราคาที่ใช้งานอยู่ (${live?.number ?? '-'}) — แก้ไขฉบับนั้น หรือสร้างฉบับแก้ไขแทนการออกเลขใหม่`;
+  return `งานนี้มีใบเสนอราคาที่ใช้งานอยู่ (${live?.number ?? '-'}) — แก้ไขฉบับนั้น หรือสร้างฉบับแก้ไขแทนการออกเลขใหม่`;
 }
 
 /** The confirm-order dialog copy for an APPROVED direct quotation (the promote endpoint), shared by

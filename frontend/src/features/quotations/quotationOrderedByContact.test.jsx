@@ -309,7 +309,7 @@ describe('ผู้ติดต่อ — what the editor saves', () => {
     fireEvent.mouseDown(await screen.findByRole('option', { name: new RegExp(PROJECT.name) }));
     // A new deal's recipient and a real ช่องทางรับงาน gate บันทึกร่าง.
     fireEvent.click(screen.getByRole('radio', { name: 'ผู้ออกแบบ' }));
-    fireEvent.click(screen.getByRole('button', { name: /ผู้ออกแบบนำดีล/ }));
+    fireEvent.click(screen.getByRole('button', { name: /ผู้ออกแบบนำงานมา/ }));
     // The picker lists the contacts of the customer just chosen, before any deal exists.
     await pickContact('สมชาย');
     expect(api.customers.contacts).toHaveBeenCalledWith(CUSTOMER.id);

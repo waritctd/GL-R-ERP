@@ -399,7 +399,7 @@ describe('files picked before the first บันทึกร่าง', () => {
     fireEvent.mouseDown(await screen.findByRole('option', { name: new RegExp(project.name) }));
     // Slice 2 (S2-B1) + #1085: a new deal's recipient and a real ช่องทางรับงาน gate บันทึกร่าง.
     fireEvent.click(screen.getByRole('radio', { name: 'ผู้ออกแบบ' }));
-    fireEvent.click(screen.getByRole('button', { name: /ผู้ออกแบบนำดีล/ }));
+    fireEvent.click(screen.getByRole('button', { name: /ผู้ออกแบบนำงานมา/ }));
   }
 
   const pick = (...files) => files.forEach((file) => fireEvent.change(attachInput(), { target: { files: [file] } }));

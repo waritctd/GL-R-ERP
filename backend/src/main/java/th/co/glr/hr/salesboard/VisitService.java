@@ -114,7 +114,7 @@ public class VisitService {
         if (request.ticketId() != null) {
             TicketSummaryDto deal = tickets.requireDealWriteAccess(request.ticketId(), actor);
             if (!DealLifecycle.ACTIVE.equals(deal.lifecycle())) {
-                throw new ApiException(HttpStatus.BAD_REQUEST, "ดีลนี้ไม่ได้เปิดอยู่ จึงนัดเข้าพบในดีลนี้ไม่ได้");
+                throw new ApiException(HttpStatus.BAD_REQUEST, "งานนี้ไม่ได้เปิดอยู่ จึงนัดเข้าพบในงานนี้ไม่ได้");
             }
         }
         if (done) {

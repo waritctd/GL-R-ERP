@@ -87,7 +87,7 @@ public class PipelineImportService {
     static final String STAGE_NOTE = "นำเข้าจากไฟล์ pipeline";
     static final String FILL_NOTE = "เติมข้อมูลจากไฟล์ pipeline: ";
     static final String NEEDS_DOCUMENT =
-        "ดีลที่ได้มัดจำ/ส่งของแล้ว ต้องบันทึกผ่านเอกสารจริง (ใบแจ้งมัดจำ/IR) ไม่นำเข้าจากชีท";
+        "งานที่ได้มัดจำ/ส่งของแล้ว ต้องบันทึกผ่านเอกสารจริง (ใบแจ้งมัดจำ/IR) ไม่นำเข้าจากชีท";
     static final String NEEDS_CUSTOMER = "ต้องมีผู้ซื้อหรือเจ้าของโครงการ";
 
     /** The app's stage-fact gate for the deal the import is about to create: a brand-new deal has no payment track,
@@ -241,7 +241,7 @@ public class PipelineImportService {
                 if (found.isEmpty()) {
                     p.error("ไม่พบพนักงานขาย '" + repText + "' — ใช้รหัสพนักงานหรืออีเมลในระบบ");
                 } else if (!found.get().eligible()) {
-                    p.error("'" + repText + "' ไม่ใช่พนักงานขาย — ดีลต้องเป็นของพนักงานขาย");
+                    p.error("'" + repText + "' ไม่ใช่พนักงานขาย — งานต้องเป็นของพนักงานขาย");
                 } else {
                     rep = found.get();
                     p.repId = rep.employeeId();
@@ -297,7 +297,7 @@ public class PipelineImportService {
                 }
             }
             if (earlier != null) {
-                p.error("ซ้ำกับแถว " + earlier + " — ดีลเดียวกันอยู่ในไฟล์สองครั้ง");
+                p.error("ซ้ำกับแถว " + earlier + " — งานเดียวกันอยู่ในไฟล์สองครั้ง");
             }
             if (p.failed()) {
                 p.action = PipelineImportDtos.SKIP;
@@ -313,13 +313,13 @@ public class PipelineImportService {
                 List<String> closed = closedMatches(lookups.deals(rep.employeeId()), bases, p.project);
                 if (!closed.isEmpty()) {
                     // H3: only ACTIVE deals are matched; a row that only finds a closed/lost deal is never re-created.
-                    p.error("ดีลนี้ปิดหรือเสียงานไปแล้ว (" + String.join(", ", closed) + ")");
+                    p.error("งานนี้ปิดหรือเสียงานไปแล้ว (" + String.join(", ", closed) + ")");
                     p.action = PipelineImportDtos.SKIP;
                     continue;
                 }
             }
             if (matches.size() > 1) {
-                p.error("ตรงกับหลายดีลในระบบ (" + String.join(", ", matches.stream()
+                p.error("ตรงกับหลายงานในระบบ (" + String.join(", ", matches.stream()
                     .map(d -> d.deal().code()).toList()) + ") — รวมหรือแก้ในระบบก่อน");
                 p.action = PipelineImportDtos.SKIP;
                 continue;
@@ -328,14 +328,14 @@ public class PipelineImportService {
                 OwnerDeal d = matches.get(0);
                 Integer otherRow = seenDeal.putIfAbsent(d.deal().ticketId(), p.row);
                 if (otherRow != null) {
-                    p.error("ซ้ำกับแถว " + otherRow + " — ตรงกับดีล " + d.deal().code() + " เดียวกัน");
+                    p.error("ซ้ำกับแถว " + otherRow + " — ตรงกับงาน " + d.deal().code() + " เดียวกัน");
                     p.action = PipelineImportDtos.SKIP;
                     continue;
                 }
                 List<String> theirs = d.quotationBases();
                 if (!bases.isEmpty() && !theirs.isEmpty() && theirs.stream().noneMatch(bases::contains)) {
-                    p.warn("เลขที่ใบเสนอราคาไม่ตรงกับดีล " + d.deal().code() + " (ในระบบ " + String.join(", ", theirs)
-                        + ") — ถือเป็นดีลเดียวกันตามชื่อโครงการ");
+                    p.warn("เลขที่ใบเสนอราคาไม่ตรงกับงาน " + d.deal().code() + " (ในระบบ " + String.join(", ", theirs)
+                        + ") — ถือเป็นงานเดียวกันตามชื่อโครงการ");
                 }
                 planUpdate(p, d.deal(), code.value());
                 continue;
@@ -438,13 +438,13 @@ public class PipelineImportService {
         compare(f.importedQuotationNo(), d.importedQuotationNo(), "เลขที่ใบเสนอราคา", changes, new ArrayList<>());
         compare(f.note(), d.note(), "หมายเหตุ", changes, new ArrayList<>());
         if (fileCode != null && !fileCode.equals(p.repCode)) {
-            p.warn("สถานะในไฟล์ " + fileCode + " ต่างจากในระบบ " + p.repCode + " — ไม่เปลี่ยนสถานะดีลที่มีอยู่");
+            p.warn("สถานะในไฟล์ " + fileCode + " ต่างจากในระบบ " + p.repCode + " — ไม่เปลี่ยนสถานะงานที่มีอยู่");
         }
         if (!kept.isEmpty()) {
             p.warn("คงค่าเดิมในระบบ: " + String.join(", ", kept));
         }
         if (!DealLifecycle.ACTIVE.equals(d.lifecycle())) {
-            p.warn("ดีล " + d.code() + " ไม่ได้อยู่ระหว่างดำเนินการ (" + d.lifecycle() + ")");
+            p.warn("งาน " + d.code() + " ไม่ได้อยู่ระหว่างดำเนินการ (" + d.lifecycle() + ")");
         }
         p.changes = List.copyOf(changes);
         p.action = changes.isEmpty() ? PipelineImportDtos.UNCHANGED : PipelineImportDtos.UPDATE;

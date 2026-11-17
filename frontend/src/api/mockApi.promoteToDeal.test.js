@@ -3,7 +3,7 @@ import { api } from './mockApi.js';
 
 // Checks mock quotation-to-deal promotion and the live-direct-quotation locks retained by the backend.
 
-const LOCK_REFUSAL = 'ดีลนี้มีใบเสนอราคาที่ยังใช้งานอยู่ — แก้ไขรายการที่ใบเสนอราคา หรือยกเลิกใบเสนอราคาก่อน';
+const LOCK_REFUSAL = 'งานนี้มีใบเสนอราคาที่ยังใช้งานอยู่ — แก้ไขรายการที่ใบเสนอราคา หรือยกเลิกใบเสนอราคาก่อน';
 
 const TILE = {
   brand: 'SCG', model: 'Trilogy', color: 'Ash', texture: 'Matt', sizeText: '60x60', thicknessMm: 10,

@@ -368,7 +368,7 @@ describe('mockApi dealQuotations.createFromPricingRequest after an outcome — t
 
     await expect(api.dealQuotations.createFromPricingRequest(designer.prId)).rejects.toMatchObject({
       status: 409,
-      message: 'คำขอราคานี้ถูกแทนที่ด้วยใบเสนอราคาฉบับใหม่ของดีลแล้ว — ออกใบเสนอราคาจากคำขอราคาล่าสุด หรือสร้างคำขอราคาใหม่',
+      message: 'คำขอราคานี้ถูกแทนที่ด้วยใบเสนอราคาฉบับใหม่ของงานแล้ว — ออกใบเสนอราคาจากคำขอราคาล่าสุด หรือสร้างคำขอราคาใหม่',
     });
   }, 20000);
 });

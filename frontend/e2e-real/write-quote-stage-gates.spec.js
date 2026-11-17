@@ -18,7 +18,7 @@ const SHOTS = process.env.E2E_SHOTS_DIR
 
 const STAGE_MESSAGE = 'อัตโนมัติจากขั้นตอนของดีล';
 const REFUSED = /เลื่อนไปขั้นตอน .*ไม่ได้: ยังไม่มีใบเสนอราคาถึง/;
-const REVISION_HINT = 'ฉบับแก้ไขต้องส่งถึงผู้รับเดิม — หากจะเสนอราคาให้ผู้รับรายอื่น ให้สร้างใบเสนอราคาใหม่บนดีลนี้';
+const REVISION_HINT = 'ฉบับแก้ไขต้องส่งถึงผู้รับเดิม — หากจะเสนอราคาให้ผู้รับรายอื่น ให้สร้างใบเสนอราคาใหม่บนงานนี้';
 const LABEL = { DESIGNER: 'ผู้ออกแบบ', OWNER: 'เจ้าของโครงการ', BUYER: 'ผู้ซื้อ / ผู้รับเหมา' };
 
 test.describe.serial('quote stage gates + versioning — real browser walk', () => {
@@ -372,7 +372,7 @@ test.describe.serial('quote stage gates + versioning — real browser walk', () 
     await page.getByRole('option', { name: new RegExp(c2.name) }).first().click();
     await page.locator('#deal-project').click();
     await page.getByRole('option', { name: new RegExp(`โครงการ ${tag} born`) }).first().click();
-    await page.getByRole('button', { name: 'ผู้ออกแบบนำดีล' }).click();
+    await page.getByRole('button', { name: 'ผู้ออกแบบนำงานมา' }).click();
     await page.locator('#quotation-recipient-OWNER').click();
     await fillTileLine(page);
     await shot(page, '08-born-editor');
@@ -390,7 +390,7 @@ test.describe.serial('quote stage gates + versioning — real browser walk', () 
   test('9. off-route recipient: the pill is disabled with the route sentence, and the API refuses it 409', async () => {
     const deal = await newDeal('C-offroute', 'OWNER_DIRECT');
     const page = salesPage;
-    const sentence = 'ดีลนี้เป็นเจ้าของติดต่อโดยตรง — ขั้นที่ 4 ไม่อยู่ในเส้นทางของดีลนี้ — แก้ช่องทางดีลก่อน';
+    const sentence = 'งานนี้เป็นเจ้าของติดต่อโดยตรง — ขั้นที่ 4 ไม่อยู่ในเส้นทางของงานนี้ — แก้ช่องทางงานก่อน';
     await page.goto(`/quotations/new?ticket=${deal}`);
     // The designer has no place on an owner-direct route: its pill is disabled and says why; the pre-select is
     // the channel's own party (the owner), never the off-route one.

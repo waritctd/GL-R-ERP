@@ -583,7 +583,7 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
     onError,
   });
   const completeDeliveryMutation = useMutation({
-    mutationFn: () => api.tickets.completeDelivery(ticketId, { note: 'ส่งมอบครบจากหน้าดีล' }),
+    mutationFn: () => api.tickets.completeDelivery(ticketId, { note: 'ส่งมอบครบจากหน้ารายละเอียดงาน' }),
     onSuccess: () => { showToast?.('success', 'ส่งมอบครบแล้ว'); invalidateAfterFulfilmentChange(); },
     onError,
   });
