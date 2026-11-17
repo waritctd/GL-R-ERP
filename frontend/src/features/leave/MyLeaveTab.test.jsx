@@ -242,6 +242,45 @@ describe('MyLeaveTab balances: one primary card + a single disclosure (owner fee
     expect(progressBar).not.toBeNull();
     expect(progressBar.getAttribute('aria-valuenow')).toBe('88');
   });
+
+  // The card names each entitlement year's remaining days whenever days were carried in, including
+  // after the carried days are spent (feedback #1: the breakdown vanished once the old year hit zero).
+  describe('per-year vacation breakdown', () => {
+    const vacation = (overrides) => ({
+      balances: [{
+        leaveTypeCode: 'VACATION', leaveTypeNameTh: 'ลาพักร้อน', annualQuotaDays: 6, approvedDays: 4, pendingDays: 0,
+        remainingDays: 6, carriedInDays: 4, carriedInFromYear: 2025, carriedInRemainingDays: 0, ownQuotaRemainingDays: 6,
+        ...overrides,
+      }],
+    });
+    const cardText = async () => {
+      renderMyLeaveTab();
+      const card = await screen.findByTestId('primary-balance-card');
+      await waitFor(() => expect(card.textContent).toMatch(/ลาพักร้อน/));
+      return card.textContent;
+    };
+
+    it('says the carried year is used up and how much of this year is left', async () => {
+      api.leave.balances.mockResolvedValue(vacation());
+      const text = await cardText();
+      expect(text).toMatch(/สิทธิ์ปี 2568 ใช้หมดแล้ว/);
+      expect(text).toMatch(/สิทธิ์ปี 2569 เหลือ 6\u00A0วัน/);
+    });
+
+    it('shows the days left in each year while carried days remain', async () => {
+      api.leave.balances.mockResolvedValue(vacation({ approvedDays: 2, remainingDays: 8, carriedInRemainingDays: 2 }));
+      const text = await cardText();
+      expect(text).toMatch(/สิทธิ์ปี 2568 เหลือ 2\u00A0วัน/);
+      expect(text).toMatch(/สิทธิ์ปี 2569 เหลือ 6\u00A0วัน/);
+    });
+
+    it('shows no per-year line when nothing was carried in', async () => {
+      api.leave.balances.mockResolvedValue(vacation({
+        approvedDays: 0, carriedInDays: 0, carriedInFromYear: null, carriedInRemainingDays: 0,
+      }));
+      expect(await cardText()).not.toMatch(/สิทธิ์ปี/);
+    });
+  });
 });
 
 describe('MyLeaveTab own-request table: the three state-defect fixes (Phase A1)', () => {

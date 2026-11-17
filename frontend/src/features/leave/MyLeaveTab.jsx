@@ -60,6 +60,16 @@ function everydayBalanceSummary(balance) {
   return `ใช้แล้ว ${formatDays(balance.approvedDays)} · รออนุมัติ ${formatDays(balance.pendingDays)} · สิทธิ์ ${formatDays(balance.annualQuotaDays)}${carryNote} · เหลือ ${formatDays(balance.remainingDays)}`;
 }
 
+// Each entitlement year's remaining days, shown whenever days were carried in, so a spent carry-over
+// still reads as "used up" instead of the year disappearing. Null when nothing was carried in.
+function yearBreakdown(balance) {
+  if (!(Number(balance.carriedInDays || 0) > 0) || balance.carriedInFromYear == null) return null;
+  const fromYearBe = Number(balance.carriedInFromYear) + 543;
+  const carriedLeft = Number(balance.carriedInRemainingDays || 0);
+  const carried = carriedLeft > 0 ? `เหลือ ${formatDays(carriedLeft)}` : 'ใช้หมดแล้ว';
+  return `สิทธิ์ปี ${fromYearBe} ${carried} · สิทธิ์ปี ${fromYearBe + 1} เหลือ ${formatDays(balance.ownQuotaRemainingDays)}`;
+}
+
 // Deliberately never reads balance.annualQuotaDays/remainingDays -- see rareLeaveConditionText's comment above
 // on why (MILITARY's 366 sentinel).
 function rareBalanceSummary(balance, leaveType) {
@@ -155,6 +165,9 @@ function PrimaryLeaveBalanceCard({ loading, balance, leaveType, isEveryday }) {
         </>
       ) : null}
       <small className="mt-1 block text-sm text-text-muted">{summary}</small>
+      {isEveryday && yearBreakdown(balance) ? (
+        <small className="block text-sm text-text-muted">{yearBreakdown(balance)}</small>
+      ) : null}
     </div>
   );
 }
