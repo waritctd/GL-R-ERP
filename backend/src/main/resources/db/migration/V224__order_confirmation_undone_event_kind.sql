@@ -1,4 +1,4 @@
--- V223: ORDER_CONFIRMATION_UNDONE, the ticket event DealQuotationService#undoOrderConfirmation writes when a rep takes
+-- V224: ORDER_CONFIRMATION_UNDONE, the ticket event DealQuotationService#undoOrderConfirmation writes when a rep takes
 -- back an order confirmation. Full re-declaration of chk_event_kind: V208's list (verified against the live schema; every
 -- other kind in TicketEventKind is notification-only and never reaches ticket_event) plus the new kind. The re-declaration
 -- is ADD ... NOT VALID then VALIDATE CONSTRAINT as a second statement (V147's idiom). Flyway runs the file in one

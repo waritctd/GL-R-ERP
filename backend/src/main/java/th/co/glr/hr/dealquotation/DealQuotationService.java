@@ -1864,7 +1864,7 @@ public class DealQuotationService {
      * {@code quotation_issued -> draft}, {@code payment_status} NULL, {@code sales_stage} back to the {@code from} of
      * the earliest automatic stage move after the promotion (unchanged if none), {@code stage_updated_at} to the time of
      * the last earlier stage move (best effort: left alone if there was none), fulfilment NULL if it was FROM_STOCK;
-     * the party AWARDED goes back to the status and not-awarded reason it had before (V223; QUOTED if none was remembered); the confirmation's events are DELETED (promotion, CUSTOMER_CONFIRMED,
+     * the party AWARDED goes back to the status and not-awarded reason it had before (V224; QUOTED if none was remembered); the confirmation's events are DELETED (promotion, CUSTOMER_CONFIRMED,
      * its automatic stage moves, its system POLICY_CHANGED: SQL readers treat the promotion event's existence as
      * "order confirmed"; the auto-cancel CANCELLED events stay); ONE {@code ORDER_CONFIRMATION_UNDONE} event records
      * who had confirmed and when, the reason, and a deleted draft deposit notice. NO notification of any kind.
