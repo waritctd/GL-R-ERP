@@ -37,6 +37,8 @@ function parseFactoryNames(message, prefix) {
 // (ImportRequestService's dry run of createDrafts' split, ImportRequestSplitPreview); this only words it. The
 // lead time reads like ImportRequestFactoryCard's "ระยะเวลานำเข้า min–max วัน".
 const LEAD_TIME_SOURCE_LABEL = { QUOTATION: 'ตามใบเสนอราคา', COUNTRY_DEFAULT: 'ค่าเริ่มต้นของประเทศ' };
+// The unplaced-lines warning doubles as the disabled confirm's stated reason (aria-describedby), fix round L5.
+const IR_UNPLACED_REASON_ID = 'ir-confirm-unplaced-reason';
 
 function irPreviewLeadLine(factory) {
   if (factory.leadTimeMinDays != null && factory.leadTimeMaxDays != null) {
@@ -96,7 +98,7 @@ function IrSplitPreview({ preview }) {
         </>
       ) : null}
       {unplaced.length > 0 ? (
-        <DialogCallout tone="warn" testId="ir-confirm-unplaced">
+        <DialogCallout tone="warn" testId="ir-confirm-unplaced" id={IR_UNPLACED_REASON_ID}>
           {`${unplaced.length} รายการยังไม่มีโรงงาน — ออกใบขอซื้อไม่ได้จนกว่าจะระบุโรงงาน: ${unplaced
             .map((l) => {
               const label = l.code || `รายการ ${l.ticketItemId}`;
@@ -764,6 +766,9 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
   // Slice 6c: the server's dry run of the split, already including the picks (they went with the read). When it is
   // there it is the whole answer — nothing is added to it by name on this side.
   const splitPreview = coverageQuery.isError ? null : (coverageQuery.data?.splitPreview ?? null);
+  // Fix round L5: the warning says the IR cannot be issued while a line has no factory, so the button agrees. The
+  // server's 409 (ImportRequestService#resolveFactoryGroups) stays the backstop.
+  const hasUnplacedLines = (splitPreview?.linesWithoutFactory?.length ?? 0) > 0;
   const coverageLoading = coverageQuery.isFetching;
   // Drawing m-ir (2026-11-16): "N โรงงาน" and a โรงงาน table. The factories are the same `confirmNames` the old
   // one-line confirm named (the server's coverage names plus the rep's picks). The drawing's per-factory รายการ count
@@ -1380,7 +1385,8 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
         message={createConfirmMessage}
         confirmLabel="ออกใบขอซื้อ"
         busy={createDraftsMutation.isPending}
-        confirmDisabled={coverageLoading || allFactoriesCovered}
+        confirmDisabled={coverageLoading || allFactoriesCovered || hasUnplacedLines}
+        confirmDescribedBy={!coverageLoading && hasUnplacedLines ? IR_UNPLACED_REASON_ID : undefined}
         // Close first: a second click on the open dialog would send twice.
         onConfirm={() => { setConfirmingCreate(false); createDraftsMutation.mutate(buildCreatePayload()); }}
         onCancel={() => setConfirmingCreate(false)}

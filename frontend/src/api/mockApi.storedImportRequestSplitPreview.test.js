@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { api } from './mockApi.js';
+import { addLiveDirectQuotationForTests, api } from './mockApi.js';
 
 // Slice 6c: the mock's coverage `splitPreview` — PLUMBING coverage only. The mock places lines with the SAME
 // simplified cascade its own createDrafts uses (mockSplitFactoryCandidates, shared with mockResolveFactoryGroups),
@@ -48,6 +48,7 @@ describe('mockApi storedImportRequests.coverage — splitPreview (slice 6c)', ()
 
   it('applies an unsaved pick in memory only: the line joins the picked factory and the deal line keeps no factory', async () => {
     const { ticketId, freeLineId } = await ownedDealWithMixedLines();
+    addLiveDirectQuotationForTests(ticketId); // the picker exists only on such a deal (fix round L1)
 
     const { splitPreview } = await api.storedImportRequests.coverage(ticketId, [{ ticketItemId: freeLineId, factoryId: 11 }]);
 
@@ -58,6 +59,15 @@ describe('mockApi storedImportRequests.coverage — splitPreview (slice 6c)', ()
     expect(ticket.items.find((i) => i.id === freeLineId).factory ?? null).toBeNull();
     const names = (await api.factoryConfigs.names()).factories.map((f) => f.factoryName);
     expect(names).not.toContain(`Mock New Co ${n}`);
+  });
+
+  it('fix round L1: a pick on a deal with no live direct quotation (no picker on screen) is ignored', async () => {
+    const { ticketId, freeLineId } = await ownedDealWithMixedLines();
+    const without = await api.storedImportRequests.coverage(ticketId);
+
+    const withPick = await api.storedImportRequests.coverage(ticketId, [{ ticketItemId: freeLineId, factoryId: 11 }]);
+
+    expect(withPick.splitPreview).toEqual(without.splitPreview);
   });
 
   it('import and sales_manager read the covered flag but get no preview (mirrors the Java gate; not evidence of it)', async () => {

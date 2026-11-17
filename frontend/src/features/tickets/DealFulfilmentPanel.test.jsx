@@ -1505,7 +1505,9 @@ describe('DealFulfilmentPanel — ยืนยันออกใบขอซื�
       .toBe('ยังไม่มีระยะเวลานำเข้า · จะให้เลือกประเทศของโรงงานก่อนออก');
   });
 
-  it('a line the split cannot place is a warning row naming it, and the confirm button still sends the same request', async () => {
+  // Fix round L5: the warning says the IR cannot be issued, so the button agrees — disabled, described by the warning.
+  // The server's 409 stays the backstop; this only stops the button contradicting the copy beside it.
+  it('a line the split cannot place disables ออกใบขอซื้อ, with the warning as its stated reason, and sends nothing', async () => {
     renderPanel(OWNER, [], {
       hasUncoveredFactories: true,
       uncoveredFactoryNames: ['Cotto Industry'],
@@ -1522,9 +1524,21 @@ describe('DealFulfilmentPanel — ยืนยันออกใบขอซื�
     expect(within(dialog).getByTestId('ir-confirm-unplaced').textContent)
       .toBe('2 รายการยังไม่มีโรงงาน — ออกใบขอซื้อไม่ได้จนกว่าจะระบุโรงงาน: Free Text One (10x10 cm), Grout');
     expect(within(dialog).getByTestId('ir-confirm-unplaced').getAttribute('role')).toBe('note');
-    fireEvent.click(within(dialog).getByRole('button', { name: 'ออกใบขอซื้อ' }));
-    await waitFor(() => expect(api.storedImportRequests.createDrafts).toHaveBeenCalledTimes(1));
-    expect(api.storedImportRequests.createDrafts.mock.calls).toEqual([[1, undefined]]);
+    const confirm = within(dialog).getByRole('button', { name: 'ออกใบขอซื้อ' });
+    expect(confirm.disabled).toBe(true);
+    const reasonId = confirm.getAttribute('aria-describedby');
+    expect(reasonId).toBeTruthy();
+    expect(document.getElementById(reasonId)).toBe(within(dialog).getByTestId('ir-confirm-unplaced'));
+    fireEvent.click(confirm);
+    await act(async () => {});
+    expect(api.storedImportRequests.createDrafts).not.toHaveBeenCalled();
+  });
+
+  it('every line placed: ออกใบขอซื้อ stays enabled and carries no disabled reason', async () => {
+    renderPanel(OWNER, [], { hasUncoveredFactories: true, uncoveredFactoryNames: NAMES, splitPreview: PREVIEW });
+    const confirm = within(await openIrConfirm()).getByRole('button', { name: 'ออกใบขอซื้อ' });
+    expect(confirm.disabled).toBe(false);
+    expect(confirm.getAttribute('aria-describedby')).toBeNull();
   });
 
   it('asks the server with the rep\'s unsaved factory pick, and shows the server\'s split instead of adding the pick by name', async () => {

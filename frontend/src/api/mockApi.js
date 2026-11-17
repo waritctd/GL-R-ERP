@@ -2869,7 +2869,10 @@ function mockSplitPreview(ticket, user, itemFactories) {
   const mayIssue = user.role === 'ceo' || (user.role === 'sales' && isOwnerOrKeyer(ticket, user.id));
   if (!mayIssue) return null;
   const picked = new Map();
-  for (const choice of itemFactories ?? []) {
+  // Fix round L1 — mirrors ImportRequestService#splitPreview: picks count only on a deal whose confirm shows the
+  // picker (a live direct quotation, DealFulfilmentPanel's factorylessLines condition).
+  const pickerShown = mockLiveDirectQuotation(ticket.id) != null;
+  for (const choice of pickerShown ? (itemFactories ?? []) : []) {
     const name = mockItemFactoryChoice(ticket, choice, false);
     if (name && !picked.has(Number(choice.ticketItemId))) picked.set(Number(choice.ticketItemId), name);
   }
@@ -4817,6 +4820,17 @@ function mockLivePartyDirectQuotation(ticketId, partyId) {
   return live
     ? { id: live.id, number: live.number, docStatus: live.docStatus, recipientType: live.recipientType ?? 'UNSPECIFIED' }
     : null;
+}
+
+/** TEST-ONLY seam — not part of `api`. Adds a bare live (APPROVED) DEAL_DIRECT quotation row to a deal, the state in
+ * which the IR confirm shows its factory picker (slice 6c fix round L1). No items, so it carries no lead time. */
+export function addLiveDirectQuotationForTests(ticketId) {
+  const id = Math.max(0, ...mockDealQuotations.map((q) => Number(q.id) || 0)) + 1;
+  mockDealQuotations.push({
+    id, ticketId: Number(ticketId), origin: 'DEAL_DIRECT', docStatus: 'APPROVED', number: `QT-TEST-${id}`,
+    recipientType: 'OWNER', items: [],
+  });
+  return id;
 }
 
 function mockLiveDirectQuotation(ticketId) {
