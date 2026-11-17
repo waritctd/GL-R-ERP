@@ -10,7 +10,7 @@ import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { bangkokTodayIso, formatMoney, formatThaiDate, PAYMENT_KIND_LABEL } from '../../utils/format.js';
 import { ACTIVITY_KINDS, activityKindLabel } from './dealTrackingMeta.js';
 import { showsPlannedVisits, TIMELINE_FILTERS, timelineRowMatches } from './dealTimeline.js';
-import { shortDayLabel, timeLabel } from '../salesBoard/visitWeek.js';
+import { shortDayLabel, timeLabel, weekStartIso } from '../salesBoard/visitWeek.js';
 import { CANCEL_REASON_LABEL, LOST_REASON_F_CODE, LOST_REASON_LABEL } from './stageMeta.js';
 import { ThaiDateInput } from '../../components/common/ThaiDateInput.jsx';
 
@@ -210,7 +210,8 @@ function ActivityRow({ activity }) {
 /**
  * Slice 6.5 (prototype screen D): one PLANNED visit on this deal, above the dated history — it is what happens next,
  * not something that happened. A dashed card with นัดไว้ (or เลยวันนัด once its day has passed unticked), who is being
- * met, when, by whom, and the purpose. With `href` the whole card opens the นัดเข้าพบ page, where it is ticked.
+ * met, when, by whom, and the purpose. With `href` the whole card opens the นัดเข้าพบ page on the week holding the
+ * visit (`?week=<Monday>`), where it is ticked.
  */
 function PlannedVisitRow({ visit, todayIso, href }) {
   const overdue = visit.plannedDate < todayIso;
@@ -233,7 +234,7 @@ function PlannedVisitRow({ visit, todayIso, href }) {
     <li data-testid="timeline-planned-visit" className={href ? '' : card}>
       {href ? (
         <Link
-          to={href}
+          to={`${href}?week=${weekStartIso(visit.plannedDate)}`}
           className={`${card} min-h-11 no-underline transition-colors hover:border-primary hover:bg-surface-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary`}
         >
           {body}

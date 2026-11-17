@@ -32,7 +32,7 @@ const visit = (over) => ({
 
 const thisWeek = [
   visit({ id: 1, contactName: 'อรุณ อาร์คิเทค', plannedDate: '2026-11-10', status: 'DONE', note: 'เทียบสเปค' }),
-  visit({ id: 2, contactName: 'Linea Interior', plannedTime: '14:00:00', ticketId: 31,
+  visit({ id: 2, contactName: 'Linea Interior', plannedTime: '14:00:00', ticketId: 31, dealFollowUpOpen: true,
     ticketTitle: 'สยามพารากอน · ห้องน้ำชั้น 3', note: 'ตามใบเสนอราคา' }),
   visit({ id: 3, contactName: 'Studio Nomad', plannedDate: '2026-11-10', status: 'CANCELLED' }),
   visit({ id: 4, contactName: 'ก้าวหน้า คอนสตรัคชั่น', plannedDate: '2026-11-13' }),
@@ -60,11 +60,11 @@ const team = {
 
 const sales = { id: 6, role: 'sales', employeeId: 6, name: 'คุณสมหมาย ขายดี' };
 
-function renderPage(user = sales, showToast = vi.fn()) {
+function renderPage(user = sales, showToast = vi.fn(), url = '/visits') {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={client}>
-      <MemoryRouter><VisitsPage user={user} showToast={showToast} /></MemoryRouter>
+      <MemoryRouter initialEntries={[url]}><VisitsPage user={user} showToast={showToast} /></MemoryRouter>
     </QueryClientProvider>,
   );
 }
@@ -200,6 +200,18 @@ describe('VisitsPage — a sales rep\'s own week', () => {
     expect(api.salesVisits.done.mock.calls[1]).toStrictEqual([2, { note: undefined }]);
   });
 
+  // Fix round 1 (review LOW): the deal page's planned-visit link opens the week holding that visit.
+  it('?week=<any day> opens the week containing that day; a malformed one opens this week', async () => {
+    renderPage(sales, vi.fn(), '/visits?week=2026-11-19');
+    expect(await screen.findByText('16–22 พ.ย.')).toBeTruthy();
+    await waitFor(() => expect(api.salesVisits.list).toHaveBeenCalledWith({ from: '2026-11-16', to: '2026-11-22' }));
+  });
+
+  it('a malformed ?week= is ignored', async () => {
+    renderPage(sales, vi.fn(), '/visits?week=not-a-date');
+    expect(await screen.findByText('สัปดาห์นี้ · 9–15 พ.ย.')).toBeTruthy();
+  });
+
   it('a tick on a งาน that has moved to someone else says so, in งาน wording', async () => {
     const showToast = vi.fn();
     api.salesVisits.done.mockResolvedValue(visit({ id: 2, status: 'DONE', dealMovedToName: 'คุณอรุณี', dealMoved: true }));
@@ -303,4 +315,11 @@ describe('VisitsPage — sales_manager and ceo see the team week', () => {
       expect(pageText(container)).not.toMatch(/ดีล/);
     });
   }
+
+  it('?week= opens the team grid on the week containing that day', async () => {
+    renderPage({ id: 2, role: 'sales_manager', employeeId: 2, name: 'ผู้จัดการ' }, vi.fn(), '/visits?week=2026-11-04');
+    await waitFor(() => expect(api.salesVisits.team).toHaveBeenCalledWith({ from: '2026-11-02', to: '2026-11-08' }));
+    const grid = await screen.findByTestId('visit-week');
+    expect(await within(grid).findByTestId('visit-chip-21')).toBeTruthy();
+  });
 });

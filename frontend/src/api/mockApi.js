@@ -8650,6 +8650,10 @@ function mockVisitDto(v) {
         && String(e.message ?? '').startsWith(MOCK_OWNER_CHANGED_MESSAGE_PREFIX)
         // A visit with no createdAt cannot be placed before the move, so it is never "moved" (v.created_at is NOT NULL server-side).
         && v.createdAt != null && Date.parse(e.createdAt) >= Date.parse(v.createdAt)),
+    // VisitRepository's deal_follow_up_open (slice 6b fix round 1): on a deal, the visit's owner is its created_by and
+    // the deal is ACTIVE — where TicketService#requireVisitFollowUpWritable accepts ตามต่อ.
+    dealFollowUpOpen: Boolean(ticket) && Number(ticket.createdById) === Number(v.ownerId)
+      && (ticket.lifecycle ?? 'ACTIVE') === 'ACTIVE',
   };
 }
 
@@ -8696,7 +8700,9 @@ function mockRequireVisitFollowUpWritable(ticketId, visitOwnerId, nextFollowUpAt
     fail('การเข้าพบนี้ไม่ได้บันทึกลงงาน จึงตั้งวันตามต่อของงานไม่ได้', 403);
   }
   if (!mockCanDealOwnership(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
-  requireActive(ticket);
+  if ((ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE') {
+    fail('งานนี้ไม่ได้อยู่ระหว่างดำเนินการ จึงตั้งวันตามต่อไม่ได้ — บันทึกเข้าพบได้โดยไม่ใส่วัน', 409);
+  }
   mockRequireFollowUpNotPast(nextFollowUpAt);
   return ticket;
 }
@@ -10323,7 +10329,9 @@ export const api = {
       // above plus an ACTIVE deal — and a date not in the past; checked before anything is written.
       const nextFollowUpAt = payload?.nextFollowUpAt || null;
       if (nextFollowUpAt) {
-        requireActive(ticket);
+        if ((ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE') {
+          fail('งานนี้ไม่ได้อยู่ระหว่างดำเนินการ จึงตั้งวันตามครั้งถัดไปไม่ได้ — บันทึกได้โดยไม่ใส่วัน', 409);
+        }
         mockRequireFollowUpNotPast(nextFollowUpAt);
       }
       const activity = {
@@ -14584,7 +14592,11 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
         const same = mockVisits.filter((v) => v.ownerId === user.id && v.ticketId === ticketId
           && v.contactName === contactName && v.plannedDate === payload.plannedDate && v.status === 'DONE'
           && Date.parse(v.createdAt ?? 0) > cutoff).at(-1);
-        if (same) return delay(mockVisitDto(same));
+        if (same) {
+          // VisitService.create fix round 1 (M3): a duplicate's date is applied, never dropped (no second activity).
+          if (nextFollowUpAt) db.tickets.find((t) => t.id === ticketId).nextFollowUpAt = nextFollowUpAt;
+          return delay(mockVisitDto(same));
+        }
       }
       const visit = {
         id: mockVisitSeq++, ownerId: user.id, ticketId, contactName, plannedDate: payload.plannedDate,

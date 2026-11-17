@@ -13,7 +13,7 @@ const TODAY = '2026-11-17';
 const visit = (over) => ({
   id: 2, ownerId: 6, ownerName: 'คุณสมหมาย', ticketId: 31, ticketTitle: 'โรงแรมริมทะเล', contactName: 'คุณวรา',
   plannedDate: TODAY, plannedTime: '14:00', status: 'PLANNED', doneAt: null, note: null, dealMovedToName: null,
-  dealMoved: false, ...over,
+  dealMoved: false, dealFollowUpOpen: true, ...over,
 });
 const deals = [{ ticketId: 31, title: 'โรงแรมริมทะเล' }, { ticketId: 32, title: 'คอนโดริมน้ำ' }];
 const followUp = (dialog) => within(dialog).queryByRole('radiogroup', { name: 'ตามต่อ' });
@@ -35,7 +35,15 @@ describe('VisitDoneModal — ตามต่อ', () => {
   });
 
   it('has no ตามต่อ when the tick stays on the visit because the งาน is someone else\'s', () => {
-    render(<VisitDoneModal visit={visit({ dealMovedToName: 'คุณอรุณี', dealMoved: true })} submitting={false}
+    render(<VisitDoneModal visit={visit({ dealMovedToName: 'คุณอรุณี', dealMoved: true, dealFollowUpOpen: false })} submitting={false}
+      onClose={vi.fn()} onSubmit={vi.fn()} />);
+    expect(followUp(screen.getByRole('dialog'))).toBeNull();
+  });
+
+  // Fix round 1: the server's own answer (VisitDto.dealFollowUpOpen) — a deal paused after the visit was planned, or a
+  // deal whose owner has no Thai name (dealMovedToName null), must not offer a date the server refuses.
+  it('has no ตามต่อ when the server says the date is closed, even with dealMovedToName empty', () => {
+    render(<VisitDoneModal visit={visit({ dealFollowUpOpen: false, dealMovedToName: null })} submitting={false}
       onClose={vi.fn()} onSubmit={vi.fn()} />);
     expect(followUp(screen.getByRole('dialog'))).toBeNull();
   });
@@ -101,13 +109,60 @@ describe('LogVisitModal — ตามต่อ', () => {
 
   it('a planned visit whose tick stays off the deal has no ตามต่อ, and its log carries no date', () => {
     const onSubmit = vi.fn();
-    const moved = visit({ dealMovedToName: 'คุณอรุณี', dealMoved: true });
+    const moved = visit({ dealMovedToName: 'คุณอรุณี', dealMoved: true, dealFollowUpOpen: false });
     render(<LogVisitModal todaysPlanned={[moved]} deals={deals} submitting={false} onClose={vi.fn()}
       onSubmit={onSubmit} />);
     const dialog = screen.getByRole('dialog');
     expect(followUp(dialog)).toBeNull();
     fireEvent.click(within(dialog).getByRole('button', { name: 'บันทึก' }));
     expect(onSubmit.mock.calls[0][0]).toStrictEqual({ visit: moved, note: undefined });
+  });
+});
+
+describe('LogVisitModal — switching clears the date and the pill (fix round 1, M2)', () => {
+  const a = visit({ id: 2, contactName: 'คุณวรา' });
+  const b = visit({ id: 3, contactName: 'คุณอรุณ', ticketId: 32, ticketTitle: 'คอนโดริมน้ำ' });
+  const checked = (dialog) => within(followUp(dialog)).getAllByRole('radio')
+    .filter((r) => r.getAttribute('aria-checked') === 'true').map((r) => r.textContent);
+
+  it('visit A → 1 สัปดาห์ → visit B: nothing checked, and B is logged without a date', () => {
+    const onSubmit = vi.fn();
+    render(<LogVisitModal todaysPlanned={[a, b]} deals={deals} submitting={false} onClose={vi.fn()} onSubmit={onSubmit} />);
+    const dialog = screen.getByRole('dialog');
+    fireEvent.click(within(followUp(dialog)).getByRole('radio', { name: '1 สัปดาห์' }));
+    fireEvent.click(within(dialog).getByRole('radio', { name: /คุณอรุณ/ }));
+
+    expect(checked(dialog)).toEqual([]);
+    fireEvent.click(within(dialog).getByRole('button', { name: 'บันทึก' }));
+    expect(onSubmit.mock.calls[0][0]).toStrictEqual({ visit: b, note: undefined });
+  });
+
+  it('visit B → 2 สัปดาห์ → visit A → back to B: still nothing checked, no date', () => {
+    const onSubmit = vi.fn();
+    render(<LogVisitModal todaysPlanned={[a, b]} deals={deals} submitting={false} onClose={vi.fn()} onSubmit={onSubmit} />);
+    const dialog = screen.getByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('radio', { name: /คุณอรุณ/ }));
+    fireEvent.click(within(followUp(dialog)).getByRole('radio', { name: '2 สัปดาห์' }));
+    fireEvent.click(within(dialog).getByRole('radio', { name: /คุณวรา/ }));
+    expect(checked(dialog)).toEqual([]);
+    fireEvent.click(within(dialog).getByRole('radio', { name: /คุณอรุณ/ }));
+    expect(checked(dialog)).toEqual([]);
+    fireEvent.click(within(dialog).getByRole('button', { name: 'บันทึก' }));
+    expect(onSubmit.mock.calls[0][0]).toStrictEqual({ visit: b, note: undefined });
+  });
+
+  it('ไม่ได้นัด on deal 31 → 1 สัปดาห์ → deal 32: nothing checked, no date', () => {
+    const onSubmit = vi.fn();
+    render(<LogVisitModal todaysPlanned={[]} deals={deals} submitting={false} onClose={vi.fn()} onSubmit={onSubmit} />);
+    const dialog = screen.getByRole('dialog');
+    fireEvent.change(within(dialog).getByLabelText(/พบใคร/), { target: { value: 'Walk-in' } });
+    fireEvent.change(within(dialog).getByLabelText(/^งาน/), { target: { value: '31' } });
+    fireEvent.click(within(followUp(dialog)).getByRole('radio', { name: '1 สัปดาห์' }));
+    fireEvent.change(within(dialog).getByLabelText(/^งาน/), { target: { value: '32' } });
+
+    expect(checked(dialog)).toEqual([]);
+    fireEvent.click(within(dialog).getByRole('button', { name: 'บันทึก' }));
+    expect(onSubmit.mock.calls[0][0]).toStrictEqual({ contactName: 'Walk-in', ticketId: 32, note: undefined });
   });
 });
 

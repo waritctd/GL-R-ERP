@@ -84,8 +84,23 @@ describe('DealHistoryPanel — planned visits', () => {
   it('each row links to the นัดเข้าพบ page when the viewer may open it', () => {
     renderPanel({ plannedVisits: [planned()], visitsHref: '/visits' });
     const link = within(screen.getByTestId('timeline-planned-visit')).getByRole('link');
-    expect(link.getAttribute('href')).toBe('/visits');
+    // Fix round 1: the week holding the visit (Thu 19 Nov 2026 → Mon 16 Nov), not always this week.
+    expect(link.getAttribute('href')).toBe('/visits?week=2026-11-16');
     expect(link.textContent).toContain('นัดเข้าพบ · คุณอรุณ');
+  });
+
+  it('a visit two months out links to its own week', () => {
+    renderPanel({ plannedVisits: [planned({ plannedDate: '2027-01-21' })], visitsHref: '/visits' });
+    expect(within(screen.getByTestId('timeline-planned-visit')).getByRole('link').getAttribute('href'))
+      .toBe('/visits?week=2027-01-18');
+  });
+
+  // Fix round 1 (review F4): the boundary. A visit dated today in Bangkok has not been missed yet.
+  it('a visit dated today is นัดไว้, not เลยวันนัด', () => {
+    renderPanel({ plannedVisits: [planned({ plannedDate: TODAY })] });
+    const row = screen.getByTestId('timeline-planned-visit');
+    expect(within(row).getByText('นัดไว้')).toBeTruthy();
+    expect(within(row).queryByText('เลยวันนัด')).toBeNull();
   });
 
   it('no link when the viewer cannot open the นัดเข้าพบ page', () => {

@@ -22,18 +22,26 @@ const OFF = 'border-border-input bg-surface text-text-secondary hover:bg-surface
 /**
  * `value` is '' or an ISO date; `todayIso` is the Asia/Bangkok date the quick choices count from (and the earliest day
  * เลือกวัน accepts — the server refuses a past date). Tapping the picked choice again clears it.
+ *
+ * The checked pill is DERIVED from `value` (fix round 1, M2): a quick choice when the value is its date, เลือกวัน for
+ * any other date. The only local state is "เลือกวัน opened, no date typed yet"; a parent that switches what the date is
+ * for remounts this control (a `key`), which clears that too.
  */
 export function FollowUpPicks({ label = 'ตามครั้งถัดไป', todayIso, value, onChange }) {
   const ids = useId();
-  const [choice, setChoice] = useState(null);
+  const [picking, setPicking] = useState(false);
+  const preset = value
+    ? (CHOICES.find((option) => option.days != null && addDaysIso(todayIso, option.days) === value)?.key ?? 'pick')
+    : null;
+  const choice = preset ?? (picking ? 'pick' : null);
 
   function pick(option) {
     if (choice === option.key) {
-      setChoice(null);
+      setPicking(false);
       onChange('');
       return;
     }
-    setChoice(option.key);
+    setPicking(option.days == null);
     onChange(option.days == null ? '' : addDaysIso(todayIso, option.days));
   }
 

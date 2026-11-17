@@ -1734,6 +1734,9 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                 deal={quickActionDeal}
                 canLogCall={canAddActivity}
                 canPlanVisit={canAddActivity && isActiveLifecycle}
+                // ตามครั้งถัดไป: the server's rule for a date — the activity's ownership gate (canAddActivity) AND an
+                // ACTIVE deal (TicketService#addActivity, fix round 1 M1).
+                canSetFollowUp={canAddActivity && isActiveLifecycle}
                 showToast={showToast}
               />
             )}

@@ -18,6 +18,7 @@ import { TicketDetailPage } from './TicketDetailPage.jsx';
 import { TicketDetailRoute } from './TicketDetailRoute.jsx';
 import { api } from '../../api/index.js';
 import { addDaysIso, bangkokTodayIso } from '../../utils/format.js';
+import { weekStartIso } from '../salesBoard/visitWeek.js';
 
 globalThis.React = React;
 
@@ -401,6 +402,22 @@ describe('header quick actions โทรแล้ว / นัดเข้าพ�
     expect(screen.queryByRole('button', { name: 'นัดเข้าพบ' })).toBeNull();
   });
 
+  // Fix round 1 (M1): the server refuses a follow-up date on a non-ACTIVE deal, so the dialog does not offer one, and
+  // the call on a paused deal is recorded exactly as before this slice.
+  it('on a paused deal โทรแล้ว offers no ตามครั้งถัดไป and sends exactly the old CALL', async () => {
+    setDeal({ lifecycle: 'ON_HOLD' }, []);
+    renderPage();
+    await pageReady();
+    fireEvent.click(await screen.findByRole('button', { name: 'โทรแล้ว' }));
+    const dialog = await screen.findByRole('dialog', { name: 'โทรแล้ว' });
+    expect(within(dialog).queryByRole('radiogroup', { name: 'ตามครั้งถัดไป' })).toBeNull();
+    fireEvent.click(within(dialog).getByRole('radio', { name: 'ไม่รับสาย' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'บันทึก' }));
+    await waitFor(() => expect(api.tickets.addActivity).toHaveBeenCalledTimes(1));
+    expect(api.tickets.addActivity.mock.calls[0]).toStrictEqual([701,
+      { kind: 'CALL', activityDate: bangkokTodayIso(), note: 'ไม่รับสาย' }]);
+  });
+
   it('wrong-way-round: a paused deal keeps โทรแล้ว but not นัดเข้าพบ (a visit needs an open deal)', async () => {
     setDeal({ lifecycle: 'ON_HOLD' }, []);
     renderPage();
@@ -475,7 +492,7 @@ describe('ภาพรวม: ข้อมูลงาน + one merged timeline'
     expect(api.salesVisits.plannedOnDeal).toHaveBeenCalledWith(701);
     expect(within(timeline).getAllByRole('listitem')[0]).toBe(row);
     expect(within(row).getByText('นัดไว้')).toBeTruthy();
-    expect(within(row).getByRole('link').getAttribute('href')).toBe('/visits');
+    expect(within(row).getByRole('link').getAttribute('href')).toBe(`/visits?week=${weekStartIso(day)}`);
   });
 
   it('the old always-open activity form is gone; "+ บันทึก" opens the note composer', async () => {

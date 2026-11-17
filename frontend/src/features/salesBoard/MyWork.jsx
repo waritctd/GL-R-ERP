@@ -384,6 +384,8 @@ export function MyWork({ subtitle, before = null, user, showToast = () => {} }) 
           deal={calling}
           submitting={callMutation.isPending}
           onClose={() => setCalling(null)}
+          // A returning paused deal (V220) is not ACTIVE: the server refuses a follow-up date on it.
+          followUpAllowed={!calling.returning}
           onSubmit={async (note, nextFollowUpAt) => {
             // A failure is toasted and the dialog stays open with what was typed.
             if (await logCall(calling, note, nextFollowUpAt)) setCalling(null);

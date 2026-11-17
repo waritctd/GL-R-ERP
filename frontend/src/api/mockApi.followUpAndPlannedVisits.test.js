@@ -104,6 +104,36 @@ describe('mockApi — slice 6.4 follow-up date from a visit', () => {
   });
 });
 
+describe('mockApi — slice 6b fix round 1', () => {
+  it('a one-step log repeated within a minute with a date applies the date, without a second visit', async () => {
+    const { ticketId } = await ownDeal();
+    const first = await api.salesVisits.create({ ticketId, contactName: 'ซ้ำ 6b', plannedDate: today, done: true });
+    const again = await api.salesVisits.create({ ticketId, contactName: 'ซ้ำ 6b', plannedDate: today, done: true,
+      nextFollowUpAt: plusDays(today, 9) });
+    expect(again.id).toBe(first.id);
+    expect((await summaryOf(ticketId)).nextFollowUpAt).toBe(plusDays(today, 9));
+  });
+
+  it('VisitDto.dealFollowUpOpen: own visit on an ACTIVE own deal only', async () => {
+    const { ticketId } = await ownDeal();
+    expect((await api.salesVisits.create({ ticketId, contactName: 'ก', plannedDate: today })).dealFollowUpOpen).toBe(true);
+    expect((await api.salesVisits.create({ contactName: 'ข', plannedDate: today })).dealFollowUpOpen).toBe(false);
+    await api.auth.login({ role: 'sales_manager' });
+    expect((await api.salesVisits.create({ ticketId, contactName: 'ค', plannedDate: today })).dealFollowUpOpen).toBe(false);
+  });
+
+  it('a date refused on a paused deal says so in Thai', async () => {
+    const { ticketId } = await ownDeal();
+    patchTicketForTests(ticketId, { lifecycle: 'ON_HOLD' });
+    try {
+      await expect(api.tickets.addActivity(ticketId, { kind: 'CALL', activityDate: today, nextFollowUpAt: plusDays(today, 3) }))
+        .rejects.toMatchObject({ status: 409, message: expect.stringContaining('ตั้งวันตามครั้งถัดไปไม่ได้') });
+    } finally {
+      patchTicketForTests(ticketId, { lifecycle: 'ACTIVE' });
+    }
+  });
+});
+
 describe('mockApi.salesVisits.plannedOnDeal — slice 6.5', () => {
   it('a rep sees only their own PLANNED visits on their deal, in the visit lists\' order', async () => {
     const { user, ticketId } = await ownDeal();

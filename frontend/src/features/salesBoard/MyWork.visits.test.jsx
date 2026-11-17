@@ -55,7 +55,7 @@ const visit = (over) => ({
 const visits = [
   visit({ id: 1, contactName: 'อรุณ อาร์คิเทค', plannedDate: otherDay.iso, status: 'DONE', note: 'เทียบสเปค',
     doneAt: '2026-11-10T03:00:00Z' }),
-  visit({ id: 2, contactName: 'Linea Interior', plannedTime: '14:00:00', ticketId: 31,
+  visit({ id: 2, contactName: 'Linea Interior', plannedTime: '14:00:00', ticketId: 31, dealFollowUpOpen: true,
     ticketTitle: 'สยามพารากอน · ห้องน้ำชั้น 3', note: 'ตามใบเสนอราคา' }),
   visit({ id: 3, contactName: 'Studio Nomad', plannedDate: otherDay.iso, status: 'CANCELLED' }),
   // PLANNED on other days pin the today-only filter of บันทึกเข้าพบ (review M5) and the overdue / future states.

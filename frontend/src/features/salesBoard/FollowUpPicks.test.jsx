@@ -104,6 +104,23 @@ describe('FollowUpPicks', () => {
   });
 });
 
+describe('FollowUpPicks — one source of truth (fix round 1, M2)', () => {
+  it('the checked pill follows `value`: a parent clearing the value un-checks it', () => {
+    const { rerender } = render(<FollowUpPicks todayIso={TODAY} value="2026-11-24" onChange={vi.fn()} />);
+    expect(radio('1 สัปดาห์').getAttribute('aria-checked')).toBe('true');
+
+    rerender(<FollowUpPicks todayIso={TODAY} value="" onChange={vi.fn()} />);
+    for (const r of within(group()).getAllByRole('radio')) expect(r.getAttribute('aria-checked')).toBe('false');
+    expect(screen.queryByText(/แสดงในข้อมูลงาน/)).toBeNull();
+  });
+
+  it('a date that is no quick choice shows as เลือกวัน with its date', () => {
+    render(<FollowUpPicks todayIso={TODAY} value="2027-01-05" onChange={vi.fn()} />);
+    expect(radio('เลือกวัน').getAttribute('aria-checked')).toBe('true');
+    expect(screen.getByLabelText('วันที่ตามครั้งถัดไป').value).toBe('05/01/2570');
+  });
+});
+
 describe('withFollowUp', () => {
   it('adds nextFollowUpAt only when a date was picked, so an unused control leaves the request exactly as before', () => {
     expect(withFollowUp({ note: 'x' }, '')).toStrictEqual({ note: 'x' });

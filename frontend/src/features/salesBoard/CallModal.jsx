@@ -17,13 +17,16 @@ const CALL_OUTCOMES = ['คุยแล้ว ยังสนใจ', 'ขอใ
  * m-call — โทรแล้ว. Shared by งานของฉัน's follow-up list and the deal page's header (extracted from FollowUpList so the
  * two open the SAME dialog). `deal` needs a title or customerName; `daysQuiet` is shown when the caller knows it (the
  * follow-up list does; the deal page does not). onSubmit receives the joined note and the picked ตามครั้งถัดไป date
- * (slice 6.4) — `undefined` when none was picked, so the caller's request stays what it was.
+ * (slice 6.4) — `undefined` when none was picked, so the caller's request stays what it was. `followUpAllowed` (fix
+ * round 1, M1): the caller says whether the server would accept a date on this deal — it refuses one on a deal that
+ * is not ACTIVE (TicketService#addActivity) — and the control is not offered when it would not.
  */
-export function CallModal({ deal, submitting, onClose, onSubmit }) {
+export function CallModal({ deal, submitting, onClose, onSubmit, followUpAllowed = true }) {
   const [outcome, setOutcome] = useState(null);
   const [note, setNote] = useState('');
   const [followUp, setFollowUp] = useState('');
-  const submit = () => onSubmit([outcome, note.trim()].filter(Boolean).join(' — ') || undefined, followUp || undefined);
+  const submit = () => onSubmit([outcome, note.trim()].filter(Boolean).join(' — ') || undefined,
+    (followUpAllowed && followUp) || undefined);
   const name = deal.title || deal.customerName;
 
   return (
@@ -69,7 +72,7 @@ export function CallModal({ deal, submitting, onClose, onSubmit }) {
             className="w-full rounded-md border border-border-input bg-surface p-2.5 text-sm font-normal text-text"
           />
         </label>
-        <FollowUpPicks todayIso={bangkokTodayIso()} value={followUp} onChange={setFollowUp} />
+        {followUpAllowed ? <FollowUpPicks todayIso={bangkokTodayIso()} value={followUp} onChange={setFollowUp} /> : null}
       </div>
     </Modal>
   );

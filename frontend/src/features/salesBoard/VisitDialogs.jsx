@@ -69,11 +69,12 @@ function DealSelect({ id, deals, value, onChange }) {
 }
 
 /**
- * Slice 6.4: whether a tick on this visit lands on a deal — the only case ตามต่อ can set the deal's follow-up date. Mirrors
- * the server (TicketService#requireVisitFollowUpWritable): the visit is on a deal and its owner still holds the deal;
- * VisitDto.dealMovedToName is set exactly when they do not (a moved deal, a keyer's or a manager's own visit).
+ * Slice 6.4: whether ตามต่อ may set this visit's deal's follow-up date — the server's own answer, VisitDto
+ * .dealFollowUpOpen (fix round 1): on a deal, the visit's owner still holds it (so the tick lands on it) and the deal is
+ * ACTIVE (TicketService#requireVisitFollowUpWritable). dealMovedToName could not say this: it is empty for a deal paused
+ * after the visit was planned, and for an owner with no Thai name.
  */
-const landsOnDeal = (visit) => Boolean(visit?.ticketId) && !visit.dealMovedToName;
+const landsOnDeal = (visit) => Boolean(visit?.ticketId) && visit.dealFollowUpOpen === true;
 
 function FollowUpField({ value, onChange }) {
   return <FollowUpPicks label="ตามต่อ" todayIso={bangkokTodayIso()} value={value} onChange={onChange} />;
@@ -234,13 +235,13 @@ export function LogVisitModal({ todaysPlanned, deals, submitting, onClose, onSub
   const picked = unplanned ? null : todaysPlanned.find((v) => String(v.id) === choice);
   const onDeal = unplanned ? Boolean(ticketId) : landsOnDeal(picked);
   const nextFollowUpAt = onDeal ? followUp : '';
-  // A date picked for one visit or deal is not carried to another, nor kept hidden once the log is off any deal.
+  // A date picked for one visit or deal is not carried to another (value here, the pill by the field's key below).
   const pickVisit = (key) => {
     if (key !== choice) setFollowUp('');
     setChoice(key);
   };
   const pickDeal = (id) => {
-    if (!id) setFollowUp('');
+    if (id !== ticketId) setFollowUp('');
     setTicketId(id);
   };
 
@@ -300,7 +301,7 @@ export function LogVisitModal({ todaysPlanned, deals, submitting, onClose, onSub
         ) : null}
         <OutcomeField value={outcome} onChange={setOutcome} />
         <NoteField value={note} onChange={setNote} />
-        {onDeal ? <FollowUpField value={followUp} onChange={setFollowUp} /> : null}
+        {onDeal ? <FollowUpField key={`${choice}:${ticketId}`} value={followUp} onChange={setFollowUp} /> : null}
       </div>
     </Modal>
   );

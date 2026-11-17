@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
@@ -48,11 +49,21 @@ function VisitColumn({ testId, title, visits, empty, todayIso, onDone, onCancel 
  * on screen — VisitService scopes it to the caller — split into นัดไว้ and ไปแล้ว. Plan, log, tick and cancel are the
  * existing dialogs and endpoints; a tick needs the visit's day to have come (VisitRow / VisitService).
  */
-function RepWeek({ showToast }) {
+/**
+ * `?week=<ISO day>` (fix round 1: the deal page's planned-visit link) opens the week containing that day, as an offset
+ * from this week; anything that is not a real ISO date opens this week.
+ */
+function weekOffsetFromParam(param, todayIso) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(param ?? '') || Number.isNaN(Date.parse(`${param}T00:00:00Z`))) return 0;
+  const diff = Date.parse(`${weekStartIso(param)}T00:00:00Z`) - Date.parse(`${weekStartIso(todayIso)}T00:00:00Z`);
+  return Math.round(diff / (7 * 86_400_000));
+}
+
+function RepWeek({ showToast, initialWeekOffset }) {
   const queryClient = useQueryClient();
   const todayIso = bangkokTodayIso();
   const thisMonday = weekStartIso(todayIso);
-  const [weekOffset, setWeekOffset] = useState(0);
+  const [weekOffset, setWeekOffset] = useState(initialWeekOffset);
   const [landed, setLanded] = useState(null);
   const [planning, setPlanning] = useState(false);
   const [logging, setLogging] = useState(false);
@@ -266,14 +277,19 @@ function RepWeek({ showToast }) {
  * weeks through GET /api/sales/visits/team. The rows (every rep) and this week come from GET /api/sales/team-overview,
  * the same cached query as the team dashboard. Both endpoints are sales_manager / ceo only.
  */
-function TeamWeek() {
+function TeamWeek({ initialWeekOffset }) {
   const query = useQuery({ queryKey: queryKeys.salesBoardTeam(), queryFn: () => api.salesBoard.teamOverview() });
   const team = query.data;
   return (
     <>
       <PageHeader title="นัดเข้าพบ" subtitle="นัดเข้าพบของทุกคนในทีม รายสัปดาห์" />
       {query.isError ? <Panel flush><Failed /></Panel> : !team ? <Loading label="กำลังโหลดตารางเข้าพบ" /> : (
-        <VisitWeekGrid reps={team.reps} visits={team.teamVisitsThisWeek ?? []} todayIso={bangkokTodayIso()} />
+        <VisitWeekGrid
+          reps={team.reps}
+          visits={team.teamVisitsThisWeek ?? []}
+          todayIso={bangkokTodayIso()}
+          initialWeekOffset={initialWeekOffset}
+        />
       )}
     </>
   );
@@ -285,9 +301,13 @@ function TeamWeek() {
  * their own week. The server re-checks the role on every call.
  */
 export function VisitsPage({ user, showToast = () => {} }) {
+  const [params] = useSearchParams();
+  const initialWeekOffset = weekOffsetFromParam(params.get('week'), bangkokTodayIso());
   return (
     <PageStack>
-      {hasPermission(user?.role, 'canViewTeamVisits') ? <TeamWeek /> : <RepWeek showToast={showToast} />}
+      {hasPermission(user?.role, 'canViewTeamVisits')
+        ? <TeamWeek initialWeekOffset={initialWeekOffset} />
+        : <RepWeek showToast={showToast} initialWeekOffset={initialWeekOffset} />}
     </PageStack>
   );
 }

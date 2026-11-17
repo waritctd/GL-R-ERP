@@ -11,8 +11,8 @@ afterAll(() => vi.useRealTimers());
 
 const deal = { ticketId: 31, title: 'โรงแรมริมทะเล · ห้องน้ำชั้น 3' };
 
-function open(onSubmit = vi.fn()) {
-  render(<CallModal deal={deal} submitting={false} onClose={vi.fn()} onSubmit={onSubmit} />);
+function open(onSubmit = vi.fn(), props = {}) {
+  render(<CallModal deal={deal} submitting={false} onClose={vi.fn()} onSubmit={onSubmit} {...props} />);
   return { dialog: screen.getByRole('dialog'), onSubmit };
 }
 
@@ -46,6 +46,15 @@ describe('CallModal — ตามครั้งถัดไป', () => {
     const { dialog } = open();
     fireEvent.click(within(dialog).getByRole('radio', { name: '3 วัน' }));
     expect(within(dialog).getByRole('button', { name: 'บันทึก' }).disabled).toBe(true);
+  });
+
+  // Fix round 1 (M1): never offer a date the server will refuse — and the call itself still records as before.
+  it('with followUpAllowed={false} there is no ตามครั้งถัดไป, and the call goes without a date', () => {
+    const { dialog, onSubmit } = open(vi.fn(), { followUpAllowed: false });
+    expect(within(dialog).queryByRole('radiogroup', { name: 'ตามครั้งถัดไป' })).toBeNull();
+    fireEvent.click(within(dialog).getByRole('radio', { name: 'ไม่รับสาย' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'บันทึก' }));
+    expect(onSubmit.mock.calls[0]).toStrictEqual(['ไม่รับสาย', undefined]);
   });
 
   it('keeps one primary action: บันทึก, beside ยกเลิก', () => {

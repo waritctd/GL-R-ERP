@@ -20,7 +20,7 @@ import { PlanVisitModal } from '../salesBoard/VisitDialogs.jsx';
  *   - canPlanVisit — VisitService#create on a deal: the same requireDealWriteAccess, AND the deal ACTIVE (it refuses
  *     "ดีลนี้ไม่ได้เปิดอยู่" otherwise).
  */
-export function DealQuickActions({ deal, canLogCall, canPlanVisit, showToast }) {
+export function DealQuickActions({ deal, canLogCall, canPlanVisit, canSetFollowUp = false, showToast }) {
   const queryClient = useQueryClient();
   const [calling, setCalling] = useState(false);
   const [planning, setPlanning] = useState(false);
@@ -69,6 +69,7 @@ export function DealQuickActions({ deal, canLogCall, canPlanVisit, showToast }) 
           deal={deal}
           submitting={callMutation.isPending}
           onClose={() => setCalling(false)}
+          followUpAllowed={canSetFollowUp}
           onSubmit={async (note, nextFollowUpAt) => {
             // A failure is toasted and the dialog stays open with what was typed, as on งานของฉัน.
             try {

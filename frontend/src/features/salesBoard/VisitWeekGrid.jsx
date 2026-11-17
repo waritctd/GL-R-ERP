@@ -58,8 +58,8 @@ function gridRows(reps, visits) {
  * embedded in team-overview; ‹ › page other weeks through GET /api/sales/visits/team (review H1). Saturday and Sunday
  * columns appear only when someone has a weekend visit. Desktop is a grid; phone is one block per rep.
  */
-export function VisitWeekGrid({ reps, visits: thisWeekVisits, todayIso }) {
-  const [weekOffset, setWeekOffset] = useState(0);
+export function VisitWeekGrid({ reps, visits: thisWeekVisits, todayIso, initialWeekOffset = 0 }) {
+  const [weekOffset, setWeekOffset] = useState(initialWeekOffset);
   const monday = addDaysIso(weekStartIso(todayIso), 7 * weekOffset);
   const sunday = addDaysIso(monday, 6);
   const otherWeek = useQuery({
