@@ -28,7 +28,7 @@ const quickAccounts = [
     email: 'sales2@glr.co.th',
     password: 'demo1234',
     label: 'ฝ่ายขาย (คนที่ 2)',
-    helper: 'ดูดีลของเพื่อนร่วมทีม · ทดสอบสองคนพร้อมกัน',
+    helper: 'ดูงานของเพื่อนร่วมทีม · ทดสอบสองคนพร้อมกัน',
     icon: 'briefcase',
   },
   { role: 'sales_manager', label: 'ผู้จัดการฝ่ายขาย', helper: 'อนุมัติค่าคอม · แก้ไขค่าหัก', icon: 'badgeDollar' },
