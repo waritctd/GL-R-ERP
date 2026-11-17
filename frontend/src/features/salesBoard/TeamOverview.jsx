@@ -128,7 +128,8 @@ export function TeamOverview({ showTitle = true }) {
             {team.reps.length === 0 ? (
               <p className={`m-0 text-sm text-text-muted ${ROW}`}>ยังไม่มีงานที่เปิดอยู่</p>
             ) : (
-              <table className="w-full border-collapse text-sm">
+              // Named after its panel: with visits this week the week grid below draws a second table in this region.
+              <table aria-label="รายคน" className="w-full border-collapse text-sm">
                 <thead>
                   <tr className="text-left text-xs text-text-muted">
                     <th scope="col" className="px-5 py-2.5 font-bold mobile:px-3.5">พนักงานขาย</th>

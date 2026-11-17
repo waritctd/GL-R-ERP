@@ -2859,6 +2859,13 @@ public class TicketRepository {
             new MapSqlParameterSource().addValue("q", expectedQuarter).addValue("id", ticketId));
     }
 
+    /** Slice 6.4: the deal's next follow-up date and nothing else (a call's or a visit's ตามครั้งถัดไป / ตามต่อ). Never
+     * {@link #updateTracking}, which rewrites every tracking column. */
+    public void updateNextFollowUpAt(long ticketId, LocalDate nextFollowUpAt) {
+        jdbc.update("UPDATE sales.ticket SET next_follow_up_at = :d, updated_at = now() WHERE ticket_id = :id",
+            new MapSqlParameterSource().addValue("d", nextFollowUpAt).addValue("id", ticketId));
+    }
+
     public void updateTracking(long ticketId, Integer winProbabilityOverride, String designerName,
                                String ownerName, String buyerName, LocalDate nextFollowUpAt) {
         jdbc.update("""

@@ -92,7 +92,7 @@ function ChangeList({ release, groups, note = null }) {
 
 /**
  * มีอะไรใหม่ — one release notice, page by page. "สำหรับแผนกของคุณ" shows only the pages the viewer's role got and
- * can open today; "ทั้งหมด" shows a section per role. `/whats-new` alone shows the latest release. Every employee
+ * can open today; "ทั้งหมด" (HR, CEO, owner only) shows a section per role. `/whats-new` alone shows the latest release. Every employee
  * can open it (SELF_SERVICE_PATHS); CEO/HR also get the publish / email control.
  */
 export function WhatsNewPage({ user, showToast }) {
@@ -129,9 +129,11 @@ export function WhatsNewPage({ user, showToast }) {
   const addressOnlyNote = addressOnlyRoles.length > 0
     ? `${addressOnlyRoles.map((role) => ROLE_LABEL[role]).join(' · ')}: ${release.otherRolesNote ?? 'ฉบับนี้มีเฉพาะการย้ายที่อยู่เว็บ (ด้านบน)'}`
     : null;
+  // "ทั้งหมด" (every role's section) is for HR, CEO and the owner account (the admin flag, GLR-1001 only).
+  const canSeeAllTab = user?.role === 'hr' || user?.role === 'ceo' || isAdmin;
   const tabs = [
     { id: 'mine', label: `สำหรับแผนกของคุณ (${mine.length})` },
-    { id: 'all', label: `ทั้งหมด (${release.entries.length})` },
+    ...(canSeeAllTab ? [{ id: 'all', label: `ทั้งหมด (${release.entries.length})` }] : []),
     {
       id: 'feedback',
       label: isAdmin
@@ -158,7 +160,7 @@ export function WhatsNewPage({ user, showToast }) {
                 isAdmin ? <FeedbackInbox showToast={showToast} /> : <FeedbackTab showToast={showToast} />
               ) : item.id === 'mine' ? (
                 mine.length > 0 ? <ChangeList release={release} groups={mineGroups} /> : (
-                  <EmptyState icon="info" title="ฉบับนี้ไม่มีเรื่องเฉพาะแผนกของคุณ" description="ดูทุกเรื่องได้ที่แท็บ ทั้งหมด" />
+                  <EmptyState icon="info" title="ฉบับนี้ไม่มีเรื่องเฉพาะแผนกของคุณ" description={canSeeAllTab ? 'ดูทุกเรื่องได้ที่แท็บ ทั้งหมด' : undefined} />
                 )
               ) : (
                 <ChangeList release={release} groups={sections} note={addressOnlyNote} />

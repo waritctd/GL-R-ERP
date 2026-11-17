@@ -165,7 +165,8 @@ for (const role of ['sales_manager', 'ceo']) {
         await expect(page.getByRole('region', { name: 'ภาพรวมทีมขาย' })).toBeVisible();
         await expect(page.getByTestId('tile-held')).toBeVisible();
         await expect(page.getByTestId('tile-quiet')).toBeVisible();
-        const table = page.getByRole('region', { name: 'ภาพรวมทีมขาย' }).getByRole('table');
+        // By name: once any visit exists this week, the ตารางเข้าพบ week grid draws a second table in this region.
+        const table = page.getByRole('region', { name: 'ภาพรวมทีมขาย' }).getByRole('table', { name: 'รายคน', exact: true });
         await expect(table).toBeVisible();
         for (const header of ['พนักงานขาย', 'งาน', 'มูลค่า', 'งานเงียบ', 'อัปเดตล่าสุด']) {
           await expect(table.getByRole('columnheader', { name: header, exact: true })).toBeVisible();

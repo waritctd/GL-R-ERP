@@ -18,6 +18,8 @@ import th.co.glr.hr.ticket.TicketRepository;
 /**
  * sales.visit (V211). Scope lives in the WHERE clause: {@link #findOwn} adds {@code v.owner_id = :ownerId};
  * {@link #findAll} has no owner predicate and is reached only through {@code VisitService}'s sales_manager/ceo gate.
+ * The same pair exists for one deal's PLANNED visits (slice 6.5): {@link #findPlannedOnDealOwnedBy} (owner predicate)
+ * and {@link #findPlannedOnDeal} (sales_manager/ceo only), both behind {@code VisitService#plannedOnDeal}.
  * Both take an inclusive {@code planned_date} range (the service caps it at 31 days) and order by
  * {@code planned_date, planned_time NULLS LAST, visit_id} — mockApi.salesBoard.visits mirrors this ORDER BY.
  */
@@ -39,7 +41,9 @@ public class VisitRepository {
                    SELECT 1 FROM sales.ticket_event te
                     WHERE te.ticket_id = t.ticket_id AND te.kind = 'EDITED'
                       AND te.message LIKE '{OWNER_CHANGED_PREFIX}%'
-                      AND te.created_at >= v.created_at)) AS deal_moved
+                      AND te.created_at >= v.created_at)) AS deal_moved,
+               -- Slice 6b fix round 1: where ตามต่อ may set the deal's follow-up date (requireVisitFollowUpWritable).
+               (t.ticket_id IS NOT NULL AND v.owner_id = t.created_by AND t.lifecycle = 'ACTIVE') AS deal_follow_up_open
           FROM sales.visit v
           JOIN hr.employee e ON e.employee_id = v.owner_id
           LEFT JOIN sales.ticket t ON t.ticket_id = v.ticket_id
@@ -63,6 +67,21 @@ public class VisitRepository {
     public List<VisitDto> findAll(LocalDate from, LocalDate to) {
         return jdbc.query(SELECT + " WHERE v.planned_date BETWEEN :from AND :to" + ORDER,
             Map.of("from", from, "to", to), VisitRepository::map);
+    }
+
+    /**
+     * Slice 6.5: one deal's PLANNED visits owned by {@code ownerId} — a sales rep's view on the deal page; the owner
+     * predicate is the same one {@link #findOwn} carries. Same ORDER BY as the lists; no LIMIT, as they have none.
+     */
+    public List<VisitDto> findPlannedOnDealOwnedBy(long ticketId, long ownerId) {
+        return jdbc.query(SELECT + " WHERE v.ticket_id = :ticketId AND v.status = 'PLANNED' AND v.owner_id = :ownerId"
+            + ORDER, Map.of("ticketId", ticketId, "ownerId", ownerId), VisitRepository::map);
+    }
+
+    /** Slice 6.5: one deal's PLANNED visits, every owner's. Only for the sales_manager / ceo view, as {@link #findAll}. */
+    public List<VisitDto> findPlannedOnDeal(long ticketId) {
+        return jdbc.query(SELECT + " WHERE v.ticket_id = :ticketId AND v.status = 'PLANNED'" + ORDER,
+            Map.of("ticketId", ticketId), VisitRepository::map);
     }
 
     public Optional<VisitDto> findById(long visitId) {
@@ -142,6 +161,6 @@ public class VisitRepository {
             rs.getString("ticket_title"), rs.getString("contact_name"), rs.getObject("planned_date", LocalDate.class),
             time == null ? null : time.toLocalTime(), rs.getString("status"),
             doneAt == null ? null : doneAt.toInstant(), rs.getString("note"), rs.getString("deal_moved_to_name"),
-            rs.getBoolean("deal_moved"));
+            rs.getBoolean("deal_moved"), rs.getBoolean("deal_follow_up_open"));
     }
 }

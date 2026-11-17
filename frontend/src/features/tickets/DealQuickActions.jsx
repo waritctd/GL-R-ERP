@@ -6,6 +6,7 @@ import { Button } from '../../components/common/Button.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { bangkokTodayIso } from '../../utils/format.js';
 import { CallModal } from '../salesBoard/CallModal.jsx';
+import { withFollowUp } from '../salesBoard/FollowUpPicks.jsx';
 import { PlanVisitModal } from '../salesBoard/VisitDialogs.jsx';
 
 /**
@@ -19,7 +20,7 @@ import { PlanVisitModal } from '../salesBoard/VisitDialogs.jsx';
  *   - canPlanVisit — VisitService#create on a deal: the same requireDealWriteAccess, AND the deal ACTIVE (it refuses
  *     "ดีลนี้ไม่ได้เปิดอยู่" otherwise).
  */
-export function DealQuickActions({ deal, canLogCall, canPlanVisit, showToast }) {
+export function DealQuickActions({ deal, canLogCall, canPlanVisit, canSetFollowUp = false, showToast }) {
   const queryClient = useQueryClient();
   const [calling, setCalling] = useState(false);
   const [planning, setPlanning] = useState(false);
@@ -35,7 +36,10 @@ export function DealQuickActions({ deal, canLogCall, canPlanVisit, showToast }) 
   }
 
   const callMutation = useMutation({
-    mutationFn: (note) => api.tickets.addActivity(ticketId, { kind: 'CALL', activityDate: bangkokTodayIso(), note }),
+    // Slice 6.4: ตามครั้งถัดไป's date rides on the activity (it writes only the deal's next follow-up date); none, the
+    // request is exactly the old one. It lands in ข้อมูลงาน through the ticketDetail refresh below.
+    mutationFn: ({ note, nextFollowUpAt }) => api.tickets.addActivity(ticketId,
+      withFollowUp({ kind: 'CALL', activityDate: bangkokTodayIso(), note }, nextFollowUpAt)),
     onSuccess: refreshDeal,
   });
   const visitMutation = useMutation({
@@ -65,10 +69,11 @@ export function DealQuickActions({ deal, canLogCall, canPlanVisit, showToast }) 
           deal={deal}
           submitting={callMutation.isPending}
           onClose={() => setCalling(false)}
-          onSubmit={async (note) => {
+          followUpAllowed={canSetFollowUp}
+          onSubmit={async (note, nextFollowUpAt) => {
             // A failure is toasted and the dialog stays open with what was typed, as on งานของฉัน.
             try {
-              await callMutation.mutateAsync(note);
+              await callMutation.mutateAsync({ note, nextFollowUpAt });
               setCalling(false);
               showToast('success', 'บันทึกการโทรแล้ว');
             } catch (error) {
