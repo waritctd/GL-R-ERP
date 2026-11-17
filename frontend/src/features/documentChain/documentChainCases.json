@@ -8,10 +8,40 @@
       "remainingState": "WAITING", "remainingBlockedReason": "ORDER_NOT_CONFIRMED"
     },
     {
-      "name": "unconfirmed deal on a no-deposit policy: still waits on the order, never 'create'",
+      "name": "unconfirmed deal on a no-deposit policy: nothing to wait for but the order (status draft: requireQuotationIssued refuses)",
       "facts": { "status": "draft", "lifecycle": "ACTIVE", "depositPolicy": "CREDIT_CUSTOMER", "paymentStatus": null, "fulfillmentStatus": null },
       "depositState": "NOT_REQUIRED", "depositBlockedReason": null,
-      "remainingState": "WAITING", "remainingBlockedReason": "ORDER_NOT_CONFIRMED"
+      "remainingState": "TO_CREATE", "remainingBlockedReason": "ORDER_NOT_CONFIRMED"
+    },
+    {
+      "name": "pricing-request deal at quotation_issued, order not yet confirmed, no-deposit policy: createDraft does not refuse the order, only the goods",
+      "facts": { "status": "quotation_issued", "lifecycle": "ACTIVE", "depositPolicy": "WAIVED", "paymentStatus": null, "fulfillmentStatus": null },
+      "depositState": "NOT_REQUIRED", "depositBlockedReason": null,
+      "remainingState": "TO_CREATE", "remainingBlockedReason": "GOODS_NOT_READY"
+    },
+    {
+      "name": "deposit notice drafted on a paused deal: issue requires an ACTIVE deal",
+      "facts": { "status": "quotation_issued", "lifecycle": "ON_HOLD", "depositPolicy": "REQUIRED", "paymentStatus": "CUSTOMER_CONFIRMED", "fulfillmentStatus": null, "noticeDraft": true },
+      "depositState": "DRAFT", "depositBlockedReason": "DEAL_NOT_ACTIVE",
+      "remainingState": "WAITING", "remainingBlockedReason": "DEPOSIT_NOT_RECEIVED"
+    },
+    {
+      "name": "remaining invoice drafted on a paused deal: issue requires an ACTIVE deal",
+      "facts": { "status": "quotation_issued", "lifecycle": "ON_HOLD", "depositPolicy": "REQUIRED", "paymentStatus": "DEPOSIT_PAID", "fulfillmentStatus": "GOODS_RECEIVED", "noticeIssued": true, "invoiceDraft": true },
+      "depositState": "PAID", "depositBlockedReason": null,
+      "remainingState": "DRAFT", "remainingBlockedReason": "DEAL_NOT_ACTIVE"
+    },
+    {
+      "name": "legacy status cancelled on an ACTIVE lifecycle, order confirmed, no notice: dead, nothing may be created",
+      "facts": { "status": "cancelled", "lifecycle": "ACTIVE", "depositPolicy": "REQUIRED", "paymentStatus": "CUSTOMER_CONFIRMED", "fulfillmentStatus": null },
+      "depositState": "TO_CREATE", "depositBlockedReason": "DEAL_NOT_ACTIVE",
+      "remainingState": "WAITING", "remainingBlockedReason": "DEAL_NOT_ACTIVE"
+    },
+    {
+      "name": "legacy status cancelled on an ACTIVE lifecycle, deposit received, goods in: dead, no invoice",
+      "facts": { "status": "cancelled", "lifecycle": "ACTIVE", "depositPolicy": "REQUIRED", "paymentStatus": "DEPOSIT_PAID", "fulfillmentStatus": "GOODS_RECEIVED", "noticeIssued": true },
+      "depositState": "PAID", "depositBlockedReason": null,
+      "remainingState": "TO_CREATE", "remainingBlockedReason": "DEAL_NOT_ACTIVE"
     },
     {
       "name": "order confirmed, no deposit notice yet",

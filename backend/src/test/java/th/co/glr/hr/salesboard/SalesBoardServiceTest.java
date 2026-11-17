@@ -214,9 +214,77 @@ class SalesBoardServiceTest {
         assertThat(team.stale().get(0).ticketId()).isEqualTo(25L);
     }
 
+    // ── paused deals coming back (owner ruling: a pause may carry a วันที่จะกลับมาดู) ─────────────
+
+    /** The rep's ควรตามต่อ takes their OWN returning paused deals, ranked with the quiet ones; the board stays the
+     * ACTIVE deals only, and the team-wide read is never touched. */
+    @Test
+    void myWork_followUpTakesTheCallersOwnReturningPausedDeals_boardDoesNot() {
+        when(repository.activeDealsOwnedBy(1L)).thenReturn(List.of(deal(1, 1L, 20, "1000", true)));
+        when(repository.returningPausedDealsOwnedBy(1L)).thenReturn(List.of(returning(9, 1L, 40, "1000")));
+
+        MyWork work = service.myWork(actor(1L, "sales"));
+
+        assertThat(work.followUp()).extracting(BoardDeal::ticketId).containsExactly(9L, 1L);
+        assertThat(work.followUp().get(0).returning()).isTrue();
+        assertThat(work.board()).extracting(BoardDeal::ticketId).containsExactly(1L);
+        verify(repository).returningPausedDealsOwnedBy(1L);
+        verify(repository, never()).returningPausedDealsAllReps();
+    }
+
+    /** A returning paused deal counts in its owner's quiet figure and the team's stale list exactly as a quiet deal
+     * does — and only there: it is not an open deal and adds nothing to the open value. */
+    @Test
+    void teamOverview_returningPausedDealCountsAsQuiet_notAsOpen() {
+        when(repository.activeDealsAllReps()).thenReturn(List.of(deal(1, 10L, 2, "100", false)));
+        when(repository.returningPausedDealsAllReps()).thenReturn(List.of(
+            returning(8, 10L, 30, "500"), returning(9, 20L, 30, "700")));
+
+        TeamOverview team = service.teamOverview(actor(1L, "sales_manager"));
+
+        RepRow a = team.reps().stream().filter(r -> r.employeeId() == 10L).findFirst().orElseThrow();
+        assertThat(a.openDeals()).isEqualTo(1);
+        assertThat(a.openValue()).isEqualByComparingTo("100");
+        assertThat(a.quietDeals()).isEqualTo(1);
+        // An owner whose only deal is a returning paused one still gets a row, with 0 open deals.
+        RepRow b = team.reps().stream().filter(r -> r.employeeId() == 20L).findFirst().orElseThrow();
+        assertThat(b.openDeals()).isZero();
+        assertThat(b.quietDeals()).isEqualTo(1);
+        assertThat(team.stale()).extracting(BoardDeal::ticketId).containsExactlyInAnyOrder(8L, 9L);
+    }
+
+    /** Fix round 1, ruling 4: returning deals are listed AHEAD of the ranked top five and never cut by the cap, even
+     * when they score 0 (no value) against valued quiet deals; the stale list likewise. */
+    @Test
+    void returningDealsLeadFollowUpAndStale_andAreNeverCutByTheCap() {
+        List<BoardDeal> valuedQuiet = IntStream.rangeClosed(1, 7).mapToObj(i -> deal(i, 1L, 20 + i, "100000", true))
+            .toList();
+        when(repository.activeDealsOwnedBy(1L)).thenReturn(valuedQuiet);
+        when(repository.returningPausedDealsOwnedBy(1L)).thenReturn(List.of(returning(90, 1L, 0, null),
+            returning(91, 1L, 3, null)));
+
+        MyWork work = service.myWork(actor(1L, "sales"));
+
+        assertThat(work.followUp()).extracting(BoardDeal::ticketId).containsExactly(91L, 90L, 7L, 6L, 5L, 4L, 3L);
+
+        when(repository.activeDealsAllReps()).thenReturn(IntStream.rangeClosed(1, 25)
+            .mapToObj(i -> deal(i, 10L, 14 + i, "100000", true)).toList());
+        when(repository.returningPausedDealsAllReps()).thenReturn(List.of(returning(99, 10L, 0, null)));
+        TeamOverview team = service.teamOverview(actor(2L, "sales_manager"));
+        assertThat(team.stale()).hasSize(21);
+        assertThat(team.stale().get(0).ticketId()).isEqualTo(99L);
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────────
 
     private static final Instant NOW = Instant.parse("2026-11-15T03:00:00Z");
+
+    /** A paused deal whose วันที่จะกลับมาดู has arrived: not quiet (that rule is ACTIVE-only), returning instead. */
+    private static BoardDeal returning(long id, long owner, int daysQuiet, String value) {
+        return new BoardDeal(id, "deal " + id, "cust", null, owner, "rep " + owner, "QUOTE_OWNER", "S3", 3,
+            value == null ? null : new BigDecimal(value), "THB", false, null, null, null, daysAgo(daysQuiet),
+            daysQuiet, false, null, null, true, LocalDate.of(2026, 11, 1));
+    }
 
     private static Instant daysAgo(int days) {
         return NOW.minusSeconds(days * 86_400L);

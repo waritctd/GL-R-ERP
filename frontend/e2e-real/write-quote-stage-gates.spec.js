@@ -146,18 +146,18 @@ test.describe.serial('quote stage gates + versioning — real browser walk', () 
     dealA = await newDeal('A', 'DESIGNER_LED');
     const page = salesPage;
     await page.goto(`/tickets/${dealA}`);
-    for (const n of [2, 3]) {
-      await page.getByRole('button', { name: new RegExp(`^เลื่อนไป: ${n}\\.`) }).first().click();
-      // Ready (gate met) → the main button moves at once; otherwise it opens the follow-up + activity form.
-      const modal = page.getByTestId('guided-advance-modal');
-      if (await modal.waitFor({ state: 'visible', timeout: 3000 }).then(() => true, () => false)) {
-        await page.getByTestId('guided-advance-followup').fill(inDays(7));
-        await page.getByTestId('guided-advance-note').fill(`${tag} โทรติดตามก่อนเลื่อนขั้น ${n}`);
-        await page.getByTestId('guided-advance-submit').click();
-        await expect(modal).toHaveCount(0);
-      }
-      await stageIs(page, n);
-    }
+    // Lifecycle dialogs (2026-11-16, drawing m-stage): on an S1 deal the main button is "ย้ายไป S2 · สเปคผ่าน", one
+    // hand move straight to ขั้น 3 (SPEC_APPROVED), replacing the two "เลื่อนไป: 2./3." steps. The dialog asks for the
+    // follow-up date / a note only when the readiness gate needs them (MoveToS2Modal), so fill whichever it shows.
+    await page.getByRole('button', { name: 'ย้ายไป S2 · สเปคผ่าน' }).first().click();
+    const moveModal = page.getByTestId('move-s2-modal');
+    await expect(moveModal).toBeVisible();
+    const followUp = moveModal.getByLabel(/วันติดตามครั้งถัดไป/);
+    if (await followUp.count()) await followUp.fill(inDays(7));
+    await moveModal.getByPlaceholder('เช่น ผู้ออกแบบเลือก Raku 20×20 สีขาว').fill(`${tag} ผู้ออกแบบตกลงสเปค`);
+    await moveModal.getByRole('button', { name: 'ย้ายไป S2', exact: true }).click();
+    await expect(moveModal).toHaveCount(0);
+    await stageIs(page, 3);
     await shot(page, '01-stage3-deal');
 
     // no primary CTA into 4
@@ -332,6 +332,35 @@ test.describe.serial('quote stage gates + versioning — real browser walk', () 
     await salesPage.goto(`/tickets/${deal}`);
     await stageIs(salesPage, 8);
     await shot(salesPage, '07-buyer-deal-stage8');
+
+    // The guided advance, in a real browser (restored, lifecycle dialogs review round 2). Case 1 used to drive it on
+    // its "เลื่อนไป: 2./3." steps. On an S1 deal those are now the "ย้ายไป S2" dialog, but the guided form still runs
+    // every hand move the readiness gate blocks. ขั้น 8 → 9 is one: the quotation just moved the stage, so no activity
+    // has been logged since. Same guarantee as before: the form collects the follow-up date and an activity, then
+    // moves the deal. The form opens from the panel's guided opener or, where the page's main button carries the
+    // move, from that "เลื่อนไป: 9." button. Either way the form itself must open, be filled and move the deal.
+    // Both openers exist only once the page's separate actions query (TicketDetailPage `actionsQuery`:
+    // stageDecisions) has loaded, and stageIs above needs only the summary. So wait, web-first, for either one to be
+    // visible, which proves the actions are in, before choosing (review round 3, M-3: an instant count() raced it).
+    const opener = salesPage.getByTestId('guided-advance-open');
+    const headerMove = salesPage.getByRole('button', { name: /^เลื่อนไป: 9\./ });
+    await expect(opener.or(headerMove).first()).toBeVisible();
+    await ((await opener.isVisible()) ? opener : headerMove).first().click();
+    const guided = salesPage.getByTestId('guided-advance-modal');
+    await expect(guided).toBeVisible();
+    // A date the form must carry through: newDeal already set inDays(7), so asserting that again would pass even if the
+    // form dropped the date (review round 3, M-3).
+    await salesPage.getByTestId('guided-advance-followup').fill(inDays(9));
+    await salesPage.getByTestId('guided-advance-note').fill(`${tag} โทรติดตามก่อนเลื่อนขั้น 9`);
+    await salesPage.getByTestId('guided-advance-submit').click();
+    await expect(guided).toHaveCount(0);
+    await stageIs(salesPage, 9);
+    const after = await ticketOf(deal);
+    expect(after.summary.salesStage).toBe('NEGOTIATION');
+    expect(after.summary.nextFollowUpAt).toBe(inDays(9));
+    const activities = await (await sessions.sales.get(`/api/tickets/${deal}/activities`)).json();
+    expect(activities.items.some((a) => String(a.note).includes(`${tag} โทรติดตามก่อนเลื่อนขั้น 9`))).toBe(true);
+    await shot(salesPage, '07-buyer-guided-advance-stage9');
   });
 
   test('8. a deal born from a quotation starts on the recipient stage', async () => {

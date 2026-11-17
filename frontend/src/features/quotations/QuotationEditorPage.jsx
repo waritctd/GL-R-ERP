@@ -1884,7 +1884,9 @@ export function QuotationEditorPage({ user, showToast }) {
     mutationFn: () => api.dealQuotations.promoteToDeal(id),
     onSuccess: (res) => {
       const dealId = res?.result?.ticketId ?? quotation?.ticketId;
-      queryClient.removeQueries({ queryKey: queryKeys.ticketDetail(dealId) });
+      // exact: only the bare deal key held this page's summary shape. The document chain the card observes is nested
+      // under it (queryKeys.documentChain) and must be refetched, not dropped from under its observer.
+      queryClient.removeQueries({ queryKey: queryKeys.ticketDetail(dealId), exact: true });
       queryClient.invalidateQueries({ queryKey: ['tickets'] });
       // The chain's keys (both pages read them): the card moves on to the deposit notice right here.
       invalidateDealDocuments(queryClient, dealId);

@@ -11,6 +11,7 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.common.ApiException;
+import th.co.glr.hr.peopleinsights.PeopleInsightsService;
 
 @Service
 public class AuthService {
@@ -21,10 +22,12 @@ public class AuthService {
     private final PasswordEncoder passwordEncoder;
     private final AuditService auditService;
     private final ViewAsService viewAs;
+    private final PeopleInsightsService peopleInsights;
 
     public AuthService(EmployeeAuthRepository employees, PasswordEncoder passwordEncoder,
-                       AuditService auditService, ViewAsService viewAs) {
+                       AuditService auditService, ViewAsService viewAs, PeopleInsightsService peopleInsights) {
         this.viewAs = viewAs;
+        this.peopleInsights = peopleInsights;
         this.employees = employees;
         this.passwordEncoder = passwordEncoder;
         this.auditService = auditService;
@@ -139,7 +142,13 @@ public class AuthService {
             }
         }
         return new AuthResponse(user, employees.isAdmin(user.id()), employees.canCreateQuotation(user.id()),
-            employees.canIssueBillingNote(user.id()), canViewAs, info);
+            employees.canIssueBillingNote(user.id()), canViewAs,
+            canViewPeopleInsights(user), info);
+    }
+
+    /** ceo and hr see the page; so does a team head. A hint for the menu only: the endpoint decides again. */
+    private boolean canViewPeopleInsights(UserPrincipal user) {
+        return "ceo".equals(user.role()) || "hr".equals(user.role()) || peopleInsights.mayView(user);
     }
 
     public void logout(HttpSession session) {

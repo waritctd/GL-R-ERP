@@ -419,6 +419,37 @@ describe('DealPaymentSection — step 2 ใบแจ้งหนี้ส่ว�
   });
 });
 
+describe('DealPaymentSection — fix round 1: never a button the server refuses', () => {
+  // F-2: the legacy cancelled status on an ACTIVE lifecycle is a dead deal (the quotation card says งานนี้ยกเลิกแล้ว).
+  it('a legacy cancelled-status deal on an ACTIVE lifecycle offers no create, and says why', async () => {
+    renderSection({ summary: summaryOf({ status: 'cancelled', lifecycle: 'ACTIVE', paymentStatus: 'CUSTOMER_CONFIRMED' }) });
+    await settled();
+    expect(deposit().queryByRole('button', { name: 'สร้างใบแจ้งยอดเงินรับมัดจำ' })).toBeNull();
+    expect(deposit().getByText(/งานพักหรือปิดอยู่/)).toBeTruthy();
+  });
+
+  // Surviving mutation F17: the create button follows the server's canCreate, not merely the TO_CREATE state.
+  it('deposit received but the goods are not in: no สร้างใบแจ้งหนี้ส่วนที่เหลือ even for the manager, and the reason', async () => {
+    renderSection({
+      summary: summaryOf({ paymentStatus: 'DEPOSIT_PAID', status: 'quotation_issued', fulfillmentStatus: null }),
+      depositNotices: [issuedNotice], canManageRemainingInvoice: true,
+    });
+    await settled();
+    expect(remaining().getByText('ยังไม่ออก')).toBeTruthy();
+    expect(remaining().queryByRole('button', { name: 'สร้างใบแจ้งหนี้ส่วนที่เหลือ' })).toBeNull();
+    expect(remaining().getByText('ออกได้เมื่อสินค้าถึงขั้นรับ/ส่งมอบแล้ว')).toBeTruthy();
+  });
+
+  // F-4 on the deal page: an unconfirmed no-deposit deal waits on the order, not on a deposit.
+  it('an unconfirmed no-deposit deal: step 2 never says รอรับมัดจำก่อน', async () => {
+    renderSection({ summary: summaryOf({ status: 'draft', depositPolicy: 'CREDIT_CUSTOMER', paymentStatus: null }), canManageRemainingInvoice: true });
+    await settled();
+    expect(remaining().queryByText('รอรับมัดจำก่อน')).toBeNull();
+    expect(remaining().getByText('ยังไม่ถึงขั้นตอน')).toBeTruthy();
+    expect(remaining().queryByRole('button')).toBeNull();
+  });
+});
+
 describe('DealPaymentSection — deposit receipt date', () => {
   it('shows the LATEST deposit receipt date, whatever order the receipts arrive in', async () => {
     renderSection({

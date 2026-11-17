@@ -119,6 +119,15 @@ class DealStageMetaControllerTest {
         assertThat((List<?>) body.get("stages")).hasSize(15);
     }
 
+    /** Owner ruling 2026-11-16: a NEW cancellation is offered exactly the drawn four. The three retired codes stay
+     * valid on the server (DealCancelReasonTest) but are never offered as a choice again. */
+    @Test
+    @SuppressWarnings("unchecked")
+    void cancelReasonsOfferExactlyTheDrawnFour() {
+        assertThat((List<Object>) controller.dealStages(signedIn()).get("cancelReasons")).containsExactly(
+            "DUPLICATE_DEAL", "WRONG_CUSTOMER_OR_PROJECT", "NO_REAL_PROJECT", "OTHER");
+    }
+
     @Test
     void stillRequiresASession() {
         assertThatThrownBy(() -> controller.dealStages(new MockHttpSession()))

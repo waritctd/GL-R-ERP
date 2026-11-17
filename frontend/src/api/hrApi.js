@@ -642,6 +642,10 @@ export const api = {
   salesAnalytics: {
     snapshot: () => apiRequest(API_ROUTES.salesAnalytics.snapshot),
   },
+  // Mirrors PeopleInsightsController (peopleinsights/). get({ year?, scope? }): scope 'all' or a team id the caller may pick.
+  peopleInsights: {
+    get: (params) => apiRequest(withQuery(API_ROUTES.peopleInsights.get, params)),
+  },
   // Mirrors SalesBoardController (salesboard/). myWork: the caller's own ACTIVE deals (followUp + board), sales /
   // sales_manager / ceo. teamOverview: per-rep rows + the team's quiet deals, sales_manager / ceo only.
   // teamBoard: { board, quietDays } — every rep's open deals in myWork.board's row shape (owner on each row), for the

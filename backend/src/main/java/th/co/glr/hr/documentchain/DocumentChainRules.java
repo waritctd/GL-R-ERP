@@ -13,11 +13,19 @@ import th.co.glr.hr.ticket.TicketStatus;
  * never derive them in the browser.
  *
  * <p>The states are the deal page's own (DealPaymentSection's deposit and remaining-invoice steps as they stood on
- * 2026-11-17), moved here unchanged except for two corrections, both "never offer a button the server would refuse":
- * an unconfirmed deal's remaining invoice waits on the ORDER (the old step said "after the deposit", and on a
- * no-deposit policy offered to create it — {@code RemainingInvoiceService#createDraft} 409s anything not
- * {@code quotation_issued}); and a paused / closed deal names {@link #DEAL_NOT_ACTIVE} (both create paths run
- * {@code requireActiveLifecycle}).
+ * 2026-11-17), moved here unchanged; the blocked REASONS say what the write paths refuse, so no page offers a button the
+ * server would refuse:
+ * <ul>
+ *   <li>{@link #ORDER_NOT_CONFIRMED} on the remaining invoice = the deal is not {@code quotation_issued}:
+ *       {@code DepositNoticeService#requireQuotationIssuedForRemainingInvoice}, which
+ *       {@code RemainingInvoiceService#createDraft} runs. That is the guard, not the payment track: a pricing-request
+ *       deal already at {@code quotation_issued} whose order is not yet confirmed is NOT refused by it (fix round 1,
+ *       F-4 — the earlier comment claimed it was);</li>
+ *   <li>{@link #DEAL_NOT_ACTIVE} = a paused / closed lifecycle, or a dead deal (lost, cancelled, or the legacy
+ *       {@code status = 'cancelled'} on an ACTIVE lifecycle): both create paths and both issue paths run
+ *       {@code requireActiveLifecycle}, and the deposit create's {@code requireApprovedTicket} refuses a cancelled
+ *       status. A DRAFT is blocked the same way, since issuing it needs an active deal (fix round 1, F-2 / F-3).</li>
+ * </ul>
  *
  * <p>The table both this class and mockApi.js's mirror are pinned to is
  * {@code frontend/src/features/documentChain/documentChainCases.json}.
@@ -70,8 +78,10 @@ public final class DocumentChainRules {
         return f.paymentStatus() != null;
     }
 
+    /** An ACTIVE lifecycle on a deal that is not dead: what requireActiveLifecycle (and, for a cancelled status,
+     * requireApprovedTicket / requireQuotationIssuedForRemainingInvoice) let a document write through. */
     private static boolean active(Facts f) {
-        return DealLifecycle.ACTIVE.equals(f.lifecycle());
+        return DealLifecycle.ACTIVE.equals(f.lifecycle()) && !dead(f);
     }
 
     public static String depositState(Facts f) {
@@ -100,18 +110,22 @@ public final class DocumentChainRules {
         if (f.invoiceIssued()) return fullyPaid ? PAID : ISSUED;
         if (f.invoiceDraft()) return DRAFT;
         if (fullyPaid) return NOT_NEEDED;
-        if (!orderConfirmed(f)) return WAITING;
         return depositDone(f) ? TO_CREATE : WAITING;
     }
 
-    /** Why the remaining invoice cannot be created now; null when it can (or when it already exists). */
+    /** Why the remaining invoice cannot be created (or its DRAFT issued) now; null when it can, or when it is issued. */
     public static String remainingBlockedReason(Facts f) {
         String state = remainingState(f);
-        if (WAITING.equals(state)) return orderConfirmed(f) ? DEPOSIT_NOT_RECEIVED : ORDER_NOT_CONFIRMED;
+        boolean quotationIssued = TicketStatus.QUOTATION_ISSUED.equals(f.status());
+        if (WAITING.equals(state)) {
+            if (dead(f)) return DEAL_NOT_ACTIVE;
+            return quotationIssued ? DEPOSIT_NOT_RECEIVED : ORDER_NOT_CONFIRMED;
+        }
+        if (DRAFT.equals(state)) return active(f) ? null : DEAL_NOT_ACTIVE;
         if (!TO_CREATE.equals(state)) return null;
         if (!active(f)) return DEAL_NOT_ACTIVE;
-        boolean ready = TicketStatus.QUOTATION_ISSUED.equals(f.status())
-            && f.fulfillmentStatus() != null && REMAINING_INVOICE_READY_FULFILMENT.contains(f.fulfillmentStatus());
+        if (!quotationIssued) return ORDER_NOT_CONFIRMED;
+        boolean ready = f.fulfillmentStatus() != null && REMAINING_INVOICE_READY_FULFILMENT.contains(f.fulfillmentStatus());
         return ready ? null : GOODS_NOT_READY;
     }
 

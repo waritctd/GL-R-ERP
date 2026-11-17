@@ -751,6 +751,11 @@ describe('activity log access (admin capability)', () => {
       expect(locked('/activity-log', user('import', { admin: true }))).toBe(true);
     });
 
+    it('keeps /activity-log locked for a locked role without the admin flag', async () => {
+      const locked = await lockedCanAccessPath();
+      expect(locked('/activity-log', user('import', { admin: false }))).toBe(false);
+    });
+
     it('unlocks NOTHING else for that admin', async () => {
       // The narrow-exemption check. Being admin must open /activity-log and nothing more; if this goes
       // green for /tickets, the exemption has been widened into a full lockdown bypass (which adding
@@ -760,6 +765,35 @@ describe('activity log access (admin capability)', () => {
       for (const path of ['/tickets', '/payroll', '/employees', '/commissions', '/catalog']) {
         expect(locked(path, admin)).toBe(false);
       }
+    });
+  });
+});
+
+// /people-insights follows the server's canViewPeopleInsights hint (ceo/hr/team head), and a team head is not hr/ceo, so
+// the self-service lockdown must let this one path through for the flag holder and nothing else.
+describe('people insights access (canViewPeopleInsights)', () => {
+  const user = (role, extra = {}) => ({ id: 9, employeeId: 9, role, ...extra });
+
+  it('opens the page only for a flagged user', () => {
+    expect(canAccessPath('/people-insights', user('employee', { canViewPeopleInsights: true }))).toBe(true);
+    expect(canAccessPath('/people-insights', user('employee', { canViewPeopleInsights: false }))).toBe(false);
+    expect(canAccessPath('/people-insights', user('hr'))).toBe(false); // no flag, no page, whatever the role
+  });
+
+  describe('under the self-service lockdown', () => {
+    afterEach(() => {
+      vi.unstubAllEnvs();
+      vi.resetModules();
+    });
+
+    it('lets a flagged team head through to this page and unlocks nothing else', async () => {
+      vi.stubEnv('VITE_SELF_SERVICE_ONLY', 'true');
+      vi.resetModules();
+      const { canAccessPath: locked } = await import('./permissions.js');
+      const head = user('employee', { canViewPeopleInsights: true });
+      expect(locked('/people-insights', head)).toBe(true);
+      expect(locked('/payroll', head)).toBe(false);
+      expect(locked('/people-insights', user('employee'))).toBe(false);
     });
   });
 });

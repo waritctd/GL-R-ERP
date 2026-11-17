@@ -6,6 +6,7 @@ import {
   allTabSections,
   audienceLabels,
   entriesForViewer,
+  entryVisibleTo,
   isForEveryone,
   publishPayload,
 } from '../audiences.js';
@@ -42,9 +43,23 @@ describe('release content modules', () => {
       const used = new Set(Object.values(release.sections).flat());
       for (const [role, sectionIds] of Object.entries(release.sections)) {
         expect(sectionIds.length, `${role} needs at least one entry`).toBeGreaterThan(0);
+        expect(new Set(sectionIds).size, `${release.id}: ${role} lists an entry twice`).toBe(sectionIds.length);
         for (const id of sectionIds) expect(ids, `${role} lists unknown entry ${id}`).toContain(id);
       }
       for (const id of ids) expect(used.has(id), `entry ${id} is in no role's section`).toBe(true);
+      // Each entry title is a line of its own in the bell and the release email: two alike would read as a duplicate.
+      const titles = release.entries.map((entry) => entry.title);
+      expect(new Set(titles).size, `${release.id}: entry titles must be unique`).toBe(titles.length);
+
+      // Wrong-way-round, with the lock OFF (the widest a role ever gets): no role's section names an entry whose
+      // page that role cannot open. Under the lock entryVisibleTo hides more; each release pins that below.
+      for (const [role, sectionIds] of Object.entries(release.sections)) {
+        for (const id of sectionIds) {
+          const entry = release.entries.find((e) => e.id === id);
+          expect(entryVisibleTo(entry, user(role)), `${release.id}: ${role} is told about ${id} (${entry.path}) but cannot open it`)
+            .toBe(true);
+        }
+      }
 
       for (const entry of release.entries) {
         const where = `${release.id}/${entry.id}`;
@@ -60,9 +75,14 @@ describe('release content modules', () => {
         entry.steps.forEach((step, index) => {
           expect(step.text.trim().length, `${where} step ${index + 1}`).toBeGreaterThan(0);
           expect(typeof step.detail, `${where} step ${index + 1}`).toBe('string');
-          // One predictable filename per step, so whoever captures the screenshots knows exactly what to save.
-          expect(step.image).toBe(`/whats-new/${release.id}/${entry.id}-${index + 1}.png`);
-          expect(step.alt.trim().length, `${where} step ${index + 1} alt`).toBeGreaterThan(0);
+          // One predictable filename per step, so whoever captures the screenshots knows exactly what to save. A step
+          // may have NO screenshot (image and alt both null) when no honest capture exists; never a dangling alt.
+          if (step.image === null) {
+            expect(step.alt, `${where} step ${index + 1}: an image-less step has no alt`).toBeNull();
+          } else {
+            expect(step.image).toBe(`/whats-new/${release.id}/${entry.id}-${index + 1}.png`);
+            expect(step.alt.trim().length, `${where} step ${index + 1} alt`).toBeGreaterThan(0);
+          }
         });
       }
     }
@@ -88,6 +108,14 @@ describe('2026-11-16 audiences (unlocked, as the test env runs)', () => {
     expect(idsFor(user('ceo'))).toEqual(['address', 'ceo-home', 'sales-insights', 'deal-list', 'deal-page-ceo', 'fulfilment']);
     expect(idsFor(user('account'))).toEqual(['address', 'finance-deal']);
     expect(idsFor(user('import'))).toEqual(['address', 'import-home', 'fulfilment', 'import-deal', 'pricing-request']);
+  });
+
+  it('every step of the published release keeps its screenshot', () => {
+    for (const entry of release.entries) {
+      entry.steps.forEach((step, index) => expect(step.image, `${entry.id} step ${index + 1}`).toBe(
+        `/whats-new/2026-11-16/${entry.id}-${index + 1}.png`,
+      ));
+    }
   });
 
   it('roles whose pages did not change get only the address entry', () => {

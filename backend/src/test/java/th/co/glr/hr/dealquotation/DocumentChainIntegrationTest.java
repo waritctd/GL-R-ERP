@@ -367,6 +367,49 @@ class DocumentChainIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(chain.forTicket(deal, ceo).viewer().mayConfirmOrder()).isFalse();
     }
 
+    // ── fix round 1: the surviving mutations B1 / B2 / B6 ────────────────────────────────────────────
+
+    /** B1: the KEYER (a rep who typed the deal in for its owner) reads its documents today, so its list rows carry the
+     * mark; dropping keyed_by from the list SQL must fail here. */
+    @Test
+    void theKeyerSeesTheListMarkOfADealOwnedBySomeoneElse() {
+        long deal = deal(owner);
+        DealQuotationDto q = approved(deal, 50);
+        jdbc.update("UPDATE sales.ticket SET created_by = :other, keyed_by = :keyer WHERE ticket_id = :id",
+            Map.of("other", otherSales.id(), "keyer", owner.id(), "id", deal));
+        assertThat(depositNoticeService.listByTicket(deal, owner)).isEmpty(); // today's read gate admits the keyer
+        List<DealQuotationDto> keyerRows = quotationService.search(null, false, owner);
+        assertThat(keyerRows).extracting(DealQuotationDto::id).contains(q.id());
+        assertThat(chain.listStages(keyerRows, owner)).containsEntry(q.id(), "AWAITING_ORDER");
+    }
+
+    /** B2, wrong-way-round: the deal's ASSIGNEE (another sales rep) cannot read its deposit notices today, so the list
+     * mark must not reach them either; widening the list SQL to assigned_to must fail here. */
+    @Test
+    void anAssigneeWhoIsNeitherOwnerNorKeyerGetsNoListMark() {
+        long deal = deal(owner);
+        DealQuotationDto q = approved(deal, 50);
+        jdbc.update("UPDATE sales.ticket SET assigned_to = :assignee WHERE ticket_id = :id",
+            Map.of("assignee", otherSales.id(), "id", deal));
+        assertForbidden(() -> depositNoticeService.listByTicket(deal, otherSales)); // today's rule
+        List<DealQuotationDto> ownerRows = quotationService.search(null, false, owner);
+        assertThat(chain.listStages(ownerRows, otherSales)).doesNotContainKey(q.id()).isEmpty();
+    }
+
+    /** B6: a sales_manager who OWNS the deal still may not write its documents (every write needs the sales ROLE), so
+     * the flag is false — and the real write agrees. Dropping the role half of the flag must fail here. */
+    @Test
+    void aSalesManagerWhoOwnsTheDealMayNotWriteItsDocuments() {
+        long deal = deal(owner);
+        confirmer.confirmOrderFromDirectQuotation(approved(deal, 50).id(), owner);
+        jdbc.update("UPDATE sales.ticket SET created_by = :sm WHERE ticket_id = :id",
+            Map.of("sm", salesManager.id(), "id", deal));
+        DocumentChainDto seen = chain.forTicket(deal, salesManager);
+        assertThat(seen.viewer().mayWriteDepositNotice()).isFalse();
+        assertThat(seen.viewer().mayWriteRemainingInvoice()).isFalse();
+        assertForbidden(() -> depositNoticeService.createDraft(deal, emptyNoticeRequest(), salesManager));
+    }
+
     // ── fixtures ──────────────────────────────────────────────────────────────────────────────────
 
     private long deal(UserPrincipal creator) {

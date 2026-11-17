@@ -9,11 +9,15 @@ const BYPASS_POLICIES = ['NOT_REQUIRED', 'WAIVED', 'CREDIT_CUSTOMER']; // Deposi
 const DEPOSIT_PAID_STATUSES = ['DEPOSIT_PAID', 'AWAITING_FINAL_PAYMENT', 'FULLY_PAID'];
 const READY_FULFILMENT = ['GOODS_RECEIVED', 'FROM_STOCK', 'PARTIALLY_DELIVERED', 'FULLY_DELIVERED'];
 
+// DocumentChainRules#dead / #active: a lost / cancelled lifecycle or the legacy cancelled status is dead; active means
+// an ACTIVE lifecycle on a deal that is not dead.
+const dead = (f) => ['CLOSED_LOST', 'CANCELLED'].includes(f.lifecycle) || f.status === 'cancelled';
+const active = (f) => f.lifecycle === 'ACTIVE' && !dead(f);
+
 export function chainOrderConfirmed(f) {
   return f.paymentStatus != null;
 }
 
-const active = (f) => f.lifecycle === 'ACTIVE';
 
 export function chainDepositState(f) {
   if (BYPASS_POLICIES.includes(f.depositPolicy)) return 'NOT_REQUIRED';
@@ -34,21 +38,23 @@ export function chainRemainingState(f) {
   if (f.invoiceIssued) return fullyPaid ? 'PAID' : 'ISSUED';
   if (f.invoiceDraft) return 'DRAFT';
   if (fullyPaid) return 'NOT_NEEDED';
-  if (!chainOrderConfirmed(f)) return 'WAITING';
   const deposit = chainDepositState(f);
   return deposit === 'NOT_REQUIRED' || deposit === 'PAID' ? 'TO_CREATE' : 'WAITING';
 }
 
 export function chainRemainingBlockedReason(f) {
   const state = chainRemainingState(f);
-  if (state === 'WAITING') return chainOrderConfirmed(f) ? 'DEPOSIT_NOT_RECEIVED' : 'ORDER_NOT_CONFIRMED';
+  const quotationIssued = f.status === 'quotation_issued';
+  if (state === 'WAITING') {
+    if (dead(f)) return 'DEAL_NOT_ACTIVE';
+    return quotationIssued ? 'DEPOSIT_NOT_RECEIVED' : 'ORDER_NOT_CONFIRMED';
+  }
+  if (state === 'DRAFT') return active(f) ? null : 'DEAL_NOT_ACTIVE';
   if (state !== 'TO_CREATE') return null;
   if (!active(f)) return 'DEAL_NOT_ACTIVE';
-  const ready = f.status === 'quotation_issued' && READY_FULFILMENT.includes(f.fulfillmentStatus);
-  return ready ? null : 'GOODS_NOT_READY';
+  if (!quotationIssued) return 'ORDER_NOT_CONFIRMED';
+  return READY_FULFILMENT.includes(f.fulfillmentStatus) ? null : 'GOODS_NOT_READY';
 }
-
-const dead = (f) => ['CLOSED_LOST', 'CANCELLED'].includes(f.lifecycle) || f.status === 'cancelled';
 
 export function chainListStage(f, promoted, confirmedQuotationId, quotationId) {
   if (dead(f)) return null;

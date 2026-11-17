@@ -41,6 +41,9 @@ export function depositBadge(chain) {
 }
 
 export function remainingBadge(chain) {
+  // Blocked on the ORDER (the deal is not quotation_issued): there is nothing — no deposit — to wait for yet (fix
+  // round 1, F-4: an unconfirmed no-deposit deal used to read "รอรับมัดจำก่อน").
+  if (chain?.remaining?.blockedReason === 'ORDER_NOT_CONFIRMED') return DEPOSIT_BADGE.NOT_YET;
   return REMAINING_BADGE[chain?.remaining?.state] ?? REMAINING_BADGE.WAITING;
 }
 

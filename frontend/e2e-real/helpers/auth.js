@@ -1,4 +1,5 @@
 import { expect } from '@playwright/test';
+import { userFromAuthResponse } from '../../src/app/authUser.js';
 import { DEMO_PASSWORD, personaFor } from './accounts.js';
 
 // Browser auth helpers for the REAL backend (no VITE_USE_MOCKS). LoginPage.jsx renders the `login-role-*`
@@ -50,8 +51,7 @@ export async function sessionUser(page) {
   if (!response.ok()) {
     throw new Error(`GET /api/auth/me returned ${response.status()} — no live session`);
   }
-  const { user } = await response.json();
-  return user;
+  return userFromAuthResponse(await response.json());
 }
 
 /** True once the app has rendered an authenticated shell rather than the login screen. */

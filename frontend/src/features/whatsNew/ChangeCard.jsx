@@ -46,7 +46,8 @@ function StepScreenshot({ step }) {
   );
 }
 
-/** One page this release changed: what, where, why, numbered steps with a screenshot each, and who to ask. */
+/** One page this release changed: what, where, why, numbered steps (each with its screenshot, unless the release marks
+ * the step image-less), and who to ask. */
 export function ChangeCard({ release, entry, anchorId }) {
   const [ref, revealed] = useReveal();
   const labels = audienceLabels(release, entry);
@@ -80,10 +81,12 @@ export function ChangeCard({ release, entry, anchorId }) {
       <ol className="m-0 grid list-none gap-4 px-[18px] pb-4 pt-1 mobile:px-4">
         {entry.steps.map((step, index) => (
           <li
-            key={step.image}
+            // Keyed by position: a step may have no image (null), so the image path is not a key.
+            key={`${entry.id}-${index + 1}`}
             style={revealed ? stepDelay(index) : undefined}
             className={cn(
-              'grid min-w-0 items-start gap-3.5 md:grid-cols-[minmax(0,1fr)_minmax(0,1.15fr)]',
+              'grid min-w-0 items-start gap-3.5',
+              step.image && 'md:grid-cols-[minmax(0,1fr)_minmax(0,1.15fr)]',
               revealed && 'motion-safe:animate-wn-rise',
             )}
           >
@@ -95,7 +98,7 @@ export function ChangeCard({ release, entry, anchorId }) {
                 {step.detail ? <span className="mt-0.5 block text-sm text-text-muted">{step.detail}</span> : null}
               </p>
             </div>
-            <StepScreenshot step={step} />
+            {step.image ? <StepScreenshot step={step} /> : null}
           </li>
         ))}
       </ol>

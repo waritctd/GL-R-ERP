@@ -99,6 +99,7 @@
     "GET /api/payroll/{periodId}/lines/{lineId}/payslip.pdf",
     "GET /api/payroll/{periodId}/payslip/me",
     "GET /api/payroll/{periodId}/payslips.zip",
+    "GET /api/people-insights",
     "GET /api/price-calc-configs",
     "GET /api/price-import/countries",
     "GET /api/price-import/factories",

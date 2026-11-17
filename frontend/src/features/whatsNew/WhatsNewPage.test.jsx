@@ -65,7 +65,18 @@ describe('WhatsNewPage', () => {
     const sections = screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent);
     expect(sections).toEqual(['ทุกแผนก', 'ฝ่ายขาย', 'ผู้จัดการฝ่ายขาย', 'CEO', 'ฝ่ายบัญชี', 'ฝ่ายนำเข้า']);
     expect(changeHeadings().join('|')).toContain('บันทึกรับชำระ');
-    expect(screen.getByText(/ฝ่ายบุคคล · คลังสินค้า · QC · พนักงานทั่วไป/)).toBeTruthy();
+    // The published 16 Nov page, word for word: a second release must not change what this one says.
+    expect(screen.getByText(/ฝ่ายบุคคล · คลังสินค้า · QC · พนักงานทั่วไป/).textContent)
+      .toBe('ฝ่ายบุคคล · คลังสินค้า · QC · พนักงานทั่วไป: ฉบับนี้มีเฉพาะการย้ายที่อยู่เว็บ (ด้านบน)');
+  });
+
+  it('the 16 Nov page is unchanged for a role a later release has nothing for', async () => {
+    renderPage(hr, '/whats-new/2026-11-16');
+
+    const mine = await screen.findByRole('tab', { name: /สำหรับแผนกของคุณ/ });
+    expect(mine.textContent).toContain('1');
+    expect(changeHeadings()).toEqual(['พอร์ทัลย้ายมาที่ glr-hub.com']);
+    expect(screen.queryByText('ฉบับนี้ไม่มีเรื่องเฉพาะแผนกของคุณ')).toBeNull();
   });
 
   it('each entry names its page and menu path', async () => {
@@ -101,10 +112,55 @@ describe('WhatsNewPage', () => {
     expect(within(firstStep).getByText('ภาพหน้าจอจะเพิ่มเร็ว ๆ นี้')).toBeTruthy();
   });
 
+  it('a step with no screenshot renders its text alone: no image, no "coming soon" placeholder', async () => {
+    renderPage({ ...sales, role: 'account' }, '/whats-new/2026-11-17');
+
+    const article = (await screen.findByRole('heading', { level: 3, name: /ที่คุณดูได้/ })).closest('article');
+    const steps = within(article).getAllByRole('listitem');
+    expect(steps).toHaveLength(3);
+    expect(within(article).queryByRole('img')).toBeNull();
+    expect(within(article).queryByText('ภาพหน้าจอจะเพิ่มเร็ว ๆ นี้')).toBeNull();
+    expect(steps[0].textContent).toContain('ใบเสนอราคา');
+  });
+
+  it('an entry mixing both shows a screenshot only on the steps that have one', async () => {
+    renderPage(sales, '/whats-new/2026-11-17');
+
+    const article = (await screen.findByRole('heading', { level: 3, name: /ระบบสรุปให้ตรวจก่อนทุกครั้ง/ })).closest('article');
+    const steps = within(article).getAllByRole('listitem');
+    expect(steps.map((step) => within(step).queryAllByRole('img').length)).toEqual([1, 0, 1, 1]);
+  });
+
   it('/whats-new with no id shows the latest release', async () => {
     renderPage(sales, '/whats-new');
 
+    expect(await screen.findByRole('heading', { level: 1, name: /17 พ\.ย\. 2569/ })).toBeTruthy();
+  });
+
+  it('the 16 Nov release stays reachable by its own link after a newer one ships', async () => {
+    renderPage(sales, '/whats-new/2026-11-16');
+
     expect(await screen.findByRole('heading', { level: 1, name: /16 พ\.ย\. 2569/ })).toBeTruthy();
+  });
+
+  it('a role whose pages did not change gets the 17 Nov launcher entry only', async () => {
+    renderPage(hr, '/whats-new/2026-11-17');
+
+    const mine = await screen.findByRole('tab', { name: /สำหรับแผนกของคุณ/ });
+    expect(mine.textContent).toContain('1');
+    expect(changeHeadings()).toHaveLength(1);
+    expect(changeHeadings()[0]).toContain('เมนู');
+  });
+
+  it('"ทั้งหมด" of 17 Nov leads with ทุกแผนก and names the other roles with ITS note, not 16 Nov’s', async () => {
+    renderPage(hr, '/whats-new/2026-11-17');
+
+    fireEvent.click(await screen.findByRole('tab', { name: /ทั้งหมด/ }));
+
+    const sections = screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent);
+    expect(sections).toEqual(['ทุกแผนก', 'ฝ่ายขาย', 'ผู้จัดการฝ่ายขาย', 'CEO', 'ฝ่ายบัญชี', 'ฝ่ายนำเข้า']);
+    expect(screen.getByText(/ฝ่ายบุคคล · คลังสินค้า · QC · พนักงานทั่วไป/).textContent)
+      .toBe('ฝ่ายบุคคล · คลังสินค้า · QC · พนักงานทั่วไป: ฉบับนี้มีเฉพาะเมนูแบบใหม่ (ด้านบน)');
   });
 
   it('an unknown release id says so instead of rendering an empty page', async () => {

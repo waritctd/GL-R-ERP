@@ -297,8 +297,10 @@ describe('shared usage pin — TicketCreateModal.jsx and DealItemsPanel.jsx (the
     return readFileSync(resolve(process.cwd(), relativePath), 'utf8');
   }
 
+  // The create form's item editor moved out of TicketCreateModal.jsx into CreateDealItems.jsx (2026-11-16 short form;
+  // shown only to creators who cannot edit items afterwards), so that file is what is pinned now.
   const files = {
-    'TicketCreateModal.jsx': readSource('src/features/tickets/TicketCreateModal.jsx'),
+    'CreateDealItems.jsx': readSource('src/features/tickets/CreateDealItems.jsx'),
     'DealItemsPanel.jsx': readSource('src/features/tickets/DealItemsPanel.jsx'),
   };
 

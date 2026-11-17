@@ -58,6 +58,16 @@ class TicketControllerCreateValidationTest {
         verifyNoInteractions(ticketService);
     }
 
+    /** The short create form's estimate (2026-11-16) is validated at the boundary too: a channel is stated, so this
+     * 400 comes from estimatedValue alone. */
+    @Test
+    void createWithANonPositiveEstimatedValueIs400AndNeverReachesTheService() throws Exception {
+        mvc.perform(post("/api/tickets").session(sales()).contentType(MediaType.APPLICATION_JSON)
+                .content(body(",\"entryChannel\":\"OWNER_DIRECT\",\"estimatedValue\":0")))
+            .andExpect(status().isBadRequest());
+        verifyNoInteractions(ticketService);
+    }
+
     /** Control: proves the 400s above come from entryChannel validation, not the harness. */
     @Test
     void createWithARealEntryChannelReachesTheService() throws Exception {

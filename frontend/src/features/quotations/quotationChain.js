@@ -87,8 +87,11 @@ export function quotationChainSteps(quotation, chain) {
     };
 
   // Before the order is confirmed the deal's policy has not followed the quotation yet: the quotation's own 0% is
-  // what confirming will set (TicketService#followQuotationDepositPolicy).
-  const noDeposit = deposit.state === 'NOT_REQUIRED' || (!order.confirmed && Number(quotation.depositPercent) === 0);
+  // what confirming will set (TicketService#followQuotationDepositPolicy). A BLANK percent is not 0%: the server reads
+  // it as the default 30% (DealQuotationRenderAdapter.effectiveDepositPercent), as quotationMeta's confirm copy does.
+  const zeroOnQuotation = quotation.depositPercent != null && quotation.depositPercent !== ''
+    && Number(quotation.depositPercent) === 0;
+  const noDeposit = deposit.state === 'NOT_REQUIRED' || (!order.confirmed && zeroOnQuotation);
   let depositStep;
   if (noDeposit) {
     depositStep = { title: CHAIN_STEP_TITLES[2], state: 'skipped', detail: 'ไม่รับมัดจำ', meta: 'ไม่รับมัดจำ — ข้ามขั้นนี้' };
@@ -100,10 +103,12 @@ export function quotationChainSteps(quotation, chain) {
     };
   } else if (deposit.state === 'TO_CREATE' || deposit.state === 'DRAFT') {
     const state = turn(2);
-    const percent = deposit.percent ?? quotation.depositPercent;
+    // The server's own percent (the notice's, else the confirmed quotation's effective one); none → no figure.
+    const percent = deposit.percent;
     depositStep = {
       title: CHAIN_STEP_TITLES[2], state,
-      meta: deposit.state === 'DRAFT' ? 'ฉบับร่าง — ยังไม่ออกเลขที่เอกสาร' : `มัดจำ ${Number(percent ?? 0)}% ตามใบเสนอราคา`,
+      meta: deposit.state === 'DRAFT' ? 'ฉบับร่าง — ยังไม่ออกเลขที่เอกสาร'
+        : percent != null ? `มัดจำ ${Number(percent)}% ตามใบเสนอราคา` : 'มัดจำตามใบเสนอราคา',
       ...(deposit.blockedReason ? { locked: blockedText(deposit.blockedReason) } : {}),
       ...(state === 'current'
         ? { action: 'deposit', actionLabel: deposit.state === 'DRAFT' ? 'ออกใบแจ้งยอดเงินรับมัดจำ' : 'สร้างใบแจ้งยอดเงินรับมัดจำ' }

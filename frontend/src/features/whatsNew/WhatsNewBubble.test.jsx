@@ -58,12 +58,68 @@ describe('WhatsNewBubble', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: /มีอะไรใหม่/ }));
     const popover = screen.getByRole('dialog', { name: 'มีอะไรใหม่' });
+    expect(popover.textContent).toContain('17 พ.ย. 2569');
     const items = within(popover).getAllByRole('listitem');
-    expect(items).toHaveLength(4);
+    expect(items).toHaveLength(7);
+    // Wrong-way-round: a rep is not shown the finance worklist or the team versions.
+    expect(popover.textContent).not.toContain('งานการเงิน');
+    expect(popover.textContent).not.toContain('ทุกคนในทีม');
+
+    fireEvent.click(within(popover).getByRole('button', { name: 'ดูรายละเอียดและวิธีใช้' }));
+    expect(onNavigate).toHaveBeenCalledWith('/whats-new/2026-11-17');
+  });
+
+  it('an unread notice for the older release still opens that release', async () => {
+    api.notifications.list.mockResolvedValue({ notifications: [notice()] });
+    const { onNavigate } = renderBubble();
+
+    await screen.findByTestId('whats-new-unread-dot');
+    fireEvent.click(trigger());
+    const popover = screen.getByRole('dialog', { name: 'มีอะไรใหม่' });
+    expect(popover.textContent).toContain('16 พ.ย. 2569');
+    expect(within(popover).getAllByRole('listitem')).toHaveLength(4);
     expect(popover.textContent).not.toContain('บันทึกรับชำระ');
 
     fireEvent.click(within(popover).getByRole('button', { name: 'ดูรายละเอียดและวิธีใช้' }));
     expect(onNavigate).toHaveBeenCalledWith('/whats-new/2026-11-16');
+  });
+
+  it('a role the new release has nothing for, holding an unread 16 Nov notice, still lands on 16 Nov', async () => {
+    api.notifications.list.mockResolvedValue({ notifications: [notice()] });
+    const { onNavigate } = renderBubble({ role: 'hr', employeeId: 47 });
+
+    await screen.findByTestId('whats-new-unread-dot');
+    fireEvent.click(trigger());
+    const popover = screen.getByRole('dialog', { name: 'มีอะไรใหม่' });
+    expect(popover.textContent).toContain('16 พ.ย. 2569');
+    const items = within(popover).getAllByRole('listitem');
+    expect(items).toHaveLength(1);
+    expect(items[0].textContent).toContain('glr-hub.com');
+    expect(within(popover).queryByText('ฉบับนี้ไม่มีเรื่องเฉพาะแผนกของคุณ')).toBeNull();
+
+    fireEvent.click(within(popover).getByRole('button', { name: 'ดูรายละเอียดและวิธีใช้' }));
+    expect(onNavigate).toHaveBeenCalledWith('/whats-new/2026-11-16');
+  });
+
+  it('a role with no sales pages is shown the 17 Nov launcher change alone', async () => {
+    renderBubble({ role: 'hr', employeeId: 47 });
+
+    fireEvent.click(await screen.findByRole('button', { name: /มีอะไรใหม่/ }));
+    const popover = screen.getByRole('dialog', { name: 'มีอะไรใหม่' });
+    expect(popover.textContent).toContain('17 พ.ย. 2569');
+    const items = within(popover).getAllByRole('listitem');
+    expect(items).toHaveLength(1);
+    expect(items[0].textContent).toContain('เมนู');
+  });
+
+  it('says "มีภาพประกอบ" only for an entry that has a screenshot', async () => {
+    renderBubble({ role: 'account', employeeId: 50 });
+
+    fireEvent.click(await screen.findByRole('button', { name: /มีอะไรใหม่/ }));
+    const items = within(screen.getByRole('dialog', { name: 'มีอะไรใหม่' })).getAllByRole('listitem');
+    const view = items.find((item) => item.textContent.includes('ที่คุณดูได้'));
+    expect(view.textContent).not.toContain('มีภาพประกอบ');
+    expect(items.find((item) => item.textContent.includes('งานการเงิน')).textContent).toContain('มีภาพประกอบ');
   });
 
   it('"ไว้ทีหลัง" and Escape close the popover without navigating', async () => {

@@ -115,8 +115,10 @@ export function WhatsNewPage({ user, showToast }) {
   const mine = entriesForViewer(release, user);
   const { sections, addressOnlyRoles } = allTabSections(release);
   const mineGroups = [{ key: 'mine', label: `สำหรับ${roleLabel}`, entries: mine }];
+  // Roles whose only entry is the everyone one. A release names it itself (`otherRolesNote`); 16 Nov predates the field
+  // and keeps its published address-move sentence word for word.
   const addressOnlyNote = addressOnlyRoles.length > 0
-    ? `${addressOnlyRoles.map((role) => ROLE_LABEL[role]).join(' · ')}: ฉบับนี้มีเฉพาะการย้ายที่อยู่เว็บ (ด้านบน)`
+    ? `${addressOnlyRoles.map((role) => ROLE_LABEL[role]).join(' · ')}: ${release.otherRolesNote ?? 'ฉบับนี้มีเฉพาะการย้ายที่อยู่เว็บ (ด้านบน)'}`
     : null;
   const tabs = [
     { id: 'mine', label: `สำหรับแผนกของคุณ (${mine.length})` },

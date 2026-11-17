@@ -10,6 +10,8 @@ import { ITEM_FIELD_META, missingQtyMessage } from './ticketItemFields.jsx';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { documentChainFromMocks } from '../../test/documentChainFromMocks.js';
+import { useDocumentChain } from '../documentChain/documentChain.js';
+import { QuotationDocumentChain } from '../quotations/QuotationDocumentChain.jsx';
 import { formatThaiDate } from '../../utils/format.js';
 import { DEAL_STAGE_CATALOG } from '../../data/dealStageCatalog.js';
 import { STAGE_ADVANCE_GATE_MESSAGE } from './dealTrackingMeta.js';
@@ -72,6 +74,9 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         updateParty: vi.fn(),
         removeParty: vi.fn(),
         recordBidOutcome: vi.fn(),
+        // Document chain fix round 1 (F-1): the deal page's own lifecycle / confirm actions.
+        confirmCustomer: vi.fn(),
+        hold: vi.fn(),
         // The revoke-close-confirm control lives in the "การเงิน" tab, outside the money section.
         revokeCloseConfirmation: vi.fn(),
         // Fulfilment: DealFulfilmentPanel's own mutations, same self-contained pattern.
@@ -1917,17 +1922,20 @@ describe('TicketDetailPage', () => {
       expect(screen.queryByTestId('guided-advance-modal')).toBeNull();
     });
 
-    it('ขั้น 2, not ready: the main button reads เลื่อนไป: 3. … and opens the follow-up + activity form instead of moving', async () => {
+    // S1 → S2 is the m-stage drawing's ย้ายไป S2 · สเปคผ่าน since 2026-11-16. This used to pin "เลื่อนไป: 3. …"
+    // opening the guided follow-up + activity form; the new dialog asks for exactly those two things itself.
+    it('ขั้น 2, not ready: the main button reads ย้ายไป S2 · สเปคผ่าน and opens that dialog, asking for what is missing, instead of moving', async () => {
       earlyDeal('PRESENTATION', 'SPEC_APPROVED');
       renderTicketDetailPage(salesOwnerUser);
 
       await waitFor(() => expect(screen.getByTestId('ticket-primary-action').getAttribute('data-action')).toBe('advance_stage'));
-      expect(screen.getByTestId('ticket-primary-action').textContent).toMatch(/เลื่อนไป: 3\./);
-      // One เลื่อนไป button on the page body: the stage panel's own opener steps aside for it.
+      expect(screen.getByTestId('ticket-primary-action').textContent).toContain('ย้ายไป S2 · สเปคผ่าน');
+      // One move button on the page body: the stage panel's own opener steps aside for it.
       expect(screen.queryByTestId('guided-advance-open')).toBeNull();
 
       fireEvent.click(screen.getByTestId('ticket-primary-action'));
-      expect(await screen.findByTestId('guided-advance-modal')).not.toBeNull();
+      const dialog = await screen.findByTestId('move-s2-modal');
+      expect(within(dialog).getByLabelText(/วันติดตามครั้งถัดไป/)).toBeTruthy();
       expect(api.tickets.updateStage).not.toHaveBeenCalled();
     });
 
@@ -5847,6 +5855,101 @@ describe('TicketDetailPage', () => {
       renderTicketDetailPageAtRoute(['/tickets/701'], salesOwnerUser);
       const card = await screen.findByTestId('next-step-card');
       await waitFor(() => expect(card.textContent).toContain('ขั้นถัดไป: ฝ่ายบัญชียืนยันรับมัดจำที่หน้าการเงิน'));
+    });
+  });
+
+  // Fix round 1, F-1 (the owner's condition): the deal page's OWN actions move the chain, and the เงิน tab (and a
+  // quotation card on the same client) must follow without a manual refetch. A tiny server: the mutation mocks move
+  // `deal`, and tickets.get / actions / documentChain.get answer from it.
+  describe('TicketDetailPage — F-1: the deal page\'s own actions refresh the document chain', () => {
+    let deal;
+    let actions;
+    function serve(summary, availableActions) {
+      deal = { lifecycle: 'ACTIVE', createdById: 1, entryChannel: 'BUYER_DIRECT', depositPolicy: 'REQUIRED', ...summary };
+      actions = availableActions;
+      api.tickets.get.mockImplementation(async () => ({ ticket: buildTicket({ summary: { ...deal } }) }));
+      api.tickets.actions.mockImplementation(async () => ({ currentState: { ...deal }, availableActions: actions }));
+      api.dealQuotations.listForTicket.mockResolvedValue({ items: [] });
+      api.depositNotices.listByTicket.mockResolvedValue({ depositNotices: [] });
+    }
+    const moveTo = (patch, nextActions = []) => {
+      Object.assign(deal, patch);
+      actions = nextActions;
+      return { ticket: buildTicket({ summary: { ...deal } }) };
+    };
+    const depositStep = () => within(screen.getByTestId('payment-step-deposit'));
+
+    it('ลูกค้ายืนยัน on the deal page: the deposit step moves to ยังไม่สร้าง with no manual refetch', async () => {
+      serve({ status: 'quotation_issued', paymentStatus: null, salesStage: 'QUOTE_BUYER', fulfillmentStatus: null },
+        [{ action: 'CONFIRM_CUSTOMER', kind: 'operational', label: 'ลูกค้ายืนยัน' }]);
+      api.tickets.confirmCustomer.mockImplementation(async () => moveTo({ paymentStatus: 'CUSTOMER_CONFIRMED', salesStage: 'ORDER_RECEIVED' }));
+      renderTicketDetailPageAtRoute(['/tickets/701?tab=money'], salesOwnerUser);
+      await waitFor(() => expect(depositStep().getByText('ยังไม่ถึงขั้นตอน')).toBeTruthy());
+      fireEvent.click(await screen.findByTestId('ticket-detail-confirm-customer'));
+      await waitFor(() => expect(api.tickets.confirmCustomer).toHaveBeenCalledWith(701));
+      await waitFor(() => expect(depositStep().getByText('ยังไม่สร้าง')).toBeTruthy());
+    });
+
+    it('พักงาน on the deal page: the เงิน tab then offers no create the server would refuse (409 requireActiveLifecycle)', async () => {
+      serve({ status: 'quotation_issued', paymentStatus: 'CUSTOMER_CONFIRMED', salesStage: 'ORDER_RECEIVED', fulfillmentStatus: null },
+        [{ action: 'PLACE_ON_HOLD' }]);
+      api.tickets.hold.mockImplementation(async () => moveTo({ lifecycle: 'ON_HOLD' }, [{ action: 'RESUME' }]));
+      const showToast = vi.fn();
+      renderTicketDetailPageAtRoute(['/tickets/701?tab=overview'], salesOwnerUser, showToast);
+      await waitFor(() => expect(api.documentChain.get).toHaveBeenCalled());
+      fireEvent.click(await screen.findByRole('button', { name: 'พักงาน' }));
+      fireEvent.click(within(await screen.findByTestId('pause-deal-modal')).getByRole('button', { name: 'พักงาน' }));
+      await waitFor(() => expect(showToast).toHaveBeenCalledWith('success', 'พักงานไว้แล้ว'));
+      await new Promise((resolve) => setTimeout(resolve, 100)); // let any refresh the action triggered land
+      // From here the server never answers again: the tab can only show what the action itself refreshed.
+      api.documentChain.get.mockImplementation(() => new Promise(() => {}));
+      api.depositNotices.listByTicket.mockImplementation(() => new Promise(() => {}));
+      await openTab(/^เงิน/);
+      expect(depositStep().queryByRole('button', { name: 'สร้างใบแจ้งยอดเงินรับมัดจำ' })).toBeNull();
+      expect(depositStep().getByText(/งานพักหรือปิดอยู่/)).toBeTruthy();
+    });
+
+    // บันทึกผลประมูล CONFIRMS THE ORDER on the Java side (DealPartyService -> confirmOrderFromDirectQuotation).
+    function CardOnSameClient() {
+      const { data } = useDocumentChain(701);
+      const quotation = { id: 11, number: 'QT-2026-0011-1', ticketId: 701, docStatus: 'APPROVED', origin: 'DEAL_DIRECT', depositPercent: 30 };
+      return data ? <QuotationDocumentChain quotation={quotation} chain={data} onConfirmOrder={vi.fn()} /> : null;
+    }
+
+    it('บันทึกผลประมูล (award): the เงิน tab and a quotation card on the same client both show the order confirmed', async () => {
+      const bidder = (overrides) => ({
+        id: 1, ticketId: 701, customerId: 5, customerName: 'บริษัท ก จำกัด', contactId: null, contactName: null,
+        role: 'BUYER', status: 'QUOTED', notAwardedReason: null, headline: true, splitTicketId: null, splitTicketCode: null,
+        latestQuotationId: 11, latestQuotationNumber: 'QT-2026-0011-1', latestQuotationStatus: 'APPROVED', latestQuotationAmount: 512900,
+        ...overrides,
+      });
+      serve({ status: 'draft', paymentStatus: null, salesStage: 'QUOTE_BUYER', fulfillmentStatus: null, code: 'DL-2026-0280', projectName: 'GRAND RIVER HOTEL' }, []);
+      api.tickets.parties.mockResolvedValue({ parties: [bidder({}), bidder({ id: 2, customerName: 'บจก. ข', headline: false, latestQuotationId: 12, latestQuotationNumber: 'QT-2026-0012-1' })] });
+      api.tickets.recordBidOutcome.mockImplementation(async () => {
+        moveTo({ status: 'quotation_issued', paymentStatus: 'CUSTOMER_CONFIRMED', salesStage: 'ORDER_RECEIVED' });
+        return { result: { ticketId: 701 } };
+      });
+      chainViewer = salesOwnerUser;
+      const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+      render(
+        <QueryClientProvider client={queryClient}>
+          <MemoryRouter initialEntries={['/tickets/701?tab=money']}>
+            <TicketDetailPage user={salesOwnerUser} ticketId={701} onBack={vi.fn()} showToast={vi.fn()} />
+            <div data-testid="quotation-page-card"><CardOnSameClient /></div>
+          </MemoryRouter>
+        </QueryClientProvider>,
+      );
+      await waitFor(() => expect(depositStep().getByText('ยังไม่ถึงขั้นตอน')).toBeTruthy());
+      const card = await screen.findByTestId('quotation-document-chain');
+      expect(card.querySelector('li[data-step="2"]').getAttribute('data-state')).not.toBe('done');
+      fireEvent.click(await screen.findByRole('button', { name: /บันทึกผลประมูล/ }));
+      const dialog = within(await screen.findByTestId('bid-outcome-modal'));
+      fireEvent.click(within(dialog.getByTestId('bid-winner-1')).getByRole('checkbox'));
+      fireEvent.click(dialog.getByRole('radio', { name: 'ราคา' }));
+      fireEvent.click(dialog.getByTestId('bid-outcome-submit'));
+      await waitFor(() => expect(api.tickets.recordBidOutcome).toHaveBeenCalled());
+      await waitFor(() => expect(depositStep().getByText('ยังไม่สร้าง')).toBeTruthy());
+      await waitFor(() => expect(card.querySelector('li[data-step="2"]').getAttribute('data-state')).toBe('done'));
     });
   });
 });

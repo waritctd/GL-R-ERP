@@ -180,6 +180,21 @@ describe('QuotationEditorPage — the document chain card', () => {
     await waitFor(() => expect(api.documentChain.get.mock.calls.length).toBeGreaterThanOrEqual(2));
   });
 
+  // Surviving mutation F16: a saved draft whose figures differ from subtotal × percent (the rep edited the draft on the
+  // notice page): the dialog must print the SAVED figures.
+  it('the issue dialog prints the saved draft\'s figures, never a figure computed in the browser', async () => {
+    const edited = { ...draftNotice, subtotal: 10000, depositPercent: 0.3, depositAmount: 2900, vatAmount: 203, totalPayable: 3103 };
+    api.documentChain.get.mockResolvedValue({ documentChain: confirmed({ deposit: { state: 'DRAFT', draftExists: true, noticeId: 31 } }) });
+    api.depositNotices.listByTicket.mockResolvedValue({ depositNotices: [edited] });
+    renderPage();
+    fireEvent.click((await card()).getByRole('button', { name: 'ออกใบแจ้งยอดเงินรับมัดจำ' }));
+    const dialog = within(await screen.findByTestId('quotation-chain-deposit-dialog'));
+    expect(await dialog.findByText(/มัดจำ 30% · 3,103\.00 บาท รวม VAT/)).toBeTruthy();
+    expect(dialog.getByText('2,900.00 บาท')).toBeTruthy();
+    expect(dialog.queryByText('3,000.00 บาท')).toBeNull();
+    expect(dialog.queryByText(/3,210\.00/)).toBeNull();
+  });
+
   it('an existing DRAFT is opened, never doubled: the button issues it and no second draft is created', async () => {
     api.documentChain.get.mockResolvedValue({ documentChain: confirmed({ deposit: { state: 'DRAFT', draftExists: true, noticeId: 31 } }) });
     api.depositNotices.listByTicket.mockResolvedValue({ depositNotices: [draftNotice] });

@@ -6,6 +6,7 @@ import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { ThaiDateInput } from '../../components/common/ThaiDateInput.jsx';
 import { formatThaiDate } from '../../utils/format.js';
 import { hasActivitySince, isReadyToAdvance, lastStageChangeAt } from './dealTrackingMeta.js';
+import { ESTIMATE_ERROR, parseEstimatedValue } from './dealEstimate.js';
 
 function Row({ label, children }) {
   return (
@@ -39,16 +40,27 @@ export function DealInfoCard({
   const hasOverride = summary.winProbabilityOverride != null;
   const ready = isReadyToAdvance(summary, hasActivitySince(activities, lastStageChangeAt(events, summary.createdAt)));
 
+  const [estimateError, setEstimateError] = useState('');
+
   function openEdit() {
+    setEstimateError('');
     setDraft({
       winProbability: summary.winProbabilityOverride != null ? String(summary.winProbabilityOverride) : '',
       designerName: summary.designerName ?? '',
       ownerName: summary.ownerName ?? '',
       nextFollowUpAt: summary.nextFollowUpAt ?? '',
+      estimatedValue: summary.estimatedValue != null ? String(summary.estimatedValue) : '',
     });
   }
 
   async function submitTracking() {
+    // มูลค่าโดยประมาณ (V220 estimated_value): set when typed, cleared when emptied (`clearEstimatedValue`, because the
+    // endpoint KEEPS an absent estimate). Same bounds as the create form and the server.
+    const estimate = parseEstimatedValue(draft.estimatedValue);
+    if (Number.isNaN(estimate)) {
+      setEstimateError(ESTIMATE_ERROR);
+      return;
+    }
     await onUpdateTracking({
       winProbability: draft.winProbability === '' ? null : Number(draft.winProbability),
       designerName: draft.designerName.trim() || null,
@@ -57,6 +69,7 @@ export function DealInfoCard({
       // replace, so the stored free-text value is sent back unchanged rather than cleared.
       buyerName: summary.buyerName ?? null,
       nextFollowUpAt: draft.nextFollowUpAt || null,
+      ...(estimate == null ? { clearEstimatedValue: true } : { estimatedValue: estimate }),
     });
     setDraft(null);
   }
@@ -116,6 +129,16 @@ export function DealInfoCard({
                 onChange={(e) => setDraft((d) => ({ ...d, ownerName: e.target.value }))}
               />
             </label>
+            <label className="flex flex-col gap-1.5 text-sm font-bold text-text-secondary">
+              มูลค่าโดยประมาณ (บาท) — ว่างไว้เพื่อล้างค่า
+              <input
+                type="text" inputMode="decimal" className="text-base"
+                value={draft.estimatedValue}
+                aria-invalid={estimateError ? true : undefined}
+                onChange={(e) => { setEstimateError(''); setDraft((d) => ({ ...d, estimatedValue: e.target.value })); }}
+              />
+              {estimateError ? <span role="alert" className="text-xs font-bold text-danger">{estimateError}</span> : null}
+            </label>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <Button type="button" variant="primary" disabled={updating} onClick={submitTracking}>บันทึก</Button>
@@ -137,6 +160,9 @@ export function DealInfoCard({
                   : <span className="text-2xs font-normal text-text-muted">(ค่าเริ่มต้นตามขั้น)</span>}
               </span>
             </Row>
+          ) : null}
+          {summary.estimatedValue != null ? (
+            <Row label="มูลค่าโดยประมาณ">{`฿${Number(summary.estimatedValue).toLocaleString('th-TH')}`}</Row>
           ) : null}
           <Row label="ติดตามครั้งถัดไป">{summary.nextFollowUpAt ? formatThaiDate(summary.nextFollowUpAt) : null}</Row>
           <Row label="ติดตามล่าสุด">{latestFollowUp ? formatThaiDate(latestFollowUp) : null}</Row>
