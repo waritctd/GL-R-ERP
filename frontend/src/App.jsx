@@ -1,5 +1,4 @@
 import React, { lazy, Suspense, useEffect, useMemo, useState } from 'react';
-import { RemainingInvoicePagePrototype } from './features/tickets/RemainingInvoicePage.prototype.jsx';
 import { Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { api } from './api/index.js';
 import { AppShell } from './components/layout/AppShell.jsx';
@@ -457,7 +456,6 @@ export function App() {
                   path="/tickets/:id"
                   element={<TicketDetailRoute user={user} showToast={showToast} />}
                 />
-                <Route path="/tickets/:ticketId/remaining-invoice" element={<RemainingInvoicePagePrototype />} />
                 <Route
                   path="/tickets/:ticketId/deposit"
                   element={<AccountFinanceRedirect user={user}><DepositNoticeRoute user={user} showToast={showToast} /></AccountFinanceRedirect>}

@@ -5,8 +5,10 @@ import { queryKeys } from '../../api/queryKeys.js';
 import { Button } from '../../components/common/Button.jsx';
 import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { DialogSummary } from '../../components/common/DocumentDialogParts.jsx';
+import { FormField } from '../../components/common/FormField.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { Skeleton } from '../../components/common/Skeleton.jsx';
+import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { downloadBlob } from '../../utils/download.js';
 import { invalidateDealDocuments } from '../documentChain/documentChain.js';
 import { formatMoney } from '../../utils/format.js';
@@ -14,6 +16,67 @@ import { ThaiDateInput } from '../../components/common/ThaiDateInput.jsx';
 import { paymentTermsLine } from '../finance/paymentDueText.js';
 
 const STATUS_LABEL = { DRAFT: 'ร่าง', ISSUED: 'ออกแล้ว', SUPERSEDED: 'ถูกแทนที่แล้ว' };
+const STATUS_TONE = { DRAFT: 'neutral', ISSUED: 'success', SUPERSEDED: 'neutral' };
+
+/**
+ * A titled section of either form. Inside the dialog a full Panel (its own border and padding) would sit as a box in
+ * a box, so the section keeps the Panel TITLE's look (the deposit notice page's `h2 m-0 text-lg`, one level down here
+ * because the dialog's own title is the h2) over a hairline, and lays its fields out exactly as the page does.
+ */
+function Section({ title, testId, children }) {
+  return (
+    <section className="flex flex-col gap-3" data-testid={testId}>
+      <h3 className="m-0 min-w-0 border-b border-border-subtle pb-2 text-lg break-words">{title}</h3>
+      {children}
+    </section>
+  );
+}
+
+/** The deposit notice page's field grid: two columns, one on mobile. */
+const FIELD_GRID = 'grid grid-cols-2 gap-3 mobile:grid-cols-1';
+
+const ITEM_GRID = 'grid-cols-[minmax(0,3fr)_minmax(5.5rem,0.9fr)_minmax(5.5rem,0.9fr)_minmax(7rem,1fr)] tablet:min-w-0 reflow-cards';
+
+/**
+ * The stored lines of the document, READ-ONLY: a snapshot of the deposit notice (or quotation) taken when the draft
+ * was saved. Nothing here is editable; the server re-snapshots them on save.
+ */
+function StoredItems({ items }) {
+  return (
+    <Section title="รายการสินค้า">
+      <div className="overflow-x-auto overflow-y-hidden rounded-md border border-border" data-testid="remaining-invoice-items">
+        <div className={`${ITEM_GRID} table-head`}>
+          <span>รายละเอียด</span>
+          <span className="text-right">จำนวน</span>
+          <span className="text-right">ราคาสุทธิ/หน่วย</span>
+          <span className="text-right">เป็นเงิน</span>
+        </div>
+        {items.map((it, idx) => (
+          <div key={it.id ?? idx} className={`${ITEM_GRID} data-row`}>
+            <span className="min-w-0 font-bold [overflow-wrap:anywhere]" data-label="รายละเอียด">{it.description}</span>
+            <span className="tabular-nums text-right" data-label="จำนวน">{`${Number(it.qty).toLocaleString('th-TH')} ${it.unit ?? ''}`.trim()}</span>
+            <span className="tabular-nums text-right" data-label="ราคาสุทธิ/หน่วย">{formatMoney(it.netUnitPrice ?? it.unitPrice)}</span>
+            <span className="tabular-nums text-right font-bold" data-label="เป็นเงิน">{formatMoney(it.amount)}</span>
+          </div>
+        ))}
+      </div>
+    </Section>
+  );
+}
+
+/** The deposit notice page's totals block: right-aligned figures, the payable row emphasised. */
+function TotalsBlock({ rows, payable }) {
+  return (
+    <div className="flex flex-col items-end gap-1" data-testid="remaining-invoice-preview">
+      {rows.map((r) => (
+        <span key={r.label} className={`text-sm ${r.bold ? 'font-bold text-text' : 'text-text-muted'}`}>
+          {r.label} <span className="tabular-nums text-text">{r.value}</span>
+        </span>
+      ))}
+      <span className="text-lg font-extrabold">{payable.label} <span className="tabular-nums">{payable.value}</span></span>
+    </div>
+  );
+}
 
 /**
  * Drawing m-remaining's summary line: "ส่วนที่เหลือ … = มูลค่า … − มัดจำ …". All three figures are ONE served row's own
@@ -42,7 +105,7 @@ function RemainingSummaryLine({ net, itemsTotal, deposit }) {
  */
 function DialogFooterRow({ children }) {
   return (
-    <div className="flex flex-wrap items-center justify-end gap-2 border-t border-border pt-3" data-testid="remaining-invoice-footer">
+    <div className="flex items-center justify-between gap-2 border-t border-border pt-3 mobile:flex-col-reverse mobile:items-stretch [&>button]:mobile:w-full" data-testid="remaining-invoice-footer">
       {children}
     </div>
   );
@@ -186,7 +249,7 @@ function VersionHistory({ versions, onDownload }) {
           <li key={v.id} className="flex items-center justify-between gap-2 rounded-md border border-border-subtle p-2 text-sm">
             <span>
               <span className="font-bold">{v.docNumber}</span>{' '}
-              <span className="text-text-muted">({STATUS_LABEL[v.status] ?? v.status})</span>
+              <StatusBadge tone={STATUS_TONE[v.status] ?? 'neutral'}>{STATUS_LABEL[v.status] ?? v.status}</StatusBadge>
             </span>
             <Button type="button" variant="secondary" onClick={() => onDownload(v.id, v.docNumber)}
               data-testid={`remaining-invoice-download-version-${v.id}`}>
@@ -387,60 +450,62 @@ function DraftEditor({ draft, issuedOfSameQuotation, onSaved, onIssued, onDelete
       {/* The draft's own stored figures, as the preview box below already shows them; the issue confirm still
           re-reads the server's fresh preview before anything is issued. */}
       <RemainingSummaryLine net={draft.netAmount} itemsTotal={draft.itemsTotal} deposit={draft.depositDeduction} />
-      <div className="flex flex-col gap-1.5">
-        <label className="text-sm font-bold text-text-secondary" htmlFor="remaining-invoice-reference">
-          อ้างอิงใบเสนอราคา / ใบสั่งซื้อ (H9)
-        </label>
-        <input id="remaining-invoice-reference" type="text" value={reference}
-          onChange={(e) => setReference(e.target.value)} />
-      </div>
-
-      {draft.depositDeduction ? (
-        <label className="flex flex-col gap-1.5 text-sm font-bold text-text-secondary" htmlFor="remaining-invoice-deposit-reference">
-          เลขอ้างอิงมัดจำ (แถวหัก มัดจำ)
-          <input id="remaining-invoice-deposit-reference" type="text" list="remaining-invoice-deposit-reference-options"
-            value={depositReference} onChange={(e) => setDepositReference(e.target.value)} />
-        </label>
-      ) : null}
-      <datalist id="remaining-invoice-deposit-reference-options">
-        {depositReferenceOptions.map((opt) => (
-          <option key={opt.value || '(blank)'} value={opt.value}>{opt.label}</option>
-        ))}
-      </datalist>
-
-      <label className="flex flex-col gap-1.5 text-sm font-bold text-text-secondary" htmlFor="remaining-invoice-issue-date">
-        วันที่ (H7)
-        <ThaiDateInput id="remaining-invoice-issue-date" value={docDate ?? ''}
-          onChange={(e) => setDocDate(e.target.value)} />
-      </label>
-
-      <fieldset className="m-0 flex flex-col gap-1.5 border-0 p-0">
-        <legend className="p-0 text-sm font-bold text-text-secondary">หมายเหตุ</legend>
-        {templates.length === 0 ? (
-          <p className="m-0 text-xs text-text-muted">ไม่มีหมายเหตุให้เลือก</p>
-        ) : templates.map((note) => (
-          <label key={note.id} className="flex items-start gap-2 text-sm font-normal text-text">
-            <input type="checkbox" className="mt-0.5" checked={notes.includes(note.text)}
-              onChange={() => toggleNote(note.text)} />
-            <span>{note.text}</span>
-          </label>
-        ))}
-      </fieldset>
-
-      <div className="flex flex-col gap-1 rounded-md border border-border-subtle bg-surface-muted p-3 text-sm" data-testid="remaining-invoice-preview">
-        <div className="flex justify-between"><span className="text-text-muted">ยอดสินค้า</span><span>{formatMoney(draft.itemsTotal)}</span></div>
-        <div className="flex justify-between"><span className="text-text-muted">หักมัดจำ</span><span>{formatMoney(draft.depositDeduction)}</span></div>
-        <div className="flex justify-between font-bold"><span>รวมเป็นเงิน</span><span>{formatMoney(draft.netAmount)}</span></div>
-        <div className="flex justify-between"><span className="text-text-muted">ภาษีมูลค่าเพิ่ม 7%</span><span>{formatMoney(draft.vatAmount)}</span></div>
-        <div className="flex justify-between border-t border-border-subtle pt-1 text-base font-extrabold">
-          <span>ยอดชำระ</span><span>{formatMoney(draft.grandTotal)}</span>
+      <Section title="ข้อมูลเอกสาร">
+        <div className={FIELD_GRID}>
+          <FormField label="อ้างอิงใบเสนอราคา / ใบสั่งซื้อ (H9)" htmlFor="remaining-invoice-reference">
+            <input id="remaining-invoice-reference" type="text" value={reference}
+              onChange={(e) => setReference(e.target.value)} />
+          </FormField>
+          {draft.depositDeduction ? (
+            <FormField label="เลขอ้างอิงมัดจำ (แถวหัก มัดจำ)" htmlFor="remaining-invoice-deposit-reference">
+              <input id="remaining-invoice-deposit-reference" type="text" list="remaining-invoice-deposit-reference-options"
+                value={depositReference} onChange={(e) => setDepositReference(e.target.value)} />
+            </FormField>
+          ) : null}
+          <datalist id="remaining-invoice-deposit-reference-options">
+            {depositReferenceOptions.map((opt) => (
+              <option key={opt.value || '(blank)'} value={opt.value}>{opt.label}</option>
+            ))}
+          </datalist>
+          <FormField label="วันที่ (H7)" htmlFor="remaining-invoice-issue-date">
+            <ThaiDateInput id="remaining-invoice-issue-date" value={docDate ?? ''}
+              onChange={(e) => setDocDate(e.target.value)} />
+          </FormField>
         </div>
-      </div>
+      </Section>
+
+      {draft.items?.length ? <StoredItems items={draft.items} /> : null}
+
+      <Section title="เงื่อนไข">
+        <fieldset className="m-0 flex flex-col gap-1.5 border-0 p-0">
+          <legend className="p-0 text-sm font-bold text-text-secondary">หมายเหตุ</legend>
+          {templates.length === 0 ? (
+            <p className="m-0 text-xs text-text-muted">ไม่มีหมายเหตุให้เลือก</p>
+          ) : templates.map((note) => (
+            <label key={note.id} className="flex items-start gap-2 text-sm font-normal text-text">
+              <input type="checkbox" className="mt-0.5" checked={notes.includes(note.text)}
+                onChange={() => toggleNote(note.text)} />
+              <span>{note.text}</span>
+            </label>
+          ))}
+        </fieldset>
+      </Section>
+
+      <Section title="ยอดรวม">
+        <TotalsBlock
+          rows={[
+            { label: 'ยอดสินค้า', value: formatMoney(draft.itemsTotal) },
+            { label: 'หักมัดจำ', value: formatMoney(draft.depositDeduction) },
+            { label: 'รวมเป็นเงิน', value: formatMoney(draft.netAmount), bold: true },
+            { label: 'ภาษีมูลค่าเพิ่ม 7%', value: formatMoney(draft.vatAmount) },
+          ]}
+          payable={{ label: 'ยอดชำระ', value: formatMoney(draft.grandTotal) }} />
+      </Section>
 
       {error ? <p className="m-0 text-sm font-bold text-danger" role="alert">{error}</p> : null}
 
       {/* Not in the drawing, kept: the draft's preview download and ลบร่าง, each with its old gate. */}
-      <div className="flex flex-wrap gap-2">
+      <div className="flex flex-wrap gap-2 mobile:flex-col [&>button]:mobile:w-full">
         <Button type="button" variant="secondary" disabled={downloading} onClick={handleDownload}
           data-testid="remaining-invoice-download-draft">
           {downloading ? 'กำลังดาวน์โหลด…' : 'ดาวน์โหลด (ตัวอย่าง)'}
@@ -572,19 +637,6 @@ function CreateForm({ ticketId, onCreated }) {
         <Skeleton height={220} />
       ) : (
         <>
-          {showQuotationPicker ? (
-            <label className="flex flex-col gap-1.5 text-sm font-bold text-text-secondary" htmlFor="remaining-invoice-quotation">
-              ใบเสนอราคา (มีมากกว่า 1 ฉบับที่ใช้ได้)
-              <select id="remaining-invoice-quotation"
-                value={selectedQuotationId ?? options.defaultQuotationId ?? ''}
-                onChange={(e) => setSelectedQuotationId(e.target.value ? Number(e.target.value) : null)}>
-                {options.quotationOptions.map((opt) => (
-                  <option key={opt.value} value={opt.value}>{opt.label}</option>
-                ))}
-              </select>
-            </label>
-          ) : null}
-
           {/* A blocked preview is a document the server will not issue, so it gets no headline figures. */}
           {!blockingReason ? (
             <RemainingSummaryLine net={options.netAmount} itemsTotal={options.itemsTotal} deposit={options.depositAmount} />
@@ -597,72 +649,86 @@ function CreateForm({ ticketId, onCreated }) {
             </p>
           ) : null}
 
-          <div className="flex flex-col gap-1.5">
-            <label className="text-sm font-bold text-text-secondary" htmlFor="remaining-invoice-reference">
-              อ้างอิงใบเสนอราคา / ใบสั่งซื้อ (H9)
-            </label>
-            <div className="flex gap-2">
-              <input id="remaining-invoice-reference" type="text" className="flex-1" list="remaining-invoice-reference-options"
-                value={reference} placeholder="พิมพ์เลขที่ใบสั่งซื้อของลูกค้า หรือเว้นว่าง"
-                onChange={(e) => setReference(e.target.value)} />
-              <Button type="button" variant="secondary" onClick={() => setReference('')} title="ล้างค่า" aria-label="ล้างอ้างอิง">
-                ล้าง
-              </Button>
+          <Section title="ข้อมูลเอกสาร">
+            <div className={FIELD_GRID}>
+              {showQuotationPicker ? (
+                <FormField label="ใบเสนอราคา (มีมากกว่า 1 ฉบับที่ใช้ได้)" htmlFor="remaining-invoice-quotation">
+                  <select id="remaining-invoice-quotation"
+                    value={selectedQuotationId ?? options.defaultQuotationId ?? ''}
+                    onChange={(e) => setSelectedQuotationId(e.target.value ? Number(e.target.value) : null)}>
+                    {options.quotationOptions.map((opt) => (
+                      <option key={opt.value} value={opt.value}>{opt.label}</option>
+                    ))}
+                  </select>
+                </FormField>
+              ) : null}
+
+              <FormField label="อ้างอิงใบเสนอราคา / ใบสั่งซื้อ (H9)" htmlFor="remaining-invoice-reference">
+                <div className="flex gap-2">
+                  <input id="remaining-invoice-reference" type="text" className="min-w-0 flex-1" list="remaining-invoice-reference-options"
+                    value={reference} placeholder="พิมพ์เลขที่ใบสั่งซื้อของลูกค้า หรือเว้นว่าง"
+                    onChange={(e) => setReference(e.target.value)} />
+                  <Button type="button" variant="secondary" onClick={() => setReference('')} title="ล้างค่า" aria-label="ล้างอ้างอิง">
+                    ล้าง
+                  </Button>
+                </div>
+                <datalist id="remaining-invoice-reference-options">
+                  {(options.referenceOptions ?? []).map((opt) => (
+                    <option key={opt.value} value={opt.value}>{opt.label}</option>
+                  ))}
+                </datalist>
+              </FormField>
+
+              {options.depositAmount > 0 && (options.depositReferenceOptions ?? []).length > 0 ? (
+                <FormField label="เลขอ้างอิงมัดจำ (แถวหัก มัดจำ)" htmlFor="remaining-invoice-deposit-reference">
+                  <select id="remaining-invoice-deposit-reference" value={depositReference}
+                    onChange={(e) => setDepositReference(e.target.value)}>
+                    {options.depositReferenceOptions.map((opt) => (
+                      <option key={opt.value || '(blank)'} value={opt.value}>{opt.label}</option>
+                    ))}
+                  </select>
+                </FormField>
+              ) : null}
+
+              <FormField label="วันที่ (H7)" htmlFor="remaining-invoice-issue-date">
+                <ThaiDateInput id="remaining-invoice-issue-date" value={issueDate}
+                  onChange={(e) => setIssueDate(e.target.value)} />
+              </FormField>
             </div>
-            <datalist id="remaining-invoice-reference-options">
-              {(options.referenceOptions ?? []).map((opt) => (
-                <option key={opt.value} value={opt.value}>{opt.label}</option>
+          </Section>
+
+          <Section title="เงื่อนไข">
+            <fieldset className="m-0 flex flex-col gap-1.5 border-0 p-0">
+              <legend className="p-0 text-sm font-bold text-text-secondary">หมายเหตุ</legend>
+              {sortedNotes.length === 0 ? (
+                <p className="m-0 text-xs text-text-muted">ไม่มีหมายเหตุให้เลือก</p>
+              ) : sortedNotes.map((note) => (
+                <label key={note.id} className="flex items-start gap-2 text-sm font-normal text-text">
+                  <input type="checkbox" className="mt-0.5" checked={selectedNoteIds.includes(note.id)}
+                    onChange={() => toggleNote(note.id)} />
+                  <span>{note.text}</span>
+                </label>
               ))}
-            </datalist>
-          </div>
+            </fieldset>
+          </Section>
 
-          {options.depositAmount > 0 && (options.depositReferenceOptions ?? []).length > 0 ? (
-            <label className="flex flex-col gap-1.5 text-sm font-bold text-text-secondary" htmlFor="remaining-invoice-deposit-reference">
-              เลขอ้างอิงมัดจำ (แถวหัก มัดจำ)
-              <select id="remaining-invoice-deposit-reference" value={depositReference}
-                onChange={(e) => setDepositReference(e.target.value)}>
-                {options.depositReferenceOptions.map((opt) => (
-                  <option key={opt.value || '(blank)'} value={opt.value}>{opt.label}</option>
-                ))}
-              </select>
-            </label>
-          ) : null}
-
-          <label className="flex flex-col gap-1.5 text-sm font-bold text-text-secondary" htmlFor="remaining-invoice-issue-date">
-            วันที่ (H7)
-            <ThaiDateInput id="remaining-invoice-issue-date" value={issueDate}
-              onChange={(e) => setIssueDate(e.target.value)} />
-          </label>
-
-          <fieldset className="m-0 flex flex-col gap-1.5 border-0 p-0">
-            <legend className="p-0 text-sm font-bold text-text-secondary">หมายเหตุ</legend>
-            {sortedNotes.length === 0 ? (
-              <p className="m-0 text-xs text-text-muted">ไม่มีหมายเหตุให้เลือก</p>
-            ) : sortedNotes.map((note) => (
-              <label key={note.id} className="flex items-start gap-2 text-sm font-normal text-text">
-                <input type="checkbox" className="mt-0.5" checked={selectedNoteIds.includes(note.id)}
-                  onChange={() => toggleNote(note.id)} />
-                <span>{note.text}</span>
-              </label>
-            ))}
-          </fieldset>
-
-          <div className="flex flex-col gap-1 rounded-md border border-border-subtle bg-surface-muted p-3 text-sm" data-testid="remaining-invoice-preview">
-            <div className="flex justify-between"><span className="text-text-muted">จำนวนรายการ</span><span>{options.itemCount}</span></div>
-            <div className="flex justify-between"><span className="text-text-muted">ยอดสินค้า</span><span>{formatMoney(options.itemsTotal)}</span></div>
-            <div className="flex justify-between"><span className="text-text-muted">หักมัดจำ</span><span>{formatMoney(options.depositAmount)}</span></div>
-            <div className="flex justify-between font-bold"><span>รวมเป็นเงิน</span><span>{formatMoney(options.netAmount)}</span></div>
-            <div className="flex justify-between"><span className="text-text-muted">ภาษีมูลค่าเพิ่ม 7%</span><span>{formatMoney(options.vatAmount)}</span></div>
-            <div className="flex justify-between border-t border-border-subtle pt-1 text-base font-extrabold">
-              <span>ยอดชำระ</span><span>{formatMoney(options.totalPayable)}</span>
-            </div>
-          </div>
+          <Section title="ยอดรวม">
+            <TotalsBlock
+              rows={[
+                { label: 'จำนวนรายการ', value: options.itemCount },
+                { label: 'ยอดสินค้า', value: formatMoney(options.itemsTotal) },
+                { label: 'หักมัดจำ', value: formatMoney(options.depositAmount) },
+                { label: 'รวมเป็นเงิน', value: formatMoney(options.netAmount), bold: true },
+                { label: 'ภาษีมูลค่าเพิ่ม 7%', value: formatMoney(options.vatAmount) },
+              ]}
+              payable={{ label: 'ยอดชำระ', value: formatMoney(options.totalPayable) }} />
+          </Section>
 
           {createError ? <p className="m-0 text-sm font-bold text-danger" role="alert">{createError}</p> : null}
 
           {/* "สร้างร่าง" became the drawn "บันทึกร่าง": this button creates the stored DRAFT, nothing more. */}
           <DialogFooterRow>
-            <Button type="button" variant="primary" disabled={!canCreate} onClick={handleCreateDraft}
+            <Button type="button" variant="primary" className="ml-auto mobile:ml-0" disabled={!canCreate} onClick={handleCreateDraft}
               data-testid="remaining-invoice-create-draft">
               {creating ? 'กำลังบันทึกร่าง…' : 'บันทึกร่าง'}
             </Button>
