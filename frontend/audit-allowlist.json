@@ -18,10 +18,10 @@
   ],
   "allow": [
     {
-      "id": "GHSA-g3hv-75wg-m249",
-      "package": "minimatch",
-      "reason": "Dev-only, lint time only. minimatch 3.1.5 arrives through eslint, eslint-plugin-react and eslint-plugin-jsx-a11y. It runs inside `npm run lint` on glob patterns from our own eslint.config.js and on our own repo file paths. It is never bundled into the app, and no user or network input reaches it, so the globparts-amplification DoS has no attacker-controlled pattern to amplify. There is no forward fix: the patched line is minimatch >=11.0.1, but the latest eslint-plugin-react and eslint-plugin-jsx-a11y still require minimatch ^3, and eslint 10 requires ^10.2.6. npm audit's only suggestion is a downgrade to eslint 4. Drop this entry once those plugins move to minimatch >=11.0.1.",
-      "reviewBy": "2027-01-31"
+      "id": "GHSA-fc5q-39xc-vjpf",
+      "package": "picomatch",
+      "reason": "Dev-only, build and test time only. picomatch 4.0.7 arrives through vite, vitest, tinyglobby and fdir, all devDependencies; `npm audit --omit=dev` reports 0 vulnerabilities, so it is never bundled into the app. It only matches glob patterns written in our own vite/vitest config and our own repo file paths, and src/ has no import.meta.glob. No user or network input supplies a pattern, so the repeated-extglob ReDoS has no attacker-controlled pattern to run. There is no forward fix: the advisory covers picomatch <=4.0.7 and 4.0.7 is the latest release. npm audit's only suggestion is a major downgrade to vite 6.2.7 / vitest 3.1.4 / @vitejs/plugin-react 5.2.0. Drop this entry once a patched picomatch is published and `npm audit fix` picks it up.",
+      "reviewBy": "2026-12-31"
     }
   ]
 }
