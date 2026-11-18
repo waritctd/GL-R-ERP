@@ -332,7 +332,7 @@ function DepositNoticeIssueDialog({ ticketId, quotationNumber, onClose, onIssued
         </div>
       )}
     >
-      {listQuery.isLoading ? (
+      {listQuery.isLoading || (quotationsQuery.isLoading && !quotationsQuery.data) ? (
         <SkeletonText lines={4} />
       ) : draft ? (
         <DepositIssueSummary

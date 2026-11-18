@@ -209,6 +209,35 @@ describe('QuotationEditorPage — the document chain card', () => {
     expect(dialog.getByRole('button', { name: 'ออกเอกสาร' }).disabled).toBe(false);
   });
 
+  describe('the issue dialog waits for the quotation read, but never on a failed one', () => {
+    const open = async () => {
+      const edited = { ...draftNotice, subtotal: 9000, reference: 'PO-77' };
+      api.documentChain.get.mockResolvedValue({ documentChain: confirmed({ deposit: { state: 'DRAFT', draftExists: true, noticeId: 31 } }) });
+      api.depositNotices.listByTicket.mockResolvedValue({ depositNotices: [edited] });
+      renderPage();
+      fireEvent.click((await card()).getByRole('button', { name: 'ออกใบแจ้งยอดเงินรับมัดจำ' }));
+      return within(await screen.findByTestId('quotation-chain-deposit-dialog'));
+    };
+
+    it('shows no summary while the quotation list is pending, then the summary with the warning line', async () => {
+      let resolveList;
+      api.dealQuotations.listForTicket.mockReturnValue(new Promise((res) => { resolveList = res; }));
+      const dialog = await open();
+      await waitFor(() => expect(api.dealQuotations.listForTicket).toHaveBeenCalled());
+      expect(dialog.queryByTestId('deposit-issue-summary')).toBeNull();
+      resolveList({ items: [quotation()], orderConfirmedQuotationId: 5 });
+      expect(await dialog.findByTestId('deposit-issue-differs')).toBeTruthy();
+      expect(dialog.getByTestId('deposit-issue-summary')).toBeTruthy();
+    });
+
+    it('a rejected quotation read still shows the summary, without the line', async () => {
+      api.dealQuotations.listForTicket.mockRejectedValue(new Error('403'));
+      const dialog = await open();
+      expect(await dialog.findByTestId('deposit-issue-summary')).toBeTruthy();
+      expect(dialog.queryByTestId('deposit-issue-differs')).toBeNull();
+    });
+  });
+
   it('an existing DRAFT is opened, never doubled: the button issues it and no second draft is created', async () => {
     api.documentChain.get.mockResolvedValue({ documentChain: confirmed({ deposit: { state: 'DRAFT', draftExists: true, noticeId: 31 } }) });
     api.depositNotices.listByTicket.mockResolvedValue({ depositNotices: [draftNotice] });

@@ -156,18 +156,19 @@ export function DealPaymentSection({
   const [confirmIssue, setConfirmIssue] = useState(false);
 
   const depositQuery = useQuery({ ...depositNoticesQueryOptions(ticketId), enabled: !!ticketId && canReadDepositNotices });
-  // Read only while the issue confirm is open (and served from cache when the register already loaded it): the
-  // confirm names the quotation when the draft's subtotal is not its quotation's. A failed read shows no line.
-  const noticeQuotationsQuery = useQuery({
-    ...dealQuotationsWithConfirmedQueryOptions(ticketId),
-    enabled: !!ticketId && confirmIssue,
-  });
   const remainingQuery = useQuery({
     queryKey: queryKeys.storedRemainingInvoices(ticketId),
     queryFn: () => api.storedRemainingInvoices.listForTicket(ticketId).then((r) => r.remainingInvoices ?? []),
     enabled: !!ticketId,
   });
   const doc = useMemo(() => pickDepositNotice(depositQuery.data), [depositQuery.data]);
+  // Read as soon as a draft the viewer could issue is shown (and served from cache when the register already loaded
+  // it), so it is ready before the confirm opens: the confirm names the quotation when the draft's subtotal is not
+  // its quotation's. A failed read shows no line.
+  const noticeQuotationsQuery = useQuery({
+    ...dealQuotationsWithConfirmedQueryOptions(ticketId),
+    enabled: !!ticketId && isOwnerSales && doc?.status === 'DRAFT',
+  });
   const invoice = pickRemainingInvoice(remainingQuery.data ?? []);
 
   const chainQuery = useDocumentChain(ticketId, { enabled: !!ticketId && canReadDepositNotices });

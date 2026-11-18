@@ -582,6 +582,23 @@ describe('DealPaymentSection — ใบแจ้งมัดจำ issue confirm
     expect(within(dialog).getByRole('button', { name: 'ออกเอกสาร' }).disabled).toBe(false);
   });
 
+  // The quotation list is read as soon as a draft the viewer could issue is shown, so the warning is there (or cached)
+  // before a fast click on ออกเอกสาร — not only once the confirm has opened.
+  it('reads the quotation list before the confirm opens when the owner has a draft', async () => {
+    api.dealQuotations.listForTicket.mockResolvedValue({ items: [], orderConfirmedQuotationId: null });
+    renderSection(props);
+    await settled();
+    await waitFor(() => expect(api.dealQuotations.listForTicket).toHaveBeenCalledWith(19));
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('does not read the quotation list when there is no draft', async () => {
+    api.dealQuotations.listForTicket.mockResolvedValue({ items: [], orderConfirmedQuotationId: null });
+    renderSection({ summary: props.summary, depositNotices: [] });
+    await settled();
+    expect(api.dealQuotations.listForTicket).not.toHaveBeenCalled();
+  });
+
   it('shows no mismatch line when the subtotals match', async () => {
     api.dealQuotations.listForTicket.mockResolvedValue({
       items: [{ id: 3, number: 'QT-2026-0201', subtotalAmount: 1240000.11 }], orderConfirmedQuotationId: 3,

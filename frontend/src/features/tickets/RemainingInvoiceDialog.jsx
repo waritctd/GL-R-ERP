@@ -23,9 +23,9 @@ const STATUS_TONE = { DRAFT: 'neutral', ISSUED: 'success', SUPERSEDED: 'neutral'
  * a box, so the section keeps the Panel TITLE's look (the deposit notice page's `h2 m-0 text-lg`, one level down here
  * because the dialog's own title is the h2) over a hairline, and lays its fields out exactly as the page does.
  */
-function Section({ title, testId, children }) {
+function Section({ title, children }) {
   return (
-    <section className="flex flex-col gap-3" data-testid={testId}>
+    <section className="flex flex-col gap-3">
       <h3 className="m-0 min-w-0 border-b border-border-subtle pb-2 text-lg break-words">{title}</h3>
       {children}
     </section>
