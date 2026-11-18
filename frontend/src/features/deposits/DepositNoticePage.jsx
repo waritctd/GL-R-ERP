@@ -804,16 +804,16 @@ export function DepositNoticePage({ ticketId, onBack, showToast }) {
                   <div key={idx} className={`${NOTICE_ITEM_GRID} data-row`}>
                     {isIssued ? (
                       <>
-                        <span className="min-w-0"><span className="font-bold">{it.description}</span></span>
-                        <span className="tabular-nums text-right">{Number(it.qty).toLocaleString('th-TH')} {it.unit ?? ''}</span>
-                        <span className="tabular-nums text-right">฿{money(it.unitPrice)}</span>
-                        <span className="tabular-nums text-right">{discount}</span>
-                        <span className="tabular-nums text-right">฿{money(net)}</span>
-                        <span className="tabular-nums text-right font-bold">฿{money(amount)}</span>
+                        <span className="min-w-0" data-label="รายละเอียด"><span className="font-bold">{it.description}</span></span>
+                        <span className="tabular-nums text-right" data-label="จำนวน">{Number(it.qty).toLocaleString('th-TH')} {it.unit ?? ''}</span>
+                        <span className="tabular-nums text-right" data-label="ราคา/หน่วย">฿{money(it.unitPrice)}</span>
+                        <span className="tabular-nums text-right" data-label={discount ? 'ส่วนลด' : ''}>{discount}</span>
+                        <span className="tabular-nums text-right" data-label="สุทธิ">฿{money(net)}</span>
+                        <span className="tabular-nums text-right font-bold" data-label="เป็นเงิน">฿{money(amount)}</span>
                       </>
                     ) : (
                       <>
-                        <span className="min-w-0">
+                        <span className="min-w-0" data-label="รายละเอียด">
                           <input
                             id={`doc-item-${idx}-description`}
                             ref={(el) => { fieldRefs.current[`items.${idx}.description`] = el; }}
@@ -829,7 +829,7 @@ export function DepositNoticePage({ ticketId, onBack, showToast }) {
                             </span>
                           ) : null}
                         </span>
-                        <span>
+                        <span data-label="จำนวน">
                           {it.discount ? <span className="block tabular-nums text-right">{it.qty}</span> : <input type="number" value={it.qty ?? ''} placeholder="จำนวน"
                             id={`doc-item-${idx}-qty`}
                             ref={(el) => { fieldRefs.current[`items.${idx}.qty`] = el; }}
@@ -844,20 +844,20 @@ export function DepositNoticePage({ ticketId, onBack, showToast }) {
                             </span>
                           ) : null}
                         </span>
-                        <span>
+                        <span data-label="ราคา/หน่วย">
                           <input type="number" value={it.unitPrice ?? ''} placeholder="ราคา"
                             aria-label={`ราคาต่อหน่วยรายการที่ ${idx + 1}`}
                             onChange={(e) => setItemField(idx, 'unitPrice', e.target.value)}
                             className="w-full text-right" />
                         </span>
-                        <span className="tabular-nums text-right">{discount}</span>
-                        <span>
+                        <span className="tabular-nums text-right" data-label={discount ? 'ส่วนลด' : ''}>{discount}</span>
+                        <span data-label="สุทธิ">
                           <input type="number" value={it.netUnitPrice ?? it.unitPrice ?? ''} placeholder="สุทธิ"
                             aria-label={`ราคาสุทธิรายการที่ ${idx + 1}`}
                             onChange={(e) => setItemField(idx, 'netUnitPrice', e.target.value)}
                             className="w-full text-right" />
                         </span>
-                        <span className="tabular-nums text-right font-bold">฿{money(amount)}</span>
+                        <span className="tabular-nums text-right font-bold" data-label="เป็นเงิน">฿{money(amount)}</span>
                       </>
                     )}
                   </div>

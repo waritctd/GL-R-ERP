@@ -798,6 +798,18 @@ describe('DepositNoticePage', () => {
     expect(within(document.getElementById('doc-summary-panel')).getAllByText('฿0.00')).toHaveLength(3);
   });
 
+  // Phone width (Task 5): the item row reflows into a card, and a cell only gets its column name there from
+  // `data-label`. Without it the card is a stack of unlabelled numbers.
+  it.each([['DRAFT'], ['ISSUED']])('labels every item cell with its column name for the phone card (%s)', async (status) => {
+    api.depositNotices.listByTicket.mockResolvedValue({
+      depositNotices: [{ ...validDraftDoc, status, docNumber: status === 'ISSUED' ? 'GLRD69001' : null }],
+    });
+    renderDepositNoticePage();
+    await waitFor(() => expect(document.querySelector('.data-row.reflow-cards')).not.toBeNull());
+    const labels = [...document.querySelector('.data-row.reflow-cards').children].map((c) => c.getAttribute('data-label'));
+    expect(labels).toEqual(['รายละเอียด', 'จำนวน', 'ราคา/หน่วย', '', 'สุทธิ', 'เป็นเงิน']);
+  });
+
   it('shows the deposit percent read-only once the notice is issued', async () => {
     api.depositNotices.listByTicket.mockResolvedValue({
       depositNotices: [{ ...validDraftDoc, status: 'ISSUED', docNumber: 'GLRD69001', depositPercent: 0.3 }],
