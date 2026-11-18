@@ -318,7 +318,8 @@ describe('2026-11-17 audiences (unlocked, as the test env runs)', () => {
     expect(ticketDetailSrc).toMatch(/cancel:\s+hasAction\('CANCEL'\) && !TERMINAL\.includes\(st\)\s+&& isOwner,/);
     // Review wn3 M1: the gate is owner OR keyer, whatever the role (isOwner = isOwnerOrKeyer; TicketService.canCancel
     // has no role check), so a manager or the CEO who keyed a deal in (pipeline import) does see ยกเลิกงาน.
-    expect(ticketDetailSrc).toContain('const isOwner = isOwnerOrKeyer(summary, user.id);');
+    // (actsAsOwner = owner/keyer, or a sales/sales_manager holder of the all-documents grant)
+    expect(ticketDetailSrc).toContain('const isOwner = actsAsOwner(summary, user);');
     expect(byId('deal-page').help).toContain('ยกเลิกได้เฉพาะเจ้าของงานหรือผู้ที่คีย์งานนั้น');
     for (const entry of release.entries) {
       for (const text of allText(entry)) expect(text, entry.id).not.toContain('เฉพาะพนักงานขายเจ้าของงาน');
@@ -795,7 +796,7 @@ describe('2026-11-17 lifecycle dialogs and document chain (17d)', () => {
   it('nobody is told to press a lifecycle control the Java service refuses them', () => {
     expect(release).not.toBeNull();
     // Cancel is owner/keyer only (TicketService.canCancel), and only sales has the create button that makes an owner.
-    expect(TICKET_SERVICE_SRC).toMatch(/private boolean canCancel\(TicketSummaryDto s, UserPrincipal actor\) \{\s*return DealOwnership\.isOwnerOrKeyer\(s, actor\.id\(\)\)/);
+    expect(TICKET_SERVICE_SRC).toMatch(/private boolean canCancel\(TicketSummaryDto s, UserPrincipal actor\) \{\s*return ownsDealOrHolder\(s, actor\)/);
     expect(pressing('ยกเลิกงาน').map((e) => e.id)).toEqual(['deal-lifecycle']);
     // Review wn3 M1: owner or keyer, any role — the link on the page is the answer; otherwise ask the owner.
     expect(byId('deal-lifecycle-team').help).toContain('ยกเลิกงานได้เฉพาะเจ้าของงานหรือผู้ที่คีย์งานนั้น');
@@ -828,7 +829,7 @@ describe('2026-11-17 lifecycle dialogs and document chain (17d)', () => {
     const confirmers = pressing('ยืนยันคำสั่งซื้อ').map((e) => e.id).sort();
     expect(confirmers).toEqual(['quotation-chain', 'quotation-chain-manager']);
     // The deposit notice and the remaining invoice: DepositNoticeService.mayWriteDealDocuments = owning sales only.
-    expect(DEPOSIT_NOTICE_SERVICE_SRC).toContain('return SALES_ROLES.contains(actor.role()) && DealOwnership.isOwnerOrKeyer(summary, actor.id());');
+    expect(DEPOSIT_NOTICE_SERVICE_SRC).toMatch(/return \(SALES_ROLES\.contains\(actor\.role\(\)\) && DealOwnership\.isOwnerOrKeyer\(summary, actor\.id\(\)\)\)\s*\|\| tickets\.holdsAllSalesDocumentsGrant\(actor\);/);
     expect(DEPOSIT_NOTICE_SERVICE_SRC).toContain('private static final java.util.Set<String> SALES_ROLES  = java.util.Set.of("sales");');
     for (const label of ['สร้างใบแจ้งยอดเงินรับมัดจำ', 'ออกเอกสาร', 'สร้างใบแจ้งหนี้ส่วนที่เหลือ']) {
       for (const entry of pressing(label)) expect(rolesForEntry(release, entry), `${entry.id} presses ${label}`).toEqual(['sales']);
