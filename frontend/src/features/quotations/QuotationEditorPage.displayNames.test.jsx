@@ -72,14 +72,14 @@ function draft(overrides = {}) {
   };
 }
 
-function renderEditor(path) {
+function renderEditor(path, user = salesUser) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   return render(
     <QueryClientProvider client={queryClient}>
       <MemoryRouter initialEntries={[path]}>
         <Routes>
-          <Route path="/quotations/new" element={<QuotationEditorPage user={salesUser} showToast={vi.fn()} />} />
-          <Route path="/quotations/:id" element={<QuotationEditorPage user={salesUser} showToast={vi.fn()} />} />
+          <Route path="/quotations/new" element={<QuotationEditorPage user={user} showToast={vi.fn()} />} />
+          <Route path="/quotations/:id" element={<QuotationEditorPage user={user} showToast={vi.fn()} />} />
         </Routes>
       </MemoryRouter>
     </QueryClientProvider>,
@@ -123,6 +123,16 @@ describe('QuotationEditorPage — V179 ผู้พิมพ์/พนักง�
     const warning = 'เปลี่ยนพนักงานขาย = ย้ายเจ้าของงานไปให้คนนี้ (คนที่คีย์งานยังเข้าถึงได้)';
     expect((await screen.findAllByText((_, el) => el.children.length === 0 && el.textContent.includes(warning))).length)
       .toBe(2);
+  });
+
+  // Ploy 2026-11-19: the hint shows only when this actor's pick would really move the owner (backend mayMove).
+  it('a canManageAllSalesDocuments holder on another rep\'s deal sees NO move-owner hint (the printed rep changes, the owner does not)', async () => {
+    renderEditor('/quotations/5', { ...salesUser, id: 7, canManageAllSalesDocuments: true });
+    await waitFor(() => expect(byId('salesRepDisplayId')).toBeTruthy());
+    // the hint shows while no ticket is loaded (a new deal), so it going away is the signal the ticket arrived
+    await waitFor(() => expect(
+      screen.queryAllByText((_, el) => el.children.length === 0 && el.textContent.includes('ย้ายเจ้าของงานไปให้คนนี้')),
+    ).toHaveLength(0));
   });
 
   it('a draft that already carries display ids pre-selects them', async () => {

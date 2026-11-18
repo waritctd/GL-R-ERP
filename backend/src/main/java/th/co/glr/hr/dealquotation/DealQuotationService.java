@@ -671,7 +671,7 @@ public class DealQuotationService {
         TicketSummaryDto ticket = requireTicketSummary(ticketId);
         // account is row-scoped: before the grant bypass, like #requireViewAccess.
         if (hasAllDocumentsGrant(actor)) {
-            // a can_manage_all_sales_documents holder acts as owner of every deal, whatever their role
+            // a can_manage_all_sales_documents holder (sales / sales_manager only) acts as owner of every deal
         } else if ("account".equals(actor.role())) {
             requireAccountScope(ticketId);
         } else if (!hasQuotationGrant(actor)) {
@@ -3838,7 +3838,7 @@ public class DealQuotationService {
         // #requireEditablePicture) and restoreRemovedItem.
         if ("PRICING_REQUEST".equals(quotation.origin())) {
             if (hasAllDocumentsGrant(actor)) {
-                return; // acts as owner of every deal, whatever the role
+                return; // a sales / sales_manager holder acts as owner of every deal
             }
             if (!EDIT_ROLES.contains(actor.role())) {
                 throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
@@ -3860,7 +3860,7 @@ public class DealQuotationService {
      * subset would mean they could create a quotation they then couldn't look at). */
     private void requireViewAccess(UserPrincipal actor, DealQuotationDto quotation) {
         if (hasAllDocumentsGrant(actor)) {
-            return; // acts as owner of every deal, whatever the role
+            return; // a sales / sales_manager holder acts as owner of every deal
         }
         // Origin-aware: a PRICING_REQUEST row uses the NARROWER CustomerQuotationService-shaped gate (no account, no
         // quotation-grant bypass), checked FIRST with an early return so the broader DEAL_DIRECT rules never apply. Covers

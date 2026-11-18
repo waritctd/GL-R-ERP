@@ -1238,7 +1238,7 @@ public class DepositNoticeService {
     }
 
     private void requireRole(UserPrincipal actor, java.util.Set<String> allowed) {
-        // a can_manage_all_sales_documents holder acts as the sales owner whatever their role
+        // a can_manage_all_sales_documents holder (sales / sales_manager only, see the grant read) acts as the sales owner
         if (!allowed.contains(actor.role()) && !(allowed.contains("sales") && tickets.holdsAllSalesDocumentsGrant(actor))) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
