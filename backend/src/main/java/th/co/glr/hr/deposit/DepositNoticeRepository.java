@@ -159,7 +159,7 @@ public class DepositNoticeRepository {
         BigDecimal vatPct = new BigDecimal("0.07");
 
         BigDecimal subtotal = items.stream()
-            .map(it -> it.netUnitPrice().multiply(it.qty()))
+            .map(DepositNoticeRepository::lineAmount)
             .reduce(BigDecimal.ZERO, BigDecimal::add)
             .setScale(2, RoundingMode.HALF_UP);
         BigDecimal deposit = subtotal.multiply(depositPct).setScale(2, RoundingMode.HALF_UP);
@@ -216,8 +216,8 @@ public class DepositNoticeRepository {
         // No items in the request (null or empty) keeps the stored lines (they are only replaced
         // below when items are sent), so the subtotal must come from those same stored lines.
         BigDecimal subtotal = (items.isEmpty()
-                ? storedItems.stream().map(it -> it.netUnitPrice().multiply(it.qty()))
-                : items.stream().map(it -> it.netUnitPrice().multiply(it.qty())))
+                ? storedItems.stream().map(DepositNoticeItemDto::amount)
+                : items.stream().map(DepositNoticeRepository::lineAmount))
             .reduce(BigDecimal.ZERO, BigDecimal::add)
             .setScale(2, RoundingMode.HALF_UP);
         BigDecimal deposit = subtotal.multiply(depositPct).setScale(2, RoundingMode.HALF_UP);
@@ -345,9 +345,15 @@ public class DepositNoticeRepository {
         return String.format("GLRD%02d%03d", yearTh % 100, seq);
     }
 
+    /** A line's stored amount when supplied (a quotation's own, rounded once), else net x qty. */
+    private static BigDecimal lineAmount(DepositNoticeItemRequest it) {
+        BigDecimal amount = it.amount() != null ? it.amount() : it.netUnitPrice().multiply(it.qty());
+        return amount.setScale(2, RoundingMode.HALF_UP);
+    }
+
     private void insertItems(long docId, List<DepositNoticeItemRequest> items) {
         for (var it : items) {
-            BigDecimal amount = it.netUnitPrice().multiply(it.qty()).setScale(2, RoundingMode.HALF_UP);
+            BigDecimal amount = lineAmount(it);
             jdbc.update("""
                 INSERT INTO sales.deposit_notice_item
                     (deposit_notice_id, seq, description, qty, unit, unit_price,
@@ -420,81 +426,39 @@ public class DepositNoticeRepository {
     }
 
     /** One deal quotation's {@code sales.quotation_item} lines, by {@code seq}, as deposit-notice
-     * items. Reads the RESOLVED display columns the quotation itself prints
-     * ({@code qty}/{@code raw_unit}/{@code unit_price}/{@code final_unit_price}), NOT the legacy
-     * {@code requested_*}/{@code approved_unit_price} columns the V2 chain leaves null. The
-     * discount-label wording matches {@link DepositNoticeService#itemsFromQuotation}. An ADJUSTMENT
-     * row is folded into the goods lines, see {@link #foldAdjustments}. */
+     * items, each with the quotation's own stored {@code amount}. Reads the RESOLVED display columns
+     * the quotation itself prints ({@code qty}/{@code raw_unit}/{@code unit_price}/{@code
+     * final_unit_price}), NOT the legacy {@code requested_*}/{@code approved_unit_price} columns the
+     * V2 chain leaves null. The discount-label wording matches {@link
+     * DepositNoticeService#itemsFromQuotation}. An ADJUSTMENT row (ส่วนลดพิเศษ) is its own line: qty
+     * -1, no unit, negative amount. */
     public List<DepositNoticeItemRequest> findDealQuotationItems(long quotationId) {
-        List<DepositNoticeItemRequest> goods = new java.util.ArrayList<>();
-        BigDecimal[] adjustment = {BigDecimal.ZERO};
-        jdbc.query("""
-            SELECT seq, description, qty, raw_unit, unit_price, sales_discount, final_unit_price, line_type
+        return jdbc.query("""
+            SELECT seq, description, qty, raw_unit, unit_price, sales_discount, final_unit_price, amount, line_type
               FROM sales.quotation_item
              WHERE quotation_id = :quotationId
              ORDER BY seq
-            """, Map.of("quotationId", quotationId), rs -> {
-                if ("ADJUSTMENT".equals(rs.getString("line_type"))) {
-                    BigDecimal net = rs.getBigDecimal("final_unit_price");
-                    BigDecimal qty = rs.getBigDecimal("qty");
-                    if (net != null && qty != null) adjustment[0] = adjustment[0].add(net.multiply(qty));
-                    return;
-                }
+            """, Map.of("quotationId", quotationId), (rs, rowNum) -> {
+                boolean adjustment = "ADJUSTMENT".equals(rs.getString("line_type"));
                 String description = rs.getString("description");
                 if (description == null || description.isBlank()) {
                     description = "รายการสินค้า";
                 }
                 String unit = rs.getString("raw_unit");
-                if (unit == null || unit.isBlank()) {
+                if (adjustment) {
+                    unit = "";
+                } else if (unit == null || unit.isBlank()) {
                     unit = "หน่วย";
                 }
                 BigDecimal discount = rs.getBigDecimal("sales_discount");
-                String discountLabel = discount != null && discount.signum() > 0
+                String discountLabel = !adjustment && discount != null && discount.signum() > 0
                     ? "ส่วนลด " + discount.stripTrailingZeros().toPlainString() + " ต่อหน่วย"
                     : null;
-                goods.add(new DepositNoticeItemRequest(
+                return new DepositNoticeItemRequest(
                     rs.getInt("seq"), description, rs.getBigDecimal("qty"), unit,
-                    rs.getBigDecimal("unit_price"), discountLabel, rs.getBigDecimal("final_unit_price")));
+                    rs.getBigDecimal("unit_price"), discountLabel, rs.getBigDecimal("final_unit_price"),
+                    rs.getBigDecimal("amount"));
             });
-        return foldAdjustments(goods, adjustment[0]);
-    }
-
-    /**
-     * A DEAL_DIRECT ส่วนลดพิเศษ row (ADJUSTMENT, qty -1) cannot be a
-     * deposit line (the editor's PUT requires qty &gt;= 0), so its amount is spread over the goods
-     * lines in proportion to their amount. "2 decimals for all": each share is HALF_UP to 2 dp and
-     * each line's new net price is 2 dp, with no remainder pushed onto a last line. The notice
-     * totals are the sum of its own stored 2 dp lines ({@code amount = net x qty}), so they can
-     * differ from the quotation's total by under qty x 0.005 baht per line; that is the intended
-     * outcome, not a bug. A line keeps the quotation's own discount wording, and gains the folded
-     * discount after it only when the fold lowered its price. A free line stays as it is.
-     */
-    static List<DepositNoticeItemRequest> foldAdjustments(List<DepositNoticeItemRequest> goods,
-                                                          BigDecimal adjustment) {
-        BigDecimal goodsTotal = goods.stream().map(it -> it.netUnitPrice().multiply(it.qty()))
-            .reduce(BigDecimal.ZERO, BigDecimal::add);
-        if (adjustment.signum() == 0 || goodsTotal.signum() == 0) {
-            return goods;
-        }
-        List<DepositNoticeItemRequest> folded = new java.util.ArrayList<>();
-        for (DepositNoticeItemRequest it : goods) {
-            BigDecimal amount = it.netUnitPrice().multiply(it.qty());
-            if (amount.signum() == 0) {
-                folded.add(it);
-                continue;
-            }
-            BigDecimal share = adjustment.multiply(amount).divide(goodsTotal, 2, RoundingMode.HALF_UP);
-            BigDecimal net = amount.add(share).divide(it.qty(), 2, RoundingMode.HALF_UP);
-            BigDecimal foldedPerUnit = it.netUnitPrice().subtract(net);
-            String label = it.discountLabel();
-            if (foldedPerUnit.signum() > 0) {
-                String extra = "ส่วนลดพิเศษ " + foldedPerUnit.stripTrailingZeros().toPlainString() + " ต่อหน่วย";
-                label = label == null || label.isBlank() ? extra : label + " + " + extra;
-            }
-            folded.add(new DepositNoticeItemRequest(it.seq(), it.description(), it.qty(), it.unit(), it.unitPrice(),
-                label, net));
-        }
-        return folded;
     }
 
     private List<DepositNoticeItemDto> findItems(long docId) {

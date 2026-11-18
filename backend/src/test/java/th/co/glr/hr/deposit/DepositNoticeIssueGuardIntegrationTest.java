@@ -241,7 +241,7 @@ class DepositNoticeIssueGuardIntegrationTest extends AbstractPostgresIntegration
             "ใบแจ้งรับมัดจำนี้มีเปอร์เซ็นต์มัดจำ 150% จึงออกเอกสารไม่ได้ (ต้องเป็นจำนวนเต็ม 1–100)");
         assertIssueRefusedAndNothingChanged(fixture,
             depositNoticeRepository.createDraft(fixture.ticketId(), secondDraftHeader(), List.of(new DepositNoticeItemRequest(
-                1, "Free item", new BigDecimal("2"), "แผ่น", BigDecimal.ZERO, null, BigDecimal.ZERO))),
+                1, "Free item", new BigDecimal("2"), "แผ่น", BigDecimal.ZERO, null, BigDecimal.ZERO, null))),
             "ใบแจ้งรับมัดจำนี้มียอดมัดจำ 0 บาท จึงออกเอกสารไม่ได้");
 
         // Owner ruling 2026-10-23: one deposit notice per deal. Even once the percent is billable,
@@ -326,7 +326,7 @@ class DepositNoticeIssueGuardIntegrationTest extends AbstractPostgresIntegration
         DepositNoticeDto savedByA = depositNoticeService.update(draftId, stampedRequest("0.40", secondDraftItems(), loaded), salesActor);
 
         List<DepositNoticeItemRequest> tabBItems = List.of(new DepositNoticeItemRequest(
-            1, "Tab B item", new BigDecimal("1"), "แผ่น", new BigDecimal("999.00"), null, new BigDecimal("999.00")));
+            1, "Tab B item", new BigDecimal("1"), "แผ่น", new BigDecimal("999.00"), null, new BigDecimal("999.00"), null));
         assertThatThrownBy(() -> depositNoticeService.update(draftId, stampedRequest("0.30", tabBItems, loaded), salesActor))
             .isInstanceOfSatisfying(ApiException.class, e -> {
                 assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
@@ -401,9 +401,9 @@ class DepositNoticeIssueGuardIntegrationTest extends AbstractPostgresIntegration
     private List<DepositNoticeItemRequest> secondDraftItems() {
         return List.of(
             new DepositNoticeItemRequest(1, "Second draft item A", new BigDecimal("1.5"), "แผ่น",
-                new BigDecimal("40.00"), "ส่วนลด 6.67 ต่อหน่วย", new BigDecimal("33.33")),
+                new BigDecimal("40.00"), "ส่วนลด 6.67 ต่อหน่วย", new BigDecimal("33.33"), null),
             new DepositNoticeItemRequest(2, "Second draft item B", new BigDecimal("2.5"), "แผ่น",
-                new BigDecimal("12.00"), "ส่วนลด 1.99 ต่อหน่วย", new BigDecimal("10.01")));
+                new BigDecimal("12.00"), "ส่วนลด 1.99 ต่อหน่วย", new BigDecimal("10.01"), null));
     }
 
     private void assertIssueRefusedAndNothingChanged(IssuedNoticeFixture fixture, long draftId, String message) {

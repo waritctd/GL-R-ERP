@@ -128,6 +128,7 @@ public class DepositNoticeService {
             throw zeroDepositRefusal(governing.number());
         }
         List<DepositNoticeItemRequest> items = buildItemsFromRequest(req, ticketId);
+        if (items == req.items()) items = echoOnly(items, List.of());
         boolean linesFromGoverning = items.isEmpty() && governing != null;
         if (linesFromGoverning) items = itemsFromGoverning(governing);
         List<String> notes = req.notes() != null ? req.notes()
@@ -194,7 +195,7 @@ public class DepositNoticeService {
             req.customerName(), req.customerTaxId(), req.customerAddress(),
             req.projectName(), req.reference(),
             depositPercent,
-            req.notes(), req.items(), req.expectedUpdatedAt()
+            req.notes(), echoOnly(req.items(), doc.items()), req.expectedUpdatedAt()
         );
         docs.update(docId, effective, doc.items());
         return docs.findById(docId).orElseThrow();
@@ -1272,6 +1273,23 @@ public class DepositNoticeService {
         return new CustomerHeaderInfo(customerTaxId, customerAddress, addressOnly, branch, projectName);
     }
 
+    /** A client line may only echo what the notice stores: its amount counts only when a stored line has the same
+     * qty, net and amount (else it is recomputed), and a negative qty only when a stored line has that qty. */
+    private static List<DepositNoticeItemRequest> echoOnly(List<DepositNoticeItemRequest> supplied,
+                                                           List<DepositNoticeItemDto> stored) {
+        if (supplied == null) return null;
+        return supplied.stream().map(it -> {
+            if (it.qty().signum() < 0 && stored.stream().noneMatch(s -> s.qty().compareTo(it.qty()) == 0)) {
+                throw new ApiException(HttpStatus.BAD_REQUEST, "จำนวนต้องไม่ติดลบ");
+            }
+            boolean echoed = it.amount() != null && stored.stream().anyMatch(s ->
+                s.qty().compareTo(it.qty()) == 0 && s.netUnitPrice().compareTo(it.netUnitPrice()) == 0
+                    && s.amount().compareTo(it.amount()) == 0);
+            return echoed || it.amount() == null ? it : new DepositNoticeItemRequest(it.seq(), it.description(),
+                it.qty(), it.unit(), it.unitPrice(), it.discountLabel(), it.netUnitPrice(), null);
+        }).toList();
+    }
+
     private List<DepositNoticeItemRequest> buildItemsFromRequest(DepositNoticeDraftRequest req, long ticketId) {
         if (req.items() != null && !req.items().isEmpty()) return req.items();
 
@@ -1303,7 +1321,7 @@ public class DepositNoticeService {
                             .reduce((a, b) -> a + " " + b).orElse(it.brand());
                         BigDecimal price = it.approvedPrice();
                         return new DepositNoticeItemRequest(
-                            seq[0]++, desc, it.qty(), "แผ่น", price, null, price
+                            seq[0]++, desc, it.qty(), "แผ่น", price, null, price, null
                         );
                     })
                     .toList();
@@ -1335,7 +1353,7 @@ public class DepositNoticeService {
                 ? "ส่วนลด " + discount.stripTrailingZeros().toPlainString() + " ต่อหน่วย" : null;
             items.add(new DepositNoticeItemRequest(
                 item.seq(), description, item.requestedQuantity(), unitLabel(item.requestedUnitBasis()),
-                item.approvedUnitPrice(), discountLabel, item.finalUnitPrice()));
+                item.approvedUnitPrice(), discountLabel, item.finalUnitPrice(), null));
         }
         return items;
     }

@@ -9,9 +9,10 @@ import java.math.BigDecimal;
 public record DepositNoticeItemRequest(
     int        seq,
     @NotBlank  String     description,
-    @NotNull @PositiveOrZero BigDecimal qty,
+    @NotNull BigDecimal qty,
     @Size(max = 32) String unit,
     @NotNull @PositiveOrZero BigDecimal unitPrice,
     String     discountLabel,
-    @NotNull @PositiveOrZero BigDecimal netUnitPrice
+    @NotNull @PositiveOrZero BigDecimal netUnitPrice,
+    BigDecimal amount
 ) {}

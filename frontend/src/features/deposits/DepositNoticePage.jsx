@@ -43,6 +43,11 @@ function lineNet(item) {
   return Number(item.netUnitPrice ?? item.unitPrice) || 0;
 }
 
+// A line's amount: the stored one (a quotation's own, rounded once) until the row is edited, else net x qty.
+function lineAmount(item) {
+  return item.amount ?? round2(lineNet(item) * (Number(item.qty) || 0));
+}
+
 // An untouched เพิ่มรายการ row (or one emptied again): no description and nothing to bill. Left
 // out of the save (the backend refuses a line without a description) and of the issue checks.
 const NO_ITEMS_MESSAGE = 'กรุณาเพิ่มรายการสินค้าอย่างน้อย 1 รายการ';
@@ -129,11 +134,12 @@ function makeLineItemSchema(rowNumber) {
   return z.object({
     description: z.string(),
     qty: z.union([z.string(), z.number()]).nullable().optional(),
+    discount: z.boolean().optional(),
   }).superRefine((item, ctx) => {
     if (!String(item.description ?? '').trim()) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['description'], message: `กรุณากรอกรายละเอียดสินค้าในรายการที่ ${rowNumber}` });
     }
-    if (!item.qty || Number(item.qty) <= 0) {
+    if (!item.discount && (!item.qty || Number(item.qty) <= 0)) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['qty'], message: `กรุณากรอกจำนวนมากกว่า 0 ในรายการที่ ${rowNumber}` });
     }
   });
@@ -298,7 +304,8 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
       // As stored (null -> blank, which saves as "keep"): a save of another field must not rewrite it.
       depositPercent:  d.depositPercent ?? '',
       notes:           d.notes         ?? [],
-      items:           (d.items ?? []).map((it) => ({ ...it })),
+      // A qty < 0 line is the quotation's ส่วนลดพิเศษ: its qty is not editable and is allowed past the qty > 0 check.
+      items:           (d.items ?? []).map((it) => ({ ...it, discount: Number(it.qty) < 0 })),
     });
   }
 
@@ -485,6 +492,8 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
           // simple: netUnitPrice = unitPrice (no discount logic for now)
           updated.netUnitPrice = updated.unitPrice;
         }
+        // an edited line recomputes its amount from net x qty
+        if (['qty', 'unitPrice', 'netUnitPrice'].includes(key)) updated.amount = null;
         return updated;
       }),
     }));
@@ -535,13 +544,14 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
         unitPrice:    Number(it.unitPrice) || 0,
         discountLabel: it.discountLabel ?? null,
         netUnitPrice: lineNet(it),
+        amount:       it.amount ?? null,
       })),
     };
   }
 
   // Recalculate summary from form items, rounding each step to the satang as
   // DepositNoticeRepository does (HALF_UP), so the screen matches the stored document.
-  const subtotal = round2(form.items.reduce((sum, it) => sum + lineNet(it) * (Number(it.qty) || 0), 0));
+  const subtotal = round2(form.items.reduce((sum, it) => sum + lineAmount(it), 0));
   const deposit = round2(subtotal * (Number(form.depositPercent) || 0));
   // the served document's own vatPercent always wins once one exists — only before that (no `doc` yet) does this
   // fall back to FALLBACK_VAT_PERCENT above.
@@ -788,7 +798,7 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
                       <span className="text-right text-sm">{it.qty}</span>
                       <span className="text-right text-sm">{money(it.unitPrice)}</span>
                       <span className="text-right text-sm">{money(it.netUnitPrice)}</span>
-                      <code className="text-right text-xs">{money((it.netUnitPrice ?? it.unitPrice) * it.qty)}</code>
+                      <code className="text-right text-xs">{money(lineAmount(it))}</code>
                     </>
                   ) : (
                     <>
@@ -808,13 +818,13 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
                         ) : null}
                       </div>
                       <div>
-                        <input type="number" value={it.qty ?? ''} placeholder="จำนวน"
+                        {it.discount ? <span className="block text-right text-xs">{it.qty}</span> : <input type="number" value={it.qty ?? ''} placeholder="จำนวน"
                           id={`doc-item-${idx}-qty`}
                           ref={(el) => { fieldRefs.current[`items.${idx}.qty`] = el; }}
                           onChange={(e) => setItemField(idx, 'qty', e.target.value)}
                           aria-invalid={fieldErrors[`items.${idx}.qty`] ? true : undefined}
                           aria-describedby={fieldErrors[`items.${idx}.qty`] ? fieldErrorId(`doc-item-${idx}-qty`) : undefined}
-                          className="w-full box-border text-right text-xs" />
+                          className="w-full box-border text-right text-xs" />}
                         {fieldErrors[`items.${idx}.qty`] ? (
                           <p id={fieldErrorId(`doc-item-${idx}-qty`)} role="alert" className="mx-0 mb-0 mt-0.5 text-[10px] font-bold text-danger">
                             {fieldErrors[`items.${idx}.qty`]}
@@ -828,7 +838,7 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
                         onChange={(e) => setItemField(idx, 'netUnitPrice', e.target.value)}
                         className="text-right text-xs" />
                       <code className="text-right text-xs text-text-secondary">
-                        {money(((it.netUnitPrice ?? it.unitPrice) || 0) * (it.qty || 0))}
+                        {money(lineAmount(it))}
                       </code>
                     </>
                   )}

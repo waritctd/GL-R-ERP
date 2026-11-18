@@ -115,6 +115,22 @@ class DepositNoticePdfRendererTest {
         }
     }
 
+    // A quotation's ส่วนลดพิเศษ line (qty -1, negative stored amount, no unit) prints as its own row with the stored values.
+    @Test
+    void aNegativeDiscountLine_printsItsStoredValuesWithAnEmptyUnit() throws Exception {
+        List<DepositNoticeItemDto> items = new java.util.ArrayList<>(twoItems());
+        items.add(item(3, "ส่วนลดพิเศษ 10 บาท", "-1", "", "10.00", null, "10.00", "-10.00"));
+        try (Workbook wb = render(model(LocalDate.of(2026, 10, 28), "สำนักงานใหญ่", "0105599999999", items))) {
+            Sheet sh = wb.getSheetAt(0);
+            int r = ITEM0 + 2;
+            assertThat(norm(str(sh, r, 1))).isEqualTo("ส่วนลดพิเศษ 10 บาท");
+            assertThat(num(sh, r, 2)).isEqualTo(-1.0);
+            assertThat(isBlank(sh, r, 3)).as("empty unit cell").isTrue();
+            assertThat(num(sh, r, 7)).isCloseTo(10.0, within(0.0001));
+            assertThat(num(sh, r, 8)).isCloseTo(-10.0, within(0.0001));
+        }
+    }
+
     @Test
     void totalsAreTheStoredValuesAsNumbersAtTheNativeRows() throws Exception {
         try (Workbook wb = render(model())) {

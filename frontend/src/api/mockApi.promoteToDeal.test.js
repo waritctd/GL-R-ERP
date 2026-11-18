@@ -151,18 +151,18 @@ describe('mock dealQuotations.promoteToDeal (GLA-136)', () => {
     expect(still.docStatus).toBe('APPROVED');
   });
 
-  // Owner ruling 2026-10-23 (DepositNoticeRepository#foldAdjustments): the deposit draft carries no
-  // qty -1 ส่วนลดพิเศษ row; a flat 95 is spread by line amount (TILE 8,500 takes 85, PLAIN 1,000
-  // takes 10), so the subtotal is the quotation's 9,405. The mock computes no % adjustment amount
-  // (MOCK_NOT_COMPUTED), so a % row is only dropped.
-  it('the deposit draft folds a flat ส่วนลดพิเศษ into the goods lines and drops a % one', async () => {
+  // The deposit draft copies the quotation's own lines (DepositNoticeRepository#findDealQuotationItems): a flat
+  // ส่วนลดพิเศษ is its own qty -1 line with its stored amount, so the subtotal is the quotation's 9,405. The mock
+  // computes no % adjustment amount (MOCK_NOT_COMPUTED), so a % row is only dropped.
+  it('the deposit draft keeps a flat ส่วนลดพิเศษ as its own line and drops a % one', async () => {
     const ghost = await quotationOnlyTicket();
     const flat = await approvedQuotation(ghost, [TILE, PLAIN, { lineType: 'ADJUSTMENT', description: 'ส่วนลดพิเศษ', adjustmentAmount: 95 }]);
     await api.dealQuotations.promoteToDeal(flat.id);
     const { depositNotice } = await api.depositNotices.createDraft(ghost, {});
-    expect(depositNotice.items.map((i) => [i.qty, i.unitPrice, i.netUnitPrice, i.discountLabel])).toEqual([
-      [10, 850, 841.5, 'ส่วนลดพิเศษ 8.5 ต่อหน่วย'],
-      [2, 500, 495, 'ส่วนลดพิเศษ 5 ต่อหน่วย'],
+    expect(depositNotice.items.map((i) => [i.qty, i.unitPrice, i.netUnitPrice, i.amount])).toEqual([
+      [10, 850, 850, 8500],
+      [2, 500, 500, 1000],
+      [-1, 95, 95, -95],
     ]);
     expect(depositNotice.subtotal).toBe(9405);
 
