@@ -20,7 +20,8 @@ import { depositNoticeStatusLabel, formatThaiDate } from '../../utils/format.js'
 import { downloadBlob } from '../../utils/download.js';
 import { round2 } from '../quotations/quotationMeta.js';
 import {
-  createDepositNoticeDraft, dealQuotationsWithConfirmedQueryOptions, resolveNoticeQuotation, subtotalsDiffer,
+  createDepositNoticeDraft, dealQuotationsWithConfirmedQueryOptions, depositNoticeFileName, resolveNoticeQuotation,
+  subtotalsDiffer,
 } from './createDepositNoticeDraft.js';
 import { invalidateDealDocuments } from '../documentChain/documentChain.js';
 
@@ -328,9 +329,9 @@ export function DepositNoticePage({ ticketId, onBack, showToast }) {
   const savedKeyRef = useRef(null);
 
   function populateForm(d, customerList = []) {
-    // The tax id / address filled from the customer master below count as "as loaded" (savedKeyRef is seeded from
-    // this result), deliberately: an unchanged draft then downloads as stored without forcing a save.
-    // If taxId/address already saved in draft, use them directly Otherwise try to match customerName against
+    // The tax id / address filled from the customer master below are NOT "as loaded": savedKeyRef is seeded from the
+    // stored values, so the fill counts as a change and a download saves it first (the file carries what the screen
+    // shows). If taxId/address already saved in draft, use them directly Otherwise try to match customerName against
     // master
     let taxId   = d.customerTaxId   ?? '';
     let address = d.customerAddress ?? '';
@@ -355,7 +356,9 @@ export function DepositNoticePage({ ticketId, onBack, showToast }) {
       // A qty < 0 line is the quotation's ส่วนลดพิเศษ: its qty is not editable and is allowed past the qty > 0 check.
       items:           (d.items ?? []).map((it) => ({ ...it, discount: Number(it.qty) < 0 })),
     };
-    savedKeyRef.current = payloadKey(buildPayloadFrom(seeded, null));
+    savedKeyRef.current = payloadKey(buildPayloadFrom({
+      ...seeded, customerTaxId: d.customerTaxId ?? '', customerAddress: d.customerAddress ?? '',
+    }, null));
     setForm(seeded);
   }
 
@@ -548,16 +551,22 @@ export function DepositNoticePage({ ticketId, onBack, showToast }) {
     try {
       if (!isIssued && payloadKey(buildPayload()) !== savedKeyRef.current) {
         try {
-          await saveMutation.mutateAsync();
-        } catch {
-          return; // saveMutation's onError already showed the message (and reloaded on a 409)
+          await saveDraft();
+          showToast('success', 'บันทึกแล้ว');
+          invalidateDepositNotices();
+        } catch (err) {
+          // A viewer who cannot save still gets the stored file; any other refusal (a 409 reloads) stops the download.
+          if (err.status !== 403) {
+            await onSaveError(err, 'บันทึกไม่สำเร็จ');
+            return;
+          }
         }
       }
       try {
         const blob = extension === 'pdf'
           ? await api.depositNotices.downloadPdf(doc.id)
           : await api.depositNotices.downloadXlsx(doc.id);
-        downloadBlob(blob, doc.docNumber ?? 'draft', extension);
+        downloadBlob(blob, depositNoticeFileName(doc, ticketId), extension);
       } catch (err) {
         showToast('error', err.message || 'ดาวน์โหลดไม่สำเร็จ');
       }

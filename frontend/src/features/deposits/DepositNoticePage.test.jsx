@@ -340,8 +340,55 @@ describe('DepositNoticePage', () => {
       await pickDownload('PDF');
 
       await waitFor(() => expect(api.depositNotices.downloadPdf).toHaveBeenCalledWith(9002));
-      await waitFor(() => expect(downloadBlob).toHaveBeenCalledWith(pdfBlob, 'draft', 'pdf'));
+      await waitFor(() => expect(downloadBlob).toHaveBeenCalledWith(pdfBlob, 'deposit-draft-ticket-701', 'pdf'));
       expect(api.depositNotices.update).not.toHaveBeenCalled();
+    });
+
+    it('names a draft download after its reference, unsafe characters replaced by -', async () => {
+      api.depositNotices.listByTicket.mockResolvedValue({
+        depositNotices: [{ ...validDraftDoc, reference: 'PO 12/34:5', updatedAt: 'T1' }],
+      });
+      renderDepositNoticePage();
+
+      await screen.findByDisplayValue('บริษัท ทดสอบ จำกัด');
+      await pickDownload('PDF');
+
+      await waitFor(() => expect(downloadBlob).toHaveBeenCalledWith(pdfBlob, 'deposit-draft-PO-12-34-5', 'pdf'));
+    });
+
+    describe('a blank stored tax id / address that the customer master fills in', () => {
+      const master = { id: 5, name: 'บริษัท ทดสอบ จำกัด', taxId: '0105500000001', address: '1 ถนนทดสอบ', branch: 'สำนักงานใหญ่' };
+      beforeEach(() => {
+        api.customers.search.mockResolvedValue({ customers: [master] });
+        api.depositNotices.listByTicket.mockResolvedValue({ depositNotices: [{ ...validDraftDoc, updatedAt: 'T1' }] });
+      });
+
+      it('is saved before the download, so the file carries what the screen shows', async () => {
+        api.depositNotices.update.mockResolvedValue({ depositNotice: { updatedAt: 'T2' } });
+        renderDepositNoticePage();
+
+        await screen.findByDisplayValue('0105500000001');
+        await pickDownload('PDF');
+
+        await waitFor(() => expect(api.depositNotices.downloadPdf).toHaveBeenCalledWith(9002));
+        expect(api.depositNotices.update).toHaveBeenCalledTimes(1);
+        expect(api.depositNotices.update.mock.calls[0][1]).toMatchObject({
+          customerTaxId: '0105500000001', customerAddress: '1 ถนนทดสอบ สำนักงานใหญ่', expectedUpdatedAt: 'T1',
+        });
+      });
+
+      it('still downloads the stored file when the save is refused with 403, with no error toast', async () => {
+        const showToast = vi.fn();
+        api.depositNotices.update.mockRejectedValue(Object.assign(new Error('forbidden'), { status: 403 }));
+        renderDepositNoticePage({ showToast });
+
+        await screen.findByDisplayValue('0105500000001');
+        await pickDownload('PDF');
+
+        await waitFor(() => expect(downloadBlob).toHaveBeenCalledWith(pdfBlob, 'deposit-draft-ticket-701', 'pdf'));
+        expect(api.depositNotices.update).toHaveBeenCalledTimes(1);
+        expect(showToast).not.toHaveBeenCalledWith('error', expect.anything());
+      });
     });
 
     it('saves an edited draft first (same payload as บันทึกร่าง), then downloads', async () => {
@@ -719,6 +766,16 @@ describe('DepositNoticePage', () => {
       draftWith({ reference: 'PO-001' });
       api.dealQuotations.listForTicket.mockResolvedValue({
         items: [{ id: 60, number: 'QT-2026-0001', subtotalAmount: 1 }, quotation], orderConfirmedQuotationId: 61,
+      });
+      renderDepositNoticePage();
+
+      expect((await screen.findByTestId('deposit-subtotal-differs')).textContent).toBe(LINE);
+    });
+
+    it('compares with the quotation the notice names, not the order-confirmed one, when they differ', async () => {
+      draftWith();
+      api.dealQuotations.listForTicket.mockResolvedValue({
+        items: [{ id: 60, number: 'QT-2026-0001', subtotalAmount: 1 }, quotation], orderConfirmedQuotationId: 60,
       });
       renderDepositNoticePage();
 

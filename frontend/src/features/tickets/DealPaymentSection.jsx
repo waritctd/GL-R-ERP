@@ -15,7 +15,8 @@ import {
   formatMoney, formatThaiDate, overdueBadgeLabel, paymentStageLabel, PAYMENT_KIND_LABEL,
 } from '../../utils/format.js';
 import {
-  dealQuotationsWithConfirmedQueryOptions, depositNoticesQueryOptions, pickDepositNotice, resolveNoticeQuotation,
+  dealQuotationsWithConfirmedQueryOptions, depositNoticeFileName, depositNoticesQueryOptions, pickDepositNotice,
+  resolveNoticeQuotation,
 } from '../deposits/createDepositNoticeDraft.js';
 import { DepositIssueSummary } from '../deposits/DepositNoticePage.jsx';
 import { canCreateDepositNoticeFromQuotation } from '../pricingRequests/pricingRequestMeta.js';
@@ -401,8 +402,8 @@ export function DealPaymentSection({
                   ) : null}
                   {(dep === 'issued' || dep === 'paid') && doc?.status === 'ISSUED' ? (
                     <>
-                      {downloadButton('dep-pdf', 'PDF', () => api.depositNotices.downloadPdf(doc.id), doc.docNumber ?? 'deposit-notice', 'pdf')}
-                      {downloadButton('dep-xlsx', 'Excel', () => api.depositNotices.downloadXlsx(doc.id), doc.docNumber ?? 'deposit-notice', 'xlsx')}
+                      {downloadButton('dep-pdf', 'PDF', () => api.depositNotices.downloadPdf(doc.id), depositNoticeFileName(doc, ticketId), 'pdf')}
+                      {downloadButton('dep-xlsx', 'Excel', () => api.depositNotices.downloadXlsx(doc.id), depositNoticeFileName(doc, ticketId), 'xlsx')}
                     </>
                   ) : null}
                 </>

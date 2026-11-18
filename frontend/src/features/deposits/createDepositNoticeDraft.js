@@ -52,15 +52,28 @@ export const dealQuotationsWithConfirmedQueryOptions = (ticketId) => ({
 });
 
 /**
- * The quotation a deposit notice stands against: the list item the order was confirmed from; if the response names none,
- * the item whose number is the notice's reference (the reference field also takes a PO number); else null.
+ * The quotation a deposit notice stands against: the list item whose number is the notice's reference (the quotation it
+ * was drafted from); if none matches (the reference is a PO number, blank or another document), the item the order was
+ * confirmed from; else null.
  */
 export function resolveNoticeQuotation(listResponse, reference) {
   const items = listResponse?.items ?? [];
+  const named = reference ? items.find((q) => q.number === reference) : null;
+  if (named) return named;
   const confirmedId = listResponse?.orderConfirmedQuotationId ?? null;
-  const confirmed = confirmedId != null ? items.find((q) => q.id === confirmedId) : null;
-  if (confirmed) return confirmed;
-  return reference ? items.find((q) => q.number === reference) ?? null : null;
+  return confirmedId != null ? items.find((q) => q.id === confirmedId) ?? null : null;
+}
+
+/**
+ * The saved file's name (no extension) for a deposit notice: an issued one keeps its document number; a draft is named
+ * after its reference, else the deal: `deposit-draft-<reference>` / `deposit-draft-ticket-<ticketId>`, with characters
+ * unsafe in file names (/ \ : * ? " < > | and whitespace) replaced by `-`.
+ */
+export function depositNoticeFileName(notice, ticketId) {
+  if (notice?.docNumber) return notice.docNumber;
+  const reference = String(notice?.reference ?? '').trim();
+  const raw = reference ? `deposit-draft-${reference}` : `deposit-draft-ticket-${ticketId ?? notice?.ticketId}`;
+  return raw.replace(/[/\\:*?"<>|\s]/g, '-');
 }
 
 /** True when both figures are known and differ at 2 dp. */
