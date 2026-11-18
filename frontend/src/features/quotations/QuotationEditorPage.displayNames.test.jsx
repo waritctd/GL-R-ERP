@@ -129,9 +129,10 @@ describe('QuotationEditorPage — V179 ผู้พิมพ์/พนักง�
   it('a canManageAllSalesDocuments holder on another rep\'s deal sees NO move-owner hint (the printed rep changes, the owner does not)', async () => {
     renderEditor('/quotations/5', { ...salesUser, id: 7, canManageAllSalesDocuments: true });
     await waitFor(() => expect(byId('salesRepDisplayId')).toBeTruthy());
-    await waitFor(() => expect(api.tickets.get).toHaveBeenCalled());
-    await new Promise((r) => setTimeout(r, 50));
-    expect(screen.queryAllByText((_, el) => el.children.length === 0 && el.textContent.includes('ย้ายเจ้าของงานไปให้คนนี้'))).toHaveLength(0);
+    // the hint shows while no ticket is loaded (a new deal), so it going away is the signal the ticket arrived
+    await waitFor(() => expect(
+      screen.queryAllByText((_, el) => el.children.length === 0 && el.textContent.includes('ย้ายเจ้าของงานไปให้คนนี้')),
+    ).toHaveLength(0));
   });
 
   it('a draft that already carries display ids pre-selects them', async () => {

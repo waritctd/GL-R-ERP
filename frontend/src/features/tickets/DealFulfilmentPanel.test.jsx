@@ -775,6 +775,8 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
       renderPanelWithChoose(holder, vi.fn(), { legacy: true, pending: true, editable: true, decidedAt: null });
       await screen.findByTestId('deal-fulfilment-create-ir-drafts');
       expect(screen.queryByTestId('deal-fulfilment-choose-source')).toBeNull();
+      // ...and no hint telling them to press a button they cannot see
+      expect(screen.queryByTestId('ir-source-hint')).toBeNull();
     });
     it('CEO on a NEW undecided deal (pending, not editable) still gets the จัดซื้อสินค้า button: the hint must never point at a missing button', async () => {
       const onChoose = vi.fn();

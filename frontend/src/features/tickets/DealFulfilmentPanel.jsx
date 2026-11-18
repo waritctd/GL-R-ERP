@@ -960,7 +960,7 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
             {canFullWriteStoredIr && !allFactoriesCovered && !allLinesFromStock && !depositReady ? (
               <p className="m-0 text-xs font-bold text-text-secondary" data-testid="ir-deposit-hint">{DEPOSIT_HINT}</p>
             ) : null}
-            {canFullWriteStoredIr && !allFactoriesCovered && !allLinesFromStock && depositReady && sourcePending ? (
+            {canDeclareStock && !allFactoriesCovered && !allLinesFromStock && depositReady && sourcePending ? (
               <p className="m-0 text-xs font-bold text-text-secondary" data-testid="ir-source-hint">ต้องกด “จัดซื้อสินค้า” เพื่อเลือกที่มาสินค้าก่อนออกใบขอซื้อ (IR)</p>
             ) : null}
             {allFactoriesCovered ? (
