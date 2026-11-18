@@ -15,6 +15,7 @@ import {
 } from '../../utils/format.js';
 import { canViewCustomerQuotation } from '../pricingRequests/pricingRequestMeta.js';
 import { canViewDealQuotation, dealQuotationStatusLabel, depositTermsSummary } from '../quotations/quotationMeta.js';
+import { depositNoticeFileName } from '../deposits/createDepositNoticeDraft.js';
 import { isRemainingInvoiceReady } from './remainingInvoiceReadiness.js';
 import { buttonVariants } from '../../components/common/Button.jsx';
 import { cn } from '../../utils/cn.js';
@@ -252,7 +253,7 @@ export function DealDocumentRegister({
     const blob = await handleDownload(key, () => (format === 'pdf'
       ? api.depositNotices.downloadPdf(doc.id)
       : api.depositNotices.downloadXlsx(doc.id)));
-    downloadBlob(blob, doc.docNumber ?? 'deposit-notice', format);
+    downloadBlob(blob, depositNoticeFileName(doc, ticketId), format);
   }
 
   async function downloadDirectQuotation(q, format) {

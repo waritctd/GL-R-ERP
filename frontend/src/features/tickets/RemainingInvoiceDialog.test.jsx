@@ -210,8 +210,8 @@ describe('RemainingInvoiceDialog — no live stored document (create flow)', () 
 
     const select = await screen.findByLabelText(/ใบเสนอราคา \(มีมากกว่า 1 ฉบับ/);
     expect(select).not.toBeNull();
-    expect(within(select.closest('label')).getByText('QT-2026-0501 (ผู้ออกแบบ)')).not.toBeNull();
-    expect(within(select.closest('label')).getByText('QT-2026-0502 (ผู้ซื้อ)')).not.toBeNull();
+    expect(within(select.parentElement).getByText('QT-2026-0501 (ผู้ออกแบบ)')).not.toBeNull();
+    expect(within(select.parentElement).getByText('QT-2026-0502 (ผู้ซื้อ)')).not.toBeNull();
 
     api.tickets.remainingInvoiceOptions.mockClear();
     fireEvent.change(select, { target: { value: '501' } });
@@ -752,7 +752,10 @@ describe('RemainingInvoiceDialog — drawing m-remaining', () => {
     expect(within(footer).getAllByRole('button').map((b) => b.textContent)).toEqual(['บันทึกร่าง', 'ออกใบแจ้งหนี้']);
     expect(footer.textContent).toBe('บันทึกร่างออกใบแจ้งหนี้');
     expect(screen.getByTestId('remaining-invoice-dialog').textContent).not.toMatch(/ทุกบรรทัด|เติมจาก/);
-    expect(editor.textContent).not.toMatch(/วันครบกำหนด|เงื่อนไข/);
+    // The section heading เงื่อนไข (the notes) is the one place the word now appears; the assertion is about FIELDS.
+    const withoutHeadings = editor.cloneNode(true);
+    withoutHeadings.querySelectorAll('h3').forEach((h) => h.remove());
+    expect(withoutHeadings.textContent).not.toMatch(/วันครบกำหนด|เงื่อนไข/);
   });
 
   it('create footer: บันทึกร่าง alone, no source claim', async () => {
@@ -874,5 +877,71 @@ describe('RemainingInvoiceDialog — payment terms (read-only, slice 6.1)', () =
 
     await screen.findByDisplayValue('QT-2026-0099');
     expect(screen.queryByTestId('remaining-invoice-terms')).toBeNull();
+  });
+});
+
+// Task 4 of the unified document generators: both forms share the deposit notice page's section vocabulary.
+describe('RemainingInvoiceDialog — sections and stored items (unified look)', () => {
+  const storedItems = [
+    { id: 1, remainingInvoiceId: 900, seq: 1, description: 'กระเบื้องรุ่นทดสอบ ก', qty: 12, unit: 'แผ่น', unitPrice: 500, discountLabel: null, netUnitPrice: 450, amount: 5400 },
+    { id: 2, remainingInvoiceId: 900, seq: 2, description: 'กระเบื้องรุ่นทดสอบ ข', qty: 3, unit: 'กล่อง', unitPrice: 1200, discountLabel: null, netUnitPrice: 1200, amount: 3600 },
+  ];
+  const headingsIn = (root) => within(root).getAllByRole('heading').map((h) => h.textContent);
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.depositNotices.noteTemplates.mockResolvedValue({
+      templates: [{ id: 1, text: 'หมายเหตุ 1', defaultSelected: true, sortOrder: 1 }],
+    });
+    api.tickets.remainingInvoiceOptions.mockResolvedValue({ options: baseOptions() });
+  });
+
+  it('create form: ข้อมูลเอกสาร, เงื่อนไข, ยอดรวม in that order, and no item list', async () => {
+    api.storedRemainingInvoices.listForTicket.mockResolvedValue({ remainingInvoices: [] });
+    renderDialog();
+    await screen.findByDisplayValue('QT-2026-0099');
+    const dialog = screen.getByTestId('remaining-invoice-dialog');
+    expect(headingsIn(dialog).filter((t) => ['ข้อมูลเอกสาร', 'รายการสินค้า', 'เงื่อนไข', 'ยอดรวม'].includes(t)))
+      .toEqual(['ข้อมูลเอกสาร', 'เงื่อนไข', 'ยอดรวม']);
+    expect(screen.queryByTestId('remaining-invoice-items')).toBeNull();
+    expect(screen.getByTestId('remaining-invoice-preview').textContent).toContain('จำนวนรายการ');
+  });
+
+  it('draft form: ข้อมูลเอกสาร, รายการสินค้า, เงื่อนไข, ยอดรวม in that order; items are read-only text', async () => {
+    api.storedRemainingInvoices.listForTicket.mockResolvedValue({ remainingInvoices: [docRow({ items: storedItems })] });
+    renderDialog();
+    const editor = await screen.findByTestId('remaining-invoice-draft-editor');
+    expect(headingsIn(editor).filter((t) => ['ข้อมูลเอกสาร', 'รายการสินค้า', 'เงื่อนไข', 'ยอดรวม'].includes(t)))
+      .toEqual(['ข้อมูลเอกสาร', 'รายการสินค้า', 'เงื่อนไข', 'ยอดรวม']);
+
+    const items = screen.getByTestId('remaining-invoice-items');
+    expect(within(items).getByText('กระเบื้องรุ่นทดสอบ ก')).not.toBeNull();
+    expect(within(items).getByText(/12\s*แผ่น/)).not.toBeNull();
+    expect(within(items).getByText('฿450.00')).not.toBeNull();
+    expect(within(items).getByText('฿5,400.00')).not.toBeNull();
+    expect(within(items).getByText('กระเบื้องรุ่นทดสอบ ข')).not.toBeNull();
+    expect(within(items).getByText(/3\s*กล่อง/)).not.toBeNull();
+    expect(within(items).getByText('฿3,600.00')).not.toBeNull();
+    expect(items.querySelectorAll('input, select, textarea').length).toBe(0);
+  });
+
+  // Phone width (Task 5 fix round 1): `.data-row > span` is nowrap + ellipsis, so text sitting directly in the cell
+  // is cut off. The description goes in an inner span, which `.data-row > span > span` lets wrap.
+  it('draft form: the item description sits in an inner span of its cell so it wraps instead of being ellipsised', async () => {
+    api.storedRemainingInvoices.listForTicket.mockResolvedValue({ remainingInvoices: [docRow({ items: storedItems })] });
+    renderDialog();
+    const items = await screen.findByTestId('remaining-invoice-items');
+    const text = within(items).getByText('กระเบื้องรุ่นทดสอบ ก');
+    const cell = text.closest('.data-row > span');
+    expect(cell).not.toBeNull();
+    expect(cell).not.toBe(text);
+    expect(cell.getAttribute('data-label')).toBe('รายละเอียด');
+  });
+
+  it('draft form: a stored row without items shows no item list', async () => {
+    api.storedRemainingInvoices.listForTicket.mockResolvedValue({ remainingInvoices: [docRow()] });
+    renderDialog();
+    await screen.findByTestId('remaining-invoice-draft-editor');
+    expect(screen.queryByTestId('remaining-invoice-items')).toBeNull();
   });
 });
