@@ -3,7 +3,6 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { z } from 'zod';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
-import { Breadcrumbs } from '../../components/common/Breadcrumbs.jsx';
 import { Button } from '../../components/common/Button.jsx';
 import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import {
@@ -130,7 +129,7 @@ export function DepositIssueSummary({
 }
 
 // validation (UX-03) ────────────────────────────────────────────────────── This gate fires ONLY from
-// handleIssue() — never from handleSave() or the preview path. This is a draft editor: users save partial
+// handleIssue() — never from handleSave(). This is a draft editor: users save partial
 // drafts incrementally, and blocking that would break a legitimate workflow.
 const customerNameSchema = z.string().trim().min(1, 'กรุณากรอกชื่อบริษัท / หน่วยงาน');
 
@@ -196,13 +195,42 @@ function validateIssueForm({ customerName, items, total, depositPercent }) {
   return { errors, order };
 }
 
-export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToast }) {
+// The request body for a save of `form`; the stamp (expectedUpdatedAt) is the caller's.
+function buildPayloadFrom(form, expectedUpdatedAt) {
+  return {
+    customerName:    form.customerName,
+    customerTaxId:   form.customerTaxId,
+    customerAddress: form.customerAddress,
+    projectName:     form.projectName,
+    reference:       form.reference,
+    // A cleared field keeps the stored % (null) rather than failing the whole save at 0.
+    depositPercent:  form.depositPercent === '' ? null : Number(form.depositPercent),
+    notes:           form.notes,
+    expectedUpdatedAt,
+    items: form.items.filter((it) => !isBlankRow(it)).map((it, idx) => ({
+      seq:          idx + 1,
+      description:  it.description ?? '',
+      qty:          Number(it.qty) || 0,
+      unit:         it.unit ?? 'แผ่น',
+      unitPrice:    Number(it.unitPrice) || 0,
+      discountLabel: it.discountLabel ?? null,
+      netUnitPrice: lineNet(it),
+      amount:       it.amount ?? null,
+    })),
+  };
+}
+
+// What the page would save (stamp left out), as a string to compare: a download of a draft saves first only when
+// this differs from the key taken at the last load/seed or successful save.
+function payloadKey(payload) {
+  return JSON.stringify({ ...payload, expectedUpdatedAt: null });
+}
+
+export function DepositNoticePage({ ticketId, onBack, showToast }) {
   const queryClient = useQueryClient();
   const [customerSearch, setCsSearch] = useState('');
-  const [previewHtml, setPreview]   = useState('');
   const [confirmIssue, setConfirmIssue] = useState(false);
   const [downloading, setDownloading] = useState(null); // 'xlsx' | 'pdf' | null
-  const iframeRef = useRef(null);
 
   // UX-03: per-field issue-validation errors, keyed 'customerName' | 'items' (at-least-one-line-item) |
   // `items.<index>.<field>` | 'total'. Populated only by handleIssue() below — see the SCOPING DECISION comment
@@ -285,6 +313,9 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
     customersQuery.refetch();
   }
 
+  // payloadKey of what the page would save, as of the last load/seed or successful save.
+  const savedKeyRef = useRef(null);
+
   function populateForm(d, customerList = []) {
     // If taxId/address already saved in draft, use them directly Otherwise try to match customerName against
     // master
@@ -299,7 +330,7 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
         address = address || [match.address, match.branch].filter(Boolean).join(' ');
       }
     }
-    setForm({
+    const seeded = {
       customerName:    d.customerName   ?? '',
       customerTaxId:   taxId,
       customerAddress: address,
@@ -310,7 +341,9 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
       notes:           d.notes         ?? [],
       // A qty < 0 line is the quotation's ส่วนลดพิเศษ: its qty is not editable and is allowed past the qty > 0 check.
       items:           (d.items ?? []).map((it) => ({ ...it, discount: Number(it.qty) < 0 })),
-    });
+    };
+    savedKeyRef.current = payloadKey(buildPayloadFrom(seeded, null));
+    setForm(seeded);
   }
 
   // Re-seed the editable `form` whenever the doc's identity/version/status actually changes (new draft created,
@@ -336,7 +369,9 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
   }
 
   async function saveDraft() {
-    const res = await api.depositNotices.update(doc.id, buildPayload());
+    const payload = buildPayload();
+    const res = await api.depositNotices.update(doc.id, payload);
+    savedKeyRef.current = payloadKey(payload);
     stampRef.current = res?.depositNotice?.updatedAt ?? stampRef.current;
     return res;
   }
@@ -382,24 +417,6 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
   function handleSave() {
     if (!doc || refusesClearedItems()) return;
     saveMutation.mutate();
-  }
-
-  const previewMutation = useMutation({
-    mutationFn: async () => {
-      // Save first, then preview.
-      await saveDraft();
-      return api.depositNotices.preview(doc.id);
-    },
-    onSuccess: (html) => {
-      setPreview(html);
-      invalidateDepositNotices();
-    },
-    onError: (err) => onSaveError(err, 'Preview ไม่สำเร็จ'),
-  });
-
-  function handlePreview() {
-    if (!doc || refusesClearedItems()) return;
-    previewMutation.mutate();
   }
 
   function handleIssue() {
@@ -452,8 +469,7 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
   }
 
   const creatingDraft = createDraftMutation.isPending;
-  const saving = saveMutation.isPending || previewMutation.isPending || issueMutation.isPending;
-  const previewLoading = previewMutation.isPending;
+  const saving = saveMutation.isPending || issueMutation.isPending;
 
   function setField(key, value) {
     setForm((f) => ({ ...f, [key]: value }));
@@ -508,49 +524,36 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
     if (['qty', 'unitPrice', 'netUnitPrice', 'discountLabel'].includes(key)) clearFieldError('total');
   }
 
-  async function handleDownloadXlsx() {
-    await download(() => api.depositNotices.downloadXlsx(doc.id), 'xlsx');
-  }
-
-  async function handleDownloadPdf() {
-    await download(() => api.depositNotices.downloadPdf(doc.id), 'pdf');
-  }
-
-  async function download(fetchBlob, extension) {
-    if (!doc) return;
+  // An issued notice downloads as stored. A draft is saved first when the form differs from what was loaded or last
+  // saved (through the same path as บันทึกร่าง, so the 409 handling is the same) and downloads only if that save
+  // succeeded; an unchanged draft downloads as stored without saving, so a reader who cannot save still gets the file.
+  async function handleDownload(extension) {
+    if (!doc || downloading) return;
+    if (!isIssued && refusesClearedItems()) return;
     setDownloading(extension);
     try {
-      const blob = await fetchBlob();
-      downloadBlob(blob, doc.docNumber ?? 'draft', extension);
-    } catch (err) {
-      showToast('error', err.message || 'ดาวน์โหลดไม่สำเร็จ');
+      if (!isIssued && payloadKey(buildPayload()) !== savedKeyRef.current) {
+        try {
+          await saveMutation.mutateAsync();
+        } catch {
+          return; // saveMutation's onError already showed the message (and reloaded on a 409)
+        }
+      }
+      try {
+        const blob = extension === 'pdf'
+          ? await api.depositNotices.downloadPdf(doc.id)
+          : await api.depositNotices.downloadXlsx(doc.id);
+        downloadBlob(blob, doc.docNumber ?? 'draft', extension);
+      } catch (err) {
+        showToast('error', err.message || 'ดาวน์โหลดไม่สำเร็จ');
+      }
     } finally {
-      setDownloading((current) => (current === extension ? null : current));
+      setDownloading(null);
     }
   }
 
   function buildPayload() {
-    return {
-      customerName:    form.customerName,
-      customerTaxId:   form.customerTaxId,
-      customerAddress: form.customerAddress,
-      projectName:     form.projectName,
-      reference:       form.reference,
-      // A cleared field keeps the stored % (null) rather than failing the whole save at 0.
-      depositPercent:  form.depositPercent === '' ? null : Number(form.depositPercent),
-      notes:           form.notes,
-      expectedUpdatedAt: stampRef.current,
-      items: form.items.filter((it) => !isBlankRow(it)).map((it, idx) => ({
-        seq:          idx + 1,
-        description:  it.description ?? '',
-        qty:          Number(it.qty) || 0,
-        unit:         it.unit ?? 'แผ่น',
-        unitPrice:    Number(it.unitPrice) || 0,
-        discountLabel: it.discountLabel ?? null,
-        netUnitPrice: lineNet(it),
-        amount:       it.amount ?? null,
-      })),
-    };
+    return buildPayloadFrom(form, stampRef.current);
   }
 
   // Recalculate summary from form items, rounding each step to the satang as
@@ -621,8 +624,8 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
               triggerIcon="download"
               align="start"
               items={[
-                { key: 'pdf', label: 'PDF', icon: 'fileText', onSelect: handleDownloadPdf, disabled: downloading != null, disabledReason: 'กำลังดาวน์โหลด…' },
-                { key: 'xlsx', label: 'Excel', icon: 'fileText', onSelect: handleDownloadXlsx, disabled: downloading != null, disabledReason: 'กำลังดาวน์โหลด…' },
+                { key: 'pdf', label: 'PDF', icon: 'fileText', onSelect: () => handleDownload('pdf'), disabled: downloading != null, disabledReason: 'กำลังดาวน์โหลด…' },
+                { key: 'xlsx', label: 'Excel', icon: 'fileText', onSelect: () => handleDownload('xlsx'), disabled: downloading != null, disabledReason: 'กำลังดาวน์โหลด…' },
               ]}
             />
             {!isIssued ? (
@@ -881,7 +884,11 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
                   htmlFor="doc-deposit-percent"
                   error={fieldErrors.depositPercent}
                   hint={percentDiffers
-                    ? `ใบเสนอราคา ${referencedQuotation.number} ระบุมัดจำ ${quotationPercent}% — ใบแจ้งนี้ใช้ ${noticePercent}%`
+                    ? (
+                      <span data-testid="deposit-percent-differs">
+                        {`ใบเสนอราคา ${referencedQuotation.number} ระบุมัดจำ ${quotationPercent}% — ใบแจ้งนี้ใช้ ${noticePercent}%`}
+                      </span>
+                    )
                     : undefined}
                 >
                   <input type="number" min="1" max="100" step="1"

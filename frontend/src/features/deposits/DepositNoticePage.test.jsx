@@ -4,8 +4,11 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { DepositNoticePage } from './DepositNoticePage.jsx';
 import { api } from '../../api/index.js';
+import { downloadBlob } from '../../utils/download.js';
 
 globalThis.React = React;
+
+vi.mock('../../utils/download.js', () => ({ downloadBlob: vi.fn() }));
 
 vi.mock('../../api/index.js', () => ({
   api: {
@@ -14,7 +17,6 @@ vi.mock('../../api/index.js', () => ({
       listByTicket: vi.fn(),
       createDraft: vi.fn(),
       update: vi.fn(),
-      preview: vi.fn(),
       issue: vi.fn(),
       downloadXlsx: vi.fn(),
       downloadPdf: vi.fn(),
@@ -45,12 +47,23 @@ function renderDepositNoticePage(props = {}) {
       <DepositNoticePage
         ticketId="701"
         onBack={vi.fn()}
-        onNavigateTickets={vi.fn()}
         showToast={vi.fn()}
         {...props}
       />
     </QueryClientProvider>,
   );
+}
+
+// The summary block (ยอดรวม) is a column of lines like "ขอรับเงินมัดจำ 33% ฿33.03". Returns one line's full text.
+// Open the ดาวน์โหลด menu and pick a format.
+async function pickDownload(format) {
+  fireEvent.click(await screen.findByRole('button', { name: 'ดาวน์โหลด' }));
+  fireEvent.click(await screen.findByRole('menuitem', { name: format }));
+}
+
+function summaryLine(label) {
+  const panel = document.getElementById('doc-summary-panel');
+  return within(panel).getByText(label).textContent;
 }
 
 describe('DepositNoticePage', () => {
@@ -169,7 +182,7 @@ describe('DepositNoticePage', () => {
 
     fireEvent.change(document.getElementById('doc-item-0-qty'), { target: { value: '5' } });
     fireEvent.change(screen.getByPlaceholderText('ราคา'), { target: { value: '100' } });
-    const percentInput = screen.getByLabelText('% มัดจำ');
+    const percentInput = screen.getByLabelText('มัดจำ %');
     for (const typed of ['0', '150']) {
       fireEvent.change(percentInput, { target: { value: typed } });
       fireEvent.click(screen.getByRole('button', { name: /ออกเอกสาร/ }));
@@ -192,8 +205,8 @@ describe('DepositNoticePage', () => {
     });
     renderDepositNoticePage();
 
-    await screen.findByText('รายการสินค้า (0 รายการ)');
-    fireEvent.click(screen.getByRole('button', { name: 'บันทึก' }));
+    await screen.findByRole('heading', { name: 'รายการสินค้า' });
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
 
     await waitFor(() => expect(api.depositNotices.update).toHaveBeenCalledTimes(1));
     expect(api.depositNotices.update).toHaveBeenCalledWith(
@@ -223,17 +236,16 @@ describe('DepositNoticePage', () => {
     });
     renderDepositNoticePage();
 
-    await screen.findByText('รายการสินค้า (2 รายการ)');
-    const percentInput = screen.getByLabelText('% มัดจำ');
+    await screen.findByRole('heading', { name: 'รายการสินค้า' });
+    const percentInput = screen.getByLabelText('มัดจำ %');
     expect(percentInput.value).toBe('33');
-    expect(screen.getByText('ขอรับเงินมัดจำ (33%)')).not.toBeNull();
-    expect(screen.getByText('100.10 บาท')).not.toBeNull();
-    expect(screen.getByText('33.03 บาท')).not.toBeNull();
-    expect(screen.getByText('2.31 บาท')).not.toBeNull();
-    expect(screen.getByText('35.34 บาท')).not.toBeNull();
+    expect(summaryLine('ขอรับเงินมัดจำ 33%')).toBe('ขอรับเงินมัดจำ 33% ฿33.03');
+    expect(summaryLine('รวมเป็นเงิน')).toBe('รวมเป็นเงิน ฿100.10');
+    expect(summaryLine(/ภาษีมูลค่าเพิ่ม 7%/)).toContain('฿2.31');
+    expect(summaryLine('รวมเป็นเงินที่ต้องชำระ')).toBe('รวมเป็นเงินที่ต้องชำระ ฿35.34');
 
     fireEvent.click(screen.getByRole('button', { name: /เพิ่มรายการ/ }));
-    fireEvent.click(screen.getByRole('button', { name: 'บันทึก' }));
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
     await waitFor(() => expect(api.depositNotices.update).toHaveBeenCalledTimes(1));
     const payload = api.depositNotices.update.mock.calls[0][1];
     expect(payload).toMatchObject({ depositPercent: 0.33, expectedUpdatedAt: '2026-10-23T08:57:19.732123Z' });
@@ -243,7 +255,7 @@ describe('DepositNoticePage', () => {
     ]);
 
     fireEvent.change(percentInput, { target: { value: '' } });
-    fireEvent.click(screen.getByRole('button', { name: 'บันทึก' }));
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
     await waitFor(() => expect(api.depositNotices.update).toHaveBeenCalledTimes(2));
     expect(api.depositNotices.update.mock.calls[1][1].depositPercent).toBeNull();
     expect(screen.queryByRole('alert')).toBeNull();
@@ -258,14 +270,14 @@ describe('DepositNoticePage', () => {
     renderDepositNoticePage();
 
     fireEvent.change(await screen.findByLabelText(/ที่อยู่/), { target: { value: 'ที่อยู่ใหม่' } });
-    fireEvent.click(screen.getByRole('button', { name: 'บันทึก' }));
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
     await waitFor(() => expect(api.depositNotices.update).toHaveBeenCalledTimes(1));
     expect(api.depositNotices.update.mock.calls[0][1]).toMatchObject({ depositPercent: 0.125, customerAddress: 'ที่อยู่ใหม่' });
   });
 
   // Blank rows are dropped from the payload and the backend keeps the stored lines when `items` is
-  // empty — so saving/previewing an all-blank form would "succeed" and bring the old lines back.
-  it('refuses to save or preview when every row was cleared, with the items error, and calls no API', async () => {
+  // empty — so saving/downloading an all-blank form would "succeed" and bring the old lines back.
+  it('refuses to save or download when every row was cleared, with the items error, and calls no API', async () => {
     api.depositNotices.listByTicket.mockResolvedValue({ depositNotices: [validDraftDoc] });
     renderDepositNoticePage();
 
@@ -273,13 +285,155 @@ describe('DepositNoticePage', () => {
     fireEvent.change(document.getElementById('doc-item-0-description'), { target: { value: '' } });
     fireEvent.change(document.getElementById('doc-item-0-qty'), { target: { value: '0' } });
 
-    fireEvent.click(screen.getByRole('button', { name: 'บันทึก' }));
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
     expect((await screen.findByText('กรุณาเพิ่มรายการสินค้าอย่างน้อย 1 รายการ')).getAttribute('role')).toBe('alert');
     expect(api.depositNotices.update).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole('button', { name: /Preview|ตัวอย่าง/ }));
+    await pickDownload('PDF');
     expect(api.depositNotices.update).not.toHaveBeenCalled();
-    expect(api.depositNotices.preview).not.toHaveBeenCalled();
+    expect(api.depositNotices.downloadPdf).not.toHaveBeenCalled();
+    expect(downloadBlob).not.toHaveBeenCalled();
+    expect(screen.getByText('กรุณาเพิ่มรายการสินค้าอย่างน้อย 1 รายการ')).not.toBeNull();
+  });
+
+  // One ดาวน์โหลด menu (PDF, Excel) serves a draft and an issued notice, like the quotation editor's.
+  describe('ดาวน์โหลด menu', () => {
+    const pdfBlob = { type: 'application/pdf' };
+    const xlsxBlob = { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' };
+    beforeEach(() => {
+      api.depositNotices.downloadPdf.mockResolvedValue(pdfBlob);
+      api.depositNotices.downloadXlsx.mockResolvedValue(xlsxBlob);
+    });
+
+    it('lists PDF and Excel in one menu and no separate download buttons', async () => {
+      api.depositNotices.listByTicket.mockResolvedValue({ depositNotices: [validDraftDoc] });
+      renderDepositNoticePage();
+
+      fireEvent.click(await screen.findByRole('button', { name: 'ดาวน์โหลด' }));
+      const menu = within(await screen.findByRole('menu', { name: 'ดาวน์โหลด' }));
+      expect(menu.getAllByRole('menuitem').map((item) => item.textContent)).toEqual(['PDF', 'Excel']);
+      expect(screen.queryByRole('button', { name: 'ดาวน์โหลด PDF' })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'ดาวน์โหลด Excel' })).toBeNull();
+    });
+
+    it('downloads an unchanged draft as stored, without saving', async () => {
+      api.depositNotices.listByTicket.mockResolvedValue({ depositNotices: [{ ...validDraftDoc, updatedAt: 'T1' }] });
+      renderDepositNoticePage();
+
+      await screen.findByDisplayValue('บริษัท ทดสอบ จำกัด');
+      await pickDownload('PDF');
+
+      await waitFor(() => expect(api.depositNotices.downloadPdf).toHaveBeenCalledWith(9002));
+      await waitFor(() => expect(downloadBlob).toHaveBeenCalledWith(pdfBlob, 'draft', 'pdf'));
+      expect(api.depositNotices.update).not.toHaveBeenCalled();
+    });
+
+    it('saves an edited draft first (same payload as บันทึกร่าง), then downloads', async () => {
+      api.depositNotices.listByTicket.mockResolvedValue({ depositNotices: [{ ...validDraftDoc, updatedAt: 'T1' }] });
+      api.depositNotices.update.mockResolvedValue({ depositNotice: { updatedAt: 'T2' } });
+      renderDepositNoticePage();
+
+      fireEvent.change(await screen.findByLabelText(/ที่อยู่/), { target: { value: 'ที่อยู่ใหม่' } });
+      await pickDownload('Excel');
+
+      await waitFor(() => expect(api.depositNotices.downloadXlsx).toHaveBeenCalledWith(9002));
+      expect(api.depositNotices.update).toHaveBeenCalledTimes(1);
+      expect(api.depositNotices.update.mock.calls[0][1])
+        .toMatchObject({ customerAddress: 'ที่อยู่ใหม่', expectedUpdatedAt: 'T1' });
+      expect(api.depositNotices.update.mock.invocationCallOrder[0])
+        .toBeLessThan(api.depositNotices.downloadXlsx.mock.invocationCallOrder[0]);
+    });
+
+    it('treats a form just saved as unchanged: a second download does not save again', async () => {
+      api.depositNotices.listByTicket.mockResolvedValue({ depositNotices: [{ ...validDraftDoc, updatedAt: 'T1' }] });
+      api.depositNotices.update.mockResolvedValue({ depositNotice: { updatedAt: 'T2' } });
+      renderDepositNoticePage();
+
+      fireEvent.change(await screen.findByLabelText(/ที่อยู่/), { target: { value: 'ที่อยู่ใหม่' } });
+      fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
+      await waitFor(() => expect(api.depositNotices.update).toHaveBeenCalledTimes(1));
+      await pickDownload('PDF');
+
+      await waitFor(() => expect(api.depositNotices.downloadPdf).toHaveBeenCalledTimes(1));
+      expect(api.depositNotices.update).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not download when the save before it fails, and shows the save error', async () => {
+      const showToast = vi.fn();
+      api.depositNotices.listByTicket.mockResolvedValue({ depositNotices: [{ ...validDraftDoc, updatedAt: 'T1' }] });
+      api.depositNotices.update.mockRejectedValue(new Error('บันทึกไม่สำเร็จ ลองใหม่'));
+      renderDepositNoticePage({ showToast });
+
+      fireEvent.change(await screen.findByLabelText(/ที่อยู่/), { target: { value: 'ที่อยู่ใหม่' } });
+      await pickDownload('PDF');
+
+      await waitFor(() => expect(showToast).toHaveBeenCalledWith('error', 'บันทึกไม่สำเร็จ ลองใหม่'));
+      expect(api.depositNotices.update).toHaveBeenCalledTimes(1);
+      expect(api.depositNotices.downloadPdf).not.toHaveBeenCalled();
+      expect(downloadBlob).not.toHaveBeenCalled();
+    });
+
+    it('on a 409 save reloads the draft and does not download', async () => {
+      api.depositNotices.listByTicket
+        .mockResolvedValueOnce({ depositNotices: [{ ...validDraftDoc, depositPercent: 0.3, updatedAt: 'T1' }] })
+        .mockResolvedValue({ depositNotices: [{ ...validDraftDoc, depositPercent: 0.4, updatedAt: 'T2' }] });
+      const stale = Object.assign(new Error('ถูกแก้ไขโดยผู้ใช้อื่น'), { status: 409 });
+      api.depositNotices.update.mockRejectedValueOnce(stale);
+      renderDepositNoticePage();
+
+      await screen.findByDisplayValue('บริษัท ทดสอบ จำกัด');
+      const percentInput = screen.getByLabelText('มัดจำ %');
+      fireEvent.change(percentInput, { target: { value: '35' } });
+      await pickDownload('PDF');
+
+      await waitFor(() => expect(percentInput.value).toBe('40'));
+      expect(api.depositNotices.downloadPdf).not.toHaveBeenCalled();
+    });
+
+    it('calls neither update nor download for a draft whose rows were all cleared, and shows the items error', async () => {
+      api.depositNotices.listByTicket.mockResolvedValue({ depositNotices: [validDraftDoc] });
+      renderDepositNoticePage();
+
+      await screen.findByDisplayValue('บริษัท ทดสอบ จำกัด');
+      fireEvent.change(document.getElementById('doc-item-0-description'), { target: { value: '' } });
+      fireEvent.change(document.getElementById('doc-item-0-qty'), { target: { value: '0' } });
+      await pickDownload('Excel');
+
+      expect((await screen.findByText('กรุณาเพิ่มรายการสินค้าอย่างน้อย 1 รายการ')).getAttribute('role')).toBe('alert');
+      expect(api.depositNotices.update).not.toHaveBeenCalled();
+      expect(api.depositNotices.downloadXlsx).not.toHaveBeenCalled();
+    });
+
+    it('downloads an issued notice directly, without saving', async () => {
+      api.depositNotices.listByTicket.mockResolvedValue({
+        depositNotices: [{ ...validDraftDoc, status: 'ISSUED', docNumber: 'GLRD69001', updatedAt: 'T1' }],
+      });
+      renderDepositNoticePage();
+
+      await screen.findAllByText('บริษัท ทดสอบ จำกัด', { exact: false });
+      await pickDownload('PDF');
+
+      await waitFor(() => expect(api.depositNotices.downloadPdf).toHaveBeenCalledWith(9002));
+      await waitFor(() => expect(downloadBlob).toHaveBeenCalledWith(pdfBlob, 'GLRD69001', 'pdf'));
+      expect(api.depositNotices.update).not.toHaveBeenCalled();
+    });
+
+    it('disables both menu items while a download is running', async () => {
+      let finish;
+      api.depositNotices.downloadPdf.mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+      api.depositNotices.listByTicket.mockResolvedValue({ depositNotices: [{ ...validDraftDoc, updatedAt: 'T1' }] });
+      renderDepositNoticePage();
+
+      await screen.findByDisplayValue('บริษัท ทดสอบ จำกัด');
+      await pickDownload('PDF');
+      await waitFor(() => expect(api.depositNotices.downloadPdf).toHaveBeenCalledTimes(1));
+
+      fireEvent.click(screen.getByRole('button', { name: 'ดาวน์โหลด' }));
+      // A disabled item also names why ("กำลังดาวน์โหลด…"), so match on the format it starts with.
+      expect((await screen.findByRole('menuitem', { name: /^PDF/ })).getAttribute('aria-disabled')).toBe('true');
+      expect(screen.getByRole('menuitem', { name: /^Excel/ }).getAttribute('aria-disabled')).toBe('true');
+      finish(pdfBlob);
+    });
   });
 
   // Someone else saved the draft since this page loaded it: the backend answers 409. The page
@@ -295,15 +449,15 @@ describe('DepositNoticePage', () => {
     renderDepositNoticePage({ showToast });
 
     await screen.findByDisplayValue('บริษัท ทดสอบ จำกัด');
-    const percentInput = screen.getByLabelText('% มัดจำ');
+    const percentInput = screen.getByLabelText('มัดจำ %');
     fireEvent.change(percentInput, { target: { value: '35' } });
-    fireEvent.click(screen.getByRole('button', { name: 'บันทึก' }));
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
 
     await waitFor(() => expect(showToast).toHaveBeenCalledWith('error', stale.message));
     expect(api.depositNotices.update.mock.calls[0][1]).toMatchObject({ depositPercent: 0.35, expectedUpdatedAt: 'T1' });
     await waitFor(() => expect(percentInput.value).toBe('40'));
 
-    fireEvent.click(screen.getByRole('button', { name: 'บันทึก' }));
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
     await waitFor(() => expect(api.depositNotices.update).toHaveBeenCalledTimes(2));
     expect(api.depositNotices.update.mock.calls[1][1]).toMatchObject({ depositPercent: 0.4, expectedUpdatedAt: 'T2' });
   });
@@ -340,12 +494,12 @@ describe('DepositNoticePage', () => {
     });
     renderDepositNoticePage();
 
-    expect(await screen.findByText('467,125.00')).not.toBeNull();
-    expect(screen.getByText('-45,000.00')).not.toBeNull();
+    expect(await screen.findByText('฿467,125.00')).not.toBeNull();
+    expect(screen.getByText('฿-45,000.00')).not.toBeNull();
     expect(screen.getAllByText(/422,125\.00/).length).toBeGreaterThan(0);
     expect(screen.queryByDisplayValue('-1')).toBeNull();   // the discount row's qty is read-only
 
-    fireEvent.click(screen.getByRole('button', { name: 'บันทึก' }));
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
     await waitFor(() => expect(api.depositNotices.update).toHaveBeenCalledTimes(1));
     expect(api.depositNotices.update.mock.calls[0][1].items.map((i) => [i.qty, i.amount])).toEqual([[1000, 467125], [-1, -45000]]);
 
@@ -354,8 +508,8 @@ describe('DepositNoticePage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'ยกเลิก' }));
 
     fireEvent.change(screen.getByDisplayValue('1000'), { target: { value: '2' } });
-    expect(screen.getByText('934.26')).not.toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'บันทึก' }));
+    expect(screen.getByText('฿934.26')).not.toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
     await waitFor(() => expect(api.depositNotices.update).toHaveBeenCalledTimes(2));
     expect(api.depositNotices.update.mock.calls[1][1].items.map((i) => i.amount)).toEqual([null, -45000]);
   });
@@ -451,13 +605,13 @@ describe('DepositNoticePage', () => {
     await waitFor(() => expect(screen.queryByText('ยังไม่มีใบแจ้งยอดเงินรับมัดจำ')).toBeNull());
     expect(await screen.findByDisplayValue('บริษัท ทดสอบ จำกัด')).not.toBeNull();
 
-    // QA-32: this is a DEAL document, so the trail says ดีล — never คำขอราคา — and the issue
-    // helper no longer talks about a คำขอราคา status change.
-    const trail = within(screen.getByRole('navigation', { name: 'breadcrumb' }));
-    expect(trail.getByText('งานทั้งหมด')).not.toBeNull();
-    expect(trail.getByText('บริษัท ทดสอบ จำกัด')).not.toBeNull();
-    expect(trail.getByText('ใบแจ้งยอดเงินรับมัดจำ')).not.toBeNull();
-    expect(trail.queryByText('คำขอราคา')).toBeNull();
+    // QA-32: this is a DEAL document, so the header says ใบแจ้งยอดเงินรับมัดจำ for this customer and project, never
+    // คำขอราคา, and the issue helper no longer talks about a คำขอราคา status change. The page header (title,
+    // subtitle) replaced the old breadcrumb trail.
+    expect(screen.getByRole('heading', { name: 'ใบแจ้งยอดเงินรับมัดจำ' })).not.toBeNull();
+    expect(screen.getByText('บริษัท ทดสอบ จำกัด · โครงการ A')).not.toBeNull();
+    expect(screen.getByRole('button', { name: /เปิดงาน/ })).not.toBeNull();
+    expect(document.body.textContent).not.toContain('คำขอราคา');
     const helper = screen.getByText(/กด "ออกเอกสาร" เพื่อออกเลขที่เอกสารอย่างเป็นทางการ/);
     expect(helper.textContent).toMatch(/แก้ไขข้อมูลในเอกสารนี้ไม่ได้อีก$/);
     expect(helper.textContent).not.toContain('คำขอราคา');
@@ -505,7 +659,7 @@ describe('DepositNoticePage', () => {
       api.dealQuotations.listForTicket.mockResolvedValue({ items });
       renderDepositNoticePage();
 
-      await screen.findByDisplayValue('บริษัท ทดสอบ จำกัด');
+      await screen.findAllByText('บริษัท ทดสอบ จำกัด', { exact: false });
       await waitFor(() => expect(api.dealQuotations.listForTicket).toHaveBeenCalled());
       expect(screen.queryByTestId('deposit-percent-differs')).toBeNull();
     });
@@ -521,29 +675,27 @@ describe('DepositNoticePage', () => {
     renderDepositNoticePage();
 
     await screen.findByDisplayValue('บริษัท ทดสอบ จำกัด');
-    const percentInput = screen.getByLabelText('% มัดจำ');
+    const percentInput = screen.getByLabelText('มัดจำ %');
     expect(percentInput.disabled).toBe(false);
     expect(percentInput.value).toBe('30');
-    expect(screen.getByText('ขอรับเงินมัดจำ (30%)')).not.toBeNull();
-    expect(screen.getByText('150.00 บาท')).not.toBeNull();
+    expect(summaryLine('ขอรับเงินมัดจำ 30%')).toBe('ขอรับเงินมัดจำ 30% ฿150.00');
 
     fireEvent.change(percentInput, { target: { value: '39.6' } });
 
     expect(percentInput.value).toBe('40');
-    expect(screen.getByText('ขอรับเงินมัดจำ (40%)')).not.toBeNull();
-    expect(screen.getByText('200.00 บาท')).not.toBeNull();
-    expect(screen.getByText('214.00 บาท')).not.toBeNull();
-    expect(screen.queryByText('150.00 บาท')).toBeNull();
+    expect(summaryLine('ขอรับเงินมัดจำ 40%')).toBe('ขอรับเงินมัดจำ 40% ฿200.00');
+    expect(summaryLine('รวมเป็นเงินที่ต้องชำระ')).toBe('รวมเป็นเงินที่ต้องชำระ ฿214.00');
+    expect(within(document.getElementById('doc-summary-panel')).queryByText('฿150.00')).toBeNull();
 
-    fireEvent.click(screen.getByRole('button', { name: 'บันทึก' }));
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
     await waitFor(() => expect(api.depositNotices.update).toHaveBeenCalledWith(
       9002, expect.objectContaining({ depositPercent: 0.4 }),
     ));
 
     // A cleared field bills nothing: 0% and ฿0 for deposit, VAT and total, never a silent 50%.
     fireEvent.change(percentInput, { target: { value: '' } });
-    expect(screen.getByText('ขอรับเงินมัดจำ (0%)')).not.toBeNull();
-    expect(screen.getAllByText('0.00 บาท')).toHaveLength(3);
+    expect(summaryLine('ขอรับเงินมัดจำ 0%')).toBe('ขอรับเงินมัดจำ 0% ฿0.00');
+    expect(within(document.getElementById('doc-summary-panel')).getAllByText('฿0.00')).toHaveLength(3);
   });
 
   it('shows the deposit percent read-only once the notice is issued', async () => {
@@ -552,10 +704,11 @@ describe('DepositNoticePage', () => {
     });
     renderDepositNoticePage();
 
-    await screen.findByDisplayValue('บริษัท ทดสอบ จำกัด');
-    const percentInput = screen.getByLabelText('% มัดจำ');
-    expect(percentInput.disabled).toBe(true);
-    expect(percentInput.value).toBe('30');
+    // An issued notice shows the percent as plain text: there is no input to edit.
+    const percent = await screen.findByText('30%');
+    expect(percent.tagName).toBe('STRONG');
+    expect(screen.queryByLabelText('มัดจำ %')).toBeNull();
+    expect(document.getElementById('doc-deposit-percent')).toBeNull();
   });
 
   // the VAT rate must come from the served document's vatPercent, not a hardcoded 0.07 literal —
@@ -573,8 +726,8 @@ describe('DepositNoticePage', () => {
     // * 0.10 = 25.00, not deposit * 0.07 = 17.50.
     expect(screen.getByText('ภาษีมูลค่าเพิ่ม 10% (คิดจากมัดจำ)')).not.toBeNull();
     expect(screen.queryByText(/ภาษีมูลค่าเพิ่ม 7%/)).toBeNull();
-    expect(screen.getByText('25.00 บาท')).not.toBeNull();
-    expect(screen.queryByText('17.50 บาท')).toBeNull();
+    expect(summaryLine(/ภาษีมูลค่าเพิ่ม 10%/)).toBe('ภาษีมูลค่าเพิ่ม 10% (คิดจากมัดจำ) ฿25.00');
+    expect(within(document.getElementById('doc-summary-panel')).queryByText('฿17.50')).toBeNull();
 
     // ConfirmDialog carries the same served rate + amount (validDraftDoc is a fully valid document, so "ออกเอกสาร"
     // opens the dialog with no issue-validation errors in the way).
