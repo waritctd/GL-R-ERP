@@ -334,14 +334,12 @@ class DepositNoticePdfRendererTest {
         }
     }
 
-    /** A document with no preparer leaves the template's own preparer line as it is. */
+    /** A document with no preparer prints no name: the template's own line carries a real person's name, and
+     * ผู้จัดทำ must be whoever made the document (sales manager ruling 2026-11-18). */
     @Test
-    void aMissingPreparerLeavesTheTemplatesOwnLine() throws Exception {
-        String own;
-        try (Workbook t = openTemplate(TEMPLATE)) { own = norm(str(t.getSheet("Update"), PREPARER, 1)); }
-        assertThat(own).as("template ships a preparer line").isNotBlank();
+    void aMissingPreparerPrintsNoName() throws Exception {
         try (Workbook wb = render(new DepositNoticeRenderModel(LocalDate.of(2026, 10, 28), "GLRD69999", "บริษัท ทดสอบ จำกัด", null, "0105599999999", "99 ถนนทดสอบ", "ตึกตัวอย่าง", "QT-TEST-0001", twoItems(), STORED_SUBTOTAL, new BigDecimal("0.30"), STORED_DEPOSIT, STORED_VAT, STORED_TOTAL, null))) {
-            assertThat(norm(str(wb.getSheetAt(0), PREPARER, 1))).isEqualTo(own);
+            assertThat(norm(str(wb.getSheetAt(0), PREPARER, 1))).isEmpty();
         }
     }
 

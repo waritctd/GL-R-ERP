@@ -144,7 +144,9 @@ public class DepositNoticePdfRenderer {
         }
 
         // Preparer
-        sb.append("<div style='margin-top:40px;font-size:12px;color:#64748b;'>ผู้จัดทำ: ").append(escHtml(doc.preparerName())).append("</div>");
+        if (doc.preparerName() != null && !doc.preparerName().isBlank()) {
+            sb.append("<div style='margin-top:40px;font-size:12px;color:#64748b;'>ผู้จัดทำ: ").append(escHtml(doc.preparerName())).append("</div>");
+        }
         sb.append("</body></html>");
         return sb.toString();
     }

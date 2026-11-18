@@ -185,7 +185,7 @@ public class DepositNoticeRepository {
             .addValue("vatAmount",       vat)
             .addValue("totalPayable",    total)
             .addValue("notes",           notesArr)
-            // NOT NULL column; blank prints the template's own preparer line (DocumentSheet.preparer)
+            // NOT NULL column; blank prints no name (DocumentSheet.preparer)
             .addValue("preparerName",    preparerName == null ? "" : preparerName);
 
         var keys = new GeneratedKeyHolder();

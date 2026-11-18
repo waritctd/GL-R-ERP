@@ -2282,7 +2282,7 @@ ${doc.projectName ? `<div>โครงการ: ${doc.projectName}</div>` : ''}
 <tr style="font-weight:bold;border-top:2px solid #1e3a5f"><td>รวมต้องชำระ</td><td style="text-align:right">${money(doc.totalPayable)} บาท</td></tr></table>
 <div style="clear:both"></div>
 ${doc.notes?.length ? `<div style="margin-top:20px;font-size:12px"><strong>หมายเหตุ:</strong><ol>${doc.notes.map(n=>`<li>${n}</li>`).join('')}</ol></div>` : ''}
-<div style="margin-top:30px;font-size:12px;color:#666">ผู้จัดทำ: จินตนา หาญมนตรี</div>
+${doc.preparerName ? `<div style="margin-top:30px;font-size:12px;color:#666">ผู้จัดทำ: ${doc.preparerName}</div>` : ''}
 </body></html>`;
 }
 
@@ -15454,7 +15454,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
         customerTaxId: customerTaxId ?? '', customerAddress: customerAddress ?? '',
         projectName: projectName ?? '', reference: payload.reference ?? (linesFromGoverning ? governing.quotation.number : null),
         depositPercent, vatPercent: 0.07,
-        notes, items, issuedByName: null, preparerName: 'จินตนา หาญมนตรี',
+        notes, items, issuedByName: null, preparerName: user.name,
         hasPdf: false, hasXlsx: false,
         createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
       });
@@ -18398,7 +18398,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
           ? newEngine.depositPercent ?? MOCK_DEFAULT_DEPOSIT_PERCENT
           : MOCK_LEGACY_DEPOSIT_PERCENT) / 100,
         vatPercent: 0.07,
-        notes, items, issuedByName: null, preparerName: 'จินตนา หาญมนตรี',
+        notes, items, issuedByName: null, preparerName: user.name,
         hasPdf: false, hasXlsx: false,
         createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
       });

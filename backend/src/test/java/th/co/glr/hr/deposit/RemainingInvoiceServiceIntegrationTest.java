@@ -342,10 +342,10 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
     }
 
     /** ผู้จัดทำ on a remaining invoice is whoever drafted THAT invoice, here a keyer working on the owner's deal,
-     * not the deposit notice's preparer; with no creator on file the template's own line stays (no Java copy of
-     * the V12 default name). */
+     * not the deposit notice's preparer; with no creator on file it prints no name (the template's own line names a
+     * real person). */
     @Test
-    void file_printsTheInvoicesOwnCreator_orTheTemplatesOwnLineWhenThereIsNone() throws Exception {
+    void file_printsTheInvoicesOwnCreator_orNoNameWhenThereIsNone() throws Exception {
         DealFixture fixture = buildAcceptedDeal(salesActor, "Preparer");
         jdbc.update("UPDATE sales.deposit_notice SET preparer_name = :n WHERE deposit_notice_id = :id",
             Map.of("n", "ผู้จัดทำ ทดสอบ", "id", fixture.depositNoticeId()));
@@ -358,12 +358,7 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
             .isEqualTo("( " + otherSalesActor.name() + " )");
 
         jdbc.update("UPDATE sales.remaining_invoice SET created_by_name = NULL WHERE id = :id", Map.of("id", issued.id()));
-        String templateOwn;
-        try (java.io.InputStream in = getClass().getResourceAsStream("/templates/remaining_invoice_template.xls");
-             org.apache.poi.ss.usermodel.Workbook t = org.apache.poi.ss.usermodel.WorkbookFactory.create(in)) {
-            templateOwn = t.getSheet("Update").getRow(44).getCell(1).getStringCellValue().replaceAll("\\s+", " ").trim();
-        }
-        assertThat(preparerLine(remainingInvoiceService.file(issued.id(), salesActor))).isEqualTo(templateOwn);
+        assertThat(preparerLine(remainingInvoiceService.file(issued.id(), salesActor))).isEmpty();
     }
 
     private static String preparerLine(byte[] xls) throws Exception {

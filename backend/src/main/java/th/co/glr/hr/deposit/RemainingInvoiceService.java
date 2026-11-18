@@ -403,21 +403,19 @@ public class RemainingInvoiceService {
 
     // ── helpers ──────────────────────────────────────────────────────────────────────────────
 
-    /** The STORED snapshot as the renderer prints it. The preparer is the invoice's own creator; none (blank)
-     * passes null, so the template's own preparer line prints. */
+    /** The STORED snapshot as the renderer prints it. The preparer is the invoice's own creator. */
     private RemainingInvoiceRenderModel toRenderable(RemainingInvoiceDocumentDto doc) {
         List<RemainingInvoiceItemDto> items = (doc.items() != null ? doc.items() : List.<RemainingInvoiceDocumentItemDto>of())
             .stream()
             .map(it -> new RemainingInvoiceItemDto(it.seq(), it.description(), it.qty(), it.unit(),
                 it.unitPrice(), it.discountLabel(), it.netUnitPrice(), it.amount()))
             .toList();
-        String preparer = doc.createdByName() == null || doc.createdByName().isBlank() ? null : doc.createdByName();
         return new RemainingInvoiceRenderModel(
             doc.docDate(), doc.docNumber() != null ? doc.docNumber() : "(ร่าง)",
             doc.customerName(), doc.customerBranch(), doc.customerTaxId(), doc.customerAddress(), doc.projectName(),
             doc.reference(), doc.depositReference(), items,
             nz(doc.depositDeduction()), doc.netAmount(), doc.vatAmount(), doc.grandTotal(),
-            preparer);
+            doc.createdByName());
     }
 
     private List<String> defaultNotes() {

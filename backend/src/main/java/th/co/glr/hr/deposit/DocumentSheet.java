@@ -124,9 +124,10 @@ final class DocumentSheet {
 
     static void num(Sheet sh, int r, int c, BigDecimal v) { cell(sh, r, c).setCellValue(v == null ? 0 : v.doubleValue()); }
 
-    /** "( name )", in the template's own cell style; a document with no preparer leaves the template's own line. */
+    /** "( name )", in the template's own cell style. No preparer prints no name: the template's own line names a
+     * real person, and ผู้จัดทำ must be whoever made the document. */
     static void preparer(Sheet sh, int r, String name) {
-        if (name != null && !name.isBlank()) str(sh, r, 1, "( " + name.trim() + " )");
+        str(sh, r, 1, name == null || name.isBlank() ? "" : "( " + name.trim() + " )");
     }
 
     /** The signature date line, in the template's own cell style. */
