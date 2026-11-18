@@ -252,6 +252,26 @@ class DealDocumentRegisterAuthzIntegrationTest extends AbstractPostgresIntegrati
         assertAttachmentsOk(hrActor);
     }
 
+    /** A holder sees every deal's pricing requests in the list (a plain rep sees only their own). */
+    @Test
+    void grantHolder_pricingRequestListShowsOtherRepsRequests() {
+        assertThat(pricingRequestService.list(null, null, false, salesOtherActor)).isEmpty();
+        grant(salesOtherActor);
+
+        assertThat(pricingRequestService.list(null, null, false, salesOtherActor))
+            .extracting(r -> r.id()).contains(pricingRequestId);
+    }
+
+    /** Pin: an inactive holder is refused (the live read only counts active employees). */
+    @Test
+    void inactiveGrantHolder_isRefused() throws Exception {
+        grant(salesOtherActor);
+        jdbc.update("UPDATE hr.employee SET is_active = FALSE WHERE employee_id = :id", Map.of("id", salesOtherActor.id()));
+
+        assertForbidden(() -> depositNoticeService.listByTicket(ticketId, salesOtherActor));
+        assertAttachmentsForbidden(salesOtherActor);
+    }
+
     /** Pin: the grant belongs to the person who has it, nobody else. */
     @Test
     void grantOnOneRep_doesNotLeakToAnother() throws Exception {

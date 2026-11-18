@@ -409,7 +409,7 @@ class RemainingInvoiceNewEngineZeroDepositIntegrationTest extends AbstractPostgr
 
     // ── "manage all sales documents" grant (Ploy 2026-11-18): hr.employee.can_manage_all_sales_documents ──
     // A holder acts as the OWNER of every deal's deposit notice / remaining invoice. The flag is set with SQL, so
-    // before V226 exists these error on the missing column (not on an assertion); the non-holder pin is green today.
+    // before V227 exists these error on the missing column (not on an assertion); the non-holder pin is green today.
 
     @Test
     void grant_salesHolder_createsAndIssuesADepositNotice_onSomeoneElsesDeal() {

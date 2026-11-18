@@ -471,7 +471,7 @@ class DealOwnerKeyerHttpIntegrationTest extends AbstractDealQuotationSlice2Integ
 
     // ── 13: "manage all sales documents" grant (Ploy 2026-11-18) ─────────────────────────────────
     // hr.employee.can_manage_all_sales_documents: a holder acts as the OWNER of every deal. The flag is set with SQL,
-    // so before V226 exists these error on the missing column (not on an assertion).
+    // so before V227 exists these error on the missing column (not on an assertion).
 
     /** 13a: a `sales` holder lists and opens a deal they neither own nor keyed. */
     @Test
@@ -549,6 +549,32 @@ class DealOwnerKeyerHttpIntegrationTest extends AbstractDealQuotationSlice2Integ
             .isEqualTo(403);
         assertThat(send(thirdRep, put("/api/deal-quotations/" + pcrOrigin),
             quotationBody("OWNER").replace("\"recipientType\":\"OWNER\"", "\"recipientType\":null"))
+            .getResponse().getStatus()).isEqualTo(403);
+    }
+
+    /** Pins: the grant never reaches approve/reject, the account-only deposit confirmation or the CEO-only close verify. */
+    @Test
+    void grantHolder_isStillRefusedQuotationApprove_confirmDepositPaid_andCloseVerify() throws Exception {
+        long ticketId = keyedDeal();
+        long quotationId = createQuotation(otherSalesActor, ticketId);
+        send(otherSalesActor, post("/api/deal-quotations/" + quotationId + "/submit"), null);
+        UserPrincipal holder = grantHolder();
+
+        assertThat(send(holder, post("/api/deal-quotations/" + quotationId + "/approve"), "{}").getResponse().getStatus())
+            .isEqualTo(403);
+        assertForbidden(() -> ticketService.confirmDepositPaid(ticketId, holder));
+        assertForbidden(() -> ticketService.verifyClose(ticketId, holder));
+    }
+
+    /** Pin: an inactive employee's grant counts for nothing (the live read is restricted to active rows). */
+    @Test
+    void inactiveGrantHolder_isRefused() throws Exception {
+        long ticketId = keyedDeal();
+        UserPrincipal holder = grantHolder();
+        jdbc.update("UPDATE hr.employee SET is_active = FALSE WHERE employee_id = :id", Map.of("id", holder.id()));
+
+        assertThat(send(holder, get("/api/tickets/" + ticketId), null).getResponse().getStatus()).isEqualTo(403);
+        assertThat(send(holder, post("/api/tickets/" + ticketId + "/stage"), "{\"stage\":\"PRESENTATION\"}")
             .getResponse().getStatus()).isEqualTo(403);
     }
 

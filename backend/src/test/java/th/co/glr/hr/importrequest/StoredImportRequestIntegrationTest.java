@@ -888,6 +888,15 @@ class StoredImportRequestIntegrationTest extends AbstractPostgresIntegrationTest
             .matches("IR\\d{2}\\d{3}");
     }
 
+    /** The กำหนดวันที่ต้องการของ note is the owner's too: a holder sets it on another rep's deal. */
+    @Test
+    void grantHolder_setsTheRequiredByNoteOnAnotherRepsDeal() {
+        jdbc.update("UPDATE hr.employee SET can_manage_all_sales_documents = TRUE WHERE employee_id = :id",
+            java.util.Map.of("id", otherSalesRep.id()));
+
+        service.setRequiredByNote(ticketId, new SetRequiredByNoteRequest("Within 30 days"), otherSalesRep);
+    }
+
     /** deleteDraft is a #FULL_WRITE_ROLES-only action per the class Javadoc — import (footer-only) and
      * sales_manager (read-only) must both be refused, not just a non-owning rep (already covered by
      * #nonOwningSalesRepCannotCreateIssueOrRevise/#importCannotCreateIssueOrRevise, which do not touch delete). */
