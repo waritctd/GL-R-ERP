@@ -1264,7 +1264,7 @@ public class ImportRequestService {
         if (!REQUIRED_BY_ROLES.contains(actor.role())) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
-        if ("sales".equals(actor.role()) && !repository.isDealOwner(ticketId, actor.id())) {
+        if ("sales".equals(actor.role()) && !ownsDeal(ticketId, actor)) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
         requireDealActive(snapshot);

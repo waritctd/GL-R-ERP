@@ -169,8 +169,10 @@ public class PricingRequestService {
         if (status != null && !PricingRequestStatus.isValid(status)) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "ไม่รองรับสถานะ '" + status + "'");
         }
-        Long createdByFilter = "sales".equals(actor.role()) ? actor.id() : null;
-        boolean draftOversight = "ceo".equals(actor.role()) || "sales_manager".equals(actor.role());
+        // a can_manage_all_sales_documents holder acts as owner of every deal: all requests, drafts included
+        boolean holder = tickets.holdsAllSalesDocumentsGrant(actor.id());
+        Long createdByFilter = "sales".equals(actor.role()) && !holder ? actor.id() : null;
+        boolean draftOversight = "ceo".equals(actor.role()) || "sales_manager".equals(actor.role()) || holder;
         return requests.findSummaries(status, assignedImportId, createdByFilter, activeDealsOnly,
             draftOversight, actor.id());
     }

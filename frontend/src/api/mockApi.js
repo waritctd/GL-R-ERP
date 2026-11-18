@@ -14282,8 +14282,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
     async setRequiredByNote(ticketId, request) {
       const ticket = findTicketRaw(Number(ticketId));
       const user = requireSession();
-      if (user.role !== 'sales' && user.role !== 'ceo') fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
-      if (user.role === 'sales' && !actsAsOwner(ticket, user)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      if (user.role !== 'ceo' && !isSalesOwner(ticket, user)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       requireActive(ticket);
       if (dealStageIndex(ticket.salesStage) < dealStageIndex('ORDER_RECEIVED')) {
         fail('ระบุกำหนดวันที่ต้องการของได้หลังจากยืนยันคำสั่งซื้อแล้ว', 409);
@@ -16519,7 +16518,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       }
       let list = mockPricingRequests;
       if (user.role === 'sales') {
-        list = list.filter((pr) => isOwnerOrKeyer(db.tickets.find((t) => t.id === pr.ticketId), user.id));
+        list = list.filter((pr) => actsAsOwner(db.tickets.find((t) => t.id === pr.ticketId), user));
       }
       // Mirrors PricingRequestService.list's draft-privacy clause: a DRAFT is the owning rep's
       // private scratchpad, visible only to them plus ceo/sales_manager oversight. import must not
@@ -16528,7 +16527,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       const draftOversight = user.role === 'ceo' || user.role === 'sales_manager';
       list = list.filter((pr) => pr.status !== 'DRAFT'
         || draftOversight
-        || isOwnerOrKeyer(db.tickets.find((t) => t.id === pr.ticketId), user.id));
+        || actsAsOwner(db.tickets.find((t) => t.id === pr.ticketId), user));
       if (params.status) {
         list = list.filter((pr) => pr.status === params.status);
       } else {
