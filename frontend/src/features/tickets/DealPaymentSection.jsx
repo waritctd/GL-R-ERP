@@ -147,7 +147,6 @@ export function DealPaymentSection({
   actionLoading = false, showToast,
 }) {
   const queryClient = useQueryClient();
-  const role = user?.role;
   const isOwnerSales = isSalesOwner(summary, user);
   const ps = summary.paymentStatus;
   const hasAction = (action) => availableActions.some((item) => item.action === action);
