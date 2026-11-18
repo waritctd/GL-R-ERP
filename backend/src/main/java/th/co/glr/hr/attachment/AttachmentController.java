@@ -150,7 +150,7 @@ public class AttachmentController {
             default -> false;
         };
         if (!TicketAccessPolicy.canViewDocuments(summary, actor, inRoleScope,
-                tickets.holdsAllSalesDocumentsGrant(actor.id()))) {
+                tickets.holdsAllSalesDocumentsGrant(actor))) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
     }
@@ -159,7 +159,7 @@ public class AttachmentController {
      * TicketAccessPolicy#DOCUMENT_WRITER_ROLES. */
     private void requireTicketWriteAccess(long ticketId, UserPrincipal actor) {
         if (!TicketAccessPolicy.canManageDocuments(requireTicketSummary(ticketId), actor,
-                tickets.holdsAllSalesDocumentsGrant(actor.id()))) {
+                tickets.holdsAllSalesDocumentsGrant(actor))) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
     }

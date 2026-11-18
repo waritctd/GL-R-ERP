@@ -285,7 +285,7 @@ public class LeadTimeChangeService {
     // ── authz ────────────────────────────────────────────────────────────────────────────────
 
     private void requireRole(UserPrincipal actor, Set<String> allowed) {
-        if (!allowed.contains(actor.role()) && !(allowed.contains("sales") && tickets.holdsAllSalesDocumentsGrant(actor.id()))) {
+        if (!allowed.contains(actor.role()) && !(allowed.contains("sales") && tickets.holdsAllSalesDocumentsGrant(actor))) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
     }
@@ -300,7 +300,7 @@ public class LeadTimeChangeService {
     private boolean isOwningRep(PricingRequestSummaryDto summary, UserPrincipal actor) {
         return ("sales".equals(actor.role())
             && DealOwnership.isOwnerOrKeyer(summary.ticketCreatedById(), summary.ticketKeyedById(), actor.id()))
-            || tickets.holdsAllSalesDocumentsGrant(actor.id());
+            || tickets.holdsAllSalesDocumentsGrant(actor);
     }
 
     // ── helpers ──────────────────────────────────────────────────────────────────────────────

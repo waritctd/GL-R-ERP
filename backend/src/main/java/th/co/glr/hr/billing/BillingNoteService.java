@@ -124,7 +124,7 @@ public class BillingNoteService {
             .filter(Objects::nonNull)
             .distinct()
             .anyMatch(ticketId -> tickets.findById(ticketId)
-                .map(t -> (DealOwnership.isOwnerOrKeyer(t.summary(), actor.id()) || tickets.holdsAllSalesDocumentsGrant(actor.id())))
+                .map(t -> (DealOwnership.isOwnerOrKeyer(t.summary(), actor.id()) || tickets.holdsAllSalesDocumentsGrant(actor)))
                 .orElse(false));
     }
 

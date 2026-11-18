@@ -153,7 +153,7 @@ public class TicketService {
 
     public List<TicketSummaryDto> list(String status, UserPrincipal actor) {
         requireRole(actor, VIEWER_ROLES);
-        Long createdByFilter = "sales".equals(actor.role()) && !employeeAuth.canManageAllSalesDocuments(actor.id()) ? actor.id() : null;
+        Long createdByFilter = "sales".equals(actor.role()) && !employeeAuth.canManageAllSalesDocuments(actor) ? actor.id() : null;
         return forRole(tickets.findSummaries(status, null, createdByFilter, actor.role(), null), actor.role());
     }
 
@@ -223,7 +223,7 @@ public class TicketService {
         if (movementFrom != null && movementFrom.isAfter(movementTo)) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "movementFrom ต้องไม่เกิน movementTo");
         }
-        Long createdByFilter = "sales".equals(actor.role()) && !employeeAuth.canManageAllSalesDocuments(actor.id()) ? actor.id() : null;
+        Long createdByFilter = "sales".equals(actor.role()) && !employeeAuth.canManageAllSalesDocuments(actor) ? actor.id() : null;
         // Role-scoped views: import/account only see the slice of the deal
         // pipeline relevant to their own worklist — see TicketRepository.appendRoleScope.
         // ceo/sales_manager/sales are unaffected (the repository ignores any other role).
@@ -3422,12 +3422,12 @@ public class TicketService {
     /** The sales-owner gate: owner/keyer in a sales role, or a live {@code can_manage_all_sales_documents} holder (acts as owner of every deal). */
     private boolean ownsDeal(TicketSummaryDto s, UserPrincipal actor) {
         return (SALES_ROLES.contains(actor.role()) && DealOwnership.isOwnerOrKeyer(s, actor.id()))
-            || employeeAuth.canManageAllSalesDocuments(actor.id());
+            || employeeAuth.canManageAllSalesDocuments(actor);
     }
 
     /** {@link DealOwnership#isOwnerOrKeyer} plus the live holder grant (for sites with no role prefix). */
     private boolean ownsDealOrHolder(TicketSummaryDto s, UserPrincipal actor) {
-        return DealOwnership.isOwnerOrKeyer(s, actor.id()) || employeeAuth.canManageAllSalesDocuments(actor.id());
+        return DealOwnership.isOwnerOrKeyer(s, actor.id()) || employeeAuth.canManageAllSalesDocuments(actor);
     }
 
     /** Lost/reopen belong to the sales side: deal owner, sales_manager, or ceo. */
@@ -3909,8 +3909,9 @@ public class TicketService {
      * as an oversight/override, not through ownership — the same shape as {@link #canWriteDelivery}.
      */
     private boolean canDeclareStockCoverage(TicketSummaryDto s, UserPrincipal actor) {
+        // the can_manage_all_sales_documents grant deliberately does NOT reach here (Ploy 2026-11-19)
         return CEO_ROLES.contains(actor.role())
-            || (ownsDeal(s, actor));
+            || (SALES_ROLES.contains(actor.role()) && DealOwnership.isOwnerOrKeyer(s, actor.id()));
     }
 
     /**
@@ -4161,7 +4162,7 @@ public class TicketService {
 
     private void requireRole(UserPrincipal actor, Set<String> allowed) {
         // a can_manage_all_sales_documents holder acts as the sales owner whatever their role
-        if (!allowed.contains(actor.role()) && !(allowed.contains("sales") && employeeAuth.canManageAllSalesDocuments(actor.id()))) {
+        if (!allowed.contains(actor.role()) && !(allowed.contains("sales") && employeeAuth.canManageAllSalesDocuments(actor))) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
     }

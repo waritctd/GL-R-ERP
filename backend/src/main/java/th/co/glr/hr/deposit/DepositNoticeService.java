@@ -1163,7 +1163,7 @@ public class DepositNoticeService {
         TicketDto t = tickets.findById(ticketId)
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบงานนี้"));
         // The per-role half is dealDocumentScope (below), which the document chain's list mark applies in SQL too.
-        switch (tickets.holdsAllSalesDocumentsGrant(actor.id()) ? DealDocumentScope.ALL : dealDocumentScope(actor.role())) {
+        switch (tickets.holdsAllSalesDocumentsGrant(actor) ? DealDocumentScope.ALL : dealDocumentScope(actor.role())) {
             case ALL -> { }
             case OWNER_OR_KEYER -> {
                 if (!ownsDeal(t.summary(), actor)) {
@@ -1221,12 +1221,12 @@ public class DepositNoticeService {
      * chain's "may this viewer act" flags. */
     public boolean mayWriteDealDocuments(TicketSummaryDto summary, UserPrincipal actor) {
         return (SALES_ROLES.contains(actor.role()) && DealOwnership.isOwnerOrKeyer(summary, actor.id()))
-            || tickets.holdsAllSalesDocumentsGrant(actor.id());
+            || tickets.holdsAllSalesDocumentsGrant(actor);
     }
 
     /** Owner/keyer of the deal, or a live {@code can_manage_all_sales_documents} holder (acts as owner of every deal). */
     private boolean ownsDeal(TicketSummaryDto s, UserPrincipal actor) {
-        return DealOwnership.isOwnerOrKeyer(s, actor.id()) || tickets.holdsAllSalesDocumentsGrant(actor.id());
+        return DealOwnership.isOwnerOrKeyer(s, actor.id()) || tickets.holdsAllSalesDocumentsGrant(actor);
     }
 
     private void requireTicketOwner(long ticketId, UserPrincipal actor) {
@@ -1239,7 +1239,7 @@ public class DepositNoticeService {
 
     private void requireRole(UserPrincipal actor, java.util.Set<String> allowed) {
         // a can_manage_all_sales_documents holder acts as the sales owner whatever their role
-        if (!allowed.contains(actor.role()) && !(allowed.contains("sales") && tickets.holdsAllSalesDocumentsGrant(actor.id()))) {
+        if (!allowed.contains(actor.role()) && !(allowed.contains("sales") && tickets.holdsAllSalesDocumentsGrant(actor))) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
     }

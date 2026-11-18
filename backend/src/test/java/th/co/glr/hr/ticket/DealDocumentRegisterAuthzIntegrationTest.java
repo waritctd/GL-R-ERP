@@ -257,6 +257,13 @@ class DealDocumentRegisterAuthzIntegrationTest extends AbstractPostgresIntegrati
         assertForbidden(() -> depositNoticeService.createDraft(ticketId,
             new th.co.glr.hr.deposit.DepositNoticeDraftRequest(null, null, null, null, null, null, null, null), accountActor));
         assertForbidden(() -> depositNoticeService.issue(1L, accountActor));
+        // the one choke point (also behind AuthResponse.canManageAllSalesDocuments): false for every non-sales role, true for sales
+        var employeeAuth = new th.co.glr.hr.auth.EmployeeAuthRepository(jdbc);
+        for (UserPrincipal nonSales : List.of(hrActor, accountActor, ceoActor)) {
+            assertThat(employeeAuth.canManageAllSalesDocuments(nonSales)).as(nonSales.role()).isFalse();
+        }
+        grant(salesOtherActor);
+        assertThat(employeeAuth.canManageAllSalesDocuments(salesOtherActor)).isTrue();
     }
 
     /** A holder sees every deal's pricing requests in the list (a plain rep sees only their own). */

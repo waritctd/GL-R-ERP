@@ -377,7 +377,7 @@ public class DealQuotationService {
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบคำขอราคานี้"));
         // Owner-only, like CustomerQuotationService#requireOwner: a sales_manager is NOT admitted here (unlike
         // DealQuotationService#EDIT_ROLES for editing an EXISTING quotation).
-        if (!(DealOwnership.isOwnerOrKeyer(summary.ticketCreatedById(), summary.ticketKeyedById(), actor.id()) || employeeAuth.canManageAllSalesDocuments(actor.id()))) {
+        if (!(DealOwnership.isOwnerOrKeyer(summary.ticketCreatedById(), summary.ticketKeyedById(), actor.id()) || employeeAuth.canManageAllSalesDocuments(actor))) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
         TicketSummaryDto ticket = requireTicketSummary(summary.ticketId());
@@ -791,7 +791,7 @@ public class DealQuotationService {
         if (!grant) {
             requireRole(actor, VIEW_ROLES);
         }
-        return LIST_SEE_ALL_ROLES.contains(actor.role()) || employeeAuth.canManageAllSalesDocuments(actor.id()) ? null : actor.id();
+        return LIST_SEE_ALL_ROLES.contains(actor.role()) || employeeAuth.canManageAllSalesDocuments(actor) ? null : actor.id();
     }
 
     /** The server recomputes every number: this is the stateless preview the item editor calls on every keystroke
@@ -2958,7 +2958,11 @@ public class DealQuotationService {
      * did it themselves).
      */
     private void moveOwnerToSalesRep(TicketSummaryDto ticket, Long salesRepId, UserPrincipal actor) {
-        if (salesRepId == null || tickets.moveOwnerToSalesRep(ticket.id(), salesRepId) == 0) {
+        // A can_manage_all_sales_documents holder may set the printed พนักงานขาย but does not MOVE the deal (Ploy 2026-11-19):
+        // only who could move it before the grant: the real owner/keyer, sales_manager, ceo or a can_create_quotation holder.
+        boolean mayMove = DealOwnership.isOwnerOrKeyer(ticket, actor.id()) || "sales_manager".equals(actor.role())
+            || "ceo".equals(actor.role()) || hasQuotationGrant(actor);
+        if (!mayMove || salesRepId == null || tickets.moveOwnerToSalesRep(ticket.id(), salesRepId) == 0) {
             return;
         }
         quotations.moveSalesRep(ticket.id(), salesRepId);
@@ -3916,12 +3920,12 @@ public class DealQuotationService {
     }
 
     private boolean hasAllDocumentsGrant(UserPrincipal actor) {
-        return employeeAuth.canManageAllSalesDocuments(actor.id());
+        return employeeAuth.canManageAllSalesDocuments(actor);
     }
 
     /** Owner/keyer of the deal, or a live {@code can_manage_all_sales_documents} holder (acts as owner of every deal). */
     private boolean ownsDealOrHolder(TicketSummaryDto ticket, UserPrincipal actor) {
-        return DealOwnership.isOwnerOrKeyer(ticket, actor.id()) || employeeAuth.canManageAllSalesDocuments(actor.id());
+        return DealOwnership.isOwnerOrKeyer(ticket, actor.id()) || employeeAuth.canManageAllSalesDocuments(actor);
     }
 
     /** Live DB read of the per-employee grant — see EmployeeAuthRepository#canCreateQuotation for why this is never

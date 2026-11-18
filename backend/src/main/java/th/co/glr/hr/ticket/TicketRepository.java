@@ -157,8 +157,8 @@ public class TicketRepository {
 
     /** Tests' convenience: the default {@value QuietRule#DEFAULT_QUIET_DAYS}-day quiet rule. */
     /** Live {@code can_manage_all_sales_documents} read, for the services that gate on deal ownership and hold no EmployeeAuthRepository. */
-    public boolean holdsAllSalesDocumentsGrant(long employeeId) {
-        return th.co.glr.hr.auth.EmployeeAuthRepository.canManageAllSalesDocuments(jdbc, employeeId);
+    public boolean holdsAllSalesDocumentsGrant(th.co.glr.hr.auth.UserPrincipal actor) {
+        return th.co.glr.hr.auth.EmployeeAuthRepository.canManageAllSalesDocuments(jdbc, actor);
     }
 
     public TicketRepository(NamedParameterJdbcTemplate jdbc) {

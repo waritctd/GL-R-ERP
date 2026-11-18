@@ -98,7 +98,7 @@ public class PricingRequestService {
     public PricingRequestDetailDto createDraft(long ticketId, CreatePricingRequestRequest request, UserPrincipal actor) {
         requireRole(actor, SALES_ROLES);
         TicketSummaryDto ticket = requireTicket(ticketId);
-        if (!(DealOwnership.isOwnerOrKeyer(ticket, actor.id()) || tickets.holdsAllSalesDocumentsGrant(actor.id()))) {
+        if (!(DealOwnership.isOwnerOrKeyer(ticket, actor.id()) || tickets.holdsAllSalesDocumentsGrant(actor))) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
         String clientRequestId = validateClientRequestId(request.clientRequestId());
@@ -152,7 +152,7 @@ public class PricingRequestService {
     public List<PricingRequestSummaryDto> listForTicket(long ticketId, UserPrincipal actor) {
         requireRole(actor, VIEWER_ROLES);
         TicketSummaryDto ticket = requireTicket(ticketId);
-        if ("sales".equals(actor.role()) && !(DealOwnership.isOwnerOrKeyer(ticket, actor.id()) || tickets.holdsAllSalesDocumentsGrant(actor.id()))) {
+        if ("sales".equals(actor.role()) && !(DealOwnership.isOwnerOrKeyer(ticket, actor.id()) || tickets.holdsAllSalesDocumentsGrant(actor))) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
         // Separate read path from findSummaries/list — must apply the same DRAFT privacy rule so a request that's
@@ -170,7 +170,7 @@ public class PricingRequestService {
             throw new ApiException(HttpStatus.BAD_REQUEST, "ไม่รองรับสถานะ '" + status + "'");
         }
         // a can_manage_all_sales_documents holder acts as owner of every deal: all requests, drafts included
-        boolean holder = tickets.holdsAllSalesDocumentsGrant(actor.id());
+        boolean holder = tickets.holdsAllSalesDocumentsGrant(actor);
         Long createdByFilter = "sales".equals(actor.role()) && !holder ? actor.id() : null;
         boolean draftOversight = "ceo".equals(actor.role()) || "sales_manager".equals(actor.role()) || holder;
         return requests.findSummaries(status, assignedImportId, createdByFilter, activeDealsOnly,
@@ -181,7 +181,7 @@ public class PricingRequestService {
     public PricingRequestDetailDto updateDraft(long id, UpdatePricingRequestRequest request, UserPrincipal actor) {
         requireRole(actor, SALES_ROLES);
         PricingRequestSummaryDto summary = requireViewable(id, actor);
-        if (!(DealOwnership.isOwnerOrKeyer(summary.ticketCreatedById(), summary.ticketKeyedById(), actor.id()) || tickets.holdsAllSalesDocumentsGrant(actor.id()))) {
+        if (!(DealOwnership.isOwnerOrKeyer(summary.ticketCreatedById(), summary.ticketKeyedById(), actor.id()) || tickets.holdsAllSalesDocumentsGrant(actor))) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
         if (!PricingRequestStatus.DRAFT.equals(summary.status())) {
@@ -242,7 +242,7 @@ public class PricingRequestService {
     public PricingRequestDetailDto submit(long id, UserPrincipal actor) {
         requireRole(actor, SALES_ROLES);
         PricingRequestSummaryDto summary = requireViewable(id, actor);
-        if (!(DealOwnership.isOwnerOrKeyer(summary.ticketCreatedById(), summary.ticketKeyedById(), actor.id()) || tickets.holdsAllSalesDocumentsGrant(actor.id()))) {
+        if (!(DealOwnership.isOwnerOrKeyer(summary.ticketCreatedById(), summary.ticketKeyedById(), actor.id()) || tickets.holdsAllSalesDocumentsGrant(actor))) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
         if (!PricingRequestStatus.DRAFT.equals(summary.status())) {
@@ -530,7 +530,7 @@ public class PricingRequestService {
         // Deliberately NO requireTicket/requireActive here (unlike updateDraft): a request on a dead deal
         // (ON_HOLD/DORMANT/etc.) must still be cancellable — that is the one mutation that should always be available
         // on a stalled deal, not blocked by it. Do not add a lifecycle gate to this method.
-        if (!"ceo".equals(actor.role()) && !(DealOwnership.isOwnerOrKeyer(summary.ticketCreatedById(), summary.ticketKeyedById(), actor.id()) || tickets.holdsAllSalesDocumentsGrant(actor.id()))) {
+        if (!"ceo".equals(actor.role()) && !(DealOwnership.isOwnerOrKeyer(summary.ticketCreatedById(), summary.ticketKeyedById(), actor.id()) || tickets.holdsAllSalesDocumentsGrant(actor))) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
         if (!PricingRequestStatus.canTransition(summary.status(), PricingRequestStatus.CANCELLED)) {
@@ -569,7 +569,7 @@ public class PricingRequestService {
                                                                 UserPrincipal actor) {
         requireRole(actor, SALES_ROLES);
         PricingRequestSummaryDto parent = requireViewable(id, actor);
-        if (!(DealOwnership.isOwnerOrKeyer(parent.ticketCreatedById(), parent.ticketKeyedById(), actor.id()) || tickets.holdsAllSalesDocumentsGrant(actor.id()))) {
+        if (!(DealOwnership.isOwnerOrKeyer(parent.ticketCreatedById(), parent.ticketKeyedById(), actor.id()) || tickets.holdsAllSalesDocumentsGrant(actor))) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
         // The state machine is the ONLY authority on which statuses a customer-change revision may
@@ -692,7 +692,7 @@ public class PricingRequestService {
     public PricingRequestAttachmentDto uploadAttachment(long id, MultipartFile file, UserPrincipal actor) {
         requireRole(actor, SALES_ROLES);
         PricingRequestSummaryDto summary = requireViewable(id, actor);
-        if (!(DealOwnership.isOwnerOrKeyer(summary.ticketCreatedById(), summary.ticketKeyedById(), actor.id()) || tickets.holdsAllSalesDocumentsGrant(actor.id()))) {
+        if (!(DealOwnership.isOwnerOrKeyer(summary.ticketCreatedById(), summary.ticketKeyedById(), actor.id()) || tickets.holdsAllSalesDocumentsGrant(actor))) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
         if (!ATTACHMENT_EDITABLE_STATUSES.contains(summary.status())) {
@@ -746,7 +746,7 @@ public class PricingRequestService {
         PricingRequestAttachmentDto attachment = requests.findAttachment(attachmentId)
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบไฟล์แนบของคำขอราคานี้"));
         PricingRequestSummaryDto summary = requireViewable(attachment.pricingRequestId(), actor);
-        if (!(DealOwnership.isOwnerOrKeyer(summary.ticketCreatedById(), summary.ticketKeyedById(), actor.id()) || tickets.holdsAllSalesDocumentsGrant(actor.id()))) {
+        if (!(DealOwnership.isOwnerOrKeyer(summary.ticketCreatedById(), summary.ticketKeyedById(), actor.id()) || tickets.holdsAllSalesDocumentsGrant(actor))) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
         if (!ATTACHMENT_EDITABLE_STATUSES.contains(summary.status())) {
@@ -925,7 +925,7 @@ public class PricingRequestService {
         if (PricingRequestStatus.DRAFT.equals(summary.status()) && !canSeeDraft(actor, summary)) {
             throw new ApiException(HttpStatus.NOT_FOUND, "ไม่พบคำขอราคานี้");
         }
-        if ("sales".equals(actor.role()) && !(DealOwnership.isOwnerOrKeyer(summary.ticketCreatedById(), summary.ticketKeyedById(), actor.id()) || tickets.holdsAllSalesDocumentsGrant(actor.id()))) {
+        if ("sales".equals(actor.role()) && !(DealOwnership.isOwnerOrKeyer(summary.ticketCreatedById(), summary.ticketKeyedById(), actor.id()) || tickets.holdsAllSalesDocumentsGrant(actor))) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
         return summary;
@@ -933,7 +933,7 @@ public class PricingRequestService {
 
     /** Who may see a request while it is still in DRAFT status — see requireViewable. */
     private boolean canSeeDraft(UserPrincipal actor, PricingRequestSummaryDto summary) {
-        return (DealOwnership.isOwnerOrKeyer(summary.ticketCreatedById(), summary.ticketKeyedById(), actor.id()) || tickets.holdsAllSalesDocumentsGrant(actor.id()))
+        return (DealOwnership.isOwnerOrKeyer(summary.ticketCreatedById(), summary.ticketKeyedById(), actor.id()) || tickets.holdsAllSalesDocumentsGrant(actor))
             || "ceo".equals(actor.role())
             || "sales_manager".equals(actor.role());
     }
@@ -982,7 +982,7 @@ public class PricingRequestService {
     }
 
     private void requireRole(UserPrincipal actor, Set<String> allowed) {
-        if (!allowed.contains(actor.role()) && !(allowed.contains("sales") && tickets.holdsAllSalesDocumentsGrant(actor.id()))) {
+        if (!allowed.contains(actor.role()) && !(allowed.contains("sales") && tickets.holdsAllSalesDocumentsGrant(actor))) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
     }

@@ -2,7 +2,7 @@ import thaiLocations from '../data/thai-locations.json';
 import { formatThaiAddress } from '../features/locations/thaiAddress.js';
 import { isPastProcurement } from '../features/finance/moneyMilestone.js';
 import { accountOwesStep } from '../features/tickets/accountActions.js';
-import { actsAsOwner, isOwnerOrKeyer, isSalesOwner } from '../features/tickets/dealOwnership.js';
+import { actsAsOwner, holdsAllSalesDocumentsGrant, isOwnerOrKeyer, isSalesOwner } from '../features/tickets/dealOwnership.js';
 import {
   chainDepositBlockedReason, chainDepositState, chainListStage, chainOrderConfirmed, chainRemainingBlockedReason,
   chainRemainingState,
@@ -2352,7 +2352,7 @@ function authResponse(user) {
     admin: Boolean(user?.admin),
     canCreateQuotation: Boolean(user?.canCreateQuotation),
     canIssueBillingNote: Boolean(user?.canIssueBillingNote),
-    canManageAllSalesDocuments: Boolean(user?.canManageAllSalesDocuments),
+    canManageAllSalesDocuments: holdsAllSalesDocumentsGrant(user),
     canViewAs: false,
     canViewPeopleInsights: ['ceo', 'hr'].includes(user?.role),
     viewAs: null,
@@ -6552,7 +6552,7 @@ function scopedDealQuotationsFor(user) {
   const grant = hasDealQuotationMockGrant(user);
   if (!grant && !DEAL_QUOTATION_VIEWER_ROLES.includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
   const base = mockDealQuotations.filter(isDealDirectOrigin);
-  if (DEAL_QUOTATION_LIST_SEE_ALL_ROLES.includes(user.role) || user.canManageAllSalesDocuments) {
+  if (DEAL_QUOTATION_LIST_SEE_ALL_ROLES.includes(user.role) || holdsAllSalesDocumentsGrant(user)) {
     return base;
   }
   return base.filter((q) => isOwnerOrKeyer(db.tickets.find((t) => t.id === q.ticketId), user.id));
