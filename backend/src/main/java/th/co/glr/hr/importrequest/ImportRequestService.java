@@ -1829,7 +1829,7 @@ public class ImportRequestService {
         if ("ceo".equals(role) || READ_ONLY_ROLES.contains(role)) {
             return;
         }
-        if ("sales".equals(role) && repository.isDealOwner(ticketId, actor.id())) {
+        if (ownsDeal(ticketId, actor)) {
             return;
         }
         throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
@@ -1844,7 +1844,13 @@ public class ImportRequestService {
 
     private boolean canFullWrite(long ticketId, UserPrincipal actor) {
         String role = actor.role();
-        return "ceo".equals(role) || ("sales".equals(role) && repository.isDealOwner(ticketId, actor.id()));
+        return "ceo".equals(role) || ownsDeal(ticketId, actor);
+    }
+
+    /** The deal's owning/keying sales rep, or a live {@code can_manage_all_sales_documents} holder of any role. */
+    private boolean ownsDeal(long ticketId, UserPrincipal actor) {
+        return ("sales".equals(actor.role()) && repository.isDealOwner(ticketId, actor.id()))
+            || tickets.holdsAllSalesDocumentsGrant(actor.id());
     }
 
     /**

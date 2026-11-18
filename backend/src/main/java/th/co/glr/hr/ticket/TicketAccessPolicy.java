@@ -40,10 +40,16 @@ public final class TicketAccessPolicy {
     /** Selects affected frontend tests, including readers outside the import graph. */
 
     public static boolean canViewDocuments(TicketSummaryDto summary, UserPrincipal actor, boolean inRoleScope) {
+        return canViewDocuments(summary, actor, inRoleScope, false);
+    }
+
+    /** {@code holdsAllDocumentsGrant}: the caller's live {@code can_manage_all_sales_documents} read; a holder acts as owner of every deal. */
+    public static boolean canViewDocuments(TicketSummaryDto summary, UserPrincipal actor, boolean inRoleScope,
+                                           boolean holdsAllDocumentsGrant) {
         if (actor == null) {
             return false;
         }
-        if (isParticipant(summary, actor)) {
+        if (holdsAllDocumentsGrant || isParticipant(summary, actor)) {
             return true;
         }
         if (!VIEWER_ROLES.contains(actor.role())) {
@@ -59,9 +65,14 @@ public final class TicketAccessPolicy {
 
     /** May {@code actor} attach a document to, or remove one from, this deal? */
     public static boolean canManageDocuments(TicketSummaryDto summary, UserPrincipal actor) {
+        return canManageDocuments(summary, actor, false);
+    }
+
+    /** {@code holdsAllDocumentsGrant}: the caller's live {@code can_manage_all_sales_documents} read. */
+    public static boolean canManageDocuments(TicketSummaryDto summary, UserPrincipal actor, boolean holdsAllDocumentsGrant) {
         if (actor == null) {
             return false;
         }
-        return isParticipant(summary, actor) || DOCUMENT_WRITER_ROLES.contains(actor.role());
+        return holdsAllDocumentsGrant || isParticipant(summary, actor) || DOCUMENT_WRITER_ROLES.contains(actor.role());
     }
 }

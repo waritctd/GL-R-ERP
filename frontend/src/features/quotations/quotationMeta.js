@@ -30,7 +30,7 @@
 // `ISSUED`/`EXPIRED` are unreachable for a DEAL_DIRECT row in practice (its single-shot approve()
 // only requests the APPROVED edge, and a DEAL_DIRECT quotation never expires): which edge a caller
 // requests decides what a row reaches, not which edges the table allows.
-import { isOwnerOrKeyer } from '../tickets/dealOwnership.js';
+import { isSalesOwner } from '../tickets/dealOwnership.js';
 import { bangkokTodayIso } from '../../utils/format.js';
 export const DEAL_QUOTATION_TRANSITIONS = {
   DRAFT: ['PENDING_APPROVAL', 'CANCELLED', 'SUPERSEDED'],
@@ -93,7 +93,7 @@ export function hasDealQuotationGrant(user) {
 export function canCreateDealQuotation(user, ticket) {
   if (!user || !ticket) return false;
   if (user.role === 'sales_manager' || hasDealQuotationGrant(user)) return true;
-  return user.role === 'sales' && isOwnerOrKeyer(ticket, user.id);
+  return isSalesOwner(ticket, user);
 }
 
 /** The role-only half of canCreateDealQuotation, for the moment BEFORE a ticket exists
@@ -197,7 +197,7 @@ export function canChangeDealCustomer(user, ticket, quotation) {
   if (!user || !ticket || !quotation) return false;
   if (quotation.docStatus !== 'DRAFT' || quotation.origin !== 'DEAL_DIRECT') return false;
   if (user.role === 'sales_manager' || user.role === 'ceo') return true;
-  return user.role === 'sales' && isOwnerOrKeyer(ticket, user.id);
+  return isSalesOwner(ticket, user);
 }
 
 /** Mirrors DealQuotationService.approve/reject's gate: sales_manager or ceo, role-only (the plan states "No

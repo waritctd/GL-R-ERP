@@ -146,6 +146,7 @@ public class DocumentChainService {
      */
     public Map<Long, String> listStages(List<DealQuotationDto> rows, UserPrincipal actor) {
         DealDocumentScope scope = DepositNoticeService.dealDocumentScope(actor.role());
+        if (tickets.holdsAllSalesDocumentsGrant(actor.id())) scope = DealDocumentScope.ALL;
         if (scope == DealDocumentScope.NONE) return Map.of();
         List<Long> ids = rows.stream()
             .filter(row -> DealQuotationRepository.ORIGIN_DEAL_DIRECT.equals(row.origin())

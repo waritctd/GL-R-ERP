@@ -25,7 +25,7 @@ import { invalidateDealDocuments, useDocumentChain } from '../documentChain/docu
 import { depositBadge, depositHint, remainingBadge, remainingHint } from '../documentChain/documentChainText.js';
 import { EVENT_KIND_LABEL, PAYMENT_TRACK_KINDS } from './DealHistoryPanel.jsx';
 import { pickRemainingInvoice } from './remainingInvoiceReadiness.js';
-import { isOwnerOrKeyer } from './dealOwnership.js';
+import { isSalesOwner } from './dealOwnership.js';
 import { ReceiptSourceChip } from '../finance/ReceiptSourceChip.jsx';
 
 /** `Date.parse`-safe timestamp, or `null`: an unparseable row sorts last rather than floating to the top as `NaN` would. */
@@ -148,7 +148,7 @@ export function DealPaymentSection({
 }) {
   const queryClient = useQueryClient();
   const role = user?.role;
-  const isOwnerSales = role === 'sales' && isOwnerOrKeyer(summary, user?.id);
+  const isOwnerSales = isSalesOwner(summary, user);
   const ps = summary.paymentStatus;
   const hasAction = (action) => availableActions.some((item) => item.action === action);
 

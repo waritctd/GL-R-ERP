@@ -121,6 +121,23 @@ public class EmployeeAuthRepository {
         return Boolean.TRUE.equals(granted);
     }
 
+    /** Live read of {@code hr.employee.can_manage_all_sales_documents} (active rows): the holder acts as the OWNER of every
+     * deal's sales documents. Same discipline as {@link #canCreateQuotation}: never cached on the principal. */
+    public boolean canManageAllSalesDocuments(long employeeId) {
+        return canManageAllSalesDocuments(jdbc, employeeId);
+    }
+
+    /** The one SQL copy; repositories that already hold a jdbc template (TicketRepository) call this instead of copying it. */
+    public static boolean canManageAllSalesDocuments(NamedParameterJdbcTemplate jdbc, long employeeId) {
+        Boolean granted = jdbc.queryForObject("""
+            SELECT EXISTS (
+                SELECT 1 FROM hr.employee
+                 WHERE employee_id = :id AND is_active AND can_manage_all_sales_documents
+            )
+            """, Map.of("id", employeeId), Boolean.class);
+        return Boolean.TRUE.equals(granted);
+    }
+
     /**
      * Whether this employee holds the {@code hr.employee.can_issue_billing_note} grant — the per-employee capability that lets a caller in
      * ANY role create/update/issue/revise/cancel/mark-received a ใบวางบิล (billing note) without

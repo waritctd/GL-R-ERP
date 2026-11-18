@@ -393,7 +393,7 @@ public class OrderConfirmationService {
     // Helpers
 
     private void requireRole(UserPrincipal actor, Set<String> allowed) {
-        if (!allowed.contains(actor.role())) {
+        if (!allowed.contains(actor.role()) && !(allowed.contains("sales") && tickets.holdsAllSalesDocumentsGrant(actor.id()))) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
     }
@@ -401,7 +401,7 @@ public class OrderConfirmationService {
     /** Owner-only, matching every prior step's "sales" scoping: the deal (ticket) owner, not merely the pricing
      * request's own requested_by (which may differ). */
     private void requireOwner(PricingRequestSummaryDto summary, UserPrincipal actor) {
-        if ("sales".equals(actor.role()) && !DealOwnership.isOwnerOrKeyer(summary.ticketCreatedById(), summary.ticketKeyedById(), actor.id())) {
+        if ("sales".equals(actor.role()) && !(DealOwnership.isOwnerOrKeyer(summary.ticketCreatedById(), summary.ticketKeyedById(), actor.id()) || tickets.holdsAllSalesDocumentsGrant(actor.id()))) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
     }

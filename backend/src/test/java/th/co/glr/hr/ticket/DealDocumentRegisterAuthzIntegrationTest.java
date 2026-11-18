@@ -227,6 +227,54 @@ class DealDocumentRegisterAuthzIntegrationTest extends AbstractPostgresIntegrati
         assertAttachmentsForbidden(salesOtherActor);
     }
 
+    // "Manage all sales documents" grant (Ploy 2026-11-18): a holder acts as OWNER of every deal in every family, whatever
+    // their role (the flag is set per person by hand). The column exists from V227; these are red until the gates admit it.
+
+    @Test
+    void grantHolder_salesRole_reachesEveryDocumentFamily_onSomeoneElsesDeal() throws Exception {
+        grant(salesOtherActor);
+
+        assertThatCode(() -> ticketService.get(ticketId, salesOtherActor)).doesNotThrowAnyException();
+        assertThatCode(() -> depositNoticeService.listByTicket(ticketId, salesOtherActor)).doesNotThrowAnyException();
+        assertNotForbidden(() -> depositNoticeService.getRemainingInvoiceOptions(ticketId, salesOtherActor));
+        assertThatCode(() -> pricingRequestService.get(pricingRequestId, salesOtherActor)).doesNotThrowAnyException();
+        assertThatCode(() -> quotationService.listForPricingRequest(pricingRequestId, salesOtherActor))
+            .doesNotThrowAnyException();
+        assertAttachmentsOk(salesOtherActor);
+    }
+
+    @Test
+    void grantHolder_anyRole_reachesTheDealItsDocumentsAndAttachments() throws Exception {
+        grant(hrActor);
+
+        assertThatCode(() -> ticketService.get(ticketId, hrActor)).doesNotThrowAnyException();
+        assertThatCode(() -> depositNoticeService.listByTicket(ticketId, hrActor)).doesNotThrowAnyException();
+        assertAttachmentsOk(hrActor);
+    }
+
+    /** Pin: the grant belongs to the person who has it, nobody else. */
+    @Test
+    void grantOnOneRep_doesNotLeakToAnother() throws Exception {
+        grant(salesManagerActor);
+
+        assertForbidden(() -> depositNoticeService.listByTicket(ticketId, salesOtherActor));
+        assertAttachmentsForbidden(salesOtherActor);
+    }
+
+    private void grant(UserPrincipal holder) {
+        jdbc.update("UPDATE hr.employee SET can_manage_all_sales_documents = TRUE WHERE employee_id = :id",
+            Map.of("id", holder.id()));
+    }
+
+    private static void assertNotForbidden(org.assertj.core.api.ThrowableAssert.ThrowingCallable callable) {
+        Throwable t = org.assertj.core.api.Assertions.catchThrowable(callable);
+        if (t instanceof ApiException e) {
+            assertThat(e.getStatus()).isNotEqualTo(org.springframework.http.HttpStatus.FORBIDDEN);
+        } else {
+            assertThat(t).isNull();
+        }
+    }
+
     // hr / employee cannot reach any of it
 
     @Test

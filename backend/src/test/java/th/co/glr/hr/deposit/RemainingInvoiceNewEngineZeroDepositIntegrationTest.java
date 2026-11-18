@@ -407,6 +407,87 @@ class RemainingInvoiceNewEngineZeroDepositIntegrationTest extends AbstractPostgr
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
     }
 
+    // ── "manage all sales documents" grant (Ploy 2026-11-18): hr.employee.can_manage_all_sales_documents ──
+    // A holder acts as the OWNER of every deal's deposit notice / remaining invoice. The flag is set with SQL, so
+    // before V226 exists these error on the missing column (not on an assertion); the non-holder pin is green today.
+
+    @Test
+    void grant_salesHolder_createsAndIssuesADepositNotice_onSomeoneElsesDeal() {
+        long ticket = deal("REQUIRED");
+        long q = quotation(ticket, "PRICING_REQUEST", "ACCEPTED", "1000.00");
+        line(q, 1, "กระเบื้อง A", "10", "100.00");
+        UserPrincipal holder = holder("sales");
+
+        var draft = depositNotices.createDraft(ticket, createBody(null), holder);
+        var issued = depositNotices.issue(draft.id(), holder);
+
+        assertThat(issued.status()).isEqualTo("ISSUED");
+        assertThat(depositNotices.listByTicket(ticket, holder)).hasSize(1);
+        assertThat(createdBy(ticket)).as("a holder acts AS owner but never becomes the owner").isEqualTo(employeeId);
+    }
+
+    @Test
+    void grant_salesHolder_createsAndIssuesARemainingInvoice_onSomeoneElsesDeal() {
+        long ticket = deal("NOT_REQUIRED");
+        long q = quotation(ticket, "PRICING_REQUEST", "ACCEPTED", "1000.00");
+        line(q, 1, "กระเบื้อง A", "10", "100.00");
+        UserPrincipal holder = holder("sales");
+
+        var draft = remainingInvoices.createDraft(ticket, null, holder);
+
+        assertThat(remainingInvoices.list(ticket, holder)).hasSize(1);
+        assertThat(remainingInvoices.issue(draft.id(), holder).status()).isEqualTo("ISSUED");
+        assertThat(createdBy(ticket)).isEqualTo(employeeId);
+    }
+
+    /** sales_manager is read-only on these documents today (SALES_ROLES excludes it); a holder writes them. */
+    @Test
+    void grant_salesManagerHolder_createsAndUpdatesADepositNotice() {
+        long ticket = deal("REQUIRED");
+        long q = quotation(ticket, "PRICING_REQUEST", "ACCEPTED", "1000.00");
+        line(q, 1, "กระเบื้อง A", "10", "100.00");
+        UserPrincipal managerHolder = holder("sales_manager");
+
+        var draft = depositNotices.createDraft(ticket, createBody(null), managerHolder);
+        var updated = depositNotices.update(draft.id(), putOf(draft, new BigDecimal("2")), managerHolder);
+
+        assertThat(updated.items().get(0).qty()).isEqualByComparingTo("2");
+        assertThat(createdBy(ticket)).isEqualTo(employeeId);
+    }
+
+    /** Pin (green today, must stay green): the grant is per-employee, a plain rep on someone else's deal is refused. */
+    @Test
+    void grant_nonHolderSales_isStillRefused403_onSomeoneElsesDeal() {
+        long ticket = deal("REQUIRED");
+        long q = quotation(ticket, "PRICING_REQUEST", "ACCEPTED", "1000.00");
+        line(q, 1, "กระเบื้อง A", "10", "100.00");
+        UserPrincipal plainRep = employeePrincipal("RI0-PLAIN", "sales", false);
+
+        assertThatThrownBy(() -> depositNotices.createDraft(ticket, createBody(null), plainRep))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+        assertThatThrownBy(() -> depositNotices.listByTicket(ticket, plainRep))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+    }
+
+    private long createdBy(long ticket) {
+        return jdbc.queryForObject("SELECT created_by FROM sales.ticket WHERE ticket_id = :t", Map.of("t", ticket), Long.class);
+    }
+
+    private UserPrincipal holder(String role) {
+        return employeePrincipal("RI0-H-" + role.substring(0, 5), role, true);
+    }
+
+    private UserPrincipal employeePrincipal(String code, String role, boolean manageAllSalesDocuments) {
+        long id = jdbc.queryForObject("""
+            INSERT INTO hr.employee (employee_code, first_name_th, last_name_th)
+            VALUES (:c, 'ทดสอบ', 'สิทธิ์') RETURNING employee_id""", Map.of("c", code), Long.class);
+        if (manageAllSalesDocuments) {
+            jdbc.update("UPDATE hr.employee SET can_manage_all_sales_documents = TRUE WHERE employee_id = :id",
+                Map.of("id", id));
+        }
+        return new UserPrincipal(id, code + "@glr.co.th", code, role, id, true, LocalDate.of(2020, 1, 1), false, null, false);
+    }
+
     // ── fixtures ─────────────────────────────────────────────────────────────────────────
 
     private long deal(String depositPolicy) {

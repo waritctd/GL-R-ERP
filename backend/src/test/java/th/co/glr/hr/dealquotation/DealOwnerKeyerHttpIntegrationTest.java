@@ -469,6 +469,105 @@ class DealOwnerKeyerHttpIntegrationTest extends AbstractDealQuotationSlice2Integ
         assertThat(employeeMails).isEmpty();
     }
 
+    // ── 13: "manage all sales documents" grant (Ploy 2026-11-18) ─────────────────────────────────
+    // hr.employee.can_manage_all_sales_documents: a holder acts as the OWNER of every deal. The flag is set with SQL,
+    // so before V226 exists these error on the missing column (not on an assertion).
+
+    /** 13a: a `sales` holder lists and opens a deal they neither own nor keyed. */
+    @Test
+    void grantHolder_seesAndOpensSomeoneElsesDeal() throws Exception {
+        long ticketId = keyedDeal(); // owner B, keyer A
+        UserPrincipal holder = grantHolder();
+
+        assertThat(dealListIds(holder)).contains(ticketId);
+        assertThat(send(holder, get("/api/tickets/" + ticketId), null).getResponse().getStatus()).isEqualTo(200);
+    }
+
+    /** 13b: an owner/keyer-gated write (the stage move) passes for a holder, and the deal's owner is unchanged. */
+    @Test
+    void grantHolder_movesTheStageOfSomeoneElsesDeal_withoutBecomingOwner() throws Exception {
+        long ticketId = keyedDeal();
+        UserPrincipal holder = grantHolder();
+
+        MvcResult result = send(holder, post("/api/tickets/" + ticketId + "/stage"), "{\"stage\":\"PRESENTATION\"}");
+
+        assertThat(result.getResponse().getStatus()).as(body(result)).isEqualTo(200);
+        assertThat(createdBy(ticketId)).isEqualTo(otherSalesActor.id());
+        assertThat(keyedBy(ticketId)).isEqualTo(salesActor.id());
+    }
+
+    /** 13c: the global quotation list shows a holder every quotation, incl. a PRICING_REQUEST-origin one. */
+    @Test
+    void grantHolder_quotationListShowsEveryQuotation() throws Exception {
+        long ticketId = keyedDeal();
+        long direct = createQuotation(otherSalesActor, ticketId);
+        long pcrOrigin = pricingRequestOriginQuotation(keyedDeal()); // one live quotation per deal -> a second deal
+        UserPrincipal holder = grantHolder();
+
+        assertThat(quotationListIds(holder)).contains(direct, pcrOrigin);
+    }
+
+    /** 13d: a holder views, edits, submits and cancels quotations on someone else's deal - PRICING_REQUEST origin too. */
+    @Test
+    void grantHolder_viewsAndEditsAnyQuotation_includingPricingRequestOrigin() throws Exception {
+        long ticketId = keyedDeal();
+        long direct = createQuotation(otherSalesActor, ticketId);
+        long pcrOrigin = pricingRequestOriginQuotation(keyedDeal()); // one live quotation per deal -> a second deal
+        UserPrincipal holder = grantHolder();
+
+        MvcResult viewPcr = send(holder, get("/api/deal-quotations/" + pcrOrigin), null);
+        // cancel = an edit-gated write (requireEditAccessForQuotation); a PUT on a PCR row is refused on business rules, not access
+        MvcResult cancelPcr = send(holder, post("/api/deal-quotations/" + pcrOrigin + "/cancel"), null);
+        MvcResult editDirect = send(holder, put("/api/deal-quotations/" + direct), quotationBody());
+        MvcResult submitDirect = send(holder, post("/api/deal-quotations/" + direct + "/submit"), null);
+
+        assertThat(viewPcr.getResponse().getStatus()).as(body(viewPcr)).isEqualTo(200);
+        assertThat(cancelPcr.getResponse().getStatus()).as(body(cancelPcr)).isEqualTo(200);
+        assertThat(editDirect.getResponse().getStatus()).as(body(editDirect)).isEqualTo(200);
+        assertThat(submitDirect.getResponse().getStatus()).as(body(submitDirect)).isEqualTo(200);
+    }
+
+    /** 13e: a holder creates a quotation on someone else's deal (the ticket stays B's). */
+    @Test
+    void grantHolder_createsAQuotationOnSomeoneElsesDeal() throws Exception {
+        long ticketId = keyedDeal();
+        UserPrincipal holder = grantHolder();
+
+        long quotationId = createQuotation(holder, ticketId);
+
+        assertThat(quotationId).isPositive();
+        assertThat(createdBy(ticketId)).isEqualTo(otherSalesActor.id());
+    }
+
+    /** 13f (pin, green today): a plain rep without the grant is still refused on someone else's PRICING_REQUEST quotation. */
+    @Test
+    void nonHolder_isStillRefusedOnSomeoneElsesPricingRequestQuotation() throws Exception {
+        long ticketId = keyedDeal();
+        long pcrOrigin = pricingRequestOriginQuotation(ticketId);
+
+        assertThat(send(thirdRep, get("/api/deal-quotations/" + pcrOrigin), null).getResponse().getStatus())
+            .isEqualTo(403);
+        assertThat(send(thirdRep, put("/api/deal-quotations/" + pcrOrigin),
+            quotationBody("OWNER").replace("\"recipientType\":\"OWNER\"", "\"recipientType\":null"))
+            .getResponse().getStatus()).isEqualTo(403);
+    }
+
+    /** thirdRep (role sales, not owner/keyer of anything) with the grant switched on. */
+    private UserPrincipal grantHolder() {
+        jdbc.update("UPDATE hr.employee SET can_manage_all_sales_documents = TRUE WHERE employee_id = :id",
+            Map.of("id", thirdRep.id()));
+        return thirdRep;
+    }
+
+    /** A DRAFT quotation on the deal re-tagged to the PRICING_REQUEST origin (same trick DealQuotationConfirmOrderIntegrationTest uses). */
+    private long pricingRequestOriginQuotation(long ticketId) throws Exception {
+        long quotationId = createQuotation(otherSalesActor, ticketId);
+        long pricingRequestId = insertPricingRequest(ticketId, otherSalesActor.id(), "SUBMITTED");
+        jdbc.update("UPDATE sales.quotation SET origin = 'PRICING_REQUEST', pricing_request_id = :pr WHERE quotation_id = :id",
+            Map.of("pr", pricingRequestId, "id", quotationId));
+        return quotationId;
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────────────────────────────
 
     private long salesRepOf(long quotationId) {

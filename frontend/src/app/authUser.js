@@ -17,6 +17,7 @@ export function userFromAuthResponse(response) {
     admin: Boolean(response.admin),
     canCreateQuotation: Boolean(response.canCreateQuotation),
     canIssueBillingNote: Boolean(response.canIssueBillingNote),
+    canManageAllSalesDocuments: Boolean(response.canManageAllSalesDocuments),
     canViewAs: Boolean(response.canViewAs),
     canViewPeopleInsights: Boolean(response.canViewPeopleInsights),
     viewAs: response.viewAs ?? null,

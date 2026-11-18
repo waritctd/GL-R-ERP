@@ -875,6 +875,19 @@ class StoredImportRequestIntegrationTest extends AbstractPostgresIntegrationTest
         assertThat(service.get(id, salesManager).id()).isEqualTo(id);
     }
 
+    /** "Manage all sales documents" grant (Ploy 2026-11-18): a holder reads and writes another rep's IR as the owner. */
+    @Test
+    void grantHolder_readsAndFullWritesAnotherRepsIr() throws Exception {
+        long id = byFactory(DraftSeed.seed(jdbc, ticketId, owner), padanaFactoryId).id();
+        jdbc.update("UPDATE hr.employee SET can_manage_all_sales_documents = TRUE WHERE employee_id = :id",
+            java.util.Map.of("id", otherSalesRep.id()));
+
+        assertThat(service.get(id, otherSalesRep).id()).isEqualTo(id);
+        assertThat(service.list(ticketId, otherSalesRep)).isNotEmpty();
+        assertThat(service.issue(id, null, otherSalesRep).docNumber())
+            .matches("IR\\d{2}\\d{3}");
+    }
+
     /** deleteDraft is a #FULL_WRITE_ROLES-only action per the class Javadoc — import (footer-only) and
      * sales_manager (read-only) must both be refused, not just a non-owning rep (already covered by
      * #nonOwningSalesRepCannotCreateIssueOrRevise/#importCannotCreateIssueOrRevise, which do not touch delete). */

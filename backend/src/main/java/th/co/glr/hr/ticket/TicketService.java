@@ -153,7 +153,7 @@ public class TicketService {
 
     public List<TicketSummaryDto> list(String status, UserPrincipal actor) {
         requireRole(actor, VIEWER_ROLES);
-        Long createdByFilter = "sales".equals(actor.role()) ? actor.id() : null;
+        Long createdByFilter = "sales".equals(actor.role()) && !employeeAuth.canManageAllSalesDocuments(actor.id()) ? actor.id() : null;
         return forRole(tickets.findSummaries(status, null, createdByFilter, actor.role(), null), actor.role());
     }
 
@@ -223,7 +223,7 @@ public class TicketService {
         if (movementFrom != null && movementFrom.isAfter(movementTo)) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "movementFrom ต้องไม่เกิน movementTo");
         }
-        Long createdByFilter = "sales".equals(actor.role()) ? actor.id() : null;
+        Long createdByFilter = "sales".equals(actor.role()) && !employeeAuth.canManageAllSalesDocuments(actor.id()) ? actor.id() : null;
         // Role-scoped views: import/account only see the slice of the deal
         // pipeline relevant to their own worklist — see TicketRepository.appendRoleScope.
         // ceo/sales_manager/sales are unaffected (the repository ignores any other role).
@@ -288,7 +288,7 @@ public class TicketService {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
         TicketDto ticket = requireTicket(ticketId);
-        if ("sales".equals(actor.role()) && !DealOwnership.isOwnerOrKeyer(ticket.summary(), actor.id())) {
+        if ("sales".equals(actor.role()) && !ownsDealOrHolder(ticket.summary(), actor)) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
         return projectForRole(ticket, actor.role());
@@ -597,7 +597,7 @@ public class TicketService {
             throw new ApiException(HttpStatus.CONFLICT,
                 "ออกใบเสนอราคาได้เฉพาะงานที่อยู่ในสถานะ 'approved' หรือ 'quotation_issued' เท่านั้น (สถานะปัจจุบัน: '" + fromStatus + "')");
         }
-        if (!DealOwnership.isOwnerOrKeyer(s, actor.id())) {
+        if (!ownsDealOrHolder(s, actor)) {
             throw new ApiException(HttpStatus.FORBIDDEN, "เฉพาะเจ้าของงานเท่านั้นที่สามารถออกใบเสนอราคาได้");
         }
         boolean acceptedInChain = full.quotations().stream()
@@ -3365,7 +3365,7 @@ public class TicketService {
             if ("sales_manager".equals(role)) {
                 return;
             }
-            if (SALES_ROLES.contains(role) && DealOwnership.isOwnerOrKeyer(s, actor.id())) {
+            if (ownsDeal(s, actor)) {
                 return;
             }
         } else if (DealStage.ACCOUNT_TARGET_STAGES.contains(targetStage)) {
@@ -3419,10 +3419,21 @@ public class TicketService {
         }
     }
 
+    /** The sales-owner gate: owner/keyer in a sales role, or a live {@code can_manage_all_sales_documents} holder (acts as owner of every deal). */
+    private boolean ownsDeal(TicketSummaryDto s, UserPrincipal actor) {
+        return (SALES_ROLES.contains(actor.role()) && DealOwnership.isOwnerOrKeyer(s, actor.id()))
+            || employeeAuth.canManageAllSalesDocuments(actor.id());
+    }
+
+    /** {@link DealOwnership#isOwnerOrKeyer} plus the live holder grant (for sites with no role prefix). */
+    private boolean ownsDealOrHolder(TicketSummaryDto s, UserPrincipal actor) {
+        return DealOwnership.isOwnerOrKeyer(s, actor.id()) || employeeAuth.canManageAllSalesDocuments(actor.id());
+    }
+
     /** Lost/reopen belong to the sales side: deal owner, sales_manager, or ceo. */
     private void requireDealOwnership(TicketSummaryDto s, UserPrincipal actor) {
         String role = actor.role();
-        boolean isOwner = SALES_ROLES.contains(role) && DealOwnership.isOwnerOrKeyer(s, actor.id());
+        boolean isOwner = ownsDeal(s, actor);
         if (!isOwner && !"sales_manager".equals(role) && !"ceo".equals(role)) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
@@ -3456,7 +3467,7 @@ public class TicketService {
      */
     private boolean canSetDepositPolicy(TicketSummaryDto s, UserPrincipal actor) {
         String role = actor.role();
-        return (SALES_ROLES.contains(role) && DealOwnership.isOwnerOrKeyer(s, actor.id()))
+        return (ownsDeal(s, actor))
             || "sales_manager".equals(role);
     }
 
@@ -3490,7 +3501,7 @@ public class TicketService {
         if (TicketStatus.CLOSED.equals(currentStatus) || TicketStatus.CANCELLED.equals(currentStatus)) {
             throw new ApiException(HttpStatus.CONFLICT, "ไม่สามารถยกเลิกงานที่ปิดหรือถูกยกเลิกไปแล้วได้");
         }
-        if (!DealOwnership.isOwnerOrKeyer(ticket.summary(), actor.id())) {
+        if (!ownsDealOrHolder(ticket.summary(), actor)) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
         tickets.cancelDeal(ticketId, reason);
@@ -3523,7 +3534,7 @@ public class TicketService {
         TicketSummaryDto s = ticket.summary();
         requireActive(s);
         String st = s.status();
-        boolean isOwner = DealOwnership.isOwnerOrKeyer(s, actor.id());
+        boolean isOwner = ownsDealOrHolder(s, actor);
 
         // DRAFT included since V50: a lightweight lead-stage deal gets its product items here before submit().
         boolean salesCanEdit = SALES_ROLES.contains(actor.role()) && isOwner
@@ -3852,17 +3863,17 @@ public class TicketService {
 
     private boolean canManageQuotation(TicketSummaryDto s, UserPrincipal actor) {
         return CEO_ROLES.contains(actor.role())
-            || (SALES_ROLES.contains(actor.role()) && DealOwnership.isOwnerOrKeyer(s, actor.id()));
+            || (ownsDeal(s, actor));
     }
 
     private boolean canConfirmCustomer(TicketSummaryDto s, UserPrincipal actor) {
-        return SALES_ROLES.contains(actor.role()) && DealOwnership.isOwnerOrKeyer(s, actor.id())
+        return ownsDeal(s, actor)
             && TicketStatus.QUOTATION_ISSUED.equals(s.status())
             && (s.paymentStatus() == null || "CUSTOMER_CONFIRMED".equals(s.paymentStatus()));
     }
 
     private boolean canCreateDepositNotice(TicketSummaryDto s, UserPrincipal actor) {
-        return SALES_ROLES.contains(actor.role()) && DealOwnership.isOwnerOrKeyer(s, actor.id())
+        return ownsDeal(s, actor)
             && TicketStatus.QUOTATION_ISSUED.equals(s.status())
             && "CUSTOMER_CONFIRMED".equals(s.paymentStatus())
             && !DepositPolicy.bypassesDepositNotice(s.depositPolicy());
@@ -3899,7 +3910,7 @@ public class TicketService {
      */
     private boolean canDeclareStockCoverage(TicketSummaryDto s, UserPrincipal actor) {
         return CEO_ROLES.contains(actor.role())
-            || (SALES_ROLES.contains(actor.role()) && DealOwnership.isOwnerOrKeyer(s, actor.id()));
+            || (ownsDeal(s, actor));
     }
 
     /**
@@ -3930,7 +3941,7 @@ public class TicketService {
      */
     private boolean canWriteDelivery(TicketSummaryDto s, UserPrincipal actor) {
         return CEO_ROLES.contains(actor.role())
-            || (SALES_ROLES.contains(actor.role()) && DealOwnership.isOwnerOrKeyer(s, actor.id()));
+            || (ownsDeal(s, actor));
     }
 
     private void requireDeliveryAccess(TicketSummaryDto s, UserPrincipal actor) {
@@ -4059,13 +4070,13 @@ public class TicketService {
     }
 
     private boolean canCancel(TicketSummaryDto s, UserPrincipal actor) {
-        return DealOwnership.isOwnerOrKeyer(s, actor.id())
+        return ownsDealOrHolder(s, actor)
             && !TicketStatus.CLOSED.equals(s.status())
             && !TicketStatus.CANCELLED.equals(s.status());
     }
 
     private boolean canEditItems(TicketSummaryDto s, UserPrincipal actor) {
-        return SALES_ROLES.contains(actor.role()) && DealOwnership.isOwnerOrKeyer(s, actor.id())
+        return ownsDeal(s, actor)
             && Set.of(TicketStatus.DRAFT, TicketStatus.SUBMITTED, TicketStatus.IN_REVIEW,
                       TicketStatus.PRICE_PROPOSED).contains(s.status());
     }
@@ -4143,20 +4154,21 @@ public class TicketService {
     }
 
     private void requireOwner(TicketSummaryDto summary, UserPrincipal actor) {
-        if (!DealOwnership.isOwnerOrKeyer(summary, actor.id())) {
+        if (!ownsDealOrHolder(summary, actor)) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
     }
 
     private void requireRole(UserPrincipal actor, Set<String> allowed) {
-        if (!allowed.contains(actor.role())) {
+        // a can_manage_all_sales_documents holder acts as the sales owner whatever their role
+        if (!allowed.contains(actor.role()) && !(allowed.contains("sales") && employeeAuth.canManageAllSalesDocuments(actor.id()))) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
     }
 
     private boolean canDealOwnership(TicketSummaryDto s, UserPrincipal actor) {
         String role = actor.role();
-        boolean isOwner = SALES_ROLES.contains(role) && DealOwnership.isOwnerOrKeyer(s, actor.id());
+        boolean isOwner = ownsDeal(s, actor);
         return isOwner || "sales_manager".equals(role) || "ceo".equals(role);
     }
 }
