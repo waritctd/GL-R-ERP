@@ -4161,7 +4161,7 @@ public class TicketService {
     }
 
     private void requireRole(UserPrincipal actor, Set<String> allowed) {
-        // a can_manage_all_sales_documents holder acts as the sales owner whatever their role
+        // a can_manage_all_sales_documents holder (sales / sales_manager only, see the grant read) acts as the sales owner
         if (!allowed.contains(actor.role()) && !(allowed.contains("sales") && employeeAuth.canManageAllSalesDocuments(actor))) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }

@@ -769,6 +769,13 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
       fireEvent.click(await screen.findByTestId('deal-fulfilment-choose-source'));
       expect(onChoose).toHaveBeenCalledTimes(1);
     });
+    // TicketService#canDeclareStockCoverage is CEO or a sales-role owner/keyer: the all-documents grant does not reach it.
+    it('a canManageAllSalesDocuments holder on another rep\'s deal gets no จัดซื้อสินค้า button (the server refuses the declaration)', async () => {
+      const holder = { ...OTHER_REP, canManageAllSalesDocuments: true };
+      renderPanelWithChoose(holder, vi.fn(), { legacy: true, pending: true, editable: true, decidedAt: null });
+      await screen.findByTestId('deal-fulfilment-create-ir-drafts');
+      expect(screen.queryByTestId('deal-fulfilment-choose-source')).toBeNull();
+    });
     it('CEO on a NEW undecided deal (pending, not editable) still gets the จัดซื้อสินค้า button: the hint must never point at a missing button', async () => {
       const onChoose = vi.fn();
       renderPanelWithChoose(CEO, onChoose, { legacy: false, pending: true, editable: false, decidedAt: null });
@@ -1171,6 +1178,18 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
       fireEvent.click(screen.getByText(TOGGLE));
       expect(screen.getByTestId('deal-required-by-note')).not.toBeNull();
       expect(screen.getByTestId('deal-required-by-note-save')).not.toBeNull();
+    });
+
+    // ImportRequestService.REQUIRED_BY_ROLES = {sales, ceo}: a sales_manager holder gets the IR controls but not this field.
+    it('a sales_manager holder gets no required-by toggle; a sales holder does', async () => {
+      renderPanel({ ...SALES_MANAGER, canManageAllSalesDocuments: true }, []);
+      await screen.findByTestId('deal-fulfilment-create-ir-drafts');
+      expect(screen.queryByText(TOGGLE)).toBeNull();
+    });
+    it('a sales-role holder on another rep\'s deal gets the required-by toggle', async () => {
+      renderPanel({ ...OTHER_REP, canManageAllSalesDocuments: true }, []);
+      await screen.findByTestId('deal-fulfilment-create-ir-drafts');
+      expect(screen.getByText(TOGGLE)).not.toBeNull();
     });
 
     it('once open, clearing all the text keeps the field open so the empty value can be saved', async () => {

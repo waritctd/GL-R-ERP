@@ -22,7 +22,7 @@ import { importStepIndex } from '../importProgress/importSteps.js';
 import { nextFulfilmentActionCode } from './importActions.js';
 import { ImportRequestFactoryCard } from './ImportRequestFactoryCard.jsx';
 import { procurementPath } from './stageMeta.js';
-import { isSalesOwner } from './dealOwnership.js';
+import { isOwnerOrKeyer, isSalesOwner } from './dealOwnership.js';
 
 const MISSING_COUNTRY_PREFIX = 'กรุณาระบุประเทศให้กับโรงงานใหม่: ';
 // 409 prefix of ImportRequestService#MISSING_LEAD_TIME_PREFIX: the factories listed after it have
@@ -363,6 +363,10 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
   const isOwner = isSalesOwner(summary, user);
   const canReadStoredIr = isFulfilment || role === 'sales_manager' || isOwner;
   const canFullWriteStoredIr = role === 'ceo' || isOwner;
+  // TicketService#canDeclareStockCoverage: the CEO, or a sales-role owner/keyer. The all-documents grant does NOT reach it.
+  const canDeclareStock = role === 'ceo' || (role === 'sales' && isOwnerOrKeyer(summary, user?.id));
+  // ImportRequestService.REQUIRED_BY_ROLES = {sales, ceo} (a sales_manager holder gets the IR controls, not this field).
+  const canSetRequiredBy = role === 'ceo' || (role === 'sales' && isOwner);
   const canFooterWriteStoredIr = role === 'ceo';
   const canAdvanceStoredIr = role === 'import' || role === 'ceo';
   const canEmailWriteStoredIr = canFullWriteStoredIr || role === 'import';
@@ -937,7 +941,7 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
                 <StepRoleTag owners={['sales', 'ceo']} viewerRole={role} />
               </div>
               {/* Pending alone: on a new deal the dialog is read-only and only records ยืนยัน, so whoever sees the hint below gets the button it names. */}
-              {canFullWriteStoredIr && depositReady && sourcePending && onChooseProcurementSource ? (
+              {canDeclareStock && depositReady && sourcePending && onChooseProcurementSource ? (
                 <Button type="button" size="sm" variant="primary" className="whitespace-nowrap"
                   onClick={onChooseProcurementSource} data-testid="deal-fulfilment-choose-source">
                   จัดซื้อสินค้า
@@ -995,7 +999,7 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
                 ))}
               </div>
             ) : null}
-            {canFullWriteStoredIr && !allFactoriesCovered ? (
+            {canSetRequiredBy && !allFactoriesCovered ? (
               requiredByOpen || dealRequiredByDraft ? (
               <label className="flex flex-wrap items-center gap-2 text-xs font-bold text-text-secondary">
                 กำหนดวันที่ต้องการของ (ค่าเริ่มต้นสำหรับใบใหม่)

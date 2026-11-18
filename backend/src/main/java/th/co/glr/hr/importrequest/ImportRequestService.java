@@ -1847,7 +1847,7 @@ public class ImportRequestService {
         return "ceo".equals(role) || ownsDeal(ticketId, actor);
     }
 
-    /** The deal's owning/keying sales rep, or a live {@code can_manage_all_sales_documents} holder of any role. */
+    /** The deal's owning/keying sales rep, or a live {@code can_manage_all_sales_documents} holder (the grant counts only for the sales / sales_manager roles). */
     private boolean ownsDeal(long ticketId, UserPrincipal actor) {
         return ("sales".equals(actor.role()) && repository.isDealOwner(ticketId, actor.id()))
             || tickets.holdsAllSalesDocumentsGrant(actor);

@@ -895,6 +895,9 @@ class StoredImportRequestIntegrationTest extends AbstractPostgresIntegrationTest
             java.util.Map.of("id", otherSalesRep.id()));
 
         service.setRequiredByNote(ticketId, new SetRequiredByNoteRequest("Within 30 days"), otherSalesRep);
+
+        assertThat(jdbc.queryForObject("SELECT required_by_note FROM sales.ticket WHERE ticket_id = :id",
+            java.util.Map.of("id", ticketId), String.class)).isEqualTo("Within 30 days");
     }
 
     /** deleteDraft is a #FULL_WRITE_ROLES-only action per the class Javadoc — import (footer-only) and

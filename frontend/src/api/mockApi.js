@@ -9945,7 +9945,7 @@ export const api = {
       const { user, ticket } = requireTicketViewer(id);
       const legacy = isLegacyStockSource(ticket);
       const decidedAt = ticket.procurementDecidedAt ?? null;
-      const owns = isSalesOwner(ticket, user);
+      const owns = user.role === 'sales' && isOwnerOrKeyer(ticket, user.id); // canDeclareStockCoverage: no grant
       return delay({
         legacy,
         editable: legacy && !decidedAt && procurementDecisionOpen(ticket) && (user.role === 'ceo' || owns),
@@ -9958,7 +9958,9 @@ export const api = {
 
     async decideProcurementSource(id, payload) {
       const ticket = findTicketRaw(Number(id));
-      const user = requireOwningRepOrCeo(ticket);
+      // TicketService#canDeclareStockCoverage: CEO, or a sales-role owner/keyer; the all-documents grant does not reach it
+      const user = requireSession();
+      if (user.role !== 'ceo' && !(user.role === 'sales' && isOwnerOrKeyer(ticket, user.id))) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       requireActive(ticket);
       if (dealStageIndex(ticket.salesStage) < dealStageIndex('ORDER_RECEIVED')) {
         fail('เลือกที่มาสินค้าได้หลังจากยืนยันคำสั่งซื้อของลูกค้าแล้วเท่านั้น (ตั้งแต่ขั้นตอน ORDER_RECEIVED)', 409);
@@ -14282,7 +14284,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
     async setRequiredByNote(ticketId, request) {
       const ticket = findTicketRaw(Number(ticketId));
       const user = requireSession();
-      if (user.role !== 'ceo' && !isSalesOwner(ticket, user)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      if (user.role !== 'ceo' && !(user.role === 'sales' && isSalesOwner(ticket, user))) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403); // REQUIRED_BY_ROLES = {sales, ceo}
       requireActive(ticket);
       if (dealStageIndex(ticket.salesStage) < dealStageIndex('ORDER_RECEIVED')) {
         fail('ระบุกำหนดวันที่ต้องการของได้หลังจากยืนยันคำสั่งซื้อแล้ว', 409);
