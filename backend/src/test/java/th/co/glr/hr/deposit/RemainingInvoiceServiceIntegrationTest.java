@@ -516,6 +516,34 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
         assertThat(redraft.preparerName()).isEqualTo(thaiName(salesManagerId));
     }
 
+    /** The file carries the CHOSEN preparer's own signature: switching the draft's preparer switches the picture. */
+    @Test
+    void file_printsTheChosenPreparersSignature() throws Exception {
+        DealFixture fixture = buildAcceptedDeal(salesActor, "SignaturePick");
+        byte[] ownerSig = PdfRendererTestSupport.signaturePng(100, 30);
+        byte[] managerSig = PdfRendererTestSupport.signaturePng(140, 50);
+        for (Object[] row : new Object[][] {{salesRepId, ownerSig}, {salesManagerId, managerSig}}) {
+            jdbc.update("INSERT INTO hr.employee_signature (employee_id, mime_type, image, uploaded_by, uploaded_at) "
+                + "VALUES (:e, 'image/png', :i, :e, now())", new org.springframework.jdbc.core.namedparam.MapSqlParameterSource()
+                    .addValue("e", row[0]).addValue("i", row[1]));
+        }
+        RemainingInvoiceDocumentDto draft = remainingInvoiceService.createDraft(fixture.ticketId(), null, salesActor);
+        assertThat(signatureBytes(remainingInvoiceService.file(draft.id(), salesActor))).isEqualTo(ownerSig);
+
+        remainingInvoiceService.updateDraft(draft.id(),
+            new RemainingInvoiceDraftRequest(null, null, null, null, null, salesManagerId), salesActor);
+
+        assertThat(signatureBytes(remainingInvoiceService.file(draft.id(), salesActor))).isEqualTo(managerSig);
+    }
+
+    private static byte[] signatureBytes(byte[] xls) throws Exception {
+        try (org.apache.poi.ss.usermodel.Workbook wb = PdfRendererTestSupport.open(xls)) {
+            var pics = PdfRendererTestSupport.signaturePictures(wb.getSheetAt(0), 44);
+            assertThat(pics).hasSize(1);
+            return pics.get(0).getPictureData().getData();
+        }
+    }
+
     /** The deposit notice's "( name )" signature line sits below the totals; its row moves with the item count. */
     private static String lastParenLine(byte[] xls) throws Exception {
         try (org.apache.poi.ss.usermodel.Workbook wb =

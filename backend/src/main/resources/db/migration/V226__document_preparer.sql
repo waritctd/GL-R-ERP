@@ -35,3 +35,33 @@ UPDATE sales.remaining_invoice r
          (SELECT d.preparer_name FROM sales.deposit_notice d WHERE d.deposit_notice_id = r.deposit_notice_id),
          'จินตนา หาญมนตรี')
  WHERE r.status <> 'DRAFT';
+
+-- An already issued document names its preparer only by the name it printed. Where that name belongs to exactly ONE
+-- employee (active or not), link it, so the document shows that person's signature image if one is uploaded.
+WITH one_name AS (
+    SELECT regexp_replace(TRIM(CONCAT_WS(' ', first_name_th, last_name_th)), '\s+', ' ', 'g') AS name,
+           MIN(employee_id) AS employee_id
+      FROM hr.employee
+     WHERE NULLIF(TRIM(CONCAT_WS(' ', first_name_th, last_name_th)), '') IS NOT NULL
+     GROUP BY 1
+    HAVING COUNT(*) = 1
+)
+UPDATE sales.deposit_notice d
+   SET preparer_id = n.employee_id
+  FROM one_name n
+ WHERE d.status <> 'DRAFT' AND d.preparer_id IS NULL
+   AND regexp_replace(TRIM(d.preparer_name), '\s+', ' ', 'g') = n.name;
+
+WITH one_name AS (
+    SELECT regexp_replace(TRIM(CONCAT_WS(' ', first_name_th, last_name_th)), '\s+', ' ', 'g') AS name,
+           MIN(employee_id) AS employee_id
+      FROM hr.employee
+     WHERE NULLIF(TRIM(CONCAT_WS(' ', first_name_th, last_name_th)), '') IS NOT NULL
+     GROUP BY 1
+    HAVING COUNT(*) = 1
+)
+UPDATE sales.remaining_invoice r
+   SET preparer_id = n.employee_id
+  FROM one_name n
+ WHERE r.status <> 'DRAFT' AND r.preparer_id IS NULL
+   AND regexp_replace(TRIM(r.preparer_name), '\s+', ' ', 'g') = n.name;

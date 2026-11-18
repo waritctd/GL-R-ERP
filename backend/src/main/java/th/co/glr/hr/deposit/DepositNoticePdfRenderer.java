@@ -45,7 +45,7 @@ public class DepositNoticePdfRenderer {
         DocumentSheet.num(sh, DEPOSIT + d, 8, m.depositAmount());
         DocumentSheet.num(sh, VAT + d, 8, m.vatAmount());
         DocumentSheet.num(sh, TOTAL + d, 8, m.totalPayable());
-        DocumentSheet.preparer(sh, PREPARER + d, m.preparerName());
+        DocumentSheet.preparer(sh, PREPARER + d, m.preparerName(), m.preparerSignature(), m.preparerSignatureMime());
         DocumentSheet.signatureDate(sh, SIGDATE + d, m.issueDate());
 
         BigDecimal maxUnit = BigDecimal.ZERO;
