@@ -947,7 +947,8 @@ class TicketServiceTest {
             "FULLY_PAID", FulfilmentStatus.PARTIALLY_DELIVERED, DealStage.PROCUREMENT, null);
         TicketDto updated = ticketLike(initial, List.of(deliveryItem(1L, "100.00", "100.00", "0.00")),
             FulfilmentStatus.PARTIALLY_DELIVERED);
-        when(ticketRepo.findById(10L)).thenReturn(Optional.of(initial), Optional.of(updated), Optional.of(updated));
+        // initial is read twice: the access check, then again under the deal's row lock
+        when(ticketRepo.findById(10L)).thenReturn(Optional.of(initial), Optional.of(initial), Optional.of(updated), Optional.of(updated));
         // Warehouse availability now keys off the permanent GOODS_RECEIVED event, not a prior delivery-record source
         // (see warehouseDeliveryAvailable — Case 8 fix).
         when(ticketRepo.hasReceivedGoods(10L)).thenReturn(true);
@@ -1020,7 +1021,8 @@ class TicketServiceTest {
             "FULLY_PAID", FulfilmentStatus.FROM_STOCK, DealStage.PROCUREMENT, null);
         TicketDto updated = ticketLike(initial, List.of(deliveryItem(1L, "100.00", "100.00", "100.00")),
             FulfilmentStatus.FROM_STOCK);
-        when(ticketRepo.findById(10L)).thenReturn(Optional.of(initial), Optional.of(updated), Optional.of(updated));
+        // initial is read twice: the access check, then again under the deal's row lock
+        when(ticketRepo.findById(10L)).thenReturn(Optional.of(initial), Optional.of(initial), Optional.of(updated), Optional.of(updated));
 
         // V184: salesActor, not importActor -- see the note above recordPartialDelivery_updatesLineProgressAndStatus.
         service.completeDelivery(10L, new CompleteDeliveryRequest("ส่งครบจากสต็อก", null), salesActor);
@@ -1041,7 +1043,8 @@ class TicketServiceTest {
             DealStage.PROCUREMENT, null);
         TicketDto fully = ticketLike(partiallyDelivered,
             List.of(deliveryItem(1L, "100.00", "100.00", "40.00")), FulfilmentStatus.PARTIALLY_DELIVERED);
-        when(ticketRepo.findById(10L)).thenReturn(Optional.of(partiallyDelivered),
+        // partiallyDelivered is read twice: the access check, then again under the deal's row lock
+        when(ticketRepo.findById(10L)).thenReturn(Optional.of(partiallyDelivered), Optional.of(partiallyDelivered),
             Optional.of(fully), Optional.of(fully));
         // No prior WAREHOUSE delivery record — the goods-received EVENT is the signal.
         when(ticketRepo.hasReceivedGoods(10L)).thenReturn(true);
@@ -2116,7 +2119,8 @@ class TicketServiceTest {
             "FULLY_PAID", FulfilmentStatus.GOODS_RECEIVED, DealStage.DELIVERY_SCHEDULING, null);
         TicketDto delivered = ticketLike(initial, List.of(deliveryItem(1L, "100.00", "100.00", "0.00")),
             FulfilmentStatus.FULLY_DELIVERED);
-        when(ticketRepo.findById(10L)).thenReturn(Optional.of(initial), Optional.of(delivered),
+        // initial is read twice: the access check, then again under the deal's row lock
+        when(ticketRepo.findById(10L)).thenReturn(Optional.of(initial), Optional.of(initial), Optional.of(delivered),
             Optional.of(delivered), Optional.of(delivered));
         when(ticketRepo.hasReceivedGoods(10L)).thenReturn(true);
 

@@ -229,6 +229,33 @@ class DocumentChainIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(invoiced.remaining().docDate()).isEqualTo(invoice.docDate());
     }
 
+    /** {@code order.undoable} is the undo's own cut-off (DealQuotationService#undoRefusal), read off the real writes. */
+    @Test
+    void orderUndoableFollowsTheUndoCutOff() {
+        long deal = deal(owner);
+        DealQuotationDto q = approved(deal, 50);
+        assertThat(chain.forTicket(deal, owner).order().undoable()).as("not confirmed yet").isFalse();
+        assertThat(chain.forTicket(deal, owner).order().confirmationEventId()).as("not confirmed yet").isNull();
+
+        confirmer.confirmOrderFromDirectQuotation(q.id(), owner);
+        assertThat(chain.forTicket(deal, owner).order().undoable()).as("right after the confirmation").isTrue();
+
+        DepositNoticeDto draft = depositNoticeService.createDraft(deal, emptyNoticeRequest(), owner);
+        assertThat(chain.forTicket(deal, owner).order().undoable()).as("a DRAFT notice does not stop it").isTrue();
+
+        depositNoticeService.issue(draft.id(), owner);
+        assertThat(chain.forTicket(deal, owner).order().undoable()).as("an issued deposit notice stops it").isFalse();
+
+        long other = deal(owner);
+        DealQuotationDto q2 = approved(other, 50);
+        confirmer.confirmOrderFromDirectQuotation(q2.id(), owner);
+        assertThat(chain.forTicket(other, owner).order().confirmationEventId()).as("names the confirmation event")
+            .isEqualTo(tickets.findPromotionEvent(other).orElseThrow().eventId());
+        confirmer.undoOrderConfirmation(q2.id(), null, null, owner);
+        assertThat(chain.forTicket(other, owner).order().confirmationEventId()).as("none once undone").isNull();
+        assertThat(chain.forTicket(other, owner).order().undoable()).as("after the undo it is not confirmed").isFalse();
+    }
+
     @Test
     void aZeroDepositQuotationConfirmsIntoANoDepositChain() {
         long deal = deal(owner);

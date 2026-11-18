@@ -2269,7 +2269,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       />
 
       {/* Slice 2 §E — the sticky "ยืนยันคำสั่งซื้อ" of an APPROVED direct quotation. The copy is the quotation
-       * editor's own (quotationMeta's CONFIRM_ORDER_FROM_QUOTATION_COPY), so the two doors to the same irreversible
+       * editor's own (quotationMeta's CONFIRM_ORDER_FROM_QUOTATION_COPY), so the two doors to the same
        * act say the same thing. */}
       {bidOutcomeOpen ? (
         <BidOutcomeModal
@@ -2287,6 +2287,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
         open={confirm?.kind === 'confirmOrderDirect'}
         number={confirm?.number}
         depositPercent={confirmedRow?.depositPercent}
+        undoable
         cancelledNumbers={confirm?.kind === 'confirmOrderDirect' ? openDirectRowsOtherThan(confirm.quotationId).map((q) => q.number) : undefined}
         cancelLabel="ปิด"
         // Until the row is read the deposit wording (it may be 0%) is unknown: no confirm yet.

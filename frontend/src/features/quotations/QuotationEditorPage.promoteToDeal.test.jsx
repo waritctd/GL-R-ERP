@@ -165,7 +165,8 @@ describe('QuotationEditorPage — ยืนยันคำสั่งซื้�
     expect(dialog.getByRole('heading', { name: 'ยืนยันคำสั่งซื้อ' })).not.toBeNull();
     expect(dialogEl.textContent).not.toMatch(/สร้าง(ดีล|งาน)/);
     expect(dialog.getByText(/ได้รับคำสั่งซื้อ/)).not.toBeNull();
-    expect(dialog.getByText(/ย้อนกลับไม่ได้/)).not.toBeNull();
+    expect(dialog.queryByText(/ย้อนกลับไม่ได้/)).toBeNull();
+    expect(dialog.getByText(/ยกเลิกการยืนยันคำสั่งซื้อ/)).not.toBeNull();
 
     fireEvent.click(dialog.getByRole('button', { name: PROMOTE }));
     await waitFor(() => expect(api.dealQuotations.promoteToDeal).toHaveBeenCalledWith('5'));

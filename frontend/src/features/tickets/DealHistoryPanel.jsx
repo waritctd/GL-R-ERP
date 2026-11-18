@@ -53,6 +53,8 @@ export const EVENT_KIND_LABEL = {
   // Relabelled by slice 2 (IA §4/§8): under the linked design the deal already exists, so what this event
   // records is the ORDER, in the same words as the CTA that fires it.
   DEAL_PROMOTED_FROM_QUOTATION: 'ยืนยันคำสั่งซื้อจากใบเสนอราคา',
+  // DealQuotationService#undoOrderConfirmation: the order confirmation was taken back.
+  ORDER_CONFIRMATION_UNDONE: 'ยกเลิกการยืนยันคำสั่งซื้อ',
   CLOSED:             'ปิดเรื่อง',
   CANCELLED:          'ยกเลิก',
   EDITED:             'แก้ไขรายการสินค้า',

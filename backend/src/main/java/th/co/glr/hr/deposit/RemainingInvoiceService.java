@@ -114,6 +114,9 @@ public class RemainingInvoiceService {
     @Transactional
     public RemainingInvoiceDocumentDto createDraft(long ticketId, RemainingInvoiceDraftRequest req, UserPrincipal actor) {
         depositNoticeService.requireDepositNoticeIssueGate(ticketId, actor);
+        // Row lock before the state is read: an undo of the order confirmation (DealQuotationService#undoOrderConfirmation)
+        // holds it, so a concurrent create sees the deal after the undo, not before. Row lock only: no lock order reversed.
+        tickets.lockTicketForUpdate(ticketId);
 
         DepositNoticeService.RemainingInvoiceSnapshot snap =
             depositNoticeService.resolveRemainingInvoiceSnapshot(ticketId, req == null ? null : req.quotationId(), actor);

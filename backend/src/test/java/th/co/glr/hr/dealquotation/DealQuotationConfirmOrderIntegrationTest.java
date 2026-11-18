@@ -3,29 +3,17 @@ package th.co.glr.hr.dealquotation;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.InputStream;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
-import th.co.glr.hr.attachment.FileStorageService;
-import th.co.glr.hr.auth.EmployeeAuthRepository;
 import th.co.glr.hr.auth.UserPrincipal;
-import th.co.glr.hr.brand.BrandAssets;
-import th.co.glr.hr.catalog.CatalogRepository;
 import th.co.glr.hr.common.ApiException;
-import th.co.glr.hr.customer.ContactRepository;
-import th.co.glr.hr.customer.CustomerDto;
-import th.co.glr.hr.customer.CustomerRepository;
-import th.co.glr.hr.customer.ProjectDto;
-import th.co.glr.hr.customer.ProjectRepository;
-import th.co.glr.hr.customerquotation.CustomerQuotationRepository;
 import th.co.glr.hr.dealquotation.DealQuotationDtos.DealQuotationDto;
 import th.co.glr.hr.dealquotation.DealQuotationDtos.PromoteToDealResultDto;
 import th.co.glr.hr.dealquotation.DealQuotationRequests.ApproveRequest;
@@ -36,37 +24,18 @@ import th.co.glr.hr.deposit.DepositNoticeDraftRequest;
 import th.co.glr.hr.deposit.DepositNoticeDto;
 import th.co.glr.hr.deposit.DepositNoticeItemDto;
 import th.co.glr.hr.deposit.DepositNoticeItemRequest;
-import th.co.glr.hr.deposit.DepositNoticePdfRenderer;
-import th.co.glr.hr.deposit.DepositNoticeRepository;
-import th.co.glr.hr.deposit.DepositNoticeService;
-import th.co.glr.hr.deposit.RemainingInvoicePdfRenderer;
-import th.co.glr.hr.employee.EmployeeCodeGenerator;
-import th.co.glr.hr.employee.EmployeeReferenceRepository;
-import th.co.glr.hr.employee.EmployeeRepository;
-import th.co.glr.hr.employee.UpsertEmployeeRequest;
-import th.co.glr.hr.mail.Mailer;
-import th.co.glr.hr.notification.NotificationEmailService;
 import th.co.glr.hr.notification.NotificationRepository;
-import th.co.glr.hr.pricingdecision.PricingDecisionRepository;
-import th.co.glr.hr.pricingrequest.PricingRequestRepository;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.CreatePricingRequestRequest;
-import th.co.glr.hr.pricingrequest.PricingRequestService;
-import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
-import th.co.glr.hr.support.RecordingSalesMailer;
-import th.co.glr.hr.ticket.CreateTicketRequest;
 import th.co.glr.hr.ticket.DealActivityKind;
 import th.co.glr.hr.ticket.DealActivityRequest;
 import th.co.glr.hr.ticket.DealStage;
 import th.co.glr.hr.ticket.DirectQuotationLocks;
 import th.co.glr.hr.ticket.EditItemsRequest;
-import th.co.glr.hr.ticket.QuotationRenderer;
 import th.co.glr.hr.ticket.QuotationStatus;
 import th.co.glr.hr.ticket.TicketDto;
 import th.co.glr.hr.ticket.TicketEventKind;
 import th.co.glr.hr.ticket.TicketItemRequest;
-import th.co.glr.hr.ticket.TicketRepository;
 import th.co.glr.hr.ticket.TicketResponses;
-import th.co.glr.hr.ticket.TicketService;
 import th.co.glr.hr.ticket.TicketStatus;
 import th.co.glr.hr.ticket.TicketSummaryDto;
 
@@ -96,92 +65,8 @@ import th.co.glr.hr.ticket.TicketSummaryDto;
  * <p>Authz cases are written wrong-way-round per CLAUDE.md: every refusal asserts that NOTHING was
  * written (still {@code draft}, still at the lead stage, no items, no event).
  */
-class DealQuotationConfirmOrderIntegrationTest extends AbstractPostgresIntegrationTest {
+class DealQuotationConfirmOrderIntegrationTest extends DirectQuotationDealTestBase {
     private static final String V193 = "db/migration/V193__ticket_quotation_only.sql";
-
-    private TicketRepository tickets;
-    private RecordingSalesMailer mailer;
-    private TicketService ticketService;
-    private DealQuotationService quotationService;
-    private DealQuotationService confirmer; // quotationService behind a real @Transactional proxy
-    private PricingRequestService pricingRequestService;
-    private DepositNoticeService depositNoticeService;
-    private CustomerRepository customers;
-    private EmployeeRepository employees;
-
-    private UserPrincipal salesActor;
-    private UserPrincipal otherSalesActor;
-    private UserPrincipal salesManagerActor;
-    private UserPrincipal ceoActor;
-    private UserPrincipal importActor;
-    private UserPrincipal accountActor;
-    private UserPrincipal grantedQcActor;
-
-    private CustomerDto customer;
-    private long projectId;
-
-    @BeforeEach
-    void wireServices() {
-        tickets = new TicketRepository(jdbc);
-        ObjectMapper objectMapper = new ObjectMapper();
-        mailer = new RecordingSalesMailer(jdbc);
-        NotificationRepository notifications = new NotificationRepository(jdbc, mailer);
-        customers = new CustomerRepository(jdbc);
-        ProjectRepository projects = new ProjectRepository(jdbc);
-        employees = new EmployeeRepository(jdbc, new EmployeeReferenceRepository(jdbc), new EmployeeCodeGenerator(jdbc));
-        PricingRequestRepository pricingRequests = new PricingRequestRepository(jdbc);
-        pricingRequestService = new PricingRequestService(pricingRequests, tickets, notifications, objectMapper,
-            new ContactRepository(jdbc), new FileStorageService("/tmp/glr-gla136-promote-test-uploads"),
-            factoryQuoteCarryForward());
-        ticketService = new TicketService(tickets, notifications, objectMapper, customers, new QuotationRenderer(),
-            pricingRequestService, new EmployeeAuthRepository(jdbc), new th.co.glr.hr.customer.ContactRepository(jdbc), new th.co.glr.hr.customer.ProjectRepository(jdbc),
-            new th.co.glr.hr.dealquotation.DealQuotationRepository(jdbc, new th.co.glr.hr.catalog.CatalogRepository(jdbc)));
-
-        Mailer noMail = new Mailer() {
-            @Override
-            public void send(String to, String subject, String body) {}
-
-            @Override
-            public void sendHtml(String to, String subject, String htmlBody, String textBody,
-                                 List<Mailer.InlineImage> inlineImages) {}
-
-            @Override
-            public void sendWithAttachment(String to, String subject, String body, String filename, byte[] bytes) {}
-
-            @Override
-            public void sendWithAttachments(String to, String subject, String body, List<Mailer.Attachment> attachments) {}
-        };
-        CustomerQuotationRepository legacyQuotations = new CustomerQuotationRepository(jdbc);
-        quotationService = new DealQuotationService(new DealQuotationRepository(jdbc, new CatalogRepository(jdbc)),
-            tickets, customers, new ContactRepository(jdbc), notifications,
-            new NotificationEmailService(noMail, new BrandAssets(), "", "", "https://portal.test"),
-            new QuotationRenderer(), new EmployeeAuthRepository(jdbc), new EmployeeSignatureRepository(jdbc),
-            new CatalogRepository(jdbc), "https://portal.test", "", "", "");
-        quotationService.wirePricingRequestDependencies(pricingRequests, new PricingDecisionRepository(jdbc),
-            legacyQuotations);
-        quotationService.wireTicketService(ticketService);
-        confirmer = transactional(quotationService);
-
-        depositNoticeService = new DepositNoticeService(new DepositNoticeRepository(jdbc), tickets, notifications,
-            new DepositNoticePdfRenderer(), customers, legacyQuotations);
-
-        salesActor = actor(createEmployee("พนักงานขาย 136", "sales-136@glr.co.th", "SALES", "แผนกขาย", null), "sales");
-        otherSalesActor = actor(createEmployee("พนักงานขาย 136 อื่น", "sales-136-other@glr.co.th", "SALES",
-            "แผนกขาย", null), "sales");
-        salesManagerActor = actor(createEmployee("ผจก.ขาย 136", "sm-136@glr.co.th", "SALES", "ฝ่ายขาย",
-            "ผู้จัดการฝ่ายขาย"), "sales_manager");
-        ceoActor = actor(createEmployee("ผู้บริหาร 136", "ceo-136@glr.co.th", "MD", "ผู้บริหาร",
-            "กรรมการผู้จัดการ"), "ceo");
-        importActor = actor(createEmployee("นำเข้า 136", "import-136@glr.co.th", "PCIM", "ฝ่ายนำเข้า", null), "import");
-        accountActor = actor(createEmployee("บัญชี 136", "account-136@glr.co.th", "ACCT", "ฝ่ายบัญชี", null), "account");
-        long qcId = createEmployee("QC 136", "qc-136@glr.co.th", "QC", "ฝ่าย QC", null);
-        jdbc.update("UPDATE hr.employee SET can_create_quotation = TRUE WHERE employee_id = :id", Map.of("id", qcId));
-        grantedQcActor = actor(qcId, "qc");
-
-        customer = customers.create("บริษัท ใบเสนอราคาตรง จำกัด", "0100000000136", "136 ถนนทดสอบ", "สนญ.", "02-000-0136");
-        ProjectDto project = projects.create(customer.id(), "โครงการใบเสนอราคาตรง 136");
-        projectId = project.id();
-    }
 
     // Happy path — owner confirms; the deal lands at S10 with the quotation's own lines, and the ticket-keyed
     // money side (deposit-notice draft) unlocks.
@@ -393,15 +278,6 @@ class DealQuotationConfirmOrderIntegrationTest extends AbstractPostgresIntegrati
             + "ดีล " + s.code() + " · ลูกค้า " + s.customerName()
             + "\nแจ้งเพื่อทราบ ยอดเต็มจะเรียกเก็บด้วยใบแจ้งหนี้เมื่อสินค้าพร้อมส่ง";
     }
-
-    private DealQuotationDto approvedZeroDepositQuotation(long deal) {
-        DealQuotationDto created = quotationService.create(deal, zeroDepositDirectDraft(), salesActor);
-        DealQuotationDto submitted = quotationService.submit(created.id(), salesActor);
-        DealQuotationDto approved = quotationService.approve(submitted.id(), new ApproveRequest(null), salesManagerActor);
-        assertThat(approved.depositPercent()).isZero();
-        return approved;
-    }
-
     /** Deposit order: CEO is told (with the retitled ORDER_CONFIRMED title); account is NOT told "no deposit". */
     @Test
     void confirmOrderFromDirectQuotation_withADeposit_notifiesTheCeoOnly() {
@@ -1277,91 +1153,10 @@ class DealQuotationConfirmOrderIntegrationTest extends AbstractPostgresIntegrati
             new th.co.glr.hr.factory.FactoryConfigRepository(jdbc), tickets, ticketService,
             new NotificationRepository(jdbc, mailer));
     }
-
-    private ItemInput stockTile(String model, boolean stock) {
-        return stockTile(model, stock, null);
-    }
-
-    /** {@code id} non-null is a row the editor already saved, which update rewrites in place. */
-    private ItemInput stockTile(String model, boolean stock, Long id) {
-        return new ItemInput(
-            null, null, null, "SCG", model, "White", "Matte", "60x60", new BigDecimal("10.00"),
-            new BigDecimal("0.36"), WastageCalculator.QUANTITY_MODE_PIECES, null, 10,
-            WastageCalculator.WASTAGE_MODE_NONE, null, 4, new BigDecimal("100.00"), BigDecimal.ZERO, "ไทย-สต็อก",
-            3, 7, null, WastageCalculator.LINE_TYPE_TILE, null, null, null, null, null, null, null, null,
-            id, null, false).withStockSource(stock ? "IN_THAILAND" : null);
-    }
-
-    private UpsertDealQuotationRequest stockDraft(Integer depositPercent, String fullPaymentTerm, ItemInput... lines) {
-        UpsertDealQuotationRequest d = directDraft();
-        return new UpsertDealQuotationRequest(d.contactId(), d.deptCode(), d.unitCode(), d.offerDate(), depositPercent,
-            d.remainderMode(), d.creditDays(), d.validityDays(), d.validityMode(), d.validityUntil(),
-            d.customerNotes(), d.priceMode(), d.documentLanguage(), d.currency(), null, null, null, null,
-            fullPaymentTerm, null, null, null, null, d.recipientType(), List.of(lines));
-    }
-
-    private long quotationOnlyTicket(UserPrincipal creator) {
-        return ticketService.create(new CreateTicketRequest(customer.name(), "NORMAL", customer.name(), customer.id(),
-            projectId, null, null, null, List.of(), LocalDate.now().plusDays(7), true), creator).summary().id();
-    }
-
-    private long pipelineTicket(UserPrincipal creator) {
-        return ticketService.create(new CreateTicketRequest("ดีล pipeline", "NORMAL", customer.name(), customer.id(),
-            projectId, null, null, null, List.of(), LocalDate.now().plusDays(7)), creator).summary().id();
-    }
-
-    private DealQuotationDto approvedDirectQuotation(long ticketId, UserPrincipal creator) {
-        DealQuotationDto created = quotationService.create(ticketId, directDraft(), creator);
-        DealQuotationDto submitted = quotationService.submit(created.id(), creator);
-        DealQuotationDto approved = quotationService.approve(submitted.id(), new ApproveRequest(null), salesManagerActor);
-        assertThat(approved.docStatus()).isEqualTo(QuotationStatus.APPROVED);
-        return approved;
-    }
-
-    private DealQuotationDto approvedQuotation(long ticketId, UpsertDealQuotationRequest draft) {
-        DealQuotationDto created = quotationService.create(ticketId, draft, salesActor);
-        quotationService.submit(created.id(), salesActor);
-        return quotationService.approve(created.id(), new ApproveRequest(null), salesManagerActor);
-    }
-
-    /** Revise {@code source} to {@code draft}'s terms, submit, and approve. */
-    private DealQuotationDto approvedRevision(DealQuotationDto source, UpsertDealQuotationRequest draft) {
-        DealQuotationDto revision = quotationService.createRevision(source.id(), salesActor);
-        quotationService.update(revision.id(), draft, salesActor);
-        quotationService.submit(revision.id(), salesActor);
-        DealQuotationDto approved = quotationService.approve(revision.id(), new ApproveRequest(null), salesManagerActor);
-        assertThat(approved.docStatus()).isEqualTo(QuotationStatus.APPROVED);
-        return approved;
-    }
-
     private List<String> policyChangedMessages(long ticketId) {
         return jdbc.queryForList("""
             SELECT message FROM sales.ticket_event WHERE ticket_id = :id AND kind = :kind ORDER BY event_id
             """, Map.of("id", ticketId, "kind", TicketEventKind.POLICY_CHANGED), String.class);
-    }
-
-    /** One TILE line (10 pcs, loose — roundToFullBox=false), one PLAIN line (2 JOB), one ADJUSTMENT (flat -100). */
-    private UpsertDealQuotationRequest directDraft() {
-        ItemInput tile = new ItemInput(
-            null, null, null, "SCG", "Direct Tile", "White", "Matte", "60x60", new BigDecimal("10.00"),
-            new BigDecimal("0.36"), WastageCalculator.QUANTITY_MODE_PIECES, null, 10,
-            WastageCalculator.WASTAGE_MODE_NONE, null, 4, new BigDecimal("100.00"), BigDecimal.ZERO, "ไทย-สต็อก",
-            3, 7, null, WastageCalculator.LINE_TYPE_TILE, null, null, null, null, null, null, null, null,
-            null, null, false);
-        ItemInput plain = new ItemInput(
-            null, null, null, null, null, null, null, null, null,
-            null, null, null, null,
-            null, null, null, new BigDecimal("500.00"), BigDecimal.ZERO, null,
-            null, null, null, WastageCalculator.LINE_TYPE_PLAIN, "ค่าขนส่ง", new BigDecimal("2"), "JOB", null, null,
-            null, null, null, null, null, null);
-        ItemInput adjustment = new ItemInput(
-            null, null, null, null, null, null, null, null, null,
-            null, null, null, null,
-            null, null, null, null, null, null,
-            null, null, null, WastageCalculator.LINE_TYPE_ADJUSTMENT, "ส่วนลดพิเศษ", null, null, null, null,
-            null, null, new BigDecimal("100.00"), null, null, null);
-        return new UpsertDealQuotationRequest(null, null, null, null, 50, "CASH_ON_DELIVERY",
-            0, 30, null, "NET", "TH", "THB", List.of(tile, plain, adjustment)).withRecipientType("OWNER");
     }
 
     /** {@link #directDraft} as a ไม่รับมัดจำ quotation: 0% submits only with a full-payment term. */
@@ -1372,15 +1167,6 @@ class DealQuotationConfirmOrderIntegrationTest extends AbstractPostgresIntegrati
             d.customerNotes(), d.priceMode(), d.documentLanguage(), d.currency(), null, null, null, null,
             d.fullPaymentTerm(), null, null, null, null, d.recipientType(), d.items());
     }
-
-    private UpsertDealQuotationRequest zeroDepositDirectDraft() {
-        UpsertDealQuotationRequest d = directDraft();
-        return new UpsertDealQuotationRequest(d.contactId(), d.deptCode(), d.unitCode(), d.offerDate(), 0,
-            d.remainderMode(), d.creditDays(), d.validityDays(), d.validityMode(), d.validityUntil(),
-            d.customerNotes(), d.priceMode(), d.documentLanguage(), d.currency(), null, null, null, null,
-            "BEFORE_DELIVERY", null, null, null, null, d.recipientType(), d.items());
-    }
-
     private TicketItemRequest ticketItem() {
         return new TicketItemRequest("SCG", "Typed", "White", "Matte", "60x60", null,
             new BigDecimal("1"), null, "PIECE", null, null, null, null, "THB");
@@ -1411,12 +1197,6 @@ class DealQuotationConfirmOrderIntegrationTest extends AbstractPostgresIntegrati
         assertThat(itemCount(ticketId)).isZero();
         assertThat(eventCount(ticketId, TicketEventKind.DEAL_PROMOTED_FROM_QUOTATION)).isZero();
     }
-
-    private static void assertForbidden(org.assertj.core.api.ThrowableAssert.ThrowingCallable call) {
-        assertThatThrownBy(call)
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
-    }
-
     private static void assertConflict(org.assertj.core.api.ThrowableAssert.ThrowingCallable call, String messagePart) {
         assertThatThrownBy(call)
             .isInstanceOfSatisfying(ApiException.class, e -> {
@@ -1424,30 +1204,13 @@ class DealQuotationConfirmOrderIntegrationTest extends AbstractPostgresIntegrati
                 assertThat(e.getMessage()).contains(messagePart);
             });
     }
-
-    private TicketSummaryDto summary(long ticketId) {
-        return tickets.findById(ticketId).orElseThrow().summary();
-    }
-
     private List<Long> listIds(UserPrincipal actor) {
         return ticketService.list(null, actor).stream().map(TicketSummaryDto::id).toList();
     }
-
-    private int itemCount(long ticketId) {
-        return jdbc.queryForObject("SELECT COUNT(*) FROM sales.ticket_item WHERE ticket_id = :id",
-            Map.of("id", ticketId), Integer.class);
-    }
-
     private int eventCount(long ticketId) {
         return jdbc.queryForObject("SELECT COUNT(*) FROM sales.ticket_event WHERE ticket_id = :id",
             Map.of("id", ticketId), Integer.class);
     }
-
-    private int eventCount(long ticketId, String kind) {
-        return jdbc.queryForObject("SELECT COUNT(*) FROM sales.ticket_event WHERE ticket_id = :id AND kind = :kind",
-            Map.of("id", ticketId, "kind", kind), Integer.class);
-    }
-
     private long insertPricingRequest(long ticketId, long requestedBy) {
         return jdbc.queryForObject("""
             INSERT INTO sales.pricing_request (request_code, ticket_id, recipient_type, requested_by)
@@ -1479,18 +1242,5 @@ class DealQuotationConfirmOrderIntegrationTest extends AbstractPostgresIntegrati
             text = new String(in.readAllBytes(), StandardCharsets.UTF_8);
         }
         jdbc.getJdbcOperations().execute(text);
-    }
-
-    private long createEmployee(String nameTh, String email, String divisionSourceCode, String divisionNameTh,
-                                String positionNameTh) {
-        return employees.create(new UpsertEmployeeRequest(
-            null, null, nameTh, null, null, null, null, null, null, null,
-            email, null, divisionSourceCode, divisionNameTh, divisionNameTh,
-            positionNameTh, null, null, "ACT", new BigDecimal("30000"), null, null, null, null, null, null, null));
-    }
-
-    private UserPrincipal actor(long employeeId, String role) {
-        return new UserPrincipal(employeeId, employeeId + "@glr.co.th", "Actor " + employeeId, role, employeeId,
-            true, LocalDate.now(), false, null, false);
     }
 }

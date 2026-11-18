@@ -58,11 +58,14 @@ export function quotationChainView(quotation, chain, { dealHref = null } = {}) {
   return notice('DEAL_PAST_DRAFT', 'งานนี้ผ่านขั้นยืนยันคำสั่งซื้อไปแล้ว — ดูต่อที่หน้ารายละเอียดงาน', dealLink);
 }
 
+/** The confirm-order step's identity (the undo button is attached to it by this, not by position). */
+export const CONFIRM_ORDER_STEP_KEY = 'confirm-order';
+
 /** Who a waiting step waits on, as the card prints it. */
 const WAITING_ON_TEXT = { sales: 'ฝ่ายขายเจ้าของงาน', account: 'ฝ่ายบัญชี' };
 
 /**
- * The four steps: `{ title, state, detail?, meta?, locked?, waitingOn?, action?, actionLabel?, download? }`, state one
+ * The four steps: `{ key? (confirm-order only), title, state, detail?, meta?, locked?, waitingOn?, action?, actionLabel?, download? }`, state one
  * of done | current | waiting | todo | skipped. `current` only where THIS viewer can act now (the card's one primary
  * button: `action` ∈ confirm | deposit | remaining); the chain's next step when someone else holds it is `waiting`,
  * naming who (`waitingOn`) or why (`locked`).
@@ -79,9 +82,9 @@ export function quotationChainSteps(quotation, chain) {
   };
 
   const confirmStep = order.confirmed
-    ? { title: CHAIN_STEP_TITLES[1], state: 'done', meta: `ยืนยันแล้ว${order.confirmedAt ? ` · ${formatThaiDate(order.confirmedAt)}` : ''}` }
+    ? { key: CONFIRM_ORDER_STEP_KEY, title: CHAIN_STEP_TITLES[1], state: 'done', meta: `ยืนยันแล้ว${order.confirmedAt ? ` · ${formatThaiDate(order.confirmedAt)}` : ''}` }
     : {
-      title: CHAIN_STEP_TITLES[1], state: turn(1), meta: 'เมื่อลูกค้าสั่งซื้อตามใบเสนอราคานี้',
+      key: CONFIRM_ORDER_STEP_KEY, title: CHAIN_STEP_TITLES[1], state: turn(1), meta: 'เมื่อลูกค้าสั่งซื้อตามใบเสนอราคานี้',
       ...(turn(1) === 'current' ? { action: 'confirm', actionLabel: 'ยืนยันคำสั่งซื้อ' } : {}),
       ...(turn(1) === 'waiting' ? { waitingOn: WAITING_ON_TEXT.sales } : {}),
     };

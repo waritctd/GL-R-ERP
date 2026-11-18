@@ -427,9 +427,16 @@ export const CONFIRM_ORDER_FROM_QUOTATION_COPY = Object.freeze({
   lead: (number) => `ระบบจะนำงานของ${number ? `ใบเสนอราคา ${number}` : 'ใบเสนอราคานี้'} เข้าสู่ขั้นตอนการขาย ที่ขั้น`,
   stage: 'ได้รับคำสั่งซื้อ',
   // Follows the quotation's deposit %: 0 takes no deposit, unknown (null) keeps the usual wording.
-  tail: (depositPercent) => (depositPercent != null && Number(depositPercent) === 0
-    ? 'พร้อมรายการสินค้าตามใบเสนอราคานี้ — ใบเสนอราคานี้ไม่เก็บมัดจำ สั่งสินค้าและส่งมอบได้เลย การดำเนินการนี้ย้อนกลับไม่ได้'
-    : 'พร้อมรายการสินค้าตามใบเสนอราคานี้ — จากนั้นออกใบแจ้งรับมัดจำ สั่งสินค้า และส่งมอบได้ตามปกติ การดำเนินการนี้ย้อนกลับไม่ได้'),
+  // `undoable`: the direct-quotation doors, whose confirmation DealQuotationService#undoOrderConfirmation can take back;
+  // the pricing-request doors have no undo and keep saying so.
+  tail: (depositPercent, undoable = false) => {
+    const zero = depositPercent != null && Number(depositPercent) === 0;
+    const body = zero
+      ? 'พร้อมรายการสินค้าตามใบเสนอราคานี้ — ใบเสนอราคานี้ไม่เก็บมัดจำ สั่งสินค้าและส่งมอบได้เลย'
+      : 'พร้อมรายการสินค้าตามใบเสนอราคานี้ — จากนั้นออกใบแจ้งรับมัดจำ สั่งสินค้า และส่งมอบได้ตามปกติ';
+    if (!undoable) return `${body} การดำเนินการนี้ย้อนกลับไม่ได้`;
+    return `${body} กดผิดยกเลิกได้ที่ "ยกเลิกการยืนยันคำสั่งซื้อ" ในหน้าใบเสนอราคา ${zero ? 'จนกว่างานจะเดินหน้าต่อ' : 'จนกว่าจะออกใบแจ้งรับมัดจำหรืองานเดินหน้าต่อ'}`;
+  },
   // The deal's OTHER open direct quotations (DRAFT / PENDING_APPROVAL), which the confirm cancels (empty when none).
   cancels: (numbers) => (numbers?.length ? `ใบเสนอราคาที่ยังเปิดอยู่ ${numbers.join(', ')} จะถูกยกเลิกอัตโนมัติ` : ''),
 });
