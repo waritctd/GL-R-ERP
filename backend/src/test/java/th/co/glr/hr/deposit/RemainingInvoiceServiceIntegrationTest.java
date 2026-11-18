@@ -430,7 +430,7 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
 
     /** A fresh remaining invoice (here drafted by the KEYER) defaults to the deal owner; a DRAFT can pick the deal's
      * keyer and the file prints them; someone outside the deal is 400; an ISSUED one cannot change (409); a revision
-     * starts again from the owner. */
+     * keeps the chosen preparer. */
     @Test
     void remainingInvoice_preparerDefaultsToTheDealOwner_isSelectableOnDraft_andLockedOnceIssued() throws Exception {
         DealFixture fixture = buildAcceptedDeal(salesActor, "RiPickPreparer");
@@ -459,8 +459,61 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
         assertThat(remainingInvoiceService.get(issued.id(), otherSalesActor).preparerId()).isEqualTo(otherSalesRepId);
 
         RemainingInvoiceDocumentDto revision = remainingInvoiceService.revise(issued.id(), otherSalesActor);
-        assertThat(revision.preparerId()).isEqualTo(salesRepId);
-        assertThat(revision.preparerName()).isEqualTo(thaiName(salesRepId));
+        assertThat(revision.preparerId()).isEqualTo(otherSalesRepId);
+        assertThat(revision.preparerName()).isEqualTo(thaiName(otherSalesRepId));
+    }
+
+    /** Both UIs send the current preparerId on every save: a stored preparer who is no longer an option (inactive here)
+     * must not make the draft unsaveable, while naming a different outsider is still 400. */
+    @Test
+    void saving_withTheStoredPreparerWhoIsNoLongerAnOption_stillWorks_butAnotherOutsiderIs400() {
+        DealFixture fixture = buildAcceptedDeal(salesActor, "StalePreparer");
+        setKeyer(fixture, otherSalesRepId);
+        RemainingInvoiceDocumentDto ri = remainingInvoiceService.createDraft(fixture.ticketId(), null, salesActor);
+        remainingInvoiceService.updateDraft(ri.id(),
+            new RemainingInvoiceDraftRequest(null, null, null, null, null, otherSalesRepId), salesActor);
+        jdbc.update("UPDATE hr.employee SET is_active = FALSE WHERE employee_id = :id", Map.of("id", otherSalesRepId));
+
+        assertThat(remainingInvoiceService.updateDraft(ri.id(),
+            new RemainingInvoiceDraftRequest(null, null, null, null, null, otherSalesRepId), salesActor).preparerId())
+            .isEqualTo(otherSalesRepId);
+        // the deposit notice (reopened as a DRAFT, its stored preparer set to the same person)
+        long noticeId = reopenedNoticeDraft(fixture);
+        jdbc.update("UPDATE sales.deposit_notice SET preparer_id = :p WHERE deposit_notice_id = :id",
+            Map.of("p", otherSalesRepId, "id", noticeId));
+        assertThat(depositNoticeService.update(noticeId, noticePreparerOnly(otherSalesRepId), salesActor).preparerId())
+            .isEqualTo(otherSalesRepId);
+        assertThatThrownBy(() -> depositNoticeService.update(noticeId, noticePreparerOnly(strangerRepId), salesActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
+    }
+
+    /** A revision keeps the chosen preparer (a sales manager here), not the owner default. */
+    @Test
+    void remainingInvoiceRevision_keepsTheChosenPreparer() {
+        DealFixture fixture = buildAcceptedDeal(salesActor, "RevisionPreparer");
+        RemainingInvoiceDocumentDto draft = remainingInvoiceService.createDraft(fixture.ticketId(), null, salesActor);
+        remainingInvoiceService.updateDraft(draft.id(),
+            new RemainingInvoiceDraftRequest(null, null, null, null, null, salesManagerId), salesActor);
+        RemainingInvoiceDocumentDto issued = remainingInvoiceService.issue(draft.id(), salesActor);
+
+        RemainingInvoiceDocumentDto revision = remainingInvoiceService.revise(issued.id(), salesActor);
+
+        assertThat(revision.preparerId()).isEqualTo(salesManagerId);
+        assertThat(revision.preparerName()).isEqualTo(thaiName(salesManagerId));
+    }
+
+    /** A new deposit notice draft on a deal that already had a notice carries that notice's chosen preparer. */
+    @Test
+    void depositNoticeRedraft_keepsThePreviousNoticesPreparer() {
+        DealFixture fixture = buildAcceptedDeal(salesActor, "RedraftPreparer");
+        long noticeId = reopenedNoticeDraft(fixture);
+        depositNoticeService.update(noticeId, noticePreparerOnly(salesManagerId), salesActor);
+        jdbc.update("UPDATE sales.deposit_notice SET status = 'SUPERSEDED' WHERE deposit_notice_id = :id", Map.of("id", noticeId));
+
+        DepositNoticeDto redraft = depositNoticeService.createDraft(fixture.ticketId(), noticePreparerOnly(null), salesActor);
+
+        assertThat(redraft.preparerId()).isEqualTo(salesManagerId);
+        assertThat(redraft.preparerName()).isEqualTo(thaiName(salesManagerId));
     }
 
     /** The deposit notice's "( name )" signature line sits below the totals; its row moves with the item count. */

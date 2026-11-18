@@ -216,10 +216,17 @@ public class DepositNoticeRepository {
                 (:ticketId, :version, :customerName, :customerTaxId, :customerAddress,
                  :projectName, :reference, :depositPercent, :subtotal, :depositAmount,
                  :vatPercent, :vatAmount, :totalPayable, :notes,
-                 COALESCE((SELECT NULLIF(TRIM(CONCAT_WS(' ', e.first_name_th, e.last_name_th)), '')
+                 -- ผู้จัดทำ: the latest earlier notice's chosen preparer, else the deal's owner, else the actor
+                 COALESCE((SELECT p.preparer_name FROM sales.deposit_notice p
+                            WHERE p.ticket_id = :ticketId AND p.preparer_id IS NOT NULL
+                              AND p.version = (SELECT MAX(version) FROM sales.deposit_notice WHERE ticket_id = :ticketId)),
+                          (SELECT NULLIF(TRIM(CONCAT_WS(' ', e.first_name_th, e.last_name_th)), '')
                              FROM sales.ticket t JOIN hr.employee e ON e.employee_id = t.created_by
                             WHERE t.ticket_id = :ticketId), :preparerName),
-                 COALESCE((SELECT t.created_by FROM sales.ticket t WHERE t.ticket_id = :ticketId), :preparerId))
+                 COALESCE((SELECT p.preparer_id FROM sales.deposit_notice p
+                            WHERE p.ticket_id = :ticketId
+                              AND p.version = (SELECT MAX(version) FROM sales.deposit_notice WHERE ticket_id = :ticketId)),
+                          (SELECT t.created_by FROM sales.ticket t WHERE t.ticket_id = :ticketId), :preparerId))
             """, params, keys, new String[]{"deposit_notice_id"});
 
         long docId = keys.getKey().longValue();

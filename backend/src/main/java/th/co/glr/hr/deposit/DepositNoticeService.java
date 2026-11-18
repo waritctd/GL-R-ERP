@@ -84,9 +84,11 @@ public class DepositNoticeService {
         return docs.findPreparerOptions(ticketId);
     }
 
-    /** A non-null preparerId must be one of THIS deal's options (owner, keyer, sales managers). */
-    public void requirePreparerInDeal(long ticketId, Long preparerId) {
-        if (preparerId != null && docs.findPreparerOptions(ticketId).stream().noneMatch(o -> o.id() == preparerId)) {
+    /** A non-null preparerId must be one of THIS deal's options (owner, keyer, sales managers), unless it is the
+     * document's stored preparer (the UIs resend it on every save, even after the deal was re-owned). */
+    public void requirePreparerInDeal(long ticketId, Long preparerId, Long storedPreparerId) {
+        if (preparerId != null && !preparerId.equals(storedPreparerId)
+                && docs.findPreparerOptions(ticketId).stream().noneMatch(o -> o.id() == preparerId)) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "ผู้จัดทำต้องเป็นเจ้าของงาน ผู้คีย์งาน หรือผู้จัดการฝ่ายขายของงานนี้");
         }
     }
@@ -198,7 +200,7 @@ public class DepositNoticeService {
         requireRole(actor, SALES_ROLES);
         DepositNoticeDto doc = requireDraft(docId);
         requireTicketOwner(doc.ticketId(), actor);
-        requirePreparerInDeal(doc.ticketId(), req.preparerId());
+        requirePreparerInDeal(doc.ticketId(), req.preparerId(), doc.preparerId());
         // Sales may change the deposit percent on a DRAFT (requireDraft
         // above 409s an issued notice). docs.update recomputes the amount from it. A request
         // without a percent keeps the draft's own.

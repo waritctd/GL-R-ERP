@@ -192,7 +192,7 @@ public class RemainingInvoiceService {
     public RemainingInvoiceDocumentDto updateDraft(long id, RemainingInvoiceDraftRequest req, UserPrincipal actor) {
         RemainingInvoiceDocumentDto existing = requireDraft(id);
         depositNoticeService.requireDepositNoticeIssueGate(existing.ticketId(), actor);
-        depositNoticeService.requirePreparerInDeal(existing.ticketId(), req == null ? null : req.preparerId());
+        depositNoticeService.requirePreparerInDeal(existing.ticketId(), req == null ? null : req.preparerId(), existing.preparerId());
 
         DepositNoticeService.RemainingInvoiceSnapshot snap = depositNoticeService.resolveRemainingInvoiceSnapshot(
             existing.ticketId(), existing.customerQuotationId(), actor);
@@ -380,6 +380,7 @@ public class RemainingInvoiceService {
                 issued.customerName(), issued.customerTaxId(), issued.customerBranch(), issued.customerAddress(),
                 issued.projectName(), issued.itemsTotal(), issued.depositDeduction(), issued.netAmount(),
                 issued.vatAmount(), issued.grandTotal(), actor.id(), actor.name());
+            if (issued.preparerId() != null) stored.copyPreparer(draftId, issued.preparerId(), issued.preparerName());
         } catch (DataIntegrityViolationException e) {
             throw new ApiException(HttpStatus.CONFLICT,
                 "มีร่างฉบับแก้ไขของใบแจ้งหนี้ส่วนที่เหลือนี้อยู่แล้ว กรุณาออกหรือลบร่างเดิมก่อน");
@@ -404,7 +405,7 @@ public class RemainingInvoiceService {
 
     // ── helpers ──────────────────────────────────────────────────────────────────────────────
 
-    /** The STORED snapshot as the renderer prints it. The preparer is the invoice's chosen preparer (default: its creator). */
+    /** The STORED snapshot as the renderer prints it. The preparer is the invoice's chosen preparer (default: the deal's owner). */
     private RemainingInvoiceRenderModel toRenderable(RemainingInvoiceDocumentDto doc) {
         List<RemainingInvoiceItemDto> items = (doc.items() != null ? doc.items() : List.<RemainingInvoiceDocumentItemDto>of())
             .stream()

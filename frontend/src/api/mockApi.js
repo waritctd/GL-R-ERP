@@ -1011,14 +1011,14 @@ const mockNoteTemplates = [
 ];
 
 const mockDepositNotices = [];
-// ผู้จัดทำ choices (DepositNoticeRepository#findPreparerOptions): the deal's owner, then its keyer. The mock has
-// no sales-manager directory, so the managers the server also lists are absent here.
+// ผู้จัดทำ choices (DepositNoticeRepository#findPreparerOptions): the deal's owner, its keyer, then the active
+// sales managers, each once.
 function mockPreparerOptions(ticket) {
   const opts = [{ id: ticket.createdById, name: ticket.createdByName }];
-  if (ticket.keyedById != null && ticket.keyedById !== ticket.createdById) {
-    opts.push({ id: ticket.keyedById, name: ticket.keyedByName ?? String(ticket.keyedById) });
-  }
-  return opts.filter((o) => o.id != null);
+  if (ticket.keyedById != null) opts.push({ id: ticket.keyedById, name: ticket.keyedByName ?? String(ticket.keyedById) });
+  db.users.filter((u) => u.role === 'sales_manager' && u.active !== false)
+    .forEach((u) => opts.push({ id: u.id, name: u.name }));
+  return opts.filter((o, i) => o.id != null && opts.findIndex((x) => x.id === o.id) === i);
 }
 // A non-null preparerId must be one of the deal's options (400 otherwise); null keeps the stored preparer.
 function applyMockPreparer(doc, ticket, preparerId) {

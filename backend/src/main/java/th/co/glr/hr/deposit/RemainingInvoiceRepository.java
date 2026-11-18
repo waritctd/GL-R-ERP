@@ -156,6 +156,12 @@ public class RemainingInvoiceRepository {
         return keys.getKey().longValue();
     }
 
+    /** A revision keeps the preparer chosen on the document it corrects. */
+    public void copyPreparer(long id, long preparerId, String preparerName) {
+        jdbc.update("UPDATE sales.remaining_invoice SET preparer_id = :p, preparer_name = :n WHERE id = :id",
+            Map.of("p", preparerId, "n", preparerName == null ? "" : preparerName, "id", id));
+    }
+
     /** Replaces every line, renumbering seq from 1 in the order supplied. Draft-only by convention (the caller
      * never invokes this on an ISSUED/SUPERSEDED row — an issued document's items are frozen for good, see
      * RemainingInvoiceDocumentDto's own Javadoc). */

@@ -20,7 +20,7 @@ public record DepositNoticeDraftRequest(
     @Valid List<DepositNoticeItemRequest> items,
     // The draft's updatedAt as this client last read it. null skips the stale-save check (older clients).
     OffsetDateTime expectedUpdatedAt,
-    // ผู้จัดทำ: an eligible sales employee id; null keeps the stored preparer.
+    // ผู้จัดทำ: the deal's owner, keyer or a sales manager; null keeps the stored preparer.
     Long preparerId
 ) {
     /** Without a stamp: creation and the server-side callers. */
