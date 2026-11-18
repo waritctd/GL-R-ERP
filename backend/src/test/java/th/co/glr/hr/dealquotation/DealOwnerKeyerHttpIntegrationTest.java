@@ -578,6 +578,35 @@ class DealOwnerKeyerHttpIntegrationTest extends AbstractDealQuotationSlice2Integ
             .getResponse().getStatus()).isEqualTo(403);
     }
 
+    /** Ploy 2026-11-19: a holder may set the printed พนักงานขาย on any quotation, but only the real owner/keyer,
+     * sales_manager, CEO or a can_create_quotation holder MOVES the deal's owner. */
+    @Test
+    void grantHolder_changingThePrintedRep_doesNotMoveTheDealOwner() throws Exception {
+        long ticketId = keyedDeal(); // owner B, keyer A
+        long quotationId = createQuotation(otherSalesActor, ticketId);
+        UserPrincipal holder = grantHolder();
+
+        MvcResult put = send(holder, put("/api/deal-quotations/" + quotationId), quotationBodyWithRep(holder.id()));
+
+        assertThat(put.getResponse().getStatus()).as(body(put)).isEqualTo(200);
+        assertThat(createdBy(ticketId)).isEqualTo(otherSalesActor.id());
+        assertThat(keyedBy(ticketId)).isEqualTo(salesActor.id());
+        assertThat(ownerMoveNotifications(ticketId)).isZero();
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sales.ticket_event WHERE ticket_id = :id AND message LIKE '%เจ้าของงาน%'",
+            Map.of("id", ticketId), Integer.class)).isZero();
+    }
+
+    /** Ploy 2026-11-19: declaring stock coverage stays the CEO's or the sales-role owner/keyer's; a holder is refused. */
+    @Test
+    void grantHolder_isRefusedTheStockDeclaration_onSomeoneElsesDeal() throws Exception {
+        long ticketId = keyedDeal();
+        UserPrincipal holder = grantHolder();
+
+        assertForbidden(() -> ticketService.decideProcurementSource(ticketId,
+            new th.co.glr.hr.ticket.ProcurementSourceRequest(java.util.List.of(
+                new th.co.glr.hr.ticket.ProcurementSourceRequest.Line(1L, true))), holder));
+    }
+
     /** thirdRep (role sales, not owner/keyer of anything) with the grant switched on. */
     private UserPrincipal grantHolder() {
         jdbc.update("UPDATE hr.employee SET can_manage_all_sales_documents = TRUE WHERE employee_id = :id",

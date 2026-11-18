@@ -243,13 +243,20 @@ class DealDocumentRegisterAuthzIntegrationTest extends AbstractPostgresIntegrati
         assertAttachmentsOk(salesOtherActor);
     }
 
+    /** Ploy 2026-11-19: the grant counts only for the sales and sales_manager roles; an hr / account holder gets nothing extra. */
     @Test
-    void grantHolder_anyRole_reachesTheDealItsDocumentsAndAttachments() throws Exception {
-        grant(hrActor);
+    void grantHolder_inANonSalesRole_getsNothingExtra() throws Exception {
+        for (UserPrincipal nonSales : List.of(hrActor, accountActor, ceoActor)) {
+            grant(nonSales);
+        }
 
-        assertThatCode(() -> ticketService.get(ticketId, hrActor)).doesNotThrowAnyException();
-        assertThatCode(() -> depositNoticeService.listByTicket(ticketId, hrActor)).doesNotThrowAnyException();
-        assertAttachmentsOk(hrActor);
+        assertForbidden(() -> ticketService.get(ticketId, hrActor));
+        assertForbidden(() -> depositNoticeService.listByTicket(ticketId, hrActor));
+        assertAttachmentsForbidden(hrActor);
+        // account holder: cannot create a deposit notice on another deal (role gate, before anything else)
+        assertForbidden(() -> depositNoticeService.createDraft(ticketId,
+            new th.co.glr.hr.deposit.DepositNoticeDraftRequest(null, null, null, null, null, null, null, null), accountActor));
+        assertForbidden(() -> depositNoticeService.issue(1L, accountActor));
     }
 
     /** A holder sees every deal's pricing requests in the list (a plain rep sees only their own). */
