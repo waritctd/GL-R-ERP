@@ -270,7 +270,7 @@ class PaymentTrackIntegrationTest extends AbstractPostgresIntegrationTest {
             .isInstanceOfSatisfying(ApiException.class,
                 e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
         long secondDraftId = depositNoticeRepository.createDraft(
-            deal.ticketId(), bareDraftRequest(), bareDraftRequest().items());
+            deal.ticketId(), bareDraftRequest(), bareDraftRequest().items(), "Test Preparer");
         assertThatThrownBy(() -> depositNoticeService.issue(secondDraftId, salesActor))
             .isInstanceOfSatisfying(ApiException.class, e -> {
                 assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);

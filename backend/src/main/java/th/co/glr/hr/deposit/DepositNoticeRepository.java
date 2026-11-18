@@ -154,7 +154,8 @@ public class DepositNoticeRepository {
     }
 
     @Transactional
-    public long createDraft(long ticketId, DepositNoticeDraftRequest req, List<DepositNoticeItemRequest> items) {
+    public long createDraft(long ticketId, DepositNoticeDraftRequest req, List<DepositNoticeItemRequest> items,
+                            String preparerName) {
         BigDecimal depositPct = req.depositPercent() != null ? req.depositPercent() : new BigDecimal("0.50");
         BigDecimal vatPct = new BigDecimal("0.07");
 
@@ -183,18 +184,20 @@ public class DepositNoticeRepository {
             .addValue("vatPercent",      vatPct)
             .addValue("vatAmount",       vat)
             .addValue("totalPayable",    total)
-            .addValue("notes",           notesArr);
+            .addValue("notes",           notesArr)
+            // NOT NULL column; blank prints the template's own preparer line (DocumentSheet.preparer)
+            .addValue("preparerName",    preparerName == null ? "" : preparerName);
 
         var keys = new GeneratedKeyHolder();
         jdbc.update("""
             INSERT INTO sales.deposit_notice
                 (ticket_id, version, customer_name, customer_tax_id, customer_address,
                  project_name, reference, deposit_percent, subtotal, deposit_amount,
-                 vat_percent, vat_amount, total_payable, notes)
+                 vat_percent, vat_amount, total_payable, notes, preparer_name)
             VALUES
                 (:ticketId, :version, :customerName, :customerTaxId, :customerAddress,
                  :projectName, :reference, :depositPercent, :subtotal, :depositAmount,
-                 :vatPercent, :vatAmount, :totalPayable, :notes)
+                 :vatPercent, :vatAmount, :totalPayable, :notes, :preparerName)
             """, params, keys, new String[]{"deposit_notice_id"});
 
         long docId = keys.getKey().longValue();

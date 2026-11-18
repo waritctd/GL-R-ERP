@@ -207,7 +207,7 @@ class DepositNoticeIssueGuardIntegrationTest extends AbstractPostgresIntegration
     @Test
     void issue_withAStaleUpdatedAt_isRefused409_andNothingIsIssued() {
         IssuedNoticeFixture fixture = buildTicketWithIssuedDepositNotice();
-        long draftId = depositNoticeRepository.createDraft(fixture.ticketId(), secondDraftHeader(), secondDraftItems());
+        long draftId = depositNoticeRepository.createDraft(fixture.ticketId(), secondDraftHeader(), secondDraftItems(), "Test Preparer");
         OffsetDateTime loaded = depositNoticeRepository.findById(draftId).orElseThrow().updatedAt();
         DepositNoticeDto saved = depositNoticeService.update(draftId, stampedRequest("0.40", secondDraftItems(), loaded), salesActor);
 
@@ -230,18 +230,18 @@ class DepositNoticeIssueGuardIntegrationTest extends AbstractPostgresIntegration
         // A stored percent outside whole 1-100 (a 0% ticket-route draft on a ไม่รับมัดจำ quotation,
         // a pre-09-29 free-typed 0.3330, an out-of-range 1.5) or a 0-baht amount takes no number.
         long secondDocId = depositNoticeRepository.createDraft(
-            fixture.ticketId(), draftHeader(BigDecimal.ZERO), secondDraftItems());
+            fixture.ticketId(), draftHeader(BigDecimal.ZERO), secondDraftItems(), "Test Preparer");
         assertIssueRefusedAndNothingChanged(fixture, secondDocId,
             "ใบแจ้งรับมัดจำนี้มีเปอร์เซ็นต์มัดจำ 0% จึงออกเอกสารไม่ได้ (ต้องเป็นจำนวนเต็ม 1–100)");
         assertIssueRefusedAndNothingChanged(fixture,
-            depositNoticeRepository.createDraft(fixture.ticketId(), draftHeader(new BigDecimal("0.3330")), secondDraftItems()),
+            depositNoticeRepository.createDraft(fixture.ticketId(), draftHeader(new BigDecimal("0.3330")), secondDraftItems(), "Test Preparer"),
             "ใบแจ้งรับมัดจำนี้มีเปอร์เซ็นต์มัดจำ 33.3% จึงออกเอกสารไม่ได้ (ต้องเป็นจำนวนเต็ม 1–100)");
         assertIssueRefusedAndNothingChanged(fixture,
-            depositNoticeRepository.createDraft(fixture.ticketId(), draftHeader(new BigDecimal("1.5")), secondDraftItems()),
+            depositNoticeRepository.createDraft(fixture.ticketId(), draftHeader(new BigDecimal("1.5")), secondDraftItems(), "Test Preparer"),
             "ใบแจ้งรับมัดจำนี้มีเปอร์เซ็นต์มัดจำ 150% จึงออกเอกสารไม่ได้ (ต้องเป็นจำนวนเต็ม 1–100)");
         assertIssueRefusedAndNothingChanged(fixture,
             depositNoticeRepository.createDraft(fixture.ticketId(), secondDraftHeader(), List.of(new DepositNoticeItemRequest(
-                1, "Free item", new BigDecimal("2"), "แผ่น", BigDecimal.ZERO, null, BigDecimal.ZERO, null))),
+                1, "Free item", new BigDecimal("2"), "แผ่น", BigDecimal.ZERO, null, BigDecimal.ZERO, null)), "Test Preparer"),
             "ใบแจ้งรับมัดจำนี้มียอดมัดจำ 0 บาท จึงออกเอกสารไม่ได้");
 
         // Owner ruling 2026-10-23: one deposit notice per deal. Even once the percent is billable,
@@ -282,7 +282,7 @@ class DepositNoticeIssueGuardIntegrationTest extends AbstractPostgresIntegration
     void update_onADraft_changesThePercentAndTheAmountFollows() {
         IssuedNoticeFixture fixture = buildTicketWithIssuedDepositNotice();
         long draftId = depositNoticeRepository.createDraft(
-            fixture.ticketId(), secondDraftHeader(), secondDraftItems()); // 0.50 of 100.00
+            fixture.ticketId(), secondDraftHeader(), secondDraftItems(), "Test Preparer"); // 0.50 of 100.00
 
         DepositNoticeDto updated = depositNoticeService.update(draftId, new DepositNoticeDraftRequest(
             "ACME", "0100000000000", "Bangkok", "Showroom", "REF-2",
@@ -321,7 +321,7 @@ class DepositNoticeIssueGuardIntegrationTest extends AbstractPostgresIntegration
     @Test
     void update_withAStaleUpdatedAt_isRefused409_andTheFirstSaveStands() {
         IssuedNoticeFixture fixture = buildTicketWithIssuedDepositNotice();
-        long draftId = depositNoticeRepository.createDraft(fixture.ticketId(), secondDraftHeader(), secondDraftItems());
+        long draftId = depositNoticeRepository.createDraft(fixture.ticketId(), secondDraftHeader(), secondDraftItems(), "Test Preparer");
         OffsetDateTime loaded = depositNoticeRepository.findById(draftId).orElseThrow().updatedAt();
 
         DepositNoticeDto savedByA = depositNoticeService.update(draftId, stampedRequest("0.40", secondDraftItems(), loaded), salesActor);

@@ -403,15 +403,15 @@ public class RemainingInvoiceService {
 
     // ── helpers ──────────────────────────────────────────────────────────────────────────────
 
-    /** The STORED snapshot as the renderer prints it. The preparer is the linked deposit notice's own; a deal with no
-     * notice (deposit bypass) passes none, so the template's own preparer line prints. */
+    /** The STORED snapshot as the renderer prints it. The preparer is the invoice's own creator; none (blank)
+     * passes null, so the template's own preparer line prints. */
     private RemainingInvoiceRenderModel toRenderable(RemainingInvoiceDocumentDto doc) {
         List<RemainingInvoiceItemDto> items = (doc.items() != null ? doc.items() : List.<RemainingInvoiceDocumentItemDto>of())
             .stream()
             .map(it -> new RemainingInvoiceItemDto(it.seq(), it.description(), it.qty(), it.unit(),
                 it.unitPrice(), it.discountLabel(), it.netUnitPrice(), it.amount()))
             .toList();
-        String preparer = doc.depositNoticeId() == null ? null : depositNoticeService.preparerNameOf(doc.depositNoticeId());
+        String preparer = doc.createdByName() == null || doc.createdByName().isBlank() ? null : doc.createdByName();
         return new RemainingInvoiceRenderModel(
             doc.docDate(), doc.docNumber() != null ? doc.docNumber() : "(ร่าง)",
             doc.customerName(), doc.customerBranch(), doc.customerTaxId(), doc.customerAddress(), doc.projectName(),

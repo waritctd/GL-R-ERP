@@ -209,6 +209,6 @@ class DepositNoticeIssueRenderOutsideTransactionIntegrationTest extends Abstract
             new BigDecimal("100.00"), null, new BigDecimal("100.00"), null));
         return docs.createDraft(ticketId, new DepositNoticeDraftRequest(
             "ACME", "0100000000000", "Bangkok", "Showroom", "REF-RENDER",
-            new BigDecimal("0.50"), List.of(), items), items);
+            new BigDecimal("0.50"), List.of(), items), items, "Test Preparer");
     }
 }

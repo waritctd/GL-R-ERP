@@ -332,19 +332,32 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
         }
     }
 
-    /** The printed preparer is the linked deposit notice's own; with no notice the template's own line stays
-     * (no Java copy of the V12 default name). */
+    /** ผู้จัดทำ on a deposit notice is whoever drafted it (sales manager ruling 2026-11-18), not the V12 default name. */
     @Test
-    void file_printsTheLinkedNoticesPreparer_orTheTemplatesOwnLineWhenThereIsNone() throws Exception {
+    void depositNotice_preparerIsTheActorWhoDraftedIt() {
+        DealFixture fixture = buildAcceptedDeal(salesActor, "NoticePreparer");
+
+        assertThat(depositNoticeService.getById(fixture.depositNoticeId(), salesActor).preparerName())
+            .isEqualTo(salesActor.name());
+    }
+
+    /** ผู้จัดทำ on a remaining invoice is whoever drafted THAT invoice, here a keyer working on the owner's deal,
+     * not the deposit notice's preparer; with no creator on file the template's own line stays (no Java copy of
+     * the V12 default name). */
+    @Test
+    void file_printsTheInvoicesOwnCreator_orTheTemplatesOwnLineWhenThereIsNone() throws Exception {
         DealFixture fixture = buildAcceptedDeal(salesActor, "Preparer");
         jdbc.update("UPDATE sales.deposit_notice SET preparer_name = :n WHERE deposit_notice_id = :id",
             Map.of("n", "ผู้จัดทำ ทดสอบ", "id", fixture.depositNoticeId()));
-        RemainingInvoiceDocumentDto draft = remainingInvoiceService.createDraft(fixture.ticketId(), null, salesActor);
-        RemainingInvoiceDocumentDto issued = remainingInvoiceService.issue(draft.id(), salesActor);
+        jdbc.update("UPDATE sales.ticket SET keyed_by = :k WHERE ticket_id = :id",
+            Map.of("k", otherSalesRepId, "id", fixture.ticketId()));
+        RemainingInvoiceDocumentDto draft = remainingInvoiceService.createDraft(fixture.ticketId(), null, otherSalesActor);
+        RemainingInvoiceDocumentDto issued = remainingInvoiceService.issue(draft.id(), otherSalesActor);
 
-        assertThat(preparerLine(remainingInvoiceService.file(issued.id(), salesActor))).isEqualTo("( ผู้จัดทำ ทดสอบ )");
+        assertThat(preparerLine(remainingInvoiceService.file(issued.id(), otherSalesActor)))
+            .isEqualTo("( " + otherSalesActor.name() + " )");
 
-        jdbc.update("UPDATE sales.remaining_invoice SET deposit_notice_id = NULL WHERE id = :id", Map.of("id", issued.id()));
+        jdbc.update("UPDATE sales.remaining_invoice SET created_by_name = NULL WHERE id = :id", Map.of("id", issued.id()));
         String templateOwn;
         try (java.io.InputStream in = getClass().getResourceAsStream("/templates/remaining_invoice_template.xls");
              org.apache.poi.ss.usermodel.Workbook t = org.apache.poi.ss.usermodel.WorkbookFactory.create(in)) {

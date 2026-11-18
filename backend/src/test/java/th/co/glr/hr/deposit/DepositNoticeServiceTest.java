@@ -820,14 +820,14 @@ class DepositNoticeServiceTest {
         stubTicketWithCustomer(10L, TicketStatus.QUOTATION_ISSUED, "CUSTOMER_CONFIRMED", 42L, "Project Zeta");
         when(customerRepo.findById(42L)).thenReturn(Optional.of(
             new CustomerDto(42L, "ACME", "0100000000000", "123 Road", "Showroom", "02-000-0000")));
-        when(docs.createDraft(eq(10L), any(), any())).thenReturn(201L);
+        when(docs.createDraft(eq(10L), any(), any(), any())).thenReturn(201L);
         stubDraft(201L, 10L);
 
         service.createDraft(10L,
             new DepositNoticeDraftRequest(null, null, null, null, null, null, null, null), owner);
 
         ArgumentCaptor<DepositNoticeDraftRequest> captor = ArgumentCaptor.forClass(DepositNoticeDraftRequest.class);
-        verify(docs).createDraft(eq(10L), captor.capture(), any());
+        verify(docs).createDraft(eq(10L), captor.capture(), any(), any());
         DepositNoticeDraftRequest effective = captor.getValue();
         assertThat(effective.customerTaxId()).isEqualTo("0100000000000");
         assertThat(effective.customerAddress()).isEqualTo("123 Road Showroom");
@@ -839,14 +839,14 @@ class DepositNoticeServiceTest {
         // Base fixture's ticket carries customerId = null — must not NPE, and the customer repository must never even
         // be consulted.
         stubTicket(10L, TicketStatus.QUOTATION_ISSUED, "CUSTOMER_CONFIRMED");
-        when(docs.createDraft(eq(10L), any(), any())).thenReturn(202L);
+        when(docs.createDraft(eq(10L), any(), any(), any())).thenReturn(202L);
         stubDraft(202L, 10L);
 
         service.createDraft(10L,
             new DepositNoticeDraftRequest(null, null, null, null, null, null, null, null), owner);
 
         ArgumentCaptor<DepositNoticeDraftRequest> captor = ArgumentCaptor.forClass(DepositNoticeDraftRequest.class);
-        verify(docs).createDraft(eq(10L), captor.capture(), any());
+        verify(docs).createDraft(eq(10L), captor.capture(), any(), any());
         assertThat(captor.getValue().customerTaxId()).isNull();
         assertThat(captor.getValue().customerAddress()).isNull();
         verify(customerRepo, never()).findById(anyLong());
@@ -862,7 +862,7 @@ class DepositNoticeServiceTest {
         when(docs.findGoverningQuotation(10L)).thenReturn(Optional.of(
             new DepositNoticeRepository.GoverningQuotation(1L, true, "QT-2026-1", new BigDecimal("0.50"))));
         when(quotationRepo.findById(1L)).thenReturn(Optional.of(quotation(1L, 10L, "ACCEPTED", 1, List.of(item))));
-        when(docs.createDraft(eq(10L), any(), any())).thenReturn(203L);
+        when(docs.createDraft(eq(10L), any(), any(), any())).thenReturn(203L);
         stubDraft(203L, 10L);
 
         service.createDraft(10L,
@@ -870,7 +870,7 @@ class DepositNoticeServiceTest {
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<DepositNoticeItemRequest>> itemsCaptor = ArgumentCaptor.forClass(List.class);
-        verify(docs).createDraft(eq(10L), any(), itemsCaptor.capture());
+        verify(docs).createDraft(eq(10L), any(), itemsCaptor.capture(), any());
         List<DepositNoticeItemRequest> items = itemsCaptor.getValue();
         assertThat(items).hasSize(1);
         assertThat(items.get(0).description()).isEqualTo("กระเบื้อง A");
@@ -890,7 +890,7 @@ class DepositNoticeServiceTest {
         // remaining-invoice match keys on the reference and these lines are not that quotation's.
         when(docs.findGoverningQuotation(10L)).thenReturn(Optional.of(
             new DepositNoticeRepository.GoverningQuotation(1L, false, "QT-2026-1", new BigDecimal("0.40"))));
-        when(docs.createDraft(eq(10L), any(), any())).thenReturn(205L);
+        when(docs.createDraft(eq(10L), any(), any(), any())).thenReturn(205L);
         stubDraft(205L, 10L);
 
         service.createDraft(10L,
@@ -899,7 +899,7 @@ class DepositNoticeServiceTest {
         ArgumentCaptor<DepositNoticeDraftRequest> requestCaptor = ArgumentCaptor.forClass(DepositNoticeDraftRequest.class);
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<DepositNoticeItemRequest>> itemsCaptor = ArgumentCaptor.forClass(List.class);
-        verify(docs).createDraft(eq(10L), requestCaptor.capture(), itemsCaptor.capture());
+        verify(docs).createDraft(eq(10L), requestCaptor.capture(), itemsCaptor.capture(), any());
         assertThat(requestCaptor.getValue().reference()).isNull();
         assertThat(requestCaptor.getValue().depositPercent()).isEqualByComparingTo("0.40");
         assertThat(itemsCaptor.getValue()).hasSize(1);
@@ -919,7 +919,7 @@ class DepositNoticeServiceTest {
         stubTicket(10L, TicketStatus.QUOTATION_ISSUED, "CUSTOMER_CONFIRMED");
         when(docs.findGoverningQuotation(10L)).thenReturn(Optional.of(
             new DepositNoticeRepository.GoverningQuotation(5L, false, "QT-5", new BigDecimal("0.30"))));
-        when(docs.createDraft(eq(10L), any(), any())).thenReturn(301L);
+        when(docs.createDraft(eq(10L), any(), any(), any())).thenReturn(301L);
         stubDraft(301L, 10L);
 
         // Caller (or a stale/forged client) asks for 99% — must be ignored; the quotation's own 30% wins.
@@ -928,7 +928,7 @@ class DepositNoticeServiceTest {
             owner);
 
         ArgumentCaptor<DepositNoticeDraftRequest> captor = ArgumentCaptor.forClass(DepositNoticeDraftRequest.class);
-        verify(docs).createDraft(eq(10L), captor.capture(), any());
+        verify(docs).createDraft(eq(10L), captor.capture(), any(), any());
         assertThat(captor.getValue().depositPercent()).isEqualByComparingTo("0.30");
     }
 
@@ -936,14 +936,14 @@ class DepositNoticeServiceTest {
     void createDraft_fallsBackTo050WhenTicketHasNoQuotationDepositPercent() {
         stubTicket(10L, TicketStatus.QUOTATION_ISSUED, "CUSTOMER_CONFIRMED");
         when(docs.findGoverningQuotation(10L)).thenReturn(Optional.empty());
-        when(docs.createDraft(eq(10L), any(), any())).thenReturn(302L);
+        when(docs.createDraft(eq(10L), any(), any(), any())).thenReturn(302L);
         stubDraft(302L, 10L);
 
         service.createDraft(10L,
             new DepositNoticeDraftRequest(null, null, null, null, null, null, null, null), owner);
 
         ArgumentCaptor<DepositNoticeDraftRequest> captor = ArgumentCaptor.forClass(DepositNoticeDraftRequest.class);
-        verify(docs).createDraft(eq(10L), captor.capture(), any());
+        verify(docs).createDraft(eq(10L), captor.capture(), any(), any());
         assertThat(captor.getValue().depositPercent()).isEqualByComparingTo("0.50");
     }
 
@@ -963,7 +963,7 @@ class DepositNoticeServiceTest {
             1, "V2 deal quotation item", new BigDecimal("3"), "แผ่น",
             new BigDecimal("999"), null, new BigDecimal("999"), null);
         when(docs.findDealQuotationItems(7L)).thenReturn(List.of(sentinel));
-        when(docs.createDraft(eq(10L), any(), any())).thenReturn(206L);
+        when(docs.createDraft(eq(10L), any(), any(), any())).thenReturn(206L);
         stubDraft(206L, 10L);
 
         service.createDraft(10L,
@@ -972,7 +972,7 @@ class DepositNoticeServiceTest {
         ArgumentCaptor<DepositNoticeDraftRequest> captor = ArgumentCaptor.forClass(DepositNoticeDraftRequest.class);
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<DepositNoticeItemRequest>> itemsCaptor = ArgumentCaptor.forClass(List.class);
-        verify(docs).createDraft(eq(10L), captor.capture(), itemsCaptor.capture());
+        verify(docs).createDraft(eq(10L), captor.capture(), itemsCaptor.capture(), any());
         assertThat(itemsCaptor.getValue()).containsExactly(sentinel);
         assertThat(captor.getValue().depositPercent()).isEqualByComparingTo("0.40");
         assertThat(captor.getValue().reference()).isEqualTo("QT-7");
@@ -1262,17 +1262,17 @@ class DepositNoticeServiceTest {
         assertThat(options.defaultReference()).isEqualTo("REF-NEG");
     }
 
-    /** A remaining invoice with no linked deposit notice passes NO preparer: the template's own line prints
+    /** A remaining invoice with no creator name passes NO preparer: the template's own line prints
      * (there is deliberately no Java copy of the V12 default name). */
     @Test
-    void remainingInvoiceFile_withNoDepositNotice_passesNoPreparer() {
+    void remainingInvoiceFile_withNoCreatorName_passesNoPreparer() {
         stubTicket(10L, TicketStatus.QUOTATION_ISSUED, "CUSTOMER_CONFIRMED");
         RemainingInvoiceRepository storedMock = mock(RemainingInvoiceRepository.class);
         RemainingInvoicePdfRenderer remainingRenderer = mock(RemainingInvoicePdfRenderer.class);
         RemainingInvoiceDocumentDto doc = new RemainingInvoiceDocumentDto(7L, 10L, null, null, "GLR6900001", 1,
             "GLR6900001-1", "ISSUED", null, "REF", null, LocalDate.of(2026, 10, 28), List.of(),
             "ACME", null, null, null, null, BigDecimal.TEN, BigDecimal.ZERO, BigDecimal.TEN, BigDecimal.ONE,
-            BigDecimal.TEN, 1L, "Sales", null, null, null, null, null, List.of());
+            BigDecimal.TEN, 1L, null, null, null, null, null, null, List.of());
         when(storedMock.findById(7L)).thenReturn(Optional.of(doc));
         when(remainingRenderer.toXls(any())).thenReturn(new byte[] {1});
 

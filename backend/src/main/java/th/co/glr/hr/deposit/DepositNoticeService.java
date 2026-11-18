@@ -171,7 +171,7 @@ public class DepositNoticeService {
             notes, items
         );
 
-        long docId = docs.createDraft(ticketId, effective, items);
+        long docId = docs.createDraft(ticketId, effective, items, actor.name());
         return docs.findById(docId).orElseThrow();
     }
 
@@ -354,11 +354,6 @@ public class DepositNoticeService {
             doc.customerName(), null, doc.customerTaxId(), doc.customerAddress(), doc.projectName(), doc.reference(),
             doc.items(), doc.subtotal(), doc.depositPercent(), doc.depositAmount(), doc.vatAmount(), doc.totalPayable(),
             doc.preparerName());
-    }
-
-    /** The preparer printed on a deposit notice (null when the row is gone). */
-    String preparerNameOf(long depositNoticeId) {
-        return docs.findById(depositNoticeId).map(DepositNoticeDto::preparerName).orElse(null);
     }
 
     // Download Excel bytes
