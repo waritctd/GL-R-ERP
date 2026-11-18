@@ -26,10 +26,22 @@ public class SalesAnalyticsService {
 
     private final SalesAnalyticsRepository repository;
     private final ObjectMapper mapper;
+    private final java.time.Clock clock;
 
+    @org.springframework.beans.factory.annotation.Autowired
     public SalesAnalyticsService(SalesAnalyticsRepository repository, ObjectMapper mapper) {
+        this(repository, mapper, java.time.Clock.system(java.time.ZoneId.of("Asia/Bangkok")));
+    }
+
+    SalesAnalyticsService(SalesAnalyticsRepository repository, ObjectMapper mapper, java.time.Clock clock) {
         this.repository = repository;
         this.mapper = mapper;
+        this.clock = clock;
+    }
+
+    /** Read-only: the latest ended week with its week-before values and data checks; nulls and empty lists before the first run. */
+    public SalesAnalyticsRepository.MetricsDto metrics() {
+        return repository.metrics(java.time.LocalDate.now(clock));
     }
 
     /** The answer is {"snapshot": null} until the first upload. The controller has already checked the role. */

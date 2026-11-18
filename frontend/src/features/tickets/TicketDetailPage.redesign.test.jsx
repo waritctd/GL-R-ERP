@@ -425,6 +425,47 @@ describe('header quick actions โทรแล้ว / นัดเข้าพ�
     expect(await screen.findByRole('button', { name: 'โทรแล้ว' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'นัดเข้าพบ' })).toBeNull();
   });
+
+  // Slice 6d: ส่งตัวอย่าง beside โทรแล้ว, under the same gate (TicketService#addActivity's requireDealOwnership), opening
+  // the sheet with this งาน fixed. Mock-driven: the permission evidence is DealActivitySampleSentIntegrationTest.
+  it('ส่งตัวอย่าง records a SAMPLE_SENT activity on this งาน, with what was sent and the picked ตามต่อ', async () => {
+    renderPage();
+    await pageReady();
+    fireEvent.click(await screen.findByRole('button', { name: 'ส่งตัวอย่าง' }));
+    const dialog = await screen.findByRole('dialog', { name: 'ส่งตัวอย่าง' });
+    expect(within(dialog).queryByLabelText(/^งาน/)).toBeNull();
+    fireEvent.change(within(dialog).getByLabelText(/^ส่งอะไร/), { target: { value: 'ตัวอย่าง Raku 3 สี' } });
+    fireEvent.click(within(dialog).getByRole('radio', { name: '3 วัน' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'บันทึก' }));
+    await waitFor(() => expect(api.tickets.addActivity).toHaveBeenCalledTimes(1));
+    expect(api.tickets.addActivity.mock.calls[0]).toStrictEqual([701, {
+      kind: 'SAMPLE_SENT', activityDate: bangkokTodayIso(), note: 'ตัวอย่าง Raku 3 สี',
+      nextFollowUpAt: addDaysIso(bangkokTodayIso(), 3),
+    }]);
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'ส่งตัวอย่าง' })).toBeNull());
+  });
+
+  it.each([['sales_manager', salesManager], ['ceo', ceo]])('%s gets ส่งตัวอย่าง too (the deal’s writers)', async (_role, user) => {
+    renderPage(user);
+    await pageReady();
+    expect(await screen.findByRole('button', { name: 'ส่งตัวอย่าง' })).toBeTruthy();
+  });
+
+  it('wrong-way-round: a sales rep who does not own the งาน gets no ส่งตัวอย่าง', async () => {
+    renderPage(otherSales);
+    await pageReady();
+    await settle();
+    expect(screen.queryByRole('button', { name: 'ส่งตัวอย่าง' })).toBeNull();
+  });
+
+  it('on a paused งาน ส่งตัวอย่าง stays but offers no ตามต่อ (the server refuses a date there)', async () => {
+    setDeal({ lifecycle: 'ON_HOLD' }, []);
+    renderPage();
+    await pageReady();
+    fireEvent.click(await screen.findByRole('button', { name: 'ส่งตัวอย่าง' }));
+    const dialog = await screen.findByRole('dialog', { name: 'ส่งตัวอย่าง' });
+    expect(within(dialog).queryByRole('radiogroup', { name: 'ตามต่อ' })).toBeNull();
+  });
 });
 
 describe('ภาพรวม: ข้อมูลงาน + one merged timeline', () => {
@@ -493,6 +534,41 @@ describe('ภาพรวม: ข้อมูลงาน + one merged timeline'
     expect(within(timeline).getAllByRole('listitem')[0]).toBe(row);
     expect(within(row).getByText('นัดไว้')).toBeTruthy();
     expect(within(row).getByRole('link').getAttribute('href')).toBe(`/visits?week=${weekStartIso(day)}`);
+  });
+
+  // Slice 6d: a SAMPLE_SENT row has its own label and icon in ประวัติ; it is not a visit, so เข้าพบ leaves it out.
+  it('a ส่งตัวอย่าง activity shows as ส่งตัวอย่าง with its icon, under ทั้งหมด but not เข้าพบ', async () => {
+    setDeal({}, [], { events });
+    api.tickets.listActivities.mockResolvedValue({
+      items: [{ id: 13, kind: 'SAMPLE_SENT', note: 'ตัวอย่าง Raku สีเทา', activityDate: '2026-07-08', createdByName: 'สมชาย ใจดี', createdAt: '2026-07-08T09:00:00.000Z' }],
+    });
+    renderPage();
+    await pageReady();
+    const timeline = await screen.findByTestId('deal-timeline');
+    const note = await within(timeline).findByText('ตัวอย่าง Raku สีเทา');
+    const row = note.closest('li');
+    const badge = within(row).getByText('ส่งตัวอย่าง');
+    expect(badge.querySelector('svg') ?? badge.parentElement.querySelector('svg')).toBeTruthy();
+    expect(row.textContent).not.toContain('SAMPLE_SENT');
+    fireEvent.click(within(within(timeline).getByRole('group', { name: 'กรองประวัติ' })).getByRole('button', { name: 'เข้าพบ' }));
+    expect(within(timeline).queryByText('ตัวอย่าง Raku สีเทา')).toBeNull();
+  });
+
+  it('"+ บันทึก" with ส่งตัวอย่าง asks what was sent and will not save it blank', async () => {
+    renderPage();
+    await pageReady();
+    const timeline = await screen.findByTestId('deal-timeline');
+    fireEvent.click(within(timeline).getByRole('button', { name: '+ บันทึก' }));
+    const kind = within(timeline).getByLabelText(/^ประเภท/);
+    fireEvent.change(kind, { target: { value: 'SAMPLE_SENT' } });
+    const save = within(timeline).getByRole('button', { name: 'บันทึกกิจกรรม' });
+    expect(within(timeline).getByLabelText(/ส่งอะไร/)).toBeTruthy();
+    expect(save.disabled).toBe(true);
+    fireEvent.change(within(timeline).getByLabelText(/ส่งอะไร/), { target: { value: 'แคตตาล็อก' } });
+    expect(save.disabled).toBe(false);
+    fireEvent.change(kind, { target: { value: 'CALL' } });
+    fireEvent.change(within(timeline).getByLabelText(/บันทึก \(ถ้ามี\)/), { target: { value: '' } });
+    expect(save.disabled).toBe(false);
   });
 
   it('the old always-open activity form is gone; "+ บันทึก" opens the note composer', async () => {

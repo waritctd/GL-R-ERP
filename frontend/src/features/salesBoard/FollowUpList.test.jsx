@@ -29,6 +29,14 @@ function renderList(props = {}) {
 }
 
 describe('FollowUpList', () => {
+  // Slice 6d: a sample sent is a follow-up touch, and ควรตามต่อ names it as the last one (ส่งตัวอย่าง, never the code).
+  it('shows a ส่งตัวอย่าง as ครั้งล่าสุด: ส่งตัวอย่าง · what was sent', () => {
+    renderList({ deals: [{ ...quiet, lastActivityKind: 'SAMPLE_SENT', lastActivityNote: 'ตัวอย่าง Raku 3 สี' }] });
+    const row = screen.getByTestId('follow-up-1');
+    expect(within(row).getByText('ครั้งล่าสุด: ส่งตัวอย่าง · ตัวอย่าง Raku 3 สี')).toBeTruthy();
+    expect(row.textContent).not.toContain('SAMPLE_SENT');
+  });
+
   it('a quiet deal keeps its three one-tap actions; ปิดงานนี้ (was ปิดดีลนี้) opens the lost dialog through onCloseDeal', () => {
     const { onCloseDeal } = renderList();
     const row = screen.getByTestId('follow-up-1');

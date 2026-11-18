@@ -10,11 +10,12 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
+import th.co.glr.hr.salesanalytics.SalesAnalyticsRepository.MetricsDto;
 import th.co.glr.hr.salesanalytics.SalesAnalyticsService.SnapshotDto;
 
 /** Sales-insights snapshot: ceo + sales_manager read, ceo uploads. Roles are checked here, before the body is touched. */
 @RestController
-@RequestMapping("/api/sales-analytics/snapshot")
+@RequestMapping("/api/sales-analytics")
 public class SalesAnalyticsController {
     private final SalesAnalyticsService service;
     private final SessionContext sessions;
@@ -24,15 +25,23 @@ public class SalesAnalyticsController {
         this.sessions = sessions;
     }
 
-    @GetMapping
+    @GetMapping("/snapshot")
     Map<String, SnapshotDto> latest(HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
         sessions.requireAnyRole(user, "ceo", "sales_manager");
         return service.latest();
     }
 
+    /** The latest ended week's figures computed inside the portal (analytics.metric_weekly); ceo + sales_manager. */
+    @GetMapping("/metrics")
+    MetricsDto metrics(HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        sessions.requireAnyRole(user, "ceo", "sales_manager");
+        return service.metrics();
+    }
+
     /** The raw stream, not a parsed body, so the service can cap how much of it is ever read. */
-    @PutMapping
+    @PutMapping("/snapshot")
     Map<String, Boolean> upload(HttpServletRequest request, HttpSession session) throws IOException {
         UserPrincipal user = sessions.requireUser(session);
         sessions.requireAnyRole(user, "ceo");

@@ -5,6 +5,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AppShell } from './AppShell.jsx';
 import { Launcher } from './Launcher.jsx';
+import { Modal } from '../common/Modal.jsx';
 
 globalThis.React = React;
 
@@ -878,3 +879,23 @@ describe('AppShell navigation: วิเคราะห์การลาแล�
     expect(screen.queryByText('วิเคราะห์การลาและเวลาเข้างาน')).toBeNull();
   });
 });
+
+// Slice 6d fix round 1 (review L5): the เมนู button's wrapper made its own layer above every modal (z-[201] against
+// the modal backdrop's z-50), so on a phone a tall dialog had the menu drawn over its title. The wrapper must sit
+// BELOW the modal layer and still ABOVE the page's own overlays (the drawer / filter-sheet ladder tops out at 45), so
+// the launcher it holds keeps covering the page. jsdom has no stacking, so this pins the z ladder from the rendered
+// classes; the look was re-checked in the browser at 320 and 375 (slice6d-shots).
+describe('AppShell — the menu layer sits under modals, over the page', () => {
+  const zOf = (el) => Number(/(?:^|\s)z-\[?(\d+)\]?(?:\s|$)/.exec(el.className)?.[1]);
+
+  it('the เมนู wrapper is below the modal backdrop and above the page-overlay ladder (45)', async () => {
+    render(shellTree(AppShell, { id: 1, role: 'ceo', name: 'ซีอีโอ', employeeId: 1 }, ['/']));
+    const wrapper = (await screen.findByRole('button', { name: 'เมนู' })).parentElement;
+    render(<Modal title="ทดสอบ" onClose={vi.fn()}>เนื้อหา</Modal>);
+    const backdrop = screen.getByRole('dialog', { name: 'ทดสอบ' }).parentElement;
+
+    expect(zOf(wrapper)).toBeGreaterThan(45);
+    expect(zOf(backdrop)).toBeGreaterThan(zOf(wrapper));
+  });
+});
+

@@ -13,8 +13,36 @@ import { SNAPSHOT, SNAPSHOT_MINIMAL, SNAPSHOT_SPARSE, SNAPSHOT_WITH_NOW } from '
 globalThis.React = React;
 
 vi.mock('../../api/index.js', () => ({
-  api: { salesAnalytics: { snapshot: vi.fn() } },
+  api: { salesAnalytics: { snapshot: vi.fn(), metrics: vi.fn() } },
 }));
+
+const NO_METRICS = { weekStart: null, computedAt: null, metrics: [], checks: [] };
+// Invented figures. Brand X: 8.0 ล้าน quoted; Brand Y: 2.0 ล้าน. Rep B has no activity metric and a real 0 for moves.
+const m = (key, dimension, label, value, previous = null) => ({ key, dimension, label, value, previous });
+const METRICS = {
+  weekStart: '2026-11-09', computedAt: '2026-11-10T01:00:00Z',
+  metrics: [
+    m('pipeline_value_dedup', '', '', 12_000_000, 10_000_000),
+    m('pipeline_value_raw', '', '', 15_000_000, null),
+    m('pipeline_stale_share', '', '', 0.25, 0.2),
+    m('rep_stage_moves_week', 'rep=1', 'Rep A', 4), m('rep_activities_week', 'rep=1', 'Rep A', 12),
+    m('rep_quiet_deal_share', 'rep=1', 'Rep A', 0.25), m('hygiene_score', 'rep=1', 'Rep A', 0.8),
+    m('rep_stage_moves_week', 'rep=2', 'Rep B', 0), m('rep_quiet_deal_share', 'rep=2', 'Rep B', 0.1), m('hygiene_score', 'rep=2', 'Rep B', 0),
+    m('rep_stage_moves_week', 'rep=3', 'Rep C', 0),                                   // nothing at all: hidden
+    m('rep_activities_week', 'rep=4', 'Rep D', 3),                                    // only activity: shown
+    m('quoted_value', 'brand=Brand Y', 'Brand Y', 2_000_000), m('quoted_sqm', 'brand=Brand Y', 'Brand Y', 1000),
+    m('quoted_value', 'brand=Brand X', 'Brand X', 8_000_000), m('quoted_sqm', 'brand=Brand X', 'Brand X', 4000),
+    m('ordered_value', 'brand=Brand X', 'Brand X', 3_000_000),
+  ],
+  checks: [
+    { key: 'stage_mapped', passed: true, detail: 'unmapped tickets=0' },
+    { key: 'quote_line_brand_present', passed: true, detail: 'lines with no brand=0' },
+  ],
+};
+const FAILED = { key: 'quote_line_brand_present', passed: false, detail: 'lines with no brand=4' };
+const withMetrics = (data = METRICS) => api.salesAnalytics.metrics.mockResolvedValue(data);
+const block = async () => { await screen.findByTestId('portal-week'); return screen.getByTestId('portal-metrics'); };
+const cells = (row) => [...row.querySelectorAll('td')].map((td) => td.textContent);
 
 // The role decides section order: a product ruling, pinned here per role.
 const CEO_ORDER = ['sales', 'comm', 'cust', 'pipe', 'des'];
@@ -51,6 +79,7 @@ describe('SalesInsights', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     withSnapshot();
+    api.salesAnalytics.metrics.mockResolvedValue(NO_METRICS);
   });
 
   describe('month picker', () => {
@@ -591,6 +620,153 @@ describe('SalesInsights', () => {
         await screen.findByTestId('insight-month-detail');
         expect(screen.queryByTestId('insight-updated')).toBeNull();
       });
+    });
+  });
+
+  describe('ตัวเลขจาก Portal block (analytics Phase 2)', () => {
+    it('renders the week line, the VAT note, the pipeline figures with the change vs the previous week, from the response only', async () => {
+      withMetrics();
+      renderInsights('ceo');
+      const el = await block();
+      expect(within(el).getByRole('heading', { name: 'ตัวเลขจาก Portal' })).toBeTruthy();
+      expect(within(el).getByTestId('portal-week').textContent)
+        .toBe(`สัปดาห์เริ่ม ${formatThaiDate('2026-11-09T00:00:00')} · คำนวณเมื่อ ${formatThaiDate('2026-11-10T01:00:00Z')}`);
+      expect(el.textContent).toContain('ไม่รวม VAT');
+      const fig = (label) => within(el).getByText(label).closest('div');
+      expect(fig('มูลค่า pipeline (นับโครงการละครั้ง)').textContent).toContain(ml(12_000_000));
+      expect(fig('มูลค่า pipeline (นับโครงการละครั้ง)').textContent).toContain('เทียบสัปดาห์ก่อน +2.0 ล้าน');
+      expect(fig('มูลค่า pipeline (รวมทุกงาน)').textContent).toContain(ml(15_000_000));
+      expect(fig('มูลค่า pipeline (รวมทุกงาน)').textContent).not.toContain('เทียบสัปดาห์ก่อน');
+      expect(fig('สัดส่วน pipeline ที่เงียบเกิน 14 วัน').textContent).toContain(pct(0.25));
+      expect(fig('สัดส่วน pipeline ที่เงียบเกิน 14 วัน').textContent).toContain('เทียบสัปดาห์ก่อน +5 จุด');
+    });
+
+    it('team table: one row per active rep; a missing metric is "—", a real 0 is 0; a rep with no deals and no activity is hidden', async () => {
+      withMetrics();
+      renderInsights('sales_manager');
+      const rows = [...(await within(await block()).findByTestId('portal-team')).querySelectorAll('tbody tr')];
+      expect(rows.map(cells)).toEqual([
+        ['Rep A', '4', '12', '25%', '80%'],
+        ['Rep B', '0', '—', '10%', '0%'],
+        ['Rep D', '—', '3', '—', '—'],
+      ]);
+    });
+
+    it('brand table: sorted by quoted value, share of the quoted total, sqm, ordered value; heading says เสนอราคา, never ขาย', async () => {
+      withMetrics();
+      renderInsights('ceo');
+      const panel = (await block()).querySelector('[data-testid="portal-brands-panel"]');
+      expect(panel.textContent).toContain('เสนอราคา');
+      expect(panel.textContent).not.toMatch(/ขาย/);
+      expect(panel.textContent).toContain('ได้รับคำสั่งซื้อ');
+      const rows = [...within(panel).getByTestId('portal-brands').querySelectorAll('tbody tr')];
+      expect(rows.map(cells)).toEqual([
+        ['Brand X', ml(8_000_000), '80%', '4,000 ตร.ม.', ml(3_000_000)],
+        ['Brand Y', ml(2_000_000), '20%', '1,000 ตร.ม.', '—'],
+      ]);
+      expect(panel.className).toContain('[&_td]:whitespace-nowrap');
+    });
+
+    it('shows a warning banner listing only the failed checks, and none when every check passed', async () => {
+      withMetrics({ ...METRICS, checks: [...METRICS.checks, FAILED] });
+      const { unmount } = renderInsights('ceo');
+      const banner = await screen.findByTestId('portal-checks');
+      expect(banner.getAttribute('role')).toBe('status');
+      expect(banner.textContent).toContain('รายการสินค้าในใบเสนอราคาที่ไม่มีแบรนด์');
+      expect(banner.textContent).toContain('lines with no brand=4');
+      expect(banner.textContent).not.toContain('stage_mapped');
+      expect(banner.textContent).not.toContain('งานที่ยังไม่ได้จับคู่ขั้นงาน');
+      unmount();
+
+      withMetrics();
+      renderInsights('ceo');
+      await block();
+      expect(screen.queryByTestId('portal-checks')).toBeNull();
+    });
+
+    it('names each failed check in Thai, and falls back to the raw key for one it does not know', async () => {
+      withMetrics({ ...METRICS, checks: [
+        { key: 'stage_mapped', passed: false, detail: 'unmapped tickets=2' },
+        { key: 'won_deal_has_value', passed: false, detail: 'won deals with no value=1' },
+        { key: 'test_flag_reviewed', passed: false, detail: 'x=3' },
+        { key: 'brand_new_check', passed: false, detail: 'n=1' },
+      ] });
+      renderInsights('ceo');
+      const t = (await screen.findByTestId('portal-checks')).textContent;
+      expect(t).toContain('งานที่ยังไม่ได้จับคู่ขั้นงาน');
+      expect(t).toContain('งานที่ได้รับคำสั่งซื้อแล้วแต่ไม่มีมูลค่า');
+      expect(t).toContain('งานที่ชื่อเหมือนงานทดสอบแต่ยังไม่ได้ตรวจสอบ');
+      expect(t).toContain('brand_new_check');
+      expect(t).not.toContain('stage_mapped');
+    });
+
+    it('stale-share change is the difference of the two ROUNDED percentages, so it agrees with what is shown', async () => {
+      withMetrics({ ...METRICS, metrics: METRICS.metrics.map((x) => (x.key === 'pipeline_stale_share' ? { ...x, value: 0.254, previous: 0.206 } : x)) });
+      renderInsights('ceo');
+      const el = await block();
+      const f = within(el).getByText('สัดส่วน pipeline ที่เงียบเกิน 14 วัน').closest('div').textContent;
+      expect(f).toContain('25%');
+      expect(f).toContain('เทียบสัปดาห์ก่อน +4 จุด');
+    });
+
+    it('prints square metres as whole numbers', async () => {
+      withMetrics({ ...METRICS, metrics: METRICS.metrics.map((x) => (x.key === 'quoted_sqm' && x.label === 'Brand X' ? { ...x, value: 4012.375 } : x)) });
+      renderInsights('ceo');
+      const rows = [...(await block()).querySelectorAll('[data-testid="portal-brands"] tbody tr')];
+      expect(cells(rows[0])[3]).toBe('4,012 ตร.ม.');
+    });
+
+    it('tolerates null metrics / checks arrays, and a malformed response cannot blank the snapshot part', async () => {
+      withMetrics({ weekStart: '2026-11-09', computedAt: '2026-11-10T01:00:00Z', metrics: null, checks: null });
+      const first = renderInsights('ceo');
+      expect(await screen.findByTestId('portal-week')).toBeTruthy();
+      expect(screen.queryByTestId('portal-metrics-fallback')).toBeNull();
+      await screen.findByTestId('insight-month-detail');
+      first.unmount();
+
+      withMetrics({ ...METRICS, metrics: [null] });
+      renderInsights('ceo');
+      expect((await screen.findByTestId('portal-metrics-fallback')).getAttribute('role')).toBe('alert');
+      await screen.findByTestId('insight-month-detail');
+    });
+
+    it('keeps the figures and shows no alert when a refetch fails after data was loaded', async () => {
+      withMetrics();
+      const { queryClient } = renderInsights('ceo');
+      await block();
+      api.salesAnalytics.metrics.mockRejectedValue(new Error('down'));
+      await act(async () => { await queryClient.refetchQueries({ queryKey: ['salesAnalytics', 'metrics'] }); });
+      await waitFor(() => expect(queryClient.getQueryState(['salesAnalytics', 'metrics']).fetchStatus).toBe('idle'));
+      expect(queryClient.getQueryState(['salesAnalytics', 'metrics']).status).toBe('error');
+      const el = screen.getByTestId('portal-metrics');
+      expect(within(el).queryByRole('alert')).toBeNull();
+      expect(within(el).getByTestId('portal-week')).toBeTruthy();
+    });
+
+    it('shows the empty state when no week has been computed', async () => {
+      renderInsights('ceo');
+      expect((await screen.findByTestId('portal-metrics-empty')).textContent)
+        .toBe('ยังไม่มีตัวเลขรายสัปดาห์ — ระบบคำนวณทุกเช้าวันจันทร์');
+      expect(screen.queryByTestId('portal-team')).toBeNull();
+    });
+
+    it('shows the metrics even when no snapshot is stored, and labels the snapshot part below it', async () => {
+      withMetrics();
+      api.salesAnalytics.snapshot.mockResolvedValue({ snapshot: null });
+      renderInsights('ceo');
+      await block();
+      expect(await screen.findByTestId('insight-empty')).toBeTruthy();
+      expect(screen.getByTestId('portal-snapshot-heading').textContent).toContain('รายงานประจำสัปดาห์');
+      const order = [...document.querySelectorAll('[data-testid="portal-metrics"], [data-testid="portal-snapshot-heading"], [data-testid="insight-empty"]')]
+        .map((e) => e.getAttribute('data-testid'));
+      expect(order).toEqual(['portal-metrics', 'portal-snapshot-heading', 'insight-empty']);
+    });
+
+    it('a failed metrics call shows an alert in the block and leaves the snapshot part intact', async () => {
+      api.salesAnalytics.metrics.mockRejectedValue(new Error('down'));
+      renderInsights('ceo');
+      expect((await within(await screen.findByTestId('portal-metrics')).findByRole('alert')).textContent).toContain('ตัวเลขจาก Portal');
+      await screen.findByTestId('insight-month-detail');
     });
   });
 });

@@ -148,6 +148,7 @@ export const API_ROUTES = {
   // SalesAnalyticsController (salesanalytics/): the weekly analytics snapshot, ceo + sales_manager read; the PUT comes from an outside refresh job.
   salesAnalytics: {
     snapshot: '/api/sales-analytics/snapshot',
+    metrics: '/api/sales-analytics/metrics',
   },
   // PeopleInsightsController (peopleinsights/): leave + check-in analytics, ceo/hr (any scope) and team heads (their team).
   peopleInsights: {

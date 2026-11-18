@@ -162,11 +162,11 @@ request (`.github/workflows/`).
 
 ## Vercel Frontend Deployment
 
-This repo includes a root-level `vercel.json` for Vercel projects whose Root Directory is the repository root. It installs and builds `frontend/`, publishes `frontend/dist`, proxies `/api/*` to `https://api.glr-hub.com/api/*` on the on-prem backend, and serves `index.html` for React SPA routes.
+This repo includes a root-level `vercel.json` for Vercel projects whose Root Directory is the repository root. It installs and builds `frontend/`, publishes `frontend/dist`, proxies `/api/*` to `https://api.glr-hub.com/api/*` on the on-prem backend, and serves `index.html` for React SPA routes. Since 14 Nov 2026 production runs this way: the website on Vercel, the backend and database on the office server. How it is wired, released and backed up is in [`ops/onprem/README.md`](ops/onprem/README.md).
 
 Builds are locked to the self-service surface by default (`VITE_SELF_SERVICE_ONLY` is on unless set to `false`). The `develop` branch build sets it to `false`, so the develop preview shows the full app; every other branch, including `main`, ships the locked surface.
 
-If the Vercel project Root Directory is set to `frontend`, the matching `frontend/vercel.json` can be used instead.
+The production Vercel project's Root Directory is `frontend`, so **`frontend/vercel.json` is the file Vercel actually uses**; change both files together.
 
 ### Maintenance mode during cutover
 
