@@ -54,7 +54,7 @@ function lineAmount(item) {
 // An untouched เพิ่มรายการ row (or one emptied again): no description and nothing to bill. Left
 // out of the save (the backend refuses a line without a description) and of the issue checks.
 // The quotation document view's item grid (QuotationDocumentView ITEM_GRID), so both documents read as one table.
-const NOTICE_ITEM_GRID = 'grid-cols-[minmax(0,3fr)_minmax(5.75rem,0.8fr)_minmax(5.75rem,0.9fr)_minmax(3.5rem,0.6fr)_minmax(5.75rem,0.9fr)_minmax(8.25rem,1fr)] tablet:min-w-0 reflow-cards';
+const NOTICE_ITEM_GRID = 'grid-cols-[minmax(0,3fr)_minmax(5.75rem,0.8fr)_minmax(5.75rem,0.9fr)_minmax(3.5rem,0.6fr)_minmax(5.75rem,0.9fr)_minmax(8.25rem,1fr)] tablet:grid-cols-[minmax(0,3fr)_minmax(5rem,0.8fr)_minmax(5rem,0.9fr)_minmax(3rem,0.5fr)_minmax(5rem,0.9fr)_minmax(7rem,1fr)] tablet:min-w-0 reflow-cards';
 const NO_ITEMS_MESSAGE = 'กรุณาเพิ่มรายการสินค้าอย่างน้อย 1 รายการ';
 
 function isBlankRow(item) {

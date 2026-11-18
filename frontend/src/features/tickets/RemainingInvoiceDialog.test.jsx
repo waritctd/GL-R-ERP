@@ -925,6 +925,19 @@ describe('RemainingInvoiceDialog — sections and stored items (unified look)', 
     expect(items.querySelectorAll('input, select, textarea').length).toBe(0);
   });
 
+  // Phone width (Task 5 fix round 1): `.data-row > span` is nowrap + ellipsis, so text sitting directly in the cell
+  // is cut off. The description goes in an inner span, which `.data-row > span > span` lets wrap.
+  it('draft form: the item description sits in an inner span of its cell so it wraps instead of being ellipsised', async () => {
+    api.storedRemainingInvoices.listForTicket.mockResolvedValue({ remainingInvoices: [docRow({ items: storedItems })] });
+    renderDialog();
+    const items = await screen.findByTestId('remaining-invoice-items');
+    const text = within(items).getByText('กระเบื้องรุ่นทดสอบ ก');
+    const cell = text.closest('.data-row > span');
+    expect(cell).not.toBeNull();
+    expect(cell).not.toBe(text);
+    expect(cell.getAttribute('data-label')).toBe('รายละเอียด');
+  });
+
   it('draft form: a stored row without items shows no item list', async () => {
     api.storedRemainingInvoices.listForTicket.mockResolvedValue({ remainingInvoices: [docRow()] });
     renderDialog();

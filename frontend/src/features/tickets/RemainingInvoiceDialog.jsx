@@ -53,7 +53,7 @@ function StoredItems({ items }) {
         </div>
         {items.map((it, idx) => (
           <div key={it.id ?? idx} className={`${ITEM_GRID} data-row`}>
-            <span className="min-w-0 font-bold [overflow-wrap:anywhere]" data-label="รายละเอียด">{it.description}</span>
+            <span className="min-w-0" data-label="รายละเอียด"><span className="font-bold [overflow-wrap:anywhere]">{it.description}</span></span>
             <span className="tabular-nums text-right" data-label="จำนวน">{`${Number(it.qty).toLocaleString('th-TH')} ${it.unit ?? ''}`.trim()}</span>
             <span className="tabular-nums text-right" data-label="ราคาสุทธิ/หน่วย">{formatMoney(it.netUnitPrice ?? it.unitPrice)}</span>
             <span className="tabular-nums text-right font-bold" data-label="เป็นเงิน">{formatMoney(it.amount)}</span>
