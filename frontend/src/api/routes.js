@@ -687,6 +687,8 @@ export const API_ROUTES = {
     // "สร้างดีลจากใบเสนอราคา": promote an APPROVED direct quotation's quotation-only container ticket
     // into the pipeline at ORDER_RECEIVED. Mirrors DealQuotationController#promoteToDeal.
     promoteToDeal: (id) => `/api/deal-quotations/${id}/confirm-order`,
+    // Takes back a ยืนยันคำสั่งซื้อ pressed by mistake. Mirrors DealQuotationController#undoConfirmOrder.
+    undoConfirmOrder: (id) => `/api/deal-quotations/${id}/undo-confirm-order`,
     cancel: (id) => `/api/deal-quotations/${id}/cancel`,
     file: (id, format) => `/api/deal-quotations/${id}/file?format=${format}`,
     // "คืนรายการ": re-adds a CEO-linked line a prior save dropped. Mirrors

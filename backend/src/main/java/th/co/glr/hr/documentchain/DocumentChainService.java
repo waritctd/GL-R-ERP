@@ -84,7 +84,8 @@ public class DocumentChainService {
             && !promoted;
         DocumentChainDto.Order order = new DocumentChainDto.Order(confirmed, confirmable,
             confirmedRow == null ? null : confirmedRow.id(), confirmedRow == null ? null : confirmedRow.number(),
-            confirmedAt);
+            confirmedAt, promoted && quotations.isOrderConfirmationUndoable(s),
+            promoted ? tickets.findPromotionEvent(ticketId).map(TicketRepository.PromotionEvent::eventId).orElse(null) : null);
 
         // ── deposit notice: the deal page's pick — the DRAFT, else the latest ISSUED ──
         DepositNoticeDto draftNotice = notices.stream().filter(d -> "DRAFT".equals(d.status())).findFirst().orElse(null);

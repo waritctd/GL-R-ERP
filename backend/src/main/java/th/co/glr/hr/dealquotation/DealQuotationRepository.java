@@ -457,11 +457,27 @@ public class DealQuotationRepository {
         return findSolePartyId(ticketId);
     }
 
-    /** The party whose quotation became the confirmed order has won (V204); the bid outcome also sets it. */
+    /** The party whose quotation became the confirmed order has won (V204); the bid outcome also sets it. Remembers the
+     * status and not-awarded reason it overwrites (V225) so an undone confirmation can put them back; a row that is
+     * already AWARDED (the bid path awards first) is not touched, so nothing is remembered for it. */
     public int markPartyAwarded(long partyId) {
         return jdbc.update("""
-            UPDATE sales.deal_party SET status = 'AWARDED', not_awarded_reason = NULL, updated_at = now()
+            UPDATE sales.deal_party
+               SET status_before_award = status, not_awarded_reason_before_award = not_awarded_reason,
+                   status = 'AWARDED', not_awarded_reason = NULL, updated_at = now()
              WHERE party_id = :id AND status <> 'AWARDED'
+            """, Map.of("id", partyId));
+    }
+
+    /** The reverse of {@link #markPartyAwarded}, for an undone order confirmation: AWARDED -> the status (and reason) it
+     * had before; QUOTED when none was remembered (awarded before V225). */
+    public int restorePartyBeforeAward(long partyId) {
+        return jdbc.update("""
+            UPDATE sales.deal_party
+               SET status = COALESCE(status_before_award, 'QUOTED'),
+                   not_awarded_reason = CASE WHEN status_before_award IS NULL THEN NULL ELSE not_awarded_reason_before_award END,
+                   status_before_award = NULL, not_awarded_reason_before_award = NULL, updated_at = now()
+             WHERE party_id = :id AND status = 'AWARDED'
             """, Map.of("id", partyId));
     }
 

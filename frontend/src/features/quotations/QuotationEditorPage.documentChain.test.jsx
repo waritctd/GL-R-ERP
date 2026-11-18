@@ -33,7 +33,7 @@ vi.mock('../../api/index.js', async (importOriginal) => {
       dealQuotations: {
         get: vi.fn(), create: vi.fn(), update: vi.fn(), calculateLine: vi.fn(), submit: vi.fn(),
         approve: vi.fn(), reject: vi.fn(), createRevision: vi.fn(), createReorder: vi.fn(),
-        cancel: vi.fn(), downloadPdf: vi.fn(), downloadXlsx: vi.fn(), promoteToDeal: vi.fn(),
+        cancel: vi.fn(), downloadPdf: vi.fn(), downloadXlsx: vi.fn(), promoteToDeal: vi.fn(), undoConfirmOrder: vi.fn(),
         displayNameOptions: vi.fn().mockResolvedValue({ items: [] }),
       },
       documentChain: { get: vi.fn() },
@@ -281,5 +281,99 @@ describe('QuotationEditorPage — the document chain card', () => {
     const step3 = el.querySelector('li[data-step="3"]');
     expect(step3.getAttribute('data-state')).toBe('skipped');
     expect(within(step3).getAllByText(/ไม่รับมัดจำ/).length).toBeGreaterThan(0);
+  });
+
+  // "ยกเลิกการยืนยันคำสั่งซื้อ": shown only when the server says the confirmation is undoable, the viewer may confirm,
+  // and the confirmation came from THIS quotation. The server re-checks everything; these pin the card's gate.
+  describe('ยกเลิกการยืนยันคำสั่งซื้อ', () => {
+    const undoBtn = () => screen.queryByTestId('quotation-chain-undo-confirm');
+    const undoable = (extra = {}) => confirmed({ ...extra, order: { undoable: true, confirmationEventId: 71, ...extra.order } });
+
+    it('shows on the confirmed step when undoable + viewer may confirm + confirmed from this quotation', async () => {
+      api.documentChain.get.mockResolvedValue({ documentChain: undoable() });
+      renderPage();
+      await (await card()).findByRole('button', { name: 'สร้างใบแจ้งยอดเงินรับมัดจำ' });
+      expect(undoBtn()).toBeTruthy();
+      expect(undoBtn().textContent).toContain('ยกเลิกการยืนยันคำสั่งซื้อ');
+      // Keyed to the confirm-order step's own identity, not to its position.
+      expect(undoBtn().closest('li').getAttribute('data-step-key')).toBe('confirm-order');
+      expect(primaryButtons(screen.getByTestId('quotation-document-chain'))).toHaveLength(1);
+    });
+
+    it.each([
+      ['not undoable', () => confirmed({ order: { undoable: false } })],
+      ['undoable flag absent', () => confirmed()],
+      ['viewer may not confirm', () => undoable({ viewer: { mayConfirmOrder: false } })],
+      ['confirmed from another quotation', () => undoable({ order: { confirmedFromQuotationId: 9 } })],
+      ['order not confirmed yet', () => summary()],
+    ])('is absent when %s', async (_name, make) => {
+      api.documentChain.get.mockResolvedValue({ documentChain: make() });
+      renderPage();
+      await waitFor(() => expect(api.documentChain.get).toHaveBeenCalled());
+      await screen.findByRole('heading', { name: /ใบเสนอราคา QT-2026-0005-1/ });
+      expect(undoBtn()).toBeNull();
+    });
+
+    it('is absent while the chain has not loaded', async () => {
+      api.documentChain.get.mockReturnValue(new Promise(() => {}));
+      renderPage();
+      await waitFor(() => expect(api.documentChain.get).toHaveBeenCalled());
+      await screen.findByRole('heading', { name: /ใบเสนอราคา QT-2026-0005-1/ });
+      expect(undoBtn()).toBeNull();
+    });
+
+    async function openDialog() {
+      api.documentChain.get.mockResolvedValueOnce({ documentChain: undoable() })
+        .mockResolvedValue({ documentChain: summary() });
+      const view = renderPage();
+      await (await card()).findByRole('button', { name: 'สร้างใบแจ้งยอดเงินรับมัดจำ' });
+      fireEvent.click(undoBtn());
+      const dialog = await screen.findByTestId('quotation-undo-confirm-dialog');
+      return { ...view, dialog: within(dialog) };
+    }
+
+    it('opens a dialog first (no call), says what happens, and submits the trimmed reason; the chain re-reads', async () => {
+      api.dealQuotations.undoConfirmOrder.mockResolvedValue({ result: { ticketId: 18, ticket: { id: 18 }, quotation: quotation() } });
+      const { dialog, showToast } = await openDialog();
+      expect(api.dealQuotations.undoConfirmOrder).not.toHaveBeenCalled();
+      expect(dialog.getByText(/ใบเสนอราคา.*แก้ไข/)).toBeTruthy();
+      expect(dialog.getByText(/ไม่มีการแจ้งเตือน/)).toBeTruthy();
+      const reason = dialog.getByRole('textbox');
+      expect(reason.getAttribute('maxlength')).toBe('500');
+      fireEvent.change(reason, { target: { value: '  กดผิดดีล  ' } });
+      fireEvent.click(screen.getByTestId('quotation-undo-confirm-submit'));
+      await waitFor(() => expect(api.dealQuotations.undoConfirmOrder).toHaveBeenCalledWith('5', { reason: 'กดผิดดีล', confirmationEventId: 71 }));
+      await waitFor(() => expect(screen.queryByTestId('quotation-undo-confirm-dialog')).toBeNull());
+      expect(showToast).toHaveBeenCalledWith('success', 'ยกเลิกการยืนยันคำสั่งซื้อแล้ว');
+      await waitFor(() => expect(undoBtn()).toBeNull());
+      expect(await (await card()).findByRole('button', { name: 'ยืนยันคำสั่งซื้อ' })).toBeTruthy();
+    });
+
+    it('with no reason typed, sends no reason key, only the confirmation the chain showed', async () => {
+      api.dealQuotations.undoConfirmOrder.mockResolvedValue({ result: { ticketId: 18, ticket: { id: 18 }, quotation: quotation() } });
+      await openDialog();
+      fireEvent.click(screen.getByTestId('quotation-undo-confirm-submit'));
+      await waitFor(() => expect(api.dealQuotations.undoConfirmOrder).toHaveBeenCalledWith('5', { confirmationEventId: 71 }));
+    });
+
+    it('a 409 closes the dialog, shows the server message and re-reads the chain', async () => {
+      api.dealQuotations.undoConfirmOrder.mockRejectedValue(Object.assign(new Error('ยกเลิกไม่ได้ — ออกใบแจ้งยอดเงินรับมัดจำแล้ว'), { status: 409 }));
+      const { showToast } = await openDialog();
+      const callsBefore = api.documentChain.get.mock.calls.length;
+      fireEvent.click(screen.getByTestId('quotation-undo-confirm-submit'));
+      await waitFor(() => expect(showToast).toHaveBeenCalledWith('error', 'ยกเลิกไม่ได้ — ออกใบแจ้งยอดเงินรับมัดจำแล้ว'));
+      await waitFor(() => expect(screen.queryByTestId('quotation-undo-confirm-dialog')).toBeNull());
+      await waitFor(() => expect(api.documentChain.get.mock.calls.length).toBeGreaterThan(callsBefore));
+    });
+
+    it('any other error (network, 500) keeps the dialog open with the typed reason, so the rep can retry', async () => {
+      api.dealQuotations.undoConfirmOrder.mockRejectedValue(Object.assign(new Error('เซิร์ฟเวอร์ขัดข้อง'), { status: 500 }));
+      const { dialog, showToast } = await openDialog();
+      fireEvent.change(dialog.getByRole('textbox'), { target: { value: 'กดผิดดีล' } });
+      fireEvent.click(screen.getByTestId('quotation-undo-confirm-submit'));
+      await waitFor(() => expect(showToast).toHaveBeenCalledWith('error', 'เซิร์ฟเวอร์ขัดข้อง'));
+      expect(screen.getByTestId('quotation-undo-confirm-dialog')).toBeTruthy();
+      expect(dialog.getByRole('textbox').value).toBe('กดผิดดีล');
+    });
   });
 });

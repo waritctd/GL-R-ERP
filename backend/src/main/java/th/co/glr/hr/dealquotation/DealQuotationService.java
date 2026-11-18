@@ -3,6 +3,7 @@ package th.co.glr.hr.dealquotation;
 import java.math.BigDecimal;
 import th.co.glr.hr.ticket.DealOwnership;
 import java.math.RoundingMode;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.ArrayList;
@@ -59,6 +60,9 @@ import th.co.glr.hr.pricingrequest.PricingRequestRepository;
 import th.co.glr.hr.pricingrequest.PricingRequestStatus;
 import th.co.glr.hr.dealquotation.DealQuotationDtos.PromoteToDealResultDto;
 import th.co.glr.hr.ticket.DealLifecycle;
+import th.co.glr.hr.ticket.DealStage;
+import th.co.glr.hr.ticket.DepositPolicy;
+import th.co.glr.hr.ticket.FulfilmentStatus;
 import th.co.glr.hr.ticket.QuotationRecipient;
 import th.co.glr.hr.ticket.QuotationStatus;
 import th.co.glr.hr.ticket.RelatedDocumentType;
@@ -1839,6 +1843,186 @@ public class DealQuotationService {
         return promotionResult(ticketId, quotationId);
     }
 
+    /**
+     * {@code POST /api/deal-quotations/{id}/undo-confirm-order}: takes back a "ยืนยันคำสั่งซื้อ" pressed by mistake,
+     * the reverse of {@link #confirmOrderFromDirectQuotation}, in ONE transaction. {@code reason} is optional (trimmed;
+     * blank = none; the controller enforces 500 chars).
+     *
+     * <p><strong>Order of checks</strong>: quotation exists on this engine (404) → authz {@link #requireEditAccess}
+     * (403, the same audience as confirm; before any 409) → {@code origin = DEAL_DIRECT} (409) → lock (advisory, then
+     * ticket row, as confirm) → idempotent replay: no {@code DEAL_PROMOTED_FROM_QUOTATION} event and an
+     * {@code ORDER_CONFIRMATION_UNDONE} event naming this quotation → return the current state, write nothing (no
+     * promotion event and no undo event: 409 never confirmed) → {@code confirmationEventId}, when the request carries one,
+     * must be the current promotion event's id (409: the order was confirmed again since the caller looked; the replay
+     * above is unaffected) → the promotion event must name THIS quotation (409) →
+     * the cut-off, {@link #undoRefusal} (409 with its own message; the same rule the document chain's
+     * {@code order.undoable} reads).
+     *
+     * <p><strong>Writes</strong>: the system's deposit-policy flip is flipped back first (only while
+     * {@code deposit_policy_set_by IS NULL}; reason NULL; a policy a person set is left alone); the deal's DRAFT deposit
+     * notices and their items are deleted; every {@code sales.ticket_item} of the deal is deleted; the ticket goes
+     * {@code quotation_issued -> draft}, {@code payment_status} NULL, {@code sales_stage} back to the {@code from} of
+     * the earliest automatic stage move after the promotion (unchanged if none), {@code stage_updated_at} to the time of
+     * the last earlier stage move (best effort: left alone if there was none), fulfilment NULL if it was FROM_STOCK;
+     * the party AWARDED goes back to the status and not-awarded reason it had before (V225; QUOTED if none was remembered); the confirmation's events are DELETED (promotion, CUSTOMER_CONFIRMED,
+     * its automatic stage moves, its system POLICY_CHANGED: SQL readers treat the promotion event's existence as
+     * "order confirmed"; the auto-cancel CANCELLED events stay); ONE {@code ORDER_CONFIRMATION_UNDONE} event records
+     * who had confirmed and when, the reason, and a deleted draft deposit notice. NO notification of any kind.
+     *
+     * <p><strong>Deliberately not restored</strong>: {@code quotation_only} (provenance only, nothing reads it); the
+     * deal's lines from before the confirmation (replaced by the quotation's, by owner ruling); sibling quotations the
+     * confirmation auto-cancelled (they stay cancelled); the notifications the confirmation sent. Afterwards the
+     * quotation can be revised again and the order confirmed again.
+     *
+     * <p><strong>Stage and its timestamp</strong>: {@code sales_stage} is restored only from an automatic stage move the
+     * confirmation wrote; if it wrote none, the stage is left as it is. That is the correct restore, not a gap: a deal
+     * cannot be moved to ORDER_RECEIVED by hand before the confirmation ({@code TicketService#requireStageFactsHold}
+     * refuses it without a payment status; pinned by {@code StageFactGateIntegrationTest
+     * #orderReceived_withNoVerifiedCustomerOrder_isRefused_andTheDealDoesNotMove}), so a deal past that point reached it
+     * through the confirmation. The {@code stage_updated_at} restore reads STAGE_CHANGED events only, so a deal with no
+     * earlier stage move keeps the confirm-time stamp.
+     */
+    @Transactional
+    public PromoteToDealResultDto undoOrderConfirmation(long quotationId, String reason, Long confirmationEventId,
+                                                        UserPrincipal actor) {
+        DealQuotationDto quotation = requireQuotation(quotationId);
+        long ticketId = quotation.ticketId();
+        requireEditAccess(actor, requireTicketSummary(ticketId));
+        if (!DealQuotationRepository.ORIGIN_DEAL_DIRECT.equals(quotation.origin())) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "ยกเลิกการยืนยันคำสั่งซื้อได้เฉพาะใบเสนอราคา (ไม่ผ่านคำขอราคา) เท่านั้น");
+        }
+        quotations.lockTicket(ticketId);
+        tickets.lockTicketForUpdate(ticketId);
+        TicketSummaryDto locked = requireTicketSummary(ticketId);
+
+        if (!tickets.hasPromotionFromQuotationEvent(ticketId)) {
+            if (tickets.hasOrderConfirmationUndoneEvent(ticketId, quotationId)) {
+                return promotionResult(ticketId, quotationId); // idempotent replay: no writes
+            }
+            throw new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคานี้ยังไม่ได้ยืนยันคำสั่งซื้อ จึงไม่มีอะไรให้ยกเลิก");
+        }
+        TicketRepository.PromotionEvent promotion = tickets.findPromotionEvent(ticketId).orElseThrow();
+        if (confirmationEventId != null && confirmationEventId != promotion.eventId()) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "คำสั่งซื้อของงานนี้ถูกยืนยันใหม่อีกครั้งแล้ว กรุณาโหลดข้อมูลใหม่ก่อนยกเลิก");
+        }
+        if (!tickets.isOrderConfirmedFromQuotation(ticketId, quotationId)) {
+            throw new ApiException(HttpStatus.CONFLICT, "คำสั่งซื้อของงานนี้ยืนยันจากใบเสนอราคาฉบับอื่น");
+        }
+        String refusal = undoRefusal(locked);
+        if (refusal != null) {
+            throw new ApiException(HttpStatus.CONFLICT, refusal);
+        }
+
+        String restoreStage = tickets.firstAutoStageFromAfter(ticketId, promotion.eventId()).orElse(null);
+        Instant restoreStageAt = restoreStage == null ? null
+            : tickets.latestStageChangeAtBefore(ticketId, promotion.eventId()).orElse(null);
+        // Under the CUSTOMER_CONFIRMED payment status the compare-and-set needs, so before the ticket reset below.
+        if (tickets.hasSystemPolicyChangeAfter(ticketId, promotion.eventId(), quotation.number())) {
+            boolean nowNotRequired = DepositPolicy.NOT_REQUIRED.equals(locked.depositPolicy());
+            tickets.syncDepositPolicyFromQuotation(ticketId,
+                nowNotRequired ? DepositPolicy.NOT_REQUIRED : DepositPolicy.REQUIRED,
+                nowNotRequired ? DepositPolicy.REQUIRED : DepositPolicy.NOT_REQUIRED, null);
+        }
+        int draftNotices = tickets.deleteDraftDepositNotices(ticketId);
+        tickets.deleteItems(ticketId);
+        if (tickets.revertOrderConfirmation(ticketId, restoreStage, restoreStageAt) != 1) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "สถานะงานถูกเปลี่ยนโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
+        }
+        if (quotation.partyId() != null) {
+            quotations.restorePartyBeforeAward(quotation.partyId());
+        }
+        tickets.deleteConfirmationEvents(ticketId, promotion.eventId(), quotation.number());
+
+        String when = UNDO_NOTE_TIME.format(promotion.at());
+        String note = "ยกเลิกการยืนยันคำสั่งซื้อจากใบเสนอราคา " + quotation.number()
+            + " (ยืนยันโดย " + promotion.actorName() + " เมื่อ " + when + ")"
+            + (reason == null || reason.isBlank() ? "" : " · เหตุผล: " + reason.trim())
+            + (draftNotices > 0 ? " · ลบใบแจ้งรับมัดจำฉบับร่างแล้ว" : "");
+        tickets.addEventWithDocument(ticketId, actor.id(), actor.name(), TicketEventKind.ORDER_CONFIRMATION_UNDONE,
+            TicketStatus.QUOTATION_ISSUED, TicketStatus.DRAFT, note, RelatedDocumentType.QUOTATION, quotationId);
+        return promotionResult(ticketId, quotationId);
+    }
+
+    private static final java.time.format.DateTimeFormatter UNDO_NOTE_TIME =
+        java.time.format.DateTimeFormatter.ofPattern("d/M/yyyy HH:mm")
+            .withChronology(java.time.chrono.ThaiBuddhistChronology.INSTANCE).withZone(BANGKOK);
+
+    /**
+     * Read-only twin of {@link #undoOrderConfirmation}'s state checks, for {@code DocumentChainDto.Order#undoable}:
+     * {@link #undoRefusal} finds nothing in the way of the deal {@code summary} describes. The caller calls it only for a
+     * deal whose confirmation event exists (the chain's {@code promoted} flag): that event is written only by
+     * {@link #confirmOrderFromDirectQuotation} and names the direct quotation, so no origin lookup is repeated here. No
+     * lock, no authz (the identity half is {@link #hasEditAccess}).
+     */
+    public boolean isOrderConfirmationUndoable(TicketSummaryDto summary) {
+        return undoRefusal(summary) == null;
+    }
+
+    /**
+     * THE cut-off for an undo, the single source for both the 409 and {@code order.undoable}: the Thai refusal message,
+     * or null when the confirmation may be undone. Assumes the deal has a promotion event naming a direct quotation.
+     * The stage rule has one exception: DELIVERY_SCHEDULING with fulfilment FROM_STOCK, which the confirmation itself
+     * auto-sets on a 0%-deposit all-stock deal (a person's all-stock reservation also looks like that, but is caught
+     * earlier as a manual stock decision), and only while no person changed the deposit policy after the confirmation
+     * ({@link #routedByTheConfirmationItself}: a waiver also routes an all-stock deposit deal there).
+     */
+    private String undoRefusal(TicketSummaryDto s) {
+        if (!DealLifecycle.ACTIVE.equals(s.lifecycle())) {
+            return "งานไม่ได้อยู่ในสถานะ ACTIVE (" + s.lifecycle() + ") จึงยกเลิกการยืนยันคำสั่งซื้อไม่ได้";
+        }
+        if (!TicketStatus.QUOTATION_ISSUED.equals(s.status()) || !"CUSTOMER_CONFIRMED".equals(s.paymentStatus())) {
+            return "งานเดินหน้าเกินขั้นยืนยันคำสั่งซื้อแล้ว (สถานะ " + s.status() + ", การชำระเงิน "
+                + s.paymentStatus() + ") จึงยกเลิกการยืนยันไม่ได้";
+        }
+        TicketRepository.UndoFacts f = tickets.undoConfirmationFacts(s.id());
+        if (f.bidOrSplit()) {
+            return "คำสั่งซื้อนี้มาจากการบันทึกผลประมูลหรือการแยกงาน จึงยกเลิกการยืนยันจากหน้านี้ไม่ได้";
+        }
+        if (f.nonDraftDepositNotice()) {
+            return "ออกใบแจ้งรับมัดจำแล้ว จึงยกเลิกการยืนยันคำสั่งซื้อไม่ได้";
+        }
+        if (f.paymentReceipt()) {
+            return "มีการบันทึกรับชำระเงินแล้ว จึงยกเลิกการยืนยันคำสั่งซื้อไม่ได้";
+        }
+        if (f.remainingInvoice()) {
+            return "มีใบแจ้งหนี้ยอดคงเหลือแล้ว จึงยกเลิกการยืนยันคำสั่งซื้อไม่ได้";
+        }
+        if (f.importRequest()) {
+            return "มีใบขอซื้อ (นำเข้า) แล้ว จึงยกเลิกการยืนยันคำสั่งซื้อไม่ได้";
+        }
+        if (f.deliveryRecord()) {
+            return "มีการบันทึกส่งสินค้าแล้ว จึงยกเลิกการยืนยันคำสั่งซื้อไม่ได้";
+        }
+        if (f.manualStockDecision()) {
+            return "มีการระบุที่มาสินค้า (สต็อก/นำเข้า) หลังยืนยันคำสั่งซื้อแล้ว จึงยกเลิกการยืนยันไม่ได้";
+        }
+        boolean autoRoutedFromStock = DealStage.DELIVERY_SCHEDULING.equals(s.salesStage())
+            && FulfilmentStatus.FROM_STOCK.equals(s.fulfillmentStatus()) && routedByTheConfirmationItself(s.id());
+        if (!DealStage.ORDER_RECEIVED.equals(s.salesStage()) && !autoRoutedFromStock) {
+            return "งานเดินหน้าไปขั้น " + s.salesStage() + " แล้ว จึงยกเลิกการยืนยันคำสั่งซื้อไม่ได้";
+        }
+        if (s.fulfillmentStatus() != null && !FulfilmentStatus.FROM_STOCK.equals(s.fulfillmentStatus())) {
+            return "งานเริ่มขั้นตอนจัดหาสินค้าแล้ว (" + s.fulfillmentStatus() + ") จึงยกเลิกการยืนยันคำสั่งซื้อไม่ได้";
+        }
+        return null;
+    }
+
+    /**
+     * The all-stock route to DELIVERY_SCHEDULING is the confirmation's own unless a person changed the deposit policy
+     * after it: {@code TicketService#waiveDeposit} routes an all-stock deposit deal there too, with the same automatic
+     * note. A waiver recorded BEFORE the confirmation does not count (the confirmation itself then routes the deal), and
+     * a waiver that routed nothing never reaches this check (the deal is still at ORDER_RECEIVED). Fails closed.
+     */
+    private boolean routedByTheConfirmationItself(long ticketId) {
+        var promotion = tickets.findPromotionEvent(ticketId);
+        var number = tickets.findOrderConfirmedQuotationId(ticketId).flatMap(tickets::quotationNumber);
+        return promotion.isPresent() && number.isPresent()
+            && !tickets.hasPersonDepositPolicyChangeAfter(ticketId, promotion.get().eventId(), number.get());
+    }
+
     private PromoteToDealResultDto promotionResult(long ticketId, long quotationId) {
         return new PromoteToDealResultDto(ticketId, requireTicketSummary(ticketId), requireQuotation(quotationId));
     }
@@ -2203,7 +2387,7 @@ public class DealQuotationService {
             }
             return quotation;
         }
-        // The quotation an order was confirmed from is the agreed order, so it is not revisable.
+        // The quotation an order was confirmed from is the agreed order, so it is not revisable (until the confirmation is undone).
         if (tickets.isOrderConfirmedFromQuotation(quotation.ticketId(), quotation.id())) {
             throw new ApiException(HttpStatus.CONFLICT,
                 "ใบเสนอราคานี้ยืนยันคำสั่งซื้อแล้ว จึงสร้างฉบับแก้ไขไม่ได้");

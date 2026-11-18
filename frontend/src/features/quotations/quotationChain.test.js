@@ -127,6 +127,12 @@ describe('quotationChainSteps — the four steps, the ONE current step, and who 
     expect(steps[3].locked).toBe('ยืนยันคำสั่งซื้อก่อน');
   });
 
+  it('the confirm-order step carries its own key, confirmed or not (the undo button keys on it, not on a position)', () => {
+    expect(quotationChainSteps(q(), chain())[1].key).toBe('confirm-order');
+    expect(quotationChainSteps(q(), chain({ order: { confirmed: true } }))[1].key).toBe('confirm-order');
+    expect(quotationChainSteps(q(), chain()).filter((s) => s.key === 'confirm-order')).toHaveLength(1);
+  });
+
   it('not yet confirmed, a viewer who may not confirm: step 2 waits on sales, no action', () => {
     const steps = quotationChainSteps(q(), chain({ viewer: { mayConfirmOrder: false } }));
     expect(stateOf(steps)).toEqual(['done', 'waiting', 'todo', 'todo']);

@@ -100,6 +100,10 @@ public class DepositNoticeService {
                                                      Integer sourceDepositPercent, UserPrincipal actor) {
         requireRole(actor, SALES_ROLES);
         requireTicketOwner(ticketId, actor);
+        // The ticket row lock BEFORE any state check, as DealQuotationService#undoOrderConfirmation holds it while it
+        // deletes the deal's draft notices: without it a draft created concurrently survives the undo. Row lock only (the
+        // undo takes the advisory lock first, then this one), so no lock order is reversed.
+        tickets.lockTicketForUpdate(ticketId);
         // One deposit notice per deal. A new draft would re-seed the % from
         // the quotation and, once issued, silently supersede the customer's document.
         docs.findByTicket(ticketId).stream().filter(d -> "ISSUED".equals(d.status())).findFirst().ifPresent(d -> {

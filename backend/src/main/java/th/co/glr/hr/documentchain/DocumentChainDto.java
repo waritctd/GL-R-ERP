@@ -35,9 +35,15 @@ public record DocumentChainDto(
      * @param confirmedFromQuotationId the direct quotation the order was confirmed from, only when this viewer can see
      *                                 that quotation (DealQuotationService#orderConfirmedQuotationId)
      * @param confirmedAt when; null for {@code account}, which reads no ticket events
+     * @param confirmationEventId the id of the confirmation's own event (the promotion event), so a request to undo can
+     *                 say WHICH confirmation it means; null when the order was not confirmed from a quotation
+     * @param undoable the state half of "ยกเลิกการยืนยันคำสั่งซื้อ": the order was confirmed from a direct quotation and
+     *                 nothing downstream stops it (DealQuotationService#isOrderConfirmationUndoable, only ever true once the order is confirmed, the very rule the
+     *                 undo endpoint's 409s come from); who may press it is {@code viewer.mayConfirmOrder}
      */
     public record Order(boolean confirmed, boolean confirmable, Long confirmedFromQuotationId,
-                        String confirmedFromQuotationNumber, Instant confirmedAt) {}
+                        String confirmedFromQuotationNumber, Instant confirmedAt, boolean undoable,
+                        Long confirmationEventId) {}
 
     /**
      * @param policy {@code sales.ticket.deposit_policy}

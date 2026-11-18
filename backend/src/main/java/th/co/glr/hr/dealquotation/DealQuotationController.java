@@ -244,6 +244,17 @@ public class DealQuotationController {
         return Map.of("result", quotations.confirmOrderFromDirectQuotation(id, user));
     }
 
+    /** Takes back a "ยืนยันคำสั่งซื้อ" pressed by mistake; optional body {"reason"}. */
+    @PostMapping("/deal-quotations/{id}/undo-confirm-order")
+    Map<String, PromoteToDealResultDto> undoConfirmOrder(
+            @PathVariable long id,
+            @Valid @RequestBody(required = false) DealQuotationRequests.UndoOrderConfirmationRequest request,
+            HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return Map.of("result", quotations.undoOrderConfirmation(id, request == null ? null : request.reason(),
+            request == null ? null : request.confirmationEventId(), user));
+    }
+
     @PostMapping("/deal-quotations/{id}/cancel")
     Map<String, DealQuotationDto> cancel(@PathVariable long id,
                                          @RequestBody(required = false) CancelRequest request,

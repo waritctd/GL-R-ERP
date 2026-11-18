@@ -49,3 +49,24 @@ describe('ConfirmOrderDialog auto-cancelled quotations', () => {
     expect(text).toContain('จากนั้นออกใบแจ้งรับมัดจำ');
   });
 });
+
+// The direct-quotation doors can take the confirmation back (undo-confirm-order); the pricing-request doors cannot,
+// so only they may say "ย้อนกลับไม่ได้".
+describe('ConfirmOrderDialog undo wording', () => {
+  it.each([0, 50])('undoable, depositPercent %i: names the undo and its cut-off, never "ย้อนกลับไม่ได้"', (depositPercent) => {
+    const text = open({ depositPercent, undoable: true });
+    expect(text).toContain('ยกเลิกการยืนยันคำสั่งซื้อ" ในหน้าใบเสนอราคา'); // the button lives only on the quotation page
+    expect(text).toContain('เดินหน้าต่อ');
+    expect(text).not.toContain('ย้อนกลับไม่ได้');
+  });
+
+  it('undoable with a deposit: the cut-off names the deposit notice', () => {
+    expect(open({ depositPercent: 50, undoable: true })).toContain('จนกว่าจะออกใบแจ้งรับมัดจำ');
+  });
+
+  it('not undoable (pricing-request door): still says it cannot be reversed and names no undo', () => {
+    const text = open({ depositPercent: 50 });
+    expect(text).toContain('ย้อนกลับไม่ได้');
+    expect(text).not.toContain('ยกเลิกการยืนยันคำสั่งซื้อ');
+  });
+});
