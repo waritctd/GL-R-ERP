@@ -192,6 +192,7 @@ public class RemainingInvoiceService {
     public RemainingInvoiceDocumentDto updateDraft(long id, RemainingInvoiceDraftRequest req, UserPrincipal actor) {
         RemainingInvoiceDocumentDto existing = requireDraft(id);
         depositNoticeService.requireDepositNoticeIssueGate(existing.ticketId(), actor);
+        depositNoticeService.requirePreparerInDeal(existing.ticketId(), req == null ? null : req.preparerId(), existing.preparerId());
 
         DepositNoticeService.RemainingInvoiceSnapshot snap = depositNoticeService.resolveRemainingInvoiceSnapshot(
             existing.ticketId(), existing.customerQuotationId(), actor);
@@ -218,7 +219,7 @@ public class RemainingInvoiceService {
         String depositReference = req != null && req.depositReference() != null
             ? req.depositReference() : existing.depositReference();
         LocalDate docDate = req != null && req.docDate() != null ? req.docDate() : existing.docDate();
-        stored.updateDraftFields(id, reference, depositReference, docDate, notes);
+        stored.updateDraftFields(id, reference, depositReference, docDate, notes, req == null ? null : req.preparerId());
 
         return requireStored(id);
     }
@@ -379,6 +380,7 @@ public class RemainingInvoiceService {
                 issued.customerName(), issued.customerTaxId(), issued.customerBranch(), issued.customerAddress(),
                 issued.projectName(), issued.itemsTotal(), issued.depositDeduction(), issued.netAmount(),
                 issued.vatAmount(), issued.grandTotal(), actor.id(), actor.name());
+            if (issued.preparerId() != null) stored.copyPreparer(draftId, issued.preparerId(), issued.preparerName());
         } catch (DataIntegrityViolationException e) {
             throw new ApiException(HttpStatus.CONFLICT,
                 "มีร่างฉบับแก้ไขของใบแจ้งหนี้ส่วนที่เหลือนี้อยู่แล้ว กรุณาออกหรือลบร่างเดิมก่อน");
@@ -403,21 +405,23 @@ public class RemainingInvoiceService {
 
     // ── helpers ──────────────────────────────────────────────────────────────────────────────
 
-    /** The STORED snapshot as the renderer prints it. The preparer is the linked deposit notice's own; a deal with no
-     * notice (deposit bypass) passes none, so the template's own preparer line prints. */
+    /** The STORED snapshot as the renderer prints it. The preparer is the invoice's chosen preparer (default: the deal's owner). */
     private RemainingInvoiceRenderModel toRenderable(RemainingInvoiceDocumentDto doc) {
         List<RemainingInvoiceItemDto> items = (doc.items() != null ? doc.items() : List.<RemainingInvoiceDocumentItemDto>of())
             .stream()
             .map(it -> new RemainingInvoiceItemDto(it.seq(), it.description(), it.qty(), it.unit(),
                 it.unitPrice(), it.discountLabel(), it.netUnitPrice(), it.amount()))
             .toList();
-        String preparer = doc.depositNoticeId() == null ? null : depositNoticeService.preparerNameOf(doc.depositNoticeId());
+        // a DRAFT file never carries a real signature
+        var sig = "DRAFT".equals(doc.status()) ? java.util.Optional.<th.co.glr.hr.dealquotation.EmployeeSignatureRepository.SignatureImage>empty()
+            : depositNoticeService.preparerSignature(doc.preparerId());
         return new RemainingInvoiceRenderModel(
             doc.docDate(), doc.docNumber() != null ? doc.docNumber() : "(ร่าง)",
             doc.customerName(), doc.customerBranch(), doc.customerTaxId(), doc.customerAddress(), doc.projectName(),
             doc.reference(), doc.depositReference(), items,
             nz(doc.depositDeduction()), doc.netAmount(), doc.vatAmount(), doc.grandTotal(),
-            preparer);
+            doc.preparerName() != null ? doc.preparerName() : doc.createdByName(),
+            sig.map(x -> x.image()).orElse(null));
     }
 
     private List<String> defaultNotes() {

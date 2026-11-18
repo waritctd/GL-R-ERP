@@ -449,17 +449,20 @@ public class CommissionRepository {
             ));
     }
 
+    /** The one definition of "a sales manager" (aliases e, d, p): shared with the deposit notice / remaining
+     * invoice ผู้จัดทำ options so the two lists cannot drift. */
+    public static final String SALES_MANAGER_FROM_WHERE = """
+          FROM hr.employee e
+          JOIN hr.division d ON d.division_id = e.division_id
+          LEFT JOIN hr.position p ON p.position_id = e.position_id
+         WHERE e.is_active = TRUE
+           AND d.source_code ILIKE 'SA%'
+           AND p.name_th LIKE '%ผู้จัดการ%'
+        """;
+
     public List<Long> findSalesManagerApproverEmployeeIds() {
-        return jdbc.query("""
-            SELECT e.employee_id
-              FROM hr.employee e
-              JOIN hr.division d ON d.division_id = e.division_id
-              LEFT JOIN hr.position p ON p.position_id = e.position_id
-             WHERE e.is_active = TRUE
-               AND d.source_code ILIKE 'SA%'
-               AND p.name_th LIKE '%ผู้จัดการ%'
-             ORDER BY e.employee_id
-            """, Map.of(), (rs, rowNum) -> rs.getLong("employee_id"));
+        return jdbc.query("SELECT e.employee_id " + SALES_MANAGER_FROM_WHERE + " ORDER BY e.employee_id",
+            Map.of(), (rs, rowNum) -> rs.getLong("employee_id"));
     }
 
     /**

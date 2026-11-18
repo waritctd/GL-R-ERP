@@ -31,7 +31,7 @@ public class RemainingInvoiceRepository {
                reference, deposit_reference, doc_date, notes,
                customer_name, customer_tax_id, customer_branch, customer_address, project_name,
                items_total, deposit_deduction, net_amount, vat_amount, grand_total,
-               created_by_id, created_by_name, created_at, updated_at,
+               created_by_id, created_by_name, preparer_id, preparer_name, created_at, updated_at,
                issued_by_id, issued_by_name, issued_at
           FROM sales.remaining_invoice
         """;
@@ -79,7 +79,7 @@ public class RemainingInvoiceRepository {
             r.reference(), r.depositReference(), r.docDate(), r.notes(),
             r.customerName(), r.customerTaxId(), r.customerBranch(), r.customerAddress(), r.projectName(),
             r.itemsTotal(), r.depositDeduction(), r.netAmount(), r.vatAmount(), r.grandTotal(),
-            r.createdById(), r.createdByName(), r.createdAt(), r.updatedAt(),
+            r.createdById(), r.createdByName(), r.preparerId(), r.preparerName(), r.createdAt(), r.updatedAt(),
             r.issuedById(), r.issuedByName(), r.issuedAt(), items);
     }
 
@@ -98,6 +98,7 @@ public class RemainingInvoiceRepository {
             rs.getBigDecimal("items_total"), rs.getBigDecimal("deposit_deduction"),
             rs.getBigDecimal("net_amount"), rs.getBigDecimal("vat_amount"), rs.getBigDecimal("grand_total"),
             (Long) rs.getObject("created_by_id"), rs.getString("created_by_name"),
+            (Long) rs.getObject("preparer_id"), rs.getString("preparer_name"),
             offsetDateTime(rs, "created_at"), offsetDateTime(rs, "updated_at"),
             (Long) rs.getObject("issued_by_id"), rs.getString("issued_by_name"), offsetDateTime(rs, "issued_at"),
             List.of());
@@ -127,13 +128,18 @@ public class RemainingInvoiceRepository {
                  reference, deposit_reference, doc_date, notes,
                  customer_name, customer_tax_id, customer_branch, customer_address, project_name,
                  items_total, deposit_deduction, net_amount, vat_amount, grand_total,
-                 created_by_id, created_by_name)
+                 created_by_id, created_by_name, preparer_id, preparer_name)
             VALUES (:ticketId, :quotationId, :depositNoticeId, 'DRAFT',
                     :reference, :depositReference, :docDate, :notes,
                     :customerName, :customerTaxId, :customerBranch, :customerAddress, :projectName,
                     :itemsTotal, :depositDeduction, :netAmount, :vatAmount, :grandTotal,
-                    :actorId, :actorName)
-            """,
+                    :actorId, :actorName,
+                    -- ผู้จัดทำ defaults to the deal's owner (the actor only when the ticket has none)
+                    COALESCE((SELECT t.created_by FROM sales.ticket t WHERE t.ticket_id = :ticketId), :actorId),
+                    COALESCE((SELECT {NAME}
+                                FROM sales.ticket t JOIN hr.employee e ON e.employee_id = t.created_by
+                               WHERE t.ticket_id = :ticketId), :actorName))
+            """.replace("{NAME}", DepositNoticeRepository.PREPARER_NAME_SQL),
             new MapSqlParameterSource()
                 .addValue("ticketId", ticketId).addValue("quotationId", customerQuotationId)
                 .addValue("depositNoticeId", depositNoticeId)
@@ -148,6 +154,12 @@ public class RemainingInvoiceRepository {
                 .addValue("actorId", actorId).addValue("actorName", actorName),
             keys, new String[] {"id"});
         return keys.getKey().longValue();
+    }
+
+    /** A revision keeps the preparer chosen on the document it corrects. */
+    public void copyPreparer(long id, long preparerId, String preparerName) {
+        jdbc.update("UPDATE sales.remaining_invoice SET preparer_id = :p, preparer_name = :n WHERE id = :id",
+            Map.of("p", preparerId, "n", preparerName == null ? "" : preparerName, "id", id));
     }
 
     /** Replaces every line, renumbering seq from 1 in the order supplied. Draft-only by convention (the caller
@@ -177,16 +189,22 @@ public class RemainingInvoiceRepository {
 
     /** DRAFT-only, UNCONDITIONAL set of the dialog fields — the WHERE clause enforces DRAFT-only, not the caller. */
     public int updateDraftFields(long id, String reference, String depositReference,
-            LocalDate docDate, List<String> notes) {
+            LocalDate docDate, List<String> notes, Long preparerId) {
         return jdbc.update("""
             UPDATE sales.remaining_invoice
                SET reference = :reference, deposit_reference = :depositReference, doc_date = :docDate,
-                   notes = :notes, updated_at = now()
+                   notes = :notes,
+                   -- a null preparerId keeps the stored preparer
+                   preparer_id = COALESCE(CAST(:preparerId AS bigint), preparer_id),
+                   preparer_name = CASE WHEN CAST(:preparerId AS bigint) IS NULL THEN preparer_name ELSE
+                       (SELECT {NAME}
+                          FROM hr.employee e WHERE e.employee_id = :preparerId) END,
+                   updated_at = now()
              WHERE id = :id AND status = 'DRAFT'
-            """, new MapSqlParameterSource()
+            """.replace("{NAME}", DepositNoticeRepository.PREPARER_NAME_SQL), new MapSqlParameterSource()
                 .addValue("id", id)
                 .addValue("reference", reference).addValue("depositReference", depositReference)
-                .addValue("docDate", docDate)
+                .addValue("docDate", docDate).addValue("preparerId", preparerId)
                 .addValue("notes", notes == null ? new String[0] : notes.toArray(new String[0])));
     }
 

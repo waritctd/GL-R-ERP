@@ -19,6 +19,7 @@ import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
+import th.co.glr.hr.commission.CommissionRepository;
 import th.co.glr.hr.dealquotation.DealQuotationRenderAdapter;
 import th.co.glr.hr.ticket.QuotationRenderer;
 
@@ -34,6 +35,33 @@ public class DepositNoticeRepository {
     }
 
     // ── Note templates ────────────────────────────────────────────────────────
+
+    /** The ผู้จัดทำ name of the employee aliased {@code e}: the Thai name, else the English one (null when neither). The
+     * one definition both repositories splice into their SQL as {@code {NAME}}. */
+    public static final String PREPARER_NAME_SQL =
+        "COALESCE(NULLIF(TRIM(CONCAT_WS(' ', e.first_name_th, e.last_name_th)), ''),"
+        + " NULLIF(TRIM(CONCAT_WS(' ', e.first_name_en, e.last_name_en)), ''))";
+
+    /** Who may be named ผู้จัดทำ on this deal's documents: its owner, its keyer, then the sales managers (the same
+     * people as CommissionRepository#findSalesManagerApproverEmployeeIds), active only, each once. */
+    public List<DocumentPreparerOption> findPreparerOptions(long ticketId) {
+        String sql = "SELECT e.employee_id, COALESCE(" + PREPARER_NAME_SQL + ", '#' || e.employee_id) AS name"
+            + " FROM (SELECT employee_id, MIN(ord) AS ord FROM ("
+            + "   SELECT created_by AS employee_id, 1 AS ord FROM sales.ticket WHERE ticket_id = :ticketId"
+            + "   UNION ALL SELECT keyed_by, 2 FROM sales.ticket WHERE ticket_id = :ticketId"
+            + "   UNION ALL SELECT e.employee_id, 3 " + CommissionRepository.SALES_MANAGER_FROM_WHERE
+            + " ) cand WHERE employee_id IS NOT NULL GROUP BY employee_id) c"
+            + " JOIN hr.employee e ON e.employee_id = c.employee_id AND e.is_active = TRUE"
+            + " ORDER BY c.ord, e.employee_id";
+        return jdbc.query(sql, Map.of("ticketId", ticketId),
+            (rs, i) -> new DocumentPreparerOption(rs.getLong("employee_id"), rs.getString("name")));
+    }
+
+    /** The preparer's own signature image (hr.employee_signature), looked up live at render time like the quotation's. */
+    public Optional<th.co.glr.hr.dealquotation.EmployeeSignatureRepository.SignatureImage> findPreparerSignature(Long employeeId) {
+        return employeeId == null ? Optional.empty()
+            : new th.co.glr.hr.dealquotation.EmployeeSignatureRepository(jdbc).find(employeeId);
+    }
 
     public List<DocumentNoteTemplateDto> findNoteTemplates() {
         return jdbc.query(
@@ -60,7 +88,7 @@ public class DepositNoticeRepository {
                    d.deposit_percent, d.subtotal, d.deposit_amount,
                    d.vat_percent, d.vat_amount, d.total_payable,
                    d.notes, d.pdf_path, d.xlsx_path,
-                   d.issued_by_name, d.preparer_name,
+                   d.issued_by_name, d.preparer_name, d.preparer_id,
                    d.created_at, d.updated_at
               FROM sales.deposit_notice d
              WHERE d.deposit_notice_id = :id
@@ -84,7 +112,7 @@ public class DepositNoticeRepository {
                    d.deposit_percent, d.subtotal, d.deposit_amount,
                    d.vat_percent, d.vat_amount, d.total_payable,
                    d.notes, d.pdf_path, d.xlsx_path,
-                   d.issued_by_name, d.preparer_name,
+                   d.issued_by_name, d.preparer_name, d.preparer_id,
                    d.created_at, d.updated_at
               FROM sales.deposit_notice d
              WHERE d.ticket_id = :ticketId
@@ -154,7 +182,8 @@ public class DepositNoticeRepository {
     }
 
     @Transactional
-    public long createDraft(long ticketId, DepositNoticeDraftRequest req, List<DepositNoticeItemRequest> items) {
+    public long createDraft(long ticketId, DepositNoticeDraftRequest req, List<DepositNoticeItemRequest> items,
+                            String preparerName) {
         BigDecimal depositPct = req.depositPercent() != null ? req.depositPercent() : new BigDecimal("0.50");
         BigDecimal vatPct = new BigDecimal("0.07");
 
@@ -183,19 +212,34 @@ public class DepositNoticeRepository {
             .addValue("vatPercent",      vatPct)
             .addValue("vatAmount",       vat)
             .addValue("totalPayable",    total)
-            .addValue("notes",           notesArr);
+            .addValue("notes",           notesArr)
+            // NOT NULL column; blank prints no name (DocumentSheet.preparer)
+            // the fallback only: the INSERT below stamps the deal's owner when the ticket has one
+            .addValue("preparerName",    preparerName == null ? "" : preparerName)
+            .addValue("preparerId",      req.preparerId());
 
         var keys = new GeneratedKeyHolder();
         jdbc.update("""
             INSERT INTO sales.deposit_notice
                 (ticket_id, version, customer_name, customer_tax_id, customer_address,
                  project_name, reference, deposit_percent, subtotal, deposit_amount,
-                 vat_percent, vat_amount, total_payable, notes)
+                 vat_percent, vat_amount, total_payable, notes, preparer_name, preparer_id)
             VALUES
                 (:ticketId, :version, :customerName, :customerTaxId, :customerAddress,
                  :projectName, :reference, :depositPercent, :subtotal, :depositAmount,
-                 :vatPercent, :vatAmount, :totalPayable, :notes)
-            """, params, keys, new String[]{"deposit_notice_id"});
+                 :vatPercent, :vatAmount, :totalPayable, :notes,
+                 -- ผู้จัดทำ: the latest earlier notice's chosen preparer, else the deal's owner, else the actor
+                 COALESCE((SELECT p.preparer_name FROM sales.deposit_notice p
+                            WHERE p.ticket_id = :ticketId AND p.preparer_id IS NOT NULL
+                              AND p.version = (SELECT MAX(version) FROM sales.deposit_notice WHERE ticket_id = :ticketId)),
+                          (SELECT {NAME}
+                             FROM sales.ticket t JOIN hr.employee e ON e.employee_id = t.created_by
+                            WHERE t.ticket_id = :ticketId), :preparerName),
+                 COALESCE((SELECT p.preparer_id FROM sales.deposit_notice p
+                            WHERE p.ticket_id = :ticketId
+                              AND p.version = (SELECT MAX(version) FROM sales.deposit_notice WHERE ticket_id = :ticketId)),
+                          (SELECT t.created_by FROM sales.ticket t WHERE t.ticket_id = :ticketId), :preparerId))
+            """.replace("{NAME}", PREPARER_NAME_SQL), params, keys, new String[]{"deposit_notice_id"});
 
         long docId = keys.getKey().longValue();
         insertItems(docId, items);
@@ -239,10 +283,15 @@ public class DepositNoticeRepository {
                 vat_amount       = :vatAmount,
                 total_payable    = :totalPayable,
                 notes            = :notes,
+                -- a null preparerId keeps the stored preparer
+                preparer_id      = COALESCE(CAST(:preparerId AS bigint), preparer_id),
+                preparer_name    = CASE WHEN CAST(:preparerId AS bigint) IS NULL THEN preparer_name ELSE COALESCE(
+                    (SELECT {NAME}
+                       FROM hr.employee e WHERE e.employee_id = :preparerId), '') END,
                 updated_at       = now()
              WHERE deposit_notice_id = :id AND status = 'DRAFT'
                AND (CAST(:expectedUpdatedAt AS timestamptz) IS NULL OR updated_at = :expectedUpdatedAt)
-            """,
+            """.replace("{NAME}", PREPARER_NAME_SQL),
             new MapSqlParameterSource()
                 .addValue("id",              docId)
                 .addValue("expectedUpdatedAt", req.expectedUpdatedAt())
@@ -257,6 +306,7 @@ public class DepositNoticeRepository {
                 .addValue("vatAmount",       vat)
                 .addValue("totalPayable",    total)
                 .addValue("notes",           notesArr)
+                .addValue("preparerId",      req.preparerId())
         );
         if (rows == 0) {
             boolean stillDraft = req.expectedUpdatedAt() != null && !jdbc.queryForList(
@@ -516,6 +566,7 @@ public class DepositNoticeRepository {
             rs.getString("xlsx_path") != null,
             rs.getString("issued_by_name"),
             rs.getString("preparer_name"),
+            (Long) rs.getObject("preparer_id"),
             rs.getObject("created_at", OffsetDateTime.class),
             rs.getObject("updated_at", OffsetDateTime.class),
             List.of()
@@ -530,7 +581,7 @@ public class DepositNoticeRepository {
             doc.depositPercent(), doc.subtotal(), doc.depositAmount(),
             doc.vatPercent(), doc.vatAmount(), doc.totalPayable(),
             doc.notes(), doc.hasPdf(), doc.hasXlsx(),
-            doc.issuedByName(), doc.preparerName(),
+            doc.issuedByName(), doc.preparerName(), doc.preparerId(),
             doc.createdAt(), doc.updatedAt(), items
         );
     }

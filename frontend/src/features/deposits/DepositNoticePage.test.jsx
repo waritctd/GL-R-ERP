@@ -14,6 +14,7 @@ vi.mock('../../api/index.js', () => ({
   api: {
     depositNotices: {
       noteTemplates: vi.fn(),
+      preparerOptions: vi.fn(),
       listByTicket: vi.fn(),
       createDraft: vi.fn(),
       update: vi.fn(),
@@ -86,6 +87,8 @@ describe('DepositNoticePage', () => {
     api.pricingRequests.listForTicket.mockResolvedValue({ items: [] });
     // QA-32: the page reads the deal's quotations for its non-blocking "% differs" hint.
     api.dealQuotations.listForTicket.mockResolvedValue({ items: [] });
+    // ผู้จัดทำ options: the deal's owner, keyer and sales managers.
+    api.depositNotices.preparerOptions.mockResolvedValue({ items: [{ id: 1, name: 'Sales' }, { id: 2, name: 'Other Rep' }] });
     api.pricingRequests.createDepositNoticeFromQuotation.mockResolvedValue({
       depositNotice: {
         id: 9003, ticketId: 701, version: 1, status: 'DRAFT', docNumber: null,
@@ -215,6 +218,44 @@ describe('DepositNoticePage', () => {
     );
     // No issue-validation errors should have been introduced by saving.
     expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('draft: shows a ผู้จัดทำ select with the options and the stored preparer selected; changing it sends preparerId', async () => {
+    api.depositNotices.listByTicket.mockResolvedValue({
+      depositNotices: [{ ...validDraftDoc, preparerId: 1, preparerName: 'Sales' }],
+    });
+    renderDepositNoticePage();
+
+    const select = await screen.findByLabelText('ผู้จัดทำ');
+    expect(select.tagName).toBe('SELECT');
+    await waitFor(() => expect(within(select).getAllByRole('option').map((o) => o.textContent)).toEqual(['Sales', 'Other Rep']));
+    expect(select.value).toBe('1');
+    fireEvent.change(select, { target: { value: '2' } });
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
+
+    await waitFor(() => expect(api.depositNotices.update).toHaveBeenCalledTimes(1));
+    expect(api.depositNotices.update.mock.calls[0][1]).toMatchObject({ preparerId: 2 });
+  });
+
+  it('draft: a stored preparer missing from the options still shows as the selected value', async () => {
+    api.depositNotices.listByTicket.mockResolvedValue({
+      depositNotices: [{ ...validDraftDoc, preparerId: 77, preparerName: 'Left Company' }],
+    });
+    renderDepositNoticePage();
+
+    const select = await screen.findByLabelText('ผู้จัดทำ');
+    await waitFor(() => expect(within(select).getAllByRole('option').map((o) => o.textContent)).toContain('Left Company'));
+    expect(select.value).toBe('77');
+  });
+
+  it('an ISSUED notice shows its preparer as read-only text, no select', async () => {
+    api.depositNotices.listByTicket.mockResolvedValue({
+      depositNotices: [{ ...validDraftDoc, status: 'ISSUED', docNumber: 'GLRD69001', preparerId: 2, preparerName: 'Other Rep' }],
+    });
+    renderDepositNoticePage();
+
+    expect(await screen.findByText('Other Rep')).not.toBeNull();
+    expect(screen.queryByLabelText('ผู้จัดทำ')).toBeNull();
   });
 
   // What บันทึก sends, and the summary beside it, must match what the backend stores:
@@ -963,7 +1004,7 @@ describe('DepositNoticePage', () => {
       await waitFor(() => expect(api.depositNotices.issue).toHaveBeenCalledTimes(1));
       expect(api.depositNotices.update.mock.calls).toEqual([[9002, {
         customerName: 'บริษัท ลุมพินี จำกัด', customerTaxId: '0105551234567', customerAddress: 'กรุงเทพฯ',
-        projectName: 'บ้านชะอำ', reference: 'QT-2026-0201', depositPercent: 0.4, notes: ['หมายเหตุมาตรฐาน'],
+        projectName: 'บ้านชะอำ', reference: 'QT-2026-0201', depositPercent: 0.4, notes: ['หมายเหตุมาตรฐาน'], preparerId: null,
         expectedUpdatedAt: 'T1',
         items: [{ seq: 1, description: 'กระเบื้อง Raku', qty: 3, unit: 'ตร.ม.', unitPrice: 1500, discountLabel: '-', netUnitPrice: 1234.57, amount: null }],
       }]]);

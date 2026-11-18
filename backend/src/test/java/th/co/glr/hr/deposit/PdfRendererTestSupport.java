@@ -237,7 +237,8 @@ final class PdfRendererTestSupport {
                 .isLessThanOrEqualTo((colTwips - 2.0 * LibreOfficeMetrics.TEXT_INSET_TWIPS) / 20.0);
         }
         assertThat(out.getColumnWidth(1)).as("B keeps the template's width").isEqualTo(template.getColumnWidth(1));
-        assertThat(pictureWidthsPt(out)).as("logo/signature sizes").isEqualTo(pictureWidthsPt(template));
+        // the logo is untouched; the template's baked signature is replaced by the chosen preparer's (none here)
+        assertThat(pictureWidthsPt(out)).as("logo size").isEqualTo(pictureWidthsPt(template).subList(0, 1));
     }
 
     static List<org.apache.poi.hssf.usermodel.HSSFPicture> pictures(Sheet sh) {
@@ -304,5 +305,60 @@ final class PdfRendererTestSupport {
     static short fontColor(Sheet sh, int r, int c) {
         var cell = sh.getRow(r).getCell(c);
         return ((org.apache.poi.hssf.usermodel.HSSFFont) sh.getWorkbook().getFontAt(cell.getCellStyle().getFontIndexAsInt())).getColor();
+    }
+
+    // ── ผู้จัดทำ block: signature picture + centring ────────────────────────────────────────────
+
+    /** A small opaque PNG (a scribble on white), the stand-in for an uploaded signature. */
+    static byte[] signaturePng(int w, int h) throws Exception {
+        java.awt.image.BufferedImage img = new java.awt.image.BufferedImage(w, h, java.awt.image.BufferedImage.TYPE_INT_ARGB);
+        java.awt.Graphics2D g = img.createGraphics();
+        g.setColor(java.awt.Color.WHITE);
+        g.fillRect(0, 0, w, h);
+        g.setColor(java.awt.Color.BLUE);
+        g.drawLine(0, h - 1, w - 1, 0);
+        g.dispose();
+        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+        javax.imageio.ImageIO.write(img, "png", out);
+        return out.toByteArray();
+    }
+
+    /** Pictures anchored in column B within the preparer block (the line above the name, the name, the date). */
+    static List<org.apache.poi.hssf.usermodel.HSSFPicture> signaturePictures(Sheet sh, int preparerRow) {
+        List<org.apache.poi.hssf.usermodel.HSSFPicture> out = new ArrayList<>();
+        for (org.apache.poi.hssf.usermodel.HSSFShape s : ((org.apache.poi.hssf.usermodel.HSSFSheet) sh).getDrawingPatriarch().getChildren()) {
+            if (!(s instanceof org.apache.poi.hssf.usermodel.HSSFPicture p)) continue;
+            org.apache.poi.hssf.usermodel.HSSFClientAnchor a = (org.apache.poi.hssf.usermodel.HSSFClientAnchor) p.getAnchor();
+            if (a.getCol1() == 1 && a.getRow1() >= preparerRow - 2 && a.getRow1() <= preparerRow + 1) out.add(p);
+        }
+        return out;
+    }
+
+    /** Pictures that are NOT in the preparer block (the logo). */
+    static int otherPictureCount(Sheet sh, int preparerRow) {
+        int all = 0;
+        for (org.apache.poi.hssf.usermodel.HSSFShape s : ((org.apache.poi.hssf.usermodel.HSSFSheet) sh).getDrawingPatriarch().getChildren())
+            if (s instanceof org.apache.poi.hssf.usermodel.HSSFPicture) all++;
+        return all - signaturePictures(sh, preparerRow).size();
+    }
+
+    /** Where the VISIBLE text of B(r) is centred, in points from the text's own left edge: leading spaces count,
+     * trailing ones do not. */
+    static double visibleCentrePt(Sheet sh, int r) {
+        String t = str(sh, r, 1);
+        String visible = t.strip();
+        int lead = t.indexOf(visible);
+        return textWidthPt(sh, r, t.substring(0, lead) + "x") - textWidthPt(sh, r, "x") + textWidthPt(sh, r, visible) / 2;
+    }
+
+    /** Column B's width in points, as LibreOffice lays it out. */
+    static double columnBPt(Sheet sh) {
+        return LibreOfficeMetrics.columnTwips(sh.getColumnWidth(1), LibreOfficeMetrics.charWidthTwips(sh.getWorkbook())) / 20.0;
+    }
+
+    /** The picture's horizontal centre, in points from column B's left edge (dx is 1/1023 of the column). */
+    static double pictureCentrePt(Sheet sh, org.apache.poi.hssf.usermodel.HSSFPicture p) {
+        org.apache.poi.hssf.usermodel.HSSFClientAnchor a = (org.apache.poi.hssf.usermodel.HSSFClientAnchor) p.getAnchor();
+        return (a.getDx1() + a.getDx2()) / 2.0 / 1023.0 * columnBPt(sh);
     }
 }

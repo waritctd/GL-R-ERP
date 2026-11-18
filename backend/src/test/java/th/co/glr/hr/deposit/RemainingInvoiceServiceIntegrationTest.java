@@ -106,6 +106,8 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
 
     private long salesRepId;
     private long otherSalesRepId;
+    private long strangerRepId;
+    private long salesManagerId;
     private UserPrincipal salesActor;
     private UserPrincipal otherSalesActor;
     private UserPrincipal importActor;
@@ -169,6 +171,11 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
         long ceoUserId = createEmployee(employees, "ผู้บริหาร RI", "ceo-ri1@glr.co.th", "MD", "ผู้บริหาร");
         long accountUserId = createEmployee(employees, "บัญชี RI", "account-ri1@glr.co.th", "ACCT", "บัญชี");
         long salesManagerUserId = createEmployee(employees, "ผจก.ขาย RI", "sales-mgr-ri1@glr.co.th", "SALESMGR", "แผนกขาย");
+        strangerRepId = createEmployee(employees, "พนักงานขาย RI3", "sales-ri3@glr.co.th", "SALES", "แผนกขาย");
+        salesManagerId = salesManagerUserId;
+        // findSalesManagerApproverEmployeeIds: active, SA* division, position ผู้จัดการ
+        jdbc.update("UPDATE hr.employee SET position_id = (SELECT position_id FROM hr.position WHERE name_th = 'ผู้จัดการ' LIMIT 1) WHERE employee_id = :id",
+            Map.of("id", salesManagerUserId));
         salesActor = actor(salesRepId, "sales");
         otherSalesActor = actor(otherSalesRepId, "sales");
         importActor = actor(importUserId, "import");
@@ -332,25 +339,268 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
         }
     }
 
-    /** The printed preparer is the linked deposit notice's own; with no notice the template's own line stays
-     * (no Java copy of the V12 default name). */
+    /** ผู้จัดทำ on a deposit notice defaults to the DEAL OWNER (ruling 2026-11-18), even when the KEYER drafts it. */
     @Test
-    void file_printsTheLinkedNoticesPreparer_orTheTemplatesOwnLineWhenThereIsNone() throws Exception {
+    void depositNotice_preparerIsTheDealOwner() {
+        DealFixture fixture = buildAcceptedDeal(salesActor, "NoticePreparer");
+        setKeyer(fixture, otherSalesRepId);
+        jdbc.update("DELETE FROM sales.deposit_notice_item WHERE deposit_notice_id = :id", Map.of("id", fixture.depositNoticeId()));
+        jdbc.update("DELETE FROM sales.deposit_notice WHERE deposit_notice_id = :id", Map.of("id", fixture.depositNoticeId()));
+
+        DepositNoticeDto draft = depositNoticeService.createDraft(fixture.ticketId(), noticePreparerOnly(null), otherSalesActor);
+
+        assertThat(draft.preparerId()).isEqualTo(salesRepId);
+        assertThat(draft.preparerName()).isEqualTo(thaiName(salesRepId));
+    }
+
+    /** The fixture's notice is ISSUED and a deal keeps one live notice, so put it back to DRAFT (it was drafted by salesActor). */
+    private long reopenedNoticeDraft(DealFixture fixture) {
+        jdbc.update("UPDATE sales.deposit_notice SET status = 'DRAFT' WHERE deposit_notice_id = :id",
+            Map.of("id", fixture.depositNoticeId()));
+        return fixture.depositNoticeId();
+    }
+
+    private void setKeyer(DealFixture fixture, long keyerId) {
+        jdbc.update("UPDATE sales.ticket SET keyed_by = :k WHERE ticket_id = :id", Map.of("k", keyerId, "id", fixture.ticketId()));
+    }
+
+    private String thaiName(long employeeId) {
+        return jdbc.queryForObject("SELECT NULLIF(TRIM(CONCAT_WS(' ', first_name_th, last_name_th)), '') FROM hr.employee WHERE employee_id = :id",
+            Map.of("id", employeeId), String.class);
+    }
+
+    private DepositNoticeDraftRequest noticePreparerOnly(Long preparerId) {
+        return new DepositNoticeDraftRequest(null, null, null, null, null, null, null, null, null, preparerId);
+    }
+
+    /** The options are exactly the deal's owner, its keyer, then the sales managers: nobody else, no duplicates. */
+    @Test
+    void documentPreparerOptions_areTheOwnerTheKeyerAndTheSalesManagers() {
+        DealFixture fixture = buildAcceptedDeal(salesActor, "PreparerOptions");
+        assertThat(depositNoticeService.documentPreparerOptions(fixture.ticketId(), salesActor))
+            .extracting(DocumentPreparerOption::id).containsExactly(salesRepId, salesManagerId);
+
+        setKeyer(fixture, otherSalesRepId);
+
+        assertThat(depositNoticeService.documentPreparerOptions(fixture.ticketId(), salesActor))
+            .extracting(DocumentPreparerOption::id, DocumentPreparerOption::name)
+            .containsExactly(
+                org.assertj.core.groups.Tuple.tuple(salesRepId, thaiName(salesRepId)),
+                org.assertj.core.groups.Tuple.tuple(otherSalesRepId, thaiName(otherSalesRepId)),
+                org.assertj.core.groups.Tuple.tuple(salesManagerId, thaiName(salesManagerId)));
+    }
+
+    /** The preparer is selectable on a DRAFT notice among the deal's keyer/manager: stored (id + Thai name) and printed. */
+    @Test
+    void depositNoticeDraft_update_withTheKeyerOrAManager_storesAndPrintsThem() throws Exception {
+        DealFixture fixture = buildAcceptedDeal(salesActor, "NoticePickPreparer");
+        setKeyer(fixture, otherSalesRepId);
+        long draftId = reopenedNoticeDraft(fixture);
+        assertThat(depositNoticeService.getById(draftId, salesActor).preparerId()).isEqualTo(salesRepId);
+
+        DepositNoticeDto updated = depositNoticeService.update(draftId, noticePreparerOnly(otherSalesRepId), salesActor);
+
+        assertThat(updated.preparerId()).isEqualTo(otherSalesRepId);
+        assertThat(updated.preparerName()).isEqualTo(thaiName(otherSalesRepId));
+        assertThat(lastParenLine(depositNoticeService.getXlsx(draftId, salesActor)))
+            .isEqualTo("( " + thaiName(otherSalesRepId) + " )");
+        // null keeps the stored preparer
+        assertThat(depositNoticeService.update(draftId, noticePreparerOnly(null), salesActor).preparerId())
+            .isEqualTo(otherSalesRepId);
+        assertThat(depositNoticeService.update(draftId, noticePreparerOnly(salesManagerId), salesActor).preparerName())
+            .isEqualTo(thaiName(salesManagerId));
+    }
+
+    /** A rep who is neither the deal's owner nor keyer, or anyone outside sales, cannot be named: 400, nothing changes. */
+    @Test
+    void depositNoticeDraft_update_withSomeoneOutsideTheDeal_is400_andChangesNothing() {
+        DealFixture fixture = buildAcceptedDeal(salesActor, "NoticeBadPreparer");
+        long draftId = reopenedNoticeDraft(fixture);
+
+        for (long outsider : List.of(strangerRepId, importActor.id())) {
+            assertThatThrownBy(() -> depositNoticeService.update(draftId, noticePreparerOnly(outsider), salesActor))
+                .isInstanceOfSatisfying(ApiException.class,
+                    e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
+        }
+
+        DepositNoticeDto after = depositNoticeService.getById(draftId, salesActor);
+        assertThat(after.preparerId()).isEqualTo(salesRepId);
+        assertThat(after.preparerName()).isEqualTo(thaiName(salesRepId));
+    }
+
+    /** A fresh remaining invoice (here drafted by the KEYER) defaults to the deal owner; a DRAFT can pick the deal's
+     * keyer and the file prints them; someone outside the deal is 400; an ISSUED one cannot change (409); a revision
+     * keeps the chosen preparer. */
+    @Test
+    void remainingInvoice_preparerDefaultsToTheDealOwner_isSelectableOnDraft_andLockedOnceIssued() throws Exception {
+        DealFixture fixture = buildAcceptedDeal(salesActor, "RiPickPreparer");
+        setKeyer(fixture, otherSalesRepId);
+        RemainingInvoiceDocumentDto draft = remainingInvoiceService.createDraft(fixture.ticketId(), null, otherSalesActor);
+        assertThat(draft.preparerId()).isEqualTo(salesRepId);
+        assertThat(draft.preparerName()).isEqualTo(thaiName(salesRepId));
+
+        RemainingInvoiceDocumentDto picked = remainingInvoiceService.updateDraft(draft.id(),
+            new RemainingInvoiceDraftRequest(null, null, null, null, null, otherSalesRepId), otherSalesActor);
+        assertThat(picked.preparerId()).isEqualTo(otherSalesRepId);
+        assertThat(picked.preparerName()).isEqualTo(thaiName(otherSalesRepId));
+
+        assertThatThrownBy(() -> remainingInvoiceService.updateDraft(draft.id(),
+                new RemainingInvoiceDraftRequest(null, null, null, null, null, strangerRepId), otherSalesActor))
+            .isInstanceOfSatisfying(ApiException.class,
+                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
+
+        RemainingInvoiceDocumentDto issued = remainingInvoiceService.issue(draft.id(), otherSalesActor);
+        assertThat(preparerLine(remainingInvoiceService.file(issued.id(), otherSalesActor)))
+            .isEqualTo("( " + thaiName(otherSalesRepId) + " )");
+        assertThatThrownBy(() -> remainingInvoiceService.updateDraft(issued.id(),
+                new RemainingInvoiceDraftRequest(null, null, null, null, null, salesRepId), otherSalesActor))
+            .isInstanceOfSatisfying(ApiException.class,
+                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+        assertThat(remainingInvoiceService.get(issued.id(), otherSalesActor).preparerId()).isEqualTo(otherSalesRepId);
+
+        RemainingInvoiceDocumentDto revision = remainingInvoiceService.revise(issued.id(), otherSalesActor);
+        assertThat(revision.preparerId()).isEqualTo(otherSalesRepId);
+        assertThat(revision.preparerName()).isEqualTo(thaiName(otherSalesRepId));
+    }
+
+    /** Both UIs send the current preparerId on every save: a stored preparer who is no longer an option (inactive here)
+     * must not make the draft unsaveable, while naming a different outsider is still 400. */
+    @Test
+    void saving_withTheStoredPreparerWhoIsNoLongerAnOption_stillWorks_butAnotherOutsiderIs400() {
+        DealFixture fixture = buildAcceptedDeal(salesActor, "StalePreparer");
+        setKeyer(fixture, otherSalesRepId);
+        RemainingInvoiceDocumentDto ri = remainingInvoiceService.createDraft(fixture.ticketId(), null, salesActor);
+        remainingInvoiceService.updateDraft(ri.id(),
+            new RemainingInvoiceDraftRequest(null, null, null, null, null, otherSalesRepId), salesActor);
+        jdbc.update("UPDATE hr.employee SET is_active = FALSE WHERE employee_id = :id", Map.of("id", otherSalesRepId));
+
+        assertThat(remainingInvoiceService.updateDraft(ri.id(),
+            new RemainingInvoiceDraftRequest(null, null, null, null, null, otherSalesRepId), salesActor).preparerId())
+            .isEqualTo(otherSalesRepId);
+        // the deposit notice (reopened as a DRAFT, its stored preparer set to the same person)
+        long noticeId = reopenedNoticeDraft(fixture);
+        jdbc.update("UPDATE sales.deposit_notice SET preparer_id = :p WHERE deposit_notice_id = :id",
+            Map.of("p", otherSalesRepId, "id", noticeId));
+        assertThat(depositNoticeService.update(noticeId, noticePreparerOnly(otherSalesRepId), salesActor).preparerId())
+            .isEqualTo(otherSalesRepId);
+        assertThatThrownBy(() -> depositNoticeService.update(noticeId, noticePreparerOnly(strangerRepId), salesActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
+    }
+
+    /** A revision keeps the chosen preparer (a sales manager here), not the owner default. */
+    @Test
+    void remainingInvoiceRevision_keepsTheChosenPreparer() {
+        DealFixture fixture = buildAcceptedDeal(salesActor, "RevisionPreparer");
+        RemainingInvoiceDocumentDto draft = remainingInvoiceService.createDraft(fixture.ticketId(), null, salesActor);
+        remainingInvoiceService.updateDraft(draft.id(),
+            new RemainingInvoiceDraftRequest(null, null, null, null, null, salesManagerId), salesActor);
+        RemainingInvoiceDocumentDto issued = remainingInvoiceService.issue(draft.id(), salesActor);
+
+        RemainingInvoiceDocumentDto revision = remainingInvoiceService.revise(issued.id(), salesActor);
+
+        assertThat(revision.preparerId()).isEqualTo(salesManagerId);
+        assertThat(revision.preparerName()).isEqualTo(thaiName(salesManagerId));
+    }
+
+    /** A new deposit notice draft on a deal that already had a notice carries that notice's chosen preparer. */
+    @Test
+    void depositNoticeRedraft_keepsThePreviousNoticesPreparer() {
+        DealFixture fixture = buildAcceptedDeal(salesActor, "RedraftPreparer");
+        long noticeId = reopenedNoticeDraft(fixture);
+        depositNoticeService.update(noticeId, noticePreparerOnly(salesManagerId), salesActor);
+        jdbc.update("UPDATE sales.deposit_notice SET status = 'SUPERSEDED' WHERE deposit_notice_id = :id", Map.of("id", noticeId));
+
+        DepositNoticeDto redraft = depositNoticeService.createDraft(fixture.ticketId(), noticePreparerOnly(null), salesActor);
+
+        assertThat(redraft.preparerId()).isEqualTo(salesManagerId);
+        assertThat(redraft.preparerName()).isEqualTo(thaiName(salesManagerId));
+    }
+
+    /** The file carries the CHOSEN preparer's own signature, but only once ISSUED: a DRAFT file (ฉบับร่าง) carries none. */
+    @Test
+    void file_printsTheChosenPreparersSignature_onlyOnceIssued() throws Exception {
+        DealFixture fixture = buildAcceptedDeal(salesActor, "SignaturePick");
+        byte[] ownerSig = PdfRendererTestSupport.signaturePng(100, 30);
+        byte[] managerSig = PdfRendererTestSupport.signaturePng(140, 50);
+        for (Object[] row : new Object[][] {{salesRepId, ownerSig}, {salesManagerId, managerSig}}) {
+            jdbc.update("INSERT INTO hr.employee_signature (employee_id, mime_type, image, uploaded_by, uploaded_at) "
+                + "VALUES (:e, 'image/png', :i, :e, now())", new org.springframework.jdbc.core.namedparam.MapSqlParameterSource()
+                    .addValue("e", row[0]).addValue("i", row[1]));
+        }
+        // deposit notice: issued carries the owner's signature
+        assertThat(signatureBytes(depositNoticeService.getXlsx(fixture.depositNoticeId(), salesActor), 47)).containsExactly(ownerSig);
+
+        RemainingInvoiceDocumentDto draft = remainingInvoiceService.createDraft(fixture.ticketId(), null, salesActor);
+        remainingInvoiceService.updateDraft(draft.id(),
+            new RemainingInvoiceDraftRequest(null, null, null, null, null, salesManagerId), salesActor);
+        assertThat(signatureBytes(remainingInvoiceService.file(draft.id(), salesActor), 44)).as("RI draft").isEmpty();
+
+        RemainingInvoiceDocumentDto issued = remainingInvoiceService.issue(draft.id(), salesActor);
+        assertThat(signatureBytes(remainingInvoiceService.file(issued.id(), salesActor), 44)).as("RI issued").containsExactly(managerSig);
+
+        // deposit notice draft: none
+        long noticeId = reopenedNoticeDraft(fixture);
+        assertThat(signatureBytes(depositNoticeService.getXlsx(noticeId, salesActor), 47)).as("notice draft").isEmpty();
+    }
+
+    /** The preparer picture bytes in the preparer block (empty when none). */
+    private static byte[] signatureBytes(byte[] xls, int preparerRow) throws Exception {
+        try (org.apache.poi.ss.usermodel.Workbook wb = PdfRendererTestSupport.open(xls)) {
+            var pics = PdfRendererTestSupport.signaturePictures(wb.getSheetAt(0), preparerRow);
+            assertThat(pics.size()).isLessThanOrEqualTo(1);
+            return pics.isEmpty() ? new byte[0] : pics.get(0).getPictureData().getData();
+        }
+    }
+
+    /** An employee with only an English name still appears in the options (under it) and prints under it. */
+    @Test
+    void aKeyerWithOnlyAnEnglishName_isAnOption_andPrints() throws Exception {
+        DealFixture fixture = buildAcceptedDeal(salesActor, "EnglishKeyer");
+        setKeyer(fixture, otherSalesRepId);
+        jdbc.update("UPDATE hr.employee SET first_name_th = '', last_name_th = NULL, first_name_en = 'Anna', last_name_en = 'Smith' WHERE employee_id = :id",
+            Map.of("id", otherSalesRepId));
+
+        assertThat(depositNoticeService.documentPreparerOptions(fixture.ticketId(), salesActor))
+            .extracting(DocumentPreparerOption::id, DocumentPreparerOption::name)
+            .contains(org.assertj.core.groups.Tuple.tuple(otherSalesRepId, "Anna Smith"));
+        RemainingInvoiceDocumentDto draft = remainingInvoiceService.createDraft(fixture.ticketId(), null, salesActor);
+        remainingInvoiceService.updateDraft(draft.id(),
+            new RemainingInvoiceDraftRequest(null, null, null, null, null, otherSalesRepId), salesActor);
+        assertThat(preparerLine(remainingInvoiceService.file(draft.id(), salesActor))).isEqualTo("( Anna Smith )");
+    }
+
+    /** The deposit notice's "( name )" signature line sits below the totals; its row moves with the item count. */
+    private static String lastParenLine(byte[] xls) throws Exception {
+        try (org.apache.poi.ss.usermodel.Workbook wb =
+                 org.apache.poi.ss.usermodel.WorkbookFactory.create(new java.io.ByteArrayInputStream(xls))) {
+            String found = "";
+            for (org.apache.poi.ss.usermodel.Row row : wb.getSheetAt(0)) {
+                org.apache.poi.ss.usermodel.Cell c = row.getCell(1);
+                if (c == null || c.getCellType() != org.apache.poi.ss.usermodel.CellType.STRING) continue;
+                String v = c.getStringCellValue().replaceAll("\\s+", " ").trim();
+                if (v.startsWith("( ") && v.endsWith(" )") && row.getRowNum() >= 40) found = v;
+            }
+            return found;
+        }
+    }
+
+    /** ผู้จัดทำ on a remaining invoice is the deal's owner even when the keyer drafted it, not the deposit notice's
+     * preparer; with no name on file it prints none (the template's own line names a real person). */
+    @Test
+    void file_printsTheDealOwner_orNoNameWhenThereIsNone() throws Exception {
         DealFixture fixture = buildAcceptedDeal(salesActor, "Preparer");
         jdbc.update("UPDATE sales.deposit_notice SET preparer_name = :n WHERE deposit_notice_id = :id",
             Map.of("n", "ผู้จัดทำ ทดสอบ", "id", fixture.depositNoticeId()));
-        RemainingInvoiceDocumentDto draft = remainingInvoiceService.createDraft(fixture.ticketId(), null, salesActor);
-        RemainingInvoiceDocumentDto issued = remainingInvoiceService.issue(draft.id(), salesActor);
+        jdbc.update("UPDATE sales.ticket SET keyed_by = :k WHERE ticket_id = :id",
+            Map.of("k", otherSalesRepId, "id", fixture.ticketId()));
+        RemainingInvoiceDocumentDto draft = remainingInvoiceService.createDraft(fixture.ticketId(), null, otherSalesActor);
+        RemainingInvoiceDocumentDto issued = remainingInvoiceService.issue(draft.id(), otherSalesActor);
 
-        assertThat(preparerLine(remainingInvoiceService.file(issued.id(), salesActor))).isEqualTo("( ผู้จัดทำ ทดสอบ )");
+        assertThat(preparerLine(remainingInvoiceService.file(issued.id(), otherSalesActor)))
+            .isEqualTo("( " + thaiName(salesRepId) + " )");
 
-        jdbc.update("UPDATE sales.remaining_invoice SET deposit_notice_id = NULL WHERE id = :id", Map.of("id", issued.id()));
-        String templateOwn;
-        try (java.io.InputStream in = getClass().getResourceAsStream("/templates/remaining_invoice_template.xls");
-             org.apache.poi.ss.usermodel.Workbook t = org.apache.poi.ss.usermodel.WorkbookFactory.create(in)) {
-            templateOwn = t.getSheet("Update").getRow(44).getCell(1).getStringCellValue().replaceAll("\\s+", " ").trim();
-        }
-        assertThat(preparerLine(remainingInvoiceService.file(issued.id(), salesActor))).isEqualTo(templateOwn);
+        jdbc.update("UPDATE sales.remaining_invoice SET created_by_name = NULL, preparer_name = NULL WHERE id = :id", Map.of("id", issued.id()));
+        assertThat(preparerLine(remainingInvoiceService.file(issued.id(), salesActor))).isEmpty();
     }
 
     private static String preparerLine(byte[] xls) throws Exception {

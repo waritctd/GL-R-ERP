@@ -79,6 +79,20 @@ public class DepositNoticeService {
         return docs.findByTicket(ticketId);
     }
 
+    public List<DocumentPreparerOption> documentPreparerOptions(long ticketId, UserPrincipal actor) {
+        requireTicketViewer(ticketId, actor);
+        return docs.findPreparerOptions(ticketId);
+    }
+
+    /** A non-null preparerId must be one of THIS deal's options (owner, keyer, sales managers), unless it is the
+     * document's stored preparer (the UIs resend it on every save, even after the deal was re-owned). */
+    public void requirePreparerInDeal(long ticketId, Long preparerId, Long storedPreparerId) {
+        if (preparerId != null && !preparerId.equals(storedPreparerId)
+                && docs.findPreparerOptions(ticketId).stream().noneMatch(o -> o.id() == preparerId)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ผู้จัดทำต้องเป็นเจ้าของงาน ผู้คีย์งาน หรือผู้จัดการฝ่ายขายของงานนี้");
+        }
+    }
+
     public DepositNoticeDto getById(long docId, UserPrincipal actor) {
         DepositNoticeDto doc = docs.findById(docId)
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบใบแจ้งรับมัดจำนี้"));
@@ -168,10 +182,10 @@ public class DepositNoticeService {
             header.taxId(), header.address(),
             header.projectName(), reference,
             effectiveDepositPercent,
-            notes, items
+            notes, items, null, actor.id()
         );
 
-        long docId = docs.createDraft(ticketId, effective, items);
+        long docId = docs.createDraft(ticketId, effective, items, actor.name());
         return docs.findById(docId).orElseThrow();
     }
 
@@ -186,6 +200,7 @@ public class DepositNoticeService {
         requireRole(actor, SALES_ROLES);
         DepositNoticeDto doc = requireDraft(docId);
         requireTicketOwner(doc.ticketId(), actor);
+        requirePreparerInDeal(doc.ticketId(), req.preparerId(), doc.preparerId());
         // Sales may change the deposit percent on a DRAFT (requireDraft
         // above 409s an issued notice). docs.update recomputes the amount from it. A request
         // without a percent keeps the draft's own.
@@ -203,7 +218,7 @@ public class DepositNoticeService {
             req.customerName(), req.customerTaxId(), req.customerAddress(),
             req.projectName(), req.reference(),
             depositPercent,
-            req.notes(), echoOnly(req.items(), doc.items()), req.expectedUpdatedAt()
+            req.notes(), echoOnly(req.items(), doc.items()), req.expectedUpdatedAt(), req.preparerId()
         );
         docs.update(docId, effective, doc.items());
         return docs.findById(docId).orElseThrow();
@@ -349,16 +364,20 @@ public class DepositNoticeService {
      * branch to the stored address, so it prints there once). A DRAFT has no issue date yet and prints {@code today}, and
      * prints ฉบับร่าง in the number cell (presentation only; nothing stored changes) so the file cannot pass for issued. */
     DepositNoticeRenderModel renderModel(DepositNoticeDto doc, LocalDate today) {
+        // a DRAFT file (ฉบับร่าง) never carries a real signature
+        var sig = "DRAFT".equals(doc.status()) ? java.util.Optional.<th.co.glr.hr.dealquotation.EmployeeSignatureRepository.SignatureImage>empty()
+            : docs.findPreparerSignature(doc.preparerId());
         return new DepositNoticeRenderModel(doc.issueDate() != null ? doc.issueDate() : today,
             doc.docNumber() != null ? doc.docNumber() : "ฉบับร่าง",
             doc.customerName(), null, doc.customerTaxId(), doc.customerAddress(), doc.projectName(), doc.reference(),
             doc.items(), doc.subtotal(), doc.depositPercent(), doc.depositAmount(), doc.vatAmount(), doc.totalPayable(),
-            doc.preparerName());
+            doc.preparerName(),
+            sig.map(x -> x.image()).orElse(null));
     }
 
-    /** The preparer printed on a deposit notice (null when the row is gone). */
-    String preparerNameOf(long depositNoticeId) {
-        return docs.findById(depositNoticeId).map(DepositNoticeDto::preparerName).orElse(null);
+    /** The chosen preparer's signature image, for the remaining invoice's render model. */
+    java.util.Optional<th.co.glr.hr.dealquotation.EmployeeSignatureRepository.SignatureImage> preparerSignature(Long employeeId) {
+        return docs.findPreparerSignature(employeeId);
     }
 
     // Download Excel bytes

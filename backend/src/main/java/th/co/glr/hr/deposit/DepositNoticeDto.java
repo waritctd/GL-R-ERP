@@ -33,6 +33,7 @@ public record DepositNoticeDto(
     boolean           hasXlsx,
     String            issuedByName,
     String            preparerName,
+    Long              preparerId,
     OffsetDateTime    createdAt,
     OffsetDateTime    updatedAt,
     List<DepositNoticeItemDto> items

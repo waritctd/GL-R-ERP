@@ -68,6 +68,13 @@ public class DepositNoticeController {
         return Map.of("depositNotices", service.listByTicket(ticketId, user));
     }
 
+    // ผู้จัดทำ choices for this deal's deposit notice / remaining invoice
+    @GetMapping("/tickets/{ticketId}/document-preparer-options")
+    Map<String, List<DocumentPreparerOption>> preparerOptions(@PathVariable long ticketId, HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return Map.of("items", service.documentPreparerOptions(ticketId, user));
+    }
+
     // Get single document
     @GetMapping("/deposit-notices/{docId}")
     Map<String, DepositNoticeDto> getDoc(@PathVariable long docId, HttpSession session) {

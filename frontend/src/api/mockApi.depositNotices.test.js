@@ -183,6 +183,19 @@ async function driveTicketToNewEngineAcceptedQuotation(options) {
   return { ticketId, prId, accepted };
 }
 
+describe('mockApi.depositNotices.preparerOptions', () => {
+  it('lists the deal owner, then the sales managers, each once', async () => {
+    const { ticketId } = await driveTicketToAcceptedQuotation();
+    const { items } = await api.depositNotices.preparerOptions(ticketId);
+    const { user: owner } = await api.auth.me();
+    await api.auth.login({ role: 'sales_manager' });
+    const { user: manager } = await api.auth.me();
+    await api.auth.login({ role: 'sales' });
+
+    expect(items.map((o) => o.id)).toEqual([owner.id, manager.id]);
+  });
+});
+
 describe('mockApi.depositNotices.createDraft autofill (branch fix: deposit-notice autofill)', () => {
   it('sources items from the accepted quotation and autofills the header when no ticket item has an approved price', async () => {
     const { ticketId, customer, project, quotation } = await driveTicketToAcceptedQuotation();
