@@ -373,6 +373,22 @@ class PricingDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(decision.status()).isEqualTo(PricingDecisionStatus.APPROVED);
     }
 
+    /** "Manage all sales documents" grant: a holder reads another rep's approved sales view; an inactive one does not. */
+    @Test
+    void salesView_admitsAGrantHolder_butNotAnInactiveOne() {
+        long pricingRequestId = twoItemSubmittedCosting();
+        approveWithFlatMargin(pricingRequestId, new BigDecimal("0.20"));
+        jdbc.update("UPDATE hr.employee SET can_manage_all_sales_documents = TRUE WHERE employee_id = :id",
+            java.util.Map.of("id", otherSalesActor.id()));
+
+        assertThat(decisionService.salesView(pricingRequestId, otherSalesActor).items()).isNotEmpty();
+
+        jdbc.update("UPDATE hr.employee SET is_active = FALSE WHERE employee_id = :id",
+            java.util.Map.of("id", otherSalesActor.id()));
+        assertThatThrownBy(() -> decisionService.salesView(pricingRequestId, otherSalesActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+    }
+
     @Test
     void accountRole_cannotReachDecisionsCostingsOrFactoryQuotes() {
         long pricingRequestId = twoItemSubmittedCosting();

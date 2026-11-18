@@ -1042,7 +1042,7 @@ public class DepositNoticeService {
         if (!TicketStatus.APPROVED.equals(st) && !TicketStatus.DOCUMENT_ISSUED.equals(st)) {
             throw new ApiException(HttpStatus.CONFLICT, "ขอแก้ไข revision ได้เฉพาะจากสถานะ approved หรือ document_issued เท่านั้น");
         }
-        if (!DealOwnership.isOwnerOrKeyer(s, actor.id())) {
+        if (!ownsDeal(s, actor)) {
             throw new ApiException(HttpStatus.FORBIDDEN, "เฉพาะเจ้าของงานเท่านั้นที่สามารถขอแก้ไขใบเสนอราคาได้");
         }
 
@@ -1163,10 +1163,10 @@ public class DepositNoticeService {
         TicketDto t = tickets.findById(ticketId)
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบงานนี้"));
         // The per-role half is dealDocumentScope (below), which the document chain's list mark applies in SQL too.
-        switch (dealDocumentScope(actor.role())) {
+        switch (tickets.holdsAllSalesDocumentsGrant(actor) ? DealDocumentScope.ALL : dealDocumentScope(actor.role())) {
             case ALL -> { }
             case OWNER_OR_KEYER -> {
-                if (!DealOwnership.isOwnerOrKeyer(t.summary(), actor.id())) {
+                if (!ownsDeal(t.summary(), actor)) {
                     throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
                 }
             }
@@ -1220,19 +1220,26 @@ public class DepositNoticeService {
      * (and createDraft/update/issue's own requireRole(SALES_ROLES) + requireTicketOwner) as a yes/no, for the document
      * chain's "may this viewer act" flags. */
     public boolean mayWriteDealDocuments(TicketSummaryDto summary, UserPrincipal actor) {
-        return SALES_ROLES.contains(actor.role()) && DealOwnership.isOwnerOrKeyer(summary, actor.id());
+        return (SALES_ROLES.contains(actor.role()) && DealOwnership.isOwnerOrKeyer(summary, actor.id()))
+            || tickets.holdsAllSalesDocumentsGrant(actor);
+    }
+
+    /** Owner/keyer of the deal, or a live {@code can_manage_all_sales_documents} holder (acts as owner of every deal). */
+    private boolean ownsDeal(TicketSummaryDto s, UserPrincipal actor) {
+        return DealOwnership.isOwnerOrKeyer(s, actor.id()) || tickets.holdsAllSalesDocumentsGrant(actor);
     }
 
     private void requireTicketOwner(long ticketId, UserPrincipal actor) {
         TicketDto t = tickets.findById(ticketId)
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบงานนี้"));
-        if (!DealOwnership.isOwnerOrKeyer(t.summary(), actor.id())) {
+        if (!ownsDeal(t.summary(), actor)) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
     }
 
     private void requireRole(UserPrincipal actor, java.util.Set<String> allowed) {
-        if (!allowed.contains(actor.role())) {
+        // a can_manage_all_sales_documents holder acts as the sales owner whatever their role
+        if (!allowed.contains(actor.role()) && !(allowed.contains("sales") && tickets.holdsAllSalesDocumentsGrant(actor))) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
     }

@@ -149,7 +149,8 @@ public class AttachmentController {
             case "account" -> tickets.isInAccountScope(ticketId) || tickets.isDeadDealWithIssuedDepositNotice(ticketId);
             default -> false;
         };
-        if (!TicketAccessPolicy.canViewDocuments(summary, actor, inRoleScope)) {
+        if (!TicketAccessPolicy.canViewDocuments(summary, actor, inRoleScope,
+                tickets.holdsAllSalesDocumentsGrant(actor))) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
     }
@@ -157,7 +158,8 @@ public class AttachmentController {
     /** Attaching or removing a document is strictly narrower than reading one. See
      * TicketAccessPolicy#DOCUMENT_WRITER_ROLES. */
     private void requireTicketWriteAccess(long ticketId, UserPrincipal actor) {
-        if (!TicketAccessPolicy.canManageDocuments(requireTicketSummary(ticketId), actor)) {
+        if (!TicketAccessPolicy.canManageDocuments(requireTicketSummary(ticketId), actor,
+                tickets.holdsAllSalesDocumentsGrant(actor))) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
     }

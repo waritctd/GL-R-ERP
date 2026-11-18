@@ -2,7 +2,7 @@ import thaiLocations from '../data/thai-locations.json';
 import { formatThaiAddress } from '../features/locations/thaiAddress.js';
 import { isPastProcurement } from '../features/finance/moneyMilestone.js';
 import { accountOwesStep } from '../features/tickets/accountActions.js';
-import { isOwnerOrKeyer } from '../features/tickets/dealOwnership.js';
+import { actsAsOwner, holdsAllSalesDocumentsGrant, isOwnerOrKeyer, isSalesOwner } from '../features/tickets/dealOwnership.js';
 import {
   chainDepositBlockedReason, chainDepositState, chainListStage, chainOrderConfirmed, chainRemainingBlockedReason,
   chainRemainingState,
@@ -1648,7 +1648,7 @@ function mockCustomerQuotationViewAccess(id) {
   if (user.role === 'sales') {
     const pr = findPricingRequestRaw(quotation.pricingRequestId);
     const ticket = db.tickets.find((t) => t.id === pr.ticketId);
-    if (!isOwnerOrKeyer(ticket, user.id)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+    if (!actsAsOwner(ticket, user)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
   }
   return quotation;
 }
@@ -1660,7 +1660,7 @@ function mockCustomerQuotationEditAccess(id, user) {
   if (!quotation) fail('ไม่พบใบเสนอราคาลูกค้านี้', 404);
   const pr = findPricingRequestRaw(quotation.pricingRequestId);
   const ticket = db.tickets.find((t) => t.id === pr.ticketId);
-  if (!isOwnerOrKeyer(ticket, user.id)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+  if (!actsAsOwner(ticket, user)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
   return quotation;
 }
 
@@ -1843,10 +1843,10 @@ function requirePricingRequestViewable(id, user) {
   const pr = findPricingRequestRaw(id);
   const ticket = db.tickets.find((t) => t.id === pr.ticketId);
   const draftOversight = user.role === 'ceo' || user.role === 'sales_manager';
-  if (pr.status === 'DRAFT' && !draftOversight && !isOwnerOrKeyer(ticket, user.id)) {
+  if (pr.status === 'DRAFT' && !draftOversight && !actsAsOwner(ticket, user)) {
     fail('ไม่พบคำขอราคานี้', 404);
   }
-  if (user.role === 'sales' && !isOwnerOrKeyer(ticket, user.id)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+  if (user.role === 'sales' && !actsAsOwner(ticket, user)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
   return pr;
 }
 
@@ -2352,6 +2352,7 @@ function authResponse(user) {
     admin: Boolean(user?.admin),
     canCreateQuotation: Boolean(user?.canCreateQuotation),
     canIssueBillingNote: Boolean(user?.canIssueBillingNote),
+    canManageAllSalesDocuments: holdsAllSalesDocumentsGrant(user),
     canViewAs: false,
     canViewPeopleInsights: ['ceo', 'hr'].includes(user?.role),
     viewAs: null,
@@ -2373,7 +2374,7 @@ function requireSession() {
  */
 function requireOwningRepOrCeo(ticket) {
   const user = requireSession();
-  const owns = user.role === 'sales' && isOwnerOrKeyer(ticket, user.id);
+  const owns = isSalesOwner(ticket, user);
   if (user.role !== 'ceo' && !owns) {
     fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
   }
@@ -2387,7 +2388,7 @@ function requireOwningRepOrCeo(ticket) {
 // RemainingInvoiceService's Javadoc).
 function requireRemainingInvoiceWriteGate(ticket) {
   const user = requireSession();
-  const owns = user.role === 'sales' && isOwnerOrKeyer(ticket, user.id);
+  const owns = isSalesOwner(ticket, user);
   if (!owns) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
   return user;
 }
@@ -2403,7 +2404,7 @@ function requireRemainingInvoiceWriteGate(ticket) {
  */
 function requireDepositPolicyOwner(ticket) {
   const user = requireSession();
-  const owns = user.role === 'sales' && isOwnerOrKeyer(ticket, user.id);
+  const owns = isSalesOwner(ticket, user);
   if (!owns && user.role !== 'sales_manager') fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
   return user;
 }
@@ -2533,7 +2534,7 @@ function requireBillingNoteReadAccess(note) {
   if (MOCK_BILLING_NOTE_READ_ROLES.includes(user.role) || hasWriteGrant) return user;
   if (user.role === 'sales') {
     const ticketIds = [...new Set(note.lines.map((l) => l.ticketId).filter((id) => id != null))];
-    const owns = ticketIds.some((id) => isOwnerOrKeyer(findTicketRaw(id), user.id));
+    const owns = ticketIds.some((id) => actsAsOwner(findTicketRaw(id), user));
     if (owns) return user;
   }
   fail('ไม่มีสิทธิ์เข้าถึงใบวางบิลนี้', 403);
@@ -2728,7 +2729,7 @@ function findStoredImportRequestRaw(id) {
 // unrestricted; sales only the deal's own owner.
 function requireStoredIrRead(ticket, user) {
   if (user.role === 'ceo' || user.role === 'import' || user.role === 'sales_manager') return;
-  if (user.role === 'sales' && isOwnerOrKeyer(ticket, user.id)) return;
+  if (isSalesOwner(ticket, user)) return;
   fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
 }
 
@@ -2736,7 +2737,7 @@ function requireStoredIrRead(ticket, user) {
 // rep/CEO) PLUS import. Distinct from the CEO-only PRINTED footer gate below.
 function requireStoredIrEmailWrite(ticket, user) {
   if (user.role === 'ceo' || user.role === 'import') return;
-  if (user.role === 'sales' && isOwnerOrKeyer(ticket, user.id)) return;
+  if (isSalesOwner(ticket, user)) return;
   fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
 }
 
@@ -2886,7 +2887,7 @@ function mockImportLineCode(item) {
 // appears in mock mode and a deal whose real IR would take the quotation's lead time shows the country default
 // here. Mock-driven results are therefore plumbing evidence, not evidence about the real split, lead time or gate.
 function mockSplitPreview(ticket, user, itemFactories) {
-  const mayIssue = user.role === 'ceo' || (user.role === 'sales' && isOwnerOrKeyer(ticket, user.id));
+  const mayIssue = user.role === 'ceo' || (isSalesOwner(ticket, user));
   if (!mayIssue) return null;
   const picked = new Map();
   // Fix round L1 — mirrors ImportRequestService#splitPreview: picks count only on a deal whose confirm shows the
@@ -3466,7 +3467,7 @@ function mockPayrollLine(employee) {
 function requireTicketViewer(id, { accountScoped = false } = {}) {
   const user = hasRole('sales', 'import', 'ceo', 'account', 'sales_manager');
   const ticket = findTicketRaw(Number(id));
-  if (user.role === 'sales' && !isOwnerOrKeyer(ticket, user.id)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+  if (user.role === 'sales' && !actsAsOwner(ticket, user)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
   // H1 lockdown: account no longer reads a deal through the ticket routes (get / actions / payments / deliveries
   // / comments) at all. The row-scoped document reads (deposit notices, remaining invoices) opt in with
   // accountScoped, where account is admitted only inside its list scope.
@@ -3590,7 +3591,7 @@ const ATTACHMENT_WRITER_ROLES = ['sales_manager', 'ceo'];
 function requireAttachmentTicketAccess(ticketId, { write = false } = {}) {
   const user = requireSession();
   const ticket = findTicketRaw(Number(ticketId));
-  const isParticipant = isOwnerOrKeyer(ticket, user.id)
+  const isParticipant = actsAsOwner(ticket, user)
     || (ticket.assignedToId != null && ticket.assignedToId === user.id);
   const importReadsInScope = !write && user.role === 'import' && importListScopeIncludes(ticket);
   const allowed = isParticipant || importReadsInScope || (write
@@ -4274,7 +4275,7 @@ function mockChainFacts(ticket) {
 // Mirrors DepositNoticeService#dealDocumentScope: whose deals' documents a role may read.
 function mockDealDocumentReadable(ticket, user) {
   if (['ceo', 'sales_manager'].includes(user.role)) return true;
-  if (user.role === 'sales') return isOwnerOrKeyer(ticket, user.id);
+  if (user.role === 'sales') return actsAsOwner(ticket, user);
   if (user.role === 'account') return accountListScopeIncludes(ticket);
   return false;
 }
@@ -4368,10 +4369,10 @@ function mockDocumentChainFor(ticket, user) {
   const invoice = invoices.find((r) => r.status === 'ISSUED') ?? invoices.find((r) => r.status === 'DRAFT') ?? null;
   const remainingState = chainRemainingState(f);
   const remainingReason = chainRemainingBlockedReason(f);
-  const mayWrite = user.role === 'sales' && isOwnerOrKeyer(ticket, user.id); // DepositNoticeService#mayWriteDealDocuments
+  const mayWrite = isSalesOwner(ticket, user); // DepositNoticeService#mayWriteDealDocuments
   // DealQuotationService#hasEditAccess (the confirm-order authz): owner sales, any sales_manager, or the grant.
   const mayConfirm = hasDealQuotationMockGrant(user) || user.role === 'sales_manager'
-    || (user.role === 'sales' && isOwnerOrKeyer(ticket, user.id));
+    || (isSalesOwner(ticket, user));
   return {
     ticketId: ticket.id, dealCode: ticket.code ?? null, dealStatus: ticket.status, lifecycle: ticket.lifecycle ?? 'ACTIVE',
     order: {
@@ -4765,7 +4766,7 @@ function mockCanWriteStage(user, ticket, code) {
   if (user.role === 'ceo') return true;
   if (gate === 'sales') {
     return user.role === 'sales_manager'
-      || (user.role === 'sales' && isOwnerOrKeyer(ticket, user.id));
+      || (isSalesOwner(ticket, user));
   }
   return user.role === gate;
 }
@@ -4791,7 +4792,7 @@ function mockEntryChannelIsStated(ticket) {
 /** Mirrors TicketService.requireDealOwnership (lost / reopen / hold / tracking). NOT authoritative. */
 function mockCanDealOwnership(user, ticket) {
   return user?.role === 'ceo' || user?.role === 'sales_manager'
-    || (user?.role === 'sales' && isOwnerOrKeyer(ticket, user.id));
+    || (isSalesOwner(ticket, user));
 }
 
 /** The mock's answer to GET /api/tickets/{id}/actions -> stageDecisions. The single place the mock decides
@@ -5494,7 +5495,7 @@ function dashboardTickets(user) {
   const list = allVisible
     ? db.tickets
     : ownVisible
-      ? db.tickets.filter((ticket) => isOwnerOrKeyer(ticket, user.id) || (user.employeeId && ticket.createdById === user.employeeId))
+      ? db.tickets.filter((ticket) => actsAsOwner(ticket, user) || (user.employeeId && ticket.createdById === user.employeeId))
       : [];
   const now = new Date();
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0, 10);
@@ -6500,12 +6501,12 @@ function requireDealQuotationViewAccess(ticket, user, origin = 'DEAL_DIRECT', do
   }
   if (origin === 'PRICING_REQUEST') {
     if (!['sales', 'sales_manager', 'ceo'].includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
-    if (user.role === 'sales' && !isOwnerOrKeyer(ticket, user.id)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+    if (user.role === 'sales' && !actsAsOwner(ticket, user)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
     return;
   }
   if (hasDealQuotationMockGrant(user)) return;
   if (!DEAL_QUOTATION_VIEWER_ROLES.includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
-  if (user.role === 'sales' && !isOwnerOrKeyer(ticket, user.id)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+  if (user.role === 'sales' && !actsAsOwner(ticket, user)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
 }
 
 // Mirrors DealQuotationService's create/update/submit/cancel/createRevision gate: sales (deal
@@ -6519,11 +6520,11 @@ function requireDealQuotationWriteAccess(ticket, user, origin = 'DEAL_DIRECT') {
   if (origin === 'PRICING_REQUEST') {
     if (!['sales', 'sales_manager'].includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
     if (user.role === 'sales_manager') return; // any deal
-    if (!isOwnerOrKeyer(ticket, user.id)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+    if (!actsAsOwner(ticket, user)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
     return;
   }
   if (hasDealQuotationMockGrant(user)) return;
-  const owns = user.role === 'sales' && isOwnerOrKeyer(ticket, user.id);
+  const owns = isSalesOwner(ticket, user);
   if (!(owns || user.role === 'sales_manager')) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
 }
 
@@ -6551,7 +6552,7 @@ function scopedDealQuotationsFor(user) {
   const grant = hasDealQuotationMockGrant(user);
   if (!grant && !DEAL_QUOTATION_VIEWER_ROLES.includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
   const base = mockDealQuotations.filter(isDealDirectOrigin);
-  if (DEAL_QUOTATION_LIST_SEE_ALL_ROLES.includes(user.role)) {
+  if (DEAL_QUOTATION_LIST_SEE_ALL_ROLES.includes(user.role) || holdsAllSalesDocumentsGrant(user)) {
     return base;
   }
   return base.filter((q) => isOwnerOrKeyer(db.tickets.find((t) => t.id === q.ticketId), user.id));
@@ -8403,7 +8404,7 @@ function buildTicketActions(user, ticket) {
   const stageDecisions = mockStageDecisions(ticket, user);
   const availableActions = [];
   const add = (action, kind, label, extra = {}) => availableActions.push({ action, kind, label, ...extra });
-  const owner = user.role === 'sales' && isOwnerOrKeyer(ticket, user.id);
+  const owner = isSalesOwner(ticket, user);
   const dealOwner = owner || user.role === 'sales_manager' || user.role === 'ceo';
 
   if (active) {
@@ -8469,7 +8470,7 @@ function buildTicketActions(user, ticket) {
     if (user.role === 'ceo' && ticket.closeConfirmedAt && closeReady) {
       add('VERIFY_CLOSE', 'operational', 'ตรวจสอบและปิดงาน');
     }
-    if (isOwnerOrKeyer(ticket, user.id) && !['closed', 'cancelled'].includes(ticket.status)) add('CANCEL', 'operational', 'ยกเลิก');
+    if (actsAsOwner(ticket, user) && !['closed', 'cancelled'].includes(ticket.status)) add('CANCEL', 'operational', 'ยกเลิก');
     if (owner && ['draft', 'submitted', 'in_review', 'price_proposed'].includes(ticket.status)) add('EDIT_ITEMS', 'operational', 'แก้ไขรายการ');
     // TicketService.actions: reserveStock's own gate, offered only before the deal is on the import axis.
     // CEO-only (production): the owning rep now goes through the "จัดซื้อสินค้า" dialog instead.
@@ -9792,7 +9793,7 @@ export const api = {
       if (!['sales', 'import', 'ceo', 'account', 'sales_manager'].includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       // A quotation-first deal is listed like any other deal ("Nothing hidden").
       let list = structuredClone(db.tickets);
-      if (user.role === 'sales') list = list.filter((t) => isOwnerOrKeyer(t, user.id));
+      if (user.role === 'sales') list = list.filter((t) => actsAsOwner(t, user));
       // import/account only see the slice of the deal pipeline relevant to their own worklist — see
       // importListScopeIncludes / accountListScopeIncludes above. ceo/sales_manager/sales are
       // unaffected.
@@ -9893,7 +9894,7 @@ export const api = {
       if (!['sales', 'ceo', 'sales_manager'].includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       const ticket = structuredClone(db.tickets.find((t) => t.id === Number(id)));
       if (!ticket) fail('ไม่พบงานนี้', 404);
-      if (user.role === 'sales' && !isOwnerOrKeyer(ticket, user.id)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      if (user.role === 'sales' && !actsAsOwner(ticket, user)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       const detail = projectTicketDetailForRole(buildTicketDetail(ticket), user.role);
       // Read-path-only fallback (mirrors TicketService#get on the backend) -- every OTHER mock
       // mutation that returns buildTicketDetail(ticket) directly (recordPayment, reserveStock,
@@ -9944,7 +9945,7 @@ export const api = {
       const { user, ticket } = requireTicketViewer(id);
       const legacy = isLegacyStockSource(ticket);
       const decidedAt = ticket.procurementDecidedAt ?? null;
-      const owns = user.role === 'sales' && isOwnerOrKeyer(ticket, user.id);
+      const owns = isSalesOwner(ticket, user);
       return delay({
         legacy,
         editable: legacy && !decidedAt && procurementDecisionOpen(ticket) && (user.role === 'ceo' || owns),
@@ -10178,7 +10179,7 @@ export const api = {
       const ticket = findTicketRaw(Number(id));
       requireActive(ticket);
       const st = ticket.status;
-      const isOwner = isOwnerOrKeyer(ticket, user.id);
+      const isOwner = actsAsOwner(ticket, user);
       // 'draft' included since V50: a lightweight lead-stage deal gets its product items here before submit().
       const salesCanEdit = user.role === 'sales' && isOwner
         && ['draft', 'submitted', 'in_review', 'price_proposed'].includes(st);
@@ -10287,7 +10288,7 @@ export const api = {
       if (ticket.status === 'closed' || ticket.status === 'cancelled') fail('ไม่สามารถยกเลิกได้', 409);
       // Ownership gate — the Java service has always had this; the mock did not, which made it MORE permissive than
       // production (the dangerous direction).
-      if (!isOwnerOrKeyer(ticket, user.id)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      if (!actsAsOwner(ticket, user)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       const prev = ticket.status;
       ticket.status = 'cancelled';
       ticket.lifecycle = 'CANCELLED';
@@ -10402,7 +10403,7 @@ export const api = {
       const ticket = findTicketRaw(Number(id));
       requireActive(ticket);
       // Mirrors TicketService.confirmCustomer: owner-only.
-      if (!isOwnerOrKeyer(ticket, user.id)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      if (!actsAsOwner(ticket, user)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       if (ticket.status !== 'quotation_issued') fail('ต้องออกใบเสนอราคาแล้วก่อนจึงจะดำเนินการขั้นตอนนี้ได้', 409);
       // Never downgrade the payment track (mirrors TicketService.confirmCustomer).
       if (ticket.paymentStatus != null && ticket.paymentStatus !== 'CUSTOMER_CONFIRMED') {
@@ -10842,7 +10843,7 @@ export const api = {
       const key = mockNormalisedProjectName(projectName);
       if (!key) return delay({ deals: [] });
       const deals = db.tickets
-        .filter((t) => isOwnerOrKeyer(t, user.id) && mockIsPreOutcome(t))
+        .filter((t) => actsAsOwner(t, user) && mockIsPreOutcome(t))
         .filter((t) => mockNormalisedProjectName(mockProjects.find((p) => p.id === t.projectId)?.name) === key)
         .sort((a, b) => b.id - a.id)
         .map((t) => {
@@ -14281,8 +14282,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
     async setRequiredByNote(ticketId, request) {
       const ticket = findTicketRaw(Number(ticketId));
       const user = requireSession();
-      if (user.role !== 'sales' && user.role !== 'ceo') fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
-      if (user.role === 'sales' && !isOwnerOrKeyer(ticket, user.id)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      if (user.role !== 'ceo' && !isSalesOwner(ticket, user)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       requireActive(ticket);
       if (dealStageIndex(ticket.salesStage) < dealStageIndex('ORDER_RECEIVED')) {
         fail('ระบุกำหนดวันที่ต้องการของได้หลังจากยืนยันคำสั่งซื้อแล้ว', 409);
@@ -14973,7 +14973,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       const user = requireSession();
       if (!MOCK_VISIT_ROLES.includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       const ticket = findTicketRaw(Number(ticketId));
-      if (user.role === 'sales' && !isOwnerOrKeyer(ticket, user.id)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      if (user.role === 'sales' && !actsAsOwner(ticket, user)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       const ownerId = MOCK_VISIT_TEAM_ROLES.includes(user.role) ? null : user.id;
       return delay(mockVisits
         .filter((v) => v.ticketId === ticket.id && v.status === 'PLANNED' && (ownerId == null || v.ownerId === ownerId))
@@ -15419,7 +15419,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       // Mirrors DepositNoticeService.createDraftFromQuotation: requireRole(SALES_ROLES) + requireTicketOwner.
       const user = hasRole('sales');
       const ticket = findTicketRaw(Number(ticketId));
-      if (!isOwnerOrKeyer(ticket, user.id)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      if (!actsAsOwner(ticket, user)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       requireNoIssuedDepositNotice(ticket.id);
       // Phase 1 lifecycle gate (mirrors DepositNoticeService.createDraft).
       requireActive(ticket);
@@ -15510,7 +15510,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       const doc = mockDepositNotices.find((d) => d.id === Number(docId));
       if (!doc) fail('ไม่พบใบแจ้งรับมัดจำนี้', 404);
       if (doc.status !== 'DRAFT') fail('ใบแจ้งรับมัดจำนี้ไม่ได้อยู่ในสถานะร่าง (DRAFT)', 409);
-      if (!isOwnerOrKeyer(findTicketRaw(doc.ticketId), user.id)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      if (!actsAsOwner(findTicketRaw(doc.ticketId), user)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       const stored = Number(doc.depositPercent) * 100;
       const pct = sent ?? stored;
       if (!(pct > 0)) fail('เปอร์เซ็นต์มัดจำต้องมากกว่า 0', 400);
@@ -15554,7 +15554,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       if (doc.status !== 'DRAFT') fail('ไม่ได้อยู่ในสถานะร่าง (DRAFT)', 409);
       const ticket = findTicketRaw(doc.ticketId);
       // DepositNoticeService.issue: sales only, the deal owner, and a stored % the document can print.
-      if (user.role !== 'sales' || !isOwnerOrKeyer(ticket, user.id)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      if (user.role !== 'sales' || !actsAsOwner(ticket, user)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       const pct = Number(doc.depositPercent) * 100;
       if (!(pct > 0 && pct <= 100) || Math.abs(pct - Math.round(pct)) > 1e-9) {
         fail(`ใบแจ้งรับมัดจำนี้มีเปอร์เซ็นต์มัดจำ ${+pct.toFixed(4)}% จึงออกเอกสารไม่ได้ (ต้องเป็นจำนวนเต็ม 1–100)`, 409);
@@ -15915,7 +15915,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       const all = mockBillingNotes.filter((n) => n.customerId === Number(customerId));
       const visible = fullAccess ? all : all.filter((n) => {
         const ticketIds = [...new Set(n.lines.map((l) => l.ticketId).filter((id) => id != null))];
-        return ticketIds.some((id) => isOwnerOrKeyer(findTicketRaw(id), user.id));
+        return ticketIds.some((id) => actsAsOwner(findTicketRaw(id), user));
       });
       // Mirrors findByCustomer's own ORDER BY COALESCE(base_number, ''), type, version — groups a revision chain
       // together (same base_number) and puts a not-yet-issued draft (base_number null -> '') first within it, not
@@ -16490,11 +16490,11 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       const ticket = db.tickets.find((t) => t.id === Number(ticketId));
       if (!ticket) fail('ไม่พบงานนี้', 404);
       // Mirrors PricingRequestService.listForTicket: sales may only see requests on tickets they created.
-      if (user.role === 'sales' && !isOwnerOrKeyer(ticket, user.id)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      if (user.role === 'sales' && !actsAsOwner(ticket, user)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       const draftOversight = user.role === 'ceo' || user.role === 'sales_manager';
       const items = mockPricingRequests
         .filter((pr) => pr.ticketId === Number(ticketId))
-        .filter((pr) => pr.status !== 'DRAFT' || draftOversight || isOwnerOrKeyer(ticket, user.id))
+        .filter((pr) => pr.status !== 'DRAFT' || draftOversight || actsAsOwner(ticket, user))
         .map(buildPricingRequestSummary);
       return delay({ items });
     },
@@ -16518,7 +16518,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       }
       let list = mockPricingRequests;
       if (user.role === 'sales') {
-        list = list.filter((pr) => isOwnerOrKeyer(db.tickets.find((t) => t.id === pr.ticketId), user.id));
+        list = list.filter((pr) => actsAsOwner(db.tickets.find((t) => t.id === pr.ticketId), user));
       }
       // Mirrors PricingRequestService.list's draft-privacy clause: a DRAFT is the owning rep's
       // private scratchpad, visible only to them plus ceo/sales_manager oversight. import must not
@@ -16527,7 +16527,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       const draftOversight = user.role === 'ceo' || user.role === 'sales_manager';
       list = list.filter((pr) => pr.status !== 'DRAFT'
         || draftOversight
-        || isOwnerOrKeyer(db.tickets.find((t) => t.id === pr.ticketId), user.id));
+        || actsAsOwner(db.tickets.find((t) => t.id === pr.ticketId), user));
       if (params.status) {
         list = list.filter((pr) => pr.status === params.status);
       } else {
@@ -16556,7 +16556,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       if (!ticket) fail('ไม่พบงานนี้', 404);
       requirePricingRequestDealActive(ticket);
       requireMockOrderNotConfirmed(ticket);
-      if (!isOwnerOrKeyer(ticket, user.id)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      if (!actsAsOwner(ticket, user)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       if (!payload.clientRequestId || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(payload.clientRequestId)) {
         fail('clientRequestId ต้องเป็น UUID', 400);
       }
@@ -16713,7 +16713,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       const user = hasRole('sales');
       const pr = findPricingRequestRaw(id);
       const ticket = db.tickets.find((t) => t.id === pr.ticketId);
-      if (!isOwnerOrKeyer(ticket, user.id)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      if (!actsAsOwner(ticket, user)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       if (pr.status !== 'DRAFT') fail(`ต้องเป็นคำขอราคาที่อยู่ในสถานะ 'DRAFT' เท่านั้น (สถานะปัจจุบัน: '${pr.status}')`, 409);
       if (!payload.recipientType?.trim()) fail('recipientType ต้องไม่เว้นว่าง', 400);
       if (!PRICING_REQUEST_RECIPIENT_VALUES.includes(payload.recipientType)) {
@@ -17506,7 +17506,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       const user = hasRole('sales', 'sales_manager', 'ceo', 'import');
       const pr = findPricingRequestRaw(id);
       const ticket = db.tickets.find((t) => t.id === pr.ticketId);
-      if (user.role === 'sales' && !isOwnerOrKeyer(ticket, user.id)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      if (user.role === 'sales' && !actsAsOwner(ticket, user)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       const decision = mockPricingDecisions.find((d) => d.pricingRequestId === pr.id && d.status === 'APPROVED');
       if (!decision) fail('ยังไม่มีมติราคาที่ได้รับอนุมัติ', 404);
       // Design correction 2 ("never leak cost to Sales"): a fresh object literal per item with ONLY these fields —
@@ -18010,7 +18010,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       const user = hasRole('sales');
       const pr = findPricingRequestRaw(id);
       const ticket = db.tickets.find((t) => t.id === pr.ticketId);
-      if (!isOwnerOrKeyer(ticket, user.id)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      if (!actsAsOwner(ticket, user)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       if (payload.clientRequestId) {
         const replay = mockCustomerQuotations.find(
           (q) => q.issuedById === user.id && q.clientRequestId === payload.clientRequestId);
@@ -18036,7 +18036,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       const pr = findPricingRequestRaw(id);
       if (user.role === 'sales') {
         const ticket = db.tickets.find((t) => t.id === pr.ticketId);
-        if (!isOwnerOrKeyer(ticket, user.id)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+        if (!actsAsOwner(ticket, user)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       }
       return delay({
         items: mockCustomerQuotations
@@ -18320,7 +18320,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       const ticket = db.tickets.find((t) => t.id === pr.ticketId);
       // Owner-only, mirrors OrderConfirmationService.requireOwner (ticket owner, not merely the pricing request's
       // own requestedById).
-      if (!isOwnerOrKeyer(ticket, user.id)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      if (!actsAsOwner(ticket, user)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
 
       if (pr.orderConfirmedAt) {
         if (payload.clientRequestId && payload.clientRequestId === pr.orderConfirmClientRequestId) {
@@ -18382,7 +18382,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       const user = hasRole('sales');
       const pr = findPricingRequestRaw(id);
       const ticket = db.tickets.find((t) => t.id === pr.ticketId);
-      if (!isOwnerOrKeyer(ticket, user.id)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      if (!actsAsOwner(ticket, user)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
 
       // Mirrors OrderConfirmationService.createDepositNoticeFromQuotation: the ACCEPTED legacy
       // quotation first, else THIS pricing request's ACCEPTED new-engine row
@@ -18455,7 +18455,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       const user = hasRole('sales');
       const pr = findPricingRequestRaw(id);
       const ticket = db.tickets.find((t) => t.id === pr.ticketId);
-      if (!isOwnerOrKeyer(ticket, user.id)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      if (!actsAsOwner(ticket, user)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       if (pr.status !== 'DRAFT') fail(`ต้องเป็นคำขอราคาที่อยู่ในสถานะ 'DRAFT' เท่านั้น (สถานะปัจจุบัน: '${pr.status}')`, 409);
       requirePricingRequestDealActive(ticket);
       requireMockOrderNotConfirmed(ticket);
@@ -18515,7 +18515,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       const user = hasRole('sales');
       const parent = requirePricingRequestViewable(id, user);
       const ticket = db.tickets.find((t) => t.id === parent.ticketId);
-      if (!isOwnerOrKeyer(ticket, user.id)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      if (!actsAsOwner(ticket, user)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       if (['DRAFT', 'CANCELLED', 'SUPERSEDED'].includes(parent.status)) {
         fail('สร้างรอบแก้ไขจากการเปลี่ยนแปลงของลูกค้าได้เฉพาะจากคำขอราคาที่ยื่นและยังดำเนินการอยู่เท่านั้น', 409);
       }
@@ -18619,7 +18619,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       const user = requireSession();
       const pr = findPricingRequestRaw(id);
       const ticket = db.tickets.find((t) => t.id === pr.ticketId);
-      const isOwnerOrCeo = user.role === 'ceo' || isOwnerOrKeyer(ticket, user.id);
+      const isOwnerOrCeo = user.role === 'ceo' || actsAsOwner(ticket, user);
       if (!isOwnerOrCeo) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       if (!pricingRequestCanTransition(pr.status, 'CANCELLED')) {
         fail(`ไม่สามารถยกเลิกคำขอราคาที่อยู่ในสถานะ '${pr.status}' ได้`, 409);
@@ -18645,7 +18645,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       const user = hasRole('sales');
       const pr = requirePricingRequestViewable(id, user);
       const ticket = db.tickets.find((t) => t.id === pr.ticketId);
-      if (!isOwnerOrKeyer(ticket, user.id)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      if (!actsAsOwner(ticket, user)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       if (pr.status !== 'DRAFT') {
         fail('แนบไฟล์ได้เฉพาะเมื่อคำขอราคายังเป็นแบบร่างเท่านั้น', 409);
       }
@@ -18682,7 +18682,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       const owningPr = mockPricingRequests.find((p) => (p.attachments ?? []).some((a) => a.id === Number(id)));
       if (!owningPr) fail('ไม่พบไฟล์แนบของคำขอราคานี้', 404);
       const ticket = db.tickets.find((t) => t.id === owningPr.ticketId);
-      if (!isOwnerOrKeyer(ticket, user.id)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      if (!actsAsOwner(ticket, user)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       if (owningPr.status !== 'DRAFT') {
         fail('ลบไฟล์แนบได้เฉพาะเมื่อคำขอราคายังเป็นแบบร่างเท่านั้น', 409);
       }
@@ -18726,7 +18726,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       // scope -- requireDealQuotationViewAccess above already refused account outside it.
       const canSeePricingRequestRows = user.role === 'account'
         || (['sales', 'sales_manager', 'ceo'].includes(user.role)
-          && (user.role !== 'sales' || isOwnerOrKeyer(ticket, user.id)));
+          && (user.role !== 'sales' || actsAsOwner(ticket, user)));
       const items = mockDealQuotations
         .filter((q) => q.ticketId === ticket.id && (isDealDirectOrigin(q) || canSeePricingRequestRows)
           && (user.role !== 'account' || ACCOUNT_VISIBLE_DEAL_QUOTATION_STATUSES.includes(q.docStatus)))
@@ -18950,7 +18950,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       const user = hasRole('sales');
       const pr = findPricingRequestRaw(pricingRequestId);
       const ticket = db.tickets.find((t) => t.id === pr.ticketId);
-      if (!isOwnerOrKeyer(ticket, user.id)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      if (!actsAsOwner(ticket, user)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       if ((ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE') fail('งานต้นทางต้องอยู่ในสถานะ ACTIVE', 409);
       // The service's re-quote: a request already QUOTATION_ISSUED may be quoted again (its quotation was
       // rejected, expired or sent back for changes; the live-quotation guard below refuses the rest),
@@ -19520,7 +19520,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       }
       if (user.role !== 'sales') fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       const ticket = db.tickets.find((t) => t.id === row.ticketId);
-      if (!isOwnerOrKeyer(ticket, user.id)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      if (!actsAsOwner(ticket, user)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       if (payload.clientRequestId) {
         // The replay check scopes on row.salesRepId (= `ticket.createdById`, kept in the
         // LOGIN-ACCOUNT id space, same as `user.id` — see #create's comment on why), matching the
@@ -19591,7 +19591,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       if ((parent.origin || 'DEAL_DIRECT') === 'PRICING_REQUEST') {
         // PRICING_REQUEST origin -- owning sales rep ONLY (DealQuotationService#createRevision
         // reuses #requireOutcomeAccess), ISSUED / REVISION_REQUESTED only.
-        if (user.role !== 'sales' || !isOwnerOrKeyer(ticket, user.id)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+        if (user.role !== 'sales' || !actsAsOwner(ticket, user)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
         if (parent.docStatus !== 'ISSUED' && parent.docStatus !== 'REVISION_REQUESTED') {
           fail('สร้างฉบับแก้ไขได้จากใบเสนอราคาที่ออกแล้วหรือลูกค้าขอแก้ไขเท่านั้น', 409);
         }

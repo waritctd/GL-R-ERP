@@ -942,7 +942,9 @@ public class PricingDecisionService {
     public PricingDecisionSalesViewDto salesView(long pricingRequestId, UserPrincipal actor) {
         requireRole(actor, SALES_VIEW_ROLES);
         PricingRequestSummaryDto summary = requirePricingRequest(pricingRequestId);
-        if ("sales".equals(actor.role()) && !DealOwnership.isOwnerOrKeyer(summary.ticketCreatedById(), summary.ticketKeyedById(), actor.id())) {
+        if ("sales".equals(actor.role())
+            && !(DealOwnership.isOwnerOrKeyer(summary.ticketCreatedById(), summary.ticketKeyedById(), actor.id())
+                || tickets.holdsAllSalesDocumentsGrant(actor))) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
         return decisions.findApprovedSalesView(pricingRequestId)

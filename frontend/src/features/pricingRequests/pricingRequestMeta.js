@@ -41,7 +41,7 @@
 // (via canTransition, also asks CANCELLED), and PricingRequestDetailPage.jsx's
 // canCreateCustomerRevision (asks SUPERSEDED). They ask different questions, which is why the
 // guard checks every edge for every status rather than the ones any one caller exercises.
-import { isOwnerOrKeyer } from '../tickets/dealOwnership.js';
+import { actsAsOwner, holdsAllSalesDocumentsGrant, isOwnerOrKeyer, isSalesOwner } from '../tickets/dealOwnership.js';
 export const ALLOWED_TRANSITIONS = {
   DRAFT: ['SUBMITTED', 'CANCELLED'],
   // SUBMITTED -> READY_FOR_CEO_REVIEW is the factory-quote carry-forward edge: a customer-change revision whose
@@ -114,20 +114,20 @@ export function unitBasisLabel(value) {
 
 /** Mirrors PricingRequestService.createDraft: sales (deal owner), deal ACTIVE, order not yet confirmed. */
 export function canCreatePricingRequest(user, deal) {
-  return user?.role === 'sales' && isOwnerOrKeyer(deal, user.id)
+  return isSalesOwner(deal, user)
     && (deal?.lifecycle ?? 'ACTIVE') === 'ACTIVE'
     && deal?.paymentStatus == null;
 }
 
 /** Mirrors PricingRequestService.updateDraft: owner sales, DRAFT only. */
 export function canUpdatePricingRequest(user, pr) {
-  return user?.role === 'sales' && isOwnerOrKeyer({ createdById: pr?.ticketCreatedById, keyedById: pr?.ticketKeyedById }, user?.id)
+  return isSalesOwner({ createdById: pr?.ticketCreatedById, keyedById: pr?.ticketKeyedById }, user)
     && pr?.status === 'DRAFT';
 }
 
 /** Mirrors PricingRequestService.submit: owner sales, DRAFT only, deal order not yet confirmed. */
 export function canSubmitPricingRequest(user, pr) {
-  return user?.role === 'sales' && isOwnerOrKeyer({ createdById: pr?.ticketCreatedById, keyedById: pr?.ticketKeyedById }, user?.id)
+  return isSalesOwner({ createdById: pr?.ticketCreatedById, keyedById: pr?.ticketKeyedById }, user)
     && pr?.status === 'DRAFT'
     && pr?.ticketPaymentStatus == null;
 }
@@ -160,6 +160,7 @@ export function canSeeRawPricingDecision(user) {
  * 404 outside the post-approval statuses. */
 export function canSeePricingDecisionSalesView(user, pr) {
   if (!['APPROVED_FOR_QUOTATION', 'QUOTATION_ISSUED', 'QUOTATION_ACCEPTED'].includes(pr?.status)) return false;
+  if (holdsAllSalesDocumentsGrant(user)) return true;
   if (!user || !['sales', 'sales_manager', 'ceo', 'import'].includes(user.role)) return false;
   if (user.role === 'sales') return isOwnerOrKeyer({ createdById: pr?.ticketCreatedById, keyedById: pr?.ticketKeyedById }, user.id);
   return true;
@@ -170,8 +171,7 @@ export function canSeePricingDecisionSalesView(user, pr) {
 /** Mirrors CustomerQuotationService.create's gate: sales only, and only once the pricing request is
  * APPROVED_FOR_QUOTATION. */
 export function canCreateCustomerQuotation(user, pr) {
-  if (user?.role !== 'sales') return false;
-  if (!isOwnerOrKeyer({ createdById: pr?.ticketCreatedById, keyedById: pr?.ticketKeyedById }, user.id)) return false;
+  if (!isSalesOwner({ createdById: pr?.ticketCreatedById, keyedById: pr?.ticketKeyedById }, user)) return false;
   return pr?.status === 'APPROVED_FOR_QUOTATION';
 }
 
@@ -179,13 +179,13 @@ export function canCreateCustomerQuotation(user, pr) {
  * ceo/import/sales_manager are always read-only on this aggregate, never just hidden buttons on an
  * otherwise-writable page. */
 export function canManageCustomerQuotation(user, pr) {
-  if (user?.role !== 'sales') return false;
-  return isOwnerOrKeyer({ createdById: pr?.ticketCreatedById, keyedById: pr?.ticketKeyedById }, user.id);
+  return isSalesOwner({ createdById: pr?.ticketCreatedById, keyedById: pr?.ticketKeyedById }, user);
 }
 
 /** Mirrors CustomerQuotationService.VIEW_ROLES: sales (owner-scoped)/sales_manager/ceo/import may read; account
  * has no positive grant anywhere on this aggregate and stays forbidden. */
 export function canViewCustomerQuotation(user, pr) {
+  if (holdsAllSalesDocumentsGrant(user)) return true;
   if (!user || !['sales', 'sales_manager', 'ceo', 'import'].includes(user.role)) return false;
   if (user.role === 'sales') return isOwnerOrKeyer({ createdById: pr?.ticketCreatedById, keyedById: pr?.ticketKeyedById }, user.id);
   return true;
@@ -293,7 +293,7 @@ export function issuedDepositNotice(depositNotices = []) {
 export function canCancelPricingRequest(user, pr) {
   if (!pr) return false;
   const isOwnerOrCeo = user?.role === 'ceo'
-    || isOwnerOrKeyer({ createdById: pr?.ticketCreatedById, keyedById: pr?.ticketKeyedById }, user?.id);
+    || actsAsOwner({ createdById: pr?.ticketCreatedById, keyedById: pr?.ticketKeyedById }, user);
   return isOwnerOrCeo && canTransition(pr.status, 'CANCELLED');
 }
 

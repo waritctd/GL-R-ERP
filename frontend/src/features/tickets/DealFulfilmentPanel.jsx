@@ -22,7 +22,7 @@ import { importStepIndex } from '../importProgress/importSteps.js';
 import { nextFulfilmentActionCode } from './importActions.js';
 import { ImportRequestFactoryCard } from './ImportRequestFactoryCard.jsx';
 import { procurementPath } from './stageMeta.js';
-import { isOwnerOrKeyer } from './dealOwnership.js';
+import { isSalesOwner } from './dealOwnership.js';
 
 const MISSING_COUNTRY_PREFIX = 'กรุณาระบุประเทศให้กับโรงงานใหม่: ';
 // 409 prefix of ImportRequestService#MISSING_LEAD_TIME_PREFIX: the factories listed after it have
@@ -360,7 +360,7 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
   // Stored ใบขอซื้อ role shape: mirrors ImportRequestService, see that class's Javadoc for the
   // matrix. Distinct from `isFulfilment` above (the legacy deal-level chain's import/ceo pair)
   // because the stored aggregate's write gate is the deal's OWNING sales rep + CEO, not import.
-  const isOwner = role === 'sales' && isOwnerOrKeyer(summary, user?.id);
+  const isOwner = isSalesOwner(summary, user);
   const canReadStoredIr = isFulfilment || role === 'sales_manager' || isOwner;
   const canFullWriteStoredIr = role === 'ceo' || isOwner;
   const canFooterWriteStoredIr = role === 'ceo';

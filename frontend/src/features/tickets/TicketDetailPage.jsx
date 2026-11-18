@@ -77,7 +77,7 @@ import {
   resolveTicketDetailTab, TICKET_DETAIL_TABS, visibleTicketDetailTabIds,
 } from './ticketDetailTabs.js';
 import { isRemainingInvoiceReady, pickRemainingInvoice } from './remainingInvoiceReadiness.js';
-import { isOwnerOrKeyer } from './dealOwnership.js';
+import { actsAsOwner, isSalesOwner } from './dealOwnership.js';
 import { invalidateDealDocuments, useDocumentChain } from '../documentChain/documentChain.js';
 import { manualMoveLabel } from './stageMeta.js';
 import { quoteNextPartyBanner, resolveWorkState, secondaryWorkActions } from './workState.js';
@@ -390,7 +390,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // `enabled` gate. A presentation projection of the backend gate, not a new authorization rule.
   const documentsTicketSummary = ticket?.summary ?? null;
   const canViewDocumentsTab = Boolean(documentsTicketSummary) && (
-    isOwnerOrKeyer(documentsTicketSummary, user.id)
+    actsAsOwner(documentsTicketSummary, user)
     || user.id === documentsTicketSummary.assignedToId
     || ROLE_PERMISSIONS.canViewTicketDocuments.includes(role)
   );
@@ -467,7 +467,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
 
   // The main button creates the deposit notice / remaining invoice, so the sales rep's page reads
   // both. Same keys and shapes as DealPaymentSection's reads, so the cache is shared (one fetch).
-  const readsDocs = role === 'sales' && isOwnerOrKeyer(ticket?.summary, user.id) && !!ticketId;
+  const readsDocs = isSalesOwner(ticket?.summary, user) && !!ticketId;
   const depositNoticesQuery = useQuery({ ...depositNoticesQueryOptions(ticketId), enabled: readsDocs });
   const remainingInvoicesQuery = useQuery({
     queryKey: queryKeys.storedRemainingInvoices(ticketId),
@@ -903,7 +903,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // Nothing on this page reads `quotationOnly`: a quotation-first deal is an ordinary deal
   // (IA §7, "Nothing hidden").
   const st = summary.status;
-  const isOwner = isOwnerOrKeyer(summary, user.id);
+  const isOwner = actsAsOwner(summary, user);
   // Reading a deal's documents is the same question as reading the deal (account/import reach the
   // เอกสาร panel, hr does not), but WRITING stays narrow: TicketAccessPolicy.canManageDocuments is
   // participant OR sales_manager/ceo. Mirrored here so the panel does not offer account/import an
@@ -2005,7 +2005,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
           ) : null}
           // เงินที่คาดว่าจะเข้า (spec 2026-11-15 §7.7): the deal's writers only — owner/keyer, sales_manager, ceo — the
           // same set ExpectedPaymentService lets write.
-          expected={role === 'ceo' || role === 'sales_manager' || (role === 'sales' && isOwnerOrKeyer(summary, user.id)) ? (
+          expected={role === 'ceo' || role === 'sales_manager' || (isSalesOwner(summary, user)) ? (
             <ExpectedPaymentsPanel
               ticketId={ticketId}
               dealValue={summary.amountPayable ?? null}
