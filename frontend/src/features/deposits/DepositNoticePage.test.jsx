@@ -54,13 +54,13 @@ function renderDepositNoticePage(props = {}) {
   );
 }
 
-// The summary block (ยอดรวม) is a column of lines like "ขอรับเงินมัดจำ 33% ฿33.03". Returns one line's full text.
 // Open the ดาวน์โหลด menu and pick a format.
 async function pickDownload(format) {
   fireEvent.click(await screen.findByRole('button', { name: 'ดาวน์โหลด' }));
   fireEvent.click(await screen.findByRole('menuitem', { name: format }));
 }
 
+// The summary block (ยอดรวม) is a column of lines like "ขอรับเงินมัดจำ 33% ฿33.03". Returns one line's full text.
 function summaryLine(label) {
   const panel = document.getElementById('doc-summary-panel');
   return within(panel).getByText(label).textContent;
@@ -314,6 +314,22 @@ describe('DepositNoticePage', () => {
       expect(menu.getAllByRole('menuitem').map((item) => item.textContent)).toEqual(['PDF', 'Excel']);
       expect(screen.queryByRole('button', { name: 'ดาวน์โหลด PDF' })).toBeNull();
       expect(screen.queryByRole('button', { name: 'ดาวน์โหลด Excel' })).toBeNull();
+    });
+
+    it('disables the download items while a save is pending, so no second update goes out', async () => {
+      api.depositNotices.listByTicket.mockResolvedValue({ depositNotices: [{ ...validDraftDoc, updatedAt: 'T1' }] });
+      api.depositNotices.update.mockReturnValue(new Promise(() => {}));
+      renderDepositNoticePage();
+
+      fireEvent.change(await screen.findByLabelText(/ที่อยู่/), { target: { value: 'ที่อยู่ใหม่' } });
+      fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
+      await waitFor(() => expect(api.depositNotices.update).toHaveBeenCalledTimes(1));
+      fireEvent.click(await screen.findByRole('button', { name: 'ดาวน์โหลด' }));
+      const item = await screen.findByRole('menuitem', { name: /^PDF/ });
+      expect(item.getAttribute('aria-disabled')).toBe('true');
+      fireEvent.click(item);
+      expect(api.depositNotices.update).toHaveBeenCalledTimes(1);
+      expect(api.depositNotices.downloadPdf).not.toHaveBeenCalled();
     });
 
     it('downloads an unchanged draft as stored, without saving', async () => {
@@ -636,6 +652,7 @@ describe('DepositNoticePage', () => {
       expect(api.dealQuotations.listForTicket).toHaveBeenCalledWith(701);
       expect(hint.textContent).toContain('ใบเสนอราคา QT-2026-0042 ระบุมัดจำ 30%');
       expect(hint.textContent).toContain('40%');
+      expect(hint.className).toContain('text-warning-dark');
       expect(screen.getByRole('button', { name: /ออกเอกสาร/ }).disabled).toBe(false);
     });
 
@@ -684,6 +701,7 @@ describe('DepositNoticePage', () => {
 
       const line = await screen.findByTestId('deposit-subtotal-differs');
       expect(line.textContent).toBe(LINE);
+      expect(line.className).toContain('text-warning-dark');
       expect(screen.getByRole('button', { name: /ออกเอกสาร/ }).disabled).toBe(false);
     });
 
@@ -808,6 +826,20 @@ describe('DepositNoticePage', () => {
     await waitFor(() => expect(document.querySelector('.data-row.reflow-cards')).not.toBeNull());
     const labels = [...document.querySelector('.data-row.reflow-cards').children].map((c) => c.getAttribute('data-label'));
     expect(labels).toEqual(['รายละเอียด', 'จำนวน', 'ราคา/หน่วย', '', 'สุทธิ', 'เป็นเงิน']);
+  });
+
+  it.each([['DRAFT'], ['ISSUED']])('shows "ลด X" in a labelled ส่วนลด cell on a line priced above its net (%s)', async (status) => {
+    api.depositNotices.listByTicket.mockResolvedValue({
+      depositNotices: [{
+        ...validDraftDoc, status, docNumber: status === 'ISSUED' ? 'GLRD69001' : null,
+        items: [{ seq: 1, description: 'กระเบื้อง A', qty: 1, unit: 'แผ่น', unitPrice: 1300, netUnitPrice: 100 }],
+      }],
+    });
+    renderDepositNoticePage();
+    await waitFor(() => expect(document.querySelector('.data-row.reflow-cards')).not.toBeNull());
+    const cell = document.querySelector('.data-row.reflow-cards').children[3];
+    expect(cell.textContent).toBe('ลด 1,200.00');
+    expect(cell.getAttribute('data-label')).toBe('ส่วนลด');
   });
 
   it('shows the deposit percent read-only once the notice is issued', async () => {

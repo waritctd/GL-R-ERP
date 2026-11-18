@@ -51,12 +51,12 @@ function lineAmount(item) {
   return item.amount ?? round2(lineNet(item) * (Number(item.qty) || 0));
 }
 
-// An untouched เพิ่มรายการ row (or one emptied again): no description and nothing to bill. Left
-// out of the save (the backend refuses a line without a description) and of the issue checks.
 // The quotation document view's item grid (QuotationDocumentView ITEM_GRID), so both documents read as one table.
-const NOTICE_ITEM_GRID = 'grid-cols-[minmax(0,3fr)_minmax(5.75rem,0.8fr)_minmax(5.75rem,0.9fr)_minmax(3.5rem,0.6fr)_minmax(5.75rem,0.9fr)_minmax(8.25rem,1fr)] tablet:grid-cols-[minmax(0,3fr)_minmax(5rem,0.8fr)_minmax(5rem,0.9fr)_minmax(3rem,0.5fr)_minmax(5rem,0.9fr)_minmax(7rem,1fr)] tablet:min-w-0 reflow-cards';
+const NOTICE_ITEM_GRID = 'grid-cols-[minmax(0,3fr)_minmax(5.75rem,0.8fr)_minmax(5.75rem,0.9fr)_minmax(3.5rem,0.6fr)_minmax(5.75rem,0.9fr)_minmax(8.25rem,1fr)] tablet:min-w-0 reflow-cards';
 const NO_ITEMS_MESSAGE = 'กรุณาเพิ่มรายการสินค้าอย่างน้อย 1 รายการ';
 
+// An untouched เพิ่มรายการ row (or one emptied again): no description and nothing to bill. Left
+// out of the save (the backend refuses a line without a description) and of the issue checks.
 function isBlankRow(item) {
   return !String(item.description ?? '').trim() && !(lineNet(item) * (Number(item.qty) || 0));
 }
@@ -328,6 +328,8 @@ export function DepositNoticePage({ ticketId, onBack, showToast }) {
   const savedKeyRef = useRef(null);
 
   function populateForm(d, customerList = []) {
+    // The tax id / address filled from the customer master below count as "as loaded" (savedKeyRef is seeded from
+    // this result), deliberately: an unchanged draft then downloads as stored without forcing a save.
     // If taxId/address already saved in draft, use them directly Otherwise try to match customerName against
     // master
     let taxId   = d.customerTaxId   ?? '';
@@ -481,6 +483,7 @@ export function DepositNoticePage({ ticketId, onBack, showToast }) {
 
   const creatingDraft = createDraftMutation.isPending;
   const saving = saveMutation.isPending || issueMutation.isPending;
+  const downloadBusy = downloading != null || saving;
 
   function setField(key, value) {
     setForm((f) => ({ ...f, [key]: value }));
@@ -539,7 +542,7 @@ export function DepositNoticePage({ ticketId, onBack, showToast }) {
   // saved (through the same path as บันทึกร่าง, so the 409 handling is the same) and downloads only if that save
   // succeeded; an unchanged draft downloads as stored without saving, so a reader who cannot save still gets the file.
   async function handleDownload(extension) {
-    if (!doc || downloading) return;
+    if (!doc || downloading || saving) return;
     if (!isIssued && refusesClearedItems()) return;
     setDownloading(extension);
     try {
@@ -635,8 +638,8 @@ export function DepositNoticePage({ ticketId, onBack, showToast }) {
               triggerIcon="download"
               align="start"
               items={[
-                { key: 'pdf', label: 'PDF', icon: 'fileText', onSelect: () => handleDownload('pdf'), disabled: downloading != null, disabledReason: 'กำลังดาวน์โหลด…' },
-                { key: 'xlsx', label: 'Excel', icon: 'fileText', onSelect: () => handleDownload('xlsx'), disabled: downloading != null, disabledReason: 'กำลังดาวน์โหลด…' },
+                { key: 'pdf', label: 'PDF', icon: 'fileText', onSelect: () => handleDownload('pdf'), disabled: downloadBusy, disabledReason: downloading != null ? 'กำลังดาวน์โหลด…' : 'กำลังบันทึก…' },
+                { key: 'xlsx', label: 'Excel', icon: 'fileText', onSelect: () => handleDownload('xlsx'), disabled: downloadBusy, disabledReason: downloading != null ? 'กำลังดาวน์โหลด…' : 'กำลังบันทึก…' },
               ]}
             />
             {!isIssued ? (
@@ -898,13 +901,13 @@ export function DepositNoticePage({ ticketId, onBack, showToast }) {
                     ? (
                       <>
                         {percentDiffers ? (
-                          <span data-testid="deposit-percent-differs">
+                          <span data-testid="deposit-percent-differs" className="text-warning-dark">
                             {`ใบเสนอราคา ${referencedQuotation.number} ระบุมัดจำ ${quotationPercent}% — ใบแจ้งนี้ใช้ ${noticePercent}%`}
                           </span>
                         ) : null}
                         {percentDiffers && subtotalDiffers ? <br /> : null}
                         {subtotalDiffers ? (
-                          <span data-testid="deposit-subtotal-differs">
+                          <span data-testid="deposit-subtotal-differs" className="text-warning-dark">
                             {quotationDiffersText(referencedQuotation, subtotal)}
                           </span>
                         ) : null}
