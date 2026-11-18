@@ -11,18 +11,18 @@ ALTER TABLE sales.remaining_invoice
 -- DRAFT deposit notices still holding the V12 default -> the deal's owner. ISSUED ones stay as printed.
 UPDATE sales.deposit_notice d
    SET preparer_id   = e.employee_id,
-       preparer_name = NULLIF(TRIM(CONCAT_WS(' ', e.first_name_th, e.last_name_th)), '')
+       preparer_name = COALESCE(NULLIF(TRIM(CONCAT_WS(' ', e.first_name_th, e.last_name_th)), ''), NULLIF(TRIM(CONCAT_WS(' ', e.first_name_en, e.last_name_en)), ''))
   FROM sales.ticket t
   JOIN hr.employee e ON e.employee_id = t.created_by
  WHERE t.ticket_id = d.ticket_id
    AND d.status = 'DRAFT'
    AND d.preparer_name = 'จินตนา หาญมนตรี'
-   AND NULLIF(TRIM(CONCAT_WS(' ', e.first_name_th, e.last_name_th)), '') IS NOT NULL;
+   AND COALESCE(NULLIF(TRIM(CONCAT_WS(' ', e.first_name_th, e.last_name_th)), ''), NULLIF(TRIM(CONCAT_WS(' ', e.first_name_en, e.last_name_en)), '')) IS NOT NULL;
 
 -- DRAFT remaining invoices -> the deal's owner (the creator when the ticket has no owner).
 UPDATE sales.remaining_invoice r
    SET preparer_id   = COALESCE(e.employee_id, r.created_by_id),
-       preparer_name = COALESCE(NULLIF(TRIM(CONCAT_WS(' ', e.first_name_th, e.last_name_th)), ''), r.created_by_name)
+       preparer_name = COALESCE(COALESCE(NULLIF(TRIM(CONCAT_WS(' ', e.first_name_th, e.last_name_th)), ''), NULLIF(TRIM(CONCAT_WS(' ', e.first_name_en, e.last_name_en)), '')), r.created_by_name)
   FROM sales.ticket t
   LEFT JOIN hr.employee e ON e.employee_id = t.created_by
  WHERE t.ticket_id = r.ticket_id

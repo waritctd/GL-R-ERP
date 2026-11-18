@@ -412,14 +412,16 @@ public class RemainingInvoiceService {
             .map(it -> new RemainingInvoiceItemDto(it.seq(), it.description(), it.qty(), it.unit(),
                 it.unitPrice(), it.discountLabel(), it.netUnitPrice(), it.amount()))
             .toList();
-        var sig = depositNoticeService.preparerSignature(doc.preparerId());
+        // a DRAFT file never carries a real signature
+        var sig = "DRAFT".equals(doc.status()) ? java.util.Optional.<th.co.glr.hr.dealquotation.EmployeeSignatureRepository.SignatureImage>empty()
+            : depositNoticeService.preparerSignature(doc.preparerId());
         return new RemainingInvoiceRenderModel(
             doc.docDate(), doc.docNumber() != null ? doc.docNumber() : "(ร่าง)",
             doc.customerName(), doc.customerBranch(), doc.customerTaxId(), doc.customerAddress(), doc.projectName(),
             doc.reference(), doc.depositReference(), items,
             nz(doc.depositDeduction()), doc.netAmount(), doc.vatAmount(), doc.grandTotal(),
             doc.preparerName() != null ? doc.preparerName() : doc.createdByName(),
-            sig.map(x -> x.image()).orElse(null), sig.map(x -> x.mimeType()).orElse(null));
+            sig.map(x -> x.image()).orElse(null));
     }
 
     private List<String> defaultNotes() {

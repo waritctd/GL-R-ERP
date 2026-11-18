@@ -131,7 +131,7 @@ final class DocumentSheet {
      * bakes in a fixed one. The baked picture is always removed; no signature image means no picture. No name prints
      * no name: the template's own line names a real person, and ผู้จัดทำ must be whoever made the document.
      */
-    static void preparer(Sheet sh, int r, String name, byte[] signature, String signatureMime) {
+    static void preparer(Sheet sh, int r, String name, byte[] signature) {
         int[] box = removeBakedSignature(sh, r);
         double linePt = textPt(sh, r - 1, cell(sh, r - 1, 1).getStringCellValue());
         str(sh, r, 1, name == null || name.isBlank() ? "" : centred(sh, r, "( " + name.trim() + " )", linePt));

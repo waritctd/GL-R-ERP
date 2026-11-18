@@ -36,10 +36,16 @@ public class DepositNoticeRepository {
 
     // ── Note templates ────────────────────────────────────────────────────────
 
+    /** The ผู้จัดทำ name of the employee aliased {@code e}: the Thai name, else the English one (null when neither). The
+     * one definition both repositories splice into their SQL as {@code {NAME}}. */
+    public static final String PREPARER_NAME_SQL =
+        "COALESCE(NULLIF(TRIM(CONCAT_WS(' ', e.first_name_th, e.last_name_th)), ''),"
+        + " NULLIF(TRIM(CONCAT_WS(' ', e.first_name_en, e.last_name_en)), ''))";
+
     /** Who may be named ผู้จัดทำ on this deal's documents: its owner, its keyer, then the sales managers (the same
      * people as CommissionRepository#findSalesManagerApproverEmployeeIds), active only, each once. */
     public List<DocumentPreparerOption> findPreparerOptions(long ticketId) {
-        String sql = "SELECT e.employee_id, COALESCE(NULLIF(TRIM(CONCAT_WS(' ', e.first_name_th, e.last_name_th)), ''), '') AS name"
+        String sql = "SELECT e.employee_id, COALESCE(" + PREPARER_NAME_SQL + ", '#' || e.employee_id) AS name"
             + " FROM (SELECT employee_id, MIN(ord) AS ord FROM ("
             + "   SELECT created_by AS employee_id, 1 AS ord FROM sales.ticket WHERE ticket_id = :ticketId"
             + "   UNION ALL SELECT keyed_by, 2 FROM sales.ticket WHERE ticket_id = :ticketId"
@@ -226,14 +232,14 @@ public class DepositNoticeRepository {
                  COALESCE((SELECT p.preparer_name FROM sales.deposit_notice p
                             WHERE p.ticket_id = :ticketId AND p.preparer_id IS NOT NULL
                               AND p.version = (SELECT MAX(version) FROM sales.deposit_notice WHERE ticket_id = :ticketId)),
-                          (SELECT NULLIF(TRIM(CONCAT_WS(' ', e.first_name_th, e.last_name_th)), '')
+                          (SELECT {NAME}
                              FROM sales.ticket t JOIN hr.employee e ON e.employee_id = t.created_by
                             WHERE t.ticket_id = :ticketId), :preparerName),
                  COALESCE((SELECT p.preparer_id FROM sales.deposit_notice p
                             WHERE p.ticket_id = :ticketId
                               AND p.version = (SELECT MAX(version) FROM sales.deposit_notice WHERE ticket_id = :ticketId)),
                           (SELECT t.created_by FROM sales.ticket t WHERE t.ticket_id = :ticketId), :preparerId))
-            """, params, keys, new String[]{"deposit_notice_id"});
+            """.replace("{NAME}", PREPARER_NAME_SQL), params, keys, new String[]{"deposit_notice_id"});
 
         long docId = keys.getKey().longValue();
         insertItems(docId, items);
@@ -280,12 +286,12 @@ public class DepositNoticeRepository {
                 -- a null preparerId keeps the stored preparer
                 preparer_id      = COALESCE(CAST(:preparerId AS bigint), preparer_id),
                 preparer_name    = CASE WHEN CAST(:preparerId AS bigint) IS NULL THEN preparer_name ELSE COALESCE(
-                    (SELECT NULLIF(TRIM(CONCAT_WS(' ', first_name_th, last_name_th)), '')
-                       FROM hr.employee WHERE employee_id = :preparerId), '') END,
+                    (SELECT {NAME}
+                       FROM hr.employee e WHERE e.employee_id = :preparerId), '') END,
                 updated_at       = now()
              WHERE deposit_notice_id = :id AND status = 'DRAFT'
                AND (CAST(:expectedUpdatedAt AS timestamptz) IS NULL OR updated_at = :expectedUpdatedAt)
-            """,
+            """.replace("{NAME}", PREPARER_NAME_SQL),
             new MapSqlParameterSource()
                 .addValue("id",              docId)
                 .addValue("expectedUpdatedAt", req.expectedUpdatedAt())

@@ -364,13 +364,15 @@ public class DepositNoticeService {
      * branch to the stored address, so it prints there once). A DRAFT has no issue date yet and prints {@code today}, and
      * prints ฉบับร่าง in the number cell (presentation only; nothing stored changes) so the file cannot pass for issued. */
     DepositNoticeRenderModel renderModel(DepositNoticeDto doc, LocalDate today) {
-        var sig = docs.findPreparerSignature(doc.preparerId());
+        // a DRAFT file (ฉบับร่าง) never carries a real signature
+        var sig = "DRAFT".equals(doc.status()) ? java.util.Optional.<th.co.glr.hr.dealquotation.EmployeeSignatureRepository.SignatureImage>empty()
+            : docs.findPreparerSignature(doc.preparerId());
         return new DepositNoticeRenderModel(doc.issueDate() != null ? doc.issueDate() : today,
             doc.docNumber() != null ? doc.docNumber() : "ฉบับร่าง",
             doc.customerName(), null, doc.customerTaxId(), doc.customerAddress(), doc.projectName(), doc.reference(),
             doc.items(), doc.subtotal(), doc.depositPercent(), doc.depositAmount(), doc.vatAmount(), doc.totalPayable(),
             doc.preparerName(),
-            sig.map(x -> x.image()).orElse(null), sig.map(x -> x.mimeType()).orElse(null));
+            sig.map(x -> x.image()).orElse(null));
     }
 
     /** The chosen preparer's signature image, for the remaining invoice's render model. */

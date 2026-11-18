@@ -343,7 +343,7 @@ class DepositNoticePdfRendererTest {
         byte[] png = signaturePng(120, 40);
         try (Workbook wb = render(new DepositNoticeRenderModel(m.issueDate(), m.docNumber(), m.customerName(), m.customerBranch(),
                 m.customerTaxId(), m.customerAddress(), m.projectName(), m.reference(), m.items(), m.subtotal(), m.depositPercent(),
-                m.depositAmount(), m.vatAmount(), m.totalPayable(), m.preparerName(), png, "image/png"))) {
+                m.depositAmount(), m.vatAmount(), m.totalPayable(), m.preparerName(), png))) {
             Sheet sh = wb.getSheetAt(0);
             var pics = signaturePictures(sh, PREPARER);
             assertThat(pics).as("exactly one picture in the preparer block").hasSize(1);

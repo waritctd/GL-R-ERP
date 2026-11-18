@@ -53,7 +53,7 @@ public class RemainingInvoicePdfRenderer {
             DocumentSheet.num(sh, VAT + d, 8, m.vatAmount());
         }
         DocumentSheet.num(sh, GRAND + d, 8, m.grandTotal());
-        DocumentSheet.preparer(sh, PREPARER + d, m.preparerName(), m.preparerSignature(), m.preparerSignatureMime());
+        DocumentSheet.preparer(sh, PREPARER + d, m.preparerName(), m.preparerSignature());
         DocumentSheet.signatureDate(sh, SIGDATE + d, m.docDate());
 
         BigDecimal maxUnit = deposit;

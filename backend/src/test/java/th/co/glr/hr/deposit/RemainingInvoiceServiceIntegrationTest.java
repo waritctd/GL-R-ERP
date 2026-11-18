@@ -516,9 +516,9 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
         assertThat(redraft.preparerName()).isEqualTo(thaiName(salesManagerId));
     }
 
-    /** The file carries the CHOSEN preparer's own signature: switching the draft's preparer switches the picture. */
+    /** The file carries the CHOSEN preparer's own signature, but only once ISSUED: a DRAFT file (ฉบับร่าง) carries none. */
     @Test
-    void file_printsTheChosenPreparersSignature() throws Exception {
+    void file_printsTheChosenPreparersSignature_onlyOnceIssued() throws Exception {
         DealFixture fixture = buildAcceptedDeal(salesActor, "SignaturePick");
         byte[] ownerSig = PdfRendererTestSupport.signaturePng(100, 30);
         byte[] managerSig = PdfRendererTestSupport.signaturePng(140, 50);
@@ -527,21 +527,46 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
                 + "VALUES (:e, 'image/png', :i, :e, now())", new org.springframework.jdbc.core.namedparam.MapSqlParameterSource()
                     .addValue("e", row[0]).addValue("i", row[1]));
         }
-        RemainingInvoiceDocumentDto draft = remainingInvoiceService.createDraft(fixture.ticketId(), null, salesActor);
-        assertThat(signatureBytes(remainingInvoiceService.file(draft.id(), salesActor))).isEqualTo(ownerSig);
+        // deposit notice: issued carries the owner's signature
+        assertThat(signatureBytes(depositNoticeService.getXlsx(fixture.depositNoticeId(), salesActor), 47)).containsExactly(ownerSig);
 
+        RemainingInvoiceDocumentDto draft = remainingInvoiceService.createDraft(fixture.ticketId(), null, salesActor);
         remainingInvoiceService.updateDraft(draft.id(),
             new RemainingInvoiceDraftRequest(null, null, null, null, null, salesManagerId), salesActor);
+        assertThat(signatureBytes(remainingInvoiceService.file(draft.id(), salesActor), 44)).as("RI draft").isEmpty();
 
-        assertThat(signatureBytes(remainingInvoiceService.file(draft.id(), salesActor))).isEqualTo(managerSig);
+        RemainingInvoiceDocumentDto issued = remainingInvoiceService.issue(draft.id(), salesActor);
+        assertThat(signatureBytes(remainingInvoiceService.file(issued.id(), salesActor), 44)).as("RI issued").containsExactly(managerSig);
+
+        // deposit notice draft: none
+        long noticeId = reopenedNoticeDraft(fixture);
+        assertThat(signatureBytes(depositNoticeService.getXlsx(noticeId, salesActor), 47)).as("notice draft").isEmpty();
     }
 
-    private static byte[] signatureBytes(byte[] xls) throws Exception {
+    /** The preparer picture bytes in the preparer block (empty when none). */
+    private static byte[] signatureBytes(byte[] xls, int preparerRow) throws Exception {
         try (org.apache.poi.ss.usermodel.Workbook wb = PdfRendererTestSupport.open(xls)) {
-            var pics = PdfRendererTestSupport.signaturePictures(wb.getSheetAt(0), 44);
-            assertThat(pics).hasSize(1);
-            return pics.get(0).getPictureData().getData();
+            var pics = PdfRendererTestSupport.signaturePictures(wb.getSheetAt(0), preparerRow);
+            assertThat(pics.size()).isLessThanOrEqualTo(1);
+            return pics.isEmpty() ? new byte[0] : pics.get(0).getPictureData().getData();
         }
+    }
+
+    /** An employee with only an English name still appears in the options (under it) and prints under it. */
+    @Test
+    void aKeyerWithOnlyAnEnglishName_isAnOption_andPrints() throws Exception {
+        DealFixture fixture = buildAcceptedDeal(salesActor, "EnglishKeyer");
+        setKeyer(fixture, otherSalesRepId);
+        jdbc.update("UPDATE hr.employee SET first_name_th = '', last_name_th = NULL, first_name_en = 'Anna', last_name_en = 'Smith' WHERE employee_id = :id",
+            Map.of("id", otherSalesRepId));
+
+        assertThat(depositNoticeService.documentPreparerOptions(fixture.ticketId(), salesActor))
+            .extracting(DocumentPreparerOption::id, DocumentPreparerOption::name)
+            .contains(org.assertj.core.groups.Tuple.tuple(otherSalesRepId, "Anna Smith"));
+        RemainingInvoiceDocumentDto draft = remainingInvoiceService.createDraft(fixture.ticketId(), null, salesActor);
+        remainingInvoiceService.updateDraft(draft.id(),
+            new RemainingInvoiceDraftRequest(null, null, null, null, null, otherSalesRepId), salesActor);
+        assertThat(preparerLine(remainingInvoiceService.file(draft.id(), salesActor))).isEqualTo("( Anna Smith )");
     }
 
     /** The deposit notice's "( name )" signature line sits below the totals; its row moves with the item count. */

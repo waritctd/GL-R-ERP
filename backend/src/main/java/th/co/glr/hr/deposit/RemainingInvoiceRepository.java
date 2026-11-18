@@ -136,10 +136,10 @@ public class RemainingInvoiceRepository {
                     :actorId, :actorName,
                     -- ผู้จัดทำ defaults to the deal's owner (the actor only when the ticket has none)
                     COALESCE((SELECT t.created_by FROM sales.ticket t WHERE t.ticket_id = :ticketId), :actorId),
-                    COALESCE((SELECT NULLIF(TRIM(CONCAT_WS(' ', e.first_name_th, e.last_name_th)), '')
+                    COALESCE((SELECT {NAME}
                                 FROM sales.ticket t JOIN hr.employee e ON e.employee_id = t.created_by
                                WHERE t.ticket_id = :ticketId), :actorName))
-            """,
+            """.replace("{NAME}", DepositNoticeRepository.PREPARER_NAME_SQL),
             new MapSqlParameterSource()
                 .addValue("ticketId", ticketId).addValue("quotationId", customerQuotationId)
                 .addValue("depositNoticeId", depositNoticeId)
@@ -197,11 +197,11 @@ public class RemainingInvoiceRepository {
                    -- a null preparerId keeps the stored preparer
                    preparer_id = COALESCE(CAST(:preparerId AS bigint), preparer_id),
                    preparer_name = CASE WHEN CAST(:preparerId AS bigint) IS NULL THEN preparer_name ELSE
-                       (SELECT NULLIF(TRIM(CONCAT_WS(' ', first_name_th, last_name_th)), '')
-                          FROM hr.employee WHERE employee_id = :preparerId) END,
+                       (SELECT {NAME}
+                          FROM hr.employee e WHERE e.employee_id = :preparerId) END,
                    updated_at = now()
              WHERE id = :id AND status = 'DRAFT'
-            """, new MapSqlParameterSource()
+            """.replace("{NAME}", DepositNoticeRepository.PREPARER_NAME_SQL), new MapSqlParameterSource()
                 .addValue("id", id)
                 .addValue("reference", reference).addValue("depositReference", depositReference)
                 .addValue("docDate", docDate).addValue("preparerId", preparerId)
