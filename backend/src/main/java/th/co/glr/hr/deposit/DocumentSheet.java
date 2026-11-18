@@ -135,7 +135,7 @@ final class DocumentSheet {
         int[] box = removeBakedSignature(sh, r);
         double linePt = textPt(sh, r - 1, cell(sh, r - 1, 1).getStringCellValue());
         str(sh, r, 1, name == null || name.isBlank() ? "" : centred(sh, r, "( " + name.trim() + " )", linePt));
-        if (signature != null && signature.length > 0) placeSignature(sh, box, linePt, signature, signatureMime);
+        if (signature != null && signature.length > 0 && linePt > 0) placeSignature(sh, box, linePt, signature);
     }
 
     /** The signature date line, centred under the underscore line two rows above it. */
@@ -177,7 +177,7 @@ final class DocumentSheet {
 
     /** The picture keeps the baked one's vertical box; its width follows the image's aspect ratio (never wider than
      * the line) and it is centred on the line. dx is 1/1023 of column B. */
-    private static void placeSignature(Sheet sh, int[] box, double linePt, byte[] image, String mime) {
+    private static void placeSignature(Sheet sh, int[] box, double linePt, byte[] image) {
         java.awt.Dimension natural = th.co.glr.hr.common.ImageDecodability.size(image);
         if (natural == null || natural.height <= 0) return;
         double colPt = LibreOfficeMetrics.columnTwips(sh.getColumnWidth(1), LibreOfficeMetrics.charWidthTwips(sh.getWorkbook())) / 20.0;
@@ -190,9 +190,8 @@ final class DocumentSheet {
         double centrePt = LibreOfficeMetrics.TEXT_INSET_TWIPS / 20.0 + linePt / 2;
         int dx1 = (int) Math.max(0, Math.round((centrePt - widthPt / 2) / colPt * 1023));
         int dx2 = (int) Math.min(1023, Math.round((centrePt + widthPt / 2) / colPt * 1023));
-        int type = mime != null && mime.toLowerCase(Locale.ROOT).contains("jpeg")
-            ? Workbook.PICTURE_TYPE_JPEG : Workbook.PICTURE_TYPE_PNG;
-        int idx = sh.getWorkbook().addPicture(image, type);
+        // EmployeeSignatureService stores every upload as a canonical PNG
+        int idx = sh.getWorkbook().addPicture(image, Workbook.PICTURE_TYPE_PNG);
         HSSFPatriarch patriarch = ((HSSFSheet) sh).getDrawingPatriarch();
         if (patriarch == null) patriarch = ((HSSFSheet) sh).createDrawingPatriarch();
         patriarch.createPicture(new HSSFClientAnchor(dx1, box[1], dx2, box[3], (short) 1, box[0], (short) 1, box[2]), idx);

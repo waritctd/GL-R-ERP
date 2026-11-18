@@ -53,11 +53,8 @@ public class DepositNoticeRepository {
 
     /** The preparer's own signature image (hr.employee_signature), looked up live at render time like the quotation's. */
     public Optional<th.co.glr.hr.dealquotation.EmployeeSignatureRepository.SignatureImage> findPreparerSignature(Long employeeId) {
-        if (employeeId == null) return Optional.empty();
-        return jdbc.query("SELECT mime_type, image FROM hr.employee_signature WHERE employee_id = :id",
-            Map.of("id", employeeId),
-            (rs, i) -> new th.co.glr.hr.dealquotation.EmployeeSignatureRepository.SignatureImage(
-                rs.getString("mime_type"), rs.getBytes("image"))).stream().findFirst();
+        return employeeId == null ? Optional.empty()
+            : new th.co.glr.hr.dealquotation.EmployeeSignatureRepository(jdbc).find(employeeId);
     }
 
     public List<DocumentNoteTemplateDto> findNoteTemplates() {
