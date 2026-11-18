@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -31,6 +32,7 @@ class RemainingInvoiceNewEngineZeroDepositIntegrationTest extends AbstractPostgr
 
     private TicketRepository tickets;
     private RemainingInvoiceService remainingInvoices;
+    private DepositNoticeService depositNotices;
     private RecordingSalesMailer mailer;
     private long employeeId;
     private UserPrincipal owner;
@@ -41,7 +43,7 @@ class RemainingInvoiceNewEngineZeroDepositIntegrationTest extends AbstractPostgr
         tickets = new TicketRepository(jdbc);
         mailer = new RecordingSalesMailer(jdbc);
         CustomerQuotationRepository quotations = new CustomerQuotationRepository(jdbc);
-        DepositNoticeService depositNotices = new DepositNoticeService(new DepositNoticeRepository(jdbc), tickets,
+        depositNotices = new DepositNoticeService(new DepositNoticeRepository(jdbc), tickets,
             new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP), new DepositNoticePdfRenderer(),
             new CustomerRepository(jdbc), quotations);
         remainingInvoices = new RemainingInvoiceService(new RemainingInvoiceRepository(jdbc), depositNotices, tickets,
@@ -213,6 +215,185 @@ class RemainingInvoiceNewEngineZeroDepositIntegrationTest extends AbstractPostgr
 
         assertThatThrownBy(() -> remainingInvoices.createDraft(ticket, null, owner))
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+    }
+
+    // The deposit notice follows the same ruling as the invoice above: it prints the QUOTATION'S OWN lines. Here the
+    // goods line is stored as 467,125.00 (list 505 less 7.5%, rounded once) although its printed net price x qty gives
+    // 467,130.00, and a -45,000.00 ส่วนลดพิเศษ follows. The notice keeps both stored amounts and the discount as its
+    // own line, so its subtotal is the quotation's 422,125.00 and the deposit is a percent of exactly that.
+    @Test
+    void aDealWithADeposit_theDepositNoticeCopiesTheQuotationsOwnLines_discountIncluded_andTheSubtotalIsTheStoredTotal() {
+        long ticket = deal("REQUIRED");
+        long q = quotation(ticket, "PRICING_REQUEST", "ACCEPTED", "422125.00");
+        line(q, 1, "กระเบื้อง", "1000", "467.13", "467125.00", "TILE");
+        line(q, 2, "ส่วนลดพิเศษ 45,000 บาท", "-1", "45000.00", "-45000.00", "ADJUSTMENT");
+
+        var draft = depositNotices.createDraft(ticket,
+            new DepositNoticeDraftRequest(null, null, null, null, null, null, null, null), owner);
+
+        assertThat(draft.items()).extracting(i -> i.amount()).usingElementComparator(BigDecimal::compareTo)
+            .containsExactly(new BigDecimal("467125.00"), new BigDecimal("-45000.00"));
+        assertThat(draft.items().get(1).description()).isEqualTo("ส่วนลดพิเศษ 45,000 บาท");
+        assertThat(draft.items().get(1).qty()).isEqualByComparingTo("-1");
+        assertThat(draft.items().get(1).unit()).isEmpty();
+        assertThat(draft.subtotal()).isEqualByComparingTo("422125.00");
+        assertThat(draft.depositAmount()).isEqualByComparingTo(
+            new BigDecimal("422125.00").multiply(draft.depositPercent()).setScale(2, java.math.RoundingMode.HALF_UP));
+    }
+
+    // The page PUTs every line back. Echoing the stored amounts keeps the quotation's total; a line the user edited
+    // (amount sent null) recomputes from net x qty.
+    @Test
+    void aDepositNoticeSave_keepsASuppliedAmount_andRecomputesWhenAmountIsNull() {
+        long ticket = deal("REQUIRED");
+        long q = quotation(ticket, "PRICING_REQUEST", "ACCEPTED", "422125.00");
+        line(q, 1, "กระเบื้อง", "1000", "467.13", "467125.00", "TILE");
+        line(q, 2, "ส่วนลดพิเศษ 45,000 บาท", "-1", "45000.00", "-45000.00", "ADJUSTMENT");
+        var draft = depositNotices.createDraft(ticket,
+            new DepositNoticeDraftRequest(null, null, null, null, null, null, null, null), owner);
+
+        var echoed = depositNotices.update(draft.id(), putOf(draft, null), owner);
+        assertThat(echoed.subtotal()).isEqualByComparingTo("422125.00");
+        assertThat(echoed.items()).extracting(i -> i.amount()).usingElementComparator(BigDecimal::compareTo)
+            .containsExactly(new BigDecimal("467125.00"), new BigDecimal("-45000.00"));
+
+        var edited = depositNotices.update(draft.id(), putOf(draft, new BigDecimal("2")), owner);
+        assertThat(edited.items().get(0).amount()).isEqualByComparingTo("934.26");
+        assertThat(edited.items().get(1).amount()).isEqualByComparingTo("-45000.00");
+        assertThat(edited.subtotal()).isEqualByComparingTo("-44065.74");
+    }
+
+    @Test
+    void aDepositNoticeSave_ignoresAnAmountThatIsNotTheStoredOne_andRefusesANewNegativeQty() {
+        long ticket = deal("REQUIRED");
+        long q = quotation(ticket, "PRICING_REQUEST", "ACCEPTED", "422125.00");
+        line(q, 1, "กระเบื้อง", "1000", "467.13", "467125.00", "TILE");
+        line(q, 2, "ส่วนลดพิเศษ 45,000 บาท", "-1", "45000.00", "-45000.00", "ADJUSTMENT");
+        var draft = depositNotices.createDraft(ticket,
+            new DepositNoticeDraftRequest(null, null, null, null, null, null, null, null), owner);
+
+        // (c) echoing the stored discount line (qty -1) still saves
+        assertThat(depositNotices.update(draft.id(), putOf(draft, null), owner).items().get(1).qty())
+            .isEqualByComparingTo("-1");
+
+        // (a) same qty/net as stored, a forged amount: the stored net x qty wins
+        var forged = putOf(draft, null);
+        var first = forged.items().get(0);
+        var items = new java.util.ArrayList<>(forged.items());
+        items.set(0, new DepositNoticeItemRequest(first.seq(), first.description(), first.qty(), first.unit(),
+            first.unitPrice(), first.discountLabel(), first.netUnitPrice(), new BigDecimal("1.00")));
+        var saved = depositNotices.update(draft.id(), withItems(forged, items), owner);
+        assertThat(saved.items().get(0).amount()).isEqualByComparingTo("467130.00");
+
+        // (b) a NEW negative-qty line is refused
+        items.add(new DepositNoticeItemRequest(3, "แถวใหม่", new BigDecimal("-5"), "แผ่น",
+            new BigDecimal("10.00"), null, new BigDecimal("10.00"), null));
+        assertThatThrownBy(() -> depositNotices.update(draft.id(), withItems(forged, items), owner))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
+
+        // (d) the stored lines echoed back PLUS one extra qty -1 line (the stored discount's qty): a negative qty may
+        // be kept, never added
+        var withExtraDiscount = new java.util.ArrayList<>(putOf(draft, null).items());
+        withExtraDiscount.add(new DepositNoticeItemRequest(3, "ส่วนลดเพิ่ม", new BigDecimal("-1"), "",
+            new BigDecimal("400000.00"), null, new BigDecimal("400000.00"), null));
+        assertThatThrownBy(() -> depositNotices.update(draft.id(), withItems(forged, withExtraDiscount), owner))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
+    }
+
+    // The client create route (createDraft with req.items) is client input: a client amount is ignored (the stored
+    // amount is net x qty) and a negative qty is refused, whatever the quotation holds.
+    @Test
+    void aClientCreate_ignoresASuppliedAmount_andRefusesANegativeQty() {
+        long ticket = deal("REQUIRED");
+        long q = quotation(ticket, "PRICING_REQUEST", "ACCEPTED", "1000.00");
+        line(q, 1, "กระเบื้อง A", "10", "100.00");
+
+        var forgedAmount = new DepositNoticeItemRequest(1, "กระเบื้อง A", new BigDecimal("2"), "แผ่น",
+            new BigDecimal("100.00"), null, new BigDecimal("100.00"), new BigDecimal("1.00"));
+        var negative = new DepositNoticeItemRequest(2, "ส่วนลด", new BigDecimal("-1"), "",
+            new BigDecimal("500.00"), null, new BigDecimal("500.00"), null);
+
+        assertThatThrownBy(() -> depositNotices.createDraft(ticket, createBody(List.of(forgedAmount, negative)), owner))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
+
+        var draft = depositNotices.createDraft(ticket, createBody(List.of(forgedAmount)), owner);
+        assertThat(draft.items().get(0).amount()).isEqualByComparingTo("200.00");
+        assertThat(draft.subtotal()).isEqualByComparingTo("200.00");
+    }
+
+    // The same two guards at the endpoint (real controller, real service): POST create and PUT update.
+    @Test
+    void theEndpoints_refuseANewNegativeQty_with400() throws Exception {
+        long ticket = deal("REQUIRED");
+        long q = quotation(ticket, "PRICING_REQUEST", "ACCEPTED", "1000.00");
+        line(q, 1, "กระเบื้อง A", "10", "100.00");
+        var mvc = org.springframework.test.web.servlet.setup.MockMvcBuilders
+            .standaloneSetup(new DepositNoticeController(depositNotices, new th.co.glr.hr.auth.SessionContext()))
+            .setControllerAdvice(new th.co.glr.hr.common.ApiExceptionHandler()).build();
+        var session = new org.springframework.mock.web.MockHttpSession();
+        session.setAttribute(th.co.glr.hr.auth.SessionContext.SESSION_USER_KEY, owner);
+        String negativeLine = """
+            {"seq": 2, "description": "แถวใหม่", "qty": -5, "unit": "แผ่น", "unitPrice": 10, "netUnitPrice": 10}""";
+
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                .post("/api/tickets/" + ticket + "/deposit-notice/draft").session(session)
+                .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                .content("{\"items\": [" + negativeLine + "]}"))
+            .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isBadRequest())
+            .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.message")
+                .value("จำนวนต้องไม่ติดลบ"));
+
+        var draft = depositNotices.createDraft(ticket, createBody(null), owner);
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                .put("/api/deposit-notices/" + draft.id()).session(session)
+                .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                .content("{\"items\": [" + negativeLine + "]}"))
+            .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isBadRequest())
+            .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.message")
+                .value("จำนวนต้องไม่ติดลบ"));
+    }
+
+    // sales.quotation_item.final_unit_price is nullable (hand-written / migrated data): an ADJUSTMENT row without a net
+    // price must still become its own discount line (net = |amount| / |qty|), never be dropped or fail the insert.
+    @Test
+    void aDepositNotice_keepsAnAdjustmentRowWhoseNetPriceIsNull_withItsStoredAmount() {
+        long ticket = deal("REQUIRED");
+        long q = quotation(ticket, "PRICING_REQUEST", "ACCEPTED", "900.00");
+        line(q, 1, "กระเบื้อง A", "10", "100.00");
+        jdbc.update("""
+            INSERT INTO sales.quotation_item (quotation_id, seq, description, qty, raw_unit, unit_price, sales_discount,
+                                               final_unit_price, amount, line_type)
+            VALUES (:q, 2, 'ส่วนลดพิเศษ', -1, 'แผ่น', 100.00, 0, NULL, -100.00, 'ADJUSTMENT')
+            """, Map.of("q", q));
+
+        var draft = depositNotices.createDraft(ticket, createBody(null), owner);
+
+        assertThat(draft.items()).hasSize(2);
+        assertThat(draft.items().get(1).qty()).isEqualByComparingTo("-1");
+        assertThat(draft.items().get(1).amount()).isEqualByComparingTo("-100.00");
+        assertThat(draft.items().get(1).netUnitPrice()).isEqualByComparingTo("100.00");
+        assertThat(draft.subtotal()).isEqualByComparingTo("900.00");
+    }
+
+    private static DepositNoticeDraftRequest createBody(List<DepositNoticeItemRequest> items) {
+        return new DepositNoticeDraftRequest(null, null, null, null, null, null, null, items);
+    }
+
+    private static DepositNoticeDraftRequest withItems(DepositNoticeDraftRequest r, List<DepositNoticeItemRequest> items) {
+        return new DepositNoticeDraftRequest(r.customerName(), r.customerTaxId(), r.customerAddress(),
+            r.projectName(), r.reference(), r.depositPercent(), r.notes(), items, null);
+    }
+
+    /** The draft's lines as the page PUTs them; a non-null {@code firstQty} edits line 1 and drops its amount. */
+    private static DepositNoticeDraftRequest putOf(DepositNoticeDto draft, BigDecimal firstQty) {
+        List<DepositNoticeItemRequest> lines = new java.util.ArrayList<>();
+        for (var i : draft.items()) {
+            boolean edited = firstQty != null && i.seq() == 1;
+            lines.add(new DepositNoticeItemRequest(i.seq(), i.description(), edited ? firstQty : i.qty(), i.unit(),
+                i.unitPrice(), i.discountLabel(), i.netUnitPrice(), edited ? null : i.amount()));
+        }
+        return new DepositNoticeDraftRequest(draft.customerName(), draft.customerTaxId(), draft.customerAddress(),
+            draft.projectName(), draft.reference(), draft.depositPercent(), draft.notes(), lines, null);
     }
 
     // PIN: no answered quotation at all (a quotation only ISSUED) -> still nothing to bill.

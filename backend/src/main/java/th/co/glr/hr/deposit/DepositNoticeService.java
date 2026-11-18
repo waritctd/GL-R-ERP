@@ -89,7 +89,7 @@ public class DepositNoticeService {
     // Create a DRAFT from approved ticket items
     @Transactional
     public DepositNoticeDto createDraft(long ticketId, DepositNoticeDraftRequest req, UserPrincipal actor) {
-        return createDraftFromQuotation(ticketId, req, null, actor);
+        return createDraftInternal(ticketId, req, null, actor, true);
     }
 
     /** {@link #createDraft} for a caller that has already chosen the source quotation: a non-null
@@ -98,6 +98,14 @@ public class DepositNoticeService {
     @Transactional
     public DepositNoticeDto createDraftFromQuotation(long ticketId, DepositNoticeDraftRequest req,
                                                      Integer sourceDepositPercent, UserPrincipal actor) {
+        return createDraftInternal(ticketId, req, sourceDepositPercent, actor, false);
+    }
+
+    /** {@code clientLines}: {@code req.items()} came from a client body (so {@link #echoOnly} distrusts them), not
+     * from the server's own quotation. */
+    private DepositNoticeDto createDraftInternal(long ticketId, DepositNoticeDraftRequest req,
+                                                 Integer sourceDepositPercent, UserPrincipal actor,
+                                                 boolean clientLines) {
         requireRole(actor, SALES_ROLES);
         requireTicketOwner(ticketId, actor);
         // The ticket row lock BEFORE any state check, as DealQuotationService#undoOrderConfirmation holds it while it
@@ -128,6 +136,7 @@ public class DepositNoticeService {
             throw zeroDepositRefusal(governing.number());
         }
         List<DepositNoticeItemRequest> items = buildItemsFromRequest(req, ticketId);
+        if (clientLines) items = echoOnly(items, List.of());
         boolean linesFromGoverning = items.isEmpty() && governing != null;
         if (linesFromGoverning) items = itemsFromGoverning(governing);
         List<String> notes = req.notes() != null ? req.notes()
@@ -194,7 +203,7 @@ public class DepositNoticeService {
             req.customerName(), req.customerTaxId(), req.customerAddress(),
             req.projectName(), req.reference(),
             depositPercent,
-            req.notes(), req.items(), req.expectedUpdatedAt()
+            req.notes(), echoOnly(req.items(), doc.items()), req.expectedUpdatedAt()
         );
         docs.update(docId, effective, doc.items());
         return docs.findById(docId).orElseThrow();
@@ -1272,6 +1281,25 @@ public class DepositNoticeService {
         return new CustomerHeaderInfo(customerTaxId, customerAddress, addressOnly, branch, projectName);
     }
 
+    /** A client line may only echo what the notice stores: its amount counts only when a stored line has the same
+     * qty, net and amount (else it is recomputed), and a negative qty may be kept but never added (the lines
+     * supplied with a given negative qty may not outnumber the stored lines with that qty). */
+    private static List<DepositNoticeItemRequest> echoOnly(List<DepositNoticeItemRequest> supplied,
+                                                           List<DepositNoticeItemDto> stored) {
+        if (supplied == null) return null;
+        return supplied.stream().map(it -> {
+            if (it.qty().signum() < 0 && supplied.stream().filter(o -> o.qty().compareTo(it.qty()) == 0).count()
+                    > stored.stream().filter(s -> s.qty().compareTo(it.qty()) == 0).count()) {
+                throw new ApiException(HttpStatus.BAD_REQUEST, "จำนวนต้องไม่ติดลบ");
+            }
+            boolean echoed = it.amount() != null && stored.stream().anyMatch(s ->
+                s.qty().compareTo(it.qty()) == 0 && s.netUnitPrice().compareTo(it.netUnitPrice()) == 0
+                    && s.amount().compareTo(it.amount()) == 0);
+            return echoed || it.amount() == null ? it : new DepositNoticeItemRequest(it.seq(), it.description(),
+                it.qty(), it.unit(), it.unitPrice(), it.discountLabel(), it.netUnitPrice(), null);
+        }).toList();
+    }
+
     private List<DepositNoticeItemRequest> buildItemsFromRequest(DepositNoticeDraftRequest req, long ticketId) {
         if (req.items() != null && !req.items().isEmpty()) return req.items();
 
@@ -1303,7 +1331,7 @@ public class DepositNoticeService {
                             .reduce((a, b) -> a + " " + b).orElse(it.brand());
                         BigDecimal price = it.approvedPrice();
                         return new DepositNoticeItemRequest(
-                            seq[0]++, desc, it.qty(), "แผ่น", price, null, price
+                            seq[0]++, desc, it.qty(), "แผ่น", price, null, price, null
                         );
                     })
                     .toList();
@@ -1335,7 +1363,7 @@ public class DepositNoticeService {
                 ? "ส่วนลด " + discount.stripTrailingZeros().toPlainString() + " ต่อหน่วย" : null;
             items.add(new DepositNoticeItemRequest(
                 item.seq(), description, item.requestedQuantity(), unitLabel(item.requestedUnitBasis()),
-                item.approvedUnitPrice(), discountLabel, item.finalUnitPrice()));
+                item.approvedUnitPrice(), discountLabel, item.finalUnitPrice(), null));
         }
         return items;
     }

@@ -1296,39 +1296,24 @@ function mockDepositNoticeItemsFromQuotation(items) {
   }));
 }
 
-// Mirrors DepositNoticeRepository.findDealQuotationItems. Values are read off the stored row,
-// never recomputed (label excepted — see below).
+// Mirrors DepositNoticeRepository.findDealQuotationItems: every stored line, with its stored amount;
+// an ADJUSTMENT (ส่วนลดพิเศษ, qty -1) is its own line with no unit.
 function mockDepositNoticeItemsFromDealQuotation(row) {
-  // DepositNoticeRepository#foldAdjustments: an ADJUSTMENT row (qty -1) is no deposit line; its
-  // amount is spread over the goods lines by amount, each share and each new net price 2 dp (no
-  // remainder on a last line: the notice total is its own 2 dp lines). A line keeps the quotation's
-  // own discount wording and gains the folded discount after it.
-  // ponytail: the mock computes no % adjustment amount (MOCK_NOT_COMPUTED), so that row is only dropped.
-  const goods = row.items.filter((item) => item.lineType !== 'ADJUSTMENT');
-  const adjustment = row.items.filter((item) => item.lineType === 'ADJUSTMENT')
-    .reduce((sum, item) => sum + (Number(item.netUnitPrice) || 0) * Number(item.quantity), 0);
-  const amountOf = (item) => item.netUnitPrice * item.quantity;
-  const total = goods.reduce((sum, item) => sum + amountOf(item), 0);
-  return goods.map((item, idx) => {
-    let netUnitPrice = item.netUnitPrice;
-    if (adjustment && total && amountOf(item)) {
-      const share = round2((adjustment * amountOf(item)) / total);
-      netUnitPrice = round2((amountOf(item) + share) / item.quantity);
-    }
+  // ponytail: the mock computes no % adjustment amount (MOCK_NOT_COMPUTED), so that row is dropped.
+  return row.items.filter((item) => item.lineType !== 'ADJUSTMENT' || item.netUnitPrice != null).map((item, idx) => {
+    const adjustment = item.lineType === 'ADJUSTMENT';
     // Display label only: the mock stores no sales_discount, so this restates the column Java reads
     // (DealQuotationRepository#itemParams writes it as unitPrice − netUnitPrice).
     const salesDiscount = round2(item.unitPrice - item.netUnitPrice);
-    const folded = round2(item.netUnitPrice - netUnitPrice);
-    const own = salesDiscount > 0 ? `ส่วนลด ${salesDiscount} ต่อหน่วย` : null;
-    const extra = folded > 0 ? `ส่วนลดพิเศษ ${folded} ต่อหน่วย` : null;
     return {
       seq: item.seq ?? idx + 1,
       description: item.descriptionLine?.trim() ? item.descriptionLine : 'รายการสินค้า',
       qty: item.quantity,
-      unit: item.unit?.trim() ? item.unit : 'หน่วย',
+      unit: adjustment ? '' : item.unit?.trim() ? item.unit : 'หน่วย',
       unitPrice: item.unitPrice,
-      discountLabel: own && extra ? `${own} + ${extra}` : own ?? extra,
-      netUnitPrice,
+      discountLabel: !adjustment && salesDiscount > 0 ? `ส่วนลด ${salesDiscount} ต่อหน่วย` : null,
+      netUnitPrice: item.netUnitPrice,
+      amount: item.lineAmount ?? null,
     };
   });
 }
@@ -2250,10 +2235,26 @@ function requireNoIssuedDepositNotice(ticketId) {
   if (issued) fail(`งานนี้ออกใบแจ้งรับมัดจำเลขที่ ${issued.docNumber} แล้ว จึงสร้างฉบับร่างใหม่ไม่ได้`, 409);
 }
 
+// Mirrors DepositNoticeService#echoOnly for a CLIENT-supplied line list: a supplied amount counts only when a stored
+// line has the same qty, net and amount (else it is net x qty to 2 dp), and a negative qty may be kept but never
+// added (the lines supplied with a given negative qty may not outnumber the stored lines with that qty).
+function mockEchoOnlyDepositItems(supplied, stored = []) {
+  const lineAmount = (it) => round2((Number(it.netUnitPrice) || 0) * (Number(it.qty) || 0));
+  const countWithQty = (list, qty) => list.filter((o) => Number(o.qty) === qty).length;
+  return supplied.map((it) => {
+    const qty = Number(it.qty);
+    if (qty < 0 && countWithQty(supplied, qty) > countWithQty(stored, qty)) fail('จำนวนต้องไม่ติดลบ', 400);
+    const echoed = it.amount != null && stored.some((s) => Number(s.qty) === qty
+      && Number(s.netUnitPrice) === Number(it.netUnitPrice) && Number(s.amount ?? lineAmount(s)) === Number(it.amount));
+    return { ...it, amount: echoed ? Number(it.amount) : lineAmount(it) };
+  });
+}
+
 function buildMockDoc(doc) {
   const items = doc.items ?? [];
   const depositPct = doc.depositPercent ?? 0.5;
-  const subtotal = items.reduce((s, it) => s + (Number(it.netUnitPrice) || 0) * (Number(it.qty) || 0), 0);
+  // The subtotal is the sum of the per-line 2 dp amounts (a line's stored amount, else net x qty).
+  const subtotal = round2(items.reduce((s, it) => s + round2(it.amount ?? (Number(it.netUnitPrice) || 0) * (Number(it.qty) || 0)), 0));
   const deposit  = Math.round(subtotal * depositPct * 100) / 100;
   const vat      = Math.round(deposit * 0.07 * 100) / 100;
   const total    = Math.round((deposit + vat) * 100) / 100;
@@ -2264,7 +2265,7 @@ function mockPreviewHtml(doc) {
   const money = (v) => v == null ? '—' : Number(v).toLocaleString('th-TH', { minimumFractionDigits: 2 });
   const depositPct = Math.round((doc.depositPercent ?? 0.5) * 100);
   let rows = (doc.items ?? []).map((it, i) =>
-    `<tr><td>${i+1}</td><td>${it.description??''}</td><td style="text-align:right">${it.qty}</td><td>${it.unit??'แผ่น'}</td><td style="text-align:right">${money(it.unitPrice)}</td><td style="text-align:right">${money(it.netUnitPrice??it.unitPrice)}</td><td style="text-align:right">${money((it.netUnitPrice??it.unitPrice)*it.qty)}</td></tr>`
+    `<tr><td>${i+1}</td><td>${it.description??''}</td><td style="text-align:right">${it.qty}</td><td>${it.unit??'แผ่น'}</td><td style="text-align:right">${money(it.unitPrice)}</td><td style="text-align:right">${money(it.netUnitPrice??it.unitPrice)}</td><td style="text-align:right">${money(it.amount??(it.netUnitPrice??it.unitPrice)*it.qty)}</td></tr>`
   ).join('');
   return `<!DOCTYPE html><html><head><meta charset="UTF-8"><style>body{font-family:sans-serif;padding:20px;font-size:13px}table{width:100%;border-collapse:collapse;margin:12px 0}th{background:#1e3a5f;color:#fff;padding:6px 8px;text-align:left}td{padding:5px 8px;border-bottom:1px solid #eee}.sum{text-align:right;width:300px;float:right;margin-top:12px}.sum td{padding:4px 8px}</style></head><body>
 <div style="display:flex;justify-content:space-between;border-bottom:2px solid #1e3a5f;padding-bottom:12px;margin-bottom:16px">
@@ -15424,7 +15425,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       if (!governing?.legacy && governing?.quotation.depositPercent === 0) {
         fail(mockZeroDepositRefusal(governing.quotation.number), 409);
       }
-      let items = payload.items?.length ? payload.items : legacyItems;
+      let items = payload.items?.length ? mockEchoOnlyDepositItems(payload.items) : legacyItems;
       const linesFromGoverning = !items.length && governing != null;
       if (linesFromGoverning) {
         items = governing.legacy
@@ -15505,7 +15506,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
         reference:       payload.reference       ?? doc.reference,
         depositPercent:  payload.depositPercent  ?? doc.depositPercent,
         notes:           payload.notes           ?? doc.notes,
-        items:           payload.items?.length ? payload.items : doc.items,
+        items:           payload.items?.length ? mockEchoOnlyDepositItems(payload.items, doc.items) : doc.items,
         // Strictly later than the stored stamp, so two saves in one millisecond still differ.
         updatedAt:       new Date(Math.max(Date.now(), (Date.parse(doc.updatedAt) || 0) + 1)).toISOString(),
       });

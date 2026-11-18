@@ -151,13 +151,13 @@ class FinanceDealIntegrationTest extends FinanceDealTestBase {
         long depositId = depositNotices.createDraft(ticketId,
             new DepositNoticeDraftRequest("ลูกค้าทดสอบ", null, null, null, "REF", new BigDecimal("0.50"), List.of(), null),
             List.of(new DepositNoticeItemRequest(1, "สินค้า", BigDecimal.ONE, "ชุด",
-                new BigDecimal("80000.00"), null, new BigDecimal("80000.00"))));
+                new BigDecimal("80000.00"), null, new BigDecimal("80000.00"), null)));
         depositNotices.issue(depositId, salesRepId, "พนักงานขาย ทดสอบ");
         // a DRAFT deposit notice must not be listed
         depositNotices.createDraft(ticketId,
             new DepositNoticeDraftRequest("ลูกค้าทดสอบ", null, null, null, "REF2", new BigDecimal("0.50"), List.of(), null),
             List.of(new DepositNoticeItemRequest(1, "สินค้า", BigDecimal.ONE, "ชุด",
-                new BigDecimal("80000.00"), null, new BigDecimal("80000.00"))));
+                new BigDecimal("80000.00"), null, new BigDecimal("80000.00"), null)));
 
         long riId = remainingInvoices.insertDraft(ticketId, null, depositId, "REF", null, LocalDate.now(), List.of(),
             "ลูกค้าทดสอบ", null, null, null, null,
@@ -304,7 +304,7 @@ class FinanceDealIntegrationTest extends FinanceDealTestBase {
         long depositOnOther = depositNotices.createDraft(other,
             new DepositNoticeDraftRequest("x", null, null, null, "R", new BigDecimal("0.50"), List.of(), null),
             List.of(new DepositNoticeItemRequest(1, "สินค้า", BigDecimal.ONE, "ชุด",
-                new BigDecimal("100.00"), null, new BigDecimal("100.00"))));
+                new BigDecimal("100.00"), null, new BigDecimal("100.00"), null)));
         depositNotices.issue(depositOnOther, salesRepId, "x");
         long invoiceRi = remainingInvoices.insertDraft(other, null, depositOnOther, "R2", null, LocalDate.now(),
             List.of(), "x", null, null, null, null, new BigDecimal("100"), new BigDecimal("50"),
@@ -352,7 +352,7 @@ class FinanceDealIntegrationTest extends FinanceDealTestBase {
         long depositId = depositNotices.createDraft(ticketId,
             new DepositNoticeDraftRequest("x", null, null, null, "R", new BigDecimal("0.50"), List.of(), null),
             List.of(new DepositNoticeItemRequest(1, "สินค้า", BigDecimal.ONE, "ชุด",
-                new BigDecimal("100.00"), null, new BigDecimal("100.00"))));
+                new BigDecimal("100.00"), null, new BigDecimal("100.00"), null)));
         depositNotices.issue(depositId, salesRepId, "x");
         long riId = remainingInvoices.insertDraft(ticketId, null, depositId, "R", null, LocalDate.now(), List.of(),
             "x", null, null, null, null, new BigDecimal("100"), new BigDecimal("50"), new BigDecimal("50"),

@@ -326,6 +326,40 @@ describe('DepositNoticePage', () => {
     await waitFor(() => expect(api.depositNotices.issue).toHaveBeenCalledWith(9002, { expectedUpdatedAt: 'T2' }));
   });
 
+  // A quotation-copied draft: the goods line's stored amount (467,125.00) differs from net x qty (467,130.00), and the
+  // ส่วนลดพิเศษ is its own qty -1 line. The page shows and saves the stored amounts; editing a line drops its amount.
+  it('shows and saves the quotation\'s stored amounts, drops an edited line\'s amount, and does not block issuing over the discount line', async () => {
+    api.depositNotices.listByTicket.mockResolvedValue({
+      depositNotices: [{
+        ...validDraftDoc,
+        items: [
+          { seq: 1, description: 'กระเบื้อง', qty: 1000, unit: 'แผ่น', unitPrice: 505, netUnitPrice: 467.13, amount: 467125 },
+          { seq: 2, description: 'ส่วนลดพิเศษ 45,000 บาท', qty: -1, unit: '', unitPrice: 45000, netUnitPrice: 45000, amount: -45000 },
+        ],
+      }],
+    });
+    renderDepositNoticePage();
+
+    expect(await screen.findByText('467,125.00')).not.toBeNull();
+    expect(screen.getByText('-45,000.00')).not.toBeNull();
+    expect(screen.getAllByText(/422,125\.00/).length).toBeGreaterThan(0);
+    expect(screen.queryByDisplayValue('-1')).toBeNull();   // the discount row's qty is read-only
+
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึก' }));
+    await waitFor(() => expect(api.depositNotices.update).toHaveBeenCalledTimes(1));
+    expect(api.depositNotices.update.mock.calls[0][1].items.map((i) => [i.qty, i.amount])).toEqual([[1000, 467125], [-1, -45000]]);
+
+    fireEvent.click(screen.getByRole('button', { name: /ออกเอกสาร/ }));
+    expect(await screen.findByRole('dialog')).not.toBeNull();   // the qty -1 row did not trip "จำนวนมากกว่า 0"
+    fireEvent.click(screen.getByRole('button', { name: 'ยกเลิก' }));
+
+    fireEvent.change(screen.getByDisplayValue('1000'), { target: { value: '2' } });
+    expect(screen.getByText('934.26')).not.toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึก' }));
+    await waitFor(() => expect(api.depositNotices.update).toHaveBeenCalledTimes(2));
+    expect(api.depositNotices.update.mock.calls[1][1].items.map((i) => i.amount)).toEqual([null, -45000]);
+  });
+
   it('renders the empty-state and lets the user create a draft', async () => {
     renderDepositNoticePage();
 
@@ -559,7 +593,7 @@ describe('DepositNoticePage', () => {
     const doc = {
       ...validDraftDoc, customerName: 'บริษัท ลุมพินี จำกัด', customerTaxId: '0105551234567', customerAddress: 'กรุงเทพฯ',
       projectName: 'บ้านชะอำ', reference: 'QT-2026-0201', depositPercent: 0.4, notes: ['หมายเหตุมาตรฐาน'], updatedAt: 'T1',
-      items: [{ seq: 1, description: 'กระเบื้อง Raku', qty: 3, unit: 'ตร.ม.', unitPrice: 1500, discountLabel: '-', netUnitPrice: 1234.57 }],
+      items: [{ seq: 1, description: 'กระเบื้อง Raku', qty: 3, unit: 'ตร.ม.', unitPrice: 1500, discountLabel: '-', netUnitPrice: 1234.57, amount: null }],
     };
 
     // Payload identity — captured against the pre-rebuild dialog and kept green through it.
@@ -577,7 +611,7 @@ describe('DepositNoticePage', () => {
         customerName: 'บริษัท ลุมพินี จำกัด', customerTaxId: '0105551234567', customerAddress: 'กรุงเทพฯ',
         projectName: 'บ้านชะอำ', reference: 'QT-2026-0201', depositPercent: 0.4, notes: ['หมายเหตุมาตรฐาน'],
         expectedUpdatedAt: 'T1',
-        items: [{ seq: 1, description: 'กระเบื้อง Raku', qty: 3, unit: 'ตร.ม.', unitPrice: 1500, discountLabel: '-', netUnitPrice: 1234.57 }],
+        items: [{ seq: 1, description: 'กระเบื้อง Raku', qty: 3, unit: 'ตร.ม.', unitPrice: 1500, discountLabel: '-', netUnitPrice: 1234.57, amount: null }],
       }]]);
       expect(api.depositNotices.issue.mock.calls).toEqual([[9002, { expectedUpdatedAt: 'T2' }]]);
       expect(api.depositNotices.update.mock.invocationCallOrder[0])
