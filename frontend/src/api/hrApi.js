@@ -467,6 +467,7 @@ export const api = {
   },
   depositNotices: {
     noteTemplates: () => apiRequest(API_ROUTES.depositNotices.noteTemplates),
+    preparerOptions: (ticketId) => apiRequest(API_ROUTES.depositNotices.preparerOptions(ticketId)),
     get: (id) => apiRequest(API_ROUTES.depositNotices.get(id)),
     update: (id, payload) => apiRequest(API_ROUTES.depositNotices.update(id), { method: 'PUT', body: payload }),
     preview: (id) => apiRequest(API_ROUTES.depositNotices.preview(id), { method: 'POST' }),

@@ -173,6 +173,7 @@ export const queryKeys = {
   ticketActivities: (id) => ['tickets', 'activities', id == null ? id : Number(id)],
   depositNotices: (ticketId) => ['depositNotices', ticketId],
   depositNoteTemplates: () => ['depositNotices', 'templates'],
+  documentPreparerOptions: (ticketId) => ['depositNotices', 'preparerOptions', ticketId],
   remainingInvoiceOptions: (ticketId, quotationId) => ['remainingInvoice', 'options', ticketId, quotationId ?? null],
   // The STORED remaining invoice aggregate: DRAFT/ISSUED/SUPERSEDED rows
   // for one deal. Separate from remainingInvoiceOptions above, which stays the stateless prefill

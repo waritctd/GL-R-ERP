@@ -20,5 +20,17 @@ public record DepositNoticeRenderModel(
     BigDecimal depositAmount,
     BigDecimal vatAmount,
     BigDecimal totalPayable,
-    String preparerName
-) {}
+    String preparerName,
+    // the chosen preparer's own signature image (hr.employee_signature), or null when none is on file
+    byte[] preparerSignature
+) {
+    /** A document with no signature image. */
+    public DepositNoticeRenderModel(LocalDate issueDate, String docNumber, String customerName, String customerBranch,
+                                    String customerTaxId, String customerAddress, String projectName, String reference,
+                                    List<DepositNoticeItemDto> items, BigDecimal subtotal, BigDecimal depositPercent,
+                                    BigDecimal depositAmount, BigDecimal vatAmount, BigDecimal totalPayable,
+                                    String preparerName) {
+        this(issueDate, docNumber, customerName, customerBranch, customerTaxId, customerAddress, projectName,
+            reference, items, subtotal, depositPercent, depositAmount, vatAmount, totalPayable, preparerName, null);
+    }
+}

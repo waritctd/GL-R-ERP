@@ -13,6 +13,7 @@ import java.util.Locale;
 import java.util.Map;
 import org.apache.poi.hssf.usermodel.HSSFClientAnchor;
 import org.apache.poi.hssf.usermodel.HSSFPatriarch;
+import org.apache.poi.hssf.usermodel.HSSFPicture;
 import org.apache.poi.hssf.usermodel.HSSFShape;
 import org.apache.poi.hssf.usermodel.HSSFSheet;
 import org.apache.poi.ss.usermodel.Cell;
@@ -124,14 +125,76 @@ final class DocumentSheet {
 
     static void num(Sheet sh, int r, int c, BigDecimal v) { cell(sh, r, c).setCellValue(v == null ? 0 : v.doubleValue()); }
 
-    /** "( name )", in the template's own cell style; a document with no preparer leaves the template's own line. */
-    static void preparer(Sheet sh, int r, String name) {
-        if (name != null && !name.isBlank()) str(sh, r, 1, "( " + name.trim() + " )");
+    /**
+     * The ผู้จัดทำ block, as the original form lays it out: "( name )" centred under the underscore line (the row
+     * above, {@code r - 1}) and the chosen person's own signature picture centred on that line, where the template
+     * bakes in a fixed one. The baked picture is always removed; no signature image means no picture. No name prints
+     * no name: the template's own line names a real person, and ผู้จัดทำ must be whoever made the document.
+     */
+    static void preparer(Sheet sh, int r, String name, byte[] signature) {
+        int[] box = removeBakedSignature(sh, r);
+        double linePt = textPt(sh, r - 1, cell(sh, r - 1, 1).getStringCellValue());
+        str(sh, r, 1, name == null || name.isBlank() ? "" : centred(sh, r, "( " + name.trim() + " )", linePt));
+        if (signature != null && signature.length > 0 && linePt > 0) placeSignature(sh, box, linePt, signature);
     }
 
-    /** The signature date line, in the template's own cell style. */
+    /** The signature date line, centred under the underscore line two rows above it. */
     static void signatureDate(Sheet sh, int r, LocalDate d) {
-        str(sh, r, 1, signatureDate(d));
+        String text = signatureDate(d);
+        double linePt = textPt(sh, r - 2, cell(sh, r - 2, 1).getStringCellValue());
+        str(sh, r, 1, text.isEmpty() ? "" : centred(sh, r, text, linePt));
+    }
+
+    /** {@code text} padded with leading spaces so its centre sits at the middle of a {@code linePt}-wide line that
+     * starts at the same left edge (measured in the cell's own font; unmeasurable fonts print it flush left). */
+    private static String centred(Sheet sh, int r, String text, double linePt) {
+        double space = textPt(sh, r, "x x") - textPt(sh, r, "xx");
+        double width = textPt(sh, r, text);
+        if (space <= 0 || width <= 0) return text;
+        return " ".repeat(Math.max(0, (int) Math.round((linePt - width) / (2 * space)))) + text;
+    }
+
+    private static double textPt(Sheet sh, int r, String text) {
+        Font f = fontAt(sh, r, 1);
+        return FontResolver.stringWidthPt(FontResolver.resolve(f.getFontName()), text, f.getFontHeightInPoints(), f.getBold()).orElse(-1);
+    }
+
+    /** Removes the template's baked signature picture (the one in column B on the underscore line's row or the row
+     * above it; never the logo) and returns its anchor {row1, dy1, row2, dy2}, or the form's usual box when absent. */
+    private static int[] removeBakedSignature(Sheet sh, int preparerRow) {
+        int[] box = {preparerRow - 2, 61, preparerRow - 1, 123};
+        HSSFPatriarch patriarch = ((HSSFSheet) sh).getDrawingPatriarch();
+        if (patriarch == null) return box;
+        for (HSSFShape shape : new ArrayList<>(patriarch.getChildren())) {
+            if (shape instanceof HSSFPicture && shape.getAnchor() instanceof HSSFClientAnchor a
+                && a.getCol1() == 1 && a.getCol2() == 1 && a.getRow1() >= preparerRow - 2 && a.getRow1() <= preparerRow - 1) {
+                box = new int[] {a.getRow1(), a.getDy1(), a.getRow2(), a.getDy2()};
+                patriarch.removeShape(shape);
+            }
+        }
+        return box;
+    }
+
+    /** The picture keeps the baked one's vertical box; its width follows the image's aspect ratio (never wider than
+     * the line) and it is centred on the line. dx is 1/1023 of column B. */
+    private static void placeSignature(Sheet sh, int[] box, double linePt, byte[] image) {
+        java.awt.Dimension natural = th.co.glr.hr.common.ImageDecodability.size(image);
+        if (natural == null || natural.height <= 0) return;
+        double colPt = LibreOfficeMetrics.columnTwips(sh.getColumnWidth(1), LibreOfficeMetrics.charWidthTwips(sh.getWorkbook())) / 20.0;
+        double heightPt = 0;
+        for (int row = box[0]; row <= box[2]; row++) {
+            double h = sh.getRow(row) == null ? sh.getDefaultRowHeightInPoints() : sh.getRow(row).getHeightInPoints();
+            heightPt += h * ((row == box[2] ? box[3] : 255) - (row == box[0] ? box[1] : 0)) / 255.0;
+        }
+        double widthPt = Math.min(heightPt * natural.width / natural.height, linePt);
+        double centrePt = LibreOfficeMetrics.TEXT_INSET_TWIPS / 20.0 + linePt / 2;
+        int dx1 = (int) Math.max(0, Math.round((centrePt - widthPt / 2) / colPt * 1023));
+        int dx2 = (int) Math.min(1023, Math.round((centrePt + widthPt / 2) / colPt * 1023));
+        // EmployeeSignatureService stores every upload as a canonical PNG
+        int idx = sh.getWorkbook().addPicture(image, Workbook.PICTURE_TYPE_PNG);
+        HSSFPatriarch patriarch = ((HSSFSheet) sh).getDrawingPatriarch();
+        if (patriarch == null) patriarch = ((HSSFSheet) sh).createDrawingPatriarch();
+        patriarch.createPicture(new HSSFClientAnchor(dx1, box[1], dx2, box[3], (short) 1, box[0], (short) 1, box[2]), idx);
     }
 
     // ── text rules ───────────────────────────────────────────────────────────────────────────────

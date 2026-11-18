@@ -28,6 +28,7 @@ vi.mock('../../api/index.js', async (importOriginal) => {
       },
       depositNotices: {
         noteTemplates: vi.fn(),
+        preparerOptions: vi.fn(),
       },
     },
   };
@@ -69,7 +70,7 @@ function docRow(overrides = {}) {
     notes: ['หมายเหตุ 1'],
     customerName: 'ACME', customerTaxId: null, customerBranch: null, customerAddress: null, projectName: null,
     itemsTotal: 37114.18, depositDeduction: 18557.09, netAmount: 18557.09, vatAmount: 1299.0, grandTotal: 19856.09,
-    createdById: 1, createdByName: 'Sales', createdAt: '2026-09-01T00:00:00Z', updatedAt: '2026-09-01T00:00:00Z',
+    createdById: 1, createdByName: 'Sales', preparerId: 1, preparerName: 'Sales', createdAt: '2026-09-01T00:00:00Z', updatedAt: '2026-09-01T00:00:00Z',
     issuedById: null, issuedByName: null, issuedAt: null,
     ...overrides,
   };
@@ -85,6 +86,12 @@ function renderDialog(props = {}) {
   );
   return { onClose };
 }
+
+// ผู้จัดทำ options: the deal's owner, keyer and sales managers ({ id, name }).
+const PREPARER_OPTIONS = [{ id: 1, name: 'Sales' }, { id: 2, name: 'Other Rep' }];
+beforeEach(() => {
+  api.depositNotices.preparerOptions.mockResolvedValue({ items: PREPARER_OPTIONS });
+});
 
 // This project does not wire up jest-dom's matchers (see LoginPage.test.jsx's own note) — assertions below
 // read plain DOM properties (.value/.checked/.disabled) rather than toHaveValue/toBeChecked/toBeDisabled.
@@ -345,6 +352,33 @@ describe('RemainingInvoiceDialog — a live DRAFT exists', () => {
 
     await waitFor(() => expect(api.storedRemainingInvoices.update).toHaveBeenCalledWith(900,
       expect.objectContaining({ reference: 'PO-EDIT-1' })));
+  });
+
+  it('draft: shows a ผู้จัดทำ select with the options and the stored preparer selected; changing it sends preparerId', async () => {
+    api.storedRemainingInvoices.listForTicket.mockResolvedValue({ remainingInvoices: [docRow()] });
+    api.storedRemainingInvoices.update.mockResolvedValue({ remainingInvoice: docRow() });
+    renderDialog();
+
+    const select = await screen.findByLabelText('ผู้จัดทำ');
+    expect(select.tagName).toBe('SELECT');
+    await waitFor(() => expect(within(select).getAllByRole('option').map((o) => o.textContent)).toEqual(['Sales', 'Other Rep']));
+    expect(select.value).toBe('1');
+    fireEvent.change(select, { target: { value: '2' } });
+    fireEvent.click(screen.getByTestId('remaining-invoice-save-draft'));
+
+    await waitFor(() => expect(api.storedRemainingInvoices.update).toHaveBeenCalledWith(900,
+      expect.objectContaining({ preparerId: 2 })));
+  });
+
+  it('draft: a stored preparer missing from the options still shows as the selected value', async () => {
+    api.storedRemainingInvoices.listForTicket.mockResolvedValue({
+      remainingInvoices: [docRow({ preparerId: 77, preparerName: 'Left Company' })],
+    });
+    renderDialog();
+
+    const select = await screen.findByLabelText('ผู้จัดทำ');
+    await waitFor(() => expect(within(select).getAllByRole('option').map((o) => o.textContent)).toContain('Left Company'));
+    expect(select.value).toBe('77');
   });
 
   it('ออกใบแจ้งหนี้ calls issue', async () => {
@@ -626,6 +660,17 @@ describe('RemainingInvoiceDialog — a live ISSUED document exists', () => {
     await waitFor(() => expect(api.storedRemainingInvoices.revise).toHaveBeenCalledWith(900));
   });
 
+  it('an ISSUED document shows its preparer as read-only text, no select', async () => {
+    api.storedRemainingInvoices.listForTicket.mockResolvedValue({
+      remainingInvoices: [docRow({ status: 'ISSUED', docNumber: 'GLR6900001-1', baseNumber: 'GLR6900001', preparerName: 'Other Rep' })],
+    });
+    renderDialog();
+
+    const summary = await screen.findByTestId('remaining-invoice-issued-summary');
+    expect(within(summary).getByText('Other Rep')).not.toBeNull();
+    expect(screen.queryByLabelText('ผู้จัดทำ')).toBeNull();
+  });
+
   it('lists SUPERSEDED versions with their own download buttons', async () => {
     const superseded = docRow({ id: 899, status: 'SUPERSEDED', docNumber: 'GLR6900001-1', version: 1, supersededById: 900 });
     const issuedRow = docRow({ id: 900, status: 'ISSUED', docNumber: 'GLR6900001-2', version: 2, baseNumber: 'GLR6900001' });
@@ -665,6 +710,7 @@ describe('RemainingInvoiceDialog — drawing m-remaining', () => {
     await waitFor(() => expect(api.storedRemainingInvoices.update).toHaveBeenCalledTimes(1));
     expect(api.storedRemainingInvoices.update.mock.calls).toEqual([[900, {
       reference: 'PO-77', depositReference: 'AI2600145', docDate: '2026-09-01', notes: ['หมายเหตุ 1', 'หมายเหตุ 2'],
+      preparerId: 1,
     }]]);
     expect(api.storedRemainingInvoices.issue).not.toHaveBeenCalled();
   });
@@ -683,7 +729,7 @@ describe('RemainingInvoiceDialog — drawing m-remaining', () => {
 
     await waitFor(() => expect(api.storedRemainingInvoices.issue).toHaveBeenCalledTimes(1));
     expect(api.storedRemainingInvoices.update.mock.calls).toEqual([[900, {
-      reference: 'QT-2026-0099', depositReference: 'AI2600145', docDate: '2026-09-01', notes: ['หมายเหตุ 1'],
+      reference: 'QT-2026-0099', depositReference: 'AI2600145', docDate: '2026-09-01', notes: ['หมายเหตุ 1'], preparerId: 1,
     }]]);
     expect(api.storedRemainingInvoices.issue.mock.calls).toEqual([[900]]);
     expect(api.storedRemainingInvoices.createDraft).not.toHaveBeenCalled();

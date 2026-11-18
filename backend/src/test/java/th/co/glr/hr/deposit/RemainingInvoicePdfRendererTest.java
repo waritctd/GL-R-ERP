@@ -16,6 +16,7 @@ import org.apache.poi.ss.usermodel.Workbook;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 import th.co.glr.hr.common.LibreOfficePdfConverter;
+import th.co.glr.hr.common.sheet.LibreOfficeMetrics;
 
 /**
  * The fresh remaining-invoice engine: render MODEL -> POI fill of templates/remaining_invoice_template.xls
@@ -366,14 +367,58 @@ class RemainingInvoicePdfRendererTest {
         }
     }
 
-    /** A document with no preparer leaves the template's own preparer line as it is. */
+    /** ผู้จัดทำ prints the CHOSEN person's signature in place of the template's baked picture, centred on the
+     * underscore line (the original form's layout); with no signature there is no picture at all (the logo stays). */
     @Test
-    void aMissingPreparerLeavesTheTemplatesOwnLine() throws Exception {
-        String own;
-        try (Workbook t = openTemplate(TEMPLATE)) { own = norm(str(t.getSheet("Update"), PREPARER, 1)); }
-        assertThat(own).as("template ships a preparer line").isNotBlank();
+    void preparerSignature_replacesTheBakedPicture_centredOnTheLine() throws Exception {
+        RemainingInvoiceRenderModel m = model();
+        byte[] png = signaturePng(120, 40);
+        try (Workbook wb = render(new RemainingInvoiceRenderModel(m.docDate(), m.docNumber(), m.customerName(), m.customerBranch(),
+                m.customerTaxId(), m.customerAddress(), m.projectName(), m.reference(), m.depositReference(), m.items(),
+                m.depositDeduction(), m.netAmount(), m.vatAmount(), m.grandTotal(), m.preparerName(), png))) {
+            Sheet sh = wb.getSheetAt(0);
+            var pics = signaturePictures(sh, PREPARER);
+            assertThat(pics).as("exactly one picture in the preparer block").hasSize(1);
+            assertThat(pics.get(0).getPictureData().getData()).as("the uploaded image, not the template's baked one").isEqualTo(png);
+            double lineCentre = LibreOfficeMetrics.TEXT_INSET_TWIPS / 20.0 + visibleCentrePt(sh, PREPARER - 1);
+            assertThat(pictureCentrePt(sh, pics.get(0))).isCloseTo(lineCentre, within(0.03 * columnBPt(sh)));
+            assertThat(otherPictureCount(sh, PREPARER)).as("the logo stays").isEqualTo(1);
+        }
+    }
+
+    @Test
+    void noPreparerSignature_printsNoPictureInThePreparerBlock() throws Exception {
+        try (Workbook wb = render(model())) {
+            Sheet sh = wb.getSheetAt(0);
+            assertThat(signaturePictures(sh, PREPARER)).isEmpty();
+            assertThat(otherPictureCount(sh, PREPARER)).as("the logo stays").isEqualTo(1);
+        }
+    }
+
+    /** The name and the date sit centred under the underscore line, short or long. */
+    @Test
+    void preparerNameAndDate_areCentredUnderTheLine() throws Exception {
+        for (String name : List.of("สมชาย ใจดี", "วิภาวดี ศรีสมบูรณ์พูนผล")) {
+            RemainingInvoiceRenderModel m = model();
+            try (Workbook wb = render(new RemainingInvoiceRenderModel(m.docDate(), m.docNumber(), m.customerName(), m.customerBranch(),
+                    m.customerTaxId(), m.customerAddress(), m.projectName(), m.reference(), m.depositReference(), m.items(),
+                    m.depositDeduction(), m.netAmount(), m.vatAmount(), m.grandTotal(), name))) {
+                Sheet sh = wb.getSheetAt(0);
+                double tol = 0.03 * columnBPt(sh);
+                double lineCentre = visibleCentrePt(sh, PREPARER - 1);
+                assertThat(norm(str(sh, PREPARER, 1))).isEqualTo("( " + name + " )");
+                assertThat(visibleCentrePt(sh, PREPARER)).as(name).isCloseTo(lineCentre, within(tol));
+                assertThat(visibleCentrePt(sh, SIGDATE)).as("date under " + name).isCloseTo(lineCentre, within(tol));
+            }
+        }
+    }
+
+    /** A document with no preparer prints no name: the template's own line carries a real person's name, and
+     * ผู้จัดทำ must be whoever made the document (sales manager ruling 2026-11-18). */
+    @Test
+    void aMissingPreparerPrintsNoName() throws Exception {
         try (Workbook wb = render(new RemainingInvoiceRenderModel(LocalDate.of(2026, 10, 28), "GLR6999999-1", "บริษัท ทดสอบ จำกัด", null, "0105599999999", "99 ถนนทดสอบ", "ตึกตัวอย่าง", "QT-TEST-0002", "AI2600001", twoItems(), DEPOSIT, STORED_NET, STORED_VAT, STORED_GRAND, null))) {
-            assertThat(norm(str(wb.getSheetAt(0), PREPARER, 1))).isEqualTo(own);
+            assertThat(norm(str(wb.getSheetAt(0), PREPARER, 1))).isEmpty();
         }
     }
 

@@ -16,6 +16,7 @@ import org.apache.poi.ss.usermodel.Workbook;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 import th.co.glr.hr.common.LibreOfficePdfConverter;
+import th.co.glr.hr.common.sheet.LibreOfficeMetrics;
 
 /**
  * The fresh deposit-notice engine (docs: pdf-generators-fresh-engine-design.md): a render MODEL ->
@@ -334,14 +335,58 @@ class DepositNoticePdfRendererTest {
         }
     }
 
-    /** A document with no preparer leaves the template's own preparer line as it is. */
+    /** ผู้จัดทำ prints the CHOSEN person's signature in place of the template's baked picture, centred on the
+     * underscore line (the original form's layout); with no signature there is no picture at all (the logo stays). */
     @Test
-    void aMissingPreparerLeavesTheTemplatesOwnLine() throws Exception {
-        String own;
-        try (Workbook t = openTemplate(TEMPLATE)) { own = norm(str(t.getSheet("Update"), PREPARER, 1)); }
-        assertThat(own).as("template ships a preparer line").isNotBlank();
+    void preparerSignature_replacesTheBakedPicture_centredOnTheLine() throws Exception {
+        DepositNoticeRenderModel m = model();
+        byte[] png = signaturePng(120, 40);
+        try (Workbook wb = render(new DepositNoticeRenderModel(m.issueDate(), m.docNumber(), m.customerName(), m.customerBranch(),
+                m.customerTaxId(), m.customerAddress(), m.projectName(), m.reference(), m.items(), m.subtotal(), m.depositPercent(),
+                m.depositAmount(), m.vatAmount(), m.totalPayable(), m.preparerName(), png))) {
+            Sheet sh = wb.getSheetAt(0);
+            var pics = signaturePictures(sh, PREPARER);
+            assertThat(pics).as("exactly one picture in the preparer block").hasSize(1);
+            assertThat(pics.get(0).getPictureData().getData()).as("the uploaded image, not the template's baked one").isEqualTo(png);
+            double lineCentre = LibreOfficeMetrics.TEXT_INSET_TWIPS / 20.0 + visibleCentrePt(sh, PREPARER - 1);
+            assertThat(pictureCentrePt(sh, pics.get(0))).isCloseTo(lineCentre, within(0.03 * columnBPt(sh)));
+            assertThat(otherPictureCount(sh, PREPARER)).as("the logo stays").isEqualTo(1);
+        }
+    }
+
+    @Test
+    void noPreparerSignature_printsNoPictureInThePreparerBlock() throws Exception {
+        try (Workbook wb = render(model())) {
+            Sheet sh = wb.getSheetAt(0);
+            assertThat(signaturePictures(sh, PREPARER)).isEmpty();
+            assertThat(otherPictureCount(sh, PREPARER)).as("the logo stays").isEqualTo(1);
+        }
+    }
+
+    /** The name and the date sit centred under the underscore line, short or long. */
+    @Test
+    void preparerNameAndDate_areCentredUnderTheLine() throws Exception {
+        for (String name : List.of("สมชาย ใจดี", "วิภาวดี ศรีสมบูรณ์พูนผล")) {
+            DepositNoticeRenderModel m = model();
+            try (Workbook wb = render(new DepositNoticeRenderModel(m.issueDate(), m.docNumber(), m.customerName(), m.customerBranch(),
+                    m.customerTaxId(), m.customerAddress(), m.projectName(), m.reference(), m.items(), m.subtotal(), m.depositPercent(),
+                    m.depositAmount(), m.vatAmount(), m.totalPayable(), name))) {
+                Sheet sh = wb.getSheetAt(0);
+                double tol = 0.03 * columnBPt(sh);
+                double lineCentre = visibleCentrePt(sh, PREPARER - 1);
+                assertThat(norm(str(sh, PREPARER, 1))).isEqualTo("( " + name + " )");
+                assertThat(visibleCentrePt(sh, PREPARER)).as(name).isCloseTo(lineCentre, within(tol));
+                assertThat(visibleCentrePt(sh, SIGDATE)).as("date under " + name).isCloseTo(lineCentre, within(tol));
+            }
+        }
+    }
+
+    /** A document with no preparer prints no name: the template's own line carries a real person's name, and
+     * ผู้จัดทำ must be whoever made the document (sales manager ruling 2026-11-18). */
+    @Test
+    void aMissingPreparerPrintsNoName() throws Exception {
         try (Workbook wb = render(new DepositNoticeRenderModel(LocalDate.of(2026, 10, 28), "GLRD69999", "บริษัท ทดสอบ จำกัด", null, "0105599999999", "99 ถนนทดสอบ", "ตึกตัวอย่าง", "QT-TEST-0001", twoItems(), STORED_SUBTOTAL, new BigDecimal("0.30"), STORED_DEPOSIT, STORED_VAT, STORED_TOTAL, null))) {
-            assertThat(norm(str(wb.getSheetAt(0), PREPARER, 1))).isEqualTo(own);
+            assertThat(norm(str(wb.getSheetAt(0), PREPARER, 1))).isEmpty();
         }
     }
 
@@ -382,7 +427,7 @@ class DepositNoticePdfRendererTest {
         DepositNoticeDto doc = new DepositNoticeDto(99L, 10L, "DEPOSIT_NOTICE", 1, "GLRD69999", LocalDate.of(2026, 10, 28),
             "ISSUED", "บริษัท ทดสอบ จำกัด", "0105599999999", "99 ถนนทดสอบ", "ตึกตัวอย่าง", "QT-TEST-0001", "THB",
             new BigDecimal("0.30"), STORED_SUBTOTAL, STORED_DEPOSIT, new BigDecimal("0.07"), STORED_VAT, STORED_TOTAL,
-            List.of("SENTINEL-NOTE-MUST-NOT-SHOW"), true, true, "Sales", "สมหญิง ทดสอบ", null, null, List.of(
+            List.of("SENTINEL-NOTE-MUST-NOT-SHOW"), true, true, "Sales", "สมหญิง ทดสอบ", null, null, null, List.of(
                 item(1, "ลดจริง", "1", "ชิ้น", "120.00", "STORED-LABEL-A", "100.00", "100.00"),
                 item(2, "ไม่ลด", "1", "ชิ้น", "100.00", "STORED-LABEL-B", "100.00", "100.00"),
                 item(3, "สุทธิสูงกว่า", "1", "ชิ้น", "398.51", "STORED-LABEL-C", "399.15", "399.15")));
@@ -400,7 +445,7 @@ class DepositNoticePdfRendererTest {
         DepositNoticeDto draft = new DepositNoticeDto(98L, 10L, "DEPOSIT_NOTICE", 1, null, null, "DRAFT",
             "บริษัท <i>ทดสอบ</i>", "0105599999999", "99 <u>ถนน</u>", "<b>x</b>", "QT-TEST-0001", "THB",
             new BigDecimal("0.30"), STORED_SUBTOTAL, STORED_DEPOSIT, new BigDecimal("0.07"), STORED_VAT, STORED_TOTAL,
-            List.of(), false, false, "Sales", "สมหญิง ทดสอบ", null, null, List.of());
+            List.of(), false, false, "Sales", "สมหญิง ทดสอบ", null, null, null, List.of());
         String html = renderer.toPreviewHtml(draft, LocalDate.of(2026, 10, 29));
         assertThat(html).contains("29 ตุลาคม 2569");
         assertThat(html).contains("&lt;b&gt;x&lt;/b&gt;").doesNotContain("<b>x</b>");

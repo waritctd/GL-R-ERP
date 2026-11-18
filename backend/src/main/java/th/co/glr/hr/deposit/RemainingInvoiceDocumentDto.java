@@ -37,6 +37,8 @@ public record RemainingInvoiceDocumentDto(
 
     Long              createdById,
     String            createdByName,
+    Long              preparerId,
+    String            preparerName,
     OffsetDateTime    createdAt,
     OffsetDateTime    updatedAt,
     Long              issuedById,
