@@ -2235,10 +2235,26 @@ function requireNoIssuedDepositNotice(ticketId) {
   if (issued) fail(`งานนี้ออกใบแจ้งรับมัดจำเลขที่ ${issued.docNumber} แล้ว จึงสร้างฉบับร่างใหม่ไม่ได้`, 409);
 }
 
+// Mirrors DepositNoticeService#echoOnly for a CLIENT-supplied line list: a supplied amount counts only when a stored
+// line has the same qty, net and amount (else it is net x qty to 2 dp), and a negative qty may be kept but never
+// added (the lines supplied with a given negative qty may not outnumber the stored lines with that qty).
+function mockEchoOnlyDepositItems(supplied, stored = []) {
+  const lineAmount = (it) => round2((Number(it.netUnitPrice) || 0) * (Number(it.qty) || 0));
+  const countWithQty = (list, qty) => list.filter((o) => Number(o.qty) === qty).length;
+  return supplied.map((it) => {
+    const qty = Number(it.qty);
+    if (qty < 0 && countWithQty(supplied, qty) > countWithQty(stored, qty)) fail('จำนวนต้องไม่ติดลบ', 400);
+    const echoed = it.amount != null && stored.some((s) => Number(s.qty) === qty
+      && Number(s.netUnitPrice) === Number(it.netUnitPrice) && Number(s.amount ?? lineAmount(s)) === Number(it.amount));
+    return { ...it, amount: echoed ? Number(it.amount) : lineAmount(it) };
+  });
+}
+
 function buildMockDoc(doc) {
   const items = doc.items ?? [];
   const depositPct = doc.depositPercent ?? 0.5;
-  const subtotal = items.reduce((s, it) => s + (it.amount ?? (Number(it.netUnitPrice) || 0) * (Number(it.qty) || 0)), 0);
+  // The subtotal is the sum of the per-line 2 dp amounts (a line's stored amount, else net x qty).
+  const subtotal = round2(items.reduce((s, it) => s + round2(it.amount ?? (Number(it.netUnitPrice) || 0) * (Number(it.qty) || 0)), 0));
   const deposit  = Math.round(subtotal * depositPct * 100) / 100;
   const vat      = Math.round(deposit * 0.07 * 100) / 100;
   const total    = Math.round((deposit + vat) * 100) / 100;
@@ -15409,7 +15425,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       if (!governing?.legacy && governing?.quotation.depositPercent === 0) {
         fail(mockZeroDepositRefusal(governing.quotation.number), 409);
       }
-      let items = payload.items?.length ? payload.items : legacyItems;
+      let items = payload.items?.length ? mockEchoOnlyDepositItems(payload.items) : legacyItems;
       const linesFromGoverning = !items.length && governing != null;
       if (linesFromGoverning) {
         items = governing.legacy
@@ -15490,7 +15506,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
         reference:       payload.reference       ?? doc.reference,
         depositPercent:  payload.depositPercent  ?? doc.depositPercent,
         notes:           payload.notes           ?? doc.notes,
-        items:           payload.items?.length ? payload.items : doc.items,
+        items:           payload.items?.length ? mockEchoOnlyDepositItems(payload.items, doc.items) : doc.items,
         // Strictly later than the stored stamp, so two saves in one millisecond still differ.
         updatedAt:       new Date(Math.max(Date.now(), (Date.parse(doc.updatedAt) || 0) + 1)).toISOString(),
       });

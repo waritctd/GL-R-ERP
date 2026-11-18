@@ -89,7 +89,7 @@ public class DepositNoticeService {
     // Create a DRAFT from approved ticket items
     @Transactional
     public DepositNoticeDto createDraft(long ticketId, DepositNoticeDraftRequest req, UserPrincipal actor) {
-        return createDraftFromQuotation(ticketId, req, null, actor);
+        return createDraftInternal(ticketId, req, null, actor, true);
     }
 
     /** {@link #createDraft} for a caller that has already chosen the source quotation: a non-null
@@ -98,6 +98,14 @@ public class DepositNoticeService {
     @Transactional
     public DepositNoticeDto createDraftFromQuotation(long ticketId, DepositNoticeDraftRequest req,
                                                      Integer sourceDepositPercent, UserPrincipal actor) {
+        return createDraftInternal(ticketId, req, sourceDepositPercent, actor, false);
+    }
+
+    /** {@code clientLines}: {@code req.items()} came from a client body (so {@link #echoOnly} distrusts them), not
+     * from the server's own quotation. */
+    private DepositNoticeDto createDraftInternal(long ticketId, DepositNoticeDraftRequest req,
+                                                 Integer sourceDepositPercent, UserPrincipal actor,
+                                                 boolean clientLines) {
         requireRole(actor, SALES_ROLES);
         requireTicketOwner(ticketId, actor);
         // The ticket row lock BEFORE any state check, as DealQuotationService#undoOrderConfirmation holds it while it
@@ -128,7 +136,7 @@ public class DepositNoticeService {
             throw zeroDepositRefusal(governing.number());
         }
         List<DepositNoticeItemRequest> items = buildItemsFromRequest(req, ticketId);
-        if (items == req.items()) items = echoOnly(items, List.of());
+        if (clientLines) items = echoOnly(items, List.of());
         boolean linesFromGoverning = items.isEmpty() && governing != null;
         if (linesFromGoverning) items = itemsFromGoverning(governing);
         List<String> notes = req.notes() != null ? req.notes()
@@ -1274,12 +1282,14 @@ public class DepositNoticeService {
     }
 
     /** A client line may only echo what the notice stores: its amount counts only when a stored line has the same
-     * qty, net and amount (else it is recomputed), and a negative qty only when a stored line has that qty. */
+     * qty, net and amount (else it is recomputed), and a negative qty may be kept but never added (the lines
+     * supplied with a given negative qty may not outnumber the stored lines with that qty). */
     private static List<DepositNoticeItemRequest> echoOnly(List<DepositNoticeItemRequest> supplied,
                                                            List<DepositNoticeItemDto> stored) {
         if (supplied == null) return null;
         return supplied.stream().map(it -> {
-            if (it.qty().signum() < 0 && stored.stream().noneMatch(s -> s.qty().compareTo(it.qty()) == 0)) {
+            if (it.qty().signum() < 0 && supplied.stream().filter(o -> o.qty().compareTo(it.qty()) == 0).count()
+                    > stored.stream().filter(s -> s.qty().compareTo(it.qty()) == 0).count()) {
                 throw new ApiException(HttpStatus.BAD_REQUEST, "จำนวนต้องไม่ติดลบ");
             }
             boolean echoed = it.amount() != null && stored.stream().anyMatch(s ->

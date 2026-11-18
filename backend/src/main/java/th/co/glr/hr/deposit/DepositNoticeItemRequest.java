@@ -9,6 +9,7 @@ import java.math.BigDecimal;
 public record DepositNoticeItemRequest(
     int        seq,
     @NotBlank  String     description,
+    // negative qty (the quotation's discount line) is validated in DepositNoticeService#echoOnly, not here
     @NotNull BigDecimal qty,
     @Size(max = 32) String unit,
     @NotNull @PositiveOrZero BigDecimal unitPrice,

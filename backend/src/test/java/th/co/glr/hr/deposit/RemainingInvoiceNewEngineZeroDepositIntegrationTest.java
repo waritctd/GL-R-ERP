@@ -290,6 +290,93 @@ class RemainingInvoiceNewEngineZeroDepositIntegrationTest extends AbstractPostgr
             new BigDecimal("10.00"), null, new BigDecimal("10.00"), null));
         assertThatThrownBy(() -> depositNotices.update(draft.id(), withItems(forged, items), owner))
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
+
+        // (d) the stored lines echoed back PLUS one extra qty -1 line (the stored discount's qty): a negative qty may
+        // be kept, never added
+        var withExtraDiscount = new java.util.ArrayList<>(putOf(draft, null).items());
+        withExtraDiscount.add(new DepositNoticeItemRequest(3, "ส่วนลดเพิ่ม", new BigDecimal("-1"), "",
+            new BigDecimal("400000.00"), null, new BigDecimal("400000.00"), null));
+        assertThatThrownBy(() -> depositNotices.update(draft.id(), withItems(forged, withExtraDiscount), owner))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
+    }
+
+    // The client create route (createDraft with req.items) is client input: a client amount is ignored (the stored
+    // amount is net x qty) and a negative qty is refused, whatever the quotation holds.
+    @Test
+    void aClientCreate_ignoresASuppliedAmount_andRefusesANegativeQty() {
+        long ticket = deal("REQUIRED");
+        long q = quotation(ticket, "PRICING_REQUEST", "ACCEPTED", "1000.00");
+        line(q, 1, "กระเบื้อง A", "10", "100.00");
+
+        var forgedAmount = new DepositNoticeItemRequest(1, "กระเบื้อง A", new BigDecimal("2"), "แผ่น",
+            new BigDecimal("100.00"), null, new BigDecimal("100.00"), new BigDecimal("1.00"));
+        var negative = new DepositNoticeItemRequest(2, "ส่วนลด", new BigDecimal("-1"), "",
+            new BigDecimal("500.00"), null, new BigDecimal("500.00"), null);
+
+        assertThatThrownBy(() -> depositNotices.createDraft(ticket, createBody(List.of(forgedAmount, negative)), owner))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
+
+        var draft = depositNotices.createDraft(ticket, createBody(List.of(forgedAmount)), owner);
+        assertThat(draft.items().get(0).amount()).isEqualByComparingTo("200.00");
+        assertThat(draft.subtotal()).isEqualByComparingTo("200.00");
+    }
+
+    // The same two guards at the endpoint (real controller, real service): POST create and PUT update.
+    @Test
+    void theEndpoints_refuseANewNegativeQty_with400() throws Exception {
+        long ticket = deal("REQUIRED");
+        long q = quotation(ticket, "PRICING_REQUEST", "ACCEPTED", "1000.00");
+        line(q, 1, "กระเบื้อง A", "10", "100.00");
+        var mvc = org.springframework.test.web.servlet.setup.MockMvcBuilders
+            .standaloneSetup(new DepositNoticeController(depositNotices, new th.co.glr.hr.auth.SessionContext()))
+            .setControllerAdvice(new th.co.glr.hr.common.ApiExceptionHandler()).build();
+        var session = new org.springframework.mock.web.MockHttpSession();
+        session.setAttribute(th.co.glr.hr.auth.SessionContext.SESSION_USER_KEY, owner);
+        String negativeLine = """
+            {"seq": 2, "description": "แถวใหม่", "qty": -5, "unit": "แผ่น", "unitPrice": 10, "netUnitPrice": 10}""";
+
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                .post("/api/tickets/" + ticket + "/deposit-notice/draft").session(session)
+                .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                .content("{\"items\": [" + negativeLine + "]}"))
+            .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isBadRequest())
+            .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.message")
+                .value("จำนวนต้องไม่ติดลบ"));
+
+        var draft = depositNotices.createDraft(ticket, createBody(null), owner);
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                .put("/api/deposit-notices/" + draft.id()).session(session)
+                .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                .content("{\"items\": [" + negativeLine + "]}"))
+            .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isBadRequest())
+            .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.message")
+                .value("จำนวนต้องไม่ติดลบ"));
+    }
+
+    // sales.quotation_item.final_unit_price is nullable (hand-written / migrated data): an ADJUSTMENT row without a net
+    // price must still become its own discount line (net = |amount| / |qty|), never be dropped or fail the insert.
+    @Test
+    void aDepositNotice_keepsAnAdjustmentRowWhoseNetPriceIsNull_withItsStoredAmount() {
+        long ticket = deal("REQUIRED");
+        long q = quotation(ticket, "PRICING_REQUEST", "ACCEPTED", "900.00");
+        line(q, 1, "กระเบื้อง A", "10", "100.00");
+        jdbc.update("""
+            INSERT INTO sales.quotation_item (quotation_id, seq, description, qty, raw_unit, unit_price, sales_discount,
+                                               final_unit_price, amount, line_type)
+            VALUES (:q, 2, 'ส่วนลดพิเศษ', -1, 'แผ่น', 100.00, 0, NULL, -100.00, 'ADJUSTMENT')
+            """, Map.of("q", q));
+
+        var draft = depositNotices.createDraft(ticket, createBody(null), owner);
+
+        assertThat(draft.items()).hasSize(2);
+        assertThat(draft.items().get(1).qty()).isEqualByComparingTo("-1");
+        assertThat(draft.items().get(1).amount()).isEqualByComparingTo("-100.00");
+        assertThat(draft.items().get(1).netUnitPrice()).isEqualByComparingTo("100.00");
+        assertThat(draft.subtotal()).isEqualByComparingTo("900.00");
+    }
+
+    private static DepositNoticeDraftRequest createBody(List<DepositNoticeItemRequest> items) {
+        return new DepositNoticeDraftRequest(null, null, null, null, null, null, null, items);
     }
 
     private static DepositNoticeDraftRequest withItems(DepositNoticeDraftRequest r, List<DepositNoticeItemRequest> items) {

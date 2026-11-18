@@ -454,9 +454,15 @@ public class DepositNoticeRepository {
                 String discountLabel = !adjustment && discount != null && discount.signum() > 0
                     ? "ส่วนลด " + discount.stripTrailingZeros().toPlainString() + " ต่อหน่วย"
                     : null;
+                BigDecimal qty = rs.getBigDecimal("qty");
+                BigDecimal net = rs.getBigDecimal("final_unit_price");
+                if (adjustment && net == null && qty != null && qty.signum() != 0) {
+                    // a hand-written row without a net price: derive it so the discount is kept, not lost
+                    net = rs.getBigDecimal("amount").abs().divide(qty.abs(), 2, java.math.RoundingMode.HALF_UP);
+                }
                 return new DepositNoticeItemRequest(
-                    rs.getInt("seq"), description, rs.getBigDecimal("qty"), unit,
-                    rs.getBigDecimal("unit_price"), discountLabel, rs.getBigDecimal("final_unit_price"),
+                    rs.getInt("seq"), description, qty, unit,
+                    rs.getBigDecimal("unit_price"), discountLabel, net,
                     rs.getBigDecimal("amount"));
             });
     }

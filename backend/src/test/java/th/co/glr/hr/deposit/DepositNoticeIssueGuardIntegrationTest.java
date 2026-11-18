@@ -288,9 +288,10 @@ class DepositNoticeIssueGuardIntegrationTest extends AbstractPostgresIntegration
             "ACME", "0100000000000", "Bangkok", "Showroom", "REF-2",
             new BigDecimal("0.40"), List.of(), secondDraftItems()), salesActor);
 
-        // secondDraftItems: net x qty sums to 75.02 (unit x qty 90.00, stored amounts 75.03, nets alone 43.34).
+        // secondDraftItems: the subtotal is the sum of the per-line rounded amounts (50.00 + 25.03 = 75.03); net x qty
+        // rounded once (75.02), unit x qty (90.00) and the nets alone (43.34) all differ.
         assertThat(updated.depositPercent()).isEqualByComparingTo("0.40");
-        assertThat(updated.subtotal()).isEqualByComparingTo("75.02");
+        assertThat(updated.subtotal()).isEqualByComparingTo("75.03");
         assertThat(updated.depositAmount()).isEqualByComparingTo("30.01");
         assertThat(updated.vatAmount()).isEqualByComparingTo("2.10");
         assertThat(updated.totalPayable()).isEqualByComparingTo("32.11");
@@ -304,15 +305,15 @@ class DepositNoticeIssueGuardIntegrationTest extends AbstractPostgresIntegration
             "ACME", "0100000000000", "Bangkok", "Showroom", "REF-2",
             new BigDecimal("0.30"), List.of(), null), salesActor);
         assertThat(nullItems.items()).isEqualTo(updated.items());
-        assertThat(nullItems.subtotal()).isEqualByComparingTo("75.02");
+        assertThat(nullItems.subtotal()).isEqualByComparingTo("75.03");
         assertThat(nullItems.depositAmount()).isEqualByComparingTo("22.51");
 
         DepositNoticeDto emptyItems = depositNoticeService.update(draftId, new DepositNoticeDraftRequest(
             "ACME", "0100000000000", "Bangkok", "Showroom", "REF-2",
             new BigDecimal("0.20"), List.of(), List.of()), salesActor);
         assertThat(emptyItems.items()).isEqualTo(updated.items());
-        assertThat(emptyItems.subtotal()).isEqualByComparingTo("75.02");
-        assertThat(emptyItems.depositAmount()).isEqualByComparingTo("15.00");
+        assertThat(emptyItems.subtotal()).isEqualByComparingTo("75.03");
+        assertThat(emptyItems.depositAmount()).isEqualByComparingTo("15.01");
     }
 
     // Two tabs on one draft: both loaded the same updatedAt. A saves; B's save with that now-stale
@@ -396,8 +397,8 @@ class DepositNoticeIssueGuardIntegrationTest extends AbstractPostgresIntegration
             new BigDecimal(depositPercent), List.of(), items, expectedUpdatedAt);
     }
 
-    // Fractional qty, net below unit: net x qty (49.995 + 25.025 = 75.02), unit x qty (90.00), the
-    // per-line rounded amounts (50.00 + 25.03 = 75.03) and the nets alone (43.34) all differ.
+    // Fractional qty, net below unit: the subtotal is the sum of the per-line rounded amounts (50.00 + 25.03 = 75.03);
+    // net x qty rounded once (49.995 + 25.025 = 75.02), unit x qty (90.00) and the nets alone (43.34) all differ.
     private List<DepositNoticeItemRequest> secondDraftItems() {
         return List.of(
             new DepositNoticeItemRequest(1, "Second draft item A", new BigDecimal("1.5"), "แผ่น",
