@@ -35,6 +35,7 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         approve: vi.fn(), reject: vi.fn(), createRevision: vi.fn(), createReorder: vi.fn(),
         cancel: vi.fn(), downloadPdf: vi.fn(), downloadXlsx: vi.fn(), promoteToDeal: vi.fn(), undoConfirmOrder: vi.fn(),
         displayNameOptions: vi.fn().mockResolvedValue({ items: [] }),
+        listForTicket: vi.fn(),
       },
       documentChain: { get: vi.fn() },
       depositNotices: { listByTicket: vi.fn(), createDraft: vi.fn(), issue: vi.fn(), downloadPdf: vi.fn() },
@@ -193,6 +194,19 @@ describe('QuotationEditorPage — the document chain card', () => {
     expect(dialog.getByText('2,900.00 บาท')).toBeTruthy();
     expect(dialog.queryByText('3,000.00 บาท')).toBeNull();
     expect(dialog.queryByText(/3,210\.00/)).toBeNull();
+  });
+
+  it('the issue dialog says when the saved draft\'s subtotal differs from its quotation, and ออกเอกสาร stays enabled', async () => {
+    const edited = { ...draftNotice, subtotal: 9000, reference: 'PO-77' };
+    api.documentChain.get.mockResolvedValue({ documentChain: confirmed({ deposit: { state: 'DRAFT', draftExists: true, noticeId: 31 } }) });
+    api.depositNotices.listByTicket.mockResolvedValue({ depositNotices: [edited] });
+    api.dealQuotations.listForTicket.mockResolvedValue({ items: [quotation()], orderConfirmedQuotationId: 5 });
+    renderPage();
+    fireEvent.click((await card()).getByRole('button', { name: 'ออกใบแจ้งยอดเงินรับมัดจำ' }));
+    const dialog = within(await screen.findByTestId('quotation-chain-deposit-dialog'));
+    expect((await dialog.findByTestId('deposit-issue-differs')).textContent)
+      .toBe('ใบเสนอราคา QT-2026-0005-1 มูลค่า 10,000.00 — ใบแจ้งนี้ 9,000.00');
+    expect(dialog.getByRole('button', { name: 'ออกเอกสาร' }).disabled).toBe(false);
   });
 
   it('an existing DRAFT is opened, never doubled: the button issues it and no second draft is created', async () => {

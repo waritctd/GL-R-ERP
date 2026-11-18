@@ -2,7 +2,7 @@ import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { DepositNoticePage } from './DepositNoticePage.jsx';
+import { DepositIssueSummary, DepositNoticePage } from './DepositNoticePage.jsx';
 import { api } from '../../api/index.js';
 import { downloadBlob } from '../../utils/download.js';
 
@@ -662,6 +662,106 @@ describe('DepositNoticePage', () => {
       await screen.findAllByText('บริษัท ทดสอบ จำกัด', { exact: false });
       await waitFor(() => expect(api.dealQuotations.listForTicket).toHaveBeenCalled());
       expect(screen.queryByTestId('deposit-percent-differs')).toBeNull();
+    });
+  });
+
+  // A notice's lines may be edited after it was drafted (an edited notice is the agreed amount, issuing is never
+  // blocked), so the page and the issue confirm say when the notice's subtotal is not its quotation's.
+  // validDraftDoc's subtotal is 5 x 100 = 500.
+  describe('notice subtotal differs from the quotation (non-blocking line)', () => {
+    const quotation = { id: 61, number: 'QT-2026-0042', depositPercent: 50, subtotalAmount: 800 };
+    const LINE = 'ใบเสนอราคา QT-2026-0042 มูลค่า 800.00 — ใบแจ้งนี้ 500.00';
+    function draftWith(over = {}) {
+      api.depositNotices.listByTicket.mockResolvedValue({
+        depositNotices: [{ ...validDraftDoc, reference: 'QT-2026-0042', ...over }],
+      });
+    }
+
+    it('shows the quotation and both subtotals, and leaves ออกเอกสาร enabled', async () => {
+      draftWith();
+      api.dealQuotations.listForTicket.mockResolvedValue({ items: [quotation] });
+      renderDepositNoticePage();
+
+      const line = await screen.findByTestId('deposit-subtotal-differs');
+      expect(line.textContent).toBe(LINE);
+      expect(screen.getByRole('button', { name: /ออกเอกสาร/ }).disabled).toBe(false);
+    });
+
+    it('shows nothing when the subtotals are equal', async () => {
+      draftWith();
+      api.dealQuotations.listForTicket.mockResolvedValue({ items: [{ ...quotation, subtotalAmount: 500 }] });
+      renderDepositNoticePage();
+
+      await screen.findAllByText('บริษัท ทดสอบ จำกัด', { exact: false });
+      await waitFor(() => expect(api.dealQuotations.listForTicket).toHaveBeenCalled());
+      expect(screen.queryByTestId('deposit-subtotal-differs')).toBeNull();
+    });
+
+    it('resolves the quotation by orderConfirmedQuotationId even when the reference is a PO number', async () => {
+      draftWith({ reference: 'PO-001' });
+      api.dealQuotations.listForTicket.mockResolvedValue({
+        items: [{ id: 60, number: 'QT-2026-0001', subtotalAmount: 1 }, quotation], orderConfirmedQuotationId: 61,
+      });
+      renderDepositNoticePage();
+
+      expect((await screen.findByTestId('deposit-subtotal-differs')).textContent).toBe(LINE);
+    });
+
+    it('falls back to the quotation whose number is the reference when the response names none', async () => {
+      draftWith();
+      api.dealQuotations.listForTicket.mockResolvedValue({
+        items: [{ id: 60, number: 'QT-2026-0001', subtotalAmount: 1 }, quotation], orderConfirmedQuotationId: null,
+      });
+      renderDepositNoticePage();
+
+      expect((await screen.findByTestId('deposit-subtotal-differs')).textContent).toBe(LINE);
+    });
+
+    it('shows nothing when no quotation resolves', async () => {
+      draftWith({ reference: 'PO-001' });
+      api.dealQuotations.listForTicket.mockResolvedValue({ items: [quotation], orderConfirmedQuotationId: null });
+      renderDepositNoticePage();
+
+      await screen.findAllByText('บริษัท ทดสอบ จำกัด', { exact: false });
+      await waitFor(() => expect(api.dealQuotations.listForTicket).toHaveBeenCalled());
+      expect(screen.queryByTestId('deposit-subtotal-differs')).toBeNull();
+    });
+
+    it('shows nothing on an issued notice', async () => {
+      draftWith({ status: 'ISSUED', docNumber: 'DN-0001' });
+      api.dealQuotations.listForTicket.mockResolvedValue({ items: [quotation] });
+      renderDepositNoticePage();
+
+      await screen.findAllByText('บริษัท ทดสอบ จำกัด', { exact: false });
+      await waitFor(() => expect(api.dealQuotations.listForTicket).toHaveBeenCalled());
+      expect(screen.queryByTestId('deposit-subtotal-differs')).toBeNull();
+    });
+
+    it('the issue confirm repeats the line', async () => {
+      draftWith();
+      api.dealQuotations.listForTicket.mockResolvedValue({ items: [quotation] });
+      renderDepositNoticePage();
+
+      await screen.findByTestId('deposit-subtotal-differs');
+      fireEvent.click(screen.getByRole('button', { name: /ออกเอกสาร/ }));
+      const dialog = await screen.findByRole('dialog');
+      expect(within(dialog).getByTestId('deposit-issue-differs').textContent).toBe(LINE);
+    });
+  });
+
+  describe('DepositIssueSummary quotation line', () => {
+    const base = { customerName: 'ลูกค้า', depositPercent: 0.3, subtotal: 500, deposit: 150, vatPercent: 0.07, vat: 10.5, total: 160.5 };
+
+    it('shows the line when the subtotal differs from the quotation\'s', () => {
+      render(<DepositIssueSummary {...base} quotation={{ number: 'QT-9', subtotalAmount: 800 }} />);
+      expect(screen.getByTestId('deposit-issue-differs').textContent).toBe('ใบเสนอราคา QT-9 มูลค่า 800.00 — ใบแจ้งนี้ 500.00');
+    });
+
+    it('shows nothing when equal, or when no quotation is given', () => {
+      const { rerender } = render(<DepositIssueSummary {...base} quotation={{ number: 'QT-9', subtotalAmount: 500 }} />);
+      expect(screen.queryByTestId('deposit-issue-differs')).toBeNull();
+      rerender(<DepositIssueSummary {...base} />);
+      expect(screen.queryByTestId('deposit-issue-differs')).toBeNull();
     });
   });
 

@@ -19,7 +19,9 @@ import { FormField, fieldErrorId } from '../../components/common/FormField.jsx';
 import { depositNoticeStatusLabel, formatThaiDate } from '../../utils/format.js';
 import { downloadBlob } from '../../utils/download.js';
 import { round2 } from '../quotations/quotationMeta.js';
-import { createDepositNoticeDraft } from './createDepositNoticeDraft.js';
+import {
+  createDepositNoticeDraft, dealQuotationsWithConfirmedQueryOptions, resolveNoticeQuotation, subtotalsDiffer,
+} from './createDepositNoticeDraft.js';
 import { invalidateDealDocuments } from '../documentChain/documentChain.js';
 
 function money(v) {
@@ -59,6 +61,11 @@ function isBlankRow(item) {
   return !String(item.description ?? '').trim() && !(lineNet(item) * (Number(item.qty) || 0));
 }
 
+// The one wording for "this notice's subtotal is not its quotation's", on the page and in every issue confirm.
+export function quotationDiffersText(quotation, noticeSubtotal) {
+  return `ใบเสนอราคา ${quotation.number} มูลค่า ${money(quotation.subtotalAmount)} — ใบแจ้งนี้ ${money(noticeSubtotal)}`;
+}
+
 /**
  * The confirm-before-issue body (drawing m-deposit-issue, 2026-11-16), shared by this editor and the deal page's
  * เงิน tab ออกเอกสาร. Display only: every figure is passed in by the caller — the served draft's subtotal /
@@ -81,9 +88,10 @@ function isBlankRow(item) {
  * one place that is always on screen with the ออกเอกสาร button on a short phone.
  */
 export function DepositIssueSummary({
-  customerName, depositPercent, subtotal, reference, deposit, vatPercent, vat, total, estimate = false,
+  customerName, depositPercent, subtotal, reference, deposit, vatPercent, vat, total, estimate = false, quotation = null,
 }) {
   const percent = Math.round(Number(depositPercent) * 100);
+  const differs = quotation != null && subtotalsDiffer(subtotal, quotation.subtotalAmount);
   return (
     <div className="flex flex-col gap-3.5">
       <DialogCallout tone="warn" testId="deposit-issue-warning">
@@ -98,6 +106,11 @@ export function DepositIssueSummary({
           {`มัดจำ ${percent}% · ${money(total)} บาท รวม VAT · ถึง ${customerName || 'ลูกค้า'}`}
         </DialogSummary>
       )}
+      {differs ? (
+        <p className="m-0 text-sm text-warning-dark" data-testid="deposit-issue-differs">
+          {quotationDiffersText(quotation, subtotal)}
+        </p>
+      ) : null}
       <DialogTable label="ยอดในใบแจ้งยอดเงินรับมัดจำ">
         <tbody>
           {estimate ? null : (
@@ -278,11 +291,9 @@ export function DepositNoticePage({ ticketId, onBack, showToast }) {
   });
   // Advisory only: the draft's reference is the QT number, so its quotation's own deposit % can be
   // compared with the % typed here. A failed read (e.g. no view access) just shows no hint.
-  const dealQuotationsQuery = useQuery({
-    queryKey: queryKeys.dealQuotationsByTicket(Number(ticketId)),
-    queryFn: () => api.dealQuotations.listForTicket(Number(ticketId)).then((response) => response.items ?? []),
-    retry: false,
-  });
+  // Read under the WITH-confirmed key (the full response, so `orderConfirmedQuotationId` is kept): the items-only
+  // `dealQuotationsByTicket` entry keeps its array shape for its other readers.
+  const dealQuotationsQuery = useQuery(dealQuotationsWithConfirmedQueryOptions(ticketId));
   const doc = useMemo(() => {
     const docs = depositNoticesQuery.data ?? [];
     const draft = docs.find((d) => d.status === 'DRAFT');
@@ -592,14 +603,14 @@ export function DepositNoticePage({ ticketId, onBack, showToast }) {
   }
 
   const isIssued = doc?.status === 'ISSUED';
-  const referencedQuotation = form.reference
-    ? (dealQuotationsQuery.data ?? []).find((q) => q.number === form.reference)
-    : null;
+  const referencedQuotation = resolveNoticeQuotation(dealQuotationsQuery.data, form.reference);
   const noticePercent = Math.round(Number(form.depositPercent) * 100);
   // A quotation with no % stored means the 30% default (as everywhere else).
   const quotationPercent = referencedQuotation ? (referencedQuotation.depositPercent ?? 30) : null;
   const percentDiffers = !isIssued && form.depositPercent !== '' && quotationPercent != null
     && quotationPercent !== noticePercent;
+  const subtotalDiffers = !isIssued && referencedQuotation != null
+    && subtotalsDiffer(subtotal, referencedQuotation.subtotalAmount);
 
   return (
     <div className="grid w-full grid-cols-1 gap-[18px] min-w-0 max-w-[1320px]">
@@ -883,11 +894,21 @@ export function DepositNoticePage({ ticketId, onBack, showToast }) {
                   label="มัดจำ %"
                   htmlFor="doc-deposit-percent"
                   error={fieldErrors.depositPercent}
-                  hint={percentDiffers
+                  hint={percentDiffers || subtotalDiffers
                     ? (
-                      <span data-testid="deposit-percent-differs">
-                        {`ใบเสนอราคา ${referencedQuotation.number} ระบุมัดจำ ${quotationPercent}% — ใบแจ้งนี้ใช้ ${noticePercent}%`}
-                      </span>
+                      <>
+                        {percentDiffers ? (
+                          <span data-testid="deposit-percent-differs">
+                            {`ใบเสนอราคา ${referencedQuotation.number} ระบุมัดจำ ${quotationPercent}% — ใบแจ้งนี้ใช้ ${noticePercent}%`}
+                          </span>
+                        ) : null}
+                        {percentDiffers && subtotalDiffers ? <br /> : null}
+                        {subtotalDiffers ? (
+                          <span data-testid="deposit-subtotal-differs">
+                            {quotationDiffersText(referencedQuotation, subtotal)}
+                          </span>
+                        ) : null}
+                      </>
                     )
                     : undefined}
                 >
@@ -954,6 +975,7 @@ export function DepositNoticePage({ ticketId, onBack, showToast }) {
         title="ยืนยันการออกเอกสาร"
         message={(
           <DepositIssueSummary estimate customerName={form.customerName} depositPercent={form.depositPercent}
+            subtotal={subtotal} quotation={referencedQuotation}
             deposit={deposit} vatPercent={vatPercent} vat={vat} total={total} />
         )}
         confirmLabel="ออกเอกสาร"

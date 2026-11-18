@@ -14,7 +14,9 @@ import { downloadBlob } from '../../utils/download.js';
 import {
   formatMoney, formatThaiDate, overdueBadgeLabel, paymentStageLabel, PAYMENT_KIND_LABEL,
 } from '../../utils/format.js';
-import { depositNoticesQueryOptions, pickDepositNotice } from '../deposits/createDepositNoticeDraft.js';
+import {
+  dealQuotationsWithConfirmedQueryOptions, depositNoticesQueryOptions, pickDepositNotice, resolveNoticeQuotation,
+} from '../deposits/createDepositNoticeDraft.js';
 import { DepositIssueSummary } from '../deposits/DepositNoticePage.jsx';
 import { canCreateDepositNoticeFromQuotation } from '../pricingRequests/pricingRequestMeta.js';
 import { newestQuotationByRequest } from '../quotations/quotationMeta.js';
@@ -154,6 +156,12 @@ export function DealPaymentSection({
   const [confirmIssue, setConfirmIssue] = useState(false);
 
   const depositQuery = useQuery({ ...depositNoticesQueryOptions(ticketId), enabled: !!ticketId && canReadDepositNotices });
+  // Read only while the issue confirm is open (and served from cache when the register already loaded it): the
+  // confirm names the quotation when the draft's subtotal is not its quotation's. A failed read shows no line.
+  const noticeQuotationsQuery = useQuery({
+    ...dealQuotationsWithConfirmedQueryOptions(ticketId),
+    enabled: !!ticketId && confirmIssue,
+  });
   const remainingQuery = useQuery({
     queryKey: queryKeys.storedRemainingInvoices(ticketId),
     queryFn: () => api.storedRemainingInvoices.listForTicket(ticketId).then((r) => r.remainingInvoices ?? []),
@@ -441,6 +449,7 @@ export function DealPaymentSection({
           message={(
             <DepositIssueSummary customerName={doc.customerName} depositPercent={doc.depositPercent}
               subtotal={doc.subtotal} reference={doc.reference}
+              quotation={resolveNoticeQuotation(noticeQuotationsQuery.data, doc.reference)}
               deposit={doc.depositAmount} vatPercent={doc.vatPercent} vat={doc.vatAmount} total={doc.totalPayable} />
           )}
           confirmLabel="ออกเอกสาร"
