@@ -1,0 +1,10 @@
+import { open, go, shoot, head } from './lib.mjs';
+const out = process.argv[2];
+const { browser, page } = await open('ฝ่ายขาย');
+page.on('pageerror', (e) => console.log('PAGEERROR', e.message.slice(0, 300)));
+page.on('console', (m) => { if (m.type() === 'error') console.log('CONSOLE', m.text().slice(0, 200)); });
+await go(page, '/tickets/22/remaining-invoice'); await shoot(page, `${out}/a_inv.png`);
+console.log('INV:', await head(page, 500));
+const o = await page.evaluate(async () => { const url = performance.getEntriesByType('resource').map((r) => r.name).find((n) => n.includes('/src/api/index.js')); const { api } = await import(url); const r = await api.tickets.remainingInvoiceOptions(22); return JSON.stringify(r.options).slice(0, 700); });
+console.log(o);
+await browser.close();

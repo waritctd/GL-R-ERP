@@ -12,9 +12,11 @@ import {
 import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { Panel } from '../../components/common/Layout.jsx';
+import { OverflowMenu } from '../../components/common/OverflowMenu.jsx';
+import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { Skeleton, SkeletonText } from '../../components/common/Skeleton.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
-import { fieldErrorId } from '../../components/common/FormField.jsx';
+import { FormField, fieldErrorId } from '../../components/common/FormField.jsx';
 import { depositNoticeStatusLabel, formatThaiDate } from '../../utils/format.js';
 import { downloadBlob } from '../../utils/download.js';
 import { round2 } from '../quotations/quotationMeta.js';
@@ -50,6 +52,8 @@ function lineAmount(item) {
 
 // An untouched เพิ่มรายการ row (or one emptied again): no description and nothing to bill. Left
 // out of the save (the backend refuses a line without a description) and of the issue checks.
+// The quotation document view's item grid (QuotationDocumentView ITEM_GRID), so both documents read as one table.
+const NOTICE_ITEM_GRID = 'grid-cols-[minmax(0,3fr)_minmax(5.75rem,0.8fr)_minmax(5.75rem,0.9fr)_minmax(3.5rem,0.6fr)_minmax(5.75rem,0.9fr)_minmax(8.25rem,1fr)] tablet:min-w-0 reflow-cards';
 const NO_ITEMS_MESSAGE = 'กรุณาเพิ่มรายการสินค้าอย่างน้อย 1 รายการ';
 
 function isBlankRow(item) {
@@ -596,81 +600,67 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
 
   return (
     <div className="grid w-full grid-cols-1 gap-[18px] min-w-0 max-w-[1320px]">
-      <Breadcrumbs
-        items={[
-          { label: 'งานทั้งหมด', onClick: onNavigateTickets },
-          { label: form.customerName || 'รายละเอียดงาน', onClick: onBack },
-          { label: 'ใบแจ้งยอดเงินรับมัดจำ' },
-        ]}
+      <PageHeader
+        title={`ใบแจ้งยอดเงินรับมัดจำ${doc?.docNumber ? ` ${doc.docNumber}` : ''}`}
+        subtitle={doc
+          ? [form.customerName, form.projectName].filter(Boolean).join(' · ') || undefined
+          : 'สร้างเอกสารฉบับร่างเพื่อเริ่มกรอกรายละเอียด'}
+        context={doc ? (
+          <>
+            <StatusBadge tone={depositNoticeStatusLabel(doc.status).tone}>
+              {depositNoticeStatusLabel(doc.status).label}
+            </StatusBadge>
+            {doc.version > 1 ? <span className="text-sm text-text-muted">ครั้งที่ {doc.version}</span> : null}
+          </>
+        ) : null}
+        actions={doc ? (
+          <>
+            <OverflowMenu
+              label="ดาวน์โหลด"
+              triggerLabel="ดาวน์โหลด"
+              triggerIcon="download"
+              align="start"
+              items={[
+                { key: 'pdf', label: 'PDF', icon: 'fileText', onSelect: handleDownloadPdf, disabled: downloading != null, disabledReason: 'กำลังดาวน์โหลด…' },
+                { key: 'xlsx', label: 'Excel', icon: 'fileText', onSelect: handleDownloadXlsx, disabled: downloading != null, disabledReason: 'กำลังดาวน์โหลด…' },
+              ]}
+            />
+            {!isIssued ? (
+              <Button variant="primary" onClick={handleIssue} disabled={saving}>ออกเอกสาร</Button>
+            ) : null}
+          </>
+        ) : null}
       />
-      {/* Mobile overflow fix: this row previously had no flexWrap, so the back button + title + 3 action buttons
-       * forced .content-scroll into horizontal scroll at 375px — burying the primary "ออกเอกสาร" action off the
-       * right edge with no visible scrollbar affordance. */}
-      <header className="flex flex-wrap items-start gap-3 mb-1">
-        <Button variant="secondary" onClick={onBack}>
-          <Icon name="chevronLeft" size={14} /> กลับ
-        </Button>
-        <div className="min-w-[220px] flex-1">
-          <h1 className="m-0 text-[20px] font-extrabold">
-            ใบแจ้งยอดเงินรับมัดจำ
-            {doc?.version > 1 && (
-              <span className="ml-2 text-sm font-normal text-text-muted">ครั้งที่ {doc.version}</span>
-            )}
-          </h1>
-          {doc && (
-            <div className="mt-1 flex items-center gap-2">
-              {doc.docNumber && (
-                <code className="rounded bg-surface-subtle px-2 py-0.5 text-xs">{doc.docNumber}</code>
-              )}
-              {/* GLA-117: `doc` here is always the ticket's DRAFT or latest ISSUED notice (see the draft ?? */}
-              <StatusBadge tone={depositNoticeStatusLabel(doc.status).tone}>
-                {depositNoticeStatusLabel(doc.status).label}
-              </StatusBadge>
-            </div>
-          )}
-          {/* Summary line: who this document is for and who prepared/issued it. Every field below already comes back on
-           * `doc` from api.depositNotices.get/createDraft/issue (src/api/mockApi.js ~L2266-2345) — no new API calls,
-           * nothing invented. Pieces are omitted individually when the underlying field is empty. */}
-          {doc && (
-            <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-sm text-text-muted">
-              {doc.customerName && (
-                <span>ลูกค้า <strong className="text-text-secondary">{doc.customerName}</strong></span>
-              )}
-              {isIssued ? (
-                <span>ออกโดย <strong className="text-text-secondary">{doc.issuedByName || '-'}</strong> · {formatThaiDate(doc.issueDate)}</span>
-              ) : (
-                doc.preparerName && <span>จัดทำโดย <strong className="text-text-secondary">{doc.preparerName}</strong></span>
-              )}
-            </div>
-          )}
-        </div>
-        {/* Save/Preview/ออกเอกสาร only render once a document actually exists — previously these rendered whenever
-         * `!isIssued` (true for `doc === null` too), so a failed load or a not-yet-created draft still offered three
-         * live-looking buttons whose handlers silently no-op'd on `if (!doc) return;`. */}
-        {doc && !isIssued && (
-          <div className="flex flex-wrap gap-2">
-            <Button variant="secondary" onClick={handleSave} disabled={saving}>
-              บันทึก
-            </Button>
-            <Button variant="secondary" onClick={handlePreview} disabled={saving}>
-              <Icon name="fileText" size={14} /> Preview
-            </Button>
-            <Button variant="primary" onClick={handleIssue} disabled={saving}>
-              <Icon name="check" size={14} /> ออกเอกสาร
-            </Button>
-          </div>
-        )}
-        {doc && isIssued && (
-          <div className="flex flex-wrap gap-2">
-            <Button variant="secondary" onClick={handleDownloadXlsx} disabled={downloading === 'xlsx'}>
-              <Icon name="fileText" size={14} /> {downloading === 'xlsx' ? 'กำลังดาวน์โหลด…' : 'ดาวน์โหลด Excel'}
-            </Button>
-            <Button variant="secondary" onClick={handleDownloadPdf} disabled={downloading === 'pdf'}>
-              <Icon name="fileText" size={14} /> {downloading === 'pdf' ? 'กำลังดาวน์โหลด…' : 'ดาวน์โหลด PDF'}
-            </Button>
-          </div>
-        )}
-      </header>
+
+      <div className="flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1.5 text-sm">
+        <span className="font-bold text-text-muted">งาน</span>
+        <span className="min-w-0 max-w-full truncate font-bold text-text">{form.customerName || '-'}</span>
+        {form.reference ? (
+          <>
+            <span aria-hidden="true" className="text-text-muted">·</span>
+            <span className="text-text-muted">อ้างอิง</span>
+            <code className="font-mono text-sm text-text">{form.reference}</code>
+          </>
+        ) : null}
+        {doc ? (
+          <>
+            <span aria-hidden="true" className="text-text-muted">·</span>
+            <span className="text-text-muted">
+              {isIssued
+                ? `ออกโดย ${doc.issuedByName || '-'} · ${formatThaiDate(doc.issueDate)}`
+                : doc.preparerName ? `จัดทำโดย ${doc.preparerName}` : ''}
+            </span>
+          </>
+        ) : null}
+        <button
+          type="button"
+          onClick={onBack}
+          className="inline-flex min-h-[38px] cursor-pointer items-center gap-1 rounded-md border-0 bg-transparent p-0 font-bold text-primary hover:text-primary-hover mobile:min-h-[44px]"
+        >
+          เปิดงาน
+          <Icon name="chevronRight" size={14} />
+        </button>
+      </div>
 
       {loadError && !doc ? (
         <Panel>
@@ -696,279 +686,260 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
           </div>
         </Panel>
       ) : (
-      <div className={previewHtml ? 'grid grid-cols-2 gap-4' : 'grid grid-cols-1 gap-4'}>
-        {/* ── Left: Form ── */}
-        {/* min-width: 0 fix: this flex column is a CSS-grid item (parent grid at previewHtml ? grid-cols-2 :
-         * grid-cols-1) and, like all flex/grid items, defaults to min-width: auto — it refuses to shrink below its
-         * content's min-content width. */}
-        <div className="flex min-w-0 flex-col gap-3.5">
-
-          {/* Customer */}
+        <>
           <Panel title="ข้อมูลลูกค้า">
-            <div className="flex flex-col gap-2.5 px-4.5 py-3.5">
-              <div className="relative">
-                <label htmlFor="doc-customer-search" className="text-xs">ค้นหาลูกค้า (master)</label>
-                <input
-                  id="doc-customer-search"
-                  value={customerSearch}
-                  onChange={(e) => setCsSearch(e.target.value)}
-                  placeholder="ชื่อบริษัท หรือ เลขภาษี…"
-                />
-                {customerSearch && customers.length > 0 && (
-                  <div className="absolute left-0 right-0 top-full z-50 max-h-[180px] overflow-y-auto rounded-[6px] border border-border-subtle bg-surface shadow-[0_4px_12px_rgba(0,0,0,0.1)]">
-                    {customers.map((c) => (
-                      <button key={c.id} type="button"
-                        onClick={() => selectCustomer(c)}
-                        className="w-full cursor-pointer border-0 border-b border-surface-subtle bg-transparent px-3 py-2 text-left text-sm text-text">
-                        <strong className="block">{c.name}</strong>
-                        <span className="text-2xs text-text-muted">{c.taxId} · {c.address}</span>
-                      </button>
-                    ))}
-                  </div>
-                )}
+            {isIssued ? (
+              <div className="grid grid-cols-2 gap-3 mobile:grid-cols-1 text-sm">
+                <div>
+                  <span className="block text-2xs font-bold uppercase text-text-muted">ลูกค้า</span>
+                  <strong>{form.customerName || '-'}</strong>
+                </div>
+                <div>
+                  <span className="block text-2xs font-bold uppercase text-text-muted">โครงการ</span>
+                  <strong>{form.projectName || '-'}</strong>
+                </div>
+                <div>
+                  <span className="block text-2xs font-bold uppercase text-text-muted">เลขที่ผู้เสียภาษี</span>
+                  <strong>{form.customerTaxId || '-'}</strong>
+                </div>
+                <div>
+                  <span className="block text-2xs font-bold uppercase text-text-muted">อ้างอิง PO / ใบเสนอราคา</span>
+                  <strong>{form.reference || '-'}</strong>
+                </div>
+                <div className="col-span-full">
+                  <span className="block text-2xs font-bold uppercase text-text-muted">ที่อยู่</span>
+                  <strong className="whitespace-pre-line">{form.customerAddress || '-'}</strong>
+                </div>
               </div>
-              <label className="text-xs">
-                ชื่อบริษัท / หน่วยงาน *
-                <input
-                  id="doc-customer-name"
-                  ref={(el) => { fieldRefs.current.customerName = el; }}
-                  value={form.customerName} disabled={isIssued}
-                  onChange={(e) => setField('customerName', e.target.value)} placeholder="บริษัท…"
-                  aria-required="true"
-                  aria-invalid={fieldErrors.customerName ? true : undefined}
-                  aria-describedby={fieldErrors.customerName ? fieldErrorId('doc-customer-name') : undefined}
-                />
-              </label>
-              {fieldErrors.customerName ? (
-                <p id={fieldErrorId('doc-customer-name')} role="alert" className="m-0 text-2xs font-bold text-danger">
-                  {fieldErrors.customerName}
-                </p>
-              ) : null}
-              <label className="text-xs">
-                เลขประจำตัวผู้เสียภาษี
-                <input value={form.customerTaxId} disabled={isIssued}
-                  onChange={(e) => setField('customerTaxId', e.target.value)} placeholder="0000000000000" />
-              </label>
-              <label className="text-xs">
-                ที่อยู่
-                <textarea rows={2} value={form.customerAddress} disabled={isIssued}
-                  onChange={(e) => setField('customerAddress', e.target.value)} placeholder="ที่อยู่…" className="resize-y" />
-              </label>
-              <div className="grid grid-cols-2 gap-2.5">
-                <label className="text-xs">
-                  ชื่อโครงการ
-                  <input value={form.projectName} disabled={isIssued}
+            ) : (
+              <div className="grid grid-cols-2 gap-3 mobile:grid-cols-1">
+                <div className="relative col-span-full">
+                  <FormField label="ค้นหาลูกค้า (master)" htmlFor="doc-customer-search">
+                    <input
+                      id="doc-customer-search"
+                      value={customerSearch}
+                      onChange={(e) => setCsSearch(e.target.value)}
+                      placeholder="ชื่อบริษัท หรือ เลขภาษี…"
+                    />
+                  </FormField>
+                  {customerSearch && customers.length > 0 && (
+                    <div className="absolute left-0 right-0 top-full z-50 max-h-[180px] overflow-y-auto rounded-[6px] border border-border-subtle bg-surface shadow-[0_4px_12px_rgba(0,0,0,0.1)]">
+                      {customers.map((c) => (
+                        <button key={c.id} type="button"
+                          onClick={() => selectCustomer(c)}
+                          className="w-full cursor-pointer border-0 border-b border-surface-subtle bg-transparent px-3 py-2 text-left text-sm text-text">
+                          <strong className="block">{c.name}</strong>
+                          <span className="text-2xs text-text-muted">{c.taxId} · {c.address}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                <FormField label="ชื่อบริษัท / หน่วยงาน" htmlFor="doc-customer-name" required error={fieldErrors.customerName}>
+                  <input
+                    id="doc-customer-name"
+                    ref={(el) => { fieldRefs.current.customerName = el; }}
+                    value={form.customerName}
+                    onChange={(e) => setField('customerName', e.target.value)} placeholder="บริษัท…"
+                  />
+                </FormField>
+                <FormField label="เลขประจำตัวผู้เสียภาษี" htmlFor="doc-customer-tax">
+                  <input id="doc-customer-tax" value={form.customerTaxId}
+                    onChange={(e) => setField('customerTaxId', e.target.value)} placeholder="0000000000000" />
+                </FormField>
+                <div className="col-span-full">
+                  <FormField label="ที่อยู่" htmlFor="doc-customer-address">
+                    <textarea id="doc-customer-address" rows={2} value={form.customerAddress}
+                      onChange={(e) => setField('customerAddress', e.target.value)} placeholder="ที่อยู่…" className="resize-y" />
+                  </FormField>
+                </div>
+                <FormField label="โครงการ" htmlFor="doc-project">
+                  <input id="doc-project" value={form.projectName}
                     onChange={(e) => setField('projectName', e.target.value)} placeholder="โครงการ…" />
-                </label>
-                <label className="text-xs">
-                  อ้างอิง PO / ใบเสนอราคา
-                  <input value={form.reference} disabled={isIssued}
+                </FormField>
+                <FormField label="อ้างอิง PO / ใบเสนอราคา" htmlFor="doc-reference">
+                  <input id="doc-reference" value={form.reference}
                     onChange={(e) => setField('reference', e.target.value)} placeholder="PO-XXXX" />
-                </label>
+                </FormField>
               </div>
-            </div>
+            )}
           </Panel>
 
-          {/* Items table */}
-          <Panel title={`รายการสินค้า (${form.items.length} รายการ)`}>
-            {/* UX-03: this whole panel body is the scroll/focus target for the "at least 1 line item" rule — there's no
-             * single input to point at when the list is empty, so (like TicketCreateModal's project selector) the wrapper
-             * itself carries aria-invalid/ aria-describedby and a tabIndex so it's focusable. */}
+          <Panel title="รายการสินค้า" flush>
             <div
               id="doc-items-panel"
               ref={(el) => { fieldRefs.current.items = el; }}
               tabIndex={-1}
               aria-invalid={fieldErrors.items ? true : undefined}
               aria-describedby={fieldErrors.items ? fieldErrorId('doc-items-panel') : undefined}
-              className="px-4.5 pb-3.5"
             >
-              {/* Muted Floor fix: was Ink Faint (#94a3b8) on a table header label — DESIGN.md specifies Ink Muted (#5c6b80)
-               * for `.table-head` overline text. */}
-              <div className="grid grid-cols-[minmax(0,3fr)_minmax(0,60px)_minmax(0,80px)_minmax(0,80px)_minmax(0,80px)] gap-1.5 border-b border-border py-2 text-2xs font-bold text-text-muted">
-                <span>รายละเอียด</span><span className="text-right">จำนวน</span>
+              <div className={`${NOTICE_ITEM_GRID} table-head`}>
+                <span>รายละเอียด</span>
+                <span className="text-right">จำนวน</span>
                 <span className="text-right">ราคา/หน่วย</span>
-                <span className="text-right">ราคาสุทธิ</span>
+                <span className="text-right">ส่วนลด</span>
+                <span className="text-right">สุทธิ</span>
                 <span className="text-right">เป็นเงิน</span>
               </div>
-              {form.items.map((it, idx) => (
-                <div key={idx} className="grid grid-cols-[minmax(0,3fr)_minmax(0,60px)_minmax(0,80px)_minmax(0,80px)_minmax(0,80px)] items-center gap-1.5 border-b border-surface-muted py-1.5">
-                  {isIssued ? (
-                    <>
-                      <span className="text-sm">{it.description}</span>
-                      <span className="text-right text-sm">{it.qty}</span>
-                      <span className="text-right text-sm">{money(it.unitPrice)}</span>
-                      <span className="text-right text-sm">{money(it.netUnitPrice)}</span>
-                      <code className="text-right text-xs">{money(lineAmount(it))}</code>
-                    </>
-                  ) : (
-                    <>
-                      <div>
-                        <input
-                          id={`doc-item-${idx}-description`}
-                          ref={(el) => { fieldRefs.current[`items.${idx}.description`] = el; }}
-                          value={it.description ?? ''} placeholder="รายละเอียดสินค้า"
-                          onChange={(e) => setItemField(idx, 'description', e.target.value)}
-                          aria-invalid={fieldErrors[`items.${idx}.description`] ? true : undefined}
-                          aria-describedby={fieldErrors[`items.${idx}.description`] ? fieldErrorId(`doc-item-${idx}-description`) : undefined}
-                          className="w-full box-border text-xs" />
-                        {fieldErrors[`items.${idx}.description`] ? (
-                          <p id={fieldErrorId(`doc-item-${idx}-description`)} role="alert" className="mx-0 mb-0 mt-0.5 text-[10px] font-bold text-danger">
-                            {fieldErrors[`items.${idx}.description`]}
-                          </p>
-                        ) : null}
-                      </div>
-                      <div>
-                        {it.discount ? <span className="block text-right text-xs">{it.qty}</span> : <input type="number" value={it.qty ?? ''} placeholder="จำนวน"
-                          id={`doc-item-${idx}-qty`}
-                          ref={(el) => { fieldRefs.current[`items.${idx}.qty`] = el; }}
-                          onChange={(e) => setItemField(idx, 'qty', e.target.value)}
-                          aria-invalid={fieldErrors[`items.${idx}.qty`] ? true : undefined}
-                          aria-describedby={fieldErrors[`items.${idx}.qty`] ? fieldErrorId(`doc-item-${idx}-qty`) : undefined}
-                          className="w-full box-border text-right text-xs" />}
-                        {fieldErrors[`items.${idx}.qty`] ? (
-                          <p id={fieldErrorId(`doc-item-${idx}-qty`)} role="alert" className="mx-0 mb-0 mt-0.5 text-[10px] font-bold text-danger">
-                            {fieldErrors[`items.${idx}.qty`]}
-                          </p>
-                        ) : null}
-                      </div>
-                      <input type="number" value={it.unitPrice ?? ''} placeholder="ราคา"
-                        onChange={(e) => setItemField(idx, 'unitPrice', e.target.value)}
-                        className="text-right text-xs" />
-                      <input type="number" value={it.netUnitPrice ?? it.unitPrice ?? ''} placeholder="สุทธิ"
-                        onChange={(e) => setItemField(idx, 'netUnitPrice', e.target.value)}
-                        className="text-right text-xs" />
-                      <code className="text-right text-xs text-text-secondary">
-                        {money(lineAmount(it))}
-                      </code>
-                    </>
-                  )}
+              {form.items.map((it, idx) => {
+                const unitPrice = Number(it.unitPrice) || 0;
+                const net = Number(it.netUnitPrice ?? it.unitPrice) || 0;
+                const discount = unitPrice > net ? `ลด ${money(unitPrice - net)}` : '';
+                const amount = lineAmount(it);
+                return (
+                  <div key={idx} className={`${NOTICE_ITEM_GRID} data-row`}>
+                    {isIssued ? (
+                      <>
+                        <span className="min-w-0"><span className="font-bold">{it.description}</span></span>
+                        <span className="tabular-nums text-right">{Number(it.qty).toLocaleString('th-TH')} {it.unit ?? ''}</span>
+                        <span className="tabular-nums text-right">฿{money(it.unitPrice)}</span>
+                        <span className="tabular-nums text-right">{discount}</span>
+                        <span className="tabular-nums text-right">฿{money(net)}</span>
+                        <span className="tabular-nums text-right font-bold">฿{money(amount)}</span>
+                      </>
+                    ) : (
+                      <>
+                        <span className="min-w-0">
+                          <input
+                            id={`doc-item-${idx}-description`}
+                            ref={(el) => { fieldRefs.current[`items.${idx}.description`] = el; }}
+                            value={it.description ?? ''} placeholder="รายละเอียดสินค้า"
+                            onChange={(e) => setItemField(idx, 'description', e.target.value)}
+                            aria-label={`รายละเอียดรายการที่ ${idx + 1}`}
+                            aria-invalid={fieldErrors[`items.${idx}.description`] ? true : undefined}
+                            aria-describedby={fieldErrors[`items.${idx}.description`] ? fieldErrorId(`doc-item-${idx}-description`) : undefined}
+                            className="w-full" />
+                          {fieldErrors[`items.${idx}.description`] ? (
+                            <span id={fieldErrorId(`doc-item-${idx}-description`)} role="alert" className="mt-1 block text-2xs font-bold text-danger">
+                              {fieldErrors[`items.${idx}.description`]}
+                            </span>
+                          ) : null}
+                        </span>
+                        <span>
+                          {it.discount ? <span className="block tabular-nums text-right">{it.qty}</span> : <input type="number" value={it.qty ?? ''} placeholder="จำนวน"
+                            id={`doc-item-${idx}-qty`}
+                            ref={(el) => { fieldRefs.current[`items.${idx}.qty`] = el; }}
+                            onChange={(e) => setItemField(idx, 'qty', e.target.value)}
+                            aria-label={`จำนวนรายการที่ ${idx + 1}`}
+                            aria-invalid={fieldErrors[`items.${idx}.qty`] ? true : undefined}
+                            aria-describedby={fieldErrors[`items.${idx}.qty`] ? fieldErrorId(`doc-item-${idx}-qty`) : undefined}
+                            className="w-full text-right" />}
+                          {fieldErrors[`items.${idx}.qty`] ? (
+                            <span id={fieldErrorId(`doc-item-${idx}-qty`)} role="alert" className="mt-1 block text-2xs font-bold text-danger">
+                              {fieldErrors[`items.${idx}.qty`]}
+                            </span>
+                          ) : null}
+                        </span>
+                        <span>
+                          <input type="number" value={it.unitPrice ?? ''} placeholder="ราคา"
+                            aria-label={`ราคาต่อหน่วยรายการที่ ${idx + 1}`}
+                            onChange={(e) => setItemField(idx, 'unitPrice', e.target.value)}
+                            className="w-full text-right" />
+                        </span>
+                        <span className="tabular-nums text-right">{discount}</span>
+                        <span>
+                          <input type="number" value={it.netUnitPrice ?? it.unitPrice ?? ''} placeholder="สุทธิ"
+                            aria-label={`ราคาสุทธิรายการที่ ${idx + 1}`}
+                            onChange={(e) => setItemField(idx, 'netUnitPrice', e.target.value)}
+                            className="w-full text-right" />
+                        </span>
+                        <span className="tabular-nums text-right font-bold">฿{money(amount)}</span>
+                      </>
+                    )}
+                  </div>
+                );
+              })}
+              {!isIssued ? (
+                <div className="flex flex-wrap items-center gap-3 border-t border-border px-5 py-4">
+                  <Button variant="secondary"
+                    onClick={() => {
+                      setForm((f) => ({ ...f, items: [...f.items, { seq: f.items.length + 1, description: '', qty: 1, unit: 'แผ่น', unitPrice: 0, netUnitPrice: 0 }] }));
+                      clearFieldError('items');
+                    }}>
+                    <Icon name="plus" size={14} /> เพิ่มรายการ
+                  </Button>
+                  {fieldErrors.items ? (
+                    <p id={fieldErrorId('doc-items-panel')} role="alert" className="m-0 text-xs font-bold text-danger">
+                      {fieldErrors.items}
+                    </p>
+                  ) : null}
                 </div>
-              ))}
-              {!isIssued && (
-                <Button variant="secondary" className="mt-2 text-xs"
-                  onClick={() => {
-                    setForm((f) => ({ ...f, items: [...f.items, { seq: f.items.length + 1, description: '', qty: 1, unit: 'แผ่น', unitPrice: 0, netUnitPrice: 0 }] }));
-                    clearFieldError('items');
-                  }}>
-                  <Icon name="plus" size={12} /> เพิ่มรายการ
-                </Button>
-              )}
-              {fieldErrors.items ? (
-                <p id={fieldErrorId('doc-items-panel')} role="alert" className="mx-0 mb-0 mt-2 text-xs font-bold text-danger">
-                  {fieldErrors.items}
-                </p>
               ) : null}
             </div>
           </Panel>
 
-          {/* Notes */}
-          <Panel title="หมายเหตุ">
-            <div className="flex flex-col gap-2 px-4.5 py-3.5">
-              {noteTemplates.map((t) => (
-                <label key={t.id} className={`flex items-start gap-2 text-sm leading-normal ${isIssued ? 'cursor-default' : 'cursor-pointer'}`}>
-                  <input type="checkbox" disabled={isIssued}
-                    checked={form.notes.includes(t.text)}
-                    onChange={() => toggleNote(t.text)}
-                    className={`mt-[3px] h-3.5 w-3.5 shrink-0 accent-info-dot ${isIssued ? 'cursor-default' : 'cursor-pointer'}`} />
-                  <span className="min-w-0 flex-1">{t.text}</span>
-                </label>
-              ))}
+          <Panel title="เงื่อนไข">
+            <div className="grid grid-cols-2 gap-3 mobile:grid-cols-1">
+              {isIssued ? (
+                <div className="text-sm">
+                  <span className="block text-2xs font-bold uppercase text-text-muted">มัดจำ</span>
+                  <strong>{noticePercent}%</strong>
+                </div>
+              ) : (
+                <FormField
+                  label="มัดจำ %"
+                  htmlFor="doc-deposit-percent"
+                  error={fieldErrors.depositPercent}
+                  hint={percentDiffers
+                    ? `ใบเสนอราคา ${referencedQuotation.number} ระบุมัดจำ ${quotationPercent}% — ใบแจ้งนี้ใช้ ${noticePercent}%`
+                    : undefined}
+                >
+                  <input type="number" min="1" max="100" step="1"
+                    id="doc-deposit-percent"
+                    ref={(el) => { fieldRefs.current.depositPercent = el; }}
+                    value={form.depositPercent === '' ? '' : Math.round(Number(form.depositPercent) * 100)}
+                    onChange={(e) => setField('depositPercent', e.target.value === '' ? '' : Math.round(Number(e.target.value)) / 100)} />
+                </FormField>
+              )}
+              <div className="col-span-full">
+                <span className="mb-1.5 block text-sm font-bold text-text-secondary">หมายเหตุในเอกสาร</span>
+                <div className="flex flex-col gap-2">
+                  {noteTemplates.map((t) => (
+                    <label key={t.id} className={`flex items-start gap-2 text-sm leading-normal ${isIssued ? 'cursor-default' : 'cursor-pointer'}`}>
+                      <input type="checkbox" disabled={isIssued}
+                        checked={form.notes.includes(t.text)}
+                        onChange={() => toggleNote(t.text)}
+                        className={`mt-[3px] h-3.5 w-3.5 shrink-0 accent-info-dot ${isIssued ? 'cursor-default' : 'cursor-pointer'}`} />
+                      <span className="min-w-0 flex-1">{t.text}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
             </div>
           </Panel>
 
-          {/* Summary + Deposit % */}
-          <Panel title="สรุปยอด">
-            {/* UX-03: scroll/focus target for the "total must be > 0" rule — total is a computed value with no single input
-             * of its own, so (same technique as doc-items-panel above) this wrapper carries the
-             * aria-invalid/aria-describedby contract itself. */}
+          <Panel title="ยอดรวม">
             <div
               id="doc-summary-panel"
               ref={(el) => { fieldRefs.current.total = el; }}
               tabIndex={-1}
               aria-invalid={fieldErrors.total ? true : undefined}
               aria-describedby={fieldErrors.total ? fieldErrorId('doc-summary-panel') : undefined}
-              className="px-4.5 py-3.5"
+              className="flex flex-col items-end gap-1"
             >
-              {/* Owner ruling 2026-10-23: the % starts from the quotation; sales may change it on
-                  a DRAFT (whole number on screen, a fraction in the payload). Read-only once issued. */}
-              <label className="mb-3 block text-xs">
-                % มัดจำ
-                <input type="number" min="1" max="100" step="1" disabled={isIssued}
-                  id="doc-deposit-percent"
-                  ref={(el) => { fieldRefs.current.depositPercent = el; }}
-                  value={form.depositPercent === '' ? '' : Math.round(Number(form.depositPercent) * 100)}
-                  onChange={(e) => setField('depositPercent', e.target.value === '' ? '' : Math.round(Number(e.target.value)) / 100)}
-                  aria-invalid={fieldErrors.depositPercent ? true : undefined}
-                  aria-describedby={fieldErrors.depositPercent ? fieldErrorId('doc-deposit-percent') : undefined}
-                  className="text-right" />
-              </label>
-              {percentDiffers ? (
-                <p data-testid="deposit-percent-differs" className="mx-0 mb-2 mt-0 text-xs text-warning-dark">
-                  ใบเสนอราคา {referencedQuotation.number} ระบุมัดจำ {quotationPercent}% — ใบแจ้งนี้ใช้ {noticePercent}%
-                </p>
-              ) : null}
-              {fieldErrors.depositPercent ? (
-                <p id={fieldErrorId('doc-deposit-percent')} role="alert" className="mx-0 mb-2 mt-0 text-xs font-bold text-danger">
-                  {fieldErrors.depositPercent}
-                </p>
-              ) : null}
-              {[
-                { label: 'รวมเป็นเงิน', value: subtotal },
-                { label: `ขอรับเงินมัดจำ (${Math.round(Number(form.depositPercent) * 100)}%)`, value: deposit },
-                { label: `ภาษีมูลค่าเพิ่ม ${formatVatPercent(vatPercent)}% (คิดจากมัดจำ)`, value: vat },
-                { label: 'รวมเป็นเงินที่ต้องชำระ', value: total, bold: true },
-              ].map(({ label, value, bold }) => (
-                <div key={label} className="flex justify-between border-b border-surface-subtle py-[5px] text-sm">
-                  <span className="text-icon-muted">{label}</span>
-                  <code className={`font-mono ${bold ? 'font-bold text-text' : 'font-normal text-text-secondary'}`}>{money(value)} บาท</code>
-                </div>
-              ))}
+              <span className="text-sm text-text-muted">รวมเป็นเงิน <span className="tabular-nums text-text">฿{money(subtotal)}</span></span>
+              <span className="text-sm text-text-muted">ขอรับเงินมัดจำ {noticePercent}% <span className="tabular-nums text-text">฿{money(deposit)}</span></span>
+              <span className="text-sm text-text-muted">ภาษีมูลค่าเพิ่ม {formatVatPercent(vatPercent)}% (คิดจากมัดจำ) <span className="tabular-nums text-text">฿{money(vat)}</span></span>
+              <span className="text-lg font-extrabold">รวมเป็นเงินที่ต้องชำระ <span className="tabular-nums">฿{money(total)}</span></span>
               {fieldErrors.total ? (
-                <p id={fieldErrorId('doc-summary-panel')} role="alert" className="mx-0 mb-0 mt-2 text-xs font-bold text-danger">
+                <p id={fieldErrorId('doc-summary-panel')} role="alert" className="m-0 text-xs font-bold text-danger">
                   {fieldErrors.total}
                 </p>
               ) : null}
-              {/* Next-action helper — describes exactly what api.depositNotices.issue
-                  does (src/api/mockApi.js ~L2322-2345): assigns a real docNumber,
-                  flips this document to ISSUED (fields above become read-only via
-                  `isIssued`). It no longer changes the parent ticket's status. */}
-              {!isIssued && (
-                <p className="mx-0 mb-0 mt-2.5 text-xs leading-[1.6] text-text-muted">
-                  กด &quot;ออกเอกสาร&quot; เพื่อออกเลขที่เอกสารอย่างเป็นทางการ — หลังจากนี้จะแก้ไขข้อมูลในเอกสารนี้ไม่ได้อีก
-                </p>
-              )}
             </div>
           </Panel>
-        </div>
 
-        {/* ── Right: Preview ── */}
-        {previewHtml && (
-          <div className="sticky top-4 h-[calc(100vh_-_120px)]">
-            <div className="mb-2 flex items-center justify-between">
-              <strong className="text-sm">Preview</strong>
-              <Button variant="icon" onClick={() => setPreview('')} title="ปิดตัวอย่าง" aria-label="ปิดตัวอย่าง"><Icon name="close" size={14} /></Button>
+          {!isIssued ? (
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-border-muted bg-surface p-4">
+              <p className="m-0 text-xs text-text-muted">
+                กด &quot;ออกเอกสาร&quot; เพื่อออกเลขที่เอกสารอย่างเป็นทางการ — หลังจากนี้จะแก้ไขข้อมูลในเอกสารนี้ไม่ได้อีก
+              </p>
+              <Button variant="secondary" className="mobile:w-full" onClick={handleSave} disabled={saving}>
+                บันทึกร่าง
+              </Button>
             </div>
-            <iframe
-              ref={iframeRef}
-              srcDoc={previewHtml}
-              className="h-[calc(100%_-_32px)] w-full rounded-md border border-border-subtle"
-              title="Deposit notice preview"
-            />
-            {previewLoading && (
-              <div
-                className="absolute inset-0 flex items-center justify-center bg-white/80"
-                aria-busy="true"
-                aria-label="กำลังโหลดตัวอย่างเอกสาร"
-              >
-                <div className="flex w-[80%] max-w-[360px] flex-col gap-2.5">
-                  <Skeleton width="60%" height={18} />
-                  <SkeletonText lines={6} />
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-      </div>
+          ) : null}
+        </>
       )}
 
       <ConfirmDialog
