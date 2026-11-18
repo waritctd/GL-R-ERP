@@ -346,9 +346,11 @@ public class DepositNoticeService {
     }
 
     /** The STORED notice as the renderer prints it: only stored fields (createDraft already appended the customer's
-     * branch to the stored address, so it prints there once). A DRAFT has no issue date yet and prints {@code today}. */
+     * branch to the stored address, so it prints there once). A DRAFT has no issue date yet and prints {@code today}, and
+     * prints ฉบับร่าง in the number cell (presentation only; nothing stored changes) so the file cannot pass for issued. */
     DepositNoticeRenderModel renderModel(DepositNoticeDto doc, LocalDate today) {
-        return new DepositNoticeRenderModel(doc.issueDate() != null ? doc.issueDate() : today, doc.docNumber(),
+        return new DepositNoticeRenderModel(doc.issueDate() != null ? doc.issueDate() : today,
+            doc.docNumber() != null ? doc.docNumber() : "ฉบับร่าง",
             doc.customerName(), null, doc.customerTaxId(), doc.customerAddress(), doc.projectName(), doc.reference(),
             doc.items(), doc.subtotal(), doc.depositPercent(), doc.depositAmount(), doc.vatAmount(), doc.totalPayable(),
             doc.preparerName());

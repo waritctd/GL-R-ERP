@@ -1229,6 +1229,22 @@ class DepositNoticeServiceTest {
             .isEqualTo(LocalDate.of(2026, 8, 1));
     }
 
+    /** A DRAFT has no number: the PDF/Excel number cell says ฉบับร่าง so it cannot pass for an issued notice. */
+    @Test
+    void renderModel_aDraftPrintsFormDraftInTheNumberCell_anIssuedNoticeItsNumber() {
+        DepositNoticeDto draft = new DepositNoticeDto(
+            98L, 10L, "DEPOSIT_NOTICE", 1, null, null, "DRAFT",
+            "ACME", "0100000000000", "Bangkok", "Showroom", "REF-1", "THB",
+            new BigDecimal("0.50"), new BigDecimal("1000.00"), new BigDecimal("500.00"),
+            new BigDecimal("0.07"), new BigDecimal("35.00"), new BigDecimal("535.00"),
+            List.of(), false, false, "Sales", "Preparer", null, null, List.of());
+        DepositNoticeDto issued = issuedNoticeWithAddress("Bangkok");
+        LocalDate today = LocalDate.of(2026, 10, 28);
+
+        assertThat(service.renderModel(draft, today).docNumber()).isEqualTo("ฉบับร่าง");
+        assertThat(service.renderModel(issued, today).docNumber()).isEqualTo(issued.docNumber()).isNotBlank();
+    }
+
     /** The negative-net refusal is still a legacy-path result: it carries the issued notice's reference too. */
     @Test
     void remainingInvoiceOptions_negativeNetLegacy_stillDefaultsTheReferenceToTheNotices() {
