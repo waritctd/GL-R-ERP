@@ -192,6 +192,7 @@ public class RemainingInvoiceService {
     public RemainingInvoiceDocumentDto updateDraft(long id, RemainingInvoiceDraftRequest req, UserPrincipal actor) {
         RemainingInvoiceDocumentDto existing = requireDraft(id);
         depositNoticeService.requireDepositNoticeIssueGate(existing.ticketId(), actor);
+        depositNoticeService.requirePreparerInDeal(existing.ticketId(), req == null ? null : req.preparerId());
 
         DepositNoticeService.RemainingInvoiceSnapshot snap = depositNoticeService.resolveRemainingInvoiceSnapshot(
             existing.ticketId(), existing.customerQuotationId(), actor);
@@ -218,7 +219,7 @@ public class RemainingInvoiceService {
         String depositReference = req != null && req.depositReference() != null
             ? req.depositReference() : existing.depositReference();
         LocalDate docDate = req != null && req.docDate() != null ? req.docDate() : existing.docDate();
-        stored.updateDraftFields(id, reference, depositReference, docDate, notes);
+        stored.updateDraftFields(id, reference, depositReference, docDate, notes, req == null ? null : req.preparerId());
 
         return requireStored(id);
     }
@@ -403,7 +404,7 @@ public class RemainingInvoiceService {
 
     // ── helpers ──────────────────────────────────────────────────────────────────────────────
 
-    /** The STORED snapshot as the renderer prints it. The preparer is the invoice's own creator. */
+    /** The STORED snapshot as the renderer prints it. The preparer is the invoice's chosen preparer (default: its creator). */
     private RemainingInvoiceRenderModel toRenderable(RemainingInvoiceDocumentDto doc) {
         List<RemainingInvoiceItemDto> items = (doc.items() != null ? doc.items() : List.<RemainingInvoiceDocumentItemDto>of())
             .stream()
@@ -415,7 +416,7 @@ public class RemainingInvoiceService {
             doc.customerName(), doc.customerBranch(), doc.customerTaxId(), doc.customerAddress(), doc.projectName(),
             doc.reference(), doc.depositReference(), items,
             nz(doc.depositDeduction()), doc.netAmount(), doc.vatAmount(), doc.grandTotal(),
-            doc.createdByName());
+            doc.preparerName() != null ? doc.preparerName() : doc.createdByName());
     }
 
     private List<String> defaultNotes() {

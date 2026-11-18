@@ -66,7 +66,7 @@ class RemainingInvoiceControllerTest {
             "QT-TEST-0002", "AI2600001", LocalDate.of(2026, 10, 28), List.of(),
             "บริษัท ทดสอบ จำกัด", "0105599999999", "สำนักงานใหญ่", "99 ถนนทดสอบ", "ตึกตัวอย่าง",
             BigDecimal.TEN, BigDecimal.ONE, BigDecimal.TEN, BigDecimal.ONE, BigDecimal.TEN,
-            1L, "Sales", null, null, null, null, null, List.of());
+            1L, "Sales", null, null, null, null, null, null, null, List.of());
     }
 
     private MockHttpSession session() {

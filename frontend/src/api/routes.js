@@ -225,6 +225,8 @@ export const API_ROUTES = {
     issue: (id) => `/api/deposit-notices/${id}/issue`,
     file: (id, fmt) => `/api/deposit-notices/${id}/file?format=${fmt}`,
     noteTemplates: '/api/document-note-templates',
+    // ผู้จัดทำ choices for a deal's deposit notice / remaining invoice: { items: [{ id, name }] }
+    preparerOptions: (ticketId) => `/api/tickets/${ticketId}/document-preparer-options`,
     // `quotationId` (optional): live-preview a specific qualifying quotation (see
     // RemainingInvoiceOptionsDto's quotationOptions/defaultQuotationId). There is no stateless
     // remaining-invoice file route; only an ISSUED/SUPERSEDED STORED remaining invoice is

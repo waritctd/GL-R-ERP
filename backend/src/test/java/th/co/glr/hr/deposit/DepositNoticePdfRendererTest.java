@@ -380,7 +380,7 @@ class DepositNoticePdfRendererTest {
         DepositNoticeDto doc = new DepositNoticeDto(99L, 10L, "DEPOSIT_NOTICE", 1, "GLRD69999", LocalDate.of(2026, 10, 28),
             "ISSUED", "บริษัท ทดสอบ จำกัด", "0105599999999", "99 ถนนทดสอบ", "ตึกตัวอย่าง", "QT-TEST-0001", "THB",
             new BigDecimal("0.30"), STORED_SUBTOTAL, STORED_DEPOSIT, new BigDecimal("0.07"), STORED_VAT, STORED_TOTAL,
-            List.of("SENTINEL-NOTE-MUST-NOT-SHOW"), true, true, "Sales", "สมหญิง ทดสอบ", null, null, List.of(
+            List.of("SENTINEL-NOTE-MUST-NOT-SHOW"), true, true, "Sales", "สมหญิง ทดสอบ", null, null, null, List.of(
                 item(1, "ลดจริง", "1", "ชิ้น", "120.00", "STORED-LABEL-A", "100.00", "100.00"),
                 item(2, "ไม่ลด", "1", "ชิ้น", "100.00", "STORED-LABEL-B", "100.00", "100.00"),
                 item(3, "สุทธิสูงกว่า", "1", "ชิ้น", "398.51", "STORED-LABEL-C", "399.15", "399.15")));
@@ -398,7 +398,7 @@ class DepositNoticePdfRendererTest {
         DepositNoticeDto draft = new DepositNoticeDto(98L, 10L, "DEPOSIT_NOTICE", 1, null, null, "DRAFT",
             "บริษัท <i>ทดสอบ</i>", "0105599999999", "99 <u>ถนน</u>", "<b>x</b>", "QT-TEST-0001", "THB",
             new BigDecimal("0.30"), STORED_SUBTOTAL, STORED_DEPOSIT, new BigDecimal("0.07"), STORED_VAT, STORED_TOTAL,
-            List.of(), false, false, "Sales", "สมหญิง ทดสอบ", null, null, List.of());
+            List.of(), false, false, "Sales", "สมหญิง ทดสอบ", null, null, null, List.of());
         String html = renderer.toPreviewHtml(draft, LocalDate.of(2026, 10, 29));
         assertThat(html).contains("29 ตุลาคม 2569");
         assertThat(html).contains("&lt;b&gt;x&lt;/b&gt;").doesNotContain("<b>x</b>");

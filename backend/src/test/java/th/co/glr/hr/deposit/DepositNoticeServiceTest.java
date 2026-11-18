@@ -770,7 +770,7 @@ class DepositNoticeServiceTest {
             "ACME", "0100000000000", "Bangkok", "Showroom", reference, "THB",
             new BigDecimal("0.50"), subtotal, depositAmount,
             new BigDecimal("0.07"), BigDecimal.ZERO, BigDecimal.ZERO,
-            List.of(), true, true, "Sales", "Preparer", null, null, items);
+            List.of(), true, true, "Sales", "Preparer", null, null, null, items);
     }
 
     @Test
@@ -1067,7 +1067,7 @@ class DepositNoticeServiceTest {
             "ACME", "0100000000000", "Bangkok", "Showroom", "REF-1", "THB",
             depositPercent, new BigDecimal("1000.00"), new BigDecimal("500.00"),
             new BigDecimal("0.07"), new BigDecimal("35.00"), new BigDecimal("535.00"),
-            List.of(), false, false, "Sales", "Preparer", null, null, List.of());
+            List.of(), false, false, "Sales", "Preparer", null, null, null, List.of());
         when(docs.findById(docId)).thenReturn(Optional.of(draft));
     }
 
@@ -1190,7 +1190,7 @@ class DepositNoticeServiceTest {
             "ACME", "0100000000000", address, "Showroom", "REF-1", "THB",
             new BigDecimal("0.50"), new BigDecimal("1000.00"), new BigDecimal("500.00"),
             new BigDecimal("0.07"), new BigDecimal("35.00"), new BigDecimal("535.00"),
-            List.of("stored note"), true, true, "Sales", "Preparer", null, null, List.of());
+            List.of("stored note"), true, true, "Sales", "Preparer", null, null, null, List.of());
     }
 
     /** Stored-document rule: the printed customer block is the STORED name/tax id/address. The customer master's
@@ -1221,7 +1221,7 @@ class DepositNoticeServiceTest {
             "ACME", "0100000000000", "Bangkok", "Showroom", "REF-1", "THB",
             new BigDecimal("0.50"), new BigDecimal("1000.00"), new BigDecimal("500.00"),
             new BigDecimal("0.07"), new BigDecimal("35.00"), new BigDecimal("535.00"),
-            List.of(), false, false, "Sales", "Preparer", null, null, List.of());
+            List.of(), false, false, "Sales", "Preparer", null, null, null, List.of());
         LocalDate today = LocalDate.of(2026, 10, 28);
 
         assertThat(service.renderModel(draft, today).issueDate()).isEqualTo(today);
@@ -1237,7 +1237,7 @@ class DepositNoticeServiceTest {
             "ACME", "0100000000000", "Bangkok", "Showroom", "REF-1", "THB",
             new BigDecimal("0.50"), new BigDecimal("1000.00"), new BigDecimal("500.00"),
             new BigDecimal("0.07"), new BigDecimal("35.00"), new BigDecimal("535.00"),
-            List.of(), false, false, "Sales", "Preparer", null, null, List.of());
+            List.of(), false, false, "Sales", "Preparer", null, null, null, List.of());
         DepositNoticeDto issued = issuedNoticeWithAddress("Bangkok");
         LocalDate today = LocalDate.of(2026, 10, 28);
 
@@ -1272,7 +1272,7 @@ class DepositNoticeServiceTest {
         RemainingInvoiceDocumentDto doc = new RemainingInvoiceDocumentDto(7L, 10L, null, null, "GLR6900001", 1,
             "GLR6900001-1", "ISSUED", null, "REF", null, LocalDate.of(2026, 10, 28), List.of(),
             "ACME", null, null, null, null, BigDecimal.TEN, BigDecimal.ZERO, BigDecimal.TEN, BigDecimal.ONE,
-            BigDecimal.TEN, 1L, null, null, null, null, null, null, List.of());
+            BigDecimal.TEN, 1L, null, null, null, null, null, null, null, null, List.of());
         when(storedMock.findById(7L)).thenReturn(Optional.of(doc));
         when(remainingRenderer.toXls(any())).thenReturn(new byte[] {1});
 

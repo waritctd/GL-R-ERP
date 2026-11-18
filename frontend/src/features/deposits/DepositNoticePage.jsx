@@ -23,6 +23,7 @@ import {
   createDepositNoticeDraft, dealQuotationsWithConfirmedQueryOptions, depositNoticeFileName, resolveNoticeQuotation,
   subtotalsDiffer,
 } from './createDepositNoticeDraft.js';
+import { DocumentPreparerSelect } from './DocumentPreparerSelect.jsx';
 import { invalidateDealDocuments } from '../documentChain/documentChain.js';
 
 function money(v) {
@@ -220,6 +221,7 @@ function buildPayloadFrom(form, expectedUpdatedAt) {
     // A cleared field keeps the stored % (null) rather than failing the whole save at 0.
     depositPercent:  form.depositPercent === '' ? null : Number(form.depositPercent),
     notes:           form.notes,
+    preparerId:      form.preparerId ?? null,
     expectedUpdatedAt,
     items: form.items.filter((it) => !isBlankRow(it)).map((it, idx) => ({
       seq:          idx + 1,
@@ -267,6 +269,7 @@ export function DepositNoticePage({ ticketId, onBack, showToast }) {
     depositPercent: 0.5,
     notes: [],
     items: [],
+    preparerId: null,
   });
 
   // Reads (TanStack Query) --- Mount only LOADS existing documents — it must never create one as a side effect
@@ -353,6 +356,7 @@ export function DepositNoticePage({ ticketId, onBack, showToast }) {
       // As stored (null -> blank, which saves as "keep"): a save of another field must not rewrite it.
       depositPercent:  d.depositPercent ?? '',
       notes:           d.notes         ?? [],
+      preparerId:      d.preparerId    ?? null,
       // A qty < 0 line is the quotation's ส่วนลดพิเศษ: its qty is not editable and is allowed past the qty > 0 check.
       items:           (d.items ?? []).map((it) => ({ ...it, discount: Number(it.qty) < 0 })),
     };
@@ -732,6 +736,10 @@ export function DepositNoticePage({ ticketId, onBack, showToast }) {
                   <span className="block text-2xs font-bold uppercase text-text-muted">อ้างอิง PO / ใบเสนอราคา</span>
                   <strong>{form.reference || '-'}</strong>
                 </div>
+                <div>
+                  <span className="block text-2xs font-bold uppercase text-text-muted">ผู้จัดทำ</span>
+                  <strong>{doc?.preparerName || '-'}</strong>
+                </div>
                 <div className="col-span-full">
                   <span className="block text-2xs font-bold uppercase text-text-muted">ที่อยู่</span>
                   <strong className="whitespace-pre-line">{form.customerAddress || '-'}</strong>
@@ -787,6 +795,8 @@ export function DepositNoticePage({ ticketId, onBack, showToast }) {
                   <input id="doc-reference" value={form.reference}
                     onChange={(e) => setField('reference', e.target.value)} placeholder="PO-XXXX" />
                 </FormField>
+                <DocumentPreparerSelect ticketId={ticketId} id="doc-preparer" value={form.preparerId}
+                  storedName={doc?.preparerName} onChange={(v) => setField('preparerId', v)} />
               </div>
             )}
           </Panel>

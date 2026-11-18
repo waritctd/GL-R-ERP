@@ -19,12 +19,23 @@ public record DepositNoticeDraftRequest(
     List<String> notes,
     @Valid List<DepositNoticeItemRequest> items,
     // The draft's updatedAt as this client last read it. null skips the stale-save check (older clients).
-    OffsetDateTime expectedUpdatedAt
+    OffsetDateTime expectedUpdatedAt,
+    // ผู้จัดทำ: an eligible sales employee id; null keeps the stored preparer.
+    Long preparerId
 ) {
     /** Without a stamp: creation and the server-side callers. */
     public DepositNoticeDraftRequest(String customerName, String customerTaxId, String customerAddress,
                                      String projectName, String reference, BigDecimal depositPercent,
                                      List<String> notes, List<DepositNoticeItemRequest> items) {
-        this(customerName, customerTaxId, customerAddress, projectName, reference, depositPercent, notes, items, null);
+        this(customerName, customerTaxId, customerAddress, projectName, reference, depositPercent, notes, items, null, null);
+    }
+
+    /** With the stale-save stamp, no preparer change. */
+    public DepositNoticeDraftRequest(String customerName, String customerTaxId, String customerAddress,
+                                     String projectName, String reference, BigDecimal depositPercent,
+                                     List<String> notes, List<DepositNoticeItemRequest> items,
+                                     OffsetDateTime expectedUpdatedAt) {
+        this(customerName, customerTaxId, customerAddress, projectName, reference, depositPercent, notes, items,
+            expectedUpdatedAt, null);
     }
 }

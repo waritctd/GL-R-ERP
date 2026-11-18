@@ -79,6 +79,18 @@ public class DepositNoticeService {
         return docs.findByTicket(ticketId);
     }
 
+    public List<DocumentPreparerOption> documentPreparerOptions(long ticketId, UserPrincipal actor) {
+        requireTicketViewer(ticketId, actor);
+        return docs.findPreparerOptions(ticketId);
+    }
+
+    /** A non-null preparerId must be one of THIS deal's options (owner, keyer, sales managers). */
+    public void requirePreparerInDeal(long ticketId, Long preparerId) {
+        if (preparerId != null && docs.findPreparerOptions(ticketId).stream().noneMatch(o -> o.id() == preparerId)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ผู้จัดทำต้องเป็นเจ้าของงาน ผู้คีย์งาน หรือผู้จัดการฝ่ายขายของงานนี้");
+        }
+    }
+
     public DepositNoticeDto getById(long docId, UserPrincipal actor) {
         DepositNoticeDto doc = docs.findById(docId)
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบใบแจ้งรับมัดจำนี้"));
@@ -168,7 +180,7 @@ public class DepositNoticeService {
             header.taxId(), header.address(),
             header.projectName(), reference,
             effectiveDepositPercent,
-            notes, items
+            notes, items, null, actor.id()
         );
 
         long docId = docs.createDraft(ticketId, effective, items, actor.name());
@@ -186,6 +198,7 @@ public class DepositNoticeService {
         requireRole(actor, SALES_ROLES);
         DepositNoticeDto doc = requireDraft(docId);
         requireTicketOwner(doc.ticketId(), actor);
+        requirePreparerInDeal(doc.ticketId(), req.preparerId());
         // Sales may change the deposit percent on a DRAFT (requireDraft
         // above 409s an issued notice). docs.update recomputes the amount from it. A request
         // without a percent keeps the draft's own.
@@ -203,7 +216,7 @@ public class DepositNoticeService {
             req.customerName(), req.customerTaxId(), req.customerAddress(),
             req.projectName(), req.reference(),
             depositPercent,
-            req.notes(), echoOnly(req.items(), doc.items()), req.expectedUpdatedAt()
+            req.notes(), echoOnly(req.items(), doc.items()), req.expectedUpdatedAt(), req.preparerId()
         );
         docs.update(docId, effective, doc.items());
         return docs.findById(docId).orElseThrow();

@@ -1010,7 +1010,24 @@ const mockNoteTemplates = [
   { id: 3, text: 'กรณีโอนเงินส่ง Pay-in มาที่ e-mail : info@glr.co.th', defaultSelected: true, sortOrder: 3 },
 ];
 
-const mockDepositNotices = []; // used by both depositNotices and documents API groups
+const mockDepositNotices = [];
+// ผู้จัดทำ choices (DepositNoticeRepository#findPreparerOptions): the deal's owner, then its keyer. The mock has
+// no sales-manager directory, so the managers the server also lists are absent here.
+function mockPreparerOptions(ticket) {
+  const opts = [{ id: ticket.createdById, name: ticket.createdByName }];
+  if (ticket.keyedById != null && ticket.keyedById !== ticket.createdById) {
+    opts.push({ id: ticket.keyedById, name: ticket.keyedByName ?? String(ticket.keyedById) });
+  }
+  return opts.filter((o) => o.id != null);
+}
+// A non-null preparerId must be one of the deal's options (400 otherwise); null keeps the stored preparer.
+function applyMockPreparer(doc, ticket, preparerId) {
+  if (preparerId == null) return;
+  const opt = mockPreparerOptions(ticket).find((o) => o.id === Number(preparerId));
+  if (!opt) fail('ผู้จัดทำต้องเป็นเจ้าของงาน ผู้คีย์งาน หรือผู้จัดการฝ่ายขายของงานนี้', 400);
+  doc.preparerId = opt.id;
+  doc.preparerName = opt.name;
+} // used by both depositNotices and documents API groups
 let mockDocSeq = 1;
 let mockDocNumberSeq = 1;
 
@@ -15454,12 +15471,17 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
         customerTaxId: customerTaxId ?? '', customerAddress: customerAddress ?? '',
         projectName: projectName ?? '', reference: payload.reference ?? (linesFromGoverning ? governing.quotation.number : null),
         depositPercent, vatPercent: 0.07,
-        notes, items, issuedByName: null, preparerName: user.name,
+        notes, items, issuedByName: null, preparerName: ticket.createdByName ?? user.name, preparerId: ticket.createdById ?? user.id,
         hasPdf: false, hasXlsx: false,
         createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
       });
       mockDepositNotices.push(doc);
       return delay({ depositNotice: structuredClone(doc) });
+    },
+
+    async preparerOptions(ticketId) {
+      requireDepositNoticeViewer(ticketId);
+      return delay({ items: mockPreparerOptions(findTicketRaw(Number(ticketId))) });
     },
 
     async listByTicket(ticketId) {
@@ -15498,6 +15520,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       if (payload.expectedUpdatedAt != null && payload.expectedUpdatedAt !== doc.updatedAt) {
         fail('ใบแจ้งรับมัดจำนี้ถูกแก้ไขโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง', 409);
       }
+      applyMockPreparer(doc, findTicketRaw(doc.ticketId), payload.preparerId);
       Object.assign(doc, {
         customerName:    payload.customerName    ?? doc.customerName,
         customerTaxId:   payload.customerTaxId   ?? doc.customerTaxId,
@@ -15700,7 +15723,10 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
         customerAddress: null, projectName: ticket.projectName ?? null,
         itemsTotal: snap.itemsTotal, depositDeduction: snap.depositDeduction, netAmount: snap.netAmount,
         vatAmount: snap.vatAmount, grandTotal: snap.grandTotal,
-        createdById: user.id, createdByName: user.name, createdAt: now, updatedAt: now,
+        createdById: user.id, createdByName: user.name,
+        // ผู้จัดทำ defaults to the deal's owner
+        preparerId: ticket.createdById ?? user.id, preparerName: ticket.createdByName ?? user.name,
+        createdAt: now, updatedAt: now,
         issuedById: null, issuedByName: null, issuedAt: null,
         items: snap.items.map((it, i) => ({ id: `${id}-${i + 1}`, remainingInvoiceId: id, ...it })),
       });
@@ -15738,6 +15764,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       if (payload.depositReference != null) row.depositReference = payload.depositReference;
       if (payload.docDate != null) row.docDate = payload.docDate;
       if (payload.notes != null) row.notes = payload.notes;
+      applyMockPreparer(row, ticket, payload.preparerId);
       row.updatedAt = new Date().toISOString();
       return delay({ remainingInvoice: structuredClone(row) });
     },
@@ -15818,7 +15845,10 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       mockRemainingInvoices.push({
         ...clone,
         id: newId, baseNumber: null, version: 1, docNumber: null, status: 'DRAFT', supersededById: null,
-        createdById: user.id, createdByName: user.name, createdAt: now, updatedAt: now,
+        createdById: user.id, createdByName: user.name,
+        // ผู้จัดทำ defaults to the deal's owner
+        preparerId: ticket.createdById ?? user.id, preparerName: ticket.createdByName ?? user.name,
+        createdAt: now, updatedAt: now,
         issuedById: null, issuedByName: null, issuedAt: null,
         items: clone.items.map((it, i) => ({ ...it, id: `${newId}-${i + 1}`, remainingInvoiceId: newId })),
       });

@@ -12,5 +12,12 @@ public record RemainingInvoiceDraftRequest(
     @Size(max = 255) String reference,
     @Size(max = 255) String depositReference,
     LocalDate docDate,
-    List<String> notes
-) {}
+    List<String> notes,
+    // ผู้จัดทำ: an eligible sales employee id; null keeps the stored preparer.
+    Long preparerId
+) {
+    public RemainingInvoiceDraftRequest(Long quotationId, String reference, String depositReference,
+                                        LocalDate docDate, List<String> notes) {
+        this(quotationId, reference, depositReference, docDate, notes, null);
+    }
+}

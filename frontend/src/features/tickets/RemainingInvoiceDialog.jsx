@@ -6,6 +6,7 @@ import { Button } from '../../components/common/Button.jsx';
 import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { DialogSummary } from '../../components/common/DocumentDialogParts.jsx';
 import { FormField } from '../../components/common/FormField.jsx';
+import { DocumentPreparerSelect } from '../deposits/DocumentPreparerSelect.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { Skeleton } from '../../components/common/Skeleton.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
@@ -303,6 +304,7 @@ function IssuedSummary({ issued, canWrite, onRevised, onDownloaded }) {
         <div className="flex justify-between"><span className="text-text-muted">เลขที่เอกสาร</span><span className="font-bold">{issued.docNumber}</span></div>
         <div className="flex justify-between"><span className="text-text-muted">วันที่</span><span>{issued.docDate}</span></div>
         <div className="flex justify-between"><span className="text-text-muted">อ้างอิง</span><span>{issued.reference || '-'}</span></div>
+        <div className="flex justify-between"><span className="text-text-muted">ผู้จัดทำ</span><span>{issued.preparerName || issued.createdByName || '-'}</span></div>
         <div className="flex justify-between"><span className="text-text-muted">ยอดสินค้า</span><span>{formatMoney(issued.itemsTotal)}</span></div>
         <div className="flex justify-between"><span className="text-text-muted">หักมัดจำ</span><span>{formatMoney(issued.depositDeduction)}</span></div>
         <div className="flex justify-between font-bold"><span>รวมเป็นเงิน</span><span>{formatMoney(issued.netAmount)}</span></div>
@@ -363,6 +365,7 @@ function DraftEditor({ draft, issuedOfSameQuotation, onSaved, onIssued, onDelete
   const [depositReference, setDepositReference] = useState(draft.depositReference ?? '');
   const [docDate, setDocDate] = useState(draft.docDate ?? '');
   const [notes, setNotes] = useState(draft.notes ?? []);
+  const [preparerId, setPreparerId] = useState(draft.preparerId ?? null);
   const [saving, setSaving] = useState(false);
   const [issuing, setIssuing] = useState(false);
   // Issuing mints the legal document number and cannot be undone, so it asks first.
@@ -377,6 +380,7 @@ function DraftEditor({ draft, issuedOfSameQuotation, onSaved, onIssued, onDelete
     setReference(draft.reference ?? '');
     setDepositReference(draft.depositReference ?? '');
     setDocDate(draft.docDate ?? '');
+    setPreparerId(draft.preparerId ?? null);
     setNotes(draft.notes ?? []);
   }, [draft]);
 
@@ -388,7 +392,7 @@ function DraftEditor({ draft, issuedOfSameQuotation, onSaved, onIssued, onDelete
     setError(null);
     setSaving(true);
     try {
-      await api.storedRemainingInvoices.update(draft.id, { reference, depositReference, docDate, notes });
+      await api.storedRemainingInvoices.update(draft.id, { reference, depositReference, docDate, notes, preparerId });
       await onSaved?.();
     } catch (err) {
       setError(err.message || 'บันทึกไม่สำเร็จ');
@@ -406,7 +410,7 @@ function DraftEditor({ draft, issuedOfSameQuotation, onSaved, onIssued, onDelete
     setError(null);
     setIssuing(true);
     try {
-      await api.storedRemainingInvoices.update(draft.id, { reference, depositReference, docDate, notes });
+      await api.storedRemainingInvoices.update(draft.id, { reference, depositReference, docDate, notes, preparerId });
       await api.storedRemainingInvoices.issue(draft.id);
       await onIssued?.();
     } catch (err) {
@@ -471,6 +475,8 @@ function DraftEditor({ draft, issuedOfSameQuotation, onSaved, onIssued, onDelete
             <ThaiDateInput id="remaining-invoice-issue-date" value={docDate ?? ''}
               onChange={(e) => setDocDate(e.target.value)} />
           </FormField>
+          <DocumentPreparerSelect ticketId={draft.ticketId} id="remaining-invoice-preparer" value={preparerId}
+            storedName={draft.preparerName} onChange={setPreparerId} />
         </div>
       </Section>
 
