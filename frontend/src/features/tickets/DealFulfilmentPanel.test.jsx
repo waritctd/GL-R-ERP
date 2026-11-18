@@ -4,6 +4,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DealFulfilmentPanel } from './DealFulfilmentPanel.jsx';
 import { api } from '../../api/index.js';
+import { addDaysIso, bangkokTodayIso } from '../../utils/format.js';
 
 globalThis.React = React;
 
@@ -83,6 +84,8 @@ function renderPanel(user, rows = [draftRow()], {
   hasUncoveredFactories = undefined, // undefined = an older backend that does not send the flag
   uncoveredFactoryNames = undefined, // undefined = an older backend that sends no names
   procurementSource = undefined,
+  events = undefined,
+  splitPreview = undefined, // undefined = a backend before slice 6c (no split preview on coverage)
 } = {}) {
   if (rows instanceof Error) api.storedImportRequests.listForTicket.mockRejectedValue(rows);
   else {
@@ -93,12 +96,13 @@ function renderPanel(user, rows = [draftRow()], {
   else {
     api.storedImportRequests.coverage.mockResolvedValue({
       hasUncoveredFactories, ...(uncoveredFactoryNames === undefined ? {} : { uncoveredFactoryNames }),
+      ...(splitPreview === undefined ? {} : { splitPreview }),
     });
   }
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   return render(
     <QueryClientProvider client={queryClient}>
-      <DealFulfilmentPanel ref={ref} user={user} ticketId={1} summary={dealSummary} items={items} availableActions={availableActions} procurementSource={procurementSource} showToast={showToast} />
+      <DealFulfilmentPanel ref={ref} user={user} ticketId={1} summary={dealSummary} items={items} availableActions={availableActions} procurementSource={procurementSource} showToast={showToast} events={events} />
     </QueryClientProvider>,
   );
 }
@@ -1453,6 +1457,139 @@ describe('DealFulfilmentPanel — ยืนยันการออกใบข�
   });
 });
 
+// Slice 6c (prototype item 6.6): the confirm shows, per factory, how many items it gets and the expected lead time,
+// from the coverage route's `splitPreview` — ImportRequestService's dry run of createDrafts' own split. The panel only
+// renders what the server sent; it computes no split and no lead time of its own.
+describe('DealFulfilmentPanel — ยืนยันออกใบขอซื้อ: รายการและระยะเวลานำเข้าต่อโรงงาน (slice 6c)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.storedImportRequests.createDrafts.mockReset();
+    api.storedImportRequests.createDrafts.mockResolvedValue({ importRequests: [] });
+  });
+  const PREVIEW = {
+    factories: [
+      { factoryName: 'Cotto Industry', newFactory: false, itemCount: 3, leadTimeMinDays: 100, leadTimeMaxDays: 120, leadTimeSource: 'QUOTATION' },
+      { factoryName: 'Rex Ceramics', newFactory: false, itemCount: 1, leadTimeMinDays: 75, leadTimeMaxDays: 90, leadTimeSource: 'COUNTRY_DEFAULT' },
+      { factoryName: 'Polska Tile', newFactory: false, itemCount: 2, leadTimeMinDays: null, leadTimeMaxDays: null, leadTimeSource: null },
+      { factoryName: 'Brand New Co', newFactory: true, itemCount: 1, leadTimeMinDays: null, leadTimeMaxDays: null, leadTimeSource: null },
+    ],
+    linesWithoutFactory: [],
+  };
+  const NAMES = PREVIEW.factories.map((f) => f.factoryName);
+  const blocks = (dialog) => within(within(dialog).getByRole('list', { name: 'โรงงานที่จะออกใบขอซื้อ' })).getAllByRole('listitem');
+
+  it('one block per factory the server previewed: name, n รายการ and นำเข้าประมาณ min–max วัน with its source', async () => {
+    renderPanel(OWNER, [], { hasUncoveredFactories: true, uncoveredFactoryNames: NAMES, splitPreview: PREVIEW });
+    const dialog = await openIrConfirm();
+
+    expect(within(dialog).getByTestId('ir-confirm-summary').textContent).toBe('4 โรงงาน · ส่งถึงฝ่ายนำเข้าทันที');
+    const [cotto, rex] = blocks(dialog);
+    expect(within(cotto).getByTestId('ir-confirm-factory-name').textContent).toBe('Cotto Industry');
+    expect(within(cotto).getByTestId('ir-confirm-factory-count').textContent).toBe('3 รายการ');
+    expect(within(cotto).getByTestId('ir-confirm-factory-lead').textContent).toBe('นำเข้าประมาณ 100–120 วัน');
+    expect(within(cotto).getByTestId('ir-confirm-factory-source').textContent).toBe('ตามใบเสนอราคา');
+    expect(within(rex).getByTestId('ir-confirm-factory-lead').textContent).toBe('นำเข้าประมาณ 75–90 วัน');
+    expect(within(rex).getByTestId('ir-confirm-factory-source').textContent).toBe('ค่าเริ่มต้นของประเทศ');
+    // The names-only table and its "shown after issuing" note are replaced, not shown alongside.
+    expect(within(dialog).queryByRole('table', { name: 'โรงงานที่จะออกใบขอซื้อ' })).toBeNull();
+    expect(dialog.textContent).not.toContain('จะแสดงในใบขอซื้อแต่ละใบหลังออก');
+  });
+
+  it('no lead time yet: says it will be asked before issuing; a new factory is tagged and says its country comes first', async () => {
+    renderPanel(OWNER, [], { hasUncoveredFactories: true, uncoveredFactoryNames: NAMES, splitPreview: PREVIEW });
+    const [, , polska, brandNew] = blocks(await openIrConfirm());
+
+    expect(within(polska).getByTestId('ir-confirm-factory-lead').textContent).toBe('ยังไม่มีระยะเวลานำเข้า · จะให้ระบุก่อนออก');
+    expect(within(polska).queryByTestId('ir-confirm-factory-source')).toBeNull();
+    expect(within(polska).queryByTestId('ir-confirm-factory-new')).toBeNull();
+    expect(within(brandNew).getByTestId('ir-confirm-factory-new').textContent).toBe('โรงงานใหม่');
+    expect(within(brandNew).getByTestId('ir-confirm-factory-lead').textContent)
+      .toBe('ยังไม่มีระยะเวลานำเข้า · จะให้เลือกประเทศของโรงงานก่อนออก');
+  });
+
+  // Fix round L5: the warning says the IR cannot be issued, so the button agrees — disabled, described by the warning.
+  // The server's 409 stays the backstop; this only stops the button contradicting the copy beside it.
+  it('a line the split cannot place disables ออกใบขอซื้อ, with the warning as its stated reason, and sends nothing', async () => {
+    renderPanel(OWNER, [], {
+      hasUncoveredFactories: true,
+      uncoveredFactoryNames: ['Cotto Industry'],
+      splitPreview: {
+        factories: [PREVIEW.factories[0]],
+        linesWithoutFactory: [
+          { ticketItemId: 31, code: 'Free Text One', size: '10x10 cm' },
+          { ticketItemId: 32, code: 'Grout', size: null },
+        ],
+      },
+    });
+    const dialog = await openIrConfirm();
+
+    expect(within(dialog).getByTestId('ir-confirm-unplaced').textContent)
+      .toBe('2 รายการยังไม่มีโรงงาน — ออกใบขอซื้อไม่ได้จนกว่าจะระบุโรงงาน: Free Text One (10x10 cm), Grout');
+    expect(within(dialog).getByTestId('ir-confirm-unplaced').getAttribute('role')).toBe('note');
+    const confirm = within(dialog).getByRole('button', { name: 'ออกใบขอซื้อ' });
+    expect(confirm.disabled).toBe(true);
+    const reasonId = confirm.getAttribute('aria-describedby');
+    expect(reasonId).toBeTruthy();
+    expect(document.getElementById(reasonId)).toBe(within(dialog).getByTestId('ir-confirm-unplaced'));
+    fireEvent.click(confirm);
+    await act(async () => {});
+    expect(api.storedImportRequests.createDrafts).not.toHaveBeenCalled();
+  });
+
+  it('every line placed: ออกใบขอซื้อ stays enabled and carries no disabled reason', async () => {
+    renderPanel(OWNER, [], { hasUncoveredFactories: true, uncoveredFactoryNames: NAMES, splitPreview: PREVIEW });
+    const confirm = within(await openIrConfirm()).getByRole('button', { name: 'ออกใบขอซื้อ' });
+    expect(confirm.disabled).toBe(false);
+    expect(confirm.getAttribute('aria-describedby')).toBeNull();
+  });
+
+  it('asks the server with the rep\'s unsaved factory pick, and shows the server\'s split instead of adding the pick by name', async () => {
+    const directSummary = { ...summary, liveDirectQuotation: { id: 5, docStatus: 'APPROVED' } };
+    const lines = [
+      { id: 1, brand: 'SCG', model: 'Catalogue', factory: 'Cotto', catalogPriceId: 90, qty: 10 },
+      { id: 3, brand: 'ค่าติดตั้ง', model: 'Free text', factory: null, catalogPriceId: null, qty: 10, qtyFromStock: 0 },
+    ];
+    renderPanel(OWNER, [], {
+      summary: directSummary, items: lines, hasUncoveredFactories: true, uncoveredFactoryNames: ['Cotto'],
+      splitPreview: { factories: [{ ...PREVIEW.factories[0], factoryName: 'Cotto', itemCount: 2 }], linesWithoutFactory: [] },
+    });
+    await waitFor(() => expect(api.storedImportRequests.coverage).toHaveBeenCalledWith(1, undefined));
+    const button = await screen.findByTestId('deal-fulfilment-create-ir-drafts');
+    const select = await screen.findByTestId('ir-line-factory-3');
+    await waitFor(() => expect(within(select).getByRole('option', { name: 'Rex Ceramics' })).not.toBeNull());
+    fireEvent.change(select, { target: { value: '7' } });
+    await waitFor(() => expect(api.storedImportRequests.coverage)
+      .toHaveBeenCalledWith(1, [{ ticketItemId: 3, factoryId: 7 }]));
+    await waitFor(() => expect(button.disabled).toBe(false));
+
+    const dialog = await openIrConfirm(button);
+    // The server's answer is the whole truth: Rex Ceramics is not added on top of it by the client.
+    expect(blocks(dialog).map((li) => within(li).getByTestId('ir-confirm-factory-name').textContent)).toEqual(['Cotto']);
+    expect(within(dialog).getByTestId('ir-confirm-summary').textContent).toBe('1 โรงงาน · ส่งถึงฝ่ายนำเข้าทันที');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'ออกใบขอซื้อ' }));
+    await waitFor(() => expect(api.storedImportRequests.createDrafts).toHaveBeenCalledTimes(1));
+    expect(api.storedImportRequests.createDrafts.mock.calls).toEqual([[1, { itemFactories: [{ ticketItemId: 3, factoryId: 7 }] }]]);
+  });
+
+  it('keeps the warning first and never says ดีล', async () => {
+    renderPanel(OWNER, [], {
+      hasUncoveredFactories: true, uncoveredFactoryNames: NAMES,
+      splitPreview: { ...PREVIEW, linesWithoutFactory: [{ ticketItemId: 31, code: 'X', size: null }] },
+    });
+    const dialog = await openIrConfirm();
+    expect(dialog.querySelector('.modal-body').firstElementChild.firstElementChild)
+      .toBe(within(dialog).getByTestId('ir-confirm-warning'));
+    expect(dialog.textContent).not.toContain('ดีล');
+  });
+
+  it('a null splitPreview (what import and sales_manager receive) falls back to the names-only table', async () => {
+    renderPanel(CEO, [], { hasUncoveredFactories: true, uncoveredFactoryNames: ['Cotto Industry'], splitPreview: null });
+    const dialog = await openIrConfirm();
+    expect(irConfirmFactories(dialog)).toEqual({ summary: '1 โรงงาน · ส่งถึงฝ่ายนำเข้าทันที', names: ['Cotto Industry'] });
+    expect(within(dialog).queryByRole('list', { name: 'โรงงานที่จะออกใบขอซื้อ' })).toBeNull();
+  });
+});
+
 // Drawing m-delivery (2026-11-16): the body is rebuilt; recordDelivery is sent exactly as before.
 describe('DealFulfilmentPanel — บันทึกการส่งสินค้า (drawing m-delivery)', () => {
   // ordered / delivered / remaining all differ per line, and from line to line.
@@ -1597,14 +1734,157 @@ describe('DealFulfilmentPanel — บันทึกการส่งสิน�
     expect(table.className).not.toMatch(/min-w-/);
   });
 
-  it('keeps แหล่งสินค้า and หมายเหตุ, says what the server does when everything is delivered, and has no วันที่ส่ง', async () => {
+  // Before slice 6d this test asserted the dialog had NO วันที่ส่ง (RecordDeliveryRequest had no date). It has one now
+  // (owner answer 2): the rest of what it pinned is kept.
+  it('keeps แหล่งสินค้า and หมายเหตุ, says what the server does when everything is delivered, and has วันที่ส่ง', async () => {
     const dialogEl = await open();
     const dialog = within(dialogEl);
     expect(dialog.getByLabelText('แหล่งสินค้า')).toBeTruthy();
     expect(dialog.getByLabelText('หมายเหตุ')).toBeTruthy();
-    expect(dialogEl.textContent).not.toContain('วันที่ส่ง');
+    expect(dialog.getByLabelText('วันที่ส่ง')).toBeTruthy();
     expect(dialogEl.textContent).not.toContain('ดีล');
     expect(dialog.getByTestId('deal-fulfilment-record-delivery-submit').textContent).toBe('บันทึกการส่ง');
+  });
+
+  describe('วันที่ส่ง (slice 6d): default today, back at most 7 days, never a future day', () => {
+    const today = bangkokTodayIso();
+    const be = (iso) => `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${Number(iso.slice(0, 4)) + 543}`;
+    const typeDate = (dialog, iso) => {
+      const field = dialog.getByLabelText('วันที่ส่ง');
+      fireEvent.change(field, { target: { value: be(iso) } });
+      fireEvent.blur(field);
+    };
+
+    it('starts on today, and today sends the request exactly as before — no deliveredOn key', async () => {
+      const dialog = within(await open());
+      expect(dialog.getByLabelText('วันที่ส่ง').value).toBe(be(today));
+      submit();
+      await waitFor(() => expect(api.tickets.recordDelivery).toHaveBeenCalledTimes(1));
+      expect(Object.keys(api.tickets.recordDelivery.mock.calls[0][1])).toEqual(['source', 'note', 'lines']);
+    });
+
+    it('a day up to 7 back is sent as deliveredOn', async () => {
+      const dialog = within(await open());
+      typeDate(dialog, addDaysIso(today, -7));
+      submit();
+      await waitFor(() => expect(api.tickets.recordDelivery).toHaveBeenCalledTimes(1));
+      expect(api.tickets.recordDelivery.mock.calls).toEqual([[1, {
+        source: 'WAREHOUSE', note: null, lines: [{ itemId: 21, qty: 64 }, { itemId: 23, qty: 75.5 }],
+        deliveredOn: addDaysIso(today, -7),
+      }]]);
+    });
+
+    it('8 days back and tomorrow are refused in the field, which keeps the day it had', async () => {
+      const dialog = within(await open());
+      typeDate(dialog, addDaysIso(today, -8));
+      expect(dialog.getByLabelText('วันที่ส่ง').value).toBe(be(today));
+      expect(dialog.getByText('วันที่อยู่นอกช่วงที่เลือกได้')).toBeTruthy();
+      typeDate(dialog, addDaysIso(today, 1));
+      expect(dialog.getByLabelText('วันที่ส่ง').value).toBe(be(today));
+      submit();
+      await waitFor(() => expect(api.tickets.recordDelivery).toHaveBeenCalledTimes(1));
+      expect(api.tickets.recordDelivery.mock.calls[0][1]).not.toHaveProperty('deliveredOn');
+    });
+
+    it('says the window and that the payment due date counts from this day', async () => {
+      const dialog = within(await open());
+      expect(dialog.getByTestId('delivery-date-hint').textContent)
+        .toBe('ย้อนหลังได้ไม่เกิน 7 วัน · วันครบกำหนดชำระนับจากวันที่ส่งครบ');
+    });
+  });
+
+  // Fix round 1 (L1): never before the Bangkok day the order was confirmed — the server's rule, offered by the field.
+  describe('วันที่ส่ง is not before the order confirmation (fix round 1, L1)', () => {
+    const today = bangkokTodayIso();
+    const be = (iso) => `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${Number(iso.slice(0, 4)) + 543}`;
+    const confirmedOn = addDaysIso(today, -3);
+    // 00:30 Bangkok on confirmedOn = 17:30 UTC the day before.
+    const events = [{ id: 1, kind: 'CUSTOMER_CONFIRMED', createdAt: `${addDaysIso(confirmedOn, -1)}T17:30:00.000Z` }];
+
+    it('the day before the confirmation is refused in the field; the day itself is sent', async () => {
+      const dialog = within(await open({ events }));
+      const field = dialog.getByLabelText('วันที่ส่ง');
+      fireEvent.change(field, { target: { value: be(addDaysIso(confirmedOn, -1)) } });
+      fireEvent.blur(field);
+      expect(field.value).toBe(be(today));
+      expect(dialog.getByText('วันที่อยู่นอกช่วงที่เลือกได้')).toBeTruthy();
+      fireEvent.change(field, { target: { value: be(confirmedOn) } });
+      fireEvent.blur(field);
+      submit();
+      await waitFor(() => expect(api.tickets.recordDelivery).toHaveBeenCalledTimes(1));
+      expect(api.tickets.recordDelivery.mock.calls[0][1].deliveredOn).toBe(confirmedOn);
+    });
+
+    it('the hint names the confirmation day when it is what sets the earliest day', async () => {
+      const dialog = within(await open({ events }));
+      const [y, m, d] = confirmedOn.split('-').map(Number);
+      const thaiShort = ['ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.', 'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.'][m - 1];
+      expect(dialog.getByTestId('delivery-date-hint').textContent)
+        .toBe(`เลือกได้ตั้งแต่วันยืนยันคำสั่งซื้อ ${d} ${thaiShort} ${y + 543} · วันครบกำหนดชำระนับจากวันที่ส่งครบ`);
+    });
+  });
+
+  // Fix round 1 (M2): the one-click ส่งมอบครบ asks for the same วันที่ส่ง, in a small confirm dialog.
+  describe('ส่งมอบครบ with วันที่ส่ง (fix round 1, M2)', () => {
+    const today = bangkokTodayIso();
+    const be = (iso) => `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${Number(iso.slice(0, 4)) + 543}`;
+    const COMPLETE = [{ action: 'COMPLETE_DELIVERY' }];
+    const openComplete = async (over = {}) => {
+      api.tickets.completeDelivery.mockReset();
+      api.tickets.completeDelivery.mockResolvedValue({});
+      renderPanel(OWNER, [], { items: lines, availableActions: COMPLETE, ...over });
+      fireEvent.click(await screen.findByTestId('deal-fulfilment-complete'));
+      return within(await screen.findByRole('dialog', { name: 'ส่งมอบครบทุกรายการ' }));
+    };
+    const confirm = (dialog) => fireEvent.click(dialog.getByRole('button', { name: 'ยืนยันส่งมอบครบ' }));
+
+    it('asks first: nothing is sent until confirmed; today sends the request exactly as before', async () => {
+      const dialog = await openComplete();
+      expect(api.tickets.completeDelivery).not.toHaveBeenCalled();
+      expect(dialog.getByLabelText('วันที่ส่ง').value).toBe(be(today));
+      confirm(dialog);
+      await waitFor(() => expect(api.tickets.completeDelivery).toHaveBeenCalledTimes(1));
+      expect(api.tickets.completeDelivery.mock.calls[0]).toEqual([1, { note: 'ส่งมอบครบจากหน้ารายละเอียดงาน' }]);
+    });
+
+    it('a past day up to 7 back goes as deliveredOn; 8 back is refused in the field', async () => {
+      const dialog = await openComplete();
+      const field = dialog.getByLabelText('วันที่ส่ง');
+      fireEvent.change(field, { target: { value: be(addDaysIso(today, -8)) } });
+      fireEvent.blur(field);
+      expect(field.value).toBe(be(today));
+      fireEvent.change(field, { target: { value: be(addDaysIso(today, -4)) } });
+      fireEvent.blur(field);
+      confirm(dialog);
+      await waitFor(() => expect(api.tickets.completeDelivery).toHaveBeenCalledTimes(1));
+      expect(api.tickets.completeDelivery.mock.calls[0]).toEqual([1,
+        { note: 'ส่งมอบครบจากหน้ารายละเอียดงาน', deliveredOn: addDaysIso(today, -4) }]);
+    });
+
+    it('ยกเลิก sends nothing', async () => {
+      const dialog = await openComplete();
+      fireEvent.click(dialog.getByRole('button', { name: 'ยกเลิก' }));
+      await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+      expect(api.tickets.completeDelivery).not.toHaveBeenCalled();
+    });
+  });
+
+  it('the history line of a back-dated record also says when it was recorded', async () => {
+    api.tickets.listDeliveries.mockResolvedValue({
+      items: [
+        { deliveryId: 1, deliveredAt: '2026-11-10T05:00:00Z', createdAt: '2026-11-14T03:00:00Z', source: 'WAREHOUSE', items: [{ itemId: 21, qty: 30 }], deliveredByName: 'สมหญิง', note: null },
+        { deliveryId: 2, deliveredAt: '2026-11-15T03:00:00Z', createdAt: '2026-11-15T03:00:00Z', source: 'WAREHOUSE', items: [{ itemId: 21, qty: 26 }], deliveredByName: null, note: null },
+      ],
+    });
+    try {
+      renderPanel(OWNER, [], { items: lines, availableActions: ACTIONS });
+      const first = (await screen.findByText(/Equipe Raku 20x20: 30/)).parentElement;
+      expect(first.textContent).toContain('บันทึก 14 พ.ย. 2569');
+      const second = screen.getByText(/Equipe Raku 20x20: 26/).parentElement;
+      expect(second.textContent).not.toContain('บันทึก');
+    } finally {
+      api.tickets.listDeliveries.mockResolvedValue({ items: [] });
+    }
   });
 
   // Fix round 1, F3/F6: the note is CONDITIONAL — whether this save completes the deal is the server's call

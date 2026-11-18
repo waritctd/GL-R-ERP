@@ -244,9 +244,7 @@ public class TicketService {
         // read (every item's cost fields, the full event feed) is therefore refused to it. This
         // guard is on this ONE read only: requireViewAccess (shared by actions, listDeliveries,
         // comment, ...) is deliberately untouched, and so are import's /import-requests routes.
-        if (IMPORT_ROLES.contains(actor.role())) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
-        }
+        refuseImportWholeDealRead(actor);
         TicketDto ticket = requireViewAccess(id, actor);
         // Display-only fallback, scoped to THIS single read endpoint on purpose. Every
         // other reader of ticket.items() (actions()'s canRecordDelivery/
@@ -1779,7 +1777,9 @@ public class TicketService {
             source,
             request == null ? null : request.note(),
             remaining,
-            request == null ? null : request.recipientName());
+            request == null ? null : request.recipientName(),
+            // Slice 6d fix round 1 (M2): the one-click ส่งมอบครบ takes the dialog's วันที่ส่ง, same window.
+            request == null ? null : request.deliveredOn());
         return recordDeliveryInternal(ticket, delivery, actor, true);
     }
 
@@ -1790,6 +1790,7 @@ public class TicketService {
         if (request == null || request.lines() == null || request.lines().isEmpty()) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุรายการส่งสินค้า");
         }
+        java.time.Instant deliveredAt = backDatedDeliveryInstant(request.deliveredOn(), s.id());
         String source = request.source() == null ? "" : request.source().trim().toUpperCase();
         if (!DELIVERY_SOURCES.contains(source)) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "source ต้องเป็น WAREHOUSE หรือ STOCK");
@@ -1826,12 +1827,14 @@ public class TicketService {
             throw new ApiException(HttpStatus.CONFLICT, "ต้องรับสินค้าเข้าโกดังก่อนส่งจากคลังสินค้า");
         }
         long deliveryId = tickets.insertDeliveryRecord(
-            s.id(), source, actor.id(), request.note(), request.recipientName(), normalized);
+            s.id(), source, actor.id(), request.note(), request.recipientName(), normalized, deliveredAt);
         TicketDto updated = requireTicket(s.id());
         TicketSummaryDto updatedSummary = updated.summary();
         boolean fullyDelivered = updated.items().stream()
             .allMatch(item -> nullToZero(item.qtyDelivered()).compareTo(nullToZero(item.qty())) >= 0);
-        String message = deliveryMessage(updated.items(), normalized);
+        // A back-dated record says so in the history: the event itself is stamped when it was recorded.
+        String message = deliveryMessage(updated.items(), normalized)
+            + (deliveredAt == null ? "" : " · วันที่ส่ง " + ThaiText.date(request.deliveredOn()));
         tickets.addEventWithDocument(s.id(), actor.id(), actor.name(),
             TicketEventKind.DELIVERY_RECORDED, updatedSummary.status(), updatedSummary.status(), message,
             RelatedDocumentType.DELIVERY_RECORD, deliveryId);
@@ -1861,6 +1864,52 @@ public class TicketService {
             tickets.updateFulfillmentStatus(s.id(), FulfilmentStatus.PARTIALLY_DELIVERED);
         }
         return requireTicket(s.id());
+    }
+
+    /** วันที่ส่ง may go back at most this many days (owner answer 2, slice 6d). */
+    static final int MAX_DELIVERY_BACK_DAYS = 7;
+
+    /**
+     * Slice 6d, วันที่ส่ง: the {@code delivered_at} to store for {@code deliveredOn}, or {@code null} for "the moment it
+     * is recorded" (the column's {@code now()} default, exactly as before). Today, or no date, is that moment. A past
+     * day — at most {@link #MAX_DELIVERY_BACK_DAYS} back on the Asia/Bangkok calendar — is stored at 12:00 Bangkok on
+     * that day: every reader of the column takes its Bangkok calendar date (paymentTermsRowSql's
+     * {@code delivered_on}, the history's date), and noon keeps that date the same in any zone from UTC−5 to UTC+12,
+     * so a browser formatting the instant in local time still shows the day (UTC−5 to UTC+14). Never a future day.
+     *
+     * <p>Fix round 1 (L1, controller ruling): never before the day the order was confirmed either — the Asia/Bangkok
+     * date of {@link TicketRepository#findOrderConfirmedAt} (the document chain's own "order confirmed": the latest
+     * confirm-from-quotation event, else the latest CUSTOMER_CONFIRMED). The earliest allowed day is the later of
+     * today − {@link #MAX_DELIVERY_BACK_DAYS} and that day, and the 400 names it. A deal with no confirmation event has
+     * the 7-day window only.
+     *
+     * <p>400, writing nothing: this runs after the caller's permission check and before any write. The window is the
+     * server's, not the client's.
+     */
+    private java.time.Instant backDatedDeliveryInstant(LocalDate deliveredOn, long ticketId) {
+        if (deliveredOn == null) {
+            return null;
+        }
+        LocalDate today = bangkokToday();
+        if (deliveredOn.isAfter(today)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "วันที่ส่งต้องไม่เป็นวันในอนาคต");
+        }
+        LocalDate windowStart = today.minusDays(MAX_DELIVERY_BACK_DAYS);
+        LocalDate confirmedOn = tickets.findOrderConfirmedAt(ticketId)
+            .map(at -> LocalDate.ofInstant(at, java.time.ZoneId.of("Asia/Bangkok")))
+            .orElse(null);
+        boolean confirmationGoverns = confirmedOn != null && confirmedOn.isAfter(windowStart);
+        LocalDate earliest = confirmationGoverns ? confirmedOn : windowStart;
+        if (deliveredOn.isBefore(earliest)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, (confirmationGoverns
+                ? "วันที่ส่งต้องไม่ก่อนวันยืนยันคำสั่งซื้อ"
+                : "ย้อนวันที่ส่งได้ไม่เกิน " + MAX_DELIVERY_BACK_DAYS + " วัน")
+                + " — เลือกได้ตั้งแต่ " + ThaiText.date(earliest));
+        }
+        if (deliveredOn.equals(today)) {
+            return null;
+        }
+        return deliveredOn.atTime(12, 0).atZone(java.time.ZoneId.of("Asia/Bangkok")).toInstant();
     }
 
     @Transactional
@@ -2629,16 +2678,46 @@ public class TicketService {
 
     // ── Deal tracking + activity (V83, "kill the weekly report") ─────────────────────────────
 
-    /** Records follow-ups even on inactive deals so their history remains explainable. */
+    /**
+     * Records follow-ups even on inactive deals so their history remains explainable.
+     *
+     * <p>Slice 6.4: an optional {@code nextFollowUpAt} (the call dialog's ตามครั้งถัดไป) also writes ONLY
+     * {@code sales.ticket.next_follow_up_at}, in this transaction. Setting the date is held to exactly what setting it
+     * through {@link #updateTracking} takes — requireDealOwnership (already checked here for the activity) plus
+     * requireActive — and the date must be today or later in Asia/Bangkok. Every check runs before any write, so a
+     * refused request writes neither the date nor the activity. Never routed through updateTracking: that is a full
+     * replace and would wipe the designer/owner/buyer names.
+     *
+     * <p>Slice 6d: ส่งตัวอย่าง ({@link DealActivityKind#SAMPLE_SENT}) takes this same path and rule; its note — what was
+     * sent — must not be blank ({@link DealActivityKind#requiresNote}), checked with the kind, before anything is read.
+     */
     @Transactional
     public DealActivityDto addActivity(long ticketId, DealActivityRequest request, UserPrincipal actor) {
         if (!DealActivityKind.isValid(request.kind())) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "ไม่รองรับประเภทกิจกรรม '" + request.kind() + "'");
         }
+        if (DealActivityKind.requiresNote(request.kind()) && blankToNull(request.note()) == null) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ระบุว่าส่งอะไรไป (เช่น ตัวอย่างกระเบื้อง 3 สี)");
+        }
+        // #1353: with a date, the deal's row lock first — before the deal is read and the ACTIVE check runs. Every kind
+        // takes this path, SAMPLE_SENT (slice 6d) included; the body checks above read no row, so they may come first.
+        if (request.nextFollowUpAt() != null) {
+            tickets.lockTicketForUpdate(ticketId); // so requireActiveForFollowUp reads the locked row
+        }
         TicketSummaryDto s = requireTicket(ticketId).summary();
         requireDealOwnership(s, actor);
+        LocalDate nextFollowUpAt = request.nextFollowUpAt();
+        if (nextFollowUpAt != null) {
+            // updateTracking's requireActive, with a message that says it is the DATE that cannot be set (fix round 1,
+            // M1): the same activity without a date is still accepted on a non-ACTIVE deal.
+            requireActiveForFollowUp(s, "งานนี้ไม่ได้อยู่ระหว่างดำเนินการ จึงตั้งวันตามครั้งถัดไปไม่ได้ — บันทึกได้โดยไม่ใส่วัน");
+            requireFollowUpNotPast(nextFollowUpAt, bangkokToday());
+        }
         long id = tickets.insertDealActivity(ticketId, request.activityDate(), request.kind(),
             blankToNull(request.note()), actor.id());
+        if (nextFollowUpAt != null) {
+            tickets.updateNextFollowUpAt(ticketId, nextFollowUpAt);
+        }
         return tickets.findActivitiesByTicket(ticketId).stream()
             .filter(a -> a.id() == id)
             .findFirst()
@@ -2670,12 +2749,110 @@ public class TicketService {
     @Transactional
     public boolean recordVisitActivity(long ticketId, java.time.LocalDate activityDate, String note, long visitOwnerId,
                                        boolean onlyIfStillOwner) {
+        return recordVisitActivity(ticketId, activityDate, note, visitOwnerId, onlyIfStillOwner, null);
+    }
+
+    /**
+     * As above; when it writes the activity and {@code nextFollowUpAt} is set, it also writes ONLY
+     * {@code next_follow_up_at} (slice 6.4). The caller must have run {@link #requireVisitFollowUpWritable} first —
+     * this never writes the date without writing the activity, so it can never land where the activity does not.
+     *
+     * <p>Fix round 1 (the reassignment race): with a date, the owner is RE-CHECKED under the deal's row lock
+     * ({@link TicketRepository#lockTicketForUpdate}, the lock the deal-party and quotation writes take), in the
+     * caller's transaction. A deal reassigned between the caller's check and this write is refused (403) rather than
+     * returning "not written" — the date was asked for and cannot land — so the caller's transaction rolls back the
+     * visit's tick with it. The activity and the date are then written together under that lock.
+     */
+    @Transactional
+    public boolean recordVisitActivity(long ticketId, LocalDate activityDate, String note, long visitOwnerId,
+                                       boolean onlyIfStillOwner, LocalDate nextFollowUpAt) {
+        if (nextFollowUpAt != null) {
+            tickets.lockTicketForUpdate(ticketId);
+        }
         TicketSummaryDto s = requireTicket(ticketId).summary();
         if (onlyIfStillOwner && s.createdById() != visitOwnerId) {
+            if (nextFollowUpAt != null) {
+                throw visitFollowUpNotOnDeal();
+            }
             return false;
         }
         tickets.insertDealActivity(ticketId, activityDate, DealActivityKind.SITE_VISIT, note, visitOwnerId);
+        if (nextFollowUpAt != null) {
+            tickets.updateNextFollowUpAt(ticketId, nextFollowUpAt);
+        }
         return true;
+    }
+
+    /**
+     * Slice 6.4: may a visit's ตามต่อ set this deal's next follow-up date? Only where three EXISTING rules all hold, so it
+     * is never looser than any path that sets the date today:
+     * <ol>
+     *   <li>the visit's SITE_VISIT activity lands on the deal — {@link #recordVisitActivity}'s rule: the visit's owner
+     *       is the deal's current owner ({@code created_by}), not merely its keyer. A visit whose tick stays on the
+     *       visit (deal moved, a keyer's or a manager's own visit) cannot move the deal's date either; 403;</li>
+     *   <li>the caller passes {@link #requireDealOwnership} — the gate {@link #updateTracking} and {@link #addActivity}
+     *       use; 403;</li>
+     *   <li>the deal is ACTIVE — updateTracking's requireActive; 409;</li>
+     * </ol>
+     * and the date is today or later on the Asia/Bangkok calendar ({@code bangkokToday} is the visit service's own
+     * clock); 400. Takes the deal's row lock (must run inside the caller's transaction), so the owner/ACTIVE checks read
+     * the deal as it is under the lock; still writes nothing.
+     */
+    public void requireVisitFollowUpWritable(long ticketId, long visitOwnerId, LocalDate nextFollowUpAt,
+                                             LocalDate bangkokToday, UserPrincipal actor) {
+        tickets.lockTicketForUpdate(ticketId);
+        TicketSummaryDto s = requireTicket(ticketId).summary();
+        if (s.createdById() != visitOwnerId) {
+            throw visitFollowUpNotOnDeal();
+        }
+        requireDealOwnership(s, actor);
+        requireActiveForFollowUp(s, "งานนี้ไม่ได้อยู่ระหว่างดำเนินการ จึงตั้งวันตามต่อไม่ได้ — บันทึกเข้าพบได้โดยไม่ใส่วัน");
+        requireFollowUpNotPast(nextFollowUpAt, bangkokToday);
+    }
+
+    /**
+     * Fix round 1 (M3): a one-step visit log de-duplicated within a minute (VisitService#create) carries a date the
+     * first log did not apply — write it, as a fresh log would have. The caller has already run
+     * {@link #requireVisitFollowUpWritable}; the owner is re-checked under the deal's row lock exactly as in
+     * {@link #recordVisitActivity}. No second activity: the first log's activity is the record.
+     */
+    @Transactional
+    public void recordVisitFollowUp(long ticketId, long visitOwnerId, LocalDate nextFollowUpAt) {
+        tickets.lockTicketForUpdate(ticketId);
+        if (requireTicket(ticketId).summary().createdById() != visitOwnerId) {
+            throw visitFollowUpNotOnDeal();
+        }
+        tickets.updateNextFollowUpAt(ticketId, nextFollowUpAt);
+    }
+
+    private static ApiException visitFollowUpNotOnDeal() {
+        return new ApiException(HttpStatus.FORBIDDEN, "การเข้าพบนี้ไม่ได้บันทึกลงงาน จึงตั้งวันตามต่อของงานไม่ได้");
+    }
+
+    /** requireActive's rule (409 unless ACTIVE) with a message naming the follow-up date as what is refused. */
+    private static void requireActiveForFollowUp(TicketSummaryDto s, String message) {
+        if (!DealLifecycle.ACTIVE.equals(s.lifecycle())) {
+            throw new ApiException(HttpStatus.CONFLICT, message);
+        }
+    }
+
+    /** The one date rule for a follow-up set from a call or a visit: today or later in Asia/Bangkok. No upper bound —
+     * the tracking path that already sets this date has none. */
+    public static void requireFollowUpNotPast(LocalDate nextFollowUpAt, LocalDate bangkokToday) {
+        if (nextFollowUpAt != null && nextFollowUpAt.isBefore(bangkokToday)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "วันตามครั้งถัดไปต้องเป็นวันนี้หรือหลังจากนี้");
+        }
+    }
+
+    /**
+     * The whole-deal read rule of {@link #get} without the read: import refused, then {@link #requireViewAccess}
+     * (viewer role; account refused; a sales rep only their own/keyed deal). 404 when the deal does not exist. For
+     * callers outside this class that serve something hanging off a deal to whoever may open it (slice 6.5's planned
+     * visits) — one definition, so the two cannot drift.
+     */
+    public void requireDealReadAccess(long ticketId, UserPrincipal actor) {
+        refuseImportWholeDealRead(actor);
+        requireViewAccess(ticketId, actor);
     }
 
     public List<DealActivityDto> listActivities(long ticketId, UserPrincipal actor) {
@@ -2684,14 +2861,24 @@ public class TicketService {
         return tickets.findActivitiesByTicket(ticketId);
     }
 
-    /** Sets the rep-facing tracking fields (win% override, counterparty names, next follow-up). */
+    /**
+     * Sets the rep-facing tracking fields (win% override, counterparty names, next follow-up).
+     *
+     * <p>The next follow-up date is KEPT when absent (set when sent, cleared by clearNextFollowUpAt), so a stale form
+     * no longer overwrites a date a call or visit set in the meantime.
+     */
     @Transactional
     public TicketDto updateTracking(long ticketId, TrackingUpdateRequest request, UserPrincipal actor) {
         TicketSummaryDto s = requireTicket(ticketId).summary();
         requireDealOwnership(s, actor);
         requireActive(s);
         tickets.updateTracking(ticketId, request.winProbability(), blankToNull(request.designerName()),
-            blankToNull(request.ownerName()), blankToNull(request.buyerName()), request.nextFollowUpAt());
+            blankToNull(request.ownerName()), blankToNull(request.buyerName()));
+        if (Boolean.TRUE.equals(request.clearNextFollowUpAt())) {
+            tickets.updateNextFollowUpAt(ticketId, null);
+        } else if (request.nextFollowUpAt() != null) {
+            tickets.updateNextFollowUpAt(ticketId, request.nextFollowUpAt());
+        }
         if (request.expectedQuarter() != null) { // null = keep (see TrackingUpdateRequest); "" = clear
             tickets.updateExpectedQuarter(ticketId, blankToNull(request.expectedQuarter()));
         }
@@ -3895,6 +4082,18 @@ public class TicketService {
 
     void useClock(java.time.Clock clock) {
         this.clock = clock;
+    }
+
+    /** Today on the Asia/Bangkok calendar, from {@link #clock}. */
+    private LocalDate bangkokToday() {
+        return LocalDate.ofInstant(clock.instant(), java.time.ZoneId.of("Asia/Bangkok"));
+    }
+
+    /** {@link #get}'s import refusal: import reads its own projected deal page, never the whole deal. */
+    private void refuseImportWholeDealRead(UserPrincipal actor) {
+        if (IMPORT_ROLES.contains(actor.role())) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
+        }
     }
 
     /** วันที่จะกลับมาดู may be today or later on the Asia/Bangkok calendar (QuietRule#returningSql reads the same

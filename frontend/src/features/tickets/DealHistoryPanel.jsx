@@ -1,5 +1,6 @@
 /* Hallmark · genre: modern-minimal · macrostructure: Workbench · design-system: design.md · designed-as-app · pre-emit critique: P4 H4 E5 S4 R5 V5 */
 import { useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { Button } from '../../components/common/Button.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
@@ -7,8 +8,9 @@ import { Panel } from '../../components/common/Layout.jsx';
 import { SkeletonText } from '../../components/common/Skeleton.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { bangkokTodayIso, formatMoney, formatThaiDate, PAYMENT_KIND_LABEL } from '../../utils/format.js';
-import { ACTIVITY_KINDS, activityKindLabel } from './dealTrackingMeta.js';
-import { TIMELINE_FILTERS, timelineRowMatches } from './dealTimeline.js';
+import { ACTIVITY_KINDS, activityKindIcon, activityKindLabel, activityNoteRequired } from './dealTrackingMeta.js';
+import { showsPlannedVisits, TIMELINE_FILTERS, timelineRowMatches } from './dealTimeline.js';
+import { shortDayLabel, timeLabel, weekStartIso } from '../salesBoard/visitWeek.js';
 import { CANCEL_REASON_LABEL, LOST_REASON_F_CODE, LOST_REASON_LABEL } from './stageMeta.js';
 import { ThaiDateInput } from '../../components/common/ThaiDateInput.jsx';
 
@@ -196,11 +198,53 @@ function ActivityRow({ activity }) {
   return (
     <li className="flex flex-col gap-0.5 rounded-lg border border-border-subtle bg-surface-subtle px-3 py-2">
       <div className="flex flex-wrap items-center gap-2">
-        <StatusBadge tone="neutral">{activityKindLabel(activity.kind)}</StatusBadge>
+        <StatusBadge
+          tone="neutral"
+          icon={activityKindIcon(activity.kind) ? <Icon name={activityKindIcon(activity.kind)} size={12} /> : null}
+        >
+          {activityKindLabel(activity.kind)}
+        </StatusBadge>
         <span className="text-xs font-bold text-text-muted">{formatThaiDate(activity.activityDate)}</span>
         <span className="text-2xs text-text-muted">· {activity.createdByName}</span>
       </div>
       {activity.note ? <p className="m-0 text-xs text-text-secondary">{activity.note}</p> : null}
+    </li>
+  );
+}
+
+/**
+ * Slice 6.5 (prototype screen D): one PLANNED visit on this deal, above the dated history — it is what happens next,
+ * not something that happened. A dashed card with นัดไว้ (or เลยวันนัด once its day has passed unticked), who is being
+ * met, when, by whom, and the purpose. With `href` the whole card opens the นัดเข้าพบ page on the week holding the
+ * visit (`?week=<Monday>`), where it is ticked.
+ */
+function PlannedVisitRow({ visit, todayIso, href }) {
+  const overdue = visit.plannedDate < todayIso;
+  const when = [shortDayLabel(visit.plannedDate, todayIso), timeLabel(visit.plannedTime)].filter(Boolean).join(' · ');
+  const body = (
+    <>
+      <span className="flex flex-wrap items-center gap-2">
+        <StatusBadge tone={overdue ? 'warning' : 'info'}>{overdue ? 'เลยวันนัด' : 'นัดไว้'}</StatusBadge>
+        <strong className="min-w-0 text-sm text-text [overflow-wrap:anywhere]">{`นัดเข้าพบ · ${visit.contactName}`}</strong>
+      </span>
+      <span className="text-xs font-bold text-text-secondary">
+        {when}
+        {visit.ownerName ? <span className="font-normal text-text-muted">{` · ${visit.ownerName}`}</span> : null}
+      </span>
+      {visit.note ? <span className="text-xs text-text-secondary [overflow-wrap:anywhere]">{visit.note}</span> : null}
+    </>
+  );
+  const card = 'flex flex-col gap-1 rounded-lg border border-dashed border-border-strong bg-surface px-3 py-2';
+  return (
+    <li data-testid="timeline-planned-visit" className={href ? '' : card}>
+      {href ? (
+        <Link
+          to={`${href}?week=${weekStartIso(visit.plannedDate)}`}
+          className={`${card} min-h-11 no-underline transition-colors hover:border-primary hover:bg-surface-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary`}
+        >
+          {body}
+        </Link>
+      ) : body}
     </li>
   );
 }
@@ -224,6 +268,11 @@ export function DealHistoryPanel({
   canAddActivity = false,
   onAddActivity,
   addingActivity = false,
+  // Slice 6.5: the deal's PLANNED visits as the server served them to this viewer (already narrowed to the visits they
+  // may read); `visitsHref` links each to the นัดเข้าพบ page when the viewer may open it; `todayIso` marks the overdue.
+  plannedVisits = [],
+  visitsHref = null,
+  todayIso = bangkokTodayIso(),
 }) {
   const [activityDraft, setActivityDraft] = useState(emptyActivityDraft);
   const [filter, setFilter] = useState('all');
@@ -250,9 +299,13 @@ export function DealHistoryPanel({
     });
   }, [events, activities]);
   const rows = allRows.filter((row) => timelineRowMatches(row, filter));
+  const upcoming = showsPlannedVisits(filter) ? plannedVisits : [];
+  const nothing = rows.length === 0 && upcoming.length === 0;
 
   async function submitActivity() {
     if (!activityDraft.activityDate) return;
+    // Slice 6d: ส่งตัวอย่าง's note is what was sent — the server 400s a blank one (DealActivityKind.requiresNote).
+    if (activityNoteRequired(activityDraft.kind) && !activityDraft.note.trim()) return;
     await onAddActivity({
       activityDate: activityDraft.activityDate,
       kind: activityDraft.kind,
@@ -309,9 +362,9 @@ export function DealHistoryPanel({
         />
       ) : null}
       <div className="ticket-events">
-        {rows.length === 0 && !loading && allRows.length > 0 ? (
+        {nothing && !loading && (allRows.length > 0 || plannedVisits.length > 0) ? (
           <p className="m-0 px-1 py-3 text-sm text-text-muted">ไม่มีรายการในตัวกรองนี้</p>
-        ) : rows.length === 0 && !loading ? (
+        ) : nothing && !loading ? (
           // FIX 1 (Opus review): when `canViewActivityFeed` is false, `activities` is always `[]` because it was never
           // fetched for this viewer (see the parent's `activitiesQuery.enabled`) — an empty `events` list here only
           // proves the AUDIT TRAIL is empty, not that "nothing has happened on this deal".
@@ -326,6 +379,9 @@ export function DealHistoryPanel({
           )
         ) : (
           <ul className="m-0 flex list-none flex-col gap-2 p-0">
+            {upcoming.map((visit) => (
+              <PlannedVisitRow key={`visit-${visit.id}`} visit={visit} todayIso={todayIso} href={visitsHref} />
+            ))}
             {rows.map((row) => (
               row.type === 'event'
                 ? <EventRow key={row.key} event={row.event} />
@@ -352,6 +408,7 @@ function Composer({
   canComment, commentText, onCommentTextChange, onSubmitComment, commentSubmitting,
   canAddActivity, activityDraft, setActivityDraft, addingActivity, submitActivity,
 }) {
+  const noteRequired = activityNoteRequired(activityDraft.kind);
   return (
     <div className="mb-3 flex flex-col rounded-md border border-border-subtle bg-surface-muted">
       {canComment ? (
@@ -399,17 +456,19 @@ function Composer({
             </label>
           </div>
           <label className="flex flex-col gap-1 text-xs font-bold text-text-secondary">
-            บันทึก (ถ้ามี)
+            {noteRequired ? 'ส่งอะไร *' : 'บันทึก (ถ้ามี)'}
             <textarea
               rows={2}
               value={activityDraft.note}
               onChange={(e) => setActivityDraft((d) => ({ ...d, note: e.target.value }))}
-              placeholder="รายละเอียดการติดต่อ / ผลที่ได้"
+              placeholder={noteRequired ? 'เช่น ตัวอย่างกระเบื้อง Raku 3 สี' : 'รายละเอียดการติดต่อ / ผลที่ได้'}
+              required={noteRequired}
+              maxLength={2000}
             />
           </label>
           <Button
             type="button" variant="secondary" className="self-end"
-            disabled={addingActivity || !activityDraft.activityDate}
+            disabled={addingActivity || !activityDraft.activityDate || (noteRequired && !activityDraft.note.trim())}
             onClick={submitActivity}
           >
             <Icon name="plus" size={14} />

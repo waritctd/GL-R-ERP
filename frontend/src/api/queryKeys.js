@@ -127,11 +127,16 @@ export const queryKeys = {
   // Under 'tickets' so every deal/visit write's ['tickets'] invalidation refreshes them too.
   salesVisitsOwn: (from, to) => ['tickets', 'salesVisits', 'own', from, to],
   salesVisitsTeam: (from, to) => ['tickets', 'salesVisits', 'team', from, to],
+  // Slice 6.5: one deal's planned visits (the deal page's history) — under 'salesVisits' so planning, ticking or
+  // cancelling a visit anywhere refreshes it.
+  salesVisitsPlannedOnDeal: (ticketId) => ['tickets', 'salesVisits', 'deal', ticketId == null ? ticketId : Number(ticketId)],
   // The quiet threshold the deal list's ภาพรวมทีม badge names. Deliberately OUTSIDE 'tickets': it is near-static, so a
   // ['tickets'] invalidation (an activity, a stage move) must not refetch the whole team overview just to re-read it.
   salesBoardQuietDays: () => ['salesBoard', 'quietDays'],
   // The weekly sales-analytics snapshot. Outside 'tickets': no deal write changes it.
   salesAnalyticsSnapshot: () => ['salesAnalytics', 'snapshot'],
+  // The weekly figures computed in the portal (analytics.metric_weekly); recomputed by a job, no write in the app changes them.
+  salesAnalyticsMetrics: () => ['salesAnalytics', 'metrics'],
   // The leave + check-in analytics page, per served scope. No write in the app changes it.
   peopleInsights: (scope, year) => ['peopleInsights', scope ?? 'default', year ?? 'default'],
   // Same reasoning, for UnitBasis's four codes. See features/pricingRequests/unitBasisCatalog.js.

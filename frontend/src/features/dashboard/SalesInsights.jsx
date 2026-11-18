@@ -7,6 +7,7 @@ import { Skeleton } from '../../components/common/Skeleton.jsx';
 import { formatThaiDate } from '../../utils/format.js';
 import { MonthDetail, MonthPicker, NowDetail } from './insight/insightMonth.jsx';
 import { isUsable } from './insight/insightFormat.js';
+import { PortalMetrics } from './insight/PortalMetrics.jsx';
 import { YearPart } from './insight/insightYear.jsx';
 
 /** The "วิเคราะห์ยอดขาย" view of the CEO / sales-manager landing page: a stored analytics snapshot. */
@@ -29,6 +30,12 @@ export function SalesInsights({ user }) {
 
   return (
     <div className="grid gap-[18px]" data-testid="sales-insights">
+      <ErrorBoundary fallback={() => <p role="alert" data-testid="portal-metrics-fallback" className="m-0 text-sm text-danger">แสดงตัวเลขจาก Portal ไม่ได้</p>}>
+        <PortalMetrics />
+      </ErrorBoundary>
+      <h2 data-testid="portal-snapshot-heading" className="m-0 mt-2 text-sm font-bold text-text-muted">
+        ส่วนด้านล่างมาจากรายงานประจำสัปดาห์และไฟล์ค่าคอมมิชชัน
+      </h2>
       {asOf || uploadedAt ? (
         <small className="text-xs text-text-muted" data-testid="insight-updated">
           {[asOf ? `ข้อมูล ณ ${asOf}` : null, uploadedAt ? `อัปเดตล่าสุด ${formatThaiDate(uploadedAt)}` : null].filter(Boolean).join(' · ')}

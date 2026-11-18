@@ -23,16 +23,10 @@ public class DocumentChainRepository {
     }
 
     /** When the order was confirmed: the latest confirm-order-from-quotation event, else the latest CUSTOMER_CONFIRMED
-     * (the pricing-request route). */
+     * (the pricing-request route). The statement is TicketRepository#ORDER_CONFIRMED_AT_SQL, shared with the
+     * delivery-date floor (slice 6d) so the two cannot disagree on "order confirmed". */
     public Optional<Instant> findOrderConfirmedAt(long ticketId) {
-        return jdbc.query("""
-            SELECT created_at FROM sales.ticket_event
-             WHERE ticket_id = :id AND kind IN (:promoted, :confirmed)
-             ORDER BY (kind = :promoted) DESC, created_at DESC, event_id DESC
-             LIMIT 1
-            """, new MapSqlParameterSource().addValue("id", ticketId)
-                .addValue("promoted", TicketEventKind.DEAL_PROMOTED_FROM_QUOTATION)
-                .addValue("confirmed", TicketEventKind.CUSTOMER_CONFIRMED),
+        return jdbc.query(TicketRepository.ORDER_CONFIRMED_AT_SQL, TicketRepository.orderConfirmedAtParams(ticketId),
             (rs, n) -> rs.getTimestamp("created_at").toInstant()).stream().findFirst();
     }
 

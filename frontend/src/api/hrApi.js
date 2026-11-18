@@ -573,8 +573,10 @@ export const api = {
     createDrafts: (ticketId, payload) =>
       apiRequest(API_ROUTES.storedImportRequests.forTicket(ticketId), { method: 'POST', body: payload }),
     listForTicket: (ticketId) => apiRequest(API_ROUTES.storedImportRequests.forTicket(ticketId)),
-    // `{ hasUncoveredFactories }` — read-only; kept off the list so the import pages do not pay for it.
-    coverage: (ticketId) => apiRequest(API_ROUTES.storedImportRequests.coverage(ticketId)),
+    // `{ hasUncoveredFactories, uncoveredFactoryNames, splitPreview }` — read-only; kept off the list so the import
+    // pages do not pay for it. `itemFactories` (optional) are the unsaved picks the split preview should apply.
+    coverage: (ticketId, itemFactories) =>
+      apiRequest(API_ROUTES.storedImportRequests.coverage(ticketId, itemFactories)),
     get: (id) => apiRequest(API_ROUTES.storedImportRequests.get(id)),
     // PATCH: an absent field is left alone, never blanked — see ImportRequestRequests.
     // UpdateImportRequestRequest's own Javadoc.
@@ -641,6 +643,8 @@ export const api = {
   // Read-only here: the weekly refresh job PUTs the document from the CEO's signed-in page, not this client.
   salesAnalytics: {
     snapshot: () => apiRequest(API_ROUTES.salesAnalytics.snapshot),
+    // metrics: {weekStart, computedAt, metrics: [{key, dimension, label, value, previous}], checks: [{key, passed, detail}]}.
+    metrics: () => apiRequest(API_ROUTES.salesAnalytics.metrics),
   },
   // Mirrors PeopleInsightsController (peopleinsights/). get({ year?, scope? }): scope 'all' or a team id the caller may pick.
   peopleInsights: {
@@ -719,14 +723,18 @@ export const api = {
   },
   // Mirrors VisitController (salesboard/). list: the caller's own visits planned in [from, to] (ISO dates, at most
   // 31 days inclusive); team: every rep's, sales_manager / ceo only. create `{ ticketId?, contactName, plannedDate,
-  // plannedTime?, note?, done? }` (done = log a visit that happened today, in one step); done `{ note? }` and cancel
-  // only from PLANNED (409 otherwise). Role and ownership gates live in VisitService.
+  // plannedTime?, note?, done?, nextFollowUpAt? }` (done = log a visit that happened today, in one step); done
+  // `{ note?, nextFollowUpAt? }` and cancel only from PLANNED (409 otherwise). nextFollowUpAt (slice 6.4, ตามต่อ) sets
+  // the deal's next follow-up date, only on a done visit whose activity lands on its deal. Role and ownership gates
+  // live in VisitService.
   salesVisits: {
     list: ({ from, to }) => apiRequest(withQuery(API_ROUTES.salesVisits.list, { from, to })),
     team: ({ from, to }) => apiRequest(withQuery(API_ROUTES.salesVisits.team, { from, to })),
     create: (payload) => apiRequest(API_ROUTES.salesVisits.create, { method: 'POST', body: payload }),
     done: (id, payload = {}) => apiRequest(API_ROUTES.salesVisits.done(id), { method: 'POST', body: payload }),
     cancel: (id) => apiRequest(API_ROUTES.salesVisits.cancel(id), { method: 'POST' }),
+    // Slice 6.5: the deal's PLANNED visits this caller may already read (own; every owner's for sales_manager / ceo).
+    plannedOnDeal: (ticketId) => apiRequest(API_ROUTES.salesVisits.plannedOnDeal(ticketId)),
   },
   // Lead-time change requests. Import raises ONE per factory quote
   // (`{ reason, lines: [{ pricingRequestItemId, newMinDays, newMaxDays }] }`); the owning rep or a

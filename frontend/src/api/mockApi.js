@@ -44,10 +44,12 @@ import {
   effectiveWinProbability as dealEffectiveWinProbability,
   hasActivitySince as dealHasActivitySince,
   isReadyToAdvance as dealIsReadyToAdvance,
+  activityNoteRequired as dealActivityNoteRequired,
   isValidActivityKind as dealIsValidActivityKind,
   lastStageChangeAt as dealLastStageChangeAt,
   STAGE_ADVANCE_GATE_MESSAGE as DEAL_STAGE_ADVANCE_GATE_MESSAGE,
 } from '../features/tickets/dealTrackingMeta.js';
+import { deliveryDateBounds as mockDeliveryDateBounds } from '../features/tickets/deliveryDate.js';
 // PricingRequest (commit 6): status transition table + option lists shared with the UI so the mock's gates
 // can't drift from PricingRequestService's — the authoritative rules live in the backend pricingrequest/
 // package.
@@ -2788,53 +2790,131 @@ function mockBuildImportRequestEmailDraft(row, docNumber, issueDateIso, firstIss
 // Mirrors ImportRequestService#applyItemFactoryChoices: sales' pick for a line with no factory at all
 // (no resolvedFactoryId, no catalogue factory, no typed name). Validated first; a line that already
 // has a factory is never overwritten.
+// Slice 6c: one pick's outcome, shared by the write above and the coverage split preview (in memory) — mirrors
+// ImportRequestService#itemFactoryChoice. The factory name to apply, or null; `refuseInvalid` is the create's 400s.
+function mockItemFactoryChoice(ticket, choice, refuseInvalid) {
+  const factory = mockPriceImportFactories.find((f) => f.factoryId === Number(choice.factoryId));
+  if (!factory) {
+    if (refuseInvalid) fail('ไม่พบโรงงานที่เลือก', 400);
+    return null;
+  }
+  const item = (ticket.items ?? []).find((i) => Number(i.id) === Number(choice.ticketItemId));
+  if (!item) {
+    if (refuseInvalid) fail('รายการที่เลือกไม่ได้อยู่ในงานนี้', 400);
+    return null;
+  }
+  const hasFactory = item.resolvedFactoryId != null
+    || (item.catalogPriceId != null && mockProductPrices.some((p) => p.priceId === Number(item.catalogPriceId)))
+    || (item.factory && String(item.factory).trim());
+  return hasFactory ? null : factory.name;
+}
+
 function mockApplyItemFactoryChoices(ticket, request) {
   for (const choice of request?.itemFactories ?? []) {
-    const factory = mockPriceImportFactories.find((f) => f.factoryId === Number(choice.factoryId));
-    if (!factory) fail('ไม่พบโรงงานที่เลือก', 400);
-    const item = (ticket.items ?? []).find((i) => Number(i.id) === Number(choice.ticketItemId));
-    if (!item) fail('รายการที่เลือกไม่ได้อยู่ในงานนี้', 400);
-    const hasFactory = item.resolvedFactoryId != null
-      || (item.catalogPriceId != null && mockProductPrices.some((p) => p.priceId === Number(item.catalogPriceId)))
-      || (item.factory && String(item.factory).trim());
-    if (!hasFactory) item.factory = factory.name;
+    const name = mockItemFactoryChoice(ticket, choice, true);
+    if (name) (ticket.items ?? []).find((i) => Number(i.id) === Number(choice.ticketItemId)).factory = name;
   }
 }
 
-function mockResolveFactoryGroups(ticket, request) {
+// Slice 6c: phase 1 of the cascade below, READ-ONLY and non-throwing — mirrors ImportRequestService#splitCandidates.
+// Shared by mockResolveFactoryGroups (which then refuses an unplaced line and creates pending factories) and the
+// coverage split preview (which reports both instead). `pickedNameByItemId`: the preview's in-memory picks, used
+// exactly where mockApplyItemFactoryChoices would have written item.factory.
+function mockSplitFactoryCandidates(ticket, pickedNameByItemId = new Map()) {
   const lines = (ticket.items ?? [])
     .map((item) => ({ item, remainingQty: moneyValue(Number(item.qty || 0) - Number(item.qtyFromStock || 0)) }))
     .filter(({ remainingQty }) => remainingQty > 0);
-  if (lines.length === 0) return [];
-
   const byFactory = new Map(); // factoryId -> { items: [{item, remainingQty}], brands: Set }
   const pendingByNormalized = new Map(); // normalized name -> { displayName, lines: [...] }
-
-  const addToFactory = (factoryId, item, remainingQty) => {
-    const bucket = byFactory.get(factoryId) ?? { items: [], brands: new Set() };
-    bucket.items.push({ item, remainingQty });
-    if (item.brand) bucket.brands.add(item.brand);
-    byFactory.set(factoryId, bucket);
-  };
-
+  const unplaced = []; // [{ item, remainingQty }]
   for (const { item, remainingQty } of lines) {
     let factoryId = item.resolvedFactoryId != null ? Number(item.resolvedFactoryId) : null;
     if (factoryId == null && item.catalogPriceId != null) {
       const product = mockProductPrices.find((p) => p.priceId === Number(item.catalogPriceId));
       factoryId = product ? product.factoryId : null;
     }
-    if (factoryId != null) { addToFactory(factoryId, item, remainingQty); continue; }
-    const candidateName = item.factory && String(item.factory).trim() ? String(item.factory).trim() : null;
-    if (!candidateName) {
-      fail(`รายการนี้ยังไม่ได้ระบุโรงงาน กรุณาระบุโรงงานก่อน: ${item.model || item.brand || `รายการ ${item.id}`}`, 409);
-    }
+    if (factoryId != null) { mockAddToFactoryBucket(byFactory, factoryId, item, remainingQty); continue; }
+    const candidateName = (item.factory && String(item.factory).trim() ? String(item.factory).trim() : null)
+      ?? pickedNameByItemId.get(Number(item.id)) ?? null;
+    if (!candidateName) { unplaced.push({ item, remainingQty }); continue; }
     const normalized = mockNormalizeFactoryName(candidateName);
     const existing = mockPriceImportFactories.find((f) => mockNormalizeFactoryName(f.name) === normalized);
-    if (existing) { addToFactory(existing.factoryId, item, remainingQty); continue; }
+    if (existing) { mockAddToFactoryBucket(byFactory, existing.factoryId, item, remainingQty); continue; }
     const pending = pendingByNormalized.get(normalized) ?? { displayName: candidateName, lines: [] };
     pending.lines.push({ item, remainingQty });
     pendingByNormalized.set(normalized, pending);
   }
+  return { lines, byFactory, pendingByNormalized, unplaced };
+}
+
+function mockAddToFactoryBucket(byFactory, factoryId, item, remainingQty) {
+  const bucket = byFactory.get(factoryId) ?? { items: [], brands: new Set() };
+  bucket.items.push({ item, remainingQty });
+  if (item.brand) bucket.brands.add(item.brand);
+  byFactory.set(factoryId, bucket);
+}
+
+// The IR line code: catalogue code, else model, else brand — ImportRequestLinePrefill.firstNonBlank's order here.
+function mockImportLineCode(item) {
+  const product = item.catalogPriceId != null
+    ? mockProductPrices.find((p) => p.priceId === Number(item.catalogPriceId)) : null;
+  return product?.productCode || item.model || item.brand || `รายการ ${item.id}`;
+}
+
+// Slice 6c: the coverage route's `splitPreview` — mirrors ImportRequestService#splitPreview's SHAPE and its gate
+// (ceo, or the owning/keying sales rep — createDrafts' requireFullWrite; null for import and sales_manager). It
+// places lines with the same simplified cascade the mock's createDrafts uses (mockSplitFactoryCandidates), and its
+// lead time is the country default ONLY: the mock's createDrafts mirrors no quotation lead time, so 'QUOTATION' never
+// appears in mock mode and a deal whose real IR would take the quotation's lead time shows the country default
+// here. Mock-driven results are therefore plumbing evidence, not evidence about the real split, lead time or gate.
+function mockSplitPreview(ticket, user, itemFactories) {
+  const mayIssue = user.role === 'ceo' || (user.role === 'sales' && isOwnerOrKeyer(ticket, user.id));
+  if (!mayIssue) return null;
+  const picked = new Map();
+  // Fix round L1 — mirrors ImportRequestService#splitPreview: picks count only on a deal whose confirm shows the
+  // picker (a live direct quotation, DealFulfilmentPanel's factorylessLines condition).
+  const pickerShown = mockLiveDirectQuotation(ticket.id) != null;
+  for (const choice of pickerShown ? (itemFactories ?? []) : []) {
+    const name = mockItemFactoryChoice(ticket, choice, false);
+    if (name && !picked.has(Number(choice.ticketItemId))) picked.set(Number(choice.ticketItemId), name);
+  }
+  const { byFactory, pendingByNormalized, unplaced } = mockSplitFactoryCandidates(ticket, picked);
+  const live = new Set(mockImportRequests
+    .filter((r) => r.ticketId === ticket.id && (r.status === 'DRAFT' || r.status === 'ISSUED'))
+    .map((r) => r.factoryId));
+  const factories = [];
+  for (const [factoryId, bucket] of byFactory) {
+    if (live.has(factoryId)) continue;
+    const factory = mockPriceImportFactories.find((f) => f.factoryId === factoryId);
+    const leadTime = mockLeadTimeDefaults(factory?.country ?? null);
+    factories.push({
+      factoryName: factory?.name ?? null, newFactory: false, itemCount: bucket.items.length,
+      leadTimeMinDays: leadTime?.min ?? null, leadTimeMaxDays: leadTime?.max ?? null,
+      leadTimeSource: leadTime ? 'COUNTRY_DEFAULT' : null,
+    });
+  }
+  for (const pending of pendingByNormalized.values()) {
+    factories.push({
+      factoryName: pending.displayName, newFactory: true, itemCount: pending.lines.length,
+      leadTimeMinDays: null, leadTimeMaxDays: null, leadTimeSource: null,
+    });
+  }
+  return {
+    factories,
+    linesWithoutFactory: unplaced.map(({ item }) => ({
+      ticketItemId: item.id, code: mockImportLineCode(item), size: item.size ?? null,
+    })),
+  };
+}
+
+function mockResolveFactoryGroups(ticket, request) {
+  const { lines, byFactory, pendingByNormalized, unplaced } = mockSplitFactoryCandidates(ticket);
+  if (lines.length === 0) return [];
+  if (unplaced.length > 0) {
+    const { item } = unplaced[0];
+    fail(`รายการนี้ยังไม่ได้ระบุโรงงาน กรุณาระบุโรงงานก่อน: ${item.model || item.brand || `รายการ ${item.id}`}`, 409);
+  }
+  const addToFactory = (factoryId, item, remainingQty) => mockAddToFactoryBucket(byFactory, factoryId, item, remainingQty);
 
   if (pendingByNormalized.size > 0) {
     const supplied = new Map();
@@ -2872,11 +2952,9 @@ function mockResolveFactoryGroups(ticket, request) {
       countryCode: factory?.country ?? null,
       brandLabel: [...bucket.brands].join(', ') || null,
       items: bucket.items.map(({ item, remainingQty }) => {
-        const product = item.catalogPriceId != null
-          ? mockProductPrices.find((p) => p.priceId === Number(item.catalogPriceId)) : null;
         return {
           ticketItemId: item.id,
-          code: product?.productCode || item.model || item.brand || `รายการ ${item.id}`,
+          code: mockImportLineCode(item),
           size: item.size ?? null,
           qty: remainingQty,
           unit: item.unit ?? null,
@@ -3858,14 +3936,43 @@ function updateItemWeightMultipliersForTicket(ticket, user, payload = {}) {
     `ตั้งน้ำหนักคอมมิชชั่นต่อรายการ ${lines.length} รายการ`);
 }
 
+/**
+ * Mirrors TicketService#backDatedDeliveryInstant (slice 6d, วันที่ส่ง): null for no date or today (the record is
+ * stamped with the moment it is saved); a past day is stored at 12:00 Bangkok (05:00Z) on that day. A future day is
+ * 400; so is a day before the earliest one — the later of today − 7 and the Bangkok day the order was confirmed (fix
+ * round 1, L1; deliveryDateBounds mirrors TicketRepository.ORDER_CONFIRMED_AT_SQL) — with the message naming that day.
+ * Called where Java calls it: after the permission, lifecycle and lines checks, before the source and anything written.
+ */
+function mockBackDatedDeliveryAt(deliveredOn, ticket) {
+  if (!deliveredOn) return null;
+  const today = mockTodayIso();
+  if (deliveredOn > today) fail('วันที่ส่งต้องไม่เป็นวันในอนาคต', 400);
+  const { min, confirmedOn } = mockDeliveryDateBounds(today, ticket?.events);
+  if (deliveredOn < min) {
+    fail(`${confirmedOn ? 'วันที่ส่งต้องไม่ก่อนวันยืนยันคำสั่งซื้อ' : 'ย้อนวันที่ส่งได้ไม่เกิน 7 วัน'} — เลือกได้ตั้งแต่ ${mockThaiLongDate(min)}`, 400);
+  }
+  return deliveredOn === today ? null : `${deliveredOn}T05:00:00.000Z`;
+}
+
+const MOCK_THAI_MONTHS_LONG = ['มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน', 'กรกฎาคม', 'สิงหาคม',
+  'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม'];
+
+/** ThaiText.date's format: "13 พฤศจิกายน 2569". */
+function mockThaiLongDate(iso) {
+  const [y, m, d] = iso.split('-').map(Number);
+  return `${d} ${MOCK_THAI_MONTHS_LONG[m - 1]} ${y + 543}`;
+}
+
 function recordDeliveryForTicket(ticket, user, payload = {}, completing = false) {
+  // Java's order (TicketService#recordDeliveryInternal): lines, then the date, then the source.
+  const lines = payload.lines ?? [];
+  if (!lines.length) fail('ต้องระบุรายการส่งสินค้า', 400);
+  const deliveredAt = mockBackDatedDeliveryAt(payload.deliveredOn, ticket);
   const source = String(payload.source ?? '').trim().toUpperCase();
   if (!['WAREHOUSE', 'STOCK'].includes(source)) fail('source ต้องเป็น WAREHOUSE หรือ STOCK', 400);
   if (source === 'STOCK' && !depositSettled(ticket)) {
     fail('ส่งสินค้าจากสต็อกได้หลังรับชำระมัดจำแล้ว (หรือได้รับการยกเว้นมัดจำ) เท่านั้น', 409);
   }
-  const lines = payload.lines ?? [];
-  if (!lines.length) fail('ต้องระบุรายการส่งสินค้า', 400);
   const combined = new Map();
   for (const line of lines) {
     const item = ticket.items.find((it) => it.id === Number(line.itemId));
@@ -3898,7 +4005,7 @@ function recordDeliveryForTicket(ticket, user, payload = {}, completing = false)
     deliveryId: nextId,
     ticketId: ticket.id,
     source,
-    deliveredAt: now,
+    deliveredAt: deliveredAt ?? now,
     deliveredById: user.id,
     deliveredByName: user.name,
     note: payload.note ?? null,
@@ -3912,7 +4019,7 @@ function recordDeliveryForTicket(ticket, user, payload = {}, completing = false)
     const item = ticket.items.find((it) => it.id === line.itemId);
     const name = [item.brand, item.model, item.size].filter(Boolean).join(' ') || `รายการ ${item.id}`;
     return `${name}: ${Number(item.qtyDelivered).toLocaleString('en-US')}/${Number(item.qty).toLocaleString('en-US')}`;
-  }).join(', ');
+  }).join(', ') + (deliveredAt ? ` · วันที่ส่ง ${mockThaiLongDate(payload.deliveredOn)}` : '');
   pushEvent(ticket, user, 'DELIVERY_RECORDED', ticket.status, ticket.status, message);
   const full = ticket.items.every((item) => Number(item.qtyDelivered ?? 0) >= Number(item.qty ?? 0));
   if (full) {
@@ -4744,6 +4851,17 @@ function mockLivePartyDirectQuotation(ticketId, partyId) {
   return live
     ? { id: live.id, number: live.number, docStatus: live.docStatus, recipientType: live.recipientType ?? 'UNSPECIFIED' }
     : null;
+}
+
+/** TEST-ONLY seam — not part of `api`. Adds a bare live (APPROVED) DEAL_DIRECT quotation row to a deal, the state in
+ * which the IR confirm shows its factory picker (slice 6c fix round L1). No items, so it carries no lead time. */
+export function addLiveDirectQuotationForTests(ticketId) {
+  const id = Math.max(0, ...mockDealQuotations.map((q) => Number(q.id) || 0)) + 1;
+  mockDealQuotations.push({
+    id, ticketId: Number(ticketId), origin: 'DEAL_DIRECT', docStatus: 'APPROVED', number: `QT-TEST-${id}`,
+    recipientType: 'OWNER', items: [],
+  });
+  return id;
 }
 
 function mockLiveDirectQuotation(ticketId) {
@@ -8447,6 +8565,23 @@ function buildFinanceDeal(raw, user) {
   return deal;
 }
 
+// Invented figures in the shape of GET /api/sales-analytics/metrics (analytics.metric_weekly); not real sales.
+const mockAnalyticsMetrics = {
+  weekStart: '2026-03-30', computedAt: '2026-03-31T01:00:00Z',
+  metrics: [
+    { key: 'pipeline_value_dedup', dimension: '', label: '', value: 12_000_000, previous: 10_500_000 },
+    { key: 'pipeline_value_raw', dimension: '', label: '', value: 15_000_000, previous: 13_000_000 },
+    { key: 'pipeline_stale_share', dimension: '', label: '', value: 0.25, previous: 0.2 },
+    { key: 'rep_stage_moves_week', dimension: 'rep=1', label: 'Rep A', value: 4, previous: null },
+    { key: 'rep_activities_week', dimension: 'rep=1', label: 'Rep A', value: 12, previous: null },
+    { key: 'rep_quiet_deal_share', dimension: 'rep=1', label: 'Rep A', value: 0.25, previous: null },
+    { key: 'hygiene_score', dimension: 'rep=1', label: 'Rep A', value: 0.8, previous: null },
+    { key: 'quoted_value', dimension: 'brand=Brand X', label: 'Brand X', value: 8_000_000, previous: null },
+    { key: 'quoted_sqm', dimension: 'brand=Brand X', label: 'Brand X', value: 4000, previous: null },
+    { key: 'ordered_value', dimension: 'brand=Brand X', label: 'Brand X', value: 3_000_000, previous: null },
+  ],
+  checks: [{ key: 'stage_mapped', passed: true, detail: 'unmapped tickets=0' }],
+};
 const mockAnalyticsSnapshot = { payload: SNAPSHOT_WITH_NOW, asOf: '2026-03-31', uploadedAt: '2026-04-02T03:00:00Z' };
 
 // ── salesBoard read model (mirrors SalesBoardRepository) ──
@@ -8714,6 +8849,10 @@ function mockVisitDto(v) {
         && String(e.message ?? '').startsWith(MOCK_OWNER_CHANGED_MESSAGE_PREFIX)
         // A visit with no createdAt cannot be placed before the move, so it is never "moved" (v.created_at is NOT NULL server-side).
         && v.createdAt != null && Date.parse(e.createdAt) >= Date.parse(v.createdAt)),
+    // VisitRepository's deal_follow_up_open (slice 6b fix round 1): on a deal, the visit's owner is its created_by and
+    // the deal is ACTIVE — where TicketService#requireVisitFollowUpWritable accepts ตามต่อ.
+    dealFollowUpOpen: Boolean(ticket) && Number(ticket.createdById) === Number(v.ownerId)
+      && (ticket.lifecycle ?? 'ACTIVE') === 'ACTIVE',
   };
 }
 
@@ -8741,6 +8880,31 @@ function mockRequireVisitRange(from, to) {
 
 const MOCK_VISIT_ROLES = ['sales', 'sales_manager', 'ceo'];
 const MOCK_VISIT_TEAM_ROLES = ['sales_manager', 'ceo'];
+
+/** TicketService.requireFollowUpNotPast (slice 6.4): today or later in Asia/Bangkok; no upper bound. */
+function mockRequireFollowUpNotPast(nextFollowUpAt) {
+  if (nextFollowUpAt && nextFollowUpAt < mockTodayIso()) fail('วันตามครั้งถัดไปต้องเป็นวันนี้หรือหลังจากนี้', 400);
+}
+
+/**
+ * TicketService.requireVisitFollowUpWritable (slice 6.4): a visit's ตามต่อ may set the deal's follow-up date only where
+ * the visit's activity lands on the deal (its owner is the deal's created_by — recordVisitActivity's rule), the caller
+ * passes requireDealOwnership, the deal is ACTIVE, and the date is not past. A visit with no deal is refused (400).
+ * NOT authoritative — VisitFollowUpIntegrationTest is the evidence.
+ */
+function mockRequireVisitFollowUpWritable(ticketId, visitOwnerId, nextFollowUpAt, user) {
+  if (ticketId == null) fail('การเข้าพบนี้ไม่ได้อยู่ในงาน จึงตั้งวันตามต่อไม่ได้', 400);
+  const ticket = findTicketRaw(Number(ticketId));
+  if (Number(ticket.createdById) !== Number(visitOwnerId)) {
+    fail('การเข้าพบนี้ไม่ได้บันทึกลงงาน จึงตั้งวันตามต่อของงานไม่ได้', 403);
+  }
+  if (!mockCanDealOwnership(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+  if ((ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE') {
+    fail('งานนี้ไม่ได้อยู่ระหว่างดำเนินการ จึงตั้งวันตามต่อไม่ได้ — บันทึกเข้าพบได้โดยไม่ใส่วัน', 409);
+  }
+  mockRequireFollowUpNotPast(nextFollowUpAt);
+  return ticket;
+}
 
 /** VisitService.requireWritable: 404 when missing; the owner, or sales_manager / ceo. */
 function mockWritableVisit(user, id) {
@@ -9735,7 +9899,8 @@ export const api = {
     async recordDelivery(id, payload) {
       // Stages 13-14 are Sales's — CEO, or the deal's OWN owning rep, ONLY (import is not admitted;
       // see requireOwningRepOrCeo's doc). The gate is ownership-aware, so the ticket is loaded
-      // FIRST. Mirrors TicketService.canWriteDelivery.
+      // FIRST. Mirrors TicketService.canWriteDelivery; the optional deliveredOn (slice 6d) mirrors
+      // TicketService#backDatedDeliveryInstant (see mockBackDatedDeliveryAt).
       const ticket = findTicketRaw(Number(id));
       const user = requireOwningRepOrCeo(ticket);
       requireActive(ticket);
@@ -9761,6 +9926,8 @@ export const api = {
         note: payload.note ?? null,
         recipientName: payload.recipientName ?? null,
         lines: remaining,
+        // Slice 6d fix round 1 (M2): CompleteDeliveryRequest.deliveredOn, the same window as the dialog.
+        deliveredOn: payload.deliveredOn ?? null,
       }, true);
       return delay({ ticket: buildTicketDetail(ticket) });
     },
@@ -10354,16 +10521,32 @@ export const api = {
     // Mirrors TicketController's addActivity/activities/updateTracking and TicketService's
     // requireDealOwnership gate (reuses mockCanDealOwnership — the same check backing
     // markLost/reopen/hold/dormant/resume above, since the real service's requireDealOwnership is
-    // one shared method too).
+    // one shared method too). Slice 6d: SAMPLE_SENT (ส่งตัวอย่าง) takes this same method; its note is required, as
+    // DealActivityKind.requiresNote makes TicketService.addActivity require it.
 
     async addActivity(id, payload) {
       const user = requireSession();
+      // Java's order (slice 6d fix round 1, review L3): the body's own checks — @NotNull activityDate, then
+      // TicketService.addActivity's kind and SAMPLE_SENT note — come BEFORE the deal is read and the ownership 403.
+      if (!payload?.activityDate) fail('ต้องระบุวันที่ทำกิจกรรม', 400);
+      if (!dealIsValidActivityKind(payload?.kind)) fail(`ไม่รองรับประเภทกิจกรรม '${payload?.kind}'`, 400);
+      // Slice 6d (DealActivityKind.requiresNote): ส่งตัวอย่าง's note — what was sent — must not be blank.
+      if (dealActivityNoteRequired(payload?.kind) && !String(payload?.note ?? '').trim()) {
+        fail('ระบุว่าส่งอะไรไป (เช่น ตัวอย่างกระเบื้อง 3 สี)', 400);
+      }
       const ticket = findTicketRaw(Number(id));
       // Deliberately NOT requireActive: a rep can still log why a deal went quiet on a non-ACTIVE deal (mirrors
       // TicketService.addActivity — see handoff 103).
       if (!mockCanDealOwnership(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
-      if (!payload?.activityDate) fail('ต้องระบุวันที่ทำกิจกรรม', 400);
-      if (!dealIsValidActivityKind(payload?.kind)) fail(`ไม่รองรับประเภทกิจกรรม '${payload?.kind}'`, 400);
+      // Slice 6.4 (TicketService.addActivity): an optional nextFollowUpAt needs what PUT /tracking needs — the ownership
+      // above plus an ACTIVE deal — and a date not in the past; checked before anything is written.
+      const nextFollowUpAt = payload?.nextFollowUpAt || null;
+      if (nextFollowUpAt) {
+        if ((ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE') {
+          fail('งานนี้ไม่ได้อยู่ระหว่างดำเนินการ จึงตั้งวันตามครั้งถัดไปไม่ได้ — บันทึกได้โดยไม่ใส่วัน', 409);
+        }
+        mockRequireFollowUpNotPast(nextFollowUpAt);
+      }
       const activity = {
         id: mockDealActivitySeq++,
         ticketId: ticket.id,
@@ -10375,6 +10558,8 @@ export const api = {
         createdAt: new Date().toISOString(),
       };
       mockDealActivities.push(activity);
+      // ONLY the follow-up date — never the tracking full replace, which would wipe designer/owner/buyer names.
+      if (nextFollowUpAt) ticket.nextFollowUpAt = nextFollowUpAt;
       return delay(structuredClone(activity));
     },
 
@@ -10406,7 +10591,9 @@ export const api = {
       ticket.designerName = (payload?.designerName || '').trim() || null;
       ticket.ownerName = (payload?.ownerName || '').trim() || null;
       ticket.buyerName = (payload?.buyerName || '').trim() || null;
-      ticket.nextFollowUpAt = payload?.nextFollowUpAt || null;
+      // Mirrors the server: the date is KEPT when absent, set when sent, cleared by clearNextFollowUpAt (which wins).
+      if (payload?.clearNextFollowUpAt) ticket.nextFollowUpAt = null;
+      else if (payload?.nextFollowUpAt) ticket.nextFollowUpAt = payload.nextFollowUpAt;
       // V209 expectedQuarter is the one exception to full-replace (TrackingUpdateRequest): absent/null KEEPS it,
       // "" clears it, anything else must be YYYY-Qn.
       if (payload?.expectedQuarter != null) {
@@ -13653,9 +13840,10 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       requireStoredIrRead(ticket, requireSession());
       return delay({ importRequests: mockImportRequestsForTicket(ticket.id) });
     },
-    async coverage(ticketId) {
+    async coverage(ticketId, itemFactories) {
       const ticket = findTicketRaw(Number(ticketId));
-      requireStoredIrRead(ticket, requireSession());
+      const user = requireSession();
+      requireStoredIrRead(ticket, user);
       // Mirrors ImportRequestService#coverage: read-only; an unresolved/unknown factory
       // (the resolver refuses without a country for a new name) counts as uncovered; only a live row covers.
       let hasUncoveredFactories = true;
@@ -13668,7 +13856,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
         hasUncoveredFactories = uncovered.length > 0;
         uncoveredFactoryNames = uncovered.map((g) => g.factoryName);
       } catch { /* unresolved factory -> uncovered (no names in the mock) */ }
-      return delay({ hasUncoveredFactories, uncoveredFactoryNames });
+      return delay({ hasUncoveredFactories, uncoveredFactoryNames, splitPreview: mockSplitPreview(ticket, user, itemFactories) });
     },
     async get(id) {
       const row = findStoredImportRequestRaw(id);
@@ -14203,6 +14391,11 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       if (!['ceo', 'sales_manager'].includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       return delay({ snapshot: mockAnalyticsSnapshot });
     },
+    async metrics() {
+      const user = requireSession();
+      if (!['ceo', 'sales_manager'].includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      return delay(mockAnalyticsMetrics);
+    },
   },
 
   // Mirrors PeopleInsightsService with the synthetic PEOPLE_FIXTURE. The role gate (ceo/hr only: the mock has no team
@@ -14569,9 +14762,10 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
     },
   },
   // Mirrors VisitController / VisitService / VisitRepository (salesboard/). AUTHZ NOTE: these gates approximate the
-  // Java service and are NOT evidence — VisitScopeIntegrationTest is. list = the caller's own visits; team =
-  // sales_manager / ceo; a visit on a deal needs TicketService#requireDealWriteAccess (mockCanDealOwnership);
-  // done / cancel = the owner or sales_manager / ceo, only from PLANNED.
+  // Java service and are NOT evidence — VisitScopeIntegrationTest, VisitFollowUpIntegrationTest and
+  // DealPlannedVisitsScopeIntegrationTest are. list = the caller's own visits; team = sales_manager / ceo; a visit on
+  // a deal needs TicketService#requireDealWriteAccess (mockCanDealOwnership); done / cancel = the owner or
+  // sales_manager / ceo, only from PLANNED; nextFollowUpAt = TicketService#requireVisitFollowUpWritable.
   salesVisits: {
     async list({ from, to }) {
       const user = requireSession();
@@ -14610,13 +14804,23 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
         if (!mockCanDealOwnership(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
         if ((ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE') fail('งานนี้ไม่ได้เปิดอยู่ จึงนัดเข้าพบในงานนี้ไม่ได้', 400);
       }
+      // Slice 6.4 (VisitService.create): ตามต่อ only on a done log, on a deal, where the log lands on the deal.
+      const nextFollowUpAt = payload.nextFollowUpAt || null;
+      if (nextFollowUpAt) {
+        if (!done) fail('ตั้งวันตามต่อได้เมื่อบันทึกว่าเข้าพบแล้วเท่านั้น', 400);
+        mockRequireVisitFollowUpWritable(ticketId, user.id, nextFollowUpAt, user);
+      }
       if (done) {
         // VisitRepository.findRecentDoneLog: the same one-step log within 60 s is the same visit.
         const cutoff = Date.now() - 60_000;
         const same = mockVisits.filter((v) => v.ownerId === user.id && v.ticketId === ticketId
           && v.contactName === contactName && v.plannedDate === payload.plannedDate && v.status === 'DONE'
           && Date.parse(v.createdAt ?? 0) > cutoff).at(-1);
-        if (same) return delay(mockVisitDto(same));
+        if (same) {
+          // VisitService.create fix round 1 (M3): a duplicate's date is applied, never dropped (no second activity).
+          if (nextFollowUpAt) db.tickets.find((t) => t.id === ticketId).nextFollowUpAt = nextFollowUpAt;
+          return delay(mockVisitDto(same));
+        }
       }
       const visit = {
         id: mockVisitSeq++, ownerId: user.id, ticketId, contactName, plannedDate: payload.plannedDate,
@@ -14625,7 +14829,10 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       };
       mockVisits.push(visit);
       const ownsDeal = ticketId != null && Number(db.tickets.find((t) => t.id === ticketId)?.createdById) === user.id;
-      if (done && ownsDeal) mockLogSiteVisit(user.id, ticketId, note);
+      if (done && ownsDeal) {
+        mockLogSiteVisit(user.id, ticketId, note);
+        if (nextFollowUpAt) db.tickets.find((t) => t.id === ticketId).nextFollowUpAt = nextFollowUpAt;
+      }
       return delay(mockVisitDto(visit));
     },
     async done(id, payload = {}) {
@@ -14636,6 +14843,9 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       if (visit.status === 'PLANNED' && visit.plannedDate > mockTodayIso()) {
         fail('ยังไม่ถึงวันนัด จึงบันทึกว่าเข้าพบแล้วไม่ได้', 409);
       }
+      // Slice 6.4 (VisitService.markDone): ตามต่อ is checked before the tick, so a refusal ticks nothing.
+      const nextFollowUpAt = payload?.nextFollowUpAt || null;
+      if (nextFollowUpAt) mockRequireVisitFollowUpWritable(visit.ticketId, visit.ownerId, nextFollowUpAt, user);
       if (visit.status !== 'PLANNED') mockVisitNotPlanned(visit);
       visit.status = 'DONE';
       visit.doneAt = new Date().toISOString();
@@ -14645,8 +14855,28 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       if (ticket && Number(ticket.createdById) === Number(visit.ownerId)) {
         const recordedBy = visit.ownerId !== user.id ? `บันทึกโดย ${user.name}` : null;
         mockLogSiteVisit(visit.ownerId, visit.ticketId, [visit.note, recordedBy].filter(Boolean).join(' · ') || null);
+        if (nextFollowUpAt) ticket.nextFollowUpAt = nextFollowUpAt;
       }
       return delay(mockVisitDto(visit));
+    },
+    // Slice 6.5 — mirrors VisitService.plannedOnDeal + VisitRepository.findPlannedOnDeal(OwnedBy): VISIT_ROLES, then
+    // the whole-deal read rule of TicketService.get (requireDealReadAccess: import / account refused, a rep only their
+    // own or keyed deal), then the deal's PLANNED rows — every owner's for sales_manager / ceo, the caller's own for
+    // sales — in VisitRepository's ORDER BY planned_date, planned_time NULLS LAST, visit_id, with no LIMIT (the Java
+    // read has none). AUTHZ NOTE: approximate; DealPlannedVisitsScopeIntegrationTest is the evidence.
+    async plannedOnDeal(ticketId) {
+      const user = requireSession();
+      if (!MOCK_VISIT_ROLES.includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      const ticket = findTicketRaw(Number(ticketId));
+      if (user.role === 'sales' && !isOwnerOrKeyer(ticket, user.id)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      const ownerId = MOCK_VISIT_TEAM_ROLES.includes(user.role) ? null : user.id;
+      return delay(mockVisits
+        .filter((v) => v.ticketId === ticket.id && v.status === 'PLANNED' && (ownerId == null || v.ownerId === ownerId))
+        .sort((a, b) => a.plannedDate.localeCompare(b.plannedDate)
+          || (a.plannedTime == null) - (b.plannedTime == null)
+          || String(a.plannedTime ?? '').localeCompare(String(b.plannedTime ?? ''))
+          || a.id - b.id)
+        .map(mockVisitDto));
     },
     async cancel(id) {
       const user = requireSession();

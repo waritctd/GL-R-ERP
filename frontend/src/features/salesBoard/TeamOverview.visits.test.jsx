@@ -68,6 +68,21 @@ describe('TeamOverview — visits', () => {
     api.salesVisits.team.mockResolvedValue([]);
   });
 
+  // With visits this week the week grid draws its own table inside ภาพรวมทีมขาย, so the per-rep table needs a name of its
+  // own to be found unambiguously (e2e-real sales-board.spec.js selects it by this name).
+  it('the per-rep table is named รายคน and stays distinct from the week grid table', async () => {
+    renderTeam();
+    const region = await screen.findByRole('region', { name: 'ภาพรวมทีมขาย' });
+    await within(region).findByTestId('visit-week');
+
+    expect(within(region).getAllByRole('table').length).toBeGreaterThan(1);
+    const perRep = within(region).getByRole('table', { name: 'รายคน' });
+    for (const header of ['พนักงานขาย', 'งาน', 'มูลค่า', 'งานเงียบ', 'อัปเดตล่าสุด']) {
+      expect(within(perRep).getByRole('columnheader', { name: header })).toBeTruthy();
+    }
+    expect(within(within(region).getByTestId('visit-week')).getByRole('table')).not.toBe(perRep);
+  });
+
   it('the เข้าพบสัปดาห์นี้ tile sums done / booked across the team', async () => {
     renderTeam();
 

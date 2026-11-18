@@ -36,6 +36,8 @@ export function ConfirmDialog({
   tone = 'default',
   busy = false,
   confirmDisabled: confirmBlocked = false,
+  // Optional id of the element that says WHY the confirm is disabled (aria-describedby on the confirm button).
+  confirmDescribedBy,
   requireReason = false,
   optionalReason = false,
   reasonLabel = 'เหตุผล',
@@ -103,6 +105,7 @@ export function ConfirmDialog({
             variant={confirmVariant}
             onClick={handleConfirm}
             disabled={confirmDisabled}
+            aria-describedby={confirmDescribedBy || undefined}
           >
             {busy ? 'กำลังดำเนินการ...' : confirmLabel}
           </Button>

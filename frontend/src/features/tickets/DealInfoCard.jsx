@@ -69,7 +69,10 @@ export function DealInfoCard({
       // Buyers are deal parties now (deal-party-model.md, "ผู้รับเหมาที่เสนอราคา"); the PUT is a full
       // replace, so the stored free-text value is sent back unchanged rather than cleared.
       buyerName: summary.buyerName ?? null,
-      nextFollowUpAt: draft.nextFollowUpAt || null,
+      // PUT /tracking keeps the date when absent, so a stale form cannot overwrite one a call/visit set: send it only
+      // when changed, and `clearNextFollowUpAt` when emptied.
+      ...(draft.nextFollowUpAt === (summary.nextFollowUpAt ?? '') ? {}
+        : draft.nextFollowUpAt ? { nextFollowUpAt: draft.nextFollowUpAt } : { clearNextFollowUpAt: true }),
       ...(estimate == null ? { clearEstimatedValue: true } : { estimatedValue: estimate }),
     });
     setDraft(null);

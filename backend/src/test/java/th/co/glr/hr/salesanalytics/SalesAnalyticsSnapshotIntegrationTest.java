@@ -39,7 +39,8 @@ class SalesAnalyticsSnapshotIntegrationTest extends AbstractPostgresIntegrationT
     @BeforeEach
     void wire() {
         SalesAnalyticsService service =
-            new SalesAnalyticsService(new SalesAnalyticsRepository(jdbc), new ObjectMapper());
+            new SalesAnalyticsService(new SalesAnalyticsRepository(jdbc), new ObjectMapper(),
+                java.time.Clock.fixed(java.time.Instant.parse("2026-11-17T03:00:00Z"), java.time.ZoneId.of("Asia/Bangkok")));
         mvc = MockMvcBuilders.standaloneSetup(new SalesAnalyticsController(service, new SessionContext()))
             .setControllerAdvice(new ApiExceptionHandler())
             .build();
@@ -236,5 +237,109 @@ class SalesAnalyticsSnapshotIntegrationTest extends AbstractPostgresIntegrationT
         putAs("ceo", snapshot("x") + " garbage", 400);
         org.assertj.core.api.Assertions.assertThat(
             jdbc.queryForObject("SELECT COUNT(*) FROM sales.sales_analytics_snapshot", Map.of(), Long.class)).isZero();
+    }
+
+    // ---- GET /api/sales-analytics/metrics (analytics Phase 2): read-only view of analytics.metric_weekly + run_log ----
+
+    private static final String METRICS_URL = "/api/sales-analytics/metrics";
+    private static final LocalDate W1 = LocalDate.of(2026, 11, 2);
+    private static final LocalDate W2 = LocalDate.of(2026, 11, 9);
+
+    private void metric(LocalDate week, String key, String dimension, Double value) {
+        jdbc.update("INSERT INTO analytics.metric_weekly (week_start, metric_key, dimension, value, computed_at)"
+            + " VALUES (:w, :k, :d, :v, TIMESTAMPTZ '2026-11-10 01:00:00+07')",
+            new org.springframework.jdbc.core.namedparam.MapSqlParameterSource().addValue("w", week).addValue("k", key)
+                .addValue("d", dimension).addValue("v", value, java.sql.Types.NUMERIC));
+    }
+
+    private void check(LocalDate week, String key, boolean passed, String detail) {
+        jdbc.update("INSERT INTO analytics.run_log (week_start, check_key, passed, detail) VALUES (:w, :k, :p, :d)",
+            Map.of("w", week, "k", key, "p", passed, "d", detail));
+    }
+
+    @Test
+    void metricsGateIsCeoAndSalesManagerOnly() throws Exception {
+        for (String role : List.of("ceo", "sales_manager")) {
+            mvc.perform(get(METRICS_URL).session(session(role))).andExpect(status().isOk());
+        }
+        for (String role : READ_DENIED) {
+            mvc.perform(get(METRICS_URL).session(session(role))).andExpect(status().isForbidden());
+        }
+        mvc.perform(get(METRICS_URL)).andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void metricsWithNoRowsAnswer200WithNullsAndEmptyLists() throws Exception {
+        mvc.perform(get(METRICS_URL).session(session("ceo")))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.weekStart").value((Object) null))
+            .andExpect(jsonPath("$.computedAt").value((Object) null))
+            .andExpect(jsonPath("$.metrics").isEmpty())
+            .andExpect(jsonPath("$.checks").isEmpty());
+    }
+
+    @Test
+    void metricsServeTheLatestWeekThatHasThePipelineSnapshot_withPreviousFilledOrNull() throws Exception {
+        metric(W1, "pipeline_value_dedup", "", 1000.0);
+        metric(W1, "pipeline_value_raw", "", 1500.0);
+        metric(W2, "pipeline_value_dedup", "", 1200.0);
+        metric(W2, "pipeline_value_raw", "", 1800.0);
+        metric(W2, "quoted_value", "brand=Brand X", 700.0);          // no prior-week row -> previous null
+        // A later week with only the week-based rep metrics (no pipeline snapshot) must NOT become the headline week.
+        metric(LocalDate.of(2026, 11, 16), "rep_activities_week", "rep=999", 3.0);
+
+        mvc.perform(get(METRICS_URL).session(session("sales_manager")))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.weekStart").value("2026-11-09"))
+            .andExpect(jsonPath("$.computedAt").isNotEmpty())
+            .andExpect(jsonPath("$.metrics.length()").value(3))
+            .andExpect(jsonPath("$.metrics[?(@.key=='pipeline_value_dedup')].value").value(1200.0))
+            .andExpect(jsonPath("$.metrics[?(@.key=='pipeline_value_dedup')].previous").value(1000.0))
+            .andExpect(jsonPath("$.metrics[?(@.key=='pipeline_value_dedup')].label").value(""))
+            .andExpect(jsonPath("$.metrics[?(@.key=='quoted_value')].label").value("Brand X"))
+            .andExpect(jsonPath("$.metrics[?(@.key=='quoted_value')].dimension").value("brand=Brand X"))
+            .andExpect(jsonPath("$.metrics[?(@.key=='quoted_value')].previous").value((Object) null));
+    }
+
+    @Test
+    void theWeekInProgressInBangkokIsNeverServed_theLastEndedWeekIs() throws Exception {
+        // Clock is Tue 2026-11-17 Bangkok: the week of Mon 11-16 has not ended, even though a hand-run wrote a snapshot for it.
+        metric(W2, "pipeline_value_dedup", "", 1200.0);
+        metric(LocalDate.of(2026, 11, 16), "pipeline_value_dedup", "", 9999.0);
+        mvc.perform(get(METRICS_URL).session(session("ceo")))
+            .andExpect(jsonPath("$.weekStart").value("2026-11-09"))
+            .andExpect(jsonPath("$.metrics[?(@.key=='pipeline_value_dedup')].value").value(1200.0));
+    }
+
+    @Test
+    void aRepDimensionIsLabelledWithTheEmployeeNameAndFallsBackToTheDimensionForAnUnknownRep() throws Exception {
+        long rep = jdbc.queryForObject("""
+            INSERT INTO hr.employee (employee_code, badge_card_no, first_name_th, last_name_th, hire_date, is_active)
+            VALUES ('REP-001', 'REP-001', 'สมมติ', 'ตัวอย่าง', :d, TRUE) RETURNING employee_id
+            """, Map.of("d", LocalDate.of(2020, 1, 1)), Long.class);
+        metric(W2, "pipeline_value_dedup", "", 1200.0);
+        metric(W2, "rep_activities_week", "rep=" + rep, 5.0);
+        metric(W2, "rep_activities_week", "rep=424242", 2.0);
+
+        mvc.perform(get(METRICS_URL).session(session("ceo")))
+            .andExpect(jsonPath("$.metrics[?(@.dimension=='rep=" + rep + "')].label").value("สมมติ ตัวอย่าง"))
+            .andExpect(jsonPath("$.metrics[?(@.dimension=='rep=424242')].label").value("rep=424242"));
+    }
+
+    @Test
+    void checksAreOnlyThoseRecordedForTheServedWeek_latestRunPerCheck() throws Exception {
+        metric(W1, "pipeline_value_dedup", "", 1000.0);
+        metric(W2, "pipeline_value_dedup", "", 1200.0);
+        check(W1, "stage_mapped", false, "unmapped tickets=9");        // other week: must not appear
+        check(W2, "stage_mapped", false, "unmapped tickets=2");        // superseded by the re-run below
+        check(W2, "stage_mapped", true, "unmapped tickets=0");
+        check(W2, "quote_line_brand_present", false, "lines with no brand=4");
+
+        mvc.perform(get(METRICS_URL).session(session("ceo")))
+            .andExpect(jsonPath("$.checks.length()").value(2))
+            .andExpect(jsonPath("$.checks[?(@.key=='stage_mapped')].passed").value(true))
+            .andExpect(jsonPath("$.checks[?(@.key=='stage_mapped')].detail").value("unmapped tickets=0"))
+            .andExpect(jsonPath("$.checks[?(@.key=='quote_line_brand_present')].passed").value(false))
+            .andExpect(jsonPath("$.checks[?(@.key=='quote_line_brand_present')].detail").value("lines with no brand=4"));
     }
 }

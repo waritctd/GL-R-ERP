@@ -1,0 +1,65 @@
+# Definitions of the weekly metrics written by analytics.compute_week (backend migration V223).
+# Definitions only; figures live in analytics.metric_weekly. A test keeps this list equal to the keys the function writes.
+# Snapshot metrics (everything except rep_stage_moves_week / rep_activities_week) are written only for the current or most recently ended week.
+# dimension is '' for a company-wide metric, 'rep=<employee_id>' or 'brand=<normalised brand>'.
+metrics:
+  - key: pipeline_value_raw
+    label_th: มูลค่า pipeline (รวมทุกดีล)
+    definition: Sum of deal value over open, non-test deals. Deal value is the ex-VAT subtotal of the deal's value quotation, so it is lower than the sales board, which shows the VAT-inclusive total; imported_value / estimated_value are used as entered (VAT basis unverified). A project quoted by several contractors is counted once per deal.
+    source: analytics.stg_deal
+    grain: week
+    audience: [ceo, sales_manager]
+  - key: pipeline_value_dedup
+    label_th: มูลค่า pipeline (นับโครงการละครั้ง)
+    definition: Sum over open, non-test projects of the largest deal value among that project's deals.
+    source: analytics.fct_project_pipeline
+    grain: week
+    audience: [ceo, sales_manager]
+  - key: pipeline_stale_share
+    label_th: สัดส่วน pipeline ที่เงียบเกิน 14 วัน
+    definition: Share of the deduplicated pipeline value whose project is quiet by the board's rule (QuietRule, meaning no activity, stage change or quotation issued for 14 days, no booked visit, not in deliver and collect); a project is quiet only when all its deals are.
+    source: analytics.fct_project_pipeline
+    grain: week
+    audience: [ceo, sales_manager]
+  - key: rep_stage_moves_week
+    label_th: จำนวนครั้งที่เลื่อนขั้นดีล (รายสัปดาห์)
+    definition: STAGE_CHANGED events on the rep's non-test deals in the 7 days from week start (Bangkok time). Always recomputed for the given week.
+    source: sales.ticket_event
+    grain: week x rep
+    audience: [ceo, sales_manager]
+  - key: rep_activities_week
+    label_th: จำนวนกิจกรรมที่บันทึก (รายสัปดาห์)
+    definition: Deal activity rows (calls, meetings, site visits) dated within the week on the rep's non-test deals. Always recomputed for the given week.
+    source: sales.deal_activity
+    grain: week x rep
+    audience: [ceo, sales_manager]
+  - key: rep_quiet_deal_share
+    label_th: สัดส่วนดีลที่เงียบเกิน 14 วัน
+    definition: Share of the rep's open, non-test deals that are quiet by the board's rule (QuietRule, app.sales.quiet-days = 14).
+    source: analytics.stg_deal
+    grain: week x rep
+    audience: [ceo, sales_manager]
+  - key: hygiene_score
+    label_th: คะแนนความครบถ้วนของข้อมูลดีล
+    definition: Average over the rep's open, non-test deals of the fraction of four fields filled (designer, win probability, expected quarter, next follow-up date); 0 to 1.
+    source: analytics.stg_deal
+    grain: week x rep
+    audience: [ceo, sales_manager]
+  - key: quoted_value
+    label_th: มูลค่าที่เสนอราคา ตามแบรนด์
+    definition: Sum of TILE line amounts of the value quotation of open, non-test deals that are their project's headline deal (so a project counts once), by normalised brand.
+    source: analytics.stg_quote_line
+    grain: week x brand
+    audience: [ceo, sales_manager]
+  - key: quoted_sqm
+    label_th: พื้นที่ที่เสนอราคา (ตร.ม.) ตามแบรนด์
+    definition: Sum of TILE line square metres (area, else pieces after wastage times square metres per piece) on the same lines, by brand.
+    source: analytics.stg_quote_line
+    grain: week x brand
+    audience: [ceo, sales_manager]
+  - key: ordered_value
+    label_th: มูลค่าที่ได้รับคำสั่งซื้อ ตามแบรนด์
+    definition: Sum of TILE line amounts of the value quotation of deals at order received or a later stage, by brand.
+    source: analytics.stg_quote_line
+    grain: week x brand
+    audience: [ceo, sales_manager]

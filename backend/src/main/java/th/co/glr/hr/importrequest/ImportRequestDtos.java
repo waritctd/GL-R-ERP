@@ -85,8 +85,41 @@ public final class ImportRequestDtos {
         List<ImportRequestItemDto> items
     ) {}
 
-    /** GET /tickets/{id}/import-requests/coverage. */
-    public record ImportRequestCoverageResponse(boolean hasUncoveredFactories, List<String> uncoveredFactoryNames) {}
+    /**
+     * GET /tickets/{id}/import-requests/coverage.
+     *
+     * <p>{@code splitPreview} (slice 6c, an additive sales API contract change): the dry run of {@link
+     * ImportRequestService#createDrafts}'s per-factory split, for the "ยืนยันออกใบขอซื้อ" confirm. Present only for a
+     * caller who may press that button — the CEO and the deal's owning (or keying) sales rep, createDrafts' own
+     * gate; {@code null} for import and sales_manager, who read this route only for the covered flag.
+     */
+    public record ImportRequestCoverageResponse(boolean hasUncoveredFactories, List<String> uncoveredFactoryNames,
+                                                ImportRequestSplitPreview splitPreview) {}
+
+    /**
+     * What {@code createDrafts} would issue right now, computed by the same code and saving nothing: one entry per
+     * factory that would get a NEW ใบขอซื้อ, in the order it would create them, and the deal lines it could not place
+     * (no factory anywhere — createDrafts refuses those with a 409 naming the line).
+     */
+    public record ImportRequestSplitPreview(List<SplitPreviewFactory> factories,
+                                            List<SplitPreviewLine> linesWithoutFactory) {}
+
+    /**
+     * One factory's would-be ใบขอซื้อ. No money of any kind (ImportRequestDtosNoPricingFieldsTest).
+     *
+     * @param newFactory      the name matches no factory yet: createDrafts will ask for its country, then create it
+     * @param itemCount       how many deal lines it gets (each line is one item on the form)
+     * @param leadTimeSource  {@link #LEAD_TIME_FROM_QUOTATION}, {@link #LEAD_TIME_COUNTRY_DEFAULT}, or {@code null}
+     *                        when neither applies yet (createDrafts will ask for it, or for the new factory's country)
+     */
+    public record SplitPreviewFactory(String factoryName, boolean newFactory, int itemCount,
+                                      Integer leadTimeMinDays, Integer leadTimeMaxDays, String leadTimeSource) {
+        public static final String LEAD_TIME_FROM_QUOTATION = "QUOTATION";
+        public static final String LEAD_TIME_COUNTRY_DEFAULT = "COUNTRY_DEFAULT";
+    }
+
+    /** A deal line the split cannot place: neither a factory id nor a factory name anywhere in its cascade. */
+    public record SplitPreviewLine(long ticketItemId, String code, String size) {}
 
     public record ImportRequestItemDto(
         long id,

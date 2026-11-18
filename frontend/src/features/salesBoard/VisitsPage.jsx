@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
@@ -10,6 +11,7 @@ import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { PageStack, Panel } from '../../components/common/Layout.jsx';
 import { Skeleton } from '../../components/common/Skeleton.jsx';
 import { addDaysIso, bangkokTodayIso } from '../../utils/format.js';
+import { withFollowUp } from './FollowUpPicks.jsx';
 import { LogVisitModal, PlanVisitModal, VisitDoneModal } from './VisitDialogs.jsx';
 import { CarriedOverVisits, VisitRow, WeekNav } from './VisitsThisWeek.jsx';
 import { VisitWeekGrid } from './VisitWeekGrid.jsx';
@@ -47,11 +49,21 @@ function VisitColumn({ testId, title, visits, empty, todayIso, onDone, onCancel 
  * on screen — VisitService scopes it to the caller — split into นัดไว้ and ไปแล้ว. Plan, log, tick and cancel are the
  * existing dialogs and endpoints; a tick needs the visit's day to have come (VisitRow / VisitService).
  */
-function RepWeek({ showToast }) {
+/**
+ * `?week=<ISO day>` (fix round 1: the deal page's planned-visit link) opens the week containing that day, as an offset
+ * from this week; anything that is not a real ISO date opens this week.
+ */
+function weekOffsetFromParam(param, todayIso) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(param ?? '') || Number.isNaN(Date.parse(`${param}T00:00:00Z`))) return 0;
+  const diff = Date.parse(`${weekStartIso(param)}T00:00:00Z`) - Date.parse(`${weekStartIso(todayIso)}T00:00:00Z`);
+  return Math.round(diff / (7 * 86_400_000));
+}
+
+function RepWeek({ showToast, initialWeekOffset }) {
   const queryClient = useQueryClient();
   const todayIso = bangkokTodayIso();
   const thisMonday = weekStartIso(todayIso);
-  const [weekOffset, setWeekOffset] = useState(0);
+  const [weekOffset, setWeekOffset] = useState(initialWeekOffset);
   const [landed, setLanded] = useState(null);
   const [planning, setPlanning] = useState(false);
   const [logging, setLogging] = useState(false);
@@ -86,7 +98,8 @@ function RepWeek({ showToast }) {
   const refresh = () => queryClient.invalidateQueries({ queryKey: ['tickets'] });
   const createVisit = useMutation({ mutationFn: (payload) => api.salesVisits.create(payload), onSuccess: refresh });
   const doneVisit = useMutation({
-    mutationFn: ({ visit, note }) => api.salesVisits.done(visit.id, { note }),
+    // Slice 6.4: ตามต่อ's date only when picked — otherwise exactly the old request.
+    mutationFn: ({ visit, note, nextFollowUpAt }) => api.salesVisits.done(visit.id, withFollowUp({ note }, nextFollowUpAt)),
     onSuccess: refresh,
   });
   const cancelVisit = useMutation({ mutationFn: (visit) => api.salesVisits.cancel(visit.id), onSuccess: refresh });
@@ -228,7 +241,8 @@ function RepWeek({ showToast }) {
           visit={ticking}
           submitting={doneVisit.isPending}
           onClose={() => setTicking(null)}
-          onSubmit={(note) => attempt(doneVisit, { visit: ticking, note }, () => setTicking(null), 'บันทึกเข้าพบแล้ว')}
+          onSubmit={(note, nextFollowUpAt) => attempt(doneVisit, { visit: ticking, note, nextFollowUpAt },
+            () => setTicking(null), 'บันทึกเข้าพบแล้ว')}
         />
       ) : null}
       {logging ? (
@@ -237,10 +251,10 @@ function RepWeek({ showToast }) {
           deals={deals}
           submitting={doneVisit.isPending || createVisit.isPending}
           onClose={() => setLogging(false)}
-          onSubmit={({ visit, contactName, ticketId, note }) => (visit
-            ? attempt(doneVisit, { visit, note }, () => setLogging(false), 'บันทึกเข้าพบแล้ว')
-            : attempt(createVisit, { contactName, ticketId, plannedDate: todayIso, note, done: true },
-              () => setLogging(false), 'บันทึกเข้าพบแล้ว'))}
+          onSubmit={({ visit, contactName, ticketId, note, nextFollowUpAt }) => (visit
+            ? attempt(doneVisit, { visit, note, nextFollowUpAt }, () => setLogging(false), 'บันทึกเข้าพบแล้ว')
+            : attempt(createVisit, withFollowUp({ contactName, ticketId, plannedDate: todayIso, note, done: true },
+              nextFollowUpAt), () => setLogging(false), 'บันทึกเข้าพบแล้ว'))}
         />
       ) : null}
       <ConfirmDialog
@@ -263,14 +277,19 @@ function RepWeek({ showToast }) {
  * weeks through GET /api/sales/visits/team. The rows (every rep) and this week come from GET /api/sales/team-overview,
  * the same cached query as the team dashboard. Both endpoints are sales_manager / ceo only.
  */
-function TeamWeek() {
+function TeamWeek({ initialWeekOffset }) {
   const query = useQuery({ queryKey: queryKeys.salesBoardTeam(), queryFn: () => api.salesBoard.teamOverview() });
   const team = query.data;
   return (
     <>
       <PageHeader title="นัดเข้าพบ" subtitle="นัดเข้าพบของทุกคนในทีม รายสัปดาห์" />
       {query.isError ? <Panel flush><Failed /></Panel> : !team ? <Loading label="กำลังโหลดตารางเข้าพบ" /> : (
-        <VisitWeekGrid reps={team.reps} visits={team.teamVisitsThisWeek ?? []} todayIso={bangkokTodayIso()} />
+        <VisitWeekGrid
+          reps={team.reps}
+          visits={team.teamVisitsThisWeek ?? []}
+          todayIso={bangkokTodayIso()}
+          initialWeekOffset={initialWeekOffset}
+        />
       )}
     </>
   );
@@ -282,9 +301,13 @@ function TeamWeek() {
  * their own week. The server re-checks the role on every call.
  */
 export function VisitsPage({ user, showToast = () => {} }) {
+  const [params] = useSearchParams();
+  const initialWeekOffset = weekOffsetFromParam(params.get('week'), bangkokTodayIso());
   return (
     <PageStack>
-      {hasPermission(user?.role, 'canViewTeamVisits') ? <TeamWeek /> : <RepWeek showToast={showToast} />}
+      {hasPermission(user?.role, 'canViewTeamVisits')
+        ? <TeamWeek initialWeekOffset={initialWeekOffset} />
+        : <RepWeek showToast={showToast} initialWeekOffset={initialWeekOffset} />}
     </PageStack>
   );
 }
