@@ -91,7 +91,6 @@ function DepositNoticeRoute({ user, showToast }) {
       user={user}
       ticketId={ticketId}
       onBack={() => navigate(`/tickets/${ticketId}`)}
-      onNavigateTickets={() => navigate('/tickets')}
       showToast={showToast}
     />
   );

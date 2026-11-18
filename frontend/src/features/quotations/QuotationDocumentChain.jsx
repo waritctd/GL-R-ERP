@@ -13,7 +13,10 @@ import { Modal } from '../../components/common/Modal.jsx';
 import { SkeletonText } from '../../components/common/Skeleton.jsx';
 import { cn } from '../../utils/cn.js';
 import { downloadBlob } from '../../utils/download.js';
-import { createDepositNoticeDraft, depositNoticesQueryOptions, pickDepositNotice } from '../deposits/createDepositNoticeDraft.js';
+import {
+  createDepositNoticeDraft, dealQuotationsWithConfirmedQueryOptions, depositNoticesQueryOptions, pickDepositNotice,
+  resolveNoticeQuotation,
+} from '../deposits/createDepositNoticeDraft.js';
 import { DepositIssueSummary } from '../deposits/DepositNoticePage.jsx';
 import { invalidateDealDocuments } from '../documentChain/documentChain.js';
 import { chainNextStep } from '../documentChain/documentChainText.js';
@@ -289,6 +292,9 @@ function DepositNoticeIssueDialog({ ticketId, quotationNumber, onClose, onIssued
   const queryClient = useQueryClient();
   const listQuery = useQuery({ ...depositNoticesQueryOptions(ticketId), staleTime: 0 });
   const draft = (listQuery.data ?? []).find((d) => d.status === 'DRAFT') ?? null;
+  // The deal's quotation list (cache-shared with the document register): the dialog names the quotation when the
+  // draft's subtotal is not its quotation's. A failed read (no view access) just shows no line.
+  const quotationsQuery = useQuery(dealQuotationsWithConfirmedQueryOptions(ticketId));
   const issue = useMutation({
     mutationFn: () => api.depositNotices.issue(draft.id, { expectedUpdatedAt: draft.updatedAt ?? null }),
     onSuccess: (res) => {
@@ -326,13 +332,14 @@ function DepositNoticeIssueDialog({ ticketId, quotationNumber, onClose, onIssued
         </div>
       )}
     >
-      {listQuery.isLoading ? (
+      {listQuery.isLoading || (quotationsQuery.isLoading && !quotationsQuery.data) ? (
         <SkeletonText lines={4} />
       ) : draft ? (
         <DepositIssueSummary
           customerName={draft.customerName} depositPercent={draft.depositPercent} subtotal={draft.subtotal}
           reference={draft.reference} deposit={draft.depositAmount} vatPercent={draft.vatPercent}
           vat={draft.vatAmount} total={draft.totalPayable}
+          quotation={resolveNoticeQuotation(quotationsQuery.data, draft.reference)}
         />
       ) : (
         <p className="m-0 text-sm text-danger">ไม่พบฉบับร่าง — ลองใหม่อีกครั้ง</p>

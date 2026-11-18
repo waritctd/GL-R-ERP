@@ -24,6 +24,7 @@ vi.mock('../../api/index.js', async (importOriginal) => {
       },
       storedRemainingInvoices: { listForTicket: vi.fn(), download: vi.fn() },
       documentChain: { get: vi.fn() },
+      dealQuotations: { listForTicket: vi.fn() },
     },
   };
 });
@@ -564,6 +565,49 @@ describe('DealPaymentSection — ใบแจ้งมัดจำ issue confirm
     expect(dialog.getByText(/ยอดเริ่มต้นเติมจากใบเสนอราคา/)).toBeTruthy();
     // Fix round 1, F2: this opener issues the saved draft exactly as listed, so it is not an estimate.
     expect(dialog.queryByTestId('deposit-issue-estimate')).toBeNull();
+  });
+
+  // The notice's lines may have been edited after it was drafted: the confirm says when its subtotal is not the
+  // quotation's (the order's confirmed quotation, else the one named by the notice's reference). Never blocks.
+  it('says when the notice subtotal differs from its quotation, and still lets ออกเอกสาร through', async () => {
+    api.dealQuotations.listForTicket.mockResolvedValue({
+      items: [{ id: 3, number: 'QT-2026-0201', subtotalAmount: 1300000 }, { id: 4, number: 'QT-2026-0300', subtotalAmount: 5 }],
+      orderConfirmedQuotationId: 3,
+    });
+    renderSection(props);
+    await settled();
+    const dialog = await openConfirm();
+    expect((await within(dialog).findByTestId('deposit-issue-differs')).textContent)
+      .toBe('ใบเสนอราคา QT-2026-0201 มูลค่า 1,300,000.00 — ใบแจ้งนี้ 1,240,000.11');
+    expect(within(dialog).getByRole('button', { name: 'ออกเอกสาร' }).disabled).toBe(false);
+  });
+
+  // The quotation list is read as soon as a draft the viewer could issue is shown, so the warning is there (or cached)
+  // before a fast click on ออกเอกสาร — not only once the confirm has opened.
+  it('reads the quotation list before the confirm opens when the owner has a draft', async () => {
+    api.dealQuotations.listForTicket.mockResolvedValue({ items: [], orderConfirmedQuotationId: null });
+    renderSection(props);
+    await settled();
+    await waitFor(() => expect(api.dealQuotations.listForTicket).toHaveBeenCalledWith(19));
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('does not read the quotation list when there is no draft', async () => {
+    api.dealQuotations.listForTicket.mockResolvedValue({ items: [], orderConfirmedQuotationId: null });
+    renderSection({ summary: props.summary, depositNotices: [] });
+    await settled();
+    expect(api.dealQuotations.listForTicket).not.toHaveBeenCalled();
+  });
+
+  it('shows no mismatch line when the subtotals match', async () => {
+    api.dealQuotations.listForTicket.mockResolvedValue({
+      items: [{ id: 3, number: 'QT-2026-0201', subtotalAmount: 1240000.11 }], orderConfirmedQuotationId: 3,
+    });
+    renderSection(props);
+    await settled();
+    const dialog = await openConfirm();
+    await waitFor(() => expect(api.dealQuotations.listForTicket).toHaveBeenCalled());
+    expect(within(dialog).queryByTestId('deposit-issue-differs')).toBeNull();
   });
 
   it('keeps the irreversibility warning, and its own labels never say ดีล', async () => {

@@ -627,7 +627,7 @@ class PaymentTrackIntegrationTest extends AbstractPostgresIntegrationTest {
             new BigDecimal("0.50"), List.of(),
             List.of(new DepositNoticeItemRequest(
                 1, "Bare test item", new BigDecimal("1"), "แผ่น",
-                new BigDecimal("100.00"), null, new BigDecimal("100.00"))));
+                new BigDecimal("100.00"), null, new BigDecimal("100.00"), null)));
     }
 
     private String paymentStatusOf(long ticketId) {

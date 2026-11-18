@@ -14,7 +14,10 @@ import { downloadBlob } from '../../utils/download.js';
 import {
   formatMoney, formatThaiDate, overdueBadgeLabel, paymentStageLabel, PAYMENT_KIND_LABEL,
 } from '../../utils/format.js';
-import { depositNoticesQueryOptions, pickDepositNotice } from '../deposits/createDepositNoticeDraft.js';
+import {
+  dealQuotationsWithConfirmedQueryOptions, depositNoticeFileName, depositNoticesQueryOptions, pickDepositNotice,
+  resolveNoticeQuotation,
+} from '../deposits/createDepositNoticeDraft.js';
 import { DepositIssueSummary } from '../deposits/DepositNoticePage.jsx';
 import { canCreateDepositNoticeFromQuotation } from '../pricingRequests/pricingRequestMeta.js';
 import { newestQuotationByRequest } from '../quotations/quotationMeta.js';
@@ -160,6 +163,13 @@ export function DealPaymentSection({
     enabled: !!ticketId,
   });
   const doc = useMemo(() => pickDepositNotice(depositQuery.data), [depositQuery.data]);
+  // Read as soon as a draft the viewer could issue is shown (and served from cache when the register already loaded
+  // it), so it is ready before the confirm opens: the confirm names the quotation when the draft's subtotal is not
+  // its quotation's. A failed read shows no line.
+  const noticeQuotationsQuery = useQuery({
+    ...dealQuotationsWithConfirmedQueryOptions(ticketId),
+    enabled: !!ticketId && isOwnerSales && doc?.status === 'DRAFT',
+  });
   const invoice = pickRemainingInvoice(remainingQuery.data ?? []);
 
   const chainQuery = useDocumentChain(ticketId, { enabled: !!ticketId && canReadDepositNotices });
@@ -392,8 +402,8 @@ export function DealPaymentSection({
                   ) : null}
                   {(dep === 'issued' || dep === 'paid') && doc?.status === 'ISSUED' ? (
                     <>
-                      {downloadButton('dep-pdf', 'PDF', () => api.depositNotices.downloadPdf(doc.id), doc.docNumber ?? 'deposit-notice', 'pdf')}
-                      {downloadButton('dep-xlsx', 'Excel', () => api.depositNotices.downloadXlsx(doc.id), doc.docNumber ?? 'deposit-notice', 'xlsx')}
+                      {downloadButton('dep-pdf', 'PDF', () => api.depositNotices.downloadPdf(doc.id), depositNoticeFileName(doc, ticketId), 'pdf')}
+                      {downloadButton('dep-xlsx', 'Excel', () => api.depositNotices.downloadXlsx(doc.id), depositNoticeFileName(doc, ticketId), 'xlsx')}
                     </>
                   ) : null}
                 </>
@@ -441,6 +451,7 @@ export function DealPaymentSection({
           message={(
             <DepositIssueSummary customerName={doc.customerName} depositPercent={doc.depositPercent}
               subtotal={doc.subtotal} reference={doc.reference}
+              quotation={resolveNoticeQuotation(noticeQuotationsQuery.data, doc.reference)}
               deposit={doc.depositAmount} vatPercent={doc.vatPercent} vat={doc.vatAmount} total={doc.totalPayable} />
           )}
           confirmLabel="ออกเอกสาร"

@@ -151,18 +151,18 @@ describe('mock dealQuotations.promoteToDeal (GLA-136)', () => {
     expect(still.docStatus).toBe('APPROVED');
   });
 
-  // Owner ruling 2026-10-23 (DepositNoticeRepository#foldAdjustments): the deposit draft carries no
-  // qty -1 ส่วนลดพิเศษ row; a flat 95 is spread by line amount (TILE 8,500 takes 85, PLAIN 1,000
-  // takes 10), so the subtotal is the quotation's 9,405. The mock computes no % adjustment amount
-  // (MOCK_NOT_COMPUTED), so a % row is only dropped.
-  it('the deposit draft folds a flat ส่วนลดพิเศษ into the goods lines and drops a % one', async () => {
+  // The deposit draft copies the quotation's own lines (DepositNoticeRepository#findDealQuotationItems): a flat
+  // ส่วนลดพิเศษ is its own qty -1 line with its stored amount, so the subtotal is the quotation's 9,405. The mock
+  // computes no % adjustment amount (MOCK_NOT_COMPUTED), so a % row is only dropped.
+  it('the deposit draft keeps a flat ส่วนลดพิเศษ as its own line and drops a % one', async () => {
     const ghost = await quotationOnlyTicket();
     const flat = await approvedQuotation(ghost, [TILE, PLAIN, { lineType: 'ADJUSTMENT', description: 'ส่วนลดพิเศษ', adjustmentAmount: 95 }]);
     await api.dealQuotations.promoteToDeal(flat.id);
     const { depositNotice } = await api.depositNotices.createDraft(ghost, {});
-    expect(depositNotice.items.map((i) => [i.qty, i.unitPrice, i.netUnitPrice, i.discountLabel])).toEqual([
-      [10, 850, 841.5, 'ส่วนลดพิเศษ 8.5 ต่อหน่วย'],
-      [2, 500, 495, 'ส่วนลดพิเศษ 5 ต่อหน่วย'],
+    expect(depositNotice.items.map((i) => [i.qty, i.unitPrice, i.netUnitPrice, i.amount])).toEqual([
+      [10, 850, 850, 8500],
+      [2, 500, 500, 1000],
+      [-1, 95, 95, -95],
     ]);
     expect(depositNotice.subtotal).toBe(9405);
 
@@ -170,6 +170,57 @@ describe('mock dealQuotations.promoteToDeal (GLA-136)', () => {
     await api.dealQuotations.promoteToDeal((await approvedQuotation(other)).id);
     const { depositNotice: pctDraft } = await api.depositNotices.createDraft(other, {});
     expect(pctDraft.items.map((i) => i.qty)).toEqual([10, 2]);
+  });
+
+  // DepositNoticeService#echoOnly: the mock mirrors it. A supplied amount counts only when a stored line has the same
+  // qty, net and amount (else it is net x qty to 2 dp); a negative qty may be kept but never added.
+  async function draftWithFlatDiscount() {
+    const ghost = await quotationOnlyTicket();
+    const flat = await approvedQuotation(ghost, [TILE, PLAIN, { lineType: 'ADJUSTMENT', description: 'ส่วนลดพิเศษ', adjustmentAmount: 95 }]);
+    await api.dealQuotations.promoteToDeal(flat.id);
+    const { depositNotice } = await api.depositNotices.createDraft(ghost, {});
+    return depositNotice;
+  }
+  const NEW_DISCOUNT = { seq: 9, description: 'แถวใหม่', qty: -1, unit: '', unitPrice: 400000, netUnitPrice: 400000, amount: null };
+  const NEGATIVE_QTY_REFUSAL = { status: 400, message: 'จำนวนต้องไม่ติดลบ' };
+
+  it('a deposit-notice save keeps the stored discount line and amounts, recomputes a forged or edited amount', async () => {
+    const draft = await draftWithFlatDiscount();
+
+    const { depositNotice: echoed } = await api.depositNotices.update(draft.id, { items: draft.items });
+    expect(echoed.items.map((i) => i.amount)).toEqual([8500, 1000, -95]);
+    expect(echoed.subtotal).toBe(9405);
+
+    const forged = draft.items.map((i, n) => (n === 0 ? { ...i, amount: 1 } : i));
+    const { depositNotice: afterForged } = await api.depositNotices.update(draft.id, { items: forged });
+    expect(afterForged.items[0].amount).toBe(8500);
+
+    const edited = draft.items.map((i, n) => (n === 0 ? { ...i, qty: 2, amount: null } : i));
+    const { depositNotice: afterEdit } = await api.depositNotices.update(draft.id, { items: edited });
+    expect(afterEdit.items.map((i) => i.amount)).toEqual([1700, 1000, -95]);
+    expect(afterEdit.subtotal).toBe(2605);
+  });
+
+  it('a deposit-notice save refuses an ADDED negative qty line, whether or not one is already stored', async () => {
+    const draft = await draftWithFlatDiscount();
+    await expect(api.depositNotices.update(draft.id, { items: [...draft.items, NEW_DISCOUNT] }))
+      .rejects.toMatchObject(NEGATIVE_QTY_REFUSAL);
+    await expect(api.depositNotices.update(draft.id, { items: [...draft.items, { ...NEW_DISCOUNT, qty: -5 }] }))
+      .rejects.toMatchObject(NEGATIVE_QTY_REFUSAL);
+    const { depositNotice: unchanged } = await api.depositNotices.get(draft.id);
+    expect(unchanged.items).toHaveLength(3);
+  });
+
+  it('a client-supplied deposit-notice create ignores the sent amount and refuses a negative qty', async () => {
+    const ghost = await quotationOnlyTicket();
+    await api.dealQuotations.promoteToDeal((await approvedQuotation(ghost, [TILE])).id);
+    const line = { seq: 1, description: 'กระเบื้อง', qty: 2, unit: 'แผ่น', unitPrice: 100, netUnitPrice: 100, amount: 1 };
+
+    await expect(api.depositNotices.createDraft(ghost, { items: [line, NEW_DISCOUNT] }))
+      .rejects.toMatchObject(NEGATIVE_QTY_REFUSAL);
+    const { depositNotice } = await api.depositNotices.createDraft(ghost, { items: [line] });
+    expect(depositNotice.items[0].amount).toBe(200);
+    expect(depositNotice.subtotal).toBe(200);
   });
 
   it('a replay is idempotent — same deal, no second event', async () => {

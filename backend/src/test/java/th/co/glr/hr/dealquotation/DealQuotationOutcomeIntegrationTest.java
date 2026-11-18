@@ -377,6 +377,31 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(draft.items()).isNotEmpty();
     }
 
+    /** The pricing-request route hands the service its OWN lines (not client input), so the quotation's special
+     * discount row (qty -1, negative stored amount) is kept as its own line and the subtotal is the stored sum. */
+    @Test
+    void createDepositNoticeFromQuotation_newEngineWithAnAdjustmentRow_draftsTheDiscountAsItsOwnLine_andTheStoredSubtotal() {
+        DealQuotationDto accepted = acceptedNewOriginQuotation(PricingRequestRecipient.DESIGNER, new BigDecimal("10"), 20);
+        jdbc.update("""
+            INSERT INTO sales.quotation_item (quotation_id, seq, description, qty, raw_unit, unit_price, sales_discount,
+                                               final_unit_price, amount, line_type)
+            VALUES (:q, 99, 'ส่วนลดพิเศษ 500 บาท', -1, 'แผ่น', 500.00, 0, 500.00, -500.00, 'ADJUSTMENT')
+            """, Map.of("q", accepted.id()));
+        BigDecimal storedSum = jdbc.queryForObject(
+            "SELECT SUM(amount) FROM sales.quotation_item WHERE quotation_id = :q", Map.of("q", accepted.id()),
+            BigDecimal.class);
+        orderConfirmation.confirmOrder(accepted.pricingRequestId(),
+            new OrderConfirmationRequests.ConfirmOrderRequest(UUID.randomUUID().toString()), salesActor);
+
+        DepositNoticeDto draft = orderConfirmation.createDepositNoticeFromQuotation(accepted.pricingRequestId(),
+            new OrderConfirmationRequests.CreateDepositNoticeFromQuotationRequest(null), salesActor);
+
+        var discount = draft.items().get(draft.items().size() - 1);
+        assertThat(discount.qty()).isEqualByComparingTo("-1");
+        assertThat(discount.amount()).isEqualByComparingTo("-500.00");
+        assertThat(draft.subtotal()).isEqualByComparingTo(storedSum);
+    }
+
     /** Engines are exclusive per pricing request, not per ticket: a sibling pricing request's
      * older legacy ISSUED quotation must not supply the lines or the percent of the draft, on
      * either route. The customer answered this quotation and not the sibling, so it governs the
