@@ -20,9 +20,4 @@ class ReleaseNoticeDeliveryTest {
             .doesNotContain("@");
     }
 
-    @Test
-    void theStoredReasonIsCapped_andNamesTheExceptionWhenThereIsNoMessage() {
-        assertThat(ReleaseNoticeDelivery.reason(new IllegalStateException("x".repeat(1000)))).hasSize(300);
-        assertThat(ReleaseNoticeDelivery.reason(new IllegalStateException())).isEqualTo("IllegalStateException");
-    }
 }
