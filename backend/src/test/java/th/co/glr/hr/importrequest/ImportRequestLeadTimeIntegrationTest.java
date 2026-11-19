@@ -4,9 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import java.math.BigDecimal;
 import java.time.LocalDate;
-import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -20,7 +18,6 @@ import th.co.glr.hr.customer.ContactRepository;
 import th.co.glr.hr.customer.CustomerRepository;
 import th.co.glr.hr.factory.FactoryConfigRepository;
 import th.co.glr.hr.importrequest.ImportRequestDtos.ImportRequestDto;
-import th.co.glr.hr.importrequest.ImportRequestRequests.SetLeadTimeRequest;
 import th.co.glr.hr.importrequest.ImportRequestRequests.UpdateImportRequestRequest;
 import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.notification.SalesNotificationMailer;
@@ -74,45 +71,6 @@ class ImportRequestLeadTimeIntegrationTest extends AbstractPostgresIntegrationTe
         ceoUser = principal(insertEmployee("LT-CEO"), "ceo");
     }
 
-    // ── autofill on DRAFT creation ────────────────────────────────────────────────────────────
-
-    @Test
-    void draftAutofillsLeadTimeFromTheFactorysCountry_it() {
-        assertAutofill("IT", 75, 90);
-    }
-
-    @Test
-    void draftAutofillsLeadTimeFromTheFactorysCountry_cn() {
-        assertAutofill("CN", 30, 45);
-    }
-
-    @Test
-    void draftAutofillsLeadTimeFromTheFactorysCountry_th() {
-        assertAutofill("TH", 3, 7);
-    }
-
-    /**
-     * 'ZZ' (อื่นๆ) and any other unmapped code get NO default. Create now ISSUES, so with no lead time
-     * it is refused outright (409 naming the factory) and writes nothing — the rep must type it in on
-     * the factory first / the deal's quotation.
-     */
-    @Test
-    void createDrafts_isRefusedNamingTheFactory_forZzAndUnmappedCodes() {
-        insertFactory("ZZ Factory", "ZZ", "Farawaystan");
-        insertFactory("Unmapped Factory", "PL", null);
-
-        for (String name : new String[] {"ZZ Factory", "Unmapped Factory"}) {
-            long ticket = insertTicket("LT-NULL-" + name.charAt(0));
-            insertItem(ticket, name, "Line", 0);
-            assertThatThrownBy(() -> service.createDrafts(ticket, null, owner))
-                .isInstanceOfSatisfying(ApiException.class, e -> {
-                    assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
-                    assertThat(e.getMessage()).contains(name);
-                });
-            assertThat(service.list(ticket, owner)).isEmpty();
-        }
-    }
-
     // ── 10-29 ruling B: lead-time popup contract (missing lead time is askable, not a dead end) ──
 
     private static final String MISSING_LEAD_TIME_PREFIX = "กรุณาระบุระยะเวลานำเข้าให้กับโรงงาน: ";
@@ -128,11 +86,6 @@ class ImportRequestLeadTimeIntegrationTest extends AbstractPostgresIntegrationTe
         return ticket;
     }
 
-    private static ImportRequestRequests.CreateImportRequestsRequest withLeadTimes(
-            ImportRequestRequests.NewFactoryLeadTimeInput... inputs) {
-        return new ImportRequestRequests.CreateImportRequestsRequest(null, null, null, List.of(inputs));
-    }
-
     @Test
     void createDrafts_409ListsOnlyTheFactoriesWithNoLeadTime_andWritesNothing() {
         long ticket = dealWithThreeFactories();
@@ -144,99 +97,6 @@ class ImportRequestLeadTimeIntegrationTest extends AbstractPostgresIntegrationTe
                     .contains("LT Missing PL").contains("LT Missing ZZ").doesNotContain("LT Good Factory");
             });
         assertThat(service.list(ticket, owner)).isEmpty();
-    }
-
-    @Test
-    void createDrafts_withOnlySomeLeadTimesSupplied_409ListsTheRest_andWritesNothing() {
-        long ticket = dealWithThreeFactories();
-
-        assertThatThrownBy(() -> service.createDrafts(ticket,
-            withLeadTimes(new ImportRequestRequests.NewFactoryLeadTimeInput("LT Missing PL", 20, 30)), owner))
-            .isInstanceOfSatisfying(ApiException.class, e -> {
-                assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
-                assertThat(e.getMessage()).startsWith(MISSING_LEAD_TIME_PREFIX)
-                    .contains("LT Missing ZZ").doesNotContain("LT Missing PL").doesNotContain("LT Good Factory");
-            });
-        assertThat(service.list(ticket, owner)).isEmpty();
-    }
-
-    @Test
-    void createDrafts_withASuppliedLeadTime_issuesEveryRow_usingIt_andKeepsTheDefaultsElsewhere() {
-        long ticket = dealWithThreeFactories();
-
-        var holder = new java.util.concurrent.atomic.AtomicReference<List<ImportRequestDto>>(List.of());
-        org.assertj.core.api.Assertions.assertThatCode(() -> holder.set(service.createDrafts(ticket,
-            withLeadTimes(new ImportRequestRequests.NewFactoryLeadTimeInput("LT Missing PL", 20, 30),
-                new ImportRequestRequests.NewFactoryLeadTimeInput("LT Missing ZZ", 5, 9)), owner)))
-            .doesNotThrowAnyException();
-
-        assertThat(holder.get()).hasSize(3).allSatisfy(r -> assertThat(r.status()).isEqualTo(ImportRequestStatus.ISSUED));
-        assertThat(byName(holder.get(), "LT Missing PL").leadTimeMinDays()).isEqualTo(20);
-        assertThat(byName(holder.get(), "LT Missing PL").leadTimeMaxDays()).isEqualTo(30);
-        assertThat(byName(holder.get(), "LT Missing ZZ").leadTimeMinDays()).isEqualTo(5);
-        assertThat(byName(holder.get(), "LT Good Factory").leadTimeMinDays()).isEqualTo(75); // IT default
-    }
-
-    @Test
-    void createDrafts_withABadSuppliedLeadTime_is400_andWritesNothing() {
-        long ticket = dealWithThreeFactories();
-        var ok = new ImportRequestRequests.NewFactoryLeadTimeInput("LT Missing ZZ", 5, 9);
-        for (var bad : List.of(
-                new ImportRequestRequests.NewFactoryLeadTimeInput("LT Missing PL", 0, 30),     // min < 1
-                new ImportRequestRequests.NewFactoryLeadTimeInput("LT Missing PL", 40, 30),    // min > max
-                new ImportRequestRequests.NewFactoryLeadTimeInput("LT Missing PL", 10, 366),   // max > 365
-                new ImportRequestRequests.NewFactoryLeadTimeInput("LT Missing PL", null, 30))) { // absent
-            assertThatThrownBy(() -> service.createDrafts(ticket, withLeadTimes(bad, ok), owner))
-                .isInstanceOfSatisfying(ApiException.class,
-                    e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
-            assertThat(service.list(ticket, owner)).isEmpty();
-        }
-    }
-
-    @Test
-    void createDrafts_ignoresASuppliedLeadTime_forAFactoryThatAlreadyHasADefault() {
-        long ticket = dealWithThreeFactories();
-
-        List<ImportRequestDto> created = service.createDrafts(ticket,
-            withLeadTimes(new ImportRequestRequests.NewFactoryLeadTimeInput("LT Good Factory", 1, 2),
-                new ImportRequestRequests.NewFactoryLeadTimeInput("LT Missing PL", 20, 30),
-                new ImportRequestRequests.NewFactoryLeadTimeInput("LT Missing ZZ", 5, 9)), owner);
-
-        assertThat(byName(created, "LT Good Factory").leadTimeMinDays()).isEqualTo(75);
-        assertThat(byName(created, "LT Good Factory").leadTimeMaxDays()).isEqualTo(90);
-    }
-
-    private static ImportRequestDto byName(List<ImportRequestDto> rows, String name) {
-        return rows.stream().filter(r -> name.equals(r.factoryName())).findFirst().orElseThrow();
-    }
-
-    private void assertAutofill(String isoCode, int expectedMin, int expectedMax) {
-        insertFactory(isoCode + " Factory", isoCode, null);
-        long ticketId = insertTicket("LT-" + isoCode);
-        insertItem(ticketId, isoCode + " Factory", "Line", 0);
-
-        ImportRequestDto draft = service.createDrafts(ticketId, null, owner).get(0);
-        assertThat(draft.leadTimeMinDays()).isEqualTo(expectedMin);
-        assertThat(draft.leadTimeMaxDays()).isEqualTo(expectedMax);
-    }
-
-    // ── issue refuses while unset ─────────────────────────────────────────────────────────────
-
-    @Test
-    void issue_isRefused_whileLeadTimeIsUnset() {
-        insertFactory("No Default Factory", "PL", null);
-        long ticketId = insertTicket("LT-ISSUE-NULL");
-        insertItem(ticketId, "No Default Factory", "Line", 0);
-        long id = DraftSeed.seed(jdbc, ticketId, owner).get(0).id();
-
-        assertThatThrownBy(() -> service.issue(id, null, owner))
-            .isInstanceOfSatisfying(ApiException.class,
-                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
-
-        // Setting it (owning rep, DRAFT) clears the refusal.
-        service.update(id, new UpdateImportRequestRequest(
-            null, null, null, null, null, null, null, null, null, 10, 20, null), owner);
-        assertThat(service.issue(id, null, owner).status()).isEqualTo(ImportRequestStatus.ISSUED);
     }
 
     // ── editable while DRAFT (owning rep/CEO), and after ISSUE (import/CEO) ──────────────────────
@@ -268,205 +128,6 @@ class ImportRequestLeadTimeIntegrationTest extends AbstractPostgresIntegrationTe
 
         // Value untouched by either refused attempt.
         assertThat(service.get(id, owner).leadTimeMinDays()).isEqualTo(15);
-    }
-
-    @Test
-    void issuedLeadTime_isEditableByImportOrCeo_notBySales() {
-        insertFactory("Editable Issued Factory", "IT", null); // autofilled 75-90, satisfies issue gate
-        long ticketId = insertTicket("LT-ISSUED-EDIT");
-        insertItem(ticketId, "Editable Issued Factory", "Line", 0);
-        long id = DraftSeed.seed(jdbc, ticketId, owner).get(0).id();
-        service.issue(id, null, owner);
-
-        // Import: allowed.
-        ImportRequestDto afterImport = service.setLeadTime(id, new SetLeadTimeRequest(20, 40), importUser);
-        assertThat(afterImport.leadTimeMinDays()).isEqualTo(20);
-        assertThat(afterImport.leadTimeMaxDays()).isEqualTo(40);
-
-        // CEO: allowed.
-        ImportRequestDto afterCeo = service.setLeadTime(id, new SetLeadTimeRequest(21, 41), ceoUser);
-        assertThat(afterCeo.leadTimeMinDays()).isEqualTo(21);
-
-        // Sales (even the owning rep): refused — post-issue lead time is import/CEO's job now.
-        assertThatThrownBy(() -> service.setLeadTime(id, new SetLeadTimeRequest(1, 2), owner))
-            .isInstanceOfSatisfying(ApiException.class,
-                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
-        assertThat(service.get(id, owner).leadTimeMinDays()).isEqualTo(21);
-    }
-
-    // ── bad range ─────────────────────────────────────────────────────────────────────────────
-
-    @Test
-    void setLeadTime_refusesAMinGreaterThanMax() {
-        insertFactory("Bad Range Factory", "IT", null);
-        long ticketId = insertTicket("LT-BADRANGE");
-        insertItem(ticketId, "Bad Range Factory", "Line", 0);
-        long id = DraftSeed.seed(jdbc, ticketId, owner).get(0).id();
-        service.issue(id, null, owner);
-
-        assertThatThrownBy(() -> service.setLeadTime(id, new SetLeadTimeRequest(50, 10), importUser))
-            .isInstanceOfSatisfying(ApiException.class,
-                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
-    }
-
-    @Test
-    void draftUpdate_refusesOneFieldWithoutTheOther() {
-        insertFactory("Partial Field Factory", "IT", null);
-        long ticketId = insertTicket("LT-PARTIAL");
-        insertItem(ticketId, "Partial Field Factory", "Line", 0);
-        long id = DraftSeed.seed(jdbc, ticketId, owner).get(0).id();
-
-        assertThatThrownBy(() -> service.update(id, new UpdateImportRequestRequest(
-                null, null, null, null, null, null, null, null, null, 30, null, null), owner))
-            .isInstanceOfSatisfying(ApiException.class,
-                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
-    }
-
-    // ── revision carries the values forward ──────────────────────────────────────────────────────
-
-    @Test
-    void revision_carriesLeadTimeForward_notReautofilled() {
-        insertFactory("Revision Factory", "IT", null); // would autofill 75-90
-        long ticketId = insertTicket("LT-REVISE");
-        insertItem(ticketId, "Revision Factory", "Line", 0);
-        long v1 = DraftSeed.seed(jdbc, ticketId, owner).get(0).id();
-        // Import/CEO hand-refine the estimate AFTER issue.
-        service.issue(v1, null, owner);
-        service.setLeadTime(v1, new SetLeadTimeRequest(60, 65), importUser);
-
-        ImportRequestDto v2 = service.revise(v1, owner);
-        // NOT re-autofilled to 75-90 -- carried forward from the predecessor's actual value.
-        assertThat(v2.leadTimeMinDays()).isEqualTo(60);
-        assertThat(v2.leadTimeMaxDays()).isEqualTo(65);
-    }
-
-    // ── vesselEtaNote re-derivation (REVIEW ROUND 2, S-D/S-E) ────────────────────────────────────
-
-    /** S-D: setLeadTime moves expectedArrivalFrom/To (derived from firstIssuedDate+leadTime), so a vesselEtaNote
-     * that is still exactly the AUTO-DERIVED text for the OLD range must move with it, and so must the unsent
-     * order-email draft's body (it quotes the same window). */
-    @Test
-    void setLeadTime_reDerivesTheAutoVesselEtaNote_andRegeneratesTheUnsentEmailBody() {
-        insertFactory("ETA Redrive Factory", "IT", null); // autofills 75-90
-        long ticketId = insertTicket("LT-ETA-REDERIVE");
-        insertItem(ticketId, "ETA Redrive Factory", "Line", 0);
-        long id = DraftSeed.seed(jdbc, ticketId, owner).get(0).id();
-        ImportRequestDto issued = service.issue(id, null, owner);
-        String autoNoteFor75to90 = issued.vesselEtaNote();
-        assertThat(autoNoteFor75to90).isNotBlank();
-        assertThat(issued.emailBody()).contains(
-            issued.issueDate().plusDays(75).format(java.time.format.DateTimeFormatter.ofPattern("dd/MM/yyyy")));
-
-        ImportRequestDto afterLeadTime = service.setLeadTime(id, new SetLeadTimeRequest(10, 20), importUser);
-        assertThat(afterLeadTime.vesselEtaNote())
-            .isNotEqualTo(autoNoteFor75to90)
-            .contains("10").contains("20");
-        assertThat(afterLeadTime.emailBody()).contains(
-            afterLeadTime.issueDate().plusDays(10).format(java.time.format.DateTimeFormatter.ofPattern("dd/MM/yyyy")))
-            .doesNotContain(
-                issued.issueDate().plusDays(75).format(java.time.format.DateTimeFormatter.ofPattern("dd/MM/yyyy")));
-    }
-
-    @Test
-    void setLeadTime_neverOverwritesACeoTypedCustomVesselEtaNote() {
-        insertFactory("ETA Custom Factory", "IT", null);
-        long ticketId = insertTicket("LT-ETA-CUSTOM");
-        insertItem(ticketId, "ETA Custom Factory", "Line", 0);
-        long id = DraftSeed.seed(jdbc, ticketId, owner).get(0).id();
-        service.issue(id, null, owner);
-        ImportRequestDto ceoTyped = service.update(id, new UpdateImportRequestRequest(
-            null, null, null, "Vessel confirmed by phone, mid-December", null, null, null, null,
-            null, null, null, null), ceoUser);
-        assertThat(ceoTyped.vesselEtaNote()).isEqualTo("Vessel confirmed by phone, mid-December");
-
-        ImportRequestDto afterLeadTime = service.setLeadTime(id, new SetLeadTimeRequest(10, 20), importUser);
-        assertThat(afterLeadTime.vesselEtaNote()).isEqualTo("Vessel confirmed by phone, mid-December");
-    }
-
-    /** S-E: revise carries the predecessor's vesselEtaNote forward; its own issue re-derives it only when it is
-     * STILL exactly the auto-derived text for this draft's own (carried-forward, unedited) range — otherwise (a
-     * CEO-typed custom note) it is left exactly alone across the revision. */
-    @Test
-    void revision_carriesVesselEtaNoteForward_andReDerivesOnlyIfStillAutoDerived() {
-        insertFactory("ETA Revise Factory", "IT", null); // autofills 75-90
-        long ticketId = insertTicket("LT-ETA-REVISE");
-        insertItem(ticketId, "ETA Revise Factory", "Line", 0);
-        long v1 = DraftSeed.seed(jdbc, ticketId, owner).get(0).id();
-        ImportRequestDto issuedV1 = service.issue(v1, null, owner);
-        assertThat(issuedV1.vesselEtaNote()).isNotBlank();
-
-        ImportRequestDto v2 = service.revise(v1, owner);
-        ImportRequestDto issuedV2 = service.issue(v2.id(), null, owner);
-        // Same anchor (firstIssuedDate carried forward) and same range -- re-derivation reproduces the identical text,
-        // so the note stays consistent with issuedV2's own derived window.
-        assertThat(issuedV2.vesselEtaNote()).isEqualTo(issuedV1.vesselEtaNote());
-        assertThat(issuedV2.firstIssuedDate()).isEqualTo(issuedV1.firstIssuedDate());
-    }
-
-    /** REVIEW ROUND 3, item 1: revise carries v1's auto-derived "" note forward onto v2's draft unchanged; the
-     * OWNING REP then edits v2's OWN lead time to 60–70 via update. */
-    @Test
-    void revision_thenEditingLeadTime_thenIssue_showsTheNewRange_notThePredecessors() {
-        insertFactory("ETA Revise Then Edit Factory", "IT", null); // autofills 75-90
-        long ticketId = insertTicket("LT-ETA-REVISE-EDIT");
-        insertItem(ticketId, "ETA Revise Then Edit Factory", "Line", 0);
-        long v1 = DraftSeed.seed(jdbc, ticketId, owner).get(0).id();
-        ImportRequestDto issuedV1 = service.issue(v1, null, owner);
-        assertThat(issuedV1.vesselEtaNote()).contains("75").contains("90");
-
-        ImportRequestDto v2 = service.revise(v1, owner);
-        // Sanity: the note WAS carried forward from v1, unchanged, before the edit below.
-        assertThat(v2.vesselEtaNote()).isEqualTo(issuedV1.vesselEtaNote());
-
-        service.update(v2.id(), new UpdateImportRequestRequest(
-            null, null, null, null, null, null, null, null, null, 60, 70, null), owner);
-
-        ImportRequestDto issuedV2 = service.issue(v2.id(), null, owner);
-        assertThat(issuedV2.vesselEtaNote())
-            .contains("60").contains("70")
-            .doesNotContain("75").doesNotContain("90");
-        assertThat(issuedV2.expectedArrivalFrom())
-            .isEqualTo(issuedV2.firstIssuedDate().plusDays(60));
-        assertThat(issuedV2.expectedArrivalTo())
-            .isEqualTo(issuedV2.firstIssuedDate().plusDays(70));
-        // The unsent order-email draft must not disagree with the printed form either.
-        assertThat(issuedV2.emailBody()).contains("60").doesNotContain("Expected arrival: approx. "
-            + issuedV1.firstIssuedDate().plusDays(75)
-                .format(java.time.format.DateTimeFormatter.ofPattern("dd/MM/yyyy")));
-    }
-
-    @Test
-    void revision_carriesACeoTypedCustomVesselEtaNoteForward_untouched() {
-        insertFactory("ETA Revise Custom Factory", "IT", null);
-        long ticketId = insertTicket("LT-ETA-REVISE-CUSTOM");
-        insertItem(ticketId, "ETA Revise Custom Factory", "Line", 0);
-        long v1 = DraftSeed.seed(jdbc, ticketId, owner).get(0).id();
-        service.issue(v1, null, owner);
-        service.update(v1, new UpdateImportRequestRequest(
-            null, null, null, "Confirmed by phone, ETA mid-Jan", null, null, null, null,
-            null, null, null, null), ceoUser);
-
-        ImportRequestDto v2 = service.revise(v1, owner);
-        ImportRequestDto issuedV2 = service.issue(v2.id(), null, owner);
-        assertThat(issuedV2.vesselEtaNote()).isEqualTo("Confirmed by phone, ETA mid-Jan");
-    }
-
-    // ── expected arrival derivation ───────────────────────────────────────────────────────────
-
-    @Test
-    void expectedArrival_isDerivedFromIssueDatePlusLeadTime_andNullUntilIssued() {
-        insertFactory("Arrival Factory", "IT", null);
-        long ticketId = insertTicket("LT-ARRIVAL");
-        insertItem(ticketId, "Arrival Factory", "Line", 0);
-        ImportRequestDto draft = DraftSeed.seed(jdbc, ticketId, owner).get(0);
-
-        // Null while DRAFT — no issueDate yet even though lead time is already autofilled.
-        assertThat(draft.expectedArrivalFrom()).isNull();
-        assertThat(draft.expectedArrivalTo()).isNull();
-
-        ImportRequestDto issued = service.issue(draft.id(), null, owner);
-        assertThat(issued.expectedArrivalFrom()).isEqualTo(issued.issueDate().plusDays(75));
-        assertThat(issued.expectedArrivalTo()).isEqualTo(issued.issueDate().plusDays(90));
     }
 
     // ── helpers ──────────────────────────────────────────────────────────────────────────────

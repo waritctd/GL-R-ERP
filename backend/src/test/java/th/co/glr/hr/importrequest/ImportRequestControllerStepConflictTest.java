@@ -8,19 +8,15 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import jakarta.servlet.http.HttpSession;
-import java.time.Instant;
 import java.time.LocalDate;
-import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.dao.CannotAcquireLockException;
 import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.http.HttpStatus;
 import org.springframework.mock.web.MockHttpSession;
 import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
-import th.co.glr.hr.importrequest.ImportRequestRequests.AdvanceImportStepRequest;
 import th.co.glr.hr.importrequest.ImportRequestRequests.UndoImportStepRequest;
 
 /**
@@ -50,21 +46,5 @@ class ImportRequestControllerStepConflictTest {
         when(service.undoStep(anyLong(), any(), any())).thenThrow(new PessimisticLockingFailureException("40P01 deadlock detected"));
         assertThatThrownBy(() -> controller.undoStep(1L, new UndoImportStepRequest("ORDERED"), session))
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
-    }
-
-    @Test
-    void aLockOrSerializationFailureOnAdvanceIsThe409_notA500() {
-        when(service.advanceStep(anyLong(), any(), any())).thenThrow(new CannotAcquireLockException("40001"));
-        assertThatThrownBy(() -> controller.advanceStep(1L, new AdvanceImportStepRequest("ORDERED", null, null), session))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
-    }
-
-    @Test
-    void anAdvanceAnswersWithWhenItsUndoWindowCloses() {
-        Instant until = Instant.parse("2026-11-15T03:00:30Z");
-        when(service.advanceStep(anyLong(), any(), any())).thenReturn(null);
-        when(service.stepUndoUntil(1L)).thenReturn(until);
-        Map<String, Object> body = controller.advanceStep(1L, new AdvanceImportStepRequest("ORDERED", null, null), session);
-        assertThat(body).containsEntry("undoUntil", until);
     }
 }

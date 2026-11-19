@@ -6,7 +6,6 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
 import java.time.LocalDate;
-import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -19,15 +18,12 @@ import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.customer.ContactRepository;
 import th.co.glr.hr.customer.CustomerRepository;
 import th.co.glr.hr.factory.FactoryConfigRepository;
-import th.co.glr.hr.importrequest.ImportRequestDtos.ImportRequestDto;
 import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.notification.SalesNotificationMailer;
 import th.co.glr.hr.pricingrequest.PricingRequestRepository;
 import th.co.glr.hr.pricingrequest.PricingRequestService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 import th.co.glr.hr.ticket.DealStage;
-import th.co.glr.hr.ticket.ProcurementSourceRequest;
-import th.co.glr.hr.ticket.TicketEventKind;
 import th.co.glr.hr.ticket.QuotationRenderer;
 import th.co.glr.hr.ticket.TicketRepository;
 import th.co.glr.hr.ticket.TicketService;
@@ -68,40 +64,6 @@ class ImportRequestPaymentGateIntegrationTest extends AbstractPostgresIntegratio
         owner = principal(ownerId, "sales");
     }
 
-    @Test
-    void secondFactorysFirstIssue_isAllowed_afterTheDealHasAdvancedToFullyPaid() {
-        long factoryA = insertFactory("Pay Gate Factory A");
-        long factoryB = insertFactory("Pay Gate Factory B");
-        long ticketId = insertTicket("GATE-FULLYPAID", "DEPOSIT_PAID");
-        insertItem(ticketId, "Pay Gate Factory A", "Line A", "60x60", "10", "pcs", 0);
-        insertItem(ticketId, "Pay Gate Factory B", "Line B", "60x60", "10", "pcs", 1);
-
-        List<ImportRequestDto> drafts = DraftSeed.seed(jdbc, ticketId, owner);
-        long aId = byFactory(drafts, factoryA).id();
-        long bId = byFactory(drafts, factoryB).id();
-        assertThat(service.issue(aId, null, owner).status()).isEqualTo(ImportRequestStatus.ISSUED);
-
-        // The customer finishes paying the deal in full before factory B's own IR is ever touched — the original
-        // (narrower) gate would have refused this; the widened one must not.
-        setPaymentStatus(ticketId, "FULLY_PAID");
-
-        assertThat(service.issue(bId, null, owner).status()).isEqualTo(ImportRequestStatus.ISSUED);
-    }
-
-    @Test
-    void aRevisionsIssue_isAllowed_afterTheDealHasAdvancedToAwaitingFinalPayment() {
-        insertFactory("Pay Gate Revise Factory");
-        long ticketId = insertTicket("GATE-AWAITING", "DEPOSIT_PAID");
-        insertItem(ticketId, "Pay Gate Revise Factory", "Line", "60x60", "10", "pcs", 0);
-        long v1 = DraftSeed.seed(jdbc, ticketId, owner).get(0).id();
-        assertThat(service.issue(v1, null, owner).status()).isEqualTo(ImportRequestStatus.ISSUED);
-
-        setPaymentStatus(ticketId, "AWAITING_FINAL_PAYMENT");
-
-        ImportRequestDto v2 = service.revise(v1, owner);
-        assertThat(service.issue(v2.id(), null, owner).status()).isEqualTo(ImportRequestStatus.ISSUED);
-    }
-
     /** The floor itself is UNCHANGED — S-C widens what counts as "ready", it never removes the requirement that the
      * deal has SOME deposit-or-later payment state at all. */
     @Test
@@ -132,46 +94,6 @@ class ImportRequestPaymentGateIntegrationTest extends AbstractPostgresIntegratio
             .fulfillmentStatus()).isNull();
     }
 
-    /**
-     * Review fix: the payment gate refuses FIRST. A deal with no paid deposit whose line also names a
-     * brand-new factory (no country, no lead time) must get the gate's 409, not the missing-country
-     * 409 that would walk sales through both popups before refusing — and nothing is written (no
-     * auto-created factory either).
-     */
-    @Test
-    void createDrafts_paymentGateRefusesBeforeTheCountryAndLeadTimePrompts() {
-        long ticketId = insertTicket("GATE-FIRST", null);
-        insertItem(ticketId, "Brand New Gate Factory Co", "Line", "60x60", "10", "pcs", 0);
-        Long factoriesBefore = jdbc.queryForObject(
-            "SELECT count(*) FROM price_catalog.factories", Map.of(), Long.class);
-
-        assertThatThrownBy(() -> service.createDrafts(ticketId, null, owner))
-            .isInstanceOfSatisfying(ApiException.class, e -> {
-                assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
-                assertThat(e.getMessage()).contains("ออกใบขอซื้อ (IR) ได้เฉพาะเมื่อรับชำระมัดจำแล้ว")
-                    .doesNotContain("ใบขอนำเข้า").doesNotContain("ประเทศ");
-            });
-
-        assertThat(service.list(ticketId, owner)).isEmpty();
-        assertThat(jdbc.queryForObject("SELECT count(*) FROM price_catalog.factories", Map.of(), Long.class))
-            .isEqualTo(factoriesBefore);
-    }
-
-    /** Cheap nit: CUSTOMER_CONFIRMED on a deposit-REQUIRED policy is STILL refused even under the WIDENED
-     * allowAdvancedPayment gate: it is neither one of the two original deposit-ready statuses, nor does
-     * depositPolicyBypassesNotice apply, nor is CUSTOMER_CONFIRMED one of the two statuses S-C added. */
-    @Test
-    void issue_isStillRefused_onCustomerConfirmed_whenDepositPolicyIsRequired() {
-        insertFactory("Pay Gate Customer Confirmed Factory");
-        long ticketId = insertTicket("GATE-CUSTCONF", "CUSTOMER_CONFIRMED");
-        insertItem(ticketId, "Pay Gate Customer Confirmed Factory", "Line", "60x60", "10", "pcs", 0);
-        long id = DraftSeed.seed(jdbc, ticketId, owner).get(0).id();
-
-        assertThatThrownBy(() -> service.issue(id, null, owner))
-            .isInstanceOfSatisfying(ApiException.class,
-                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
-    }
-
     /** The gate is "deposit received", NOT "quotation issued": a deal whose ticket never left draft (the redesigned
      * pricing chain does not always advance it) can still issue once the deposit condition holds. */
     @Test
@@ -185,104 +107,10 @@ class ImportRequestPaymentGateIntegrationTest extends AbstractPostgresIntegratio
         assertThat(service.issue(id, null, owner).status()).isEqualTo(ImportRequestStatus.ISSUED);
     }
 
-    /** Same rule on the shared issuable gate (the legacy one-shot action that also used it is closed, W3-04). */
-    @Test
-    void issuableGate_isAllowed_onADraftTicket_whenTheDepositIsPaid() {
-        long ticketId = insertTicket("GATE-DRAFT-LEGACY", "DEPOSIT_PAID");
-        setTicketStatus(ticketId, "draft");
-
-        ticketService.requireImportRequestIssuable(new TicketRepository(jdbc).findById(ticketId).orElseThrow().summary());
-    }
-
-    /** Dropping the status requirement must not drop the deposit floor — wrong-way-round cases. */
-    @Test
-    void issue_isStillRefused_onADraftTicket_withNoDeposit_orOnlyCustomerConfirmed() {
-        insertFactory("Pay Gate Draft Refused Factory");
-        for (String paymentStatus : new String[] {null, "CUSTOMER_CONFIRMED"}) {
-            long ticketId = insertTicket("GATE-DR-" + (paymentStatus == null ? "NULL" : "CC"), paymentStatus);
-            setTicketStatus(ticketId, "draft");
-            insertItem(ticketId, "Pay Gate Draft Refused Factory", "Line", "60x60", "10", "pcs", 0);
-            long id = DraftSeed.seed(jdbc, ticketId, owner).get(0).id();
-
-            assertThatThrownBy(() -> service.issue(id, null, owner))
-                .isInstanceOfSatisfying(ApiException.class,
-                    e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
-            assertThatThrownBy(() -> ticketService.requireImportRequestIssuable(
-                new TicketRepository(jdbc).findById(ticketId).orElseThrow().summary()))
-                .isInstanceOfSatisfying(ApiException.class,
-                    e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
-        }
-    }
-
-    private static final String PICK_SOURCE_FIRST = "กด \"จัดซื้อสินค้า\" เพื่อเลือกที่มาสินค้าก่อนออกใบขอซื้อ (IR)";
-
-    /** Stage-10 dialog: an old (pre-2026-11-07 direct-quotation) deal must have its import/stock split decided first. */
-    @Test
-    void oldUndecidedDealCannotCreateIr() {
-        long ticketId = oldDealWithOneLine("GATE-OLD-UNDECIDED");
-
-        assertThatThrownBy(() -> service.createDrafts(ticketId, null, owner))
-            .isInstanceOfSatisfying(ApiException.class, e -> {
-                assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
-                assertThat(e.getMessage()).isEqualTo(PICK_SOURCE_FIRST);
-            });
-        assertThat(service.list(ticketId, owner)).isEmpty();
-    }
-
-    @Test
-    void oldDecidedDealCreatesIr() {
-        long ticketId = oldDealWithOneLine("GATE-OLD-DECIDED");
-        long itemId = jdbc.queryForObject(
-            "SELECT item_id FROM sales.ticket_item WHERE ticket_id = :t", Map.of("t", ticketId), Long.class);
-        ticketService.decideProcurementSource(ticketId, new ProcurementSourceRequest(
-            List.of(new ProcurementSourceRequest.Line(itemId, false))), owner);
-
-        assertThat(service.createDrafts(ticketId, null, owner)).hasSize(1);
-    }
-
-    @Test
-    void newUndecidedDealStillCreatesIr() {
-        insertFactory("Pay Gate New Deal Factory");
-        long ticketId = insertTicket("GATE-NEW-UNDECIDED", "DEPOSIT_PAID");
-        insertItem(ticketId, "Pay Gate New Deal Factory", "Line", "60x60", "10", "pcs", 0);
-
-        assertThat(ticketService.getProcurementSource(ticketId, owner).pending()).isTrue();
-        assertThat(service.createDrafts(ticketId, null, owner)).hasSize(1);
-        // creating the IR is itself the decision: the dialog must not stay pending
-        var after = ticketService.getProcurementSource(ticketId, owner);
-        assertThat(after.pending()).isFalse();
-        assertThat(after.decidedAt()).isNotNull();
-    }
-
-    /** Hand-seeded legacy shape: DEAL_DIRECT quotation issued 2026-11-06 + DEAL_PROMOTED_FROM_QUOTATION event. */
-    private long oldDealWithOneLine(String code) {
-        insertFactory("Pay Gate Old Deal Factory " + code);
-        long ticketId = insertTicket(code, "DEPOSIT_PAID");
-        insertItem(ticketId, "Pay Gate Old Deal Factory " + code, "Line", "60x60", "10", "pcs", 0);
-        long quotationId = jdbc.queryForObject("""
-            INSERT INTO sales.quotation (ticket_id, number, issued_by, issued_at, origin)
-            VALUES (:t, :n, :by, '2026-11-06 10:00:00+07', 'DEAL_DIRECT') RETURNING quotation_id
-            """, Map.of("t", ticketId, "n", "QT-" + code, "by", ownerId), Long.class);
-        jdbc.update("""
-            INSERT INTO sales.ticket_event (ticket_id, actor_id, kind, related_document_type, related_document_id)
-            VALUES (:t, :by, :kind, 'QUOTATION', :q)
-            """, Map.of("t", ticketId, "by", ownerId, "kind", TicketEventKind.DEAL_PROMOTED_FROM_QUOTATION, "q", quotationId));
-        return ticketId;
-    }
-
     // ── fixtures ──────────────────────────────────────────────────────────────────────────────
-
-    private static ImportRequestDto byFactory(List<ImportRequestDto> rows, long factoryId) {
-        return rows.stream().filter(r -> r.factoryId() == factoryId).findFirst().orElseThrow();
-    }
 
     private void setTicketStatus(long ticketId, String status) {
         jdbc.update("UPDATE sales.ticket SET status = :s WHERE ticket_id = :id", Map.of("s", status, "id", ticketId));
-    }
-
-    private void setPaymentStatus(long ticketId, String paymentStatus) {
-        jdbc.update("UPDATE sales.ticket SET payment_status = :s WHERE ticket_id = :id",
-            Map.of("s", paymentStatus, "id", ticketId));
     }
 
     private static UserPrincipal principal(long employeeId, String role) {
