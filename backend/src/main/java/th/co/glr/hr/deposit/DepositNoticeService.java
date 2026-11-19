@@ -209,6 +209,8 @@ public class DepositNoticeService {
         requireRole(actor, SALES_ROLES);
         DepositNoticeDto doc = requireEditable(docId);
         requireTicketOwner(doc.ticketId(), actor);
+        requireActiveLifecycle(tickets.findSummaryById(doc.ticketId())
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบงานนี้")));
         requirePreparerInDeal(doc.ticketId(), req.preparerId(), doc.preparerId());
         // Sales may change the deposit percent on a DRAFT or an ISSUED notice (a SUPERSEDED one is refused by
         // requireEditable above). docs.update recomputes the amount from it. A request without a percent keeps the
@@ -216,6 +218,9 @@ public class DepositNoticeService {
         BigDecimal depositPercent = req.depositPercent() != null ? req.depositPercent() : doc.depositPercent();
         if (depositPercent.signum() <= 0) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "เปอร์เซ็นต์มัดจำต้องมากกว่า 0");
+        }
+        if (depositPercent.compareTo(BigDecimal.ONE) > 0) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "เปอร์เซ็นต์มัดจำต้องไม่เกิน 100");
         }
         // Whole percents only: the document prints the percent rounded (40.5% shows as "41%"). A
         // percent stored before that rule (0.3330) still saves while it is sent back unchanged;
@@ -873,14 +878,16 @@ public class DepositNoticeService {
             answered.totalAmount());
     }
 
-    /** Deposit deduction (pre-VAT): what account actually received (VAT-inclusive DEPOSIT receipts) / 1.07, so a
-     * post-payment edit of the notice cannot change the invoice; no receipt yet -> the notice's own amount. */
+    /** Deposit deduction (pre-VAT): the larger of the notice's own amount and what account actually received
+     * (VAT-inclusive DEPOSIT receipts / 1.07). Not capped at the notice: one edited DOWN after payment still deducts
+     * what was received, and a partial payment never lowers the deduction below the notice (no double billing). */
     private BigDecimal deductionFor(long ticketId, BigDecimal noticeAmount) {
+        BigDecimal notice = noticeAmount != null ? noticeAmount : BigDecimal.ZERO;
         BigDecimal received = tickets.sumDepositReceipts(ticketId);
-        if (received != null && received.signum() > 0) {
-            return received.divide(BigDecimal.ONE.add(VAT_RATE), 2, RoundingMode.HALF_UP);
+        if (received == null || received.signum() <= 0) {
+            return notice;
         }
-        return noticeAmount != null ? noticeAmount : BigDecimal.ZERO;
+        return notice.max(received.divide(BigDecimal.ONE.add(VAT_RATE), 2, RoundingMode.HALF_UP));
     }
 
     /** Item/deduction sourcing (rule D11) and rule C (net must not be negative), applied

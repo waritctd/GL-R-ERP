@@ -2014,17 +2014,21 @@ public class TicketRepository {
         + " AND pe.related_document_type = 'QUOTATION' AND pe.related_document_id = q.quotation_id)))";
 
     /**
-     * Once a remaining invoice is ISSUED, what the customer owes follows the ISSUED
-     * documents -- the deposit PART plus the remaining invoice's grand_total -- because each tax invoice rounds its
-     * own VAT, so the sum may sit a satang away from the deal's computed total. The deposit part follows the same
-     * rule as the invoice's deduction ({@code DepositNoticeService#deductionFor}): the DEPOSIT receipts actually
-     * received (VAT-inclusive) when any exist, else the notice's total_payable -- so editing the issued notice after
-     * payment cannot move the deal's total. Trailing comma included; VAT-inclusive variant only (the ex-VAT figure
-     * stays the quotation's subtotal).
+     * Once a remaining invoice is ISSUED, what the customer owes follows the ISSUED documents -- the deposit PART plus
+     * the remaining invoice's grand_total -- because each tax invoice rounds its own VAT, so the sum may sit a satang
+     * away from the deal's computed total. The deposit part is the invoice's FROZEN pre-VAT deposit_deduction made
+     * VAT-inclusive (the notice's exact total_payable when the deduction equals the notice amount, else
+     * ROUND(deduction * 1.07, 2); none -> 0). When the deduction came from receipts, the exact received sum is used while
+     * it still matches the frozen deduction (avoids a satang of rounding drift); once receipts change, the frozen figure wins.
+     * Trailing comma included; VAT-inclusive variant only (the ex-VAT figure stays the quotation's subtotal).
      */
     private static String issuedDocumentsPayable(String ticketIdRef) {
-        return "(SELECT COALESCE(NULLIF((SELECT SUM(pr.amount) FROM sales.payment_receipt pr"
-            + " WHERE pr.ticket_id = ri.ticket_id AND pr.kind = 'DEPOSIT'), 0), dn.total_payable, 0)"
+        return "(SELECT COALESCE(CASE WHEN ri.deposit_deduction = dn.deposit_amount THEN dn.total_payable"
+            + " WHEN ROUND((SELECT SUM(pr.amount) FROM sales.payment_receipt pr"
+            + " WHERE pr.ticket_id = ri.ticket_id AND pr.kind = 'DEPOSIT') / 1.07, 2) = ri.deposit_deduction"
+            + " THEN (SELECT SUM(pr.amount) FROM sales.payment_receipt pr"
+            + " WHERE pr.ticket_id = ri.ticket_id AND pr.kind = 'DEPOSIT')"
+            + " ELSE ROUND(ri.deposit_deduction * 1.07, 2) END, 0)"
             + " + ri.grand_total FROM sales.remaining_invoice ri"
             + " LEFT JOIN sales.deposit_notice dn ON dn.deposit_notice_id = ri.deposit_notice_id"
             + " WHERE ri.ticket_id = " + ticketIdRef + " AND ri.status = 'ISSUED' AND ri.grand_total IS NOT NULL"

@@ -85,7 +85,7 @@ function TotalsBlock({ rows, payable }) {
  * fields (the options preview's netAmount/itemsTotal/depositAmount, or a stored row's netAmount/itemsTotal/
  * depositDeduction), consistent by construction: DepositNoticeService#computeRemainingInvoiceMoney sets
  * netAmount = itemsTotal − depositAmount. Nothing is computed here. "มัดจำ", not the drawing's "มัดจำที่ได้รับ": the
- * deduction is the deposit notice's billed deposit (pre-VAT), not a received amount. With no deduction on the row
+ * deduction is max(notice deposit, received deposit / 1.07), pre-VAT. With no deduction on the row
  * the equation is left out rather than completed with a zero the server did not send.
  */
 function RemainingSummaryLine({ net, itemsTotal, deposit }) {

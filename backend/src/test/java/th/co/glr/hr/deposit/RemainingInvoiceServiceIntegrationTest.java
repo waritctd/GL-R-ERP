@@ -1258,12 +1258,20 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
     void editingTheIssuedDepositNotice_afterPaymentConfirmed_invoiceKeepsDeductingTheReceivedDeposit() {
         DealFixture fixture = buildAcceptedDeal(salesActor, "CascadeIssuedRi");
         ticketService.confirmDepositPaid(fixture.ticketId(), accountActor);
+        // a received amount (above the notice) whose /1.07 round trip drifts a satang under the old formula
+        BigDecimal paid = tickets.sumDepositReceipts(fixture.ticketId()).add(new BigDecimal("1000.00"));
+        while (paid.divide(new BigDecimal("1.07"), 2, RoundingMode.HALF_UP).multiply(new BigDecimal("1.07"))
+                .setScale(2, RoundingMode.HALF_UP).compareTo(paid) == 0) {
+            paid = paid.add(new BigDecimal("0.01"));
+        }
+        jdbc.update("UPDATE sales.payment_receipt SET amount = :a WHERE ticket_id = :id AND kind = 'DEPOSIT'",
+            Map.of("a", paid, "id", fixture.ticketId()));
         RemainingInvoiceDocumentDto v1 = remainingInvoiceService.issue(
             remainingInvoiceService.createDraft(fixture.ticketId(), null, salesActor).id(), salesActor);
         RemainingInvoiceDocumentDto live = remainingInvoiceService.issue(
             remainingInvoiceService.revise(v1.id(), salesActor).id(), salesActor);
         DepositNoticeDto notice = depositNoticeService.getById(fixture.depositNoticeId(), salesActor);
-        String newPercent = notice.depositPercent().compareTo(new BigDecimal("0.40")) == 0 ? "0.20" : "0.40";
+        String newPercent = "0.01"; // edited DOWN after payment
 
         DepositNoticeDto editedNotice = depositNoticeService.update(
             fixture.depositNoticeId(), noticeWithPercent(notice, newPercent), salesActor);
@@ -1280,8 +1288,9 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
         assertThat(refreshed.depositDeduction())
             .isEqualByComparingTo(received.divide(new BigDecimal("1.07"), 2, RoundingMode.HALF_UP));
         assertThat(refreshed.grandTotal()).isEqualByComparingTo(live.grandTotal());
-        // the deal's payable follows received + invoice, not the edited notice's total_payable
-        assertThat(tickets.payableAmount(fixture.ticketId())).isEqualByComparingTo(received.add(live.grandTotal()));
+        // the deal's payable follows the frozen deduction + invoice, not the edited notice's total_payable
+        assertThat(tickets.payableAmount(fixture.ticketId()))
+            .isEqualByComparingTo(received.add(live.grandTotal()));
         assertThat(tickets.findSummaryById(fixture.ticketId()).orElseThrow().amountOutstanding())
             .isEqualByComparingTo(live.grandTotal());
         assertThat(editedEvents(fixture.ticketId()).stream().map(e -> (String) e.get("message"))
@@ -1291,6 +1300,42 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
         assertThat(superseded.status()).isEqualTo("SUPERSEDED");
         assertThat(superseded.depositDeduction()).isEqualByComparingTo(v1.depositDeduction());
         assertThat(superseded.grandTotal()).isEqualByComparingTo(v1.grandTotal());
+    }
+
+    /** Partial deposit: the notice says 107,000 (100,000 pre-VAT) but only 50,000 was received. The invoice deducts the
+     * full notice (max of notice and received), and payable = notice total + invoice -- no double billing. */
+    @Test
+    void partialDepositReceipt_invoiceStillDeductsTheNotice_andPayableFollowsTheFrozenDeduction() {
+        DealFixture fixture = buildAcceptedDeal(salesActor, "PartialDeposit");
+        long ticketId = fixture.ticketId();
+        var dn = new DepositNoticeRepository(jdbc).findById(fixture.depositNoticeId()).orElseThrow();
+        ticketService.confirmDepositPaid(ticketId, accountActor);
+        jdbc.update("UPDATE sales.payment_receipt SET amount = 50000 WHERE ticket_id = :id AND kind = 'DEPOSIT'",
+            Map.of("id", ticketId));
+
+        RemainingInvoiceDocumentDto issued = remainingInvoiceService.issue(
+            remainingInvoiceService.createDraft(ticketId, null, salesActor).id(), salesActor);
+
+        assertThat(issued.depositDeduction()).isEqualByComparingTo(dn.depositAmount());
+        assertThat(tickets.payableAmount(ticketId)).isEqualByComparingTo(dn.totalPayable().add(issued.grandTotal()));
+    }
+
+    @Test
+    void updatingAnIssuedNotice_above100Percent_isRefused_andOnACancelledDeal_isRefused() {
+        DealFixture fixture = buildAcceptedDeal(salesActor, "UpdateGuards");
+        DepositNoticeDto notice = depositNoticeService.getById(fixture.depositNoticeId(), salesActor);
+
+        assertThatThrownBy(() -> depositNoticeService.update(
+            fixture.depositNoticeId(), noticeWithPercent(notice, "1.50"), salesActor))
+            .isInstanceOfSatisfying(ApiException.class,
+                e -> assertThat(e.getStatus()).isEqualTo(org.springframework.http.HttpStatus.BAD_REQUEST));
+
+        jdbc.update("UPDATE sales.ticket SET lifecycle = 'CANCELLED' WHERE ticket_id = :id",
+            Map.of("id", fixture.ticketId()));
+        assertThatThrownBy(() -> depositNoticeService.update(
+            fixture.depositNoticeId(), noticeWithPercent(notice, "0.30"), salesActor))
+            .isInstanceOfSatisfying(ApiException.class,
+                e -> assertThat(e.getStatus()).isEqualTo(org.springframework.http.HttpStatus.CONFLICT));
     }
 
     /** When the refresh cannot run (here the deal left quotation_issued), the notice edit still succeeds, the invoice
