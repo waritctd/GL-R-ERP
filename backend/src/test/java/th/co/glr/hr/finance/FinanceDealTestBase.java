@@ -206,12 +206,6 @@ abstract class FinanceDealTestBase extends AbstractPostgresIntegrationTest {
             new MapSqlParameterSource("id", ticketId), Integer.class);
     }
 
-    boolean closeConfirmed(long ticketId) {
-        return Boolean.TRUE.equals(jdbc.queryForObject(
-            "SELECT close_confirmed_at IS NOT NULL FROM sales.ticket WHERE ticket_id = :id",
-            new MapSqlParameterSource("id", ticketId), Boolean.class));
-    }
-
     long createEmployee(EmployeeRepository employees, String name, String email) {
         return employees.create(new UpsertEmployeeRequest(
             null, null, name, null, null, null, null, null, null, null,
