@@ -156,6 +156,16 @@ describe('App login errors (UX-06)', () => {
     expect(screen.queryByText('Invalid email or password')).toBeNull();
     expect(screen.queryByText(/invalid/i)).toBeNull();
   });
+
+  it('shows a distinct generic Thai message when the failure has no HTTP status', async () => {
+    api.auth.login.mockRejectedValue(new TypeError('Failed to fetch'));
+
+    await renderLoginForm();
+
+    await waitFor(() => {
+      expect(screen.getByText('เข้าสู่ระบบไม่สำเร็จ กรุณาลองใหม่อีกครั้ง')).toBeTruthy();
+    });
+  });
 });
 
 // Commit 6 added the '/pricing-requests' PATH_GUARDS entry gated on

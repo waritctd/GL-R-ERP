@@ -1,31 +1,18 @@
 import { afterEach, describe, it, expect, vi } from 'vitest';
 import { hasPermission, allowedRoute, canAccessPath, isDivisionManager, dealRedirectFor } from './permissions.js';
 
+// Capability table: each row pins who holds the capability and who must not (an unknown key fails closed).
 describe('hasPermission', () => {
-  it('scopes price import to ceo/import only (#205)', () => {
-    expect(hasPermission('ceo', 'canManagePriceImport')).toBe(true);
-    expect(hasPermission('import', 'canManagePriceImport')).toBe(true);
-    expect(hasPermission('sales', 'canManagePriceImport')).toBe(false);
-    expect(hasPermission('sales_manager', 'canManagePriceImport')).toBe(false);
-    expect(hasPermission('admin', 'canManagePriceImport')).toBe(false);
-  });
-
-  it('scopes the deal-pipeline BROWSER to sales/sales_manager/ceo, excluding account (Account role-scoped views)', () => {
-    expect(hasPermission('sales', 'canViewDealPipeline')).toBe(true);
-    expect(hasPermission('sales_manager', 'canViewDealPipeline')).toBe(true);
-    expect(hasPermission('ceo', 'canViewDealPipeline')).toBe(true);
-    expect(hasPermission('account', 'canViewDealPipeline')).toBe(false);
-    expect(hasPermission('import', 'canViewDealPipeline')).toBe(false);
-  });
-
-  it('scopes sensitive employee data (salary, salary history, PDPA tab) to hr only (UX-09)', () => {
-    expect(hasPermission('hr', 'canViewSensitiveEmployeeData')).toBe(true);
-    expect(hasPermission('employee', 'canViewSensitiveEmployeeData')).toBe(false);
-    expect(hasPermission('sales', 'canViewSensitiveEmployeeData')).toBe(false);
-    expect(hasPermission('sales_manager', 'canViewSensitiveEmployeeData')).toBe(false);
-    expect(hasPermission('ceo', 'canViewSensitiveEmployeeData')).toBe(false);
-    expect(hasPermission('import', 'canViewSensitiveEmployeeData')).toBe(false);
-    expect(hasPermission('account', 'canViewSensitiveEmployeeData')).toBe(false);
+  it.each([
+    ['canManagePriceImport', ['ceo', 'import'], ['sales', 'sales_manager', 'admin']],
+    ['canManageCatalogProducts', ['ceo', 'import'], ['sales', 'employee']],
+    ['canViewDealPipeline', ['sales', 'sales_manager', 'ceo'], ['account', 'import']],
+    ['canViewTeamVisits', ['sales_manager', 'ceo'], ['sales']],
+    ['canViewSensitiveEmployeeData', ['hr'], ['employee', 'sales', 'sales_manager', 'ceo', 'import', 'account']],
+    ['canDoSomethingImaginary', [], ['hr']],
+  ])('%s', (permission, allowed, denied) => {
+    for (const role of allowed) expect(hasPermission(role, permission), `${role} ${permission}`).toBe(true);
+    for (const role of denied) expect(hasPermission(role, permission), `${role} ${permission}`).toBe(false);
   });
 });
 
@@ -40,6 +27,8 @@ describe('canAccessPath role matrix', () => {
   it.each([
     ['/employees', ['hr'], ['employee']],
     ['/employees/5', ['hr'], ['employee']],
+    ['/requests', ['hr'], ['employee']],
+    ['/payroll/deduction-consents', ['hr', 'ceo'], ['employee', 'sales', 'import', 'account']],
     ['/hr', ['hr'], ['employee']],
     ['/payroll', ['hr', 'ceo'], ['employee', 'sales', 'import', 'account']],
     ['/payroll/deduction-shortfalls', ['hr', 'ceo'], ['employee', 'sales', 'import', 'account']],
@@ -313,6 +302,15 @@ describe('canAccessPath under the release lockdown', () => {
     const { canAccessPath: guard } = await locked();
     expect(guard('/some-feature-added-later', employee)).toBe(false);
     expect(guard('/some-feature-added-later', hr)).toBe(true);
+  });
+
+  it('does not let /whats-new admit a lookalike path, while /whats-new itself stays open', async () => {
+    const { canAccessPath: guard } = await locked();
+    for (const user of LOCKED_ROLES) {
+      expect(guard('/whats-new', user)).toBe(true);
+      expect(guard('/whats-new-admin', user)).toBe(false);
+      expect(guard('/whats-newsletter', user)).toBe(false);
+    }
   });
 
   it('exempts hr and ceo — their existing access is untouched', async () => {

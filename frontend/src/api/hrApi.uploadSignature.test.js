@@ -31,7 +31,6 @@ describe('hrApi.employees.uploadSignature -- 204 no-body response', () => {
       .rejects.toThrow('ไม่มีสิทธิ์อัปโหลดลายเซ็นนี้');
   });
 
-  // A non-2xx status can ALSO carry no body (e.g. a 413 from a body-size limit upstream of the controller) --
 });
 
 // hasSignature is a PROBE (SignatureCard.jsx's #M1) -- it only ever reads `res.ok`, so it has no reason to
