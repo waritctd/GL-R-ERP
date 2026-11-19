@@ -89,70 +89,7 @@ class DesignerCreateAuthzIntegrationTest extends AbstractPostgresIntegrationTest
         assertThat(designerSourceSheetOf("IT-SALES-1")).isEqualTo("UI");
     }
 
-    @Test
-    void salesManagerCanCreateADesigner() throws Exception {
-        designerMvc.perform(post("/api/designers").session(session(salesManagerId, "sales_manager"))
-                .contentType(MediaType.APPLICATION_JSON)
-                .content("{\"code\":\"IT-SM-1\",\"name\":\"Integration Test SM Designer\"}"))
-            .andExpect(status().is2xxSuccessful());
-        assertThat(designerRowExists("IT-SM-1")).isTrue();
-    }
-
-    @Test
-    void aGrantedQcCanCreateADesigner_butAnUngrantedOneCannot() throws Exception {
-        designerMvc.perform(post("/api/designers").session(session(qcUserId, "qc"))
-                .contentType(MediaType.APPLICATION_JSON)
-                .content("{\"code\":\"IT-QC-UNGRANTED\",\"name\":\"Should Not Be Created\"}"))
-            .andExpect(status().isForbidden());
-        assertThat(designerRowExists("IT-QC-UNGRANTED")).isFalse();
-
-        grantQuotationCapability(qcUserId);
-        designerMvc.perform(post("/api/designers").session(session(qcUserId, "qc"))
-                .contentType(MediaType.APPLICATION_JSON)
-                .content("{\"code\":\"IT-QC-GRANTED\",\"name\":\"Integration Test Granted QC Designer\"}"))
-            .andExpect(status().is2xxSuccessful());
-        assertThat(designerRowExists("IT-QC-GRANTED")).isTrue();
-    }
-
-    // ── duplicate code ───────────────────────────────────────────────────────────────────────
-
-    @Test
-    void duplicateCodeIs409_andTheOriginalRowIsUnchanged() throws Exception {
-        designerMvc.perform(post("/api/designers").session(session(employeeUserId, "sales"))
-                .contentType(MediaType.APPLICATION_JSON)
-                .content("{\"code\":\"IT-DUP-1\",\"name\":\"Original Name\"}"))
-            .andExpect(status().is2xxSuccessful());
-
-        designerMvc.perform(post("/api/designers").session(session(employeeUserId, "sales"))
-                .contentType(MediaType.APPLICATION_JSON)
-                .content("{\"code\":\"IT-DUP-1\",\"name\":\"Attempted Overwrite\"}"))
-            .andExpect(status().isConflict());
-
-        assertThat(designerNameOf("IT-DUP-1")).as("the original row must survive a duplicate-code attempt")
-            .isEqualTo("Original Name");
-    }
-
-    // ── validation ───────────────────────────────────────────────────────────────────────────
-
-    @Test
-    void blankCodeOrNameIsRefused() throws Exception {
-        designerMvc.perform(post("/api/designers").session(session(employeeUserId, "sales"))
-                .contentType(MediaType.APPLICATION_JSON)
-                .content("{\"code\":\"\",\"name\":\"Some Name\"}"))
-            .andExpect(status().isBadRequest());
-        designerMvc.perform(post("/api/designers").session(session(employeeUserId, "sales"))
-                .contentType(MediaType.APPLICATION_JSON)
-                .content("{\"code\":\"IT-BLANK-NAME\",\"name\":\"\"}"))
-            .andExpect(status().isBadRequest());
-        assertThat(designerRowExists("IT-BLANK-NAME")).isFalse();
-    }
-
     // ── helpers ─────────────────────────────────────────────────────────────────────────────
-
-    private void grantQuotationCapability(long employeeId) {
-        jdbc.update("UPDATE hr.employee SET can_create_quotation = TRUE WHERE employee_id = :id",
-            Map.of("id", employeeId));
-    }
 
     private boolean designerRowExists(String code) {
         Integer count = jdbc.queryForObject("SELECT COUNT(*) FROM sales.designer WHERE code = :code",

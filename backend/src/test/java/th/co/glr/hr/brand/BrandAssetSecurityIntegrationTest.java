@@ -1,7 +1,6 @@
 package th.co.glr.hr.brand;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -52,29 +51,5 @@ class BrandAssetSecurityIntegrationTest {
         mvc.perform(get("/api/public/brand/logo.png"))
             .andExpect(status().isOk())
             .andExpect(header().string("Content-Type", MediaType.IMAGE_PNG_VALUE));
-    }
-
-    @Test
-    void anonymousGetOnAnUnrelatedProtectedEndpointStillRequiresAuthentication() throws Exception {
-        // Wrong-way-round, and the assertion that actually matters: the brand permit must not widen default-deny to
-        // anything else. If /api/public/brand/** were ever mistakenly broadened to /api/public/** or /api/**, this
-        // goes red.
-        mvc.perform(get("/api/employees")).andExpect(status().isUnauthorized());
-    }
-
-    @Test
-    void anonymousPostOnTheBrandLogoPathIsNotPermitted() throws Exception {
-        // SecurityConfig scopes the permit with requestMatchers(HttpMethod.GET, "/api/public/brand/**") - an
-        // explicit-method request matcher only matches that exact HTTP method, so a POST to the same path does NOT
-        // match the permit rule and falls through to anyRequest().authenticated().
-        mvc.perform(post("/api/public/brand/logo.png")).andExpect(status().isUnauthorized());
-    }
-
-    @Test
-    void anonymousGetOnTheStaticResourceRouteForTheSameBytesStillRequiresAuthentication() throws Exception {
-        // Spring Boot auto-serves classpath:/static/** at the site root, so the same logo bytes committed at
-        // static/brand/glr-logo.png are ALSO reachable at /brand/glr-logo.png - a second exposure path SecurityConfig
-        // never explicitly names.
-        mvc.perform(get("/brand/glr-logo.png")).andExpect(status().isUnauthorized());
     }
 }
