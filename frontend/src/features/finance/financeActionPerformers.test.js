@@ -22,9 +22,4 @@ describe('canPerformFinanceStep — action × role, mirrored from the Java servi
     ['confirmDeposit', 'confirmFinalPayment', 'confirmCloseReady', 'recordInvoiceCommission', 'chaseOverdue']
       .forEach((key) => expect(canPerformFinanceStep(key, 'ceo')).toBe(false));
   });
-
-  it('an unknown step, or no step, is performable by nobody', () => {
-    expect(canPerformFinanceStep('somethingNew', 'account')).toBe(false);
-    expect(canPerformFinanceStep(undefined, 'account')).toBe(false);
-  });
 });

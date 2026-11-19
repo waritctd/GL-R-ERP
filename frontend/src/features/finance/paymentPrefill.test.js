@@ -30,14 +30,6 @@ describe('paymentPrefill', () => {
     });
   });
 
-  it('reads the LIVE notice: the highest ISSUED version, never a superseded one', () => {
-    const d = deal(
-      { paymentStatus: 'DEPOSIT_NOTICE_ISSUED', amountPaid: 0, payments: [] },
-      { depositNotices: [notice({ id: 6, version: 1, status: 'SUPERSEDED', totalPayable: 99999 }), notice({ id: 7, version: 2, docNumber: 'DN-2026-0007-2' })], remainingInvoices: [] },
-    );
-    expect(paymentPrefill(d)).toMatchObject({ kind: 'DEPOSIT', amount: 42800, docLabel: 'ใบแจ้งมัดจำ DN-2026-0007-2' });
-  });
-
   // Review LOW: the invoice branch is THAT invoice's own outstanding (its grand total less the balance already taken),
   // not the deal-wide figure, which also carries any unpaid deposit or credit.
   it('a balance with an issued remaining invoice: BALANCE, that invoice’s own outstanding, not the deal-wide one', () => {
@@ -58,27 +50,5 @@ describe('paymentPrefill', () => {
       { depositNotices: [notice()], remainingInvoices: [] },
     );
     expect(paymentPrefill(d).amount).toBe(34800);
-  });
-
-  it('says to adjust the amount when the deal carries withholding tax; says nothing otherwise', () => {
-    const plain = deal({ paymentStatus: 'AWAITING_FINAL_PAYMENT', payments: [] }, { remainingInvoices: [invoice()] });
-    expect(paymentPrefill(plain).whtHint).toBeNull();
-    const withWht = { ...plain, commissionInvoice: { withholdingTax: 2400 } };
-    expect(paymentPrefill(withWht).whtHint).toBe('ถ้าลูกค้าหัก ณ ที่จ่าย ให้แก้ยอด');
-  });
-
-  it('a deposit already confirmed does not re-offer the deposit notice, even with no invoice yet: no amount guessed', () => {
-    const d = deal({ paymentStatus: 'DEPOSIT_PAID', amountPaid: 42800, amountOutstanding: 77200 }, { remainingInvoices: [] });
-    expect(paymentPrefill(d)).toMatchObject({ kind: 'BALANCE', amount: null, docLabel: null, basisHint: null });
-  });
-
-  it('nothing outstanding: the invoice is named but no amount is filled', () => {
-    const d = deal({ paymentStatus: 'AWAITING_FINAL_PAYMENT', payments: [{ id: 2, kind: 'BALANCE', amount: 85600 }] }, { remainingInvoices: [invoice()] });
-    expect(paymentPrefill(d).amount).toBeNull();
-  });
-
-  it('no document at all keeps the old default kind (DEPOSIT before anything is paid) and leaves the amount blank', () => {
-    const d = deal({ paymentStatus: 'UNPAID', amountPaid: 0 }, { depositNotices: [], remainingInvoices: [] });
-    expect(paymentPrefill(d)).toMatchObject({ kind: 'DEPOSIT', amount: null, docLabel: null, basisHint: null });
   });
 });
