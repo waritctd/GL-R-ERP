@@ -27,8 +27,6 @@ import th.co.glr.hr.pricingrequest.PricingRequestStatus;
  * un-priced. */
 class StockLineCeoDecisionIntegrationTest extends AbstractStockLineIntegrationTest {
 
-    // Case 11 - startReview
-
     // Case 12 - CEO update: ราคาตั้ง on a stock line
 
     @Test
@@ -125,8 +123,6 @@ class StockLineCeoDecisionIntegrationTest extends AbstractStockLineIntegrationTe
             });
         assertThat(storedDecisionStatus(decision.id())).isEqualTo(PricingDecisionStatus.DRAFT);
     }
-
-    // Case 14 - return-to-import
 
     // Case 16 - authz, wrong way round: nobody but the CEO prices a stock line
 

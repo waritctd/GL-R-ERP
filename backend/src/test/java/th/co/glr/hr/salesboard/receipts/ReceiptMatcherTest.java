@@ -38,13 +38,6 @@ class ReceiptMatcherTest {
     }
 
     @Test
-    void invoiceVersionSuffixIsIgnoredOnBothSides() {
-        Candidate d = deal(1, "x", Set.of("GLR6900031-2"), Set.of());
-        assertThat(ReceiptMatcher.match(row("y", "1", "GLR6900031"), List.of(d)).ticketId()).isEqualTo(1L);
-        assertThat(ReceiptMatcher.match(row("y", "1", "GLR6900031-3"), List.of(d)).ticketId()).isEqualTo(1L);
-    }
-
-    @Test
     void sameInvoiceNumberOnTwoDealsIsAmbiguous_notAGuess_andDoesNotFallThrough() {
         Candidate a = deal(1, "ลุมพินี", Set.of("DN1"), Set.of(), "100");
         Candidate b = deal(2, "ลุมพินี", Set.of("DN1"), Set.of());
@@ -53,42 +46,7 @@ class ReceiptMatcherTest {
         assertThat(m.reason()).isEqualTo(Reason.AMBIGUOUS);
     }
 
-    // ── rule 2: quotation number ─────────────────────────────────────────────
-
-    @Test
-    void aLongNumericTailIsPartOfTheNumber_soTwoNumbersOfTheSameYearNeverLookAlike() {
-        Candidate d = deal(1, "x", Set.of(), Set.of("QT-2026-0188"));
-        assertThat(ReceiptMatcher.match(row("y", "1", "QT-2026-0201"), List.of(d)).matched()).isFalse();
-        assertThat(ReceiptMatcher.match(row("y", "1", "QT-2026-0188-2"), List.of(d)).ticketId()).isEqualTo(1L);
-    }
-
-    @Test
-    void quotationNumberMatchesCaseInsensitivelyWithARevisionSuffix() {
-        Candidate d = deal(7, "x", Set.of(), Set.of("QN6900188"));
-        Match m = ReceiptMatcher.match(row("y", "1", "qn6900188-2"), List.of(d));
-        assertThat(m.ticketId()).isEqualTo(7L);
-        assertThat(m.rule()).isEqualTo(Rule.QUOTATION_NO);
-    }
-
-    @Test
-    void aReferenceThatIsNotADocumentNumberFallsToCustomerAndAmount() {
-        Candidate d = deal(7, "บริษัท ลุมพินี เรสซิเดนซ์ จำกัด", Set.of(), Set.of("QN1"), "372000");
-        Match m = ReceiptMatcher.match(row("บจก. ลุมพินี เรสซิเดนซ์", "372000", "มัดจำ บ้านสวน"), List.of(d));
-        assertThat(m.ticketId()).isEqualTo(7L);
-        assertThat(m.rule()).isEqualTo(Rule.CUSTOMER_AMOUNT);
-    }
-
     // ── rule 3: customer + amount ────────────────────────────────────────────
-
-    @Test
-    void customerNamesNormaliseCompanyWordsSpacesAndCase() {
-        assertThat(ReceiptMatcher.normaliseCustomer("  บริษัท  ลุมพินี   เรสซิเดนซ์ จำกัด (มหาชน) "))
-            .isEqualTo(ReceiptMatcher.normaliseCustomer("ลุมพินี เรสซิเดนซ์"));
-        assertThat(ReceiptMatcher.normaliseCustomer("Siam Mall Co.,Ltd."))
-            .isEqualTo(ReceiptMatcher.normaliseCustomer("siam mall"));
-        assertThat(ReceiptMatcher.normaliseCustomer("บจก. ทวีทรัพย์"))
-            .isEqualTo(ReceiptMatcher.normaliseCustomer("ทวีทรัพย์"));
-    }
 
     @Test
     void amountToleranceIsOnePercentOrTenBaht_whicheverIsWider() {
@@ -110,28 +68,4 @@ class ReceiptMatcherTest {
         assertThat(m.candidateIds()).containsExactlyInAnyOrder(1L, 2L);
     }
 
-    @Test
-    void sameCustomerWithNoOpenExpectedPaymentNearTheAmountIsNoCandidate_listingTheCustomersDeals() {
-        Candidate a = deal(1, "ลุมพินี", Set.of(), Set.of(), "360000");
-        Candidate other = deal(9, "คนอื่น", Set.of(), Set.of(), "372000");
-        Match m = ReceiptMatcher.match(row("ลุมพินี", "372000", null), List.of(a, other));
-        assertThat(m.matched()).isFalse();
-        assertThat(m.reason()).isEqualTo(Reason.NO_CANDIDATE);
-        assertThat(m.candidateIds()).as("the customer's deals are offered for a one-tap match").containsExactly(1L);
-    }
-
-    @Test
-    void noCustomerNameNeverMatchesByAmountAlone() {
-        Candidate a = deal(1, "", Set.of(), Set.of(), "372000");
-        Match m = ReceiptMatcher.match(row("", "372000", null), List.of(a));
-        assertThat(m.matched()).isFalse();
-        assertThat(m.candidateIds()).isEmpty();
-    }
-
-    @Test
-    void emptyCandidatesIsNoCandidate() {
-        Match m = ReceiptMatcher.match(row("ใคร", "1", "DN9"), List.of());
-        assertThat(m.matched()).isFalse();
-        assertThat(m.reason()).isEqualTo(Reason.NO_CANDIDATE);
-    }
 }

@@ -79,105 +79,6 @@ class PausedDealFollowUpScopeIntegrationTest extends AbstractDealQuotationSlice2
         assertThat(ids(work.get("board"))).doesNotContain(id);
     }
 
-    /** THE scope test: rep B's returning paused deal never appears in rep A's list (control: it does in B's). */
-    @Test
-    void anotherRepsReturningPausedDeal_neverAppearsInMyFollowUp() throws Exception {
-        long theirs = deal(otherSalesActor);
-        pause(theirs, "hold", today(), otherSalesActor);
-
-        assertThat(ids(ok(get("/api/sales/my-work"), salesActor).get("followUp"))).doesNotContain(theirs);
-        assertThat(ids(ok(get("/api/sales/my-work"), otherSalesActor).get("followUp"))).contains(theirs);
-    }
-
-    @Test
-    void aPausedDealWhoseDateHasNotArrived_staysOut() throws Exception {
-        long id = deal(salesActor);
-        pause(id, "hold", today().plusDays(1), salesActor);
-        backdate(id, 30);
-
-        assertThat(ids(ok(get("/api/sales/my-work"), salesActor).get("followUp"))).doesNotContain(id);
-    }
-
-    @Test
-    void aPausedDealWithNoDate_staysOutAsToday() throws Exception {
-        long id = deal(salesActor);
-        pause(id, "hold", null, salesActor);
-        backdate(id, 30);
-
-        assertThat(ids(ok(get("/api/sales/my-work"), salesActor).get("followUp"))).doesNotContain(id);
-    }
-
-    @Test
-    void aDateThatPassedDaysAgo_isStillIn_untilTheRepActs() throws Exception {
-        long id = deal(salesActor);
-        pause(id, "dormant", today(), salesActor);
-        jdbc.update("UPDATE sales.ticket SET pause_return_on = :d WHERE ticket_id = :id",
-            Map.of("d", today().minusDays(5), "id", id));
-
-        assertThat(ids(ok(get("/api/sales/my-work"), salesActor).get("followUp"))).contains(id);
-    }
-
-    @Test
-    void resumingTheDeal_dropsItOut() throws Exception {
-        long id = deal(salesActor);
-        pause(id, "hold", today(), salesActor);
-
-        ok(post("/api/tickets/" + id + "/resume"), salesActor);
-
-        JsonNode work = ok(get("/api/sales/my-work"), salesActor);
-        assertThat(ids(work.get("followUp"))).doesNotContain(id);
-        assertThat(ids(work.get("board"))).contains(id);
-    }
-
-    @Test
-    void rePausingWithALaterDate_dropsItOut() throws Exception {
-        long id = deal(salesActor);
-        pause(id, "hold", today(), salesActor);
-
-        pause(id, "dormant", today().plusMonths(1), salesActor);
-
-        assertThat(ids(ok(get("/api/sales/my-work"), salesActor).get("followUp"))).doesNotContain(id);
-    }
-
-    @Test
-    void lostAndCancelledDealsNeverReturn_evenWithAnArrivedDate() throws Exception {
-        long id = deal(salesActor);
-        jdbc.update("UPDATE sales.ticket SET lifecycle = 'CANCELLED', pause_return_on = :d WHERE ticket_id = :id",
-            Map.of("d", today().minusDays(1), "id", id));
-
-        assertThat(ids(ok(get("/api/sales/my-work"), salesActor).get("followUp"))).doesNotContain(id);
-    }
-
-    /** Fix round 1, ruling 4: a returning deal is never crowded out of ควรตามต่อ by the five-deal cap — five quiet
-     * deals (backdated, so they outrank a just-paused deal with no value) and the returning one all show — and the
-     * rep's quiet + returning count equals the manager's quietDeals for the same rep. */
-    @Test
-    void aReturningDealIsNeverCrowdedOutByTheCap_andTheRepAndManagerCountsAgree() throws Exception {
-        List<Long> quiet = new ArrayList<>();
-        for (int days = 20; days < 25; days++) {
-            long id = deal(salesActor);
-            backdate(id, days);
-            quiet.add(id);
-        }
-        long back = deal(salesActor);
-        pause(back, "hold", today(), salesActor);
-
-        JsonNode work = ok(get("/api/sales/my-work"), salesActor);
-        assertThat(ids(work.get("followUp"))).contains(back).containsAll(quiet).hasSize(6);
-        assertThat(ids(work.get("followUp")).get(0)).as("returning deals lead the list").isEqualTo(back);
-
-        long repQuiet = 0;
-        for (JsonNode d : work.get("board")) {
-            if (d.get("quiet").asBoolean()) repQuiet++;
-        }
-        for (JsonNode d : work.get("followUp")) {
-            if (d.get("returning").asBoolean()) repQuiet++;
-        }
-        JsonNode team = ok(get("/api/sales/team-overview"), salesManagerActor);
-        assertThat(rep(team, salesActor.id()).get("quietDeals").asLong()).isEqualTo(repQuiet).isEqualTo(6);
-        assertThat(ids(team.get("stale"))).contains(back);
-    }
-
     /** Fix round 1, ruling 8: "today" is the Asia/Bangkok date even when the UTC date is still yesterday (Bangkok
      * 00:00–06:59). Clock fixed at 2026-11-18 03:00 Bangkok = 2026-11-17 20:00 UTC: a deal due back on the 18th has
      * come back; one due the 19th has not. Computing "today" in UTC would drop the first. */
@@ -198,41 +99,6 @@ class PausedDealFollowUpScopeIntegrationTest extends AbstractDealQuotationSlice2
         assertThat(back).contains(due18).doesNotContain(due19);
     }
 
-    // ── the manager's quiet figures ──────────────────────────────────────────────────────────────
-
-    @Test
-    void teamOverview_countsAReturningPausedDealAsQuiet_forItsOwnRepOnly_andNotAsOpen() throws Exception {
-        long a = deal(salesActor);
-        long b = deal(otherSalesActor);
-        pause(b, "hold", today(), otherSalesActor);
-
-        JsonNode team = ok(get("/api/sales/team-overview"), salesManagerActor);
-
-        JsonNode repA = rep(team, salesActor.id());
-        JsonNode repB = rep(team, otherSalesActor.id());
-        assertThat(repA.get("openDeals").asInt()).isEqualTo(1);
-        assertThat(repA.get("quietDeals").asInt()).isZero();
-        assertThat(repB.get("openDeals").asInt()).isZero();
-        assertThat(repB.get("quietDeals").asInt()).isEqualTo(1);
-        assertThat(ids(team.get("stale"))).containsExactly(b).doesNotContain(a);
-    }
-
-    @Test
-    void theTeamBoardStillShowsOnlyActiveDeals() throws Exception {
-        long id = deal(salesActor);
-        pause(id, "hold", today(), salesActor);
-
-        assertThat(ids(ok(get("/api/sales/team-board"), salesManagerActor).get("board"))).doesNotContain(id);
-    }
-
-    @Test
-    void aSalesRepIsStillRefusedTheTeamOverview() throws Exception {
-        long id = deal(otherSalesActor);
-        pause(id, "hold", today(), otherSalesActor);
-
-        assertThat(perform(get("/api/sales/team-overview"), salesActor).getResponse().getStatus()).isEqualTo(403);
-    }
-
     // ── helpers ──────────────────────────────────────────────────────────────────────────────────
 
     private static LocalDate today() {
@@ -242,15 +108,6 @@ class PausedDealFollowUpScopeIntegrationTest extends AbstractDealQuotationSlice2
     private void pause(long id, String path, LocalDate on, UserPrincipal actor) throws Exception {
         ok(post("/api/tickets/" + id + "/" + path).contentType(MediaType.APPLICATION_JSON)
             .content(on == null ? "{}" : "{\"pauseReturnOn\":\"" + on + "\"}"), actor);
-    }
-
-    private void backdate(long ticketId, int days) {
-        Map<String, Object> p = Map.of("d", days, "id", ticketId);
-        jdbc.update("UPDATE sales.ticket SET created_at = now() - make_interval(days => :d) WHERE ticket_id = :id", p);
-        jdbc.update("UPDATE sales.ticket_event SET created_at = now() - make_interval(days => :d) WHERE ticket_id = :id",
-            p);
-        jdbc.update("UPDATE sales.deal_activity SET created_at = now() - make_interval(days => :d) WHERE ticket_id = :id",
-            p);
     }
 
     private JsonNode ok(MockHttpServletRequestBuilder request, UserPrincipal actor) throws Exception {

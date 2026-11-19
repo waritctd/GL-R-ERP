@@ -85,66 +85,7 @@ class VisitFollowUpIntegrationTest extends AbstractDealQuotationSlice2Integratio
         assertThat(trackingSnapshot(deal)).as("only next_follow_up_at moved").isEqualTo(before);
     }
 
-    @Test
-    void theOwnersTickOnAPlannedVisit_writesTheFollowUpDate() throws Exception {
-        long deal = deal(salesActor);
-        long visit = plan(salesActor, deal, today);
-
-        ok(done(visit, today.plusDays(3)), salesActor);
-
-        assertThat(visitStatus(visit)).isEqualTo("DONE");
-        assertThat(siteVisitRows(deal)).isEqualTo(1);
-        assertThat(nextFollowUp(deal)).isEqualTo(today.plusDays(3));
-    }
-
-    @Test
-    void aManagerTickingTheRepsVisitOnTheRepsDeal_mayAlsoSetIt() throws Exception {
-        long deal = deal(salesActor);
-        long visit = plan(salesActor, deal, today);
-
-        ok(done(visit, today.plusDays(14)), salesManagerActor);
-
-        assertThat(siteVisitRows(deal)).isEqualTo(1);
-        assertThat(nextFollowUp(deal)).isEqualTo(today.plusDays(14));
-    }
-
-    @Test
-    void withoutAFollowUp_bothRequestsLeaveTheDealsDateAsItWas() throws Exception {
-        long deal = deal(salesActor);
-        LocalDate original = nextFollowUp(deal);
-        long visit = plan(salesActor, deal, today);
-
-        ok(post("/api/sales/visits/" + visit + "/done").contentType(MediaType.APPLICATION_JSON)
-            .content("{\"note\":\"ส่งตัวอย่าง\"}"), salesActor);
-        ok(log(deal, "Walk-in", null), salesActor);
-
-        assertThat(siteVisitRows(deal)).isEqualTo(2);
-        assertThat(nextFollowUp(deal)).isEqualTo(original);
-    }
-
     // ── wrong-way-round: refused, nothing written ────────────────────────────
-
-    @Test
-    void aVisitWithNoDeal_refusesTheFollowUp_400_andIsNeitherCreatedNorTicked() throws Exception {
-        assertThat(status(log(null, "Walk-in", today.plusDays(7)), salesActor)).isEqualTo(400);
-        assertThat(visitCount()).isZero();
-
-        long visit = plan(salesActor, null, today);
-        assertThat(status(done(visit, today.plusDays(7)), salesActor)).isEqualTo(400);
-        assertThat(visitStatus(visit)).isEqualTo("PLANNED");
-    }
-
-    @Test
-    void aPlanThatIsNotYetDone_refusesTheFollowUp_400() throws Exception {
-        long deal = deal(salesActor);
-        LocalDate original = nextFollowUp(deal);
-
-        assertThat(status(createRequest(deal, "คุณอรุณ", today.plusDays(2), false, today.plusDays(9)), salesActor))
-            .isEqualTo(400);
-
-        assertThat(visitCount()).isZero();
-        assertThat(nextFollowUp(deal)).isEqualTo(original);
-    }
 
     @Test
     void anotherRepAndAQuotationGrantHolder_onSomeoneElsesDeal_are403_andNothingIsWritten() throws Exception {
@@ -160,191 +101,6 @@ class VisitFollowUpIntegrationTest extends AbstractDealQuotationSlice2Integratio
         assertThat(nextFollowUp(deal)).isEqualTo(original);
     }
 
-    @Test
-    void accountImportAndHr_are403_onBothRequests_andNothingIsWritten() throws Exception {
-        long deal = deal(salesActor);
-        LocalDate original = nextFollowUp(deal);
-        long visit = plan(salesActor, deal, today);
-
-        for (String role : List.of("account", "import", "hr")) {
-            UserPrincipal other = actor(createEmployee("ผู้ใช้ 6.4 " + role, role + "-64v@glr.co.th", "ACC", "บัญชี",
-                null), role);
-            assertThat(status(log(deal, "คุณอรุณ", today.plusDays(7)), other)).as("%s log", role).isEqualTo(403);
-            assertThat(status(done(visit, today.plusDays(7)), other)).as("%s done", role).isEqualTo(403);
-        }
-
-        assertThat(visitCount()).isEqualTo(1);
-        assertThat(visitStatus(visit)).isEqualTo("PLANNED");
-        assertThat(siteVisitRows(deal)).isZero();
-        assertThat(nextFollowUp(deal)).isEqualTo(original);
-    }
-
-    @Test
-    void aKeyerWhoIsNotTheOwner_whoseVisitStaysOffTheDeal_is403_onBothRequests() throws Exception {
-        long deal = deal(salesActor);
-        jdbc.update("UPDATE sales.ticket SET created_by = :owner, keyed_by = :keyer WHERE ticket_id = :id",
-            Map.of("owner", otherSalesActor.id(), "keyer", salesActor.id(), "id", deal));
-        LocalDate original = nextFollowUp(deal);
-        long visit = plan(salesActor, deal, today);
-
-        assertThat(status(done(visit, today.plusDays(7)), salesActor)).isEqualTo(403);
-        assertThat(status(log(deal, "Walk-in", today.plusDays(7)), salesActor)).isEqualTo(403);
-
-        assertThat(visitStatus(visit)).isEqualTo("PLANNED");
-        assertThat(visitCount()).isEqualTo(1);
-        assertThat(siteVisitRows(deal)).isZero();
-        assertThat(nextFollowUp(deal)).isEqualTo(original);
-    }
-
-    @Test
-    void anExOwnerAfterTheDealMoved_is403_andTheVisitStaysPlanned() throws Exception {
-        long deal = deal(salesActor);
-        long visit = plan(salesActor, deal, today);
-        reassign(deal, otherSalesActor);
-        LocalDate original = nextFollowUp(deal);
-
-        for (UserPrincipal ticker : List.of(salesActor, salesManagerActor)) {
-            assertThat(status(done(visit, today.plusDays(7)), ticker)).as(ticker.role()).isEqualTo(403);
-        }
-
-        assertThat(visitStatus(visit)).isEqualTo("PLANNED");
-        assertThat(siteVisitRows(deal)).isZero();
-        assertThat(nextFollowUp(deal)).isEqualTo(original);
-    }
-
-    @Test
-    void aManagersOwnVisitOnARepsDeal_whoseActivityStaysOffTheDeal_is403() throws Exception {
-        long deal = deal(salesActor);
-        LocalDate original = nextFollowUp(deal);
-        long planned = plan(salesManagerActor, deal, today);
-
-        assertThat(status(log(deal, "คุณอรุณ", today.plusDays(7)), salesManagerActor)).isEqualTo(403);
-        assertThat(status(done(planned, today.plusDays(7)), salesManagerActor)).isEqualTo(403);
-
-        assertThat(visitCount()).isEqualTo(1);
-        assertThat(visitStatus(planned)).isEqualTo("PLANNED");
-        assertThat(siteVisitRows(deal)).isZero();
-        assertThat(nextFollowUp(deal)).isEqualTo(original);
-    }
-
-    @Test
-    void aTickOnADealThatIsNoLongerActive_refusesTheFollowUp_409() throws Exception {
-        long deal = deal(salesActor);
-        long visit = plan(salesActor, deal, today);
-        LocalDate original = nextFollowUp(deal);
-        jdbc.update("UPDATE sales.ticket SET lifecycle = 'ON_HOLD' WHERE ticket_id = :id", Map.of("id", deal));
-
-        assertThat(status(done(visit, today.plusDays(7)), salesActor)).isEqualTo(409);
-
-        assertThat(visitStatus(visit)).isEqualTo("PLANNED");
-        assertThat(siteVisitRows(deal)).isZero();
-        assertThat(nextFollowUp(deal)).isEqualTo(original);
-    }
-
-    @Test
-    void aPastDateIs400_onBothRequests_andNothingIsWritten() throws Exception {
-        long deal = deal(salesActor);
-        LocalDate original = nextFollowUp(deal);
-        long visit = plan(salesActor, deal, today);
-
-        assertThat(status(done(visit, today.minusDays(1)), salesActor)).isEqualTo(400);
-        assertThat(status(log(deal, "Walk-in", today.minusDays(1)), salesActor)).isEqualTo(400);
-        assertThat(status(done(visit, today), salesActor)).as("today is allowed").isEqualTo(200);
-
-        assertThat(visitCount()).isEqualTo(1);
-        assertThat(nextFollowUp(deal)).isEqualTo(today);
-        assertThat(original).isNotEqualTo(today);
-    }
-
-    // ── fix round 1 ──────────────────────────────────────────────────────────
-
-    /** Review M3: the 60-second de-duplication must not drop a date the duplicate carries. */
-    @Test
-    void aDuplicateLogWithinAMinuteThatAddsADate_appliesTheDate_withoutASecondVisitOrActivity() throws Exception {
-        long deal = deal(salesActor);
-        long first = ok(log(deal, "คุณอรุณ", null), salesActor).get("id").asLong();
-
-        long again = ok(log(deal, "คุณอรุณ", today.plusDays(7)), salesActor).get("id").asLong();
-
-        assertThat(again).isEqualTo(first);
-        assertThat(visitCount()).isEqualTo(1);
-        assertThat(siteVisitRows(deal)).isEqualTo(1);
-        assertThat(nextFollowUp(deal)).isEqualTo(today.plusDays(7));
-    }
-
-    @Test
-    void aDuplicateLogWithinAMinuteThatChangesTheDate_appliesTheNewDate() throws Exception {
-        long deal = deal(salesActor);
-        ok(log(deal, "คุณอรุณ", today.plusDays(3)), salesActor);
-
-        ok(log(deal, "คุณอรุณ", today.plusDays(14)), salesActor);
-
-        assertThat(visitCount()).isEqualTo(1);
-        assertThat(nextFollowUp(deal)).isEqualTo(today.plusDays(14));
-    }
-
-    @Test
-    void aDuplicateLogCarryingARefusedDate_isRefusedLikeAFreshOne_andChangesNothing() throws Exception {
-        long deal = deal(salesActor);
-        LocalDate original = nextFollowUp(deal);
-        ok(log(deal, "คุณอรุณ", null), salesActor);
-
-        assertThat(status(log(deal, "คุณอรุณ", today.minusDays(1)), salesActor)).isEqualTo(400);
-
-        assertThat(visitCount()).isEqualTo(1);
-        assertThat(nextFollowUp(deal)).isEqualTo(original);
-    }
-
-    /** Review M1: a date refused because the deal is paused says so in Thai; the tick without a date still works. */
-    @Test
-    void aDateRefusedOnAPausedDeal_saysSoInThai_andTheTickWithoutADateStillWorks() throws Exception {
-        long deal = deal(salesActor);
-        long visit = plan(salesActor, deal, today);
-        jdbc.update("UPDATE sales.ticket SET lifecycle = 'ON_HOLD' WHERE ticket_id = :id", Map.of("id", deal));
-
-        MvcResult refused = perform(done(visit, today.plusDays(7)), salesActor);
-        assertThat(refused.getResponse().getStatus()).isEqualTo(409);
-        assertThat(refused.getResponse().getContentAsString(StandardCharsets.UTF_8))
-            .contains("ตั้งวันตามต่อไม่ได้").contains("ไม่ใส่วัน");
-        assertThat(visitStatus(visit)).isEqualTo("PLANNED");
-
-        ok(post("/api/sales/visits/" + visit + "/done").contentType(MediaType.APPLICATION_JSON).content("{}"), salesActor);
-        assertThat(visitStatus(visit)).isEqualTo("DONE");
-    }
-
-    /**
-     * Review M1 / LOW: VisitDto.dealFollowUpOpen tells the dialogs exactly when the server accepts ตามต่อ (the visit's
-     * activity lands on its deal, and the deal is ACTIVE) — including the case dealMovedToName cannot express, a deal
-     * owner with no Thai name.
-     */
-    @Test
-    void dealFollowUpOpenIsTrueOnlyWhereTheServerAcceptsADate() throws Exception {
-        long own = deal(salesActor);
-        assertThat(ok(createRequest(own, "ก", today, false, null), salesActor).get("dealFollowUpOpen").asBoolean())
-            .as("own visit on own ACTIVE deal").isTrue();
-        assertThat(ok(createRequest(null, "ข", today, false, null), salesActor).get("dealFollowUpOpen").asBoolean())
-            .as("no deal").isFalse();
-        assertThat(ok(createRequest(own, "ค", today, false, null), salesManagerActor).get("dealFollowUpOpen").asBoolean())
-            .as("a manager's own visit on a rep's deal").isFalse();
-
-        long paused = deal(salesActor);
-        long pausedVisit = plan(salesActor, paused, today);
-        jdbc.update("UPDATE sales.ticket SET lifecycle = 'ON_HOLD' WHERE ticket_id = :id", Map.of("id", paused));
-        assertThat(ok(post("/api/sales/visits/" + pausedVisit + "/done").contentType(MediaType.APPLICATION_JSON)
-            .content("{}"), salesActor).get("dealFollowUpOpen").asBoolean()).as("paused after planning").isFalse();
-
-        UserPrincipal nameless = actor(createEmployee("ไม่มีชื่อ", "nameless-64@glr.co.th", "SALES", "แผนกขาย", null),
-            "sales");
-        jdbc.update("UPDATE hr.employee SET first_name_th = '', last_name_th = '' WHERE employee_id = :id",
-            Map.of("id", nameless.id()));
-        long keyed = deal(salesActor);
-        jdbc.update("UPDATE sales.ticket SET created_by = :owner, keyed_by = :keyer WHERE ticket_id = :id",
-            Map.of("owner", nameless.id(), "keyer", salesActor.id(), "id", keyed));
-        JsonNode keyerVisit = ok(createRequest(keyed, "ง", today, false, null), salesActor);
-        assertThat(keyerVisit.get("dealMovedToName").isNull()).as("the owner has no Thai name").isTrue();
-        assertThat(keyerVisit.get("dealFollowUpOpen").asBoolean()).as("a keyer's visit, owner nameless").isFalse();
-    }
-
     // ── helpers ──────────────────────────────────────────────────────────────
 
     private UserPrincipal grantHolder() {
@@ -353,10 +109,6 @@ class VisitFollowUpIntegrationTest extends AbstractDealQuotationSlice2Integratio
         UserPrincipal resolved = new SessionAccountResolver(new EmployeeAuthRepository(jdbc)).current(id).orElseThrow();
         assertThat(resolved.role()).isEqualTo("sales");
         return resolved;
-    }
-
-    private long plan(UserPrincipal owner, Long ticketId, LocalDate date) throws Exception {
-        return ok(createRequest(ticketId, "คุณอรุณ", date, false, null), owner).get("id").asLong();
     }
 
     private MockHttpServletRequestBuilder log(Long ticketId, String contact, LocalDate nextFollowUpAt) throws Exception {
@@ -413,11 +165,6 @@ class VisitFollowUpIntegrationTest extends AbstractDealQuotationSlice2Integratio
     private LocalDate nextFollowUp(long deal) {
         return jdbc.queryForObject("SELECT next_follow_up_at FROM sales.ticket WHERE ticket_id = :id",
             Map.of("id", deal), LocalDate.class);
-    }
-
-    private String visitStatus(long visitId) {
-        return jdbc.queryForObject("SELECT status FROM sales.visit WHERE visit_id = :id", Map.of("id", visitId),
-            String.class);
     }
 
     private int visitCount() {

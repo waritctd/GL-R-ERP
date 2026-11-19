@@ -436,8 +436,6 @@ class PricingChainEndToEndIntegrationTest extends AbstractPostgresIntegrationTes
 
     // Helpers
 
-    private record PricingChainFixture(long pricingRequestId, long itemAId, long itemBId) {}
-
     private void assertUnitBasisCoherentAcrossChain(long pricingRequestItemId, long pricingRequestId,
                                                      long costingId, long decisionId, long quotationId,
                                                      String expectedBasis) {
