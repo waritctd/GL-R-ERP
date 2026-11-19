@@ -771,9 +771,7 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
      * quotation carries its own frozen price snapshot in sales.quotation_item, so superseding the
      * decision cannot change what the customer was quoted.
      *
-     * <p>The quotation's retirement is covered elsewhere: it happens when the REPLACEMENT
-     * quotation is issued, which is proved end to end by
-     * {@code ReissueThroughCeoChainIntegrationTest#parentQuotationStaysIssuedWhileTheChainRuns_andRetiresWhenTheReplacementIssues}.
+     * <p>The quotation's retirement is not asserted here: it happens when the REPLACEMENT quotation is issued.
      */
     @Test
     void recordOutcome_revisionRequested_thenCostAffectingRevision_supersedesOldDecisionButLeavesTheQuotationLive() {

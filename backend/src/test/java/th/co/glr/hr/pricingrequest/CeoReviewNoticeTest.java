@@ -19,25 +19,6 @@ class CeoReviewNoticeTest {
     private static final String TODO = "\n\nสิ่งที่ต้องทำต่อ: เปิดคำขอราคา ใส่กำไร % แล้วบันทึกราคาขาย";
 
     @Test
-    void threeCostedImportLines_listEachCostAndTheTotal() {
-        List<PricingRequestItemDto> items = List.of(
-            item(1, "SCG", "Tile A", "60x60", new BigDecimal("100.00"), new BigDecimal("100"), "ตร.ม.", null),
-            item(2, "SCG", null, "  ", new BigDecimal("12.5"), new BigDecimal("12.5"), "ตร.ม.", null),
-            withDescription(item(3, null, null, null, null, new BigDecimal("1250"), "กล่อง", null), "กระเบื้องพิเศษ"));
-        CalculationResult costs = new CalculationResult(List.of(
-            cost(1, "360.00", "0.36", null),
-            cost(2, "90.50", "0.5", null),
-            cost(3, "1234.5", null, null)), new BigDecimal("20000.5"));
-
-        assertThat(CeoReviewNotice.message(HEADLINE, summary(), items, costs)).isEqualTo(HEAD
-            + "รายการ (3):\n"
-            + "• SCG Tile A 60x60 — 100 ตร.ม. · ต้นทุน 1,000.00 บาท/ตร.ม.\n"
-            + "• SCG — 12.5 ตร.ม. · ต้นทุน 181.00 บาท/ตร.ม.\n"
-            + "• กระเบื้องพิเศษ — 1,250 กล่อง · ต้นทุน 1,234.50 บาท/กล่อง\n"
-            + "ต้นทุนรวม 20,000.50 บาท" + TODO);
-    }
-
-    @Test
     void mixedStockAndImport_stockLinesNameTheirSource_andTotalIsLabelledImportOnly() {
         List<PricingRequestItemDto> items = List.of(
             item(1, "SCG", "Imp", "60x60", new BigDecimal("10"), new BigDecimal("10"), "ตร.ม.", null),

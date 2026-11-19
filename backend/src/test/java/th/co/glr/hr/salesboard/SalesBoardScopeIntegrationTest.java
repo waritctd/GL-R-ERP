@@ -120,6 +120,24 @@ class SalesBoardScopeIntegrationTest extends AbstractDealQuotationSlice2Integrat
     // ── review fixes: currency (M1), CLOSED_PAID (M2), value source (M3), role label ──────────
 
     @Test
+    void usdValueKeepsItsCurrency_andStaysOutOfTheThbTotal() throws Exception {
+        long thb = deal(salesActor);
+        DealQuotationDto thbQuote = approved(thb, salesActor, "DESIGNER");
+        long usd = deal(salesActor);
+        DealQuotationDto usdQuote = approved(usd, salesActor, "DESIGNER");
+        jdbc.update("UPDATE sales.quotation SET currency = 'USD' WHERE quotation_id = :id", Map.of("id", usdQuote.id()));
+
+        JsonNode work = ok(get("/api/sales/my-work"), salesActor);
+        assertThat(byId(work.get("board"), usd).get("currency").asText()).isEqualTo("USD");
+        assertThat(byId(work.get("board"), thb).get("currency").asText()).isEqualTo("THB");
+
+        JsonNode rep = rep(ok(get("/api/sales/team-overview"), salesManagerActor), salesActor.id());
+        assertThat(new BigDecimal(rep.get("openValue").asText())).isEqualByComparingTo(thbQuote.grandTotal());
+        assertThat(new BigDecimal(rep.get("otherCurrencyValues").get("USD").asText()))
+            .isEqualByComparingTo(usdQuote.grandTotal());
+    }
+
+    @Test
     void closedPaidDealsAreNotOpen_butDeliveredOnesAre() throws Exception {
         long paid = deal(salesActor);
         long delivered = deal(salesActor);

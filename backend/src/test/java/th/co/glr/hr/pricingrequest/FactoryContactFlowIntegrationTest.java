@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
@@ -113,8 +114,44 @@ class FactoryContactFlowIntegrationTest extends Cr1FixtureSupport {
         assertThat(received.status()).isEqualTo(FactoryQuoteStatus.RESPONSE_RECEIVED);
     }
 
-    // round 2 — review fixes
+    /** B4 — owner ruling 2026-10-01: factories sell on different terms, so import may quote a
+     *  per-ตร.ม. line per แผ่น and vice versa. Only that pair is switchable. */
+    @Test
+    void importMayQuoteAPerPieceLineBySqm() {
+        long prId = requestInImportReview(line("Tile A", "Factory A", 10, null, null, "EUR", UnitBasis.PER_PIECE));
+        FactoryQuoteDto quote = requestedQuote(prId, "Factory A");
 
-    // B — currency + price unit locked from the sales request
+        FactoryQuoteDto received = factoryQuoteService.receive(quote.id(), receiveAll(quote, "EUR", "PER_SQM"), importActor);
+
+        assertThat(received.items().get(0).unitBasis()).isEqualTo("PER_SQM");
+        assertThat(received.items().get(0).sqmPerUnit()).isEqualByComparingTo("0.36");
+    }
+
+    @Test
+    void aPriceUnitOutsideSqmAndPieceStaysLocked_andStoresNothing() {
+        long sqmLine = requestInImportReview(line("Tile A", "Factory A", 10, null, null, "EUR", UnitBasis.PER_SQM));
+        FactoryQuoteDto sqmQuote = requestedQuote(sqmLine, "Factory A");
+        // a per-sqm line cannot be switched to per-box ...
+        assertThatThrownBy(() -> factoryQuoteService.receive(sqmQuote.id(), receiveAll(sqmQuote, "EUR", "PER_BOX"), importActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+
+        // ... and a per-box line cannot be switched to per-sqm (the pair is sqm <-> piece only).
+        long boxLine = requestInImportReview(line("Tile B", "Factory B", 10, null, null, "EUR", UnitBasis.PER_BOX));
+        FactoryQuoteDto boxQuote = requestedQuote(boxLine, "Factory B");
+        assertThatThrownBy(() -> factoryQuoteService.receive(boxQuote.id(), receiveAll(boxQuote, "EUR", "PER_SQM"), importActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+        assertThat(factoryQuoteService.get(boxQuote.id(), importActor).status()).isEqualTo(FactoryQuoteStatus.REQUESTED);
+        assertThat(factoryQuoteService.get(boxQuote.id(), importActor).items())
+            .allSatisfy(i -> assertThat(i.rawUnitPrice()).isNull());
+    }
+
+    /** A quote that is already contacted, reached by forcing the state directly so the currency/unit rule is
+     * isolated from the contact API (and from the price-entry lock). */
+    private FactoryQuoteDto requestedQuote(long prId, String factoryName) {
+        FactoryQuoteDto draft = quoteFor(factoryQuoteService.generateDrafts(prId, importActor), factoryName);
+        jdbc.update("UPDATE sales.factory_quote SET status = 'REQUESTED', requested_at = now() WHERE factory_quote_id = :id",
+            Map.of("id", draft.id()));
+        return factoryQuoteService.get(draft.id(), importActor);
+    }
 
 }

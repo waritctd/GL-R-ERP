@@ -37,7 +37,6 @@ import th.co.glr.hr.support.RecordingSalesMailer;
 class LeadTimeChangeIntegrationTest extends Cr1FixtureSupport {
     private long prId;
     private FactoryQuoteDto quoteA;
-    private FactoryQuoteDto quoteB;
     private long a1;
     private long a2;
     private long a3;
@@ -71,7 +70,6 @@ class LeadTimeChangeIntegrationTest extends Cr1FixtureSupport {
                 java.util.Map.of("id", d.id()));
         }
         quoteA = quoteFor(factoryQuoteService.list(prId, importActor), "Factory A");
-        quoteB = quoteFor(factoryQuoteService.list(prId, importActor), "Factory B");
         a1 = itemId("A-1");
         a2 = itemId("A-2");
         a3 = itemId("A-3");

@@ -10,7 +10,6 @@ import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
-import th.co.glr.hr.commission.CommissionRepository;
 import th.co.glr.hr.customer.CustomerRepository;
 import th.co.glr.hr.customerquotation.CustomerQuotationRepository;
 import th.co.glr.hr.dealquotation.DealQuotationRepository;
@@ -18,11 +17,6 @@ import th.co.glr.hr.catalog.CatalogRepository;
 import th.co.glr.hr.deposit.DepositNoticePdfRenderer;
 import th.co.glr.hr.deposit.DepositNoticeRepository;
 import th.co.glr.hr.deposit.DepositNoticeService;
-import th.co.glr.hr.factory.FactoryConfigRepository;
-import th.co.glr.hr.importrequest.ImportRequestQueryRepository;
-import th.co.glr.hr.importrequest.ImportRequestRenderer;
-import th.co.glr.hr.importrequest.ImportRequestRepository;
-import th.co.glr.hr.importrequest.ImportRequestService;
 import th.co.glr.hr.orderconfirmation.OrderConfirmationRequests.ConfirmOrderRequest;
 import th.co.glr.hr.orderconfirmation.OrderConfirmationService;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.PricingRequestItemRequest;
@@ -53,8 +47,6 @@ import th.co.glr.hr.ticket.TicketSummaryDto;
 class StockLineFulfilmentIntegrationTest extends AbstractStockLineIntegrationTest {
 
     private OrderConfirmationService orderConfirmation;
-    private ImportRequestService importRequests;
-    private CommissionRepository commissionRepository;
     private int quotationSeq;
 
     @BeforeEach
@@ -68,9 +60,6 @@ class StockLineFulfilmentIntegrationTest extends AbstractStockLineIntegrationTes
         // Same wiring the app has (setter-injected): without it the accepted quotation's deposit
         // percent is never read and the 0% path could not be exercised.
         orderConfirmation.wireDealQuotationRepository(new DealQuotationRepository(jdbc, new CatalogRepository(jdbc)));
-        importRequests = new ImportRequestService(new ImportRequestQueryRepository(jdbc), new ImportRequestRenderer(),
-            new ImportRequestRepository(jdbc), new FactoryConfigRepository(jdbc), tickets, ticketService, notifications);
-        commissionRepository = new CommissionRepository(jdbc);
         jdbc.update("DELETE FROM sales.ticket_item WHERE ticket_id = :t", Map.of("t", ticketId));
     }
 

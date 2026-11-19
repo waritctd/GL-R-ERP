@@ -85,6 +85,16 @@ class BoardDrawnDetailsIntegrationTest extends AbstractDealQuotationSlice2Integr
         assertThat(card.path("overdue").asBoolean()).isTrue().isEqualTo(summary.overdue());
     }
 
+    @Test
+    void anUnpaidDepositIsNeverOverdue_onTheBoardAsInFinance() throws Exception {
+        long id = creditDealDelivered(31, "DEPOSIT_NOTICE_ISSUED");
+
+        JsonNode card = byId(ok(get("/api/sales/my-work"), salesActor).get("board"), id);
+
+        assertThat(card.path("paymentDueDate").asText()).isEqualTo(String.valueOf(summary(id).paymentDueDate()));
+        assertThat(card.path("overdue").asBoolean()).isFalse().isEqualTo(summary(id).overdue());
+    }
+
     // ── scope: wrong way round ──────────────────────────────────────────────────────────────────
 
     @Test

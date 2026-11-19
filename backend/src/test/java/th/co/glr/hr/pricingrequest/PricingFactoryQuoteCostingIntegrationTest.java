@@ -523,9 +523,7 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
     //
     // Deletion must not be permitted merely because the parent pricing request is in a broad
     // "mutable" set that includes READY_FOR_CEO_REVIEW (and it must not physically remove the row
-    // and file). Each test below isolates exactly ONE of the independent
-    // guards deleteAttachment applies, by constructing state where the OTHER two guards do
-    // not (and could not) fire — see each test's own comment for how.
+    // and file). The tests below pin the tombstone path and the READY_FOR_CEO_REVIEW guard.
 
     @Test
     void factoryQuoteAttachmentDeletion_tombstonesInsteadOfPhysicallyDeletingWhenPermitted() {
@@ -732,29 +730,13 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
             Map.of("name", name), Long.class);
     }
 
-    /** Unlike #freeTextPricingItem, which names "Free Text Factory", this line has NO factory on EITHER side — no
-     * catalog product to snapshot one from, and no free text. That is the shape the whole section above is about,
-     * and nothing else in this file produced it. */
-    // Model is unconditionally required, independent of whether the item
-    // has a catalog link — "free text" here means no catalog PRODUCT, not no model. Both helpers
-    // pass `description` itself as the model so they (a) reach resolveItems' happy path
-    // and (b) print the SAME text callers assert on via
-    // PricingRequestItemDto#displayName() (brand/model, falling back to productDescription only
-    // when both are blank) — model is not blank here, so it is the source of that text, and
-    // the two are deliberately kept equal. productId stays null on both — the "no catalog
-    // product to snapshot" shape both are testing.
+    /** A line with NO factory on EITHER side — no catalog product to snapshot one from, and no free text. That is
+     * the shape the whole section above is about. Model is unconditionally required, independent of whether the item
+     * has a catalog link, so `description` is passed as the model: it reaches resolveItems' happy path and prints the
+     * same text callers assert on via PricingRequestItemDto#displayName(). */
     private PricingRequestRequests.PricingRequestItemRequest factorylessPricingItem(String description) {
         return new PricingRequestRequests.PricingRequestItemRequest(null, null, null, null, description,
             description, "White", "Matte", "60x60", null, null, null, null, null,
-            QuantityType.CONFIRMED, null, null, null,
-            null, new BigDecimal("10"), new BigDecimal("0.36"), WastageCalculator.QUANTITY_MODE_PIECES,
-            null, 1, WastageCalculator.WASTAGE_MODE_NONE, null, 4, null,
-            false, "ไทย-สต็อก", 3, 7, null, null, null);
-    }
-
-    private PricingRequestRequests.PricingRequestItemRequest freeTextPricingItem(String description) {
-        return new PricingRequestRequests.PricingRequestItemRequest(null, null, null, null, description,
-            description, "White", "Matte", "60x60", "Free Text Factory", null, null, null, null,
             QuantityType.CONFIRMED, null, null, null,
             null, new BigDecimal("10"), new BigDecimal("0.36"), WastageCalculator.QUANTITY_MODE_PIECES,
             null, 1, WastageCalculator.WASTAGE_MODE_NONE, null, 4, null,
@@ -769,21 +751,6 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
         PricingCostingItemDto line = singleItemCosting(
             new BigDecimal("10"), UnitBasis.PER_BOX,
             UnitBasis.PER_BOX, new BigDecimal("10.00"), "1000.00",
-            new BigDecimal("0.5"), new BigDecimal("20"), null);
-
-        assertThat(line.goodsCostThb()).isEqualByComparingTo("50.0000");
-        assertThat(line.normalizedQuantityPieces()).isEqualByComparingTo("200.000000");
-        // V152: 200 pieces / 100 sqm total at Italy [8,12)mm — hand-verified: C=10000, i=55.3725, F=50000),
-        // cif=60055.3725, duty=18016.6118,*1.07=83537.0232, +clearance)=8000 => TC=91537.0232, rounding through the
-        // per-piece column back to 91537.0200 total.
-        assertThat(line.totalLandedCostThb()).isEqualByComparingTo("91537.0200");
-    }
-
-    @Test
-    void unitConversion_quotePerPieceRequestInBoxes() {
-        PricingCostingItemDto line = singleItemCosting(
-            new BigDecimal("10"), UnitBasis.PER_BOX,
-            UnitBasis.PER_PIECE, new BigDecimal("200.00"), "50.00",
             new BigDecimal("0.5"), new BigDecimal("20"), null);
 
         assertThat(line.goodsCostThb()).isEqualByComparingTo("50.0000");

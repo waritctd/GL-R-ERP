@@ -59,14 +59,12 @@ class PricingRequestFlowIntegrationTest extends AbstractPostgresIntegrationTest 
     private long importUserId;
     private long secondImportUserId;
     private long ceoUserId;
-    private long accountUserId;
     private long salesManagerUserId;
     private UserPrincipal salesActor;
     private UserPrincipal secondSalesActor;
     private UserPrincipal importActor;
     private UserPrincipal secondImportActor;
     private UserPrincipal ceoActor;
-    private UserPrincipal accountActor;
     private UserPrincipal salesManagerActor;
 
     private long ticketId;
@@ -102,7 +100,6 @@ class PricingRequestFlowIntegrationTest extends AbstractPostgresIntegrationTest 
         // exactly one Import recipient.
         secondImportUserId = createEmployee(employees, "ฝ่ายนำเข้า สำรอง", "import2@glr.co.th", "OPS", "ฝ่ายปฏิบัติการ");
         ceoUserId = createManagingDirector(employees, "ผู้บริหาร ทดสอบ", "ceo@glr.co.th");
-        accountUserId = createEmployee(employees, "ฝ่ายบัญชี ทดสอบ", "account@glr.co.th", "ACCT", "ฝ่ายบัญชี");
         salesManagerUserId = createEmployee(employees, "ผู้จัดการฝ่ายขาย", "sales-manager@glr.co.th", "SALES", "ฝ่ายขาย");
 
         salesActor = actor(salesRepId, "sales");
@@ -110,7 +107,6 @@ class PricingRequestFlowIntegrationTest extends AbstractPostgresIntegrationTest 
         importActor = actor(importUserId, "import");
         secondImportActor = actor(secondImportUserId, "import");
         ceoActor = actor(ceoUserId, "ceo");
-        accountActor = actor(accountUserId, "account");
         salesManagerActor = actor(salesManagerUserId, "sales_manager");
 
         catalogProductId = insertCatalogProduct("Test Catalog Factory", "TH", "TEST-PROD-001",

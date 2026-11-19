@@ -87,7 +87,6 @@ class PricingChainEndToEndIntegrationTest extends AbstractPostgresIntegrationTes
     private TicketRepository tickets;
     private PricingRequestRepository pricingRequests;
     private PricingRequestService pricingRequestService;
-    private FactoryQuoteRepository factoryQuoteRepository;
     private FactoryQuoteService factoryQuoteService;
     private PricingCostingRepository costingRepository;
     private PricingCostingService costingService;
@@ -131,7 +130,6 @@ class PricingChainEndToEndIntegrationTest extends AbstractPostgresIntegrationTes
             pricingRequests, tickets, notifications, objectMapper, new ContactRepository(jdbc), fileStorage, factoryQuoteCarryForward());
 
         FactoryQuoteRepository factoryQuotes = new FactoryQuoteRepository(jdbc);
-        factoryQuoteRepository = factoryQuotes;
         FxRateRepository fxRates = new FxRateRepository(jdbc);
         PricingFormulaEngine formulaEngine = new PricingFormulaEngine(new PricingFormulaConfigRepository(jdbc));
         // V141 ("CEO owns costing"): shared by FactoryQuoteService's markReadyForCosting auto-advance check and

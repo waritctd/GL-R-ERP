@@ -36,6 +36,8 @@ class PricingFormulaEngineTest {
     @CsvSource({
         "freightQtyBand_justBelowMax_staysInFirstBand,             10,   100.99, 50000",
         "freightQtyBand_exactMin_1FallsInFirstBand,                10,   1,      50000",
+        // 101 is band2's min and band1's max — must land in [101,451), never [1,101).
+        "freightQtyBand_minIsInclusive_101FallsInSecondBandNotFirst, 10, 101,    80000",
         // 8 is band2's min and band1's max — must land in [8,12), never [3,8).
         "freightThicknessBand_minIsInclusive_8FallsInSecondBandNotFirst, 8, 50,  50000",
         "freightThicknessBand_justBelowMax_staysInFirstBand,       7.99, 50,     80000",
@@ -65,6 +67,18 @@ class PricingFormulaEngineTest {
             new PricingClearanceFeeDto(3L, bd("451"), bd("801"), bd("15000")),
             new PricingClearanceFeeDto(4L, bd("801"), null, bd("20000"))
         );
+    }
+
+    // Min is inclusive (101 -> second band), a null max catches everything above the top boundary.
+    @ParameterizedTest(name = "{0}")
+    @CsvSource({
+        "clearanceBand_minIsInclusive_101FallsInSecondBandNotFirst, 101,      12000",
+        "clearanceBand_nullMaxCatchesTheTopBoundary,                801,      20000",
+        "clearanceBand_nullMaxCatchesEverythingAbove,               50000000, 20000",
+    })
+    void clearanceBandEdge(String caseName, String quantity, String expectedAmount) {
+        assertThat(engine.selectClearanceFee(clearanceFees(), bd(quantity), "test").amountThb())
+            .isEqualByComparingTo(expectedAmount);
     }
 
     // ── Duty rate selection — exact match ────────────────────────────────────────────────────

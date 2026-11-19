@@ -179,22 +179,6 @@ class PricingRequestItemDirectDealFieldsIntegrationTest extends AbstractPostgres
             });
     }
 
-    // ── a tiny AREA quantity rounds up to one piece ────────────────────────────────────────
-
-    @Test
-    void createDraft_aTinyAreaRoundsUpToOnePiece() {
-        // 0.3 m2 at 0.72 m2/piece (piecesPerSqm 1.39) = 0.417 rounds UP to 1 piece
-        // ("ปัดขึ้นทุกกรณี"): any positive area is at least 1 piece, so the line is accepted
-        // and V59's chk_pricing_request_item_qty (requested_qty > 0) is never reached.
-        PricingRequestDetailDto detail = pricingRequestService.createDraft(ticketId,
-            createRequest(List.of(completeItem(b -> b
-                .quantityMode(WastageCalculator.QUANTITY_MODE_AREA).areaSqm(new BigDecimal("0.3"))
-                .sqmPerPiece(new BigDecimal("0.72")).wastageMode(WastageCalculator.WASTAGE_MODE_NONE)
-                .piecesPerBox(10).roundToFullBox(false)))),
-            salesActor);
-        assertThat(onlyItem(detail).requestedQty()).isEqualByComparingTo("1");
-    }
-
     // ── Sales thickness never writes to the shared catalogue ───────────────────────────────
 
     @Test

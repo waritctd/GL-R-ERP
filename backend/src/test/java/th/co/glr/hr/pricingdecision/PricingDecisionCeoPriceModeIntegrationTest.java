@@ -22,9 +22,6 @@ import th.co.glr.hr.customer.CustomerDto;
 import th.co.glr.hr.customer.CustomerRepository;
 import th.co.glr.hr.customer.ProjectDto;
 import th.co.glr.hr.customer.ProjectRepository;
-import th.co.glr.hr.customerquotation.CustomerQuotationRepository;
-import th.co.glr.hr.customerquotation.CustomerQuotationService;
-import th.co.glr.hr.customerquotation.DiscountApprovalRepository;
 import th.co.glr.hr.dealquotation.WastageCalculator;
 import th.co.glr.hr.employee.EmployeeCodeGenerator;
 import th.co.glr.hr.employee.EmployeeReferenceRepository;
@@ -85,7 +82,6 @@ class PricingDecisionCeoPriceModeIntegrationTest extends AbstractPostgresIntegra
     private PricingRequestService pricingRequestService;
     private FactoryQuoteService factoryQuoteService;
     private PricingDecisionService decisionService;
-    private CustomerQuotationService quotationService;
     private TicketRepository tickets;
 
     private long salesRepId;
@@ -94,8 +90,6 @@ class PricingDecisionCeoPriceModeIntegrationTest extends AbstractPostgresIntegra
     private UserPrincipal salesActor;
     private UserPrincipal importActor;
     private UserPrincipal ceoActor;
-    private UserPrincipal salesManagerActor;
-    private UserPrincipal accountActor;
     private long ticketId;
     private long catalogProductIdFactoryA;
     private long catalogProductIdFactoryB;
@@ -129,20 +123,13 @@ class PricingDecisionCeoPriceModeIntegrationTest extends AbstractPostgresIntegra
         TicketService ticketService = new TicketService(tickets, notifications,
             objectMapper, customers, new QuotationRenderer(), pricingRequestService, new th.co.glr.hr.auth.EmployeeAuthRepository(jdbc), new th.co.glr.hr.customer.ContactRepository(jdbc), new th.co.glr.hr.customer.ProjectRepository(jdbc),
             new th.co.glr.hr.dealquotation.DealQuotationRepository(jdbc, new th.co.glr.hr.catalog.CatalogRepository(jdbc)));
-        quotationService = new CustomerQuotationService(new CustomerQuotationRepository(jdbc), pricingRequests,
-            decisionRepository, tickets, ticketService, customers, new QuotationRenderer(), notifications,
-            new DiscountApprovalRepository(jdbc));
 
         salesRepId = createEmployee(employees, "พนักงานขาย CEOP", "sales-ceop@glr.co.th", "SALES", "แผนกขาย");
         importUserId = createEmployee(employees, "ฝ่ายนำเข้า CEOP", "import-ceop@glr.co.th", "PCIM", "ฝ่ายนำเข้า");
         ceoUserId = createEmployee(employees, "ผู้บริหาร CEOP", "ceo-ceop@glr.co.th", "MD", "ผู้บริหาร");
-        long salesManagerId = createEmployee(employees, "ผจก.ขาย CEOP", "sm-ceop@glr.co.th", "SALES", "ฝ่ายขาย");
-        long accountId = createEmployee(employees, "บัญชี CEOP", "acct-ceop@glr.co.th", "ACCT", "ฝ่ายบัญชี");
         salesActor = actor(salesRepId, "sales");
         importActor = actor(importUserId, "import");
         ceoActor = actor(ceoUserId, "ceo");
-        salesManagerActor = actor(salesManagerId, "sales_manager");
-        accountActor = actor(accountId, "account");
 
         catalogProductIdFactoryA = insertCatalogProduct("Factory A-CEOP", "IT", "TEST-A-CEOP-001",
             new BigDecimal("100.00"), "THB", "per_piece");

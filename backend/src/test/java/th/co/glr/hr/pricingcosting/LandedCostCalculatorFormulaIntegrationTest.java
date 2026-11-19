@@ -1,12 +1,14 @@
 package th.co.glr.hr.pricingcosting;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -40,6 +42,7 @@ import th.co.glr.hr.pricingdecision.PricingDecisionDtos.PricingDecisionDto;
 import th.co.glr.hr.pricingdecision.PricingDecisionDtos.PricingDecisionItemDto;
 import th.co.glr.hr.pricingdecision.PricingDecisionRepository;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.ApprovePricingDecisionRequest;
+import th.co.glr.hr.pricingdecision.PricingDecisionRequests.FreightRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.StartPricingDecisionRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionService;
 import th.co.glr.hr.pricingrequest.PricingRequestRecipient;
@@ -329,10 +332,99 @@ class LandedCostCalculatorFormulaIntegrationTest extends AbstractPostgresIntegra
             });
     }
 
+    // ไทย-สต็อก (goods already in Thailand): a DOMESTIC purchase, owner ruling.
+    // cost = Import's price in THB only. No freight lookup, insurance, duty, cost buffer or clearance.
+    @Test
+    void thaiStockOrigin_noCatalogCountry_sameFormulaWithIFTSZero_everyImportComponentZeroNotNull() {
+        // 100 pieces @ 100.00 THB, 1 sqm/piece: goods = 100.0000/pc; TC = (goods + 0 + 0) x (1 + 0) x 1.07
+        // + 0 = 10,700.0000 -> 107.0000/pc (the sheet's x1.07 stays; i = F = T = S = 0).
+        PricingDecisionDto decision = startedDecisionWithoutCatalogLink("ไทย-สต็อก");
+        PricingCostingItemDto item = costingItemFor(decision);
+
+        assertThat(item.uncostableReason()).isNull();
+        assertThat(item.goodsCostThb()).isEqualByComparingTo("100.0000");
+        assertThat(item.freightCostThb()).isEqualByComparingTo("0");
+        assertThat(item.insuranceCostThb()).isEqualByComparingTo("0");
+        assertThat(item.importDutyThb()).isEqualByComparingTo("0");
+        assertThat(item.inlandTransportCostThb()).isEqualByComparingTo("0");
+        assertThat(item.clearanceFeeThb()).isEqualByComparingTo("0");
+        assertThat(item.cifCostThb()).isEqualByComparingTo("100.0000");
+        assertThat(item.landedCostPerUnitThb()).isEqualByComparingTo("107.0000");
+        assertThat(item.totalLandedCostThb()).isEqualByComparingTo("10700.0000");
+        assertThat(jdbc.queryForObject("SELECT calculation_snapshot::text FROM sales.pricing_costing_item WHERE pricing_costing_id = :id",
+            Map.of("id", decision.pricingCostingId()), String.class)).contains("DOMESTIC");
+
+        // The table never prices a domestic line, so a CEO freight is refused WITHOUT claiming the table has a rate.
+        assertThatThrownBy(() -> decisionService.setItemFreight(decision.pricingRequestId(), item.pricingRequestItemId(),
+                new FreightRequest(new BigDecimal("1000")), ceoActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> {
+                assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
+                assertThat(e.getMessage()).contains("ไม่ได้ใช้ตารางค่าขนส่ง").doesNotContain("ตารางค่าขนส่งมีอัตรา");
+            });
+    }
+
+    /**
+     * Gap line (no band), CEO F = 12,000.00 THB for the line. Same formula, hand-computed:
+     * C = 10,000.0000; i = 55.3725; F = 12,000; cif = 22,055.3725; duty 30% = 6,616.61175 -> 6,616.6118;
+     * (cif+duty) x 1.07 = 28,671.9843 x 1.07 = 30,679.0232; S (qty 100) = 8,000; TC = 38,679.0232;
+     * per piece = 386.7902 (money4); total = 386.7902 x 100 = 38,679.0200.
+     */
+    @Test
+    void freightGap_ceoEntersF_sameFormulaWithThatF_everyComponent_andItSurvivesRecalculation() {
+        // A catalogue Italy line at 100 mm: outside every seeded freight band.
+        long productId = insertCatalogProduct("Formula Factory", "IT", "GAP-" + UUID.randomUUID(),
+            new BigDecimal("100.00"), "THB", "per_piece", "ACTIVE", new BigDecimal("100"));
+        long prId = readyForReviewWithProduct(productId, "Formula Factory", new BigDecimal("100"), UnitBasis.PER_PIECE,
+            UnitBasis.PER_PIECE, new BigDecimal("100"), "100.00", new BigDecimal("1"), null, null);
+        assertThatCode(() -> decisionService.startReview(prId,
+            new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, UUID.randomUUID().toString()), ceoActor))
+            .as("a freight gap must not abort the whole costing").doesNotThrowAnyException();
+        PricingDecisionDto decision = decisionRepository.findOpenDraft(prId).orElseThrow();
+        PricingCostingItemDto gap = costingItemFor(decision);
+        assertThat(gap.uncostableReason()).contains("ไม่มีอัตราค่าขนส่ง").doesNotContain("ประเทศต้นทาง");
+        assertThat(gap.uncostableCode()).isEqualTo("NO_FREIGHT_BAND");
+
+        long itemId = decision.items().get(0).pricingRequestItemId();
+        PricingDecisionDto after = decisionService.setItemFreight(prId, itemId, new FreightRequest(new BigDecimal("12000")), ceoActor).decision();
+
+        PricingCostingItemDto item = costingItemFor(after);
+        assertThat(item.uncostableReason()).isNull();
+        assertThat(item.goodsCostThb()).isEqualByComparingTo("100.0000");
+        assertThat(item.insuranceCostThb()).isEqualByComparingTo("0.5537");
+        assertThat(item.freightCostThb()).isEqualByComparingTo("120.0000");
+        assertThat(item.cifCostThb()).isEqualByComparingTo("220.5537");
+        assertThat(item.importDutyThb()).isEqualByComparingTo("66.1661");
+        assertThat(item.clearanceFeeThb()).isEqualByComparingTo("80.0000");
+        assertThat(item.landedCostPerUnitThb()).isEqualByComparingTo("386.7902");
+        assertThat(item.totalLandedCostThb()).isEqualByComparingTo("38679.0200");
+        assertThat(jdbc.queryForList("SELECT message FROM sales.pricing_request_event WHERE pricing_request_id = :id AND event_kind = :k",
+            Map.of("id", prId, "k", "PRICING_REQUEST_ITEM_FREIGHT_SET"), String.class)).singleElement()
+            .satisfies(m -> assertThat(m).contains("12000"));
+        assertThat(jdbc.queryForObject("SELECT calculation_snapshot::text FROM sales.pricing_costing_item WHERE pricing_costing_id = :id AND uncostable_reason IS NULL",
+            Map.of("id", after.pricingCostingId()), String.class)).contains("CEO_MANUAL");
+
+        // Survives a recalculation (persisted on the item) ...
+        PricingDecisionDto recalculated = decisionService.recalculateCost(after.id(), ceoActor);
+        assertThat(costingItemFor(recalculated).landedCostPerUnitThb()).isEqualByComparingTo("386.7902");
+        // ... and clearing it returns the line to uncostable.
+        PricingDecisionDto cleared = decisionService.setItemFreight(prId, itemId, new FreightRequest(null), ceoActor).decision();
+        assertThat(costingItemFor(cleared).uncostableReason()).contains("ไม่มีอัตราค่าขนส่ง");
+    }
+
     // Fixture helpers
 
     private PricingCostingItemDto costingItemFor(PricingDecisionDto decision) {
         return costingRepository.find(decision.pricingCostingId()).orElseThrow().items().get(0);
+    }
+
+    /** Free-text line: no catalog link, so only the item's own origin_country/thickness can feed freight. */
+    private PricingDecisionDto startedDecisionWithoutCatalogLink(String originCountry) {
+        long prId = readyForReview(new BigDecimal("100"), UnitBasis.PER_PIECE, UnitBasis.PER_PIECE,
+            new BigDecimal("100"), "100.00", new BigDecimal("1"), null, null);
+        jdbc.update("UPDATE sales.pricing_request_item SET product_id = NULL, catalog_price_id = NULL, thickness_mm = :t, origin_country = :o WHERE pricing_request_id = :id",
+            Map.of("o", originCountry, "id", prId, "t", 10));
+        return decisionService.startReview(prId,
+            new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, UUID.randomUUID().toString()), ceoActor);
     }
 
     private long readyForReview(BigDecimal requestedQty, String requestedUnitBasis, String quotedUnitBasis,

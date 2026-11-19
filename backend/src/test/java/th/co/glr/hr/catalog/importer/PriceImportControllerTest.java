@@ -25,16 +25,16 @@ class PriceImportControllerTest {
         .build();
 
     @Test
-    void employeeCannotCommit() throws Exception {
-        mvc.perform(post("/api/price-import/commit/1").session(session("employee")))
+    void salesCannotCommit() throws Exception {
+        mvc.perform(post("/api/price-import/commit/1").session(session("sales")))
             .andExpect(status().isForbidden());
     }
 
     @Test
-    void ceoCanCommit() throws Exception {
+    void importCanCommit() throws Exception {
         when(service.commit(anyLong(), anyLong()))
             .thenReturn(new PriceImportService.CommitResult(1L, 10, 2, 1));
-        mvc.perform(post("/api/price-import/commit/1").session(session("ceo")))
+        mvc.perform(post("/api/price-import/commit/1").session(session("import")))
             .andExpect(status().is2xxSuccessful());
     }
 

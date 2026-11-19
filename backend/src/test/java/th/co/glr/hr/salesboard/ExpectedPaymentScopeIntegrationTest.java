@@ -35,9 +35,8 @@ import tools.jackson.databind.json.JsonMapper;
 
 /**
  * /api/tickets/{id}/expected-payments through the real controller, service, repository and Postgres (V212). Written
- * wrong-way-round: another rep must NOT read or write a deal's schedule (by deal id or by guessing a row id), account
- * may read inside its finance scope but NEVER write, import/hr reach nothing, an expected week must be a Monday, and
- * a RECEIVED row can be neither edited nor cancelled. Annotated itself — @EnabledIf is not inherited.
+ * wrong-way-round: another rep must NOT read or write a deal's schedule (by deal id or by guessing a row id), the
+ * manager and CEO may write any rep's deal, and a RECEIVED row can be neither edited nor cancelled. Annotated itself — @EnabledIf is not inherited.
  */
 @EnabledIf(
     value = "th.co.glr.hr.support.PostgresTestSupport#isAvailable",
@@ -93,7 +92,19 @@ class ExpectedPaymentScopeIntegrationTest extends AbstractDealQuotationSlice2Int
         assertThat(statusOf(theirs)).isEqualTo("OPEN");
     }
 
-    // ── validation ───────────────────────────────────────────────────────────
+    @Test
+    void guessingAnotherDealsRowIdThroughOwnDealIs404AndChangesNothing() throws Exception {
+        long mine = deal(salesActor);
+        long theirDeal = deal(otherSalesActor);
+        long theirs = create(otherSalesActor, theirDeal, "DEPOSIT", "5000", monday);
+
+        assertThat(status(put(path(mine) + "/" + theirs).contentType(MediaType.APPLICATION_JSON)
+            .content(body("DEPOSIT", "1", monday)), salesActor)).isEqualTo(404);
+        assertThat(status(delete(path(mine) + "/" + theirs), salesActor)).isEqualTo(404);
+
+        assertThat(amountOf(theirs)).isEqualByComparingTo("5000");
+        assertThat(statusOf(theirs)).isEqualTo("OPEN");
+    }
 
     @Test
     void receivedRowCannotBeCancelledOrEdited() throws Exception {

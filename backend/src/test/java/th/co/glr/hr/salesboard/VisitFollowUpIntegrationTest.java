@@ -28,8 +28,6 @@ import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiExceptionHandler;
 import th.co.glr.hr.dealquotation.AbstractDealQuotationSlice2IntegrationTest;
-import th.co.glr.hr.ticket.TicketEventKind;
-import th.co.glr.hr.ticket.TicketRepository;
 import tools.jackson.databind.DeserializationFeature;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -135,13 +133,6 @@ class VisitFollowUpIntegrationTest extends AbstractDealQuotationSlice2Integratio
         body.put("nextFollowUpAt", nextFollowUpAt.toString());
         return post("/api/sales/visits/" + visitId + "/done").contentType(MediaType.APPLICATION_JSON)
             .content(json.writeValueAsString(body));
-    }
-
-    /** As VisitScopeIntegrationTest#reassign: TicketRepository#moveOwnerToSalesRep, then the recorded move. */
-    private void reassign(long ticketId, UserPrincipal newOwner) {
-        assertThat(tickets.moveOwnerToSalesRep(ticketId, newOwner.id())).isEqualTo(1);
-        tickets.addEvent(ticketId, newOwner.id(), newOwner.name(), TicketEventKind.EDITED, null, null,
-            TicketRepository.OWNER_CHANGED_MESSAGE_PREFIX + "เดิม → " + newOwner.name());
     }
 
     private void fillTrackingFields(long deal) {

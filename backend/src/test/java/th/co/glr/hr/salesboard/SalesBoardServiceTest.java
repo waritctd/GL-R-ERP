@@ -60,13 +60,6 @@ class SalesBoardServiceTest {
 
     private static final Instant NOW = Instant.parse("2026-11-15T03:00:00Z");
 
-    /** A paused deal whose วันที่จะกลับมาดู has arrived: not quiet (that rule is ACTIVE-only), returning instead. */
-    private static BoardDeal returning(long id, long owner, int daysQuiet, String value) {
-        return new BoardDeal(id, "deal " + id, "cust", null, owner, "rep " + owner, "QUOTE_OWNER", "S3", 3,
-            value == null ? null : new BigDecimal(value), "THB", false, null, null, null, daysAgo(daysQuiet),
-            daysQuiet, false, null, null, true, LocalDate.of(2026, 11, 1));
-    }
-
     private static Instant daysAgo(int days) {
         return NOW.minusSeconds(days * 86_400L);
     }

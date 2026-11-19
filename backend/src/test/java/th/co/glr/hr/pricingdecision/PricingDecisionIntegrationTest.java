@@ -2,7 +2,6 @@ package th.co.glr.hr.pricingdecision;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.ArgumentMatchers.any;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
@@ -47,7 +46,6 @@ import th.co.glr.hr.pricing.FxRateRepository;
 import th.co.glr.hr.pricing.PricingFormulaConfigRepository;
 import th.co.glr.hr.pricingcosting.LandedCostCalculator;
 import th.co.glr.hr.pricingcosting.PricingCostingRepository;
-import th.co.glr.hr.pricingcosting.PricingCostingService;
 import th.co.glr.hr.pricingcosting.PricingFormulaEngine;
 import th.co.glr.hr.pricingdecision.PricingDecisionDtos.PricingDecisionDto;
 import th.co.glr.hr.pricingdecision.PricingDecisionDtos.PricingDecisionItemDto;
@@ -79,10 +77,8 @@ class PricingDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
     private TicketRepository tickets;
     private PricingRequestRepository pricingRequests;
     private PricingRequestService pricingRequestService;
-    private FactoryQuoteRepository factoryQuoteRepository;
     private FactoryQuoteService factoryQuoteService;
     private PricingCostingRepository costingRepository;
-    private PricingCostingService costingService;
     private PricingDecisionRepository decisionRepository;
     private PricingDecisionService decisionService;
     private NotificationRepository notificationRepository;
@@ -91,22 +87,16 @@ class PricingDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
     private long importUserId;
     private long ceoUserId;
     private long secondCeoUserId;
-    private long accountUserId;
     private long salesManagerUserId;
     private UserPrincipal salesActor;
     private UserPrincipal otherSalesActor;
     private UserPrincipal importActor;
     private UserPrincipal ceoActor;
     private UserPrincipal secondCeoActor;
-    private UserPrincipal accountActor;
     private UserPrincipal salesManagerActor;
     private long ticketId;
     private long catalogProductIdFactoryA;
     private long catalogProductIdFactoryB;
-    // All-zero price_calc_config country -- see PricingFactoryQuoteCostingIntegrationTest's own identical fixture
-    // for why: landedCostPerUnitThb == goodsCostThb exactly, so margin/price arithmetic assertions are not diluted
-    // by freight/insurance/duty/inland.
-    private long catalogProductIdFactoryC;
 
     @BeforeEach
     void wireServicesAndCreateDeal() {
@@ -124,7 +114,6 @@ class PricingDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
         pricingRequestService = new PricingRequestService(
             pricingRequests, tickets, notifications, objectMapper, new ContactRepository(jdbc), fileStorage, factoryQuoteCarryForward());
         FactoryQuoteRepository factoryQuotes = new FactoryQuoteRepository(jdbc);
-        factoryQuoteRepository = factoryQuotes;
         FxRateRepository fxRates = new FxRateRepository(jdbc);
         PricingFormulaEngine formulaEngine = new PricingFormulaEngine(new PricingFormulaConfigRepository(jdbc));
         // V152 (V109 engine wiring): shared by FactoryQuoteService's markReadyForCosting auto-advance check and
@@ -135,9 +124,6 @@ class PricingDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
             new FactoryConfigRepository(jdbc), notifications, fileStorage,
             landedCostCalculator);
         costingRepository = new PricingCostingRepository(jdbc);
-        // V141: PricingCostingService is READ-ONLY now (list/get) — Import's costing create/recalculate/submit is
-        // gone; the CEO computes it via PricingDecisionService.
-        costingService = new PricingCostingService(costingRepository, pricingRequests, tickets);
         decisionRepository = new PricingDecisionRepository(jdbc);
         decisionService = new PricingDecisionService(decisionRepository, pricingRequests, costingRepository,
             tickets, fxRates, notifications, landedCostCalculator, formulaEngine);
@@ -150,14 +136,12 @@ class PricingDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
         importUserId = createEmployee(employees, "ฝ่ายนำเข้า สาม", "import-step3@glr.co.th", "PCIM", "ฝ่ายนำเข้า");
         ceoUserId = createEmployee(employees, "ผู้บริหาร สาม", "ceo-step3@glr.co.th", "MD", "ผู้บริหาร");
         secondCeoUserId = createEmployee(employees, "ผู้บริหาร สอง", "ceo-step3-2@glr.co.th", "MD", "ผู้บริหาร");
-        accountUserId = createEmployee(employees, "บัญชี สาม", "account-step3@glr.co.th", "ACCT", "ฝ่ายบัญชี");
         salesManagerUserId = createEmployee(employees, "ผู้จัดการฝ่ายขาย สาม", "sales-manager-step3@glr.co.th", "SALES", "ฝ่ายขาย");
         salesActor = actor(salesRepId, "sales");
         otherSalesActor = actor(otherSalesId, "sales");
         importActor = actor(importUserId, "import");
         ceoActor = actor(ceoUserId, "ceo");
         secondCeoActor = actor(secondCeoUserId, "ceo");
-        accountActor = actor(accountUserId, "account");
         salesManagerActor = actor(salesManagerUserId, "sales_manager");
 
         // V152 (V109 engine wiring): factory country must be one of V109's seeded origin countries (Italy/Spain/China)
@@ -167,15 +151,6 @@ class PricingDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
             new BigDecimal("100.00"), "THB", "per_piece");
         catalogProductIdFactoryB = insertCatalogProduct("Factory B3", "IT", "TEST-B3-001",
             new BigDecimal("100.00"), "THB", "per_piece");
-
-        catalogProductIdFactoryC = insertCatalogProduct("Factory C3", "IT", "TEST-C3-001",
-            new BigDecimal("100.00"), "THB", "per_piece");
-        jdbc.update("""
-            INSERT INTO sales.price_calc_config
-                (version, country, freight_per_sqm, insurance_per_sqm, inland_factory_to_port_per_sqm,
-                 inland_port_to_warehouse_per_sqm, import_duty_pct, margin_pct, is_current)
-            VALUES (1, 'TestLand3', 0, 0, 0, 0, 0, 0, TRUE)
-            """, Map.of());
 
         CustomerDto customer = customers.create(
             "บริษัท Step 3 จำกัด", "0100000000003", "123 ถนนทดสอบ", "สำนักงานใหญ่", "02-000-0003");

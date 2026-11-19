@@ -18,7 +18,6 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
-import th.co.glr.hr.catalog.importer.ImportEngine;
 import th.co.glr.hr.catalog.importer.PriceImportService;
 import th.co.glr.hr.common.ApiExceptionHandler;
 import th.co.glr.hr.factory.FactoryConfigController;
@@ -76,7 +75,6 @@ class CatalogPricingReadAuthzIntegrationTest extends AbstractPostgresIntegration
 
     private static final List<String> COSTING_ROLES = List.of("ceo", "import");
 
-    private MockMvc catalogMvc;
     private MockMvc priceConfigMvc;
     private MockMvc fxMvc;
     private MockMvc factoryMvc;
@@ -98,10 +96,6 @@ class CatalogPricingReadAuthzIntegrationTest extends AbstractPostgresIntegration
             .configure(DeserializationFeature.ACCEPT_EMPTY_STRING_AS_NULL_OBJECT, true)
             .build();
 
-        catalogMvc = standalone(new CatalogController(
-            new CatalogRepository(jdbc),
-            new PriceImportService(mock(ImportEngine.class), jdbc, objectMapper, new FactoryConfigRepository(jdbc)),
-            sessions), jsonMapper);
         priceConfigMvc = standalone(
             new PriceCalcConfigController(new PriceCalcConfigRepository(jdbc), sessions), jsonMapper);
         botFxFetchService = mock(BotFxFetchService.class);
