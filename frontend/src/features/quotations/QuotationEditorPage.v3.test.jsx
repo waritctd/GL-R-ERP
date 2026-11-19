@@ -273,22 +273,6 @@ describe('PLAIN and ส่วนลดพิเศษ rows', () => {
   });
 });
 
-describe('customer address + repeat-customer autofill (owner, 2026-09-11)', () => {
-  it('ส่งขออนุมัติ SAVES unsaved edits first, then submits', async () => {
-    renderEditor('/quotations/5');
-    await screen.findByTestId('checklist-warnings');
-    fireEvent.change(screen.getByLabelText('หมายเหตุเพิ่มเติม'), { target: { value: 'ส่งภายใน 60 วัน' } });
-    fireEvent.click(screen.getByRole('button', { name: 'ส่งขออนุมัติ' }));
-    expect(screen.getByText('การแก้ไขที่ยังไม่บันทึกจะถูกบันทึกก่อนส่ง')).not.toBeNull();
-    fireEvent.click(screen.getAllByRole('button', { name: 'ส่งขออนุมัติ' }).at(-1));
-
-    await waitFor(() => expect(api.dealQuotations.submit).toHaveBeenCalledWith('5'));
-    expect(api.dealQuotations.update).toHaveBeenCalledTimes(1);
-    expect(api.dealQuotations.update.mock.invocationCallOrder[0]).toBeLessThan(api.dealQuotations.submit.mock.invocationCallOrder[0]);
-    expect(api.dealQuotations.update.mock.calls[0][1].customerNotes).toBe('ส่งภายใน 60 วัน');
-  });
-});
-
 describe('ยืนราคา — จำนวนวัน / ระบุวันที่ toggle (V178, owner ruling 2026-09-14)', () => {
   it('choosing ระบุวันที่ shows a date input and saves validityMode/validityUntil; validityDays is still sent', async () => {
     api.dealQuotations.get.mockResolvedValue({

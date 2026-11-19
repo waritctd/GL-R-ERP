@@ -30,7 +30,6 @@ vi.mock('../../api/index.js', async (importOriginal) => {
       },
       // The "เลือกดีลที่มีอยู่" branch mounts DealPicker, which reads the deal list.
       tickets: { list: vi.fn() },
-      dealQuotations: { },
     },
   };
 });

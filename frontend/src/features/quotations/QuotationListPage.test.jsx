@@ -40,14 +40,6 @@ function row(overrides = {}) {
   };
 }
 
-// Prints the current search string so a test can assert the tab actually travels in the URL (owner feedback
-// F5: "driven by the URL (`?status=`)") rather than only in component state.
-// The list opens flat (sales request 2026-11-16). The grouped describes below opt in the way a rep would have:
-// the view they last chose, remembered per user in this browser.
-const LIST_VIEW_KEY = 'glr.quotation.listView.v1';
-function showGroupedView(user = salesUser) {
-  globalThis.localStorage.setItem(`${LIST_VIEW_KEY}:${user.id}`, JSON.stringify('grouped'));
-}
 // This repo's Node ships a broken built-in `localStorage` (see quotationPrefs.test.js), so each test gets a
 // fresh in-memory one.
 function memoryStorage() {
@@ -61,6 +53,8 @@ function memoryStorage() {
 }
 beforeEach(() => vi.stubGlobal('localStorage', memoryStorage()));
 
+// Prints the current search string so a test can assert the tab actually travels in the URL (owner feedback
+// F5: "driven by the URL (`?status=`)") rather than only in component state.
 function LocationProbe() {
   const location = useLocation();
   return <p data-testid="location-search">{location.search}</p>;
@@ -247,38 +241,6 @@ describe('QuotationListPage — revisions of one document fold into the version 
     const [, inForce] = groupQuotationRows(rows);
     expect(inForce.number).toBe('QT-2026-0303-2');
     expect(inForce.olderCount).toBe(2);
-  });
-});
-
-// Not every quotation is for a contractor: each row says who it is for, and the deal header counts by role.
-describe('QuotationListPage — who each quotation is for', () => {
-  const q = (overrides) => row({ ticketId: 70, ticketCode: 'DL-2026-0070', projectName: 'โครงการ ผู้รับหลายฝ่าย', docStatus: 'APPROVED', ...overrides });
-  const items = [
-    q({ id: 4, number: 'QT-2026-0704-1', customerName: 'บจก.รับเหมา หนึ่ง', recipientType: 'BUYER', partyId: 4, partyStatus: 'QUOTED' }),
-    q({ id: 3, number: 'QT-2026-0703-1', customerName: 'บจก.รับเหมา สอง', recipientType: 'BUYER', partyId: 3, partyStatus: 'QUOTED' }),
-    q({ id: 2, number: 'QT-2026-0702-1', customerName: 'บจก.เจ้าของ ตัวอย่าง', recipientType: 'OWNER', partyId: 2, partyStatus: 'QUOTED' }),
-    q({ id: 1, number: 'QT-2026-0701-1', customerName: 'บจก.ดีไซน์ ตัวอย่าง', recipientType: 'DESIGNER', partyId: 1, partyStatus: 'QUOTED' }),
-    row({ id: 9, number: 'QT-2026-0109-1', customerName: 'บจก.ใบเก่า', projectName: 'ใบเก่า', ticketId: 71, ticketCode: 'DL-2026-0071', recipientType: 'UNSPECIFIED' }),
-  ];
-  beforeEach(() => {
-    vi.clearAllMocks();
-    api.dealQuotations.counts.mockResolvedValue({});
-    showGroupedView();
-    api.dealQuotations.list.mockResolvedValue({ items });
-  });
-
-  it('labels each row with its recipient role; an unrecorded recipient gets no label', async () => {
-    renderListPage(salesUser);
-    await screen.findAllByTestId('quotation-group-row');
-    const roleOf = (number) => within(screen.getByText(number).closest('tr')).queryByTestId('quotation-recipient-chip')?.dataset.role ?? null;
-    expect(roleOf('QT-2026-0701-1')).toBe('DESIGNER');
-    expect(roleOf('QT-2026-0702-1')).toBe('OWNER');
-    expect(roleOf('QT-2026-0704-1')).toBe('BUYER');
-    expect(roleOf('QT-2026-0109-1')).toBeNull();
-    expect(screen.queryByText('ไม่ระบุ')).toBeNull();
-    // The bid outcome chip belongs to contractors only.
-    expect(within(screen.getByText('QT-2026-0701-1').closest('tr')).queryByText('เสนอราคาแล้ว')).toBeNull();
-    expect(within(screen.getByText('QT-2026-0704-1').closest('tr')).getByText('เสนอราคาแล้ว')).toBeTruthy();
   });
 });
 

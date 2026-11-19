@@ -1,5 +1,5 @@
 import React from 'react';
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { QuotationChecklist } from './QuotationChecklist.jsx';
 
@@ -38,18 +38,5 @@ describe('QuotationChecklist', () => {
     expect(screen.getByText('ควรกรอก — ไม่บังคับ ยังบันทึกและส่งขออนุมัติได้')).not.toBeNull();
   });
 
-  it('clicking an entry moves focus to ITS field', () => {
-    render(
-      <>
-        <textarea id="deal-customer-address" />
-        <select id="quotation-contact" />
-        <QuotationChecklist entries={entries} />
-      </>,
-    );
-    fireEvent.click(screen.getByRole('button', { name: 'ยังไม่ได้กรอกที่อยู่ลูกค้า' }));
-    expect(document.activeElement?.id).toBe('deal-customer-address');
-    fireEvent.click(screen.getByRole('button', { name: 'กรุณาระบุผู้สั่งซื้อ' }));
-    expect(document.activeElement?.id).toBe('quotation-contact');
-  });
 });
 

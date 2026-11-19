@@ -17,7 +17,6 @@ vi.mock('../../api/index.js', async (importOriginal) => {
     ...actual,
     api: {
       tickets: { list: vi.fn() },
-      dealQuotations: { },
     },
   };
 });

@@ -2,12 +2,17 @@ import { describe, expect, it } from 'vitest';
 import * as meta from './quotationMeta.js';
 import {
   canApproveDealQuotation,
+  canCancelDealQuotation,
   canChangeDealCustomer,
   canCreateDealQuotation,
   canCreateDealQuotationStandalone,
+  canDecideDealQuotation,
   canEditDealQuotation,
+  isDealQuotationEditable,
+  parseSizeText,
   canPromoteDealQuotationToDeal,
   canReviseDealQuotation,
+  canSubmitDealQuotation,
   canTransitionDealQuotation,
   canViewDealQuotation,
   hasSpecialPricing,
@@ -47,6 +52,16 @@ describe('canTransitionDealQuotation', () => {
     expect(canTransitionDealQuotation('PENDING_APPROVAL', 'DRAFT')).toBe(true);
     expect(canTransitionDealQuotation('APPROVED', 'SUPERSEDED')).toBe(true);
   });
+
+  it('refuses every terminal/backward edge the plan does not describe', () => {
+    expect(canTransitionDealQuotation('DRAFT', 'APPROVED')).toBe(false);
+    expect(canTransitionDealQuotation('APPROVED', 'DRAFT')).toBe(false);
+    expect(canTransitionDealQuotation('APPROVED', 'PENDING_APPROVAL')).toBe(false);
+    expect(canTransitionDealQuotation('CANCELLED', 'DRAFT')).toBe(false);
+    expect(canTransitionDealQuotation('SUPERSEDED', 'APPROVED')).toBe(false);
+    expect(canTransitionDealQuotation(null, 'DRAFT')).toBe(false);
+    expect(canTransitionDealQuotation('DRAFT', undefined)).toBe(false);
+  });
 });
 
 describe('canCreateDealQuotation', () => {
@@ -63,6 +78,11 @@ describe('canCreateDealQuotation', () => {
     expect(canCreateDealQuotation(qcWithGrant, ownedTicket)).toBe(true);
     expect(canCreateDealQuotation(qcWithGrant, otherTicket)).toBe(true);
   });
+
+  it('a qc user WITHOUT the grant is refused, even on their own imaginary deal', () => {
+    expect(canCreateDealQuotation(qcUser, ownedTicket)).toBe(false);
+    expect(canCreateDealQuotation(qcUser, otherTicket)).toBe(false);
+  });
 });
 
 // Role-only half of canCreateDealQuotation for the moment BEFORE a ticket exists. Must grant exactly
@@ -75,6 +95,14 @@ describe('canCreateDealQuotationStandalone', () => {
     expect(canCreateDealQuotationStandalone(salesManager)).toBe(true);
     expect(canCreateDealQuotationStandalone(qcWithGrant)).toBe(true);
   });
+
+  it('refuses ceo/import/account/hr/qc-without-grant, same audience canCreateDealQuotation refuses', () => {
+    expect(canCreateDealQuotationStandalone(ceo)).toBe(false);
+    expect(canCreateDealQuotationStandalone(importUser)).toBe(false);
+    expect(canCreateDealQuotationStandalone(accountUser)).toBe(false);
+    expect(canCreateDealQuotationStandalone(hrUser)).toBe(false);
+    expect(canCreateDealQuotationStandalone(qcUser)).toBe(false);
+  });
 });
 
 describe('canEditDealQuotation / isDealQuotationEditable', () => {
@@ -85,6 +113,19 @@ describe('canEditDealQuotation / isDealQuotationEditable', () => {
 
   it('refuses a sales rep on a quotation whose salesRepId is someone else\'s', () => {
     expect(canEditDealQuotation(otherSales, quotation({ salesRepId: 6 }))).toBe(false);
+  });
+
+  it('refuses ceo/import/account -- oversight/read-only roles, never edit', () => {
+    expect(canEditDealQuotation(ceo, quotation())).toBe(false);
+    expect(canEditDealQuotation(importUser, quotation())).toBe(false);
+    expect(canEditDealQuotation(accountUser, quotation())).toBe(false);
+  });
+
+  it('isDealQuotationEditable is DRAFT-only, regardless of who is asking', () => {
+    expect(isDealQuotationEditable(quotation({ docStatus: 'DRAFT' }))).toBe(true);
+    expect(isDealQuotationEditable(quotation({ docStatus: 'PENDING_APPROVAL' }))).toBe(false);
+    expect(isDealQuotationEditable(quotation({ docStatus: 'APPROVED' }))).toBe(false);
+    expect(isDealQuotationEditable(quotation({ docStatus: 'CANCELLED' }))).toBe(false);
   });
 });
 
@@ -105,6 +146,18 @@ describe('canSubmitDealQuotation / canCancelDealQuotation / canReviseDealQuotati
     expect(canReviseDealQuotation(salesOwner, approved, { confirmed: true })).toBe(false);
     expect(canReviseDealQuotation(salesManager, approved, { confirmed: true })).toBe(false);
     expect(canReviseDealQuotation(salesOwner, approved, null)).toBe(false);
+  });
+
+  it('submit needs edit rights AND DRAFT', () => {
+    expect(canSubmitDealQuotation(salesOwner, quotation({ docStatus: 'DRAFT' }))).toBe(true);
+    expect(canSubmitDealQuotation(salesOwner, quotation({ docStatus: 'PENDING_APPROVAL' }))).toBe(false);
+    expect(canSubmitDealQuotation(otherSales, quotation({ docStatus: 'DRAFT' }))).toBe(false);
+  });
+
+  it('cancel needs edit rights AND DRAFT (mirrors "DRAFT -> (cancel) -> CANCELLED")', () => {
+    expect(canCancelDealQuotation(salesOwner, quotation({ docStatus: 'DRAFT' }))).toBe(true);
+    expect(canCancelDealQuotation(salesOwner, quotation({ docStatus: 'APPROVED' }))).toBe(false);
+    expect(canCancelDealQuotation(otherSales, quotation({ docStatus: 'DRAFT' }))).toBe(false);
   });
 });
 
@@ -136,6 +189,19 @@ describe('canPromoteDealQuotationToDeal', () => {
     expect(canPromoteDealQuotationToDeal(salesOwner, quotation({ docStatus: 'APPROVED' }))).toBe(true);
     // A stored-null/absent origin reads as DEAL_DIRECT, exactly like the server DTO.
     expect(canPromoteDealQuotationToDeal(salesOwner, quotation({ docStatus: 'APPROVED', origin: undefined }))).toBe(true);
+  });
+
+  it('never before APPROVED, and never after it was superseded/cancelled', () => {
+    for (const docStatus of ['DRAFT', 'PENDING_APPROVAL', 'SUPERSEDED', 'CANCELLED']) {
+      expect(canPromoteDealQuotationToDeal(salesOwner, quotation({ docStatus }))).toBe(false);
+    }
+  });
+
+  it('never a user without edit rights (wrong-way-round)', () => {
+    expect(canPromoteDealQuotationToDeal(otherSales, quotation({ docStatus: 'APPROVED' }))).toBe(false);
+    expect(canPromoteDealQuotationToDeal({ id: 8, role: 'ceo' }, quotation({ docStatus: 'APPROVED' }))).toBe(false);
+    expect(canPromoteDealQuotationToDeal({ id: 7, role: 'import' }, quotation({ docStatus: 'APPROVED' }))).toBe(false);
+    expect(canPromoteDealQuotationToDeal(null, quotation({ docStatus: 'APPROVED' }))).toBe(false);
   });
 });
 
@@ -175,15 +241,34 @@ describe('canApproveDealQuotation / canDecideDealQuotation', () => {
   it('sales can NEVER approve, including the deal\'s own owning rep', () => {
     expect(canApproveDealQuotation(salesOwner)).toBe(false);
   });
+
+  it('the canCreateQuotation grant does NOT make a qc user an approver', () => {
+    expect(canApproveDealQuotation(qcWithGrant)).toBe(false);
+    expect(canDecideDealQuotation(qcWithGrant, quotation({ docStatus: 'PENDING_APPROVAL' }))).toBe(false);
+  });
+
+  it('canDecideDealQuotation additionally requires PENDING_APPROVAL', () => {
+    expect(canDecideDealQuotation(ceo, quotation({ docStatus: 'PENDING_APPROVAL' }))).toBe(true);
+    expect(canDecideDealQuotation(ceo, quotation({ docStatus: 'DRAFT' }))).toBe(false);
+    expect(canDecideDealQuotation(ceo, quotation({ docStatus: 'APPROVED' }))).toBe(false);
+    expect(canDecideDealQuotation(salesOwner, quotation({ docStatus: 'PENDING_APPROVAL' }))).toBe(false);
+  });
 });
 
-describe('canViewDealQuotation / isDealQuotationReadOnlyViewer', () => {
+describe('canViewDealQuotation', () => {
   it('grants the plan\'s exact view role set', () => {
     expect(canViewDealQuotation(salesOwner)).toBe(true);
     expect(canViewDealQuotation(salesManager)).toBe(true);
     expect(canViewDealQuotation(ceo)).toBe(true);
     expect(canViewDealQuotation(importUser)).toBe(true);
     expect(canViewDealQuotation(accountUser)).toBe(true);
+  });
+
+  it('refuses hr/qc/warehouse and no user', () => {
+    expect(canViewDealQuotation(hrUser)).toBe(false);
+    expect(canViewDealQuotation(qcUser)).toBe(false);
+    expect(canViewDealQuotation(warehouseUser)).toBe(false);
+    expect(canViewDealQuotation(null)).toBe(false);
   });
 });
 
@@ -277,6 +362,14 @@ describe('sqmPerPieceFromSizeCm (ขนาด (ซม.) → ตร.ม./แผ�
     expect(sqmPerPieceFromSizeCm('60x120 ซม.')).toBe(0.72);
     expect(sqmPerPieceFromSizeCm('7.5x30')).toBe(0.0225);
     expect(sqmPerPieceFromSizeCm('30*60')).toBe(0.18);
+  });
+
+  it('longer than the 64-char length guard is rejected outright, even for an otherwise-genuine shape', () => {
+    // The padding is INTERNAL (between the first number and the separator), so no trimming step could shrink it
+    // away -- this pins the length guard itself, not just the regex fix.
+    const genuineButLong = '30' + ' '.repeat(60) + 'x60';
+    expect(genuineButLong.length).toBe(65);
+    expect(parseSizeText(genuineButLong)).toBeNull();
   });
 });
 
@@ -377,6 +470,13 @@ describe('v3/v3b document settings', () => {
     expect(meta.rowHasPriceForPreview({ unitPrice: null, specialPriceSqm: 64 }, 'SPECIAL_SQM', 'EN')).toBe(true);
     expect(meta.rowHasPriceForPreview({ lineType: 'PLAIN', unitPrice: null }, 'SPECIAL_SQM')).toBe(false);
     expect(meta.rowHasPriceForPreview({ lineType: 'PLAIN', unitPrice: 3500 }, 'NET')).toBe(true);
+  });
+
+  it('derives the currency and the VAT rate from the language alone', () => {
+    expect(meta.currencyForLanguage('TH')).toBe('THB');
+    expect(meta.currencyForLanguage('EN')).toBe('USD');
+    expect(meta.vatRateForLanguage('TH')).toBe(0.07);
+    expect(meta.vatRateForLanguage('EN')).toBe(0);
   });
 });
 

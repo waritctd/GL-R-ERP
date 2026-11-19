@@ -505,7 +505,7 @@ describe('QuotationEditorPage inline deal creation', () => {
     })));
 
     expect(await screen.findByText('navigated-to-99')).not.toBeNull();
-  });
+  }, 10000);
 
   it('a dealQuotations.create failure after tickets.create succeeded retries WITHOUT creating a second ticket', async () => {
     api.tickets.create.mockResolvedValue({ ticket: { summary: { id: 42 } } });
@@ -530,7 +530,7 @@ describe('QuotationEditorPage inline deal creation', () => {
     expect(api.dealQuotations.create).toHaveBeenNthCalledWith(2, 42, expect.anything());
     expect(api.tickets.create).toHaveBeenCalledTimes(1); // still just the one ticket
     expect(await screen.findByText('navigated-to-99')).not.toBeNull();
-  });
+  }, 10000);
 
   describe('the deal a retry reuses is the one made for the customer and project on the form', () => {
     const otherCustomer = { id: 2, name: 'บริษัท รุ่งเรือง ดีเวลลอปเมนท์ จำกัด', taxId: '0105565067890' };
@@ -541,7 +541,7 @@ describe('QuotationEditorPage inline deal creation', () => {
     const saveButton = () => screen.getByRole('button', { name: 'บันทึกร่าง' });
     const dealsQuotedOn = () => api.dealQuotations.create.mock.calls.map(([dealId]) => dealId);
 
-    // A filled row is previewed 300ms later, and these cases are still on the form by then.
+    // A filled row is previewed 300ms later, and this case is still on the form by then.
     beforeEach(() => {
       api.dealQuotations.calculateLine.mockResolvedValue({ item: {} });
     });

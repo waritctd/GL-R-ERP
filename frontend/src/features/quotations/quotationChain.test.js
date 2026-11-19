@@ -93,4 +93,15 @@ describe('quotationChainSteps — the four steps, the ONE current step, and who 
       expect(quotationChainSteps(q(), s).filter((step) => step.state === 'current').length).toBeLessThanOrEqual(1);
     }
   });
+
+  it('a quotation with no deposit percent set is a 30% quotation: step 3 is NOT skipped before the confirm', () => {
+    const steps = quotationChainSteps(q({ depositPercent: null }), chain());
+    expect(steps[2].state).not.toBe('skipped');
+    expect(steps[2].locked).toBe('ยืนยันคำสั่งซื้อก่อน');
+  });
+
+  it('a 0% quotation shows step 3 as ไม่รับมัดจำ, skipped, even before the order is confirmed', () => {
+    const steps = quotationChainSteps(q({ depositPercent: 0 }), chain());
+    expect(steps[2]).toMatchObject({ state: 'skipped', detail: 'ไม่รับมัดจำ' });
+  });
 });

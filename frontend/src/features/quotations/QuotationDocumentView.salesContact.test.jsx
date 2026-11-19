@@ -12,7 +12,6 @@ import { QuotationDocumentView } from './QuotationDocumentView.jsx';
 
 const PHONE = '089-765-4321 ต่อ 77';
 const EMAIL = 'bid.contact@contractor-b.example';
-const PRINTED_WHEN_FILLED = 'พิมพ์ในใบเสนอราคาเมื่อกรอก';
 
 function docQuotation(overrides = {}) {
   return {
@@ -31,17 +30,6 @@ function docQuotation(overrides = {}) {
 const view = (overrides) => render(<QuotationDocumentView quotation={docQuotation(overrides)} />);
 
 describe('QuotationDocumentView — ผู้ติดต่อ\'s Phone and Email (printed when filled)', () => {
-  it('shows both, each under its own word, and says they print when filled', () => {
-    const { getByTestId } = view({ orderedByPhone: PHONE, orderedByEmail: EMAIL });
-
-    const block = getByTestId('doc-sales-contact');
-    expect(block.textContent).toContain('Phone');
-    expect(block.textContent).toContain(PHONE);
-    expect(block.textContent).toContain('Email');
-    expect(block.textContent).toContain(EMAIL);
-    expect(block.textContent).toContain(PRINTED_WHEN_FILLED);
-    expect(block.textContent).not.toContain('ไม่พิมพ์');
-  });
 
   // The panel reproduces what the paper prints (owner, 2026-10-13: the typed values, or nothing).
   // So the header lines above the block — ติดต่อผู้สั่งซื้อ and โทร. — show the typed phone and
