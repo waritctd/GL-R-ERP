@@ -224,6 +224,17 @@ describe('ImportDealPage', () => {
       expect(await screen.findByRole('button', { name: 'บันทึกออกเดินทาง' })).not.toBeNull();
     });
 
+    it('CEO gets ออกเลข beside the same hint on this page, outside the collapsed details', async () => {
+      api.importDeals.get.mockResolvedValue({
+        deal: dealFixture({ importRequests: [irRow({ id: 14, status: 'DRAFT', importStep: null })] }),
+      });
+      renderPage({ role: 'ceo' });
+      const hint = await screen.findByTestId('ir-draft-hint-14');
+      const issue = screen.getByTestId('ir-issue-14');
+      expect(issue.closest('details')).toBeNull();
+      expect(hint.parentElement.contains(issue)).toBe(true);
+    });
+
     it.each(['quotation_issued', 'approved'])(
       'IR_ISSUED (status %s, no per-factory rows): shows ส่งคำขอนำเข้าแล้ว; clicking it calls tickets.markIrSent',
       async (status) => {

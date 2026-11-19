@@ -1081,8 +1081,7 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
       renderDetailPage({ user: importUser, request });
       await waitForLoaded(request);
 
-      // Import never reaches the CEO panel (canSeeRawPricingDecision(user) && !isImport(user)),
-      // like the "Import sees no CEO decision UI" coverage for the legacy panel.
+      // Import never reaches the CEO panel (canSeeRawPricingDecision(user) && !isImport(user)).
       expect(screen.queryByText('การพิจารณาราคาขายของ CEO')).toBeNull();
       expect(screen.queryByRole('group', { name: 'วิธีกรอกราคากระเบื้อง' })).toBeNull();
     });
@@ -1222,8 +1221,7 @@ describe('PricingRequestDetailPage Step 4: Customer Quotation', () => {
 // query: reverting DealQuotationService#findForPricingRequest to a DRAFT-only reader leaves them
 // green. That is covered by
 // DealQuotationOutcomeIntegrationTest#findForPricingRequest_returnsTheQuotationPastDraft (real
-// Postgres). These tests pin, per status, the same UI behaviour the legacy "Step 5" describe block
-// above pins for the old engine, now for the new one.
+// Postgres). These tests pin, per status, the outcome/expiry UI behaviour of the new engine.
 describe('PricingRequestDetailPage GLA-123 slice S3: new-engine (dealQuotationForPr) outcome + expiry', () => {
   function newEngineQuotation(overrides = {}) {
     return { id: 9101, number: 'QT-2026-0101-1', docStatus: 'ISSUED', ...overrides };
@@ -1856,5 +1854,40 @@ describe('CEO pricing workspace redesign — review fixes', () => {
       expect(profit).toContain('200.00');
       expect(profit).toContain('16.7%');
     });
+  });
+});
+
+// Spec 2026-11-15 §7.11 item 2: the currency and price unit Sales already set are shown as read-only chips, not re-asked.
+describe('PricingRequestDetailPage import workspace — terms Sales already set', () => {
+  it('shows the Sales-set currency and unit as chips, with no currency select and no unit switch', async () => {
+    renderDetailPage({ user: importUser, request: crRequest(), factoryQuotes: [contactedQuote()] });
+    await waitForLoaded();
+    await screen.findByText('SCG Ceramics');
+
+    const currencyChip = screen.getByTestId('pcr-sales-currency-91');
+    expect(currencyChip.textContent).toContain('EUR');
+    expect(currencyChip.textContent).toContain('ตามที่ฝ่ายขายระบุ');
+    expect(screen.queryByRole('combobox', { name: 'สกุลเงินที่โรงงานเสนอ' })).toBeNull();
+    expect(screen.getByTestId('pcr-factory-currency-91').textContent).toContain('ฝ่ายขายขอ: EUR');
+    const unitChip = screen.getByTestId('pcr-sales-unit-91-1');
+    expect(unitChip.textContent).toContain('/ ตร.ม.');
+    expect(unitChip.textContent).toContain('ตามที่ฝ่ายขายระบุ');
+    expect(screen.queryByRole('group', { name: /^หน่วยราคา รายการ/ })).toBeNull();
+  });
+
+  it('confirming with the chips sends the same payload as before: the line keeps Sales’ currency and unit', async () => {
+    const quote = contactedQuote();
+    renderDetailPage({ user: importUser, request: crRequest(), factoryQuotes: [quote] });
+    await waitForLoaded();
+    await screen.findByText('SCG Ceramics');
+
+    fireEvent.change(screen.getByLabelText(/^ราคาที่เสนอ/), { target: { value: '32.5' } });
+    fireEvent.click(screen.getByRole('button', { name: 'ยืนยันราคาเสนอ' }));
+    await waitFor(() => expect(api.pricingRequests.receiveFactoryQuote).toHaveBeenCalledWith(
+      quote.id,
+      expect.objectContaining({
+        items: [expect.objectContaining({ currency: 'EUR', unitBasis: 'PER_SQM', quotedUnit: 'ตร.ม.', rawUnitPrice: 32.5 })],
+      }),
+    ));
   });
 });

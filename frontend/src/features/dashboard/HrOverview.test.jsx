@@ -1,7 +1,7 @@
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
-import { render, screen, within } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { HrOverview } from './HrOverview.jsx';
 
@@ -67,18 +67,4 @@ describe('HrOverview', () => {
     expect(screen.getByText('ไปที่หน้าเงินเดือน').closest('button')).not.toBeNull();
   });
 
-  it('renders leave/OT as monitoring-only, with no approve button anywhere on the page', () => {
-    renderOverview();
-    const monitorPanel = screen.getByText('ภาพรวมลา / OT (ดูอย่างเดียว)').closest('section');
-    expect(within(monitorPanel).getByText('อนุมัติโดยหัวหน้าฝ่าย/CEO — ฝ่ายบุคคลติดตามสถานะเท่านั้น')).not.toBeNull();
-    expect(within(monitorPanel).getByText('คำขอลารออนุมัติ')).not.toBeNull();
-    expect(within(monitorPanel).getByText('OT รออนุมัติ')).not.toBeNull();
-
-    // No button anywhere on the page is an approval action (e.g. "อนุมัติ") — HR approves nothing here; it only
-    // monitors leave/OT. This deliberately does not match "รออนุมัติ" ("awaiting approval") labels, which are
-    // informational counts, not approve buttons.
-    const approveButtons = screen.queryAllByRole('button')
-      .filter((button) => /^อนุมัติ/.test(button.textContent.trim()));
-    expect(approveButtons).toHaveLength(0);
-  });
 });

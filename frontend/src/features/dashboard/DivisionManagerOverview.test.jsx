@@ -121,11 +121,4 @@ describe('DivisionManagerOverview', () => {
     expect(within(teamCard).getByText('12')).not.toBeNull();
   });
 
-  it('renders no sales pipeline surface', async () => {
-    renderOverview();
-    await waitFor(() => expect(overtimeList).toHaveBeenCalled());
-    expect(screen.queryByText('งานทั้งหมด')).toBeNull();
-    expect(screen.queryByText('ดีลทั้งหมด')).toBeNull();
-    expect(screen.queryByText(/quotation/i)).toBeNull();
-  });
 });

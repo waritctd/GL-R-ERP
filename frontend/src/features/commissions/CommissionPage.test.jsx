@@ -400,7 +400,6 @@ describe('CommissionPage — payroll-round approval page (sales_manager / ceo)',
   const r704 = saleRecord({ id: 704, sourceTicketId: 88, salesRepId: REP_B.id, salesRepName: REP_B.name, commissionableBase: 500000, actualReceived: 535000, weightMultiplier: 2, invoiceDetails: inv(704, 'INV-OK-0704', 535000) });
   const r705 = saleRecord({ id: 705, salesRepId: REP_A.id, salesRepName: REP_A.name, commissionableBase: 300000, actualReceived: 321000, invoiceDetails: inv(705, 'INV-OK-0705', 321000) });
   const r601 = submitted(601, 'INV-JUL-0601', REP_C, { payrollMonth: '2026-07-01', commissionableBase: 500000 }); // carried over from July
- // two rounds back
   const r901 = submitted(901, 'INV-SEP-0901', REP_A, { payrollMonth: '2026-09-01' }); // a LATER round: neither queue nor callout in August
   const BY_MONTH = { '2026-08': [r701, r702, r703, r704, r705], '2026-07': [r601], '2026-09': [r901] };
 
@@ -550,11 +549,56 @@ describe('CommissionPage — payroll-round approval page (sales_manager / ceo)',
     commissions: payrollMonth === '2026-08' ? [...BY_MONTH['2026-08'], manual801] : [],
   }));
 
+  it('the CEO sees a manual MANAGER_APPROVED entry in her queue (no weights), and approves it through the same confirm dialog', async () => {
+    stub([dto703]);
+    withManual();
+    api.commissions.approve.mockResolvedValue({});
+    renderAt(ceoUser);
+    const row = await screen.findByTestId('queue-row-801');
+
+    expect(await screen.findByRole('heading', { name: /^รอคุณอนุมัติ\s*2$/ })).not.toBeNull();
+    expect(row.textContent).toContain('สมชาย ใจดี');
+    expect(row.textContent).toContain('ปรับปรุง/รับช่วงงาน · หักค่าเสียหาย');
+    expect(row.textContent).toMatch(/2,500\.00/);
+    expect(row.querySelector('.text-danger')).not.toBeNull(); // negative amount is red
+
+    fireEvent.click(within(row).getByRole('button', { name: /^ดูรายละเอียด/ }));
+    const panel = await screen.findByTestId('detail-panel-801');
+    expect(within(panel).queryByRole('region', { name: 'สินค้าและน้ำหนัก' })).toBeNull();
+    expect(within(panel).getByRole('region', { name: 'สถานะและเอกสาร' })).not.toBeNull();
+
+    fireEvent.click(within(row).getByRole('button', { name: 'อนุมัติ' }));
+    fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'อนุมัติ' }));
+    await waitFor(() => expect(api.commissions.approve).toHaveBeenCalledWith(801));
+  });
+
   it('CANNOT REACH: the sales_manager does not get the manager-approved manual entry in her queue', async () => {
     stub(managerPending);
     withManual();
     renderAt(salesManagerUser);
     await screen.findByTestId('queue-row-701');
     expect(screen.queryByTestId('queue-row-801')).toBeNull();
+  });
+});
+
+// H1 lockdown: account reads a deal through the finance view only (api.tickets.get 403s for it).
+describe('CommissionPage — account create-from-deal: deal must be CLOSED_PAID', () => {
+  it('a finance-view deal that has not reached CLOSED_PAID is refused with the stage in the message', async () => {
+    api.finance.getDeal.mockResolvedValue({
+      deal: { id: 42, code: 'TCK-0042', customerName: 'บริษัท ทดสอบ จำกัด', salesStage: 'DELIVERY_SCHEDULING', money: { amountPayable: 3210000, amountPayableExVat: 3000000 } },
+    });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    render(
+      <MemoryRouter>
+        <QueryClientProvider client={queryClient}>
+          <CommissionPage user={{ id: 20, employeeId: 20, name: 'บัญชี ทดสอบ', role: 'account' }} showToast={vi.fn()} />
+        </QueryClientProvider>
+      </MemoryRouter>,
+    );
+    fireEvent.change(screen.getByLabelText(/เลขที่งาน \(ID\)/), { target: { value: '42' } });
+    fireEvent.click(screen.getByRole('button', { name: /โหลดข้อมูลงาน/ }));
+    const msg = (await screen.findByText(/ยังไม่ถึงขั้นตอนปิดงาน/)).textContent;
+    expect(msg).toContain('นัดส่งสินค้า / นัดรับเงินส่วนที่เหลือ');
+    expect(msg).not.toContain('[object Object]');
   });
 });

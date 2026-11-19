@@ -109,7 +109,6 @@ function renderMyWork(props = {}) {
   );
 }
 
-/** The phone screen's own text, without any dialog a test opened. */
 describe('MyWork on a phone — วันนี้ของฉัน', () => {
   beforeEach(() => {
     vi.clearAllMocks();

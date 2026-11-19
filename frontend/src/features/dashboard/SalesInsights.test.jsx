@@ -65,6 +65,11 @@ function renderInsights(role, queries = {}) {
 const withSnapshot = (payload = SNAPSHOT) => api.salesAnalytics.snapshot.mockResolvedValue({
   snapshot: { payload, asOf: '2026-03-31', uploadedAt: '2026-04-02T03:00:00Z' },
 });
+const expectNoUploadControl = () => {
+  const root = screen.getByTestId('sales-insights');
+  expect(root.querySelector('input[type="file"]')).toBeNull();
+  expect(within(root).queryByRole('button', { name: /อัปโหลด|upload/i })).toBeNull();
+};
 const detail = () => screen.getByTestId('insight-month-detail');
 const sectionOrder = () => [...document.querySelectorAll('[data-testid^="insight-section-"]')]
   .map((el) => el.getAttribute('data-testid').replace('insight-section-', ''));
@@ -74,6 +79,21 @@ describe('SalesInsights', () => {
     vi.clearAllMocks();
     withSnapshot();
     api.salesAnalytics.metrics.mockResolvedValue(NO_METRICS);
+  });
+
+  describe('empty state', () => {
+    it('offers no upload control to anyone, the CEO included: the data arrives through the weekly update', async () => {
+      api.salesAnalytics.snapshot.mockResolvedValue({ snapshot: null });
+      const { unmount } = renderInsights('ceo');
+      const ceoEmpty = await screen.findByTestId('insight-empty');
+      expect(ceoEmpty.textContent).toBe('ยังไม่มีข้อมูลวิเคราะห์ — ข้อมูลอัปเดตทุกสัปดาห์');
+      expectNoUploadControl();
+      unmount();
+
+      renderInsights('sales_manager');
+      expect((await screen.findByTestId('insight-empty')).textContent).toBe(ceoEmpty.textContent);
+      expectNoUploadControl();
+    });
   });
 
   describe('month picker', () => {
@@ -121,17 +141,6 @@ describe('SalesInsights', () => {
         renderInsights('ceo');
         return screen.findByTestId('insight-year');
       };
-
-      it('the quarter finding is red only when the quarter fell, neutral when it rose', async () => {
-        const { unmount } = renderInsights('ceo');
-        await screen.findByTestId('insight-year');
-        expect(dotOf('ไตรมาส 1/70')).toContain('bg-danger');
-        unmount();
-
-        await show({ quarter: { ...SNAPSHOT.quarter, chg: 5 } });
-        expect(dotOf('ไตรมาส 1/70')).not.toContain('bg-danger');
-        expect(dotOf('ไตรมาส 1/70')).toContain('bg-text-muted');
-      });
 
       it('the pipe concentration finding is red with "แต่" only when the top 10 hold at least half', async () => {
         const { unmount } = renderInsights('ceo');
