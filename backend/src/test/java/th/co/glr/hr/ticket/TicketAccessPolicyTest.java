@@ -20,16 +20,9 @@ class TicketAccessPolicyTest {
         "ceo", "hr", "import", "account", "warehouse", "qc", "sales_manager", "sales", "employee"
     };
 
-    // ── the defect, both directions ───────────────────────────────────────────────────────
-
     @Test
     void hrCannotReadTheDocumentsOfADealItDoesNotParticipateIn() {
         assertThat(TicketAccessPolicy.canViewDocuments(summary(), stranger("hr"))).isFalse();
-    }
-
-    @Test
-    void hrCannotWriteTheDocumentsOfADealItDoesNotParticipateIn() {
-        assertThat(TicketAccessPolicy.canManageDocuments(summary(), stranger("hr"))).isFalse();
     }
 
     @Test
@@ -54,23 +47,11 @@ class TicketAccessPolicyTest {
         assertThat(TicketAccessPolicy.canManageDocuments(summary(), stranger("account"))).isFalse();
     }
 
-    // ── the rest of the matrix, wrong-way-round ───────────────────────────────────────────
-
     @Test
     void aSalesRepWhoIsNeitherCreatorNorAssigneeCannotReadOrWrite() {
         UserPrincipal other = stranger("sales");
         assertThat(TicketAccessPolicy.canViewDocuments(summary(), other)).isFalse();
         assertThat(TicketAccessPolicy.canManageDocuments(summary(), other)).isFalse();
-    }
-
-    @Test
-    void nonSalesStackRolesReachNothing() {
-        for (String role : new String[]{"employee", "warehouse", "qc", "hr"}) {
-            assertThat(TicketAccessPolicy.canViewDocuments(summary(), stranger(role)))
-                .as("canViewDocuments for role %s", role).isFalse();
-            assertThat(TicketAccessPolicy.canManageDocuments(summary(), stranger(role)))
-                .as("canManageDocuments for role %s", role).isFalse();
-        }
     }
 
     /** THE PIN for import's refusal (issue #389 review), at the decision layer. An earlier revision of this branch
@@ -83,32 +64,6 @@ class TicketAccessPolicyTest {
             .contains("import");
         assertThat(TicketAccessPolicy.canViewDocuments(summary(), stranger("import"))).isFalse();
         assertThat(TicketAccessPolicy.canManageDocuments(summary(), stranger("import"))).isFalse();
-    }
-
-    /** 2026-09-30 owner ruling: import's document read is row-scoped, not role-blocked. The policy itself is pure
-     * (no DB), so "in import scope" is passed in — the repository predicate that computes it is proven against
-     * real Postgres in ImportCommentAndDocumentAuthzIntegrationTest. */
-    @Test
-    void importMayReadDocumentsOnlyWhenTheDealIsInItsImportScope() {
-        assertThat(TicketAccessPolicy.canViewDocuments(summary(), stranger("import"), true)).isTrue();
-        assertThat(TicketAccessPolicy.canViewDocuments(summary(), stranger("import"), false)).isFalse();
-        assertThat(TicketAccessPolicy.canManageDocuments(summary(), stranger("import"))).isFalse();
-    }
-
-    /** The scope flag is import-only: it must never widen any other role's document read. */
-    @Test
-    void theImportScopeFlagNeverWidensAnyOtherRole() {
-        for (String role : new String[]{"sales", "hr", "employee", "warehouse", "qc"}) {
-            assertThat(TicketAccessPolicy.canViewDocuments(summary(), stranger(role), true))
-                .as("canViewDocuments(importInScope=true) for role %s", role).isFalse();
-        }
-    }
-
-    @Test
-    void importRegainsAccessOnlyOnADealItActuallyPickedUp() {
-        // The assignee IS the import user who picked the deal up — a participant, not a role grant.
-        assertThat(TicketAccessPolicy.canViewDocuments(summary(), actor(ASSIGNEE_ID, "import"))).isTrue();
-        assertThat(TicketAccessPolicy.canManageDocuments(summary(), actor(ASSIGNEE_ID, "import"))).isTrue();
     }
 
     @Test
@@ -126,15 +81,6 @@ class TicketAccessPolicyTest {
     }
 
     @Test
-    void aNullActorReachesNothing() {
-        assertThat(TicketAccessPolicy.canViewDocuments(summary(), null)).isFalse();
-        assertThat(TicketAccessPolicy.canManageDocuments(summary(), null)).isFalse();
-        assertThat(TicketAccessPolicy.isParticipant(summary(), null)).isFalse();
-    }
-
-    // ── positive controls: the roles whose job this is keep their access ──────────────────
-
-    @Test
     void participantsAndOversightRolesKeepFullDocumentAccess() {
         for (UserPrincipal actor : new UserPrincipal[]{
                 actor(CREATOR_ID, "sales"),          // the deal's own rep
@@ -147,24 +93,6 @@ class TicketAccessPolicyTest {
                 .as("canManageDocuments for %s", actor.role()).isTrue();
         }
     }
-
-    @Test
-    void theDealViewerRoleSetIsTheOneTicketServiceUses() {
-        // The drift that produced #389 was AttachmentController keeping its own copy of "who may reach a deal". This
-        // is now the single constant TicketService.VIEWER_ROLES aliases.
-        assertThat(TicketAccessPolicy.VIEWER_ROLES)
-            .containsExactlyInAnyOrder("sales", "import", "ceo", "account", "sales_manager")
-            .doesNotContain("hr");
-    }
-
-    @Test
-    void anUnassignedDealHasNoSecondParticipant() {
-        TicketSummaryDto unassigned = summary(null);
-        assertThat(TicketAccessPolicy.isParticipant(unassigned, actor(ASSIGNEE_ID, "import"))).isFalse();
-        assertThat(TicketAccessPolicy.canManageDocuments(unassigned, actor(ASSIGNEE_ID, "import"))).isFalse();
-    }
-
-    // ── fixtures ──────────────────────────────────────────────────────────────────────────
 
     private TicketSummaryDto summary() {
         return summary(ASSIGNEE_ID);

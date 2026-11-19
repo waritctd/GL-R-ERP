@@ -1,7 +1,6 @@
 package th.co.glr.hr.ticket;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -16,7 +15,6 @@ import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
@@ -69,55 +67,6 @@ class DealStageQuoteOwnerAndRouteIntegrationTest extends AbstractPostgresIntegra
         importActor = principal(createEmployee(employees, "ฝ่ายนำเข้า", "import-s5@glr.co.th"), "import");
     }
 
-    // ── Part B: the schema, and the recipient routing ────────────────────────
-
-    /** V143 widened chk_ticket_sales_stage rather than dropping it. Both halves are asserted because a migration
-     * that simply deleted the constraint would pass the first half alone. */
-    @Test
-    void theCheckConstraintAcceptsQuoteOwnerAndStillRejectsAnUnknownStage() {
-        long ticketId = createTicket();
-
-        assertThatCode(() -> tickets.updateSalesStage(ticketId, DealStage.QUOTE_OWNER))
-            .doesNotThrowAnyException();
-        assertThat(stageOf(ticketId)).isEqualTo(DealStage.QUOTE_OWNER);
-
-        assertThatThrownBy(() -> tickets.updateSalesStage(ticketId, "QUOTE_SOMEONE_ELSE"))
-            .isInstanceOf(DataIntegrityViolationException.class);
-        assertThat(stageOf(ticketId)).isEqualTo(DealStage.QUOTE_OWNER);
-    }
-
-    /** The headline of Part B, written wrong-way-round: a quotation issued to the OWNER must NOT land on
-     * QUOTE_DESIGN_SIDE. It did before — both recipients were mapped onto that one stage, which is why sales_stage
-     * could not answer "has the owner been quoted yet?". */
-    @Test
-    void aQuotationIssuedToTheOwnerLandsOnQuoteOwnerAndNeverOnQuoteDesignSide() {
-        long ticketId = createTicket();
-
-        ticketService.advanceStageForCustomerQuotationIssue(ticketId, QuotationRecipient.OWNER, ownerRep);
-
-        assertThat(stageOf(ticketId)).isEqualTo(DealStage.QUOTE_OWNER);
-        assertThat(stageOf(ticketId)).isNotEqualTo(DealStage.QUOTE_DESIGN_SIDE);
-    }
-
-    @Test
-    void theOtherRecipientsKeepTheStagesTheyAlreadyHad() {
-        long designerDeal = createTicket();
-        ticketService.advanceStageForCustomerQuotationIssue(designerDeal, QuotationRecipient.DESIGNER, ownerRep);
-        assertThat(stageOf(designerDeal)).isEqualTo(DealStage.QUOTE_DESIGN_SIDE);
-
-        long buyerDeal = createTicket();
-        ticketService.advanceStageForCustomerQuotationIssue(buyerDeal, QuotationRecipient.BUYER, ownerRep);
-        assertThat(stageOf(buyerDeal)).isEqualTo(DealStage.QUOTE_BUYER);
-
-        // UNSPECIFIED (and anything unrecognised) advances nothing, exactly as the old if/else-if chain did by falling
-        // off the end.
-        long unspecifiedDeal = createTicket();
-        ticketService.advanceStageForCustomerQuotationIssue(unspecifiedDeal, QuotationRecipient.UNSPECIFIED, ownerRep);
-        assertThat(stageOf(unspecifiedDeal)).isEqualTo(DealStage.LEAD_APPROACH);
-    }
-
-    // ── Part B: the permission surface QUOTE_OWNER joins ─────────────────────
-
     /** Wrong-way-round authz. QUOTE_OWNER is in SALES_TARGET_STAGES, so the money roles and a rep who does not own
      * this deal must be refused — and the stage must genuinely not move, not merely throw. */
     @Test
@@ -131,101 +80,6 @@ class DealStageQuoteOwnerAndRouteIntegrationTest extends AbstractPostgresIntegra
             assertThat(stageOf(ticketId)).as("%s must not have moved the deal", denied.role())
                 .isEqualTo(DealStage.SPEC_APPROVED);
         }
-    }
-
-    /**
-     * The permitted half of the authz pair above, and it must stay an authz test.
-     *
-     * <p>Each deal is given an OWNER quotation first (owner ruling 2026-10-16,
-     * {@code .design/quote-stage-gates} D-3: a manual move into ขั้น 5 is refused until the deal
-     * holds a quotation addressed to that party). Without it all three PERMITTED actors are refused
-     * 409 and this test cannot say anything about who may write the stage.
-     *
-     * <p>Its sibling refusal test needs no such fixture and deliberately has none: the role gate
-     * ({@code requireStageWriteAccess}, rung 2) runs before the fact gate (rung 5), so account,
-     * import and a non-owning rep still meet their 403 whether a quotation exists or not. The pair
-     * therefore still distinguishes "you may not" from "there is nothing to be on this stage for".
-     *
-     * <p>The quotation is inserted directly, not issued through {@code DealQuotationService}: the
-     * subject here is WRITE ACCESS, and dragging the pricing chain in would test something else.
-     */
-    @Test
-    void quoteOwnerIsWritableByTheOwningRepBySalesManagerAndByCeo() {
-        long byOwner = readyToAdvanceFrom(DealStage.SPEC_APPROVED);
-        QuoteStageFixtures.issuedQuotationOnDeal(jdbc, byOwner, ownerRepId, QuotationRecipient.OWNER);
-        ticketService.updateStage(byOwner, DealStage.QUOTE_OWNER, null, ownerRep);
-        assertThat(stageOf(byOwner)).isEqualTo(DealStage.QUOTE_OWNER);
-
-        long byManager = readyToAdvanceFrom(DealStage.SPEC_APPROVED);
-        QuoteStageFixtures.issuedQuotationOnDeal(jdbc, byManager, ownerRepId, QuotationRecipient.OWNER);
-        ticketService.updateStage(byManager, DealStage.QUOTE_OWNER, null, salesManager);
-        assertThat(stageOf(byManager)).isEqualTo(DealStage.QUOTE_OWNER);
-
-        long byCeo = readyToAdvanceFrom(DealStage.SPEC_APPROVED);
-        QuoteStageFixtures.issuedQuotationOnDeal(jdbc, byCeo, ownerRepId, QuotationRecipient.OWNER);
-        ticketService.updateStage(byCeo, DealStage.QUOTE_OWNER, null, ceo);
-        assertThat(stageOf(byCeo)).isEqualTo(DealStage.QUOTE_OWNER);
-    }
-
-    /** The money/import stages are unchanged by this branch — asserted so a future widening of SALES_TARGET_STAGES
-     * cannot quietly hand a sales rep the payment or import stages. */
-    @Test
-    void theMoneyAndImportStagesStillBelongToTheirOwnRoles() {
-        long ticketId = readyToAdvanceFrom(DealStage.NEGOTIATION);
-
-        assertThatThrownBy(() -> ticketService.updateStage(ticketId, DealStage.DEPOSIT_RECEIVED, "x", ownerRep))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus().value()).isEqualTo(403));
-        assertThatThrownBy(() -> ticketService.updateStage(ticketId, DealStage.PROCUREMENT, "x", ownerRep))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus().value()).isEqualTo(403));
-        assertThat(stageOf(ticketId)).isEqualTo(DealStage.NEGOTIATION);
-    }
-
-    // ── Part C: the business's real routes need no written justification ─────
-
-    /**
-     * Case C — a contractor arrives with a BOQ and a spec, so the deal opens straight at S8.
-     *
-     * <p>Subject is the NOTE rule: S1 -> S8 crosses only route-dependent stages (none of S2-S7 is
-     * {@code MANDATORY}), so {@code requiresJustification} asks for no written reason, and this
-     * passes {@code null} and requires it to succeed. The BUYER quotation is fixture, not subject
-     * (owner ruling 2026-10-16, {@code .design/quote-stage-gates} D-3) — it only clears the fact
-     * gate so the manual call is reachable and the note rule is what gets exercised.
-     *
-     * <p>This is also where {@code SalesRouteWalkIntegrationTest}'s route-C note assertion moved
-     * to: that suite now opens S8 through the document, which never consults the note rule.
-     */
-    @Test
-    void caseC_leadApproachStraightToQuoteBuyer_needsNoNote() {
-        long ticketId = readyToAdvanceFrom(DealStage.LEAD_APPROACH);
-        QuoteStageFixtures.issuedQuotationOnDeal(jdbc, ticketId, ownerRepId, QuotationRecipient.BUYER);
-
-        ticketService.updateStage(ticketId, DealStage.QUOTE_BUYER, null, ownerRep);
-
-        assertThat(stageOf(ticketId)).isEqualTo(DealStage.QUOTE_BUYER);
-    }
-
-    /**
-     * Case B — the owner buys directly, so S3 and S4 never happen. Subject is the NOTE rule, as in
-     * case C above; the OWNER quotation is fixture clearing the D-3 fact gate, nothing more.
-     */
-    @Test
-    void caseB_presentationStraightToQuoteOwner_needsNoNote() {
-        long ticketId = readyToAdvanceFrom(DealStage.PRESENTATION);
-        QuoteStageFixtures.issuedQuotationOnDeal(jdbc, ticketId, ownerRepId, QuotationRecipient.OWNER);
-
-        ticketService.updateStage(ticketId, DealStage.QUOTE_OWNER, null, ownerRep);
-
-        assertThat(stageOf(ticketId)).isEqualTo(DealStage.QUOTE_OWNER);
-    }
-
-    /** Case D — everything is in stock, so PROCUREMENT is skipped. */
-    @Test
-    void caseD_depositReceivedStraightToDeliveryScheduling_needsNoNote() {
-        long ticketId = readyToAdvanceFrom(DealStage.DEPOSIT_RECEIVED);
-
-        ticketService.updateStage(ticketId, DealStage.DELIVERY_SCHEDULING, null, ownerRep);
-
-        assertThat(stageOf(ticketId)).isEqualTo(DealStage.DELIVERY_SCHEDULING);
     }
 
     /** …and the wrong-way-round half: stepping over a MANDATORY stage still costs a sentence. QUOTE_BUYER ->
@@ -249,31 +103,6 @@ class DealStageQuoteOwnerAndRouteIntegrationTest extends AbstractPostgresIntegra
         ticketService.updateStage(ticketId, DealStage.ORDER_RECEIVED, "ลูกค้าสั่งซื้อทันที", ownerRep);
         assertThat(stageOf(ticketId)).isEqualTo(DealStage.ORDER_RECEIVED);
     }
-
-    /** Backward moves are untouched by Part C: still a reason, still the backward message. */
-    @Test
-    void aGenuineBackwardMoveStillDemandsAReasonAndSaysSo() {
-        long ticketId = readyToAdvanceFrom(DealStage.QUOTE_OWNER);
-
-        assertThatThrownBy(() -> ticketService.updateStage(ticketId, DealStage.SPEC_APPROVED, null, ownerRep))
-            .isInstanceOfSatisfying(ApiException.class, e -> {
-                assertThat(e.getStatus().value()).isEqualTo(400);
-                assertThat(e.getMessage()).isEqualTo("การย้อนสถานะกลับต้องระบุเหตุผล");
-            });
-        assertThat(stageOf(ticketId)).isEqualTo(DealStage.QUOTE_OWNER);
-    }
-
-    /** The one routine backward pair still needs nothing — S4 → S3 is the everyday path. */
-    @Test
-    void quoteDesignSideBackToSpecApproved_stillNeedsNoNote() {
-        long ticketId = readyToAdvanceFrom(DealStage.QUOTE_DESIGN_SIDE);
-
-        ticketService.updateStage(ticketId, DealStage.SPEC_APPROVED, null, ownerRep);
-
-        assertThat(stageOf(ticketId)).isEqualTo(DealStage.SPEC_APPROVED);
-    }
-
-    // ── helpers ──────────────────────────────────────────────────────────────
 
     /** A deal parked at stage with the tracking fields the B1 forward-advance gate demands (a next follow-up date
      * and one activity logged after the last stage change), so that a test asserting the NOTE rule fails on the

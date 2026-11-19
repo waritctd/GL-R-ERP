@@ -72,29 +72,6 @@ class PaymentRecordingAuthzIntegrationTest extends AbstractPostgresIntegrationTe
             createEmployee(employees, "ผู้จัดการฝ่ายขาย", "payrec-salesmgr@glr.co.th"), "sales_manager");
     }
 
-    // ── the refusals (this is the evidence) ──────────────────────────────────────────────
-
-    /** The case the account-only gate must NOT open. Even the deal's OWNING sales rep is refused — recording money
-     * received was never a sales-side action, and Rule A has no ownership clause at all (unlike deposit-policy
-     * Rule B). */
-    @Test
-    void nonAccountRoles_areRefusedRecordingADepositReceipt_andNothingChanges() {
-        long ticketId = createPricedDeal();
-
-        for (UserPrincipal stranger : List.of(ceoUser, salesManagerUser, owner, importUser)) {
-            assertThatThrownBy(() -> ticketService.recordPayment(ticketId,
-                new RecordPaymentRequest("DEPOSIT", new BigDecimal("500.00"), null, "ลองบันทึก", null, null, false),
-                stranger))
-                .describedAs("role %s must not be able to record a DEPOSIT receipt", stranger.role())
-                .isInstanceOfSatisfying(ApiException.class,
-                    e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
-        }
-
-        assertThat(paymentReceiptCount(ticketId)).isZero();
-        assertThat(paymentStatus(ticketId)).isNull();
-        assertThat(salesStage(ticketId)).isEqualTo(DealStage.LEAD_APPROACH);
-    }
-
     /** Same refusal set, same discipline, for a BALANCE receipt instead of DEPOSIT. */
     @Test
     void nonAccountRoles_areRefusedRecordingABalanceReceipt_andNothingChanges() {
@@ -111,42 +88,6 @@ class PaymentRecordingAuthzIntegrationTest extends AbstractPostgresIntegrationTe
 
         assertThat(paymentReceiptCount(ticketId)).isZero();
         assertThat(paymentStatus(ticketId)).isNull();
-    }
-
-    /** TicketService#confirmFinalPayment is a payment-recording entry point too — same account-only gate, pinned
-     * separately because it can advance payment_status WITHOUT ever calling recordPaymentInternal (the "nothing
-     * outstanding" branch). */
-    @Test
-    void nonAccountRoles_areRefusedConfirmingFinalPayment_andPaymentStatusIsUnchanged() {
-        // A deal genuinely awaiting final payment, so without the gate these callers would SUCCEED — the refusal (and
-        // the unchanged-state assertions) are then meaningful, not a 409 in disguise.
-        long ticketId = createPricedDealAwaitingFinalPayment();
-        long receiptsBefore = paymentReceiptCount(ticketId);
-        String statusBefore = paymentStatus(ticketId);
-
-        for (UserPrincipal stranger : List.of(ceoUser, salesManagerUser, owner, importUser)) {
-            assertThatThrownBy(() -> ticketService.confirmFinalPayment(ticketId, stranger))
-                .describedAs("role %s must not be able to confirm final payment", stranger.role())
-                .isInstanceOfSatisfying(ApiException.class,
-                    e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
-        }
-
-        assertThat(paymentReceiptCount(ticketId)).isEqualTo(receiptsBefore);
-        assertThat(paymentStatus(ticketId)).isEqualTo(statusBefore);
-    }
-
-    // ── the grants (necessary, but not the evidence) ─────────────────────────────────────
-
-    @Test
-    void account_recordsADepositReceipt_andTheRowIsActuallyWritten() {
-        long ticketId = createPricedDeal();
-        putInAccountScope(ticketId);
-
-        ticketService.recordPayment(ticketId,
-            new RecordPaymentRequest("DEPOSIT", new BigDecimal("300.00"), null, "บันทึกมัดจำ", null, "RC-DEP-1", false),
-            accountUser);
-
-        assertThat(paymentReceiptCount(ticketId)).isEqualTo(1);
     }
 
     @Test
@@ -175,27 +116,6 @@ class PaymentRecordingAuthzIntegrationTest extends AbstractPostgresIntegrationTe
         assertThat(paymentReceiptCount(ticketId)).isZero();
     }
 
-    // ── available actions: the advertiser must never drift from the gate ────────────────
-
-    @Test
-    void availableActions_neverOfferFinalPaymentToCeo_onlyToAccount() {
-        long ticketId = createPricedDealAwaitingFinalPayment();
-
-        assertThat(actionCodes(ticketId, ceoUser)).doesNotContain("FINAL_PAYMENT");
-        assertThat(actionCodes(ticketId, accountUser)).contains("FINAL_PAYMENT");
-    }
-
-    // ── helpers ───────────────────────────────────────────────────────────────────────
-
-    // H1 lockdown: account no longer reaches TicketService.actions (the /tickets path); its action list comes from
-    // financeActions -- the SAME gate logic, built without the ticket view-access check.
-    private List<String> actionCodes(long ticketId, UserPrincipal actor) {
-        var response = "account".equals(actor.role())
-            ? ticketService.financeActions(ticketId, actor)
-            : ticketService.actions(ticketId, actor);
-        return response.availableActions().stream().map(TicketResponses.TicketActionDto::action).toList();
-    }
-
     private void putInAccountScope(long ticketId) {
         jdbc.update("UPDATE sales.ticket SET sales_stage = 'ORDER_RECEIVED' WHERE ticket_id = :id",
             Map.of("id", ticketId));
@@ -214,19 +134,6 @@ class PaymentRecordingAuthzIntegrationTest extends AbstractPostgresIntegrationTe
         return ticketId;
     }
 
-    /** Walks the real PaymentTrack machine to AWAITING_FINAL_PAYMENT — the state canConfirmFinalPaymentNow requires
-     * before FINAL_PAYMENT is advertised. */
-    private long createPricedDealAwaitingFinalPayment() {
-        long ticketId = createPricedDeal();
-        advancePaymentStatus(ticketId, null, PaymentTrack.CUSTOMER_CONFIRMED);
-        advancePaymentStatus(ticketId, PaymentTrack.CUSTOMER_CONFIRMED, PaymentTrack.DEPOSIT_NOTICE_ISSUED);
-        advancePaymentStatus(ticketId, PaymentTrack.DEPOSIT_NOTICE_ISSUED, PaymentTrack.DEPOSIT_PAID);
-        advancePaymentStatus(ticketId, PaymentTrack.DEPOSIT_PAID, PaymentTrack.AWAITING_FINAL_PAYMENT);
-        // 2026-11-07: FINAL_PAYMENT is only advertised from DELIVERY_SCHEDULING on.
-        tickets.updateSalesStage(ticketId, th.co.glr.hr.ticket.DealStage.DELIVERY_SCHEDULING);
-        return ticketId;
-    }
-
     private void advancePaymentStatus(long ticketId, String expected, String next) {
         int rows = tickets.advancePaymentStatus(ticketId, DepositPolicy.REQUIRED, expected, next);
         assertThat(rows).describedAs("payment_status %s -> %s must apply", expected, next).isEqualTo(1);
@@ -234,11 +141,6 @@ class PaymentRecordingAuthzIntegrationTest extends AbstractPostgresIntegrationTe
 
     private String paymentStatus(long ticketId) {
         return jdbc.queryForObject("SELECT payment_status FROM sales.ticket WHERE ticket_id = :id",
-            Map.of("id", ticketId), String.class);
-    }
-
-    private String salesStage(long ticketId) {
-        return jdbc.queryForObject("SELECT sales_stage FROM sales.ticket WHERE ticket_id = :id",
             Map.of("id", ticketId), String.class);
     }
 

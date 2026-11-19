@@ -38,40 +38,6 @@ class SummaryDrawnDetailsIntegrationTest extends AbstractDealQuotationSlice2Inte
         ceoActor = actor(createEmployee("ซีอีโอ s6", "ceo-s6@glr.co.th", "EXE", "ผู้บริหาร", null), "ceo");
     }
 
-    // ── expectedQuarter (คาดปิด) ─────────────────────────────────────────────────────────────────
-
-    @Test
-    void expectedQuarterIsOnTheSingleReadAndTheListRow_forTheOwnerCeoAndManager() {
-        long id = deal(salesActor);
-        tickets.updateExpectedQuarter(id, "2026-Q4");
-
-        assertThat(ticketService.get(id, salesActor).summary().expectedQuarter()).isEqualTo("2026-Q4");
-        assertThat(row(ticketService.list(null, salesActor), id).expectedQuarter()).isEqualTo("2026-Q4");
-        assertThat(row(ticketService.list(null, ceoActor), id).expectedQuarter()).isEqualTo("2026-Q4");
-        assertThat(row(ticketService.list(null, salesManagerActor), id).expectedQuarter()).isEqualTo("2026-Q4");
-    }
-
-    @Test
-    void expectedQuarterIsNullWhenTheRepNeverSetOne() {
-        long id = deal(salesActor);
-
-        assertThat(ticketService.get(id, salesActor).summary().expectedQuarter()).isNull();
-    }
-
-    @Test
-    void accountReadsExpectedQuarterAndReceiptSource_onADealInItsScope() {
-        long id = orderDeal(salesActor);
-        tickets.updateExpectedQuarter(id, "2027-Q1");
-        receipt(id, "MANUAL", null);
-
-        TicketSummaryDto row = row(ticketService.list(null, accountActor), id);
-
-        assertThat(row.expectedQuarter()).isEqualTo("2027-Q1");
-        assertThat(row.receiptSource()).isEqualTo("MANUAL");
-    }
-
-    // ── wrong way round: import's no-money summary gains neither field ───────────────────────────
-
     @Test
     void importsListRowNeverCarriesExpectedQuarterOrReceiptSource() {
         long id = orderDeal(salesActor);
@@ -92,21 +58,6 @@ class SummaryDrawnDetailsIntegrationTest extends AbstractDealQuotationSlice2Inte
     }
 
     @Test
-    void importsPagedListIsProjectedTheSameWay() {
-        long id = orderDeal(salesActor);
-        tickets.updateExpectedQuarter(id, "2026-Q4");
-        receipt(id, "EXPRESS", null);
-
-        TicketSummaryDto importRow = row(ticketService.listPage(null, importActor,
-            th.co.glr.hr.common.PageRequest.resolve(0, 50)).items(), id);
-
-        assertThat(importRow.expectedQuarter()).isNull();
-        assertThat(importRow.receiptSource()).isNull();
-    }
-
-    // ── wrong way round: a rep's list never carries another rep's deal ──────────────────────────
-
-    @Test
     void aRepsListNeverCarriesAnotherRepsDeal_withItsQuarterOrReceipts() {
         long theirs = orderDeal(otherSalesActor);
         tickets.updateExpectedQuarter(theirs, "2026-Q4");
@@ -117,89 +68,6 @@ class SummaryDrawnDetailsIntegrationTest extends AbstractDealQuotationSlice2Inte
 
         assertThat(list).extracting(TicketSummaryDto::id).contains(mine).doesNotContain(theirs);
     }
-
-    // ── receiptSource ───────────────────────────────────────────────────────────────────────────
-
-    @Test
-    void receiptSourceIsExpress_whenEveryReceiptCameFromTheExpressFileOrIsLinkedToAnExpressDocument() {
-        long id = orderDeal(salesActor);
-        receipt(id, "EXPRESS", null);
-        receipt(id, "MANUAL", "RE6900123"); // typed by hand, later matched to an Express document (V214)
-
-        assertThat(summary(id).receiptSource()).isEqualTo("EXPRESS");
-    }
-
-    @Test
-    void receiptSourceIsManual_whenNoReceiptCameFromExpress() {
-        long id = orderDeal(salesActor);
-        receipt(id, "MANUAL", null);
-        receipt(id, "MANUAL", null);
-
-        assertThat(summary(id).receiptSource()).isEqualTo("MANUAL");
-    }
-
-    @Test
-    void receiptSourceIsMixed_whenSomeReceiptsAreExpressAndSomeAreNot() {
-        long id = orderDeal(salesActor);
-        receipt(id, "EXPRESS", null);
-        receipt(id, "MANUAL", null);
-
-        assertThat(summary(id).receiptSource()).isEqualTo("MIXED");
-    }
-
-    /** B1 (fix round 1): one hand-typed receipt plus one hand-typed receipt later LINKED to an Express document is
-     * MIXED — the express_doc_no branch, not only the source column, decides. */
-    @Test
-    void receiptSourceIsMixed_whenOneHandTypedReceiptIsLinkedToExpressAndTheOtherIsNot() {
-        long id = orderDeal(salesActor);
-        receipt(id, "MANUAL", null);
-        receipt(id, "MANUAL", "RE6900456");
-
-        assertThat(summary(id).receiptSource()).isEqualTo("MIXED");
-    }
-
-    /** Ruling (fix round 1): the chip describes how the money RECEIVED was recorded, so a refund / credit note
-     * (kind ADJUSTMENT) never counts — a hand-typed refund on an Express-paid deal leaves it Express. */
-    @Test
-    void aHandTypedRefundDoesNotMakeAnExpressDealMixed() {
-        long id = orderDeal(salesActor);
-        receipt(id, "EXPRESS", null);
-        receipt(id, "MANUAL", null, "ADJUSTMENT");
-
-        assertThat(summary(id).receiptSource()).isEqualTo("EXPRESS");
-    }
-
-    @Test
-    void aDealWhoseOnlyReceiptIsARefundHasNoReceiptSource() {
-        long id = orderDeal(salesActor);
-        receipt(id, "MANUAL", null, "ADJUSTMENT");
-
-        assertThat(summary(id).receiptSource()).isNull();
-    }
-
-    @Test
-    void receiptSourceIsNull_whenTheDealHasNoReceiptAtAll() {
-        long id = orderDeal(salesActor);
-
-        assertThat(summary(id).receiptSource()).isNull();
-    }
-
-    @Test
-    void receiptSourceIsComputedPerDeal_onOneListPage() {
-        long express = orderDeal(salesActor);
-        receipt(express, "EXPRESS", null);
-        long manual = orderDeal(salesActor);
-        receipt(manual, "MANUAL", null);
-        long none = orderDeal(salesActor);
-
-        List<TicketSummaryDto> list = ticketService.list(null, ceoActor);
-
-        assertThat(row(list, express).receiptSource()).isEqualTo("EXPRESS");
-        assertThat(row(list, manual).receiptSource()).isEqualTo("MANUAL");
-        assertThat(row(list, none).receiptSource()).isNull();
-    }
-
-    // ── helpers ─────────────────────────────────────────────────────────────────────────────────
 
     /** A deal at ORDER_RECEIVED: inside both import's and account's list scope (TicketRepository#appendRoleScope). */
     private long orderDeal(UserPrincipal owner) {

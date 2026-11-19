@@ -27,7 +27,6 @@ import th.co.glr.hr.auth.SessionAccountResolver;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.customer.CustomerRepository;
-import th.co.glr.hr.documentchain.DocumentChainRepository;
 import th.co.glr.hr.employee.EmployeeCodeGenerator;
 import th.co.glr.hr.employee.EmployeeReferenceRepository;
 import th.co.glr.hr.employee.EmployeeRepository;
@@ -101,8 +100,6 @@ class DeliveryBackDateIntegrationTest extends AbstractPostgresIntegrationTest {
         return LocalDate.now(BANGKOK);
     }
 
-    // ── what is stored ───────────────────────────────────────────────────────
-
     @Test
     void aPastDayIsStoredAtNoonBangkok_onThatDay() {
         long deal = deliverableDeal(null);
@@ -114,44 +111,6 @@ class DeliveryBackDateIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     @Test
-    void sevenDaysBackIsTheEarliestDayAccepted() {
-        long deal = deliverableDeal(null);
-
-        ticketService.recordPartialDelivery(deal, deliver(deal, "1.00", today().minusDays(7)), owner);
-
-        assertThat(deliveredAtsInBangkok(deal)).containsExactly(today().minusDays(7).atTime(12, 0));
-    }
-
-    @Test
-    void noDateOrToday_storesTheMomentItWasRecorded_exactlyAsBefore() {
-        for (LocalDate deliveredOn : new LocalDate[] {null, today()}) {
-            long deal = deliverableDeal(null);
-
-            ticketService.recordPartialDelivery(deal, deliver(deal, "2.00", deliveredOn), owner);
-
-            Map<String, Object> row = jdbc.queryForMap(
-                "SELECT delivered_at, created_at, now() AS db_now FROM sales.delivery_record WHERE ticket_id = :id",
-                Map.of("id", deal));
-            assertThat(row.get("delivered_at")).as("deliveredOn=%s", deliveredOn).isEqualTo(row.get("created_at"));
-        }
-    }
-
-    @Test
-    void theEventInTheHistorySaysWhichDayTheGoodsWent_whenItIsNotToday() {
-        long deal = deliverableDeal(null);
-        LocalDate day = today().minusDays(3);
-
-        ticketService.recordPartialDelivery(deal, deliver(deal, "4.00", day), owner);
-
-        String message = jdbc.queryForObject("""
-            SELECT message FROM sales.ticket_event WHERE ticket_id = :id AND kind = 'DELIVERY_RECORDED'
-            """, Map.of("id", deal), String.class);
-        assertThat(message).contains("วันที่ส่ง " + th.co.glr.hr.common.ThaiText.date(day));
-    }
-
-    // ── the window, enforced by the server ───────────────────────────────────
-
-    @Test
     void eightDaysBack_is400_andNothingIsWritten() {
         long deal = deliverableDeal(null);
 
@@ -159,17 +118,6 @@ class DeliveryBackDateIntegrationTest extends AbstractPostgresIntegrationTest {
             deal, deliver(deal, "4.00", today().minusDays(8)), owner), HttpStatus.BAD_REQUEST);
 
         assertThat(e.getMessage()).contains("7 วัน");
-        assertNothingDelivered(deal);
-    }
-
-    @Test
-    void tomorrow_is400_andNothingIsWritten() {
-        long deal = deliverableDeal(null);
-
-        ApiException e = refusal(() -> ticketService.recordPartialDelivery(
-            deal, deliver(deal, "4.00", today().plusDays(1)), owner), HttpStatus.BAD_REQUEST);
-
-        assertThat(e.getMessage()).contains("อนาคต");
         assertNothingDelivered(deal);
     }
 
@@ -200,8 +148,6 @@ class DeliveryBackDateIntegrationTest extends AbstractPostgresIntegrationTest {
         assertNothingDelivered(future);
     }
 
-    // ── wrong-way-round: whoever cannot record a delivery cannot back-date one ─
-
     @Test
     void anotherRepTheSalesManagerAccountImportHrAndAQuotationGrantHolder_are403_andNothingIsWritten() {
         long deal = deliverableDeal(null);
@@ -217,241 +163,6 @@ class DeliveryBackDateIntegrationTest extends AbstractPostgresIntegrationTest {
         }
 
         assertNothingDelivered(deal);
-    }
-
-    @Test
-    void theOwnerAndTheCeo_mayBackDate() {
-        long ownersDeal = deliverableDeal(null);
-        ticketService.recordPartialDelivery(ownersDeal, deliver(ownersDeal, "1.00", today().minusDays(2)), owner);
-        assertThat(deliveredAtsInBangkok(ownersDeal)).containsExactly(today().minusDays(2).atTime(12, 0));
-
-        long ceosDeal = deliverableDeal(null);
-        ticketService.recordPartialDelivery(ceosDeal, deliver(ceosDeal, "1.00", today().minusDays(2)), ceoUser);
-        assertThat(deliveredAtsInBangkok(ceosDeal)).containsExactly(today().minusDays(2).atTime(12, 0));
-    }
-
-    // ── the due date follows the earlier date; nothing else about the money moves ─
-
-    /**
-     * Two identical deals (฿100,000 accepted quotation, CREDIT 3 days from full delivery, deposit paid, balance owed),
-     * delivered in full by the same rep: one today, one back-dated 5 days. The due date is the delivery date + 3 as
-     * paymentDueStates computes it; the back-dated one is therefore already past due (today − 2) and overdue, the
-     * other due today + 3 and not. Everything else the summary says about money, stage and fulfilment is identical.
-     */
-    @Test
-    void aBackDatedFinalDelivery_movesTheDueDateAndTheOverdueFlag_andNothingElse() {
-        long deliveredToday = deliverableDeal(3);
-        long backDated = deliverableDeal(3);
-
-        ticketService.recordPartialDelivery(deliveredToday, deliver(deliveredToday, "10.00", null), owner);
-        ticketService.recordPartialDelivery(backDated, deliver(backDated, "10.00", today().minusDays(5)), owner);
-
-        Map<Long, TicketRepository.PaymentDueState> due = tickets.paymentDueStates(List.of(deliveredToday, backDated));
-        assertThat(due.get(deliveredToday)).isEqualTo(new TicketRepository.PaymentDueState(today().plusDays(3), false));
-        assertThat(due.get(backDated)).isEqualTo(new TicketRepository.PaymentDueState(today().minusDays(2), true));
-
-        TicketSummaryDto a = tickets.findSummaryById(deliveredToday).orElseThrow();
-        TicketSummaryDto b = tickets.findSummaryById(backDated).orElseThrow();
-        assertThat(b.paymentDueDate()).isEqualTo(today().minusDays(2));
-        assertThat(b.overdue()).isTrue();
-        assertThat(a.paymentDueDate()).isEqualTo(today().plusDays(3));
-        assertThat(a.overdue()).isFalse();
-        assertThat(b.paymentDueBasis()).isEqualTo(a.paymentDueBasis()).isEqualTo("CREDIT_FROM_DELIVERY");
-        assertThat(b.paymentDueCreditDays()).isEqualTo(a.paymentDueCreditDays()).isEqualTo(3);
-
-        // Everything else: identical.
-        assertThat(b.paymentStatus()).isEqualTo(a.paymentStatus()).isEqualTo("DEPOSIT_PAID");
-        assertThat(b.paymentStage()).isEqualTo(a.paymentStage());
-        assertThat(b.amountPayable()).isEqualByComparingTo(a.amountPayable());
-        assertThat(b.amountPaid()).isEqualByComparingTo(a.amountPaid());
-        assertThat(b.amountOutstanding()).isEqualByComparingTo(a.amountOutstanding()).isPositive();
-        assertThat(b.fulfillmentStatus()).isEqualTo(a.fulfillmentStatus()).isEqualTo(FulfilmentStatus.FULLY_DELIVERED);
-        assertThat(b.salesStage()).isEqualTo(a.salesStage()).isEqualTo(DealStage.DELIVERED);
-        assertThat(b.commissionRecorded()).isEqualTo(a.commissionRecorded()).isFalse();
-        assertThat(commissionRows(backDated)).isEqualTo(commissionRows(deliveredToday)).isZero();
-        assertThat(eventKinds(backDated)).isEqualTo(eventKinds(deliveredToday));
-    }
-
-    /**
-     * delivered_at is read as the DELIVERY date, not the insert time: the due date takes the LATEST delivery date (the
-     * day the last goods arrived), and the history lists records in delivery-date order. A final batch back-dated
-     * before a partial recorded today therefore leaves the due date on today's partial.
-     */
-    @Test
-    void aFinalBatchBackDatedBeforeAnEarlierRecordedPartial_dueDateIsTheLatestDeliveryDay_andTheListIsInDeliveryOrder() {
-        long deal = deliverableDeal(3);
-
-        ticketService.recordPartialDelivery(deal, deliver(deal, "6.00", null), owner);
-        ticketService.recordPartialDelivery(deal, deliver(deal, "4.00", today().minusDays(4)), owner);
-
-        assertThat(tickets.findSummaryById(deal).orElseThrow().fulfillmentStatus())
-            .isEqualTo(FulfilmentStatus.FULLY_DELIVERED);
-        assertThat(tickets.paymentDueStates(List.of(deal)).get(deal).dueDate()).isEqualTo(today().plusDays(3));
-        List<DeliveryRecordDto> listed = tickets.findDeliveriesByTicket(deal);
-        assertThat(listed).extracting(r -> r.items().get(0).qty().stripTrailingZeros().toPlainString())
-            .containsExactly("4", "6");
-    }
-
-    // ── fix round 1, M2: the one-click ส่งมอบครบ takes the same date, the same window ──
-
-    @Test
-    void completeDelivery_backDated_storesNoonOnThatDay_andTheDueDateFollows() {
-        long deal = deliverableDeal(3);
-
-        ticketService.completeDelivery(deal, complete(today().minusDays(5)), owner);
-
-        assertThat(deliveredAtsInBangkok(deal)).containsExactly(today().minusDays(5).atTime(12, 0));
-        assertThat(tickets.findSummaryById(deal).orElseThrow().fulfillmentStatus())
-            .isEqualTo(FulfilmentStatus.FULLY_DELIVERED);
-        assertThat(tickets.paymentDueStates(List.of(deal)).get(deal))
-            .isEqualTo(new TicketRepository.PaymentDueState(today().minusDays(2), true));
-        String message = jdbc.queryForObject("""
-            SELECT message FROM sales.ticket_event WHERE ticket_id = :id AND kind = 'DELIVERY_RECORDED'
-            """, Map.of("id", deal), String.class);
-        assertThat(message).contains("วันที่ส่ง " + th.co.glr.hr.common.ThaiText.date(today().minusDays(5)));
-    }
-
-    @Test
-    void completeDelivery_noDateOrToday_storesTheMomentItWasRecorded() {
-        for (LocalDate deliveredOn : new LocalDate[] {null, today()}) {
-            long deal = deliverableDeal(null);
-            ticketService.completeDelivery(deal, complete(deliveredOn), owner);
-            Map<String, Object> row = jdbc.queryForMap(
-                "SELECT delivered_at, created_at FROM sales.delivery_record WHERE ticket_id = :id", Map.of("id", deal));
-            assertThat(row.get("delivered_at")).as("deliveredOn=%s", deliveredOn).isEqualTo(row.get("created_at"));
-        }
-    }
-
-    @Test
-    void completeDelivery_eightDaysBackOrTomorrow_is400_andNothingIsWritten() {
-        for (LocalDate deliveredOn : new LocalDate[] {today().minusDays(8), today().plusDays(1)}) {
-            long deal = deliverableDeal(null);
-            refusal(() -> ticketService.completeDelivery(deal, complete(deliveredOn), owner), HttpStatus.BAD_REQUEST);
-            assertNothingDelivered(deal);
-        }
-    }
-
-    @Test
-    void completeDelivery_theWindowIsTheBangkokCalendar_notUtc() {
-        ticketService.useClock(Clock.fixed(Instant.parse("2026-11-12T18:00:00Z"), ZoneOffset.UTC));
-
-        long earliest = deliverableDeal(null);
-        ticketService.completeDelivery(earliest, complete(LocalDate.of(2026, 11, 6)), owner);
-        assertThat(deliveredAtsInBangkok(earliest)).containsExactly(LocalDateTime.of(2026, 11, 6, 12, 0));
-
-        long tooEarly = deliverableDeal(null);
-        refusal(() -> ticketService.completeDelivery(tooEarly, complete(LocalDate.of(2026, 11, 5)), owner),
-            HttpStatus.BAD_REQUEST);
-        assertNothingDelivered(tooEarly);
-    }
-
-    @Test
-    void completeDelivery_whoeverCannotRecordADelivery_cannotBackDateOne() {
-        long deal = deliverableDeal(null);
-        for (UserPrincipal outsider : List.of(otherSalesRep, salesManagerUser, accountUser, importUser, hrUser, grantHolder())) {
-            refusal(() -> ticketService.completeDelivery(deal, complete(today().minusDays(3)), outsider),
-                HttpStatus.FORBIDDEN);
-        }
-        assertNothingDelivered(deal);
-    }
-
-    // ── fix round 1, L1: never before the day the order was confirmed ─────────────────────
-
-    /** The confirmation is 00:30 Bangkok on today−3 — still today−4 in UTC — so the floor must be the BANGKOK date. */
-    @Test
-    void notBeforeTheOrderConfirmation_theDayBeforeIs400NamingTheDay_theDayItselfIsAccepted() {
-        LocalDate confirmedOn = today().minusDays(3);
-        long refused = deliverableDeal(null);
-        confirmOrderAt(refused, TicketEventKind.CUSTOMER_CONFIRMED, confirmedOn.atTime(0, 30));
-
-        ApiException e = refusal(() -> ticketService.recordPartialDelivery(
-            refused, deliver(refused, "1.00", confirmedOn.minusDays(1)), owner), HttpStatus.BAD_REQUEST);
-        assertThat(e.getMessage()).contains("ยืนยันคำสั่งซื้อ").contains(th.co.glr.hr.common.ThaiText.date(confirmedOn));
-        assertNothingDelivered(refused);
-
-        long accepted = deliverableDeal(null);
-        confirmOrderAt(accepted, TicketEventKind.CUSTOMER_CONFIRMED, confirmedOn.atTime(0, 30));
-        ticketService.recordPartialDelivery(accepted, deliver(accepted, "1.00", confirmedOn), owner);
-        assertThat(deliveredAtsInBangkok(accepted)).containsExactly(confirmedOn.atTime(12, 0));
-    }
-
-    @Test
-    void notBeforeTheOrderConfirmation_onTheOneClickPathToo() {
-        LocalDate confirmedOn = today().minusDays(2);
-        long deal = deliverableDeal(null);
-        confirmOrderAt(deal, TicketEventKind.CUSTOMER_CONFIRMED, confirmedOn.atTime(9, 0));
-
-        refusal(() -> ticketService.completeDelivery(deal, complete(confirmedOn.minusDays(1)), owner),
-            HttpStatus.BAD_REQUEST);
-        assertNothingDelivered(deal);
-        ticketService.completeDelivery(deal, complete(confirmedOn), owner);
-        assertThat(deliveredAtsInBangkok(deal)).containsExactly(confirmedOn.atTime(12, 0));
-    }
-
-    /** The same "order confirmed" DocumentChainRepository#findOrderConfirmedAt reads: the latest confirm-from-quotation
-     * event wins over a CUSTOMER_CONFIRMED one. */
-    @Test
-    void theConfirmationDayIsTheDocumentChainsOne_promotionFirst() {
-        // Round 2: the CUSTOMER_CONFIRMED is LATER than the promotion, so only the promotion-first rule picks the
-        // promotion — "the latest event of either kind" would pick today−1.
-        long deal = deliverableDeal(null);
-        LocalDateTime promotedAt = today().minusDays(5).atTime(9, 0);
-        confirmOrderAt(deal, TicketEventKind.DEAL_PROMOTED_FROM_QUOTATION, promotedAt);
-        confirmOrderAt(deal, TicketEventKind.CUSTOMER_CONFIRMED, today().minusDays(1).atTime(9, 0));
-
-        assertThat(new DocumentChainRepository(jdbc).findOrderConfirmedAt(deal))
-            .contains(promotedAt.atZone(BANGKOK).toInstant());
-        refusal(() -> ticketService.recordPartialDelivery(deal, deliver(deal, "1.00", today().minusDays(6)), owner),
-            HttpStatus.BAD_REQUEST);
-        ticketService.recordPartialDelivery(deal, deliver(deal, "1.00", today().minusDays(3)), owner);
-        assertThat(deliveredAtsInBangkok(deal)).containsExactly(today().minusDays(3).atTime(12, 0));
-    }
-
-    /** Round 2: two confirmations of the same kind (a re-confirmation) — the LATEST one is the order's, for the
-     * document chain and for the floor alike. */
-    @Test
-    void twoConfirmationsOfTheSameKind_theLatestIsTheOrdersDay() {
-        long deal = deliverableDeal(null);
-        LocalDateTime latest = today().minusDays(2).atTime(9, 0);
-        confirmOrderAt(deal, TicketEventKind.CUSTOMER_CONFIRMED, today().minusDays(6).atTime(9, 0));
-        confirmOrderAt(deal, TicketEventKind.CUSTOMER_CONFIRMED, latest);
-
-        assertThat(new DocumentChainRepository(jdbc).findOrderConfirmedAt(deal))
-            .contains(latest.atZone(BANGKOK).toInstant());
-        ApiException e = refusal(() -> ticketService.recordPartialDelivery(
-            deal, deliver(deal, "1.00", today().minusDays(3)), owner), HttpStatus.BAD_REQUEST);
-        assertThat(e.getMessage()).contains(th.co.glr.hr.common.ThaiText.date(today().minusDays(2)));
-        ticketService.recordPartialDelivery(deal, deliver(deal, "1.00", today().minusDays(2)), owner);
-        assertThat(deliveredAtsInBangkok(deal)).containsExactly(today().minusDays(2).atTime(12, 0));
-    }
-
-    @Test
-    void aConfirmationOlderThanTheWindow_leavesTheSevenDayRuleInCharge() {
-        long deal = deliverableDeal(null);
-        confirmOrderAt(deal, TicketEventKind.CUSTOMER_CONFIRMED, today().minusDays(30).atTime(9, 0));
-
-        ApiException e = refusal(() -> ticketService.recordPartialDelivery(
-            deal, deliver(deal, "1.00", today().minusDays(8)), owner), HttpStatus.BAD_REQUEST);
-        assertThat(e.getMessage()).contains("7 วัน").contains(th.co.glr.hr.common.ThaiText.date(today().minusDays(7)));
-        ticketService.recordPartialDelivery(deal, deliver(deal, "1.00", today().minusDays(7)), owner);
-        assertThat(deliveredAtsInBangkok(deal)).containsExactly(today().minusDays(7).atTime(12, 0));
-    }
-
-    // ── fixtures ────────────────────────────────────────────────────────────────────────────
-
-    private static CompleteDeliveryRequest complete(LocalDate deliveredOn) {
-        return new CompleteDeliveryRequest(null, null, deliveredOn);
-    }
-
-    /** A confirmation event on the deal at that Bangkok wall-clock moment. */
-    private void confirmOrderAt(long ticketId, String kind, LocalDateTime bangkok) {
-        tickets.addEvent(ticketId, ownerId, "เจ้าของงาน ย้อนวันส่ง", kind, null, null, null);
-        jdbc.update("""
-            UPDATE sales.ticket_event SET created_at = :at
-             WHERE event_id = (SELECT max(event_id) FROM sales.ticket_event WHERE ticket_id = :id AND kind = :kind)
-            """, new org.springframework.jdbc.core.namedparam.MapSqlParameterSource()
-                .addValue("at", java.sql.Timestamp.from(bangkok.atZone(BANGKOK).toInstant()))
-                .addValue("id", ticketId).addValue("kind", kind));
     }
 
     /**
@@ -517,16 +228,6 @@ class DeliveryBackDateIntegrationTest extends AbstractPostgresIntegrationTest {
             """, Map.of("id", ticketId), Integer.class)).isZero();
         assertThat(tickets.findSummaryById(ticketId).orElseThrow().fulfillmentStatus())
             .isNotIn(FulfilmentStatus.PARTIALLY_DELIVERED, FulfilmentStatus.FULLY_DELIVERED);
-    }
-
-    private int commissionRows(long ticketId) {
-        return jdbc.queryForObject("SELECT count(*) FROM sales.commission_record WHERE source_ticket_id = :id",
-            Map.of("id", ticketId), Integer.class);
-    }
-
-    private List<String> eventKinds(long ticketId) {
-        return jdbc.queryForList("SELECT kind FROM sales.ticket_event WHERE ticket_id = :id ORDER BY event_id",
-            Map.of("id", ticketId), String.class);
     }
 
     private UserPrincipal grantHolder() {

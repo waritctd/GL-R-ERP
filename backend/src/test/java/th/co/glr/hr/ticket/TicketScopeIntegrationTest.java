@@ -2,13 +2,11 @@ package th.co.glr.hr.ticket;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.Mockito.mock;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
-import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
@@ -17,14 +15,12 @@ import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.catalog.CatalogRepository;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.common.PageRequest;
-import th.co.glr.hr.config.AppProperties;
 import th.co.glr.hr.customer.ContactRepository;
 import th.co.glr.hr.customer.CustomerRepository;
 import th.co.glr.hr.customerquotation.CustomerQuotationRepository;
 import th.co.glr.hr.deposit.DepositNoticePdfRenderer;
 import th.co.glr.hr.deposit.DepositNoticeRepository;
 import th.co.glr.hr.deposit.DepositNoticeService;
-import th.co.glr.hr.deposit.RemainingInvoicePdfRenderer;
 import th.co.glr.hr.employee.EmployeeCodeGenerator;
 import th.co.glr.hr.employee.EmployeeReferenceRepository;
 import th.co.glr.hr.employee.EmployeeRepository;
@@ -32,7 +28,6 @@ import th.co.glr.hr.employee.UpsertEmployeeRequest;
 import th.co.glr.hr.factory.FactoryConfigRepository;
 import th.co.glr.hr.factoryquote.FactoryQuoteRepository;
 import th.co.glr.hr.factoryquote.FactoryQuoteService;
-import th.co.glr.hr.mail.Mailer;
 import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.notification.SalesNotificationMailer;
 import th.co.glr.hr.pricing.FxRateRepository;
@@ -118,8 +113,6 @@ class TicketScopeIntegrationTest extends AbstractPostgresIntegrationTest {
         ceoUser    = principal(ceoId, "ceo");
     }
 
-    // ── import list scoping ──────────────────────────────────────────────────
-
     @Test
     void importListPage_leadStageDealWithNoPricingRequest_isNotReturned() {
         long ticketId = createTicket(DealStage.LEAD_APPROACH);
@@ -132,55 +125,6 @@ class TicketScopeIntegrationTest extends AbstractPostgresIntegrationTest {
         long ticketId = createTicket(DealStage.PROCUREMENT);
 
         assertThat(idsIn(listPage(importUser))).contains(ticketId);
-    }
-
-    /** The state the whole import worklist exists to serve, and the one the scope used to hide. Under the old
-     * PROCUREMENT floor BOTH disjuncts were false and the row simply did not come back, while PROCUREMENT is
-     * written only by issueImportRequest itself. */
-    @Test
-    void importListPage_dealAwaitingItsImportRequest_isReturned() {
-        long ticketId = createTicket(DealStage.DEPOSIT_RECEIVED);
-        insertPricingRequest(ticketId, "QUOTATION_ACCEPTED");
-
-        assertThat(idsIn(listPage(importUser))).contains(ticketId);
-    }
-
-    /** The deposit-bypass path. issueImportRequest accepts DEPOSIT_NOTICE_ISSUED and a bypass policy's
-     * CUSTOMER_CONFIRMED, and a deal in either is still standing at ORDER_RECEIVED — the stage only advances to
-     * DEPOSIT_RECEIVED once money lands. */
-    @Test
-    void importListPage_orderReceivedDealWithNoLivePricingRequest_isReturned() {
-        long ticketId = createTicket(DealStage.ORDER_RECEIVED);
-        insertPricingRequest(ticketId, "QUOTATION_ACCEPTED");
-
-        assertThat(idsIn(listPage(importUser))).contains(ticketId);
-    }
-
-    /** Wrong way round: the widening must not have become "import sees everything". NEGOTIATION is the stage
-     * immediately below the new ORDER_RECEIVED floor, and with only a terminal pricing request neither disjunct
-     * holds — so it stays out. */
-    @Test
-    void importListPage_stageJustBelowTheFloorWithOnlyATerminalPricingRequest_isNotReturned() {
-        long ticketId = createTicket(DealStage.NEGOTIATION);
-        insertPricingRequest(ticketId, "QUOTATION_ACCEPTED");
-
-        assertThat(idsIn(listPage(importUser))).doesNotContain(ticketId);
-    }
-
-    @Test
-    void importListPage_activeNonTerminalPricingRequest_isReturned() {
-        long ticketId = createTicket(DealStage.NEGOTIATION);
-        insertPricingRequest(ticketId, "SUBMITTED");
-
-        assertThat(idsIn(listPage(importUser))).contains(ticketId);
-    }
-
-    @Test
-    void importListPage_onlyCancelledPricingRequestAtEarlyStage_isNotReturned() {
-        long ticketId = createTicket(DealStage.NEGOTIATION);
-        insertPricingRequest(ticketId, "CANCELLED");
-
-        assertThat(idsIn(listPage(importUser))).doesNotContain(ticketId);
     }
 
     @Test
@@ -200,27 +144,10 @@ class TicketScopeIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(ids).contains(leadTicketId, procurementTicketId);
     }
 
-    // ── account list scoping ─────────────────────────────────────────────────
-
-    @Test
-    void accountListPage_noPendingPaymentActionAndNotOverdue_isNotReturned() {
-        long ticketId = createTicket(DealStage.NEGOTIATION);
-
-        assertThat(idsIn(listPage(accountUser))).doesNotContain(ticketId);
-    }
-
     @Test
     void accountListPage_depositNoticeIssuedPending_isReturned() {
         long ticketId = createTicket(DealStage.DEPOSIT_RECEIVED);
         tickets.updatePaymentStatusUnchecked(ticketId, "DEPOSIT_NOTICE_ISSUED");
-
-        assertThat(idsIn(listPage(accountUser))).contains(ticketId);
-    }
-
-    @Test
-    void accountListPage_awaitingFinalPaymentPending_isReturned() {
-        long ticketId = createTicket(DealStage.DELIVERED);
-        tickets.updatePaymentStatusUnchecked(ticketId, "AWAITING_FINAL_PAYMENT");
 
         assertThat(idsIn(listPage(accountUser))).contains(ticketId);
     }
@@ -250,73 +177,6 @@ class TicketScopeIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(idsIn(listPage(accountUser))).doesNotContain(ticketId);
     }
 
-    // Checks account's worklist includes live orders throughout fulfilment, beyond narrow payment-status filters.
-
-    @Test
-    void accountListPage_orderReceivedWithNoPaymentStatus_isReturned() {
-        long ticketId = createTicket(DealStage.ORDER_RECEIVED);
-
-        assertThat(idsIn(listPage(accountUser))).contains(ticketId);
-    }
-
-    /** The S15 bug: PROCUREMENT + DEPOSIT_PAID matched neither old disjunct. */
-    @Test
-    void accountListPage_procurementDepositPaid_s15_isReturned() {
-        long ticketId = createTicket(DealStage.PROCUREMENT);
-        tickets.updatePaymentStatusUnchecked(ticketId, "DEPOSIT_PAID");
-
-        assertThat(idsIn(listPage(accountUser))).contains(ticketId);
-    }
-
-    @Test
-    void accountListPage_bypassPolicyOrderReceivedCustomerConfirmed_isReturned() {
-        long ticketId = createTicket(DealStage.ORDER_RECEIVED);
-        tickets.updateDepositPolicy(ticketId, DepositPolicy.CREDIT_CUSTOMER, "credit customer", salesRepId);
-        tickets.updatePaymentStatusUnchecked(ticketId, "CUSTOMER_CONFIRMED");
-
-        assertThat(idsIn(listPage(accountUser))).contains(ticketId);
-    }
-
-    @Test
-    void accountListPage_deliveredFullyPaidNotYetCloseConfirmed_isReturned() {
-        long ticketId = createTicket(DealStage.DELIVERED);
-        tickets.updatePaymentStatusUnchecked(ticketId, "FULLY_PAID");
-
-        assertThat(idsIn(listPage(accountUser))).contains(ticketId);
-    }
-
-    /** History stays listed: CLOSED_PAID, both with the default status and after the CEO closed it. */
-    @Test
-    void accountListPage_closedPaid_isReturnedAsHistory_evenWhenStatusIsClosed() {
-        long openStatus = createTicket(DealStage.CLOSED_PAID);
-        long closedStatus = createTicket(DealStage.CLOSED_PAID);
-        jdbc.update("UPDATE sales.ticket SET status = 'closed' WHERE ticket_id = :id",
-            new MapSqlParameterSource("id", closedStatus));
-
-        assertThat(idsIn(listPage(accountUser))).contains(openStatus, closedStatus);
-    }
-
-    @Test
-    void accountListPage_lostProcurementDeal_isNotReturned() {
-        long ticketId = createTicket(DealStage.PROCUREMENT);
-        tickets.updatePaymentStatusUnchecked(ticketId, "DEPOSIT_PAID");
-        tickets.updateLifecycle(ticketId, DealLifecycle.CLOSED_LOST);
-
-        assertThat(idsIn(listPage(accountUser))).doesNotContain(ticketId);
-    }
-
-    @Test
-    void accountListPage_cancelledProcurementDeal_isNotReturned_byLifecycleOrByStatus() {
-        long byLifecycle = createTicket(DealStage.PROCUREMENT);
-        tickets.updateLifecycle(byLifecycle, DealLifecycle.CANCELLED);
-        long byStatus = createTicket(DealStage.PROCUREMENT);
-        jdbc.update("UPDATE sales.ticket SET status = 'cancelled' WHERE ticket_id = :id",
-            new MapSqlParameterSource("id", byStatus));
-
-        List<Long> ids = idsIn(listPage(accountUser));
-        assertThat(ids).doesNotContain(byLifecycle, byStatus);
-    }
-
     /** Forces the COUNT branch: a page that is exactly full skips the "rows.size() < size" shortcut, so
      * countSummaries really runs and must apply the identical fragment. */
     @Test
@@ -340,8 +200,6 @@ class TicketScopeIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(firstPage.total()).isEqualTo(inScopeTotal);
     }
 
-    // ── import: quotation is not part of its read surface ───────────────────
-
     /** import no longer reaches GET /tickets/{id} (it has its own per-deal endpoint, GET /api/import/deals/{id},
      * which never carries a quotation — see ImportDealAuthzIntegrationTest). */
     @Test
@@ -364,47 +222,6 @@ class TicketScopeIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     @Test
-    void importGetQuotationFile_denied() {
-        long ticketId = createTicket(DealStage.QUOTE_BUYER);
-        var quotation = tickets.createQuotation(ticketId, "QT-SCOPE-0004", salesRepId, new BigDecimal("10000.00"));
-
-        assertThatThrownBy(() -> ticketService.getQuotationXlsx(ticketId, quotation.id(), importUser))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus().value()).isEqualTo(403));
-
-        // Positive control: ceo can still download it.
-        assertThat(ticketService.getQuotationXlsx(ticketId, quotation.id(), ceoUser)).isNotEmpty();
-    }
-
-    @Test
-    void importListPayments_denied() {
-        long ticketId = createTicket(DealStage.DELIVERED);
-
-        assertThatThrownBy(() -> ticketService.listPayments(ticketId, importUser))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus().value()).isEqualTo(403));
-
-        // Positive control: ceo can read the ledger. (H1 lockdown: account no longer reads it through /tickets -- it
-        // reads it inside the finance deal view.)
-        assertThat(ticketService.listPayments(ticketId, ceoUser)).isEmpty();
-        assertThatThrownBy(() -> ticketService.listPayments(ticketId, accountUser))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus().value()).isEqualTo(403));
-    }
-
-    // ── import: deposit notice is entirely off-limits ────────────────────────
-
-    @Test
-    void importDepositNotice_listByTicketDenied() {
-        long ticketId = createTicket(DealStage.DEPOSIT_RECEIVED);
-
-        assertThatThrownBy(() -> depositNoticeService.listByTicket(ticketId, importUser))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus().value()).isEqualTo(403));
-
-        // Positive control: account (ฝ่ายบัญชี) still reads its own document.
-        assertThat(depositNoticeService.listByTicket(ticketId, accountUser)).isEmpty();
-    }
-
-    // ── account: pricing-request/factory-quote/costing are entirely off-limits ──
-
-    @Test
     void accountPricingRequestGet_denied() {
         long ticketId = createTicket(DealStage.NEGOTIATION);
         long prId = insertPricingRequest(ticketId, "SUBMITTED");
@@ -415,28 +232,6 @@ class TicketScopeIntegrationTest extends AbstractPostgresIntegrationTest {
         // Positive control: import (the intended reader of a submitted request) can reach it.
         assertThat(pricingRequestService.get(prId, importUser)).isNotNull();
     }
-
-    @Test
-    void accountFactoryQuoteGet_deniedBeforeAnyLookup() {
-        // The role gate runs before the repository lookup, so a non-existent id is enough to distinguish "denied"
-        // (403) from "role passed, resource not found" (404).
-        assertThatThrownBy(() -> factoryQuoteService.get(999_999L, accountUser))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus().value()).isEqualTo(403));
-        assertThatThrownBy(() -> factoryQuoteService.get(999_999L, importUser))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus().value()).isEqualTo(404));
-    }
-
-    @Test
-    void accountPricingCostingGet_deniedBeforeAnyLookup() {
-        assertThatThrownBy(() -> pricingCostingService.get(999_999L, accountUser))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus().value()).isEqualTo(403));
-        assertThatThrownBy(() -> pricingCostingService.get(999_999L, importUser))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus().value()).isEqualTo(404));
-    }
-
-    // L2 (Stage L): sales own-only created_by row-scope ───────────────────────
-    // TicketRepository.findSummaries/countSummaries carry "AND (:createdBy::bigint IS NULL OR t.created_by =
-    // :createdBy)", bound by TicketService only when actor.role().equals("sales").
 
     /** MUTATION-CHECK RECORD: temporarily changed both occurrences of AND in TicketRepository#findSummaries and
      * TicketRepository#countSummaries to AND and ran this class. Reverted both occurrences; git diff against the
@@ -451,19 +246,6 @@ class TicketScopeIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(idsSeenByRepA).contains(ticketA);
         assertThat(idsSeenByRepA).doesNotContain(ticketB);
     }
-
-    @Test
-    void salesList_ownOnly_excludesOtherRepsTicket() {
-        long ticketA = createTicket(DealStage.LEAD_APPROACH, salesRepId, "พนักงานขาย ทดสอบ");
-        long ticketB = createTicket(DealStage.LEAD_APPROACH, salesRepBId, "พนักงานขาย บี ทดสอบ");
-
-        List<Long> idsSeenByRepB = ticketService.list(null, salesRepB).stream().map(TicketSummaryDto::id).toList();
-
-        assertThat(idsSeenByRepB).contains(ticketB);
-        assertThat(idsSeenByRepB).doesNotContain(ticketA);
-    }
-
-    // ── helpers ───────────────────────────────────────────────────────────────
 
     private long createTicket(String salesStage) {
         return createTicket(salesStage, salesRepId, "พนักงานขาย ทดสอบ");

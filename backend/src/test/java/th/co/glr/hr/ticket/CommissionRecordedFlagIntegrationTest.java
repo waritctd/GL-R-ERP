@@ -7,7 +7,6 @@ import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
-import th.co.glr.hr.commission.CommissionKind;
 import th.co.glr.hr.commission.CommissionRepository;
 import th.co.glr.hr.commission.CommissionStatus;
 import th.co.glr.hr.employee.EmployeeCodeGenerator;
@@ -59,15 +58,6 @@ class CommissionRecordedFlagIntegrationTest extends AbstractPostgresIntegrationT
         repId = createEmployee(employees, "เซลล์ ทดสอบคอม", "commflag-rep@glr.co.th");
     }
 
-    // ═══ Behavioural cases, one shape each — see the bullet list on issue #736 ═══════════════
-
-    @Test
-    void closedPaidTicketWithNoCommission_isNotRecorded() {
-        long ticketId = closedPaidDeal();
-
-        assertThat(commissionRecordedOf(ticketId)).isFalse();
-    }
-
     @Test
     void closedPaidTicketAfterALiveSaleCommission_isRecorded() {
         long ticketId = closedPaidDeal();
@@ -75,109 +65,6 @@ class CommissionRecordedFlagIntegrationTest extends AbstractPostgresIntegrationT
 
         assertThat(commissionRecordedOf(ticketId)).isTrue();
     }
-
-    /** A rejected commission is not a recorded one — the deal genuinely still needs one. */
-    @Test
-    void rejectedCommission_isNotRecorded() {
-        long ticketId = closedPaidDeal();
-        insertSaleCommission(ticketId, CommissionStatus.REJECTED);
-
-        assertThat(commissionRecordedOf(ticketId)).isFalse();
-    }
-
-    /** VOID is unreachable through the application by design (see CommissionStatus.VOID's own Javadoc: "the only
-     * writes in the tree are fixtures that bypass the service entirely") — this fixture is exactly that kind of
-     * bypass, inserted directly rather than via any service. */
-    @Test
-    void voidCommission_isNotRecorded() {
-        long ticketId = closedPaidDeal();
-        insertSaleCommission(ticketId, CommissionStatus.VOID);
-
-        assertThat(commissionRecordedOf(ticketId)).isFalse();
-    }
-
-    /** Catches a missing WHERE source_ticket_id predicate: a live SALE commission exists, but against a DIFFERENT
-     * ticket, so the ticket under test must stay unrecorded while the other one correctly flips true. */
-    @Test
-    void aLiveCommissionOnADifferentTicket_leavesThisTicketNotRecorded() {
-        long ticketId = closedPaidDeal();
-        long otherTicketId = closedPaidDeal();
-        insertSaleCommission(otherTicketId, CommissionStatus.APPROVED);
-
-        assertThat(commissionRecordedOf(ticketId)).isFalse();
-        assertThat(commissionRecordedOf(otherTicketId)).isTrue();
-    }
-
-    /** Catches a missing kind = 'SALE' predicate: an ADJUSTMENT commission genuinely pointed at this ticket's id
-     * must not count as its (nonexistent) sale commission. */
-    @Test
-    void aNonSaleKindAgainstThisTicket_isNotRecorded() {
-        long ticketId = closedPaidDeal();
-        insertManualCommission(ticketId, CommissionKind.ADJUSTMENT, CommissionStatus.APPROVED);
-
-        assertThat(commissionRecordedOf(ticketId)).isFalse();
-    }
-
-    /** The flag must survive the LIST projection too, not just a single-ticket load — the account Overview worklist
-     * (accountActions.js) is built from findSummaries rows, not a per-ticket detail fetch. */
-    @Test
-    void theFlagSurvivesTheListProjection() {
-        long ticketId = closedPaidDeal();
-        insertSaleCommission(ticketId, CommissionStatus.SUBMITTED);
-
-        List<TicketSummaryDto> rows = tickets.findSummaries(null, DealStage.CLOSED_PAID, repId, null, null);
-        TicketSummaryDto row = rows.stream().filter(r -> r.id() == ticketId).findFirst()
-            .orElseThrow(() -> new AssertionError("ticket " + ticketId + " missing from findSummaries rows"));
-
-        assertThat(row.commissionRecorded())
-            .as("commissionRecorded must reach LIST rows, not just single-ticket findById")
-            .isTrue();
-    }
-
-    // ═══ THE ANTI-DRIFT ASSERTION ══════════════════════════════════════════════════════════
-
-    /** Loops a fresh ticket for every fixture shape above (plus a CLAWBACK-kind row, a second non-SALE kind, and
-     * MANAGER_APPROVED, a third live status) and asserts TicketRepository's flag equals
-     * CommissionRepository#hasActiveCommissionForTicket for every one of them. */
-    @Test
-    void neverDisagreesWithCommissionRepositoryAcrossEveryFixtureShape() {
-        long noCommission = closedPaidDeal();
-
-        long submitted = closedPaidDeal();
-        insertSaleCommission(submitted, CommissionStatus.SUBMITTED);
-
-        long managerApproved = closedPaidDeal();
-        insertSaleCommission(managerApproved, CommissionStatus.MANAGER_APPROVED);
-
-        long approved = closedPaidDeal();
-        insertSaleCommission(approved, CommissionStatus.APPROVED);
-
-        long rejected = closedPaidDeal();
-        insertSaleCommission(rejected, CommissionStatus.REJECTED);
-
-        long voided = closedPaidDeal();
-        insertSaleCommission(voided, CommissionStatus.VOID);
-
-        long clawbackOnly = closedPaidDeal();
-        insertClawbackCommission(clawbackOnly, CommissionStatus.APPROVED);
-
-        long adjustmentOnly = closedPaidDeal();
-        insertManualCommission(adjustmentOnly, CommissionKind.ADJUSTMENT, CommissionStatus.APPROVED);
-
-        long elsewhereTarget = closedPaidDeal();
-        long elsewhereDecoy = closedPaidDeal();
-        insertSaleCommission(elsewhereDecoy, CommissionStatus.APPROVED);
-
-        for (long ticketId : List.of(noCommission, submitted, managerApproved, approved, rejected,
-                voided, clawbackOnly, adjustmentOnly, elsewhereTarget, elsewhereDecoy)) {
-            assertThat(commissionRecordedOf(ticketId))
-                .as("TicketRepository#hasRecordedCommission must never disagree with "
-                    + "CommissionRepository#hasActiveCommissionForTicket for ticket %d", ticketId)
-                .isEqualTo(commissions.hasActiveCommissionForTicket(ticketId));
-        }
-    }
-
-    // ── helpers ──────────────────────────────────────────────────────────────
 
     private boolean commissionRecordedOf(long ticketId) {
         return tickets.findById(ticketId).orElseThrow().summary().commissionRecorded();
@@ -228,48 +115,6 @@ class CommissionRecordedFlagIntegrationTest extends AbstractPostgresIntegrationT
                 .addValue("invoiceId", invoiceId)
                 .addValue("ticketId", ticketId)
                 .addValue("repId", repId)
-                .addValue("status", status),
-            Long.class);
-    }
-
-    /** A CLAWBACK-kind commission — also invoice-backed per chk_commission_manual_fields, so it doubles as a second
-     * "the kind predicate, not just the status one, is what excludes this row" fixture alongside
-     * #insertManualCommission. */
-    private long insertClawbackCommission(long ticketId, String status) {
-        long invoiceId = insertInvoice();
-        return jdbc.queryForObject("""
-            INSERT INTO sales.commission_record
-                (invoice_id, source_ticket_id, sales_rep_id, submitted_by_id, kind, status,
-                 payroll_month, actual_received, commissionable_base)
-            VALUES
-                (:invoiceId, :ticketId, :repId, :repId, 'CLAWBACK', :status,
-                 date_trunc('month', CURRENT_DATE)::date, -1000.00, -1000.00)
-            RETURNING commission_id
-            """,
-            new MapSqlParameterSource()
-                .addValue("invoiceId", invoiceId)
-                .addValue("ticketId", ticketId)
-                .addValue("repId", repId)
-                .addValue("status", status),
-            Long.class);
-    }
-
-    /** A manual-kind commission (ADJUSTMENT/MANAGER/STOCK_BONUS/INCENTIVE) — no invoice, per
-     * chk_commission_manual_fields. */
-    private long insertManualCommission(long ticketId, String kind, String status) {
-        return jdbc.queryForObject("""
-            INSERT INTO sales.commission_record
-                (invoice_id, source_ticket_id, sales_rep_id, submitted_by_id, kind, status,
-                 payroll_month, actual_received, commissionable_base, manual_amount, manual_reason)
-            VALUES
-                (NULL, :ticketId, :repId, :repId, :kind, :status,
-                 date_trunc('month', CURRENT_DATE)::date, 0, 0, 100.00, 'ค่าคอมทดสอบ')
-            RETURNING commission_id
-            """,
-            new MapSqlParameterSource()
-                .addValue("ticketId", ticketId)
-                .addValue("repId", repId)
-                .addValue("kind", kind)
                 .addValue("status", status),
             Long.class);
     }

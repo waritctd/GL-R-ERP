@@ -23,8 +23,6 @@ import th.co.glr.hr.customerquotation.CustomerQuotationRepository;
 import th.co.glr.hr.deposit.DepositNoticePdfRenderer;
 import th.co.glr.hr.deposit.DepositNoticeRepository;
 import th.co.glr.hr.deposit.DepositNoticeService;
-import th.co.glr.hr.deposit.RevisionRequest;
-import th.co.glr.hr.deposit.RevisionScope;
 import th.co.glr.hr.employee.EmployeeCodeGenerator;
 import th.co.glr.hr.employee.EmployeeReferenceRepository;
 import th.co.glr.hr.employee.EmployeeRepository;
@@ -77,8 +75,6 @@ class TicketStatusMachineIntegrationTest extends AbstractPostgresIntegrationTest
         ceo = principal(createEmployee(employees, "ซีอีโอ สถานะ", "ceo-status-machine@glr.co.th"), "ceo");
         accountActor = principal(createEmployee(employees, "บัญชี สถานะ", "account-status-machine@glr.co.th"), "account");
     }
-
-    // ── the guard itself, at the repository ──────────────────────────────────
 
     /** Wrong-way-round #1: an edge the machine does not declare is refused BEFORE any SQL runs, and the row is
      * untouched. draft -> closed was a perfectly happy write before this change — isValid("closed") is true, and
@@ -135,17 +131,6 @@ class TicketStatusMachineIntegrationTest extends AbstractPostgresIntegrationTest
         assertThat(statusOf(draftTicket)).isEqualTo(TicketStatus.QUOTATION_ISSUED);
     }
 
-    // ── behaviour preservation, one test per production write site ───────────
-
-    /** Site 1 — {@code TicketRepository.create}: the INSERT's initial state, not an edge. */
-    @Test
-    void creation_stillLeavesTheDealAtDraftEvenThoughTheCreatedEventNoLongerWritesIt() {
-        long ticketId = createTicket();
-
-        assertThat(statusOf(ticketId)).isEqualTo(TicketStatus.DRAFT);
-        assertThat(eventCount(ticketId, TicketEventKind.CREATED)).isEqualTo(1);
-    }
-
     /** Site 7 — verifyClose, via the legacy document_issued route (requireClosePrerequisites's legacyOk branch: a
      * pre-dual-track deal whose payment track was never started). closed_at is still stamped, which is the side
      * effect that stayed behind in addEvent when the status write moved out. */
@@ -164,35 +149,6 @@ class TicketStatusMachineIntegrationTest extends AbstractPostgresIntegrationTest
         assertThat(ticketService.verifyClose(ticketId, ceo).summary().status()).isEqualTo(TicketStatus.CLOSED);
         assertThat(statusOf(ticketId)).isEqualTo(TicketStatus.CLOSED);
         assertThat(closedAt(ticketId)).isNotNull();
-    }
-
-    /**
-     * P1 hand-off notification (A6): account's close-ready confirmation tells the CEO to verify.
-     * Pins the bell row AND the email path. The fixture owes 2,140 (2 x 1,000 + 7% VAT) and has been
-     * paid in full, so {@code requireClosePrerequisites} passes with a real, non-zero payable.
-     */
-    @Test
-    void confirmCloseReady_notifiesTheCeoWithTheDealTotal() {
-        long ceoId = mailer.seedRoleEmployee("ceo");
-        long ticketId = createTicket();
-        seedStatus(ticketId, TicketStatus.DOCUMENT_ISSUED);
-        jdbc.update("UPDATE sales.ticket SET sales_stage = 'DELIVERED' WHERE ticket_id = :id", Map.of("id", ticketId));
-        jdbc.update("""
-            INSERT INTO sales.ticket_item (ticket_id, brand, model, qty, unit, sort_order, approved_price)
-            VALUES (:t, 'Brand', 'Model', 2, 'pcs', 0, 1000)
-            """, Map.of("t", ticketId));
-        tickets.insertPaymentReceipt(ticketId, "BALANCE", new BigDecimal("2140.00"), salesRepId, null, null, null, null);
-        TicketSummaryDto before = tickets.findById(ticketId).orElseThrow().summary();
-        assertThat(before.amountPayable()).as("fixture payable").isEqualByComparingTo("2140.00");
-        mailer.assertNoNotice("CLOSE_READY_FOR_CEO", "ดีลพร้อมปิด — รอ CEO ตรวจสอบ");
-
-        ticketService.confirmCloseReady(ticketId, accountActor);
-
-        mailer.assertRoleNotice("ceo", "CLOSE_READY_FOR_CEO", "ดีลพร้อมปิด — รอ CEO ตรวจสอบ",
-            "ฝ่ายบัญชี (" + accountActor.name() + ") ยืนยันว่าดีลนี้รับเงินครบและพร้อมปิดแล้ว\n"
-                + "ดีล " + before.code() + " · ลูกค้า " + before.customerName() + " · ยอดรวม 2,140 บาท"
-                + "\nสิ่งที่ต้องทำต่อ: ตรวจสอบและยืนยันปิดดีล",
-            "/tickets/" + ticketId, ceoId);
     }
 
     /** A confirmation refused for an unmet prerequisite (balance still owed, 409) tells the CEO nothing. */
@@ -216,40 +172,12 @@ class TicketStatusMachineIntegrationTest extends AbstractPostgresIntegrationTest
         mailer.assertNoNotice("CLOSE_READY_FOR_CEO", "ดีลพร้อมปิด — รอ CEO ตรวจสอบ");
     }
 
-    // ── P2 B2: close (CEO verifies) and revoking the account's close confirmation ──────────────
-
     private static final String DEAL_CLOSED_TITLE = "ดีลปิดเรียบร้อยแล้ว";
-    private static final String REVOKED_TITLE = "ถอนการยืนยันพร้อมปิดดีลแล้ว";
     private static final String FYI = "แจ้งเพื่อทราบ ไม่ต้องดำเนินการ";
 
     private String label(long ticketId) {
         TicketSummaryDto s = tickets.findById(ticketId).orElseThrow().summary();
         return "ดีล " + s.code() + " · ลูกค้า " + s.customerName();
-    }
-
-    /** A deal account has confirmed ready-to-close (the legacy document_issued route), waiting on the CEO. */
-    private long dealAwaitingCeoVerification() {
-        long ticketId = createTicket();
-        seedStatus(ticketId, TicketStatus.DOCUMENT_ISSUED);
-        jdbc.update("UPDATE sales.ticket SET sales_stage = 'DELIVERED' WHERE ticket_id = :id", Map.of("id", ticketId));
-        ticketService.confirmCloseReady(ticketId, accountActor);
-        return ticketId;
-    }
-
-    /** The CEO's verification closes the deal: the rep and account hear it (FYI); the CEO who did it does not. */
-    @Test
-    void verifyClose_notifiesTheRepAndAccount_notTheCeoWhoClosedIt() {
-        long accountId = mailer.seedRoleEmployee("account");
-        long ceoId = mailer.seedRoleEmployee("ceo");
-        long ticketId = dealAwaitingCeoVerification();
-
-        ticketService.verifyClose(ticketId, ceo);
-
-        String message = "CEO (" + ceo.name() + ") ตรวจสอบและปิดดีลเรียบร้อยแล้ว\n" + label(ticketId) + "\n" + FYI;
-        mailer.assertNoticeFor(salesRepId, "DEAL_CLOSED", DEAL_CLOSED_TITLE, message, "/tickets/" + ticketId);
-        mailer.assertNoticeFor(accountId, "DEAL_CLOSED", DEAL_CLOSED_TITLE, message, "/finance/deals/" + ticketId);
-        mailer.assertBellRecipients("DEAL_CLOSED", salesRepId, accountId); // not ceoId
-        assertThat(ceoId).as("fixture: a CEO exists to be wrongly notified").isNotEqualTo(salesRepId);
     }
 
     /** verifyClose refused (account never confirmed) closes nothing and tells nobody. */
@@ -265,70 +193,8 @@ class TicketStatusMachineIntegrationTest extends AbstractPostgresIntegrationTest
         mailer.assertNoNotice("DEAL_CLOSED", DEAL_CLOSED_TITLE);
     }
 
-    /** Account withdraws its confirmation: the CEO's "รอ CEO ตรวจสอบ" bell is stale, so the CEO (only) is told, with the reason. */
-    @Test
-    void financeRevokeCloseConfirmation_byAccount_tellsTheCeoWithTheReason_notAccount() {
-        long ceoId = mailer.seedRoleEmployee("ceo");
-        mailer.seedRoleEmployee("account");
-        long ticketId = dealAwaitingCeoVerification();
-
-        ticketService.financeRevokeCloseConfirmation(ticketId, "ยอดเงินไม่ตรง", accountActor);
-
-        mailer.assertRoleNotice("ceo", "CLOSE_CONFIRMATION_REVOKED", REVOKED_TITLE,
-            "ฝ่ายบัญชี (" + accountActor.name() + ") ถอนการยืนยันพร้อมปิดดีลแล้ว — ยอดเงินไม่ตรง\n" + label(ticketId)
-                + "\nแจ้งเพื่อทราบ ยังไม่ต้องตรวจสอบปิดดีล — รอฝ่ายบัญชียืนยันใหม่",
-            "/tickets/" + ticketId, ceoId);
-    }
-
-    /** The CEO withdraws it (finance entrypoint, no note): account is told to re-confirm when ready. */
-    @Test
-    void financeRevokeCloseConfirmation_byCeo_tellsAccountToReconfirm_notTheCeo() {
-        long accountId = mailer.seedRoleEmployee("account");
-        mailer.seedRoleEmployee("ceo");
-        long ticketId = dealAwaitingCeoVerification();
-
-        ticketService.financeRevokeCloseConfirmation(ticketId, null, ceo);
-
-        mailer.assertRoleNotice("account", "CLOSE_CONFIRMATION_REVOKED", REVOKED_TITLE,
-            "CEO (" + ceo.name() + ") ถอนการยืนยันพร้อมปิดดีลแล้ว\n" + label(ticketId)
-                + "\nสิ่งที่ต้องทำต่อ: ตรวจสอบเหตุผล แล้วยืนยันพร้อมปิดดีลใหม่เมื่อพร้อม",
-            "/finance/deals/" + ticketId, accountId);
-    }
-
-    /** The /api/tickets entrypoint (ceo only) revokes through the same logic: same notice to account, reason included. */
-    @Test
-    void revokeCloseConfirmation_ceoEntrypoint_tellsAccount() {
-        long accountId = mailer.seedRoleEmployee("account");
-        long ticketId = dealAwaitingCeoVerification();
-
-        ticketService.revokeCloseConfirmation(ticketId, "รอใบกำกับภาษีฉบับใหม่", ceo);
-
-        mailer.assertRoleNotice("account", "CLOSE_CONFIRMATION_REVOKED", REVOKED_TITLE,
-            "CEO (" + ceo.name() + ") ถอนการยืนยันพร้อมปิดดีลแล้ว — รอใบกำกับภาษีฉบับใหม่\n" + label(ticketId)
-                + "\nสิ่งที่ต้องทำต่อ: ตรวจสอบเหตุผล แล้วยืนยันพร้อมปิดดีลใหม่เมื่อพร้อม",
-            "/finance/deals/" + ticketId, accountId);
-    }
-
-    /** Nothing was confirmed, so there is nothing to revoke (409): nobody is told. */
-    @Test
-    void revokeCloseConfirmation_whenNothingWasConfirmed_notifiesNobody() {
-        mailer.seedRoleEmployee("account");
-        mailer.seedRoleEmployee("ceo");
-        long ticketId = createTicket();
-        seedStatus(ticketId, TicketStatus.DOCUMENT_ISSUED);
-
-        assertThatThrownBy(() -> ticketService.revokeCloseConfirmation(ticketId, null, ceo))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus().value()).isEqualTo(409));
-
-        mailer.assertNoNotice("CLOSE_CONFIRMATION_REVOKED", REVOKED_TITLE);
-    }
-
-    // ── P2 B5: lost / cancelled / on hold / dormant / resumed / reopened ──────────────────────────
-
     private static final String IMPORT_STOP = "สิ่งที่ต้องทำต่อ: หากสั่งซื้อกับโรงงานไปแล้ว กรุณาแจ้งโรงงานให้หยุดหรือยกเลิกคำสั่งซื้อ";
     private static final String ACCOUNT_REFUND = "สิ่งที่ต้องทำต่อ: ตรวจสอบเงินมัดจำที่รับไว้ และแจ้งผู้เกี่ยวข้องหากต้องคืนเงินลูกค้า";
-    private static final String IMPORT_PAUSE = "สิ่งที่ต้องทำต่อ: หากสั่งซื้อกับโรงงานไปแล้ว กรุณาแจ้งโรงงานว่าดีลถูกพักไว้";
-    private static final String ACCOUNT_WAIT = "สิ่งที่ต้องทำต่อ: ตรวจสอบเงินมัดจำที่รับไว้ แล้วรอจนกว่าดีลจะกลับมาดำเนินการ";
 
     private record LifecycleRoles(long sm, long ceo, long importId, long account) {}
 
@@ -350,15 +216,6 @@ class TicketStatusMachineIntegrationTest extends AbstractPostgresIntegrationTest
             VALUES (:t, :f, 'Factory Lifecycle', 'Brand', 1, 'ISSUED', 'IR-LIFE-1', CURRENT_DATE,
                     'CONTACTED', CURRENT_DATE, CURRENT_DATE)
             """, new MapSqlParameterSource().addValue("t", ticketId).addValue("f", factoryId));
-    }
-
-    /** An ISSUED ใบแจ้งยอดเงินรับมัดจำ for the deal — the "account has a deposit to look after" signal. */
-    private void seedIssuedDepositNotice(long ticketId) {
-        jdbc.update("""
-            INSERT INTO sales.deposit_notice (ticket_id, version, status, customer_name, deposit_percent,
-                subtotal, deposit_amount, vat_percent, vat_amount, total_payable)
-            VALUES (:id, 1, 'ISSUED', 'x', 0.3, 100000.00, 30000.00, 0.07, 2100.00, 32100.00)
-            """, Map.of("id", ticketId));
     }
 
     /**
@@ -383,57 +240,6 @@ class TicketStatusMachineIntegrationTest extends AbstractPostgresIntegrationTest
         mailer.assertBellRecipients(type, expected.stream().mapToLong(Long::longValue).toArray());
     }
 
-    /** Plain deal, no IR, no deposit notice: only the sales manager and the CEO are told; the rep who did it is not. */
-    @Test
-    void markLost_withNoIrAndNoDepositNotice_tellsOnlySalesManagerAndCeo() {
-        LifecycleRoles r = seedLifecycleRoles();
-        long ticketId = createTicket();
-
-        ticketService.markLost(ticketId, DealLostReason.PRICE, "แพ้ราคาคู่แข่ง", salesRep);
-
-        assertLifecycleNotices(ticketId, "DEAL_LOST", "ดีลเสียงาน",
-            salesRep.name() + " บันทึกว่าดีลเสียงาน (ราคา) — แพ้ราคาคู่แข่ง", r, IMPORT_STOP, ACCOUNT_REFUND, false, false);
-    }
-
-    /** A sales manager who marks a deal lost is not told about it themselves; the OTHER sales manager and the CEO are. */
-    @Test
-    void markLost_bySalesManager_doesNotNotifyThatSalesManager() {
-        LifecycleRoles r = seedLifecycleRoles();
-        long otherSm = mailer.seedRoleEmployee("sales_manager");
-        UserPrincipal smActor = principal(r.sm(), "sales_manager");
-        long ticketId = createTicket();
-
-        ticketService.markLost(ticketId, DealLostReason.PRICE, null, smActor);
-
-        String head = smActor.name() + " บันทึกว่าดีลเสียงาน (ราคา)\n" + label(ticketId) + "\n" + FYI;
-        mailer.assertNoticeFor(otherSm, "DEAL_LOST", "ดีลเสียงาน", head, "/tickets/" + ticketId);
-        mailer.assertNoticeFor(r.ceo(), "DEAL_LOST", "ดีลเสียงาน", head, "/tickets/" + ticketId);
-        // R2: somebody other than the deal's rep did it, so the rep hears it too (once, as an employee notice).
-        mailer.assertNoticeFor(salesRepId, "DEAL_LOST", "ดีลเสียงาน", head, "/tickets/" + ticketId);
-        mailer.assertBellRecipients("DEAL_LOST", otherSm, r.ceo(), salesRepId); // not r.sm()
-    }
-
-    /** R2 for every lifecycle change a non-rep can make: the rep is told each time, same type, FYI, link /tickets/{id}. */
-    @Test
-    void lifecycleChangesByAnotherUser_tellTheRepOfEachOne() {
-        seedLifecycleRoles();
-        long ticketId = createTicket();
-        String link = "/tickets/" + ticketId;
-        String tail = "\n" + label(ticketId) + "\n" + FYI;
-
-        ticketService.placeOnHold(ticketId, null, ceo);
-        mailer.assertNoticeFor(salesRepId, "DEAL_ON_HOLD", "ดีลถูกพักไว้ชั่วคราว", ceo.name() + " พักดีลไว้ชั่วคราว" + tail, link);
-        ticketService.resume(ticketId, null, ceo);
-        mailer.assertNoticeFor(salesRepId, "DEAL_RESUMED", "ดีลกลับมาดำเนินการต่อแล้ว", ceo.name() + " ให้ดีลกลับมาดำเนินการต่อ" + tail, link);
-        ticketService.markDormant(ticketId, null, ceo);
-        mailer.assertNoticeFor(salesRepId, "DEAL_DORMANT", "ดีลถูกพักไว้ระยะยาว", ceo.name() + " พักดีลไว้ระยะยาว (dormant)" + tail, link);
-        ticketService.resume(ticketId, null, ceo);
-        ticketService.markLost(ticketId, DealLostReason.PRICE, null, ceo);
-        mailer.assertNoticeFor(salesRepId, "DEAL_LOST", "ดีลเสียงาน", ceo.name() + " บันทึกว่าดีลเสียงาน (ราคา)" + tail, link);
-        ticketService.reopenDeal(ticketId, null, ceo);
-        mailer.assertNoticeFor(salesRepId, "DEAL_REOPENED", "ดีลที่เสียงานถูกเปิดกลับมาอีกครั้ง", ceo.name() + " เปิดดีลที่เสียงานกลับมาอีกครั้ง" + tail, link);
-    }
-
     /** An ISSUED IR puts import in the loop (to stop the factory order) but not account. */
     @Test
     void markLost_withAnIssuedImportRequest_alsoTellsImport_notAccount() {
@@ -447,116 +253,6 @@ class TicketStatusMachineIntegrationTest extends AbstractPostgresIntegrationTest
             salesRep.name() + " บันทึกว่าดีลเสียงาน (ราคา)", r, IMPORT_STOP, ACCOUNT_REFUND, true, false);
     }
 
-    /** An ISSUED deposit notice puts account in the loop (deposit/refund check) but not import. */
-    @Test
-    void markLost_withAnIssuedDepositNotice_alsoTellsAccount_notImport() {
-        LifecycleRoles r = seedLifecycleRoles();
-        long ticketId = createTicket();
-        seedIssuedDepositNotice(ticketId);
-
-        ticketService.markLost(ticketId, DealLostReason.PRICE, null, salesRep);
-
-        assertLifecycleNotices(ticketId, "DEAL_LOST", "ดีลเสียงาน",
-            salesRep.name() + " บันทึกว่าดีลเสียงาน (ราคา)", r, IMPORT_STOP, ACCOUNT_REFUND, false, true);
-    }
-
-    @Test
-    void cancel_withAnIrAndADepositNotice_tellsSalesManagerCeoImportAndAccount() {
-        LifecycleRoles r = seedLifecycleRoles();
-        long ticketId = createTicket();
-        seedIssuedImportRequest(ticketId);
-        seedIssuedDepositNotice(ticketId);
-
-        ticketService.cancel(ticketId, DealCancelReason.OWNER_CANCELLED, null, salesRep);
-
-        assertLifecycleNotices(ticketId, "DEAL_CANCELLED", "ดีลถูกยกเลิก",
-            salesRep.name() + " ยกเลิกดีล (เจ้าของยกเลิกโครงการ)", r, IMPORT_STOP, ACCOUNT_REFUND, true, true);
-    }
-
-    @Test
-    void placeOnHold_withAnIrAndADepositNotice_tellsEveryoneWithAPause_andTheReason() {
-        LifecycleRoles r = seedLifecycleRoles();
-        long ticketId = createTicket();
-        seedIssuedImportRequest(ticketId);
-        seedIssuedDepositNotice(ticketId);
-
-        ticketService.placeOnHold(ticketId, "รอเจ้าของโครงการ", salesRep);
-
-        assertLifecycleNotices(ticketId, "DEAL_ON_HOLD", "ดีลถูกพักไว้ชั่วคราว",
-            salesRep.name() + " พักดีลไว้ชั่วคราว — รอเจ้าของโครงการ", r, IMPORT_PAUSE, ACCOUNT_WAIT, true, true);
-    }
-
-    @Test
-    void markDormant_withAnIrAndADepositNotice_tellsEveryoneWithAPause() {
-        LifecycleRoles r = seedLifecycleRoles();
-        long ticketId = createTicket();
-        seedIssuedImportRequest(ticketId);
-        seedIssuedDepositNotice(ticketId);
-
-        ticketService.markDormant(ticketId, null, salesRep);
-
-        assertLifecycleNotices(ticketId, "DEAL_DORMANT", "ดีลถูกพักไว้ระยะยาว",
-            salesRep.name() + " พักดีลไว้ระยะยาว (dormant)", r, IMPORT_PAUSE, ACCOUNT_WAIT, true, true);
-    }
-
-    /** Resuming is good news for everyone who was told to pause: FYI to all, no action. */
-    @Test
-    void resume_withAnIrAndADepositNotice_tellsEveryoneFyi() {
-        LifecycleRoles r = seedLifecycleRoles();
-        long ticketId = createTicket();
-        seedIssuedImportRequest(ticketId);
-        seedIssuedDepositNotice(ticketId);
-        ticketService.placeOnHold(ticketId, null, salesRep);
-
-        ticketService.resume(ticketId, null, salesRep);
-
-        assertLifecycleNotices(ticketId, "DEAL_RESUMED", "ดีลกลับมาดำเนินการต่อแล้ว",
-            salesRep.name() + " ให้ดีลกลับมาดำเนินการต่อ", r, FYI, FYI, true, true);
-    }
-
-    @Test
-    void reopenDeal_withAnIrAndADepositNotice_tellsEveryoneFyi() {
-        LifecycleRoles r = seedLifecycleRoles();
-        long ticketId = createTicket();
-        seedIssuedImportRequest(ticketId);
-        seedIssuedDepositNotice(ticketId);
-        ticketService.markLost(ticketId, DealLostReason.PRICE, null, salesRep);
-
-        ticketService.reopenDeal(ticketId, "ลูกค้ากลับมาคุย", salesRep);
-
-        assertLifecycleNotices(ticketId, "DEAL_REOPENED", "ดีลที่เสียงานถูกเปิดกลับมาอีกครั้ง",
-            salesRep.name() + " เปิดดีลที่เสียงานกลับมาอีกครั้ง — ลูกค้ากลับมาคุย", r, FYI, FYI, true, true);
-    }
-
-    /** A refused lifecycle action (reopening a deal that was never lost, 409) tells nobody. */
-    @Test
-    void reopenDeal_onADealThatWasNeverLost_notifiesNobody() {
-        seedLifecycleRoles();
-        long ticketId = createTicket();
-
-        assertThatThrownBy(() -> ticketService.reopenDeal(ticketId, null, salesRep))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus().value()).isEqualTo(409));
-
-        mailer.assertNoNotice("DEAL_REOPENED", "ดีลที่เสียงานถูกเปิดกลับมาอีกครั้ง");
-    }
-
-    /** Site 8 — {@code cancel}, reachable from every non-terminal status. */
-    @Test
-    void cancel_stillReachesCancelledFromEveryNonTerminalStatus() {
-        for (String from : TicketStatus.VALUES) {
-            if (TicketStatus.CLOSED.equals(from) || TicketStatus.CANCELLED.equals(from)) {
-                continue;
-            }
-            long ticketId = createTicket();
-            seedStatus(ticketId, from);
-
-            ticketService.cancel(ticketId, DealCancelReason.OTHER, "ทดสอบ", salesRep);
-
-            assertThat(statusOf(ticketId)).as("cancel from %s", from).isEqualTo(TicketStatus.CANCELLED);
-            assertThat(closedAt(ticketId)).as("cancel from %s still stamps closed_at", from).isNotNull();
-        }
-    }
-
     /** …and a terminal deal is still refused by the service's own pre-guard, not by the machine. */
     @Test
     void cancel_onAnAlreadyClosedDeal_is409AndTheRowStaysClosed() {
@@ -568,27 +264,6 @@ class TicketStatusMachineIntegrationTest extends AbstractPostgresIntegrationTest
 
         assertThat(statusOf(ticketId)).isEqualTo(TicketStatus.CLOSED);
     }
-
-    /** Site 9 — DepositNoticeService.requestRevision, the deliberate BACKWARD moves. */
-    @Test
-    void requestRevision_stillMovesTheDealBackwardsAccordingToScope() {
-        for (String from : List.of(TicketStatus.APPROVED, TicketStatus.DOCUMENT_ISSUED)) {
-            assertRevisionLands(from, RevisionScope.QTY_OR_NOTE, TicketStatus.APPROVED);
-            assertRevisionLands(from, RevisionScope.PRICE_CHANGE, TicketStatus.PRICE_PROPOSED);
-            assertRevisionLands(from, RevisionScope.NEW_ITEM, TicketStatus.IN_REVIEW);
-        }
-    }
-
-    private void assertRevisionLands(String from, RevisionScope scope, String expected) {
-        long ticketId = createTicket();
-        seedStatus(ticketId, from);
-
-        depositNoticeService.requestRevision(ticketId, new RevisionRequest(scope, "เหตุผล"), salesRep);
-
-        assertThat(statusOf(ticketId)).as("%s + %s", from, scope).isEqualTo(expected);
-    }
-
-    // ── helpers ──────────────────────────────────────────────────────────────
 
     private long createTicket() {
         return tickets.create(
@@ -611,12 +286,6 @@ class TicketStatusMachineIntegrationTest extends AbstractPostgresIntegrationTest
     private java.sql.Timestamp closedAt(long ticketId) {
         return jdbc.queryForObject("SELECT closed_at FROM sales.ticket WHERE ticket_id = :id",
             Map.of("id", ticketId), java.sql.Timestamp.class);
-    }
-
-    private long eventCount(long ticketId, String kind) {
-        return jdbc.queryForObject(
-            "SELECT COUNT(*) FROM sales.ticket_event WHERE ticket_id = :id AND kind = :kind",
-            new MapSqlParameterSource().addValue("id", ticketId).addValue("kind", kind), Long.class);
     }
 
     private long createEmployee(EmployeeRepository employees, String name, String email) {

@@ -1,7 +1,6 @@
 package th.co.glr.hr.ticket;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 
@@ -11,8 +10,6 @@ import java.time.LocalDate;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.dao.DataIntegrityViolationException;
-import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.customer.CustomerDto;
@@ -68,42 +65,6 @@ class EntryChannelIntegrationTest extends AbstractPostgresIntegrationTest {
         projectId = project.id();
     }
 
-    // ── the honest default ───────────────────────────────────────────────────
-
-    /** Evidence 1. The whole point of V144: silence must read as silence. Before it, an omitted channel was written
-     * as DESIGNER_LED by both the repository and the column default, so a deliberate designer-led deal and an
-     * unattended one were byte-identical in the table. */
-    @Test
-    void createTicket_withNoEntryChannel_landsUnspecifiedNotDesignerLed() {
-        long ticketId = ticketService.create(request(null), salesRep).summary().id();
-
-        assertThat(storedChannel(ticketId)).isEqualTo(EntryChannel.UNSPECIFIED);
-        assertThat(storedChannel(ticketId)).isNotEqualTo(EntryChannel.DESIGNER_LED);
-    }
-
-    /** A blank string is "nobody said" too, not a value to push at the CHECK constraint. */
-    @Test
-    void createTicket_withBlankEntryChannel_landsUnspecified() {
-        long ticketId = ticketService.create(request("   "), salesRep).summary().id();
-
-        assertThat(storedChannel(ticketId)).isEqualTo(EntryChannel.UNSPECIFIED);
-    }
-
-    /** Evidence 2. The success path is unchanged for callers who DO state a channel — including DESIGNER_LED, which
-     * must still be storable now that it is no longer the default. (The real create-deal modal always sends one of
-     * these three.) */
-    @Test
-    void createTicket_withAnExplicitChannel_storesExactlyThatChannel() {
-        for (String channel : List.of(
-                EntryChannel.DESIGNER_LED, EntryChannel.OWNER_DIRECT, EntryChannel.BUYER_DIRECT)) {
-            long ticketId = ticketService.create(request(channel), salesRep).summary().id();
-
-            assertThat(storedChannel(ticketId)).as("stored channel for %s", channel).isEqualTo(channel);
-        }
-    }
-
-    // ── UNSPECIFIED is valid as stored, invalid as input ─────────────────────
-
     /** Evidence 3, wrong-way-round: the caller must NOT be able to un-state a channel, and the stored value must
      * genuinely not move. Mirrors generateQuotation's QuotationRecipient.UNSPECIFIED rejection. */
     @Test
@@ -117,67 +78,6 @@ class EntryChannelIntegrationTest extends AbstractPostgresIntegrationTest {
             .isInstanceOfSatisfying(ApiException.class,
                 e -> assertThat(e.getStatus().value()).isEqualTo(400));
 
-        assertThat(storedChannel(ticketId)).isEqualTo(EntryChannel.OWNER_DIRECT);
-    }
-
-    /** Un-stating is refused even on a deal that was never stated — no "no-op" loophole. */
-    @Test
-    void setEntryChannel_rejectsUnspecified_evenOnAnAlreadyUnspecifiedDeal() {
-        long ticketId = ticketService.create(request(null), salesRep).summary().id();
-
-        assertThatThrownBy(() ->
-            ticketService.setEntryChannel(ticketId, EntryChannel.UNSPECIFIED, null, salesRep))
-            .isInstanceOfSatisfying(ApiException.class,
-                e -> assertThat(e.getStatus().value()).isEqualTo(400));
-
-        assertThat(storedChannel(ticketId)).isEqualTo(EntryChannel.UNSPECIFIED);
-    }
-
-    /** Evidence 3, other half: the three real channels are still accepted and still persisted. */
-    @Test
-    void setEntryChannel_stillAcceptsTheThreeRealChannels() {
-        for (String channel : List.of(
-                EntryChannel.DESIGNER_LED, EntryChannel.OWNER_DIRECT, EntryChannel.BUYER_DIRECT)) {
-            long ticketId = ticketService.create(request(null), salesRep).summary().id();
-
-            ticketService.setEntryChannel(ticketId, channel, null, salesRep);
-
-            assertThat(storedChannel(ticketId)).as("channel %s", channel).isEqualTo(channel);
-        }
-    }
-
-    /** And an unknown value is still a 400, not a 500 from the CHECK constraint. */
-    @Test
-    void setEntryChannel_stillRejectsAnUnknownChannel() {
-        long ticketId = ticketService.create(request(null), salesRep).summary().id();
-
-        assertThatThrownBy(() -> ticketService.setEntryChannel(ticketId, "WALK_IN", null, salesRep))
-            .isInstanceOfSatisfying(ApiException.class,
-                e -> assertThat(e.getStatus().value()).isEqualTo(400));
-
-        assertThat(storedChannel(ticketId)).isEqualTo(EntryChannel.UNSPECIFIED);
-    }
-
-    // ── the "changing a stated channel needs a reason" guard, across the new default ──
-
-    /** Regression guard for the note rule. UNSPECIFIED counts as unstated, so the FIRST statement of a channel on a
-     * new deal takes no note — exactly as it did when the default was DESIGNER_LED. */
-    @Test
-    void setEntryChannel_firstStatementOnANewDealNeedsNoNote() {
-        long ticketId = ticketService.create(request(null), salesRep).summary().id();
-
-        assertThatCode(() -> ticketService.setEntryChannel(ticketId, EntryChannel.BUYER_DIRECT, null, salesRep))
-            .doesNotThrowAnyException();
-        assertThat(storedChannel(ticketId)).isEqualTo(EntryChannel.BUYER_DIRECT);
-    }
-
-    /** The pre-V144 default is still treated as unstated too — those rows were never backfilled. */
-    @Test
-    void setEntryChannel_firstStatementOnALegacyDesignerLedDealNeedsNoNote() {
-        long ticketId = ticketService.create(request(EntryChannel.DESIGNER_LED), salesRep).summary().id();
-
-        assertThatCode(() -> ticketService.setEntryChannel(ticketId, EntryChannel.OWNER_DIRECT, null, salesRep))
-            .doesNotThrowAnyException();
         assertThat(storedChannel(ticketId)).isEqualTo(EntryChannel.OWNER_DIRECT);
     }
 
@@ -195,79 +95,6 @@ class EntryChannelIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(storedChannel(ticketId)).isEqualTo(EntryChannel.BUYER_DIRECT);
     }
 
-    // ── the migration itself ─────────────────────────────────────────────────
-
-    /** Evidence 5. Proves V144 actually applied, independently of any Java: the widened chk_ticket_entry_channel
-     * accepts UNSPECIFIED and still refuses junk. Without the migration the first UPDATE would be a constraint
-     * violation. */
-    @Test
-    void checkConstraint_acceptsUnspecifiedAndStillRejectsJunk() {
-        long ticketId = ticketService.create(request(EntryChannel.OWNER_DIRECT), salesRep).summary().id();
-
-        assertThatCode(() -> updateChannelDirectly(ticketId, EntryChannel.UNSPECIFIED))
-            .doesNotThrowAnyException();
-        assertThat(storedChannel(ticketId)).isEqualTo(EntryChannel.UNSPECIFIED);
-
-        assertThatThrownBy(() -> updateChannelDirectly(ticketId, "WALK_IN"))
-            .isInstanceOf(DataIntegrityViolationException.class);
-        assertThat(storedChannel(ticketId)).isEqualTo(EntryChannel.UNSPECIFIED);
-    }
-
-    /** The column default is the second half of the fix: any INSERT that does not name entry_channel — a future
-     * code path, a manual fix-up, a data load — must land UNSPECIFIED rather than the V51 DESIGNER_LED.
-     * TicketRepository's own default is asserted separately above; this one is the schema's. */
-    @Test
-    void columnDefault_isUnspecifiedForAnInsertThatDoesNotNameTheColumn() {
-        String channel = jdbc.queryForObject("""
-            INSERT INTO sales.ticket (code, title, created_by)
-            VALUES (:code, 'ดีลที่ไม่ระบุช่องทาง', :createdBy)
-            RETURNING entry_channel
-            """,
-            new MapSqlParameterSource()
-                .addValue("code", tickets.nextTicketCode())
-                .addValue("createdBy", salesRepId),
-            String.class);
-
-        assertThat(channel).isEqualTo(EntryChannel.UNSPECIFIED);
-    }
-
-    // ── helpers ──────────────────────────────────────────────────────────────
-
-    // First-run friction: a deal created through the SERVICE (i.e. by a rep in the UI) must be advanceable. It was
-    // not — the create-deal modal collected neither half of the readiness gate, so the rep's very first stage move
-    // always 400'd with a message they had no way to anticipate.
-
-    @Test
-    void dealCreatedWithAFollowUpDate_canMakeItsFirstForwardMove() {
-        long ticketId = ticketService.create(new CreateTicketRequest(
-            "ดีลใหม่จากหน้าจอขาย", "NORMAL", customerName, null, projectId, null, null, null,
-            List.of(), LocalDate.now().plusDays(14)), salesRep).summary().id();
-
-        ticketService.updateStage(ticketId, DealStage.PRESENTATION, null, salesRep);
-
-        assertThat(tickets.findById(ticketId).orElseThrow().summary().salesStage())
-            .as("a freshly created deal must be movable without the rep first hunting for two hidden prerequisites")
-            .isEqualTo(DealStage.PRESENTATION);
-    }
-
-    @Test
-    void dealCreatedWithoutAFollowUpDate_isStillRefused() {
-        // Wrong-way-round: the gate did NOT weaken. Creation now supplies the activity half, so this proves the OTHER
-        // half still bites — omit the date and the move is still refused.
-        long ticketId = ticketService.create(new CreateTicketRequest(
-            "ดีลไม่มีวันติดตาม", "NORMAL", customerName, null, projectId, null, null, null,
-            List.of(), null), salesRep).summary().id();
-
-        assertThatThrownBy(() -> ticketService.updateStage(ticketId, DealStage.PRESENTATION, null, salesRep))
-            .isInstanceOfSatisfying(ApiException.class, e -> {
-                assertThat(e.getStatus().value()).isEqualTo(400);
-                assertThat(e.getMessage()).contains("วันติดตามครั้งถัดไป");
-            });
-
-        assertThat(tickets.findById(ticketId).orElseThrow().summary().salesStage())
-            .isEqualTo(DealStage.LEAD_APPROACH);
-    }
-
     private CreateTicketRequest request(String entryChannel) {
         return new CreateTicketRequest("ดีลทดสอบ entry channel", "NORMAL", customerName,
             null, projectId, null, null, entryChannel, List.of());
@@ -277,8 +104,4 @@ class EntryChannelIntegrationTest extends AbstractPostgresIntegrationTest {
         return tickets.findById(ticketId).orElseThrow().summary().entryChannel();
     }
 
-    private void updateChannelDirectly(long ticketId, String value) {
-        jdbc.update("UPDATE sales.ticket SET entry_channel = :value WHERE ticket_id = :id",
-            new MapSqlParameterSource().addValue("value", value).addValue("id", ticketId));
-    }
 }

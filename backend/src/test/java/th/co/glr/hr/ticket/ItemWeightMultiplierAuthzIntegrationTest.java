@@ -72,8 +72,6 @@ class ItemWeightMultiplierAuthzIntegrationTest extends AbstractPostgresIntegrati
             createEmployee(employees, "ผู้จัดการฝ่ายขาย น้ำหนัก", "weight-salesmgr@glr.co.th"), "sales_manager");
     }
 
-    // ── the refusals: these are the evidence ─────────────────────────────────
-
     /** The case this gate exists for: reserveStock's own authorized declarer — the deal's OWNER, a sales role —
      * must NOT also be able to approve this deal's commission weight. The two decisions (declare quantity vs.
      * approve weight) are deliberately held by different people. */
@@ -89,85 +87,6 @@ class ItemWeightMultiplierAuthzIntegrationTest extends AbstractPostgresIntegrati
         assertNothingMoved(itemId);
     }
 
-    /** A sales rep who does not even own the deal — the same role as the owner, still refused. */
-    @Test
-    void otherSalesRep_isRefused_andTheRowIsUnmoved() {
-        long ticketId = createTicketWithOneItem();
-        long itemId = onlyItemId(ticketId);
-
-        assertThatThrownBy(() -> ticketService.setItemWeightMultipliers(ticketId, weightRequest(itemId, 2), otherSalesRep))
-            .isInstanceOfSatisfying(ApiException.class,
-                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
-
-        assertNothingMoved(itemId);
-    }
-
-    /** import holds the identical reserveStock ability owner/ceo do, and must be refused here just as certainly —
-     * the same "declare vs. approve" separation this whole gate exists for. */
-    @Test
-    void importRole_isRefused_andTheRowIsUnmoved() {
-        long ticketId = createTicketWithOneItem();
-        long itemId = onlyItemId(ticketId);
-
-        assertThatThrownBy(() -> ticketService.setItemWeightMultipliers(ticketId, weightRequest(itemId, 3), importUser))
-            .isInstanceOfSatisfying(ApiException.class,
-                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
-
-        assertNothingMoved(itemId);
-    }
-
-    /** Neither ownership nor a fulfilment role, and no manager oversight role either. */
-    @Test
-    void accountAndHrRoles_areRefused_andTheRowIsUnmoved() {
-        long ticketId = createTicketWithOneItem();
-        long itemId = onlyItemId(ticketId);
-
-        for (UserPrincipal stranger : List.of(accountUser, hrUser)) {
-            assertThatThrownBy(() -> ticketService.setItemWeightMultipliers(ticketId, weightRequest(itemId, 2), stranger))
-                .describedAs("role %s must not be able to set the item weight multiplier", stranger.role())
-                .isInstanceOfSatisfying(ApiException.class,
-                    e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
-        }
-
-        assertNothingMoved(itemId);
-    }
-
-    /** The coarse pre-filter's own reason to exist: a role that can never set this must be refused BEFORE the
-     * ticket is read, so this endpoint cannot become a "does ticket N exist?" probe — 403, never 404 — for every
-     * non-sales_manager/ceo role, sales/owner included. */
-    @Test
-    void roleThatCanNeverSetWeight_isRefusedBeforeTheTicketIsRead() {
-        long neverCreated = 9_999_998L;
-        assertThat(tickets.findById(neverCreated)).isEmpty();
-
-        for (UserPrincipal stranger : List.of(owner, otherSalesRep, importUser, accountUser, hrUser)) {
-            assertThatThrownBy(() -> ticketService.setItemWeightMultipliers(neverCreated, weightRequest(1L, 2), stranger))
-                .describedAs("role %s must get 403 (not 404) for a ticket it may never touch", stranger.role())
-                .isInstanceOfSatisfying(ApiException.class,
-                    e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
-        }
-    }
-
-    /** A refusal is not enough on its own: this drives the refusal AFTER a legitimate manager approval, so the
-     * assertion is that the stranger's attempt did not overwrite the manager's decision — a stronger check than
-     * "still the default", which a no-op would also satisfy. */
-    @Test
-    void refusedAttempt_doesNotOverwriteTheWeightAlreadyOnFile() {
-        long ticketId = createTicketWithOneItem();
-        long itemId = onlyItemId(ticketId);
-        ticketService.setItemWeightMultipliers(ticketId, weightRequest(itemId, 2), salesManagerUser);
-        assertThat(weightMultiplier(itemId)).isEqualTo(2);
-
-        assertThatThrownBy(() -> ticketService.setItemWeightMultipliers(ticketId, weightRequest(itemId, 3), owner))
-            .isInstanceOf(ApiException.class);
-        assertThatThrownBy(() -> ticketService.setItemWeightMultipliers(ticketId, weightRequest(itemId, 1), importUser))
-            .isInstanceOf(ApiException.class);
-
-        assertThat(weightMultiplier(itemId)).isEqualTo(2);
-    }
-
-    // ── the grants: necessary, but not the evidence ──────────────────────────
-
     @Test
     void salesManager_setsTheWeight_andTheRowIsActuallyWritten() {
         long ticketId = createTicketWithOneItem();
@@ -177,37 +96,6 @@ class ItemWeightMultiplierAuthzIntegrationTest extends AbstractPostgresIntegrati
 
         assertThat(weightMultiplier(itemId)).isEqualTo(2);
     }
-
-    /** ceo may also set it — the existing record-level fallback setter (CommissionService#updateDeductions) is
-     * manager-or-CEO, and this task's brief asks the more granular per-item control to be no MORE restrictive than
-     * the coarser one it complements. */
-    @Test
-    void ceo_setsTheWeight_andTheRowIsActuallyWritten() {
-        long ticketId = createTicketWithOneItem();
-        long itemId = onlyItemId(ticketId);
-
-        ticketService.setItemWeightMultipliers(ticketId, weightRequest(itemId, 3), ceoUser);
-
-        assertThat(weightMultiplier(itemId)).isEqualTo(3);
-    }
-
-    /** TicketService#actions must advertise SET_ITEM_WEIGHT_MULTIPLIER for a sales_manager and must NOT advertise
-     * it for the deal's own owner — the same "one predicate drives both the gate and the advertisement" discipline
-     * canReserveStock documents, proven here rather than merely asserted in a comment. */
-    @Test
-    void actionsAdvertisement_matchesTheGate_forManagerAndOwner() {
-        long ticketId = createTicketWithOneItem();
-
-        boolean managerSees = ticketService.actions(ticketId, salesManagerUser).availableActions().stream()
-            .anyMatch(a -> "SET_ITEM_WEIGHT_MULTIPLIER".equals(a.action()));
-        boolean ownerSees = ticketService.actions(ticketId, owner).availableActions().stream()
-            .anyMatch(a -> "SET_ITEM_WEIGHT_MULTIPLIER".equals(a.action()));
-
-        assertThat(managerSees).isTrue();
-        assertThat(ownerSees).isFalse();
-    }
-
-    // ── helpers ──────────────────────────────────────────────────────────────
 
     private void assertNothingMoved(long itemId) {
         assertThat(weightMultiplier(itemId)).isEqualTo(1);

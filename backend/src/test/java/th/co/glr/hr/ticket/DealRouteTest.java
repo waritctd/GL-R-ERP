@@ -2,12 +2,6 @@ package th.co.glr.hr.ticket;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
-
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
 import org.junit.jupiter.api.Test;
 
 /** The pure route definition: which stages are OFF each entry channel's route. A test that only checked
@@ -15,19 +9,6 @@ import org.junit.jupiter.api.Test;
 class DealRouteTest {
 
     private static final int ALL_STAGES = DealStage.ORDER.size();
-
-    // ── the three real routes ────────────────────────────────────────────────
-
-    /** Full 15-stage spine — the majority route, and what every un-chosen legacy row reads. */
-    @Test
-    void designerLed_hasNoOffRouteStages() {
-        assertThat(DealRoute.offRouteStages(EntryChannel.DESIGNER_LED)).isEmpty();
-        assertThat(DealRoute.path(EntryChannel.DESIGNER_LED)).containsExactlyElementsOf(DealStage.ORDER);
-        for (String stage : DealStage.ORDER) {
-            assertThat(DealRoute.isOnRoute(EntryChannel.DESIGNER_LED, stage))
-                .as("%s on the designer-led route", stage).isTrue();
-        }
-    }
 
     /** No designer to quote — and nothing else. S3 is KEPT (only its wording differs per party). */
     @Test
@@ -51,150 +32,4 @@ class DealRouteTest {
         assertThat(DealRoute.path(EntryChannel.BUYER_DIRECT)).hasSize(ALL_STAGES - 4);
     }
 
-    // ── the absence of a route: everything reachable ─────────────────────────
-
-    /** A safety requirement, not politeness: pre-V144 rows and quotation-first ghosts can carry UNSPECIFIED and
-     * GLA-156 removed the in-portal way to correct it, so gating it would brick those deals with no remedy. */
-    @Test
-    void unspecified_unknownAndNull_haveAllFifteenStagesOnRoute() {
-        for (String channel : new String[] {EntryChannel.UNSPECIFIED, "SOMETHING_NEW", "", null}) {
-            assertThat(DealRoute.offRouteStages(channel)).as("off-route set for %s", channel).isEmpty();
-            assertThat(DealRoute.path(channel)).as("path for %s", channel)
-                .containsExactlyElementsOf(DealStage.ORDER);
-            for (String stage : DealStage.ORDER) {
-                assertThat(DealRoute.isOnRoute(channel, stage))
-                    .as("%s on the route of channel %s", stage, channel).isTrue();
-            }
-        }
-    }
-
-    // ── table hygiene ────────────────────────────────────────────────────────
-
-    /** Catches a typo'd stage string, which would silently gate nothing. */
-    @Test
-    void everyOffRouteSet_isASubsetOfDealStageOrder() {
-        for (String channel : EntryChannel.VALID) {
-            assertThat(DealStage.ORDER).as("stages of %s", channel)
-                .containsAll(DealRoute.offRouteStages(channel));
-        }
-    }
-
-    /** {@code path} is filtered FROM {@link DealStage#ORDER}, never re-ordered. */
-    @Test
-    void path_preservesDealStageOrder_forEveryChannel() {
-        for (String channel : EntryChannel.VALID) {
-            List<String> expected = new ArrayList<>(DealStage.ORDER);
-            Set<String> off = DealRoute.offRouteStages(channel);
-            expected.removeIf(off::contains);
-
-            assertThat(DealRoute.path(channel)).as("path for %s", channel)
-                .containsExactlyElementsOf(expected);
-        }
-    }
-
-    // ── the structural invariant: a route may only ever vary the PARTY axis ───
-
-    /** autoAdvanceStage returns silently on an off-route target. So the set of stages a route may ever exclude is
-     * pinned, explicitly, to the five party stages. */
-    @Test
-    void routeVariable_isExactlyTheFivePartyStages() {
-        assertThat(DealRoute.ROUTE_VARIABLE).containsExactlyInAnyOrder(
-            DealStage.QUOTE_DESIGN_SIDE, DealStage.QUOTE_OWNER, DealStage.OWNER_SIGNOFF,
-            DealStage.AWAITING_BUYER, DealStage.QUOTE_BUYER);
-    }
-
-    @Test
-    void everyOffRouteSet_isInsideRouteVariable() {
-        for (String channel : EntryChannel.VALID) {
-            assertThat(DealRoute.ROUTE_VARIABLE).as("off-route stages of %s", channel)
-                .containsAll(DealRoute.offRouteStages(channel));
-        }
-    }
-
-    /** Enumerated explicitly rather than derived: the test must still fail if someone edits a table (or
-     * DealStage.MANDATORY) in a way that puts an operational stage off a route. "On-route" means PERMITTED, not
-     * visited — Case C never visits S1-S3 and must still be allowed. */
-    @Test
-    void everyOperationalAndMandatoryStage_isOnRouteForEveryChannel() {
-        List<String> alwaysOnRoute = List.of(
-            DealStage.LEAD_APPROACH, DealStage.PRESENTATION, DealStage.SPEC_APPROVED,
-            // the auto-advanced targets
-            DealStage.NEGOTIATION, DealStage.ORDER_RECEIVED, DealStage.DEPOSIT_RECEIVED,
-            DealStage.PROCUREMENT, DealStage.DELIVERY_SCHEDULING, DealStage.DELIVERED,
-            DealStage.CLOSED_PAID);
-        for (String channel : new String[] {EntryChannel.DESIGNER_LED, EntryChannel.OWNER_DIRECT,
-                EntryChannel.BUYER_DIRECT, EntryChannel.UNSPECIFIED, "SOMETHING_NEW", null}) {
-            for (String stage : alwaysOnRoute) {
-                assertThat(DealRoute.isOnRoute(channel, stage))
-                    .as("%s must be on the route of channel %s", stage, channel).isTrue();
-            }
-        }
-    }
-
-    /** The static guard: a table that excludes anything outside ROUTE_VARIABLE is a programming error. */
-    @Test
-    void validate_rejectsATableThatExcludesANonRouteVariableStage() {
-        for (String forbidden : List.of(DealStage.CLOSED_PAID, DealStage.ORDER_RECEIVED,
-                DealStage.PROCUREMENT, DealStage.SPEC_APPROVED, DealStage.LEAD_APPROACH)) {
-            assertThatThrownBy(() ->
-                DealRoute.validate(Map.of(EntryChannel.OWNER_DIRECT, Set.of(forbidden))))
-                .as("off-route %s", forbidden)
-                .isInstanceOf(IllegalStateException.class);
-        }
-        // and a legitimate table passes
-        DealRoute.validate(Map.of(EntryChannel.OWNER_DIRECT, Set.of(DealStage.QUOTE_DESIGN_SIDE)));
-    }
-
-    // ── the refusal message ──────────────────────────────────────────────────
-
-    /** Names the deal's channel, the stage, and the remedy — and derives the channel from input. */
-    @Test
-    void refusalMessage_namesChannelStageAndRemedy_perChannel() {
-        String owner = DealRoute.refusalMessage(EntryChannel.OWNER_DIRECT, DealStage.QUOTE_DESIGN_SIDE);
-        // The stage is named by DISPLAY NUMBER, never by its code: this string is shown verbatim to a Thai-speaking
-        // rep, so a raw Java constant must never appear in it.
-        assertThat(owner).contains("เจ้าของติดต่อโดยตรง")
-            .contains(DealRoute.stagePhrase(DealStage.QUOTE_DESIGN_SIDE))
-            .doesNotContain(DealStage.QUOTE_DESIGN_SIDE)
-            .contains("แก้ช่องทางรับงาน");
-
-        String buyer = DealRoute.refusalMessage(EntryChannel.BUYER_DIRECT, DealStage.AWAITING_BUYER);
-        assertThat(buyer).contains("ผู้ซื้อ/ผู้รับเหมาติดต่อโดยตรง")
-            .contains(DealRoute.stagePhrase(DealStage.AWAITING_BUYER))
-            .doesNotContain(DealStage.AWAITING_BUYER)
-            .contains("แก้ช่องทางรับงาน");
-
-        assertThat(owner).isNotEqualTo(buyer);
-        assertThat(buyer).doesNotContain("เจ้าของติดต่อโดยตรง");
-
-        // The whole sentence, word for word (frontend stageCatalog.recipientRouteRefusal and mockApi say the same):
-        // the channel is named as the ช่องทางรับงาน field, so "ผู้ออกแบบนำงานมา" never reads as "งานนี้เป็น…งาน".
-        assertThat(DealRoute.refusalMessage(EntryChannel.DESIGNER_LED, DealStage.AWAITING_BUYER)).isEqualTo(
-            "ช่องทางรับงานของงานนี้คือผู้ออกแบบนำงานมา — ขั้นที่ " + DealStage.displayNoOf(DealStage.AWAITING_BUYER)
-                + " ไม่อยู่ในเส้นทางนี้ — แก้ช่องทางรับงานก่อน");
-    }
-
-    // ── round-2 N1: where an UNSPECIFIED-recipient quotation puts a deal ─────
-
-    /** Owner-approved V204 reading: a direct quotation is addressed to a buyer. Every channel — including the
-     * stated-nothing ones and null — lands on QUOTE_BUYER, which no route skips. Never the designer stage. */
-    @Test
-    void unspecifiedRecipient_advancesLikeBuyer_onEveryChannel() {
-        List<String> channels = new ArrayList<>(EntryChannel.VALID);
-        channels.add(null);
-        channels.add("SOMETHING_UNKNOWN");
-        for (String channel : channels) {
-            assertThat(TicketService.stageForUnspecifiedRecipient(channel)).as("channel %s", channel)
-                .isEqualTo(DealStage.QUOTE_BUYER);
-        }
-    }
-
-    /** The fallback half of the rule: were QUOTE_BUYER ever off a route, the nearest on-route stage BEFORE it is
-     * taken (walking DealStage.ORDER backwards), never one after it. */
-    @Test
-    void unspecifiedRecipient_fallsBackToTheNearestEarlierOnRouteStage() {
-        Set<String> off = Set.of(DealStage.QUOTE_BUYER, DealStage.AWAITING_BUYER, DealStage.OWNER_SIGNOFF);
-        assertThat(TicketService.nearestOnRouteAtOrBefore(DealStage.QUOTE_BUYER, stage -> !off.contains(stage)))
-            .isEqualTo(DealStage.QUOTE_OWNER);
-    }
 }

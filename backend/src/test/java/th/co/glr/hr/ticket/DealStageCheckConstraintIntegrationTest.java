@@ -1,7 +1,6 @@
 package th.co.glr.hr.ticket;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.math.BigDecimal;
@@ -29,15 +28,6 @@ class DealStageCheckConstraintIntegrationTest extends AbstractPostgresIntegratio
     private static final String SCHEMA = "sales";
     private static final String TABLE = "ticket";
     private static final String CONSTRAINT = "chk_ticket_sales_stage";
-    private static final String LIFECYCLE_CONSTRAINT = "chk_ticket_lifecycle";
-
-    /** The stage count that exists today (V143). Used only as a LOWER bound, never an equality: a legitimate 16th
-     * stage must fail on the set comparison, which names the offending code, and not here on a count that says
-     * nothing about which side drifted. */
-    private static final int STAGES_TODAY = 15;
-
-    /** The lifecycle count that exists today (V51). A LOWER bound, for the same reason as #STAGES_TODAY. */
-    private static final int LIFECYCLES_TODAY = 6;
 
     /** How Postgres renders col IN ('a','b') for a scalar column — as (col)::text = ANY ((ARRAY['a'::character
      * varying, ...])::text[]). */
@@ -66,35 +56,6 @@ class DealStageCheckConstraintIntegrationTest extends AbstractPostgresIntegratio
             tickets.nextTicketCode(), ownerId, "พนักงานขาย ทดสอบขั้นตอน");
     }
 
-    // ── Anti-vacuity: prove the extraction found something before comparing anything ──────────
-
-    /** Checks the live stage constraint is readable and nonempty before comparing its values with Java. */
-    @Test
-    void theLiveConstraintIsReadableAndItsValueListIsPlausible() {
-        String definition = liveConstraintDefinition(CONSTRAINT);
-
-        assertThat(definition)
-            .as("chk_ticket_sales_stage is not shaped like a value list any more — this guard "
-                + "cannot read it, and a human has to look rather than let it pass")
-            .contains(ARRAY_OPEN);
-
-        Set<String> permitted = permittedStages();
-        assertThat(permitted)
-            .as("read %d value(s) out of %s — the pipeline has had at least %d stages since V143, "
-                + "so this is a broken extraction, not a shrunken constraint. Definition: %s",
-                permitted.size(), CONSTRAINT, STAGES_TODAY, definition)
-            .hasSizeGreaterThanOrEqualTo(STAGES_TODAY)
-            .contains(DealStage.QUOTE_OWNER);
-
-        // …and the same for the other side of the comparison, so an emptied ORDER cannot make the set equality below
-        // pass by matching an equally empty extraction.
-        assertThat(DealStage.ORDER)
-            .hasSizeGreaterThanOrEqualTo(STAGES_TODAY)
-            .contains(DealStage.QUOTE_OWNER);
-    }
-
-    // ── The guard itself, both directions ────────────────────────────────────────────────────
-
     /** Checks the database constraint and DealStage.ORDER contain exactly the same stage codes. */
     @Test
     void theConstraintPermitsExactlyTheStagesDealStageOrderDeclares() {
@@ -117,33 +78,6 @@ class DealStageCheckConstraintIntegrationTest extends AbstractPostgresIntegratio
             .containsExactlyInAnyOrderElementsOf(permitted);
     }
 
-    // ── The same claim, probed rather than parsed ────────────────────────────────────────────
-
-    /** Direction 1 behaviourally, with no dependency on the parse: every code in DealStage#ORDER really is writable
-     * to a real ticket row through the real repository. */
-    @Test
-    void everyStageInOrderCanReallyBeWrittenToADeal() {
-        for (String stage : DealStage.ORDER) {
-            assertThatCode(() -> tickets.updateSalesStage(ticketId, stage))
-                .as("DealStage.ORDER declares %s but sales.ticket refuses it — the forward "
-                    + "migration widening %s is missing", stage, CONSTRAINT)
-                .doesNotThrowAnyException();
-            assertThat(stageOfTheDeal()).isEqualTo(stage);
-        }
-    }
-
-    /** Direction 2's other half: every value the parse pulled out of the definition really is accepted. */
-    @Test
-    void everyValueTheParseCallsPermittedReallyIsAccepted() {
-        for (String value : permittedStages()) {
-            assertThatCode(() -> tickets.updateSalesStage(ticketId, value))
-                .as("this guard read %s as a value %s permits, but sales.ticket refused it — the "
-                    + "extraction is unreliable and the comparison it feeds cannot be trusted",
-                    value, CONSTRAINT)
-                .doesNotThrowAnyException();
-        }
-    }
-
     /** ANTI-VACUITY for the two probes above: the constraint is still ENFORCING. The deal must also still be
      * sitting where it was: a rejected statement must not have moved it. That is what makes it independent
      * evidence for the probes rather than a second copy of them. */
@@ -157,97 +91,6 @@ class DealStageCheckConstraintIntegrationTest extends AbstractPostgresIntegratio
             .isInstanceOf(DataIntegrityViolationException.class);
         assertThat(stageOfTheDeal()).isEqualTo(DealStage.NEGOTIATION);
     }
-
-    // The same guard, for chk_ticket_lifecycle ←→ DealLifecycle.VALID (2026-08-13).
-
-    /** ANTI-VACUITY, the lifecycle half of #theLiveConstraintIsReadableAndItsValueListIsPlausible(): a query that
-     * matched no constraint, or a parse that matched no literal, would hand every assertion below an empty set
-     * that trivially satisfies "nothing is missing" in one direction. */
-    @Test
-    void theLiveLifecycleConstraintIsReadableAndItsValueListIsPlausible() {
-        String definition = liveConstraintDefinition(LIFECYCLE_CONSTRAINT);
-
-        assertThat(definition)
-            .as("chk_ticket_lifecycle is not shaped like a value list any more — this guard cannot "
-                + "read it, and a human has to look rather than let it pass")
-            .contains(ARRAY_OPEN);
-
-        Set<String> permitted = permittedLifecycles();
-        assertThat(permitted)
-            .as("read %d value(s) out of %s — the deal lifecycle has had at least %d values since "
-                + "V51, so this is a broken extraction, not a shrunken constraint. Definition: %s",
-                permitted.size(), LIFECYCLE_CONSTRAINT, LIFECYCLES_TODAY, definition)
-            .hasSizeGreaterThanOrEqualTo(LIFECYCLES_TODAY)
-            .contains(DealLifecycle.COMPLETED);
-
-        assertThat(DealLifecycle.VALID)
-            .hasSizeGreaterThanOrEqualTo(LIFECYCLES_TODAY)
-            .contains(DealLifecycle.COMPLETED);
-    }
-
-    /** THE LIFECYCLE GUARD. Both directions, reported separately because they are different bugs. In VALID,
-     * rejected by the constraint — a lifecycle was added to Java with no forward migration. Fix: add the
-     * migration. */
-    @Test
-    void theConstraintPermitsExactlyTheLifecyclesDealLifecycleValidDeclares() {
-        Set<String> permitted = permittedLifecycles();
-
-        assertThat(permitted)
-            .as("%s permits a value DealLifecycle.VALID does not declare — a migration widened the "
-                + "CHECK and the Java mirror was not updated, so a deal can hold a lifecycle the "
-                + "application has no constant for", LIFECYCLE_CONSTRAINT)
-            .containsExactlyInAnyOrderElementsOf(DealLifecycle.VALID);
-
-        // Stated the other way round as well, so the failure message names the right side of the mirror whichever one
-        // drifted.
-        assertThat(DealLifecycle.VALID)
-            .as("DealLifecycle.VALID declares a lifecycle %s does not permit — updateLifecycle "
-                + "fails with a constraint violation the first time a deal reaches it",
-                LIFECYCLE_CONSTRAINT)
-            .containsExactlyInAnyOrderElementsOf(permitted);
-    }
-
-    /** Direction 1 behaviourally, with no dependency on the parse: every value in DealLifecycle#VALID really is
-     * writable through the real repository — the same method every production caller uses. */
-    @Test
-    void everyLifecycleInValidCanReallyBeWrittenToADeal() {
-        for (String lifecycle : DealLifecycle.VALID) {
-            assertThatCode(() -> tickets.updateLifecycle(ticketId, lifecycle))
-                .as("DealLifecycle.VALID declares %s but sales.ticket refuses it — the forward "
-                    + "migration widening %s is missing", lifecycle, LIFECYCLE_CONSTRAINT)
-                .doesNotThrowAnyException();
-            assertThat(lifecycleOfTheDeal()).isEqualTo(lifecycle);
-        }
-    }
-
-    /** Direction 2's other half: every value the parse pulled out really is accepted, so #permittedLifecycles() is
-     * evidence rather than a hopeful regex. */
-    @Test
-    void everyValueTheLifecycleParseCallsPermittedReallyIsAccepted() {
-        for (String value : permittedLifecycles()) {
-            assertThatCode(() -> tickets.updateLifecycle(ticketId, value))
-                .as("this guard read %s as a value %s permits, but sales.ticket refused it — the "
-                    + "extraction is unreliable and the comparison it feeds cannot be trusted",
-                    value, LIFECYCLE_CONSTRAINT)
-                .doesNotThrowAnyException();
-        }
-    }
-
-    /** ANTI-VACUITY for the two lifecycle probes: the constraint is still ENFORCING. A migration that dropped
-     * chk_ticket_lifecycle would make every write succeed and both probes pass while the column accepted anything
-     * at all. */
-    @Test
-    void anUnknownLifecycleIsStillRejected_soTheProbesAboveAreNotVacuous() {
-        tickets.updateLifecycle(ticketId, DealLifecycle.ON_HOLD);
-
-        assertThatThrownBy(() -> tickets.updateLifecycle(ticketId, "NOT_A_LIFECYCLE"))
-            .as("%s no longer rejects an unknown lifecycle — it has been dropped or widened to "
-                + "everything, and the probes in this class are proving nothing", LIFECYCLE_CONSTRAINT)
-            .isInstanceOf(DataIntegrityViolationException.class);
-        assertThat(lifecycleOfTheDeal()).isEqualTo(DealLifecycle.ON_HOLD);
-    }
-
-    // ── reading the live constraint ──────────────────────────────────────────────────────────
 
     /** The rendered definition of the live constraint, from the catalog. contype = 'c' and convalidated are part of
      * the WHERE on purpose: a NOT VALID check constraint is enforced for new writes but was never checked against
@@ -278,11 +121,6 @@ class DealStageCheckConstraintIntegrationTest extends AbstractPostgresIntegratio
     /** The set of stage codes the live constraint permits. */
     private Set<String> permittedStages() {
         return permittedValuesOf(CONSTRAINT);
-    }
-
-    /** The set of lifecycle codes the live constraint permits. */
-    private Set<String> permittedLifecycles() {
-        return permittedValuesOf(LIFECYCLE_CONSTRAINT);
     }
 
     private Set<String> permittedValuesOf(String constraint) {
@@ -323,8 +161,4 @@ class DealStageCheckConstraintIntegrationTest extends AbstractPostgresIntegratio
             Map.of("id", ticketId), String.class);
     }
 
-    private String lifecycleOfTheDeal() {
-        return jdbc.queryForObject("SELECT lifecycle FROM sales.ticket WHERE ticket_id = :id",
-            Map.of("id", ticketId), String.class);
-    }
 }

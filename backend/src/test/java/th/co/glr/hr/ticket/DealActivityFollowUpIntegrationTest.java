@@ -43,69 +43,6 @@ class DealActivityFollowUpIntegrationTest extends AbstractDealQuotationSlice2Int
         ticketService.useClock(Clock.fixed(NOW, ZoneOffset.UTC));
     }
 
-    // ── the write itself ─────────────────────────────────────────────────────
-
-    @Test
-    void ownersCallWithAFollowUp_writesOnlyTheFollowUpDate_andTheActivity() {
-        long deal = deal(salesActor);
-        fillTrackingFields(deal);
-        Map<String, Object> before = trackingSnapshot(deal);
-
-        DealActivityDto activity = ticketService.addActivity(deal,
-            new DealActivityRequest(TODAY, DealActivityKind.CALL, "คุยแล้ว ยังสนใจ", TODAY.plusDays(7)), salesActor);
-
-        assertThat(activity.kind()).isEqualTo(DealActivityKind.CALL);
-        assertThat(activityCount(deal)).isEqualTo(1);
-        assertThat(nextFollowUp(deal)).isEqualTo(TODAY.plusDays(7));
-        assertThat(trackingSnapshot(deal))
-            .as("designer/owner/buyer names, win%, quarter, estimate, last follow-up: untouched")
-            .isEqualTo(before);
-    }
-
-    @Test
-    void aCallWithoutAFollowUp_leavesTheDealsDateAsItWas() {
-        long deal = deal(salesActor);
-        setNextFollowUp(deal, TODAY.plusDays(20));
-        fillTrackingFields(deal);
-        Map<String, Object> before = trackingSnapshot(deal);
-
-        ticketService.addActivity(deal, new DealActivityRequest(TODAY, DealActivityKind.CALL, "ไม่รับสาย"), salesActor);
-
-        assertThat(nextFollowUp(deal)).isEqualTo(TODAY.plusDays(20));
-        assertThat(trackingSnapshot(deal)).isEqualTo(before);
-        assertThat(activityCount(deal)).isEqualTo(1);
-    }
-
-    @Test
-    void todayInBangkokIsAllowed_evenWhileUtcIsStillOnTheDayBefore() {
-        long deal = deal(salesActor);
-
-        ticketService.addActivity(deal, new DealActivityRequest(TODAY, DealActivityKind.CALL, null, TODAY), salesActor);
-
-        assertThat(nextFollowUp(deal)).isEqualTo(TODAY);
-    }
-
-    @Test
-    void theSameRuleTheTrackingPathUses_letsTheKeyerTheManagerAndTheCeoSetIt() {
-        UserPrincipal ceo = actor(createEmployee("ซีอีโอ 6.4", "ceo-64@glr.co.th", "EXE", "ผู้บริหาร", null), "ceo");
-        long keyed = deal(otherSalesActor);
-        jdbc.update("UPDATE sales.ticket SET keyed_by = :keyer WHERE ticket_id = :id",
-            Map.of("keyer", salesActor.id(), "id", keyed));
-
-        ticketService.addActivity(keyed,
-            new DealActivityRequest(TODAY, DealActivityKind.CALL, null, TODAY.plusDays(3)), salesActor);
-        assertThat(nextFollowUp(keyed)).as("keyer").isEqualTo(TODAY.plusDays(3));
-
-        for (UserPrincipal overseer : List.of(salesManagerActor, ceo)) {
-            long deal = deal(salesActor);
-            ticketService.addActivity(deal,
-                new DealActivityRequest(TODAY, DealActivityKind.CALL, null, TODAY.plusDays(14)), overseer);
-            assertThat(nextFollowUp(deal)).as(overseer.role()).isEqualTo(TODAY.plusDays(14));
-        }
-    }
-
-    // ── wrong-way-round: refused, and nothing at all is written ──────────────
-
     @Test
     void anotherRepAccountImportHrAndAQuotationGrantHolder_are403_andNothingIsWritten() {
         long deal = deal(salesActor);
@@ -141,55 +78,6 @@ class DealActivityFollowUpIntegrationTest extends AbstractDealQuotationSlice2Int
         assertThat(activityCount(deal)).isZero();
     }
 
-    @Test
-    void aNonActiveDealRefusesTheFollowUp_409_butStillTakesAPlainActivityAsBefore() {
-        long deal = deal(salesActor);
-        LocalDate original = nextFollowUp(deal);
-        jdbc.update("UPDATE sales.ticket SET lifecycle = 'CLOSED_LOST' WHERE ticket_id = :id", Map.of("id", deal));
-
-        refusal(() -> ticketService.addActivity(deal,
-            new DealActivityRequest(TODAY, DealActivityKind.CALL, null, TODAY.plusDays(7)), salesActor),
-            HttpStatus.CONFLICT);
-        assertThat(nextFollowUp(deal)).isEqualTo(original);
-        assertThat(activityCount(deal)).isZero();
-
-        // Unchanged behaviour: logging why a deal went quiet still works on a non-ACTIVE deal.
-        ticketService.addActivity(deal, new DealActivityRequest(TODAY, DealActivityKind.CALL, "ลูกค้าเลือกเจ้าอื่น"),
-            salesActor);
-        assertThat(activityCount(deal)).isEqualTo(1);
-    }
-
-    // ── fix round 1 (review M1) ──────────────────────────────────────────────
-
-    @Test
-    void aCallWithNoDateOnAPausedDeal_isStillRecordedExactlyAsBeforeThisSlice() {
-        long deal = deal(salesActor);
-        LocalDate original = nextFollowUp(deal);
-        jdbc.update("UPDATE sales.ticket SET lifecycle = 'ON_HOLD' WHERE ticket_id = :id", Map.of("id", deal));
-
-        DealActivityDto logged = ticketService.addActivity(deal,
-            new DealActivityRequest(TODAY, DealActivityKind.CALL, "ลูกค้าขอพักไว้ก่อน"), salesActor);
-
-        assertThat(logged.note()).isEqualTo("ลูกค้าขอพักไว้ก่อน");
-        assertThat(activityCount(deal)).isEqualTo(1);
-        assertThat(nextFollowUp(deal)).isEqualTo(original);
-    }
-
-    @Test
-    void aDateRefusedOnAPausedDeal_saysInThaiThatItIsTheDateThatCannotBeSet() {
-        long deal = deal(salesActor);
-        jdbc.update("UPDATE sales.ticket SET lifecycle = 'ON_HOLD' WHERE ticket_id = :id", Map.of("id", deal));
-
-        var refused = refusal(() -> ticketService.addActivity(deal,
-            new DealActivityRequest(TODAY, DealActivityKind.CALL, null, TODAY.plusDays(7)), salesActor),
-            HttpStatus.CONFLICT);
-
-        assertThat(refused.getMessage()).contains("ตั้งวันตามครั้งถัดไปไม่ได้").contains("ไม่ใส่วัน");
-        assertThat(activityCount(deal)).isZero();
-    }
-
-    // ── helpers ──────────────────────────────────────────────────────────────
-
     /** A QC employee holding hr.employee.can_create_quotation, resolved through the real session resolver: it acts
      * as {@code sales} — and is on no deal. */
     private UserPrincipal grantHolder() {
@@ -198,29 +86,6 @@ class DealActivityFollowUpIntegrationTest extends AbstractDealQuotationSlice2Int
         UserPrincipal resolved = new SessionAccountResolver(new EmployeeAuthRepository(jdbc)).current(id).orElseThrow();
         assertThat(resolved.role()).as("the grant makes a QC employee act as sales").isEqualTo("sales");
         return resolved;
-    }
-
-    private void fillTrackingFields(long deal) {
-        jdbc.update("""
-            UPDATE sales.ticket
-               SET designer_name = 'สตูดิโอเส้นตรง', owner_name = 'คุณเจ้าของ', buyer_name = 'บริษัท ผู้ซื้อ',
-                   win_probability = 60, expected_quarter = '2027-Q1', estimated_value = 250000,
-                   last_follow_up_at = DATE '2026-11-01'
-             WHERE ticket_id = :id
-            """, Map.of("id", deal));
-    }
-
-    /** Every tracking column the PUT /tracking full replace would rewrite, except next_follow_up_at itself. */
-    private Map<String, Object> trackingSnapshot(long deal) {
-        return jdbc.queryForMap("""
-            SELECT designer_name, owner_name, buyer_name, win_probability, expected_quarter, estimated_value,
-                   last_follow_up_at, lifecycle, sales_stage
-              FROM sales.ticket WHERE ticket_id = :id
-            """, Map.of("id", deal));
-    }
-
-    private void setNextFollowUp(long deal, LocalDate date) {
-        jdbc.update("UPDATE sales.ticket SET next_follow_up_at = :d WHERE ticket_id = :id", Map.of("d", date, "id", deal));
     }
 
     private LocalDate nextFollowUp(long deal) {

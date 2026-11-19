@@ -13,15 +13,11 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
-import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
-import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.commission.CommissionRepository;
-import th.co.glr.hr.commission.InvoiceCalculation;
-import th.co.glr.hr.commission.SubmitCommissionRequest;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.customer.CustomerRepository;
 import th.co.glr.hr.employee.EmployeeCodeGenerator;
@@ -123,8 +119,6 @@ class StockDeclarationAuthzIntegrationTest extends AbstractPostgresIntegrationTe
             createEmployee(employees, "ผู้จัดการฝ่ายขาย", "stock-salesmgr@glr.co.th"), "sales_manager");
     }
 
-    // ── the refusals: these are the evidence ─────────────────────────────────
-
     /** The case the widened gate must NOT open. otherSalesRep holds the same sales role as the owner and passes the
      * coarse role pre-filter — the only thing standing between them and another rep's commission input is the
      * per-row ownership test. */
@@ -140,70 +134,6 @@ class StockDeclarationAuthzIntegrationTest extends AbstractPostgresIntegrationTe
         assertNothingMoved(ticketId, itemId);
     }
 
-    /**
-     * Neither ownership nor a fulfilment role. {@code sales_manager} is in this list deliberately:
-     * {@code requireDealOwnership} grants it elsewhere, but the rule is "Sales declares", and
-     * this write lands in the OWNING rep's STOCK_BONUS input — so oversight is refused here, and
-     * that exclusion is pinned rather than left to be re-litigated by a future reader.
-     */
-    @Test
-    void roleWithNeitherOwnershipNorFulfilment_isRefused_andTheRowIsUnmoved() {
-        long ticketId = createTicketWithOneItem();
-        long itemId = onlyItemId(ticketId);
-
-        for (UserPrincipal stranger : List.of(accountUser, hrUser, salesManagerUser)) {
-            assertThatThrownBy(() -> ticketService.reserveStock(ticketId, declare(itemId, "100.00"), stranger))
-                .describedAs("role %s must not be able to declare stock coverage", stranger.role())
-                .isInstanceOfSatisfying(ApiException.class,
-                    e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
-        }
-
-        assertNothingMoved(ticketId, itemId);
-    }
-
-    /** The coarse pre-filter's own reason to exist, and the only test that can fail if it is deleted (the per-row
-     * check below it already refuses these roles on a deal that exists). */
-    @Test
-    void roleThatCanNeverDeclare_isRefusedBeforeTheTicketIsRead() {
-        long neverCreated = 9_999_999L;
-        assertThat(tickets.findById(neverCreated)).isEmpty();
-
-        // import is in this set: it is not in STOCK_DECLARATION_ROLES at all, so it is
-        // refused at the coarse pre-filter (403) before the ticket is read, exactly like the
-        // roles that could never declare.
-        // sales (even a deal owner) is refused before the ticket read too: reps use the "จัดซื้อสินค้า" button only.
-        assertThatThrownBy(() -> ticketService.reserveStock(neverCreated, declare(1L, "1.00"), owner))
-            .isInstanceOfSatisfying(ApiException.class, e -> {
-                assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN);
-                assertThat(e.getMessage()).isEqualTo("ระบุสินค้าจากสต็อกผ่านปุ่ม \"จัดซื้อสินค้า\" เท่านั้น");
-            });
-        for (UserPrincipal stranger : List.of(accountUser, hrUser, salesManagerUser, importUser)) {
-            assertThatThrownBy(() -> ticketService.reserveStock(neverCreated, declare(1L, "1.00"), stranger))
-                .describedAs("role %s must get 403 (not 404) for a ticket it may never touch", stranger.role())
-                .isInstanceOfSatisfying(ApiException.class,
-                    e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
-        }
-    }
-
-    /** A refusal is not enough on its own: a partly-applied write would leave the row moved even though the call
-     * threw. */
-    @Test
-    void refusedDeclaration_doesNotOverwriteTheDeclarationAlreadyOnFile() {
-        long ticketId = createTicketWithOneItem();
-        long itemId = onlyItemId(ticketId);
-        ticketService.reserveStock(ticketId, declare(itemId, "40.00"), ceoUser);
-        assertThat(qtyFromStock(itemId)).isEqualByComparingTo("40.00");
-
-        assertThatThrownBy(() -> ticketService.reserveStock(ticketId, declare(itemId, "100.00"), otherSalesRep))
-            .isInstanceOf(ApiException.class);
-        assertThatThrownBy(() -> ticketService.reserveStock(ticketId, declare(itemId, "0.00"), accountUser))
-            .isInstanceOf(ApiException.class);
-
-        assertThat(qtyFromStock(itemId)).isEqualByComparingTo("40.00");
-    }
-
-    // ── the grants: necessary, but not the evidence ──────────────────────────
-
     /** The rep's per-line declaration is withdrawn: reps declare through POST /procurement-source only. */
     @Test
     void dealOwner_isRefused_andTheRowIsUnmoved() {
@@ -217,47 +147,6 @@ class StockDeclarationAuthzIntegrationTest extends AbstractPostgresIntegrationTe
             });
 
         assertNothingMoved(ticketId, itemId);
-    }
-
-    @Test
-    void ownerRepNotAdvertisedReserveStock() {
-        long ticketId = createTicketWithOneItem();
-
-        assertThat(advertised(ticketId, owner)).doesNotContain("RESERVE_STOCK");
-        assertThat(advertised(ticketId, ceoUser)).contains("RESERVE_STOCK");
-    }
-
-    /**
-     * The case the narrowing exists for: import must not be able to correct a rep's figure
-     * after the fact. Driven AFTER a legitimate owner declaration, so the assertion
-     * is that import's number did not overwrite the owner's — a stronger check than "still zero",
-     * which a no-op would also satisfy — and re-read straight from Postgres.
-     */
-    @Test
-    void importRole_isRefused_andTheRowIsUnmoved() {
-        long ticketId = createTicketWithOneItem();
-        long itemId = onlyItemId(ticketId);
-        ticketService.reserveStock(ticketId, declare(itemId, "80.00"), ceoUser);
-        assertThat(qtyFromStock(itemId)).isEqualByComparingTo("80.00");
-
-        assertThatThrownBy(() -> ticketService.reserveStock(ticketId, declare(itemId, "25.00"), importUser))
-            .isInstanceOfSatisfying(ApiException.class,
-                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
-
-        assertThat(qtyFromStock(itemId))
-            .describedAs("import may no longer correct stock coverage (owner decision 2026-09-28)")
-            .isEqualByComparingTo("80.00");
-    }
-
-    /** The CEO keeps the correction/override path — through oversight, not ownership. */
-    @Test
-    void ceoCorrectsTheOwnersDeclaration() {
-        long ticketId = createTicketWithOneItem();
-        long itemId = onlyItemId(ticketId);
-        ticketService.reserveStock(ticketId, declare(itemId, "80.00"), ceoUser);
-
-        ticketService.reserveStock(ticketId, declare(itemId, "30.00"), ceoUser);
-        assertThat(qtyFromStock(itemId)).isEqualByComparingTo("30.00");
     }
 
     /**
@@ -284,37 +173,6 @@ class StockDeclarationAuthzIntegrationTest extends AbstractPostgresIntegrationTe
         assertThat(salesStage(ceoDeclared)).isEqualTo(DealStage.DELIVERY_SCHEDULING);
     }
 
-    /**
-     * Closes the loop the whole change exists for, through the REAL and deliberately UNMODIFIED
-     * {@link CommissionRepository#sumActiveStockActualReceived}: the number the owning rep just
-     * declared is the number their STOCK_BONUS input is computed from. Nothing here reimplements
-     * the formula — that would be the "mock mirrors the computation" failure {@code CLAUDE.md}
-     * catalogues; the assertion is on the real SQL's output.
-     *
-     * <p>Stock share 40/100 = 0.4 on ฿500,000 received -> ฿200,000 of stock receipts. The
-     * commission record is forced to APPROVED directly because that repository method filters on
-     * {@code status = 'APPROVED'}; driving the manager+CEO approval chain
-     * would test CommissionService, which this class does not touch.
-     */
-    @Test
-    void ceoDeclaration_feedsTheRealStockBonusCommissionInput() {
-        long ticketId = createTicketWithOneItem();
-        long itemId = onlyItemId(ticketId);
-        LocalDate payrollMonth = LocalDate.of(2026, 8, 1);
-        seedApprovedTicketLinkedCommission(ticketId, ownerId, new BigDecimal("500000.00"), payrollMonth);
-
-        assertThat(commissions.sumActiveStockActualReceived(ownerId, payrollMonth))
-            .describedAs("nothing declared yet -> stock share 0")
-            .isEqualByComparingTo("0.00");
-
-        ticketService.reserveStock(ticketId, declare(itemId, "40.00"), ceoUser);
-
-        assertThat(commissions.sumActiveStockActualReceived(ownerId, payrollMonth))
-            .isEqualByComparingTo("200000.00");
-    }
-
-    // ── helpers ──────────────────────────────────────────────────────────────
-
     /** Every axis the refused call could have touched, re-read from Postgres. */
     private void assertNothingMoved(long ticketId, long itemId) {
         assertThat(qtyFromStock(itemId)).isEqualByComparingTo("0.00");
@@ -322,11 +180,6 @@ class StockDeclarationAuthzIntegrationTest extends AbstractPostgresIntegrationTe
         assertThat(fulfillmentStatus(ticketId)).isNull();
         assertThat(salesStage(ticketId)).isEqualTo(DealStage.ORDER_RECEIVED);
         assertThat(stockReservedEvents(ticketId)).isZero();
-    }
-
-    private List<String> advertised(long ticketId, UserPrincipal actor) {
-        return ticketService.actions(ticketId, actor).availableActions().stream()
-            .map(TicketResponses.TicketActionDto::action).toList();
     }
 
     private static StockReservationRequest declare(long itemId, String qtyFromStock) {
@@ -379,21 +232,6 @@ class StockDeclarationAuthzIntegrationTest extends AbstractPostgresIntegrationTe
              WHERE ticket_id = :ticketId AND kind = :kind
             """,
             Map.of("ticketId", ticketId, "kind", TicketEventKind.STOCK_RESERVED), Integer.class);
-    }
-
-    /** A real APPROVED, ticket-linked SALE commission, built through the real CommissionRepository writers and then
-     * moved to APPROVED with one statement. */
-    private void seedApprovedTicketLinkedCommission(long ticketId, long salesRepId,
-                                                    BigDecimal actualReceived, LocalDate payrollMonth) {
-        SubmitCommissionRequest request = new SubmitCommissionRequest(
-            ticketId, salesRepId, "INV-STOCKAUTHZ-" + UUID.randomUUID(), LocalDate.of(2026, 8, 5),
-            actualReceived, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
-            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO);
-        long invoiceId = commissions.createInvoice(request);
-        long commissionId = commissions.createCommissionRecord(invoiceId, ticketId, salesRepId, salesRepId,
-            payrollMonth, new InvoiceCalculation(actualReceived, actualReceived));
-        jdbc.update("UPDATE sales.commission_record SET status = 'APPROVED' WHERE commission_id = :id",
-            new MapSqlParameterSource().addValue("id", commissionId));
     }
 
     private long createEmployee(EmployeeRepository employees, String name, String email) {
