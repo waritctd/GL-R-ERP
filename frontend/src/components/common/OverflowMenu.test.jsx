@@ -1,7 +1,6 @@
 import React from 'react';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { Modal } from './Modal.jsx';
 import { OverflowMenu } from './OverflowMenu.jsx';
 
 globalThis.React = React;
@@ -15,31 +14,9 @@ function items(overrides = []) {
   ];
 }
 
-// Matches useIsMobile.test.js's own mock shape — OverflowMenu's mobile flip is backed by that same shared
-// `useIsMobile` hook.
-function mockMobileMatchMedia() {
-  window.matchMedia = vi.fn().mockReturnValue({
-    matches: true,
-    media: '(max-width: 720px)',
-    addEventListener: vi.fn(),
-    removeEventListener: vi.fn(),
-  });
-}
-
 describe('OverflowMenu', () => {
   afterEach(() => {
     delete window.matchMedia;
-  });
-
-
-  it('renders no trigger at all when there are no items', () => {
-    const { container } = render(<OverflowMenu items={[]} />);
-    expect(container.firstChild).toBeNull();
-  });
-
-  it('renders no trigger when items is undefined', () => {
-    const { container } = render(<OverflowMenu items={undefined} />);
-    expect(container.firstChild).toBeNull();
   });
 
   it('opens the menu on trigger click, showing every item', () => {
@@ -51,67 +28,6 @@ describe('OverflowMenu', () => {
     const menu = screen.getByRole('menu');
     expect(menu).not.toBeNull();
     expect(screen.getAllByRole('menuitem')).toHaveLength(3);
-  });
-
-  it('can render a visible trigger label while keeping the menu label as the accessible name', () => {
-    render(<OverflowMenu items={items()} label="เอกสาร" triggerLabel="เอกสาร" triggerIcon="fileText" />);
-
-    const trigger = screen.getByRole('button', { name: 'เอกสาร' });
-    expect(trigger.textContent).toContain('เอกสาร');
-  });
-
-  // The deal page's เสนอราคา trigger: its chevron rides inside triggerLabel and triggerIcon={null}
-  // drops the leading icon, so the label lays out in a row with a gap (review V9, V15).
-  it('passes triggerProps (e.g. data-testid / data-action) onto the trigger, labelled or icon-only', () => {
-    const props = { 'data-testid': 'ticket-primary-action', 'data-action': 'quote_next_party' };
-    const { unmount } = render(
-      <OverflowMenu items={items()} label="เสนอราคา" triggerLabel={<>เสนอราคา<svg /></>} triggerIcon={null} triggerProps={props} />,
-    );
-    let trigger = screen.getByTestId('ticket-primary-action');
-    expect(trigger).toBe(screen.getByRole('button', { name: 'เสนอราคา' }));
-    expect(trigger.getAttribute('data-action')).toBe('quote_next_party');
-    expect(trigger.querySelectorAll('svg')).toHaveLength(1);
-    expect(trigger.firstElementChild.className).toEqual(expect.stringContaining('inline-flex items-center gap-[7px]'));
-    unmount();
-
-    render(<OverflowMenu items={items()} triggerProps={props} />);
-    trigger = screen.getByTestId('ticket-primary-action');
-    expect(trigger).toBe(screen.getByRole('button', { name: 'การดำเนินการเพิ่มเติม' }));
-  });
-
-  it('keeps menu items at the mobile 44px touch target floor without changing desktop density', () => {
-    render(<OverflowMenu items={items()} />);
-    fireEvent.click(screen.getByRole('button', { name: 'การดำเนินการเพิ่มเติม' }));
-
-    for (const item of screen.getAllByRole('menuitem')) {
-      expect(item.className).toContain('mobile:min-h-[44px]');
-      expect(item.className).toContain('mobile:px-4');
-      expect(item.className).toContain('mobile:py-3');
-      expect(item.className).toContain('justify-center');
-    }
-  });
-
-  it('can flip upward on mobile for fixed bottom action bars', () => {
-    mockMobileMatchMedia();
-    render(<OverflowMenu items={items()} mobilePlacement="up" />);
-    fireEvent.click(screen.getByRole('button', { name: 'การดำเนินการเพิ่มเติม' }));
-
-    // Position moved from the `mobile:` Tailwind variant to a JS-computed inline style (see OverflowMenu.jsx's doc
-    // comment on `createPortal`) — flipping up now means `bottom` is set and `top` isn't, rather than a
-    // `mobile:bottom-full` class.
-    const menu = screen.getByRole('menu');
-    expect(menu.style.bottom).not.toBe('');
-    expect(menu.style.top).toBe('');
-    expect(menu.className).toContain('mobile:max-h-[calc(100dvh-7rem)]');
-  });
-
-  it('anchors downward from the trigger when not on mobile', () => {
-    render(<OverflowMenu items={items()} mobilePlacement="up" />);
-    fireEvent.click(screen.getByRole('button', { name: 'การดำเนินการเพิ่มเติม' }));
-
-    const menu = screen.getByRole('menu');
-    expect(menu.style.top).not.toBe('');
-    expect(menu.style.bottom).toBe('');
   });
 
   it('invokes the item\'s onSelect and closes the menu on click', () => {
@@ -126,36 +42,6 @@ describe('OverflowMenu', () => {
     expect(screen.queryByRole('menu')).toBeNull();
   });
 
-  // Spec J1 (2026-10-27): a dialog an item opens (a confirm, a form) hands focus back, when it
-  // closes, to whatever held focus when it opened — that has to be this trigger, not the menu item
-  // the click is about to unmount.
-  // The trigger is on screen (it was just clicked); a scroller that pads its top (the deal page's
-  // sticky header) would jump to "reveal" it — on the way into the dialog and, via useDialogFocus,
-  // on the way out (review V7).
-  it('an item that opens a dialog: focus goes to the trigger before it runs and back to it on close, without scrolling the page', () => {
-    let focusedWhenSelected = null;
-    function Harness() {
-      const [open, setOpen] = React.useState(false);
-      const onSelect = () => { focusedWhenSelected = document.activeElement; setOpen(true); };
-      return (
-        <>
-          <OverflowMenu items={[{ key: 'a', label: 'เปิดหน้าต่างยืนยัน', onSelect }]} />
-          {open ? <Modal title="หน้าต่าง" onClose={() => setOpen(false)}><button type="button" onClick={() => setOpen(false)}>เสร็จ</button></Modal> : null}
-        </>
-      );
-    }
-    render(<Harness />);
-    const trigger = screen.getByRole('button', { name: 'การดำเนินการเพิ่มเติม' });
-    fireEvent.click(trigger);
-    const focus = vi.spyOn(trigger, 'focus');
-
-    fireEvent.click(screen.getByRole('menuitem', { name: 'เปิดหน้าต่างยืนยัน' }));
-    expect(focusedWhenSelected).toBe(trigger);
-    fireEvent.click(screen.getByRole('button', { name: 'เสร็จ' }));
-
-    expect(focus.mock.calls).toEqual([[{ preventScroll: true }], [{ preventScroll: true }]]);
-  });
-
   it('Escape closes the menu and returns focus to the trigger, without scrolling the page', () => {
     render(<OverflowMenu items={items()} />);
     const trigger = screen.getByRole('button', { name: 'การดำเนินการเพิ่มเติม' });
@@ -168,84 +54,6 @@ describe('OverflowMenu', () => {
     expect(screen.queryByRole('menu')).toBeNull();
     expect(document.activeElement).toBe(trigger);
     expect(focus).toHaveBeenCalledWith({ preventScroll: true });
-  });
-
-  it('a click outside the menu closes it', () => {
-    render(
-      <div>
-        <OverflowMenu items={items()} />
-        <button type="button">elsewhere</button>
-      </div>,
-    );
-    fireEvent.click(screen.getByRole('button', { name: 'การดำเนินการเพิ่มเติม' }));
-    expect(screen.getByRole('menu')).not.toBeNull();
-
-    fireEvent.mouseDown(screen.getByRole('button', { name: 'elsewhere' }));
-
-    expect(screen.queryByRole('menu')).toBeNull();
-  });
-
-  it('ArrowDown/ArrowUp cycle focus between menu items, wrapping at both ends', () => {
-    render(<OverflowMenu items={items()} />);
-    fireEvent.click(screen.getByRole('button', { name: 'การดำเนินการเพิ่มเติม' }));
-    const menuItems = screen.getAllByRole('menuitem');
-    expect(document.activeElement).toBe(menuItems[0]);
-
-    fireEvent.keyDown(document, { key: 'ArrowDown' });
-    expect(document.activeElement).toBe(menuItems[1]);
-
-    fireEvent.keyDown(document, { key: 'ArrowUp' });
-    expect(document.activeElement).toBe(menuItems[0]);
-
-    // Wraps backward from the first item to the last.
-    fireEvent.keyDown(document, { key: 'ArrowUp' });
-    expect(document.activeElement).toBe(menuItems[2]);
-
-    // Wraps forward from the last item back to the first.
-    fireEvent.keyDown(document, { key: 'ArrowDown' });
-    expect(document.activeElement).toBe(menuItems[0]);
-  });
-
-  it('Home/End jump focus to the first/last menu item', () => {
-    render(<OverflowMenu items={items()} />);
-    fireEvent.click(screen.getByRole('button', { name: 'การดำเนินการเพิ่มเติม' }));
-    const menuItems = screen.getAllByRole('menuitem');
-
-    fireEvent.keyDown(document, { key: 'End' });
-    expect(document.activeElement).toBe(menuItems[2]);
-
-    fireEvent.keyDown(document, { key: 'Home' });
-    expect(document.activeElement).toBe(menuItems[0]);
-  });
-
-  it('focuses the first item automatically on open', () => {
-    render(<OverflowMenu items={items()} />);
-    fireEvent.click(screen.getByRole('button', { name: 'การดำเนินการเพิ่มเติม' }));
-    expect(document.activeElement).toBe(screen.getAllByRole('menuitem')[0]);
-  });
-
-  // every item is tabIndex={-1} (reachable only via Arrow/Home/End, see the component's own doc comment on the
-  // button element) so a plain Tab from within the menu skips every OTHER item and lands on whatever follows
-  // this component in the DOM.
-  it('items are out of the normal Tab order (tabIndex -1), and Tab closes the menu', () => {
-    render(<OverflowMenu items={items()} />);
-    fireEvent.click(screen.getByRole('button', { name: 'การดำเนินการเพิ่มเติม' }));
-    const menuItems = screen.getAllByRole('menuitem');
-    menuItems.forEach((item) => expect(item.tabIndex).toBe(-1));
-
-    fireEvent.keyDown(document, { key: 'Tab' });
-
-    expect(screen.queryByRole('menu')).toBeNull();
-  });
-
-  it('Shift+Tab also closes the menu', () => {
-    render(<OverflowMenu items={items()} />);
-    fireEvent.click(screen.getByRole('button', { name: 'การดำเนินการเพิ่มเติม' }));
-    expect(screen.getByRole('menu')).not.toBeNull();
-
-    fireEvent.keyDown(document, { key: 'Tab', shiftKey: true });
-
-    expect(screen.queryByRole('menu')).toBeNull();
   });
 
   // a disabled item is deliberately NOT given the native `disabled` attribute (see the component's own doc

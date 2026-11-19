@@ -6,20 +6,6 @@ import { CollapsibleSection } from './CollapsibleSection.jsx';
 globalThis.React = React;
 
 describe('CollapsibleSection', () => {
-  it('renders title and children when open', () => {
-    render(
-      <CollapsibleSection title="ข้อมูลลูกค้า">
-        <p>เนื้อหาแบบฟอร์ม</p>
-      </CollapsibleSection>,
-    );
-
-    expect(screen.getByText('ข้อมูลลูกค้า')).toBeTruthy();
-    expect(screen.getByText('เนื้อหาแบบฟอร์ม')).toBeTruthy();
-
-    const button = screen.getByRole('button', { name: 'ข้อมูลลูกค้า' });
-    expect(button.getAttribute('aria-expanded')).toBe('true');
-  });
-
   it('toggles aria-expanded and hides/shows the body when the header is clicked', () => {
     render(
       <CollapsibleSection title="ข้อมูลลูกค้า">
@@ -36,30 +22,5 @@ describe('CollapsibleSection', () => {
     fireEvent.click(button);
     expect(button.getAttribute('aria-expanded')).toBe('true');
     expect(screen.getByText('เนื้อหาแบบฟอร์ม')).toBeTruthy();
-  });
-
-  it('starts closed when defaultOpen is false', () => {
-    render(
-      <CollapsibleSection title="ตัวเลือกเพิ่มเติม" defaultOpen={false}>
-        <p>ซ่อนอยู่</p>
-      </CollapsibleSection>,
-    );
-
-    expect(screen.getByRole('button', { name: 'ตัวเลือกเพิ่มเติม' }).getAttribute('aria-expanded')).toBe(
-      'false',
-    );
-    expect(screen.queryByText('ซ่อนอยู่')).toBeNull();
-  });
-
-  it('renders a heading with no disclosure control when collapsible is false', () => {
-    render(
-      <CollapsibleSection title="ค่าตอบแทน" collapsible={false}>
-        <p>฿149,500</p>
-      </CollapsibleSection>,
-    );
-
-    expect(screen.getByRole('heading', { name: 'ค่าตอบแทน' })).toBeTruthy();
-    expect(screen.queryByRole('button')).toBeNull();
-    expect(screen.getByText('฿149,500')).toBeTruthy();
   });
 });

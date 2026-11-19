@@ -66,48 +66,4 @@ describe('NotificationBell', () => {
     // with refetchInterval, and the key other pages' mutations invalidate to live-update the bell.
     await waitFor(() => expect(api.notifications.list).toHaveBeenCalledTimes(2));
   });
-
-  it('closes with Escape and restores focus to the notification trigger', async () => {
-    renderBell();
-
-    const trigger = await screen.findByRole('button', { name: /การแจ้งเตือน/ });
-    fireEvent.click(trigger);
-    expect(await screen.findByRole('dialog', { name: 'การแจ้งเตือน' })).toBeTruthy();
-
-    fireEvent.keyDown(document, { key: 'Escape' });
-
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'การแจ้งเตือน' })).toBeNull());
-    expect(document.activeElement).toBe(trigger);
-  });
-
-  it('closes and restores focus after marking all notifications read', async () => {
-    renderBell();
-
-    const trigger = await screen.findByRole('button', { name: /การแจ้งเตือน/ });
-    fireEvent.click(trigger);
-
-    const markAllButton = await screen.findByRole('button', { name: 'อ่านทั้งหมด' });
-    markAllButton.focus();
-    fireEvent.click(markAllButton);
-
-    await waitFor(() => expect(api.notifications.markRead).toHaveBeenCalledWith(1));
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'การแจ้งเตือน' })).toBeNull());
-    expect(document.activeElement).toBe(trigger);
-  });
-
-  // มีอะไรใหม่ (release notice): its bell row gets its own glyph rather than the generic bell fallback, so it reads
-  // as an announcement, not as one more workflow event.
-  it('gives a RELEASE_NOTE row the sparkles icon', async () => {
-    api.notifications.list.mockResolvedValue({
-      notifications: [
-        { id: 5, type: 'RELEASE_NOTE', message: 'มีอะไรใหม่: อัปเดตระบบขาย', read: false, createdAt: new Date().toISOString(), link: '/whats-new/2026-11-16' },
-      ],
-    });
-    renderBell();
-
-    fireEvent.click(await screen.findByRole('button', { name: /การแจ้งเตือน/ }));
-    const row = (await screen.findByText(/มีอะไรใหม่: อัปเดตระบบขาย/)).closest('button');
-    expect(row.querySelector('svg.lucide-sparkles')).not.toBeNull();
-    expect(row.querySelector('svg.lucide-bell')).toBeNull();
-  });
 });

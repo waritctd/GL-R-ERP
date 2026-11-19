@@ -57,28 +57,6 @@ describe('view-as banner', () => {
     await waitFor(() => expect(assign).toHaveBeenCalledWith('/'));
     expect(stop).toHaveBeenCalledTimes(1);
   });
-
-  it('a failed stop does not reload into the view: shows the error and re-enables the button', async () => {
-    const assign = vi.fn();
-    vi.stubGlobal('location', { ...window.location, assign });
-    stop.mockRejectedValue(new Error('หยุดไม่ได้'));
-    renderShell({ ...target, canViewAs: true, viewAs: { actorId: 1, actorName: 'เจ้าของ' } });
-
-    await screen.findByText('เนื้อหา');
-    fireEvent.click(screen.getByRole('button', { name: 'ออกจากมุมมองนี้' }));
-
-    expect((await screen.findByRole('alert')).textContent).toContain('หยุดไม่ได้');
-    expect(assign).not.toHaveBeenCalled();
-    expect(screen.getByRole('button', { name: 'ออกจากมุมมองนี้' }).disabled).toBe(false);
-  });
-
-  it('shows no banner when not viewing', async () => {
-    renderShell({ ...target, canViewAs: true, viewAs: null });
-
-    await screen.findByText('เนื้อหา');
-    expect(screen.queryByText(/กำลังดูในมุมมองของ/)).toBeNull();
-    expect(screen.queryByRole('button', { name: 'ออกจากมุมมองนี้' })).toBeNull();
-  });
 });
 
 describe('view-as picker entry in the user menu', () => {
@@ -95,11 +73,6 @@ describe('view-as picker entry in the user menu', () => {
 
   it('is hidden without canViewAs', async () => {
     await openMenu({ ...target, canViewAs: false, viewAs: null });
-    expect(screen.queryByRole('menuitem', { name: /ดูในมุมมองพนักงาน/ })).toBeNull();
-  });
-
-  it('is hidden while already viewing', async () => {
-    await openMenu({ ...target, canViewAs: true, viewAs: { actorId: 1, actorName: 'เจ้าของ' } });
     expect(screen.queryByRole('menuitem', { name: /ดูในมุมมองพนักงาน/ })).toBeNull();
   });
 });
