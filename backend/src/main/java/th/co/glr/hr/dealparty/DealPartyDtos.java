@@ -89,6 +89,11 @@ public final class DealPartyDtos {
 
     public record BidOutcomeResponse(BidOutcomeResult result) {}
 
+    /** POST /api/tickets/{id}/add-on-orders: the linked deal a second order (สั่งเพิ่ม) started. */
+    public record AddOnOrderResult(long ticketId, String code, long parentTicketId) {}
+
+    public record AddOnOrderResponse(AddOnOrderResult addOnOrder) {}
+
     /** A deal the quotation editor may attach a new ผู้รับเหมา to: the actor's open, pre-outcome deal on this project. */
     public record OpenDealDto(
         long id, String code, String projectName, String salesStage, String customerName,

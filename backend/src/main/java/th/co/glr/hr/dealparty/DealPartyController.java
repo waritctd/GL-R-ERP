@@ -15,6 +15,7 @@ import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
+import th.co.glr.hr.dealparty.DealPartyDtos.AddOnOrderResponse;
 import th.co.glr.hr.dealparty.DealPartyDtos.AddPartyRequest;
 import th.co.glr.hr.dealparty.DealPartyDtos.BidOutcomeRequest;
 import th.co.glr.hr.dealparty.DealPartyDtos.BidOutcomeResponse;
@@ -75,5 +76,12 @@ public class DealPartyController {
                                   HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
         return new BidOutcomeResponse(service.recordBidOutcome(id, request, user));
+    }
+
+    @PostMapping("/{id}/add-on-orders")
+    @ResponseStatus(HttpStatus.CREATED)
+    AddOnOrderResponse addOnOrder(@PathVariable long id, HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return new AddOnOrderResponse(service.createAddOnOrder(id, user));
     }
 }

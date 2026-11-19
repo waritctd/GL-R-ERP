@@ -200,8 +200,53 @@ public record TicketSummaryDto(
      * {@code TicketRepository#enrichSummaries} in the statement that already carries the rest of the enrichment (no
      * query per row). Withheld by {@link #withoutMoney()}: it describes received money.
      */
-    String receiptSource
+    String receiptSource,
+    /**
+     * V230 {@code sales.ticket.parent_ticket_id}: the root deal this one is linked under (a bid-split child or an
+     * add-on order), or null for a top-level deal. {@link #parentCode} is that deal's code, {@link #childKind} is
+     * {@code BID_SPLIT} or {@code ADD_ON} (null exactly when there is no parent).
+     */
+    Long parentTicketId,
+    String parentCode,
+    String childKind
 ) {
+    /** The shape before {@link #parentTicketId} / {@link #parentCode} / {@link #childKind}: all default to {@code null}. */
+    public TicketSummaryDto(
+        long id, String code, String type, String title, String status, String priority,
+        long createdById, String createdByName, Long assignedToId, String assignedToName,
+        String customerName, Long customerId, Long projectId, String projectName,
+        Long contactId, String contactName, String note,
+        Instant createdAt, Instant updatedAt, Instant closedAt, int itemCount, boolean hasEdits,
+        String paymentStatus, String fulfillmentStatus,
+        String salesStage, String lostReason, Instant lostAt, Instant stageUpdatedAt,
+        String lifecycle, String tenderRequirement, String depositPolicy, String depositPolicyReason,
+        String entryChannel, LocalDate billingDate, LocalDate dueDate, Integer creditTermDays,
+        LocalDate lastFollowUpAt, LocalDate nextFollowUpAt, String paymentStage,
+        BigDecimal amountPayable, BigDecimal amountPaid, BigDecimal amountOutstanding, boolean overdue,
+        Instant closeConfirmedAt, String closeConfirmedByName, boolean invoiceOnFile,
+        String cancelReason, Instant cancelledAt,
+        Integer winProbabilityOverride, String designerName, String ownerName, String buyerName,
+        boolean stale, boolean commissionRecorded, Instant reopenedAt, int reopenCount,
+        boolean quotationOnly, LocalDate paymentDueDate, String paymentDueBasis,
+        Integer paymentDueCreditDays, LiveDirectQuotationDto liveDirectQuotation,
+        Set<String> quotedRecipients, BigDecimal depositDue, Long keyedById,
+        boolean stageChangedInRange, boolean activityInRange, LocalDate lastActivityAt, LocalDate pauseReturnOn,
+        BigDecimal estimatedValue, String expectedQuarter, String receiptSource
+    ) {
+        this(id, code, type, title, status, priority, createdById, createdByName, assignedToId,
+            assignedToName, customerName, customerId, projectId, projectName, contactId, contactName,
+            note, createdAt, updatedAt, closedAt, itemCount, hasEdits, paymentStatus, fulfillmentStatus,
+            salesStage, lostReason, lostAt, stageUpdatedAt, lifecycle, tenderRequirement, depositPolicy,
+            depositPolicyReason, entryChannel, billingDate, dueDate, creditTermDays, lastFollowUpAt,
+            nextFollowUpAt, paymentStage, amountPayable, amountPaid, amountOutstanding, overdue,
+            closeConfirmedAt, closeConfirmedByName, invoiceOnFile, cancelReason, cancelledAt,
+            winProbabilityOverride, designerName, ownerName, buyerName, stale, commissionRecorded,
+            reopenedAt, reopenCount, quotationOnly, paymentDueDate, paymentDueBasis,
+            paymentDueCreditDays, liveDirectQuotation, quotedRecipients, depositDue, keyedById,
+            stageChangedInRange, activityInRange, lastActivityAt, pauseReturnOn, estimatedValue,
+            expectedQuarter, receiptSource, null, null, null);
+    }
+
     /** The shape before {@link #expectedQuarter} / {@link #receiptSource}: both default to {@code null}. */
     public TicketSummaryDto(
         long id, String code, String type, String title, String status, String priority,
@@ -536,7 +581,7 @@ public record TicketSummaryDto(
             commissionRecorded, reopenedAt, reopenCount, quotationOnly, paymentDueDate, paymentDueBasis,
             paymentDueCreditDays, liveDirectQuotation, quotedRecipients, depositDue, keyedById,
             stageChangedInRange, activityInRange, lastActivityAt, pauseReturnOn, estimatedValue,
-            expectedQuarter, receiptSource);
+            expectedQuarter, receiptSource, parentTicketId, parentCode, childKind);
     }
 
     /**
@@ -574,7 +619,8 @@ public record TicketSummaryDto(
             null /* pauseReturnOn: withheld here exactly as in the reviewed slice (afe6acbd) — not widened */,
             null /* estimatedValue: a selling figure */,
             null /* expectedQuarter: never readable by import before slice 6.3 — not widened */,
-            null /* receiptSource: describes received money */);
+            null /* receiptSource: describes received money */,
+            parentTicketId, parentCode, childKind);
     }
 
     /** Copy with {@link #keyedById} set (the row mapper builds the summary through a shorter shape). */
@@ -590,7 +636,7 @@ public record TicketSummaryDto(
             commissionRecorded, reopenedAt, reopenCount, quotationOnly, paymentDueDate, paymentDueBasis,
             paymentDueCreditDays, liveDirectQuotation, quotedRecipients, depositDue, keyedById,
             stageChangedInRange, activityInRange, lastActivityAt, pauseReturnOn, estimatedValue,
-            expectedQuarter, receiptSource);
+            expectedQuarter, receiptSource, parentTicketId, parentCode, childKind);
     }
 
     /** Copy with the movement-range facts set (the row mapper builds the summary through a shorter shape). */
@@ -606,7 +652,7 @@ public record TicketSummaryDto(
             commissionRecorded, reopenedAt, reopenCount, quotationOnly, paymentDueDate, paymentDueBasis,
             paymentDueCreditDays, liveDirectQuotation, quotedRecipients, depositDue, keyedById,
             stageChangedInRange, activityInRange, lastActivityAt, pauseReturnOn, estimatedValue,
-            expectedQuarter, receiptSource);
+            expectedQuarter, receiptSource, parentTicketId, parentCode, childKind);
     }
 
     /** Copy with {@link #estimatedValue} set (the row mapper builds the summary through a shorter shape). */
@@ -622,7 +668,7 @@ public record TicketSummaryDto(
             commissionRecorded, reopenedAt, reopenCount, quotationOnly, paymentDueDate, paymentDueBasis,
             paymentDueCreditDays, liveDirectQuotation, quotedRecipients, depositDue, keyedById,
             stageChangedInRange, activityInRange, lastActivityAt, pauseReturnOn, estimatedValue,
-            expectedQuarter, receiptSource);
+            expectedQuarter, receiptSource, parentTicketId, parentCode, childKind);
     }
 
     /** Copy with {@link #pauseReturnOn} set (the row mapper builds the summary through a shorter shape). */
@@ -638,12 +684,28 @@ public record TicketSummaryDto(
             commissionRecorded, reopenedAt, reopenCount, quotationOnly, paymentDueDate, paymentDueBasis,
             paymentDueCreditDays, liveDirectQuotation, quotedRecipients, depositDue, keyedById,
             stageChangedInRange, activityInRange, lastActivityAt, pauseReturnOn, estimatedValue,
-            expectedQuarter, receiptSource);
+            expectedQuarter, receiptSource, parentTicketId, parentCode, childKind);
     }
 
     /** Copy with {@link #expectedQuarter} set (the row mapper builds the summary through a shorter shape). */
     public TicketSummaryDto withExpectedQuarter(String expectedQuarter) {
         return withDrawnDetails(expectedQuarter, receiptSource);
+    }
+
+    /** Copy with the V230 link facts set (the row mapper builds the summary through a shorter shape). */
+    public TicketSummaryDto withParent(Long parentTicketId, String parentCode, String childKind) {
+        return new TicketSummaryDto(id, code, type, title, status, priority, createdById, createdByName,
+            assignedToId, assignedToName, customerName, customerId, projectId, projectName,
+            contactId, contactName, note, createdAt, updatedAt, closedAt, itemCount, hasEdits,
+            paymentStatus, fulfillmentStatus, salesStage, lostReason, lostAt, stageUpdatedAt, lifecycle,
+            tenderRequirement, depositPolicy, depositPolicyReason, entryChannel, billingDate, dueDate,
+            creditTermDays, lastFollowUpAt, nextFollowUpAt, paymentStage, amountPayable, amountPaid,
+            amountOutstanding, overdue, closeConfirmedAt, closeConfirmedByName, invoiceOnFile,
+            cancelReason, cancelledAt, winProbabilityOverride, designerName, ownerName, buyerName, stale,
+            commissionRecorded, reopenedAt, reopenCount, quotationOnly, paymentDueDate, paymentDueBasis,
+            paymentDueCreditDays, liveDirectQuotation, quotedRecipients, depositDue, keyedById,
+            stageChangedInRange, activityInRange, lastActivityAt, pauseReturnOn, estimatedValue,
+            expectedQuarter, receiptSource, parentTicketId, parentCode, childKind);
     }
 
     /** Copy with {@link #receiptSource} set. */
@@ -663,7 +725,7 @@ public record TicketSummaryDto(
             commissionRecorded, reopenedAt, reopenCount, quotationOnly, paymentDueDate, paymentDueBasis,
             paymentDueCreditDays, liveDirectQuotation, quotedRecipients, depositDue, keyedById,
             stageChangedInRange, activityInRange, lastActivityAt, pauseReturnOn, estimatedValue,
-            expectedQuarter, receiptSource);
+            expectedQuarter, receiptSource, parentTicketId, parentCode, childKind);
     }
 
     /** Copy without the activity facts (lastActivityAt and the range flags), for roles that cannot read deal activities. */

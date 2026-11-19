@@ -52,6 +52,8 @@ public class TicketRepository {
                t.reopened_at, t.reopen_count,
                t.win_probability, t.designer_name, t.owner_name, t.buyer_name,
                t.quotation_only, t.keyed_by, t.pause_return_on, t.estimated_value, t.expected_quarter,
+               t.parent_ticket_id, t.child_kind,
+               (SELECT pt.code FROM sales.ticket pt WHERE pt.ticket_id = t.parent_ticket_id) AS parent_code,
                (SELECT MAX(da.activity_date) FROM sales.deal_activity da
                  WHERE da.ticket_id = t.ticket_id) AS last_activity_at,
                -- Movement range (inclusive Asia/Bangkok calendar days); both FALSE when no range is given.
@@ -1349,7 +1351,9 @@ public class TicketRepository {
                 rs.getObject("last_activity_at", LocalDate.class))
             .withPauseReturnOn(rs.getObject("pause_return_on", LocalDate.class))
             .withEstimatedValue(rs.getBigDecimal("estimated_value"))
-            .withExpectedQuarter(rs.getString("expected_quarter"));
+            .withExpectedQuarter(rs.getString("expected_quarter"))
+            .withParent(rs.getObject("parent_ticket_id", Long.class), rs.getString("parent_code"),
+                rs.getString("child_kind"));
     }
 
     /** One row's worth of the enrichment facts {@link SummaryFactsSql#SELECT} computes for a page of deals. */
@@ -1478,7 +1482,8 @@ public class TicketRepository {
             facts.liveDirectQuotation(), facts.quotedRecipients(),
             "DEPOSIT_NOTICE_ISSUED".equals(s.paymentStatus()) ? facts.depositDue() : null,
             s.keyedById(), s.stageChangedInRange(), s.activityInRange(), s.lastActivityAt(), s.pauseReturnOn(),
-            s.estimatedValue(), s.expectedQuarter(), f.receiptSource());
+            s.estimatedValue(), s.expectedQuarter(), f.receiptSource(),
+            s.parentTicketId(), s.parentCode(), s.childKind());
     }
 
     /** An INVOICE document is on file. The invoice is produced by an external system and uploaded here, so its
@@ -2636,7 +2641,7 @@ public class TicketRepository {
                         AND event_id > COALESCE((SELECT MAX(event_id) FROM sales.ticket_event
                                                   WHERE ticket_id = :t AND kind = 'DEAL_PROMOTED_FROM_QUOTATION'), 0))
                OR EXISTS(SELECT 1 FROM sales.ticket_event WHERE ticket_id = :t AND kind = 'DEAL_SPLIT_FROM_PARENT')
-               OR EXISTS(SELECT 1 FROM sales.ticket WHERE parent_ticket_id = :t)) AS bid_or_split,
+               OR EXISTS(SELECT 1 FROM sales.ticket WHERE parent_ticket_id = :t AND child_kind = 'BID_SPLIT')) AS bid_or_split,
               EXISTS(SELECT 1 FROM sales.deposit_notice WHERE ticket_id = :t AND status <> 'DRAFT') AS notice,
               EXISTS(SELECT 1 FROM sales.payment_receipt WHERE ticket_id = :t) AS receipt,
               EXISTS(SELECT 1 FROM sales.remaining_invoice WHERE ticket_id = :t) AS invoice,

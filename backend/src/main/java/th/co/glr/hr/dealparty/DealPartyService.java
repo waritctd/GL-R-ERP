@@ -16,6 +16,7 @@ import th.co.glr.hr.customer.ContactDto;
 import th.co.glr.hr.customer.ContactRepository;
 import th.co.glr.hr.customer.CustomerDto;
 import th.co.glr.hr.customer.CustomerRepository;
+import th.co.glr.hr.dealparty.DealPartyDtos.AddOnOrderResult;
 import th.co.glr.hr.dealparty.DealPartyDtos.AddPartyRequest;
 import th.co.glr.hr.dealparty.DealPartyDtos.BidOutcomeRequest;
 import th.co.glr.hr.dealparty.DealPartyDtos.BidOutcomeResult;
@@ -254,6 +255,12 @@ public class DealPartyService {
         }
         tickets.addEvent(ticketId, actor.id(), actor.name(), TicketEventKind.BID_OUTCOME_RECORDED, null, null, message.toString());
         return new BidOutcomeResult(ticketId, childTicketIds, requireSummary(ticketId));
+    }
+
+    /** สั่งเพิ่ม: a linked deal under the root deal. Phase A stub. */
+    @Transactional
+    public AddOnOrderResult createAddOnOrder(long ticketId, UserPrincipal actor) {
+        throw new UnsupportedOperationException("add-on order not implemented");
     }
 
     public List<OpenDealDto> openDealsForProject(String projectName, UserPrincipal actor) {
