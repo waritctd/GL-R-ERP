@@ -321,15 +321,12 @@ public class DealPartyService {
         BigDecimal value = BigDecimal.ZERO;
         BigDecimal received = BigDecimal.ZERO;
         BigDecimal outstanding = BigDecimal.ZERO;
-        String rootCode = requested.code();
         List<DealPartyRepository.OrderRow> chain = parties.findOrderChain(rootId);
+        String rootCode = chain.isEmpty() ? requested.code() : chain.get(0).code();
         for (int i = 0; i < chain.size(); i++) {
             DealPartyRepository.OrderRow row = chain.get(i);
             if (row.ticketId() != ticketId && !canReadOrder(row.ticketId(), actor)) {
                 continue;
-            }
-            if (row.ticketId() == rootId) {
-                rootCode = row.code();
             }
             BigDecimal owed = row.payable().subtract(row.received()).max(BigDecimal.ZERO);
             boolean dead = DealLifecycle.CLOSED_LOST.equals(row.lifecycle()) || DealLifecycle.CANCELLED.equals(row.lifecycle());

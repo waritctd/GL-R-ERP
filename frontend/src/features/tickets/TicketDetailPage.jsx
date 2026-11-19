@@ -1549,6 +1549,11 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     );
   }
 
+  // รวมโครงการ (R1.2): a project-wide view has no per-order action, so the sticky primary gives way to a hint.
+  if (showOrderSwitcher && allScope && activeTab === 'money') {
+    cardAction = <span className="text-sm text-text-muted" data-testid="all-scope-hint">เลือกออเดอร์เพื่อดำเนินการ</span>;
+  }
+
   // The header's โทรแล้ว / นัดเข้าพบ and the timeline's any-kind activity form share one gate: TicketService
   // #addActivity's requireDealOwnership (owner/keyer sales, sales_manager, ceo) — the old "บันทึกกิจกรรม" form's
   // gate, unchanged. นัดเข้าพบ also needs an ACTIVE deal (VisitService#create refuses any other).
@@ -1727,6 +1732,49 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   }
 
   // openDeliveryModal/closeDeliveryModal/openStockModal live in DealFulfilmentPanel.
+
+  const quotationsNode = (
+    <>
+      {/* ใบเสนอราคาของงานนี้: the register's quotation family (was the เอกสาร tab's first section). Its header
+          carries NO quotation entry of its own (fix round 1, ruling 1; the 5560009a guard): only a second
+          trigger for the page's primary while that primary is the route choice (เสนอราคา<party>) — same
+          builder, same handler, present exactly when the primary is. */}
+      <DealDocumentRegister
+        part="quotations"
+        showToast={showToast}
+        quotationsAction={routeChoiceSecondTrigger}
+        ticketId={ticketId}
+        user={user}
+        summary={summary}
+        sections={sections}
+        canViewPricingRequests={canViewPricingRequests}
+        canViewDocumentsTab={canViewDocumentsTab}
+        pricingRequests={pricingRequests}
+        pricingRequestsLoading={canViewPricingRequests && pricingRequestsQuery.isLoading}
+        legacyQuotations={sortedQuotations}
+        attachments={attachments}
+        attachLoading={attachLoading}
+      />
+      {/* The customer-facing tail of the PricingRequest chain (issue/outcome + confirm-order). Renders nothing
+          until a request reaches APPROVED_FOR_QUOTATION (see DealQuotationPanel's doc comment). The primary
+          button's CONFIRM_ORDER calls dealQuotationPanelRef directly. */}
+      {sections.dealQuotation && canViewPricingRequests ? (
+        <div id="deal-quotation-panel" tabIndex={-1} className="mobile:scroll-mt-[420px] outline-none">
+          <DealQuotationPanel ref={dealQuotationPanelRef} ticketId={ticketId} pricingRequests={pricingRequests} quotationByRequest={quotationByRequest} user={user} showToast={showToast}
+            depositMainButtonLabel={workStateAction?.key === 'create_deposit_notice' ? workStateAction.label : null}
+            depositNoticeExists={depositNotice != null} />
+        </div>
+      ) : null}
+      {/* Legacy ticket-native quotation rows (DealLegacyQuotations.jsx); null when there are none. */}
+      {sections.quotation ? (
+        <DealLegacyQuotations
+          quotationGroups={quotationGroups}
+          downloadingQuotationKey={downloadingQuotationKey}
+          handleDownloadQuotation={handleDownloadQuotation}
+        />
+      ) : null}
+    </>
+  );
 
   return (
     // Bottom room on a phone exactly when the ขั้นต่อไป card's button bar is fixed to the bottom of the screen — that is
@@ -1942,7 +1990,9 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
 
       <TabPanel id="quote" idPrefix="ticket-detail" active={activeTab === 'quote'}>
         <DealQuoteTab
-          orderQuotations={showOrderSwitcher ? <ProjectQuotationsByOrder orders={projectOrders} /> : null}
+          orderQuotations={showOrderSwitcher ? (
+            <ProjectQuotationsByOrder orders={projectOrders} currentId={Number(ticketId)} currentContent={quotationsNode} />
+          ) : null}
           addOn={canOpenAddOn(summary, user) ? (
             <div>
               <Button type="button" variant="secondary" className="w-full sm:w-auto" data-testid="add-on-order-open" onClick={() => setAddOnOpen(true)}>
@@ -1951,48 +2001,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
               </Button>
             </div>
           ) : null}
-          quotations={(
-            <>
-              {/* ใบเสนอราคาของงานนี้: the register's quotation family (was the เอกสาร tab's first section). Its header
-                  carries NO quotation entry of its own (fix round 1, ruling 1; the 5560009a guard): only a second
-                  trigger for the page's primary while that primary is the route choice (เสนอราคา<party>) — same
-                  builder, same handler, present exactly when the primary is. */}
-              <DealDocumentRegister
-                part="quotations"
-                showToast={showToast}
-                quotationsAction={routeChoiceSecondTrigger}
-                ticketId={ticketId}
-                user={user}
-                summary={summary}
-                sections={sections}
-                canViewPricingRequests={canViewPricingRequests}
-                canViewDocumentsTab={canViewDocumentsTab}
-                pricingRequests={pricingRequests}
-                pricingRequestsLoading={canViewPricingRequests && pricingRequestsQuery.isLoading}
-                legacyQuotations={sortedQuotations}
-                attachments={attachments}
-                attachLoading={attachLoading}
-              />
-              {/* The customer-facing tail of the PricingRequest chain (issue/outcome + confirm-order). Renders nothing
-                  until a request reaches APPROVED_FOR_QUOTATION (see DealQuotationPanel's doc comment). The primary
-                  button's CONFIRM_ORDER calls dealQuotationPanelRef directly. */}
-              {sections.dealQuotation && canViewPricingRequests ? (
-                <div id="deal-quotation-panel" tabIndex={-1} className="mobile:scroll-mt-[420px] outline-none">
-                  <DealQuotationPanel ref={dealQuotationPanelRef} ticketId={ticketId} pricingRequests={pricingRequests} quotationByRequest={quotationByRequest} user={user} showToast={showToast}
-                    depositMainButtonLabel={workStateAction?.key === 'create_deposit_notice' ? workStateAction.label : null}
-                    depositNoticeExists={depositNotice != null} />
-                </div>
-              ) : null}
-              {/* Legacy ticket-native quotation rows (DealLegacyQuotations.jsx); null when there are none. */}
-              {sections.quotation ? (
-                <DealLegacyQuotations
-                  quotationGroups={quotationGroups}
-                  downloadingQuotationKey={downloadingQuotationKey}
-                  handleDownloadQuotation={handleDownloadQuotation}
-                />
-              ) : null}
-            </>
-          )}
+          quotations={showOrderSwitcher ? null : quotationsNode}
           latestItems={<DealLatestQuotationItems quotation={latestPricedQuotation(dealQuotationRows)} />}
           items={(
             <DealItemsPanel

@@ -9,7 +9,7 @@ import { Button } from '../../components/common/Button.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import {
-  dealLifecycleLabel, dealStageLabel, formatMoney, formatThaiDate, fulfilmentStatusLabel,
+  dealLifecycleLabel, dealStageLabel, formatMoney, formatThaiDate, fulfilmentStatusLabel, quotationStatusLabel,
 } from '../../utils/format.js';
 import { dealQuotationStatusLabel } from '../quotations/quotationMeta.js';
 import { findStage, useStageCatalog } from './stageCatalog.js';
@@ -27,7 +27,8 @@ function MoneyCell({ value, owed }) {
   return (
     <span className="shrink-0 text-right text-[0.9375rem] font-bold tabular-nums">
       {formatMoney(value)}
-      <small className="block text-xs font-normal text-text-muted">ค้างรับ {formatMoney(owed)}</small>
+      <small className="block text-xs font-normal text-text-muted">มูลค่าก่อน VAT</small>
+      <small className="block text-xs font-normal text-text-muted">ค้างรับ (รวม VAT) {formatMoney(owed)}</small>
     </span>
   );
 }
@@ -64,13 +65,12 @@ function OrderRow({ order, current }) {
 
 /**
  * `ordersQuery`: useProjectOrders' result. `canAddOn` + `onAddOn`: whether the viewer may open one, and the opener.
- * Shown when the project has more than one order or the viewer may open an add-on; with a single order only the
- * button shows.
+ * Shown when the project has more than one order or the viewer may open an add-on (its error and skeleton show for
+ * every viewer who can read the project); with a single order only the button shows.
  */
 export function ProjectOrdersCard({ ordersQuery, currentId, canAddOn, onAddOn }) {
   const orders = ordersQuery.data?.orders ?? [];
   const multiple = orders.length > 1;
-  if (!multiple && !canAddOn) return null;
   const addOn = canAddOn ? (
     <Button type="button" variant="secondary" className="w-full" data-testid="project-orders-add-on" onClick={onAddOn}>
       <Icon name="plus" size={16} />
@@ -89,7 +89,7 @@ export function ProjectOrdersCard({ ordersQuery, currentId, canAddOn, onAddOn })
   if (ordersQuery.isLoading) {
     return <div className="h-40 animate-pulse rounded-md bg-surface-subtle" data-testid="project-orders-skeleton" aria-busy="true" />;
   }
-  if (!multiple) return <div data-testid="project-orders-single">{addOn}</div>;
+  if (!multiple) return addOn ? <div data-testid="project-orders-single">{addOn}</div> : null;
   const totals = ordersQuery.data?.totals;
   return (
     <section className="flex flex-col gap-2" data-testid="project-orders-card">
@@ -103,7 +103,6 @@ export function ProjectOrdersCard({ ordersQuery, currentId, canAddOn, onAddOn })
           <li className="flex min-h-14 items-center gap-3 bg-surface-subtle px-4 py-2.5" data-testid="project-orders-total">
             <span className="flex min-w-0 flex-1 flex-col">
               <b className="text-base">รวมทั้งโครงการ</b>
-              <small className="text-xs text-text-muted">มูลค่าก่อน VAT</small>
             </span>
             <MoneyCell value={totals.valueExVat} owed={totals.outstanding} />
           </li>
@@ -114,43 +113,76 @@ export function ProjectOrdersCard({ ordersQuery, currentId, canAddOn, onAddOn })
   );
 }
 
-/** ใบเสนอราคา tab (M06) on a multi-order project: each order's quotations under an "ออเดอร์ n <code>" heading. */
-export function ProjectQuotationsByOrder({ orders }) {
+/** ใบเสนอราคา tab (M06) on a multi-order project: each order's quotations under an "ออเดอร์ n <code>" heading, once.
+ * The current order renders `currentContent` (the page's own quotation section, deal-direct and legacy); the others
+ * list deal-direct quotations plus their ticket-native (legacy) ones. */
+export function ProjectQuotationsByOrder({ orders, currentId, currentContent }) {
   const results = useQueries({
-    queries: orders.map((order) => ({
-      queryKey: queryKeys.dealQuotationsByTicket(order.ticketId),
-      queryFn: () => api.dealQuotations.listForTicket(order.ticketId).then((r) => r.items ?? []),
-    })),
+    queries: orders.flatMap((order) => (order.ticketId === currentId ? [] : [
+      {
+        queryKey: queryKeys.dealQuotationsByTicket(order.ticketId),
+        queryFn: () => api.dealQuotations.listForTicket(order.ticketId).then((r) => r.items ?? []),
+      },
+      {
+        queryKey: queryKeys.ticketDetail(order.ticketId),
+        queryFn: () => api.tickets.get(order.ticketId).then((r) => r.ticket),
+      },
+    ])),
   });
+  let at = 0;
   return (
     <div className="flex flex-col gap-4" data-testid="project-quotations-by-order">
-      {orders.map((order, i) => {
-        const rows = results[i]?.data ?? [];
+      {orders.map((order) => {
+        const heading = (
+          <h2 className="m-0 flex items-baseline justify-between gap-2 px-1 text-[0.8125rem] font-bold text-text-secondary">
+            ออเดอร์ {order.orderNo}
+            <span className="font-normal text-text-muted"><code className="tabular-nums">{order.displayCode}</code></span>
+          </h2>
+        );
+        if (order.ticketId === currentId) {
+          return (
+            <section key={order.ticketId} className="flex flex-col gap-2" data-testid={`order-quotations-${order.orderNo}`}>
+              {heading}
+              {currentContent}
+            </section>
+          );
+        }
+        const [direct, detail] = [results[at], results[at + 1]];
+        at += 2;
+        const loading = direct?.isLoading || detail?.isLoading;
+        const failed = direct?.isError || detail?.isError;
+        const seen = new Set((direct?.data ?? []).map((q) => q.number));
+        const rows = [
+          ...(direct?.data ?? []).map((q) => ({ ...q, href: `/quotations/${q.id}` })),
+          ...(detail?.data?.quotations ?? []).filter((q) => !seen.has(q.number)).map((q) => ({ ...q, href: null })),
+        ];
         return (
-          <section key={order.ticketId} className="flex flex-col gap-2">
-            <h2 className="m-0 flex items-baseline justify-between gap-2 px-1 text-[0.8125rem] font-bold text-text-secondary">
-              ออเดอร์ {order.orderNo}
-              <span className="font-normal text-text-muted"><code className="tabular-nums">{order.displayCode}</code></span>
-            </h2>
-            {results[i]?.isLoading ? <div className="h-16 animate-pulse rounded-md bg-surface-subtle" /> : null}
-            {results[i]?.isError ? <p role="alert" className="m-0 px-1 text-sm text-danger">โหลดใบเสนอราคาไม่สำเร็จ</p> : null}
-            {!results[i]?.isLoading && !results[i]?.isError && rows.length === 0 ? (
+          <section key={order.ticketId} className="flex flex-col gap-2" data-testid={`order-quotations-${order.orderNo}`}>
+            {heading}
+            {loading ? <div className="h-16 animate-pulse rounded-md bg-surface-subtle" /> : null}
+            {failed ? <p role="alert" className="m-0 px-1 text-sm text-danger">โหลดใบเสนอราคาไม่สำเร็จ</p> : null}
+            {!loading && !failed && rows.length === 0 ? (
               <p className="m-0 px-1 text-sm text-text-muted">ยังไม่มีใบเสนอราคา</p>
             ) : null}
             {rows.length > 0 ? (
               <ul className="m-0 list-none divide-y divide-border-subtle overflow-hidden rounded-md border border-border bg-surface p-0">
                 {rows.map((q) => {
-                  const status = dealQuotationStatusLabel(q.docStatus);
+                  const status = q.href ? dealQuotationStatusLabel(q.docStatus) : quotationStatusLabel(q.docStatus);
+                  const body = (
+                    <>
+                      <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                        <b className="text-[0.9375rem] tabular-nums">{q.number}</b>
+                        {q.issuedAt || q.createdAt ? <small className="text-xs text-text-muted">{formatThaiDate(q.issuedAt ?? q.createdAt)}</small> : null}
+                        <span className="mt-1"><StatusBadge tone={status.tone}>{status.label}</StatusBadge></span>
+                      </span>
+                      {q.totalAmount != null ? <span className="shrink-0 text-[0.9375rem] font-bold tabular-nums">{formatMoney(q.totalAmount)}</span> : null}
+                    </>
+                  );
                   return (
-                    <li key={q.id}>
-                      <Link to={`/quotations/${q.id}`} className={ROW} data-testid={`order-quotation-${q.id}`}>
-                        <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-                          <b className="text-[0.9375rem] tabular-nums">{q.number}</b>
-                          {q.issuedAt || q.createdAt ? <small className="text-xs text-text-muted">{formatThaiDate(q.issuedAt ?? q.createdAt)}</small> : null}
-                          <span className="mt-1"><StatusBadge tone={status.tone}>{status.label}</StatusBadge></span>
-                        </span>
-                        {q.totalAmount != null ? <span className="shrink-0 text-[0.9375rem] font-bold tabular-nums">{formatMoney(q.totalAmount)}</span> : null}
-                      </Link>
+                    <li key={`${q.href ? 'd' : 'l'}-${q.id}`}>
+                      {q.href
+                        ? <Link to={q.href} className={ROW} data-testid={`order-quotation-${q.id}`}>{body}</Link>
+                        : <div className={ROW} data-testid={`order-quotation-legacy-${q.id}`}>{body}</div>}
                     </li>
                   );
                 })}
@@ -168,8 +200,8 @@ export function ProjectTotalsTiles({ totals }) {
   if (totals?.valueExVat == null) return null;
   const tiles = [
     ['มูลค่าก่อน VAT', totals.valueExVat, 'text-text'],
-    ['รับแล้ว', totals.received, 'text-success-dark'],
-    ['ค้างรับ', totals.outstanding, 'text-text'],
+    ['รับแล้ว (รวม VAT)', totals.received, 'text-success-dark'],
+    ['ค้างรับ (รวม VAT)', totals.outstanding, 'text-text'],
   ];
   return (
     <section className="flex flex-col gap-2" data-testid="project-totals">
