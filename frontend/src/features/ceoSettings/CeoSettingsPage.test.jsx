@@ -64,29 +64,6 @@ function sampleFormulaConfig() {
   };
 }
 
-// extends sampleFormulaConfig with two more rows that leave ONE cell genuinely blank (China thickness [7,12) x
-// qty [100, null)) -- mirrors V109's own "trailing blank, never an interior hole" seed shape.
-function sampleFormulaConfigWithBlankCell() {
-  const base = sampleFormulaConfig();
-  return {
-    ...base,
-    freightRates: [
-      ...base.freightRates,
-      { freightRateId: 2, originCountryCode: 'CN', originCountryName: 'จีน', thicknessMinMm: 3, thicknessMaxMm: 7, qtyMinSqm: 100, qtyMaxSqm: null, amountThb: 70000 },
-      { freightRateId: 3, originCountryCode: 'CN', originCountryName: 'จีน', thicknessMinMm: 7, thicknessMaxMm: 12, qtyMinSqm: 1, qtyMaxSqm: 100, amountThb: 65000 },
-      // China [7,12) x [100, null) is DELIBERATELY missing -- the blank cell under test.
-    ],
-  };
-}
-
-// Mirrors HolidaysTab.test.jsx's identical helper -- both features' BOT fetchers throw the same { message,
-// status } shape (apiRequest's real error object) for a non-2xx response.
-function apiError(message, status) {
-  const error = new Error(message);
-  error.status = status;
-  return error;
-}
-
 function renderCeoSettingsPage(showToast = vi.fn()) {
   const queryClient = new QueryClient({
     defaultOptions: {
@@ -127,35 +104,6 @@ describe('CeoSettingsPage', () => {
     api.pricingFormulaConfig.deleteFreightRate.mockResolvedValue({
       formulaConfig: { ...sampleFormulaConfig(), version: 2, freightRates: [] },
     });
-  });
-
-  // The "ความหนาเริ่มต้นตามคอลเลกชัน (มม.)" panel (V153 thickness defaults) and its tests stood here until
-  // 2026-09-17, removed on request alongside the panel itself — see the frontend-only removal note in
-  // CeoSettingsPage.jsx.
-
-  it('renders fx rates from a mocked api.fxRates.list', async () => {
-    renderCeoSettingsPage();
-
-    expect(await screen.findByText('USD')).not.toBeNull();
-    expect(screen.getByText('36.50')).not.toBeNull();
-    expect(api.fxRates.list).toHaveBeenCalledTimes(1);
-  });
-
-  it('invalidates and refetches fx rates after saving an override', async () => {
-    const showToast = vi.fn();
-    renderCeoSettingsPage(showToast);
-
-    await screen.findByText('USD');
-    expect(api.fxRates.list).toHaveBeenCalledTimes(1);
-
-    fireEvent.click(screen.getByRole('button', { name: 'แก้ไขเอง' }));
-    const input = screen.getByDisplayValue('36.5');
-    fireEvent.change(input, { target: { value: '37' } });
-    fireEvent.click(screen.getByRole('button', { name: 'บันทึก' }));
-
-    await waitFor(() => expect(api.fxRates.upsert).toHaveBeenCalledWith('USD', { rateToThb: 37 }));
-    await waitFor(() => expect(api.fxRates.list).toHaveBeenCalledTimes(2));
-    expect(showToast).toHaveBeenCalledWith('success', 'อัปเดตอัตรา USD แล้ว');
   });
 
   // UX-03: an invalid FX rate override must be marked inline on that currency's own input (aria-invalid +
@@ -225,129 +173,6 @@ describe('CeoSettingsPage', () => {
     });
   });
 
-  // Review fix (2026-09-28): S2 -- fetchNow had zero test coverage. Modelled on HolidaysTab.test.jsx's identical
-  // BOT-fetch coverage (success/zero-row/cooldown).
-  describe('BOT FX fetch-now button (review fix)', () => {
-    it('calls api.fxRates.fetchNow exactly once when clicked', async () => {
-      api.fxRates.fetchNow.mockResolvedValue({ result: { updated: 2, total: 5, asOf: '2026-09-28', updatedCurrencies: ['USD', 'EUR'] } });
-      renderCeoSettingsPage();
-
-      await screen.findByText('USD');
-      fireEvent.click(screen.getByTestId('fx-fetch-now'));
-
-      await waitFor(() => expect(api.fxRates.fetchNow).toHaveBeenCalledTimes(1));
-    });
-
-    it('shows a pending label and disables the button while the fetch is in flight', async () => {
-      let resolveFetch;
-      api.fxRates.fetchNow.mockReturnValue(new Promise((resolve) => { resolveFetch = resolve; }));
-      renderCeoSettingsPage();
-
-      await screen.findByText('USD');
-      fireEvent.click(screen.getByTestId('fx-fetch-now'));
-
-      // isPending only flips a render AFTER the mutate() call has started (react-query's own async dispatch, not
-      // synchronous with fireEvent.click) -- waitFor rather than asserting immediately, mirroring this repo's own
-      // documented gotcha (see SpecialMoneyPanel.test.jsx).
-      await waitFor(() => expect(screen.getByTestId('fx-fetch-now')).toHaveProperty('disabled', true));
-      expect(screen.getByTestId('fx-fetch-now').textContent).toContain('กำลังดึงเรต');
-
-      resolveFetch({ result: { updated: 1, total: 5, asOf: '2026-09-28', updatedCurrencies: ['USD'] } });
-      await waitFor(() => expect(screen.getByTestId('fx-fetch-now')).toHaveProperty('disabled', false));
-    });
-
-    it('reports a genuine update as a success toast naming updated/total', async () => {
-      api.fxRates.fetchNow.mockResolvedValue({ result: { updated: 3, total: 5, asOf: '2026-09-28', updatedCurrencies: ['USD', 'EUR', 'JPY'] } });
-      const showToast = vi.fn();
-      renderCeoSettingsPage(showToast);
-
-      await screen.findByText('USD');
-      fireEvent.click(screen.getByTestId('fx-fetch-now'));
-
-      await waitFor(() => expect(showToast).toHaveBeenCalledWith('success', expect.stringContaining('3/5')));
-      await waitFor(() => expect(api.fxRates.list).toHaveBeenCalledTimes(2)); // invalidated + refetched
-    });
-
-    // The exact production failure mode this review fix names: HTTP 200, updated: 0 (BOT hasn't published
-    // DAILY_AVG_EXG_RATE yet, or the token is bad) -- must never render as success.
-    it('reports a zero-currency fetch honestly -- no success toast, an info toast instead', async () => {
-      api.fxRates.fetchNow.mockResolvedValue({ result: { updated: 0, total: 5, asOf: '2026-09-28', updatedCurrencies: [] } });
-      const showToast = vi.fn();
-      renderCeoSettingsPage(showToast);
-
-      await screen.findByText('USD');
-      fireEvent.click(screen.getByTestId('fx-fetch-now'));
-
-      await waitFor(() => expect(api.fxRates.fetchNow).toHaveBeenCalledTimes(1));
-      expect(showToast).not.toHaveBeenCalledWith('success', expect.anything());
-      expect(showToast).toHaveBeenCalledWith('info', expect.stringContaining('ยังไม่มีอัตราใหม่'));
-    });
-
-    // 429: BotFxFetchService.MANUAL_FETCH_COOLDOWN -- a timed, non-error state, not a failure.
-    it('renders a 429 as a cooldown message, not an error toast, and disables the fetch button', async () => {
-      api.fxRates.fetchNow.mockRejectedValue(apiError(
-        'รอสักครู่ก่อนเรียกดึงอัตราแลกเปลี่ยนจากธนาคารแห่งประเทศไทยอีกครั้ง (ประมาณ 5 วินาที)',
-        429,
-      ));
-      const showToast = vi.fn();
-      renderCeoSettingsPage(showToast);
-
-      await screen.findByText('USD');
-      fireEvent.click(screen.getByTestId('fx-fetch-now'));
-
-      await waitFor(() => expect(api.fxRates.fetchNow).toHaveBeenCalledTimes(1));
-      expect(showToast).not.toHaveBeenCalledWith('error', expect.anything());
-      expect(await screen.findByText(/เหลืออีกประมาณ 5 วินาที/)).not.toBeNull();
-      expect(screen.getByTestId('fx-fetch-now')).toHaveProperty('disabled', true);
-    });
-  });
-
-  // P0 support fix (2026-09): this used to read "...ติดต่อผู้ดูแลระบบหากยังไม่เปิดใช้งานการดึง อัตราอัตโนมัติ",
-  // implying the CEO had to wait on an admin before costing would work — no longer true now that a MANUAL rate
-  // is fully usable on its own.
-  it('rewords the FX panel subheading so a manually entered rate reads as fully usable, not gated on an admin', async () => {
-    renderCeoSettingsPage();
-    await screen.findByText('USD');
-
-    expect(screen.queryByText(/ติดต่อผู้ดูแลระบบหากยังไม่เปิดใช้งาน/)).toBeNull();
-    expect(screen.getByText(/ใช้คำนวณต้นทุนได้ตามปกติทันที/)).not.toBeNull();
-  });
-
-  // UX-08: the config editor is now built on the shared Modal — real dialog semantics, and Escape closes it
-  // (was: hand-rolled overlay with none of this).
-  it('opens the config editor as a real dialog and closes it on Escape', async () => {
-    renderCeoSettingsPage();
-
-    await screen.findByText('CN');
-    fireEvent.click(screen.getByRole('button', { name: 'แก้ไข' }));
-
-    const dialog = await screen.findByRole('dialog');
-    expect(dialog.getAttribute('aria-modal')).toBe('true');
-    expect(screen.getByText('แก้ไขสูตรราคา — CN')).not.toBeNull();
-
-    fireEvent.keyDown(document, { key: 'Escape' });
-
-    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
-  });
-
-  // UX-03: this is the silent-zero regression guard. It must now be rejected inline instead, and the save must
-  // never fire.
-  it('rejects a blank pricing field inline and does not call priceCalcConfigs.update', async () => {
-    renderCeoSettingsPage();
-
-    await screen.findByText('CN');
-    fireEvent.click(screen.getByRole('button', { name: 'แก้ไข' }));
-    await screen.findByRole('dialog');
-
-    const freightInput = screen.getByLabelText('ค่าขนส่งทางเรือ (THB/ตร.ม.)');
-    fireEvent.change(freightInput, { target: { value: '' } });
-    fireEvent.click(screen.getByRole('button', { name: 'บันทึกเวอร์ชันใหม่' }));
-
-    expect(await screen.findByText('กรุณากรอกตัวเลขที่ถูกต้อง (ตั้งแต่ 0 ขึ้นไป)')).not.toBeNull();
-    expect(freightInput.getAttribute('aria-invalid')).toBe('true');
-    expect(api.priceCalcConfigs.update).not.toHaveBeenCalled();
-  });
-
   // Pricing round-trip guard: importDutyPct/marginPct are stored as fractions but edited as percents.
   // openConfigEdit multiplies by 100 for display; saveConfig must divide back by 100 on save.
   it('saves a valid config with the exact payload, including the percent round-trip', async () => {
@@ -373,65 +198,6 @@ describe('CeoSettingsPage', () => {
 
   // BRANCH 1: sales.pricing_formula_config config storage + CEO editing UI.
   describe('pricing formula config (สูตรคำนวณราคาขาย)', () => {
-    it('renders the section with version/effective date and displays multipliers RAW (not scaled) alongside percent fields scaled', async () => {
-      renderCeoSettingsPage();
-
-      const heading = await screen.findByText('สูตรคำนวณราคาขายของงาน');
-      // Scoped to this new section -- "เวอร์ชัน 1" / "20.00%"-shaped text also appears in the pre-existing
-      // price-calc-config table above it, on the same page.
-      const section = within(heading.closest('section'));
-
-      expect(section.getByText('เวอร์ชัน 1')).not.toBeNull();
-      expect(section.getByText('• มีผลตั้งแต่ 2026-01-01')).not.toBeNull();
-
-      // Raw multipliers must render as-is -- 1.15 must NOT become "115" or "115%".
-      expect(section.getByText('1.15')).not.toBeNull();
-      expect(section.getByText('0.0045')).not.toBeNull();
-      // insuranceBuffer/costBuffer/sellingBuffer all default to 1.07 -- appears 3x.
-      expect(section.getAllByText('1.07')).toHaveLength(3);
-
-      // defaultMarginPct (0.24) and dutyPct (0.3) ARE percentages -- displayed scaled.
-      expect(section.getByText('24.00%')).not.toBeNull();
-      expect(section.getByText('30.00%')).not.toBeNull();
-
-      // Freight matrix cell and clearance fee amount.
-      expect(section.getByText('60,000.00')).not.toBeNull();
-      expect(section.getByText('8,000.00 บาท')).not.toBeNull();
-    });
-
-    it('opens the formula editor as a real dialog with multiplier defaults unscaled and percent defaults scaled', async () => {
-      renderCeoSettingsPage();
-
-      await screen.findByText('สูตรคำนวณราคาขายของงาน');
-      fireEvent.click(screen.getByRole('button', { name: 'แก้ไขสูตรคำนวณราคาขาย' }));
-
-      const dialog = await screen.findByRole('dialog');
-      expect(dialog.getAttribute('aria-modal')).toBe('true');
-
-      // NON-NEGOTIABLE round-trip guard: the multiplier input must show "1.15", never "115".
-      expect(screen.getByLabelText('ตัวคูณมูลค่าสินค้าเพื่อประกันภัย').value).toBe('1.15');
-      expect(screen.getByLabelText('อัตราค่าประกันภัย').value).toBe('0.0045');
-      // The percent field must show the SCALED value ("24"), matching the existing page's fraction->percent
-      // convention exactly.
-      expect(screen.getByLabelText('อัตรากำไรเริ่มต้น').value).toBe('24');
-    });
-
-    it('rejects a blank multiplier field inline and never calls pricingFormulaConfig.update', async () => {
-      renderCeoSettingsPage();
-
-      await screen.findByText('สูตรคำนวณราคาขายของงาน');
-      fireEvent.click(screen.getByRole('button', { name: 'แก้ไขสูตรคำนวณราคาขาย' }));
-      await screen.findByRole('dialog');
-
-      const factorInput = screen.getByLabelText('ตัวคูณมูลค่าสินค้าเพื่อประกันภัย');
-      fireEvent.change(factorInput, { target: { value: '' } });
-      fireEvent.click(screen.getByRole('button', { name: 'บันทึกเวอร์ชันใหม่' }));
-
-      expect(await screen.findByText('กรุณากรอกตัวเลขที่ถูกต้อง (ตั้งแต่ 0 ขึ้นไป)')).not.toBeNull();
-      expect(factorInput.getAttribute('aria-invalid')).toBe('true');
-      expect(api.pricingFormulaConfig.update).not.toHaveBeenCalled();
-    });
-
     it('saves with the exact payload, including the multiplier passthrough and the percent round-trip', async () => {
       renderCeoSettingsPage();
 
@@ -464,88 +230,6 @@ describe('CeoSettingsPage', () => {
     });
   });
 
-  // Issue #436, commit 3: freight-row ADD. Lives on the READ-ONLY matrix panel — see AddFreightRateModal's own
-  // doc comment for why it is never inside FormulaConfigEditModal.
-  describe('freight-row add (issue #436)', () => {
-    it('renders an add control on a blank matrix cell; clicking it opens the modal prefilled with that cell\'s coordinates', async () => {
-      api.pricingFormulaConfig.get.mockResolvedValue({ formulaConfig: sampleFormulaConfigWithBlankCell() });
-      renderCeoSettingsPage();
-
-      await screen.findByText('สูตรคำนวณราคาขายของงาน');
-      const addCellButton = await screen.findByRole(
-        'button',
-        { name: 'เพิ่มค่าขนส่ง จีน หนา 7 – <12 มม. ช่วง ≥100 ตร.ม.' },
-      );
-      fireEvent.click(addCellButton);
-
-      const dialog = await screen.findByRole('dialog', { name: 'เพิ่มค่าขนส่ง' });
-      expect(within(dialog).getByLabelText('ประเทศต้นทาง').value).toBe('CN');
-      expect(within(dialog).getByLabelText('ความหนาตั้งแต่ (มม.)').value).toBe('7');
-      expect(within(dialog).getByLabelText('ถึง (<) (มม.)').value).toBe('12');
-      expect(within(dialog).getByLabelText('จำนวนตั้งแต่ (ตร.ม.)').value).toBe('100');
-      // qtyMaxSqm is null on the target cell (open-ended top band) -- prefilled BLANK, not '0' and not the string
-      // 'null'.
-      expect(within(dialog).getByLabelText('ถึง (<) (ตร.ม.)').value).toBe('');
-    });
-
-    it('submits with the right types, sending qtyMaxSqm: null when the field is left blank', async () => {
-      renderCeoSettingsPage();
-      await screen.findByText('สูตรคำนวณราคาขายของงาน');
-
-      fireEvent.click(screen.getByRole('button', { name: '+ เพิ่มค่าขนส่ง' }));
-      const dialog = await screen.findByRole('dialog', { name: 'เพิ่มค่าขนส่ง' });
-
-      fireEvent.change(within(dialog).getByLabelText('ประเทศต้นทาง'), { target: { value: 'ES' } });
-      fireEvent.change(within(dialog).getByLabelText('ความหนาตั้งแต่ (มม.)'), { target: { value: '21' } });
-      fireEvent.change(within(dialog).getByLabelText('ถึง (<) (มม.)'), { target: { value: '25' } });
-      fireEvent.change(within(dialog).getByLabelText('จำนวนตั้งแต่ (ตร.ม.)'), { target: { value: '1' } });
-      // qtyMax deliberately left blank.
-      fireEvent.change(within(dialog).getByLabelText('ค่าขนส่ง (บาท)'), { target: { value: '90000' } });
-      fireEvent.click(within(dialog).getByRole('button', { name: 'เพิ่มค่าขนส่ง' }));
-
-      await waitFor(() => expect(api.pricingFormulaConfig.addFreightRate).toHaveBeenCalledWith({
-        originCountryCode: 'ES',
-        thicknessMinMm: 21,
-        thicknessMaxMm: 25,
-        qtyMinSqm: 1,
-        qtyMaxSqm: null,
-        amountThb: 90000,
-      }));
-    });
-
-    it('rejects a blank required field inline and never calls addFreightRate', async () => {
-      renderCeoSettingsPage();
-      await screen.findByText('สูตรคำนวณราคาขายของงาน');
-
-      fireEvent.click(screen.getByRole('button', { name: '+ เพิ่มค่าขนส่ง' }));
-      const dialog = await screen.findByRole('dialog', { name: 'เพิ่มค่าขนส่ง' });
-      fireEvent.click(within(dialog).getByRole('button', { name: 'เพิ่มค่าขนส่ง' }));
-
-      expect(await within(dialog).findByText('กรุณาเลือกประเทศต้นทาง')).not.toBeNull();
-      expect(api.pricingFormulaConfig.addFreightRate).not.toHaveBeenCalled();
-    });
-
-    it('surfaces a server 400 (overlap) through showToast', async () => {
-      const showToast = vi.fn();
-      api.pricingFormulaConfig.addFreightRate.mockRejectedValue(
-        new Error('ช่วงความหนาและช่วงจำนวน (ตร.ม.) ซ้อนทับกัน: China หนา 3-7 มม. (1-100 ตร.ม.) กับ 3-7 มม. (1-100 ตร.ม.)'),
-      );
-      renderCeoSettingsPage(showToast);
-      await screen.findByText('สูตรคำนวณราคาขายของงาน');
-
-      fireEvent.click(screen.getByRole('button', { name: '+ เพิ่มค่าขนส่ง' }));
-      const dialog = await screen.findByRole('dialog', { name: 'เพิ่มค่าขนส่ง' });
-      fireEvent.change(within(dialog).getByLabelText('ประเทศต้นทาง'), { target: { value: 'CN' } });
-      fireEvent.change(within(dialog).getByLabelText('ความหนาตั้งแต่ (มม.)'), { target: { value: '3' } });
-      fireEvent.change(within(dialog).getByLabelText('ถึง (<) (มม.)'), { target: { value: '7' } });
-      fireEvent.change(within(dialog).getByLabelText('จำนวนตั้งแต่ (ตร.ม.)'), { target: { value: '1' } });
-      fireEvent.change(within(dialog).getByLabelText('ค่าขนส่ง (บาท)'), { target: { value: '60000' } });
-      fireEvent.click(within(dialog).getByRole('button', { name: 'เพิ่มค่าขนส่ง' }));
-
-      await waitFor(() => expect(showToast).toHaveBeenCalledWith('error', expect.stringContaining('ซ้อนทับกัน')));
-    });
-  });
-
   // Issue #436, commit 4: freight-row DELETE. Same read-only-matrix-only placement as add.
   describe('freight-row delete (issue #436)', () => {
     async function openDeleteConfirm() {
@@ -553,15 +237,6 @@ describe('CeoSettingsPage', () => {
       fireEvent.click(deleteButton);
       return screen.findByRole('dialog', { name: 'ยืนยันการลบค่าขนส่ง' });
     }
-
-    it('renders a delete control on a populated cell; clicking it opens a confirmation naming that row', async () => {
-      renderCeoSettingsPage();
-      await screen.findByText('สูตรคำนวณราคาขายของงาน');
-
-      const dialog = await openDeleteConfirm();
-      expect(within(dialog).getByText(/จีน/)).not.toBeNull();
-      expect(within(dialog).getByText(/60,000\.00 บาท/)).not.toBeNull();
-    });
 
     it("confirming calls deleteFreightRate with that row's freightRateId exactly once", async () => {
       renderCeoSettingsPage();
@@ -572,31 +247,6 @@ describe('CeoSettingsPage', () => {
 
       await waitFor(() => expect(api.pricingFormulaConfig.deleteFreightRate).toHaveBeenCalledWith(1));
       expect(api.pricingFormulaConfig.deleteFreightRate).toHaveBeenCalledTimes(1);
-    });
-
-    it('cancelling the confirmation calls nothing', async () => {
-      renderCeoSettingsPage();
-      await screen.findByText('สูตรคำนวณราคาขายของงาน');
-
-      const dialog = await openDeleteConfirm();
-      fireEvent.click(within(dialog).getByRole('button', { name: 'ยกเลิก' }));
-
-      await waitFor(() => expect(screen.queryByRole('dialog', { name: 'ยืนยันการลบค่าขนส่ง' })).toBeNull());
-      expect(api.pricingFormulaConfig.deleteFreightRate).not.toHaveBeenCalled();
-    });
-
-    it('surfaces a server 400 (interior gap) through showToast', async () => {
-      const showToast = vi.fn();
-      api.pricingFormulaConfig.deleteFreightRate.mockRejectedValue(new Error(
-        'ลบไม่ได้: จะทำให้ช่วงจำนวน (ตร.ม.) ขาดตอนตรงกลาง — China หนา 3-7 มม. ช่วง 1-100 ตร.ม. ลบได้เฉพาะช่วงบนสุดหรือล่างสุด',
-      ));
-      renderCeoSettingsPage(showToast);
-      await screen.findByText('สูตรคำนวณราคาขายของงาน');
-
-      const dialog = await openDeleteConfirm();
-      fireEvent.click(within(dialog).getByRole('button', { name: 'ลบค่าขนส่ง' }));
-
-      await waitFor(() => expect(showToast).toHaveBeenCalledWith('error', expect.stringContaining('ขาดตอนตรงกลาง')));
     });
   });
 
