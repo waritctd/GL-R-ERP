@@ -202,7 +202,7 @@ public record TicketSummaryDto(
      */
     String receiptSource,
     /**
-     * V230 {@code sales.ticket.parent_ticket_id}: the root deal this one is linked under (a bid-split child or an
+     * V204 {@code sales.ticket.parent_ticket_id} (kind: V231): the root deal this one is linked under (a bid-split child or an
      * add-on order), or null for a top-level deal. {@link #parentCode} is that deal's code, {@link #childKind} is
      * {@code BID_SPLIT} or {@code ADD_ON} (null exactly when there is no parent).
      */
@@ -735,7 +735,7 @@ public record TicketSummaryDto(
         return withDrawnDetails(expectedQuarter, receiptSource);
     }
 
-    /** Copy with the V230 link facts set (the row mapper builds the summary through a shorter shape). */
+    /** Copy with the V231 link facts set (the row mapper builds the summary through a shorter shape). */
     public TicketSummaryDto withParent(Long parentTicketId, String parentCode, String childKind, int addOnCount) {
         return new TicketSummaryDto(id, code, type, title, status, priority, createdById, createdByName,
             assignedToId, assignedToName, customerName, customerId, projectId, projectName,

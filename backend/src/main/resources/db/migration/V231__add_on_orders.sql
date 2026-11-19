@@ -1,4 +1,4 @@
--- V230: add-on orders (สั่งเพิ่ม). A contractor buys more later: sales starts a second order under the same project as a
+-- V231: add-on orders (สั่งเพิ่ม). A contractor buys more later: sales starts a second order under the same project as a
 -- linked deal (sales.ticket.parent_ticket_id = the root deal), the same shape a bid-split child already has. child_kind
 -- says why the link exists, so an ADD_ON child is not mistaken for a BID_SPLIT one (the undo of the parent's order
 -- confirmation, the split-letter numbering). Existing children are all bid splits. Also the ADD_ON_ORDER_CREATED ticket

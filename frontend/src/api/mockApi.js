@@ -5018,7 +5018,7 @@ export function applyImportRequestRollupMock(ticket, actor) {
   autoAdvanceStage(ticket, 'DELIVERY_SCHEDULING', actor);
 }
 
-// TicketSummaryDto#parentTicketId / parentCode / childKind / addOnCount (V230). A child is a bid-split or an add-on
+// TicketSummaryDto#parentTicketId / parentCode / childKind / addOnCount (V231). A child is a bid-split or an add-on
 // order; addOnCount is the ROOT's add-on count (an add-on reports its root's), as TicketRepository.SUMMARY_SELECT does.
 function mockLinkFacts(t) {
   const parent = t.parentTicketId != null ? db.tickets.find((x) => x.id === t.parentTicketId) : null;
