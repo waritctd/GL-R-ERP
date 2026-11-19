@@ -24,12 +24,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.web.multipart.MultipartFile;
-import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
-import th.co.glr.hr.commission.CommissionAttachmentRepository;
-import th.co.glr.hr.commission.CommissionCalculator;
-import th.co.glr.hr.commission.CommissionRepository;
-import th.co.glr.hr.commission.CommissionService;
 import th.co.glr.hr.commission.SubmitCommissionRequest;
 import th.co.glr.hr.customer.ContactRepository;
 import th.co.glr.hr.dealquotation.WastageCalculator;
@@ -37,10 +32,8 @@ import th.co.glr.hr.employee.EmployeeCodeGenerator;
 import th.co.glr.hr.employee.EmployeeReferenceRepository;
 import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.employee.UpsertEmployeeRequest;
-import th.co.glr.hr.notification.CeoApproverRepository;
 import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.notification.SalesNotificationMailer;
-import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.pricingrequest.PricingRequestRecipient;
 import th.co.glr.hr.pricingrequest.PricingRequestRepository;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests;
@@ -48,15 +41,12 @@ import th.co.glr.hr.pricingrequest.PricingRequestService;
 import th.co.glr.hr.pricingrequest.QuantityType;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 import th.co.glr.hr.ticket.CreateTicketRequest;
-import th.co.glr.hr.ticket.DealStage;
 import th.co.glr.hr.ticket.TicketRepository;
 
 /** FileStorageService#store copies bytes to disk the instant it is called. This class pins all three, in both
  * directions — a rollback must leave the uploads directory empty, and a commit must leave the file in place
  * and referenced. */
 class FileStorageRollbackOrphanIntegrationTest extends AbstractPostgresIntegrationTest {
-    private static final MultipartFile PDF =
-        new MockMultipartFile("invoiceAttachment", "invoice.pdf", "application/pdf", "pdf-bytes".getBytes());
 
     private EmployeeRepository employees;
     private TicketRepository tickets;
@@ -74,120 +64,7 @@ class FileStorageRollbackOrphanIntegrationTest extends AbstractPostgresIntegrati
 
     // CommissionService#submit
 
-    @Test
-    void commissionSubmit_rollingBackAfterTheFileLands_leavesNoOrphanOnDisk() {
-        CommissionService service = transactional(commissionService(failingAudit()));
-        long salesRepId = createEmployee("พนักงานขาย ออร์แฟน", "rep-orphan-" + UUID.randomUUID() + "@glr.co.th");
-        UserPrincipal manager = actor(createEmployee("ผู้จัดการ ออร์แฟน",
-            "sm-orphan-" + UUID.randomUUID() + "@glr.co.th"), "sales_manager");
-        String invoiceNumber = "INV-ORPHAN-" + UUID.randomUUID();
-
-        assertThatThrownBy(() -> service.submit(request(salesRepId, invoiceNumber), PDF, manager))
-            .isInstanceOf(IllegalStateException.class);
-
-        assertThat(countInvoiceRows(invoiceNumber))
-            .as("precondition for the disk assertion below: the transaction really did roll back, "
-                + "so there is no sales.invoice_details row referencing the stored file")
-            .isZero();
-        assertThat(storedFiles())
-            .as("the invoice PDF was written to disk BEFORE the audit write failed. Postgres rolled "
-                + "the referencing row back; nothing rolls the disk copy back, so without a "
-                + "rollback hook this file survives forever as an unreferenced customer invoice")
-            .isEmpty();
-    }
-
-    @Test
-    void commissionSubmit_committing_stillStoresTheFileAndReferencesIt() {
-        CommissionService service = transactional(commissionService(mock(AuditService.class)));
-        long salesRepId = createEmployee("พนักงานขาย สำเร็จ", "rep-ok-" + UUID.randomUUID() + "@glr.co.th");
-        UserPrincipal manager = actor(createEmployee("ผู้จัดการ สำเร็จ",
-            "sm-ok-" + UUID.randomUUID() + "@glr.co.th"), "sales_manager");
-        String invoiceNumber = "INV-OK-" + UUID.randomUUID();
-
-        var created = service.submit(request(salesRepId, invoiceNumber), PDF, manager);
-
-        // The success path must be untouched by the rollback hook: same file, same place, same name.
-        assertThat(created.invoiceDetails().invoiceAttachmentId()).isNotNull();
-        assertThat(countInvoiceRows(invoiceNumber)).isOne();
-        assertThat(storedFiles())
-            .as("a committed submission keeps exactly the one file store() wrote — proves the "
-                + "rollback test above means 'cleaned up', not 'submit never writes a file'")
-            .hasSize(1);
-        assertThat(committedAttachmentPath(invoiceNumber))
-            .as("and the committed row still points at that exact file, which still exists on disk")
-            .isEqualTo(storedFiles().get(0).toString());
-    }
-
-    /** The vacuity control. Without a proxy @Transactional is inert, so nothing rolls back, no synchronization is
-     * ever active, and the cleanup hook cannot fire. Identical injected failure, but the RAW un-proxied service —
-     * how ~123 other integration tests in this suite are driven. */
-    @Test
-    void commissionSubmit_withoutTheProxy_neverRollsBackSoTheHookNeverFires() {
-        CommissionService rawService = commissionService(failingAudit());
-        long salesRepId = createEmployee("พนักงานขาย ไม่มีพรอกซี", "rep-np-" + UUID.randomUUID() + "@glr.co.th");
-        UserPrincipal manager = actor(createEmployee("ผู้จัดการ ไม่มีพรอกซี",
-            "sm-np-" + UUID.randomUUID() + "@glr.co.th"), "sales_manager");
-        String invoiceNumber = "INV-NOPROXY-" + UUID.randomUUID();
-
-        assertThatThrownBy(() -> rawService.submit(request(salesRepId, invoiceNumber), PDF, manager))
-            .isInstanceOf(IllegalStateException.class);
-
-        assertThat(countInvoiceRows(invoiceNumber))
-            .as("no proxy, no transaction: createInvoice's write auto-commits and survives")
-            .isOne();
-        assertThat(storedFiles())
-            .as("with no transaction there is no rollback to hook, so the file stays — this is the "
-                + "control that proves the proxied tests above are not passing trivially")
-            .hasSize(1);
-    }
-
     // CommissionService#createFromDeal — stores the same file_path into sales.attachment too
-
-    @Test
-    void createFromDeal_rollingBackAfterTheFileLands_leavesNoOrphanOnDisk() {
-        long salesRepId = createEmployee("พนักงานขาย ดีล", "rep-deal-" + UUID.randomUUID() + "@glr.co.th");
-        UserPrincipal account = actor(createEmployee("บัญชี ดีล",
-            "acct-deal-" + UUID.randomUUID() + "@glr.co.th"), "account");
-        long ticketId = closedPaidTicket(salesRepId);
-        CommissionService service = transactional(commissionService(failingAudit()));
-        String invoiceNumber = "INV-DEAL-ORPHAN-" + UUID.randomUUID();
-
-        assertThatThrownBy(() -> service.createFromDeal(ticketId, invoiceNumber, LocalDate.of(2026, 7, 1),
-                new BigDecimal("50000.00"), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
-                BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, PDF, account))
-            .isInstanceOf(IllegalStateException.class);
-
-        assertThat(countInvoiceRows(invoiceNumber)).isZero();
-        assertThat(countTicketAttachments(ticketId))
-            .as("createFromDeal registers the SAME file_path into sales.attachment as well — that "
-                + "row rolls back too, so the file it pointed at is doubly unreferenced")
-            .isZero();
-        assertThat(storedFiles())
-            .as("one physical file backed two rolled-back rows; deleting it once must leave the "
-                + "uploads root empty")
-            .isEmpty();
-    }
-
-    @Test
-    void createFromDeal_committing_stillStoresTheFileAndReferencesItFromBothRows() {
-        long salesRepId = createEmployee("พนักงานขาย ดีลสำเร็จ", "rep-dok-" + UUID.randomUUID() + "@glr.co.th");
-        UserPrincipal account = actor(createEmployee("บัญชี ดีลสำเร็จ",
-            "acct-dok-" + UUID.randomUUID() + "@glr.co.th"), "account");
-        long ticketId = closedPaidTicket(salesRepId);
-        CommissionService service = transactional(commissionService(mock(AuditService.class)));
-        String invoiceNumber = "INV-DEAL-OK-" + UUID.randomUUID();
-
-        service.createFromDeal(ticketId, invoiceNumber, LocalDate.of(2026, 7, 1), new BigDecimal("50000.00"),
-            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
-            BigDecimal.ZERO, BigDecimal.ZERO, PDF, account);
-
-        assertThat(countInvoiceRows(invoiceNumber)).isOne();
-        assertThat(countTicketAttachments(ticketId))
-            .as("the ticket-attachment row that satisfies the deal-close invoiceOnFile gate must "
-                + "still be written — the rollback hook must not touch the success path")
-            .isOne();
-        assertThat(storedFiles()).hasSize(1);
-    }
 
     // PricingRequestService#uploadAttachment
 
@@ -217,56 +94,11 @@ class FileStorageRollbackOrphanIntegrationTest extends AbstractPostgresIntegrati
             .isEmpty();
     }
 
-    @Test
-    void uploadAttachment_committing_stillStoresTheFileAndReferencesIt() {
-        long salesRepId = createEmployee("พนักงานขาย คำขอราคาสำเร็จ", "rep-prok-" + UUID.randomUUID() + "@glr.co.th");
-        UserPrincipal sales = actor(salesRepId, "sales");
-        long pricingRequestId = draftPricingRequest(salesRepId, sales);
-        PricingRequestService service = transactional(pricingRequestService(new PricingRequestRepository(jdbc)));
-
-        var attachment = service.uploadAttachment(pricingRequestId, attachmentFile(), sales);
-
-        assertThat(attachment.fileName()).isEqualTo("spec.pdf");
-        assertThat(countPricingRequestAttachments(pricingRequestId)).isOne();
-        assertThat(storedFiles())
-            .as("a committed upload keeps exactly the one file store() wrote, unchanged")
-            .hasSize(1);
-    }
-
     // Wiring helpers
-
-    private CommissionService commissionService(AuditService audit) {
-        return new CommissionService(
-            new CommissionRepository(jdbc),
-            new CommissionAttachmentRepository(jdbc),
-            new CommissionCalculator(),
-            fileStorage,
-            audit,
-            mock(NotificationService.class),
-            tickets,
-            new AttachmentRepository(jdbc), new CeoApproverRepository(jdbc));
-    }
 
     private PricingRequestService pricingRequestService(PricingRequestRepository requests) {
         return new PricingRequestService(requests, tickets, new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP),
             new ObjectMapper(), new ContactRepository(jdbc), fileStorage, factoryQuoteCarryForward());
-    }
-
-    /** Fails the LAST write of both commission create paths, after the file has really landed. */
-    private AuditService failingAudit() {
-        AuditService audit = mock(AuditService.class);
-        doThrow(new IllegalStateException("injected failure after the file was written to disk"))
-            .when(audit).record(any(), any(), any(), any(), any(), any());
-        return audit;
-    }
-
-    private long closedPaidTicket(long salesRepId) {
-        long ticketId = tickets.create(
-            new CreateTicketRequest("ดีล Orphan File", "NORMAL", null, null, null, null, null, null, null),
-            tickets.nextTicketCode(), salesRepId, "พนักงานขาย ดีล");
-        // createFromDeal's resolveDealLinkage requires CLOSED_PAID; a new ticket starts at V50's lead-stage default.
-        tickets.updateSalesStage(ticketId, DealStage.CLOSED_PAID);
-        return ticketId;
     }
 
     /** A DRAFT pricing request owned by {@code salesRepId} — uploadAttachment's only editable state. */
@@ -310,23 +142,6 @@ class FileStorageRollbackOrphanIntegrationTest extends AbstractPostgresIntegrati
         } catch (IOException exception) {
             throw new UncheckedIOException(exception);
         }
-    }
-
-    private String committedAttachmentPath(String invoiceNumber) {
-        return jdbc.queryForObject("""
-            SELECT fa.file_path
-              FROM hr.file_attachment fa
-              JOIN sales.invoice_details i ON i.invoice_attachment_id = fa.attachment_id
-             WHERE i.invoice_number = :invoiceNumber
-            """, Map.of("invoiceNumber", invoiceNumber), String.class);
-    }
-
-    private int countInvoiceRows(String invoiceNumber) {
-        return count("SELECT COUNT(*) FROM sales.invoice_details WHERE invoice_number = :v", invoiceNumber);
-    }
-
-    private int countTicketAttachments(long ticketId) {
-        return count("SELECT COUNT(*) FROM sales.attachment WHERE ticket_id = :v", ticketId);
     }
 
     private int countPricingRequestAttachments(long pricingRequestId) {

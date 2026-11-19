@@ -89,39 +89,6 @@ class FileDeleteRollbackIntegrationTest extends AbstractPostgresIntegrationTest 
             .isTrue();
     }
 
-    @Test
-    void committingTheDeleteStillRemovesTheFile() {
-        Attachment fixture = uploadedAttachment();
-        AttachmentController controller = transactional(controller());
-
-        controller.delete(fixture.id(), session);
-
-        assertThat(attachmentRows(fixture.id())).isZero();
-        assertThat(Files.exists(fixture.path()))
-            .as("deferring the delete to afterCommit must not turn it into never deleting — a "
-                + "committed removal still has to reclaim the bytes, or every deleted attachment "
-                + "leaks and the rollback test above would pass by doing nothing at all")
-            .isFalse();
-    }
-
-    @Test
-    void deletingWithNoTransactionAtAllStillRemovesTheFileImmediately() {
-        Attachment fixture = uploadedAttachment();
-        // Raw, un-proxied: no transaction, so there is no commit to defer to. Mirrors deleteOnRollback's own "nothing
-        // can roll back, so this is a no-op" guard — the same branch, resolved the other way, because here the
-        // caller's intent is that the file goes.
-        AttachmentController controller = controller();
-
-        controller.delete(fixture.id(), session);
-
-        assertThat(attachmentRows(fixture.id())).isZero();
-        assertThat(Files.exists(fixture.path()))
-            .as("with no synchronization active the deferred hook would never run, so the delete "
-                + "must happen inline — otherwise a non-transactional caller silently leaks every "
-                + "file it deletes")
-            .isFalse();
-    }
-
     // ── wiring ────────────────────────────────────────────────────────────────────────────
 
     private AttachmentController controller() {

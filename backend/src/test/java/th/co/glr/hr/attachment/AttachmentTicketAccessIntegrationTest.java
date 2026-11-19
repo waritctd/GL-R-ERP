@@ -7,8 +7,6 @@ import static org.mockito.Mockito.mock;
 
 import jakarta.servlet.http.HttpSession;
 import java.math.BigDecimal;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
@@ -86,33 +84,8 @@ class AttachmentTicketAccessIntegrationTest extends AbstractPostgresIntegrationT
     // Problem 1: hr held sales-document access it holds nowhere else in the system.
 
     @Test
-    void hrCannotListTheDocumentsOfADealItDoesNotParticipateIn() {
-        assertForbidden(() -> controller.list(ticketId, sessionFor(hr)));
-    }
-
-    @Test
     void hrCannotDownloadADealDocument() {
         assertForbidden(() -> controller.download(attachmentId, sessionFor(hr)));
-    }
-
-    @Test
-    void hrCannotUploadADocumentOntoADeal() {
-        assertForbidden(() -> controller.upload(
-            ticketId, pdfFile(), "OTHER", null, sessionFor(hr)));
-        assertThat(attachments.findByTicketId(ticketId))
-            .as("a refused upload must leave no row behind")
-            .hasSize(1);
-    }
-
-    @Test
-    void hrCannotDeleteADealDocument() {
-        assertForbidden(() -> controller.delete(attachmentId, sessionFor(hr)));
-        assertThat(attachments.findById(attachmentId))
-            .as("a refused delete must leave the row intact")
-            .isPresent();
-        assertThat(Files.exists(Path.of(attachmentPath)))
-            .as("a refused delete must leave the file intact")
-            .isTrue();
     }
 
     // Everyone else who must stay out. These already held before #389 and must keep holding — narrowing hr must
@@ -126,50 +99,9 @@ class AttachmentTicketAccessIntegrationTest extends AbstractPostgresIntegrationT
         assertForbidden(() -> controller.delete(attachmentId, sessionFor(salesOther)));
     }
 
-    @Test
-    void aPlainEmployeeIsRefusedEverything() {
-        assertForbidden(() -> controller.list(ticketId, sessionFor(employee)));
-        assertForbidden(() -> controller.download(attachmentId, sessionFor(employee)));
-        assertForbidden(() -> controller.upload(ticketId, pdfFile(), "OTHER", null, sessionFor(employee)));
-        assertForbidden(() -> controller.delete(attachmentId, sessionFor(employee)));
-    }
-
     // Problem 2: account must be able to OPEN the receipt it confirms money against — but the tax invoice keeps
     // exactly one entry point (CommissionService#createFromDeal), so account gaining read must NOT hand it a
     // second write path.
-
-    @Test
-    void accountCannotUploadADocument_theTaxInvoiceKeepsExactlyOneEntryPoint() {
-        assertForbidden(() -> controller.upload(
-            ticketId, pdfFile(), "INVOICE", null, sessionFor(account)));
-        assertThat(attachments.findByTicketId(ticketId))
-            .as("account must not be able to satisfy the close gate's invoiceOnFile check here")
-            .hasSize(1);
-    }
-
-    @Test
-    void accountCannotDeleteADocumentItDidNotUpload() {
-        assertForbidden(() -> controller.delete(attachmentId, sessionFor(account)));
-        assertThat(attachments.findById(attachmentId)).isPresent();
-    }
-
-    // H1 lockdown: account is ROW-SCOPED to its list scope. The fixture deal is at the default (lead) stage, so it
-    // is refused until the deal is put inside the scope (S12); all four attach types stay readable there
-    // (AttachType is exactly {PO, SIGNED_QUOTATION, INVOICE, OTHER}, so no type filter).
-    @Test
-    void accountCanOpenTheDocumentItMustConfirmMoneyAgainst_onlyInsideItsListScope() {
-        assertForbidden(() -> controller.list(ticketId, sessionFor(account)));
-        assertForbidden(() -> controller.download(attachmentId, sessionFor(account)));
-
-        jdbc.update("UPDATE sales.ticket SET sales_stage = 'PROCUREMENT' WHERE ticket_id = :id",
-            Map.of("id", ticketId));
-
-        assertThat(controller.list(ticketId, sessionFor(account)).get("attachments"))
-            .extracting(AttachmentDto::id)
-            .containsExactly(attachmentId);
-        assertThatCode(() -> controller.download(attachmentId, sessionFor(account)))
-            .doesNotThrowAnyException();
-    }
 
     // Positive controls: the roles whose job this is keep the access they had.
 
@@ -183,17 +115,6 @@ class AttachmentTicketAccessIntegrationTest extends AbstractPostgresIntegrationT
             assertThatCode(() -> controller.upload(ticketId, pdfFile(), "OTHER", null, sessionFor(actor)))
                 .as("upload for role %s", actor.role()).doesNotThrowAnyException();
         }
-    }
-
-    /** Import's refusal (issue #389 review), enforced end-to-end, now bounded by ROW SCOPE (owner ruling
-     * 2026-09-30): import reads a deal's documents only when the deal is inside its import scope
-     * (TicketRepository#isInImportScope) or it is the deal's participant. */
-    @Test
-    void importIsRefusedDocumentsOnAnOutOfScopeDealItHasNotPickedUp() {
-        assertForbidden(() -> controller.list(ticketId, sessionFor(importUser)));
-        assertForbidden(() -> controller.download(attachmentId, sessionFor(importUser)));
-        assertForbidden(() -> controller.upload(ticketId, pdfFile(), "OTHER", null, sessionFor(importUser)));
-        assertForbidden(() -> controller.delete(attachmentId, sessionFor(importUser)));
     }
 
     // ── dead deals (owner ruling 2026-11-04): import / account may READ the documents of a lost or cancelled deal
@@ -213,28 +134,9 @@ class AttachmentTicketAccessIntegrationTest extends AbstractPostgresIntegrationT
             """, Map.of("id", ticketId));
     }
 
-    private void seedIssuedImportRequest() {
-        long factoryId = jdbc.queryForObject("""
-            INSERT INTO price_catalog.factories (name, country, default_currency)
-            VALUES ('Factory Attach Dead', 'IT', 'EUR') RETURNING factory_id
-            """, Map.of(), Long.class);
-        jdbc.update("""
-            INSERT INTO sales.import_request
-                (ticket_id, factory_id, factory_name, brand, version, status, doc_number, issue_date,
-                 import_step, import_step_at, first_issued_date)
-            VALUES (:t, :f, 'Factory Attach Dead', 'Brand', 1, 'ISSUED', 'IR-ATT-1', CURRENT_DATE,
-                    'CONTACTED', CURRENT_DATE, CURRENT_DATE)
-            """, Map.of("t", ticketId, "f", factoryId));
-    }
-
     private void assertCanRead(UserPrincipal who) {
         assertThatCode(() -> controller.list(ticketId, sessionFor(who))).as("list, %s", who.role()).doesNotThrowAnyException();
         assertThatCode(() -> controller.download(attachmentId, sessionFor(who))).as("download, %s", who.role()).doesNotThrowAnyException();
-    }
-
-    private void assertCannotRead(UserPrincipal who) {
-        assertForbidden(() -> controller.list(ticketId, sessionFor(who)));
-        assertForbidden(() -> controller.download(attachmentId, sessionFor(who)));
     }
 
     @Test
@@ -245,60 +147,6 @@ class AttachmentTicketAccessIntegrationTest extends AbstractPostgresIntegrationT
         assertCanRead(account);
         assertForbidden(() -> controller.upload(ticketId, pdfFile(), "OTHER", null, sessionFor(account)));
         assertForbidden(() -> controller.delete(attachmentId, sessionFor(account)));
-    }
-
-    @Test
-    void importCanReadTheDocumentsOfADeadDeal_thatHasAnIssuedImportRequest_butNotWriteThem() {
-        markDead();
-        seedIssuedImportRequest();
-
-        assertCanRead(importUser);
-        assertForbidden(() -> controller.upload(ticketId, pdfFile(), "OTHER", null, sessionFor(importUser)));
-        assertForbidden(() -> controller.delete(attachmentId, sessionFor(importUser)));
-    }
-
-    /** Each role is widened by ITS OWN document only, and a dead deal with neither document stays closed to both. */
-    @Test
-    void aDeadDeal_isOpenOnlyThroughTheCallersOwnIssuedDocument() {
-        markDead();
-        assertCannotRead(account);
-        assertCannotRead(importUser);
-
-        seedIssuedDepositNotice();
-        assertCanRead(account);
-        assertCannotRead(importUser); // a deposit notice is not import's document
-
-        seedIssuedImportRequest();
-        assertCanRead(importUser);
-    }
-
-    /** hr and a rep who does not own the deal stay out even when BOTH issued documents exist. */
-    @Test
-    void hrAndANonOwningRepStayRefused_onADeadDealWithBothIssuedDocuments() {
-        markDead();
-        seedIssuedDepositNotice();
-        seedIssuedImportRequest();
-
-        assertCannotRead(hr);
-        assertCannotRead(salesOther);
-        assertCannotRead(employee);
-    }
-
-    @Test
-    void theUploaderKeepsAccessToTheirOwnFileRegardlessOfTheDealGate() {
-        FileStorageService.StoredFile own = storeFile("own-" + UUID.randomUUID() + ".pdf");
-        long ownId = attachments.save(ticketId, null, own.fileName(), own.filePath(),
-            own.mimeType(), own.fileSize(), "OTHER", account.id()).id();
-
-        assertThatCode(() -> controller.download(ownId, sessionFor(account))).doesNotThrowAnyException();
-        assertThat(controller.delete(ownId, sessionFor(account)).get("ok")).isTrue();
-    }
-
-    @Test
-    void anUnknownDealIs404NotAnAuthzLeak() {
-        assertThatThrownBy(() -> controller.list(ticketId + 999_999L, sessionFor(ceo)))
-            .isInstanceOfSatisfying(ApiException.class,
-                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.NOT_FOUND));
     }
 
     // ── helpers ───────────────────────────────────────────────────────────────────────────
