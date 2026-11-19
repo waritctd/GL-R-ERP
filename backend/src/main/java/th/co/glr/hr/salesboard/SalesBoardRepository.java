@@ -67,7 +67,8 @@ public class SalesBoardRepository {
                  WHERE ep.ticket_id = t.ticket_id AND ep.kind = 'DEPOSIT' AND ep.status = 'OPEN') AS expected_deposit_week,
                (t.payment_status IN (:depositInHandStatuses)
                 AND COALESCE(t.deposit_policy, '') NOT IN (:depositBypassPolicies)) AS deposit_received,
-               la.kind AS last_activity_kind, la.note AS last_activity_note
+               la.kind AS last_activity_kind, la.note AS last_activity_note,
+               EXISTS (SELECT 1 FROM sales.ticket ao WHERE ao.parent_ticket_id = t.ticket_id AND ao.child_kind = 'ADD_ON') AS has_add_on
           FROM sales.ticket t
           JOIN hr.employee e ON e.employee_id = t.created_by
           LEFT JOIN customers.project p ON p.project_id = t.project_id
@@ -232,11 +233,11 @@ public class SalesBoardRepository {
             rs.getObject("expected_deposit_week", java.time.LocalDate.class), rs.getBoolean("deposit_received"),
             null, false, 1, List.of(rs.getString("code")), 1, rs.getLong("ticket_id"));
         return new Row(deal, rs.getString("code"), rs.getObject("parent_ticket_id", Long.class),
-            rs.getString("child_kind"), rs.getString("lifecycle"));
+            rs.getString("child_kind"), rs.getString("lifecycle"), rs.getBoolean("has_add_on"));
     }
 
     /** A board row with the facts only the fold reads. */
-    private record Row(BoardDeal deal, String code, Long parentId, String childKind, String lifecycle) {
+    private record Row(BoardDeal deal, String code, Long parentId, String childKind, String lifecycle, boolean hasAddOns) {
         boolean isAddOn() {
             return "ADD_ON".equals(childKind) && parentId != null;
         }
@@ -251,23 +252,27 @@ public class SalesBoardRepository {
         ProjectFold.Ops<Row> ops = new ProjectFold.Ops<>() {
             public long id(Row r) { return r.deal().ticketId(); }
             public Long parentId(Row r) { return r.isAddOn() ? r.parentId() : null; }
+            public boolean hasAddOns(Row r) { return r.hasAddOns(); }
             public String code(Row r) { return r.code(); }
             public boolean visible(Row r) { return ownerScope == null || r.deal().ownerId() == ownerScope; }
             public boolean open(Row r) {
                 return "ACTIVE".equals(r.lifecycle()) && !"CLOSED_PAID".equals(r.deal().salesStage());
             }
-            public boolean cancelled(Row r) { return "CANCELLED".equals(r.lifecycle()); }
+            public boolean cancelled(Row r) { return "CANCELLED".equals(r.lifecycle()) || "CLOSED_LOST".equals(r.lifecycle()); }
             public Instant activity(Row r) { return r.deal().lastTouchedAt(); }
             public Row project(ProjectFold.Project<Row> p) { return projectRow(p); }
         };
         return ProjectFold.fold(rows, ops, this::relatedRows, skipIfOpen).stream().map(Row::deal).toList();
     }
 
-    /** Every add-on of the given roots and the roots themselves (any lifecycle, any owner): the chain's other orders. */
-    private List<Row> relatedRows(java.util.Set<Long> keys) {
+    /** The chain's other orders (any lifecycle, any owner) the list lacks: the given roots and the add-ons of the
+     * expanded roots, minus what is already listed. */
+    private List<Row> relatedRows(java.util.Set<Long> roots, java.util.Set<Long> expandRoots, java.util.Set<Long> listed) {
         return jdbc.query(ROW_SELECT
-                + " WHERE t.ticket_id IN (:keys) OR (t.child_kind = 'ADD_ON' AND t.parent_ticket_id IN (:keys))",
-            params().addValue("keys", keys), this::map);
+                + " WHERE (t.ticket_id IN (:roots) OR (t.child_kind = 'ADD_ON' AND t.parent_ticket_id IN (:expand)))"
+                + " AND t.ticket_id NOT IN (:listed)",
+            params().addValue("roots", roots.isEmpty() ? java.util.Set.of(-1L) : roots).addValue("expand", expandRoots)
+                .addValue("listed", listed), this::map);
     }
 
     private static Row projectRow(ProjectFold.Project<Row> p) {
@@ -292,7 +297,7 @@ public class SalesBoardRepository {
         long linkId = p.mayOpenRoot() ? root.ticketId() : lead.ticketId();
         BoardDeal deal = lead.asProject(linkId, root, owner.ownerId(), owner.ownerName(), value, currency,
             p.count(), p.open().size(), p.codes(Row::code));
-        return new Row(deal, p.root().code(), null, null, p.lead().lifecycle());
+        return new Row(deal, p.root().code(), null, null, p.lead().lifecycle(), false);
     }
 
     /** The quotation's grand total, derived exactly as DealQuotationRepository#mapQuotation derives it. */

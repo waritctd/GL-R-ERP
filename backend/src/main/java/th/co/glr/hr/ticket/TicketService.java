@@ -244,11 +244,15 @@ public class TicketService {
         // pipeline relevant to their own worklist — see TicketRepository.appendRoleScope.
         // ceo/sales_manager/sales are unaffected (the repository ignores any other role).
         if (fold != null && FOLD_ROLES.contains(actor.role())) {
+            // Capped at PageRequest.MAX_SIZE orders; `total` then carries the real count so the client can see the cut.
             List<TicketSummaryDto> all = forRole(
-                tickets.findSummaries(status, salesStage, createdByFilter, actor.role(), null, movementFrom, movementTo),
+                tickets.findSummaries(status, salesStage, createdByFilter, actor.role(),
+                    new PageRequest(0, PageRequest.MAX_SIZE), movementFrom, movementTo),
                 actor.role());
             List<TicketSummaryDto> folded = foldProjects(all);
-            return new Page<>(folded, 0, Math.max(folded.size(), 1), folded.size());
+            int total = all.size() < PageRequest.MAX_SIZE ? folded.size()
+                : Math.max(folded.size(), tickets.countSummaries(status, salesStage, createdByFilter, actor.role()));
+            return new Page<>(folded, 0, Math.max(folded.size(), 1), total);
         }
         List<TicketSummaryDto> rows =
             forRole(tickets.findSummaries(status, salesStage, createdByFilter, actor.role(), page, movementFrom, movementTo),
@@ -267,12 +271,13 @@ public class TicketService {
         ProjectFold.Ops<TicketSummaryDto> ops = new ProjectFold.Ops<>() {
             public long id(TicketSummaryDto t) { return t.id(); }
             public Long parentId(TicketSummaryDto t) { return "ADD_ON".equals(t.childKind()) ? t.parentTicketId() : null; }
+            public boolean hasAddOns(TicketSummaryDto t) { return false; } // only a root outside the list matters here
             public String code(TicketSummaryDto t) { return t.code(); }
             public boolean visible(TicketSummaryDto t) { return listed.contains(t.id()); }
             public boolean open(TicketSummaryDto t) {
                 return "ACTIVE".equals(t.lifecycle()) && !"CLOSED_PAID".equals(t.salesStage());
             }
-            public boolean cancelled(TicketSummaryDto t) { return "CANCELLED".equals(t.lifecycle()); }
+            public boolean cancelled(TicketSummaryDto t) { return "CANCELLED".equals(t.lifecycle()) || "CLOSED_LOST".equals(t.lifecycle()); }
             public java.time.Instant activity(TicketSummaryDto t) {
                 java.time.Instant a = t.lastActivityAt() == null ? null
                     : t.lastActivityAt().atStartOfDay(java.time.ZoneOffset.UTC).toInstant();
@@ -297,10 +302,7 @@ public class TicketService {
                 return a == null ? b : b == null ? a : a.add(b);
             }
         };
-        return ProjectFold.fold(rows, ops,
-            keys -> keys.stream().filter(k -> !listed.contains(k))
-                .map(k -> tickets.findSummaryById(k).orElse(null)).filter(java.util.Objects::nonNull).toList(),
-            false);
+        return ProjectFold.fold(rows, ops, (roots, expand, alreadyListed) -> tickets.findSummariesByIds(roots), false);
     }
 
     public TicketDto get(long id, UserPrincipal actor) {

@@ -21,7 +21,7 @@ import java.util.function.Function;
  *   <li>Lead order: the root when the root is open; else the open add-on with the latest activity. Every STATE field
  *       (stage, lifecycle, quiet, follow-up, payment-due chip) comes from the lead. No order open: from the root
  *       (or, when the viewer cannot see the root, from the viewer's latest order).</li>
- *   <li>Orders counted: every non-cancelled order of the chain the viewer may see, root first, then by order number;
+ *   <li>Orders counted: every order that is neither cancelled nor lost of the chain the viewer may see, root first, then by order number;
  *       value: the sum of the OPEN ones only (none open: all of them).</li>
  *   <li>Link: the root's id when the viewer may see the root, else the lead order's id.</li>
  *   <li>Rows that are not part of an add-on chain (including bid-split children) pass through untouched.</li>
@@ -37,6 +37,9 @@ public final class ProjectFold {
         /** The root's id when {@code t} is an ADD_ON order, else null. */
         Long parentId(T t);
 
+        /** True when {@code t} is a root that has add-on orders (so the fold must look for them). */
+        boolean hasAddOns(T t);
+
         String code(T t);
 
         /** May the viewer see (own, or the list's scope covers) this order? Only visible orders are counted. */
@@ -45,6 +48,7 @@ public final class ProjectFold {
         /** ACTIVE and not CLOSED_PAID. */
         boolean open(T t);
 
+        /** Cancelled or lost: not counted, and never the lead while another order stands. */
         boolean cancelled(T t);
 
         Instant activity(T t);
@@ -66,27 +70,46 @@ public final class ProjectFold {
         }
     }
 
+    /** Loads the chain rows the list does not carry. */
+    @FunctionalInterface
+    public interface Related<T> {
+        /**
+         * @param roots       roots referenced by a listed add-on but not listed themselves: load them
+         * @param expandRoots roots whose add-ons to load as well (listed roots that have add-ons, and {@code roots})
+         * @param listed      ids already in the list: never load these again
+         */
+        Collection<T> load(Set<Long> roots, Set<Long> expandRoots, Set<Long> listed);
+    }
+
     /**
      * @param rows       the list as the caller's query produced it (its own scope and filters)
-     * @param related    the chain rows beyond {@code rows} for the given project keys: every add-on of those roots and
-     *                   the roots themselves, whatever their lifecycle (the caller's {@code visible} decides)
+     * @param related    the chain rows beyond {@code rows}: only what is missing, whatever its lifecycle (the caller's
+     *                   {@code visible} decides); never called when nothing is missing (no add-ons in the list)
      * @param skipIfOpen drop a project that has an open order: for the "returning from pause" list, whose projects
      *                   are on the board already
      */
-    public static <T> List<T> fold(List<T> rows, Ops<T> ops, Function<Set<Long>, Collection<T>> related,
+    public static <T> List<T> fold(List<T> rows, Ops<T> ops, Related<T> related,
                                    boolean skipIfOpen) {
-        Set<Long> keys = new LinkedHashSet<>();
-        for (T r : rows) {
-            Long parent = ops.parentId(r);
-            keys.add(parent != null ? parent : ops.id(r));
-        }
-        if (keys.isEmpty()) {
+        if (rows.isEmpty()) {
             return rows;
         }
         Map<Long, T> byId = new LinkedHashMap<>();
         rows.forEach(r -> byId.put(ops.id(r), r));
-        for (T r : related.apply(keys)) {
-            byId.putIfAbsent(ops.id(r), r);
+        Set<Long> roots = new LinkedHashSet<>();
+        Set<Long> expand = new LinkedHashSet<>();
+        for (T r : rows) {
+            Long parent = ops.parentId(r);
+            if (parent != null) {
+                (byId.containsKey(parent) ? expand : roots).add(parent);
+            } else if (ops.hasAddOns(r)) {
+                expand.add(ops.id(r));
+            }
+        }
+        expand.addAll(roots);
+        if (!expand.isEmpty()) {
+            for (T r : related.load(roots, expand, new HashSet<>(byId.keySet()))) {
+                byId.putIfAbsent(ops.id(r), r);
+            }
         }
         Map<Long, List<T>> addOns = new LinkedHashMap<>();
         for (T r : byId.values()) {

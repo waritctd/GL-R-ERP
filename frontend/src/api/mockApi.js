@@ -6946,11 +6946,22 @@ function mockOrderChain(ticket) {
     .sort((a, b) => a.id - b.id)];
 }
 
-/** Every line of every approved quotation in the chain, latest approval first. */
-function mockApprovedChainSources(ticket) {
+/** M1 (DealQuotationService#reuseCustomerId): the customer whose approved prices may be reused: the first order's
+ * confirmed quotation's party, else the party being written to, else the deal's own customer. -1 matches nothing. */
+function mockReuseCustomerId(ticket, ownPartyId = null) {
+  const customerOf = (partyId) => (partyId != null ? mockDealParties.find((p) => p.id === Number(partyId))?.customerId ?? null : null);
+  const root = mockOrderChain(ticket)[0];
+  const confirmed = mockConfirmedQuotationEvent(root)
+    ? mockDealQuotations.find((q) => q.id === root.orderConfirmedQuotationId) : null;
+  return customerOf(confirmed?.partyId) ?? customerOf(ownPartyId) ?? ticket.customerId ?? -1;
+}
+
+/** Every line of every approved quotation in the chain addressed to `customerId`, latest approval first. */
+function mockApprovedChainSources(ticket, customerId) {
   const chain = mockOrderChain(ticket);
   return mockDealQuotations
-    .filter((q) => chain.some((t) => t.id === q.ticketId) && MOCK_APPROVED_QUOTATION_STATUSES.includes(q.docStatus))
+    .filter((q) => chain.some((t) => t.id === q.ticketId) && MOCK_APPROVED_QUOTATION_STATUSES.includes(q.docStatus)
+      && (mockDealParties.find((p) => p.id === q.partyId)?.customerId ?? chain.find((t) => t.id === q.ticketId)?.customerId) === customerId)
     .sort((a, b) => String(b.approvedAt ?? '').localeCompare(String(a.approvedAt ?? '')) || b.id - a.id)
     .flatMap((q) => {
       const owner = chain.find((t) => t.id === q.ticketId);
@@ -6968,9 +6979,9 @@ function mockReferenceQuotation(ticket, sources) {
 }
 
 /** A claim of reuse is kept only for an approved item of this ADD_ON deal's chain; anywhere else it is dropped. */
-function mockKeepValidSources(ticket, items) {
+function mockKeepValidSources(ticket, items, ownPartyId = null) {
   const valid = ticket.childKind === 'ADD_ON'
-    ? new Set(mockApprovedChainSources(ticket).map((s) => s.item.id)) : new Set();
+    ? new Set(mockApprovedChainSources(ticket, mockReuseCustomerId(ticket, ownPartyId)).map((s) => s.item.id)) : new Set();
   items.forEach((it) => {
     if (it.sourceQuotationItemId != null && !valid.has(it.sourceQuotationItemId)) it.sourceQuotationItemId = null;
   });
@@ -6983,9 +6994,13 @@ const sameMockMoney = (a, b) => (a == null ? b == null : b != null && Number(a) 
 function mockReusesApprovedPricesOnly(row, ticket) {
   if ((row.origin || 'DEAL_DIRECT') !== 'DEAL_DIRECT' || ticket.childKind !== 'ADD_ON' || !row.items?.length) return false;
   if (row.items.some((it) => it.sourceQuotationItemId == null || (it.lineType ?? 'TILE') === 'ADJUSTMENT')) return false;
-  const sources = mockApprovedChainSources(ticket);
+  const customerId = mockReuseCustomerId(ticket, row.partyId);
+  const ownCustomer = row.partyId != null ? mockDealParties.find((p) => p.id === row.partyId)?.customerId ?? null : null;
+  if (ownCustomer != null && ownCustomer !== customerId) return false;
+  const sources = mockApprovedChainSources(ticket, customerId);
   const reference = mockReferenceQuotation(ticket, sources);
   if (!reference || reference.depositPercent == null || reference.depositPercent !== row.depositPercent
+    || (reference.validityDays ?? null) !== (row.validityDays ?? null)
     || !sameMockText(reference.remainderMode, row.remainderMode) || (reference.creditDays ?? null) !== (row.creditDays ?? null)
     || !sameMockText(reference.fullPaymentTerm, row.fullPaymentTerm)
     || row.validityMode === 'DATE' || String(row.customerNotes ?? '').trim() !== '') return false;
@@ -7005,7 +7020,10 @@ function mockReusesApprovedPricesOnly(row, ticket) {
       && ['productCode', 'brand', 'model', 'color', 'texture', 'sizeText', 'originCountry', 'unit', 'descriptionLine']
         .every((k) => sameMockText(a[k], b[k]))
       && sameMockMoney(a.thicknessMm, b.thicknessMm) && sameMockMoney(a.sqmPerPiece, b.sqmPerPiece)
-      && sameMockMoney(a.sqmPerBox, b.sqmPerBox) && (a.piecesPerBox ?? null) === (b.piecesPerBox ?? null);
+      && sameMockMoney(a.sqmPerBox, b.sqmPerBox) && (a.piecesPerBox ?? null) === (b.piecesPerBox ?? null)
+      // I2: the printed delivery promise is part of what is sold.
+      && (a.leadTimeMinDays ?? null) === (b.leadTimeMinDays ?? null)
+      && (a.leadTimeMaxDays ?? null) === (b.leadTimeMaxDays ?? null) && sameMockText(a.stockSource, b.stockSource);
   });
 }
 
@@ -7064,8 +7082,8 @@ function mockApproveDirectRow(row, user, note) {
 }
 
 /** DealQuotationService#submitDraftRow: an ADD_ON draft that reuses approved prices only is approved at once, no notice. */
-function submitDealQuotationRowOrApproveByRule(row, ticket, user) {
-  if (!mockReusesApprovedPricesOnly(row, ticket)) return submitDealQuotationRow(row, user);
+function submitDealQuotationRowOrApproveByRule(row, ticket, user, afterRejection = false) {
+  if (afterRejection || !mockReusesApprovedPricesOnly(row, ticket)) return submitDealQuotationRow(row, user);
   const now = new Date().toISOString();
   row.docStatus = 'PENDING_APPROVAL';
   row.submittedAt = now;
@@ -7075,7 +7093,7 @@ function submitDealQuotationRowOrApproveByRule(row, ticket, user) {
   // DealQuotationRepository#approveByReuseRule: no approver snapshot, the basis and source numbers stored.
   const sourceIds = new Set(row.items.map((it) => it.sourceQuotationItemId));
   row.approvalBasis = 'REUSED_APPROVED_PRICE';
-  row.approvalSourceNumbers = [...new Set(mockApprovedChainSources(ticket)
+  row.approvalSourceNumbers = [...new Set(mockApprovedChainSources(ticket, mockReuseCustomerId(ticket, row.partyId))
     .filter((src) => sourceIds.has(src.item.id)).map((src) => src.quotation.number))].join(', ');
   row.approverSignatureSnapshot = false;
   return delay({ quotation: buildDealQuotationDto(row) });
@@ -9062,7 +9080,7 @@ function mockBoardFoldOps(ownerScope) {
     parentId: (r) => (isAddOn(r) ? ticket(r).parentTicketId : null),
     visible: (r) => ownerScope == null || r.ownerId === ownerScope,
     open: (r) => (ticket(r).lifecycle ?? 'ACTIVE') === 'ACTIVE' && ticket(r).salesStage !== 'CLOSED_PAID',
-    cancelled: (r) => ticket(r).lifecycle === 'CANCELLED',
+    cancelled: (r) => ['CANCELLED', 'CLOSED_LOST'].includes(ticket(r).lifecycle),
     activity: (r) => r.lastTouchedAt,
     related: (keys) => mockBoardRows((t) => keys.has(t.id) || (t.childKind === 'ADD_ON' && keys.has(t.parentTicketId))),
     project: ({ root, lead, orders, open, mayOpenRoot }) => {
@@ -10160,7 +10178,7 @@ export const api = {
             parentId: (x) => (x.childKind === 'ADD_ON' ? x.parentTicketId : null),
             visible: (x) => listed.has(x.id),
             open: (x) => lifecycleOf(x) === 'ACTIVE' && x.salesStage !== 'CLOSED_PAID',
-            cancelled: (x) => lifecycleOf(x) === 'CANCELLED',
+            cancelled: (x) => ['CANCELLED', 'CLOSED_LOST'].includes(lifecycleOf(x)),
             activity: (x) => [x.lastActivityAt, x.stageUpdatedAt].filter(Boolean).sort().at(-1) ?? null,
             // A root outside the viewer's list lends its code and title only.
             related: (keys) => [...keys].filter((k) => !listed.has(k)).map((k) => db.tickets.find((x) => x.id === k)).filter(Boolean)
@@ -11163,6 +11181,9 @@ export const api = {
         // route), with the normal stage event, like DealPartyService#createAddOnOrder.
         salesStage: 'QUOTE_BUYER', createdAt: now.slice(0, 10), updatedAt: now.slice(0, 10), closedAt: null, stageUpdatedAt: now,
         events: [],
+        // DealPartyRepository#forkAddOn copies none of these: the root's value must not be counted twice on the board.
+        estimatedValue: null, importedValue: null, expectedQuarter: null, buyerName: null, pauseReturnOn: null,
+        lastFollowUpAt: null,
       };
       db.tickets.unshift(child);
       const headline = mockPartiesOf(root.id).find((p) => p.headline);
@@ -19106,7 +19127,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       if (!ticket) fail('ไม่พบงานนี้', 404);
       requireDealQuotationWriteAccess(ticket, user);
       if (ticket.childKind !== 'ADD_ON') fail('ใช้ได้เฉพาะออเดอร์สั่งเพิ่มเท่านั้น', 409);
-      const sources = mockApprovedChainSources(ticket);
+      const sources = mockApprovedChainSources(ticket, mockReuseCustomerId(ticket));
       const seen = new Set();
       const items = [];
       sources.forEach(({ item, quotation, orderCode }) => {
@@ -19280,7 +19301,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       const now = new Date().toISOString();
       const header = resolveDealQuotationV3Header(payload);
       const items = buildDealQuotationItems(payload.items, header.priceMode, null, header.documentLanguage);
-      mockKeepValidSources(ticket, items);
+      mockKeepValidSources(ticket, items, payload.partyId ?? null);
       // quotationDate check uses the SAME `now.slice(0, 10)` the row's own quotationDate below is set from, so the
       // two can never disagree about "today".
       const { validityMode, validityUntil } = resolveDealQuotationValidity(
@@ -19595,7 +19616,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
         : resolveDealQuotationContact(snapTicket, payload, row);
       const header = resolveDealQuotationV3Header(payload, row);
       const items = buildDealQuotationItems(payload.items, header.priceMode, row.items, header.documentLanguage);
-      mockKeepValidSources(ticket, items);
+      mockKeepValidSources(ticket, items, row.partyId ?? null);
       // Carry the pricing-request/decision-item LINK forward across the save, keyed by the (stable) item id — the
       // client payload has no field for either, so a link can only ever be established at createFromPricingRequest,
       // never here. Mirrors DealQuotationService#update's own #withDecisionLink device.
@@ -19817,7 +19838,8 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
         }
         const revision = mintDealQuotationRevision(row, user);
         mockDealQuotations.push(revision);
-        return submitDealQuotationRowOrApproveByRule(revision, ticket, user);
+        // M2: the rule never approves a resubmission after a human rejection.
+        return submitDealQuotationRowOrApproveByRule(revision, ticket, user, true);
       }
       return submitDealQuotationRowOrApproveByRule(row, ticket, user);
     },

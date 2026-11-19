@@ -20,6 +20,7 @@ import { DealBoard } from './DealBoard.jsx';
 import { FollowUpList } from './FollowUpList.jsx';
 import { CallModal } from './CallModal.jsx';
 import { withFollowUp } from './FollowUpPicks.jsx';
+import { actionTicketId } from './dealPickGroups.js';
 import { CallPicker, TodayOnPhone } from './TodayOnPhone.jsx';
 import { SampleSentModal } from './SampleSentModal.jsx';
 import { LogVisitModal, PlanVisitModal, VisitDoneModal } from './VisitDialogs.jsx';
@@ -141,25 +142,25 @@ export function MyWork({ subtitle, before = null, user, showToast = () => {} }) 
 
   const callMutation = useMutation({
     // Slice 6.4: a picked ตามครั้งถัดไป rides on the same request as the deal's nextFollowUpAt; none, no key at all.
-    mutationFn: ({ deal, note, nextFollowUpAt }) => api.tickets.addActivity(deal.ticketId, withFollowUp({
+    mutationFn: ({ deal, note, nextFollowUpAt }) => api.tickets.addActivity(actionTicketId(deal), withFollowUp({
       kind: 'CALL', activityDate: bangkokTodayIso(), note,
     }, nextFollowUpAt)),
     onSuccess: refresh,
   });
   // Slice 6d: ส่งตัวอย่าง is a SAMPLE_SENT deal activity on the same endpoint as a call; what was sent is its note.
   const sampleMutation = useMutation({
-    mutationFn: ({ deal, note, nextFollowUpAt }) => api.tickets.addActivity(deal.ticketId, withFollowUp({
+    mutationFn: ({ deal, note, nextFollowUpAt }) => api.tickets.addActivity(actionTicketId(deal), withFollowUp({
       kind: 'SAMPLE_SENT', activityDate: bangkokTodayIso(), note,
     }, nextFollowUpAt)),
     onSuccess: refresh,
   });
   const lostMutation = useMutation({
-    mutationFn: ({ deal, payload }) => api.tickets.markLost(deal.ticketId, payload),
+    mutationFn: ({ deal, payload }) => api.tickets.markLost(actionTicketId(deal), payload),
     onSuccess: refresh,
   });
   // A returning paused deal (V220) leaves ควรตามต่อ when resumed — the same POST /resume the deal page uses.
   const resumeMutation = useMutation({
-    mutationFn: (deal) => api.tickets.resume(deal.ticketId, {}),
+    mutationFn: (deal) => api.tickets.resume(actionTicketId(deal), {}),
     onSuccess: () => { refresh(); showToast('success', 'ดำเนินการต่อแล้ว'); },
     onError: fail,
   });

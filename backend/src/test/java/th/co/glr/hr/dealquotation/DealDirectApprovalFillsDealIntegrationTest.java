@@ -368,6 +368,58 @@ class DealDirectApprovalFillsDealIntegrationTest extends AbstractDealQuotationSl
         assertThat(submitReuse(addOn, UnaryOperator.identity(), 50, 15).docStatus()).isEqualTo("PENDING_APPROVAL");
     }
 
+    /** The printed delivery promise is part of what is sold: a reused line with a changed lead time needs approval. */
+    @Test
+    void addOn_reusedLineWithAChangedLeadTime_fallsBackToApproval() {
+        long addOn = addOnWithApprovedRoot();
+
+        DealQuotationDto submitted = submitReuse(addOn, i -> new ItemInput(i.locationLabel(), i.catalogPriceId(),
+            i.productCode(), i.brand(), i.model(), i.color(), i.texture(), i.sizeText(), i.thicknessMm(), i.sqmPerPiece(),
+            i.quantityMode(), i.areaSqm(), i.piecesInput(), i.wastageMode(), i.wastageValue(), i.piecesPerBox(),
+            i.unitPrice(), i.discountPct(), i.originCountry(),
+            i.leadTimeMinDays() == null ? 1 : i.leadTimeMinDays() + 1, i.leadTimeMaxDays() == null ? null : i.leadTimeMaxDays() + 1, i.itemNotes(), i.lineType(),
+            i.description(), i.quantity(), i.unit(), i.specialPriceSqm(), i.directNetPrice(), i.adjustmentPct(),
+            i.adjustmentDeadline(), i.adjustmentAmount(), i.id(), i.sqmPerBox(), i.roundToFullBox(), i.listPriceSqm(),
+            i.directNetPriceSqm(), i.priceMode(), i.stockSource(), i.sourceQuotationItemId()), 50);
+
+        assertThat(submitted.docStatus()).isEqualTo("PENDING_APPROVAL");
+    }
+
+    /** Only approved prices addressed to the SAME party are sources: a quotation of the project addressed to another
+     * party (a losing bidder) is not offered, and a claim on its line is dropped, so the line needs approval. */
+    @Test
+    void addOn_approvedQuotationOfAnotherParty_isNotOfferedAndCannotBeClaimed() {
+        long addOn = addOnWithApprovedRoot();
+        List<ItemInput> lines = quotationService.reusableApprovedItems(addOn, salesActor).items().stream()
+            .map(i -> i.item()).toList();
+        long root = jdbc.queryForObject("SELECT parent_ticket_id FROM sales.ticket WHERE ticket_id = :id",
+            Map.of("id", addOn), Long.class);
+        long rootQuotation = jdbc.queryForObject("SELECT quotation_id FROM sales.quotation WHERE ticket_id = :id",
+            Map.of("id", root), Long.class);
+        attachToBuyerParty(root, rootQuotation);
+
+        assertThat(quotationService.reusableApprovedItems(addOn, salesActor).items()).isEmpty();
+        DealQuotationDto created = quotationService.create(addOn, new UpsertDealQuotationRequest(null, null, null,
+            null, 50, "CASH_ON_DELIVERY", 0, 30, null, "NET", "TH", "THB", lines).withRecipientType("BUYER"), salesActor);
+        assertThat(created.items().get(0).sourceQuotationItemId()).isNull();
+        assertThat(quotationService.submit(created.id(), salesActor).docStatus()).isEqualTo("PENDING_APPROVAL");
+    }
+
+    /** A human said no: resubmitting (the rejected draft becomes a revision) is never approved by the rule. */
+    @Test
+    void addOn_rejectedByAPerson_isNotApprovedByRuleWhenResubmitted() {
+        long addOn = addOnWithApprovedRoot();
+        List<ItemInput> lines = quotationService.reusableApprovedItems(addOn, salesActor).items().stream()
+            .map(i -> i.item()).toList();
+        DealQuotationDto created = quotationService.create(addOn, new UpsertDealQuotationRequest(null, null, null,
+            null, 50, "CASH_ON_DELIVERY", 0, 30, null, "NET", "TH", "THB", lines).withRecipientType("BUYER"), salesActor);
+        jdbc.update("UPDATE sales.quotation SET doc_status = 'PENDING_APPROVAL' WHERE quotation_id = :id",
+            Map.of("id", created.id()));
+        quotationService.reject(created.id(), new DealQuotationRequests.RejectRequest("ราคาต้องตรวจอีกครั้ง"), salesManagerActor);
+
+        assertThat(quotationService.submit(created.id(), salesActor).docStatus()).isEqualTo("PENDING_APPROVAL");
+    }
+
     /** A rule-approved quotation records its basis and sources, shows no person as approver, and tells the rep nothing. */
     @Test
     void addOn_ruleApproval_isMarked_hasNoApproverNameOrSignature_andDoesNotNotifyTheRep() {

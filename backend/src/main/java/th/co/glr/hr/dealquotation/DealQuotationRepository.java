@@ -1145,16 +1145,17 @@ public class DealQuotationRepository {
      * approved (APPROVED / ISSUED / SENT / ACCEPTED), latest approval first. A BID_SPLIT child is another customer's
      * deal and is never part of the chain.
      */
-    public List<ChainQuotation> findApprovedQuotationsInChain(long ticketId) {
+    public List<ChainQuotation> findApprovedQuotationsInChain(long ticketId, long customerId) {
         return jdbc.query("""
             SELECT q.quotation_id,
                    CASE WHEN c.child_kind = 'ADD_ON' THEN c.code ELSE c.code || '-1' END AS order_code
               FROM (""" + CHAIN_TICKETS + """
                    ) c
               JOIN sales.quotation q ON q.ticket_id = c.ticket_id
+              JOIN sales.deal_party p ON p.party_id = q.party_id AND p.customer_id = :customerId
              WHERE q.doc_status IN ('APPROVED', 'ISSUED', 'SENT', 'ACCEPTED')
              ORDER BY q.approved_at DESC NULLS LAST, q.quotation_id DESC
-            """, Map.of("ticketId", ticketId),
+            """, Map.of("ticketId", ticketId, "customerId", customerId),
             (rs, n) -> new ChainQuotation(rs.getLong("quotation_id"), rs.getString("order_code")));
     }
 
@@ -1183,7 +1184,7 @@ public class DealQuotationRepository {
     }
 
     /** Which of these quotation item ids belong to an approved quotation of this deal's chain. */
-    public Set<Long> findReusableSourceIds(long ticketId, java.util.Collection<Long> itemIds) {
+    public Set<Long> findReusableSourceIds(long ticketId, long customerId, java.util.Collection<Long> itemIds) {
         if (itemIds.isEmpty()) {
             return Set.of();
         }
@@ -1193,9 +1194,10 @@ public class DealQuotationRepository {
               JOIN sales.quotation q ON q.quotation_id = qi.quotation_id
              WHERE qi.quotation_item_id IN (:ids)
                AND q.doc_status IN ('APPROVED', 'ISSUED', 'SENT', 'ACCEPTED')
+               AND EXISTS (SELECT 1 FROM sales.deal_party p WHERE p.party_id = q.party_id AND p.customer_id = :customerId)
                AND q.ticket_id IN (SELECT c.ticket_id FROM (""" + CHAIN_TICKETS + """
                    ) c)
-            """, new MapSqlParameterSource().addValue("ids", itemIds).addValue("ticketId", ticketId),
+            """, new MapSqlParameterSource().addValue("ids", itemIds).addValue("ticketId", ticketId).addValue("customerId", customerId),
             (rs, n) -> rs.getLong("quotation_item_id")));
     }
 

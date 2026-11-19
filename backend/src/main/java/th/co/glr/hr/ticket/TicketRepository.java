@@ -891,6 +891,26 @@ public class TicketRepository {
 
     // --- private helpers ---
 
+    /** {@link #findSummaryById} for many ids in one round trip (empty input, empty output). */
+    public List<TicketSummaryDto> findSummariesByIds(java.util.Collection<Long> ids) {
+        if (ids.isEmpty()) {
+            return List.of();
+        }
+        List<TicketSummaryDto> rows = jdbc.query(
+            SUMMARY_SELECT + """
+             WHERE t.ticket_id IN (:ids)
+             GROUP BY t.ticket_id, ec.first_name_th, ec.last_name_th,
+                      ea.first_name_th, ea.last_name_th,
+                      p.name, ct.first_name, ct.last_name,
+                      ecc.first_name_th, ecc.last_name_th
+            """,
+            new MapSqlParameterSource("ids", ids)
+                .addValue("movementFrom", null, Types.DATE)
+                .addValue("movementTo", null, Types.DATE),
+            (rs, rowNum) -> mapSummary(rs));
+        return enrichSummaries(rows);
+    }
+
     public Optional<TicketSummaryDto> findSummaryById(long id) {
         try {
             TicketSummaryDto summary = jdbc.queryForObject(
