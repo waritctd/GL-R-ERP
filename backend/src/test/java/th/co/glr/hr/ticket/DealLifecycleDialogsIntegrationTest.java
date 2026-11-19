@@ -89,6 +89,24 @@ class DealLifecycleDialogsIntegrationTest extends AbstractDealQuotationSlice2Int
         assertThat(dealCount()).isEqualTo(before);
     }
 
+    @Test
+    void theTrackingUpdateSetsAndClearsTheEstimate_andLeavesItWhenNotSent() throws Exception {
+        long id = created(",\"estimatedValue\":500000");
+
+        // A tracking update that does not mention the estimate keeps it (the guided advance sends such updates).
+        ok(put("/api/tickets/" + id + "/tracking").contentType(MediaType.APPLICATION_JSON)
+            .content("{\"nextFollowUpAt\":\"" + today().plusDays(7) + "\"}"), salesActor);
+        assertThat((BigDecimal) row(id).get("estimated_value")).isEqualByComparingTo("500000");
+
+        ok(put("/api/tickets/" + id + "/tracking").contentType(MediaType.APPLICATION_JSON)
+            .content("{\"estimatedValue\":750000}"), salesActor);
+        assertThat((BigDecimal) row(id).get("estimated_value")).isEqualByComparingTo("750000");
+
+        ok(put("/api/tickets/" + id + "/tracking").contentType(MediaType.APPLICATION_JSON)
+            .content("{\"clearEstimatedValue\":true}"), salesActor);
+        assertThat(row(id).get("estimated_value")).isNull();
+    }
+
     /** Wrong-way-round: the estimate is editable by exactly whoever may edit the tracking info today. */
     @Test
     void anotherRepCannotEditTheEstimate() throws Exception {
@@ -127,6 +145,31 @@ class DealLifecycleDialogsIntegrationTest extends AbstractDealQuotationSlice2Int
         assertThat(status(post("/api/tickets/" + id + "/cancel").contentType(MediaType.APPLICATION_JSON)
             .content("{\"reason\":\"NO_REAL_PROJECT\"}"), otherSalesActor)).isEqualTo(403);
         assertThat(row(id).get("cancel_reason")).isNull();
+    }
+
+    @Test
+    void holdWithAReturnDate_storesIt_andTheDealPageReadsIt() throws Exception {
+        long id = deal(salesActor);
+        LocalDate on = today().plusMonths(2);
+
+        ok(post("/api/tickets/" + id + "/hold").contentType(MediaType.APPLICATION_JSON)
+            .content("{\"note\":\"รอใบอนุญาต\",\"pauseReturnOn\":\"" + on + "\"}"), salesActor);
+
+        JsonNode detail = ok(get("/api/tickets/" + id), salesActor);
+        assertThat(detail.at("/ticket/summary/lifecycle").asText()).isEqualTo(DealLifecycle.ON_HOLD);
+        assertThat(detail.at("/ticket/summary/pauseReturnOn").asText()).isEqualTo(on.toString());
+    }
+
+    @Test
+    void resume_clearsTheReturnDate() throws Exception {
+        long id = deal(salesActor);
+        ok(post("/api/tickets/" + id + "/hold").contentType(MediaType.APPLICATION_JSON)
+            .content("{\"pauseReturnOn\":\"" + today().plusDays(30) + "\"}"), salesActor);
+
+        ok(post("/api/tickets/" + id + "/resume"), salesActor);
+
+        assertThat(row(id).get("lifecycle")).isEqualTo(DealLifecycle.ACTIVE);
+        assertThat(summary(id).pauseReturnOn()).isNull();
     }
 
     @Test

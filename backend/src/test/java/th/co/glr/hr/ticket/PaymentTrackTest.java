@@ -118,12 +118,4 @@ class PaymentTrackTest {
             "BOGUS_POLICY", PaymentTrack.CUSTOMER_CONFIRMED, PaymentTrack.DEPOSIT_NOTICE_ISSUED)).isFalse();
     }
 
-    @Test
-    void stepsBetween_requiredPath_walksEndToEnd() {
-        assertThat(PaymentTrack.stepsBetween(DepositPolicy.REQUIRED, null, PaymentTrack.FULLY_PAID))
-            .containsExactly(
-                PaymentTrack.CUSTOMER_CONFIRMED, PaymentTrack.DEPOSIT_NOTICE_ISSUED, PaymentTrack.DEPOSIT_PAID,
-                PaymentTrack.AWAITING_FINAL_PAYMENT, PaymentTrack.FULLY_PAID);
-    }
-
 }

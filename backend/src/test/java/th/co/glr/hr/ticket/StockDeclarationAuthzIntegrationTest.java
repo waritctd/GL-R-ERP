@@ -30,49 +30,14 @@ import th.co.glr.hr.pricingrequest.PricingRequestService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
 /**
- * Rule: <b>"Sales declares; the CEO may correct/override; Import is
- * excluded."</b> S18 (จัดตารางส่งมอบ / stock coverage) belongs to Sales, the same direction taken for
- * delivery recording (S19). Import neither declares nor corrects stock
- * coverage; only the owning sales rep declares, with the CEO as oversight/override.
+ * Real-Postgres evidence for {@link TicketService#reserveStock}'s role gate: sales declares stock coverage
+ * on their own deal, the CEO may correct, and import / non-owning roles are refused. A mocked
+ * {@link TicketRepository} cannot prove the decision reaches the UPDATE, so each refusal re-reads
+ * {@code sales.ticket_item.qty_from_stock} straight out of Postgres to prove nothing moved.
  *
- * <p>Real-DB enforcement coverage for {@link TicketService#reserveStock}'s gate, which is the
- * required evidence under {@code CLAUDE.md}'s "permission changes must ship evidence": a role gate
- * needs a real-DB integration test through the real service AND the real repository, because
- * Mockito cannot reach this — a mocked {@link TicketRepository} passes happily while the
- * {@code UPDATE} does something else entirely. {@link TicketServiceTest}'s companion cases pin which
- * branch is chosen; only these prove the decision survives into the SQL.
- *
- * <p><b>Written wrong-way-round on purpose.</b> The tests that matter are the refusals, and each
- * one re-reads {@code sales.ticket_item.qty_from_stock} (plus the deal's fulfilment status, stage
- * and event log) straight out of Postgres afterwards to prove nothing moved. "The owner can
- * declare their own deal" is necessary but is not the evidence. {@code importRole_isRefused_...} is
- * the case the narrowing exists for: import must not be able to correct here, re-read from
- * Postgres to prove its number never landed.
- *
- * <p>Why {@code qty_from_stock} is worth this much care: it is the sole input to the owning rep's
- * own STOCK_BONUS ({@code CommissionRepository#sumActiveStockActualReceived} =
- * {@code SUM(actual_received × SUM(qty_from_stock)/SUM(qty))}), so a rep who could write another
- * rep's row — or a role with no business here at all — would be writing someone's pay. The last
- * test closes that loop through the real, unmodified commission SQL.
- *
- * <p><b>Mutation-check.</b> The gate has two layers, each with a test that fails alone if the layer
- * is deleted: the coarse {@code requireRole(actor, STOCK_DECLARATION_ROLES)} is pinned by
- * {@code roleThatCanNeverDeclare_isRefusedBeforeTheTicketIsRead} (403-not-404, and import is now in
- * that set), and the per-row {@code canDeclareStockCoverage} by
- * {@code salesRepWhoDoesNotOwnTheDeal_...} / {@code importRole_isRefused_...} /
- * {@code refusedDeclaration_...}. Reverting {@code canDeclareStockCoverage} to a
- * {@code FULFILMENT_ROLES}-based gate turns {@code importRole_isRefused_andTheRowIsUnmoved} red
- * (import would be granted again) while the owner/CEO grants stay green — that opposition is what
- * proves the suite exercises the NARROWING and not merely the refusals.
- * This class's integration tests run against real Postgres in CI (Testcontainers /
- * {@code TEST_DB_URL}); they were not run on the authoring machine, which had neither.
- *
- * <p>Mirrors {@code th.co.glr.hr.attendance.AttendanceScopeIntegrationTest} and
- * {@link DealTrackingAndActivityIntegrationTest}. Note the suite-wide trap documented on {@link
- * AbstractPostgresIntegrationTest}: services are hand-wired with {@code new}, so {@code
- * @Transactional} is inert here and no rollback is ever exercised — nothing below asserts one.
- * The "unmoved" assertions hold because the guard throws before any write, not because a
- * transaction rolled back.
+ * <p>{@code qty_from_stock} is the input to the owning rep's STOCK_BONUS, so writing it wrongly is writing
+ * someone's pay. Services are hand-wired with {@code new}, so {@code @Transactional} is inert here (see
+ * {@link AbstractPostgresIntegrationTest}); the "unmoved" assertions hold because the guard throws before any write.
  */
 class StockDeclarationAuthzIntegrationTest extends AbstractPostgresIntegrationTest {
 

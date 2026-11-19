@@ -1,6 +1,7 @@
 package th.co.glr.hr.ticket;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -191,6 +192,19 @@ class DealDocumentRegisterAuthzIntegrationTest extends AbstractPostgresIntegrati
         assertAttachmentsForbidden(salesOtherActor);
     }
 
+    @Test
+    void grantHolder_salesRole_reachesEveryDocumentFamily_onSomeoneElsesDeal() throws Exception {
+        grant(salesOtherActor);
+
+        assertThatCode(() -> ticketService.get(ticketId, salesOtherActor)).doesNotThrowAnyException();
+        assertThatCode(() -> depositNoticeService.listByTicket(ticketId, salesOtherActor)).doesNotThrowAnyException();
+        assertNotForbidden(() -> depositNoticeService.getRemainingInvoiceOptions(ticketId, salesOtherActor));
+        assertThatCode(() -> pricingRequestService.get(pricingRequestId, salesOtherActor)).doesNotThrowAnyException();
+        assertThatCode(() -> quotationService.listForPricingRequest(pricingRequestId, salesOtherActor))
+            .doesNotThrowAnyException();
+        assertAttachmentsOk(salesOtherActor);
+    }
+
     /** Ploy 2026-11-19: the grant counts only for the sales and sales_manager roles; an hr / account holder gets nothing extra. */
     @Test
     void grantHolder_inANonSalesRole_getsNothingExtra() throws Exception {
@@ -216,6 +230,15 @@ class DealDocumentRegisterAuthzIntegrationTest extends AbstractPostgresIntegrati
     private void grant(UserPrincipal holder) {
         jdbc.update("UPDATE hr.employee SET can_manage_all_sales_documents = TRUE WHERE employee_id = :id",
             Map.of("id", holder.id()));
+    }
+
+    private static void assertNotForbidden(org.assertj.core.api.ThrowableAssert.ThrowingCallable callable) {
+        Throwable t = org.assertj.core.api.Assertions.catchThrowable(callable);
+        if (t instanceof ApiException e) {
+            assertThat(e.getStatus()).isNotEqualTo(org.springframework.http.HttpStatus.FORBIDDEN);
+        } else {
+            assertThat(t).isNull();
+        }
     }
 
     @Test
@@ -245,6 +268,11 @@ class DealDocumentRegisterAuthzIntegrationTest extends AbstractPostgresIntegrati
     private void assertAttachmentsForbidden(UserPrincipal actor) throws Exception {
         mvc.perform(get("/api/tickets/{ticketId}/attachments", ticketId).session(sessionFor(actor)))
             .andExpect(status().isForbidden());
+    }
+
+    private void assertAttachmentsOk(UserPrincipal actor) throws Exception {
+        mvc.perform(get("/api/tickets/{ticketId}/attachments", ticketId).session(sessionFor(actor)))
+            .andExpect(status().isOk());
     }
 
     private long createEmployee(EmployeeRepository employees, String nameTh, String email,

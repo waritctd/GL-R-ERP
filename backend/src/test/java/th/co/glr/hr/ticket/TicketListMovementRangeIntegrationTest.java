@@ -22,11 +22,8 @@ import tools.jackson.databind.json.JsonMapper;
 
 /**
  * GET /api/tickets movement range: {@code movementFrom}/{@code movementTo} (inclusive Asia/Bangkok days) add
- * {@code stageChangedInRange} (a STAGE_CHANGED ticket_event in range) and {@code activityInRange} (a deal_activity
- * with activity_date in range) to every row, and every row carries {@code lastActivityAt}. Driven over MockMvc
- * so the JSON field names are the contract; before the feature exists each case fails on an assertion.
- *
- * <p>Scoping note: only {@code sales} is scoped in the list query (own deals); sales_manager / ceo see every deal.
+ * {@code stageChangedInRange} and {@code activityInRange} to every row, and every row carries
+ * {@code lastActivityAt}. Driven over MockMvc so the JSON field names are the contract.
  */
 class TicketListMovementRangeIntegrationTest extends AbstractDealQuotationSlice2IntegrationTest {
 
@@ -39,6 +36,19 @@ class TicketListMovementRangeIntegrationTest extends AbstractDealQuotationSlice2
             .setMessageConverters(new JacksonJsonHttpMessageConverter(JsonMapper.builder().build()))
             .setControllerAdvice(new ApiExceptionHandler())
             .build();
+    }
+
+    @Test
+    void activityInsideRange_setsActivityInRange_activityOnlyOutside_doesNot() throws Exception {
+        long inside = deal(salesActor);
+        long outside = deal(salesActor);
+        activity(inside, "2026-03-10");
+        activity(outside, "2026-03-20");
+
+        JsonNode rows = list(salesActor, "movementFrom=2026-03-08&movementTo=2026-03-12");
+        assertThat(flag(rows, inside, "activityInRange")).isTrue();
+        assertThat(flag(rows, outside, "activityInRange")).isFalse();
+        assertThat(flag(rows, inside, "stageChangedInRange")).isFalse();
     }
 
     @Test
@@ -111,4 +121,11 @@ class TicketListMovementRangeIntegrationTest extends AbstractDealQuotationSlice2
         return null;
     }
 
+    /** Missing field reads as null-node -> asBoolean() false would hide a missing field, so require presence. */
+    private static boolean flag(JsonNode rows, long id, String field) {
+        JsonNode r = row(rows, id);
+        assertThat(r).as("row %s present", id).isNotNull();
+        assertThat(r.has(field)).as("row %s carries %s", id, field).isTrue();
+        return r.get(field).asBoolean();
+    }
 }

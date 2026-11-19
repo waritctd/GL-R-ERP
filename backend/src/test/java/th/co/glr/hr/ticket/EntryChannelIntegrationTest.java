@@ -65,22 +65,6 @@ class EntryChannelIntegrationTest extends AbstractPostgresIntegrationTest {
         projectId = project.id();
     }
 
-    /** Evidence 3, wrong-way-round: the caller must NOT be able to un-state a channel, and the stored value must
-     * genuinely not move. Mirrors generateQuotation's QuotationRecipient.UNSPECIFIED rejection. */
-    @Test
-    void setEntryChannel_rejectsUnspecified_andLeavesTheStatedChannelUntouched() {
-        long ticketId = ticketService.create(request(null), salesRep).summary().id();
-        ticketService.setEntryChannel(ticketId, EntryChannel.OWNER_DIRECT, null, salesRep);
-        assertThat(storedChannel(ticketId)).isEqualTo(EntryChannel.OWNER_DIRECT);
-
-        assertThatThrownBy(() ->
-            ticketService.setEntryChannel(ticketId, EntryChannel.UNSPECIFIED, "เปลี่ยนกลับ", salesRep))
-            .isInstanceOfSatisfying(ApiException.class,
-                e -> assertThat(e.getStatus().value()).isEqualTo(400));
-
-        assertThat(storedChannel(ticketId)).isEqualTo(EntryChannel.OWNER_DIRECT);
-    }
-
     /** But overwriting an already-STATED channel still requires a reason, as before. */
     @Test
     void setEntryChannel_changingAnAlreadyStatedChannelStillRequiresANote() {

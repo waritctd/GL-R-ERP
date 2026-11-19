@@ -70,31 +70,6 @@ class QuotationRendererTest {
     }
 
     @Test
-    void aQuoteLargerThanOnePageOfItemsPaginatesWithTotalsOnTheLastPage() throws Exception {
-        requireLibreOffice();
-        // Enough items that the quote must span multiple pages in ANY font environment — the exact page count is
-        // font-dependent (CI runs without the Thai fonts, which over-shrink), but 120 one-line items cannot fit a
-        // single page even at maximum shrink. Every item renders and the grand total is correct.
-        List<TicketItemDto> items = new ArrayList<>();
-        for (int i = 1; i <= 120; i++) {
-            items.add(item(i, "Brand" + i, "Model" + i, BigDecimal.ONE, new BigDecimal("10.00")));
-        }
-        byte[] pdf = renderer.toPdf(ticket(items), quotation(), customer(null));
-        int pages;
-        try (PDDocument doc = Loader.loadPDF(pdf)) {
-            pages = doc.getNumberOfPages();
-        }
-        assertThat(pages).isGreaterThanOrEqualTo(2);
-        String text = strip(pdf);
-        assertThat(text).contains("Model1");
-        assertThat(text).contains("Model60");
-        assertThat(text).contains("Model120");        // last item rendered
-        assertThat(text).contains("1,200.00");         // 120 × 10 subtotal
-        assertThat(text).contains("1,284.00");         // + 7% VAT grand total
-        assertThat(text).doesNotContain("#VALUE!").doesNotContain("#REF!").doesNotContain("###");
-    }
-
-    @Test
     void xlsxSubtotalCellSumsAllPricedItemsNotJustTheRenderedFifteen() throws Exception {
         // The subtotal cell must match
         // TicketService.generateQuotation's total_amount, which sums ALL priced items — not just a

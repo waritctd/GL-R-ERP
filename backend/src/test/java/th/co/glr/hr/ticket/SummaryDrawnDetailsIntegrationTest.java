@@ -39,6 +39,17 @@ class SummaryDrawnDetailsIntegrationTest extends AbstractDealQuotationSlice2Inte
     }
 
     @Test
+    void expectedQuarterIsOnTheSingleReadAndTheListRow_forTheOwnerCeoAndManager() {
+        long id = deal(salesActor);
+        tickets.updateExpectedQuarter(id, "2026-Q4");
+
+        assertThat(ticketService.get(id, salesActor).summary().expectedQuarter()).isEqualTo("2026-Q4");
+        assertThat(row(ticketService.list(null, salesActor), id).expectedQuarter()).isEqualTo("2026-Q4");
+        assertThat(row(ticketService.list(null, ceoActor), id).expectedQuarter()).isEqualTo("2026-Q4");
+        assertThat(row(ticketService.list(null, salesManagerActor), id).expectedQuarter()).isEqualTo("2026-Q4");
+    }
+
+    @Test
     void importsListRowNeverCarriesExpectedQuarterOrReceiptSource() {
         long id = orderDeal(salesActor);
         tickets.updateExpectedQuarter(id, "2026-Q4");

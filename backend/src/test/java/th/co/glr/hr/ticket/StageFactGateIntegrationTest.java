@@ -50,15 +50,6 @@ import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
  * exception thrown while the write still landed is the failure mode that matters, and Mockito
  * cannot see it. "The stage moves once the fact holds" is necessary but is not the evidence.
  *
- * <p><b>The automatic path is deliberately NOT gated</b>, and {@link
- * #autoAdvanceStillReachesAllFourGatedStagesWhenTheFactBecomesTrue} is the test that proves it:
- * {@code autoAdvanceStage} fires <em>because</em> the fact just became true, so routing it through
- * the gate would be circular and would break every operational advance. That test drives the real
- * service methods end to end and is also the walk for the owner's all-from-stock route.
- *
- * <p><b>MUTATION-CHECK RECORD</b> — see the branch's PR body for the per-gate results (each gate
- * removed in turn, the red set recorded, then restored to a byte-identical file).
- *
  * <p>Modelled on {@link StockDeclarationAuthzIntegrationTest} and
  * {@link DealStageQuoteOwnerAndRouteIntegrationTest}. Note the suite-wide trap documented on
  * {@link AbstractPostgresIntegrationTest}: services are hand-wired with {@code new}, so

@@ -16,32 +16,11 @@ import th.co.glr.hr.employee.UpsertEmployeeRequest;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
 /**
- * Real-Postgres proof that {@link TicketSummaryDto#commissionRecorded} answers the same question
- * {@link CommissionRepository#hasActiveCommissionForTicket} does (issue #736).
- *
- * <p><b>Why this test exists.</b> Before this flag, {@code TicketSummaryDto} had no per-ticket
- * "commission already recorded?" signal, and the {@code account} role has no route to {@code GET
- * /api/commissions} to check directly ({@code CommissionController}'s role check excludes it by
- * design). So {@code accountActions.js#nextAccountAction} could only guess: EVERY {@code
- * CLOSED_PAID} deal permanently showed "บันทึกใบกำกับ + ออกค่าคอม" as ฝ่ายบัญชี's next action, and
- * the accountant's worklist over-counted its backlog and never emptied. {@link
- * TicketRepository#hasRecordedCommission} (embedded in the list-facts SQL) closes that gap, but it is a DELIBERATE second copy of
- * {@code CommissionRepository#hasActiveCommissionForTicket}'s SQL — {@code TicketRepository} is
- * hand-wired as {@code new TicketRepository(jdbc)} in ~40 places, so injecting {@code
- * CommissionRepository} there to reuse the real method would break all of them for one boolean.
- *
- * <p>A duplicated predicate has no compiler to keep it honest. This class is what keeps the two
- * identical: {@link #neverDisagreesWithCommissionRepositoryAcrossEveryFixtureShape} loops every
- * fixture shape below and asserts {@code TicketRepository}'s answer equals {@code
- * CommissionRepository}'s for the same ticket. If a future edit changes one predicate without the
- * other, that test — not code review — is what goes red. Every behavioural test below is also
- * written wrong-way-round wherever possible: the interesting assertions are the ones proving the
- * flag stays FALSE (a different ticket's commission, a rejected/voided one, a non-SALE kind), not
- * the one proving it can turn true.
- *
- * <p>{@code @Transactional} is inert in this suite (services are hand-wired with {@code new}, no
- * Spring proxy — see {@link AbstractPostgresIntegrationTest}'s own Javadoc), so every fixture below
- * is its own ticket/commission pair rather than relying on a rollback between assertions.
+ * Real-Postgres proof that {@link TicketSummaryDto#commissionRecorded} turns true for a ticket with a live
+ * SALE commission (issue #736). {@link TicketRepository#hasRecordedCommission} is a deliberate second copy of
+ * {@code CommissionRepository#hasActiveCommissionForTicket}'s SQL, because {@code TicketRepository} is
+ * hand-wired as {@code new TicketRepository(jdbc)} in many places. {@code @Transactional} is inert in this
+ * suite (see {@link AbstractPostgresIntegrationTest}), so each fixture is its own ticket/commission pair.
  */
 class CommissionRecordedFlagIntegrationTest extends AbstractPostgresIntegrationTest {
 

@@ -44,6 +44,23 @@ class DealActivityFollowUpIntegrationTest extends AbstractDealQuotationSlice2Int
     }
 
     @Test
+    void ownersCallWithAFollowUp_writesOnlyTheFollowUpDate_andTheActivity() {
+        long deal = deal(salesActor);
+        fillTrackingFields(deal);
+        Map<String, Object> before = trackingSnapshot(deal);
+
+        DealActivityDto activity = ticketService.addActivity(deal,
+            new DealActivityRequest(TODAY, DealActivityKind.CALL, "คุยแล้ว ยังสนใจ", TODAY.plusDays(7)), salesActor);
+
+        assertThat(activity.kind()).isEqualTo(DealActivityKind.CALL);
+        assertThat(activityCount(deal)).isEqualTo(1);
+        assertThat(nextFollowUp(deal)).isEqualTo(TODAY.plusDays(7));
+        assertThat(trackingSnapshot(deal))
+            .as("designer/owner/buyer names, win%, quarter, estimate, last follow-up: untouched")
+            .isEqualTo(before);
+    }
+
+    @Test
     void anotherRepAccountImportHrAndAQuotationGrantHolder_are403_andNothingIsWritten() {
         long deal = deal(salesActor);
         LocalDate original = nextFollowUp(deal);
@@ -86,6 +103,25 @@ class DealActivityFollowUpIntegrationTest extends AbstractDealQuotationSlice2Int
         UserPrincipal resolved = new SessionAccountResolver(new EmployeeAuthRepository(jdbc)).current(id).orElseThrow();
         assertThat(resolved.role()).as("the grant makes a QC employee act as sales").isEqualTo("sales");
         return resolved;
+    }
+
+    private void fillTrackingFields(long deal) {
+        jdbc.update("""
+            UPDATE sales.ticket
+               SET designer_name = 'สตูดิโอเส้นตรง', owner_name = 'คุณเจ้าของ', buyer_name = 'บริษัท ผู้ซื้อ',
+                   win_probability = 60, expected_quarter = '2027-Q1', estimated_value = 250000,
+                   last_follow_up_at = DATE '2026-11-01'
+             WHERE ticket_id = :id
+            """, Map.of("id", deal));
+    }
+
+    /** Every tracking column the PUT /tracking full replace would rewrite, except next_follow_up_at itself. */
+    private Map<String, Object> trackingSnapshot(long deal) {
+        return jdbc.queryForMap("""
+            SELECT designer_name, owner_name, buyer_name, win_probability, expected_quarter, estimated_value,
+                   last_follow_up_at, lifecycle, sales_stage
+              FROM sales.ticket WHERE ticket_id = :id
+            """, Map.of("id", deal));
     }
 
     private LocalDate nextFollowUp(long deal) {

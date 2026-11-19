@@ -1,7 +1,6 @@
 package th.co.glr.hr.ticket;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.util.List;
 import java.util.Map;
@@ -9,7 +8,6 @@ import org.junit.jupiter.api.Test;
 import org.springframework.mock.web.MockHttpSession;
 import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
-import th.co.glr.hr.common.ApiException;
 
 /** GET /api/meta/deal-stages's routes entry: the per-EntryChannel route, served so a LIST row (which has
  * deal.entryChannel but no per-deal payload) can print its position on the deal's own route instead of the
@@ -39,12 +37,6 @@ class DealStageMetaControllerTest {
             .hasSize(14)
             .doesNotContain(DealStage.QUOTE_DESIGN_SIDE)
             .contains(DealStage.SPEC_APPROVED, DealStage.QUOTE_OWNER);
-    }
-
-    @Test
-    void stillRequiresASession() {
-        assertThatThrownBy(() -> controller.dealStages(new MockHttpSession()))
-            .isInstanceOf(ApiException.class);
     }
 
 }

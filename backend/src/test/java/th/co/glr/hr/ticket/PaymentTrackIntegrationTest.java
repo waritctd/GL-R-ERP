@@ -2,7 +2,6 @@ package th.co.glr.hr.ticket;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
@@ -405,7 +404,6 @@ class PaymentTrackIntegrationTest extends AbstractPostgresIntegrationTest {
         String email = FACTORY.toLowerCase().replace(" ", "-") + "@example.com";
         factoryQuoteService.markContacted(draft.id(),
             new MarkFactoryContactedRequest(java.time.LocalDate.now(java.time.ZoneId.of("Asia/Bangkok")), null), importActor);
-        drainDispatches();
         ReceiveFactoryQuoteRequest response = new ReceiveFactoryQuoteRequest(
             "REF-" + UUID.randomUUID(), "THB", "30 days", "45 days", "revision", "note",
             List.of(new ReceiveFactoryQuoteItemRequest(
@@ -432,12 +430,6 @@ class PaymentTrackIntegrationTest extends AbstractPostgresIntegrationTest {
             draftQuotation.id(), new IssueCustomerQuotationRequest(UUID.randomUUID().toString()), salesActor);
         quotationService.recordOutcome(issued.id(),
             new RecordQuotationOutcomeRequest(QuotationStatus.ACCEPTED, "ลูกค้าโอเค", UUID.randomUUID().toString()), salesActor);
-    }
-
-    private void drainDispatches() {
-        // No-op now: FactoryQuoteService.send is synchronous (manual-RFQ redesign) -- there is no dispatch/worker
-        // queue left to drain. Kept (rather than removing every call site) so this helper's callers do not all need to
-        // be revisited individually.
     }
 
     private TicketItemRequest ticketItem(String brand, String model, String factory) {

@@ -36,6 +36,20 @@ class DealActivitySampleSentIntegrationTest extends AbstractDealQuotationSlice2I
     private static final LocalDate TODAY = LocalDate.now(ZoneId.of("Asia/Bangkok"));
 
     @Test
+    void theOwnerRecordsASampleSent_withWhatWasSent_andAFollowUpDate() {
+        long deal = deal(salesActor);
+
+        DealActivityDto logged = ticketService.addActivity(deal,
+            new DealActivityRequest(TODAY, SAMPLE_SENT, "ตัวอย่างกระเบื้อง Raku 3 สี", TODAY.plusDays(7)), salesActor);
+
+        assertThat(logged.kind()).isEqualTo(SAMPLE_SENT);
+        assertThat(logged.note()).isEqualTo("ตัวอย่างกระเบื้อง Raku 3 สี");
+        assertThat(logged.createdById()).isEqualTo(salesActor.id());
+        assertThat(sampleRows(deal)).isEqualTo(1);
+        assertThat(nextFollowUp(deal)).isEqualTo(TODAY.plusDays(7));
+    }
+
+    @Test
     void anotherRepAccountImportHrAndAQuotationGrantHolder_are403_andNothingIsWritten() {
         long deal = deal(salesActor);
         LocalDate original = nextFollowUp(deal);
