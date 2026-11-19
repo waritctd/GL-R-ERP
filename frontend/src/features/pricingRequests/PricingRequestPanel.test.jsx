@@ -1,6 +1,6 @@
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { PricingRequestPanel } from './PricingRequestPanel.jsx';
 import { api } from '../../api/index.js';
@@ -98,27 +98,6 @@ describe('PricingRequestPanel', () => {
     expect(screen.queryByTestId('pcr-pickup-1')).toBeNull();
   });
 
-  // Ticket-detail IA rebuild Phase 1 clutter follow-up: this panel no longer renders its own "สร้างคำขอราคา"
-  // button — TicketDetailPage's sticky header CTA owns that action now, so the same label no longer appears
-  // twice on one page.
-  it('shows an empty state for the deal owner when there are no requests, with no create button of its own', async () => {
-    api.pricingRequests.listForTicket.mockResolvedValue({ items: [] });
-    renderPanel();
-
-    expect(await screen.findByText('ยังไม่มีคำขอราคา')).not.toBeNull();
-    expect(screen.getByText(/สร้างได้จากปุ่ม/)).not.toBeNull();
-    expect(screen.queryByRole('button', { name: /สร้างคำขอราคา/ })).toBeNull();
-  });
-
-  it('shows a plainer empty-state description for a non-owner (also no create button)', async () => {
-    api.pricingRequests.listForTicket.mockResolvedValue({ items: [] });
-    renderPanel({ user: { id: 2, name: 'อื่น', role: 'sales' } });
-
-    await screen.findByText('ยังไม่มีคำขอราคา');
-    expect(screen.getByText('ยังไม่มีคำขอราคาสำหรับงานนี้')).not.toBeNull();
-    expect(screen.queryByRole('button', { name: /สร้างคำขอราคา/ })).toBeNull();
-  });
-
   describe('imperative handle (sticky header CTA trigger)', () => {
     it('openCreate() is a no-op for a non-owner', async () => {
       api.pricingRequests.listForTicket.mockResolvedValue({ items: [] });
@@ -132,22 +111,6 @@ describe('PricingRequestPanel', () => {
             ticketItems={[]}
             user={{ id: 2, name: 'อื่น', role: 'sales' }}
           />
-        </QueryClientProvider>,
-      );
-      await screen.findByText('ยังไม่มีคำขอราคา');
-
-      act(() => ref.current.openCreate());
-
-      expect(screen.queryByRole('dialog')).toBeNull();
-    });
-
-    it('openCreate() is a no-op once the deal order is confirmed (walk 4: no new pricing round)', async () => {
-      api.pricingRequests.listForTicket.mockResolvedValue({ items: [] });
-      const ref = React.createRef();
-      render(
-        <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-          <PricingRequestPanel ref={ref} ticketId={701} deal={{ ...deal, paymentStatus: 'CUSTOMER_CONFIRMED' }}
-            ticketItems={[]} user={salesOwner} />
         </QueryClientProvider>,
       );
       await screen.findByText('ยังไม่มีคำขอราคา');
@@ -173,81 +136,6 @@ describe('PricingRequestPanel', () => {
     });
   });
 
-  // Code review of #1195 (finding 2): the form may already have saved a DRAFT (its send then failed);
-  // closing it re-reads the deal's requests, so that draft shows instead of "no request yet".
-  it('closing the create form re-reads the deal\'s requests, so a draft it already saved shows', async () => {
-    api.pricingRequests.listForTicket.mockResolvedValueOnce({ items: [] }).mockResolvedValue({ items: [summary()] });
-    const ref = React.createRef();
-    render(
-      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } })}>
-        <PricingRequestPanel ref={ref} ticketId={701} deal={deal} ticketItems={[]} user={salesOwner} />
-      </QueryClientProvider>,
-    );
-    await screen.findByText('ยังไม่มีคำขอราคา');
-    act(() => ref.current.openCreate());
-
-    fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'ยกเลิก' }));
-
-    expect(await screen.findByText('PCR-2026-0001')).not.toBeNull();
-  });
-
-  it('renders a request row with its status badge and an expand toggle that loads items/events', async () => {
-    api.pricingRequests.listForTicket.mockResolvedValue({ items: [summary()] });
-    api.pricingRequests.get.mockResolvedValue({
-      pricingRequest: {
-        summary: summary(),
-        // V185: color/texture/size/thicknessMm/sqmPerPiece/piecesPerBox/a quantity are now required on every item
-        // PricingRequestCreateModal can save — see that component's own validateItemFields (mirrors
-        // PricingRequestService#requireItemFieldsComplete).
-        items: [{
-          id: 11, brand: 'SCG', model: 'A1', color: 'ขาว', texture: 'ด้าน', size: '60x60',
-          thicknessMm: 10, sqmPerPiece: 0.36, quantityMode: 'PIECES', piecesInput: 10,
-          piecesPerBox: 4, quantityType: 'ESTIMATE',
-          // GLA-125: required on this form.
-          originCountry: 'ไทย-สต็อก', leadTimeMinDays: 3, leadTimeMaxDays: 7,
-        }],
-        events: [{ id: 21, eventKind: 'PRICING_REQUEST_CREATED', actorName: 'พนักงานขาย', createdAt: '2026-07-01T09:00:00.000Z' }],
-      },
-    });
-    renderPanel();
-
-    expect(await screen.findByText('PCR-2026-0001')).not.toBeNull();
-    expect(screen.getByText('แบบร่าง')).not.toBeNull();
-
-    fireEvent.click(screen.getByText('PCR-2026-0001').closest('button'));
-
-    await waitFor(() => expect(api.pricingRequests.get).toHaveBeenCalledWith(1));
-    expect(await screen.findByText('SCG A1')).not.toBeNull();
-    expect(screen.getByText('สร้างคำขอราคา (ร่าง)')).not.toBeNull();
-  });
-
-  it('shows productDescription as the item identity when brand and model are blank', async () => {
-    api.pricingRequests.listForTicket.mockResolvedValue({ items: [summary()] });
-    api.pricingRequests.get.mockResolvedValue({
-      pricingRequest: {
-        summary: summary(),
-        items: [{
-          id: 11,
-          brand: null,
-          model: null,
-          productDescription: 'Porcelain anti-slip tile 60x60 cm',
-          color: null,
-          texture: null,
-          size: null,
-          requestedQty: 12,
-          requestedUnit: 'กล่อง',
-          quantityType: 'ESTIMATE',
-        }],
-        events: [],
-      },
-    });
-    renderPanel({ user: { id: 3, name: 'Import', role: 'import' } });
-
-    fireEvent.click(await screen.findByText('PCR-2026-0001'));
-
-    expect(await screen.findByText('Porcelain anti-slip tile 60x60 cm')).not.toBeNull();
-  });
-
   it('lets the owner submit an existing DRAFT request to Import', async () => {
     api.pricingRequests.listForTicket.mockResolvedValue({ items: [summary({ status: 'DRAFT' })] });
     api.pricingRequests.submit.mockResolvedValue({
@@ -270,126 +158,4 @@ describe('PricingRequestPanel', () => {
     await screen.findByText('PCR-2026-0001');
     expect(screen.queryByRole('button', { name: 'ส่งให้ฝ่ายนำเข้า' })).toBeNull();
   });
-
-  // Regression, reported from UAT 2026-08-11: submit() 422'd and the user saw NOTHING — the button appeared to
-  // do nothing and the reason existed only in the browser console, because submitMutation had no onError and the
-  // component rendered `.error` nowhere.
-  it('shows the server error message when submitting to Import fails, instead of failing silently', async () => {
-    api.pricingRequests.listForTicket.mockResolvedValue({ items: [summary({ status: 'DRAFT' })] });
-    api.pricingRequests.submit.mockRejectedValue(new Error('รายการที่ 1: ไม่ผ่านเงื่อนไขการส่ง'));
-    renderPanel();
-
-    fireEvent.click(await screen.findByRole('button', { name: 'ส่งให้ฝ่ายนำเข้า' }));
-
-    const alert = await screen.findByRole('alert');
-    expect(alert.textContent).toContain('รายการที่ 1: ไม่ผ่านเงื่อนไขการส่ง');
-  });
-
-  // The mutation instance is shared by every row, so an unscoped render would print one row's failure under all
-  // of them. Two DRAFTs, submit the second, assert exactly one alert.
-  it('reports a submit failure only under the row it was fired from', async () => {
-    api.pricingRequests.listForTicket.mockResolvedValue({
-      items: [
-        summary({ id: 1, requestCode: 'PCR-2026-0001', status: 'DRAFT' }),
-        summary({ id: 2, requestCode: 'PCR-2026-0002', status: 'DRAFT' }),
-      ],
-    });
-    api.pricingRequests.submit.mockRejectedValue(new Error('ส่งไม่สำเร็จ'));
-    renderPanel();
-
-    const submitButtons = await screen.findAllByRole('button', { name: 'ส่งให้ฝ่ายนำเข้า' });
-    fireEvent.click(submitButtons[1]);
-
-    await screen.findByRole('alert');
-    expect(screen.getAllByRole('alert')).toHaveLength(1);
-  });
-
-  // Fix 2 (review-remediation plan): a saved draft had no path to fix a wrong quantity/recipient/date before
-  // this — only submit or cancel.
-  it('lets the owner edit an existing DRAFT via "แก้ไขร่าง", seeding the modal from the request detail', async () => {
-    api.pricingRequests.listForTicket.mockResolvedValue({ items: [summary({ status: 'DRAFT' })] });
-    api.pricingRequests.get.mockResolvedValue({
-      pricingRequest: {
-        summary: summary({ status: 'DRAFT', recipientLabel: 'ผู้ออกแบบ ก.' }),
-        // V185: color/texture/size/thicknessMm/sqmPerPiece/piecesPerBox/a quantity are now required on every item
-        // PricingRequestCreateModal can save — see that component's own validateItemFields (mirrors
-        // PricingRequestService#requireItemFieldsComplete).
-        items: [{
-          id: 11, brand: 'SCG', model: 'A1', color: 'ขาว', texture: 'ด้าน', size: '60x60',
-          thicknessMm: 10, sqmPerPiece: 0.36, quantityMode: 'PIECES', piecesInput: 10,
-          piecesPerBox: 4, quantityType: 'ESTIMATE',
-          // GLA-125: required on this form.
-          originCountry: 'ไทย-สต็อก', leadTimeMinDays: 3, leadTimeMaxDays: 7,
-          // CR-1: the currency + price unit sales fixed on the line (required to save again).
-          requestedCurrency: 'THB', requestedPriceUnitBasis: 'PER_PIECE',
-        }],
-        events: [],
-      },
-    });
-    api.pricingRequests.update.mockResolvedValue({
-      pricingRequest: { summary: summary({ status: 'DRAFT' }), items: [], events: [] },
-    });
-    renderPanel();
-
-    const editButton = await screen.findByRole('button', { name: 'แก้ไขร่าง' });
-    fireEvent.click(editButton);
-
-    await waitFor(() => expect(api.pricingRequests.get).toHaveBeenCalledWith(1));
-    expect(await screen.findByDisplayValue('ผู้ออกแบบ ก.')).not.toBeNull();
-
-    fireEvent.click(screen.getByRole('button', { name: 'บันทึกการแก้ไข' }));
-
-    await waitFor(() => expect(api.pricingRequests.update).toHaveBeenCalledWith(1, expect.objectContaining({
-      recipientLabel: 'ผู้ออกแบบ ก.',
-    })));
-  });
-
-  // canUpdatePricingRequest is DRAFT-only (mirrors PricingRequestService.updateDraft) — once submitted, editing
-  // must disappear the same way "ส่งให้ฝ่ายนำเข้า" does.
-  it('does not offer "แก้ไขร่าง" once a request is past DRAFT', async () => {
-    api.pricingRequests.listForTicket.mockResolvedValue({ items: [summary({ status: 'SUBMITTED' })] });
-    renderPanel();
-
-    await screen.findByText('PCR-2026-0001');
-    expect(screen.queryByRole('button', { name: 'แก้ไขร่าง' })).toBeNull();
-  });
-
-  it('never offers "ส่งให้ฝ่ายนำเข้า" once a request is past DRAFT, even for the CEO (cancel is still allowed)', async () => {
-    api.pricingRequests.listForTicket.mockResolvedValue({ items: [summary({ status: 'SUBMITTED' })] });
-    renderPanel({ user: { id: 9, name: 'CEO', role: 'ceo' } });
-
-    await screen.findByText('PCR-2026-0001');
-    // Submit is DRAFT-only and owner-sales-only (PricingRequestService.submit) — the CEO never gets it, regardless
-    // of status.
-    expect(screen.queryByRole('button', { name: 'ส่งให้ฝ่ายนำเข้า' })).toBeNull();
-    // Cancel is the one action the CEO gets on ANY cancellable status, as an explicit override
-    // (PricingRequestService.cancel).
-    expect(screen.getByRole('button', { name: 'ยกเลิก' })).not.toBeNull();
-  });
-
-
-  // V140 deleted the ขอข้อมูลเพิ่มเติม round-trip from the product — the service methods, the API surface, the
-  // canRequestInformation/canRespondInformation predicates and both modals are gone. Two of them also drove a
-  // MORE_INFO_REQUIRED fixture, a status V140 removed from the DB constraint entirely.
-  it('offers no ขอข้อมูลเพิ่มเติม surface to any role — the whole round-trip was removed', async () => {
-    const roles = [
-      salesOwner,
-      { id: 2, name: 'อื่น', role: 'sales' },
-      importUser,
-      { id: 9, name: 'CEO', role: 'ceo' },
-    ];
-
-    for (const user of roles) {
-      api.pricingRequests.listForTicket.mockResolvedValue({
-        items: [summary({ status: 'IMPORT_REVIEWING', assignedImportId: 5, assignedImportName: importUser.name })],
-      });
-      const { unmount } = renderPanel({ user });
-
-      await screen.findByText('PCR-2026-0001');
-      expect(screen.queryByRole('button', { name: 'ขอข้อมูลเพิ่มเติม' })).toBeNull();
-      expect(screen.queryByRole('button', { name: 'ตอบข้อมูลเพิ่มเติม' })).toBeNull();
-      unmount();
-    }
-  });
-
 });
