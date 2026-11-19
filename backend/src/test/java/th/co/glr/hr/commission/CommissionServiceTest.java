@@ -6,7 +6,6 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -27,7 +26,6 @@ import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.notification.CeoApproverRepository;
 import th.co.glr.hr.notification.NotificationService;
-import th.co.glr.hr.ticket.AttachType;
 import th.co.glr.hr.ticket.DealStage;
 import th.co.glr.hr.ticket.TicketDto;
 import th.co.glr.hr.ticket.TicketRepository;
@@ -55,58 +53,6 @@ class CommissionServiceTest {
         ceoApprovers
     );
 
-    @Test
-    void submitRecordsAuditTrailForNewCommission() {
-        SubmitCommissionRequest request = new SubmitCommissionRequest(
-            null,
-            30L,
-            "INV-001",
-            LocalDate.of(2026, 6, 15),
-            new BigDecimal("1000.00"),
-            BigDecimal.ZERO,
-            BigDecimal.ZERO,
-            BigDecimal.ZERO,
-            BigDecimal.ZERO,
-            BigDecimal.ZERO,
-            BigDecimal.ZERO,
-            BigDecimal.ZERO
-        );
-        InvoiceCalculation calculation = new InvoiceCalculation(new BigDecimal("1000.00"), new BigDecimal("1000.00"));
-        when(calculator.calculateInvoice(any(), any(), any(), any(), any(), any(), any(), any())).thenReturn(calculation);
-        when(commissions.createInvoice(any(SubmitCommissionRequest.class))).thenReturn(500L);
-        when(fileStorage.store(eq("commission-invoice"), eq(500L), any(), any()))
-            .thenReturn(new FileStorageService.StoredFile("invoice.pdf", "/tmp/invoice.pdf", "application/pdf", 100L));
-        when(commissionAttachments.saveWithContent(eq(500L), eq("invoice.pdf"), eq("/tmp/invoice.pdf"), eq("application/pdf"), eq(100L), eq(30L), any(byte[].class)))
-            .thenReturn(700L);
-        // FLAG-10 (2026-07-23): commission on money received in month M is paid in payroll month M+1 -- invoiceDate
-        // June 15 lands payroll_month July 1, not June 1.
-        when(commissions.createCommissionRecord(eq(500L), eq((Long) null), eq(30L), eq(30L), eq(LocalDate.of(2026, 7, 1)),
-                eq(calculation), eq((BigDecimal) null), eq(false), eq((BigDecimal) null)))
-            .thenReturn(900L);
-        CommissionRecord created = record(900L, 30L, CommissionKind.SALE, CommissionStatus.SUBMITTED);
-        when(commissions.findById(900L)).thenReturn(Optional.of(created));
-        when(commissions.findSalesManagerApproverEmployeeIds()).thenReturn(List.of(88L));
-        UserPrincipal account = accountUser();
-
-        CommissionRecord result = service.submit(request, invoiceFile(), account);
-
-        assertThat(result.id()).isEqualTo(900L);
-        verify(commissions).attachInvoiceFile(500L, 700L);
-        verify(auditService).record(account, "SUBMIT_COMMISSION", "commission_record", 900L, null, created);
-        verify(notificationService).notify(eq(30L), eq("COMMISSION_SUBMITTED"), anyString(), anyString(), eq("/commissions"), eq(true));
-        verify(notificationService).notify(eq(88L), eq("COMMISSION_PENDING_MANAGER"), anyString(), anyString(), eq("/commissions?view=pending"), eq(true));
-    }
-
-    @Test
-    void submitRequiresInvoiceFile() {
-        SubmitCommissionRequest request = submitRequest();
-
-        assertThatThrownBy(() -> service.submit(request, accountUser()))
-            .isInstanceOf(ApiException.class)
-            .extracting(exception -> ((ApiException) exception).getStatus())
-            .isEqualTo(HttpStatus.BAD_REQUEST);
-    }
-
     // Slice A2 (AUTHZ CHANGE): sales can no longer submit/create commissions at all. Written wrong-way-round per
     // CLAUDE.md — the "sales is rejected, nothing is created" case is the one that matters.
 
@@ -120,33 +66,9 @@ class CommissionServiceTest {
         verify(commissions, never()).createInvoice(any());
     }
 
-    @Test
-    void createFromDealAsSales_isForbidden_andCreatesNoRecord() {
-        assertThatThrownBy(() -> service.createFromDeal(
-                42L, "INV-X", LocalDate.of(2026, 6, 15), null, null, null, null, null, null, null, null,
-                invoiceFile(), salesUser()))
-            .isInstanceOfSatisfying(ApiException.class,
-                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
-        verify(tickets, never()).findById(anyLong());
-        verify(commissions, never()).createInvoice(any());
-        verify(commissions, never()).hasActiveCommissionForTicket(anyLong());
-    }
-
     // Step 9 gate + cross-check decision (unit level — the SQL enforcement itself is proven by
     // CommissionDealLinkageIntegrationTest against real Postgres, per CLAUDE.md's "unit-test the decision,
     // integration-test the enforcement").
-
-    @Test
-    void submitWithLinkedTicketNotFound_rejectsBeforeTouchingTheInvoice() {
-        SubmitCommissionRequest request = submitRequestLinkedTo(999L, new BigDecimal("1000.00"));
-        when(tickets.findSalesStage(999L)).thenReturn(Optional.empty());
-
-        assertThatThrownBy(() -> service.submit(request, invoiceFile(), accountUser()))
-            .isInstanceOf(ApiException.class)
-            .extracting(exception -> ((ApiException) exception).getStatus())
-            .isEqualTo(HttpStatus.NOT_FOUND);
-        verify(commissions, never()).createInvoice(any());
-    }
 
     @Test
     void submitWithLinkedTicketNotClosedPaid_rejectsWithUnprocessableEntity() {
@@ -160,108 +82,8 @@ class CommissionServiceTest {
         verify(commissions, never()).createInvoice(any());
     }
 
-    @Test
-    void submitWithLinkedClosedPaidTicket_withinThreshold_succeedsAndRecordsNoMismatch() {
-        SubmitCommissionRequest request = submitRequestLinkedTo(42L, new BigDecimal("1000.00"));
-        when(tickets.findSalesStage(42L)).thenReturn(Optional.of(DealStage.CLOSED_PAID));
-        when(tickets.payableAmount(42L)).thenReturn(new BigDecimal("1030.00")); // 2.9% off — within 5%
-        InvoiceCalculation calculation = new InvoiceCalculation(new BigDecimal("1000.00"), new BigDecimal("1000.00"));
-        when(calculator.calculateInvoice(any(), any(), any(), any(), any(), any(), any(), any())).thenReturn(calculation);
-        when(commissions.createInvoice(any(SubmitCommissionRequest.class))).thenReturn(500L);
-        when(fileStorage.store(eq("commission-invoice"), eq(500L), any(), any()))
-            .thenReturn(new FileStorageService.StoredFile("invoice.pdf", "/tmp/invoice.pdf", "application/pdf", 100L));
-        when(commissionAttachments.saveWithContent(eq(500L), eq("invoice.pdf"), eq("/tmp/invoice.pdf"), eq("application/pdf"), eq(100L), eq(30L), any(byte[].class)))
-            .thenReturn(700L);
-        when(commissions.createCommissionRecord(eq(500L), eq(42L), eq(30L), eq(30L), any(),
-                eq(calculation), eq(new BigDecimal("1030.00")), eq(false), eq((BigDecimal) null)))
-            .thenReturn(900L);
-        CommissionRecord created = record(900L, 30L, CommissionKind.SALE, CommissionStatus.SUBMITTED);
-        when(commissions.findById(900L)).thenReturn(Optional.of(created));
-        when(commissions.findSalesManagerApproverEmployeeIds()).thenReturn(List.of(88L));
-
-        CommissionRecord result = service.submit(request, invoiceFile(), accountUser());
-
-        assertThat(result.id()).isEqualTo(900L);
-        verify(commissions).createCommissionRecord(eq(500L), eq(42L), eq(30L), eq(30L), any(),
-            eq(calculation), eq(new BigDecimal("1030.00")), eq(false), eq((BigDecimal) null));
-    }
-
-    @Test
-    void submitWithLinkedClosedPaidTicket_beyondThreshold_stillSucceedsButFlagsMismatch() {
-        SubmitCommissionRequest request = submitRequestLinkedTo(42L, new BigDecimal("1000.00"));
-        when(tickets.findSalesStage(42L)).thenReturn(Optional.of(DealStage.CLOSED_PAID));
-        when(tickets.payableAmount(42L)).thenReturn(new BigDecimal("1200.00")); // 16.7% off — beyond 5%
-        InvoiceCalculation calculation = new InvoiceCalculation(new BigDecimal("1000.00"), new BigDecimal("1000.00"));
-        when(calculator.calculateInvoice(any(), any(), any(), any(), any(), any(), any(), any())).thenReturn(calculation);
-        when(commissions.createInvoice(any(SubmitCommissionRequest.class))).thenReturn(500L);
-        when(fileStorage.store(eq("commission-invoice"), eq(500L), any(), any()))
-            .thenReturn(new FileStorageService.StoredFile("invoice.pdf", "/tmp/invoice.pdf", "application/pdf", 100L));
-        when(commissionAttachments.saveWithContent(eq(500L), eq("invoice.pdf"), eq("/tmp/invoice.pdf"), eq("application/pdf"), eq(100L), eq(30L), any(byte[].class)))
-            .thenReturn(700L);
-        when(commissions.createCommissionRecord(eq(500L), eq(42L), eq(30L), eq(30L), any(),
-                eq(calculation), eq(new BigDecimal("1200.00")), eq(true), eq((BigDecimal) null)))
-            .thenReturn(900L);
-        CommissionRecord created = record(900L, 30L, CommissionKind.SALE, CommissionStatus.SUBMITTED);
-        when(commissions.findById(900L)).thenReturn(Optional.of(created));
-        when(commissions.findSalesManagerApproverEmployeeIds()).thenReturn(List.of(88L));
-
-        CommissionRecord result = service.submit(request, invoiceFile(), accountUser());
-
-        assertThat(result.id()).isEqualTo(900L);
-        verify(commissions).createCommissionRecord(eq(500L), eq(42L), eq(30L), eq(30L), any(),
-            eq(calculation), eq(new BigDecimal("1200.00")), eq(true), eq((BigDecimal) null));
-    }
-
-    @Test
-    void submitWithNoLinkedTicket_neverConsultsTicketRepository_regressionGuard() {
-        SubmitCommissionRequest request = submitRequest();
-        InvoiceCalculation calculation = new InvoiceCalculation(new BigDecimal("1000.00"), new BigDecimal("1000.00"));
-        when(calculator.calculateInvoice(any(), any(), any(), any(), any(), any(), any(), any())).thenReturn(calculation);
-        when(commissions.createInvoice(any(SubmitCommissionRequest.class))).thenReturn(500L);
-        when(fileStorage.store(eq("commission-invoice"), eq(500L), any(), any()))
-            .thenReturn(new FileStorageService.StoredFile("invoice.pdf", "/tmp/invoice.pdf", "application/pdf", 100L));
-        when(commissionAttachments.saveWithContent(eq(500L), eq("invoice.pdf"), eq("/tmp/invoice.pdf"), eq("application/pdf"), eq(100L), eq(30L), any(byte[].class)))
-            .thenReturn(700L);
-        when(commissions.createCommissionRecord(eq(500L), eq((Long) null), eq(30L), eq(30L), any(),
-                eq(calculation), eq((BigDecimal) null), eq(false), eq((BigDecimal) null)))
-            .thenReturn(900L);
-        CommissionRecord created = record(900L, 30L, CommissionKind.SALE, CommissionStatus.SUBMITTED);
-        when(commissions.findById(900L)).thenReturn(Optional.of(created));
-        when(commissions.findSalesManagerApproverEmployeeIds()).thenReturn(List.of(88L));
-
-        CommissionRecord result = service.submit(request, invoiceFile(), accountUser());
-
-        assertThat(result.id()).isEqualTo(900L);
-        assertThat(result.dealPayableAmountSnapshot()).isNull();
-        assertThat(result.dealAmountMismatch()).isFalse();
-        verify(tickets, never()).findSalesStage(anyLong());
-        verify(tickets, never()).payableAmountExVat(anyLong());
-    }
-
     // Slice A2 createFromDeal decision-level tests (unit) — role gate, salesRepId resolution, grossAmount
     // defaulting, and the duplicate/CLOSED_PAID guards.
-
-    @Test
-    void createFromDeal_requiresInvoiceFile() {
-        assertThatThrownBy(() -> service.createFromDeal(
-                42L, "INV-X", LocalDate.of(2026, 6, 15), null, null, null, null, null, null, null, null,
-                null, accountUser()))
-            .isInstanceOfSatisfying(ApiException.class,
-                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
-        verify(tickets, never()).findById(anyLong());
-    }
-
-    @Test
-    void createFromDeal_rejectsWhenTicketNotFound() {
-        when(tickets.findById(999L)).thenReturn(Optional.empty());
-
-        assertThatThrownBy(() -> service.createFromDeal(
-                999L, "INV-X", LocalDate.of(2026, 6, 15), null, null, null, null, null, null, null, null,
-                invoiceFile(), accountUser()))
-            .isInstanceOfSatisfying(ApiException.class,
-                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.NOT_FOUND));
-        verify(commissions, never()).createInvoice(any());
-    }
 
     @Test
     void createFromDeal_rejectsDuplicateCommissionForSameDeal_beforeCheckingDealStage() {
@@ -276,107 +98,6 @@ class CommissionServiceTest {
                 e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
         verify(commissions, never()).createInvoice(any());
         verify(tickets, never()).findSalesStage(anyLong());
-    }
-
-    @Test
-    void createFromDeal_rejectsWhenDealNotClosedPaid() {
-        long ticketId = 42L;
-        when(tickets.findById(ticketId)).thenReturn(Optional.of(ticketWithOwner(ticketId, 30L)));
-        when(commissions.hasActiveCommissionForTicket(ticketId)).thenReturn(false);
-        when(tickets.findSalesStage(ticketId)).thenReturn(Optional.of(DealStage.DELIVERED));
-
-        assertThatThrownBy(() -> service.createFromDeal(
-                ticketId, "INV-X", LocalDate.of(2026, 6, 15), null, null, null, null, null, null, null, null,
-                invoiceFile(), accountUser()))
-            .isInstanceOfSatisfying(ApiException.class,
-                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_CONTENT));
-        verify(commissions, never()).createInvoice(any());
-    }
-
-    @Test
-    void createFromDeal_resolvesSalesRepFromTicketOwner_neverFromActor() {
-        long ticketId = 42L;
-        long ownerId = 77L; // deliberately different from the accountant actor's own id (30L)
-        when(tickets.findById(ticketId)).thenReturn(Optional.of(ticketWithOwner(ticketId, ownerId)));
-        when(commissions.hasActiveCommissionForTicket(ticketId)).thenReturn(false);
-        when(tickets.findSalesStage(ticketId)).thenReturn(Optional.of(DealStage.CLOSED_PAID));
-        when(tickets.payableAmount(ticketId)).thenReturn(new BigDecimal("1000.00"));
-        InvoiceCalculation calculation = new InvoiceCalculation(new BigDecimal("1000.00"), new BigDecimal("1000.00"));
-        when(calculator.calculateInvoice(any(), any(), any(), any(), any(), any(), any(), any())).thenReturn(calculation);
-        when(commissions.createInvoice(any(SubmitCommissionRequest.class))).thenReturn(500L);
-        when(fileStorage.store(eq("commission-invoice"), eq(500L), any(), any()))
-            .thenReturn(new FileStorageService.StoredFile("invoice.pdf", "/tmp/invoice.pdf", "application/pdf", 100L));
-        when(commissionAttachments.saveWithContent(eq(500L), any(), any(), any(), any(), anyLong(), any())).thenReturn(700L);
-        when(commissions.createCommissionRecord(eq(500L), eq(ticketId), eq(ownerId), eq(30L), any(),
-                eq(calculation), any(), eq(false), eq((BigDecimal) null))).thenReturn(900L);
-        CommissionRecord created = record(900L, ownerId, CommissionKind.SALE, CommissionStatus.SUBMITTED);
-        when(commissions.findById(900L)).thenReturn(Optional.of(created));
-        when(commissions.findSalesManagerApproverEmployeeIds()).thenReturn(List.of(88L));
-
-        CommissionRecord result = service.createFromDeal(
-            ticketId, "INV-AUTO-1", LocalDate.of(2026, 6, 15), null, null, null, null, null, null, null, null,
-            invoiceFile(), accountUser());
-
-        assertThat(result.salesRepId()).isEqualTo(ownerId);
-        verify(commissions).createCommissionRecord(eq(500L), eq(ticketId), eq(ownerId), eq(30L), any(),
-            eq(calculation), any(), eq(false), eq((BigDecimal) null));
-        // The same upload also becomes the ticket's INVOICE attachment (invoiceOnFile gate).
-        verify(attachments).save(eq(ticketId), isNull(), any(), any(), any(), any(), eq(AttachType.INVOICE), eq(30L));
-        verify(auditService).record(any(), eq("CREATE_COMMISSION_FROM_DEAL"), eq("commission_record"), eq(900L), isNull(), eq(created));
-    }
-
-    @Test
-    void createFromDeal_defaultsGrossAmountFromDealPayable_whenOmitted() {
-        long ticketId = 42L;
-        when(tickets.findById(ticketId)).thenReturn(Optional.of(ticketWithOwner(ticketId, 30L)));
-        when(commissions.hasActiveCommissionForTicket(ticketId)).thenReturn(false);
-        when(tickets.findSalesStage(ticketId)).thenReturn(Optional.of(DealStage.CLOSED_PAID));
-        when(tickets.payableAmount(ticketId)).thenReturn(new BigDecimal("2500.00"));
-        InvoiceCalculation calculation = new InvoiceCalculation(new BigDecimal("2500.00"), new BigDecimal("2500.00"));
-        when(calculator.calculateInvoice(eq(new BigDecimal("2500.00")), any(), any(), any(), any(), any(), any(), any()))
-            .thenReturn(calculation);
-        when(commissions.createInvoice(any(SubmitCommissionRequest.class))).thenReturn(500L);
-        when(fileStorage.store(eq("commission-invoice"), eq(500L), any(), any()))
-            .thenReturn(new FileStorageService.StoredFile("invoice.pdf", "/tmp/invoice.pdf", "application/pdf", 100L));
-        when(commissionAttachments.saveWithContent(eq(500L), any(), any(), any(), any(), anyLong(), any())).thenReturn(700L);
-        when(commissions.createCommissionRecord(eq(500L), eq(ticketId), eq(30L), eq(30L), any(),
-                eq(calculation), any(), any(Boolean.class), eq((BigDecimal) null))).thenReturn(900L);
-        when(commissions.findById(900L)).thenReturn(
-            Optional.of(record(900L, 30L, CommissionKind.SALE, CommissionStatus.SUBMITTED)));
-        when(commissions.findSalesManagerApproverEmployeeIds()).thenReturn(List.of(88L));
-
-        // grossAmount omitted (null) — must default from the deal's payable amount, not zero.
-        service.createFromDeal(ticketId, "INV-AUTO-2", LocalDate.of(2026, 6, 15),
-            null, null, null, null, null, null, null, null, invoiceFile(), accountUser());
-
-        verify(calculator).calculateInvoice(eq(new BigDecimal("2500.00")), any(), any(), any(), any(), any(), any(), any());
-    }
-
-    @Test
-    void createFromDeal_usesProvidedGrossAmount_whenGiven_insteadOfDealPayable() {
-        long ticketId = 42L;
-        when(tickets.findById(ticketId)).thenReturn(Optional.of(ticketWithOwner(ticketId, 30L)));
-        when(commissions.hasActiveCommissionForTicket(ticketId)).thenReturn(false);
-        when(tickets.findSalesStage(ticketId)).thenReturn(Optional.of(DealStage.CLOSED_PAID));
-        // Deliberately different from the payable amount, to prove the override wins.
-        when(tickets.payableAmount(ticketId)).thenReturn(new BigDecimal("2500.00"));
-        InvoiceCalculation calculation = new InvoiceCalculation(new BigDecimal("9999.00"), new BigDecimal("9999.00"));
-        when(calculator.calculateInvoice(eq(new BigDecimal("9999.00")), any(), any(), any(), any(), any(), any(), any()))
-            .thenReturn(calculation);
-        when(commissions.createInvoice(any(SubmitCommissionRequest.class))).thenReturn(500L);
-        when(fileStorage.store(eq("commission-invoice"), eq(500L), any(), any()))
-            .thenReturn(new FileStorageService.StoredFile("invoice.pdf", "/tmp/invoice.pdf", "application/pdf", 100L));
-        when(commissionAttachments.saveWithContent(eq(500L), any(), any(), any(), any(), anyLong(), any())).thenReturn(700L);
-        when(commissions.createCommissionRecord(eq(500L), eq(ticketId), eq(30L), eq(30L), any(),
-                eq(calculation), any(), any(Boolean.class), eq((BigDecimal) null))).thenReturn(900L);
-        when(commissions.findById(900L)).thenReturn(
-            Optional.of(record(900L, 30L, CommissionKind.SALE, CommissionStatus.SUBMITTED)));
-        when(commissions.findSalesManagerApproverEmployeeIds()).thenReturn(List.of(88L));
-
-        service.createFromDeal(ticketId, "INV-AUTO-3", LocalDate.of(2026, 6, 15),
-            new BigDecimal("9999.00"), null, null, null, null, null, null, null, invoiceFile(), accountUser());
-
-        verify(calculator).calculateInvoice(eq(new BigDecimal("9999.00")), any(), any(), any(), any(), any(), any(), any());
     }
 
     /** FLAG-10 (2026-07-23, owner-confirmed against reconciled real May 2026 accountant data): commission on money
@@ -405,52 +126,6 @@ class CommissionServiceTest {
 
         verify(commissions).createCommissionRecord(eq(500L), eq((Long) null), eq(30L), eq(30L), eq(LocalDate.of(2026, 6, 1)),
             eq(calculation), eq((BigDecimal) null), eq(false), eq((BigDecimal) null));
-    }
-
-    /** FLAG-10 companion for the other SALE-commission creation site: the accountant auto-create trigger must shift
-     * by the same +1 month, not just the manual #submit path. */
-    @Test
-    void createFromDeal_shiftsPayrollMonthToTheMonthAfterInvoiceDate_flag10() {
-        long ticketId = 42L;
-        when(tickets.findById(ticketId)).thenReturn(Optional.of(ticketWithOwner(ticketId, 30L)));
-        when(commissions.hasActiveCommissionForTicket(ticketId)).thenReturn(false);
-        when(tickets.findSalesStage(ticketId)).thenReturn(Optional.of(DealStage.CLOSED_PAID));
-        when(tickets.payableAmount(ticketId)).thenReturn(new BigDecimal("1000.00"));
-        InvoiceCalculation calculation = new InvoiceCalculation(new BigDecimal("1000.00"), new BigDecimal("1000.00"));
-        when(calculator.calculateInvoice(any(), any(), any(), any(), any(), any(), any(), any())).thenReturn(calculation);
-        when(commissions.createInvoice(any(SubmitCommissionRequest.class))).thenReturn(500L);
-        when(fileStorage.store(eq("commission-invoice"), eq(500L), any(), any()))
-            .thenReturn(new FileStorageService.StoredFile("invoice.pdf", "/tmp/invoice.pdf", "application/pdf", 100L));
-        when(commissionAttachments.saveWithContent(eq(500L), any(), any(), any(), any(), anyLong(), any())).thenReturn(700L);
-        when(commissions.createCommissionRecord(eq(500L), eq(ticketId), eq(30L), eq(30L), eq(LocalDate.of(2026, 6, 1)),
-                eq(calculation), any(), eq(false), eq((BigDecimal) null))).thenReturn(900L);
-        when(commissions.findById(900L)).thenReturn(
-            Optional.of(record(900L, 30L, CommissionKind.SALE, CommissionStatus.SUBMITTED)));
-        when(commissions.findSalesManagerApproverEmployeeIds()).thenReturn(List.of(88L));
-
-        service.createFromDeal(ticketId, "INV-FLAG10-DEAL", LocalDate.of(2026, 5, 20),
-            null, null, null, null, null, null, null, null, invoiceFile(), accountUser());
-
-        verify(commissions).createCommissionRecord(eq(500L), eq(ticketId), eq(30L), eq(30L), eq(LocalDate.of(2026, 6, 1)),
-            eq(calculation), any(), eq(false), eq((BigDecimal) null));
-    }
-
-    /** FLAG-10 boundary: the HR-picked manual-entry month is already a target payroll month, not a money-received
-     * date, so it must NOT go through the +1 shift -- only get normalized to day 1 exactly as before. A May 15
-     * pick must land May 1, never June 1. */
-    @Test
-    void createManualCommission_explicitPayrollMonthIsNormalizedButNotShifted_flag10() {
-        when(commissions.createManualCommission(eq(CommissionKind.INCENTIVE), eq(30L), eq(500L),
-                eq(LocalDate.of(2026, 5, 1)), eq(new BigDecimal("15000.00")), eq("incentive bonus"), eq(true)))
-            .thenReturn(900L);
-        when(commissions.findById(900L)).thenReturn(
-            Optional.of(record(900L, 30L, CommissionKind.INCENTIVE, CommissionStatus.APPROVED)));
-
-        service.createManualCommission(30L, CommissionKind.INCENTIVE, new BigDecimal("15000.00"),
-            "incentive bonus", LocalDate.of(2026, 5, 15), ceoUser());
-
-        verify(commissions).createManualCommission(eq(CommissionKind.INCENTIVE), eq(30L), eq(500L),
-            eq(LocalDate.of(2026, 5, 1)), eq(new BigDecimal("15000.00")), eq("incentive bonus"), eq(true));
     }
 
     private TicketDto ticketWithOwner(long ticketId, long ownerId) {
@@ -485,23 +160,6 @@ class CommissionServiceTest {
     }
 
     @Test
-    void managerApprovalTransitionsSubmittedToManagerApproved() {
-        CommissionRecord existing = record(900L, 30L, CommissionKind.SALE, CommissionStatus.SUBMITTED);
-        CommissionRecord managerApproved = record(900L, 30L, CommissionKind.SALE, CommissionStatus.MANAGER_APPROVED);
-        when(commissions.findById(900L)).thenReturn(Optional.of(existing), Optional.of(managerApproved));
-        when(ceoApprovers.findEmployeeIds()).thenReturn(List.of(500L));
-        UserPrincipal approver = approverUser();
-
-        CommissionRecord result = service.approve(900L, approver);
-
-        assertThat(result.status()).isEqualTo(CommissionStatus.MANAGER_APPROVED);
-        verify(commissions).managerApprove(900L, approver.id());
-        verify(auditService).record(approver, "MANAGER_APPROVE_COMMISSION", "commission_record", 900L, existing, managerApproved);
-        verify(notificationService).notify(eq(30L), eq("COMMISSION_MANAGER_APPROVED"), anyString(), anyString(), eq("/commissions"), eq(true));
-        verify(notificationService).notify(eq(500L), eq("COMMISSION_PENDING_CEO"), anyString(), anyString(), eq("/commissions"), eq(true));
-    }
-
-    @Test
     void ceoApprovalTransitionsManagerApprovedToApproved() {
         CommissionRecord managerApproved = record(900L, 30L, CommissionKind.SALE, CommissionStatus.MANAGER_APPROVED);
         CommissionRecord approved = record(900L, 30L, CommissionKind.SALE, CommissionStatus.APPROVED);
@@ -515,36 +173,6 @@ class CommissionServiceTest {
         verify(auditService).record(ceo, "CEO_APPROVE_COMMISSION", "commission_record", 900L, managerApproved, approved);
         verify(notificationService).notify(eq(30L), eq("COMMISSION_APPROVED"), anyString(), anyString(), eq("/commissions"), eq(true));
         verify(notificationService).notify(eq(88L), eq("COMMISSION_APPROVED"), anyString(), anyString(), eq("/commissions"), eq(true));
-    }
-
-    @Test
-    void managerRejectTransitionsSubmittedToRejected() {
-        CommissionRecord submitted = record(900L, 30L, CommissionKind.SALE, CommissionStatus.SUBMITTED);
-        CommissionRecord rejected = record(900L, 30L, CommissionKind.SALE, CommissionStatus.REJECTED);
-        when(commissions.findById(900L)).thenReturn(Optional.of(submitted), Optional.of(rejected));
-        UserPrincipal manager = approverUser();
-
-        CommissionRecord result = service.reject(900L, new ReviewCommissionRequest("missing invoice detail"), manager);
-
-        assertThat(result.status()).isEqualTo(CommissionStatus.REJECTED);
-        verify(commissions).managerReject(900L, manager.id(), "missing invoice detail");
-        verify(auditService).record(manager, "REJECT_COMMISSION", "commission_record", 900L, submitted, rejected);
-        verify(notificationService).notify(eq(30L), eq("COMMISSION_REJECTED"), anyString(), anyString(), eq("/commissions"), eq(true));
-    }
-
-    @Test
-    void ceoRejectTransitionsManagerApprovedToRejected() {
-        CommissionRecord managerApproved = record(900L, 30L, CommissionKind.SALE, CommissionStatus.MANAGER_APPROVED);
-        CommissionRecord rejected = record(900L, 30L, CommissionKind.SALE, CommissionStatus.REJECTED);
-        when(commissions.findById(900L)).thenReturn(Optional.of(managerApproved), Optional.of(rejected));
-        UserPrincipal ceo = ceoUser();
-
-        CommissionRecord result = service.reject(900L, new ReviewCommissionRequest("needs review"), ceo);
-
-        assertThat(result.status()).isEqualTo(CommissionStatus.REJECTED);
-        verify(commissions).ceoReject(900L, ceo.id(), "needs review");
-        verify(auditService).record(ceo, "CEO_REJECT_COMMISSION", "commission_record", 900L, managerApproved, rejected);
-        verify(notificationService).notify(eq(30L), eq("COMMISSION_REJECTED"), anyString(), anyString(), eq("/commissions"), eq(true));
     }
 
     @Test

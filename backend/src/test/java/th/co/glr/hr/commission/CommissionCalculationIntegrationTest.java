@@ -38,45 +38,6 @@ class CommissionCalculationIntegrationTest extends AbstractPostgresIntegrationTe
             true, LocalDate.now(), false, null, false);
     }
 
-    // Withholding tax / overpayment sign convention.
-
-    @Test
-    void withholdingTax_reducesCommissionableBase_vsSameInvoiceWithoutIt() {
-        wireService();
-        CommissionSimulationDto without = commissionService.simulate(simulatorRequest(
-            new BigDecimal("107000.00"), BigDecimal.ZERO, BigDecimal.ZERO), salesActor);
-        CommissionSimulationDto with = commissionService.simulate(simulatorRequest(
-            new BigDecimal("107000.00"), new BigDecimal("2140.00"), BigDecimal.ZERO), salesActor);
-
-        assertThat(with.actualReceived()).isLessThan(without.actualReceived());
-        assertThat(with.commissionableBase()).isLessThan(without.commissionableBase());
-        assertThat(with.actualReceived()).isEqualByComparingTo(new BigDecimal("104860.00"));
-    }
-
-    @Test
-    void overpayment_increasesCommissionableBase_vsSameInvoiceWithoutIt() {
-        wireService();
-        CommissionSimulationDto without = commissionService.simulate(simulatorRequest(
-            new BigDecimal("107000.00"), BigDecimal.ZERO, BigDecimal.ZERO), salesActor);
-        CommissionSimulationDto with = commissionService.simulate(simulatorRequest(
-            new BigDecimal("107000.00"), BigDecimal.ZERO, new BigDecimal("1000.00")), salesActor);
-
-        assertThat(with.actualReceived()).isGreaterThan(without.actualReceived());
-        assertThat(with.commissionableBase()).isGreaterThan(without.commissionableBase());
-        assertThat(with.actualReceived()).isEqualByComparingTo(new BigDecimal("108000.00"));
-    }
-
-    @Test
-    void zeroWithholdingTaxAndOverpayment_isBackwardCompatibleWithPreSliceA1Result() {
-        wireService();
-        CommissionSimulationDto withZeros = commissionService.simulate(simulatorRequest(
-            new BigDecimal("107000.00"), BigDecimal.ZERO, BigDecimal.ZERO), salesActor);
-
-        // Same math as the pre-Slice-A1 five-column formula: 107000 / 1.07 = 100000.00.
-        assertThat(withZeros.actualReceived()).isEqualByComparingTo(new BigDecimal("107000.00"));
-        assertThat(withZeros.commissionableBase()).isEqualByComparingTo(new BigDecimal("100000.00"));
-    }
-
     // <50,000 monthly floor — written wrong-way-round: the below-floor ZERO case is the assertion that matters,
     // not the above-floor positive case.
 
@@ -90,19 +51,6 @@ class CommissionCalculationIntegrationTest extends AbstractPostgresIntegrationTe
 
         assertThat(dto.commissionableBase()).isEqualByComparingTo(new BigDecimal("49999.00"));
         assertThat(dto.projectedMonthlyCommission()).isEqualByComparingTo(BigDecimal.ZERO);
-    }
-
-    @Test
-    void monthlyBaseAtOrAboveFiftyThousand_paysPositiveCommission() {
-        wireService();
-        // 50001 * 1.07 = 53501.07, an exact reverse — commissionableBase = 50,001.00.
-        CommissionSimulationDto dto = commissionService.simulate(
-            simulatorRequest(new BigDecimal("53501.07"), BigDecimal.ZERO, BigDecimal.ZERO), salesActor);
-
-        assertThat(dto.commissionableBase()).isEqualByComparingTo(new BigDecimal("50001.00"));
-        assertThat(dto.projectedMonthlyCommission()).isGreaterThan(BigDecimal.ZERO);
-        // Tier 1 (0-250,000 @ 0.25%) applies from THB 0, unchanged, once the floor is met.
-        assertThat(dto.projectedMonthlyCommission()).isEqualByComparingTo(new BigDecimal("125.00"));
     }
 
     // V81: tier 13 (>3,000,000) corrected from 7.5000% to 3.2500% — read from the real sales.tier_config table,

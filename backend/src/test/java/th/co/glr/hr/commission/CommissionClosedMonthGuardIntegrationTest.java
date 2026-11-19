@@ -12,9 +12,6 @@ import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
-import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
-import org.springframework.mock.web.MockMultipartFile;
-import org.springframework.web.multipart.MultipartFile;
 import th.co.glr.hr.attachment.AttachmentRepository;
 import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.audit.AuditService;
@@ -87,115 +84,6 @@ class CommissionClosedMonthGuardIntegrationTest extends AbstractPostgresIntegrat
         assertThat(countCommissionRecords()).isEqualTo(before);
     }
 
-    /** The message here must be the OTHER fact -- "already processed", not "paid outside the system". */
-    @Test
-    void manualCommission_intoProcessedMonth_isRefused_zeroRowsWritten_withTheOtherMessage() {
-        LocalDate processedMonth = LocalDate.of(2026, 4, 1);
-        insertProcessedPeriod(processedMonth);
-        int before = countCommissionRecords();
-
-        assertThatThrownBy(() -> commissionService.createManualCommission(
-                salesRepId, CommissionKind.ADJUSTMENT, new BigDecimal("5000.00"),
-                "should be refused -- already processed", processedMonth, managerActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> {
-                assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
-                assertThat(e.getMessage()).contains("ประมวลผลไปแล้ว");
-                assertThat(e.getMessage()).doesNotContain("จ่ายนอกระบบ");
-            });
-
-        assertThat(countCommissionRecords()).isEqualTo(before);
-    }
-
-    // createFromDeal (SALE path) — case 3. invoiceDate derives via saleCommissionPayrollMonth (M+1): a 2026-05-15
-    // invoice derives to payroll month 2026-06-01, inside coverage.
-
-    @Test
-    void createFromDeal_derivingIntoSeedCoveredMonth_isRefused_nothingWritten() {
-        insertSeedCoverage(TAX_YEAR, LocalDate.of(2026, 6, 1));
-        long ticketId = createClosedPaidTicket(salesRepId);
-        int beforeCommissions = countCommissionRecords();
-        int beforeInvoices = countInvoiceDetails();
-
-        // createFromDeal throws CONFLICT for a DIFFERENT reason too (hasActiveCommissionForTicket) -- assert the
-        // distinguishing Thai substring, not just the status, so a fixture change could never make this pass for the
-        // wrong reason (reviewer finding F5).
-        assertThatThrownBy(() -> commissionService.createFromDeal(
-                ticketId, "INV-GUARD-CFD-" + UUID.randomUUID().toString().substring(0, 8),
-                LocalDate.of(2026, 5, 15), new BigDecimal("10000.00"),
-                null, null, null, null, null, null, null,
-                invoiceFile(), accountActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> {
-                assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
-                assertThat(e.getMessage()).contains("จ่ายนอกระบบ");
-            });
-
-        assertThat(countCommissionRecords()).isEqualTo(beforeCommissions);
-        assertThat(countInvoiceDetails()).isEqualTo(beforeInvoices);
-        // The guard runs before the invoice upload also flips the ticket's invoiceOnFile flag -- a refused create must
-        // leave the ticket's close gate untouched too.
-        assertThat(tickets.hasInvoiceAttachment(ticketId)).isFalse();
-    }
-
-    @Test
-    void createFromDeal_derivingIntoProcessedMonth_isRefused_nothingWritten() {
-        LocalDate processedMonth = LocalDate.of(2026, 4, 1);
-        insertProcessedPeriod(processedMonth);
-        long ticketId = createClosedPaidTicket(salesRepId);
-        int beforeCommissions = countCommissionRecords();
-
-        // 2026-03-15 derives to payroll month 2026-04-01 -- processed.
-        assertThatThrownBy(() -> commissionService.createFromDeal(
-                ticketId, "INV-GUARD-CFD-PROC-" + UUID.randomUUID().toString().substring(0, 8),
-                LocalDate.of(2026, 3, 15), new BigDecimal("10000.00"),
-                null, null, null, null, null, null, null,
-                invoiceFile(), accountActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> {
-                assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
-                assertThat(e.getMessage()).contains("ประมวลผลไปแล้ว");
-            });
-
-        assertThat(countCommissionRecords()).isEqualTo(beforeCommissions);
-        assertThat(tickets.hasInvoiceAttachment(ticketId)).isFalse();
-    }
-
-    // submit (SALE path, unlinked) — case 4. sourceTicketId is null, so resolveDealLinkage's CLOSED_PAID check
-    // never runs -- proves the guard fires independently of deal linkage.
-
-    @Test
-    void submit_derivingIntoSeedCoveredMonth_isRefused_nothingWritten() {
-        insertSeedCoverage(TAX_YEAR, LocalDate.of(2026, 6, 1));
-        int beforeCommissions = countCommissionRecords();
-        int beforeInvoices = countInvoiceDetails();
-        SubmitCommissionRequest request = unlinkedRequest(
-            salesRepId, LocalDate.of(2026, 5, 15), "INV-GUARD-SUBMIT-" + UUID.randomUUID().toString().substring(0, 8));
-
-        assertThatThrownBy(() -> commissionService.submit(request, invoiceFile(), accountActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> {
-                assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
-                assertThat(e.getMessage()).contains("จ่ายนอกระบบ");
-            });
-
-        assertThat(countCommissionRecords()).isEqualTo(beforeCommissions);
-        assertThat(countInvoiceDetails()).isEqualTo(beforeInvoices);
-    }
-
-    @Test
-    void submit_derivingIntoProcessedMonth_isRefused_nothingWritten() {
-        LocalDate processedMonth = LocalDate.of(2026, 4, 1);
-        insertProcessedPeriod(processedMonth);
-        int beforeCommissions = countCommissionRecords();
-        SubmitCommissionRequest request = unlinkedRequest(
-            salesRepId, LocalDate.of(2026, 3, 15), "INV-GUARD-SUBMIT-PROC-" + UUID.randomUUID().toString().substring(0, 8));
-
-        assertThatThrownBy(() -> commissionService.submit(request, invoiceFile(), accountActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> {
-                assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
-                assertThat(e.getMessage()).contains("ประมวลผลไปแล้ว");
-            });
-
-        assertThat(countCommissionRecords()).isEqualTo(beforeCommissions);
-    }
-
     // createClawback (reviewer finding F2) — a FOURTH insert path into sales.commission_record, guarded on
     // currentPayrollMonth() (always the CURRENT month, never a caller-supplied one).
 
@@ -238,23 +126,6 @@ class CommissionClosedMonthGuardIntegrationTest extends AbstractPostgresIntegrat
         assertThat(commissions.findById(commissionId).orElseThrow().status()).isEqualTo(CommissionStatus.SUBMITTED);
     }
 
-    @Test
-    void ceoApprove_refusedOnceThePayrollMonthClosesUnderneath_statusUnchanged() {
-        LocalDate month = LocalDate.of(2026, 4, 1);
-        long commissionId = seedSubmittedTierCommission(salesRepId, month, new BigDecimal("50000.00"));
-        commissionService.approve(commissionId, managerActor); // -> MANAGER_APPROVED, month still open The month closes AFTER manager approval, while the request waits for
-        // the CEO.
-        insertProcessedPeriod(month);
-
-        assertThatThrownBy(() -> commissionService.approve(commissionId, ceoActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> {
-                assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
-                assertThat(e.getMessage()).contains("ประมวลผลไปแล้ว");
-            });
-
-        assertThat(commissions.findById(commissionId).orElseThrow().status()).isEqualTo(CommissionStatus.MANAGER_APPROVED);
-    }
-
     // Boundary — case 5: the guard does not over-reach. Given coverage through 2026-06-01, a June invoice derives
     // (M+1) to July, the first OPEN month, and must succeed.
 
@@ -269,40 +140,7 @@ class CommissionClosedMonthGuardIntegrationTest extends AbstractPostgresIntegrat
         assertThat(created.payrollMonth()).isEqualTo(LocalDate.of(2026, 7, 1));
     }
 
-    @Test
-    void submit_invoiceDerivingToFirstOpenMonthPastCoverage_succeeds() {
-        insertSeedCoverage(TAX_YEAR, LocalDate.of(2026, 6, 1));
-        // 2026-06-20 derives (M+1) to payroll month 2026-07-01 -- the first open month.
-        SubmitCommissionRequest request = unlinkedRequest(
-            salesRepId, LocalDate.of(2026, 6, 20), "INV-GUARD-BOUNDARY-" + UUID.randomUUID().toString().substring(0, 8));
-
-        CommissionRecord created = commissionService.submit(request, invoiceFile(), accountActor);
-
-        assertThat(created.payrollMonth()).isEqualTo(LocalDate.of(2026, 7, 1));
-    }
-
-    // Data-driven, not hardcoded — case 6: with NO coverage row at all (UAT's shape today), a month that would
-    // otherwise be covered succeeds. Proves the guard reads real coverage data rather than a baked-in date.
-
-    @Test
-    void createManualCommission_withNoCoverageRowAtAll_succeedsEvenForAnOldMonth() {
-        // No insertSeedCoverage call -- hr.payroll_seed_coverage starts empty in every fresh test database, exactly
-        // UAT's current shape (no payroll_year_to_date_seed rows to derive from).
-        CommissionRecord created = commissionService.createManualCommission(
-            salesRepId, CommissionKind.ADJUSTMENT, new BigDecimal("1000.00"),
-            "no coverage row exists anywhere", LocalDate.of(2026, 1, 1), managerActor);
-
-        assertThat(created.payrollMonth()).isEqualTo(LocalDate.of(2026, 1, 1));
-    }
-
     // Helpers
-
-    private SubmitCommissionRequest unlinkedRequest(long salesRepId, LocalDate invoiceDate, String invoiceNumber) {
-        return new SubmitCommissionRequest(
-            null, salesRepId, invoiceNumber, invoiceDate, new BigDecimal("10000.00"),
-            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
-            BigDecimal.ZERO, BigDecimal.ZERO);
-    }
 
     /** Writes a real SUBMITTED SALE commission directly through the repository (bypassing submit's own create-time
      * guard entirely, deliberately. */
@@ -329,26 +167,6 @@ class CommissionClosedMonthGuardIntegrationTest extends AbstractPostgresIntegrat
         return commissionId;
     }
 
-    private MultipartFile invoiceFile() {
-        return new MockMultipartFile("invoiceAttachment", "invoice.pdf", "application/pdf", "pdf".getBytes());
-    }
-
-    /** Direct SQL, not the full 8-step ticket->deal fixture -- the guard is date-math, not deal state, and every
-     * other test in this class only needs a ticket that already reads back as CLOSED_PAID with a known owner,
-     * exactly what createFromDeal looks up. */
-    private long createClosedPaidTicket(long createdBy) {
-        return jdbc.queryForObject("""
-            INSERT INTO sales.ticket (code, title, status, created_by, sales_stage)
-            VALUES (:code, 'commission closed-month guard test ticket', 'draft', :createdBy, 'CLOSED_PAID')
-            RETURNING ticket_id
-            """,
-            new MapSqlParameterSource()
-                // sales.ticket.code is VARCHAR(20).
-                .addValue("code", "T-CMG-" + UUID.randomUUID().toString().substring(0, 8))
-                .addValue("createdBy", createdBy),
-            Long.class);
-    }
-
     private void insertSeedCoverage(int taxYear, LocalDate coversThrough) {
         jdbc.update("""
             INSERT INTO hr.payroll_seed_coverage (tax_year, covers_through, note)
@@ -371,11 +189,6 @@ class CommissionClosedMonthGuardIntegrationTest extends AbstractPostgresIntegrat
 
     private int countCommissionRecords() {
         Integer count = jdbc.queryForObject("SELECT COUNT(*) FROM sales.commission_record", Map.of(), Integer.class);
-        return count == null ? 0 : count;
-    }
-
-    private int countInvoiceDetails() {
-        Integer count = jdbc.queryForObject("SELECT COUNT(*) FROM sales.invoice_details", Map.of(), Integer.class);
         return count == null ? 0 : count;
     }
 

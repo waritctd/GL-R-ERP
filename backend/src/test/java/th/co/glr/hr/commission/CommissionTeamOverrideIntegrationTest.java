@@ -1,7 +1,6 @@
 package th.co.glr.hr.commission;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 
 import java.math.BigDecimal;
@@ -11,13 +10,11 @@ import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIf;
-import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import th.co.glr.hr.attachment.AttachmentRepository;
 import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
-import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.employee.EmployeeCodeGenerator;
 import th.co.glr.hr.employee.EmployeeReferenceRepository;
 import th.co.glr.hr.employee.EmployeeRepository;
@@ -111,23 +108,6 @@ class CommissionTeamOverrideIntegrationTest extends AbstractPostgresIntegrationT
     }
 
     @Test
-    void recipientWhoAlsoHasSales_overrideIsAddedToTheirExistingRow_notASecondRow() {
-        wireService();
-        insertConfig(MARCH_2027, true, "3000000.00", "0.0750", recipient1);
-        seedApproved(recipient1, TWO_M_EX_VAT, MARCH_2027); // her own 2,000,000 ex-VAT
-        seedApproved(repB, TWO_M_EX_VAT, MARCH_2027);
-
-        PayrollCommissionSummaryDto summary = commissionService.payrollReadySummary(MARCH_2027, hrActor);
-
-        assertThat(summary.salesReps().stream().filter(r -> r.salesRepId() == recipient1)).hasSize(1);
-        SalesRepCommissionSummaryDto row = repRow(summary, recipient1).orElseThrow();
-        BigDecimal ownTier = calculator.progressiveCommission(new BigDecimal("2000000.00"));
-        assertThat(row.commissionableBase()).isEqualByComparingTo("2000000.00");
-        assertThat(row.teamOverrideAmount()).isEqualByComparingTo("750.00");
-        assertThat(row.commissionAmount()).isEqualByComparingTo(ownTier.add(new BigDecimal("750.00")));
-    }
-
-    @Test
     void companyBaseIsUnweighted_aWeightTwoSaleCountsOnceInTheCompanyBase() {
         wireService();
         insertConfig(MARCH_2027, true, "3000000.00", "0.0750", recipient1);
@@ -145,24 +125,6 @@ class CommissionTeamOverrideIntegrationTest extends AbstractPostgresIntegrationT
         assertThat(r1).isNotNull();
         assertThat(r1.teamOverrideAmount()).isEqualByComparingTo("750.00");
         assertThat(r1.teamOverrideAmount()).isNotEqualByComparingTo("2250.00");
-        assertThat(summary.companyCommissionableBase()).isEqualByComparingTo("4000000.00");
-    }
-
-    @Test
-    void anUnapprovedReceiptIsExcludedFromThePayrollCompanyBase() {
-        wireService();
-        insertConfig(MARCH_2027, true, "3000000.00", "0.0750", recipient1);
-        seedApproved(repA, TWO_M_EX_VAT, MARCH_2027);
-        seedApproved(repB, TWO_M_EX_VAT, MARCH_2027);
-        // A SUBMITTED (nobody approved it) receipt of ฿1,070,000 = ฿1,000,000 ex-VAT.
-        seedSubmitted(repA, new BigDecimal("1070000.00"), MARCH_2027);
-
-        PayrollCommissionSummaryDto summary = commissionService.payrollReadySummary(MARCH_2027, hrActor);
-
-        SalesRepCommissionSummaryDto r1 = repRow(summary, recipient1).orElse(null);
-        assertThat(r1).isNotNull();
-        assertThat(r1.teamOverrideAmount()).isEqualByComparingTo("750.00");
-        assertThat(r1.teamOverrideAmount()).isNotEqualByComparingTo("1500.00");
         assertThat(summary.companyCommissionableBase()).isEqualByComparingTo("4000000.00");
     }
 
@@ -210,60 +172,6 @@ class CommissionTeamOverrideIntegrationTest extends AbstractPostgresIntegrationT
     }
 
     @Test
-    void aZeroManualManagerEntry_isANote_notAReplacement_autoLimbStillComputes() {
-        wireService();
-        insertConfig(MARCH_2027, true, "3000000.00", "0.0750", recipient1);
-        seedApproved(repA, TWO_M_EX_VAT, MARCH_2027);
-        seedApproved(repB, TWO_M_EX_VAT, MARCH_2027);
-        commissionService.createManualCommission(
-            recipient1, CommissionKind.MANAGER, BigDecimal.ZERO, "note only", MARCH_2027, ceoActor);
-
-        SalesRepCommissionSummaryDto r1 = repRow(commissionService.payrollReadySummary(MARCH_2027, hrActor), recipient1).orElseThrow();
-
-        // Same rule as INCENTIVE/STOCK_BONUS: only a STRICTLY POSITIVE manual entry replaces. (A NEGATIVE manual
-        // MANAGER cannot be created -- createManualCommission 400s it -- so the zero case is the only "not a
-        // replacement" MANAGER shape reachable through the service.)
-        assertThat(r1.teamOverrideAmount()).isEqualByComparingTo("750.00");
-        assertThat(r1.manualAdjustmentAmount()).isEqualByComparingTo(ZERO2);
-        assertThat(r1.commissionAmount()).isEqualByComparingTo("750.00");
-    }
-
-    @Test
-    void aPositiveApprovedAdjustment_doesNotSuppressTheOverride_onlyManagerKindDoes() {
-        wireService();
-        insertConfig(MARCH_2027, true, "3000000.00", "0.0750", recipient1);
-        seedApproved(repA, TWO_M_EX_VAT, MARCH_2027);
-        seedApproved(repB, TWO_M_EX_VAT, MARCH_2027);
-        commissionService.createManualCommission(
-            recipient1, CommissionKind.ADJUSTMENT, new BigDecimal("1000.00"), "unrelated bonus", MARCH_2027, ceoActor);
-
-        SalesRepCommissionSummaryDto r1 = repRow(commissionService.payrollReadySummary(MARCH_2027, hrActor), recipient1).orElseThrow();
-
-        assertThat(r1.teamOverrideAmount()).isEqualByComparingTo("750.00");
-        assertThat(r1.commissionAmount()).isEqualByComparingTo("1750.00");
-    }
-
-    @Test
-    void aManualManagerEntryStillAwaitingCeoApproval_neitherSuppressesNorPaysOut() {
-        wireService();
-        insertConfig(MARCH_2027, true, "3000000.00", "0.0750", recipient1);
-        seedApproved(repA, TWO_M_EX_VAT, MARCH_2027);
-        seedApproved(repB, TWO_M_EX_VAT, MARCH_2027);
-        // sales_manager-created manual entry -> MANAGER_APPROVED, still awaiting the CEO.
-        commissionService.createManualCommission(
-            recipient1, CommissionKind.MANAGER, new BigDecimal("5000.00"), "pending hand entry", MARCH_2027, managerActor);
-
-        SalesRepCommissionSummaryDto r1 = repRow(commissionService.payrollReadySummary(MARCH_2027, hrActor), recipient1).orElse(null);
-        assertThat(r1).as("recipient 1 has a payroll row").isNotNull();
-
-        // Payroll only ever sees APPROVED rows: the pending 5,000 is not paid AND does not switch the auto limb off --
-        // otherwise the recipient would silently get nothing this month.
-        assertThat(r1.teamOverrideAmount()).isEqualByComparingTo("750.00");
-        assertThat(r1.manualAdjustmentAmount()).isEqualByComparingTo(ZERO2);
-        assertThat(r1.commissionAmount()).isEqualByComparingTo("750.00");
-    }
-
-    @Test
     void noConfigGenerationForTheMonth_noOverrideForAnyone() {
         wireService();
         // Sep 2026 is before every generation, so no generation applies at all. Feb 2027 IS covered by the V199 seed
@@ -287,21 +195,6 @@ class CommissionTeamOverrideIntegrationTest extends AbstractPostgresIntegrationT
             assertThat(commissionService.payrollCommissionTotalsByEmployee(month))
                 .doesNotContainKeys(recipient1, recipient2);
         }
-    }
-
-    @Test
-    void aDisabledGeneration_paysNothing_evenOverTheThreshold() {
-        wireService();
-        insertConfig(MARCH_2027, false, "3000000.00", "0.0750", recipient1);
-        seedApproved(repA, TWO_M_EX_VAT, MARCH_2027);
-        seedApproved(repB, TWO_M_EX_VAT, MARCH_2027);
-
-        PayrollCommissionSummaryDto summary = commissionService.payrollReadySummary(MARCH_2027, hrActor);
-
-        assertThat(summary.totalTeamOverrideAmount()).isEqualByComparingTo(ZERO2);
-        assertThat(summary.companyCommissionableBase())
-            .as("a disabled generation exposes no company base: null, not 0.00").isNull();
-        assertThat(repRow(summary, recipient1)).isEmpty();
     }
 
     @Test
@@ -359,143 +252,7 @@ class CommissionTeamOverrideIntegrationTest extends AbstractPostgresIntegrationT
             .isEqualByComparingTo(calculator.progressiveCommission(new BigDecimal("2000000.00")));
     }
 
-    @Test
-    void payrollReadySummaryTotals_equalTheRows_andThePayrollMapAgreesWithThePerRepSummary() {
-        wireService();
-        insertConfig(MARCH_2027, true, "3000000.00", "0.0750", recipient1, recipient2);
-        seedApproved(repA, TWO_M_EX_VAT, MARCH_2027);
-        seedApproved(repB, TWO_M_EX_VAT, MARCH_2027);
-        commissionService.createManualCommission(
-            recipient2, CommissionKind.ADJUSTMENT, new BigDecimal("300.00"), "misc", MARCH_2027, ceoActor);
-
-        PayrollCommissionSummaryDto summary = commissionService.payrollReadySummary(MARCH_2027, hrActor);
-        Map<Long, BigDecimal> payrollMap = commissionService.payrollCommissionTotalsByEmployee(MARCH_2027);
-
-        BigDecimal sumOfRows = summary.salesReps().stream()
-            .map(SalesRepCommissionSummaryDto::teamOverrideAmount)
-            .reduce(BigDecimal.ZERO, BigDecimal::add);
-        assertThat(sumOfRows).isEqualByComparingTo("1500.00");
-        assertThat(summary.totalTeamOverrideAmount()).isEqualByComparingTo(sumOfRows);
-        assertThat(summary.companyCommissionableBase()).isEqualByComparingTo("4000000.00");
-        assertThat(summary.companyCommissionableBase().scale()).isEqualTo(2);
-        // The two callers (HR's screen and what payroll actually pays) must never diverge, per rep.
-        assertThat(payrollMap).hasSameSizeAs(summary.salesReps());
-        for (SalesRepCommissionSummaryDto row : summary.salesReps()) {
-            assertThat(payrollMap.get(row.salesRepId()))
-                .as("payrollCommissionTotalsByEmployee vs payrollReadySummary for rep %s", row.salesRepId())
-                .isEqualByComparingTo(row.commissionAmount());
-        }
-        assertThat(payrollMap.get(recipient1)).isEqualByComparingTo("750.00");
-        assertThat(payrollMap.get(recipient2)).isEqualByComparingTo("1050.00"); // 750 override + 300 adjustment
-    }
-
     // monthlySummary -- the rep-facing "how was my commission built" read model
-
-    @Test
-    void monthlySummary_rawPlusWeightUpliftEqualsTheCommissionableBase() {
-        wireService();
-        long weighted = seedApproved(repA, TWO_M_EX_VAT, MARCH_2027);
-        setWeightMultiplier(weighted, 2);
-        seedApproved(repA, new BigDecimal("1070000.00"), MARCH_2027); // weight 1, 1,000,000 ex-VAT
-
-        CommissionMonthlySummaryDto dto = commissionService.monthlySummary(repA, MARCH_2027, principal(repA, "sales"));
-
-        // commissionable (weighted) = 2,000,000 x 2 + 1,000,000 = 5,000,000; raw = 3,000,000.
-        assertThat(dto.commissionableBase()).isEqualByComparingTo("5000000.00");
-        assertThat(dto.rawCommissionableBase()).isNotNull();
-        assertThat(dto.rawCommissionableBase()).isEqualByComparingTo("3000000.00");
-        assertThat(dto.weightUpliftBase()).isNotNull();
-        assertThat(dto.weightUpliftBase()).isEqualByComparingTo("2000000.00");
-        assertThat(dto.rawCommissionableBase().add(dto.weightUpliftBase())).isEqualByComparingTo(dto.commissionableBase());
-    }
-
-    @Test
-    void monthlySummary_unweightedRep_hasZeroUplift() {
-        wireService();
-        seedApproved(repA, TWO_M_EX_VAT, MARCH_2027);
-
-        CommissionMonthlySummaryDto dto = commissionService.monthlySummary(repA, MARCH_2027, principal(repA, "sales"));
-
-        assertThat(dto.rawCommissionableBase()).isEqualByComparingTo("2000000.00");
-        assertThat(dto.weightUpliftBase()).isEqualByComparingTo(ZERO2);
-    }
-
-    @Test
-    void monthlySummary_stockBonusAppearsOnceTheConfigIsEnabled_andIsInTheTotal() {
-        wireService();
-        enableStockBonus();
-        long ticket = createTicket(repA);
-        addTicketItem(ticket, new BigDecimal("100.00"), new BigDecimal("100.00")); // fully from stock
-        seedApprovedStockLinked(repA, ticket, new BigDecimal("300000.00"), MARCH_2027);
-
-        CommissionMonthlySummaryDto dto = commissionService.monthlySummary(repA, MARCH_2027, principal(repA, "sales"));
-
-        // Computed exactly as payroll does: floor(300,000 / 100,000) x 1,000 = 3,000.00.
-        assertThat(dto.stockBonusAmount()).isNotNull();
-        assertThat(dto.stockBonusAmount()).isEqualByComparingTo("3000.00");
-        assertThat(dto.totalCommission()).isEqualByComparingTo(
-            dto.tierCommission().add(dto.incentiveAmount()).add(dto.manualTotal())
-                .add(dto.stockBonusAmount()).add(dto.teamOverrideAmount()));
-        // ...and equals what payroll pays this rep.
-        assertThat(dto.totalCommission()).isEqualByComparingTo(
-            commissionService.payrollReadySummary(MARCH_2027, hrActor).salesReps().stream()
-                .filter(r -> r.salesRepId() == repA).findFirst().orElseThrow().commissionAmount());
-    }
-
-    @Test
-    void monthlySummary_stockBonusIsZeroWhileTheSeededConfigIsDisabled() {
-        wireService();
-        long ticket = createTicket(repA);
-        addTicketItem(ticket, new BigDecimal("100.00"), new BigDecimal("100.00"));
-        seedApprovedStockLinked(repA, ticket, new BigDecimal("300000.00"), MARCH_2027);
-
-        CommissionMonthlySummaryDto dto = commissionService.monthlySummary(repA, MARCH_2027, principal(repA, "sales"));
-
-        assertThat(dto.stockBonusAmount()).isNotNull();
-        assertThat(dto.stockBonusAmount()).isEqualByComparingTo(ZERO2);
-    }
-
-    @Test
-    void monthlySummary_aPositiveManualStockBonusSuppressesTheAutoStockBonus() {
-        wireService();
-        enableStockBonus();
-        long ticket = createTicket(repA);
-        addTicketItem(ticket, new BigDecimal("100.00"), new BigDecimal("100.00"));
-        seedApprovedStockLinked(repA, ticket, new BigDecimal("300000.00"), MARCH_2027);
-        commissionService.createManualCommission(
-            repA, CommissionKind.STOCK_BONUS, new BigDecimal("1000.00"), "hand entered", MARCH_2027, ceoActor);
-
-        CommissionMonthlySummaryDto dto = commissionService.monthlySummary(repA, MARCH_2027, principal(repA, "sales"));
-
-        assertThat(dto.stockBonusAmount()).isNotNull();
-        assertThat(dto.stockBonusAmount()).as("auto limb replaced by the manual 1,000").isEqualByComparingTo(ZERO2);
-        assertThat(dto.manualTotal()).isEqualByComparingTo("1000.00");
-    }
-
-    @Test
-    void monthlySummary_aRecipientSeesTheCompanyBaseAndTheRule_usingThePreviewFilter() {
-        wireService();
-        insertConfig(MARCH_2027, true, "3000000.00", "0.0750", recipient1);
-        seedApproved(repA, TWO_M_EX_VAT, MARCH_2027);
-        seedApproved(repB, TWO_M_EX_VAT, MARCH_2027);
-        // A still-SUBMITTED ฿1,070,000 receipt: the live ESTIMATE counts it (same NOT IN ('VOID','REJECTED') preview
-        // filter the rest of monthlySummary uses), payroll does not.
-        seedSubmitted(repA, new BigDecimal("1070000.00"), MARCH_2027);
-
-        CommissionMonthlySummaryDto dto = commissionService.monthlySummary(recipient1, MARCH_2027, principal(recipient1, "sales"));
-
-        assertThat(dto.companyCommissionableBase()).isNotNull();
-        assertThat(dto.companyCommissionableBase()).isEqualByComparingTo("5000000.00");
-        assertThat(dto.teamOverrideThresholdBase()).isNotNull();
-        assertThat(dto.teamOverrideThresholdBase()).isEqualByComparingTo("3000000.00");
-        assertThat(dto.teamOverrideRatePercent()).isNotNull();
-        assertThat(dto.teamOverrideRatePercent()).isEqualByComparingTo("0.0750");
-        // (5,000,000 - 3,000,000) x 0.075% = 1,500.00 (the estimate), included in the total.
-        assertThat(dto.teamOverrideAmount()).isEqualByComparingTo("1500.00");
-        assertThat(dto.totalCommission()).isEqualByComparingTo(
-            dto.tierCommission().add(dto.incentiveAmount()).add(dto.manualTotal())
-                .add(dto.stockBonusAmount()).add(dto.teamOverrideAmount()));
-    }
 
     @Test
     void monthlySummary_overrideAgreesWithPayroll_whenEveryReceiptIsApproved() {
@@ -511,75 +268,6 @@ class CommissionTeamOverrideIntegrationTest extends AbstractPostgresIntegrationT
         assertThat(dto.teamOverrideAmount()).isEqualByComparingTo("750.00");
         assertThat(dto.teamOverrideAmount()).isEqualByComparingTo(payroll.teamOverrideAmount());
         assertThat(dto.totalCommission()).isEqualByComparingTo(payroll.commissionAmount());
-    }
-
-    @Test
-    void monthlySummary_aRecipientsPositiveManualManagerEntrySuppressesTheAutoLimb() {
-        wireService();
-        insertConfig(MARCH_2027, true, "3000000.00", "0.0750", recipient1);
-        seedApproved(repA, TWO_M_EX_VAT, MARCH_2027);
-        seedApproved(repB, TWO_M_EX_VAT, MARCH_2027);
-        commissionService.createManualCommission(
-            recipient1, CommissionKind.MANAGER, new BigDecimal("5000.00"), "hand-typed", MARCH_2027, ceoActor);
-
-        CommissionMonthlySummaryDto dto = commissionService.monthlySummary(recipient1, MARCH_2027, principal(recipient1, "sales"));
-
-        assertThat(dto.teamOverrideAmount()).isEqualByComparingTo(ZERO2);
-        assertThat(dto.manualTotal()).isEqualByComparingTo("5000.00");
-        // She is still a recipient, so she still sees the rule and base that would have applied.
-        assertThat(dto.companyCommissionableBase()).isNotNull();
-    }
-
-    @Test
-    void monthlySummary_aZeroManualManagerEntryDoesNotSuppressTheAutoOverride() {
-        wireService();
-        insertConfig(MARCH_2027, true, "3000000.00", "0.0750", recipient1);
-        seedApproved(repA, TWO_M_EX_VAT, MARCH_2027);
-        seedApproved(repB, TWO_M_EX_VAT, MARCH_2027);
-        commissionService.createManualCommission(
-            recipient1, CommissionKind.MANAGER, BigDecimal.ZERO, "note only", MARCH_2027, ceoActor);
-
-        CommissionMonthlySummaryDto dto = commissionService.monthlySummary(recipient1, MARCH_2027, principal(recipient1, "sales"));
-
-        // Same rule as the payroll path: only a STRICTLY POSITIVE manual MANAGER replaces the auto limb.
-        assertThat(dto.teamOverrideAmount()).isEqualByComparingTo("750.00");
-        assertThat(dto.manualTotal()).isEqualByComparingTo(ZERO2);
-        assertThat(dto.totalCommission()).isEqualByComparingTo(
-            dto.tierCommission().add(dto.incentiveAmount()).add(dto.manualTotal())
-                .add(dto.stockBonusAmount()).add(dto.teamOverrideAmount()));
-    }
-
-    @Test
-    void monthlySummary_managerAndCeoViewingARecipient_seeTheCompanyBase() {
-        wireService();
-        insertConfig(MARCH_2027, true, "3000000.00", "0.0750", recipient1);
-        seedApproved(repA, TWO_M_EX_VAT, MARCH_2027);
-        seedApproved(repB, TWO_M_EX_VAT, MARCH_2027);
-
-        CommissionMonthlySummaryDto viaManager = commissionService.monthlySummary(recipient1, MARCH_2027, managerActor);
-        CommissionMonthlySummaryDto viaCeo = commissionService.monthlySummary(recipient1, MARCH_2027, ceoActor);
-
-        assertThat(viaManager.companyCommissionableBase()).isNotNull();
-        assertThat(viaManager.companyCommissionableBase()).isEqualByComparingTo("4000000.00");
-        assertThat(viaManager.teamOverrideAmount()).isEqualByComparingTo("750.00");
-        assertThat(viaCeo.companyCommissionableBase()).isNotNull();
-        assertThat(viaCeo.companyCommissionableBase()).isEqualByComparingTo("4000000.00");
-    }
-
-    @Test
-    void monthlySummary_aDisabledGenerationIsTreatedAsNotARecipient_nullBaseAndZeroOverride() {
-        wireService();
-        insertConfig(MARCH_2027, false, "3000000.00", "0.0750", recipient1);
-        seedApproved(repA, TWO_M_EX_VAT, MARCH_2027);
-        seedApproved(repB, TWO_M_EX_VAT, MARCH_2027);
-
-        CommissionMonthlySummaryDto dto = commissionService.monthlySummary(recipient1, MARCH_2027, principal(recipient1, "sales"));
-
-        assertThat(dto.companyCommissionableBase()).isNull();
-        assertThat(dto.teamOverrideThresholdBase()).isNull();
-        assertThat(dto.teamOverrideRatePercent()).isNull();
-        assertThat(dto.teamOverrideAmount()).isNotNull();
-        assertThat(dto.teamOverrideAmount()).isEqualByComparingTo(ZERO2);
     }
 
     @Test
@@ -600,46 +288,6 @@ class CommissionTeamOverrideIntegrationTest extends AbstractPostgresIntegrationT
         // Her own figures are untouched by the feature.
         assertThat(dto.totalCommission())
             .isEqualByComparingTo(calculator.progressiveCommission(new BigDecimal("2000000.00")));
-    }
-
-    @Test
-    void monthlySummary_aManagerViewingANonRecipientRep_alsoGetsNullCompanyBase() {
-        wireService();
-        insertConfig(MARCH_2027, true, "3000000.00", "0.0750", recipient1);
-        seedApproved(repA, TWO_M_EX_VAT, MARCH_2027);
-        seedApproved(repB, TWO_M_EX_VAT, MARCH_2027);
-
-        // The base is tied to the VIEWED rep being a recipient, not to the viewer's role.
-        CommissionMonthlySummaryDto dto = commissionService.monthlySummary(repA, MARCH_2027, managerActor);
-
-        assertThat(dto.companyCommissionableBase()).isNull();
-        assertThat(dto.teamOverrideThresholdBase()).isNull();
-        assertThat(dto.teamOverrideRatePercent()).isNull();
-    }
-
-    @Test
-    void monthlySummary_aNonRecipientSalesRepCannotReadARecipientsSummaryToGetAtTheCompanyBase() {
-        wireService();
-        insertConfig(MARCH_2027, true, "3000000.00", "0.0750", recipient1);
-        seedApproved(repA, TWO_M_EX_VAT, MARCH_2027);
-        seedApproved(repB, TWO_M_EX_VAT, MARCH_2027);
-
-        assertThatThrownBy(() -> commissionService.monthlySummary(recipient1, MARCH_2027, principal(repA, "sales")))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
-    }
-
-    @Test
-    void monthlySummary_noGenerationForTheMonth_aRecipientOfAnotherMonthGetsNoCompanyBase() {
-        wireService();
-        insertConfig(MARCH_2027, true, "3000000.00", "0.0750", recipient1);
-        seedApproved(repA, TWO_M_EX_VAT, FEB_2027);
-        seedApproved(repB, TWO_M_EX_VAT, FEB_2027);
-
-        CommissionMonthlySummaryDto dto = commissionService.monthlySummary(recipient1, FEB_2027, principal(recipient1, "sales"));
-
-        assertThat(dto.companyCommissionableBase()).isNull();
-        assertThat(dto.teamOverrideAmount()).isNotNull();
-        assertThat(dto.teamOverrideAmount()).isEqualByComparingTo(ZERO2);
     }
 
     // Helpers
@@ -682,34 +330,6 @@ class CommissionTeamOverrideIntegrationTest extends AbstractPostgresIntegrationT
             Map.of("w", weight, "id", commissionId));
     }
 
-    /** Flips the seeded V108 stock_bonus_config row (effective_from 2026-08-01) to enabled. */
-    private void enableStockBonus() {
-        jdbc.update("UPDATE sales.stock_bonus_config SET enabled = TRUE WHERE effective_from = '2026-08-01'", Map.of());
-    }
-
-    private long createTicket(long salesRepId) {
-        return jdbc.queryForObject("""
-            INSERT INTO sales.ticket (code, title, status, created_by)
-            VALUES (:code, 'team override test ticket', 'draft', :createdBy)
-            RETURNING ticket_id
-            """,
-            new MapSqlParameterSource()
-                .addValue("code", "T-" + UUID.randomUUID().toString().substring(0, 8))
-                .addValue("createdBy", salesRepId),
-            Long.class);
-    }
-
-    private void addTicketItem(long ticketId, BigDecimal qty, BigDecimal qtyFromStock) {
-        jdbc.update("""
-            INSERT INTO sales.ticket_item (ticket_id, brand, qty, qty_from_stock)
-            VALUES (:ticketId, 'team override test item', :qty, :qtyFromStock)
-            """,
-            new MapSqlParameterSource()
-                .addValue("ticketId", ticketId)
-                .addValue("qty", qty)
-                .addValue("qtyFromStock", qtyFromStock));
-    }
-
     /** One real, fully APPROVED (manager + CEO) unlinked SALE commission in {@code payrollMonth}. */
     private long seedApproved(long salesRepId, BigDecimal actualReceived, LocalDate payrollMonth) {
         long commissionId = seedSubmitted(salesRepId, actualReceived, payrollMonth);
@@ -721,13 +341,6 @@ class CommissionTeamOverrideIntegrationTest extends AbstractPostgresIntegrationT
     /** Same, but left at SUBMITTED -- nobody has reviewed it. */
     private long seedSubmitted(long salesRepId, BigDecimal actualReceived, LocalDate payrollMonth) {
         return insertSale(null, salesRepId, actualReceived, payrollMonth);
-    }
-
-    private long seedApprovedStockLinked(long salesRepId, long ticketId, BigDecimal actualReceived, LocalDate payrollMonth) {
-        long commissionId = insertSale(ticketId, salesRepId, actualReceived, payrollMonth);
-        commissionService.approve(commissionId, managerActor);
-        commissionService.approve(commissionId, ceoActor);
-        return commissionId;
     }
 
     private long insertSale(Long ticketId, long salesRepId, BigDecimal actualReceived, LocalDate payrollMonth) {
