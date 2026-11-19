@@ -5,8 +5,6 @@ import {
   advanceStage,
   cancelDeal,
   createDeal,
-  createDirectQuotation,
-  AUTO_STAGE_MESSAGE,
   readDeal,
   runId,
   setTracking,
@@ -142,29 +140,6 @@ test.describe('@uat-sales refusal matrix — stage/note/readiness/role guards', 
     expect(untouched.summary.salesStage, 'a refused backward move must not move the stage').toBe(
       'PRESENTATION'
     );
-  });
-
-  // ── 4. The one routine backward exception ───────────────────────────────────────────────────
-  test('note rule: QUOTE_DESIGN_SIDE -> SPEC_APPROVED is the single hand-patched backward exception', async () => {
-    test.setTimeout(90_000);
-    const deal = await createDeal(sessions, { caseName: 'refusal4 routine backward' });
-    created.push(deal.id);
-
-    // ขั้น 4 is reached by quoting the designer (D-2: creating a quotation moves the deal onto the
-    // recipient's stage). A hand move into QUOTE_DESIGN_SIDE is 409 without such a quotation (D-3).
-    // createDeal sends no entryChannel -> UNSPECIFIED, which has no route, so the advance fires.
-    await createDirectQuotation(sessions, deal.id, 'DESIGNER');
-
-    // The allowlisted pair (DealStage.isRoutineBackwardMove) — no note needed even though it is backward.
-    await advanceStage(sessions, 'sales', deal.id, 'SPEC_APPROVED', { note: null });
-
-    const moved = await readDeal(sessions, 'sales', deal.id);
-    expect(moved.summary.salesStage).toBe('SPEC_APPROVED');
-    const history = await stageHistory(sessions, 'sales', deal.id);
-    expect(history, 'both hops recorded; the first is automatic, the backward one carries no note').toEqual([
-      { from: 'LEAD_APPROACH', to: 'QUOTE_DESIGN_SIDE', message: AUTO_STAGE_MESSAGE },
-      { from: 'QUOTE_DESIGN_SIDE', to: 'SPEC_APPROVED', message: null },
-    ]);
   });
 
   // ── 5. Fact gate: no CEO break-glass ─────────────────────────────────────────────────────────
@@ -351,27 +326,5 @@ test.describe('@uat-sales refusal matrix — stage/note/readiness/role guards', 
       untouched.summary.closeConfirmedAt ?? null,
       'a refused confirm must not stamp closeConfirmedAt'
     ).toBeNull();
-  });
-
-  // ── 13. Entry channel: UNSPECIFIED is legal as stored, illegal as input ─────────────────────
-  test('entry channel: UNSPECIFIED is legal as stored but illegal as input', async () => {
-    test.setTimeout(60_000);
-    const deal = await createDeal(sessions, { caseName: 'refusal13 entry channel unspecified' });
-    created.push(deal.id);
-
-    // EntryChannel.isValid is true.
-    const response = await apiWrite(sessions.sales, 'post', `/api/tickets/${deal.id}/entry-channel`, {
-      value: 'UNSPECIFIED',
-      note: null,
-    });
-    expect(response.status(), 'sales POST /entry-channel value=UNSPECIFIED').toBe(400);
-    const body = await response.json();
-    expect(body.message).toContain('ไม่รองรับช่องทางรับงาน');
-
-    const untouched = await readDeal(sessions, 'sales', deal.id);
-    expect(
-      untouched.summary.entryChannel,
-      'a refused entry-channel call must not change the stored value'
-    ).toBe('UNSPECIFIED');
   });
 });

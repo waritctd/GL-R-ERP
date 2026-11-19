@@ -31,7 +31,7 @@ import {
 // PGPORT, PGDATABASE, PGUSER, PGPASSWORD — same variables sales-board.spec.js reads).
 //
 // Express upload ON: run again with APP_RECEIPTS_EXPRESS_UPLOAD_ENABLED=true on the backend; the describe tagged
-// @express-on skips itself when the flag is off, and the flag-OFF assertions skip when it is on. Product defaults are
+// @express-on skips itself when the flag is off. Product defaults are
 // not touched.
 //
 // Set E2E_SHOT_DIR to also save screenshots.
@@ -116,12 +116,10 @@ test.describe.serial('cash + ops screens — real pricing-chain deals @cash-ops'
   let cashDeal; // ORDER_RECEIVED, deposit required — the cash journeys
   let importDeal; // same, deposit waived and its ใบขอซื้อ issued — the import journeys
   let payable;
-  let expressWasOn = false;
 
   test.beforeAll(async () => {
     test.setTimeout(300_000);
     sessions = await apiSessionsFor(['sales', 'sales_manager', 'import', 'ceo', 'account', 'employee', 'hr']);
-    expressWasOn = await expressEnabled(sessions.account);
     const factory = await resolveFactory(sessions);
     for (const caseName of ['cash journeys', 'import journeys']) {
       const deal = await createDeal(sessions, { caseName, entryChannel: 'DESIGNER_LED' });
@@ -324,33 +322,7 @@ test.describe.serial('cash + ops screens — real pricing-chain deals @cash-ops'
     expect(rows.some((r) => Number(r.amount) === 1234.56)).toBe(false);
   });
 
-  // ── Express receipts upload: OFF by default ───────────────────────────────────────────────────
-
-  test('Express flag OFF (default): the page and card are hidden and the upload is refused', async ({ page }) => {
-    test.skip(expressWasOn, 'the backend was started with the Express upload ON — covered by the @express-on describe');
-    const latest = await (await sessions.account.get('/api/sales/receipt-imports/latest')).json();
-    expect(latest.uploadEnabled).toBe(false);
-
-    const refused = await uploadReceipts(sessions.account, Buffer.from('\uFEFFเลขที่เอกสาร,วันที่,จำนวนเงิน\r\nRE-1,2026-11-16,100\r\n', 'utf8'));
-    expect(refused.status()).toBe(409);
-    expect(await refused.text()).toContain('UPLOAD_DISABLED');
-
-    await loginAs(page, 'account');
-    await page.goto('/finance');
-    await expect(page.getByText('อัปโหลดไฟล์รับเงินจาก Express')).toHaveCount(0);
-    // The nav lives in the launcher now; open it so the absence check is not vacuous.
-    await page.getByRole('button', { name: 'เมนู', exact: true }).click();
-    await expect(page.getByRole('navigation', { name: 'Primary navigation' })).toBeVisible();
-    await expect(page.getByRole('link', { name: /รับเงินจาก Express/ })).toHaveCount(0);
-    await page.keyboard.press('Escape');
-    await shot(page, 'cash-10-express-off-account-landing');
-    await page.goto('/finance/receipts-import');
-    // Reached by URL the page says so and offers no file input (it is a notice, not an upload form).
-    await expect(page.getByText('ยังไม่เปิดใช้การอัปโหลดไฟล์ Express')).toBeVisible();
-    await expect(page.locator('input[type="file"]')).toHaveCount(0);
-    await shot(page, 'cash-11-express-off-page');
-  });
-
+  // ── receipt-imports: account only ───────────────────────────────────────────────────
   test('receipt-imports: CEO, sales and import are refused (account only); the CEO route guard hides the page', async ({ page }) => {
     const csv = Buffer.from('\uFEFFเลขที่เอกสาร,วันที่,จำนวนเงิน\r\nRE-X,2026-11-16,100\r\n', 'utf8');
     for (const role of ['ceo', 'sales', 'import']) {

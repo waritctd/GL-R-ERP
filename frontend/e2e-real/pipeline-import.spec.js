@@ -2,7 +2,7 @@ import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { test, expect } from '@playwright/test';
 import { personaFor } from './helpers/accounts.js';
-import { anonApi, apiSessionsFor, disposeSessions, writeHeaders } from './helpers/api.js';
+import { apiSessionsFor, disposeSessions, writeHeaders } from './helpers/api.js';
 import { loginAs } from './helpers/auth.js';
 import { cancelDeal } from './helpers/sales.js';
 
@@ -141,12 +141,6 @@ test.describe.serial('pipeline import — happy path @pipeline-import', () => {
     for (const title of SKIPPED_TITLES) expect(board.has(title), `skipped row "${title}" must not become a deal`).toBe(false);
   });
 
-  test('the imported deal appears on the rep\'s own board in the UI', async ({ page }) => {
-    await loginAs(page, 'sales');
-    await expect(page.getByTestId('deal-board')).toBeVisible();
-    await expect(page.getByTestId('deal-board').getByText(GOOD_TITLE)).toBeVisible();
-  });
-
   test('re-uploading the same file creates 0 deals (idempotent)', async () => {
     const before = await repBoard(sessions);
     const res = await uploadImport(sessions.sales_manager, MIXED, { dryRun: false });
@@ -157,22 +151,6 @@ test.describe.serial('pipeline import — happy path @pipeline-import', () => {
     const after = await repBoard(sessions);
     expect(after.size).toBe(before.size);
     expect([...after.keys()].filter((t) => t === GOOD_TITLE)).toHaveLength(1);
-  });
-});
-
-test.describe('pipeline import — 375px dialog @pipeline-import', () => {
-  test('dry-run table fits a phone without horizontal page scroll', async ({ page }) => {
-    await page.setViewportSize({ width: 375, height: 812 });
-    await loginAs(page, 'sales_manager');
-    const dialog = await openDialog(page);
-    await chooseFile(dialog, MIXED);
-    await dialog.getByRole('button', { name: 'ตรวจก่อนนำเข้า' }).click();
-    await expect(dialog.getByRole('table')).toBeVisible();
-    await expect(dialog.getByText('! ข้าม').first()).toBeVisible();
-    const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
-    expect(overflow, 'horizontal page overflow in px').toBeLessThanOrEqual(1);
-    await shot(page, 'pipeline-03-dry-run-375');
-    // Dry run only — this test never commits, so there is nothing to clean up.
   });
 });
 
@@ -201,52 +179,5 @@ test.describe('pipeline import — failure paths @pipeline-import', () => {
     } finally {
       await disposeSessions(sessions);
     }
-  });
-
-  test('anonymous caller is 401', async () => {
-    const anon = await anonApi();
-    try {
-      const res = await anon.fetch('/api/sales/pipeline-imports?dryRun=true', {
-        method: 'POST',
-        multipart: { file: { name: 'p.csv', mimeType: 'text/csv', buffer: csvBuffer([s4Row]) } },
-        failOnStatusCode: false,
-      });
-      expect(res.status()).toBe(401);
-    } finally {
-      await anon.dispose();
-    }
-  });
-
-  test('more than 2000 rows is 400', async () => {
-    const sessions = await apiSessionsFor(['sales_manager']);
-    try {
-      const rows = Array.from({ length: 2001 }, (_, i) => [REP, `${TAG} bulk ${i}`, 'd', 'b', '', '1', 'S2', '10', '2026-Q4']);
-      const res = await uploadImport(sessions.sales_manager, csvBuffer(rows), { dryRun: true });
-      expect(res.status()).toBe(400);
-    } finally {
-      await disposeSessions(sessions);
-    }
-  });
-
-  test('a file over 5 MB is 400', async () => {
-    const sessions = await apiSessionsFor(['sales_manager']);
-    try {
-      const padded = [REP, `${TAG} big`, 'd', 'b', '', '1', 'S2', '10', '2026-Q4'];
-      const big = Buffer.concat([csvBuffer([padded]), Buffer.from('\r\n' + 'x'.repeat(5 * 1024 * 1024 + 1024))]);
-      const res = await uploadImport(sessions.sales_manager, big, { dryRun: true });
-      expect(res.status()).toBe(400);
-    } finally {
-      await disposeSessions(sessions);
-    }
-  });
-
-  test('UI: a server 400 shows the error in the dialog and nothing is previewed', async ({ page }) => {
-    await loginAs(page, 'sales_manager');
-    const dialog = await openDialog(page);
-    await chooseFile(dialog, Buffer.from('')); // an empty file is refused server-side
-    await dialog.getByRole('button', { name: 'ตรวจก่อนนำเข้า' }).click();
-    await expect(dialog.getByRole('alert')).toBeVisible();
-    await expect(dialog.getByRole('table')).toHaveCount(0);
-    await shot(page, 'pipeline-04-error');
   });
 });

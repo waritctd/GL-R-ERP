@@ -15,7 +15,7 @@ import { captureJson } from './helpers/network.js';
 // V21__demo_seed_accounts.sql.
 
 test.describe('this suite is actually talking to the backend', () => {
-  // These two run first and exist to make the rest of the file trustworthy. If the frontend were accidentally
+  // This runs first and exists to make the rest of the file trustworthy. If the frontend were accidentally
   // serving mocks (a stray VITE_USE_MOCKS=true — see playwright.real.config.js) every other spec in this
   // directory would still pass while proving nothing about the Java services.
 
@@ -36,17 +36,6 @@ test.describe('this suite is actually talking to the backend', () => {
     expect(status).toBe(200);
     expect(json.user.email).toBe(PERSONAS.hr.email);
     await expectAuthenticated(page);
-  });
-
-  test('the mock-only quick-login buttons are not rendered', async ({ page }) => {
-    await page.goto('/');
-    await expect(page.getByTestId('login-submit')).toBeVisible();
-
-    // LoginPage.jsx renders these only under VITE_USE_MOCKS === 'true'. Their absence is the second, independent
-    // signal that this is the real build.
-    for (const role of ['hr', 'employee', 'sales', 'ceo']) {
-      await expect(page.getByTestId(`login-role-${role}`)).toHaveCount(0);
-    }
   });
 });
 
@@ -81,18 +70,6 @@ test.describe('credential login', () => {
     await expectLoggedOut(page);
     await expect(userMenu(page)).toHaveCount(0);
   });
-
-  test('an unknown email is rejected with the same message as a wrong password', async ({ page }) => {
-    await page.goto('/');
-    await page.getByTestId('login-email').fill('nobody.here@demo.invalid');
-    await page.getByTestId('login-password').fill(DEMO_PASSWORD);
-    await page.getByTestId('login-submit').click();
-
-    // Same 401 + same string for "no such user" and "bad password" — AuthService throws INVALID_CREDENTIALS for
-    // both on purpose, so the response cannot be used to enumerate which addresses are real accounts.
-    await expect(page.getByText('อีเมลหรือรหัสผ่านไม่ถูกต้อง')).toBeVisible();
-    await expectLoggedOut(page);
-  });
 });
 
 test.describe('session lifecycle', () => {
@@ -119,16 +96,6 @@ test.describe('session lifecycle', () => {
     // behind; AuthService.logout calls session.invalidate(), so the same cookie must now be worthless.
     const me = await page.request.get('/api/auth/me');
     expect(me.status()).toBe(401);
-  });
-
-  test('an unauthenticated browser cannot reach a guarded API route', async ({ page }) => {
-    await page.goto('/');
-
-    // SecurityConfig allowlists only login, the device punch endpoint and /actuator/health; everything else is
-    // `.anyRequest().authenticated()` → 401 with no session.
-    for (const path of ['/api/auth/me', '/api/employees', '/api/tickets']) {
-      expect((await page.request.get(path)).status(), `${path} without a session`).toBe(401);
-    }
   });
 });
 

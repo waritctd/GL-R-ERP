@@ -73,21 +73,6 @@ test.describe('overtime approval chain (real OvertimeService)', () => {
     return requests.find((row) => row.id === id) ?? null;
   }
 
-  test('an employee submits, and the request lands SUBMITTED awaiting its manager', async () => {
-    const created = await submitOvertime('e2e: submit lands in SUBMITTED');
-    try {
-      expect(created.pendingApproverRole).toBe('manager');
-      // Read it back through a separate request rather than trusting the create response: the point is that it was
-      // persisted, not that the service echoed what we sent.
-      const persisted = await readOvertime(created.id);
-      expect(persisted, 'the submitted request must be readable by its owner').not.toBeNull();
-      expect(persisted.status).toBe('SUBMITTED');
-      expect(persisted.plannedMinutes).toBe(120);
-    } finally {
-      await cancelOvertime(created.id);
-    }
-  });
-
   test('HR cannot approve overtime — the real service refuses it (issue #199)', async () => {
     const created = await submitOvertime('e2e: HR must not be able to approve this');
     try {

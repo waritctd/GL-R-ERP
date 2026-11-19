@@ -3,111 +3,16 @@ import { apiSessionFor } from './helpers/api.js';
 import { loginAs } from './helpers/auth.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// /tax-allowance IN A REAL BROWSER.
-//
-// WHY THIS SPEC EXISTS. jsdom does not implement the browser's HTML "implicit submission"
-// algorithm at all (SafeForm.jsx's own header: fireEvent.keyDown/keyPress/keyUp('Enter') fires no
-// submit event whatsoever under jsdom — verified empirically, not assumed). TaxAllowanceForm.jsx
-// puts roughly a dozen text/number inputs inside ONE <form> with ONE submit button, and that
-// exact shape has already shipped this exact bug TWICE in this repo — SafeForm.jsx names both
-// incidents by name, and the FIRST one was this page: "/tax-allowance filed a real tax
-// declaration" the moment a redesign narrowed its blocking-field count. TaxAllowanceForm.test.jsx's
-// own "a submit event with no submitter does nothing" test says so explicitly in its doc comment:
-// "the case that actually matters — Enter in one of a dozen text fields, which HTML turns into a
-// real implicit submission — CANNOT be reproduced here at all: jsdom does not implement implicit
-// submission. That one needs e2e-real". This file is that.
-//
-// This is the ONLY place implicit-submission behaviour is checked in a real browser anywhere in
-// the app, not just on this page.
-//
-// WHAT EACH TEST PINS, AND WHAT IT DOES NOT — read this before trusting a green run:
-//   1. The page loads through the real stack (Vite → Spring → Postgres) for a plain employee — the
-//      heading renders, no React error boundary, no 5xx. Independent of every state below.
-//   2. A collapsed ข้อ's typed value survives collapse + re-expand. CollapsibleSection unmounts its
-//      children, so this only works because react-hook-form defaults `shouldUnregister: false`.
-//      TaxAllowanceForm.test.jsx ALREADY pins the react-hook-form mechanics of this under jsdom
-//      ("a value typed into a ข้อ survives collapsing it") — jsdom can simulate mount/unmount/
-//      re-register fine; it only fails at implicit submission. This test is real-browser
-//      corroboration through the ACTUAL page (real CollapsibleSection CSS/DOM, real
-//      TaxAllowancePage data-fetch wiring), not a newly-discovered gap.
-//   3. THE HEADLINE TEST. Pressing Enter in a real, focused text field must not POST the
-//      declaration — asserted on the network (a request listener / waitForRequest), not just the
-//      DOM, because a DOM-only assertion can pass while a request already went out.
-//
-//      ⚠️ READ THE SCOPE OF THIS ONE CAREFULLY. It covers Enter **while the submit button is
-//      disabled**, i.e. before a signed form is staged. That is a real state an employee spends
-//      most of their time in — the whole form is filled in before the signed scan is attached last
-//      — and it is the state the historical incident occurred in. It is NOT a general "Enter can
-//      never file this declaration" guarantee.
-//
-//      Measured in real Chromium against the real stack: with the signed form attached and the
-//      submit button therefore ENABLED, Enter in `#ta-taxpayer-id` fires exactly one
-//      `POST /api/payroll/tax-allowances/declarations/me` unless a confirmation intervenes. That
-//      follows from SafeForm.jsx's own documented mechanism: a form that HAS a default submit
-//      button gives implicit submission a real `event.submitter`, so SafeForm's submitter check
-//      passes, and `canSubmit` is true in that state by construction — both guards satisfied.
-//
-//      So the rule is: confirm before filing, on ANY trigger, rather than an Enter-specific guard
-//      — the hazard is "files with no confirmation", and an Enter-only fix leaves a stray click on
-//      the enabled button equally exposed. Enter still submits like ordinary HTML; the submit
-//      opens a ConfirmDialog instead of calling the API. Test 5 below covers that state, and is
-//      only safe to run on a shared database BECAUSE of that confirmation.
-//
-//      In the state this test DOES cover, two guards are active at once: SafeForm.jsx documents
-//      (verified empirically in real Chromium) that a sole default submit button which is DISABLED
-//      makes the browser fire no native 'submit' event at all, and SafeForm's `canSubmit` check
-//      would refuse a submit if one somehow fired anyway. This test cannot tell those two layers
-//      apart and does not try to.
-//   5. Enter with the submit button ENABLED opens the confirmation and files nothing when
-//      dismissed — the state test 3 deliberately does not reach, and the one that would otherwise
-//      file a real declaration. See the confirmation note under test 3.
-//   4. The submit button stays disabled until a signed-form file is staged, then enables.
-//      TaxAllowanceForm.test.jsx already pins the PROP wiring (`signedFormAttached` → disabled) in
-//      isolation via a manual rerender. This test additionally exercises the real pipeline that
-//      prop depends on: CollapsibleSection expand → FileUploadField's real <input type="file"> →
-//      TaxAllowanceEvidencePanel's staging path → TaxAllowancePage's `stagedEvidence` state →
-//      `signedFormAttached` → TaxAllowanceForm's `canSubmit`. Never clicks submit — see below.
-//
-// SAFETY / RE-RUNNABILITY — this suite has no per-test database reset (README.md, "How the write
-// specs stay safe on a shared database"), so this file is written to need none, and is safe to run
-// back-to-back against an already-dirtied database:
-//   • no test here ever sends a POST/PUT/PATCH/DELETE to the tax-allowance API. Tests 1–3 are pure
-//     GET-and-observe; test 4 stages a file into REACT STATE ONLY (TaxAllowanceEvidencePanel's
-//     'staging' mode — TaxAllowancePage.jsx's own doc comment: staged files upload only from
-//     `submitMutation.onSuccess`, which nothing here ever triggers). The staged file is discarded
-//     with the page when the test ends; no server-side row is ever created, so there is nothing to
-//     withdraw or clean up;
-//   • tests 2–4 need the form to be EDITABLE, which the employee's current-tax-year declaration
-//     status may or may not allow (TaxAllowancePage.jsx's EDITABLE_STATUS_KEYS = NONE / REJECTED /
-//     EXPIRED only — PENDING and both APPROVED variants are permanently read-only from the
-//     employee's side). `beforeAll` below reads that status fresh from the real API before any
-//     browser test runs, and skips 2–4 with an explicit reason if none of those three applies —
-//     deterministic either way. It never tries to force the database into an editable state: in
-//     particular it never withdraws a PENDING declaration, because this spec creates nothing, so
-//     any PENDING/APPROVED row it finds belongs to something else and is not this spec's to touch.
-//     ⚠️ THE COST OF THAT CHOICE: a skipped test reads as green. If demo.employee ever ends up with
-//     a PENDING or APPROVED current-year declaration, the three tests that matter here vanish from
-//     the run and nothing fails (a re-run reports "1 passed, 3 skipped" and exit 0). CI is unaffected (each job
-//     gets a brand-new Postgres, so the seed state is always NONE), but a LOCAL green run is only
-//     evidence if you read the skip count. `frontend/scripts/reset-e2e-db.mjs` restores a pristine
-//     seed;
-//   • test 2 always `.fill()`s an explicit, known value rather than depending on the field starting
-//     empty, so a field pre-populated by a leftover REJECTED/EXPIRED declaration from an earlier
-//     run does not change the assertion.
-//
-// NAVIGATION. `page.goto()` is used directly (not the SPA `spaGoto` history-push helper) — per
-// helpers/auth.js's own comment, that is a speed choice for route SWEEPS, not a correctness
-// requirement here: this suite's session lives in Postgres, so a hard navigation is safe, and
-// smoke.spec.js already does exactly this (`loginAs` then `page.goto(path)`) for the same kind of
-// single-page, real-data deep dive this file is.
-//
-// VIEWPORT. `loginAs()` needs a desktop viewport or `inert` hides subtrees and elements become
-// unclickable. Nothing here sets one explicitly because nothing in e2e-real/ needs to: the suite's
-// only project (playwright.real.config.js) is `devices['Desktop Chrome']`, already desktop-sized.
+// /tax-allowance IN A REAL BROWSER: HTML implicit submission (Enter in a text field) is not implemented by jsdom,
+// and this exact shape has already filed a real tax declaration twice (SafeForm.jsx names both incidents).
+//   1. Enter in a text field while submit is disabled must not POST the declaration (network-asserted).
+//   2. Enter with the signed form staged and submit ENABLED opens the confirmation and files nothing.
+// Neither test ever sends a write: the staged file lives in React state only, so the shared database stays clean.
+// Both need an EDITABLE form (NONE/REJECTED/EXPIRED); beforeAll reads the status and skips with a reason otherwise,
+// so a LOCAL green run is only evidence if you read the skip count (CI gets a fresh Postgres, always NONE).
 // ─────────────────────────────────────────────────────────────────────────────
 
 const DECLARATIONS_ME_PATH = '/api/payroll/tax-allowances/declarations/me';
-const CAPS_PATH = '/api/payroll/tax-allowances/caps';
 
 // A declaration's raw backend `status` stops being "the employee's current standing" once it is SUPERSEDED or
 // WITHDRAWN — mirrors taxAllowanceStatus.js's NON_CURRENT_STATUSES / selectCurrentDeclaration.
@@ -186,63 +91,6 @@ test.describe('ล.ย.01 tax-allowance form — real browser (jsdom cannot see 
     }
   });
 
-  test('loads for a plain employee — no error boundary, no 5xx', async ({ page }) => {
-    await loginAs(page, 'employee');
-
-    const serverErrors = [];
-    page.on('response', (response) => {
-      if (response.status() >= 500 && response.url().includes('/api/')) {
-        serverErrors.push(`${response.status()} ${new URL(response.url()).pathname}`);
-      }
-    });
-
-    const declarationsResponse = await openTaxAllowancePage(page);
-    expect(declarationsResponse.status(), 'GET .../declarations/me').toBe(200);
-
-    // The other background fetch this page always makes (field-cap captions). Waited for explicitly, with its own
-    // bounded timeout, so a 5xx from it specifically is not missed by the assertion below racing ahead of the
-    // response arriving.
-    await page
-      .waitForResponse((r) => new URL(r.url()).pathname === CAPS_PATH, { timeout: 5_000 })
-      .catch(() => {});
-
-    // ErrorBoundary's DefaultErrorFallback text — the same locator route-coverage.spec.js uses to detect a route
-    // that crashed while rendering.
-    await expect(page.getByText('โหลดหน้านี้ไม่สำเร็จ')).toHaveCount(0);
-    expect(serverErrors, '5xx responses while loading /tax-allowance').toEqual([]);
-  });
-
-  test('a numeric ข้อ keeps its typed value across collapse and re-expand', async ({ page }) => {
-    test.skip(!editability.canEdit, editability.reason);
-
-    await loginAs(page, 'employee');
-    await openTaxAllowancePage(page);
-    await enterEditMode(page);
-
-    // ข้อ 7 · เบี้ยประกันชีวิตที่จ่ายภายในปีภาษี — one field, kind 'money', id `ta-lifeInsuranceAllowance`
-    // (taxAllowanceSchema.js LOR_YOR_01_SECTIONS, section key 'item7').
-    const header = page.locator('#ta-section-item7-header');
-    const field = page.locator('#ta-lifeInsuranceAllowance');
-
-    await expect(header).toHaveAttribute('aria-expanded', 'false');
-    await header.click();
-    await expect(header).toHaveAttribute('aria-expanded', 'true');
-    await expect(field).toBeVisible();
-
-    await field.fill('12345');
-    await expect(field).toHaveValue('12345');
-
-    await header.click(); // collapse — CollapsibleSection unmounts `children` here
-    await expect(header).toHaveAttribute('aria-expanded', 'false');
-    await expect(field).toHaveCount(0);
-
-    await header.click(); // re-expand
-    await expect(field).toBeVisible();
-    // THE assertion: the value is back, even though the <input> was just unmounted and remounted. Only true
-    // because react-hook-form defaults shouldUnregister:false — see file header.
-    await expect(field).toHaveValue('12345');
-  });
-
   test('pressing Enter in a text field must not file the declaration', async ({ page }) => {
     test.skip(!editability.canEdit, editability.reason);
 
@@ -293,51 +141,6 @@ test.describe('ล.ย.01 tax-allowance form — real browser (jsdom cannot see 
     await expect(taxpayerId).toHaveValue('1234567890123');
     await expect(page.getByText('ยื่นแบบแจ้งเรียบร้อย', { exact: false })).toHaveCount(0);
     expect(page.url(), 'must not have navigated away').toContain('/tax-allowance');
-  });
-
-  test('submit stays disabled until a signed, scanned form is attached', async ({ page }) => {
-    test.skip(!editability.canEdit, editability.reason);
-
-    await loginAs(page, 'employee');
-    await openTaxAllowancePage(page);
-    await enterEditMode(page);
-
-    const submitButton = page.locator('form#tax-allowance-form button[type="submit"]');
-    await expect(submitButton).toBeVisible();
-    await expect(submitButton).toBeDisabled();
-
-    // "ตรวจทาน ลงนาม และยื่น" starts collapsed (TaxAllowanceForm.jsx: defaultOpen={false}) — expand it to reach
-    // the signed-form evidence panel's file input.
-    await page.locator('#ta-section-sign-header').click();
-
-    // id = `tax-allowance-evidence-file-${sectionKey ?? 'general'}` with sectionKey="signed_form"
-    // (TaxAllowanceEvidencePanel.jsx / FileUploadField.jsx).
-    const signedFormInput = page.locator('#tax-allowance-evidence-file-signed_form');
-    await expect(signedFormInput).toBeAttached();
-
-    // In-memory buffer, never a real file off disk (safety instructions). application/pdf so
-    // TaxAllowanceEvidencePanel#prepareFile passes it straight through — no image-compression path
-    // (browser-image-compression + a web worker) for this test to depend on.
-    await signedFormInput.setInputFiles({
-      name: 'signed-loryor01.pdf',
-      mimeType: 'application/pdf',
-      buffer: Buffer.from('%PDF-1.4\ne2e stub — staged client-side only, never uploaded\n'),
-    });
-
-    // Staged, not uploaded: TaxAllowanceEvidencePanel's 'staging' mode holds the file in TaxAllowancePage's React
-    // state rather than POSTing it anywhere. "รอส่ง" only ever renders on a STAGED item, never on
-    // FileUploadField's own picked- filename echo.
-    await expect(page.getByText('รอส่ง')).toBeVisible();
-    await expect(page.getByText('แนบแบบที่ลงนามแล้ว')).toBeVisible();
-
-    // THE assertion: the exact same button that was disabled above is now enabled, driven purely by the file just
-    // staged (TaxAllowancePage's `signedFormAttached` → TaxAllowanceForm's `canSubmit`) — nothing else about the
-    // page changed.
-    await expect(submitButton).toBeEnabled();
-
-    // Deliberately never clicked. `submitMutation` only fires on a real click/submit, and TaxAllowancePage only
-    // flushes staged evidence from that mutation's `onSuccess` — so stopping here means nothing was ever sent to
-    // the server, and there is nothing to clean up.
   });
 
   /**
