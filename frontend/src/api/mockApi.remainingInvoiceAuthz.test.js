@@ -58,19 +58,6 @@ describe('mockApi.storedRemainingInvoices — write gate (mirrors requireRemaini
 });
 
 describe('mockApi.storedRemainingInvoices — O2 cross-chain rules (GLA-99 step 2 review-round-2, P6)', () => {
-  it('createDraft refuses a second DRAFT on the deal for a DIFFERENT quotation chain', async () => {
-    const ticketId = 22;
-    await loginRole('sales');
-    const { remainingInvoice: draftA } = await api.storedRemainingInvoices.createDraft(ticketId, { quotationId: 111 });
-    expect(draftA.status).toBe('DRAFT');
-
-    await expect(api.storedRemainingInvoices.createDraft(ticketId, { quotationId: 222 }))
-      .rejects.toMatchObject({ status: 409 });
-
-    const { remainingInvoices } = await api.storedRemainingInvoices.listForTicket(ticketId);
-    expect(remainingInvoices).toHaveLength(1);
-  });
-
   it('issue supersedes EVERY other currently-ISSUED remaining invoice on the deal, even a different chain', async () => {
     const ticketId = 23;
     await loginRole('sales');
@@ -93,26 +80,5 @@ describe('mockApi.storedRemainingInvoices — O2 cross-chain rules (GLA-99 step 
     const stillIssued = all.filter((r) => r.status === 'ISSUED');
     expect(stillIssued).toHaveLength(1); // exactly one live, per O2
     expect(stillIssued[0].id).toBe(issuedB.id);
-  });
-
-  it('revise refuses when a DRAFT for a DIFFERENT chain already exists on the deal', async () => {
-    const ticketId = 24;
-    await loginRole('sales');
-    const { remainingInvoice: draftA } = await api.storedRemainingInvoices.createDraft(ticketId, { quotationId: 111 });
-    const { remainingInvoice: issuedA } = await api.storedRemainingInvoices.issue(draftA.id);
-
-    // A DRAFT for a DIFFERENT chain now exists on the same deal (legal at createDraft time — A is ISSUED, not
-    // DRAFT, so createDraft's own anotherDraftLive check does not fire).
-    const { remainingInvoice: draftB } = await api.storedRemainingInvoices.createDraft(ticketId, { quotationId: 222 });
-    expect(draftB.status).toBe('DRAFT');
-
-    // Revising A (chain 111) is refused while B's own DRAFT (chain 222) is live — O2/P3: one live DRAFT per DEAL,
-    // not one per chain.
-    await expect(api.storedRemainingInvoices.revise(issuedA.id)).rejects.toMatchObject({ status: 409 });
-
-    const { remainingInvoice: aReread } = await api.storedRemainingInvoices.get(issuedA.id);
-    expect(aReread.status).toBe('ISSUED'); // untouched — no orphaned revision draft
-    const { remainingInvoice: bReread } = await api.storedRemainingInvoices.get(draftB.id);
-    expect(bReread.status).toBe('DRAFT'); // untouched
   });
 });

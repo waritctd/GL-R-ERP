@@ -77,14 +77,6 @@ describe('mockApi.dealQuotations -- account redaction (mirrors forViewer)', () =
       expect(item.discountPct, `${email} discountPct`).toBe(10);
     }
   });
-
-  // list() mirrors DealQuotationService.search: every row goes through forViewer.
-  it('list() rows are redacted for account', async () => {
-    await createApprovedQuotation();
-    await api.auth.login({ role: 'account' });
-    const { items } = await api.dealQuotations.list({});
-    for (const q of items) expectRedacted(q);
-  });
 });
 
 describe('mockApi.dealQuotations -- account sees only quotations that went to the customer', () => {

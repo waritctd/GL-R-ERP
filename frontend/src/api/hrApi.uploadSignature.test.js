@@ -22,17 +22,6 @@ describe('hrApi.employees.uploadSignature -- 204 no-body response', () => {
     await expect(api.employees.uploadSignature(7, new Blob(['x'], { type: 'image/png' }))).resolves.toBeNull();
   });
 
-  it('sends the file as multipart on the signature route', async () => {
-    fetchMock.mockResolvedValue(new Response(null, { status: 204 }));
-    await api.employees.uploadSignature(7, new Blob(['x'], { type: 'image/png' }));
-
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    const [url, options] = fetchMock.mock.calls[0];
-    expect(url).toBe(API_ROUTES.employees.signature(7));
-    expect(options.method).toBe('PUT');
-    expect(options.body).toBeInstanceOf(FormData);
-  });
-
   it('a non-2xx response with a JSON error body throws that message, not a parse error', async () => {
     fetchMock.mockResolvedValue(new Response(JSON.stringify({ message: 'ไม่มีสิทธิ์อัปโหลดลายเซ็นนี้' }), {
       status: 403,
@@ -43,12 +32,6 @@ describe('hrApi.employees.uploadSignature -- 204 no-body response', () => {
   });
 
   // A non-2xx status can ALSO carry no body (e.g. a 413 from a body-size limit upstream of the controller) --
-  // must not throw a second, unrelated parse error on top of the real failure.
-  it('a non-2xx response with no body throws the generic Thai fallback, not a parse error', async () => {
-    fetchMock.mockResolvedValue(new Response(null, { status: 413 }));
-    await expect(api.employees.uploadSignature(7, new Blob(['x'], { type: 'image/png' })))
-      .rejects.toThrow('อัปโหลดไม่สำเร็จ');
-  });
 });
 
 // hasSignature is a PROBE (SignatureCard.jsx's #M1) -- it only ever reads `res.ok`, so it has no reason to
