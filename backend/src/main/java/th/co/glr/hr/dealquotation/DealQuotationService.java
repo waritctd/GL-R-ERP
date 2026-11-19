@@ -2520,6 +2520,10 @@ public class DealQuotationService {
         return renderer.toPdf(toRenderModel(quotation));
     }
 
+    public String renderText(long id, UserPrincipal actor) {
+        return renderer.toText(buildRenderModel(id, actor));
+    }
+
     public byte[] renderXlsx(long id, UserPrincipal actor) {
         return renderer.toXlsx(buildRenderModel(id, actor));
     }

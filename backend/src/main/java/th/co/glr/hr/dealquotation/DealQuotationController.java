@@ -275,16 +275,22 @@ public class DealQuotationController {
     }
 
     @GetMapping("/deal-quotations/{id}/file")
-    ResponseEntity<byte[]> file(@PathVariable long id, @RequestParam(defaultValue = "pdf") String format,
+    ResponseEntity<?> file(@PathVariable long id, @RequestParam(defaultValue = "pdf") String format,
                                 HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
-        if (!"xlsx".equalsIgnoreCase(format) && !"pdf".equalsIgnoreCase(format)) {
+        if (!"xlsx".equalsIgnoreCase(format) && !"pdf".equalsIgnoreCase(format) && !"text".equalsIgnoreCase(format)) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "ไม่รองรับรูปแบบไฟล์ '" + format + "'");
         }
         // Download filename is the quotation NUMBER, not the internal id -- "deal-quotation-42.pdf" told the rep
         // nothing about which document they just downloaded when they have several deals open.
         String number = quotations.get(id, user).number();
         String filename = sanitizeFilename(number);
+        if ("text".equalsIgnoreCase(format)) {
+            // "คัดลอกข้อมูล": clean text for the clipboard (the PDF's Thai text copies out garbled). Inline, not a download.
+            return ResponseEntity.ok()
+                .contentType(new MediaType("text", "plain", java.nio.charset.StandardCharsets.UTF_8))
+                .body(quotations.renderText(id, user));
+        }
         if ("xlsx".equalsIgnoreCase(format)) {
             byte[] bytes = quotations.renderXlsx(id, user);
             return ResponseEntity.ok()

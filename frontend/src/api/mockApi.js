@@ -19869,6 +19869,11 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       return mockDocPlaceholderBlob(mockDealQuotationDocLines(row));
     },
 
+    async downloadText(id) {
+      const row = requireDealQuotationRowViewable(id);
+      return mockDealQuotationDocLines(row).join('\n');
+    },
+
     async downloadXlsx(id) {
       const row = requireDealQuotationRowViewable(id);
       return mockDocPlaceholderBlob(mockDealQuotationDocLines(row));

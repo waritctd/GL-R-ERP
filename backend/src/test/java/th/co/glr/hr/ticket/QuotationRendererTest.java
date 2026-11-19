@@ -1991,4 +1991,35 @@ class QuotationRendererTest {
         assertThat(xlsAfter).startsWith((byte) 0xD0, (byte) 0xCF, 0x11, (byte) 0xE0,
             (byte) 0xA1, (byte) 0xB1, 0x1A, (byte) 0xE1);
     }
+
+    @Test
+    void toText_printsHeaderTabSeparatedItemRowsAndTotals() {
+        var one = new QuotationRenderModel.RenderItem(null, List.of("Trilogy Ash", "60x60 cm"), new BigDecimal("57"),
+            "แผ่น", new BigDecimal("850.00"), "Net", new BigDecimal("850.00"), new BigDecimal("48450.00"));
+        var two = new QuotationRenderModel.RenderItem(null, List.of("Bullnose"), new BigDecimal("2"),
+            "ชิ้น", new BigDecimal("100.00"), "10%", new BigDecimal("90.00"), new BigDecimal("180.00"));
+        QuotationRenderModel model = new QuotationRenderModel(
+            LocalDate.of(2026, 9, 11), "QT-2026-0005", null, null, "Sales/สมชาย T.081",
+            "คุณณัฐพงศ์ / บริษัท ทดสอบ จำกัด   เลขที่ผู้เสียภาษี : 0105551234567",
+            "ที่อยู่ 1 ถนนสุขุมวิท   โทร. 02-000-0000", "โครงการ A",
+            List.of(one, two), List.of(), new QuotationRenderModel.Signatories(null, null, null, null, null), true);
+
+        assertThat(renderer.toText(model)).isEqualTo(String.join("\n",
+            "ใบเสนอราคา QT-2026-0005",
+            "วันที่ 11 กันยายน 2569",
+            "เรียน คุณณัฐพงศ์ / บริษัท ทดสอบ จำกัด",
+            "เลขที่ผู้เสียภาษี 0105551234567",
+            "ที่อยู่ 1 ถนนสุขุมวิท",
+            "โทร. 02-000-0000",
+            "Project โครงการ A",
+            "",
+            "ลำดับ\tรายการ\tจำนวน\tหน่วย\tราคา\tส่วนลด\tคงเหลือ\tเป็นเงิน",
+            "1\tTrilogy Ash 60x60 cm\t57\tแผ่น\t850.00\tNet\t850.00\t48,450.00",
+            "2\tBullnose\t2\tชิ้น\t100.00\t10%\t90.00\t180.00",
+            "",
+            "รวมเป็นเงิน\t48,630.00",
+            "ภาษีมูลค่าเพิ่ม 7%\t3,404.10",
+            "รวมเป็นเงินทั้งสิ้น\t52,034.10",
+            ""));
+    }
 }

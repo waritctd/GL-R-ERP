@@ -560,6 +560,67 @@ public class QuotationRenderer {
         }
     }
 
+    /**
+     * The quotation as clean UTF-8 text for the "คัดลอกข้อมูล" button: Thai text copied out of the PDF comes out garbled
+     * in most viewers, so staff paste this instead. Built from the same model the PDF prints (same date, descriptions,
+     * number formatting, totals, EN/no-VAT rules); item rows are tab-separated so a paste lands cell by cell in Excel.
+     * Group headings and pictures are not included. Empty values are left out.
+     */
+    public String toText(QuotationRenderModel model) {
+        boolean en = model.isEnglish();
+        String currency = model.currencyCode();
+        StringBuilder sb = new StringBuilder();
+        textLine(sb, en ? "Quotation" : "ใบเสนอราคา", model.number());
+        textLine(sb, en ? "Date" : "วันที่", en ? englishDate(model.issueDate()) : thaiDate(model.issueDate()));
+        // The printed "เรียน" line folds the tax id onto the same string; split it back out into its own line.
+        String[] attn = nullSafe(model.attnLine()).split("\\s*เลขที่ผู้เสียภาษี\\s*:\\s*", 2);
+        textLine(sb, en ? "Attn" : "เรียน", attn[0]);
+        if (attn.length > 1) textLine(sb, "เลขที่ผู้เสียภาษี", attn[1]);
+        // The address / e-mail / phone line is already "label value   label value": one output line per part.
+        for (String part : nullSafe(model.phoneLine()).split("\\s{3,}")) {
+            sb.append(part.strip().isEmpty() ? "" : part.strip() + "\n");
+        }
+        if (!model.hideProjectLine() && model.projectName() != null) textLine(sb, "Project", model.projectName());
+        sb.append('\n');
+        String[] heads = en
+            ? new String[] {EN_COL_ITEMS, EN_COL_DESCRIPTION, EN_COL_QTY, EN_COL_UNIT, EN_COL_UNIT_PRICE,
+                EN_COL_DISCOUNT, EN_COL_NET_PRICE, EN_COL_AMOUNT_PREFIX + " (" + currency + ")"}
+            : new String[] {"ลำดับ", "รายการ", "จำนวน", "หน่วย", "ราคา", "ส่วนลด", "คงเหลือ", "เป็นเงิน"};
+        sb.append(String.join("\t", heads)).append('\n');
+        boolean showSeq = model.signatureLabelsV2() || model.items().size() > 1;
+        int seq = 0;
+        for (RenderItem item : model.items()) {
+            seq++;
+            List<String> desc = item.descriptionLines() != null ? item.descriptionLines() : List.of();
+            BigDecimal qty = item.qty() != null ? item.qty() : BigDecimal.ONE;
+            sb.append(String.join("\t",
+                showSeq ? String.valueOf(seq) : "",
+                String.join(" ", desc.stream().map(String::strip).filter(l -> !l.isEmpty()).toList()),
+                qtyPreview(qty, item.qtyFormat()),
+                item.unit() != null ? item.unit() : "แผ่น",
+                moneyPreview(item.unitPrice()),
+                item.discountLabel() != null ? item.discountLabel() : "Net",
+                moneyPreview(item.netUnitPrice()),
+                moneyPreview(item.amount()))).append('\n');
+        }
+        sb.append('\n');
+        BigDecimal subtotal = model.items().stream().map(RenderItem::amount).filter(java.util.Objects::nonNull)
+            .reduce(BigDecimal.ZERO, BigDecimal::add);
+        if (en) {
+            sb.append(EN_GRAND_TOTAL_PREFIX).append(" (").append(currency).append(")\t").append(moneyPreview(subtotal)).append('\n');
+        } else {
+            BigDecimal vat = subtotal.multiply(VAT_RATE).setScale(2, RoundingMode.HALF_UP);
+            sb.append("รวมเป็นเงิน\t").append(moneyPreview(subtotal)).append('\n');
+            sb.append("ภาษีมูลค่าเพิ่ม 7%\t").append(moneyPreview(vat)).append('\n');
+            sb.append("รวมเป็นเงินทั้งสิ้น\t").append(moneyPreview(subtotal.add(vat))).append('\n');
+        }
+        return sb.toString();
+    }
+
+    private static void textLine(StringBuilder sb, String label, String value) {
+        if (value != null && !value.isBlank()) sb.append(label).append(' ').append(value.strip()).append('\n');
+    }
+
     public byte[] toXlsx(QuotationRenderModel model) {
         return toXls(model);
     }

@@ -2028,45 +2028,80 @@ export function QuotationEditorPage({ user, showToast }) {
    * would skip the save, and step 3 would already have cancelled the autosave that edit scheduled.
    * Reading refs means the edit whose timer step 3 cancelled is the one step 5 saves.
    */
+  // Steps 1-5 above, shared by the downloads and the copy button. Resolves false when it refused (already toasted).
+  async function flushUnsavedEdits() {
+    if (isEditable) {
+      await contactPickerRef.current?.flushPendingContactSave();
+      if (pendingSaveRef.current) {
+        // Already toasted by updateMutation's onError if it fails; fall through to the live checks.
+        await pendingSaveRef.current.catch(() => {});
+      }
+      // Cancel any pending autosave timer now, after both awaits (see header for why).
+      if (autosaveTimerRef.current) {
+        clearTimeout(autosaveTimerRef.current);
+        autosaveTimerRef.current = null;
+      }
+      // Only refuse when there is unsaved work this flush cannot save.
+      if ((dirtyRef.current || pendingSaveRef.current) && hasValidationErrorsRef.current) {
+        refuseDownloadForValidation();
+        return false;
+      }
+      if (dirtyRef.current) {
+        // Re-checked in case an edit during the pendingSaveRef await made the form newly invalid.
+        if (hasValidationErrorsRef.current) {
+          refuseDownloadForValidation();
+          return false;
+        }
+        try {
+          await runSave(false);
+        } catch {
+          // updateMutation's onError already toasted this; returning (not rethrowing) skips the
+          // download without a duplicate toast from the outer catch.
+          return false;
+        }
+      }
+    }
+    return true;
+  }
+
   async function handleDownload(format) {
     if (downloading) return; // one flush+download in flight at a time — no double-fire
     setDownloading(format);
     try {
-      if (isEditable) {
-        await contactPickerRef.current?.flushPendingContactSave();
-        if (pendingSaveRef.current) {
-          // Already toasted by updateMutation's onError if it fails; fall through to the live checks.
-          await pendingSaveRef.current.catch(() => {});
-        }
-        // Cancel any pending autosave timer now, after both awaits (see header for why).
-        if (autosaveTimerRef.current) {
-          clearTimeout(autosaveTimerRef.current);
-          autosaveTimerRef.current = null;
-        }
-        // Only refuse when there is unsaved work this flush cannot save.
-        if ((dirtyRef.current || pendingSaveRef.current) && hasValidationErrorsRef.current) {
-          refuseDownloadForValidation();
-          return;
-        }
-        if (dirtyRef.current) {
-          // Re-checked in case an edit during the pendingSaveRef await made the form newly invalid.
-          if (hasValidationErrorsRef.current) {
-            refuseDownloadForValidation();
-            return;
-          }
-          try {
-            await runSave(false);
-          } catch {
-            // updateMutation's onError already toasted this; returning (not rethrowing) skips the
-            // download without a duplicate toast from the outer catch.
-            return;
-          }
-        }
-      }
+      if (!(await flushUnsavedEdits())) return;
       const blob = format === 'pdf' ? await api.dealQuotations.downloadPdf(id) : await api.dealQuotations.downloadXlsx(id);
       downloadBlob(blob, quotation?.number ?? 'quotation', format);
     } catch (error) {
       showToast('error', error.message || 'ดาวน์โหลดไม่สำเร็จ');
+    } finally {
+      setDownloading(null);
+    }
+  }
+
+  /**
+   * "คัดลอกข้อมูล": the quotation as clean text (the PDF's Thai text copies out garbled). The flush + fetch are async
+   * but a clipboard write needs the click's user gesture, so the write is started SYNCHRONOUSLY with a ClipboardItem
+   * whose text is a promise (flush, then fetch the CURRENT saved text; no stale prefetch). Browsers without
+   * ClipboardItem fall back to writeText after the fetch.
+   */
+  async function handleCopyData() {
+    if (downloading) return;
+    setDownloading('text');
+    const fetchText = async () => {
+      if (!(await flushUnsavedEdits())) throw new Error('refused');
+      return api.dealQuotations.downloadText(id);
+    };
+    try {
+      if (typeof ClipboardItem !== 'undefined' && navigator.clipboard?.write) {
+        const textPromise = fetchText().then((text) => new Blob([text], { type: 'text/plain' }));
+        await navigator.clipboard.write([new ClipboardItem({ 'text/plain': textPromise })]);
+      } else {
+        await navigator.clipboard.writeText(await fetchText());
+      }
+      showToast('success', 'คัดลอกข้อมูลใบเสนอราคาแล้ว — วางใน Excel หรือโปรแกรมอื่นได้เลย');
+    } catch (error) {
+      // A validation refusal already toasted its own reason.
+      if (error?.message !== 'refused') showToast('error', 'คัดลอกไม่สำเร็จ — ลองอีกครั้ง');
     } finally {
       setDownloading(null);
     }
@@ -2243,6 +2278,11 @@ export function QuotationEditorPage({ user, showToast }) {
                   { key: 'xlsx', label: 'Excel', icon: 'fileText', onSelect: () => handleDownload('xlsx'), disabled: downloading != null, disabledReason: 'กำลังดาวน์โหลด…' },
                 ]}
               />
+            ) : null}
+            {quotation ? (
+              <Button variant="secondary" disabled={downloading != null} onClick={handleCopyData}>
+                คัดลอกข้อมูล
+              </Button>
             ) : null}
             {quotation && canSubmitDealQuotation(user, quotation) ? (
               // Submit is live for PRICING_REQUEST-origin too: canSubmitDealQuotation is

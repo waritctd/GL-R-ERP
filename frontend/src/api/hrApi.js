@@ -1459,6 +1459,12 @@ export const api = {
       if (!res.ok) throw new Error('Download failed');
       return res.blob();
     },
+    // The quotation as clean text for the "คัดลอกข้อมูล" button (same render model as the PDF).
+    downloadText: async (id) => {
+      const res = await fetch(API_ROUTES.dealQuotations.file(id, 'text'), { credentials: 'include' });
+      if (!res.ok) throw new Error('Download failed');
+      return res.text();
+    },
     downloadXlsx: async (id) => {
       const res = await fetch(API_ROUTES.dealQuotations.file(id, 'xlsx'), { credentials: 'include' });
       if (!res.ok) throw new Error('Download failed');
