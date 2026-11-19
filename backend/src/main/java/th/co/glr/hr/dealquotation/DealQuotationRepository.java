@@ -612,8 +612,36 @@ public class DealQuotationRepository {
         String priceMode,
         // 'IN_THAILAND' on a DEAL_DIRECT row the rep marked จากสต็อก; a PRICING_REQUEST row's value comes from its
         // pricing-request item instead (see INSERT_ITEM_SQL), and the client value is ignored there.
-        String stockSource
+        String stockSource,
+        /** V232 — the approved quotation item this line reuses at its approved price (add-on orders only); null otherwise. */
+        Long sourceQuotationItemId
     ) {
+        /** The pre-V232 canonical shape (with #stockSource, no #sourceQuotationItemId) -- kept so every existing construction site compiles unchanged. */
+        public NewItem(
+            String locationLabel, Long catalogPriceId, String productCode, String brand, String model,
+            String color, String texture, String sizeText, BigDecimal thicknessMm, BigDecimal sqmPerPiece,
+            String quantityMode, BigDecimal areaSqm, Integer piecesInput, String wastageMode,
+            BigDecimal wastageValue, Integer piecesPerBox, int piecesBeforeWastage, int piecesAfterWastage,
+            int piecesFinal, Integer boxes, BigDecimal unitPrice, BigDecimal discountPct,
+            BigDecimal netUnitPrice, BigDecimal lineAmount, BigDecimal vat, BigDecimal lineTotal,
+            String originCountry, Integer leadTimeMinDays, Integer leadTimeMaxDays, String itemNotes,
+            String descriptionLine, String lineType, BigDecimal quantity, String unit,
+            BigDecimal specialPriceSqm, BigDecimal adjustmentPct, java.time.LocalDate adjustmentDeadline,
+            BigDecimal catalogWidthMm, BigDecimal catalogHeightMm, BigDecimal sqmPerBox,
+            boolean roundToFullBox, Long pricingRequestItemId, Long pricingDecisionItemId,
+            BigDecimal listPriceSqm, BigDecimal directNetPriceSqm, String priceMode,
+            String stockSource) {
+            this(
+                locationLabel, catalogPriceId, productCode, brand, model, color, texture, sizeText,
+                thicknessMm, sqmPerPiece, quantityMode, areaSqm, piecesInput, wastageMode, wastageValue,
+                piecesPerBox, piecesBeforeWastage, piecesAfterWastage, piecesFinal, boxes, unitPrice,
+                discountPct, netUnitPrice, lineAmount, vat, lineTotal, originCountry, leadTimeMinDays,
+                leadTimeMaxDays, itemNotes, descriptionLine, lineType, quantity, unit, specialPriceSqm,
+                adjustmentPct, adjustmentDeadline, catalogWidthMm, catalogHeightMm, sqmPerBox,
+                roundToFullBox, pricingRequestItemId, pricingDecisionItemId, listPriceSqm,
+                directNetPriceSqm, priceMode, stockSource, null);
+        }
+
         /** The pre-stockSource canonical shape: no stock declaration. */
         public NewItem(
             String locationLabel, Long catalogPriceId, String productCode, String brand, String model,
@@ -649,7 +677,20 @@ public class DealQuotationRepository {
                 leadTimeMaxDays, itemNotes, descriptionLine, lineType, quantity, unit, specialPriceSqm,
                 adjustmentPct, adjustmentDeadline, catalogWidthMm, catalogHeightMm, sqmPerBox,
                 roundToFullBox, pricingRequestItemId, pricingDecisionItemId, listPriceSqm,
-                directNetPriceSqm, priceMode, value);
+                directNetPriceSqm, priceMode, value, sourceQuotationItemId);
+        }
+
+        /** This row carrying {@code value} as its {@link #sourceQuotationItemId}, everything else unchanged. */
+        public NewItem withSourceQuotationItemId(Long value) {
+            return new NewItem(
+                locationLabel, catalogPriceId, productCode, brand, model, color, texture, sizeText,
+                thicknessMm, sqmPerPiece, quantityMode, areaSqm, piecesInput, wastageMode, wastageValue,
+                piecesPerBox, piecesBeforeWastage, piecesAfterWastage, piecesFinal, boxes, unitPrice,
+                discountPct, netUnitPrice, lineAmount, vat, lineTotal, originCountry, leadTimeMinDays,
+                leadTimeMaxDays, itemNotes, descriptionLine, lineType, quantity, unit, specialPriceSqm,
+                adjustmentPct, adjustmentDeadline, catalogWidthMm, catalogHeightMm, sqmPerBox,
+                roundToFullBox, pricingRequestItemId, pricingDecisionItemId, listPriceSqm,
+                directNetPriceSqm, priceMode, stockSource, value);
         }
 
         /** The pre-V192.5 canonical shape (no per-row price mode) — kept so every existing
@@ -689,7 +730,7 @@ public class DealQuotationRepository {
                 leadTimeMaxDays, itemNotes, descriptionLine, lineType, quantity, unit, specialPriceSqm,
                 adjustmentPct, adjustmentDeadline, catalogWidthMm, catalogHeightMm, sqmPerBox,
                 roundToFullBox, pricingRequestItemId, pricingDecisionItemId, listPriceSqm,
-                directNetPriceSqm, value, stockSource);
+                directNetPriceSqm, value, stockSource, sourceQuotationItemId);
         }
 
         /** The shape without a pricing-request/decision item link — kept so every existing
@@ -967,7 +1008,9 @@ public class DealQuotationRepository {
             .addValue("directNetPriceSqm", item.directNetPriceSqm())
             // V192.5 — the row's own price mode; null on every row of a single-mode document.
             .addValue("priceMode", item.priceMode())
-            .addValue("stockSource", item.stockSource());
+            .addValue("stockSource", item.stockSource())
+            // V232 — the approved item a reused add-on line copies; null on every ordinary row.
+            .addValue("sourceQuotationItemId", item.sourceQuotationItemId());
     }
 
     private static final String INSERT_ITEM_SQL = """
@@ -980,7 +1023,7 @@ public class DealQuotationRepository {
              lead_time_min_days, lead_time_max_days, item_notes,
              line_type, special_price_sqm, adjustment_pct, adjustment_deadline, sqm_per_box,
              round_to_full_box, pricing_request_item_id, pricing_decision_item_id, stock_source,
-             list_price_sqm, direct_net_price_sqm, price_mode)
+             list_price_sqm, direct_net_price_sqm, price_mode, source_quotation_item_id)
         VALUES
             (:quotationId, :seq, :brand, :model, :color, :texture, :size, :rawUnit, :qty, :unitPrice, :amount,
              :salesDiscount, :finalUnitPrice, :lineSubtotal, :vat, :lineTotal, :description,
@@ -996,7 +1039,7 @@ public class DealQuotationRepository {
              -- :stockSource instead.
              COALESCE((SELECT pri.stock_source FROM sales.pricing_request_item pri
                         WHERE pri.pricing_request_item_id = :pricingRequestItemId), :stockSource),
-             :listPriceSqm, :directNetPriceSqm, :priceMode)
+             :listPriceSqm, :directNetPriceSqm, :priceMode, :sourceQuotationItemId)
         """;
 
     /** One row about to be inserted at an explicit seq — #insertItemsAtSeq, the variant update() needs because its
@@ -1069,7 +1112,8 @@ public class DealQuotationRepository {
                    price_mode = :priceMode,
                    -- Rewritten on every save: a direct row's tick is the rep's to clear, and a
                    -- pricing-request row arrives here carrying its stored value (DealQuotationService#update).
-                   stock_source = :stockSource
+                   stock_source = :stockSource,
+                   source_quotation_item_id = :sourceQuotationItemId
              WHERE quotation_id = :quotationId AND quotation_item_id = :itemId
             """, batch);
     }
@@ -1080,6 +1124,81 @@ public class DealQuotationRepository {
     public List<Long> findItemIds(long quotationId) {
         return jdbc.query("SELECT quotation_item_id FROM sales.quotation_item WHERE quotation_id = :id",
             Map.of("id", quotationId), (rs, rowNum) -> rs.getLong("quotation_item_id"));
+    }
+
+    // ── V232 add-on orders: approved quotations of a project's chain (root + ADD_ON children) ──────────────────────
+    private static final String CHAIN_TICKETS = """
+        SELECT ct.ticket_id, ct.code, ct.child_kind
+          FROM sales.ticket me
+          JOIN sales.ticket ct
+            ON ct.ticket_id = CASE WHEN me.child_kind = 'ADD_ON' THEN me.parent_ticket_id ELSE me.ticket_id END
+            OR (ct.parent_ticket_id = CASE WHEN me.child_kind = 'ADD_ON' THEN me.parent_ticket_id ELSE me.ticket_id END
+                AND ct.child_kind = 'ADD_ON')
+         WHERE me.ticket_id = :ticketId
+        """;
+
+    /** One approved quotation of the chain; orderCode is the root's code + "-1" for the root, the add-on's own code else. */
+    public record ChainQuotation(long quotationId, String orderCode) {}
+
+    /**
+     * Every quotation of the project's chain (the root and its ADD_ON children, from any one of them) that has been
+     * approved (APPROVED / ISSUED / SENT / ACCEPTED), latest approval first. A BID_SPLIT child is another customer's
+     * deal and is never part of the chain.
+     */
+    public List<ChainQuotation> findApprovedQuotationsInChain(long ticketId, long customerId) {
+        return jdbc.query("""
+            SELECT q.quotation_id,
+                   CASE WHEN c.child_kind = 'ADD_ON' THEN c.code ELSE c.code || '-1' END AS order_code
+              FROM (""" + CHAIN_TICKETS + """
+                   ) c
+              JOIN sales.quotation q ON q.ticket_id = c.ticket_id
+              JOIN sales.deal_party p ON p.party_id = q.party_id AND p.customer_id = :customerId
+             WHERE q.doc_status IN ('APPROVED', 'ISSUED', 'SENT', 'ACCEPTED')
+             ORDER BY q.approved_at DESC NULLS LAST, q.quotation_id DESC
+            """, Map.of("ticketId", ticketId, "customerId", customerId),
+            (rs, n) -> new ChainQuotation(rs.getLong("quotation_id"), rs.getString("order_code")));
+    }
+
+    /** The root's confirmed quotation (the first order's agreed terms), if the order is still confirmed; empty otherwise
+     * (the caller falls back to the latest approved quotation of the chain). */
+    public Optional<Long> findRootConfirmedQuotationId(long ticketId) {
+        List<Long> rows = jdbc.query("""
+            SELECT ev.related_document_id
+              FROM sales.ticket me
+              JOIN LATERAL (
+                   SELECT e.kind, e.related_document_id FROM sales.ticket_event e
+                    WHERE e.ticket_id = CASE WHEN me.child_kind = 'ADD_ON' THEN me.parent_ticket_id ELSE me.ticket_id END
+                      AND e.kind IN ('ORDER_CONFIRMED_FROM_QUOTATION', 'ORDER_CONFIRMATION_UNDONE')
+                    ORDER BY e.created_at DESC, e.event_id DESC LIMIT 1) ev
+                ON ev.kind = 'ORDER_CONFIRMED_FROM_QUOTATION'
+             WHERE me.ticket_id = :ticketId AND ev.related_document_id IS NOT NULL
+            """, Map.of("ticketId", ticketId), (rs, n) -> rs.getLong("related_document_id"));
+        return rows.stream().findFirst();
+    }
+
+    /** The root ticket of this deal's chain (itself unless it is an ADD_ON child). */
+    public long rootTicketId(long ticketId) {
+        return jdbc.queryForObject("""
+            SELECT CASE WHEN child_kind = 'ADD_ON' AND parent_ticket_id IS NOT NULL THEN parent_ticket_id ELSE ticket_id END
+              FROM sales.ticket WHERE ticket_id = :id""", Map.of("id", ticketId), Long.class);
+    }
+
+    /** Which of these quotation item ids belong to an approved quotation of this deal's chain. */
+    public Set<Long> findReusableSourceIds(long ticketId, long customerId, java.util.Collection<Long> itemIds) {
+        if (itemIds.isEmpty()) {
+            return Set.of();
+        }
+        return new java.util.HashSet<>(jdbc.query("""
+            SELECT qi.quotation_item_id
+              FROM sales.quotation_item qi
+              JOIN sales.quotation q ON q.quotation_id = qi.quotation_id
+             WHERE qi.quotation_item_id IN (:ids)
+               AND q.doc_status IN ('APPROVED', 'ISSUED', 'SENT', 'ACCEPTED')
+               AND EXISTS (SELECT 1 FROM sales.deal_party p WHERE p.party_id = q.party_id AND p.customer_id = :customerId)
+               AND q.ticket_id IN (SELECT c.ticket_id FROM (""" + CHAIN_TICKETS + """
+                   ) c)
+            """, new MapSqlParameterSource().addValue("ids", itemIds).addValue("ticketId", ticketId).addValue("customerId", customerId),
+            (rs, n) -> rs.getLong("quotation_item_id")));
     }
 
     /**
@@ -1430,6 +1549,25 @@ public class DealQuotationRepository {
             """,
             new MapSqlParameterSource().addValue("id", quotationId).addValue("approverId", approverId)
                 .addValue("note", note).addValue("validityDate", validityDate));
+    }
+
+    /**
+     * The add-on reuse rule's approval (V232): the same PENDING_APPROVAL -> APPROVED compare-and-set as {@link #approve}
+     * but NO approver snapshot, and the basis/source numbers stored, so the document prints no person as approver.
+     * {@code approved_by} stays the submitter (ruling); every read blanks the approver name/signature for such a row.
+     */
+    public int approveByReuseRule(long quotationId, long submitterId, String note, LocalDate validityDate, String basis,
+                                  String sourceNumbers) {
+        return jdbc.update("""
+            UPDATE sales.quotation
+               SET doc_status = 'APPROVED', approved_at = now(), approved_by = :by,
+                   approval_decided_at = now(), approval_decided_by = :by, approval_note = :note,
+                   validity_date = :validityDate, approval_basis = :basis, approval_source_numbers = :sources,
+                   updated_at = now()
+             WHERE quotation_id = :id AND origin = 'DEAL_DIRECT' AND doc_status = 'PENDING_APPROVAL'
+            """, new MapSqlParameterSource().addValue("id", quotationId).addValue("by", submitterId)
+                .addValue("note", note).addValue("validityDate", validityDate).addValue("basis", basis)
+                .addValue("sources", sourceNumbers));
     }
 
     /** Compare-and-set PENDING_APPROVAL -> DRAFT, with the reason recorded for the rep to see.
@@ -1967,7 +2105,7 @@ public class DealQuotationRepository {
                    final_unit_price, amount,
                    raw_unit, description, line_type, qi.special_price_sqm, adjustment_pct, adjustment_deadline,
                    picture_placement, sqm_per_box, round_to_full_box,
-                   qi.list_price_sqm, qi.direct_net_price_sqm, qi.stock_source,
+                   qi.list_price_sqm, qi.direct_net_price_sqm, qi.stock_source, qi.source_quotation_item_id,
                    -- V192.5: the ROW's own mode. Aliased because "price_mode" below is already the
                    -- DOCUMENT's (the subselect), and #mapItemColumns needs both to tell them apart.
                    qi.price_mode AS item_price_mode,
@@ -2017,7 +2155,7 @@ public class DealQuotationRepository {
                    final_unit_price, amount,
                    raw_unit, description, line_type, qi.special_price_sqm, adjustment_pct, adjustment_deadline,
                    picture_placement, sqm_per_box, round_to_full_box,
-                   qi.list_price_sqm, qi.direct_net_price_sqm, qi.stock_source,
+                   qi.list_price_sqm, qi.direct_net_price_sqm, qi.stock_source, qi.source_quotation_item_id,
                    -- V192.5: the ROW's own mode. Aliased because "price_mode" below is already the
                    -- DOCUMENT's (the subselect), and #mapItemColumns needs both to tell them apart.
                    qi.price_mode AS item_price_mode,
@@ -2077,10 +2215,12 @@ public class DealQuotationRepository {
                    -- live hr.employee / hr.employee_signature values are only a defensive fallback
                    -- for a row with no snapshot (V175's backfill gives every pre-V175 approval
                    -- one); DRAFT/PENDING rows have approved_by NULL, so both are NULL.
-                   CASE WHEN aps.quotation_id IS NOT NULL THEN aps.approver_name_th
+                   CASE WHEN q.approval_basis IS NOT NULL THEN NULL
+                        WHEN aps.quotation_id IS NOT NULL THEN aps.approver_name_th
                         ELSE NULLIF(TRIM(CONCAT_WS(' ', ap.first_name_th, ap.last_name_th)), '')
                    END AS approved_by_name,
-                   CASE WHEN aps.quotation_id IS NOT NULL THEN aps.approver_name_en
+                   CASE WHEN q.approval_basis IS NOT NULL THEN NULL
+                        WHEN aps.quotation_id IS NOT NULL THEN aps.approver_name_en
                         ELSE NULLIF(TRIM(CONCAT_WS(' ', ap.first_name_en, ap.last_name_en)), '')
                    END AS approved_by_name_en,
                    q.approved_at, q.approval_note,
@@ -2095,9 +2235,11 @@ public class DealQuotationRepository {
                    q.omit_contact_honorific, q.full_payment_term,
                    q.total_amount, q.currency, q.issued_at AS created_at, q.updated_at,
                    q.recipient_type, q.recipient_label,
-                   CASE WHEN aps.quotation_id IS NOT NULL THEN aps.signature_image IS NOT NULL
+                   CASE WHEN q.approval_basis IS NOT NULL THEN FALSE
+                        WHEN aps.quotation_id IS NOT NULL THEN aps.signature_image IS NOT NULL
                         ELSE EXISTS (SELECT 1 FROM hr.employee_signature es WHERE es.employee_id = q.approved_by)
                    END AS approver_has_signature,
+                   q.approval_basis, q.approval_source_numbers,
                    -- V179: print-only ผู้พิมพ์/พนักงานขาย name override — see DealQuotationDtos'
                    -- printedByDisplayId/salesRepDisplayId Javadoc. Both LEFT JOINs are null when the
                    -- column itself is null, which is what lets #mapQuotation fall back to the real
@@ -2295,7 +2437,8 @@ public class DealQuotationRepository {
             rs.getString("party_status"),
             rs.getBoolean("party_headline"),
             rs.getInt("deal_buyer_count")
-        );
+        )
+            .withApprovalBasis(rs.getString("approval_basis"), rs.getString("approval_source_numbers"));
     }
 
     /**
@@ -2398,7 +2541,8 @@ public class DealQuotationRepository {
      * the bytes are served separately by {@link #findItemPicture}. An item without a picture
      * keeps the legacy constructor's {@code hasPicture=false} shape exactly. */
     private DealQuotationItemDto mapItem(ResultSet rs, Map<Long, CatalogSqmBasis> basisByPriceId) throws SQLException {
-        DealQuotationItemDto item = mapItemColumns(rs, basisByPriceId).withStockSource(rs.getString("stock_source"));
+        DealQuotationItemDto item = mapItemColumns(rs, basisByPriceId).withStockSource(rs.getString("stock_source"))
+            .withSourceQuotationItemId(rs.getObject("source_quotation_item_id", Long.class));
         String placement = rs.getString("picture_placement");
         return placement == null ? item : item.withPicture(rs.getLong("quotation_id"), placement);
     }

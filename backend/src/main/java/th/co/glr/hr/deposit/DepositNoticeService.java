@@ -208,9 +208,7 @@ public class DepositNoticeService {
     public DepositNoticeDto update(long docId, DepositNoticeDraftRequest req, UserPrincipal actor) {
         requireRole(actor, SALES_ROLES);
         DepositNoticeDto doc = requireEditable(docId);
-        requireTicketOwner(doc.ticketId(), actor);
-        requireActiveLifecycle(tickets.findSummaryById(doc.ticketId())
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบงานนี้")));
+        requireActiveLifecycle(requireTicketOwner(doc.ticketId(), actor));
         requirePreparerInDeal(doc.ticketId(), req.preparerId(), doc.preparerId());
         // Sales may change the deposit percent on a DRAFT or an ISSUED notice (a SUPERSEDED one is refused by
         // requireEditable above). docs.update recomputes the amount from it. A request without a percent keeps the
@@ -1374,12 +1372,13 @@ public class DepositNoticeService {
         return DealOwnership.isOwnerOrKeyer(s, actor.id()) || tickets.holdsAllSalesDocumentsGrant(actor);
     }
 
-    private void requireTicketOwner(long ticketId, UserPrincipal actor) {
+    private TicketSummaryDto requireTicketOwner(long ticketId, UserPrincipal actor) {
         TicketDto t = tickets.findById(ticketId)
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบงานนี้"));
         if (!ownsDeal(t.summary(), actor)) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
+        return t.summary();
     }
 
     private void requireRole(UserPrincipal actor, java.util.Set<String> allowed) {

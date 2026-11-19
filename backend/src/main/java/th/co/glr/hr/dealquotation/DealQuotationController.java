@@ -96,6 +96,12 @@ public class DealQuotationController {
             .body(Map.of("quotation", quotations.createFromPricingRequest(pricingRequestId, user)));
     }
 
+    /** Add-on orders only: the approved lines this order may reuse at their approved price (see the service). */
+    @GetMapping("/tickets/{ticketId}/reusable-approved-items")
+    DealQuotationDtos.ReusableApprovedItemsDto reusableApprovedItems(@PathVariable long ticketId, HttpSession session) {
+        return quotations.reusableApprovedItems(ticketId, sessions.requireUser(session));
+    }
+
     @GetMapping("/tickets/{ticketId}/deal-quotations")
     Map<String, Object> listForTicket(@PathVariable long ticketId, HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);

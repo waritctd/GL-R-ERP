@@ -94,6 +94,12 @@ export function SalesOverview({ user, employee, showToast }) {
     queryKey: queryKeys.ticketListByRange(range.from, range.to),
     queryFn: () => api.tickets.list({ movementFrom: range.from, movementTo: range.to }).then((response) => response.tickets ?? []),
   });
+  // The headline figures count one row per project (server-side fold); the to-do worklist below keeps every ORDER, so an
+  // add-on's own next action shows.
+  const projectTicketsQuery = useQuery({
+    queryKey: queryKeys.ticketListByRange(range.from, range.to, 'project'),
+    queryFn: () => api.tickets.list({ movementFrom: range.from, movementTo: range.to, fold: 'project' }).then((response) => response.tickets ?? []),
+  });
   const pricingRequestsQuery = useQuery({
     queryKey: queryKeys.pricingRequestQueue({}),
     queryFn: () => api.pricingRequests.queue({}).then((response) => response.items ?? []),
@@ -110,6 +116,7 @@ export function SalesOverview({ user, employee, showToast }) {
   // query is still loading — otherwise every render would hand the useMemo hooks below a "new" array and defeat
   // their memoization (same convention as TicketListPage's `allDeals`).
   const deals = useMemo(() => ticketsQuery.data ?? [], [ticketsQuery.data]);
+  const projectDeals = useMemo(() => projectTicketsQuery.data ?? [], [projectTicketsQuery.data]);
   const pricingRequests = useMemo(() => pricingRequestsQuery.data ?? [], [pricingRequestsQuery.data]);
   const loading = ticketsQuery.isLoading || pricingRequestsQuery.isLoading;
 
@@ -167,11 +174,12 @@ export function SalesOverview({ user, employee, showToast }) {
 
   const { ordered, expected } = useMemo(() => {
     const isOrdered = isOrderedIn(stageCatalog);
+    const activeProjects = projectDeals.filter((deal) => deal.lifecycle === 'ACTIVE');
     return {
-      ordered: activeDeals.filter(isOrdered),
-      expected: orderReceivedIdx >= 0 ? activeDeals.filter((deal) => !isOrdered(deal)) : [],
+      ordered: activeProjects.filter(isOrdered),
+      expected: orderReceivedIdx >= 0 ? activeProjects.filter((deal) => !isOrdered(deal)) : [],
     };
-  }, [activeDeals, stageCatalog, orderReceivedIdx]);
+  }, [projectDeals, stageCatalog, orderReceivedIdx]);
 
   const grouped = useMemo(() => {
     const byKey = Object.fromEntries(GROUPS.map((g) => [g.key, []]));
@@ -200,12 +208,12 @@ export function SalesOverview({ user, employee, showToast }) {
               <Figure
                 lead
                 label="ยอดที่สั่งซื้อแล้ว"
-                value={dash(ticketsQuery, ticketsQuery.data && (catalogReady ? formatMoney(sumAmount(ordered)) : '—'))}
+                value={dash(projectTicketsQuery, projectTicketsQuery.data && (catalogReady ? formatMoney(sumAmount(ordered)) : '—'))}
                 caption={`${ordered.length} งาน · ยังไม่ปิดงาน`}
               />
               <Figure
                 label="ยอดคาดหวัง"
-                value={dash(ticketsQuery, ticketsQuery.data && (catalogReady ? formatMoney(sumAmount(expected)) : '—'))}
+                value={dash(projectTicketsQuery, projectTicketsQuery.data && (catalogReady ? formatMoney(sumAmount(expected)) : '—'))}
                 caption={`${expected.length} งาน · ยังไม่ได้รับใบสั่งซื้อ`}
               />
               <Figure

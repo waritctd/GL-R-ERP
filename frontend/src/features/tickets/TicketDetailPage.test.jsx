@@ -70,10 +70,13 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         updateTracking: vi.fn(),
         // Deal parties (deal-party-model.md): the ผู้รับเหมาที่เสนอราคา panel and บันทึกผลประมูล.
         parties: vi.fn(),
+        orders: vi.fn(),
         addParty: vi.fn(),
         updateParty: vi.fn(),
         removeParty: vi.fn(),
         recordBidOutcome: vi.fn(),
+        // สั่งเพิ่ม: opens an add-on order (POST /api/tickets/{id}/add-on-orders).
+        createAddOnOrder: vi.fn(),
         // Document chain fix round 1 (F-1): the deal page's own lifecycle / confirm actions.
         confirmCustomer: vi.fn(),
         hold: vi.fn(),
@@ -364,6 +367,7 @@ describe('TicketDetailPage', () => {
     });
     api.tickets.updateTracking.mockResolvedValue({ ticket: buildTicket() });
     api.tickets.parties.mockResolvedValue({ parties: [] });
+    api.tickets.orders.mockResolvedValue({ rootTicketId: 701, rootCode: 'PR-2026-0701', orders: [], totals: null });
     // DealDepositPanel mounts for every role that isn't 'import' (sections.depositNotice), so its list
     // query needs a default resolve or every test above would reject.
     api.depositNotices.listByTicket.mockResolvedValue({ depositNotices: [] });
@@ -5676,6 +5680,57 @@ describe('TicketDetailPage', () => {
       await waitFor(() => expect(api.tickets.setEntryChannel).toHaveBeenCalledWith(701, {
         value: 'DESIGNER_LED', note: 'มีผู้ออกแบบเข้ามาร่วมจริง',
       }));
+    });
+  });
+
+  // สั่งเพิ่ม (add-on orders): the entry on the ใบเสนอราคา tab, the confirm sheet, and where confirming lands.
+  describe('add-on order (สั่งเพิ่ม)', () => {
+    function addOnDeal(summary = {}) {
+      api.tickets.get.mockResolvedValue({
+        ticket: buildTicket({
+          summary: {
+            lifecycle: 'ACTIVE', salesStage: 'ORDER_RECEIVED', status: 'quotation_issued', createdById: 1,
+            code: 'DL-2026-0300', projectName: 'โครงการตัวอย่าง', addOnCount: 1, ...summary,
+          },
+        }),
+      });
+      api.tickets.parties.mockResolvedValue({ parties: [] });
+      api.dealQuotations.listForTicket.mockResolvedValue({ items: [] });
+    }
+
+    it('the owner sees the button; the sheet names the next code, and confirming opens the new order in the editor', async () => {
+      addOnDeal();
+      api.tickets.createAddOnOrder.mockResolvedValue({ addOnOrder: { ticketId: 902, code: 'DL-2026-0300-3', parentTicketId: 701 } });
+      renderTicketDetailPageAtRoute(['/tickets/701?tab=quote'], salesOwnerUser);
+      fireEvent.click(await screen.findByTestId('add-on-order-open'));
+      const sheet = await screen.findByTestId('add-on-order-sheet');
+      expect(within(sheet).getByText('เปิดออเดอร์เพิ่มในงานนี้?')).toBeTruthy();
+      expect(sheet.textContent).toContain('DL-2026-0300-3');
+      expect(sheet.textContent).toContain('ออเดอร์เดิม (DL-2026-0300-1) ไม่ถูกแก้ไข');
+      fireEvent.click(within(sheet).getByTestId('add-on-order-confirm'));
+      await waitFor(() => expect(screen.getByTestId('location-probe').textContent).toBe('/quotations/new?ticket=902'));
+      expect(api.tickets.createAddOnOrder).toHaveBeenCalledWith(701);
+    });
+
+    it('is not offered to account, nor to a rep who does not own the deal', async () => {
+      addOnDeal();
+      const { unmount } = renderTicketDetailPageAtRoute(['/tickets/701?tab=quote'], { id: 77, employeeId: 77, name: 'อื่น', role: 'sales' });
+      await screen.findByText('ใบเสนอราคาของงานนี้');
+      await stickyInputsSettled();
+      expect(screen.queryByTestId('add-on-order-open')).toBeNull();
+      unmount();
+      renderTicketDetailPageAtRoute(['/tickets/701?tab=quote'], accountUser);
+      await screen.findByText('ใบเสนอราคาของงานนี้');
+      await stickyInputsSettled();
+      expect(screen.queryByTestId('add-on-order-open')).toBeNull();
+    });
+
+    it('an add-on deal links back to its parent in the header', async () => {
+      addOnDeal({ code: 'DL-2026-0300-2', parentTicketId: 700, parentCode: 'DL-2026-0300', childKind: 'ADD_ON' });
+      renderTicketDetailPageAtRoute(['/tickets/701'], salesOwnerUser);
+      const link = await screen.findByTestId('deal-add-on-parent-link');
+      expect(link.textContent).toBe('ออเดอร์เพิ่มของ DL-2026-0300');
+      expect(link.getAttribute('href')).toBe('/tickets/700');
     });
   });
 

@@ -314,6 +314,118 @@ class SalesBoardScopeIntegrationTest extends AbstractDealQuotationSlice2Integrat
             .get("openDeals").asInt()).isEqualTo(1);
     }
 
+    private long addOn(long root, UserPrincipal keyer) {
+        return new th.co.glr.hr.dealparty.DealPartyRepository(jdbc).forkAddOn(root, summary(root).code() + "-2", keyer.id());
+    }
+
+    private JsonNode projectList(UserPrincipal actor) throws Exception {
+        return ok(get("/api/tickets").param("fold", "project"), actor).get("tickets");
+    }
+
+    /** สั่งเพิ่ม: a project is ONE row (ProjectFold). The add-on folds into its root (orderCount 2, both open, summed
+     * value, both codes), and the team's openDeals counts the project once. */
+    @Test
+    void anAddOnFoldsIntoItsRootRow_andTheProjectCountsOnce() throws Exception {
+        long root = deal(salesActor);
+        DealQuotationDto quote = approved(root, salesActor, "DESIGNER");
+        long addOn = addOn(root, salesActor);
+        jdbc.update("UPDATE sales.ticket SET estimated_value = 1000 WHERE ticket_id = :id", Map.of("id", addOn));
+
+        JsonNode board = ok(get("/api/sales/my-work"), salesActor).get("board");
+
+        assertThat(ids(board)).containsExactly(root);
+        JsonNode row = byId(board, root);
+        assertThat(row.get("orderCount").asInt()).isEqualTo(2);
+        assertThat(row.get("openOrderCount").asInt()).isEqualTo(2);
+        assertThat(new BigDecimal(row.get("value").asText())).isEqualByComparingTo(quote.grandTotal().add(BigDecimal.valueOf(1000)));
+        assertThat(row.get("orderCodes")).hasSize(2);
+        assertThat(rep(ok(get("/api/sales/team-overview"), salesManagerActor), salesActor.id())
+            .get("openDeals").asInt()).isEqualTo(1);
+    }
+
+    /** The fold rule with the root CLOSED_PAID and a live add-on: ONE open row under the ROOT's id and code, in the
+     * add-on's stage, worth the open order only (the closed first order does not inflate open value), on the board and
+     * in `/api/tickets?fold=project` alike. */
+    @Test
+    void aClosedRootWithALiveAddOn_isOneOpenRowInTheAddOnsStage_onTheBoardAndTheTicketList() throws Exception {
+        long root = deal(salesActor);
+        approved(root, salesActor, "DESIGNER");
+        long addOn = addOn(root, salesActor);
+        jdbc.update("UPDATE sales.ticket SET estimated_value = 1000 WHERE ticket_id = :id", Map.of("id", addOn));
+        jdbc.update("UPDATE sales.ticket SET sales_stage = 'CLOSED_PAID' WHERE ticket_id = :id", Map.of("id", root));
+        String addOnStage = summary(addOn).salesStage();
+
+        JsonNode board = ok(get("/api/sales/my-work"), salesActor).get("board");
+        assertThat(ids(board)).containsExactly(root);
+        JsonNode card = byId(board, root);
+        assertThat(card.get("salesStage").asText()).isEqualTo(addOnStage);
+        assertThat(card.get("orderCount").asInt()).isEqualTo(2);
+        assertThat(card.get("openOrderCount").asInt()).isEqualTo(1);
+        assertThat(new BigDecimal(card.get("value").asText())).isEqualByComparingTo("1000");
+        assertThat(rep(ok(get("/api/sales/team-overview"), salesManagerActor), salesActor.id())
+            .get("openDeals").asInt()).isEqualTo(1);
+
+        JsonNode rows = projectList(salesActor);
+        assertThat(ids(rows, "id")).containsExactly(root);
+        JsonNode row = byId(rows, "id", root);
+        assertThat(row.get("code").asText()).isEqualTo(summary(root).code());
+        assertThat(row.get("salesStage").asText()).isEqualTo(addOnStage);
+        assertThat(row.get("orderCount").asInt()).isEqualTo(2);
+        assertThat(row.get("openOrderCount").asInt()).isEqualTo(1);
+        // the unfolded list still has both orders
+        assertThat(ok(get("/api/tickets"), salesActor).get("tickets")).hasSize(2);
+    }
+
+    /** Import acts on each order: it never gets the project fold. */
+    @Test
+    void importKeepsOneRowPerOrder_whateverFoldSays() throws Exception {
+        long root = deal(salesActor);
+        addOn(root, salesActor);
+        UserPrincipal imp = actor(createEmployee("นำเข้า", "imp-fold@glr.co.th", "IMP", "นำเข้า", null), "import");
+
+        assertThat(ok(get("/api/tickets").param("fold", "project"), imp).get("tickets"))
+            .hasSize(ok(get("/api/tickets"), imp).get("tickets").size());
+    }
+
+    /** Rep B owns the add-on of rep A's project: B gets ONE row under A's code and title, linking to B's own order,
+     * with only B's order counted. A's own list never counts B's order's value. */
+    @Test
+    void anAddOnOwnedByAnotherRep_isOneRowUnderTheRootsCode_linkingToTheirOwnOrder() throws Exception {
+        long root = deal(salesActor);
+        approved(root, salesActor, "DESIGNER");
+        long addOn = addOn(root, otherSalesActor);
+        jdbc.update("UPDATE sales.ticket SET created_by = :b, estimated_value = 700 WHERE ticket_id = :id",
+            Map.of("b", otherSalesActor.id(), "id", addOn));
+
+        JsonNode rows = projectList(otherSalesActor);
+        assertThat(ids(rows, "id")).containsExactly(addOn);
+        JsonNode row = byId(rows, "id", addOn);
+        assertThat(row.get("code").asText()).isEqualTo(summary(root).code());
+        assertThat(row.get("orderCount").asInt()).isEqualTo(1);
+        assertThat(new BigDecimal(row.get("amountPayable").asText())).isLessThanOrEqualTo(BigDecimal.valueOf(1000));
+
+        JsonNode board = ok(get("/api/sales/my-work"), otherSalesActor).get("board");
+        assertThat(ids(board)).containsExactly(addOn);
+        assertThat(byId(board, addOn).get("orderCodes").get(0).asText()).isEqualTo(summary(root).code());
+        assertThat(new BigDecimal(byId(board, addOn).get("value").asText())).isEqualByComparingTo("700");
+    }
+
+    /** A project on the board (open root) with a paused add-on that has come back from pause is NOT also in the
+     * returning list: one project, one place (no duplicate key, no double quiet count). */
+    @Test
+    void aProjectOnTheBoardIsNotAlsoInTheReturningList() throws Exception {
+        long root = deal(salesActor);
+        long addOn = addOn(root, salesActor);
+        backdate(root, 30);
+        jdbc.update("UPDATE sales.ticket SET lifecycle = 'ON_HOLD', pause_return_on = current_date - 1"
+            + " WHERE ticket_id = :id", Map.of("id", addOn));
+
+        JsonNode work = ok(get("/api/sales/my-work"), salesActor);
+
+        assertThat(ids(work.get("board"))).containsExactly(root);
+        assertThat(ids(work.get("followUp"))).containsExactly(root);
+    }
+
     /** Two live quotations (seeded directly: the service's sweep allows only one): the NEWER approval wins. */
     @Test
     void valueIsTheLatestLiveQuotation_byApprovalTime_notTheOlderOne() throws Exception {
@@ -537,14 +649,22 @@ class SalesBoardScopeIntegrationTest extends AbstractDealQuotationSlice2Integrat
     }
 
     private static List<Long> ids(JsonNode deals) {
+        return ids(deals, "ticketId");
+    }
+
+    private static List<Long> ids(JsonNode deals, String field) {
         List<Long> out = new ArrayList<>();
-        deals.forEach(d -> out.add(d.get("ticketId").asLong()));
+        deals.forEach(d -> out.add(d.get(field).asLong()));
         return out;
     }
 
     private static JsonNode byId(JsonNode deals, long id) {
+        return byId(deals, "ticketId", id);
+    }
+
+    private static JsonNode byId(JsonNode deals, String field, long id) {
         for (JsonNode d : deals) {
-            if (d.get("ticketId").asLong() == id) {
+            if (d.get(field).asLong() == id) {
                 return d;
             }
         }

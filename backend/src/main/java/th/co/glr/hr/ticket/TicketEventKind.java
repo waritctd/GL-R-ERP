@@ -157,5 +157,8 @@ public final class TicketEventKind {
     /** The rep took back an order confirmation (DealQuotationService#undoOrderConfirmation). */
     public static final String ORDER_CONFIRMATION_UNDONE = "ORDER_CONFIRMATION_UNDONE";
 
+    /** สั่งเพิ่ม: on the source deal and on the new linked deal it started (DealPartyService#createAddOnOrder). */
+    public static final String ADD_ON_ORDER_CREATED = "ADD_ON_ORDER_CREATED";
+
     private TicketEventKind() {}
 }

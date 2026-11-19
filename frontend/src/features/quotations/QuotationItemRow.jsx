@@ -163,6 +163,7 @@ export function ceoOriginalPriceText(priceMode, item, currency) {
 }
 
 export function QuotationItemRow({
+  priceLocked: priceLockedProp = false,
   item, index, readOnly, errors = {}, onChange, onRemove,
   groupId = null, locationGroups = [], recentPicks = [], onMove, onDuplicate, onCatalogPicked,
   // The QUOTATION's tile price mode (one per document; see quotationMeta's PRICE_MODE_OPTIONS) and
@@ -217,6 +218,8 @@ export function QuotationItemRow({
   mixedPriceModes = false,
   onChangePriceMode = null,
 }) {
+  // V232: a line reusing an approved item keeps its approved price; the server enforces it too.
+  const priceLocked = priceLockedProp || item.sourceQuotationItemId != null;
   const perSqm = isEnglishPerSqm(priceMode, documentLanguage);
   // On a Thai document every tile price box is per ตร.ม. including VAT. See quotationMeta's
   // "ราคา/ตร.ม. รวม VAT" block for the two ways a row carries a price; this component only decides
@@ -897,7 +900,7 @@ export function QuotationItemRow({
               <select
                 id={`price-mode-${index}`}
                 value={priceMode}
-                disabled={readOnly}
+                disabled={readOnly || priceLocked}
                 onChange={(e) => onChangePriceMode?.(e.target.value)}
               >
                 {availablePriceModes(documentLanguage).map((opt) => (
@@ -940,7 +943,7 @@ export function QuotationItemRow({
               {/* Typing here makes the per-ตร.ม. figure THE net: a per-แผ่น net the row was carrying is
                   dropped with it, so the row never holds two nets that could disagree. */}
               <PriceInputWithSuffix
-                id={`direct-net-${index}`} type="number" step="0.01" disabled={readOnly} suffix="บาท/ตร.ม."
+                id={`direct-net-${index}`} type="number" step="0.01" disabled={readOnly || priceLocked} suffix="บาท/ตร.ม."
                 unitInLabel
                 aria-describedby={`direct-net-${index}-per-piece`}
                 value={netPriceSqmShown}
@@ -960,7 +963,7 @@ export function QuotationItemRow({
           ) : (
             <FormField label="ราคาสุทธิ/แผ่น" htmlFor={`direct-net-${index}`} required error={errors.directNetPrice}>
               <input
-                id={`direct-net-${index}`} type="number" step="0.01" disabled={readOnly}
+                id={`direct-net-${index}`} type="number" step="0.01" disabled={readOnly || priceLocked}
                 value={item.directNetPrice ?? ''}
                 onChange={(e) => patch({ directNetPrice: e.target.value === '' ? '' : Number(e.target.value) })}
               />
@@ -984,7 +987,7 @@ export function QuotationItemRow({
                   EMPTYING the box clears the price altogether, per-แผ่น figure included, or the box
                   would refill itself with that figure's per-ตร.ม. equivalent. */}
               <PriceInputWithSuffix
-                id={`price-${index}`} type="number" step="0.01" disabled={readOnly} suffix="บาท/ตร.ม."
+                id={`price-${index}`} type="number" step="0.01" disabled={readOnly || priceLocked} suffix="บาท/ตร.ม."
                 unitInLabel
                 aria-describedby={listPerPieceNote ? `price-${index}-per-piece` : undefined}
                 value={listPriceSqmShown}
@@ -1010,7 +1013,7 @@ export function QuotationItemRow({
               error={errors.unitPrice}
             >
               <input
-                id={`price-${index}`} type="number" step="0.01" disabled={readOnly}
+                id={`price-${index}`} type="number" step="0.01" disabled={readOnly || priceLocked}
                 value={item.unitPrice ?? ''}
                 onChange={(e) => patch({ unitPrice: e.target.value === '' ? '' : Number(e.target.value) })}
               />
@@ -1019,7 +1022,7 @@ export function QuotationItemRow({
           {!hidePricing && priceMode === 'NET' ? (
             <FormField label="ส่วนลด %" htmlFor={`disc-${index}`}>
               <input
-                id={`disc-${index}`} type="number" step="0.01" disabled={readOnly}
+                id={`disc-${index}`} type="number" step="0.01" disabled={readOnly || priceLocked}
                 value={item.discountPct ?? ''}
                 onChange={(e) => patch({ discountPct: e.target.value === '' ? null : Number(e.target.value) })}
               />
@@ -1028,7 +1031,7 @@ export function QuotationItemRow({
           {!hidePricing && priceMode === 'SPECIAL_SQM' && !perSqm ? (
             <FormField label="ราคาพิเศษ/ตร.ม. (รวม VAT)" htmlFor={`special-${index}`} required error={errors.specialPriceSqm}>
               <PriceInputWithSuffix
-                id={`special-${index}`} type="number" step="0.01" disabled={readOnly} suffix="บาท/ตร.ม."
+                id={`special-${index}`} type="number" step="0.01" disabled={readOnly || priceLocked} suffix="บาท/ตร.ม."
                 unitInLabel
                 value={item.specialPriceSqm ?? ''}
                 onChange={(e) => patch({ specialPriceSqm: e.target.value === '' ? '' : Number(e.target.value) })}
@@ -1049,7 +1052,7 @@ export function QuotationItemRow({
                   when blank. Both are computed by the server (calculate-line), never here. */}
               <FormField label="ราคา (USD/ตร.ม.)" htmlFor={`special-${index}`} required error={errors.specialPriceSqm}>
                 <input
-                  id={`special-${index}`} type="number" step="0.01" disabled={readOnly}
+                  id={`special-${index}`} type="number" step="0.01" disabled={readOnly || priceLocked}
                   value={item.specialPriceSqm ?? ''}
                   onChange={(e) => patch({ specialPriceSqm: e.target.value === '' ? '' : Number(e.target.value) })}
                 />
@@ -1241,6 +1244,7 @@ export function itemInputFromRow(item, priceMode = 'NET', documentLanguage = 'TH
       // DealQuotationService#update upserts it in place instead of delete + re-insert, which would
       // orphan a per-item picture (keyed by item id) on every save. `null` on a never-saved row.
       id: item.id ?? null,
+      ...(item.sourceQuotationItemId != null ? { sourceQuotationItemId: item.sourceQuotationItemId } : {}),
       lineType: LINE_TYPE_PLAIN,
       locationLabel: item.locationLabel || null,
       description: item.description?.trim() || null,
@@ -1274,6 +1278,7 @@ export function itemInputFromRow(item, priceMode = 'NET', documentLanguage = 'TH
   return {
     // Same reason and contract as the PLAIN branch above.
     id: item.id ?? null,
+    ...(item.sourceQuotationItemId != null ? { sourceQuotationItemId: item.sourceQuotationItemId } : {}),
     ...tileInputFromRow(item),
     lineType: LINE_TYPE_TILE,
     // English per-sqm: the USD/ตร.ม. IS the unit price (the server substitutes it anyway).

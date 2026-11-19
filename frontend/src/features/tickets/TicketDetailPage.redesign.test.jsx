@@ -39,6 +39,7 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         addActivity: vi.fn(),
         updateTracking: vi.fn(),
         parties: vi.fn(),
+        orders: vi.fn(),
         comment: vi.fn(),
         hold: vi.fn(),
         dormant: vi.fn(),
@@ -163,6 +164,7 @@ beforeEach(() => {
   api.tickets.listDeliveries.mockResolvedValue({ items: [] });
   api.tickets.listActivities.mockResolvedValue({ items: [] });
   api.tickets.parties.mockResolvedValue({ parties: [] });
+  api.tickets.orders.mockResolvedValue({ rootTicketId: 701, rootCode: 'PR-2026-0701', orders: [], totals: null });
   api.tickets.addActivity.mockResolvedValue({ id: 1, kind: 'CALL' });
   api.tickets.reopen.mockResolvedValue({ ticket: buildTicket() });
   api.tickets.resume.mockResolvedValue({ ticket: buildTicket() });
@@ -1276,5 +1278,41 @@ describe('drawn details (slice 6)', () => {
     await pageReady();
     await settle();
     expect(tabNames()).toEqual(['ภาพรวม', 'ใบเสนอราคา', 'เงิน', 'ส่งของ', 'ไฟล์']);
+  });
+  describe('add-on orders', () => {
+    const ORDERS = {
+      rootTicketId: 701,
+      rootCode: 'PR-2026-0701',
+      orders: [
+        { ticketId: 701, code: 'PR-2026-0701', displayCode: 'PR-2026-0701-1', orderNo: 1, childKind: null, salesStage: 'SPEC_APPROVED', lifecycle: 'ACTIVE', fulfillmentStatus: null, valueExVat: 100000, received: 50000, outstanding: 57000 },
+        { ticketId: 702, code: 'PR-2026-0702', displayCode: 'PR-2026-0701-2', orderNo: 2, childKind: 'ADD_ON', salesStage: 'SPEC_APPROVED', lifecycle: 'ACTIVE', fulfillmentStatus: null, valueExVat: 35000, received: 0, outstanding: 37450 },
+      ],
+      totals: { valueExVat: 135000, received: 50000, outstanding: 94450 },
+    };
+
+    it('the orders card lists both orders with the project total, each money cell labelled by its VAT basis', async () => {
+      api.tickets.orders.mockResolvedValue(ORDERS);
+      renderPage();
+      await pageReady();
+
+      const card = await screen.findByTestId('project-orders-card');
+      expect(within(card).getByText('ออเดอร์ 1')).toBeTruthy();
+      expect(within(card).getByText('ออเดอร์ 2')).toBeTruthy();
+      const total = within(card).getByTestId('project-orders-total');
+      expect(within(total).getByText('฿135,000.00')).toBeTruthy();
+      expect(within(total).getByText('มูลค่าก่อน VAT')).toBeTruthy();
+      expect(within(total).getByText(/ค้างรับ \(รวม VAT\)\s*฿94,450\.00/)).toBeTruthy();
+      expect(within(screen.getByTestId('project-order-2')).getByText('มูลค่าก่อน VAT')).toBeTruthy();
+    });
+
+    it('an order chip on เงิน links to the other order\'s page, same tab', async () => {
+      api.tickets.orders.mockResolvedValue(ORDERS);
+      renderPage(salesOwner, { url: '/tickets/701?tab=money' });
+      await pageReady();
+
+      const nav = await screen.findByTestId('order-switcher');
+      const chip = within(nav).getByRole('link', { name: /ออเดอร์ 2/ });
+      expect(chip.getAttribute('href')).toBe('/tickets/702?tab=money');
+    });
   });
 });

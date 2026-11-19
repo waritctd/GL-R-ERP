@@ -42,7 +42,7 @@ export function writeStoredView(user, view) {
 export function boardDealMatches(deal, query) {
   const needle = (query ?? '').trim().toLowerCase();
   if (!needle) return true;
-  return [deal.title, deal.projectName, deal.customerName, deal.designerName]
+  return [deal.title, deal.projectName, deal.customerName, deal.designerName, ...(deal.orderCodes ?? [])]
     .filter(Boolean).join(' ').toLowerCase().includes(needle);
 }
 

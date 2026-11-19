@@ -116,8 +116,8 @@ function AllDealsBoard({ user, showToast, onShowTable }) {
   // count equals the rows its link opens.
   const range = useMemo(() => rangeFromParams(null, null), []);
   const ticketsQuery = useQuery({
-    queryKey: queryKeys.ticketListByRange(range.from, range.to),
-    queryFn: () => api.tickets.list({ movementFrom: range.from, movementTo: range.to })
+    queryKey: queryKeys.ticketListByRange(range.from, range.to, 'project'),
+    queryFn: () => api.tickets.list({ movementFrom: range.from, movementTo: range.to, fold: 'project' })
       .then((response) => response.tickets || []),
   });
 

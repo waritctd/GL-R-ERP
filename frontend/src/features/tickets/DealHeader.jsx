@@ -1,3 +1,4 @@
+import { Link } from 'react-router-dom';
 import { Button } from '../../components/common/Button.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { OverflowMenu } from '../../components/common/OverflowMenu.jsx';
@@ -81,6 +82,16 @@ export function DealHeader({
               : <StatusBadge tone={lifecycle.tone}>{lifecycle.label}</StatusBadge>}
             {summary.hasEdits && !condensed ? <StatusBadge tone="warning">✎ มีการแก้ไข</StatusBadge> : null}
           </div>
+          {summary.childKind === 'ADD_ON' && summary.parentTicketId ? (
+            // An add-on order (สั่งเพิ่ม) names the deal it hangs under; the link is the way back to the root.
+            <Link
+              to={`/tickets/${summary.parentTicketId}`}
+              data-testid="deal-add-on-parent-link"
+              className="inline-flex min-h-[44px] w-fit items-center text-sm font-bold text-primary sm:min-h-0"
+            >
+              {`ออเดอร์เพิ่มของ ${summary.parentCode}`}
+            </Link>
+          ) : null}
           <h1
             className={`m-0 min-w-0 font-extrabold leading-tight text-text transition-[font-size] duration-200 ease-out motion-reduce:transition-none [overflow-wrap:anywhere] ${
               condensed ? 'truncate text-base' : 'text-xl sm:text-2xl'

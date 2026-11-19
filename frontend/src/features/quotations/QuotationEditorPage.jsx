@@ -58,6 +58,9 @@ import {
   itemInputFromRow, newItemClientId, QuotationItemRow,
 } from './QuotationItemRow.jsx';
 import { QuotationPlainItemRow } from './QuotationPlainItemRow.jsx';
+import { ApprovalBasisPill } from './ApprovalBasisPill.jsx';
+import { ApprovedItemsPicker } from './ApprovedItemsPicker.jsx';
+import { reusesApprovedPricesOnly, rowFromApprovedItem } from './approvedItemsReuse.js';
 import { QuotationAdjustmentRow } from './QuotationAdjustmentRow.jsx';
 import {
   pushRecentCatalogPick, readQuotationDefaults, readRecentCatalogPicks, writeQuotationDefaults,
@@ -243,6 +246,13 @@ export function QuotationEditorPage({ user, showToast }) {
     enabled: !!effectiveTicketId && (!id || quotation?.docStatus === 'DRAFT'),
   });
   const ticket = ticketQuery.data ?? null;
+  // Add-on orders (สั่งเพิ่ม): the approved lines this order may reuse at their approved price (ADD_ON deals only).
+  const isAddOn = ticket?.childKind === 'ADD_ON';
+  const reusableQuery = useQuery({
+    queryKey: queryKeys.reusableApprovedItems(effectiveTicketId),
+    queryFn: () => api.dealQuotations.reusableApprovedItems(effectiveTicketId),
+    enabled: isAddOn && (!id || quotation?.docStatus === 'DRAFT'),
+  });
   // The pick moves the owner only for who could move it before the all-documents grant (backend DealQuotationService#moveOwnerToSalesRep's
   // mayMove): the real owner/keyer, sales_manager, CEO or a can_create_quotation holder. A canManageAllSalesDocuments holder
   // only changes the printed rep, so no hint for them. No ticket yet = a new deal the actor will own.
@@ -525,6 +535,21 @@ export function QuotationEditorPage({ user, showToast }) {
   // buildUpsertPayload save with no re-sorting.
   const [groups, setGroups] = useState(() => [{ groupId: newLocationGroupId(), label: '' }]);
   const [terms, setTerms] = useState(() => emptyTerms(storedDefaults));
+  // An add-on's deposit % follows the first order and needs approval to change: a NEW add-on quotation starts on it.
+  const depositPresetRef = useRef(false);
+  const sourceDepositPercent = reusableQuery.data?.sourceDepositPercent ?? null;
+  const sourceTerms = reusableQuery.data?.sourceTerms ?? null;
+  useEffect(() => {
+    if (id || depositPresetRef.current || sourceDepositPercent == null) return;
+    depositPresetRef.current = true;
+    const first = sourceTerms ?? {};
+    setTerms((t) => ({
+      ...t, noDeposit: Number(sourceDepositPercent) === 0, depositPercent: sourceDepositPercent,
+      depositPercentCustom: !DEPOSIT_PERCENT_PRESETS.includes(Number(sourceDepositPercent)),
+      remainderMode: first.remainderMode ?? t.remainderMode, creditDays: first.creditDays ?? t.creditDays,
+      fullPaymentTerm: first.fullPaymentTerm ?? t.fullPaymentTerm,
+    }));
+  }, [id, sourceDepositPercent, sourceTerms]);
   const [dirty, setDirtyState] = useState(false);
   // A monotonically increasing counter of "the form changed" events, bumped on every setDirty(true)
   // (once per genuine edit, never per render). A save's onSuccess captures it when it BUILT its
@@ -1085,6 +1110,13 @@ export function QuotationEditorPage({ user, showToast }) {
     setRecentPicks(pushRecentCatalogPick(user?.id, cat));
   }
 
+  function pickApprovedItem(reusableItem) {
+    setDirty(true);
+    const groupId = groups[groups.length - 1]?.groupId ?? null;
+    const row = rowFromApprovedItem(reusableItem, docSettings.priceMode, groupId);
+    setItems((prev) => insertIntoGroup(prev, row, groupId));
+  }
+
   function removeItem(clientId) {
     setDirty(true);
     setItems((prev) => prev.filter((it) => it.clientId !== clientId));
@@ -1144,6 +1176,10 @@ export function QuotationEditorPage({ user, showToast }) {
   const isEnglish = docSettings.documentLanguage === 'EN';
   const provisionalVat = Math.round(provisionalSubtotal * vatRateForLanguage(docSettings.documentLanguage) * 100) / 100;
   const provisionalGrand = provisionalSubtotal + provisionalVat;
+  const reusesApprovedOnly = isAddOn && reusesApprovedPricesOnly({
+    items, adjustments, depositPercent: terms.noDeposit ? 0 : terms.depositPercent, sourceDepositPercent, sourceTerms,
+    terms, reusable: reusableQuery.data?.items ?? [], docSettings,
+  });
   // The server's own adjustment rows, in order, once the editor is clean — what each QuotationAdjustmentRow
   // shows instead of its estimate.
   const serverAdjustments = useMemo(
@@ -1664,7 +1700,7 @@ export function QuotationEditorPage({ user, showToast }) {
       queryClient.setQueryData(queryKeys.dealQuotationDetail(id), res.quotation);
       queryClient.invalidateQueries({ queryKey: ['dealQuotations'] });
       invalidateDealViews();
-      showToast('success', 'ส่งขออนุมัติแล้ว');
+      showToast('success', res.quotation?.docStatus === 'APPROVED' ? 'อนุมัติแล้ว — ใช้ราคาเดิมที่อนุมัติแล้วในงานนี้' : 'ส่งขออนุมัติแล้ว');
       setSubmitConfirmOpen(false);
     },
     onError: (error) => showToast('error', error.message || 'ส่งขออนุมัติไม่สำเร็จ'),
@@ -2239,6 +2275,7 @@ export function QuotationEditorPage({ user, showToast }) {
         context={(
           <>
             {status ? <StatusBadge tone={status.tone}>{status.label}</StatusBadge> : null}
+            <ApprovalBasisPill quotation={quotation} />
             {/* "เอกสารแนบ {n} ไฟล์", beside the status of the read-only details (see
                 QuotationAttachmentsLink). Not on the edit form, whose reader attached them. */}
             {quotation && !isEditable ? <QuotationAttachmentsLink user={user} quotation={quotation} /> : null}
@@ -2811,6 +2848,20 @@ export function QuotationEditorPage({ user, showToast }) {
               label typed once in its header (a floor with six tiles is one label, not six). Blocks
               read top-to-bottom in the order the printed document groups them (see
               locationGroupsFromItems), so the editor previews the page structure. */}
+          {isAddOn && isEditable && !isPricingRequestOrigin ? (
+            <ApprovedItemsPicker
+              query={reusableQuery}
+              rows={items}
+              currency={currency}
+              totals={{ subtotal: provisionalSubtotal, vat: provisionalVat, grand: provisionalGrand }}
+              noApproval={reusesApprovedOnly}
+              onPick={pickApprovedItem}
+              onUnpick={removeItem}
+              onQuantity={(clientId, field, value) => updateItem(clientId, { [field]: value })}
+              onAddOther={() => addItem()}
+            />
+          ) : null}
+
           <Panel
             title="รายการสินค้า"
             actions={isPricingRequestOrigin ? (
@@ -3367,7 +3418,11 @@ export function QuotationEditorPage({ user, showToast }) {
             </>
           )}
         >
-          <p>ส่งใบเสนอราคา {quotation?.number} ให้ผู้จัดการฝ่ายขายหรือผู้บริหารอนุมัติ ต้องการดำเนินการต่อหรือไม่</p>
+          {reusesApprovedOnly ? (
+            <p>ใบเสนอราคา {quotation?.number} ใช้ราคาเดิมที่อนุมัติแล้วทุกรายการ จึงอนุมัติทันที ไม่ต้องรออนุมัติ ต้องการดำเนินการต่อหรือไม่</p>
+          ) : (
+            <p>ส่งใบเสนอราคา {quotation?.number} ให้ผู้จัดการฝ่ายขายหรือผู้บริหารอนุมัติ ต้องการดำเนินการต่อหรือไม่</p>
+          )}
           {/* Unlike checklistWarnings below, these THREE genuinely block (the opening button is
               disabled while any is true), so they only show if the dialog was already open when a
               concurrent edit removed a lead time, re-typed a 0% deposit, or blanked a CREDIT

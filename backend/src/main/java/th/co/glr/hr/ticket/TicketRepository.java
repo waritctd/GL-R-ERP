@@ -52,6 +52,12 @@ public class TicketRepository {
                t.reopened_at, t.reopen_count,
                t.win_probability, t.designer_name, t.owner_name, t.buyer_name,
                t.quotation_only, t.keyed_by, t.pause_return_on, t.estimated_value, t.expected_quarter,
+               t.parent_ticket_id, t.child_kind,
+               (SELECT pt.code FROM sales.ticket pt WHERE pt.ticket_id = t.parent_ticket_id) AS parent_code,
+               (SELECT COUNT(*) FROM sales.ticket ao
+                 WHERE ao.child_kind = 'ADD_ON'
+                   AND ao.parent_ticket_id = CASE WHEN t.child_kind = 'ADD_ON' THEN t.parent_ticket_id ELSE t.ticket_id END
+               ) AS add_on_count,
                (SELECT MAX(da.activity_date) FROM sales.deal_activity da
                  WHERE da.ticket_id = t.ticket_id) AS last_activity_at,
                -- Movement range (inclusive Asia/Bangkok calendar days); both FALSE when no range is given.
@@ -885,6 +891,26 @@ public class TicketRepository {
 
     // --- private helpers ---
 
+    /** {@link #findSummaryById} for many ids in one round trip (empty input, empty output). */
+    public List<TicketSummaryDto> findSummariesByIds(java.util.Collection<Long> ids) {
+        if (ids.isEmpty()) {
+            return List.of();
+        }
+        List<TicketSummaryDto> rows = jdbc.query(
+            SUMMARY_SELECT + """
+             WHERE t.ticket_id IN (:ids)
+             GROUP BY t.ticket_id, ec.first_name_th, ec.last_name_th,
+                      ea.first_name_th, ea.last_name_th,
+                      p.name, ct.first_name, ct.last_name,
+                      ecc.first_name_th, ecc.last_name_th
+            """,
+            new MapSqlParameterSource("ids", ids)
+                .addValue("movementFrom", null, Types.DATE)
+                .addValue("movementTo", null, Types.DATE),
+            (rs, rowNum) -> mapSummary(rs));
+        return enrichSummaries(rows);
+    }
+
     public Optional<TicketSummaryDto> findSummaryById(long id) {
         try {
             TicketSummaryDto summary = jdbc.queryForObject(
@@ -1349,7 +1375,9 @@ public class TicketRepository {
                 rs.getObject("last_activity_at", LocalDate.class))
             .withPauseReturnOn(rs.getObject("pause_return_on", LocalDate.class))
             .withEstimatedValue(rs.getBigDecimal("estimated_value"))
-            .withExpectedQuarter(rs.getString("expected_quarter"));
+            .withExpectedQuarter(rs.getString("expected_quarter"))
+            .withParent(rs.getObject("parent_ticket_id", Long.class), rs.getString("parent_code"),
+                rs.getString("child_kind"), rs.getInt("add_on_count"));
     }
 
     /** One row's worth of the enrichment facts {@link SummaryFactsSql#SELECT} computes for a page of deals. */
@@ -1478,7 +1506,8 @@ public class TicketRepository {
             facts.liveDirectQuotation(), facts.quotedRecipients(),
             "DEPOSIT_NOTICE_ISSUED".equals(s.paymentStatus()) ? facts.depositDue() : null,
             s.keyedById(), s.stageChangedInRange(), s.activityInRange(), s.lastActivityAt(), s.pauseReturnOn(),
-            s.estimatedValue(), s.expectedQuarter(), f.receiptSource());
+            s.estimatedValue(), s.expectedQuarter(), f.receiptSource(),
+            s.parentTicketId(), s.parentCode(), s.childKind(), s.addOnCount());
     }
 
     /** An INVOICE document is on file. The invoice is produced by an external system and uploaded here, so its
@@ -2026,11 +2055,12 @@ public class TicketRepository {
      * the remaining invoice's grand_total -- because each tax invoice rounds its own VAT, so the sum may sit a satang
      * away from the deal's computed total. The deposit part is the invoice's FROZEN pre-VAT deposit_deduction made
      * VAT-inclusive (the notice's exact total_payable when the deduction equals the notice amount, else
-     * ROUND(deduction * 1.07, 2); none -> 0), so receipts and notice edits cannot move it.
+     * ROUND(deduction * 1.07, 2); no stored deduction -> the linked notice's total; no notice -> 0), so receipts and notice edits cannot move it.
      * Trailing comma included; VAT-inclusive variant only (the ex-VAT figure stays the quotation's subtotal).
      */
     private static String issuedDocumentsPayable(String ticketIdRef) {
-        return "(SELECT COALESCE(CASE WHEN ri.deposit_deduction = dn.deposit_amount THEN dn.total_payable"
+        return "(SELECT COALESCE(CASE WHEN ri.deposit_deduction IS NULL OR ri.deposit_deduction = dn.deposit_amount"
+            + " THEN dn.total_payable"
             + " ELSE ROUND(ri.deposit_deduction * 1.07, 2) END, 0)"
             + " + ri.grand_total FROM sales.remaining_invoice ri"
             + " LEFT JOIN sales.deposit_notice dn ON dn.deposit_notice_id = ri.deposit_notice_id"
@@ -2046,7 +2076,7 @@ public class TicketRepository {
     }
 
     /** Same SELECT, PRE-VAT — what {@code payableAmountSelect} returned before payable became VAT-inclusive. */
-    private static String payableAmountExVatSelect(String ticketIdRef) {
+    public static String payableAmountExVatSelect(String ticketIdRef) {
         return payableAmountSelect(ticketIdRef, false);
     }
 
@@ -2626,7 +2656,8 @@ public class TicketRepository {
     /** One read of every downstream row an undo must not orphan. "Bid or split" = the bid path wrote its
      * BID_OUTCOME_RECORDED right AFTER the promotion event in the same transaction (DealPartyService#recordBidOutcome),
      * so an outcome recorded EARLIER on the deal does not count; or the deal is a split child (DEAL_SPLIT_FROM_PARENT)
-     * or has split children. "Manual stock decision" = a STOCK_RESERVED or
+     * or has split children (a child with no kind counts as a split; only ADD_ON children are exempt: an undo
+     * deletes only this deal's own ticket_item rows, never a quotation item an add-on reuses). "Manual stock decision" = a STOCK_RESERVED or
      * PROCUREMENT_SOURCE_DECIDED event after the (latest) promotion event, or the V208 latch; the confirmation's own
      * cover of จากสต็อก lines writes neither. */
     public UndoFacts undoConfirmationFacts(long ticketId) {
@@ -2636,7 +2667,8 @@ public class TicketRepository {
                         AND event_id > COALESCE((SELECT MAX(event_id) FROM sales.ticket_event
                                                   WHERE ticket_id = :t AND kind = 'DEAL_PROMOTED_FROM_QUOTATION'), 0))
                OR EXISTS(SELECT 1 FROM sales.ticket_event WHERE ticket_id = :t AND kind = 'DEAL_SPLIT_FROM_PARENT')
-               OR EXISTS(SELECT 1 FROM sales.ticket WHERE parent_ticket_id = :t)) AS bid_or_split,
+               OR EXISTS(SELECT 1 FROM sales.ticket WHERE parent_ticket_id = :t
+                          AND COALESCE(child_kind, 'BID_SPLIT') = 'BID_SPLIT')) AS bid_or_split,
               EXISTS(SELECT 1 FROM sales.deposit_notice WHERE ticket_id = :t AND status <> 'DRAFT') AS notice,
               EXISTS(SELECT 1 FROM sales.payment_receipt WHERE ticket_id = :t) AS receipt,
               EXISTS(SELECT 1 FROM sales.remaining_invoice WHERE ticket_id = :t) AS invoice,
