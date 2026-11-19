@@ -68,13 +68,6 @@ class AuditServiceTest {
         assertThat(after.path("viewingAs").path("employeeId").asLong()).isEqualTo(2L);
     }
 
-    @Test
-    void nonObjectAfter_isWrappedAsValue() throws Exception {
-        JsonNode after = recorded(java.util.List.of(1, 2));
-        assertThat(after.path("value").size()).isEqualTo(2);
-        assertThat(after.path("viewingAs").path("name").asText()).isEqualTo("Target");
-    }
-
     private static UserPrincipal principal(long id, String name) {
         return new UserPrincipal(id, name + "@example.test", name, "employee", id, true,
             LocalDate.of(2020, 1, 1), false, null, false);

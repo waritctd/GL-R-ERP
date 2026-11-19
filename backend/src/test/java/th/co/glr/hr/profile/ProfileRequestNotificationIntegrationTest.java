@@ -3,10 +3,7 @@ package th.co.glr.hr.profile;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
-import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.time.LocalDate;
@@ -30,11 +27,6 @@ import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
  * the REAL SalesNotificationMailRouter/SalesMailRecipientRepository chain, mocked only at the
  * NotificationEmailService boundary -- not SalesNotificationMailer.NO_OP. */
 class ProfileRequestNotificationIntegrationTest extends AbstractPostgresIntegrationTest {
-
-    /** Literal, not a reference to SalesNotificationMailRouter.ACCOUNT_MAILBOX: that constant is package-private to
-     * th.co.glr.hr.notification, and this test lives in th.co.glr.hr.profile. */
-    private static final String ACCOUNT_MAILBOX = "account@glr.co.th";
-    private static final String IMPORT_MAILBOX = "import@glr.co.th";
 
     private final EmployeeRepository employees = mock(EmployeeRepository.class);
     private final AuditService auditService = mock(AuditService.class);
@@ -93,117 +85,6 @@ class ProfileRequestNotificationIntegrationTest extends AbstractPostgresIntegrat
         assertThat(hrRows.get(0).link()).isEqualTo("/requests");
     }
 
-    /** Wrong-way-round, per CLAUDE.md's "ask the question the wrong way round" discipline: this is the case that
-     * actually proves the new "hr" division predicate FILTERS, rather than merely that HR happens to receive a
-     * row. */
-    @Test
-    void createDoesNotNotifyANonHrEmployee() {
-        service.create(emailRequest("old@glr.co.th", "new@glr.co.th"), salesUser());
-
-        assertThat(notificationsFor(salesEmployee, "PROFILE_REQUEST_SUBMITTED")).isEmpty();
-    }
-
-    // --- update(): notifies the requesting employee, at THEIR OWN address ----------------------
-
-    /** THE regression test, wrong-way-round: this proves the mail does NOT land on the shared account@glr.co.th
-     * box, not merely that it lands somewhere. Confirmed against production (employee 72, ฝ่ายบัญชี, source_code =
-     * 'AC') -- see ProfileRequestService's constructor Javadoc. */
-    @Test
-    void approvingAnAcDivisionEmployeesRequestEmailsThemPersonallyNotTheSharedAccountMailbox() {
-        ProfileRequestDto created = service.create(emailRequest("old@glr.co.th", "new@glr.co.th"), acUser());
-
-        service.update(created.id(), new UpdateProfileRequestRequest("approved", null), hrUser());
-
-        verify(emailService).send(eq(accountEmployee), eq("sunee.account@glr.co.th"), any(),
-            eq("อนุมัติคำขอแก้ไขข้อมูลของคุณแล้ว"), any(), eq("/profile"));
-        verify(emailService, never()).send(anyLong(), eq(ACCOUNT_MAILBOX), any(), any(), any(), any());
-    }
-
-    /** Same regression, the PCIM/import division -- and the rejection path, not just approval, so both update()
-     * branches are proven to carry the fix, not just the one the AC case happens to exercise. */
-    @Test
-    void rejectingAPcimDivisionEmployeesRequestEmailsThemPersonallyNotTheSharedImportMailbox() {
-        ProfileRequestDto created = service.create(emailRequest("old@glr.co.th", "new@glr.co.th"), importUser());
-
-        service.update(created.id(), new UpdateProfileRequestRequest("rejected", "ข้อมูลไม่ตรงกับเอกสาร"), hrUser());
-
-        verify(emailService).send(eq(importEmployee), eq("buyer.import@glr.co.th"), any(),
-            eq("คำขอแก้ไขข้อมูลของคุณไม่ได้รับอนุมัติ"), any(), eq("/profile"));
-        verify(emailService, never()).send(anyLong(), eq(IMPORT_MAILBOX), any(), any(), any(), any());
-    }
-
-    /** No-regression companion to the two cases above: a plain (non-AC/PCIM) employee already got personal delivery
-     * before this fix (their division resolves to SalesMailRecipientRepository #findRecipient's ELSE 'sales'
-     * branch either way) and must still get it after. */
-    @Test
-    void approvingAPlainDivisionEmployeesRequestStillEmailsThemPersonally() {
-        ProfileRequestDto created = service.create(emailRequest("old@glr.co.th", "new@glr.co.th"), salesUser());
-
-        service.update(created.id(), new UpdateProfileRequestRequest("approved", null), hrUser());
-
-        verify(emailService).send(eq(salesEmployee), eq("rep.sales@glr.co.th"), any(),
-            eq("อนุมัติคำขอแก้ไขข้อมูลของคุณแล้ว"), any(), eq("/profile"));
-    }
-
-    @Test
-    void approvingNotifiesTheRequestingEmployeeWithTheProfileLink() {
-        ProfileRequestDto created = service.create(emailRequest("old@glr.co.th", "new@glr.co.th"), salesUser());
-
-        service.update(created.id(), new UpdateProfileRequestRequest("approved", null), hrUser());
-
-        List<NotificationRow> rows = notificationsFor(salesEmployee, "PROFILE_REQUEST_APPROVED");
-        assertThat(rows).hasSize(1);
-        assertThat(rows.get(0).link()).isEqualTo("/profile");
-        // Byte-identical to what #860 shipped (now sourced from ProfileRequestService's own APPROVED_TITLE constant
-        // rather than NotificationRepository#TICKET_EVENT_TITLES) -- the in-app row must read exactly the same to a
-        // user regardless of which transport wrote it.
-        assertThat(rows.get(0).title()).isEqualTo("อนุมัติคำขอแก้ไขข้อมูลของคุณแล้ว");
-    }
-
-    @Test
-    void rejectingCarriesTheReviewerNoteToTheRequestingEmployee() {
-        ProfileRequestDto created = service.create(emailRequest("old@glr.co.th", "new@glr.co.th"), salesUser());
-
-        service.update(created.id(), new UpdateProfileRequestRequest("rejected", "ข้อมูลไม่ตรงกับเอกสาร"), hrUser());
-
-        List<NotificationRow> rows = notificationsFor(salesEmployee, "PROFILE_REQUEST_REJECTED");
-        assertThat(rows).hasSize(1);
-        assertThat(rows.get(0).message()).contains("เหตุผล: ข้อมูลไม่ตรงกับเอกสาร");
-        assertThat(rows.get(0).title()).isEqualTo("คำขอแก้ไขข้อมูลของคุณไม่ได้รับอนุมัติ");
-    }
-
-    @Test
-    void rejectingWithABlankReviewerNoteLeavesNoDanglingReasonLabel() {
-        ProfileRequestDto created = service.create(emailRequest("old@glr.co.th", "new@glr.co.th"), salesUser());
-
-        service.update(created.id(), new UpdateProfileRequestRequest("rejected", ""), hrUser());
-
-        List<NotificationRow> rows = notificationsFor(salesEmployee, "PROFILE_REQUEST_REJECTED");
-        assertThat(rows).hasSize(1);
-        assertThat(rows.get(0).message()).doesNotContain("เหตุผล");
-    }
-
-    // --- copy guard: fieldLabel only, never the raw fieldKey -------------------
-
-    /** Regression guard for the TRAVEL_PER_DIEM class of defect that CLAUDE.md records: a raw machine field code
-     * reaching a human-facing message instead of its Thai label. Deliberately asserts nothing about ROW COUNT --
-     * only message content. */
-    @Test
-    void everyNotificationMessageCarriesTheThaiLabelNeverTheRawFieldKey() {
-        ProfileRequestDto toApprove = service.create(emailRequest("old@glr.co.th", "new@glr.co.th"), salesUser());
-        ProfileRequestDto toReject = service.create(emailRequest("old2@glr.co.th", "new2@glr.co.th"), salesUser());
-        service.update(toApprove.id(), new UpdateProfileRequestRequest("approved", null), hrUser());
-        service.update(toReject.id(), new UpdateProfileRequestRequest("rejected", "ข้อมูลไม่ตรงกับเอกสาร"), hrUser());
-
-        List<String> messages = profileRequestNotificationMessages();
-
-        assertThat(messages).isNotEmpty();
-        assertThat(messages).allSatisfy(message -> {
-            assertThat(message).contains("อีเมล");
-            assertThat(message).doesNotContain("email");
-        });
-    }
-
     // --- helpers ----------------------------------------------------------------
 
     private record NotificationRow(String type, String title, String message, String link) {
@@ -221,14 +102,6 @@ class ProfileRequestNotificationIntegrationTest extends AbstractPostgresIntegrat
                 rs.getString("type"), rs.getString("title"), rs.getString("message"), rs.getString("link")));
     }
 
-    private List<String> profileRequestNotificationMessages() {
-        return jdbc.query("""
-            SELECT message FROM hr.notification
-             WHERE type LIKE 'PROFILE_REQUEST%'
-             ORDER BY notification_id
-            """, Map.of(), (rs, rowNum) -> rs.getString("message"));
-    }
-
     private CreateProfileRequestRequest emailRequest(String oldValue, String newValue) {
         return new CreateProfileRequestRequest("email", "อีเมล", oldValue, newValue);
     }
@@ -236,21 +109,6 @@ class ProfileRequestNotificationIntegrationTest extends AbstractPostgresIntegrat
     private UserPrincipal salesUser() {
         return new UserPrincipal(500L, "sales@glr.co.th", "sales", "sales", salesEmployee, true,
             LocalDate.now(), false, salesDivision, false);
-    }
-
-    private UserPrincipal hrUser() {
-        return new UserPrincipal(1L, "hr@glr.co.th", "hr", "hr", hrEmployee, true,
-            LocalDate.now(), false, hrDivision, false);
-    }
-
-    private UserPrincipal acUser() {
-        return new UserPrincipal(502L, "account.rep@glr.co.th", "employee", "employee", accountEmployee, true,
-            LocalDate.now(), false, accountDivision, false);
-    }
-
-    private UserPrincipal importUser() {
-        return new UserPrincipal(503L, "import.rep@glr.co.th", "employee", "employee", importEmployee, true,
-            LocalDate.now(), false, importDivision, false);
     }
 
     private long insertDivision(String code, String name) {

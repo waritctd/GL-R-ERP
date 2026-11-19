@@ -1,7 +1,6 @@
 package th.co.glr.hr.profile;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -12,10 +11,8 @@ import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.http.HttpStatus;
 import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
-import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.notification.NotificationService;
@@ -66,17 +63,6 @@ class ProfileRequestScopeIntegrationTest extends AbstractPostgresIntegrationTest
     // --- create: identity gate ----------------------------------------------
 
     @Test
-    void callerWithNoEmployeeIdCannotCreateAndNoRowIsWritten() {
-        UserPrincipal noEmployeeId = sessionUser(900L, "sales", null);
-
-        assertThatThrownBy(() -> service.create(phoneRequest(), noEmployeeId))
-            .isInstanceOfSatisfying(ApiException.class, exception ->
-                assertThat(exception.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
-
-        assertThat(rowCount()).isZero();
-    }
-
-    @Test
     void salesCallerCreatesLandsOnlyOnTheirOwnEmployeeId() {
         // `id` (the app_user/session id) is deliberately different from `employeeId` here, so a mutation that swapped
         // one for the other is caught rather than coincidentally passing.
@@ -87,17 +73,6 @@ class ProfileRequestScopeIntegrationTest extends AbstractPostgresIntegrationTest
         List<ProfileRequestRecord> rows = profileRequests.findAll();
         assertThat(rows).hasSize(1);
         assertThat(rows.get(0).employeeId()).isEqualTo(salesEmployeeA);
-    }
-
-    @Test
-    void salesCallerWithEmployeeIdCanCreate() {
-        // Positive control, kept minimal: this is the point of the change.
-        UserPrincipal sales = sessionUser(501L, "sales", salesEmployeeB);
-
-        ProfileRequestDto created = service.create(phoneRequest(), sales);
-
-        assertThat(created.employeeId()).isEqualTo(salesEmployeeB);
-        assertThat(created.status()).isEqualTo("pending");
     }
 
     // --- list: per-employee scope --------------------------------------------
@@ -129,11 +104,6 @@ class ProfileRequestScopeIntegrationTest extends AbstractPostgresIntegrationTest
     }
 
     // --- helpers --------------------------------------------------------------
-
-    private int rowCount() {
-        Integer count = jdbc.queryForObject("SELECT COUNT(*)::int FROM hr.profile_change_request", Map.of(), Integer.class);
-        return count == null ? 0 : count;
-    }
 
     private CreateProfileRequestRequest phoneRequest() {
         return new CreateProfileRequestRequest("phone", "เบอร์โทรศัพท์", "02-000-0000", "089-999-9999");

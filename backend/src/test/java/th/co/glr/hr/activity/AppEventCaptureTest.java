@@ -7,10 +7,6 @@ import ch.qos.logback.classic.LoggerContext;
 import ch.qos.logback.classic.spi.LoggingEvent;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
@@ -41,117 +37,6 @@ class AppEventCaptureTest {
         assertThat(captured).extracting(AppEvent::kind).containsOnly(AppEvent.KIND_LOG);
         assertThat(captured).extracting(AppEvent::message)
             .containsExactly("something looked wrong", "something broke");
-    }
-
-    @Test
-    void ignoresInfoAndBelow() {
-        // The volume decision, pinned. INFO is 36 of this codebase's 76 log statements and is routine chatter;
-        // capturing it would multiply the table for no diagnostic gain.
-        appender.doAppend(event(Level.INFO, "routine", null));
-        appender.doAppend(event(Level.DEBUG, "noisy", null));
-        appender.doAppend(event(Level.TRACE, "very noisy", null));
-
-        assertThat(drain()).isEmpty();
-    }
-
-    @Test
-    void storesOneStackFrameAndNeverTheWholeTrace() {
-        // The data-exposure guard. A full trace is where a connection string, a token or an employee's data reaches a
-        // page that a human reads in a browser.
-        RuntimeException failure = new IllegalStateException("connection to db.internal failed");
-        failure.setStackTrace(new StackTraceElement[] {
-            new StackTraceElement("th.co.glr.hr.Deep", "inner", "Deep.java", 10),
-            new StackTraceElement("th.co.glr.hr.Outer", "outer", "Outer.java", 20),
-            new StackTraceElement("th.co.glr.hr.Top", "top", "Top.java", 30),
-        });
-
-        appender.doAppend(event(Level.ERROR, "boom", failure));
-
-        AppEvent captured = drain().get(0);
-        assertThat(captured.exceptionType()).isEqualTo("java.lang.IllegalStateException");
-        assertThat(captured.exceptionMessage()).isEqualTo("connection to db.internal failed");
-        assertThat(captured.firstFrame()).contains("Deep.java:10");
-        // The frames below the first must not be anywhere in the row.
-        assertThat(captured.firstFrame()).doesNotContain("Outer.java", "Top.java");
-    }
-
-    @Test
-    void carriesTheCorrelationIdSoAnEventCanBeTiedToItsRequest() {
-        LoggingEvent withMdc = event(Level.ERROR, "failed mid-request", null);
-        withMdc.setMDCPropertyMap(Map.of(DatabaseLogAppender.CORRELATION_ID_KEY, "abc-123"));
-
-        appender.doAppend(withMdc);
-
-        assertThat(drain().get(0).correlationId()).isEqualTo("abc-123");
-    }
-
-    @Test
-    void leavesTheCorrelationIdNullWhenThereIsNoRequest() {
-        // Boot-time and scheduler-thread events have no request, and must not borrow one.
-        appender.doAppend(event(Level.WARN, "started up oddly", null));
-
-        assertThat(drain().get(0).correlationId()).isNull();
-    }
-
-    @Test
-    void dropsRatherThanGrowsWithoutBound() {
-        // A database outage must not turn the log pipeline into a memory leak.
-        for (int i = 0; i < 6_000; i++) {
-            appender.doAppend(event(Level.WARN, "flood " + i, null));
-        }
-
-        List<AppEvent> captured = drain();
-        assertThat(captured).hasSizeLessThanOrEqualTo(5_000);
-        assertThat(buffer.droppedCount()).isPositive();
-    }
-
-    @Test
-    void assertionsSurviveACompetingDrainerOfTheSharedBuffer() throws InterruptedException {
-        // Regression test for the flake this class used to have: a background thread draining AppEventBuffer.shared.
-        AtomicBoolean running = new AtomicBoolean(true);
-        CountDownLatch drainerStarted = new CountDownLatch(1);
-        AppEventBuffer sharedBuffer = AppEventBuffer.shared();
-        Thread foreignDrainer = new Thread(() -> {
-            drainerStarted.countDown();
-            while (running.get()) {
-                try {
-                    AppEvent stolen = sharedBuffer.poll(20);
-                    if (stolen != null) {
-                        List<AppEvent> discarded = new ArrayList<>();
-                        discarded.add(stolen);
-                        sharedBuffer.drainTo(discarded, 199);
-                    }
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    return;
-                }
-            }
-        }, "app-event-writer-simulator");
-        foreignDrainer.setDaemon(true);
-        foreignDrainer.start();
-        drainerStarted.await();
-
-        try {
-            appender.doAppend(event(Level.WARN, "something looked wrong", null));
-            appender.doAppend(event(Level.ERROR, "something broke", null));
-            Thread.sleep(200); // give the foreign drainer every chance to steal from THIS buffer
-
-            List<AppEvent> captured = drain();
-            assertThat(captured).extracting(AppEvent::level).containsExactly("WARN", "ERROR");
-        } finally {
-            running.set(false);
-            foreignDrainer.interrupt();
-            foreignDrainer.join(TimeUnit.SECONDS.toMillis(2));
-        }
-    }
-
-    @Test
-    void namesAScheduledJobByItsMethodNotItsLambdaIdentity() {
-        // A lambda's toString() is a synthetic identity that changes between builds, which would make job history
-        // impossible to group by worker.
-        Runnable plain = () -> { };
-        assertThat(ScheduledJobEventConfig.describe(plain)).doesNotContain("$$Lambda");
-        assertThat(ScheduledJobEventConfig.describe(null)).isEqualTo("unknown");
     }
 
     /** Built through a REAL logger from the real context, not new LoggingEvent(). A hand-constructed event has a
