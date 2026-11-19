@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import java.time.LocalDate;
 import java.time.ZoneId;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
@@ -47,6 +48,21 @@ class DealActivitySampleSentIntegrationTest extends AbstractDealQuotationSlice2I
         assertThat(logged.createdById()).isEqualTo(salesActor.id());
         assertThat(sampleRows(deal)).isEqualTo(1);
         assertThat(nextFollowUp(deal)).isEqualTo(TODAY.plusDays(7));
+    }
+
+    @Test
+    void whatWasSentIsRequired_blankOrMissingIs400_andNothingIsWritten() {
+        long deal = deal(salesActor);
+        LocalDate original = nextFollowUp(deal);
+
+        for (String blank : Arrays.asList(null, "", "   ")) {
+            ApiExceptionAssert.of(refusal(() -> ticketService.addActivity(deal,
+                    new DealActivityRequest(TODAY, SAMPLE_SENT, blank, TODAY.plusDays(3)), salesActor),
+                HttpStatus.BAD_REQUEST)).messageContains("ส่งอะไร");
+        }
+
+        assertThat(sampleRows(deal)).isZero();
+        assertThat(nextFollowUp(deal)).isEqualTo(original);
     }
 
     @Test
