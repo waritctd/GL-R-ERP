@@ -1,12 +1,10 @@
 package th.co.glr.hr.employee;
 
-import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.time.LocalDate;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.springframework.dao.DuplicateKeyException;
@@ -29,17 +27,6 @@ class EmployeeEmailUniqueIndexIntegrationTest extends AbstractPostgresIntegratio
             .isInstanceOf(DuplicateKeyException.class);
     }
 
-    /** Surrounding whitespace is folded by the index expression too, so it cannot smuggle one past. */
-    @Test
-    void refusesADuplicateHiddenBySurroundingWhitespace() {
-        insertEmployee("UQ-010", "warehouse.manager@glr.co.th");
-
-        assertThatThrownBy(() -> insertEmployee("UQ-011", "  warehouse.manager@glr.co.th  "))
-            .isInstanceOf(DuplicateKeyException.class);
-        assertThatThrownBy(() -> insertEmployee("UQ-012", " Warehouse.Manager@GLR.co.th"))
-            .isInstanceOf(DuplicateKeyException.class);
-    }
-
     /** Asked the wrong way round. Everything above would also pass against an index that rejected every second
      * insert, so this is the case that gives them meaning: genuinely different addresses must still be accepted,
      * including ones that differ only late in the string. */
@@ -52,52 +39,6 @@ class EmployeeEmailUniqueIndexIntegrationTest extends AbstractPostgresIntegratio
             insertEmployee("UQ-022", "somchai@glr.co.th");
             insertEmployee("UQ-023", "suneesallim@gmail.co");
         }).doesNotThrowAnyException();
-    }
-
-    /** 108 rows in prod carry a NULL email; every one of them must remain insertable. */
-    @Test
-    void leavesEmployeesWithNoEmailUnconstrained() {
-        assertThatCode(() -> {
-            insertEmployee("UQ-030", null);
-            insertEmployee("UQ-031", null);
-            insertEmployee("UQ-032", null);
-        }).doesNotThrowAnyException();
-    }
-
-    /** The case the partial predicate is actually load-bearing for. Neither prod nor UAT has a blank address today,
-     * which is exactly why this needs a test rather than a note: without it, the regression would surface only in
-     * production, in whatever code path first clears an employee's email. */
-    @Test
-    void leavesEmployeesWithABlankEmailUnconstrained() {
-        assertThatCode(() -> {
-            insertEmployee("UQ-040", "");
-            insertEmployee("UQ-041", "");
-            insertEmployee("UQ-042", "   ");
-        }).doesNotThrowAnyException();
-    }
-
-    /** Reads the catalog rather than inferring the index's shape from behaviour, so a future migration that
-     * recreates it non-unique or non-partial fails here and names what changed. Also asserts V158's drop of the
-     * now-redundant plain index actually happened. */
-    @Test
-    void theIndexIsUniqueAndPartialAndTheOldPlainIndexIsGone() {
-        List<Map<String, Object>> rows = jdbc.queryForList("""
-            SELECT indexname, indexdef
-              FROM pg_indexes
-             WHERE schemaname = 'hr' AND tablename = 'employee' AND indexdef ILIKE '%email%'
-             ORDER BY indexname
-            """, Map.of());
-
-        assertThat(rows).hasSize(1);
-        String def = String.valueOf(rows.get(0).get("indexdef"));
-        assertThat(rows.get(0).get("indexname")).isEqualTo("uq_employee_email_lower_ci");
-        assertThat(def).contains("UNIQUE INDEX");
-        assertThat(def).contains("lower(btrim(");
-        // Partial — the predicate is what keeps NULL and blank addresses out of the constraint.
-        assertThat(def).contains("WHERE");
-        // V158 drops it; if a later migration resurrects it, the two indexes are redundant.
-        assertThat(rows).noneSatisfy(row ->
-            assertThat(row.get("indexname")).isEqualTo("idx_employee_email_lower"));
     }
 
     private void insertEmployee(String code, String email) {

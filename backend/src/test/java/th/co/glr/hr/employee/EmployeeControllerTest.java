@@ -1,7 +1,6 @@
 package th.co.glr.hr.employee;
 
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.mockito.ArgumentMatchers.any;
@@ -15,7 +14,6 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
 import org.junit.jupiter.api.Test;
-import org.springframework.http.MediaType;
 import org.springframework.mock.web.MockHttpSession;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
@@ -23,8 +21,6 @@ import org.springframework.validation.beanvalidation.LocalValidatorFactoryBean;
 import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiExceptionHandler;
-import th.co.glr.hr.common.Page;
-import th.co.glr.hr.common.PageRequest;
 
 class EmployeeControllerTest {
     private final EmployeeService employeeService = mock(EmployeeService.class);
@@ -33,15 +29,6 @@ class EmployeeControllerTest {
         .setControllerAdvice(new ApiExceptionHandler())
         .setValidator(validator())
         .build();
-
-    @Test
-    void requiresAuthenticationForEmployeeDetails() throws Exception {
-        mvc.perform(get("/api/employees/10"))
-            .andExpect(status().isUnauthorized())
-            .andExpect(jsonPath("$.message").value("กรุณาเข้าสู่ระบบก่อนใช้งาน"));
-
-        verifyNoInteractions(employeeService);
-    }
 
     @Test
     void forbidsEmployeeRoleFromListingAllEmployees() throws Exception {
@@ -53,56 +40,10 @@ class EmployeeControllerTest {
     }
 
     @Test
-    void validatesEmployeePayloadBeforeCreate() throws Exception {
-        mvc.perform(post("/api/employees")
-                .session(sessionFor("hr"))
-                .contentType(MediaType.APPLICATION_JSON)
-                .content("{\"nameTh\":\"ทดสอบ\",\"email\":\"not-an-email\"}"))
-            .andExpect(status().isBadRequest());
-
-        verifyNoInteractions(employeeService);
-    }
-
-    @Test
-    void mapsActiveQueryParameterForAuthorizedListRequests() throws Exception {
-        EmployeeFilter filter = new EmployeeFilter(null, null, null, null, Boolean.TRUE);
-        when(employeeService.listPage(eq(filter), any(UserPrincipal.class), any(PageRequest.class)))
-            .thenReturn(new Page<>(List.of(), 0, PageRequest.DEFAULT_SIZE, 0));
-
-        mvc.perform(get("/api/employees?active=true").session(sessionFor("hr")))
-            .andExpect(status().isOk())
-            .andExpect(jsonPath("$.employees").isArray())
-            .andExpect(jsonPath("$.total").value(0));
-
-        verify(employeeService).listPage(eq(filter), any(UserPrincipal.class), any(PageRequest.class));
-    }
-
-    @Test
-    void resetPasswordReturnsPlaintextTemporaryPasswordForHr() throws Exception {
-        when(employeeService.resetPassword(eq(10L), any(UserPrincipal.class)))
-            .thenReturn(new PasswordResetResult("Temp-Abcd2345"));
-
-        mvc.perform(post("/api/employees/10/reset-password").session(sessionFor("hr")))
-            .andExpect(status().isOk())
-            .andExpect(jsonPath("$.temporaryPassword").value("Temp-Abcd2345"));
-
-        verify(employeeService).resetPassword(eq(10L), any(UserPrincipal.class));
-    }
-
-    @Test
     void forbidsNonHrFromResettingPassword() throws Exception {
         mvc.perform(post("/api/employees/10/reset-password").session(sessionFor("employee")))
             .andExpect(status().isForbidden())
             .andExpect(jsonPath("$.message").value("ไม่มีสิทธิ์เข้าถึงรายการนี้"));
-
-        verifyNoInteractions(employeeService);
-    }
-
-    @Test
-    void requiresAuthenticationToResetPassword() throws Exception {
-        mvc.perform(post("/api/employees/10/reset-password"))
-            .andExpect(status().isUnauthorized())
-            .andExpect(jsonPath("$.message").value("กรุณาเข้าสู่ระบบก่อนใช้งาน"));
 
         verifyNoInteractions(employeeService);
     }

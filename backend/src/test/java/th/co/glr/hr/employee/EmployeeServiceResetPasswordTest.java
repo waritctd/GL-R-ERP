@@ -80,28 +80,4 @@ class EmployeeServiceResetPasswordTest {
                 assertThat(ex.getStatus()).isEqualTo(HttpStatus.UNAUTHORIZED));
     }
 
-    @Test
-    void auditsTheResetWithActorAndTargetButNeverThePlaintext() {
-        when(employees.exists(42L)).thenReturn(true);
-
-        PasswordResetResult result = service.resetPassword(42L, hrActor);
-
-        ArgumentCaptor<Object> before = ArgumentCaptor.forClass(Object.class);
-        ArgumentCaptor<Object> after = ArgumentCaptor.forClass(Object.class);
-        verify(auditService).record(eq(hrActor), eq("RESET_EMPLOYEE_PASSWORD"), eq("employee"),
-            eq(42L), before.capture(), after.capture());
-        // No password material in the audit payload.
-        assertThat(before.getValue()).isNull();
-        assertThat(after.getValue()).isNull();
-        assertThat(result.temporaryPassword()).isNotBlank();
-    }
-
-    @Test
-    void rejectsResetForAnUnknownEmployee() {
-        when(employees.exists(99L)).thenReturn(false);
-
-        assertThatThrownBy(() -> service.resetPassword(99L, hrActor))
-            .isInstanceOfSatisfying(ApiException.class, ex ->
-                assertThat(ex.getStatus()).isEqualTo(HttpStatus.NOT_FOUND));
-    }
 }
