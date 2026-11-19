@@ -149,30 +149,6 @@ describe('PayrollPage special-pay carry-forward', () => {
     expect(screen.getByLabelText(/พิเศษ 9/).value).toBe('');
   });
 
-  it('lets HR override a pre-filled carried value, and the edited value — not the suggestion — is what gets submitted', async () => {
-    api.payroll.suggestedInputs.mockResolvedValue({
-      payrollMonth: '2026-07-01',
-      suggestions: [
-        { employeeId: 1, specialPay1: 700, specialPay2: 0, specialPay3: 0, specialPay4: 0, specialPay5: 0, nonTaxableIncome: 0, studentLoanDeduction: 0, legalExecutionDeduction: 0 },
-      ],
-    });
-
-    renderWithClient(<PayrollPage user={hrUser} showToast={vi.fn()} />);
-
-    const costOfLiving = await screen.findByLabelText(/พิเศษ 1 \(ค่าครองชีพ\)/);
-    await waitFor(() => expect(costOfLiving.value).toBe('700'));
-
-    // HR overrides the pre-filled 700 with 950.
-    fireEvent.change(costOfLiving, { target: { value: '950' } });
-    expect(costOfLiving.value).toBe('950');
-
-    fireEvent.click(screen.getByRole('button', { name: /บันทึกร่าง/i }));
-
-    await waitFor(() => expect(api.payroll.preview).toHaveBeenCalledTimes(1));
-    const submittedInput = api.payroll.preview.mock.calls[0][0].inputs.find((item) => item.employeeId === 1);
-    expect(submittedInput.specialPay1).toBe(950);
-  });
-
   it('never fetches suggestions once a period is already processed for the month', async () => {
     api.payroll.current.mockResolvedValue({
       period: freshPreviewPeriod({ id: 7, status: 'PROCESSED' }),

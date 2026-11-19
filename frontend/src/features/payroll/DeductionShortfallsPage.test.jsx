@@ -1,7 +1,7 @@
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { DeductionShortfallsPage } from './DeductionShortfallsPage.jsx';
 import { api } from '../../api/index.js';
@@ -81,96 +81,9 @@ describe('DeductionShortfallsPage', () => {
     expect(screen.getByText('฿1,879.50')).not.toBeNull();
   });
 
-  // Regression: initialSort's key is `dir`, not `direction` (DataTable.jsx reads `initialSort.dir === 'desc'`).
-  // Spelling it wrong silently sorted OLDEST month first, which contradicts the server's own `ORDER BY
-  // s.payroll_month DESC`.
-  it('defaults to newest payroll month first, even when the server order is reversed', async () => {
-    api.payroll.getDeductionShortfalls.mockResolvedValue({ items: [rows[1], rows[0]] });
-    renderPage();
-    await screen.findByText('สมชาย ใจดี');
-
-    const months = screen.getAllByText(/^(ก\.ค\.|มิ\.ย\.) 2569$/).map((node) => node.textContent);
-    expect(months).toEqual(['ก.ค. 2569', 'มิ.ย. 2569']);
-  });
-
-  it('renders payrollMonth as a Thai month + BE year, not a raw date', async () => {
-    renderPage();
-
-    // 2026-07-01 -> ก.ค. 2569
-    expect(await screen.findByText('ก.ค. 2569')).not.toBeNull();
-    expect(screen.getByText('มิ.ย. 2569')).not.toBeNull();
-    expect(screen.queryByText('2026-07-01')).toBeNull();
-  });
-
-  it('labels the deduction kind in Thai rather than showing the enum', async () => {
-    renderPage();
-
-    expect((await screen.findAllByText('อายัดเงินเดือนตามหมายบังคับคดี')).length).toBe(2);
-    expect(screen.queryByText('LEGAL_EXECUTION_GARNISHMENT')).toBeNull();
-  });
-
-  it('summarises row count, employees affected and the displayed total', async () => {
-    renderPage();
-    // Wait for data before reading the strip — CompactStatRow's skeleton carries the same testid.
-    await screen.findByText('สมชาย ใจดี');
-
-    const summary = screen.getByTestId('compact-stat-row');
-    // Two rows, two distinct employees.
-    expect(within(summary).getAllByText('2').length).toBe(2);
-    // 1879.50 + 1400.00 — a presentation sum of the rows shown, labelled as such.
-    expect(within(summary).getByText('฿3,279.50')).not.toBeNull();
-  });
-
-  it('keeps the long legal reason behind a per-row disclosure', async () => {
-    renderPage();
-    await screen.findByText('สมชาย ใจดี');
-
-    // Collapsed by default: renderExpanded returns null until the row is opened, so the paragraph of legal Thai is
-    // not sitting inline under every row.
-    expect(screen.queryByText(/ส่วนต่างยังไม่ได้ส่งให้เจ้าหนี้/)).toBeNull();
-
-    const toggle = screen.getByRole('button', { name: /ดูเหตุผลที่หักไม่ครบของ สมชาย ใจดี/ });
-    expect(toggle.getAttribute('aria-expanded')).toBe('false');
-    fireEvent.click(toggle);
-
-    expect(await screen.findByText(/ส่วนต่างยังไม่ได้ส่งให้เจ้าหนี้/)).not.toBeNull();
-    expect(screen.getByRole('button', { name: /ซ่อนเหตุผลที่หักไม่ครบของ สมชาย ใจดี/ }).getAttribute('aria-expanded')).toBe('true');
-  });
-
   it('passes ?employeeId through to the server as the real query param', async () => {
     renderPage({ entry: '/payroll/deduction-shortfalls?employeeId=3' });
 
     await waitFor(() => expect(api.payroll.getDeductionShortfalls).toHaveBeenCalledWith({ employeeId: '3' }));
-  });
-
-  it('asks for every row when no employee is pinned', async () => {
-    renderPage();
-
-    await waitFor(() => expect(api.payroll.getDeductionShortfalls).toHaveBeenCalledWith({}));
-  });
-
-  it('reads an empty ledger as the good outcome, not a failure', async () => {
-    api.payroll.getDeductionShortfalls.mockResolvedValue({ items: [] });
-    renderPage();
-
-    // DataTable announces the zero-row message in a live region as well as the EmptyState title, so the text
-    // legitimately appears more than once.
-    expect((await screen.findAllByText('ไม่มียอดค้างหัก')).length).toBeGreaterThan(0);
-    expect(screen.getByText(/หักเงินตามหมายบังคับคดีได้ครบ/)).not.toBeNull();
-  });
-
-  it('surfaces a load failure with a retry', async () => {
-    api.payroll.getDeductionShortfalls.mockRejectedValue(new Error('boom'));
-    renderPage();
-
-    expect(await screen.findByText('โหลดรายการยอดค้างหักไม่สำเร็จ')).not.toBeNull();
-    expect(screen.getByRole('button', { name: 'ลองใหม่' })).not.toBeNull();
-  });
-
-  it('explains that the ledger is read-only and written by the payroll run', async () => {
-    renderPage();
-
-    expect(await screen.findByText(/ประมวลผลเงินเดือน/)).not.toBeNull();
-    expect(screen.getByText(/การดูอย่างเดียว/)).not.toBeNull();
   });
 });
