@@ -2656,7 +2656,8 @@ public class TicketRepository {
     /** One read of every downstream row an undo must not orphan. "Bid or split" = the bid path wrote its
      * BID_OUTCOME_RECORDED right AFTER the promotion event in the same transaction (DealPartyService#recordBidOutcome),
      * so an outcome recorded EARLIER on the deal does not count; or the deal is a split child (DEAL_SPLIT_FROM_PARENT)
-     * or has split children. "Manual stock decision" = a STOCK_RESERVED or
+     * or has split children (a child with no kind counts as a split; only ADD_ON children are exempt: an undo
+     * deletes only this deal's own ticket_item rows, never a quotation item an add-on reuses). "Manual stock decision" = a STOCK_RESERVED or
      * PROCUREMENT_SOURCE_DECIDED event after the (latest) promotion event, or the V208 latch; the confirmation's own
      * cover of จากสต็อก lines writes neither. */
     public UndoFacts undoConfirmationFacts(long ticketId) {
@@ -2666,7 +2667,8 @@ public class TicketRepository {
                         AND event_id > COALESCE((SELECT MAX(event_id) FROM sales.ticket_event
                                                   WHERE ticket_id = :t AND kind = 'DEAL_PROMOTED_FROM_QUOTATION'), 0))
                OR EXISTS(SELECT 1 FROM sales.ticket_event WHERE ticket_id = :t AND kind = 'DEAL_SPLIT_FROM_PARENT')
-               OR EXISTS(SELECT 1 FROM sales.ticket WHERE parent_ticket_id = :t AND child_kind = 'BID_SPLIT')) AS bid_or_split,
+               OR EXISTS(SELECT 1 FROM sales.ticket WHERE parent_ticket_id = :t
+                          AND COALESCE(child_kind, 'BID_SPLIT') = 'BID_SPLIT')) AS bid_or_split,
               EXISTS(SELECT 1 FROM sales.deposit_notice WHERE ticket_id = :t AND status <> 'DRAFT') AS notice,
               EXISTS(SELECT 1 FROM sales.payment_receipt WHERE ticket_id = :t) AS receipt,
               EXISTS(SELECT 1 FROM sales.remaining_invoice WHERE ticket_id = :t) AS invoice,

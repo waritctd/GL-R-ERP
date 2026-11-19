@@ -129,10 +129,9 @@ export function ProjectQuotationsByOrder({ orders, currentId, currentContent }) 
       },
     ])),
   });
-  let at = 0;
   return (
     <div className="flex flex-col gap-4" data-testid="project-quotations-by-order">
-      {orders.map((order) => {
+      {orders.map((order, i) => {
         const heading = (
           <h2 className="m-0 flex items-baseline justify-between gap-2 px-1 text-[0.8125rem] font-bold text-text-secondary">
             ออเดอร์ {order.orderNo}
@@ -147,8 +146,8 @@ export function ProjectQuotationsByOrder({ orders, currentId, currentContent }) 
             </section>
           );
         }
+        const at = orders.slice(0, i).filter((o) => o.ticketId !== currentId).length * 2;
         const [direct, detail] = [results[at], results[at + 1]];
-        at += 2;
         const loading = direct?.isLoading || detail?.isLoading;
         const failed = direct?.isError || detail?.isError;
         const seen = new Set((direct?.data ?? []).map((q) => q.number));

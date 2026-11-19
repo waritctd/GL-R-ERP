@@ -513,7 +513,7 @@ class DealQuotationUndoOrderConfirmationIntegrationTest extends DirectQuotationD
     void cutOff_aDealThatHasSplitChildren() {
         Confirmed c = confirmedDeal();
         long child = pipelineTicket(salesActor);
-        jdbc.update("UPDATE sales.ticket SET parent_ticket_id = :p WHERE ticket_id = :c", Map.of("p", c.deal(), "c", child));
+        jdbc.update("UPDATE sales.ticket SET parent_ticket_id = :p, child_kind = 'BID_SPLIT' WHERE ticket_id = :c", Map.of("p", c.deal(), "c", child));
 
         assertRefusedAndNothingWritten(c);
     }
