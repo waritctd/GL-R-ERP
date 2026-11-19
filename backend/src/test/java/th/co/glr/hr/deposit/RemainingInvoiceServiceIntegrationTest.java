@@ -17,6 +17,7 @@ import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.catalog.CatalogRepository;
 import th.co.glr.hr.common.ApiException;
+import th.co.glr.hr.common.ThaiText;
 import th.co.glr.hr.customer.ContactRepository;
 import th.co.glr.hr.customer.CustomerDto;
 import th.co.glr.hr.customer.CustomerRepository;
@@ -156,7 +157,7 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
 
         DepositNoticeRepository depositNoticeRepository = new DepositNoticeRepository(jdbc);
         depositNoticeService = new DepositNoticeService(depositNoticeRepository, tickets, notifications,
-            new DepositNoticePdfRenderer(), customers, quotationRepository, th.co.glr.hr.support.DocumentBundles.noDownload(jdbc));
+            new DepositNoticePdfRenderer(), customers, quotationRepository, th.co.glr.hr.support.DocumentBundles.noDownload(jdbc), new th.co.glr.hr.deposit.RemainingInvoiceRepository(jdbc));
 
         orderConfirmation = new OrderConfirmationService(
             pricingRequests, tickets, ticketService, quotationRepository, depositNoticeService, notifications);
@@ -268,6 +269,34 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
             List.of(invoiceIssuedMessage(fixture.ticketId(), salesActor, v1, false),
                 invoiceIssuedMessage(fixture.ticketId(), salesActor, v2, true)),
             accountId);
+    }
+
+    /** Editing an ISSUED invoice so its grand total changes tells account (they collect against it), with the doc number
+     * and old -> new total; an edit that leaves the total alone raises nothing. */
+    @Test
+    void updateDraft_onAnIssuedInvoice_notifiesAccountOnlyWhenTheGrandTotalChanges() {
+        long accountId = mailer.seedRoleEmployee("account");
+        DealFixture fixture = buildAcceptedDeal(salesActor, "EditedNotify");
+        RemainingInvoiceDocumentDto issued = remainingInvoiceService.issue(
+            remainingInvoiceService.createDraft(fixture.ticketId(), null, salesActor).id(), salesActor);
+
+        remainingInvoiceService.updateDraft(issued.id(),
+            new RemainingInvoiceDraftRequest(null, "REF-NO-MONEY-CHANGE", null, null, null, null), salesActor);
+        mailer.assertNoNotice("EDITED", "แก้ไขเอกสารที่ออกเลขแล้ว");
+
+        // the stored total drifts (as when the quotation/notice behind it moved); the next edit re-snapshots it back
+        jdbc.update("UPDATE sales.remaining_invoice SET grand_total = grand_total + 100 WHERE id = :id",
+            Map.of("id", issued.id()));
+        BigDecimal drifted = issued.grandTotal().add(new BigDecimal("100"));
+        remainingInvoiceService.updateDraft(issued.id(),
+            new RemainingInvoiceDraftRequest(null, "REF-TOTAL-CHANGE", null, null, null, null), salesActor);
+
+        var s = tickets.findById(fixture.ticketId()).orElseThrow().summary();
+        mailer.assertRoleNotice("account", "EDITED", "แก้ไขเอกสารที่ออกเลขแล้ว",
+            "แก้ไขใบแจ้งหนี้ " + issued.docNumber() + " (ออกเลขแล้ว)\n"
+                + "ดีล " + s.code() + " · ลูกค้า " + s.customerName() + " · ยอดชำระรวม VAT "
+                + ThaiText.money(drifted) + " → " + ThaiText.money(issued.grandTotal()) + " บาท",
+            "/finance/deals/" + fixture.ticketId(), accountId);
     }
 
     @Test
@@ -429,10 +458,10 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
     }
 
     /** A fresh remaining invoice (here drafted by the KEYER) defaults to the deal owner; a DRAFT can pick the deal's
-     * keyer and the file prints them; someone outside the deal is 400; an ISSUED one cannot change (409); a revision
-     * keeps the chosen preparer. */
+     * keyer and the file prints them; someone outside the deal is 400; an ISSUED one can still be edited in place (same
+     * number and status); a revision keeps the chosen preparer. */
     @Test
-    void remainingInvoice_preparerDefaultsToTheDealOwner_isSelectableOnDraft_andLockedOnceIssued() throws Exception {
+    void remainingInvoice_preparerDefaultsToTheDealOwner_isSelectableOnDraft_andStillEditableOnceIssued() throws Exception {
         DealFixture fixture = buildAcceptedDeal(salesActor, "RiPickPreparer");
         setKeyer(fixture, otherSalesRepId);
         RemainingInvoiceDocumentDto draft = remainingInvoiceService.createDraft(fixture.ticketId(), null, otherSalesActor);
@@ -452,15 +481,15 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
         RemainingInvoiceDocumentDto issued = remainingInvoiceService.issue(draft.id(), otherSalesActor);
         assertThat(preparerLine(remainingInvoiceService.file(issued.id(), otherSalesActor)))
             .isEqualTo("( " + thaiName(otherSalesRepId) + " )");
-        assertThatThrownBy(() -> remainingInvoiceService.updateDraft(issued.id(),
-                new RemainingInvoiceDraftRequest(null, null, null, null, null, salesRepId), otherSalesActor))
-            .isInstanceOfSatisfying(ApiException.class,
-                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
-        assertThat(remainingInvoiceService.get(issued.id(), otherSalesActor).preparerId()).isEqualTo(otherSalesRepId);
+        RemainingInvoiceDocumentDto reassigned = remainingInvoiceService.updateDraft(issued.id(),
+            new RemainingInvoiceDraftRequest(null, null, null, null, null, salesRepId), otherSalesActor);
+        assertThat(reassigned.status()).isEqualTo("ISSUED");
+        assertThat(reassigned.docNumber()).isEqualTo(issued.docNumber());
+        assertThat(remainingInvoiceService.get(issued.id(), otherSalesActor).preparerId()).isEqualTo(salesRepId);
 
         RemainingInvoiceDocumentDto revision = remainingInvoiceService.revise(issued.id(), otherSalesActor);
-        assertThat(revision.preparerId()).isEqualTo(otherSalesRepId);
-        assertThat(revision.preparerName()).isEqualTo(thaiName(otherSalesRepId));
+        assertThat(revision.preparerId()).isEqualTo(salesRepId);
+        assertThat(revision.preparerName()).isEqualTo(thaiName(salesRepId));
     }
 
     /** Both UIs send the current preparerId on every save: a stored preparer who is no longer an option (inactive here)
@@ -1138,6 +1167,187 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
         RemainingInvoiceDocumentDto reread = remainingInvoiceService.get(draft.id(), salesActor);
         assertThat(reread.reference()).isNotEqualTo("SHOULD-NEVER-STICK");
         assertThat(reread.reference()).isEqualTo(draft.reference());
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────────────
+    // Owner ruling: ISSUED notices/invoices are editable IN PLACE (no payment lock); SUPERSEDED stay read-only.
+    // ─────────────────────────────────────────────────────────────────────────────────────
+
+    private List<Map<String, Object>> editedEvents(long ticketId) {
+        return jdbc.queryForList(
+            "SELECT actor_id, message FROM sales.ticket_event WHERE ticket_id = :t AND kind = 'EDITED'",
+            Map.of("t", ticketId));
+    }
+
+    private DepositNoticeDraftRequest noticeWithPercent(DepositNoticeDto n, String percent) {
+        return new DepositNoticeDraftRequest(n.customerName(), n.customerTaxId(), n.customerAddress(),
+            n.projectName(), n.reference(), new BigDecimal(percent), n.notes(), null);
+    }
+
+    @Test
+    void updateDraft_onAnIssuedInvoice_editsInPlace_keepsNumberAndStatus_andWritesAnAuditEvent() {
+        DealFixture fixture = buildAcceptedDeal(salesActor, "EditIssuedRi");
+        RemainingInvoiceDocumentDto issued = remainingInvoiceService.issue(
+            remainingInvoiceService.createDraft(fixture.ticketId(), null, salesActor).id(), salesActor);
+        assertThat(editedEvents(fixture.ticketId())).isEmpty();
+
+        RemainingInvoiceDocumentDto edited = remainingInvoiceService.updateDraft(issued.id(),
+            new RemainingInvoiceDraftRequest(null, "PO-ISSUED-EDIT", "DEP-ISSUED-EDIT", LocalDate.of(2026, 11, 20),
+                List.of("edited note")), salesActor);
+
+        assertThat(edited.id()).isEqualTo(issued.id());
+        assertThat(edited.status()).isEqualTo("ISSUED");
+        assertThat(edited.docNumber()).isEqualTo(issued.docNumber());
+        assertThat(edited.version()).isEqualTo(issued.version());
+        assertThat(edited.reference()).isEqualTo("PO-ISSUED-EDIT");
+        assertThat(edited.depositReference()).isEqualTo("DEP-ISSUED-EDIT");
+        assertThat(edited.docDate()).isEqualTo(LocalDate.of(2026, 11, 20));
+        assertThat(edited.notes()).containsExactly("edited note");
+        RemainingInvoiceDocumentDto reread = remainingInvoiceService.get(issued.id(), salesActor);
+        assertThat(reread.status()).isEqualTo("ISSUED");
+        assertThat(reread.reference()).isEqualTo("PO-ISSUED-EDIT");
+
+        List<Map<String, Object>> events = editedEvents(fixture.ticketId());
+        assertThat(events).hasSize(1);
+        assertThat(((Number) events.get(0).get("actor_id")).longValue()).isEqualTo(salesRepId);
+        String message = (String) events.get(0).get("message");
+        assertThat(message).contains(issued.docNumber()).contains("PO-ISSUED-EDIT");
+        assertThat(message).contains(issued.reference() == null ? "" : issued.reference());
+    }
+
+    @Test
+    void updateDraft_onAnIssuedInvoice_nonOwnerRolesAreRefused_rowAndAuditUntouched() {
+        DealFixture fixture = buildAcceptedDeal(salesActor, "EditIssuedRiAuthz");
+        RemainingInvoiceDocumentDto issued = remainingInvoiceService.issue(
+            remainingInvoiceService.createDraft(fixture.ticketId(), null, salesActor).id(), salesActor);
+
+        for (UserPrincipal intruder : List.of(otherSalesActor, ceoActor, importActor, accountActor, salesManagerActor)) {
+            assertThatThrownBy(() -> remainingInvoiceService.updateDraft(issued.id(),
+                    new RemainingInvoiceDraftRequest(null, "SHOULD-NEVER-STICK", null, null, null), intruder))
+                .isInstanceOfSatisfying(ApiException.class,
+                    e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+        }
+
+        RemainingInvoiceDocumentDto reread = remainingInvoiceService.get(issued.id(), salesActor);
+        assertThat(reread.reference()).isEqualTo(issued.reference());
+        assertThat(editedEvents(fixture.ticketId())).isEmpty();
+    }
+
+    @Test
+    void updateDraft_onASupersededInvoice_isStillRefusedWith409() {
+        DealFixture fixture = buildAcceptedDeal(salesActor, "EditSupersededRi");
+        RemainingInvoiceDocumentDto v1 = remainingInvoiceService.issue(
+            remainingInvoiceService.createDraft(fixture.ticketId(), null, salesActor).id(), salesActor);
+        remainingInvoiceService.issue(remainingInvoiceService.revise(v1.id(), salesActor).id(), salesActor);
+        assertThat(remainingInvoiceService.get(v1.id(), salesActor).status()).isEqualTo("SUPERSEDED");
+
+        assertThatThrownBy(() -> remainingInvoiceService.updateDraft(v1.id(),
+                new RemainingInvoiceDraftRequest(null, "SHOULD-NEVER-STICK", null, null, null), salesActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> {
+                assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
+                assertThat(e.getMessage()).isEqualTo("เอกสารนี้ถูกแทนที่ด้วยฉบับใหม่แล้ว แก้ไขไม่ได้");
+            });
+        assertThat(remainingInvoiceService.get(v1.id(), salesActor).reference()).isEqualTo(v1.reference());
+        assertThat(editedEvents(fixture.ticketId())).isEmpty();
+    }
+
+    /** The invoice snapshots its deposit deduction + money totals from the latest ISSUED notice, so editing that
+     * notice (here AFTER account confirmed the deposit: no payment lock) must carry into the live invoice. The
+     * SUPERSEDED earlier version of the invoice stays frozen. */
+    @Test
+    void editingTheIssuedDepositNotice_refreshesTheIssuedInvoice_evenAfterPaymentConfirmed_notTheSuperseded() {
+        DealFixture fixture = buildAcceptedDeal(salesActor, "CascadeIssuedRi");
+        ticketService.confirmDepositPaid(fixture.ticketId(), accountActor);
+        RemainingInvoiceDocumentDto v1 = remainingInvoiceService.issue(
+            remainingInvoiceService.createDraft(fixture.ticketId(), null, salesActor).id(), salesActor);
+        RemainingInvoiceDocumentDto live = remainingInvoiceService.issue(
+            remainingInvoiceService.revise(v1.id(), salesActor).id(), salesActor);
+        DepositNoticeDto notice = depositNoticeService.getById(fixture.depositNoticeId(), salesActor);
+        String newPercent = notice.depositPercent().compareTo(new BigDecimal("0.40")) == 0 ? "0.20" : "0.40";
+
+        DepositNoticeDto editedNotice = depositNoticeService.update(
+            fixture.depositNoticeId(), noticeWithPercent(notice, newPercent), salesActor);
+
+        assertThat(editedNotice.status()).isEqualTo("ISSUED");
+        assertThat(editedNotice.depositAmount()).isNotEqualByComparingTo(notice.depositAmount());
+        RemainingInvoiceDocumentDto refreshed = remainingInvoiceService.get(live.id(), salesActor);
+        assertThat(refreshed.status()).isEqualTo("ISSUED");
+        assertThat(refreshed.docNumber()).isEqualTo(live.docNumber());
+        assertThat(refreshed.depositDeduction()).isEqualByComparingTo(editedNotice.depositAmount());
+        assertThat(refreshed.netAmount()).isEqualByComparingTo(refreshed.itemsTotal().subtract(editedNotice.depositAmount()));
+        assertThat(refreshed.vatAmount()).isEqualByComparingTo(
+            refreshed.netAmount().multiply(new BigDecimal("0.07")).setScale(2, RoundingMode.HALF_UP));
+        assertThat(refreshed.grandTotal()).isEqualByComparingTo(refreshed.netAmount().add(refreshed.vatAmount()));
+        assertThat(refreshed.grandTotal()).isNotEqualByComparingTo(live.grandTotal());
+
+        // The refreshed ISSUED invoice's money change is audited on the deal: invoice number, old -> new total and deduction.
+        String invoiceEvent = editedEvents(fixture.ticketId()).stream().map(e -> (String) e.get("message"))
+            .filter(m -> m.contains(live.docNumber())).findFirst().orElseThrow();
+        assertThat(invoiceEvent).contains(ThaiText.money(live.grandTotal())).contains(ThaiText.money(refreshed.grandTotal()))
+            .contains(ThaiText.money(live.depositDeduction())).contains(ThaiText.money(refreshed.depositDeduction()));
+
+        RemainingInvoiceDocumentDto superseded = remainingInvoiceService.get(v1.id(), salesActor);
+        assertThat(superseded.status()).isEqualTo("SUPERSEDED");
+        assertThat(superseded.depositDeduction()).isEqualByComparingTo(v1.depositDeduction());
+        assertThat(superseded.grandTotal()).isEqualByComparingTo(v1.grandTotal());
+    }
+
+    /** When the refresh cannot run (here the deal left quotation_issued), the notice edit still succeeds, the invoice
+     * keeps its figures, and the deal timeline says the invoice was NOT refreshed and why. */
+    @Test
+    void editingTheIssuedDepositNotice_whenTheRefreshIsSkipped_stillSaves_andLogsAnEventOnTheDeal() {
+        DealFixture fixture = buildAcceptedDeal(salesActor, "SkipRefreshRi");
+        RemainingInvoiceDocumentDto live = remainingInvoiceService.issue(
+            remainingInvoiceService.createDraft(fixture.ticketId(), null, salesActor).id(), salesActor);
+        jdbc.update("UPDATE sales.ticket SET status = 'document_issued' WHERE ticket_id = :id", Map.of("id", fixture.ticketId()));
+        DepositNoticeDto notice = depositNoticeService.getById(fixture.depositNoticeId(), salesActor);
+        String newPercent = notice.depositPercent().compareTo(new BigDecimal("0.40")) == 0 ? "0.20" : "0.40";
+
+        DepositNoticeDto editedNotice = depositNoticeService.update(
+            fixture.depositNoticeId(), noticeWithPercent(notice, newPercent), salesActor);
+
+        assertThat(editedNotice.depositPercent()).isEqualByComparingTo(newPercent);
+        assertThat(remainingInvoiceService.get(live.id(), salesActor).grandTotal()).isEqualByComparingTo(live.grandTotal());
+        String skipped = editedEvents(fixture.ticketId()).stream().map(e -> (String) e.get("message"))
+            .filter(m -> m.contains(live.docNumber())).findFirst().orElseThrow();
+        assertThat(skipped).contains("ไม่ได้อัปเดต");
+    }
+
+    /** updateDraft's repository writes are told the status the service read, so a DRAFT save cannot land on a row
+     * issued in between (and an ISSUED save cannot land on a superseded one). */
+    @Test
+    void repositoryWrites_refuseARowThatIsNoLongerInTheStatusTheServiceRead() {
+        DealFixture fixture = buildAcceptedDeal(salesActor, "RiRepoRace");
+        RemainingInvoiceDocumentDto issued = remainingInvoiceService.issue(
+            remainingInvoiceService.createDraft(fixture.ticketId(), null, salesActor).id(), salesActor);
+
+        int fields = remainingInvoiceRepository.updateDraftFields(issued.id(), "RACE", null, LocalDate.of(2026, 1, 1),
+            List.of(), null, "DRAFT");
+        int snapshot = remainingInvoiceRepository.updateSnapshot(issued.id(), null, "RACE", null, null, null, null,
+            BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ONE, "DRAFT");
+
+        assertThat(fields).isZero();
+        assertThat(snapshot).isZero();
+        RemainingInvoiceDocumentDto reread = remainingInvoiceService.get(issued.id(), salesActor);
+        assertThat(reread.reference()).isEqualTo(issued.reference());
+        assertThat(reread.grandTotal()).isEqualByComparingTo(issued.grandTotal());
+    }
+
+    @Test
+    void editingTheIssuedDepositNotice_refreshesADraftInvoiceToo() {
+        DealFixture fixture = buildAcceptedDeal(salesActor, "CascadeDraftRi");
+        RemainingInvoiceDocumentDto draft = remainingInvoiceService.createDraft(fixture.ticketId(), null, salesActor);
+        DepositNoticeDto notice = depositNoticeService.getById(fixture.depositNoticeId(), salesActor);
+        String newPercent = notice.depositPercent().compareTo(new BigDecimal("0.40")) == 0 ? "0.20" : "0.40";
+
+        DepositNoticeDto editedNotice = depositNoticeService.update(
+            fixture.depositNoticeId(), noticeWithPercent(notice, newPercent), salesActor);
+
+        RemainingInvoiceDocumentDto refreshed = remainingInvoiceService.get(draft.id(), salesActor);
+        assertThat(refreshed.status()).isEqualTo("DRAFT");
+        assertThat(refreshed.depositDeduction()).isEqualByComparingTo(editedNotice.depositAmount());
+        assertThat(refreshed.netAmount()).isEqualByComparingTo(refreshed.itemsTotal().subtract(editedNotice.depositAmount()));
+        assertThat(refreshed.grandTotal()).isNotEqualByComparingTo(draft.grandTotal());
     }
 
     @Test

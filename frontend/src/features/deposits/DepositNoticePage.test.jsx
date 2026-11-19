@@ -754,7 +754,7 @@ describe('DepositNoticePage', () => {
     expect(screen.getByRole('button', { name: /เปิดงาน/ })).not.toBeNull();
     expect(document.body.textContent).not.toContain('คำขอราคา');
     const helper = screen.getByText(/กด "ออกเอกสาร" เพื่อออกเลขที่เอกสารอย่างเป็นทางการ/);
-    expect(helper.textContent).toMatch(/แก้ไขข้อมูลในเอกสารนี้ไม่ได้อีก$/);
+    expect(helper.textContent).toMatch(/ระบบจะบันทึกประวัติการแก้ไข$/);
     expect(helper.textContent).not.toContain('คำขอราคา');
   });
 
@@ -975,6 +975,42 @@ describe('DepositNoticePage', () => {
     const cell = document.querySelector('.data-row.reflow-cards').children[3];
     expect(cell.textContent).toBe('ลด 1,200.00');
     expect(cell.getAttribute('data-label')).toBe('ส่วนลด');
+  });
+
+  it('an ISSUED notice offers an แก้ไข button: it unlocks the percent, and บันทึก updates the same document without re-issuing', async () => {
+    api.depositNotices.listByTicket.mockResolvedValue({
+      depositNotices: [{ ...validDraftDoc, status: 'ISSUED', docNumber: 'GLRD69001', depositPercent: 0.3 }],
+    });
+    renderDepositNoticePage();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'แก้ไข' }));
+    const percentInput = await screen.findByLabelText('มัดจำ %');
+    expect(percentInput.disabled).toBe(false);
+    fireEvent.change(percentInput, { target: { value: '40' } });
+    // Still the same issued document: the issue action never reappears.
+    expect(screen.queryByRole('button', { name: /ออกเอกสาร/ })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึก' }));
+
+    await waitFor(() => expect(api.depositNotices.update).toHaveBeenCalledWith(
+      9002, expect.objectContaining({ depositPercent: 0.4 }),
+    ));
+    expect(api.depositNotices.issue).not.toHaveBeenCalled();
+  });
+
+  it('a DRAFT has no แก้ไข button (it is already editable), and a SUPERSEDED notice shows none', async () => {
+    api.depositNotices.listByTicket.mockResolvedValue({ depositNotices: [validDraftDoc] });
+    const { unmount } = renderDepositNoticePage();
+    await screen.findByDisplayValue('บริษัท ทดสอบ จำกัด');
+    expect(screen.queryByRole('button', { name: 'แก้ไข' })).toBeNull();
+    unmount();
+
+    api.depositNotices.listByTicket.mockResolvedValue({
+      depositNotices: [{ ...validDraftDoc, status: 'SUPERSEDED', docNumber: 'GLRD69001' }],
+    });
+    renderDepositNoticePage();
+    await waitFor(() => expect(api.depositNotices.listByTicket).toHaveBeenCalledTimes(2));
+    await screen.findByRole('button', { name: /สร้าง/ }); // nothing live: the empty state, never an editable notice
+    expect(screen.queryByRole('button', { name: 'แก้ไข' })).toBeNull();
   });
 
   it('shows the deposit percent read-only once the notice is issued', async () => {

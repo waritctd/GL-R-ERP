@@ -247,6 +247,8 @@ export function DepositNoticePage({ ticketId, onBack, showToast }) {
   const queryClient = useQueryClient();
   const [customerSearch, setCsSearch] = useState('');
   const [confirmIssue, setConfirmIssue] = useState(false);
+  // An ISSUED notice is read-only until sales presses แก้ไข; saving then updates the same document in place.
+  const [editingIssued, setEditingIssued] = useState(false);
   const [downloading, setDownloading] = useState(null); // 'xlsx' | 'pdf' | null
 
   // UX-03: per-field issue-validation errors, keyed 'customerName' | 'items' (at-least-one-line-item) |
@@ -422,6 +424,7 @@ export function DepositNoticePage({ ticketId, onBack, showToast }) {
     mutationFn: saveDraft,
     onSuccess: () => {
       showToast('success', 'บันทึกแล้ว');
+      setEditingIssued(false);
       invalidateDepositNotices();
     },
     onError: (err) => onSaveError(err, 'บันทึกไม่สำเร็จ'),
@@ -551,10 +554,10 @@ export function DepositNoticePage({ ticketId, onBack, showToast }) {
   // succeeded; an unchanged draft downloads as stored without saving, so a reader who cannot save still gets the file.
   async function handleDownload(extension) {
     if (!doc || downloading || saving) return;
-    if (!isIssued && refusesClearedItems()) return;
+    if (!locked && refusesClearedItems()) return;
     setDownloading(extension);
     try {
-      if (!isIssued && payloadKey(buildPayload()) !== savedKeyRef.current) {
+      if (!locked && payloadKey(buildPayload()) !== savedKeyRef.current) {
         try {
           await saveDraft();
           showToast('success', 'บันทึกแล้ว');
@@ -621,13 +624,14 @@ export function DepositNoticePage({ ticketId, onBack, showToast }) {
   }
 
   const isIssued = doc?.status === 'ISSUED';
+  const locked = isIssued && !editingIssued; // read-only view
   const referencedQuotation = resolveNoticeQuotation(dealQuotationsQuery.data, form.reference);
   const noticePercent = Math.round(Number(form.depositPercent) * 100);
   // A quotation with no % stored means the 30% default (as everywhere else).
   const quotationPercent = referencedQuotation ? (referencedQuotation.depositPercent ?? 30) : null;
-  const percentDiffers = !isIssued && form.depositPercent !== '' && quotationPercent != null
+  const percentDiffers = !locked && form.depositPercent !== '' && quotationPercent != null
     && quotationPercent !== noticePercent;
-  const subtotalDiffers = !isIssued && referencedQuotation != null
+  const subtotalDiffers = !locked && referencedQuotation != null
     && subtotalsDiffer(subtotal, referencedQuotation.subtotalAmount);
 
   return (
@@ -659,6 +663,9 @@ export function DepositNoticePage({ ticketId, onBack, showToast }) {
             />
             {!isIssued ? (
               <Button variant="primary" onClick={handleIssue} disabled={saving}>ออกเอกสาร</Button>
+            ) : null}
+            {locked ? (
+              <Button variant="secondary" onClick={() => setEditingIssued(true)}>แก้ไข</Button>
             ) : null}
           </>
         ) : null}
@@ -720,7 +727,7 @@ export function DepositNoticePage({ ticketId, onBack, showToast }) {
       ) : (
         <>
           <Panel title="ข้อมูลลูกค้า">
-            {isIssued ? (
+            {locked ? (
               <div className="grid grid-cols-2 gap-3 mobile:grid-cols-1 text-sm">
                 <div>
                   <span className="block text-2xs font-bold uppercase text-text-muted">ลูกค้า</span>
@@ -826,7 +833,7 @@ export function DepositNoticePage({ ticketId, onBack, showToast }) {
                 const amount = lineAmount(it);
                 return (
                   <div key={idx} className={`${NOTICE_ITEM_GRID} data-row`}>
-                    {isIssued ? (
+                    {locked ? (
                       <>
                         <span className="min-w-0" data-label="รายละเอียด"><span className="font-bold">{it.description}</span></span>
                         <span className="tabular-nums text-right" data-label="จำนวน">{Number(it.qty).toLocaleString('th-TH')} {it.unit ?? ''}</span>
@@ -888,7 +895,7 @@ export function DepositNoticePage({ ticketId, onBack, showToast }) {
                   </div>
                 );
               })}
-              {!isIssued ? (
+              {!locked ? (
                 <div className="flex flex-wrap items-center gap-3 border-t border-border px-5 py-4">
                   <Button variant="secondary"
                     onClick={() => {
@@ -909,7 +916,7 @@ export function DepositNoticePage({ ticketId, onBack, showToast }) {
 
           <Panel title="เงื่อนไข">
             <div className="grid grid-cols-2 gap-3 mobile:grid-cols-1">
-              {isIssued ? (
+              {locked ? (
                 <div className="text-sm">
                   <span className="block text-2xs font-bold uppercase text-text-muted">มัดจำ</span>
                   <strong>{noticePercent}%</strong>
@@ -948,11 +955,11 @@ export function DepositNoticePage({ ticketId, onBack, showToast }) {
                 <span className="mb-1.5 block text-sm font-bold text-text-secondary">หมายเหตุในเอกสาร</span>
                 <div className="flex flex-col gap-2">
                   {noteTemplates.map((t) => (
-                    <label key={t.id} className={`flex items-start gap-2 text-sm leading-normal ${isIssued ? 'cursor-default' : 'cursor-pointer'}`}>
-                      <input type="checkbox" disabled={isIssued}
+                    <label key={t.id} className={`flex items-start gap-2 text-sm leading-normal ${locked ? 'cursor-default' : 'cursor-pointer'}`}>
+                      <input type="checkbox" disabled={locked}
                         checked={form.notes.includes(t.text)}
                         onChange={() => toggleNote(t.text)}
-                        className={`mt-[3px] h-3.5 w-3.5 shrink-0 accent-info-dot ${isIssued ? 'cursor-default' : 'cursor-pointer'}`} />
+                        className={`mt-[3px] h-3.5 w-3.5 shrink-0 accent-info-dot ${locked ? 'cursor-default' : 'cursor-pointer'}`} />
                       <span className="min-w-0 flex-1">{t.text}</span>
                     </label>
                   ))}
@@ -985,11 +992,24 @@ export function DepositNoticePage({ ticketId, onBack, showToast }) {
           {!isIssued ? (
             <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-border-muted bg-surface p-4">
               <p className="m-0 text-xs text-text-muted">
-                กด &quot;ออกเอกสาร&quot; เพื่อออกเลขที่เอกสารอย่างเป็นทางการ — หลังจากนี้จะแก้ไขข้อมูลในเอกสารนี้ไม่ได้อีก
+                กด &quot;ออกเอกสาร&quot; เพื่อออกเลขที่เอกสารอย่างเป็นทางการ — หลังจากนี้ยังแก้ไขได้ในเอกสารเดิม (เลขที่คงเดิม) และระบบจะบันทึกประวัติการแก้ไข
               </p>
               <Button variant="secondary" className="mobile:w-full" onClick={handleSave} disabled={saving}>
                 บันทึกร่าง
               </Button>
+            </div>
+          ) : null}
+          {isIssued && editingIssued ? (
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-border-muted bg-surface p-4">
+              <p className="m-0 text-xs text-text-muted">
+                แก้ไขเอกสารที่ออกเลขแล้ว — เลขที่เอกสารและสถานะคงเดิม ระบบจะบันทึกประวัติการแก้ไข
+              </p>
+              <div className="flex gap-2">
+                <Button variant="secondary" onClick={() => { setEditingIssued(false); populateForm(doc, customers); }} disabled={saving}>
+                  ยกเลิก
+                </Button>
+                <Button variant="primary" onClick={handleSave} disabled={saving}>บันทึก</Button>
+              </div>
             </div>
           ) : null}
         </>
