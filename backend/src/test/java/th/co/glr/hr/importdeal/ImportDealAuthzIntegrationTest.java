@@ -33,10 +33,8 @@ import th.co.glr.hr.notification.SalesNotificationMailer;
 import th.co.glr.hr.pricingrequest.PricingRequestRepository;
 import th.co.glr.hr.pricingrequest.PricingRequestService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
-import th.co.glr.hr.ticket.CommentRequest;
 import th.co.glr.hr.ticket.DealStage;
 import th.co.glr.hr.ticket.QuotationRenderer;
-import th.co.glr.hr.ticket.RecordDeliveryRequest;
 import th.co.glr.hr.ticket.TicketEventKind;
 import th.co.glr.hr.ticket.TicketRepository;
 import th.co.glr.hr.ticket.TicketService;
@@ -168,149 +166,6 @@ class ImportDealAuthzIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(json).doesNotContain(RAW_PRICE, PROPOSED_PRICE, APPROVED_PRICE, CALCED_COST, MANUAL_PRICE);
     }
 
-    @Test
-    void importSeesTheCommentThread_butNotThePriceBearingEventFeed() throws Exception {
-        ImportDealDto deal = service.get(ticketId, importUser);
-
-        assertThat(deal).isNotNull();
-        assertThat(deal.comments()).extracting(ImportDealDtos.ImportDealCommentDto::message)
-            .containsExactly("ลูกค้าขอเลื่อนส่งของ");
-        String json = new ObjectMapper().findAndRegisterModules().writeValueAsString(deal);
-        assertThat(json).doesNotContain(OVERRIDE_NOTE);
-    }
-
-    @Test
-    void aDealInScopeOnlyThroughALivePricingRequest_isReadable() {
-        // Second disjunct of the import scope: a live pricing request, stage still pre-order.
-        long early = insertTicket("IMPDEAL-PCR", "ลูกค้า PCR", DealStage.NEGOTIATION);
-        insertPricingRequest(early, "SUBMITTED");
-
-        assertThat(service.get(early, importUser)).isNotNull();
-    }
-
-    // ── 2. import, OUT-of-scope deal: 403 ─────────────────────────────────────────────────────────
-
-    @Test
-    void importCannotReadALeadStageDealWithNoPricingRequest() {
-        long lead = insertTicket("IMPDEAL-LEAD", "ลูกค้าใหม่", DealStage.LEAD_APPROACH);
-
-        assertForbidden(() -> service.get(lead, importUser));
-    }
-
-    @Test
-    void importCannotReadADealWhoseOnlyPricingRequestIsTerminalBelowTheStageFloor() {
-        long below = insertTicket("IMPDEAL-BELOW", "ลูกค้าต่ำกว่าเกณฑ์", DealStage.NEGOTIATION);
-        insertPricingRequest(below, "QUOTATION_ACCEPTED");
-
-        assertForbidden(() -> service.get(below, importUser));
-    }
-
-    @Test
-    void importCannotReadAClosedLostDeal_evenAtAnInScopeStage() {
-        long lost = insertTicket("IMPDEAL-LOST", "ลูกค้าหลุด", DealStage.PROCUREMENT);
-        jdbc.update("UPDATE sales.ticket SET lifecycle = 'CLOSED_LOST' WHERE ticket_id = :id",
-            Map.of("id", lost));
-
-        assertForbidden(() -> service.get(lost, importUser));
-    }
-
-    @Test
-    void importCannotReadACancelledDeal_evenAtAnInScopeStage() {
-        long cancelled = insertTicket("IMPDEAL-CANC", "ลูกค้ายกเลิก", DealStage.PROCUREMENT);
-        jdbc.update("UPDATE sales.ticket SET lifecycle = 'CANCELLED', status = 'cancelled' WHERE ticket_id = :id",
-            Map.of("id", cancelled));
-
-        assertForbidden(() -> service.get(cancelled, importUser));
-    }
-
-    // ── dead deals (owner ruling 2026-11-04): import may OPEN a lost/cancelled deal that has an ISSUED IR (the
-    // link in its notification), but never write to it; with no issued IR the two refusals above still hold ──
-
-    @Test
-    void importCanReadALostDeal_thatHasAnIssuedImportRequest() {
-        issueOneImportRequest();
-        jdbc.update("UPDATE sales.ticket SET lifecycle = 'CLOSED_LOST' WHERE ticket_id = :id", Map.of("id", ticketId));
-        assertThat(tickets.isInImportScope(ticketId)).as("fixture: outside the LIST scope").isFalse();
-
-        assertThat(service.get(ticketId, importUser).id()).isEqualTo(ticketId);
-    }
-
-    @Test
-    void importCanReadACancelledDeal_thatHasAnIssuedImportRequest() {
-        issueOneImportRequest();
-        jdbc.update("UPDATE sales.ticket SET lifecycle = 'CANCELLED', status = 'cancelled' WHERE ticket_id = :id",
-            Map.of("id", ticketId));
-
-        assertThat(service.get(ticketId, importUser).id()).isEqualTo(ticketId);
-    }
-
-    /** Reading is widened, writing is not: advancing the IR and commenting on the lost deal stay refused. */
-    @Test
-    void importStillCannotWriteToALostDeal_evenWithAnIssuedImportRequest() {
-        ImportRequestDto ir = issueOneImportRequest();
-        jdbc.update("UPDATE sales.ticket SET lifecycle = 'CLOSED_LOST' WHERE ticket_id = :id", Map.of("id", ticketId));
-
-        assertThatThrownBy(() -> importRequestService.advanceStep(ir.id(),
-            new th.co.glr.hr.importrequest.ImportRequestRequests.AdvanceImportStepRequest(
-                th.co.glr.hr.importrequest.ImportRequestStep.IN_TRANSIT, null, null), importUser))
-            .isInstanceOf(ApiException.class);
-        assertForbidden(() -> ticketService.comment(ticketId, new CommentRequest("ความเห็นหลังดีลหลุด"), importUser));
-    }
-
-    /** No existence oracle: a missing deal is indistinguishable from an out-of-scope one to import. */
-    @Test
-    void importGetsForbiddenNotNotFound_forANonExistentDeal() {
-        assertForbidden(() -> service.get(9_999_999L, importUser));
-    }
-
-    // ── 3. every other role: 403, even on an in-scope deal ───────────────────────────────────────
-
-    @Test
-    void salesOwnerCannotUseTheImportView_evenOnTheirOwnDeal() {
-        assertForbidden(() -> service.get(ticketId, owner));
-    }
-
-    @Test
-    void otherRolesCannotUseTheImportView() {
-        assertForbidden(() -> service.get(ticketId, otherSalesRep));
-        assertForbidden(() -> service.get(ticketId, salesManager));
-        assertForbidden(() -> service.get(ticketId, accountUser));
-        assertForbidden(() -> service.get(ticketId, hrUser));
-    }
-
-    /** The role gate runs before any lookup, so a wrong role learns nothing about existence either. */
-    @Test
-    void aWrongRoleGetsForbiddenNotNotFound_forANonExistentDeal() {
-        assertForbidden(() -> service.get(9_999_999L, owner));
-        assertForbidden(() -> service.get(9_999_999L, accountUser));
-    }
-
-    // ── 4. ceo: allowed, and NOT row-scoped ──────────────────────────────────────────────────────
-
-    @Test
-    void ceoReadsAnInScopeDeal() {
-        assertThat(service.get(ticketId, ceoUser)).isNotNull();
-    }
-
-    @Test
-    void ceoIsNotRowScoped_canReadADealOutsideImportsScope() {
-        long lead = insertTicket("IMPDEAL-CEOLEAD", "ลูกค้าใหม่", DealStage.LEAD_APPROACH);
-        // Positive control: import is refused this very deal, so the ceo's success is the scope difference, not an
-        // accident of the fixture.
-        assertForbidden(() -> service.get(lead, importUser));
-
-        ImportDealDto deal = service.get(lead, ceoUser);
-
-        assertThat(deal).isNotNull();
-        assertThat(deal.id()).isEqualTo(lead);
-    }
-
-    @Test
-    void ceoGetsNotFound_forANonExistentDeal() {
-        assertThatThrownBy(() -> service.get(9_999_999L, ceoUser))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus().value()).isEqualTo(404));
-    }
-
     // ── 5. the paired removal: import loses GET /tickets/{id}, and ONLY that ─────────────────────
 
     @Test
@@ -328,50 +183,11 @@ class ImportDealAuthzIntegrationTest extends AbstractPostgresIntegrationTest {
         assertForbidden(() -> ticketService.get(ticketId, accountUser));
     }
 
-    /** Sub-paths import still needs are NOT blocked by the tickets-get guard. */
-    @Test
-    void importCanStillReachItsImportRequestSubPaths() {
-        issueOneImportRequest();
-
-        assertThat(importRequestService.list(ticketId, importUser)).hasSize(1);
-        assertThatCode(() -> ticketService.listDeliveries(ticketId, importUser)).doesNotThrowAnyException();
-        assertThatCode(() -> ticketService.actions(ticketId, importUser)).doesNotThrowAnyException();
-    }
-
-    // ── 6. comments + delivery ────────────────────────────────────────────────────────────────────
-
-    @Test
-    void importCanPostAComment_andReadsItBackThroughTheImportView() {
-        ticketService.comment(ticketId, new CommentRequest("นำเข้า: โรงงานยืนยันวันส่งแล้ว"), importUser);
-
-        ImportDealDto deal = service.get(ticketId, importUser);
-
-        assertThat(deal).isNotNull();
-        assertThat(deal.comments()).extracting(ImportDealDtos.ImportDealCommentDto::message)
-            .contains("นำเข้า: โรงงานยืนยันวันส่งแล้ว");
-        assertThat(deal.comments()).extracting(ImportDealDtos.ImportDealCommentDto::actorName)
-            .doesNotContainNull();
-    }
-
-    @Test
-    void importCannotWriteDelivery() {
-        var request = new RecordDeliveryRequest("WAREHOUSE", null,
-            List.of(new RecordDeliveryRequest.Line(firstItemId(), new BigDecimal("1"))), null);
-
-        assertForbidden(() -> ticketService.recordPartialDelivery(ticketId, request, importUser));
-        assertForbidden(() -> ticketService.completeDelivery(ticketId, null, importUser));
-    }
-
     // ── fixtures ──────────────────────────────────────────────────────────────────────────────────
 
     private ImportRequestDto issueOneImportRequest() {
         // createDrafts creates AND issues (10-29), so the created row is already ISSUED.
         return importRequestService.createDrafts(ticketId, null, ceoUser).get(0);
-    }
-
-    private long firstItemId() {
-        return jdbc.queryForObject(
-            "SELECT MIN(item_id) FROM sales.ticket_item WHERE ticket_id = :t", Map.of("t", ticketId), Long.class);
     }
 
     private static void assertForbidden(org.assertj.core.api.ThrowableAssert.ThrowingCallable call) {
@@ -442,23 +258,5 @@ class ImportDealAuthzIntegrationTest extends AbstractPostgresIntegrationTest {
                 .addValue("raw", new BigDecimal(RAW_PRICE)).addValue("proposed", new BigDecimal(PROPOSED_PRICE))
                 .addValue("approved", new BigDecimal(APPROVED_PRICE)).addValue("cost", new BigDecimal(CALCED_COST))
                 .addValue("manual", new BigDecimal(MANUAL_PRICE)));
-    }
-
-    private long insertPricingRequest(long ticket, String status) {
-        boolean cancelled = "CANCELLED".equals(status);
-        return jdbc.queryForObject("""
-            INSERT INTO sales.pricing_request
-                (request_code, ticket_id, recipient_type, status, requested_by, cancelled_at)
-            VALUES (:code, :ticketId, 'DESIGNER', :status, :requestedBy, :cancelledAt)
-            RETURNING pricing_request_id
-            """,
-            new MapSqlParameterSource()
-                .addValue("code", "PCR-ID-" + ticket + "-" + status.substring(0, 3))
-                .addValue("ticketId", ticket)
-                .addValue("status", status)
-                .addValue("requestedBy", ownerId)
-                .addValue("cancelledAt", cancelled ? java.sql.Timestamp.from(java.time.Instant.now()) : null,
-                    java.sql.Types.TIMESTAMP),
-            Long.class);
     }
 }

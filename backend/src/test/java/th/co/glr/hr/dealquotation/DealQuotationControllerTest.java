@@ -24,8 +24,7 @@ import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiExceptionHandler;
 import th.co.glr.hr.dealquotation.DealQuotationDtos.DealQuotationDto;
 
-/** Pins the GET /api/deal-quotations/{id/file} response contract — same MockMvc standalone pattern
- * CustomerQuotationControllerTest uses for the sibling pricing-chain quotation endpoint. */
+/** Pins the GET /api/deal-quotations/{id/file} response contract (MockMvc standalone). */
 class DealQuotationControllerTest {
     private static final byte[] OLE2_MAGIC_BYTES =
         {(byte) 0xD0, (byte) 0xCF, 0x11, (byte) 0xE0, (byte) 0xA1, (byte) 0xB1, 0x1A, (byte) 0xE1};
