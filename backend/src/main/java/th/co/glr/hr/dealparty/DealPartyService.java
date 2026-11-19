@@ -282,8 +282,9 @@ public class DealPartyService {
         // A null parent (FK ON DELETE SET NULL after the root was hard-deleted) makes the add-on its own root.
         long rootId = "ADD_ON".equals(source.childKind()) && source.parentTicketId() != null
             ? source.parentTicketId() : ticketId;
-        // Lock order: the ROOT first, then the source add-on (same order as DealQuotationService#submit), so the two
-        // cannot deadlock.
+        // Root first, then the source add-on. DealQuotationService#submit also takes the root before the add-on, but
+        // with an advisory lock (this is a row lock), so the two paths do not contend; any path taking two row locks
+        // of one project must keep this order.
         if (rootId != ticketId) {
             tickets.lockTicketForUpdate(rootId);
         }

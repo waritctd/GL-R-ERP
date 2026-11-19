@@ -69,14 +69,18 @@ export function reusesApprovedPricesOnly({
 
 /**
  * The group a picked line goes into: the existing group with the source's label, else the last group when it is blank
- * and empty (it gets named), else a new group. Blank label: the last group, as before. Returns `{ groups, groupId }`.
+ * and empty (it gets named), else a new group. Blank label: an existing blank group, else a new blank one. Returns `{ groups, groupId }`.
  */
 export function groupForPickedLabel(groups, items, label) {
   const wanted = blank(label);
   const last = groups[groups.length - 1];
-  if (wanted == null) return { groups, groupId: last?.groupId ?? null };
+  // An existing group with the SAME label (blank = blank) is reused; a blank pick never lands under a labelled group.
   const same = groups.find((g) => blank(g.label) === wanted);
   if (same) return { groups, groupId: same.groupId };
+  if (wanted == null) {
+    const groupId = newLocationGroupId();
+    return { groups: [...groups, { groupId, label: '' }], groupId };
+  }
   if (last && blank(last.label) == null && !items.some((it) => it.groupId === last.groupId)) {
     return { groups: groups.map((g) => (g === last ? { ...g, label: wanted } : g)), groupId: last.groupId };
   }

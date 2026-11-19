@@ -123,7 +123,7 @@ function ManagerToday({ user, employee, switcher, panelProps }) {
       <PageStack {...panelProps}>
       <TeamOverview showTitle={false} />
 
-      <TeamMovementPanel deals={tickets} orders={ordersQuery.data ?? null} range={teamRange} />
+      <TeamMovementPanel deals={tickets} orders={ordersQuery.data ?? null} ordersFailed={failed(ordersQuery)} range={teamRange} />
 
       <Panel title="อัตราปิดงาน">
         {failed(ticketsQuery) ? (

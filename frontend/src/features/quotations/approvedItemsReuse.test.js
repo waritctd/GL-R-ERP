@@ -31,4 +31,23 @@ describe('picked approved line', () => {
     const added = groupForPickedLabel(groups, [], 'ชั้น 3');
     expect(added.groups).toHaveLength(3);
   });
+
+  it('an unheaded pick after a headed one never lands under the headed group', () => {
+    const headed = groupForPickedLabel([{ groupId: 'g0', label: '' }], [], 'ห้องน้ำ');
+    const rowA = rowFromApprovedItem({ ...source, locationLabel: 'ห้องน้ำ' }, 'NET', headed.groupId);
+    const plain = { ...source, sourceQuotationItemId: 8, locationLabel: null, itemNotes: null };
+    const second = groupForPickedLabel(headed.groups, [rowA], plain.locationLabel);
+    expect(second.groupId).not.toBe(headed.groupId);
+    expect(second.groups.at(-1).label).toBe('');
+    const rowB = rowFromApprovedItem(plain, 'NET', second.groupId);
+    const args = {
+      items: [rowA, rowB], adjustments: [], depositPercent: 50, sourceDepositPercent: 50,
+      reusable: [{ ...source, locationLabel: 'ห้องน้ำ' }, plain],
+      docSettings: { priceMode: 'NET', documentLanguage: 'TH' },
+      locationOf: (it) => second.groups.find((g) => g.groupId === it.groupId)?.label,
+    };
+    expect(reusesApprovedPricesOnly(args)).toBe(true);
+    // a second blank pick reuses the blank group
+    expect(groupForPickedLabel(second.groups, [rowA, rowB], '').groupId).toBe(second.groupId);
+  });
 });

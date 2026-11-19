@@ -23,14 +23,15 @@ function Count({ id, week, range, value, danger = false }) {
 
 const HEADS = ['ผู้ดูแล', 'งานที่เปิดอยู่', 'ขยับขั้น', 'มีกิจกรรม', 'เลยนัด', 'ไม่เคลื่อนไหว', 'ยอดที่สั่งซื้อแล้ว', 'ยอดคาดหวัง'];
 
-export function TeamMovementPanel({ deals, orders = null, range }) {
+export function TeamMovementPanel({ deals, orders = null, ordersFailed = false, range }) {
   const { catalog } = useStageCatalog();
   const todayIso = bangkokTodayIso();
   // Until the catalog loads nothing can be classed as ordered or expected: show — rather than a wrong split.
-  const catalogReady = stageIndexIn(catalog, 'ORDER_RECEIVED') >= 0;
+  // Money also waits for the per-order list: never split by a folded row's (lead order's) stage.
+  const catalogReady = stageIndexIn(catalog, 'ORDER_RECEIVED') >= 0 && orders != null;
   const rows = useMemo(() => {
     if (!deals) return null;
-    return summariseByOwner(deals, range, todayIso, isOrderedIn(catalog), orders ?? deals);
+    return summariseByOwner(deals, range, todayIso, isOrderedIn(catalog), orders ?? []);
   }, [deals, orders, catalog, range, todayIso]);
   return (
     <Panel
@@ -67,6 +68,9 @@ export function TeamMovementPanel({ deals, orders = null, range }) {
               ))}
             </tbody>
           </table>
+          {ordersFailed ? (
+            <p role="alert" className="m-0 px-5 py-3 text-xs text-danger mobile:px-3.5">โหลดยอดที่สั่งซื้อแล้ว/ยอดคาดหวังไม่สำเร็จ ลองรีเฟรชหน้านี้</p>
+          ) : null}
         </div>
       )}
     </Panel>

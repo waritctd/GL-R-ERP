@@ -101,8 +101,7 @@ export function isOrderedIn(catalog) {
  */
 export function summariseByOwner(deals, range, todayIso, isOrdered, orders = deals) {
   const byOwner = new Map();
-  for (const deal of deals) {
-    if (!isActive(deal) || deal.createdById == null) continue;
+  const ownerRow = (deal) => {
     let row = byOwner.get(deal.createdById);
     if (!row) {
       row = {
@@ -111,15 +110,22 @@ export function summariseByOwner(deals, range, todayIso, isOrdered, orders = dea
       };
       byOwner.set(deal.createdById, row);
     }
+    return row;
+  };
+  for (const deal of deals) {
+    if (!isActive(deal) || deal.createdById == null) continue;
+    const row = ownerRow(deal);
     row.open += 1;
     if (weekPredicates.moved(deal)) row.moved += 1;
     if (weekPredicates.activity(deal)) row.activity += 1;
     if (weekPredicates.overdue(deal, range, todayIso)) row.overdue += 1;
     if (weekPredicates.silent(deal)) row.silent += 1;
   }
+  // Each order's money goes to ITS OWN owner (an add-on can be moved to another rep than its root), creating that
+  // owner's row when no folded row named them, so the team total is the sum over every active order.
   for (const order of orders) {
-    const row = isActive(order) && order.createdById != null ? byOwner.get(order.createdById) : null;
-    if (row) row[isOrdered(order) ? 'won' : 'expected'] += Number(order.amountPayable) || 0;
+    if (!isActive(order) || order.createdById == null) continue;
+    ownerRow(order)[isOrdered(order) ? 'won' : 'expected'] += Number(order.amountPayable) || 0;
   }
   return [...byOwner.values()].sort((a, b) => b.silent - a.silent || a.ownerName.localeCompare(b.ownerName, 'th'));
 }
