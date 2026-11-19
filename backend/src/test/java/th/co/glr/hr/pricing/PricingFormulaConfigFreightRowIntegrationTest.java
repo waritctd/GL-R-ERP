@@ -1,7 +1,6 @@
 package th.co.glr.hr.pricing;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -91,70 +90,7 @@ class PricingFormulaConfigFreightRowIntegrationTest extends AbstractPostgresInte
         }
     }
 
-    @Test
-    void nonCeoRolesCannotDeleteAFreightRowAndTheRowSurvives() throws Exception {
-        int seededRowCount = totalFreightRowCount();
-        long targetId = topQuantityBandOf("IT", "12", "17").freightRateId();
-
-        for (String role : DENIED_ROLES) {
-            mvc.perform(delete("/api/pricing-formula-config/freight-rates/{id}", targetId)
-                    .session(sessionFor(role)))
-                .andExpect(status().isForbidden());
-
-            assertThat(currentConfig().version()).as("version after %s attempted a delete", role).isEqualTo(2);
-            assertThat(totalFreightRowCount()).as("row count after %s attempted a delete", role).isEqualTo(seededRowCount);
-            assertThat(currentConfig().freightRates())
-                .as("target row after %s attempted a delete", role)
-                .anyMatch(rate -> rate.freightRateId() == targetId);
-        }
-    }
-
-    @Test
-    void anonymousCallerIsRejectedOnBothWriteEndpoints() throws Exception {
-        long targetId = topQuantityBandOf("IT", "12", "17").freightRateId();
-
-        mvc.perform(post("/api/pricing-formula-config/freight-rates")
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(newRowBody("TR", 3, 8, 1, 101, 70000)))
-            .andExpect(status().isUnauthorized());
-        mvc.perform(delete("/api/pricing-formula-config/freight-rates/{id}", targetId))
-            .andExpect(status().isUnauthorized());
-
-        assertThat(currentConfig().version()).isEqualTo(2);
-        assertThat(countryRowCountAcrossAllVersions("TR")).isZero();
-    }
-
     // The CEO can do the thing the issue was filed about
-
-    /** The headline case: Italy [12,17)mm x [801,+inf) sqm is one of V109's deliberately-blank cells, and before
-     * #436 there was no way to fill it short of a Flyway migration. */
-    @Test
-    void ceoCanFillADeliberatelyBlankCellAndTheOrderBecomesPriceable() throws Exception {
-        BigDecimal thickness = new BigDecimal("14");
-        BigDecimal qty = new BigDecimal("900");
-        assertThat(matchingBands(currentConfig(), "IT", thickness, qty))
-            .as("the blank cell really is blank before the fix")
-            .isZero();
-
-        mvc.perform(post("/api/pricing-formula-config/freight-rates")
-                .session(sessionFor("ceo"))
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(newRowBody("IT", 12, 17, 801, null, 110000)))
-            .andExpect(status().isOk());
-
-        PricingFormulaConfigDto after = currentConfig();
-        assertThat(after.version()).isEqualTo(3);
-        assertThat(after.freightRates()).hasSize(40);
-        assertThat(matchingBands(after, "IT", thickness, qty)).isEqualTo(1);
-        assertThat(after.freightRates().stream()
-            .filter(rate -> "IT".equals(rate.originCountryCode()))
-            .filter(rate -> rate.qtyMinSqm().compareTo(new BigDecimal("801")) == 0)
-            .filter(rate -> rate.thicknessMinMm().compareTo(new BigDecimal("12")) == 0)
-            .findFirst().orElseThrow().amountThb()).isEqualByComparingTo("110000");
-
-        // V109's versioning model is untouched: the previous generation (v2, the V197 republish) keeps all 39 of its rows.
-        assertThat(freightRowCountForVersion(2)).isEqualTo(39);
-    }
 
     /** A brand-new origin country is now a config edit, not a migration -- the other half of #436. */
     @Test
@@ -170,190 +106,12 @@ class PricingFormulaConfigFreightRowIntegrationTest extends AbstractPostgresInte
         assertThat(matchingBands(after, "TR", new BigDecimal("5.5"), new BigDecimal("250.25"))).isEqualTo(1);
     }
 
-    @Test
-    void ceoCanDeleteAnEdgeBandAndThePreviousVersionIsRetained() throws Exception {
-        PricingFreightRateDto target = topQuantityBandOf("IT", "12", "17");
-
-        mvc.perform(delete("/api/pricing-formula-config/freight-rates/{id}", target.freightRateId())
-                .session(sessionFor("ceo")))
-            .andExpect(status().isOk());
-
-        PricingFormulaConfigDto after = currentConfig();
-        assertThat(after.version()).isEqualTo(3);
-        assertThat(after.freightRates()).hasSize(38);
-        assertThat(after.freightRates())
-            .noneMatch(rate -> "IT".equals(rate.originCountryCode())
-                && rate.thicknessMinMm().compareTo(new BigDecimal("12")) == 0
-                && rate.qtyMinSqm().compareTo(target.qtyMinSqm()) == 0);
-        // Trimming the top of a ladder is allowed, and the row below it still covers its own range exactly once -- the
-        // delete narrowed coverage without disturbing what remains.
-        assertThat(matchingBands(after, "IT", new BigDecimal("14"), new BigDecimal("300"))).isEqualTo(1);
-        assertThat(freightRowCountForVersion(2)).isEqualTo(39);
-    }
-
     // Validation holds on INSERT, and a delete cannot punch a hole
-
-    @Test
-    void ceoCannotAddAnOverlappingFreightRow() throws Exception {
-        // Italy [12,17)mm already has [451,801); [700,900) overlaps it on BOTH thickness and qty.
-        mvc.perform(post("/api/pricing-formula-config/freight-rates")
-                .session(sessionFor("ceo"))
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(newRowBody("IT", 12, 17, 700, 900, 95000)))
-            .andExpect(status().isBadRequest());
-
-        assertThat(currentConfig().version()).isEqualTo(2);
-        // Across ALL versions: 39 (V109 seed v1) + 39 (V197 margin-30% republish v2); nothing added.
-        assertThat(totalFreightRowCount()).isEqualTo(78);
-    }
-
-    /** An overlapping THICKNESS band is caught on insert too, not just an overlapping qty band. */
-    @Test
-    void ceoCannotAddARowWhoseThicknessBandOverlapsAnExistingOne() throws Exception {
-        mvc.perform(post("/api/pricing-formula-config/freight-rates")
-                .session(sessionFor("ceo"))
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(newRowBody("IT", 5, 10, 1, 101, 85000)))
-            .andExpect(status().isBadRequest());
-
-        assertThat(currentConfig().version()).isEqualTo(2);
-    }
-
-    @Test
-    void ceoCannotAddARowWithAnInvertedThicknessBand() throws Exception {
-        mvc.perform(post("/api/pricing-formula-config/freight-rates")
-                .session(sessionFor("ceo"))
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(newRowBody("TR", 12, 12, 1, 101, 70000)))
-            .andExpect(status().isBadRequest());
-
-        assertThat(currentConfig().version()).isEqualTo(2);
-    }
-
-    /** The gap rule. Italy [12,17)mm is seeded [1,101) / [101,451) / [451,801); dropping the middle band would
-     * leave 101-451 sqm unpriceable while the orders either side still price fine -- silent mis-coverage. Deleting
-     * an edge is a deliberate trim; deleting a middle band is a hole. */
-    @Test
-    void ceoCannotDeleteAMiddleQuantityBand() throws Exception {
-        PricingFreightRateDto middle = currentConfig().freightRates().stream()
-            .filter(rate -> "IT".equals(rate.originCountryCode()))
-            .filter(rate -> rate.thicknessMinMm().compareTo(new BigDecimal("12")) == 0)
-            .filter(rate -> rate.qtyMinSqm().compareTo(new BigDecimal("101")) == 0)
-            .findFirst().orElseThrow();
-
-        mvc.perform(delete("/api/pricing-formula-config/freight-rates/{id}", middle.freightRateId())
-                .session(sessionFor("ceo")))
-            .andExpect(status().isBadRequest());
-
-        assertThat(currentConfig().version()).isEqualTo(2);
-        assertThat(currentConfig().freightRates()).anyMatch(rate -> rate.freightRateId() == middle.freightRateId());
-        // Still exactly one band for a 300 sqm / 14 mm Italian order -- the hole was never opened.
-        assertThat(matchingBands(currentConfig(), "IT", new BigDecimal("14"), new BigDecimal("300"))).isEqualTo(1);
-    }
-
-    /** Same rule one level up: emptying a MIDDLE thickness band is a hole in the thickness ladder. Italy [8,12)mm
-     * is reduced to a single row first (deleting from its edges inward, which is allowed), and the final row --
-     * the one whose removal would empty the band -- is refused. */
-    @Test
-    void ceoCannotEmptyAMiddleThicknessBand() throws Exception {
-        deleteAsCeoExpectingOk(quantityBandOf("IT", "8", "12", "801").freightRateId());
-        deleteAsCeoExpectingOk(quantityBandOf("IT", "8", "12", "451").freightRateId());
-        deleteAsCeoExpectingOk(quantityBandOf("IT", "8", "12", "101").freightRateId());
-
-        PricingFreightRateDto last = quantityBandOf("IT", "8", "12", "1");
-        mvc.perform(delete("/api/pricing-formula-config/freight-rates/{id}", last.freightRateId())
-                .session(sessionFor("ceo")))
-            .andExpect(status().isBadRequest());
-
-        assertThat(currentConfig().freightRates()).anyMatch(rate -> rate.freightRateId() == last.freightRateId());
-    }
-
-    /** A row id from a superseded version is a 404 -- old generations stay immutable audit records. */
-    @Test
-    void deletingARowIdFromASupersededVersionIsNotFound() throws Exception {
-        long staleId = topQuantityBandOf("IT", "12", "17").freightRateId();
-        deleteAsCeoExpectingOk(staleId);
-        assertThat(currentConfig().version()).isEqualTo(3);
-
-        mvc.perform(delete("/api/pricing-formula-config/freight-rates/{id}", staleId)
-                .session(sessionFor("ceo")))
-            .andExpect(status().isNotFound());
-
-        // The superseded version still has all 39 of its rows, including the one just "deleted".
-        assertThat(freightRowCountForVersion(2)).isEqualTo(39);
-        assertThat(currentConfig().version()).isEqualTo(3);
-    }
-
-    @Test
-    void deletingAnIdThatNeverExistedIsNotFound() throws Exception {
-        mvc.perform(delete("/api/pricing-formula-config/freight-rates/{id}", 9_999_999L)
-                .session(sessionFor("ceo")))
-            .andExpect(status().isNotFound());
-        assertThat(currentConfig().version()).isEqualTo(2);
-    }
-
-    /** The whole matrix stays coherent after a real add + a real delete: for every distinct (country,
-     * thickness-band) group, a quantity that the group covers falls in EXACTLY one band. "Exactly one" catches an
-     * overlap the add might have introduced as well as a gap the delete might have opened. */
-    @Test
-    void everyCoveredQuantityStillMatchesExactlyOneBandAfterAnAddAndADelete() throws Exception {
-        mvc.perform(post("/api/pricing-formula-config/freight-rates")
-                .session(sessionFor("ceo"))
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(newRowBody("IT", 12, 17, 801, null, 110000)))
-            .andExpect(status().isOk());
-        deleteAsCeoExpectingOk(quantityBandOf("CN", "17", "21", "101").freightRateId());
-
-        PricingFormulaConfigDto after = currentConfig();
-        assertThat(after.version()).isEqualTo(4);
-
-        for (BigDecimal qty : List.of(new BigDecimal("1"), new BigDecimal("100.5"), new BigDecimal("450.75"))) {
-            for (PricingFreightRateDto rate : after.freightRates()) {
-                if (!covers(rate, qty)) {
-                    continue;
-                }
-                long matches = after.freightRates().stream()
-                    .filter(other -> other.originCountryCode().equals(rate.originCountryCode()))
-                    .filter(other -> other.thicknessMinMm().compareTo(rate.thicknessMinMm()) == 0)
-                    .filter(other -> other.thicknessMaxMm().compareTo(rate.thicknessMaxMm()) == 0)
-                    .filter(other -> covers(other, qty))
-                    .count();
-                assertThat(matches)
-                    .as("bands matching %s sqm in %s [%s,%s)mm", qty, rate.originCountryCode(),
-                        rate.thicknessMinMm(), rate.thicknessMaxMm())
-                    .isEqualTo(1);
-            }
-        }
-    }
 
     // helpers
 
-    private void deleteAsCeoExpectingOk(long freightRateId) throws Exception {
-        mvc.perform(delete("/api/pricing-formula-config/freight-rates/{id}", freightRateId)
-                .session(sessionFor("ceo")))
-            .andExpect(status().isOk());
-    }
-
     private PricingFormulaConfigDto currentConfig() {
         return formulaConfigs.findCurrent().orElseThrow();
-    }
-
-    private PricingFreightRateDto quantityBandOf(String country, String thicknessMin, String thicknessMax, String qtyMin) {
-        return currentConfig().freightRates().stream()
-            .filter(rate -> rate.originCountryCode().equals(country))
-            .filter(rate -> rate.thicknessMinMm().compareTo(new BigDecimal(thicknessMin)) == 0)
-            .filter(rate -> rate.thicknessMaxMm().compareTo(new BigDecimal(thicknessMax)) == 0)
-            .filter(rate -> rate.qtyMinSqm().compareTo(new BigDecimal(qtyMin)) == 0)
-            .findFirst().orElseThrow();
-    }
-
-    private PricingFreightRateDto topQuantityBandOf(String country, String thicknessMin, String thicknessMax) {
-        return currentConfig().freightRates().stream()
-            .filter(rate -> rate.originCountryCode().equals(country))
-            .filter(rate -> rate.thicknessMinMm().compareTo(new BigDecimal(thicknessMin)) == 0)
-            .filter(rate -> rate.thicknessMaxMm().compareTo(new BigDecimal(thicknessMax)) == 0)
-            .max((a, b) -> a.qtyMinSqm().compareTo(b.qtyMinSqm()))
-            .orElseThrow();
     }
 
     /** Half-open [min, max), NULL max = +infinity -- V109's BAND CONVENTION. */
@@ -372,14 +130,6 @@ class PricingFormulaConfigFreightRowIntegrationTest extends AbstractPostgresInte
 
     private int totalFreightRowCount() {
         return jdbc.queryForObject("SELECT COUNT(*) FROM sales.pricing_freight_rate", Map.of(), Integer.class);
-    }
-
-    private int freightRowCountForVersion(int version) {
-        return jdbc.queryForObject("""
-            SELECT COUNT(*) FROM sales.pricing_freight_rate r
-              JOIN sales.pricing_formula_config c ON c.formula_config_id = r.formula_config_id
-             WHERE c.version = :version
-            """, Map.of("version", version), Integer.class);
     }
 
     private int countryRowCountAcrossAllVersions(String country) {

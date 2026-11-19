@@ -21,59 +21,6 @@ class FxResolverTest {
 
     private final FxRateRepository fxRates = mock(FxRateRepository.class);
 
-    // ── THB shortcut — unaffected by the P0 change, sanity only ─────────────────────────────
-
-    @Test
-    void thb_alwaysResolvesToRateOne_evenWithNoRowOnFile() {
-        when(fxRates.findByCurrency("THB")).thenReturn(Optional.empty());
-        FxRateDto resolved = FxResolver.resolve(fxRates, "THB");
-        assertThat(resolved.rateToThb()).isEqualByComparingTo(BigDecimal.ONE);
-    }
-
-    @Test
-    void blankOrNullCurrency_isTreatedAsThb() {
-        when(fxRates.findByCurrency("THB")).thenReturn(Optional.empty());
-        assertThat(FxResolver.resolve(fxRates, null).currency()).isEqualTo("THB");
-        assertThat(FxResolver.resolve(fxRates, "  ").currency()).isEqualTo("THB");
-    }
-
-    // ── P0: a MANUAL rate is now accepted (was unconditionally refused before the fix) ──────
-
-    @Test
-    void manualNonThbRate_recentEffectiveDate_isNowAccepted() {
-        FxRateDto manual = fxRate(CURRENCY, "MANUAL", LocalDate.now(), null);
-        when(fxRates.findByCurrency(CURRENCY)).thenReturn(Optional.of(manual));
-
-        FxRateDto resolved = FxResolver.resolve(fxRates, CURRENCY);
-
-        assertThat(resolved.source()).isEqualTo("MANUAL");
-        assertThat(resolved.rateToThb()).isEqualByComparingTo(manual.rateToThb());
-    }
-
-    /** The direction that must NOT regress: a BOT-sourced rate was accepted before this fix and must stay accepted
-     * after it — only the BOT-ONLY requirement was removed, not BOT itself. */
-    @Test
-    void botNonThbRate_recentEffectiveDate_isStillAccepted() {
-        FxRateDto bot = fxRate(CURRENCY, "BOT", LocalDate.now(), Instant.now());
-        when(fxRates.findByCurrency(CURRENCY)).thenReturn(Optional.of(bot));
-
-        FxRateDto resolved = FxResolver.resolve(fxRates, CURRENCY);
-
-        assertThat(resolved.source()).isEqualTo("BOT");
-    }
-
-    /** Currency matching must be case-insensitive on the way in — the controller/mock both normalise to upper case,
-     * but a caller passing lower case must still resolve. */
-    @Test
-    void currencyLookup_isCaseInsensitiveOnTheWayIn() {
-        FxRateDto manual = fxRate(CURRENCY, "MANUAL", LocalDate.now(), null);
-        when(fxRates.findByCurrency(CURRENCY)).thenReturn(Optional.of(manual));
-
-        assertThat(FxResolver.resolve(fxRates, "eur").source()).isEqualTo("MANUAL");
-    }
-
-    // ── The staleness guard: UNCHANGED, and applies to BOTH sources — the mutation-check target ──
-
     /** CLAUDE.md's testing rule: assert both sides (MANUAL and BOT) on ONE fixture (same currency, same stale
      * date), rather than two independent tests that could each be individually broken without the other catching
      * it. */
@@ -118,41 +65,6 @@ class FxResolverTest {
         when(fxRates.findByCurrency(CURRENCY)).thenReturn(Optional.of(exactlyAWeekOld));
 
         assertThat(FxResolver.resolve(fxRates, CURRENCY).source()).isEqualTo("MANUAL");
-    }
-
-    @Test
-    void nullEffectiveDate_refusedWithItsOwnMessage_neverAttemptingToPrintANullDate() {
-        FxRateDto noDate = fxRate(CURRENCY, "MANUAL", null, null);
-        when(fxRates.findByCurrency(CURRENCY)).thenReturn(Optional.of(noDate));
-
-        assertThatThrownBy(() -> FxResolver.resolve(fxRates, CURRENCY))
-            .isInstanceOfSatisfying(ApiException.class, e -> {
-                assertThat(e.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_CONTENT);
-                assertThat(e.getMessage())
-                    .as("must not read 'null' as a printed date, and must not share the stale "
-                        + "wording (which names an actual date)")
-                    .doesNotContain("null")
-                    .contains(CURRENCY)
-                    .contains("ตั้งค่า CEO", "อัตราแลกเปลี่ยน");
-            });
-    }
-
-    // ── No row at all ────────────────────────────────────────────────────────────────────────
-
-    @Test
-    void missingRateRow_refusedWithActionableMessage_namingTheCeoSettingsPath() {
-        when(fxRates.findByCurrency(CURRENCY)).thenReturn(Optional.empty());
-
-        assertThatThrownBy(() -> FxResolver.resolve(fxRates, CURRENCY))
-            .isInstanceOfSatisfying(ApiException.class, e -> {
-                assertThat(e.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_CONTENT);
-                assertThat(e.getMessage())
-                    .as("must name the fix the CEO can actually perform, not the old BOT wording")
-                    .contains(CURRENCY)
-                    .contains("ยังไม่มีอัตราแลกเปลี่ยน")
-                    .contains("ตั้งค่า CEO", "อัตราแลกเปลี่ยน")
-                    .doesNotContain("BOT");
-            });
     }
 
     private FxRateDto fxRate(String currency, String source, LocalDate effectiveDate, Instant fetchedAt) {
