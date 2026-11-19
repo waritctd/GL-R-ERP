@@ -8,6 +8,20 @@ import org.junit.jupiter.api.Test;
  * DealQuotationLines#parseTwoDimensions, so a pathological input must not hang the render. */
 class DealQuotationLinesTest {
 
+    // Grammar-only vector: short enough (<= 64) to bypass the length guard, so it exercises the regex in
+    // isolation. Pre-fix it took 253 ms at 128 chars; a regression in the grammar alone blows this up.
+    @Test
+    void parseTwoDimensions_pathologicalWhitespace_underTheLengthGuard_doesNotCatastrophicallyBacktrack() {
+        String attack = "30" + " ".repeat(18) + "x60" + " ".repeat(18) + "x1" + " ".repeat(18) + "!";
+        assertThat(attack.length()).isLessThanOrEqualTo(64);
+        long start = System.nanoTime();
+        DealQuotationLines.ParsedSize result = DealQuotationLines.parseTwoDimensions(attack);
+        long elapsedMs = (System.nanoTime() - start) / 1_000_000;
+        assertThat(result).as("a trailing '!' must never match").isNull();
+        assertThat(elapsedMs).as("must not catastrophically backtrack on pathological whitespace")
+            .isLessThan(50);
+    }
+
     @Test
     void parseTwoDimensions_pathologicalWhitespace_248chars_doesNotCatastrophicallyBacktrack() {
         // The reviewer's own reported shape (measured pre-fix at 12,238ms on the reviewer's code, 5,026ms on this
