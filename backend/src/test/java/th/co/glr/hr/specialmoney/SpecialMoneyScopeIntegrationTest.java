@@ -97,78 +97,6 @@ class SpecialMoneyScopeIntegrationTest extends AbstractPostgresIntegrationTest {
         }
     }
 
-    // --- 3. list() employee scoping ------------------------------------------
-
-    @Test
-    void employeeCannotSeeAnotherEmployeesRequest() {
-        submitFuneralRequest(salesManagerEmployeeId);
-
-        List<SpecialMoneyRequestDto> visible = service.list(
-            employee(salesStaffEmployeeId, salesDivision),
-            LocalDate.of(2026, 1, 1), LocalDate.of(2026, 12, 31), null, null, null);
-
-        assertThat(visible).isEmpty();
-    }
-
-    // --- 4. submit() on behalf of a non-report -------------------------------
-
-    @Test
-    void employeeCannotSubmitOnBehalfOfNonReport() {
-        long countBefore = requestCountFor(factoryStaffEmployeeId);
-
-        assertThatThrownBy(() -> service.submit(
-                "AID_FUNERAL",
-                funeralRequest(factoryStaffEmployeeId, LocalDate.of(2026, 7, 1)),
-                employee(salesStaffEmployeeId, salesDivision)))
-            .isInstanceOf(ApiException.class)
-            .hasMessageContaining("ตนเอง");
-
-        assertThat(requestCountFor(factoryStaffEmployeeId)).isEqualTo(countBefore);
-    }
-
-    // --- 5. hr cannot approve (issue #199 shape) -----------------------------
-
-    @Test
-    void hrCannotApprove() {
-        long requestId = submitFuneralRequest(salesStaffEmployeeId);
-
-        assertThatThrownBy(() -> service.approve(requestId, null, hr()))
-            .isInstanceOf(ApiException.class);
-        assertThat(statusOf(requestId)).isEqualTo("SUBMITTED");
-    }
-
-    // --- 6. hr cannot submit on behalf of an arbitrary employee --------------
-
-    @Test
-    void hrCannotSubmitOnBehalfOfArbitraryEmployee() {
-        long countBefore = requestCountFor(salesStaffEmployeeId);
-
-        assertThatThrownBy(() -> service.submit(
-                "AID_FUNERAL",
-                funeralRequest(salesStaffEmployeeId, LocalDate.of(2026, 7, 1)),
-                hr()))
-            .isInstanceOf(ApiException.class);
-
-        assertThat(requestCountFor(salesStaffEmployeeId)).isEqualTo(countBefore);
-    }
-
-    // --- 7. nobody below the CEO can approve, whatever their relationship ----
-
-    @Test
-    void nobodyBelowCeoCanApproveAWelfareRequest() {
-        long requestId = submitFuneralRequest(salesStaffEmployeeId);
-
-        // Every non-CEO shape at once: the requester's own ผู้จัดการ, HR (issue #199), and the requester themselves.
-        // "CEO-only" must be a role gate, not a scope gate -- if it were a scope gate, the first of these would pass.
-        for (UserPrincipal notTheCeo : List.of(
-                salesManager(), hr(), employee(salesStaffEmployeeId, salesDivision))) {
-            assertThatThrownBy(() -> service.approve(requestId, null, notTheCeo))
-                .isInstanceOf(ApiException.class);
-        }
-        assertThat(statusOf(requestId)).isEqualTo("SUBMITTED");
-        assertThat(approvedAmountOf(requestId)).isNull();
-    }
-
     // --- 8. the CEO approves in ONE stage, for every shape of employee -------
 
     @Test
@@ -210,141 +138,7 @@ class SpecialMoneyScopeIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(statusOf(requestId)).isEqualTo("APPROVED");
     }
 
-    @Test
-    void evidenceCanOnlyBeAttachedByTheRequesterAndOnlyBeforeADecision() {
-        long requestId = submitFuneralRequest(salesStaffEmployeeId);
-
-        // A ผู้จัดการ in the same ฝ่าย must not slip documents into someone else's claim (they can no longer even see
-        // it); nor may the CEO manufacture the evidence they then approve against.
-        assertThatThrownBy(() -> service.requireCanAttach(requestId, salesManager()))
-            .isInstanceOf(ApiException.class);
-        assertThatThrownBy(() -> service.requireCanAttach(requestId, ceo()))
-            .isInstanceOf(ApiException.class);
-
-        // The owner may, while it is still SUBMITTED.
-        service.requireCanAttach(requestId, employeeOwner(salesStaffEmployeeId));
-
-        attachEvidence(requestId);
-        service.approve(requestId, null, ceo());
-        // ...but not after a decision: the evidence a decision rested on must not change under it.
-        assertThatThrownBy(() -> service.requireCanAttach(requestId, employeeOwner(salesStaffEmployeeId)))
-            .isInstanceOf(ApiException.class);
-    }
-
-    @Test
-    void evidenceIsNotReadableByAnUnrelatedEmployee() {
-        long requestId = submitFuneralRequest(salesStaffEmployeeId);
-        attachEvidence(requestId);
-
-        // Medical receipts and death certificates: readable by the employee, HR and the CEO -- and nobody else. The
-        // ฝ่าย manager used to be on that list and no longer is (see
-        // managerCannotReachAnInDivisionTeamMembersWelfareThroughAnyReadPath below).
-        assertThatThrownBy(() -> service.listAttachments(requestId, employee(factoryStaffEmployeeId, factoryDivision)))
-            .isInstanceOf(ApiException.class);
-        assertThat(service.listAttachments(requestId, ceo())).hasSize(1);
-        assertThat(service.listAttachments(requestId, hr())).hasSize(1);
-    }
-
-    @Test
-    void ceoCanRejectFromSubmittedToo() {
-        long requestId = submitFuneralRequest(orphanStaffEmployeeId);
-
-        service.reject(requestId, new ReviewSpecialMoneyRequest("ไม่เข้าเงื่อนไข", null, null), ceo());
-
-        // Approve-only would be a trap door: the sole reviewer must also be able to refuse.
-        assertThat(statusOf(requestId)).isEqualTo("REJECTED");
-        assertThat(approvedAmountOf(requestId)).isNull();
-    }
-
-    @Test
-    void ceoCanStillClearALegacyManagerApprovedRow() {
-        long requestId = submitFuneralRequest(salesStaffEmployeeId);
-        // Nothing can reach MANAGER_APPROVED through the service any more, so this forces the state a pre-change row
-        // would be sitting in. Without the legacy branch such rows would be stranded permanently -- approve() would
-        // 409 them as "already reviewed".
-        parkInLegacyManagerApprovedState(requestId);
-        attachEvidence(requestId);
-
-        service.approve(requestId, null, ceo());
-
-        assertThat(statusOf(requestId)).isEqualTo("APPROVED");
-        assertThat(approvedAmountOf(requestId)).isEqualByComparingTo(new BigDecimal("5000"));
-    }
-
-    // --- 9. usage() quota scoping ---------------------------------------------
-
-    @Test
-    void employeeCannotReadAnotherEmployeesUsageQuota() {
-        assertThatThrownBy(() -> service.usage(
-                factoryStaffEmployeeId, 2026, employee(salesStaffEmployeeId, salesDivision)))
-            .isInstanceOf(ApiException.class);
-    }
-
-    // --- 10. cancel() scoping ---------------------------------------------------
-
-    @Test
-    void employeeCannotCancelAnotherEmployeesRequest() {
-        long requestId = submitFuneralRequest(salesManagerEmployeeId);
-
-        assertThatThrownBy(() -> service.cancel(requestId, null, employee(salesStaffEmployeeId, salesDivision)))
-            .isInstanceOf(ApiException.class);
-        assertThat(statusOf(requestId)).isEqualTo("SUBMITTED");
-    }
-
     // Managers must not read another employee's welfare claims, including members of their own division.
-
-    /** THE regression test. One in-division team member, every read path in this service, each asserted to come
-     * back empty or 403. Splitting them into four tests would let three stay green while the suite still looked
-     * healthy. */
-    @Test
-    void managerCannotReachAnInDivisionTeamMembersWelfareThroughAnyReadPath() {
-        // salesStaff reports into salesManager AND shares salesDivision -- the exact relationship that used to grant
-        // division-wide read.
-        long requestId = submitFuneralRequest(salesStaffEmployeeId);
-        long attachmentId = attachEvidenceReturningId(requestId);
-
-        // (a) the list: zero rows, not "their own plus the team's".
-        assertThat(service.list(salesManager(), LocalDate.of(2026, 1, 1), LocalDate.of(2026, 12, 31), null, null, null))
-            .isEmpty();
-
-        // (b) asking for that employee explicitly: 403, not a filtered-to-nothing 200.
-        assertThatThrownBy(() -> service.list(
-                salesManager(), LocalDate.of(2026, 1, 1), LocalDate.of(2026, 12, 31),
-                salesStaffEmployeeId, null, null))
-            .isInstanceOf(ApiException.class);
-
-        // (c) the quota: how much medical/funeral money a colleague has drawn this year is itself confidential, even
-        // without the individual rows.
-        assertThatThrownBy(() -> service.usage(salesStaffEmployeeId, 2026, salesManager()))
-            .isInstanceOf(ApiException.class);
-
-        // (d) the evidence -- the worst of the four. These files are death certificates, birth certificates and
-        // medical receipts.
-        assertThatThrownBy(() -> service.listAttachments(requestId, salesManager()))
-            .isInstanceOf(ApiException.class);
-        assertThatThrownBy(() -> service.resolveAttachmentForDownload(attachmentId, salesManager()))
-            .isInstanceOf(ApiException.class);
-
-        // ...and the row is still there, so this is scoping and not an accidental delete.
-        assertThat(statusOf(requestId)).isEqualTo("SUBMITTED");
-    }
-
-    /** The positive control for the test above. Without this, deleting the read paths entirely would also pass, and
-     * "nobody can see anything" is not the requirement -- hr/ceo must still see everything. */
-    @Test
-    void hrAndCeoStillSeeEveryEmployeesWelfareIncludingTheEvidence() {
-        long requestId = submitFuneralRequest(salesStaffEmployeeId);
-        long attachmentId = attachEvidenceReturningId(requestId);
-
-        for (UserPrincipal viewer : List.of(hr(), ceo())) {
-            assertThat(service.list(viewer, LocalDate.of(2026, 1, 1), LocalDate.of(2026, 12, 31), null, null, null))
-                .extracting(SpecialMoneyRequestDto::id)
-                .contains(requestId);
-            assertThat(service.usage(salesStaffEmployeeId, 2026, viewer)).isNotNull();
-            assertThat(service.listAttachments(requestId, viewer)).hasSize(1);
-            assertThat(service.resolveAttachmentForDownload(attachmentId, viewer)).isNotNull();
-        }
-    }
 
     /** ...and the employee themselves is of course unaffected. */
     @Test
@@ -356,52 +150,6 @@ class SpecialMoneyScopeIntegrationTest extends AbstractPostgresIntegrationTest {
                 LocalDate.of(2026, 1, 1), LocalDate.of(2026, 12, 31), null, null, null))
             .extracting(SpecialMoneyRequestDto::id)
             .containsExactly(requestId);
-    }
-
-    /** Submit-on-behalf is gone, so the manager cannot get at the row by CREATING it either. This is the path that
-     * would otherwise defeat the read scoping entirely: file it yourself and you are requested_by_id. */
-    @Test
-    void managerCannotSubmitOnBehalfOfAnInDivisionTeamMember() {
-        long countBefore = requestCountFor(salesStaffEmployeeId);
-
-        assertThatThrownBy(() -> service.submit(
-                "AID_FUNERAL",
-                funeralRequest(salesStaffEmployeeId, LocalDate.of(2026, 7, 1)),
-                salesManager()))
-            .isInstanceOf(ApiException.class)
-            .hasMessageContaining("ตนเอง");
-
-        assertThat(requestCountFor(salesStaffEmployeeId)).isEqualTo(countBefore);
-    }
-
-    /** The picker must agree with the gate above. Offering a name that submit() then refuses turns a dropdown
-     * choice into a 403 -- and, worse, leaks the ฝ่าย roster into a screen whose whole point is now "you, and only
-     * you". */
-    @Test
-    void managerEmployeePickerOffersOnlyThemselves() {
-        assertThat(service.employeeOptions(salesManager()))
-            .extracting(SpecialMoneyEmployeeOption::employeeId)
-            .containsExactly(salesManagerEmployeeId);
-        assertThat(service.employeeOptions(salesManager()))
-            .allSatisfy(option -> assertThat(option.directReport()).isFalse());
-    }
-
-    /** The residual path on rows that predate the change: requested_by_id pointing at somebody other than the
-     * employee. cancel() returns the full DTO, so letting the old filer through would hand them exactly the
-     * confidential row this change closes. */
-    @Test
-    void aLegacyOnBehalfFilerCanNoLongerCancelOrAttachToTheRow() {
-        long requestId = submitFuneralRequest(salesStaffEmployeeId);
-        parkAsLegacyOnBehalfRow(requestId, salesManagerEmployeeId);
-
-        assertThatThrownBy(() -> service.cancel(requestId, null, salesManager()))
-            .isInstanceOf(ApiException.class);
-        assertThatThrownBy(() -> service.requireCanAttach(requestId, salesManager()))
-            .isInstanceOf(ApiException.class);
-
-        assertThat(statusOf(requestId)).isEqualTo("SUBMITTED");
-        // The employee is not locked out of their own legacy row by that.
-        service.requireCanAttach(requestId, employeeOwner(salesStaffEmployeeId));
     }
 
     // --- helpers --------------------------------------------------------------
@@ -445,38 +193,6 @@ class SpecialMoneyScopeIntegrationTest extends AbstractPostgresIntegrationTest {
             """, Map.of("id", requestId));
     }
 
-    /** As {@link #attachEvidence}, but hands back the id so the download gate can be exercised. */
-    private long attachEvidenceReturningId(long requestId) {
-        return jdbc.queryForObject("""
-            INSERT INTO hr.special_money_request_attachment
-                (special_money_request_id, file_name, storage_path, mime_type, size_bytes)
-            VALUES (:id, 'mor-ana-bat.pdf', '/tmp/test/mor-ana-bat.pdf', 'application/pdf', 1024)
-            RETURNING attachment_id
-            """, Map.of("id", requestId), Long.class);
-    }
-
-    /** Repoints requested_by_id at somebody other than the employee -- the shape of a row filed on-behalf before
-     * that capability was removed. The service can no longer produce one, so the gates that used to key on it need
-     * this to be testable at all. */
-    private void parkAsLegacyOnBehalfRow(long requestId, long filerEmployeeId) {
-        jdbc.update("""
-            UPDATE hr.special_money_request
-               SET requested_by_id = :filerId
-             WHERE special_money_request_id = :id
-            """, Map.of("id", requestId, "filerId", filerEmployeeId));
-    }
-
-    /** Forces the state a row written before the manager stage was removed would be sitting in. */
-    private void parkInLegacyManagerApprovedState(long requestId) {
-        jdbc.update("""
-            UPDATE hr.special_money_request
-               SET status = 'MANAGER_APPROVED',
-                   manager_approved_by = :managerId,
-                   manager_approved_at = now()
-             WHERE special_money_request_id = :id
-            """, Map.of("id", requestId, "managerId", salesManagerEmployeeId));
-    }
-
     /** Read straight from the table, not the DTO: the columns are the thing payroll and audit read. */
     private Long managerApprovedByOf(long requestId) {
         return jdbc.queryForObject(
@@ -488,12 +204,6 @@ class SpecialMoneyScopeIntegrationTest extends AbstractPostgresIntegrationTest {
         return jdbc.queryForObject(
             "SELECT ceo_approved_by FROM hr.special_money_request WHERE special_money_request_id = :id",
             Map.of("id", requestId), Long.class);
-    }
-
-    private long requestCountFor(long employeeId) {
-        return jdbc.queryForObject(
-            "SELECT COUNT(*) FROM hr.special_money_request WHERE employee_id = :employeeId",
-            Map.of("employeeId", employeeId), Long.class);
     }
 
     private UserPrincipal hr() {

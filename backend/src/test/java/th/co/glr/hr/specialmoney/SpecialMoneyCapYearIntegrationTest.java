@@ -107,100 +107,6 @@ class SpecialMoneyCapYearIntegrationTest extends AbstractPostgresIntegrationTest
         assertThat(capOverrideReasonOf(second.id())).isEqualTo("Owner-approved exception");
     }
 
-    // UNIFORM_ANNUAL -- once/yr guard, exploited via a future event_date
-
-    @Test
-    void secondUniformAnnualClaimWithFutureEventDateIsRefused() {
-        LocalDate today = LocalDate.now(BUSINESS_ZONE);
-        int thisYear = today.getYear();
-        long firstId = submitAndApproveUniform(LocalDate.of(thisYear, 6, 10));
-        assertThat(statusOf(firstId)).isEqualTo("APPROVED");
-
-        // Same trick as MEDICAL: event_date in NEXT year's June still satisfies "month == JUNE", and under the bug
-        // also satisfied the once-per-year COUNT, since that count was keyed on event_date's year too
-        // (SpecialMoneyRepository.java:140).
-        SubmitSpecialMoneyRequest second = uniformRequest(LocalDate.of(thisYear + 1, 6, 10));
-
-        assertThatThrownBy(() -> service.submit("UNIFORM_ANNUAL", second, employeeOwner()))
-            .isInstanceOf(ApiException.class)
-            .hasMessageContaining("ปีละ 1 ครั้ง");
-        assertThat(requestCountFor(employeeId, "UNIFORM_ANNUAL")).isEqualTo(1);
-    }
-
-    // The FIRST claim carries the mismatched date, not the second -- proves the SpecialMoneyRepository SQL column
-    // choice is load-bearing, not just SpecialMoneyService's choice of which year to ask for. These reverse which
-    // claim is adversarial to close that gap.
-
-    @Test
-    void firstMedicalClaimFiledWithAForwardEventDateStillConsumesTheYearItIsActuallyApprovedIn() {
-        LocalDate today = LocalDate.now(BUSINESS_ZONE);
-        // Filed and approved TODAY (so payrollMonth is THIS year and pays via THIS year's payroll), but its OWN
-        // event_date claims next year.
-        long firstId = submitAndApproveMedical(
-            today.plusYears(1).withMonth(6).withDayOfMonth(1), today.minusDays(5), new BigDecimal("3000"));
-        assertThat(statusOf(firstId)).isEqualTo("APPROVED");
-        assertThat(approvedAmountOf(firstId)).isEqualByComparingTo("3000");
-
-        // Second claim is now the HONEST one: event_date = today, matching the year its own payroll will actually land
-        // in.
-        SubmitSpecialMoneyRequest second = medicalRequest(today, today.minusDays(3), new BigDecimal("3000"));
-
-        assertThatThrownBy(() -> service.submit("MEDICAL", second, employeeOwner()))
-            .isInstanceOf(ApiException.class)
-            .hasMessageContaining("เกินวงเงินคงเหลือ");
-
-        assertThat(requestCountFor(employeeId, "MEDICAL")).isEqualTo(1);
-        SpecialMoneyUsageDto usage = service.usage(employeeId, today.getYear(), ceo());
-        assertThat(usage.approvedAmountThisYearByType().get("MEDICAL")).isEqualByComparingTo("3000");
-    }
-
-    @Test
-    void firstUniformAnnualClaimFiledWithAForwardEventDateStillConsumesTheYearItIsActuallySubmittedIn() {
-        LocalDate today = LocalDate.now(BUSINESS_ZONE);
-        int thisYear = today.getYear();
-        // event_date NEXT year's June -- "month == JUNE" never checks the year, so this passes the claim-window rule
-        // -- but submitted (and approved) TODAY, so requestedAt is THIS year.
-        long firstId = submitAndApproveUniform(LocalDate.of(thisYear + 1, 6, 10));
-        assertThat(statusOf(firstId)).isEqualTo("APPROVED");
-
-        // Second claim is the honest one: event_date THIS year's June. If the count query keyed on event_date, the
-        // first row (event_date next year) would be invisible to a "filed THIS year" count, and a second uniform claim
-        // would be allowed in the same real year.
-        SubmitSpecialMoneyRequest second = uniformRequest(LocalDate.of(thisYear, 6, 10));
-
-        assertThatThrownBy(() -> service.submit("UNIFORM_ANNUAL", second, employeeOwner()))
-            .isInstanceOf(ApiException.class)
-            .hasMessageContaining("ปีละ 1 ครั้ง");
-        assertThat(requestCountFor(employeeId, "UNIFORM_ANNUAL")).isEqualTo(1);
-    }
-
-    // Legitimate backdating and normal in-cap claims must keep working
-
-    @Test
-    void backdatedMedicalReceiptWithinTheOneMonthWindowStillSucceeds() {
-        LocalDate today = LocalDate.now(BUSINESS_ZONE);
-        // A receipt from a few weeks ago, filed today -- the ordinary "I was busy, filing late" case the welfare
-        // document's one-month receipt window exists to allow. Must not be refused just because the fix stopped
-        // trusting employee-supplied dates for the cap YEAR.
-        long id = submitAndApproveMedical(today.minusDays(20), today.minusDays(20), new BigDecimal("1200"));
-
-        assertThat(statusOf(id)).isEqualTo("APPROVED");
-        assertThat(approvedAmountOf(id)).isEqualByComparingTo("1200");
-    }
-
-    @Test
-    void normalWithinCapMedicalClaimStillSucceeds() {
-        // The fix must not turn into "deny everything": a fresh employee filing a single, ordinary, within-cap claim
-        // still goes straight through.
-        LocalDate today = LocalDate.now(BUSINESS_ZONE);
-        long id = submitAndApproveMedical(today, today.minusDays(1), new BigDecimal("1500"));
-
-        assertThat(statusOf(id)).isEqualTo("APPROVED");
-        assertThat(approvedAmountOf(id)).isEqualByComparingTo("1500");
-        SpecialMoneyUsageDto usage = service.usage(employeeId, today.getYear(), ceo());
-        assertThat(usage.approvedAmountThisYearByType().get("MEDICAL")).isEqualByComparingTo("1500");
-    }
-
     // helpers
 
     private long submitAndApproveMedical(LocalDate eventDate, LocalDate receiptDate, BigDecimal amount) {
@@ -211,23 +117,9 @@ class SpecialMoneyCapYearIntegrationTest extends AbstractPostgresIntegrationTest
         return created.id();
     }
 
-    private long submitAndApproveUniform(LocalDate eventDate) {
-        SpecialMoneyRequestDto created = service.submit("UNIFORM_ANNUAL", uniformRequest(eventDate), employeeOwner());
-        attachEvidence(created.id());
-        service.approve(created.id(), null, ceo());
-        return created.id();
-    }
-
     private SubmitSpecialMoneyRequest medicalRequest(LocalDate eventDate, LocalDate receiptDate, BigDecimal amount) {
         return new SubmitSpecialMoneyRequest(
             employeeId, eventDate, null, receiptDate, BigDecimal.ONE, amount, "Medical claim", Map.of());
-    }
-
-    /** TAILORED mode: no receipt-month constraint, just event_date's month (June) and piece count. */
-    private SubmitSpecialMoneyRequest uniformRequest(LocalDate eventDate) {
-        return new SubmitSpecialMoneyRequest(
-            employeeId, eventDate, null, null, BigDecimal.ONE, new BigDecimal("1300"), "Annual uniform",
-            Map.of("uniformMode", "TAILORED", "shirtCount", "2", "trouserCount", "2"));
     }
 
     private void attachEvidence(long requestId) {

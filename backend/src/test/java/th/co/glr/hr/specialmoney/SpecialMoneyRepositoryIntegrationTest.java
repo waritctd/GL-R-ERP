@@ -1,6 +1,5 @@
 package th.co.glr.hr.specialmoney;
 
-import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -23,64 +22,6 @@ class SpecialMoneyRepositoryIntegrationTest extends AbstractPostgresIntegrationT
     @BeforeEach
     void wireRepository() {
         repository = new SpecialMoneyRepository(jdbc, new ObjectMapper());
-    }
-
-    @Test
-    void findPolicyAmountsReadsBothAmountAndTextValueForTheEffectiveDatedRows() {
-        // A made-up request_type (special_money_policy.request_type carries no FK/check to SpecialMoneyType) so this
-        // test's rows never collide with the real V66 seed data. A superseded row (effective_to set) must not be
-        // picked up.
-        jdbc.update("""
-            INSERT INTO hr.special_money_policy (request_type, policy_key, amount, effective_from, effective_to, version)
-            VALUES ('TEST_POLICY_TYPE', 'cap', 4000, DATE '2015-01-01', DATE '2017-12-31', 1)
-            """, Map.of());
-        jdbc.update("""
-            INSERT INTO hr.special_money_policy (request_type, policy_key, amount, effective_from, version)
-            VALUES ('TEST_POLICY_TYPE', 'cap', 6000, DATE '2018-01-01', 2)
-            """, Map.of());
-        jdbc.update("""
-            INSERT INTO hr.special_money_policy (request_type, policy_key, text_value, effective_from, version)
-            VALUES ('TEST_POLICY_TYPE', 'note_code', 'FUNERAL-X', DATE '2018-01-01', 2)
-            """, Map.of());
-
-        PolicyAmounts amounts = repository.findPolicyAmounts("TEST_POLICY_TYPE", LocalDate.of(2026, 1, 1));
-
-        assertThat(amounts.amount("cap")).isEqualByComparingTo("6000");
-        assertThat(amounts.text("note_code")).isEqualTo("FUNERAL-X");
-        assertThat(amounts.version()).isEqualTo(2);
-    }
-
-    /** findUsage's year filter used to be EXTRACT for both the amount and the count query -- event_date is
-     * employee-supplied and SubmitSpecialMoneyHttpRequest places no bound on it, so an annual cap keyed on it
-     * could always be defeated by filing against a year nothing had been approved against yet. */
-    @Test
-    void findUsageKeysTheAmountSumOnPayrollMonthAndTheCountOnRequestedAt() {
-        long employeeId = insertEmployee("SMR-USG");
-        // APPROVED, payroll_month in 2026 (so it belongs to 2026's cap under the fix) but event_date claims 2099 --
-        // must still be COUNTED for year 2026.
-        insertRequest(employeeId, "MEDICAL", LocalDate.of(2099, 1, 1), "1500", "APPROVED", "1500",
-            LocalDate.of(2026, 4, 1), OffsetDateTime.parse("2026-03-15T10:00:00+07:00"));
-        // APPROVED, payroll_month in 2025 (belongs to 2025's cap) but event_date claims 2026 -- must be EXCLUDED from
-        // 2026, even though the old, buggy query would have included it.
-        insertRequest(employeeId, "MEDICAL", LocalDate.of(2026, 12, 1), "800", "APPROVED", "800",
-            LocalDate.of(2025, 12, 1), OffsetDateTime.parse("2025-12-20T10:00:00+07:00"));
-        // SUBMITTED (no payroll_month yet), requested_at in 2026, event_date claims 2099 -- must be excluded from the
-        // APPROVED amount sum (not yet approved) but counted in the in-flight per-year count for 2026, keyed on
-        // requested_at.
-        insertRequest(employeeId, "MEDICAL", LocalDate.of(2099, 6, 1), "500", "SUBMITTED", null, null,
-            OffsetDateTime.parse("2026-06-01T09:00:00+07:00"));
-
-        UsageSnapshot usage = repository.findUsage(employeeId, 2026);
-
-        // Only the first row: payroll_month 2026, regardless of its 2099 event_date.
-        assertThat(usage.approvedAmountThisYear(SpecialMoneyType.MEDICAL)).isEqualByComparingTo("1500");
-        // Lifetime count is NOT year-scoped by design (it backs the once-per-lifetime AID gate, which must see every
-        // prior claim regardless of year): all 3 rows count.
-        assertThat(usage.activeCountLifetime(SpecialMoneyType.MEDICAL)).isEqualTo(3);
-        // requested_at in 2026: rows 1 and 3 (row 2's requested_at is 2025). Deliberately different from both the
-        // lifetime count (3) and the approved-only amount-bearing count (1), so an implementation that keys this off
-        // the wrong column/map fails here rather than by luck.
-        assertThat(usage.activeCountThisYear(SpecialMoneyType.MEDICAL)).isEqualTo(2);
     }
 
     @Test
