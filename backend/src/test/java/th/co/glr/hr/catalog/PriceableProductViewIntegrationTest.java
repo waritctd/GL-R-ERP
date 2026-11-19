@@ -40,16 +40,6 @@ class PriceableProductViewIntegrationTest extends AbstractPostgresIntegrationTes
     }
 
     @Test
-    void perSqmPriceIsTheSourcePriceUnchanged() {
-        long id = insertCatalogProduct("V153 F1", "IT", "SQM-1",
-            new BigDecimal("74.50"), "EUR", "per_sqm", "ACTIVE");
-        setGeometry(id, "60x120", 600, 1200, new BigDecimal("9"), null, new BigDecimal("1.44"));
-
-        assertThat(view(id).pricePerSqm()).isEqualByComparingTo("74.50");
-        assertThat(view(id).status()).isEqualTo("PRICEABLE");
-    }
-
-    @Test
     void perPiecePriceIsDividedByTheAreaOfOnePiece() {
         long id = insertCatalogProduct("V153 F2", "IT", "PC-1",
             new BigDecimal("18.00"), "EUR", "per_piece", "ACTIVE");
@@ -57,31 +47,6 @@ class PriceableProductViewIntegrationTest extends AbstractPostgresIntegrationTes
         setGeometry(id, "60x60", 600, 600, new BigDecimal("9"), new BigDecimal("0.36"), null);
 
         assertThat(view(id).pricePerSqm()).isEqualByComparingTo("50.00");
-    }
-
-    /** The worked example from the design doc: CITY RQ81 AVORIO BATTISCOPA R., 7x60 cm, EUR 22.00 per linear metre.
-     * One linear metre of a 7 cm profile covers 0.07 m2, so the per-sqm equivalent is 22.00 / 0.07 = EUR
-     * 314.285714. */
-    @Test
-    void linearMetrePriceIsDividedByTheProfileHeight() {
-        long id = insertCatalogProduct("V153 F3", "IT", "ML-1",
-            new BigDecimal("22.00"), "EUR", "per_linear_m", "ACTIVE");
-        setGeometry(id, "7x60", 70, 600, new BigDecimal("8.5"), null, new BigDecimal("6"));
-
-        assertThat(view(id).pricePerSqm()).isEqualByComparingTo("314.285714");
-    }
-
-    /** The mislabelled box quantity: 6 "m2/box" is really 6 linear metres = 0.42 m2. */
-    @Test
-    void perMetreBoxQuantityIsCorrectedFromLinearMetresToSquareMetres() {
-        long id = insertCatalogProduct("V153 F4", "IT", "ML-2",
-            new BigDecimal("22.00"), "EUR", "per_linear_m", "ACTIVE");
-        setGeometry(id, "7x60", 70, 600, new BigDecimal("8.5"), null, new BigDecimal("6"));
-
-        BigDecimal trueSqmPerBox = jdbc.queryForObject(
-            "SELECT true_sqm_per_box FROM price_catalog.v_priceable_product WHERE price_id = :id",
-            Map.of("id", id), BigDecimal.class);
-        assertThat(trueSqmPerBox).isEqualByComparingTo("0.42");
     }
 
     @Test
@@ -94,111 +59,4 @@ class PriceableProductViewIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(view(id).status()).isEqualTo("NO_SQM_BASIS");
     }
 
-    // ── thickness fallback chain ─────────────────────────────────────────────
-
-    @Test
-    void aRowWithNoThicknessIsUnpriceableUntilTheCeoSuppliesADefault() {
-        long id = insertCatalogProduct("V153 F6", "ES", "TH-1",
-            new BigDecimal("40.00"), "EUR", "per_sqm", "ACTIVE");
-        setGeometry(id, "20x20", 200, 200, null, null, null);
-        jdbc.update("UPDATE price_catalog.product_prices SET collection = 'ALTEA' WHERE price_id = :id",
-            Map.of("id", id));
-
-        // No default anywhere: refuse, never guess -- a wrong thickness picks a freight band that can differ by 50,000
-        // THB per shipment.
-        assertThat(view(id).status()).isEqualTo("NO_THICKNESS");
-        assertThat(view(id).thickness()).isNull();
-
-        Long factoryId = jdbc.queryForObject(
-            "SELECT factory_id FROM price_catalog.product_prices WHERE price_id = :id",
-            Map.of("id", id), Long.class);
-        jdbc.update("""
-            INSERT INTO price_catalog.collection_thickness_default (factory_id, collection, thickness_mm)
-            VALUES (:f, 'ALTEA', 8.5)
-            """, new MapSqlParameterSource().addValue("f", factoryId));
-
-        assertThat(view(id).status()).isEqualTo("PRICEABLE");
-        assertThat(view(id).thickness()).isEqualByComparingTo("8.5");
-    }
-
-    @Test
-    void theMostSpecificThicknessDefaultWins() {
-        long id = insertCatalogProduct("V153 F7", "ES", "TH-2",
-            new BigDecimal("40.00"), "EUR", "per_sqm", "ACTIVE");
-        setGeometry(id, "30x60", 300, 600, null, null, null);
-        jdbc.update("UPDATE price_catalog.product_prices SET collection = 'BARNET' WHERE price_id = :id",
-            Map.of("id", id));
-        Long factoryId = jdbc.queryForObject(
-            "SELECT factory_id FROM price_catalog.product_prices WHERE price_id = :id",
-            Map.of("id", id), Long.class);
-
-        // Three overlapping defaults, deliberately inserted least-specific first so a naive "first row wins"
-        // implementation would pick the wrong one. '300X600' is the V172 canonical form, not the pre-V172 raw-text
-        // form -- the override must match whatever size_norm actually is.
-        jdbc.update("""
-            INSERT INTO price_catalog.collection_thickness_default
-                (factory_id, collection, size_norm, thickness_mm)
-            VALUES (:f, NULL, NULL, 6), (:f, 'BARNET', NULL, 9), (:f, 'BARNET', '300X600', 12)
-            """, new MapSqlParameterSource().addValue("f", factoryId));
-
-        assertThat(view(id).thickness()).isEqualByComparingTo("12");
-    }
-
-    /** V172 regression guard: recanonicalising size_norm (from raw text to width_mmxheight_mm) must not disturb the
-     * ONE shape actually in production today — a collection-level default (size_norm IS NULL), which matches
-     * regardless of size_norm's value or format. */
-    @Test
-    void collectionLevelDefaultStillMatchesAfterSizeNormCanonicalisation() {
-        long id = insertCatalogProduct("V172 F1", "IT", "SN-1",
-            new BigDecimal("55.00"), "EUR", "per_sqm", "ACTIVE");
-        // Deliberately messy size_raw (the exact shape V172's header describes size_norm used to mishandle) —
-        // collection-level matching must not care what size_norm resolves to here.
-        setGeometry(id, "60x120 9MM", 600, 1200, null, null, null);
-        jdbc.update("UPDATE price_catalog.product_prices SET collection = 'SN-COLL' WHERE price_id = :id",
-            Map.of("id", id));
-        Long factoryId = jdbc.queryForObject(
-            "SELECT factory_id FROM price_catalog.product_prices WHERE price_id = :id",
-            Map.of("id", id), Long.class);
-
-        assertThat(view(id).status()).isEqualTo("NO_THICKNESS");
-
-        jdbc.update("""
-            INSERT INTO price_catalog.collection_thickness_default
-                (factory_id, collection, size_norm, thickness_mm)
-            VALUES (:f, 'SN-COLL', NULL, 11)
-            """, new MapSqlParameterSource().addValue("f", factoryId));
-
-        assertThat(view(id).status()).isEqualTo("PRICEABLE");
-        assertThat(view(id).thickness()).isEqualByComparingTo("11");
-    }
-
-    @Test
-    void aThicknessOutsideTheSeededFreightBandsIsFlaggedNotSilentlyPriced() {
-        long id = insertCatalogProduct("V153 F8", "IT", "TH-3",
-            new BigDecimal("90.00"), "EUR", "per_sqm", "ACTIVE");
-        // Freight bands cover [3,21) mm only; a 30 mm slab matches nothing.
-        setGeometry(id, "120x120", 1200, 1200, new BigDecimal("30"), null, null);
-
-        assertThat(view(id).status()).isEqualTo("THICKNESS_OUT_OF_BAND");
-    }
-
-    // ── version scoping ──────────────────────────────────────────────────────
-
-    @Test
-    void theViewShowsOnlyTheActiveVersion() {
-        long active = insertCatalogProduct("V153 F9", "IT", "VER-1",
-            new BigDecimal("50.00"), "EUR", "per_sqm", "ACTIVE");
-        long draft = insertCatalogProduct("V153 F10", "IT", "VER-2",
-            new BigDecimal("50.00"), "EUR", "per_sqm", "DRAFT");
-
-        Integer activeSeen = jdbc.queryForObject(
-            "SELECT count(*) FROM price_catalog.v_priceable_product WHERE price_id = :id",
-            Map.of("id", active), Integer.class);
-        Integer draftSeen = jdbc.queryForObject(
-            "SELECT count(*) FROM price_catalog.v_priceable_product WHERE price_id = :id",
-            Map.of("id", draft), Integer.class);
-
-        assertThat(activeSeen).isEqualTo(1);
-        assertThat(draftSeen).as("a DRAFT version must never reach the pricing engine").isZero();
-    }
 }

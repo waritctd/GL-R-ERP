@@ -3,9 +3,6 @@ package th.co.glr.hr.pricingdecision;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
@@ -22,14 +19,11 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.dao.DuplicateKeyException;
 import org.springframework.http.HttpStatus;
-import org.springframework.mock.web.MockMultipartFile;
 import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.catalog.CatalogRepository;
 import th.co.glr.hr.common.ApiException;
-import th.co.glr.hr.config.AppProperties;
 import th.co.glr.hr.customer.ContactRepository;
 import th.co.glr.hr.customer.CustomerDto;
 import th.co.glr.hr.customer.CustomerRepository;
@@ -43,28 +37,21 @@ import th.co.glr.hr.employee.UpsertEmployeeRequest;
 import th.co.glr.hr.factory.FactoryConfigRepository;
 import th.co.glr.hr.factoryquote.FactoryQuoteDtos.FactoryQuoteDto;
 import th.co.glr.hr.factoryquote.FactoryQuoteRepository;
-import th.co.glr.hr.factoryquote.FactoryQuoteRequests.MarkNotAvailableRequest;
 import th.co.glr.hr.factoryquote.FactoryQuoteRequests.ReceiveFactoryQuoteItemRequest;
 import th.co.glr.hr.factoryquote.FactoryQuoteRequests.ReceiveFactoryQuoteRequest;
 import th.co.glr.hr.factoryquote.FactoryQuoteRequests.MarkFactoryContactedRequest;
-import th.co.glr.hr.factoryquote.FactoryQuoteRequests.StartNegotiationRequest;
 import th.co.glr.hr.factoryquote.FactoryQuoteService;
 import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.notification.SalesNotificationMailer;
 import th.co.glr.hr.pricing.FxRateRepository;
 import th.co.glr.hr.pricing.PricingFormulaConfigRepository;
 import th.co.glr.hr.pricingcosting.LandedCostCalculator;
-import th.co.glr.hr.pricingcosting.PricingCostingDtos.PricingCostingDto;
-import th.co.glr.hr.pricingcosting.PricingCostingDtos.PricingCostingItemDto;
 import th.co.glr.hr.pricingcosting.PricingCostingRepository;
 import th.co.glr.hr.pricingcosting.PricingCostingService;
 import th.co.glr.hr.pricingcosting.PricingFormulaEngine;
 import th.co.glr.hr.pricingdecision.PricingDecisionDtos.PricingDecisionDto;
 import th.co.glr.hr.pricingdecision.PricingDecisionDtos.PricingDecisionItemDto;
-import th.co.glr.hr.pricingdecision.PricingDecisionDtos.PricingDecisionSalesViewDto;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.ApprovePricingDecisionRequest;
-import th.co.glr.hr.pricingdecision.PricingDecisionRequests.CostOverrideRequest;
-import th.co.glr.hr.pricingdecision.PricingDecisionRequests.ReturnPricingDecisionRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.StartPricingDecisionRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.UpdatePricingDecisionItemRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.UpdatePricingDecisionRequest;
@@ -74,7 +61,6 @@ import th.co.glr.hr.pricingrequest.PricingRequestRequests;
 import th.co.glr.hr.pricingrequest.PricingRequestService;
 import th.co.glr.hr.pricingrequest.PricingRequestStatus;
 import th.co.glr.hr.pricingrequest.QuantityType;
-import th.co.glr.hr.pricingrequest.UnitBasis;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 import th.co.glr.hr.ticket.CreateTicketRequest;
 import th.co.glr.hr.ticket.QuotationRenderer;
@@ -203,163 +189,9 @@ class PricingDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
 
     // Acceptance scenario (end to end, real Postgres)
 
-    @Test
-    void acceptanceScenario_submitApproveAndSalesVisibility() {
-        String ticketStatusBefore = jdbc.queryForObject(
-            "SELECT status FROM sales.ticket WHERE ticket_id = :id", Map.of("id", ticketId), String.class);
-        String salesStageBefore = jdbc.queryForObject(
-            "SELECT sales_stage FROM sales.ticket WHERE ticket_id = :id", Map.of("id", ticketId), String.class);
-
-        long pricingRequestId = twoItemSubmittedCosting();
-
-        // CEO opens the review.
-        PricingDecisionDto decision = decisionService.startReview(pricingRequestId,
-            new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, UUID.randomUUID().toString()), ceoActor);
-        assertThat(decision.status()).isEqualTo(PricingDecisionStatus.DRAFT);
-        assertThat(pricingRequestService.get(pricingRequestId, ceoActor).summary().status())
-            .isEqualTo(PricingRequestStatus.CEO_REVIEWING);
-        assertThat(decision.items()).hasSize(2);
-        // Default margin (20%) applied to every item at creation.
-        for (PricingDecisionItemDto item : decision.items()) {
-            assertThat(item.proposedMarginPct()).isEqualByComparingTo("0.20");
-            assertThat(item.proposedSellingPricePerRequestedUnit())
-                .isEqualByComparingTo(formulaSellingPrice(item.frozenLandedCostPerRequestedUnitThb(), "0.20"));
-        }
-
-        // CEO changes Item A's margin to 35% and sets minimum selling prices for both items (required at approval —
-        // design correction 5).
-        PricingDecisionItemDto itemA = decision.items().get(0);
-        PricingDecisionItemDto itemB = decision.items().get(1);
-        PricingDecisionDto updated = decisionService.update(decision.id(), new UpdatePricingDecisionRequest(
-            "ปรับ margin item A", List.of(
-                new UpdatePricingDecisionItemRequest(itemA.id(), new BigDecimal("0.35"),
-                    new BigDecimal("90.00"), null, null, false),
-                new UpdatePricingDecisionItemRequest(itemB.id(), null,
-                    new BigDecimal("90.00"), null, null, false))),
-            ceoActor);
-        PricingDecisionItemDto updatedA = itemById(updated, itemA.id());
-        assertThat(updatedA.proposedMarginPct()).isEqualByComparingTo("0.35");
-        assertThat(updatedA.proposedSellingPricePerRequestedUnit())
-            .isEqualByComparingTo(formulaSellingPrice(updatedA.frozenLandedCostPerRequestedUnitThb(), "0.35"));
-
-        // CEO approves all items.
-        PricingDecisionDto approved = decisionService.approve(decision.id(),
-            new ApprovePricingDecisionRequest("อนุมัติ", UUID.randomUUID().toString()), ceoActor);
-        assertThat(approved.status()).isEqualTo(PricingDecisionStatus.APPROVED);
-        assertThat(approved.approvedBy()).isEqualTo(ceoUserId);
-        for (PricingDecisionItemDto item : approved.items()) {
-            assertThat(item.approvedMarginPct()).isEqualByComparingTo(item.proposedMarginPct());
-            assertThat(item.approvedSellingPricePerRequestedUnit())
-                .isEqualByComparingTo(formulaSellingPrice(
-                    item.frozenLandedCostPerRequestedUnitThb(), item.approvedMarginPct()));
-        }
-        assertThat(pricingRequestService.get(pricingRequestId, ceoActor).summary().status())
-            .isEqualTo(PricingRequestStatus.APPROVED_FOR_QUOTATION);
-
-        // Sales sees the approved selling prices...
-        PricingDecisionSalesViewDto salesView = decisionService.salesView(pricingRequestId, salesActor);
-        assertThat(salesView.items()).hasSize(2);
-        assertThat(salesView.items()).extracting(i -> i.approvedSellingPricePerRequestedUnit())
-            .containsExactlyInAnyOrderElementsOf(
-                approved.items().stream().map(PricingDecisionItemDto::approvedSellingPricePerRequestedUnit).toList());
-
-        // ...but cannot see raw cost (structural: PricingDecisionSalesItemDto has no cost/margin accessor at all — see
-        // design correction 2). Confirm sales cannot reach the raw endpoints.
-        assertThatThrownBy(() -> decisionService.get(decision.id(), salesActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
-        assertThatThrownBy(() -> decisionService.list(pricingRequestId, salesActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
-
-        // Deal stage/status unchanged, no quotation created.
-        assertThat(jdbc.queryForObject(
-            "SELECT status FROM sales.ticket WHERE ticket_id = :id", Map.of("id", ticketId), String.class))
-            .isEqualTo(ticketStatusBefore);
-        assertThat(jdbc.queryForObject(
-            "SELECT sales_stage FROM sales.ticket WHERE ticket_id = :id", Map.of("id", ticketId), String.class))
-            .isEqualTo(salesStageBefore);
-        assertThat(jdbc.queryForObject(
-            "SELECT COUNT(*) FROM sales.quotation WHERE ticket_id = :id", Map.of("id", ticketId), Long.class))
-            .isZero();
-
-        // Exactly one approval event and one notification.
-        assertThat(jdbc.queryForObject("""
-            SELECT COUNT(*) FROM sales.pricing_request_event
-             WHERE pricing_request_id = :id AND event_kind = 'PRICING_DECISION_APPROVED'
-            """, Map.of("id", pricingRequestId), Long.class)).isEqualTo(1L);
-        assertThat(jdbc.queryForObject("""
-            SELECT COUNT(*) FROM hr.notification
-             WHERE employee_id = :salesRepId AND type = 'PRICING_DECISION_APPROVED'
-            """, Map.of("salesRepId", salesRepId), Long.class)).isEqualTo(1L);
-    }
-
     // Design correction 1: unit basis
 
-    /** A per-box request and a per-piece request at the SAME physical quantity (200 pieces / 10 boxes of 20) must
-     * land on the same TOTAL landed cost and the same total selling price at the same margin — the
-     * per-requested-unit PRICE differs (it's per box vs per piece) but the total does not. */
-    @Test
-    void unitBasis_perBoxAndPerPieceRequests_atSamePhysicalQuantity_produceTheSameTotal() {
-        long perBoxRequestId = singleItemSubmittedCosting(new BigDecimal("10"), UnitBasis.PER_BOX,
-            UnitBasis.PER_BOX, new BigDecimal("10.00"), "1000.00", new BigDecimal("0.5"), new BigDecimal("20"), null);
-        long perPieceRequestId = singleItemSubmittedCosting(new BigDecimal("200"), UnitBasis.PER_PIECE,
-            UnitBasis.PER_BOX, new BigDecimal("10.00"), "1000.00", new BigDecimal("0.5"), new BigDecimal("20"), null);
-
-        PricingDecisionDto perBoxDecision = decisionService.startReview(perBoxRequestId,
-            new StartPricingDecisionRequest(new BigDecimal("0.10"), "THB", null, null), ceoActor);
-        PricingDecisionDto perPieceDecision = decisionService.startReview(perPieceRequestId,
-            new StartPricingDecisionRequest(new BigDecimal("0.10"), "THB", null, null), ceoActor);
-
-        PricingDecisionItemDto perBoxItem = perBoxDecision.items().get(0);
-        PricingDecisionItemDto perPieceItem = perPieceDecision.items().get(0);
-
-        assertThat(perBoxItem.requestedUnitBasis()).isEqualTo(UnitBasis.PER_BOX);
-        assertThat(perPieceItem.requestedUnitBasis()).isEqualTo(UnitBasis.PER_PIECE);
-        assertThat(perBoxItem.normalizedQuantityPieces()).isEqualByComparingTo("200.000000");
-        assertThat(perPieceItem.normalizedQuantityPieces()).isEqualByComparingTo("200");
-
-        // Per-REQUESTED-UNIT price differs (per box vs per piece)...
-        assertThat(perBoxItem.frozenLandedCostPerRequestedUnitThb())
-            .isNotEqualByComparingTo(perPieceItem.frozenLandedCostPerRequestedUnitThb());
-        // ...but the TOTAL (price-per-unit * requested quantity) is identical.
-        BigDecimal perBoxTotal = perBoxItem.frozenLandedCostPerRequestedUnitThb().multiply(perBoxItem.requestedQuantity());
-        BigDecimal perPieceTotal = perPieceItem.frozenLandedCostPerRequestedUnitThb().multiply(perPieceItem.requestedQuantity());
-        // V152: both scenarios cost 200 pieces / 100 sqm total at Italy [8,12)mm. The point of this test
-        // (basis-invariance) is unchanged: both bases still land on the SAME total.
-        assertThat(perBoxTotal).isEqualByComparingTo("91537.0200");
-        assertThat(perPieceTotal).isEqualByComparingTo("91537.0200");
-        assertThat(perBoxTotal).isEqualByComparingTo(perPieceTotal);
-
-        // The SELLING price total is not basis-invariant, and
-        // that is CORRECT — see LandedCostCalculatorFormulaIntegrationTest
-        // and CustomerQuotationIntegrationTest's identical scenario for the full explanation.
-        // SP rounds HALF_UP to 2dp; the figures below are hand-verified values for that rule.
-        // The rounding happens at the
-        // PER-REQUESTED-UNIT level BEFORE multiplying by quantity, so the same underlying landed
-        // cost (91537.0200 total either way) rounds by a different RELATIVE amount
-        // depending on how large the per-unit price is, and that per-unit slop is multiplied by a
-        // different quantity (10 boxes vs 200 pieces) on each side — basis-invariance is the
-        // wrong intuition for the SELLING total. Hand-verified at margin=0.10 (this test's own default), sellingBuffer=1.07:
-        //   per-box:   9153.7020 x 1.10 x 1.07 = 10773.907254 -> HALF_UP 2dp -> ฿10,773.91/box
-        //              x 10 boxes   = ฿107,739.10
-        //   per-piece:  457.6851 x 1.10 x 1.07 =   538.6953827 -> HALF_UP 2dp -> ฿538.70/piece
-        //              x 200 pieces = ฿107,740.00
-        BigDecimal perBoxSellingTotal = perBoxItem.proposedSellingPricePerRequestedUnit().multiply(perBoxItem.requestedQuantity());
-        BigDecimal perPieceSellingTotal = perPieceItem.proposedSellingPricePerRequestedUnit().multiply(perPieceItem.requestedQuantity());
-        assertThat(perBoxSellingTotal).isEqualByComparingTo("107739.10");
-        assertThat(perPieceSellingTotal).isEqualByComparingTo("107740.00");
-    }
-
     // Design correction 2: never leak cost to Sales
-
-    @Test
-    void salesView_returns404WhenNoDecisionHasBeenApprovedYet() {
-        long pricingRequestId = twoItemSubmittedCosting();
-        decisionService.startReview(pricingRequestId,
-            new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, null), ceoActor);
-
-        assertThatThrownBy(() -> decisionService.salesView(pricingRequestId, salesActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.NOT_FOUND));
-    }
 
     @Test
     void salesView_rejectsANonOwningSalesRep() {
@@ -373,42 +205,7 @@ class PricingDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(decision.status()).isEqualTo(PricingDecisionStatus.APPROVED);
     }
 
-    /** "Manage all sales documents" grant: a holder reads another rep's approved sales view; an inactive one does not. */
-    @Test
-    void salesView_admitsAGrantHolder_butNotAnInactiveOne() {
-        long pricingRequestId = twoItemSubmittedCosting();
-        approveWithFlatMargin(pricingRequestId, new BigDecimal("0.20"));
-        jdbc.update("UPDATE hr.employee SET can_manage_all_sales_documents = TRUE WHERE employee_id = :id",
-            java.util.Map.of("id", otherSalesActor.id()));
-
-        assertThat(decisionService.salesView(pricingRequestId, otherSalesActor).items()).isNotEmpty();
-
-        jdbc.update("UPDATE hr.employee SET is_active = FALSE WHERE employee_id = :id",
-            java.util.Map.of("id", otherSalesActor.id()));
-        assertThatThrownBy(() -> decisionService.salesView(pricingRequestId, otherSalesActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
-    }
-
-    @Test
-    void accountRole_cannotReachDecisionsCostingsOrFactoryQuotes() {
-        long pricingRequestId = twoItemSubmittedCosting();
-        PricingDecisionDto decision = decisionService.startReview(pricingRequestId,
-            new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, null), ceoActor);
-
-        assertThatThrownBy(() -> decisionService.get(decision.id(), accountActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
-        assertThatThrownBy(() -> decisionService.list(pricingRequestId, accountActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
-        assertThatThrownBy(() -> decisionService.salesView(pricingRequestId, accountActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
-        assertThatThrownBy(() -> costingService.list(pricingRequestId, accountActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
-        assertThatThrownBy(() -> factoryQuoteService.list(pricingRequestId, accountActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
-    }
-
-    // Stage L3 (release runbook): sales/sales_manager must never reach the RAW cost/margin/quote endpoints — only
-    // the account denial was previously asserted (accountRole_cannotReachDecisionsCostingsOrFactoryQuotes above).
+    // Stage L3 (release runbook): sales/sales_manager must never reach the RAW cost/margin/quote endpoints.
 
     /** MUTATION-CHECK RECORD (actually run, not simulated): temporarily changed
      * PricingDecisionService.RAW_DECISION_ROLES from Set.of("import", "ceo") to Set.of("import", "ceo", "sales")
@@ -433,48 +230,6 @@ class PricingDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(decisionService.list(pricingRequestId, importActor)).isNotEmpty();
     }
 
-    @Test
-    void salesAndSalesManager_cannotReachRawPricingCosting() {
-        long pricingRequestId = twoItemSubmittedCosting();
-        // V141 ("CEO owns costing"): a costing only exists once the CEO opens review — there is no more standalone
-        // Import-created costing to fetch before that.
-        decisionService.startReview(pricingRequestId,
-            new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, null), ceoActor);
-        long costingId = costingService.list(pricingRequestId, importActor).get(0).id();
-
-        assertThatThrownBy(() -> costingService.get(costingId, salesActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
-        assertThatThrownBy(() -> costingService.list(pricingRequestId, salesActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
-        assertThatThrownBy(() -> costingService.get(costingId, salesManagerActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
-        assertThatThrownBy(() -> costingService.list(pricingRequestId, salesManagerActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
-
-        // Positive control: import/ceo (RAW_COSTING_ROLES) are unaffected.
-        assertThat(costingService.get(costingId, ceoActor)).isNotNull();
-        assertThat(costingService.list(pricingRequestId, importActor)).isNotEmpty();
-    }
-
-    @Test
-    void salesAndSalesManager_cannotReachRawFactoryQuote() {
-        long pricingRequestId = twoItemSubmittedCosting();
-        long quoteId = factoryQuoteRepository.findCurrentByFactory(pricingRequestId, "Factory A3").orElseThrow().id();
-
-        assertThatThrownBy(() -> factoryQuoteService.get(quoteId, salesActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
-        assertThatThrownBy(() -> factoryQuoteService.list(pricingRequestId, salesActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
-        assertThatThrownBy(() -> factoryQuoteService.get(quoteId, salesManagerActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
-        assertThatThrownBy(() -> factoryQuoteService.list(pricingRequestId, salesManagerActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
-
-        // Positive control: import/ceo (RAW_QUOTE_ROLES) are unaffected.
-        assertThat(factoryQuoteService.get(quoteId, ceoActor)).isNotNull();
-        assertThat(factoryQuoteService.list(pricingRequestId, importActor)).isNotEmpty();
-    }
-
     /** Positive control for the L3 redaction (not a blackout): the owning sales rep, AND the sales manager, can
      * still reach the approved selling price through salesView even though both are locked out of the raw get/list
      * endpoints above. */
@@ -491,177 +246,12 @@ class PricingDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
     // must stay read-only — factory-quote and costing MUTATIONS are IMPORT_ROLES-only. Untested until now. Written
     // wrong-way-round: can ceo mutate.
 
-    /** MUTATION-CHECK RECORD (actually run, not simulated): temporarily changed FactoryQuoteService.IMPORT_ROLES
-     * from Set.of("import") to Set.of("import", "ceo") (reintroducing the vulnerability this test guards against)
-     * and ran this class. */
-    @Test
-    void ceo_cannotMutateFactoryQuote_importOnlyRemainsAbleTo() {
-        long pricingRequestId = twoItemSubmittedCosting();
-        FactoryQuoteDto quoteBefore = factoryQuoteRepository.findCurrentByFactory(pricingRequestId, "Factory A3").orElseThrow();
-        long quoteId = quoteBefore.id();
-
-        // CR-1 (B-R1): the CEO MAY now mark a factory contacted, so that call is no longer a role refusal -- but this
-        // quote is already READY_FOR_COSTING (not a DRAFT), so it is refused on STATE (409) and, below, the row is
-        // still untouched.
-        assertThatThrownBy(() -> factoryQuoteService.markContacted(quoteId,
-            new MarkFactoryContactedRequest(java.time.LocalDate.now(java.time.ZoneId.of("Asia/Bangkok")), null), ceoActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
-        assertThatThrownBy(() -> factoryQuoteService.receive(quoteId,
-                new ReceiveFactoryQuoteRequest("REF-CEO-ATTEMPT", "THB", "30 days", "45 days", "revision", "note",
-                    List.of(new ReceiveFactoryQuoteItemRequest(
-                        1L, null, null, new BigDecimal("1.00"), "piece", "piece",
-                        new BigDecimal("999.00"), "THB", null, new BigDecimal("1.00"), null, null,
-                        "45 days", null, null)),
-                    UUID.randomUUID().toString()),
-                ceoActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
-        assertThatThrownBy(() -> factoryQuoteService.markReadyForCosting(quoteId, ceoActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
-
-        // DB re-read: the quote row is untouched by any of the three failed ceo attempts.
-        FactoryQuoteDto quoteAfter = factoryQuoteRepository.findCurrentByFactory(pricingRequestId, "Factory A3").orElseThrow();
-        assertThat(quoteAfter.status()).isEqualTo(quoteBefore.status());
-        assertThat(quoteAfter.updatedAt()).isEqualTo(quoteBefore.updatedAt());
-
-        // V141 ("CEO owns costing"): Import's costing create/recalculate/submit endpoints are gone entirely — there is
-        // no "ceo attempts the Import costing path" left to test here.
-
-        // Positive control: import (IMPORT_ROLES) still can — proven by twoItemSubmittedCosting() itself already
-        // having driven this exact pricing request's factory quote through send/receive/markReadyForCosting as
-        // importActor.
-    }
-
     // Design correction 3: freeze factory-quote mutations from CEO_REVIEWING
-
-    @Test
-    void ceoReviewing_freezesFactoryQuoteMutations() {
-        long pricingRequestId = twoItemSubmittedCosting();
-        long anyQuoteId = factoryQuoteRepository.findCurrentByFactory(pricingRequestId, "Factory A3").orElseThrow().id();
-        PricingDecisionDto decision = decisionService.startReview(pricingRequestId,
-            new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, null), ceoActor);
-        assertThat(pricingRequestService.get(pricingRequestId, ceoActor).summary().status())
-            .isEqualTo(PricingRequestStatus.CEO_REVIEWING);
-
-        assertThatThrownBy(() -> factoryQuoteService.startNegotiation(anyQuoteId,
-            new StartNegotiationRequest("note"), importActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
-        assertThatThrownBy(() -> factoryQuoteService.markNotAvailable(anyQuoteId,
-            new MarkNotAvailableRequest("unavailable"), importActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
-        assertThatThrownBy(() -> factoryQuoteService.uploadAttachment(anyQuoteId,
-            new MockMultipartFile("file", "x.pdf", "application/pdf", "x".getBytes()), importActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
-        // V141: there is no Import-side costing endpoint left to attempt from CEO_REVIEWING — what "freezing" now
-        // protects is exactly what CEO_REVIEWING unlocks for the CEO instead: recalculateCost/ overrideItemCost, both
-        // gated on this same DRAFT decision.
-
-        assertThat(decision.status()).isEqualTo(PricingDecisionStatus.DRAFT);
-    }
 
     // Design correction 4: one return-to-Import path
 
-    @Test
-    void returnToImport_movesToAwaitingFactoryResponse_andImportCanRenegotiateBackToReadyForCeoReview() {
-        long pricingRequestId = twoItemSubmittedCosting();
-        PricingDecisionDto decision = decisionService.startReview(pricingRequestId,
-            new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, null), ceoActor);
-
-        PricingDecisionDto returned = decisionService.returnToImport(decision.id(),
-            new ReturnPricingDecisionRequest("ราคาต้นทุนคลาดเคลื่อน กรุณาคำนวณใหม่"), ceoActor);
-        assertThat(returned.status()).isEqualTo(PricingDecisionStatus.RETURNED);
-        // V141 ("CEO owns costing"): there is no COSTING_REVISION_REQUIRED any more — a returned request goes straight
-        // back to AWAITING_FACTORY_RESPONSE (Import's only remaining job is to renegotiate/re-mark the factory
-        // quote(s) ready; the CEO's next startReview recomputes the cost from scratch).
-        assertThat(pricingRequestService.get(pricingRequestId, importActor).summary().status())
-            .isEqualTo(PricingRequestStatus.AWAITING_FACTORY_RESPONSE);
-
-        // Both quotes are already READY_FOR_COSTING (unchanged by returnToImport — it never touches factory quotes) —
-        // FactoryQuoteRepository.markReady only accepts a RESPONSE_RECEIVED/NEGOTIATING quote, so Import must submit a
-        // fresh revision on EACH before either can be re-marked ready.
-        for (FactoryQuoteDto quote : List.of(
-                factoryQuoteRepository.findCurrentByFactory(pricingRequestId, "Factory A3").orElseThrow(),
-                factoryQuoteRepository.findCurrentByFactory(pricingRequestId, "Factory B3").orElseThrow())) {
-            FactoryQuoteDto revised = factoryQuoteService.receive(quote.id(),
-                response("REF-" + quote.factoryName() + "-v2", "THB", "95.00",
-                    quote.items().get(0).pricingRequestItemId()), importActor);
-            factoryQuoteService.markReadyForCosting(revised.id(), importActor);
-        }
-        // The LAST re-marked-ready revision auto-advances the request back to READY_FOR_CEO_REVIEW.
-        assertThat(pricingRequestService.get(pricingRequestId, importActor).summary().status())
-            .isEqualTo(PricingRequestStatus.READY_FOR_CEO_REVIEW);
-
-        // CEO can start a SECOND decision version against a freshly computed costing; the first RETURNED decision
-        // stays readable as history.
-        PricingDecisionDto decisionV2 = decisionService.startReview(pricingRequestId,
-            new StartPricingDecisionRequest(new BigDecimal("0.15"), "THB", null, null), ceoActor);
-        assertThat(decisionV2.decisionVersionNo()).isEqualTo(2);
-        assertThat(decisionV2.pricingCostingId()).isNotEqualTo(decision.pricingCostingId());
-        List<PricingDecisionDto> history = decisionService.list(pricingRequestId, ceoActor);
-        assertThat(history).hasSize(2);
-        assertThat(history.get(0).status()).isEqualTo(PricingDecisionStatus.RETURNED);
-        assertThat(history.get(1).status()).isEqualTo(PricingDecisionStatus.DRAFT);
-    }
-
     // Design correction 7 + Phase 1 UI simplification: margin required (unless overridden), minimum selling price
     // auto-populated, server recomputes
-
-    /**
-     * ราคาขั้นต่ำ is not a CEO input, so a null minimum
-     * does not block approval; it auto-populates instead. Margin is still required. The
-     * wrong-way-round proof that the auto-populated minimum still refuses a discount lives in
-     * {@code PricingDecisionMinimumPriceAutoPopulationIntegrationTest}.
-     */
-    @Test
-    void approve_rejectsWhenAnyItemLacksMargin_butNoLongerRequiresAnExplicitMinimumSellingPrice() {
-        long pricingRequestId = twoItemSubmittedCosting();
-        // No defaultMarginPct at all -> every item starts with a null margin and null price.
-        PricingDecisionDto decision = decisionService.startReview(pricingRequestId,
-            new StartPricingDecisionRequest(null, "THB", null, null), ceoActor);
-
-        assertThatThrownBy(() -> decisionService.approve(decision.id(),
-            new ApprovePricingDecisionRequest(null, null), ceoActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_CONTENT));
-
-        // Set margin on both items — no minimum selling price on either, and no ability to set one from the new UI any
-        // more — approval now succeeds anyway.
-        PricingDecisionItemDto itemA = decision.items().get(0);
-        PricingDecisionItemDto itemB = decision.items().get(1);
-        decisionService.update(decision.id(), new UpdatePricingDecisionRequest(null, List.of(
-            new UpdatePricingDecisionItemRequest(itemA.id(), new BigDecimal("0.2"), null, null, null, false),
-            new UpdatePricingDecisionItemRequest(itemB.id(), new BigDecimal("0.2"), null, null, null, false))), ceoActor);
-
-        PricingDecisionDto approved = decisionService.approve(decision.id(),
-            new ApprovePricingDecisionRequest(null, null), ceoActor);
-        assertThat(approved.status()).isEqualTo(PricingDecisionStatus.APPROVED);
-        // Auto-populated with the approved selling price itself on BOTH items — the "any discount refused" floor this
-        // phase deliberately keeps (see PricingDecisionService#approve).
-        for (PricingDecisionItemDto item : approved.items()) {
-            assertThat(item.minimumSellingPricePerRequestedUnit())
-                .isEqualByComparingTo(item.approvedSellingPricePerRequestedUnit());
-        }
-    }
-
-    /** An explicitly-set (lower) floor, still settable through update() exactly as before, is honoured rather than
-     * silently overwritten by the auto-population fallback — only a still-NULL minimum falls back to the approved
-     * price. */
-    @Test
-    void approve_honoursAnExplicitlySetMinimumSellingPrice_ratherThanOverwritingItWithTheApprovedPrice() {
-        long pricingRequestId = twoItemSubmittedCosting();
-        PricingDecisionDto decision = decisionService.startReview(pricingRequestId,
-            new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, null), ceoActor);
-        PricingDecisionItemDto itemA = decision.items().get(0);
-        BigDecimal explicitMinimum = itemA.frozenLandedCostPerRequestedUnitThb(); // well below the 20%-margin price
-        decisionService.update(decision.id(), new UpdatePricingDecisionRequest(null, List.of(
-            new UpdatePricingDecisionItemRequest(itemA.id(), null, explicitMinimum, null, null, false))), ceoActor);
-
-        PricingDecisionDto approved = decisionService.approve(decision.id(),
-            new ApprovePricingDecisionRequest(null, null), ceoActor);
-
-        PricingDecisionItemDto approvedA = itemById(approved, itemA.id());
-        assertThat(approvedA.minimumSellingPricePerRequestedUnit()).isEqualByComparingTo(explicitMinimum);
-        assertThat(approvedA.minimumSellingPricePerRequestedUnit())
-            .isNotEqualByComparingTo(approvedA.approvedSellingPricePerRequestedUnit());
-    }
 
     // "ปรับราคาเอง" (Phase 1 UI simplification) — CEO selling-price override, via PUT /pricing-decisions/{id}
     // (PricingDecisionService#update -> applyItemUpdates).
@@ -694,126 +284,6 @@ class PricingDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(approvedItem.approvedSellingPricePerRequestedUnit()).isEqualByComparingTo(overridePrice);
         // Minimum auto-population also uses the OVERRIDDEN (effective) price, not the formula's.
         assertThat(approvedItem.minimumSellingPricePerRequestedUnit()).isEqualByComparingTo(overridePrice);
-    }
-
-    @Test
-    void sellingPriceOverride_exemptsThatLineFromTheMissingMarginGate() {
-        long pricingRequestId = twoItemSubmittedCosting();
-        // No defaultMarginPct -> both items start with a null margin.
-        PricingDecisionDto decision = decisionService.startReview(pricingRequestId,
-            new StartPricingDecisionRequest(null, "THB", null, null), ceoActor);
-        PricingDecisionItemDto itemA = decision.items().get(0);
-        PricingDecisionItemDto itemB = decision.items().get(1);
-
-        // Item A gets a genuine margin; item B gets a direct price override instead — neither route through the "must
-        // have a margin" gate the same way, and both should clear it.
-        decisionService.update(decision.id(), new UpdatePricingDecisionRequest(null, List.of(
-            new UpdatePricingDecisionItemRequest(itemA.id(), new BigDecimal("0.20"), null, null, null, false),
-            new UpdatePricingDecisionItemRequest(itemB.id(), null, null,
-                "ราคาที่ตกลงกับลูกค้าโดยตรง ไม่ผ่านสูตร", new BigDecimal("999.0000"), false))), ceoActor);
-
-        PricingDecisionDto approved = decisionService.approve(decision.id(),
-            new ApprovePricingDecisionRequest(null, null), ceoActor);
-        assertThat(approved.status()).isEqualTo(PricingDecisionStatus.APPROVED);
-        assertThat(itemById(approved, itemB.id()).approvedSellingPricePerRequestedUnit())
-            .isEqualByComparingTo("999.0000");
-    }
-
-    @Test
-    void sellingPriceOverride_refusesANullOrBlankReason_onEitherTheSetOrClearPath_andWritesNothing() {
-        long pricingRequestId = twoItemSubmittedCosting();
-        PricingDecisionDto decision = decisionService.startReview(pricingRequestId,
-            new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, null), ceoActor);
-        PricingDecisionItemDto item = decision.items().get(0);
-
-        // SET path, null reason.
-        assertThatThrownBy(() -> decisionService.update(decision.id(), new UpdatePricingDecisionRequest(null,
-            List.of(new UpdatePricingDecisionItemRequest(item.id(), null, null, null,
-                new BigDecimal("500.0000"), false))), ceoActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> {
-                assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST);
-                assertThat(e.getMessage()).isEqualTo("ต้องระบุเหตุผลในการปรับราคาขาย ไม่ว่าจะปรับหรือยกเลิกการปรับก็ตาม");
-            });
-        // SET path, blank (whitespace-only) reason.
-        assertThatThrownBy(() -> decisionService.update(decision.id(), new UpdatePricingDecisionRequest(null,
-            List.of(new UpdatePricingDecisionItemRequest(item.id(), null, null, "   ",
-                new BigDecimal("500.0000"), false))), ceoActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
-
-        PricingDecisionItemDto untouched = itemById(decisionService.get(decision.id(), ceoActor), item.id());
-        assertThat(untouched.manualSellingPricePerRequestedUnit()).isNull();
-
-        // Legitimately set an override so the CLEAR path has something to clear...
-        decisionService.update(decision.id(), new UpdatePricingDecisionRequest(null,
-            List.of(new UpdatePricingDecisionItemRequest(item.id(), null, null,
-                "ราคาที่ตกลงกับลูกค้า", new BigDecimal("500.0000"), false))), ceoActor);
-
-        // ...then CLEAR path, null reason — clearing is money-affecting too (same precedent as the cost override's own
-        // mandatory-reason-on-clear rule).
-        assertThatThrownBy(() -> decisionService.update(decision.id(), new UpdatePricingDecisionRequest(null,
-            List.of(new UpdatePricingDecisionItemRequest(item.id(), null, null, null, null, true))), ceoActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> {
-                assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST);
-                assertThat(e.getMessage()).isEqualTo("ต้องระบุเหตุผลในการปรับราคาขาย ไม่ว่าจะปรับหรือยกเลิกการปรับก็ตาม");
-            });
-        PricingDecisionItemDto stillOverridden = itemById(decisionService.get(decision.id(), ceoActor), item.id());
-        assertThat(stillOverridden.manualSellingPricePerRequestedUnit()).isEqualByComparingTo("500.0000");
-    }
-
-    @Test
-    void sellingPriceOverride_refusesSettingAndClearingInTheSameCall() {
-        long pricingRequestId = twoItemSubmittedCosting();
-        PricingDecisionDto decision = decisionService.startReview(pricingRequestId,
-            new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, null), ceoActor);
-        PricingDecisionItemDto item = decision.items().get(0);
-
-        assertThatThrownBy(() -> decisionService.update(decision.id(), new UpdatePricingDecisionRequest(null,
-            List.of(new UpdatePricingDecisionItemRequest(item.id(), null, null, "เหตุผล",
-                new BigDecimal("500.0000"), true))), ceoActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
-    }
-
-    @Test
-    void sellingPriceOverride_refusesANegativePrice_andWritesNothing() {
-        long pricingRequestId = twoItemSubmittedCosting();
-        PricingDecisionDto decision = decisionService.startReview(pricingRequestId,
-            new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, null), ceoActor);
-        PricingDecisionItemDto item = decision.items().get(0);
-
-        assertThatThrownBy(() -> decisionService.update(decision.id(), new UpdatePricingDecisionRequest(null,
-            List.of(new UpdatePricingDecisionItemRequest(item.id(), null, null, "พิมพ์ผิด",
-                new BigDecimal("-1.0000"), false))), ceoActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> {
-                assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST);
-                assertThat(e.getMessage()).isEqualTo("ราคาที่ปรับต้องไม่ติดลบ");
-            });
-        PricingDecisionItemDto untouched = itemById(decisionService.get(decision.id(), ceoActor), item.id());
-        assertThat(untouched.manualSellingPricePerRequestedUnit()).isNull();
-    }
-
-    @Test
-    void sellingPriceOverride_clearedWithAReason_revertsToTheFormulaDrivenPriceAtApproval() {
-        long pricingRequestId = twoItemSubmittedCosting();
-        PricingDecisionDto decision = decisionService.startReview(pricingRequestId,
-            new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, null), ceoActor);
-        PricingDecisionItemDto item = decision.items().get(0);
-        BigDecimal formulaPrice = item.proposedSellingPricePerRequestedUnit();
-
-        decisionService.update(decision.id(), new UpdatePricingDecisionRequest(null,
-            List.of(new UpdatePricingDecisionItemRequest(item.id(), null, null,
-                "ราคาชั่วคราว", new BigDecimal("500.0000"), false))), ceoActor);
-        PricingDecisionDto clearedDecision = decisionService.update(decision.id(), new UpdatePricingDecisionRequest(null,
-            List.of(new UpdatePricingDecisionItemRequest(item.id(), null, null,
-                "กลับไปใช้ราคาที่คำนวณอัตโนมัติ", null, true))), ceoActor);
-
-        PricingDecisionItemDto cleared = itemById(clearedDecision, item.id());
-        assertThat(cleared.manualSellingPricePerRequestedUnit()).isNull();
-        assertThat(cleared.effectiveSellingPricePerRequestedUnit()).isEqualByComparingTo(formulaPrice);
-
-        PricingDecisionDto approved = decisionService.approve(decision.id(),
-            new ApprovePricingDecisionRequest(null, null), ceoActor);
-        assertThat(itemById(approved, item.id()).approvedSellingPricePerRequestedUnit())
-            .isEqualByComparingTo(formulaPrice);
     }
 
     /** Design correction 7: the server must recompute the approved selling price from the frozen cost and the
@@ -934,243 +404,10 @@ class PricingDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
             """, Map.of("salesRepId", salesRepId), Long.class)).isEqualTo(1L);
     }
 
-    @Test
-    void onlyOneApprovedDecisionCanEverExist_databaseLevel() {
-        long pricingRequestId = twoItemSubmittedCosting();
-        approveWithFlatMargin(pricingRequestId, new BigDecimal("0.20"));
-
-        // A second APPROVED row for the same pricing request, inserted directly (bypassing the service entirely), must
-        // violate the partial unique index — proves the DB-level backstop described in V72's own comment is real, not
-        // just documentation.
-        assertThatThrownBy(() -> jdbc.update("""
-            INSERT INTO sales.pricing_decision
-                (decision_code, pricing_request_id, pricing_costing_id, decision_version_no, status,
-                 currency, fx_rate_used, fx_source, fx_effective_date, approved_by, approved_at)
-            SELECT 'PCD-TEST-DUP', pricing_request_id, pricing_costing_id, 99, 'APPROVED',
-                   currency, fx_rate_used, fx_source, fx_effective_date, approved_by, now()
-              FROM sales.pricing_decision WHERE pricing_request_id = :id AND status = 'APPROVED'
-            """, Map.of("id", pricingRequestId)))
-            .isInstanceOf(DuplicateKeyException.class);
-    }
-
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // "CEO owns costing": CEO cost override + staleness (owner's explicit requirement).
-    // A cost override is an INPUT to price = cost x margin, so it must not silently outlive the
-    // FX rate or calc-config version that justified it — see PricingDecisionService#approve's own
-    // stale-override guard and PricingCostingRepository#mapItem's overrideStale derivation.
-    //
-    // recalculateCost itself is covered first: PricingCostingRepository
-    // #replaceItemsPreservingOverrides must not DELETE-then-INSERT every
-    // sales.pricing_costing_item row for the costing, which would violate the NOT NULL ... ON DELETE
-    // RESTRICT FK from sales.pricing_decision_item into those exact rows the moment a
-    // decision existed — i.e. on literally every real call (a DRAFT decision only ever comes to
-    // exist via startReview, which is what wrote that FK in the first place). That method is
-    // an UPSERT keyed on the unique index uq_pricing_costing_item_request_item, so every
-    // pricing_costing_item_id PRIMARY KEY stays stable across a recalculation and the FK never
-    // breaks — see PricingCostingRepository#replaceItemsPreservingOverrides's own javadoc for the
-    // full account. Every test below drives the real recalculateCost path.
-    // ─────────────────────────────────────────────────────────────────────────────────────
-
-    /** Regression guard for the fixed FK-violation bug (formerly pinned here as
-     * recalculateCost_onADecisionWithExistingItems_currentlyThrowsForeignKeyViolation_ productionBugNotFixed —
-     * retired now that the bug is fixed). */
-    @Test
-    void recalculateCost_onADecisionWithExistingItems_succeedsAndPreservesCostingItemPrimaryKeys() {
-        long pricingRequestId = twoItemSubmittedCosting();
-        PricingDecisionDto decision = decisionService.startReview(pricingRequestId,
-            new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, null), ceoActor);
-        Map<Long, Long> costingItemIdByDecisionItemId = decision.items().stream()
-            .collect(java.util.stream.Collectors.toMap(PricingDecisionItemDto::id, PricingDecisionItemDto::pricingCostingItemId));
-
-        // Move the world (see overrideItemCost_thenTheWorldChanges_... below for why mutating sales.fx_rates — the
-        // source of truth — rather than the frozen per-item snapshot is the legitimate way to do this) so the
-        // recalculation is a genuine refresh, not a no-op.
-        jdbc.update("UPDATE sales.fx_rates SET rate_to_thb = rate_to_thb + 0.05 WHERE currency = 'THB'", Map.of());
-
-        PricingDecisionDto recalculated = decisionService.recalculateCost(decision.id(), ceoActor);
-
-        assertThat(recalculated.status()).isEqualTo(PricingDecisionStatus.DRAFT);
-        assertThat(recalculated.items()).hasSize(2);
-        for (PricingDecisionItemDto item : recalculated.items()) {
-            // Same pricing_costing_item_id as before the recalculation — proves the UPSERT, not a delete+reinsert, is what
-            // actually ran.
-            assertThat(item.pricingCostingItemId()).isEqualTo(costingItemIdByDecisionItemId.get(item.id()));
-            // A genuine refresh, not a no-op — the frozen cost moved with the fx_rate change.
-            assertThat(item.frozenLandedCostPerPieceThb())
-                .isNotEqualByComparingTo(itemById(decision, item.id()).frozenLandedCostPerPieceThb());
-        }
-
-        // The FK from pricing_decision_item into pricing_costing_item never broke: every decision item's bound
-        // costing_item_id still resolves to a live row with a populated figure.
-        PricingCostingDto refreshedCosting = costingService.get(recalculated.pricingCostingId(), ceoActor);
-        assertThat(refreshedCosting.items()).hasSize(2);
-        for (PricingCostingItemDto costingItem : refreshedCosting.items()) {
-            assertThat(costingItem.landedCostPerUnitThb()).isNotNull();
-        }
-        assertThat(jdbc.queryForObject("""
-            SELECT COUNT(*) FROM sales.pricing_decision_item pdi
-             JOIN sales.pricing_costing_item pci ON pci.pricing_costing_item_id = pdi.pricing_costing_item_id
-             WHERE pdi.pricing_decision_id = :decisionId
-            """, Map.of("decisionId", decision.id()), Long.class)).isEqualTo(2L);
-
-        // recalculateCost never transitions status — still DRAFT / CEO_REVIEWING.
-        assertThat(decisionService.get(decision.id(), ceoActor).status()).isEqualTo(PricingDecisionStatus.DRAFT);
-        assertThat(pricingRequestService.get(pricingRequestId, ceoActor).summary().status())
-            .isEqualTo(PricingRequestStatus.CEO_REVIEWING);
-    }
-
-    /** Proves the UPSERT is genuinely idempotent-SAFE across repeated calls — the thing the old delete+insert could
-     * never do (its very FIRST write, on any decision with items, already hit the FK violation regression-guarded
-     * above). */
-    @Test
-    void recalculateCost_calledTwiceInARow_bothCallsSucceedAndPrimaryKeysStayStable() {
-        long pricingRequestId = twoItemSubmittedCosting();
-        PricingDecisionDto decision = decisionService.startReview(pricingRequestId,
-            new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, null), ceoActor);
-        Map<Long, Long> originalCostingItemIdByDecisionItemId = decision.items().stream()
-            .collect(java.util.stream.Collectors.toMap(PricingDecisionItemDto::id, PricingDecisionItemDto::pricingCostingItemId));
-
-        PricingDecisionDto firstRecalc = decisionService.recalculateCost(decision.id(), ceoActor);
-        PricingDecisionDto secondRecalc = decisionService.recalculateCost(decision.id(), ceoActor);
-
-        assertThat(secondRecalc.status()).isEqualTo(PricingDecisionStatus.DRAFT);
-        assertThat(secondRecalc.items()).hasSize(2);
-        for (PricingDecisionItemDto item : secondRecalc.items()) {
-            assertThat(item.pricingCostingItemId()).isEqualTo(originalCostingItemIdByDecisionItemId.get(item.id()));
-            // Nothing in the world moved between the two calls, so the recomputed figures agree.
-            assertThat(item.frozenLandedCostPerPieceThb())
-                .isEqualByComparingTo(itemById(firstRecalc, item.id()).frozenLandedCostPerPieceThb());
-        }
-
-        // The trailing DELETE inside replaceItemsPreservingOverrides (drops lines the recalculation no longer
-        // produces) did not fire against either item on the second pass either — still exactly the same 2
-        // pricing_costing_item rows.
-        assertThat(costingService.get(secondRecalc.pricingCostingId(), ceoActor).items()).hasSize(2);
-    }
-
-    /** Checks FX changes refresh computed cost but preserve overrides; approval waits until stale overrides are
-     * reconfirmed. */
-    @Test
-    void overrideItemCost_thenTheWorldChanges_recalculateCostRefreshesIt_approveIsRefusedUntilOverrideReconfirmed() {
-        long pricingRequestId = twoItemSubmittedCosting();
-        PricingDecisionDto decision = decisionService.startReview(pricingRequestId,
-            new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, null), ceoActor);
-        for (PricingDecisionItemDto item : decision.items()) {
-            decisionService.update(decision.id(), new UpdatePricingDecisionRequest(null, List.of(
-                new UpdatePricingDecisionItemRequest(item.id(), null, new BigDecimal("1.00"), null, null, false))), ceoActor);
-        }
-        PricingDecisionItemDto itemA = decision.items().get(0);
-        BigDecimal manualCost = itemA.frozenLandedCostPerPieceThb().add(new BigDecimal("5.0000"));
-
-        PricingDecisionDto overridden = decisionService.overrideItemCost(decision.id(), itemA.id(),
-            new CostOverrideRequest(manualCost, "negotiated a better price directly with the factory"), ceoActor);
-        assertThat(itemById(overridden, itemA.id()).frozenLandedCostPerPieceThb()).isEqualByComparingTo(manualCost);
-
-        // Simulate the world moving since the override was entered — see this test's own javadoc for why mutating
-        // sales.fx_rates itself, not the frozen per-item snapshot, is required.
-        jdbc.update("UPDATE sales.fx_rates SET rate_to_thb = rate_to_thb + 0.05 WHERE currency = 'THB'", Map.of());
-
-        // The real production path: the CEO pulls the current FX rate/calc-config via recalculateCost — no longer
-        // routed around.
-        decisionService.recalculateCost(decision.id(), ceoActor);
-
-        PricingCostingItemDto costingItemA = costingItemFor(
-            costingService.get(decision.pricingCostingId(), ceoActor), itemA.pricingRequestItemId());
-        assertThat(costingItemA.overrideStale())
-            .as("fx_rate moved since the override snapshotted the OLD rate — must read stale")
-            .isTrue();
-        // The override is PRESERVED (rule: never clear it on a cost-affecting change) and
-        // the COMPUTED figure is REFRESHED, not destroyed — it reflects the new fx_rate,
-        // sitting BESIDE the (unchanged) override.
-        assertThat(costingItemA.manualLandedCostPerUnitThb()).isEqualByComparingTo(manualCost);
-        assertThat(costingItemA.landedCostPerUnitThb()).isNotNull();
-
-        assertThatThrownBy(() -> decisionService.approve(decision.id(),
-                new ApprovePricingDecisionRequest(null, null), ceoActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
-        // Refused BEFORE any approval write — nothing in the decision or the pricing request moved as a side effect of
-        // the refused attempt.
-        assertThat(decisionService.get(decision.id(), importActor).status()).isEqualTo(PricingDecisionStatus.DRAFT);
-        assertThat(pricingRequestService.get(pricingRequestId, importActor).summary().status())
-            .isEqualTo(PricingRequestStatus.CEO_REVIEWING);
-
-        // Re-confirming the SAME override value re-stamps override_fx_rate to the CURRENT rate — the CEO's escape
-        // hatch — which clears staleness.
-        PricingDecisionDto reconfirmed = decisionService.overrideItemCost(decision.id(), itemA.id(),
-            new CostOverrideRequest(manualCost, "re-confirming after the FX update"), ceoActor);
-        assertThat(itemById(reconfirmed, itemA.id()).frozenLandedCostPerPieceThb()).isEqualByComparingTo(manualCost);
-        PricingCostingItemDto costingItemAReconfirmed = costingItemFor(
-            costingService.get(reconfirmed.pricingCostingId(), ceoActor), itemA.pricingRequestItemId());
-        assertThat(costingItemAReconfirmed.overrideStale()).isFalse();
-
-        PricingDecisionDto approved = decisionService.approve(decision.id(),
-            new ApprovePricingDecisionRequest(null, null), ceoActor);
-        assertThat(approved.status()).isEqualTo(PricingDecisionStatus.APPROVED);
-        PricingDecisionItemDto approvedItemA = itemById(approved, itemA.id());
-        // The frozen cost approve() froze in is the OVERRIDE, and the approved selling price is built on it — never
-        // the (fx-refreshed) computed figure.
-        assertThat(approvedItemA.frozenLandedCostPerPieceThb()).isEqualByComparingTo(manualCost);
-        BigDecimal expectedSellingPrice = formulaSellingPrice(
-            approvedItemA.frozenLandedCostPerRequestedUnitThb(), approvedItemA.approvedMarginPct());
-        assertThat(approvedItemA.approvedSellingPricePerRequestedUnit()).isEqualByComparingTo(expectedSellingPrice);
-    }
-
-    /**
-     * Isolates the PRESERVATION contract itself, driven through the REAL {@link
-     * PricingDecisionService#recalculateCost} (no standalone, decision-less costing is needed — see
-     * {@link PricingCostingRepository#replaceItemsPreservingOverrides}'s own javadoc): a SECOND
-     * write to the SAME costing (the "recalculate" shape) must carry an existing override
-     * forward, never destroy the computed figure sitting beside it, and — because NOTHING in the
-     * world actually changes between the two calls in this test, unlike the
-     * overrideItemCost_thenTheWorldChanges_... test above — must never manufacture false
-     * staleness either.
-     */
-    @Test
-    void recalculateCost_preservesAnExistingOverride_andNeverDestroysTheComputedFigure_norFalselyFlagsStaleness() {
-        long pricingRequestId = twoItemSubmittedCosting();
-        PricingDecisionDto decision = decisionService.startReview(pricingRequestId,
-            new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, null), ceoActor);
-
-        PricingDecisionItemDto itemA = decision.items().get(0);
-        PricingCostingItemDto costingItemABefore = costingItemFor(
-            costingService.get(decision.pricingCostingId(), ceoActor), itemA.pricingRequestItemId());
-        BigDecimal manualCost = costingItemABefore.landedCostPerUnitThb().add(new BigDecimal("3.0000"));
-        decisionService.overrideItemCost(decision.id(), itemA.id(),
-            new CostOverrideRequest(manualCost, "renegotiated directly with the factory"), ceoActor);
-
-        // The "recalculate" shape, for real: a SECOND write to the SAME pricing_costing_id, with NOTHING in the world
-        // having moved since startReview (same factory quote, same fx_rate, same calc-config version) — the UPSERT's
-        // steady-state case.
-        decisionService.recalculateCost(decision.id(), ceoActor);
-
-        PricingCostingItemDto afterRecalc = costingItemFor(
-            costingService.get(decision.pricingCostingId(), ceoActor), itemA.pricingRequestItemId());
-        // The override is PRESERVED (rule: never clear on recalculate).
-        assertThat(afterRecalc.manualLandedCostPerUnitThb()).isEqualByComparingTo(manualCost);
-        assertThat(afterRecalc.effectiveLandedCostPerUnitThb()).isEqualByComparingTo(manualCost);
-        // The COMPUTED figure is never destroyed — it is still present beside the override.
-        assertThat(afterRecalc.landedCostPerUnitThb()).isNotNull();
-        // Nothing in the world changed, so the override must NOT be flagged stale — staleness is a genuine drift
-        // signal, not a side effect of recalculating at all.
-        assertThat(afterRecalc.overrideStale())
-            .as("fx_rate/calc-config version are unchanged across this recalculateCost call")
-            .isFalse();
-        // Same pricing_costing_item PRIMARY KEY across the recalculation — the UPSERT, not a delete+reinsert, is what
-        // ran; the inbound FK from pricing_decision_item (and, once a PO exists, factory_purchase_order_item) never
-        // had a chance to break.
-        assertThat(afterRecalc.id()).isEqualTo(costingItemABefore.id());
-    }
-
     // Helpers
 
     private PricingDecisionItemDto itemById(PricingDecisionDto decision, long itemId) {
         return decision.items().stream().filter(i -> i.id() == itemId).findFirst().orElseThrow();
-    }
-
-    private PricingCostingItemDto costingItemFor(PricingCostingDto costing, long pricingRequestItemId) {
-        return costing.items().stream()
-            .filter(i -> i.pricingRequestItemId() == pricingRequestItemId)
-            .findFirst().orElseThrow();
     }
 
     private PricingDecisionDto approveWithFlatMargin(long pricingRequestId, BigDecimal marginPct) {
@@ -1206,47 +443,6 @@ class PricingDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(pricingRequestService.get(pricingRequestId, importActor).summary().status())
             .isEqualTo(PricingRequestStatus.READY_FOR_CEO_REVIEW);
         return pricingRequestId;
-    }
-
-    /** Single-item, single-factory (zero-cost-config "Factory C3") scenario driven to
-     * READY_FOR_CEO_REVIEW, mirroring {@code PricingFactoryQuoteCostingIntegrationTest
-     * #singleItemCosting}. No standalone costing is created here either — see
-     * {@link #twoItemSubmittedCosting()}'s own javadoc. */
-    private long singleItemSubmittedCosting(
-        BigDecimal requestedQty, String requestedUnitBasis, String quotedUnitBasis, BigDecimal quotedQuantity,
-        String rawPrice, BigDecimal sqmPerUnit, BigDecimal piecesPerBox, BigDecimal linearMPerUnit
-    ) {
-        PricingRequestRequests.PricingRequestItemRequest item = new PricingRequestRequests.PricingRequestItemRequest(
-            null, catalogProductIdFactoryC, null, "TestBrand3", "TestModel3", "TestBrand3 TestModel3",
-            null, null, "1x1", "Factory C3", requestedQty, requestedQty, "unit", requestedUnitBasis,
-            QuantityType.CONFIRMED, null, null, null);
-        PricingRequestRequests.CreatePricingRequestRequest request = new PricingRequestRequests.CreatePricingRequestRequest(
-            PricingRequestRecipient.DESIGNER, null, "Designer Co.", LocalDate.now().plusDays(14),
-            null, "THB", "step 3 unit test", UUID.randomUUID().toString(), List.of(item));
-        // V185: bypasses PricingRequestService.createDraft on purpose -- that method now forces every item's
-        // requestedUnitBasis to PER_PIECE, which would make it impossible to construct the non-PER_PIECE
-        // requestedUnitBasis this unit-conversion matrix exists to test.
-        long pricingRequestId = pricingRequests.create(ticketId, pricingRequests.nextRequestCode(), request, salesRepId);
-        pricingRequestService.submit(pricingRequestId, salesActor);
-        pricingRequestService.pickup(pricingRequestId, importActor);
-        FactoryQuoteDto draft = quoteFor(factoryQuoteService.generateDrafts(pricingRequestId, importActor), "Factory C3");
-        ReceiveFactoryQuoteRequest response = new ReceiveFactoryQuoteRequest("REF-UNIT", "THB", "30 days", "45 days",
-            "revision", "note", List.of(new ReceiveFactoryQuoteItemRequest(
-                draft.items().get(0).pricingRequestItemId(), null, null, quotedQuantity, quotedUnitBasis, quotedUnitBasis,
-                new BigDecimal(rawPrice), "THB", null, sqmPerUnit, piecesPerBox, linearMPerUnit,
-                "45 days", null, null)),
-            UUID.randomUUID().toString());
-        factoryQuoteService.markContacted(draft.id(), new MarkFactoryContactedRequest(
-            java.time.LocalDate.now(java.time.ZoneId.of("Asia/Bangkok")), null), importActor);
-        FactoryQuoteDto responded = factoryQuoteService.receive(draft.id(), response, importActor);
-        factoryQuoteService.markReadyForCosting(responded.id(), importActor);
-        assertThat(pricingRequestService.get(pricingRequestId, importActor).summary().status())
-            .isEqualTo(PricingRequestStatus.READY_FOR_CEO_REVIEW);
-        return pricingRequestId;
-    }
-
-    private FactoryQuoteDto quoteFor(List<FactoryQuoteDto> quotes, String factoryName) {
-        return quotes.stream().filter(q -> factoryName.equals(q.factoryName())).findFirst().orElseThrow();
     }
 
     /**

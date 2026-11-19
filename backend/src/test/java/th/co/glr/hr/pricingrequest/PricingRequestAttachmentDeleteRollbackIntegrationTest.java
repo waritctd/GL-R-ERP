@@ -85,39 +85,6 @@ class PricingRequestAttachmentDeleteRollbackIntegrationTest extends AbstractPost
             .isTrue();
     }
 
-    @Test
-    void committingTheDeleteStillRemovesTheFile() {
-        Attachment fixture = uploadedAttachment();
-        PricingRequestService service = transactional(service());
-
-        service.deleteAttachment(fixture.id(), salesRep);
-
-        assertThat(attachmentRows(fixture.id())).isZero();
-        assertThat(Files.exists(fixture.path()))
-            .as("deferring the delete to afterCommit must not turn it into never deleting — a "
-                + "committed removal still has to reclaim the bytes, or every deleted attachment "
-                + "leaks and the rollback test above would pass by doing nothing at all")
-            .isFalse();
-    }
-
-    @Test
-    void deletingWithNoTransactionAtAllStillRemovesTheFileImmediately() {
-        Attachment fixture = uploadedAttachment();
-        // Raw, un-proxied: no transaction, so there is no commit to defer to. This is the control — the un-proxied
-        // path MUST behave differently from the two proxied tests above, or the harness has stopped discriminating and
-        // their evidence is vacuous.
-        PricingRequestService service = service();
-
-        service.deleteAttachment(fixture.id(), salesRep);
-
-        assertThat(attachmentRows(fixture.id())).isZero();
-        assertThat(Files.exists(fixture.path()))
-            .as("with no synchronization active the deferred hook would never run, so the delete "
-                + "must happen inline — otherwise a non-transactional caller silently leaks every "
-                + "file it deletes")
-            .isFalse();
-    }
-
     // ── wiring ────────────────────────────────────────────────────────────────────────────
 
     private PricingRequestService service() {

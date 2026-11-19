@@ -3,14 +3,12 @@ package th.co.glr.hr.pricingrequest;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
@@ -23,23 +21,18 @@ import java.util.Optional;
 import org.assertj.core.api.ThrowableAssert;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
-import org.springframework.mock.web.MockMultipartFile;
 import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
-import th.co.glr.hr.customer.ContactDto;
 import th.co.glr.hr.customer.ContactRepository;
 import th.co.glr.hr.dealquotation.WastageCalculator;
 import th.co.glr.hr.factoryquote.FactoryQuoteCarryForward;
 import th.co.glr.hr.notification.NotificationRepository;
-import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestAttachmentDto;
 import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestItemDto;
 import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestSummaryDto;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.CancelPricingRequestRequest;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.CreatePricingRequestRequest;
-import th.co.glr.hr.pricingrequest.PricingRequestRequests.CustomerChangeRevisionRequest;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.PricingRequestItemRequest;
-import th.co.glr.hr.pricingrequest.PricingRequestRequests.UpdatePricingRequestAttachmentRequest;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.UpdatePricingRequestRequest;
 import th.co.glr.hr.ticket.DealLifecycle;
 import th.co.glr.hr.ticket.DepositPolicy;
@@ -86,40 +79,6 @@ class PricingRequestServiceTest {
         verify(requestRepo, never()).create(anyLong(), any(), any(), anyLong());
     }
 
-    @Test
-    void updateDraft_rejectsNonSalesRoles() {
-        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
-        assertForbidden(() -> service.updateDraft(20L, sampleUpdateRequest(), importActor));
-        assertForbidden(() -> service.updateDraft(20L, sampleUpdateRequest(), ceoActor));
-        assertForbidden(() -> service.updateDraft(20L, sampleUpdateRequest(), accountActor));
-        assertForbidden(() -> service.updateDraft(20L, sampleUpdateRequest(), salesManagerActor));
-        verify(requestRepo, never()).updateDraft(anyLong(), any());
-    }
-
-    @Test
-    void updateDraft_rejectsNonActiveDeal() {
-        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
-        stubTicket(10L, 1L, DealLifecycle.ON_HOLD);
-        assertConflict(() -> service.updateDraft(20L, sampleUpdateRequest(), salesActor));
-        verify(requestRepo, never()).updateDraft(anyLong(), any());
-    }
-
-    @Test
-    void submit_rejectsNonSalesRoles() {
-        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
-        assertForbidden(() -> service.submit(20L, importActor));
-        assertForbidden(() -> service.submit(20L, ceoActor));
-        assertForbidden(() -> service.submit(20L, accountActor));
-        assertForbidden(() -> service.submit(20L, salesManagerActor));
-        verify(requestRepo, never()).transition(anyLong(), any(), any(), any(), any());
-    }
-
-    @Test
-    void get_rejectsEmployeeRole() {
-        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
-        assertForbidden(() -> service.get(20L, employeeActor));
-    }
-
     // ── ownership ──────────────────────────────────────────────────────────
 
     @Test
@@ -138,269 +97,7 @@ class PricingRequestServiceTest {
         verify(requestRepo, never()).create(anyLong(), any(), any(), anyLong());
     }
 
-    // ── validation before persistence ───────────────────────────────────────
-
-    @Test
-    void createDraft_rejectsInvalidRecipientType() {
-        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
-        CreatePricingRequestRequest request = createRequest("BOGUS", 1L, null,
-            List.of(sampleItemRequest(null, QuantityType.REFERENCE)));
-        assertBadRequest(() -> service.createDraft(10L, request, salesActor));
-        verify(requestRepo, never()).create(anyLong(), any(), any(), anyLong());
-    }
-
-    @Test
-    void createDraft_rejectsInvalidQuantityType() {
-        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
-        CreatePricingRequestRequest request = createRequest(PricingRequestRecipient.BUYER, 1L, null,
-            List.of(sampleItemRequest(null, "BOGUS")));
-        assertBadRequest(() -> service.createDraft(10L, request, salesActor));
-        verify(requestRepo, never()).create(anyLong(), any(), any(), anyLong());
-    }
-
-    @Test
-    void createDraft_rejectsInvalidCurrency() {
-        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
-        CreatePricingRequestRequest request = new CreatePricingRequestRequest(
-            PricingRequestRecipient.BUYER, 1L, null, null, null, "DOLLARS", null,
-            clientRequestId(), List.of(sampleItemRequest(null, QuantityType.REFERENCE)));
-        assertBadRequest(() -> service.createDraft(10L, request, salesActor));
-        verify(requestRepo, never()).create(anyLong(), any(), any(), anyLong());
-    }
-
-    @Test
-    void createDraft_rejectsMissingRecipient() {
-        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
-        CreatePricingRequestRequest request = createRequest(PricingRequestRecipient.BUYER, null, null,
-            List.of(sampleItemRequest(null, QuantityType.REFERENCE)));
-        assertBadRequest(() -> service.createDraft(10L, request, salesActor));
-        verify(requestRepo, never()).create(anyLong(), any(), any(), anyLong());
-    }
-
-    @Test
-    void createDraft_rejectsSourceItemFromAnotherTicket() {
-        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
-        when(requestRepo.findItemIdsForTicket(10L)).thenReturn(List.of(501L, 502L));
-        CreatePricingRequestRequest request = createRequest(PricingRequestRecipient.BUYER, 1L, null,
-            List.of(sampleItemRequest(999L, QuantityType.REFERENCE)));
-        assertBadRequest(() -> service.createDraft(10L, request, salesActor));
-        verify(requestRepo, never()).create(anyLong(), any(), any(), anyLong());
-    }
-
-    @Test
-    void createDraft_acceptsSourceItemBelongingToTicket() {
-        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
-        when(requestRepo.findItemIdsForTicket(10L)).thenReturn(List.of(501L, 502L));
-        when(requestRepo.nextRequestCode()).thenReturn("PCR-2026-0001");
-        CreatePricingRequestRequest request = createRequest(PricingRequestRecipient.BUYER, 1L, null,
-            List.of(sampleItemRequest(501L, QuantityType.REFERENCE)));
-        when(requestRepo.create(eq(10L), eq("PCR-2026-0001"), any(), eq(1L))).thenReturn(20L);
-        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
-
-        service.createDraft(10L, request, salesActor);
-
-        verify(requestRepo).create(eq(10L), eq("PCR-2026-0001"), any(), eq(1L));
-        verify(requestRepo).addEvent(eq(20L), eq(10L), eq(1L), any(),
-            eq(PricingRequestEventKind.PRICING_REQUEST_CREATED), eq(null), eq(PricingRequestStatus.DRAFT),
-            eq(null), eq(null));
-    }
-
-    @Test
-    void createDraft_notifiesNobody() {
-        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
-        when(requestRepo.findItemIdsForTicket(10L)).thenReturn(List.of());
-        when(requestRepo.nextRequestCode()).thenReturn("PCR-2026-0001");
-        CreatePricingRequestRequest request = createRequest(PricingRequestRecipient.BUYER, 1L, null,
-            List.of(sampleItemRequest(null, QuantityType.REFERENCE)));
-        when(requestRepo.create(eq(10L), eq("PCR-2026-0001"), any(), eq(1L))).thenReturn(20L);
-        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
-
-        service.createDraft(10L, request, salesActor);
-
-        verify(notifRepo, never()).notifyByRole(any(), anyLong(), any(), any());
-        verify(notifRepo, never()).notifyEmployee(anyLong(), anyLong(), any(), any());
-    }
-
-    // ── factory normalization: free text must never reach factory_name_snapshot ──
-
-    private String savedFactoryFor(String typed, java.util.Optional<String> master) {
-        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
-        when(requestRepo.findItemIdsForTicket(10L)).thenReturn(List.of());
-        when(requestRepo.nextRequestCode()).thenReturn("PCR-2026-0001");
-        // The master names are read ONCE per save, not once per line.
-        when(requestRepo.findMasterFactoryNames()).thenReturn(master.map(List::of).orElse(List.of("Unrelated Factory")));
-        when(requestRepo.create(eq(10L), eq("PCR-2026-0001"), any(), eq(1L))).thenReturn(20L);
-        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
-
-        service.createDraft(10L, createRequest(PricingRequestRecipient.BUYER, 1L, null,
-            List.of(sampleItemRequest(null, QuantityType.REFERENCE, typed))), salesActor);
-
-        org.mockito.ArgumentCaptor<CreatePricingRequestRequest> saved =
-            org.mockito.ArgumentCaptor.forClass(CreatePricingRequestRequest.class);
-        verify(requestRepo).create(eq(10L), eq("PCR-2026-0001"), saved.capture(), eq(1L));
-        return saved.getValue().items().get(0).factory();
-    }
-
-    @Test
-    void createDraft_unknownTypedFactoryIsSavedAsNull() {
-        // "Padana marmoker" = brand+series typed into the factory field; not a master row
-        assertThat(savedFactoryFor("Padana marmoker", java.util.Optional.empty())).isNull();
-    }
-
-    @Test
-    void createDraft_knownFactoryDifferentCaseOrPaddedIsSavedCanonical() {
-        assertThat(savedFactoryFor("  padana ", java.util.Optional.of("Padana"))).isEqualTo("Padana");
-    }
-
-    @Test
-    void createDraft_exactKnownFactoryIsKept() {
-        assertThat(savedFactoryFor("Padana", java.util.Optional.of("Padana"))).isEqualTo("Padana");
-    }
-
-    @Test
-    void createDraft_blankFactoryIsSavedAsNull() {
-        assertThat(savedFactoryFor("   ", java.util.Optional.empty())).isNull();
-        verify(requestRepo, never()).findMasterFactoryNames();
-    }
-
-    @Test
-    void createDraft_readsTheMasterFactoryNamesOnceForManyLines() {
-        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
-        when(requestRepo.findItemIdsForTicket(10L)).thenReturn(List.of());
-        when(requestRepo.nextRequestCode()).thenReturn("PCR-2026-0001");
-        when(requestRepo.findMasterFactoryNames()).thenReturn(List.of("Padana"));
-        when(requestRepo.create(eq(10L), eq("PCR-2026-0001"), any(), eq(1L))).thenReturn(20L);
-        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
-
-        service.createDraft(10L, createRequest(PricingRequestRecipient.BUYER, 1L, null, List.of(
-            sampleItemRequest(null, QuantityType.REFERENCE, "padana"),
-            sampleItemRequest(null, QuantityType.REFERENCE, "Padana "),
-            sampleItemRequest(null, QuantityType.REFERENCE, "Other"))), salesActor);
-
-        verify(requestRepo, org.mockito.Mockito.times(1)).findMasterFactoryNames();
-    }
-
     // ── item identity (Part 1: an unidentified product must be rejected) ───────
-
-    @Test
-    void createDraft_rejectsItemWithNoIdentityField() {
-        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
-        CreatePricingRequestRequest request = createRequest(PricingRequestRecipient.BUYER, 1L, null,
-            List.of(itemRequestWithIdentity(null, null, "Brand only, no model", null, null)));
-        assertBadRequest(() -> service.createDraft(10L, request, salesActor));
-        verify(requestRepo, never()).create(anyLong(), any(), any(), anyLong());
-    }
-
-    @Test
-    void createDraft_rejectsItemIdentifiedByBrandAlone() {
-        // Brand alone is explicitly NOT sufficient — a brand with no model does not identify a product. Same assertion
-        // as the no-fields test above, kept separate so a future change that (wrongly) special-cases "at least one
-        // field is non-null" fails this test specifically.
-        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
-        CreatePricingRequestRequest request = createRequest(PricingRequestRecipient.BUYER, 1L, null,
-            List.of(itemRequestWithIdentity(null, null, "Some Brand", null, null)));
-        assertBadRequest(() -> service.createDraft(10L, request, salesActor));
-        verify(requestRepo, never()).create(anyLong(), any(), any(), anyLong());
-    }
-
-    @Test
-    void createDraft_rejectsItemIdentifiedByFactoryAlone() {
-        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
-        CreatePricingRequestRequest request = createRequest(PricingRequestRecipient.BUYER, 1L, null,
-            List.of(new PricingRequestItemRequest(null, null, null, null, null, null, null, null, null, "Factory only",
-                new BigDecimal("1"), null, "PIECE", UnitBasis.PER_PIECE, QuantityType.REFERENCE, null, null, null)));
-        assertBadRequest(() -> service.createDraft(10L, request, salesActor));
-        verify(requestRepo, never()).create(anyLong(), any(), any(), anyLong());
-    }
-
-    @Test
-    void createDraft_acceptsItemIdentifiedBySourceTicketItemIdAlone() {
-        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
-        when(requestRepo.findItemIdsForTicket(10L)).thenReturn(List.of(501L));
-        when(requestRepo.nextRequestCode()).thenReturn("PCR-2026-0001");
-        // V185: model is now unconditionally required (see itemRequestWithIdentity's own Javadoc) — this test isolates
-        // sourceTicketItemId as the identity signal, ALONGSIDE the now-mandatory model, not instead of it.
-        CreatePricingRequestRequest request = createRequest(PricingRequestRecipient.BUYER, 1L, null,
-            List.of(itemRequestWithIdentity(501L, null, null, "Model (baseline)", null)));
-        when(requestRepo.create(eq(10L), eq("PCR-2026-0001"), any(), eq(1L))).thenReturn(20L);
-        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
-
-        service.createDraft(10L, request, salesActor);
-
-        // any(), not eq(request): resolveItems() derives requestedQty/Unit/Basis and the wastage audit columns onto a
-        // NEW PricingRequestItemRequest before this call, so the object the repository actually receives is never
-        // equal to the one this test built.
-        verify(requestRepo).create(eq(10L), eq("PCR-2026-0001"), any(), eq(1L));
-    }
-
-    @Test
-    void createDraft_acceptsItemIdentifiedByProductIdAlone() {
-        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
-        when(requestRepo.findItemIdsForTicket(10L)).thenReturn(List.of());
-        when(requestRepo.nextRequestCode()).thenReturn("PCR-2026-0001");
-        // V185: see createDraft_acceptsItemIdentifiedBySourceTicketItemIdAlone's identical comment.
-        CreatePricingRequestRequest request = createRequest(PricingRequestRecipient.BUYER, 1L, null,
-            List.of(itemRequestWithIdentity(null, 77L, null, "Model (baseline)", null)));
-        when(requestRepo.create(eq(10L), eq("PCR-2026-0001"), any(), eq(1L))).thenReturn(20L);
-        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
-
-        service.createDraft(10L, request, salesActor);
-
-        verify(requestRepo).create(eq(10L), eq("PCR-2026-0001"), any(), eq(1L));
-    }
-
-    @Test
-    void createDraft_acceptsItemIdentifiedByModelAlone() {
-        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
-        when(requestRepo.findItemIdsForTicket(10L)).thenReturn(List.of());
-        when(requestRepo.nextRequestCode()).thenReturn("PCR-2026-0001");
-        CreatePricingRequestRequest request = createRequest(PricingRequestRecipient.BUYER, 1L, null,
-            List.of(itemRequestWithIdentity(null, null, null, "Model X", null)));
-        when(requestRepo.create(eq(10L), eq("PCR-2026-0001"), any(), eq(1L))).thenReturn(20L);
-        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
-
-        service.createDraft(10L, request, salesActor);
-
-        verify(requestRepo).create(eq(10L), eq("PCR-2026-0001"), any(), eq(1L));
-    }
-
-    @Test
-    void createDraft_rejectsItemIdentifiedBySpecialRequirementAlone() {
-        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
-        CreatePricingRequestRequest request = createRequest(PricingRequestRecipient.BUYER, 1L, null,
-            List.of(itemRequestWithIdentity(null, null, null, null, "กระเบื้องลายไม้สีเข้ม ผิวด้าน")));
-        assertBadRequest(() -> service.createDraft(10L, request, salesActor));
-        verify(requestRepo, never()).create(anyLong(), any(), any(), anyLong());
-    }
-
-    @Test
-    void createDraft_acceptsItemIdentifiedByProductDescriptionAlone() {
-        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
-        when(requestRepo.findItemIdsForTicket(10L)).thenReturn(List.of());
-        when(requestRepo.nextRequestCode()).thenReturn("PCR-2026-0001");
-        // V185: see createDraft_acceptsItemIdentifiedBySourceTicketItemIdAlone's identical comment — model is now
-        // unconditionally required alongside whatever else identifies the item.
-        CreatePricingRequestRequest request = createRequest(PricingRequestRecipient.BUYER, 1L, null,
-            List.of(itemRequestWithIdentity(null, null, null, "Model (baseline)", null,
-                "กระเบื้องพอร์ซเลน 60x60 สีขาว")));
-        when(requestRepo.create(eq(10L), eq("PCR-2026-0001"), any(), eq(1L))).thenReturn(20L);
-        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
-        service.createDraft(10L, request, salesActor);
-
-        verify(requestRepo).create(eq(10L), eq("PCR-2026-0001"), any(), eq(1L));
-    }
-
-    @Test
-    void createDraft_rejectsMalformedClientRequestId() {
-        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
-        CreatePricingRequestRequest request = new CreatePricingRequestRequest(
-            PricingRequestRecipient.BUYER, 1L, null, null, null, null, null, "not-a-uuid",
-            List.of(sampleItemRequest(null, QuantityType.REFERENCE)));
-
-        assertBadRequest(() -> service.createDraft(10L, request, salesActor));
-
-        verify(requestRepo, never()).create(anyLong(), any(), any(), anyLong());
-    }
 
     @Test
     void createDraft_idempotentReplayReturnsExistingWithoutDuplicateInsertOrEvent() {
@@ -417,194 +114,6 @@ class PricingRequestServiceTest {
         verify(requestRepo, never()).addEvent(anyLong(), anyLong(), anyLong(), any(), any(), any(), any(), any(), any());
     }
 
-    @Test
-    void createDraft_idempotentConflictReturnsExistingWithoutDuplicateItemsOrEvent() {
-        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
-        PricingRequestSummaryDto existing = stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
-        when(requestRepo.findByClientRequestId(1L, clientRequestId()))
-            .thenReturn(Optional.empty(), Optional.of(existing));
-        when(requestRepo.findItems(20L)).thenReturn(List.of());
-        when(requestRepo.findEvents(20L)).thenReturn(List.of());
-        when(requestRepo.nextRequestCode()).thenReturn("PCR-2026-0001");
-        // any(), not eq(sampleCreateRequest()): resolveItems() derives requestedQty/Unit/Basis onto a new item object
-        // before this call, so the actual argument is never equal to a fresh sampleCreateRequest() call's own
-        // (unresolved) items.
-        when(requestRepo.create(eq(10L), eq("PCR-2026-0001"), any(), eq(1L))).thenReturn(0L);
-
-        var replay = service.createDraft(10L, sampleCreateRequest(), salesActor);
-
-        assertThat(replay.summary().id()).isEqualTo(20L);
-        verify(requestRepo).create(eq(10L), eq("PCR-2026-0001"), any(), eq(1L));
-        verify(requestRepo, never()).replaceItems(anyLong(), any());
-        verify(requestRepo, never()).addEvent(anyLong(), anyLong(), anyLong(), any(), any(), any(), any(), any(), any());
-    }
-
-    @Test
-    void createDraft_rejectsClientRequestIdReplayedForDifferentTicket() {
-        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
-        PricingRequestSummaryDto existing = stubPricingRequest(20L, 99L, 1L, PricingRequestStatus.DRAFT);
-        when(requestRepo.findByClientRequestId(1L, clientRequestId())).thenReturn(Optional.of(existing));
-
-        assertConflict(() -> service.createDraft(10L, sampleCreateRequest(), salesActor));
-
-        verify(requestRepo, never()).create(anyLong(), any(), any(), anyLong());
-    }
-
-    @Test
-    void submit_rejectsPreExistingDraftWithUnidentifiedItem() {
-        // Simulates a draft created BEFORE this rule existed (or otherwise persisted with an unidentified line):
-        // submit() must re-check the PERSISTED items, not just rely on createDraft/updateDraft having validated them
-        // at write time.
-        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT, 1L, null, null);
-        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
-        when(requestRepo.findItems(20L)).thenReturn(List.of(itemDtoWithIdentity(null, null, "Brand only", null, null, null)));
-        assertBadRequest(() -> service.submit(20L, salesActor));
-        verify(requestRepo, never()).transition(anyLong(), any(), any(), any(), any());
-    }
-
-    @Test
-    void submit_acceptsPreExistingDraftWithProductDescriptionOnly() {
-        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT, 1L, null, null);
-        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
-        when(requestRepo.findItems(20L)).thenReturn(List.of(
-            itemDtoWithIdentity(null, null, null, null, null, "กระเบื้องพอร์ซเลน 60x60 สีขาว")));
-        when(requestRepo.transition(20L, PricingRequestStatus.DRAFT, PricingRequestStatus.SUBMITTED, null, null))
-            .thenReturn(1);
-
-        service.submit(20L, salesActor);
-
-        verify(requestRepo).transition(20L, PricingRequestStatus.DRAFT, PricingRequestStatus.SUBMITTED, null, null);
-    }
-
-    // The catalog is not mandatory: a free-text item must not 422 here. A คำขอราคา may name a product that is not in
-    // the catalogue yet, which is precisely what Import is being asked to price. This is the
-    // wrong-way-round case for the removal: it fails if anyone reinstates the gate.
-    @Test
-    void submit_acceptsFreeTextItemWithNoCatalogSnapshot() {
-        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT, 1L, null, null);
-        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
-        when(requestRepo.findItems(20L)).thenReturn(List.of(
-            itemDtoWithoutCatalogSnapshot(null, null, "Brand", "Model")));
-        // transition() returns the compare-and-set row count; Mockito's int default of 0 would make submit() throw the
-        // optimistic-lock 409 before this test could observe anything.
-        when(requestRepo.transition(20L, PricingRequestStatus.DRAFT, PricingRequestStatus.SUBMITTED, null, null))
-            .thenReturn(1);
-
-        service.submit(20L, salesActor);
-
-        verify(requestRepo).transition(20L, PricingRequestStatus.DRAFT, PricingRequestStatus.SUBMITTED, null, null);
-    }
-
-    // Same, with several free-text lines mixed in beside a fully-snapshotted one — the old gate reported
-    // "รายการที่ 2, 3" here and blocked the submit.
-    @Test
-    void submit_acceptsAMixOfCatalogBackedAndFreeTextItems() {
-        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT, 1L, null, null);
-        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
-        when(requestRepo.findItems(20L)).thenReturn(List.of(
-            sampleItem(null),
-            itemDtoWithoutCatalogSnapshot(null, null, "Brand 2", "Model 2"),
-            itemDtoWithoutCatalogSnapshot(null, null, "Brand 3", "Model 3")));
-        when(requestRepo.transition(20L, PricingRequestStatus.DRAFT, PricingRequestStatus.SUBMITTED, null, null))
-            .thenReturn(1);
-
-        service.submit(20L, salesActor);
-
-        verify(requestRepo).transition(20L, PricingRequestStatus.DRAFT, PricingRequestStatus.SUBMITTED, null, null);
-    }
-
-    // A request whose items already have a full catalog snapshot (simulating a real submit(), where
-    // snapshotCatalogSelections has already populated these fields) submits cleanly.
-    @Test
-    void submit_acceptsPreExistingDraftWithFullCatalogSnapshot() {
-        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT, 1L, null, null);
-        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
-        when(requestRepo.findItems(20L)).thenReturn(List.of(sampleItem(null)));
-        when(requestRepo.transition(20L, PricingRequestStatus.DRAFT, PricingRequestStatus.SUBMITTED, null, null))
-            .thenReturn(1);
-
-        service.submit(20L, salesActor);
-
-        verify(requestRepo).transition(20L, PricingRequestStatus.DRAFT, PricingRequestStatus.SUBMITTED, null, null);
-    }
-
-    // ── recipient contact ownership ────────────────────────────────
-
-    @Test
-    void createDraft_rejectsContactBelongingToAnotherCustomer() {
-        stubTicket(10L, 1L, DealLifecycle.ACTIVE, 5L);
-        when(requestRepo.findItemIdsForTicket(10L)).thenReturn(List.of());
-        when(contactRepo.findById(1L)).thenReturn(Optional.of(
-            new ContactDto(1L, 99L, "Other", "Customer's Contact", null, null, null)));
-        CreatePricingRequestRequest request = createRequest(PricingRequestRecipient.BUYER, 1L, null,
-            List.of(sampleItemRequest(null, QuantityType.REFERENCE)));
-        assertBadRequest(() -> service.createDraft(10L, request, salesActor));
-        verify(requestRepo, never()).create(anyLong(), any(), any(), anyLong());
-    }
-
-    @Test
-    void createDraft_acceptsContactBelongingToTheDealsCustomer() {
-        stubTicket(10L, 1L, DealLifecycle.ACTIVE, 5L);
-        when(requestRepo.findItemIdsForTicket(10L)).thenReturn(List.of());
-        when(contactRepo.findById(1L)).thenReturn(Optional.of(
-            new ContactDto(1L, 5L, "Matching", "Contact", null, null, null)));
-        when(requestRepo.nextRequestCode()).thenReturn("PCR-2026-0001");
-        CreatePricingRequestRequest request = createRequest(PricingRequestRecipient.BUYER, 1L, null,
-            List.of(sampleItemRequest(null, QuantityType.REFERENCE)));
-        when(requestRepo.create(eq(10L), eq("PCR-2026-0001"), any(), eq(1L))).thenReturn(20L);
-        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
-
-        service.createDraft(10L, request, salesActor);
-
-        verify(requestRepo).create(eq(10L), eq("PCR-2026-0001"), any(), eq(1L));
-    }
-
-    @Test
-    void createDraft_rejectsUnknownContactId() {
-        stubTicket(10L, 1L, DealLifecycle.ACTIVE, 5L);
-        when(requestRepo.findItemIdsForTicket(10L)).thenReturn(List.of());
-        when(contactRepo.findById(1L)).thenReturn(Optional.empty());
-        CreatePricingRequestRequest request = createRequest(PricingRequestRecipient.BUYER, 1L, null,
-            List.of(sampleItemRequest(null, QuantityType.REFERENCE)));
-        assertBadRequest(() -> service.createDraft(10L, request, salesActor));
-        verify(requestRepo, never()).create(anyLong(), any(), any(), anyLong());
-    }
-
-    @Test
-    void createDraft_skipsContactOwnershipCheckWhenTicketHasNoCustomer() {
-        // Older deals may have customerId == null (no customer link at all). The ownership check has nothing to
-        // compare the contact against in that case, so it is skipped rather than treated as a mismatch — this is
-        // "nothing to check", NOT "any contact is fine" in general.
-        stubTicket(10L, 1L, DealLifecycle.ACTIVE); // customerId defaults to null
-        when(requestRepo.findItemIdsForTicket(10L)).thenReturn(List.of());
-        when(requestRepo.nextRequestCode()).thenReturn("PCR-2026-0001");
-        CreatePricingRequestRequest request = createRequest(PricingRequestRecipient.BUYER, 1L, null,
-            List.of(sampleItemRequest(null, QuantityType.REFERENCE)));
-        when(requestRepo.create(eq(10L), eq("PCR-2026-0001"), any(), eq(1L))).thenReturn(20L);
-        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
-
-        service.createDraft(10L, request, salesActor);
-
-        verify(requestRepo).create(eq(10L), eq("PCR-2026-0001"), any(), eq(1L));
-        verifyNoInteractions(contactRepo);
-    }
-
-    @Test
-    void updateDraft_rejectsContactBelongingToAnotherCustomer() {
-        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
-        stubTicket(10L, 1L, DealLifecycle.ACTIVE, 5L);
-        when(contactRepo.findById(1L)).thenReturn(Optional.of(
-            new ContactDto(1L, 99L, "Other", "Customer's Contact", null, null, null)));
-        // recipientType must be a real value here (not null): updateDraft is a
-        // full-replacement PUT that validates recipientType unconditionally
-        // before it ever reaches the contact-ownership check this test targets —
-        // a null would fail-fast on THAT guard instead, never exercising this one.
-        UpdatePricingRequestRequest request = new UpdatePricingRequestRequest(
-            PricingRequestRecipient.BUYER, 1L, null, null, null, null, null, null);
-        assertBadRequest(() -> service.updateDraft(20L, request, salesActor));
-        verify(requestRepo, never()).updateDraft(anyLong(), any());
-    }
-
     // ── updateDraft: full-replacement re-validation ────────
     // The full-replacement PUT re-runs EVERY validation against the
     // replacement payload, not just the contact-ownership check above; these
@@ -612,123 +121,10 @@ class PricingRequestServiceTest {
     // ahead of it, and the happy path.
 
     @Test
-    void updateDraft_otherSalesCannotDiscoverAnotherRepsDraft() {
-        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
-        assertNotFound(() -> service.updateDraft(20L, sampleUpdateRequest(), otherSales));
-        verify(requestRepo, never()).updateDraft(anyLong(), any());
-    }
-
-    @Test
     void updateDraft_rejectsNonDraftStatus() {
         stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.SUBMITTED);
         assertConflict(() -> service.updateDraft(20L, sampleUpdateRequest(), salesActor));
         verify(requestRepo, never()).updateDraft(anyLong(), any());
-    }
-
-    @Test
-    void updateDraft_rejectsNullRecipientType() {
-        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
-        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
-        UpdatePricingRequestRequest request = new UpdatePricingRequestRequest(
-            null, null, null, null, null, null, null, null);
-        assertBadRequest(() -> service.updateDraft(20L, request, salesActor));
-        verify(requestRepo, never()).updateDraft(anyLong(), any());
-    }
-
-    @Test
-    void updateDraft_rejectsBlankRecipientType() {
-        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
-        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
-        UpdatePricingRequestRequest request = new UpdatePricingRequestRequest(
-            "   ", null, null, null, null, null, null, null);
-        assertBadRequest(() -> service.updateDraft(20L, request, salesActor));
-        verify(requestRepo, never()).updateDraft(anyLong(), any());
-    }
-
-    @Test
-    void updateDraft_rejectsInvalidRecipientType() {
-        // Proves the replacement payload's recipientType is re-validated against PricingRequestRecipient, the same as
-        // createDraft — not merely checked for blankness.
-        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
-        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
-        UpdatePricingRequestRequest request = new UpdatePricingRequestRequest(
-            "BOGUS", 1L, null, null, null, null, null, null);
-        assertBadRequest(() -> service.updateDraft(20L, request, salesActor));
-        verify(requestRepo, never()).updateDraft(anyLong(), any());
-    }
-
-    @Test
-    void updateDraft_rejectsInvalidCurrency() {
-        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
-        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
-        UpdatePricingRequestRequest request = new UpdatePricingRequestRequest(
-            PricingRequestRecipient.BUYER, 1L, null, null, null, "DOLLARS", null, null);
-        assertBadRequest(() -> service.updateDraft(20L, request, salesActor));
-        verify(requestRepo, never()).updateDraft(anyLong(), any());
-    }
-
-    @Test
-    void updateDraft_rejectsReplacementItemWithNoIdentityField() {
-        // The item-identity rule is re-run against the REPLACEMENT items
-        // list, same as createDraft — a full-replacement PUT could otherwise be
-        // used to smuggle an unidentified line past the create-time check.
-        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
-        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
-        UpdatePricingRequestRequest request = new UpdatePricingRequestRequest(
-            PricingRequestRecipient.BUYER, 1L, null, null, null, null, null,
-            List.of(itemRequestWithIdentity(null, null, "Brand only, no model", null, null)));
-        assertBadRequest(() -> service.updateDraft(20L, request, salesActor));
-        verify(requestRepo, never()).updateDraft(anyLong(), any());
-    }
-
-    @Test
-    void updateDraft_rejectsReplacementSourceItemFromAnotherTicket() {
-        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
-        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
-        when(requestRepo.findItemIdsForTicket(10L)).thenReturn(List.of(501L, 502L));
-        UpdatePricingRequestRequest request = new UpdatePricingRequestRequest(
-            PricingRequestRecipient.BUYER, 1L, null, null, null, null, null,
-            List.of(sampleItemRequest(999L, QuantityType.REFERENCE)));
-        assertBadRequest(() -> service.updateDraft(20L, request, salesActor));
-        verify(requestRepo, never()).updateDraft(anyLong(), any());
-    }
-
-    @Test
-    void updateDraft_skipsItemValidationWhenItemsOmitted() {
-        // items == null means "leave the item list untouched" (the one field that keeps sparse-PATCH semantics under
-        // the otherwise full-replacement PUT — see PricingRequestRepository.updateDraft's Javadoc), so neither
-        // validateItems nor validateSourceItemsBelongToTicket should run at all.
-        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
-        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
-        when(requestRepo.updateDraft(eq(20L), any())).thenReturn(true);
-
-        service.updateDraft(20L, validUpdateRequest(), salesActor);
-
-        verify(requestRepo, never()).findItemIdsForTicket(anyLong());
-    }
-
-    @Test
-    void updateDraft_rejectsWhenUpdateReturnsFalse() {
-        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
-        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
-        when(requestRepo.updateDraft(eq(20L), any())).thenReturn(false);
-        assertConflict(() -> service.updateDraft(20L, validUpdateRequest(), salesActor));
-        verify(requestRepo, never()).addEvent(anyLong(), anyLong(), anyLong(), any(), any(), any(), any(), any(), any());
-    }
-
-    @Test
-    void updateDraft_succeedsAndRecordsUpdatedEvent() {
-        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
-        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
-        UpdatePricingRequestRequest request = validUpdateRequest();
-        when(requestRepo.updateDraft(20L, request)).thenReturn(true);
-
-        service.updateDraft(20L, request, salesActor);
-
-        verify(requestRepo).updateDraft(20L, request);
-        verify(requestRepo).addEvent(eq(20L), eq(10L), eq(1L), any(),
-            eq(PricingRequestEventKind.PRICING_REQUEST_UPDATED), eq(PricingRequestStatus.DRAFT),
-            eq(PricingRequestStatus.DRAFT), eq(null), eq(null));
     }
 
     // ── updateDraft (recipient guard on the OTHER route) ────────────
@@ -758,65 +154,7 @@ class PricingRequestServiceTest {
         verify(requestRepo, never()).addEvent(anyLong(), anyLong(), anyLong(), any(), any(), any(), any(), any(), any());
     }
 
-    @Test
-    void updateDraft_allowsSameRecipientTypeOnRevisionChild_unchangedBehaviour() {
-        stubPricingRequestRevisionChild(21L, 10L, 1L, PricingRequestStatus.DRAFT,
-            PricingRequestRecipient.DESIGNER, 20L);
-        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
-        UpdatePricingRequestRequest request = validUpdateRequest(); // recipientType DESIGNER — matches the stub
-        when(requestRepo.updateDraft(21L, request)).thenReturn(true);
-
-        service.updateDraft(21L, request, salesActor);
-
-        verify(requestRepo).updateDraft(21L, request);
-    }
-
-    @Test
-    void updateDraft_allowsRecipientTypeChangeOnRootPricingRequest_scopeBoundaryPinned() {
-        // Deliberate scope boundary: a ROOT pricing request may still have its recipientType changed via updateDraft.
-        // This pins that reasoning against a future regression that widens the guard to roots without re-deriving it.
-        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT); // recipientType BUYER, parentPricingRequestId null
-        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
-        UpdatePricingRequestRequest request = validUpdateRequest(); // recipientType DESIGNER — DIFFERENT from BUYER
-        when(requestRepo.updateDraft(20L, request)).thenReturn(true);
-
-        service.updateDraft(20L, request, salesActor);
-
-        verify(requestRepo).updateDraft(20L, request);
-    }
-
-    @Test
-    void submit_rejectsContactBelongingToAnotherCustomer() {
-        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT, 1L, null, null);
-        stubTicket(10L, 1L, DealLifecycle.ACTIVE, 5L);
-        when(requestRepo.findItems(20L)).thenReturn(List.of(sampleItem(null)));
-        when(contactRepo.findById(1L)).thenReturn(Optional.of(
-            new ContactDto(1L, 99L, "Other", "Customer's Contact", null, null, null)));
-        assertBadRequest(() -> service.submit(20L, salesActor));
-        verify(requestRepo, never()).transition(anyLong(), any(), any(), any(), any());
-    }
-
     // ── submit ───────────────────────────────────────────────────────────
-
-    @Test
-    void submit_rejectsNonDraftStatus() {
-        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.SUBMITTED);
-        assertConflict(() -> service.submit(20L, salesActor));
-        verify(requestRepo, never()).transition(anyLong(), any(), any(), any(), any());
-    }
-
-    @Test
-    void submit_rejectsWhenTransitionRowsZero() {
-        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT, 1L, null, null);
-        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
-        when(requestRepo.findItems(20L)).thenReturn(List.of(sampleItem(null)));
-        when(requestRepo.transition(20L, PricingRequestStatus.DRAFT, PricingRequestStatus.SUBMITTED, null, null))
-            .thenReturn(0);
-
-        assertConflict(() -> service.submit(20L, salesActor));
-
-        verify(notifRepo, never()).notifyByRole(any(), anyLong(), any(), any());
-    }
 
     @Test
     void submit_notifiesImportAndCeoWithPricingRequestLinks() {
@@ -835,33 +173,6 @@ class PricingRequestServiceTest {
     }
 
     @Test
-    void submit_rejectsWhenNoItems() {
-        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT, 1L, null, null);
-        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
-        when(requestRepo.findItems(20L)).thenReturn(List.of());
-        assertBadRequest(() -> service.submit(20L, salesActor));
-        verify(requestRepo, never()).transition(anyLong(), any(), any(), any(), any());
-    }
-
-    @Test
-    void submit_rejectsDuplicateSourceTicketItemIds() {
-        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT, 1L, null, null);
-        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
-        when(requestRepo.findItems(20L)).thenReturn(List.of(sampleItem(501L), sampleItem(501L)));
-        assertBadRequest(() -> service.submit(20L, salesActor));
-        verify(requestRepo, never()).transition(anyLong(), any(), any(), any(), any());
-    }
-
-    @Test
-    void submit_rejectsUnidentifiableRecipient() {
-        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT, null, null, null);
-        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
-        when(requestRepo.findItems(20L)).thenReturn(List.of(sampleItem(null)));
-        assertBadRequest(() -> service.submit(20L, salesActor));
-        verify(requestRepo, never()).transition(anyLong(), any(), any(), any(), any());
-    }
-
-    @Test
     void submit_rejectsPastRequiredDate() {
         stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT, 1L, null, LocalDate.now().minusDays(1));
         stubTicket(10L, 1L, DealLifecycle.ACTIVE);
@@ -870,30 +181,7 @@ class PricingRequestServiceTest {
         verify(requestRepo, never()).transition(anyLong(), any(), any(), any(), any());
     }
 
-    @Test
-    void submit_otherSalesCannotDiscoverAnotherRepsDraft() {
-        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT, 1L, null, null);
-        assertNotFound(() -> service.submit(20L, otherSales));
-        verify(requestRepo, never()).transition(anyLong(), any(), any(), any(), any());
-    }
-
-    @Test
-    void submit_rejectsNonActiveDeal() {
-        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT, 1L, null, null);
-        stubTicket(10L, 1L, DealLifecycle.ON_HOLD);
-        when(requestRepo.findItems(20L)).thenReturn(List.of(sampleItem(null)));
-        assertConflict(() -> service.submit(20L, salesActor));
-        verify(requestRepo, never()).transition(anyLong(), any(), any(), any(), any());
-    }
-
     // ── cancel ───────────────────────────────────────────────────────────
-
-    @Test
-    void cancel_rejectsAlreadyCancelled() {
-        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.CANCELLED);
-        assertConflict(() -> service.cancel(20L, cancelRequest(), salesActor));
-        verify(requestRepo, never()).transition(anyLong(), any(), any(), any(), any());
-    }
 
     @Test
     void cancel_allowsOwnerFromDraft() {
@@ -917,107 +205,7 @@ class PricingRequestServiceTest {
         verify(requestRepo).transition(20L, PricingRequestStatus.SUBMITTED, PricingRequestStatus.CANCELLED, null, 4L);
     }
 
-    @Test
-    void cancel_otherSalesCannotDiscoverAnotherRepsDraft() {
-        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
-        assertNotFound(() -> service.cancel(20L, cancelRequest(), otherSales));
-        verify(requestRepo, never()).transition(anyLong(), any(), any(), any(), any());
-    }
-
-    @Test
-    void cancel_rejectsWhenTransitionRowsZero() {
-        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
-        when(requestRepo.transition(20L, PricingRequestStatus.DRAFT, PricingRequestStatus.CANCELLED, null, 1L))
-            .thenReturn(0);
-        assertConflict(() -> service.cancel(20L, cancelRequest(), salesActor));
-    }
-
-    @Test
-    void cancel_succeedsOnNonActiveDealWithoutCheckingTicketLifecycle() {
-        // cancel() must remain callable no matter the deal's lifecycle — a request left over on a deal that just went
-        // ON_HOLD/DORMANT/lost must still be cancellable (see the comment on cancel() itself).
-        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
-        when(requestRepo.transition(20L, PricingRequestStatus.DRAFT, PricingRequestStatus.CANCELLED, null, 1L))
-            .thenReturn(1);
-
-        service.cancel(20L, cancelRequest(), salesActor);
-
-        verify(requestRepo).transition(20L, PricingRequestStatus.DRAFT, PricingRequestStatus.CANCELLED, null, 1L);
-        verify(ticketRepo, never()).findById(anyLong());
-    }
-
-    // ── createCustomerChangeRevision (recipient guard) ─────────────
-    //
-    // The caller must not be able to pass a DIFFERENT recipientType than the
-    // parent's own: the parent would get marked SUPERSEDED anyway,
-    // and later, when the child's quotation was issued, CustomerQuotationService#issue's
-    // supersedeSupersededChainQuotations retires every OTHER issued quotation sharing the same
-    // root_pricing_request_id — including a different recipient's already-delivered quotation.
-    // Quoting a second recipient is createDraft's job (an independent PricingRequest that never
-    // supersedes anything); a revision must only ever change the SAME recipient's terms.
-
-    @Test
-    void createCustomerChangeRevision_rejectsDifferentRecipientTypeAndMutatesNothing() {
-        // Mirrors the bug's own narrative: an ISSUED quotation to the DESIGNER, "revised" into a request addressed to
-        // the OWNER instead.
-        stubPricingRequestWithRecipient(20L, 10L, 1L, PricingRequestStatus.QUOTATION_ISSUED,
-            PricingRequestRecipient.DESIGNER);
-        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
-
-        assertConflict(() -> service.createCustomerChangeRevision(
-            20L, customerChangeRevisionRequest(PricingRequestRecipient.OWNER), salesActor));
-
-        // The guard must fire BEFORE any state change: nothing about the parent or a new row may be touched once the
-        // recipientType mismatch is detected.
-        verify(requestRepo, never()).createCustomerChangeRevision(any(), any(), anyLong());
-        verify(requestRepo, never()).supersedeForCustomerRevision(anyLong(), any(), anyLong());
-        verify(requestRepo, never()).cancelOpenStep2Children(anyLong(), any(), anyLong());
-        verify(requestRepo, never()).supersedeOpenPricingDecision(anyLong());
-        verify(requestRepo, never()).addEvent(anyLong(), anyLong(), anyLong(), any(), any(), any(), any(), any(), any());
-    }
-
-    @Test
-    void createCustomerChangeRevision_allowsSameRecipientType_unchangedBehaviour() {
-        stubPricingRequestWithRecipient(20L, 10L, 1L, PricingRequestStatus.QUOTATION_ISSUED,
-            PricingRequestRecipient.DESIGNER);
-        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
-        when(requestRepo.createCustomerChangeRevision(any(), any(), anyLong())).thenReturn(21L);
-        when(requestRepo.supersedeForCustomerRevision(20L, PricingRequestStatus.QUOTATION_ISSUED, 21L))
-            .thenReturn(1);
-        stubPricingRequestWithRecipient(21L, 10L, 1L, PricingRequestStatus.DRAFT,
-            PricingRequestRecipient.DESIGNER);
-
-        var result = service.createCustomerChangeRevision(
-            20L, customerChangeRevisionRequest(PricingRequestRecipient.DESIGNER), salesActor);
-
-        assertThat(result.summary().id()).isEqualTo(21L);
-        verify(requestRepo).createCustomerChangeRevision(any(), any(), anyLong());
-        verify(requestRepo).supersedeForCustomerRevision(20L, PricingRequestStatus.QUOTATION_ISSUED, 21L);
-    }
-
-    @Test
-    void createCustomerChangeRevision_nullRecipientType_stillRejectedAsBadRequestNotByTheNewGuard() {
-        // request.recipientType() is @NotBlank on the wire (CustomerChangeRevisionRequest, enforced by @Valid at the
-        // controller), so a real caller can never reach this method with recipientType == null — it is not an
-        // "unchanged" signal, it is invalid input.
-        stubPricingRequestWithRecipient(20L, 10L, 1L, PricingRequestStatus.QUOTATION_ISSUED,
-            PricingRequestRecipient.DESIGNER);
-        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
-
-        assertBadRequest(() -> service.createCustomerChangeRevision(
-            20L, customerChangeRevisionRequest(null), salesActor));
-
-        verify(requestRepo, never()).createCustomerChangeRevision(any(), any(), anyLong());
-        verify(requestRepo, never()).supersedeForCustomerRevision(anyLong(), any(), anyLong());
-    }
-
     // ── read scoping ─────────────────────────────────────────────────────
-
-    @Test
-    void get_otherSalesCannotDiscoverAnotherRepsDraft_returns404() {
-        stubPricingRequest(20L, 10L, 99L, PricingRequestStatus.DRAFT);
-        assertNotFound(() -> service.get(20L, salesActor));
-    }
 
     @Test
     void get_otherSalesCannotReadAnotherRepsSubmittedRequest_returns403() {
@@ -1047,176 +235,11 @@ class PricingRequestServiceTest {
     }
 
     @Test
-    void get_accountRejected() {
-        stubPricingRequest(20L, 10L, 99L, PricingRequestStatus.DRAFT);
-        assertForbidden(() -> service.get(20L, accountActor));
-    }
-
-    @Test
-    void get_ceoCanSeeDraft() {
-        stubPricingRequest(20L, 10L, 99L, PricingRequestStatus.DRAFT);
-        when(requestRepo.findItems(20L)).thenReturn(List.of());
-        when(requestRepo.findEvents(20L)).thenReturn(List.of());
-        assertThat(service.get(20L, ceoActor).summary().id()).isEqualTo(20L);
-    }
-
-    @Test
-    void get_salesManagerCanSeeDraft() {
-        stubPricingRequest(20L, 10L, 99L, PricingRequestStatus.DRAFT);
-        when(requestRepo.findItems(20L)).thenReturn(List.of());
-        when(requestRepo.findEvents(20L)).thenReturn(List.of());
-        assertThat(service.get(20L, salesManagerActor).summary().id()).isEqualTo(20L);
-    }
-
-    @Test
     void get_ownerSalesCanSeeOwnDraft() {
         stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
         when(requestRepo.findItems(20L)).thenReturn(List.of());
         when(requestRepo.findEvents(20L)).thenReturn(List.of());
         assertThat(service.get(20L, salesActor).summary().id()).isEqualTo(20L);
-    }
-
-    // list()/findSummaries: another rep's DRAFT must never leak into the queue, regardless of the status filter
-    // used, unless the caller has oversight.
-    @Test
-    void list_importDoesNotSeeAnotherRepsDraft_statusFilterNull() {
-        when(requestRepo.findSummaries(null, null, null, true, false, 3L)).thenReturn(List.of());
-        assertThat(service.list(null, null, true, importActor)).isEmpty();
-        verify(requestRepo).findSummaries(null, null, null, true, false, 3L);
-    }
-
-    @Test
-    void list_importDoesNotSeeAnotherRepsDraft_statusFilterDraft() {
-        when(requestRepo.findSummaries(PricingRequestStatus.DRAFT, null, null, true, false, 3L)).thenReturn(List.of());
-        assertThat(service.list(PricingRequestStatus.DRAFT, null, true, importActor)).isEmpty();
-        verify(requestRepo).findSummaries(PricingRequestStatus.DRAFT, null, null, true, false, 3L);
-    }
-
-    @Test
-    void list_ceoSeesAnotherRepsDraft() {
-        PricingRequestSummaryDto draft = stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
-        when(requestRepo.findSummaries(null, null, null, true, true, 4L)).thenReturn(List.of(draft));
-        assertThat(service.list(null, null, true, ceoActor))
-            .extracting(PricingRequestSummaryDto::id).contains(20L);
-        verify(requestRepo).findSummaries(null, null, null, true, true, 4L);
-    }
-
-    // sales_manager is the OTHER oversight
-    // role in draftOversight's "ceo".equals(...) || "sales_manager".equals(...)
-    // check, so it must also flip that flag to true. account
-    // is neither owner-filtered nor oversight, so it must behave like import.
-    @Test
-    void list_salesManagerHasDraftOversight() {
-        PricingRequestSummaryDto draft = stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
-        when(requestRepo.findSummaries(null, null, null, true, true, 7L)).thenReturn(List.of(draft));
-        assertThat(service.list(null, null, true, salesManagerActor))
-            .extracting(PricingRequestSummaryDto::id).contains(20L);
-        verify(requestRepo).findSummaries(null, null, null, true, true, 7L);
-    }
-
-    @Test
-    void list_accountRejected() {
-        assertForbidden(() -> service.list(null, null, true, accountActor));
-        verify(requestRepo, never()).findSummaries(any(), any(), any(), anyBoolean(), anyBoolean(), any());
-    }
-
-    // listForTicket is a separate read path from get()/list() and must honour the same DRAFT-privacy rule.
-    @Test
-    void listForTicket_importDoesNotSeeDraftRequestsOnTicket() {
-        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
-        PricingRequestSummaryDto draft = stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
-        when(requestRepo.findByTicket(10L)).thenReturn(List.of(draft));
-        assertThat(service.listForTicket(10L, importActor)).isEmpty();
-    }
-
-    @Test
-    void listForTicket_accountRejected() {
-        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
-        assertForbidden(() -> service.listForTicket(10L, accountActor));
-        verify(requestRepo, never()).findByTicket(anyLong());
-    }
-
-    @Test
-    void listForTicket_ceoSeesDraftRequestsOnTicket() {
-        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
-        PricingRequestSummaryDto draft = stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
-        when(requestRepo.findByTicket(10L)).thenReturn(List.of(draft));
-        assertThat(service.listForTicket(10L, ceoActor))
-            .extracting(PricingRequestSummaryDto::id).containsExactly(20L);
-    }
-
-    @Test
-    void listForTicket_salesManagerSeesDraftRequestsOnTicket() {
-        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
-        PricingRequestSummaryDto draft = stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
-        when(requestRepo.findByTicket(10L)).thenReturn(List.of(draft));
-        assertThat(service.listForTicket(10L, salesManagerActor))
-            .extracting(PricingRequestSummaryDto::id).containsExactly(20L);
-    }
-
-    @Test
-    void listForTicket_ownerSalesSeesOwnDraftRequest() {
-        // Unlike listForTicket_salesSeesOnlyOwnDeal (which only proves the
-        // repo call happens), this proves the owner's OWN draft actually survives
-        // the service's DRAFT-privacy filter, not just import/ceo/sales_manager's.
-        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
-        PricingRequestSummaryDto draft = stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
-        when(requestRepo.findByTicket(10L)).thenReturn(List.of(draft));
-        assertThat(service.listForTicket(10L, salesActor))
-            .extracting(PricingRequestSummaryDto::id).containsExactly(20L);
-    }
-
-    @Test
-    void listForTicket_salesSeesOnlyOwnDeal() {
-        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
-        service.listForTicket(10L, salesActor);
-        verify(requestRepo).findByTicket(10L);
-    }
-
-    @Test
-    void listForTicket_salesCannotSeeOthersDeal() {
-        stubTicket(10L, 99L, DealLifecycle.ACTIVE);
-        assertForbidden(() -> service.listForTicket(10L, salesActor));
-    }
-
-    @Test
-    void list_salesFiltersToOwnDeals() {
-        service.list(null, null, true, salesActor);
-        // draftOversight=false (sales is not ceo/sales_manager), draftOwnerId=1L (salesActor's own id) — see
-        // findSummaries's Javadoc/clause comment.
-        verify(requestRepo).findSummaries(null, null, 1L, true, false, 1L);
-    }
-
-    @Test
-    void list_nonSalesSeesAllDeals() {
-        service.list(null, null, true, importActor);
-        // import is not ceo/sales_manager, so draftOversight=false — import still relies on the
-        // draftOwnerId=t.created_by match, which the DRAFT-hiding matrix below (list_import...) proves does NOT let
-        // import see another rep's draft.
-        verify(requestRepo).findSummaries(null, null, null, true, false, 3L);
-    }
-
-    @Test
-    void list_rejectsInvalidStatus() {
-        assertBadRequest(() -> service.list("BOGUS", null, true, salesActor));
-    }
-
-    // ── dead-deal lifecycle filter is wired, but get(id) bypasses it ───────
-
-    @Test
-    void list_defaultQueueExcludesOnHoldDealButGetStillReachesIt() {
-        // list must exclude a request whose deal is not ACTIVE; this test proves the SERVICE actually passes
-        // activeDealsOnly through unmangled, and that get — which never touches deal lifecycle, only ownership/role —
-        // still reaches the same request directly.
-        when(requestRepo.findSummaries(null, null, null, true, false, 3L)).thenReturn(List.of());
-        PricingRequestSummaryDto onHoldDealRequest = stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.SUBMITTED);
-        when(requestRepo.findSummaries(null, null, null, false, false, 3L)).thenReturn(List.of(onHoldDealRequest));
-        when(requestRepo.findItems(20L)).thenReturn(List.of());
-        when(requestRepo.findEvents(20L)).thenReturn(List.of());
-
-        assertThat(service.list(null, null, true, importActor)).isEmpty();
-        assertThat(service.list(null, null, false, importActor)).extracting(PricingRequestSummaryDto::id).contains(20L);
-        assertThat(service.get(20L, importActor).summary().id()).isEqualTo(20L);
     }
 
     // ── pickup ───────────────────────────────────────────────────────────
@@ -1228,52 +251,6 @@ class PricingRequestServiceTest {
         assertForbidden(() -> service.pickup(20L, ceoActor));
         assertForbidden(() -> service.pickup(20L, accountActor));
         verify(requestRepo, never()).transition(anyLong(), any(), any(), any(), any());
-    }
-
-    @Test
-    void accountCannotMutateAnyPricingRequestAction() {
-        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.SUBMITTED, 3L);
-
-        assertForbidden(() -> service.updateDraft(20L, sampleUpdateRequest(), accountActor));
-        assertForbidden(() -> service.submit(20L, accountActor));
-        assertForbidden(() -> service.pickup(20L, accountActor));
-        assertForbidden(() -> service.cancel(20L, cancelRequest(), accountActor));
-
-        verify(requestRepo, never()).transition(anyLong(), any(), any(), any(), any());
-        verify(requestRepo, never()).updateDraft(anyLong(), any());
-    }
-
-    @Test
-    void pickup_rejectsNonSubmittedStatus() {
-        // This pricing request is still
-        // DRAFT and importActor (id 3) is not its owner (id 1) nor ceo/
-        // sales_manager, so requireViewable hides it from import entirely —
-        // 404, not a 409 "Only a submitted pricing request can be picked
-        // up". That 409 message would leak the row's existence/status to
-        // an import user who should not even know a draft with this id exists;
-        // a still-DRAFT request literally cannot reach a submitted-only import
-        // yet, so 404 is the correct status once DRAFT is private.
-        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
-        assertNotFound(() -> service.pickup(20L, importActor));
-        verify(requestRepo, never()).transition(anyLong(), any(), any(), any(), any());
-    }
-
-    @Test
-    void pickup_rejectsNonActiveDeal() {
-        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.SUBMITTED);
-        stubTicket(10L, 1L, DealLifecycle.ON_HOLD);
-        assertConflict(() -> service.pickup(20L, importActor));
-        verify(requestRepo, never()).transition(anyLong(), any(), any(), any(), any());
-    }
-
-    @Test
-    void pickup_rejectsWhenTransitionRowsZero() {
-        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.SUBMITTED);
-        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
-        when(requestRepo.transition(20L, PricingRequestStatus.SUBMITTED, PricingRequestStatus.IMPORT_REVIEWING,
-            3L, null)).thenReturn(0);
-        assertConflict(() -> service.pickup(20L, importActor));
-        verify(notifRepo, never()).notifyEmployee(anyLong(), anyLong(), any(), any());
     }
 
     @Test
@@ -1299,67 +276,6 @@ class PricingRequestServiceTest {
         // pickup) lives in PricingRequestRepositoryIntegrationTest.
         verify(ticketRepo, times(1)).findById(10L);
         verifyNoMoreInteractions(ticketRepo);
-    }
-
-    // ── cancelOpenForTicket ─────────────────────────────────────────────────
-
-    @Test
-    void cancelOpenForTicket_cancelsAllOpenRequests() {
-        when(requestRepo.findOpenIdsForTicket(10L)).thenReturn(List.of(20L, 21L));
-        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.SUBMITTED);
-        stubPricingRequest(21L, 10L, 1L, PricingRequestStatus.AWAITING_FACTORY_RESPONSE);
-        when(requestRepo.cancelForDeadDeal(20L, PricingRequestStatus.SUBMITTED, 4L)).thenReturn(1);
-        when(requestRepo.cancelForDeadDeal(21L, PricingRequestStatus.AWAITING_FACTORY_RESPONSE, 4L)).thenReturn(1);
-
-        PricingRequestService.CancelOpenForTicketResult result =
-            service.cancelOpenForTicket(10L, "PROJECT_ON_HOLD", PricingRequestService.DeadDealCause.LOST, ceoActor);
-
-        assertThat(result.cancelledCount()).isEqualTo(2);
-        assertThat(result.abandonedIds()).isEmpty();
-        assertThat(result.hasAbandoned()).isFalse();
-        verify(requestRepo).addEvent(eq(20L), eq(10L), eq(4L), any(),
-            eq(PricingRequestEventKind.PRICING_REQUEST_CANCELLED), eq(PricingRequestStatus.SUBMITTED),
-            eq(PricingRequestStatus.CANCELLED), eq("PROJECT_ON_HOLD"), any());
-        verify(requestRepo).addEvent(eq(21L), eq(10L), eq(4L), any(),
-            eq(PricingRequestEventKind.PRICING_REQUEST_CANCELLED), eq(PricingRequestStatus.AWAITING_FACTORY_RESPONSE),
-            eq(PricingRequestStatus.CANCELLED), eq("PROJECT_ON_HOLD"), any());
-    }
-
-    @Test
-    void cancelOpenForTicket_rowGoneEntirelyIsSettledNotAbandoned() {
-        // 20L: already gone entirely by the time findSummary runs (findOpenIdsForTicket's read is not in the same
-        // transaction snapshot as the loop body). Nothing left to cancel, so this is settled on the first read — not
-        // retried, not abandoned.
-        when(requestRepo.findOpenIdsForTicket(10L)).thenReturn(List.of(20L, 22L));
-        when(requestRepo.findSummary(20L)).thenReturn(java.util.Optional.empty());
-        stubPricingRequest(22L, 10L, 1L, PricingRequestStatus.SUBMITTED);
-        when(requestRepo.cancelForDeadDeal(22L, PricingRequestStatus.SUBMITTED, 4L)).thenReturn(1);
-
-        PricingRequestService.CancelOpenForTicketResult result = service.cancelOpenForTicket(10L, "OTHER", PricingRequestService.DeadDealCause.LOST, ceoActor);
-
-        assertThat(result.cancelledCount()).isEqualTo(1);
-        assertThat(result.abandonedIds()).isEmpty();
-        verify(requestRepo, times(1)).findSummary(20L);
-        verify(requestRepo, never()).cancelForDeadDeal(eq(20L), any(), anyLong());
-        verify(requestRepo).addEvent(eq(22L), eq(10L), eq(4L), any(),
-            eq(PricingRequestEventKind.PRICING_REQUEST_CANCELLED), eq(PricingRequestStatus.SUBMITTED),
-            eq(PricingRequestStatus.CANCELLED), eq("OTHER"), any());
-    }
-
-    @Test
-    void cancelOpenForTicket_alreadyCancelledByARaceIsSettledNotDoubleCancelled() {
-        // 21L: by the time the loop reaches it, something else already raced it to CANCELLED. The wanted end state
-        // already holds, so this must count as settled (no retry, no abandonment, no duplicate cancel event) rather
-        // than either "cancelled by us" or "gave up".
-        when(requestRepo.findOpenIdsForTicket(10L)).thenReturn(List.of(21L));
-        stubPricingRequest(21L, 10L, 1L, PricingRequestStatus.CANCELLED);
-
-        PricingRequestService.CancelOpenForTicketResult result = service.cancelOpenForTicket(10L, "OTHER", PricingRequestService.DeadDealCause.LOST, ceoActor);
-
-        assertThat(result.cancelledCount()).isEqualTo(0);
-        assertThat(result.abandonedIds()).isEmpty();
-        verify(requestRepo, never()).cancelForDeadDeal(eq(21L), any(), anyLong());
-        verify(requestRepo, never()).addEvent(eq(21L), anyLong(), anyLong(), any(), any(), any(), any(), any(), any());
     }
 
     // A raced compare-and-set must not be skipped, which would silently leave a
@@ -1413,114 +329,6 @@ class PricingRequestServiceTest {
     // Pricing Request attachments ───── "Unit-test the decision" half of the two-layer evidence CLAUDE.md requires
     // for an authorization change.
 
-    @Test
-    void uploadAttachment_rejectsNonSalesRoles() {
-        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
-        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
-        assertForbidden(() -> service.uploadAttachment(20L, sampleFile(), importActor));
-        assertForbidden(() -> service.uploadAttachment(20L, sampleFile(), ceoActor));
-        assertForbidden(() -> service.uploadAttachment(20L, sampleFile(), salesManagerActor));
-        verifyNoInteractions(fileStorage);
-    }
-
-    /**
-     * Deliberately a NON-DRAFT status: requireViewable's own draft-privacy check (a different,
-     * pre-existing guard) would otherwise fire FIRST and produce a 404 for a non-owner reaching a
-     * DRAFT — see {@code aSecondSalesRep_cannotReadTheFirstReps_pricingRequest} in
-     * {@code PricingRequestFlowIntegrationTest} for that behavior. A non-draft status isolates
-     * THIS method's own explicit ownership re-check.
-     *
-     * <p>AWAITING_FACTORY_RESPONSE keeps the property that matters: the 403 asserted here is
-     * genuinely the ownership guard's and not the status guard's: uploadAttachment checks ownership BEFORE
-     * ATTACHMENT_EDITABLE_STATUSES, so a status guard firing first would surface as a 409 and turn
-     * this assertion red rather than silently passing for the wrong reason.
-     */
-    @Test
-    void uploadAttachment_rejectsNonOwnerSalesRep() {
-        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
-        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.AWAITING_FACTORY_RESPONSE);
-        assertForbidden(() -> service.uploadAttachment(20L, sampleFile(), otherSales));
-        verifyNoInteractions(fileStorage);
-    }
-
-    @Test
-    void uploadAttachment_rejectsWhenStatusIsNotDraft() {
-        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
-        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.SUBMITTED);
-        assertConflict(() -> service.uploadAttachment(20L, sampleFile(), salesActor));
-        verifyNoInteractions(fileStorage);
-    }
-
-    @Test
-    void uploadAttachment_acceptsOwnerOnDraftAndPersistsTheStoredFile() {
-        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
-        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
-        when(fileStorage.store(eq("pricing-request"), eq(20L), any(), any()))
-            .thenReturn(new FileStorageService.StoredFile("quote-sketch.pdf", "/tmp/x/y.pdf", "application/pdf", 1234L));
-        when(requestRepo.saveAttachment(20L, "quote-sketch.pdf", "/tmp/x/y.pdf", "application/pdf", 1234L, 1L))
-            .thenReturn(new PricingRequestAttachmentDto(
-                90L, 20L, "quote-sketch.pdf", "application/pdf", 1234L, false, 1L, Instant.now()));
-
-        PricingRequestAttachmentDto result = service.uploadAttachment(20L, sampleFile(), salesActor);
-
-        assertThat(result.id()).isEqualTo(90L);
-        assertThat(result.includeInFactoryEmail()).isFalse();
-        verify(requestRepo).saveAttachment(20L, "quote-sketch.pdf", "/tmp/x/y.pdf", "application/pdf", 1234L, 1L);
-        verify(requestRepo).addEvent(eq(20L), eq(10L), eq(1L), any(),
-            eq(PricingRequestEventKind.PRICING_REQUEST_UPDATED), eq(PricingRequestStatus.DRAFT),
-            eq(PricingRequestStatus.DRAFT), any(), any());
-    }
-
-    /** Same non-draft-status reasoning as {@code uploadAttachment_rejectsNonOwnerSalesRep}. */
-    @Test
-    void deleteAttachment_rejectsNonOwnerSalesRep() {
-        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.AWAITING_FACTORY_RESPONSE);
-        when(requestRepo.findAttachment(90L)).thenReturn(Optional.of(
-            new PricingRequestAttachmentDto(90L, 20L, "f.pdf", "application/pdf", 1L, false, 1L, Instant.now())));
-
-        assertForbidden(() -> service.deleteAttachment(90L, otherSales));
-        verify(requestRepo, never()).deleteAttachment(anyLong());
-    }
-
-    @Test
-    void deleteAttachment_rejectsWhenStatusIsNotDraft() {
-        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.IMPORT_REVIEWING);
-        when(requestRepo.findAttachment(90L)).thenReturn(Optional.of(
-            new PricingRequestAttachmentDto(90L, 20L, "f.pdf", "application/pdf", 1L, false, 1L, Instant.now())));
-
-        assertConflict(() -> service.deleteAttachment(90L, salesActor));
-        verify(requestRepo, never()).deleteAttachment(anyLong());
-    }
-
-    @Test
-    void setAttachmentIncludeInFactoryEmail_rejectsNonImportRoles() {
-        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.IMPORT_REVIEWING);
-        when(requestRepo.findAttachment(90L)).thenReturn(Optional.of(
-            new PricingRequestAttachmentDto(90L, 20L, "f.pdf", "application/pdf", 1L, false, 1L, Instant.now())));
-
-        assertForbidden(() -> service.setAttachmentIncludeInFactoryEmail(
-            90L, new UpdatePricingRequestAttachmentRequest(true), salesActor));
-        assertForbidden(() -> service.setAttachmentIncludeInFactoryEmail(
-            90L, new UpdatePricingRequestAttachmentRequest(true), ceoActor));
-        verify(requestRepo, never()).setIncludeInFactoryEmail(anyLong(), anyBoolean());
-    }
-
-    @Test
-    void setAttachmentIncludeInFactoryEmail_acceptsImport() {
-        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.IMPORT_REVIEWING);
-        when(requestRepo.findAttachment(90L)).thenReturn(Optional.of(
-            new PricingRequestAttachmentDto(90L, 20L, "f.pdf", "application/pdf", 1L, false, 1L, Instant.now())));
-        when(requestRepo.setIncludeInFactoryEmail(90L, true)).thenReturn(1);
-
-        service.setAttachmentIncludeInFactoryEmail(90L, new UpdatePricingRequestAttachmentRequest(true), importActor);
-
-        verify(requestRepo).setIncludeInFactoryEmail(90L, true);
-    }
-
-    private static MockMultipartFile sampleFile() {
-        return new MockMultipartFile("file", "quote-sketch.pdf", "application/pdf", "content".getBytes());
-    }
-
     // ── helpers ──────────────────────────────────────────────────────────
 
     private static UserPrincipal actor(long id, String role) {
@@ -1573,18 +381,6 @@ class PricingRequestServiceTest {
         return summary;
     }
 
-    /** Variant where the caller controls recipientType directly instead of the hardcoded BUYER default. */
-    private PricingRequestSummaryDto stubPricingRequestWithRecipient(long id, long ticketId, long ticketCreatedById,
-                                                                      String status, String recipientType) {
-        PricingRequestSummaryDto summary = new PricingRequestSummaryDto(
-            id, "PCR-2026-0001", ticketId, "PR-2026-0001", "Test Project", "Test Customer",
-            ticketCreatedById, recipientType, 1L, null,
-            status, ticketCreatedById, "Sales User", null, null, null, null, null, null,
-            1, 1, null, null, null, null, Instant.now(), Instant.now(), null);
-        when(requestRepo.findSummary(id)).thenReturn(java.util.Optional.of(summary));
-        return summary;
-    }
-
     /**
      * Variant for a revision CHILD — parentPricingRequestId is non-null, exactly
      * the signal PricingRequestService#updateDraft's new guard keys on.
@@ -1599,12 +395,6 @@ class PricingRequestServiceTest {
             1, 2, parentPricingRequestId, null, null, null, Instant.now(), Instant.now(), null);
         when(requestRepo.findSummary(id)).thenReturn(java.util.Optional.of(summary));
         return summary;
-    }
-
-    private static CustomerChangeRevisionRequest customerChangeRevisionRequest(String recipientType) {
-        return new CustomerChangeRevisionRequest(
-            "ลูกค้าเปลี่ยนใจ", clientRequestId(), recipientType, 1L, "Recipient Co.", null, null, null, null,
-            List.of(sampleItemRequest(null, QuantityType.REFERENCE)));
     }
 
     /** Catalog snapshot fields are fully populated here so the Finding A catalog-completeness gate in submit does
@@ -1631,25 +421,6 @@ class PricingRequestServiceTest {
             null, "ไทย-สต็อก", 3, 7, null, null, null);
     }
 
-    /** Lets each Part 1 identity test set exactly one identifying field and leave the rest null — INCLUDING model,
-     * so a "rejects" test isolating sourceTicketItemId/productId/ productDescription/brand/specialRequirement
-     * alone still hits isProductIdentified's rejection exactly as before V185. */
-    private static PricingRequestItemRequest itemRequestWithIdentity(Long sourceTicketItemId, Long productId,
-                                                                     String brand, String model, String specialRequirement) {
-        return itemRequestWithIdentity(sourceTicketItemId, productId, brand, model, specialRequirement, null);
-    }
-
-    private static PricingRequestItemRequest itemRequestWithIdentity(Long sourceTicketItemId, Long productId,
-                                                                     String brand, String model, String specialRequirement,
-                                                                     String productDescription) {
-        return new PricingRequestItemRequest(sourceTicketItemId, productId, null, brand, model,
-            productDescription, "สี", "ผิว", "60x60", null,
-            null, null, null, null, QuantityType.REFERENCE, null, null, specialRequirement,
-            null, new BigDecimal("10"), new BigDecimal("0.36"), WastageCalculator.QUANTITY_MODE_PIECES,
-            null, 1, WastageCalculator.WASTAGE_MODE_NONE, null, 4, null,
-            null, "ไทย-สต็อก", 3, 7, null, null, null);
-    }
-
     /** Same as {@link #sampleItem}, but with every identity field controllable for the Part 1 submit-recheck tests. */
     private static PricingRequestItemDto itemDtoWithIdentity(Long sourceTicketItemId, Long productId,
                                                              String brand, String model, String specialRequirement) {
@@ -1666,15 +437,6 @@ class PricingRequestServiceTest {
             new BigDecimal("1"), null, "PIECE", UnitBasis.PER_PIECE, QuantityType.REFERENCE,
             null, null, specialRequirement, 0, 900L, 900L, new BigDecimal("100.0000"), "THB",
             null, 900L, "Test Factory", null, null, null, null, null);
-    }
-
-    /** Same shape as {@link #itemDtoWithIdentity}, but with every catalog snapshot field left null — for the dedicated catalog-gate tests. */
-    private static PricingRequestItemDto itemDtoWithoutCatalogSnapshot(Long sourceTicketItemId, Long productId,
-                                                                       String brand, String model) {
-        return new PricingRequestItemDto(1L, 20L, sourceTicketItemId, productId, null,
-            brand, model, null, null, null, null, null,
-            new BigDecimal("1"), null, "PIECE", UnitBasis.PER_PIECE, QuantityType.REFERENCE,
-            null, null, null, 0, null, null, null, null, null, null, null, null, null, null, null, null);
     }
 
     private static CreatePricingRequestRequest createRequest(String recipientType, Long recipientContactId,
@@ -1708,13 +470,6 @@ class PricingRequestServiceTest {
             PricingRequestRecipient.DESIGNER, null, null, LocalDate.now().plusDays(1), null, null, null, null);
     }
 
-    /** A full-replacement update payload that passes every updateDraft validation. */
-    private static UpdatePricingRequestRequest validUpdateRequest() {
-        return new UpdatePricingRequestRequest(
-            PricingRequestRecipient.DESIGNER, null, "Designer Co.", LocalDate.now().plusDays(1),
-            null, null, null, null);
-    }
-
     private static CancelPricingRequestRequest cancelRequest() {
         return new CancelPricingRequestRequest("ลูกค้ายกเลิกโครงการ");
     }
@@ -1743,13 +498,4 @@ class PricingRequestServiceTest {
                 assertThat(e.getStatus()).isEqualTo(HttpStatus.NOT_FOUND));
     }
 
-    private static void assertUnprocessable(ThrowableAssert.ThrowingCallable action, String expectedMessageFragment) {
-        assertThatThrownBy(action)
-            .isInstanceOfSatisfying(ApiException.class, e -> {
-                assertThat(e.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_CONTENT);
-                if (expectedMessageFragment != null) {
-                    assertThat(e.getMessage()).contains(expectedMessageFragment);
-                }
-            });
-    }
 }

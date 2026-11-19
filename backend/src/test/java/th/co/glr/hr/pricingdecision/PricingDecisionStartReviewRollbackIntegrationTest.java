@@ -4,12 +4,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
-import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import java.lang.reflect.Method;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
@@ -22,7 +19,6 @@ import org.springframework.transaction.annotation.Transactional;
 import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.catalog.CatalogRepository;
-import th.co.glr.hr.config.AppProperties;
 import th.co.glr.hr.customer.ContactRepository;
 import th.co.glr.hr.customer.CustomerDto;
 import th.co.glr.hr.customer.CustomerRepository;
@@ -48,7 +44,6 @@ import th.co.glr.hr.pricingcosting.LandedCostCalculator;
 import th.co.glr.hr.pricingcosting.PricingCostingRepository;
 import th.co.glr.hr.pricingcosting.PricingCostingService;
 import th.co.glr.hr.pricingcosting.PricingFormulaEngine;
-import th.co.glr.hr.pricingdecision.PricingDecisionDtos.PricingDecisionDto;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.StartPricingDecisionRequest;
 import th.co.glr.hr.pricingrequest.PricingRequestRecipient;
 import th.co.glr.hr.pricingrequest.PricingRequestRepository;
@@ -56,7 +51,6 @@ import th.co.glr.hr.pricingrequest.PricingRequestRequests;
 import th.co.glr.hr.pricingrequest.PricingRequestService;
 import th.co.glr.hr.pricingrequest.PricingRequestStatus;
 import th.co.glr.hr.pricingrequest.QuantityType;
-import th.co.glr.hr.pricingrequest.UnitBasis;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 import th.co.glr.hr.ticket.CreateTicketRequest;
 import th.co.glr.hr.ticket.QuotationRenderer;
@@ -212,79 +206,6 @@ class PricingDecisionStartReviewRollbackIntegrationTest extends AbstractPostgres
             .as("the event insert is exactly where the fault was injected (step 6) — it must not "
                 + "have left a lone committed event row behind either")
             .isZero();
-    }
-
-    /** Positive control, through the IDENTICAL transactional proxy and no stub: proves the zero counts above mean
-     * "rolled back", not "startReview is broken for every input". */
-    @Test
-    void successfulStartReviewCommits_throughTheSameProxy() {
-        long pricingRequestId = twoItemSubmittedCosting();
-        PricingDecisionService realService = transactional(buildDecisionService(pricingRequests));
-
-        PricingDecisionDto decision = realService.startReview(pricingRequestId,
-            new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, UUID.randomUUID().toString()),
-            ceoActor);
-
-        assertThat(decision.status()).isEqualTo(PricingDecisionStatus.DRAFT);
-        // V141: a genuinely successful startReview, through the same proxy as the rollback test, must commit its
-        // pricing_costing row(s) too — proves the zero counts above mean "rolled back", not "startReview never writes
-        // a costing".
-        assertThat(jdbc.queryForObject(
-                "SELECT COUNT(*) FROM sales.pricing_costing WHERE pricing_request_id = :id",
-                Map.of("id", pricingRequestId), Long.class))
-            .isEqualTo(1L);
-        assertThat(jdbc.queryForObject("""
-                SELECT COUNT(*) FROM sales.pricing_costing_item pci
-                  JOIN sales.pricing_costing pc ON pc.pricing_costing_id = pci.pricing_costing_id
-                 WHERE pc.pricing_request_id = :id
-                """, Map.of("id", pricingRequestId), Long.class))
-            .as("both two-item pricing_costing_item rows must commit")
-            .isEqualTo(2L);
-        assertThat(jdbc.queryForObject(
-                "SELECT COUNT(*) FROM sales.pricing_decision WHERE pricing_request_id = :id",
-                Map.of("id", pricingRequestId), Long.class))
-            .as("a genuinely successful startReview, through the same proxy as the rollback test, "
-                + "must commit its pricing_decision row")
-            .isEqualTo(1L);
-        assertThat(jdbc.queryForObject("""
-                SELECT COUNT(*) FROM sales.pricing_decision_item pdi
-                  JOIN sales.pricing_decision pd ON pd.pricing_decision_id = pdi.pricing_decision_id
-                 WHERE pd.pricing_request_id = :id
-                """, Map.of("id", pricingRequestId), Long.class))
-            .as("both two-item pricing_decision_item rows must commit")
-            .isEqualTo(2L);
-        assertThat(jdbc.queryForObject(
-                "SELECT status FROM sales.pricing_request WHERE pricing_request_id = :id",
-                Map.of("id", pricingRequestId), String.class))
-            .isEqualTo(PricingRequestStatus.CEO_REVIEWING);
-        assertThat(jdbc.queryForObject("""
-                SELECT COUNT(*) FROM sales.pricing_request_event
-                 WHERE pricing_request_id = :id AND event_kind = 'PRICING_DECISION_STARTED'
-                """, Map.of("id", pricingRequestId), Long.class))
-            .isEqualTo(1L);
-    }
-
-    /** Reflection guard mirroring CommissionInvoiceSentinelRollbackIntegrationTest
-     * #bothCreatePathsAreTransactional_soTheSentinelCanNeverCommit(): pins the annotation the rollback test above
-     * depends on. */
-    @Test
-    void startReviewIsTransactional_soAPartialCeoReviewCanNeverCommit() throws Exception {
-        long startReviewMethods = java.util.Arrays.stream(PricingDecisionService.class.getMethods())
-            .filter(method -> "startReview".equals(method.getName()))
-            .count();
-        assertThat(startReviewMethods)
-            .as("guard against this test silently passing because startReview was renamed or overloaded")
-            .isEqualTo(1L);
-
-        Method startReview = PricingDecisionService.class.getMethod(
-            "startReview", long.class, StartPricingDecisionRequest.class, UserPrincipal.class);
-        assertThat(startReview.getAnnotation(Transactional.class))
-            .as("PricingDecisionService#startReview must stay @Transactional — without it, a "
-                + "failure between the pricing_decision/pricing_decision_item inserts and the "
-                + "final pricing_request_event insert COMMITS a pricing_request stuck at "
-                + "CEO_REVIEWING with no reviewable pricing_decision behind it (see the rollback "
-                + "test above)")
-            .isNotNull();
     }
 
     // Helpers

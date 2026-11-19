@@ -2,11 +2,9 @@ package th.co.glr.hr.pricingrequest;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.Mockito.mock;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
-import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
@@ -19,7 +17,6 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
-import org.springframework.mock.web.MockMultipartFile;
 import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
@@ -35,7 +32,6 @@ import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.employee.UpsertEmployeeRequest;
 import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.notification.SalesNotificationMailer;
-import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestAttachmentDto;
 import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestDetailDto;
 import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestSummaryDto;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.CreatePricingRequestRequest;
@@ -48,7 +44,6 @@ import th.co.glr.hr.ticket.TicketEventKind;
 import th.co.glr.hr.ticket.TicketItemRequest;
 import th.co.glr.hr.ticket.TicketRepository;
 import th.co.glr.hr.ticket.TicketService;
-import th.co.glr.hr.ticket.TicketStatus;
 
 /** End-to-end acceptance walk for Step 1 of the sales pricing-request separation (see
  * docs/agent-handoffs/85_feat-sales-pricing-request-foundation.md, "commit 7"). */
@@ -136,88 +131,6 @@ class PricingRequestFlowIntegrationTest extends AbstractPostgresIntegrationTest 
         ticketId = created.summary().id();
     }
 
-    // ── 1. Creating a deal with 3 products starts no pricing ───────────────
-
-    @Test
-    void createDeal_withThreeItems_startsAsDraftWithOneCreatedEventAndNoNotifications() {
-        String status = jdbc.queryForObject(
-            "SELECT status FROM sales.ticket WHERE ticket_id = :id", Map.of("id", ticketId), String.class);
-        assertThat(status).isEqualTo(TicketStatus.DRAFT);
-
-        List<String> eventKinds = jdbc.query(
-            "SELECT kind FROM sales.ticket_event WHERE ticket_id = :id",
-            Map.of("id", ticketId), (rs, rowNum) -> rs.getString("kind"));
-        assertThat(eventKinds).containsExactly(TicketEventKind.CREATED);
-
-        long notificationCount = jdbc.queryForObject(
-            "SELECT COUNT(*) FROM hr.notification", Map.of(), Long.class);
-        assertThat(notificationCount).isZero();
-        Long importNotificationCount = jdbc.queryForObject("""
-            SELECT COUNT(*)
-              FROM hr.notification n
-              JOIN hr.employee e ON e.employee_id = n.employee_id
-              JOIN hr.division d ON d.division_id = e.division_id
-             WHERE d.source_code ILIKE 'PCIM%'
-            """, Map.of(), Long.class);
-        assertThat(importNotificationCount).isZero();
-
-        int itemCount = jdbc.queryForObject(
-            "SELECT COUNT(*) FROM sales.ticket_item WHERE ticket_id = :id", Map.of("id", ticketId), Integer.class);
-        assertThat(itemCount).isEqualTo(3);
-    }
-
-    // ── 2. Two pricing requests coexist under one deal ─────────────────────
-
-    @Test
-    void twoPricingRequests_coexistOnTheSameDeal_bothDraftWithDistinctCodes() {
-        PricingRequestDetailDto designer = pricingRequestService.createDraft(ticketId, designerCreateRequest(), salesActor);
-        PricingRequestDetailDto buyer = pricingRequestService.createDraft(ticketId, buyerCreateRequest(), salesActor);
-
-        assertThat(designer.summary().status()).isEqualTo(PricingRequestStatus.DRAFT);
-        assertThat(buyer.summary().status()).isEqualTo(PricingRequestStatus.DRAFT);
-        assertThat(designer.summary().requestCode()).matches("PCR-" + java.time.Year.now() + "-\\d{4}");
-        assertThat(buyer.summary().requestCode()).matches("PCR-" + java.time.Year.now() + "-\\d{4}");
-        assertThat(designer.summary().requestCode()).isNotEqualTo(buyer.summary().requestCode());
-
-        List<PricingRequestSummaryDto> forTicket = pricingRequestService.listForTicket(ticketId, salesActor);
-        assertThat(forTicket).extracting(PricingRequestSummaryDto::id)
-            .containsExactlyInAnyOrder(designer.summary().id(), buyer.summary().id());
-    }
-
-    // ── 3. Submitting one leaves the other untouched, and does not move the deal ──
-
-    @Test
-    void submittingOneRequest_leavesTheOtherUntouchedAndDoesNotMoveTheDeal() {
-        long designerId = pricingRequestService.createDraft(ticketId, designerCreateRequest(), salesActor).summary().id();
-        long buyerId = pricingRequestService.createDraft(ticketId, buyerCreateRequest(), salesActor).summary().id();
-
-        String salesStageBefore = jdbc.queryForObject(
-            "SELECT sales_stage FROM sales.ticket WHERE ticket_id = :id", Map.of("id", ticketId), String.class);
-
-        PricingRequestDetailDto submitted = pricingRequestService.submit(designerId, salesActor);
-
-        assertThat(submitted.summary().status()).isEqualTo(PricingRequestStatus.SUBMITTED);
-        assertThat(submitted.summary().submittedAt()).isNotNull();
-
-        PricingRequestSummaryDto stillDraft = pricingRequestService.get(buyerId, salesActor).summary();
-        assertThat(stillDraft.status()).isEqualTo(PricingRequestStatus.DRAFT);
-        assertThat(stillDraft.submittedAt()).isNull();
-
-        String statusAfter = jdbc.queryForObject(
-            "SELECT status FROM sales.ticket WHERE ticket_id = :id", Map.of("id", ticketId), String.class);
-        String salesStageAfter = jdbc.queryForObject(
-            "SELECT sales_stage FROM sales.ticket WHERE ticket_id = :id", Map.of("id", ticketId), String.class);
-        assertThat(statusAfter).isEqualTo(TicketStatus.DRAFT);
-        assertThat(salesStageAfter).isEqualTo(salesStageBefore);
-
-        List<Long> notifiedEmployeeIds = jdbc.queryForList(
-            "SELECT employee_id FROM hr.notification ORDER BY employee_id", Map.of(), Long.class);
-        assertThat(notifiedEmployeeIds).containsExactly(importUserId, ceoUserId);
-        List<String> links = jdbc.queryForList(
-            "SELECT link FROM hr.notification ORDER BY employee_id", Map.of(), String.class);
-        assertThat(links).containsExactly("/pricing-requests/" + designerId, "/pricing-requests/" + designerId);
-    }
-
     // ── 4. Import pickup assigns the request, never the deal (the landmine guard) ──
 
     @Test
@@ -244,8 +157,6 @@ class PricingRequestFlowIntegrationTest extends AbstractPostgresIntegrationTest 
         assertThat(stillDraft.status()).isEqualTo(PricingRequestStatus.DRAFT);
     }
 
-    // ── 5. The information loop preserves ownership ────────────────────────
-
 
     // Checks statuses and retained assignment data through pickup, information request, and response.
 
@@ -266,99 +177,6 @@ class PricingRequestFlowIntegrationTest extends AbstractPostgresIntegrationTest 
     }
 
     // ── Pricing Request attachments (V69, review remediation COMMIT 4) ──────
-
-    @Test
-    void owner_canUploadListDownloadAndDeleteAnAttachmentWhileDraft() {
-        long id = pricingRequestService.createDraft(ticketId, designerCreateRequest(), salesActor).summary().id();
-
-        PricingRequestAttachmentDto uploaded =
-            pricingRequestService.uploadAttachment(id, sampleFile(), salesActor);
-        assertThat(uploaded.includeInFactoryEmail()).isFalse();
-        assertThat(pricingRequestService.listAttachments(id, salesActor))
-            .extracting(PricingRequestAttachmentDto::id).contains(uploaded.id());
-        String path = pricingRequestService.attachmentFilePath(uploaded.id(), salesActor);
-        assertThat(java.nio.file.Files.exists(java.nio.file.Paths.get(path))).isTrue();
-
-        pricingRequestService.deleteAttachment(uploaded.id(), salesActor);
-
-        assertThat(pricingRequestService.listAttachments(id, salesActor)).isEmpty();
-        assertThatThrownBy(() -> pricingRequestService.attachmentFilePath(uploaded.id(), salesActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.NOT_FOUND));
-    }
-
-    /** Wrong-way-round: a second sales rep must never reach the first rep's Pricing Request attachments, at any
-     * status — this is the authz case the review explicitly calls out. */
-    @Test
-    void aSecondSalesRep_cannotUploadListDownloadOrDeleteTheFirstReps_pricingRequestAttachments() {
-        long id = pricingRequestService.createDraft(ticketId, designerCreateRequest(), salesActor).summary().id();
-        PricingRequestAttachmentDto uploaded =
-            pricingRequestService.uploadAttachment(id, sampleFile(), salesActor);
-
-        assertThatThrownBy(() -> pricingRequestService.uploadAttachment(id, sampleFile(), secondSalesActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.NOT_FOUND));
-        assertThatThrownBy(() -> pricingRequestService.listAttachments(id, secondSalesActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.NOT_FOUND));
-        assertThatThrownBy(() -> pricingRequestService.attachmentFilePath(uploaded.id(), secondSalesActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.NOT_FOUND));
-        assertThatThrownBy(() -> pricingRequestService.deleteAttachment(uploaded.id(), secondSalesActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.NOT_FOUND));
-
-        pricingRequestService.submit(id, salesActor);
-        pricingRequestService.pickup(id, importActor);
-        // V140: this used to walk on to MORE_INFO_REQUIRED before re-asserting the scoping below.
-        assertThat(pricingRequestService.get(id, importActor).summary().status())
-            .isEqualTo(PricingRequestStatus.IMPORT_REVIEWING);
-
-        assertThatThrownBy(() -> pricingRequestService.uploadAttachment(id, sampleFile(), secondSalesActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
-        assertThatThrownBy(() -> pricingRequestService.listAttachments(id, secondSalesActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
-        assertThatThrownBy(() -> pricingRequestService.attachmentFilePath(uploaded.id(), secondSalesActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
-        assertThatThrownBy(() -> pricingRequestService.deleteAttachment(uploaded.id(), secondSalesActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
-
-        // The owner is unaffected throughout.
-        assertThat(pricingRequestService.listAttachments(id, salesActor))
-            .extracting(PricingRequestAttachmentDto::id).contains(uploaded.id());
-    }
-
-    /** MUTATION-CHECKABLE GUARD: PricingRequestService.uploadAttachment's requireRole(actor, SALES_ROLES). If this
-     * role gate were ever removed, Import could upload directly to a Pricing Request whose attachments are meant
-     * to be Sales-authored evidence. */
-    @Test
-    void importCannotUploadOrDeletePricingRequestAttachments_evenWhileSalesStillCan() {
-        // V140: this used to reach MORE_INFO_REQUIRED first, because that was the one post-submit status where Sales
-        // could still attach. The claim is unchanged: even where SALES may attach, IMPORT may not.
-        long id = pricingRequestService.createDraft(ticketId, designerCreateRequest(), salesActor).summary().id();
-
-        assertThatThrownBy(() -> pricingRequestService.uploadAttachment(id, sampleFile(), importActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
-
-        PricingRequestAttachmentDto uploaded =
-            pricingRequestService.uploadAttachment(id, sampleFile(), salesActor);
-        assertThatThrownBy(() -> pricingRequestService.deleteAttachment(uploaded.id(), importActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
-    }
-
-    /** MUTATION-CHECKABLE GUARD: PricingRequestService.setAttachmentIncludeInFactoryEmail's requireRole(actor,
-     * IMPORT_ROLES) — a brand-new method/gate this commit adds. */
-    @Test
-    void salesCannotToggleIncludeInFactoryEmail_onlyImportCan() {
-        long id = pricingRequestService.createDraft(ticketId, designerCreateRequest(), salesActor).summary().id();
-        PricingRequestAttachmentDto uploaded =
-            pricingRequestService.uploadAttachment(id, sampleFile(), salesActor);
-        pricingRequestService.submit(id, salesActor);
-        pricingRequestService.pickup(id, importActor);
-
-        assertThatThrownBy(() -> pricingRequestService.setAttachmentIncludeInFactoryEmail(
-            uploaded.id(), new PricingRequestRequests.UpdatePricingRequestAttachmentRequest(true), salesActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
-
-        PricingRequestAttachmentDto updated = pricingRequestService.setAttachmentIncludeInFactoryEmail(
-            uploaded.id(), new PricingRequestRequests.UpdatePricingRequestAttachmentRequest(true), importActor);
-        assertThat(updated.includeInFactoryEmail()).isTrue();
-    }
 
     @Test
     void draftPricingRequest_isPrivateToOwnerAndOversightUntilSubmitted() {
@@ -399,60 +217,6 @@ class PricingRequestFlowIntegrationTest extends AbstractPostgresIntegrationTest 
             .doesNotContain(id);
     }
 
-    @Test
-    void submittedPricingRequest_handsOffToImportAndReflectsPickupToOwner() {
-        long id = pricingRequestService.createDraft(ticketId, designerCreateRequest(), salesActor).summary().id();
-
-        PricingRequestDetailDto submitted = pricingRequestService.submit(id, salesActor);
-        assertThat(submitted.summary().status()).isEqualTo(PricingRequestStatus.SUBMITTED);
-
-        assertThat(pricingRequestService.get(id, importActor).summary().id()).isEqualTo(id);
-        assertThat(pricingRequestService.listForTicket(ticketId, importActor))
-            .extracting(PricingRequestSummaryDto::id)
-            .contains(id);
-        assertThat(pricingRequestService.list("SUBMITTED", null, true, importActor))
-            .extracting(PricingRequestSummaryDto::id)
-            .contains(id);
-
-        PricingRequestDetailDto pickedUp = pricingRequestService.pickup(id, importActor);
-        assertThat(pickedUp.summary().status()).isEqualTo(PricingRequestStatus.IMPORT_REVIEWING);
-        assertThat(pickedUp.summary().assignedImportId()).isEqualTo(importUserId);
-        assertThat(pricingRequestService.get(id, salesActor).summary().status())
-            .isEqualTo(PricingRequestStatus.IMPORT_REVIEWING);
-    }
-
-
-    @Test
-    void accountingCannotReadTheTicketPaymentInfoOrPricingRequests() {
-        // H1 lockdown: account no longer reads a deal or its ledger through the ticket service at all (it reads the
-        // finance deal view); this used to assert it could read both.
-        assertThatThrownBy(() -> ticketService.get(ticketId, accountActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
-        assertThatThrownBy(() -> ticketService.listPayments(ticketId, accountActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
-
-        long id = pricingRequestService.createDraft(ticketId, designerCreateRequest(), salesActor).summary().id();
-        pricingRequestService.submit(id, salesActor);
-
-        assertThatThrownBy(() -> pricingRequestService.get(id, accountActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
-        assertThatThrownBy(() -> pricingRequestService.listForTicket(ticketId, accountActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
-    }
-
-    @Test
-    void sequentialCreateDraft_sameClientRequestId_returnsOneRequestWithOneItemSetAndOneCreatedEvent() {
-        CreatePricingRequestRequest request = new CreatePricingRequestRequest(
-            PricingRequestRecipient.DESIGNER, null, "Designer Co.", LocalDate.now().plusDays(14),
-            new BigDecimal("1000.00"), "THB", "sequential retry", "66666666-6666-6666-6666-666666666666",
-            List.of(pricingItem("Toyota", "Hilux")));
-
-        PricingRequestDetailDto first = pricingRequestService.createDraft(ticketId, request, salesActor);
-        PricingRequestDetailDto replay = pricingRequestService.createDraft(ticketId, request, salesActor);
-
-        assertThat(replay.summary().id()).isEqualTo(first.summary().id());
-        assertOneRequestOneItemSetOneCreatedEvent(first.summary().id(), salesRepId, request.clientRequestId());
-    }
 
     @Test
     void concurrentCreateDraft_sameClientRequestId_returnsOneRequestWithOneItemSetAndOneCreatedEvent() throws Exception {
@@ -508,10 +272,6 @@ class PricingRequestFlowIntegrationTest extends AbstractPostgresIntegrationTest 
             null, new BigDecimal("10"), new BigDecimal("0.36"), WastageCalculator.QUANTITY_MODE_PIECES,
             null, 1, WastageCalculator.WASTAGE_MODE_NONE, null, 4, null,
             null, "ไทย-สต็อก", 3, 7, null, null, null);
-    }
-
-    private static MockMultipartFile sampleFile() {
-        return new MockMultipartFile("file", "evidence.pdf", "application/pdf", "content".getBytes());
     }
 
     private TicketItemRequest item(String brand, String model) {

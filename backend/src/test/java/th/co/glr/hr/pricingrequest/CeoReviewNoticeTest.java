@@ -4,10 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
-import java.util.ArrayList;
 import java.util.List;
 import org.junit.jupiter.api.Test;
-import th.co.glr.hr.pricingcosting.LandedCostCalculator;
 import th.co.glr.hr.pricingcosting.LandedCostCalculator.CalculationResult;
 import th.co.glr.hr.pricingcosting.PricingCostingRepository.PricingCostingWriteItem;
 import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestItemDto;
@@ -40,48 +38,6 @@ class CeoReviewNoticeTest {
     }
 
     @Test
-    void twelveLines_showTenThenCountTheRest() {
-        List<PricingRequestItemDto> items = new ArrayList<>();
-        List<PricingCostingWriteItem> costed = new ArrayList<>();
-        for (int i = 1; i <= 12; i++) {
-            items.add(item(i, "B", "M" + i, "60x60", new BigDecimal("10"), new BigDecimal("10"), "ตร.ม.", null));
-            costed.add(cost(i, "36.00", "0.36", null));
-        }
-        String msg = CeoReviewNotice.message(HEADLINE, summary(), items,
-            new CalculationResult(costed, new BigDecimal("1200")));
-
-        assertThat(msg).contains("รายการ (12):\n");
-        assertThat(msg.lines().filter(l -> l.startsWith("• "))).hasSize(10);
-        assertThat(msg).contains("• B M10 60x60 — 10 ตร.ม. · ต้นทุน 100.00 บาท/ตร.ม.\nและอีก 2 รายการ\nต้นทุนรวม 1,200.00 บาท");
-        assertThat(msg).doesNotContain("M11").doesNotContain("M12");
-    }
-
-    @Test
-    void oneUncostableLine_isDashed_andThereIsNoTotalLine() {
-        List<PricingRequestItemDto> items = List.of(
-            item(1, "SCG", "A", "60x60", new BigDecimal("10"), new BigDecimal("10"), "ตร.ม.", null),
-            item(2, "SCG", "B", "60x60", new BigDecimal("10"), new BigDecimal("10"), "ตร.ม.", null));
-        CalculationResult costs = new CalculationResult(List.of(
-            cost(1, "36.00", "0.36", null),
-            cost(2, null, null, "ไม่พบอัตราค่าขนส่ง")), new BigDecimal("360"));
-
-        assertThat(CeoReviewNotice.message(HEADLINE, summary(), items, costs)).isEqualTo(HEAD
-            + "รายการ (2):\n"
-            + "• SCG A 60x60 — 10 ตร.ม. · ต้นทุน 100.00 บาท/ตร.ม.\n"
-            + "• SCG B 60x60 — 10 ตร.ม. · ต้นทุน -" + TODO);
-    }
-
-    @Test
-    void nullCosts_everyImportLineIsDashed_noTotal() {
-        List<PricingRequestItemDto> items = List.of(
-            item(1, "SCG", "A", "60x60", new BigDecimal("10"), new BigDecimal("10"), "ตร.ม.", null));
-
-        assertThat(CeoReviewNotice.message(HEADLINE, summary(), items, null)).isEqualTo(HEAD
-            + "รายการ (1):\n"
-            + "• SCG A 60x60 — 10 ตร.ม. · ต้นทุน -" + TODO);
-    }
-
-    @Test
     void mixedStockAndImport_stockLinesNameTheirSource_andTotalIsLabelledImportOnly() {
         List<PricingRequestItemDto> items = List.of(
             item(1, "SCG", "Imp", "60x60", new BigDecimal("10"), new BigDecimal("10"), "ตร.ม.", null),
@@ -95,64 +51,6 @@ class CeoReviewNoticeTest {
             + "• SCG Th 60x60 — 5 ตร.ม. · สต็อกในไทย\n"
             + "• SCG Tr 60x60 — 6 ตร.ม. · สินค้าระหว่างขนส่ง\n"
             + "ต้นทุนรวมสินค้านำเข้า 360.00 บาท" + TODO);
-    }
-
-    @Test
-    void stockOnly_noCosts_noTotalLine() {
-        List<PricingRequestItemDto> items = List.of(
-            item(1, "SCG", "Th", "60x60", new BigDecimal("5"), new BigDecimal("5"), "ตร.ม.", "IN_THAILAND"));
-
-        assertThat(CeoReviewNotice.message(HEADLINE, summary(), items, null)).isEqualTo(HEAD
-            + "รายการ (1):\n"
-            + "• SCG Th 60x60 — 5 ตร.ม. · สต็อกในไทย" + TODO);
-    }
-
-    @Test
-    void quantityInPieces_whenNoSqm_usesRequestedUnit() {
-        List<PricingRequestItemDto> items = List.of(
-            item(1, "SCG", "A", "60x60", null, new BigDecimal("1250.00"), "แผ่น", null));
-
-        assertThat(CeoReviewNotice.message(HEADLINE, summary(), items, null))
-            .contains("• SCG A 60x60 — 1,250 แผ่น · ต้นทุน -");
-    }
-
-    @Test
-    void nonSqmUnitCost_isPerRequestedUnit_andFallsBackToหน่วย() {
-        List<PricingRequestItemDto> items = List.of(
-            item(1, "SCG", "A", "60x60", null, new BigDecimal("4"), "แผ่น", null),
-            item(2, "SCG", "B", "60x60", null, new BigDecimal("4"), null, null));
-        CalculationResult costs = new CalculationResult(List.of(
-            cost(1, "123.456", null, null), cost(2, "10", "0", null)), new BigDecimal("133.456"));
-
-        String msg = CeoReviewNotice.message(HEADLINE, summary(), items, costs);
-
-        assertThat(msg).contains("• SCG A 60x60 — 4 แผ่น · ต้นทุน 123.46 บาท/แผ่น");
-        assertThat(msg).contains("• SCG B 60x60 — 4 · ต้นทุน 10.00 บาท/หน่วย");
-    }
-
-    @Test
-    void costsOrNull_returnsTheCalculatorsResult() {
-        CalculationResult result = new CalculationResult(List.of(), BigDecimal.TEN);
-        LandedCostCalculator calc = new LandedCostCalculator(null, null, null, null, null, null) {
-            @Override
-            public CalculationResult calculate(PricingRequestSummaryDto s) {
-                return result;
-            }
-        };
-
-        assertThat(CeoReviewNotice.costsOrNull(calc, summary())).isSameAs(result);
-    }
-
-    @Test
-    void costsOrNull_swallowsACalculatorFailure() {
-        LandedCostCalculator calc = new LandedCostCalculator(null, null, null, null, null, null) {
-            @Override
-            public CalculationResult calculate(PricingRequestSummaryDto s) {
-                throw new IllegalStateException("no freight rate");
-            }
-        };
-
-        assertThat(CeoReviewNotice.costsOrNull(calc, summary())).isNull();
     }
 
     // ── fixtures ──

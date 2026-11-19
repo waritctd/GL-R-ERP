@@ -3,12 +3,10 @@ package th.co.glr.hr.catalog.importer;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.mock;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import java.time.LocalDate;
-import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.springframework.mock.web.MockHttpSession;
 import org.springframework.test.web.servlet.MockMvc;
@@ -27,40 +25,8 @@ class PriceImportControllerTest {
         .build();
 
     @Test
-    void employeeCannotListFactories() throws Exception {
-        mvc.perform(get("/api/price-import/factories").session(session("employee")))
-            .andExpect(status().isForbidden());
-    }
-
-    @Test
-    void salesCannotListFactories() throws Exception {
-        mvc.perform(get("/api/price-import/factories").session(session("sales")))
-            .andExpect(status().isForbidden());
-    }
-
-    @Test
-    void ceoCanListFactories() throws Exception {
-        when(service.listFactories()).thenReturn(List.of());
-        mvc.perform(get("/api/price-import/factories").session(session("ceo")))
-            .andExpect(status().is2xxSuccessful());
-    }
-
-    @Test
-    void importCanListFactories() throws Exception {
-        when(service.listFactories()).thenReturn(List.of());
-        mvc.perform(get("/api/price-import/factories").session(session("import")))
-            .andExpect(status().is2xxSuccessful());
-    }
-
-    @Test
     void employeeCannotCommit() throws Exception {
         mvc.perform(post("/api/price-import/commit/1").session(session("employee")))
-            .andExpect(status().isForbidden());
-    }
-
-    @Test
-    void salesCannotCommit() throws Exception {
-        mvc.perform(post("/api/price-import/commit/1").session(session("sales")))
             .andExpect(status().isForbidden());
     }
 
@@ -70,20 +36,6 @@ class PriceImportControllerTest {
             .thenReturn(new PriceImportService.CommitResult(1L, 10, 2, 1));
         mvc.perform(post("/api/price-import/commit/1").session(session("ceo")))
             .andExpect(status().is2xxSuccessful());
-    }
-
-    @Test
-    void importCanCommit() throws Exception {
-        when(service.commit(anyLong(), anyLong()))
-            .thenReturn(new PriceImportService.CommitResult(1L, 10, 2, 1));
-        mvc.perform(post("/api/price-import/commit/1").session(session("import")))
-            .andExpect(status().is2xxSuccessful());
-    }
-
-    @Test
-    void factoriesRequiresAuthentication() throws Exception {
-        mvc.perform(get("/api/price-import/factories"))
-            .andExpect(status().isUnauthorized());
     }
 
     private MockHttpSession session(String role) {

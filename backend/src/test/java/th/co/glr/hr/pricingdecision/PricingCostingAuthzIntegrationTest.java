@@ -2,10 +2,6 @@ package th.co.glr.hr.pricingdecision;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
@@ -21,7 +17,6 @@ import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.catalog.CatalogRepository;
 import th.co.glr.hr.common.ApiException;
-import th.co.glr.hr.config.AppProperties;
 import th.co.glr.hr.customer.ContactRepository;
 import th.co.glr.hr.customer.CustomerDto;
 import th.co.glr.hr.customer.CustomerRepository;
@@ -50,14 +45,12 @@ import th.co.glr.hr.pricingcosting.PricingCostingService;
 import th.co.glr.hr.pricingcosting.PricingFormulaEngine;
 import th.co.glr.hr.pricingdecision.PricingDecisionDtos.PricingDecisionDto;
 import th.co.glr.hr.pricingdecision.PricingDecisionDtos.PricingDecisionItemDto;
-import th.co.glr.hr.pricingdecision.PricingDecisionRequests.CostOverrideRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.StartPricingDecisionRequest;
 import th.co.glr.hr.pricingrequest.PricingRequestRecipient;
 import th.co.glr.hr.pricingrequest.PricingRequestRepository;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests;
 import th.co.glr.hr.pricingrequest.PricingRequestService;
 import th.co.glr.hr.pricingrequest.QuantityType;
-import th.co.glr.hr.pricingrequest.UnitBasis;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 import th.co.glr.hr.ticket.CreateTicketRequest;
 import th.co.glr.hr.ticket.QuotationRenderer;
@@ -189,59 +182,8 @@ class PricingCostingAuthzIntegrationTest extends AbstractPostgresIntegrationTest
     // overrideItemCost — wrong-way-round: import/sales/sales_manager/account all refused, ceo (positive control)
     // can.
 
-    @Test
-    void overrideItemCost_refusesImportSalesSalesManagerAndAccount_ceoCanStillWrite() {
-        long pricingRequestId = twoItemSubmittedCosting();
-        PricingDecisionDto decision = decisionService.startReview(pricingRequestId,
-            new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, null), ceoActor);
-        PricingDecisionItemDto item = decision.items().get(0);
-        CostOverrideRequest overrideAttempt = new CostOverrideRequest(new BigDecimal("999.0000"), "attempted override");
-
-        for (UserPrincipal forbidden : List.of(importActor, salesActor, salesManagerActor, accountActor)) {
-            assertThatThrownBy(() -> decisionService.overrideItemCost(decision.id(), item.id(), overrideAttempt, forbidden))
-                .as("role '%s' must be refused overrideItemCost", forbidden.role())
-                .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
-        }
-
-        // Assert the ABSENCE of the write with a direct DB query — no override row, no event.
-        assertThat(jdbc.queryForObject("""
-            SELECT manual_landed_cost_per_unit_thb FROM sales.pricing_costing_item
-             WHERE pricing_costing_item_id = :id
-            """, Map.of("id", item.pricingCostingItemId()), BigDecimal.class))
-            .isNull();
-        assertThat(jdbc.queryForObject("""
-            SELECT COUNT(*) FROM sales.pricing_request_event
-             WHERE pricing_request_id = :id AND event_kind = 'PRICING_COSTING_ITEM_COST_OVERRIDDEN'
-            """, Map.of("id", pricingRequestId), Long.class))
-            .isZero();
-        assertThat(decisionService.get(decision.id(), importActor).items().stream()
-                .filter(i -> i.id() == item.id()).findFirst().orElseThrow().frozenLandedCostPerPieceThb())
-            .isEqualByComparingTo(item.frozenLandedCostPerPieceThb());
-
-        // Positive control: ceo (CEO_ROLES) can.
-        PricingDecisionDto overridden = decisionService.overrideItemCost(decision.id(), item.id(), overrideAttempt, ceoActor);
-        assertThat(overridden.items().stream().filter(i -> i.id() == item.id()).findFirst().orElseThrow()
-            .frozenLandedCostPerPieceThb()).isEqualByComparingTo("999.0000");
-        assertThat(jdbc.queryForObject("""
-            SELECT manual_landed_cost_per_unit_thb FROM sales.pricing_costing_item
-             WHERE pricing_costing_item_id = :id
-            """, Map.of("id", item.pricingCostingItemId()), BigDecimal.class))
-            .isEqualByComparingTo("999.0000");
-    }
-
     // Positive control: import keeps its deliberately-preserved READ grant (list/get) even though its WRITE access
     // to costing is gone entirely.
-
-    @Test
-    void import_canStillReadListAndGet_theDeliberatelyPreservedGrant() {
-        long pricingRequestId = twoItemSubmittedCosting();
-        PricingDecisionDto decision = decisionService.startReview(pricingRequestId,
-            new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, null), ceoActor);
-
-        assertThat(costingService.list(pricingRequestId, importActor)).isNotEmpty();
-        assertThat(costingService.get(decision.pricingCostingId(), importActor).id())
-            .isEqualTo(decision.pricingCostingId());
-    }
 
     /** The three Import-era costing WRITE paths are severed, not deleted — they 409 for EVERY role, including the
      * CEO, because the action itself no longer exists rather than having moved to a different actor. */

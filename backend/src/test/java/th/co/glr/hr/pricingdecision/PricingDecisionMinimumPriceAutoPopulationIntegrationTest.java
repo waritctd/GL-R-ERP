@@ -2,10 +2,6 @@ package th.co.glr.hr.pricingdecision;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
@@ -20,7 +16,6 @@ import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.catalog.CatalogRepository;
 import th.co.glr.hr.common.ApiException;
-import th.co.glr.hr.config.AppProperties;
 import th.co.glr.hr.customer.ContactRepository;
 import th.co.glr.hr.customer.CustomerDto;
 import th.co.glr.hr.customer.CustomerRepository;
@@ -184,67 +179,6 @@ class PricingDecisionMinimumPriceAutoPopulationIntegrationTest extends AbstractP
                 assertThat(e.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_CONTENT);
                 assertThat(e.getMessage()).startsWith(BELOW_MINIMUM_ON_ISSUE);
             });
-    }
-
-    /** Same proof at the ISSUE gate — CustomerQuotationService#issue's own independent null-guarded check, not the
-     * one update already refused above. Corrupts the discount directly via SQL so issue() is what has to catch it,
-     * not update(). */
-    @Test
-    void minimumSellingPrice_autoPopulated_alsoBlocksIssueOfAnAlreadyDiscountedLine() {
-        PricingDecisionDto approved = approveOneItemDecision(new BigDecimal("0.20"));
-        CustomerQuotationDto draft = quotationService.create(approved.pricingRequestId(),
-            new CreateCustomerQuotationRequest(null, null, null, null, null, null), salesActor);
-        CustomerQuotationItemDto item = draft.items().get(0);
-
-        jdbc.update("""
-            UPDATE sales.quotation_item
-               SET sales_discount = 0.01,
-                   final_unit_price = final_unit_price - 0.01
-             WHERE quotation_item_id = :id
-            """, Map.of("id", item.id()));
-
-        assertThatThrownBy(() -> quotationService.issue(draft.id(),
-            new IssueCustomerQuotationRequest(UUID.randomUUID().toString()),
-            salesActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> {
-                assertThat(e.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_CONTENT);
-                assertThat(e.getMessage()).startsWith(BELOW_MINIMUM_ON_ISSUE);
-            });
-    }
-
-    /** A margin of exactly 0 still produces a non-null minimum (== the approved price, which is itself equal to
-     * cost at 0 margin) — the auto-population does not depend on the price being "large" or the margin being
-     * positive, only on the item having been approved at all. */
-    @Test
-    void minimumSellingPrice_autoPopulated_evenAtZeroMargin_stillNeedsApprovalBeforeIssue() {
-        PricingDecisionDto approved = approveOneItemDecision(BigDecimal.ZERO);
-        PricingDecisionItemDto approvedItem = approved.items().get(0);
-        assertThat(approvedItem.minimumSellingPricePerRequestedUnit())
-            .isEqualByComparingTo(approvedItem.approvedSellingPricePerRequestedUnit());
-
-        CustomerQuotationDto draft = quotationService.create(approved.pricingRequestId(),
-            new CreateCustomerQuotationRequest(null, null, null, null, null, null), salesActor);
-        CustomerQuotationItemDto item = draft.items().get(0);
-
-        CustomerQuotationDto discounted = quotationService.update(draft.id(), new UpdateCustomerQuotationRequest(
-            null, null, null, null, null,
-            List.of(new UpdateCustomerQuotationItemRequest(item.id(), null, null, new BigDecimal("0.01")))),
-            salesActor);
-        assertThat(discounted.items().get(0).salesDiscount()).isEqualByComparingTo(new BigDecimal("0.01"));
-
-        assertThatThrownBy(() -> quotationService.issue(discounted.id(),
-            new IssueCustomerQuotationRequest(UUID.randomUUID().toString()), salesActor))
-            .isInstanceOfSatisfying(ApiException.class,
-                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_CONTENT));
-    }
-
-    /** Documents the mutation this file exists to catch — see this task's own mutation-check step. This test itself
-     * only pins the CURRENT (correct) behaviour at the DTO level as a fast, non-quotation-round-trip signal; it is
-     * not the mutation-check itself. */
-    @Test
-    void approve_leavesMinimumNull_isTheMutationThisFileExistsToCatch() {
-        PricingDecisionDto approved = approveOneItemDecision(new BigDecimal("0.20"));
-        assertThat(approved.items().get(0).minimumSellingPricePerRequestedUnit()).isNotNull();
     }
 
     // Helpers

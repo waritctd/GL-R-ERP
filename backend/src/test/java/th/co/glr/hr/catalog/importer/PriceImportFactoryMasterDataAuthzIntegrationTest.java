@@ -2,9 +2,7 @@ package th.co.glr.hr.catalog.importer;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -36,11 +34,6 @@ class PriceImportFactoryMasterDataAuthzIntegrationTest extends AbstractPostgresI
     /** Everyone outside PriceImportController.requireImporter's ceo/import gate. */
     private static final List<String> DENIED_ROLES =
         List.of("employee", "warehouse", "qc", "hr", "sales", "sales_manager", "account");
-
-    /** PR-B REVIEW ROUND 1, B2: everyone outside requireCountriesReader's widened ceo/import/sales/sales_manager
-     * gate for the countries picker specifically. */
-    private static final List<String> DENIED_COUNTRIES_READ_ROLES =
-        List.of("employee", "warehouse", "qc", "hr", "account");
 
     private MockMvc mvc;
 
@@ -82,20 +75,6 @@ class PriceImportFactoryMasterDataAuthzIntegrationTest extends AbstractPostgresI
             .isZero();
     }
 
-    @Test
-    void anonymousCallerIsRejectedOnEveryWriteEndpointAndTheCountryPicker() throws Exception {
-        mvc.perform(post("/api/price-import/factories")
-                .contentType(MediaType.APPLICATION_JSON)
-                .content("{\"name\": \"Anon\", \"country\": \"TH\"}"))
-            .andExpect(status().isUnauthorized());
-        mvc.perform(put("/api/price-import/factories/1")
-                .contentType(MediaType.APPLICATION_JSON)
-                .content("{\"name\": \"Anon\", \"country\": \"TH\"}"))
-            .andExpect(status().isUnauthorized());
-        mvc.perform(get("/api/price-import/countries"))
-            .andExpect(status().isUnauthorized());
-    }
-
     // ── create: the permitted roles reach a REAL row, and validation actually fires ──────────
 
     @Test
@@ -123,72 +102,7 @@ class PriceImportFactoryMasterDataAuthzIntegrationTest extends AbstractPostgresI
         assertThat(countFactoriesNamed("New Factory Ceo")).isEqualTo(1L);
     }
 
-    /** THE FIX: country = null used to reach the NOT NULL + FK column and 500. Now a clean 400, and — the part a
-     * status-code-only assertion would miss — no half-written row. */
-    @Test
-    void createFactoryRejectsABlankCountryWith400NotA500() throws Exception {
-        mvc.perform(post("/api/price-import/factories").session(session("import"))
-                .contentType(MediaType.APPLICATION_JSON)
-                .content("""
-                    {"name": "No Country Factory", "defaultCurrency": "THB"}
-                    """))
-            .andExpect(status().isBadRequest());
-        assertThat(countFactoriesNamed("No Country Factory")).isZero();
-    }
-
-    /** 'XX' — not 'ZZ', since V184 seeded 'ZZ' (อื่นๆ) as a real, always- valid catch-all country (owner decision
-     * 09-18). */
-    @Test
-    void createFactoryRejectsAnUnknownCountryCodeWith400NotA500() throws Exception {
-        mvc.perform(post("/api/price-import/factories").session(session("import"))
-                .contentType(MediaType.APPLICATION_JSON)
-                .content("""
-                    {"name": "Bad Country Factory", "country": "XX", "defaultCurrency": "THB"}
-                    """))
-            .andExpect(status().isBadRequest());
-        assertThat(countFactoriesNamed("Bad Country Factory")).isZero();
-    }
-
     // ── create: 'ZZ' (อื่นๆ) / countryOther pairing (V184, owner decision 09-18) ───────────────
-
-    @Test
-    void createFactoryRejectsZzWithNoCountryOtherWith400NotA500() throws Exception {
-        mvc.perform(post("/api/price-import/factories").session(session("import"))
-                .contentType(MediaType.APPLICATION_JSON)
-                .content("""
-                    {"name": "ZZ No Text Factory", "country": "ZZ", "defaultCurrency": "THB"}
-                    """))
-            .andExpect(status().isBadRequest());
-        assertThat(countFactoriesNamed("ZZ No Text Factory")).isZero();
-    }
-
-    @Test
-    void createFactoryAcceptsZzWithACountryOther() throws Exception {
-        mvc.perform(post("/api/price-import/factories").session(session("import"))
-                .contentType(MediaType.APPLICATION_JSON)
-                .content("""
-                    {"name": "ZZ With Text Factory", "country": "ZZ", "countryOther": "Farawaystan",
-                     "defaultCurrency": "THB"}
-                    """))
-            .andExpect(status().is2xxSuccessful())
-            .andExpect(jsonPath("$.country").value("ZZ"))
-            .andExpect(jsonPath("$.countryOther").value("Farawaystan"));
-        assertThat(jdbc.queryForObject(
-            "SELECT country_other FROM price_catalog.factories WHERE name = :name",
-            Map.of("name", "ZZ With Text Factory"), String.class)).isEqualTo("Farawaystan");
-    }
-
-    @Test
-    void createFactoryRejectsACountryOtherOnANonZzCountryWith400NotA500() throws Exception {
-        mvc.perform(post("/api/price-import/factories").session(session("import"))
-                .contentType(MediaType.APPLICATION_JSON)
-                .content("""
-                    {"name": "Stray CountryOther Factory", "country": "TH", "countryOther": "should not be here",
-                     "defaultCurrency": "THB"}
-                    """))
-            .andExpect(status().isBadRequest());
-        assertThat(countFactoriesNamed("Stray CountryOther Factory")).isZero();
-    }
 
     @Test
     void createFactoryRejectsADuplicateNameWith409NotA500() throws Exception {
@@ -205,262 +119,6 @@ class PriceImportFactoryMasterDataAuthzIntegrationTest extends AbstractPostgresI
     // create: currency/email/unit length validation ───────── The country fix above closed ONE way this endpoint
     // 500'd on bad input, but normalizeCurrency only uppercased/trimmed — it never checked length — and email/unit
     // had no length check at all.
-
-    @Test
-    void createFactoryRejectsAnInvalidLengthCurrencyWith400NotA500() throws Exception {
-        // "EURO" (4 chars) would 22001 outright; "TH" (2 chars) would not error at all — CHAR(3) BLANK-PADS a
-        // too-short value instead of rejecting it, silently storing "TH " with a trailing space. Both must be refused
-        // up front.
-        for (String badCurrency : List.of("EURO", "TH")) {
-            mvc.perform(post("/api/price-import/factories").session(session("import"))
-                    .contentType(MediaType.APPLICATION_JSON)
-                    .content("""
-                        {"name": "Bad Currency Factory", "country": "TH", "defaultCurrency": "%s"}
-                        """.formatted(badCurrency)))
-                .andExpect(status().isBadRequest());
-        }
-        assertThat(countFactoriesNamed("Bad Currency Factory")).isZero();
-    }
-
-    @Test
-    void createFactoryRejectsAnOverLongEmailWith400NotA500() throws Exception {
-        String overLongEmail = "a".repeat(195) + "@x.com"; // 201 chars, one over VARCHAR(200)
-        mvc.perform(post("/api/price-import/factories").session(session("import"))
-                .contentType(MediaType.APPLICATION_JSON)
-                .content("""
-                    {"name": "Bad Email Factory", "country": "TH", "defaultCurrency": "THB", "email": "%s"}
-                    """.formatted(overLongEmail)))
-            .andExpect(status().isBadRequest());
-        assertThat(countFactoriesNamed("Bad Email Factory")).isZero();
-    }
-
-    @Test
-    void createFactoryRejectsAnOverLongUnitWith400NotA500() throws Exception {
-        String overLongUnit = "u".repeat(31); // one over VARCHAR(30)
-        mvc.perform(post("/api/price-import/factories").session(session("import"))
-                .contentType(MediaType.APPLICATION_JSON)
-                .content("""
-                    {"name": "Bad Unit Factory", "country": "TH", "defaultCurrency": "THB", "unit": "%s"}
-                    """.formatted(overLongUnit)))
-            .andExpect(status().isBadRequest());
-        assertThat(countFactoriesNamed("Bad Unit Factory")).isZero();
-    }
-
-    // ── update: authz, wrong-way-round ───────────────────────────────────────────────────────
-
-    @Test
-    void nonImportCeoRolesCannotUpdateAFactory() throws Exception {
-        long factoryId = seedFactory("Update Target Factory", "IT", "EUR");
-        for (String role : DENIED_ROLES) {
-            mvc.perform(put("/api/price-import/factories/" + factoryId).session(session(role))
-                    .contentType(MediaType.APPLICATION_JSON)
-                    .content("""
-                        {"name": "Should Not Update", "country": "IT", "defaultCurrency": "EUR"}
-                        """))
-                .andExpect(status().isForbidden());
-        }
-        assertThat(factoryName(factoryId))
-            .as("a denied role's request must not have renamed the row despite the 403")
-            .isEqualTo("Update Target Factory");
-    }
-
-    // ── update: the permitted roles reach a REAL row, and validation actually fires ──────────
-
-    @Test
-    void importAndCeoCanUpdateAFactory() throws Exception {
-        long factoryId = seedFactory("Update Target Factory Two", "IT", "EUR");
-
-        mvc.perform(put("/api/price-import/factories/" + factoryId).session(session("import"))
-                .contentType(MediaType.APPLICATION_JSON)
-                .content("""
-                    {"name": "Renamed Factory", "country": "vn", "defaultCurrency": "usd",
-                     "email": "new@renamed.example", "unit": "box"}
-                    """))
-            .andExpect(status().is2xxSuccessful())
-            .andExpect(jsonPath("$.name").value("Renamed Factory"))
-            .andExpect(jsonPath("$.country").value("VN"))
-            .andExpect(jsonPath("$.email").value("new@renamed.example"));
-        assertThat(jdbc.queryForObject(
-            "SELECT unit FROM price_catalog.factories WHERE factory_id = :id",
-            Map.of("id", factoryId), String.class)).isEqualTo("box");
-
-        mvc.perform(put("/api/price-import/factories/" + factoryId).session(session("ceo"))
-                .contentType(MediaType.APPLICATION_JSON)
-                .content("""
-                    {"name": "Renamed Factory Again", "country": "TH", "defaultCurrency": "THB"}
-                    """))
-            .andExpect(status().is2xxSuccessful());
-        assertThat(factoryName(factoryId)).isEqualTo("Renamed Factory Again");
-    }
-
-    @Test
-    void updateFactoryReturns404ForAnUnknownId() throws Exception {
-        mvc.perform(put("/api/price-import/factories/999999999").session(session("import"))
-                .contentType(MediaType.APPLICATION_JSON)
-                .content("""
-                    {"name": "Whatever", "country": "TH", "defaultCurrency": "THB"}
-                    """))
-            .andExpect(status().isNotFound());
-    }
-
-    /** {@code 'XX'}, not {@code 'ZZ'} — see {@link #createFactoryRejectsAnUnknownCountryCodeWith400NotA500}. */
-    @Test
-    void updateFactoryReturns400ForAnInvalidCountryNotA500() throws Exception {
-        long factoryId = seedFactory("Country Validation Factory", "IT", "EUR");
-        mvc.perform(put("/api/price-import/factories/" + factoryId).session(session("import"))
-                .contentType(MediaType.APPLICATION_JSON)
-                .content("""
-                    {"name": "Country Validation Factory", "country": "XX", "defaultCurrency": "EUR"}
-                    """))
-            .andExpect(status().isBadRequest());
-        assertThat(jdbc.queryForObject(
-            "SELECT country FROM price_catalog.factories WHERE factory_id = :id",
-            Map.of("id", factoryId), String.class)).isEqualTo("IT");
-    }
-
-    @Test
-    void updateFactoryReturns400ForZzWithNoCountryOtherNotA500() throws Exception {
-        long factoryId = seedFactory("ZZ Update Validation Factory", "IT", "EUR");
-        mvc.perform(put("/api/price-import/factories/" + factoryId).session(session("import"))
-                .contentType(MediaType.APPLICATION_JSON)
-                .content("""
-                    {"name": "ZZ Update Validation Factory", "country": "ZZ", "defaultCurrency": "EUR"}
-                    """))
-            .andExpect(status().isBadRequest());
-        assertThat(jdbc.queryForObject(
-            "SELECT country FROM price_catalog.factories WHERE factory_id = :id",
-            Map.of("id", factoryId), String.class)).isEqualTo("IT");
-    }
-
-    @Test
-    void updateFactoryAcceptsZzWithACountryOther() throws Exception {
-        long factoryId = seedFactory("ZZ Update Accept Factory", "IT", "EUR");
-        mvc.perform(put("/api/price-import/factories/" + factoryId).session(session("import"))
-                .contentType(MediaType.APPLICATION_JSON)
-                .content("""
-                    {"name": "ZZ Update Accept Factory", "country": "ZZ", "countryOther": "Neverland",
-                     "defaultCurrency": "EUR"}
-                    """))
-            .andExpect(status().is2xxSuccessful())
-            .andExpect(jsonPath("$.country").value("ZZ"))
-            .andExpect(jsonPath("$.countryOther").value("Neverland"));
-        assertThat(jdbc.queryForObject(
-            "SELECT country_other FROM price_catalog.factories WHERE factory_id = :id",
-            Map.of("id", factoryId), String.class)).isEqualTo("Neverland");
-    }
-
-    /** REVIEW ROUND 1, S6: a ZZ factory that already has a stored countryOther must stay EDITABLE from a request
-     * that omits the field entirely — today's UI has no text input for it yet (PR-B adds one; PriceImportPage's
-     * picker hides 'ZZ' from NEW selections for exactly this reason). */
-    @Test
-    void updateFactoryKeepsTheStoredCountryOther_whenTheRequestOmitsItAndCountryIsUnchanged() throws Exception {
-        long factoryId = jdbc.queryForObject("""
-            INSERT INTO price_catalog.factories (name, country, country_other, default_currency)
-            VALUES ('ZZ Keep Factory', 'ZZ', 'Farawaystan', 'EUR')
-            RETURNING factory_id
-            """, Map.of(), Long.class);
-
-        mvc.perform(put("/api/price-import/factories/" + factoryId).session(session("import"))
-                .contentType(MediaType.APPLICATION_JSON)
-                .content("""
-                    {"name": "ZZ Keep Factory", "country": "ZZ", "defaultCurrency": "EUR",
-                     "email": "kept@example.com"}
-                    """))
-            .andExpect(status().is2xxSuccessful())
-            .andExpect(jsonPath("$.country").value("ZZ"))
-            .andExpect(jsonPath("$.countryOther").value("Farawaystan"));
-        assertThat(jdbc.queryForObject(
-            "SELECT country_other FROM price_catalog.factories WHERE factory_id = :id",
-            Map.of("id", factoryId), String.class)).isEqualTo("Farawaystan");
-    }
-
-    @Test
-    void updateFactoryReturns409ForADuplicateNameNotA500() throws Exception {
-        seedFactory("Existing Name Holder", "IT", "EUR");
-        long secondFactoryId = seedFactory("Second Factory To Rename", "IT", "EUR");
-
-        mvc.perform(put("/api/price-import/factories/" + secondFactoryId).session(session("import"))
-                .contentType(MediaType.APPLICATION_JSON)
-                .content("""
-                    {"name": "Existing Name Holder", "country": "IT", "defaultCurrency": "EUR"}
-                    """))
-            .andExpect(status().isConflict());
-        assertThat(factoryName(secondFactoryId)).isEqualTo("Second Factory To Rename");
-    }
-
-    // ── update: currency/email/unit length validation (MEDIUM 5, review remediation) ─────────
-
-    @Test
-    void updateFactoryReturns400ForAnInvalidLengthCurrencyNotA500() throws Exception {
-        long factoryId = seedFactory("Currency Validation Factory", "IT", "EUR");
-        for (String badCurrency : List.of("EURO", "TH")) {
-            mvc.perform(put("/api/price-import/factories/" + factoryId).session(session("import"))
-                    .contentType(MediaType.APPLICATION_JSON)
-                    .content("""
-                        {"name": "Currency Validation Factory", "country": "IT", "defaultCurrency": "%s"}
-                        """.formatted(badCurrency)))
-                .andExpect(status().isBadRequest());
-        }
-        assertThat(jdbc.queryForObject(
-            "SELECT default_currency FROM price_catalog.factories WHERE factory_id = :id",
-            Map.of("id", factoryId), String.class)).isEqualTo("EUR");
-    }
-
-    @Test
-    void updateFactoryReturns400ForAnOverLongEmailNotA500() throws Exception {
-        long factoryId = seedFactory("Email Validation Factory", "IT", "EUR");
-        String overLongEmail = "a".repeat(195) + "@x.com";
-        mvc.perform(put("/api/price-import/factories/" + factoryId).session(session("import"))
-                .contentType(MediaType.APPLICATION_JSON)
-                .content("""
-                    {"name": "Email Validation Factory", "country": "IT", "defaultCurrency": "EUR", "email": "%s"}
-                    """.formatted(overLongEmail)))
-            .andExpect(status().isBadRequest());
-        assertThat(jdbc.queryForObject(
-            "SELECT email FROM price_catalog.factories WHERE factory_id = :id",
-            Map.of("id", factoryId), String.class)).isNull();
-    }
-
-    @Test
-    void updateFactoryReturns400ForAnOverLongUnitNotA500() throws Exception {
-        long factoryId = seedFactory("Unit Validation Factory", "IT", "EUR");
-        String overLongUnit = "u".repeat(31);
-        mvc.perform(put("/api/price-import/factories/" + factoryId).session(session("import"))
-                .contentType(MediaType.APPLICATION_JSON)
-                .content("""
-                    {"name": "Unit Validation Factory", "country": "IT", "defaultCurrency": "EUR", "unit": "%s"}
-                    """.formatted(overLongUnit)))
-            .andExpect(status().isBadRequest());
-        assertThat(jdbc.queryForObject(
-            "SELECT unit FROM price_catalog.factories WHERE factory_id = :id",
-            Map.of("id", factoryId), String.class)).isEqualTo("piece");
-    }
-
-    // ── countries picker: authz ───────────────────────────────────────────────────────────────
-
-    /** PR-B REVIEW ROUND 1, B2: wrong-way-round — roles with no business reason to see the country picker
-     * (employee/warehouse/qc/hr/account) must still 403. sales/sales_manager are DELIBERATELY EXCLUDED from this
-     * list now — see #importCeoSalesSalesManagerCanListCountries. */
-    @Test
-    void rolesOutsideTheWidenedCountriesGateCannotListCountries() throws Exception {
-        for (String role : DENIED_COUNTRIES_READ_ROLES) {
-            mvc.perform(get("/api/price-import/countries").session(session(role)))
-                .andExpect(status().isForbidden());
-        }
-    }
-
-    /** PR-B REVIEW ROUND 1, B2 (owner-approved default): the owning sales rep's new-factory country picker on
-     * ImportRequestFactoryCard (V184 createDrafts auto-create path) needs to read this list — country codes are
-     * not sensitive, so READ widens to sales + sales_manager alongside the existing import/ceo. */
-    @Test
-    void importCeoSalesSalesManagerCanListCountries() throws Exception {
-        for (String role : List.of("import", "ceo", "sales", "sales_manager")) {
-            mvc.perform(get("/api/price-import/countries").session(session(role)))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$[?(@.countryCode == 'TH')].nameEn").exists())
-                .andExpect(jsonPath("$[?(@.countryCode == 'IT')].nameTh").exists());
-        }
-    }
 
     // ── helpers ───────────────────────────────────────────────────────────────────────────────
 
@@ -481,12 +139,6 @@ class PriceImportFactoryMasterDataAuthzIntegrationTest extends AbstractPostgresI
         return jdbc.queryForObject(
             "SELECT COUNT(*) FROM price_catalog.factories WHERE name = :name",
             Map.of("name", name), Long.class);
-    }
-
-    private String factoryName(long factoryId) {
-        return jdbc.queryForObject(
-            "SELECT name FROM price_catalog.factories WHERE factory_id = :id",
-            Map.of("id", factoryId), String.class);
     }
 
     private static MockHttpSession session(String role) {

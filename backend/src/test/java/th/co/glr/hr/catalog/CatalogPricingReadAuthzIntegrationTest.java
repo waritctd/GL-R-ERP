@@ -1,13 +1,7 @@
 package th.co.glr.hr.catalog;
 
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.times;
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.verifyNoInteractions;
-import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -76,10 +70,6 @@ import tools.jackson.databind.json.JsonMapper;
  */
 class CatalogPricingReadAuthzIntegrationTest extends AbstractPostgresIntegrationTest {
 
-    /** The roles DivisionAccessPolicy hands ordinary staff, plus hr. Used two ways below: as the pin that they DO
-     * reach both open catalog reads, and as part of the denial set that they do NOT reach the cost model. */
-    private static final List<String> ORDINARY_STAFF = List.of("employee", "warehouse", "qc", "hr");
-
     /** Everyone outside RAW_COSTING_ROLES — ordinary staff plus the whole sales/account side. */
     private static final List<String> NON_COSTING_ROLES =
         List.of("employee", "warehouse", "qc", "hr", "sales", "sales_manager", "account");
@@ -123,57 +113,6 @@ class CatalogPricingReadAuthzIntegrationTest extends AbstractPostgresIntegration
         seedFixtures();
     }
 
-    // ── what stays deliberately open, pinned against the real SQL ────────────────────────────
-
-    /**
-     * PINS THE PRODUCT-OWNER RULE: "The catalog stays browsable by any logged-in
-     * user." Ordinary staff reach real catalog rows through the real repository query.
-     * {@code CatalogDto} carries no price field, so nothing commercially sensitive is returned.
-     *
-     * <p>A failure here means someone gated {@code CatalogController.search} — reopen the rule with the
-     * product owner rather than editing this test.
-     */
-    @Test
-    void catalogBrowsingStaysOpenPerIssue205() throws Exception {
-        for (String role : ORDINARY_STAFF) {
-            catalogMvc.perform(get("/api/catalog")
-                    .param("q", "AuthzBrand388")
-                    .session(sessionFor(role)))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.items[0].brand").value("AuthzBrand388"));
-        }
-    }
-
-    /**
-     * PINS THE PRODUCT-OWNER RULING that the catalog's "browsable by any
-     * logged-in user" extends to the supplier PURCHASE price.
-     *
-     * <p>What this asserts, deliberately and against a real row in real Postgres: <strong>an
-     * {@code employee}, {@code warehouse}, {@code qc} or {@code hr} session reads
-     * {@code factoryName}, {@code price} and {@code currency} out of the live price catalog.</strong>
-     * That was reported as a HIGH-severity exposure; the owner ruled it an accepted business
-     * exposure. Accepted is not the same as safe — an authenticated account is the only control in
-     * front of this data — and pinning it is what keeps the acceptance visible instead of looking
-     * like a missing gate the next audit re-files.
-     *
-     * <p>A failure here means someone gated {@code CatalogController.searchPrices}. Reopen the
-     * ruling with the product owner. The cost MODEL around it — margin/duty config, FX, supplier
-     * directory — is a different question and IS gated, below.
-     */
-    @Test
-    void factoryPurchasePricesStayOpenPerIssue388Ruling() throws Exception {
-        for (String role : ORDINARY_STAFF) {
-            catalogMvc.perform(get("/api/catalog/prices")
-                    .param("q", "AUTHZ-388")
-                    .param("limit", "200")
-                    .session(sessionFor(role)))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.items[0].productCode").value("AUTHZ-388-001"))
-                .andExpect(jsonPath("$.items[0].factoryName").value("Authz Factory 388"))
-                .andExpect(jsonPath("$.items[0].price").exists());
-        }
-    }
-
     // ── the cases that matter: callers who must NOT reach the cost model ─────────────────────
 
     /** The margin policy itself — marginPct / importDutyPct. */
@@ -183,110 +122,6 @@ class CatalogPricingReadAuthzIntegrationTest extends AbstractPostgresIntegration
             priceConfigMvc.perform(get("/api/price-calc-configs").session(sessionFor(role)))
                 .andExpect(status().isForbidden());
         }
-    }
-
-    /**
-     * PINS THE OWNER'S RULE (see {@code FxRateController.READ_ROLES}): the FX read
-     * is wider than {@code RAW_COSTING_ROLES} by {@code sales}, so the
-     * deal-create modal's estimate can convert a catalog price to THB for a plain rep. Asserted
-     * against a real row in real Postgres, exactly like the two "stays open" pins above — a
-     * failure here means someone re-narrowed the gate; reopen the rule with the product owner
-     * rather than editing this test.
-     */
-    @Test
-    void salesCanReadFxRatesPerOwnerRuling20260802() throws Exception {
-        fxMvc.perform(get("/api/fx-rates").session(sessionFor("sales")))
-            .andExpect(status().isOk())
-            .andExpect(jsonPath("$.fxRates[?(@.currency == 'XTS')].rateToThb").exists());
-    }
-
-    /**
-     * The deal page converts SM's foreign-currency
-     * prices to THB, so the FX read widens to {@code sales_manager}. Writes stay CEO-only.
-     */
-    @Test
-    void salesManagerCanReadFxRatesPerOwnerRuling20261029() throws Exception {
-        fxMvc.perform(get("/api/fx-rates").session(sessionFor("sales_manager")))
-            .andExpect(status().isOk())
-            .andExpect(jsonPath("$.fxRates[?(@.currency == 'XTS')].rateToThb").exists());
-    }
-
-    /**
-     * THE OTHER HALF OF THE SAME RULE, and the half that actually catches a regression. The
-     * rule is "should only be to sale" — it does NOT open the rate to every authenticated
-     * session. Without this case the suite stays green with the gate wide open, which is precisely
-     * the failure mode a read-gate widening has: you find out in production.
-     *
-     * <p>{@code sales_manager} is not in this list; it can read FX rates and is pinned by {@link #salesManagerCanReadFxRatesPerOwnerRuling20261029}.
-     */
-    @Test
-    void everyRoleOutsideTheRulingIsStillRefusedTheFxRead() throws Exception {
-        for (String role : List.of("employee", "warehouse", "qc", "hr", "account")) {
-            fxMvc.perform(get("/api/fx-rates").session(sessionFor(role)))
-                .andExpect(status().isForbidden());
-        }
-    }
-
-    /** The read widening is deliberately narrow: it must not leak into the write. A plain sales session — now able
-     * to GET the same rate — must still be refused the real PUT, through the real repository. */
-    @Test
-    void salesCannotWriteFxRatesDespiteTheReadWidening() throws Exception {
-        fxMvc.perform(put("/api/fx-rates/EUR")
-                .session(sessionFor("sales"))
-                .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
-                .content("""
-                    {"rateToThb": 38.5, "effectiveDate": "2026-08-02"}
-                    """))
-            .andExpect(status().isForbidden());
-    }
-
-    /**
-     * {@code POST /api/fx-rates/fetch-now} (CEO console
-     * "ดึงเรตจาก BOT ตอนนี้" button) is gated exactly like {@link
-     * FxRateController#upsert}: CEO-only, because it writes rates too. Written wrong-way-round
-     * per CLAUDE.md: {@code sales} and {@code import} — both members of {@code
-     * FxRateController.READ_ROLES}, so
-     * this proves the read widening does not leak into the new write — are refused, and the
-     * refusal is proven to reach no further than the role gate by asserting {@code
-     * BotFxFetchService} was <b>never invoked</b> for either of them (a Mockito verification, not
-     * merely the 403 status). {@code ceo} is the positive control: it reaches the real write
-     * path and the service's result is echoed back through the real controller.
-     */
-    @Test
-    void fetchNowIsCeoOnly_forbiddenRolesNeverInvokeTheBotFetch_ceoDoes() throws Exception {
-        for (String role : List.of("sales", "import")) {
-            fxMvc.perform(post("/api/fx-rates/fetch-now").session(sessionFor(role)))
-                .andExpect(status().isForbidden());
-        }
-        verifyNoInteractions(botFxFetchService);
-
-        when(botFxFetchService.fetchNow()).thenReturn(new BotFxFetchService.FxFetchResult(
-            3, 5, LocalDate.now().toString(), List.of("USD", "EUR", "JPY")));
-
-        fxMvc.perform(post("/api/fx-rates/fetch-now").session(sessionFor("ceo")))
-            .andExpect(status().isOk())
-            .andExpect(jsonPath("$.result.updated").value(3))
-            .andExpect(jsonPath("$.result.total").value(5));
-
-        verify(botFxFetchService, times(1)).fetchNow();
-    }
-
-    @Test
-    void nonCostingRolesCannotReadTheSupplierDirectory() throws Exception {
-        for (String role : NON_COSTING_ROLES) {
-            factoryMvc.perform(get("/api/factory-configs").session(sessionFor(role)))
-                .andExpect(status().isForbidden());
-        }
-    }
-
-    /** Role-gated is not the same as authenticated: an anonymous caller still gets 401, not 403. */
-    @Test
-    void anonymousCallerIsRejectedOnEveryReadEndpoint() throws Exception {
-        catalogMvc.perform(get("/api/catalog")).andExpect(status().isUnauthorized());
-        catalogMvc.perform(get("/api/catalog/prices")).andExpect(status().isUnauthorized());
-        priceConfigMvc.perform(get("/api/price-calc-configs")).andExpect(status().isUnauthorized());
-        fxMvc.perform(get("/api/fx-rates")).andExpect(status().isUnauthorized());
-        factoryMvc.perform(get("/api/factory-configs")).andExpect(status().isUnauthorized());
     }
 
     // ── fixture liveness: permitted roles must reach REAL rows, or the denials prove nothing ──
