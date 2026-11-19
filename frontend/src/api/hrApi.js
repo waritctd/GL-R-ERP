@@ -15,6 +15,13 @@ function duplicateQuery(options) {
   return options?.confirmPossibleDuplicate ? { confirmPossibleDuplicate: true } : {};
 }
 
+// The PDF bundle's X-Document-Bundle-Skipped header ("po,quotation") rides on the blob for bundleSkippedMessage.
+async function withBundleSkipped(res) {
+  const blob = await res.blob();
+  blob.bundleSkipped = res.headers?.get?.('X-Document-Bundle-Skipped') ?? '';
+  return blob;
+}
+
 export const api = {
   auth: {
     login: (payload) => apiRequest(API_ROUTES.auth.login, { method: 'POST', body: payload }),
@@ -34,6 +41,11 @@ export const api = {
     candidates: () => apiRequest(API_ROUTES.viewAs.candidates),
     start: (employeeId) => apiRequest(API_ROUTES.viewAs.root, { method: 'POST', body: { employeeId } }),
     stop: () => apiRequest(API_ROUTES.viewAs.root, { method: 'DELETE' }),
+  },
+  // Test-site-only role switcher. Mirrors TestSiteRoleSwitcherController.
+  testSite: {
+    accounts: () => apiRequest(API_ROUTES.testSite.accounts),
+    switchTo: (email) => apiRequest(API_ROUTES.testSite.switch, { method: 'POST', body: { email } }),
   },
   // Admin-only cross-employee activity. Mirrors ActivityLogController; the gate is
   // ActivityLogService.requireAdmin, which re-reads hr.employee.is_admin per request — a client that fakes
@@ -481,7 +493,7 @@ export const api = {
     downloadPdf: async (id) => {
       const res = await fetch(API_ROUTES.depositNotices.file(id, 'pdf'), { credentials: 'include' });
       if (!res.ok) throw new Error('Download failed');
-      return res.blob();
+      return withBundleSkipped(res);
     },
     listByTicket: (ticketId) => apiRequest(API_ROUTES.tickets.listDocs(ticketId)),
     createDraft: (ticketId, payload) => apiRequest(API_ROUTES.tickets.createDocDraft(ticketId), { method: 'POST', body: payload }),
@@ -513,7 +525,7 @@ export const api = {
         const err = await res.json().catch(() => ({}));
         throw new Error(err.message || 'ดาวน์โหลดใบแจ้งหนี้ส่วนที่เหลือไม่สำเร็จ');
       }
-      return res.blob();
+      return withBundleSkipped(res);
     },
   },
   // Mirrors BillingNoteController: the STORED ใบวางบิล aggregate. Customer-scoped, DRAFT -> ISSUED

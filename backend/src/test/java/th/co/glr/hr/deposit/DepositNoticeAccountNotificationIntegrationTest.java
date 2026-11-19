@@ -150,7 +150,7 @@ class DepositNoticeAccountNotificationIntegrationTest extends AbstractPostgresIn
             new DiscountApprovalRepository(jdbc));
 
         depositNoticeService = new DepositNoticeService(new DepositNoticeRepository(jdbc), tickets, notifications,
-            new DepositNoticePdfRenderer(), customers, quotationRepository);
+            new DepositNoticePdfRenderer(), customers, quotationRepository, th.co.glr.hr.support.DocumentBundles.noDownload(jdbc));
 
         orderConfirmation = new OrderConfirmationService(
             pricingRequests, tickets, ticketService, quotationRepository, depositNoticeService, notifications);

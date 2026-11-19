@@ -45,7 +45,7 @@ class RemainingInvoiceNewEngineZeroDepositIntegrationTest extends AbstractPostgr
         CustomerQuotationRepository quotations = new CustomerQuotationRepository(jdbc);
         depositNotices = new DepositNoticeService(new DepositNoticeRepository(jdbc), tickets,
             new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP), new DepositNoticePdfRenderer(),
-            new CustomerRepository(jdbc), quotations);
+            new CustomerRepository(jdbc), quotations, th.co.glr.hr.support.DocumentBundles.noDownload(jdbc));
         remainingInvoices = new RemainingInvoiceService(new RemainingInvoiceRepository(jdbc), depositNotices, tickets,
             new RemainingInvoicePdfRenderer(), new NotificationRepository(jdbc, mailer));
         employeeId = jdbc.queryForObject("""
@@ -453,6 +453,35 @@ class RemainingInvoiceNewEngineZeroDepositIntegrationTest extends AbstractPostgr
 
         assertThat(updated.items().get(0).qty()).isEqualByComparingTo("2");
         assertThat(createdBy(ticket)).isEqualTo(employeeId);
+    }
+
+    /** Items 1+2 for the invoice that prints the quotation's own lines: each line's ส่วนลด cell is the QUOTATION's own
+     * cell text (พิเศษ for a SPECIAL_SQM tile, Net for a plain line, empty for the ส่วนลดพิเศษ row), never a computed
+     * "ลด x"; and the tile's description carries the quotation's size line on a second line. */
+    @Test
+    void newEngineInvoice_linesCarryTheQuotationsDiscountCellTextAndSizeLine() {
+        long ticket = deal("NOT_REQUIRED");
+        long q = quotation(ticket, "PRICING_REQUEST", "ACCEPTED", "5311.60");
+        jdbc.update("UPDATE sales.quotation SET price_mode = 'SPECIAL_SQM' WHERE quotation_id = :q", Map.of("q", q));
+        jdbc.update("""
+            INSERT INTO sales.quotation_item (quotation_id, seq, description, qty, raw_unit, unit_price, sales_discount,
+                                               final_unit_price, amount, line_type, size, thickness_mm, special_price_sqm)
+            VALUES (:q, 1, 'กระเบื้อง รุ่น Tribeca สี Sage green ผิว Glossy', 10, 'แผ่น', 1210.25, 679.09, 531.16,
+                    5311.60, 'TILE', '6x24.6', 8, 790.00)
+            """, Map.of("q", q));
+        line(q, 2, "ค่าขนส่ง", "1", "0.00", "0.00", "PLAIN");
+        line(q, 3, "ส่วนลดพิเศษ 0 บาท", "-1", "0.00", "0.00", "ADJUSTMENT");
+
+        var draft = remainingInvoices.createDraft(ticket, null, owner);
+
+        assertThat(draft.items()).extracting(RemainingInvoiceDocumentItemDto::discountLabel)
+            .satisfiesExactly(
+                tile -> assertThat(tile).isEqualTo("พิเศษ"),
+                plain -> assertThat(plain).isEqualTo("Net"),
+                adjustment -> assertThat(adjustment).isNullOrEmpty());
+        assertThat(draft.items().get(0).description())
+            .isEqualTo("กระเบื้อง รุ่น Tribeca สี Sage green ผิว Glossy\nขนาด 6 cm x 24.6 cm x 8 mm (ขนาดโดยประมาณ)");
+        assertThat(draft.items().get(1).description()).isEqualTo("ค่าขนส่ง");
     }
 
     /** Pin (green today, must stay green): the grant is per-employee, a plain rep on someone else's deal is refused. */

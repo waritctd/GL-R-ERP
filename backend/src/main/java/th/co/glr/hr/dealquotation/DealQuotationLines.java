@@ -248,6 +248,33 @@ public final class DealQuotationLines {
         return label + facePart + " x " + thicknessPart + approx;
     }
 
+    /**
+     * The ส่วนลด cell of an item row, the ONE rule the quotation PDF, the deposit notice and the remaining invoice
+     * all print. {@code priceMode} is the row's effective mode ({@link WastageCalculator#rowPriceMode}). Reads
+     * <b>พิเศษ</b> for a SPECIAL_SQM tile row, and for a DIRECT_NET tile row whose net differs from the list price;
+     * {@code Net} / {@code N%} otherwise. The price mode only governs TILE rows; a PLAIN row follows its own
+     * discount. An ADJUSTMENT row prints NOTHING (the row IS the discount). English prints "Special" and, for a
+     * per-sqm row, "Net".
+     */
+    public static String discountCellText(String lineType, String priceMode, BigDecimal discountPct,
+                                          BigDecimal unitPrice, BigDecimal netUnitPrice, boolean english) {
+        if (WastageCalculator.LINE_TYPE_ADJUSTMENT.equals(lineType)) {
+            return "";
+        }
+        String special = english ? "Special" : "พิเศษ";
+        boolean tile = lineType == null || WastageCalculator.LINE_TYPE_TILE.equals(lineType);
+        if (tile) {
+            if (WastageCalculator.PRICE_MODE_SPECIAL_SQM.equals(priceMode)) {
+                return english ? "Net" : special;
+            }
+            if (WastageCalculator.PRICE_MODE_DIRECT_NET.equals(priceMode)) {
+                boolean differs = unitPrice != null && netUnitPrice != null && unitPrice.compareTo(netUnitPrice) != 0;
+                return differs ? special : "Net";
+            }
+        }
+        return (discountPct == null || discountPct.signum() == 0) ? "Net" : format(discountPct) + "%";
+    }
+
     /** The shared size grammar — see #TWO_DIMENSIONS's Javadoc for the full spec (separators, per-number/trailing
      * units, decimal comma, ignored third dimension, ignored trailing parenthetical). */
     static ParsedSize parseTwoDimensions(String sizeText) {

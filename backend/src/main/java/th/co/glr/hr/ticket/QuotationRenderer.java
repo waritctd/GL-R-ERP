@@ -610,7 +610,7 @@ public class QuotationRenderer {
     /** Appends every page of extraPdf onto basePdf (in that order) and returns the combined bytes. Package-private
      * test seam: QuotationRendererTest calls this directly with a minimal in-memory PDFBox document as basePdf so
      * the merge itself can be asserted without LibreOffice or Chromium in the loop. */
-    static byte[] appendPdf(byte[] basePdf, byte[] extraPdf) throws IOException {
+    public static byte[] appendPdf(byte[] basePdf, byte[] extraPdf) throws IOException {
         try (PDDocument base = Loader.loadPDF(basePdf);
              PDDocument extra = Loader.loadPDF(extraPdf)) {
             for (int i = 0; i < extra.getNumberOfPages(); i++) {

@@ -316,6 +316,27 @@ describe('DepositNoticePage', () => {
     expect(api.depositNotices.update.mock.calls[0][1]).toMatchObject({ depositPercent: 0.125, customerAddress: 'ที่อยู่ใหม่' });
   });
 
+  // A tile line's description carries the quotation's size line on a second line ("\n"): editing the product text
+  // must not flatten it, or the printed notice loses the size under the product.
+  it('keeps the size line (a newline in the description) when the description is edited and saved', async () => {
+    const size = 'ขนาด 6 cm x 24.6 cm x 8 mm (ขนาดโดยประมาณ)';
+    api.depositNotices.listByTicket.mockResolvedValue({
+      depositNotices: [{
+        ...validDraftDoc, updatedAt: 'T1',
+        items: [{ seq: 1, description: `กระเบื้อง รุ่น Tribeca\n${size}`, qty: 5, unit: 'แผ่น', unitPrice: 100, netUnitPrice: 100 }],
+      }],
+    });
+    renderDepositNoticePage();
+
+    const field = await screen.findByLabelText('รายละเอียดรายการที่ 1');
+    expect(field.tagName).toBe('TEXTAREA');
+    fireEvent.change(field, { target: { value: `กระเบื้อง รุ่น Tribeca สี Sage\n${size}` } });
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
+    await waitFor(() => expect(api.depositNotices.update).toHaveBeenCalledTimes(1));
+    expect(api.depositNotices.update.mock.calls[0][1].items[0].description)
+      .toBe(`กระเบื้อง รุ่น Tribeca สี Sage\n${size}`);
+  });
+
   // Blank rows are dropped from the payload and the backend keeps the stored lines when `items` is
   // empty — so saving/downloading an all-blank form would "succeed" and bring the old lines back.
   it('refuses to save or download when every row was cleared, with the items error, and calls no API', async () => {
@@ -430,6 +451,22 @@ describe('DepositNoticePage', () => {
         expect(api.depositNotices.update).toHaveBeenCalledTimes(1);
         expect(showToast).not.toHaveBeenCalledWith('error', expect.anything());
       });
+    });
+
+    it('warns, naming the parts, when the server skipped some of the bundle; says nothing for a clean one', async () => {
+      const showToast = vi.fn();
+      api.depositNotices.listByTicket.mockResolvedValue({ depositNotices: [validDraftDoc] });
+      api.depositNotices.downloadPdf.mockResolvedValueOnce({ ...pdfBlob, bundleSkipped: 'po,quotation' });
+      renderDepositNoticePage({ showToast });
+
+      await pickDownload('PDF');
+
+      await waitFor(() => expect(showToast).toHaveBeenCalledWith('warning',
+        'แนบ PO และ ใบเสนอราคา ไม่ครบ กรุณาตรวจสอบไฟล์ก่อนส่งลูกค้า'));
+      showToast.mockClear();
+      await pickDownload('PDF');
+      await waitFor(() => expect(downloadBlob).toHaveBeenCalledTimes(2));
+      expect(showToast).not.toHaveBeenCalled();
     });
 
     it('saves an edited draft first (same payload as บันทึกร่าง), then downloads', async () => {

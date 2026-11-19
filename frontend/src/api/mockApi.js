@@ -9607,6 +9607,17 @@ export const api = {
       return delay(authResponse(requireSession()));
     },
   },
+  // Test-site switcher is a real-backend feature; the mock has no test site.
+  testSite: {
+    async accounts() {
+      return delay({ accounts: [] });
+    },
+    async switchTo(email) {
+      void email;
+      requireSession();
+      fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+    },
+  },
   activityLog: {
     async list(params = {}) {
       void params;

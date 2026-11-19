@@ -10,6 +10,7 @@ import { Panel } from '../../components/common/Layout.jsx';
 import { Skeleton } from '../../components/common/Skeleton.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { downloadBlob } from '../../utils/download.js';
+import { warnIfBundleSkipped } from '../../utils/userMessages.js';
 import {
   depositNoticeStatusLabel, formatMoney, formatThaiDate, quotationRecipientLabel, quotationStatusLabel,
 } from '../../utils/format.js';
@@ -102,6 +103,7 @@ export function canReadStoredImportRequests(user, summary) {
  * which is worse than an honest "not available in this view".
  */
 export function DealDocumentRegister({
+  showToast,
   // W3-10: the page header's สร้างใบแจ้งยอดเงินรับมัดจำ button is up (the page's own signal).
   depositCtaShown = false,
   ticketId,
@@ -254,6 +256,7 @@ export function DealDocumentRegister({
       ? api.depositNotices.downloadPdf(doc.id)
       : api.depositNotices.downloadXlsx(doc.id)));
     downloadBlob(blob, depositNoticeFileName(doc, ticketId), format);
+    warnIfBundleSkipped(blob, showToast);
   }
 
   async function downloadDirectQuotation(q, format) {
@@ -268,6 +271,7 @@ export function DealDocumentRegister({
     const key = `remaining-${v.id}-pdf`;
     const blob = await handleDownload(key, () => api.storedRemainingInvoices.download(v.id));
     downloadBlob(blob, v.docNumber || `draft-${v.id}`, 'pdf');
+    warnIfBundleSkipped(blob, showToast);
   }
 
   async function downloadImportRequest(row) {
@@ -494,7 +498,7 @@ export function DealDocumentRegister({
       ) : null}
 
       {remainingInvoiceDialogOpen ? (
-        <RemainingInvoiceDialog ticketId={ticketId} canWrite={canWriteRemainingInvoice}
+        <RemainingInvoiceDialog ticketId={ticketId} canWrite={canWriteRemainingInvoice} showToast={showToast}
           onClose={() => setRemainingInvoiceDialogOpen(false)} />
       ) : null}
     </Panel>

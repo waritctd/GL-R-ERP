@@ -126,7 +126,7 @@ class DocumentChainIntegrationTest extends AbstractPostgresIntegrationTest {
         quotationService.wireTicketService(ticketService);
         confirmer = transactional(quotationService);
         depositNoticeService = new DepositNoticeService(new DepositNoticeRepository(jdbc), tickets, notifications,
-            new DepositNoticePdfRenderer(), customers, legacyQuotations);
+            new DepositNoticePdfRenderer(), customers, legacyQuotations, th.co.glr.hr.support.DocumentBundles.noDownload(jdbc));
         remainingInvoiceService = new RemainingInvoiceService(new RemainingInvoiceRepository(jdbc),
             depositNoticeService, tickets, new RemainingInvoicePdfRenderer(), notifications);
         chain = new DocumentChainService(new DocumentChainRepository(jdbc), tickets, depositNoticeService,

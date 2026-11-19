@@ -47,13 +47,25 @@ class RemainingInvoiceControllerTest {
     @Test
     void fileWithFormatPdfReturnsApplicationPdfNamedDotPdf() throws Exception {
         when(service.get(eq(7L), any(UserPrincipal.class))).thenReturn(document());
-        when(service.getPdf(eq(7L), any(UserPrincipal.class))).thenReturn("%PDF-1.4\n".getBytes());
+        when(service.getPdfBundle(eq(7L), any(UserPrincipal.class)))
+            .thenReturn(new DocumentBundle.Result("%PDF-1.4\n".getBytes(), List.of()));
 
         mvc.perform(get("/api/remaining-invoices/7/file?format=pdf").session(session()))
             .andExpect(status().isOk())
             .andExpect(header().string(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"GLR6900001-1.pdf\""))
             .andExpect(content().contentType("application/pdf"))
             .andExpect(content().bytes("%PDF-1.4\n".getBytes()));
+    }
+
+    @Test
+    void pdfNamesWhatTheBundleSkipped_inAnAsciiHeader() throws Exception {
+        when(service.get(eq(7L), any(UserPrincipal.class))).thenReturn(document());
+        when(service.getPdfBundle(eq(7L), any(UserPrincipal.class)))
+            .thenReturn(new DocumentBundle.Result("%PDF-1.4\n".getBytes(), List.of("po")));
+
+        mvc.perform(get("/api/remaining-invoices/7/file?format=pdf").session(session()))
+            .andExpect(status().isOk())
+            .andExpect(header().string("X-Document-Bundle-Skipped", "po"));
     }
 
     @Test

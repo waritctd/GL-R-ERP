@@ -8,6 +8,7 @@ import java.sql.SQLException;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.Year;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
@@ -426,29 +427,64 @@ public class DepositNoticeRepository {
         }
     }
 
-    /** One stored line of a new-engine quotation, as the remaining invoice prints it: the STORED amount (never
-     * recomputed) and, for an ADJUSTMENT (ส่วนลดพิเศษ), qty -1 with its own negative amount. */
+    /** The new-engine (origin set) quotation of this deal with this number: the one a notice's reference names. */
+    public Optional<Long> findNewEngineQuotationId(long ticketId, String number) {
+        return jdbc.queryForList("SELECT quotation_id FROM sales.quotation WHERE ticket_id = :t AND number = :n"
+            + " AND origin IS NOT NULL ORDER BY quotation_id DESC LIMIT 1",
+            Map.of("t", ticketId, "n", number), Long.class).stream().findFirst();
+    }
+
+    /** One stored line of a new-engine quotation, as the notice and the remaining invoice print it: the STORED amount
+     * (never recomputed), the quotation's own ส่วนลด cell text ({@code discountLabel}), the description with the
+     * quotation's size line on a second line, and for an ADJUSTMENT (ส่วนลดพิเศษ) qty -1 with its own negative amount. */
     public record QuotationInvoiceLine(int seq, String description, BigDecimal qty, String unit, BigDecimal unitPrice,
-                                       BigDecimal salesDiscount, BigDecimal netUnitPrice, BigDecimal amount,
+                                       String discountLabel, BigDecimal netUnitPrice, BigDecimal amount,
                                        boolean adjustment) {}
 
     public List<QuotationInvoiceLine> findQuotationInvoiceLines(long quotationId) {
-        return jdbc.query("""
-            SELECT seq, description, qty, raw_unit, unit_price, sales_discount, final_unit_price, amount, line_type
-              FROM sales.quotation_item
-             WHERE quotation_id = :quotationId
-             ORDER BY seq
-            """, Map.of("quotationId", quotationId), (rs, rowNum) -> {
-                boolean adjustment = "ADJUSTMENT".equals(rs.getString("line_type"));
-                String description = rs.getString("description");
-                String unit = rs.getString("raw_unit");
-                return new QuotationInvoiceLine(rs.getInt("seq"),
-                    description == null || description.isBlank() ? "รายการสินค้า" : description,
-                    rs.getBigDecimal("qty"),
-                    adjustment ? null : (unit == null || unit.isBlank() ? "หน่วย" : unit),
-                    rs.getBigDecimal("unit_price"), rs.getBigDecimal("sales_discount"),
-                    rs.getBigDecimal("final_unit_price"), rs.getBigDecimal("amount"), adjustment);
-            });
+        List<Map<String, Object>> rows = jdbc.queryForList("""
+            SELECT qi.seq, qi.description, qi.qty, qi.raw_unit, qi.unit_price, qi.final_unit_price, qi.amount,
+                   qi.line_type, qi.discount_pct, qi.size, qi.thickness_mm, pp.width_mm, pp.height_mm,
+                   qi.price_mode AS row_price_mode, q.price_mode AS doc_price_mode, q.document_language
+              FROM sales.quotation_item qi
+              JOIN sales.quotation q ON q.quotation_id = qi.quotation_id
+              LEFT JOIN price_catalog.product_prices pp ON pp.price_id = qi.catalog_price_id
+             WHERE qi.quotation_id = :quotationId
+             ORDER BY qi.seq
+            """, Map.of("quotationId", quotationId));
+        List<QuotationInvoiceLine> out = new ArrayList<>();
+        for (Map<String, Object> r : rows) {
+            String lineType = (String) r.get("line_type");
+            boolean adjustment = "ADJUSTMENT".equals(lineType);
+            boolean tile = lineType == null || "TILE".equals(lineType);
+            boolean english = th.co.glr.hr.dealquotation.WastageCalculator.DOCUMENT_LANGUAGE_EN
+                .equals(r.get("document_language"));
+            BigDecimal unitPrice = (BigDecimal) r.get("unit_price");
+            BigDecimal net = (BigDecimal) r.get("final_unit_price");
+            String priceMode = th.co.glr.hr.dealquotation.WastageCalculator.rowPriceMode(
+                (String) r.get("doc_price_mode"), (String) r.get("row_price_mode"));
+            String label = th.co.glr.hr.dealquotation.DealQuotationLines.discountCellText(
+                lineType, priceMode, (BigDecimal) r.get("discount_pct"), unitPrice, net, english);
+            String description = (String) r.get("description");
+            description = description == null || description.isBlank() ? "รายการสินค้า" : description;
+            if (tile) {
+                BigDecimal width = (BigDecimal) r.get("width_mm");
+                BigDecimal height = (BigDecimal) r.get("height_mm");
+                String sizeLine = th.co.glr.hr.dealquotation.DealQuotationLines.sizeLine(
+                    english ? th.co.glr.hr.dealquotation.WastageCalculator.DOCUMENT_LANGUAGE_EN
+                        : th.co.glr.hr.dealquotation.WastageCalculator.DOCUMENT_LANGUAGE_TH,
+                    (String) r.get("size"), (BigDecimal) r.get("thickness_mm"), width, height);
+                if (sizeLine != null) {
+                    description = description + "\n" + sizeLine;
+                }
+            }
+            String unit = (String) r.get("raw_unit");
+            out.add(new QuotationInvoiceLine(((Number) r.get("seq")).intValue(), description,
+                (BigDecimal) r.get("qty"),
+                adjustment ? null : (unit == null || unit.isBlank() ? "หน่วย" : unit),
+                unitPrice, label, net, (BigDecimal) r.get("amount"), adjustment));
+        }
+        return out;
     }
 
     /** The quotation payable reads: id, number, stored total, document language (null = TH), and whether it is a
@@ -483,38 +519,17 @@ public class DepositNoticeRepository {
      * DepositNoticeService#itemsFromQuotation}. An ADJUSTMENT row (ส่วนลดพิเศษ) is its own line: qty
      * -1, no unit, negative amount. */
     public List<DepositNoticeItemRequest> findDealQuotationItems(long quotationId) {
-        return jdbc.query("""
-            SELECT seq, description, qty, raw_unit, unit_price, sales_discount, final_unit_price, amount, line_type
-              FROM sales.quotation_item
-             WHERE quotation_id = :quotationId
-             ORDER BY seq
-            """, Map.of("quotationId", quotationId), (rs, rowNum) -> {
-                boolean adjustment = "ADJUSTMENT".equals(rs.getString("line_type"));
-                String description = rs.getString("description");
-                if (description == null || description.isBlank()) {
-                    description = "รายการสินค้า";
-                }
-                String unit = rs.getString("raw_unit");
-                if (adjustment) {
-                    unit = "";
-                } else if (unit == null || unit.isBlank()) {
-                    unit = "หน่วย";
-                }
-                BigDecimal discount = rs.getBigDecimal("sales_discount");
-                String discountLabel = !adjustment && discount != null && discount.signum() > 0
-                    ? "ส่วนลด " + discount.stripTrailingZeros().toPlainString() + " ต่อหน่วย"
-                    : null;
-                BigDecimal qty = rs.getBigDecimal("qty");
-                BigDecimal net = rs.getBigDecimal("final_unit_price");
-                if (adjustment && net == null && qty != null && qty.signum() != 0) {
-                    // a hand-written row without a net price: derive it so the discount is kept, not lost
-                    net = rs.getBigDecimal("amount").abs().divide(qty.abs(), 2, java.math.RoundingMode.HALF_UP);
-                }
-                return new DepositNoticeItemRequest(
-                    rs.getInt("seq"), description, qty, unit,
-                    rs.getBigDecimal("unit_price"), discountLabel, net,
-                    rs.getBigDecimal("amount"));
-            });
+        List<DepositNoticeItemRequest> out = new ArrayList<>();
+        for (QuotationInvoiceLine line : findQuotationInvoiceLines(quotationId)) {
+            BigDecimal net = line.netUnitPrice();
+            if (line.adjustment() && net == null && line.qty() != null && line.qty().signum() != 0) {
+                // a hand-written row without a net price: derive it so the discount is kept, not lost
+                net = line.amount().abs().divide(line.qty().abs(), 2, java.math.RoundingMode.HALF_UP);
+            }
+            out.add(new DepositNoticeItemRequest(line.seq(), line.description(), line.qty(),
+                line.adjustment() ? "" : line.unit(), line.unitPrice(), line.discountLabel(), net, line.amount()));
+        }
+        return out;
     }
 
     private List<DepositNoticeItemDto> findItems(long docId) {

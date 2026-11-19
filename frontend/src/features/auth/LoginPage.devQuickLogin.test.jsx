@@ -55,9 +55,19 @@ describe('LoginPage dev quick-login (real backend)', () => {
     expect(onLogin.mock.calls[0][0].role).toBeUndefined();
   });
 
+  it('renders on a test-site build (VITE_TEST_SITE=true), which is not a dev server', () => {
+    vi.stubEnv('DEV', false);
+    vi.stubEnv('VITE_USE_MOCKS', 'false');
+    vi.stubEnv('VITE_TEST_SITE', 'true');
+    renderLoginPage({ onLogin: vi.fn(), loading: false, error: null });
+
+    expect(screen.getAllByTestId(/^login-dev-/)).toHaveLength(DEMO_EMAILS.length);
+  });
+
   it('is absent from a production build, so the demo password never ships', () => {
     vi.stubEnv('DEV', false);
     vi.stubEnv('VITE_USE_MOCKS', 'false');
+    vi.stubEnv('VITE_TEST_SITE', '');
     renderLoginPage({ onLogin: vi.fn(), loading: false, error: null });
 
     expect(screen.queryAllByTestId(/^login-dev-/)).toHaveLength(0);

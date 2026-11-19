@@ -56,7 +56,8 @@ const devQuickAccounts = [
 export function LoginPage({ onLogin, loading, error }) {
   const [form, setForm] = useState({ email: '', password: '' });
   const isMock = import.meta.env.VITE_USE_MOCKS === 'true';
-  const showDevQuickLogin = import.meta.env.DEV && !isMock;
+  // The seeded test site is a built bundle (DEV is false there), so it opts in with VITE_TEST_SITE.
+  const showDevQuickLogin = (import.meta.env.DEV || import.meta.env.VITE_TEST_SITE === 'true') && !isMock;
   const navigate = useNavigate();
 
   function updateField(field, value) {

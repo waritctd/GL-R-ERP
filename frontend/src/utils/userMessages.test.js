@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { sanitizeToastMessage, toUserErrorDescription, toUserErrorMessage } from './userMessages.js';
+import { warnIfBundleSkipped, sanitizeToastMessage, toUserErrorDescription, toUserErrorMessage } from './userMessages.js';
 
 describe('userMessages', () => {
   it('maps the known employee-linking implementation error to approved Thai copy', () => {
@@ -22,5 +22,16 @@ describe('userMessages', () => {
     expect(spy).toHaveBeenCalledWith('Suppressed technical error toast:', 'User is not linked to an employee');
 
     spy.mockRestore();
+  });
+
+  it('warnIfBundleSkipped toasts a warning naming the skipped parts, and is silent otherwise', () => {
+    const showToast = vi.fn();
+    warnIfBundleSkipped({ bundleSkipped: 'po,quotation' }, showToast);
+    expect(showToast).toHaveBeenCalledWith('warning', 'แนบ PO และ ใบเสนอราคา ไม่ครบ กรุณาตรวจสอบไฟล์ก่อนส่งลูกค้า');
+    showToast.mockClear();
+    warnIfBundleSkipped({ bundleSkipped: '' }, showToast);
+    warnIfBundleSkipped(new Blob(['x']), showToast);
+    warnIfBundleSkipped({ bundleSkipped: 'po' }, undefined);
+    expect(showToast).not.toHaveBeenCalled();
   });
 });

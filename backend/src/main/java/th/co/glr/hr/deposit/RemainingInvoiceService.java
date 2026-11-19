@@ -89,11 +89,11 @@ public class RemainingInvoiceService {
     }
 
     /** The same frozen snapshot as {@link #file}, as a PDF. */
-    public byte[] getPdf(long id, UserPrincipal actor) {
+    public DocumentBundle.Result getPdfBundle(long id, UserPrincipal actor) {
         RemainingInvoiceDocumentDto doc = requireStored(id);
         depositNoticeService.requireTicketViewer(doc.ticketId(), actor);
         try {
-            return renderer.toPdf(toRenderable(doc));
+            return depositNoticeService.bundled(renderer.toPdf(toRenderable(doc)), doc.ticketId(), doc.reference(), actor);
         } catch (Exception e) {
             throw new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "สร้างไฟล์ PDF ไม่สำเร็จ: " + e.getMessage());
         }

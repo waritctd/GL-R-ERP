@@ -189,7 +189,7 @@ class DepositNoticeIssueRenderOutsideTransactionIntegrationTest extends Abstract
     private DepositNoticeService service() {
         return new DepositNoticeService(docs, tickets, new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP),
             renderer, new CustomerRepository(jdbc),
-            new CustomerQuotationRepository(jdbc));
+            new CustomerQuotationRepository(jdbc), th.co.glr.hr.support.DocumentBundles.noDownload(jdbc));
     }
 
     /** A DRAFT deposit notice on a ticket that satisfies every gate in issue: owned by the fixture rep,

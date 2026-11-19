@@ -15,6 +15,7 @@ import { NotificationBell } from '../common/NotificationBell.jsx';
 import { WhatsNewBubble } from '../../features/whatsNew/WhatsNewBubble.jsx';
 import { Launcher } from './Launcher.jsx';
 import { UserMenu } from './UserMenu.jsx';
+import { TestSiteSwitcher } from './TestSiteSwitcher.jsx';
 import { ViewAsBanner } from './ViewAsBanner.jsx';
 import { ViewAsPickerModal } from './ViewAsPickerModal.jsx';
 
@@ -355,6 +356,7 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
           stays a `banner`; the flex-none header + flex-1 overflow-auto scroller keeps the topbar
           pinned at every breakpoint. */}
       <div className="flex min-w-0 flex-1 flex-col">
+        <TestSiteSwitcher user={user} />
         {user.viewAs ? <ViewAsBanner user={user} /> : null}
         <header
           className={cn(

@@ -58,10 +58,13 @@ public class DepositNoticeService {
     private final CustomerRepository customers;
     private final CustomerQuotationRepository quotations;
 
+    private final DocumentBundle bundle;
+
     public DepositNoticeService(DepositNoticeRepository docs, TicketRepository tickets,
                            NotificationRepository notifications, DepositNoticePdfRenderer renderer,
                            CustomerRepository customers,
-                           CustomerQuotationRepository quotations) {
+                           CustomerQuotationRepository quotations, DocumentBundle bundle) {
+        this.bundle            = bundle;
         this.docs              = docs;
         this.tickets           = tickets;
         this.notifications     = notifications;
@@ -390,13 +393,19 @@ public class DepositNoticeService {
         }
     }
 
-    public byte[] getPdf(long docId, UserPrincipal actor) {
+    public DocumentBundle.Result getPdfBundle(long docId, UserPrincipal actor) {
         DepositNoticeDto doc = getById(docId, actor);
         try {
-            return renderer.toPdf(renderModel(doc, bangkokToday()));
+            byte[] pdf = renderer.toPdf(renderModel(doc, bangkokToday()));
+            return bundle.bundle(pdf, doc.ticketId(), doc.reference(), actor);
         } catch (Exception e) {
             throw new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "สร้างไฟล์ PDF ไม่สำเร็จ: " + e.getMessage());
         }
+    }
+
+    /** The bundle (PO + quotation) for a download of a document of {@code ticketId}. */
+    DocumentBundle.Result bundled(byte[] pdf, long ticketId, String quotationNumber, UserPrincipal actor) {
+        return bundle.bundle(pdf, ticketId, quotationNumber, actor);
     }
 
     // ── Remaining Invoice (ข้อ 13.5) ─────────────────────────────────────────
@@ -719,10 +728,8 @@ public class DepositNoticeService {
         }
         List<RemainingInvoiceItemDto> items = new ArrayList<>();
         for (DepositNoticeRepository.QuotationInvoiceLine line : docs.findQuotationInvoiceLines(answered.id())) {
-            BigDecimal discountPerUnit = line.adjustment() || line.unitPrice() == null || line.netUnitPrice() == null
-                ? null : line.unitPrice().subtract(line.netUnitPrice());
             items.add(new RemainingInvoiceItemDto(line.seq(), line.description(), line.qty(), line.unit(),
-                line.unitPrice(), shortDiscountLabel(discountPerUnit), line.netUnitPrice(), line.amount()));
+                line.unitPrice(), line.discountLabel(), line.netUnitPrice(), line.amount()));
         }
         if (items.isEmpty()) {
             return blocked("ใบเสนอราคา " + answered.number() + " ไม่มีรายการสินค้า จึงออกใบแจ้งหนี้ไม่ได้");
@@ -947,19 +954,14 @@ public class DepositNoticeService {
         return price.multiply(qty).setScale(2, RoundingMode.HALF_UP);
     }
 
-    /** Short discount-label form: {@code "ลด " + amount}
-     * — the only form proven to fit the renderer's narrow column G without
-     * truncating it. Blank when there is no discount. Shared by BOTH item-sourcing paths below
-     * so the format can never drift between them. {@link
-     * #itemsFromDepositNoticeForRemainingInvoice} must not pass the deposit notice's own {@code
-     * discountLabel} straight through: {@code itemsFromQuotation}
-     * (DepositNoticeService's static helper, used by both {@code createDraft} and
-     * {@code OrderConfirmationService.createDepositNoticeFromQuotation}) authors it in the LONG form
-     * {@code "ส่วนลด " + amount + " ต่อหน่วย"}, which clips in column G for every
-     * notice-matched (the common) case. */
-    private String shortDiscountLabel(BigDecimal discountPerUnit) {
-        return discountPerUnit != null && discountPerUnit.signum() > 0
-            ? "ลด " + discountPerUnit.stripTrailingZeros().toPlainString() : null;
+    /** ส่วนลด cell text for a legacy CustomerQuotation line, which stores a per-unit discount AMOUNT, not a percent:
+     * the percent of the approved price ("N%"), or "Net" with no discount - the same texts the quotation prints. */
+    static String legacyDiscountLabel(BigDecimal approvedUnitPrice, BigDecimal discountPerUnit) {
+        BigDecimal pct = discountPerUnit != null && discountPerUnit.signum() > 0 && approvedUnitPrice != null
+            && approvedUnitPrice.signum() > 0
+            ? discountPerUnit.multiply(BigDecimal.valueOf(100)).divide(approvedUnitPrice, 2, RoundingMode.HALF_UP) : null;
+        return th.co.glr.hr.dealquotation.DealQuotationLines.discountCellText(
+            null, th.co.glr.hr.dealquotation.WastageCalculator.PRICE_MODE_NET, pct, null, null, false);
     }
 
     private List<RemainingInvoiceItemDto> itemsFromQuotationForRemainingInvoice(List<CustomerQuotationItemDto> quotationItems) {
@@ -969,7 +971,7 @@ public class DepositNoticeService {
                 ? item.description() : "รายการสินค้า";
             out.add(new RemainingInvoiceItemDto(
                 item.seq(), description, item.requestedQuantity(), unitLabel(item.requestedUnitBasis()),
-                item.approvedUnitPrice(), shortDiscountLabel(item.salesDiscount()), item.finalUnitPrice(),
+                item.approvedUnitPrice(), legacyDiscountLabel(item.approvedUnitPrice(), item.salesDiscount()), item.finalUnitPrice(),
                 // The customer's own accepted subtotal — never recomputed as finalUnitPrice*qty outright (see
                 // quotationLineAmount's own Javadoc for the null-handling rule).
                 quotationLineAmount(item)));
@@ -980,27 +982,10 @@ public class DepositNoticeService {
     private List<RemainingInvoiceItemDto> itemsFromDepositNoticeForRemainingInvoice(List<DepositNoticeItemDto> noticeItems) {
         List<RemainingInvoiceItemDto> out = new ArrayList<>();
         for (DepositNoticeItemDto item : noticeItems) {
-            // Normalize into the short form via shortDiscountLabel
-            // above — do NOT pass item.discountLabel() through, it is authored in the long
-            // "ส่วนลด X ต่อหน่วย" form (see itemsFromQuotation) and clips in column G. The notice
-            // doesn't store a separate discount-amount field, so the per-unit discount is derived
-            // from its own numeric unitPrice/netUnitPrice (unitPrice - netUnitPrice) rather than
-            // string-parsing discountLabel. This mirrors how those two numbers were produced in
-            // the first place: CustomerQuotationService#applyItemUpdates computes finalUnitPrice
-            // as money4(approvedUnitPrice - discount) at NUMERIC(18,4), and itemsFromQuotation
-            // maps approvedUnitPrice/finalUnitPrice onto this notice item's unitPrice/netUnitPrice
-            // — but sales.deposit_notice_item stores those two columns at NUMERIC(15,2) (V12),
-            // narrower than the 4dp the discount was computed at. So the subtraction here recovers
-            // the discount consistent with what this notice's OWN 2dp columns show (matching the
-            // remaining invoice's own printed E/H amounts) — not necessarily bit-for-bit the
-            // original 4dp figure the quotation carried. A discount of 43.1725 on this notice
-            // prints here as 43.17, same rounding the notice's unitPrice/netUnitPrice already went
-            // through, not the sharper number a quotation-sourced remaining invoice would show.
-            BigDecimal discountPerUnit = item.unitPrice() != null && item.netUnitPrice() != null
-                ? item.unitPrice().subtract(item.netUnitPrice()) : null;
+            // The notice's stored label is the quotation's own ส่วนลด cell text: carried through as-is.
             out.add(new RemainingInvoiceItemDto(
                 item.seq(), item.description(), item.qty(), item.unit(),
-                item.unitPrice(), shortDiscountLabel(discountPerUnit), item.netUnitPrice(), item.amount()));
+                item.unitPrice(), item.discountLabel(), item.netUnitPrice(), item.amount()));
         }
         return out;
     }
@@ -1386,9 +1371,7 @@ public class DepositNoticeService {
         for (CustomerQuotationItemDto item : quotationItems) {
             String description = item.description() != null && !item.description().isBlank()
                 ? item.description() : "รายการสินค้า";
-            BigDecimal discount = item.salesDiscount();
-            String discountLabel = discount != null && discount.signum() > 0
-                ? "ส่วนลด " + discount.stripTrailingZeros().toPlainString() + " ต่อหน่วย" : null;
+            String discountLabel = legacyDiscountLabel(item.approvedUnitPrice(), item.salesDiscount());
             items.add(new DepositNoticeItemRequest(
                 item.seq(), description, item.requestedQuantity(), unitLabel(item.requestedUnitBasis()),
                 item.approvedUnitPrice(), discountLabel, item.finalUnitPrice(), null));

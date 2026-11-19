@@ -18,6 +18,7 @@ import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { FormField, fieldErrorId } from '../../components/common/FormField.jsx';
 import { depositNoticeStatusLabel, formatThaiDate } from '../../utils/format.js';
 import { downloadBlob } from '../../utils/download.js';
+import { warnIfBundleSkipped } from '../../utils/userMessages.js';
 import { round2 } from '../quotations/quotationMeta.js';
 import {
   createDepositNoticeDraft, dealQuotationsWithConfirmedQueryOptions, depositNoticeFileName, resolveNoticeQuotation,
@@ -571,6 +572,7 @@ export function DepositNoticePage({ ticketId, onBack, showToast }) {
           ? await api.depositNotices.downloadPdf(doc.id)
           : await api.depositNotices.downloadXlsx(doc.id);
         downloadBlob(blob, depositNoticeFileName(doc, ticketId), extension);
+        warnIfBundleSkipped(blob, showToast);
       } catch (err) {
         showToast('error', err.message || 'ดาวน์โหลดไม่สำเร็จ');
       }
@@ -836,15 +838,16 @@ export function DepositNoticePage({ ticketId, onBack, showToast }) {
                     ) : (
                       <>
                         <span className="min-w-0" data-label="รายละเอียด">
-                          <input
+                          <textarea
                             id={`doc-item-${idx}-description`}
                             ref={(el) => { fieldRefs.current[`items.${idx}.description`] = el; }}
+                            rows={Math.max(1, String(it.description ?? '').split('\n').length)}
                             value={it.description ?? ''} placeholder="รายละเอียดสินค้า"
                             onChange={(e) => setItemField(idx, 'description', e.target.value)}
                             aria-label={`รายละเอียดรายการที่ ${idx + 1}`}
                             aria-invalid={fieldErrors[`items.${idx}.description`] ? true : undefined}
                             aria-describedby={fieldErrors[`items.${idx}.description`] ? fieldErrorId(`doc-item-${idx}-description`) : undefined}
-                            className="w-full" />
+                            className="w-full resize-y" />
                           {fieldErrors[`items.${idx}.description`] ? (
                             <span id={fieldErrorId(`doc-item-${idx}-description`)} role="alert" className="mt-1 block text-2xs font-bold text-danger">
                               {fieldErrors[`items.${idx}.description`]}

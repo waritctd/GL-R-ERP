@@ -660,6 +660,21 @@ describe('RemainingInvoiceDialog — a live ISSUED document exists', () => {
     await waitFor(() => expect(api.storedRemainingInvoices.revise).toHaveBeenCalledWith(900));
   });
 
+  it('warns when the downloaded bundle is missing its PO', async () => {
+    const showToast = vi.fn();
+    api.storedRemainingInvoices.listForTicket.mockResolvedValue({
+      remainingInvoices: [docRow({ status: 'ISSUED', docNumber: 'GLR6900001-1', baseNumber: 'GLR6900001' })],
+    });
+    api.storedRemainingInvoices.download.mockResolvedValue(Object.assign(new Blob(['x']), { bundleSkipped: 'po' }));
+    renderDialog({ showToast });
+
+    await screen.findByTestId('remaining-invoice-issued-summary');
+    fireEvent.click(screen.getByTestId('remaining-invoice-download'));
+
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith('warning',
+      'แนบ PO ไม่ครบ กรุณาตรวจสอบไฟล์ก่อนส่งลูกค้า'));
+  });
+
   it('an ISSUED document shows its preparer as read-only text, no select', async () => {
     api.storedRemainingInvoices.listForTicket.mockResolvedValue({
       remainingInvoices: [docRow({ status: 'ISSUED', docNumber: 'GLR6900001-1', baseNumber: 'GLR6900001', preparerName: 'Other Rep' })],

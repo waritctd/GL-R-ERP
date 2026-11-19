@@ -92,10 +92,12 @@ public class RemainingInvoiceController {
         RemainingInvoiceDocumentDto doc = service.get(id, user);
         String base = doc.docNumber() != null ? doc.docNumber() : "draft-" + id;
         if ("pdf".equals(format == null ? "" : format.trim().toLowerCase())) {
+            DocumentBundle.Result bundle = service.getPdfBundle(id, user);
             return ResponseEntity.ok()
                 .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + base + ".pdf\"")
+                .headers(DocumentBundle.skippedHeader(bundle))
                 .contentType(MediaType.APPLICATION_PDF)
-                .body(service.getPdf(id, user));
+                .body(bundle.pdf());
         }
         return ResponseEntity.ok()
             .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + base + ".xls\"")

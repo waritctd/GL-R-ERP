@@ -131,12 +131,13 @@ public class DepositNoticeController {
                     "application/vnd.ms-excel"))
                 .body(bytes);
         }
-        byte[] bytes = service.getPdf(docId, user);
+        DocumentBundle.Result bundle = service.getPdfBundle(docId, user);
         String filename = (doc.docNumber() != null ? doc.docNumber() : "draft") + ".pdf";
         return ResponseEntity.ok()
             .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + filename + "\"")
+            .headers(DocumentBundle.skippedHeader(bundle))
             .contentType(MediaType.APPLICATION_PDF)
-            .body(bytes);
+            .body(bundle.pdf());
     }
 
     // Remaining invoice: prefill + preview for the download dialog (ข้อ 13.5). `quotationId` is optional — see
