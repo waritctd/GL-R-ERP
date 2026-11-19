@@ -60,7 +60,7 @@ import {
 import { QuotationPlainItemRow } from './QuotationPlainItemRow.jsx';
 import { ApprovalBasisPill } from './ApprovalBasisPill.jsx';
 import { ApprovedItemsPicker } from './ApprovedItemsPicker.jsx';
-import { reusesApprovedPricesOnly, rowFromApprovedItem } from './approvedItemsReuse.js';
+import { groupForPickedLabel, locationOrNoteDiffers, reusesApprovedPricesOnly, rowFromApprovedItem } from './approvedItemsReuse.js';
 import { QuotationAdjustmentRow } from './QuotationAdjustmentRow.jsx';
 import {
   pushRecentCatalogPick, readQuotationDefaults, readRecentCatalogPicks, writeQuotationDefaults,
@@ -1112,7 +1112,9 @@ export function QuotationEditorPage({ user, showToast }) {
 
   function pickApprovedItem(reusableItem) {
     setDirty(true);
-    const groupId = groups[groups.length - 1]?.groupId ?? null;
+    const picked = groupForPickedLabel(groups, items, reusableItem.locationLabel);
+    const { groupId } = picked;
+    if (picked.groups !== groups) setGroups(picked.groups);
     const row = rowFromApprovedItem(reusableItem, docSettings.priceMode, groupId);
     setItems((prev) => insertIntoGroup(prev, row, groupId));
   }
@@ -1180,6 +1182,9 @@ export function QuotationEditorPage({ user, showToast }) {
     items, adjustments, depositPercent: terms.noDeposit ? 0 : terms.depositPercent, sourceDepositPercent, sourceTerms,
     terms, reusable: reusableQuery.data?.items ?? [], docSettings,
     locationOf: (it) => labelByGroupId.get(it.groupId) ?? it.locationLabel,
+  });
+  const locationNoteChanged = isAddOn && locationOrNoteDiffers({
+    items, reusable: reusableQuery.data?.items ?? [], locationOf: (it) => labelByGroupId.get(it.groupId) ?? it.locationLabel,
   });
   // The server's own adjustment rows, in order, once the editor is clean — what each QuotationAdjustmentRow
   // shows instead of its estimate.
@@ -2856,6 +2861,7 @@ export function QuotationEditorPage({ user, showToast }) {
               currency={currency}
               totals={{ subtotal: provisionalSubtotal, vat: provisionalVat, grand: provisionalGrand }}
               noApproval={reusesApprovedOnly}
+              blockedReason={locationNoteChanged ? 'ต้องรออนุมัติ: ตำแหน่งติดตั้งหรือหมายเหตุของรายการต่างจากที่อนุมัติไว้' : null}
               onPick={pickApprovedItem}
               onUnpick={removeItem}
               onQuantity={(clientId, field, value) => updateItem(clientId, { [field]: value })}

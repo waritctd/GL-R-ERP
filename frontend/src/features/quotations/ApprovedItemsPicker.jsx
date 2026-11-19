@@ -11,7 +11,7 @@ import { approvedPriceText, discountText } from './approvedItemsReuse.js';
  * deposit % is the first order's, the server approves on submit and nobody is asked.
  */
 export function ApprovedItemsPicker({
-  query, rows, onPick, onUnpick, onQuantity, onAddOther, totals, noApproval, currency = 'THB',
+  query, rows, onPick, onUnpick, onQuantity, onAddOther, totals, noApproval, blockedReason = null, currency = 'THB',
 }) {
   const reusable = query.data?.items ?? [];
   const pickedBySource = new Map(rows.filter((r) => r.sourceQuotationItemId != null).map((r) => [r.sourceQuotationItemId, r]));
@@ -90,7 +90,7 @@ export function ApprovedItemsPicker({
             <div className="flex justify-between text-base"><dt className="font-bold">ยอดรวม</dt><dd className="m-0 font-extrabold tabular-nums">{formatQuotationMoney(totals.grand, currency)}</dd></div>
           </dl>
           <p className={cn('m-0 text-xs font-bold', noApproval ? 'text-success' : 'text-text-muted')} data-testid="reuse-approval-note">
-            {noApproval ? 'ไม่ต้องรออนุมัติ เพราะใช้ราคาเดิมทุกรายการ' : 'ต้องขออนุมัติ เพราะมีสินค้าใหม่ ราคาที่เปลี่ยน หรือเงื่อนไขต่างจากออเดอร์แรก'}
+            {noApproval ? 'ไม่ต้องรออนุมัติ เพราะใช้ราคาเดิมทุกรายการ' : blockedReason ?? 'ต้องขออนุมัติ เพราะมีสินค้าใหม่ ราคาที่เปลี่ยน หรือเงื่อนไขต่างจากออเดอร์แรก'}
           </p>
         </div>
       )}

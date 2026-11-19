@@ -1,14 +1,16 @@
 import { rowFromServerItem } from './QuotationItemRow.jsx';
-import { lineTypeOf } from './quotationMeta.js';
+import { lineTypeOf, newLocationGroupId } from './quotationMeta.js';
 
-/** An add-on's picked line: the approved item as an editor row, price fields as approved, quantity left blank. */
+/** An add-on's picked line: the approved item as an editor row, price fields as approved, quantity left blank. The
+ * source's location heading and note carry over (the rule needs them equal); `groupId` is the group carrying that label. */
 export function rowFromApprovedItem(item, priceMode, groupId) {
   const row = rowFromServerItem({ ...item, id: null }, priceMode);
   const plain = lineTypeOf(row) === 'PLAIN';
   return {
     ...row,
     groupId,
-    locationLabel: '',
+    locationLabel: item.locationLabel ?? '',
+    itemNotes: item.itemNotes ?? '',
     sourceQuotationItemId: item.sourceQuotationItemId,
     ...(plain ? { quantity: '' } : { quantityMode: 'AREA', areaSqm: '', piecesInput: '' }),
   };
@@ -62,5 +64,31 @@ export function reusesApprovedPricesOnly({
       && blank(locationOf(it)) === blank(source.locationLabel) && blank(it.itemNotes) === blank(source.itemNotes)
       && (docSettings.priceMode ?? 'NET') === (source.documentPriceMode ?? 'NET')
       && (docSettings.documentLanguage ?? 'TH') === (source.documentLanguage ?? 'TH');
+  });
+}
+
+/**
+ * The group a picked line goes into: the existing group with the source's label, else the last group when it is blank
+ * and empty (it gets named), else a new group. Blank label: the last group, as before. Returns `{ groups, groupId }`.
+ */
+export function groupForPickedLabel(groups, items, label) {
+  const wanted = blank(label);
+  const last = groups[groups.length - 1];
+  if (wanted == null) return { groups, groupId: last?.groupId ?? null };
+  const same = groups.find((g) => blank(g.label) === wanted);
+  if (same) return { groups, groupId: same.groupId };
+  if (last && blank(last.label) == null && !items.some((it) => it.groupId === last.groupId)) {
+    return { groups: groups.map((g) => (g === last ? { ...g, label: wanted } : g)), groupId: last.groupId };
+  }
+  const groupId = newLocationGroupId();
+  return { groups: [...groups, { groupId, label: wanted }], groupId };
+}
+
+/** True when a picked line's location heading or note differs from its source's: the one reason the server's rule
+ * (DealQuotationService#sameIdentity) refuses that this caption can name. */
+export function locationOrNoteDiffers({ items, reusable, locationOf = (it) => it.locationLabel }) {
+  return items.some((it) => {
+    const source = reusable.find((r) => r.sourceQuotationItemId === it.sourceQuotationItemId);
+    return Boolean(source) && (blank(locationOf(it)) !== blank(source.locationLabel) || blank(it.itemNotes) !== blank(source.itemNotes));
   });
 }
