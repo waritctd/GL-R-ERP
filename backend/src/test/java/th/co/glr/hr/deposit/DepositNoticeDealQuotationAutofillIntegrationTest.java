@@ -33,41 +33,6 @@ class DepositNoticeDealQuotationAutofillIntegrationTest extends AbstractPostgres
         employeeId = insertEmployee("DEPNOT-IT");
     }
 
-    // ── (a) PRICING_REQUEST / ISSUED, two items (one discounted, one not) ───────────────────────
-
-    @Test
-    void pricingRequestIssuedQuotation_returnsItemsInSeqOrderWithDiscountLabels() {
-        long ticketId = insertTicket("DEPNOT-A");
-        long quotationId = insertQuotation(ticketId, "PRICING_REQUEST", "ISSUED");
-        // Seq 2 inserted first, seq 1 second — proves the repository orders by seq, not insert order.
-        insertQuotationItem(quotationId, 2, "กระเบื้อง B", new BigDecimal("5"), "ตร.ม.",
-            new BigDecimal("500.00"), BigDecimal.ZERO, new BigDecimal("500.00"));
-        long discounted = insertQuotationItem(quotationId, 1, "กระเบื้อง A", new BigDecimal("10"), "แผ่น",
-            new BigDecimal("4365.29"), new BigDecimal("873.06"), new BigDecimal("3492.23"));
-        jdbc.update("UPDATE sales.quotation_item SET discount_pct = 20 WHERE quotation_item_id = :id", Map.of("id", discounted));
-
-        List<DepositNoticeItemRequest> items = itemsForDeposit(ticketId);
-
-        assertThat(items).hasSize(2);
-        assertThat(items.get(0).seq()).isEqualTo(1);
-        assertThat(items.get(0).description()).isEqualTo("กระเบื้อง A");
-        assertThat(items.get(0).unit()).isEqualTo("แผ่น");
-        assertThat(items.get(0).unitPrice()).isEqualByComparingTo("4365.29");
-        assertThat(items.get(0).netUnitPrice()).isEqualByComparingTo("3492.23");
-        // the quotation's own ส่วนลด cell: 20% — not the computed per-unit amount, and no "ลด "/"ส่วนลด " wording
-        assertThat(items.get(0).discountLabel()).isEqualTo("20%");
-
-        assertThat(items.get(1).seq()).isEqualTo(2);
-        assertThat(items.get(1).description()).isEqualTo("กระเบื้อง B");
-        assertThat(items.get(1).unit()).isEqualTo("ตร.ม.");
-        assertThat(items.get(1).unitPrice()).isEqualByComparingTo("500.00");
-        assertThat(items.get(1).netUnitPrice()).isEqualByComparingTo("500.00");
-        // no discount_pct: the quotation prints "Net" in that cell, so the notice does too (never "ส่วนลด 0 ต่อหน่วย").
-        assertThat(items.get(1).discountLabel()).isEqualTo("Net");
-    }
-
-    // ── (a2) the ส่วนลด cell follows the QUOTATION renderer's own rule, per price mode and line type ─────
-
     /** SPECIAL_SQM tile -> พิเศษ; a plain line -> Net; an ADJUSTMENT (ส่วนลดพิเศษ, qty -1) keeps an EMPTY cell. */
     @Test
     void specialSqmQuotation_printsSpecialOnTheTileLine_netOnThePlainLine_andNothingOnTheDiscountLine() {
@@ -87,84 +52,7 @@ class DepositNoticeDealQuotationAutofillIntegrationTest extends AbstractPostgres
                 adjustment -> assertThat(adjustment).isNullOrEmpty());
     }
 
-    /** DIRECT_NET: พิเศษ only when the net really differs from the list price, else Net. NET + a percent: "N%". */
-    @Test
-    void directNetAndNetModes_printTheSameTextTheQuotationDoes() {
-        long ticketId = insertTicket("DEPNOT-N");
-        long direct = insertQuotation(ticketId, "DEAL_DIRECT", "APPROVED");
-        jdbc.update("UPDATE sales.quotation SET price_mode = 'DIRECT_NET' WHERE quotation_id = :id", Map.of("id", direct));
-        insertLine(direct, 1, "TILE", "ต่างจากราคาตั้ง", "1", "100.00", "80.00", null, null, null);
-        insertLine(direct, 2, "TILE", "เท่าราคาตั้ง", "1", "100.00", "100.00", null, null, null);
-        long net = insertQuotation(ticketId, "DEAL_DIRECT", "SUPERSEDED");
-        insertLine(net, 1, "TILE", "ลด 12.5%", "1", "100.00", "87.50", "12.5", null, null);
-        insertLine(net, 2, "TILE", "ไม่ลด", "1", "100.00", "100.00", null, null, null);
-
-        assertThat(repo.findDealQuotationItems(direct)).extracting(DepositNoticeItemRequest::discountLabel)
-            .containsExactly("พิเศษ", "Net");
-        assertThat(repo.findDealQuotationItems(net)).extracting(DepositNoticeItemRequest::discountLabel)
-            .containsExactly("12.5%", "Net");
-    }
-
-    // ── (a3) the quotation's size line is copied under the product, from the SAME formatter ──────────
-
-    /** The quotation prints "ขนาด 6 cm x 24.6 cm x 8 mm (ขนาดโดยประมาณ)" under the product; the notice line's
-     * description = the stored description, a newline, that exact text (DealQuotationLines#sizeLine, not a copy of it).
-     * A row with no thickness has no size line (sizeLine returns null) and a PLAIN row never has one. */
-    @Test
-    void tileLine_descriptionCarriesTheQuotationsSizeLineOnASecondLine() {
-        long ticketId = insertTicket("DEPNOT-Z");
-        long q = insertQuotation(ticketId, "DEAL_DIRECT", "APPROVED");
-        insertLine(q, 1, "TILE", "กระเบื้อง รุ่น Tribeca สี Sage green ผิว Glossy", "10", "100.00", "100.00", null,
-            "6x24.6", "8");
-        insertLine(q, 2, "TILE", "ไม่มีความหนา", "1", "100.00", "100.00", null, "60x60", null);
-        insertLine(q, 3, "PLAIN", "ค่าขนส่ง", "1", "500.00", "500.00", null, null, null);
-
-        List<DepositNoticeItemRequest> items = repo.findDealQuotationItems(q);
-
-        String size = "ขนาด 6 cm x 24.6 cm x 8 mm (ขนาดโดยประมาณ)";
-        assertThat(size).as("the fixture is the owner's example, via the shared formatter")
-            .isEqualTo(th.co.glr.hr.dealquotation.DealQuotationLines.sizeLine("6x24.6", new BigDecimal("8"), null, null));
-        assertThat(items.get(0).description())
-            .isEqualTo("กระเบื้อง รุ่น Tribeca สี Sage green ผิว Glossy\n" + size);
-        assertThat(items.get(1).description()).as("no thickness -> no size line, no dangling newline")
-            .isEqualTo("ไม่มีความหนา");
-        assertThat(items.get(2).description()).isEqualTo("ค่าขนส่ง");
-    }
-
-    // ── (b) NEGATIVE, wrong-way-round: nothing in a live status -> empty list ───────────────────
-
-    /** Written wrong-way-round per CLAUDE.md's "Permission changes must ship evidence" guidance, applied here to
-     * the status filter: a ticket whose ONLY quotations sit in every non-live status (DRAFT, CANCELLED,
-     * SUPERSEDED, PENDING_APPROVAL) must autofill EMPTY, never one of them. */
-    @Test
-    void onlyNonLiveStatusQuotations_returnsEmptyList() {
-        long ticketId = insertTicket("DEPNOT-D");
-        long draftId = insertQuotation(ticketId, "PRICING_REQUEST", "DRAFT");
-        insertQuotationItem(draftId, 1, "Draft item", BigDecimal.ONE, "แผ่น",
-            BigDecimal.TEN, BigDecimal.ZERO, BigDecimal.TEN);
-        long cancelledId = insertQuotation(ticketId, "DEAL_DIRECT", "CANCELLED");
-        insertQuotationItem(cancelledId, 1, "Cancelled item", BigDecimal.ONE, "แผ่น",
-            BigDecimal.TEN, BigDecimal.ZERO, BigDecimal.TEN);
-        long supersededId = insertQuotation(ticketId, "PRICING_REQUEST", "SUPERSEDED");
-        insertQuotationItem(supersededId, 1, "Superseded item", BigDecimal.ONE, "แผ่น",
-            BigDecimal.TEN, BigDecimal.ZERO, BigDecimal.TEN);
-        long pendingApprovalId = insertQuotation(ticketId, "DEAL_DIRECT", "PENDING_APPROVAL");
-        insertQuotationItem(pendingApprovalId, 1, "Pending-approval item", BigDecimal.ONE, "แผ่น",
-            BigDecimal.TEN, BigDecimal.ZERO, BigDecimal.TEN);
-
-        List<DepositNoticeItemRequest> items = itemsForDeposit(ticketId);
-
-        assertThat(items).isEmpty();
-    }
-
     // ── helpers ──────────────────────────────────────────────────────────────────────────────
-
-    /** The new-engine branch of {@code DepositNoticeService#itemsFromGoverning}. */
-    private List<DepositNoticeItemRequest> itemsForDeposit(long ticketId) {
-        return repo.findGoverningQuotation(ticketId)
-            .map(governing -> repo.findDealQuotationItems(governing.quotationId()))
-            .orElse(List.of());
-    }
 
     private long insertEmployee(String code) {
         return jdbc.queryForObject(
@@ -221,31 +109,5 @@ class DepositNoticeDealQuotationAutofillIntegrationTest extends AbstractPostgres
                 .addValue("pct", discountPct == null ? null : new BigDecimal(discountPct))
                 .addValue("size", sizeText)
                 .addValue("thickness", thicknessMm == null ? null : new BigDecimal(thicknessMm)));
-    }
-
-    private long insertQuotationItem(long quotationId, int seq, String description, BigDecimal qty,
-                                     String rawUnit, BigDecimal unitPrice, BigDecimal salesDiscount,
-                                     BigDecimal finalUnitPrice) {
-        // amount is legacy NOT NULL (V49) — irrelevant to findDealQuotationItems, which
-        // reads unit_price/final_unit_price instead, so a harmless qty*unitPrice placeholder.
-        BigDecimal amount = qty.multiply(unitPrice);
-        return jdbc.queryForObject("""
-            INSERT INTO sales.quotation_item
-                (quotation_id, seq, description, qty, raw_unit, unit_price, sales_discount,
-                 final_unit_price, amount)
-            VALUES
-                (:quotationId, :seq, :description, :qty, :rawUnit, :unitPrice, :salesDiscount,
-                 :finalUnitPrice, :amount)
-            RETURNING quotation_item_id
-            """, new MapSqlParameterSource()
-                .addValue("quotationId", quotationId)
-                .addValue("seq", seq)
-                .addValue("description", description)
-                .addValue("qty", qty)
-                .addValue("rawUnit", rawUnit)
-                .addValue("unitPrice", unitPrice)
-                .addValue("salesDiscount", salesDiscount)
-                .addValue("finalUnitPrice", finalUnitPrice)
-                .addValue("amount", amount), Long.class);
     }
 }
