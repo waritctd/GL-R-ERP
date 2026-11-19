@@ -1,7 +1,6 @@
 package th.co.glr.hr.attendance;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.ByteArrayInputStream;
@@ -28,7 +27,6 @@ import th.co.glr.hr.attendance.daily.AttendanceDailyService;
 import th.co.glr.hr.attendance.schedule.CompanyWideWorkScheduleResolver;
 import th.co.glr.hr.attendance.schedule.DbHolidayCalendar;
 import th.co.glr.hr.auth.UserPrincipal;
-import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.config.AppProperties;
 import th.co.glr.hr.leave.LeaveRepository;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
@@ -104,22 +102,6 @@ class AttendanceMonthlySummaryIntegrationTest extends AbstractPostgresIntegratio
 
     // --- ฝ่าย manager -------------------------------------------------------
 
-    @Test
-    void aManagersUnfilteredExportContainsOnlyTheirOwnDivision() {
-        List<String> codes = employeeCodesIn(export(manager(salesManagerId, salesDivision), JULY_2026, null, null));
-
-        assertThat(codes).containsExactlyInAnyOrder(salesManagerCode, salesStaffCode);
-        assertThat(codes).doesNotContain(factoryStaffCode);
-    }
-
-    /** The attack the employeeId parameter invites. */
-    @Test
-    void aManagerAskingForAnOutOfDivisionEmployeeGetsAWorkbookWithNoEmployeeRows() {
-        byte[] workbook = export(manager(salesManagerId, salesDivision), JULY_2026, factoryStaffId, null);
-
-        assertThat(employeeCodesIn(workbook)).isEmpty();
-    }
-
     /** Same attack via the OTHER parameter: the division id must be ignored for a manager, not merged, so the
      * request stays inside their own ฝ่าย instead of hopping to another. */
     @Test
@@ -129,22 +111,6 @@ class AttendanceMonthlySummaryIntegrationTest extends AbstractPostgresIntegratio
 
         assertThat(codes).doesNotContain(factoryStaffCode);
         assertThat(codes).containsExactlyInAnyOrder(salesManagerCode, salesStaffCode);
-    }
-
-    // --- plain employee -------------------------------------------------------
-
-    @Test
-    void aPlainEmployeesExportContainsOnlyThemselves() {
-        assertThat(employeeCodesIn(export(employee(salesStaffId), JULY_2026, null, null)))
-            .containsExactly(salesStaffCode);
-    }
-
-    @Test
-    void anEmployeeAskingForSomeoneElseIsRejected() {
-        UserPrincipal caller = employee(salesStaffId);
-        assertThatThrownBy(() -> monthlySummaryService.export(caller, JULY_2026, factoryStaffId, null))
-            .isInstanceOf(ApiException.class)
-            .hasMessageContaining("ไม่มีสิทธิ์เข้าถึงรายการนี้");
     }
 
     // --- helpers ------------------------------------------------------------

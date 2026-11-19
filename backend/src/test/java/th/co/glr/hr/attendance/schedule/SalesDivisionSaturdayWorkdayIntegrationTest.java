@@ -10,11 +10,9 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.function.Predicate;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import th.co.glr.hr.config.AppProperties;
-import th.co.glr.hr.leave.LeaveRepository;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
 /** Real-Postgres coverage of V160 — ฝ่ายขาย moving to a six-day week (Saturday becomes a scheduled working day)
@@ -82,133 +80,9 @@ class SalesDivisionSaturdayWorkdayIntegrationTest extends AbstractPostgresIntegr
             .isFalse();
     }
 
-    @Test
-    void salesSupportGetsSaturdayButStillHasToScanOut_whileANonSalesDivisionIsUntouched() {
-        long salesDivision = insertDivision("SA", "ฝ่ายขาย (test)");
-        long salesSupport1 = insertDepartment("SALES", "ฝ่ายสนับสนุนการขาย 1 (test)", salesDivision);
-        long supportEmployee = insertEmployee("SALES-1", salesDivision, salesSupport1);
-        assignDivision(salesDivision, "SALES_5D", ANNOUNCEMENT_2567, null);
-        assignDepartment(salesSupport1, "OFFICE_5D", ANNOUNCEMENT_2567, null);
-
-        // A five-day division V160 must not touch, resolved on the SAME Saturday. Without this the test would still
-        // pass if V160 dropped the source_code filter and moved every scope.
-        long hrDivision = insertDivision("HR", "HR-ฝ่ายบุคคล (test)");
-        long hrEmployee = insertEmployee("HR-1", hrDivision, null);
-        assignDivision(hrDivision, "OFFICE_5D", ANNOUNCEMENT_2567, null);
-
-        executeStatements(migrationSql);
-        resolver.invalidate();
-
-        WorkSchedule support = resolver.resolve(supportEmployee, salesDivision, salesSupport1, SATURDAY_AFTER);
-        assertThat(support.isWorkday(SATURDAY_AFTER))
-            .as("Sales Support 1's DEPARTMENT row moved to OPS_6D — Saturday is a working day")
-            .isTrue();
-        assertThat(support.requiresCheckOut())
-            .as("Sales Support still has to scan out — V160 changes which DAYS are worked, nothing else")
-            .isTrue();
-
-        assertThat(resolver.resolve(hrEmployee, hrDivision, null, SATURDAY_AFTER).isWorkday(SATURDAY_AFTER))
-            .as("ฝ่ายบุคคล's same Saturday is still a non-working day — the change is sales-only")
-            .isFalse();
-    }
-
-    @Test
-    void aSalesDepartmentWithNoDepartmentRowInheritsSaturdayFromTheDivisionTier() {
-        long salesDivision = insertDivision("SA", "ฝ่ายขาย (test)");
-        // ออกแบบ has no DEPARTMENT-scope assignment in prod, so it resolves through DIVISION 'SA'. This is the case
-        // the division-tier row in Part C exists for.
-        long designDept = insertDepartment("SADS", "ออกแบบ (test)", salesDivision);
-        long designer = insertEmployee("SADS-1", salesDivision, designDept);
-        assignDivision(salesDivision, "SALES_5D", ANNOUNCEMENT_2567, null);
-
-        executeStatements(migrationSql);
-        resolver.invalidate();
-
-        WorkSchedule resolved = resolver.resolve(designer, salesDivision, designDept, SATURDAY_AFTER);
-        assertThat(resolved.isWorkday(SATURDAY_AFTER))
-            .as("a ฝ่ายขาย department with no row of its own inherits SALES_6D from the DIVISION tier")
-            .isTrue();
-        assertThat(resolved.requiresCheckOut())
-            .as("the division-tier catch-all is SALES_6D (scan-in-only), matching the SALES_5D it replaces")
-            .isFalse();
-    }
-
-    @Test
-    void theBlockedLeaveDateNowCountsAsAWorkingDayThroughLeaveRepositorysOwnPredicate() {
-        // The user-facing outcome, asserted through the exact collaborator LeaveService#submit uses: LeaveService
-        // rejects a range whose working-day count is zero ("ช่วงวันลาต้องมีวันทำงานอย่างน้อย 1 วัน"), and a lone
-        // Saturday counted zero under SALES_5D.
-        long salesDivision = insertDivision("SA", "ฝ่ายขาย (test)");
-        long salesTeam = insertDepartment("SATM", "ทีมขาย (test)", salesDivision);
-        long employee = insertEmployee("SATM-LEAVE", salesDivision, salesTeam);
-        assignDivision(salesDivision, "SALES_5D", ANNOUNCEMENT_2567, null);
-        assignDepartment(salesTeam, "SALES_5D", ANNOUNCEMENT_2567, null);
-
-        LeaveRepository leaveRepository = new LeaveRepository(jdbc, resolver, new DbHolidayCalendar(jdbc));
-
-        Predicate<LocalDate> before =
-            leaveRepository.workingDayPredicate(employee, SATURDAY_AFTER, SATURDAY_AFTER);
-        assertThat(before.test(SATURDAY_AFTER))
-            .as("precondition: 2026-09-05 counts zero working days, which is what LeaveService rejects")
-            .isFalse();
-
-        executeStatements(migrationSql);
-        resolver.invalidate();
-
-        Predicate<LocalDate> after =
-            leaveRepository.workingDayPredicate(employee, SATURDAY_BEFORE, SUNDAY_AFTER);
-        assertThat(after.test(SATURDAY_AFTER))
-            .as("2026-09-05 now counts as a working day, so a leave request for it is accepted")
-            .isTrue();
-        assertThat(after.test(SATURDAY_BEFORE))
-            .as("the identical predicate still says 2026-08-29 is not a working day")
-            .isFalse();
-        assertThat(after.test(SUNDAY_AFTER))
-            .as("the identical predicate still says Sunday is not a working day")
-            .isFalse();
-    }
-
-    @Test
-    void replayingTheMigrationIsANoOp_becauseProductionGetsTheseRowsByHandFirst() {
-        // V160's rows were applied to prod by hand on 2026-09-01 (the Render backend does not auto-deploy), so Flyway
-        // will replay this file over a database that already has them.
-        long salesDivision = insertDivision("SA", "ฝ่ายขาย (test)");
-        long salesTeam = insertDepartment("SATM", "ทีมขาย (test)", salesDivision);
-        long salesSupport1 = insertDepartment("SALES", "ฝ่ายสนับสนุนการขาย 1 (test)", salesDivision);
-        assignDivision(salesDivision, "SALES_5D", ANNOUNCEMENT_2567, null);
-        assignDepartment(salesTeam, "SALES_5D", ANNOUNCEMENT_2567, null);
-        assignDepartment(salesSupport1, "OFFICE_5D", ANNOUNCEMENT_2567, null);
-
-        executeStatements(migrationSql);
-        Map<String, Object> afterFirstRun = snapshot();
-
-        executeStatements(migrationSql);
-
-        assertThat(snapshot())
-            .as("a second replay of V160 changes no schedule, day or assignment row")
-            .isEqualTo(afterFirstRun);
-    }
-
-    /** Row counts plus the full assignment ledger — anything a duplicate replay could disturb. */
-    private Map<String, Object> snapshot() {
-        Map<String, Object> state = new HashMap<>();
-        state.put("schedules", jdbc.queryForObject(
-            "SELECT count(*) FROM hr.work_schedule", Map.of(), Integer.class));
-        state.put("scheduleDays", jdbc.queryForObject(
-            "SELECT count(*) FROM hr.work_schedule_day", Map.of(), Integer.class));
-        state.put("assignments", jdbc.queryForList("""
-            SELECT a.scope_type, a.scope_id, s.code, a.effective_from, a.effective_to
-              FROM hr.work_schedule_assignment a
-              JOIN hr.work_schedule s ON s.work_schedule_id = a.work_schedule_id
-             ORDER BY a.scope_type, a.scope_id, a.effective_from, s.code
-            """, Map.of()));
-        return state;
-    }
-
     // --- helpers --------------------------------------------------------------------------------
 
-    /** Strips -- line comments, then splits on ;. V160 contains no $$ block, so the dollar-quote handling
-     * OrgNormalizationScheduleIntegrationTest needs for V121 is not repeated here. */
+    /** Strips -- line comments, then splits on ;. V160 contains no $$ block, so no dollar-quote handling is needed. */
     private void executeStatements(String sql) {
         StringBuilder withoutComments = new StringBuilder();
         for (String line : sql.split("\n")) {

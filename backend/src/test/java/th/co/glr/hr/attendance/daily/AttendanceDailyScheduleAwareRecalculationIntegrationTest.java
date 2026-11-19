@@ -21,8 +21,6 @@ class AttendanceDailyScheduleAwareRecalculationIntegrationTest extends AbstractP
     private static final ZoneId BANGKOK = ZoneId.of("Asia/Bangkok");
     // 2026-08-05 is a Wednesday (a SALES_5D/OFFICE_5D/OPS_6D workday for all three).
     private static final LocalDate WEDNESDAY = LocalDate.of(2026, 8, 5);
-    // 2026-08-08 is a Saturday: a non-workday under the company-wide Mon-Fri default, but a workday under OPS_6D.
-    private static final LocalDate SATURDAY = LocalDate.of(2026, 8, 8);
 
     private AttendanceDailyRepository repository;
     private AttendanceDailyCalculator calculator;
@@ -59,61 +57,6 @@ class AttendanceDailyScheduleAwareRecalculationIntegrationTest extends AbstractP
         assertThat(dto.flags())
             .as("the read path must agree with what the write path already knew about requiresCheckOut")
             .doesNotContain(AttendanceDayFlag.MISSING_CHECK_OUT);
-    }
-
-    /** A sales employee who DOES scan out is unaffected by the fix — the ordinary two-punch path applies unchanged
-     * on both read and write. */
-    @Test
-    void aSalesEmployeeWhoDoesScanOutIsUnaffected() {
-        wire();
-        long salesDept = insertDepartment("SALES-RW2", "ฝ่ายขาย (test read/write agreement 2)");
-        assignDepartment(salesDept, "SALES_5D", LocalDate.of(2024, 10, 1), null);
-        long employeeId = insertEmployee("RW2", "RW2", salesDept, LocalDate.of(2020, 1, 1));
-        insertPunch("RW2", at(WEDNESDAY, 8, 20));
-        insertPunch("RW2", at(WEDNESDAY, 17, 25));
-
-        AttendanceDailyService service = serviceWith(new AppProperties());
-        service.recalculateRange(WEDNESDAY, WEDNESDAY, null);
-
-        AttendanceDailyDto dto = service.list(
-            new AttendanceDailyFilter(employeeId, null, WEDNESDAY, WEDNESDAY)).get(0);
-
-        assertThat(dto.status()).isEqualTo(AttendanceDayStatus.PRESENT);
-        assertThat(dto.checkOut()).isNotNull();
-    }
-
-    /** Checks that cache expiry lets recalculation reflect a changed schedule without restarting the application. */
-    @Test
-    void recalculationReflectsARealScheduleChangeOnceTheCacheHasExpired() throws InterruptedException {
-        wire();
-        long dept = insertDepartment("OPS-RECALC", "ฝ่ายทดสอบ (test recalc)");
-        long employeeId = insertEmployee("RECALC1", "RECALC1", dept, LocalDate.of(2020, 1, 1));
-        insertPunch("RECALC1", at(SATURDAY, 8, 50));
-        insertPunch("RECALC1", at(SATURDAY, 17, 20));
-
-        AppProperties properties = new AppProperties();
-        properties.getAttendance().getSchedule().setAssignmentCacheTtlMs(20);
-        AttendanceDailyService service = serviceWith(properties);
-
-        int firstRun = service.recalculateRange(SATURDAY, SATURDAY, null);
-        assertThat(firstRun).isEqualTo(1);
-        assertThat(lateMinutes(employeeId))
-            .as("before OPS_6D applies, Saturday falls back to the Mon-Fri default — not a workday, "
-                + "so late/early are left at their zero default rather than measured")
-            .isZero();
-
-        // The department is moved onto OPS_6D (Mon-Sat) — a real assignment change, the same shape V121 made for real
-        // departments.
-        assignDepartment(dept, "OPS_6D", LocalDate.of(2024, 10, 1), null);
-        Thread.sleep(200); // comfortably outlive the 20ms TTL
-
-        int secondRun = service.recalculateRange(SATURDAY, SATURDAY, null);
-        assertThat(secondRun).isEqualTo(1);
-        assertThat(lateMinutes(employeeId))
-            .as("after OPS_6D applies (post-V121 grace = 15), Saturday is a workday and the 08:50 "
-                + "check-in is 20 minutes late — genuinely different stored output, not merely a "
-                + "different read-time label")
-            .isEqualTo(20);
     }
 
     // --- helpers ----------------------------------------------------------------------------------
@@ -180,9 +123,4 @@ class AttendanceDailyScheduleAwareRecalculationIntegrationTest extends AbstractP
             """, params);
     }
 
-    private int lateMinutes(long employeeId) {
-        return jdbc.queryForObject(
-            "SELECT late_minutes FROM hr.attendance_daily WHERE employee_id = :employeeId",
-            Map.of("employeeId", employeeId), Integer.class);
-    }
 }

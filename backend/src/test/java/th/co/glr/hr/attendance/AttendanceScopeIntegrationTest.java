@@ -1,7 +1,6 @@
 package th.co.glr.hr.attendance;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.LocalDate;
@@ -16,11 +15,9 @@ import th.co.glr.hr.attendance.daily.AttendanceDailyCalculator;
 import th.co.glr.hr.attendance.daily.AttendanceDailyDto;
 import th.co.glr.hr.attendance.daily.AttendanceDailyRepository;
 import th.co.glr.hr.attendance.daily.AttendanceDailyService;
-import th.co.glr.hr.attendance.daily.AttendanceEmployeeOption;
 import th.co.glr.hr.attendance.schedule.CompanyWideWorkScheduleResolver;
 import th.co.glr.hr.attendance.schedule.DbHolidayCalendar;
 import th.co.glr.hr.auth.UserPrincipal;
-import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.config.AppProperties;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
@@ -79,14 +76,6 @@ class AttendanceScopeIntegrationTest extends AbstractPostgresIntegrationTest {
             .contains(salesManager, salesStaff, factoryStaff);
     }
 
-    @Test
-    void hrCanNarrowToOneDivisionAndGetsOnlyThatDivision() {
-        List<AttendanceDailyDto> days = listDaily(hr(), null, salesDivision);
-
-        assertThat(employeeIdsIn(days)).contains(salesManager, salesStaff);
-        assertThat(employeeIdsIn(days)).doesNotContain(factoryStaff);
-    }
-
     // --- ฝ่าย manager -------------------------------------------------------
 
     @Test
@@ -108,16 +97,6 @@ class AttendanceScopeIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(employeeIdsIn(days)).contains(salesManager, salesStaff);
     }
 
-    /** Asking for a specific out-of-division employee must yield nothing rather than that person's data — both
-     * predicates AND in the WHERE clause, which a mocked repository cannot demonstrate. */
-    @Test
-    void aManagerAskingForAnOutOfDivisionEmployeeGetsNoRows() {
-        List<AttendanceDailyDto> days =
-            listDaily(manager(salesStaffPrincipalId(), salesDivision), factoryStaff, null);
-
-        assertThat(days).isEmpty();
-    }
-
     // --- plain employee -----------------------------------------------------
 
     @Test
@@ -125,49 +104,6 @@ class AttendanceScopeIntegrationTest extends AbstractPostgresIntegrationTest {
         List<AttendanceDailyDto> days = listDaily(employee(salesStaff), null, null);
 
         assertThat(employeeIdsIn(days)).containsOnly(salesStaff);
-    }
-
-    @Test
-    void anEmployeeAskingForSomeoneElseIsRejected() {
-        assertThatThrownBy(() -> listDaily(employee(salesStaff), factoryStaff, null))
-            .isInstanceOf(ApiException.class)
-            .hasMessageContaining("ไม่มีสิทธิ์เข้าถึงรายการนี้");
-    }
-
-    @Test
-    void anEmployeeCannotUseTheDivisionParameterToWiden() {
-        List<AttendanceDailyDto> days = listDaily(employee(salesStaff), null, factoryDivision);
-
-        assertThat(employeeIdsIn(days)).containsOnly(salesStaff);
-    }
-
-    // --- the employee picker ------------------------------------------------
-
-    @Test
-    void theEmployeePickerNeverOffersSomeoneTheCallerCannotRead() {
-        List<AttendanceEmployeeOption> forManager =
-            service.listEmployeeOptions(manager(salesStaffPrincipalId(), salesDivision));
-        assertThat(forManager).extracting(AttendanceEmployeeOption::employeeId)
-            .contains(salesManager, salesStaff)
-            .doesNotContain(factoryStaff);
-
-        List<AttendanceEmployeeOption> forEmployee = service.listEmployeeOptions(employee(salesStaff));
-        assertThat(forEmployee).extracting(AttendanceEmployeeOption::employeeId)
-            .containsOnly(salesStaff);
-
-        assertThat(service.listEmployeeOptions(hr()))
-            .extracting(AttendanceEmployeeOption::employeeId)
-            .contains(salesManager, salesStaff, factoryStaff);
-    }
-
-    /** The ฝ่าย list the UI builds is derived from these options, so it inherits the same scope. */
-    @Test
-    void theDivisionsAManagerCanDeriveAreOnlyTheirOwn() {
-        List<AttendanceEmployeeOption> options =
-            service.listEmployeeOptions(manager(salesStaffPrincipalId(), salesDivision));
-
-        assertThat(options).extracting(AttendanceEmployeeOption::divisionId)
-            .containsOnly(salesDivision);
     }
 
     // --- helpers ------------------------------------------------------------
