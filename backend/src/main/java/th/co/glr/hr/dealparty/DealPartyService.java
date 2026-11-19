@@ -307,19 +307,23 @@ public class DealPartyService {
         }
     }
 
-    private static void requireViewAccess(TicketSummaryDto summary, UserPrincipal actor) {
+    private void requireViewAccess(TicketSummaryDto summary, UserPrincipal actor) {
         String role = actor.role();
+        if (tickets.holdsAllSalesDocumentsGrant(actor)) {
+            return;
+        }
         if (!VIEW_ROLES.contains(role)) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
-        if ("sales".equals(role) && !DealOwnership.isOwnerOrKeyer(summary, actor.id())) {
+        if ("sales".equals(role) && !(DealOwnership.isOwnerOrKeyer(summary, actor.id()) || tickets.holdsAllSalesDocumentsGrant(actor))) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
     }
 
-    private static void requireManageAccess(TicketSummaryDto summary, UserPrincipal actor) {
+    private void requireManageAccess(TicketSummaryDto summary, UserPrincipal actor) {
         String role = actor.role();
-        boolean owner = "sales".equals(role) && DealOwnership.isOwnerOrKeyer(summary, actor.id());
+        boolean owner = ("sales".equals(role) && DealOwnership.isOwnerOrKeyer(summary, actor.id()))
+            || tickets.holdsAllSalesDocumentsGrant(actor);
         if (!owner && !"sales_manager".equals(role) && !"ceo".equals(role)) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }

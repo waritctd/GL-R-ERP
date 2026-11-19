@@ -377,7 +377,7 @@ public class DealQuotationService {
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบคำขอราคานี้"));
         // Owner-only, like CustomerQuotationService#requireOwner: a sales_manager is NOT admitted here (unlike
         // DealQuotationService#EDIT_ROLES for editing an EXISTING quotation).
-        if (!DealOwnership.isOwnerOrKeyer(summary.ticketCreatedById(), summary.ticketKeyedById(), actor.id())) {
+        if (!(DealOwnership.isOwnerOrKeyer(summary.ticketCreatedById(), summary.ticketKeyedById(), actor.id()) || employeeAuth.canManageAllSalesDocuments(actor))) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
         TicketSummaryDto ticket = requireTicketSummary(summary.ticketId());
@@ -670,11 +670,13 @@ public class DealQuotationService {
     public List<DealQuotationDto> listForTicket(long ticketId, UserPrincipal actor) {
         TicketSummaryDto ticket = requireTicketSummary(ticketId);
         // account is row-scoped: before the grant bypass, like #requireViewAccess.
-        if ("account".equals(actor.role())) {
+        if (hasAllDocumentsGrant(actor)) {
+            // a can_manage_all_sales_documents holder (sales / sales_manager only) acts as owner of every deal
+        } else if ("account".equals(actor.role())) {
             requireAccountScope(ticketId);
         } else if (!hasQuotationGrant(actor)) {
             requireRole(actor, VIEW_ROLES);
-            if ("sales".equals(actor.role()) && !DealOwnership.isOwnerOrKeyer(ticket, actor.id())) {
+            if ("sales".equals(actor.role()) && !ownsDealOrHolder(ticket, actor)) {
                 throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงงานนี้");
             }
         }
@@ -785,11 +787,11 @@ public class DealQuotationService {
      * including a grant-holder, is scoped to deals they created (returns their own id as the owner filter).
      */
     private Long listOwnerScope(UserPrincipal actor) {
-        boolean grant = hasQuotationGrant(actor);
+        boolean grant = hasQuotationGrant(actor) || hasAllDocumentsGrant(actor);
         if (!grant) {
             requireRole(actor, VIEW_ROLES);
         }
-        return LIST_SEE_ALL_ROLES.contains(actor.role()) ? null : actor.id();
+        return LIST_SEE_ALL_ROLES.contains(actor.role()) || employeeAuth.canManageAllSalesDocuments(actor) ? null : actor.id();
     }
 
     /** The server recomputes every number: this is the stateless preview the item editor calls on every keystroke
@@ -1670,7 +1672,7 @@ public class DealQuotationService {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
         TicketSummaryDto ticket = requireTicketSummary(quotation.ticketId());
-        if (!DealOwnership.isOwnerOrKeyer(ticket, actor.id())) {
+        if (!ownsDealOrHolder(ticket, actor)) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
     }
@@ -2956,7 +2958,11 @@ public class DealQuotationService {
      * did it themselves).
      */
     private void moveOwnerToSalesRep(TicketSummaryDto ticket, Long salesRepId, UserPrincipal actor) {
-        if (salesRepId == null || tickets.moveOwnerToSalesRep(ticket.id(), salesRepId) == 0) {
+        // A can_manage_all_sales_documents holder may set the printed พนักงานขาย but does not MOVE the deal (Ploy 2026-11-19):
+        // only who could move it before the grant: the real owner/keyer, sales_manager, ceo or a can_create_quotation holder.
+        boolean mayMove = DealOwnership.isOwnerOrKeyer(ticket, actor.id()) || "sales_manager".equals(actor.role())
+            || "ceo".equals(actor.role()) || hasQuotationGrant(actor);
+        if (!mayMove || salesRepId == null || tickets.moveOwnerToSalesRep(ticket.id(), salesRepId) == 0) {
             return;
         }
         quotations.moveSalesRep(ticket.id(), salesRepId);
@@ -3809,14 +3815,14 @@ public class DealQuotationService {
 
     /** null when {@code actor} may edit quotations on {@code ticket}; otherwise the 403's message. */
     private String editAccessRefusal(UserPrincipal actor, TicketSummaryDto ticket) {
-        boolean grant = hasQuotationGrant(actor);
+        boolean grant = hasQuotationGrant(actor) || hasAllDocumentsGrant(actor);
         if (!EDIT_ROLES.contains(actor.role()) && !grant) {
             return "ไม่มีสิทธิ์เข้าถึงรายการนี้";
         }
         if ("sales_manager".equals(actor.role()) || grant) {
             return null; // any deal
         }
-        if ("sales".equals(actor.role()) && DealOwnership.isOwnerOrKeyer(ticket, actor.id())) {
+        if ("sales".equals(actor.role()) && ownsDealOrHolder(ticket, actor)) {
             return null;
         }
         return "ไม่มีสิทธิ์เข้าถึงงานนี้";
@@ -3831,6 +3837,9 @@ public class DealQuotationService {
         // reaching this method: update, submit/cancel/createRevision/createReorder, the picture endpoints (via
         // #requireEditablePicture) and restoreRemovedItem.
         if ("PRICING_REQUEST".equals(quotation.origin())) {
+            if (hasAllDocumentsGrant(actor)) {
+                return; // a sales / sales_manager holder acts as owner of every deal
+            }
             if (!EDIT_ROLES.contains(actor.role())) {
                 throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
             }
@@ -3838,7 +3847,7 @@ public class DealQuotationService {
                 return; // any deal — same DEAL_DIRECT rule this role already gets, untouched.
             }
             TicketSummaryDto ticket = requireTicketSummary(quotation.ticketId());
-            if (!DealOwnership.isOwnerOrKeyer(ticket, actor.id())) {
+            if (!ownsDealOrHolder(ticket, actor)) {
                 throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
             }
             return;
@@ -3850,6 +3859,9 @@ public class DealQuotationService {
      * may view any deal — the grant already lets them act on any deal, so it lets them view any deal too (a strict
      * subset would mean they could create a quotation they then couldn't look at). */
     private void requireViewAccess(UserPrincipal actor, DealQuotationDto quotation) {
+        if (hasAllDocumentsGrant(actor)) {
+            return; // a sales / sales_manager holder acts as owner of every deal
+        }
         // Origin-aware: a PRICING_REQUEST row uses the NARROWER CustomerQuotationService-shaped gate (no account, no
         // quotation-grant bypass), checked FIRST with an early return so the broader DEAL_DIRECT rules never apply. Covers
         // get/render/download/pictures. account is ROW-scoped on BOTH origins: refused on a deal outside its list scope,
@@ -3874,7 +3886,7 @@ public class DealQuotationService {
         requireRole(actor, VIEW_ROLES);
         if ("sales".equals(actor.role())) {
             TicketSummaryDto ticket = requireTicketSummary(quotation.ticketId());
-            if (!DealOwnership.isOwnerOrKeyer(ticket, actor.id())) {
+            if (!ownsDealOrHolder(ticket, actor)) {
                 throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
             }
         }
@@ -3890,6 +3902,9 @@ public class DealQuotationService {
      * sales_manager, ceo) with NO {@link #hasQuotationGrant} bypass, unlike every other gate on this class.
      */
     private boolean canViewPricingRequestOriginRow(UserPrincipal actor, DealQuotationDto quotation) {
+        if (hasAllDocumentsGrant(actor)) {
+            return true;
+        }
         // account is the exception; see PRICING_REQUEST_VIEW_ROLES's comment.
         if ("account".equals(actor.role())) {
             return tickets.isInAccountScope(quotation.ticketId());
@@ -3899,9 +3914,18 @@ public class DealQuotationService {
         }
         if ("sales".equals(actor.role())) {
             TicketSummaryDto ticket = requireTicketSummary(quotation.ticketId());
-            return DealOwnership.isOwnerOrKeyer(ticket, actor.id());
+            return ownsDealOrHolder(ticket, actor);
         }
         return true;
+    }
+
+    private boolean hasAllDocumentsGrant(UserPrincipal actor) {
+        return employeeAuth.canManageAllSalesDocuments(actor);
+    }
+
+    /** Owner/keyer of the deal, or a live {@code can_manage_all_sales_documents} holder (acts as owner of every deal). */
+    private boolean ownsDealOrHolder(TicketSummaryDto ticket, UserPrincipal actor) {
+        return DealOwnership.isOwnerOrKeyer(ticket, actor.id()) || employeeAuth.canManageAllSalesDocuments(actor);
     }
 
     /** Live DB read of the per-employee grant — see EmployeeAuthRepository#canCreateQuotation for why this is never

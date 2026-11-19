@@ -227,6 +227,87 @@ class DealDocumentRegisterAuthzIntegrationTest extends AbstractPostgresIntegrati
         assertAttachmentsForbidden(salesOtherActor);
     }
 
+    // "Manage all sales documents" grant (Ploy 2026-11-18): a holder acts as OWNER of every deal in every family, whatever
+    // their role (the flag is set per person by hand). The column exists from V227; these are red until the gates admit it.
+
+    @Test
+    void grantHolder_salesRole_reachesEveryDocumentFamily_onSomeoneElsesDeal() throws Exception {
+        grant(salesOtherActor);
+
+        assertThatCode(() -> ticketService.get(ticketId, salesOtherActor)).doesNotThrowAnyException();
+        assertThatCode(() -> depositNoticeService.listByTicket(ticketId, salesOtherActor)).doesNotThrowAnyException();
+        assertNotForbidden(() -> depositNoticeService.getRemainingInvoiceOptions(ticketId, salesOtherActor));
+        assertThatCode(() -> pricingRequestService.get(pricingRequestId, salesOtherActor)).doesNotThrowAnyException();
+        assertThatCode(() -> quotationService.listForPricingRequest(pricingRequestId, salesOtherActor))
+            .doesNotThrowAnyException();
+        assertAttachmentsOk(salesOtherActor);
+    }
+
+    /** Ploy 2026-11-19: the grant counts only for the sales and sales_manager roles; an hr / account holder gets nothing extra. */
+    @Test
+    void grantHolder_inANonSalesRole_getsNothingExtra() throws Exception {
+        for (UserPrincipal nonSales : List.of(hrActor, accountActor, ceoActor)) {
+            grant(nonSales);
+        }
+
+        assertForbidden(() -> ticketService.get(ticketId, hrActor));
+        assertForbidden(() -> depositNoticeService.listByTicket(ticketId, hrActor));
+        assertAttachmentsForbidden(hrActor);
+        // account holder: cannot create a deposit notice on another deal (role gate, before anything else)
+        assertForbidden(() -> depositNoticeService.createDraft(ticketId,
+            new th.co.glr.hr.deposit.DepositNoticeDraftRequest(null, null, null, null, null, null, null, null), accountActor));
+        // the one choke point (also behind AuthResponse.canManageAllSalesDocuments): false for every non-sales role, true for sales
+        var employeeAuth = new th.co.glr.hr.auth.EmployeeAuthRepository(jdbc);
+        for (UserPrincipal nonSales : List.of(hrActor, accountActor, ceoActor)) {
+            assertThat(employeeAuth.canManageAllSalesDocuments(nonSales)).as(nonSales.role()).isFalse();
+        }
+        grant(salesOtherActor);
+        assertThat(employeeAuth.canManageAllSalesDocuments(salesOtherActor)).isTrue();
+    }
+
+    /** A holder sees every deal's pricing requests in the list (a plain rep sees only their own). */
+    @Test
+    void grantHolder_pricingRequestListShowsOtherRepsRequests() {
+        assertThat(pricingRequestService.list(null, null, false, salesOtherActor)).isEmpty();
+        grant(salesOtherActor);
+
+        assertThat(pricingRequestService.list(null, null, false, salesOtherActor))
+            .extracting(r -> r.id()).contains(pricingRequestId);
+    }
+
+    /** Pin: an inactive holder is refused (the live read only counts active employees). */
+    @Test
+    void inactiveGrantHolder_isRefused() throws Exception {
+        grant(salesOtherActor);
+        jdbc.update("UPDATE hr.employee SET is_active = FALSE WHERE employee_id = :id", Map.of("id", salesOtherActor.id()));
+
+        assertForbidden(() -> depositNoticeService.listByTicket(ticketId, salesOtherActor));
+        assertAttachmentsForbidden(salesOtherActor);
+    }
+
+    /** Pin: the grant belongs to the person who has it, nobody else. */
+    @Test
+    void grantOnOneRep_doesNotLeakToAnother() throws Exception {
+        grant(salesManagerActor);
+
+        assertForbidden(() -> depositNoticeService.listByTicket(ticketId, salesOtherActor));
+        assertAttachmentsForbidden(salesOtherActor);
+    }
+
+    private void grant(UserPrincipal holder) {
+        jdbc.update("UPDATE hr.employee SET can_manage_all_sales_documents = TRUE WHERE employee_id = :id",
+            Map.of("id", holder.id()));
+    }
+
+    private static void assertNotForbidden(org.assertj.core.api.ThrowableAssert.ThrowingCallable callable) {
+        Throwable t = org.assertj.core.api.Assertions.catchThrowable(callable);
+        if (t instanceof ApiException e) {
+            assertThat(e.getStatus()).isNotEqualTo(org.springframework.http.HttpStatus.FORBIDDEN);
+        } else {
+            assertThat(t).isNull();
+        }
+    }
+
     // hr / employee cannot reach any of it
 
     @Test

@@ -36,8 +36,9 @@ import {
   newLocationGroupId,
   REMAINDER_MODE_OPTIONS, UNLABELLED_LOCATION_TEXT, validateQuotationItem, VALIDITY_DAYS_OPTIONS,
   VALIDITY_MODE_OPTIONS, FULL_PAYMENT_TERM_OPTIONS,
-  carryContactDetails,
+  carryContactDetails, hasDealQuotationGrant,
 } from './quotationMeta.js';
+import { isOwnerOrKeyer } from '../tickets/dealOwnership.js';
 import { CustomerDetailsFields } from './CustomerDetailsFields.jsx';
 import { ChangeCustomerModal } from './ChangeCustomerModal.jsx';
 import { DealCustomerCard, ExistingDealNotice, QuotationRecipientField } from './DealCustomerCard.jsx';
@@ -242,6 +243,11 @@ export function QuotationEditorPage({ user, showToast }) {
     enabled: !!effectiveTicketId && (!id || quotation?.docStatus === 'DRAFT'),
   });
   const ticket = ticketQuery.data ?? null;
+  // The pick moves the owner only for who could move it before the all-documents grant (backend DealQuotationService#moveOwnerToSalesRep's
+  // mayMove): the real owner/keyer, sales_manager, CEO or a can_create_quotation holder. A canManageAllSalesDocuments holder
+  // only changes the printed rep, so no hint for them. No ticket yet = a new deal the actor will own.
+  const salesRepMovesOwner = !ticket || isOwnerOrKeyer(ticket, user?.id) || user?.role === 'sales_manager'
+    || user?.role === 'ceo' || hasDealQuotationGrant(user);
 
   // V204 deal parties (deal-party-model.md). `?party=` names the contractor a NEW quotation is for
   // (the deal page's เสนอราคา link); an existing quotation carries its own partyId. The party's
@@ -2552,7 +2558,7 @@ export function QuotationEditorPage({ user, showToast }) {
                     phone for a selected override comes from the last SAVED value
                     (quotation.salesRepDisplayPhone); the options list carries no phone, so an
                     unsaved selection previews none until the next save. */}
-                <FormField label="พนักงานขาย" htmlFor="salesRepDisplayIdCard" hint={SALES_REP_MOVES_OWNER_HINT}>
+                <FormField label="พนักงานขาย" htmlFor="salesRepDisplayIdCard" hint={salesRepMovesOwner ? SALES_REP_MOVES_OWNER_HINT : undefined}>
                   <select
                     id="salesRepDisplayIdCard"
                     value={terms.salesRepDisplayId}
@@ -3166,7 +3172,7 @@ export function QuotationEditorPage({ user, showToast }) {
               <FormField
                 label="แสดงชื่อพนักงานขายเป็น"
                 htmlFor="salesRepDisplayId"
-                hint={`ค่าเริ่มต้น = ชื่อพนักงานขายจริง — มีผลถึงเบอร์โทรบนหัวเอกสารด้วย. ${SALES_REP_MOVES_OWNER_HINT}`}
+                hint={`ค่าเริ่มต้น = ชื่อพนักงานขายจริง — มีผลถึงเบอร์โทรบนหัวเอกสารด้วย.${salesRepMovesOwner ? ` ${SALES_REP_MOVES_OWNER_HINT}` : ''}`}
               >
                 <select
                   id="salesRepDisplayId"

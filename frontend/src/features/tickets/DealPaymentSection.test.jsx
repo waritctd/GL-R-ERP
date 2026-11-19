@@ -216,6 +216,19 @@ describe('DealPaymentSection — step 1 ใบแจ้งยอดเงิน�
     expect(shown.sort()).toEqual([...EXPECTED[state][role]].sort());
   });
 
+  // "Manage all sales documents" grant (Ploy 2026-11-18): the holder acts as the owner of every deal's documents, so the
+  // draft's edit/issue controls show on a deal they neither own nor keyed. `canManageAllSalesDocuments` is the
+  // AuthResponse hint carried onto the user (like canCreateQuotation); the backend re-reads the grant live.
+  it.each([['sales', otherSales], ['sales_manager', salesManager]])(
+    'draft: a canManageAllSalesDocuments holder (%s) gets ตัวอย่าง, แก้ไขรายการ and ออกเอกสาร on a deal they do not own',
+    async (_role, base) => {
+      renderSection({ ...STATES.draft.props, user: { ...base, canManageAllSalesDocuments: true } });
+      await settled();
+      const shown = BUTTONS.filter((name) => deposit().queryByRole('button', { name }) || deposit().queryByRole('link', { name }));
+      expect(shown.sort()).toEqual(['ตัวอย่าง', 'แก้ไขรายการ', 'ออกเอกสาร'].sort());
+    },
+  );
+
   it('draft: the owner edit link opens /tickets/:id/deposit; the row says it is a draft', async () => {
     renderSection({ ...STATES.draft.props });
     await settled();
