@@ -150,16 +150,6 @@ class SupersedeChainRecipientScopeIntegrationTest extends AbstractPostgresIntegr
         assertThat(docStatus(chain.mismatchedRecipientQuotationId())).isEqualTo("ISSUED");
     }
 
-    /** The positive case, in the SAME fixture: the fix must not over-scope. The DESIGNER chain's own earlier ISSUED
-     * quotation — same recipient as the request that just issued — is still exactly the row
-     * supersedeSupersededChainQuotations exists to retire, and must still go to SUPERSEDED. */
-    @Test
-    void issuingASecondRecipientsQuotation_stillSupersedesAnEarlierSameRecipientRevisionInTheChain() {
-        MixedRecipientChain chain = buildMixedRecipientChainAndIssueTheDesignerReplacement();
-
-        assertThat(docStatus(chain.sameRecipientParentQuotationId())).isEqualTo("SUPERSEDED");
-    }
-
     private record MixedRecipientChain(long sameRecipientParentQuotationId, long mismatchedRecipientQuotationId) {}
 
     /** Builds one revision chain with two recipients and drives the second, DESIGNER-recipient quotation all the

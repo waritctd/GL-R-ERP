@@ -174,11 +174,6 @@ public abstract class AbstractStockLineIntegrationTest extends AbstractPostgresI
         return line(model, catalogProductId, factory, pieces, "ไทย-สต็อก", 3, 7, null);
     }
 
-    /** An import line with NO factory, NO catalog link (a free-text product Import must route). */
-    protected PricingRequestItemRequest importLineWithoutFactory(String model, int pieces) {
-        return line(model, null, null, pieces, "ไทย-สต็อก", 3, 7, null);
-    }
-
     /**
      * An import line with a free-text factory (routable through the quote step) but NO catalog link,
      * so it reaches startReview UNCOSTABLE and is set aside (frozenLandedCost == null).
@@ -204,12 +199,6 @@ public abstract class AbstractStockLineIntegrationTest extends AbstractPostgresI
     protected PricingRequestItemRequest stockLineWithCatalog(String model, String stockSource,
                                                              long catalogProductId, String factory, int pieces) {
         return line(model, catalogProductId, factory, pieces, null, null, null, stockSource);
-    }
-
-    /** A line that is COMPLETE as an import line (origin country + lead time) but carries an arbitrary stockSource
-     * - used to probe source validation without tripping an unrelated "missing origin country" 400 first. */
-    protected PricingRequestItemRequest lineWithFullImportFields(String model, String stockSource, int pieces) {
-        return line(model, null, null, pieces, "ไทย-สต็อก", 3, 7, stockSource);
     }
 
     private PricingRequestItemRequest line(String model, Long catalogProductId, String factory, int pieces,

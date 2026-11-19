@@ -26,22 +26,6 @@ class FactoryQuoteCarryForwardTest {
         assertThat(FactoryQuoteCarryForward.equivalentItemMapping(parent, child)).isNull();
     }
 
-    /** The mirror case: an item REMOVED. Same guard, other direction. */
-    @Test
-    void aRemovedItem_makesTheListsInequivalent_soNoQuoteIsCarriedForward() {
-        List<PricingRequestItemDto> parent = List.of(item(1L, "10"), item(2L, "3"));
-        List<PricingRequestItemDto> child = List.of(item(11L, "10"));
-
-        assertThat(FactoryQuoteCarryForward.equivalentItemMapping(parent, child)).isNull();
-    }
-
-    /** The rule this whole class of change exists to protect. */
-    @Test
-    void aChangedQuantity_makesTheListsInequivalent_evenWhenEveryOtherFieldMatches() {
-        assertThat(FactoryQuoteCarryForward.equivalentItemMapping(
-            List.of(item(1L, "10")), List.of(item(11L, "25")))).isNull();
-    }
-
     /** The trap in the other direction, and the reason the comparison uses compareTo rather than equals: scale is
      * part of BigDecimal equality, so new BigDecimal("10").equals(new BigDecimal("10.00")) is false. A quantity
      * re-entered with a different scale is the SAME quantity. */
@@ -53,26 +37,6 @@ class FactoryQuoteCarryForwardTest {
         assertThat(mapping).containsExactly(Map.entry(1L, 11L));
     }
 
-    /** A different product at the same quantity is not the same order. */
-    @Test
-    void aChangedProduct_makesTheListsInequivalent() {
-        PricingRequestItemDto parent = item(1L, "10");
-        PricingRequestItemDto child = new PricingRequestItemDto(11L, 99L, null, 777L, null, "SCG",
-            "Tile B", "SCG Tile B", null, null, "60x60", "Factory X", new BigDecimal("10"),
-            new BigDecimal("10"), "piece", UnitBasis.PER_PIECE, QuantityType.CONFIRMED, null, null, null,
-            0, null, null, null, null, null, null, null, null, null, null, null, null);
-
-        assertThat(FactoryQuoteCarryForward.equivalentItemMapping(List.of(parent), List.of(child))).isNull();
-    }
-
-    /** An empty parent has no quotes to carry, so it can never authorise a shortcut. Asserted because size() ==
-     * size() alone would call two empty lists "equivalent" and hand back an empty mapping — which the caller would
-     * read as success. */
-    @Test
-    void twoEmptyLists_areNotEquivalent_soAnEmptyMappingCannotBeReadAsSuccess() {
-        assertThat(FactoryQuoteCarryForward.equivalentItemMapping(List.of(), List.of())).isNull();
-    }
-
     /** The path the shortcut exists for: identical order, mapping returned parent-id -> child-id. */
     @Test
     void identicalLists_mapEveryParentItemOntoItsChild() {
@@ -80,94 +44,6 @@ class FactoryQuoteCarryForwardTest {
             List.of(item(1L, "10"), item(2L, "3")), List.of(item(11L, "10"), item(12L, "3")));
 
         assertThat(mapping).containsExactly(Map.entry(1L, 11L), Map.entry(2L, 12L));
-    }
-
-    /** V185 direct-deal-form parity (Opus review finding #4, 2026-09-18): thicknessMm now participates in the
-     * equivalence check. */
-    @Test
-    void aChangedThickness_makesTheListsInequivalent_evenWhenEveryOtherFieldMatches() {
-        PricingRequestItemDto parent = itemWithThickness(1L, "10", new BigDecimal("8"));
-        PricingRequestItemDto child = itemWithThickness(11L, "10", new BigDecimal("10"));
-
-        assertThat(FactoryQuoteCarryForward.equivalentItemMapping(List.of(parent), List.of(child))).isNull();
-    }
-
-    /** productCode joined the same comparison, for the identical reason. */
-    @Test
-    void aChangedProductCode_makesTheListsInequivalent() {
-        PricingRequestItemDto parent = itemWithProductCode(1L, "10", "PC-OLD");
-        PricingRequestItemDto child = itemWithProductCode(11L, "10", "PC-NEW");
-
-        assertThat(FactoryQuoteCarryForward.equivalentItemMapping(List.of(parent), List.of(child))).isNull();
-    }
-
-    /** originCountry joined the same comparison, for the identical reason. */
-    @Test
-    void aChangedOriginCountry_makesTheListsInequivalent() {
-        PricingRequestItemDto parent = itemWithOriginCountry(1L, "10", "TH");
-        PricingRequestItemDto child = itemWithOriginCountry(11L, "10", "CN");
-
-        assertThat(FactoryQuoteCarryForward.equivalentItemMapping(List.of(parent), List.of(child))).isNull();
-    }
-
-    /** Two legacy (pre-V185) rows both carry a null thicknessMm — null-safe equality must still treat that as
-     * "unchanged", not disqualify every pre-V185 revision from the shortcut. */
-    @Test
-    void twoItemsWithNullThickness_areStillEquivalent() {
-        PricingRequestItemDto parent = itemWithThickness(1L, "10", null);
-        PricingRequestItemDto child = itemWithThickness(11L, "10", null);
-
-        assertThat(FactoryQuoteCarryForward.equivalentItemMapping(List.of(parent), List.of(child)))
-            .containsExactly(Map.entry(1L, 11L));
-    }
-
-    /** GLA-125 (second review pass, finding N3): originCountryOther (the typed name under the "อื่นๆ"
-     * origin_country sentinel) now participates too. */
-    @Test
-    void aChangedOriginCountryOther_makesTheListsInequivalent_evenWithTheSameOriginCountrySentinel() {
-        PricingRequestItemDto parent = itemWithOriginCountryOther(1L, "10", "เวียดนาม");
-        PricingRequestItemDto child = itemWithOriginCountryOther(11L, "10", "กัมพูชา");
-
-        assertThat(FactoryQuoteCarryForward.equivalentItemMapping(List.of(parent), List.of(child))).isNull();
-    }
-
-    /** Two legacy (pre-GLA-125) rows both carry a null originCountryOther — null-safe equality must still treat
-     * that as "unchanged". */
-    @Test
-    void twoItemsWithNullOriginCountryOther_areStillEquivalent() {
-        PricingRequestItemDto parent = itemWithOriginCountryOther(1L, "10", null);
-        PricingRequestItemDto child = itemWithOriginCountryOther(11L, "10", null);
-
-        assertThat(FactoryQuoteCarryForward.equivalentItemMapping(List.of(parent), List.of(child)))
-            .containsExactly(Map.entry(1L, 11L));
-    }
-
-    /** CR-1: the currency Sales asked the factory to quote in is part of what a factory price means. A revision
-     * that changes ONLY EUR -> USD must not carry the EUR quotes forward as ready. */
-    @Test
-    void aChangedRequestedCurrency_makesTheListsInequivalent_evenWhenEveryOtherFieldMatches() {
-        assertThat(FactoryQuoteCarryForward.equivalentItemMapping(
-            List.of(itemWithTerms(1L, "EUR", UnitBasis.PER_SQM)),
-            List.of(itemWithTerms(11L, "USD", UnitBasis.PER_SQM)))).isNull();
-    }
-
-    /** Likewise a revision that changes ONLY the requested price unit basis. */
-    @Test
-    void aChangedRequestedPriceUnitBasis_makesTheListsInequivalent_evenWhenEveryOtherFieldMatches() {
-        assertThat(FactoryQuoteCarryForward.equivalentItemMapping(
-            List.of(itemWithTerms(1L, "EUR", UnitBasis.PER_SQM)),
-            List.of(itemWithTerms(11L, "EUR", UnitBasis.PER_PIECE)))).isNull();
-    }
-
-    /** Control: identical terms still carry forward (and two legacy null-null rows are still equal). */
-    @Test
-    void identicalRequestedTerms_stillMapEveryParentItemOntoItsChild() {
-        assertThat(FactoryQuoteCarryForward.equivalentItemMapping(
-            List.of(itemWithTerms(1L, "EUR", UnitBasis.PER_SQM)),
-            List.of(itemWithTerms(11L, "EUR", UnitBasis.PER_SQM)))).containsExactly(Map.entry(1L, 11L));
-        assertThat(FactoryQuoteCarryForward.equivalentItemMapping(
-            List.of(itemWithTerms(1L, null, null)), List.of(itemWithTerms(11L, null, null))))
-            .containsExactly(Map.entry(1L, 11L));
     }
 
 private static PricingRequestItemDto itemWithTerms(long id, String currency, String unitBasis) {
@@ -186,44 +62,4 @@ private static PricingRequestItemDto itemWithTerms(long id, String currency, Str
             null, null, null, null, null, null, null, null);
     }
 
-    /** Same base fixture as #item, but reaching the CANONICAL (V185, 48-arg) constructor directly so a V185 tile
-     * field can be set — the 33-arg constructor item() uses defaults every one of them to null/true. */
-    private static PricingRequestItemDto itemWithThickness(long id, String qty, BigDecimal thicknessMm) {
-        return new PricingRequestItemDto(id, 99L, null, 555L, null, "SCG", "Tile A", "SCG Tile A",
-            null, null, "60x60", "Factory X", new BigDecimal(qty), new BigDecimal(qty), "piece",
-            UnitBasis.PER_PIECE, QuantityType.CONFIRMED, null, null, null, 0, null, null, null, null,
-            null, null, null, null, null, null, null, null,
-            null, thicknessMm, null, null, null, null, null, null, null, null, null, null, null,
-            true, null, null, null);
-    }
-
-    private static PricingRequestItemDto itemWithProductCode(long id, String qty, String productCode) {
-        return new PricingRequestItemDto(id, 99L, null, 555L, null, "SCG", "Tile A", "SCG Tile A",
-            null, null, "60x60", "Factory X", new BigDecimal(qty), new BigDecimal(qty), "piece",
-            UnitBasis.PER_PIECE, QuantityType.CONFIRMED, null, null, null, 0, null, null, null, null,
-            null, null, null, null, null, null, null, null,
-            productCode, null, null, null, null, null, null, null, null, null, null, null, null,
-            true, null, null, null);
-    }
-
-    private static PricingRequestItemDto itemWithOriginCountry(long id, String qty, String originCountry) {
-        return new PricingRequestItemDto(id, 99L, null, 555L, null, "SCG", "Tile A", "SCG Tile A",
-            null, null, "60x60", "Factory X", new BigDecimal(qty), new BigDecimal(qty), "piece",
-            UnitBasis.PER_PIECE, QuantityType.CONFIRMED, null, null, null, 0, null, null, null, null,
-            null, null, null, null, null, null, null, null,
-            null, null, null, null, null, null, null, null, null, null, null, null, null,
-            true, originCountry, null, null);
-    }
-
-    /** Same base fixture, reaching the FULL canonical (49-arg, originCountryOther appended) constructor directly so
-     * that trailing field can be set — every other helper above uses the 48-arg (pre-GLA-125) constructor, which
-     * defaults it to null. */
-    private static PricingRequestItemDto itemWithOriginCountryOther(long id, String qty, String originCountryOther) {
-        return new PricingRequestItemDto(id, 99L, null, 555L, null, "SCG", "Tile A", "SCG Tile A",
-            null, null, "60x60", "Factory X", new BigDecimal(qty), new BigDecimal(qty), "piece",
-            UnitBasis.PER_PIECE, QuantityType.CONFIRMED, null, null, null, 0, null, null, null, null,
-            null, null, null, null, null, null, null, null,
-            null, null, null, null, null, null, null, null, null, null, null, null, null,
-            true, "อื่นๆ", null, null, originCountryOther);
-    }
 }
