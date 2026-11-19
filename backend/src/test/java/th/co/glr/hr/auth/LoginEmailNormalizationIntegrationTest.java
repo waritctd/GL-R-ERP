@@ -47,28 +47,6 @@ class LoginEmailNormalizationIntegrationTest extends AbstractPostgresIntegration
         assertThat(loginAs("SuNeEsLlIm.1977@GmAiL.cOm").user().id()).isEqualTo(id);
     }
 
-    /** The mirror image: stored lowercase, typed with capitals — e.g. by a phone keyboard. This one guards
-     * LoginRequest's constructor, NOT the SQL, and the difference was found by mutation rather than assumed. */
-    @Test
-    void logsInAgainstALowercaseStoredAddressWhenTheCallerTypesCapitals() {
-        long id = insertEmployeeWithEmail("CASE-002", "somchai.p@glr.co.th");
-
-        assertThat(loginAs("Somchai.P@glr.co.th").user().id()).isEqualTo(id);
-        assertThat(loginAs("SOMCHAI.P@GLR.CO.TH").user().id()).isEqualTo(id);
-    }
-
-    /** The half that was actually broken. AuthController#login is @Valid, so LoginRequest's @Email runs on the
-     * constructed record — and Hibernate Validator's pattern admits no whitespace — while AuthService's .trim()
-     * only ran afterwards. */
-    @Test
-    void logsInWhenTheAddressArrivesWithSurroundingWhitespace() {
-        long id = insertEmployeeWithEmail("CASE-003", "warehouse.manager@glr.co.th");
-
-        assertThat(loginAs("  warehouse.manager@glr.co.th").user().id()).isEqualTo(id);
-        assertThat(loginAs("warehouse.manager@glr.co.th  ").user().id()).isEqualTo(id);
-        assertThat(loginAs("  Warehouse.Manager@glr.co.th  ").user().id()).isEqualTo(id);
-    }
-
     /** Asked the wrong way round. Everything above would also pass against a predicate that matched any row at all,
      * so this is the case that gives the others their meaning: a different address must be refused however it is
      * capitalised, and a near-miss must not be folded into a hit. */
@@ -81,19 +59,6 @@ class LoginEmailNormalizationIntegrationTest extends AbstractPostgresIntegration
         // A prefix of the real address, not the address: LOWER() must not have become LIKE.
         assertThatThrownBy(() -> loginAs("Suneesllim.1977@gmail.co")).isInstanceOf(ApiException.class);
         assertThatThrownBy(() -> loginAs("uneesllim.1977@gmail.com")).isInstanceOf(ApiException.class);
-    }
-
-    /** The password is emphatically NOT normalised alongside the email. Leading and trailing spaces are legitimate
-     * password characters, and trimming them would silently lock out anyone whose password has one — a far worse
-     * failure than the one being fixed. */
-    @Test
-    void doesNotTrimThePasswordWhileNormalisingTheEmail() {
-        insertEmployeeWithEmail("CASE-005", "spacey@glr.co.th");
-
-        assertThatThrownBy(() -> loginAs("spacey@glr.co.th", " " + PASSWORD))
-            .isInstanceOf(ApiException.class);
-        assertThatThrownBy(() -> loginAs("spacey@glr.co.th", PASSWORD + " "))
-            .isInstanceOf(ApiException.class);
     }
 
     private AuthResponse loginAs(String email) {

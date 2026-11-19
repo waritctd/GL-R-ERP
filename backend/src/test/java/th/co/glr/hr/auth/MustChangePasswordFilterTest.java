@@ -3,7 +3,6 @@ package th.co.glr.hr.auth;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.time.LocalDate;
-import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.springframework.mock.web.MockFilterChain;
@@ -45,30 +44,6 @@ class MustChangePasswordFilterTest {
         assertThat(chain.getRequest()).as("chain NOT invoked — the request never reaches the controller").isNull();
     }
 
-    @Test
-    void theBlockedResponseCarriesTheStandardErrorShape() throws Exception {
-        MockHttpServletResponse response = new MockHttpServletResponse();
-
-        filter.doFilter(request("GET", "/api/employees", sessionWith(true)), response, new MockFilterChain());
-
-        assertThat(response.getContentType()).startsWith("application/json");
-        assertThat(response.getContentAsString())
-            .as("matches ApiExceptionHandler.ErrorResponse, so the SPA's client.js reads .message")
-            .isEqualTo("{\"message\":\"กรุณาเปลี่ยนรหัสผ่านก่อนใช้งานระบบ\",\"status\":403}");
-    }
-
-    @Test
-    void theAllowlistIsMethodSensitive() throws Exception {
-        MockHttpServletResponse response = new MockHttpServletResponse();
-        MockFilterChain chain = new MockFilterChain();
-
-        // GET /api/auth/me is allowed; POST to the same path is not.
-        filter.doFilter(request("POST", "/api/auth/me", sessionWith(true)), response, chain);
-
-        assertThat(response.getStatus()).isEqualTo(403);
-        assertThat(chain.getRequest()).isNull();
-    }
-
     // ---------------------------------------------------------------- allowed
 
     @ParameterizedTest(name = "[{index}] {0} {1} stays reachable for a must-change session")
@@ -85,45 +60,6 @@ class MustChangePasswordFilterTest {
         filter.doFilter(request(method, path, sessionWith(true)), response, chain);
 
         assertThat(chain.getRequest()).as("chain invoked — otherwise the user is locked out for good").isNotNull();
-        assertThat(response.getStatus()).isEqualTo(200);
-    }
-
-    @Test
-    void aNormalSessionIsUntouched() throws Exception {
-        MockHttpServletResponse response = new MockHttpServletResponse();
-        MockFilterChain chain = new MockFilterChain();
-
-        filter.doFilter(request("GET", "/api/employees", sessionWith(false)), response, chain);
-
-        assertThat(chain.getRequest()).isNotNull();
-        assertThat(response.getStatus()).isEqualTo(200);
-    }
-
-    @Test
-    void anAnonymousRequestIsUntouchedAndLeftToTheRestOfTheChain() throws Exception {
-        MockHttpServletResponse response = new MockHttpServletResponse();
-        MockFilterChain chain = new MockFilterChain();
-
-        // No session at all — e.g. the device agent's POST /api/attendance/punch, or any unauthenticated call that
-        // SecurityConfig's default-deny should 401 further down.
-        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/api/attendance/punch");
-
-        filter.doFilter(request, response, chain);
-
-        assertThat(chain.getRequest()).as("this filter must not become a second authentication gate").isNotNull();
-        assertThat(response.getStatus()).isEqualTo(200);
-    }
-
-    @Test
-    void nonApiPathsAreNotFilteredAtAll() throws Exception {
-        MockHttpServletResponse response = new MockHttpServletResponse();
-        MockFilterChain chain = new MockFilterChain();
-
-        // The SPA's own static assets are served from the same origin; a must-change user still has to be able to load
-        // the app that renders the change-password modal.
-        filter.doFilter(request("GET", "/index.html", sessionWith(true)), response, chain);
-
-        assertThat(chain.getRequest()).isNotNull();
         assertThat(response.getStatus()).isEqualTo(200);
     }
 

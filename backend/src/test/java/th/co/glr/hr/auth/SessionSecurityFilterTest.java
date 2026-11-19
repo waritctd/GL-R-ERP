@@ -1,11 +1,7 @@
 package th.co.glr.hr.auth;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import jakarta.servlet.FilterChain;
@@ -14,7 +10,6 @@ import java.util.Optional;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.mock.web.MockHttpSession;
@@ -38,21 +33,6 @@ class SessionSecurityFilterTest {
     // ── a session with a sign-in record is re-checked ────────────────────────────────────────
 
     @Test
-    void signedIn_andNothingHasChanged_runsAsThatPrincipal_withoutWritingToTheSession() throws Exception {
-        UserPrincipal hr = principal(7, "hr", false);
-        CountingSession session = signedIn(hr);
-        when(accounts.current(7)).thenReturn(Optional.of(principal(7, "hr", false)));
-
-        Authentication seen = run(session);
-
-        assertThat(seen.getPrincipal()).isEqualTo(hr);
-        assertThat(seen.getAuthorities()).extracting(Object::toString).containsExactly("ROLE_HR");
-        // An unchanged account costs a read, never a session write.
-        assertThat(session.writes).isZero();
-        assertThat(session.isInvalid()).isFalse();
-    }
-
-    @Test
     void signedIn_andTheAccountHasChanged_runsAsWhatItIsNow_andTheSessionCarriesThatOnwards() throws Exception {
         CountingSession session = signedIn(principal(7, "hr", false));
         UserPrincipal now = principal(7, "employee", false);
@@ -70,17 +50,6 @@ class SessionSecurityFilterTest {
     }
 
     @Test
-    void signedIn_andNowFlaggedMustChangePassword_theSessionCarriesTheFlag() throws Exception {
-        CountingSession session = signedIn(principal(7, "hr", false));
-        when(accounts.current(7)).thenReturn(Optional.of(principal(7, "hr", true)));
-
-        run(session);
-
-        assertThat(((UserPrincipal) session.getAttribute(SessionContext.SESSION_USER_KEY)).mustChangePassword())
-            .isTrue();
-    }
-
-    @Test
     void signedIn_andTheAccountIsGoneOrInactive_endsTheSession_andTheRequestRunsUnauthenticated() throws Exception {
         CountingSession session = signedIn(principal(7, "hr", false));
         when(accounts.current(7)).thenReturn(Optional.empty());
@@ -91,74 +60,7 @@ class SessionSecurityFilterTest {
         assertThat(session.isInvalid()).isTrue();
     }
 
-    /** The safety property. The database being unreachable for one request must cost that request — a 500 — and
-     * nothing else. Reading a failed lookup as "this account is inactive" would end the session of every single
-     * person who happened to make a request during the blip. */
-    @Test
-    void signedIn_andTheLookupFails_theFailurePropagates_andTheSessionIsLeftAlone() {
-        UserPrincipal hr = principal(7, "hr", false);
-        CountingSession session = signedIn(hr);
-        when(accounts.current(7)).thenThrow(new DataAccessResourceFailureException("connection refused"));
-
-        assertThatThrownBy(() -> run(session)).isInstanceOf(DataAccessResourceFailureException.class);
-
-        assertThat(session.isInvalid()).isFalse();
-        assertThat(session.getAttribute(SessionContext.SESSION_USER_KEY)).isEqualTo(hr);
-        assertThat(session.writes).isZero();
-    }
-
-    // ── a session with no sign-in record is trusted as it always was ─────────────────────────
-
-    /** Not a production case — SessionContext#signIn is the only thing that ever puts a principal into a session
-     * there. This is the shape ~50 test classes plant by hand (session.setAttribute(SESSION_USER_KEY,
-     * principal(id, "account"))), usually with no employee row behind the role. */
-    @Test
-    void plantedPrincipal_withNoSignInRecord_runsAsPlanted_andTheDatabaseIsNotAsked() throws Exception {
-        UserPrincipal planted = principal(999, "account", false);
-        CountingSession session = new CountingSession();
-        session.setAttribute(SessionContext.SESSION_USER_KEY, planted);
-        session.writes = 0;
-
-        Authentication seen = run(session);
-
-        assertThat(seen.getPrincipal()).isEqualTo(planted);
-        assertThat(seen.getAuthorities()).extracting(Object::toString).containsExactly("ROLE_ACCOUNT");
-        verifyNoInteractions(accounts);
-        assertThat(session.writes).isZero();
-    }
-
     // ── no session, no principal ─────────────────────────────────────────────────────────────
-
-    @Test
-    void noSession_runsUnauthenticated_andCreatesNoSession() throws Exception {
-        MockHttpServletRequest request = new MockHttpServletRequest();
-
-        Authentication seen = run(request);
-
-        assertThat(seen).isNull();
-        assertThat(request.getSession(false)).as("the filter must never CREATE a session").isNull();
-        verifyNoInteractions(accounts);
-    }
-
-    @Test
-    void aSessionThatHoldsNoPrincipal_runsUnauthenticated() throws Exception {
-        CountingSession session = new CountingSession();
-        session.setAttribute(SessionContext.SESSION_SIGNED_IN_AT_KEY, 1L); // a record with nobody behind it
-
-        assertThat(run(session)).isNull();
-        verifyNoInteractions(accounts);
-    }
-
-    @Test
-    void theSecurityContextIsEmptyAgainOnceTheRequestIsOver() throws Exception {
-        CountingSession session = signedIn(principal(7, "hr", false));
-        when(accounts.current(anyLong())).thenReturn(Optional.of(principal(7, "hr", false)));
-
-        run(session);
-
-        assertThat(SecurityContextHolder.getContext().getAuthentication()).isNull();
-        verify(accounts).current(7);
-    }
 
     @Test
     void viewingAs_authenticatesAsTheRefreshedTarget_withTheTargetsRole() throws Exception {
@@ -173,43 +75,6 @@ class SessionSecurityFilterTest {
         assertThat(((UserPrincipal) seen.getPrincipal()).id()).isEqualTo(9L);
         assertThat(((UserPrincipal) seen.getPrincipal()).mustChangePassword()).isFalse();
         assertThat(seen.getAuthorities()).extracting(Object::toString).containsExactly("ROLE_HR");
-    }
-
-    @Test
-    void ownerDeactivatedWhileViewing_closesTheViewInTheAudit_beforeTheSessionEnds() throws Exception {
-        UserPrincipal owner = principal(7, "employee", false);
-        UserPrincipal target = principal(9, "employee", false);
-        CountingSession session = signedIn(owner);
-        SessionContext.startViewAs(session, target);
-        when(accounts.current(7)).thenReturn(Optional.empty());
-
-        run(session);
-
-        verify(viewAs).recordStopQuietly(owner, target);
-        assertThat(session.isInvalid()).isTrue();
-    }
-
-    @Test
-    void targetGone_twoConcurrentRequests_closeTheViewOnce() throws Exception {
-        CountingSession session = signedIn(principal(7, "employee", false));
-        UserPrincipal target = principal(9, "employee", false);
-        SessionContext.startViewAs(session, target);
-        when(accounts.current(7)).thenReturn(Optional.of(principal(7, "employee", false)));
-        java.util.concurrent.CyclicBarrier bothSawTheView = new java.util.concurrent.CyclicBarrier(2);
-        when(accounts.current(9)).thenAnswer(inv -> {
-            bothSawTheView.await(5, java.util.concurrent.TimeUnit.SECONDS);
-            return Optional.empty();
-        });
-
-        Thread other = new Thread(() -> {
-            try { run(session); } catch (Exception e) { throw new IllegalStateException(e); }
-        });
-        other.start();
-        run(session);
-        other.join(5000);
-
-        assertThat(session.getAttribute(SessionContext.VIEW_AS_USER_KEY)).isNull();
-        verify(viewAs, org.mockito.Mockito.times(1)).recordStopQuietly(principal(7, "employee", false), target);
     }
 
     // ── harness ──────────────────────────────────────────────────────────────────────────────

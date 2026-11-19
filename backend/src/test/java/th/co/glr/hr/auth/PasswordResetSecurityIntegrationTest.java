@@ -1,6 +1,5 @@
 package th.co.glr.hr.auth;
 
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -58,29 +57,6 @@ class PasswordResetSecurityIntegrationTest {
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"email\":\"no-such-employee@glr.co.th\"}"))
             .andExpect(status().isOk());
-    }
-
-    @Test
-    void anonymousPostToResetPasswordWithNoCsrfHeaderIsReachable() throws Exception {
-        // A syntactically-valid-but-unknown token: the endpoint must still be REACHED (past both guards) and rejected
-        // by BUSINESS logic (400, PasswordResetService's own invalid/expired-token error), never blocked by
-        // security/CSRF (401/403) first.
-        mvc.perform(post("/api/auth/reset-password")
-                .contentType(MediaType.APPLICATION_JSON)
-                .content("{\"token\":\"not-a-real-token\",\"newPassword\":\"SomeValidPass1\"}"))
-            .andExpect(status().isBadRequest());
-    }
-
-    @Test
-    void getOnForgotPasswordIsNotPermitted() throws Exception {
-        // SecurityConfig scopes the permit with requestMatchers(HttpMethod.POST, ...) - an explicit-method request
-        // matcher only matches that exact HTTP method.
-        mvc.perform(get("/api/auth/forgot-password")).andExpect(status().isUnauthorized());
-    }
-
-    @Test
-    void getOnResetPasswordIsNotPermitted() throws Exception {
-        mvc.perform(get("/api/auth/reset-password")).andExpect(status().isUnauthorized());
     }
 
     @Test

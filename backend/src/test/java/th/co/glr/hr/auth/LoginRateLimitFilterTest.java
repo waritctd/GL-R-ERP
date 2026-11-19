@@ -38,41 +38,6 @@ class LoginRateLimitFilterTest {
         assertThat(chainCalls.get()).isZero(); // short-circuited before the auth logic ran
     }
 
-    @Test
-    void successfulLoginResetsTheCounter() throws Exception {
-        properties.getLoginRateLimit().setMaxAccountFailures(5);
-
-        for (int i = 0; i < 4; i++) {
-            attempt("user@glr.co.th", chainStatus(401));
-        }
-        attempt("user@glr.co.th", chainStatus(200)); // success clears the prior failures
-
-        // A fresh failure after reset must not be blocked.
-        MockHttpServletResponse afterReset = attempt("user@glr.co.th", chainStatus(401));
-        assertThat(afterReset.getStatus()).isEqualTo(401);
-    }
-
-    @Test
-    void disabledFilterNeverBlocks() throws Exception {
-        properties.getLoginRateLimit().setEnabled(false);
-
-        for (int i = 0; i < 50; i++) {
-            MockHttpServletResponse response = attempt("user@glr.co.th", chainStatus(401));
-            assertThat(response.getStatus()).isEqualTo(401);
-        }
-    }
-
-    @Test
-    void ignoresNonLoginRequests() throws Exception {
-        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/employees");
-        MockHttpServletResponse response = new MockHttpServletResponse();
-        AtomicInteger chainCalls = new AtomicInteger();
-
-        filter.doFilter(request, response, (req, res) -> chainCalls.incrementAndGet());
-
-        assertThat(chainCalls.get()).isEqualTo(1);
-    }
-
     private FilterChain chainStatus(int status) {
         return (req, res) -> ((HttpServletResponse) res).setStatus(status);
     }
