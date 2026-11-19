@@ -221,6 +221,7 @@ export const API_ROUTES = {
     bidOutcome: (id) => `/api/tickets/${id}/bid-outcome`,
     addOnOrders: (id) => `/api/tickets/${id}/add-on-orders`,
     orders: (id) => `/api/tickets/${id}/orders`,
+    reusableApprovedItems: (id) => `/api/tickets/${id}/reusable-approved-items`,
     // The actor's own ACTIVE pre-outcome deals whose project name matches (case/whitespace-
     // insensitive), for the quotation editor's "โครงการนี้มีดีลของคุณอยู่แล้ว" prompt.
     openForProject: (projectName) => `/api/tickets/open-for-project?projectName=${encodeURIComponent(projectName ?? '')}`,

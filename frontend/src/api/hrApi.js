@@ -1417,6 +1417,8 @@ export const api = {
     createRevision: (id, payload = {}) => apiRequest(API_ROUTES.dealQuotations.revisions(id), { method: 'POST', body: payload }),
     // "สร้างจากใบเดิม" / สั่งเหมือนเดิม: clone an APPROVED quotation into a new, independent DRAFT.
     // The source stays APPROVED; see DealQuotationService#createReorder.
+    // Add-on orders only: the approved lines this order may reuse at their approved price.
+    reusableApprovedItems: (ticketId) => apiRequest(API_ROUTES.tickets.reusableApprovedItems(ticketId)),
     createReorder: (id, payload = {}) => apiRequest(API_ROUTES.dealQuotations.reorders(id), { method: 'POST', body: payload }),
     // "สร้างดีลจากใบเสนอราคา". No request body. Responds
     // `{ result: { ticketId, ticket: TicketSummaryDto, quotation: DealQuotationDto } }`

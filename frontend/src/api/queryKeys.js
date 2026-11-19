@@ -225,6 +225,7 @@ export const queryKeys = {
   discountApprovals: (quotationId) => ['customerQuotations', 'discountApprovals', quotationId],
   // Direct deal quotation. A sibling key space to
   // pricingRequests'/customerQuotations' above, never sharing an entry with them.
+  reusableApprovedItems: (ticketId) => ['dealQuotations', 'reusableApprovedItems', ticketId ?? ''],
   dealQuotationsByTicket: (ticketId) => ['dealQuotations', 'byTicket', ticketId ?? ''],
   // The same list WITH `orderConfirmedQuotationId` (DealDocumentRegister): the full response, kept apart from the
   // items-only entry above so its four readers keep their array. A child of that key, so invalidating it refreshes both.

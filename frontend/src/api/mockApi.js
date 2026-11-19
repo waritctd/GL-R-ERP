@@ -6934,6 +6934,134 @@ function mintDealQuotationReorder(source, user) {
 // ran against the PARENT's current data before either branch is reached -- the revision is a
 // verbatim copy of that data, so it is validated by construction and this never re-checks it,
 // matching the real service.
+// ── V231 add-on reuse: mirrors DealQuotationService#reusesApprovedPricesOnly / #keepValidSources / #reusableApprovedItems ──
+const MOCK_APPROVED_QUOTATION_STATUSES = ['APPROVED', 'ISSUED', 'SENT', 'ACCEPTED'];
+const MOCK_REUSE_RULE_NOTE = 'อนุมัติตามราคาเดิมที่อนุมัติแล้วในงานนี้';
+
+/** The project's chain from any order of it: the root and its ADD_ON children (never a BID_SPLIT child). */
+function mockOrderChain(ticket) {
+  const root = ticket.childKind === 'ADD_ON' && ticket.parentTicketId != null
+    ? db.tickets.find((t) => t.id === ticket.parentTicketId) : ticket;
+  return [root, ...db.tickets.filter((t) => t.parentTicketId === root.id && t.childKind === 'ADD_ON')
+    .sort((a, b) => a.id - b.id)];
+}
+
+/** Every line of every approved quotation in the chain, latest approval first. */
+function mockApprovedChainSources(ticket) {
+  const chain = mockOrderChain(ticket);
+  return mockDealQuotations
+    .filter((q) => chain.some((t) => t.id === q.ticketId) && MOCK_APPROVED_QUOTATION_STATUSES.includes(q.docStatus))
+    .sort((a, b) => String(b.approvedAt ?? '').localeCompare(String(a.approvedAt ?? '')) || b.id - a.id)
+    .flatMap((q) => {
+      const owner = chain.find((t) => t.id === q.ticketId);
+      const orderCode = owner.childKind === 'ADD_ON' ? owner.code : `${owner.code}-1`;
+      return (q.items ?? []).map((item) => ({ item, quotation: q, orderCode }));
+    });
+}
+
+function mockSourceDepositPercent(ticket, sources) {
+  const root = mockOrderChain(ticket)[0];
+  const confirmed = mockConfirmedQuotationEvent(root)
+    ? mockDealQuotations.find((q) => q.id === root.orderConfirmedQuotationId) : null;
+  if (confirmed?.depositPercent != null) return confirmed.depositPercent;
+  return sources[0]?.quotation.depositPercent ?? null;
+}
+
+/** A claim of reuse is kept only for an approved item of this ADD_ON deal's chain; anywhere else it is dropped. */
+function mockKeepValidSources(ticket, items) {
+  const valid = ticket.childKind === 'ADD_ON'
+    ? new Set(mockApprovedChainSources(ticket).map((s) => s.item.id)) : new Set();
+  items.forEach((it) => {
+    if (it.sourceQuotationItemId != null && !valid.has(it.sourceQuotationItemId)) it.sourceQuotationItemId = null;
+  });
+}
+
+const sameMockMoney = (a, b) => (a == null ? b == null : b != null && Number(a) === Number(b));
+
+/** The server's rule, never the client's claim; anything else falls back to the ordinary approval. Quantity is never checked. */
+function mockReusesApprovedPricesOnly(row, ticket) {
+  if ((row.origin || 'DEAL_DIRECT') !== 'DEAL_DIRECT' || ticket.childKind !== 'ADD_ON' || !row.items?.length) return false;
+  if (row.items.some((it) => it.sourceQuotationItemId == null || (it.lineType ?? 'TILE') === 'ADJUSTMENT')) return false;
+  const sources = mockApprovedChainSources(ticket);
+  const deposit = mockSourceDepositPercent(ticket, sources);
+  if (deposit == null || deposit !== row.depositPercent) return false;
+  return row.items.every((it) => {
+    const src = sources.find((s) => s.item.id === it.sourceQuotationItemId);
+    return Boolean(src)
+      && sameMockMoney(it.unitPrice, src.item.unitPrice) && sameMockMoney(it.discountPct, src.item.discountPct)
+      && sameMockMoney(it.netUnitPrice, src.item.netUnitPrice) && (it.priceMode ?? null) === (src.item.priceMode ?? null)
+      && (row.priceMode ?? null) === (src.quotation.priceMode ?? null)
+      && (row.currency ?? null) === (src.quotation.currency ?? null)
+      && (row.documentLanguage ?? null) === (src.quotation.documentLanguage ?? null);
+  });
+}
+
+/** The DEAL_DIRECT approval proper (DealQuotationService#approveCore), shared by approve() and the add-on reuse rule. */
+function mockApproveDirectRow(row, user, note) {
+  const now = new Date().toISOString();
+  row.docStatus = 'APPROVED';
+  row.approvedById = user.employeeId ?? null;
+  row.approvedByName = user.name;
+  // V175: snapshot the approver's signature presence at approval (DealQuotationRepository#approve).
+  row.approverSignatureSnapshot = row.approvedById != null && mockEmployeeSignatures.has(Number(row.approvedById));
+  row.approvedAt = now;
+  row.approvalDecidedAt = now;
+  row.approvalDecidedBy = user.employeeId ?? null;
+  row.approvalNote = note;
+  // "validity_date = quotation date + N, written at approval". Uses this file's OWN
+  // bangkokTodayIso() (above, near round2) -- Bangkok LOCAL date, not `now.slice(0, 10)`, which
+  // reads the UTC calendar day off a UTC instant and is one day behind Bangkok on any approval
+  // made between 00:00-06:59 Bangkok time (UTC+7).
+  row.quotationDate = bangkokTodayIso();
+  // V178: a DATE-mode document WITH special pricing keeps its OWN validity_until verbatim (approval never
+  // recomputes it); every other case falls back to the existing day-count rule.
+  row.validityDate = row.validityMode === 'DATE' && hasSpecialPricing(row.priceMode, row.items)
+    ? row.validityUntil
+    : (row.validityDays ? addDaysIso(row.quotationDate, row.validityDays) : null);
+  row.updatedAt = now;
+  // One live offer per DEAL, any origin: sweep BEFORE the ancestor walk so a revision's parent
+  // gets its event from the sweep. See the helper's header.
+  supersedeOtherLiveMockDealQuotations(row, user, now);
+  // "When the child is APPROVED the parent becomes SUPERSEDED (not before)" -- the customer's
+  // last approved document stays valid until replaced. Runs AFTER the sweep above and stays
+  // SILENT -- no ticket event: a DRAFT ancestor from a reject/resubmit chain is invisible to
+  // the sweep's own `docStatus === 'APPROVED'` filter, so this walk is the only thing that ever
+  // supersedes one, and nothing asks for that to be logged. Walks the WHOLE ancestry chain, not
+  // just the immediate parent -- mirrors DealQuotationService#approve's own ancestor walk (see
+  // that method's Javadoc: a single hop strands every ancestor above the immediate parent
+  // forever in a 2+ reject/resubmit chain).
+  let ancestorId = row.parentQuotationId;
+  while (ancestorId) {
+    const ancestor = mockDealQuotations.find((q) => q.id === ancestorId);
+    if (!ancestor) break;
+    if (canTransitionDealQuotation(ancestor.docStatus, 'SUPERSEDED')) {
+      ancestor.docStatus = 'SUPERSEDED';
+      ancestor.updatedAt = now;
+    }
+    ancestorId = ancestor.parentQuotationId;
+  }
+  // Mirrors DealQuotationService#approve's QUOTATION_ISSUED event and TicketService#applyApprovedQuotation
+  // (spec 2026-11-15 §7.2): advance onto the recipient's stage (forward-only) and fill a blank party name with
+  // the quotation's addressee. A non-ACTIVE deal is left alone.
+  const dealTicket = db.tickets.find((t) => t.id === row.ticketId);
+  if (dealTicket) {
+    pushEvent(dealTicket, user, 'QUOTATION_ISSUED', null, null, `อนุมัติใบเสนอราคา ${row.number}`);
+    mockApplyApprovedQuotation(dealTicket, row, user);
+  }
+}
+
+/** DealQuotationService#submitDraftRow: an ADD_ON draft that reuses approved prices only is approved at once, no notice. */
+function submitDealQuotationRowOrApproveByRule(row, ticket, user) {
+  if (!mockReusesApprovedPricesOnly(row, ticket)) return submitDealQuotationRow(row, user);
+  const now = new Date().toISOString();
+  row.docStatus = 'PENDING_APPROVAL';
+  row.submittedAt = now;
+  row.submittedBy = user.id;
+  row.updatedAt = now;
+  mockApproveDirectRow(row, user, MOCK_REUSE_RULE_NOTE);
+  return delay({ quotation: buildDealQuotationDto(row) });
+}
+
 function submitDealQuotationRow(row, user) {
   const now = new Date().toISOString();
   row.docStatus = 'PENDING_APPROVAL';
@@ -7606,6 +7734,8 @@ function buildDealQuotationItems(inputs, priceMode, existingItems = null, docume
       priceMode: mixed && dealQuotationLineType(item) === 'TILE' ? rowMode : null,
       // DealQuotationRequests.ItemInput#stockSource: IN_THAILAND on a TILE row only; IN_TRANSIT is a pricing-request value.
       stockSource: dealQuotationLineType(item) === 'TILE' && item.stockSource === 'IN_THAILAND' ? 'IN_THAILAND' : null,
+      // V231: the approved item a reused add-on line copies; emptied by mockKeepValidSources unless it is valid.
+      sourceQuotationItemId: item.sourceQuotationItemId ?? null,
     };
   });
   const known = items.every((it) => it.lineAmount != null);
@@ -18827,6 +18957,32 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
   // transitions mirror quotationMeta.js's DEAL_QUOTATION_TRANSITIONS so the mock's gate can't drift
   // from the frontend's own copy of QuotationStatus.
   dealQuotations: {
+    // GET /api/tickets/{id}/reusable-approved-items: DealQuotationService#reusableApprovedItems (403 before 409).
+    async reusableApprovedItems(ticketId) {
+      const user = requireSession();
+      const ticket = db.tickets.find((t) => t.id === Number(ticketId));
+      if (!ticket) fail('ไม่พบงานนี้', 404);
+      requireDealQuotationWriteAccess(ticket, user);
+      if (ticket.childKind !== 'ADD_ON') fail('ใช้ได้เฉพาะออเดอร์สั่งเพิ่มเท่านั้น', 409);
+      const sources = mockApprovedChainSources(ticket);
+      const seen = new Set();
+      const items = [];
+      sources.forEach(({ item, quotation, orderCode }) => {
+        if ((item.lineType ?? 'TILE') === 'ADJUSTMENT') return;
+        const norm = (v) => String(v ?? '').trim().toLowerCase();
+        const key = item.catalogPriceId != null ? `c${item.catalogPriceId}`
+          : [item.productCode, item.sizeText, item.brand, item.model, item.color, item.texture, item.descriptionLine].map(norm).join('|');
+        if (seen.has(key)) return;
+        seen.add(key);
+        items.push({
+          ...item, id: null, sourceQuotationItemId: item.id, quotationId: quotation.id, quotationNumber: quotation.number,
+          orderCode, documentPriceMode: quotation.priceMode ?? 'NET', documentLanguage: quotation.documentLanguage ?? 'TH',
+          currency: quotation.currency ?? 'THB',
+        });
+      });
+      return delay({ sourceDepositPercent: mockSourceDepositPercent(ticket, sources), items });
+    },
+
     async listForTicket(ticketId) {
       const user = requireSession();
       const ticket = db.tickets.find((t) => t.id === Number(ticketId));
@@ -18974,6 +19130,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       const now = new Date().toISOString();
       const header = resolveDealQuotationV3Header(payload);
       const items = buildDealQuotationItems(payload.items, header.priceMode, null, header.documentLanguage);
+      mockKeepValidSources(ticket, items);
       // quotationDate check uses the SAME `now.slice(0, 10)` the row's own quotationDate below is set from, so the
       // two can never disagree about "today".
       const { validityMode, validityUntil } = resolveDealQuotationValidity(
@@ -19288,6 +19445,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
         : resolveDealQuotationContact(snapTicket, payload, row);
       const header = resolveDealQuotationV3Header(payload, row);
       const items = buildDealQuotationItems(payload.items, header.priceMode, row.items, header.documentLanguage);
+      mockKeepValidSources(ticket, items);
       // Carry the pricing-request/decision-item LINK forward across the save, keyed by the (stable) item id — the
       // client payload has no field for either, so a link can only ever be established at createFromPricingRequest,
       // never here. Mirrors DealQuotationService#update's own #withDecisionLink device.
@@ -19509,9 +19667,9 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
         }
         const revision = mintDealQuotationRevision(row, user);
         mockDealQuotations.push(revision);
-        return submitDealQuotationRow(revision, user);
+        return submitDealQuotationRowOrApproveByRule(revision, ticket, user);
       }
-      return submitDealQuotationRow(row, user);
+      return submitDealQuotationRowOrApproveByRule(row, ticket, user);
     },
 
     async approve(id, payload = {}) {
@@ -19529,56 +19687,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       if (!canTransitionDealQuotation(row.docStatus, 'APPROVED')) {
         fail(`อนุมัติไม่ได้ในสถานะ '${row.docStatus}'`, 409);
       }
-      const now = new Date().toISOString();
-      row.docStatus = 'APPROVED';
-      row.approvedById = user.employeeId ?? null;
-      row.approvedByName = user.name;
-      // V175: snapshot the approver's signature presence at approval (DealQuotationRepository#approve).
-      row.approverSignatureSnapshot = row.approvedById != null && mockEmployeeSignatures.has(Number(row.approvedById));
-      row.approvedAt = now;
-      row.approvalDecidedAt = now;
-      row.approvalDecidedBy = user.employeeId ?? null;
-      row.approvalNote = payload?.note?.trim() || null;
-      // "validity_date = quotation date + N, written at approval". Uses this file's OWN
-      // bangkokTodayIso() (above, near round2) -- Bangkok LOCAL date, not `now.slice(0, 10)`, which
-      // reads the UTC calendar day off a UTC instant and is one day behind Bangkok on any approval
-      // made between 00:00-06:59 Bangkok time (UTC+7).
-      row.quotationDate = bangkokTodayIso();
-      // V178: a DATE-mode document WITH special pricing keeps its OWN validity_until verbatim (approval never
-      // recomputes it); every other case falls back to the existing day-count rule.
-      row.validityDate = row.validityMode === 'DATE' && hasSpecialPricing(row.priceMode, row.items)
-        ? row.validityUntil
-        : (row.validityDays ? addDaysIso(row.quotationDate, row.validityDays) : null);
-      row.updatedAt = now;
-      // One live offer per DEAL, any origin: sweep BEFORE the ancestor walk so a revision's parent
-      // gets its event from the sweep. See the helper's header.
-      supersedeOtherLiveMockDealQuotations(row, user, now);
-      // "When the child is APPROVED the parent becomes SUPERSEDED (not before)" -- the customer's
-      // last approved document stays valid until replaced. Runs AFTER the sweep above and stays
-      // SILENT -- no ticket event: a DRAFT ancestor from a reject/resubmit chain is invisible to
-      // the sweep's own `docStatus === 'APPROVED'` filter, so this walk is the only thing that ever
-      // supersedes one, and nothing asks for that to be logged. Walks the WHOLE ancestry chain, not
-      // just the immediate parent -- mirrors DealQuotationService#approve's own ancestor walk (see
-      // that method's Javadoc: a single hop strands every ancestor above the immediate parent
-      // forever in a 2+ reject/resubmit chain).
-      let ancestorId = row.parentQuotationId;
-      while (ancestorId) {
-        const ancestor = mockDealQuotations.find((q) => q.id === ancestorId);
-        if (!ancestor) break;
-        if (canTransitionDealQuotation(ancestor.docStatus, 'SUPERSEDED')) {
-          ancestor.docStatus = 'SUPERSEDED';
-          ancestor.updatedAt = now;
-        }
-        ancestorId = ancestor.parentQuotationId;
-      }
-      // Mirrors DealQuotationService#approve's QUOTATION_ISSUED event and TicketService#applyApprovedQuotation
-      // (spec 2026-11-15 §7.2): advance onto the recipient's stage (forward-only) and fill a blank party name with
-      // the quotation's addressee. A non-ACTIVE deal is left alone.
-      const dealTicket = db.tickets.find((t) => t.id === row.ticketId);
-      if (dealTicket) {
-        pushEvent(dealTicket, user, 'QUOTATION_ISSUED', null, null, `อนุมัติใบเสนอราคา ${row.number}`);
-        mockApplyApprovedQuotation(dealTicket, row, user);
-      }
+      mockApproveDirectRow(row, user, payload?.note?.trim() || null);
       return delay({ quotation: buildDealQuotationDto(row) });
     },
 

@@ -12,6 +12,14 @@ import th.co.glr.hr.dealquotation.DealQuotationRequests.ApproveRequest;
 import th.co.glr.hr.ticket.DealLifecycle;
 import th.co.glr.hr.ticket.DealStage;
 import th.co.glr.hr.ticket.EntryChannel;
+import th.co.glr.hr.common.ApiException;
+import th.co.glr.hr.dealparty.DealPartyRepository;
+import th.co.glr.hr.dealquotation.DealQuotationDtos.ReusableApprovedItemsDto;
+import th.co.glr.hr.dealquotation.DealQuotationRequests.ItemInput;
+import th.co.glr.hr.dealquotation.DealQuotationRequests.UpsertDealQuotationRequest;
+import java.math.BigDecimal;
+import java.util.List;
+import java.util.function.UnaryOperator;
 
 /**
  * Spec 2026-11-15 §7.2 — "deals fill from quotations", as corrected after review (H1/H2). Approving a DEAL_DIRECT
@@ -274,6 +282,92 @@ class DealDirectApprovalFillsDealIntegrationTest extends AbstractDealQuotationSl
 
         assertThat(summary(ticket).salesStage()).isEqualTo(DealStage.SPEC_APPROVED);
         assertThat(parties(ticket).get("designer_name")).isNull();
+    }
+
+    // ── add-on reuse (V231): an add-on that reuses approved lines at their approved price needs no second approval ──
+
+    /** Every line reuses an approved price and the deposit % is the first order's: APPROVED in one submit, and the
+     * approvers (sales manager) hear nothing. */
+    @Test
+    void addOn_allLinesReused_approvesInOneSubmit_withoutNotifyingApprovers() {
+        long addOn = addOnWithApprovedRoot();
+
+        DealQuotationDto submitted = submitReuse(addOn, UnaryOperator.identity(), 50);
+
+        assertThat(submitted.docStatus()).isEqualTo("APPROVED");
+        assertThat(submitted.approvalNote()).isEqualTo(DealQuotationService.REUSE_RULE_NOTE);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM hr.notification WHERE employee_id = :e",
+            Map.of("e", salesManagerActor.id()), Integer.class)).isZero();
+    }
+
+    /** The lock is the server's: a reused line posted with a different unit price is NOT approved by rule — it falls
+     * back to the ordinary flow (PENDING_APPROVAL, approvers notified); never a 400. */
+    @Test
+    void addOn_reusedLineWithAChangedPrice_fallsBackToApproval() {
+        long addOn = addOnWithApprovedRoot();
+
+        DealQuotationDto submitted = submitReuse(addOn,
+            item -> item.withPerPiecePrices(item.unitPrice().add(BigDecimal.ONE), null), 50);
+
+        assertThat(submitted.docStatus()).isEqualTo("PENDING_APPROVAL");
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM hr.notification WHERE employee_id = :e",
+            Map.of("e", salesManagerActor.id()), Integer.class)).isPositive();
+    }
+
+    /** The first order's deposit % is part of the rule: a different one needs approval. */
+    @Test
+    void addOn_changedDepositPercent_fallsBackToApproval() {
+        long addOn = addOnWithApprovedRoot();
+
+        assertThat(submitReuse(addOn, UnaryOperator.identity(), 30).docStatus()).isEqualTo("PENDING_APPROVAL");
+    }
+
+    /** A claim of reuse for an item that was never approved in this project's chain (here another deal's approved
+     * line) is dropped when saved, so the line is an ordinary one and goes to approval. */
+    @Test
+    void addOn_claimOfAnItemOutsideTheChain_isIgnoredAndNeedsApproval() {
+        long addOn = addOnWithApprovedRoot();
+        DealQuotationDto elsewhere = approved(deal(otherSalesActor), otherSalesActor, "BUYER");
+        long foreignItemId = elsewhere.items().get(0).id();
+
+        DealQuotationDto submitted = submitReuse(addOn, item -> item.withSourceQuotationItemId(foreignItemId), 50);
+
+        assertThat(submitted.docStatus()).isEqualTo("PENDING_APPROVAL");
+        assertThat(submitted.items().get(0).sourceQuotationItemId()).isNull();
+    }
+
+    @Test
+    void reusableApprovedItems_isConflictOnANonAddOnDeal() {
+        long ticket = deal(salesActor);
+        approved(ticket, salesActor, "BUYER");
+
+        ApiException refusal = org.junit.jupiter.api.Assertions.assertThrows(ApiException.class,
+            () -> quotationService.reusableApprovedItems(ticket, salesActor));
+
+        assertThat(refusal.getStatus().value()).isEqualTo(409);
+    }
+
+    private long addOnWithApprovedRoot() {
+        long root = deal(salesActor);
+        approved(root, salesActor, "BUYER");
+        long addOn = new DealPartyRepository(jdbc).forkAddOn(root, summary(root).code() + "-2", salesActor.id());
+        // DealPartyService#createAddOnOrder also gives the order its party row (the buyer, still bidding).
+        jdbc.update("INSERT INTO sales.deal_party (ticket_id, customer_id, role, status, is_headline) "
+            + "VALUES (:t, :c, 'BUYER', 'ACTIVE', TRUE)", Map.of("t", addOn, "c", customer.id()));
+        return addOn;
+    }
+
+    /** Saves an add-on draft whose lines are the picker's items (each mapped by {@code tweak}), then submits it. */
+    private DealQuotationDto submitReuse(long addOn, UnaryOperator<ItemInput> tweak, int depositPercent) {
+        // The root order's own approval (the fixture) notified the approvers; only what THIS submit sends counts.
+        jdbc.update("DELETE FROM hr.notification", Map.of());
+        ReusableApprovedItemsDto reusable = quotationService.reusableApprovedItems(addOn, salesActor);
+        assertThat(reusable.sourceDepositPercent()).isEqualTo(50);
+        List<ItemInput> lines = reusable.items().stream().map(i -> tweak.apply(i.item())).toList();
+        DealQuotationDto created = quotationService.create(addOn, new UpsertDealQuotationRequest(null, null, null,
+            null, depositPercent, "CASH_ON_DELIVERY", 0, 30, null, "NET", "TH", "THB", lines)
+            .withRecipientType("BUYER"), salesActor);
+        return quotationService.submit(created.id(), salesActor);
     }
 
     // ── helpers ──────────────────────────────────────────────────────────────────────────────────

@@ -22,6 +22,7 @@ vi.mock('../../api/index.js', async (importOriginal) => {
       pricingRequests: { listForTicket: vi.fn().mockResolvedValue({ items: [] }) },
       dealQuotations: {
         displayNameOptions: vi.fn(),
+        reusableApprovedItems: vi.fn(),
         get: vi.fn(),
         create: vi.fn(),
         update: vi.fn(),
@@ -143,6 +144,31 @@ describe('QuotationEditorPage item calc wiring', () => {
     // subtotal are the SAME number (before VAT) and both render -- this asserts the calculated amount reached the
     // screen at all, not which element shows it.
     expect(screen.getAllByText('฿35,000.00').length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('an add-on order picks an approved item: its price is locked, the deposit follows the first order, and the note says no approval is needed', async () => {
+    api.tickets.get.mockResolvedValue({
+      ticket: { summary: {
+        id: 18, createdById: 6, createdByName: 'คุณสมหมาย ขายดี', salesStage: 'QUOTE_BUYER', childKind: 'ADD_ON',
+        customerName: 'บริษัท แฟชั่นไอส์แลนด์ จำกัด', projectName: null, customerId: 5, contactId: 6, contactName: 'ณัฐพงศ์ ศรีวิไล',
+      } },
+    });
+    api.dealQuotations.reusableApprovedItems.mockResolvedValue({
+      sourceDepositPercent: 50,
+      items: [{
+        sourceQuotationItemId: 901, quotationId: 3, quotationNumber: 'QT-2026-0006-2', orderCode: 'DL-2026-0013-1',
+        documentPriceMode: 'NET', documentLanguage: 'TH', lineType: 'TILE', brand: 'Duragres', model: 'Forest Brown',
+        sizeText: '20x100', listPriceSqm: 265, unitPrice: 53, discountPct: 0, netUnitPrice: 53, areaSqm: 10,
+        quantityMode: 'AREA', wastageMode: 'PERCENT', wastageValue: 0,
+      }],
+    });
+    renderEditor('/quotations/new?ticket=18');
+
+    fireEvent.click(await screen.findByRole('checkbox', { name: /Forest Brown/ }));
+
+    expect(await screen.findByLabelText(/จำนวนที่สั่งเพิ่ม/)).toBeTruthy();
+    expect(screen.getByLabelText(/^ราคา\/ตร\.ม\./).disabled).toBe(true);
+    expect(screen.getByTestId('reuse-approval-note').textContent).toMatch(/ไม่ต้องรออนุมัติ/);
   });
 
   it('re-debounces on every keystroke rather than firing once per stroke', async () => {
