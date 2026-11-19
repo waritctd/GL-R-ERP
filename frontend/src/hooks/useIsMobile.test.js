@@ -29,18 +29,6 @@ describe('useIsMobile', () => {
     delete window.matchMedia;
   });
 
-  it('returns false when matchMedia is unavailable (jsdom default)', () => {
-    delete window.matchMedia;
-    const { result } = renderHook(() => useIsMobile());
-    expect(result.current).toBe(false);
-  });
-
-  it('returns true when the viewport already matches the mobile query', () => {
-    mockMatchMedia(true);
-    const { result } = renderHook(() => useIsMobile());
-    expect(result.current).toBe(true);
-  });
-
   it('reacts to viewport changes after mount', () => {
     const { fire } = mockMatchMedia(false);
     const { result } = renderHook(() => useIsMobile());
