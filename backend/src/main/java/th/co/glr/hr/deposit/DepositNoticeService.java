@@ -237,6 +237,12 @@ public class DepositNoticeService {
         docs.update(docId, effective, doc.items(), doc.status());
         DepositNoticeDto updated = docs.findById(docId).orElseThrow();
         if ("ISSUED".equals(doc.status())) {
+            BigDecimal netReceived = tickets.netDepositReceived(doc.ticketId());
+            if (updated.depositAmount().compareTo(doc.depositAmount()) < 0 && updated.depositAmount().compareTo(
+                    netReceived.divide(BigDecimal.ONE.add(VAT_RATE), 2, RoundingMode.HALF_UP)) < 0) {
+                throw new ApiException(HttpStatus.CONFLICT, "ลดยอดมัดจำต่ำกว่าที่รับชำระแล้วไม่ได้ (รับแล้ว ฿"
+                    + String.format(java.util.Locale.US, "%,.2f", netReceived) + ") — ให้ฝ่ายบัญชีบันทึกคืนเงินก่อน");
+            }
             tickets.addEvent(doc.ticketId(), actor.id(), actor.name(), TicketEventKind.EDITED, null, null,
                 "แก้ไขใบแจ้งรับมัดจำ " + doc.docNumber() + " (ออกเลขแล้ว): " + changes(doc, updated));
             if (doc.depositAmount().compareTo(updated.depositAmount()) != 0) {
@@ -878,16 +884,10 @@ public class DepositNoticeService {
             answered.totalAmount());
     }
 
-    /** Deposit deduction (pre-VAT): the larger of the notice's own amount and what account actually received
-     * (VAT-inclusive DEPOSIT receipts / 1.07). Not capped at the notice: one edited DOWN after payment still deducts
-     * what was received, and a partial payment never lowers the deduction below the notice (no double billing). */
-    private BigDecimal deductionFor(long ticketId, BigDecimal noticeAmount) {
-        BigDecimal notice = noticeAmount != null ? noticeAmount : BigDecimal.ZERO;
-        BigDecimal received = tickets.sumDepositReceipts(ticketId);
-        if (received == null || received.signum() <= 0) {
-            return notice;
-        }
-        return notice.max(received.divide(BigDecimal.ONE.add(VAT_RATE), 2, RoundingMode.HALF_UP));
+    /** Deposit deduction (pre-VAT): always the notice's own deposit amount. Money received beyond it (an overpayment)
+     * is refunded by account as an ADJUSTMENT receipt, never billed here. */
+    private static BigDecimal deductionFor(BigDecimal noticeAmount) {
+        return noticeAmount != null ? noticeAmount : BigDecimal.ZERO;
     }
 
     /** Item/deduction sourcing (rule D11) and rule C (net must not be negative), applied
@@ -924,7 +924,7 @@ public class DepositNoticeService {
             // here — there is deliberately no subtotal-must-match rule (matched.subtotal() vs the
             // quotation's own item total).
             items = itemsFromDepositNoticeForRemainingInvoice(matched.items());
-            depositAmount = deductionFor(ticketId, matched.depositAmount());
+            depositAmount = deductionFor(matched.depositAmount());
             DepositRefBundle refs = resolveDepositReferenceOptions(ticketId, matched);
             defaultDepositReference = refs.defaultRef();
             depositReferenceOptions = refs.options();
@@ -972,7 +972,7 @@ public class DepositNoticeService {
             }
         }
         BigDecimal depositAmount = latestIssued == null ? BigDecimal.ZERO
-            : deductionFor(ticketId, latestIssued.depositAmount());
+            : deductionFor(latestIssued.depositAmount());
         BigDecimal itemsTotal = sumAmounts(items);
         if (itemsTotal.subtract(depositAmount).compareTo(BigDecimal.ZERO) < 0) {
             return new ResolvedRemainingInvoice(items, depositAmount, legacyReference(latestIssued), List.of(), null, List.of(),
