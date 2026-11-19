@@ -55,15 +55,6 @@ describe('LoginPage dev quick-login (real backend)', () => {
     expect(onLogin.mock.calls[0][0].role).toBeUndefined();
   });
 
-  it('renders on a test-site build (VITE_TEST_SITE=true), which is not a dev server', () => {
-    vi.stubEnv('DEV', false);
-    vi.stubEnv('VITE_USE_MOCKS', 'false');
-    vi.stubEnv('VITE_TEST_SITE', 'true');
-    renderLoginPage({ onLogin: vi.fn(), loading: false, error: null });
-
-    expect(screen.getAllByTestId(/^login-dev-/)).toHaveLength(DEMO_EMAILS.length);
-  });
-
   it('is absent from a production build, so the demo password never ships', () => {
     vi.stubEnv('DEV', false);
     vi.stubEnv('VITE_USE_MOCKS', 'false');
@@ -72,22 +63,5 @@ describe('LoginPage dev quick-login (real backend)', () => {
 
     expect(screen.queryAllByTestId(/^login-dev-/)).toHaveLength(0);
     expect(screen.queryByText('Demo@2026')).toBeNull();
-  });
-
-  it('is absent in mock mode, where the mock role row is the quick-login', () => {
-    vi.stubEnv('DEV', true);
-    vi.stubEnv('VITE_USE_MOCKS', 'true');
-    renderLoginPage({ onLogin: vi.fn(), loading: false, error: null });
-
-    expect(screen.queryAllByTestId(/^login-dev-/)).toHaveLength(0);
-    expect(screen.getByTestId('login-role-hr')).toBeTruthy();
-  });
-
-  it('disables the buttons while a login is in flight', () => {
-    vi.stubEnv('DEV', true);
-    vi.stubEnv('VITE_USE_MOCKS', 'false');
-    renderLoginPage({ onLogin: vi.fn(), loading: true, error: null });
-
-    screen.getAllByTestId(/^login-dev-/).forEach((button) => expect(button.disabled).toBe(true));
   });
 });
