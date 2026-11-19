@@ -505,6 +505,8 @@ export const FULL_PAYMENT_TERM_OPTIONS = [
   { code: 'BEFORE_DELIVERY', label: 'บริษัทขอรับเงินค่าสินค้า 100% ก่อนส่งมอบสินค้า' },
   { code: 'ON_DELIVERY', label: 'บริษัทขอรับเงินค่าสินค้า 100% เมื่อส่งมอบสินค้า' },
   { code: 'ON_OR_BEFORE_DELIVERY', label: 'บริษัทขอรับเงินค่าสินค้า 100% เมื่อส่งมอบสินค้าหรือก่อนส่งมอบสินค้า' },
+  // Feedback #62: credit customers pay nothing up front; the editor shows a day-count input beside it.
+  { code: 'CREDIT', label: 'บริษัทขอรับเงินค่าสินค้าภายใน … วัน นับจากวันที่ส่งมอบสินค้า (เครดิต)' },
 ];
 
 export function fullPaymentTermLabel(value) {
@@ -531,6 +533,7 @@ export function depositTermsSummary({ depositPercent, fullPaymentTerm, remainder
   const pct = depositPercent ?? 30;
   if (pct === 100) return 'ชำระเต็มจำนวน 100% เมื่อสั่งซื้อสินค้า';
   if (pct === 0) {
+    if (fullPaymentTerm === 'CREDIT') return `เครดิต ${creditDays ?? 0} วัน (ไม่รับมัดจำ)`;
     const term = FULL_PAYMENT_TERM_SHORT[fullPaymentTerm]
       ?? (remainderMode === 'CREDIT'
         ? `ชำระเต็มจำนวนเป็นเครดิต ${creditDays ?? 0} วัน`
@@ -2204,10 +2207,10 @@ export function buildQuotationChecklist({
   if (isEffectiveZeroDeposit({ noDeposit, depositPercentCustom, depositPercent }) && blankValue(fullPaymentTerm)) {
     push(QUOTATION_CHECK.FULL_PAYMENT_TERM, 'มัดจำ 0% กรุณาเลือกเงื่อนไขการชำระเงิน', 'fullPaymentTerm');
   }
-  // Mirrors DealQuotationService's credit-days rule. Skipped entirely at effective-zero-deposit,
-  // where remainderMode is forced null server-side regardless of what is still displayed
-  // (buildUpsertPayload's `terms.noDeposit ? null : ...` ternary).
-  if (!isEffectiveZeroDeposit({ noDeposit, depositPercentCustom, depositPercent }) && remainderMode === 'CREDIT') {
+  // Mirrors DealQuotationService's credit-days rule. At effective-zero-deposit the remainder is forced null
+  // server-side, so only the CREDIT full-payment term carries days there.
+  const zeroDeposit = isEffectiveZeroDeposit({ noDeposit, depositPercentCustom, depositPercent });
+  if (zeroDeposit ? fullPaymentTerm === 'CREDIT' : remainderMode === 'CREDIT') {
     if (!blankValue(creditDays) && Number(creditDays) <= 0) {
       push(QUOTATION_CHECK.CREDIT_DAYS_INVALID, 'กรุณาระบุจำนวนวันเครดิต อย่างน้อย 1 วัน', 'creditDays');
     } else if (blankValue(creditDays)) {

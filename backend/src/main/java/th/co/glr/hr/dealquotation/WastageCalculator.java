@@ -113,6 +113,8 @@ public final class WastageCalculator {
      * THEN "หรือก่อน...", the reverse order of the other two terms'
      * own "ก่อน...หรือเมื่อ..." phrasing, hence the code name ON_OR_BEFORE_DELIVERY. */
     public static final String FULL_PAYMENT_TERM_ON_OR_BEFORE_DELIVERY = "ON_OR_BEFORE_DELIVERY";
+    /** "บริษัทขอรับเงินค่าสินค้าภายใน N วัน" — a credit customer pays nothing up front; REQUIRES credit_days (1..365). */
+    public static final String FULL_PAYMENT_TERM_CREDIT = "CREDIT";
 
     /** The currency a document defaults to from its language — TH→THB, EN→USD, so a rep picks ONE thing
      * (ภาษาเอกสาร) and the rest follows. DealQuotationService#resolveCurrency lets an explicit request override

@@ -7520,19 +7520,20 @@ function resolveDealQuotationDepositTerms(payload) {
   const depositPercent = payload.depositPercent ?? null;
   const noDeposit = depositPercent === 0;
   const remainderMode = noDeposit ? null : (payload.remainderMode ?? null);
-  const creditDays = noDeposit ? null : (payload.creditDays ?? null);
+  const creditTerm = noDeposit && payload.fullPaymentTerm === 'CREDIT';
+  const creditDays = noDeposit && !creditTerm ? null : (payload.creditDays ?? null);
   // Mirrors DealQuotationService#requireValidCreditDays: an EXPLICIT non-blank but invalid
   // creditDays (0 or negative) is refused immediately on every save when remainderMode is CREDIT. A
   // blank value still saves (a draft may be incomplete) -- only submit() below requires it be
   // filled in, the same split fullPaymentTerm already uses.
-  if (remainderMode === 'CREDIT' && creditDays != null && Number(creditDays) <= 0) {
+  if ((remainderMode === 'CREDIT' || creditTerm) && creditDays != null && Number(creditDays) <= 0) {
     fail('กรุณาระบุจำนวนวันเครดิต อย่างน้อย 1 วัน', 400);
   }
   let fullPaymentTerm = null;
   if (noDeposit) {
     fullPaymentTerm = payload.fullPaymentTerm ? String(payload.fullPaymentTerm).trim() : null;
-    if (fullPaymentTerm && !['BEFORE_DELIVERY', 'ON_DELIVERY', 'ON_OR_BEFORE_DELIVERY'].includes(fullPaymentTerm)) {
-      fail('ต้องเป็น BEFORE_DELIVERY, ON_DELIVERY หรือ ON_OR_BEFORE_DELIVERY', 400);
+    if (fullPaymentTerm && !['BEFORE_DELIVERY', 'ON_DELIVERY', 'ON_OR_BEFORE_DELIVERY', 'CREDIT'].includes(fullPaymentTerm)) {
+      fail('ต้องเป็น BEFORE_DELIVERY, ON_DELIVERY, ON_OR_BEFORE_DELIVERY หรือ CREDIT', 400);
     }
   }
   return { depositPercent, remainderMode, creditDays, fullPaymentTerm };

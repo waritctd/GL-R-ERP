@@ -1267,6 +1267,17 @@ class DealQuotationRenderAdapterV3Test {
     }
 
     @Test
+    void note2_zeroDeposit_creditTerm_printsDaysInThaiAndEnglish() {
+        assertThat(DealQuotationRenderAdapter.toRenderModel(
+            quotationWithDepositAndTerm(0, WastageCalculator.FULL_PAYMENT_TERM_CREDIT, null), null, null)
+            .remarkLines().get(1)).isEqualTo("2.บริษัทขอรับเงินค่าสินค้าภายใน 30 วัน นับจากวันที่ส่งมอบสินค้า");
+        assertThat(DealQuotationRenderAdapter.toRenderModel(
+            quotationWithDepositAndTerm(0, WastageCalculator.FULL_PAYMENT_TERM_CREDIT,
+                WastageCalculator.DOCUMENT_LANGUAGE_EN), null, null)
+            .remarkLines().get(1)).isEqualTo("2.Full payment is due within 30 days of delivery.");
+    }
+
+    @Test
     void englishDocument_note2_zeroDeposit_beforeDeliveryTerm() {
         QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(
             quotationWithDepositAndTerm(0, WastageCalculator.FULL_PAYMENT_TERM_BEFORE_DELIVERY,
@@ -1311,7 +1322,8 @@ class DealQuotationRenderAdapterV3Test {
             null, null, null, null, null, null,
             LocalDate.of(2026, 9, 11), "ลูกค้าทดสอบ", null, null, null,
             null, null, null, null, "โครงการทดสอบ",
-            "P003", "D002", LocalDate.of(2026, 9, 11), depositPercent, null, null, 30, null, null, null,
+            "P003", "D002", LocalDate.of(2026, 9, 11), depositPercent, null,
+            WastageCalculator.FULL_PAYMENT_TERM_CREDIT.equals(fullPaymentTerm) ? 30 : null, 30, null, null, null,
             null,
             WastageCalculator.PRICE_MODE_NET,
             documentLanguage != null ? documentLanguage : WastageCalculator.DOCUMENT_LANGUAGE_TH,

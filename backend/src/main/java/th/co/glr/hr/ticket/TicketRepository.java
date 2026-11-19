@@ -2118,6 +2118,8 @@ public class TicketRepository {
      * <ul>
      *   <li>{@code remainder_mode = CREDIT} with {@code credit_days} N: due = delivery date + N
      *       ({@code CREDIT_FROM_DELIVERY});</li>
+     *   <li>a zero-deposit {@code full_payment_term = CREDIT} with {@code credit_days} N: identical to the
+     *       CREDIT remainder (due = delivery date + N, {@code CREDIT_FROM_DELIVERY});</li>
      *   <li>any other non-null {@code remainder_mode} (the remainder is due before/on delivery), or a
      *       zero-deposit {@code full_payment_term} (BEFORE_DELIVERY / ON_DELIVERY / ON_OR_BEFORE_DELIVERY):
      *       due = the delivery date ({@code ON_DELIVERY});</li>
@@ -2130,16 +2132,16 @@ public class TicketRepository {
         return """
             SELECT tq.days, tq.basis, tq.credit_days, dv.delivered_on
               FROM (SELECT CASE
-                               WHEN q.remainder_mode = 'CREDIT' AND q.credit_days IS NOT NULL THEN q.credit_days::int
+                               WHEN (q.remainder_mode = 'CREDIT' OR q.full_payment_term = 'CREDIT') AND q.credit_days IS NOT NULL THEN q.credit_days::int
                                WHEN q.full_payment_term IN ('BEFORE_DELIVERY', 'ON_DELIVERY', 'ON_OR_BEFORE_DELIVERY') THEN 0
                                WHEN q.remainder_mode IS NOT NULL AND q.remainder_mode <> 'CREDIT' THEN 0
                            END AS days,
                            CASE
-                               WHEN q.remainder_mode = 'CREDIT' AND q.credit_days IS NOT NULL THEN 'CREDIT_FROM_DELIVERY'
+                               WHEN (q.remainder_mode = 'CREDIT' OR q.full_payment_term = 'CREDIT') AND q.credit_days IS NOT NULL THEN 'CREDIT_FROM_DELIVERY'
                                WHEN q.full_payment_term IN ('BEFORE_DELIVERY', 'ON_DELIVERY', 'ON_OR_BEFORE_DELIVERY') THEN 'ON_DELIVERY'
                                WHEN q.remainder_mode IS NOT NULL AND q.remainder_mode <> 'CREDIT' THEN 'ON_DELIVERY'
                            END AS basis,
-                           CASE WHEN q.remainder_mode = 'CREDIT' AND q.credit_days IS NOT NULL THEN q.credit_days::int END AS credit_days
+                           CASE WHEN (q.remainder_mode = 'CREDIT' OR q.full_payment_term = 'CREDIT') AND q.credit_days IS NOT NULL THEN q.credit_days::int END AS credit_days
                       FROM sales.quotation q
                      WHERE q.ticket_id = %1$s AND (ANSWERED OR q.doc_status IN ('ISSUED', 'SENT'))
                      ORDER BY CASE q.doc_status WHEN 'ACCEPTED' THEN 0 WHEN 'APPROVED' THEN 1 ELSE 2 END,

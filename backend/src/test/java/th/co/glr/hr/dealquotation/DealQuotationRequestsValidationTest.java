@@ -176,6 +176,7 @@ class DealQuotationRequestsValidationTest {
         assertThat(VALIDATOR.validate(validUpsert().fullPaymentTerm("BEFORE_DELIVERY").build())).isEmpty();
         assertThat(VALIDATOR.validate(validUpsert().fullPaymentTerm("ON_DELIVERY").build())).isEmpty();
         assertThat(VALIDATOR.validate(validUpsert().fullPaymentTerm("ON_OR_BEFORE_DELIVERY").build())).isEmpty();
+        assertThat(VALIDATOR.validate(validUpsert().fullPaymentTerm("CREDIT").build())).isEmpty();
     }
 
     private void assertViolated(Object candidate) {

@@ -481,7 +481,8 @@ public final class DealQuotationRequests {
          * V181, "ไม่รับมัดจำ" — one of
          * {@link WastageCalculator#FULL_PAYMENT_TERM_BEFORE_DELIVERY}/
          * {@link WastageCalculator#FULL_PAYMENT_TERM_ON_DELIVERY}/
-         * {@link WastageCalculator#FULL_PAYMENT_TERM_ON_OR_BEFORE_DELIVERY}, meaningful ONLY on a
+         * {@link WastageCalculator#FULL_PAYMENT_TERM_ON_OR_BEFORE_DELIVERY}/
+         * {@link WastageCalculator#FULL_PAYMENT_TERM_CREDIT} (which keeps {@code creditDays}), meaningful ONLY on a
          * document whose {@link #depositPercent} resolves to exactly 0 ("ไม่รับมัดจำ" ticked) —
          * {@code DealQuotationService#resolveFullPaymentTerm} forces it back to null on any other
          * deposit percentage, so a rep who unticks "ไม่รับมัดจำ" can never leave a stale term
@@ -490,8 +491,8 @@ public final class DealQuotationRequests {
          * to advance such a document until one is chosen. An unrecognised code is rejected here by
          * bean validation (400), before the service ever sees it.
          */
-        @Pattern(regexp = "BEFORE_DELIVERY|ON_DELIVERY|ON_OR_BEFORE_DELIVERY",
-            message = "ต้องเป็น BEFORE_DELIVERY, ON_DELIVERY หรือ ON_OR_BEFORE_DELIVERY")
+        @Pattern(regexp = "BEFORE_DELIVERY|ON_DELIVERY|ON_OR_BEFORE_DELIVERY|CREDIT",
+            message = "ต้องเป็น BEFORE_DELIVERY, ON_DELIVERY, ON_OR_BEFORE_DELIVERY หรือ CREDIT")
         String fullPaymentTerm,
         /**
          * IGNORED. {@code DealQuotationService} writes {@code ordered_by_name} (stored only, never

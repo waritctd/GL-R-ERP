@@ -313,6 +313,19 @@ class FinancePayableVatAndDueIntegrationTest extends FinanceDealTestBase {
     }
 
     @Test
+    void zeroDepositCreditTerm_isDueDeliveryPlusCreditDays() {
+        long ticketId = createS15Deal("AWAITING_FINAL_PAYMENT");
+        jdbc.update("UPDATE sales.quotation SET deposit_percent = 0, remainder_mode = NULL, full_payment_term = 'CREDIT', credit_days = 30 WHERE ticket_id = :id",
+            new MapSqlParameterSource("id", ticketId));
+        deliver(ticketId, today().minusDays(3).atTime(10, 0).atZone(BKK).toInstant());
+
+        TicketSummaryDto s = summary(ticketId);
+        assertThat(s.paymentDueBasis()).isEqualTo("CREDIT_FROM_DELIVERY");
+        assertThat(s.paymentDueDate()).isEqualTo(today().minusDays(3).plusDays(30));
+        assertThat(s.overdue()).isFalse();
+    }
+
+    @Test
     void unpaidDeposit_isNeverOverdue_evenWhenDeliveredLongAgo() {
         long ticketId = creditDeal(30, today().minusDays(90));
         tickets.updatePaymentStatusUnchecked(ticketId, "DEPOSIT_NOTICE_ISSUED");
