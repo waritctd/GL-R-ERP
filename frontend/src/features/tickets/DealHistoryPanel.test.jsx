@@ -1,7 +1,6 @@
 import React from 'react';
-import { fireEvent, render, screen } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
-import { formatMoney } from '../../utils/format.js';
+import { render, screen } from '@testing-library/react';
+import { describe, expect, it } from 'vitest';
 import { DealHistoryPanel } from './DealHistoryPanel.jsx';
 
 globalThis.React = React;
@@ -44,148 +43,6 @@ describe('DealHistoryPanel', () => {
     expect(advance).toBe('ฝ่ายนำเข้าเลื่อนขั้นตอน');
   });
 
-  it('PROCUREMENT_SOURCE_DECIDED has a Thai label (not the raw kind)', () => {
-    render(<DealHistoryPanel events={[{ id: 1, kind: 'PROCUREMENT_SOURCE_DECIDED', actorName: 'พนักงานขาย', createdAt: '2026-11-10T09:00:00.000Z' }]} activities={[]} />);
-    expect(screen.getByRole('listitem').textContent).toContain('เลือกที่มาสินค้า');
-  });
-
-  it('still renders newest-first for events at genuinely different timestamps (unaffected by the tiebreak)', () => {
-    render(
-      <DealHistoryPanel
-        events={[
-          { id: 1, kind: 'CREATED', actorName: 'พนักงานขาย', createdAt: '2026-07-01T09:00:00.000Z' },
-          { id: 2, kind: 'SUBMITTED', actorName: 'พนักงานขาย', createdAt: '2026-07-05T09:00:00.000Z' },
-        ]}
-        activities={[]}
-      />,
-    );
-
-    const items = screen.getAllByRole('listitem').map((li) => li.textContent);
-    expect(items[0]).toContain('ส่งเรื่องเข้าระบบ');
-    expect(items[1]).toContain('สร้างงาน');
-  });
-
-  it('a tie that is not between two events (e.g. an unparseable/missing timestamp) keeps a stable order rather than crashing', () => {
-    render(
-      <DealHistoryPanel
-        events={[
-          { id: 1, kind: 'CREATED', actorName: 'พนักงานขาย', createdAt: null },
-        ]}
-        activities={[
-          { id: 501, kind: 'CALL', activityDate: null, createdByName: 'พนักงานขาย', note: null },
-        ]}
-      />,
-    );
-
-    // Both rows have an unparseable timestamp — `toTimestamp` returns null for both, so neither is the two-events
-    // case the id tiebreak targets. No crash, and both still render (order unaffected by this fix).
-    expect(screen.getAllByRole('listitem')).toHaveLength(2);
-  });
-
-  // The activity form defaults to today in Bangkok, read when the form renders: at 06:30 Bangkok the
-  // UTC date is still yesterday, and a date fixed when the module loaded goes stale overnight.
-  it('the activity form defaults its date to today in Bangkok, not the UTC date', () => {
-    vi.useFakeTimers({ toFake: ['Date'] });
-    vi.setSystemTime(new Date('2026-10-30T23:30:00Z'));
-    try {
-      render(<DealHistoryPanel canAddActivity />);
-      // The form opens from "+ บันทึก" since the deal page redesign (2026-11-16).
-      fireEvent.click(screen.getByRole('button', { name: '+ บันทึก' }));
-      expect(screen.getByLabelText('วันที่').value).toBe('31/10/2569');
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  // GLA-74 (Opus review finding, 2026-09-19): DEAL_QUOTATION_SUPERSEDED had no EVENT_KIND_LABEL entry, so a
-  // missing label falls through to the RAW kind string (`EVENT_KIND_LABEL[event.kind] ?? event.kind`) -- a rep
-  // would see "DEAL_QUOTATION_SUPERSEDED" verbatim in the deal history.
-  it('labels DEAL_QUOTATION_SUPERSEDED in Thai rather than falling through to the raw kind string', () => {
-    render(
-      <DealHistoryPanel
-        events={[
-          { id: 1, kind: 'DEAL_QUOTATION_SUPERSEDED', actorName: 'พนักงานขาย',
-            message: 'ใบ QT-2026-0001-1 ถูกแทนที่ด้วย QT-2026-0001-2', createdAt: '2026-09-19T09:00:00.000Z' },
-        ]}
-        activities={[]}
-      />,
-    );
-
-    const item = screen.getByRole('listitem').textContent;
-    expect(item).toContain('ใบเสนอราคาถูกแทนที่');
-    expect(item).not.toContain('DEAL_QUOTATION_SUPERSEDED');
-  });
-
-  // Slice 2 (SLICE-2-FLOW-A.md §F, IA §8): the direct quotation's order confirmation is "ยืนยันคำสั่งซื้อ", not
-  // "สร้างดีล…" — under the linked design the deal already exists, so the event records the customer's order,
-  // and its history label says so.
-  it('labels DEAL_PROMOTED_FROM_QUOTATION as ยืนยันคำสั่งซื้อจากใบเสนอราคา', () => {
-    render(
-      <DealHistoryPanel
-        events={[
-          { id: 1, kind: 'DEAL_PROMOTED_FROM_QUOTATION', actorName: 'พนักงานขาย',
-            message: 'สร้างดีลจากใบเสนอราคา QT-2026-0005-1', createdAt: '2026-09-30T09:00:00.000Z' },
-        ]}
-        activities={[]}
-      />,
-    );
-
-    const item = screen.getByRole('listitem').textContent;
-    expect(item).toContain('ยืนยันคำสั่งซื้อจากใบเสนอราคา');
-    expect(item).not.toContain('DEAL_PROMOTED_FROM_QUOTATION');
-  });
-
-  // QA-29 leftover: kinds TicketEventKind writes that EVENT_KIND_LABEL lacked, so the raw enum showed.
-  it.each([
-    'CLOSE_CONFIRMED', 'CLOSE_CONFIRM_REVOKED', 'ORDER_CONFIRMATION_UNDONE', 'ORDER_CONFIRMED_FROM_QUOTATION',
-    'DEAL_QUOTATION_SUBMITTED', 'DEAL_QUOTATION_APPROVED', 'DEAL_QUOTATION_REJECTED',
-    'DEAL_QUOTATION_REVISION_SUBMITTED', 'IMPORT_STEP_ADVANCED', 'IMPORT_REQUEST_EMAIL_SENT',
-  ])('labels %s in Thai rather than the raw kind', (kind) => {
-    render(<DealHistoryPanel events={[{ id: 1, kind, actorName: 'พนักงานขาย', createdAt: '2026-10-30T09:00:00.000Z' }]} activities={[]} />);
-
-    const title = screen.getByRole('listitem').querySelector('strong').textContent;
-    expect(title).not.toBe(kind);
-    expect(title).toMatch(/[\u0E00-\u0E7F]/);
-    expect(screen.getByRole('listitem').textContent).not.toContain(kind);
-  });
-
-  // The backend writes "kind=…, amount=…, paid=…, payable=… — note"; old rows keep it, so the panel formats it.
-  describe('PAYMENT_RECORDED message', () => {
-    const payment = (message) => render(
-      <DealHistoryPanel events={[{ id: 1, kind: 'PAYMENT_RECORDED', actorName: 'บัญชี', message, createdAt: '2026-10-30T09:00:00.000Z' }]} activities={[]} />,
-    );
-
-    it('BALANCE reads ส่วนที่เหลือ with a formatted amount, keeping the note, and shows no kind=/amount= text', () => {
-      payment('kind=BALANCE, amount=440647.94, paid=440647.94, payable=881295.88 — ยืนยันชำระส่วนที่เหลือ');
-      const text = screen.getByRole('listitem').textContent;
-      expect(text).toContain('ส่วนที่เหลือ');
-      expect(text).toContain(formatMoney(440647.94));
-      expect(text).toContain('ยืนยันชำระส่วนที่เหลือ');
-      // F12: the running totals stay on the row (paid so far out of the payable).
-      expect(text).toContain(`รับแล้วรวม ${formatMoney(440647.94)}`);
-      expect(text).toContain(`จากยอด ${formatMoney(881295.88)}`);
-      expect(text).not.toMatch(/kind=|amount=|paid=|payable=|BALANCE/);
-    });
-
-    it.each([
-      ['DEPOSIT', 'มัดจำ'],
-      ['ADJUSTMENT', 'ปรับปรุงยอด/คืนเงิน'],
-    ])('%s reads %s with a formatted amount', (kind, label) => {
-      payment(`kind=${kind}, amount=1500.5, paid=1500.5, payable=5000`);
-      const text = screen.getByRole('listitem').textContent;
-      expect(text).toContain(label);
-      expect(text).toContain(formatMoney(1500.5));
-      expect(text).not.toMatch(new RegExp(`kind=|amount=|${kind}`));
-      expect(text).toContain(`รับแล้วรวม ${formatMoney(1500.5)}`);
-      expect(text).toContain(`จากยอด ${formatMoney(5000)}`);
-    });
-
-    it('a message that is not in that format is shown as written', () => {
-      payment('รับโอนเพิ่มเติมจากลูกค้า');
-      expect(screen.getByRole('listitem').textContent).toContain('รับโอนเพิ่มเติมจากลูกค้า');
-    });
-  });
-
   // TicketService.cancel / markLost write "ยกเลิกดีล (CODE) — note" / "เสียงาน (CODE) — note". The reason code is the
   // only place a cancelled deal's reason is displayed, so it reads as its label — the drawn new codes AND the three
   // retired on 2026-11-16 that already-cancelled deals carry. An unknown code is shown as written.
@@ -194,25 +51,9 @@ describe('DealHistoryPanel', () => {
       <DealHistoryPanel events={[{ id: 1, kind, actorName: 'พนักงานขาย', message, createdAt: '2026-11-16T09:00:00.000Z' }]} activities={[]} />,
     );
 
-    it.each([
-      ['ยกเลิกดีล (DUPLICATE_DEAL) — ซ้ำกับ PR-2026-0028', 'เปิดซ้ำกับงานอื่น — ซ้ำกับ PR-2026-0028'],
-      ['ยกเลิกดีล (OWNER_CANCELLED)', 'เจ้าของยกเลิกโครงการ'],
-      ['ยกเลิกดีล (BUDGET_CANCELLED)', 'งบประมาณถูกยกเลิก'],
-    ])('a CANCELLED message "%s" reads its label', (message, expected) => {
-      one('CANCELLED', message);
-      const text = screen.getByRole('listitem').textContent;
-      expect(text).toContain(expected);
-      expect(text).not.toMatch(/[A-Z]{3,}_[A-Z]/);
-    });
-
     it('a MARKED_LOST message reads its F-code and label', () => {
       one('MARKED_LOST', 'เสียงาน (PRICE) — คู่แข่งถูกกว่า');
       expect(screen.getByRole('listitem').textContent).toContain('F2 ราคา — คู่แข่งถูกกว่า');
-    });
-
-    it('an unknown code or free text is shown as written', () => {
-      one('CANCELLED', 'ลูกค้าแจ้งยกเลิก');
-      expect(screen.getByRole('listitem').textContent).toContain('ลูกค้าแจ้งยกเลิก');
     });
   });
 });

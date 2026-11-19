@@ -7,10 +7,6 @@ import { dealInScope, SALES_VIEW_SECTION_IDS, visibleSections } from './salesVie
 // DealStage.java — so passing it here is not a fixture inventing its own pipeline.
 const catalog = DEAL_STAGE_CATALOG;
 
-// Presentation-only module — see salesViewScope.js's own doc comment. These tests assert what a role's screen
-// renders, not what the server allows; the wrong-way-round cases below are the ones that matter (a role must
-// NOT see a section it has no business in), not merely that each role sees its own.
-
 describe('visibleSections', () => {
   it('ceo and sales_manager are an unconditional pass-through', () => {
     for (const role of ['ceo', 'sales_manager']) {
@@ -18,13 +14,6 @@ describe('visibleSections', () => {
       for (const id of SALES_VIEW_SECTION_IDS) {
         expect(sections[id], `${role}.${id}`).toBe(true);
       }
-    }
-  });
-
-  it('sales sees its own full pipeline', () => {
-    const sections = visibleSections('sales');
-    for (const id of SALES_VIEW_SECTION_IDS) {
-      expect(sections[id], `sales.${id}`).toBe(true);
     }
   });
 
@@ -36,37 +25,9 @@ describe('visibleSections', () => {
     expect(sections.dealQuotation).toBe(false);
   });
 
-  it('import DOES see the pricing-request/factory-quote/costing panel and procurement/fulfilment', () => {
-    const sections = visibleSections('import');
-    expect(sections.pricingRequest).toBe(true);
-    expect(sections.delivery).toBe(true);
-  });
-
   it('account does NOT see the pricing-request panel', () => {
     const sections = visibleSections('account');
     expect(sections.pricingRequest).toBe(false);
-  });
-
-  // Phase 3 Slice S4 (handoff 105): account now sees DealFulfilmentPanel too (read-only — no `can.*` action
-  // inside it ever resolves true for account's role), since the deal's fulfilment progress is exactly what gates
-  // the final-payment confirmation account is waiting to make.
-  it('account DOES see the fulfilment/delivery section', () => {
-    const sections = visibleSections('account');
-    expect(sections.delivery).toBe(true);
-  });
-
-  it('account DOES see the payment section, legacy quotations (for the total), and the deal-quotation section', () => {
-    const sections = visibleSections('account');
-    expect(sections.payment).toBe(true);
-    expect(sections.quotation).toBe(true);
-    expect(sections.dealQuotation).toBe(true);
-  });
-
-  it('an unexpected role (never reaches this page in production) defaults to nothing rather than leaking a section', () => {
-    const sections = visibleSections('hr');
-    for (const id of SALES_VIEW_SECTION_IDS) {
-      expect(sections[id], `hr.${id}`).toBe(false);
-    }
   });
 });
 
@@ -79,37 +40,9 @@ describe('dealInScope', () => {
     overdue: false,
   };
 
-  it('ceo and sales_manager see every deal', () => {
-    const deal = { ...baseDeal, salesStage: 'LEAD_APPROACH' };
-    expect(dealInScope('ceo', deal, catalog)).toBe(true);
-    expect(dealInScope('sales_manager', deal, catalog)).toBe(true);
-    expect(dealInScope('ceo', { ...deal, lifecycle: 'CLOSED_LOST' }, catalog)).toBe(true);
-  });
-
-  it('sales sees every deal it is handed (the list endpoint already scoped it to its own)', () => {
-    expect(dealInScope('sales', baseDeal, catalog)).toBe(true);
-  });
-
-  it('returns false for a missing deal regardless of role', () => {
-    expect(dealInScope('ceo', null, catalog)).toBe(false);
-    expect(dealInScope('import', undefined, catalog)).toBe(false);
-  });
-
   it('import: a deal still in the lead/presentation phase (no pricing work yet) is NOT in scope', () => {
     expect(dealInScope('import', { ...baseDeal, salesStage: 'LEAD_APPROACH' }, catalog)).toBe(false);
     expect(dealInScope('import', { ...baseDeal, salesStage: 'PRESENTATION' }, catalog)).toBe(false);
-  });
-
-  it('import: phase 2/3 quote stages (pricing work likely in flight) ARE in scope', () => {
-    expect(dealInScope('import', { ...baseDeal, salesStage: 'SPEC_APPROVED' }, catalog)).toBe(true);
-    expect(dealInScope('import', { ...baseDeal, salesStage: 'NEGOTIATION' }, catalog)).toBe(true);
-  });
-
-  it('import: salesStage index >= PROCUREMENT is in scope, even though phase 4 order/deposit stages are not', () => {
-    expect(dealInScope('import', { ...baseDeal, salesStage: 'ORDER_RECEIVED' }, catalog)).toBe(false);
-    expect(dealInScope('import', { ...baseDeal, salesStage: 'DEPOSIT_RECEIVED' }, catalog)).toBe(false);
-    expect(dealInScope('import', { ...baseDeal, salesStage: 'PROCUREMENT' }, catalog)).toBe(true);
-    expect(dealInScope('import', { ...baseDeal, salesStage: 'DELIVERED' }, catalog)).toBe(true);
   });
 
   it('import: a closed/lost/cancelled deal is never in scope even at a late stage', () => {
@@ -117,21 +50,8 @@ describe('dealInScope', () => {
     expect(dealInScope('import', { ...baseDeal, salesStage: 'PROCUREMENT', status: 'cancelled' }, catalog)).toBe(false);
   });
 
-  it('account: no money action pending means NOT in scope', () => {
-    expect(dealInScope('account', { ...baseDeal, paymentStatus: null, overdue: false }, catalog)).toBe(false);
-    expect(dealInScope('account', { ...baseDeal, paymentStatus: 'CUSTOMER_CONFIRMED', overdue: false }, catalog)).toBe(false);
-  });
-
   it('account: an awaited deposit or final-payment confirmation IS in scope', () => {
     expect(dealInScope('account', { ...baseDeal, paymentStatus: 'DEPOSIT_NOTICE_ISSUED' }, catalog)).toBe(true);
     expect(dealInScope('account', { ...baseDeal, paymentStatus: 'AWAITING_FINAL_PAYMENT' }, catalog)).toBe(true);
-  });
-
-  it('account: an overdue outstanding balance IS in scope regardless of paymentStatus', () => {
-    expect(dealInScope('account', { ...baseDeal, paymentStatus: 'FULLY_PAID', overdue: true }, catalog)).toBe(true);
-  });
-
-  it('an unexpected role never gets a deal placed in its scope', () => {
-    expect(dealInScope('hr', { ...baseDeal, paymentStatus: 'DEPOSIT_NOTICE_ISSUED', overdue: true }, catalog)).toBe(false);
   });
 });

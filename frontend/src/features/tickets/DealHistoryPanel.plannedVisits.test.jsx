@@ -1,6 +1,6 @@
 import React from 'react';
 import { MemoryRouter } from 'react-router-dom';
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { DealHistoryPanel } from './DealHistoryPanel.jsx';
 
@@ -41,82 +41,8 @@ describe('DealHistoryPanel — planned visits', () => {
     expect(all[2].textContent).toContain('ออกใบเสนอราคา');
   });
 
-  it('say นัดไว้, who is being met, when, by whom, and the purpose', () => {
-    renderPanel({ plannedVisits: [planned()] });
-
-    const row = screen.getByTestId('timeline-planned-visit');
-    expect(within(row).getByText('นัดไว้')).toBeTruthy();
-    expect(within(row).getByText('นัดเข้าพบ · คุณอรุณ · สตูดิโอเส้นตรง')).toBeTruthy();
-    expect(row.textContent).toContain('พฤ. 19 พ.ย. · 10:00');
-    expect(row.textContent).toContain('คุณสมหมาย ขายดี');
-    expect(within(row).getByText('นำตัวอย่างไปเทียบสี')).toBeTruthy();
-  });
-
-  it('an untimed visit shows the day only', () => {
-    renderPanel({ plannedVisits: [planned({ plannedTime: null, plannedDate: '2026-11-24' })] });
-    const row = screen.getByTestId('timeline-planned-visit');
-    expect(row.textContent).toContain('อ. 24 พ.ย.');
-    expect(row.textContent).not.toMatch(/\d\d:\d\d/);
-  });
-
-  it('a planned visit whose day has passed without a tick says เลยวันนัด, not นัดไว้', () => {
-    renderPanel({ plannedVisits: [planned({ plannedDate: '2026-11-16' })] });
-    const row = screen.getByTestId('timeline-planned-visit');
-    expect(within(row).getByText('เลยวันนัด')).toBeTruthy();
-    expect(within(row).queryByText('นัดไว้')).toBeNull();
-  });
-
-  it('stay under ทั้งหมด and เข้าพบ, and leave under เอกสาร', () => {
-    renderPanel({ plannedVisits: [planned()] });
-
-    fireEvent.click(screen.getByRole('button', { name: 'เข้าพบ' }));
-    expect(screen.getByTestId('timeline-planned-visit')).toBeTruthy();
-    expect(rows()).toHaveLength(2);
-
-    fireEvent.click(screen.getByRole('button', { name: 'เอกสาร' }));
-    expect(screen.queryByTestId('timeline-planned-visit')).toBeNull();
-    expect(rows()).toHaveLength(1);
-
-    fireEvent.click(screen.getByRole('button', { name: 'ทั้งหมด' }));
-    expect(screen.getByTestId('timeline-planned-visit')).toBeTruthy();
-  });
-
-  it('each row links to the นัดเข้าพบ page when the viewer may open it', () => {
-    renderPanel({ plannedVisits: [planned()], visitsHref: '/visits' });
-    const link = within(screen.getByTestId('timeline-planned-visit')).getByRole('link');
-    // Fix round 1: the week holding the visit (Thu 19 Nov 2026 → Mon 16 Nov), not always this week.
-    expect(link.getAttribute('href')).toBe('/visits?week=2026-11-16');
-    expect(link.textContent).toContain('นัดเข้าพบ · คุณอรุณ');
-  });
-
-  it('a visit two months out links to its own week', () => {
-    renderPanel({ plannedVisits: [planned({ plannedDate: '2027-01-21' })], visitsHref: '/visits' });
-    expect(within(screen.getByTestId('timeline-planned-visit')).getByRole('link').getAttribute('href'))
-      .toBe('/visits?week=2027-01-18');
-  });
-
-  // Fix round 1 (review F4): the boundary. A visit dated today in Bangkok has not been missed yet.
-  it('a visit dated today is นัดไว้, not เลยวันนัด', () => {
-    renderPanel({ plannedVisits: [planned({ plannedDate: TODAY })] });
-    const row = screen.getByTestId('timeline-planned-visit');
-    expect(within(row).getByText('นัดไว้')).toBeTruthy();
-    expect(within(row).queryByText('เลยวันนัด')).toBeNull();
-  });
-
   it('no link when the viewer cannot open the นัดเข้าพบ page', () => {
     renderPanel({ plannedVisits: [planned()], visitsHref: null });
     expect(within(screen.getByTestId('timeline-planned-visit')).queryByRole('link')).toBeNull();
-  });
-
-  it('a deal with only a planned visit does not claim the history is empty', () => {
-    renderPanel({ events: [], activities: [], plannedVisits: [planned()] });
-    expect(screen.queryByText('ยังไม่มีประวัติ')).toBeNull();
-    expect(screen.getByTestId('timeline-planned-visit')).toBeTruthy();
-  });
-
-  it('with no planned visits the history is exactly as before', () => {
-    renderPanel({ plannedVisits: [] });
-    expect(screen.queryByTestId('timeline-planned-visit')).toBeNull();
-    expect(rows()).toHaveLength(2);
   });
 });

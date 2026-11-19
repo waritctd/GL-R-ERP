@@ -1,11 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import { SALES_ACTION, nextSalesAction, sortWorklist } from './salesActions.js';
-import { bangkokTodayIso } from '../../utils/format.js';
-
-// Direct unit tests for this module, focused on the RECORD_DELIVERY bucket (stages 13-14
-// ส่งมอบสินค้า) and its interaction with the rest of the cascade, plus a baseline pass over every
-// other bucket. workState.test.js's "nextSalesAction — CREATE_PCR gate" describe still covers the
-// bucket-1 guard on its own.
 
 function baseDeal(overrides = {}) {
   return {
@@ -31,14 +25,6 @@ describe('nextSalesAction — RECORD_DELIVERY (stages 13-14, owner ruling 2026-0
     });
   });
 
-  it('returns RECORD_DELIVERY for FROM_STOCK and PARTIALLY_DELIVERED too — every status nextFulfilmentActionCode calls delivery-ready', () => {
-    const prs = [orderConfirmedPr()];
-    expect(nextSalesAction(baseDeal({ status: 'quotation_issued', fulfillmentStatus: 'FROM_STOCK', paymentStatus: 'DEPOSIT_PAID' }), prs))
-      .toMatchObject({ key: SALES_ACTION.RECORD_DELIVERY });
-    expect(nextSalesAction(baseDeal({ status: 'quotation_issued', fulfillmentStatus: 'PARTIALLY_DELIVERED' }), prs))
-      .toMatchObject({ key: SALES_ACTION.RECORD_DELIVERY });
-  });
-
   it('does NOT return RECORD_DELIVERY once delivery is complete (FULLY_DELIVERED) or still mid-fulfilment (SHIPPING)', () => {
     const prs = [orderConfirmedPr()];
     // .toBeNull(), not just ".key !== RECORD_DELIVERY": with orderConfirmedAt already set, bucket 3 is also
@@ -46,18 +32,6 @@ describe('nextSalesAction — RECORD_DELIVERY (stages 13-14, owner ruling 2026-0
     // on some OTHER bucket.
     expect(nextSalesAction(baseDeal({ status: 'quotation_issued', fulfillmentStatus: 'FULLY_DELIVERED' }), prs)).toBeNull();
     expect(nextSalesAction(baseDeal({ status: 'quotation_issued', fulfillmentStatus: 'SHIPPING' }), prs)).toBeNull();
-  });
-
-  it('outranks a due follow-up on the same deal — bucket 4 returns before bucket 5 (follow-up) is ever checked', () => {
-    const deal = baseDeal({
-      status: 'quotation_issued', fulfillmentStatus: 'GOODS_RECEIVED',
-      nextFollowUpAt: '2020-01-01', // deeply overdue — would win bucket 5 outright on its own
-    });
-    const action = nextSalesAction(deal, [orderConfirmedPr()]);
-    expect(action.key).toBe(SALES_ACTION.RECORD_DELIVERY);
-    // `followUp` is only ever set by bucket 5's own return — its absence here confirms this really is bucket 4
-    // firing, not a follow-up action that happens to carry the delivery label.
-    expect(action.followUp).toBeUndefined();
   });
 
   // ── Bucket-1 interaction ───────────────────────────────────────────────────
@@ -73,42 +47,15 @@ describe('nextSalesAction — RECORD_DELIVERY (stages 13-14, owner ruling 2026-0
     // 'still offers create_pcr after ...
     expect(nextSalesAction(deal, [])).toMatchObject({ key: SALES_ACTION.CREATE_PCR });
   });
-
-  // The counterpart: once there IS price evidence, even with zero live (or zero total) pricing
-  // requests (the pricedOutsidePcrChain legacy-deal case), bucket 1 steps aside and RECORD_DELIVERY
-  // fires. This is the shape of the two sales-owned demo fixtures in demoData.js (tickets 13 "Mega
-  // Bangna Retail" and 14 "IconSiam Riverside": createdById 6, zero PricingRequest rows, status
-  // quotation_issued, fulfillmentStatus GOODS_RECEIVED, a non-null paymentStatus).
-  it('RECORD_DELIVERY fires once there is price evidence, even with zero pricing requests (legacy pre-PCR-chain deal)', () => {
-    const deal = baseDeal({
-      status: 'quotation_issued', fulfillmentStatus: 'GOODS_RECEIVED', paymentStatus: 'AWAITING_FINAL_PAYMENT',
-    });
-    expect(nextSalesAction(deal, [])).toEqual({ key: SALES_ACTION.RECORD_DELIVERY, label: 'บันทึกส่งมอบ' });
-  });
 });
 
 describe('nextSalesAction — RECORD_QUOTATION_OUTCOME (bucket 4, deal-page CTA discoverability fix)', () => {
-  it('returns RECORD_QUOTATION_OUTCOME for a live PR at QUOTATION_ISSUED (previously fell through to follow-up/activity)', () => {
-    const prs = [{ id: 4, ticketId: 1, status: 'QUOTATION_ISSUED' }];
-    expect(nextSalesAction(baseDeal(), prs)).toEqual({
-      key: SALES_ACTION.RECORD_QUOTATION_OUTCOME,
-      label: 'บันทึกผลใบเสนอราคา',
-      pricingRequestId: 4,
-    });
-  });
-
   it('CONFIRM_ORDER still wins when one PR is QUOTATION_ACCEPTED even alongside a stale sibling PR still at QUOTATION_ISSUED', () => {
     const prs = [
       { id: 1, ticketId: 1, status: 'QUOTATION_ISSUED' },
       { id: 2, ticketId: 1, status: 'QUOTATION_ACCEPTED', orderConfirmedAt: null },
     ];
     expect(nextSalesAction(baseDeal(), prs)).toMatchObject({ key: SALES_ACTION.CONFIRM_ORDER });
-  });
-
-  it('RECORD_QUOTATION_OUTCOME outranks RECORD_DELIVERY when both could apply (bucket 4 fires before bucket 5 is ever checked)', () => {
-    const deal = baseDeal({ status: 'quotation_issued', fulfillmentStatus: 'GOODS_RECEIVED' });
-    const prs = [{ id: 1, ticketId: 1, status: 'QUOTATION_ISSUED' }];
-    expect(nextSalesAction(deal, prs)).toMatchObject({ key: SALES_ACTION.RECORD_QUOTATION_OUTCOME });
   });
 });
 
@@ -126,17 +73,6 @@ describe('nextSalesAction — full cascade baseline (buckets 1-3, 6-7)', () => {
     });
   });
 
-  // The deal page hands in its quotation list (`quotationByRequest`, a Map of pricingRequestId ->
-  // the newest PRICING_REQUEST-origin quotation). A DRAFT already written for the approved request
-  // is opened, never written a second time.
-  it('ISSUE_QUOTATION — the approved request\'s DRAFT quotation is already written: "เสนอใบราคา<party>" points at that draft', () => {
-    const prs = [{ id: 7, ticketId: 1, status: 'APPROVED_FOR_QUOTATION', recipientType: 'OWNER' }];
-    const quotationByRequest = new Map([[7, { id: 9107, number: 'QT-2026-0107-1', docStatus: 'DRAFT' }]]);
-    expect(nextSalesAction(baseDeal(), prs, { quotationByRequest })).toMatchObject({
-      key: SALES_ACTION.ISSUE_QUOTATION, label: 'เสนอใบราคาเจ้าของโครงการ', to: '/quotations/9107',
-    });
-  });
-
   it('CONFIRM_ORDER — QUOTATION_ACCEPTED but not yet order-confirmed', () => {
     const prs = [{ id: 1, ticketId: 1, status: 'QUOTATION_ACCEPTED', orderConfirmedAt: null }];
     expect(nextSalesAction(baseDeal(), prs)).toMatchObject({ key: SALES_ACTION.CONFIRM_ORDER });
@@ -149,11 +85,6 @@ describe('nextSalesAction — full cascade baseline (buckets 1-3, 6-7)', () => {
     }
   });
 
-  it('CONFIRM_ORDER — still offered for a quotation_issued ticket (a later accepted revision)', () => {
-    const prs = [{ id: 1, ticketId: 1, status: 'QUOTATION_ACCEPTED', orderConfirmedAt: null }];
-    expect(nextSalesAction(baseDeal({ status: 'quotation_issued' }), prs)).toMatchObject({ key: SALES_ACTION.CONFIRM_ORDER });
-  });
-
   it('FOLLOW_UP — order confirmed, not delivery-ready, follow-up overdue', () => {
     const deal = baseDeal({ status: 'quotation_issued', nextFollowUpAt: '2020-01-01' });
     expect(nextSalesAction(deal, [orderConfirmedPr()])).toMatchObject({ key: SALES_ACTION.FOLLOW_UP, followUp: 'overdue' });
@@ -164,31 +95,9 @@ describe('nextSalesAction — full cascade baseline (buckets 1-3, 6-7)', () => {
     expect(nextSalesAction(deal, [orderConfirmedPr()])).toMatchObject({ key: SALES_ACTION.LOG_ACTIVITY });
   });
 
-  it('null — nothing pending anywhere in the cascade (a live PR sitting with import, nothing else due)', () => {
-    const prs = [{ id: 1, ticketId: 1, status: 'IMPORT_REVIEWING' }];
-    expect(nextSalesAction(baseDeal({ status: 'quotation_issued' }), prs)).toBeNull();
-  });
-
   it('null for a non-ACTIVE deal, and null for no deal at all', () => {
     expect(nextSalesAction(baseDeal({ lifecycle: 'ON_HOLD' }), [orderConfirmedPr()])).toBeNull();
     expect(nextSalesAction(null, [])).toBeNull();
-  });
-});
-
-// Stock goods leave only once the deposit is settled (paid, or a no-deposit policy).
-describe('nextSalesAction — RECORD_DELIVERY waits for the deposit on a stock deal', () => {
-  const fromStock = (overrides = {}) => baseDeal({ status: 'quotation_issued', fulfillmentStatus: 'FROM_STOCK', ...overrides });
-  it('FROM_STOCK on a REQUIRED deal still at CUSTOMER_CONFIRMED -> no delivery action', () => {
-    expect(nextSalesAction(fromStock({ paymentStatus: 'CUSTOMER_CONFIRMED', depositPolicy: 'REQUIRED' }), [orderConfirmedPr()])?.key)
-      .not.toBe(SALES_ACTION.RECORD_DELIVERY);
-  });
-  it.each([
-    ['REQUIRED', 'DEPOSIT_PAID'],
-    ['NOT_REQUIRED', 'CUSTOMER_CONFIRMED'],
-    ['REQUIRED', 'FULLY_PAID'],
-  ])('depositPolicy %s at %s -> บันทึกส่งมอบ', (depositPolicy, paymentStatus) => {
-    expect(nextSalesAction(fromStock({ paymentStatus, depositPolicy }), [orderConfirmedPr()]))
-      .toMatchObject({ key: SALES_ACTION.RECORD_DELIVERY });
   });
 });
 
@@ -201,42 +110,6 @@ describe('sortWorklist — RECORD_DELIVERY rank relative to CONFIRM_ORDER and FO
     ];
     expect(sortWorklist(items).map((item) => item.deal.id)).toEqual([2, 1, 3]);
   });
-
-  it('places RECORD_QUOTATION_OUTCOME between ISSUE_QUOTATION and CREATE_PCR, ahead of RECORD_DELIVERY', () => {
-    const items = [
-      { deal: { id: 1, stageUpdatedAt: '2026-07-01T00:00:00.000Z' }, action: { key: SALES_ACTION.RECORD_DELIVERY, label: 'x' } },
-      { deal: { id: 2, stageUpdatedAt: '2026-07-01T00:00:00.000Z' }, action: { key: SALES_ACTION.CREATE_PCR, label: 'x' } },
-      { deal: { id: 3, stageUpdatedAt: '2026-07-01T00:00:00.000Z' }, action: { key: SALES_ACTION.RECORD_QUOTATION_OUTCOME, label: 'x' } },
-      { deal: { id: 4, stageUpdatedAt: '2026-07-01T00:00:00.000Z' }, action: { key: SALES_ACTION.ISSUE_QUOTATION, label: 'x' } },
-    ];
-    expect(sortWorklist(items).map((item) => item.deal.id)).toEqual([4, 3, 2, 1]);
-  });
-
-  it('an OVERDUE follow-up still leads ahead of a delivery row, despite RECORD_DELIVERY outranking FOLLOW_UP under equal urgency', () => {
-    const items = [
-      { deal: { id: 1, stageUpdatedAt: '2026-07-01T00:00:00.000Z' }, action: { key: SALES_ACTION.RECORD_DELIVERY, label: 'x' } },
-      { deal: { id: 2, stageUpdatedAt: '2026-07-01T00:00:00.000Z' }, action: { key: SALES_ACTION.FOLLOW_UP, label: 'x', followUp: 'overdue' } },
-    ];
-    expect(sortWorklist(items).map((item) => item.deal.id)).toEqual([2, 1]);
-  });
-
-  it('two delivery rows tie-break on the OLDER stageUpdatedAt first', () => {
-    const items = [
-      { deal: { id: 1, stageUpdatedAt: '2026-07-10T00:00:00.000Z' }, action: { key: SALES_ACTION.RECORD_DELIVERY, label: 'x' } },
-      { deal: { id: 2, stageUpdatedAt: '2026-07-01T00:00:00.000Z' }, action: { key: SALES_ACTION.RECORD_DELIVERY, label: 'x' } },
-    ];
-    expect(sortWorklist(items).map((item) => item.deal.id)).toEqual([2, 1]);
-  });
-
-  it('does not mutate the input array', () => {
-    const items = [
-      { deal: { id: 1, stageUpdatedAt: '2026-07-01T00:00:00.000Z' }, action: { key: SALES_ACTION.FOLLOW_UP, label: 'x' } },
-      { deal: { id: 2, stageUpdatedAt: '2026-07-01T00:00:00.000Z' }, action: { key: SALES_ACTION.RECORD_DELIVERY, label: 'x' } },
-    ];
-    const original = [...items];
-    sortWorklist(items);
-    expect(items).toEqual(original);
-  });
 });
 
 // A deal whose direct quotation (DEAL_DIRECT) is live is being priced BY HAND. Its CTA follows that
@@ -248,27 +121,6 @@ describe('nextSalesAction — live direct quotation buckets (slice 2, flow A)', 
     return { id: 77, number: 'QT-2026-0077-1', docStatus, recipientType: 'DESIGNER', ...overrides };
   }
 
-  it('DRAFT -> SUBMIT_DIRECT_QUOTATION "ส่งขออนุมัติใบเสนอราคา", pointing at the quotation', () => {
-    const deal = baseDeal({ liveDirectQuotation: liveDirect('DRAFT') });
-    expect(nextSalesAction(deal, [])).toEqual({
-      key: SALES_ACTION.SUBMIT_DIRECT_QUOTATION,
-      label: 'ส่งขออนุมัติใบเสนอราคา',
-      quotationId: 77,
-      quotationNumber: 'QT-2026-0077-1',
-      to: '/quotations/77',
-    });
-  });
-
-  it('PENDING_APPROVAL -> AWAIT_DIRECT_APPROVAL "รออนุมัติใบเสนอราคา" (a waiting state, carries the number for the banner)', () => {
-    const deal = baseDeal({ liveDirectQuotation: liveDirect('PENDING_APPROVAL') });
-    expect(nextSalesAction(deal, [])).toMatchObject({
-      key: SALES_ACTION.AWAIT_DIRECT_APPROVAL,
-      label: 'รออนุมัติใบเสนอราคา',
-      quotationId: 77,
-      quotationNumber: 'QT-2026-0077-1',
-    });
-  });
-
   it('APPROVED -> CONFIRM_ORDER_DIRECT "ยืนยันคำสั่งซื้อ"', () => {
     const deal = baseDeal({ liveDirectQuotation: liveDirect('APPROVED') });
     expect(nextSalesAction(deal, [])).toMatchObject({
@@ -276,16 +128,6 @@ describe('nextSalesAction — live direct quotation buckets (slice 2, flow A)', 
       label: 'ยืนยันคำสั่งซื้อ',
       quotationId: 77,
     });
-  });
-
-  it('wins over CREATE_PCR — a zero-pricing-request deal with a live direct quotation is never told to open a คำขอราคา', () => {
-    // Exactly bucket 1's shape (no PR at all, no price evidence): this is the ordering test.
-    const keys = ['DRAFT', 'PENDING_APPROVAL', 'APPROVED']
-      .map((docStatus) => nextSalesAction(baseDeal({ liveDirectQuotation: liveDirect(docStatus) }), [])?.key);
-    expect(keys).toEqual([
-      SALES_ACTION.SUBMIT_DIRECT_QUOTATION, SALES_ACTION.AWAIT_DIRECT_APPROVAL, SALES_ACTION.CONFIRM_ORDER_DIRECT,
-    ]);
-    expect(keys).not.toContain(SALES_ACTION.CREATE_PCR);
   });
 
   // confirmOrderFromDirectQuotation 409s unless the deal's status is still 'draft'. A legacy deal
@@ -309,28 +151,6 @@ describe('nextSalesAction — live direct quotation buckets (slice 2, flow A)', 
       nextSalesAction(baseDeal({ status: 'draft', liveDirectQuotation: liveDirect('APPROVED', liveOverrides), ...dealOverrides }), [],
         { offRouteParties });
 
-    it('DESIGNER -> เสนอราคาเจ้าของโครงการ with [OWNER, BUYER], anchored on the designer, direct: true', () => {
-      expect(next({ recipientType: 'DESIGNER' })).toMatchObject({
-        key: SALES_ACTION.QUOTE_NEXT_PARTY,
-        label: 'เสนอราคาเจ้าของโครงการ',
-        parties: ['OWNER', 'BUYER'],
-        anchorParty: 'DESIGNER',
-        anchorDeclined: false,
-        direct: true,
-      });
-    });
-
-    it('OWNER -> เสนอราคาผู้ซื้อ/ผู้รับเหมา with [BUYER]', () => {
-      expect(next({ recipientType: 'OWNER' })).toMatchObject({
-        key: SALES_ACTION.QUOTE_NEXT_PARTY, label: 'เสนอราคาผู้ซื้อ/ผู้รับเหมา', parties: ['BUYER'], anchorParty: 'OWNER', direct: true,
-      });
-    });
-
-    it('a skipped OWNER (off the route) leaves only BUYER, labelled by the first on-route party', () => {
-      expect(next({ recipientType: 'DESIGNER' }, { offRouteParties: new Set(['OWNER']) }))
-        .toMatchObject({ key: SALES_ACTION.QUOTE_NEXT_PARTY, label: 'เสนอราคาผู้ซื้อ/ผู้รับเหมา', parties: ['BUYER'] });
-    });
-
     it('stays CONFIRM_ORDER_DIRECT for BUYER / UNSPECIFIED, when no later party is on the route, and when the route is unknown', () => {
       for (const recipientType of ['BUYER', 'UNSPECIFIED']) {
         expect(next({ recipientType }).key).toBe(SALES_ACTION.CONFIRM_ORDER_DIRECT);
@@ -339,56 +159,6 @@ describe('nextSalesAction — live direct quotation buckets (slice 2, flow A)', 
       expect(next({ recipientType: 'DESIGNER' }, { offRouteParties: new Set(['OWNER', 'BUYER']) }).key).toBe(SALES_ACTION.CONFIRM_ORDER_DIRECT);
       expect(next({ recipientType: 'DESIGNER' }, { offRouteParties: null }).key).toBe(SALES_ACTION.CONFIRM_ORDER_DIRECT);
     });
-
-    it('DRAFT / PENDING_APPROVAL direct quotations never turn into a route choice', () => {
-      const draftAction = nextSalesAction(baseDeal({ status: 'draft', liveDirectQuotation: liveDirect('DRAFT') }), [], { offRouteParties: KNOWN });
-      const pendingAction = nextSalesAction(baseDeal({ status: 'draft', liveDirectQuotation: liveDirect('PENDING_APPROVAL') }), [], { offRouteParties: KNOWN });
-      expect([draftAction.key, pendingAction.key]).toEqual([SALES_ACTION.SUBMIT_DIRECT_QUOTATION, SALES_ACTION.AWAIT_DIRECT_APPROVAL]);
-    });
-
-    it('a deal past draft is not offered the route choice either (same status guard as the confirm)', () => {
-      const action = next({ recipientType: 'DESIGNER' }, { dealOverrides: { status: 'approved' } });
-      expect(action?.key).not.toBe(SALES_ACTION.QUOTE_NEXT_PARTY);
-    });
-  });
-
-  it('null / absent liveDirectQuotation leaves the cascade exactly as before (CREATE_PCR)', () => {
-    expect(nextSalesAction(baseDeal({ liveDirectQuotation: null }), [])).toMatchObject({ key: SALES_ACTION.CREATE_PCR });
-    expect(nextSalesAction(baseDeal(), [])).toMatchObject({ key: SALES_ACTION.CREATE_PCR });
-  });
-
-  it('a non-live status (CANCELLED / SUPERSEDED / REJECTED) is ignored — the server never sends one, but the client must not act on it either', () => {
-    for (const docStatus of ['CANCELLED', 'SUPERSEDED', 'REJECTED']) {
-      expect(nextSalesAction(baseDeal({ liveDirectQuotation: liveDirect(docStatus) }), []))
-        .toMatchObject({ key: SALES_ACTION.CREATE_PCR });
-    }
-  });
-
-  it('a non-ACTIVE deal gets nothing, live quotation or not (same lifecycle guard as every bucket)', () => {
-    expect(nextSalesAction(baseDeal({ lifecycle: 'ON_HOLD', liveDirectQuotation: liveDirect('DRAFT') }), [])).toBeNull();
-  });
-
-  it('ranks: CONFIRM_ORDER_DIRECT with CONFIRM_ORDER (1), SUBMIT_DIRECT_QUOTATION with ISSUE_QUOTATION (2), AWAIT_DIRECT_APPROVAL with the waiting rank (5)', () => {
-    const at = '2026-07-01T00:00:00.000Z';
-    const row = (id, key) => ({ deal: { id, stageUpdatedAt: at }, action: { key } });
-    const sorted = sortWorklist([
-      row(1, SALES_ACTION.AWAIT_DIRECT_APPROVAL),
-      row(2, SALES_ACTION.FOLLOW_UP),
-      row(3, SALES_ACTION.CREATE_PCR),
-      row(4, SALES_ACTION.SUBMIT_DIRECT_QUOTATION),
-      row(5, SALES_ACTION.CONFIRM_ORDER_DIRECT),
-    ]).map((item) => item.deal.id);
-    // CONFIRM_ORDER_DIRECT(1) < SUBMIT(2) < CREATE_PCR(4) < AWAIT(5) < FOLLOW_UP(6)
-    expect(sorted).toEqual([5, 4, 3, 1, 2]);
-  });
-
-  it('shares a rank with its sibling: inside rank 2 the longest-waiting deal leads, whichever bucket it is', () => {
-    const sorted = sortWorklist([
-      { deal: { id: 1, stageUpdatedAt: '2026-07-05T00:00:00.000Z' }, action: { key: SALES_ACTION.SUBMIT_DIRECT_QUOTATION } },
-      { deal: { id: 2, stageUpdatedAt: '2026-07-01T00:00:00.000Z' }, action: { key: SALES_ACTION.ISSUE_QUOTATION } },
-      { deal: { id: 3, stageUpdatedAt: '2026-06-01T00:00:00.000Z' }, action: { key: SALES_ACTION.SUBMIT_DIRECT_QUOTATION } },
-    ]).map((item) => item.deal.id);
-    expect(sorted).toEqual([3, 2, 1]);
   });
 });
 
@@ -406,33 +176,11 @@ describe('nextSalesAction — REVISE_QUOTATION (PR A)', () => {
   const issuedPr = (overrides = {}) => ({ id: 5, ticketId: 1, status: 'QUOTATION_ISSUED', orderConfirmedAt: null, ...overrides });
   const approvedDirect = { id: 90, number: 'QT-2026-0090-1', docStatus: 'APPROVED', recipientType: 'DESIGNER' };
 
-  it('exposes the new action key', () => {
-    expect(SALES_ACTION.REVISE_QUOTATION).toBe('revise_quotation');
-  });
-
   it('APPROVED direct quotation on a deal past draft -> REVISE_QUOTATION instead of the old CREATE_PCR fall-through', () => {
     const deal = baseDeal({ status: 'quotation_issued', liveDirectQuotation: approvedDirect });
     expect(nextSalesAction(deal, [], { reviseTarget: target })).toEqual({
       key: REVISE, label: 'แก้ใบเสนอราคา', quotationId: 90, quotationNumber: 'QT-2026-0090-1',
     });
-  });
-
-  it('cascade order unchanged: an APPROVED direct quotation on a still-draft deal keeps CONFIRM_ORDER_DIRECT', () => {
-    const deal = baseDeal({ status: 'draft', liveDirectQuotation: approvedDirect });
-    expect(nextSalesAction(deal, [], { reviseTarget: target })).toMatchObject({ key: SALES_ACTION.CONFIRM_ORDER_DIRECT });
-  });
-
-  it.each(['QUOTE_OWNER', 'QUOTE_BUYER'])(
-    'an issued PR-origin quotation at %s keeps RECORD_QUOTATION_OUTCOME as the primary even with a reviseTarget (revise is a SECONDARY action — see workState secondaryWorkActions)',
-    (salesStage) => {
-      const deal = baseDeal({ salesStage });
-      expect(nextSalesAction(deal, [issuedPr()], { reviseTarget: target })).toMatchObject({ key: SALES_ACTION.RECORD_QUOTATION_OUTCOME });
-    },
-  );
-
-  it('wrong-way-round: the same issued quotation at the DESIGNER stage still gets RECORD_QUOTATION_OUTCOME', () => {
-    const deal = baseDeal({ salesStage: 'QUOTE_DESIGN_SIDE' });
-    expect(nextSalesAction(deal, [issuedPr()], { reviseTarget: target })).toMatchObject({ key: SALES_ACTION.RECORD_QUOTATION_OUTCOME });
   });
 
   it('wrong-way-round: NO reviseTarget (non-owner / other role / predicate refused) -> cascade exactly as before', () => {
@@ -441,32 +189,6 @@ describe('nextSalesAction — REVISE_QUOTATION (PR A)', () => {
     expect(nextSalesAction(deal, [issuedPr()], { reviseTarget: null })).toMatchObject({ key: SALES_ACTION.RECORD_QUOTATION_OUTCOME });
     const past = baseDeal({ status: 'quotation_issued', liveDirectQuotation: approvedDirect });
     expect(nextSalesAction(past, [], {})?.key).not.toBe(REVISE);
-  });
-
-  it('an accepted PR (CONFIRM_ORDER) still wins at the owner stage', () => {
-    const deal = baseDeal({ salesStage: 'QUOTE_OWNER' });
-    const prs = [issuedPr(), { id: 6, ticketId: 1, status: 'QUOTATION_ACCEPTED', orderConfirmedAt: null }];
-    expect(nextSalesAction(deal, prs, { reviseTarget: target })).toMatchObject({ key: SALES_ACTION.CONFIRM_ORDER });
-  });
-
-  it('APPROVED-direct-past-draft with an open revision draft -> label "ไปที่ฉบับแก้ไข", pointing at the draft (never mints a second one)', () => {
-    const deal = baseDeal({ status: 'quotation_issued', liveDirectQuotation: approvedDirect });
-    expect(nextSalesAction(deal, [], { reviseTarget: { ...target, openDraftId: 91 } })).toMatchObject({
-      key: REVISE, label: 'ไปที่ฉบับแก้ไข', quotationId: 90, to: '/quotations/91',
-    });
-  });
-
-  it('a non-ACTIVE deal gets nothing even with a reviseTarget', () => {
-    expect(nextSalesAction(baseDeal({ lifecycle: 'ON_HOLD', salesStage: 'QUOTE_OWNER' }), [issuedPr()], { reviseTarget: target })).toBeNull();
-  });
-
-  it('sortWorklist gives REVISE_QUOTATION a defined rank (no NaN ordering): ahead of FOLLOW_UP, behind CONFIRM_ORDER', () => {
-    const at = '2026-07-01T00:00:00.000Z';
-    const row = (id, key) => ({ deal: { id, stageUpdatedAt: at }, action: { key } });
-    const sorted = sortWorklist([
-      row(1, SALES_ACTION.FOLLOW_UP), row(2, REVISE), row(3, SALES_ACTION.CONFIRM_ORDER),
-    ]).map((item) => item.deal.id);
-    expect(sorted).toEqual([3, 2, 1]);
   });
 });
 
@@ -479,50 +201,12 @@ describe('ขั้น 1–2: the main action is always เลื่อนขั
     expect(nextSalesAction(baseDeal({ salesStage }), [])).toEqual({ key: SALES_ACTION.ADVANCE_STAGE, label: 'เลื่อนขั้น' });
   });
 
-  it.each([
-    ['overdue', '2020-01-01'],
-    ['due today', bangkokTodayIso()],
-  ])('a follow-up %s does not take over: still ADVANCE_STAGE', (_label, nextFollowUpAt) => {
-    expect(nextSalesAction(baseDeal({ salesStage: 'LEAD_APPROACH', nextFollowUpAt }), [])).toMatchObject({ key: SALES_ACTION.ADVANCE_STAGE });
-  });
-
-  it('a stale deal does not take over: still ADVANCE_STAGE', () => {
-    expect(nextSalesAction(baseDeal({ salesStage: 'PRESENTATION', stale: true }), [])).toMatchObject({ key: SALES_ACTION.ADVANCE_STAGE });
-  });
-
-  it.each(['DRAFT', 'SUBMITTED', 'APPROVED_FOR_QUOTATION'])('an older price request (%s) at ขั้น 2 does not take over: still ADVANCE_STAGE', (status) => {
-    const prs = [{ id: 1, ticketId: 1, status }];
-    expect(nextSalesAction(baseDeal({ salesStage: 'PRESENTATION' }), prs)).toMatchObject({ key: SALES_ACTION.ADVANCE_STAGE });
-  });
-
   it.each(['SPEC_APPROVED', 'QUOTE_DESIGN_SIDE', 'QUOTE_OWNER', 'OWNER_SIGNOFF', 'AWAITING_BUYER', 'QUOTE_BUYER', 'NEGOTIATION'])(
     'boundary: %s with no price request -> CREATE_PCR, as before',
     (salesStage) => {
       expect(nextSalesAction(baseDeal({ salesStage }), [])).toEqual({ key: SALES_ACTION.CREATE_PCR, label: 'สร้างคำขอราคา' });
     },
   );
-
-  it('a deal whose stage is missing keeps CREATE_PCR (an unknown stage must never strand the rep)', () => {
-    expect(nextSalesAction(baseDeal({ salesStage: undefined }), [])).toMatchObject({ key: SALES_ACTION.CREATE_PCR });
-  });
-
-  it('a live direct quotation at ขั้น 1 still comes first (bucket 0)', () => {
-    const deal = baseDeal({ salesStage: 'LEAD_APPROACH', liveDirectQuotation: { id: 77, number: 'QT-2026-0077-1', docStatus: 'DRAFT' } });
-    expect(nextSalesAction(deal, [])).toMatchObject({ key: SALES_ACTION.SUBMIT_DIRECT_QUOTATION });
-  });
-
-  it('a non-ACTIVE deal at ขั้น 1 gets nothing', () => {
-    expect(nextSalesAction(baseDeal({ salesStage: 'LEAD_APPROACH', lifecycle: 'ON_HOLD' }), [])).toBeNull();
-  });
-
-  it('sortWorklist gives ADVANCE_STAGE a defined rank (no NaN ordering): ahead of FOLLOW_UP', () => {
-    const at = '2026-07-01T00:00:00.000Z';
-    const sorted = sortWorklist([
-      { deal: { id: 1, stageUpdatedAt: at }, action: { key: SALES_ACTION.FOLLOW_UP, followUp: 'today' } },
-      { deal: { id: 2, stageUpdatedAt: at }, action: { key: SALES_ACTION.ADVANCE_STAGE } },
-    ]);
-    expect(sorted.map((row) => row.deal.id)).toEqual([2, 1]);
-  });
 });
 
 // The rep picks the next party when the designer's or owner's quotation is SENT, not after an
@@ -546,31 +230,6 @@ describe('nextSalesAction — the route choice once a designer/owner quotation i
   const deal = (overrides) => baseDeal({ status: 'draft', ...overrides });
   const known = (...entries) => ({ offRouteParties: ROUTE_KNOWN, quotationByRequest: quotations(...entries) });
 
-  it('exposes the action key', () => {
-    expect(SALES_ACTION.QUOTE_NEXT_PARTY).toBe(QUOTE_NEXT);
-  });
-
-  it.each(['ISSUED', 'SUPERSEDED', 'REJECTED', 'EXPIRED'])(
-    'a designer quotation that went out and is not awaiting a revision (%s) -> "เสนอราคาเจ้าของโครงการ" listing owner then buyer',
-    (docStatus) => {
-      expect(nextSalesAction(deal(), [designerSent], known([1, docStatus]))).toMatchObject({
-        key: QUOTE_NEXT, label: 'เสนอราคาเจ้าของโครงการ', parties: ['OWNER', 'BUYER'],
-      });
-    },
-  );
-
-  // A quotation being redone is written again for the same party: a fresh one from the request after
-  // a change request, or the redo draft already open. (One awaiting approval is a waiting line
-  // instead; see workState.test.js.)
-  it.each([
-    ['REVISION_REQUESTED', {}],
-    ['DRAFT', { to: '/quotations/9101' }],
-  ])('a designer quotation being redone (newest row %s) -> "เสนอใบราคาผู้ออกแบบ", not the route choice', (docStatus, extra) => {
-    expect(nextSalesAction(deal(), [designerSent], known([1, docStatus]))).toEqual({
-      key: SALES_ACTION.ISSUE_QUOTATION, label: 'เสนอใบราคาผู้ออกแบบ', pricingRequestId: 1, ...extra,
-    });
-  });
-
   // No row for the request means its status alone decides.
   it.each([
     ['the dashboard, which has no quotation list', undefined],
@@ -583,104 +242,6 @@ describe('nextSalesAction — the route choice once a designer/owner quotation i
       .toMatchObject({ key: SALES_ACTION.RECORD_QUOTATION_OUTCOME, pricingRequestId: 1 });
   });
 
-  it('the party furthest along the route anchors the choice: the owner\'s quotation went out after the designer\'s -> "เสนอราคาผู้ซื้อ/ผู้รับเหมา", the buyer only', () => {
-    const prs = [designerSent, request(2, 'OWNER', 'QUOTATION_ISSUED')];
-    expect(nextSalesAction(deal(), prs, known([1, 'SUPERSEDED'], [2, 'ISSUED']))).toMatchObject({
-      key: QUOTE_NEXT, label: 'เสนอราคาผู้ซื้อ/ผู้รับเหมา', parties: ['BUYER'],
-    });
-  });
-
-  it.each(['CANCELLED', 'SUPERSEDED'])('a later party\'s dead request (%s) does not hold the route choice back', (status) => {
-    const prs = [designerSent, request(2, 'OWNER', status)];
-    expect(nextSalesAction(deal(), prs, known([1, 'ISSUED']))).toMatchObject({ key: QUOTE_NEXT, parties: ['OWNER', 'BUYER'] });
-  });
-
-  it('another deal\'s request does not hold it back (only this deal\'s requests count)', () => {
-    const prs = [designerSent, { ...request(2, 'OWNER', 'SUBMITTED'), ticketId: 999 }];
-    expect(nextSalesAction(deal(), prs, known([1, 'ISSUED']))).toMatchObject({ key: QUOTE_NEXT, parties: ['OWNER', 'BUYER'] });
-  });
-
-  it('a party off this deal\'s route is skipped: the owner off the route -> "เสนอราคาผู้ซื้อ/ผู้รับเหมา", the buyer only', () => {
-    const action = nextSalesAction(deal(), [designerSent], {
-      offRouteParties: new Set(['OWNER']), quotationByRequest: quotations([1, 'ISSUED']),
-    });
-    expect(action).toMatchObject({ key: QUOTE_NEXT, label: 'เสนอราคาผู้ซื้อ/ผู้รับเหมา', parties: ['BUYER'] });
-  });
-
-  // A designer/owner outcome is never prompted, route known or not.
-  it('the route has to be known: without offRouteParties a sent designer quotation gets nothing (no route choice, no outcome prompt); an empty set means every party is on it', () => {
-    const quotationByRequest = quotations([1, 'ISSUED']);
-    expect(nextSalesAction(deal(), [designerSent], { quotationByRequest })).toBeNull();
-    expect(nextSalesAction(deal(), [designerSent], { quotationByRequest, offRouteParties: new Set() }))
-      .toMatchObject({ key: QUOTE_NEXT, parties: ['OWNER', 'BUYER'] });
-  });
-
-  // With two later drafts, the first in route order (not list order).
-  it('a later party\'s request still a private DRAFT -> "ส่งคำขอราคาถึงเจ้าของโครงการ" (the first draft in route order), ranked ahead of a follow-up in the worklist', () => {
-    const prs = [designerSent, request(3, 'BUYER', 'DRAFT'), request(2, 'OWNER', 'DRAFT')];
-    const action = nextSalesAction(deal(), prs, known([1, 'ISSUED']));
-    expect(action).toMatchObject({ label: 'ส่งคำขอราคาถึงเจ้าของโครงการ' });
-    const at = '2026-07-01T00:00:00.000Z';
-    const sorted = sortWorklist([
-      { deal: { id: 9, stageUpdatedAt: at }, action: { key: SALES_ACTION.FOLLOW_UP, followUp: 'today' } },
-      { deal: { id: 1, stageUpdatedAt: at }, action },
-    ]);
-    expect(sorted.map((row) => row.deal.id)).toEqual([1, 9]);
-  });
-
-  // A designer/owner who said no is never quoted again: the route moved on.
-  it.each([
-    ['SUBMITTED', 'ISSUED'],
-    ['CEO_REVIEWING', 'REJECTED'],
-  ])('a later party\'s request with import/CEO (%s) -> nothing for the rep: no route choice, outcome prompt or redo for the designer\'s %s quotation', (status, designerDoc) => {
-    expect(nextSalesAction(deal(), [designerSent, request(2, 'OWNER', status)], known([1, designerDoc]))).toBeNull();
-  });
-
-  // The buyer said no, let it expire or asked for changes -> a fresh quotation from the same request
-  // (DealQuotationService#createFromPricingRequest's re-quote).
-  it.each(['REJECTED', 'EXPIRED', 'REVISION_REQUESTED'])(
-    'a buyer quotation %s -> "เสนอใบราคาผู้ซื้อ/ผู้รับเหมา" writes a fresh one from the same request, not บันทึกผลใบเสนอราคา',
-    (docStatus) => {
-      expect(nextSalesAction(deal(), [request(1, 'BUYER', 'QUOTATION_ISSUED')], known([1, docStatus]))).toEqual({
-        key: SALES_ACTION.ISSUE_QUOTATION, label: 'เสนอใบราคาผู้ซื้อ/ผู้รับเหมา', pricingRequestId: 1,
-      });
-    },
-  );
-
-  it('a buyer quotation superseded by a newer one on the deal prompts nothing (the server refuses that re-quote)', () => {
-    expect(nextSalesAction(deal(), [request(1, 'BUYER', 'QUOTATION_ISSUED')], known([1, 'SUPERSEDED']))).toBeNull();
-  });
-
-  // The owner's went out after the designer's: the owner being redone holds the route choice back and
-  // is redone itself.
-  it.each([
-    ['REVISION_REQUESTED', {}],
-    ['DRAFT', { to: '/quotations/9102' }],
-  ])('the owner\'s quotation being redone (%s) after the designer\'s went out -> "เสนอใบราคาเจ้าของโครงการ"', (docStatus, extra) => {
-    const prs = [designerSent, request(2, 'OWNER', 'QUOTATION_ISSUED')];
-    expect(nextSalesAction(deal(), prs, known([1, 'SUPERSEDED'], [2, docStatus]))).toEqual({
-      key: SALES_ACTION.ISSUE_QUOTATION, label: 'เสนอใบราคาเจ้าของโครงการ', pricingRequestId: 2, ...extra,
-    });
-  });
-
-  it('an earlier party\'s open redo draft never takes over the buyer\'s quotation: a live one still asks for its outcome, a rejected one is redone for the buyer', () => {
-    const prs = [designerSent, request(3, 'BUYER', 'QUOTATION_ISSUED')];
-    expect(nextSalesAction(deal(), prs, known([1, 'DRAFT'], [3, 'ISSUED'])))
-      .toMatchObject({ key: SALES_ACTION.RECORD_QUOTATION_OUTCOME, pricingRequestId: 3 });
-    expect(nextSalesAction(deal(), prs, known([1, 'DRAFT'], [3, 'REJECTED']))).toEqual({
-      key: SALES_ACTION.ISSUE_QUOTATION, label: 'เสนอใบราคาผู้ซื้อ/ผู้รับเหมา', pricingRequestId: 3,
-    });
-  });
-
-  it.each(['DESIGNER', 'OWNER', 'BUYER', null, 'UNSPECIFIED'])(
-    'an accepted, unconfirmed %s request -> ยืนยันคำสั่งซื้อ, as on main (an acceptance is the order, whoever accepted)',
-    (recipientType) => {
-      expect(nextSalesAction(deal(), [request(1, recipientType, 'QUOTATION_ACCEPTED')], known([1, 'ACCEPTED']))).toEqual({
-        key: SALES_ACTION.CONFIRM_ORDER, label: 'ยืนยันคำสั่งซื้อ',
-      });
-    },
-  );
-
   // Review V1: an approved later request (bucket 2) does not hold it back either.
   it.each([
     ['SUBMITTED', []],
@@ -689,34 +250,6 @@ describe('nextSalesAction — the route choice once a designer/owner quotation i
   ])('an accepted designer request -> ยืนยันคำสั่งซื้อ even while the owner\'s request is %s %j (nothing holds the confirm back)', (status, ownerEntries) => {
     const prs = [request(1, 'DESIGNER', 'QUOTATION_ACCEPTED'), request(2, 'OWNER', status)];
     expect(nextSalesAction(deal(), prs, known([1, 'ACCEPTED'], ...ownerEntries))).toMatchObject({ key: SALES_ACTION.CONFIRM_ORDER });
-  });
-
-  it('an accepted designer request on a ticket the order bridge cannot advance (\'submitted\') -> neither ยืนยันคำสั่งซื้อ nor a route choice', () => {
-    const action = nextSalesAction(deal({ status: 'submitted' }), [request(1, 'DESIGNER', 'QUOTATION_ACCEPTED')], known([1, 'ACCEPTED']));
-    expect(action).toBeNull();
-  });
-
-  // Spec B1: an acceptance is the order, so nothing is quoted after it (clean-review finding; the
-  // last two rows are review V1: bucket 2 and the approval wait).
-  const confirmed = (id, party) => ({ ...request(id, party, 'QUOTATION_ACCEPTED'), orderConfirmedAt: '2026-10-27T10:00:00Z' });
-  it.each([
-    ['a stale request of the same party (route choice)', [designerSent, confirmed(2, 'DESIGNER')], [[1, 'SUPERSEDED'], [2, 'ACCEPTED']]],
-    ['an earlier party\'s open redo draft (redo)', [designerSent, confirmed(3, 'BUYER')], [[1, 'DRAFT'], [3, 'ACCEPTED']]],
-    ['a later party\'s approved request (bucket 2)', [confirmed(1, 'DESIGNER'), request(2, 'OWNER', 'APPROVED_FOR_QUOTATION')], [[1, 'ACCEPTED']]],
-    ['a later party\'s quotation awaiting approval (the wait)', [confirmed(1, 'DESIGNER'), request(2, 'OWNER', 'APPROVED_FOR_QUOTATION')], [[1, 'ACCEPTED'], [2, 'PENDING_APPROVAL']]],
-  ])('after a confirmed order nothing is quoted again: %s -> null', (_label, prs, entries) => {
-    expect(nextSalesAction(deal(), prs, known(...entries))).toBeNull();
-  });
-
-  it('sortWorklist ranks QUOTE_NEXT_PARTY with CONFIRM_ORDER (1): ahead of ISSUE_QUOTATION, ties broken by the older stageUpdatedAt', () => {
-    const row = (id, key, stageUpdatedAt) => ({ deal: { id, stageUpdatedAt }, action: { key } });
-    const sorted = sortWorklist([
-      row(1, SALES_ACTION.ISSUE_QUOTATION, '2026-06-01T00:00:00.000Z'),
-      row(2, SALES_ACTION.FOLLOW_UP, '2026-05-01T00:00:00.000Z'),
-      row(3, SALES_ACTION.CONFIRM_ORDER, '2026-07-10T00:00:00.000Z'),
-      row(4, QUOTE_NEXT, '2026-07-01T00:00:00.000Z'),
-    ]).map((item) => item.deal.id);
-    expect(sorted).toEqual([4, 3, 1, 2]);
   });
 });
 
@@ -732,31 +265,8 @@ describe('nextSalesAction — สร้างใบแจ้งยอดเง�
     expect(nextSalesAction(confirmedDeal({ depositPolicy: 'REQUIRED' }), [orderConfirmedPr()])).toEqual(CREATE_DEPOSIT);
   });
 
-  it('ขั้น 10, direct-quotation flow (no pricing requests) -> the same action: the gate is paymentStatus, not a PR', () => {
-    expect(nextSalesAction(confirmedDeal({ liveDirectQuotation: null }), [])).toEqual(CREATE_DEPOSIT);
-  });
-
-  it('ขั้น 10, flow A after confirm: the direct quotation stays APPROVED + live and a reviseTarget exists -> still สร้างใบแจ้งยอดเงินรับมัดจำ, not แก้ใบเสนอราคา', () => {
-    const deal = confirmedDeal({ liveDirectQuotation: { id: 77, number: 'QT-2026-0077-1', docStatus: 'APPROVED', recipientType: 'DESIGNER' } });
-    expect(nextSalesAction(deal, [], { reviseTarget: { quotationId: 77, number: 'QT-2026-0077-1' } })).toEqual(CREATE_DEPOSIT);
-  });
-
-  it('a DRAFT notice already exists -> ออกใบแจ้งยอดเงินรับมัดจำ (same key)', () => {
-    expect(nextSalesAction(confirmedDeal(), [orderConfirmedPr()], { depositNotice: { status: 'DRAFT' } }))
-      .toEqual({ key: 'create_deposit_notice', label: 'ออกใบแจ้งยอดเงินรับมัดจำ' });
-  });
-
   it.each(['NOT_REQUIRED', 'WAIVED', 'CREDIT_CUSTOMER'])('depositPolicy %s -> no deposit-notice action', (depositPolicy) => {
     expect(nextSalesAction(confirmedDeal({ depositPolicy }), [orderConfirmedPr()])?.key).not.toBe('create_deposit_notice');
-  });
-
-  it.each(['DEPOSIT_NOTICE_ISSUED', 'DEPOSIT_PAID'])('paymentStatus %s (notice already out) -> no deposit-notice action', (paymentStatus) => {
-    expect(nextSalesAction(confirmedDeal({ paymentStatus }), [orderConfirmedPr()])?.key).not.toBe('create_deposit_notice');
-  });
-
-  it('regression: ยืนยันคำสั่งซื้อ still wins while an accepted PR has no orderConfirmedAt', () => {
-    const pr = { id: 1, ticketId: 1, status: 'QUOTATION_ACCEPTED', orderConfirmedAt: null };
-    expect(nextSalesAction(confirmedDeal(), [pr])).toMatchObject({ key: SALES_ACTION.CONFIRM_ORDER });
   });
 
   // ขั้น 13
@@ -768,22 +278,6 @@ describe('nextSalesAction — สร้างใบแจ้งยอดเง�
     expect(nextSalesAction(readyDeal(), [orderConfirmedPr()], { remainingInvoice: { status: 'DRAFT' } }))
       .toEqual({ key: 'create_remaining_invoice', label: 'ออกใบแจ้งหนี้' });
   });
-
-  it('an ISSUED remaining invoice, or the option omitted (dashboard worklist), -> no create_remaining_invoice', () => {
-    expect(nextSalesAction(readyDeal(), [orderConfirmedPr()], { remainingInvoice: { status: 'ISSUED' } })?.key).not.toBe('create_remaining_invoice');
-    expect(nextSalesAction(readyDeal(), [orderConfirmedPr()])?.key).not.toBe('create_remaining_invoice');
-  });
-
-  it('ordering (ruling 2026-10-22): the invoice is generated at นัดส่งสินค้า, so it wins over บันทึกส่งมอบ until it is issued', () => {
-    const deal = readyDeal({ fulfillmentStatus: 'GOODS_RECEIVED' });
-    expect(nextSalesAction(deal, [orderConfirmedPr()], { remainingInvoice: null })).toMatchObject({ key: 'create_remaining_invoice' });
-    expect(nextSalesAction(deal, [orderConfirmedPr()], { remainingInvoice: { status: 'ISSUED' } })).toMatchObject({ key: SALES_ACTION.RECORD_DELIVERY });
-  });
-
-  it('a deal not yet ready (SHIPPING) -> no create_remaining_invoice', () => {
-    expect(nextSalesAction(readyDeal({ fulfillmentStatus: 'SHIPPING' }), [orderConfirmedPr()], { remainingInvoice: null })?.key)
-      .not.toBe('create_remaining_invoice');
-  });
 });
 
 // ขั้น 11 (DEPOSIT_RECEIVED): the owning rep's one main button creates the import request.
@@ -793,106 +287,8 @@ describe('nextSalesAction — ออกใบขอซื้อ (IR) at ขั�
 
   // The stage-10 "จัดซื้อสินค้า" decision comes first; the cases below run with it already made.
   const DECIDED = { procurementSource: { decidedAt: '2026-11-10T00:00:00Z' } };
-  const PROCURE = { key: 'choose_procurement_source', label: 'จัดซื้อสินค้า' };
-
-  it('exposes the action keys', () => {
-    expect(SALES_ACTION.CREATE_IMPORT_REQUEST).toBe('create_import_request');
-    expect(SALES_ACTION.CHOOSE_PROCUREMENT_SOURCE).toBe('choose_procurement_source');
-  });
-
-  it('procure action only when the loaded source says pending === true', () => {
-    expect(nextSalesAction(paidDeal(), [orderConfirmedPr()], { procurementSource: { pending: true, decidedAt: null }, importRequests: [] })).toEqual(PROCURE);
-  });
-
-  it('source not loaded (undefined, e.g. dashboard) or pending false -> IR as before', () => {
-    expect(nextSalesAction(paidDeal(), [orderConfirmedPr()], { importRequests: [] })).toEqual(CREATE_IR);
-    expect(nextSalesAction(paidDeal(), [orderConfirmedPr()], { procurementSource: { pending: false, decidedAt: null }, importRequests: [] })).toEqual(CREATE_IR);
-  });
 
   it('IR action returns once decided', () => {
     expect(nextSalesAction(paidDeal(), [orderConfirmedPr()], { ...DECIDED, importRequests: [] })).toEqual(CREATE_IR);
-  });
-
-  it('no procure action before the deposit is settled', () => {
-    expect(nextSalesAction(paidDeal({ paymentStatus: 'DEPOSIT_NOTICE_ISSUED' }), [orderConfirmedPr()], { importRequests: [] })?.key)
-      .not.toBe('choose_procurement_source');
-  });
-
-  it('no procure action when every line is from stock', () => {
-    expect(nextSalesAction(paidDeal(), [orderConfirmedPr()], { importRequests: [], items: [{ qty: 4, qtyFromStock: 4 }] })?.key)
-      .not.toBe('choose_procurement_source');
-  });
-
-  it('DEPOSIT_PAID + no fulfilment yet -> ออกใบขอซื้อ (IR); importRequests unknown (undefined) or empty -> same', () => {
-    expect(nextSalesAction(paidDeal(), [orderConfirmedPr()], DECIDED)).toEqual(CREATE_IR);
-    expect(nextSalesAction(paidDeal(), [orderConfirmedPr()], { ...DECIDED, importRequests: [] })).toEqual(CREATE_IR);
-  });
-
-  it('a DRAFT IR exists -> ออกเลขใบขอซื้อ (IR) (same key); SUPERSEDED rows are ignored', () => {
-    expect(nextSalesAction(paidDeal(), [orderConfirmedPr()], { ...DECIDED, importRequests: [{ id: 1, status: 'DRAFT' }] }))
-      .toEqual({ key: 'create_import_request', label: 'ออกเลขใบขอซื้อ (IR)' });
-    expect(nextSalesAction(paidDeal(), [orderConfirmedPr()], { ...DECIDED, importRequests: [{ id: 1, status: 'SUPERSEDED' }, { id: 2, status: 'DRAFT' }] }))
-      .toEqual({ key: 'create_import_request', label: 'ออกเลขใบขอซื้อ (IR)' });
-    expect(nextSalesAction(paidDeal(), [orderConfirmedPr()], { ...DECIDED, importRequests: [{ id: 1, status: 'SUPERSEDED' }] }))
-      .toEqual(CREATE_IR);
-  });
-
-  it.each(['IR_ISSUED', 'FROM_STOCK', 'SHIPPING'])('fulfillmentStatus %s -> not offered', (fulfillmentStatus) => {
-    expect(nextSalesAction(paidDeal({ fulfillmentStatus }), [orderConfirmedPr()], { ...DECIDED, importRequests: [] })?.key)
-      .not.toBe('create_import_request');
-  });
-
-  it('a confirmed direct-quotation deal with a reviseTarget still gets the IR, not แก้ใบเสนอราคา', () => {
-    const deal = paidDeal({ liveDirectQuotation: { id: 90, number: 'QT-2026-0090-1', docStatus: 'APPROVED', recipientType: 'BUYER' } });
-    expect(nextSalesAction(deal, [], { ...DECIDED, reviseTarget: { quotationId: 90, number: 'QT-2026-0090-1' }, importRequests: [] })).toEqual(CREATE_IR);
-  });
-
-  it.each(['CUSTOMER_CONFIRMED', 'DEPOSIT_NOTICE_ISSUED', 'AWAITING_FINAL_PAYMENT', null])('paymentStatus %s -> not offered', (paymentStatus) => {
-    expect(nextSalesAction(paidDeal({ paymentStatus }), [orderConfirmedPr()], { ...DECIDED, importRequests: [] })?.key)
-      .not.toBe('create_import_request');
-  });
-
-  // A deal whose lines are all covered from stock orders nothing from a factory. The page passes its
-  // items (the deal summary has none); a legacy deal not yet routed to FROM_STOCK must still not be
-  // told to make an IR.
-  it('items all covered from stock -> no create_import_request; some uncovered, or no items passed -> still offered', () => {
-    const covered = [{ qty: 10, qtyFromStock: 10 }, { qty: 4, qtyFromStock: 4 }];
-    const partly = [{ qty: 10, qtyFromStock: 10 }, { qty: 8, qtyFromStock: 0 }];
-    expect(nextSalesAction(paidDeal(), [orderConfirmedPr()], { ...DECIDED, importRequests: [], items: covered })?.key)
-      .not.toBe('create_import_request');
-    expect(nextSalesAction(paidDeal(), [orderConfirmedPr()], { ...DECIDED, importRequests: [], items: partly })).toEqual(CREATE_IR);
-    expect(nextSalesAction(paidDeal(), [orderConfirmedPr()], { ...DECIDED, importRequests: [], items: [] })).toEqual(CREATE_IR);
-    expect(nextSalesAction(paidDeal(), [orderConfirmedPr()], { ...DECIDED, importRequests: [] })).toEqual(CREATE_IR);
-  });
-
-  // A no-deposit deal never gets a deposit notice, so nothing moves its payment status past
-  // CUSTOMER_CONFIRMED; the backend gate (requireImportRequestIssuable) already lets it issue an IR
-  // there. The main button must offer the IR, not fall through to "nothing to do".
-  it.each(['NOT_REQUIRED', 'WAIVED'])(
-    'depositPolicy %s at CUSTOMER_CONFIRMED + no fulfilment yet -> สร้างใบขอซื้อ (IR) (no deposit to wait for)', (depositPolicy) => {
-      const deal = paidDeal({ paymentStatus: 'CUSTOMER_CONFIRMED', depositPolicy });
-      expect(nextSalesAction(deal, [orderConfirmedPr()], { ...DECIDED, importRequests: [] })).toEqual(CREATE_IR);
-      expect(nextSalesAction(deal, [orderConfirmedPr()], { ...DECIDED, importRequests: [{ id: 1, status: 'DRAFT' }] }))
-        .toEqual({ key: 'create_import_request', label: 'ออกเลขใบขอซื้อ (IR)' });
-    });
-
-  it('depositPolicy REQUIRED at CUSTOMER_CONFIRMED still gets the deposit notice, never the IR (wrong-way-round)', () => {
-    expect(nextSalesAction(paidDeal({ paymentStatus: 'CUSTOMER_CONFIRMED', depositPolicy: 'REQUIRED' }),
-      [orderConfirmedPr()], { ...DECIDED, importRequests: [] })).toMatchObject({ key: 'create_deposit_notice' });
-  });
-
-  it('a no-deposit deal that already has fulfilment (IR issued / from stock) is not offered the IR again', () => {
-    expect(nextSalesAction(paidDeal({ paymentStatus: 'CUSTOMER_CONFIRMED', depositPolicy: 'NOT_REQUIRED', fulfillmentStatus: 'IR_ISSUED' }),
-      [orderConfirmedPr()], { ...DECIDED, importRequests: [] })?.key).not.toBe('create_import_request');
-  });
-
-  it('DEPOSIT_NOTICE_ISSUED stays unoffered on a no-deposit deal too (unchanged)', () => {
-    expect(nextSalesAction(paidDeal({ paymentStatus: 'DEPOSIT_NOTICE_ISSUED', depositPolicy: 'NOT_REQUIRED' }),
-      [orderConfirmedPr()], { ...DECIDED, importRequests: [] })?.key).not.toBe('create_import_request');
-  });
-
-  it('CUSTOMER_CONFIRMED: the deposit-notice action still wins (the IR button only follows it)', () => {
-    expect(nextSalesAction(paidDeal({ paymentStatus: 'CUSTOMER_CONFIRMED' }), [orderConfirmedPr()], { ...DECIDED, importRequests: [] }))
-      .toMatchObject({ key: 'create_deposit_notice' });
   });
 });

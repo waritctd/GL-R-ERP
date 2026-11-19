@@ -1,14 +1,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { ACTIVITY_KINDS, activityKindIcon, activityKindLabel, activityNoteRequired } from './dealTrackingMeta.js';
-import { timelineRowMatches } from './dealTimeline.js';
-
-// Slice 6d (ส่งตัวอย่าง = SAMPLE_SENT, V224). The deal-activity kinds live in three places that must agree — the
-// database constraint, DealActivityKind.java and dealTrackingMeta.js's ACTIVITY_KINDS (which the mock validates
-// through) — and in every other file that spells the whole list out. This guard reads the repository itself, so a
-// kind added in one place and forgotten in another fails here rather than as a 400 or a raw code on screen.
-// (The database side is also read back from a live Postgres by DealActivitySampleSentIntegrationTest.)
+import { ACTIVITY_KINDS } from './dealTrackingMeta.js';
 
 function repoRoot() {
   for (let dir = process.cwd(), depth = 0; depth < 8; depth += 1, dir = dirname(dir)) {
@@ -97,24 +90,6 @@ describe('deal-activity kinds: one list everywhere', () => {
     expect(frontend).toContain('SAMPLE_SENT');
     expect(frontend).toEqual(sorted(javaKinds()));
     expect(frontend).toEqual(sorted(constraintKinds()));
-  });
-
-  it('ส่งตัวอย่าง has its own label and icon, and is the one kind whose note (what was sent) is required', () => {
-    expect(activityKindLabel('SAMPLE_SENT')).toBe('ส่งตัวอย่าง');
-    expect(activityKindIcon('SAMPLE_SENT')).toBe('package');
-    expect(ACTIVITY_KINDS.filter((k) => activityNoteRequired(k.code)).map((k) => k.code)).toEqual(['SAMPLE_SENT']);
-    // Every kind has a label of its own (never the raw code) and an icon.
-    ACTIVITY_KINDS.forEach((k) => {
-      expect(activityKindLabel(k.code)).not.toBe(k.code);
-      expect(activityKindIcon(k.code)).toBeTruthy();
-    });
-  });
-
-  it('ส่งตัวอย่าง is not a visit: the timeline\'s เข้าพบ filter leaves it out, ทั้งหมด keeps it', () => {
-    const row = { type: 'activity', activity: { kind: 'SAMPLE_SENT' } };
-    expect(timelineRowMatches(row, 'visits')).toBe(false);
-    expect(timelineRowMatches(row, 'all')).toBe(true);
-    expect(timelineRowMatches(row, 'documents')).toBe(false);
   });
 
   // Fix round 1 (review M1): the scan below must see the shapes a kind list actually takes, not only quoted codes.

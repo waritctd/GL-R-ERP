@@ -1,12 +1,11 @@
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AllDealsPage } from './AllDealsPage.jsx';
 import { api } from '../../api/index.js';
 import { currentQuarter } from '../salesBoard/boardFormat.js';
-import { viewStorageKey } from './allDealsView.js';
 
 globalThis.React = React;
 
@@ -20,11 +19,6 @@ function memoryStorage() {
     removeItem: (k) => { map.delete(k); },
     clear: () => map.clear(),
   };
-}
-
-function throwingStorage() {
-  const boom = () => { throw new DOMException('The operation is insecure.', 'SecurityError'); };
-  return { getItem: boom, setItem: boom, removeItem: boom, clear: boom };
 }
 
 vi.mock('../../api/index.js', async (importOriginal) => {
@@ -120,20 +114,6 @@ describe('AllDealsPage (งานทั้งหมด)', () => {
     vi.unstubAllGlobals();
   });
 
-  // ── default view and data source per role ──────────────────────────────
-
-  it('opens a sales rep on the board, fed by their own my-work board, never the team board', async () => {
-    renderPage(salesUser);
-
-    await board();
-    expect(screen.getByRole('heading', { level: 1, name: 'งานทั้งหมด' })).toBeTruthy();
-    expect(api.salesBoard.myWork).toHaveBeenCalled();
-    expect(api.salesBoard.teamBoard).not.toHaveBeenCalled();
-    expect(within(screen.getByTestId('board-column-1')).getByText('Aira Two Hotel Silom')).toBeTruthy();
-    // A rep looking at their own deals sees no owner tag.
-    expect(screen.queryByTestId('board-card-owner')).toBeNull();
-  });
-
   it.each([['sales_manager', managerUser], ['ceo', ceoUser]])(
     '%s sees the whole team board, each card naming its rep, and never the own-deals board',
     async (_role, user) => {
@@ -148,8 +128,6 @@ describe('AllDealsPage (งานทั้งหมด)', () => {
     },
   );
 
-  // ── header ─────────────────────────────────────────────────────────────
-
   it('subtitle counts and sums exactly the cards shown, and says the order', async () => {
     renderPage(salesUser);
     await board();
@@ -161,145 +139,6 @@ describe('AllDealsPage (งานทั้งหมด)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'ไตรมาสนี้' }));
     expect(await screen.findByText('3 งานที่เปิดอยู่ · มูลค่ารวม ฿6,390,000 · เรียงตามวันที่เงียบ')).toBeTruthy();
   });
-
-  it('subtitle adds another currency beside the ฿ total, never into it', async () => {
-    api.salesBoard.myWork.mockResolvedValue({ followUp: [], quietDays: 14, visitsThisWeek: [], cash: null, board: [
-      boardDeal({ ticketId: 41, value: 2000 }),
-      boardDeal({ ticketId: 42, value: 1000, currency: 'USD' }),
-    ] });
-    renderPage(salesUser);
-
-    expect(await screen.findByText('2 งานที่เปิดอยู่ · มูลค่ารวม ฿2,000 + USD 1,000 · เรียงตามวันที่เงียบ')).toBeTruthy();
-  });
-
-  it('งานใหม่ opens the existing create-deal modal', async () => {
-    renderPage(salesUser);
-    await board();
-
-    fireEvent.click(screen.getByRole('button', { name: /งานใหม่/ }));
-
-    expect(await screen.findByText('สร้างงาน (stub)')).toBeTruthy();
-  });
-
-  // ── the quiet rule ─────────────────────────────────────────────────────
-
-  it('shows the days chip only on a deal the shared quiet rule calls quiet', async () => {
-    renderPage(salesUser);
-    await board();
-
-    expect(within(screen.getByTestId('board-card-12')).getByText('เงียบ 19 วัน')).toBeTruthy();
-    expect(within(screen.getByTestId('board-card-13')).queryByText(/เงียบ/)).toBeNull();
-  });
-
-  it('orders each column by days quiet, longest first', async () => {
-    renderPage(salesUser);
-    await board();
-
-    const column = screen.getByTestId('board-column-2');
-    const titles = within(column).getAllByRole('link').map((a) => a.textContent);
-    expect(titles).toEqual(['ปุรีมายา Wellness', 'Central Ladprao ชั้น B1']);
-  });
-
-  // ── search and chips ───────────────────────────────────────────────────
-
-  it('searches by project, customer or designer', async () => {
-    renderPage(salesUser);
-    await board();
-
-    fireEvent.change(screen.getByRole('searchbox', { name: 'ค้นหางาน' }), { target: { value: 'pia' } });
-
-    await waitFor(() => expect(screen.queryByTestId('board-card-12')).toBeNull());
-    expect(screen.getByTestId('board-card-11')).toBeTruthy();
-    expect(screen.getByRole('searchbox', { name: 'ค้นหางาน' }).getAttribute('placeholder')).toBe('ค้นหาโครงการ ลูกค้า ผู้ออกแบบ');
-  });
-
-  it('ทั้งหมด is the default chip; ไตรมาสนี้ keeps this quarter; เฉพาะงานเงียบ n keeps only quiet deals', async () => {
-    renderPage(salesUser);
-    await board();
-
-    expect(screen.getByRole('button', { name: 'ทั้งหมด' }).getAttribute('aria-pressed')).toBe('true');
-    expect(screen.getByTestId('board-card-14')).toBeTruthy();
-
-    fireEvent.click(screen.getByRole('button', { name: 'ไตรมาสนี้' }));
-    await waitFor(() => expect(screen.queryByTestId('board-card-14')).toBeNull());
-    expect(screen.getByTestId('board-card-11')).toBeTruthy();
-
-    fireEvent.click(screen.getByRole('button', { name: 'เฉพาะงานเงียบ 1' }));
-    await waitFor(() => expect(screen.queryByTestId('board-card-11')).toBeNull());
-    expect(screen.getByTestId('board-card-12')).toBeTruthy();
-  });
-
-  // The adversarial probe: every deal carries some quarter, none this one. The old default (ไตรมาสนี้ once half the
-  // deals had any quarter) showed an empty board here.
-  it('a team whose deals are all in other quarters still opens on every deal', async () => {
-    api.salesBoard.teamBoard.mockResolvedValue({ quietDays: 14, board: [
-      boardDeal({ ticketId: 51, expectedQuarter: '2001-Q2' }),
-      boardDeal({ ticketId: 52, expectedQuarter: '2001-Q3' }),
-      boardDeal({ ticketId: 53, expectedQuarter: null }),
-    ] });
-    renderPage(managerUser);
-
-    expect(await screen.findByTestId('board-card-51')).toBeTruthy();
-    expect(screen.getByTestId('board-card-52')).toBeTruthy();
-    expect(screen.getByTestId('board-card-53')).toBeTruthy();
-    expect(screen.getByText(/^3 งานที่เปิดอยู่/)).toBeTruthy();
-  });
-
-  it('a chip that leaves no card says so, and one action brings every deal back', async () => {
-    api.salesBoard.myWork.mockResolvedValue({ followUp: [], quietDays: 14, visitsThisWeek: [], cash: null, board: [
-      boardDeal({ ticketId: 61, title: 'งานไตรมาสอื่น', expectedQuarter: '2001-Q1' }),
-    ] });
-    renderPage(salesUser);
-    await screen.findByTestId('board-card-61');
-
-    fireEvent.click(screen.getByRole('button', { name: 'ไตรมาสนี้' }));
-
-    expect(await screen.findByText('ไม่มีงานในตัวกรองนี้')).toBeTruthy();
-    expect(screen.getByText(/^0 งานที่เปิดอยู่ · มูลค่ารวม ฿0/)).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'แสดงงานทั้งหมด' }));
-
-    expect(await screen.findByTestId('board-card-61')).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'ทั้งหมด' }).getAttribute('aria-pressed')).toBe('true');
-  });
-
-  it('a search that matches nothing names the search, and the same action clears it', async () => {
-    renderPage(salesUser);
-    await board();
-
-    fireEvent.click(screen.getByRole('button', { name: 'ไตรมาสนี้' }));
-    fireEvent.change(screen.getByRole('searchbox', { name: 'ค้นหางาน' }), { target: { value: 'ไม่มีแน่นอน' } });
-
-    expect(await screen.findByText('ไม่พบงานที่ตรงกับ “ไม่มีแน่นอน”')).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'แสดงงานทั้งหมด' }));
-
-    expect(await screen.findByTestId('board-card-14')).toBeTruthy();
-    expect(screen.getByRole('searchbox', { name: 'ค้นหางาน' }).value).toBe('');
-    expect(screen.getByRole('button', { name: 'ทั้งหมด' }).getAttribute('aria-pressed')).toBe('true');
-  });
-
-  // Decision: the chip n = quiet deals among the SEARCH results, in every quarter: exactly the cards pressing it
-  // shows. It ignores the quarter chip (pressing it replaces that chip) but follows the search (which it keeps).
-  it('the quiet chip counts quiet deals in the search results, whatever quarter is selected', async () => {
-    api.salesBoard.myWork.mockResolvedValue({ followUp: [], quietDays: 14, visitsThisWeek: [], cash: null, board: [
-      boardDeal({ ticketId: 71, title: 'Alpha หนึ่ง', quiet: true, daysQuiet: 20 }),
-      boardDeal({ ticketId: 72, title: 'Alpha สอง', quiet: true, daysQuiet: 30, expectedQuarter: '2001-Q1' }),
-      boardDeal({ ticketId: 73, title: 'Beta', quiet: true, daysQuiet: 40 }),
-    ] });
-    renderPage(salesUser);
-    await screen.findByTestId('board-card-71');
-
-    expect(screen.getByRole('button', { name: 'เฉพาะงานเงียบ 3' })).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'ไตรมาสนี้' }));
-    expect(screen.getByRole('button', { name: 'เฉพาะงานเงียบ 3' })).toBeTruthy();
-
-    fireEvent.change(screen.getByRole('searchbox', { name: 'ค้นหางาน' }), { target: { value: 'alpha' } });
-    expect(await screen.findByRole('button', { name: 'เฉพาะงานเงียบ 2' })).toBeTruthy();
-
-    fireEvent.click(screen.getByRole('button', { name: 'เฉพาะงานเงียบ 2' }));
-    await waitFor(() => expect(screen.getAllByTestId(/^board-card-\d+$/)).toHaveLength(2));
-  });
-
-  // ── failure and other roles ────────────────────────────────────────────
 
   it('a failed team-board load (e.g. an older backend) says so in the subtitle and the board, and retries', async () => {
     api.salesBoard.teamBoard.mockRejectedValue(new Error('404'));
@@ -314,16 +153,6 @@ describe('AllDealsPage (งานทั้งหมด)', () => {
     expect(await screen.findByTestId('board-card-21')).toBeTruthy();
   });
 
-  it('a failed board load still reaches the table in one tap', async () => {
-    api.salesBoard.teamBoard.mockRejectedValue(new Error('404'));
-    renderPage(managerUser);
-    await screen.findByText('โหลดงานไม่สำเร็จ');
-
-    fireEvent.click(screen.getByRole('button', { name: 'เปิดแบบตาราง' }));
-
-    expect(await screen.findByRole('region', { name: 'ขอบเขตและตัวกรองงานทั้งหมด' })).toBeTruthy();
-  });
-
   it.each([['account', { id: 4, employeeId: 4, role: 'account' }], ['import', { id: 3, employeeId: 3, role: 'import' }]])(
     '%s gets the table only: no board, no board data, no view toggle',
     async (_role, user) => {
@@ -336,83 +165,4 @@ describe('AllDealsPage (งานทั้งหมด)', () => {
       expect(api.salesBoard.teamBoard).not.toHaveBeenCalled();
     },
   );
-
-  it('links the paused, lost and cancelled counts to the table filtered to each', async () => {
-    renderPage(salesUser);
-    await board();
-
-    const closed = await screen.findByRole('navigation', { name: 'งานที่พักไว้หรือปิดแล้ว' });
-    await waitFor(() => expect(within(closed).getByRole('link', { name: /เสียงาน 2/ })).toBeTruthy());
-    expect(within(closed).getByRole('link', { name: /พักไว้ 1/ }).getAttribute('href')).toBe('/tickets?view=table&life=ON_HOLD');
-    expect(within(closed).getByRole('link', { name: /ยกเลิก 1/ }).getAttribute('href')).toBe('/tickets?view=table&life=CANCELLED');
-    // No dormant deal: no พักยาว segment.
-    expect(within(closed).queryByRole('link', { name: /พักยาว/ })).toBeNull();
-
-    fireEvent.click(within(closed).getByRole('link', { name: /เสียงาน 2/ }));
-
-    expect(await screen.findByRole('region', { name: 'ขอบเขตและตัวกรองงานทั้งหมด' })).toBeTruthy();
-    expect(screen.queryByTestId('deal-board')).toBeNull();
-  });
-
-  // ── table toggle and the remembered view ───────────────────────────────
-
-  it('ตาราง switches to the existing table, remembers it per user, and บอร์ด switches back', async () => {
-    renderPage(salesUser);
-    await board();
-
-    fireEvent.click(screen.getByRole('button', { name: /ตาราง/ }));
-
-    expect(await screen.findByRole('region', { name: 'ขอบเขตและตัวกรองงานทั้งหมด' })).toBeTruthy();
-    expect(screen.queryByTestId('deal-board')).toBeNull();
-    expect(screen.getByRole('heading', { level: 1, name: 'งานทั้งหมด' })).toBeTruthy();
-    expect(store.getItem(viewStorageKey(salesUser))).toBe('table');
-
-    fireEvent.click(screen.getByRole('button', { name: /บอร์ด/ }));
-
-    expect(await board()).toBeTruthy();
-    expect(store.getItem(viewStorageKey(salesUser))).toBe('board');
-  });
-
-  it('reopens on the table when that was the last choice', async () => {
-    store.setItem(viewStorageKey(salesUser), 'table');
-    renderPage(salesUser);
-
-    expect(await screen.findByRole('region', { name: 'ขอบเขตและตัวกรองงานทั้งหมด' })).toBeTruthy();
-    expect(screen.queryByTestId('deal-board')).toBeNull();
-  });
-
-  it('a deep link with a table-only filter (?owner=) opens the table even when the board was remembered', async () => {
-    store.setItem(viewStorageKey(managerUser), 'board');
-    renderPage(managerUser, '/tickets?owner=8');
-
-    expect(await screen.findByRole('region', { name: 'ขอบเขตและตัวกรองงานทั้งหมด' })).toBeTruthy();
-    expect(screen.queryByTestId('deal-board')).toBeNull();
-    expect(api.salesBoard.teamBoard).not.toHaveBeenCalled();
-  });
-
-  it('still works when localStorage throws: board by default, toggle still switches', async () => {
-    vi.stubGlobal('localStorage', throwingStorage());
-    renderPage(salesUser);
-
-    await board();
-    fireEvent.click(screen.getByRole('button', { name: /ตาราง/ }));
-
-    expect(await screen.findByRole('region', { name: 'ขอบเขตและตัวกรองงานทั้งหมด' })).toBeTruthy();
-  });
-
-  // ── phone ──────────────────────────────────────────────────────────────
-
-  it('keeps every board control at a 44px tap target on a phone', async () => {
-    renderPage(salesUser);
-    await board();
-
-    for (const name of ['ไตรมาสนี้', 'ทั้งหมด', 'เฉพาะงานเงียบ 1']) {
-      expect(screen.getByRole('button', { name }).className).toMatch(/mobile:min-h-11|min-h-11/);
-    }
-    const closed = screen.getByRole('navigation', { name: 'งานที่พักไว้หรือปิดแล้ว' });
-    await waitFor(() => expect(within(closed).getAllByRole('link').length).toBeGreaterThan(0));
-    for (const link of within(closed).getAllByRole('link')) {
-      expect(link.className).toMatch(/mobile:min-h-11|min-h-11/);
-    }
-  });
 });

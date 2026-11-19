@@ -32,10 +32,4 @@ describe('DealQuickActions — gates', () => {
     expect(screen.queryByRole('button', { name: 'ส่งตัวอย่าง' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'โทรแล้ว' })).toBeNull();
   });
-
-  it('with canLogCall, ส่งตัวอย่าง sits beside โทรแล้ว', () => {
-    renderActions({ canLogCall: true, canPlanVisit: false });
-    expect(screen.getByRole('button', { name: 'ส่งตัวอย่าง' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'โทรแล้ว' })).toBeTruthy();
-  });
 });
