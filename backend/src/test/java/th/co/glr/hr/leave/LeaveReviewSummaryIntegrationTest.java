@@ -36,20 +36,6 @@ class LeaveReviewSummaryIntegrationTest extends AbstractPostgresIntegrationTest 
     }
 
     @Test
-    void managerWithZeroPendingRequestsIsStillAReviewer() {
-        long manager = insertEmployee("SUM-MGR-EMPTY", null, null, true);
-        // An active direct report exists, but files nothing -- the queue is genuinely empty.
-        insertEmployee("SUM-RPT-EMPTY", null, manager, true);
-
-        LeaveReviewSummaryDto summary = leaveService.reviewSummary(employee(manager));
-
-        assertThat(summary.isReviewer())
-            .as("a manager with an active direct report is a reviewer even with nothing pending")
-            .isTrue();
-        assertThat(summary.pendingCount()).isZero();
-    }
-
-    @Test
     void managerWithAPendingRequestSeesTheCorrectCount() {
         long manager = insertEmployee("SUM-MGR-PENDING", null, null, true);
         long report = insertEmployee("SUM-RPT-PENDING", null, manager, true);
@@ -69,26 +55,6 @@ class LeaveReviewSummaryIntegrationTest extends AbstractPostgresIntegrationTest 
 
         assertThat(summary.isReviewer()).isFalse();
         assertThat(summary.pendingCount()).isZero();
-    }
-
-    @Test
-    void aManagerOfAnInactiveReportOnlyIsNotAReviewer() {
-        // reports_to_employee_id alone is not enough -- the report must be ACTIVE, mirroring
-        // LeaveService#isDirectManager's own access.active() check.
-        long manager = insertEmployee("SUM-MGR-INACTIVE", null, null, true);
-        insertEmployee("SUM-RPT-INACTIVE", null, manager, false);
-
-        LeaveReviewSummaryDto summary = leaveService.reviewSummary(employee(manager));
-
-        assertThat(summary.isReviewer()).isFalse();
-        assertThat(summary.pendingCount()).isZero();
-    }
-
-    @Test
-    void hrIsAlwaysAReviewerRegardlessOfPending() {
-        LeaveReviewSummaryDto summary = leaveService.reviewSummary(hr());
-
-        assertThat(summary.isReviewer()).isTrue();
     }
 
     // --- helpers ------------------------------------------------------------

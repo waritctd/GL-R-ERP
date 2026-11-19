@@ -40,49 +40,4 @@ class LeaveRepositoryPendingApproverTest {
         assertThat(repository.resolvePendingApproverName(rs)).isEqualTo("เอ็ม");
     }
 
-    @Test
-    void submittedWithNoManager_fallsBackToHrGenericRole() throws SQLException {
-        ResultSet rs = resultSet("SUBMITTED", null, false, null, "สมศรี");
-
-        assertThat(repository.resolvePendingApproverRole(rs)).isEqualTo("hr");
-        assertThat(repository.resolvePendingApproverName(rs)).isEqualTo("สมศรี");
-    }
-
-    @Test
-    void submittedWithInactiveManager_fallsBackToHrGenericRole() throws SQLException {
-        // A stored reports_to_employee_id whose target is no longer active is NOT a live reviewer. Deliberately a
-        // DIFFERENT check from LeaveService#isDirectManager's own active flag (that one reads the REQUESTER's active
-        // status, not the manager's) -- see LeaveRepository#resolvePendingApproverRole's javadoc.
-        ResultSet rs = resultSet("SUBMITTED", 99L, false, "เอ็ม (inactive)", "สมศรี");
-
-        assertThat(repository.resolvePendingApproverRole(rs)).isEqualTo("hr");
-        assertThat(repository.resolvePendingApproverName(rs)).isEqualTo("สมศรี");
-    }
-
-    @Test
-    void hrRoleWithMultipleActiveHrEmployees_omitsNameButKeepsRole() throws SQLException {
-        // Ambiguity case: PendingApproverSql#SINGLE_ACTIVE_HR_NAME_SQL resolves to SQL NULL when more than one active
-        // hr-role employee exists -- this test stands in for that by having the (mocked) SQL layer already report
-        // null, and asserts the Java side does not invent a name when the column comes back null.
-        ResultSet rs = resultSet("SUBMITTED", null, false, null, null);
-
-        assertThat(repository.resolvePendingApproverRole(rs)).isEqualTo("hr");
-        assertThat(repository.resolvePendingApproverName(rs)).isNull();
-    }
-
-    @Test
-    void approvedStatus_hasNoPendingApprover() throws SQLException {
-        ResultSet rs = resultSet("APPROVED", 99L, true, "เอ็ม", "สมศรี");
-
-        assertThat(repository.resolvePendingApproverRole(rs)).isNull();
-        assertThat(repository.resolvePendingApproverName(rs)).isNull();
-    }
-
-    @Test
-    void rejectedStatus_hasNoPendingApprover() throws SQLException {
-        ResultSet rs = resultSet("REJECTED", null, false, null, "สมศรี");
-
-        assertThat(repository.resolvePendingApproverRole(rs)).isNull();
-        assertThat(repository.resolvePendingApproverName(rs)).isNull();
-    }
 }

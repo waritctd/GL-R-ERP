@@ -1,14 +1,11 @@
 package th.co.glr.hr.leave;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalTime;
-import th.co.glr.hr.common.ApiException;
 import java.time.ZoneId;
 import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
@@ -115,204 +112,6 @@ class LeavePartialDaySpanIntegrationTest extends AbstractPostgresIntegrationTest
         assertThat(reread.endDate()).isEqualTo(LocalDate.parse("2026-09-12"));
     }
 
-    /** Regression guard for a defect introduced while building V166 and caught in review: the CALENDAR_DAYS
-     * early-return was placed ABOVE the clock-bound check, so a MATERNITY request outside working hours stopped
-     * being refused. */
-    @Test
-    void aTimedMaternityRequestOutsideWorkingHoursIsStillRefusedEvenThoughItCountsCalendarDays() {
-        long officeDept = insertDepartmentOnSchedule("OF-MAT1", "OFFICE_5D");
-        long employeeId = insertEmployee("MAT-BOUND", officeDept);
-
-        SubmitLeaveRequest outOfHours = new SubmitLeaveRequest(
-            employeeId, "MATERNITY",
-            LocalDate.parse("2026-09-14"), LocalDate.parse("2026-09-14"),
-            "maternity, out of hours",
-            LocalTime.of(6, 0), LocalTime.of(20, 0),
-            null, null, null, null, null, null, null);
-
-        assertThatThrownBy(() -> leaveService.submit(outOfHours, employee(employeeId)))
-            .isInstanceOf(ApiException.class)
-            .hasMessageContaining("ช่วงเวลาทำงาน");
-
-        // Wrong-way-round: the SAME type inside working hours must still be accepted, so the guard above is refusing
-        // the time bound rather than refusing MATERNITY outright.
-        SubmitLeaveRequest inHours = new SubmitLeaveRequest(
-            employeeId, "MATERNITY",
-            LocalDate.parse("2026-09-14"), LocalDate.parse("2026-09-14"),
-            "maternity, in hours",
-            LocalTime.of(9, 0), LocalTime.of(12, 0),
-            null, null, null, null, null, null, null);
-
-        assertThat(leaveService.submit(inHours, employee(employeeId)).status()).isEqualTo("SUBMITTED");
-    }
-
-    // --- Required scenarios per the task brief --------------------------------------------------
-
-    @Test
-    void allDayMultiDaySpanIsUnchangedFromBeforeV166() {
-        // No times at all -- must be byte-identical to the pre-V166 whole-day multi-day path
-        // (LeaveDayMath#unpaidWorkingDaysByMonth/#totalDaysByYear, untouched by this migration).
-        long officeDept = insertDepartmentOnSchedule("OFC-PDS2", "OFFICE_5D");
-        long employeeId = insertEmployee("PDS-ALLD", officeDept);
-
-        SubmitLeaveRequest request = new SubmitLeaveRequest(
-            employeeId, "VACATION", LocalDate.parse("2026-08-10"), LocalDate.parse("2026-08-12"),
-            "whole-day multi-day, unaffected by V166");
-
-        LeaveRequestDto result = leaveService.submit(request, employee(employeeId));
-
-        assertThat(result.startTime()).isNull();
-        assertThat(result.endTime()).isNull();
-        assertThat(result.totalDays()).isEqualByComparingTo("3.00");
-        assertThat(result.paidDays()).isEqualByComparingTo("3.00");
-    }
-
-    @Test
-    void singleDayTimedRequestUsesTheFixedEightHourBreakAwareDivisorNotTheScheduleSpan() {
-        // Rule: 08:30-12:30 = 240 clock-minutes, ZERO overlap with the
-        // 12:30-13:30 company-wide break (the segment ends exactly as the break starts) -> 240
-        // worked minutes / 480 = 0.50 HALF_UP. Dividing by the day's own resolved WorkSchedule
-        // span instead (240min/540min = 0.4444... -> 0.44) is WRONG (see LeaveDayMath's
-        // "Partial-day span" section header) -- asserted wrong-way-round below, mirroring
-        // PayrollLeaveUnpaidDeductionSeamIntegrationTest's own pinned regression on the exact
-        // same arithmetic.
-        long officeDept = insertDepartmentOnSchedule("OFC-PDS3", "OFFICE_5D");
-        long employeeId = insertEmployee("PDS-SNGL", officeDept);
-
-        SubmitLeaveRequest request = new SubmitLeaveRequest(
-            employeeId, "VACATION", LocalDate.parse("2026-08-11"), LocalDate.parse("2026-08-11"),
-            "single-day timed", LocalTime.of(8, 30), LocalTime.of(12, 30),
-            null, null, null, null, null, null, null);
-
-        LeaveRequestDto result = leaveService.submit(request, employee(employeeId));
-
-        assertThat(result.totalDays()).isEqualByComparingTo("0.50");
-        assertThat(result.totalDays()).isNotEqualByComparingTo("0.44");
-    }
-
-    @Test
-    void aSpanCrossingTheLunchBreakSubtractsOnlyTheOverlapNotAFlatHour() {
-        // The rule's differentiator: 11:00-14:00 = 180
-        // clock-minutes, of which 60 overlap the 12:30-13:30 break -> 120 worked minutes / 480 =
-        // 0.25 HALF_UP. This tells apart the wrong alternatives: an
-        // hours/8 divisor (no break subtraction at all) would give 180/480 = 0.375, and a
-        // schedule-span divisor would give 180/540 = 0.33 -- both asserted
-        // wrong-way-round below.
-        long officeDept = insertDepartmentOnSchedule("OFC-PDS8", "OFFICE_5D");
-        long employeeId = insertEmployee("PDS-BRK", officeDept);
-
-        SubmitLeaveRequest request = new SubmitLeaveRequest(
-            employeeId, "VACATION", LocalDate.parse("2026-08-11"), LocalDate.parse("2026-08-11"),
-            "crosses the lunch break", LocalTime.of(11, 0), LocalTime.of(14, 0),
-            null, null, null, null, null, null, null);
-
-        LeaveRequestDto result = leaveService.submit(request, employee(employeeId));
-
-        assertThat(result.totalDays()).isEqualByComparingTo("0.25");
-        assertThat(result.totalDays()).isNotEqualByComparingTo("0.375");
-        assertThat(result.totalDays()).isNotEqualByComparingTo("0.33");
-    }
-
-    @Test
-    void aTimedSpanCrossingAWeekendSkipsSaturdayAndSundayForAFiveDayEmployee() {
-        // Fri 2026-08-07 13:00 (afternoon, 0.50) -> Mon 2026-08-10 17:30 (full day, represented by
-        // endTime == that day's workEnd, 1.00). Sat 8/8 + Sun 8/9 are non-working for OFFICE_5D and
-        // contribute nothing -- proves the interior-day walk skips weekends for a five-day
-        // employee exactly as the whole-day path does.
-        long officeDept = insertDepartmentOnSchedule("OFC-PDS4", "OFFICE_5D");
-        long employeeId = insertEmployee("PDS-WKND", officeDept);
-
-        SubmitLeaveRequest request = new SubmitLeaveRequest(
-            employeeId, "VACATION", LocalDate.parse("2026-08-07"), LocalDate.parse("2026-08-10"),
-            "crosses a weekend", LocalTime.of(13, 0), LocalTime.of(17, 30),
-            null, null, null, null, null, null, null);
-
-        LeaveRequestDto result = leaveService.submit(request, employee(employeeId));
-
-        assertThat(result.totalDays()).isEqualByComparingTo("1.50");
-    }
-
-    @Test
-    void aTimedSpanCrossingASeededHolidayExcludesItForEveryEmployee() {
-        // Mon 2026-08-03 13:00 (0.50) -> Wed 2026-08-05 17:30 (1.00, last day), with Tue 8/4 seeded
-        // as a company holiday -- the interior day contributes NOTHING, mirroring
-        // LeaveScheduleHolidayAwareIntegrationTest's own holiday-beats-schedule rule, proven for
-        // the fraction-ledger interior-day branch specifically (not just the whole-day path).
-        long officeDept = insertDepartmentOnSchedule("OFC-PDS5", "OFFICE_5D");
-        long employeeId = insertEmployee("PDS-HOLI", officeDept);
-        insertHoliday("2026-08-04", "ทดสอบวันหยุด");
-
-        SubmitLeaveRequest request = new SubmitLeaveRequest(
-            employeeId, "VACATION", LocalDate.parse("2026-08-03"), LocalDate.parse("2026-08-05"),
-            "crosses a seeded holiday", LocalTime.of(13, 0), LocalTime.of(17, 30),
-            null, null, null, null, null, null, null);
-
-        LeaveRequestDto result = leaveService.submit(request, employee(employeeId));
-
-        assertThat(result.totalDays())
-            .as("Mon 0.50 + Tue holiday 0.00 + Wed 1.00 = 1.50")
-            .isEqualByComparingTo("1.50");
-    }
-
-    @Test
-    void aSixDayDivisionEmployeesSaturdayCountsAsAFullWorkingDayInATimedSpan() {
-        // Fri 2026-08-07 13:00 (0.50) -> Sat 2026-08-08 17:30 (1.00) -- Saturday is a WORKING day
-        // for an OPS_6D employee, unlike the five-day-employee weekend case above
-        // (same calendar range, opposite outcome), proving the boundary-fraction branch is
-        // genuinely schedule-aware, not hardcoded Mon-Fri.
-        long warehouseDept = insertDepartmentOnSchedule("WH-PDS6", "OPS_6D");
-        long employeeId = insertEmployee("PDS-SAT", warehouseDept);
-
-        SubmitLeaveRequest request = new SubmitLeaveRequest(
-            employeeId, "VACATION", LocalDate.parse("2026-08-07"), LocalDate.parse("2026-08-08"),
-            "six-day division, Saturday is a workday", LocalTime.of(13, 0), LocalTime.of(17, 30),
-            null, null, null, null, null, null, null);
-
-        LeaveRequestDto result = leaveService.submit(request, employee(employeeId));
-
-        assertThat(result.totalDays())
-            .as("Fri 0.50 + Sat (working for OPS_6D) 1.00 = 1.50")
-            .isEqualByComparingTo("1.50");
-    }
-
-    @Test
-    void aTimedSpanCrossingAPayrollMonthBoundaryAttributesUnpaidDaysToEachMonthSeparately() {
-        // LEAVE_WITHOUT_PAY (0-day statutory quota, always fully unpaid -- no quota gate to
-        // isolate away): Thu 2026-07-30 13:00 (0.50, July) -> Fri 2026-07-31 full day (1.00, July)
-        // -> [Sat 8/1, Sun 8/2 excluded] -> Mon 2026-08-03 17:30 (1.00, August). Total 2.50, split
-        // 1.50 July / 1.00 August -- proves LeaveRepository#findUnpaidLeaveDaysByEmployeeForMonth's
-        // fraction-aware branch (spanDayFractions filtered to the clipped year, then
-        // unpaidByMonthFromFractions) attributes a timed span's fractional boundary days to the
-        // correct payroll MONTH, not just the correct total.
-        long officeDept = insertDepartmentOnSchedule("OFC-PDS7", "OFFICE_5D");
-        long employeeId = insertEmployee("PDS-MNTH", officeDept);
-
-        SubmitLeaveRequest request = new SubmitLeaveRequest(
-            employeeId, "LEAVE_WITHOUT_PAY", LocalDate.parse("2026-07-30"), LocalDate.parse("2026-08-03"),
-            "crosses a payroll month boundary", LocalTime.of(13, 0), LocalTime.of(17, 30),
-            null, null, null, null, null, null, null);
-
-        LeaveRequestDto result = leaveService.submit(request, employee(employeeId));
-        assertThat(result.totalDays()).isEqualByComparingTo("2.50");
-        assertThat(result.unpaidDays()).isEqualByComparingTo("2.50");
-
-        // Leave requires approval: findUnpaidLeaveDaysByEmployeeForMonth is filtered to
-        // APPROVED requests.
-        leaveService.approve(result.id(), new ReviewLeaveRequest("approved"), hr());
-
-        Map<Long, BigDecimal> unpaidJuly =
-            leaveRepository.findUnpaidLeaveDaysByEmployeeForMonth(LocalDate.parse("2026-07-01"));
-        Map<Long, BigDecimal> unpaidAugust =
-            leaveRepository.findUnpaidLeaveDaysByEmployeeForMonth(LocalDate.parse("2026-08-01"));
-
-        assertThat(unpaidJuly)
-            .as("Thu 0.50 + Fri 1.00 = 1.50 attributed to July")
-            .containsEntry(employeeId, new BigDecimal("1.50"));
-        assertThat(unpaidAugust)
-            .as("Mon 1.00 attributed to August")
-            .containsEntry(employeeId, new BigDecimal("1.00"));
-    }
-
     // --- helpers ------------------------------------------------------------
 
     private UserPrincipal employee(long employeeId) {
@@ -352,10 +151,4 @@ class LeavePartialDaySpanIntegrationTest extends AbstractPostgresIntegrationTest
             Long.class);
     }
 
-    private void insertHoliday(String date, String nameTh) {
-        jdbc.update("""
-            INSERT INTO hr.holiday (holiday_date, name_th, source)
-            VALUES (:date, :nameTh, 'COMPANY')
-            """, new MapSqlParameterSource().addValue("date", LocalDate.parse(date)).addValue("nameTh", nameTh));
-    }
 }

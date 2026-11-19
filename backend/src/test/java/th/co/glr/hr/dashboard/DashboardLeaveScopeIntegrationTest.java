@@ -108,8 +108,7 @@ class DashboardLeaveScopeIntegrationTest extends AbstractPostgresIntegrationTest
     @Test
     void inactiveDirectReportsPendingLeaveIsNotCounted() {
         // A direct report who is no longer active but still carries a stale SUBMITTED row must NOT be counted (PR #846
-        // defect D3) -- mirrors LeaveRepository#countReviewableSubmitted's `AND e.is_active = TRUE` guard and
-        // LeaveReviewSummaryIntegrationTest#aManagerOfAnInactiveReportOnlyIsNotAReviewer.
+        // defect D3) -- mirrors LeaveRepository#countReviewableSubmitted's `AND e.is_active = TRUE` guard.
         long inactiveReport = insertEmployee("R003", division, manager, false);
         insertSubmittedLeave(inactiveReport);
 

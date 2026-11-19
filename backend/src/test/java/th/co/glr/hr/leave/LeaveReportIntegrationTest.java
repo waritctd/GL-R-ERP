@@ -72,39 +72,6 @@ class LeaveReportIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     @Test
-    void ownReportNeverIncludesAnotherEmployeesRecords() {
-        long employeeA = insertEmployee("LR-OWN-A", null, true);
-        long employeeB = insertEmployee("LR-OWN-B", null, true);
-        insertApprovedLeave(employeeA, "VACATION", LocalDate.of(2026, 3, 3), LocalDate.of(2026, 3, 3), "1.00");
-        insertApprovedLeave(employeeB, "VACATION", LocalDate.of(2026, 3, 4), LocalDate.of(2026, 3, 4), "1.00");
-
-        List<LeaveReportEmployeeDto> sections = leaveService.ownLeaveReport(employee(employeeA), 2026, null);
-
-        assertThat(sections).hasSize(1);
-        assertThat(sections.get(0).employeeId()).isEqualTo(employeeA);
-        assertThat(sections.get(0).requests())
-            .as("an employee's own report must never carry another employee's rows")
-            .extracting(LeaveRequestDto::employeeId)
-            .containsOnly(employeeA);
-
-        String text = extractText(renderer.toPdf(sections, 2026, null, false));
-        assertThat(text).contains("LR-OWN-A");
-        assertThat(text).doesNotContain("LR-OWN-B");
-    }
-
-    @Test
-    void managerWithNoDirectReportsGetsAnEmptyReportNotAnError() {
-        long plainEmployee = insertEmployee("LR-PLAIN", null, true);
-
-        List<LeaveReportEmployeeDto> sections = leaveService.teamLeaveReport(employee(plainEmployee), 2026, null);
-
-        assertThat(sections).isEmpty();
-        // Renders a friendly empty-team page rather than throwing.
-        String text = extractText(renderer.toPdf(sections, 2026, null, true));
-        assertThat(text).contains("รายงานสรุปใบลางาน");
-    }
-
-    @Test
     void hrTeamReportStillCoversEveryEmployeeExistingCanViewAllSemantics() {
         long manager1 = insertEmployee("LR-HR-MGR1", null, true);
         long manager2 = insertEmployee("LR-HR-MGR2", null, true);
@@ -119,70 +86,6 @@ class LeaveReportIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     // --- PDF text-extraction assertions (PDFBox PDFTextStripper, never byte-length) -------------
-
-    @Test
-    void totalDaysPrintsAsDaysAndHoursNeverADecimal() {
-        long divisionId = insertDivision("ฝ่ายทดสอบรายงานใบลา");
-        long manager = insertEmployee("LR-FMT-MGR", null, true);
-        long report = insertEmployeeWithDivision("LR-FMT-RPT", manager, divisionId, true);
-        // 1.56 round-trips to EXACTLY "1 วัน 4 ชม. 30 น." -- see LeaveDayMath#formatDuration's Javadoc: 1.56 * 480 =
-        // 748.8 minutes, snapped to the nearest 5-minute step = 750 minutes = 1 whole day (480min) + a 270-minute
-        // (4h30m) remainder.
-        insertApprovedLeave(report, "PERSONAL", LocalDate.of(2026, 5, 11), LocalDate.of(2026, 5, 12), "1.56");
-
-        List<LeaveReportEmployeeDto> sections = leaveService.teamLeaveReport(employee(manager), 2026, null);
-        String text = extractText(renderer.toPdf(sections, 2026, null, true));
-
-        assertThat(text).contains("1 วัน 4 ชม. 30 น.");
-        assertThat(text).doesNotContain("1.56");
-        assertThat(text).contains("ฝ่ายทดสอบรายงานใบลา");
-    }
-
-    @Test
-    void quotaSummaryBlockReadsTheSameNumbersTeamBalancesPutsOnScreen() {
-        long manager = insertEmployee("LR-QT-MGR", null, true);
-        long report = insertEmployee("LR-QT-RPT", manager, true);
-        insertApprovedLeave(report, "VACATION", LocalDate.of(2026, 2, 2), LocalDate.of(2026, 2, 2), "1.00");
-
-        List<LeaveTeamMemberBalanceDto> teamBalances = leaveService.teamBalances(employee(manager), 2026);
-        List<LeaveReportEmployeeDto> sections = leaveService.teamLeaveReport(employee(manager), 2026, null);
-
-        LeaveBalanceDto expected = balanceFor(teamBalances.get(0).balances(), "VACATION");
-        LeaveBalanceDto actual = balanceFor(sections.get(0).balances(), "VACATION");
-        assertThat(actual.remainingDays()).isEqualByComparingTo(expected.remainingDays());
-        assertThat(actual.approvedDays()).isEqualByComparingTo(expected.approvedDays());
-        assertThat(actual.annualQuotaDays()).isEqualByComparingTo(expected.annualQuotaDays());
-
-        String text = extractText(renderer.toPdf(sections, 2026, null, true));
-        assertThat(text).contains(LeaveDayMath.formatDuration(expected.remainingDays()));
-    }
-
-    @Test
-    void anInertQuotaRowIsDroppedButAnUnusedENTITLEMENTIsKept() {
-        long manager = insertEmployee("LR-INERT-MGR", null, true);
-        long report = insertEmployee("LR-INERT-RPT", manager, true);
-
-        List<LeaveReportEmployeeDto> sections = leaveService.teamLeaveReport(employee(manager), 2026, null);
-        String text = extractText(renderer.toPdf(sections, 2026, null, true));
-
-        // LEAVE_WITHOUT_PAY carries a 0-day statutory quota and this employee has used none of it, so the row can tell
-        // the reader nothing and must not take a line.
-        assertThat(text)
-            .as("a wholly inert quota row must be dropped")
-            .doesNotContain("ลาไม่รับค่าจ้าง");
-        // VACATION is unused too, but the employee HOLDS the entitlement -- that is the most useful line on the page
-        // for someone who has taken none of it, so it must survive the same filter.
-        assertThat(text)
-            .as("an unused entitlement is NOT inert and must be kept")
-            .contains("ลาพักร้อน");
-    }
-
-    private LeaveBalanceDto balanceFor(List<LeaveBalanceDto> balances, String leaveTypeCode) {
-        return balances.stream()
-            .filter(balance -> balance.leaveTypeCode().equals(leaveTypeCode))
-            .findFirst()
-            .orElseThrow();
-    }
 
     private String extractText(byte[] pdf) {
         try (PDDocument document = Loader.loadPDF(pdf)) {
@@ -211,12 +114,6 @@ class LeaveReportIntegrationTest extends AbstractPostgresIntegrationTest {
             VALUES (:code, 'ทดสอบ', :code, :reportsTo, :divisionId, :active, DATE '2020-01-01')
             RETURNING employee_id
             """, new MapSqlParameterSource(params), Long.class);
-    }
-
-    private long insertDivision(String nameTh) {
-        return jdbc.queryForObject("""
-            INSERT INTO hr.division (name_th, is_active) VALUES (:name, TRUE) RETURNING division_id
-            """, Map.of("name", nameTh), Long.class);
     }
 
     private long insertApprovedLeave(

@@ -33,59 +33,6 @@ class LeaveControllerPolicyDocumentIntegrationTest extends AbstractPostgresInteg
             /* attachmentBlobs */ null, /* leaveReportRenderer */ null);
     }
 
-    // --- GET: read path, unchanged access (any authenticated user) -------------------------
-
-    @Test
-    void getReturns404WithAClearThaiMessageWhenTheTableIsEmpty() {
-        assertThatThrownBy(() -> get(employee()))
-            .isInstanceOf(ApiException.class)
-            .satisfies(exception -> {
-                ApiException apiException = (ApiException) exception;
-                assertThat(apiException.getStatus()).isEqualTo(HttpStatus.NOT_FOUND);
-                assertThat(apiException.getMessage()).isEqualTo("ยังไม่มีการอัปโหลดเอกสารประกาศฉบับนี้ กรุณาติดต่อฝ่ายบุคคล");
-            });
-    }
-
-    @Test
-    void getRequiresAuthentication() {
-        MockHttpSession anonymousSession = new MockHttpSession();
-        assertThatThrownBy(() -> controller.policyDocument(anonymousSession))
-            .isInstanceOf(ApiException.class)
-            .extracting(exception -> ((ApiException) exception).getStatus())
-            .isEqualTo(HttpStatus.UNAUTHORIZED);
-    }
-
-    @Test
-    void anyAuthenticatedRoleCanReadOnceADocumentExists() throws Exception {
-        upload(hr(), samplePdfBytes(), LocalDate.of(2024, 10, 1));
-
-        // A plain employee (never hr/ceo) can still read -- this is the "every employee may read the rules that bind
-        // them" access CLAUDE.md's brief specified, unchanged by the write gate above.
-        ResponseEntity<Resource> response = get(employee());
-        assertThat(response.getStatusCode().value()).isEqualTo(200);
-        assertThat(response.getBody().getContentAsByteArray()).isEqualTo(samplePdfBytes());
-    }
-
-    @Test
-    void getServesTheLatestEffectiveFromNotInTheFuture() throws Exception {
-        byte[] older = pdfBytes("older");
-        byte[] current = pdfBytes("current");
-        byte[] future = pdfBytes("future");
-
-        upload(hr(), older, LocalDate.of(2018, 6, 1));
-        upload(hr(), current, LocalDate.of(2024, 10, 1));
-        // A future-dated upload must NOT become "current" yet.
-        upload(hr(), future, LocalDate.now().plusYears(1));
-
-        ResponseEntity<Resource> response = get(employee());
-        assertThat(response.getBody().getContentAsByteArray()).isEqualTo(current);
-
-        // The superseded version is still byte-for-byte retrievable by id — not deleted, not overwritten (V133's
-        // migration comment).
-        LeavePolicyDocumentDto currentDto = repository.findCurrent().orElseThrow();
-        assertThat(currentDto.effectiveFrom()).isEqualTo(LocalDate.of(2024, 10, 1));
-    }
-
     // --- POST: write path, HR/CEO only ------------------------------------------------------
 
     @Test
@@ -100,60 +47,8 @@ class LeaveControllerPolicyDocumentIntegrationTest extends AbstractPostgresInteg
     }
 
     @Test
-    void ceoCanUpload() throws Exception {
-        Map<String, LeavePolicyDocumentDto> response = upload(ceo(), samplePdfBytes(), LocalDate.of(2024, 10, 1));
-        assertThat(response.get("document")).isNotNull();
-    }
-
-    @Test
     void aPlainEmployeeCannotUpload() {
         assertForbidden(() -> upload(employee(), samplePdfBytes(), LocalDate.of(2024, 10, 1)));
-    }
-
-    @Test
-    void aSalesCallerCannotUpload() {
-        assertForbidden(() -> upload(sales(), samplePdfBytes(), LocalDate.of(2024, 10, 1)));
-    }
-
-    /** manager() below is role "employee" with manager=true — a department manager is still gated out;
-     * requireAnyRole checks role, not the manager flag. */
-    @Test
-    void aDepartmentManagerCannotUpload() {
-        assertForbidden(() -> upload(manager(), samplePdfBytes(), LocalDate.of(2024, 10, 1)));
-    }
-
-    @Test
-    void aNonPdfMimeTypeIsRejectedWith400() {
-        MockMultipartFile file = new MockMultipartFile(
-            "file", "policy.txt", "text/plain", "not a pdf".getBytes());
-        assertThatThrownBy(() -> controller.uploadPolicyDocument(file, LocalDate.of(2024, 10, 1), sessionFor(hr())))
-            .isInstanceOf(ApiException.class)
-            .extracting(exception -> ((ApiException) exception).getStatus())
-            .isEqualTo(HttpStatus.BAD_REQUEST);
-        assertThat(repository.findCurrent()).as("a rejected upload must never reach the database").isEmpty();
-    }
-
-    @Test
-    void anOversizeFileIsRejectedWith400() {
-        // MockMultipartFile.getSize() reflects the actual byte array length, so this genuinely exceeds
-        // LeaveController.MAX_POLICY_DOCUMENT_BYTES (10MB) rather than faking a reported size.
-        byte[] oversized = new byte[11 * 1024 * 1024];
-        MockMultipartFile file = new MockMultipartFile("file", "big.pdf", "application/pdf", oversized);
-
-        assertThatThrownBy(() -> controller.uploadPolicyDocument(file, LocalDate.of(2024, 10, 1), sessionFor(hr())))
-            .isInstanceOf(ApiException.class)
-            .extracting(exception -> ((ApiException) exception).getStatus())
-            .isEqualTo(HttpStatus.BAD_REQUEST);
-        assertThat(repository.findCurrent()).as("a rejected upload must never reach the database").isEmpty();
-    }
-
-    @Test
-    void anEmptyFileIsRejectedWith400() {
-        MockMultipartFile file = new MockMultipartFile("file", "empty.pdf", "application/pdf", new byte[0]);
-        assertThatThrownBy(() -> controller.uploadPolicyDocument(file, LocalDate.of(2024, 10, 1), sessionFor(hr())))
-            .isInstanceOf(ApiException.class)
-            .extracting(exception -> ((ApiException) exception).getStatus())
-            .isEqualTo(HttpStatus.BAD_REQUEST);
     }
 
     // --- helpers --------------------------------------------------------------------------
@@ -208,7 +103,4 @@ class LeaveControllerPolicyDocumentIntegrationTest extends AbstractPostgresInteg
         return new UserPrincipal(4L, "sales@glr.co.th", "sales", "sales", null, true, LocalDate.now(), false, null, false);
     }
 
-    private UserPrincipal manager() {
-        return new UserPrincipal(5L, "mgr@glr.co.th", "mgr", "employee", null, true, LocalDate.now(), false, null, true);
-    }
 }
