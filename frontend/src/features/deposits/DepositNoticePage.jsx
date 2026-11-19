@@ -18,7 +18,7 @@ import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { FormField, fieldErrorId } from '../../components/common/FormField.jsx';
 import { depositNoticeStatusLabel, formatThaiDate } from '../../utils/format.js';
 import { downloadBlob } from '../../utils/download.js';
-import { bundleSkippedMessage } from '../../utils/userMessages.js';
+import { warnIfBundleSkipped } from '../../utils/userMessages.js';
 import { round2 } from '../quotations/quotationMeta.js';
 import {
   createDepositNoticeDraft, dealQuotationsWithConfirmedQueryOptions, depositNoticeFileName, resolveNoticeQuotation,
@@ -572,8 +572,7 @@ export function DepositNoticePage({ ticketId, onBack, showToast }) {
           ? await api.depositNotices.downloadPdf(doc.id)
           : await api.depositNotices.downloadXlsx(doc.id);
         downloadBlob(blob, depositNoticeFileName(doc, ticketId), extension);
-        const skipped = bundleSkippedMessage(blob);
-        if (skipped) showToast('warning', skipped);
+        warnIfBundleSkipped(blob, showToast);
       } catch (err) {
         showToast('error', err.message || 'ดาวน์โหลดไม่สำเร็จ');
       }

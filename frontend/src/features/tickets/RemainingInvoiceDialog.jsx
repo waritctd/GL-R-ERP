@@ -11,7 +11,7 @@ import { Modal } from '../../components/common/Modal.jsx';
 import { Skeleton } from '../../components/common/Skeleton.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { downloadBlob } from '../../utils/download.js';
-import { bundleSkippedMessage } from '../../utils/userMessages.js';
+import { warnIfBundleSkipped } from '../../utils/userMessages.js';
 import { invalidateDealDocuments } from '../documentChain/documentChain.js';
 import { formatMoney } from '../../utils/format.js';
 import { ThaiDateInput } from '../../components/common/ThaiDateInput.jsx';
@@ -140,11 +140,6 @@ function DialogFooterRow({ children }) {
  * This is UI convenience only (hides buttons that would otherwise just 403), never the actual
  * security boundary — that is, and stays, the backend gate above.
  */
-function warnIfSkipped(blob, showToast) {
-  const message = bundleSkippedMessage(blob);
-  if (message) showToast?.('warning', message);
-}
-
 export function RemainingInvoiceDialog({ ticketId, canWrite = true, onClose, onDownloaded, showToast }) {
   const queryClient = useQueryClient();
 
@@ -182,7 +177,7 @@ export function RemainingInvoiceDialog({ ticketId, canWrite = true, onClose, onD
   async function handleDownloadVersion(id, docNumber) {
     const blob = await api.storedRemainingInvoices.download(id);
     downloadBlob(blob, docNumber || `draft-${id}`, 'pdf');
-    warnIfSkipped(blob, showToast);
+    warnIfBundleSkipped(blob, showToast);
     onDownloaded?.();
   }
 
@@ -297,7 +292,7 @@ function IssuedSummary({ issued, canWrite, onRevised, onDownloaded, showToast })
     try {
       const blob = await api.storedRemainingInvoices.download(issued.id);
       downloadBlob(blob, issued.docNumber || `remaining-invoice-${issued.id}`, 'pdf');
-      warnIfSkipped(blob, showToast);
+      warnIfBundleSkipped(blob, showToast);
       onDownloaded?.();
     } catch (err) {
       setError(err.message || 'ดาวน์โหลดไม่สำเร็จ');
@@ -448,7 +443,7 @@ function DraftEditor({ draft, issuedOfSameQuotation, onSaved, onIssued, onDelete
     try {
       const blob = await api.storedRemainingInvoices.download(draft.id);
       downloadBlob(blob, draft.docNumber || `draft-${draft.id}`, 'pdf');
-      warnIfSkipped(blob, showToast);
+      warnIfBundleSkipped(blob, showToast);
       onDownloaded?.();
     } catch (err) {
       setError(err.message || 'ดาวน์โหลดไม่สำเร็จ');

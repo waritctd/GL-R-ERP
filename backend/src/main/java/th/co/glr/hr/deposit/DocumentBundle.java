@@ -17,6 +17,7 @@ import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Component;
 import th.co.glr.hr.attachment.AttachmentDto;
 import th.co.glr.hr.attachment.AttachmentRepository;
+import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.dealquotation.DealQuotationService;
 import th.co.glr.hr.ticket.AttachType;
 import th.co.glr.hr.ticket.QuotationRenderer;
@@ -24,9 +25,10 @@ import th.co.glr.hr.ticket.QuotationRenderer;
 /**
  * What the customer receives with a ใบแจ้งยอดเงินรับมัดจำ / ใบแจ้งหนี้ส่วนที่เหลือ PDF: the document, then the deal's
  * PO(s) (oldest first), then the quotation PDF it references (its terms & conditions pages included). Best effort:
- * the caller has already been authorised on the deal, so the quotation is rendered without its own view gate (but
- * only if it belongs to that deal). A missing/unreadable PO or an unrenderable quotation is logged at WARN and skipped, never a failed download; the skipped kinds ("po", "quotation") are returned so the
- * download endpoints can say so in X-Document-Bundle-Skipped.
+ * the quotation is rendered with the requesting user's own quotation view gate (and only if it belongs to the deal), so
+ * a viewer the quotation endpoint refuses gets the document without it. A missing/unreadable PO, an unknown, refused
+ * or unrenderable quotation is logged at WARN and skipped, never a failed download; the skipped kinds ("po",
+ * "quotation") are returned so the download endpoints can say so in X-Document-Bundle-Skipped.
  * PDF POs are appended as-is, PNG/JPG POs are fitted onto one A4 page, any other type is skipped.
  */
 @Component
@@ -58,12 +60,20 @@ public class DocumentBundle {
         return headers;
     }
 
-    public Result bundle(byte[] documentPdf, long ticketId, String quotationNumber) {
+    public Result bundle(byte[] documentPdf, long ticketId, String quotationNumber, UserPrincipal actor) {
         byte[] out = documentPdf;
         List<String> skipped = new ArrayList<>();
-        List<AttachmentDto> pos = attachments.findByTicketId(ticketId).stream()
-            .filter(a -> AttachType.PO.equals(a.attachType()))
-            .sorted(Comparator.comparingLong(AttachmentDto::id)).toList();
+        // No per-attachment gate here: every role that may read a notice (owner/keyer, grant holder, sales_manager, ceo,
+        // account in scope) may also list and download the deal's attachments (TicketAccessPolicy.canViewDocuments).
+        List<AttachmentDto> pos = List.of();
+        try {
+            pos = attachments.findByTicketId(ticketId).stream()
+                .filter(a -> AttachType.PO.equals(a.attachType()))
+                .sorted(Comparator.comparingLong(AttachmentDto::id)).toList();
+        } catch (Exception e) {
+            log.warn("PO attachments of ticket {} could not be listed for the PDF bundle", ticketId, e);
+            addOnce(skipped, "po");
+        }
         for (AttachmentDto po : pos) {
             try {
                 byte[] bytes = Files.readAllBytes(Path.of(attachments.findFilePathById(po.id())));
@@ -82,8 +92,12 @@ public class DocumentBundle {
         if (quotationNumber != null && !quotationNumber.isBlank()) {
             try {
                 Long quotationId = docs.findNewEngineQuotationId(ticketId, quotationNumber).orElse(null);
-                if (quotationId != null) {
-                    out = QuotationRenderer.appendPdf(out, quotations.renderPdfForDealDocument(quotationId, ticketId));
+                if (quotationId == null) {
+                    log.warn("Quotation {} of ticket {} was not found for the PDF bundle", quotationNumber, ticketId);
+                    addOnce(skipped, "quotation");
+                } else {
+                    out = QuotationRenderer.appendPdf(out,
+                        quotations.renderPdfForDealDocument(quotationId, ticketId, actor));
                 }
             } catch (Exception e) {
                 log.warn("Quotation {} could not be added to the PDF bundle of ticket {}", quotationNumber, ticketId, e);

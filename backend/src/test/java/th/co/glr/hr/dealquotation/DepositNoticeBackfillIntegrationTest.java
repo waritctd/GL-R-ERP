@@ -28,8 +28,12 @@ class DepositNoticeBackfillIntegrationTest extends DirectQuotationDealTestBase {
         confirmer.confirmOrderFromDirectQuotation(quotation.id(), salesActor);
         notice = depositNoticeService.createDraft(ticketId,
             new DepositNoticeDraftRequest(null, null, null, null, null, null, null, null), salesActor);
-        jdbc.update("UPDATE sales.deposit_notice_item SET discount_label = 'ส่วนลด 9 ต่อหน่วย', description = 'legacy'"
-            + " WHERE deposit_notice_id = :id", Map.of("id", notice.id()));
+        // the pre-release shape: the quotation's bare description (no size line) and an old authored label
+        for (var line : repo.findQuotationInvoiceLines(quotation.id())) {
+            jdbc.update("UPDATE sales.deposit_notice_item SET discount_label = 'ส่วนลด 9 ต่อหน่วย', description = :d"
+                + " WHERE deposit_notice_id = :id AND seq = :seq",
+                Map.of("d", line.description().split("\n", 2)[0], "id", notice.id(), "seq", line.seq()));
+        }
     }
 
     private List<Map<String, Object>> items() {
@@ -59,6 +63,30 @@ class DepositNoticeBackfillIntegrationTest extends DirectQuotationDealTestBase {
         assertThat(backfill.refresh()).isZero();
 
         assertThat(items()).isEqualTo(before);
+    }
+
+    /** A description hand-edited after the release is no longer a pre-release value: the next boot must not reset it. */
+    @Test
+    void aDraftWhoseDescriptionWasHandEdited_isNotTouched() {
+        jdbc.update("UPDATE sales.deposit_notice_item SET description = 'แก้เอง' WHERE deposit_notice_id = :id AND seq = 1",
+            Map.of("id", notice.id()));
+        List<Map<String, Object>> before = items();
+
+        backfill.refresh();
+
+        assertThat(items().get(0)).isEqualTo(before.get(0));
+        assertThat(items().get(0).get("description")).isEqualTo("แก้เอง");
+    }
+
+    /** A label the user typed (not null, not a legacy shape) is a hand edit too. */
+    @Test
+    void aDraftItemWithAHandTypedLabel_isNotTouched() {
+        jdbc.update("UPDATE sales.deposit_notice_item SET discount_label = 'ลดพิเศษ 5 บาท' WHERE deposit_notice_id = :id AND seq = 1",
+            Map.of("id", notice.id()));
+
+        backfill.refresh();
+
+        assertThat(items().get(0).get("discount_label")).isEqualTo("ลดพิเศษ 5 บาท");
     }
 
     @Test

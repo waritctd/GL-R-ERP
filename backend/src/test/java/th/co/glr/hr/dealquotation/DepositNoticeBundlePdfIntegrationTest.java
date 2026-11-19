@@ -65,7 +65,7 @@ class DepositNoticeBundlePdfIntegrationTest extends DirectQuotationDealTestBase 
         Deal deal = confirmedDepositDeal();
         attachPo(deal.ticketId(), onePagePdf(PO_SENTINEL));
 
-        List<String> pages = pageTexts(depositNoticeService.getPdf(deal.notice().id(), salesActor));
+        List<String> pages = pageTexts(depositNoticeService.getPdfBundle(deal.notice().id(), salesActor).pdf());
 
         int quotationPages = pageCount(quotationService.renderPdf(deal.quotation().id(), salesActor));
         int poPage = firstPageContaining(pages, PO_SENTINEL);
@@ -82,7 +82,7 @@ class DepositNoticeBundlePdfIntegrationTest extends DirectQuotationDealTestBase 
     void depositNoticePdf_withNoPo_isStillFollowedByTheQuotationAndItsConditions() throws Exception {
         Deal deal = confirmedDepositDeal();
 
-        List<String> pages = pageTexts(depositNoticeService.getPdf(deal.notice().id(), salesActor));
+        List<String> pages = pageTexts(depositNoticeService.getPdfBundle(deal.notice().id(), salesActor).pdf());
 
         byte[] quotationPdf = quotationService.renderPdf(deal.quotation().id(), salesActor);
         assertThat(pages).as("a single notice page + the quotation PDF").hasSize(1 + pageCount(quotationPdf));
@@ -103,21 +103,32 @@ class DepositNoticeBundlePdfIntegrationTest extends DirectQuotationDealTestBase 
         }
     }
 
-    /** The viewer was already authorised on the deal when the notice download passed requireTicketViewer, so the
-     * quotation pages must not depend on the quotation's own view gate. Here the deal is inside account's scope (it
-     * may download the notice) but the referenced quotation has since been SUPERSEDED, which DealQuotationService's
-     * account gate refuses: the quotation must still be bundled. */
+    /** A notice viewer the quotation's own view gate refuses (account, SUPERSEDED quotation) gets the notice without
+     * the quotation, and the download says so; it does not fail. */
     @Test
-    void aViewerRefusedOnTheQuotationItself_stillGetsTheQuotationPagesInTheBundle() throws Exception {
+    void aViewerRefusedOnTheQuotationItself_getsTheNoticeWithoutIt_andSkippedSaysSo() throws Exception {
         Deal deal = confirmedDepositDeal();
         jdbc.update("UPDATE sales.quotation SET doc_status = 'SUPERSEDED' WHERE quotation_id = :id",
             java.util.Map.of("id", deal.quotation().id()));
         assertForbidden(() -> quotationService.renderPdf(deal.quotation().id(), accountActor)); // the premise
 
-        List<String> pages = pageTexts(depositNoticeService.getPdf(deal.notice().id(), accountActor));
+        var bundled = depositNoticeService.getPdfBundle(deal.notice().id(), accountActor);
 
-        assertThat(pages).as("notice + the quotation PDF, although account may not read that quotation directly")
-            .hasSize(1 + pageCount(quotationService.renderPdf(deal.quotation().id(), salesActor)));
+        assertThat(pageTexts(bundled.pdf())).as("the notice only").hasSize(1);
+        assertThat(bundled.skipped()).containsExactly("quotation");
+        assertThat(depositNoticeService.getPdfBundle(deal.notice().id(), salesActor).skipped())
+            .as("the owner may read it").isEmpty();
+    }
+
+    /** A reference that names no new-engine quotation is a skipped quotation, not silence. */
+    @Test
+    void aReferenceWithNoQuotation_isReportedAsSkipped() {
+        Deal deal = confirmedDepositDeal();
+        jdbc.update("UPDATE sales.deposit_notice SET reference = 'NO-SUCH-QT' WHERE deposit_notice_id = :id",
+            java.util.Map.of("id", deal.notice().id()));
+
+        assertThat(depositNoticeService.getPdfBundle(deal.notice().id(), salesActor).skipped())
+            .containsExactly("quotation");
     }
 
     /** The ungated render is bound to the deal: asked for another deal's quotation it refuses (404). */
@@ -127,7 +138,7 @@ class DepositNoticeBundlePdfIntegrationTest extends DirectQuotationDealTestBase 
         long otherTicket = pipelineTicket(salesActor);
 
         assertStatus(org.springframework.http.HttpStatus.NOT_FOUND,
-            () -> quotationService.renderPdfForDealDocument(deal.quotation().id(), otherTicket));
+            () -> quotationService.renderPdfForDealDocument(deal.quotation().id(), otherTicket, salesActor));
     }
 
     /** A PNG PO is fitted onto one A4 page between the notice and the quotation; an unsupported type is skipped. */
@@ -137,7 +148,7 @@ class DepositNoticeBundlePdfIntegrationTest extends DirectQuotationDealTestBase 
         attachPoFile(deal.ticketId(), "po.png", "image/png", onePixelPng());
         attachPoFile(deal.ticketId(), "po.txt", "text/plain", "not a pdf".getBytes());
 
-        byte[] bundled = depositNoticeService.getPdf(deal.notice().id(), salesActor);
+        byte[] bundled = depositNoticeService.getPdfBundle(deal.notice().id(), salesActor).pdf();
 
         int quotationPages = pageCount(quotationService.renderPdf(deal.quotation().id(), salesActor));
         List<String> pages = pageTexts(bundled);
@@ -154,7 +165,7 @@ class DepositNoticeBundlePdfIntegrationTest extends DirectQuotationDealTestBase 
         attachPo(deal.ticketId(), onePagePdf("PO-FIRST-1111"));
         attachPo(deal.ticketId(), onePagePdf("PO-SECOND-2222"));
 
-        List<String> pages = pageTexts(depositNoticeService.getPdf(deal.notice().id(), salesActor));
+        List<String> pages = pageTexts(depositNoticeService.getPdfBundle(deal.notice().id(), salesActor).pdf());
 
         int first = firstPageContaining(pages, "PO-FIRST-1111");
         int second = firstPageContaining(pages, "PO-SECOND-2222");
@@ -171,7 +182,7 @@ class DepositNoticeBundlePdfIntegrationTest extends DirectQuotationDealTestBase 
         jdbc.update("UPDATE sales.attachment SET file_path = '/tmp/glr-notice-bundle-test-uploads/gone.pdf'"
             + " WHERE ticket_id = :t", java.util.Map.of("t", deal.ticketId()));
 
-        List<String> pages = pageTexts(depositNoticeService.getPdf(deal.notice().id(), salesActor));
+        List<String> pages = pageTexts(depositNoticeService.getPdfBundle(deal.notice().id(), salesActor).pdf());
 
         assertThat(firstPageContaining(pages, PO_SENTINEL)).isEqualTo(-1);
         assertThat(pages).as("notice + quotation + conditions, no 500")
@@ -203,7 +214,7 @@ class DepositNoticeBundlePdfIntegrationTest extends DirectQuotationDealTestBase 
         attachPo(ticketId, onePagePdf(PO_SENTINEL));
         RemainingInvoiceDocumentDto invoice = remainingInvoiceService.createDraft(ticketId, null, salesActor);
 
-        List<String> pages = pageTexts(remainingInvoiceService.getPdf(invoice.id(), salesActor));
+        List<String> pages = pageTexts(remainingInvoiceService.getPdfBundle(invoice.id(), salesActor).pdf());
 
         int quotationPages = pageCount(quotationService.renderPdf(quotation.id(), salesActor));
         int poPage = firstPageContaining(pages, PO_SENTINEL);
@@ -220,7 +231,7 @@ class DepositNoticeBundlePdfIntegrationTest extends DirectQuotationDealTestBase 
         confirmer.confirmOrderFromDirectQuotation(quotation.id(), salesActor);
         RemainingInvoiceDocumentDto invoice = remainingInvoiceService.createDraft(ticketId, null, salesActor);
 
-        List<String> pages = pageTexts(remainingInvoiceService.getPdf(invoice.id(), salesActor));
+        List<String> pages = pageTexts(remainingInvoiceService.getPdfBundle(invoice.id(), salesActor).pdf());
 
         byte[] quotationPdf = quotationService.renderPdf(quotation.id(), salesActor);
         assertThat(pages).hasSize(1 + pageCount(quotationPdf));

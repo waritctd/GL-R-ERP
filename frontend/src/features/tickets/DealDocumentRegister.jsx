@@ -10,7 +10,7 @@ import { Panel } from '../../components/common/Layout.jsx';
 import { Skeleton } from '../../components/common/Skeleton.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { downloadBlob } from '../../utils/download.js';
-import { bundleSkippedMessage } from '../../utils/userMessages.js';
+import { warnIfBundleSkipped } from '../../utils/userMessages.js';
 import {
   depositNoticeStatusLabel, formatMoney, formatThaiDate, quotationRecipientLabel, quotationStatusLabel,
 } from '../../utils/format.js';
@@ -224,11 +224,6 @@ export function DealDocumentRegister({
 
   const remainingInvoiceReady = isRemainingInvoiceReady(summary);
 
-  function warnIfSkipped(blob) {
-    const message = bundleSkippedMessage(blob);
-    if (message) showToast?.('warning', message);
-  }
-
   async function handleDownload(key, run) {
     setBusyKey(key);
     try {
@@ -261,7 +256,7 @@ export function DealDocumentRegister({
       ? api.depositNotices.downloadPdf(doc.id)
       : api.depositNotices.downloadXlsx(doc.id)));
     downloadBlob(blob, depositNoticeFileName(doc, ticketId), format);
-    warnIfSkipped(blob);
+    warnIfBundleSkipped(blob, showToast);
   }
 
   async function downloadDirectQuotation(q, format) {
@@ -276,7 +271,7 @@ export function DealDocumentRegister({
     const key = `remaining-${v.id}-pdf`;
     const blob = await handleDownload(key, () => api.storedRemainingInvoices.download(v.id));
     downloadBlob(blob, v.docNumber || `draft-${v.id}`, 'pdf');
-    warnIfSkipped(blob);
+    warnIfBundleSkipped(blob, showToast);
   }
 
   async function downloadImportRequest(row) {

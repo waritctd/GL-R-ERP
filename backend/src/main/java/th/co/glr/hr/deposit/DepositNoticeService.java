@@ -393,23 +393,19 @@ public class DepositNoticeService {
         }
     }
 
-    public byte[] getPdf(long docId, UserPrincipal actor) {
-        return getPdfBundle(docId, actor).pdf();
-    }
-
     public DocumentBundle.Result getPdfBundle(long docId, UserPrincipal actor) {
         DepositNoticeDto doc = getById(docId, actor);
         try {
             byte[] pdf = renderer.toPdf(renderModel(doc, bangkokToday()));
-            return bundle.bundle(pdf, doc.ticketId(), doc.reference());
+            return bundle.bundle(pdf, doc.ticketId(), doc.reference(), actor);
         } catch (Exception e) {
             throw new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "สร้างไฟล์ PDF ไม่สำเร็จ: " + e.getMessage());
         }
     }
 
     /** The bundle (PO + quotation) for a download of a document of {@code ticketId}. */
-    DocumentBundle.Result bundled(byte[] pdf, long ticketId, String quotationNumber) {
-        return bundle.bundle(pdf, ticketId, quotationNumber);
+    DocumentBundle.Result bundled(byte[] pdf, long ticketId, String quotationNumber, UserPrincipal actor) {
+        return bundle.bundle(pdf, ticketId, quotationNumber, actor);
     }
 
     // ── Remaining Invoice (ข้อ 13.5) ─────────────────────────────────────────

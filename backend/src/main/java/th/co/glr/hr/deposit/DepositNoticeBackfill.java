@@ -11,8 +11,8 @@ import org.springframework.stereotype.Component;
 
 /**
  * Drafts saved before the ส่วนลด / size-line release carry the old label and a bare description. For an untouched
- * DRAFT (its items' seq and amount equal its referenced quotation's lines exactly) this rewrites each item's
- * discount_label and description from the quotation line. An edited draft, a draft whose quotation is not found,
+ * DRAFT (its items' seq and amount equal its referenced quotation's lines exactly) this rewrites each item that still holds
+ * pre-release values (the bare description and a null / legacy label) from the quotation line. An edited item or draft, a draft whose quotation is not found,
  * and every non-DRAFT notice are left alone; a second run rewrites nothing.
  */
 // ponytail: delete this class one release after deploy; by then every pre-release DRAFT is refreshed or edited.
@@ -63,8 +63,13 @@ public class DepositNoticeBackfill implements ApplicationRunner {
             for (int i = 0; i < items.size(); i++) {
                 Map<String, Object> item = items.get(i);
                 var line = lines.get(i);
-                if (java.util.Objects.equals(item.get("description"), line.description())
-                    && java.util.Objects.equals(item.get("discount_label"), line.discountLabel())) {
+                // Only a pre-release item is rewritten: the bare description (no size line) and a null or legacy label.
+                // Anything else was typed by a user (or already refreshed) and stays.
+                boolean preRelease = line.description().split("\n", 2)[0].equals(item.get("description"))
+                    && isLegacyLabel((String) item.get("discount_label"));
+                boolean changes = !java.util.Objects.equals(item.get("description"), line.description())
+                    || !java.util.Objects.equals(item.get("discount_label"), line.discountLabel());
+                if (!preRelease || !changes) {
                     continue;
                 }
                 rewritten += jdbc.update("UPDATE sales.deposit_notice_item SET discount_label = :label,"
@@ -75,6 +80,11 @@ public class DepositNoticeBackfill implements ApplicationRunner {
             }
         }
         return rewritten;
+    }
+
+    private static boolean isLegacyLabel(String label) {
+        return label == null || (label.startsWith("ส่วนลด") && label.endsWith("ต่อหน่วย"))
+            || label.matches("^ลด [0-9].*");
     }
 
     private static boolean matches(List<Map<String, Object>> items, List<DepositNoticeRepository.QuotationInvoiceLine> lines) {
