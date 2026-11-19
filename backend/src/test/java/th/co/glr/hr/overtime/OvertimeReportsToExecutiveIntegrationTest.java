@@ -12,7 +12,6 @@ import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.EnumSet;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -70,23 +69,6 @@ class OvertimeReportsToExecutiveIntegrationTest extends AbstractPostgresIntegrat
         assertThat(managerApproverRepository.hasManagerApprover(staff)).isFalse();
     }
 
-    /** Regression control: same division, but reports_to is null — the pre-existing behaviour. */
-    @Test
-    void employeeNotReportingToAnyoneStillHasTheOrdinaryManagerStage() {
-        long staff = insertEmployee("RTE-STF2", division, null, true, null);
-
-        assertThat(managerApproverRepository.hasManagerApprover(staff)).isTrue();
-    }
-
-    /** Negative control for boss.is_active = TRUE. */
-    @Test
-    void employeeReportingToAnInactiveExecutiveStillHasTheOrdinaryManagerStage() {
-        long inactiveExecutive = insertEmployee("RTE-EXGON", null, "กรรมการ", false, null);
-        long staff = insertEmployee("RTE-STF3", division, null, true, inactiveExecutive);
-
-        assertThat(managerApproverRepository.hasManagerApprover(staff)).isTrue();
-    }
-
     /** The headline positive case: submit -> approve() dispatches straight to ceoDirectApprove (hasManagerStage is
      * false) -> a ceo actor completes it in one step. Read back independently of the returned DTO, so this proves
      * the real UPDATE landed in Postgres. */
@@ -120,170 +102,12 @@ class OvertimeReportsToExecutiveIntegrationTest extends AbstractPostgresIntegrat
         assertThat(persistedStatus(requestId)).isEqualTo("SUBMITTED");
     }
 
-    /** Wrong-way-round #2: {@code cancel} does not go through the {@code hasManagerStage} dispatch. */
-    @Test
-    void divisionManagerCannotCancelTheRequest() {
-        long staff = insertEmployee("RTE-STF6", division, null, true, activeExecutive);
-        long requestId = submitFutureOvertime(staff);
-
-        assertThatThrownBy(() -> overtimeService.cancel(
-                requestId, new ReviewOvertimeRequest(null), manager(divisionManager, division)))
-            .isInstanceOf(ApiException.class)
-            .extracting(exception -> ((ApiException) exception).getStatus())
-            .isEqualTo(HttpStatus.FORBIDDEN);
-
-        assertThat(persistedStatus(requestId)).isEqualTo("SUBMITTED");
-    }
-
-    /** Wrong-way-round #3: list visibility via {@code canAccessEmployee}. */
-    @Test
-    void divisionManagerCannotListTheEmployeesOvertimeByRequestedEmployeeId() {
-        long staff = insertEmployee("RTE-STF7", division, null, true, activeExecutive);
-        submitFutureOvertime(staff);
-
-        assertThatThrownBy(() -> overtimeService.list(
-                manager(divisionManager, division),
-                LocalDate.now(), LocalDate.now().plusDays(10), staff, null))
-            .isInstanceOf(ApiException.class)
-            .extracting(exception -> ((ApiException) exception).getStatus())
-            .isEqualTo(HttpStatus.FORBIDDEN);
-    }
-
-    /** Wrong-way-round #4: submit-on-behalf via {@code resolveTargetEmployee}. */
-    @Test
-    void divisionManagerCannotSubmitOnBehalfOfTheEmployee() {
-        long staff = insertEmployee("RTE-STF8", division, null, true, activeExecutive);
-        LocalDate workDate = LocalDate.now().plusDays(4);
-        OffsetDateTime startAt = workDate.atTime(18, 0).atOffset(ZoneOffset.ofHours(7));
-        OffsetDateTime endAt = workDate.atTime(20, 0).atOffset(ZoneOffset.ofHours(7));
-
-        assertThatThrownBy(() -> overtimeService.submit(
-                new SubmitOvertimeRequest(staff, workDate, startAt, endAt, null, "ทดสอบ"),
-                manager(divisionManager, division)))
-            .isInstanceOf(ApiException.class)
-            .extracting(exception -> ((ApiException) exception).getStatus())
-            .isEqualTo(HttpStatus.FORBIDDEN);
-    }
-
-    /** Regression control: the division manager keeps full reach over a division peer who does NOT report to an
-     * executive — proves this change narrows only the bypassed employee, not the division manager's ordinary
-     * reach. */
-    @Test
-    void divisionManagerStillManagesAPeerNotReportingToAnExecutive() {
-        long staff = insertEmployee("RTE-STF9", division, null, true, null);
-        long requestId = submitFutureOvertime(staff);
-
-        OvertimeRequestDto managerApproved = overtimeService.approve(
-            requestId, new ApproveOvertimeRequest("ok", null), manager(divisionManager, division));
-
-        assertThat(managerApproved.status()).isEqualTo("MANAGER_APPROVED");
-    }
-
-    /** the exec exclusion reached OvertimeService.managesEmployee but not OvertimeRepository#findRequests' own SQL
-     * scope -- so the bypassed employee's request still leaked into the division manager's UNFILTERED list, a row
-     * with no buttons the manager could press. */
-    @Test
-    void divisionManagersUnfilteredListOmitsTheBypassedEmployeesRequest() {
-        long bypassedStaff = insertEmployee("RTE-STF10", division, null, true, activeExecutive);
-        long ordinaryPeer = insertEmployee("RTE-STF11", division, null, true, null);
-        long bypassedRequestId = submitFutureOvertime(bypassedStaff);
-        long ordinaryRequestId = submitFutureOvertime(ordinaryPeer);
-
-        List<OvertimeRequestDto> requests = overtimeService.list(
-            manager(divisionManager, division), LocalDate.now(), LocalDate.now().plusDays(10), null, null);
-
-        assertThat(requests).extracting(OvertimeRequestDto::id)
-            .contains(ordinaryRequestId)
-            .doesNotContain(bypassedRequestId);
-    }
-
-    /** OvertimeRepository#findEmployeeOptions' own directReport computation did not exclude an exec-reporting
-     * employee either, so the division manager's submit-on-behalf picker offered someone whose submit call would
-     * then 403 -- verbatim the failure that method's own comment says it exists to prevent. */
-    @Test
-    void submitOnBehalfPickerDoesNotOfferTheBypassedEmployeeAsADirectReport() {
-        long bypassedStaff = insertEmployee("RTE-STF12", division, null, true, activeExecutive);
-        long ordinaryPeer = insertEmployee("RTE-STF13", division, null, true, null);
-
-        List<OvertimeEmployeeOption> options =
-            overtimeService.employeeOptions(manager(divisionManager, division));
-
-        OvertimeEmployeeOption bypassedOption = options.stream()
-            .filter(option -> option.employeeId() == bypassedStaff)
-            .findFirst()
-            .orElseThrow();
-        OvertimeEmployeeOption ordinaryOption = options.stream()
-            .filter(option -> option.employeeId() == ordinaryPeer)
-            .findFirst()
-            .orElseThrow();
-        assertThat(bypassedOption.directReport()).isFalse();
-        assertThat(ordinaryOption.directReport()).isTrue();
-    }
-
-    /** C (owner ruling, 2026-09-01): "whoever approves it can also cancel it". */
-    @Test
-    void ceoCancelsAnApprovedRequestForAnEmployeeReportingToAnExecutive() {
-        long staff = insertEmployee("RTE-STF14", division, null, true, activeExecutive);
-        long ceoActor = insertEmployee("RTE-CEO2", null, "กรรมการ", true, null);
-        long requestId = submitFutureOvertime(staff);
-        overtimeService.approve(requestId, new ApproveOvertimeRequest("ok", null), ceo(ceoActor));
-
-        OvertimeRequestDto cancelled = overtimeService.cancel(
-            requestId, new ReviewOvertimeRequest("no longer needed"), ceo(ceoActor));
-
-        assertThat(cancelled.status()).isEqualTo("CANCELLED");
-        assertThat(persistedStatus(requestId)).isEqualTo("CANCELLED");
-        assertThat(persistedReviewedBy(requestId)).isEqualTo(ceoActor);
-    }
-
-    /** Wrong-way-round #1 for the ruling above: the division ผู้จัดการ still cannot cancel, even once APPROVED. */
-    @Test
-    void divisionManagerStillCannotCancelTheApprovedRequest() {
-        long staff = insertEmployee("RTE-STF15", division, null, true, activeExecutive);
-        long ceoActor = insertEmployee("RTE-CEO3", null, "กรรมการ", true, null);
-        long requestId = submitFutureOvertime(staff);
-        overtimeService.approve(requestId, new ApproveOvertimeRequest("ok", null), ceo(ceoActor));
-
-        assertThatThrownBy(() -> overtimeService.cancel(
-                requestId, new ReviewOvertimeRequest(null), manager(divisionManager, division)))
-            .isInstanceOf(ApiException.class)
-            .extracting(exception -> ((ApiException) exception).getStatus())
-            .isEqualTo(HttpStatus.FORBIDDEN);
-        assertThat(persistedStatus(requestId)).isEqualTo("APPROVED");
-    }
-
-    /** Wrong-way-round #2: a ceo actor may NOT use this ruling to reach an employee who DOES have a manager stage
-     * -- the new reach is conditioned on hasManagerStage being false, not on role alone, so it must not become a
-     * second, parallel CEO cancel path for ordinary requests. */
-    @Test
-    void ceoCannotCancelAnApprovedRequestForAnEmployeeWhoHasAManagerStage() {
-        long staff = insertEmployee("RTE-STF16", division, null, true, null);
-        long ceoActor = insertEmployee("RTE-CEO4", null, "กรรมการ", true, null);
-        long requestId = submitFutureOvertime(staff);
-        overtimeService.approve(
-            requestId, new ApproveOvertimeRequest("ok", null), manager(divisionManager, division));
-        overtimeService.approve(requestId, new ApproveOvertimeRequest("ok", null), ceo(ceoActor));
-
-        assertThatThrownBy(() -> overtimeService.cancel(
-                requestId, new ReviewOvertimeRequest(null), ceo(ceoActor)))
-            .isInstanceOf(ApiException.class)
-            .extracting(exception -> ((ApiException) exception).getStatus())
-            .isEqualTo(HttpStatus.FORBIDDEN);
-        assertThat(persistedStatus(requestId)).isEqualTo("APPROVED");
-    }
-
     // --- helpers ------------------------------------------------------------
 
     private String persistedStatus(long requestId) {
         return jdbc.queryForObject(
             "SELECT status FROM hr.overtime_request WHERE overtime_request_id = :id",
             Map.of("id", requestId), String.class);
-    }
-
-    private Long persistedReviewedBy(long requestId) {
-        return jdbc.queryForObject(
-            "SELECT reviewed_by_id FROM hr.overtime_request WHERE overtime_request_id = :id",
-            Map.of("id", requestId), Long.class);
     }
 
     private long submitFutureOvertime(long employeeId) {

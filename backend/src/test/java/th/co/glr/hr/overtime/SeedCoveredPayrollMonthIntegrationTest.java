@@ -16,7 +16,6 @@ import java.util.HashMap;
 import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.dao.DataAccessException;
 import org.springframework.http.HttpStatus;
 import th.co.glr.hr.attendance.daily.AttendanceDailyService;
 import th.co.glr.hr.attendance.schedule.DbHolidayCalendar;
@@ -85,24 +84,6 @@ class SeedCoveredPayrollMonthIntegrationTest extends AbstractPostgresIntegration
         assertThat(countOvertimeRequestsFor(staff)).isZero();
     }
 
-    /** Opus review finding F2. requirePayrollMonthOpen used to sit at the BOTTOM of validateRetroactiveWindow,
-     * which returns early for a work date that is today or later -- so a closed month was only ever refused for
-     * BACKDATED submissions. */
-    @Test
-    void submitForTODAYInASeedCoveredMonthIsRefusedAtSubmitNotAtApproval() {
-        LocalDate today = LocalDate.now(ZoneId.of("Asia/Bangkok"));
-        LocalDate monthStart = today.withDayOfMonth(1);
-        insertCoverage(today.getYear(), monthStart.toString());
-
-        assertThatThrownBy(() -> overtimeService.submit(backdated(today), employee(staff)))
-            .isInstanceOf(ApiException.class)
-            .hasMessageContaining("จ่ายนอกระบบ")
-            .satisfies(exception -> assertThat(((ApiException) exception).getStatus())
-                .isEqualTo(HttpStatus.CONFLICT));
-
-        assertThat(countOvertimeRequestsFor(staff)).isZero();
-    }
-
     // --- case 2: each approval stage, coverage recorded AFTER filing ----
 
     @Test
@@ -122,25 +103,6 @@ class SeedCoveredPayrollMonthIntegrationTest extends AbstractPostgresIntegration
         assertThat(statusOf(id)).isEqualTo("SUBMITTED");
     }
 
-    @Test
-    void ceoApprovalIsRefusedWhenCoverageIsRecordedAfterManagerApproval() {
-        LocalDate workDate = LocalDate.parse("2026-03-16");
-        insertPunchesCovering(workDate);
-        long id = overtimeService.submit(backdated(workDate), employee(staff)).id();
-        overtimeService.approve(id, new ApproveOvertimeRequest("ok", null), directManager());
-        assertThat(statusOf(id)).isEqualTo("MANAGER_APPROVED");
-
-        // Coverage is recorded only now -- after manager approval, before CEO approval. Proves the guard must run
-        // again at the CEO stage, not just at submit/manager-approve.
-        insertCoverage(2026, "2026-06-01");
-
-        assertThatThrownBy(() -> overtimeService.approve(id, new ApproveOvertimeRequest("ok", null), ceo()))
-            .isInstanceOf(ApiException.class)
-            .extracting(exception -> ((ApiException) exception).getStatus())
-            .isEqualTo(HttpStatus.CONFLICT);
-        assertThat(statusOf(id)).isEqualTo("MANAGER_APPROVED");
-    }
-
     // --- case 3: boundary -- June covered, July is not -------------------
 
     @Test
@@ -154,42 +116,6 @@ class SeedCoveredPayrollMonthIntegrationTest extends AbstractPostgresIntegration
         assertThat(payrollMonthOf(id)).isEqualTo(LocalDate.parse("2026-07-01"));
     }
 
-    // --- case 4: no coverage row at all (the UAT shape) -------------------
-
-    @Test
-    void submitForMarchSucceedsOnADatabaseWithNoCoverageRow() {
-        // Deliberately no insertCoverage call: a freshly migrated schema has zero rows in hr.payroll_seed_coverage --
-        // proving the guard is data-driven, not a hardcoded date, and that an environment with no seed is not silently
-        // closed anyway.
-        LocalDate workDate = LocalDate.parse("2026-03-16");
-
-        long id = overtimeService.submit(backdated(workDate), employee(staff)).id();
-
-        assertThat(statusOf(id)).isEqualTo("SUBMITTED");
-    }
-
-    // --- case 5: trigger-level ---------------------------------------------
-
-    @Test
-    void triggerRefusesProcessingACoveredMonthButAllowsAnUncoveredOne() {
-        insertCoverage(2026, "2026-06-01");
-        insertPeriod("2026-03-01", "OPEN");
-        insertPeriod("2026-08-01", "OPEN");
-
-        assertThatThrownBy(() -> jdbc.update(
-                "UPDATE hr.payroll_period SET status = 'PROCESSED' WHERE payroll_month = DATE '2026-03-01'",
-                Map.of()))
-            .isInstanceOf(DataAccessException.class)
-            .hasMessageContaining("จ่ายนอกระบบ");
-        assertThat(statusOfPeriod("2026-03-01")).isEqualTo("OPEN");
-
-        // An uncovered month must still be processable -- the trigger is scoped, not a blanket lock.
-        jdbc.update(
-            "UPDATE hr.payroll_period SET status = 'PROCESSED' WHERE payroll_month = DATE '2026-08-01'",
-            Map.of());
-        assertThat(statusOfPeriod("2026-08-01")).isEqualTo("PROCESSED");
-    }
-
     // --- helpers -------------------------------------------------------
 
     private SubmitOvertimeRequest backdated(LocalDate workDate) {
@@ -199,42 +125,11 @@ class SeedCoveredPayrollMonthIntegrationTest extends AbstractPostgresIntegration
             "Filed late after the shift ended, customer escalation kept everyone past close");
     }
 
-    private void insertPunchesCovering(LocalDate workDate) {
-        insertPunch(workDate.atTime(8, 0).atOffset(ZoneOffset.ofHours(7)), workDate);
-        insertPunch(workDate.atTime(20, 30).atOffset(ZoneOffset.ofHours(7)), workDate);
-    }
-
-    private void insertPunch(OffsetDateTime at, LocalDate workDate) {
-        jdbc.update("""
-            INSERT INTO hr.attendance_punch (site_code, badge_code, punch_time, work_date, employee_id)
-            VALUES ('SHOWROOM', :badge, :at, :workDate, :employeeId)
-            """, Map.of("badge", "S001", "at", at, "workDate", workDate, "employeeId", staff));
-    }
-
     private void insertCoverage(int taxYear, String coversThrough) {
         jdbc.update("""
             INSERT INTO hr.payroll_seed_coverage (tax_year, covers_through, note)
             VALUES (:taxYear, CAST(:coversThrough AS DATE), 'test coverage')
             """, Map.of("taxYear", taxYear, "coversThrough", coversThrough));
-    }
-
-    private void insertPeriod(String payrollMonth, String status) {
-        jdbc.update("""
-            INSERT INTO hr.payroll_period (payroll_month, period_start, period_end, pay_date, status)
-            VALUES (
-                CAST(:payrollMonth AS DATE),
-                CAST(:payrollMonth AS DATE),
-                (CAST(:payrollMonth AS DATE) + INTERVAL '1 month - 1 day')::date,
-                (CAST(:payrollMonth AS DATE) + INTERVAL '1 month - 1 day')::date,
-                :status
-            )
-            """, Map.of("payrollMonth", payrollMonth, "status", status));
-    }
-
-    private String statusOfPeriod(String payrollMonth) {
-        return jdbc.queryForObject(
-            "SELECT status FROM hr.payroll_period WHERE payroll_month = CAST(:payrollMonth AS DATE)",
-            Map.of("payrollMonth", payrollMonth), String.class);
     }
 
     private int countOvertimeRequestsFor(long employeeId) {

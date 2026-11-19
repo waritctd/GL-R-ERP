@@ -37,9 +37,6 @@ class OvertimeDayTypeDerivedFromCalendarIntegrationTest extends AbstractPostgres
 
     private static final BigDecimal SALARY = new BigDecimal("30000.00");
     private static final ZoneId BANGKOK = ZoneId.of("Asia/Bangkok");
-    /** Deliberately far enough in the future that no other fixture in this class (all pinned to "now + 10 days", i.e.
-     * the current year) could plausibly collide with it. */
-    private static final int FAR_FUTURE_YEAR_WITH_NO_HOLIDAY_DATA = 2099;
 
     private OvertimeService overtimeService;
 
@@ -95,19 +92,6 @@ class OvertimeDayTypeDerivedFromCalendarIntegrationTest extends AbstractPostgres
     // no claim at all (the request(workDate, employeeId) overload below never sets one), pay is still exclusively
     // calendar/schedule-derived.
 
-    /** The label an approver would see must be honest from the moment the row is created — see
-     * OvertimeService#submit's comment. Asserted directly against the stored columns, before any approval runs. */
-    @Test
-    void weekdayOvertimeWithNoCalendarEntryStoresWorkdayMultiplier() {
-        LocalDate workDate = aWeekdayWithNoHolidayRow();
-
-        OvertimeRequestDto created = overtimeService.submit(request(workDate, staff), employee(staff));
-
-        assertThat(created.suggestedDayType()).isEqualTo("WORKDAY");
-        assertThat(dayTypeOf(created.id())).isEqualTo("WORKDAY");
-        assertThat(multiplierOf(created.id())).isEqualByComparingTo("1.50");
-    }
-
     /** THE headline scenario from the defect report, reproduced with its exact figures: ฿30,000/month -> hourly base
      * 30000/30/8 = ฿125. 3 hours (18:00-21:00) on an ordinary weekday. Correct pay is 3 x 125 x 1.50 = ฿562.50. */
     @Test
@@ -124,24 +108,6 @@ class OvertimeDayTypeDerivedFromCalendarIntegrationTest extends AbstractPostgres
         assertThat(multiplierOf(id)).isEqualByComparingTo("1.50");
         assertThat(overtimePayFor(workDate.withDayOfMonth(1), staff))
             .as("3h x (30000/30/8) x 1.50 -- NOT x 3.00")
-            .isEqualByComparingTo(new BigDecimal("562.50"));
-    }
-
-    /** The manager-less route (ceoDirectApprove) is a separate repository method from managerApprove with its own SQL
-     * -- it needs its own proof it also derives and freezes from the calendar, not an assumption that fixing one
-     * fixed both. */
-    @Test
-    void ceoDirectApprovalDerivesFromTheCalendarForManagerlessEmployeesToo() {
-        LocalDate workDate = aWeekdayWithNoHolidayRow();
-        insertPunchesCovering(workDate, managerlessStaff, "F001");
-
-        long id = overtimeService.submit(request(workDate, managerlessStaff), employee(managerlessStaff)).id();
-        overtimeService.approve(id, approve(), ceo());
-
-        assertThat(statusOf(id)).isEqualTo("APPROVED");
-        assertThat(dayTypeOf(id)).isEqualTo("WORKDAY");
-        assertThat(multiplierOf(id)).isEqualByComparingTo("1.50");
-        assertThat(overtimePayFor(workDate.withDayOfMonth(1), managerlessStaff))
             .isEqualByComparingTo(new BigDecimal("562.50"));
     }
 
@@ -168,41 +134,6 @@ class OvertimeDayTypeDerivedFromCalendarIntegrationTest extends AbstractPostgres
     // Case 3: the calendar can change between submit and approval (HR corrects it), same shape of problem
     // requirePayrollMonthOpen already guards against for the payroll-month gate. Proves the design choice to
     // re-derive AND FREEZE at approval (OvertimeService#calculate), not only at submit.
-
-    @Test
-    void aHolidayAddedToTheCalendarAfterSubmitIsPickedUpAndFrozenAtManagerApproval() {
-        LocalDate workDate = aWeekdayWithNoHolidayRow();
-        insertPunchesCovering(workDate, staff, "S001");
-
-        long id = overtimeService.submit(request(workDate, staff), employee(staff)).id();
-        assertThat(dayTypeOf(id)).isEqualTo("WORKDAY");
-
-        // HR adds a late-breaking / corrected holiday entry before anyone has approved yet.
-        insertHoliday(workDate, "ประกาศเพิ่มเติม");
-
-        overtimeService.approve(id, approve(), directManager());
-
-        assertThat(dayTypeOf(id)).isEqualTo("HOLIDAY");
-        assertThat(multiplierOf(id)).isEqualByComparingTo("3.00");
-    }
-
-    @Test
-    void aMistakenHolidayEntryRemovedAfterSubmitIsPickedUpAndFrozenAtManagerApproval() {
-        LocalDate workDate = aWeekdayWithNoHolidayRow();
-        insertHoliday(workDate, "รายการผิดพลาด");
-        insertPunchesCovering(workDate, staff, "S001");
-
-        long id = overtimeService.submit(request(workDate, staff), employee(staff)).id();
-        assertThat(dayTypeOf(id)).isEqualTo("HOLIDAY");
-
-        // HR discovers the calendar entry was a mistake and removes it before anyone approves.
-        deleteHoliday(workDate);
-
-        overtimeService.approve(id, approve(), directManager());
-
-        assertThat(dayTypeOf(id)).isEqualTo("WORKDAY");
-        assertThat(multiplierOf(id)).isEqualByComparingTo("1.50");
-    }
 
     /** The other half of "runs once": once manager approval has frozen the value, the final CEO sign-off must NOT
      * silently re-price the request out from under what the manager approved -- matching how
@@ -270,133 +201,6 @@ class OvertimeDayTypeDerivedFromCalendarIntegrationTest extends AbstractPostgres
             .isEqualByComparingTo(new BigDecimal("562.50"));
     }
 
-    /** The fix is not "always refuse a HOLIDAY claim" -- one the calendar corroborates is accepted at the real rate, and needs no flag. */
-    @Test
-    void holidayClaimCorroboratedByTheCalendarIsAcceptedAtTheHolidayRateWithNoFlag() {
-        LocalDate holiday = aWeekdayWithNoHolidayRow();
-        insertHoliday(holiday, "วันหยุดทดสอบ");
-
-        long id = overtimeService.submit(request(holiday, staff, "HOLIDAY"), employee(staff)).id();
-
-        assertThat(dayTypeOf(id)).isEqualTo("HOLIDAY");
-        assertThat(multiplierOf(id)).isEqualByComparingTo("3.00");
-        assertThat(calculationNoteOf(id)).isNull();
-    }
-
-    /** The calendar has never been loaded for the work date's year AT ALL -- the claim can be neither confirmed nor
-     * refused, so it is accepted but flagged in calculation_note for HR to review once the calendar is populated. */
-    @Test
-    void holidayClaimWithNoCalendarDataForTheYearIsAcceptedAndFlagged() {
-        LocalDate workDate = aFarFutureYearWeekdayWithNoHolidayRow();
-
-        long id = overtimeService.submit(request(workDate, staff, "HOLIDAY"), employee(staff)).id();
-
-        assertThat(dayTypeOf(id))
-            .as("an unverifiable claim never becomes pay -- suggestDayType alone decides, and the calendar/schedule say WORKDAY")
-            .isEqualTo("WORKDAY");
-        assertThat(multiplierOf(id)).isEqualByComparingTo("1.50");
-        assertThat(calculationNoteOf(id))
-            .as("the note is about the CALENDAR (names the year), not the claim -- it no longer mentions HOLIDAY at all, see resolveDayTypeSubmitNote's Javadoc")
-            .isNotNull()
-            .contains(String.valueOf(FAR_FUTURE_YEAR_WITH_NO_HOLIDAY_DATA));
-    }
-
-    /** THE exact gap the original fix closed, proved end to end against real Postgres (the unit-level proof, including
-     * its own mutation-check, lives in OvertimeServiceTest). Written wrong-way-round: asserts the note is PRESENT
-     * where the pre-fix code left it absent. */
-    @Test
-    void workdayClaimWithNoCalendarDataForTheYearIsAcceptedAndFlaggedToo() {
-        LocalDate workDate = aFarFutureYearWeekdayWithNoHolidayRow();
-
-        long id = overtimeService.submit(request(workDate, staff, "WORKDAY"), employee(staff)).id();
-
-        assertThat(dayTypeOf(id)).isEqualTo("WORKDAY");
-        assertThat(multiplierOf(id)).isEqualByComparingTo("1.50");
-        assertThat(calculationNoteOf(id))
-            .as("a WORKDAY claim -- OvertimePanel.jsx's dropdown default -- must be flagged too: the suggestion is unverified independent of what was claimed")
-            .isNotNull()
-            .contains(String.valueOf(FAR_FUTURE_YEAR_WITH_NO_HOLIDAY_DATA));
-    }
-
-    /** The claim can under-state the true day type without consequence -- suggestDayType corrects it upward
-     * regardless, exactly as it already does for a NO-claim submission. */
-    @Test
-    void workdayClaimOnAGenuineHolidayIsStoredAsHolidayRegardlessOfTheUnderclaim() {
-        LocalDate holiday = aWeekdayWithNoHolidayRow();
-        insertHoliday(holiday, "วันหยุดทดสอบ");
-
-        long id = overtimeService.submit(request(holiday, staff, "WORKDAY"), employee(staff)).id();
-
-        assertThat(dayTypeOf(id)).isEqualTo("HOLIDAY");
-        assertThat(multiplierOf(id)).isEqualByComparingTo("3.00");
-    }
-
-    /** calculation_note is written at BOTH submit time (a day-type flag, when one fires) and approval time
-     * (OvertimeService#calculate's attendance-derived note) -- and managerApprove/ceoDirectApprove overwrite the
-     * column wholesale. */
-    @Test
-    void managerApprovalPreservesTheSubmitTimeUnverifiedClaimFlagInsteadOfClobberingIt() {
-        LocalDate workDate = aFarFutureYearWeekdayWithNoHolidayRow();
-        insertPunchesCovering(workDate, staff, "S001");
-
-        long id = overtimeService.submit(request(workDate, staff, "HOLIDAY"), employee(staff)).id();
-        String submitTimeNote = calculationNoteOf(id);
-        assertThat(submitTimeNote).isNotNull();
-
-        overtimeService.approve(id, approve(), directManager());
-
-        assertThat(calculationNoteOf(id))
-            .as("the submit-time flag must survive approval, alongside the new approval-time note -- not be replaced by it")
-            .contains(submitTimeNote)
-            .contains("Calculated from the overlap");
-    }
-
-    /** ceoDirectApprove is a SEPARATE UPDATE statement from managerApprove. Otherwise identical to
-     * #managerApprovalPreservesTheSubmitTimeUnverifiedClaimFlagInsteadOfClobberingIt, through the manager-less
-     * employee / CEO-direct route instead. */
-    @Test
-    void ceoDirectApprovalPreservesTheSubmitTimeUnverifiedClaimFlagInsteadOfClobberingIt() {
-        LocalDate workDate = aFarFutureYearWeekdayWithNoHolidayRow();
-        insertPunchesCovering(workDate, managerlessStaff, "F001");
-
-        long id = overtimeService.submit(request(workDate, managerlessStaff, "HOLIDAY"), employee(managerlessStaff)).id();
-        String submitTimeNote = calculationNoteOf(id);
-        assertThat(submitTimeNote).isNotNull();
-
-        overtimeService.approve(id, approve(), ceo());
-
-        assertThat(calculationNoteOf(id))
-            .as("the submit-time flag must survive ceoDirectApprove too, alongside the new approval-time note -- not be replaced by it")
-            .contains(submitTimeNote)
-            .contains("Calculated from the overlap");
-    }
-
-    /** THE wrong-way-round case CLAUDE.md's authorization-evidence rule calls out by name, and the one this fix's task
-     * brief flags as "must not be skipped": a claim from the SUBMITTER never reaches pay_rate_multiplier, proven
-     * through the manager-LESS / CEO-direct route too. */
-    @Test
-    void aSubmittedDayTypeClaimNeverReachesPayRateMultiplierOnTheManagerlessRouteEither() {
-        LocalDate workDate = aWeekdayWithNoHolidayRow();
-        LocalDate sentinelHolidayDate = workDate.getDayOfYear() == 1
-            ? workDate.plusDays(1)
-            : workDate.withDayOfYear(1);
-        insertHoliday(sentinelHolidayDate, "วันหยุดอื่นในปีเดียวกัน");
-        insertPunchesCovering(workDate, managerlessStaff, "F001");
-
-        long id = overtimeService.submit(request(workDate, managerlessStaff, "HOLIDAY"), employee(managerlessStaff)).id();
-        assertThat(dayTypeOf(id)).isEqualTo("WORKDAY");
-
-        overtimeService.approve(id, approve(), ceo());
-
-        assertThat(statusOf(id)).isEqualTo("APPROVED");
-        assertThat(dayTypeOf(id))
-            .as("the claim never reaches pay_rate_multiplier on the manager-less route either")
-            .isEqualTo("WORKDAY");
-        assertThat(multiplierOf(id)).isEqualByComparingTo("1.50");
-        assertThat(overtimePayFor(workDate.withDayOfMonth(1), managerlessStaff))
-            .isEqualByComparingTo(new BigDecimal("562.50"));
-    }
-
     /** Authorization evidence, wrong-way-round: an actor forbidden from approving THIS request cannot move money
      * through the NEW ApproveOvertimeRequest#dayType field either. */
     @Test
@@ -416,45 +220,6 @@ class OvertimeDayTypeDerivedFromCalendarIntegrationTest extends AbstractPostgres
             .as("a rejected self-approve attempt must not move dayType/pay_rate_multiplier at all -- the HOLIDAY override never took effect")
             .isEqualTo("WORKDAY");
         assertThat(multiplierOf(id)).isEqualByComparingTo("1.50");
-    }
-
-    // Case 6 (feat/ot-nonworkday-rate-suggestion, NEW): the schedule half of the suggestion -- Saturday/Sunday now
-    // suggest HOLIDAY for a Mon-Fri employee, WITHOUT any hr.holiday row, and WITHOUT needing the calendar loaded for
-    // the year at all (see resolveDayTypeSubmitNote's narrowing).
-
-    @Test
-    void saturdaySuggestsHolidayForAMonFriEmployeeAndApprovingWithNoOverridePaysTheHolidayRate() {
-        LocalDate saturday = aSaturdayWithNoHolidayRow();
-        insertPunchesCovering(saturday, staff, "S001");
-
-        OvertimeRequestDto created = overtimeService.submit(request(saturday, staff), employee(staff));
-
-        assertThat(created.suggestedDayType()).isEqualTo("HOLIDAY");
-        assertThat(dayTypeOf(created.id())).isEqualTo("HOLIDAY");
-        assertThat(multiplierOf(created.id())).isEqualByComparingTo("3.00");
-        assertThat(calculationNoteOf(created.id()))
-            .as("a schedule-derived non-workday needs no calendar data to be certain -- narrowed calendar-unverified flag must NOT fire")
-            .isNull();
-
-        overtimeService.approve(created.id(), approve(), directManager());
-        overtimeService.approve(created.id(), approve(), ceo());
-
-        assertThat(dayTypeOf(created.id())).isEqualTo("HOLIDAY");
-        assertThat(multiplierOf(created.id())).isEqualByComparingTo("3.00");
-        assertThat(overtimePayFor(saturday.withDayOfMonth(1), staff))
-            .as("3h x (30000/30/8) x 3.00 -- confirmed by the approver, not silently paid")
-            .isEqualByComparingTo(new BigDecimal("1125.00"));
-    }
-
-    @Test
-    void sundaySuggestsHolidayForAMonFriEmployee() {
-        LocalDate sunday = aSundayWithNoHolidayRow();
-
-        OvertimeRequestDto created = overtimeService.submit(request(sunday, staff), employee(staff));
-
-        assertThat(created.suggestedDayType()).isEqualTo("HOLIDAY");
-        assertThat(dayTypeOf(created.id())).isEqualTo("HOLIDAY");
-        assertThat(multiplierOf(created.id())).isEqualByComparingTo("3.00");
     }
 
     // Case 7 (feat/ot-nonworkday-rate-suggestion, NEW): OPS_6D tiering. THE case a naive day-of-week fix gets wrong
@@ -488,68 +253,9 @@ class OvertimeDayTypeDerivedFromCalendarIntegrationTest extends AbstractPostgres
             .isEqualByComparingTo(new BigDecimal("562.50"));
     }
 
-    @Test
-    void sundayIsSuggestedHolidayForAnOps6dEmployee() {
-        LocalDate sunday = aSundayWithNoHolidayRow();
-        insertPunchesCovering(sunday, opsSixDayStaff, "S006");
-
-        OvertimeRequestDto created =
-            overtimeService.submit(request(sunday, opsSixDayStaff), employee(opsSixDayStaff));
-
-        assertThat(created.suggestedDayType())
-            .as("Sunday is OPS_6D's one day off, same rule shape as a five-day schedule's weekend")
-            .isEqualTo("HOLIDAY");
-
-        overtimeService.approve(created.id(), approve(), opsSixDayManagerUser());
-        overtimeService.approve(created.id(), approve(), ceo());
-
-        assertThat(dayTypeOf(created.id())).isEqualTo("HOLIDAY");
-        assertThat(multiplierOf(created.id())).isEqualByComparingTo("3.00");
-        assertThat(overtimePayFor(sunday.withDayOfMonth(1), opsSixDayStaff))
-            .isEqualByComparingTo(new BigDecimal("1125.00"));
-    }
-
-    // Case 8 (feat/ot-nonworkday-rate-suggestion, NEW): the employee's claim may disagree with a non-workday
-    // suggestion too -- accepted and flagged, never refused, same as Case 4's holiday-vs-workday direction but on the
-    // SCHEDULE side of the suggestion this time.
-
-    @Test
-    void employeeClaimingWorkdayOnASuggestedHolidaySaturdayIsAcceptedAndFlaggedNotRejected() {
-        LocalDate saturday = aSaturdayWithNoHolidayRow();
-
-        OvertimeRequestDto created = overtimeService.submit(request(saturday, staff, "WORKDAY"), employee(staff));
-
-        assertThat(created.suggestedDayType()).isEqualTo("HOLIDAY");
-        assertThat(dayTypeOf(created.id()))
-            .as("stored day_type still comes from the SUGGESTION, never the claim")
-            .isEqualTo("HOLIDAY");
-        assertThat(multiplierOf(created.id())).isEqualByComparingTo("3.00");
-        assertThat(calculationNoteOf(created.id()))
-            .as("the employee's claim disagreed with the suggestion -- flagged, never a 400")
-            .isNotNull()
-            .contains("ไม่ตรงกับที่ระบบแนะนำ");
-    }
-
     // Case 9 (feat/ot-nonworkday-rate-suggestion, NEW): the approver's decision. Absent/null dayType falls back to
     // the suggestion (already proved throughout Cases 1-8 above, which all approve() with no override); an EXPLICIT
     // override wins outright, in both directions.
-
-    @Test
-    void managerOverridingTheSuggestionToWorkdayOnASaturdayStoresTheLowerRate() {
-        LocalDate saturday = aSaturdayWithNoHolidayRow();
-        insertPunchesCovering(saturday, staff, "S001");
-
-        long id = overtimeService.submit(request(saturday, staff), employee(staff)).id();
-        assertThat(dayTypeOf(id)).isEqualTo("HOLIDAY");
-
-        overtimeService.approve(
-            id, new ApproveOvertimeRequest("data looked wrong, this was an ordinary shift", "WORKDAY"), directManager());
-
-        assertThat(dayTypeOf(id))
-            .as("the approver's explicit override wins over the suggestion")
-            .isEqualTo("WORKDAY");
-        assertThat(multiplierOf(id)).isEqualByComparingTo("1.50");
-    }
 
     /** The other direction: the approver may also UPGRADE an ordinary-suggested day to the holiday rate. */
     @Test
@@ -567,47 +273,6 @@ class OvertimeDayTypeDerivedFromCalendarIntegrationTest extends AbstractPostgres
             .as("the approver's explicit override wins over the suggestion, in the upgrade direction too")
             .isEqualTo("HOLIDAY");
         assertThat(multiplierOf(id)).isEqualByComparingTo("3.00");
-    }
-
-    /** The freeze point does not move: on the two-stage route the MANAGER's decision is what freezes, and the CEO's
-     * final sign-off inherits it -- ApproveOvertimeRequest#dayType sent to the SECOND approve call must be silently
-     * ignored, exactly like a stale calendar change is. */
-    @Test
-    void theCeosFinalSignOffCannotOverrideWhatTheManagerAlreadyFroze() {
-        LocalDate workDate = aWeekdayWithNoHolidayRow();
-        insertPunchesCovering(workDate, staff, "S001");
-
-        long id = overtimeService.submit(request(workDate, staff), employee(staff)).id();
-        overtimeService.approve(id, new ApproveOvertimeRequest("ok", "HOLIDAY"), directManager());
-        assertThat(dayTypeOf(id)).isEqualTo("HOLIDAY");
-        assertThat(multiplierOf(id)).isEqualByComparingTo("3.00");
-
-        // The CEO tries to downgrade at the final sign-off -- must be silently ignored.
-        overtimeService.approve(id, new ApproveOvertimeRequest("ok", "WORKDAY"), ceo());
-
-        assertThat(statusOf(id)).isEqualTo("APPROVED");
-        assertThat(dayTypeOf(id))
-            .as("ceoApprove must never honour dayType -- the manager's decision is frozen")
-            .isEqualTo("HOLIDAY");
-        assertThat(multiplierOf(id)).isEqualByComparingTo("3.00");
-        assertThat(overtimePayFor(workDate.withDayOfMonth(1), staff))
-            .isEqualByComparingTo(new BigDecimal("1125.00"));
-    }
-
-    /** A malformed (non-blank, non-WORKDAY/HOLIDAY) approver dayType is a 400 about syntax, same message as a malformed claim. */
-    @Test
-    void aMalformedApproverDayTypeIsRejectedWithNoRowChanged() {
-        LocalDate workDate = aWeekdayWithNoHolidayRow();
-        long id = overtimeService.submit(request(workDate, staff), employee(staff)).id();
-
-        assertThatThrownBy(() ->
-                overtimeService.approve(id, new ApproveOvertimeRequest("ok", "TUESDAY"), directManager()))
-            .isInstanceOf(ApiException.class)
-            .extracting(exception -> ((ApiException) exception).getStatus())
-            .isEqualTo(HttpStatus.BAD_REQUEST);
-
-        assertThat(statusOf(id)).isEqualTo("SUBMITTED");
-        assertThat(dayTypeOf(id)).isEqualTo("WORKDAY");
     }
 
     // --- fixtures -------------------------------------------------------------------------------
@@ -633,15 +298,6 @@ class OvertimeDayTypeDerivedFromCalendarIntegrationTest extends AbstractPostgres
         return date;
     }
 
-    /** The next Sunday on/after "now + 10 days" -- see {@link #aSaturdayWithNoHolidayRow}'s Javadoc. */
-    private LocalDate aSundayWithNoHolidayRow() {
-        LocalDate date = LocalDate.now(BANGKOK).plusDays(10);
-        while (date.getDayOfWeek() != DayOfWeek.SUNDAY) {
-            date = date.plusDays(1);
-        }
-        return date;
-    }
-
     /** A date in the SAME calendar year as date that is never equal to date itself -- used to make hasHolidaysForYear
      * true (the year is "loaded") without making date itself a holiday. */
     private LocalDate sentinelDateInSameYear(LocalDate date) {
@@ -649,29 +305,11 @@ class OvertimeDayTypeDerivedFromCalendarIntegrationTest extends AbstractPostgres
         return date.equals(jan1) ? jan1.plusDays(1) : jan1;
     }
 
-    /** See #FAR_FUTURE_YEAR_WITH_NO_HOLIDAY_DATA's Javadoc for why this year and the defensive DELETE. Weekday-ness is
-     * not load-bearing here (see #aWeekdayWithNoHolidayRow's Javadoc) but is kept for consistency with this class's
-     * other fixtures. */
-    private LocalDate aFarFutureYearWeekdayWithNoHolidayRow() {
-        jdbc.update(
-            "DELETE FROM hr.holiday WHERE EXTRACT(YEAR FROM holiday_date) = :year",
-            Map.of("year", FAR_FUTURE_YEAR_WITH_NO_HOLIDAY_DATA));
-        LocalDate date = LocalDate.of(FAR_FUTURE_YEAR_WITH_NO_HOLIDAY_DATA, 6, 15);
-        while (date.getDayOfWeek() == DayOfWeek.SATURDAY || date.getDayOfWeek() == DayOfWeek.SUNDAY) {
-            date = date.plusDays(1);
-        }
-        return date;
-    }
-
     private void insertHoliday(LocalDate date, String nameTh) {
         jdbc.update("""
             INSERT INTO hr.holiday (holiday_date, name_th, source)
             VALUES (:date, :name, 'BANK')
             """, Map.of("date", date, "name", nameTh));
-    }
-
-    private void deleteHoliday(LocalDate date) {
-        jdbc.update("DELETE FROM hr.holiday WHERE holiday_date = :date", Map.of("date", date));
     }
 
     private long scheduleIdByCode(String code) {

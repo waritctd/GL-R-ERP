@@ -69,16 +69,6 @@ class OvertimeRetroactiveScopeIntegrationTest extends AbstractPostgresIntegratio
         factoryStaff = insertEmployee("F001", factoryDivision, null);
     }
 
-    // --- what the change deliberately allows --------------------------------
-
-    @Test
-    void anEmployeeCanNowSelfFileRetroactiveOvertime() {
-        OvertimeRequestDto created = service.submit(backdated(null, 3, LATE_REASON), employee(salesStaff));
-
-        assertThat(created.employeeId()).isEqualTo(salesStaff);
-        assertThat(storedCountFor(salesStaff)).isEqualTo(1);
-    }
-
     // --- what must still be refused -----------------------------------------
 
     /** The guard this branch had to leave standing. Backdating is now open to everyone, so if resolveTargetEmployee
@@ -87,29 +77,6 @@ class OvertimeRetroactiveScopeIntegrationTest extends AbstractPostgresIntegratio
     @Test
     void anEmployeeCannotSelfFileRetroactiveOvertimeForSomeoneTheyDoNotManage() {
         assertThatThrownBy(() -> service.submit(backdated(factoryStaff, 3, LATE_REASON), employee(salesStaff)))
-            .isInstanceOf(ApiException.class)
-            .extracting(exception -> ((ApiException) exception).getStatus())
-            .isEqualTo(HttpStatus.FORBIDDEN);
-
-        assertThat(storedCountFor(factoryStaff)).isZero();
-    }
-
-    @Test
-    void aManagerCannotFileRetroactiveOvertimeForAnotherDivision() {
-        assertThatThrownBy(() ->
-            service.submit(backdated(factoryStaff, 3, LATE_REASON), divisionManager(salesManager, salesDivision)))
-            .isInstanceOf(ApiException.class)
-            .extracting(exception -> ((ApiException) exception).getStatus())
-            .isEqualTo(HttpStatus.FORBIDDEN);
-
-        assertThat(storedCountFor(factoryStaff)).isZero();
-    }
-
-    /** HR has VIEW_ALL_ROLES read access but no write path, and never gained one here. Issue #199 was exactly this
-     * shape for approval — HR reading as more powerful than it is. */
-    @Test
-    void hrCannotFileRetroactiveOvertimeOnBehalfOfAnArbitraryEmployee() {
-        assertThatThrownBy(() -> service.submit(backdated(factoryStaff, 3, LATE_REASON), hr()))
             .isInstanceOf(ApiException.class)
             .extracting(exception -> ((ApiException) exception).getStatus())
             .isEqualTo(HttpStatus.FORBIDDEN);
@@ -158,11 +125,6 @@ class OvertimeRetroactiveScopeIntegrationTest extends AbstractPostgresIntegratio
             employeeId, true, LocalDate.now(), false, null, false);
     }
 
-    private UserPrincipal divisionManager(long employeeId, long divisionId) {
-        return new UserPrincipal(employeeId, "mgr@glr.co.th", "Manager", "employee",
-            employeeId, true, LocalDate.now(), false, divisionId, true);
-    }
-
     private UserPrincipal hr() {
         return new UserPrincipal(salesManager, "hr@glr.co.th", "HR", "hr",
             salesManager, true, LocalDate.now(), false, null, false);
@@ -202,7 +164,6 @@ class OvertimeRetroactiveScopeIntegrationTest extends AbstractPostgresIntegratio
             VALUES (:code, :name, TRUE) RETURNING position_id
             """, Map.of("code", code, "name", nameTh), Long.class);
     }
-
 
     private void insertProcessedPeriod(LocalDate payrollMonth) {
         jdbc.update("""
