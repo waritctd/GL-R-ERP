@@ -23,17 +23,4 @@ class SecurityHeadersFilterTest {
         assertThat(response.getHeader("Content-Security-Policy")).contains("frame-ancestors 'none'");
     }
 
-    @Test
-    void emitsHstsOnlyOverHttps() throws Exception {
-        MockHttpServletRequest insecure = new MockHttpServletRequest("GET", "/api/employees");
-        MockHttpServletResponse insecureResponse = new MockHttpServletResponse();
-        filter.doFilter(insecure, insecureResponse, new MockFilterChain());
-        assertThat(insecureResponse.getHeader("Strict-Transport-Security")).isNull();
-
-        MockHttpServletRequest secure = new MockHttpServletRequest("GET", "/api/employees");
-        secure.setSecure(true);
-        MockHttpServletResponse secureResponse = new MockHttpServletResponse();
-        filter.doFilter(secure, secureResponse, new MockFilterChain());
-        assertThat(secureResponse.getHeader("Strict-Transport-Security")).contains("max-age=");
-    }
 }

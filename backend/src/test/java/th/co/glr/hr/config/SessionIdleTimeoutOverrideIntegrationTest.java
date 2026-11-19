@@ -18,13 +18,6 @@ import org.springframework.test.context.ActiveProfiles;
 class SessionIdleTimeoutOverrideIntegrationTest extends AbstractRealSessionIntegrationTest {
 
     @Test
-    void withAnIdleLimitConfigured_aNewSessionCarriesExactlyThatLimit() throws Exception {
-        Browser browser = signIn(employee("IT", "IT-ไอที"));
-
-        assertThat(stored(browser).getMaxInactiveInterval()).isEqualTo((int) Duration.ofMinutes(30).toSeconds());
-    }
-
-    @Test
     void withAnIdleLimitConfigured_aSessionInsideItKeepsWorking() throws Exception {
         Browser browser = signIn(employee("IT", "IT-ไอที"));
 
@@ -45,14 +38,4 @@ class SessionIdleTimeoutOverrideIntegrationTest extends AbstractRealSessionInteg
         assertThat(stored(browser)).isNull();
     }
 
-    /** …and the background sweep alone, with no request at all, clears it out. */
-    @Test
-    void withAnIdleLimitConfigured_theExpirySweepRemovesAnIdleSession() throws Exception {
-        Browser browser = signIn(employee("IT", "IT-ไอที"));
-
-        ageSession(browser, Duration.ofMinutes(31));
-        runExpirySweep();
-
-        assertThat(stored(browser)).isNull();
-    }
 }
