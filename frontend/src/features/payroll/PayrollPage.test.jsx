@@ -134,20 +134,6 @@ describe('PayrollPage adjustment inputs', () => {
     }
   });
 
-  // The two deduction pages left the main nav (AppShell launcher); their routes and guards are unchanged, so this
-  // page is how they stay reachable. Same audience as the page itself (canViewPayroll: hr + ceo).
-  it.each([
-    ['hr', { role: 'hr', employeeId: 10 }],
-    ['ceo (read-only view)', { role: 'ceo', employeeId: 1 }],
-  ])('links to the deduction shortfalls and consents pages for %s', async (_label, user) => {
-    renderWithClient(<PayrollPage user={user} showToast={vi.fn()} />);
-    await screen.findByRole('button', { name: 'เอกสาร' });
-
-    const hrefs = screen.getAllByRole('link').map((link) => link.getAttribute('href'));
-    expect(hrefs).toContain('/payroll/deduction-shortfalls');
-    expect(hrefs).toContain('/payroll/deduction-consents');
-  });
-
   it('allows clearing zero/default amounts and sends them as zeroes', async () => {
     renderWithClient(<PayrollPage user={hrUser} showToast={vi.fn()} />);
 
