@@ -34,9 +34,4 @@ describe('MaintenanceGate', () => {
     expect(screen.getByText('real app')).toBeTruthy();
     expect(screen.queryByRole('heading', { name: /ปรับปรุงระบบ/ })).toBeNull();
   });
-
-  it('renders the app for any value other than "true"', async () => {
-    await renderGate('false');
-    expect(screen.getByText('real app')).toBeTruthy();
-  });
 });

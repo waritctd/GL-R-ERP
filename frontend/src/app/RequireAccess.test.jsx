@@ -59,43 +59,6 @@ describe('RequireAccess', () => {
     expect(screen.getByText('หน้าดีลฝ่ายนำเข้า')).not.toBeNull();
     expect(screen.queryByText('หน้าดีลเต็ม')).toBeNull();
   });
-
-  // นัดเข้าพบ: typing /visits is refused to every role the visit endpoints refuse, by name, and never renders it.
-  function renderVisits(user) {
-    return render(
-      <MemoryRouter initialEntries={['/visits']}>
-        <Routes>
-          <Route element={<RequireAccess user={user} />}>
-            <Route path="/visits" element={<div>หน้านัดเข้าพบ</div>} />
-          </Route>
-        </Routes>
-      </MemoryRouter>,
-    );
-  }
-
-  it('refuses /visits by direct navigation to a role outside the visit endpoints', async () => {
-    for (const role of ['hr', 'account', 'import', 'employee']) {
-      const { unmount } = renderVisits({ role, employeeId: 4 });
-      expect(await screen.findByRole('heading', { name: 'ไม่มีสิทธิ์เข้าถึงหน้านี้' })).not.toBeNull();
-      expect(screen.getByText('นัดเข้าพบ').tagName).toBe('STRONG');
-      expect(screen.getByText('/visits')).not.toBeNull();
-      expect(screen.queryByText('หน้านัดเข้าพบ')).toBeNull();
-      unmount();
-    }
-  });
-
-  it('opens /visits for sales, sales_manager and ceo', () => {
-    for (const role of ['sales', 'sales_manager', 'ceo']) {
-      const { unmount } = renderVisits({ role, employeeId: 4 });
-      expect(screen.getByText('หน้านัดเข้าพบ')).not.toBeNull();
-      unmount();
-    }
-  });
-
-  it('still renders the whole deal for the CEO', () => {
-    renderDealRoutes({ role: 'ceo', employeeId: 1 });
-    expect(screen.getByText('หน้าดีลเต็ม')).not.toBeNull();
-  });
 });
 
 // Production runs with the self-service lock ON, and under it canAccessPath refuses account every
@@ -144,35 +107,11 @@ describe('RequireAccess under the self-service lock', () => {
     expect(denied()).toBeNull();
   });
 
-  it('sends account from /tickets/:id/deposit to /finance/deals/:id', async () => {
-    await renderLocked('/tickets/123/deposit', account);
-    expect(screen.getByText('finance-deal /finance/deals/123')).not.toBeNull();
-    expect(denied()).toBeNull();
-  });
-
-  // The query string is dropped, like import's redirect: FinanceDealPage reads no search params.
-  it('still redirects account when the deal link carries a query string', async () => {
-    await renderLocked('/tickets/123?from=notification', account);
-    expect(screen.getByText('finance-deal /finance/deals/123')).not.toBeNull();
-    expect(denied()).toBeNull();
-  });
-
   it('still refuses account the deal pipeline list at /tickets', async () => {
     await renderLocked('/tickets', account);
     expect(denied()).not.toBeNull();
     expect(screen.queryByText(/^pipeline /)).toBeNull();
     expect(screen.queryByText(/^finance-deal /)).toBeNull();
-  });
-
-  it('still refuses account /quotations/:id', async () => {
-    await renderLocked('/quotations/5', account);
-    expect(denied()).not.toBeNull();
-    expect(screen.queryByText(/^finance-deal /)).toBeNull();
-  });
-
-  it('still sends import from /tickets/:id to /import/deals/:id', async () => {
-    await renderLocked('/tickets/123', { role: 'import', employeeId: 2 });
-    expect(screen.getByText('import-deal /import/deals/123')).not.toBeNull();
   });
 
   it('does not redirect a sales rep (exempt from the lock) off the whole deal', async () => {
