@@ -28,7 +28,7 @@ import {
 } from './helpers/sales.js';
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────
-// The four sales-pipeline JOURNEY specs (Cases A-D), proving the four real routes named
+// The three sales-pipeline JOURNEY specs (Cases A-C), proving the three real routes named
 // in DealStage.java:78-100 are what a deal ACTUALLY WALKS, not merely a stage it happens to end
 // on:
 //
@@ -52,7 +52,7 @@ import {
 // other journey specs already rely on would not be trustworthy evidence about the route itself.
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 
-test.describe('@uat-sales pipeline journeys — Cases A-D', () => {
+test.describe('@uat-sales pipeline journeys — Cases A-C', () => {
   /** @type {Record<string, import('@playwright/test').APIRequestContext>} */
   const sessions = {};
   /** Every deal this file creates, so afterAll can take them back even if a test threw. */
@@ -358,7 +358,7 @@ test.describe('@uat-sales pipeline journeys — Cases A-D', () => {
       const baseline = await stageHistory(sessions, 'sales', deal.id);
       expect(baseline, 'a freshly created deal must have no STAGE_CHANGED history').toEqual([]);
 
-      // No manual move needs inserting between issue and confirm-order for this route (unlike Cases A/B/D), so
+      // No manual move needs inserting between issue and confirm-order for this route (unlike Cases A/B), so
       // runPricingChainToOrder's own tail applies unmodified.
       await runPricingChainToOrder(sessions, deal.id, {
         factoryName: factory.factoryName,

@@ -181,7 +181,7 @@ test.describe('direct-deal ใบเสนอราคา — the real service',
   });
 });
 
-// ── Quotation v3 / v3b, customer details, against the real service ─────────────
+// ── Quotation v3 / v3b against the real service ─────────────
 //
 // v3: the ราคาพิเศษ net per piece (calculate-line) and v3b: the English (USD, no VAT) document.
 //
@@ -190,7 +190,7 @@ test.describe('direct-deal ใบเสนอราคา — the real service',
 // and mockApi.js deliberately returns no figure for it at all, so THIS file is the only evidence
 // that the number the editor shows is right.
 
-test.describe('quotation v3 / v3b + customer details — the real service', () => {
+test.describe('quotation v3 / v3b — the real service', () => {
   test.describe.configure({ mode: 'serial' });
 
   let sessions;
@@ -207,7 +207,7 @@ test.describe('quotation v3 / v3b + customer details — the real service', () =
 
   test.beforeAll(async () => {
     sessions = await apiSessionsFor(['sales', 'sales_manager']);
-    // A BARE customer — name only — so the document's missing-field behaviour is observable.
+    // A customer with a name only; the surviving tests need just a customer, project and deals.
     const customer = await apiWrite(sessions.sales, 'post', '/api/customers', { name: `บริษัท เปล่า ${tag} จำกัด` });
     expect(customer.status(), 'POST /api/customers').toBe(200);
     customerId = (await customer.json()).customer.id;
@@ -222,7 +222,7 @@ test.describe('quotation v3 / v3b + customer details — the real service', () =
       expect(ticket.status(), 'POST /api/tickets').toBe(200);
       return (await ticket.json()).ticket.summary.id;
     };
-    // A ผู้สั่งซื้อ with NO phone and NO email.
+    // A ผู้สั่งซื้อ with no phone and no email, used as the quotation recipient contact.
     const contact = await apiWrite(sessions.sales, 'post', `/api/customers/${customerId}/contacts`, { firstName: 'สมศรี', lastName: tag });
     contactId = (await contact.json()).contact.id;
   });

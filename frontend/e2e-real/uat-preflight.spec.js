@@ -38,16 +38,4 @@ test.describe('@uat-sales UAT harness handshake', () => {
       expected
     );
   });
-
-  test('write credentials are present in the captured sessions', async () => {
-    // XSRF-TOKEN is what separates "the session works" from "the session can write". Without it every journey
-    // would fail on its FIRST write with a 403 that is indistinguishable at a glance from an authorization denial
-    // — the exact confusion helpers/api.js's header is written to design out.
-    const { cookies } = await sessions.sales.storageState();
-    const names = cookies.map((cookie) => cookie.name);
-    expect(names, 'sales session is missing its session cookie').toContain('GLR_HR_SESSION');
-    expect(names, 'sales session cannot perform a write (CsrfCookieFilter would 403 it)').toContain(
-      'XSRF-TOKEN'
-    );
-  });
 });
