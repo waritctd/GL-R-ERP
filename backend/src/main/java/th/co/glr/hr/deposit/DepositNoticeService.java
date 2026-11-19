@@ -873,6 +873,16 @@ public class DepositNoticeService {
             answered.totalAmount());
     }
 
+    /** Deposit deduction (pre-VAT): what account actually received (VAT-inclusive DEPOSIT receipts) / 1.07, so a
+     * post-payment edit of the notice cannot change the invoice; no receipt yet -> the notice's own amount. */
+    private BigDecimal deductionFor(long ticketId, BigDecimal noticeAmount) {
+        BigDecimal received = tickets.sumDepositReceipts(ticketId);
+        if (received != null && received.signum() > 0) {
+            return received.divide(BigDecimal.ONE.add(VAT_RATE), 2, RoundingMode.HALF_UP);
+        }
+        return noticeAmount != null ? noticeAmount : BigDecimal.ZERO;
+    }
+
     /** Item/deduction sourcing (rule D11) and rule C (net must not be negative), applied
      * to the single chosen quotation — see this section's header comment for the full rules. */
     private ResolvedRemainingInvoice resolveFromQuotation(long ticketId, QualifyingQuotation chosen,
@@ -907,7 +917,7 @@ public class DepositNoticeService {
             // here — there is deliberately no subtotal-must-match rule (matched.subtotal() vs the
             // quotation's own item total).
             items = itemsFromDepositNoticeForRemainingInvoice(matched.items());
-            depositAmount = matched.depositAmount() != null ? matched.depositAmount() : BigDecimal.ZERO;
+            depositAmount = deductionFor(ticketId, matched.depositAmount());
             DepositRefBundle refs = resolveDepositReferenceOptions(ticketId, matched);
             defaultDepositReference = refs.defaultRef();
             depositReferenceOptions = refs.options();
@@ -954,8 +964,8 @@ public class DepositNoticeService {
                     "ไม่พบใบเสนอราคาที่ลูกค้ายอมรับ หรือใบแจ้งยอดมัดจำที่ออกแล้วสำหรับงานนี้ จึงไม่สามารถออกใบแจ้งหนี้ส่วนที่เหลือได้");
             }
         }
-        BigDecimal depositAmount = latestIssued != null && latestIssued.depositAmount() != null
-            ? latestIssued.depositAmount() : BigDecimal.ZERO;
+        BigDecimal depositAmount = latestIssued == null ? BigDecimal.ZERO
+            : deductionFor(ticketId, latestIssued.depositAmount());
         BigDecimal itemsTotal = sumAmounts(items);
         if (itemsTotal.subtract(depositAmount).compareTo(BigDecimal.ZERO) < 0) {
             return new ResolvedRemainingInvoice(items, depositAmount, legacyReference(latestIssued), List.of(), null, List.of(),

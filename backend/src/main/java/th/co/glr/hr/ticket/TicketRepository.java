@@ -2015,12 +2015,17 @@ public class TicketRepository {
 
     /**
      * Once a remaining invoice is ISSUED, what the customer owes follows the ISSUED
-     * documents -- the deposit notice's total_payable plus the remaining invoice's grand_total -- because each tax
-     * invoice rounds its own VAT, so the sum may sit a satang away from the deal's computed total. Trailing comma
-     * included; VAT-inclusive variant only (the ex-VAT figure stays the quotation's subtotal).
+     * documents -- the deposit PART plus the remaining invoice's grand_total -- because each tax invoice rounds its
+     * own VAT, so the sum may sit a satang away from the deal's computed total. The deposit part follows the same
+     * rule as the invoice's deduction ({@code DepositNoticeService#deductionFor}): the DEPOSIT receipts actually
+     * received (VAT-inclusive) when any exist, else the notice's total_payable -- so editing the issued notice after
+     * payment cannot move the deal's total. Trailing comma included; VAT-inclusive variant only (the ex-VAT figure
+     * stays the quotation's subtotal).
      */
     private static String issuedDocumentsPayable(String ticketIdRef) {
-        return "(SELECT COALESCE(dn.total_payable, 0) + ri.grand_total FROM sales.remaining_invoice ri"
+        return "(SELECT COALESCE(NULLIF((SELECT SUM(pr.amount) FROM sales.payment_receipt pr"
+            + " WHERE pr.ticket_id = ri.ticket_id AND pr.kind = 'DEPOSIT'), 0), dn.total_payable, 0)"
+            + " + ri.grand_total FROM sales.remaining_invoice ri"
             + " LEFT JOIN sales.deposit_notice dn ON dn.deposit_notice_id = ri.deposit_notice_id"
             + " WHERE ri.ticket_id = " + ticketIdRef + " AND ri.status = 'ISSUED' AND ri.grand_total IS NOT NULL"
             + " ORDER BY ri.issued_at DESC, ri.id DESC LIMIT 1),";

@@ -1255,7 +1255,7 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
      * notice (here AFTER account confirmed the deposit: no payment lock) must carry into the live invoice. The
      * SUPERSEDED earlier version of the invoice stays frozen. */
     @Test
-    void editingTheIssuedDepositNotice_refreshesTheIssuedInvoice_evenAfterPaymentConfirmed_notTheSuperseded() {
+    void editingTheIssuedDepositNotice_afterPaymentConfirmed_invoiceKeepsDeductingTheReceivedDeposit() {
         DealFixture fixture = buildAcceptedDeal(salesActor, "CascadeIssuedRi");
         ticketService.confirmDepositPaid(fixture.ticketId(), accountActor);
         RemainingInvoiceDocumentDto v1 = remainingInvoiceService.issue(
@@ -1273,18 +1273,19 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
         RemainingInvoiceDocumentDto refreshed = remainingInvoiceService.get(live.id(), salesActor);
         assertThat(refreshed.status()).isEqualTo("ISSUED");
         assertThat(refreshed.docNumber()).isEqualTo(live.docNumber());
-        assertThat(refreshed.depositDeduction()).isEqualByComparingTo(editedNotice.depositAmount());
-        assertThat(refreshed.netAmount()).isEqualByComparingTo(refreshed.itemsTotal().subtract(editedNotice.depositAmount()));
-        assertThat(refreshed.vatAmount()).isEqualByComparingTo(
-            refreshed.netAmount().multiply(new BigDecimal("0.07")).setScale(2, RoundingMode.HALF_UP));
-        assertThat(refreshed.grandTotal()).isEqualByComparingTo(refreshed.netAmount().add(refreshed.vatAmount()));
-        assertThat(refreshed.grandTotal()).isNotEqualByComparingTo(live.grandTotal());
-
-        // The refreshed ISSUED invoice's money change is audited on the deal: invoice number, old -> new total and deduction.
-        String invoiceEvent = editedEvents(fixture.ticketId()).stream().map(e -> (String) e.get("message"))
-            .filter(m -> m.contains(live.docNumber())).findFirst().orElseThrow();
-        assertThat(invoiceEvent).contains(ThaiText.money(live.grandTotal())).contains(ThaiText.money(refreshed.grandTotal()))
-            .contains(ThaiText.money(live.depositDeduction())).contains(ThaiText.money(refreshed.depositDeduction()));
+        // Account already received the deposit: the invoice deducts what was RECEIVED (VAT-incl receipt / 1.07), so the
+        // lowered/raised notice changes nothing on the invoice and writes no invoice EDITED event.
+        BigDecimal received = tickets.sumDepositReceipts(fixture.ticketId());
+        assertThat(received).isPositive();
+        assertThat(refreshed.depositDeduction())
+            .isEqualByComparingTo(received.divide(new BigDecimal("1.07"), 2, RoundingMode.HALF_UP));
+        assertThat(refreshed.grandTotal()).isEqualByComparingTo(live.grandTotal());
+        // the deal's payable follows received + invoice, not the edited notice's total_payable
+        assertThat(tickets.payableAmount(fixture.ticketId())).isEqualByComparingTo(received.add(live.grandTotal()));
+        assertThat(tickets.findSummaryById(fixture.ticketId()).orElseThrow().amountOutstanding())
+            .isEqualByComparingTo(live.grandTotal());
+        assertThat(editedEvents(fixture.ticketId()).stream().map(e -> (String) e.get("message"))
+            .filter(m -> m.contains(live.docNumber()))).isEmpty();
 
         RemainingInvoiceDocumentDto superseded = remainingInvoiceService.get(v1.id(), salesActor);
         assertThat(superseded.status()).isEqualTo("SUPERSEDED");
