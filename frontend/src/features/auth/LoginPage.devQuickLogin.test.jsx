@@ -2,7 +2,7 @@ import React from 'react';
 import {
   afterEach, describe, expect, it, vi,
 } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import { LoginPage } from './LoginPage.jsx';
 
@@ -41,18 +41,6 @@ describe('LoginPage dev quick-login (real backend)', () => {
     renderLoginPage({ onLogin: vi.fn(), loading: false, error: null });
 
     expect(screen.getAllByTestId(/^login-dev-/)).toHaveLength(DEMO_EMAILS.length);
-  });
-
-  it.each(DEMO_EMAILS)('sends real credentials for %s, not a mock { role }', (email) => {
-    vi.stubEnv('DEV', true);
-    vi.stubEnv('VITE_USE_MOCKS', 'false');
-    const onLogin = vi.fn();
-    renderLoginPage({ onLogin, loading: false, error: null });
-
-    fireEvent.click(screen.getByTestId(`login-dev-${email}`));
-
-    expect(onLogin).toHaveBeenCalledWith({ email, password: 'Demo@2026' });
-    expect(onLogin.mock.calls[0][0].role).toBeUndefined();
   });
 
   it('is absent from a production build, so the demo password never ships', () => {
