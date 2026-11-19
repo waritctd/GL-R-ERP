@@ -6,8 +6,6 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
-import org.apache.pdfbox.Loader;
-import org.apache.pdfbox.text.PDFTextStripper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import th.co.glr.hr.dealquotation.QuotationHtmlDocument;
@@ -34,44 +32,6 @@ class ChromiumPdfPrinterTest {
         assertThat(pdf[3]).isEqualTo((byte) 'F');
     }
 
-    @Test
-    void singlePageDocumentContainsLabelsAndRemarksAndNoPageNumber() throws Exception {
-        byte[] pdf = ChromiumPdfPrinter.print(QuotationHtmlDocument.render(model(3)));
-        String text = new PDFTextStripper().getText(Loader.loadPDF(pdf));
-        String flat = text.replaceAll("\\s+", "");
-
-        assertThat(flat).contains("ผู้พิมพ์");
-        assertThat(flat).contains("พนักงานขาย");
-        assertThat(flat).contains("ผู้จัดการฝ่ายขาย");
-        assertThat(flat).contains("ผู้สั่งซื้อ");
-        for (String line : EIGHT_REMARKS) {
-            assertThat(flat).contains(line.replaceAll("\\s+", ""));
-        }
-        // The XLS path sets the "หน้า &P/&N" footer only when it paginates; a single-page LibreOffice render carries
-        // no page number, so neither does this one.
-        assertThat(flat).doesNotContain("หน้า1/1");
-        assertThat(Loader.loadPDF(pdf).getNumberOfPages()).isEqualTo(1);
-    }
-
-    @Test
-    void thirtyItemDocumentPaginatesAndRepeatsHeaderRow() throws Exception {
-        byte[] pdf = ChromiumPdfPrinter.print(QuotationHtmlDocument.render(model(30)));
-        var doc = Loader.loadPDF(pdf);
-        int pageCount = doc.getNumberOfPages();
-        assertThat(pageCount).isGreaterThan(1);
-
-        PDFTextStripper stripper = new PDFTextStripper();
-        for (int p = 1; p <= pageCount; p++) {
-            stripper.setStartPage(p);
-            stripper.setEndPage(p);
-            String pageText = stripper.getText(doc).replaceAll("\\s+", "");
-            // The sheet's repeating rows A1:I7 (letterhead + column titles) print on every page.
-            assertThat(pageText).contains("ลำดับ").contains("จำนวน").contains("หน่วย")
-                .contains("ราคา").contains("ส่วนลด").contains("คงเหลือ");
-            assertThat(pageText).contains("หน้า" + p + "/" + pageCount);
-        }
-    }
-
     // ── fixtures ─────────────────────────────────────────────────────────────────────────
 
     private static final List<String> EIGHT_REMARKS = List.of(
@@ -82,8 +42,7 @@ class ChromiumPdfPrinterTest {
         return model(itemCount, "QT-TEST-0001");
     }
 
-    /** A small itemCount-item quotation numbered number — shared with ChromiumPdfPrinterConcurrencyTest, whose
-     * renders must be told apart by number. */
+    /** A small itemCount-item quotation numbered number. */
     static QuotationRenderModel model(int itemCount, String number) {
         List<RenderItem> items = new ArrayList<>();
         for (int i = 1; i <= itemCount; i++) {

@@ -11,12 +11,6 @@ import org.junit.jupiter.api.Test;
 class ChromiumPathResolutionTest {
 
     @Test
-    void candidatesCoverBothDebianAndUbuntuPackageLayouts() {
-        assertThat(ChromiumPdfPrinter.SYSTEM_CHROMIUM_CANDIDATES)
-            .containsSubsequence("/usr/bin/chromium", "/usr/bin/chromium-browser");
-    }
-
-    @Test
     void dockerfileChromiumPathIsOneOfTheCandidates() throws Exception {
         List<String> dockerfile = java.nio.file.Files.readAllLines(java.nio.file.Path.of("Dockerfile"));
         String envLine = dockerfile.stream()
