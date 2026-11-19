@@ -200,8 +200,7 @@ class TaxAllowanceCapCatalogTest extends AbstractPostgresIntegrationTest {
     }
 
     /** Same as the 1-arg overload, but against a specific taxYear -- needed because Thai ESG is the only category
-     * in this catalogue whose ownCap actually varies by year (the enhanced-cap sunset from tax year 2027; see
-     * thaiEsgCapRevertsToOneHundredThousandFromTaxYear2027). */
+     * in this catalogue whose ownCap actually varies by year (the enhanced-cap sunset from tax year 2027). */
     private TaxAllowanceCapEntry entry(String category, int taxYear) {
         return catalog.capsFor(taxYear).stream()
             .filter(e -> e.category().equals(category))

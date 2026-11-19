@@ -23,32 +23,21 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import th.co.glr.hr.attachment.AttachmentRepository;
 import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.audit.AuditService;
-import th.co.glr.hr.auth.EmployeeAuthRepository;
 import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiExceptionHandler;
-import th.co.glr.hr.customer.CustomerRepository;
-import th.co.glr.hr.deposit.DepositNoticeRepository;
-import th.co.glr.hr.deposit.RemainingInvoiceRepository;
 import th.co.glr.hr.employee.EmployeeCodeGenerator;
 import th.co.glr.hr.employee.EmployeeReferenceRepository;
 import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.employee.UpsertEmployeeRequest;
-import th.co.glr.hr.finance.FinanceDealController;
-import th.co.glr.hr.finance.FinanceDealRepository;
-import th.co.glr.hr.finance.FinanceDealService;
 import th.co.glr.hr.notification.CeoApproverRepository;
-import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.notification.NotificationService;
-import th.co.glr.hr.notification.SalesNotificationMailer;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 import th.co.glr.hr.ticket.CreateTicketRequest;
 import th.co.glr.hr.ticket.DealStage;
-import th.co.glr.hr.ticket.QuotationRenderer;
 import th.co.glr.hr.ticket.TicketItemDto;
 import th.co.glr.hr.ticket.TicketItemRequest;
 import th.co.glr.hr.ticket.TicketRepository;
-import th.co.glr.hr.ticket.TicketService;
 
 /** The NEW commission / finance API proven wired at the HTTP layer: the REAL CommissionController and REAL
  * FinanceDealController (with ApiExceptionHandler) behind MockMvc standalone setup, hand-wired to the real
@@ -60,22 +49,15 @@ class CommissionFinanceHttpWiringIntegrationTest extends AbstractPostgresIntegra
     private TicketRepository tickets;
     private CommissionRepository commissions;
     private MockMvc commissionMvc;
-    private MockMvc financeMvc;
 
     private long repId;
-    private UserPrincipal repActor;
-    private UserPrincipal managerActor;
-    private UserPrincipal ceoActor;
     private UserPrincipal accountActor;
-    private UserPrincipal importActor;
-    private UserPrincipal hrActor;
 
     @BeforeEach
     void wire() {
         tickets = new TicketRepository(jdbc);
         commissions = new CommissionRepository(jdbc);
         AttachmentRepository attachments = new AttachmentRepository(jdbc);
-        NotificationRepository notificationRepository = new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP);
         CommissionService commissionService = new CommissionService(
             commissions,
             new CommissionAttachmentRepository(jdbc),
@@ -86,31 +68,15 @@ class CommissionFinanceHttpWiringIntegrationTest extends AbstractPostgresIntegra
             tickets,
             attachments,
             new CeoApproverRepository(jdbc));
-        TicketService ticketService = new TicketService(tickets, notificationRepository, new ObjectMapper(),
-            new CustomerRepository(jdbc), new QuotationRenderer(),
-            (th.co.glr.hr.pricingrequest.PricingRequestService) null, new EmployeeAuthRepository(jdbc), new th.co.glr.hr.customer.ContactRepository(jdbc), new th.co.glr.hr.customer.ProjectRepository(jdbc),
-            new th.co.glr.hr.dealquotation.DealQuotationRepository(jdbc, new th.co.glr.hr.catalog.CatalogRepository(jdbc)));
-        FinanceDealService financeService = new FinanceDealService(tickets, new FinanceDealRepository(jdbc),
-            new DepositNoticeRepository(jdbc), new RemainingInvoiceRepository(jdbc), attachments, ticketService);
 
         commissionMvc = MockMvcBuilders
             .standaloneSetup(new CommissionController(commissionService, new SessionContext()))
-            .setControllerAdvice(new ApiExceptionHandler()).build();
-        financeMvc = MockMvcBuilders
-            .standaloneSetup(new FinanceDealController(financeService, new SessionContext()))
             .setControllerAdvice(new ApiExceptionHandler()).build();
 
         EmployeeRepository employees = new EmployeeRepository(
             jdbc, new EmployeeReferenceRepository(jdbc), new EmployeeCodeGenerator(jdbc));
         repId = createEmployee(employees, "พนักงานขาย เอชทีทีพี", "hw-rep@glr.co.th", "SL", "เจ้าหน้าที่");
-        repActor = principal(repId, "sales");
-        managerActor = principal(
-            createEmployee(employees, "ผู้จัดการฝ่ายขาย เอชทีทีพี", "hw-mgr@glr.co.th", "SA", "ผู้จัดการฝ่ายขาย"),
-            "sales_manager");
-        ceoActor = principal(createEmployee(employees, "ซีอีโอ เอชทีทีพี", "hw-ceo@glr.co.th", "MD", "กรรมการผู้จัดการ"), "ceo");
         accountActor = principal(createEmployee(employees, "บัญชี เอชทีทีพี", "hw-acct@glr.co.th", "ACCT", "เจ้าหน้าที่"), "account");
-        importActor = principal(createEmployee(employees, "นำเข้า เอชทีทีพี", "hw-imp@glr.co.th", "PCIM", "เจ้าหน้าที่"), "import");
-        hrActor = principal(createEmployee(employees, "บุคคล เอชทีทีพี", "hw-hr@glr.co.th", "HR", "เจ้าหน้าที่"), "hr");
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────

@@ -16,6 +16,7 @@ import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.payroll.obligation.DeductionObligationDtos.DeductionObligationCreateRequest;
+import th.co.glr.hr.payroll.obligation.DeductionObligationDtos.DeductionObligationDto;
 import th.co.glr.hr.payroll.obligation.DeductionObligationDtos.DeductionObligationProgressDto;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
@@ -60,6 +61,16 @@ class DeductionObligationScopeIntegrationTest extends AbstractPostgresIntegratio
     @Test
     void anEmployeeCannotReadTheHrRegisterEvenFilteredToThemselves() {
         assertForbidden(() -> service.list(employeeA, null, null, employee(employeeA)));
+    }
+
+    @Test
+    void ceoCanViewTheRegisterButCannotStopAnObligation() {
+        List<DeductionObligationDto> visibleToCeo = service.list(null, null, null, ceo());
+        assertThat(visibleToCeo).extracting(DeductionObligationDto::id).contains(obligationForA);
+
+        assertForbidden(() -> service.stop(obligationForA, ceo()));
+        assertThat(repository.findById(obligationForA).orElseThrow().status())
+            .isEqualTo(DeductionObligationStatus.ACTIVE); // unchanged
     }
 
     // --- helpers ------------------------------------------------------------

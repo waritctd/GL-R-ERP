@@ -17,7 +17,7 @@ import th.co.glr.hr.payroll.obligation.PayrollDeductionShortfallDtos.PayrollDedu
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
 /** Confirms shortfall-ledger read authorization against the real service and real SQL (issue #376) -- the gap
- * Mockito-based unit tests (PayrollDeductionShortfallServiceTest) cannot cover. */
+ * Mockito-based unit tests cannot cover. */
 class PayrollDeductionShortfallScopeIntegrationTest extends AbstractPostgresIntegrationTest {
     private PayrollDeductionShortfallRepository repository;
     private PayrollDeductionShortfallService service;

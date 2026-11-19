@@ -131,6 +131,37 @@ class PayrollCalculatorTest {
         assertThat(over65.withholdingTax()).isLessThan(under65.withholdingTax());
     }
 
+    /** The exemption comes off BEFORE the 50% expense deduction. On ฿300,000 a year the expense deduction is still
+     * percentage-bound, so the order is observable: exemption first leaves 110,000, halved to 55,000 of expenses;
+     * the wrong order would leave 150,000 of expenses. */
+    @Test
+    void the190000ExemptionIsTakenBeforeTheFiftyPercentExpenseDeduction() {
+        PayrollCalculation result = calculator.calculate(new PayrollCalculationInput(
+            new BigDecimal("25000.00"), List.of(),
+            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+            BigDecimal.ZERO, BigDecimal.ZERO,
+            declaration("0", "0", "0", "0", 0, 0, 0, false),
+            PayrollYearToDate.empty(), 1,
+            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+            null, 2026, 0, 70));
+
+        assertThat(result.projectedAnnualIncome()).isEqualByComparingTo(new BigDecimal("300000.00"));
+        // 300,000 - 190,000 exempt = 110,000 assessable; 50% of that = 55,000, under the 100,000 cap.
+        assertThat(result.taxExpenseDeduction()).isEqualByComparingTo(new BigDecimal("55000.00"));
+    }
+
+    /** A บัตรประจำตัวคนพิการ holder gets the same 190,000 exemption at any age. */
+    @Test
+    void aDisabilityCardHolderUnder65GetsTheSameExemption() {
+        PayrollCalculation withoutCard = withAllowances(
+            declaration("0", "0", "0", "0", 0, 0, 0, false), 2026, 40);
+        PayrollCalculation withCard = withAllowances(
+            declaration("0", "0", "0", "0", 0, 0, 0, true), 2026, 40);
+
+        assertThat(withoutCard.taxableAnnualIncome().subtract(withCard.taxableAnnualIncome()))
+            .isEqualByComparingTo(new BigDecimal("190000.00"));
+    }
+
     /** ข้อ 2.5, the clause the old single-limb projection violated. A ฿100,000 bonus paid once, in June, typed into
      * พิเศษ 1 where HR actually puts it. */
     @Test
@@ -208,14 +239,10 @@ class PayrollCalculatorTest {
     }
 
     /**
-     * The first row of {@link
-     * #theTwoIncomeLimbsAlwaysSumToGrossTaxableIncome} above places 5,000.00 at zero-based index 6
-     * (specialPay7) but passes regardless, because that test only asserts a PARTITION invariant
-     * (regular + variable == gross) that holds no matter which limb index 6 lands in -- an engine that
-     * put specialPay7 in the WRONG limb would still pass it. It is structurally incapable of catching
-     * what it appears to cover.
+     * A partition invariant (regular + variable == gross) holds no matter which limb index 6 (specialPay7)
+     * lands in, so it cannot catch an engine that put specialPay7 in the WRONG limb.
      *
-     * <p>This test covers that: it isolates specialPay7's own contribution (against an otherwise
+     * <p>This test isolates specialPay7's own contribution (against an otherwise
      * identical zeroed run) and pins specifically that it lands in the REGULAR limb, not the variable
      * one -- the actual behaviour {@code COMMISSION_SPECIAL_PAY_INDEX} is supposed to produce.
      */

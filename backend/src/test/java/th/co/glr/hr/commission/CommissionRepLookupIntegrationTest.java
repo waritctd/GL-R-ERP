@@ -34,11 +34,7 @@ class CommissionRepLookupIntegrationTest extends AbstractPostgresIntegrationTest
     private EmployeeRepository employees;
 
     private UserPrincipal managerActor;
-    private UserPrincipal ceoActor;
     private UserPrincipal salesActor;
-    private UserPrincipal hrActor;
-    private UserPrincipal accountActor;
-    private UserPrincipal employeeActor;
 
     private void wireService() {
         commissions = new CommissionRepository(jdbc);
@@ -54,19 +50,14 @@ class CommissionRepLookupIntegrationTest extends AbstractPostgresIntegrationTest
             mock(AttachmentRepository.class), new CeoApproverRepository(jdbc));
 
         long managerEmployeeId = createEmployee("ผู้จัดการฝ่ายขาย รายชื่อ", "reps-manager@glr.co.th", "SA", "แผนกขาย");
-        long ceoEmployeeId = createEmployee("ผู้บริหาร รายชื่อ", "reps-ceo@glr.co.th", "MD", "ผู้บริหาร");
-        // Both actors carry their REAL division_id via the 3-arg principal()/divisionIdOf() helpers, deliberately,
-        // even though the current code no longer reads divisionId for EITHER role (scoping is
-        // division-of-the-TARGET-employee now, not division-of-the-caller).
+        createEmployee("ผู้บริหาร รายชื่อ", "reps-ceo@glr.co.th", "MD", "ผู้บริหาร");
+        // The manager carries the REAL division_id via the 3-arg principal()/divisionIdOf() helpers, deliberately,
+        // even though the current code no longer reads divisionId (scoping is division-of-the-TARGET-employee now,
+        // not division-of-the-caller).
         managerActor = principal(managerEmployeeId, "sales_manager", divisionIdOf(managerEmployeeId));
-        ceoActor = principal(ceoEmployeeId, "ceo", divisionIdOf(ceoEmployeeId));
 
-        // Denied roles are rejected at the role gate before any DB lookup (same as
-        // CommissionListScopeIntegrationTest's importActor/employeeActor/etc.) — synthetic ids.
+        // Denied roles are rejected at the role gate before any DB lookup -- synthetic id.
         salesActor = principal(999_711L, "sales");
-        hrActor = principal(999_722L, "hr"); // hr CAN read /api/employees; must NOT reach this narrower list.
-        accountActor = principal(999_733L, "account");
-        employeeActor = principal(999_744L, "employee"); // DivisionAccessPolicy fallback role.
     }
 
     // ── 1-4: wrong-way-round — denied roles get FORBIDDEN, never a list ─────────────────────

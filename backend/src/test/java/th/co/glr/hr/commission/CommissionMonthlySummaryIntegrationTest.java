@@ -34,8 +34,6 @@ class CommissionMonthlySummaryIntegrationTest extends AbstractPostgresIntegratio
     private CommissionService commissionService;
     private CommissionCalculator calculator;
     private EmployeeRepository employees;
-    private long managerEmployeeId;
-    private UserPrincipal managerActor;
     private long ceoEmployeeId;
     private UserPrincipal ceoActor;
 
@@ -52,8 +50,7 @@ class CommissionMonthlySummaryIntegrationTest extends AbstractPostgresIntegratio
             mock(NotificationService.class),
             mock(TicketRepository.class),
             mock(AttachmentRepository.class), new CeoApproverRepository(jdbc));
-        managerEmployeeId = createEmployee("ผู้จัดการฝ่ายขาย สรุปเดือน", "sm-monthlysummary@glr.co.th", "SA", "แผนกขาย");
-        managerActor = principal(managerEmployeeId, "sales_manager");
+        createEmployee("ผู้จัดการฝ่ายขาย สรุปเดือน", "sm-monthlysummary@glr.co.th", "SA", "แผนกขาย");
         ceoEmployeeId = createEmployee("ผู้บริหาร สรุปเดือน", "ceo-monthlysummary@glr.co.th", "MD", "ผู้บริหาร");
         ceoActor = principal(ceoEmployeeId, "ceo");
     }

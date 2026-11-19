@@ -25,10 +25,7 @@ import th.co.glr.hr.payroll.PayrollClassifiedCalculationDtos.PayrollClassifiedCa
  * payroll. Every non-zero component is classified {@code REGULAR_REPROJECT} (the layered engine's
  * equivalent of single-limb annualisation when nothing is KNOWN or CUMULATIVE). Every
  * ACCOUNTANT-WORKBOOK figure (the {@code MAY_2026} rows and every test driven directly from them)
- * is a transcribed sheet value. Not every expected figure here is workbook-reconciled: {@link
- * #anEmptyYearToDateUnderWithholdsAndReachesZeroLateInTheYear()} is NOT reconciled against the
- * sheet (it drives an empty year-to-date, a scenario the sheet does not represent); see that
- * test's own javadoc.
+ * is a transcribed sheet value.
  *
  * <p>{@code calculate} and {@code calculateClassified} do not agree on this classification shape,
  * and need not: {@code calculate} is a two-limb ป.96 engine in which เงินพิเศษ (ข้อ 2.5) is taken at
@@ -41,8 +38,7 @@ import th.co.glr.hr.payroll.PayrollClassifiedCalculationDtos.PayrollClassifiedCa
  * <p>What this test deliberately does NOT assert: the withholding-tax column (AE). That figure
  * depends on each employee's personal allowances (spouse, children, parent care, life insurance,
  * RMF/SSF, mortgage interest…), which live in the accountant's own records and appear nowhere in
- * this workbook. {@link #withholdingTaxDependsOnAllowancesThatTheSheetDoesNotCarry()} demonstrates
- * the consequence rather than papering over it.
+ * this workbook.
  *
  * <p>Sheet column map: D/H = เงินเดือน, I..V = the พิเศษ allowances + OT + commission,
  * W = รวมรายได้ที่ต้องคิดภาษี (A), AC = รวมรายหักที่ต้องคิดภาษี (B), AD = คงเหลือ (A-B),
@@ -157,8 +153,6 @@ class PayrollExcelReconciliationTest {
         // would silently put the whole พิเศษ block into the wage base -- undetectable by any
         // assertion on these rows because every MAY_2026 row's base salary already saturates the
         // ฿17,500 ceiling on its own, so socialSecurityMatchesTheSheet() lands on 875 either way.
-        // See aBelowCeilingSalaryDetectsWhetherTheAllowanceBlockWronglyEntersTheSsoBase() above for
-        // the case that does discriminate.
         return calculateClassified(
             new BigDecimal(row.baseSalary()), new BigDecimal(row.allowances()), BigDecimal.ZERO,
             false, allowances, month, specialPayTreatment);

@@ -42,8 +42,7 @@ class PayrollCommissionWeightedBaseIntegrationTest extends AbstractPostgresInteg
     // (owner decision 2026-08-25, PayrollService rounds commission to whole baht -- the accountant's house
     // convention, no statute behind it), so the payslip carries 67,849 where the commission
     // module's own summary still reports 67,849.23. The two differing by up to 50 satang is the
-    // INTENDED consequence, not drift; the relationship is pinned in
-    // #payrollCommissionPay_isTheWholeBahtRoundingOfThePayrollReadySummary.
+    // INTENDED consequence, not drift.
     private static final BigDecimal WEIGHTED_COMMISSION_PAID = new BigDecimal("67849.00");
     // The bug this test guards against: summing commissionableBase unweighted (i.e. as if the second receipt were
     // never bumped to 2x) reproduces the OLD, wrong, lower figure instead.

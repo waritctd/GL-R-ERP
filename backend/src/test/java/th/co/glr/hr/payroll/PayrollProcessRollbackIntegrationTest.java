@@ -60,7 +60,7 @@ class PayrollProcessRollbackIntegrationTest extends AbstractPostgresIntegrationT
 
     // ── wiring ────────────────────────────────────────────────────────────────────────────
 
-    /** Same wiring as PayrollInputDraftClearedOnProcessIntegrationTest: real PayrollRepository, real
+    /** Real PayrollRepository, real
      * PayrollCalculator, real LeaveRepository and a real DeductionObligationService on the same jdbc, so every
      * write process performs is a real write against real Postgres. */
     private PayrollService payrollService(AuditService audit) {

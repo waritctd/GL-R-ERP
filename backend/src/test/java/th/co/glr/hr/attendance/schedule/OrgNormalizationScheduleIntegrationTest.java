@@ -163,8 +163,7 @@ class OrgNormalizationScheduleIntegrationTest extends AbstractPostgresIntegratio
 
     // --- helpers --------------------------------------------------------------------------------
 
-    /** Strips -- line comments first, then splits into statements on ; -- mirrors
-     * PayrollComponentTaxTreatmentBackfillIntegrationTest#executeStatements, EXTENDED to be dollar-quote aware: V121
+    /** Strips -- line comments first, then splits into statements on ; -- dollar-quote aware: V121
      * contains a DO $$ ... $$ block whose body contains its own ; terminators that must NOT split the block apart. */
     private void executeStatements(String sql) {
         StringBuilder withoutComments = new StringBuilder();

@@ -37,11 +37,9 @@ class CommissionListScopeIntegrationTest extends AbstractPostgresIntegrationTest
     private long repAId;
     private long repBId;
     private UserPrincipal repAActor;
-    private UserPrincipal repBActor;
     private UserPrincipal accountActor;
     private UserPrincipal hrActor;
     private UserPrincipal managerActor;
-    private UserPrincipal ceoActor;
     private UserPrincipal importActor;
     private UserPrincipal employeeActor;
     private UserPrincipal warehouseActor;
@@ -67,11 +65,9 @@ class CommissionListScopeIntegrationTest extends AbstractPostgresIntegrationTest
         long managerId = createEmployee("ผู้จัดการขาย ลิสต์", "commission-list-manager@glr.co.th", "SA", "แผนกขาย");
 
         repAActor = principal(repAId, "sales");
-        repBActor = principal(repBId, "sales");
         accountActor = principal(accountId, "account");
         hrActor = principal(999_888L, "hr");
         managerActor = principal(managerId, "sales_manager");
-        ceoActor = principal(999_333L, "ceo");
         // Denied viewer roles — rejected at the role gate before any DB lookup, so synthetic ids. hr reads commissions
         // via the payroll-ready feed (PAYROLL_ROLES), account only does createFromDeal — neither may call the list,
         // per canListCommissionRecords.

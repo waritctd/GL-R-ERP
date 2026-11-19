@@ -88,6 +88,22 @@ class CommissionCalculatorTest {
         assertThat(withWht.commissionableBase()).isLessThan(baseline.commissionableBase());
     }
 
+    @Test
+    void calculateInvoiceWithOverpayment_increasesActualReceivedAndBase() {
+        InvoiceCalculation baseline = calculator.calculateInvoice(
+            new BigDecimal("107000.00"), new BigDecimal("1000.00"), new BigDecimal("2000.00"),
+            new BigDecimal("3000.00"), new BigDecimal("4000.00"), new BigDecimal("5000.00"),
+            BigDecimal.ZERO, BigDecimal.ZERO);
+        InvoiceCalculation withOverpayment = calculator.calculateInvoice(
+            new BigDecimal("107000.00"), new BigDecimal("1000.00"), new BigDecimal("2000.00"),
+            new BigDecimal("3000.00"), new BigDecimal("4000.00"), new BigDecimal("5000.00"),
+            BigDecimal.ZERO, new BigDecimal("1000.00"));
+
+        assertThat(withOverpayment.actualReceived()).isEqualByComparingTo(new BigDecimal("93000.00"));
+        assertThat(withOverpayment.actualReceived()).isGreaterThan(baseline.actualReceived());
+        assertThat(withOverpayment.commissionableBase()).isGreaterThan(baseline.commissionableBase());
+    }
+
     // Columns: case name, base, expected incentive. The expected value is compared with isEqualByComparingTo, so
     // "0" is the same check as the BigDecimal.ZERO the single-case tests used.
     @ParameterizedTest(name = "monthlyIncentive_{0}")

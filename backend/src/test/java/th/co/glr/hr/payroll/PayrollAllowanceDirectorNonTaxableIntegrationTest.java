@@ -66,8 +66,7 @@ class PayrollAllowanceDirectorNonTaxableIntegrationTest extends AbstractPostgres
     // ---- P8: a stored tax-allowance declaration changes the bracket/amount through preview -----
 
     /** Salary 40,000, January (monthsRemaining = 12), no YTD. Baseline (no stored allowance): taxableAnnualIncome
-     * 309,500.00 sits in the 10% bracket, annualTax 8,450.00, withholdingTax 704.00 (whole baht since 2026-08-28;
-     * see PayrollPersistedPayslipIntegrationTest for the full trace -- identical inputs). */
+     * 309,500.00 sits in the 10% bracket, annualTax 8,450.00, withholdingTax 704.00 (whole baht since 2026-08-28). */
     @Test
     void storedTaxAllowanceChangesTheBracketAndAmountThroughPreview() {
         LocalDate month = LocalDate.of(2026, 1, 1);

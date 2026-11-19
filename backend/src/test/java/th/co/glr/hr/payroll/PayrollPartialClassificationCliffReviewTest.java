@@ -90,13 +90,67 @@ class PayrollPartialClassificationCliffReviewTest extends AbstractPostgresIntegr
             .doesNotThrowAnyException();
     }
 
+    /** The surviving-mutation half of the cliff fix: SPECIAL_PAY_1 is classified REGULAR_REPROJECT, which DIFFERS
+     * from its default (EXTRA_CUMULATIVE_ACTUAL) -- the only way the two resolutions produce different,
+     * hand-traceable numbers. */
+    @Test
+    void anExplicitlyStoredTreatmentIsNeverReplacedByTheSynthesizedDefaultForThatComponent() {
+        LocalDate january = LocalDate.of(2026, 1, 1);
+        long employeeId = seedEmployee("STB-001", "จัดเอง", "ไม่ใช่ค่าเริ่มต้น", new BigDecimal("50000.00"));
+        when(commissionService.payrollCommissionTotalsByEmployee(january)).thenReturn(Map.of());
+
+        // HR deliberately classifies พิเศษ 1 as ประจำ (ข้อ 1(4)) -- a fixed monthly cost-of-living allowance, the
+        // exact case the EXTRA_CUMULATIVE_ACTUAL default gets WRONG and the matrix screen exists to let HR correct.
+        payrollRepository.upsertComponentTaxTreatment(TAX_YEAR, List.of(
+            new ComponentTaxTreatmentUpsertRequest(
+                employeeId, PayrollComponent.SPECIAL_PAY_1, PayrollTaxTreatment.REGULAR_REPROJECT)
+        ), employeeId);
+
+        assertThat(PayrollRepository.defaultTaxTreatment(PayrollComponent.SPECIAL_PAY_1))
+            .as("premise: the stored choice must DIFFER from the default, or this test proves nothing")
+            .isEqualTo(PayrollTaxTreatment.EXTRA_CUMULATIVE_ACTUAL);
+
+        PayrollPeriodDto period = payrollService.preview(
+            new ProcessPayrollRequest(january, List.of(inputWithSpecialPays(
+                employeeId, new BigDecimal("10000.00"), BigDecimal.ZERO, BigDecimal.ZERO))),
+            hr());
+
+        PayrollLineDto line = period.lines().stream()
+            .filter(l -> l.employeeId() == employeeId)
+            .findFirst()
+            .orElseThrow();
+
+        // Hand trace, REGULAR_REPROJECT (HR's stored choice): the regular limb annualises salary AND the พิเศษ 1
+        // allowance together -- (50,000 + 10,000) x 12 = 720,000.
+        assertThat(line.projectedAnnualIncome())
+            .withFailMessage("HR's stored REGULAR_REPROJECT must annualise พิเศษ 1 into the regular "
+                + "limb ((50,000 + 10,000) x 12 = 720,000). 600,000 means mergeWithDefaults silently "
+                + "substituted the EXTRA_CUMULATIVE_ACTUAL default over HR's explicit choice.")
+            .isEqualByComparingTo("720000.00");
+        assertThat(line.withholdingTaxCumulativeLimb())
+            .withFailMessage("nothing is classified EXTRA_CUMULATIVE_ACTUAL this run, so the "
+                + "cumulative limb must be exactly zero -- a non-zero value means the default was "
+                + "applied to พิเศษ 1 instead of HR's stored REGULAR_REPROJECT")
+            .isEqualByComparingTo("0.00");
+        assertThat(line.withholdingTaxRegularLimb())
+            .withFailMessage("the whole withholding must come from the regular limb")
+            .isEqualByComparingTo(line.withholdingTax());
+    }
+
     // ------------------------------------------------------------------
 
     private PayrollEmployeeInputRequest inputWithSpecialPays(long employeeId) {
         BigDecimal zero = BigDecimal.ZERO;
+        return inputWithSpecialPays(employeeId, zero, new BigDecimal("1500.00"), new BigDecimal("2500.00"));
+    }
+
+    private PayrollEmployeeInputRequest inputWithSpecialPays(
+        long employeeId, BigDecimal specialPay1, BigDecimal specialPay3, BigDecimal specialPay7
+    ) {
+        BigDecimal zero = BigDecimal.ZERO;
         return new PayrollEmployeeInputRequest(
             employeeId,
-            zero, zero, new BigDecimal("1500.00"), zero, zero, zero, new BigDecimal("2500.00"), zero, zero,
+            specialPay1, zero, specialPay3, zero, zero, zero, specialPay7, zero, zero,
             zero, // nonTaxableIncome
             zero, // unpaidLeaveDays
             zero, // studentLoanDeduction

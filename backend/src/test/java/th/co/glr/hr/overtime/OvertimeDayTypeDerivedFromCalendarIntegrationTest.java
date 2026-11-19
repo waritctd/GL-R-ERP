@@ -169,8 +169,7 @@ class OvertimeDayTypeDerivedFromCalendarIntegrationTest extends AbstractPostgres
     void holidayClaimContradictedByTheCalendarIsAcceptedAndFlaggedNotRejected() {
         LocalDate workDate = aWeekdayWithNoHolidayRow();
         // The calendar IS loaded for this year (at least one row) -- but not on workDate. Otherwise the
-        // calendar-unverified flag (not the disagreement flag) would be what fires, which is a different case (see
-        // holidayClaimWithNoCalendarDataForTheYearIsAcceptedAndFlagged below).
+        // calendar-unverified flag (not the disagreement flag) would be what fires, which is a different case.
         LocalDate sentinelHolidayDate = workDate.getDayOfYear() == 1
             ? workDate.plusDays(1)
             : workDate.withDayOfYear(1);
@@ -273,6 +272,32 @@ class OvertimeDayTypeDerivedFromCalendarIntegrationTest extends AbstractPostgres
             .as("the approver's explicit override wins over the suggestion, in the upgrade direction too")
             .isEqualTo("HOLIDAY");
         assertThat(multiplierOf(id)).isEqualByComparingTo("3.00");
+    }
+
+    // The schedule half of the suggestion: Saturday suggests HOLIDAY for a Mon-Fri employee WITHOUT any hr.holiday
+    // row and without the calendar loaded for the year.
+    @Test
+    void saturdaySuggestsHolidayForAMonFriEmployeeAndApprovingWithNoOverridePaysTheHolidayRate() {
+        LocalDate saturday = aSaturdayWithNoHolidayRow();
+        insertPunchesCovering(saturday, staff, "S001");
+
+        OvertimeRequestDto created = overtimeService.submit(request(saturday, staff), employee(staff));
+
+        assertThat(created.suggestedDayType()).isEqualTo("HOLIDAY");
+        assertThat(dayTypeOf(created.id())).isEqualTo("HOLIDAY");
+        assertThat(multiplierOf(created.id())).isEqualByComparingTo("3.00");
+        assertThat(calculationNoteOf(created.id()))
+            .as("a schedule-derived non-workday needs no calendar data to be certain -- narrowed calendar-unverified flag must NOT fire")
+            .isNull();
+
+        overtimeService.approve(created.id(), approve(), directManager());
+        overtimeService.approve(created.id(), approve(), ceo());
+
+        assertThat(dayTypeOf(created.id())).isEqualTo("HOLIDAY");
+        assertThat(multiplierOf(created.id())).isEqualByComparingTo("3.00");
+        assertThat(overtimePayFor(saturday.withDayOfMonth(1), staff))
+            .as("3h x (30000/30/8) x 3.00 -- confirmed by the approver, not silently paid")
+            .isEqualByComparingTo(new BigDecimal("1125.00"));
     }
 
     // --- fixtures -------------------------------------------------------------------------------

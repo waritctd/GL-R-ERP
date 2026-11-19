@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
@@ -30,6 +31,7 @@ import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 import th.co.glr.hr.ticket.CreateTicketRequest;
 import th.co.glr.hr.ticket.DealStage;
 import th.co.glr.hr.ticket.ItemWeightMultiplierRequest;
+import th.co.glr.hr.ticket.TicketDto;
 import th.co.glr.hr.ticket.TicketItemDto;
 import th.co.glr.hr.ticket.TicketItemRequest;
 import th.co.glr.hr.ticket.TicketRepository;
@@ -39,6 +41,7 @@ import th.co.glr.hr.ticket.TicketRepository;
  * repositories. */
 class CommissionPendingItemWeightIntegrationTest extends AbstractPostgresIntegrationTest {
     private static final LocalDate JUNE_INVOICE = LocalDate.of(2026, 6, 15);   // -> payroll month 2026-07-01
+    private static final LocalDate JULY_INVOICE = LocalDate.of(2026, 7, 15);   // -> payroll month 2026-08-01
     private TicketRepository tickets;
     private CommissionRepository commissions;
     private CommissionCalculator calculator;
@@ -84,6 +87,86 @@ class CommissionPendingItemWeightIntegrationTest extends AbstractPostgresIntegra
     }
 
     // GET pending-approval
+
+    @Test
+    void pendingList_managerSeesOnlySubmitted_acrossMonths() {
+        // Six records for ONE rep across two payroll months. Item shapes differ so each frozen effective weight
+        // differs (and the estimate is non-trivial: the rep's month totals add up).
+        long r1 = createRecord(dealWithItems(itemSpec(10, 4, 1000, 2), itemSpec(5, 0, 2000, 1)), JUNE_INVOICE, "300000.00"); // Jul, stays SUBMITTED
+        long r2 = createRecord(dealWithItems(itemSpec(8, 8, 1500, 3)), JUNE_INVOICE, "250000.00");                          // Jul -> MANAGER_APPROVED
+        long r3 = createRecord(dealWithItems(itemSpec(4, 2, 5000, 2), itemSpec(6, 6, 700, 1)), JULY_INVOICE, "400000.00");  // Aug, stays SUBMITTED
+        long r4 = createRecord(dealWithItems(itemSpec(3, 3, 9000, 2)), JULY_INVOICE, "280000.00");                          // Aug -> APPROVED
+        long r5 = createRecord(dealWithItems(itemSpec(2, 1, 4000, 3)), JUNE_INVOICE, "150000.00");                          // Jul -> REJECTED
+        long r6 = createRecord(dealWithItems(itemSpec(12, 6, 800, 2)), JUNE_INVOICE, "320000.00");                          // Jul, stays SUBMITTED
+
+        commissionService.approve(r2, managerActor);
+        commissionService.approve(r4, managerActor);
+        commissionService.approve(r4, ceoActor);
+        commissionService.reject(r5, new ReviewCommissionRequest("ตีกลับเพื่อทดสอบ"), managerActor);
+        assertThat(commissions.findById(r2).orElseThrow().status()).isEqualTo(CommissionStatus.MANAGER_APPROVED);
+        assertThat(commissions.findById(r4).orElseThrow().status()).isEqualTo(CommissionStatus.APPROVED);
+        assertThat(commissions.findById(r5).orElseThrow().status()).isEqualTo(CommissionStatus.REJECTED);
+
+        List<PendingCommissionDto> pending = commissionService.listPendingApproval(managerActor);
+
+        // Exactly the SUBMITTED ones, every payroll month, commission_id ASC.
+        assertThat(pending).extracting(p -> p.commission().id()).containsExactly(r1, r3, r6);
+        assertThat(pending).allSatisfy(p -> assertThat(p.commission().status()).isEqualTo(CommissionStatus.SUBMITTED));
+        assertThat(pending).extracting(p -> p.commission().payrollMonth())
+            .containsExactly(LocalDate.of(2026, 7, 1), LocalDate.of(2026, 8, 1), LocalDate.of(2026, 7, 1));
+        // Commission approval redesign: the CEO's queue is the MANAGER_APPROVED records (r2 only),
+        // NOT the manager's SUBMITTED list -- same DTO shape (items, effective weight, estimate).
+        List<PendingCommissionDto> ceoQueue = commissionService.listPendingApproval(ceoActor);
+        assertThat(ceoQueue).extracting(p -> p.commission().id()).containsExactly(r2);
+        assertThat(ceoQueue).allSatisfy(p -> {
+            assertThat(p.commission().status()).isEqualTo(CommissionStatus.MANAGER_APPROVED);
+            assertThat(p.items()).isNotEmpty();
+            assertThat(p.effectiveWeight()).isNotNull();
+            assertThat(p.weightedCommissionableBase()).isNotNull();
+            assertThat(p.estimatedCommission()).isNotNull();
+        });
+
+        boolean sawNonZeroEstimate = false;
+        for (PendingCommissionDto dto : pending) {
+            CommissionRecord rec = commissions.findById(dto.commission().id()).orElseThrow();
+            TicketDto ticket = tickets.findById(rec.sourceTicketId()).orElseThrow();
+
+            assertThat(dto.ticketCode()).isEqualTo(ticket.summary().code());
+            assertThat(dto.customerName()).isEqualTo(ticket.summary().customerName());
+
+            List<PendingCommissionItemDto> expectedItems = ticket.items().stream()
+                .map(i -> new PendingCommissionItemDto(i.id(), expectedDescription(i), i.qty(), i.qtyFromStock(),
+                    i.weightMultiplier()))
+                .toList();
+            assertThat(dto.items()).hasSize(expectedItems.size());
+            for (int i = 0; i < expectedItems.size(); i++) {
+                PendingCommissionItemDto actual = dto.items().get(i);
+                PendingCommissionItemDto expected = expectedItems.get(i);
+                assertThat(actual.itemId()).isEqualTo(expected.itemId());
+                assertThat(actual.description()).isEqualTo(expected.description());
+                assertThat(actual.qty()).isEqualByComparingTo(expected.qty());
+                assertThat(actual.qtyFromStock()).isEqualByComparingTo(expected.qtyFromStock());
+                assertThat(actual.weightMultiplier()).isEqualTo(expected.weightMultiplier());
+            }
+
+            assertThat(rec.effectiveWeightMultiplier()).as("freeze produced a blended weight").isNotNull();
+            assertThat(dto.effectiveWeight()).isEqualByComparingTo(rec.effectiveWeight());
+
+            BigDecimal weightedReceived = rec.actualReceived().multiply(rec.effectiveWeight());
+            assertThat(dto.weightedCommissionableBase())
+                .isEqualByComparingTo(calculator.monthlyTierBase(weightedReceived).setScale(2, RoundingMode.HALF_UP));
+
+            // Contract composition, from the real calculator + real repo sums:
+            List<TierConfig> tiers = commissions.findTiers().isEmpty() ? TierConfig.defaults() : commissions.findTiers();
+            BigDecimal total = commissions.sumActiveWeightedActualReceived(rec.salesRepId(), rec.payrollMonth());
+            BigDecimal without = total.subtract(weightedReceived).max(BigDecimal.ZERO);
+            BigDecimal expectedEstimate = calculator.progressiveCommission(calculator.monthlyTierBase(total), tiers)
+                .subtract(calculator.progressiveCommission(calculator.monthlyTierBase(without), tiers));
+            assertThat(dto.estimatedCommission()).isEqualByComparingTo(expectedEstimate);
+            sawNonZeroEstimate |= expectedEstimate.signum() > 0;
+        }
+        assertThat(sawNonZeroEstimate).as("fixture must make at least one estimate non-zero").isTrue();
+    }
 
     @Test
     void pendingList_refusedFor_sales_account_import_hr() {
@@ -185,6 +268,14 @@ class CommissionPendingItemWeightIntegrationTest extends AbstractPostgresIntegra
 
     private static ItemWeightMultiplierRequest weights(ItemWeightMultiplierRequest.Line... lines) {
         return new ItemWeightMultiplierRequest(List.of(lines));
+    }
+
+    private static String expectedDescription(TicketItemDto i) {
+        List<String> parts = new ArrayList<>();
+        for (String p : new String[] {i.brand(), i.model(), i.color(), i.texture(), i.size()}) {
+            if (p != null && !p.isBlank()) parts.add(p);
+        }
+        return String.join(" ", parts).trim();
     }
 
     private BigDecimal effectiveWeightColumn(long commissionId) {

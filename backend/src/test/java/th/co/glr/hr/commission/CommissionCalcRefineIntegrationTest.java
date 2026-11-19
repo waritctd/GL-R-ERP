@@ -32,8 +32,6 @@ class CommissionCalcRefineIntegrationTest extends AbstractPostgresIntegrationTes
     private EmployeeRepository employees;
     private long managerEmployeeId;
     private UserPrincipal managerActor;
-    private long ceoEmployeeId;
-    private UserPrincipal ceoActor;
     private UserPrincipal salesActorFor(long employeeId) {
         return new UserPrincipal(employeeId, employeeId + "@glr.co.th", "Sales Rep " + employeeId, "sales",
             employeeId, true, LocalDate.now(), false, null, false);
@@ -55,9 +53,7 @@ class CommissionCalcRefineIntegrationTest extends AbstractPostgresIntegrationTes
         managerEmployeeId = createEmployee("ผู้จัดการฝ่ายขาย ทดสอบ", "sm-calcrefine@glr.co.th", "SA", "แผนกขาย");
         managerActor = new UserPrincipal(managerEmployeeId, managerEmployeeId + "@glr.co.th", "Sales Manager",
             "sales_manager", managerEmployeeId, true, LocalDate.now(), false, null, false);
-        ceoEmployeeId = createEmployee("ผู้บริหาร ทดสอบ", "ceo-calcrefine@glr.co.th", "MD", "ผู้บริหาร");
-        ceoActor = new UserPrincipal(ceoEmployeeId, ceoEmployeeId + "@glr.co.th", "CEO",
-            "ceo", ceoEmployeeId, true, LocalDate.now(), false, null, false);
+        createEmployee("ผู้บริหาร ทดสอบ", "ceo-calcrefine@glr.co.th", "MD", "ผู้บริหาร");
     }
 
     // Workbook reconciliation — five real rep/month totals, hand-checked by the owner (2026-07-22) against the

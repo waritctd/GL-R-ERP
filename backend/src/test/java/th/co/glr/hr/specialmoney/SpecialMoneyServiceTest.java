@@ -44,8 +44,7 @@ class SpecialMoneyServiceTest {
         repository, evaluator, auditService, notificationService, appProperties, ceoApprovers);
 
     /** Evidence-required types cannot be approved with nothing attached. Default the count to 1 so each approval
-     * case below stays about the rule it names; the gate itself is proven by
-     * #approvalIsRefusedWhenAnEvidenceRequiredTypeHasNoAttachment(). */
+     * case below stays about the rule it names. */
     @BeforeEach
     void assumeEvidenceIsOnFile() {
         when(repository.countAttachments(anyLong())).thenReturn(1);

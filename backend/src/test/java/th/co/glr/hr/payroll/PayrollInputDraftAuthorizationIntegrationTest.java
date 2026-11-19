@@ -68,8 +68,7 @@ class PayrollInputDraftAuthorizationIntegrationTest {
             .andExpect(status().isForbidden());
     }
 
-    /** Optimistic concurrency (issue #422 follow-up): PUT now REQUIRES If-Match (428 without it -- see
-     * missingIfMatchIsRejectedWith428 below), so the positive case must GET first to obtain the month's current
+    /** Optimistic concurrency (issue #422 follow-up): PUT now REQUIRES If-Match (428 without it), so the positive case must GET first to obtain the month's current
      * ETag and thread it through, exactly like the real frontend does. */
     @Test
     void hrCanSaveTheDraft() throws Exception {

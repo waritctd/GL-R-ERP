@@ -1,5 +1,6 @@
 package th.co.glr.hr.specialmoney;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -22,6 +23,39 @@ class SpecialMoneyRepositoryIntegrationTest extends AbstractPostgresIntegrationT
     @BeforeEach
     void wireRepository() {
         repository = new SpecialMoneyRepository(jdbc, new ObjectMapper());
+    }
+
+    /** findUsage's year filter used to be EXTRACT for both the amount and the count query -- event_date is
+     * employee-supplied and SubmitSpecialMoneyHttpRequest places no bound on it, so an annual cap keyed on it
+     * could always be defeated by filing against a year nothing had been approved against yet. */
+    @Test
+    void findUsageKeysTheAmountSumOnPayrollMonthAndTheCountOnRequestedAt() {
+        long employeeId = insertEmployee("SMR-USG");
+        // APPROVED, payroll_month in 2026 (so it belongs to 2026's cap under the fix) but event_date claims 2099 --
+        // must still be COUNTED for year 2026.
+        insertRequest(employeeId, "MEDICAL", LocalDate.of(2099, 1, 1), "1500", "APPROVED", "1500",
+            LocalDate.of(2026, 4, 1), OffsetDateTime.parse("2026-03-15T10:00:00+07:00"));
+        // APPROVED, payroll_month in 2025 (belongs to 2025's cap) but event_date claims 2026 -- must be EXCLUDED from
+        // 2026, even though the old, buggy query would have included it.
+        insertRequest(employeeId, "MEDICAL", LocalDate.of(2026, 12, 1), "800", "APPROVED", "800",
+            LocalDate.of(2025, 12, 1), OffsetDateTime.parse("2025-12-20T10:00:00+07:00"));
+        // SUBMITTED (no payroll_month yet), requested_at in 2026, event_date claims 2099 -- must be excluded from the
+        // APPROVED amount sum (not yet approved) but counted in the in-flight per-year count for 2026, keyed on
+        // requested_at.
+        insertRequest(employeeId, "MEDICAL", LocalDate.of(2099, 6, 1), "500", "SUBMITTED", null, null,
+            OffsetDateTime.parse("2026-06-01T09:00:00+07:00"));
+
+        UsageSnapshot usage = repository.findUsage(employeeId, 2026);
+
+        // Only the first row: payroll_month 2026, regardless of its 2099 event_date.
+        assertThat(usage.approvedAmountThisYear(SpecialMoneyType.MEDICAL)).isEqualByComparingTo("1500");
+        // Lifetime count is NOT year-scoped by design (it backs the once-per-lifetime AID gate, which must see every
+        // prior claim regardless of year): all 3 rows count.
+        assertThat(usage.activeCountLifetime(SpecialMoneyType.MEDICAL)).isEqualTo(3);
+        // requested_at in 2026: rows 1 and 3 (row 2's requested_at is 2025). Deliberately different from both the
+        // lifetime count (3) and the approved-only amount-bearing count (1), so an implementation that keys this off
+        // the wrong column/map fails here rather than by luck.
+        assertThat(usage.activeCountThisYear(SpecialMoneyType.MEDICAL)).isEqualTo(2);
     }
 
     @Test

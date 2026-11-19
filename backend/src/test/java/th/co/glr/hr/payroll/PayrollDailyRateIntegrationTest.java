@@ -1,6 +1,7 @@
 package th.co.glr.hr.payroll;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -10,9 +11,11 @@ import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpStatus;
 import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.commission.CommissionService;
+import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.leave.LeaveRepository;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
@@ -128,6 +131,24 @@ class PayrollDailyRateIntegrationTest extends AbstractPostgresIntegrationTest {
             .as("SSO on the corrected ฿11,250 base is ฿562.50, rounded to ฿563 whole baht "
                 + "(มาตรา 46 วรรคท้าย) -- not the ฿22.50/฿23 the raw ฿450 day rate would give")
             .isEqualByComparingTo("563.00");
+    }
+
+    /** A daily-rate employee whose day count was never typed used to compute a ฿0 salary with no error at all.
+     * Now the run is refused (409) and nothing is persisted. */
+    @Test
+    void aDailyRateEmployeeWithNoInputRowAtAllProcessesSilentlyAtZeroPay() {
+        LocalDate july = LocalDate.of(2026, 7, 1);
+        seedEmployee("DRE-001", "ไม่กรอก", "วันทำงาน", DAY_RATE, "D");
+
+        assertThatThrownBy(() -> payrollService.process(new ProcessPayrollRequest(july, List.of()), hr()))
+            .as("FIXED: a daily-rate employee with no days-worked input row must refuse the run, "
+                + "not silently persist a ฿0 payslip")
+            .isInstanceOf(ApiException.class)
+            .satisfies(ex -> assertThat(((ApiException) ex).getStatus()).isEqualTo(HttpStatus.CONFLICT))
+            .hasMessageContaining("DRE-001");
+        assertThat(payrollRepository.findPeriodByMonth(july))
+            .as("the guard fires before saveProcessedPeriod is ever called -- nothing persisted")
+            .isEmpty();
     }
 
     // ------------------------------------------------------------------

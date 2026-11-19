@@ -38,7 +38,6 @@ class CommissionClosedMonthGuardIntegrationTest extends AbstractPostgresIntegrat
     private long salesRepId;
     private UserPrincipal managerActor;
     private UserPrincipal ceoActor;
-    private UserPrincipal accountActor;
 
     @BeforeEach
     void wireService() {
@@ -61,8 +60,6 @@ class CommissionClosedMonthGuardIntegrationTest extends AbstractPostgresIntegrat
         managerActor = actor(managerEmployeeId, "sales_manager");
         long ceoEmployeeId = createEmployee(employees, "ผู้บริหาร งวดปิด", "ceo-closedmonth@glr.co.th", "MD", "ผู้บริหาร");
         ceoActor = actor(ceoEmployeeId, "ceo");
-        long accountEmployeeId = createEmployee(employees, "บัญชี งวดปิด", "acct-closedmonth@glr.co.th", "ACCT", "ฝ่ายบัญชี");
-        accountActor = actor(accountEmployeeId, "account");
         salesRepId = createEmployee(employees, "พนักงานขาย งวดปิด", "sales-closedmonth@glr.co.th", "SA", "แผนกขาย");
     }
 
