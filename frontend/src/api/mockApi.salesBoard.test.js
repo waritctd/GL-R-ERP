@@ -317,3 +317,26 @@ describe('mockApi drawn details (slice 6)', () => {
     }
   });
 });
+
+// Last on purpose: it adds an add-on and closes a root in the shared mock database.
+describe('mockApi.salesBoard one row per project (add-on orders)', () => {
+  it('folds an add-on into its root (count, codes), and keeps the project under the root when the root is closed', async () => {
+    await api.auth.login({ role: 'sales' });
+    const before = (await api.salesBoard.myWork()).board;
+    const root = before[0];
+    const { addOnOrder } = await api.tickets.createAddOnOrder(root.ticketId);
+
+    const after = (await api.salesBoard.myWork()).board;
+    expect(after).toHaveLength(before.length);
+    expect(after.map((d) => d.ticketId)).not.toContain(addOnOrder.ticketId);
+    const folded = after.find((d) => d.ticketId === root.ticketId);
+    expect(folded.orderCount).toBe(2);
+    expect(folded.orderCodes).toEqual([expect.any(String), addOnOrder.code]);
+
+    patchTicketForTests(root.ticketId, { salesStage: 'CLOSED_PAID' });
+    const closed = (await api.salesBoard.myWork()).board;
+    expect(closed.map((d) => d.ticketId)).toContain(root.ticketId);
+    expect(closed.map((d) => d.ticketId)).not.toContain(addOnOrder.ticketId);
+    expect(closed.find((d) => d.ticketId === root.ticketId).orderCount).toBe(2);
+  });
+});

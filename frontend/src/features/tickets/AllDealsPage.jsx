@@ -15,6 +15,7 @@ import {
 import {
   boardDealMatches, closedCounts, readStoredView, resolveDealsView, sortByQuiet, writeStoredView,
 } from './allDealsView.js';
+import { foldAddOnOrders } from './orderChain.js';
 import { rangeFromParams } from './movementRange.js';
 import { TicketCreateModal } from './TicketCreateModal.jsx';
 import { TicketListPage } from './TicketListPage.jsx';
@@ -138,7 +139,7 @@ function AllDealsBoard({ user, showToast, onShowTable }) {
   // shows (it replaces the quarter chip but keeps the search).
   const quietCount = searched.filter((d) => d.quiet).length;
   const narrowed = filter !== 'all' || searchText.trim() !== '';
-  const counts = closedCounts(ticketsQuery.data);
+  const counts = useMemo(() => closedCounts(foldAddOnOrders(ticketsQuery.data)), [ticketsQuery.data]);
 
   const createMutation = useMutation({
     mutationFn: (payload) => api.tickets.create(payload),

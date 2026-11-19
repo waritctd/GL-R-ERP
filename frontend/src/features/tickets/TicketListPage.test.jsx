@@ -1015,6 +1015,24 @@ describe('TicketListPage', () => {
       api.tickets.list.mockResolvedValue({ tickets: MOVE_DEALS });
     });
 
+    it('an add-on folds into its project: one row with the order tag and the summed value, found by its own number', async () => {
+      api.tickets.list.mockResolvedValue({
+        tickets: [
+          moveDeal(801, 'ลูกค้า-โครงการ', { code: 'DL-1', amountPayable: 1000 }),
+          moveDeal(802, 'ลูกค้า-โครงการ', {
+            code: 'DL-1-2', amountPayable: 500, childKind: 'ADD_ON', parentTicketId: 801, parentCode: 'DL-1',
+          }),
+        ],
+      });
+      renderTicketListPage(salesUser, ['/tickets?q=DL-1-2']);
+      await screen.findByText('ลูกค้า-โครงการ');
+
+      const footer = screen.getByTestId('deal-list-footer');
+      expect(footer.textContent).toContain('1 รายการ');
+      expect(footer.textContent).toContain('฿1,500.00');
+      expect(screen.getAllByText(/2 ออเดอร์/).length).toBeGreaterThan(0);
+    });
+
     it('sales: renders the ช่วงวันที่ row with the default 7-day range and sends it to the API', async () => {
       renderTicketListPage(salesUser, ['/tickets'], <LocationDisplay />);
       await screen.findByText('ลูกค้า-ขยับ');

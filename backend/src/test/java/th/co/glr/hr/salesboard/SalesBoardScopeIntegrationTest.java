@@ -314,6 +314,45 @@ class SalesBoardScopeIntegrationTest extends AbstractDealQuotationSlice2Integrat
             .get("openDeals").asInt()).isEqualTo(1);
     }
 
+    /** สั่งเพิ่ม: a project is ONE row. The add-on folds into its root (orderCount 2, summed value, both codes), and
+     * the team's openDeals counts the project once. */
+    @Test
+    void anAddOnFoldsIntoItsRootRow_andTheProjectCountsOnce() throws Exception {
+        long root = deal(salesActor);
+        DealQuotationDto quote = approved(root, salesActor, "DESIGNER");
+        long addOn = new th.co.glr.hr.dealparty.DealPartyRepository(jdbc)
+            .forkAddOn(root, summary(root).code() + "-2", salesActor.id());
+        jdbc.update("UPDATE sales.ticket SET estimated_value = 1000 WHERE ticket_id = :id", Map.of("id", addOn));
+
+        JsonNode board = ok(get("/api/sales/my-work"), salesActor).get("board");
+
+        assertThat(ids(board)).containsExactly(root);
+        JsonNode row = byId(board, root);
+        assertThat(row.get("orderCount").asInt()).isEqualTo(2);
+        assertThat(new BigDecimal(row.get("value").asText())).isEqualByComparingTo(quote.grandTotal().add(BigDecimal.valueOf(1000)));
+        assertThat(row.get("orderCodes")).hasSize(2);
+        assertThat(rep(ok(get("/api/sales/team-overview"), salesManagerActor), salesActor.id())
+            .get("openDeals").asInt()).isEqualTo(1);
+    }
+
+    /** M3: with the root CLOSED_PAID the add-on still never shows as its own row; the project card stays under the
+     * ROOT's id and carries the add-on's live stage. */
+    @Test
+    void anAddOnNeverShowsAsItsOwnRow_evenWhenItsRootIsClosed() throws Exception {
+        long root = deal(salesActor);
+        long addOn = new th.co.glr.hr.dealparty.DealPartyRepository(jdbc)
+            .forkAddOn(root, summary(root).code() + "-2", salesActor.id());
+        jdbc.update("UPDATE sales.ticket SET sales_stage = 'CLOSED_PAID' WHERE ticket_id = :id", Map.of("id", root));
+
+        JsonNode board = ok(get("/api/sales/my-work"), salesActor).get("board");
+
+        assertThat(ids(board)).containsExactly(root).doesNotContain(addOn);
+        assertThat(byId(board, root).get("orderCount").asInt()).isEqualTo(2);
+        assertThat(byId(board, root).get("boardColumn").asInt()).isNotEqualTo(5);
+        assertThat(rep(ok(get("/api/sales/team-overview"), salesManagerActor), salesActor.id())
+            .get("openDeals").asInt()).isEqualTo(1);
+    }
+
     /** Two live quotations (seeded directly: the service's sweep allows only one): the NEWER approval wins. */
     @Test
     void valueIsTheLatestLiveQuotation_byApprovalTime_notTheOlderOne() throws Exception {

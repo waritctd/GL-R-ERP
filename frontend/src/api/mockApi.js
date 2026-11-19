@@ -8989,14 +8989,63 @@ export function receiptSourceForTests(allReceipts) {
 /** Every open deal (ACTIVE, not CLOSED_PAID) as a BoardDeal, ordered as the repository's
  * `ORDER BY last_touched_at, t.ticket_id`. */
 function mockBoardDeals() {
-  return mockBoardRows((t) => (t.lifecycle ?? 'ACTIVE') === 'ACTIVE' && t.salesStage !== 'CLOSED_PAID');
+  return mockFoldAddOnOrders(mockBoardRows((t) => (t.lifecycle ?? 'ACTIVE') === 'ACTIVE' && t.salesStage !== 'CLOSED_PAID'));
 }
 
 /** SalesBoardRepository#returningPausedDeals*: paused deals whose วันที่จะกลับมาดู has arrived (QuietRule#returningSql,
  * mirrored by quietRule.js#isReturning), in the same row shape and order. */
 function mockReturningPausedDeals() {
   const today = mockTodayIso();
-  return mockBoardRows((t) => mockIsReturning(t, today) && t.salesStage !== 'CLOSED_PAID');
+  return mockFoldAddOnOrders(mockBoardRows((t) => mockIsReturning(t, today) && t.salesStage !== 'CLOSED_PAID'));
+}
+
+/**
+ * Mirrors SalesBoardRepository#fold (M3): one row per project. An ADD_ON row folds into its root when the root is in
+ * the list (root keeps its place; orderCount + codes + value summed when the currencies match). A root NOT in the
+ * list (closed / paused) is read here and the project's card is the root's id / title under the add-on's live stage;
+ * a root owned by someone else than the add-on is never read for them, so that add-on stays its own row.
+ */
+function mockFoldAddOnOrders(rows) {
+  const isAddOn = (r) => {
+    const t = db.tickets.find((x) => x.id === r.ticketId);
+    return t?.childKind === 'ADD_ON' && t.parentTicketId != null;
+  };
+  const parentOf = (r) => db.tickets.find((x) => x.id === r.ticketId).parentTicketId;
+  const listed = new Set(rows.map((r) => r.ticketId));
+  const missing = new Set(rows.filter(isAddOn).map(parentOf).filter((id) => !listed.has(id)));
+  const roots = new Map(mockBoardRows((t) => missing.has(t.id)).map((r) => [r.ticketId, r]));
+  const slots = new Map();
+  const out = [];
+  for (const r of rows) {
+    if (!isAddOn(r)) {
+      const slot = { card: { ...r }, orders: 1, codes: [r.orderCodes[0]] };
+      slots.set(r.ticketId, slot);
+      out.push(slot);
+    } else if (!listed.has(parentOf(r)) && !slots.has(parentOf(r))) {
+      const root = roots.get(parentOf(r));
+      if (!root || root.ownerId !== r.ownerId) { out.push({ plain: r }); continue; }
+      const slot = {
+        card: {
+          ...r, ticketId: root.ticketId, title: root.title, customerName: root.customerName,
+          projectName: root.projectName, ownerId: root.ownerId, ownerName: root.ownerName,
+          value: root.value, currency: root.currency,
+        },
+        orders: 1, codes: [root.orderCodes[0]],
+      };
+      slots.set(parentOf(r), slot);
+      out.push(slot);
+    }
+  }
+  for (const r of rows) {
+    const slot = isAddOn(r) ? slots.get(parentOf(r)) : null;
+    if (!slot) continue;
+    slot.orders += 1;
+    slot.codes.push(r.orderCodes[0]);
+    if (r.value == null) continue;
+    if (slot.card.value == null) { slot.card.value = r.value; slot.card.currency = r.currency; }
+    else if (slot.card.currency === r.currency) slot.card.value = round2(Number(slot.card.value) + Number(r.value));
+  }
+  return out.map((o) => (o.plain ?? { ...o.card, orderCount: o.orders, orderCodes: o.codes }));
 }
 
 function mockBoardRows(include) {
@@ -9041,6 +9090,8 @@ function mockBoardRows(include) {
         // V220 (BoardDeal.returning / pauseReturnOn): a paused deal coming back — never an ACTIVE board row.
         returning: mockIsReturning(t, today),
         pauseReturnOn: t.pauseReturnOn ?? null,
+        orderCount: 1,
+        orderCodes: [t.code],
         ...mockBoardCardDetails(t, valueQuotation),
         lastTouchedMs: last,
       };

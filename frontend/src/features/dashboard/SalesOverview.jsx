@@ -13,6 +13,7 @@ import { bangkokMonthStartIso, bangkokTodayIso, formatMoney, formatThaiDate, gre
 import { newestQuotationByRequest } from '../quotations/quotationMeta.js';
 import { dealAmountLabel, defaultRange, isOrderedIn, sumAmount } from '../tickets/movementRange.js';
 import { followUpStatus, nextSalesAction, sortWorklist, SALES_ACTION } from '../tickets/salesActions.js';
+import { foldAddOnOrders } from '../tickets/orderChain.js';
 import { offRoutePartiesFor, stageIndexIn, useStageCatalog } from '../tickets/stageCatalog.js';
 import { Figure, failed } from './dashboardParts.jsx';
 
@@ -109,7 +110,7 @@ export function SalesOverview({ user, employee, showToast }) {
   // useMemo (not a bare `?? []`) so the fallback empty array is referentially stable across renders while a
   // query is still loading — otherwise every render would hand the useMemo hooks below a "new" array and defeat
   // their memoization (same convention as TicketListPage's `allDeals`).
-  const deals = useMemo(() => ticketsQuery.data ?? [], [ticketsQuery.data]);
+  const deals = useMemo(() => foldAddOnOrders(ticketsQuery.data ?? []), [ticketsQuery.data]);
   const pricingRequests = useMemo(() => pricingRequestsQuery.data ?? [], [pricingRequestsQuery.data]);
   const loading = ticketsQuery.isLoading || pricingRequestsQuery.isLoading;
 

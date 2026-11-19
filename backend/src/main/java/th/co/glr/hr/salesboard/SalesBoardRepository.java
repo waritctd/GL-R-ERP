@@ -4,6 +4,8 @@ import java.math.BigDecimal;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -50,7 +52,7 @@ public class SalesBoardRepository {
      * clock minus a Postgres timestamp, which read N-1 for an N-day deal whenever the JVM clock lagged the database's
      * and reordered ควรตามต่อ (review round 2, L-1). */
     private static final String ROW_SELECT = """
-        SELECT t.ticket_id, t.title, t.customer_name, p.name AS project_name,
+        SELECT t.ticket_id, t.code, t.parent_ticket_id, t.child_kind, t.title, t.customer_name, p.name AS project_name,
                t.created_by AS owner_id,
                NULLIF(TRIM(CONCAT_WS(' ', e.first_name_th, e.last_name_th)), '') AS owner_name,
                t.sales_stage, t.designer_name, t.win_probability, t.expected_quarter, t.imported_value,
@@ -129,26 +131,26 @@ public class SalesBoardRepository {
 
     /** The caller's own ACTIVE deals — the deal's owner ({@code created_by}), not its keyer. */
     public List<BoardDeal> activeDealsOwnedBy(long ownerId) {
-        return jdbc.query(BOARD_SELECT + " AND t.created_by = :ownerId ORDER BY last_touched_at, t.ticket_id",
-            params().addValue("ownerId", ownerId), this::map);
+        return fold(jdbc.query(BOARD_SELECT + " AND t.created_by = :ownerId ORDER BY last_touched_at, t.ticket_id",
+            params().addValue("ownerId", ownerId), this::map));
     }
 
     /** Every ACTIVE deal of every rep. Only for the sales_manager/ceo team overview. */
     public List<BoardDeal> activeDealsAllReps() {
-        return jdbc.query(BOARD_SELECT + " ORDER BY last_touched_at, t.ticket_id", params(), this::map);
+        return fold(jdbc.query(BOARD_SELECT + " ORDER BY last_touched_at, t.ticket_id", params(), this::map));
     }
 
     /** The caller's own paused deals whose วันที่จะกลับมาดู has arrived — owner ({@code created_by}) scoped in the
      * WHERE clause exactly as {@link #activeDealsOwnedBy}. Same row order. */
     public List<BoardDeal> returningPausedDealsOwnedBy(long ownerId) {
-        return jdbc.query(RETURNING_SELECT + " AND t.created_by = :ownerId ORDER BY last_touched_at, t.ticket_id",
-            params().addValue("ownerId", ownerId), this::map);
+        return fold(jdbc.query(RETURNING_SELECT + " AND t.created_by = :ownerId ORDER BY last_touched_at, t.ticket_id",
+            params().addValue("ownerId", ownerId), this::map));
     }
 
     /** Every rep's returning paused deals. Only for the sales_manager/ceo team overview, like
      * {@link #activeDealsAllReps}. */
     public List<BoardDeal> returningPausedDealsAllReps() {
-        return jdbc.query(RETURNING_SELECT + " ORDER BY last_touched_at, t.ticket_id", params(), this::map);
+        return fold(jdbc.query(RETURNING_SELECT + " ORDER BY last_touched_at, t.ticket_id", params(), this::map));
     }
 
     /** The bind parameters every board read needs: the value statuses, the quiet threshold, and the Asia/Bangkok
@@ -196,7 +198,7 @@ public class SalesBoardRepository {
         return state == null ? d : d.withPaymentDue(state.dueDate(), state.overdue());
     }
 
-    private BoardDeal map(ResultSet rs, int rowNum) throws SQLException {
+    private Row map(ResultSet rs, int rowNum) throws SQLException {
         String stage = rs.getString("sales_stage");
         Timestamp lastTouched = rs.getTimestamp("last_touched_at");
         int override = rs.getInt("win_probability");
@@ -216,7 +218,7 @@ public class SalesBoardRepository {
             value = rs.getBigDecimal("estimated_value");
             currency = "THB";
         }
-        return new BoardDeal(
+        BoardDeal deal = new BoardDeal(
             rs.getLong("ticket_id"), rs.getString("title"), rs.getString("customer_name"),
             rs.getString("project_name"), rs.getLong("owner_id"), rs.getString("owner_name"),
             stage, DealStage.repCodeOf(stage), DealStage.boardColumnOf(stage),
@@ -228,7 +230,99 @@ public class SalesBoardRepository {
             rs.getBoolean("returning"), rs.getObject("pause_return_on", java.time.LocalDate.class),
             rs.getString("quotation_number"), rs.getString("buyer_name"),
             rs.getObject("expected_deposit_week", java.time.LocalDate.class), rs.getBoolean("deposit_received"),
-            null, false);
+            null, false, 1, List.of(rs.getString("code")));
+        return new Row(deal, rs.getString("code"), rs.getObject("parent_ticket_id", Long.class),
+            rs.getString("child_kind"));
+    }
+
+    /** A board row with the facts only the fold reads. */
+    private record Row(BoardDeal deal, String code, Long parentId, String childKind) {
+        boolean isAddOn() {
+            return "ADD_ON".equals(childKind) && parentId != null;
+        }
+    }
+
+    /** One project's row while the orders are folded in: the card, its order codes and its summed value. */
+    private static final class Slot {
+        BoardDeal card;
+        final List<String> codes = new ArrayList<>();
+        int orders = 1;
+
+        Slot(BoardDeal card, String code) {
+            this.card = card;
+            codes.add(code);
+        }
+
+        /** One more order: its code, and its value when the currencies match (other currencies are rare; the card
+         * then keeps its own value, an under-stated mixed-currency total). */
+        void add(Row order) {
+            orders++;
+            codes.add(order.code());
+            BoardDeal d = order.deal();
+            if (d.value() == null) {
+                return;
+            }
+            if (card.value() == null) {
+                card = card.withOrders(orders, d.value(), d.currency(), codes);
+            } else if (java.util.Objects.equals(card.currency(), d.currency())) {
+                card = card.withOrders(orders, card.value().add(d.value()), card.currency(), codes);
+            }
+        }
+
+        BoardDeal done() {
+            return card.withOrders(orders, card.value(), card.currency(), List.copyOf(codes));
+        }
+    }
+
+    /**
+     * One row per project (สั่งเพิ่ม, M3). An ADD_ON order never shows as its own row: it folds into its root when the
+     * root is in the list (the root keeps its place; {@code orderCount} and {@code value} take the add-on). When the
+     * root is not in the list (closed or paused) the project's card is the root, read here, carrying the live
+     * add-on's stage and quiet state, so a project with a live add-on is open and stays under the root's number.
+     * One exception: a root owned by someone else than the add-on (the caller's list is owner-scoped) is never read
+     * for them; that add-on stays as its own row rather than leak the root. BID_SPLIT children are ordinary rows.
+     * Row order is the query's (the first row of a project fixes its place).
+     */
+    private List<BoardDeal> fold(List<Row> rows) {
+        java.util.Set<Long> listed = new java.util.HashSet<>();
+        for (Row r : rows) {
+            listed.add(r.deal().ticketId());
+        }
+        List<Long> missing = rows.stream().filter(Row::isAddOn).map(Row::parentId)
+            .filter(id -> !listed.contains(id)).distinct().toList();
+        Map<Long, Row> roots = new java.util.HashMap<>();
+        if (!missing.isEmpty()) {
+            for (Row root : jdbc.query(ROW_SELECT + " WHERE t.ticket_id IN (:rootIds)",
+                params().addValue("rootIds", missing), this::map)) {
+                roots.put(root.deal().ticketId(), root);
+            }
+        }
+        Map<Long, Slot> slots = new LinkedHashMap<>();
+        List<Object> out = new ArrayList<>();
+        for (Row r : rows) {
+            if (!r.isAddOn()) {
+                Slot slot = new Slot(r.deal(), r.code());
+                slots.put(r.deal().ticketId(), slot);
+                out.add(slot);
+            } else if (!listed.contains(r.parentId()) && !slots.containsKey(r.parentId())) {
+                Row root = roots.get(r.parentId());
+                if (root == null || root.deal().ownerId() != r.deal().ownerId()) {
+                    out.add(r.deal()); // root unreadable for this list: never hide live work
+                    continue;
+                }
+                Slot slot = new Slot(r.deal().underProject(root.deal())
+                    .withOrders(1, root.deal().value(), root.deal().currency(), List.of()), root.code());
+                slots.put(r.parentId(), slot);
+                out.add(slot);
+            }
+        }
+        for (Row r : rows) {
+            Slot slot = r.isAddOn() ? slots.get(r.parentId()) : null;
+            if (slot != null) {
+                slot.add(r);
+            }
+        }
+        return out.stream().map(o -> o instanceof Slot s ? s.done() : (BoardDeal) o).toList();
     }
 
     /** The quotation's grand total, derived exactly as DealQuotationRepository#mapQuotation derives it. */
