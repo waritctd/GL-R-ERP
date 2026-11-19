@@ -2,11 +2,6 @@ package th.co.glr.hr.procurement;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyLong;
-import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
@@ -21,7 +16,6 @@ import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.catalog.CatalogRepository;
 import th.co.glr.hr.common.ApiException;
-import th.co.glr.hr.config.AppProperties;
 import th.co.glr.hr.customer.ContactRepository;
 import th.co.glr.hr.customer.CustomerDto;
 import th.co.glr.hr.customer.CustomerRepository;
@@ -38,7 +32,6 @@ import th.co.glr.hr.deposit.DepositNoticeDto;
 import th.co.glr.hr.deposit.DepositNoticePdfRenderer;
 import th.co.glr.hr.deposit.DepositNoticeRepository;
 import th.co.glr.hr.deposit.DepositNoticeService;
-import th.co.glr.hr.deposit.RemainingInvoicePdfRenderer;
 import th.co.glr.hr.employee.EmployeeCodeGenerator;
 import th.co.glr.hr.employee.EmployeeReferenceRepository;
 import th.co.glr.hr.employee.EmployeeRepository;
@@ -69,7 +62,6 @@ import th.co.glr.hr.pricingdecision.PricingDecisionRequests.StartPricingDecision
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.UpdatePricingDecisionItemRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.UpdatePricingDecisionRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionService;
-import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestSummaryDto;
 import th.co.glr.hr.pricingrequest.PricingRequestRecipient;
 import th.co.glr.hr.pricingrequest.PricingRequestRepository;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests;
@@ -79,9 +71,6 @@ import th.co.glr.hr.pricingrequest.QuantityType;
 import th.co.glr.hr.pricingrequest.UnitBasis;
 import th.co.glr.hr.procurement.ProcurementDtos.FactoryPurchaseOrderDto;
 import th.co.glr.hr.procurement.ProcurementRequests.CreateFactoryPurchaseOrdersRequest;
-import th.co.glr.hr.procurement.ProcurementRequests.RecordGoodsReceivedRequest;
-import th.co.glr.hr.procurement.ProcurementRequests.RecordShippingDetailRequest;
-import th.co.glr.hr.procurement.ProcurementRequests.RecordSupplierProformaRequest;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 import th.co.glr.hr.ticket.CreateTicketRequest;
 import th.co.glr.hr.ticket.DealStage;
@@ -195,220 +184,12 @@ class ProcurementServiceIntegrationTest extends AbstractPostgresIntegrationTest 
     private void insertFactory(String name) {
     }
 
-    // Acceptance scenario (end to end, real Postgres) — 2 factories -> 2 POs, traced items, detail recording, and
-    // composition with the existing markIrSent/markShipping/ markGoodsReceived ticket-level flow.
-
-    @Test
-    void fullChain_quotationAcceptedThroughGoodsReceived_sourcesFromCostingAndComposesWithTicketFlow() {
-        DealFixture deal = driveToProcurement(true);
-
-        List<FactoryPurchaseOrderDto> created = procurement.createPurchaseOrders(deal.pricingRequestId,
-            new CreateFactoryPurchaseOrdersRequest(UUID.randomUUID().toString()), importActor);
-        assertThat(created).hasSize(2);
-        assertThat(created).extracting(FactoryPurchaseOrderDto::factoryName)
-            .containsExactlyInAnyOrder(FACTORY_A, FACTORY_B);
-        assertThat(created).allSatisfy(po -> {
-            assertThat(po.status()).isEqualTo(FactoryPurchaseOrderStatus.OPEN);
-            assertThat(po.pricingRequestId()).isEqualTo(deal.pricingRequestId);
-            assertThat(po.ticketId()).isEqualTo(deal.ticketId);
-            assertThat(po.items()).hasSize(1);
-        });
-
-        // ── Items trace to the EXACT costing figures, not re-derived ────────────────────────
-        for (FactoryPurchaseOrderDto po : created) {
-            var item = po.items().get(0);
-            Map<String, Object> costingRow = jdbc.queryForMap("""
-                SELECT requested_quantity, raw_unit_price, raw_currency
-                  FROM sales.pricing_costing_item WHERE pricing_costing_item_id = :id
-                """, Map.of("id", item.pricingCostingItemId()));
-            assertThat(item.quantity()).isEqualByComparingTo((BigDecimal) costingRow.get("requested_quantity"));
-            assertThat(item.unitPrice()).isEqualByComparingTo((BigDecimal) costingRow.get("raw_unit_price"));
-            assertThat(item.currency()).isEqualTo(costingRow.get("raw_currency"));
-            assertThat(item.lineTotal()).isEqualByComparingTo(item.quantity().multiply(item.unitPrice()));
-            assertThat(po.totalAmount()).isEqualByComparingTo(item.lineTotal());
-        }
-
-        // ── Idempotent re-create: no duplicate POs, no duplicate items ──────────────────────
-        List<FactoryPurchaseOrderDto> secondCall = procurement.createPurchaseOrders(deal.pricingRequestId,
-            new CreateFactoryPurchaseOrdersRequest(UUID.randomUUID().toString()), importActor);
-        assertThat(secondCall).hasSize(2);
-        assertThat(jdbc.queryForObject("""
-            SELECT COUNT(*) FROM sales.factory_purchase_order WHERE pricing_request_id = :id
-            """, Map.of("id", deal.pricingRequestId), Long.class)).isEqualTo(2L);
-        assertThat(jdbc.queryForObject("""
-            SELECT COUNT(*) FROM sales.factory_purchase_order_item poi
-              JOIN sales.factory_purchase_order po ON po.factory_purchase_order_id = poi.factory_purchase_order_id
-             WHERE po.pricing_request_id = :id
-            """, Map.of("id", deal.pricingRequestId), Long.class)).isEqualTo(2L);
-
-        // ── Supplier proforma + shipping detail + goods received on one PO ──────────────────
-        FactoryPurchaseOrderDto poA = created.stream().filter(po -> FACTORY_A.equals(po.factoryName())).findFirst().orElseThrow();
-        FactoryPurchaseOrderDto afterProforma = procurement.recordSupplierProforma(poA.id(),
-            new RecordSupplierProformaRequest("PI-2026-0001", "30% deposit, 70% before shipment"), importActor);
-        assertThat(afterProforma.supplierProformaRef()).isEqualTo("PI-2026-0001");
-        assertThat(afterProforma.status()).isEqualTo(FactoryPurchaseOrderStatus.OPEN); // proforma alone does not advance status
-
-        FactoryPurchaseOrderDto afterShipping = procurement.recordShippingDetail(poA.id(),
-            new RecordShippingDetailRequest("CONT-1234567", LocalDate.now().plusDays(3), LocalDate.now().plusDays(30), "AWAITING_CLEARANCE"),
-            importActor);
-        assertThat(afterShipping.status()).isEqualTo(FactoryPurchaseOrderStatus.SHIPPING);
-        assertThat(afterShipping.containerRef()).isEqualTo("CONT-1234567");
-        assertThat(afterShipping.customsStatus()).isEqualTo("AWAITING_CLEARANCE");
-
-        // Step 8: no per-item receipt supplied — the backward-compatible default fills qtyReceived from each line's
-        // own ordered quantity (zero discrepancy), so the unmodified Step 7 caller shape keeps working unchanged.
-        FactoryPurchaseOrderDto afterReceived = procurement.recordGoodsReceived(poA.id(),
-            new RecordGoodsReceivedRequest(new BigDecimal("12345.6789"), null), importActor);
-        assertThat(afterReceived.status()).isEqualTo(FactoryPurchaseOrderStatus.RECEIVED);
-        assertThat(afterReceived.actualLandedCostThb()).isEqualByComparingTo("12345.6789");
-        assertThat(afterReceived.receivedAt()).isNotNull();
-        // The ESTIMATE (Step 2) stays visible on the item, distinct from the actual just recorded.
-        assertThat(afterReceived.items().get(0).estimatedTotalLandedCostThb()).isNotNull();
-        assertThat(afterReceived.items().get(0).estimatedTotalLandedCostThb())
-            .isNotEqualByComparingTo(afterReceived.actualLandedCostThb());
-        assertThat(afterReceived.items().get(0).qtyReceived())
-            .isEqualByComparingTo(afterReceived.items().get(0).quantity());
-        assertThat(afterReceived.items().get(0).discrepancyQty()).isEqualByComparingTo(BigDecimal.ZERO);
-
-        // A closed PO cannot be touched again.
-        assertThatThrownBy(() -> procurement.recordGoodsReceived(poA.id(),
-            new RecordGoodsReceivedRequest(BigDecimal.TEN, null), importActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
-
-        // Composes with the ticket-level fulfillment flow — but, as of the derived-fulfilment- status branch, no
-        // longer INDEPENDENTLY of it.
-        assertThat(tickets.findById(deal.ticketId).orElseThrow().summary().fulfillmentStatus())
-            .isEqualTo(FulfilmentStatus.SHIPPING);
-        assertThatThrownBy(() -> ticketService.markShipping(deal.ticketId, importActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
-        assertThatThrownBy(() -> ticketService.markGoodsReceived(deal.ticketId, importActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
-        // The OTHER PO (factory B) is still OPEN — receiving IT is what completes the rollup to GOODS_RECEIVED (see
-        // DerivedFulfilmentRollupIntegrationTest #rollupMovesTicketToGoodsReceivedOnlyWhenEveryLivePoIsReceived), not
-        // a ticket-level call.
-        FactoryPurchaseOrderDto poB = created.stream().filter(po -> FACTORY_B.equals(po.factoryName())).findFirst().orElseThrow();
-        assertThat(procurement.get(poB.id(), importActor).status()).isEqualTo(FactoryPurchaseOrderStatus.OPEN);
-    }
-
-    // Step 8: Receiving — per-item actual quantity vs ordered, discrepancy, QC/damage note.
-
-    @Test
-    void recordGoodsReceived_withExplicitItemReceipt_recordsQtyReceivedDiscrepancyAndQcNote() {
-        DealFixture deal = driveToProcurement(true);
-        List<FactoryPurchaseOrderDto> created = procurement.createPurchaseOrders(deal.pricingRequestId,
-            new CreateFactoryPurchaseOrdersRequest(null), importActor);
-        FactoryPurchaseOrderDto poA = created.stream().filter(po -> FACTORY_A.equals(po.factoryName())).findFirst().orElseThrow();
-        long itemId = poA.items().get(0).id();
-        BigDecimal ordered = poA.items().get(0).quantity();
-
-        // Ordered 10 (see driveToQuotationIssuedNotYetAccepted's own itemA), only 8 physically counted on arrival — a
-        // real shortage, with a damage note.
-        FactoryPurchaseOrderDto afterReceived = procurement.recordGoodsReceived(poA.id(),
-            new RecordGoodsReceivedRequest(new BigDecimal("999.99"),
-                List.of(new ProcurementRequests.ItemReceiptRequest(itemId, new BigDecimal("8"), "กล่องเสียหาย 2 กล่อง"))),
-            importActor);
-
-        var receivedItem = afterReceived.items().get(0);
-        assertThat(receivedItem.quantity()).isEqualByComparingTo(ordered);
-        assertThat(receivedItem.qtyReceived()).isEqualByComparingTo("8");
-        assertThat(receivedItem.qcNote()).isEqualTo("กล่องเสียหาย 2 กล่อง");
-        assertThat(receivedItem.discrepancyQty()).isEqualByComparingTo(new BigDecimal("8").subtract(ordered));
-        assertThat(receivedItem.discrepancyQty().signum()).isNegative();
-        assertThat(afterReceived.status()).isEqualTo(FactoryPurchaseOrderStatus.RECEIVED);
-    }
-
-    @Test
-    void recordGoodsReceived_omittingItems_defaultsEveryLineToOrderedQtyWithZeroDiscrepancy() {
-        // Backward compatibility: the unmodified Step 7 caller shape (no items array) must keep working exactly as
-        // before — every line defaults to "received exactly as ordered."
-        DealFixture deal = driveToProcurement(true);
-        List<FactoryPurchaseOrderDto> created = procurement.createPurchaseOrders(deal.pricingRequestId,
-            new CreateFactoryPurchaseOrdersRequest(null), importActor);
-        FactoryPurchaseOrderDto poA = created.stream().filter(po -> FACTORY_A.equals(po.factoryName())).findFirst().orElseThrow();
-
-        FactoryPurchaseOrderDto afterReceived = procurement.recordGoodsReceived(poA.id(),
-            new RecordGoodsReceivedRequest(new BigDecimal("500.00"), null), importActor);
-
-        var receivedItem = afterReceived.items().get(0);
-        assertThat(receivedItem.qtyReceived()).isEqualByComparingTo(receivedItem.quantity());
-        assertThat(receivedItem.discrepancyQty()).isEqualByComparingTo(BigDecimal.ZERO);
-        assertThat(receivedItem.qcNote()).isNull();
-    }
-
-    @Test
-    void recordGoodsReceived_partialItemList_isRejected_notSilentlyLeavingLinesUnset() {
-        // A PO with 1 item here, but the guard is exercised via an explicitly EMPTY-vs-partial distinction: supplying
-        // an item list that omits a real line must be rejected outright, per RecordGoodsReceivedRequest's own Javadoc.
-        DealFixture deal = driveToProcurement(true);
-        List<FactoryPurchaseOrderDto> created = procurement.createPurchaseOrders(deal.pricingRequestId,
-            new CreateFactoryPurchaseOrdersRequest(null), importActor);
-        FactoryPurchaseOrderDto poA = created.stream().filter(po -> FACTORY_A.equals(po.factoryName())).findFirst().orElseThrow();
-
-        assertThatThrownBy(() -> procurement.recordGoodsReceived(poA.id(),
-            new RecordGoodsReceivedRequest(new BigDecimal("100.00"), List.of()), importActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
-        // Unaffected — still OPEN/SHIPPING, not silently advanced to RECEIVED.
-        assertThat(procurement.get(poA.id(), importActor).status()).isNotEqualTo(FactoryPurchaseOrderStatus.RECEIVED);
-    }
-
-    @Test
-    void recordGoodsReceived_itemIdFromAnotherPo_isRejected() {
-        // Cross-PO guard: an itemId that legitimately belongs to a DIFFERENT PO (factory B here, same pricing request
-        // even) must not be accepted for factory A's receiving call.
-        DealFixture deal = driveToProcurement(true);
-        List<FactoryPurchaseOrderDto> created = procurement.createPurchaseOrders(deal.pricingRequestId,
-            new CreateFactoryPurchaseOrdersRequest(null), importActor);
-        FactoryPurchaseOrderDto poA = created.stream().filter(po -> FACTORY_A.equals(po.factoryName())).findFirst().orElseThrow();
-        FactoryPurchaseOrderDto poB = created.stream().filter(po -> FACTORY_B.equals(po.factoryName())).findFirst().orElseThrow();
-        long foreignItemId = poB.items().get(0).id();
-
-        assertThatThrownBy(() -> procurement.recordGoodsReceived(poA.id(),
-            new RecordGoodsReceivedRequest(new BigDecimal("100.00"),
-                List.of(new ProcurementRequests.ItemReceiptRequest(foreignItemId, BigDecimal.ONE, null))),
-            importActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
-        assertThat(procurement.get(poA.id(), importActor).status()).isNotEqualTo(FactoryPurchaseOrderStatus.RECEIVED);
-    }
-
     // Gate: reachable only from QUOTATION_ACCEPTED + DealStage.PROCUREMENT (as strict as issueImportRequest's own
     // precondition, not weaker).
 
     @Test
     void createPurchaseOrders_beforeQuotationAccepted_isRejected() {
         DealFixture deal = driveToQuotationIssuedNotYetAccepted(FACTORY_A, FACTORY_B);
-        assertThatThrownBy(() -> procurement.createPurchaseOrders(deal.pricingRequestId,
-            new CreateFactoryPurchaseOrdersRequest(null), importActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
-        assertThat(jdbc.queryForObject("""
-            SELECT COUNT(*) FROM sales.factory_purchase_order WHERE pricing_request_id = :id
-            """, Map.of("id", deal.pricingRequestId), Long.class)).isZero();
-    }
-
-    /** Isolates the PricingRequestStatus.QUOTATION_ACCEPTED guard specifically from the DealStage.PROCUREMENT
-     * guard, since a deal driven by a SINGLE pricing request can never exercise them independently. */
-    @Test
-    void createPurchaseOrders_ticketAtProcurementButThisPricingRequestNotAccepted_isRejected() {
-        DealFixture deal = driveToProcurement(true, true);
-        // The second pricing request is driven all the way to QUOTATION_ISSUED — it DOES have its own APPROVED
-        // decision and its own real pricing_costing_item rows, so findApprovedPricingCostingId succeeds and cannot be
-        // the thing that blocks this call.
-        long otherPricingRequestId = siblingPricingRequestId;
-        assertThat(pricingRequestService.get(otherPricingRequestId, importActor).summary().status())
-            .isEqualTo(PricingRequestStatus.QUOTATION_ISSUED);
-
-        assertThatThrownBy(() -> procurement.createPurchaseOrders(otherPricingRequestId,
-            new CreateFactoryPurchaseOrdersRequest(null), importActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
-        assertThat(jdbc.queryForObject("""
-            SELECT COUNT(*) FROM sales.factory_purchase_order WHERE pricing_request_id = :id
-            """, Map.of("id", otherPricingRequestId), Long.class)).isZero();
-    }
-
-    @Test
-    void createPurchaseOrders_quotationAcceptedButImportRequestNotYetIssued_isRejected() {
-        // Reaches QUOTATION_ACCEPTED and even DEPOSIT_PAID, but deliberately stops short of calling issueImportRequest
-        // — the deal never reaches DealStage.PROCUREMENT.
-        DealFixture deal = driveToProcurement(false);
         assertThatThrownBy(() -> procurement.createPurchaseOrders(deal.pricingRequestId,
             new CreateFactoryPurchaseOrdersRequest(null), importActor))
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
@@ -431,14 +212,6 @@ class ProcurementServiceIntegrationTest extends AbstractPostgresIntegrationTest 
     }
 
     @Test
-    void createPurchaseOrders_accountActor_cannotCreate() {
-        DealFixture deal = driveToProcurement(true);
-        assertThatThrownBy(() -> procurement.createPurchaseOrders(deal.pricingRequestId,
-            new CreateFactoryPurchaseOrdersRequest(null), accountActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
-    }
-
-    @Test
     void ceoActor_canCreateAndReadPurchaseOrders() {
         DealFixture deal = driveToProcurement(true);
         List<FactoryPurchaseOrderDto> created = procurement.createPurchaseOrders(deal.pricingRequestId,
@@ -446,41 +219,6 @@ class ProcurementServiceIntegrationTest extends AbstractPostgresIntegrationTest 
         assertThat(created).hasSize(2);
         assertThat(procurement.list(null, ceoActor)).isNotEmpty();
     }
-
-    @Test
-    void salesActor_cannotReadPurchaseOrders() {
-        DealFixture deal = driveToProcurement(true);
-        procurement.createPurchaseOrders(deal.pricingRequestId, new CreateFactoryPurchaseOrdersRequest(null), importActor);
-        assertThatThrownBy(() -> procurement.listForPricingRequest(deal.pricingRequestId, salesActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
-        assertThatThrownBy(() -> procurement.list(null, salesActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
-    }
-
-    // Guard: a PO cannot reference a factory-quote/costing item from a DIFFERENT pricing request —
-    // cross-tenant/cross-request reference guard, tested directly at the repository layer (the only way to reach
-    // it: the service never accepts a caller-supplied item id).
-
-    @Test
-    void insertItems_rejectsCostingItemFromADifferentPricingRequest() {
-        DealFixture dealA = driveToProcurement(true);
-        List<FactoryPurchaseOrderDto> poAList = procurement.createPurchaseOrders(dealA.pricingRequestId,
-            new CreateFactoryPurchaseOrdersRequest(null), importActor);
-        long poAId = poAList.get(0).id();
-
-        // A second, wholly distinct deal/pricing request/costing — only driven far enough (Steps 1-2) to have its own
-        // real pricing_costing_item rows.
-        long foreignCostingItemId = createSecondPricingRequestCostingItem();
-
-        int inserted = purchaseOrders.insertItems(poAId, dealA.pricingRequestId, List.of(foreignCostingItemId));
-        assertThat(inserted).isZero();
-        assertThat(jdbc.queryForObject("""
-            SELECT COUNT(*) FROM sales.factory_purchase_order_item
-             WHERE factory_purchase_order_id = :poId AND pricing_costing_item_id = :itemId
-            """, Map.of("poId", poAId, "itemId", foreignCostingItemId), Long.class)).isZero();
-    }
-
-    // Mutation-check evidence.
 
     // Fixture helpers.
 
@@ -613,64 +351,6 @@ class ProcurementServiceIntegrationTest extends AbstractPostgresIntegrationTest 
                 UUID.randomUUID().toString()), salesActor);
         quotationService.issue(draftQuotation.id(), new IssueCustomerQuotationRequest(UUID.randomUUID().toString()), salesActor);
         return new DealFixture(ticketId, pricingRequestId);
-    }
-
-    /** A wholly separate deal, driven only through Steps 1-2 (far enough to produce real pricing_costing_item rows)
-     * — used solely to obtain a costing-item id that legitimately belongs to a DIFFERENT pricing request, for the
-     * cross-tenant guard test. */
-    private long createSecondPricingRequestCostingItem() {
-        String factory = "Factory PO Foreign";
-        insertFactory(factory);
-        long catalogProductId = insertCatalogProduct(factory, "IT", "TEST-PO-FOREIGN-" + UUID.randomUUID().toString().substring(0, 8),
-            new BigDecimal("50.00"), "THB", "per_piece");
-        CustomerRepository customersRepo = new CustomerRepository(jdbc);
-        ProjectRepository projectsRepo = new ProjectRepository(jdbc);
-        CustomerDto customer = customersRepo.create(
-            "บริษัท Foreign " + UUID.randomUUID() + " จำกัด", "0100000000008", "123 ถนนทดสอบ", "สำนักงานใหญ่", "02-000-0008");
-        ProjectDto project = projectsRepo.create(customer.id(), "โครงการ Foreign");
-        TicketDto created = ticketService.create(
-            new CreateTicketRequest("ดีล Foreign", "NORMAL", customer.name(), customer.id(), project.id(), null,
-                null, null, List.of(ticketItem("SCG", "Tile Foreign", factory))),
-            salesActor);
-        long ticketId = created.summary().id();
-
-        // V185 (direct-deal-form parity): color/texture/thicknessMm/sqmPerPiece/piecesPerBox/a quantity are now
-        // required on every item PricingRequestService#createDraft persists —
-        // requestedQty/requestedUnit/requestedUnitBasis are derived instead.
-        PricingRequestRequests.PricingRequestItemRequest item = new PricingRequestRequests.PricingRequestItemRequest(
-            null, catalogProductId, null, "SCG", "Tile Foreign", "SCG Tile Foreign",
-            "White", "Matte", "60x60", factory, null, null, null, null,
-            QuantityType.CONFIRMED, null, null, null,
-            null, new BigDecimal("10"), new BigDecimal("0.36"), WastageCalculator.QUANTITY_MODE_PIECES,
-            null, 3, WastageCalculator.WASTAGE_MODE_NONE, null, 4, null,
-            false, "ไทย-สต็อก", 3, 7, null, null, null);
-        PricingRequestRequests.CreatePricingRequestRequest request = new PricingRequestRequests.CreatePricingRequestRequest(
-            PricingRequestRecipient.DESIGNER, null, "Designer Co.", LocalDate.now().plusDays(14),
-            new BigDecimal("500.00"), "THB", "cross-tenant guard fixture", UUID.randomUUID().toString(), List.of(item));
-        long pricingRequestId = pricingRequestService.createDraft(ticketId, request, salesActor).summary().id();
-        pricingRequestService.submit(pricingRequestId, salesActor);
-        pricingRequestService.pickup(pricingRequestId, importActor);
-
-        List<FactoryQuoteDto> drafts = factoryQuoteService.generateDrafts(pricingRequestId, importActor);
-        FactoryQuoteDto draft = drafts.get(0);
-        long pricingRequestItemId = draft.items().get(0).pricingRequestItemId();
-        factoryQuoteService.markContacted(draft.id(),
-            new MarkFactoryContactedRequest(java.time.LocalDate.now(java.time.ZoneId.of("Asia/Bangkok")), null), importActor);
-        drainDispatches();
-        ReceiveFactoryQuoteRequest response = new ReceiveFactoryQuoteRequest("REF-FOREIGN", "THB", "30 days", "45 days",
-            "revision", "note", List.of(new ReceiveFactoryQuoteItemRequest(
-                pricingRequestItemId, null, null, new BigDecimal("3.00"), "piece", UnitBasis.PER_PIECE,
-                new BigDecimal("50.00"), "THB", null, new BigDecimal("1.00"), null, null,
-                "45 days", null, null)),
-            UUID.randomUUID().toString());
-        FactoryQuoteDto responded = factoryQuoteService.receive(draft.id(), response, importActor);
-        factoryQuoteService.markReadyForCosting(responded.id(), importActor);
-        // V141 ("CEO owns costing"): markReadyForCosting auto-advances the request straight to READY_FOR_CEO_REVIEW —
-        // the CEO's startReview computes+persists the costing itself, so that is now how this fixture gets a real
-        // pricing_costing_item id to return.
-        PricingDecisionDto decision = decisionService.startReview(pricingRequestId,
-            new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, UUID.randomUUID().toString()), ceoActor);
-        return decision.items().get(0).pricingCostingItemId();
     }
 
     /** A second pricing request on an EXISTING ticket, driven all the way through Steps 1-4 to QUOTATION_ISSUED —

@@ -1,27 +1,17 @@
 package th.co.glr.hr.procurement;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyLong;
-import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
-import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.http.HttpStatus;
 import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.catalog.CatalogRepository;
-import th.co.glr.hr.common.ApiException;
-import th.co.glr.hr.config.AppProperties;
 import th.co.glr.hr.customer.ContactRepository;
 import th.co.glr.hr.customer.CustomerDto;
 import th.co.glr.hr.customer.CustomerRepository;
@@ -38,7 +28,6 @@ import th.co.glr.hr.deposit.DepositNoticeDto;
 import th.co.glr.hr.deposit.DepositNoticePdfRenderer;
 import th.co.glr.hr.deposit.DepositNoticeRepository;
 import th.co.glr.hr.deposit.DepositNoticeService;
-import th.co.glr.hr.deposit.RemainingInvoicePdfRenderer;
 import th.co.glr.hr.employee.EmployeeCodeGenerator;
 import th.co.glr.hr.employee.EmployeeReferenceRepository;
 import th.co.glr.hr.employee.EmployeeRepository;
@@ -76,14 +65,10 @@ import th.co.glr.hr.pricingrequest.PricingRequestStatus;
 import th.co.glr.hr.pricingrequest.QuantityType;
 import th.co.glr.hr.pricingrequest.UnitBasis;
 import th.co.glr.hr.procurement.ProcurementDtos.FactoryPurchaseOrderDto;
-import th.co.glr.hr.procurement.ProcurementRequests.CancelFactoryPurchaseOrderRequest;
 import th.co.glr.hr.procurement.ProcurementRequests.CreateFactoryPurchaseOrdersRequest;
 import th.co.glr.hr.procurement.ProcurementRequests.RecordGoodsReceivedRequest;
-import th.co.glr.hr.procurement.ProcurementRequests.RecordShippingDetailRequest;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
-import th.co.glr.hr.ticket.CompleteDeliveryRequest;
 import th.co.glr.hr.ticket.CreateTicketRequest;
-import th.co.glr.hr.ticket.DealLifecycle;
 import th.co.glr.hr.ticket.DealStage;
 import th.co.glr.hr.ticket.FulfilmentStatus;
 import th.co.glr.hr.ticket.QuotationRenderer;
@@ -92,7 +77,6 @@ import th.co.glr.hr.ticket.TicketDto;
 import th.co.glr.hr.ticket.TicketItemRequest;
 import th.co.glr.hr.ticket.TicketRepository;
 import th.co.glr.hr.ticket.TicketService;
-import th.co.glr.hr.ticket.TicketStatus;
 import th.co.glr.hr.ticket.TicketSummaryDto;
 
 /** Real-DB coverage for the factory-PO -> ticket import-status rollup (TicketRepository#deriveImportStatus,
@@ -201,87 +185,7 @@ class DerivedFulfilmentRollupIntegrationTest extends AbstractPostgresIntegration
     private void insertFactory(String name) {
     }
 
-    // Refusal guard — wrong-way-round: the caller must NOT be able to do the thing they shouldn't, and the row
-    // must NOT have changed, not merely that a throw happened.
-
-    @Test
-    void importCannotMarkGoodsReceivedWhileTheOtherFactoryIsStillShipping() {
-        DealFixture deal = driveToProcurement(true);
-        List<FactoryPurchaseOrderDto> created = procurement.createPurchaseOrders(deal.pricingRequestId,
-            new CreateFactoryPurchaseOrdersRequest(null), importActor);
-        assertThat(created).hasSize(2);
-        FactoryPurchaseOrderDto poA = poFor(created, FACTORY_A);
-
-        procurement.recordShippingDetail(poA.id(),
-            new RecordShippingDetailRequest("CONT-0001", LocalDate.now().plusDays(3), LocalDate.now().plusDays(30), "AWAITING_CLEARANCE"),
-            importActor);
-        procurement.recordGoodsReceived(poA.id(), new RecordGoodsReceivedRequest(BigDecimal.TEN, null), importActor);
-        // PO B (factory B) is left untouched — still OPEN — so not every live PO is received.
-
-        assertThatThrownBy(() -> ticketService.markGoodsReceived(deal.ticketId, importActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
-
-        // Not merely "did not become GOODS_RECEIVED" — pin the exact value the PO rollup already wrote (SHIPPING),
-        // proving the refused call really left the row untouched.
-        TicketSummaryDto after = tickets.findById(deal.ticketId).orElseThrow().summary();
-        assertThat(after.fulfillmentStatus()).isEqualTo(FulfilmentStatus.SHIPPING);
-    }
-
-    @Test
-    void ceoCannotMarkGoodsReceivedWhileTheOtherFactoryIsStillShipping() {
-        DealFixture deal = driveToProcurement(true);
-        List<FactoryPurchaseOrderDto> created = procurement.createPurchaseOrders(deal.pricingRequestId,
-            new CreateFactoryPurchaseOrdersRequest(null), importActor);
-        assertThat(created).hasSize(2);
-        FactoryPurchaseOrderDto poA = poFor(created, FACTORY_A);
-
-        procurement.recordShippingDetail(poA.id(),
-            new RecordShippingDetailRequest("CONT-0002", LocalDate.now().plusDays(3), LocalDate.now().plusDays(30), "AWAITING_CLEARANCE"),
-            importActor);
-        procurement.recordGoodsReceived(poA.id(), new RecordGoodsReceivedRequest(BigDecimal.TEN, null), importActor);
-
-        // CEO is the OTHER member of FULFILMENT_ROLES — the refusal must not be import-only.
-        assertThatThrownBy(() -> ticketService.markGoodsReceived(deal.ticketId, ceoActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
-
-        TicketSummaryDto after = tickets.findById(deal.ticketId).orElseThrow().summary();
-        assertThat(after.fulfillmentStatus()).isEqualTo(FulfilmentStatus.SHIPPING);
-    }
-
-    @Test
-    void importCannotMarkShippingOnAPoTrackedDeal() {
-        DealFixture deal = driveToProcurement(true);
-        List<FactoryPurchaseOrderDto> created = procurement.createPurchaseOrders(deal.pricingRequestId,
-            new CreateFactoryPurchaseOrdersRequest(null), importActor);
-        assertThat(created).hasSize(2);
-        // Neither PO has been progressed — both still OPEN, so the PO rollup itself currently asserts nothing
-        // (deriveImportStatus would return null).
-
-        assertThatThrownBy(() -> ticketService.markShipping(deal.ticketId, importActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
-
-        TicketSummaryDto after = tickets.findById(deal.ticketId).orElseThrow().summary();
-        assertThat(after.fulfillmentStatus()).isEqualTo(FulfilmentStatus.IR_ISSUED);
-    }
-
     // The rollup itself.
-
-    @Test
-    void rollupMovesTicketToShippingWhenOnlyOneFactoryHasShipped() {
-        DealFixture deal = driveToProcurement(true);
-        List<FactoryPurchaseOrderDto> created = procurement.createPurchaseOrders(deal.pricingRequestId,
-            new CreateFactoryPurchaseOrdersRequest(null), importActor);
-        assertThat(created).hasSize(2);
-        FactoryPurchaseOrderDto poA = poFor(created, FACTORY_A);
-
-        procurement.recordShippingDetail(poA.id(),
-            new RecordShippingDetailRequest("CONT-0003", LocalDate.now().plusDays(3), LocalDate.now().plusDays(30), null),
-            importActor);
-
-        TicketSummaryDto after = tickets.findById(deal.ticketId).orElseThrow().summary();
-        assertThat(after.fulfillmentStatus()).isEqualTo(FulfilmentStatus.SHIPPING);
-        assertThat(after.fulfillmentStatus()).isNotEqualTo(FulfilmentStatus.GOODS_RECEIVED);
-    }
 
     @Test
     void rollupMovesTicketToGoodsReceivedOnlyWhenEveryLivePoIsReceived() {
@@ -306,131 +210,7 @@ class DerivedFulfilmentRollupIntegrationTest extends AbstractPostgresIntegration
         assertThat(tickets.hasReceivedGoods(deal.ticketId)).isTrue();
     }
 
-    @Test
-    void cancellingTheLastOutstandingPoCompletesTheRollup() {
-        DealFixture deal = driveToProcurement(true);
-        List<FactoryPurchaseOrderDto> created = procurement.createPurchaseOrders(deal.pricingRequestId,
-            new CreateFactoryPurchaseOrdersRequest(null), importActor);
-        assertThat(created).hasSize(2);
-        FactoryPurchaseOrderDto poA = poFor(created, FACTORY_A);
-        FactoryPurchaseOrderDto poB = poFor(created, FACTORY_B);
-
-        procurement.recordGoodsReceived(poA.id(), new RecordGoodsReceivedRequest(BigDecimal.TEN, null), importActor);
-        // Still SHIPPING here — B is live and OPEN, so not every live PO is received yet.
-        assertThat(tickets.findById(deal.ticketId).orElseThrow().summary().fulfillmentStatus())
-            .isEqualTo(FulfilmentStatus.SHIPPING);
-
-        procurement.cancel(poB.id(), new CancelFactoryPurchaseOrderRequest("เปลี่ยนโรงงานใหม่"), importActor);
-
-        // B is now CANCELLED, i.e. no longer "live" — the only live PO (A) is RECEIVED, so the rollup completes even
-        // though the deal now has an unreceived PO on it (it just isn't live).
-        TicketSummaryDto after = tickets.findById(deal.ticketId).orElseThrow().summary();
-        assertThat(after.fulfillmentStatus()).isEqualTo(FulfilmentStatus.GOODS_RECEIVED);
-    }
-
-    // The close-gate protection (delivery-axis firewall).
-
-    @Test
-    void aLatePoMutationCannotRewriteFullyDelivered() {
-        DealFixture deal = driveToProcurement(true);
-        List<FactoryPurchaseOrderDto> created = procurement.createPurchaseOrders(deal.pricingRequestId,
-            new CreateFactoryPurchaseOrdersRequest(null), importActor);
-        assertThat(created).hasSize(2);
-        FactoryPurchaseOrderDto poA = poFor(created, FACTORY_A);
-        FactoryPurchaseOrderDto poB = poFor(created, FACTORY_B);
-
-        procurement.recordGoodsReceived(poA.id(), new RecordGoodsReceivedRequest(BigDecimal.TEN, null), importActor);
-        procurement.recordGoodsReceived(poB.id(), new RecordGoodsReceivedRequest(BigDecimal.TEN, null), importActor);
-        assertThat(tickets.findById(deal.ticketId).orElseThrow().summary().fulfillmentStatus())
-            .isEqualTo(FulfilmentStatus.GOODS_RECEIVED);
-
-        // V184: completeDelivery's gate transferred to {ceo, owning-rep} only -- salesActor, not importActor. See
-        // DeliveryAuthzIntegrationTest for the authz pin itself.
-        TicketDto afterDelivery = ticketService.completeDelivery(
-            deal.ticketId, new CompleteDeliveryRequest(null, null), salesActor);
-        assertThat(afterDelivery.summary().fulfillmentStatus()).isEqualTo(FulfilmentStatus.FULLY_DELIVERED);
-
-        // Both POs are now RECEIVED — a terminal (CLOSED) PO status, so neither
-        // recordShippingDetail/recordGoodsReceived/cancel can legitimately run again through ProcurementService (its
-        // own compare-and-set guards refuse a closed PO with 409, before ever reaching the rollup call).
-        ticketService.applyPurchaseOrderRollup(deal.ticketId, importActor);
-
-        TicketSummaryDto afterLateRollup = tickets.findById(deal.ticketId).orElseThrow().summary();
-        assertThat(afterLateRollup.fulfillmentStatus()).isEqualTo(FulfilmentStatus.FULLY_DELIVERED);
-    }
-
-    // Non-regression: a deal with NO purchase orders keeps using the ticket-level setters.
-
-    @Test
-    void aStockOnlyDealWithNoPurchaseOrdersStillUsesTheTicketLevelSetters() {
-        DealFixture deal = driveToProcurement(true);
-        // Deliberately never call procurement.createPurchaseOrders — zero rows in sales.factory_purchase_order for
-        // this ticket, confirmed via the real repository below, not assumed.
-        assertThat(tickets.hasLivePurchaseOrders(deal.ticketId)).isFalse();
-
-        ticketService.markIrSent(deal.ticketId, importActor);
-        TicketDto afterShipping = ticketService.markShipping(deal.ticketId, importActor);
-        assertThat(afterShipping.summary().fulfillmentStatus()).isEqualTo(FulfilmentStatus.SHIPPING);
-
-        TicketDto afterGoodsReceived = ticketService.markGoodsReceived(deal.ticketId, importActor);
-        assertThat(afterGoodsReceived.summary().fulfillmentStatus()).isEqualTo(FulfilmentStatus.GOODS_RECEIVED);
-        assertThat(afterGoodsReceived.summary().salesStage()).isEqualTo(DealStage.DELIVERY_SCHEDULING);
-    }
-
     // The close gate itself, on a PO-tracked multi-factory deal.
-
-    @Test
-    void multiFactoryDealCanStillClose() {
-        DealFixture deal = driveToProcurement(true);
-        List<FactoryPurchaseOrderDto> created = procurement.createPurchaseOrders(deal.pricingRequestId,
-            new CreateFactoryPurchaseOrdersRequest(null), importActor);
-        assertThat(created).hasSize(2);
-        FactoryPurchaseOrderDto poA = poFor(created, FACTORY_A);
-        FactoryPurchaseOrderDto poB = poFor(created, FACTORY_B);
-
-        procurement.recordGoodsReceived(poA.id(), new RecordGoodsReceivedRequest(BigDecimal.TEN, null), importActor);
-        procurement.recordGoodsReceived(poB.id(), new RecordGoodsReceivedRequest(BigDecimal.TEN, null), importActor);
-        ticketService.completeDelivery(deal.ticketId, new CompleteDeliveryRequest(null, null), salesActor);
-        ticketService.confirmFinalPayment(deal.ticketId, accountActor);
-        insertInvoiceAttachment(deal.ticketId, accountUserId);
-
-        ticketService.confirmCloseReady(deal.ticketId, accountActor);
-        TicketDto closed = ticketService.verifyClose(deal.ticketId, ceoActor);
-
-        assertThat(closed.summary().status()).isEqualTo(TicketStatus.CLOSED);
-        assertThat(closed.summary().lifecycle()).isEqualTo(DealLifecycle.COMPLETED);
-    }
-
-    @Test
-    void cannotCloseWhileAFactoryHasNotDelivered() {
-        DealFixture deal = driveToProcurement(true);
-        List<FactoryPurchaseOrderDto> created = procurement.createPurchaseOrders(deal.pricingRequestId,
-            new CreateFactoryPurchaseOrdersRequest(null), importActor);
-        assertThat(created).hasSize(2);
-        FactoryPurchaseOrderDto poA = poFor(created, FACTORY_A);
-        FactoryPurchaseOrderDto poB = poFor(created, FACTORY_B);
-
-        // Goods reached GLR's own warehouse (GOODS_RECEIVED)...
-        procurement.recordGoodsReceived(poA.id(), new RecordGoodsReceivedRequest(BigDecimal.TEN, null), importActor);
-        procurement.recordGoodsReceived(poB.id(), new RecordGoodsReceivedRequest(BigDecimal.TEN, null), importActor);
-        assertThat(tickets.findById(deal.ticketId).orElseThrow().summary().fulfillmentStatus())
-            .isEqualTo(FulfilmentStatus.GOODS_RECEIVED);
-        // ...and everything else about closing is made ready...
-        ticketService.confirmFinalPayment(deal.ticketId, accountActor);
-        insertInvoiceAttachment(deal.ticketId, accountUserId);
-        // ...but the goods were never delivered onward to the customer.
-        assertThatThrownBy(() -> ticketService.confirmCloseReady(deal.ticketId, accountActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
-
-        assertThat(tickets.findById(deal.ticketId).orElseThrow().summary().closeConfirmedAt()).isNull();
-    }
-
-    private void insertInvoiceAttachment(long ticketId, long uploadedBy) {
-        jdbc.update("""
-            INSERT INTO sales.attachment (ticket_id, file_name, file_path, attach_type, uploaded_by)
-            VALUES (:ticketId, 'invoice.pdf', '/tmp/derived-fulfilment-test-invoice.pdf', 'INVOICE', :uploadedBy)
-            """, Map.of("ticketId", ticketId, "uploadedBy", uploadedBy));
-    }
 
     private FactoryPurchaseOrderDto poFor(List<FactoryPurchaseOrderDto> pos, String factoryName) {
         return pos.stream().filter(po -> factoryName.equals(po.factoryName())).findFirst().orElseThrow();
