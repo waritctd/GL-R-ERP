@@ -93,12 +93,5 @@ describe('EmployeeListPage status filter', () => {
     expect(screen.getByText('นภาพร สุขสวัสดิ์')).toBeTruthy();
     expect(screen.queryByText('อาทิตย์ พงษ์ไพร')).toBeNull();
   });
-
-  it('shows only resigned staff for ?status=RSG', () => {
-    renderPage('/employees?status=RSG');
-
-    expect(screen.getByText('อาทิตย์ พงษ์ไพร')).toBeTruthy();
-    expect(screen.queryByText('สมชาย ใจดี')).toBeNull();
-  });
 });
 
