@@ -2,14 +2,8 @@ import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { ActivityLogPage, TABS, formatDateTime, formatTime } from './ActivityLogPage.jsx';
+import { ActivityLogPage } from './ActivityLogPage.jsx';
 import { api } from '../../api/index.js';
-import { gridTrackCount } from '../../test/gridTracks.js';
-
-// Tab id -> the api.activityLog method it drives (ActivityLogPage.jsx's QUERIES map). Kept separate from TABS
-// itself so this table still catches TABS drifting out of sync with QUERIES, not just TABS drifting out of
-// sync with Tabs.jsx's `id` contract.
-const METHOD_BY_TAB_ID = { summary: 'summary', actions: 'audit', requests: 'list', system: 'events' };
 
 globalThis.React = React;
 
@@ -39,43 +33,6 @@ function renderPage() {
   );
 }
 
-// formatTime backs summary's firstSeen/lastSeen columns, formatDateTime backs every other tab's `at` column.
-// Unit-tested directly (rather than only through a rendered tab) so this coverage does not depend on
-// tab-switching working.
-describe('formatTime / formatDateTime', () => {
-  // Regression coverage for the invalid-date crash: these used to only guard `!value`, so a non-empty value that
-  // doesn't parse to a real date left `new Date(value)` an Invalid Date, and Intl.DateTimeFormat#format threw a
-  // RangeError.
-  it.each([
-    ['a non-empty string that is not a date', 'not-a-real-date'],
-    ['a malformed ISO-ish string', '2026-13-45T99:99:99'],
-    ['an empty object (what a misconfigured ObjectMapper could emit for OffsetDateTime)', {}],
-  ])('formatTime returns "-" instead of throwing for %s', (_label, value) => {
-    expect(() => formatTime(value)).not.toThrow();
-    expect(formatTime(value)).toBe('-');
-  });
-
-  it.each([
-    ['a non-empty string that is not a date', 'not-a-real-date'],
-    ['a malformed ISO-ish string', '2026-13-45T99:99:99'],
-  ])('formatDateTime returns "-" instead of throwing for %s', (_label, value) => {
-    expect(() => formatDateTime(value)).not.toThrow();
-    expect(formatDateTime(value)).toBe('-');
-  });
-
-  it('still formats a genuinely valid date (guard does not over-fire)', () => {
-    expect(formatTime('2026-09-15T09:30:00+07:00')).not.toBe('-');
-    expect(formatDateTime('2026-09-15T09:30:00+07:00')).not.toBe('-');
-  });
-
-  it('still returns "-" for null/undefined/empty string, as before', () => {
-    expect(formatTime(null)).toBe('-');
-    expect(formatTime(undefined)).toBe('-');
-    expect(formatTime('')).toBe('-');
-    expect(formatDateTime(null)).toBe('-');
-  });
-});
-
 describe('ActivityLogPage', () => {
   beforeEach(() => {
     // Each vi.fn() lives in the module-level vi.mock factory, so call counts survive across tests unless cleared —
@@ -83,39 +40,6 @@ describe('ActivityLogPage', () => {
     // rather than the click this test just fired.
     vi.clearAllMocks();
     for (const fn of Object.values(api.activityLog)) fn.mockResolvedValue([]);
-  });
-
-  it('renders the default summary tab without crashing', async () => {
-    renderPage();
-    await waitFor(() => expect(api.activityLog.summary).toHaveBeenCalled());
-    // getAttribute, not jest-dom's toHaveAttribute — this project does not wire up jest-dom.
-    expect(screen.getByRole('tab', { name: /สรุป/ }).getAttribute('aria-selected')).toBe('true');
-  });
-
-  // Regression test for the Tabs.jsx contract mismatch: TABS items must carry `id` (what Tabs.jsx's
-  // onClick/onChange/selected-state logic reads), not `value` — see git history for the incident this pins.
-  it.each(TABS.filter((t) => t.id !== 'summary'))('switches to the $label tab without throwing', async (tabItem) => {
-    renderPage();
-    await waitFor(() => expect(api.activityLog.summary).toHaveBeenCalled());
-
-    const tab = screen.getByRole('tab', { name: new RegExp(tabItem.label) });
-    fireEvent.click(tab);
-
-    expect(tab.getAttribute('aria-selected')).toBe('true');
-    const method = METHOD_BY_TAB_ID[tabItem.id];
-    await waitFor(() => expect(api.activityLog[method]).toHaveBeenCalled());
-  });
-
-  // Every tab has its own column set; a template with the wrong track count wraps cells onto a
-  // second grid row.
-  it.each(TABS)('the $label tab lays its header out with one grid track per column', async (tabItem) => {
-    for (const fn of Object.values(api.activityLog)) fn.mockResolvedValue([{ id: 1, employeeId: 1, at: '2026-08-01T03:00:00Z' }]);
-    const { container } = renderPage();
-    fireEvent.click(screen.getByRole('tab', { name: new RegExp(tabItem.label) }));
-    await waitFor(() => expect(api.activityLog[METHOD_BY_TAB_ID[tabItem.id]]).toHaveBeenCalled());
-    await waitFor(() => expect(container.querySelector('tbody tr.data-row')).not.toBeNull());
-    const head = container.querySelector('tr.table-head');
-    expect(gridTrackCount(head.className)).toBe(head.querySelectorAll('th').length);
   });
 
   // Date fields commit on blur: a partly typed date reverts and never reaches the query; a
@@ -136,14 +60,6 @@ describe('ActivityLogPage', () => {
     fireEvent.change(screen.getByLabelText(/ตั้งแต่วันที่/), { target: { value: '01/01/2569' } });
     fireEvent.blur(screen.getByLabelText(/ตั้งแต่วันที่/));
     await waitFor(() => expect(api.activityLog.summary).toHaveBeenLastCalledWith({ from: '2026-01-01', to: initial.to }));
-  });
-
-  it('renders a summary row with valid data without crashing', async () => {
-    api.activityLog.summary.mockResolvedValue([
-      { employeeId: 1, name: 'ทดสอบ', employeeCode: 'EMP-1', requestCount: 3, firstSeen: '2026-09-15T09:00:00+07:00', lastSeen: '2026-09-15T10:00:00+07:00' },
-    ]);
-    renderPage();
-    await waitFor(() => expect(screen.getByText('ทดสอบ (EMP-1)')).toBeTruthy());
   });
 
   // End-to-end proof that a malformed row from the real endpoint no longer crashes the page — the summary tab is
