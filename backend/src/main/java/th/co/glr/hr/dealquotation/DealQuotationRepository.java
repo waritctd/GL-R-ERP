@@ -613,10 +613,10 @@ public class DealQuotationRepository {
         // 'IN_THAILAND' on a DEAL_DIRECT row the rep marked จากสต็อก; a PRICING_REQUEST row's value comes from its
         // pricing-request item instead (see INSERT_ITEM_SQL), and the client value is ignored there.
         String stockSource,
-        /** V231 — the approved quotation item this line reuses at its approved price (add-on orders only); null otherwise. */
+        /** V232 — the approved quotation item this line reuses at its approved price (add-on orders only); null otherwise. */
         Long sourceQuotationItemId
     ) {
-        /** The pre-V231 canonical shape (with #stockSource, no #sourceQuotationItemId) -- kept so every existing construction site compiles unchanged. */
+        /** The pre-V232 canonical shape (with #stockSource, no #sourceQuotationItemId) -- kept so every existing construction site compiles unchanged. */
         public NewItem(
             String locationLabel, Long catalogPriceId, String productCode, String brand, String model,
             String color, String texture, String sizeText, BigDecimal thicknessMm, BigDecimal sqmPerPiece,
@@ -1009,7 +1009,7 @@ public class DealQuotationRepository {
             // V192.5 — the row's own price mode; null on every row of a single-mode document.
             .addValue("priceMode", item.priceMode())
             .addValue("stockSource", item.stockSource())
-            // V231 — the approved item a reused add-on line copies; null on every ordinary row.
+            // V232 — the approved item a reused add-on line copies; null on every ordinary row.
             .addValue("sourceQuotationItemId", item.sourceQuotationItemId());
     }
 
@@ -1126,7 +1126,7 @@ public class DealQuotationRepository {
             Map.of("id", quotationId), (rs, rowNum) -> rs.getLong("quotation_item_id"));
     }
 
-    // ── V231 add-on orders: approved quotations of a project's chain (root + ADD_ON children) ──────────────────────
+    // ── V232 add-on orders: approved quotations of a project's chain (root + ADD_ON children) ──────────────────────
     private static final String CHAIN_TICKETS = """
         SELECT ct.ticket_id, ct.code, ct.child_kind
           FROM sales.ticket me

@@ -6934,7 +6934,7 @@ function mintDealQuotationReorder(source, user) {
 // ran against the PARENT's current data before either branch is reached -- the revision is a
 // verbatim copy of that data, so it is validated by construction and this never re-checks it,
 // matching the real service.
-// ── V231 add-on reuse: mirrors DealQuotationService#reusesApprovedPricesOnly / #keepValidSources / #reusableApprovedItems ──
+// ── V232 add-on reuse: mirrors DealQuotationService#reusesApprovedPricesOnly / #keepValidSources / #reusableApprovedItems ──
 const MOCK_APPROVED_QUOTATION_STATUSES = ['APPROVED', 'ISSUED', 'SENT', 'ACCEPTED'];
 const MOCK_REUSE_RULE_NOTE = 'อนุมัติตามราคาเดิมที่อนุมัติแล้วในงานนี้';
 
@@ -7734,7 +7734,7 @@ function buildDealQuotationItems(inputs, priceMode, existingItems = null, docume
       priceMode: mixed && dealQuotationLineType(item) === 'TILE' ? rowMode : null,
       // DealQuotationRequests.ItemInput#stockSource: IN_THAILAND on a TILE row only; IN_TRANSIT is a pricing-request value.
       stockSource: dealQuotationLineType(item) === 'TILE' && item.stockSource === 'IN_THAILAND' ? 'IN_THAILAND' : null,
-      // V231: the approved item a reused add-on line copies; emptied by mockKeepValidSources unless it is valid.
+      // V232: the approved item a reused add-on line copies; emptied by mockKeepValidSources unless it is valid.
       sourceQuotationItemId: item.sourceQuotationItemId ?? null,
     };
   });

@@ -817,7 +817,7 @@ public final class DealQuotationDtos {
          * null = สั่งนำเข้า. Accepted from the client on DEAL_DIRECT rows only; on every other row it is
          * stamped from the pricing-request item. */
         String stockSource,
-        /** V231 — the approved quotation item this line reuses at its approved price (add-on orders only); null otherwise. */
+        /** V232 — the approved quotation item this line reuses at its approved price (add-on orders only); null otherwise. */
         Long sourceQuotationItemId
     ) {
         /** The account view -- net unit price and line amount stay; every list-price / discount / CEO pricing field is emptied. */
@@ -839,7 +839,7 @@ public final class DealQuotationDtos {
                 ceoNetUnitPrice, listPriceSqm, directNetPriceSqm, value, stockSource, sourceQuotationItemId);
         }
 
-                /** The pre-V231 canonical shape (with #stockSource, no #sourceQuotationItemId) -- kept so every existing construction site compiles unchanged. */
+                /** The pre-V232 canonical shape (with #stockSource, no #sourceQuotationItemId) -- kept so every existing construction site compiles unchanged. */
         public DealQuotationItemDto(
             long id, int seq, String locationLabel, Long catalogPriceId, String productCode,
             String brand, String model, String color, String texture, String sizeText,

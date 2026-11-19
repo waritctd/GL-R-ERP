@@ -11,7 +11,7 @@ export function QuotationPlainItemRow({
   item, index, readOnly, errors = {}, onChange, onRemove,
   groupId = null, locationGroups = [], onMove, documentLanguage = 'TH', currency = 'THB',
 }) {
-  // V231: a line reusing an approved item keeps its approved price; the server enforces it too.
+  // V232: a line reusing an approved item keeps its approved price; the server enforces it too.
   const priceLocked = item.sourceQuotationItemId != null;
   const moveTargets = locationGroups.filter((group) => group.groupId !== groupId);
   const primaryUnits = PLAIN_UNIT_OPTIONS[documentLanguage] ?? PLAIN_UNIT_OPTIONS.TH;

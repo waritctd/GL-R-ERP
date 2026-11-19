@@ -218,7 +218,7 @@ export function QuotationItemRow({
   mixedPriceModes = false,
   onChangePriceMode = null,
 }) {
-  // V231: a line reusing an approved item keeps its approved price; the server enforces it too.
+  // V232: a line reusing an approved item keeps its approved price; the server enforces it too.
   const priceLocked = priceLockedProp || item.sourceQuotationItemId != null;
   const perSqm = isEnglishPerSqm(priceMode, documentLanguage);
   // On a Thai document every tile price box is per ตร.ม. including VAT. See quotationMeta's

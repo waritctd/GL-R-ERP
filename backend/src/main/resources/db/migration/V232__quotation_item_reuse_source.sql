@@ -1,4 +1,4 @@
--- V231: add-on orders reuse items already approved elsewhere in the project. A reused line records which approved
+-- V232: add-on orders reuse items already approved elsewhere in the project. A reused line records which approved
 -- quotation item it copies (source_quotation_item_id) so the server can check, at submit, that its price still equals
 -- the approved one and approve the add-on quotation without a second approval. SET NULL: a deleted source (a draft
 -- row replaced by a save) just turns the line back into an ordinary one that needs approval.

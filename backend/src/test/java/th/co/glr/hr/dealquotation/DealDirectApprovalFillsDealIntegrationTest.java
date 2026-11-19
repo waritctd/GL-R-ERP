@@ -284,7 +284,7 @@ class DealDirectApprovalFillsDealIntegrationTest extends AbstractDealQuotationSl
         assertThat(parties(ticket).get("designer_name")).isNull();
     }
 
-    // ── add-on reuse (V231): an add-on that reuses approved lines at their approved price needs no second approval ──
+    // ── add-on reuse (V232): an add-on that reuses approved lines at their approved price needs no second approval ──
 
     /** Every line reuses an approved price and the deposit % is the first order's: APPROVED in one submit, and the
      * approvers (sales manager) hear nothing. */

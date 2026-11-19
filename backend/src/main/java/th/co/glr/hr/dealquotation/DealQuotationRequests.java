@@ -196,10 +196,10 @@ public final class DealQuotationRequests {
          * row ignores this: its pricing-request line is the truth. */
         @Pattern(regexp = "IN_THAILAND", message = "stockSource ต้องเป็น IN_THAILAND หรือว่าง")
         String stockSource,
-        /** V231 — the approved quotation item this line reuses at its approved price (add-on orders only); null otherwise. */
+        /** V232 — the approved quotation item this line reuses at its approved price (add-on orders only); null otherwise. */
         Long sourceQuotationItemId
     ) {
-        /** The pre-V231 canonical shape (with #stockSource, no #sourceQuotationItemId) -- kept so every existing construction site compiles unchanged. */
+        /** The pre-V232 canonical shape (with #stockSource, no #sourceQuotationItemId) -- kept so every existing construction site compiles unchanged. */
         public ItemInput(
             String locationLabel, Long catalogPriceId, String productCode, String brand, String model,
             String color, String texture, String sizeText, BigDecimal thicknessMm, BigDecimal sqmPerPiece,
