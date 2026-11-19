@@ -36,7 +36,6 @@ import th.co.glr.hr.pricingdecision.PricingDecisionRepository;
 import th.co.glr.hr.pricingrequest.PricingRequestRepository;
 import th.co.glr.hr.pricingrequest.PricingRequestService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
-import th.co.glr.hr.support.WorkbookTexts;
 import th.co.glr.hr.ticket.CreateTicketRequest;
 import th.co.glr.hr.ticket.QuotationRenderer;
 import th.co.glr.hr.ticket.QuotationStatus;
@@ -220,12 +219,6 @@ abstract class AbstractDealDirectQuotationIntegrationTest extends AbstractPostgr
     protected int quotationCount(long ticketId) {
         return jdbc.queryForObject("SELECT COUNT(*) FROM sales.quotation WHERE ticket_id = :id",
             Map.of("id", ticketId), Integer.class);
-    }
-
-    /** Every text cell of the workbook the SERVICE renders for the stored quotation — the same
-     * render model the PDF is printed from. */
-    protected List<String> sheetTexts(long quotationId) {
-        return WorkbookTexts.of(quotationService.renderXlsx(quotationId, salesActor));
     }
 
     protected static ApiException refusal(org.assertj.core.api.ThrowableAssert.ThrowingCallable call, HttpStatus status) {

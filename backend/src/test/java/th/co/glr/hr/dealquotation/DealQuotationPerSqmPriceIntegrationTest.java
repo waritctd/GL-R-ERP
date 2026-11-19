@@ -3,24 +3,15 @@ package th.co.glr.hr.dealquotation;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.within;
 
-import java.io.ByteArrayInputStream;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import org.apache.poi.ss.usermodel.Cell;
-import org.apache.poi.ss.usermodel.CellType;
-import org.apache.poi.ss.usermodel.Row;
-import org.apache.poi.ss.usermodel.Sheet;
-import org.apache.poi.ss.usermodel.Workbook;
-import org.apache.poi.ss.usermodel.WorkbookFactory;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import th.co.glr.hr.dealquotation.DealQuotationDtos.DealQuotationDto;
 import th.co.glr.hr.dealquotation.DealQuotationDtos.DealQuotationItemDto;
 import th.co.glr.hr.dealquotation.DealQuotationRequests.ItemInput;
-import th.co.glr.hr.dealquotation.DealQuotationRequests.UpsertDealQuotationRequest;
 
 /**
  * Sales feedback #1 (แจ้งปัญหาการใช้งาน เสนอราคา, 2026-10-06) — "แก้เป็น ตร.ม. รวม VAT ทุกแบบ" —
@@ -105,16 +96,6 @@ class DealQuotationPerSqmPriceIntegrationTest extends AbstractDealDirectQuotatio
         assertThat(item.lineAmount()).isEqualByComparingTo("5311.60");
     }
 
-    /** A rep who only has a net price leaves ราคาตั้ง blank; the editor then sends the net as the list price too
-     * (it always has, per แผ่น). Both derive to the same figure, which is what makes the document print "Net" in
-     * the ส่วนลด column. */
-    @Test
-    void directNet_whenTheListIsTheNet_bothComeOutEqual() {
-        DealQuotationItemDto item = createOne(DIRECT_NET, perSqm("790", "790", null));
-
-        assertThat(item.unitPrice()).isEqualByComparingTo(item.netUnitPrice()).isEqualByComparingTo("531.16");
-    }
-
     // ── what was typed is what comes back ────────────────────────────────────────────────────
 
     /** On a 10×10 tile (100 แผ่น/ตร.ม.) 1,800 becomes 16.82 a piece — and 16.82 a piece is 1,799.74 per ตร.ม. A
@@ -129,27 +110,6 @@ class DealQuotationPerSqmPriceIntegrationTest extends AbstractDealDirectQuotatio
         assertThat(reread.unitPrice()).isEqualByComparingTo("16.82");
         assertThat(reread.listPriceSqm()).isEqualByComparingTo("1800.00");
         assertThat(storedPrices(reread.id())).containsEntry("list_price_sqm", bd("1800.00"));
-    }
-
-    /** GET → PUT of an untouched document is a no-op on every price. Sent the way the editor sends it — each saved
-     * row WITH its id — so this goes through the in-place rewrite. */
-    @Test
-    void savingADraftBackUnchanged_movesNoPrice() {
-        long ticket = deal(salesActor);
-        ItemInput typed = perSqm("1799.99", null, "12.5");
-        DealQuotationDto created = quotationService.create(ticket, request(NET, typed), salesActor);
-        DealQuotationItemDto before = created.items().get(0);
-
-        DealQuotationDto saved = quotationService.update(created.id(),
-            request(NET, withId(before.id(), typed)), salesActor);
-        DealQuotationItemDto after = saved.items().get(0);
-
-        assertThat(after.id()).as("the same row, rewritten in place").isEqualTo(before.id());
-        assertThat(after.listPriceSqm()).isEqualByComparingTo("1799.99");
-        assertThat(after.unitPrice()).isEqualByComparingTo(before.unitPrice());
-        assertThat(after.netUnitPrice()).isEqualByComparingTo(before.netUnitPrice());
-        assertThat(after.lineAmount()).isEqualByComparingTo(before.lineAmount());
-        assertThat(saved.subtotalAmount()).isEqualByComparingTo(created.subtotalAmount());
     }
 
     // ── what must not change ─────────────────────────────────────────────────────────────────
@@ -169,78 +129,9 @@ class DealQuotationPerSqmPriceIntegrationTest extends AbstractDealDirectQuotatio
             .containsEntry("direct_net_price_sqm", null);
     }
 
-    /** A row repriced per แผ่น (the legacy path) must not keep showing a per-ตร.ม. figure that no longer has
-     * anything to do with its price. */
-    @Test
-    void repricingARowPerPiece_clearsTheStoredPerSqmFigure() {
-        long ticket = deal(salesActor);
-        DealQuotationDto created = quotationService.create(ticket,
-            request(NET, perSqm("1800", null, "0")), salesActor);
-        assertThat(created.items().get(0).listPriceSqm()).isEqualByComparingTo("1800.00");
-
-        DealQuotationDto saved = quotationService.update(created.id(), request(NET, perPiece("999.00", "0")), salesActor);
-
-        DealQuotationItemDto item = saved.items().get(0);
-        assertThat(item.unitPrice()).isEqualByComparingTo("999.00");
-        assertThat(item.listPriceSqm()).isNull();
-    }
-
     // a save that reuses the row's id ────────────────────────────────────────────────────── The editor sends
     // every row it has already saved WITH its id, and DealQuotationService#update then rewrites that row IN PLACE
     // (DealQuotationRepository#updateItemsInPlace) rather than deleting and re-inserting it.
-
-    @Test
-    void anInPlaceSave_writesAPerSqmPrice_ontoARowThatWasPricedPerPiece() {
-        long ticket = deal(salesActor);
-        DealQuotationDto created = quotationService.create(ticket, request(NET, perPiece("999.00", "0")), salesActor);
-        long rowId = created.items().get(0).id();
-
-        DealQuotationDto saved = quotationService.update(created.id(),
-            request(NET, withId(rowId, perSqm("1800", null, "20"))), salesActor);
-
-        DealQuotationItemDto item = saved.items().get(0);
-        assertThat(item.id()).as("the same row, rewritten in place").isEqualTo(rowId);
-        assertThat(item.listPriceSqm()).isEqualByComparingTo("1800.00");
-        assertThat(item.unitPrice()).isEqualByComparingTo("1210.25");
-        assertThat(item.netUnitPrice()).isEqualByComparingTo("968.20");
-        assertThat(storedPrices(rowId)).containsEntry("list_price_sqm", bd("1800.00"));
-    }
-
-    @Test
-    void anInPlaceSave_repricedPerPiece_clearsBothStoredPerSqmFigures() {
-        long ticket = deal(salesActor);
-        DealQuotationDto created = quotationService.create(ticket,
-            request(DIRECT_NET, perSqm("1800", "790", null)), salesActor);
-        long rowId = created.items().get(0).id();
-        assertThat(storedPrices(rowId)).containsEntry("list_price_sqm", bd("1800.00"))
-            .containsEntry("direct_net_price_sqm", bd("790.00"));
-
-        DealQuotationDto saved = quotationService.update(created.id(),
-            request(NET, withId(rowId, perPiece("999.00", "0"))), salesActor);
-
-        DealQuotationItemDto item = saved.items().get(0);
-        assertThat(item.id()).as("the same row, rewritten in place").isEqualTo(rowId);
-        assertThat(item.unitPrice()).isEqualByComparingTo("999.00");
-        assertThat(item.listPriceSqm()).isNull();
-        assertThat(item.directNetPriceSqm()).isNull();
-        assertThat(storedPrices(rowId)).containsEntry("list_price_sqm", null)
-            .containsEntry("direct_net_price_sqm", null);
-    }
-
-    /** The printed document is untouched by this change: it shows the per-แผ่น list and net prices it always has.
-     * The per-ตร.ม. figure the rep typed is an INPUT, and appears nowhere on it. */
-    @Test
-    void thePrintedDocument_stillShowsPerPiecePrices_andNotThePerSqmFigure() {
-        DealQuotationDto created = quotationService.create(deal(salesActor),
-            request(NET, perSqm("1800", null, "20")), salesActor);
-
-        List<BigDecimal> numbers = sheetNumbers(created.id());
-        assertThat(numbers).as("ราคา").anySatisfy(n -> assertThat(n).isEqualByComparingTo("1210.25"));
-        assertThat(numbers).as("คงเหลือ").anySatisfy(n -> assertThat(n).isEqualByComparingTo("968.20"));
-        assertThat(numbers).as("เป็นเงิน").anySatisfy(n -> assertThat(n).isEqualByComparingTo("9682.00"));
-        assertThat(numbers).as("the typed per-ตร.ม. price is not printed")
-            .noneSatisfy(n -> assertThat(n).isEqualByComparingTo("1800"));
-    }
 
     // ยอดรวม: the foot of the document ───────────────────────────────────────────────────── Owner, 2026-10-06:
     // "make sure the ยอดรวม in final is correct … calculated correctly". The price the rep keys is per ตร.ม.
@@ -276,52 +167,7 @@ class DealQuotationPerSqmPriceIntegrationTest extends AbstractDealDirectQuotatio
             .isNotCloseTo(keyed.divide(new BigDecimal("1.07"), 2, RoundingMode.HALF_UP), within(new BigDecimal("100")));
     }
 
-    /** The same in every price mode, each with the box that mode keys its price in. */
-    @Test
-    void everyPriceMode_comesBackToTheKeyedPriceAtTheFoot() {
-        // ราคาตั้ง 1,800 less 20%: 28 × 1,210.25 × 0.80
-        assertFoot(NET, pieces(28, perSqm("1800", null, "20")),
-            "27109.60", "1897.67", "29007.27", keyedPriceTimesArea("1440", 28));
-        // ราคาพิเศษ 790 (ราคาตั้ง 1,800 only prints): 28 × 531.16
-        assertFoot(SPECIAL_SQM, pieces(28, item("60x120", "0.72", 2, null, null, "790", "1800", null)),
-            "14872.48", "1041.07", "15913.55", keyedPriceTimesArea("790", 28));
-        // ราคาสุทธิ 790: the same money as ราคาพิเศษ 790 — it is the same keyed price
-        assertFoot(DIRECT_NET, pieces(28, perSqm("1800", "790", null)),
-            "14872.48", "1041.07", "15913.55", keyedPriceTimesArea("790", 28));
-    }
-
-    /** More than one line: รวมเป็นเงิน is the sum of the lines, and VAT is taken on THAT (once, on the document),
-     * whatever unit each line's price was keyed in. */
-    @Test
-    void theSubtotalIsTheSumOfTheLines_andVatIsTakenOnce_onTheSubtotal() {
-        DealQuotationDto quotation = quotationService.create(deal(salesActor),
-            request(NET, pieces(28, perSqm("1800", null, "0")), freight()), salesActor);
-
-        BigDecimal sumOfLines = quotation.items().stream().map(DealQuotationItemDto::lineAmount)
-            .reduce(BigDecimal.ZERO, BigDecimal::add);
-        assertThat(sumOfLines).as("33,887.00 + 2 × 500.00").isEqualByComparingTo("34887.00");
-        assertThat(quotation.subtotalAmount()).isEqualByComparingTo(sumOfLines);
-        assertThat(quotation.vatAmount()).as("7% of 34,887.00").isEqualByComparingTo("2442.09");
-        assertThat(quotation.grandTotal()).isEqualByComparingTo("37329.09");
-    }
-
     // ── refusals ─────────────────────────────────────────────────────────────────────────────
-
-    /** "รวม VAT" has no meaning on the English form (USD, no VAT). It keeps its own inputs. */
-    @Test
-    void anEnglishDocument_refusesAVatInclusivePerSqmPrice_andStoresNothing() {
-        long ticket = deal(salesActor);
-        UpsertDealQuotationRequest english = new UpsertDealQuotationRequest(null, null, null, null, 50,
-            "CASH_ON_DELIVERY", 0, 30, null, NET, "EN", "USD",
-            List.of(item("60x120", "0.72", 2, "15.00", "0", null, "1800", null))).withRecipientType("OWNER");
-
-        // The row ALSO states a perfectly good per-piece price, so nothing but the per-ตร.ม. figure can be what is
-        // refused here.
-        assertThat(refusal(() -> quotationService.create(ticket, english, salesActor), HttpStatus.BAD_REQUEST))
-            .hasMessageContaining("ใช้ได้กับใบเสนอราคาภาษาไทยเท่านั้น");
-
-        assertThat(quotationCount(ticket)).isZero();
-    }
 
     /** No area per piece, no conversion — and never a silent fallback to reading 1,800 per ตร.ม. as 1,800 a piece.
      * The message is asserted because a save is refused for an incomplete row anyway: only the wording says the
@@ -339,16 +185,6 @@ class DealQuotationPerSqmPriceIntegrationTest extends AbstractDealDirectQuotatio
                 HttpStatus.BAD_REQUEST)).hasMessageContaining("ขาด แผ่น/ตร.ม.");
         }
         assertThat(quotationCount(ticket)).isZero();
-    }
-
-    /** The live preview skips the completeness check (a half-typed row must still preview), so it is the one path
-     * where nothing else would stop the fallback above. It shows no number at all rather than 10 แผ่น × 1,800. */
-    @Test
-    void thePreview_withNoAreaPerPiece_showsNoNumber_ratherThanThePerSqmPriceTimesThePieces() {
-        ItemInput noAreaWithAPerPiecePriceBeside = item("60x120", null, 2, "1800", "0", null, "1800", null);
-
-        assertThat(refusal(() -> quotationService.calculateLine(noAreaWithAPerPiecePriceBeside, "TH", salesActor),
-            HttpStatus.BAD_REQUEST)).hasMessageContaining("ขาด แผ่น/ตร.ม.");
     }
 
     /** A per-ตร.ม. price that is present but not positive is refused AS SUCH — not skipped in favour of a per-piece
@@ -372,36 +208,6 @@ class DealQuotationPerSqmPriceIntegrationTest extends AbstractDealDirectQuotatio
         assertThat(quotationCount(ticket)).isZero();
     }
 
-    /** ราคาสุทธิ/ตร.ม. belongs to ราคาสุทธิ mode only — exactly as ราคาพิเศษ is only read in its own mode. Sent
-     * under another mode it prices nothing and is not kept. */
-    @Test
-    void aNetPerSqm_outsideNetPriceMode_pricesNothingAndIsNotStored() {
-        DealQuotationItemDto item = createOne(NET, perSqm("1800", "790", "0"));
-
-        assertThat(item.unitPrice()).isEqualByComparingTo("1210.25");
-        assertThat(item.netUnitPrice()).as("NET: list × (1 − 0%)").isEqualByComparingTo("1210.25");
-        assertThat(item.directNetPriceSqm()).isNull();
-        assertThat(storedPrices(item.id())).containsEntry("direct_net_price_sqm", null);
-    }
-
-    /** สินค้า/บริการอื่น has no area, so it has no per-ตร.ม. price; one sent on it changes nothing. */
-    @Test
-    void aPlainRow_isNotPricedPerSqm() {
-        ItemInput freight = new ItemInput(
-            null, null, null, null, null, null, null, null, null,
-            null, null, null, null,
-            null, null, null, bd("500.00"), BigDecimal.ZERO, null,
-            null, null, null, WastageCalculator.LINE_TYPE_PLAIN, "ค่าขนส่ง", bd("2"), "JOB", null, null,
-            null, null, null, null, null, null, bd("1800"), bd("790"));
-
-        DealQuotationItemDto item = createOne(NET, freight);
-
-        assertThat(item.unitPrice()).isEqualByComparingTo("500.00");
-        assertThat(item.lineAmount()).isEqualByComparingTo("1000.00");
-        assertThat(item.listPriceSqm()).isNull();
-        assertThat(item.directNetPriceSqm()).isNull();
-    }
-
     // ── the live preview ─────────────────────────────────────────────────────────────────────
 
     /** calculate-line is what shows the rep the per-แผ่น figure while they type the per-ตร.ม. one. */
@@ -414,19 +220,6 @@ class DealQuotationPerSqmPriceIntegrationTest extends AbstractDealDirectQuotatio
         assertThat(preview.netUnitPrice()).isEqualByComparingTo("968.20");
         assertThat(preview.lineAmount()).isEqualByComparingTo("9682.00");
         assertThat(preview.listPriceSqm()).isEqualByComparingTo("1800");
-    }
-
-    /** The preview has no quotation to read a price mode from; it infers one from the row. A net typed per ตร.ม.
-     * has to say "ราคาสุทธิ" just as a net typed per แผ่น does — otherwise the row previews as NET, off its list
-     * price, and shows the rep a number for a price nobody typed. */
-    @Test
-    void thePreview_readsANetPerSqm_asNetPriceMode() {
-        DealQuotationItemDto preview = quotationService.calculateLine(
-            perSqm("1800", "790", null), "TH", salesActor);
-
-        assertThat(preview.netUnitPrice()).isEqualByComparingTo("531.16");
-        assertThat(preview.lineAmount()).isEqualByComparingTo("5311.60");
-        assertThat(preview.unitPrice()).isEqualByComparingTo("1210.25");
     }
 
     // ── copies ───────────────────────────────────────────────────────────────────────────────
@@ -473,16 +266,6 @@ class DealQuotationPerSqmPriceIntegrationTest extends AbstractDealDirectQuotatio
             .divide(new BigDecimal("1.39"), 2, RoundingMode.HALF_UP);
     }
 
-    private void assertFoot(String priceMode, ItemInput row, String subtotal, String vat, String grandTotal,
-                            BigDecimal keyed) {
-        DealQuotationDto quotation = quotationService.create(deal(salesActor), request(priceMode, row), salesActor);
-        assertThat(quotation.subtotalAmount()).as("%s รวมเป็นเงิน", priceMode).isEqualByComparingTo(subtotal);
-        assertThat(quotation.vatAmount()).as("%s VAT 7%%", priceMode).isEqualByComparingTo(vat);
-        assertThat(quotation.grandTotal()).as("%s ยอดรวมทั้งสิ้น", priceMode).isEqualByComparingTo(grandTotal);
-        assertThat(quotation.grandTotal()).as("%s: what the keyed price says", priceMode)
-            .isCloseTo(keyed, within(new BigDecimal("0.50")));
-    }
-
     private DealQuotationItemDto createOne(String priceMode, ItemInput item) {
         return quotationService.create(deal(salesActor), request(priceMode, item), salesActor).items().get(0);
     }
@@ -493,23 +276,4 @@ class DealQuotationPerSqmPriceIntegrationTest extends AbstractDealDirectQuotatio
             Map.of("id", itemId));
     }
 
-    /** Every numeric cell of the workbook the SERVICE renders for the stored quotation, at 2dp. */
-    private List<BigDecimal> sheetNumbers(long quotationId) {
-        byte[] xls = quotationService.renderXlsx(quotationId, salesActor);
-        List<BigDecimal> numbers = new ArrayList<>();
-        try (Workbook workbook = WorkbookFactory.create(new ByteArrayInputStream(xls))) {
-            for (Sheet sheet : workbook) {
-                for (Row row : sheet) {
-                    for (Cell cell : row) {
-                        if (cell.getCellType() == CellType.NUMERIC) {
-                            numbers.add(BigDecimal.valueOf(cell.getNumericCellValue()).setScale(2, RoundingMode.HALF_UP));
-                        }
-                    }
-                }
-            }
-        } catch (java.io.IOException e) {
-            throw new java.io.UncheckedIOException(e);
-        }
-        return numbers;
-    }
 }

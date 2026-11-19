@@ -511,7 +511,7 @@ class DealQuotationApproverSnapshotIntegrationTest extends AbstractPostgresInteg
     }
 
     private static byte[] signatureA() {
-        return HtmlXlsFidelityTest.signaturePng();
+        return LegacyDirectQuotationFixtures.signaturePng();
     }
 
     /** A second synthetic signature — a zig-zag, visibly different from A's sine squiggle. */

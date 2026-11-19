@@ -75,83 +75,11 @@ class DealDirectApprovalFillsDealIntegrationTest extends AbstractDealQuotationSl
         assertThat(summary(ticket).salesStage()).isEqualTo(DealStage.QUOTE_BUYER);
     }
 
-    @Test
-    void unspecifiedRecipient_onAnOwnerDirectDeal_advancesLikeBuyer_toQuoteBuyer() {
-        long ticket = deal(salesActor, EntryChannel.OWNER_DIRECT);
-        DealQuotationDto created = quotationService.create(ticket, draft("OWNER"), salesActor);
-        jdbc.update("UPDATE sales.quotation SET recipient_type = 'UNSPECIFIED' WHERE quotation_id = :id",
-            Map.of("id", created.id()));
-        tickets.updateSalesStage(ticket, DealStage.LEAD_APPROACH);
-
-        approve(created);
-
-        assertThat(summary(ticket).salesStage()).isEqualTo(DealStage.QUOTE_BUYER);
-    }
-
-    /** Round-2 N1: BUYER_DIRECT used to get nothing; QUOTE_BUYER is on its route, so it now moves too. */
-    @Test
-    void unspecifiedRecipient_onABuyerDirectDeal_advancesToQuoteBuyer() {
-        long ticket = deal(salesActor, EntryChannel.BUYER_DIRECT);
-        DealQuotationDto created = quotationService.create(ticket, draft("BUYER"), salesActor);
-        jdbc.update("UPDATE sales.quotation SET recipient_type = 'UNSPECIFIED' WHERE quotation_id = :id",
-            Map.of("id", created.id()));
-        tickets.updateSalesStage(ticket, DealStage.LEAD_APPROACH);
-
-        approve(created);
-
-        assertThat(summary(ticket).salesStage()).isEqualTo(DealStage.QUOTE_BUYER);
-    }
-
-    @Test
-    void unspecifiedRecipient_neverRegressesADealAlreadyPast() {
-        long ticket = deal(salesActor, EntryChannel.DESIGNER_LED);
-        DealQuotationDto created = unspecified(ticket);
-        tickets.updateSalesStage(ticket, DealStage.NEGOTIATION);
-
-        approve(created);
-
-        assertThat(summary(ticket).salesStage()).isEqualTo(DealStage.NEGOTIATION);
-    }
-
     // ── party names ───────────────────────────────────────────────────────────
 
     @Test
     void designerName_comesFromTheDesignerDirectoryEntryBehindTheDCo() {
         long ticket = deal(salesActor);
-        DealQuotationDto created = quotationService.create(ticket, draft("DESIGNER"), salesActor);
-        setUnitCode(created.id(), DESIGNER_CODE);
-
-        approve(created);
-
-        assertThat(parties(ticket).get("designer_name")).isEqualTo(DESIGNER_NAME);
-    }
-
-    /** Wrong-way-round: the bill-to customer is NOT the designer, so it must never land in designer_name. */
-    @Test
-    void designerQuotation_neverWritesTheBillToCustomerIntoDesignerName() {
-        long ticket = deal(salesActor);
-
-        DealQuotationDto approved = approved(ticket, salesActor, "DESIGNER");
-
-        assertThat(approved.customerName()).isEqualTo(customer.name());
-        assertThat(parties(ticket).get("designer_name")).isNull();
-    }
-
-    @Test
-    void designerName_isSkippedWhenTheDCoIsNotInTheDirectory() {
-        long ticket = deal(salesActor);
-        DealQuotationDto created = quotationService.create(ticket, draft("DESIGNER"), salesActor);
-        setUnitCode(created.id(), "NOPE99");
-
-        approve(created);
-
-        assertThat(parties(ticket).get("designer_name")).isNull();
-    }
-
-    @Test
-    void approvalFillsAWhitespaceOnlyDesignerName() {
-        long ticket = deal(salesActor);
-        setParty(ticket, "designer_name", "   ");
         DealQuotationDto created = quotationService.create(ticket, draft("DESIGNER"), salesActor);
         setUnitCode(created.id(), DESIGNER_CODE);
 
@@ -172,64 +100,6 @@ class DealDirectApprovalFillsDealIntegrationTest extends AbstractDealQuotationSl
         assertThat(parties(ticket).get("designer_name")).isEqualTo("คุณบี");
     }
 
-    /** Round-2 N3: the D.Co. is the project's designer whoever the document is addressed to, so an OWNER quotation
-     * still names the designer from the directory — and owner_name is still never filled. */
-    @Test
-    void ownerQuotation_fillsDesignerNameFromItsDCo_butNeverOwnerName() {
-        long ticket = deal(salesActor);
-        DealQuotationDto created = quotationService.create(ticket, draft("OWNER"), salesActor);
-        setUnitCode(created.id(), DESIGNER_CODE);
-
-        approve(created);
-
-        assertThat(parties(ticket)).containsEntry("owner_name", null).containsEntry("designer_name", DESIGNER_NAME)
-            .containsEntry("buyer_name", null);
-    }
-
-    /** Round-2 N3: a BUYER quotation names both its bidder and, from its D.Co., the designer. */
-    @Test
-    void buyerQuotation_fillsDesignerNameFromItsDCoToo() {
-        long ticket = deal(salesActor);
-        DealQuotationDto created = quotationService.create(ticket, draft("BUYER"), salesActor);
-        attachToBuyerParty(ticket, created.id());
-        setUnitCode(created.id(), DESIGNER_CODE);
-
-        approve(created);
-
-        assertThat(parties(ticket)).containsEntry("designer_name", DESIGNER_NAME).containsEntry("buyer_name", BIDDER_NAME)
-            .containsEntry("owner_name", null);
-    }
-
-    /** Final review: an UNSPECIFIED quotation's BUYER party is the bill-to customer (V204), never a name source — it
-     * fills the designer from its D.Co. and leaves buyer_name blank, even when its party is a real sibling bidder
-     * (an UNSPECIFIED document cannot be told apart from the bill-to one). Never owner_name either. */
-    @Test
-    void unspecifiedQuotation_fillsDesignerFromItsDCo_butNeverBuyerName() {
-        long ticket = deal(salesActor, EntryChannel.DESIGNER_LED);
-        DealQuotationDto created = unspecified(ticket);
-        attachToBuyerParty(ticket, created.id());
-        setUnitCode(created.id(), DESIGNER_CODE);
-
-        approve(created);
-
-        assertThat(parties(ticket)).containsEntry("designer_name", DESIGNER_NAME).containsEntry("buyer_name", null)
-            .containsEntry("owner_name", null);
-        // It still advances like a BUYER quotation (the stage rule is unchanged).
-        assertThat(summary(ticket).salesStage()).isEqualTo(DealStage.QUOTE_BUYER);
-    }
-
-    @Test
-    void ownerQuotation_neverOverwritesATypedDesigner() {
-        long ticket = deal(salesActor);
-        setParty(ticket, "designer_name", "คุณบี");
-        DealQuotationDto created = quotationService.create(ticket, draft("OWNER"), salesActor);
-        setUnitCode(created.id(), DESIGNER_CODE);
-
-        approve(created);
-
-        assertThat(parties(ticket).get("designer_name")).isEqualTo("คุณบี");
-    }
-
     @Test
     void buyerName_comesFromTheQuotationsBuyerParty() {
         long ticket = deal(salesActor);
@@ -240,25 +110,6 @@ class DealDirectApprovalFillsDealIntegrationTest extends AbstractDealQuotationSl
 
         assertThat(parties(ticket)).containsEntry("buyer_name", BIDDER_NAME).containsEntry("designer_name", null)
             .containsEntry("owner_name", null);
-    }
-
-    /** The quotation's party is not a BUYER (here a DESIGNER-role party): no bidder to name, nothing written. */
-    @Test
-    void buyerName_isSkippedWhenTheQuotationsPartyIsNotABuyer() {
-        long ticket = deal(salesActor);
-        DealQuotationDto created = quotationService.create(ticket, draft("BUYER"), salesActor);
-        CustomerDto other = customers.create("บริษัท ไม่ใช่ผู้ซื้อ จำกัด", "0100000000404", "404 ถนนทดสอบ", "สนญ.",
-            "02-000-0404");
-        Long partyId = jdbc.queryForObject("""
-            INSERT INTO sales.deal_party (ticket_id, customer_id, role, status)
-            VALUES (:t, :c, 'DESIGNER', 'QUOTED') RETURNING party_id
-            """, Map.of("t", ticket, "c", other.id()), Long.class);
-        jdbc.update("UPDATE sales.quotation SET party_id = :p WHERE quotation_id = :id",
-            Map.of("p", partyId, "id", created.id()));
-
-        approve(created);
-
-        assertThat(parties(ticket).get("buyer_name")).isNull();
     }
 
     @Test

@@ -203,11 +203,6 @@ public abstract class AbstractDealQuotationSlice2IntegrationTest extends Abstrac
             Map.of("id", ticketId, "kind", kind), Integer.class);
     }
 
-    protected Map<String, Object> recipientColumns(long quotationId) {
-        return jdbc.queryForMap("SELECT recipient_type, recipient_label FROM sales.quotation WHERE quotation_id = :id",
-            Map.of("id", quotationId));
-    }
-
     // ── assertions ───────────────────────────────────────────────────────────────────────────────
 
     protected static ApiException refusal(org.assertj.core.api.ThrowableAssert.ThrowingCallable call, HttpStatus status) {
