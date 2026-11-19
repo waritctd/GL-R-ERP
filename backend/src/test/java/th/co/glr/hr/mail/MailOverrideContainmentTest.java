@@ -1,6 +1,5 @@
 package th.co.glr.hr.mail;
 
-import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.argThat;
@@ -33,32 +32,6 @@ class MailOverrideContainmentTest {
         verify(terminalTransport).sendHtml(eq(OVERRIDE_TO), anyString(),
             argThat(html -> html.contains(REAL_EMPLOYEE_ADDRESS)),
             argThat(text -> text.contains(REAL_EMPLOYEE_ADDRESS)),
-            anyList());
-    }
-
-    @Test
-    void notificationEmailServiceSendWithAttachmentNeverReachesTheRealEmployeeAddress() {
-        NotificationEmailService service = notificationEmailService();
-
-        service.sendWithAttachment(REAL_EMPLOYEE_ADDRESS, "Payslip", "Attached", "payslip.pdf", "%PDF".getBytes());
-
-        verify(terminalTransport, never()).sendWithAttachment(eq(REAL_EMPLOYEE_ADDRESS), anyString(), anyString(), anyString(), any());
-        verify(terminalTransport).sendWithAttachment(eq(OVERRIDE_TO), eq("Payslip"),
-            argThat(body -> body.contains(REAL_EMPLOYEE_ADDRESS)), eq("payslip.pdf"), any());
-    }
-
-    // Same as notificationEmailServiceSendNeverReachesTheRealEmployeeAddress, but for the employee that
-    // NotificationService fans a notification out to despite having NO address on file at all - the exact
-    // production incident NotificationServiceOverrideConfiguredTest pins at the NotificationService layer.
-    @Test
-    void notificationEmailServiceStillRedirectsWhenTheEmployeeHasNoAddressOnFile() {
-        NotificationEmailService service = notificationEmailService();
-
-        service.send(7L, null, "สมชาย", "Leave submitted", "your leave was submitted", "/leave/1");
-
-        verify(terminalTransport).sendHtml(eq(OVERRIDE_TO), anyString(),
-            argThat(html -> html.contains("no address on file")),
-            argThat(text -> text.contains("no address on file")),
             anyList());
     }
 

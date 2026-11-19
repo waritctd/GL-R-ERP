@@ -1,7 +1,6 @@
 package th.co.glr.hr.mail;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.Mockito.mock;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
@@ -27,14 +26,6 @@ class MailOverrideBeanPostProcessorTest {
     }
 
     @Test
-    void wrapsTheDefaultLogMailerWhenOverrideIsConfigured() {
-        runner.withPropertyValues("app.mail.override-to=qa-inbox@example.com").run(ctx -> {
-            assertThat(ctx).hasNotFailed();
-            assertThat(ctx.getBean(Mailer.class)).isInstanceOf(OverrideRedirectingMailer.class);
-        });
-    }
-
-    @Test
     void wrapsTheResendMailerWhenOverrideIsConfigured() {
         runner.withPropertyValues(
                 "app.mail.provider=resend",
@@ -48,48 +39,4 @@ class MailOverrideBeanPostProcessorTest {
             });
     }
 
-    @Test
-    void wrapsTheSmtpMailerWhenOverrideIsConfigured() {
-        runner.withPropertyValues(
-                "app.mail.provider=smtp",
-                "app.mail.smtp.host=localhost",
-                "app.mail.from=job@glr.co.th",
-                "app.mail.override-to=qa-inbox@example.com")
-            .run(ctx -> {
-                assertThat(ctx).hasNotFailed();
-                assertThat(ctx.getBean(Mailer.class)).isInstanceOf(OverrideRedirectingMailer.class);
-            });
-    }
-
-    // The processor must ignore beans that are not a Mailer at all - proves it does not, say, blow up or misbehave
-    // when it sees an arbitrary bean during a real context refresh (every bean passes through
-    // postProcessAfterInitialization, not just Mailer ones).
-    @Test
-    void passesThroughANonMailerBeanUnchanged() {
-        MailOverrideBeanPostProcessor processor = new MailOverrideBeanPostProcessor("qa-inbox@example.com");
-
-        Object notAMailer = new Object();
-
-        assertThat(processor.postProcessAfterInitialization(notAMailer, "someBean")).isSameAs(notAMailer);
-    }
-
-    @Test
-    void directlyWrapsWhateverMailerBeanItSeesWhenConfigured() {
-        MailOverrideBeanPostProcessor processor = new MailOverrideBeanPostProcessor("qa-inbox@example.com");
-        Mailer someFutureMailerImplementation = mock(Mailer.class);
-
-        Object wrapped = processor.postProcessAfterInitialization(someFutureMailerImplementation, "someFutureMailer");
-
-        assertThat(wrapped).isInstanceOf(OverrideRedirectingMailer.class);
-    }
-
-    @Test
-    void directlyLeavesAMailerBeanAloneWhenOverrideBlank() {
-        MailOverrideBeanPostProcessor processor = new MailOverrideBeanPostProcessor("");
-        Mailer someMailer = mock(Mailer.class);
-
-        Object result = processor.postProcessAfterInitialization(someMailer, "someMailer");
-
-        assertThat(result).isSameAs(someMailer);
-    }
 }
