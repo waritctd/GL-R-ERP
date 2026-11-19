@@ -7,8 +7,6 @@ import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
-import java.time.Clock;
-import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
@@ -74,36 +72,6 @@ class BotHolidayFetchServiceTest {
                 && event.getFormattedMessage().contains("HTTP 200 but no holidays parsed for year 2026"));
         } finally {
             detachLogAppender(appender);
-        }
-    }
-
-    /** A {@link Clock} a test can advance by hand, so the cooldown guard needs no real sleep. */
-    private static final class MutableClock extends Clock {
-        private Instant instant;
-        private final ZoneId zone;
-
-        MutableClock(Instant instant, ZoneId zone) {
-            this.instant = instant;
-            this.zone = zone;
-        }
-
-        void advance(Duration amount) {
-            instant = instant.plus(amount);
-        }
-
-        @Override
-        public ZoneId getZone() {
-            return zone;
-        }
-
-        @Override
-        public Clock withZone(ZoneId newZone) {
-            return new MutableClock(instant, newZone);
-        }
-
-        @Override
-        public Instant instant() {
-            return instant;
         }
     }
 

@@ -40,9 +40,7 @@ class ProfileRequestNotificationIntegrationTest extends AbstractPostgresIntegrat
     private long hrEmployee;
     private long salesEmployee;
     private long accountDivision;
-    private long accountEmployee;
     private long importDivision;
-    private long importEmployee;
 
     @BeforeEach
     void wireRealCollaborators() {
@@ -69,9 +67,9 @@ class ProfileRequestNotificationIntegrationTest extends AbstractPostgresIntegrat
         // The two shared-mailbox divisions SalesMailRecipientRepository#findRecipient classifies by source_code prefix
         // (ILIKE 'AC%' / ILIKE 'PCIM%').
         accountDivision = insertDivision("AC", "ฝ่ายบัญชี");
-        accountEmployee = insertEmployee("AC001", accountDivision, "sunee.account@glr.co.th");
+        insertEmployee("AC001", accountDivision, "sunee.account@glr.co.th");
         importDivision = insertDivision("PCIM", "จัดซื้อต่างประเทศ");
-        importEmployee = insertEmployee("PCIM001", importDivision, "buyer.import@glr.co.th");
+        insertEmployee("PCIM001", importDivision, "buyer.import@glr.co.th");
     }
 
     // --- create(): notifies HR -----------------------------------------------

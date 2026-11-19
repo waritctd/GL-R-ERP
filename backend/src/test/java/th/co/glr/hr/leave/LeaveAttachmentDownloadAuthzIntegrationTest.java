@@ -29,7 +29,6 @@ class LeaveAttachmentDownloadAuthzIntegrationTest extends AbstractPostgresIntegr
     private long requester;
     private long requesterManager;
     private long sameDepartmentPeer;
-    private long unrelatedEmployee;
     private long otherEmployeeManager;
     private long attachmentId;
 
@@ -51,7 +50,7 @@ class LeaveAttachmentDownloadAuthzIntegrationTest extends AbstractPostgresIntegr
         // Same department as the requester, but reports to nobody in particular -- proves department membership ALONE
         // grants no access, only the direct-manager relationship does.
         sameDepartmentPeer = insertEmployee("PEER-001", department, null, null, true);
-        unrelatedEmployee = insertEmployee("UNRELATED-001", null, null, null, true);
+        insertEmployee("UNRELATED-001", null, null, null, true);
         otherEmployeeManager = insertEmployee("MGR-OTHER", null, null, null, true);
         // Seeded only so otherEmployeeManager genuinely IS someone's direct manager -- just not the requester's --
         // proving "a manager, but of the wrong employee" is still refused.

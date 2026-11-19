@@ -137,9 +137,8 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
 
     @Test
     void theDatabaseItselfRefusesASecondLiveOrdinationClaimEvenBypassingTheJavaCheck() {
-        // The test above proves the NORMAL path (LeaveService's Java-level pre-check). If this constraint were ever
-        // dropped or its WHERE clause narrowed, this is the test that would catch it; LeaveServiceTest's
-        // DuplicateKeyException-catch test only proves the CATCH works, not that the INDEX exists.
+        // If this constraint were ever dropped or its WHERE clause narrowed, this is the test that would catch it;
+        // LeaveServiceTest's DuplicateKeyException-catch test only proves the CATCH works, not that the INDEX exists.
         long employeeId = insertEmployee("ORD-RACE-001", LocalDate.parse("2015-01-01"));
 
         long firstId = createOrdinationRequestDirectly(employeeId, "2026-07-13", "2026-07-14", LeaveStatus.SUBMITTED);

@@ -182,8 +182,4 @@ class AttendanceServiceTest {
         return new UserPrincipal(1L, role + "@glr.co.th", role, role, employeeId, true, LocalDate.now(), false, null, false);
     }
 
-    // markPresent ----------------------------------- The controller already restricts this endpoint to hr/ceo via
-    // requireAnyRole; these cases cover the decision markPresent itself makes — validating the submitted ids
-    // against the caller's own scope rather than trusting them outright.
-
 }

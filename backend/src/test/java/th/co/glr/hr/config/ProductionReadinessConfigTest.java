@@ -115,7 +115,7 @@ class ProductionReadinessConfigTest {
         assertThat(appender.list).isEmpty();
     }
 
-    /** The six original tests above were all written back when app.uploads-dir was the only property
+    /** The four tests above were all written back when app.uploads-dir was the only property
      * ProductionReadinessConfig#validate ever read. */
     private static Environment environment(String... profiles) {
         Environment environment = mock(Environment.class);

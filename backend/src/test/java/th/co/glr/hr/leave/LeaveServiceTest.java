@@ -70,15 +70,13 @@ class LeaveServiceTest {
         // date a working day" predicate -- see LeaveRepository/LeaveDayMath's javadoc.
         // Default every test to the Mon-Fri/no-holiday behaviour (LeaveDayMath's own legacy
         // predicate) so the tests that do not care about six-day-schedule or holiday nuances are
-        // unaffected. Tests THAT do care (see the "schedule/holiday-aware" section near the bottom
-        // of this file) re-stub this per test.
+        // unaffected. Tests that do care re-stub this per test.
         when(leaveRepository.workingDayPredicate(anyLong(), any(), any()))
             .thenReturn(LeaveDayMath::isWorkingDay);
         // LeaveService resolves leaveRepository.resolveOwnSchedule(...) for every TIMED request's
         // boundary date(s) -- default every test to the seeded standard 08:30-17:30 Mon-Fri
         // schedule (the same fixture LeaveDayMathTest/AttendanceDailyCalculatorTest use), so the
-        // timed-request tests below need not each re-declare it. Tests that care about a DIFFERENT schedule (e.g. a
-        // six-day division) re-stub this per test.
+        // tests need not each re-declare it. Tests that care about a DIFFERENT schedule re-stub this per test.
         when(leaveRepository.resolveOwnSchedule(anyLong(), any())).thenReturn(STANDARD_SCHEDULE);
         // §5.3.5 pool split:LeaveService#carriedInRemaining/#ownQuotaRemaining subtract
         // these from a pool's size, and Mockito defaults an unstubbed BigDecimal-returning method to
@@ -345,16 +343,10 @@ class LeaveServiceTest {
             argThat(value -> value != null && value.compareTo(new BigDecimal("1")) == 0));
     }
 
-    // Notification coverage gap B: cancel() must notify the requester and whoever the request was still pending
-    // with -- but NOT an already-decided request's approvers.
-
-    /** Like {@link #requestDto}, but with reviewedById/reviewedByName/managerEmployeeId controllable -- needed to prove the self-cancel-vs-reviewer-cancel wording and the pending-manager resolution in the gap B tests above. */
-
     /**
      * Like {@link #requestDto}, but with employeeId/managerEmployeeId controllable -- needed by the
-     * two {@link #notifyPendingApproval} tests below, neither of which the fixed-{@code 10L}/
-     * {@code 99L} {@link #requestDto} fixture can express (one needs {@code managerEmployeeId ==
-     * null}; the other needs {@code managerEmployeeId} to equal the ACTOR, not a fixed third party).
+     * {@link #notifyPendingApproval} test below, which needs {@code managerEmployeeId == null}, something the
+     * fixed-{@code 10L}/{@code 99L} {@link #requestDto} fixture cannot express.
      */
     private LeaveRequestDto requestDtoWithManager(long id, long employeeId, LocalDate startDate, LocalDate endDate, Long managerEmployeeId) {
         OffsetDateTime timestamp = OffsetDateTime.parse("2026-06-14T10:00:00+07:00");
@@ -819,9 +811,7 @@ class LeaveServiceTest {
     }
 
     private LeaveTypeDto vacationType() {
-        // proratedFirstYear=false here: pro-ration is covered by its own dedicated fixture/tests below, which
-        // construct a LeaveTypeDto with proratedFirstYear=true explicitly rather than making every existing VACATION
-        // test in this class newly depend on a stubbed hire date.
+        // proratedFirstYear=false so no test here depends on a stubbed hire date.
         return new LeaveTypeDto("VACATION", "ลาพักร้อน", "Vacation leave", new BigDecimal("6.00"), false,
             null, 7, 0, null, false, LeaveDayCountBasis.WORKING_DAYS, false, null, null, 0, null, false);
     }

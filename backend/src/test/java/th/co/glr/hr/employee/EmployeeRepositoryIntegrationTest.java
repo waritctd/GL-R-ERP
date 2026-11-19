@@ -18,8 +18,6 @@ class EmployeeRepositoryIntegrationTest extends AbstractPostgresIntegrationTest 
             jdbc, new EmployeeReferenceRepository(jdbc), new EmployeeCodeGenerator(jdbc));
     }
 
-    /** Only the email set; every other field null, so {@code addSet} leaves the rest untouched. */
-
     /** The standing withholding-tax override is deliberately a FULL-REPLACE column, unlike every other field update
      * touches: the column is nullable and NULL is itself a meaningful state, so a skip- when-null write would let
      * HR set the override but never clear it back to NULL. */

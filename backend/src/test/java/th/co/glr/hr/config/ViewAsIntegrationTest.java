@@ -62,12 +62,6 @@ class ViewAsIntegrationTest extends AbstractRealSessionIntegrationTest {
         return JSON.readTree(response.body());
     }
 
-    List<Map<String, Object>> audit(String action, long entityId) {
-        return jdbc.queryForList(
-            "SELECT actor_user_id, entity_id FROM hr.audit_log WHERE action = :a AND entity_id = :e ORDER BY id",
-            Map.of("a", action, "e", entityId));
-    }
-
     // ── 1. gate ──────────────────────────────────────────────────────────────────────────────
 
     @Test

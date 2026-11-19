@@ -198,10 +198,6 @@ class SecurityAuthorizationIntegrationTest {
             Map.of("code", code), Long.class);
     }
 
-    /** Same as {@link #sessionFor}, but pinned to a specific employeeId rather than the hardcoded 1. */
-
-    /** Same idea, but for a specific role (hr/ceo/...) pinned to a specific employeeId — see {@link #sessionForEmployeeId}. */
-
     private int countTaxAllowanceRows(long employeeId) {
         Integer count = jdbc.queryForObject(
             "SELECT COUNT(*) FROM hr.employee_tax_allowance WHERE employee_id = :employeeId",

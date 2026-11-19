@@ -37,13 +37,12 @@ class AttendanceMonthlyReportJobIntegrationTest extends AbstractPostgresIntegrat
 
     private long alice;
     private long bob;
-    private long someoneElse;
 
     @BeforeEach
     void seedEmployees() {
         alice = insertEmployee("10016", "ทดสอบ", "หนึ่ง");
         bob = insertEmployee("10030", "ทดสอบ", "สอง");
-        someoneElse = insertEmployee("10099", "คนอื่น", "ไม่เกี่ยว");
+        insertEmployee("10099", "คนอื่น", "ไม่เกี่ยว");
     }
 
     @Test

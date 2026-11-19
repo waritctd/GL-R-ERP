@@ -32,7 +32,6 @@ class WorkScheduleAssignmentControllerIntegrationTest extends AbstractPostgresIn
         Clock.fixed(Instant.parse("2026-08-10T03:00:00Z"), ZoneId.of("Asia/Bangkok"));
 
     private WorkScheduleAssignmentController controller;
-    private WorkScheduleController scheduleController;
     private WorkScheduleAssignmentRepository repository;
     private TieredWorkScheduleResolver resolver;
 
@@ -47,7 +46,6 @@ class WorkScheduleAssignmentControllerIntegrationTest extends AbstractPostgresIn
         WorkScheduleAssignmentAdminService service =
             new WorkScheduleAssignmentAdminService(repository, resolver, auditService, FIXED_CLOCK);
         controller = new WorkScheduleAssignmentController(service, new SessionContext());
-        scheduleController = new WorkScheduleController(service, new SessionContext());
     }
 
     // --- back-dating ---------------------------------------------------------------------------

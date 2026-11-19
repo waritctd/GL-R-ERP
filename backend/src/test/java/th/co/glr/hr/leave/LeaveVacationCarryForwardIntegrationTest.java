@@ -137,10 +137,6 @@ class LeaveVacationCarryForwardIntegrationTest extends AbstractPostgresIntegrati
 
     // --- helpers ------------------------------------------------------------
 
-    // §5.3.5 pool choice (V161): the split is now RECORDED per request, and the requester picks the order. Fixture
-    // shared by the three tests below: 2025 uses 4 of its 6, carrying 2.00 into 2026, which also has its own fresh
-    // 6.00 -- 8.00 available in 2026.
-
     private LeaveBalanceDto vacationBalance(LeaveService service, long employeeId, int year) {
         return balanceFor(service, employeeId, year, "VACATION");
     }

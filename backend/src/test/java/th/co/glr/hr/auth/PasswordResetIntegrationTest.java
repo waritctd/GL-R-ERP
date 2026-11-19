@@ -1,6 +1,7 @@
 package th.co.glr.hr.auth;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.LocalDate;
@@ -110,6 +111,23 @@ class PasswordResetIntegrationTest extends AbstractPostgresIntegrationTest {
                 + "WHERE e.email = :email",
             Map.of("email", "reset.nobody-here@glr.co.th"), Integer.class);
         assertThat(tokenCount).isEqualTo(0);
+    }
+
+    @Test
+    void expiredTokenIsRejected() {
+        insertEmployeeWithEmail("RESET-003", "reset.expired@glr.co.th", "EMP003", ORIGINAL_PASSWORD);
+
+        service.forgotPassword(new ForgotPasswordRequest("reset.expired@glr.co.th"));
+        String rawToken = extractToken(mailer.lastSentTo("reset.expired@glr.co.th"));
+
+        // Force the issued token into the past rather than waiting 30 real minutes or threading a fixed Clock through
+        // - the row is the one thing that actually gates resetPassword.
+        jdbc.update("UPDATE hr.password_reset_token SET expires_at = now() - interval '1 minute' "
+            + "WHERE token_hash = :hash", Map.of("hash", PasswordResetTokenCodec.hash(rawToken)));
+
+        assertThatThrownBy(() -> service.resetPassword(new ResetPasswordRequest(rawToken, "BrandNewPass1!")))
+            .isInstanceOf(ApiException.class)
+            .satisfies(ex -> assertThat(((ApiException) ex).getStatus().value()).isEqualTo(400));
     }
 
     /** Two requests that both read the token as still-open BEFORE either writes: a sequential reuse check would

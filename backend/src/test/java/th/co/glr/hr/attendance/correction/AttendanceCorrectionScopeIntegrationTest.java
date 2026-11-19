@@ -38,7 +38,6 @@ class AttendanceCorrectionScopeIntegrationTest extends AbstractPostgresIntegrati
     private long salesDivision;
     private long salesManager;
     private long salesStaff;
-    private long anotherStaff;
     private long ceoEmployee;
 
     @BeforeEach
@@ -62,7 +61,7 @@ class AttendanceCorrectionScopeIntegrationTest extends AbstractPostgresIntegrati
         salesDivision = insertDivision("SLS", "ฝ่ายขาย");
         salesManager = insertEmployee("M001", salesDivision);
         salesStaff = insertEmployee("S001", salesDivision);
-        anotherStaff = insertEmployee("S002", salesDivision);
+        insertEmployee("S002", salesDivision);
         ceoEmployee = insertEmployee("C001", salesDivision);
     }
 

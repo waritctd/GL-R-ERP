@@ -33,12 +33,7 @@ class EmployeeReferenceForeignKeyIntegrationTest extends AbstractPostgresIntegra
         }
     }
 
-    // ── Behavioural evidence: the constraint actually blocks a bad insert ───────────────────────
-
-    // PART 2 — V147 itself. Each test below builds the "constraint missing" state (prod's real shape) and then
-    // runs V147's own SQL, read live off the classpath.
-
-    // ── catalog assertions, shared by Part 1 and Part 2 ─────────────────────────────────────────
+    // ── catalog assertions ──────────────────────────────────────────────────────────────────────
 
     private List<Map<String, Object>> foreignKeyRows(ExpectedForeignKey fk) {
         return jdbc.queryForList("""

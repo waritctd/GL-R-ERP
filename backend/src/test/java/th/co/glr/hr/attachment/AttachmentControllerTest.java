@@ -61,9 +61,6 @@ class AttachmentControllerTest {
             .andExpect(status().isNotFound()); // access check passed; 404 is from missing file on disk
     }
 
-    /** hr used to sit in this controller's own MANAGER_ROLES and so could read every deal's documents, despite
-     * being refused the deal itself everywhere else. These two tests asserted that behaviour; they now assert its
-
     /** #389's other direction: account confirms the money these documents evidence, so it may now open them — but
      * it may NOT upload, because the tax invoice keeps exactly one entry point (CommissionService#createFromDeal). */
     @Test

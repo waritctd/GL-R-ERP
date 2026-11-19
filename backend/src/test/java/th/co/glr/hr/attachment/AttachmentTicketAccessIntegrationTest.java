@@ -39,7 +39,6 @@ class AttachmentTicketAccessIntegrationTest extends AbstractPostgresIntegrationT
 
     private long ticketId;
     private long attachmentId;
-    private String attachmentPath;
 
     private UserPrincipal salesOwner;
     private UserPrincipal salesOther;
@@ -74,7 +73,6 @@ class AttachmentTicketAccessIntegrationTest extends AbstractPostgresIntegrationT
 
         ticketId = insertTicket(salesOwner.id(), assignee.id());
         FileStorageService.StoredFile stored = storeFile("contract-" + UUID.randomUUID() + ".pdf");
-        attachmentPath = stored.filePath();
         // Uploaded by the CEO, not by any actor under test, so no assertion below can accidentally pass through the
         // "uploader may always reach their own file" shortcut.
         attachmentId = attachments.save(ticketId, null, stored.fileName(), stored.filePath(),

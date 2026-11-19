@@ -1,6 +1,7 @@
 package th.co.glr.hr.employee;
 
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.mockito.ArgumentMatchers.any;
@@ -37,6 +38,18 @@ class EmployeeControllerTest {
             .andExpect(jsonPath("$.message").value("ไม่มีสิทธิ์เข้าถึงรายการนี้"));
 
         verifyNoInteractions(employeeService);
+    }
+
+    @Test
+    void resetPasswordReturnsPlaintextTemporaryPasswordForHr() throws Exception {
+        when(employeeService.resetPassword(eq(10L), any(UserPrincipal.class)))
+            .thenReturn(new PasswordResetResult("Temp-Abcd2345"));
+
+        mvc.perform(post("/api/employees/10/reset-password").session(sessionFor("hr")))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.temporaryPassword").value("Temp-Abcd2345"));
+
+        verify(employeeService).resetPassword(eq(10L), any(UserPrincipal.class));
     }
 
     @Test
