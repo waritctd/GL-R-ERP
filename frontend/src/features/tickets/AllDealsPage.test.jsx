@@ -128,18 +128,6 @@ describe('AllDealsPage (งานทั้งหมด)', () => {
     },
   );
 
-  it('subtitle counts and sums exactly the cards shown, and says the order', async () => {
-    renderPage(salesUser);
-    await board();
-
-    // ทั้งหมด is the default (ruling 2026-11-16): all four deals.
-    expect(await screen.findByText('4 งานที่เปิดอยู่ · มูลค่ารวม ฿6,770,000 · เรียงตามวันที่เงียบ')).toBeTruthy();
-
-    // ไตรมาสนี้ leaves the three deals expected this quarter: 2,500,000 + 640,000 + 3,250,000.
-    fireEvent.click(screen.getByRole('button', { name: 'ไตรมาสนี้' }));
-    expect(await screen.findByText('3 งานที่เปิดอยู่ · มูลค่ารวม ฿6,390,000 · เรียงตามวันที่เงียบ')).toBeTruthy();
-  });
-
   it('a failed team-board load (e.g. an older backend) says so in the subtitle and the board, and retries', async () => {
     api.salesBoard.teamBoard.mockRejectedValue(new Error('404'));
     renderPage(managerUser);

@@ -348,7 +348,6 @@ describe('TicketListPage', () => {
       await waitFor(() => expect(rowNames()).toHaveLength(5));
     });
 
-    // UNCHANGED ROLE: account/import render exactly as before.
     it('sales_manager gets the range row and the API is called with movement params', async () => {
       renderTicketListPage(managerUser, ['/tickets?inbox=0']);
       await screen.findByText('ลูกค้า-ขยับ');
@@ -356,6 +355,7 @@ describe('TicketListPage', () => {
       expect(lastListArgs()).toHaveProperty('movementFrom');
     });
 
+    // UNCHANGED ROLE: account/import render exactly as before.
     it.each([['account', accountUser], ['import', importUser]])('%s: no range row, old columns, API called without movement params', async (_role, user) => {
       renderTicketListPage(user, ['/tickets?inbox=0']); // inbox=0: every deal the role may read, not the worklist subset
       await screen.findByText('ลูกค้า-ขยับ');

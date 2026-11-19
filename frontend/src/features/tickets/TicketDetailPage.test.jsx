@@ -1081,6 +1081,7 @@ describe('TicketDetailPage', () => {
       renderTicketDetailPageAtRoute(['/tickets/701'], salesOwnerUser);
       await waitFor(() => expect(primaryAction()).toBe('create_import_request'));
       expect(primary().textContent).toContain('ออกใบขอซื้อ (IR)');
+      expect(primary().textContent).not.toContain('สร้างใบขอซื้อ');
       await waitFor(() => expect(primary().disabled).toBe(false));
 
       fireEvent.click(primary());
@@ -1363,6 +1364,128 @@ describe('TicketDetailPage', () => {
       await waitFor(() => expect(api.tickets.setEntryChannel).toHaveBeenCalledWith(701, {
         value: 'DESIGNER_LED', note: 'มีผู้ออกแบบเข้ามาร่วมจริง',
       }));
+    });
+  });
+
+  // QA-22's stored-IR read: every role the backend lets read them does, and never a role it would refuse.
+  describe('stored IR read gate (QA-22)', () => {
+    it.each([
+      ['the owning sales rep', salesOwnerUser],
+      ['import (not the owner)', { id: 7, employeeId: 7, name: 'ฝ่ายนำเข้า', role: 'import' }],
+      ['sales_manager (not the owner)', { id: 11, employeeId: 11, name: 'ผจก.ขาย', role: 'sales_manager' }],
+    ])('reads the stored IRs for %s', async (_name, viewer) => {
+      renderTicketDetailPage(viewer);
+      await waitFor(() => expect(api.storedImportRequests.listForTicket).toHaveBeenCalledWith(701));
+    });
+
+    it('a non-owner sales rep cannot read stored IRs: no request is made', async () => {
+      renderTicketDetailPage({ id: 2, employeeId: 2, name: 'พนักงานขายอีกคน', role: 'sales' });
+      await screen.findByTestId('deal-state-header');
+      await stickyInputsSettled().catch(() => {});
+      expect(api.storedImportRequests.listForTicket).not.toHaveBeenCalled();
+    });
+  });
+
+  // The download gate is remainingInvoiceReadiness.js's rule (stock-delivered and imported deals), sales owner only.
+  describe('remaining-invoice download gate', () => {
+    const INVOICE_BUTTON = 'ดาวน์โหลดใบแจ้งหนี้ส่วนที่เหลือ';
+    afterEach(() => { api.storedRemainingInvoices.listForTicket.mockResolvedValue({ remainingInvoices: [] }); });
+
+    it.each(['FROM_STOCK', 'GOODS_RECEIVED'])('offers the download to the sales owner once fulfilment is %s', async (fulfillmentStatus) => {
+      api.storedRemainingInvoices.listForTicket.mockResolvedValue({ remainingInvoices: [{ id: 901, ticketId: 701, status: 'ISSUED', docNumber: 'GLRI69001' }] });
+      api.tickets.get.mockResolvedValueOnce({
+        ticket: buildTicket({ summary: { status: 'quotation_issued', fulfillmentStatus, createdById: 1 } }),
+      });
+      renderTicketDetailPage(salesOwnerUser);
+      await waitFor(() => expect(api.storedRemainingInvoices.listForTicket).toHaveBeenCalled());
+      expect(await screen.findByRole('button', { name: INVOICE_BUTTON })).not.toBeNull();
+    });
+
+    it('withholds the download from a non-sales role even on a delivered stock deal', async () => {
+      api.storedRemainingInvoices.listForTicket.mockResolvedValue({ remainingInvoices: [{ id: 901, ticketId: 701, status: 'ISSUED', docNumber: 'GLRI69001' }] });
+      api.tickets.get.mockResolvedValueOnce({
+        ticket: buildTicket({ summary: { status: 'quotation_issued', fulfillmentStatus: 'FULLY_DELIVERED', createdById: 1 } }),
+      });
+      renderTicketDetailPage(accountUser);
+      expect(await screen.findByRole('heading', { level: 1 })).not.toBeNull();
+      await act(async () => { await new Promise((resolve) => { setTimeout(resolve, 50); }); });
+      expect(screen.queryByRole('button', { name: INVOICE_BUTTON })).toBeNull();
+    });
+  });
+
+  // The blocker line must not show "รอชำระมัดจำ" for account (its own action clears the wait); sales_manager, not ceo,
+  // is the positive because the page guards on role === 'account' exactly. A legacy status keeps the resolver primary out.
+  describe('blocker line respects !isMoneyRecorder (GLA-118)', () => {
+    const waiting = () => {
+      api.tickets.get.mockResolvedValue({
+        ticket: buildTicket({
+          summary: {
+            lifecycle: 'ACTIVE', salesStage: 'QUOTE_DESIGN_SIDE', status: 'document_issued', paymentStatus: 'DEPOSIT_NOTICE_ISSUED', createdById: 1,
+          },
+        }),
+      });
+      api.tickets.actions.mockResolvedValue({
+        currentState: {
+          lifecycle: 'ACTIVE', salesStage: 'QUOTE_DESIGN_SIDE', paymentStatus: 'DEPOSIT_NOTICE_ISSUED', fulfillmentStatus: null, status: 'document_issued',
+        },
+        availableActions: [],
+      });
+    };
+
+    it('shows "รอชำระมัดจำ" to a non-account role (sales_manager)', async () => {
+      waiting();
+      renderTicketDetailPage({ id: 11, employeeId: 11, name: 'ผจก.ขาย', role: 'sales_manager' });
+      expect((await screen.findAllByText(/รอชำระมัดจำ/)).length).toBeGreaterThan(0);
+    });
+
+    it('never shows "รอชำระมัดจำ" to account — account is the role that clears it', async () => {
+      waiting();
+      renderTicketDetailPage(accountUser);
+      await screen.findByRole('heading', { level: 1, name: 'โครงการทดสอบ' });
+      expect(screen.queryByText(/รอชำระมัดจำ/)).toBeNull();
+    });
+  });
+
+  // deal-party-model.md: a bidding contractor is a BUYER party; บันทึกผลประมูล is the primary only for the deal's editors.
+  describe('deal parties — บันทึกผลประมูล gating', () => {
+    const party = (overrides) => ({
+      id: 1, ticketId: 701, customerId: 5, customerName: 'บริษัท ก จำกัด', contactId: null, contactName: null,
+      role: 'BUYER', status: 'QUOTED', notAwardedReason: null, headline: false, splitTicketId: null, splitTicketCode: null,
+      latestQuotationId: 11, latestQuotationNumber: 'QT-2026-0011-1', latestQuotationStatus: 'APPROVED', latestQuotationAmount: 512900,
+      ...overrides,
+    });
+    function bidDeal() {
+      api.tickets.get.mockResolvedValue({
+        ticket: buildTicket({
+          summary: {
+            lifecycle: 'ACTIVE', salesStage: 'QUOTE_BUYER', status: 'draft', createdById: 1, entryChannel: 'BUYER_DIRECT',
+            code: 'DL-2026-0280', projectName: 'GRAND RIVER HOTEL',
+          },
+        }),
+      });
+      api.tickets.parties.mockResolvedValue({
+        parties: [
+          party({ id: 1, headline: true }),
+          party({ id: 2, customerName: 'บจก.สมมติ ก่อสร้าง', latestQuotationId: 12, latestQuotationNumber: 'QT-2026-0012-2' }),
+        ],
+      });
+      api.dealQuotations.listForTicket.mockResolvedValue({ items: [] });
+    }
+
+    it('several bidders, none awarded: the owner gets บันทึกผลประมูล as the primary', async () => {
+      bidDeal();
+      renderTicketDetailPageAtRoute(['/tickets/701?tab=deal'], salesOwnerUser);
+      const primary = await screen.findByTestId('ticket-primary-action');
+      await waitFor(() => expect(primary.getAttribute('data-action')).toBe('record_bid_outcome'));
+    });
+
+    it('a viewer who may not edit the deal gets no บันทึกผลประมูล and no add button', async () => {
+      bidDeal();
+      renderTicketDetailPageAtRoute(['/tickets/701?tab=deal'], { id: 77, employeeId: 77, name: 'อื่น', role: 'sales' });
+      await screen.findByTestId('deal-parties-panel');
+      await stickyInputsSettled();
+      expect(screen.queryByTestId('add-party')).toBeNull();
+      expect(document.querySelector('[data-action="record_bid_outcome"]')).toBeNull();
     });
   });
 });
