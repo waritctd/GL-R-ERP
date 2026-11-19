@@ -54,6 +54,10 @@ public class TicketRepository {
                t.quotation_only, t.keyed_by, t.pause_return_on, t.estimated_value, t.expected_quarter,
                t.parent_ticket_id, t.child_kind,
                (SELECT pt.code FROM sales.ticket pt WHERE pt.ticket_id = t.parent_ticket_id) AS parent_code,
+               (SELECT COUNT(*) FROM sales.ticket ao
+                 WHERE ao.child_kind = 'ADD_ON'
+                   AND ao.parent_ticket_id = CASE WHEN t.child_kind = 'ADD_ON' THEN t.parent_ticket_id ELSE t.ticket_id END
+               ) AS add_on_count,
                (SELECT MAX(da.activity_date) FROM sales.deal_activity da
                  WHERE da.ticket_id = t.ticket_id) AS last_activity_at,
                -- Movement range (inclusive Asia/Bangkok calendar days); both FALSE when no range is given.
@@ -1353,7 +1357,7 @@ public class TicketRepository {
             .withEstimatedValue(rs.getBigDecimal("estimated_value"))
             .withExpectedQuarter(rs.getString("expected_quarter"))
             .withParent(rs.getObject("parent_ticket_id", Long.class), rs.getString("parent_code"),
-                rs.getString("child_kind"));
+                rs.getString("child_kind"), rs.getInt("add_on_count"));
     }
 
     /** One row's worth of the enrichment facts {@link SummaryFactsSql#SELECT} computes for a page of deals. */
@@ -1483,7 +1487,7 @@ public class TicketRepository {
             "DEPOSIT_NOTICE_ISSUED".equals(s.paymentStatus()) ? facts.depositDue() : null,
             s.keyedById(), s.stageChangedInRange(), s.activityInRange(), s.lastActivityAt(), s.pauseReturnOn(),
             s.estimatedValue(), s.expectedQuarter(), f.receiptSource(),
-            s.parentTicketId(), s.parentCode(), s.childKind());
+            s.parentTicketId(), s.parentCode(), s.childKind(), s.addOnCount());
     }
 
     /** An INVOICE document is on file. The invoice is produced by an external system and uploaded here, so its

@@ -64,7 +64,9 @@ import { repStepIndex } from './dealSteps.js';
 import { latestPricedQuotation } from './dealTimeline.js';
 import { nextStepFor } from './nextStep.js';
 import { DealPartiesPanel } from './DealPartiesPanel.jsx';
+import { AddOnOrderSheet } from './AddOnOrderSheet.jsx';
 import { BidOutcomeModal } from './BidOutcomeModal.jsx';
+import { canOpenAddOn } from './orderChain.js';
 import {
   buyerParties, isAwaitingBidOutcome, isBiddingParty,
 } from './dealPartyMeta.js';
@@ -464,6 +466,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   });
   const parties = canViewDealTracking ? (partiesQuery.data ?? []) : [];
   const [bidOutcomeOpen, setBidOutcomeOpen] = useState(false);
+  const [addOnOpen, setAddOnOpen] = useState(false);
 
   // The main button creates the deposit notice / remaining invoice, so the sales rep's page reads
   // both. Same keys and shapes as DealPaymentSection's reads, so the cache is shared (one fetch).
@@ -1912,6 +1915,14 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
 
       <TabPanel id="quote" idPrefix="ticket-detail" active={activeTab === 'quote'}>
         <DealQuoteTab
+          addOn={canOpenAddOn(summary, user) ? (
+            <div>
+              <Button type="button" variant="secondary" className="w-full sm:w-auto" data-testid="add-on-order-open" onClick={() => setAddOnOpen(true)}>
+                <Icon name="plus" size={16} />
+                สั่งเพิ่ม (ออเดอร์ใหม่)
+              </Button>
+            </div>
+          ) : null}
           quotations={(
             <>
               {/* ใบเสนอราคาของงานนี้: the register's quotation family (was the เอกสาร tab's first section). Its header
@@ -2273,6 +2284,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       {/* Slice 2 §E — the sticky "ยืนยันคำสั่งซื้อ" of an APPROVED direct quotation. The copy is the quotation
        * editor's own (quotationMeta's CONFIRM_ORDER_FROM_QUOTATION_COPY), so the two doors to the same
        * act say the same thing. */}
+      {addOnOpen ? <AddOnOrderSheet summary={summary} onClose={() => setAddOnOpen(false)} /> : null}
       {bidOutcomeOpen ? (
         <BidOutcomeModal
           ticketId={ticketId}

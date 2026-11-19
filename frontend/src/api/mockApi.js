@@ -4314,7 +4314,7 @@ function mockUndoRefusal(ticket) {
   const promotionId = mockConfirmedQuotationEvent(ticket)?.id ?? 0;
   const after = (kinds) => ticket.events.some((e) => kinds.includes(e.kind) && e.id > promotionId);
   if (after(['BID_OUTCOME_RECORDED']) || ticket.events.some((e) => e.kind === 'DEAL_SPLIT_FROM_PARENT')
-    || db.tickets.some((t) => t.parentTicketId === ticket.id)) {
+    || db.tickets.some((t) => t.parentTicketId === ticket.id && t.childKind !== 'ADD_ON')) {
     return 'ยกเลิกไม่ได้ — คำสั่งซื้อนี้มาจากการบันทึกผลประมูลหรือการแยกงาน';
   }
   if (mockRemainingInvoices.some((r) => r.ticketId === ticket.id)) return 'ยกเลิกไม่ได้ — ออกใบแจ้งหนี้ส่วนที่เหลือแล้ว';
@@ -5018,6 +5018,19 @@ export function applyImportRequestRollupMock(ticket, actor) {
   autoAdvanceStage(ticket, 'DELIVERY_SCHEDULING', actor);
 }
 
+// TicketSummaryDto#parentTicketId / parentCode / childKind / addOnCount (V230). A child is a bid-split or an add-on
+// order; addOnCount is the ROOT's add-on count (an add-on reports its root's), as TicketRepository.SUMMARY_SELECT does.
+function mockLinkFacts(t) {
+  const parent = t.parentTicketId != null ? db.tickets.find((x) => x.id === t.parentTicketId) : null;
+  const rootId = t.childKind === 'ADD_ON' ? t.parentTicketId : t.id;
+  return {
+    parentTicketId: t.parentTicketId ?? null,
+    parentCode: parent?.code ?? null,
+    childKind: t.parentTicketId != null ? (t.childKind ?? 'BID_SPLIT') : null,
+    addOnCount: db.tickets.filter((x) => x.parentTicketId === rootId && x.childKind === 'ADD_ON').length,
+  };
+}
+
 function buildTicketDetail(ticket) {
   const project = ticket.projectId ? mockProjects.find((p) => p.id === ticket.projectId) : null;
   const contact = ticket.contactId ? mockContacts.find((c) => c.id === ticket.contactId) : null;
@@ -5078,6 +5091,7 @@ function buildTicketDetail(ticket) {
       commissionRecorded: hasRecordedCommission(ticket),
       // TicketSummaryDto.quotationOnly.
       quotationOnly: ticket.quotationOnly === true,
+      ...mockLinkFacts(ticket),
       // Mirrors TicketSummaryDto#liveDirectQuotation.
       liveDirectQuotation: mockLiveDirectQuotation(ticket.id),
       ...paymentFields,
@@ -7967,7 +7981,16 @@ const mockDealQuotations = [
     createdAt: '2026-09-05T10:00:00Z', updatedAt: '2026-09-05T10:00:00Z',
   },
 ];
-mockDealQuotationNumberSeq = 3;
+// Ticket 19 (an ACTIVE ORDER_RECEIVED deal of mock user 6): an APPROVED direct quotation, so the add-on flow has a
+// confirmed order to hang under in mock mode.
+mockDealQuotations.push({
+  ...structuredClone(mockDealQuotations[1]),
+  id: mockQuotationSeq, number: 'QT-2026-0003', ticketId: 19, docStatus: 'APPROVED',
+  customerName: 'บริษัท สยามพารากอน ดีเวลลอปเมนท์ จำกัด', contactId: null, contactName: null, contactPhone: null,
+  contactEmail: null, approvedById: 9, approvedByName: 'ผู้จัดการฝ่ายขาย', approvedAt: '2026-09-08T10:00:00Z',
+  approvalDecidedAt: '2026-09-08T10:00:00Z', approvalDecidedBy: 9, quotationDate: '2026-09-05',
+});
+mockDealQuotationNumberSeq = 4;
 // One id sequence across both quotation arrays: start past the highest literal seed id above.
 mockQuotationSeq = Math.max(mockQuotationSeq, Math.max(...mockDealQuotations.map((q) => q.id)) + 1);
 
@@ -8164,7 +8187,7 @@ for (const t of db.tickets) {
  * onto ORDER_RECEIVED the same way the parent is. Code `<parent>-A`, `-B`, …
  */
 function mockForkChildDeal(parent, party, user) {
-  const siblings = db.tickets.filter((t) => t.parentTicketId === parent.id).length;
+  const siblings = db.tickets.filter((t) => t.parentTicketId === parent.id && t.childKind !== 'ADD_ON').length;
   const nextId = Math.max(...db.tickets.map((t) => t.id)) + 1;
   const customer = mockCustomers.find((c) => c.id === party.customerId);
   const now = new Date().toISOString();
@@ -8172,7 +8195,7 @@ function mockForkChildDeal(parent, party, user) {
     ...structuredClone({ ...parent, events: [], items: [], quotations: [], quotation: null }),
     id: nextId,
     code: `${parent.code}-${siblings < 26 ? String.fromCharCode(65 + siblings) : siblings + 1}`,
-    parentTicketId: parent.id,
+    parentTicketId: parent.id, childKind: 'BID_SPLIT',
     customerId: party.customerId, customerName: customer?.name ?? null, contactId: party.contactId ?? null,
     title: customer?.name ?? parent.title,
     status: 'draft', paymentStatus: null, fulfillmentStatus: null,
@@ -9884,6 +9907,7 @@ export const api = {
         // too because accountActions.js's worklist is built from list rows, not detail fetches.
         commissionRecorded: hasRecordedCommission(t),
         quotationOnly: t.quotationOnly === true,
+        ...mockLinkFacts(t),
         // Mirrors TicketSummaryDto#liveDirectQuotation on the LIST projection — the CTA cascade and
         // the DealPicker read list rows.
         liveDirectQuotation: mockLiveDirectQuotation(t.id),
@@ -10850,6 +10874,43 @@ export const api = {
       pushEvent(ticket, user, 'BID_OUTCOME_RECORDED', ticket.status, ticket.status,
         `บันทึกผลประมูล: ได้งาน ${awarded.map(mockPartyName).join(', ')}`);
       return delay({ result: { primaryTicketId: ticket.id, childTicketIds, ticket: buildTicketDetail(ticket).summary } });
+    },
+
+    // POST /api/tickets/{id}/add-on-orders: DealPartyService#createAddOnOrder (404, then 403, then 409).
+    async createAddOnOrder(ticketId) {
+      const source = findTicketRaw(Number(ticketId));
+      const user = requireSession();
+      if (!(isOwnerOrKeyer(source, user.id) || holdsAllSalesDocumentsGrant(user))) {
+        fail('ไม่มีสิทธิ์เปิดออเดอร์เพิ่มในงานนี้', 403);
+      }
+      requireActive(source);
+      const root = source.childKind === 'ADD_ON' ? findTicketRaw(source.parentTicketId) : source;
+      const n = db.tickets.filter((t) => t.parentTicketId === root.id && t.childKind === 'ADD_ON').length + 2;
+      const nextId = Math.max(...db.tickets.map((t) => t.id)) + 1;
+      const now = new Date().toISOString();
+      const child = {
+        ...structuredClone({ ...root, events: [], items: [], quotations: [], quotation: null }),
+        id: nextId, code: `${root.code}-${n}`,
+        parentTicketId: root.id, childKind: 'ADD_ON',
+        keyedById: user.id, keyedByName: user.name,
+        status: 'draft', paymentStatus: null, fulfillmentStatus: null,
+        lifecycle: 'ACTIVE', lostReason: null, lostAt: null,
+        quotationOnly: true, orderConfirmedQuotationId: null, closeConfirmedAt: null, closeConfirmedByName: null,
+        salesStage: 'LEAD_APPROACH', createdAt: now.slice(0, 10), updatedAt: now.slice(0, 10), closedAt: null, stageUpdatedAt: now,
+        events: [],
+      };
+      db.tickets.unshift(child);
+      const headline = mockPartiesOf(root.id).find((p) => p.headline);
+      if (headline) {
+        mockInsertDealParty({
+          ticketId: child.id, customerId: headline.customerId, contactId: headline.contactId, role: headline.role,
+          status: 'ACTIVE', headline: true, addedById: user.id,
+        });
+      }
+      pushEvent(child, user, 'CREATED', null, 'draft', null);
+      pushEvent(child, user, 'ADD_ON_ORDER_CREATED', null, null, `ออเดอร์เพิ่มของ ${root.code}`);
+      pushEvent(root, user, 'ADD_ON_ORDER_CREATED', null, null, `เปิดออเดอร์เพิ่ม ${child.code}`);
+      return delay({ addOnOrder: { ticketId: child.id, code: child.code, parentTicketId: root.id } });
     },
 
     async openForProject(projectName) {

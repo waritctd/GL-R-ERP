@@ -16,10 +16,11 @@ export function DealOverviewTab({ timeline, info, parties = null, quietLinks = n
   );
 }
 
-/** ใบเสนอราคา: this deal's quotations (+ create), the latest quotation's lines, then the items and คำขอราคา. */
-export function DealQuoteTab({ quotations, latestItems = null, items, pricingRequests = null }) {
+/** ใบเสนอราคา: the สั่งเพิ่ม entry (owner only), this deal's quotations (+ create), the latest quotation's lines, then the items and คำขอราคา. */
+export function DealQuoteTab({ addOn = null, quotations, latestItems = null, items, pricingRequests = null }) {
   return (
     <div className="flex min-w-0 flex-col gap-4">
+      {addOn}
       {quotations}
       {latestItems}
       {items}

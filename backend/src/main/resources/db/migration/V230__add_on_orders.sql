@@ -4,14 +4,12 @@
 -- confirmation, the split-letter numbering). Existing children are all bid splits. Also the ADD_ON_ORDER_CREATED ticket
 -- event: a full re-declaration of chk_event_kind in V225's shape (V225's list plus the new kind).
 --
--- Rollback: drop the two child_kind checks and the column; re-declare chk_event_kind as V225 did (delete any
+-- Rollback: drop chk_ticket_child_kind and the column; re-declare chk_event_kind as V225 did (delete any
 -- ADD_ON_ORDER_CREATED rows first).
 
 ALTER TABLE sales.ticket ADD COLUMN IF NOT EXISTS child_kind VARCHAR(16);
 UPDATE sales.ticket SET child_kind = 'BID_SPLIT' WHERE parent_ticket_id IS NOT NULL AND child_kind IS NULL;
 ALTER TABLE sales.ticket ADD CONSTRAINT chk_ticket_child_kind CHECK (child_kind IN ('BID_SPLIT', 'ADD_ON'));
-ALTER TABLE sales.ticket ADD CONSTRAINT chk_ticket_child_kind_iff_child
-    CHECK ((child_kind IS NULL) = (parent_ticket_id IS NULL));
 
 ALTER TABLE sales.ticket_event DROP CONSTRAINT IF EXISTS chk_event_kind;
 ALTER TABLE sales.ticket_event ADD CONSTRAINT chk_event_kind CHECK (kind IN (

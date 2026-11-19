@@ -318,6 +318,65 @@ class DealPartyIntegrationTest extends AbstractDealDirectQuotationIntegrationTes
         assertThat(partyService.openDealsForProject("ไม่มีโครงการนี้", salesActor)).isEmpty();
     }
 
+    // ── add-on orders (สั่งเพิ่ม) ───────────────────────────────────────────────────────────
+
+    @Test
+    void addOnOrder_numbersFromTheRoot_andLeavesBidSplitLettersAlone() {
+        long ticketId = deal(salesActor);
+        String code = summary(ticketId).code();
+        DealPartyDto partyA = partyService.list(ticketId, salesActor).get(0);
+
+        var first = partyService.createAddOnOrder(ticketId, salesActor);
+        var second = partyService.createAddOnOrder(first.ticketId(), salesActor);
+
+        assertThat(first.code()).isEqualTo(code + "-2");
+        assertThat(second.code()).as("add-on of an add-on hangs under the root").isEqualTo(code + "-3");
+        assertThat(second.parentTicketId()).isEqualTo(ticketId);
+        assertThat(summary(ticketId).addOnCount()).isEqualTo(2);
+        assertThat(summary(first.ticketId()).addOnCount()).as("an add-on reports its root's count").isEqualTo(2);
+        TicketSummaryDto child = summary(second.ticketId());
+        assertThat(child.childKind()).isEqualTo("ADD_ON");
+        assertThat(child.parentCode()).isEqualTo(code);
+        assertThat(child.customerId()).isEqualTo(summary(ticketId).customerId());
+        assertThat(partyService.list(second.ticketId(), salesActor)).singleElement()
+            .satisfies(p -> assertThat(p.customerId()).isEqualTo(partyA.customerId()));
+        assertThat(eventKinds(second.ticketId())).contains(TicketEventKind.ADD_ON_ORDER_CREATED);
+        assertThat(eventKinds(ticketId)).contains(TicketEventKind.ADD_ON_ORDER_CREATED);
+
+        // A bid split after the add-ons still takes the first letter, and is a BID_SPLIT.
+        CustomerDto contractorB = contractor("บจก.ผู้รับเหมา แยกหลังสั่งเพิ่ม");
+        DealPartyDto partyB = partyService.add(ticketId, new AddPartyRequest(contractorB.id(), "BUYER", null), salesActor);
+        approved(ticketId, draft().withRecipientType("BUYER"), salesActor);
+        approved(ticketId, draft().withPartyId(partyB.id()), salesActor);
+        BidOutcomeResult result = partyService.recordBidOutcome(ticketId,
+            new BidOutcomeRequest(List.of(partyA.id(), partyB.id()), partyA.id(), "NOT_AWARDED", null), salesActor);
+        TicketSummaryDto split = summary(result.childTicketIds().get(0));
+        assertThat(split.code()).isEqualTo(code + "-A");
+        assertThat(split.childKind()).isEqualTo("BID_SPLIT");
+    }
+
+    @Test
+    void addOnOrder_isForOwnersAndGrantHoldersOnly_andOnlyOnActiveDeals() {
+        long ticketId = deal(salesActor);
+        refusal(() -> partyService.createAddOnOrder(ticketId, otherSalesActor), HttpStatus.FORBIDDEN);
+        refusal(() -> partyService.createAddOnOrder(ticketId, actor(otherSalesActor.id(), "account")), HttpStatus.FORBIDDEN);
+        refusal(() -> partyService.createAddOnOrder(ticketId, salesManagerActor), HttpStatus.FORBIDDEN);
+        refusal(() -> partyService.createAddOnOrder(-1L, salesActor), HttpStatus.NOT_FOUND);
+        jdbc.update("UPDATE sales.ticket SET lifecycle = 'CANCELLED' WHERE ticket_id = :id", Map.of("id", ticketId));
+        refusal(() -> partyService.createAddOnOrder(ticketId, salesActor), HttpStatus.CONFLICT);
+    }
+
+    @Test
+    void addOnOrder_doesNotBlockTheRootsUndoOfItsOrderConfirmation() {
+        long ticketId = deal(salesActor);
+        DealQuotationDto quote = approved(ticketId, draft(), salesActor);
+        quotationService.confirmOrderFromDirectQuotation(quote.id(), salesActor, java.util.Set.of());
+        partyService.createAddOnOrder(ticketId, salesActor);
+
+        assertThat(quotationService.undoOrderConfirmation(quote.id(), "กดผิด", null, salesActor).ticketId())
+            .isEqualTo(ticketId);
+    }
+
     // ── access ───────────────────────────────────────────────────────────────────────────────
 
     @Test

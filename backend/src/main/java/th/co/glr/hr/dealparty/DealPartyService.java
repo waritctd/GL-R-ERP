@@ -214,7 +214,7 @@ public class DealPartyService {
             if (primary != null && w.id() == primary.id()) {
                 continue;
             }
-            String code = summary.code() + "-" + childCodeSuffix(parties.countChildren(ticketId));
+            String code = summary.code() + "-" + childCodeSuffix(parties.countChildren(ticketId, "BID_SPLIT"));
             long childId = parties.forkChild(ticketId, code, w.customerId(), w.customerName(), w.contactId(), actor.id());
             long childPartyId = parties.insert(childId, w.customerId(), w.contactId(), DealPartyDtos.ROLE_BUYER,
                 DealPartyDtos.STATUS_AWARDED, true, actor.id());
@@ -257,10 +257,37 @@ public class DealPartyService {
         return new BidOutcomeResult(ticketId, childTicketIds, requireSummary(ticketId));
     }
 
-    /** สั่งเพิ่ม: a linked deal under the root deal. Phase A stub. */
+    /**
+     * สั่งเพิ่ม: a second order under the same project, as a linked deal (child_kind ADD_ON) of the root deal.
+     * Only the owner/keyer or an all-sales-documents grant holder; CEO and sales_manager without the grant are refused.
+     * The root of a bid-split child is that child itself (a split child is another customer's deal). The number is
+     * {@code <root code>-<n>} with n = 2 + the root's add-ons, assigned under the root's row lock.
+     */
     @Transactional
     public AddOnOrderResult createAddOnOrder(long ticketId, UserPrincipal actor) {
-        throw new UnsupportedOperationException("add-on order not implemented");
+        TicketSummaryDto source = requireSummary(ticketId);
+        if (!(DealOwnership.isOwnerOrKeyer(source, actor.id()) || tickets.holdsAllSalesDocumentsGrant(actor))) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เปิดออเดอร์เพิ่มในงานนี้");
+        }
+        tickets.lockTicketForUpdate(ticketId);
+        requireActive(requireSummary(ticketId));
+        // An add-on always hangs directly under its root, so one hop is the whole walk.
+        long rootId = "ADD_ON".equals(source.childKind()) ? source.parentTicketId() : ticketId;
+        if (rootId != ticketId) {
+            tickets.lockTicketForUpdate(rootId);
+        }
+        TicketSummaryDto root = requireSummary(rootId);
+        String code = root.code() + "-" + (parties.countChildren(rootId, "ADD_ON") + 2);
+        long newId = parties.forkAddOn(rootId, code, actor.id());
+        parties.findByTicket(rootId).stream().filter(DealPartyDto::headline).findFirst()
+            .ifPresent(h -> parties.insert(newId, h.customerId(), h.contactId(), h.role(), DealPartyDtos.STATUS_ACTIVE,
+                true, actor.id()));
+        tickets.addEvent(newId, actor.id(), actor.name(), TicketEventKind.CREATED, null, "draft", null);
+        tickets.addEvent(newId, actor.id(), actor.name(), TicketEventKind.ADD_ON_ORDER_CREATED, null, null,
+            "ออเดอร์เพิ่มของ " + root.code());
+        tickets.addEvent(rootId, actor.id(), actor.name(), TicketEventKind.ADD_ON_ORDER_CREATED, null, null,
+            "เปิดออเดอร์เพิ่ม " + code);
+        return new AddOnOrderResult(newId, code, rootId);
     }
 
     public List<OpenDealDto> openDealsForProject(String projectName, UserPrincipal actor) {
