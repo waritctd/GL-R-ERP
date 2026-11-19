@@ -7023,7 +7023,8 @@ function mockReusesApprovedPricesOnly(row, ticket) {
       && sameMockMoney(a.sqmPerBox, b.sqmPerBox) && (a.piecesPerBox ?? null) === (b.piecesPerBox ?? null)
       // I2: the printed delivery promise is part of what is sold.
       && (a.leadTimeMinDays ?? null) === (b.leadTimeMinDays ?? null)
-      && (a.leadTimeMaxDays ?? null) === (b.leadTimeMaxDays ?? null) && sameMockText(a.stockSource, b.stockSource);
+      && (a.leadTimeMaxDays ?? null) === (b.leadTimeMaxDays ?? null) && sameMockText(a.stockSource, b.stockSource)
+      && sameMockText(a.locationLabel, b.locationLabel) && sameMockText(a.itemNotes, b.itemNotes);
   });
 }
 

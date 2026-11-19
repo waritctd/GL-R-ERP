@@ -8,7 +8,8 @@ import { stageIndexIn, useStageCatalog } from '../tickets/stageCatalog.js';
 // "ความเคลื่อนไหวของทีม" for the manager / CEO landings: one row per deal owner over `range`. `deals` is the
 // deal list fetched with that SAME range (null while loading); the server already scopes it for the role, so
 // nothing is filtered here. Each count links to the deal list filtered by owner + week key AND carrying the
-// range explicitly, so the list opens on exactly the range the counts were computed for.
+// range explicitly, so the list opens on exactly the range the counts were computed for. `deals` (project-folded) drives
+// the counts; `orders` (unfolded, one row per order) drives the ordered/expected money, each order by its own stage.
 function Count({ id, week, range, value, danger = false }) {
   return (
     <Link
@@ -22,15 +23,15 @@ function Count({ id, week, range, value, danger = false }) {
 
 const HEADS = ['ผู้ดูแล', 'งานที่เปิดอยู่', 'ขยับขั้น', 'มีกิจกรรม', 'เลยนัด', 'ไม่เคลื่อนไหว', 'ยอดที่สั่งซื้อแล้ว', 'ยอดคาดหวัง'];
 
-export function TeamMovementPanel({ deals, range }) {
+export function TeamMovementPanel({ deals, orders = null, range }) {
   const { catalog } = useStageCatalog();
   const todayIso = bangkokTodayIso();
   // Until the catalog loads nothing can be classed as ordered or expected: show — rather than a wrong split.
   const catalogReady = stageIndexIn(catalog, 'ORDER_RECEIVED') >= 0;
   const rows = useMemo(() => {
     if (!deals) return null;
-    return summariseByOwner(deals, range, todayIso, isOrderedIn(catalog));
-  }, [deals, catalog, range, todayIso]);
+    return summariseByOwner(deals, range, todayIso, isOrderedIn(catalog), orders ?? deals);
+  }, [deals, orders, catalog, range, todayIso]);
   return (
     <Panel
       flush

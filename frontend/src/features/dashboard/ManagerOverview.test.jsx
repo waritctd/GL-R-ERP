@@ -222,11 +222,12 @@ describe('ManagerOverview', () => {
       expect(probeText()).toBe(`/tickets?owner=12&week=activity&from=${addDays(TODAY, -6)}&to=${TODAY}`);
     });
 
-    it('reads the deal list once, with the default 7-day range', async () => {
+    it('reads the deal list folded (counts) and per order (money), each once, with the default 7-day range', async () => {
       renderOverview();
       await screen.findByTestId('team-row-11');
-      expect(api.tickets.list).toHaveBeenCalledTimes(1);
+      expect(api.tickets.list).toHaveBeenCalledTimes(2);
       expect(api.tickets.list).toHaveBeenCalledWith({ movementFrom: addDays(TODAY, -6), movementTo: TODAY, fold: 'project' });
+      expect(api.tickets.list).toHaveBeenCalledWith({ movementFrom: addDays(TODAY, -6), movementTo: TODAY });
     });
   });
 

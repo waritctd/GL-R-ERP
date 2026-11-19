@@ -297,7 +297,7 @@ function CeoToday({ user, employee, dashboardSummary, switcher, panelProps }) {
         </dl>
       </section>
 
-      <TeamMovementPanel deals={projectTicketsQuery.data ?? null} range={teamRange} />
+      <TeamMovementPanel deals={projectTicketsQuery.data ?? null} orders={ticketsQuery.data ?? null} range={teamRange} />
 
       <div className="grid items-start gap-[18px] grid-cols-[1.6fr_1fr] nav-drawer:grid-cols-1">
         <Panel

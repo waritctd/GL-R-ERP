@@ -38,10 +38,11 @@ const blank = (v) => (v == null || String(v).trim() === '' ? null : String(v).tr
  * Mirror of the server's rule (DealQuotationService#reusesApprovedPricesOnly), only to word the caption honestly: at
  * least one line, every line picked from an approved item (its price and identity are locked), no adjustment line, the
  * document's price mode / language equal the source's, the commercial terms (deposit %, remainder, credit days, full
- * payment term) equal the first order's, each line's lead time and stock source equal its source's, no explicit-date validity and no customer notes. The server decides.
+ * payment term) equal the first order's, each line's lead time, stock source, location heading and note equal its source's, no explicit-date validity and no customer notes. The server decides.
  */
 export function reusesApprovedPricesOnly({
   items, adjustments, depositPercent, sourceDepositPercent, sourceTerms, terms = {}, reusable, docSettings,
+  locationOf = (it) => it.locationLabel,
 }) {
   if (!items.length || adjustments.length || sourceDepositPercent == null) return false;
   if (depositPercent === '' || Number(depositPercent) !== Number(sourceDepositPercent)) return false;
@@ -57,6 +58,8 @@ export function reusesApprovedPricesOnly({
     // The printed delivery promise is part of what is sold: a changed lead time or stock source needs approval.
     return Boolean(source) && (it.leadTimeMinDays ?? null) === (source.leadTimeMinDays ?? null)
       && (it.leadTimeMaxDays ?? null) === (source.leadTimeMaxDays ?? null) && blank(it.stockSource) === blank(source.stockSource)
+      // Free text nobody approved must not ride a rule-approved quotation (server: DealQuotationService#sameIdentity).
+      && blank(locationOf(it)) === blank(source.locationLabel) && blank(it.itemNotes) === blank(source.itemNotes)
       && (docSettings.priceMode ?? 'NET') === (source.documentPriceMode ?? 'NET')
       && (docSettings.documentLanguage ?? 'TH') === (source.documentLanguage ?? 'TH');
   });

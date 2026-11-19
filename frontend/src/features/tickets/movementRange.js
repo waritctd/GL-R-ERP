@@ -95,9 +95,11 @@ export function isOrderedIn(catalog) {
 /**
  * One row per deal owner with at least one open (ACTIVE) deal, for the manager / CEO team panel.
  * `isOrdered(deal)` says whether a deal is at or after ORDER_RECEIVED (ordered vs expected value).
- * Sorted by ไม่เคลื่อนไหว desc, then name.
+ * Sorted by ไม่เคลื่อนไหว desc, then name. `deals` may be project-folded rows (counts match the list they link to); money
+ * is split ordered/expected from `orders` (UNFOLDED, one row per order, default `deals`): a folded row carries the lead
+ * order's stage but every open order's value, so only an order's own stage can class its own money.
  */
-export function summariseByOwner(deals, range, todayIso, isOrdered) {
+export function summariseByOwner(deals, range, todayIso, isOrdered, orders = deals) {
   const byOwner = new Map();
   for (const deal of deals) {
     if (!isActive(deal) || deal.createdById == null) continue;
@@ -114,7 +116,10 @@ export function summariseByOwner(deals, range, todayIso, isOrdered) {
     if (weekPredicates.activity(deal)) row.activity += 1;
     if (weekPredicates.overdue(deal, range, todayIso)) row.overdue += 1;
     if (weekPredicates.silent(deal)) row.silent += 1;
-    row[isOrdered(deal) ? 'won' : 'expected'] += Number(deal.amountPayable) || 0;
+  }
+  for (const order of orders) {
+    const row = isActive(order) && order.createdById != null ? byOwner.get(order.createdById) : null;
+    if (row) row[isOrdered(order) ? 'won' : 'expected'] += Number(order.amountPayable) || 0;
   }
   return [...byOwner.values()].sort((a, b) => b.silent - a.silent || a.ownerName.localeCompare(b.ownerName, 'th'));
 }

@@ -278,15 +278,17 @@ public class DealPartyService {
         if (!(DealOwnership.isOwnerOrKeyer(source, actor.id()) || tickets.holdsAllSalesDocumentsGrant(actor))) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เปิดออเดอร์เพิ่มในงานนี้");
         }
-        tickets.lockTicketForUpdate(ticketId);
-        requireActive(requireSummary(ticketId));
         // An add-on always hangs directly under its root, so one hop is the whole walk.
         // A null parent (FK ON DELETE SET NULL after the root was hard-deleted) makes the add-on its own root.
         long rootId = "ADD_ON".equals(source.childKind()) && source.parentTicketId() != null
             ? source.parentTicketId() : ticketId;
+        // Lock order: the ROOT first, then the source add-on (same order as DealQuotationService#submit), so the two
+        // cannot deadlock.
         if (rootId != ticketId) {
             tickets.lockTicketForUpdate(rootId);
         }
+        tickets.lockTicketForUpdate(ticketId);
+        requireActive(requireSummary(ticketId));
         TicketSummaryDto root = requireSummary(rootId);
         String code = root.code() + "-" + (parties.countChildren(rootId, "ADD_ON") + 2);
         long newId = parties.forkAddOn(rootId, code, actor.id());

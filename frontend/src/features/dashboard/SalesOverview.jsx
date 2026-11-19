@@ -172,14 +172,18 @@ export function SalesOverview({ user, employee, showToast }) {
     return sortWorklist(items);
   }, [activeDeals, pricingRequests, stageCatalog, quotedDealIds, quotationRows, sourceDealIds, sourceRows]);
 
-  const { ordered, expected } = useMemo(() => {
+  // COUNTS (งาน) come from the folded project rows, so they match the list they link to; MONEY is classified per ORDER by
+  // that order's own stage (a folded row carries the lead order's stage but the sum of every open order's value).
+  const { ordered, expected, orderedMoney, expectedMoney } = useMemo(() => {
     const isOrdered = isOrderedIn(stageCatalog);
     const activeProjects = projectDeals.filter((deal) => deal.lifecycle === 'ACTIVE');
     return {
       ordered: activeProjects.filter(isOrdered),
       expected: orderReceivedIdx >= 0 ? activeProjects.filter((deal) => !isOrdered(deal)) : [],
+      orderedMoney: sumAmount(activeDeals.filter(isOrdered)),
+      expectedMoney: orderReceivedIdx >= 0 ? sumAmount(activeDeals.filter((deal) => !isOrdered(deal))) : 0,
     };
-  }, [projectDeals, stageCatalog, orderReceivedIdx]);
+  }, [projectDeals, activeDeals, stageCatalog, orderReceivedIdx]);
 
   const grouped = useMemo(() => {
     const byKey = Object.fromEntries(GROUPS.map((g) => [g.key, []]));
@@ -208,12 +212,12 @@ export function SalesOverview({ user, employee, showToast }) {
               <Figure
                 lead
                 label="ยอดที่สั่งซื้อแล้ว"
-                value={dash(projectTicketsQuery, projectTicketsQuery.data && (catalogReady ? formatMoney(sumAmount(ordered)) : '—'))}
+                value={dash(ticketsQuery, ticketsQuery.data && (catalogReady ? formatMoney(orderedMoney) : '—'))}
                 caption={`${ordered.length} งาน · ยังไม่ปิดงาน`}
               />
               <Figure
                 label="ยอดคาดหวัง"
-                value={dash(projectTicketsQuery, projectTicketsQuery.data && (catalogReady ? formatMoney(sumAmount(expected)) : '—'))}
+                value={dash(ticketsQuery, ticketsQuery.data && (catalogReady ? formatMoney(expectedMoney) : '—'))}
                 caption={`${expected.length} งาน · ยังไม่ได้รับใบสั่งซื้อ`}
               />
               <Figure

@@ -1179,6 +1179,7 @@ export function QuotationEditorPage({ user, showToast }) {
   const reusesApprovedOnly = isAddOn && reusesApprovedPricesOnly({
     items, adjustments, depositPercent: terms.noDeposit ? 0 : terms.depositPercent, sourceDepositPercent, sourceTerms,
     terms, reusable: reusableQuery.data?.items ?? [], docSettings,
+    locationOf: (it) => labelByGroupId.get(it.groupId) ?? it.locationLabel,
   });
   // The server's own adjustment rows, in order, once the editor is clean — what each QuotationAdjustmentRow
   // shows instead of its estimate.
