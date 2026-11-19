@@ -320,23 +320,42 @@ describe('mockApi drawn details (slice 6)', () => {
 
 // Last on purpose: it adds an add-on and closes a root in the shared mock database.
 describe('mockApi.salesBoard one row per project (add-on orders)', () => {
-  it('folds an add-on into its root (count, codes), and keeps the project under the root when the root is closed', async () => {
+  it('applies the one fold rule on the board and in tickets.list({ fold: "project" })', async () => {
     await api.auth.login({ role: 'sales' });
     const before = (await api.salesBoard.myWork()).board;
     const root = before[0];
     const { addOnOrder } = await api.tickets.createAddOnOrder(root.ticketId);
 
+    // both orders open: one row, two orders, both counted
     const after = (await api.salesBoard.myWork()).board;
     expect(after).toHaveLength(before.length);
     expect(after.map((d) => d.ticketId)).not.toContain(addOnOrder.ticketId);
     const folded = after.find((d) => d.ticketId === root.ticketId);
-    expect(folded.orderCount).toBe(2);
+    expect([folded.orderCount, folded.openOrderCount]).toEqual([2, 2]);
     expect(folded.orderCodes).toEqual([expect.any(String), addOnOrder.code]);
 
+    // another rep owns the add-on: the owner of the root counts only their own order
+    patchTicketForTests(addOnOrder.ticketId, { createdById: 12 });
+    const own = (await api.salesBoard.myWork()).board.find((d) => d.ticketId === root.ticketId);
+    expect([own.orderCount, own.openOrderCount]).toEqual([1, 1]);
+    patchTicketForTests(addOnOrder.ticketId, { createdById: root.ownerId });
+
+    // the root closes: still ONE open row under the root's id, in the add-on's stage, worth the open order only
     patchTicketForTests(root.ticketId, { salesStage: 'CLOSED_PAID' });
     const closed = (await api.salesBoard.myWork()).board;
-    expect(closed.map((d) => d.ticketId)).toContain(root.ticketId);
+    const card = closed.find((d) => d.ticketId === root.ticketId);
     expect(closed.map((d) => d.ticketId)).not.toContain(addOnOrder.ticketId);
-    expect(closed.find((d) => d.ticketId === root.ticketId).orderCount).toBe(2);
+    expect([card.orderCount, card.openOrderCount]).toEqual([2, 1]);
+    expect(card.salesStage).toBe('QUOTE_BUYER');
+
+    const rows = (await api.tickets.list({ fold: 'project' })).tickets;
+    const row = rows.find((t) => t.id === root.ticketId);
+    expect(rows.map((t) => t.id)).not.toContain(addOnOrder.ticketId);
+    expect(row).toMatchObject({ code: expect.any(String), salesStage: 'QUOTE_BUYER', orderCount: 2, openOrderCount: 1 });
+    expect((await api.tickets.list({})).tickets.map((t) => t.id)).toContain(addOnOrder.ticketId);
+
+    await api.auth.login({ role: 'import' });
+    const importRows = (await api.tickets.list({ fold: 'project' })).tickets;
+    expect(importRows).toHaveLength((await api.tickets.list({})).tickets.length);
   });
 });

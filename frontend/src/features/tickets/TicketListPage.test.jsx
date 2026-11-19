@@ -1015,22 +1015,27 @@ describe('TicketListPage', () => {
       api.tickets.list.mockResolvedValue({ tickets: MOVE_DEALS });
     });
 
-    it('an add-on folds into its project: one row with the order tag and the summed value, found by its own number', async () => {
+    it('asks the server for one row per project, and labels a project with an open add-on and a closed first order', async () => {
       api.tickets.list.mockResolvedValue({
         tickets: [
-          moveDeal(801, 'ลูกค้า-โครงการ', { code: 'DL-1', amountPayable: 1000 }),
-          moveDeal(802, 'ลูกค้า-โครงการ', {
-            code: 'DL-1-2', amountPayable: 500, childKind: 'ADD_ON', parentTicketId: 801, parentCode: 'DL-1',
+          moveDeal(801, 'ลูกค้า-โครงการ', {
+            code: 'DL-1', amountPayable: 500, orderCount: 2, openOrderCount: 1, orderCodes: ['DL-1', 'DL-1-2'],
           }),
         ],
       });
       renderTicketListPage(salesUser, ['/tickets?q=DL-1-2']);
       await screen.findByText('ลูกค้า-โครงการ');
 
-      const footer = screen.getByTestId('deal-list-footer');
-      expect(footer.textContent).toContain('1 รายการ');
-      expect(footer.textContent).toContain('฿1,500.00');
+      expect(lastListArgs()).toMatchObject({ fold: 'project' });
+      expect(screen.getByTestId('deal-list-footer').textContent).toContain('1 รายการ');
       expect(screen.getAllByText(/2 ออเดอร์/).length).toBeGreaterThan(0);
+      expect(screen.getByText('รวม 1 จาก 2 ออเดอร์ที่ยังเปิดอยู่')).toBeTruthy();
+    });
+
+    it('import keeps asking for one row per order (no fold)', async () => {
+      renderTicketListPage(importUser, ['/tickets?inbox=0']);
+      await waitFor(() => expect(api.tickets.list).toHaveBeenCalled());
+      expect(api.tickets.list.mock.calls.at(-1)[0]).not.toHaveProperty('fold');
     });
 
     it('sales: renders the ช่วงวันที่ row with the default 7-day range and sends it to the API', async () => {
@@ -1181,7 +1186,7 @@ describe('TicketListPage', () => {
         api.tickets.list.mockClear();
         const view = renderTicketListPage(salesUser, [`/tickets?${query}`]);
         await screen.findByText('ลูกค้า-ขยับ');
-        expect(lastListArgs()).toEqual({ movementFrom: addDays(TODAY, -6), movementTo: TODAY });
+        expect(lastListArgs()).toEqual({ movementFrom: addDays(TODAY, -6), movementTo: TODAY, fold: 'project' });
         view.unmount();
       }
     });

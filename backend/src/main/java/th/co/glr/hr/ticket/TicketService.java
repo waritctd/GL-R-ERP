@@ -216,7 +216,23 @@ public class TicketService {
      */
     public Page<TicketSummaryDto> listPage(String status, String salesStage, LocalDate movementFrom,
                                            LocalDate movementTo, UserPrincipal actor, PageRequest page) {
+        return listPage(status, salesStage, movementFrom, movementTo, null, actor, page);
+    }
+
+    /** Roles whose lists are project-level: add-on orders fold into their project. Import and account act on each
+     * order, so their lists stay one row per order whatever {@code fold} says. */
+    private static final Set<String> FOLD_ROLES = Set.of("sales", "sales_manager", "ceo");
+
+    /**
+     * @param fold {@code "project"} (else 400): one row per project — see {@link ProjectFold}. Served whole (not paged),
+     *             only to sales / sales_manager / ceo; other roles get the per-order list.
+     */
+    public Page<TicketSummaryDto> listPage(String status, String salesStage, LocalDate movementFrom,
+                                           LocalDate movementTo, String fold, UserPrincipal actor, PageRequest page) {
         requireRole(actor, VIEWER_ROLES);
+        if (fold != null && !"project".equals(fold)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "fold ต้องเป็น project");
+        }
         if ((movementFrom == null) != (movementTo == null)) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุ movementFrom และ movementTo ทั้งคู่");
         }
@@ -227,6 +243,13 @@ public class TicketService {
         // Role-scoped views: import/account only see the slice of the deal
         // pipeline relevant to their own worklist — see TicketRepository.appendRoleScope.
         // ceo/sales_manager/sales are unaffected (the repository ignores any other role).
+        if (fold != null && FOLD_ROLES.contains(actor.role())) {
+            List<TicketSummaryDto> all = forRole(
+                tickets.findSummaries(status, salesStage, createdByFilter, actor.role(), null, movementFrom, movementTo),
+                actor.role());
+            List<TicketSummaryDto> folded = foldProjects(all);
+            return new Page<>(folded, 0, Math.max(folded.size(), 1), folded.size());
+        }
         List<TicketSummaryDto> rows =
             forRole(tickets.findSummaries(status, salesStage, createdByFilter, actor.role(), page, movementFrom, movementTo),
                 actor.role());
@@ -235,6 +258,49 @@ public class TicketService {
             ? rows.size()
             : tickets.countSummaries(status, salesStage, createdByFilter, actor.role());
         return new Page<>(rows, page.page(), page.size(), total);
+    }
+
+    /** The list as one row per project (ProjectFold). The rows ARE the viewer's scope: an order is visible when it is in
+     * {@code rows}; a root outside it lends its code and title only. */
+    private List<TicketSummaryDto> foldProjects(List<TicketSummaryDto> rows) {
+        Set<Long> listed = rows.stream().map(TicketSummaryDto::id).collect(java.util.stream.Collectors.toSet());
+        ProjectFold.Ops<TicketSummaryDto> ops = new ProjectFold.Ops<>() {
+            public long id(TicketSummaryDto t) { return t.id(); }
+            public Long parentId(TicketSummaryDto t) { return "ADD_ON".equals(t.childKind()) ? t.parentTicketId() : null; }
+            public String code(TicketSummaryDto t) { return t.code(); }
+            public boolean visible(TicketSummaryDto t) { return listed.contains(t.id()); }
+            public boolean open(TicketSummaryDto t) {
+                return "ACTIVE".equals(t.lifecycle()) && !"CLOSED_PAID".equals(t.salesStage());
+            }
+            public boolean cancelled(TicketSummaryDto t) { return "CANCELLED".equals(t.lifecycle()); }
+            public java.time.Instant activity(TicketSummaryDto t) {
+                java.time.Instant a = t.lastActivityAt() == null ? null
+                    : t.lastActivityAt().atStartOfDay(java.time.ZoneOffset.UTC).toInstant();
+                java.time.Instant best = t.stageUpdatedAt() != null ? t.stageUpdatedAt() : t.updatedAt();
+                return a != null && (best == null || a.isAfter(best)) ? a : best;
+            }
+            public TicketSummaryDto project(ProjectFold.Project<TicketSummaryDto> p) {
+                List<TicketSummaryDto> counted = p.open().isEmpty() ? p.orders() : p.open();
+                java.math.BigDecimal payable = null;
+                java.math.BigDecimal paid = null;
+                java.math.BigDecimal outstanding = null;
+                for (TicketSummaryDto o : counted) {
+                    payable = add(payable, o.amountPayable());
+                    paid = add(paid, o.amountPaid());
+                    outstanding = add(outstanding, o.amountOutstanding());
+                }
+                long linkId = p.mayOpenRoot() ? p.root().id() : p.lead().id();
+                return p.lead().asProject(linkId, p.root(), payable, paid, outstanding, p.count(), p.open().size(),
+                    p.codes(TicketSummaryDto::code));
+            }
+            private java.math.BigDecimal add(java.math.BigDecimal a, java.math.BigDecimal b) {
+                return a == null ? b : b == null ? a : a.add(b);
+            }
+        };
+        return ProjectFold.fold(rows, ops,
+            keys -> keys.stream().filter(k -> !listed.contains(k))
+                .map(k -> tickets.findSummaryById(k).orElse(null)).filter(java.util.Objects::nonNull).toList(),
+            false);
     }
 
     public TicketDto get(long id, UserPrincipal actor) {

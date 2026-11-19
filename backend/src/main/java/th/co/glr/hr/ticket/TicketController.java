@@ -54,12 +54,14 @@ public class TicketController {
         // Movement range (inclusive Asia/Bangkok days): adds stageChangedInRange / activityInRange to every row.
         @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate movementFrom,
         @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate movementTo,
+        // fold=project: one row per project (add-on orders folded in), served whole; sales / sales_manager / ceo only.
+        @RequestParam(required = false) String fold,
         @RequestParam(required = false) Integer page,
         @RequestParam(required = false) Integer size,
         HttpSession session
     ) {
         UserPrincipal user = sessions.requireUser(session);
-        Page<TicketSummaryDto> result = ticketService.listPage(status, salesStage, movementFrom, movementTo, user, PageRequest.resolve(page, size));
+        Page<TicketSummaryDto> result = ticketService.listPage(status, salesStage, movementFrom, movementTo, fold, user, PageRequest.resolve(page, size));
         return new TicketListResponse(result.items(), result.page(), result.size(), result.total());
     }
 

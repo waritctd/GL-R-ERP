@@ -1,5 +1,6 @@
 import { Link } from 'react-router-dom';
 import { Icon } from '../../components/common/Icon.jsx';
+import { orderTotalLabel } from '../tickets/orderChain.js';
 import {
   BOARD_COLUMNS, MONEY_CHIP_COLUMNS, cardMoneyChip, money, otherCurrencyTotals, ownerShortName, quarterLabel, sumValue,
   totalLabel,
@@ -82,7 +83,7 @@ function DealCard({ deal, showCode, showOwner }) {
       <span className="flex flex-wrap items-center justify-between gap-2">
         <span className="flex flex-wrap items-baseline gap-1.5">
           <span className="text-sm font-bold tabular-nums text-text">{money(deal.value, deal.currency)}</span>
-          {deal.orderCount > 1 ? <span className="text-xs text-text-muted">รวม {deal.orderCount} ออเดอร์</span> : null}
+          {orderTotalLabel(deal) ? <span className="text-xs text-text-muted">{orderTotalLabel(deal)}</span> : null}
           {deal.valueExpired ? <Chip>หมดอายุ</Chip> : null}
         </span>
         <span className="flex flex-wrap gap-1">

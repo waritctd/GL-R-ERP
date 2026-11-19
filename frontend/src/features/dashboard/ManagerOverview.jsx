@@ -87,8 +87,9 @@ function ManagerToday({ user, employee, switcher, panelProps }) {
   // The team-movement panel and อัตราปิดงาน read the deal list with the default 7-day range (server flags per row).
   const teamRange = useMemo(() => defaultRange(), []);
   const ticketsQuery = useQuery({
-    queryKey: queryKeys.ticketListByRange(teamRange.from, teamRange.to),
-    queryFn: () => api.tickets.list({ movementFrom: teamRange.from, movementTo: teamRange.to }).then((r) => r.tickets ?? []),
+    // One row per project, like the list the panel links to (server-side fold).
+    queryKey: queryKeys.ticketListByRange(teamRange.from, teamRange.to, 'project'),
+    queryFn: () => api.tickets.list({ movementFrom: teamRange.from, movementTo: teamRange.to, fold: 'project' }).then((r) => r.tickets ?? []),
   });
 
   // null while loading: the panel shows its own skeleton, the rest of the page is already up.

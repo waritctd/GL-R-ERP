@@ -87,6 +87,12 @@ function CeoToday({ user, employee, dashboardSummary, switcher, panelProps }) {
     queryFn: () => api.tickets.list({ movementFrom: teamRange.from, movementTo: teamRange.to })
       .then((r) => (Array.isArray(r) ? r : (r?.tickets ?? []))),
   });
+  // The panel reads one row per project (like the list it links to); the close-verify worklist below stays per order.
+  const projectTicketsQuery = useQuery({
+    queryKey: queryKeys.ticketListByRange(teamRange.from, teamRange.to, 'project'),
+    queryFn: () => api.tickets.list({ movementFrom: teamRange.from, movementTo: teamRange.to, fold: 'project' })
+      .then((r) => r?.tickets ?? []),
+  });
   const pricingQueueQuery = useQuery({
     queryKey: queryKeys.pricingRequestQueue({ activeOnly: true }),
     queryFn: () => api.pricingRequests.queue({ activeOnly: true }).then((r) => r.items ?? []),
@@ -291,7 +297,7 @@ function CeoToday({ user, employee, dashboardSummary, switcher, panelProps }) {
         </dl>
       </section>
 
-      <TeamMovementPanel deals={tickets} range={teamRange} />
+      <TeamMovementPanel deals={projectTicketsQuery.data ?? null} range={teamRange} />
 
       <div className="grid items-start gap-[18px] grid-cols-[1.6fr_1fr] nav-drawer:grid-cols-1">
         <Panel

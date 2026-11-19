@@ -8962,7 +8962,7 @@ function mockWithPaymentDue(rows) {
   // Callers (fix round 2): my-work board, team-board board, and my-work's returning followUp rows.
   return rows.map((d) => {
     if (d.boardColumn < 4) return d;
-    const due = derivePaymentFields(db.tickets.find((t) => t.id === d.ticketId));
+    const due = derivePaymentFields(db.tickets.find((t) => t.id === (d.leadTicketId ?? d.ticketId)));
     return { ...d, paymentDueDate: due.paymentDueDate ?? null, overdue: Boolean(due.overdue) };
   });
 }
@@ -8988,64 +8988,99 @@ export function receiptSourceForTests(allReceipts) {
 
 /** Every open deal (ACTIVE, not CLOSED_PAID) as a BoardDeal, ordered as the repository's
  * `ORDER BY last_touched_at, t.ticket_id`. */
-function mockBoardDeals() {
-  return mockFoldAddOnOrders(mockBoardRows((t) => (t.lifecycle ?? 'ACTIVE') === 'ACTIVE' && t.salesStage !== 'CLOSED_PAID'));
+function mockBoardDeals(ownerScope = null) {
+  return mockProjectFold(
+    mockBoardRows((t) => (t.lifecycle ?? 'ACTIVE') === 'ACTIVE' && t.salesStage !== 'CLOSED_PAID'
+      && (ownerScope == null || t.createdById === ownerScope)),
+    mockBoardFoldOps(ownerScope),
+  );
 }
 
 /** SalesBoardRepository#returningPausedDeals*: paused deals whose วันที่จะกลับมาดู has arrived (QuietRule#returningSql,
  * mirrored by quietRule.js#isReturning), in the same row shape and order. */
-function mockReturningPausedDeals() {
+function mockReturningPausedDeals(ownerScope = null) {
   const today = mockTodayIso();
-  return mockFoldAddOnOrders(mockBoardRows((t) => mockIsReturning(t, today) && t.salesStage !== 'CLOSED_PAID'));
+  return mockProjectFold(
+    mockBoardRows((t) => mockIsReturning(t, today) && t.salesStage !== 'CLOSED_PAID'
+      && (ownerScope == null || t.createdById === ownerScope)),
+    mockBoardFoldOps(ownerScope),
+    true,
+  );
 }
 
 /**
- * Mirrors SalesBoardRepository#fold (M3): one row per project. An ADD_ON row folds into its root when the root is in
- * the list (root keeps its place; orderCount + codes + value summed when the currencies match). A root NOT in the
- * list (closed / paused) is read here and the project's card is the root's id / title under the add-on's live stage;
- * a root owned by someone else than the add-on is never read for them, so that add-on stays its own row.
+ * Mirrors th.co.glr.hr.ticket.ProjectFold, THE fold rule (one row per project), once for every list that folds:
+ * the root's identity; state from the lead order (the root when open, else the open add-on with the latest activity,
+ * else the root); orders counted = the viewer's visible non-cancelled chain, root first; value = the OPEN orders only;
+ * link = the root when the viewer may see it, else the lead. Rows outside an add-on chain pass through.
+ * `o`: { id, parentId (null unless ADD_ON), code, visible, open, cancelled, activity, related(keys) -> rows,
+ * project({root, lead, orders, open, mayOpenRoot}) -> row }.
  */
-function mockFoldAddOnOrders(rows) {
-  const isAddOn = (r) => {
-    const t = db.tickets.find((x) => x.id === r.ticketId);
-    return t?.childKind === 'ADD_ON' && t.parentTicketId != null;
-  };
-  const parentOf = (r) => db.tickets.find((x) => x.id === r.ticketId).parentTicketId;
-  const listed = new Set(rows.map((r) => r.ticketId));
-  const missing = new Set(rows.filter(isAddOn).map(parentOf).filter((id) => !listed.has(id)));
-  const roots = new Map(mockBoardRows((t) => missing.has(t.id)).map((r) => [r.ticketId, r]));
-  const slots = new Map();
+function mockProjectFold(rows, o, skipIfOpen = false) {
+  const keys = new Set(rows.map((r) => o.parentId(r) ?? o.id(r)));
+  if (!keys.size) return rows;
+  const byId = new Map(rows.map((r) => [o.id(r), r]));
+  for (const r of o.related(keys)) if (!byId.has(o.id(r))) byId.set(o.id(r), r);
+  const addOns = new Map();
+  for (const r of byId.values()) {
+    const parent = o.parentId(r);
+    if (parent != null) addOns.set(parent, [...(addOns.get(parent) ?? []), r]);
+  }
+  const done = new Set();
   const out = [];
   for (const r of rows) {
-    if (!isAddOn(r)) {
-      const slot = { card: { ...r }, orders: 1, codes: [r.orderCodes[0]] };
-      slots.set(r.ticketId, slot);
-      out.push(slot);
-    } else if (!listed.has(parentOf(r)) && !slots.has(parentOf(r))) {
-      const root = roots.get(parentOf(r));
-      if (!root || root.ownerId !== r.ownerId) { out.push({ plain: r }); continue; }
-      const slot = {
-        card: {
-          ...r, ticketId: root.ticketId, title: root.title, customerName: root.customerName,
-          projectName: root.projectName, ownerId: root.ownerId, ownerName: root.ownerName,
-          value: root.value, currency: root.currency,
-        },
-        orders: 1, codes: [root.orderCodes[0]],
+    const key = o.parentId(r) ?? o.id(r);
+    const root = byId.get(key);
+    if (!addOns.has(key) || !root) { out.push(r); continue; }
+    if (done.has(key)) continue;
+    done.add(key);
+    const chain = [root, ...addOns.get(key).sort((x, y) => o.id(x) - o.id(y))];
+    const visible = chain.filter(o.visible);
+    let orders = visible.filter((x) => !o.cancelled(x));
+    if (!orders.length) orders = visible;
+    if (!orders.length) { out.push(r); continue; }
+    const open = orders.filter(o.open);
+    if (skipIfOpen && open.length) continue;
+    const rootVisible = o.visible(root);
+    const latest = (list) => list.reduce((best, x) => {
+      const [ax, ab] = [o.activity(x) ?? '', o.activity(best) ?? ''];
+      return ax > ab || (ax === ab && o.id(x) > o.id(best)) ? x : best;
+    });
+    const lead = rootVisible && o.open(root) && !o.cancelled(root) ? root
+      : open.length ? latest(open) : rootVisible ? root : latest(orders);
+    out.push(o.project({ root, lead, orders, open, mayOpenRoot: rootVisible }));
+  }
+  return out;
+}
+
+/** The board's view of a row (SalesBoardRepository's Ops): facts come from the stored ticket. */
+function mockBoardFoldOps(ownerScope) {
+  const ticket = (r) => db.tickets.find((x) => x.id === r.ticketId);
+  const isAddOn = (r) => ticket(r)?.childKind === 'ADD_ON' && ticket(r).parentTicketId != null;
+  return {
+    id: (r) => r.ticketId,
+    parentId: (r) => (isAddOn(r) ? ticket(r).parentTicketId : null),
+    visible: (r) => ownerScope == null || r.ownerId === ownerScope,
+    open: (r) => (ticket(r).lifecycle ?? 'ACTIVE') === 'ACTIVE' && ticket(r).salesStage !== 'CLOSED_PAID',
+    cancelled: (r) => ticket(r).lifecycle === 'CANCELLED',
+    activity: (r) => r.lastTouchedAt,
+    related: (keys) => mockBoardRows((t) => keys.has(t.id) || (t.childKind === 'ADD_ON' && keys.has(t.parentTicketId))),
+    project: ({ root, lead, orders, open, mayOpenRoot }) => {
+      let value = null;
+      let currency = null;
+      for (const x of open.length ? open : orders) {
+        if (x.value == null) continue;
+        if (value == null) { value = x.value; currency = x.currency; } else if (currency === x.currency) value = round2(Number(value) + Number(x.value));
+      }
+      const owner = orders.includes(root) ? root : lead;
+      return {
+        ...lead, ticketId: mayOpenRoot ? root.ticketId : lead.ticketId, title: root.title, customerName: root.customerName,
+        projectName: root.projectName, ownerId: owner.ownerId, ownerName: owner.ownerName, value, currency,
+        orderCount: orders.length, openOrderCount: open.length, orderCodes: [...new Set([root, ...orders].map((x) => x.orderCodes[0]))],
+        leadTicketId: lead.ticketId,
       };
-      slots.set(parentOf(r), slot);
-      out.push(slot);
-    }
-  }
-  for (const r of rows) {
-    const slot = isAddOn(r) ? slots.get(parentOf(r)) : null;
-    if (!slot) continue;
-    slot.orders += 1;
-    slot.codes.push(r.orderCodes[0]);
-    if (r.value == null) continue;
-    if (slot.card.value == null) { slot.card.value = r.value; slot.card.currency = r.currency; }
-    else if (slot.card.currency === r.currency) slot.card.value = round2(Number(slot.card.value) + Number(r.value));
-  }
-  return out.map((o) => (o.plain ?? { ...o.card, orderCount: o.orders, orderCodes: o.codes }));
+    },
+  };
 }
 
 function mockBoardRows(include) {
@@ -9091,7 +9126,9 @@ function mockBoardRows(include) {
         returning: mockIsReturning(t, today),
         pauseReturnOn: t.pauseReturnOn ?? null,
         orderCount: 1,
+        openOrderCount: 1,
         orderCodes: [t.code],
+        leadTicketId: t.id,
         ...mockBoardCardDetails(t, valueQuotation),
         lastTouchedMs: last,
       };
@@ -10109,7 +10146,39 @@ export const api = {
         nextFollowUpAt: t.nextFollowUpAt ?? null,
         ...movementFlags(t),
         ...derivePaymentFields(t),
+        orderCount: 1, openOrderCount: 1, orderCodes: [],
       }));
+      if (params.fold != null && params.fold !== 'project') fail('fold ต้องเป็น project', 400);
+      // fold=project: ProjectFold, sales / sales_manager / ceo only (import and account act on each order).
+      if (params.fold === 'project' && canReadActivities) {
+        const listed = new Set(tickets.map((x) => x.id));
+        const lifecycleOf = (x) => x.lifecycle ?? 'ACTIVE';
+        const sum = (rows, field) => rows.reduce((acc, x) => (x[field] == null ? acc : (acc ?? 0) + Number(x[field])), null);
+        return delay({
+          tickets: mockProjectFold(tickets, {
+            id: (x) => x.id,
+            parentId: (x) => (x.childKind === 'ADD_ON' ? x.parentTicketId : null),
+            visible: (x) => listed.has(x.id),
+            open: (x) => lifecycleOf(x) === 'ACTIVE' && x.salesStage !== 'CLOSED_PAID',
+            cancelled: (x) => lifecycleOf(x) === 'CANCELLED',
+            activity: (x) => [x.lastActivityAt, x.stageUpdatedAt].filter(Boolean).sort().at(-1) ?? null,
+            // A root outside the viewer's list lends its code and title only.
+            related: (keys) => [...keys].filter((k) => !listed.has(k)).map((k) => db.tickets.find((x) => x.id === k)).filter(Boolean)
+              .map((x) => ({ ...x, projectName: x.projectId ? (mockProjects.find((q) => q.id === x.projectId)?.name ?? null) : null })),
+            project: ({ root, lead, orders, open, mayOpenRoot }) => {
+              const counted = open.length ? open : orders;
+              return {
+                ...lead, id: mayOpenRoot ? root.id : lead.id, code: root.code, title: root.title,
+                customerName: root.customerName, projectId: root.projectId ?? null, projectName: root.projectName ?? null,
+                parentTicketId: null, parentCode: null, childKind: null,
+                amountPayable: sum(counted, 'amountPayable'), amountPaid: sum(counted, 'amountPaid'),
+                amountOutstanding: sum(counted, 'amountOutstanding'),
+                orderCount: orders.length, openOrderCount: open.length, orderCodes: [...new Set([root, ...orders].map((x) => x.code))],
+              };
+            },
+          }),
+        });
+      }
       return delay({ tickets });
     },
 
@@ -14851,9 +14920,9 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
     async myWork() {
       const user = requireSession();
       if (!['sales', 'sales_manager', 'ceo'].includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
-      const board = mockBoardDeals().filter((d) => d.ownerId === user.id);
+      const board = mockBoardDeals(user.id);
       // ควรตามต่อ also takes the caller's OWN returning paused deals (SalesBoardRepository#returningPausedDealsOwnedBy).
-      const returning = mockReturningPausedDeals().filter((d) => d.ownerId === user.id);
+      const returning = mockReturningPausedDeals(user.id);
       return delay({
         // Fix round 2 (SalesBoardService#myWork): the RETURNING followUp rows are DealBoard cards in งานของฉัน's
         // เฉพาะงานเงียบ view, so they carry the due state too; the active followUp rows (ควรตามต่อ list only) do not.

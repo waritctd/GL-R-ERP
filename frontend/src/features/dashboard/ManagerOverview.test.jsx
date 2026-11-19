@@ -226,7 +226,7 @@ describe('ManagerOverview', () => {
       renderOverview();
       await screen.findByTestId('team-row-11');
       expect(api.tickets.list).toHaveBeenCalledTimes(1);
-      expect(api.tickets.list).toHaveBeenCalledWith({ movementFrom: addDays(TODAY, -6), movementTo: TODAY });
+      expect(api.tickets.list).toHaveBeenCalledWith({ movementFrom: addDays(TODAY, -6), movementTo: TODAY, fold: 'project' });
     });
   });
 

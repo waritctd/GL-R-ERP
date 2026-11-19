@@ -29,7 +29,7 @@ import {
 import { ThaiDateInput } from '../../components/common/ThaiDateInput.jsx';
 import { StageProgressBar } from './DealStageStepper.jsx';
 import { dealHref } from '../finance/dealHref.js';
-import { foldAddOnOrders } from './orderChain.js';
+import { orderTotalLabel } from './orderChain.js';
 import { dealInScope } from './salesViewScope.js';
 import {
   EMPTY_STAGE_CATALOG, findStage, routePositionForChannel, stageIndexIn, useStageCatalog,
@@ -524,7 +524,7 @@ function SalesDealCard({ deal, catalog, showOwner = false, onOpen }) {
         </span>
         <span className="flex flex-col items-end">
           <strong className="tabular-nums">{dealAmountLabel(deal)}</strong>
-          {deal.orderCount > 1 ? <small className="text-xs font-normal text-text-muted">รวม {deal.orderCount} ออเดอร์</small> : null}
+          {orderTotalLabel(deal) ? <small className="text-xs font-normal text-text-muted">{orderTotalLabel(deal)}</small> : null}
         </span>
       </div>
       <strong className="ticket-card-title">{deal.customerName || deal.title}</strong>
@@ -561,7 +561,7 @@ function buildSalesColumns({ role, catalog }) {
       render: (deal) => (
         <span className="block text-right text-sm font-bold tabular-nums text-text">
           {dealAmountLabel(deal)}
-          {deal.orderCount > 1 ? <small className="block text-xs font-normal text-text-muted">รวม {deal.orderCount} ออเดอร์</small> : null}
+          {orderTotalLabel(deal) ? <small className="block text-xs font-normal text-text-muted">{orderTotalLabel(deal)}</small> : null}
         </span>
       ),
     },
@@ -701,14 +701,15 @@ export function TicketListPage({ user, showToast, viewSwitch = null }) {
   });
   const quietDays = teamOverviewQuery.data?.quietDays ?? null;
   const ticketsQuery = useQuery({
-    queryKey: isSales ? queryKeys.ticketListByRange(range.from, range.to) : queryKeys.ticketList(''),
-    queryFn: () => api.tickets.list(isSales ? { movementFrom: range.from, movementTo: range.to } : {})
+    queryKey: isSales ? queryKeys.ticketListByRange(range.from, range.to, 'project') : queryKeys.ticketList(''),
+    queryFn: () => api.tickets.list(isSales ? { movementFrom: range.from, movementTo: range.to, fold: 'project' } : {})
       .then((response) => response.tickets || []),
     // keep the previous rows on screen while a shifted range loads
     placeholderData: isSales ? keepPreviousData : undefined,
   });
-  // One row per project: add-on orders fold into their root before every count, total and filter below.
-  const allDeals = useMemo(() => foldAddOnOrders(ticketsQuery.data ?? []), [ticketsQuery.data]);
+  // sales / sales_manager / ceo read ONE ROW PER PROJECT (server-side fold, so every count, total and filter below is
+  // computed from project rows); import and account keep one row per order.
+  const allDeals = useMemo(() => ticketsQuery.data ?? [], [ticketsQuery.data]);
   const loading = ticketsQuery.isLoading;
   const refreshing = ticketsQuery.isFetching && !ticketsQuery.isLoading;
   const openDeal = useCallback((deal) => {

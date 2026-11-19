@@ -37,7 +37,9 @@ public final class SalesBoardDtos {
      * <p>สั่งเพิ่ม: a project is ONE row however many add-on orders it has ({@code SalesBoardRepository#fold}).
      * {@code orderCount} is the orders the row stands for (1 for an ordinary deal), {@code value} their sum when the
      * currencies agree, and {@code orderCodes} every order's code (root first) so a search by an add-on's own number
-     * finds the project's row.
+     * finds the project's row. {@code openOrderCount} of them are open (the value counts only those) and
+     * {@code leadTicketId} is the order whose state the row shows (the payment-due chip is looked up by it);
+     * {@code ticketId} is the id the card opens. Rule: {@code ticket.ProjectFold}.
      */
     public record BoardDeal(long ticketId, String title, String customerName, String projectName, long ownerId,
                             String ownerName, String salesStage, String repCode, int boardColumn, BigDecimal value,
@@ -46,7 +48,8 @@ public final class SalesBoardDtos {
                             String lastActivityKind, String lastActivityNote, boolean returning,
                             LocalDate pauseReturnOn, String quotationNumber, String buyerName,
                             LocalDate expectedDepositWeek, boolean depositReceived, LocalDate paymentDueDate,
-                            boolean overdue, int orderCount, List<String> orderCodes) {
+                            boolean overdue, int orderCount, List<String> orderCodes, int openOrderCount,
+                            long leadTicketId) {
         /** The shape before add-on folding: one order, no codes. */
         public BoardDeal(long ticketId, String title, String customerName, String projectName, long ownerId,
                          String ownerName, String salesStage, String repCode, int boardColumn, BigDecimal value,
@@ -59,7 +62,7 @@ public final class SalesBoardDtos {
             this(ticketId, title, customerName, projectName, ownerId, ownerName, salesStage, repCode, boardColumn,
                 value, currency, valueExpired, designerName, winProbability, expectedQuarter, lastTouchedAt,
                 daysQuiet, quiet, lastActivityKind, lastActivityNote, returning, pauseReturnOn, quotationNumber,
-                buyerName, expectedDepositWeek, depositReceived, paymentDueDate, overdue, 1, List.of());
+                buyerName, expectedDepositWeek, depositReceived, paymentDueDate, overdue, 1, List.of(), 1, ticketId);
         }
 
         /** The shape before slice 6.2's card fields: no quotation number / buyer, no money state. */
@@ -81,25 +84,21 @@ public final class SalesBoardDtos {
                 boardColumn, value, currency, valueExpired, designerName, winProbability, expectedQuarter,
                 lastTouchedAt, daysQuiet, quiet, lastActivityKind, lastActivityNote, returning, pauseReturnOn,
                 quotationNumber, buyerName, expectedDepositWeek, depositReceived, paymentDueDate, overdue,
-                orderCount, orderCodes);
+                orderCount, orderCodes, openOrderCount, leadTicketId);
         }
 
-        /** Copy standing for {@code count} orders: their summed value and every order's code. */
-        BoardDeal withOrders(int count, BigDecimal totalValue, String totalCurrency, List<String> codes) {
-            return new BoardDeal(ticketId, title, customerName, projectName, ownerId, ownerName, salesStage, repCode,
-                boardColumn, totalValue, totalCurrency, valueExpired, designerName, winProbability, expectedQuarter,
-                lastTouchedAt, daysQuiet, quiet, lastActivityKind, lastActivityNote, returning, pauseReturnOn,
-                quotationNumber, buyerName, expectedDepositWeek, depositReceived, paymentDueDate, overdue,
-                count, codes);
-        }
-
-        /** This (live add-on) row's state under the PROJECT's identity: the root's id, title, customer and project. */
-        BoardDeal underProject(BoardDeal root) {
-            return new BoardDeal(root.ticketId, root.title, root.customerName, root.projectName, root.ownerId,
-                root.ownerName, salesStage, repCode, boardColumn, value, currency, valueExpired, designerName,
+        /**
+         * The project's row (ProjectFold): this lead order's state under the root's identity and the folded orders:
+         * {@code linkId} (the id the card opens), the root's title / customer / project, the owner, the value of the
+         * open orders, and the order count / open count / codes.
+         */
+        public BoardDeal asProject(long linkId, BoardDeal root, long ownerId, String ownerName, BigDecimal totalValue,
+                                   String totalCurrency, int count, int openCount, List<String> codes) {
+            return new BoardDeal(linkId, root.title, root.customerName, root.projectName, ownerId, ownerName,
+                salesStage, repCode, boardColumn, totalValue, totalCurrency, valueExpired, designerName,
                 winProbability, expectedQuarter, lastTouchedAt, daysQuiet, quiet, lastActivityKind, lastActivityNote,
                 returning, pauseReturnOn, quotationNumber, buyerName, expectedDepositWeek, depositReceived,
-                paymentDueDate, overdue, orderCount, orderCodes);
+                paymentDueDate, overdue, count, codes, openCount, ticketId);
         }
 
         /** The shape before {@code returning}/{@code pauseReturnOn}: an ACTIVE board row. */
