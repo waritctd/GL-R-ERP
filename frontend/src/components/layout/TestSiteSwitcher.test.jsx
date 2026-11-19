@@ -60,4 +60,29 @@ describe('test-site role switcher', () => {
     expect(await screen.findByText('บัญชีนี้สลับบทบาทไม่ได้')).toBeTruthy();
     expect(screen.queryByRole('combobox')).toBeNull();
   });
+
+  it('hides the select during a read-only view-as, where every switch would be refused', async () => {
+    vi.stubEnv('VITE_TEST_SITE', 'true');
+    accounts.mockResolvedValue(list);
+    render(<TestSiteSwitcher user={{ ...user, viewAs: { actorId: 9 } }} />);
+
+    expect(await screen.findByText(/โหมดทดสอบ/)).toBeTruthy();
+    await waitFor(() => expect(accounts).toHaveBeenCalled());
+    expect(screen.queryByRole('combobox')).toBeNull();
+  });
+
+  it('when the current account is not in the list, shows a placeholder and switching to the first account works', async () => {
+    vi.stubEnv('VITE_TEST_SITE', 'true');
+    const assign = vi.fn();
+    vi.stubGlobal('location', { ...window.location, assign });
+    accounts.mockResolvedValue(list);
+    switchTo.mockResolvedValue({});
+    render(<TestSiteSwitcher user={{ ...user, email: 'demo.hr@demo.invalid' }} />);
+
+    const select = await screen.findByRole('combobox');
+    expect(select.value).toBe('');
+    fireEvent.change(select, { target: { value: 'demo.sales@demo.invalid' } });
+
+    await waitFor(() => expect(switchTo).toHaveBeenCalledWith('demo.sales@demo.invalid'));
+  });
 });

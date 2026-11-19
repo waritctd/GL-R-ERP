@@ -18,6 +18,9 @@ export function TestSiteSwitcher({ user }) {
 
   if (!enabled) return null;
 
+  const current = user.email?.trim().toLowerCase() ?? '';
+  const listed = accounts.some((a) => a.email === current);
+
   async function change(e) {
     setError('');
     try {
@@ -35,8 +38,10 @@ export function TestSiteSwitcher({ user }) {
       className="flex flex-none flex-wrap items-center justify-center gap-3 border-b border-warning-border bg-warning-bg px-4 py-2 text-sm font-semibold text-warning-dark"
     >
       <span>โหมดทดสอบ · กำลังใช้งานเป็น {user.name}</span>
-      {accounts.length > 0 ? (
-        <select aria-label="สลับบัญชีทดสอบ" value={user.email?.trim().toLowerCase()} onChange={change} className="rounded border border-warning-border bg-surface px-2 py-1">
+      {/* A view-as session is read-only, so the backend refuses every switch there: offer none. */}
+      {accounts.length > 0 && !user.viewAs ? (
+        <select aria-label="สลับบัญชีทดสอบ" value={listed ? current : ''} onChange={change} className="rounded border border-warning-border bg-surface px-2 py-1">
+          {listed ? null : <option value="" disabled>เลือกบัญชี</option>}
           {accounts.map((a) => <option key={a.email} value={a.email}>{a.name}</option>)}
         </select>
       ) : null}
