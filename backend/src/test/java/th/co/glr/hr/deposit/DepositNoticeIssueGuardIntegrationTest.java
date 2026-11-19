@@ -151,7 +151,7 @@ class DepositNoticeIssueGuardIntegrationTest extends AbstractPostgresIntegration
 
         depositNoticeRepository = new DepositNoticeRepository(jdbc);
         depositNoticeService = new DepositNoticeService(depositNoticeRepository, tickets, notifications,
-            new DepositNoticePdfRenderer(), customers, quotationRepository, th.co.glr.hr.support.DocumentBundles.noDownload(jdbc));
+            new DepositNoticePdfRenderer(), customers, quotationRepository, th.co.glr.hr.support.DocumentBundles.noDownload(jdbc), new th.co.glr.hr.deposit.RemainingInvoiceRepository(jdbc));
 
         orderConfirmation = new OrderConfirmationService(
             pricingRequests, tickets, ticketService, quotationRepository, depositNoticeService, notifications);
@@ -345,9 +345,85 @@ class DepositNoticeIssueGuardIntegrationTest extends AbstractPostgresIntegration
         assertThat(reloaded.subtotal()).isEqualByComparingTo("999.00");
     }
 
+    private List<Map<String, Object>> editedEvents(long ticketId) {
+        return jdbc.queryForList(
+            "SELECT actor_id, message FROM sales.ticket_event WHERE ticket_id = :t AND kind = 'EDITED'",
+            Map.of("t", ticketId));
+    }
+
+    /** Owner ruling: an ISSUED notice is editable IN PLACE (same number, same status), and every such edit leaves an
+     * audit event (who + old/new values) on the deal's ticket_event trail. */
     @Test
-    void update_onAnIssuedNotice_refusesThePercentEditWith409_rowUnchanged() {
+    void update_onAnIssuedNotice_editsInPlace_keepsNumberAndStatus_andWritesAnAuditEvent() {
         IssuedNoticeFixture fixture = buildTicketWithIssuedDepositNotice();
+        DepositNoticeDto before = depositNoticeRepository.findById(fixture.docId()).orElseThrow();
+        assertThat(before.depositPercent()).isNotEqualByComparingTo("0.40"); // fixture precondition
+        assertThat(editedEvents(fixture.ticketId())).isEmpty();
+
+        DepositNoticeDto updated = depositNoticeService.update(fixture.docId(), new DepositNoticeDraftRequest(
+                "ACME EDITED", "0100000000000", "Bangkok", "Showroom", "REF-EDITED",
+                new BigDecimal("0.40"), List.of("หมายเหตุใหม่"), secondDraftItems()), salesActor);
+
+        assertThat(updated.id()).isEqualTo(fixture.docId());
+        assertThat(updated.status()).isEqualTo("ISSUED");
+        assertThat(updated.docNumber()).isEqualTo(fixture.docNumber());
+        assertThat(updated.reference()).isEqualTo("REF-EDITED");
+        assertThat(updated.depositPercent()).isEqualByComparingTo("0.40");
+        assertThat(updated.subtotal()).isEqualByComparingTo("75.03"); // sum of secondDraftItems' rounded lines
+        assertThat(updated.depositAmount()).isEqualByComparingTo("30.01"); // 75.03 x 40%
+        DepositNoticeDto reread = depositNoticeRepository.findById(fixture.docId()).orElseThrow();
+        assertThat(reread.status()).isEqualTo("ISSUED");
+        assertThat(reread.docNumber()).isEqualTo(fixture.docNumber());
+        assertThat(reread.depositPercent()).isEqualByComparingTo("0.40");
+        assertThat(reread.items()).hasSize(2);
+
+        // Audit: one EDITED event by the actor; the message names the document and carries old and new values.
+        List<Map<String, Object>> events = editedEvents(fixture.ticketId());
+        assertThat(events).hasSize(1);
+        assertThat(((Number) events.get(0).get("actor_id")).longValue()).isEqualTo(salesRepId);
+        String message = (String) events.get(0).get("message");
+        assertThat(message).contains(fixture.docNumber()).contains("REF-EDITED").contains("40");
+        assertThat(message).contains(before.reference() == null ? "" : before.reference());
+        assertThat(message).contains(before.depositPercent().movePointRight(2).stripTrailingZeros().toPlainString());
+        // Header, notes and line changes are named too, and "nothing changed" is never claimed.
+        assertThat(message).contains("ชื่อลูกค้า").contains("ACME EDITED").contains("หมายเหตุ").contains("รายการสินค้า");
+        assertThat(message).doesNotContain("ไม่มีการเปลี่ยนแปลง");
+    }
+
+    @Test
+    void update_onAnIssuedNotice_keepsTheSameValidation_andPermissions_rowAndAuditUntouched() {
+        IssuedNoticeFixture fixture = buildTicketWithIssuedDepositNotice();
+        DepositNoticeDto before = depositNoticeRepository.findById(fixture.docId()).orElseThrow();
+
+        for (String bad : List.of("0", "0.405")) { // not > 0 / not a whole percent: same 400s as on a draft
+            assertThatThrownBy(() -> depositNoticeService.update(fixture.docId(), new DepositNoticeDraftRequest(
+                    "ACME", "0100000000000", "Bangkok", "Showroom", "REF-2",
+                    new BigDecimal(bad), List.of(), secondDraftItems()), salesActor))
+                .isInstanceOfSatisfying(ApiException.class,
+                    e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
+        }
+        for (UserPrincipal intruder : List.of(importActor, ceoActor)) { // outside the sales roles: 403
+            assertThatThrownBy(() -> depositNoticeService.update(fixture.docId(), draftHeader(new BigDecimal("0.40")), intruder))
+                .isInstanceOfSatisfying(ApiException.class,
+                    e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+        }
+
+        DepositNoticeDto reread = depositNoticeRepository.findById(fixture.docId()).orElseThrow();
+        assertThat(reread.status()).isEqualTo("ISSUED");
+        assertThat(reread.depositPercent()).isEqualByComparingTo(before.depositPercent());
+        assertThat(reread.items()).isEqualTo(before.items());
+        assertThat(editedEvents(fixture.ticketId())).isEmpty();
+    }
+
+    private static final String SUPERSEDED_MESSAGE = "เอกสารนี้ถูกแทนที่ด้วยฉบับใหม่แล้ว แก้ไขไม่ได้";
+
+    /** SUPERSEDED stays read-only: 409 with its own message from the service, and from the repository for a save that
+     * raced past it. */
+    @Test
+    void update_onASupersededNotice_isStillRefusedWith409_rowUnchanged() {
+        IssuedNoticeFixture fixture = buildTicketWithIssuedDepositNotice();
+        jdbc.update("UPDATE sales.deposit_notice SET status = 'SUPERSEDED' WHERE deposit_notice_id = :id",
+            Map.of("id", fixture.docId()));
         DepositNoticeDto before = depositNoticeRepository.findById(fixture.docId()).orElseThrow();
 
         assertThatThrownBy(() -> depositNoticeService.update(fixture.docId(), new DepositNoticeDraftRequest(
@@ -355,24 +431,39 @@ class DepositNoticeIssueGuardIntegrationTest extends AbstractPostgresIntegration
                 new BigDecimal("0.40"), List.of(), secondDraftItems()), salesActor))
             .isInstanceOfSatisfying(ApiException.class, e -> {
                 assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
-                assertThat(e.getMessage()).isEqualTo("ใบแจ้งรับมัดจำนี้ไม่ได้อยู่ในสถานะร่าง (DRAFT)");
+                assertThat(e.getMessage()).isEqualTo(SUPERSEDED_MESSAGE);
             });
-
-        // Repository level: a save that passed requireDraft before issue() committed reaches the
-        // UPDATE with the row already ISSUED. It must refuse before touching the lines, which the
-        // PDF/XLSX print.
         assertThatThrownBy(() -> depositNoticeRepository.update(fixture.docId(), new DepositNoticeDraftRequest(
                 "ACME", "0100000000000", "Bangkok", "Showroom", "REF-2",
-                new BigDecimal("0.40"), List.of(), secondDraftItems()), before.items()))
+                new BigDecimal("0.40"), List.of(), secondDraftItems()), before.items(), "ISSUED"))
             .isInstanceOfSatisfying(ApiException.class, e -> {
                 assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
-                assertThat(e.getMessage()).isEqualTo("ใบแจ้งรับมัดจำนี้ไม่ได้อยู่ในสถานะร่าง (DRAFT)");
+                assertThat(e.getMessage()).isEqualTo(SUPERSEDED_MESSAGE);
             });
 
         DepositNoticeDto reread = depositNoticeRepository.findById(fixture.docId()).orElseThrow();
-        assertThat(reread.status()).isEqualTo("ISSUED");
+        assertThat(reread.status()).isEqualTo("SUPERSEDED");
         assertThat(reread.depositPercent()).isEqualByComparingTo(before.depositPercent());
-        assertThat(reread.depositAmount()).isEqualByComparingTo(before.depositAmount());
+        assertThat(reread.items()).isEqualTo(before.items());
+        assertThat(editedEvents(fixture.ticketId())).isEmpty();
+    }
+
+    /** A save that read the notice as DRAFT must not land on a row that was issued meanwhile (it would edit an issued
+     * document with no audit): the repository update is told the status the service read and refuses (409) on any other. */
+    @Test
+    void repositoryUpdate_refusesWhenTheRowIsNoLongerInTheStatusTheServiceRead() {
+        IssuedNoticeFixture fixture = buildTicketWithIssuedDepositNotice();
+        DepositNoticeDto before = depositNoticeRepository.findById(fixture.docId()).orElseThrow();
+
+        assertThatThrownBy(() -> depositNoticeRepository.update(fixture.docId(), new DepositNoticeDraftRequest(
+                "ACME", "0100000000000", "Bangkok", "Showroom", "REF-RACE",
+                new BigDecimal("0.40"), List.of(), secondDraftItems()), before.items(), "DRAFT"))
+            .isInstanceOfSatisfying(ApiException.class,
+                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+
+        DepositNoticeDto reread = depositNoticeRepository.findById(fixture.docId()).orElseThrow();
+        assertThat(reread.reference()).isNotEqualTo("REF-RACE");
+        assertThat(reread.depositPercent()).isEqualByComparingTo(before.depositPercent());
         assertThat(reread.items()).isEqualTo(before.items());
     }
 

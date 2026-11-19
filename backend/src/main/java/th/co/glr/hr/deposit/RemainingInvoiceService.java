@@ -185,12 +185,13 @@ public class RemainingInvoiceService {
         return requireStored(id);
     }
 
-    /** Re-snapshots items/deposit-deduction/customer header from the draft's OWN already-chosen source quotation,
+    /** Re-snapshots items/deposit-deduction/customer header from the row's OWN already-chosen source quotation,
      * then applies whichever dialog fields the request actually supplied, carrying every omitted one forward from
-     * the existing row. */
+     * the existing row. Works on a DRAFT and, in place (same number, same status), on an ISSUED invoice — the latter
+     * leaves an EDITED event on the deal; a SUPERSEDED one is refused (409). */
     @Transactional
     public RemainingInvoiceDocumentDto updateDraft(long id, RemainingInvoiceDraftRequest req, UserPrincipal actor) {
-        RemainingInvoiceDocumentDto existing = requireDraft(id);
+        RemainingInvoiceDocumentDto existing = requireEditable(id);
         depositNoticeService.requireDepositNoticeIssueGate(existing.ticketId(), actor);
         depositNoticeService.requirePreparerInDeal(existing.ticketId(), req == null ? null : req.preparerId(), existing.preparerId());
 
@@ -210,18 +211,37 @@ public class RemainingInvoiceService {
 
         DepositNoticeService.CustomerHeaderInfo header = snap.header();
         TicketSummaryDto s = snap.ticketSummary();
-        stored.updateSnapshot(id, resolved.matchedDepositNoticeId(), s.customerName(), header.taxId(),
+        requireRowUpdated(stored.updateSnapshot(id, resolved.matchedDepositNoticeId(), s.customerName(), header.taxId(),
             header.branch(), header.addressOnly(), header.projectName(),
-            itemsTotal, depositAmount, money.netAmount(), money.vatAmount(), money.grandTotal());
+            itemsTotal, depositAmount, money.netAmount(), money.vatAmount(), money.grandTotal(), existing.status()), id);
         stored.replaceItems(id, items);
 
         String reference = req != null && req.reference() != null ? req.reference() : existing.reference();
         String depositReference = req != null && req.depositReference() != null
             ? req.depositReference() : existing.depositReference();
         LocalDate docDate = req != null && req.docDate() != null ? req.docDate() : existing.docDate();
-        stored.updateDraftFields(id, reference, depositReference, docDate, notes, req == null ? null : req.preparerId());
+        requireRowUpdated(stored.updateDraftFields(id, reference, depositReference, docDate, notes,
+            req == null ? null : req.preparerId(), existing.status()), id);
 
-        return requireStored(id);
+        RemainingInvoiceDocumentDto updated = requireStored(id);
+        if ("ISSUED".equals(existing.status())) {
+            tickets.addEvent(existing.ticketId(), actor.id(), actor.name(), TicketEventKind.EDITED, null, null,
+                "แก้ไขใบแจ้งหนี้ส่วนที่เหลือ " + existing.docNumber() + " (ออกเลขแล้ว): "
+                    + "อ้างอิง \"" + Objects.toString(existing.reference(), "") + "\" → \"" + Objects.toString(updated.reference(), "") + "\""
+                    + " · อ้างอิงมัดจำ \"" + Objects.toString(existing.depositReference(), "") + "\" → \"" + Objects.toString(updated.depositReference(), "") + "\""
+                    + " · วันที่ " + existing.docDate() + " → " + updated.docDate()
+                    + " · ยอดชำระ " + ThaiText.money(existing.grandTotal()) + " → " + ThaiText.money(updated.grandTotal()));
+            if (existing.grandTotal().compareTo(updated.grandTotal()) != 0) {
+                // account collects against this total, same channel as issue()
+                boolean noVat = updated.vatAmount() != null && updated.vatAmount().signum() == 0;
+                notifications.notifyByRoleAtLink("account", TicketEventKind.EDITED,
+                    "แก้ไขใบแจ้งหนี้ " + existing.docNumber() + " (ออกเลขแล้ว)\n"
+                        + DealNoticeText.dealLabel(s.code(), s.customerName()) + " · ยอดชำระรวม " + (noVat ? "" : "VAT ")
+                        + ThaiText.money(existing.grandTotal()) + " → " + ThaiText.money(updated.grandTotal()) + " บาท",
+                    "/finance/deals/" + existing.ticketId());
+            }
+        }
+        return updated;
     }
 
     /** DRAFT → ISSUED: mints (first issue) or carries forward (revision) the {@code base_number},
@@ -276,7 +296,7 @@ public class RemainingInvoiceService {
         // (reference/depositReference/docDate/notes) are untouched by this call.
         stored.updateSnapshot(id, resolved.matchedDepositNoticeId(), snapSummary.customerName(), header.taxId(),
             header.branch(), header.addressOnly(), header.projectName(),
-            itemsTotal, depositAmount, money.netAmount(), money.vatAmount(), money.grandTotal());
+            itemsTotal, depositAmount, money.netAmount(), money.vatAmount(), money.grandTotal(), "DRAFT");
         stored.replaceItems(id, items);
 
         LocalDate today = LocalDate.now(BANGKOK);
@@ -444,6 +464,23 @@ public class RemainingInvoiceService {
     private RemainingInvoiceDocumentDto requireStored(long id) {
         return stored.findById(id)
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบใบแจ้งหนี้ส่วนที่เหลือนี้"));
+    }
+
+    private RemainingInvoiceDocumentDto requireEditable(long id) {
+        RemainingInvoiceDocumentDto doc = requireStored(id);
+        if (!"DRAFT".equals(doc.status()) && !"ISSUED".equals(doc.status())) {
+            throw new ApiException(HttpStatus.CONFLICT, DepositNoticeRepository.SUPERSEDED);
+        }
+        return doc;
+    }
+
+    /** A guarded repository write that matched no row: the invoice left the status this request read (issued or
+     * superseded meanwhile). 409 and the surrounding transaction rolls the request back. */
+    private void requireRowUpdated(int rows, long id) {
+        if (rows == 0) {
+            throw new ApiException(HttpStatus.CONFLICT, "SUPERSEDED".equals(requireStored(id).status())
+                ? DepositNoticeRepository.SUPERSEDED : "ใบแจ้งหนี้ส่วนที่เหลือนี้ถูกเปลี่ยนสถานะแล้ว กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
+        }
     }
 
     private RemainingInvoiceDocumentDto requireDraft(long id) {

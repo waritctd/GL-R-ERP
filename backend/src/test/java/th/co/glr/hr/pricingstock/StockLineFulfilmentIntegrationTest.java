@@ -70,7 +70,7 @@ class StockLineFulfilmentIntegrationTest extends AbstractStockLineIntegrationTes
         CustomerRepository customers = new CustomerRepository(jdbc);
         CustomerQuotationRepository legacyQuotations = new CustomerQuotationRepository(jdbc);
         DepositNoticeService depositNotices = new DepositNoticeService(new DepositNoticeRepository(jdbc), tickets,
-            notifications, new DepositNoticePdfRenderer(), customers, legacyQuotations, th.co.glr.hr.support.DocumentBundles.noDownload(jdbc));
+            notifications, new DepositNoticePdfRenderer(), customers, legacyQuotations, th.co.glr.hr.support.DocumentBundles.noDownload(jdbc), new th.co.glr.hr.deposit.RemainingInvoiceRepository(jdbc));
         orderConfirmation = new OrderConfirmationService(
             pricingRequests, tickets, ticketService, legacyQuotations, depositNotices, notifications);
         // Same wiring the app has (setter-injected): without it the accepted quotation's deposit

@@ -1202,10 +1202,9 @@ export function QuotationEditorPage({ user, showToast }) {
   // still saves (buildQuotationChecklist's CREDIT_DAYS check stays non-blocking); only #submit refuses
   // it. An explicit INVALID (<=0) value is the already-blocking QUOTATION_CHECK.CREDIT_DAYS_INVALID
   // (in hasValidationErrors) and is not repeated here.
-  const hasMissingCreditDays = terms.remainderMode === 'CREDIT'
-    && !isEffectiveZeroDeposit({
+  const hasMissingCreditDays = (isEffectiveZeroDeposit({
       noDeposit: terms.noDeposit, depositPercentCustom: terms.depositPercentCustom, depositPercent: terms.depositPercent,
-    })
+    }) ? terms.fullPaymentTerm === 'CREDIT' : terms.remainderMode === 'CREDIT')
     && (terms.creditDays === '' || terms.creditDays == null);
   const creditDaysBlockMessage = hasMissingCreditDays
     ? 'กรุณาระบุจำนวนวันเครดิต อย่างน้อย 1 วัน ก่อนส่งขออนุมัติ' : null;
@@ -1327,7 +1326,7 @@ export function QuotationEditorPage({ user, showToast }) {
     // the rep stale data before the next fetch.
     depositPercent: terms.noDeposit ? 0 : (terms.depositPercent === '' ? null : Number(terms.depositPercent)),
     remainderMode: terms.noDeposit ? null : (terms.remainderMode || null),
-    creditDays: terms.noDeposit ? null : (terms.creditDays === '' ? null : Number(terms.creditDays)),
+    creditDays: terms.noDeposit && terms.fullPaymentTerm !== 'CREDIT' ? null : (terms.creditDays === '' ? null : Number(terms.creditDays)),
     fullPaymentTerm: terms.noDeposit ? (terms.fullPaymentTerm || null) : null,
     validityDays: terms.validityDays === '' ? null : Number(terms.validityDays),
     // V178: validityDays is ALWAYS sent, in both modes so DAYS mode has a real number to fall back to the moment
@@ -2028,45 +2027,80 @@ export function QuotationEditorPage({ user, showToast }) {
    * would skip the save, and step 3 would already have cancelled the autosave that edit scheduled.
    * Reading refs means the edit whose timer step 3 cancelled is the one step 5 saves.
    */
+  // Steps 1-5 above, shared by the downloads and the copy button. Resolves false when it refused (already toasted).
+  async function flushUnsavedEdits() {
+    if (isEditable) {
+      await contactPickerRef.current?.flushPendingContactSave();
+      if (pendingSaveRef.current) {
+        // Already toasted by updateMutation's onError if it fails; fall through to the live checks.
+        await pendingSaveRef.current.catch(() => {});
+      }
+      // Cancel any pending autosave timer now, after both awaits (see header for why).
+      if (autosaveTimerRef.current) {
+        clearTimeout(autosaveTimerRef.current);
+        autosaveTimerRef.current = null;
+      }
+      // Only refuse when there is unsaved work this flush cannot save.
+      if ((dirtyRef.current || pendingSaveRef.current) && hasValidationErrorsRef.current) {
+        refuseDownloadForValidation();
+        return false;
+      }
+      if (dirtyRef.current) {
+        // Re-checked in case an edit during the pendingSaveRef await made the form newly invalid.
+        if (hasValidationErrorsRef.current) {
+          refuseDownloadForValidation();
+          return false;
+        }
+        try {
+          await runSave(false);
+        } catch {
+          // updateMutation's onError already toasted this; returning (not rethrowing) skips the
+          // download without a duplicate toast from the outer catch.
+          return false;
+        }
+      }
+    }
+    return true;
+  }
+
   async function handleDownload(format) {
     if (downloading) return; // one flush+download in flight at a time — no double-fire
     setDownloading(format);
     try {
-      if (isEditable) {
-        await contactPickerRef.current?.flushPendingContactSave();
-        if (pendingSaveRef.current) {
-          // Already toasted by updateMutation's onError if it fails; fall through to the live checks.
-          await pendingSaveRef.current.catch(() => {});
-        }
-        // Cancel any pending autosave timer now, after both awaits (see header for why).
-        if (autosaveTimerRef.current) {
-          clearTimeout(autosaveTimerRef.current);
-          autosaveTimerRef.current = null;
-        }
-        // Only refuse when there is unsaved work this flush cannot save.
-        if ((dirtyRef.current || pendingSaveRef.current) && hasValidationErrorsRef.current) {
-          refuseDownloadForValidation();
-          return;
-        }
-        if (dirtyRef.current) {
-          // Re-checked in case an edit during the pendingSaveRef await made the form newly invalid.
-          if (hasValidationErrorsRef.current) {
-            refuseDownloadForValidation();
-            return;
-          }
-          try {
-            await runSave(false);
-          } catch {
-            // updateMutation's onError already toasted this; returning (not rethrowing) skips the
-            // download without a duplicate toast from the outer catch.
-            return;
-          }
-        }
-      }
+      if (!(await flushUnsavedEdits())) return;
       const blob = format === 'pdf' ? await api.dealQuotations.downloadPdf(id) : await api.dealQuotations.downloadXlsx(id);
       downloadBlob(blob, quotation?.number ?? 'quotation', format);
     } catch (error) {
       showToast('error', error.message || 'ดาวน์โหลดไม่สำเร็จ');
+    } finally {
+      setDownloading(null);
+    }
+  }
+
+  /**
+   * "คัดลอกข้อมูล": the quotation as clean text (the PDF's Thai text copies out garbled). The flush + fetch are async
+   * but a clipboard write needs the click's user gesture, so the write is started SYNCHRONOUSLY with a ClipboardItem
+   * whose text is a promise (flush, then fetch the CURRENT saved text; no stale prefetch). Browsers without
+   * ClipboardItem fall back to writeText after the fetch.
+   */
+  async function handleCopyData() {
+    if (downloading) return;
+    setDownloading('text');
+    const fetchText = async () => {
+      if (!(await flushUnsavedEdits())) throw new Error('refused');
+      return api.dealQuotations.downloadText(id);
+    };
+    try {
+      if (typeof ClipboardItem !== 'undefined' && navigator.clipboard?.write) {
+        const textPromise = fetchText().then((text) => new Blob([text], { type: 'text/plain' }));
+        await navigator.clipboard.write([new ClipboardItem({ 'text/plain': textPromise })]);
+      } else {
+        await navigator.clipboard.writeText(await fetchText());
+      }
+      showToast('success', 'คัดลอกข้อมูลใบเสนอราคาแล้ว — วางใน Excel หรือโปรแกรมอื่นได้เลย');
+    } catch (error) {
+      // A validation refusal already toasted its own reason.
+      if (error?.message !== 'refused') showToast('error', 'คัดลอกไม่สำเร็จ — ลองอีกครั้ง');
     } finally {
       setDownloading(null);
     }
@@ -2243,6 +2277,11 @@ export function QuotationEditorPage({ user, showToast }) {
                   { key: 'xlsx', label: 'Excel', icon: 'fileText', onSelect: () => handleDownload('xlsx'), disabled: downloading != null, disabledReason: 'กำลังดาวน์โหลด…' },
                 ]}
               />
+            ) : null}
+            {quotation ? (
+              <Button variant="secondary" disabled={downloading != null} onClick={handleCopyData}>
+                คัดลอกข้อมูล
+              </Button>
             ) : null}
             {quotation && canSubmitDealQuotation(user, quotation) ? (
               // Submit is live for PRICING_REQUEST-origin too: canSubmitDealQuotation is
@@ -3026,17 +3065,40 @@ export function QuotationEditorPage({ user, showToast }) {
                   <span className="text-xs font-bold">ไม่รับมัดจำ</span>
                 </label>
                 {terms.noDeposit ? (
-                  <select
-                    id="fullPaymentTerm"
-                    className="w-full"
-                    value={terms.fullPaymentTerm}
-                    onChange={(e) => { setTerms((t) => ({ ...t, fullPaymentTerm: e.target.value })); setDirty(true); }}
-                  >
-                    <option value="">- เลือกเงื่อนไข -</option>
-                    {FULL_PAYMENT_TERM_OPTIONS.map((opt) => (
-                      <option key={opt.code} value={opt.code}>{opt.label}</option>
-                    ))}
-                  </select>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <select
+                      id="fullPaymentTerm"
+                      className="w-full"
+                      value={terms.fullPaymentTerm}
+                      onChange={(e) => {
+                        const fullPaymentTerm = e.target.value;
+                        setTerms((t) => ({ ...t, fullPaymentTerm }));
+                        setDirty(true);
+                        // Phone reps: land straight in the days box once it has rendered.
+                        if (fullPaymentTerm === 'CREDIT') setTimeout(() => document.getElementById('creditDays')?.focus(), 0);
+                      }}
+                    >
+                      <option value="">- เลือกเงื่อนไข -</option>
+                      {FULL_PAYMENT_TERM_OPTIONS.map((opt) => (
+                        <option key={opt.code} value={opt.code}>{opt.label}</option>
+                      ))}
+                    </select>
+                    {terms.fullPaymentTerm === 'CREDIT' ? (
+                      <span className="inline-flex items-center gap-1.5 text-xs text-text-muted">
+                        เครดิต
+                        <input
+                          id="creditDays"
+                          aria-label="เครดิต (จำนวนวัน)"
+                          type="number"
+                          inputMode="numeric"
+                          className="w-16 min-h-[38px] mobile:min-h-[44px]"
+                          value={terms.creditDays}
+                          onChange={(e) => { setTerms((t) => ({ ...t, creditDays: e.target.value })); setDirty(true); }}
+                        />
+                        วัน
+                      </span>
+                    ) : null}
+                  </div>
                 ) : (
                   <div className="flex flex-wrap gap-2">
                     {DEPOSIT_PERCENT_PRESETS.map((pct) => (

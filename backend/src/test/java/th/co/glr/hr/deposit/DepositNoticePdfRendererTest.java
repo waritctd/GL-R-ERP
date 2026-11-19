@@ -247,6 +247,9 @@ class DepositNoticePdfRendererTest {
             assertThat(doc.getNumberOfPages()).isEqualTo(1);
             assertThat(text).doesNotContain("#VALUE!", "#N/A", "#REF!", "###");
             assertThat(text).contains("396.33", "370.40", "25.93", "1,234.56", "299.99", "28/10/2569");
+            // No sheet-name bookmark: Acrobat would otherwise open its Bookmarks panel with one "Update" entry.
+            assertThat(doc.getDocumentCatalog().getDocumentOutline()).isNull();
+            assertThat(doc.getDocumentCatalog().getPageMode().stringValue()).isNotEqualTo("UseOutlines");
         }
     }
 

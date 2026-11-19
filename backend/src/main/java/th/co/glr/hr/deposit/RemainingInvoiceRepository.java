@@ -162,9 +162,8 @@ public class RemainingInvoiceRepository {
             Map.of("p", preparerId, "n", preparerName == null ? "" : preparerName, "id", id));
     }
 
-    /** Replaces every line, renumbering seq from 1 in the order supplied. Draft-only by convention (the caller
-     * never invokes this on an ISSUED/SUPERSEDED row — an issued document's items are frozen for good, see
-     * RemainingInvoiceDocumentDto's own Javadoc). */
+    /** Replaces every line, renumbering seq from 1 in the order supplied. Callers use it on DRAFT and ISSUED rows
+     * only (an issued one is edited in place); a SUPERSEDED row's items stay frozen. */
     public void replaceItems(long remainingInvoiceId, List<RemainingInvoiceItemDto> items) {
         jdbc.update("DELETE FROM sales.remaining_invoice_item WHERE remaining_invoice_id = :id",
             Map.of("id", remainingInvoiceId));
@@ -187,9 +186,10 @@ public class RemainingInvoiceRepository {
         }
     }
 
-    /** DRAFT-only, UNCONDITIONAL set of the dialog fields — the WHERE clause enforces DRAFT-only, not the caller. */
+    /** UNCONDITIONAL set of the dialog fields on a DRAFT or an ISSUED row (an issued one is edited in place) — the
+     * WHERE clause refuses SUPERSEDED, not the caller. */
     public int updateDraftFields(long id, String reference, String depositReference,
-            LocalDate docDate, List<String> notes, Long preparerId) {
+            LocalDate docDate, List<String> notes, Long preparerId, String expectedStatus) {
         return jdbc.update("""
             UPDATE sales.remaining_invoice
                SET reference = :reference, deposit_reference = :depositReference, doc_date = :docDate,
@@ -200,21 +200,21 @@ public class RemainingInvoiceRepository {
                        (SELECT {NAME}
                           FROM hr.employee e WHERE e.employee_id = :preparerId) END,
                    updated_at = now()
-             WHERE id = :id AND status = 'DRAFT'
+             WHERE id = :id AND status = :expectedStatus
             """.replace("{NAME}", DepositNoticeRepository.PREPARER_NAME_SQL), new MapSqlParameterSource()
-                .addValue("id", id)
+                .addValue("id", id).addValue("expectedStatus", expectedStatus)
                 .addValue("reference", reference).addValue("depositReference", depositReference)
                 .addValue("docDate", docDate).addValue("preparerId", preparerId)
                 .addValue("notes", notes == null ? new String[0] : notes.toArray(new String[0])));
     }
 
-    /** Re-snapshot the priced content (items applied separately via #replaceItems) — DRAFT only. Used by
-     * RemainingInvoiceService#updateDraft's own re-snapshot-from-the-latest- issued-deposit-notice step (plan step
-     * 2). */
+    /** Re-snapshot the priced content (items applied separately via #replaceItems) — DRAFT or ISSUED (an issued
+     * invoice follows an edited deposit notice), never SUPERSEDED. Used by RemainingInvoiceService#updateDraft's own
+     * re-snapshot step and DepositNoticeService#refreshRemainingInvoices. */
     public int updateSnapshot(long id, Long depositNoticeId, String customerName, String customerTaxId,
             String customerBranch, String customerAddress, String projectName,
             BigDecimal itemsTotal, BigDecimal depositDeduction, BigDecimal netAmount,
-            BigDecimal vatAmount, BigDecimal grandTotal) {
+            BigDecimal vatAmount, BigDecimal grandTotal, String expectedStatus) {
         return jdbc.update("""
             UPDATE sales.remaining_invoice
                SET deposit_notice_id = :depositNoticeId,
@@ -224,9 +224,9 @@ public class RemainingInvoiceRepository {
                    items_total = :itemsTotal, deposit_deduction = :depositDeduction,
                    net_amount = :netAmount, vat_amount = :vatAmount, grand_total = :grandTotal,
                    updated_at = now()
-             WHERE id = :id AND status = 'DRAFT'
+             WHERE id = :id AND status = :expectedStatus
             """, new MapSqlParameterSource()
-                .addValue("id", id).addValue("depositNoticeId", depositNoticeId)
+                .addValue("id", id).addValue("expectedStatus", expectedStatus).addValue("depositNoticeId", depositNoticeId)
                 .addValue("customerName", customerName).addValue("customerTaxId", customerTaxId)
                 .addValue("customerBranch", customerBranch).addValue("customerAddress", customerAddress)
                 .addValue("projectName", projectName)

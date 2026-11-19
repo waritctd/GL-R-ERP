@@ -24,7 +24,7 @@ vi.mock('../../api/index.js', async (importOriginal) => {
       dealQuotations: {
         get: vi.fn(), create: vi.fn(), update: vi.fn(), calculateLine: vi.fn(), submit: vi.fn(),
         approve: vi.fn(), reject: vi.fn(), createRevision: vi.fn(), createReorder: vi.fn(), cancel: vi.fn(),
-        downloadPdf: vi.fn(), downloadXlsx: vi.fn(),
+        downloadPdf: vi.fn(), downloadXlsx: vi.fn(), downloadText: vi.fn(),
       },
       catalog: { prices: vi.fn() },
       designers: { search: vi.fn(), getByCode: vi.fn().mockRejectedValue(new Error('not found')) },
@@ -262,5 +262,22 @@ describe('download flushes unsaved edits before rendering the document (2026-09-
     await waitFor(() => expect(api.dealQuotations.update).toHaveBeenCalledTimes(1));
     expect(api.dealQuotations.update.mock.calls[0][1].customerNotes).toBe('edit during flush');
     await waitFor(() => expect(api.dealQuotations.downloadPdf).toHaveBeenCalledWith('5'));
+  });
+});
+
+describe('คัดลอกข้อมูล copies the saved quotation as clean text', () => {
+  it('flushes edits, fetches the text and writes it to the clipboard', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    api.dealQuotations.downloadText.mockResolvedValue('ใบเสนอราคา QT-2026-0005');
+    const showToast = renderEditor('/quotations/5');
+    fireEvent.change(await screen.findByLabelText('หมายเหตุเพิ่มเติม'), { target: { value: 'พิกัดใหม่' } });
+
+    fireEvent.click(await screen.findByRole('button', { name: 'คัดลอกข้อมูล' }));
+
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith('ใบเสนอราคา QT-2026-0005'));
+    expect(api.dealQuotations.update.mock.invocationCallOrder[0])
+      .toBeLessThan(api.dealQuotations.downloadText.mock.invocationCallOrder[0]);
+    expect(showToast).toHaveBeenCalledWith('success', 'คัดลอกข้อมูลใบเสนอราคาแล้ว — วางใน Excel หรือโปรแกรมอื่นได้เลย');
   });
 });

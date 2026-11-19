@@ -50,7 +50,7 @@ class DepositNoticeServiceTest {
     private final CustomerQuotationRepository quotationRepo = mock(CustomerQuotationRepository.class);
     private final DocumentBundle bundle = mock(DocumentBundle.class);
     private final DepositNoticeService service = new DepositNoticeService(
-        docs, ticketRepo, notifications, renderer, customerRepo, quotationRepo, bundle);
+        docs, ticketRepo, notifications, renderer, customerRepo, quotationRepo, bundle, org.mockito.Mockito.mock(th.co.glr.hr.deposit.RemainingInvoiceRepository.class));
     {
         when(bundle.bundle(any(), org.mockito.ArgumentMatchers.anyLong(), any(), any()))
             .thenAnswer(i -> new DocumentBundle.Result(i.getArgument(0), java.util.List.of()));
@@ -798,7 +798,7 @@ class DepositNoticeServiceTest {
         assertForbidden(() -> service.update(99L,
             new DepositNoticeDraftRequest(null, null, null, null, null, null, null, null),
             salesManagerOwner));
-        verify(docs, never()).update(anyLong(), any(), any());
+        verify(docs, never()).update(anyLong(), any(), any(), any());
     }
 
     @Test
@@ -995,7 +995,7 @@ class DepositNoticeServiceTest {
             owner);
 
         ArgumentCaptor<DepositNoticeDraftRequest> captor = ArgumentCaptor.forClass(DepositNoticeDraftRequest.class);
-        verify(docs).update(eq(99L), captor.capture(), any());
+        verify(docs).update(eq(99L), captor.capture(), any(), any());
         assertThat(captor.getValue().depositPercent()).isEqualByComparingTo("0.40");
         assertThat(captor.getValue().customerName()).isEqualTo("ACME");
         assertThat(captor.getValue().reference()).isEqualTo("REF-2");
@@ -1011,7 +1011,7 @@ class DepositNoticeServiceTest {
             owner);
 
         ArgumentCaptor<DepositNoticeDraftRequest> captor = ArgumentCaptor.forClass(DepositNoticeDraftRequest.class);
-        verify(docs).update(eq(99L), captor.capture(), any());
+        verify(docs).update(eq(99L), captor.capture(), any(), any());
         assertThat(captor.getValue().depositPercent()).isEqualByComparingTo("0.50");
     }
 
@@ -1036,7 +1036,7 @@ class DepositNoticeServiceTest {
                 assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST);
                 assertThat(e.getMessage()).isEqualTo("เปอร์เซ็นต์มัดจำต้องเป็นจำนวนเต็ม");
             });
-        verify(docs, never()).update(anyLong(), any(), any());
+        verify(docs, never()).update(anyLong(), any(), any(), any());
 
         // The stored value sent back unchanged (0.333 == 0.3330) still saves the rest of the draft;
         // a whole percent replaces it.
@@ -1047,7 +1047,7 @@ class DepositNoticeServiceTest {
             new DepositNoticeDraftRequest("ACME", null, null, null, "REF-2", new BigDecimal("0.40"), null, null),
             owner);
         ArgumentCaptor<DepositNoticeDraftRequest> captor = ArgumentCaptor.forClass(DepositNoticeDraftRequest.class);
-        verify(docs, times(2)).update(eq(99L), captor.capture(), any());
+        verify(docs, times(2)).update(eq(99L), captor.capture(), any(), any());
         assertThat(captor.getAllValues())
             .extracting(r -> r.depositPercent().stripTrailingZeros().toPlainString())
             .containsExactly("0.333", "0.4");

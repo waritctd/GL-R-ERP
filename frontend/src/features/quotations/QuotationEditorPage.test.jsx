@@ -2133,7 +2133,7 @@ describe('QuotationEditorPage terms card — item 2 + item 4 (owner ruling 2026-
     expect(screen.queryByRole('button', { name: '50%' })).toBeNull();
     expect(screen.queryByRole('group', { name: 'ส่วนที่เหลือ' })).toBeNull();
     const select = screen.getByLabelText('เงื่อนไขการชำระเงิน');
-    expect(within(select).getAllByRole('option')).toHaveLength(4); // placeholder + 3 terms
+    expect(within(select).getAllByRole('option')).toHaveLength(5); // placeholder + 4 terms
   });
 
   it('saving with "ไม่รับมัดจำ" ticked sends depositPercent 0, clears remainderMode/creditDays, and sends the chosen term', async () => {
@@ -2154,6 +2154,27 @@ describe('QuotationEditorPage terms card — item 2 + item 4 (owner ruling 2026-
     expect(payload.remainderMode).toBeNull();
     expect(payload.creditDays).toBeNull();
     expect(payload.fullPaymentTerm).toBe('ON_DELIVERY');
+  });
+
+  it('"ไม่รับมัดจำ" + credit term sends fullPaymentTerm CREDIT with the entered creditDays', async () => {
+    api.dealQuotations.get.mockResolvedValue({ quotation: existingDraftWithOneItem() });
+    api.dealQuotations.update.mockResolvedValue({ quotation: existingDraftWithOneItem() });
+    renderEditor('/quotations/5');
+
+    await screen.findByRole('button', { name: '30%' });
+    fireEvent.click(screen.getByRole('checkbox', { name: /ไม่รับมัดจำ/ }));
+    fireEvent.change(screen.getByLabelText('เงื่อนไขการชำระเงิน'), { target: { value: 'CREDIT' } });
+    fireEvent.change(screen.getByLabelText('เครดิต (จำนวนวัน)'), { target: { value: '30' } });
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).disabled).toBe(false));
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
+
+    await waitFor(() => expect(api.dealQuotations.update).toHaveBeenCalledTimes(1));
+    const payload = api.dealQuotations.update.mock.calls[0][1];
+    expect(payload.depositPercent).toBe(0);
+    expect(payload.remainderMode).toBeNull();
+    expect(payload.fullPaymentTerm).toBe('CREDIT');
+    expect(payload.creditDays).toBe(30);
   });
 
   // This is the ONLY thing this change leaves untouched (task scope: prefs, not editing).

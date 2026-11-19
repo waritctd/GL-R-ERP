@@ -22,6 +22,11 @@ public final class LibreOfficePdfConverter {
         System.getProperty("java.io.tmpdir"),
         "glr-lo-profile-" + ProcessHandle.current().pid()).toUri().toString();
 
+    // ExportBookmarks=false: otherwise LibreOffice writes the sheet name as a PDF outline plus /PageMode /UseOutlines,
+    // so Acrobat opens a Bookmarks panel with one "Update" entry. JSON filter options need LibreOffice >= 7.4.
+    private static final String PDF_FILTER =
+        "pdf:calc_pdf_Export:{\"ExportBookmarks\":{\"type\":\"boolean\",\"value\":\"false\"}}";
+
     private LibreOfficePdfConverter() {}
 
     /** Whether a usable LibreOffice soffice binary is present. Lets tests and callers gate the PDF-conversion path
@@ -51,7 +56,7 @@ public final class LibreOfficePdfConverter {
                 "--nofirststartwizard",
                 "--norestore",
                 "-env:UserInstallation=" + USER_INSTALLATION,
-                "--convert-to", "pdf",
+                "--convert-to", PDF_FILTER,
                 "--outdir", outDir.toAbsolutePath().toString(),
                 tmpXls.toAbsolutePath().toString()
             );

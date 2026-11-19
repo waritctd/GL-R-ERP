@@ -155,7 +155,7 @@ class PaymentTrackIntegrationTest extends AbstractPostgresIntegrationTest {
 
         depositNoticeRepository = new DepositNoticeRepository(jdbc);
         depositNoticeService = new DepositNoticeService(depositNoticeRepository, tickets, notifications,
-            new DepositNoticePdfRenderer(), customersRepo, quotationRepository, th.co.glr.hr.support.DocumentBundles.noDownload(jdbc));
+            new DepositNoticePdfRenderer(), customersRepo, quotationRepository, th.co.glr.hr.support.DocumentBundles.noDownload(jdbc), new th.co.glr.hr.deposit.RemainingInvoiceRepository(jdbc));
 
         orderConfirmation = new OrderConfirmationService(
             pricingRequests, tickets, ticketService, quotationRepository, depositNoticeService, notifications);

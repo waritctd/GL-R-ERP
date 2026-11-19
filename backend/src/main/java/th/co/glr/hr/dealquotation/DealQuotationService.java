@@ -269,9 +269,11 @@ public class DealQuotationService {
         // fullPaymentTerm; see #noDeposit/#resolveFullPaymentTerm.
         boolean noDeposit = isZeroDeposit(request.depositPercent());
         String remainderMode = noDeposit ? null : blankToNull(request.remainderMode());
-        Integer creditDays = noDeposit ? null : request.creditDays();
-        requireValidCreditDays(remainderMode, creditDays);
         String fullPaymentTerm = resolveFullPaymentTerm(request.depositPercent(), request.fullPaymentTerm());
+        // The zero-deposit CREDIT term carries its own day count; every other zero-deposit term drops it.
+        boolean creditTerm = WastageCalculator.FULL_PAYMENT_TERM_CREDIT.equals(fullPaymentTerm);
+        Integer creditDays = noDeposit && !creditTerm ? null : request.creditDays();
+        requireValidCreditDays(creditTerm ? "CREDIT" : remainderMode, creditDays);
         // Refused here, before a quotation number is taken or anything is written.
         String orderedByPhone = resolveOrderedByPhone(request.orderedByPhone());
         String orderedByEmail = resolveOrderedByEmail(request.orderedByEmail());
@@ -914,9 +916,11 @@ public class DealQuotationService {
         // depositPercent, so there is nothing stale to preserve.
         boolean noDeposit = isZeroDeposit(request.depositPercent());
         String remainderMode = noDeposit ? null : blankToNull(request.remainderMode());
-        Integer creditDays = noDeposit ? null : request.creditDays();
-        requireValidCreditDays(remainderMode, creditDays);
         String fullPaymentTerm = resolveFullPaymentTerm(request.depositPercent(), request.fullPaymentTerm());
+        // The zero-deposit CREDIT term carries its own day count; every other zero-deposit term drops it.
+        boolean creditTerm = WastageCalculator.FULL_PAYMENT_TERM_CREDIT.equals(fullPaymentTerm);
+        Integer creditDays = noDeposit && !creditTerm ? null : request.creditDays();
+        requireValidCreditDays(creditTerm ? "CREDIT" : remainderMode, creditDays);
         // The editor always sends its CURRENT value (the checkbox is always rendered), so there is no "missing keeps
         // stored" case: null on the wire means UNticked, as on create.
         boolean omitContactHonorific = resolveOmitContactHonorific(request.omitContactHonorific());
@@ -1185,7 +1189,9 @@ public class DealQuotationService {
         // Submit-time half of the credit-days rule: create/update refuse an explicit invalid VALUE
         // (#requireValidCreditDays) but let a CREDIT-remainder draft save with creditDays BLANK; submit requires it. Not
         // re-checked for a non-null value: one already accepted by create/update is never invalid.
-        if ("CREDIT".equals(quotation.remainderMode()) && quotation.creditDays() == null) {
+        if (("CREDIT".equals(quotation.remainderMode())
+            || WastageCalculator.FULL_PAYMENT_TERM_CREDIT.equals(quotation.fullPaymentTerm()))
+            && quotation.creditDays() == null) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "กรุณาระบุจำนวนวันเครดิต อย่างน้อย 1 วัน");
         }
         // A DATE-mode validity deadline that has already passed must not reach an approver: create/update refuse one
@@ -2518,6 +2524,10 @@ public class DealQuotationService {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
         return renderer.toPdf(toRenderModel(quotation));
+    }
+
+    public String renderText(long id, UserPrincipal actor) {
+        return renderer.toText(buildRenderModel(id, actor));
     }
 
     public byte[] renderXlsx(long id, UserPrincipal actor) {

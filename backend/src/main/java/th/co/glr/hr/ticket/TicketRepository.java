@@ -2014,13 +2014,22 @@ public class TicketRepository {
         + " AND pe.related_document_type = 'QUOTATION' AND pe.related_document_id = q.quotation_id)))";
 
     /**
-     * Once a remaining invoice is ISSUED, what the customer owes follows the ISSUED
-     * documents -- the deposit notice's total_payable plus the remaining invoice's grand_total -- because each tax
-     * invoice rounds its own VAT, so the sum may sit a satang away from the deal's computed total. Trailing comma
-     * included; VAT-inclusive variant only (the ex-VAT figure stays the quotation's subtotal).
+     * Once a remaining invoice is ISSUED, what the customer owes follows the ISSUED documents -- the deposit PART plus
+     * the remaining invoice's grand_total -- because each tax invoice rounds its own VAT, so the sum may sit a satang
+     * away from the deal's computed total. The deposit part is the invoice's FROZEN pre-VAT deposit_deduction made
+     * VAT-inclusive (the notice's exact total_payable when the deduction equals the notice amount, else
+     * ROUND(deduction * 1.07, 2); none -> 0). When the deduction came from receipts, the exact received sum is used while
+     * it still matches the frozen deduction (avoids a satang of rounding drift); once receipts change, the frozen figure wins.
+     * Trailing comma included; VAT-inclusive variant only (the ex-VAT figure stays the quotation's subtotal).
      */
     private static String issuedDocumentsPayable(String ticketIdRef) {
-        return "(SELECT COALESCE(dn.total_payable, 0) + ri.grand_total FROM sales.remaining_invoice ri"
+        return "(SELECT COALESCE(CASE WHEN ri.deposit_deduction = dn.deposit_amount THEN dn.total_payable"
+            + " WHEN ROUND((SELECT SUM(pr.amount) FROM sales.payment_receipt pr"
+            + " WHERE pr.ticket_id = ri.ticket_id AND pr.kind = 'DEPOSIT') / 1.07, 2) = ri.deposit_deduction"
+            + " THEN (SELECT SUM(pr.amount) FROM sales.payment_receipt pr"
+            + " WHERE pr.ticket_id = ri.ticket_id AND pr.kind = 'DEPOSIT')"
+            + " ELSE ROUND(ri.deposit_deduction * 1.07, 2) END, 0)"
+            + " + ri.grand_total FROM sales.remaining_invoice ri"
             + " LEFT JOIN sales.deposit_notice dn ON dn.deposit_notice_id = ri.deposit_notice_id"
             + " WHERE ri.ticket_id = " + ticketIdRef + " AND ri.status = 'ISSUED' AND ri.grand_total IS NOT NULL"
             + " ORDER BY ri.issued_at DESC, ri.id DESC LIMIT 1),";
@@ -2113,6 +2122,8 @@ public class TicketRepository {
      * <ul>
      *   <li>{@code remainder_mode = CREDIT} with {@code credit_days} N: due = delivery date + N
      *       ({@code CREDIT_FROM_DELIVERY});</li>
+     *   <li>a zero-deposit {@code full_payment_term = CREDIT} with {@code credit_days} N: identical to the
+     *       CREDIT remainder (due = delivery date + N, {@code CREDIT_FROM_DELIVERY});</li>
      *   <li>any other non-null {@code remainder_mode} (the remainder is due before/on delivery), or a
      *       zero-deposit {@code full_payment_term} (BEFORE_DELIVERY / ON_DELIVERY / ON_OR_BEFORE_DELIVERY):
      *       due = the delivery date ({@code ON_DELIVERY});</li>
@@ -2125,16 +2136,16 @@ public class TicketRepository {
         return """
             SELECT tq.days, tq.basis, tq.credit_days, dv.delivered_on
               FROM (SELECT CASE
-                               WHEN q.remainder_mode = 'CREDIT' AND q.credit_days IS NOT NULL THEN q.credit_days::int
+                               WHEN (q.remainder_mode = 'CREDIT' OR q.full_payment_term = 'CREDIT') AND q.credit_days IS NOT NULL THEN q.credit_days::int
                                WHEN q.full_payment_term IN ('BEFORE_DELIVERY', 'ON_DELIVERY', 'ON_OR_BEFORE_DELIVERY') THEN 0
                                WHEN q.remainder_mode IS NOT NULL AND q.remainder_mode <> 'CREDIT' THEN 0
                            END AS days,
                            CASE
-                               WHEN q.remainder_mode = 'CREDIT' AND q.credit_days IS NOT NULL THEN 'CREDIT_FROM_DELIVERY'
+                               WHEN (q.remainder_mode = 'CREDIT' OR q.full_payment_term = 'CREDIT') AND q.credit_days IS NOT NULL THEN 'CREDIT_FROM_DELIVERY'
                                WHEN q.full_payment_term IN ('BEFORE_DELIVERY', 'ON_DELIVERY', 'ON_OR_BEFORE_DELIVERY') THEN 'ON_DELIVERY'
                                WHEN q.remainder_mode IS NOT NULL AND q.remainder_mode <> 'CREDIT' THEN 'ON_DELIVERY'
                            END AS basis,
-                           CASE WHEN q.remainder_mode = 'CREDIT' AND q.credit_days IS NOT NULL THEN q.credit_days::int END AS credit_days
+                           CASE WHEN (q.remainder_mode = 'CREDIT' OR q.full_payment_term = 'CREDIT') AND q.credit_days IS NOT NULL THEN q.credit_days::int END AS credit_days
                       FROM sales.quotation q
                      WHERE q.ticket_id = %1$s AND (ANSWERED OR q.doc_status IN ('ISSUED', 'SENT'))
                      ORDER BY CASE q.doc_status WHEN 'ACCEPTED' THEN 0 WHEN 'APPROVED' THEN 1 ELSE 2 END,

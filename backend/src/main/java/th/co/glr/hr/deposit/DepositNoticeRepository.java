@@ -27,6 +27,8 @@ import th.co.glr.hr.ticket.QuotationRenderer;
 @Repository
 public class DepositNoticeRepository {
     static final String NOT_DRAFT = "ใบแจ้งรับมัดจำนี้ไม่ได้อยู่ในสถานะร่าง (DRAFT)";
+    /** A SUPERSEDED notice/invoice is read-only: its replacement is the live document. */
+    static final String SUPERSEDED = "เอกสารนี้ถูกแทนที่ด้วยฉบับใหม่แล้ว แก้ไขไม่ได้";
     static final String EDITED_ELSEWHERE = "ใบแจ้งรับมัดจำนี้ถูกแก้ไขโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง";
 
     private final NamedParameterJdbcTemplate jdbc;
@@ -248,12 +250,14 @@ public class DepositNoticeRepository {
     }
 
     /**
-     * Saves a DRAFT. Refuses with 409 before touching the lines when the row is no longer DRAFT
-     * (issued after the service read it) or, given {@code req.expectedUpdatedAt()}, someone else
+     * Saves a DRAFT or an ISSUED notice (an issued one is edited in place: same number, same status). Refuses with 409
+     * before touching the lines when the row is no longer in {@code expectedStatus} (the status the service read: a save
+     * must not land on a row issued or superseded meanwhile), or, given {@code req.expectedUpdatedAt()}, someone else
      * saved it since that stamp. {@code req.depositPercent()} is always set by the service.
      */
     @Transactional
-    public void update(long docId, DepositNoticeDraftRequest req, List<DepositNoticeItemDto> storedItems) {
+    public void update(long docId, DepositNoticeDraftRequest req, List<DepositNoticeItemDto> storedItems,
+            String expectedStatus) {
         BigDecimal depositPct = req.depositPercent();
         BigDecimal vatPct = new BigDecimal("0.07");
         List<DepositNoticeItemRequest> items = req.items() != null ? req.items() : List.of();
@@ -290,7 +294,7 @@ public class DepositNoticeRepository {
                     (SELECT {NAME}
                        FROM hr.employee e WHERE e.employee_id = :preparerId), '') END,
                 updated_at       = now()
-             WHERE deposit_notice_id = :id AND status = 'DRAFT'
+             WHERE deposit_notice_id = :id AND status = :expectedStatus
                AND (CAST(:expectedUpdatedAt AS timestamptz) IS NULL OR updated_at = :expectedUpdatedAt)
             """.replace("{NAME}", PREPARER_NAME_SQL),
             new MapSqlParameterSource()
@@ -308,12 +312,15 @@ public class DepositNoticeRepository {
                 .addValue("totalPayable",    total)
                 .addValue("notes",           notesArr)
                 .addValue("preparerId",      req.preparerId())
+                .addValue("expectedStatus",  expectedStatus)
         );
         if (rows == 0) {
-            boolean stillDraft = req.expectedUpdatedAt() != null && !jdbc.queryForList(
-                "SELECT 1 FROM sales.deposit_notice WHERE deposit_notice_id = :id AND status = 'DRAFT'",
-                Map.of("id", docId), Integer.class).isEmpty();
-            throw new th.co.glr.hr.common.ApiException(HttpStatus.CONFLICT, stillDraft ? EDITED_ELSEWHERE : NOT_DRAFT);
+            List<String> now = jdbc.queryForList(
+                "SELECT status FROM sales.deposit_notice WHERE deposit_notice_id = :id", Map.of("id", docId), String.class);
+            String status = now.isEmpty() ? null : now.get(0);
+            throw new th.co.glr.hr.common.ApiException(HttpStatus.CONFLICT,
+                "SUPERSEDED".equals(status) ? SUPERSEDED
+                    : expectedStatus.equals(status) && req.expectedUpdatedAt() != null ? EDITED_ELSEWHERE : NOT_DRAFT);
         }
         if (!items.isEmpty()) {
             jdbc.update("DELETE FROM sales.deposit_notice_item WHERE deposit_notice_id = :id", Map.of("id", docId));

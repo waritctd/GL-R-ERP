@@ -3813,6 +3813,27 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             .isEqualTo(WastageCalculator.FULL_PAYMENT_TERM_ON_OR_BEFORE_DELIVERY);
     }
 
+    /** CREDIT keeps its day count at 0% deposit; a draft may save without days, submit refuses it. */
+    @Test
+    void zeroDepositCreditTerm_keepsCreditDays_andSubmitRefusesMissingDays() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            withDepositAndTerm(upsertRequest(List.of(sampleItem("100.00", 10))),
+                0, null, 30, WastageCalculator.FULL_PAYMENT_TERM_CREDIT), salesActor);
+        assertThat(created.creditDays()).isEqualTo(30);
+        assertThat(created.remainderMode()).isNull();
+        quotationService.update(created.id(),
+            withDepositAndTerm(upsertRequest(List.of(sampleItem("100.00", 10))),
+                0, null, null, WastageCalculator.FULL_PAYMENT_TERM_CREDIT), salesActor);
+        assertThatThrownBy(() -> quotationService.submit(created.id(), salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasMessageContaining("จำนวนวันเครดิต");
+        quotationService.update(created.id(),
+            withDepositAndTerm(upsertRequest(List.of(sampleItem("100.00", 10))),
+                0, null, 30, WastageCalculator.FULL_PAYMENT_TERM_CREDIT), salesActor);
+        assertThat(quotationService.submit(created.id(), salesActor).docStatus())
+            .isEqualTo(QuotationStatus.PENDING_APPROVAL);
+    }
+
     /** A non-zero-deposit document is NEVER blocked by the new submit gate — the condition can only ever fire on a
      * genuinely zero-deposit document (regression guard for the guard itself). */
     @Test

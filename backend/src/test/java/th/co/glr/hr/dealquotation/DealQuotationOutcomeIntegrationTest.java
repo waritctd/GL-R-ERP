@@ -190,7 +190,7 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
         DepositNoticeRepository depositNoticeRepository = new DepositNoticeRepository(jdbc);
         depositNoticeService = new DepositNoticeService(depositNoticeRepository, tickets,
             notifications, new DepositNoticePdfRenderer(), customers,
-            legacyQuotationRepository, th.co.glr.hr.support.DocumentBundles.noDownload(jdbc));
+            legacyQuotationRepository, th.co.glr.hr.support.DocumentBundles.noDownload(jdbc), new th.co.glr.hr.deposit.RemainingInvoiceRepository(jdbc));
         orderConfirmation = new OrderConfirmationService(
             pricingRequests, tickets, ticketService, legacyQuotationRepository, depositNoticeService, notifications);
         // Without this wiring, reconcileTicketItems silently

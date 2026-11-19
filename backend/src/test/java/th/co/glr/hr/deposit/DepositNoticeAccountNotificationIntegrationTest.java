@@ -150,7 +150,7 @@ class DepositNoticeAccountNotificationIntegrationTest extends AbstractPostgresIn
             new DiscountApprovalRepository(jdbc));
 
         depositNoticeService = new DepositNoticeService(new DepositNoticeRepository(jdbc), tickets, notifications,
-            new DepositNoticePdfRenderer(), customers, quotationRepository, th.co.glr.hr.support.DocumentBundles.noDownload(jdbc));
+            new DepositNoticePdfRenderer(), customers, quotationRepository, th.co.glr.hr.support.DocumentBundles.noDownload(jdbc), new th.co.glr.hr.deposit.RemainingInvoiceRepository(jdbc));
 
         orderConfirmation = new OrderConfirmationService(
             pricingRequests, tickets, ticketService, quotationRepository, depositNoticeService, notifications);
@@ -257,6 +257,37 @@ class DepositNoticeAccountNotificationIntegrationTest extends AbstractPostgresIn
 
         assertThat(countAccountNotificationRows()).isEqualTo(rowsAfterFirstIssue);
         assertThat(mailer.sent()).isEmpty();
+    }
+
+    /** Editing an ISSUED notice so that its deposit amount changes tells account (they match the bank transfer against
+     * it), with the doc number and old -> new amount; an edit that leaves the amount alone raises nothing. */
+    @Test
+    void update_onAnIssuedNotice_notifiesAccountOnlyWhenTheDepositAmountChanges() {
+        DraftFixture fixture = buildDraftDepositNotice();
+        DepositNoticeDto issued = depositNoticeService.issue(fixture.docId(), salesActor);
+        String newPercent = issued.depositPercent().compareTo(new BigDecimal("0.40")) == 0 ? "0.20" : "0.40";
+        long before = maxNotificationId();
+
+        DepositNoticeDto edited = depositNoticeService.update(issued.id(), new DepositNoticeDraftRequest(
+            issued.customerName(), issued.customerTaxId(), issued.customerAddress(), issued.projectName(),
+            "REF-NO-MONEY-CHANGE", issued.depositPercent(), issued.notes(), null), salesActor);
+        assertThat(edited.depositAmount()).isEqualByComparingTo(issued.depositAmount());
+        assertThat(jdbc.queryForList("SELECT 1 FROM hr.notification WHERE notification_id > :m",
+            Map.of("m", before))).isEmpty();
+
+        edited = depositNoticeService.update(issued.id(), new DepositNoticeDraftRequest(
+            issued.customerName(), issued.customerTaxId(), issued.customerAddress(), issued.projectName(),
+            "REF-NO-MONEY-CHANGE", new BigDecimal(newPercent), issued.notes(), null), salesActor);
+
+        List<Map<String, Object>> rows = jdbc.queryForList(
+            "SELECT employee_id, message FROM hr.notification WHERE notification_id > :m", Map.of("m", before));
+        assertThat(rows).hasSize(1);
+        assertThat(rows.get(0).get("employee_id")).isEqualTo(accountEmployeeId);
+        String message = (String) rows.get(0).get("message");
+        assertThat(message).contains(issued.docNumber())
+            .contains(ThaiText.money(issued.depositAmount())).contains(ThaiText.money(edited.depositAmount()))
+            .contains("ยอดชำระรวม VAT " + ThaiText.money(issued.totalPayable()) + " → "
+                + ThaiText.money(edited.totalPayable()) + " บาท");
     }
 
     // Rollback: the critical AfterCommit trap this branch exists to avoid regressing

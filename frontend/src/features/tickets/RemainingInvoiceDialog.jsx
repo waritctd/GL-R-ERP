@@ -85,7 +85,7 @@ function TotalsBlock({ rows, payable }) {
  * fields (the options preview's netAmount/itemsTotal/depositAmount, or a stored row's netAmount/itemsTotal/
  * depositDeduction), consistent by construction: DepositNoticeService#computeRemainingInvoiceMoney sets
  * netAmount = itemsTotal − depositAmount. Nothing is computed here. "มัดจำ", not the drawing's "มัดจำที่ได้รับ": the
- * deduction is the deposit notice's billed deposit (pre-VAT), not a received amount. With no deduction on the row
+ * deduction is max(notice deposit, received deposit / 1.07), pre-VAT. With no deduction on the row
  * the equation is left out rather than completed with a zero the server did not send.
  */
 function RemainingSummaryLine({ net, itemsTotal, deposit }) {
@@ -124,8 +124,8 @@ function DialogFooterRow({ children }) {
  *    one-shot file.
  *  - A live DRAFT -> an editable form (same fields) with "บันทึก" (re-snapshot + save), "ลบร่าง",
  *    and "ออกใบแจ้งหนี้" (issue — mints the real number).
- *  - A live ISSUED document (no draft) -> a read-only summary, "ออกฉบับแก้ไข" (revise — prepares a
- *    new correcting DRAFT), and a download button.
+ *  - A live ISSUED document (no draft) -> a read-only summary, "แก้ไขฉบับปัจจุบัน" (edits the same document in place:
+ *    same number and status), "ออกฉบับใหม่" (revise — prepares a new correcting DRAFT), and a download button.
  *  - Every ISSUED/SUPERSEDED version is listed below, each individually downloadable — including
  *    while a revision DRAFT is open above it: the document being corrected stays ISSUED (see
  *    RemainingInvoiceService#revise's Javadoc) and must stay reachable/downloadable.
@@ -266,10 +266,11 @@ function VersionHistory({ versions, onDownload }) {
   );
 }
 
-/** Read-only summary of the currently-live ISSUED document, plus the "ออกฉบับแก้ไข" action —
+/** Read-only summary of the currently-live ISSUED document, plus the "ออกฉบับใหม่" action —
  * hidden when `canWrite` is false: a non-owning viewer still reads/downloads, never revises. */
 function IssuedSummary({ issued, canWrite, onRevised, onDownloaded, showToast }) {
   const [revising, setRevising] = useState(false);
+  const [editing, setEditing] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const [error, setError] = useState(null);
 
@@ -280,7 +281,7 @@ function IssuedSummary({ issued, canWrite, onRevised, onDownloaded, showToast })
       await api.storedRemainingInvoices.revise(issued.id);
       await onRevised?.();
     } catch (err) {
-      setError(err.message || 'ออกฉบับแก้ไขไม่สำเร็จ');
+      setError(err.message || 'ออกฉบับใหม่ไม่สำเร็จ');
     } finally {
       setRevising(false);
     }
@@ -299,6 +300,13 @@ function IssuedSummary({ issued, canWrite, onRevised, onDownloaded, showToast })
     } finally {
       setDownloading(false);
     }
+  }
+
+  if (editing) {
+    return (
+      <DraftEditor draft={issued} issuedMode onCancel={() => setEditing(false)} onDownloaded={onDownloaded} showToast={showToast}
+        onSaved={async () => { await onRevised?.(); setEditing(false); }} />
+    );
   }
 
   return (
@@ -324,18 +332,31 @@ function IssuedSummary({ issued, canWrite, onRevised, onDownloaded, showToast })
           {downloading ? 'กำลังดาวน์โหลด…' : 'ดาวน์โหลด'}
         </Button>
         {canWrite ? (
+          <Button type="button" variant="secondary" onClick={() => setEditing(true)}
+            data-testid="remaining-invoice-edit">
+            แก้ไขฉบับปัจจุบัน
+          </Button>
+        ) : null}
+        {canWrite ? (
           <Button type="button" variant="secondary" disabled={revising} onClick={handleRevise}
             data-testid="remaining-invoice-revise">
-            {revising ? 'กำลังออกฉบับแก้ไข…' : 'ออกฉบับแก้ไข'}
+            {revising ? 'กำลังออกฉบับใหม่…' : 'ออกฉบับใหม่'}
           </Button>
         ) : null}
       </div>
+      {canWrite ? (
+        <ul className="m-0 flex list-none flex-col gap-1 p-0 text-xs text-text-muted" data-testid="remaining-invoice-action-help">
+          <li><b className="text-text-secondary">แก้ไขฉบับปัจจุบัน</b> — แก้ในเอกสาร {issued.docNumber} ใช้เลขที่เดิม ระบบบันทึกประวัติการแก้ไขไว้</li>
+          <li><b className="text-text-secondary">ออกฉบับใหม่</b> — เปิดร่างฉบับถัดไป (เลขที่ใหม่) เมื่อออกแล้ว ฉบับ {issued.docNumber} จะถูกแทนที่</li>
+        </ul>
+      ) : null}
     </div>
   );
 }
 
-/** Editable form for the live DRAFT — save (re-snapshot), issue, or delete. */
-function DraftEditor({ draft, issuedOfSameQuotation, onSaved, onIssued, onDeleted, onDownloaded, showToast }) {
+/** Editable form for the live DRAFT — save (re-snapshot), issue, or delete. With `issuedMode` the same form edits an
+ * ISSUED document in place: only save and cancel (same number, same status; no issue, no delete). */
+function DraftEditor({ draft, issuedOfSameQuotation, issuedMode = false, onCancel, onSaved, onIssued, onDeleted, onDownloaded, showToast }) {
   const templatesQuery = useQuery({
     queryKey: queryKeys.depositNoteTemplates(),
     queryFn: () => api.depositNotices.noteTemplates().then((r) => r.templates ?? []),
@@ -519,23 +540,32 @@ function DraftEditor({ draft, issuedOfSameQuotation, onSaved, onIssued, onDelete
       <div className="flex flex-wrap gap-2 mobile:flex-col [&>button]:mobile:w-full">
         <Button type="button" variant="secondary" disabled={downloading} onClick={handleDownload}
           data-testid="remaining-invoice-download-draft">
-          {downloading ? 'กำลังดาวน์โหลด…' : 'ดาวน์โหลด (ตัวอย่าง)'}
+          {downloading ? 'กำลังดาวน์โหลด…' : issuedMode ? 'ดาวน์โหลด' : 'ดาวน์โหลด (ตัวอย่าง)'}
         </Button>
-        <Button type="button" variant="danger" disabled={busy} onClick={handleDelete}
-          data-testid="remaining-invoice-delete-draft">
-          {deleting ? 'กำลังลบ…' : 'ลบร่าง'}
-        </Button>
+        {issuedMode ? null : (
+          <Button type="button" variant="danger" disabled={busy} onClick={handleDelete}
+            data-testid="remaining-invoice-delete-draft">
+            {deleting ? 'กำลังลบ…' : 'ลบร่าง'}
+          </Button>
+        )}
       </div>
 
       <DialogFooterRow>
         <Button type="button" variant="secondary" disabled={busy} onClick={handleSave}
           data-testid="remaining-invoice-save-draft">
-          {saving ? 'กำลังบันทึก…' : 'บันทึกร่าง'}
+          {saving ? 'กำลังบันทึก…' : issuedMode ? 'บันทึก' : 'บันทึกร่าง'}
         </Button>
-        <Button type="button" variant="primary" disabled={busy} onClick={() => { depositReferenceOptionsQuery.refetch(); setConfirmingIssue(true); }}
-          data-testid="remaining-invoice-issue">
-          {issuing ? 'กำลังออกเอกสาร…' : 'ออกใบแจ้งหนี้'}
-        </Button>
+        {issuedMode ? (
+          <Button type="button" variant="secondary" disabled={busy} onClick={onCancel}
+            data-testid="remaining-invoice-cancel-edit">
+            ยกเลิก
+          </Button>
+        ) : (
+          <Button type="button" variant="primary" disabled={busy} onClick={() => { depositReferenceOptionsQuery.refetch(); setConfirmingIssue(true); }}
+            data-testid="remaining-invoice-issue">
+            {issuing ? 'กำลังออกเอกสาร…' : 'ออกใบแจ้งหนี้'}
+          </Button>
+        )}
       </DialogFooterRow>
 
       <ConfirmDialog

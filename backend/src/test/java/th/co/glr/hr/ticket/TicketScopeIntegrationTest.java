@@ -85,7 +85,7 @@ class TicketScopeIntegrationTest extends AbstractPostgresIntegrationTest {
 
         depositNoticeService = new DepositNoticeService(new DepositNoticeRepository(jdbc), tickets,
             notifications, new DepositNoticePdfRenderer(), customers,
-            new CustomerQuotationRepository(jdbc), th.co.glr.hr.support.DocumentBundles.noDownload(jdbc));
+            new CustomerQuotationRepository(jdbc), th.co.glr.hr.support.DocumentBundles.noDownload(jdbc), new th.co.glr.hr.deposit.RemainingInvoiceRepository(jdbc));
 
         // V141: shared by FactoryQuoteService and, in production, PricingDecisionService — this file only reads
         // through PricingCostingService, so the calculator is wired but never exercised beyond satisfying the
