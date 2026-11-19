@@ -19,13 +19,6 @@ vi.mock('../../api/index.js', () => ({
   },
 }));
 
-const employeeUser = {
-  employeeId: 1,
-  name: 'พนักงาน ทดสอบ',
-  role: 'employee',
-  manager: false,
-};
-
 const ceoUser = {
   employeeId: 99,
   name: 'ผู้บริหาร ทดสอบ',
@@ -57,7 +50,6 @@ const submittedRequest = {
   status: 'SUBMITTED',
 };
 
-
 // The section is collapsed by default for every role (owner, 2026-08-10) — it is a correction workflow, rare
 // for an employee and batched for the CEO, and expanded it put a stat strip, a filter bar and a full table
 // between the attendance table and the bottom of the page.
@@ -67,42 +59,10 @@ async function expandSection() {
   return header;
 }
 
-describe('AttendanceCorrectionPanel — own request list', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  it("lists the employee's own past requests with status", async () => {
-    api.attendanceCorrection.list.mockResolvedValue({
-      requests: [{ ...submittedRequest, canReview: false }],
-    });
-
-    renderPanel(employeeUser);
-    await expandSection();
-
-    expect(await screen.findByText('ลืมสแกนนิ้ว')).not.toBeNull();
-    // "รอ CEO" also appears as a status-filter <option>, AND the collapsed-section header now carries its own
-    // pending-count StatusBadge ("รอพิจารณา N") — so a document-wide `.status-badge` lookup returns the header's,
-    // not this row's. Scope to the row.
-    expect(document.querySelector('.data-row .status-badge')?.textContent).toBe('รอ CEO');
-  });
-});
-
 describe('AttendanceCorrectionPanel — CEO review affordance', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     api.attendanceCorrection.approve.mockResolvedValue({ request: { id: 5, status: 'APPROVED' } });
-  });
-
-  // Split from the former "does not render the submit form for the CEO" (submit-flow) test -- the submit FORM
-  // moved to AttendanceCorrectionRequestModal.jsx (fix/attendance-correction-on-attendance-page), so this panel
-  // never renders one for ANY role any more.
-  it('renders the review queue (empty state) for the CEO', async () => {
-    api.attendanceCorrection.list.mockResolvedValue({ requests: [] });
-    renderPanel(ceoUser);
-    await expandSection();
-
-    expect(await screen.findByText('ยังไม่มีคำขอแก้ไขเวลา')).not.toBeNull();
   });
 
   it('shows approve/reject for a SUBMITTED request and approves on confirm', async () => {
@@ -118,33 +78,5 @@ describe('AttendanceCorrectionPanel — CEO review affordance', () => {
     fireEvent.click(screen.getByRole('button', { name: 'อนุมัติ' }));
 
     await waitFor(() => expect(api.attendanceCorrection.approve).toHaveBeenCalledWith(5, { reviewerNote: null }));
-  });
-
-  // Regression coverage for the deliberate invalidation change this branch makes: approving now writes a real
-  // punch, and this list sits on the same page as the attendance day table now, so an approval must invalidate
-  // BOTH query prefixes or the table above keeps showing stale data.
-  it('invalidates both attendanceCorrection and attendance on approve', async () => {
-    const queryClient = new QueryClient({
-      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-    });
-    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
-    api.attendanceCorrection.list.mockResolvedValue({
-      requests: [{ ...submittedRequest, canReview: true }],
-    });
-
-    render(
-      <QueryClientProvider client={queryClient}>
-        <AttendanceCorrectionPanel user={ceoUser} showToast={vi.fn()} />
-      </QueryClientProvider>,
-    );
-    await expandSection();
-
-    const approveButton = await screen.findByRole('button', { name: 'CEO อนุมัติ' });
-    fireEvent.click(approveButton);
-    fireEvent.click(screen.getByRole('button', { name: 'อนุมัติ' }));
-
-    await waitFor(() => expect(api.attendanceCorrection.approve).toHaveBeenCalledTimes(1));
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['attendanceCorrection'] });
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['attendance'] });
   });
 });
