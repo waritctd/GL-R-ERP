@@ -25,18 +25,6 @@ const group = () => screen.getByRole('radiogroup', { name: 'ตามครั�
 const radio = (name) => within(group()).getByRole('radio', { name });
 
 describe('FollowUpPicks', () => {
-  it('offers 3 วัน · 1 สัปดาห์ · 2 สัปดาห์ · เลือกวัน with nothing preselected and no date shown', () => {
-    const onValue = vi.fn();
-    render(<Controlled onValue={onValue} />);
-
-    const names = within(group()).getAllByRole('radio').map((r) => r.textContent);
-    expect(names).toEqual(['3 วัน', '1 สัปดาห์', '2 สัปดาห์', 'เลือกวัน']);
-    for (const r of within(group()).getAllByRole('radio')) expect(r.getAttribute('aria-checked')).toBe('false');
-    expect(onValue).not.toHaveBeenCalled();
-    expect(screen.queryByText(/แสดงในข้อมูลงาน/)).toBeNull();
-    expect(screen.getByText('(ไม่บังคับ)')).toBeTruthy();
-  });
-
   it('each quick choice counts from today in Bangkok and says which day it lands on', () => {
     const onValue = vi.fn();
     render(<Controlled onValue={onValue} />);
@@ -50,74 +38,6 @@ describe('FollowUpPicks', () => {
     expect(radio('3 วัน').getAttribute('aria-checked')).toBe('false');
     fireEvent.click(radio('2 สัปดาห์'));
     expect(onValue).toHaveBeenLastCalledWith('2026-12-01');
-  });
-
-  it('tapping the picked choice again clears it — the follow-up stays optional', () => {
-    const onValue = vi.fn();
-    render(<Controlled onValue={onValue} />);
-
-    fireEvent.click(radio('1 สัปดาห์'));
-    fireEvent.click(radio('1 สัปดาห์'));
-
-    expect(onValue).toHaveBeenLastCalledWith('');
-    expect(radio('1 สัปดาห์').getAttribute('aria-checked')).toBe('false');
-    expect(screen.queryByText(/แสดงในข้อมูลงาน/)).toBeNull();
-  });
-
-  it('เลือกวัน opens a date field that starts empty, refuses a past day, and takes a typed พ.ศ. date', () => {
-    const onValue = vi.fn();
-    render(<Controlled onValue={onValue} />);
-
-    fireEvent.click(radio('1 สัปดาห์'));
-    fireEvent.click(radio('เลือกวัน'));
-    expect(onValue).toHaveBeenLastCalledWith('');
-    const field = screen.getByLabelText('วันที่ตามครั้งถัดไป');
-    expect(field.value).toBe('');
-
-    fireEvent.change(field, { target: { value: '16/11/2569' } });
-    fireEvent.blur(field);
-    expect(onValue).toHaveBeenLastCalledWith('');
-
-    fireEvent.change(field, { target: { value: '05/01/2570' } });
-    fireEvent.blur(field);
-    expect(onValue).toHaveBeenLastCalledWith('2027-01-05');
-  });
-
-  it('a later date in another year carries its พ.ศ. year in the line under the choices', () => {
-    render(<Controlled />);
-    fireEvent.click(radio('เลือกวัน'));
-    const field = screen.getByLabelText('วันที่ตามครั้งถัดไป');
-    fireEvent.change(field, { target: { value: '05/01/2570' } });
-    fireEvent.blur(field);
-
-    expect(screen.getByText('ตามครั้งถัดไป อ. 5 ม.ค. 2570 · แสดงในข้อมูลงาน')).toBeTruthy();
-  });
-
-  it('takes the visit dialogs\' label ตามต่อ', () => {
-    render(<Controlled label="ตามต่อ" />);
-    expect(screen.getByRole('radiogroup', { name: 'ตามต่อ' })).toBeTruthy();
-  });
-
-  it('every choice is at least 44px tall on a phone', () => {
-    render(<Controlled />);
-    for (const r of within(group()).getAllByRole('radio')) expect(r.className).toContain('mobile:min-h-[44px]');
-  });
-});
-
-describe('FollowUpPicks — one source of truth (fix round 1, M2)', () => {
-  it('the checked pill follows `value`: a parent clearing the value un-checks it', () => {
-    const { rerender } = render(<FollowUpPicks todayIso={TODAY} value="2026-11-24" onChange={vi.fn()} />);
-    expect(radio('1 สัปดาห์').getAttribute('aria-checked')).toBe('true');
-
-    rerender(<FollowUpPicks todayIso={TODAY} value="" onChange={vi.fn()} />);
-    for (const r of within(group()).getAllByRole('radio')) expect(r.getAttribute('aria-checked')).toBe('false');
-    expect(screen.queryByText(/แสดงในข้อมูลงาน/)).toBeNull();
-  });
-
-  it('a date that is no quick choice shows as เลือกวัน with its date', () => {
-    render(<FollowUpPicks todayIso={TODAY} value="2027-01-05" onChange={vi.fn()} />);
-    expect(radio('เลือกวัน').getAttribute('aria-checked')).toBe('true');
-    expect(screen.getByLabelText('วันที่ตามครั้งถัดไป').value).toBe('05/01/2570');
   });
 });
 

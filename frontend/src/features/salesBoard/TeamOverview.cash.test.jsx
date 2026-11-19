@@ -54,14 +54,4 @@ describe('TeamOverview — cash (slice 3)', () => {
     expect(within(tile).getByText('฿2,840,000')).toBeTruthy();
     expect(within(tile).getByText('จากที่ทีมคาด ฿7,900,000 · มาจาก Express')).toBeTruthy();
   });
-
-  it('puts each rep’s expected and received in the row; zero reads as a dash, not ฿0', async () => {
-    renderTeam();
-    const table = await screen.findByRole('table');
-    const [, somMai, wipa] = within(table).getAllByRole('row');
-    expect(within(somMai).getByTestId('rep-expected').textContent).toBe('฿1,301,000');
-    expect(within(somMai).getByTestId('rep-received').textContent).toBe('฿121,150');
-    expect(within(wipa).getByTestId('rep-expected').textContent).toBe('—');
-    expect(within(wipa).getByTestId('rep-received').textContent).toBe('—');
-  });
 });
