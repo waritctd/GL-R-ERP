@@ -135,6 +135,26 @@ class DepositNoticeBundlePdfIntegrationTest extends DirectQuotationDealTestBase 
             .hasSize(1 + pageCount(quotationService.renderPdf(deal.quotation().id(), salesActor)));
     }
 
+    /** account reaches an issued notice of a DEAD deal outside its list scope (the issued-notice exception); that must
+     * not hand it the CEO-approved prices of a PRICING_REQUEST-origin quotation. */
+    @Test
+    void anOutOfScopeAccountOnADeadDeal_getsTheNoticeButNotAPricingRequestQuotation() throws Exception {
+        Deal deal = confirmedDepositDeal();
+        jdbc.update("UPDATE sales.quotation SET origin = 'PRICING_REQUEST' WHERE quotation_id = :id",
+            java.util.Map.of("id", deal.quotation().id()));
+        jdbc.update("UPDATE sales.deposit_notice SET status = 'ISSUED', doc_number = 'DEAD-1' WHERE deposit_notice_id = :id",
+            java.util.Map.of("id", deal.notice().id()));
+        jdbc.update("UPDATE sales.ticket SET lifecycle = 'CLOSED_LOST' WHERE ticket_id = :id",
+            java.util.Map.of("id", deal.ticketId()));
+        assertThat(tickets.isInAccountScope(deal.ticketId())).as("premise: outside account's scope").isFalse();
+        assertThat(tickets.isDeadDealWithIssuedDepositNotice(deal.ticketId())).as("premise: the exception").isTrue();
+
+        var bundled = depositNoticeService.getPdfBundle(deal.notice().id(), accountActor);
+
+        assertThat(pageTexts(bundled.pdf())).as("the notice only").hasSize(1);
+        assertThat(bundled.skipped()).containsExactly("quotation");
+    }
+
     /** What stays gated: a PRICING_REQUEST-origin quotation carries the CEO's approved prices, which import never sees. */
     @Test
     void aPricingRequestQuotation_isLeftOutForImport_andSkippedSaysSo() throws Exception {

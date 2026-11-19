@@ -2502,18 +2502,19 @@ public class DealQuotationService {
     }
 
     /** The quotation PDF for a document of deal {@code ticketId} (the notice / remaining invoice bundle). The quotation
-     * must belong to that deal (404 otherwise). Anyone who may open the document gets the quotation it references (even a
-     * SUPERSEDED one), except that a PRICING_REQUEST-origin quotation still goes through {@link #renderPdf}'s view gate
-     * (403) unless the actor is account or a grant holder, as it carries the CEO-approved prices. */
+     * must belong to that deal (404 otherwise). Anyone who may open the document gets the quotation it references, even
+     * a SUPERSEDED one: this does NOT go through {@link #renderPdf}'s view gate. The one exception is a
+     * PRICING_REQUEST-origin quotation, which carries the CEO-approved prices: it needs
+     * {@link #canViewPricingRequestOriginRow} (403 otherwise), which admits owner/sales_manager/ceo, a
+     * {@code can_manage_all_sales_documents} holder and account inside its list scope, with no status filter. */
     public byte[] renderPdfForDealDocument(long id, long ticketId, UserPrincipal actor) {
         DealQuotationDto quotation = requireQuotation(id);
         if (quotation.ticketId() != ticketId) {
             throw new ApiException(HttpStatus.NOT_FOUND, "ไม่พบใบเสนอราคานี้");
         }
-        // Its prices are the CEO's approved ones: import never gets them. No status filter here: account (already scoped
-        // to the deal by the notice access) and grant holders get it even once SUPERSEDED.
-        if ("PRICING_REQUEST".equals(quotation.origin()) && !"account".equals(actor.role())
-            && !hasAllDocumentsGrant(actor) && !canViewPricingRequestOriginRow(actor, quotation)) {
+        // Its prices are the CEO's approved ones: only canViewPricingRequestOriginRow (owner, sales_manager, ceo, a grant
+        // holder, account INSIDE its list scope) gets them. No status filter, so a SUPERSEDED one is still attached.
+        if ("PRICING_REQUEST".equals(quotation.origin()) && !canViewPricingRequestOriginRow(actor, quotation)) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
         return renderer.toPdf(toRenderModel(quotation));
