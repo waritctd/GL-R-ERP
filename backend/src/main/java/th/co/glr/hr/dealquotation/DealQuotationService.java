@@ -2502,14 +2502,21 @@ public class DealQuotationService {
     }
 
     /** The quotation PDF for a document of deal {@code ticketId} (the notice / remaining invoice bundle). The quotation
-     * must belong to that deal (404 otherwise), and {@code actor} must pass the same view gate as
-     * {@link #renderPdf} (403 otherwise): a notice viewer gets no quotation the quotation endpoint would refuse. */
+     * must belong to that deal (404 otherwise). Anyone who may open the document gets the quotation it references, even
+     * a SUPERSEDED one: this does NOT go through {@link #renderPdf}'s view gate. The one exception is a
+     * PRICING_REQUEST-origin quotation, which carries the CEO-approved prices: it needs
+     * {@link #canViewPricingRequestOriginRow} (403 otherwise), which admits owner/sales_manager/ceo, a
+     * {@code can_manage_all_sales_documents} holder and account inside its list scope, with no status filter. */
     public byte[] renderPdfForDealDocument(long id, long ticketId, UserPrincipal actor) {
         DealQuotationDto quotation = requireQuotation(id);
         if (quotation.ticketId() != ticketId) {
             throw new ApiException(HttpStatus.NOT_FOUND, "ไม่พบใบเสนอราคานี้");
         }
-        requireViewAccess(actor, quotation);
+        // Its prices are the CEO's approved ones: only canViewPricingRequestOriginRow (owner, sales_manager, ceo, a grant
+        // holder, account INSIDE its list scope) gets them. No status filter, so a SUPERSEDED one is still attached.
+        if ("PRICING_REQUEST".equals(quotation.origin()) && !canViewPricingRequestOriginRow(actor, quotation)) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
+        }
         return renderer.toPdf(toRenderModel(quotation));
     }
 

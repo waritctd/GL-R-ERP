@@ -103,32 +103,82 @@ class DepositNoticeBundlePdfIntegrationTest extends DirectQuotationDealTestBase 
         }
     }
 
-    /** A notice viewer the quotation's own view gate refuses (account, SUPERSEDED quotation) gets the notice without
-     * the quotation, and the download says so; it does not fail. */
+    /** Ploy's ruling: anyone who can open the notice gets the quotation it references, even after that quotation was
+     * revised (SUPERSEDED), which the account role may not open on the quotation endpoint. */
     @Test
-    void aViewerRefusedOnTheQuotationItself_getsTheNoticeWithoutIt_andSkippedSaysSo() throws Exception {
+    void aSupersededQuotation_isStillAttached_forAnAccountViewer() throws Exception {
         Deal deal = confirmedDepositDeal();
         jdbc.update("UPDATE sales.quotation SET doc_status = 'SUPERSEDED' WHERE quotation_id = :id",
-            java.util.Map.of("id", deal.quotation().id()));
+            java.util.Map.of("id", deal.quotation().id())); // as a later revision leaves it
         assertForbidden(() -> quotationService.renderPdf(deal.quotation().id(), accountActor)); // the premise
+
+        var bundled = depositNoticeService.getPdfBundle(deal.notice().id(), accountActor);
+
+        assertThat(bundled.skipped()).isEmpty();
+        assertThat(pageTexts(bundled.pdf())).as("notice + the referenced quotation")
+            .hasSize(1 + pageCount(quotationService.renderPdf(deal.quotation().id(), salesActor)));
+    }
+
+    /** The same ruling for a PRICING_REQUEST-origin quotation: account (already scoped to the deal by the notice access)
+     * still gets it attached once it is SUPERSEDED; no status filter applies. */
+    @Test
+    void aSupersededPricingRequestQuotation_isStillAttached_forAnAccountViewer() throws Exception {
+        Deal deal = confirmedDepositDeal();
+        jdbc.update("UPDATE sales.quotation SET origin = 'PRICING_REQUEST', doc_status = 'SUPERSEDED'"
+            + " WHERE quotation_id = :id", java.util.Map.of("id", deal.quotation().id()));
+        assertForbidden(() -> quotationService.renderPdf(deal.quotation().id(), accountActor)); // the premise
+
+        var bundled = depositNoticeService.getPdfBundle(deal.notice().id(), accountActor);
+
+        assertThat(bundled.skipped()).isEmpty();
+        assertThat(pageTexts(bundled.pdf())).as("notice + the quotation")
+            .hasSize(1 + pageCount(quotationService.renderPdf(deal.quotation().id(), salesActor)));
+    }
+
+    /** account reaches an issued notice of a DEAD deal outside its list scope (the issued-notice exception); that must
+     * not hand it the CEO-approved prices of a PRICING_REQUEST-origin quotation. */
+    @Test
+    void anOutOfScopeAccountOnADeadDeal_getsTheNoticeButNotAPricingRequestQuotation() throws Exception {
+        Deal deal = confirmedDepositDeal();
+        jdbc.update("UPDATE sales.quotation SET origin = 'PRICING_REQUEST' WHERE quotation_id = :id",
+            java.util.Map.of("id", deal.quotation().id()));
+        jdbc.update("UPDATE sales.deposit_notice SET status = 'ISSUED', doc_number = 'DEAD-1' WHERE deposit_notice_id = :id",
+            java.util.Map.of("id", deal.notice().id()));
+        jdbc.update("UPDATE sales.ticket SET lifecycle = 'CLOSED_LOST' WHERE ticket_id = :id",
+            java.util.Map.of("id", deal.ticketId()));
+        assertThat(tickets.isInAccountScope(deal.ticketId())).as("premise: outside account's scope").isFalse();
+        assertThat(tickets.isDeadDealWithIssuedDepositNotice(deal.ticketId())).as("premise: the exception").isTrue();
 
         var bundled = depositNoticeService.getPdfBundle(deal.notice().id(), accountActor);
 
         assertThat(pageTexts(bundled.pdf())).as("the notice only").hasSize(1);
         assertThat(bundled.skipped()).containsExactly("quotation");
-        assertThat(depositNoticeService.getPdfBundle(deal.notice().id(), salesActor).skipped())
-            .as("the owner may read it").isEmpty();
     }
 
-    /** A reference that names no new-engine quotation is a skipped quotation, not silence. */
+    /** What stays gated: a PRICING_REQUEST-origin quotation carries the CEO's approved prices, which import never sees. */
     @Test
-    void aReferenceWithNoQuotation_isReportedAsSkipped() {
+    void aPricingRequestQuotation_isLeftOutForImport_andSkippedSaysSo() throws Exception {
+        Deal deal = confirmedDepositDeal();
+        jdbc.update("UPDATE sales.quotation SET origin = 'PRICING_REQUEST' WHERE quotation_id = :id",
+            java.util.Map.of("id", deal.quotation().id()));
+        assertForbidden(() -> quotationService.renderPdf(deal.quotation().id(), importActor)); // the premise
+        var bundle = new th.co.glr.hr.deposit.DocumentBundle(attachments, quotationService,
+            new th.co.glr.hr.deposit.DepositNoticeRepository(jdbc));
+
+        var bundled = bundle.bundle(onePagePdf("NOTICE"), deal.ticketId(), deal.quotation().number(), importActor);
+
+        assertThat(pageTexts(bundled.pdf())).as("the document only").hasSize(1);
+        assertThat(bundled.skipped()).containsExactly("quotation");
+    }
+
+    /** A reference that names no new-engine quotation (a legacy / old-engine number) has nothing to attach: not a skip. */
+    @Test
+    void aReferenceWithNoNewEngineQuotation_isNotReportedAsSkipped() {
         Deal deal = confirmedDepositDeal();
         jdbc.update("UPDATE sales.deposit_notice SET reference = 'NO-SUCH-QT' WHERE deposit_notice_id = :id",
             java.util.Map.of("id", deal.notice().id()));
 
-        assertThat(depositNoticeService.getPdfBundle(deal.notice().id(), salesActor).skipped())
-            .containsExactly("quotation");
+        assertThat(depositNoticeService.getPdfBundle(deal.notice().id(), salesActor).skipped()).isEmpty();
     }
 
     /** The ungated render is bound to the deal: asked for another deal's quotation it refuses (404). */
