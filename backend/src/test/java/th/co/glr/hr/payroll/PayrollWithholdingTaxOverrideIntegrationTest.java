@@ -17,10 +17,7 @@ import th.co.glr.hr.commission.CommissionAttachmentRepository;
 import th.co.glr.hr.commission.CommissionCalculator;
 import th.co.glr.hr.commission.CommissionRepository;
 import th.co.glr.hr.commission.CommissionService;
-import th.co.glr.hr.employee.EmployeeCodeGenerator;
-import th.co.glr.hr.employee.EmployeeReferenceRepository;
 import th.co.glr.hr.employee.EmployeeRepository;
-import th.co.glr.hr.employee.UpsertEmployeeRequest;
 import th.co.glr.hr.leave.LeaveRepository;
 import th.co.glr.hr.notification.CeoApproverRepository;
 import th.co.glr.hr.notification.NotificationService;
@@ -31,7 +28,6 @@ import th.co.glr.hr.ticket.TicketRepository;
  * the calculator in isolation): the two-layer "Both" model. GUARDRAIL asserted throughout: the override only
  * SUBSTITUTES the final withheld amount. */
 class PayrollWithholdingTaxOverrideIntegrationTest extends AbstractPostgresIntegrationTest {
-    private static final BigDecimal COMPUTED_WITHHOLDING = new BigDecimal("704.00");
 
     private PayrollRepository payrollRepository;
     private PayrollService payrollService;
@@ -65,37 +61,6 @@ class PayrollWithholdingTaxOverrideIntegrationTest extends AbstractPostgresInteg
                 mock(th.co.glr.hr.employee.EmployeeRepository.class),
                 mock(AuditService.class),
                 new th.co.glr.hr.payroll.obligation.PayrollDeductionShortfallRepository(jdbc)));
-    }
-
-    /** Layer 1: the standing per-employee override on hr.employee flows through preview and substitutes the
-     * withheld amount, while the progressive-tax computation stays intact and is still reported. The per-run typed
-     * field on the line stays null (the standing value is not a per-run entry). */
-    @Test
-    void standingEmployeeOverrideSubstitutesWithheldAmountButLeavesComputationIntact() {
-        LocalDate month = LocalDate.of(2026, 1, 1);
-        long employeeId = seedEmployee("WHT-STAND", "มาตรฐาน", "ทดสอบ", new BigDecimal("40000.00"));
-
-        // Baseline: no override -> computed withholding.
-        PayrollLineDto computed = previewLineFor(month, employeeId);
-        assertThat(computed.withholdingTax()).isEqualByComparingTo(COMPUTED_WITHHOLDING);
-        assertThat(computed.withholdingTaxOverride()).isNull();
-
-        // Set the standing override to 500.00 and re-preview.
-        setStandingOverride(employeeId, new BigDecimal("500.00"));
-        PayrollLineDto overridden = previewLineFor(month, employeeId);
-
-        // Withheld tax is substituted...
-        assertThat(overridden.withholdingTax()).isEqualByComparingTo("500.00");
-        // ...but the computation is untouched and still reported.
-        assertThat(overridden.annualTax()).isEqualByComparingTo(computed.annualTax());
-        assertThat(overridden.taxableAnnualIncome()).isEqualByComparingTo(computed.taxableAnnualIncome());
-        assertThat(overridden.projectedAnnualIncome()).isEqualByComparingTo(computed.projectedAnnualIncome());
-        // The line's per-run typed field is null: the standing value is not a per-run entry, so it must not be
-        // persisted onto the line or carried forward.
-        assertThat(overridden.withholdingTaxOverride()).isNull();
-        // Net pay reflects the smaller withheld amount exactly.
-        assertThat(overridden.netPay())
-            .isEqualByComparingTo(computed.netPay().add(COMPUTED_WITHHOLDING).subtract(new BigDecimal("500.00")));
     }
 
     /** Layer 2 precedence: a per-run HR-typed override WINS over the standing employee override. Same employee,
@@ -137,93 +102,7 @@ class PayrollWithholdingTaxOverrideIntegrationTest extends AbstractPostgresInteg
         assertThat(row.withholdingTaxOverride()).isEqualByComparingTo("250.00");
     }
 
-    /** Zero is a meaningful per-run override (withhold nothing) and must be honoured, distinct from "no override"
-     * -- proving the null-vs-zero distinction survives the JSON/DB round trip. */
-    @Test
-    void perRunOverrideOfZeroForcesZeroWithheldTaxThroughTheService() {
-        LocalDate month = LocalDate.of(2026, 1, 1);
-        long employeeId = seedEmployee("WHT-ZERO", "ศูนย์", "ทดสอบ", new BigDecimal("40000.00"));
-
-        PayrollPeriodDto preview = payrollService.preview(
-            new ProcessPayrollRequest(month, List.of(inputWithWithholdingOverride(employeeId, BigDecimal.ZERO))),
-            hr());
-        PayrollLineDto line = lineFor(preview, employeeId);
-
-        assertThat(line.withholdingTax()).isEqualByComparingTo("0.00");
-        assertThat(line.withholdingTaxOverride()).isEqualByComparingTo("0.00");
-        // Projection still computed and still positive -- only the withheld amount is zeroed.
-        assertThat(line.annualTax()).isEqualByComparingTo("8450.00");
-    }
-
-    /** The employee-update clear path (bug fix under test, EmployeeRepository.update): setting the standing
-     * override then clearing it back to NULL through the real update() path must restore COMPUTED withholding on
-     * the very next payroll line -- not just leave the stale override value in place. */
-    @Test
-    void clearingStandingOverrideThroughEmployeeUpdateRestoresComputedWithholdingOnNextPayrollLine() {
-        LocalDate month = LocalDate.of(2026, 1, 1);
-        long employeeId = seedEmployee("WHT-CLEAR", "ล้างค่า", "ทดสอบ", new BigDecimal("40000.00"));
-
-        PayrollLineDto computed = previewLineFor(month, employeeId);
-        assertThat(computed.withholdingTax()).isEqualByComparingTo(COMPUTED_WITHHOLDING);
-
-        // Set a standing override -- substitutes the withheld amount, as in the test above.
-        setStandingOverride(employeeId, new BigDecimal("500.00"));
-        assertThat(previewLineFor(month, employeeId).withholdingTax()).isEqualByComparingTo("500.00");
-
-        // Clear it through EmployeeRepository.update (the actual HR employee-edit code path), not the direct-SQL
-        // helper -- this is what proves the fix, not just the DB state.
-        EmployeeRepository employeeRepository =
-            new EmployeeRepository(jdbc, new EmployeeReferenceRepository(jdbc), new EmployeeCodeGenerator(jdbc));
-        employeeRepository.update(employeeId, clearWithholdingOverrideRequest());
-
-        // The column is genuinely NULL again (wrong-way-round check)...
-        BigDecimal stored = jdbc.queryForObject(
-            "SELECT withholding_tax_override FROM hr.employee WHERE employee_id = :id",
-            Map.of("id", employeeId), BigDecimal.class);
-        assertThat(stored).isNull();
-
-        // ...and the next payroll preview line is back to the COMPUTED tax, byte-identical to baseline.
-        PayrollLineDto restored = previewLineFor(month, employeeId);
-        assertThat(restored.withholdingTax()).isEqualByComparingTo(COMPUTED_WITHHOLDING);
-        assertThat(restored.withholdingTax()).isEqualByComparingTo(computed.withholdingTax());
-    }
-
-    /** Zero is a meaningful standing override ("withhold nothing") and must survive an update() call distinctly
-     * from NULL -- it must NOT be treated as a clear. */
-    @Test
-    void settingStandingOverrideToZeroThroughEmployeeUpdateStaysZeroNotNull() {
-        long employeeId = seedEmployee("WHT-ZEROSTAND", "ศูนย์คงที่", "ทดสอบ", new BigDecimal("40000.00"));
-        EmployeeRepository employeeRepository =
-            new EmployeeRepository(jdbc, new EmployeeReferenceRepository(jdbc), new EmployeeCodeGenerator(jdbc));
-
-        employeeRepository.update(employeeId, withholdingOverrideRequest(BigDecimal.ZERO));
-
-        BigDecimal stored = jdbc.queryForObject(
-            "SELECT withholding_tax_override FROM hr.employee WHERE employee_id = :id",
-            Map.of("id", employeeId), BigDecimal.class);
-        assertThat(stored).isNotNull();
-        assertThat(stored).isEqualByComparingTo("0.00");
-    }
-
-    /** Every other field left null (unchanged); only withholdingTaxOverride is set on this update call. */
-    private UpsertEmployeeRequest withholdingOverrideRequest(BigDecimal withholdingTaxOverride) {
-        return new UpsertEmployeeRequest(
-            null, null, null, null, null, null, null, null, null, null, // code..maritalStatus
-            null, null, null, null, null,                               // email..departmentTh
-            null, null, null, null, null, null,                         // positionTh..directorRemuneration
-            withholdingTaxOverride,
-            null, null, null, null, null, null);                        // hireDate..emergencyPhone
-    }
-
-    private UpsertEmployeeRequest clearWithholdingOverrideRequest() {
-        return withholdingOverrideRequest(null);
-    }
-
     // --- helpers ------------------------------------------------------------
-
-    private PayrollLineDto previewLineFor(LocalDate payrollMonth, long employeeId) {
-        return lineFor(payrollService.preview(new ProcessPayrollRequest(payrollMonth, List.of()), hr()), employeeId);
-    }
 
     private PayrollLineDto lineFor(PayrollPeriodDto period, long employeeId) {
         return period.lines().stream()

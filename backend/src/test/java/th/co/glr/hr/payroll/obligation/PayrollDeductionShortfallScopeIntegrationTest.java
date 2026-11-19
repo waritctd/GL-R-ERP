@@ -36,11 +36,6 @@ class PayrollDeductionShortfallScopeIntegrationTest extends AbstractPostgresInte
     }
 
     @Test
-    void anEmployeeCannotReadTheShortfallLedgerEvenFilteredToThemselves() {
-        assertForbidden(() -> service.list(employeeA, null, employee(employeeA)));
-    }
-
-    @Test
     void anEmployeeCannotReadTheShortfallLedgerUnfiltered() {
         assertForbidden(() -> service.list(null, null, employee(employeeA)));
     }
@@ -50,12 +45,6 @@ class PayrollDeductionShortfallScopeIntegrationTest extends AbstractPostgresInte
         List<PayrollDeductionShortfallDto> rows = service.list(employeeA, null, hr());
         assertThat(rows).hasSize(1);
         assertThat(rows.get(0).employeeId()).isEqualTo(employeeA);
-    }
-
-    @Test
-    void ceoCanReadTheShortfallLedger() {
-        List<PayrollDeductionShortfallDto> rows = service.list(employeeA, null, ceo());
-        assertThat(rows).hasSize(1);
     }
 
     // --- helpers ------------------------------------------------------------

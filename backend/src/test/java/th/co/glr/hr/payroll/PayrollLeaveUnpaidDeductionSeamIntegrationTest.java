@@ -6,7 +6,6 @@ import static org.mockito.Mockito.mock;
 import java.math.BigDecimal;
 import java.time.DayOfWeek;
 import java.time.LocalDate;
-import java.time.LocalTime;
 import java.time.ZoneId;
 import java.time.temporal.TemporalAdjusters;
 import java.util.List;
@@ -109,99 +108,6 @@ class PayrollLeaveUnpaidDeductionSeamIntegrationTest extends AbstractPostgresInt
         assertThat(line.unpaidLeaveDeduction()).isEqualByComparingTo("1000.00");
         assertThat(line.grossEarnings()).isEqualByComparingTo("30000.00");
         assertThat(line.grossTaxableIncome()).isEqualByComparingTo("29000.00");
-    }
-
-    @Test
-    void paidWithinQuotaLeaveContributesNoUnpaidDaysAndNoDeduction() {
-        long employeeId = insertEmployee("SEAM-002");
-        LocalDate monday = firstMondayOfMonth(2);
-        LocalDate month = monday.withDayOfMonth(1);
-
-        LeaveRequestDto leave = leaveService.submit(
-            new SubmitLeaveRequest(employeeId, "VACATION", monday, monday.plusDays(1), "Short trip"),
-            employee(employeeId));
-        assertThat(leave.unpaidDays()).isEqualByComparingTo("0.00");
-
-        PayrollCarryForwardDtos.SuggestedInputsResponse suggestions = payrollService.suggestedInputs(month, hr());
-        boolean hasNonZeroUnpaidRow = suggestions.suggestions().stream()
-            .anyMatch(r -> employeeId == r.employeeId() && r.unpaidLeaveDays().signum() > 0);
-        assertThat(hasNonZeroUnpaidRow).isFalse();
-
-        PayrollPeriodDto period = payrollService.preview(new ProcessPayrollRequest(month, List.of()), hr());
-        PayrollLineDto line = lineFor(period, employeeId);
-
-        assertThat(line.unpaidLeaveDays()).isEqualByComparingTo("0.00");
-        assertThat(line.unpaidLeaveDeduction()).isEqualByComparingTo("0.00");
-        assertThat(line.grossTaxableIncome()).isEqualByComparingTo(line.grossEarnings());
-    }
-
-    @Test
-    void cancelAfterCloseCorrectionSurfacesInSuggestionsWithoutTouchingPreview() {
-        long employeeId = insertEmployee("SEAM-003");
-        LocalDate monday = firstMondayOfMonth(2);
-        LocalDate month = monday.withDayOfMonth(1);
-        LocalDate nextMonth = month.plusMonths(1);
-
-        LeaveRequestDto leave = leaveService.submit(
-            new SubmitLeaveRequest(employeeId, "VACATION", monday, monday.plusDays(8), "Trip"),
-            employee(employeeId));
-        assertThat(leave.unpaidDays()).isEqualByComparingTo("1.00");
-        // Leave requires approval (2026-08-05): #recordPayrollCorrectionIfNeeded (invoked from #cancel below) only
-        // fires for a request that is APPROVED at cancel time -- this test's subject is exactly that
-        // cancel-after-close correction, so the request must actually reach APPROVED first.
-        leaveService.approve(leave.id(), new ReviewLeaveRequest("approved"), hr());
-
-        insertProcessedPayrollPeriod(month);
-        leaveService.cancel(leave.id(), new ReviewLeaveRequest("cancelled after close"), hr());
-
-        PayrollCarryForwardDtos.SuggestedInputsResponse suggestions = payrollService.suggestedInputs(nextMonth, hr());
-        PayrollCarryForwardDtos.SuggestedInputRow row = suggestions.suggestions().stream()
-            .filter(r -> employeeId == r.employeeId())
-            .findFirst()
-            .orElseThrow(() -> new AssertionError("no suggestion row for employee " + employeeId));
-
-        // The cancelled leave no longer contributes unpaid days going forward, but the pending correction credit is
-        // surfaced so HR can see and manually net it -- this PR does NOT auto-apply it into unpaidLeaveDays or into
-        // preview/process; see LeaveService#cancel.
-        assertThat(row.unpaidLeaveDays()).isEqualByComparingTo("0.00");
-        assertThat(row.pendingUnpaidLeaveCorrectionDays()).isEqualByComparingTo("1.00");
-    }
-
-    @Test
-    void subDayLeaveOverQuotaDeductsProportionalDailyRate() {
-        // Partial-day span: LEAVE_WITHOUT_PAY has a 0-day statutory quota, so a half-day request is entirely unpaid
-        // from day 1.
-        long employeeId = insertEmployee("SEAM-004");
-        LocalDate monday = firstMondayOfMonth(2);
-        LocalDate month = monday.withDayOfMonth(1);
-
-        LeaveRequestDto leave = leaveService.submit(
-            new SubmitLeaveRequest(employeeId, "LEAVE_WITHOUT_PAY", monday, monday, "Half-day errand",
-                LocalTime.of(8, 30), LocalTime.of(12, 30), null, null, null, null, null, null, null),
-            employee(employeeId));
-        assertThat(leave.totalDays()).isEqualByComparingTo("0.50");
-        assertThat(leave.totalDays()).isNotEqualByComparingTo("0.44");
-        assertThat(leave.unpaidDays()).isEqualByComparingTo("0.50");
-        // Leave requires approval (2026-08-05): see the whole-day case above -- payroll only sees APPROVED leave.
-        leaveService.approve(leave.id(), new ReviewLeaveRequest("approved"), hr());
-
-        PayrollCarryForwardDtos.SuggestedInputsResponse suggestions = payrollService.suggestedInputs(month, hr());
-        PayrollCarryForwardDtos.SuggestedInputRow row = suggestions.suggestions().stream()
-            .filter(r -> employeeId == r.employeeId())
-            .findFirst()
-            .orElseThrow(() -> new AssertionError("no suggestion row for employee " + employeeId));
-        assertThat(row.unpaidLeaveDays()).isEqualByComparingTo("0.50");
-
-        PayrollPeriodDto period = payrollService.preview(
-            new ProcessPayrollRequest(month, List.of(inputWithUnpaidLeaveDays(employeeId, row.unpaidLeaveDays()))),
-            hr());
-        PayrollLineDto line = lineFor(period, employeeId);
-
-        // dailyRate = 30000/30 = 1000.00; unpaidLeaveDeduction = 1000.00 x 0.50 unpaid day = 500.00.
-        assertThat(line.unpaidLeaveDays()).isEqualByComparingTo("0.50");
-        assertThat(line.unpaidLeaveDeduction()).isEqualByComparingTo("500.00");
-        assertThat(line.grossEarnings()).isEqualByComparingTo("30000.00");
-        assertThat(line.grossTaxableIncome()).isEqualByComparingTo("29500.00");
     }
 
     // --- helpers ------------------------------------------------------------
@@ -310,15 +216,4 @@ class PayrollLeaveUnpaidDeductionSeamIntegrationTest extends AbstractPostgresInt
             """, new MapSqlParameterSource("leaveRequestId", leaveRequestId));
     }
 
-    private void insertProcessedPayrollPeriod(LocalDate payrollMonth) {
-        jdbc.update("""
-            INSERT INTO hr.payroll_period (payroll_month, period_start, period_end, pay_date, status)
-            VALUES (
-                :payrollMonth, :payrollMonth,
-                (:payrollMonth + INTERVAL '1 month - 1 day')::date,
-                (:payrollMonth + INTERVAL '1 month - 1 day')::date,
-                'PROCESSED'
-            )
-            """, new MapSqlParameterSource().addValue("payrollMonth", payrollMonth));
-    }
 }

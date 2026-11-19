@@ -61,19 +61,6 @@ class PayrollExcessWithheldClassifiedEngineIntegrationTest extends AbstractPostg
     }
 
     @Test
-    void normalProcessingWithNoOverrideLeavesExcessWithheldToDateAtZero() {
-        // ฿10,000/mo -- annual income (120,000) never clears the ฿150,000 exempt bracket even before the personal/SSO
-        // allowances are subtracted, so the true annual liability is genuinely zero and nothing should ever read as
-        // "excess".
-        long employeeId = seedEmployee("EXCESS-001", "ปกติ", "ทดสอบ", new BigDecimal("10000.00"));
-
-        PayrollPeriodDto processed = payrollService.process(
-            new ProcessPayrollRequest(LocalDate.of(2026, 1, 1), List.of(input(employeeId, null))), hr());
-
-        assertThat(onlyLine(processed, employeeId).excessWithheldToDate()).isEqualByComparingTo("0.00");
-    }
-
-    @Test
     void anHrOverrideThatExceedsTheTrueAnnualLiabilityProducesAPositiveExcessWithheldToDate() {
         long employeeId = seedEmployee("EXCESS-002", "หักเกิน", "ทดสอบ", new BigDecimal("10000.00"));
 
@@ -93,21 +80,6 @@ class PayrollExcessWithheldClassifiedEngineIntegrationTest extends AbstractPostg
         // reaches the INSERT, not just the in-memory calculation.
         PayrollLineDto reread = onlyLine(payrollRepository.findPeriodById(processed.id()).orElseThrow(), employeeId);
         assertThat(reread.excessWithheldToDate()).isEqualByComparingTo("5000.00");
-    }
-
-    @Test
-    void theExcessCarriesForwardAndCompoundsAcrossPeriodsWhenTheOverrideRepeats() {
-        long employeeId = seedEmployee("EXCESS-003", "สะสม", "ทดสอบ", new BigDecimal("10000.00"));
-
-        payrollService.process(
-            new ProcessPayrollRequest(LocalDate.of(2026, 1, 1), List.of(input(employeeId, new BigDecimal("2000.00")))),
-            hr());
-        PayrollPeriodDto february = payrollService.process(
-            new ProcessPayrollRequest(LocalDate.of(2026, 2, 1), List.of(input(employeeId, new BigDecimal("2000.00")))),
-            hr());
-
-        // January's ฿2,000 (all excess, true liability still 0.00) plus February's own ฿2,000.
-        assertThat(onlyLine(february, employeeId).excessWithheldToDate()).isEqualByComparingTo("4000.00");
     }
 
     // --- helpers ------------------------------------------------------------

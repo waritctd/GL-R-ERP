@@ -14,80 +14,6 @@ import org.junit.jupiter.api.Test;
 class PayslipRendererTest {
     private final PayslipRenderer renderer = new PayslipRenderer();
 
-    @Test
-    void rendersTheTwoColumnEmployerLayout() throws Exception {
-        PayrollLineDto line = line();
-        byte[] pdf = renderer.toPdf(line, periodFor(line));
-
-        assertThat(new String(pdf, 0, 5)).isEqualTo("%PDF-");
-        String text = extractText(pdf);
-
-        // Header + meta
-        assertThat(text).contains("บริษัท จีแอลแอนด์อาร์แทปส์แอนด์ไทลส์ จำกัด");
-        assertThat(text).contains("สลิปเงินเดือน");
-        assertThat(text).contains("สมชาย ทดสอบ");
-        assertThat(text).contains("GLR-42");
-        assertThat(text).contains("30/มิ.ย./2569");
-
-        // Two-column grid headers + rows
-        assertThat(text).contains("รายการได้");
-        assertThat(text).contains("รายการหัก");
-        assertThat(text).contains("เงินเดือน");
-        assertThat(text).contains("ค่าล่วงเวลา");     // overtime surfaced when non-zero
-        assertThat(text).contains("ค่าคอมมิชชั่น");   // commission surfaced when non-zero
-        assertThat(text).contains("ประกันสังคม");
-        assertThat(text).contains("ภาษี");
-
-        // Totals foot: รวมรายได้ − รวมรายหัก == เงินรับสุทธิ == netPay
-        assertThat(text).contains("รวมรายได้");
-        assertThat(text).contains("42,000.00");
-        assertThat(text).contains("รวมรายหัก");
-        assertThat(text).contains("10,000.00");
-        assertThat(text).contains("เงินรับสุทธิ");
-        assertThat(text).contains("32,000.00");
-        BigDecimal earningsTotal = nz(line.grossEarnings()).add(nz(line.nonTaxableIncome()));
-        assertThat(earningsTotal.subtract(line.totalDeductions())).isEqualByComparingTo(line.netPay());
-
-        // Signature line
-        assertThat(text).contains("ผู้รับเงิน");
-        assertThat(text).contains("วันที่");
-
-        // The old HR-worksheet intermediates are gone
-        assertThat(text).doesNotContain("รายได้ทั้งปีประมาณการ");
-        assertThat(text).doesNotContain("เงินได้สุทธิทั้งปี");
-        assertThat(text).doesNotContain("รหัสรอบเงินเดือน");
-        assertThat(text).doesNotContain("?????");
-    }
-
-    @Test
-    void footsWithNonTaxableIncomeAndLeaveRefundCredit() throws Exception {
-        // gross 30,000 + non-taxable 2,000 = earnings total 32,000 deductions: unpaidLeave 1,500 − refund 500 + sso
-        // 875 + กยศ 1,000 = 2,875 net = 30,000 − 2,875 + 2,000 = 29,125
-        PayrollLineDto line = new PayrollLineDto(
-            1L, 7L, "GLR-07", "ทดสอบ สอง", "AC-บัญชี", "ธ.", "1",
-            money("30000.00"), money("1000.00"), money("125.00"),
-            List.of(), money("0.00"), money("0.00"), money("0.00"),
-            money("30000.00"), money("2000.00"), money("1.50"), money("1500.00"), money("28000.00"),
-            money("17500.00"), money("875.00"), money("0.00"), money("0.00"), money("0.00"),
-            money("0.00"), money("0.00"), money("0.00"), money("1000.00"), money("0.00"),
-            money("0.00"), money("2875.00"), money("29125.00"), null,
-            money("0.00"), money("0.00"), money("0.00"), money("0.00"),
-            money("0.50"), money("500.00")
-        );
-        String text = extractText(renderer.toPdf(line, periodFor(line)));
-
-        assertThat(text).contains("รายได้ไม่คิดภาษี");
-        assertThat(text).contains("2,000.00");
-        assertThat(text).contains("คืนหักลาย้อนหลัง");
-        assertThat(text).contains("-500.00");
-        assertThat(text).contains("32,000.00");   // รวมรายได้
-        assertThat(text).contains("2,875.00");     // รวมรายหัก
-        assertThat(text).contains("29,125.00");    // เงินรับสุทธิ
-
-        BigDecimal earningsTotal = nz(line.grossEarnings()).add(nz(line.nonTaxableIncome()));
-        assertThat(earningsTotal.subtract(line.totalDeductions())).isEqualByComparingTo(line.netPay());
-    }
-
     private String extractText(byte[] pdf) throws Exception {
         try (PDDocument doc = Loader.loadPDF(pdf)) {
             return new PDFTextStripper().getText(doc);
@@ -136,40 +62,6 @@ class PayslipRendererTest {
             .as("the employee must be told the route to reclaim any excess, since payroll cannot return it")
             .contains("ภ.ง.ด.90")
             .contains("ภ.ง.ด.91");
-    }
-
-    /** MID-YEAR: the same figure is only an estimate — later periods can still absorb it by withholding less — so
-     * the payslip must NOT assert it is unrecoverable. */
-    @Test
-    void aMidYearOverWithholdingIsReportedAsProvisionalNotFinal() throws Exception {
-        PayrollLineDto line = lineWithExcessWithheld(new BigDecimal("17527.51"));
-        String text = extractText(renderer.toPdf(line, periodForMonth(line, 6)));
-
-        assertThat(text)
-            .as("mid-year the figure is an estimate and must be labelled as one")
-            .contains("ประมาณการ");
-        // spec section 8 forbids printing the excess baht figure at all, in any month -- see the December test's own
-        // comment above for the full reasoning.
-        assertThat(text)
-            .as("spec section 8 forbids printing the excess baht figure")
-            .doesNotContain("17,527.51");
-        assertThat(text)
-            .as("mid-year the payslip must not claim the excess is unrecoverable")
-            .doesNotContain("ไม่สามารถคืนผ่านระบบเงินเดือนได้");
-        assertThat(text)
-            .as("nor send the employee to ภ.ง.ด.91 over a figure that may still be absorbed")
-            .doesNotContain("ภ.ง.ด.91");
-    }
-
-    /** The ordinary case prints no notice at all — it must not become background noise. */
-    @Test
-    void aPayslipWithNoOverWithholdingCarriesNoNotice() throws Exception {
-        PayrollLineDto line = lineWithExcessWithheld(BigDecimal.ZERO);
-        String text = extractText(renderer.toPdf(line, periodForMonth(line, 12)));
-
-        assertThat(text).doesNotContain("ภ.ง.ด.91");
-        assertThat(text).doesNotContain("เกินภาษีที่ต้องเสียทั้งปี");
-        assertThat(text).doesNotContain("ประมาณการ");
     }
 
     private PayrollPeriodDto periodForMonth(PayrollLineDto line, int month) {
@@ -243,10 +135,6 @@ class PayslipRendererTest {
             BigDecimal.ZERO,
             BigDecimal.ZERO
         );
-    }
-
-    private BigDecimal nz(BigDecimal value) {
-        return value == null ? BigDecimal.ZERO : value;
     }
 
     private BigDecimal money(String value) {

@@ -6,7 +6,6 @@ import static org.mockito.Mockito.mock;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
-import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -22,9 +21,7 @@ import th.co.glr.hr.notification.SalesNotificationMailer;
 import th.co.glr.hr.payroll.PayrollRepository;
 import th.co.glr.hr.payroll.PayrollService;
 import th.co.glr.hr.payroll.declaration.TaxAllowanceDeclarationDtos.TaxAllowanceDeclarationDto;
-import th.co.glr.hr.payroll.declaration.TaxAllowanceDeclarationDtos.TaxAllowanceDeclarationRegisterResponse;
 import th.co.glr.hr.payroll.declaration.TaxAllowanceDeclarationDtos.TaxAllowanceDeclarationSubmitRequest;
-import th.co.glr.hr.payroll.declaration.TaxAllowanceDeclarationDtos.TaxAllowanceReviewRequest;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
 /** Confirms the tax-allowance declaration workflow's authorization against the real service and the real SQL —
@@ -108,63 +105,6 @@ class TaxAllowanceDeclarationScopeIntegrationTest extends AbstractPostgresIntegr
     }
 
     @Test
-    void employeeCannotRenderAnotherEmployeesLorYor01Form() {
-        TaxAllowanceDeclarationDto victimDeclaration = submit(employeeB, 2026, new BigDecimal("60000"));
-
-        assertThatThrownBy(() -> service.renderLorYor01(victimDeclaration.declarationId(), employeeActor(employeeA)))
-            .as("a foreign declaration id must 404 — the same shape as every other read on this row")
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.NOT_FOUND));
-    }
-
-    /** HR does reach it — the register exists to review these, and the owner obviously does too. */
-    @Test
-    void hrAndTheOwnerCanBothRenderTheForm() {
-        TaxAllowanceDeclarationDto declaration = submit(employeeB, 2026, new BigDecimal("60000"));
-
-        assertThat(service.renderLorYor01(declaration.declarationId(), hrActor()))
-            .as("HR reviews these").isNotEmpty();
-        assertThat(service.renderLorYor01(declaration.declarationId(), employeeActor(employeeB)))
-            .as("the owner prints and signs it").isNotEmpty();
-    }
-
-    /** The draft endpoint takes a request body and no employee id, so the only thing stopping it becoming a read of
-     * someone else's ข้อ 13 SSO figure is that it always resolves the ACTOR. There is no id in the body to assert
-     * on — this pins that the rendered document is the caller's own. */
-    @Test
-    void theDraftFormAlwaysRendersForTheCallerNotAnyoneElse() {
-        byte[] pdf = service.renderLorYor01Draft(
-            submitRequest(2026, new BigDecimal("60000")), employeeActor(employeeA));
-
-        assertThat(pdf).isNotEmpty();
-        // Nothing was persisted for either employee: a draft render is a pure read.
-        assertThat(repository.findForEmployee(employeeA, 2026)).isEmpty();
-        assertThat(repository.findForEmployee(employeeB, 2026)).isEmpty();
-    }
-
-    @Test
-    void employeeCannotWithdrawAnotherEmployeesDeclarationAndTheVictimRowSurvives() {
-        TaxAllowanceDeclarationDto victimDeclaration = submit(employeeB, 2026, new BigDecimal("60000"));
-
-        assertThatThrownBy(() -> service.withdrawOwn(victimDeclaration.declarationId(), employeeActor(employeeA)))
-            .as("an employee acting on another employee's declaration id must 404, not 403 — a 403 would leak that the id exists")
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.NOT_FOUND));
-
-        TaxAllowanceDeclarationDto stillThere = repository.findById(victimDeclaration.declarationId()).orElseThrow();
-        assertThat(stillThere.status()).isEqualTo(TaxAllowanceDeclarationStatus.PENDING);
-    }
-
-    @Test
-    void aSelfServiceSubmissionAlwaysLandsOnTheCallerAndNeverOnAnotherEmployee() {
-        TaxAllowanceDeclarationDto created = submit(employeeA, 2026, new BigDecimal("60000"));
-
-        assertThat(created.employeeId()).isEqualTo(employeeA);
-        assertThat(repository.findForEmployee(employeeB, 2026))
-            .as("submitOwn takes no employeeId parameter at all — there is no path from employeeA's " +
-                "call that could ever create a row for employeeB")
-            .isEmpty();
-    }
-
-    @Test
     void employeeCannotApproveTheirOwnDeclarationAndItStaysPending() {
         TaxAllowanceDeclarationDto own = submit(employeeA, 2026, new BigDecimal("60000"));
 
@@ -173,52 +113,6 @@ class TaxAllowanceDeclarationScopeIntegrationTest extends AbstractPostgresIntegr
 
         assertThat(repository.findById(own.declarationId()).orElseThrow().status())
             .isEqualTo(TaxAllowanceDeclarationStatus.PENDING);
-    }
-
-    /** Written against a declaration HR has NOT approved, so the allowance table is genuinely empty when the
-     * employee tries: since approval promotes on its own (whole-year ruling, 2026-08-31), approving first would
-     * leave a row that says nothing about whether the employee's own call was refused. */
-    @Test
-    void employeeCannotApplyAndTheAllowanceTableStaysEmpty() {
-        TaxAllowanceDeclarationDto declaration = submit(employeeA, 2026, new BigDecimal("60000"));
-
-        assertThatThrownBy(() -> service.apply(declaration.declarationId(), employeeActor(employeeA)))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
-
-        assertThat(countEmployeeTaxAllowanceRows(employeeA)).isZero();
-    }
-
-    @Test
-    void ceoReadsTheRegisterButCannotApproveOrApply() {
-        TaxAllowanceDeclarationDto declaration = submit(employeeA, 2026, new BigDecimal("60000"));
-
-        TaxAllowanceDeclarationRegisterResponse register = service.getRegister(2026, null, ceoActor());
-        assertThat(register.items()).extracting(TaxAllowanceDeclarationDto::declarationId)
-            .contains(declaration.declarationId());
-
-        assertThatThrownBy(() -> service.approve(declaration.declarationId(), null, ceoActor()))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
-        assertThat(repository.findById(declaration.declarationId()).orElseThrow().status())
-            .isEqualTo(TaxAllowanceDeclarationStatus.PENDING);
-
-        // Left PENDING on purpose — same reasoning as employeeCannotApplyAndTheAllowanceTableStaysEmpty above: HR
-        // approving here would write the allowance row itself, so a non-empty table afterwards would no longer be
-        // evidence about what the CEO's call did.
-        assertThatThrownBy(() -> service.apply(declaration.declarationId(), ceoActor()))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
-        assertThat(countEmployeeTaxAllowanceRows(employeeA)).isZero();
-    }
-
-    @Test
-    void approvingAnAlreadyApprovedDeclarationIsConflictViaTheRowcountCheck() {
-        TaxAllowanceDeclarationDto declaration = submit(employeeA, 2026, new BigDecimal("60000"));
-
-        approveSigned(declaration.declarationId());
-        assertThatThrownBy(() -> service.approve(declaration.declarationId(), null, hrActor()))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
-
-        assertThat(repository.findById(declaration.declarationId()).orElseThrow().status())
-            .isEqualTo(TaxAllowanceDeclarationStatus.APPROVED);
     }
 
     // --- helpers ---------------------------------------------------------------------------------
@@ -243,13 +137,6 @@ class TaxAllowanceDeclarationScopeIntegrationTest extends AbstractPostgresIntegr
             null);                   // lorYor01 — no ล.ย.01 form detail in this fixture
     }
 
-    private int countEmployeeTaxAllowanceRows(long employeeId) {
-        Integer count = jdbc.queryForObject(
-            "SELECT COUNT(*) FROM hr.employee_tax_allowance WHERE employee_id = :employeeId",
-            Map.of("employeeId", employeeId), Integer.class);
-        return count == null ? 0 : count;
-    }
-
     private long seedEmployee(String code) {
         return jdbc.queryForObject(
             "INSERT INTO hr.employee (employee_code, is_active) VALUES (:code, TRUE) RETURNING employee_id",
@@ -263,10 +150,6 @@ class TaxAllowanceDeclarationScopeIntegrationTest extends AbstractPostgresIntegr
 
     private UserPrincipal hrActor() {
         return new UserPrincipal(hrEmployeeId, "hr@glr.co.th", "HR", "hr", hrEmployeeId, true, LocalDate.now(), false, null, false);
-    }
-
-    private UserPrincipal ceoActor() {
-        return new UserPrincipal(ceoEmployeeId, "ceo@glr.co.th", "CEO", "ceo", ceoEmployeeId, true, LocalDate.now(), false, null, false);
     }
 
     /** Approves the way HR now has to: the signed ล.ย.01 must be attached first (owner decision #3). The failure

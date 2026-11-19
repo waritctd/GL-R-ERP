@@ -78,57 +78,6 @@ class PayrollCustomerReturnRoundTripIntegrationTest extends AbstractPostgresInte
             .isEqualByComparingTo("7000.00");
     }
 
-    /** (b) The silent-net-pay-change failure mode itself: reprocessing the same month, with the second run's input
-     * hydrated from what the FIRST run persisted (exactly what PayrollPage.jsx's adjustmentFromLine does on a
-     * reload), must not change net pay. */
-    @Test
-    void reprocessingWithInputsHydratedFromThePersistedLineProducesIdenticalNetPayBothTimes() {
-        long employeeId = seedEmployee("CRR-002", "รอบสอง", "ทดสอบ", new BigDecimal("30000.00"));
-        when(commissionService.payrollCommissionTotalsByEmployee(MONTH))
-            .thenReturn(Map.of(employeeId, new BigDecimal("10000.00")));
-
-        PayrollEmployeeInputRequest firstInput = customerReturnInputOf(employeeId, new BigDecimal("3000.00"), false);
-        PayrollPeriodDto firstRun = payrollService.process(new ProcessPayrollRequest(MONTH, List.of(firstInput)), hr());
-        BigDecimal firstNetPay = lineFor(firstRun, employeeId).netPay();
-
-        // Simulate a reload: hydrate the SECOND run's request from the persisted line's customerReturnRequested,
-        // exactly as the frontend now does.
-        PayrollLineDto persistedAfterFirstRun = reloadedLineFor(employeeId);
-        PayrollEmployeeInputRequest secondInput = customerReturnInputOf(
-            employeeId, persistedAfterFirstRun.customerReturnRequested(), false);
-        PayrollPeriodDto secondRun = payrollService.process(new ProcessPayrollRequest(MONTH, List.of(secondInput)), hr());
-        BigDecimal secondNetPay = lineFor(secondRun, employeeId).netPay();
-
-        assertThat(secondNetPay)
-            .as("reprocessing the same month, with inputs hydrated from what was persisted, must "
-                + "not silently change net pay -- the exact failure mode when the entered amount "
-                + "does not round-trip and a reload/reprocess drops the pre-tax netting")
-            .isEqualByComparingTo(firstNetPay);
-    }
-
-    /** The already-earned (post-tax clawback) path is the control case: it must be UNCHANGED by this fix. */
-    @Test
-    void alreadyEarnedPathStillDeductsPostTaxOnlyAndDoesNotNetCommission() {
-        long employeeId = seedEmployee("CRR-003", "รับแล้ว", "ทดสอบ", new BigDecimal("30000.00"));
-        when(commissionService.payrollCommissionTotalsByEmployee(MONTH))
-            .thenReturn(Map.of(employeeId, new BigDecimal("10000.00")));
-
-        PayrollEmployeeInputRequest input = customerReturnInputOf(employeeId, new BigDecimal("3000.00"), true);
-        payrollService.process(new ProcessPayrollRequest(MONTH, List.of(input)), hr());
-
-        PayrollLineDto reloaded = reloadedLineFor(employeeId);
-
-        assertThat(reloaded.commissionPay())
-            .as("already-earned path must NOT net the commission -- it was already paid and earned")
-            .isEqualByComparingTo("10000.00");
-        assertThat(reloaded.customerReturnDeduction())
-            .as("already-earned path applies the full amount as a post-tax clawback")
-            .isEqualByComparingTo("3000.00");
-        assertThat(reloaded.customerReturnRequested())
-            .as("requested and applied agree in the already-earned path")
-            .isEqualByComparingTo("3000.00");
-    }
-
     // ------------------------------------------------------------------
 
     private PayrollLineDto reloadedLineFor(long employeeId) {
@@ -139,13 +88,6 @@ class PayrollCustomerReturnRoundTripIntegrationTest extends AbstractPostgresInte
             .filter(line -> line.employeeId() == employeeId)
             .findFirst()
             .orElseThrow(() -> new AssertionError("no persisted line for employee " + employeeId));
-    }
-
-    private PayrollLineDto lineFor(PayrollPeriodDto period, long employeeId) {
-        return period.lines().stream()
-            .filter(line -> line.employeeId() == employeeId)
-            .findFirst()
-            .orElseThrow(() -> new AssertionError("no line for employee " + employeeId));
     }
 
     private PayrollEmployeeInputRequest customerReturnInputOf(

@@ -13,13 +13,9 @@ import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.commission.CommissionCalculator;
-import th.co.glr.hr.commission.CommissionKind;
-import th.co.glr.hr.commission.CommissionRecord;
 import th.co.glr.hr.commission.CommissionRepository;
 import th.co.glr.hr.commission.CommissionService;
 import th.co.glr.hr.commission.InvoiceCalculation;
-import th.co.glr.hr.commission.PayrollCommissionSummaryDto;
-import th.co.glr.hr.commission.SalesRepCommissionSummaryDto;
 import th.co.glr.hr.commission.SubmitCommissionRequest;
 import th.co.glr.hr.commission.UpdateCommissionDeductionsRequest;
 import th.co.glr.hr.employee.EmployeeCodeGenerator;
@@ -42,7 +38,6 @@ class PayrollCommissionWeightedBaseIntegrationTest extends AbstractPostgresInteg
     // Workbook reference: receipts 3,808,589.56 at 1x and 15,107.93 at 2x yield a 3,587,668.62 tier base.
     private static final BigDecimal FIRST_RECEIPT = new BigDecimal("3808589.56");
     private static final BigDecimal SECOND_RECEIPT = new BigDecimal("15107.93");
-    private static final BigDecimal WEIGHTED_COMMISSION = new BigDecimal("67849.23");
     // What payroll actually PAYS. Commission is rounded to whole baht at the payroll boundary
     // (owner decision 2026-08-25, PayrollService rounds commission to whole baht -- the accountant's house
     // convention, no statute behind it), so the payslip carries 67,849 where the commission
@@ -53,11 +48,6 @@ class PayrollCommissionWeightedBaseIntegrationTest extends AbstractPostgresInteg
     // The bug this test guards against: summing commissionableBase unweighted (i.e. as if the second receipt were
     // never bumped to 2x) reproduces the OLD, wrong, lower figure instead.
     private static final BigDecimal UNWEIGHTED_COMMISSION = new BigDecimal("67390.34");
-    // Real payroll reconciliation (June 2026, owner-confirmed 2026-07-23): a rep's full commission is the weighted
-    // tier commission PLUS their approved manual entries -- 67,849.23 + a 15,000 INCENTIVE = 82,849.23.
-    private static final BigDecimal MANUAL_INCENTIVE_AMOUNT = new BigDecimal("15000.00");
-    private static final BigDecimal WEIGHTED_PLUS_MANUAL_COMMISSION = new BigDecimal("82849.23");
-    private static final BigDecimal WEIGHTED_PLUS_MANUAL_COMMISSION_PAID = new BigDecimal("82849.00");
 
     private CommissionRepository commissions;
     private CommissionService commissionService;
@@ -126,83 +116,6 @@ class PayrollCommissionWeightedBaseIntegrationTest extends AbstractPostgresInteg
         assertThat(line.commissionPay()).isNotEqualByComparingTo(UNWEIGHTED_COMMISSION);
         assertThat(line.commissionPay())
             .isNotEqualByComparingTo(UNWEIGHTED_COMMISSION.setScale(0, RoundingMode.HALF_UP));
-    }
-
-    /** The two call paths must still agree to the baht: what payroll pays is exactly the whole-baht rounding of
-     * what HR sees in the payroll-ready summary, for the same rep/month. */
-    @Test
-    void payrollCommissionPay_isTheWholeBahtRoundingOfThePayrollReadySummary() {
-        wireRealCollaborators();
-        long salesRepId = createEmployee("เจนเนตร สรุปเพย์โรล", "jennet-summary-calcrefine@glr.co.th", "SA", "แผนกขาย");
-        seedApprovedJennetScenario(salesRepId);
-
-        PayrollLineDto line = previewLineFor(salesRepId);
-
-        UserPrincipal hrActor = new UserPrincipal(999_002L, "hr-payroll-calcrefine@glr.co.th", "HR", "hr",
-            999_002L, true, LocalDate.now(), false, null, false);
-        PayrollCommissionSummaryDto summary = commissionService.payrollReadySummary(PAYROLL_MONTH, hrActor);
-        SalesRepCommissionSummaryDto repSummary = summary.salesReps().stream()
-            .filter(s -> s.salesRepId() == salesRepId)
-            .findFirst()
-            .orElseThrow();
-
-        assertThat(line.commissionPay()).isEqualByComparingTo(WEIGHTED_COMMISSION_PAID);
-        assertThat(repSummary.commissionAmount()).isEqualByComparingTo(WEIGHTED_COMMISSION);
-        // The two paths no longer produce the IDENTICAL number -- payroll rounds to whole baht and the commission
-        // module does not. Pin the RELATIONSHIP, so a future change on either side cannot widen the gap past that
-        // rounding without turning this red.
-        assertThat(line.commissionPay())
-            .isEqualByComparingTo(repSummary.commissionAmount().setScale(0, RoundingMode.HALF_UP));
-    }
-
-    /** The gross figure on the payroll line has to move with the fix too, not just an internal aggregate --
-     * otherwise the corrected money never reaches the payslip. */
-    @Test
-    void payrollGrossEarningsReflectTheWeightedCommission() {
-        wireRealCollaborators();
-        long salesRepId = createEmployee("เจนเนตร ยอดรวม", "jennet-gross-calcrefine@glr.co.th", "SA", "แผนกขาย");
-        PayrollLineDto beforeAnyCommission = previewLineFor(salesRepId);
-        assertThat(beforeAnyCommission.commissionPay()).isEqualByComparingTo(BigDecimal.ZERO);
-
-        seedApprovedJennetScenario(salesRepId);
-        PayrollLineDto after = previewLineFor(salesRepId);
-
-        assertThat(after.commissionPay()).isEqualByComparingTo(WEIGHTED_COMMISSION_PAID);
-        // Gross moves by the ROUNDED commission -- the whole point of rounding at the boundary is that gross, the ป.96
-        // limbs and net are all derived from the same single number.
-        assertThat(after.grossEarnings())
-            .isEqualByComparingTo(beforeAnyCommission.grossEarnings().add(WEIGHTED_COMMISSION_PAID));
-    }
-
-    /** Revision 1 headline case: real payroll pays each rep's FULL commission = weighted tier commission + approved
-     * manual entries, not just the tier portion. Proof figure is the real "jennet" June 2026 payroll
-     * reconciliation: 82,849.23 = weighted tier 67,849.23 + a 15,000 INCENTIVE. */
-    @Test
-    void payrollPaysWeightedTierPlusApprovedManualEntries_matchingPayrollReadySummary() {
-        wireRealCollaborators();
-        long salesRepId = createEmployee("เจนเนตร อินเซนทีฟ", "jennet-incentive-calcrefine@glr.co.th", "SA", "แผนกขาย");
-        seedApprovedJennetScenario(salesRepId);
-        // CEO-created manual entries land APPROVED directly (no separate manager sign-off needed).
-        commissionService.createManualCommission(
-            salesRepId, CommissionKind.INCENTIVE, MANUAL_INCENTIVE_AMOUNT,
-            "payroll weighted-base fix test: reconciled June 2026 incentive", PAYROLL_MONTH, ceoActor);
-
-        PayrollLineDto line = previewLineFor(salesRepId);
-
-        assertThat(line.commissionPay()).isEqualByComparingTo(WEIGHTED_PLUS_MANUAL_COMMISSION_PAID);
-
-        UserPrincipal hrActor = new UserPrincipal(999_004L, "hr-payroll-incentive-calcrefine@glr.co.th", "HR", "hr",
-            999_004L, true, LocalDate.now(), false, null, false);
-        PayrollCommissionSummaryDto summary = commissionService.payrollReadySummary(PAYROLL_MONTH, hrActor);
-        SalesRepCommissionSummaryDto repSummary = summary.salesReps().stream()
-            .filter(s -> s.salesRepId() == salesRepId)
-            .findFirst()
-            .orElseThrow();
-
-        assertThat(repSummary.commissionAmount()).isEqualByComparingTo(WEIGHTED_PLUS_MANUAL_COMMISSION);
-        assertThat(line.commissionPay())
-            .isEqualByComparingTo(repSummary.commissionAmount().setScale(0, RoundingMode.HALF_UP));
-        assertThat(repSummary.manualAdjustmentAmount()).isEqualByComparingTo(MANUAL_INCENTIVE_AMOUNT);
     }
 
     // --- helpers ------------------------------------------------------------

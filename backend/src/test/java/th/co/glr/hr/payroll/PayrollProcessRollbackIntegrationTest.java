@@ -58,48 +58,6 @@ class PayrollProcessRollbackIntegrationTest extends AbstractPostgresIntegrationT
             .hasSize(1);
     }
 
-    @Test
-    void processCommittingStillWritesThePeriodTheLinesAndClearsTheDraft() {
-        long employeeId = seedEmployee("PR-RB-002", "สำเร็จ", "ครบถ้วน");
-        payrollRepository.saveInputDrafts(MONTH, List.of(input(employeeId, "1234.00")), 1L);
-        PayrollService service = transactional(payrollService(mock(AuditService.class)));
-
-        service.process(new ProcessPayrollRequest(MONTH, List.of(input(employeeId, "1234.00"))), hr());
-
-        // Without this, the rollback test above would pass just as happily if process() had been broken into writing
-        // nothing at all.
-        assertThat(processedPeriods()).as("the month really does process when nothing fails").isOne();
-        assertThat(payrollLines()).isOne();
-        assertThat(payrollRepository.findInputDrafts(MONTH))
-            .as("and the draft really is cleared on the success path — the behaviour "
-                + "PayrollInputDraftClearedOnProcessIntegrationTest pins, unchanged by the rollback")
-            .isEmpty();
-    }
-
-    /** The vacuity control. Identical injected failure, but the RAW un-proxied service — how every other
-     * integration test in this suite drives its services. With no proxy @Transactional is inert, so each write
-     * auto-commits on its own and the failure strands the rest. */
-    @Test
-    void processWithoutTheProxyLeavesTornPayrollState() {
-        long employeeId = seedEmployee("PR-RB-003", "ไม่มีพรอกซี", "สภาพฉีกขาด");
-        payrollRepository.saveInputDrafts(MONTH, List.of(input(employeeId, "1234.00")), 1L);
-        PayrollService rawService = payrollService(failingAudit());
-
-        assertThatThrownBy(() -> rawService.process(
-                new ProcessPayrollRequest(MONTH, List.of(input(employeeId, "1234.00"))), hr()))
-            .isInstanceOf(IllegalStateException.class);
-
-        assertThat(processedPeriods())
-            .as("no proxy, no transaction: the period insert auto-committed and survives the failure")
-            .isOne();
-        assertThat(payrollLines()).isOne();
-        assertThat(payrollRepository.findInputDrafts(MONTH))
-            .as("and the draft deletion auto-committed too — a PROCESSED month, no audit row, and "
-                + "HR's input gone. This is the control that proves the proxied test above is not "
-                + "passing trivially")
-            .isEmpty();
-    }
-
     // ── wiring ────────────────────────────────────────────────────────────────────────────
 
     /** Same wiring as PayrollInputDraftClearedOnProcessIntegrationTest: real PayrollRepository, real

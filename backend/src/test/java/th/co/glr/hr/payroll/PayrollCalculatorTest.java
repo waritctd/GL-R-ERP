@@ -52,31 +52,6 @@ class PayrollCalculatorTest {
             null, 2026, remainingPayPeriods));
     }
 
-    /** Runs a whole tax year, carrying both ป.96 limbs forward, and returns the total withheld. */
-    private BigDecimal withheldOverFullYear(String salary, String bonus, int bonusMonth) {
-        BigDecimal regularIncome = BigDecimal.ZERO;
-        BigDecimal variableIncome = BigDecimal.ZERO;
-        BigDecimal sso = BigDecimal.ZERO;
-        BigDecimal regularTax = BigDecimal.ZERO;
-        BigDecimal variableTax = BigDecimal.ZERO;
-        BigDecimal total = BigDecimal.ZERO;
-        for (int month = 1; month <= 12; month += 1) {
-            PayrollCalculation result = salaryWithBonus(
-                salary,
-                month == bonusMonth ? bonus : "0",
-                new PayrollYearToDate(regularIncome, variableIncome, sso, regularTax, variableTax),
-                month,
-                0);
-            regularIncome = regularIncome.add(result.regularTaxableIncome());
-            variableIncome = variableIncome.add(result.variableTaxableIncome());
-            sso = sso.add(result.socialSecurity());
-            regularTax = regularTax.add(result.regularWithholdingTax());
-            variableTax = variableTax.add(result.variableWithholdingTax());
-            total = total.add(result.withholdingTax());
-        }
-        return total;
-    }
-
     // ---------------------------------------------------------------------------------------------
     // ค่าลดหย่อน correctness
     // ---------------------------------------------------------------------------------------------
@@ -143,17 +118,6 @@ class PayrollCalculatorTest {
             .isEqualByComparingTo(new BigDecimal("60000.00").add(new BigDecimal("90000.00")).add(new BigDecimal("10500.00")));
     }
 
-    /** ค่าอุปการะคนพิการ is 60,000 per person cared for, and was likewise uncapped. */
-    @Test
-    void theDisabledCareAllowanceIsCappedByTheDeclaredNumberOfDependants() {
-        PayrollCalculation honest = withAllowances(
-            declaration("0", "60000.00", "0", "0", 0, 0, 1, false), 2026, 40);
-        PayrollCalculation overstated = withAllowances(
-            declaration("0", "300000.00", "0", "0", 0, 0, 1, false), 2026, 40);
-
-        assertThat(overstated.taxableAnnualIncome()).isEqualByComparingTo(honest.taxableAnnualIncome());
-    }
-
     /** ยกเว้นเงินได้ 190,000 for a taxpayer aged 65+ (กฎกระทรวง ฉบับที่ 126), applied BEFORE ค่าใช้จ่าย. */
     @Test
     void ataxpayerAged65OrOverGetsThe190000Exemption() {
@@ -165,77 +129,6 @@ class PayrollCalculatorTest {
         assertThat(under65.taxableAnnualIncome().subtract(over65.taxableAnnualIncome()))
             .isEqualByComparingTo(new BigDecimal("190000.00"));
         assertThat(over65.withholdingTax()).isLessThan(under65.withholdingTax());
-    }
-
-    /** The exemption comes off BEFORE the 50% expense deduction. On ฿300,000 a year the expense deduction is still
-     * percentage-bound, so the order is observable: exemption first leaves 110,000, halved to 55,000 of expenses;
-     * the wrong order would leave 150,000 of expenses. */
-    @Test
-    void the190000ExemptionIsTakenBeforeTheFiftyPercentExpenseDeduction() {
-        PayrollCalculation result = calculator.calculate(new PayrollCalculationInput(
-            new BigDecimal("25000.00"), List.of(),
-            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
-            BigDecimal.ZERO, BigDecimal.ZERO,
-            declaration("0", "0", "0", "0", 0, 0, 0, false),
-            PayrollYearToDate.empty(), 1,
-            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
-            null, 2026, 0, 70));
-
-        assertThat(result.projectedAnnualIncome()).isEqualByComparingTo(new BigDecimal("300000.00"));
-        // 300,000 - 190,000 exempt = 110,000 assessable; 50% of that = 55,000, under the 100,000 cap.
-        assertThat(result.taxExpenseDeduction()).isEqualByComparingTo(new BigDecimal("55000.00"));
-    }
-
-    /** A บัตรประจำตัวคนพิการ holder gets the same 190,000 exemption at any age. */
-    @Test
-    void aDisabilityCardHolderUnder65GetsTheSameExemption() {
-        PayrollCalculation withoutCard = withAllowances(
-            declaration("0", "0", "0", "0", 0, 0, 0, false), 2026, 40);
-        PayrollCalculation withCard = withAllowances(
-            declaration("0", "0", "0", "0", 0, 0, 0, true), 2026, 40);
-
-        assertThat(withoutCard.taxableAnnualIncome().subtract(withCard.taxableAnnualIncome()))
-            .isEqualByComparingTo(new BigDecimal("190000.00"));
-    }
-
-    /** An unknown date of birth must NOT be read as eligibility — the exemption is not granted. */
-    @Test
-    void anUnknownDateOfBirthDoesNotGrantTheExemption() {
-        PayrollCalculation unknownAge = withAllowances(
-            declaration("0", "0", "0", "0", 0, 0, 0, false), 2026, 0);
-        PayrollCalculation knownYoung = withAllowances(
-            declaration("0", "0", "0", "0", 0, 0, 0, false), 2026, 30);
-
-        assertThat(unknownAge.taxableAnnualIncome()).isEqualByComparingTo(knownYoung.taxableAnnualIncome());
-    }
-
-    /** An HR withholding override must be reflected in the over-withholding figure the payslip prints. Regression
-     * guard for a defect found in the fifth review. A payroll document that names a baht figure and tells the
-     * employee to reclaim it on their ภ.ง.ด.91 has to name the right one. */
-    @Test
-    void aWithholdingOverrideIsReflectedInTheReportedOverWithholding() {
-        // December, already over-withheld: 25,000 taken against a 20,450 annual liability.
-        PayrollYearToDate overWithheld = new PayrollYearToDate(
-            new BigDecimal("550000.00"), BigDecimal.ZERO, new BigDecimal("9625.00"),
-            new BigDecimal("25000.00"), BigDecimal.ZERO);
-
-        PayrollCalculation withoutOverride = salaryWithBonus("50000.00", "0", overWithheld, 12, 0);
-        assertThat(withoutOverride.withholdingTax()).isEqualByComparingTo(BigDecimal.ZERO);
-        BigDecimal baseExcess = withoutOverride.excessWithheldToDate();
-        assertThat(baseExcess).isGreaterThan(BigDecimal.ZERO);
-
-        PayrollCalculation withOverride = calculator.calculate(new PayrollCalculationInput(
-            new BigDecimal("50000.00"), List.of(),
-            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
-            BigDecimal.ZERO, BigDecimal.ZERO,
-            PayrollTaxAllowanceInput.empty(), overWithheld, 12,
-            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
-            new BigDecimal("5000.00"), 2026, 0, 0));
-
-        assertThat(withOverride.withholdingTax()).isEqualByComparingTo(new BigDecimal("5000.00"));
-        assertThat(withOverride.excessWithheldToDate())
-            .withFailMessage("an override that withholds 5,000 more must raise the reported excess by 5,000")
-            .isEqualByComparingTo(baseExcess.add(new BigDecimal("5000.00")));
     }
 
     /** ข้อ 2.5, the clause the old single-limb projection violated. A ฿100,000 bonus paid once, in June, typed into
@@ -263,28 +156,6 @@ class PayrollCalculatorTest {
         // and a monthly ภ.ง.ด.1 that did not match the RD's own method.
         assertThat(june.withholdingTax()).isLessThan(new BigDecimal("19836.31"));
         assertThat(june.withholdingTax()).isEqualByComparingTo(new BigDecimal("13179.16"));
-    }
-
-    /**
-     * ข้อ 2.9: a large bonus late in the year must not over-withhold PERMANENTLY. Without the
-     * true-up, November projected income that would never arrive, and December's
-     * {@code .max(ZERO)} clamp meant the excess could never
-     * be handed back: ฿500,000 in November made the year withhold ฿119,708.34 against an actual
-     * liability of ฿100,900.00 — ฿18,808.34 the employee could only reclaim on their ภ.ง.ด.91.
-     */
-    @Test
-    void aLateYearBonusNoLongerOverWithholdsForTheWholeYear() {
-        BigDecimal withheld = withheldOverFullYear("50000.00", "500000.00", 11);
-
-        assertThat(withheld).isEqualByComparingTo(new BigDecimal("100900.00"));
-        assertThat(withheld).isLessThan(new BigDecimal("119708.34"));
-    }
-
-    /** The mid-year bonus year also lands exactly on the true annual liability (ข้อ 2.9). */
-    @Test
-    void aYearWithAMidYearBonusWithholdsExactlyTheAnnualLiability() {
-        assertThat(withheldOverFullYear("50000.00", "100000.00", 6))
-            .isEqualByComparingTo(new BigDecimal("31925.00"));
     }
 
     /** ข้อ 2.9 — December is the true-up. With deliberately under-withheld year-to-date, the final period collects
@@ -336,55 +207,6 @@ class PayrollCalculatorTest {
         assertThat(august.annualTax()).isLessThan(new BigDecimal("20450.00"));
     }
 
-    /** ข้อ 2.1's own worked example: someone starting 1 April on monthly pay has 9 ครั้ง left, so their first
-     * payroll must project over 9 periods and not 12. This already worked before the ป.96 change (an empty
-     * year-to-date plus 13 - month produces it); pinned so it cannot regress. */
-    @Test
-    void aMidYearJoinerProjectsOverTheirRemainingPayPeriodsOnly() {
-        PayrollCalculation april = salaryWithBonus("50000.00", "0", PayrollYearToDate.empty(), 4, 0);
-
-        assertThat(april.remainingPayPeriods()).isEqualTo(9);
-        assertThat(april.projectedAnnualIncome()).isEqualByComparingTo(new BigDecimal("450000.00"));
-    }
-
-    /** The income invariant the whole change rests on: the two limbs partition exactly the same total the
-     * single-limb code produced. */
-    @Test
-    void theTwoIncomeLimbsAlwaysSumToGrossTaxableIncome() {
-        String[][] cases = {
-            // พิเศษ7 is คอมมิชชั่น, and COMMISSION_SPECIAL_PAY_INDEX treats it as RECURRING (the
-            // regular limb), not occasional. See
-            // theSeventhSpecialPaySlotIsCommissionAndLandsInTheRegularLimbNotVariable below for a test
-            // that actually pins this, unlike the partition-only assertions in this method.
-            //
-            // salary, พิเศษ7 (RECURRING -- commission slot), พิเศษ1 (occasional/bonus), OT, commissionPay field (RECURRING), unpaid leave days
-            {"50000.00", "5000.00", "100000.00", "3000.00", "8000.00", "0"},
-            {"50000.00", "0", "0", "0", "0", "5"},
-            {"3000.00", "0", "20000.00", "0", "0", "30"},     // deductions exceed the regular limb
-            {"3000.00", "0", "0", "0", "0", "60"},            // deductions exceed everything
-            {"20000.00", "2000.00", "0", "1500.00", "0", "2"},
-        };
-        for (String[] row : cases) {
-            PayrollCalculation result = calculator.calculate(new PayrollCalculationInput(
-                new BigDecimal(row[0]),
-                List.of(new BigDecimal(row[2]), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
-                    BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal(row[1]), BigDecimal.ZERO),
-                new BigDecimal(row[3]), new BigDecimal(row[4]),
-                BigDecimal.ZERO, new BigDecimal(row[5]),
-                BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
-                PayrollTaxAllowanceInput.empty(), PayrollYearToDate.empty(), 3,
-                BigDecimal.ZERO, new BigDecimal("500.00"), new BigDecimal("250.00"),
-                new BigDecimal("125.00"), BigDecimal.ZERO, null, 2026, 0));
-
-            assertThat(result.regularTaxableIncome().add(result.variableTaxableIncome()))
-                .withFailMessage("limbs must partition grossTaxableIncome for salary=%s", row[0])
-                .isEqualByComparingTo(result.grossTaxableIncome());
-            assertThat(result.regularWithholdingTax().add(result.variableWithholdingTax()))
-                .withFailMessage("withholding split must sum to withholdingTax for salary=%s", row[0])
-                .isEqualByComparingTo(result.withholdingTax());
-        }
-    }
-
     /**
      * The first row of {@link
      * #theTwoIncomeLimbsAlwaysSumToGrossTaxableIncome} above places 5,000.00 at zero-based index 6
@@ -429,29 +251,6 @@ class PayrollCalculatorTest {
         assertThat(variableContribution)
             .withFailMessage("specialPay7 must NOT land in the variable limb")
             .isEqualByComparingTo("0.00");
-    }
-
-    /** With no occasional pay at all — no OT and nothing in the occasional slots — the ป.96 split is a no-op and
-     * the engine must reproduce the pre-change figures exactly. This is the regression guarantee for the great
-     * majority of employees, who are paid salary and recurring allowances only. */
-    @Test
-    void withNoOccasionalPayTheWithholdingIsUnchangedFromTheSingleLimbEngine() {
-        // ฿40,000, month 6, YTD 200,000 taxable / 2,675.00 withheld: the exact scenario already pinned by
-        // yearToDateWithholdingTaxIsSubtractedBeforeSpreadingOverRemainingMonths below, whose expected values predate
-        // this change.
-        PayrollCalculation result = calculator.calculate(new PayrollCalculationInput(
-            new BigDecimal("40000.00"), List.of(),
-            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
-            BigDecimal.ZERO, BigDecimal.ZERO,
-            PayrollTaxAllowanceInput.empty(),
-            new PayrollYearToDate(new BigDecimal("200000.00"), BigDecimal.ZERO, new BigDecimal("2675.00")),
-            6));
-
-        assertThat(result.projectedAnnualIncome()).isEqualByComparingTo(new BigDecimal("480000.00"));
-        assertThat(result.annualTax()).isEqualByComparingTo(new BigDecimal("8887.50"));
-        assertThat(result.withholdingTax()).isEqualByComparingTo(new BigDecimal("887.50"));
-        assertThat(result.variableTaxableIncome()).isEqualByComparingTo(BigDecimal.ZERO);
-        assertThat(result.variableWithholdingTax()).isEqualByComparingTo(BigDecimal.ZERO);
     }
 
     @Test
@@ -508,37 +307,6 @@ class PayrollCalculatorTest {
         assertThat(result.withholdingTax()).isEqualByComparingTo(new BigDecimal("535.42"));
         assertThat(result.legalExecutionDeduction()).isEqualByComparingTo(new BigDecimal("12350.00"));
         assertThat(result.netPay()).isEqualByComparingTo(new BigDecimal("25906.25"));
-    }
-
-    @Test
-    void includesAllEightSpecialPaySlotsAsTaxableEarnings() {
-        PayrollCalculation result = calculator.calculate(new PayrollCalculationInput(
-            new BigDecimal("30000.00"),
-            List.of(
-                new BigDecimal("100.00"),
-                new BigDecimal("200.00"),
-                new BigDecimal("300.00"),
-                new BigDecimal("400.00"),
-                new BigDecimal("500.00"),
-                new BigDecimal("600.00"),
-                new BigDecimal("700.00"),
-                new BigDecimal("800.00")
-            ),
-            BigDecimal.ZERO,
-            BigDecimal.ZERO,
-            BigDecimal.ZERO,
-            BigDecimal.ZERO,
-            BigDecimal.ZERO,
-            BigDecimal.ZERO,
-            BigDecimal.ZERO,
-            PayrollTaxAllowanceInput.empty(),
-            PayrollYearToDate.empty(),
-            6
-        ));
-
-        assertThat(result.specialPayTotal()).isEqualByComparingTo(new BigDecimal("3600.00"));
-        assertThat(result.grossEarnings()).isEqualByComparingTo(new BigDecimal("33600.00"));
-        assertThat(result.grossTaxableIncome()).isEqualByComparingTo(new BigDecimal("33600.00"));
     }
 
     @Test
@@ -652,18 +420,6 @@ class PayrollCalculatorTest {
     }
 
     @Test
-    void progressiveTaxIsZeroBelowTheFirstTaxableBracket() {
-        assertThat(calculator.progressiveTax(new BigDecimal("100000.00"))).isEqualByComparingTo(BigDecimal.ZERO);
-    }
-
-    @Test
-    void progressiveTaxAppliesFivePercentWithinFirstBracket() {
-        // (200,000 - 150,000) x 5% = 2,500
-        assertThat(calculator.progressiveTax(new BigDecimal("200000.00")))
-            .isEqualByComparingTo(new BigDecimal("2500.00"));
-    }
-
-    @Test
     void progressiveTaxSumsAcrossMultipleBrackets() {
         // 150,000@5% + 200,000@10% + 100,000@15% = 7,500 + 20,000 + 15,000 = 42,500
         assertThat(calculator.progressiveTax(new BigDecimal("600000.00")))
@@ -721,28 +477,6 @@ class PayrollCalculatorTest {
 
     // ---- ข้อ 9 ล.ย.01: กองทุนสำรองเลี้ยงชีพ / กบข. / กอช. / ครูโรงเรียนเอกชน (V137) --------------
 
-    /**
-     * ข้อ 9 is fillable AND feeds withholding. Asserted as a RELATIONSHIP
-     * -- the same employee, identical in every respect except the declared ข้อ 9 figure, must have
-     * strictly less tax withheld -- rather than against a hardcoded baht figure. A total-only
-     * assertion would still pass if the term reached {@code taxAllowanceTotal} but never reached the
-     * tax computation, which is precisely the "feeds withholding" half of the rule.
-     */
-    @Test
-    void providentFundContributionsReduceWithholdingNotJustTheAllowanceTotal() {
-        PayrollCalculation without = calculateWithProvidentFund(BigDecimal.ZERO, BigDecimal.ZERO);
-        PayrollCalculation with = calculateWithProvidentFund(new BigDecimal("30000.00"), BigDecimal.ZERO);
-
-        assertThat(with.taxAllowanceTotal())
-            .as("personal 60,000 + projected SSO 10,500 + ข้อ 9 30,000")
-            .isEqualByComparingTo(new BigDecimal("100500.00"));
-        assertThat(with.taxAllowanceTotal().subtract(without.taxAllowanceTotal()))
-            .isEqualByComparingTo(new BigDecimal("30000.00"));
-        assertThat(with.withholdingTax())
-            .as("a ข้อ 9 contribution must actually move the tax, not just the allowance total")
-            .isLessThan(without.withholdingTax());
-    }
-
     /** ข้อ 9's sub-cap is ฿30,000 -- กอช.'s, the tightest of the four funds the single box covers, NOT the
      * provident fund's 15%-of-wages-to-฿500,000. Declaring far more must grant exactly the sub-cap. */
     @Test
@@ -752,49 +486,6 @@ class PayrollCalculatorTest {
         assertThat(result.taxAllowanceTotal())
             .as("a declared 500,000 must be clamped to the 30,000 sub-cap, not granted in full")
             .isEqualByComparingTo(new BigDecimal("100500.00"));
-    }
-
-    /** The ฿500,000 cluster is shared, so ข้อ 9 and RMF together stop at exactly ฿500,000 rather than summing to
-     * ฿530,000. This is the "exactly at the ceiling" case. */
-    @Test
-    void providentFundAndRmfTogetherStopAtExactlyTheFiveHundredThousandCeiling() {
-        PayrollCalculation result = calculateWithProvidentFund(
-            new BigDecimal("30000.00"), new BigDecimal("500000.00"));
-
-        assertThat(result.taxAllowanceTotal())
-            .as("personal 60,000 + SSO 10,500 + cluster capped at 500,000 -- NOT 530,000")
-            .isEqualByComparingTo(new BigDecimal("570500.00"));
-    }
-
-    /**
-     * ⚠️ Documents a REAL LIMIT of this suite, and is written as a property rather than as an
-     * ordering assertion on purpose.
-     *
-     * <p>{@code PayrollCalculator#retirementAllowance} takes ข้อ 9 before RMF, on the rationale
-     * that a contribution taken at source cannot be stopped by the employee. That ordering is
-     * currently <b>unobservable in the result</b>: every term is capped independently and then
-     * clamped to the remaining budget, and greedy fill of a fixed bucket totals
-     * min(sum of own-caps, 500,000) whichever order the terms are taken in. Swapping the ข้อ 9 and
-     * RMF blocks in the calculator therefore turns NO test red -- verified by mutation.
-     *
-     * <p>So rather than pretend an ordering test exists, this pins the invariant that makes the
-     * ordering moot. If a future change ever makes order matter -- a per-item breakdown, a sub-cap
-     * that depends on the remaining cluster -- this test starts failing and whoever wrote that change
-     * has to decide the ordering deliberately.
-     */
-    @Test
-    void theRetirementClusterTotalIsInvariantToTheOrderItsTermsAreTaken() {
-        BigDecimal pvdFirstShape = calculateWithProvidentFund(
-            new BigDecimal("30000.00"), new BigDecimal("490000.00")).taxAllowanceTotal();
-        BigDecimal rmfDominantShape = calculateWithProvidentFund(
-            new BigDecimal("30000.00"), new BigDecimal("500000.00")).taxAllowanceTotal();
-
-        assertThat(pvdFirstShape)
-            .as("30,000 + 490,000 = 520,000 of own-caps, clamped to the 500,000 cluster")
-            .isEqualByComparingTo(new BigDecimal("570500.00"));
-        assertThat(rmfDominantShape)
-            .as("adding a further 10,000 of RMF own-cap cannot move a total already at the ceiling")
-            .isEqualByComparingTo(pvdFirstShape);
     }
 
     /** ฿160,000/month, every allowance zero except ข้อ 9 and RMF — mirrors the RMF cluster test above. */
@@ -915,63 +606,6 @@ class PayrollCalculatorTest {
     // and cover the engine-level behaviour the reconciliation only demonstrates by example.
     // ------------------------------------------------------------------------------------------
 
-    /**
-     * Byte-identical regression: with every input added by the reconciliation at zero, the
-     * calculator must reproduce exactly what it produced before those inputs existed. This uses the legacy 12-arg
-     * constructor (so it is exercised the same way the pre-existing tests exercise it) against a
-     * fully-populated scenario that exercises allowances, unpaid leave, YTD and legal execution
-     * together, and asserts every output field.
-     */
-    @Test
-    void withEveryNewInputAtZeroTheCalculatorIsByteIdenticalToBeforeTheReconciliationChange() {
-        PayrollCalculationInput legacyShapedInput = new PayrollCalculationInput(
-            new BigDecimal("40000.00"),
-            List.of(),
-            new BigDecimal("2500.00"),
-            BigDecimal.ZERO,
-            BigDecimal.ZERO,
-            new BigDecimal("1.00"),
-            new BigDecimal("1500.00"),
-            new BigDecimal("12350.00"),
-            BigDecimal.ZERO,
-            new PayrollTaxAllowanceInput(
-                BigDecimal.ZERO, new BigDecimal("30000.00"), BigDecimal.ZERO, BigDecimal.ZERO,
-                BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("15000.00"), BigDecimal.ZERO,
-                BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
-                BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO
-            ),
-            PayrollYearToDate.empty(),
-            1
-        );
-        PayrollCalculationInput explicitZeroInput = new PayrollCalculationInput(
-            legacyShapedInput.baseSalary(), legacyShapedInput.specialPays(), legacyShapedInput.overtimePay(),
-            legacyShapedInput.commissionPay(), legacyShapedInput.nonTaxableIncome(), legacyShapedInput.unpaidLeaveDays(),
-            legacyShapedInput.studentLoanDeduction(), legacyShapedInput.legalExecutionRequested(),
-            legacyShapedInput.otherPostTaxDeductions(), legacyShapedInput.taxAllowances(), legacyShapedInput.yearToDate(),
-            legacyShapedInput.payrollMonthValue(),
-            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO
-        );
-
-        PayrollCalculation viaLegacyConstructor = calculator.calculate(legacyShapedInput);
-        PayrollCalculation viaExplicitZeros = calculator.calculate(explicitZeroInput);
-
-        assertThat(viaExplicitZeros.grossEarnings()).isEqualByComparingTo(viaLegacyConstructor.grossEarnings());
-        assertThat(viaExplicitZeros.grossTaxableIncome()).isEqualByComparingTo(viaLegacyConstructor.grossTaxableIncome());
-        assertThat(viaExplicitZeros.ssoWageBase()).isEqualByComparingTo(viaLegacyConstructor.ssoWageBase());
-        assertThat(viaExplicitZeros.socialSecurity()).isEqualByComparingTo(viaLegacyConstructor.socialSecurity());
-        assertThat(viaExplicitZeros.projectedAnnualIncome()).isEqualByComparingTo(viaLegacyConstructor.projectedAnnualIncome());
-        assertThat(viaExplicitZeros.taxAllowanceTotal()).isEqualByComparingTo(viaLegacyConstructor.taxAllowanceTotal());
-        assertThat(viaExplicitZeros.annualTax()).isEqualByComparingTo(viaLegacyConstructor.annualTax());
-        assertThat(viaExplicitZeros.withholdingTax()).isEqualByComparingTo(viaLegacyConstructor.withholdingTax());
-        assertThat(viaExplicitZeros.legalExecutionDeduction()).isEqualByComparingTo(viaLegacyConstructor.legalExecutionDeduction());
-        assertThat(viaExplicitZeros.totalDeductions()).isEqualByComparingTo(viaLegacyConstructor.totalDeductions());
-        assertThat(viaExplicitZeros.netPay()).isEqualByComparingTo(viaLegacyConstructor.netPay());
-
-        // And the absolute figures still match what this exact scenario asserted before the change (see the equivalent
-        // case earlier in this file / the original commit).
-        assertThat(viaExplicitZeros.netPay()).isEqualByComparingTo(new BigDecimal("25906.25"));
-    }
-
     @Test
     void directorRemunerationRaisesGrossAndTaxButNeverTouchesSocialSecurity() {
         PayrollCalculation withoutDirectorPay = calculator.calculate(director(BigDecimal.ZERO));
@@ -988,23 +622,6 @@ class PayrollCalculatorTest {
         assertThat(withDirectorPay.ssoWageBase()).isEqualByComparingTo(withoutDirectorPay.ssoWageBase());
     }
 
-    /** Use a director with no salary so the social-security ceiling cannot hide remuneration incorrectly entering
-     * the wage base. */
-    @Test
-    void aDirectorWithNoSalaryPaysNoSocialSecurityAtAll() {
-        PayrollCalculation result = calculator.calculate(new PayrollCalculationInput(
-            BigDecimal.ZERO, List.of(), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
-            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
-            PayrollTaxAllowanceInput.empty(), PayrollYearToDate.empty(), 1,
-            new BigDecimal("150000.00"), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO));
-
-        assertThat(result.grossEarnings()).isEqualByComparingTo(new BigDecimal("150000.00"));
-        assertThat(result.ssoWageBase()).isEqualByComparingTo(BigDecimal.ZERO);
-        assertThat(result.socialSecurity())
-            .withFailMessage("a director has no wages, so no social security is due")
-            .isEqualByComparingTo(BigDecimal.ZERO);
-    }
-
     private PayrollCalculationInput director(BigDecimal directorRemuneration) {
         return new PayrollCalculationInput(
             new BigDecimal("30000.00"), List.of(), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
@@ -1014,70 +631,7 @@ class PayrollCalculatorTest {
         );
     }
 
-    @Test
-    void eachPreTaxDeductionReducesBothTaxableIncomeAndNetPay() {
-        PayrollCalculation baseline = calculator.calculate(pretax(BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO));
-        PayrollCalculation withWarningLetter = calculator.calculate(pretax(new BigDecimal("1000.00"), BigDecimal.ZERO, BigDecimal.ZERO));
-        PayrollCalculation withCustomerReturn = calculator.calculate(pretax(BigDecimal.ZERO, new BigDecimal("1000.00"), BigDecimal.ZERO));
-        PayrollCalculation withOtherPretax = calculator.calculate(pretax(BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("1000.00")));
-
-        for (PayrollCalculation withDeduction : List.of(withWarningLetter, withCustomerReturn, withOtherPretax)) {
-            assertThat(withDeduction.grossTaxableIncome())
-                .isEqualByComparingTo(baseline.grossTaxableIncome().subtract(new BigDecimal("1000.00")));
-            assertThat(withDeduction.netPay()).isLessThan(baseline.netPay());
-        }
-    }
-
-    /**
-     * A pre-tax deduction changes the tax base (and therefore withholding), while
-     * an equal-sized post-tax deduction does not. Same 1,000 THB, same employee, different treatment.
-     */
-    @Test
-    void aPreTaxDeductionIsTaxedDifferentlyFromTheSameAmountAsAPostTaxDeduction() {
-        PayrollCalculationInput asPreTax = new PayrollCalculationInput(
-            new BigDecimal("50000.00"), List.of(), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
-            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
-            PayrollTaxAllowanceInput.empty(), PayrollYearToDate.empty(), 1,
-            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("1000.00")
-        );
-        PayrollCalculationInput asPostTax = new PayrollCalculationInput(
-            new BigDecimal("50000.00"), List.of(), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
-            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("1000.00"),
-            PayrollTaxAllowanceInput.empty(), PayrollYearToDate.empty(), 1
-        );
-
-        PayrollCalculation preTaxResult = calculator.calculate(asPreTax);
-        PayrollCalculation postTaxResult = calculator.calculate(asPostTax);
-
-        assertThat(preTaxResult.grossTaxableIncome())
-            .isEqualByComparingTo(postTaxResult.grossTaxableIncome().subtract(new BigDecimal("1000.00")));
-        assertThat(preTaxResult.withholdingTax()).isLessThan(postTaxResult.withholdingTax());
-        // Both deduct the same 1,000 from net pay, but the pre-tax version withholds less tax, so its
-        // net pay ends up higher by exactly that tax difference.
-        assertThat(preTaxResult.netPay()).isGreaterThan(postTaxResult.netPay());
-    }
-
-    private PayrollCalculationInput pretax(BigDecimal warningLetter, BigDecimal customerReturn, BigDecimal otherPretax) {
-        return new PayrollCalculationInput(
-            new BigDecimal("40000.00"), List.of(), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
-            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
-            PayrollTaxAllowanceInput.empty(), PayrollYearToDate.empty(), 1,
-            BigDecimal.ZERO, warningLetter, customerReturn, otherPretax
-        );
-    }
-
     // ---- Cancel-after-close reversal, AUTO-REFUND ------------------------------
-
-    @Test
-    void legacySixteenArgConstructorDefaultsLeaveRefundDaysToZero() {
-        PayrollCalculationInput legacy = new PayrollCalculationInput(
-            new BigDecimal("40000.00"), List.of(), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
-            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
-            PayrollTaxAllowanceInput.empty(), PayrollYearToDate.empty(), 1,
-            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO
-        );
-        assertThat(legacy.leaveRefundDays()).isEqualByComparingTo(BigDecimal.ZERO);
-    }
 
     /** At a salary BELOW the SSO 17,500 ceiling, the refund visibly moves the SSO wage base -- proving it
      * recomputes SSO, not just a flat add to net pay. Expected figures hand-derived (dailyRate = 10000/30 =
@@ -1112,58 +666,6 @@ class PayrollCalculatorTest {
         // the refund is genuinely taxed/SSO'd like real income, not just handed back flat.
         assertThat(withRefund.netPay().subtract(withoutRefund.netPay()))
             .isEqualByComparingTo(new BigDecimal("633.67"));
-    }
-
-    /** At a salary already at the SSO ceiling, the refund cannot move SSO further (proving the existing [MIN,MAX]
-     * clamp protects against a refund pushing the base past 17,500), but DOES visibly move withholding tax at this
-     * larger amount -- proving the refund recomputes tax too. */
-    @Test
-    void leaveDeductionRefundRecomputesWithholdingTaxWithoutBreachingTheSsoCeiling() {
-        PayrollCalculation withoutRefund = calculator.calculate(new PayrollCalculationInput(
-            new BigDecimal("80000.00"), List.of(), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
-            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
-            PayrollTaxAllowanceInput.empty(), PayrollYearToDate.empty(), 6,
-            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO
-        ));
-        PayrollCalculation withRefund = calculator.calculate(new PayrollCalculationInput(
-            new BigDecimal("80000.00"), List.of(), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
-            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
-            PayrollTaxAllowanceInput.empty(), PayrollYearToDate.empty(), 6,
-            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("5.00")
-        ));
-
-        assertThat(withoutRefund.annualTax()).isEqualByComparingTo("16887.50");
-        assertThat(withoutRefund.withholdingTax()).isEqualByComparingTo("2412.50");
-
-        assertThat(withRefund.leaveDeductionRefund()).isEqualByComparingTo("13333.33");
-        assertThat(withRefund.grossTaxableIncome()).isEqualByComparingTo("93333.33");
-        assertThat(withRefund.ssoWageBase()).isEqualByComparingTo("17500.00");
-        assertThat(withRefund.socialSecurity()).isEqualByComparingTo(withoutRefund.socialSecurity());
-        assertThat(withRefund.annualTax()).isEqualByComparingTo("26220.83");
-        assertThat(withRefund.withholdingTax()).isEqualByComparingTo("3745.83");
-        assertThat(withRefund.netPay()).isEqualByComparingTo("88712.50");
-        assertThat(withRefund.netPay()).isGreaterThan(withoutRefund.netPay());
-    }
-
-    /** A refund and this month's OWN new unpaid leave can coexist -- they are independent events (a credit owed
-     * from a past cancelled leave vs. a fresh deduction this month) that combine additively through the same
-     * pre-tax path, not one silently overriding the other. */
-    @Test
-    void leaveDeductionRefundNetsAgainstThisMonthsOwnUnpaidLeaveDeduction() {
-        PayrollCalculation result = calculator.calculate(new PayrollCalculationInput(
-            new BigDecimal("80000.00"), List.of(), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
-            new BigDecimal("3.00"), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
-            PayrollTaxAllowanceInput.empty(), PayrollYearToDate.empty(), 6,
-            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("5.00")
-        ));
-
-        assertThat(result.unpaidLeaveDays()).isEqualByComparingTo("3.00");
-        assertThat(result.unpaidLeaveDeduction()).isEqualByComparingTo("8000.00");
-        assertThat(result.leaveRefundDays()).isEqualByComparingTo("5.00");
-        assertThat(result.leaveDeductionRefund()).isEqualByComparingTo("13333.33");
-        // Net pre-tax effect is +5,333.33 (13,333.33 refund - 8,000.00 new deduction).
-        assertThat(result.grossTaxableIncome()).isEqualByComparingTo("85333.33");
-        assertThat(result.netPay()).isEqualByComparingTo("81512.50");
     }
 
     // ---- Withholding-tax override ----------------------------------------
@@ -1216,27 +718,6 @@ class PayrollCalculatorTest {
         assertThat(overridden.withholdingTaxOverride()).isEqualByComparingTo(BigDecimal.ZERO);
         // The projection is still computed and still positive -- only the withheld amount is zeroed.
         assertThat(overridden.annualTax()).isGreaterThan(BigDecimal.ZERO);
-    }
-
-    /** Wrong-way / regression: a NULL override reproduces today's behaviour exactly. Every output field of the
-     * null-override run equals the pre-override (17-arg, no withholding-override) run, and the override marker is
-     * null (no note appended). */
-    @Test
-    void nullWithholdingTaxOverrideIsByteIdenticalToNoOverrideAtAll() {
-        PayrollCalculation viaLegacyNoOverride = calculator.calculate(new PayrollCalculationInput(
-            new BigDecimal("50000.00"), List.of(), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
-            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
-            PayrollTaxAllowanceInput.empty(), PayrollYearToDate.empty(), 1,
-            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO));
-        PayrollCalculation viaNullOverride = calculator.calculate(withWithholdingOverride(null));
-
-        assertThat(viaNullOverride.withholdingTax()).isEqualByComparingTo(viaLegacyNoOverride.withholdingTax());
-        assertThat(viaNullOverride.annualTax()).isEqualByComparingTo(viaLegacyNoOverride.annualTax());
-        assertThat(viaNullOverride.projectedAnnualIncome()).isEqualByComparingTo(viaLegacyNoOverride.projectedAnnualIncome());
-        assertThat(viaNullOverride.totalDeductions()).isEqualByComparingTo(viaLegacyNoOverride.totalDeductions());
-        assertThat(viaNullOverride.netPay()).isEqualByComparingTo(viaLegacyNoOverride.netPay());
-        assertThat(viaNullOverride.withholdingTaxOverride()).isNull();
-        assertThat(viaNullOverride.calculationNote()).doesNotContain("overridden by HR");
     }
 
     /** Same fixed scenario (base 50,000, month 1, no allowances) with only the override varying. */

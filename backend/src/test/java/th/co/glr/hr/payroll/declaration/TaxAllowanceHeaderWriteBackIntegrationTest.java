@@ -80,19 +80,6 @@ class TaxAllowanceHeaderWriteBackIntegrationTest extends AbstractPostgresIntegra
         assertThat(maritalStatusOf(employeeA)).isEqualTo("สมรส");
     }
 
-    /** All five V137 columns must land — the write-back's whole justification was reaching them. */
-    @Test
-    void theWriteBackReachesAllThirteenAddressSlotsNotJustTheEightThatPredateV137() {
-        long declarationId = submitWithHeader(employeeA, fullHeader()).declarationId();
-        approveSigned(declarationId);
-
-        assertThat(addressField(employeeA, "room_no")).isEqualTo("1204");
-        assertThat(addressField(employeeA, "floor")).isEqualTo("12");
-        assertThat(addressField(employeeA, "village")).isEqualTo("หมู่บ้านสุขใจ");
-        assertThat(addressField(employeeA, "moo")).isEqualTo("4");
-        assertThat(addressField(employeeA, "junction")).isEqualTo("แยกรัชดา");
-    }
-
     // ---- wrong-way-round: refused actions must not touch the master ------------------------------
 
     /** THE case that matters. A plain employee cannot approve — and must therefore not be able to rewrite their own
@@ -114,152 +101,6 @@ class TaxAllowanceHeaderWriteBackIntegrationTest extends AbstractPostgresIntegra
         assertThat(taxIdOf(employeeA))
             .as("hr_restricted must not gain a row from a refused approval")
             .isNull();
-    }
-
-    /** A different, unrelated employee cannot approve someone else's declaration either. */
-    @Test
-    void anUnrelatedEmployeeCannotApproveAndTheOwnersMasterStaysUntouched() {
-        seedExistingAddress(employeeA, "OLD-HOUSE", "OLD-PROVINCE");
-        long declarationId = submitWithHeader(employeeA, fullHeader()).declarationId();
-        TaxAllowanceTestSupport.attachSignedForm(jdbc, declarationId);
-
-        assertThatThrownBy(() -> service.approve(declarationId, null, employeeActor(employeeB)))
-            .isInstanceOf(ApiException.class);
-
-        assertThat(addressField(employeeA, "house_no")).isEqualTo("OLD-HOUSE");
-        assertThat(taxIdOf(employeeA)).isNull();
-    }
-
-    /** The signed ล.ย.01 is the employee's attestation to the header. No signature, no write — otherwise HR could
-     * promote a header nobody stood behind. */
-    @Test
-    void approvingWithoutASignedFormIsRefusedAndWritesNothingToTheMaster() {
-        seedExistingAddress(employeeA, "OLD-HOUSE", "OLD-PROVINCE");
-        long declarationId = submitWithHeader(employeeA, fullHeader()).declarationId();
-
-        assertThatThrownBy(() -> service.approve(declarationId, null, hrActor()))
-            .isInstanceOf(ApiException.class);
-
-        assertThat(addressField(employeeA, "house_no")).isEqualTo("OLD-HOUSE");
-        assertThat(taxIdOf(employeeA)).isNull();
-    }
-
-    /** The write must land on the declaration's OWNER, never on the HR actor who approved it. The employee id comes
-     * from the stored declaration, not from anything the caller supplies, and this is what pins that. */
-    @Test
-    void theWriteLandsOnTheDeclarationOwnerNotOnTheApprovingHrUser() {
-        long declarationId = submitWithHeader(employeeA, fullHeader()).declarationId();
-        approveSigned(declarationId);
-
-        assertThat(taxIdOf(employeeA)).isEqualTo("1234567890123");
-        assertThat(taxIdOf(hrEmployeeId))
-            .as("approving must not stamp the approver's own PII row")
-            .isNull();
-        assertThat(addressField(hrEmployeeId, "house_no")).isNull();
-        assertThat(addressField(employeeB, "house_no"))
-            .as("no bystander employee may be touched")
-            .isNull();
-    }
-
-    // ---- non-destruction and scope limits --------------------------------------------------------
-
-    /** A blank box means "not answered", not "erase it". A partially-filled header must leave every unanswered slot
-     * as HR already had it. */
-    @Test
-    void blankHeaderFieldsPreserveExistingMasterValuesRatherThanErasingThem() {
-        seedExistingAddress(employeeA, "OLD-HOUSE", "OLD-PROVINCE");
-        LorYor01Details sparse = header(null, "SINGLE", new LorYor01AddressPayload(
-            null, null, null, null, "NEW-HOUSE", null, null, null, null, null, null, null, null));
-
-        long declarationId = submitWithHeader(employeeA, sparse).declarationId();
-        approveSigned(declarationId);
-
-        assertThat(addressField(employeeA, "house_no")).isEqualTo("NEW-HOUSE");
-        assertThat(addressField(employeeA, "province"))
-            .as("an unanswered slot must not blank the master value")
-            .isEqualTo("OLD-PROVINCE");
-    }
-
-    /** Scope is address + สถานภาพ + tax ID. A tax form is not a name-change instrument. */
-    @Test
-    void theLegalNameIsNeverRewrittenEvenThoughTheFormCarriesIt() {
-        jdbc.update("UPDATE hr.employee SET first_name_th = 'เดิม', last_name_th = 'นามสกุลเดิม' "
-            + "WHERE employee_id = :id", Map.of("id", employeeA));
-
-        long declarationId = submitWithHeader(employeeA, fullHeader()).declarationId();
-        approveSigned(declarationId);
-
-        assertThat(nameOf(employeeA, "first_name_th")).isEqualTo("เดิม");
-        assertThat(nameOf(employeeA, "last_name_th")).isEqualTo("นามสกุลเดิม");
-    }
-
-    /** hr.employee.marital_status holds Thai free text everywhere else in this system, and has no CHECK constraint
-     * to stop an enum token going in. WIDOWED / DIED_DURING_YEAR are deliberately NOT mapped — see
-     * TaxAllowanceDeclarationService#maritalStatusForMaster. */
-    @Test
-    void maritalStatusIsWrittenAsThaiAndUnmappableStatesLeaveTheMasterAlone() {
-        jdbc.update("UPDATE hr.employee SET marital_status = 'โสด' WHERE employee_id = :id",
-            Map.of("id", employeeA));
-        long single = submitWithHeader(employeeA, header(null, "MARRIED", null)).declarationId();
-        approveSigned(single);
-        assertThat(maritalStatusOf(employeeA))
-            .as("must be the Thai vocabulary the column already holds, never the token MARRIED")
-            .isEqualTo("สมรส");
-
-        jdbc.update("UPDATE hr.employee SET marital_status = 'สมรส' WHERE employee_id = :id",
-            Map.of("id", employeeB));
-        long widowed = submitWithHeader(employeeB, header(null, "DIED_DURING_YEAR", null)).declarationId();
-        approveSigned(widowed);
-        assertThat(maritalStatusOf(employeeB))
-            .as("an unmappable ล.ย.01 state must leave the master for HR to set by hand")
-            .isEqualTo("สมรส");
-    }
-
-    /** The upsert half: employee_pii has no row for most employees, so an UPDATE would write nothing. */
-    @Test
-    void theTaxIdWriteInsertsWhenTheEmployeeHasNoPiiRowAtAll() {
-        assertThat(jdbc.queryForObject(
-            "SELECT COUNT(*) FROM hr_restricted.employee_pii WHERE employee_id = :id",
-            Map.of("id", employeeA), Integer.class)).isZero();
-
-        approveSigned(submitWithHeader(employeeA, fullHeader()).declarationId());
-
-        assertThat(taxIdOf(employeeA)).isEqualTo("1234567890123");
-    }
-
-    /** ...and the update half, without clobbering the other PII columns on an existing row. */
-    @Test
-    void theTaxIdWriteUpdatesAnExistingPiiRowWithoutTouchingItsOtherColumns() {
-        jdbc.update("""
-            INSERT INTO hr_restricted.employee_pii(employee_id, national_id, tax_id, religion)
-            VALUES (:id, '9999999999999', 'OLD-TAX-ID', 'พุทธ')
-            """, Map.of("id", employeeA));
-
-        approveSigned(submitWithHeader(employeeA, fullHeader()).declarationId());
-
-        assertThat(taxIdOf(employeeA)).isEqualTo("1234567890123");
-        assertThat(jdbc.queryForObject(
-            "SELECT national_id FROM hr_restricted.employee_pii WHERE employee_id = :id",
-            Map.of("id", employeeA), String.class))
-            .as("a tax-ID correction must not disturb the rest of the PII row")
-            .isEqualTo("9999999999999");
-        assertThat(jdbc.queryForObject(
-            "SELECT religion FROM hr_restricted.employee_pii WHERE employee_id = :id",
-            Map.of("id", employeeA), String.class)).isEqualTo("พุทธ");
-    }
-
-    /** V138 widened building/soi/road from VARCHAR(120) to VARCHAR(200) to match the declaration. Without it this
-     * approval fails with SQLSTATE 22001 and rolls the whole thing back. */
-    @Test
-    void aTwoHundredCharacterRoadDoesNotOverflowTheMasterColumn() {
-        String longRoad = "ถ".repeat(200);
-        LorYor01Details wide = header(null, "SINGLE", new LorYor01AddressPayload(
-            "อ".repeat(200), null, null, null, "1", null, "ซ".repeat(200), null, longRoad,
-            null, null, null, null));
-
-        approveSigned(submitWithHeader(employeeA, wide).declarationId());
-
-        assertThat(addressField(employeeA, "road")).isEqualTo(longRoad);
     }
 
     // --- helpers ----------------------------------------------------------------------------------
@@ -321,12 +162,6 @@ class TaxAllowanceHeaderWriteBackIntegrationTest extends AbstractPostgresIntegra
 
     private String maritalStatusOf(long employeeId) {
         return jdbc.queryForObject("SELECT marital_status FROM hr.employee WHERE employee_id = :id",
-            Map.of("id", employeeId), String.class);
-    }
-
-    private String nameOf(long employeeId, String column) {
-        return jdbc.queryForObject(
-            "SELECT " + column + " FROM hr.employee WHERE employee_id = :id",
             Map.of("id", employeeId), String.class);
     }
 

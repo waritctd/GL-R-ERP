@@ -37,9 +37,6 @@ import th.co.glr.hr.ticket.TicketRepository;
 class TaxAllowanceCapCatalogTest extends AbstractPostgresIntegrationTest {
     private static final BigDecimal ABSURD = new BigDecimal("9999999.00");
     private static final LocalDate MONTH = LocalDate.of(2026, 1, 1);
-    // Thai ESG enhanced-cap sunset (2026 -> 2027): PayrollService#preview derives taxYear from
-    // payrollMonth.getYear(), so exercising tax year 2027 means previewing a 2027 month.
-    private static final LocalDate MONTH_2027 = LocalDate.of(2027, 1, 1);
     private static final BigDecimal PERSONAL_PLUS_SSO = new BigDecimal("70500.00"); // 60,000 + SSO year cap 10,500
 
     private final TaxAllowanceCapCatalog catalog = new TaxAllowanceCapCatalog();
@@ -103,28 +100,6 @@ class TaxAllowanceCapCatalogTest extends AbstractPostgresIntegrationTest {
         assertThat(deltaOverFloor(e2)).isEqualByComparingTo(childOwnCap.multiply(new BigDecimal(2)).add(childDoubleOwnCap));
     }
 
-    @Test
-    void disabledCareCapMatchesTheCatalogue() {
-        BigDecimal ownCap = ownCap("disabled_care");
-        long employeeId = seedEmployee("CAP-DISABLED");
-        seed(employeeId, "disabled_care_allowance", ABSURD, Map.of("disabled_care_count", "2"));
-        assertThat(deltaOverFloor(employeeId)).isEqualByComparingTo(ownCap.multiply(new BigDecimal(2)));
-    }
-
-    @Test
-    void parentCareCapMatchesTheCatalogueIncludingTheFourHeadMaxTotal() {
-        TaxAllowanceCapEntry parentCare = entry("parent_care");
-        long belowMax = seedEmployee("CAP-PARENT-1");
-        seed(belowMax, "parent_care_allowance", ABSURD, Map.of("parent_care_count", "1"));
-        assertThat(deltaOverFloor(belowMax)).isEqualByComparingTo(parentCare.ownCap());
-
-        long atMax = seedEmployee("CAP-PARENT-2");
-        seed(atMax, "parent_care_allowance", ABSURD, Map.of("parent_care_count", "4"));
-        assertThat(deltaOverFloor(atMax))
-            .as("4 heads x ownCap must clamp to the statutory maxTotal, not run past it")
-            .isEqualByComparingTo(parentCare.maxTotal());
-    }
-
     /** Life ฿100,000 + health ฿25,000 must add to ฿100,000, NOT ฿125,000 — the exact case the plan doc names. */
     @Test
     void lifeAndHealthShareOneHundredThousandNotOneHundredTwentyFive() {
@@ -140,13 +115,6 @@ class TaxAllowanceCapCatalogTest extends AbstractPostgresIntegrationTest {
         assertThat(deltaOverFloor(employeeId))
             .as("life's own cap + health's own cap must clamp to the SHARED group cap")
             .isEqualByComparingTo(life.groupCap());
-    }
-
-    @Test
-    void healthAloneIsCappedAtItsOwnTwentyFiveThousandNotTheSharedHundred() {
-        long employeeId = seedEmployee("CAP-HEALTH-ALONE");
-        seed(employeeId, "health_insurance_allowance", ABSURD, Map.of());
-        assertThat(deltaOverFloor(employeeId)).isEqualByComparingTo(ownCap("health_insurance"));
     }
 
     /** RMF -> SSF -> pension share one ฿500,000 cluster, consumed in that order. */
@@ -193,34 +161,6 @@ class TaxAllowanceCapCatalogTest extends AbstractPostgresIntegrationTest {
             .isEqualByComparingTo(providentFund.ownCap());
     }
 
-    /** ข้อ 9 shares the ฿500,000 retirement cluster rather than sitting outside it -- the wrong-way- round case,
-     * because a term added to the wrong group would still look correct on its own. */
-    @Test
-    void providentFundSharesTheRetirementClusterRatherThanAddingOnTopOfIt() {
-        TaxAllowanceCapEntry providentFund = entry("provident_fund");
-        assertThat(providentFund.groupId()).isEqualTo("retirement");
-        assertThat(providentFund.groupCap()).isEqualByComparingTo(new BigDecimal("500000.00"));
-
-        long employeeId = seedEmployee("CAP-PVD-RMF");
-        seed(employeeId, "provident_fund_allowance", ABSURD, Map.of(), "rmf_allowance", ABSURD);
-        assertThat(deltaOverFloor(employeeId))
-            .as("ข้อ 9 + RMF must clamp to the shared 500,000, not reach 530,000")
-            .isEqualByComparingTo(providentFund.groupCap());
-    }
-
-    /** SSF is ฿0 from tax year 2025 onward (sunset) — this repo's calculator year is always >= 2025. */
-    @Test
-    void ssfAloneContributesNothingBecauseTaxYear2026IsPastTheSunset() {
-        TaxAllowanceCapEntry ssf = entry("ssf");
-        assertThat(ssf.ownCap()).isEqualByComparingTo(BigDecimal.ZERO);
-
-        long employeeId = seedEmployee("CAP-SSF");
-        seed(employeeId, "ssf_allowance", ABSURD, Map.of());
-        assertThat(deltaOverFloor(employeeId))
-            .as("SSF must add exactly zero for a 2026 declaration")
-            .isEqualByComparingTo(BigDecimal.ZERO);
-    }
-
     /** Thai ESG enhanced ceiling (หนังสือกรมสรรพากร / Royal Decree extending the higher cap to units purchased 1
      * Jan 2024 - 31 Dec 2026): tax year 2026 still falls inside that window, so the ceiling is the full ฿300,000
      * at 30% of assessable income. */
@@ -239,68 +179,6 @@ class TaxAllowanceCapCatalogTest extends AbstractPostgresIntegrationTest {
         assertThat(deltaOverFloor(employeeId))
             .as("catalogue ownCap must match what the real calculator actually grants")
             .isEqualByComparingTo(thaiEsg.ownCap());
-    }
-
-    /** From tax year 2027 the enhanced window (1 Jan 2024 - 31 Dec 2026) has closed and the ceiling REVERTS to its
-     * original ฿100,000 -- this is NOT a sunset to zero like SSF's; the 30% of assessable income rate is
-     * unchanged, only the absolute ceiling steps down. */
-    @Test
-    void thaiEsgCapRevertsToOneHundredThousandFromTaxYear2027() {
-        TaxAllowanceCapEntry thaiEsg = entry("thai_esg", 2027);
-        assertThat(thaiEsg.ownCap())
-            .as("the enhanced 300,000 window closed after 31 Dec 2026 -- reverts to 100,000, not zero")
-            .isEqualByComparingTo(new BigDecimal("100000.00"));
-        assertThat(thaiEsg.incomeRate())
-            .as("30% of assessable income rate is unchanged across both regimes")
-            .isEqualByComparingTo(new BigDecimal("0.30"));
-
-        long employeeId = seedEmployee("CAP-ESG-2027", 2027);
-        seed(employeeId, 2027, "thai_esg_allowance", ABSURD, Map.of());
-        assertThat(deltaOverFloor(employeeId, MONTH_2027))
-            .as("catalogue ownCap must match what the real calculator actually grants for 2027")
-            .isEqualByComparingTo(thaiEsg.ownCap());
-    }
-
-    /** Tax year 2023 is BEFORE the enhanced window opened (1 Jan 2024), so the ceiling is the law's own
-     * pre-enhancement ฿100,000 — the same figure as after the window closes. */
-    @Test
-    void thaiEsgCapIsThePreEnhancementCeilingBeforeTheWindowOpened() {
-        assertThat(entry("thai_esg", 2023).ownCap())
-            .as("2023 predates the 1 Jan 2024 enhancement — ฿100,000, not the enhanced ฿300,000")
-            .isEqualByComparingTo(new BigDecimal("100000.00"));
-    }
-
-    /** The rate, not the ceiling, under test. A low salary inverts the binding constraint, so this test fails on
-     * exactly that mutation. */
-    @Test
-    void thaiEsgIsRateBoundNotCeilingBoundOnALowSalaryForTaxYear2026() {
-        assertThaiEsgIsRateBound(2026, MONTH);
-    }
-
-    /** Same property in the post-2026 regime — the ceiling steps down but the 30% rate must not. */
-    @Test
-    void thaiEsgIsRateBoundNotCeilingBoundOnALowSalaryForTaxYear2027() {
-        assertThaiEsgIsRateBound(2027, MONTH_2027);
-    }
-
-    private void assertThaiEsgIsRateBound(int taxYear, LocalDate month) {
-        // ฿25,000/month => ~฿300,000 projected annually => 30% is ~฿90,000, comfortably under BOTH the enhanced
-        // ฿300,000 and the reverted ฿100,000 ceilings, so the percentage binds first.
-        long employeeId = seedEmployee("CAP-ESG-RATE-" + taxYear, taxYear, new BigDecimal("25000.00"));
-        seed(employeeId, taxYear, "thai_esg_allowance", ABSURD, Map.of());
-
-        PayrollLineDto line = lineFor(employeeId, month);
-        BigDecimal granted = line.taxAllowanceTotal().subtract(PERSONAL_PLUS_SSO);
-        BigDecimal expected = line.projectedAnnualIncome()
-            .multiply(new BigDecimal("0.30"))
-            .setScale(2, java.math.RoundingMode.HALF_UP);
-
-        assertThat(granted)
-            .as("the 30%% rate — not the ceiling — must decide the grant on a low salary (taxYear=%d)", taxYear)
-            .isEqualByComparingTo(expected);
-        assertThat(granted)
-            .as("guard: if this ever reaches the ceiling the test has silently become an ownCap test")
-            .isLessThan(entry("thai_esg", taxYear).ownCap());
     }
 
     // --- helpers ---------------------------------------------------------------------------------

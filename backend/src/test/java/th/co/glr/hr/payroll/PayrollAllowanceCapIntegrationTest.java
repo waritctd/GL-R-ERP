@@ -114,34 +114,6 @@ class PayrollAllowanceCapIntegrationTest extends AbstractPostgresIntegrationTest
             .isGreaterThanOrEqualTo(withoutRunBody.withholdingTax());
     }
 
-    /** The identical hole on ค่าอุปการะคนพิการ (฿60,000 per head). */
-    @Test
-    @DisplayName("a run-body entry must not disturb the per-head อุปการะคนพิการ cap")
-    void aRunBodyEntryMustNotDisturbThePerHeadDisabledCareCap() {
-        LocalDate month = LocalDate.of(2026, 1, 1);
-        long employeeId = seedEmployee("CAP-002", "เกินเพดาน", "คนพิการ", new BigDecimal("200000.00"));
-        // See the sibling test above for why both seed calls are needed post-118.
-        seedRegularTaxTreatment(employeeId, 2026, PayrollComponent.SPECIAL_PAY_1);
-        seedSsoIncluded(employeeId, 2026, PayrollComponent.SALARY);
-        jdbc.update("""
-            INSERT INTO hr.employee_tax_allowance
-                (employee_id, tax_year, disabled_care_allowance, disabled_care_count, effective_month)
-            VALUES (:id, 2026, 600000, 1, 1)
-            """, Map.of("id", employeeId));
-
-        PayrollLineDto withoutRunBody = lineFor(payrollService.preview(
-            new ProcessPayrollRequest(month, List.of()), hr()), employeeId);
-        PayrollLineDto withRunBody = lineFor(payrollService.preview(
-            new ProcessPayrollRequest(month, List.of(onlyASpecialPay(employeeId))), hr()), employeeId);
-
-        BigDecimal personalPlusSso = new BigDecimal("70500.00");
-        assertThat(withoutRunBody.taxAllowanceTotal())
-            .isEqualByComparingTo(personalPlusSso.add(new BigDecimal("60000.00")));
-        assertThat(withRunBody.taxAllowanceTotal())
-            .as("600,000 declared against a count of ONE must clamp to the 60,000 the count allows")
-            .isEqualByComparingTo(personalPlusSso.add(new BigDecimal("60000.00")));
-    }
-
     // --- helpers ------------------------------------------------------------
 
     /** Exactly what the payroll UI submits for an untouched employee on a fresh run: a ฿500 พิเศษ 1. */

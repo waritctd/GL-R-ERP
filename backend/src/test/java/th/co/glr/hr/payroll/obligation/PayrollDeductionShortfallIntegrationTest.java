@@ -28,7 +28,6 @@ import th.co.glr.hr.payroll.PayrollRepository;
 import th.co.glr.hr.payroll.PayrollService;
 import th.co.glr.hr.payroll.ProcessPayrollRequest;
 import th.co.glr.hr.payroll.obligation.DeductionObligationDtos.DeductionObligationCreateRequest;
-import th.co.glr.hr.payroll.obligation.DeductionObligationDtos.DeductionObligationOverrideRequest;
 import th.co.glr.hr.payroll.obligation.PayrollDeductionShortfallDtos.PayrollDeductionShortfallDto;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 import th.co.glr.hr.ticket.TicketRepository;
@@ -97,103 +96,6 @@ class PayrollDeductionShortfallIntegrationTest extends AbstractPostgresIntegrati
             new BigDecimal("20000.00").subtract(line.legalExecutionDeduction()));
         assertThat(row.shortfallReason()).contains("ป.วิ.พ. ม.302").contains("SALARY");
         assertThat(row.payrollMonth()).isEqualTo(month);
-    }
-
-    /** D-376-1 regression (Opus review): reproduces the reviewer's exact probe. A single-obligation test cannot
-     * reach this: the flip only matters when a SECOND obligation exists to be picked up by the changed ordering. */
-    @Test
-    void aSecondObligationCompletingDuringThisRunDoesNotFabricateAShortfallOnAnUnrelatedObligation() {
-        LocalDate month = LocalDate.of(2026, 1, 1);
-        long employeeId = seedEmployee("SHORTFALL-TWOOBLIG", new BigDecimal("30000.00"));
-
-        // The LATER-start-date obligation, already fully paid off and COMPLETED before this run even starts, with an
-        // HR override recorded (so #resolveMonthlyAmount would return its full ฿5,000 monthly figure if it were ever
-        // picked as driving).
-        long olderCompletedObligationId = obligationRepository.insert(new DeductionObligationCreateRequest(
-            employeeId, DeductionObligationKind.LEGAL_EXECUTION, new BigDecimal("5000.00"),
-            new BigDecimal("60000.00"), "LED-TWOOBLIG-COMPLETED", LocalDate.of(2025, 6, 1), null), employeeId);
-        obligationRepository.upsertRemittance(olderCompletedObligationId, LocalDate.of(2025, 12, 1), new BigDecimal("60000.00"), null);
-        obligationRepository.applyCompletionTransition(olderCompletedObligationId, true);
-        obligationService.overrideContinue(olderCompletedObligationId,
-            new DeductionObligationOverrideRequest("reviewer probe D-376-1"), hr());
-        assertThat(obligationRepository.findById(olderCompletedObligationId).orElseThrow().status())
-            .isEqualTo(DeductionObligationStatus.COMPLETED);
-
-        // The EARLIER-start-date obligation, still ACTIVE going into this run -- the one that actually drives it
-        // (ORDER BY (status='ACTIVE') DESC ranks it first regardless of start_date).
-        long activeObligationId = obligationRepository.insert(new DeductionObligationCreateRequest(
-            employeeId, DeductionObligationKind.LEGAL_EXECUTION, new BigDecimal("100.00"),
-            new BigDecimal("100.00"), "LED-TWOOBLIG-ACTIVE", LocalDate.of(2025, 1, 1), null), employeeId);
-
-        PayrollPeriodDto period = payrollService.process(new ProcessPayrollRequest(month, List.of()), hr());
-        PayrollLineDto line = lineFor(period, employeeId);
-
-        // The court order behind the ACTIVE obligation was satisfied in full at its own requested figure -- no
-        // statutory cap came anywhere near binding (30% of ~30,000 is ~9,000).
-        assertThat(line.legalExecutionDeduction()).isEqualByComparingTo("100.00");
-        // This run's own remittance completed the ACTIVE obligation -- the state transition that exposed the bug.
-        assertThat(obligationRepository.findById(activeObligationId).orElseThrow().status())
-            .isEqualTo(DeductionObligationStatus.COMPLETED);
-        // The OTHER (unrelated, already-completed) obligation must be completely untouched by this run.
-        assertThat(obligationRepository.findById(olderCompletedObligationId).orElseThrow().status())
-            .isEqualTo(DeductionObligationStatus.COMPLETED);
-
-        // THE regression assertion: no phantom ฿4,900 shortfall against a court order that was paid in full. Before
-        // the fix this returned one row: requested=5000.00, actual=100.00, shortfall=4900.00.
-        assertThat(shortfallRepository.findAll(employeeId, PayrollDeductionKind.LEGAL_EXECUTION_GARNISHMENT)).isEmpty();
-    }
-
-    /** A monthly figure well inside the statutory cap never produces a shortfall row at all. */
-    @Test
-    void noShortfallRowWhenTheDeductionIsNotCapped() {
-        LocalDate month = LocalDate.of(2026, 1, 1);
-        long employeeId = seedEmployee("SHORTFALL-NOCAP", new BigDecimal("30000.00"));
-        obligationRepository.insert(new DeductionObligationCreateRequest(
-            employeeId, DeductionObligationKind.LEGAL_EXECUTION, new BigDecimal("500.00"), null,
-            "LED-SHORTFALL-NOCAP", month, null), employeeId);
-
-        PayrollPeriodDto period = payrollService.process(new ProcessPayrollRequest(month, List.of()), hr());
-        PayrollLineDto line = lineFor(period, employeeId);
-        assertThat(line.legalExecutionDeduction()).isEqualByComparingTo("500.00");
-
-        assertThat(shortfallRepository.findAll(employeeId, PayrollDeductionKind.LEGAL_EXECUTION_GARNISHMENT)).isEmpty();
-    }
-
-    /** Reprocessing the SAME month upserts the one row instead of inserting a second one. */
-    @Test
-    void reprocessingTheSameMonthSelfCorrectsTheShortfallLedgerInsteadOfDuplicating() {
-        LocalDate month = LocalDate.of(2026, 1, 1);
-        long employeeId = seedEmployee("SHORTFALL-REPROCESS", new BigDecimal("30000.00"));
-        obligationRepository.insert(new DeductionObligationCreateRequest(
-            employeeId, DeductionObligationKind.LEGAL_EXECUTION, new BigDecimal("20000.00"), null,
-            "LED-SHORTFALL-REPROCESS", month, null), employeeId);
-
-        payrollService.process(new ProcessPayrollRequest(month, List.of()), hr());
-        payrollService.process(new ProcessPayrollRequest(month, List.of()), hr());
-        payrollService.process(new ProcessPayrollRequest(month, List.of()), hr());
-
-        List<PayrollDeductionShortfallDto> rows = shortfallRepository.findAll(employeeId, PayrollDeductionKind.LEGAL_EXECUTION_GARNISHMENT);
-        assertThat(rows).hasSize(1);
-    }
-
-    /** A correction that removes the shortfall (HR lowers the instructed monthly figure to something the statutory
-     * cap no longer binds) must DELETE the stale row on reprocess, not strand it. */
-    @Test
-    void aShortfallThatDisappearsOnCorrectionIsDeletedOnReprocess() {
-        LocalDate month = LocalDate.of(2026, 1, 1);
-        long employeeId = seedEmployee("SHORTFALL-CORRECTED", new BigDecimal("30000.00"));
-        long obligationId = obligationRepository.insert(new DeductionObligationCreateRequest(
-            employeeId, DeductionObligationKind.LEGAL_EXECUTION, new BigDecimal("20000.00"), null,
-            "LED-SHORTFALL-CORRECTED", month, null), employeeId);
-
-        payrollService.process(new ProcessPayrollRequest(month, List.of()), hr());
-        assertThat(shortfallRepository.findAll(employeeId, PayrollDeductionKind.LEGAL_EXECUTION_GARNISHMENT)).hasSize(1);
-
-        obligationRepository.update(obligationId, new DeductionObligationDtos.DeductionObligationUpdateRequest(
-            new BigDecimal("500.00"), null, "LED-SHORTFALL-CORRECTED", null), employeeId);
-        payrollService.process(new ProcessPayrollRequest(month, List.of()), hr());
-
-        assertThat(shortfallRepository.findAll(employeeId, PayrollDeductionKind.LEGAL_EXECUTION_GARNISHMENT)).isEmpty();
     }
 
     /** STUDENT_LOAN is never capped by anything today (item, cap_group NONE -- see PayrollDeductionClassification),

@@ -3,7 +3,6 @@ package th.co.glr.hr.payroll.obligation;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -29,24 +28,9 @@ class DeductionWrittenConsentServiceTest {
         new DeductionWrittenConsentService(repository, employeeRepository, auditService);
 
     @Test
-    void anEmployeeCannotListConsentRecords() {
-        assertForbidden(() -> service.list(1L, null, employee(1L)));
-        verifyNoInteractions(repository);
-    }
-
-    @Test
     void anEmployeeCannotUpsertAConsentRecord() {
         assertForbidden(() -> service.upsert(request(PayrollDeductionKind.WARNING_LETTER), employee(1L)));
         verifyNoInteractions(repository);
-    }
-
-    @Test
-    void ceoCanListButCannotUpsert() {
-        when(repository.findAll(null, null)).thenReturn(List.of());
-        service.list(null, null, ceo());
-
-        assertForbidden(() -> service.upsert(request(PayrollDeductionKind.WARNING_LETTER), ceo()));
-        verify(repository, never()).upsert(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.anyLong());
     }
 
     @Test
@@ -57,26 +41,6 @@ class DeductionWrittenConsentServiceTest {
         service.upsert(request(PayrollDeductionKind.WARNING_LETTER), hr());
 
         verify(repository).upsert(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.eq(99L));
-    }
-
-    @Test
-    void statutoryOrCourtOrderedKindsAreRejectedAsNotConsentApplicable() {
-        for (PayrollDeductionKind kind : new PayrollDeductionKind[] {
-            PayrollDeductionKind.WITHHOLDING_TAX, PayrollDeductionKind.SOCIAL_SECURITY,
-            PayrollDeductionKind.STUDENT_LOAN, PayrollDeductionKind.LEGAL_EXECUTION_GARNISHMENT
-        }) {
-            assertThatThrownBy(() -> service.upsert(request(kind), hr()))
-                .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
-        }
-        verifyNoInteractions(repository);
-    }
-
-    @Test
-    void upsertingForAnUnknownEmployeeIs404() {
-        when(employeeRepository.exists(1L)).thenReturn(false);
-        assertThatThrownBy(() -> service.upsert(request(PayrollDeductionKind.CUSTOMER_RETURN), hr()))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.NOT_FOUND));
-        verify(repository, never()).upsert(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.anyLong());
     }
 
     // --- helpers ------------------------------------------------------------

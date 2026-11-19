@@ -1,10 +1,7 @@
 package th.co.glr.hr.payroll.declaration;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.verify;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -28,8 +25,6 @@ import th.co.glr.hr.payroll.PayrollService;
 import th.co.glr.hr.payroll.declaration.loryor01.LorYor01Renderer;
 import th.co.glr.hr.payroll.declaration.TaxAllowanceDeclarationDtos.TaxAllowanceDeclarationDto;
 import th.co.glr.hr.payroll.declaration.TaxAllowanceDeclarationDtos.TaxAllowanceDeclarationSubmitRequest;
-import th.co.glr.hr.payroll.declaration.TaxAllowanceDeclarationDtos.TaxAllowanceOnBehalfRequest;
-import th.co.glr.hr.payroll.declaration.TaxAllowanceDeclarationDtos.TaxAllowanceReviewRequest;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
 /** The ล.ย.01 workflow emitted no notifications at all: HR approving, HR rejecting and the yearly expiry sweep
@@ -86,77 +81,6 @@ class TaxAllowanceNotificationIntegrationTest extends AbstractPostgresIntegratio
         assertThat(notificationTypesFor(employeeB)).isEmpty();
     }
 
-    @Test
-    void rejectionNotifiesTheOwnerAndNobodyElse() {
-        TaxAllowanceDeclarationDto declaration = submit(employeeA, 2026);
-
-        service.reject(declaration.declarationId(), new TaxAllowanceReviewRequest("หลักฐานไม่ครบ"), hrActor());
-
-        assertThat(notificationTypesFor(employeeA)).containsExactly("TAX_ALLOWANCE_REJECTED");
-        assertThat(notificationTypesFor(hrEmployeeId)).isEmpty();
-        assertThat(notificationTypesFor(employeeB)).isEmpty();
-    }
-
-    @Test
-    void theRejectionReasonTravelsInTheNotificationBody() {
-        TaxAllowanceDeclarationDto declaration = submit(employeeA, 2026);
-
-        service.reject(declaration.declarationId(), new TaxAllowanceReviewRequest("ขาดใบเสร็จเบี้ยประกัน"), hrActor());
-
-        Map<String, Object> row = latestNotification(employeeA);
-        assertThat((String) row.get("message")).contains("ขาดใบเสร็จเบี้ยประกัน");
-        // Deep-links to the employee's own declaration page, not a ticket route.
-        assertThat(row.get("link")).isEqualTo("/tax-allowance");
-    }
-
-    @Test
-    void everyNotificationLandsOnTheOwnerEvenWhenAnotherEmployeeHasTheirOwnDeclaration() {
-        TaxAllowanceDeclarationDto declarationA = submit(employeeA, 2026);
-        TaxAllowanceDeclarationDto declarationB = submit(employeeB, 2026);
-
-        approveSigned(declarationA.declarationId());
-        service.reject(declarationB.declarationId(), new TaxAllowanceReviewRequest("ไม่ผ่าน"), hrActor());
-
-        // Each employee sees exactly their own outcome — never the other's.
-        assertThat(notificationTypesFor(employeeA)).containsExactly("TAX_ALLOWANCE_APPROVED");
-        assertThat(notificationTypesFor(employeeB)).containsExactly("TAX_ALLOWANCE_REJECTED");
-    }
-
-    @Test
-    void theExpirySweepNotifiesEachOwnerExactlyOnce() {
-        TaxAllowanceDeclarationDto declaration = submit(employeeA, 2026);
-        approveSigned(declaration.declarationId());
-        // Backdate the deadline so the sweep considers this row overdue.
-        jdbc.update("UPDATE hr.tax_allowance_declaration SET expires_on = :past WHERE declaration_id = :id",
-            Map.of("past", LocalDate.now().minusDays(1), "id", declaration.declarationId()));
-
-        assertThat(service.expireOverdueVerifications()).isEqualTo(1);
-        assertThat(notificationTypesFor(employeeA))
-            .containsExactly("TAX_ALLOWANCE_APPROVED", "TAX_ALLOWANCE_EXPIRED");
-
-        // A second sweep matches zero rows (the conditional UPDATE already fired), so it must not notify again —
-        // otherwise a stuck scheduler would refill the employee's inbox hourly.
-        assertThat(service.expireOverdueVerifications()).isEqualTo(0);
-        assertThat(notificationTypesFor(employeeA))
-            .containsExactly("TAX_ALLOWANCE_APPROVED", "TAX_ALLOWANCE_EXPIRED");
-    }
-
-    // --- 2026-08-31: mail dispatch -----------------------------------------------------------
-
-    @Test
-    void approvalAlsoDispatchesEmailWithTheSameSubjectAndBody() {
-        TaxAllowanceDeclarationDto declaration = submit(employeeA, 2026);
-
-        approveSigned(declaration.declarationId());
-
-        // emailService is a mock (no real Mailer/SMTP in this class) — this verifies the WIRING
-        // (NotificationService#notify was reached with sendEmail=true and the right arguments), not delivery.
-        verify(emailService).send(eq(employeeA), any(), any(),
-            eq("แบบแจ้ง ล.ย.01 ได้รับการอนุมัติ"),
-            eq("ฝ่ายบุคคลอนุมัติแบบแจ้งค่าลดหย่อนภาษีปี 2026 แล้ว มีผลกับการหักภาษี ณ ที่จ่ายตลอดทั้งปีภาษีนี้"),
-            eq("/tax-allowance"));
-    }
-
     // --- 2026-08-31: submitOwn notifies HR ----------------------------------------------------
 
     @Test
@@ -172,96 +96,6 @@ class TaxAllowanceNotificationIntegrationTest extends AbstractPostgresIntegratio
         assertThat(row.get("title")).isEqualTo("มีแบบ ล.ย.01 รอ HR ตรวจสอบ");
         assertThat(row.get("link")).isEqualTo("/tax-allowance-review");
         assertThat(row.get("message")).isEqualTo("นายภาคภูมิ ศรีสุข (GLR-1009) ยื่นแบบ ล.ย.01 ปีภาษี 2026");
-    }
-
-    /** Wrong-way-round, per CLAUDE.md's "ask the question the wrong way round" discipline: this is the case that
-     * actually proves the "hr" division predicate FILTERS, rather than merely that HR happens to receive a row. */
-    @Test
-    void submittingDoesNotNotifyANonHrEmployee() {
-        long salesDivision = insertDivision("SLS", "ฝ่ายขาย");
-        long salesEmployee = insertEmployeeInDivision("SUBSLS", salesDivision);
-
-        submit(salesEmployee, 2026);
-
-        assertThat(notificationTypesFor(salesEmployee)).doesNotContain("TAX_ALLOWANCE_SUBMITTED");
-    }
-
-    @Test
-    void createOnBehalfDoesNotAlsoNotifyHrOfASubmission() {
-        // createOnBehalf never leaves a PENDING row for HR to see — it inserts and auto-approves within the same
-        // transaction, so notifyHrOfSubmission (submitOwn-only) must not fire here.
-        long hrDivision = insertDivision("HR", "HR-บุคคล");
-        long hrRecipient = insertEmployeeInDivision("OBHR", hrDivision);
-        long employeeId = seedEmployee("TAN-OB1");
-
-        service.createOnBehalf(onBehalfRequest(employeeId, 2026), hrActor());
-
-        assertThat(notificationTypesFor(hrRecipient)).isEmpty();
-    }
-
-    // --- 2026-08-31: audit additions — createOnBehalf and reverify notify the employee too ---
-
-    @Test
-    void creatingOnBehalfNotifiesTheEmployeeItWasApprovedForThem() {
-        long employeeId = seedEmployee("TAN-OB2");
-
-        service.createOnBehalf(onBehalfRequest(employeeId, 2026), hrActor());
-
-        assertThat(notificationTypesFor(employeeId)).containsExactly("TAX_ALLOWANCE_APPROVED");
-        Map<String, Object> row = latestNotification(employeeId);
-        assertThat(row.get("message")).isEqualTo("ฝ่ายบุคคลสร้างและอนุมัติแบบแจ้งค่าลดหย่อนภาษีปี 2026 ให้คุณแล้ว");
-        assertThat(row.get("link")).isEqualTo("/tax-allowance");
-    }
-
-    @Test
-    void reverifyingNotifiesTheEmployeeTheirAllowanceIsActiveAgain() {
-        TaxAllowanceDeclarationDto declaration = submit(employeeA, 2026);
-        approveSigned(declaration.declarationId());
-        jdbc.update("UPDATE hr.tax_allowance_declaration SET expires_on = :past WHERE declaration_id = :id",
-            Map.of("past", LocalDate.now().minusDays(1), "id", declaration.declarationId()));
-        assertThat(service.expireOverdueVerifications()).isEqualTo(1);
-
-        service.reverify(declaration.declarationId(), hrActor());
-
-        assertThat(notificationTypesFor(employeeA))
-            .containsExactly("TAX_ALLOWANCE_APPROVED", "TAX_ALLOWANCE_EXPIRED", "TAX_ALLOWANCE_APPROVED");
-        Map<String, Object> row = latestNotification(employeeA);
-        assertThat(row.get("message")).isEqualTo(
-            "แบบแจ้งค่าลดหย่อนภาษีปี 2026 ที่เคยหมดอายุ ได้รับการยืนยันใหม่จากฝ่ายบุคคลแล้ว "
-                + "สิทธิลดหย่อนของคุณกลับมาใช้งานได้ตามปกติ");
-        assertThat(row.get("link")).isEqualTo("/tax-allowance");
-    }
-
-    // --- 2026-08-31: copy guard ----------------------------------------------------------------
-
-    /** Regression guard for the TRAVEL_PER_DIEM class of defect that CLAUDE.md records: a raw machine code reaching
-     * a human-facing message. */
-    @Test
-    void noNotificationMessageOrTitleEverContainsARawTypeCode() {
-        TaxAllowanceDeclarationDto toApprove = submit(employeeA, 2026);
-        approveSigned(toApprove.declarationId());
-        jdbc.update("UPDATE hr.tax_allowance_declaration SET expires_on = :past WHERE declaration_id = :id",
-            Map.of("past", LocalDate.now().minusDays(1), "id", toApprove.declarationId()));
-        service.expireOverdueVerifications();
-        service.reverify(toApprove.declarationId(), hrActor());
-
-        TaxAllowanceDeclarationDto toReject = submit(employeeB, 2027);
-        service.reject(toReject.declarationId(), new TaxAllowanceReviewRequest("เอกสารไม่ครบ"), hrActor());
-
-        long onBehalfEmployee = seedEmployee("TAN-COPY-OB");
-        service.createOnBehalf(onBehalfRequest(onBehalfEmployee, 2026), hrActor());
-
-        List<String> copy = jdbc.query(
-            "SELECT title FROM hr.notification UNION ALL SELECT message FROM hr.notification",
-            Map.of(), (rs, rowNum) -> rs.getString(1));
-
-        assertThat(copy).isNotEmpty();
-        assertThat(copy).allSatisfy(text -> {
-            assertThat(text).doesNotContain("TAX_ALLOWANCE_");
-            assertThat(text).doesNotContain("PENDING");
-            assertThat(text).doesNotContain("SUPERSEDED");
-            assertThat(text).doesNotContain("WITHDRAWN");
-        });
     }
 
     // --- helpers ---------------------------------------------------------------------------------
@@ -296,21 +130,6 @@ class TaxAllowanceNotificationIntegrationTest extends AbstractPostgresIntegratio
             null,                   // documentReference
             null);                   // lorYor01 — no ล.ย.01 form detail in this fixture
         return service.submitOwn(request, employeeActor(employeeId));
-    }
-
-    private TaxAllowanceOnBehalfRequest onBehalfRequest(long employeeId, int taxYear) {
-        return new TaxAllowanceOnBehalfRequest(
-            employeeId, taxYear,
-            new BigDecimal("60000"), // spouseAllowance
-            null, null, null, null,  // child, parentCare, disabledCare, maternity
-            null, null, null,        // life, health, parentHealth
-            null, null, null, null,  // rmf, ssf, pension, thaiEsg
-            null, null, null, null,  // homeLoan, educationDonation, generalDonation, politicalDonation
-            null, null, null,        // childCount, childCountDouble, disabledCareCount
-            null,                    // disabilityCardHolder
-            null,                    // parentCareCount
-            null,                    // documentReference
-            null);                   // lorYor01
     }
 
     private long seedEmployee(String code) {

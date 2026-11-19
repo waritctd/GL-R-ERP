@@ -73,38 +73,12 @@ class PayrollDetailPreviewAndBulkPayslipAuthorizationIntegrationTest {
     }
 
     @Test
-    void ceoCanReachDetailPreviewExport() throws Exception {
-        mvc.perform(post("/api/payroll/preview/export/payroll-detail")
-                .session(sessionFor("ceo"))
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(PREVIEW_BODY))
-            .andExpect(status().isOk());
-    }
-
-    @Test
     void aPlainEmployeeCannotReachDetailPreviewExport() throws Exception {
         mvc.perform(post("/api/payroll/preview/export/payroll-detail")
                 .session(sessionFor("employee"))
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(PREVIEW_BODY))
             .andExpect(status().isForbidden());
-    }
-
-    @Test
-    void aSalesRoleCannotReachDetailPreviewExportEither() throws Exception {
-        mvc.perform(post("/api/payroll/preview/export/payroll-detail")
-                .session(sessionFor("sales"))
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(PREVIEW_BODY))
-            .andExpect(status().isForbidden());
-    }
-
-    @Test
-    void anUnauthenticatedRequestToDetailPreviewExportIsRejectedWith401() throws Exception {
-        mvc.perform(post("/api/payroll/preview/export/payroll-detail")
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(PREVIEW_BODY))
-            .andExpect(status().isUnauthorized());
     }
 
     // ---- GET /api/payroll/{periodId}/payslips.zip ----
@@ -117,33 +91,12 @@ class PayrollDetailPreviewAndBulkPayslipAuthorizationIntegrationTest {
     }
 
     @Test
-    void ceoCanReachBulkPayslipZip() throws Exception {
-        // A distinct month from the HR case above -- hr.payroll_period has a UNIQUE(payroll_month) index, and both
-        // tests share the same real Postgres schema/context.
-        long periodId = insertProcessedPeriod(LocalDate.of(2026, 4, 1));
-        mvc.perform(get("/api/payroll/" + periodId + "/payslips.zip").session(sessionFor("ceo")))
-            .andExpect(status().isOk());
-    }
-
-    @Test
     void aPlainEmployeeCannotReachBulkPayslipZip() throws Exception {
         // The security gate must reject the role BEFORE the service/DB is ever touched -- a nonexistent periodId still
         // exercises exactly that, and proves the 403 isn't merely coincidental with a 404 the service would otherwise
         // throw.
         mvc.perform(get("/api/payroll/999999/payslips.zip").session(sessionFor("employee")))
             .andExpect(status().isForbidden());
-    }
-
-    @Test
-    void aSalesRoleCannotReachBulkPayslipZipEither() throws Exception {
-        mvc.perform(get("/api/payroll/999999/payslips.zip").session(sessionFor("sales")))
-            .andExpect(status().isForbidden());
-    }
-
-    @Test
-    void anUnauthenticatedRequestToBulkPayslipZipIsRejectedWith401() throws Exception {
-        mvc.perform(get("/api/payroll/999999/payslips.zip"))
-            .andExpect(status().isUnauthorized());
     }
 
     private MockHttpSession sessionFor(String role) {

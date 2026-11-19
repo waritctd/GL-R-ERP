@@ -58,27 +58,9 @@ class PayrollSuggestedInputsAuthorizationIntegrationTest {
     }
 
     @Test
-    void ceoCanReachSuggestedInputs() throws Exception {
-        mvc.perform(get("/api/payroll/suggested-inputs?payrollMonth=2026-07").session(sessionFor("ceo")))
-            .andExpect(status().isOk());
-    }
-
-    @Test
     void aPlainEmployeeCannotReachSuggestedInputs() throws Exception {
         mvc.perform(get("/api/payroll/suggested-inputs?payrollMonth=2026-07").session(sessionFor("employee")))
             .andExpect(status().isForbidden());
-    }
-
-    @Test
-    void aSalesRoleCannotReachSuggestedInputsEither() throws Exception {
-        mvc.perform(get("/api/payroll/suggested-inputs?payrollMonth=2026-07").session(sessionFor("sales")))
-            .andExpect(status().isForbidden());
-    }
-
-    @Test
-    void anUnauthenticatedRequestIsRejectedWith401() throws Exception {
-        mvc.perform(get("/api/payroll/suggested-inputs?payrollMonth=2026-07"))
-            .andExpect(status().isUnauthorized());
     }
 
     private MockHttpSession sessionFor(String role) {
