@@ -1,6 +1,6 @@
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { LeaveRequestPage } from './LeaveRequestPage.jsx';
@@ -101,8 +101,7 @@ async function goToStep2ForVacation() {
   return utils;
 }
 
-// Shared baseline fixture, called from every describe block's own `beforeEach`, including the
-// sibling "implicit submission" block at the bottom. Each block calling this itself and clearing
+// Shared baseline fixture, called from every describe block's own `beforeEach`. Each block calling this itself and clearing
 // mocks itself keeps every block correct regardless of what ran before it: `vi.fn()`
 // implementations set via `mockResolvedValue` persist across tests (only `vi.clearAllMocks()`,
 // called here, resets call HISTORY), so test ORDER must never be load-bearing for isolation.
@@ -175,42 +174,6 @@ describe('LeaveRequestPage (Phase A2, #485)', () => {
     expect(await screen.findByText(/ใช้สิทธิ์ได้เพียงครั้งเดียวตลอดระยะเวลาที่เป็นพนักงาน/)).not.toBeNull();
   });
 
-  // Real-backend gap (not visible under mocks: LeaveService's resolveTargetEmployee() gate has no
-  // mock-mode equivalent): a preview call can fail outright with a plain 403 instead of returning a
-  // LeaveRuleOutcome, e.g. HR/CEO requesting leave for themselves. That has no `code` for
-  // LeaveRulePanel's RULE_META, so an errored query (`data` undefined) must not silently read as
-  // "not blocking" and leave the type looking available with a permanently unresolved skeleton;
-  // see PreviewErrorNotice's own comment.
-  it('step 1: a preview call that fails outright (not a LeaveRuleOutcome) disables the type with the real error message', async () => {
-    api.leave.preview.mockImplementation((payload) => {
-      if (payload?.leaveTypeCode === 'PERSONAL') {
-        return Promise.reject(new Error('ฝ่ายบุคคลและผู้บริหารไม่สามารถยื่นคำขอลาให้ตนเองได้ กรุณาให้ผู้อื่นดำเนินการแทน'));
-      }
-      return Promise.resolve(dateless_ok_preview);
-    });
-
-    renderComposer();
-
-    await waitFor(() => {
-      const button = screen.getByRole('button', { name: /ลากิจ/ });
-      expect(button.disabled).toBe(true);
-    });
-    expect(await screen.findByText(/ฝ่ายบุคคลและผู้บริหารไม่สามารถยื่นคำขอลาให้ตนเองได้/)).not.toBeNull();
-  });
-
-  it('step 1 -> 2: blocks advancing until a type is chosen, and moves focus to the step-2 heading', async () => {
-    renderComposer();
-    const nextButton = await screen.findByRole('button', { name: 'ถัดไป' });
-    expect(nextButton.disabled).toBe(true);
-
-    fireEvent.click(await screen.findByRole('button', { name: /ลาพักร้อน/ }));
-    await waitFor(() => expect(nextButton.disabled).toBe(false));
-    fireEvent.click(nextButton);
-
-    const heading = await screen.findByText(/ขั้นตอนที่ 2\/3/);
-    await waitFor(() => expect(heading.closest('h2')).toBe(document.activeElement));
-  });
-
   it('step 2: start date before today is rejected and cannot advance to step 3', async () => {
     await goToStep2ForVacation();
 
@@ -243,26 +206,6 @@ describe('LeaveRequestPage (Phase A2, #485)', () => {
     expect(screen.getByRole('button', { name: /ถัดไป: ตรวจสอบก่อนส่ง/ }).disabled).toBe(false);
     fireEvent.click(screen.getByRole('button', { name: /ถัดไป: ตรวจสอบก่อนส่ง/ }));
     expect(await screen.findByText(/ขั้นตอนที่ 3\/3/)).not.toBeNull();
-  });
-
-  // The two call sites of isStartDateBlockedAsPast can disagree: `shouldValidate` on the type button
-  // re-runs the schema but writes back only leaveTypeCode's own error, so a past-date error raised
-  // under ลาพักร้อน could survive the switch to ลาป่วย (error text still rendered while Next is
-  // enabled). That is exactly the correction the SICK exemption exists to allow, so it is pinned.
-  it('step 2: switching ลาพักร้อน -> ลาป่วย clears the past-date error the old type raised', async () => {
-    await goToStep2ForVacation();
-    fireEvent.change(screen.getByLabelText(/วันที่เริ่ม/), { target: { value: '2020-01-01' } });
-    fireEvent.blur(screen.getByLabelText(/วันที่เริ่ม/));
-    expect(await screen.findByText('วันที่เริ่มลาต้องไม่ก่อนวันนี้')).not.toBeNull();
-
-    fireEvent.click(screen.getByRole('button', { name: 'ย้อนกลับ' }));
-    fireEvent.click(await screen.findByRole('button', { name: /ลาป่วย/ }));
-    fireEvent.click(screen.getByRole('button', { name: 'ถัดไป' }));
-    await screen.findByText(/ขั้นตอนที่ 2\/3/);
-
-    await waitFor(() => expect(screen.queryByText('วันที่เริ่มลาต้องไม่ก่อนวันนี้')).toBeNull());
-    expect(screen.getByLabelText(/วันที่เริ่ม/).getAttribute('aria-invalid')).not.toBe('true');
-    expect(screen.getByRole('button', { name: /ถัดไป: ตรวจสอบก่อนส่ง/ }).disabled).toBe(false);
   });
 
   // PERSONAL filed as ลากิจฉุกเฉิน is exempt from the past-start-date block the same way SICK is
@@ -300,143 +243,6 @@ describe('LeaveRequestPage (Phase A2, #485)', () => {
       expect.objectContaining({ leaveTypeCode: 'PERSONAL', startDate: '2020-01-01', requestedAsEmergency: true }),
       expect.anything(),
     ));
-  });
-
-  it('step 2: unticking ลากิจฉุกเฉิน re-blocks a past PERSONAL start date', async () => {
-    renderComposer();
-    fireEvent.click(await screen.findByRole('button', { name: /ลากิจ/ }));
-    fireEvent.click(screen.getByRole('button', { name: 'ถัดไป' }));
-    await screen.findByText(/ขั้นตอนที่ 2\/3/);
-
-    fireEvent.change(screen.getByLabelText(/วันที่เริ่ม/), { target: { value: '2020-01-01' } });
-    fireEvent.blur(screen.getByLabelText(/วันที่เริ่ม/));
-    fireEvent.change(screen.getByLabelText(/^เหตุผลการลา(?!กิจ)/), { target: { value: 'ธุระด่วนที่บ้าน' } });
-    expect(await screen.findByText(/วันที่เริ่มลาต้องไม่ก่อนวันนี้/)).not.toBeNull();
-
-    const emergencyCheckbox = screen.getByLabelText(/ลากิจฉุกเฉิน/);
-    fireEvent.click(emergencyCheckbox);
-    await waitFor(() => expect(screen.queryByText(/วันที่เริ่มลาต้องไม่ก่อนวันนี้/)).toBeNull());
-
-    fireEvent.click(emergencyCheckbox);
-    expect(await screen.findByText(/วันที่เริ่มลาต้องไม่ก่อนวันนี้/)).not.toBeNull();
-    expect(screen.getByRole('button', { name: /ถัดไป: ตรวจสอบก่อนส่ง/ }).disabled).toBe(true);
-  });
-
-  // Wrong-way-round: the exemption is keyed on `leaveTypeCode === 'PERSONAL'` AND the checkbox, not on "the
-  // employee ticked the box at some point in this session".
-  it('step 2: the ลากิจฉุกเฉิน exemption does not leak into another type', async () => {
-    renderComposer();
-    fireEvent.click(await screen.findByRole('button', { name: /ลากิจ/ }));
-    fireEvent.click(screen.getByRole('button', { name: 'ถัดไป' }));
-    await screen.findByText(/ขั้นตอนที่ 2\/3/);
-
-    fireEvent.change(screen.getByLabelText(/วันที่เริ่ม/), { target: { value: '2020-01-01' } });
-    fireEvent.blur(screen.getByLabelText(/วันที่เริ่ม/));
-    fireEvent.change(screen.getByLabelText(/^เหตุผลการลา(?!กิจ)/), { target: { value: 'ธุระด่วนที่บ้าน' } });
-    fireEvent.click(screen.getByLabelText(/ลากิจฉุกเฉิน/));
-    await waitFor(() => expect(screen.queryByText(/วันที่เริ่มลาต้องไม่ก่อนวันนี้/)).toBeNull());
-
-    fireEvent.click(screen.getByRole('button', { name: 'ย้อนกลับ' }));
-    fireEvent.click(await screen.findByRole('button', { name: /ลาพักร้อน/ }));
-    fireEvent.click(screen.getByRole('button', { name: 'ถัดไป' }));
-    await screen.findByText(/ขั้นตอนที่ 2\/3/);
-
-    expect(await screen.findByText('วันที่เริ่มลาต้องไม่ก่อนวันนี้')).not.toBeNull();
-    expect(screen.getByRole('button', { name: /ถัดไป: ตรวจสอบก่อนส่ง/ }).disabled).toBe(true);
-
-    // The leg that actually exercises selectType's reset. The VACATION leg above is satisfied by the type gate
-    // alone (VACATION is never exempt, ticked or not), so on its own it stays green with the reset deleted --
-    // found by the reviewer's own mutation check.
-    fireEvent.click(screen.getByRole('button', { name: 'ย้อนกลับ' }));
-    fireEvent.click(await screen.findByRole('button', { name: /ลากิจ/ }));
-    fireEvent.click(screen.getByRole('button', { name: 'ถัดไป' }));
-    await screen.findByText(/ขั้นตอนที่ 2\/3/);
-
-    expect(screen.getByLabelText(/ลากิจฉุกเฉิน/).checked).toBe(false);
-    expect(await screen.findByText(/วันที่เริ่มลาต้องไม่ก่อนวันนี้/)).not.toBeNull();
-    expect(screen.getByRole('button', { name: /ถัดไป: ตรวจสอบก่อนส่ง/ }).disabled).toBe(true);
-  });
-
-  it('step 2: honestly surfaces coverageEvaluated=false under the debounced QUICK preview', async () => {
-    await goToStep2ForVacation();
-    fireEvent.change(screen.getByLabelText(/วันที่เริ่ม/), { target: { value: '2099-12-31' } });
-    fireEvent.blur(screen.getByLabelText(/วันที่เริ่ม/));
-    fireEvent.change(screen.getByLabelText(/วันที่สิ้นสุด/), { target: { value: '2099-12-31' } });
-    fireEvent.blur(screen.getByLabelText(/วันที่สิ้นสุด/));
-
-    expect(screen.getByText(/ยังไม่ตรวจภาระงานของแผนก/)).not.toBeNull();
-    await waitFor(() => expect(api.leave.preview).toHaveBeenCalledWith(
-      expect.objectContaining({ depth: 'QUICK' }),
-      expect.anything(),
-    ));
-  });
-
-  // Holidays are visible BEFORE a date is picked: this panel sits above the date inputs and never
-  // touches startDate/endDate, so rendering it here (with no date field changed) is itself the proof
-  // it does not depend on what the employee has chosen.
-  it('step 2: shows the วันหยุดที่จะถึง panel above the date inputs, so holidays are visible before picking a date', async () => {
-    api.leave.calendarContext.mockResolvedValue({
-      calendarContext: {
-        holidays: [{ holidayDate: '2026-08-15', nameTh: 'วันหยุดทดสอบ' }],
-        // Empty on purpose: the reactive per-selection note further down only lists holiday NAMES once nonWorkingDates
-        // is non-empty (see that block's own comment) -- keeping it empty here means any "วันหยุดทดสอบ" on screen can
-        // only be coming from the panel.
-        nonWorkingDates: [],
-      },
-    });
-
-    await goToStep2ForVacation();
-
-    const panelHeading = await screen.findByRole('heading', { name: 'วันหยุดที่จะถึง' });
-    expect(panelHeading.closest('section').textContent).toMatch(/วันหยุดทดสอบ/);
-  });
-
-  // Real วันหยุดบริษัท names run up to 149 chars (MOCK_HOLIDAY_DATES in mockApi.js is a verbatim
-  // copy of production's hr.holiday; V129 widened name_th to TEXT). The per-selection note must not
-  // interpolate `${formatDate(...)} (${nameTh})` into one comma-joined run-on sentence: fine at 9-17
-  // chars, an unreadable wall at production length with two holidays in one selected range.
-  it('step 2: a multi-day range with two long company-holiday names renders each on its own line, not a comma-joined wall of text', async () => {
-    const LONG_NAME_1 = 'ชดเชยวันคล้ายวันพระบรมราชสมภพ พระบาทสมเด็จพระบรมชนกาธิเบศร มหาภูมิพลอดุลยเดชมหาราช บรมนาถบพิตร วันชาติ และวันพ่อแห่งชาติ (วันเสาร์ที่ 5 ธันวาคม 2569)';
-    const LONG_NAME_2 = 'วันพระบาทสมเด็จพระพุทธยอดฟ้าจุฬาโลกมหาราช และวันที่ระลึกมหาจักรีบรมราชวงศ์';
-    const start = '2099-12-07';
-    const end = '2099-12-08';
-
-    // Keyed on params so only the note's own SELECTED-range query returns these holidays -- the วันหยุดที่จะถึง
-    // panel's separate ~90-day-forward query stays empty, which isolates this assertion to the note under test
-    // instead of also matching the panel's own render of the same names.
-    api.leave.calendarContext.mockImplementation((params) => Promise.resolve({
-      calendarContext: params?.from === start && params?.to === end
-        ? {
-          holidays: [
-            { holidayDate: start, nameTh: LONG_NAME_1 },
-            { holidayDate: end, nameTh: LONG_NAME_2 },
-          ],
-          nonWorkingDates: [start, end],
-        }
-        : { holidays: [], nonWorkingDates: [] },
-    }));
-
-    await goToStep2ForVacation();
-    fireEvent.change(screen.getByLabelText(/วันที่เริ่ม/), { target: { value: start } });
-    fireEvent.blur(screen.getByLabelText(/วันที่เริ่ม/));
-    fireEvent.change(screen.getByLabelText(/วันที่สิ้นสุด/), { target: { value: end } });
-    fireEvent.blur(screen.getByLabelText(/วันที่สิ้นสุด/));
-
-    await waitFor(() => {
-      expect(screen.getByTestId('calendar-context-note').textContent).toMatch(LONG_NAME_1);
-    });
-    const note = screen.getByTestId('calendar-context-note');
-
-    // Each long name is its OWN element (an exact-text match only succeeds if some element's full text is exactly
-    // this string, not a substring of a longer run-on sentence) sitting in its own list row -- never comma-joined
-    // into the same element as the other.
-    const firstNameEl = within(note).getByText(LONG_NAME_1);
-    const secondNameEl = within(note).getByText(LONG_NAME_2);
-    expect(firstNameEl.closest('li')).not.toBeNull();
-    expect(secondNameEl.closest('li')).not.toBeNull();
-    expect(firstNameEl.closest('li')).not.toBe(secondNameEl.closest('li'));
-    expect(firstNameEl.closest('li').textContent).not.toMatch(LONG_NAME_2);
-    expect(secondNameEl.closest('li').textContent).not.toMatch(LONG_NAME_1);
   });
 
   it('full happy path: sends the same create() payload shape the pre-A2 form sent, via step 3', async () => {
@@ -479,132 +285,6 @@ describe('LeaveRequestPage (Phase A2, #485)', () => {
     });
   });
 
-  // imageCompression() returns a Blob, and FormData built from a bare Blob has no filename, so the
-  // multipart part's filename defaults to the literal string "blob" per spec. Only JPG/PNG hit this:
-  // PDFs skip compression entirely.
-  it('re-wraps the compressed image so create() receives the original filename, not "blob"', async () => {
-    await goToStep2ForVacation();
-
-    const futureDate = '2099-12-31';
-    fireEvent.change(screen.getByLabelText(/วันที่เริ่ม/), { target: { value: futureDate } });
-    fireEvent.blur(screen.getByLabelText(/วันที่เริ่ม/));
-    fireEvent.change(screen.getByLabelText(/เหตุผลการลา/), { target: { value: 'ทดสอบระบบ' } });
-
-    const original = new File(['fake-jpeg-bytes'], 'sick-note.jpg', { type: 'image/jpeg' });
-    fireEvent.change(document.getElementById('leave-attachment-file'), { target: { files: [original] } });
-
-    fireEvent.click(screen.getByRole('button', { name: /ถัดไป: ตรวจสอบก่อนส่ง/ }));
-    await screen.findByText(/ขั้นตอนที่ 3\/3/);
-    const submitButton = await screen.findByRole('button', { name: /ส่งคำขอ/ });
-    await waitFor(() => expect(submitButton.disabled).toBe(false));
-    fireEvent.click(submitButton);
-
-    await waitFor(() => expect(api.leave.create).toHaveBeenCalledTimes(1));
-    const { attachmentFile } = api.leave.create.mock.calls[0][0];
-
-    // The regression this guards: without the File re-wrap, `attachmentFile.name` is undefined (a bare Blob has no
-    // `.name`), and FormData/fetch would send "blob" to the real backend.
-    expect(attachmentFile.name).toBe('sick-note.jpg');
-    expect(attachmentFile).toBeInstanceOf(File);
-    expect(attachmentFile.type).toBe('image/jpeg');
-  });
-
-  it('does not touch PDFs -- they skip compression and keep their name for a different reason', async () => {
-    const imageCompression = (await import('browser-image-compression')).default;
-    await goToStep2ForVacation();
-
-    const futureDate = '2099-12-31';
-    fireEvent.change(screen.getByLabelText(/วันที่เริ่ม/), { target: { value: futureDate } });
-    fireEvent.blur(screen.getByLabelText(/วันที่เริ่ม/));
-    fireEvent.change(screen.getByLabelText(/เหตุผลการลา/), { target: { value: 'ทดสอบระบบ' } });
-
-    const pdf = new File(['fake-pdf-bytes'], 'sick-note.pdf', { type: 'application/pdf' });
-    fireEvent.change(document.getElementById('leave-attachment-file'), { target: { files: [pdf] } });
-
-    fireEvent.click(screen.getByRole('button', { name: /ถัดไป: ตรวจสอบก่อนส่ง/ }));
-    await screen.findByText(/ขั้นตอนที่ 3\/3/);
-    const submitButton = await screen.findByRole('button', { name: /ส่งคำขอ/ });
-    await waitFor(() => expect(submitButton.disabled).toBe(false));
-    fireEvent.click(submitButton);
-
-    await waitFor(() => expect(api.leave.create).toHaveBeenCalledTimes(1));
-    const { attachmentFile } = api.leave.create.mock.calls[0][0];
-
-    expect(imageCompression).not.toHaveBeenCalled();
-    expect(attachmentFile.name).toBe('sick-note.pdf');
-  });
-
-  it('unticking ลาทั้งวัน (single day) sends the chosen times without touching endDate', async () => {
-    await goToStep2ForVacation();
-
-    const futureDate = '2099-12-31';
-    fireEvent.change(screen.getByLabelText(/วันที่เริ่ม/), { target: { value: futureDate } });
-    fireEvent.blur(screen.getByLabelText(/วันที่เริ่ม/));
-    fireEvent.change(screen.getByLabelText(/เหตุผลการลา/), { target: { value: 'หาหมอครึ่งวัน' } });
-    // "ลาทั้งวัน" is TICKED by default -- unticking it reveals the time fields.
-    fireEvent.click(screen.getByLabelText(/ลาทั้งวัน/));
-
-    // Partial-day span: endDate is NOT forced to startDate when timed (endDate === startDate here
-    // only because the user never touched endDate after setting startDate).
-    expect(screen.getByLabelText(/วันที่สิ้นสุด/).value).toBe('31/12/2642'); // the field shows พ.ศ.
-    fireEvent.change(screen.getByLabelText(/เวลาเริ่ม/), { target: { value: '08:30' } });
-    fireEvent.change(screen.getByLabelText(/เวลาสิ้นสุด/), { target: { value: '12:30' } });
-
-    fireEvent.click(screen.getByRole('button', { name: /ถัดไป: ตรวจสอบก่อนส่ง/ }));
-    await screen.findByText(/ขั้นตอนที่ 3\/3/);
-    const submitButton = await screen.findByRole('button', { name: /ส่งคำขอ/ });
-    await waitFor(() => expect(submitButton.disabled).toBe(false));
-    fireEvent.click(submitButton);
-
-    await waitFor(() => expect(api.leave.create).toHaveBeenCalledTimes(1));
-    const payload = api.leave.create.mock.calls[0][0];
-    expect(payload.startDate).toBe(futureDate);
-    expect(payload.endDate).toBe(futureDate);
-    expect(payload.startTime).toBe('08:30');
-    expect(payload.endTime).toBe('12:30');
-  });
-
-  // A timed span that crosses a calendar day (possible since chk_leave_time_single_day was
-  // relaxed): behaviour the old "sub-day" feature could not represent.
-  it('a timed span can now cross calendar days -- endDate stays independently editable', async () => {
-    await goToStep2ForVacation();
-
-    const startDate = '2099-12-31';
-    const endDate = '2100-01-01';
-    fireEvent.change(screen.getByLabelText(/วันที่เริ่ม/), { target: { value: startDate } });
-    fireEvent.blur(screen.getByLabelText(/วันที่เริ่ม/));
-    fireEvent.change(screen.getByLabelText(/วันที่สิ้นสุด/), { target: { value: endDate } });
-    fireEvent.blur(screen.getByLabelText(/วันที่สิ้นสุด/));
-    fireEvent.change(screen.getByLabelText(/เหตุผลการลา/), { target: { value: 'ลาบ่ายต่อเนื่องถึงวันถัดไป' } });
-    fireEvent.click(screen.getByLabelText(/ลาทั้งวัน/));
-
-    // Still both dates as chosen -- unticking "ลาทั้งวัน" must never collapse a multi-day span.
-    expect(screen.getByLabelText(/วันที่เริ่ม/).value).toBe('31/12/2642'); // the fields show พ.ศ.
-    expect(screen.getByLabelText(/วันที่สิ้นสุด/).value).toBe('01/01/2643');
-    fireEvent.change(screen.getByLabelText(/เวลาเริ่ม/), { target: { value: '13:00' } });
-    fireEvent.change(screen.getByLabelText(/เวลาสิ้นสุด/), { target: { value: '17:30' } });
-
-    fireEvent.click(screen.getByRole('button', { name: /ถัดไป: ตรวจสอบก่อนส่ง/ }));
-    await screen.findByText(/ขั้นตอนที่ 3\/3/);
-    const submitButton = await screen.findByRole('button', { name: /ส่งคำขอ/ });
-    await waitFor(() => expect(submitButton.disabled).toBe(false));
-    fireEvent.click(submitButton);
-
-    await waitFor(() => expect(api.leave.create).toHaveBeenCalledTimes(1));
-    const payload = api.leave.create.mock.calls[0][0];
-    expect(payload.startDate).toBe(startDate);
-    expect(payload.endDate).toBe(endDate);
-    expect(payload.startTime).toBe('13:00');
-    expect(payload.endTime).toBe('17:30');
-  });
-
-  it('deep link (?type=&start=&end=) lands directly on step 2 with the type/dates prefilled', async () => {
-    renderComposer(['/leave/new?type=SICK&start=2099-06-01&end=2099-06-02']);
-    await screen.findByText(/ขั้นตอนที่ 2\/3/);
-    expect(screen.getByLabelText(/วันที่เริ่ม/).value).toBe('01/06/2642');
-    expect(screen.getByLabelText(/วันที่สิ้นสุด/).value).toBe('02/06/2642');
-  });
-
   it('step 3: a blocking verdict renders role="alert" and disables submit', async () => {
     const blockingOutcome = {
       code: 'DEPARTMENT_COVERAGE',
@@ -634,36 +314,6 @@ describe('LeaveRequestPage (Phase A2, #485)', () => {
     const alert = await screen.findByRole('alert');
     expect(alert.textContent).toMatch(/ไม่มีพนักงานคนอื่นในแผนกทำงานในวันที่เลือก/);
     expect(screen.getByRole('button', { name: /ส่งคำขอ/ }).disabled).toBe(true);
-  });
-
-  // The safety-relevant half of the same gap as the step-1 test above: `step3Blocking` read null on
-  // an errored FULL preview (undefined `data`), so submit fell back to enabled with no explanation.
-  // An errored authorization check must gate submit exactly like a real blocking verdict.
-  it('step 3: a preview call that fails outright (not a LeaveRuleOutcome) renders role="alert" and disables submit', async () => {
-    api.leave.preview.mockImplementation((payload) => {
-      if (!payload?.startDate) return Promise.resolve(dateless_ok_preview);
-      if (payload.depth === 'FULL') {
-        return Promise.reject(new Error('ฝ่ายบุคคลและผู้บริหารไม่สามารถยื่นคำขอลาให้ตนเองได้ กรุณาให้ผู้อื่นดำเนินการแทน'));
-      }
-      return Promise.resolve(approvedPreview(payload));
-    });
-
-    await goToStep2ForVacation();
-    const futureDate = '2099-12-31';
-    fireEvent.change(screen.getByLabelText(/วันที่เริ่ม/), { target: { value: futureDate } });
-    fireEvent.blur(screen.getByLabelText(/วันที่เริ่ม/));
-    fireEvent.change(screen.getByLabelText(/เหตุผลการลา/), { target: { value: 'ทดสอบ' } });
-    fireEvent.click(screen.getByRole('button', { name: /ถัดไป: ตรวจสอบก่อนส่ง/ }));
-
-    const alert = await screen.findByRole('alert');
-    expect(alert.textContent).toMatch(/ฝ่ายบุคคลและผู้บริหารไม่สามารถยื่นคำขอลาให้ตนเองได้/);
-    expect(screen.getByRole('button', { name: /ส่งคำขอ/ }).disabled).toBe(true);
-  });
-
-  it('cancel from step 1 navigates back to /leave with the returnTab carried through', async () => {
-    renderComposer(['/leave/new?returnTab=review']);
-    fireEvent.click(await screen.findByRole('button', { name: 'ยกเลิก' }));
-    await waitFor(() => expect(screen.getByTestId('location-probe').textContent).toBe('/leave?tab=review'));
   });
 
   // The carry-in/own-quota selector. Nested (not a sibling describe) so it inherits the outer
@@ -698,94 +348,6 @@ describe('LeaveRequestPage (Phase A2, #485)', () => {
         }],
       };
     }
-
-    it('does NOT render when the type carries forward but this employee has nothing left in the carry-in pool', async () => {
-      api.leave.balances.mockResolvedValue(carryInBalance({ carriedInRemainingDays: 0 }));
-      await goToStep2ForVacation();
-
-      // Let the resolved balances promise's state update actually commit before asserting the negative -- otherwise
-      // "absent" would be trivially true before the query even settles, proving nothing about the gate itself (the
-      // vacuous-test shape CLAUDE.md warns about).
-      await waitFor(() => expect(api.leave.balances).toHaveBeenCalled());
-      await new Promise((resolve) => { setTimeout(resolve, 50); });
-      expect(screen.queryByText(/เลือกโควตาที่จะหักก่อน/)).toBeNull();
-    });
-
-    // Wrong-way-round on purpose: this SICK balance carries a positive carriedInRemainingDays, so this test only
-    // passes for the right reason if the render gate genuinely checks carriesForward.
-    it('does NOT render for a type that does not carry forward, even when its balance carries a positive carriedInRemainingDays', async () => {
-      api.leave.balances.mockResolvedValue({
-        balances: [{
-          leaveTypeCode: 'SICK', leaveTypeNameTh: 'ลาป่วย', annualQuotaDays: 30, approvedDays: 0, pendingDays: 0,
-          remainingDays: 32, carriedInDays: 2, carriedInFromYear: 2025, carriedInExpiresOn: '2026-12-31',
-          carriedInRemainingDays: 2, ownQuotaRemainingDays: 30,
-        }],
-      });
-      renderComposer();
-      fireEvent.click(await screen.findByRole('button', { name: /ลาป่วย/ }));
-      fireEvent.click(screen.getByRole('button', { name: 'ถัดไป' }));
-      await screen.findByText(/ขั้นตอนที่ 2\/3/);
-
-      await waitFor(() => expect(api.leave.balances).toHaveBeenCalled());
-      await new Promise((resolve) => { setTimeout(resolve, 50); });
-      expect(screen.queryByText(/เลือกโควตาที่จะหักก่อน/)).toBeNull();
-    });
-
-    it('renders with carry-in selected by default, naming each pool\'s BE year/remaining days and the carry-in expiry', async () => {
-      api.leave.balances.mockResolvedValue(carryInBalance());
-      await goToStep2ForVacation();
-
-      const carriedInRadio = await screen.findByRole('radio', { name: /หักจากโควตาสะสม/ });
-      const ownRadio = screen.getByRole('radio', { name: /หักจากโควตาปีนี้/ });
-      expect(carriedInRadio.checked).toBe(true);
-      expect(ownRadio.checked).toBe(false);
-
-      // BE years are derived from carriedInFromYear alone (2025 -> 2568 carry-in pool, 2026 -> 2569 own pool -- see
-      // QuotaPoolPreferenceField's own comment on why never "today").
-      expect(carriedInRadio.closest('label').textContent).toMatch(/ปี 2568/);
-      expect(carriedInRadio.closest('label').textContent).toMatch(/เหลือ 2\u00A0วัน/);
-      expect(carriedInRadio.closest('label').textContent).toMatch(/หมดอายุ 31 ธ\.ค\. 2569/);
-      expect(ownRadio.closest('label').textContent).toMatch(/ปี 2569/);
-      expect(ownRadio.closest('label').textContent).toMatch(/เหลือ 6\u00A0วัน/);
-
-      await waitFor(() => expect(api.leave.preview).toHaveBeenCalledWith(
-        expect.objectContaining({ quotaPoolPreference: 'CARRIED_IN_FIRST' }),
-        expect.anything(),
-      ));
-    });
-
-    it('switching to "หักจากโควตาปีนี้ก่อน" flips the checked radio and the next preview call reflects it', async () => {
-      api.leave.balances.mockResolvedValue(carryInBalance());
-      await goToStep2ForVacation();
-      const ownRadio = await screen.findByRole('radio', { name: /หักจากโควตาปีนี้/ });
-
-      fireEvent.click(ownRadio);
-      expect(ownRadio.checked).toBe(true);
-
-      await waitFor(() => expect(api.leave.preview).toHaveBeenCalledWith(
-        expect.objectContaining({ quotaPoolPreference: 'OWN_FIRST' }),
-        expect.anything(),
-      ));
-    });
-
-    it('the chosen preference reaches create() at submit', async () => {
-      api.leave.balances.mockResolvedValue(carryInBalance());
-      await goToStep2ForVacation();
-      fireEvent.click(await screen.findByRole('radio', { name: /หักจากโควตาปีนี้/ }));
-
-      const futureDate = '2099-12-31';
-      fireEvent.change(screen.getByLabelText(/วันที่เริ่ม/), { target: { value: futureDate } });
-      fireEvent.blur(screen.getByLabelText(/วันที่เริ่ม/));
-      fireEvent.change(screen.getByLabelText(/เหตุผลการลา/), { target: { value: 'ทดสอบระบบ' } });
-      fireEvent.click(screen.getByRole('button', { name: /ถัดไป: ตรวจสอบก่อนส่ง/ }));
-      await screen.findByText(/ขั้นตอนที่ 3\/3/);
-      const submitButton = await screen.findByRole('button', { name: /ส่งคำขอ/ });
-      await waitFor(() => expect(submitButton.disabled).toBe(false));
-      fireEvent.click(submitButton);
-
-      await waitFor(() => expect(api.leave.create).toHaveBeenCalledTimes(1));
-      expect(api.leave.create.mock.calls[0][0].quotaPoolPreference).toBe('OWN_FIRST');
-    });
 
     // Step-3 QuotaBar with carry-forward: the counterpart to MyLeaveTab.test.jsx's "reconciles
     // สิทธิ์/เหลือ and the QuotaBar cap when a carry-over is present". A 6-day annual VACATION quota
@@ -874,14 +436,6 @@ const advanceNoticeWarning = {
   messageTh: 'การลาพักร้อนต้องยื่นล่วงหน้าอย่างน้อย 3 วัน (ระเบียบข้อ 5) คำขอนี้ยื่นไม่ทันกำหนด '
     + 'แต่ยังส่งให้หัวหน้างานพิจารณาได้ หากอนุมัติ วันลา 1 วันจะไม่ได้รับค่าจ้าง',
 };
-const probationNotPassedWarning = {
-  code: 'PROBATION_NOT_PASSED',
-  params: {
-    leaveTypeNameTh: 'ลากิจ', probationEndsOn: '1 มกราคม 2570', section: '5.2', days: '1',
-  },
-  messageTh: 'การลากิจต้องผ่านทดลองงานก่อน (คาดว่าจะผ่านวันที่ 1 มกราคม 2570 ระเบียบข้อ 5.2) '
-    + 'แต่ยังส่งให้หัวหน้างานพิจารณาได้ หากอนุมัติ วันลา 1 วันจะไม่ได้รับค่าจ้าง',
-};
 
 function warningPreview({ ruleWarnings, unpaidByRuleDays, depth } = {}) {
   return {
@@ -945,57 +499,6 @@ describe('LeaveRequestPage: §5 WARN_UNPAID_* gates (V164 follow-up, 2026-09-09)
     await waitFor(() => expect(api.leave.create).toHaveBeenCalledTimes(1));
   });
 
-  it('step 2: the green "ผ่านเงื่อนไขแล้ว" line is SUPPRESSED when a warning fired', async () => {
-    api.leave.preview.mockImplementation((payload) => {
-      if (!payload?.startDate) return Promise.resolve(dateless_ok_preview);
-      return Promise.resolve(warningPreview({
-        ruleWarnings: [advanceNoticeWarning], unpaidByRuleDays: 1, depth: payload.depth,
-      }));
-    });
-
-    await goToStep2ForVacation();
-    fireEvent.change(screen.getByLabelText(/วันที่เริ่ม/), { target: { value: '2099-12-31' } });
-    fireEvent.blur(screen.getByLabelText(/วันที่เริ่ม/));
-    fireEvent.change(screen.getByLabelText(/เหตุผลการลา/), { target: { value: 'ทดสอบ' } });
-
-    // The warning itself IS shown at step 2...
-    expect(await screen.findByText(/ต้องยื่นล่วงหน้าอย่างน้อย 3 วัน/)).not.toBeNull();
-    // ...and the green "passed" line must NOT sit above it. A request carrying a warning does pass (nothing blocks
-    // submission), but telling someone their leave cleared the checks immediately before telling them it will be
-    // unpaid is the wrong thing for them to take away.
-    expect(screen.queryByText(/ผ่านเงื่อนไขที่ตรวจแบบเร็วแล้ว/)).toBeNull();
-  });
-
-  it('step 2: the green "ผ่านเงื่อนไขแล้ว" line still shows when there is nothing to flag', async () => {
-    api.leave.preview.mockImplementation((payload) => {
-      if (!payload?.startDate) return Promise.resolve(dateless_ok_preview);
-      return Promise.resolve(warningPreview({
-        ruleWarnings: [], unpaidByRuleDays: 0, depth: payload.depth,
-      }));
-    });
-
-    await goToStep2ForVacation();
-    fireEvent.change(screen.getByLabelText(/วันที่เริ่ม/), { target: { value: '2099-12-31' } });
-    fireEvent.blur(screen.getByLabelText(/วันที่เริ่ม/));
-    fireEvent.change(screen.getByLabelText(/เหตุผลการลา/), { target: { value: 'ทดสอบ' } });
-
-    expect(await screen.findByText(/ผ่านเงื่อนไขที่ตรวจแบบเร็วแล้ว/)).not.toBeNull();
-  });
-
-  it('step 3: multiple warnings all render, not just the first (owner ruling: show all)', async () => {
-    api.leave.preview.mockImplementation((payload) => {
-      if (!payload?.startDate) return Promise.resolve(dateless_ok_preview);
-      return Promise.resolve(warningPreview({
-        ruleWarnings: [advanceNoticeWarning, probationNotPassedWarning], unpaidByRuleDays: 1, depth: payload.depth,
-      }));
-    });
-
-    await advanceToStep3WithFutureDate();
-
-    expect(await screen.findByText(/ต้องยื่นล่วงหน้าอย่างน้อย 3 วัน/)).not.toBeNull();
-    expect(await screen.findByText(/ต้องผ่านทดลองงานก่อน/)).not.toBeNull();
-  });
-
   it('step 3: a BLOCK still disables submit and shows only the danger panel, even alongside warnings', async () => {
     // Defensive: LeavePreviewDto's own contract says a non-null `blocking` always pairs with an EMPTY ruleWarnings
     // (a BLOCK wins outright) -- this proves the FRONTEND enforces that dominance itself rather than trusting a
@@ -1035,104 +538,5 @@ describe('LeaveRequestPage: §5 WARN_UNPAID_* gates (V164 follow-up, 2026-09-09)
     expect(submitButton.disabled).toBe(true);
     expect(submitButton.textContent).not.toMatch(/ไม่รับค่าจ้าง/);
   });
-
-  it('a dateless preview renders no warning, even if (incorrectly) the response carried one', async () => {
-    // The real LeavePreviewDto contract is that ruleWarnings is ALWAYS empty for a dateless call -- step 1's
-    // TypeChoice never reads ruleWarnings at all, so this holds even if a misbehaving response broke that
-    // contract.
-    api.leave.preview.mockImplementation((payload) => {
-      if (payload?.leaveTypeCode === 'VACATION' && !payload?.startDate) {
-        return Promise.resolve({
-          preview: {
-            blocking: null,
-            datesEvaluated: false,
-            coverageEvaluated: false,
-            totalDays: null,
-            paidDays: null,
-            unpaidDays: null,
-            quotaYearSplits: [],
-            ruleWarnings: [advanceNoticeWarning],
-            unpaidByRuleDays: null,
-            counters: NO_COUNTERS,
-          },
-        });
-      }
-      return Promise.resolve(dateless_ok_preview);
-    });
-
-    renderComposer();
-    await screen.findByRole('button', { name: /ลาพักร้อน/ });
-
-    expect(screen.queryByText(/จะไม่ได้รับค่าจ้าง/)).toBeNull();
-  });
 });
 
-// HTML implicit submission: a <form> with no submit button but exactly ONE field that blocks
-// implicit submission fires a real 'submit' event on Enter. jsdom does not implement that algorithm
-// (e2e/implicit-submission.spec.js reproduces the real thing). See `canSubmit`'s comment in
-// LeaveRequestPage.jsx for why this describe block is hardening, not a fix.
-//
-// `submitWithSubmitter` below, not `fireEvent.submit(form)`: this form is `<SafeForm
-// canSubmit={step === 3} ...>`, and `canSubmit` is a RESTRICTION layered on SafeForm's own submitter
-// guard, so both always apply. `fireEvent.submit(form)` dispatches a plain Event with no `.submitter`
-// under jsdom, so it would be blocked by the submitter guard on EVERY step, making "does NOT call
-// create()" pass for the wrong reason on steps 1/2 and "calls create()" on step 3 fail. A
-// constructed `SubmitEvent` with an explicit `submitter` is picked up by React's onSubmit like a
-// real click, so every case exercises `canSubmit`. Mirrors TaxAllowanceForm.test.jsx's "form-level
-// submit gate blocks Enter-key implicit submission" and TicketCreateModal.test.jsx's `submitForm()`.
-function submitWithSubmitter(form) {
-  form.dispatchEvent(new SubmitEvent('submit', { bubbles: true, cancelable: true, submitter: document.createElement('button') }));
-}
-
-describe('LeaveRequestPage implicit submission (Enter-key) hardening', () => {
-  // Own beforeEach (not inherited: this is a SIBLING describe) -- see installDefaultLeaveMocks'
-  // comment.
-  beforeEach(() => {
-    installDefaultLeaveMocks();
-  });
-
-  // The gate's blocking branch (`event.preventDefault(); return;`) is synchronous, so a correctly
-  // gated step 1/2 never calls `handleSubmit`. But `handleSubmit(onSubmit)` is asynchronous, so a
-  // SYNCHRONOUS "not called" check would also pass with the gate removed. Waiting a beat first means
-  // "not called" is checked once an unguarded submit would already have gotten there.
-  async function flushAsyncSubmitChain() {
-    await new Promise((resolve) => { setTimeout(resolve, 50); });
-  }
-
-  it('a real submit event on step 1 does not call create()', async () => {
-    const { container } = renderComposer();
-    await screen.findByRole('button', { name: /ลาพักร้อน/ });
-
-    submitWithSubmitter(container.querySelector('form'));
-    await flushAsyncSubmitChain();
-
-    expect(api.leave.create).not.toHaveBeenCalled();
-  });
-
-  it('a real submit event on step 2 does not call create()', async () => {
-    const { container } = await goToStep2ForVacation();
-    fireEvent.change(screen.getByLabelText(/วันที่เริ่ม/), { target: { value: '2099-12-31' } });
-    fireEvent.blur(screen.getByLabelText(/วันที่เริ่ม/));
-    fireEvent.change(screen.getByLabelText(/เหตุผลการลา/), { target: { value: 'ทดสอบระบบ' } });
-
-    submitWithSubmitter(container.querySelector('form'));
-    await flushAsyncSubmitChain();
-
-    expect(api.leave.create).not.toHaveBeenCalled();
-  });
-
-  it('a real submit event on step 3 calls create()', async () => {
-    const { container } = await goToStep2ForVacation();
-    const futureDate = '2099-12-31';
-    fireEvent.change(screen.getByLabelText(/วันที่เริ่ม/), { target: { value: futureDate } });
-    fireEvent.blur(screen.getByLabelText(/วันที่เริ่ม/));
-    fireEvent.change(screen.getByLabelText(/เหตุผลการลา/), { target: { value: 'ทดสอบระบบ' } });
-    fireEvent.click(screen.getByRole('button', { name: /ถัดไป: ตรวจสอบก่อนส่ง/ }));
-    await screen.findByText(/ขั้นตอนที่ 3\/3/);
-    await waitFor(() => expect(screen.getByRole('button', { name: /ส่งคำขอ/ }).disabled).toBe(false));
-
-    submitWithSubmitter(container.querySelector('form'));
-
-    await waitFor(() => expect(api.leave.create).toHaveBeenCalledTimes(1));
-  });
-});

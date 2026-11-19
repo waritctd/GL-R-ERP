@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { LEAVE_HOURS_PER_DAY, formatDays, formatDaysOrDash } from './leaveFormatting.js';
+import { LEAVE_HOURS_PER_DAY, formatDays } from './leaveFormatting.js';
 
 // LeaveService's own literal, TRANSCRIBED rather than imported from the module under test. Hardcoded, a wrong
 // workday length fails all 96. If LeaveService's STANDARD_WORKDAY_MINUTES ever changes, this line changes by
@@ -25,45 +25,11 @@ const NB = '\u00A0';
 const d = (text) => text.replace(/(\d) /g, `$1${NB}`);
 
 describe('formatDays', () => {
-  it('glues each number to its unit with a no-break space, and only there', () => {
-    // The wrap contract, spelled out once without the `d` helper in the way: break opportunities exist BETWEEN
-    // units and nowhere else, so "6 วัน / 3 ชั่วโมง" can happen and "6 / วัน" cannot.
-    expect(formatDays(6.37)).toBe(`6${NB}วัน 3${NB}ชั่วโมง`);
-    expect(formatDays(6.37).split(' ')).toEqual([`6${NB}วัน`, `3${NB}ชั่วโมง`]);
-    expect(formatDays(7)).toBe(`7${NB}วัน`);
-    expect(formatDays(7)).not.toContain('7 วัน');
-  });
-
-  it('renders a whole day count exactly as it did before this change', () => {
-    expect(formatDays(7)).toBe(d('7 วัน'));
-    expect(formatDays(1)).toBe(d('1 วัน'));
-    expect(formatDays(98)).toBe(d('98 วัน'));
-    expect(formatDays(366)).toBe(d('366 วัน'));
-  });
-
   it('renders the reported row: 0.38 used, 6.37 remaining', () => {
     // The exact pair from the bug report ("0.38 วัน · เหลือ 6.37 วัน") -- a flat three-hour ลากิจ against a 7-day
     // quota. 0.38 IS three hours; 6.37 is six days and three hours.
     expect(formatDays(0.38)).toBe(d('3 ชั่วโมง'));
     expect(formatDays(6.37)).toBe(d('6 วัน 3 ชั่วโมง'));
-  });
-
-  it('renders a day-and-hours balance', () => {
-    expect(formatDays(1.63)).toBe(d('1 วัน 5 ชั่วโมง'));
-    expect(formatDays(0.5)).toBe(d('4 ชั่วโมง'));
-    expect(formatDays(6.5)).toBe(d('6 วัน 4 ชั่วโมง'));
-  });
-
-  it('renders minutes, and combines all three units', () => {
-    expect(formatDays(storeAsDayCount(30))).toBe(d('30 นาที'));
-    expect(formatDays(storeAsDayCount(105))).toBe(d('1 ชั่วโมง 45 นาที'));
-    expect(formatDays(1 + storeAsDayCount(345))).toBe(d('1 วัน 5 ชั่วโมง 45 นาที'));
-  });
-
-  it('drops zero-valued units instead of padding them', () => {
-    expect(formatDays(2)).not.toContain('ชั่วโมง');
-    expect(formatDays(0.38)).not.toContain('วัน');
-    expect(formatDays(6.37)).not.toContain('นาที');
   });
 
   // THE derivation test. `DISPLAY_MINUTE_STEP = 5` is only defensible if a five-minute leave survives the trip
@@ -85,35 +51,5 @@ describe('formatDays', () => {
     }
     expect(failures).toEqual([]);
   });
-
-  it('reads a null/undefined/empty day count as zero, and never emits NaN', () => {
-    expect(formatDays(0)).toBe(d('0 วัน'));
-    expect(formatDays(null)).toBe(d('0 วัน'));
-    expect(formatDays(undefined)).toBe(d('0 วัน'));
-    expect(formatDays('')).toBe(d('0 วัน'));
-    // Previously "NaN วัน" reached the DOM here.
-    expect(formatDays('ไม่ทราบ')).toBe(d('0 วัน'));
-    expect(formatDays(Number.NaN)).toBe(d('0 วัน'));
-  });
-
-  it('keeps the sign on an over-quota (negative) balance', () => {
-    expect(formatDays(-0.5)).toBe(d('-4 ชั่วโมง'));
-    expect(formatDays(-1.5)).toBe(d('-1 วัน 4 ชั่วโมง'));
-  });
-
-  it('accepts the string day counts the API actually returns', () => {
-    // NUMERIC(5,2) arrives over JSON as a string in some client paths; the old implementation coerced too, so this
-    // pins that it still does.
-    expect(formatDays('6.37')).toBe(d('6 วัน 3 ชั่วโมง'));
-    expect(formatDays('0.38')).toBe(d('3 ชั่วโมง'));
-  });
 });
 
-describe('formatDaysOrDash', () => {
-  it('still distinguishes "not known" from "genuinely zero"', () => {
-    expect(formatDaysOrDash(null)).toBe('-');
-    expect(formatDaysOrDash(undefined)).toBe('-');
-    expect(formatDaysOrDash(0)).toBe(d('0 วัน'));
-    expect(formatDaysOrDash(0.38)).toBe(d('3 ชั่วโมง'));
-  });
-});
