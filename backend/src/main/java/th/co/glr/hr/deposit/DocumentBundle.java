@@ -93,8 +93,8 @@ public class DocumentBundle {
             try {
                 Long quotationId = docs.findNewEngineQuotationId(ticketId, quotationNumber).orElse(null);
                 if (quotationId == null) {
-                    log.warn("Quotation {} of ticket {} was not found for the PDF bundle", quotationNumber, ticketId);
-                    addOnce(skipped, "quotation");
+                    // a legacy / old-engine reference: nothing to attach, which is not a skip
+                    log.info("Quotation {} of ticket {} is not a new-engine quotation; nothing to attach", quotationNumber, ticketId);
                 } else {
                     out = QuotationRenderer.appendPdf(out,
                         quotations.renderPdfForDealDocument(quotationId, ticketId, actor));

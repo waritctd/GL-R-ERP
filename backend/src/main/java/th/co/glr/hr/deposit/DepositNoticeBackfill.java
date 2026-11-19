@@ -12,8 +12,8 @@ import org.springframework.stereotype.Component;
 /**
  * Drafts saved before the ส่วนลด / size-line release carry the old label and a bare description. For an untouched
  * DRAFT (its items' seq and amount equal its referenced quotation's lines exactly) this rewrites each item that still holds
- * pre-release values (the bare description and a null / legacy label) from the quotation line. An edited item or draft, a draft whose quotation is not found,
- * and every non-DRAFT notice are left alone; a second run rewrites nothing.
+ * pre-release values (the bare description and no label) from the quotation line. An edited item or draft, a draft whose quotation is not found,
+ * every non-DRAFT notice and every draft saved since V228 ran (updated_at past its installed_on) are left alone; a second run rewrites nothing.
  */
 // ponytail: delete this class one release after deploy; by then every pre-release DRAFT is refreshed or edited.
 @Component
@@ -45,7 +45,10 @@ public class DepositNoticeBackfill implements ApplicationRunner {
         int rewritten = 0;
         List<Map<String, Object>> drafts = jdbc.queryForList(
             "SELECT deposit_notice_id, ticket_id, reference FROM sales.deposit_notice"
-                + " WHERE status = 'DRAFT' AND reference IS NOT NULL", Map.of());
+                + " WHERE status = 'DRAFT' AND reference IS NOT NULL"
+                // one-shot marker: a save bumps updated_at, so only drafts untouched since V228 ran qualify
+                + " AND updated_at <= (SELECT installed_on FROM hr.flyway_schema_history WHERE version = '228')",
+            Map.of());
         for (Map<String, Object> d : drafts) {
             long id = ((Number) d.get("deposit_notice_id")).longValue();
             Long quotationId = docs.findNewEngineQuotationId(((Number) d.get("ticket_id")).longValue(),
@@ -63,10 +66,10 @@ public class DepositNoticeBackfill implements ApplicationRunner {
             for (int i = 0; i < items.size(); i++) {
                 Map<String, Object> item = items.get(i);
                 var line = lines.get(i);
-                // Only a pre-release item is rewritten: the bare description (no size line) and a null or legacy label.
-                // Anything else was typed by a user (or already refreshed) and stays.
+                // Only a pre-release item is rewritten: the bare description (no size line) and no label (V228 nulled
+                // the legacy shapes). Anything else was typed by a user (or already refreshed) and stays.
                 boolean preRelease = line.description().split("\n", 2)[0].equals(item.get("description"))
-                    && isLegacyLabel((String) item.get("discount_label"));
+                    && item.get("discount_label") == null;
                 boolean changes = !java.util.Objects.equals(item.get("description"), line.description())
                     || !java.util.Objects.equals(item.get("discount_label"), line.discountLabel());
                 if (!preRelease || !changes) {
@@ -80,11 +83,6 @@ public class DepositNoticeBackfill implements ApplicationRunner {
             }
         }
         return rewritten;
-    }
-
-    private static boolean isLegacyLabel(String label) {
-        return label == null || (label.startsWith("ส่วนลด") && label.endsWith("ต่อหน่วย"))
-            || label.matches("^ลด [0-9].*");
     }
 
     private static boolean matches(List<Map<String, Object>> items, List<DepositNoticeRepository.QuotationInvoiceLine> lines) {
