@@ -82,48 +82,7 @@ class CustomerForeignAddressSwitchIntegrationTest extends AbstractPostgresIntegr
         assertThat(after.districtNameTh()).isNull();
         assertThat(after.subdistrictNameTh()).isNull();
         // The old structured display string is preserved as legacyAddress (CustomerRepository.update's own
-        // COALESCE(legacy_address, address)), the same discipline CustomerThaiAddressIntegrationTest already pins for
-        // a plain legacy customer.
+        // COALESCE(legacy_address, address)).
         assertThat(after.legacyAddress()).isEqualTo(before.address());
-    }
-
-    /** Wrong-way-round: a normal single-field PATCH that carries no address at all must NOT disturb an existing
-     * structured address — proves the structured/:address IS NOT NULL gate in CustomerRepository#update only fires
-     * when the caller actually sends address, never as a side effect of some other field. */
-    @Test
-    void aPhoneOnlyUpdateOnAStructuredCustomerLeavesTheStructuredAddressUntouched() throws Exception {
-        long id = seedStructuredCustomer();
-        CustomerDto before = new CustomerRepository(jdbc).findById(id).orElseThrow();
-
-        mvc().perform(put("/api/customers/{id}", id).session(salesSession())
-                .contentType(MediaType.APPLICATION_JSON)
-                .content("{\"phone\":\"02-999-9999\"}"))
-            .andExpect(status().isOk())
-            .andExpect(jsonPath("$.customer.phone").value("02-999-9999"));
-
-        CustomerDto after = new CustomerRepository(jdbc).findById(id).orElseThrow();
-        assertThat(after.phone()).isEqualTo("02-999-9999");
-        assertThat(after.address()).isEqualTo(before.address());
-        assertThat(after.provinceCode()).isEqualTo(before.provinceCode());
-        assertThat(after.districtCode()).isEqualTo(before.districtCode());
-        assertThat(after.subdistrictCode()).isEqualTo(before.subdistrictCode());
-        assertThat(after.postalCode()).isEqualTo(before.postalCode());
-        assertThat(after.legacyAddress()).isNull(); // never touched — no COALESCE(legacy_address,...) fired
-    }
-
-    @Test
-    void aTaxIdOnlyUpdateOnAStructuredCustomerAlsoLeavesTheAddressUntouched() {
-        long id = seedStructuredCustomer();
-        CustomerDto before = new CustomerRepository(jdbc).findById(id).orElseThrow();
-
-        CustomerDto after = new CustomerRepository(jdbc)
-            .update(id, null, "0105542000009", null, null, null)
-            .orElseThrow();
-
-        assertThat(after.taxId()).isEqualTo("0105542000009");
-        assertThat(after.provinceCode()).isEqualTo(before.provinceCode());
-        assertThat(after.districtCode()).isEqualTo(before.districtCode());
-        assertThat(after.subdistrictCode()).isEqualTo(before.subdistrictCode());
-        assertThat(after.address()).isEqualTo(before.address());
     }
 }

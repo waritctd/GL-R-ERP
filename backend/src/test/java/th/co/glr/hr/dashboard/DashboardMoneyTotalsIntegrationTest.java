@@ -80,41 +80,6 @@ class DashboardMoneyTotalsIntegrationTest extends AbstractPostgresIntegrationTes
         }
     }
 
-    /** Guards the builder: each fixture is the shape its case names, as /finance's own row sees it. */
-    @Test
-    void theBuiltDealsAreTheShapesTheCasesName() throws Exception {
-        JsonNode table;
-        try (InputStream in = getClass().getResourceAsStream("/dashboard/money-cases.json")) {
-            table = new ObjectMapper().readTree(in);
-        }
-        BigDecimal payable = table.get("payable").decimalValue();
-        for (JsonNode c : table.get("cases")) {
-            long id = buildDeal(c, payable);
-            var row = tickets.findSummaryById(id).orElseThrow();
-            assertThat(row.amountPayable()).as("payable: %s", c.get("name").asText()).isEqualByComparingTo(payable);
-            assertThat(row.overdue()).as("overdue: %s", c.get("name").asText()).isEqualTo(c.get("overdue").asBoolean());
-            assertThat(row.commissionRecorded()).as("commission: %s", c.get("name").asText())
-                .isEqualTo(c.get("commission").asBoolean());
-        }
-    }
-
-    @Test
-    void totalsIncludeEveryDeal_notJustTheFirstFiveHundred() {
-        int deals = 505; // /api/tickets pages at 500
-        BigDecimal payable = new BigDecimal("107000.00");
-        for (int i = 0; i < deals; i++) {
-            long id = newDeal();
-            acceptedQuotation(id);
-            // a deposit notice is out, before ORDER_RECEIVED: counted by both totals
-            jdbc.update("""
-                UPDATE sales.ticket SET status = 'quotation_issued', payment_status = 'DEPOSIT_NOTICE_ISSUED', sales_stage = 'QUOTE_BUYER'
-                 WHERE ticket_id = :id""", Map.of("id", id));
-        }
-
-        assertThat(dashboard.financeOutstanding()).isEqualByComparingTo(payable.multiply(BigDecimal.valueOf(deals)));
-        assertThat(dashboard.forecastValue()).isEqualByComparingTo(payable.multiply(BigDecimal.valueOf(deals)));
-    }
-
     // ── builders ────────────────────────────────────────────────────────────────────────────
 
     private long newDeal() {

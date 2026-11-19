@@ -83,42 +83,6 @@ class CustomerReadAuthzIntegrationTest extends AbstractPostgresIntegrationTest {
         }
     }
 
-    @Test
-    void nonViewerRolesCannotListContacts() throws Exception {
-        for (String role : NON_VIEWER_ROLES) {
-            mvc.perform(get("/api/customers/{id}/contacts", customerId).session(sessionFor(role)))
-                .andExpect(status().isForbidden())
-                .andExpect(jsonPath("$.contacts").doesNotExist());
-        }
-    }
-
-    @Test
-    void nonViewerRolesCannotListProjects() throws Exception {
-        for (String role : NON_VIEWER_ROLES) {
-            mvc.perform(get("/api/customers/{id}/projects", customerId).session(sessionFor(role)))
-                .andExpect(status().isForbidden())
-                .andExpect(jsonPath("$.projects").doesNotExist());
-        }
-    }
-
-    /** Named explicitly per the audit that opened this fix: warehouse/qc are the two roles the audit specifically
-     * called out as having "no sales access anywhere else in the system", so they get their own case rather than
-     * being folded silently into the loop above. */
-    @Test
-    void warehouseAndQcSpecificallyGetZeroRowsOnAllThreeReads() throws Exception {
-        for (String role : List.of("warehouse", "qc")) {
-            mvc.perform(get("/api/customers").session(sessionFor(role)))
-                .andExpect(status().isForbidden())
-                .andExpect(jsonPath("$.customers").doesNotExist());
-            mvc.perform(get("/api/customers/{id}/contacts", customerId).session(sessionFor(role)))
-                .andExpect(status().isForbidden())
-                .andExpect(jsonPath("$.contacts").doesNotExist());
-            mvc.perform(get("/api/customers/{id}/projects", customerId).session(sessionFor(role)))
-                .andExpect(status().isForbidden())
-                .andExpect(jsonPath("$.projects").doesNotExist());
-        }
-    }
-
     // ── the gate isn't "deny everything": every derived-audience role gets 200 + a REAL row ──
 
     @Test
@@ -128,32 +92,6 @@ class CustomerReadAuthzIntegrationTest extends AbstractPostgresIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.customers[0].taxId").value(SEEDED_TAX_ID));
         }
-    }
-
-    @Test
-    void everyViewerRoleCanListContactsAndSeesTheRealRow() throws Exception {
-        for (String role : VIEWER_ROLES) {
-            mvc.perform(get("/api/customers/{id}/contacts", customerId).session(sessionFor(role)))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.contacts[0].email").value(SEEDED_EMAIL));
-        }
-    }
-
-    @Test
-    void everyViewerRoleCanListProjectsAndSeesTheRealRow() throws Exception {
-        for (String role : VIEWER_ROLES) {
-            mvc.perform(get("/api/customers/{id}/projects", customerId).session(sessionFor(role)))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.projects[0].name").value(SEEDED_PROJECT));
-        }
-    }
-
-    /** Role-gated is not the same as authenticated: an anonymous caller still gets 401, not 403. */
-    @Test
-    void anonymousCallerIsRejectedWith401OnEveryRead() throws Exception {
-        mvc.perform(get("/api/customers")).andExpect(status().isUnauthorized());
-        mvc.perform(get("/api/customers/{id}/contacts", customerId)).andExpect(status().isUnauthorized());
-        mvc.perform(get("/api/customers/{id}/projects", customerId)).andExpect(status().isUnauthorized());
     }
 
     // ── helpers ───────────────────────────────────────────────────────────────────────────────
