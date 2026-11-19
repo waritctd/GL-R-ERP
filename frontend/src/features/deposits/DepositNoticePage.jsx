@@ -665,7 +665,7 @@ export function DepositNoticePage({ ticketId, onBack, showToast }) {
               <Button variant="primary" onClick={handleIssue} disabled={saving}>ออกเอกสาร</Button>
             ) : null}
             {locked ? (
-              <Button variant="secondary" onClick={() => setEditingIssued(true)}>แก้ไข</Button>
+              <Button variant="secondary" onClick={() => setEditingIssued(true)}>แก้ไขฉบับปัจจุบัน</Button>
             ) : null}
           </>
         ) : null}

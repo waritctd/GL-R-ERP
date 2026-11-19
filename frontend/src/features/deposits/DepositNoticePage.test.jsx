@@ -983,7 +983,7 @@ describe('DepositNoticePage', () => {
     });
     renderDepositNoticePage();
 
-    fireEvent.click(await screen.findByRole('button', { name: 'แก้ไข' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'แก้ไขฉบับปัจจุบัน' }));
     const percentInput = await screen.findByLabelText('มัดจำ %');
     expect(percentInput.disabled).toBe(false);
     fireEvent.change(percentInput, { target: { value: '40' } });
@@ -1001,7 +1001,7 @@ describe('DepositNoticePage', () => {
     api.depositNotices.listByTicket.mockResolvedValue({ depositNotices: [validDraftDoc] });
     const { unmount } = renderDepositNoticePage();
     await screen.findByDisplayValue('บริษัท ทดสอบ จำกัด');
-    expect(screen.queryByRole('button', { name: 'แก้ไข' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'แก้ไขฉบับปัจจุบัน' })).toBeNull();
     unmount();
 
     api.depositNotices.listByTicket.mockResolvedValue({
@@ -1010,7 +1010,7 @@ describe('DepositNoticePage', () => {
     renderDepositNoticePage();
     await waitFor(() => expect(api.depositNotices.listByTicket).toHaveBeenCalledTimes(2));
     await screen.findByRole('button', { name: /สร้าง/ }); // nothing live: the empty state, never an editable notice
-    expect(screen.queryByRole('button', { name: 'แก้ไข' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'แก้ไขฉบับปัจจุบัน' })).toBeNull();
   });
 
   it('shows the deposit percent read-only once the notice is issued', async () => {
