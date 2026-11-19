@@ -204,12 +204,15 @@ public final class DealQuotationRenderAdapter {
         // printedBy/salesRep each fall back to the display override when the corresponding
         // *DisplayId is set (V179) — see #printedByName/#salesRepDisplayNameOrReal. approvedBy
         // is untouched: the override never covers the approver slot.
+        boolean ruleApproved = quotation.approvalBasis() != null;
         Signatories signatories = new Signatories(
             printedByName(quotation, english),
             salesRepDisplayNameOrReal(quotation, english),
-            displayName(quotation.approvedByName(), quotation.approvedByNameEn(), english),
+            // A rule-approved add-on quotation (V232) prints no person in the approver slot: no name, no signature.
+            ruleApproved ? "อนุมัติตามราคาเดิม " + quotation.approvalSourceNumbers()
+                : displayName(quotation.approvedByName(), quotation.approvedByNameEn(), english),
             null,
-            approverSignaturePng, approverSignatureMime,
+            ruleApproved ? null : approverSignaturePng, ruleApproved ? null : approverSignatureMime,
             bangkokDate(quotation.createdAt()), bangkokDate(quotation.submittedAt()), bangkokDate(quotation.approvedAt()),
             printedBySignaturePng, printedBySignatureMime,
             salesRepSignaturePng, salesRepSignatureMime);

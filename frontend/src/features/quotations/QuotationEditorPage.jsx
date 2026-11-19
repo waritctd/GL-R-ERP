@@ -58,6 +58,7 @@ import {
   itemInputFromRow, newItemClientId, QuotationItemRow,
 } from './QuotationItemRow.jsx';
 import { QuotationPlainItemRow } from './QuotationPlainItemRow.jsx';
+import { ApprovalBasisPill } from './ApprovalBasisPill.jsx';
 import { ApprovedItemsPicker } from './ApprovedItemsPicker.jsx';
 import { reusesApprovedPricesOnly, rowFromApprovedItem } from './approvedItemsReuse.js';
 import { QuotationAdjustmentRow } from './QuotationAdjustmentRow.jsx';
@@ -537,14 +538,18 @@ export function QuotationEditorPage({ user, showToast }) {
   // An add-on's deposit % follows the first order and needs approval to change: a NEW add-on quotation starts on it.
   const depositPresetRef = useRef(false);
   const sourceDepositPercent = reusableQuery.data?.sourceDepositPercent ?? null;
+  const sourceTerms = reusableQuery.data?.sourceTerms ?? null;
   useEffect(() => {
     if (id || depositPresetRef.current || sourceDepositPercent == null) return;
     depositPresetRef.current = true;
+    const first = sourceTerms ?? {};
     setTerms((t) => ({
-      ...t, noDeposit: false, depositPercent: sourceDepositPercent,
+      ...t, noDeposit: Number(sourceDepositPercent) === 0, depositPercent: sourceDepositPercent,
       depositPercentCustom: !DEPOSIT_PERCENT_PRESETS.includes(Number(sourceDepositPercent)),
+      remainderMode: first.remainderMode ?? t.remainderMode, creditDays: first.creditDays ?? t.creditDays,
+      fullPaymentTerm: first.fullPaymentTerm ?? t.fullPaymentTerm,
     }));
-  }, [id, sourceDepositPercent]);
+  }, [id, sourceDepositPercent, sourceTerms]);
   const [dirty, setDirtyState] = useState(false);
   // A monotonically increasing counter of "the form changed" events, bumped on every setDirty(true)
   // (once per genuine edit, never per render). A save's onSuccess captures it when it BUILT its
@@ -1172,8 +1177,8 @@ export function QuotationEditorPage({ user, showToast }) {
   const provisionalVat = Math.round(provisionalSubtotal * vatRateForLanguage(docSettings.documentLanguage) * 100) / 100;
   const provisionalGrand = provisionalSubtotal + provisionalVat;
   const reusesApprovedOnly = isAddOn && reusesApprovedPricesOnly({
-    items, adjustments, depositPercent: terms.noDeposit ? 0 : terms.depositPercent, sourceDepositPercent,
-    reusable: reusableQuery.data?.items ?? [], docSettings,
+    items, adjustments, depositPercent: terms.noDeposit ? 0 : terms.depositPercent, sourceDepositPercent, sourceTerms,
+    terms, reusable: reusableQuery.data?.items ?? [], docSettings,
   });
   // The server's own adjustment rows, in order, once the editor is clean — what each QuotationAdjustmentRow
   // shows instead of its estimate.
@@ -2270,6 +2275,7 @@ export function QuotationEditorPage({ user, showToast }) {
         context={(
           <>
             {status ? <StatusBadge tone={status.tone}>{status.label}</StatusBadge> : null}
+            <ApprovalBasisPill quotation={quotation} />
             {/* "เอกสารแนบ {n} ไฟล์", beside the status of the read-only details (see
                 QuotationAttachmentsLink). Not on the edit form, whose reader attached them. */}
             {quotation && !isEditable ? <QuotationAttachmentsLink user={user} quotation={quotation} /> : null}

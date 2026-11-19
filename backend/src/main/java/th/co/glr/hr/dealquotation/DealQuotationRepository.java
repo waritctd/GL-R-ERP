@@ -1158,11 +1158,11 @@ public class DealQuotationRepository {
             (rs, n) -> new ChainQuotation(rs.getLong("quotation_id"), rs.getString("order_code")));
     }
 
-    /** The deposit % the project's first order settled on: the root's confirmed quotation, if the order is still
-     * confirmed. Empty otherwise (the caller falls back to the latest approved quotation's). */
-    public Optional<Integer> findRootConfirmedDepositPercent(long ticketId) {
-        List<Integer> rows = jdbc.query("""
-            SELECT q.deposit_percent
+    /** The root's confirmed quotation (the first order's agreed terms), if the order is still confirmed; empty otherwise
+     * (the caller falls back to the latest approved quotation of the chain). */
+    public Optional<Long> findRootConfirmedQuotationId(long ticketId) {
+        List<Long> rows = jdbc.query("""
+            SELECT ev.related_document_id
               FROM sales.ticket me
               JOIN LATERAL (
                    SELECT e.kind, e.related_document_id FROM sales.ticket_event e
@@ -1170,10 +1170,16 @@ public class DealQuotationRepository {
                       AND e.kind IN ('ORDER_CONFIRMED_FROM_QUOTATION', 'ORDER_CONFIRMATION_UNDONE')
                     ORDER BY e.created_at DESC, e.event_id DESC LIMIT 1) ev
                 ON ev.kind = 'ORDER_CONFIRMED_FROM_QUOTATION'
-              JOIN sales.quotation q ON q.quotation_id = ev.related_document_id
-             WHERE me.ticket_id = :ticketId AND q.deposit_percent IS NOT NULL
-            """, Map.of("ticketId", ticketId), (rs, n) -> rs.getInt("deposit_percent"));
+             WHERE me.ticket_id = :ticketId AND ev.related_document_id IS NOT NULL
+            """, Map.of("ticketId", ticketId), (rs, n) -> rs.getLong("related_document_id"));
         return rows.stream().findFirst();
+    }
+
+    /** The root ticket of this deal's chain (itself unless it is an ADD_ON child). */
+    public long rootTicketId(long ticketId) {
+        return jdbc.queryForObject("""
+            SELECT CASE WHEN child_kind = 'ADD_ON' AND parent_ticket_id IS NOT NULL THEN parent_ticket_id ELSE ticket_id END
+              FROM sales.ticket WHERE ticket_id = :id""", Map.of("id", ticketId), Long.class);
     }
 
     /** Which of these quotation item ids belong to an approved quotation of this deal's chain. */
@@ -1541,6 +1547,25 @@ public class DealQuotationRepository {
             """,
             new MapSqlParameterSource().addValue("id", quotationId).addValue("approverId", approverId)
                 .addValue("note", note).addValue("validityDate", validityDate));
+    }
+
+    /**
+     * The add-on reuse rule's approval (V232): the same PENDING_APPROVAL -> APPROVED compare-and-set as {@link #approve}
+     * but NO approver snapshot, and the basis/source numbers stored, so the document prints no person as approver.
+     * {@code approved_by} stays the submitter (ruling); every read blanks the approver name/signature for such a row.
+     */
+    public int approveByReuseRule(long quotationId, long submitterId, String note, LocalDate validityDate, String basis,
+                                  String sourceNumbers) {
+        return jdbc.update("""
+            UPDATE sales.quotation
+               SET doc_status = 'APPROVED', approved_at = now(), approved_by = :by,
+                   approval_decided_at = now(), approval_decided_by = :by, approval_note = :note,
+                   validity_date = :validityDate, approval_basis = :basis, approval_source_numbers = :sources,
+                   updated_at = now()
+             WHERE quotation_id = :id AND origin = 'DEAL_DIRECT' AND doc_status = 'PENDING_APPROVAL'
+            """, new MapSqlParameterSource().addValue("id", quotationId).addValue("by", submitterId)
+                .addValue("note", note).addValue("validityDate", validityDate).addValue("basis", basis)
+                .addValue("sources", sourceNumbers));
     }
 
     /** Compare-and-set PENDING_APPROVAL -> DRAFT, with the reason recorded for the rep to see.
@@ -2188,10 +2213,12 @@ public class DealQuotationRepository {
                    -- live hr.employee / hr.employee_signature values are only a defensive fallback
                    -- for a row with no snapshot (V175's backfill gives every pre-V175 approval
                    -- one); DRAFT/PENDING rows have approved_by NULL, so both are NULL.
-                   CASE WHEN aps.quotation_id IS NOT NULL THEN aps.approver_name_th
+                   CASE WHEN q.approval_basis IS NOT NULL THEN NULL
+                        WHEN aps.quotation_id IS NOT NULL THEN aps.approver_name_th
                         ELSE NULLIF(TRIM(CONCAT_WS(' ', ap.first_name_th, ap.last_name_th)), '')
                    END AS approved_by_name,
-                   CASE WHEN aps.quotation_id IS NOT NULL THEN aps.approver_name_en
+                   CASE WHEN q.approval_basis IS NOT NULL THEN NULL
+                        WHEN aps.quotation_id IS NOT NULL THEN aps.approver_name_en
                         ELSE NULLIF(TRIM(CONCAT_WS(' ', ap.first_name_en, ap.last_name_en)), '')
                    END AS approved_by_name_en,
                    q.approved_at, q.approval_note,
@@ -2206,9 +2233,11 @@ public class DealQuotationRepository {
                    q.omit_contact_honorific, q.full_payment_term,
                    q.total_amount, q.currency, q.issued_at AS created_at, q.updated_at,
                    q.recipient_type, q.recipient_label,
-                   CASE WHEN aps.quotation_id IS NOT NULL THEN aps.signature_image IS NOT NULL
+                   CASE WHEN q.approval_basis IS NOT NULL THEN FALSE
+                        WHEN aps.quotation_id IS NOT NULL THEN aps.signature_image IS NOT NULL
                         ELSE EXISTS (SELECT 1 FROM hr.employee_signature es WHERE es.employee_id = q.approved_by)
                    END AS approver_has_signature,
+                   q.approval_basis, q.approval_source_numbers,
                    -- V179: print-only ผู้พิมพ์/พนักงานขาย name override — see DealQuotationDtos'
                    -- printedByDisplayId/salesRepDisplayId Javadoc. Both LEFT JOINs are null when the
                    -- column itself is null, which is what lets #mapQuotation fall back to the real
@@ -2406,7 +2435,8 @@ public class DealQuotationRepository {
             rs.getString("party_status"),
             rs.getBoolean("party_headline"),
             rs.getInt("deal_buyer_count")
-        );
+        )
+            .withApprovalBasis(rs.getString("approval_basis"), rs.getString("approval_source_numbers"));
     }
 
     /**

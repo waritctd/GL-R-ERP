@@ -306,7 +306,10 @@ export function QuotationDocumentView({ quotation }) {
           <div>
             <span className="block text-2xs font-bold uppercase text-text-muted">{labels.approvedBy}</span>
             <strong className="block mt-6 border-t border-border pt-2">
-              {quotation.docStatus === 'APPROVED' ? (name(quotation.approvedByNameEn, quotation.approvedByName) ?? '-') : ''}
+              {quotation.docStatus === 'APPROVED'
+                ? (quotation.approvalBasis ? `อนุมัติตามราคาเดิม ${quotation.approvalSourceNumbers ?? ''}`.trim()
+                  : (name(quotation.approvedByNameEn, quotation.approvedByName) ?? '-'))
+                : ''}
             </strong>
           </div>
           <div>

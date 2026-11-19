@@ -347,6 +347,55 @@ class DealDirectApprovalFillsDealIntegrationTest extends AbstractDealQuotationSl
         assertThat(refusal.getStatus().value()).isEqualTo(409);
     }
 
+    /** The rule checks the ITEM, not only the price: a line whose product code or sqm/piece differs from its source,
+     * price kept, is not approved by rule. */
+    @Test
+    void addOn_reusedLineWithAChangedProductCodeOrSqmPerPiece_fallsBackToApproval() {
+        long addOn = addOnWithApprovedRoot();
+        assertThat(submitReuse(addOn, i -> retarget(i, "OTHER-CODE", i.sqmPerPiece()), 50).docStatus())
+            .isEqualTo("PENDING_APPROVAL");
+        long second = addOnWithApprovedRoot();
+        assertThat(submitReuse(second, i -> retarget(i, i.productCode(),
+            i.sqmPerPiece() == null ? null : i.sqmPerPiece().add(new BigDecimal("0.01"))), 50).docStatus())
+            .isEqualTo("PENDING_APPROVAL");
+    }
+
+    /** Header terms are part of the rule: a different credit-days (like a different deposit %) needs approval. */
+    @Test
+    void addOn_changedCreditDays_fallsBackToApproval() {
+        long addOn = addOnWithApprovedRoot();
+
+        assertThat(submitReuse(addOn, UnaryOperator.identity(), 50, 15).docStatus()).isEqualTo("PENDING_APPROVAL");
+    }
+
+    /** A rule-approved quotation records its basis and sources, shows no person as approver, and tells the rep nothing. */
+    @Test
+    void addOn_ruleApproval_isMarked_hasNoApproverNameOrSignature_andDoesNotNotifyTheRep() {
+        long addOn = addOnWithApprovedRoot();
+
+        DealQuotationDto submitted = submitReuse(addOn, UnaryOperator.identity(), 50);
+
+        assertThat(submitted.approvalBasis()).isEqualTo("REUSED_APPROVED_PRICE");
+        assertThat(submitted.approvalSourceNumbers()).startsWith("QT-");
+        assertThat(submitted.approvedByName()).isNull();
+        assertThat(submitted.approverHasSignature()).isFalse();
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sales.quotation_approver_snapshot WHERE quotation_id = :id",
+            Map.of("id", submitted.id()), Integer.class)).isZero();
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM hr.notification WHERE employee_id = :e",
+            Map.of("e", salesActor.id()), Integer.class)).isZero();
+    }
+
+    /** The same ItemInput with a different product code / sqm per piece, price and everything else unchanged. */
+    private static ItemInput retarget(ItemInput i, String productCode, BigDecimal sqmPerPiece) {
+        return new ItemInput(i.locationLabel(), i.catalogPriceId(), productCode, i.brand(), i.model(), i.color(),
+            i.texture(), i.sizeText(), i.thicknessMm(), sqmPerPiece, i.quantityMode(), i.areaSqm(), i.piecesInput(),
+            i.wastageMode(), i.wastageValue(), i.piecesPerBox(), i.unitPrice(), i.discountPct(), i.originCountry(),
+            i.leadTimeMinDays(), i.leadTimeMaxDays(), i.itemNotes(), i.lineType(), i.description(), i.quantity(),
+            i.unit(), i.specialPriceSqm(), i.directNetPrice(), i.adjustmentPct(), i.adjustmentDeadline(),
+            i.adjustmentAmount(), i.id(), i.sqmPerBox(), i.roundToFullBox(), i.listPriceSqm(), i.directNetPriceSqm(),
+            i.priceMode(), i.stockSource(), i.sourceQuotationItemId());
+    }
+
     private long addOnWithApprovedRoot() {
         long root = deal(salesActor);
         approved(root, salesActor, "BUYER");
@@ -359,13 +408,17 @@ class DealDirectApprovalFillsDealIntegrationTest extends AbstractDealQuotationSl
 
     /** Saves an add-on draft whose lines are the picker's items (each mapped by {@code tweak}), then submits it. */
     private DealQuotationDto submitReuse(long addOn, UnaryOperator<ItemInput> tweak, int depositPercent) {
+        return submitReuse(addOn, tweak, depositPercent, 0);
+    }
+
+    private DealQuotationDto submitReuse(long addOn, UnaryOperator<ItemInput> tweak, int depositPercent, int creditDays) {
         // The root order's own approval (the fixture) notified the approvers; only what THIS submit sends counts.
         jdbc.update("DELETE FROM hr.notification", Map.of());
         ReusableApprovedItemsDto reusable = quotationService.reusableApprovedItems(addOn, salesActor);
         assertThat(reusable.sourceDepositPercent()).isEqualTo(50);
         List<ItemInput> lines = reusable.items().stream().map(i -> tweak.apply(i.item())).toList();
         DealQuotationDto created = quotationService.create(addOn, new UpsertDealQuotationRequest(null, null, null,
-            null, depositPercent, "CASH_ON_DELIVERY", 0, 30, null, "NET", "TH", "THB", lines)
+            null, depositPercent, "CASH_ON_DELIVERY", creditDays, 30, null, "NET", "TH", "THB", lines)
             .withRecipientType("BUYER"), salesActor);
         return quotationService.submit(created.id(), salesActor);
     }

@@ -6959,12 +6959,12 @@ function mockApprovedChainSources(ticket) {
     });
 }
 
-function mockSourceDepositPercent(ticket, sources) {
+/** The first order's agreed quotation: the root's confirmed one, else the latest approved one of the chain. */
+function mockReferenceQuotation(ticket, sources) {
   const root = mockOrderChain(ticket)[0];
   const confirmed = mockConfirmedQuotationEvent(root)
     ? mockDealQuotations.find((q) => q.id === root.orderConfirmedQuotationId) : null;
-  if (confirmed?.depositPercent != null) return confirmed.depositPercent;
-  return sources[0]?.quotation.depositPercent ?? null;
+  return confirmed ?? sources[0]?.quotation ?? null;
 }
 
 /** A claim of reuse is kept only for an approved item of this ADD_ON deal's chain; anywhere else it is dropped. */
@@ -6976,6 +6976,7 @@ function mockKeepValidSources(ticket, items) {
   });
 }
 
+const sameMockText = (a, b) => (String(a ?? '').trim() || null) === (String(b ?? '').trim() || null);
 const sameMockMoney = (a, b) => (a == null ? b == null : b != null && Number(a) === Number(b));
 
 /** The server's rule, never the client's claim; anything else falls back to the ordinary approval. Quantity is never checked. */
@@ -6983,16 +6984,28 @@ function mockReusesApprovedPricesOnly(row, ticket) {
   if ((row.origin || 'DEAL_DIRECT') !== 'DEAL_DIRECT' || ticket.childKind !== 'ADD_ON' || !row.items?.length) return false;
   if (row.items.some((it) => it.sourceQuotationItemId == null || (it.lineType ?? 'TILE') === 'ADJUSTMENT')) return false;
   const sources = mockApprovedChainSources(ticket);
-  const deposit = mockSourceDepositPercent(ticket, sources);
-  if (deposit == null || deposit !== row.depositPercent) return false;
+  const reference = mockReferenceQuotation(ticket, sources);
+  if (!reference || reference.depositPercent == null || reference.depositPercent !== row.depositPercent
+    || !sameMockText(reference.remainderMode, row.remainderMode) || (reference.creditDays ?? null) !== (row.creditDays ?? null)
+    || !sameMockText(reference.fullPaymentTerm, row.fullPaymentTerm)
+    || row.validityMode === 'DATE' || String(row.customerNotes ?? '').trim() !== '') return false;
   return row.items.every((it) => {
-    const src = sources.find((s) => s.item.id === it.sourceQuotationItemId);
-    return Boolean(src)
-      && sameMockMoney(it.unitPrice, src.item.unitPrice) && sameMockMoney(it.discountPct, src.item.discountPct)
-      && sameMockMoney(it.netUnitPrice, src.item.netUnitPrice) && (it.priceMode ?? null) === (src.item.priceMode ?? null)
+    const src = sources.find((s2) => s2.item.id === it.sourceQuotationItemId);
+    if (!src) return false;
+    const a = it;
+    const b = src.item;
+    return sameMockMoney(a.unitPrice, b.unitPrice) && sameMockMoney(a.discountPct, b.discountPct)
+      && sameMockMoney(a.netUnitPrice, b.netUnitPrice) && sameMockMoney(a.listPriceSqm, b.listPriceSqm)
+      && sameMockMoney(a.directNetPriceSqm, b.directNetPriceSqm) && sameMockMoney(a.specialPriceSqm, b.specialPriceSqm)
+      && (a.priceMode ?? null) === (b.priceMode ?? null)
       && (row.priceMode ?? null) === (src.quotation.priceMode ?? null)
       && (row.currency ?? null) === (src.quotation.currency ?? null)
-      && (row.documentLanguage ?? null) === (src.quotation.documentLanguage ?? null);
+      && (row.documentLanguage ?? null) === (src.quotation.documentLanguage ?? null)
+      && (a.lineType ?? 'TILE') === (b.lineType ?? 'TILE') && (a.catalogPriceId ?? null) === (b.catalogPriceId ?? null)
+      && ['productCode', 'brand', 'model', 'color', 'texture', 'sizeText', 'originCountry', 'unit', 'descriptionLine']
+        .every((k) => sameMockText(a[k], b[k]))
+      && sameMockMoney(a.thicknessMm, b.thicknessMm) && sameMockMoney(a.sqmPerPiece, b.sqmPerPiece)
+      && sameMockMoney(a.sqmPerBox, b.sqmPerBox) && (a.piecesPerBox ?? null) === (b.piecesPerBox ?? null);
   });
 }
 
@@ -7059,6 +7072,12 @@ function submitDealQuotationRowOrApproveByRule(row, ticket, user) {
   row.submittedBy = user.id;
   row.updatedAt = now;
   mockApproveDirectRow(row, user, MOCK_REUSE_RULE_NOTE);
+  // DealQuotationRepository#approveByReuseRule: no approver snapshot, the basis and source numbers stored.
+  const sourceIds = new Set(row.items.map((it) => it.sourceQuotationItemId));
+  row.approvalBasis = 'REUSED_APPROVED_PRICE';
+  row.approvalSourceNumbers = [...new Set(mockApprovedChainSources(ticket)
+    .filter((src) => sourceIds.has(src.item.id)).map((src) => src.quotation.number))].join(', ');
+  row.approverSignatureSnapshot = false;
   return delay({ quotation: buildDealQuotationDto(row) });
 }
 
@@ -7867,7 +7886,10 @@ function buildDealQuotationDto(row) {
     salesRepPhone: row.salesRepPhone,
     submittedAt: row.submittedAt,
     approvedById: row.approvedById,
-    approvedByName: row.approvedByName,
+    // A rule-approved (add-on reuse) document names no approver; the basis says how it was approved.
+    approvedByName: row.approvalBasis ? null : row.approvedByName,
+    approvalBasis: row.approvalBasis ?? null,
+    approvalSourceNumbers: row.approvalSourceNumbers ?? null,
     approvedByNameEn: row.approvedByNameEn ?? null,
     approvedAt: row.approvedAt,
     approvalNote: row.approvalNote,
@@ -18980,7 +19002,15 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
           currency: quotation.currency ?? 'THB',
         });
       });
-      return delay({ sourceDepositPercent: mockSourceDepositPercent(ticket, sources), items });
+      const reference = mockReferenceQuotation(ticket, sources);
+      return delay({
+        sourceDepositPercent: reference?.depositPercent ?? null,
+        sourceTerms: reference ? {
+          depositPercent: reference.depositPercent ?? null, remainderMode: reference.remainderMode ?? null,
+          creditDays: reference.creditDays ?? null, fullPaymentTerm: reference.fullPaymentTerm ?? null,
+        } : null,
+        items,
+      });
     },
 
     async listForTicket(ticketId) {

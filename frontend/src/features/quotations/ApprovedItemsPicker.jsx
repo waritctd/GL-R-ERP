@@ -1,8 +1,9 @@
 import { Button } from '../../components/common/Button.jsx';
+import { Icon } from '../../components/common/Icon.jsx';
 import { Panel } from '../../components/common/Layout.jsx';
 import { cn } from '../../utils/cn.js';
 import { formatQuotationMoney, lineTypeOf } from './quotationMeta.js';
-import { approvedPriceText } from './approvedItemsReuse.js';
+import { approvedPriceText, discountText } from './approvedItemsReuse.js';
 
 /**
  * Add-on orders (สั่งเพิ่ม): tick an item already approved in this project and it joins the quotation at its approved
@@ -50,7 +51,7 @@ export function ApprovedItemsPicker({
                         onClick={() => (row ? onUnpick(row.clientId) : onPick(item))}
                       >
                         <span aria-hidden="true" className={cn('mt-0.5 grid size-6 shrink-0 place-items-center rounded border', row ? 'border-primary bg-primary text-white' : 'border-border')}>
-                          {row ? '✓' : ''}
+                          {row ? <Icon name="check" size={16} /> : null}
                         </span>
                         <span className="grid min-w-0 gap-0.5">
                           <b className="text-sm">{name}</b>
@@ -58,6 +59,9 @@ export function ApprovedItemsPicker({
                           <small className="text-xs text-text-muted">
                             {approvedPriceText(item, (v) => formatQuotationMoney(v, currency))} · ราคาที่อนุมัติแล้ว{row ? ' แก้ไม่ได้' : ''}
                           </small>
+                          {discountText(item, (v) => formatQuotationMoney(v, currency)) ? (
+                            <small className="text-xs text-text-muted">{discountText(item, (v) => formatQuotationMoney(v, currency))}</small>
+                          ) : null}
                         </span>
                       </button>
                       {row ? (
@@ -86,7 +90,7 @@ export function ApprovedItemsPicker({
             <div className="flex justify-between text-base"><dt className="font-bold">ยอดรวม</dt><dd className="m-0 font-extrabold tabular-nums">{formatQuotationMoney(totals.grand, currency)}</dd></div>
           </dl>
           <p className={cn('m-0 text-xs font-bold', noApproval ? 'text-success' : 'text-text-muted')} data-testid="reuse-approval-note">
-            {noApproval ? 'ไม่ต้องรออนุมัติ เพราะใช้ราคาเดิมทุกรายการ' : 'มีรายการที่ต้องขออนุมัติ (ราคาใหม่ หรือมัดจำต่างจากออเดอร์แรก)'}
+            {noApproval ? 'ไม่ต้องรออนุมัติ เพราะใช้ราคาเดิมทุกรายการ' : 'ต้องขออนุมัติ เพราะมีสินค้าใหม่ ราคาที่เปลี่ยน หรือเงื่อนไขต่างจากออเดอร์แรก'}
           </p>
         </div>
       )}

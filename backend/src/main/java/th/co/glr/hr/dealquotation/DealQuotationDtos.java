@@ -252,8 +252,70 @@ public final class DealQuotationDtos {
         boolean partyHeadline,
         /** BUYER parties on the deal, read live. More than one means sibling bids share this deal, so the
          * register groups them under the project. */
-        int dealBuyerCount
+        int dealBuyerCount,
+        /** V232 — how this quotation was approved: null = by a person (an approver); {@code REUSED_APPROVED_PRICE} = by the
+         * add-on reuse rule (every line an approved item at its approved price, terms unchanged). Such a document prints no
+         * approver name or signature; see {@link #approvalSourceNumbers}. */
+        String approvalBasis,
+        /** The quotation number(s) a rule approval rests on, comma-separated ("QT-2026-0005-1, QT-2026-0007-1"); null otherwise. */
+        String approvalSourceNumbers
     ) {
+        /** The pre-V232 canonical shape (no {@link #approvalBasis}): approved by a person. */
+        public DealQuotationDto(
+            long id, String number, long ticketId, String docStatus, int revisionNo, Long parentQuotationId,
+            Long createdById, String createdByName, String createdByNameEn, long salesRepId, String salesRepName,
+            String salesRepNameEn, String salesRepPhone, Instant submittedAt, Long approvedById, String approvedByName,
+            String approvedByNameEn, Instant approvedAt, String approvalNote, LocalDate quotationDate,
+            String customerName, String customerAddress, String customerTaxId, String customerPhone, Long contactId,
+            String contactName, String contactPhone, String contactEmail, String projectName, String deptCode,
+            String unitCode, LocalDate offerDate, Integer depositPercent, String remainderMode, Integer creditDays,
+            Integer validityDays, LocalDate validityDate, String validityMode, LocalDate validityUntil,
+            String customerNotes, String priceMode, String documentLanguage, BigDecimal subtotalAmount,
+            BigDecimal vatAmount, BigDecimal grandTotal, String currency, boolean approverHasSignature,
+            Long printedByDisplayId, String printedByDisplayName, String printedByDisplayNameEn,
+            Long salesRepDisplayId, String salesRepDisplayName, String salesRepDisplayNameEn,
+            String salesRepDisplayPhone, boolean omitContactHonorific, String fullPaymentTerm,
+            Long derivedFromQuotationId, String derivedFromQuotationNumber, String derivedFromQuotationStatus,
+            List<DealQuotationItemDto> items, Instant createdAt, Instant updatedAt, String origin,
+            Long pricingRequestId, boolean priceModeChangedFromCeo, String ceoPriceMode, String pricingRequestCode,
+            int itemsRemovedFromCeoCount, List<DealQuotationRepository.RemovedLinkedItemDto> removedCeoItems,
+            String orderedByName, boolean hideProjectName, String orderedByPhone, String orderedByEmail,
+            String recipientType, String recipientLabel, String ticketCode, String dealStage, boolean readOnly,
+            Long partyId, String partyStatus, boolean partyHeadline, int dealBuyerCount) {
+            this(id, number, ticketId, docStatus, revisionNo, parentQuotationId, createdById, createdByName,
+                createdByNameEn, salesRepId, salesRepName, salesRepNameEn, salesRepPhone, submittedAt, approvedById,
+                approvedByName, approvedByNameEn, approvedAt, approvalNote, quotationDate, customerName,
+                customerAddress, customerTaxId, customerPhone, contactId, contactName, contactPhone, contactEmail,
+                projectName, deptCode, unitCode, offerDate, depositPercent, remainderMode, creditDays, validityDays,
+                validityDate, validityMode, validityUntil, customerNotes, priceMode, documentLanguage, subtotalAmount,
+                vatAmount, grandTotal, currency, approverHasSignature, printedByDisplayId, printedByDisplayName,
+                printedByDisplayNameEn, salesRepDisplayId, salesRepDisplayName, salesRepDisplayNameEn,
+                salesRepDisplayPhone, omitContactHonorific, fullPaymentTerm, derivedFromQuotationId,
+                derivedFromQuotationNumber, derivedFromQuotationStatus, items, createdAt, updatedAt, origin,
+                pricingRequestId, priceModeChangedFromCeo, ceoPriceMode, pricingRequestCode, itemsRemovedFromCeoCount,
+                removedCeoItems, orderedByName, hideProjectName, orderedByPhone, orderedByEmail, recipientType,
+                recipientLabel, ticketCode, dealStage, readOnly, partyId, partyStatus, partyHeadline, dealBuyerCount,
+                null, null);
+        }
+
+        /** This quotation carrying the rule-approval marker (see {@link #approvalBasis}). */
+        public DealQuotationDto withApprovalBasis(String basis, String sourceNumbers) {
+            return new DealQuotationDto(id, number, ticketId, docStatus, revisionNo, parentQuotationId, createdById,
+                createdByName, createdByNameEn, salesRepId, salesRepName, salesRepNameEn, salesRepPhone, submittedAt,
+                approvedById, approvedByName, approvedByNameEn, approvedAt, approvalNote, quotationDate, customerName,
+                customerAddress, customerTaxId, customerPhone, contactId, contactName, contactPhone, contactEmail,
+                projectName, deptCode, unitCode, offerDate, depositPercent, remainderMode, creditDays, validityDays,
+                validityDate, validityMode, validityUntil, customerNotes, priceMode, documentLanguage, subtotalAmount,
+                vatAmount, grandTotal, currency, approverHasSignature, printedByDisplayId, printedByDisplayName,
+                printedByDisplayNameEn, salesRepDisplayId, salesRepDisplayName, salesRepDisplayNameEn,
+                salesRepDisplayPhone, omitContactHonorific, fullPaymentTerm, derivedFromQuotationId,
+                derivedFromQuotationNumber, derivedFromQuotationStatus, items, createdAt, updatedAt, origin,
+                pricingRequestId, priceModeChangedFromCeo, ceoPriceMode, pricingRequestCode, itemsRemovedFromCeoCount,
+                removedCeoItems, orderedByName, hideProjectName, orderedByPhone, orderedByEmail, recipientType,
+                recipientLabel, ticketCode, dealStage, readOnly, partyId, partyStatus, partyHeadline, dealBuyerCount,
+                basis, sourceNumbers);
+        }
+
         /** The shape without {@link #ticketCode}/{@link #dealStage}/{@link #readOnly} —
          * kept so every existing construction site (tests, mostly) compiles unchanged, the same
          * device {@code TicketSummaryDto} uses. Defaults to null/null/false, which is what
@@ -380,7 +442,7 @@ public final class DealQuotationDtos {
 
         /** The account view -- number, totals and each line's NET price stay; list price, discount and CEO pricing metadata are emptied. */
         public DealQuotationDto withoutPriceInternals() {
-            return new DealQuotationDto(id, number, ticketId, docStatus, revisionNo, parentQuotationId, createdById, createdByName, createdByNameEn, salesRepId, salesRepName, salesRepNameEn, salesRepPhone, submittedAt, approvedById, approvedByName, approvedByNameEn, approvedAt, approvalNote, quotationDate, customerName, customerAddress, customerTaxId, customerPhone, contactId, contactName, contactPhone, contactEmail, projectName, deptCode, unitCode, offerDate, depositPercent, remainderMode, creditDays, validityDays, validityDate, validityMode, validityUntil, customerNotes, null, documentLanguage, subtotalAmount, vatAmount, grandTotal, currency, approverHasSignature, printedByDisplayId, printedByDisplayName, printedByDisplayNameEn, salesRepDisplayId, salesRepDisplayName, salesRepDisplayNameEn, salesRepDisplayPhone, omitContactHonorific, fullPaymentTerm, derivedFromQuotationId, derivedFromQuotationNumber, derivedFromQuotationStatus, items == null ? null : items.stream().map(DealQuotationItemDto::withoutPriceInternals).toList(), createdAt, updatedAt, origin, pricingRequestId, false, null, pricingRequestCode, 0, List.of(), orderedByName, hideProjectName, orderedByPhone, orderedByEmail, recipientType, recipientLabel, ticketCode, dealStage, readOnly, partyId, partyStatus, partyHeadline, dealBuyerCount);
+            return new DealQuotationDto(id, number, ticketId, docStatus, revisionNo, parentQuotationId, createdById, createdByName, createdByNameEn, salesRepId, salesRepName, salesRepNameEn, salesRepPhone, submittedAt, approvedById, approvedByName, approvedByNameEn, approvedAt, approvalNote, quotationDate, customerName, customerAddress, customerTaxId, customerPhone, contactId, contactName, contactPhone, contactEmail, projectName, deptCode, unitCode, offerDate, depositPercent, remainderMode, creditDays, validityDays, validityDate, validityMode, validityUntil, customerNotes, null, documentLanguage, subtotalAmount, vatAmount, grandTotal, currency, approverHasSignature, printedByDisplayId, printedByDisplayName, printedByDisplayNameEn, salesRepDisplayId, salesRepDisplayName, salesRepDisplayNameEn, salesRepDisplayPhone, omitContactHonorific, fullPaymentTerm, derivedFromQuotationId, derivedFromQuotationNumber, derivedFromQuotationStatus, items == null ? null : items.stream().map(DealQuotationItemDto::withoutPriceInternals).toList(), createdAt, updatedAt, origin, pricingRequestId, false, null, pricingRequestCode, 0, List.of(), orderedByName, hideProjectName, orderedByPhone, orderedByEmail, recipientType, recipientLabel, ticketCode, dealStage, readOnly, partyId, partyStatus, partyHeadline, dealBuyerCount, approvalBasis, approvalSourceNumbers);
         }
 
         /** This DTO carrying #removedCeoItems — same device as DealQuotationItemDto#withCeoComparison (appended field
@@ -399,7 +461,7 @@ public final class DealQuotationDtos {
                 derivedFromQuotationNumber, derivedFromQuotationStatus, items, createdAt, updatedAt, origin,
                 pricingRequestId, priceModeChangedFromCeo, ceoPriceMode, pricingRequestCode,
                 itemsRemovedFromCeoCount, removedItems, orderedByName, hideProjectName,
-                orderedByPhone, orderedByEmail, recipientType, recipientLabel, ticketCode, dealStage, readOnly, partyId, partyStatus, partyHeadline, dealBuyerCount);
+                orderedByPhone, orderedByEmail, recipientType, recipientLabel, ticketCode, dealStage, readOnly, partyId, partyStatus, partyHeadline, dealBuyerCount, approvalBasis, approvalSourceNumbers);
         }
 
         /** This DTO carrying value as its #orderedByName — same appended-field device as #withRemovedCeoItems, added
@@ -419,7 +481,7 @@ public final class DealQuotationDtos {
                 derivedFromQuotationNumber, derivedFromQuotationStatus, items, createdAt, updatedAt, origin,
                 pricingRequestId, priceModeChangedFromCeo, ceoPriceMode, pricingRequestCode,
                 itemsRemovedFromCeoCount, removedCeoItems, value, hideProjectName,
-                orderedByPhone, orderedByEmail, recipientType, recipientLabel, ticketCode, dealStage, readOnly, partyId, partyStatus, partyHeadline, dealBuyerCount);
+                orderedByPhone, orderedByEmail, recipientType, recipientLabel, ticketCode, dealStage, readOnly, partyId, partyStatus, partyHeadline, dealBuyerCount, approvalBasis, approvalSourceNumbers);
         }
 
         /** This DTO carrying {@code value} as its {@link #hideProjectName} — the same
@@ -441,7 +503,7 @@ public final class DealQuotationDtos {
                 derivedFromQuotationNumber, derivedFromQuotationStatus, items, createdAt, updatedAt, origin,
                 pricingRequestId, priceModeChangedFromCeo, ceoPriceMode, pricingRequestCode,
                 itemsRemovedFromCeoCount, removedCeoItems, orderedByName, value,
-                orderedByPhone, orderedByEmail, recipientType, recipientLabel, ticketCode, dealStage, readOnly, partyId, partyStatus, partyHeadline, dealBuyerCount);
+                orderedByPhone, orderedByEmail, recipientType, recipientLabel, ticketCode, dealStage, readOnly, partyId, partyStatus, partyHeadline, dealBuyerCount, approvalBasis, approvalSourceNumbers);
         }
 
         /** The shape without {@link #itemsRemovedFromCeoCount} — kept so every existing
@@ -1107,5 +1169,9 @@ public final class DealQuotationDtos {
         @com.fasterxml.jackson.annotation.JsonUnwrapped DealQuotationRequests.ItemInput item) {}
 
     /** {@code GET /api/tickets/{id}/reusable-approved-items}. */
-    public record ReusableApprovedItemsDto(Integer sourceDepositPercent, List<ReusableApprovedItemDto> items) {}
+    public record ReusableApprovedItemsDto(Integer sourceDepositPercent, SourceTermsDto sourceTerms,
+                                           List<ReusableApprovedItemDto> items) {}
+
+    /** The first order's commercial terms an add-on must keep for instant approval. */
+    public record SourceTermsDto(Integer depositPercent, String remainderMode, Integer creditDays, String fullPaymentTerm) {}
 }
