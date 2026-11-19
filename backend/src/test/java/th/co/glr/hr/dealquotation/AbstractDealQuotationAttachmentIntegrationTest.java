@@ -168,15 +168,6 @@ abstract class AbstractDealQuotationAttachmentIntegrationTest extends AbstractDe
         return found.isEmpty() ? null : found.get(0);
     }
 
-    /** The name the employee table holds for {@code employeeId}, read the way a quotation reads
-     * its own {@code createdByName}. */
-    protected String employeeName(long employeeId) {
-        return jdbc.queryForObject("""
-            SELECT NULLIF(TRIM(CONCAT_WS(' ', first_name_th, last_name_th)), '')
-              FROM hr.employee WHERE employee_id = :id
-            """, Map.of("id", employeeId), String.class);
-    }
-
     /** The bytes {@code reader} is served for {@code attachmentId}. */
     protected byte[] served(long attachmentId, UserPrincipal reader) {
         DealQuotationAttachmentService.AttachmentFile file = attachmentService.download(attachmentId, reader);

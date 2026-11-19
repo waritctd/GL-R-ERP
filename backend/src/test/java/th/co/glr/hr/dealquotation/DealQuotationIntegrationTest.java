@@ -18,7 +18,6 @@ import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
-import th.co.glr.hr.activity.ActivityLogRepository;
 import th.co.glr.hr.auth.EmployeeAuthRepository;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.brand.BrandAssets;
@@ -29,7 +28,6 @@ import th.co.glr.hr.customer.ContactDto;
 import th.co.glr.hr.customer.ContactRepository;
 import th.co.glr.hr.customer.CustomerDto;
 import th.co.glr.hr.customer.CustomerRepository;
-import th.co.glr.hr.customer.CustomerService;
 import th.co.glr.hr.customer.ProjectDto;
 import th.co.glr.hr.customer.ProjectRepository;
 import th.co.glr.hr.dealquotation.DealQuotationDtos.DealQuotationDto;
@@ -66,18 +64,11 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     private DealQuotationRepository quotationRepository;
     private DealQuotationService quotationService;
     private EmployeeAuthRepository employeeAuth;
-    // See ContactUpdateRefreshesDraftQuotations* tests below.
-    // Wrapped in #transactional(...) at each call site, not here, so its own @Transactional
-    // is exercised through a real AOP proxy rather than being inert (this suite hand-wires with
-    // `new` everywhere else — see AbstractPostgresIntegrationTest#transactional's own Javadoc).
-    private CustomerService customerService;
-    private EmployeeSignatureService signatureService;
     private CapturingMailer mailer;
 
     private long salesRepId;
     private long otherSalesId;
     private long salesManagerId;
-    private long ceoId;
     private long importUserId;
     private long accountUserId;
     private long qcUserId;
@@ -85,7 +76,6 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     private UserPrincipal salesActor;
     private UserPrincipal otherSalesActor;
     private UserPrincipal salesManagerActor;
-    private UserPrincipal ceoActor;
     private UserPrincipal importActor;
     private UserPrincipal accountActor;
     private UserPrincipal qcActor;
@@ -130,14 +120,11 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             // app.quotation.bank-block-line1..3 — empty here, so the English document prints the proforma-invoice line.
             // DealQuotationEnglishFormTest covers the configured block.
             "", "", "");
-        customerService = new CustomerService(customers, contacts, projects, employeeAuth, quotationRepository);
-
-        signatureService = new EmployeeSignatureService(signatureRepository, new ActivityLogRepository(jdbc));
 
         salesRepId = createEmployee(employees, "พนักงานขาย คิว", "sales-dq@glr.co.th", "SALES", "แผนกขาย");
         otherSalesId = createEmployee(employees, "พนักงานขาย อื่นคิว", "sales-dq-other@glr.co.th", "SALES", "แผนกขาย");
         salesManagerId = createSalesManager(employees, "ผู้จัดการฝ่ายขาย คิว", "sales-manager-dq@glr.co.th");
-        ceoId = createManagingDirector(employees, "ผู้บริหาร คิว", "ceo-dq@glr.co.th");
+        createManagingDirector(employees, "ผู้บริหาร คิว", "ceo-dq@glr.co.th");
         importUserId = createEmployee(employees, "ฝ่ายนำเข้า คิว", "import-dq@glr.co.th", "PCIM", "ฝ่ายนำเข้า");
         accountUserId = createEmployee(employees, "บัญชี คิว", "account-dq@glr.co.th", "ACCT", "ฝ่ายบัญชี");
         qcUserId = createEmployee(employees, "QC คิว", "qc-dq@glr.co.th", "QC", "ฝ่าย QC");
@@ -146,7 +133,6 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         salesActor = actor(salesRepId, "sales");
         otherSalesActor = actor(otherSalesId, "sales");
         salesManagerActor = actor(salesManagerId, "sales_manager");
-        ceoActor = actor(ceoId, "ceo");
         importActor = actor(importUserId, "import");
         accountActor = actor(accountUserId, "account");
         qcActor = actor(qcUserId, "qc");
@@ -170,40 +156,6 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             new CreateTicketRequest(title, "NORMAL", customer.name(), customer.id(), projectId,
                 contactId, null, null, null), creator);
         return created.summary().id();
-    }
-
-    // Acceptance
-
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // "สร้างจากใบเดิม" / สั่งเหมือนเดิม — clone an APPROVED quotation into a new, INDEPENDENT draft.
-    //
-    // A deal may hold only ONE live quotation at a time (the sweep is origin-agnostic:
-    // DEAL_DIRECT APPROVED, PRICING_REQUEST ISSUED/REVISION_REQUESTED). Clone CREATION itself
-    // leaves the source untouched (still APPROVED) -- see the first test below -- but once the
-    // CLONE ITSELF reaches APPROVED, DealQuotationService#approve's same-ticket sweep supersedes
-    // the source then, exactly as approving a revision or a second, wholly independent
-    // first-issue quotation would.
-    // ─────────────────────────────────────────────────────────────────────────────────────
-
-    private static final class SupersedeOnLockDealQuotationRepository extends DealQuotationRepository {
-        private final org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate jdbcTemplate;
-        private final long targetQuotationId;
-
-        SupersedeOnLockDealQuotationRepository(org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate jdbc,
-                                               CatalogRepository catalog, long targetQuotationId) {
-            super(jdbc, catalog);
-            this.jdbcTemplate = jdbc;
-            this.targetQuotationId = targetQuotationId;
-        }
-
-        @Override
-        public void lockTicket(long ticketId) {
-            super.lockTicket(ticketId);
-            jdbcTemplate.update("""
-                UPDATE sales.quotation SET doc_status = 'SUPERSEDED', updated_at = now()
-                 WHERE quotation_id = :id AND origin = 'DEAL_DIRECT'
-                """, java.util.Map.of("id", targetQuotationId));
-        }
     }
 
     /**
@@ -314,33 +266,18 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         }
     }
 
+    @Test
+    void totalsAreServerRecomputed_fromCurrentItemsOnly() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10), sampleItem("50.00", 4))), salesActor);
+        // 1000 + 200 = 1200
+        assertThat(created.subtotalAmount()).isEqualByComparingTo("1200.00");
 
-    // ── resubmitting a ตีกลับ'd draft mints a NEW revision ──
-    //
-    // "ตีกลับ = แก้ใบเดิม เลขไม่เปลี่ยน (this row, this number, back to DRAFT) — but resubmitting
-    // it, once sales has fixed it, ออกใบใหม่ เลขเปลี่ยน (a new row/number), the SAME way revising
-    // an already-APPROVED document always has." reject() itself leaves the number alone (see the
-    // test above); everything below pins what submit() does to a DRAFT that carries a rejection.
-
-    // ── a revision's submit must read as a REVISION to
-    // sales_manager/ceo, not the identical "รออนุมัติ" text a first-time submit sends ──
-
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // Item completeness rule (inline-deal-spec.md)
-    // ─────────────────────────────────────────────────────────────────────────────────────
-
-    // ── submit requires a lead time on every TILE row ────────────────
-
-    // ── an ENTERED lead-time range must be min>=1, max>=min ────
-
-    // ── a tiny AREA quantity rounds up to one piece ─────────────────────────────────────────
-
-    /** 0.01 sqm × 2.78 = 0.0278 rounds UP to 1 piece ("ปัดขึ้นทุกกรณี"), so
-     * the row is accepted. (The zero-piece guard in {@code DealQuotationService} stays as a backstop;
-
-    // ── PIECES wastage must be a whole number ────────────────
-
-    // ── CREDIT remainder needs at least 1 credit day ──────────
+        DealQuotationDto updated = quotationService.update(created.id(),
+            upsertRequest(List.of(sampleItem("10.00", 3))), salesActor);
+        assertThat(updated.subtotalAmount()).isEqualByComparingTo("30.00");
+        assertThat(updated.items()).hasSize(1);
+    }
 
     /** The submit-time half: a CREDIT-remainder draft with creditDays still blank may not advance past DRAFT. */
     @Test
@@ -355,11 +292,6 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
             .hasMessageContaining("กรุณาระบุจำนวนวันเครดิต อย่างน้อย 1 วัน");
     }
-
-
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // The "แก้" bucket (needsRework) + per-status counts, owner-scoped
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     // Authz — wrong-way-round (the caller must NOT reach what they should not)
 
@@ -385,8 +317,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     //
     // LIST_SEE_ALL_ROLES is mutation-checked separately, by editing #listOwnerScope to
     // `return null;` (always "see all"): ONLY the global-list scope tests below
-    // (search_seesOnlyOwnDeals, listSeeAll_*, importAndAccount_..._butGlobalListScopedToOwn,
-    // grantHolder_search...) go red.
+    // (search_seesOnlyOwnDeals, listSeeAll_*) go red.
     // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
@@ -417,8 +348,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
 
     /** Wrong-way-round: import created NOTHING (salesActor owns
      * ticketId), so the global list is empty for import even though salesActor's quotation
-     * exists. Distinct from {@link #importAndAccount_readIndividualDeals_butGlobalListScopedToOwn}
-     * above, which proves the SAME row is still readable individually. */
+     * exists. */
     @Test
     void listSeeAllRoles_import_doesNotSeeAnotherRepsQuotationOnTheGlobalList() {
         quotationService.create(ticketId, upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
@@ -543,26 +473,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             java.util.Map.of("id", employeeId));
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // Remark 7's second กำหนดยืนยันราคา variant (an exact validity_until date, gated on
-    // the document having special pricing).
-    // ─────────────────────────────────────────────────────────────────────────────────────
-
-    /** withValidity — the ONE wither this file's UpsertDealQuotationRequest builders lack, added for V178 so every
-     * test above can start from an existing request (built by #upsertRequestWithMode) and set just the two new
-     * fields. */
-    private UpsertDealQuotationRequest withValidity(UpsertDealQuotationRequest base, String validityMode,
-                                                     LocalDate validityUntil) {
-        return new UpsertDealQuotationRequest(base.contactId(), base.deptCode(), base.unitCode(),
-            base.offerDate(), base.depositPercent(), base.remainderMode(), base.creditDays(),
-            base.validityDays(), validityMode, validityUntil, base.customerNotes(), base.priceMode(),
-            base.documentLanguage(), base.currency(), base.items()).withRecipientType("OWNER");
-    }
-
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // "ไม่เติม “คุณ” หน้าชื่อผู้สั่งซื้อ" and "ไม่รับมัดจำ" — real-DB coverage through the real
-    // service.
-    // ─────────────────────────────────────────────────────────────────────────────────────
+    // "ไม่รับมัดจำ" (zero deposit) — real-DB coverage through the real service.
 
     /** Wither — sets depositPercent/remainderMode/creditDays/fullPaymentTerm together,
      * since {@code DealQuotationService} resolves the four as one unit (see
@@ -616,17 +527,6 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             .hasMessageContaining("เงื่อนไขการชำระเงิน");
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // Contact-update DRAFT snapshot refresh ("แก้หรือเพิ่ม Email ผู้สั่งซื้อภายหลังไม่ได้") —
-    // CustomerService#updateContact / DealQuotationRepository#refreshDraftContactSnapshot.
-    // Written wrong-way-round per CLAUDE.md ("Permission changes must ship evidence" — same
-    // discipline applied to this scope guard): negative cases (a row that must NOT move) come first. Every call goes through
-    // #transactional(customerService) rather than the bare field, so #updateContact's own
-    // @Transactional is exercised through a real AOP proxy instead of being inert — see that
-    // helper's own Javadoc and the double-afterCommit-defer test above for why a bare `new`-wired
-    // service would prove nothing about the annotation.
-    // ─────────────────────────────────────────────────────────────────────────────────────
-
     // Helpers
 
     /** Slice 2's N6 allows one live direct quotation per deal; the tests below that put several on one deal
@@ -657,8 +557,6 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         return sampleItem(null, unitPrice, pieces);
     }
 
-    /** A location heading is what actually exercises {@code QuotationRenderer}'s
-     * underline-style cache — see {@link #renderPdfAndXlsx_nonEmptyBytes}'s own comment. */
     private ItemInput sampleItem(String locationLabel, String unitPrice, int pieces) {
         // Item completeness rule (inline-deal-spec.md): thicknessMm and
         // piecesPerBox are REQUIRED on create/update.
@@ -667,8 +565,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         // piecesPerBox=1 (not e.g. 4) deliberately -- box rounding is a no-op at box size 1
         // (ceil(n/1)*1 == n for every n), so every dollar-amount assertion across this large
         // file is unaffected by box rounding; a caller that specifically wants to exercise box rounding builds its own
-        // ItemInput (see e.g. #incompleteItem_missingPiecesPerBox_isBadRequestNamingTheRowAndField's
-        // ItemInputBuilder).
+        // ItemInput.
         return new ItemInput(locationLabel, null, null, "Brand A", "Model A", "White", "Matte", "60x60",
             new BigDecimal("10"), new BigDecimal("0.36"),
             WastageCalculator.QUANTITY_MODE_PIECES, null, pieces, WastageCalculator.WASTAGE_MODE_NONE, null, 1,
@@ -733,43 +630,8 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         public void sendWithAttachments(String to, String subject, String body, List<Attachment> attachments) {}
     }
 
-    // ═══════════════════════════════════════════════════════════════════════════════════════
-    // Quotation v3 — price modes, PLAIN and ADJUSTMENT rows.
-    //
-    // Every negative case below is written WRONG-WAY-ROUND per CLAUDE.md: it asserts what the
-    // service must REFUSE, not what it accepts. These run through the REAL DealQuotationService
-    // against a REAL Postgres (AbstractPostgresIntegrationTest), so they prove the rule survives
-    // into the stored row, not merely that a branch was taken.
-    // ═══════════════════════════════════════════════════════════════════════════════════════
-
-    // ── Type-aware price validation, wrong-way-round ────────────────────────────────────────
-
-    // ── submit / revision over the new row types ────────────────────────────────────────────
-
-    // ══════════════════════════════════════════════════════════════════════════════════════
-    // The UPDATE path.
-    //
-    // ⚠️ Replacing `resolvePriceMode(request.priceMode())` at DealQuotationService#update with a
-    // hardcoded PRICE_MODE_NET must turn these red: otherwise the suite stays green while
-    // silently repricing every SPECIAL_SQM and DIRECT_NET document a rep edits. Every test in
-    // this block runs through the REAL service against a REAL Postgres.
-    //
-    // Mutations that must each go red:
-    //   - update()'s price mode hardcoded to PRICE_MODE_NET: the keepsTheStored*Mode update tests,
-    //     update_withAnExplicitPriceMode_switchesTheDocumentBothWays and
-    //     getThenPutVerbatim_roundTripsASpecialSqmDocument.
-    //   - the ADJUSTMENT "cannot supply a price" throw restored:
-    //     adjustmentRow_withARepSuppliedPrice_ignoresIt_andStillDerivesTheAmount and both
-    //     getThenPutVerbatim_* round-trips.
-    //   - the negative-subtotal guard disabled: twoAdjustments_drivingTheSubtotalNegative_areRejected,
-    //     aFlatAdjustmentLargerThanTheDocument_isRejected, update_drivingTheSubtotalNegative_isRejected.
-    //   - each of the three @Digits removed in turn (DealQuotationRequests): exactly the matching
-    //     case in DealQuotationRequestsValidationTest.
-    // ══════════════════════════════════════════════════════════════════════════════════════
-
     /**
-     * ⚠️ A rule the business has not confirmed; it falls out of the "two adjustments do not
-     * compound" question above.
+     * ⚠️ A rule the business has not confirmed: adjustments do not compound.
      *
      * <p>Because adjustments do not compound, each one takes the FULL non-adjustment base — so two
      * 60% rows take 120% and the document ends up owing the customer money. Refused.
@@ -785,22 +647,6 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             .isInstanceOf(ApiException.class)
             .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
             .hasMessageContaining("ติดลบ");
-    }
-
-    // ── Quotation arithmetic reconciliation — service-level reproductions of five real printed
-    // ── documents, through create()+get() against real Postgres.
-    // ── English per-sqm boxes are pinned in DealQuotationEnglishIntegrationTest; not duplicated
-    // ── here. Plain-row totals identical in shape to the cases below, and pieces-only documents,
-    // ── have no service-level equivalent (pieces-only is pinned at the WastageCalculator layer by
-    // ── WastageCalculatorTest/QuotationGoldenDocumentsTest). ────────
-
-    // ── "Sell loose pieces" ─────────────────────────────────
-
-    // ── v3 fixtures ────────────────────────────────────────────────────────────────────────
-
-    private UpsertDealQuotationRequest upsertRequestWithMode(String priceMode, List<ItemInput> items) {
-        return new UpsertDealQuotationRequest(null, "P003", "D002", LocalDate.now(), 30, "CREDIT", 30, 30,
-            "หมายเหตุทดสอบ", priceMode, items).withRecipientType("OWNER");
     }
 
     private ItemInput adjustmentPctItem(String pct, LocalDate deadline) {

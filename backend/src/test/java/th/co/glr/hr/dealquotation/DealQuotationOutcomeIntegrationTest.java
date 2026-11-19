@@ -25,13 +25,9 @@ import th.co.glr.hr.customer.ProjectDto;
 import th.co.glr.hr.customer.ProjectRepository;
 import th.co.glr.hr.customerquotation.CustomerQuotationRepository;
 import th.co.glr.hr.customerquotation.CustomerQuotationService;
-import th.co.glr.hr.customerquotation.DiscountApprovalRepository;
 import th.co.glr.hr.dealquotation.DealQuotationDtos.DealQuotationDto;
 import th.co.glr.hr.dealquotation.DealQuotationRequests.ApproveRequest;
 import th.co.glr.hr.dealquotation.DealQuotationRequests.RecordOutcomeRequest;
-import th.co.glr.hr.deposit.DepositNoticePdfRenderer;
-import th.co.glr.hr.deposit.DepositNoticeRepository;
-import th.co.glr.hr.deposit.DepositNoticeService;
 import th.co.glr.hr.employee.EmployeeCodeGenerator;
 import th.co.glr.hr.employee.EmployeeReferenceRepository;
 import th.co.glr.hr.employee.EmployeeRepository;
@@ -95,9 +91,6 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
     private DealQuotationService quotationService;
     private DealQuotationRepository quotationRepository;
     private CustomerQuotationRepository legacyQuotationRepository;
-    private CustomerQuotationService legacyQuotationService;
-    private OrderConfirmationService orderConfirmation;
-    private DepositNoticeService depositNoticeService;
     private TicketRepository tickets;
     private TicketService ticketService;
 
@@ -171,21 +164,6 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
         quotationService.wirePricingRequestDependencies(pricingRequests, decisionRepository, legacyQuotationRepository);
         quotationService.wireTicketService(ticketService);
 
-        legacyQuotationService = new CustomerQuotationService(legacyQuotationRepository, pricingRequests,
-            decisionRepository, tickets, ticketService, customers, new QuotationRenderer(), notifications,
-            new DiscountApprovalRepository(jdbc));
-
-        DepositNoticeRepository depositNoticeRepository = new DepositNoticeRepository(jdbc);
-        depositNoticeService = new DepositNoticeService(depositNoticeRepository, tickets,
-            notifications, new DepositNoticePdfRenderer(), customers,
-            legacyQuotationRepository, th.co.glr.hr.support.DocumentBundles.noDownload(jdbc));
-        orderConfirmation = new OrderConfirmationService(
-            pricingRequests, tickets, ticketService, legacyQuotationRepository, depositNoticeService, notifications);
-        // Without this wiring, reconcileTicketItems silently
-        // falls back to the PR item's own requestedQty for every test in this file, which would
-        // make the "quantity edited on the quotation" regression test below pass vacuously.
-        orderConfirmation.wireDealQuotationRepository(quotationRepository);
-
         salesRepId = createEmployee(employees, "พนักงานขาย S3", "sales-s3@glr.co.th", "SALES", "แผนกขาย");
         otherSalesId = createEmployee(employees, "พนักงานขาย S3 อื่น", "sales-s3-other@glr.co.th", "SALES", "แผนกขาย");
         importUserId = createEmployee(employees, "ฝ่ายนำเข้า S3", "import-s3@glr.co.th", "PCIM", "ฝ่ายนำเข้า");
@@ -229,16 +207,6 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
             .isEqualTo(PricingRequestStatus.QUOTATION_ACCEPTED);
     }
 
-    // ── Deposit notice from the pricing-request route when the accepted quotation is NEW-engine ──
-    // DealDepositPanel/DepositNoticePage call
-    // POST /pricing-requests/{id}/deposit-notice whenever a QUOTATION_ACCEPTED pricing request exists;
-    // that route must also read NEW-engine quotations (reading only legacy CustomerQuotation rows
-    // answers 409 for every deal quoted through DealQuotationService.createFromPricingRequest). Direct quotations never take this route.
-
-    // ── A ไม่รับมัดจำ quotation puts the deal on the no-deposit payment path ──
-    // confirmOrder syncs sales.ticket.deposit_policy from the confirmed quotation's 0%, so the import
-    // request and final-payment gates open without a manual waiveDeposit, and no route can bill a deposit.
-
     @Test
     void recordOutcome_byNonOwningSales_refused_writesNothing() {
         DealQuotationDto issued = issuedNewOriginQuotation(PricingRequestRecipient.DESIGNER, new BigDecimal("10"));
@@ -278,84 +246,7 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(quotationService.get(issued.id(), salesActor).docStatus()).isEqualTo(QuotationStatus.ISSUED);
     }
 
-    // one finalized (ACCEPTED) quotation per DEAL, across BOTH คำขอราคา origins. Both directions are
-    // wrong-way-round: the SECOND accept must be refused with NOTHING written, regardless of which origin goes
-    // first.
-
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // Confirm order (R9) — OrderConfirmationService#confirmOrder reused UNCHANGED, driven from a
-    // PRICING_REQUEST-origin accepted quotation.
-    //
-    // Sales can edit a PRICING_REQUEST-origin quotation line's
-    // quantity after the PR was authored (excluded from requireCeoApprovalIfChanged, so no CEO
-    // re-approval needed), so reconcileTicketItems must write the quotation's accepted quantity,
-    // not the PR's ORIGINAL one (which would silently discard the customer's actual accepted
-    // quantity). The two tests below
-    // are the accepted-quotation-quantity regression (edited) and its unedited counterpart
-    // (proving the already-correct case is unchanged).
-    // ─────────────────────────────────────────────────────────────────────────────────────
-
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // DealQuotationRepository#findByTicket must not be DEAL_DIRECT-only, or a deal whose only
-    // quotation is PRICING_REQUEST-origin returns an EMPTY list from GET
-    // /tickets/{id}/deal-quotations — the endpoint both DealDocumentRegister.jsx's
-    // directQuotationsQuery and DealDirectQuotationPanel.jsx call to render "ใบเสนอราคา" at all.
-    // ─────────────────────────────────────────────────────────────────────────────────────
-
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // Visibility: widening #findByTicket's RESULT SET (above) must not widen #listForTicket's
-    // per-row VISIBILITY rule beyond the DEAL_DIRECT-shaped
-    // VIEW_ROLES {sales,sales_manager,ceo,import,account} + a full hasQuotationGrant bypass —
-    // otherwise import/account/any canCreateQuotation-granted employee could read a PRICING_REQUEST
-    // row's unitPrice/discountPct/netUnitPrice through this endpoint, which on THIS origin are the
-    // CEO's own approved price and discount (restricted to
-    // PRICING_REQUEST_VIEW_ROLES with no grant bypass). The unauthorized
-    // PRICING_REQUEST row is FILTERED OUT of the list entirely (not field-stripped) — see
-    // #listForTicket's own comment for why that matches every sibling list/count surface on this
-    // class.
-    // ─────────────────────────────────────────────────────────────────────────────────────
-
-    // Account sees number, total and each line's NET unit price -- never the CEO list
-    // price or discount. Stripped at the service layer on EVERY JSON read account can reach (get, listForTicket).
-    private static final java.util.Set<String> PRICE_INTERNAL_KEYS = java.util.Set.of(
-        "unitPrice", "discountPct", "specialPriceSqm", "adjustmentPct", "adjustmentAmount", "catalogPriceId",
-        "specialPriceLine", "calculationLine", "priceMode", "ceoPriceMode", "priceModeChangedFromCeo",
-        "priceChangedFromCeo", "itemsRemovedFromCeoCount", "removedCeoItems",
-        "ceoListUnitPrice", "ceoDiscountPct", "ceoSpecialPriceSqm", "ceoDirectNetPrice", "ceoNetUnitPrice");
-
-    /** A price-internal key may exist only as an emptied value (null / false / 0 / empty list). */
-    private void assertNoPriceInternals(com.fasterxml.jackson.databind.JsonNode node, String path) {
-        if (node.isObject()) {
-            node.fields().forEachRemaining(e -> {
-                var v = e.getValue();
-                if (PRICE_INTERNAL_KEYS.contains(e.getKey())) {
-                    boolean empty = v.isNull() || (v.isBoolean() && !v.asBoolean()) || (v.isNumber() && v.asInt() == 0)
-                        || (v.isArray() && v.isEmpty());
-                    assertThat(empty).as(path + "." + e.getKey() + " must be stripped but was " + v).isTrue();
-                }
-                assertNoPriceInternals(v, path + "." + e.getKey());
-            });
-        } else if (node.isArray()) {
-            node.forEach(n -> assertNoPriceInternals(n, path + "[]"));
-        }
-    }
-
     // Fixture helpers
-
-    private static String line(BigDecimal qty, BigDecimal netUnitPrice) {
-        return (qty == null ? "null" : qty.stripTrailingZeros().toPlainString()) + " @ "
-            + (netUnitPrice == null ? "null" : netUnitPrice.stripTrailingZeros().toPlainString());
-    }
-
-    private DealQuotationDto acceptedNewOriginQuotation(String recipient, BigDecimal qty) {
-        return acceptedNewOriginQuotation(recipient, qty, null);
-    }
-
-    private DealQuotationDto acceptedNewOriginQuotation(String recipient, BigDecimal qty, Integer depositPercent) {
-        DealQuotationDto issued = issuedNewOriginQuotation(recipient, qty, depositPercent);
-        return quotationService.recordOutcome(issued.id(),
-            new RecordOutcomeRequest(QuotationStatus.ACCEPTED, "ลูกค้าโอเค", UUID.randomUUID().toString()), salesActor);
-    }
 
     private DealQuotationDto issuedNewOriginQuotation(String recipient, BigDecimal qty) {
         return issuedNewOriginQuotation(recipient, qty, null);
@@ -428,10 +319,6 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
         return pricingRequestId;
     }
 
-    private DealQuotationRequests.UpsertDealQuotationRequest upsertWithValidityDays(DealQuotationDto q, int days) {
-        return upsertWithValidityDays(q, days, q.depositPercent());
-    }
-
     private DealQuotationRequests.UpsertDealQuotationRequest upsertWithValidityDays(DealQuotationDto q, int days,
                                                                                     Integer depositPercent) {
         List<DealQuotationRequests.ItemInput> items = q.items().stream().map(this::asItemInput).toList();
@@ -470,18 +357,6 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
             null, null, nameTh, null, null, null, null, null, null, null,
             email, null, divisionSourceCode, divisionNameTh, divisionNameTh,
             null, null, null, "ACT", new BigDecimal("30000"), null, null, null, null, null, null, null));
-    }
-
-    /** account role WITH the can_create_quotation grant — mirrors PricingRequestQuotationIntegrationTest#grantedAccountActor's
-     * identical pattern; the grant lets this actor view/edit ANY DEAL_DIRECT deal, but must NOT bypass
-     * DealQuotationService#PRICING_REQUEST_VIEW_ROLES for a PRICING_REQUEST-origin row. */
-    private UserPrincipal grantedAccountActor(String suffix) {
-        EmployeeRepository employees = new EmployeeRepository(
-            jdbc, new EmployeeReferenceRepository(jdbc), new EmployeeCodeGenerator(jdbc));
-        long id = createEmployee(employees, "บัญชี S3 BLOCKER-A (สิทธิ์พิเศษ) " + suffix,
-            "acct-s3-blockera-grant-" + suffix + "@glr.co.th", "ACCT", "ฝ่ายบัญชี");
-        jdbc.update("UPDATE hr.employee SET can_create_quotation = TRUE WHERE employee_id = :id", Map.of("id", id));
-        return actor(id, "account");
     }
 
     private UserPrincipal actor(long employeeId, String role) {

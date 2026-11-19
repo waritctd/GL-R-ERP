@@ -67,10 +67,6 @@ class ApprovedQuotationStageBackfillMigrationIntegrationTest extends AbstractDea
         });
     }
 
-    // ── round-2 N4 ───────────────────────────────────────────────────────────
-
-    // ── round-2 N3 ───────────────────────────────────────────────────────────
-
     @Test
     void rerunningIsANoOp() throws IOException {
         long ticket = stuckDeal(EntryChannel.DESIGNER_LED);
@@ -80,8 +76,6 @@ class ApprovedQuotationStageBackfillMigrationIntegrationTest extends AbstractDea
 
         assertThat(eventCount(ticket, "STAGE_CHANGED")).isEqualTo(1);
     }
-
-    // ── rollback ─────────────────────────────────────────────────────────────
 
     // ── helpers ──────────────────────────────────────────────────────────────────────────────────
 

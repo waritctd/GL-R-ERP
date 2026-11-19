@@ -13,7 +13,6 @@ import th.co.glr.hr.dealquotation.DealQuotationDtos.PromoteToDealResultDto;
 import th.co.glr.hr.dealquotation.DealQuotationRequests.ApproveRequest;
 import th.co.glr.hr.deposit.DepositNoticeDraftRequest;
 import th.co.glr.hr.ticket.DealStage;
-import th.co.glr.hr.ticket.DirectQuotationLocks;
 import th.co.glr.hr.ticket.QuotationStatus;
 import th.co.glr.hr.ticket.TicketEventKind;
 import th.co.glr.hr.ticket.TicketResponses;
@@ -27,31 +26,14 @@ import th.co.glr.hr.ticket.TicketSummaryDto;
  * /api/deal-quotations/{id}/confirm-order}; {@code …/promote-to-deal} is kept as an alias for one
  * release). A quotation-first deal is NOT hidden from the pipeline.
  *
- * <p>Pinned here:
- * <ul>
- *   <li>there is no {@code quotation_only} precondition — an ordinary deal with an APPROVED
- *       direct quotation confirms too; {@code quotation_only} is provenance only;</li>
- *   <li>a quotation-first deal is a real pipeline deal: it is listed, and stage / entry-channel /
- *       tender writes work on it;</li>
- *   <li>the items and pricing-request refusals are keyed on "this deal has a live
- *       DEAL_DIRECT quotation", not the flag ({@link DirectQuotationLocks}).</li>
- * </ul>
- *
- * <p>Every service is the production class, hand-wired against real Postgres (no Mockito anywhere):
- * the authz decision, the list SQL and the confirmation's writes are all exercised through the real
- * repositories. The confirmation itself is called through {@link #transactional} — a real
- * transactional AOP proxy — so the atomicity test below proves the method's own
- * {@code @Transactional} is what rolls a half-done confirmation back, not a template the test supplied.
+ * <p>Pinned here: the owner-only authz, the 409 preconditions, replay idempotence, the zero-deposit
+ * no-deposit path, cancelling the deal's other open quotations, and revision/clone refusal after
+ * confirmation. Every service is the production class, hand-wired against real Postgres (no Mockito).
  *
  * <p>Authz cases are written wrong-way-round per CLAUDE.md: every refusal asserts that NOTHING was
  * written (still {@code draft}, still at the lead stage, no items, no event).
  */
 class DealQuotationConfirmOrderIntegrationTest extends DirectQuotationDealTestBase {
-    private static final String V193 = "db/migration/V193__ticket_quotation_only.sql";
-
-    // Happy path — owner confirms; the deal lands at S10 with the quotation's own lines, and the ticket-keyed
-    // money side (deposit-notice draft) unlocks.
-
     @Test
     void replay_isIdempotent_returnsTheDeal_andWritesNothingMore() {
         long ghost = quotationOnlyTicket(salesActor);
@@ -67,12 +49,6 @@ class DealQuotationConfirmOrderIntegrationTest extends DirectQuotationDealTestBa
         assertThat(eventCount(ghost)).isEqualTo(eventsBefore);
         assertThat(itemCount(ghost)).isEqualTo(itemsBefore);
     }
-
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // Hand-off notifications: confirm-order from a direct quotation tells the CEO, and
-    // account too when the order carries no deposit. Bell row AND email path are pinned.
-    // ─────────────────────────────────────────────────────────────────────────────────────
-
 
     /** A ไม่รับมัดจำ (0%) direct quotation confirms onto the no-deposit
      * payment path, so final payment is not blocked by a deposit that will never exist. */
@@ -125,6 +101,27 @@ class DealQuotationConfirmOrderIntegrationTest extends DirectQuotationDealTestBa
 
         assertThat(quotationRows(deal)).isEqualTo(rowsBefore);
         assertThat(quotationService.get(fifty.id(), salesActor).docStatus()).isEqualTo(QuotationStatus.APPROVED);
+    }
+
+    @Test
+    void afterConfirm_aCloneOrRevisionDraftOpenedBeforeConfirm_cannotBeSubmitted() {
+        long deal = pipelineTicket(salesActor);
+        DealQuotationDto v1 = approvedDirectQuotation(deal, salesActor);
+        DealQuotationDto clone = quotationService.createReorder(v1.id(), salesActor);
+        DealQuotationDto revisionDraft = quotationService.createRevision(v1.id(), salesActor);
+        confirmer.confirmOrderFromDirectQuotation(v1.id(), salesActor);
+
+        assertConflict(() -> quotationService.submit(clone.id(), salesActor), "ยืนยันคำสั่งซื้อจากใบเสนอราคาอื่นแล้ว");
+        assertConflict(() -> quotationService.submit(revisionDraft.id(), salesActor), "ยืนยันคำสั่งซื้อจากใบเสนอราคาอื่นแล้ว");
+
+        assertStillTheAgreedOrder(deal, v1);
+    }
+
+    private void assertStillTheAgreedOrder(long deal, DealQuotationDto v1) {
+        assertThat(quotationService.get(v1.id(), salesActor).docStatus()).isEqualTo(QuotationStatus.APPROVED);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sales.quotation WHERE ticket_id = :id AND doc_status = 'APPROVED'",
+            Map.of("id", deal), Integer.class)).isEqualTo(1);
+        assertThat(summary(deal).depositPolicy()).isEqualTo("REQUIRED");
     }
 
     /** Confirming the order must not strand the deal's other open direct quotations. */
@@ -233,28 +230,7 @@ class DealQuotationConfirmOrderIntegrationTest extends DirectQuotationDealTestBa
         assertNothingPromoted(ghost);
     }
 
-    // A quotation-first deal is a real pipeline deal (IA §7) — listed, and movable by hand.
-
-    // Items / pricing-request refusals are keyed on "a LIVE DEAL_DIRECT quotation exists" — not on the
-    // quotation_only flag. Written on ORDINARY deals so the flag cannot be the cause.
-
-    // V193 backfill — V193 re-executed VERBATIM from the classpath over hand-shaped rows.
-
-
     // Helpers
-
-    /** Exactly what the quotation editor's inline create sends (QuotationEditorPage #handleInlineCreate): no
-     * contact, no items, a follow-up date, and quotationOnly=true. */
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // Confirm-order on a DIRECT quotation must hand each
-    // ticket_item the quotation line's catalogue link and factory, as the pricing-request route does —
-    // otherwise สร้างใบ IR 409s "รายการนี้ยังไม่ได้ระบุโรงงาน" and nobody can fix it.
-    // ─────────────────────────────────────────────────────────────────────────────────────
-
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // จากสต็อก on a direct quotation: the declaration reaches the ticket and drives routing exactly as the
-    // pricing-request route does (qty_from_stock = qty on a stock line).
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     /**
      * Every refusal above asserts through here: the promotion wrote NOTHING.

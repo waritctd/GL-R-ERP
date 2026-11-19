@@ -70,14 +70,6 @@ class DealOwnerKeyerHttpIntegrationTest extends AbstractDealQuotationSlice2Integ
         jdbc.update("UPDATE hr.division SET source_code = 'SA' WHERE source_code = 'SALES'", Map.of());
     }
 
-    // ── 1/2: create ──────────────────────────────────────────────────────────────────────────────
-
-    // ── 3: owner validation ──────────────────────────────────────────────────────────────────────
-
-    // ── 4: owner B ───────────────────────────────────────────────────────────────────────────────
-
-    // ── 5: keyer A ───────────────────────────────────────────────────────────────────────────────
-
     /** Scenario 5a: the keyer still sees the deal in the deal list and can open it. */
     @Test
     void keyer_seesTheDealInTheDealList_andCanOpenIt() throws Exception {
@@ -101,8 +93,6 @@ class DealOwnerKeyerHttpIntegrationTest extends AbstractDealQuotationSlice2Integ
         assertThat(quotationListIds(salesActor)).contains(quotationId);
     }
 
-    // ── 6: third rep C ───────────────────────────────────────────────────────────────────────────
-
     /** Scenario 6: neither owner nor keyer -> not listed, 403 on GET, quotation create, and stage move. */
     @Test
     void thirdRep_neverSeesNorTouchesTheDeal() throws Exception {
@@ -120,8 +110,6 @@ class DealOwnerKeyerHttpIntegrationTest extends AbstractDealQuotationSlice2Integ
             .getResponse().getStatus()).isEqualTo(403);
     }
 
-    // ── 7: attribution follows the owner ─────────────────────────────────────────────────────────
-
     // ── 8: QT พนักงานขาย moves the deal owner (Ploy 2026-11-13) ──────────────────────────────────
 
     /** 8a: rep B on a deal A owns (no keyer) -> owner B, A becomes keyer; B reaches the deal, A still does. */
@@ -138,11 +126,6 @@ class DealOwnerKeyerHttpIntegrationTest extends AbstractDealQuotationSlice2Integ
         assertThat(send(otherSalesActor, get("/api/tickets/" + ticketId), null).getResponse().getStatus()).isEqualTo(200);
         assertThat(send(salesActor, get("/api/tickets/" + ticketId), null).getResponse().getStatus()).isEqualTo(200);
     }
-
-    /**
-     * 8f: finished deal -> no move. Predicate: lifecycle NOT ACTIVE (CLOSED_LOST/CANCELLED/COMPLETED,
-     * DealLifecycle) or status closed/cancelled (TicketStatus). The draft QT is created while the deal is live,
-     * then the deal is finished, then the rep is changed on the draft. The save itself may or may not be refused;
 
     // ── 13: "manage all sales documents" grant (Ploy 2026-11-18) ─────────────────────────────────
     // hr.employee.can_manage_all_sales_documents: a holder acts as the OWNER of every deal. The flag is set with SQL,

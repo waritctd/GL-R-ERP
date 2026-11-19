@@ -112,27 +112,7 @@ class DealQuotationUndoOrderConfirmationIntegrationTest extends DirectQuotationD
     }
 
     // ───────────────────────────────────────────────────────────────────────────────────
-    // 2. A DRAFT deposit notice is deleted (with its items); another deal's is not
-    // ───────────────────────────────────────────────────────────────────────────────────
-
-    // ───────────────────────────────────────────────────────────────────────────────────
-    // 3. 0% deposit: the system's policy flip is reversed; the all-stock auto-route is undone
-    // ───────────────────────────────────────────────────────────────────────────────────
-
-    // ───────────────────────────────────────────────────────────────────────────────────
-    // 4. After the undo the deal is a normal pre-order deal again
-    // ───────────────────────────────────────────────────────────────────────────────────
-
-    // ───────────────────────────────────────────────────────────────────────────────────
-    // 5. Siblings the confirmation auto-cancelled stay cancelled
-    // ───────────────────────────────────────────────────────────────────────────────────
-
-    // ───────────────────────────────────────────────────────────────────────────────────
-    // 6. No notification of any kind
-    // ───────────────────────────────────────────────────────────────────────────────────
-
-    // ───────────────────────────────────────────────────────────────────────────────────
-    // 7. Cut-offs: each is a 409 and NOTHING is written
+    // Cut-offs: each is a 409 and NOTHING is written
     // ───────────────────────────────────────────────────────────────────────────────────
 
     @ParameterizedTest
@@ -193,11 +173,7 @@ class DealQuotationUndoOrderConfirmationIntegrationTest extends DirectQuotationD
     }
 
     // ───────────────────────────────────────────────────────────────────────────────────
-    // 8. Quotation / state refusals
-    // ───────────────────────────────────────────────────────────────────────────────────
-
-    // ───────────────────────────────────────────────────────────────────────────────────
-    // 9. Authz: who cannot reach it (403 before any 409), who can
+    // Authz: who cannot reach it (403 before any 409), who can
     // ───────────────────────────────────────────────────────────────────────────────────
 
     @Test
@@ -222,7 +198,7 @@ class DealQuotationUndoOrderConfirmationIntegrationTest extends DirectQuotationD
     }
 
     // ───────────────────────────────────────────────────────────────────────────────────
-    // 10. Idempotent replay
+    // Idempotent replay
     // ───────────────────────────────────────────────────────────────────────────────────
 
     @Test
@@ -241,7 +217,7 @@ class DealQuotationUndoOrderConfirmationIntegrationTest extends DirectQuotationD
     }
 
     // ───────────────────────────────────────────────────────────────────────────────────
-    // 11. Atomicity — through the real @Transactional proxy
+    // Atomicity — through the real @Transactional proxy
     // ───────────────────────────────────────────────────────────────────────────────────
 
     /**
@@ -279,15 +255,7 @@ class DealQuotationUndoOrderConfirmationIntegrationTest extends DirectQuotationD
     }
 
     // ───────────────────────────────────────────────────────────────────────────────────
-    // 12. The awarded party goes back to the status (and reason) it had before the award
-    // ───────────────────────────────────────────────────────────────────────────────────
-
-    // ───────────────────────────────────────────────────────────────────────────────────
-    // 13. The deposit-policy note the undo looks for is exactly the one the confirmation writes
-    // ───────────────────────────────────────────────────────────────────────────────────
-
-    // ───────────────────────────────────────────────────────────────────────────────────
-    // 14. Concurrency: a draft cannot be created behind an undo's back
+    // Concurrency: a draft cannot be created behind an undo's back
     // ───────────────────────────────────────────────────────────────────────────────────
 
     /**
@@ -350,15 +318,6 @@ class DealQuotationUndoOrderConfirmationIntegrationTest extends DirectQuotationD
             pool.shutdownNow();
         }
     }
-
-
-    // ───────────────────────────────────────────────────────────────────────────────────
-    // 15. A delayed retry names the confirmation it means (confirmationEventId)
-    // ───────────────────────────────────────────────────────────────────────────────────
-
-    // ───────────────────────────────────────────────────────────────────────────────────
-    // 16. The all-stock route is only the confirmation's own
-    // ───────────────────────────────────────────────────────────────────────────────────
 
     // ───────────────────────────────────────────────────────────────────────────────────
     // Helpers
