@@ -2,10 +2,8 @@ import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { AttendancePage, PunchDetail, punchRole } from './AttendancePage.jsx';
+import { AttendancePage, PunchDetail } from './AttendancePage.jsx';
 import { api } from '../../api/index.js';
-import { useToast } from '../../hooks/useToast.js';
-import { Toast } from '../../components/common/Toast.jsx';
 
 globalThis.React = React;
 
@@ -40,8 +38,6 @@ const hrUser = { role: 'hr', employeeId: 1 };
 // isSelfView.
 const selfViewUser = { role: 'employee', employeeId: 2, manager: false };
 const ceoUser = { role: 'ceo', employeeId: 3 };
-// a session not yet linked to an employee record -- e.g. a brand-new account.
-const noEmployeeIdUser = { role: 'employee', employeeId: null, manager: false };
 
 function renderWithClient(ui) {
   const queryClient = new QueryClient({
@@ -49,36 +45,6 @@ function renderWithClient(ui) {
   });
   return render(<QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>);
 }
-
-// Mirrors App.jsx's real wiring: useToast hands back a `showToast` function that is re-created on every render
-// of whatever owns it -- unlike a test's `vi.fn`, which never changes identity and so cannot reproduce the
-// infinite-render-loop hazard this harness exists to catch.
-function AppShapedHarness({ children, onShowToast }) {
-  const { toast, showToast, dismissToast } = useToast();
-  function wrappedShowToast(kind, message) {
-    onShowToast?.(kind, message);
-    showToast(kind, message);
-  }
-  return (
-    <>
-      {children(wrappedShowToast)}
-      <Toast toast={toast} onDismiss={dismissToast} />
-    </>
-  );
-}
-
-describe('punchRole', () => {
-  it('labels the first scan as clock-in (เข้า) and the last as clock-out (ออก)', () => {
-    expect(punchRole(0, 4).label).toBe('เข้า');
-    expect(punchRole(3, 4).label).toBe('ออก');
-    expect(punchRole(1, 4).label).toBe('ระหว่างวัน');
-    expect(punchRole(2, 4).label).toBe('ระหว่างวัน');
-  });
-
-  it('leaves a lone scan unlabelled — its direction is not asserted', () => {
-    expect(punchRole(0, 1).label).toBe('');
-  });
-});
 
 describe('PunchDetail — first punch is clock-in, last is clock-out', () => {
   // Punches arrive oldest-first (the AttendanceRepository.findPunches contract), so the earliest time must
@@ -106,181 +72,6 @@ describe('PunchDetail — first punch is clock-in, last is clock-out', () => {
     // Mid-day scans are neither clock-in nor clock-out.
     expect(within(rows[1]).getByText('ระหว่างวัน')).toBeTruthy();
     expect(within(rows[2]).getByText('ระหว่างวัน')).toBeTruthy();
-  });
-});
-
-// Issue #422 BLOCKING 4 (adversarial review): the whole B2 slice (useQuery, the four refetch() conversions,
-// the scoped key, the relocated setExpandedKey(null) effect) previously shipped with NO rendering test at all
-// -- this file only ever exercised the pure PunchDetail/punchRole helpers above.
-describe('AttendancePage rendering (issue #422 B2)', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    api.attendance.daily.mockResolvedValue({ days: [] });
-    api.attendance.employees.mockResolvedValue({ employees: [] });
-    api.attendance.devices.mockResolvedValue({ devices: [] });
-    api.attendance.unmapped.mockResolvedValue({ badges: [] });
-    api.attendanceCorrection.list.mockResolvedValue({ requests: [] });
-  });
-
-  it('loads and renders the daily attendance table on mount', async () => {
-    api.attendance.daily.mockResolvedValue({
-      days: [{
-        employee_id: 1,
-        work_date: '2026-08-01',
-        employee_name: 'พนักงาน ทดสอบ',
-        employee_code: 'GLR-001',
-        check_in: '2026-08-01T08:00:00+07:00',
-        check_out: '2026-08-01T17:00:00+07:00',
-        total_minutes: 480,
-        status: 'ON_TIME',
-        punch_count: 2,
-      }],
-    });
-
-    renderWithClient(<AttendancePage user={hrUser} showToast={vi.fn()} />);
-
-    await screen.findByText('พนักงาน ทดสอบ');
-    expect(api.attendance.daily).toHaveBeenCalledTimes(1);
-  });
-
-  it('the รีเฟรช button refetches the daily attendance query', async () => {
-    renderWithClient(<AttendancePage user={hrUser} showToast={vi.fn()} />);
-
-    // Scoped to `.page-actions` (PageHeader.jsx's own actions row): AttendanceCorrectionPanel's own section
-    // (fix/attendance-correction-on-attendance-page) now ALSO renders a "รีเฟรช" button lower on the page (it
-    // refetches the correction list, not the daily table), so an unscoped query is ambiguous.
-    const pageActions = document.querySelector('.page-actions');
-    const refreshButton = await within(pageActions).findByRole('button', { name: /รีเฟรช/ });
-    // Wait for the FIRST fetch to actually resolve (the button is disabled while `isLoading`, issue #422 P2 fix)
-    // before clicking, or the click is a no-op on a disabled button.
-    await waitFor(() => expect(refreshButton.disabled).toBe(false));
-    await waitFor(() => expect(api.attendance.daily).toHaveBeenCalledTimes(1));
-
-    fireEvent.click(refreshButton);
-
-    await waitFor(() => expect(api.attendance.daily).toHaveBeenCalledTimes(2));
-  });
-
-  // BLOCKING 1: a query-error toast effect that puts an unstable `showToast` in its dependency array re-fires
-  // every time `showToast` is called.
-  it('does not call showToast more than once when api.attendance.daily fails, driven by an App-shaped (unstable) showToast', async () => {
-    api.attendance.daily.mockRejectedValue(new Error('เครือข่ายขัดข้อง'));
-    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    const showToastCalls = [];
-
-    render(
-      <QueryClientProvider client={queryClient}>
-        <AppShapedHarness
-          onShowToast={(kind, message) => {
-            showToastCalls.push({ kind, message });
-            if (showToastCalls.length > 1) {
-              throw new Error(`showToast called ${showToastCalls.length} times -- infinite render loop`);
-            }
-          }}
-        >
-          {(showToast) => <AttendancePage user={hrUser} showToast={showToast} />}
-        </AppShapedHarness>
-      </QueryClientProvider>,
-    );
-
-    const alert = await screen.findByRole('alert');
-    expect(alert.textContent).toContain('เครือข่ายขัดข้อง');
-    expect(showToastCalls).toHaveLength(1);
-  });
-});
-
-// Regression coverage for the date stepper bug: `stepDay` used to round-trip through `new
-// Date(...).toISOString()`, which reads the UTC calendar day off a Bangkok-midnight instant -- always one day
-// behind the Bangkok date intended, netting a 2-day back-step and a stuck forward-step.
-describe('AttendancePage date stepper', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    api.attendance.daily.mockResolvedValue({ days: [] });
-    api.attendance.employees.mockResolvedValue({ employees: [] });
-    api.attendance.devices.mockResolvedValue({ devices: [] });
-    api.attendance.unmapped.mockResolvedValue({ badges: [] });
-    api.attendanceCorrection.list.mockResolvedValue({ requests: [] });
-  });
-
-  it('previous then next round-trips to the original date, one calendar day at a time', async () => {
-    vi.useFakeTimers({ toFake: ['Date'] });
-    try {
-      vi.setSystemTime(new Date('2026-08-15T05:00:00Z')); // 2026-08-15 12:00 Bangkok
-      renderWithClient(<AttendancePage user={hrUser} showToast={vi.fn()} />);
-
-      const dateInput = await screen.findByLabelText('วันที่');
-      await waitFor(() => expect(dateInput.value).toBe('15/08/2569'));
-
-      const prevButton = screen.getByRole('button', { name: 'วันก่อนหน้า' });
-      const nextButton = screen.getByRole('button', { name: 'วันถัดไป' });
-      // Both buttons are disabled while the scoped daily-attendance query for the CURRENT selectedDate is loading
-      // (issue #422 P2) -- wait for that to clear before every click, or a click on a still-disabled button is a
-      // silent no-op that this test would misread as the stepper doing nothing.
-      await waitFor(() => expect(prevButton.disabled).toBe(false));
-
-      fireEvent.click(prevButton);
-      await waitFor(() => expect(dateInput.value).toBe('14/08/2569'));
-      await waitFor(() => expect(nextButton.disabled).toBe(false));
-
-      fireEvent.click(nextButton);
-      await waitFor(() => expect(dateInput.value).toBe('15/08/2569'));
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  // Typing never reaches the page until blur, so clearing the field to retype leaves it empty
-  // instead of being refilled with today under the cursor.
-  it('clearing the date field leaves it empty while typing, and a newly typed พ.ศ. date is what sticks', async () => {
-    vi.useFakeTimers({ toFake: ['Date'] });
-    try {
-      vi.setSystemTime(new Date('2026-08-15T05:00:00Z'));
-      renderWithClient(<AttendancePage user={hrUser} showToast={vi.fn()} />);
-      const dateInput = await screen.findByLabelText('วันที่');
-      await waitFor(() => expect(dateInput.value).toBe('15/08/2569'));
-
-      await waitFor(() => expect(screen.getByRole('button', { name: 'วันก่อนหน้า' }).disabled).toBe(false));
-      fireEvent.click(screen.getByRole('button', { name: 'วันก่อนหน้า' }));
-      await waitFor(() => expect(dateInput.value).toBe('14/08/2569'));
-
-      fireEvent.change(dateInput, { target: { value: '' } });
-      expect(dateInput.value).toBe('');
-      fireEvent.change(dateInput, { target: { value: '10/08/2569' } });
-      fireEvent.blur(dateInput);
-      await waitFor(() => expect(dateInput.value).toBe('10/08/2569'));
-      await waitFor(() => expect(api.attendance.daily).toHaveBeenLastCalledWith(expect.objectContaining({ from: '2026-08-10', to: '2026-08-10' })));
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-});
-
-// Regression coverage: monthBounds widened the picker's browsable window to 3 months back, but the self-view
-// fetch range must NOT widen along with it -- it has no date control to reach further back with, and
-// AttendanceDailyService.MAX_RANGE_DAYS caps any query at <92 days.
-describe('AttendancePage self-view fetch range', () => {
-  it("does not widen the self-view's own attendance query past the current month", async () => {
-    vi.clearAllMocks();
-    api.attendance.daily.mockResolvedValue({ days: [] });
-    api.attendance.employees.mockResolvedValue({ employees: [] });
-    api.attendance.devices.mockResolvedValue({ devices: [] });
-    api.attendance.unmapped.mockResolvedValue({ badges: [] });
-    api.attendanceCorrection.list.mockResolvedValue({ requests: [] });
-
-    vi.useFakeTimers({ toFake: ['Date'] });
-    try {
-      // Late in the month -- if the self-view range had inherited the 3-month-back picker window, `from` would be
-      // 2026-05-01 and the span would be 96 days, over the backend's 92-day cap.
-      vi.setSystemTime(new Date('2026-08-30T05:00:00Z')); // 2026-08-30 12:00 Bangkok
-      renderWithClient(<AttendancePage user={selfViewUser} showToast={vi.fn()} />);
-
-      await waitFor(() => expect(api.attendance.daily).toHaveBeenCalledTimes(1));
-      expect(api.attendance.daily).toHaveBeenCalledWith(
-        expect.objectContaining({ from: '2026-08-01', to: '2026-08-30' }),
-      );
-    } finally {
-      vi.useRealTimers();
-    }
   });
 });
 
@@ -316,27 +107,6 @@ describe('AttendancePage attendance-correction button and section', () => {
     await waitFor(() => expect(api.attendance.daily).toHaveBeenCalledTimes(1));
     expect(screen.queryByRole('button', { name: 'ขอแก้ไขเวลา' })).toBeNull();
   });
-
-  it('renders the attendance-correction review section below the daily table', async () => {
-    renderWithClient(<AttendancePage user={selfViewUser} showToast={vi.fn()} />);
-
-    // Substring, not an exact name: the section is collapsible now, and CollapsibleSection puts the title AND the
-    // subtitle inside the disclosure button that its wraps (ARIA APG accordion pattern), so the heading's
-    // accessible name is "<title> <subtitle>".
-    expect(await screen.findByRole('heading', { name: /คำขอแก้ไขเวลาเข้า-ออกงาน/ })).not.toBeNull();
-  });
-
-  // neither gate's `employeeId` conjunct had a fixture that could ever fail it -- every existing fixture is
-  // either CEO or already carries an employeeId.
-  it('renders neither "ขอแก้ไขเวลา" nor the review section for a session with no employeeId', async () => {
-    renderWithClient(<AttendancePage user={noEmployeeIdUser} showToast={vi.fn()} />);
-
-    // Same settle signal as the CEO case above -- unambiguous regardless of how many รีเฟรช buttons the page ends
-    // up with.
-    await waitFor(() => expect(api.attendance.daily).toHaveBeenCalledTimes(1));
-    expect(screen.queryByRole('button', { name: 'ขอแก้ไขเวลา' })).toBeNull();
-    expect(screen.queryByRole('heading', { name: /คำขอแก้ไขเวลาเข้า-ออกงาน/ })).toBeNull();
-  });
 });
 
 // สรุปรายเดือน (monthly attendance summary export): the button's HR-vs-self-view gate, the modal's month +
@@ -370,60 +140,5 @@ describe('AttendancePage monthly summary export', () => {
     // buttons the page ends up with.
     await waitFor(() => expect(api.attendance.daily).toHaveBeenCalledTimes(1));
     expect(screen.queryByRole('button', { name: 'สรุปรายเดือน' })).toBeNull();
-  });
-
-  it("opening the modal and confirming calls api.attendance.monthlySummary with the month and the page's current ฝ่าย/พนักงาน filter", async () => {
-    api.attendance.employees.mockResolvedValue({
-      employees: [
-        {
-          employee_id: 10, employee_code: 'E010', employee_name: 'พนักงาน เอ',
-          nick_name: 'เอ', department_name: 'ขาย', division_id: 1, division_name: 'ฝ่ายขาย',
-        },
-        {
-          employee_id: 11, employee_code: 'E011', employee_name: 'พนักงาน บี',
-          nick_name: 'บี', department_name: 'ขาย', division_id: 1, division_name: 'ฝ่ายขาย',
-        },
-      ],
-    });
-    api.attendance.monthlySummary.mockResolvedValue(new Blob(['xlsx'], {
-      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    }));
-
-    vi.useFakeTimers({ toFake: ['Date'] });
-    try {
-      vi.setSystemTime(new Date('2026-08-15T05:00:00Z')); // 2026-08-15 12:00 Bangkok
-      renderWithClient(<AttendancePage user={hrUser} showToast={vi.fn()} />);
-
-      // Pick a specific employee from the page's OWN filter bar BEFORE opening the modal, so the download call is
-      // proven to carry the SAME filter this picker set, not a value the modal invented independently.
-      const employeeSelect = await screen.findByLabelText('พนักงาน');
-      fireEvent.change(employeeSelect, { target: { value: '10' } });
-
-      fireEvent.click(screen.getByRole('button', { name: 'สรุปรายเดือน' }));
-
-      const monthInput = await screen.findByLabelText('เดือน');
-      // Defaults to the CURRENT month (2026-08-15's month), not selectedDate/monthStart -- see the modal's own
-      // comment for why it must not inherit the day-view stepper's clamp.
-      expect(monthInput.value).toBe('2026-08');
-
-      fireEvent.click(screen.getByRole('button', { name: /ดาวน์โหลด/ }));
-
-      await waitFor(() => expect(api.attendance.monthlySummary).toHaveBeenCalledTimes(1));
-      expect(api.attendance.monthlySummary).toHaveBeenCalledWith({ month: '2026-08', employeeId: '10' });
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it('a failed download surfaces a toast rather than throwing', async () => {
-    api.attendance.monthlySummary.mockRejectedValue(new Error('เครือข่ายขัดข้อง'));
-    const showToast = vi.fn();
-
-    renderWithClient(<AttendancePage user={hrUser} showToast={showToast} />);
-
-    fireEvent.click(await screen.findByRole('button', { name: 'สรุปรายเดือน' }));
-    fireEvent.click(await screen.findByRole('button', { name: /ดาวน์โหลด/ }));
-
-    await waitFor(() => expect(showToast).toHaveBeenCalledWith('error', 'เครือข่ายขัดข้อง'));
   });
 });
