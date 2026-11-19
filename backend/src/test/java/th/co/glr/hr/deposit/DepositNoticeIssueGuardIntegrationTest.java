@@ -2,7 +2,6 @@ package th.co.glr.hr.deposit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
@@ -151,6 +150,45 @@ class DepositNoticeIssueGuardIntegrationTest extends AbstractPostgresIntegration
         salesActor = actor(salesRepId, "sales");
         importActor = actor(importUserId, "import");
         ceoActor = actor(ceoUserId, "ceo");
+    }
+
+    // Owner ruling 2026-10-23: sales may change the deposit % on a DRAFT; the amount follows.
+    @Test
+    void update_onADraft_changesThePercentAndTheAmountFollows() {
+        IssuedNoticeFixture fixture = buildTicketWithIssuedDepositNotice();
+        long draftId = depositNoticeRepository.createDraft(
+            fixture.ticketId(), secondDraftHeader(), secondDraftItems(), "Test Preparer"); // 0.50 of 100.00
+
+        DepositNoticeDto updated = depositNoticeService.update(draftId, new DepositNoticeDraftRequest(
+            "ACME", "0100000000000", "Bangkok", "Showroom", "REF-2",
+            new BigDecimal("0.40"), List.of(), secondDraftItems()), salesActor);
+
+        // secondDraftItems: the subtotal is the sum of the per-line rounded amounts (50.00 + 25.03 = 75.03); net x qty
+        // rounded once (75.02), unit x qty (90.00) and the nets alone (43.34) all differ.
+        assertThat(updated.depositPercent()).isEqualByComparingTo("0.40");
+        assertThat(updated.subtotal()).isEqualByComparingTo("75.03");
+        assertThat(updated.depositAmount()).isEqualByComparingTo("30.01");
+        assertThat(updated.vatAmount()).isEqualByComparingTo("2.10");
+        assertThat(updated.totalPayable()).isEqualByComparingTo("32.11");
+        assertThat(depositNoticeService.preview(draftId, salesActor))
+            .contains("ขอรับเงินมัดจำ (40%)")
+            .contains("30.01 บาท");
+
+        // A request without items (null, or an empty list) keeps the stored lines; the amount is
+        // recomputed from them at the new percent.
+        DepositNoticeDto nullItems = depositNoticeService.update(draftId, new DepositNoticeDraftRequest(
+            "ACME", "0100000000000", "Bangkok", "Showroom", "REF-2",
+            new BigDecimal("0.30"), List.of(), null), salesActor);
+        assertThat(nullItems.items()).isEqualTo(updated.items());
+        assertThat(nullItems.subtotal()).isEqualByComparingTo("75.03");
+        assertThat(nullItems.depositAmount()).isEqualByComparingTo("22.51");
+
+        DepositNoticeDto emptyItems = depositNoticeService.update(draftId, new DepositNoticeDraftRequest(
+            "ACME", "0100000000000", "Bangkok", "Showroom", "REF-2",
+            new BigDecimal("0.20"), List.of(), List.of()), salesActor);
+        assertThat(emptyItems.items()).isEqualTo(updated.items());
+        assertThat(emptyItems.subtotal()).isEqualByComparingTo("75.03");
+        assertThat(emptyItems.depositAmount()).isEqualByComparingTo("15.01");
     }
 
     // The deal page's confirm dialog showed amounts read at T0; the draft was saved since. Issuing

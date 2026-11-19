@@ -27,7 +27,6 @@ import th.co.glr.hr.customerquotation.CustomerQuotationDtos.CustomerQuotationIte
 import th.co.glr.hr.customerquotation.CustomerQuotationRepository;
 import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.ticket.DepositPolicy;
-import th.co.glr.hr.ticket.PaymentTrack;
 import th.co.glr.hr.ticket.TicketDto;
 import th.co.glr.hr.ticket.TicketRepository;
 import th.co.glr.hr.ticket.TicketStatus;

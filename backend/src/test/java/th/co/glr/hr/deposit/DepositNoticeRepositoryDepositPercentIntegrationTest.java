@@ -90,6 +90,15 @@ class DepositNoticeRepositoryDepositPercentIntegrationTest extends AbstractPostg
         assertGoverning(ticketId, accepted, true, "0.50");
     }
 
+    @Test
+    void pricingRequestOrigin_anAcceptedQuotationBeatsANewerIssuedOne() {
+        long ticketId = newBareTicket();
+        long accepted = insertOriginTaggedQuotation(ticketId, "PRICING_REQUEST", "ACCEPTED", (short) 30);
+        insertOriginTaggedQuotation(ticketId, "PRICING_REQUEST", "ISSUED", (short) 20);
+
+        assertGoverning(ticketId, accepted, false, "0.30");
+    }
+
     private void assertGoverning(long ticketId, long quotationId, boolean legacy, String depositPercent) {
         DepositNoticeRepository.GoverningQuotation governing =
             depositNotices.findGoverningQuotation(ticketId).orElseThrow();
@@ -160,6 +169,25 @@ class DepositNoticeRepositoryDepositPercentIntegrationTest extends AbstractPostg
                 .addValue("docStatus", docStatus)
                 .addValue("version", version)
                 .addValue("pricingRequestId", pricingRequestId)
+                .addValue("depositPercent", depositPercent), Long.class);
+    }
+
+    private long insertOriginTaggedQuotation(long ticketId, String origin, String docStatus, Short depositPercent) {
+        int version = ++quotationVersionSeq;
+        return jdbc.queryForObject("""
+            INSERT INTO sales.quotation
+                (ticket_id, number, issued_by, doc_status, quotation_version, origin, deposit_percent)
+            VALUES
+                (:ticketId, :number, :issuedBy, :docStatus, :version, :origin, :depositPercent)
+            RETURNING quotation_id
+            """,
+            new MapSqlParameterSource()
+                .addValue("ticketId", ticketId)
+                .addValue("number", "QTD" + ticketId + "-" + version)
+                .addValue("issuedBy", employeeId)
+                .addValue("docStatus", docStatus)
+                .addValue("version", version)
+                .addValue("origin", origin)
                 .addValue("depositPercent", depositPercent), Long.class);
     }
 

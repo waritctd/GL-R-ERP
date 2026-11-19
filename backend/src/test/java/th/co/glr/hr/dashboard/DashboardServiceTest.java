@@ -4,6 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.math.BigDecimal;
@@ -59,6 +61,19 @@ class DashboardServiceTest {
 
         assertThat(summary.cashReceivedThisMonth()).isEqualByComparingTo("125000.50");
         assertThat(summary.cashReceivedByRep()).hasSize(2);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"hr", "import", "sales", "employee"})
+    void cashReceivedIsNullForEveryOtherRoleAndNeverQueried(String role) {
+        when(repository.cashReceivedByRep(any()))
+            .thenReturn(List.of(new CashByRepDto("สมชาย ขายดี", new BigDecimal("125000.50"))));
+
+        DashboardSummaryDto summary = service.summary(user(role, 41L, null, false));
+
+        assertThat(summary.cashReceivedThisMonth()).isNull();
+        assertThat(summary.cashReceivedByRep()).isNull();
+        verify(repository, never()).cashReceivedByRep(any());
     }
 
     private UserPrincipal user(String role, Long employeeId, Long divisionId, boolean manager) {

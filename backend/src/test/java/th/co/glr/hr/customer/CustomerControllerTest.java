@@ -2,7 +2,6 @@ package th.co.glr.hr.customer;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -30,8 +29,7 @@ class CustomerControllerTest {
     // Unstubbed -> canCreateQuotation() defaults to false (Mockito), so a role reaches an endpoint here only via
     // its OWN role (sales/sales_manager) or an explicit per-test stub — never a phantom grant.
     private final EmployeeAuthRepository employeeAuth = mock(EmployeeAuthRepository.class);
-    // Unstubbed -> refreshDraftContactSnapshot returns 0 (Mockito default for int), which is all #updateContact
-    // needs from it.
+    // Unstubbed -> refreshDraftContactSnapshot returns 0 (Mockito default for int); nothing here reads it.
     private final DealQuotationRepository dealQuotations = mock(DealQuotationRepository.class);
     private final CustomerService customerService = new CustomerService(customers, contacts, projects, employeeAuth, dealQuotations);
     private final MockMvc mvc = MockMvcBuilders

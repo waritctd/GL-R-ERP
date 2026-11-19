@@ -112,8 +112,6 @@ class StoredImportRequestIntegrationTest extends AbstractPostgresIntegrationTest
         assertThat(service.list(ticketId, owner)).hasSize(2);
     }
 
-    // ── owner ruling 2026-10-29 (5c): GET /tickets/{id}/import-requests also says whether a factory is uncovered ──
-
     @Test
     void createDrafts_isAllOrNothing_whenOneNewFactoryHasNoLeadTime() {
         // country PL has no LeadTimeDefaults entry -> null lead time -> cannot be issued.
@@ -181,6 +179,32 @@ class StoredImportRequestIntegrationTest extends AbstractPostgresIntegrationTest
         assertThat(sequenceValue()).isEqualTo(seqBefore);
     }
 
+    /** Two partial unique indexes on (ticket_id, factory_id): a correction is prepared while the previous version
+     * is still live, and the revision's issue carries the predecessor's progress step FORWARD rather than
+     * resetting it to CONTACTED (import-request-per-factory-PLAN.md §3). */
+    @Test
+    void revise_leavesThePreviousVersionIssuedUntilTheReplacementIsIssued_andCarriesTheStepForward() {
+        long v1 = byFactory(DraftSeed.seed(jdbc, ticketId, owner), padanaFactoryId).id();
+        service.issue(v1, null, owner);
+        service.advanceStep(v1, new AdvanceImportStepRequest(ImportRequestStep.ORDERED, null, null), importUser);
+
+        ImportRequestDto v2 = service.revise(v1, owner);
+        assertThat(v2.status()).isEqualTo(ImportRequestStatus.DRAFT);
+        assertThat(v2.version()).isEqualTo(2);
+        assertThat(v2.items()).extracting(i -> i.code())
+            .containsExactly("Lithos Nero Nat", "Terrazzo White Nat");
+        // v1 is STILL the live issued form at this point.
+        assertThat(service.get(v1, owner).status()).isEqualTo(ImportRequestStatus.ISSUED);
+
+        ImportRequestDto v2Issued = service.issue(v2.id(), null, owner);
+        // Carried forward, not reset — v1 had already advanced past CONTACTED.
+        assertThat(v2Issued.importStep()).isEqualTo(ImportRequestStep.ORDERED);
+
+        ImportRequestDto superseded = service.get(v1, owner);
+        assertThat(superseded.status()).isEqualTo(ImportRequestStatus.SUPERSEDED);
+        assertThat(superseded.supersededById()).isEqualTo(v2.id());
+    }
+
     /** A revision cannot even be prepared once the predecessor has reached RECEIVED. */
     @Test
     void revise_isRefusedOnceThePredecessorHasReceivedTheGoods() {
@@ -194,10 +218,6 @@ class StoredImportRequestIntegrationTest extends AbstractPostgresIntegrationTest
         assertThatThrownBy(() -> service.revise(v1, owner))
             .isInstanceOfSatisfying(ApiException.class,
                 e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
-    }
-
-    private void advance(long id, String step) {
-        service.advanceStep(id, new AdvanceImportStepRequest(step, null, null), importUser);
     }
 
     // ── authorisation (owner decision 1), asked the wrong way round ─────────────────────────────

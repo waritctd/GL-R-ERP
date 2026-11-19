@@ -30,13 +30,11 @@ import th.co.glr.hr.notification.SalesNotificationMailer;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 import th.co.glr.hr.ticket.CreateTicketRequest;
 import th.co.glr.hr.ticket.QuotationRenderer;
-import th.co.glr.hr.ticket.TicketController;
 import th.co.glr.hr.ticket.TicketRepository;
 import th.co.glr.hr.ticket.TicketService;
 
 /** Shared real-Postgres wiring for the finance deal tests: the REAL TicketService + repositories and the REAL
- * FinanceDealService/Controller and TicketController behind MockMvc (so a removed route is observed as a
- * missing route, not assumed). Nothing here is mocked. */
+ * FinanceDealService/Controller behind MockMvc. Nothing here is mocked. */
 abstract class FinanceDealTestBase extends AbstractPostgresIntegrationTest {
 
     /** Any JSON key containing one of these (case-insensitive) is a cost/pricing/tracking/list-price leak. */
@@ -56,7 +54,6 @@ abstract class FinanceDealTestBase extends AbstractPostgresIntegrationTest {
     RemainingInvoiceRepository remainingInvoices;
     AttachmentRepository attachments;
     MockMvc financeMvc;
-    MockMvc ticketsMvc;
     final ObjectMapper json = new ObjectMapper();
 
     long salesRepId;
@@ -66,7 +63,6 @@ abstract class FinanceDealTestBase extends AbstractPostgresIntegrationTest {
     UserPrincipal hrUser;
     UserPrincipal employeeUser;
     UserPrincipal accountUser;
-    UserPrincipal ceoUser;
 
     @BeforeEach
     void wire() {
@@ -85,8 +81,6 @@ abstract class FinanceDealTestBase extends AbstractPostgresIntegrationTest {
             remainingInvoices, attachments, ticketService);
         financeMvc = MockMvcBuilders.standaloneSetup(new FinanceDealController(service, new SessionContext()))
             .setControllerAdvice(new ApiExceptionHandler()).build();
-        ticketsMvc = MockMvcBuilders.standaloneSetup(new TicketController(ticketService, new SessionContext()))
-            .setControllerAdvice(new ApiExceptionHandler()).build();
 
         EmployeeRepository employees = new EmployeeRepository(
             jdbc, new EmployeeReferenceRepository(jdbc), new EmployeeCodeGenerator(jdbc));
@@ -97,7 +91,6 @@ abstract class FinanceDealTestBase extends AbstractPostgresIntegrationTest {
         hrUser = principal(createEmployee(employees, "ฝ่ายบุคคล ทดสอบ", "fin-hr@glr.co.th"), "hr");
         employeeUser = principal(createEmployee(employees, "พนักงาน ทดสอบ", "fin-emp@glr.co.th"), "employee");
         accountUser = principal(createEmployee(employees, "ฝ่ายบัญชี ทดสอบ", "fin-account@glr.co.th"), "account");
-        ceoUser = principal(createEmployee(employees, "ซีอีโอ ทดสอบ", "fin-ceo@glr.co.th"), "ceo");
     }
 
     // ── JSON helpers ────────────────────────────────────────────────────────────────────────

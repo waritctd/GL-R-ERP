@@ -58,14 +58,6 @@ final class PdfRendererTestSupport {
             || (cell.getCellType() == CellType.STRING && cell.getStringCellValue().isBlank());
     }
 
-    /** Seq may be written as a number or text — both are fine, the VALUE must be n. */
-    static int seq(Sheet sh, int r) {
-        Cell cell = cell(sh, r, 0);
-        assertThat(cell).as("seq cell row %d", r).isNotNull();
-        return cell.getCellType() == CellType.NUMERIC
-            ? (int) cell.getNumericCellValue() : Integer.parseInt(cell.getStringCellValue().trim());
-    }
-
     static String norm(String s) { return s.replaceAll("\\s+", " ").trim(); }
 
     /** Every OLE stream of the committed template (Workbook, SummaryInformation, ...) as raw bytes. */
@@ -94,12 +86,6 @@ final class PdfRendererTestSupport {
         return -1;
     }
 
-    /** {col1,row1,dx1,dy1,col2,row2,dx2,dy2} */
-    static int[] anchor(org.apache.poi.hssf.usermodel.HSSFPicture p) {
-        var a = (org.apache.poi.hssf.usermodel.HSSFClientAnchor) p.getAnchor();
-        return new int[] {a.getCol1(), a.getRow1(), a.getDx1(), a.getDy1(), a.getCol2(), a.getRow2(), a.getDx2(), a.getDy2()};
-    }
-
     /** The user name stored in the workbook's WRITEACCESS record (0x005C), or null when there is none. */
     static String writeAccessUser(byte[] workbook) {
         int p = 0;
@@ -115,19 +101,5 @@ final class PdfRendererTestSupport {
             p += 4 + len;
         }
         return null;
-    }
-
-    /** A small opaque PNG (a scribble on white), the stand-in for an uploaded signature. */
-    static byte[] signaturePng(int w, int h) throws Exception {
-        java.awt.image.BufferedImage img = new java.awt.image.BufferedImage(w, h, java.awt.image.BufferedImage.TYPE_INT_ARGB);
-        java.awt.Graphics2D g = img.createGraphics();
-        g.setColor(java.awt.Color.WHITE);
-        g.fillRect(0, 0, w, h);
-        g.setColor(java.awt.Color.BLUE);
-        g.drawLine(0, h - 1, w - 1, 0);
-        g.dispose();
-        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
-        javax.imageio.ImageIO.write(img, "png", out);
-        return out.toByteArray();
     }
 }

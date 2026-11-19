@@ -414,16 +414,6 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
     private record DealFixture(long ticketId, long pricingRequestId, long depositNoticeId) {}
 
     private DealFixture buildAcceptedDeal(UserPrincipal owner, String label) {
-        return buildAcceptedDeal(owner, label, null);
-    }
-
-    /** Chain B's request and ISSUED quotation, prepared BEFORE chain A's order is confirmed (a
-     * confirmed deal can start no new pricing round); {@link #acceptPreparedSecondChain} accepts and confirms it. */
-    private long preparedSecondPricingRequestId;
-    private long preparedSecondIssuedQuotationId;
-
-    /** {@code secondChainLabel} non-null: a second chain is prepared (driven to ISSUED) before A is confirmed. */
-    private DealFixture buildAcceptedDeal(UserPrincipal owner, String label, String secondChainLabel) {
         long catalogProductId = insertCatalogProduct(FACTORY, "IT",
             "TEST-RI-" + label + "-" + UUID.randomUUID().toString().substring(0, 8),
             new BigDecimal("100.00"), "THB", "per_piece");
@@ -459,9 +449,6 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
         long pricingRequestId = pricingRequestService.createDraft(ticketId, request, owner).summary().id();
 
         driveDraftPricingRequestToQuotationAccepted(pricingRequestId, quantity, owner);
-        if (secondChainLabel != null) {
-            prepareSecondQuotationChain(ticketId, owner, secondChainLabel);
-        }
 
         orderConfirmation.confirmOrder(pricingRequestId,
             new ConfirmOrderRequest(UUID.randomUUID().toString()), owner);
@@ -472,84 +459,13 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
         return new DealFixture(ticketId, pricingRequestId, depositIssued.id());
     }
 
-    /** A SECOND, wholly separate pricing-request chain on an ALREADY-EXISTING ticket — its own
-     * catalog product, pricing request, factory quote, pricing decision and CustomerQuotation,
-     * driven to ACCEPTED (no second deposit notice: one ISSUED per deal), exactly like {@link #buildAcceptedDeal}
-     * except it reuses the given ticket (and its first ticket item) instead of creating a new one.
-     * Used by the one-live-remaining-invoice-per-deal tests to prove superseding/blocking
-     * reaches a genuinely different chain, not merely a different id on the same fixture. This half builds it
-     * up to an ISSUED quotation; {@link #acceptPreparedSecondChain} finishes it. */
-    private void prepareSecondQuotationChain(long ticketId, UserPrincipal owner, String label) {
-        long catalogProductId = insertCatalogProduct(FACTORY, "IT",
-            "TEST-RI-" + label + "-" + UUID.randomUUID().toString().substring(0, 8),
-            new BigDecimal("100.00"), "THB", "per_piece");
-        long ticketItemId = tickets.findById(ticketId).orElseThrow().items().get(0).id();
-
-        BigDecimal quantity = new BigDecimal("10");
-        PricingRequestRequests.PricingRequestItemRequest item = new PricingRequestRequests.PricingRequestItemRequest(
-            ticketItemId, catalogProductId, null, "SCG", "Tile RI " + label, "SCG Tile RI " + label,
-            "White", "Matte", "60x60", FACTORY, null, null, null, null,
-            QuantityType.CONFIRMED, null, null, null,
-            null, new BigDecimal("10"), new BigDecimal("0.36"), WastageCalculator.QUANTITY_MODE_PIECES,
-            null, quantity.intValueExact(), WastageCalculator.WASTAGE_MODE_NONE, null, 4, null,
-            false, "ไทย-สต็อก", 3, 7, null, null, null);
-        PricingRequestRequests.CreatePricingRequestRequest request = new PricingRequestRequests.CreatePricingRequestRequest(
-            PricingRequestRecipient.DESIGNER, null, "Designer Co.", LocalDate.now().plusDays(14),
-            new BigDecimal("5000.00"), "THB", "remaining-invoice test walk 2 " + label,
-            UUID.randomUUID().toString(), List.of(item));
-        long pricingRequestId = pricingRequestService.createDraft(ticketId, request, owner).summary().id();
-
-        // Driving chain B through recordOutcome (the real API) would first need chain A's
-        // quotation SUPERSEDED, leaving only one ACCEPTED row at a time. That is VACUOUS for
-        // this test's purpose: RemainingInvoiceService's "pick the newest ACCEPTED chain"
-        // selection logic would never have two real candidates and would pass identically with
-        // a broken "pick ANY accepted row" implementation. recordOutcome's application-layer
-        // guard is real and correct — no production caller can put a ticket into "two rows
-        // ACCEPTED at once" — but whether the SELECTION QUERY picks the right one among several
-        // ACCEPTED-shaped rows is an independent thing to prove, and that DB SHAPE is not
-        // reachable through the app. So: drive chain B to ISSUED through the real API, then
-        // flip its doc_status to ACCEPTED with a DIRECT SQL UPDATE — bypassing recordOutcome
-        // deliberately. This reaches into forbidden territory on purpose, to test code that
-        // must behave correctly even in a shape the application will never produce (defense in
-        // depth, same reasoning as
-        // #v188_dbInvariant_atMostOneIssuedRemainingInvoicePerTicket_evenBypassingTheService a
-        // few tests below, which does the identical "go around the service with raw SQL" move).
-        // Chain A's own row is left untouched — genuinely still ACCEPTED.
-        CustomerQuotationDto issuedB = driveDraftPricingRequestToQuotationIssued(pricingRequestId, quantity, owner);
-        preparedSecondPricingRequestId = pricingRequestId;
-        preparedSecondIssuedQuotationId = issuedB.id();
-    }
-
-    /** Accepts (raw SQL, see the note in the second-chain builder above) and confirms the chain {@link #prepareSecondQuotationChain} built. */
-    private void acceptPreparedSecondChain(long ticketId, UserPrincipal owner) {
-        long pricingRequestId = preparedSecondPricingRequestId;
-        jdbc.update("UPDATE sales.quotation SET doc_status = 'ACCEPTED', accepted_at = now() WHERE quotation_id = :id",
-            Map.of("id", preparedSecondIssuedQuotationId));
-        // recordOutcome ALSO transitions the pricing request's own status (QUOTATION_ISSUED -> QUOTATION_ACCEPTED) —
-        // the confirmOrder call right below gates on THIS column, not sales.quotation.doc_status, so the raw-SQL
-        // bypass above must carry that write too.
-        jdbc.update("UPDATE sales.pricing_request SET status = 'QUOTATION_ACCEPTED' WHERE pricing_request_id = :id",
-            Map.of("id", pricingRequestId));
-
-        orderConfirmation.confirmOrder(pricingRequestId,
-            new ConfirmOrderRequest(UUID.randomUUID().toString()), owner);
-        // Chain B has no deposit notice of its own, so it qualifies for a remaining invoice only through
-        // the bypass branch: flip the deal to NOT_REQUIRED (chain A's drafts/invoices were made earlier).
-        jdbc.update("UPDATE sales.ticket SET deposit_policy = 'NOT_REQUIRED' WHERE ticket_id = :id",
-            Map.of("id", ticketId));
-        // No deposit notice for chain B: a deal has at most one ISSUED deposit notice, so chain A's stays the deal's only one; the remaining-invoice rules under test
-        // key off the accepted quotations, not a second notice.
-    }
-
     private void driveDraftPricingRequestToQuotationAccepted(long pricingRequestId, BigDecimal quantity, UserPrincipal owner) {
         CustomerQuotationDto issued = driveDraftPricingRequestToQuotationIssued(pricingRequestId, quantity, owner);
         quotationService.recordOutcome(issued.id(),
             new RecordQuotationOutcomeRequest(QuotationStatus.ACCEPTED, "ลูกค้าโอเค", UUID.randomUUID().toString()), owner);
     }
 
-    /** Drives a fresh pricing request to an ISSUED customer quotation — factored out of {@link
-     * #driveDraftPricingRequestToQuotationAccepted} so {@link #buildSecondAcceptedQuotationChain}
-     * can stop short of {@code recordOutcome} (see that method's own comment for why). */
+    /** Drives a fresh pricing request to an ISSUED customer quotation. */
     private CustomerQuotationDto driveDraftPricingRequestToQuotationIssued(long pricingRequestId, BigDecimal quantity, UserPrincipal owner) {
         pricingRequestService.submit(pricingRequestId, owner);
         pricingRequestService.pickup(pricingRequestId, importActor);

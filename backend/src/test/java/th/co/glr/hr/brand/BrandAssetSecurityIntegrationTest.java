@@ -20,8 +20,7 @@ import org.springframework.web.context.WebApplicationContext;
 import th.co.glr.hr.support.PostgresTestSupport;
 
 /** Verifies the SecurityConfig allowlist addition for the emailed brand logo: an anonymous GET
- * /api/public/brand/logo.png is permitted under default-deny, while every other surface - including a second,
- * unrelated exposure path for the same bytes - stays behind anyRequest.authenticated. */
+ * /api/public/brand/logo.png is permitted under default-deny. */
 @EnabledIf(
     value = "th.co.glr.hr.support.PostgresTestSupport#isAvailable",
     disabledReason = "No TEST_DB_URL and no Docker available for Testcontainers Postgres")

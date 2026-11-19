@@ -15,10 +15,10 @@ import th.co.glr.hr.importrequest.ImportRequestRequests.ItemFactoryInput;
  * Slice 6c: the coverage route's split preview — the dry run of {@link ImportRequestService#createDrafts}'s
  * per-factory split shown in the "ยืนยันออกใบขอซื้อ" confirm — against real Postgres through the real service.
  *
- * <p>Three claims, each pinned here: the preview says what the create then does (same factories, same order,
- * same item counts, same lead times); it writes nothing anywhere; and only a caller who may press the create
+ * <p>Two claims, each pinned here: the preview says what the create then does (same factories, same order,
+ * same item counts, same lead times); and only a caller who may press the create
  * button (the CEO, the deal's owning or keying rep) gets it — import and sales_manager read the route for the
- * covered flag and get {@code null}, a non-owning rep and account are refused the route as before.
+ * covered flag and get {@code null}.
  */
 class ImportRequestSplitPreviewIntegrationTest extends SplitFixtureSupport {
 

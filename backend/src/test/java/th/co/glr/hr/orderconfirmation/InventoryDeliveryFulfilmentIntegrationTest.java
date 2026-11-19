@@ -2,8 +2,6 @@ package th.co.glr.hr.orderconfirmation;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
@@ -238,20 +236,6 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
         return createDealAndDriveFirstPricingRequest(quantity, true);
     }
 
-    /**
-     * Same fixture, stopped one step earlier — at QUOTATION_ISSUED, before the customer's
-     * acceptance is recorded.
-     *
-     * <p>This is the ONLY state a
-     * customer-change revision can be created from at the end of the chain. QUOTATION_ACCEPTED is
-     * terminal and refused — see {@code PricingRequestStatus.ALLOWED} and the two
-     * {@code customerChangeRevision_from...IsRejected} tests below. Every test in this file that
-     * revises a deal therefore starts here rather than from acceptance.
-     */
-    private Deal createDealAndDriveFirstPricingRequestToQuotationIssued(BigDecimal quantity) {
-        return createDealAndDriveFirstPricingRequest(quantity, false);
-    }
-
     private Deal createDealAndDriveFirstPricingRequest(BigDecimal quantity, boolean recordAcceptance) {
         long catalogProductId = insertCatalogProduct(FACTORY, "IT",
             "TEST-INV-" + UUID.randomUUID().toString().substring(0, 8), new BigDecimal("100.00"), "THB", "per_piece");
@@ -291,8 +275,7 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
     }
 
     /** Creates a customer-change revision on deal's ticket item, requesting the NEW quantity, and drives IT to
-     * QUOTATION_ACCEPTED. The parent must be at QUOTATION_ISSUED — see
-     * #createDealAndDriveFirstPricingRequestToQuotationIssued. */
+     * QUOTATION_ACCEPTED. The parent must be at QUOTATION_ISSUED. */
     private long createRevisionAndDriveToQuotationAccepted(Deal deal, BigDecimal newQuantity) {
         // V185 (direct-deal-form parity): color/texture/thicknessMm/sqmPerPiece/piecesPerBox/a quantity are now
         // required on every item resolveItems persists — requestedQty/ requestedUnit/requestedUnitBasis are derived

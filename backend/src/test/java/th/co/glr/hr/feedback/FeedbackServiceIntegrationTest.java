@@ -137,6 +137,23 @@ class FeedbackServiceIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(feedbackBells(otherRep)).isEmpty();
     }
 
+    @Test
+    void nonAdminsCanNotDecide_includingCeoHrAndTheReporter_andNothingChanges() {
+        long id = pending();
+        long before = bellCount(rep);
+
+        for (UserPrincipal denied : List.of(principal(rep, "sales"), principal(ceo, "ceo"), principal(hr, "hr"))) {
+            assertThatThrownBy(() -> service.decide(denied, id, new DecisionRequest("ACCEPT", LocalDate.of(2026, 12, 5), null)))
+                .as(denied.role())
+                .hasFieldOrPropertyWithValue("status", HttpStatus.FORBIDDEN);
+            assertThatThrownBy(() -> service.decide(denied, id, new DecisionRequest("DENY", null, "ไม่รับเรื่องนี้")))
+                .as(denied.role())
+                .hasFieldOrPropertyWithValue("status", HttpStatus.FORBIDDEN);
+        }
+        assertThat(statusOf(id)).isEqualTo("PENDING");
+        assertThat(bellCount(rep)).isEqualTo(before);
+    }
+
     // ── helpers ─────────────────────────────────────────────────────────────────────────────────────────────
 
     private long pending() {
@@ -156,6 +173,15 @@ class FeedbackServiceIntegrationTest extends AbstractPostgresIntegrationTest {
         return new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP).findByEmployeeId(employeeId).stream()
             .filter(n -> n.type().startsWith("FEEDBACK_"))
             .toList();
+    }
+
+    private long bellCount(long employeeId) {
+        return feedbackBells(employeeId).size();
+    }
+
+    private String statusOf(long id) {
+        return jdbc.queryForObject("SELECT status FROM hr.feedback_request WHERE feedback_id = :id",
+            Map.of("id", id), String.class);
     }
 
     private Long decidedBy(long id) {
