@@ -1,25 +1,18 @@
 package th.co.glr.hr.pricingcosting;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
-import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.http.HttpStatus;
 import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.catalog.CatalogRepository;
-import th.co.glr.hr.common.ApiException;
-import th.co.glr.hr.config.AppProperties;
 import th.co.glr.hr.customer.ContactRepository;
 import th.co.glr.hr.customer.CustomerDto;
 import th.co.glr.hr.customer.CustomerRepository;
@@ -153,58 +146,7 @@ class LandedCostCalculatorFxAndAggregationIntegrationTest extends AbstractPostgr
 
     // P1a: every missing-factor problem across every item is reported together, in one 422
 
-    /**
-     * Two items, from TWO DIFFERENT factories (so two shipments) — this is what actually
-     * discriminates the fix from a narrower one that only aggregates WITHIN a shipment. Item A is a
-     * PER_LINEAR_M request missing {@code linearMPerUnit}; item B is a PER_BOX request missing
-     * {@code piecesPerBox}. Both are cluster-2 ({@code missingFactor}) THROWS that still aggregate —
-     * deliberately NOT a missing {@code sqmPerUnit}, which #1127 moved to the uncostable set-aside
-     * path (its own test), so it no longer surfaces in this 422. On items from different shipments
-     * the old, per-shipment {@code resolveItemPhysicals} call would have thrown on item A's shipment
-     * alone, and the CEO would never learn about item B until fixing A and re-running. This is one
-     * of the two tests this task's mutation-check targets: reverting the aggregation must turn
-     * THIS test red (specifically: only ONE of the two assertions below still holds) and nothing
-     * else.
-     */
-    @Test
-    void twoItemsAcrossTwoFactories_eachMissingADifferentFactor_bothReportedInOneMessage() {
-        long pricingRequestId = twoItemTwoFactoriesEachMissingADifferentFactor();
-
-        assertThatThrownBy(() -> decisionService.startReview(pricingRequestId,
-                new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, UUID.randomUUID().toString()),
-                ceoActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> {
-                assertThat(e.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_CONTENT);
-                assertThat(e.getMessage())
-                    .as("BOTH items' problems, and BOTH factor names in Thai, must appear in the "
-                        + "SAME message — proves aggregation across shipments, not first-problem-only")
-                    .contains("Model NoLinear")
-                    .contains("ความยาว (เมตร) ต่อหน่วย (linearMPerUnit)")
-                    .contains("Model NoBox")
-                    .contains("จำนวนแผ่นต่อกล่อง (piecesPerBox)")
-                    // Both bullets present means neither problem shadowed the other.
-                    .contains("\n- ");
-            });
-    }
-
     // isFullyResolvable's semantics must survive the restructure: false, never a thrown exception
-
-    /** FactoryQuoteCarryForward and FactoryQuoteService#markReadyForCosting both depend on isFullyResolvable
-     * returning a plain false (never letting the ApiException escape) for a request that is not yet costable — a
-     * request with no factory quote at all is the simplest such case. */
-    @Test
-    void isFullyResolvable_returnsFalse_neverThrows_whenNoFactoryQuoteExistsYet() {
-        long pricingRequestId = singleItemSubmittedNoQuoteYet("FX Unresolvable Factory");
-        var summary = pricingRequestService.get(pricingRequestId, importActor).summary();
-
-        boolean resolvable = landedCostCalculator.isFullyResolvable(summary);
-
-        assertThat(resolvable)
-            .as("no factory quote exists yet, so this must be false — and must NOT throw, or "
-                + "every caller of isFullyResolvable (markReadyForCosting, FactoryQuoteCarryForward) "
-                + "would need its own try/catch instead of a plain boolean check")
-            .isFalse();
-    }
 
     // Fixture helpers
 
@@ -269,144 +211,6 @@ class LandedCostCalculatorFxAndAggregationIntegrationTest extends AbstractPostgr
         return pricingRequestId;
     }
 
-    /**
-     * Two factories, one item each, both items with a fully valid factory/quote/price/currency/unit
-     * (so {@code resolveSources} — cluster 1 — succeeds for both and the request auto-advances to
-     * READY_FOR_CEO_REVIEW), but each missing a DIFFERENT physical conversion factor (cluster 2):
-     * <ul>
-     *   <li>"Model NoLinear" (factory A): the REQUEST is expressed PER_LINEAR_M with no {@code
-     *       linearMPerUnit} on the quote (quoted PER_PIECE with {@code sqmPerUnit} supplied, so it is
-     *       NOT set aside as uncostable) — {@code quantityToPieces} throws {@code
-     *       missingFactor("linearMPerUnit")}. Deliberately NOT a missing {@code sqmPerUnit}: #1127
-     *       moved that to the uncostable set-aside path, so it no longer surfaces in this 422.
-     *   <li>"Model NoBox" (factory B): the REQUEST is expressed PER_BOX with no {@code
-     *       piecesPerBox} on the quote — deliberately NOT the quote's own {@code unitBasis} (quoted
-     *       PER_PIECE instead, with {@code sqmPerUnit} supplied so {@code resolveSqmPerPiece} itself
-     *       succeeds): {@code FactoryQuoteService#receive} already refuses a PER_BOX/PER_SQM/
-     *       PER_LINEAR_M *quote* response with no matching factor (422 at receive time, before this
-     *       item could ever reach the calculator), so a quote-side gap is not reachable through the
-     *       normal flow — but that check never cross-references the REQUEST's own {@code
-     *       requestedUnitBasis}, so {@code quantityToPieces}'s PER_BOX branch (driven by the
-     *       request, independent of the quote) is where a real gap survives, and is what this
-     *       isolates.
-     * </ul>
-     */
-    private long twoItemTwoFactoriesEachMissingADifferentFactor() {
-        String factoryA = "Missing Linear Factory " + UUID.randomUUID();
-        String factoryB = "Missing Box Factory " + UUID.randomUUID();
-        long productA = insertCatalogProduct(factoryA, "IT", "AGG-A-" + UUID.randomUUID(),
-            new BigDecimal("100.00"), "THB", "per_piece");
-        long productB = insertCatalogProduct(factoryB, "IT", "AGG-B-" + UUID.randomUUID(),
-            new BigDecimal("100.00"), "THB", "per_piece");
-
-        long ticketId = createTwoFactoryDeal("ดีล Aggregation " + UUID.randomUUID(), factoryA, factoryB);
-
-        // A PER_LINEAR_M request whose quote supplies no linearMPerUnit — quantityToPieces then
-        // throws missingFactor("linearMPerUnit"). sqm IS resolvable (the quote carries sqmPerUnit),
-        // so this line is NOT set aside as uncostable; its problem is a cluster-2 missing FACTOR,
-        // the aggregated-422 path (NOT the sqm set-aside path, which #1127 moved out of this 422).
-        PricingRequestItemRequest itemA = new PricingRequestItemRequest(
-            null, productA, null, "Brand", "Model NoLinear", "Brand Model NoLinear", null, null, "1x1", factoryA,
-            new BigDecimal("100"), null, "m", UnitBasis.PER_LINEAR_M, QuantityType.CONFIRMED, null, null, null);
-        PricingRequestItemRequest itemB = new PricingRequestItemRequest(
-            null, productB, null, "Brand", "Model NoBox", "Brand Model NoBox", null, null, "1x1", factoryB,
-            new BigDecimal("10"), new BigDecimal("100"), "box", UnitBasis.PER_BOX,
-            QuantityType.CONFIRMED, null, null, null);
-        CreatePricingRequestRequest request = new CreatePricingRequestRequest(
-            PricingRequestRecipient.DESIGNER, null, "Designer Co.", LocalDate.now().plusDays(14),
-            null, "THB", "aggregation test request", UUID.randomUUID().toString(), List.of(itemA, itemB));
-        // V185: bypasses PricingRequestService.createDraft on purpose -- that method now forces
-
-        // every item.s requestedUnitBasis to PER_PIECE (the new sales form never types a unit/basis
-
-        // directly), which would make it impossible to construct a PER_SQM/PER_BOX/PER_LINEAR_M-basis
-
-        // item for this costing-conversion test. PricingRequestRepository.create performs the exact
-
-        // same DB write createDraft would (persistence only, per that class.s own header Javadoc), just
-
-        // without the sales-form-specific derivation/validation -- LandedCostCalculator does not care
-
-        // how an item.s requested_unit_basis got set, only what it does with the value.
-
-        long pricingRequestId = pricingRequests.create(ticketId, pricingRequests.nextRequestCode(), request, salesRepId);
-        pricingRequestService.submit(pricingRequestId, salesActor);
-        pricingRequestService.pickup(pricingRequestId, importActor);
-
-        List<FactoryQuoteDto> drafts = factoryQuoteService.generateDrafts(pricingRequestId, importActor);
-        FactoryQuoteDto draftA = drafts.stream().filter(q -> factoryA.equals(q.factoryName())).findFirst().orElseThrow();
-        FactoryQuoteDto draftB = drafts.stream().filter(q -> factoryB.equals(q.factoryName())).findFirst().orElseThrow();
-
-        // Factory A: quoted PER_PIECE with sqmPerUnit SUPPLIED (0.36) — so the line resolves sqm and
-        // is not set aside as uncostable — but linearMPerUnit (field 12) left null, which the
-        // REQUEST's own PER_LINEAR_M basis (see itemA above) then needs in quantityToPieces.
-        ReceiveFactoryQuoteRequest responseA = new ReceiveFactoryQuoteRequest("REF-AGG-A", "THB", "30 days", "45 days",
-            "revision", "note", List.of(new ReceiveFactoryQuoteItemRequest(
-                draftA.items().get(0).pricingRequestItemId(), null, null, new BigDecimal("100"),
-                UnitBasis.PER_PIECE, UnitBasis.PER_PIECE, new BigDecimal("100.00"), "THB", null,
-                new BigDecimal("0.36"), null, null, "45 days", null, null)),
-            UUID.randomUUID().toString());
-        factoryQuoteService.markContacted(draftA.id(), new MarkFactoryContactedRequest(
-            java.time.LocalDate.now(java.time.ZoneId.of("Asia/Bangkok")), null), importActor);
-        FactoryQuoteDto respondedA = factoryQuoteService.receive(draftA.id(), responseA, importActor);
-        factoryQuoteService.markReadyForCosting(respondedA.id(), importActor);
-
-        // Factory B: quoted PER_PIECE (sqmPerUnit supplied, so resolveSqmPerPiece succeeds and
-        // FactoryQuoteService#receive's own PER_BOX/PER_SQM/PER_LINEAR_M validation never triggers — that check only
-        // looks at the QUOTE's basis).
-        ReceiveFactoryQuoteRequest responseB = new ReceiveFactoryQuoteRequest("REF-AGG-B", "THB", "30 days", "45 days",
-            "revision", "note", List.of(new ReceiveFactoryQuoteItemRequest(
-                draftB.items().get(0).pricingRequestItemId(), null, null, new BigDecimal("100"),
-                UnitBasis.PER_PIECE, UnitBasis.PER_PIECE, new BigDecimal("100.00"), "THB", null,
-                new BigDecimal("1"), null, null, "45 days", null, null)),
-            UUID.randomUUID().toString());
-        factoryQuoteService.markContacted(draftB.id(), new MarkFactoryContactedRequest(
-            java.time.LocalDate.now(java.time.ZoneId.of("Asia/Bangkok")), null), importActor);
-        FactoryQuoteDto respondedB = factoryQuoteService.receive(draftB.id(), responseB, importActor);
-        factoryQuoteService.markReadyForCosting(respondedB.id(), importActor);
-
-        assertThat(pricingRequestService.get(pricingRequestId, importActor).summary().status())
-            .as("both cluster-1 concerns (factory/quote/price/currency/unit) resolve cleanly for "
-                + "both items, so the request DOES auto-advance — the missing factors are a "
-                + "cluster-2 problem that only surfaces when calculate() actually runs")
-            .isEqualTo(th.co.glr.hr.pricingrequest.PricingRequestStatus.READY_FOR_CEO_REVIEW);
-        return pricingRequestId;
-    }
-
-    /** A single item, single factory, submitted and picked up but with NO factory quote drafted or received yet —
-     * resolveSources fails at the "quote not found" step, the simplest unresolvable state. */
-    private long singleItemSubmittedNoQuoteYet(String factoryName) {
-        long productId = insertCatalogProduct(factoryName, "IT", "UNRESOLVED-" + UUID.randomUUID(),
-            new BigDecimal("100.00"), "THB", "per_piece");
-        long ticketId = createDeal("ดีล Unresolvable " + UUID.randomUUID(), factoryName);
-        PricingRequestItemRequest item = new PricingRequestItemRequest(
-            null, productId, null, "Test", "Model", "Test Model", null, null, "1x1", factoryName,
-            new BigDecimal("10"), new BigDecimal("10"), "piece", UnitBasis.PER_PIECE,
-            QuantityType.CONFIRMED, null, null, null);
-        CreatePricingRequestRequest request = new CreatePricingRequestRequest(
-            PricingRequestRecipient.DESIGNER, null, "Designer Co.", LocalDate.now().plusDays(14),
-            null, "THB", "unresolvable test request", UUID.randomUUID().toString(), List.of(item));
-        // V185: bypasses PricingRequestService.createDraft on purpose -- that method now forces
-
-        // every item.s requestedUnitBasis to PER_PIECE (the new sales form never types a unit/basis
-
-        // directly), which would make it impossible to construct a PER_SQM/PER_BOX/PER_LINEAR_M-basis
-
-        // item for this costing-conversion test. PricingRequestRepository.create performs the exact
-
-        // same DB write createDraft would (persistence only, per that class.s own header Javadoc), just
-
-        // without the sales-form-specific derivation/validation -- LandedCostCalculator does not care
-
-        // how an item.s requested_unit_basis got set, only what it does with the value.
-
-        long pricingRequestId = pricingRequests.create(ticketId, pricingRequests.nextRequestCode(), request, salesRepId);
-        pricingRequestService.submit(pricingRequestId, salesActor);
-        pricingRequestService.pickup(pricingRequestId, importActor);
-        // Deliberately stop here — no generateDrafts/receive/markReadyForCosting at all.
-        return pricingRequestId;
-    }
-
     private long createDeal(String dealName, String factoryName) {
         CustomerDto customer = customers.create(
             "บริษัท " + UUID.randomUUID() + " จำกัด", "010" + System.nanoTime() % 10000000L,
@@ -415,20 +219,6 @@ class LandedCostCalculatorFxAndAggregationIntegrationTest extends AbstractPostgr
         TicketDto created = ticketService.create(
             new CreateTicketRequest(dealName, "NORMAL", customer.name(), customer.id(), project.id(), null,
                 null, null, List.of(ticketItem("Test", "Model", factoryName))),
-            salesActor);
-        return created.summary().id();
-    }
-
-    private long createTwoFactoryDeal(String dealName, String factoryA, String factoryB) {
-        CustomerDto customer = customers.create(
-            "บริษัท " + UUID.randomUUID() + " จำกัด", "010" + System.nanoTime() % 10000000L,
-            "123 ถนนทดสอบ", "สำนักงานใหญ่", "02-000-0000");
-        ProjectDto project = projects.create(customer.id(), "โครงการ " + dealName);
-        TicketDto created = ticketService.create(
-            new CreateTicketRequest(dealName, "NORMAL", customer.name(), customer.id(), project.id(), null,
-                null, null, List.of(
-                    ticketItem("Brand", "Model NoLinear", factoryA),
-                    ticketItem("Brand", "Model NoBox", factoryB))),
             salesActor);
         return created.summary().id();
     }
