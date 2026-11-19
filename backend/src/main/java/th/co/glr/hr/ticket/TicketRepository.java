@@ -2055,7 +2055,7 @@ public class TicketRepository {
     }
 
     /** Same SELECT, PRE-VAT — what {@code payableAmountSelect} returned before payable became VAT-inclusive. */
-    private static String payableAmountExVatSelect(String ticketIdRef) {
+    public static String payableAmountExVatSelect(String ticketIdRef) {
         return payableAmountSelect(ticketIdRef, false);
     }
 

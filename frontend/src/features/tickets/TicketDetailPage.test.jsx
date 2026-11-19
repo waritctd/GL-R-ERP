@@ -70,6 +70,7 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         updateTracking: vi.fn(),
         // Deal parties (deal-party-model.md): the ผู้รับเหมาที่เสนอราคา panel and บันทึกผลประมูล.
         parties: vi.fn(),
+        orders: vi.fn(),
         addParty: vi.fn(),
         updateParty: vi.fn(),
         removeParty: vi.fn(),
@@ -366,6 +367,7 @@ describe('TicketDetailPage', () => {
     });
     api.tickets.updateTracking.mockResolvedValue({ ticket: buildTicket() });
     api.tickets.parties.mockResolvedValue({ parties: [] });
+    api.tickets.orders.mockResolvedValue({ rootTicketId: 701, rootCode: 'PR-2026-0701', orders: [], totals: null });
     // DealDepositPanel mounts for every role that isn't 'import' (sections.depositNotice), so its list
     // query needs a default resolve or every test above would reject.
     api.depositNotices.listByTicket.mockResolvedValue({ depositNotices: [] });

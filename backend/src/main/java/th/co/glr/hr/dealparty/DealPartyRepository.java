@@ -16,6 +16,7 @@ import th.co.glr.hr.dealparty.DealPartyDtos.DealPartyDto;
 import th.co.glr.hr.dealparty.DealPartyDtos.OpenDealDto;
 import th.co.glr.hr.dealparty.DealPartyDtos.OpenDealPartyDto;
 import th.co.glr.hr.dealquotation.WastageCalculator;
+import th.co.glr.hr.ticket.TicketRepository;
 
 /** {@code sales.deal_party} (V204) plus the few ticket writes a bid outcome needs. Plain JDBC, like its neighbours. */
 @Repository
@@ -164,6 +165,33 @@ public class DealPartyRepository {
     }
 
     /** Children of one kind ({@code BID_SPLIT} or {@code ADD_ON}); each kind numbers its own suffixes. */
+    /** One row of {@link #findOrderChain}: the ticket's own columns plus its three money figures. */
+    public record OrderRow(long ticketId, String code, String childKind, String salesStage, String lifecycle,
+                           String fulfillmentStatus, BigDecimal valueExVat, BigDecimal received, BigDecimal payable) {}
+
+    /**
+     * The root and its ADD_ON children (a BID_SPLIT child is another customer's deal, not an order), root first then
+     * by ticket id, with the money figures in the same statement. Value is the answered/issued quotation's pre-VAT
+     * figure, falling back to the latest APPROVED DEAL_DIRECT quotation's subtotal while nothing is confirmed.
+     */
+    public List<OrderRow> findOrderChain(long rootId) {
+        return jdbc.query(
+            "SELECT t.ticket_id, t.code, t.child_kind, t.sales_stage, t.lifecycle, t.fulfillment_status,"
+                + " COALESCE(NULLIF((" + TicketRepository.payableAmountExVatSelect("t.ticket_id") + "), 0),"
+                + " (SELECT q.total_amount FROM sales.quotation q WHERE q.ticket_id = t.ticket_id"
+                + " AND q.doc_status = 'APPROVED' AND q.origin = 'DEAL_DIRECT'"
+                + " ORDER BY q.quotation_id DESC LIMIT 1), 0) AS value_ex_vat,"
+                + " (" + TicketRepository.paidAmountSelect("t.ticket_id") + ") AS received,"
+                + " (" + TicketRepository.payableAmountSelect("t.ticket_id") + ") AS payable"
+                + " FROM sales.ticket t"
+                + " WHERE t.ticket_id = :root OR (t.parent_ticket_id = :root AND t.child_kind = 'ADD_ON')"
+                + " ORDER BY (t.ticket_id = :root) DESC, t.ticket_id",
+            Map.of("root", rootId),
+            (rs, n) -> new OrderRow(rs.getLong("ticket_id"), rs.getString("code"), rs.getString("child_kind"),
+                rs.getString("sales_stage"), rs.getString("lifecycle"), rs.getString("fulfillment_status"),
+                rs.getBigDecimal("value_ex_vat"), rs.getBigDecimal("received"), rs.getBigDecimal("payable")));
+    }
+
     public int countChildren(long parentTicketId, String childKind) {
         Integer n = jdbc.queryForObject(
             "SELECT COUNT(*) FROM sales.ticket WHERE parent_ticket_id = :p AND child_kind = :k",

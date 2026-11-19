@@ -23,6 +23,7 @@ import th.co.glr.hr.dealparty.DealPartyDtos.OpenDealsResponse;
 import th.co.glr.hr.dealparty.DealPartyDtos.PartiesResponse;
 import th.co.glr.hr.dealparty.DealPartyDtos.PartyResponse;
 import th.co.glr.hr.dealparty.DealPartyDtos.PatchPartyRequest;
+import th.co.glr.hr.dealparty.DealPartyDtos.ProjectOrdersDto;
 
 /** Deal parties and the bid outcome (V204). Sits under {@code /api/tickets} beside the deal's other routes. */
 @RestController
@@ -76,6 +77,12 @@ public class DealPartyController {
                                   HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
         return new BidOutcomeResponse(service.recordBidOutcome(id, request, user));
+    }
+
+    @GetMapping("/{id}/orders")
+    ProjectOrdersDto orders(@PathVariable long id, HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return service.orders(id, user);
     }
 
     @PostMapping("/{id}/add-on-orders")

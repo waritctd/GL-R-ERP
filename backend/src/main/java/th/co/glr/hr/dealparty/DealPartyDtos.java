@@ -94,6 +94,20 @@ public final class DealPartyDtos {
 
     public record AddOnOrderResponse(AddOnOrderResult addOnOrder) {}
 
+    /**
+     * GET /api/tickets/{id}/orders: a project's orders (the root plus its ADD_ON children). {@code orderNo} is 1 for
+     * the root, then the add-ons in creation order. Money is VAT-exclusive value and received/outstanding; all null
+     * for a role served {@code withoutMoney()}. {@code totals} leaves out a lost or cancelled order.
+     */
+    public record OrderDto(
+        long ticketId, String code, String displayCode, int orderNo, String childKind, String salesStage,
+        String lifecycle, String fulfillmentStatus, BigDecimal valueExVat, BigDecimal received, BigDecimal outstanding
+    ) {}
+
+    public record OrderTotalsDto(BigDecimal valueExVat, BigDecimal received, BigDecimal outstanding) {}
+
+    public record ProjectOrdersDto(long rootTicketId, String rootCode, List<OrderDto> orders, OrderTotalsDto totals) {}
+
     /** A deal the quotation editor may attach a new ผู้รับเหมา to: the actor's open, pre-outcome deal on this project. */
     public record OpenDealDto(
         long id, String code, String projectName, String salesStage, String customerName,

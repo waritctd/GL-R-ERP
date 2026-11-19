@@ -51,7 +51,7 @@ class DealPartyIntegrationTest extends AbstractDealDirectQuotationIntegrationTes
         tickets = new TicketRepository(jdbc);
         customers = new CustomerRepository(jdbc);
         partyService = transactional(new DealPartyService(new DealPartyRepository(jdbc), tickets, customers,
-            new ContactRepository(jdbc), quotationService));
+            new ContactRepository(jdbc), quotationService, ticketService));
         EmployeeRepository employees = new EmployeeRepository(jdbc, new EmployeeReferenceRepository(jdbc),
             new EmployeeCodeGenerator(jdbc));
         otherSalesActor = actor(createEmployee(employees, "พนักงานขาย อีกคน", "sales-other-dp@glr.co.th", "SALES",
@@ -381,6 +381,48 @@ class DealPartyIntegrationTest extends AbstractDealDirectQuotationIntegrationTes
 
         assertThat(quotationService.undoOrderConfirmation(quote.id(), "กดผิด", null, salesActor).ticketId())
             .isEqualTo(ticketId);
+    }
+
+    @Test
+    void orders_totalsSumTheLiveOrders_skipUnreadableSiblings_andImportGetsNoMoney() {
+        long rootId = deal(salesActor);
+        approved(rootId, draft(), salesActor);
+        var live = partyService.createAddOnOrder(rootId, salesActor);
+        var cancelled = partyService.createAddOnOrder(rootId, salesActor);
+        approved(live.ticketId(), draft(), salesActor);
+        approved(cancelled.ticketId(), draft(), salesActor);
+        jdbc.update("UPDATE sales.ticket SET lifecycle = 'CANCELLED' WHERE ticket_id = :id", Map.of("id", cancelled.ticketId()));
+
+        var chain = partyService.orders(live.ticketId(), salesActor);
+        assertThat(chain.rootTicketId()).isEqualTo(rootId);
+        assertThat(chain.orders()).extracting(o -> o.orderNo()).containsExactly(1, 2, 3);
+        assertThat(chain.orders().get(0).displayCode()).isEqualTo(chain.rootCode() + "-1");
+        assertThat(chain.orders().get(1).displayCode()).isEqualTo(live.code());
+        assertThat(chain.orders().get(0).valueExVat()).isPositive();
+        // The cancelled add-on stays listed with its value but is not in the totals: two live orders of equal value.
+        assertThat(chain.orders().get(2).lifecycle()).isEqualTo("CANCELLED");
+        assertThat(chain.orders().get(2).valueExVat()).isPositive();
+        assertThat(chain.totals().valueExVat())
+            .isEqualByComparingTo(chain.orders().get(0).valueExVat().add(chain.orders().get(1).valueExVat()));
+
+        // A rep who owns only the root does not see a sibling someone else owns (it is skipped, not a 403).
+        jdbc.update("UPDATE sales.ticket SET created_by = :o, keyed_by = :o WHERE ticket_id = :id",
+            Map.of("o", otherSalesActor.id(), "id", live.ticketId()));
+        assertThat(partyService.orders(rootId, salesActor).orders()).extracting(o -> o.ticketId())
+            .containsExactly(rootId, cancelled.ticketId());
+        refusal(() -> partyService.orders(live.ticketId(), salesActor), HttpStatus.FORBIDDEN);
+
+        // import reads the chain (inside its scope) but never a price.
+        jdbc.update("UPDATE sales.ticket SET sales_stage = :s WHERE ticket_id = :id",
+            Map.of("s", DealStage.ORDER_RECEIVED, "id", rootId));
+        var forImport = partyService.orders(rootId, actor(otherSalesActor.id(), "import"));
+        assertThat(forImport.orders()).extracting(o -> o.ticketId()).contains(rootId);
+        assertThat(forImport.orders()).allSatisfy(o -> {
+            assertThat(o.valueExVat()).isNull();
+            assertThat(o.received()).isNull();
+            assertThat(o.outstanding()).isNull();
+        });
+        assertThat(forImport.totals().valueExVat()).isNull();
     }
 
     // ── access ───────────────────────────────────────────────────────────────────────────────

@@ -113,6 +113,8 @@ export const queryKeys = {
   // empty/undefined id is left alone (NaN) rather than defaulted, like every other id-keyed
   // entry below that has no "no id yet" caller.
   ticketDetail: (id) => queryKeysTicketDetail(id),
+  // The project's orders (root + add-ons) for the order box / switcher; under 'tickets' so a stage or money change refreshes it.
+  ticketOrders: (id) => ['tickets', 'orders', id == null ? id : Number(id)],
   // Immutable server enumeration — fetched once, never invalidated. See stageCatalog.js.
   dealStageCatalog: () => ['meta', 'deal-stages'],
   // Under 'tickets' so every existing ['tickets'] invalidation (an activity, a stage move, a lost deal) refreshes

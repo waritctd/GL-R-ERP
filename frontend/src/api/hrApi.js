@@ -475,6 +475,7 @@ export const api = {
     removeParty: (ticketId, partyId) => apiRequest(API_ROUTES.tickets.party(ticketId, partyId), { method: 'DELETE' }),
     recordBidOutcome: (ticketId, payload) =>
       apiRequest(API_ROUTES.tickets.bidOutcome(ticketId), { method: 'POST', body: payload }),
+    orders: (ticketId) => apiRequest(API_ROUTES.tickets.orders(ticketId)),
     createAddOnOrder: (ticketId) => apiRequest(API_ROUTES.tickets.addOnOrders(ticketId), { method: 'POST' }),
     openForProject: (projectName) => apiRequest(API_ROUTES.tickets.openForProject(projectName)),
   },

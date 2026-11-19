@@ -1,5 +1,6 @@
 package th.co.glr.hr.dealparty;
 
+import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -22,6 +23,9 @@ import th.co.glr.hr.dealparty.DealPartyDtos.BidOutcomeRequest;
 import th.co.glr.hr.dealparty.DealPartyDtos.BidOutcomeResult;
 import th.co.glr.hr.dealparty.DealPartyDtos.DealPartyDto;
 import th.co.glr.hr.dealparty.DealPartyDtos.OpenDealDto;
+import th.co.glr.hr.dealparty.DealPartyDtos.OrderDto;
+import th.co.glr.hr.dealparty.DealPartyDtos.OrderTotalsDto;
+import th.co.glr.hr.dealparty.DealPartyDtos.ProjectOrdersDto;
 import th.co.glr.hr.dealparty.DealPartyDtos.PatchPartyRequest;
 import th.co.glr.hr.dealquotation.DealQuotationService;
 import th.co.glr.hr.ticket.DealLifecycle;
@@ -29,6 +33,7 @@ import th.co.glr.hr.ticket.DealOwnership;
 import th.co.glr.hr.ticket.DealStage;
 import th.co.glr.hr.ticket.TicketEventKind;
 import th.co.glr.hr.ticket.TicketRepository;
+import th.co.glr.hr.ticket.TicketService;
 import th.co.glr.hr.ticket.TicketSummaryDto;
 
 /**
@@ -50,14 +55,17 @@ public class DealPartyService {
     private final CustomerRepository customers;
     private final ContactRepository contacts;
     private final DealQuotationService dealQuotations;
+    private final TicketService ticketService;
 
     public DealPartyService(DealPartyRepository parties, TicketRepository tickets, CustomerRepository customers,
-                            ContactRepository contacts, DealQuotationService dealQuotations) {
+                            ContactRepository contacts, DealQuotationService dealQuotations,
+                            TicketService ticketService) {
         this.parties = parties;
         this.tickets = tickets;
         this.customers = customers;
         this.contacts = contacts;
         this.dealQuotations = dealQuotations;
+        this.ticketService = ticketService;
     }
 
     public List<DealPartyDto> list(long ticketId, UserPrincipal actor) {
@@ -296,6 +304,78 @@ public class DealPartyService {
         tickets.addEvent(rootId, actor.id(), actor.name(), TicketEventKind.ADD_ON_ORDER_CREATED, null, null,
             "เปิดออเดอร์เพิ่ม " + code);
         return new AddOnOrderResult(newId, code, rootId);
+    }
+
+    /**
+     * GET /api/tickets/{id}/orders: the project's orders (root + ADD_ON children). The requested deal must be
+     * readable by the actor (404/403 as its own read); a sibling the actor cannot read is left out. Import gets no
+     * money. A lost or cancelled order stays listed but is left out of the totals.
+     */
+    public ProjectOrdersDto orders(long ticketId, UserPrincipal actor) {
+        TicketSummaryDto requested = requireSummary(ticketId);
+        requireOrderRead(ticketId, actor);
+        long rootId = "ADD_ON".equals(requested.childKind()) && requested.parentTicketId() != null
+            ? requested.parentTicketId() : ticketId;
+        boolean withMoney = !"import".equals(actor.role());
+        List<OrderDto> orders = new ArrayList<>();
+        BigDecimal value = BigDecimal.ZERO;
+        BigDecimal received = BigDecimal.ZERO;
+        BigDecimal outstanding = BigDecimal.ZERO;
+        String rootCode = requested.code();
+        List<DealPartyRepository.OrderRow> chain = parties.findOrderChain(rootId);
+        for (int i = 0; i < chain.size(); i++) {
+            DealPartyRepository.OrderRow row = chain.get(i);
+            if (row.ticketId() != ticketId && !canReadOrder(row.ticketId(), actor)) {
+                continue;
+            }
+            if (row.ticketId() == rootId) {
+                rootCode = row.code();
+            }
+            BigDecimal owed = row.payable().subtract(row.received()).max(BigDecimal.ZERO);
+            boolean dead = DealLifecycle.CLOSED_LOST.equals(row.lifecycle()) || DealLifecycle.CANCELLED.equals(row.lifecycle());
+            if (!dead) {
+                value = value.add(row.valueExVat());
+                received = received.add(row.received());
+                outstanding = outstanding.add(owed);
+            }
+            boolean root = row.ticketId() == rootId;
+            orders.add(new OrderDto(row.ticketId(), row.code(),
+                root && !"ADD_ON".equals(row.childKind()) ? row.code() + "-1" : row.code(), i + 1,
+                row.childKind(), row.salesStage(), row.lifecycle(), row.fulfillmentStatus(),
+                withMoney ? row.valueExVat() : null, withMoney ? row.received() : null, withMoney ? owed : null));
+        }
+        return new ProjectOrdersDto(rootId, rootCode, orders,
+            withMoney ? new OrderTotalsDto(value, received, outstanding) : new OrderTotalsDto(null, null, null));
+    }
+
+    /** The deal-read rule each role already has: sales/sales_manager/ceo the whole-deal read, import its scoped page,
+     * account its finance-view scope. Anyone else (warehouse, qc, employee, hr) is refused. */
+    private void requireOrderRead(long ticketId, UserPrincipal actor) {
+        switch (actor.role()) {
+            case "import" -> {
+                if (!tickets.isInImportScope(ticketId) && !tickets.isDeadDealWithIssuedImportRequest(ticketId)) {
+                    throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
+                }
+            }
+            case "account" -> {
+                if (!tickets.isInAccountScope(ticketId)) {
+                    throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
+                }
+            }
+            default -> ticketService.requireDealReadAccess(ticketId, actor);
+        }
+    }
+
+    private boolean canReadOrder(long ticketId, UserPrincipal actor) {
+        try {
+            requireOrderRead(ticketId, actor);
+            return true;
+        } catch (ApiException e) {
+            if (e.getStatus() == HttpStatus.FORBIDDEN) {
+                return false;
+            }
+            throw e;
+        }
     }
 
     public List<OpenDealDto> openDealsForProject(String projectName, UserPrincipal actor) {

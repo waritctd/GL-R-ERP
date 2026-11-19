@@ -10907,6 +10907,53 @@ export const api = {
       return delay({ addOnOrder: { ticketId: child.id, code: child.code, parentTicketId: root.id } });
     },
 
+    // GET /api/tickets/{id}/orders: DealPartyService#orders. The requested deal must be readable by the viewer (its own
+    // role rule); a sibling the viewer cannot read is skipped; import gets no money; a lost/cancelled order is listed but
+    // not totalled. Mock approximation: valueExVat is payable / 1.07 (the mock keeps no pre-VAT subtotal).
+    async orders(ticketId) {
+      const user = hasRole('sales', 'import', 'ceo', 'account', 'sales_manager');
+      const canRead = (t) => {
+        if (user.role === 'sales') return actsAsOwner(t, user);
+        if (user.role === 'import') return importListScopeIncludes(t);
+        if (user.role === 'account') return accountListScopeIncludes(t);
+        return true;
+      };
+      const requested = findTicketRaw(Number(ticketId));
+      if (!canRead(requested)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      const root = requested.childKind === 'ADD_ON' && requested.parentTicketId != null
+        ? findTicketRaw(requested.parentTicketId) : requested;
+      const chain = [root, ...db.tickets
+        .filter((t) => t.parentTicketId === root.id && t.childKind === 'ADD_ON')
+        .sort((a, b) => a.id - b.id)];
+      const withMoney = user.role !== 'import';
+      const totals = { valueExVat: 0, received: 0, outstanding: 0 };
+      const orders = [];
+      chain.forEach((t, i) => {
+        if (t.id !== requested.id && !canRead(t)) return;
+        const payable = payableAmount(t);
+        const received = sumPaid(t.id);
+        const owed = moneyValue(Math.max(0, payable - received));
+        const valueExVat = moneyValue(payable / 1.07);
+        const lifecycle = t.lifecycle ?? 'ACTIVE';
+        if (lifecycle !== 'CLOSED_LOST' && lifecycle !== 'CANCELLED') {
+          totals.valueExVat += valueExVat; totals.received += received; totals.outstanding += owed;
+        }
+        orders.push({
+          ticketId: t.id, code: t.code,
+          displayCode: t.childKind === 'ADD_ON' ? t.code : `${t.code}-1`,
+          orderNo: i + 1, childKind: t.parentTicketId != null ? (t.childKind ?? 'BID_SPLIT') : null,
+          salesStage: t.salesStage, lifecycle, fulfillmentStatus: t.fulfillmentStatus ?? null,
+          valueExVat: withMoney ? valueExVat : null, received: withMoney ? received : null, outstanding: withMoney ? owed : null,
+        });
+      });
+      return delay({
+        rootTicketId: root.id, rootCode: root.code, orders,
+        totals: withMoney
+          ? { valueExVat: moneyValue(totals.valueExVat), received: moneyValue(totals.received), outstanding: moneyValue(totals.outstanding) }
+          : { valueExVat: null, received: null, outstanding: null },
+      });
+    },
+
     async openForProject(projectName) {
       const user = requireDealEntry();
       const key = mockNormalisedProjectName(projectName);

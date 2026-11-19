@@ -67,6 +67,8 @@ import { DealPartiesPanel } from './DealPartiesPanel.jsx';
 import { AddOnOrderSheet } from './AddOnOrderSheet.jsx';
 import { BidOutcomeModal } from './BidOutcomeModal.jsx';
 import { canOpenAddOn } from './orderChain.js';
+import { OrderSwitcher, useProjectOrders } from './OrderSwitcher.jsx';
+import { ProjectOrdersCard, ProjectQuotationsByOrder, ProjectTotalsTiles } from './ProjectOrdersCard.jsx';
 import {
   buyerParties, isAwaitingBidOutcome, isBiddingParty,
 } from './dealPartyMeta.js';
@@ -199,6 +201,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     setSearchParams((prev) => {
       const next = new URLSearchParams(prev);
       next.set('tab', tabId);
+      next.delete('scope');
       return next;
     }, { replace: true });
   }
@@ -467,6 +470,22 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   const parties = canViewDealTracking ? (partiesQuery.data ?? []) : [];
   const [bidOutcomeOpen, setBidOutcomeOpen] = useState(false);
   const [addOnOpen, setAddOnOpen] = useState(false);
+  // The project's orders (root + add-ons): the overview box, the order chips on เงิน / ส่งของ / ไฟล์ and the quotation
+  // tab's per-order lists. Same audience as the whole-deal read (sales, sales_manager, ceo).
+  const ordersQuery = useProjectOrders(ticketId, canViewDealTracking && !!ticket);
+  const projectOrders = ordersQuery.data?.orders ?? [];
+  const showOrderSwitcher = projectOrders.length > 1;
+  const allScope = searchParams.get('scope') === 'all';
+  const orderSwitcherFor = (tab, allLabel = null) => (showOrderSwitcher ? (
+    <OrderSwitcher
+      orders={projectOrders}
+      currentId={ticketId}
+      hrefFor={(order) => `/tickets/${order.ticketId}?tab=${tab}`}
+      allLabel={allLabel}
+      allHref={allLabel ? `/tickets/${ticketId}?tab=${tab}&scope=all` : null}
+      allActive={Boolean(allLabel) && allScope}
+    />
+  ) : null);
 
   // The main button creates the deposit notice / remaining invoice, so the sales rep's page reads
   // both. Same keys and shapes as DealPaymentSection's reads, so the cache is shared (one fetch).
@@ -1843,6 +1862,14 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       <div className="min-w-0">
       <TabPanel id="overview" idPrefix="ticket-detail" active={activeTab === 'overview'}>
         <DealOverviewTab
+          projectOrders={(
+            <ProjectOrdersCard
+              ordersQuery={ordersQuery}
+              currentId={ticketId}
+              canAddOn={canOpenAddOn(summary, user)}
+              onAddOn={() => setAddOnOpen(true)}
+            />
+          )}
           timeline={(
             // id: the primary button's LOG_ACTIVITY jump target (IN_PAGE_JUMP_TARGET).
             <div id="deal-timeline-panel" tabIndex={-1} className="mobile:scroll-mt-[420px] outline-none">
@@ -1915,6 +1942,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
 
       <TabPanel id="quote" idPrefix="ticket-detail" active={activeTab === 'quote'}>
         <DealQuoteTab
+          orderQuotations={showOrderSwitcher ? <ProjectQuotationsByOrder orders={projectOrders} /> : null}
           addOn={canOpenAddOn(summary, user) ? (
             <div>
               <Button type="button" variant="secondary" className="w-full sm:w-auto" data-testid="add-on-order-open" onClick={() => setAddOnOpen(true)}>
@@ -1995,6 +2023,8 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
 
       <TabPanel id="money" idPrefix="ticket-detail" active={activeTab === 'money'}>
         <DealMoneyTab
+          orderSwitcher={orderSwitcherFor('money', 'รวมโครงการ')}
+          projectTotals={showOrderSwitcher && allScope ? <ProjectTotalsTiles totals={ordersQuery.data?.totals} /> : null}
           payment={sections.payment ? (
             <DealPaymentSection
               ticketId={ticketId}
@@ -2044,6 +2074,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
 
       <TabPanel id="ship" idPrefix="ticket-detail" active={activeTab === 'ship'}>
         <DealShipTab
+          orderSwitcher={orderSwitcherFor('ship')}
           fulfilment={(
             // "การส่งมอบ / นำเข้า": the deal-level IR → shipping → goods-received → delivery chain, the per-factory
             // trackers (read-only here, ดูอย่างเดียว) and the delivery table. id (DOM): the primary button's
@@ -2071,6 +2102,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
 
       <TabPanel id="files" idPrefix="ticket-detail" active={activeTab === 'files'}>
         <DealFilesTab
+          orderSwitcher={orderSwitcherFor('files')}
           register={(
             // The old เอกสาร tab's document register minus the quotation family (now on ใบเสนอราคา): deposit
             // notice, remaining invoice, ใบขอซื้อ, attachments — each family behind its own gate inside.
