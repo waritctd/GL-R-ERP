@@ -68,7 +68,7 @@ class TicketStatusMachineIntegrationTest extends AbstractPostgresIntegrationTest
 
         depositNoticeService = new DepositNoticeService(new DepositNoticeRepository(jdbc), tickets,
             notifications, new DepositNoticePdfRenderer(), customers,
-            new CustomerQuotationRepository(jdbc));
+            new CustomerQuotationRepository(jdbc), th.co.glr.hr.support.DocumentBundles.noDownload(jdbc));
 
         EmployeeRepository employees = new EmployeeRepository(
             jdbc, new EmployeeReferenceRepository(jdbc), new EmployeeCodeGenerator(jdbc));

@@ -171,7 +171,7 @@ class ProcurementServiceIntegrationTest extends AbstractPostgresIntegrationTest 
 
         DepositNoticeRepository depositNoticeRepository = new DepositNoticeRepository(jdbc);
         depositNoticeService = new DepositNoticeService(depositNoticeRepository, tickets, notifications,
-            new DepositNoticePdfRenderer(), customers, quotationRepository);
+            new DepositNoticePdfRenderer(), customers, quotationRepository, th.co.glr.hr.support.DocumentBundles.noDownload(jdbc));
 
         orderConfirmation = new OrderConfirmationService(
             pricingRequests, tickets, ticketService, quotationRepository, depositNoticeService, notifications);

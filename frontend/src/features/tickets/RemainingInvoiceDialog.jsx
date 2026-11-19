@@ -11,6 +11,7 @@ import { Modal } from '../../components/common/Modal.jsx';
 import { Skeleton } from '../../components/common/Skeleton.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { downloadBlob } from '../../utils/download.js';
+import { bundleSkippedMessage } from '../../utils/userMessages.js';
 import { invalidateDealDocuments } from '../documentChain/documentChain.js';
 import { formatMoney } from '../../utils/format.js';
 import { ThaiDateInput } from '../../components/common/ThaiDateInput.jsx';
@@ -139,7 +140,12 @@ function DialogFooterRow({ children }) {
  * This is UI convenience only (hides buttons that would otherwise just 403), never the actual
  * security boundary — that is, and stays, the backend gate above.
  */
-export function RemainingInvoiceDialog({ ticketId, canWrite = true, onClose, onDownloaded }) {
+function warnIfSkipped(blob, showToast) {
+  const message = bundleSkippedMessage(blob);
+  if (message) showToast?.('warning', message);
+}
+
+export function RemainingInvoiceDialog({ ticketId, canWrite = true, onClose, onDownloaded, showToast }) {
   const queryClient = useQueryClient();
 
   // Slice 6.1: the payment terms and due date, READ-ONLY, from the summary the server already serves
@@ -176,6 +182,7 @@ export function RemainingInvoiceDialog({ ticketId, canWrite = true, onClose, onD
   async function handleDownloadVersion(id, docNumber) {
     const blob = await api.storedRemainingInvoices.download(id);
     downloadBlob(blob, docNumber || `draft-${id}`, 'pdf');
+    warnIfSkipped(blob, showToast);
     onDownloaded?.();
   }
 
@@ -206,9 +213,10 @@ export function RemainingInvoiceDialog({ ticketId, canWrite = true, onClose, onD
           ) : null}
           {draft && canWrite ? (
             <DraftEditor draft={draft} issuedOfSameQuotation={list.find((d) => d.status === 'ISSUED' && d.customerQuotationId === draft.customerQuotationId)} onSaved={invalidateList} onIssued={invalidateList}
-              onDeleted={invalidateList} onDownloaded={onDownloaded} />
+              onDeleted={invalidateList} onDownloaded={onDownloaded} showToast={showToast} />
           ) : issued ? (
-            <IssuedSummary issued={issued} canWrite={canWrite} onRevised={invalidateList} onDownloaded={onDownloaded} />
+            <IssuedSummary issued={issued} canWrite={canWrite} onRevised={invalidateList} onDownloaded={onDownloaded}
+              showToast={showToast} />
           ) : canWrite ? (
             <CreateForm ticketId={ticketId} onCreated={invalidateList} />
           ) : (
@@ -265,7 +273,7 @@ function VersionHistory({ versions, onDownload }) {
 
 /** Read-only summary of the currently-live ISSUED document, plus the "ออกฉบับแก้ไข" action —
  * hidden when `canWrite` is false: a non-owning viewer still reads/downloads, never revises. */
-function IssuedSummary({ issued, canWrite, onRevised, onDownloaded }) {
+function IssuedSummary({ issued, canWrite, onRevised, onDownloaded, showToast }) {
   const [revising, setRevising] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const [error, setError] = useState(null);
@@ -289,6 +297,7 @@ function IssuedSummary({ issued, canWrite, onRevised, onDownloaded }) {
     try {
       const blob = await api.storedRemainingInvoices.download(issued.id);
       downloadBlob(blob, issued.docNumber || `remaining-invoice-${issued.id}`, 'pdf');
+      warnIfSkipped(blob, showToast);
       onDownloaded?.();
     } catch (err) {
       setError(err.message || 'ดาวน์โหลดไม่สำเร็จ');
@@ -331,7 +340,7 @@ function IssuedSummary({ issued, canWrite, onRevised, onDownloaded }) {
 }
 
 /** Editable form for the live DRAFT — save (re-snapshot), issue, or delete. */
-function DraftEditor({ draft, issuedOfSameQuotation, onSaved, onIssued, onDeleted, onDownloaded }) {
+function DraftEditor({ draft, issuedOfSameQuotation, onSaved, onIssued, onDeleted, onDownloaded, showToast }) {
   const templatesQuery = useQuery({
     queryKey: queryKeys.depositNoteTemplates(),
     queryFn: () => api.depositNotices.noteTemplates().then((r) => r.templates ?? []),
@@ -439,6 +448,7 @@ function DraftEditor({ draft, issuedOfSameQuotation, onSaved, onIssued, onDelete
     try {
       const blob = await api.storedRemainingInvoices.download(draft.id);
       downloadBlob(blob, draft.docNumber || `draft-${draft.id}`, 'pdf');
+      warnIfSkipped(blob, showToast);
       onDownloaded?.();
     } catch (err) {
       setError(err.message || 'ดาวน์โหลดไม่สำเร็จ');

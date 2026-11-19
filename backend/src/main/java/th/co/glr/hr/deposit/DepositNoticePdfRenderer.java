@@ -36,7 +36,7 @@ public class DepositNoticePdfRenderer {
         List<DocumentSheet.Line> lines = new ArrayList<>();
         for (DepositNoticeItemDto i : m.items())
             lines.add(new DocumentSheet.Line(i.seq(), i.description(), i.qty(), i.unit(), i.unitPrice(),
-                i.netUnitPrice(), i.amount()));
+                i.netUnitPrice(), i.amount(), i.discountLabel()));
         List<int[]> blocks = new ArrayList<>();
         int d = DocumentSheet.fillItems(sh, lines, NOTES_ROW, blocks);
 
@@ -151,10 +151,10 @@ public class DepositNoticePdfRenderer {
         return sb.toString();
     }
 
-    /** The same single "ลด unit-net" total the PDF prints in column G; blank unless net < unit. */
+    /** The same stored label the PDF prints in column G. */
     private static String discountText(DepositNoticeItemDto item) {
         return new DocumentSheet.Line(item.seq(), item.description(), item.qty(), item.unit(), item.unitPrice(),
-            item.netUnitPrice(), item.amount()).discountText();
+            item.netUnitPrice(), item.amount(), item.discountLabel()).discountText();
     }
 
     private static String thaiDate(LocalDate d) { return DocumentSheet.thaiDate(d); }

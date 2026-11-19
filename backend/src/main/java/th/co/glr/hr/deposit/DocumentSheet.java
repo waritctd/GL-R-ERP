@@ -45,7 +45,7 @@ final class DocumentSheet {
     static final int ITEM_START = 12;          // 0-based row of the first item (row 13)
     static final int HEADER_LAST_ROW = 9;      // rows 0..9 (A1:I10) repeat on every page
     private static final int DESCRIPTION_COL = 1;   // B
-    private static final int DISCOUNT_COL = 6;      // G  (the short "ลด X" label)
+    private static final int DISCOUNT_COL = 6;      // G  (the stored ส่วนลด label)
     private static final int AMOUNT_COL = 8;        // I
     private static final int HELPER_COL = 9;        // J  (the template's hidden-formula helper)
     private static final int LAST_COL = 8;          // print columns A..I
@@ -53,13 +53,12 @@ final class DocumentSheet {
     private static final int MONEY_UNITS_PER_CHAR = 300;
     private static final int NOTE_LINES = 6;
 
-    /** One printed line: a real item, or the remaining invoice's deposit-deduction row (seq 0 = no number). */
+    /** One printed line: a real item, or the remaining invoice's deposit-deduction row (seq 0 = no number).
+     * {@code discountLabel} is the stored ส่วนลด cell text (the quotation's own: พิเศษ / Net / N%), printed as-is. */
     record Line(int seq, String description, BigDecimal qty, String unit, BigDecimal unitPrice,
-                BigDecimal netUnitPrice, BigDecimal amount) {
-        /** Column G's single total "ลด X", X = unit price - net price: only when a discount really applies (net < unit). */
+                BigDecimal netUnitPrice, BigDecimal amount, String discountLabel) {
         String discountText() {
-            if (unitPrice == null || netUnitPrice == null || netUnitPrice.compareTo(unitPrice) >= 0) return "";
-            return "ลด " + String.format(Locale.US, "%,.2f", unitPrice.subtract(netUnitPrice));
+            return discountLabel == null ? "" : discountLabel.strip();
         }
     }
 

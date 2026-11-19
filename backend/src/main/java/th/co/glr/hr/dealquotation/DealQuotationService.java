@@ -2501,6 +2501,17 @@ public class DealQuotationService {
         return renderer.toPdf(buildRenderModel(id, actor));
     }
 
+    /** The quotation PDF for a document of deal {@code ticketId} (the notice / remaining invoice bundle). The caller
+     * has already been authorised on the DEAL, so there is no per-quotation view gate; the quotation must belong to
+     * that deal (404 otherwise), so this can never be pointed at another deal's quotation. */
+    public byte[] renderPdfForDealDocument(long id, long ticketId) {
+        DealQuotationDto quotation = requireQuotation(id);
+        if (quotation.ticketId() != ticketId) {
+            throw new ApiException(HttpStatus.NOT_FOUND, "ไม่พบใบเสนอราคานี้");
+        }
+        return renderer.toPdf(toRenderModel(quotation));
+    }
+
     public byte[] renderXlsx(long id, UserPrincipal actor) {
         return renderer.toXlsx(buildRenderModel(id, actor));
     }

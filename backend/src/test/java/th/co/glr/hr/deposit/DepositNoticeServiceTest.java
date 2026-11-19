@@ -48,9 +48,12 @@ class DepositNoticeServiceTest {
     private final DepositNoticePdfRenderer renderer = mock(DepositNoticePdfRenderer.class);
     private final CustomerRepository customerRepo = mock(CustomerRepository.class);
     private final CustomerQuotationRepository quotationRepo = mock(CustomerQuotationRepository.class);
+    private final DocumentBundle bundle = mock(DocumentBundle.class);
     private final DepositNoticeService service = new DepositNoticeService(
-        docs, ticketRepo, notifications, renderer, customerRepo, quotationRepo);
+        docs, ticketRepo, notifications, renderer, customerRepo, quotationRepo, bundle);
     {
+        when(bundle.bundle(any(), org.mockito.ArgumentMatchers.anyLong(), any()))
+            .thenAnswer(i -> new DocumentBundle.Result(i.getArgument(0), java.util.List.of()));
         // Default stub so every payment-track write in this file (advancePaymentStatus's compare-and-set) reads as
         // "succeeded" unless a specific test overrides it — Mockito's default answer for an unstubbed int-returning
         // method is 0, which the service would read as a lost race and turn into a 409.
@@ -677,33 +680,34 @@ class DepositNoticeServiceTest {
         assertThat(resolved.blockingReason()).isNull();
     }
 
-    // ── D11: the matched notice's own discountLabel is authored in the
-    // LONG form ("ส่วนลด X ต่อหน่วย" — see itemsFromQuotation, used by both createDraft and
-    // OrderConfirmationService.createDepositNoticeFromQuotation), which clips in the renderer's
-    // narrow column G. itemsFromDepositNoticeForRemainingInvoice must normalize it into the SAME
-    // short "ลด X" form itemsFromQuotationForRemainingInvoice already uses — derived from the
-    // notice item's own unitPrice/netUnitPrice, never by parsing discountLabel itself (the fixture
-    // below deliberately sets discountLabel to a WRONG long-form string so a test that accidentally
-    // passed it through unchanged, or that string-parsed it, would fail).
+    // ── The matched notice's own discountLabel is the quotation's ส่วนลด cell text ("พิเศษ" / "Net" / "10%"),
+    // copied when the notice was drafted. The remaining invoice sourced from that notice must carry it THROUGH,
+    // unchanged — never re-derive a computed "ลด <unit - net>" from the numeric columns (the fixture's numbers
+    // would yield "ลด 43.17", which is exactly what must NOT appear).
 
     @Test
-    void remainingInvoiceXlsx_noticeSourcedDiscountLabelIsNormalizedToShortForm() throws Exception {
+    void remainingInvoiceXlsx_noticeSourcedDiscountLabelIsCarriedThroughAsIs() throws Exception {
         stubTicket(10L, TicketStatus.QUOTATION_ISSUED, "CUSTOMER_CONFIRMED");
         when(quotationRepo.findByTicket(10L)).thenReturn(List.of(
             quotation(1L, 10L, "ACCEPTED", 1, List.of(quotationItem("A", BigDecimal.TEN, "PER_PIECE",
                 new BigDecimal("100"), new BigDecimal("43.17"), new BigDecimal("56.83"))))));
-        // unitPrice=100 (approvedUnitPrice), netUnitPrice=56.83 (finalUnitPrice) -> discount = 43.17 per unit, the
-        // same figure the REAL long-form label below quotes.
-        DepositNoticeItemDto noticeItem = new DepositNoticeItemDto(
+        DepositNoticeItemDto special = new DepositNoticeItemDto(
             1L, 1, "From notice", BigDecimal.TEN, "แผ่น",
-            new BigDecimal("100"), "ส่วนลด 43.17 ต่อหน่วย", new BigDecimal("56.83"), new BigDecimal("568.30"));
+            new BigDecimal("100"), "พิเศษ", new BigDecimal("56.83"), new BigDecimal("568.30"));
+        DepositNoticeItemDto net = new DepositNoticeItemDto(
+            2L, 2, "Plain", BigDecimal.ONE, "งาน",
+            new BigDecimal("40"), "Net", new BigDecimal("40"), new BigDecimal("40.00"));
+        DepositNoticeItemDto discountLine = new DepositNoticeItemDto(
+            3L, 3, "ส่วนลดพิเศษ", new BigDecimal("-1"), "",
+            new BigDecimal("10"), "", new BigDecimal("10"), new BigDecimal("-10.00"));
         when(docs.findByTicket(10L)).thenReturn(List.of(
-            issuedNotice(5L, 10L, 1, "GLRD69001", "QT-2026-1", new BigDecimal("568.30"), new BigDecimal("5"),
-                List.of(noticeItem))));
+            issuedNotice(5L, 10L, 1, "GLRD69001", "QT-2026-1", new BigDecimal("598.30"), new BigDecimal("5"),
+                List.of(special, net, discountLine))));
 
         DepositNoticeService.ResolvedRemainingInvoice resolved =
             service.resolveRemainingInvoiceSnapshot(10L, null, owner).resolved();
-        assertThat(resolved.items().get(0).discountLabel()).isEqualTo("ลด 43.17");
+        assertThat(resolved.items()).extracting(RemainingInvoiceItemDto::discountLabel)
+            .containsExactly("พิเศษ", "Net", "");
     }
 
     // ── D11: once a quotation is matched to a notice, that notice's own

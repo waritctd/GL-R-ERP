@@ -43,7 +43,7 @@ class RemainingInvoicePdfRendererTest {
 
     private static List<RemainingInvoiceItemDto> twoItems() {
         return List.of(
-            item(1, "กระเบื้องทดสอบ รุ่น BBB", "3", "แผ่น", "120.00", "ส่วนลด 20.00 ต่อหน่วย", "100.00", "299.99"),
+            item(1, "กระเบื้องทดสอบ รุ่น BBB", "3", "แผ่น", "120.00", "พิเศษ", "100.00", "299.99"),
             item(2, "ยาแนวทดสอบ", "2", "ถุง", "55.50", null, "55.50", "111.00"));
     }
 
@@ -126,7 +126,7 @@ class RemainingInvoicePdfRendererTest {
             assertThat(num(sh, ITEM0, 2)).isEqualTo(3.0);
             assertThat(str(sh, ITEM0, 3)).isEqualTo("แผ่น");
             assertThat(num(sh, ITEM0, 4)).isEqualTo(120.00);
-            assertThat(norm(str(sh, ITEM0, 6))).isEqualTo("ลด 20.00");
+            assertThat(norm(str(sh, ITEM0, 6))).isEqualTo("พิเศษ");   // the stored label as-is, no "ลด "
             assertThat(num(sh, ITEM0, 7)).isEqualTo(100.00);
             assertThat(num(sh, ITEM0, 8)).isCloseTo(299.99, within(0.0001));    // stored, not 3 x 100
             assertThat(seq(sh, ITEM0 + 1)).isEqualTo(2);
@@ -452,25 +452,40 @@ class RemainingInvoicePdfRendererTest {
         return c == 0x0E31 || (c >= 0x0E34 && c <= 0x0E3A) || (c >= 0x0E47 && c <= 0x0E4E);
     }
 
-    /** Ruling P1-b: column G prints ONE total "ลด <unit - net>" whenever net < unit (the stored label text is ignored);
-     * blank when net == unit or net > unit. Same font/alignment as the figures, width = E, B untouched. */
+    /** The ส่วนลด cell prints the stored discount_label AS-IS (พิเศษ / Net / N%), never a computed "ลด <unit - net>";
+     * a null/blank label leaves G empty even when net < unit. Same font/alignment as the figures, width = E. */
     @Test
-    void theDiscountColumnPrintsOneTotalLikeTheFigures() throws Exception {
+    void theDiscountColumnPrintsTheStoredLabelAsIs() throws Exception {
         List<RemainingInvoiceItemDto> items = List.of(
-            item(1, "folded", "1", "ชิ้น", "120.00", "ส่วนลด 20 ต่อหน่วย + ส่วนลดพิเศษ 3.37 ต่อหน่วย", "96.63", "96.63"),
-            item(2, "special", "1", "ชิ้น", "100.00", "ส่วนลดพิเศษ 5 ต่อหน่วย", "95.00", "95.00"),
-            item(3, "no label", "1", "ชิ้น", "50.00", null, "40.00", "40.00"),
-            item(4, "thousands", "1", "ชิ้น", "12345.67", null, "10000.00", "10000.00"),
-            item(5, "no discount", "1", "ชิ้น", "100.00", "ส่วนลด 9 ต่อหน่วย", "100.00", "100.00"),
-            item(6, "net above unit", "1", "ชิ้น", "398.51", null, "399.15", "399.15"));
+            item(1, "special", "1", "ชิ้น", "120.00", "พิเศษ", "96.63", "96.63"),
+            item(2, "net", "1", "ชิ้น", "100.00", "Net", "100.00", "100.00"),
+            item(3, "percent", "1", "ชิ้น", "12345.67", "12.5%", "10000.00", "10000.00"),
+            item(4, "null label, net < unit", "1", "ชิ้น", "50.00", null, "40.00", "40.00"),
+            item(5, "blank label (discount line)", "-1", "", "10.00", "", "10.00", "-10.00"));
         try (Workbook wb = render(model(LocalDate.of(2026, 10, 28), DEPOSIT, items)); Workbook t = openTemplate(TEMPLATE)) {
             Sheet sh = wb.getSheetAt(0);
-            assertDiscountCellPrintsLikeTheFigures(sh, t.getSheet("Update"), ITEM0, "ลด 23.37");
-            assertDiscountCellPrintsLikeTheFigures(sh, t.getSheet("Update"), ITEM0 + 1, "ลด 5.00");
-            assertDiscountCellPrintsLikeTheFigures(sh, t.getSheet("Update"), ITEM0 + 2, "ลด 10.00");
-            assertDiscountCellPrintsLikeTheFigures(sh, t.getSheet("Update"), ITEM0 + 3, "ลด 2,345.67");
-            assertThat(isBlank(sh, ITEM0 + 4, 6)).as("net == unit -> G blank").isTrue();
-            assertThat(isBlank(sh, ITEM0 + 5, 6)).as("net > unit -> G blank").isTrue();
+            assertDiscountCellPrintsLikeTheFigures(sh, t.getSheet("Update"), ITEM0, "พิเศษ");
+            assertDiscountCellPrintsLikeTheFigures(sh, t.getSheet("Update"), ITEM0 + 1, "Net");
+            assertDiscountCellPrintsLikeTheFigures(sh, t.getSheet("Update"), ITEM0 + 2, "12.5%");
+            assertThat(isBlank(sh, ITEM0 + 3, 6)).as("null label -> G blank, not a computed ลด 10.00").isTrue();
+            assertThat(isBlank(sh, ITEM0 + 4, 6)).as("discount line keeps an empty ส่วนลด cell").isTrue();
+            for (int r = ITEM0; r <= ITEM0 + 4; r++)
+                assertThat(str(sh, r, 6)).as("row %d G", r).doesNotStartWith("ลด");
+        }
+    }
+
+    /** A description with the quotation's size line on a second line prints it on its own row under the product. */
+    @Test
+    void aSizeLineOnASecondDescriptionLinePrintsUnderTheProduct() throws Exception {
+        String size = "ขนาด 6 cm x 24.6 cm x 8 mm (ขนาดโดยประมาณ)";
+        List<RemainingInvoiceItemDto> items = List.of(
+            item(1, "กระเบื้อง รุ่น Tribeca สี Sage green ผิว Glossy\n" + size, "3", "แผ่น", "120.00", "พิเศษ", "100.00", "300.00"));
+        try (Workbook wb = render(model(LocalDate.of(2026, 10, 28), DEPOSIT, items))) {
+            Sheet sh = wb.getSheetAt(0);
+            assertThat(norm(str(sh, ITEM0, 1))).isEqualTo("กระเบื้อง รุ่น Tribeca สี Sage green ผิว Glossy");
+            assertThat(norm(str(sh, ITEM0 + 1, 1))).isEqualTo(size);
+            assertThat(num(sh, ITEM0, 8)).isEqualTo(300.00);
+            assertThat(isBlank(sh, ITEM0 + 1, 8)).as("the size row carries no figures").isTrue();
         }
     }
 

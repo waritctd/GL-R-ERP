@@ -46,13 +46,25 @@ class DepositNoticeControllerTest {
     @Test
     void fileDefaultsToPdfForIssuedDocument() throws Exception {
         when(service.getById(eq(99L), any(UserPrincipal.class))).thenReturn(document());
-        when(service.getPdf(eq(99L), any(UserPrincipal.class))).thenReturn("%PDF-1.4\n".getBytes());
+        when(service.getPdfBundle(eq(99L), any(UserPrincipal.class)))
+            .thenReturn(new DocumentBundle.Result("%PDF-1.4\n".getBytes(), List.of()));
 
         mvc.perform(get("/api/deposit-notices/99/file").session(session()))
             .andExpect(status().isOk())
             .andExpect(header().string(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"GLRD69001.pdf\""))
             .andExpect(content().contentType("application/pdf"))
             .andExpect(content().bytes("%PDF-1.4\n".getBytes()));
+    }
+
+    @Test
+    void pdfNamesWhatTheBundleSkipped_inAnAsciiHeader() throws Exception {
+        when(service.getById(eq(99L), any(UserPrincipal.class))).thenReturn(document());
+        when(service.getPdfBundle(eq(99L), any(UserPrincipal.class)))
+            .thenReturn(new DocumentBundle.Result("%PDF-1.4\n".getBytes(), List.of("po", "quotation")));
+
+        mvc.perform(get("/api/deposit-notices/99/file").session(session()))
+            .andExpect(status().isOk())
+            .andExpect(header().string("X-Document-Bundle-Skipped", "po,quotation"));
     }
 
     @Test

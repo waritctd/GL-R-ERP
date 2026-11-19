@@ -273,6 +273,7 @@ export function QuotationDocumentChain({ quotation, chain, onConfirmOrder, onUnd
         <RemainingInvoiceDialog
           ticketId={ticketId}
           canWrite={Boolean(chain.viewer?.mayWriteRemainingInvoice)}
+          showToast={showToast}
           onClose={() => {
             setRemainingOpen(false);
             invalidateDealDocuments(queryClient, ticketId);

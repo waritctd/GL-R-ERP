@@ -38,3 +38,12 @@ export function sanitizeToastMessage(kind, message) {
   console.error('Suppressed technical error toast:', textFrom(message));
   return mapped.message;
 }
+
+const BUNDLE_PART_LABEL = { po: 'PO', quotation: 'ใบเสนอราคา' };
+
+/** The warning for a PDF download whose bundle left out a PO / the quotation (hrApi copies the server's
+ * X-Document-Bundle-Skipped header onto the blob as `bundleSkipped`); null when nothing was skipped. */
+export function bundleSkippedMessage(blob) {
+  const parts = String(blob?.bundleSkipped ?? '').split(',').map((p) => BUNDLE_PART_LABEL[p.trim()]).filter(Boolean);
+  return parts.length ? `แนบ ${parts.join(' และ ')} ไม่ครบ กรุณาตรวจสอบไฟล์ก่อนส่งลูกค้า` : null;
+}

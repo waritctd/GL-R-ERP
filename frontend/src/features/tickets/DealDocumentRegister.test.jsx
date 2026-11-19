@@ -716,6 +716,35 @@ describe('DealDocumentRegister', () => {
     expect(p2).toBeLessThan(p1);
   });
 
+  it('warns after a deposit-notice or remaining-invoice PDF whose bundle skipped a part, and stays quiet when nothing was', async () => {
+    const showToast = vi.fn();
+    api.depositNotices.listByTicket.mockResolvedValue({
+      depositNotices: [{ id: 12, status: 'ISSUED', docNumber: 'DN-2026-0001', depositPercent: 0.5, version: 1 }],
+    });
+    api.storedRemainingInvoices.listForTicket.mockResolvedValue({
+      remainingInvoices: [{ id: 42, baseNumber: 'GLR6900001', version: 1, docNumber: 'GLR6900001-1', status: 'ISSUED', grandTotal: 200 }],
+    });
+    api.depositNotices.downloadPdf.mockResolvedValueOnce(Object.assign(new Blob(['pdf']), { bundleSkipped: 'po' }))
+      .mockResolvedValueOnce(Object.assign(new Blob(['pdf']), { bundleSkipped: '' }));
+    api.storedRemainingInvoices.download.mockResolvedValue(Object.assign(new Blob(['x']), { bundleSkipped: 'quotation' }));
+    renderRegister({ user: { id: 5, role: 'account' }, sections: ACCOUNT_SECTIONS, canViewPricingRequests: false,
+      canViewDocumentsTab: true, showToast });
+
+    const deposit = within(await screen.findByTestId('register-deposit'));
+    fireEvent.click(await deposit.findByRole('button', { name: 'PDF' }));
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith('warning',
+      'แนบ PO ไม่ครบ กรุณาตรวจสอบไฟล์ก่อนส่งลูกค้า'));
+    showToast.mockClear();
+    fireEvent.click(deposit.getByRole('button', { name: 'PDF' }));
+    await waitFor(() => expect(api.depositNotices.downloadPdf).toHaveBeenCalledTimes(2));
+    expect(showToast).not.toHaveBeenCalled();
+
+    await screen.findByText('GLR6900001-1');
+    fireEvent.click(within(screen.getByTestId('document-version-remaining-42')).getByRole('button', { name: 'PDF' }));
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith('warning',
+      'แนบ ใบเสนอราคา ไม่ครบ กรุณาตรวจสอบไฟล์ก่อนส่งลูกค้า'));
+  });
+
   it('lists stored remaining-invoice versions newest first, downloads by id, and shows a DRAFT as ร่าง without a download', async () => {
     api.storedRemainingInvoices.listForTicket.mockResolvedValue({
       remainingInvoices: [

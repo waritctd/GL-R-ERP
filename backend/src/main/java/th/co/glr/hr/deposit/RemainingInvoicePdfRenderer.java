@@ -33,11 +33,11 @@ public class RemainingInvoicePdfRenderer {
         List<DocumentSheet.Line> lines = new ArrayList<>();
         for (RemainingInvoiceItemDto i : m.items())
             lines.add(new DocumentSheet.Line(i.seq(), i.description(), i.qty(), i.unit(), i.unitPrice(),
-                i.netUnitPrice(), i.amount()));
+                i.netUnitPrice(), i.amount(), i.discountLabel()));
         BigDecimal deposit = m.depositDeduction() == null ? BigDecimal.ZERO : m.depositDeduction();
         if (deposit.signum() != 0) {
             lines.add(new DocumentSheet.Line(0, "หัก  มัดจำ  " + (m.depositReference() == null ? "" : m.depositReference()),
-                BigDecimal.ONE.negate(), null, deposit, deposit, deposit.negate()));
+                BigDecimal.ONE.negate(), null, deposit, deposit, deposit.negate(), null));
         }
         List<int[]> blocks = new ArrayList<>();
         int d = DocumentSheet.fillItems(sh, lines, NOTES_ROW, blocks);

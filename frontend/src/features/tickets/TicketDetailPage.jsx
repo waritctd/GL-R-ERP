@@ -1920,6 +1920,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                   builder, same handler, present exactly when the primary is. */}
               <DealDocumentRegister
                 part="quotations"
+                showToast={showToast}
                 quotationsAction={routeChoiceSecondTrigger}
                 ticketId={ticketId}
                 user={user}
@@ -2064,6 +2065,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
             // notice, remaining invoice, ใบขอซื้อ, attachments — each family behind its own gate inside.
             <DealDocumentRegister
               part="files"
+              showToast={showToast}
               depositCtaShown={workStateAction?.key === 'create_deposit_notice'}
               ticketId={ticketId}
               user={user}
@@ -2175,7 +2177,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       {remainingInvoiceDialogOpen ? (
         // mirrors RemainingInvoiceService's own write gate — sales role + this deal's own owner, see
         // DealDocumentRegister.jsx's identical predicate.
-        <RemainingInvoiceDialog ticketId={ticketId} canWrite={role === 'sales' && isOwner}
+        <RemainingInvoiceDialog ticketId={ticketId} canWrite={role === 'sales' && isOwner} showToast={showToast}
           onClose={() => setRemainingInvoiceDialogOpen(false)} />
       ) : null}
 

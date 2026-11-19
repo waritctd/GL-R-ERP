@@ -118,7 +118,9 @@ abstract class DirectQuotationDealTestBase extends AbstractPostgresIntegrationTe
         quotationService.wireTicketService(ticketService);
         confirmer = transactional(quotationService);
         depositNoticeService = new DepositNoticeService(new DepositNoticeRepository(jdbc), tickets, notifications,
-            new DepositNoticePdfRenderer(), customers, legacyQuotations);
+            new DepositNoticePdfRenderer(), customers, legacyQuotations,
+            new th.co.glr.hr.deposit.DocumentBundle(new th.co.glr.hr.attachment.AttachmentRepository(jdbc),
+                quotationService, new DepositNoticeRepository(jdbc)));
 
         salesActor = actor(createEmployee("พนักงานขาย 222", "sales-222@glr.co.th", "SALES", "แผนกขาย", null), "sales");
         otherSalesActor = actor(createEmployee("พนักงานขาย 222 อื่น", "sales-222-other@glr.co.th", "SALES",

@@ -144,12 +144,15 @@ class DealQuotationConfirmOrderIntegrationTest extends DirectQuotationDealTestBa
         // lines, and the subtotal is the quotation's 1,900.
         assertThat(draft.items())
             .extracting(i -> i.qty().stripTrailingZeros().toPlainString(), i -> i.unitPrice().toPlainString(),
-                i -> i.netUnitPrice().toPlainString(), i -> i.amount().toPlainString(),
-                DepositNoticeItemDto::discountLabel)
+                i -> i.netUnitPrice().toPlainString(), i -> i.amount().toPlainString())
             .containsExactly(
-                org.assertj.core.groups.Tuple.tuple("10", "100.00", "100.00", "1000.00", null),
-                org.assertj.core.groups.Tuple.tuple("2", "500.00", "500.00", "1000.00", null),
-                org.assertj.core.groups.Tuple.tuple("-1", "100.00", "100.00", "-100.00", null));
+                org.assertj.core.groups.Tuple.tuple("10", "100.00", "100.00", "1000.00"),
+                org.assertj.core.groups.Tuple.tuple("2", "500.00", "500.00", "1000.00"),
+                org.assertj.core.groups.Tuple.tuple("-1", "100.00", "100.00", "-100.00"));
+        // The ส่วนลด cell is what the QUOTATION prints there: Net for a no-discount line, nothing on the discount line.
+        assertThat(draft.items().get(0).discountLabel()).isEqualTo("Net");
+        assertThat(draft.items().get(1).discountLabel()).isEqualTo("Net");
+        assertThat(draft.items().get(2).discountLabel()).isNullOrEmpty();
         assertThat(draft.items().get(1).description()).isEqualTo("ค่าขนส่ง");
         assertThat(draft.items().get(2).description()).contains("ส่วนลดพิเศษ");
         assertThat(draft.items().get(2).unit()).isEmpty();

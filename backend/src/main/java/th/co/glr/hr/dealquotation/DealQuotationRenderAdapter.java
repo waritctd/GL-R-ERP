@@ -341,28 +341,8 @@ public final class DealQuotationRenderAdapter {
      * row that IS the discount rather than a row carrying one.
      */
     private static String discountLabel(DealQuotationItemDto item, String priceMode, boolean english) {
-        // English: "Special", never "พิเศษ" — the English form carries no Thai in its item table. The SAME word
-        // QuotationDocumentView prints on screen (quotationMeta#documentDiscountLabel), so the page and the PDF agree.
-        String special = english ? "Special" : "พิเศษ";
-        BigDecimal pct = item.discountPct();
-        if (WastageCalculator.LINE_TYPE_ADJUSTMENT.equals(item.lineType())) {
-            return "";
-        }
-        boolean tile = item.lineType() == null
-            || WastageCalculator.LINE_TYPE_TILE.equals(item.lineType());
-        if (tile) {
-            if (WastageCalculator.PRICE_MODE_SPECIAL_SQM.equals(priceMode)) {
-                // An English per-sqm row prints "Net" — the USD/sqm IS the net.
-                // Thai keeps พิเศษ.
-                return english ? "Net" : special;
-            }
-            if (WastageCalculator.PRICE_MODE_DIRECT_NET.equals(priceMode)) {
-                boolean differs = item.unitPrice() != null && item.netUnitPrice() != null
-                    && item.unitPrice().compareTo(item.netUnitPrice()) != 0;
-                return differs ? special : "Net";
-            }
-        }
-        return (pct == null || pct.signum() == 0) ? "Net" : formatPct(pct) + "%";
+        return DealQuotationLines.discountCellText(item.lineType(), priceMode, item.discountPct(), item.unitPrice(),
+            item.netUnitPrice(), english);
     }
 
     // ── "Has special pricing" (V178). The ONE shared gate for whether
@@ -1073,12 +1053,6 @@ public final class DealQuotationRenderAdapter {
      * words), so the two live next to each other here rather than one being reused with a flag. */
     private static String shortEnglishDate(LocalDate d) {
         return String.format("%02d/%02d/%d", d.getDayOfMonth(), d.getMonthValue(), d.getYear());
-    }
-
-    private static String formatPct(BigDecimal value) {
-        // Not thread-safe -- DecimalFormat never shared, mirrors DealQuotationLines' own discipline.
-        DecimalFormat format = new DecimalFormat("#,##0.##", DecimalFormatSymbols.getInstance(Locale.US));
-        return format.format(value);
     }
 
     private static LocalDate bangkokDate(java.time.Instant instant) {
