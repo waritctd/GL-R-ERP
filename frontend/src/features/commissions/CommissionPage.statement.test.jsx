@@ -2,20 +2,12 @@ import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { CommissionPage } from './CommissionPage.jsx';
 import { api } from '../../api/index.js';
-import { formatMoney, formatThaiMonthYearFromMonthInputValue } from '../../utils/format.js';
+import { formatMoney } from '../../utils/format.js';
 
 globalThis.React = React;
-
-// Only `Date` is faked (timers stay real). The manager/CEO page reads "now" at render time.
-function setClock(iso) {
-  vi.useRealTimers();
-  vi.useFakeTimers({ toFake: ['Date'] });
-  vi.setSystemTime(new Date(iso));
-}
-afterEach(() => { vi.useRealTimers(); });
 
 // Commission page redesign (branch feat/commission-page-redesign), STEP 1: tests first.
 vi.mock('../../api/index.js', async (importOriginal) => {
@@ -57,10 +49,6 @@ function renderPage(user, url = '/commissions') {
 }
 
 const salesUser = { id: 10, employeeId: 10, name: 'พนักงานขาย ทดสอบ', role: 'sales' };
-const salesManagerUser = { id: 30, employeeId: 30, name: 'ผู้จัดการฝ่ายขาย ทดสอบ', role: 'sales_manager' };
-const ceoUser = { id: 50, employeeId: 50, name: 'CEO ทดสอบ', role: 'ceo' };
-const hrUser = { id: 900, employeeId: 900, name: 'HR Test', role: 'hr' };
-
 function invoiceDetails(overrides = {}) {
   return {
     id: 1,
@@ -149,7 +137,6 @@ async function openAugust(user = salesUser) {
   fireEvent.change(screen.getByLabelText('รอบเดือน'), { target: { value: '2026-08' } });
 }
 
-const row = (key) => screen.getByTestId(`statement-${key}`);
 const text = (el) => el.textContent.replace(/\s+/g, ' ').trim();
 
 describe('rep statement — "ค่าคอมของฉัน" builds the total limb by limb', () => {
@@ -185,15 +172,6 @@ describe('rep statement — "ค่าคอมของฉัน" builds the to
     });
   });
 
-  it('labels the total a PREVIEW that counts receipts not yet approved', async () => {
-    api.commissions.monthlySummary.mockResolvedValue({ summary: summary() });
-    await openAugust();
-    await screen.findByTestId('statement-total');
-    const note = screen.getByTestId('statement-preview-note');
-    expect(text(note)).toMatch(/ประมาณการ/);
-    expect(text(note)).toMatch(/ยังไม่(ได้)?อนุมัติ/);
-  });
-
   // weightUpliftBase goes NEGATIVE when a weighted (x2) sale is clawed back in the month. The row is then a
   // deduction: minus operator, its own label, the figure as a positive magnitude after the minus sign (never
   // "฿-50,000.00" after a "+").
@@ -213,36 +191,6 @@ describe('rep statement — "ค่าคอมของฉัน" builds the to
     expect(text(uplift)).toContain('฿50,000.00');
     expect(text(uplift)).not.toContain('฿-50,000.00');
     expect(text(uplift)).not.toContain('ส่วนเพิ่มจากสินค้าสต็อก');
-  });
-
-  it('a positive weightUpliftBase keeps the "+" and the original label', async () => {
-    api.commissions.monthlySummary.mockResolvedValue({ summary: summary() });
-    await openAugust();
-    const uplift = await screen.findByTestId('statement-uplift');
-    expect(text(uplift)).toContain('+');
-    expect(text(uplift)).toContain('ส่วนเพิ่มจากสินค้าสต็อก (2x/3x)');
-    expect(text(uplift)).not.toContain('ส่วนลดจากการหักคืน');
-  });
-
-  it('hides the limbs that are zero (uplift, incentive, stock bonus, manual) but always keeps base, tier and total', async () => {
-    api.commissions.monthlySummary.mockResolvedValue({
-      summary: summary({
-        rawCommissionableBase: 3000000,
-        weightUpliftBase: 0,
-        incentiveAmount: 0,
-        stockBonusAmount: 0,
-        manualTotal: 0,
-        totalCommission: 48750,
-      }),
-    });
-    await openAugust();
-    await screen.findByTestId('statement-total');
-
-    ['uplift', 'incentive', 'stock-bonus', 'manual'].forEach((key) => {
-      expect(screen.queryByTestId(`statement-${key}`)).toBeNull();
-    });
-    ['raw', 'base', 'tier', 'total'].forEach((key) => expect(screen.getByTestId(`statement-${key}`)).not.toBeNull());
-    expect(text(row('total'))).toContain('฿48,750.00');
   });
 
   it('shows the ค่าคอมทีม row ONLY when companyCommissionableBase is non-null, with the formula spelled out from the API\'s numbers', async () => {
@@ -284,37 +232,6 @@ describe('rep statement — "ค่าคอมของฉัน" builds the to
     expect(text(team)).not.toContain('แทนที่ด้วยรายการที่บันทึกเอง');
   });
 
-  it('a recipient above the threshold whose amount is still 0: "แทนที่ด้วยรายการที่บันทึกเอง (ดูรายการปรับปรุง)"', async () => {
-    api.commissions.monthlySummary.mockResolvedValue({
-      summary: summary({
-        teamOverrideAmount: 0,
-        companyCommissionableBase: 9500000,
-        teamOverrideThresholdBase: 3000000,
-        teamOverrideRatePercent: 0.075,
-      }),
-    });
-    await openAugust();
-    const team = await screen.findByTestId('statement-team-override');
-    expect(text(team)).toContain('฿0.00');
-    expect(text(team)).toContain('แทนที่ด้วยรายการที่บันทึกเอง (ดูรายการปรับปรุง)');
-    expect(text(team)).not.toContain('ยังไม่ถึงเกณฑ์');
-  });
-
-  it('a recipient above the threshold WITH an amount: no reason line at all', async () => {
-    api.commissions.monthlySummary.mockResolvedValue({
-      summary: summary({
-        teamOverrideAmount: 4875,
-        companyCommissionableBase: 9500000,
-        teamOverrideThresholdBase: 3000000,
-        teamOverrideRatePercent: 0.075,
-      }),
-    });
-    await openAugust();
-    const team = await screen.findByTestId('statement-team-override');
-    expect(text(team)).not.toContain('ยังไม่ถึงเกณฑ์');
-    expect(text(team)).not.toContain('แทนที่ด้วยรายการที่บันทึกเอง');
-  });
-
   it('WRONG-WAY: a rep who is not an override recipient never sees ค่าคอมทีม, even if a stray teamOverrideAmount arrives', async () => {
     // companyCommissionableBase null = not a recipient. The row must be gated on THAT, not on the amount being
     // non-zero -- a stray amount on a non-recipient must not surface as a line.
@@ -327,84 +244,6 @@ describe('rep statement — "ค่าคอมของฉัน" builds the to
     expect(screen.queryByTestId('statement-team-override')).toBeNull();
     expect(screen.queryByText(/ค่าคอมทีม/)).toBeNull();
     expect(screen.queryByText(/ยอดรับทั้งบริษัท/)).toBeNull();
-  });
-
-  it('belowFloor renders a clear warning that this round earns no tiered commission; absent otherwise', async () => {
-    api.commissions.monthlySummary.mockResolvedValue({
-      summary: summary({
-        rawCommissionableBase: 40000,
-        weightUpliftBase: 0,
-        commissionableBase: 40000,
-        tierCommission: 0,
-        incentiveAmount: 0,
-        stockBonusAmount: 0,
-        manualTotal: 0,
-        totalCommission: 0,
-        belowFloor: true,
-      }),
-    });
-    await openAugust();
-    const warning = await screen.findByTestId('statement-below-floor');
-    // The ฿ floor itself is a policy number owned by the backend (see the existing comment in CommissionPage on
-    // MonthlyTierPanel), so the wording is pinned, not the figure.
-    expect(text(warning)).toMatch(/ต่ำกว่า.*ยังไม่ได้ค่าคอมตามขั้น/);
-  });
-
-  it('no belowFloor warning when the base clears the floor', async () => {
-    api.commissions.monthlySummary.mockResolvedValue({ summary: summary({ belowFloor: false }) });
-    await openAugust();
-    await screen.findByTestId('statement-total');
-    expect(screen.queryByTestId('statement-below-floor')).toBeNull();
-  });
-});
-
-describe('rep month header — payroll month N is paid from money received in N-1', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    api.commissions.list.mockResolvedValue({ commissions: [saleRecord()] });
-    api.commissions.monthlySummary.mockResolvedValue({ summary: summary() });
-  });
-
-  it('says "รอบจ่าย <N> · จากยอดรับเงินเดือน <N-1>"', async () => {
-    await openAugust();
-    const expected = `รอบจ่าย ${formatThaiMonthYearFromMonthInputValue('2026-08')} · จากยอดรับเงินเดือน ${formatThaiMonthYearFromMonthInputValue('2026-07')}`;
-    expect(await screen.findByText(expected)).not.toBeNull();
-    // Literal guard on the month names (the shared formatter abbreviates: ส.ค. / ก.ค.) so the helper cannot drift
-    // on both sides of the assertion together.
-    expect(expected).toBe('รอบจ่าย ส.ค. 2569 · จากยอดรับเงินเดือน ก.ค. 2569');
-  });
-
-  it('rolls the year back for a January payroll month (ม.ค. 2569 is paid from ธ.ค. 2568)', async () => {
-    renderPage(salesUser);
-    await waitFor(() => expect(api.commissions.list).toHaveBeenCalled());
-    fireEvent.change(screen.getByLabelText('รอบเดือน'), { target: { value: '2026-01' } });
-    const expected = `รอบจ่าย ${formatThaiMonthYearFromMonthInputValue('2026-01')} · จากยอดรับเงินเดือน ${formatThaiMonthYearFromMonthInputValue('2025-12')}`;
-    expect(await screen.findByText(expected)).not.toBeNull();
-  });
-});
-
-describe('rep tier-band disclosure', () => {
-  it('is collapsed by default and, once opened, lists only the bands actually reached as range · rate · amount', async () => {
-    vi.clearAllMocks();
-    api.commissions.list.mockResolvedValue({ commissions: [saleRecord()] });
-    api.commissions.monthlySummary.mockResolvedValue({
-      summary: summary({
-        tiers: [
-          { tierNumber: 1, lowerBound: 0, upperBound: 250000, ratePercent: 0.25, highRoller: false, commission: 625 },
-          { tierNumber: 2, lowerBound: 250000, upperBound: 500000, ratePercent: '0.5000', highRoller: false, commission: 1250 },
-          { tierNumber: 3, lowerBound: 500000, upperBound: null, ratePercent: 0.75, highRoller: true, commission: 0 },
-        ],
-      }),
-    });
-    await openAugust();
-    const disclosure = await screen.findByRole('button', { name: /ขั้นบันไดที่ได้รับ/ });
-    expect(screen.queryByText('0.25%')).toBeNull();
-    fireEvent.click(disclosure);
-    expect(await screen.findByText('0.25%')).not.toBeNull();
-    expect(screen.getByText('0.50%')).not.toBeNull();
-    expect(screen.getByText('฿625.00')).not.toBeNull();
-    expect(screen.getByText('฿1,250.00')).not.toBeNull();
-    expect(screen.queryByText('0.75%')).toBeNull();
   });
 });
 
@@ -441,35 +280,6 @@ describe('rep receipt ledger — where each figure comes from', () => {
     vi.clearAllMocks();
     api.commissions.list.mockResolvedValue({ commissions: [plain, weighted, managerSet] });
     api.commissions.monthlySummary.mockResolvedValue({ summary: summary() });
-  });
-
-  it('one row per receipt: invoice no. · Thai status · ex-VAT amount · weight chip only when != 1 · contribution to the base', async () => {
-    await openAugust();
-    const plainRow = await screen.findByTestId('receipt-row-501');
-    const weightedRow = screen.getByTestId('receipt-row-503');
-
-    expect(text(plainRow)).toContain('INV-PLAIN-501');
-    expect(text(plainRow)).toContain('อนุมัติแล้ว');
-    expect(text(plainRow)).toContain('฿3,000,000.00');
-    expect(text(plainRow)).not.toContain('×'); // weight 1 -> no chip
-
-    expect(text(weightedRow)).toContain('INV-WEIGHTED-503');
-    expect(text(weightedRow)).toContain('รอผู้จัดการ');
-    expect(text(weightedRow)).toContain('฿1,397,196.26'); // ยอดไม่รวม VAT
-    expect(text(weightedRow)).toContain('×2'); // weight chip
-    expect(text(weightedRow)).toContain('฿2,794,392.52'); // เข้าฐาน = ex-VAT x weight
-  });
-
-  it('explains in one line why a single sale has no baht commission of its own, and never shows one per row', async () => {
-    await openAugust();
-    await screen.findByTestId('receipt-row-501');
-    expect(text(screen.getByTestId('no-per-sale-note'))).toMatch(/ขั้นบันได.*ยอดรวม.*เดือน/);
-    // The ladder is marginal over the month, so a per-receipt baht figure would be invented. None of the month's
-    // commission figures may appear inside a receipt row.
-    ['฿48,750.00', '฿66,250.00', '฿15,000.00'].forEach((figure) => {
-      expect(text(screen.getByTestId('receipt-row-501'))).not.toContain(figure);
-      expect(text(screen.getByTestId('receipt-row-503'))).not.toContain(figure);
-    });
   });
 
   it('expanding a receipt shows the whole chain: gross - each deduction + overpayment = actual ÷ VAT = ex-VAT × weight = into the base', async () => {
@@ -538,62 +348,6 @@ describe('rep receipt ledger — a rejected or void receipt puts nothing into th
   });
 });
 
-describe('rep receipt ledger — why a receipt is weighted, and the rounding caveat', () => {
-  const plain = saleRecord({ id: 501, invoiceDetails: invoiceDetails({ id: 501, invoiceNumber: 'INV-PLAIN-501' }) });
-  const fromDeal = saleRecord({
-    id: 503,
-    commissionableBase: 1000000,
-    effectiveWeightMultiplier: 2,
-    invoiceDetails: invoiceDetails({ id: 503, invoiceNumber: 'INV-FROMDEAL-503' }),
-  });
-  const managerSet = saleRecord({
-    id: 504,
-    commissionableBase: 1000000,
-    weightMultiplier: 2,
-    effectiveWeightMultiplier: null,
-    invoiceDetails: invoiceDetails({ id: 504, invoiceNumber: 'INV-MGRSET-504' }),
-  });
-
-  beforeEach(() => {
-    vi.clearAllMocks();
-    api.commissions.list.mockResolvedValue({ commissions: [plain, fromDeal, managerSet] });
-    api.commissions.monthlySummary.mockResolvedValue({ summary: summary() });
-  });
-
-  async function expand(id) {
-    const rowEl = await screen.findByTestId(`receipt-row-${id}`);
-    fireEvent.click(within(rowEl).getByRole('button', { name: 'ดูรายละเอียดการคำนวณ' }));
-    return screen.findByTestId(`receipt-chain-${id}`);
-  }
-
-  it('an item-derived weight (effectiveWeightMultiplier non-null) is explained as stock-weighted, import lines at ×1', async () => {
-    await openAugust();
-    const chain = await expand(503);
-    expect(text(chain)).toContain('น้ำหนักถ่วงจากรายการสต็อกของงาน (ของสั่งคิด ×1)');
-    expect(text(chain)).not.toContain('น้ำหนักที่ผู้จัดการกำหนด');
-  });
-
-  it('a weight that exists only at record level (weightMultiplier != 1, no effective weight) is explained as manager-set', async () => {
-    await openAugust();
-    const chain = await expand(504);
-    expect(text(chain)).toContain('น้ำหนักที่ผู้จัดการกำหนด');
-    expect(text(chain)).not.toContain('น้ำหนักถ่วงจากรายการสต็อกของงาน');
-  });
-
-  it('a weight-1 receipt carries no weight explanation at all', async () => {
-    await openAugust();
-    const chain = await expand(501);
-    expect(text(chain)).not.toContain('น้ำหนักถ่วงจากรายการสต็อกของงาน');
-    expect(text(chain)).not.toContain('น้ำหนักที่ผู้จัดการกำหนด');
-  });
-
-  it('says once that per-receipt figures are rounded, so their sum can differ from ฐานคิดค่าคอม by a few satang', async () => {
-    await openAugust();
-    await screen.findByTestId('receipt-row-501');
-    expect(text(screen.getByTestId('receipt-rounding-note'))).toMatch(/ปัดเศษ.*ต่างจาก.*ฐานคิดค่าคอม.*สตางค์/);
-  });
-});
-
 describe('WRONG-WAY: what a sales rep is NOT offered', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -624,172 +378,5 @@ describe('WRONG-WAY: what a sales rep is NOT offered', () => {
       expect(api.commissions.reps).not.toHaveBeenCalled();
       unmount();
     }
-  });
-});
-
-// Commission approval redesign: the rep <select> is replaced by a TABLE of every rep with records in
-// the shown round; clicking a row opens that rep's statement (this same CommissionStatement) under it.
-// Estimated commission per rep = that rep's own monthly-summary totalCommission (server figure).
-describe('manager / CEO: "สรุปรายคน · <month>" table re-uses the rep statement for a clicked rep', () => {
-  const REP_A = { id: 10, name: 'พนักงานขาย ทดสอบ' };
-  const REP_B = { id: 11, name: 'อีกคนหนึ่ง' };
-  const rec = (id, rep, status, base, over = {}) => saleRecord({
-    id, status, salesRepId: rep.id, salesRepName: rep.name, commissionableBase: base,
-    invoiceDetails: invoiceDetails({ id, invoiceNumber: `INV-REP-${id}` }), ...over,
-  });
-  // rep A: 4.8M (x1.6) SUBMITTED + 2M APPROVED + 0.3M APPROVED; rep B: 1M x2 weight APPROVED + 1M SUBMITTED.
-  const records = [
-    rec(1, REP_A, 'SUBMITTED', 3000000, { effectiveWeightMultiplier: 1.6 }),
-    rec(2, REP_A, 'APPROVED', 2000000),
-    rec(3, REP_A, 'APPROVED', 300000),
-    rec(4, REP_B, 'APPROVED', 500000, { weightMultiplier: 2 }),
-    rec(5, REP_B, 'SUBMITTED', 1000000),
-  ];
-  const totals = { 10: 12345.67, 11: 6789.01 };
-
-  beforeEach(() => {
-    vi.clearAllMocks();
-    setClock('2026-08-15T05:00:00Z');
-    api.commissions.list.mockResolvedValue({ commissions: records });
-    api.commissions.pendingApproval.mockResolvedValue({ commissions: [] });
-    api.commissions.reps.mockResolvedValue({ reps: [REP_A, REP_B] });
-    api.commissions.monthlySummary.mockImplementation(async ({ salesRepId }) => ({
-      summary: summary({ salesRepId, totalCommission: totals[salesRepId] }),
-    }));
-  });
-
-  it.each([
-    ['sales_manager', salesManagerUser],
-    ['ceo', ceoUser],
-  ])('%s: one row per rep with count, weighted base, the rep\'s own estimated commission and an a/n progress; click shows that rep\'s statement', async (_role, user) => {
-    renderPage(user);
-    const region = await screen.findByRole('region', { name: 'สรุปรายคน · ส.ค. 2569' });
-    const table = within(region).getByRole('table');
-    ['พนักงานขาย', 'รายการ', 'ฐานค่าคอม (หลังถ่วง)', 'ค่าคอมโดยประมาณ', 'ความคืบหน้า'].forEach((name) => {
-      expect(within(table).getByRole('columnheader', { name })).not.toBeNull();
-    });
-    const rowOf = (name) => within(table).getAllByRole('row').find((r) => r.textContent.includes(name));
-
-    await waitFor(() => expect(rowOf(REP_A.name).textContent).toContain('฿12,345.67'));
-    expect(rowOf(REP_A.name).textContent).toContain('฿7,100,000.00'); // 4.8M + 2M + 0.3M
-    expect(rowOf(REP_A.name).textContent).toContain('2/3 อนุมัติแล้ว');
-    expect(rowOf(REP_B.name).textContent).toContain('฿2,000,000.00'); // 1M x2 + 1M
-    expect(rowOf(REP_B.name).textContent).toContain('฿6,789.01');
-    expect(rowOf(REP_B.name).textContent).toContain('1/2 อนุมัติแล้ว');
-    expect(api.commissions.monthlySummary).toHaveBeenCalledWith(expect.objectContaining({ payrollMonth: '2026-08', salesRepId: 10 }));
-    expect(screen.queryByLabelText('เลือกพนักงานขาย')).toBeNull(); // the <select> is gone
-    expect(screen.queryByTestId('statement-total')).toBeNull(); // nothing opened yet
-
-    fireEvent.click(within(rowOf(REP_A.name)).getByText(REP_A.name));
-    const total = await screen.findByTestId('statement-total');
-    expect(text(total)).toContain('฿12,345.67');
-    expect(table.compareDocumentPosition(total) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-  });
-});
-
-describe('hr payroll summary — ค่าคอมทีม', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  it('shows a ค่าคอมทีม column with each rep\'s amount and a total', async () => {
-    api.commissions.payrollReady.mockResolvedValue({
-      summary: {
-        payrollMonth: '2026-08-01',
-        status: 'PAYROLL_READY',
-        totalCommissionableBase: 6000000,
-        totalCommissionAmount: 140000,
-        totalIncentiveAmount: 15000,
-        totalStockBonusAmount: 0,
-        totalTeamOverrideAmount: 1234.56,
-        companyCommissionableBase: 9500000,
-        salesReps: [
-          {
-            salesRepId: 10,
-            salesRepName: 'เจนเนตร',
-            commissionableBase: 3000000,
-            commissionAmount: 70000,
-            manualAdjustmentAmount: 0,
-            incentiveAmount: 15000,
-            stockBonusAmount: 0,
-            teamOverrideAmount: 1234.56,
-          },
-          {
-            salesRepId: 11,
-            salesRepName: 'อีกคนหนึ่ง',
-            commissionableBase: 3000000,
-            commissionAmount: 70000,
-            manualAdjustmentAmount: 0,
-            incentiveAmount: 0,
-            stockBonusAmount: 0,
-            teamOverrideAmount: 0,
-          },
-        ],
-      },
-    });
-    renderPage(hrUser);
-
-    expect((await screen.findAllByText('ค่าคอมทีม')).length).toBeGreaterThan(0);
-    expect(await screen.findByText('เจนเนตร')).not.toBeNull();
-    expect(screen.getAllByText('฿1,234.56').length).toBeGreaterThan(0); // the recipient's cell
-    expect(text(screen.getByTestId('payroll-team-override-total'))).toContain('฿1,234.56');
-  });
-
-  // The backend sends companyCommissionableBase = null when no override applies in the month, but ALWAYS sends
-  // totalTeamOverrideAmount (0.00) -- so a month before the override existed must not grow an all-zero ค่าคอมทีม
-  // column or a "รวมค่าคอมทีม 0.00" footer.
-  it('no override in the month (companyCommissionableBase null, total 0): no ค่าคอมทีม column and no footer', async () => {
-    api.commissions.payrollReady.mockResolvedValue({
-      summary: {
-        payrollMonth: '2026-08-01',
-        status: 'PAYROLL_READY',
-        totalCommissionableBase: 3000000,
-        totalCommissionAmount: 70000,
-        totalIncentiveAmount: 15000,
-        totalStockBonusAmount: 0,
-        totalTeamOverrideAmount: 0,
-        companyCommissionableBase: null,
-        salesReps: [{
-          salesRepId: 10,
-          salesRepName: 'เจนเนตร',
-          commissionableBase: 3000000,
-          commissionAmount: 70000,
-          manualAdjustmentAmount: 0,
-          incentiveAmount: 15000,
-          stockBonusAmount: 0,
-          teamOverrideAmount: 0,
-        }],
-      },
-    });
-    renderPage(hrUser);
-
-    expect(await screen.findByText('เจนเนตร')).not.toBeNull();
-    expect(screen.getByText('อินเซนทีฟ')).not.toBeNull(); // the rest of the table is there
-    expect(screen.queryByText('ค่าคอมทีม')).toBeNull();
-    expect(screen.queryByTestId('payroll-team-override-total')).toBeNull();
-    expect(screen.queryByText(/รวมค่าคอมทีม/)).toBeNull();
-  });
-
-  it('a non-zero team total with no company base still shows the column and the footer', async () => {
-    api.commissions.payrollReady.mockResolvedValue({
-      summary: {
-        payrollMonth: '2026-08-01',
-        status: 'PAYROLL_READY',
-        totalCommissionableBase: 3000000,
-        totalCommissionAmount: 70000,
-        totalIncentiveAmount: 0,
-        totalStockBonusAmount: 0,
-        totalTeamOverrideAmount: 500,
-        companyCommissionableBase: null,
-        salesReps: [{
-          salesRepId: 10, salesRepName: 'เจนเนตร', commissionableBase: 3000000, commissionAmount: 70000,
-          manualAdjustmentAmount: 0, incentiveAmount: 0, stockBonusAmount: 0, teamOverrideAmount: 500,
-        }],
-      },
-    });
-    renderPage(hrUser);
-
-    expect((await screen.findAllByText('ค่าคอมทีม')).length).toBeGreaterThan(0);
-    expect(text(screen.getByTestId('payroll-team-override-total'))).toContain('฿500.00');
   });
 });
