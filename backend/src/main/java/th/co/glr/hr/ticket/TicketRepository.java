@@ -2055,11 +2055,12 @@ public class TicketRepository {
      * the remaining invoice's grand_total -- because each tax invoice rounds its own VAT, so the sum may sit a satang
      * away from the deal's computed total. The deposit part is the invoice's FROZEN pre-VAT deposit_deduction made
      * VAT-inclusive (the notice's exact total_payable when the deduction equals the notice amount, else
-     * ROUND(deduction * 1.07, 2); none -> 0), so receipts and notice edits cannot move it.
+     * ROUND(deduction * 1.07, 2); no stored deduction -> the linked notice's total; no notice -> 0), so receipts and notice edits cannot move it.
      * Trailing comma included; VAT-inclusive variant only (the ex-VAT figure stays the quotation's subtotal).
      */
     private static String issuedDocumentsPayable(String ticketIdRef) {
-        return "(SELECT COALESCE(CASE WHEN ri.deposit_deduction = dn.deposit_amount THEN dn.total_payable"
+        return "(SELECT COALESCE(CASE WHEN ri.deposit_deduction IS NULL OR ri.deposit_deduction = dn.deposit_amount"
+            + " THEN dn.total_payable"
             + " ELSE ROUND(ri.deposit_deduction * 1.07, 2) END, 0)"
             + " + ri.grand_total FROM sales.remaining_invoice ri"
             + " LEFT JOIN sales.deposit_notice dn ON dn.deposit_notice_id = ri.deposit_notice_id"
