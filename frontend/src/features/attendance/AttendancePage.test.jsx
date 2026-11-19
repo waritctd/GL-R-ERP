@@ -109,9 +109,8 @@ describe('AttendancePage attendance-correction button and section', () => {
   });
 });
 
-// สรุปรายเดือน (monthly attendance summary export): the button's HR-vs-self-view gate, the modal's month +
-// read-only filter recap, and the download call/failure path. Mocks the api module per this file's own
-// convention -- no assertion on real blob bytes anywhere below.
+// สรุปรายเดือน (monthly attendance summary export): the button's HR-vs-self-view gate. Mocks the api module
+// per this file's own convention.
 describe('AttendancePage monthly summary export', () => {
   beforeEach(() => {
     vi.clearAllMocks();

@@ -93,7 +93,7 @@ describe('MyLeaveTab balances: one primary card + a single disclosure (owner fee
 
   it('DEFECT: the "โควตาคงเหลือ" stat sums ONLY the everyday three, never the rare types', async () => {
     // Regression: the stat once summed EVERY balance (7 + 30 + 3 + MATERNITY 98 + MILITARY 366 +
-    // ORDINATION 60 = "โควตาคงเหลือ 564 วัน"). A bare `queryByText(/366/)` is null check
+    // ORDINATION 60 = "โควตาคงเหลือ 564 วัน"). A bare `queryByText(/366/)` is a null check
     // could not detect it (the buggy sum renders 372), so assert the STAT's own value.
     api.leave.balances.mockResolvedValue({
       balances: [
@@ -149,7 +149,7 @@ describe('MyLeaveTab balances: one primary card + a single disclosure (owner fee
   });
 });
 
-describe('MyLeaveTab own-request table: the three state-defect fixes (Phase A1)', () => {
+describe('MyLeaveTab own-request table: a 403 from the list endpoint (Phase A1)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     api.leave.types.mockResolvedValue({ leaveTypes: [] });
@@ -170,7 +170,7 @@ describe('MyLeaveTab own-request table: the three state-defect fixes (Phase A1)'
   });
 });
 
-describe('MyLeaveTab Phase A4: self-cancel confirmation + certificate download', () => {
+describe('MyLeaveTab Phase A4: self-cancel confirmation', () => {
   const ownSubmittedRow = {
     id: 3002,
     employeeId: 1,

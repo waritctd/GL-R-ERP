@@ -126,8 +126,7 @@ function installDefaultLeaveMocks() {
     payload?.startDate ? approvedPreview(payload) : dateless_ok_preview,
   ));
   // Default: no holidays anywhere -- keeps every test below on the empty-state วันหยุดที่จะถึง panel and the
-  // "all working days" calendar-context note, uninvolved with what each test actually asserts on. The
-  // holiday-visibility cases below override this per-test.
+  // "all working days" calendar-context note, uninvolved with what each test actually asserts on.
   api.leave.calendarContext.mockResolvedValue({ calendarContext: { holidays: [], nonWorkingDates: [] } });
 }
 
@@ -214,8 +213,7 @@ describe('LeaveRequestPage (Phase A2, #485)', () => {
   // change.
   it('step 2: PERSONAL start date in the past is blocked until ลากิจฉุกเฉิน is ticked, then advances to step 3', async () => {
     renderComposer();
-    // No "ประเภทอื่นๆ" disclosure needed -- ลากิจ (PERSONAL) is a top-level type button, same as the "preview call
-    // that fails outright" test above confirms with the same query.
+    // No "ประเภทอื่นๆ" disclosure needed -- ลากิจ (PERSONAL) is a top-level type button.
     fireEvent.click(await screen.findByRole('button', { name: /ลากิจ/ }));
     fireEvent.click(screen.getByRole('button', { name: 'ถัดไป' }));
     await screen.findByText(/ขั้นตอนที่ 2\/3/);

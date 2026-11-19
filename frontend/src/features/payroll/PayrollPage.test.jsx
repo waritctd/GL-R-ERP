@@ -350,6 +350,21 @@ describe('PayrollPage adjustment inputs', () => {
       expect(submitted).toBeDefined();
       expect(submitted.withholdingTaxOverride).toBe(0);
     });
+
+    it('sends a blank override as null (compute/standing applies)', async () => {
+      renderPayrollPage();
+      const override = await openOverrideInput();
+      expect(override.value).toBe('');
+
+      fireEvent.click(screen.getByRole('button', { name: /บันทึกร่าง/i }));
+
+      await waitFor(() => expect(api.payroll.preview).toHaveBeenCalledTimes(1));
+      // The line is still submitted (it carries the UAT default special pays), but the untyped override is null --
+      // never 0 -- so the server computes/uses the standing value.
+      const submitted = api.payroll.preview.mock.calls[0][0].inputs.find((input) => input.employeeId === 1);
+      expect(submitted).toBeDefined();
+      expect(submitted.withholdingTaxOverride).toBeNull();
+    });
   });
 
   // Guards against HR typing a per-diem amount with no basis: Preview succeeds (never writes), then

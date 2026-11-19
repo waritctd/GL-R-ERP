@@ -1,9 +1,10 @@
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen, within, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, within, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { SpecialMoneyPanel } from './SpecialMoneyPanel.jsx';
 import { api } from '../../api/index.js';
+import { queryKeys } from '../../api/queryKeys.js';
 
 globalThis.React = React;
 
@@ -214,20 +215,20 @@ describe('SpecialMoneyPanel', () => {
       };
     }
 
-    // A regression pin, not proof of the picker's removal: the old select also defaulted to the caller's own id,
-    // so this passes on either code. The render test above is the one that can fail.
-    it('submits the viewer\'s own employeeId regardless of the extra roster entry', async () => {
+    it('renders only the disabled display input, never a <select>/combobox, against a roster with a second entry', async () => {
       api.specialMoney.employees.mockResolvedValue(rosterWithStaleSecondEntry());
-      renderPanel();
+      const { queryClient } = renderPanel();
 
-      await selectType('AID_WEDDING');
-      typeDate(await screen.findByLabelText(/วันที่เกิดเหตุการณ์/), '2026-07-01');
-      fireEvent.change(screen.getByLabelText(/เหตุผล/), { target: { value: 'ทดสอบระบบ' } });
-      fireEvent.click(screen.getByRole('button', { name: /ส่งคำขอ/ }));
-
-      await waitFor(() => expect(api.specialMoney.create).toHaveBeenCalledTimes(1));
-      const payload = api.specialMoney.create.mock.calls[0][0];
-      expect(payload.employeeId).toBe(1);
+      // The display input shows user.name before GET /employees resolves, so waiting on it alone would assert
+      // against an empty roster and pass even with the old picker back in place. Wait until the two-entry roster is
+      // in the cache, then let React commit the re-render.
+      await waitFor(() => expect(queryClient.getQueryData(queryKeys.specialMoneyEmployees())).toHaveLength(2));
+      await act(async () => {});
+      await screen.findByDisplayValue('พนักงาน ทดสอบ');
+      expect(screen.queryByRole('combobox', { name: /พนักงาน/ })).toBeNull();
+      expect(document.getElementById('smr-employee')).toBeNull();
+      expect(document.getElementById('smr-employee-display')).not.toBeNull();
+      expect(document.getElementById('smr-employee-display').disabled).toBe(true);
     });
   });
 
@@ -350,5 +351,27 @@ describe('SpecialMoneyPanel', () => {
         expect(api.specialMoney.approve).not.toHaveBeenCalled();
       },
     );
+  });
+
+  describe('a request that is filed but whose evidence upload fails', () => {
+    it('clears the form, so pressing ส่งคำขอ again cannot re-file the accepted payload', async () => {
+      api.specialMoney.addAttachment.mockRejectedValueOnce(new Error('เกิดข้อผิดพลาดภายในระบบ'));
+      renderPanel();
+
+      await selectType('AID_WEDDING');
+      fireEvent.change(await screen.findByLabelText(/วันที่เกิดเหตุการณ์/), { target: { value: '2026-07-01' } });
+      fireEvent.change(screen.getByLabelText(/เหตุผล/), { target: { value: 'ทดสอบระบบ' } });
+      fireEvent.change(document.getElementById('smr-evidence'), {
+        target: { files: [new File(['x'], 'marriage-cert.pdf', { type: 'application/pdf' })] },
+      });
+      fireEvent.click(screen.getByRole('button', { name: /ส่งคำขอ/ }));
+      await screen.findByText(/บันทึกคำขอเลขที่ 3001 เรียบร้อยแล้ว/);
+
+      // Both halves matter: the notice says "ไม่ต้องส่งคำขอซ้ำ", and the form no longer holds the data that would
+      // make sending it again a single click.
+      expect(screen.getByText(/ไม่ต้องส่งคำขอซ้ำ/)).not.toBeNull();
+      expect(screen.getByLabelText(/เหตุผล/).value).toBe('');
+      expect(api.specialMoney.create).toHaveBeenCalledTimes(1);
+    });
   });
 });

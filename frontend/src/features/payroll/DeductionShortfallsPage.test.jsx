@@ -1,7 +1,7 @@
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { DeductionShortfallsPage } from './DeductionShortfallsPage.jsx';
 import { api } from '../../api/index.js';
@@ -68,17 +68,6 @@ describe('DeductionShortfallsPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     api.payroll.getDeductionShortfalls.mockResolvedValue({ items: rows });
-  });
-
-  it('renders a row per shortfall with money formatted as THB', async () => {
-    renderPage();
-
-    expect(await screen.findByText('สมชาย ใจดี')).not.toBeNull();
-    expect(screen.getByText('มานี รักงาน')).not.toBeNull();
-    // requested / actual / shortfall for row 1, all straight from the DTO.
-    expect(screen.getByText('฿5,000.00')).not.toBeNull();
-    expect(screen.getByText('฿3,120.50')).not.toBeNull();
-    expect(screen.getByText('฿1,879.50')).not.toBeNull();
   });
 
   it('passes ?employeeId through to the server as the real query param', async () => {

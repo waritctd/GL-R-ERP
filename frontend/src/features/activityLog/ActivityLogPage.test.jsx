@@ -63,7 +63,7 @@ describe('ActivityLogPage', () => {
   });
 
   // End-to-end proof that a malformed row from the real endpoint no longer crashes the page — the summary tab is
-  // the default tab, reachable without depending on the tab-switching test above.
+  // the default tab, so no tab switching is needed to reach it.
   it('renders "-" instead of crashing the page when a summary row has an unparseable firstSeen', async () => {
     api.activityLog.summary.mockResolvedValue([
       { employeeId: 1, name: 'ทดสอบ', employeeCode: 'EMP-1', requestCount: 1, firstSeen: 'not-a-real-date', lastSeen: null },

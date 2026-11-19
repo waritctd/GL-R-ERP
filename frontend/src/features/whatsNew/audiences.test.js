@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 describe('noticePayload', () => {
   // Production runs with the release lockdown on. There, account and import cannot open /quotations, so an entry about
   // that page must not reach them by email (it reaches nobody, so it is left out). This is the case that tells the
-  // page's visibility filter apart from a plain "whoever's section lists it", which the unlocked runs above cannot.
+  // page's visibility filter apart from a plain "whoever's section lists it".
   describe('under the release lockdown (production)', () => {
     afterEach(() => {
       vi.unstubAllEnvs();

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  applicablePayrollMonth, hasAllowanceDisagreement,resolvePayrollAllowance,
+  applicablePayrollMonth, hasAllowanceDisagreement, resolvePayrollAllowance,
 } from './taxAllowanceStatus.js';
 
 // Guards `resolvePayrollAllowance`/`applicablePayrollMonth` against
@@ -12,7 +12,7 @@ function row({ employeeId = 1, effectiveMonth, verificationStatus = 'VERIFIED', 
 }
 
 describe('applicablePayrollMonth', () => {
-  const today = new Date(2026, 7, 7);
+  const today = new Date(2026, 7, 7); // 7 Aug 2026 -- Date months are 0-indexed, so index 7 = August
 
   it('resolves a PAST tax year to December (F3) -- the year already ran its full course', () => {
     expect(applicablePayrollMonth(2025, today)).toBe(12);
@@ -26,7 +26,7 @@ describe('applicablePayrollMonth', () => {
 });
 
 describe('resolvePayrollAllowance', () => {
-  const today = new Date(2026, 7, 7);
+  const today = new Date(2026, 7, 7); // August 2026 -> applicablePayrollMonth(2026, today) === 8
 
   it('excludes a row dated AFTER the resolved month, even though it exists (the effective_month <= filter)', () => {
     const items = [row({ employeeId: 1, effectiveMonth: 9 })]; // 9 > applicablePayrollMonth's 8
