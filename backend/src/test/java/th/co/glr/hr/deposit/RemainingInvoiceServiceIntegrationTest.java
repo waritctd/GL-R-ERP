@@ -1251,55 +1251,46 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
         assertThat(editedEvents(fixture.ticketId())).isEmpty();
     }
 
-    /** The invoice snapshots its deposit deduction + money totals from the latest ISSUED notice, so editing that
-     * notice (here AFTER account confirmed the deposit: no payment lock) must carry into the live invoice. The
-     * SUPERSEDED earlier version of the invoice stays frozen. */
+    /** Once the deposit is paid in full the notice cannot be edited BELOW what was received (account refunds first). */
     @Test
-    void editingTheIssuedDepositNotice_afterPaymentConfirmed_invoiceKeepsDeductingTheReceivedDeposit() {
-        DealFixture fixture = buildAcceptedDeal(salesActor, "CascadeIssuedRi");
+    void editingTheIssuedDepositNotice_belowTheReceivedDeposit_isRefused() {
+        DealFixture fixture = buildAcceptedDeal(salesActor, "EditBelowReceived");
         ticketService.confirmDepositPaid(fixture.ticketId(), accountActor);
-        // a received amount (above the notice) whose /1.07 round trip drifts a satang under the old formula
-        BigDecimal paid = tickets.sumDepositReceipts(fixture.ticketId()).add(new BigDecimal("1000.00"));
-        while (paid.divide(new BigDecimal("1.07"), 2, RoundingMode.HALF_UP).multiply(new BigDecimal("1.07"))
-                .setScale(2, RoundingMode.HALF_UP).compareTo(paid) == 0) {
-            paid = paid.add(new BigDecimal("0.01"));
-        }
-        jdbc.update("UPDATE sales.payment_receipt SET amount = :a WHERE ticket_id = :id AND kind = 'DEPOSIT'",
-            Map.of("a", paid, "id", fixture.ticketId()));
-        RemainingInvoiceDocumentDto v1 = remainingInvoiceService.issue(
-            remainingInvoiceService.createDraft(fixture.ticketId(), null, salesActor).id(), salesActor);
-        RemainingInvoiceDocumentDto live = remainingInvoiceService.issue(
-            remainingInvoiceService.revise(v1.id(), salesActor).id(), salesActor);
         DepositNoticeDto notice = depositNoticeService.getById(fixture.depositNoticeId(), salesActor);
-        String newPercent = "0.01"; // edited DOWN after payment
 
-        DepositNoticeDto editedNotice = depositNoticeService.update(
-            fixture.depositNoticeId(), noticeWithPercent(notice, newPercent), salesActor);
+        assertThatThrownBy(() -> depositNoticeService.update(
+            fixture.depositNoticeId(), noticeWithPercent(notice, "0.01"), salesActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> {
+                assertThat(e.getStatus()).isEqualTo(org.springframework.http.HttpStatus.CONFLICT);
+                assertThat(e.getMessage()).contains("ลดยอดมัดจำต่ำกว่าที่รับชำระแล้วไม่ได้");
+            });
+    }
 
-        assertThat(editedNotice.status()).isEqualTo("ISSUED");
-        assertThat(editedNotice.depositAmount()).isNotEqualByComparingTo(notice.depositAmount());
-        RemainingInvoiceDocumentDto refreshed = remainingInvoiceService.get(live.id(), salesActor);
-        assertThat(refreshed.status()).isEqualTo("ISSUED");
-        assertThat(refreshed.docNumber()).isEqualTo(live.docNumber());
-        // Account already received the deposit: the invoice deducts what was RECEIVED (VAT-incl receipt / 1.07), so the
-        // lowered/raised notice changes nothing on the invoice and writes no invoice EDITED event.
-        BigDecimal received = tickets.sumDepositReceipts(fixture.ticketId());
-        assertThat(received).isPositive();
-        assertThat(refreshed.depositDeduction())
-            .isEqualByComparingTo(received.divide(new BigDecimal("1.07"), 2, RoundingMode.HALF_UP));
-        assertThat(refreshed.grandTotal()).isEqualByComparingTo(live.grandTotal());
-        // the deal's payable follows the frozen deduction + invoice, not the edited notice's total_payable
-        assertThat(tickets.payableAmount(fixture.ticketId()))
-            .isEqualByComparingTo(received.add(live.grandTotal()));
-        assertThat(tickets.findSummaryById(fixture.ticketId()).orElseThrow().amountOutstanding())
-            .isEqualByComparingTo(live.grandTotal());
-        assertThat(editedEvents(fixture.ticketId()).stream().map(e -> (String) e.get("message"))
-            .filter(m -> m.contains(live.docNumber()))).isEmpty();
+    /** Overpaid deposit: the invoice still deducts the NOTICE's deposit and payable = notice total + invoice; after
+     * account refunds the excess as an ADJUSTMENT receipt, only the invoice is outstanding (the refund is never left unbilled). */
+    @Test
+    void overpaidDeposit_invoiceDeductsTheNotice_andRefundLeavesNothingOutstanding() {
+        DealFixture fixture = buildAcceptedDeal(salesActor, "OverpaidDeposit");
+        long ticketId = fixture.ticketId();
+        var dn = new DepositNoticeRepository(jdbc).findById(fixture.depositNoticeId()).orElseThrow();
+        ticketService.confirmDepositPaid(ticketId, accountActor);
+        BigDecimal excess = new BigDecimal("10700.00");
+        jdbc.update("UPDATE sales.payment_receipt SET amount = :a WHERE ticket_id = :id AND kind = 'DEPOSIT'",
+            Map.of("a", dn.totalPayable().add(excess), "id", ticketId));
 
-        RemainingInvoiceDocumentDto superseded = remainingInvoiceService.get(v1.id(), salesActor);
-        assertThat(superseded.status()).isEqualTo("SUPERSEDED");
-        assertThat(superseded.depositDeduction()).isEqualByComparingTo(v1.depositDeduction());
-        assertThat(superseded.grandTotal()).isEqualByComparingTo(v1.grandTotal());
+        RemainingInvoiceDocumentDto issued = remainingInvoiceService.issue(
+            remainingInvoiceService.createDraft(ticketId, null, salesActor).id(), salesActor);
+        assertThat(issued.depositDeduction()).isEqualByComparingTo(dn.depositAmount());
+        assertThat(tickets.payableAmount(ticketId)).isEqualByComparingTo(dn.totalPayable().add(issued.grandTotal()));
+
+        jdbc.update("INSERT INTO sales.payment_receipt (ticket_id, kind, amount, recorded_by, receipt_ref)"
+            + " VALUES (:t, 'ADJUSTMENT', :a, :by, 'REFUND-TEST')",
+            Map.of("t", ticketId, "a", excess, "by", accountActor.id()));
+        assertThat(tickets.netDepositReceived(ticketId)).isEqualByComparingTo(dn.totalPayable());
+        assertThat(tickets.payableAmount(ticketId)).isEqualByComparingTo(dn.totalPayable().add(issued.grandTotal()));
+        // net received = notice total, so only the invoice itself is still outstanding (no phantom 10,700)
+        assertThat(tickets.findSummaryById(ticketId).orElseThrow().amountOutstanding())
+            .isEqualByComparingTo(issued.grandTotal());
     }
 
     /** Partial deposit: the notice says 107,000 (100,000 pre-VAT) but only 50,000 was received. The invoice deducts the
