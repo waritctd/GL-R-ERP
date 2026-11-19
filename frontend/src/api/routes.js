@@ -14,6 +14,11 @@ export const API_ROUTES = {
     candidates: '/api/view-as/candidates',
     root: '/api/view-as',
   },
+  // Test-site-only role switcher. Mirrors TestSiteRoleSwitcherController (404 unless enabled).
+  testSite: {
+    accounts: '/api/test-site/accounts',
+    switch: '/api/test-site/switch',
+  },
   // Admin-only. Mirrors ActivityLogController.
   activityLog: {
     list: '/api/activity-log',

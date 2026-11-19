@@ -68,6 +68,12 @@ spring:
       max-file-size: ${APP_MAX_FILE_SIZE:10MB}
       max-request-size: ${APP_MAX_REQUEST_SIZE:12MB}
 app:
+  # Test site only: lets listed demo accounts switch between each other (full re-sign-in). Off by default;
+  # the controller refuses to start on the prod profile when enabled.
+  test-site:
+    role-switcher:
+      enabled: ${APP_TEST_SITE_ROLE_SWITCHER_ENABLED:false}
+      accounts: ${APP_TEST_SITE_ROLE_SWITCHER_ACCOUNTS:}
   quotation:
     # Direct-deal quotation PDF engine (docs/sales/quotation-v2-plan.md "PDF renderer"):
     #   xls      — POI template → LibreOffice (the long-standing path, default)

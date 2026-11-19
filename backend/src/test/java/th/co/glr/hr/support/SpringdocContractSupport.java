@@ -47,6 +47,8 @@ public abstract class SpringdocContractSupport {
         registry.add("spring.datasource.url", PostgresTestSupport::jdbcUrl);
         registry.add("spring.datasource.username", PostgresTestSupport::username);
         registry.add("spring.datasource.password", PostgresTestSupport::password);
+        // The test-site switcher is flag-gated; enable it so the published surface digests include its routes.
+        registry.add("app.test-site.role-switcher.enabled", () -> "true");
     }
 
     protected final MockMvc mvc;

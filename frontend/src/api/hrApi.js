@@ -42,6 +42,11 @@ export const api = {
     start: (employeeId) => apiRequest(API_ROUTES.viewAs.root, { method: 'POST', body: { employeeId } }),
     stop: () => apiRequest(API_ROUTES.viewAs.root, { method: 'DELETE' }),
   },
+  // Test-site-only role switcher. Mirrors TestSiteRoleSwitcherController.
+  testSite: {
+    accounts: () => apiRequest(API_ROUTES.testSite.accounts),
+    switchTo: (email) => apiRequest(API_ROUTES.testSite.switch, { method: 'POST', body: { email } }),
+  },
   // Admin-only cross-employee activity. Mirrors ActivityLogController; the gate is
   // ActivityLogService.requireAdmin, which re-reads hr.employee.is_admin per request — a client that fakes
   // `admin` on the session gains nothing.
