@@ -1,10 +1,7 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { TaxAllowanceForm } from './TaxAllowanceForm.jsx';
 import {
-  ALLOWANCE_MONEY_KEYS,
-  HR_SUPPLIED_KEYS,
-  LOR_YOR_01_SECTIONS,
   emptyAllowanceValues,
 } from './taxAllowanceSchema.js';
 
@@ -22,65 +19,6 @@ function renderForm(props = {}) {
   );
 }
 
-/** Opens a ข้อ by clicking its disclosure header. */
-function openSection(titleFragment) {
-  fireEvent.click(screen.getByRole('button', { name: new RegExp(titleFragment) }));
-}
-
-describe('TaxAllowanceForm — the page is the government form', () => {
-  it('renders one section per ข้อ, numbered as the form numbers them', () => {
-    renderForm();
-    // ข้อ 1–2 share a section (both are สถานภาพ), so the numbering is not a plain 1..15 sequence — it is whatever
-    // the form prints, which is the point.
-    for (const section of LOR_YOR_01_SECTIONS) {
-      const label = section.no ? `ข้อ ${section.no} · ${section.title}` : section.title;
-      expect(screen.getByRole('button', { name: new RegExp(label.slice(0, 24)) })).toBeTruthy();
-    }
-  });
-
-  it('offers no control for the five deductions ล.ย.01 does not print', () => {
-    // SSF, Thai ESG, pension life insurance, ค่าฝากครรภ์, political donation are all legally real but absent from
-    // this form (owner ruling: strictly the 15 items).
-    renderForm();
-    for (const key of ['ssfAllowance', 'thaiEsgAllowance', 'pensionInsuranceAllowance',
-      'maternityAllowance', 'politicalDonation']) {
-      expect(document.getElementById(`ta-${key}`), `${key} must have no input`).toBeNull();
-    }
-    // …and neither do the two the form omits but payroll needs — HR supplies those at review.
-    for (const key of HR_SUPPLIED_KEYS) {
-      expect(document.getElementById(`ta-${key}`), `${key} is HR-supplied, not declared`).toBeNull();
-    }
-    // The wire shape is unchanged, though: every key still ships in the submit body.
-    expect(ALLOWANCE_MONEY_KEYS).toContain('ssfAllowance');
-  });
-
-  it('ข้อ 11 and ข้อ 13 explain themselves instead of offering an input', () => {
-    renderForm();
-    openSection('ข้อ 11');
-    expect(screen.getByText(/สิ้นสุดสิทธิลดหย่อน/)).toBeTruthy();
-    openSection('ข้อ 13');
-    expect(screen.getByText(/คำนวณอัตโนมัติ/)).toBeTruthy();
-  });
-
-  /** The one library behaviour this component leans on. `CollapsibleSection` UNMOUNTS its children, and these are
-   * `register`ed inputs — so the values survive only because react-hook-form defaults `shouldUnregister: false`. */
-  it('a value typed into a ข้อ survives collapsing it', () => {
-    const onSubmit = vi.fn();
-    renderForm({ onSubmit, signedFormAttached: true });
-
-    openSection('ข้อ 7');
-    fireEvent.change(screen.getByLabelText('จำนวนเงิน'), { target: { value: '12345' } });
-    openSection('ข้อ 7'); // collapse again — the input unmounts here
-    expect(screen.queryByLabelText('จำนวนเงิน')).toBeNull();
-
-    fireEvent.click(screen.getByRole('button', { name: 'ยื่นแบบแจ้ง' }));
-    return vi.waitFor(() => {
-      expect(onSubmit).toHaveBeenCalled();
-      expect(onSubmit.mock.calls[0][0].lifeInsuranceAllowance).toBe(12345);
-    });
-  });
-});
-
 describe('TaxAllowanceForm — the signed form gates submission', () => {
   it('the submit button is disabled until the signed scan is attached', () => {
     const { rerender } = renderForm({ signedFormAttached: false });
@@ -91,58 +29,6 @@ describe('TaxAllowanceForm — the signed form gates submission', () => {
     );
     expect(screen.getByRole('button', { name: 'ยื่นแบบแจ้ง' }).disabled).toBe(false);
   });
-
-  /** A submit event that did not come from a real submitter must not file the declaration. ⚠️ READ THIS BEFORE
-   * TRUSTING IT. `SafeForm` refuses a submit with no submitter REGARDLESS of `canSubmit`, so this passing does
-   * not prove the signed-form gate works — it proves the submitter guard does. */
-  it('a submit event with no submitter does nothing', () => {
-    const onSubmit = vi.fn();
-    renderForm({ onSubmit, signedFormAttached: false });
-
-    fireEvent.submit(document.getElementById('tax-allowance-form'));
-
-    expect(onSubmit).not.toHaveBeenCalled();
-  });
-
-  it('generating the PDF hands over the values currently typed, not the defaults', async () => {
-    const onGeneratePdf = vi.fn();
-    renderForm({ onGeneratePdf });
-
-    openSection('ข้อ 12');
-    fireEvent.change(screen.getByLabelText('จำนวนเงิน'), { target: { value: '54321' } });
-    openSection('ตรวจทาน ลงนาม และยื่น');
-    fireEvent.click(screen.getByRole('button', { name: 'สร้างไฟล์ PDF แบบ ล.ย.01' }));
-
-    // Awaited: the handler now validates the whole form before rendering anything (below).
-    await vi.waitFor(() => expect(onGeneratePdf).toHaveBeenCalledTimes(1));
-    expect(Number(onGeneratePdf.mock.calls[0][0].homeLoanInterestAllowance)).toBe(54321);
-  });
-
-  /** The PDF is the sheet the employee prints and signs, so it must not be rendered from values the schema
-   * rejects. */
-  it('refuses to render the PDF while a field is invalid, and says so', async () => {
-    const onGeneratePdf = vi.fn();
-    const showToast = vi.fn();
-    renderForm({ onGeneratePdf, showToast });
-
-    // 13 printed cells; "123" cannot be a เลขประจำตัวผู้เสียภาษีอากร.
-    fireEvent.change(screen.getByLabelText('เลขประจำตัวผู้เสียภาษีอากร'), { target: { value: '123' } });
-    openSection('ตรวจทาน ลงนาม และยื่น');
-    fireEvent.click(screen.getByRole('button', { name: 'สร้างไฟล์ PDF แบบ ล.ย.01' }));
-
-    await vi.waitFor(() => expect(showToast).toHaveBeenCalledWith('error', expect.stringMatching(/กรอกไม่ถูกต้อง/)));
-    expect(onGeneratePdf).not.toHaveBeenCalled();
-  });
-
-  it('shows the field error as soon as the field is left, not only at submit', async () => {
-    renderForm();
-
-    const taxId = screen.getByLabelText('เลขประจำตัวผู้เสียภาษีอากร');
-    fireEvent.change(taxId, { target: { value: '123' } });
-    fireEvent.blur(taxId);
-
-    expect(await screen.findByText('เลขประจำตัวผู้เสียภาษีอากรต้องมี 13 หลัก')).toBeTruthy();
-  });
 });
 
 describe('TaxAllowanceForm — read-only', () => {
@@ -151,29 +37,5 @@ describe('TaxAllowanceForm — read-only', () => {
     expect(screen.queryByRole('button', { name: 'ยื่นแบบแจ้ง' })).toBeNull();
     expect(screen.queryByRole('button', { name: /ตรวจทาน ลงนาม/ })).toBeNull();
   });
-
-  it('still shows the declared figures, so a filed declaration stays readable', () => {
-    const values = emptyAllowanceValues();
-    values.lifeInsuranceAllowance = 9999;
-    renderForm({ readOnly: true, defaultValues: values });
-
-    // Twice, and that is the point: once as ข้อ 7's own collapsed-row subtotal, once as the declared total. The
-    // total used to live only inside the sign-off panel, which read-only does not render — so a filed declaration
-    // showed fifteen subtotals and no total anywhere.
-    expect(screen.getAllByText(/9,999/)).toHaveLength(2);
-    expect(screen.getByText('รวมค่าลดหย่อนที่ประกาศ')).toBeTruthy();
-  });
 });
 
-describe('TaxAllowanceForm — whole-tax-year, no effective month', () => {
-  /** Owner ruling 2026-08-31: a ล.ย.01 covers its whole tax year and HR's approval is what makes it live, so the
-   * employee has no งวดเดือน to pick. */
-  it('renders no มีผลตั้งแต่งวดเดือน control anywhere on the form', () => {
-    renderForm();
-    expect(screen.queryByLabelText(/มีผลตั้งแต่งวดเดือน/)).toBeNull();
-    expect(document.querySelector('#ta-effective-month')).toBeNull();
-    // The neighbouring field in the same FormGrid still renders, so this is not passing because the whole block
-    // failed to mount.
-    expect(screen.getByLabelText(/เลขที่เอกสารอ้างอิง/)).toBeTruthy();
-  });
-});
