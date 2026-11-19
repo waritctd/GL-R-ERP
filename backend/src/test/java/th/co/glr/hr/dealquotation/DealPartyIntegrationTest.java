@@ -336,6 +336,8 @@ class DealPartyIntegrationTest extends AbstractDealDirectQuotationIntegrationTes
         assertThat(summary(first.ticketId()).addOnCount()).as("an add-on reports its root's count").isEqualTo(2);
         TicketSummaryDto child = summary(second.ticketId());
         assertThat(child.childKind()).isEqualTo("ADD_ON");
+        assertThat(child.salesStage()).as("starts where the buyer quotation is drafted").isEqualTo(DealStage.QUOTE_BUYER);
+        assertThat(eventKinds(second.ticketId())).contains(TicketEventKind.STAGE_CHANGED);
         assertThat(child.parentCode()).isEqualTo(code);
         assertThat(child.customerId()).isEqualTo(summary(ticketId).customerId());
         assertThat(partyService.list(second.ticketId(), salesActor)).singleElement()
@@ -353,6 +355,10 @@ class DealPartyIntegrationTest extends AbstractDealDirectQuotationIntegrationTes
         TicketSummaryDto split = summary(result.childTicketIds().get(0));
         assertThat(split.code()).isEqualTo(code + "-A");
         assertThat(split.childKind()).isEqualTo("BID_SPLIT");
+
+        // An add-on whose root was hard-deleted (parent_ticket_id SET NULL) is its own root, not a 500.
+        jdbc.update("UPDATE sales.ticket SET parent_ticket_id = NULL WHERE ticket_id = :id", Map.of("id", first.ticketId()));
+        assertThat(partyService.createAddOnOrder(first.ticketId(), salesActor).code()).isEqualTo(code + "-2-2");
     }
 
     @Test

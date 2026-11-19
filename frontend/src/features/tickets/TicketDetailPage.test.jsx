@@ -5712,7 +5712,12 @@ describe('TicketDetailPage', () => {
 
     it('is not offered to account, nor to a rep who does not own the deal', async () => {
       addOnDeal();
-      renderTicketDetailPageAtRoute(['/tickets/701?tab=quote'], { id: 77, employeeId: 77, name: 'อื่น', role: 'sales' });
+      const { unmount } = renderTicketDetailPageAtRoute(['/tickets/701?tab=quote'], { id: 77, employeeId: 77, name: 'อื่น', role: 'sales' });
+      await screen.findByText('ใบเสนอราคาของงานนี้');
+      await stickyInputsSettled();
+      expect(screen.queryByTestId('add-on-order-open')).toBeNull();
+      unmount();
+      renderTicketDetailPageAtRoute(['/tickets/701?tab=quote'], accountUser);
       await screen.findByText('ใบเสนอราคาของงานนี้');
       await stickyInputsSettled();
       expect(screen.queryByTestId('add-on-order-open')).toBeNull();

@@ -5022,7 +5022,7 @@ export function applyImportRequestRollupMock(ticket, actor) {
 // order; addOnCount is the ROOT's add-on count (an add-on reports its root's), as TicketRepository.SUMMARY_SELECT does.
 function mockLinkFacts(t) {
   const parent = t.parentTicketId != null ? db.tickets.find((x) => x.id === t.parentTicketId) : null;
-  const rootId = t.childKind === 'ADD_ON' ? t.parentTicketId : t.id;
+  const rootId = t.childKind === 'ADD_ON' && t.parentTicketId != null ? t.parentTicketId : t.id;
   return {
     parentTicketId: t.parentTicketId ?? null,
     parentCode: parent?.code ?? null,
@@ -7981,16 +7981,7 @@ const mockDealQuotations = [
     createdAt: '2026-09-05T10:00:00Z', updatedAt: '2026-09-05T10:00:00Z',
   },
 ];
-// Ticket 19 (an ACTIVE ORDER_RECEIVED deal of mock user 6): an APPROVED direct quotation, so the add-on flow has a
-// confirmed order to hang under in mock mode.
-mockDealQuotations.push({
-  ...structuredClone(mockDealQuotations[1]),
-  id: mockQuotationSeq, number: 'QT-2026-0003', ticketId: 19, docStatus: 'APPROVED',
-  customerName: 'บริษัท สยามพารากอน ดีเวลลอปเมนท์ จำกัด', contactId: null, contactName: null, contactPhone: null,
-  contactEmail: null, approvedById: 9, approvedByName: 'ผู้จัดการฝ่ายขาย', approvedAt: '2026-09-08T10:00:00Z',
-  approvalDecidedAt: '2026-09-08T10:00:00Z', approvalDecidedBy: 9, quotationDate: '2026-09-05',
-});
-mockDealQuotationNumberSeq = 4;
+mockDealQuotationNumberSeq = 3;
 // One id sequence across both quotation arrays: start past the highest literal seed id above.
 mockQuotationSeq = Math.max(mockQuotationSeq, Math.max(...mockDealQuotations.map((q) => q.id)) + 1);
 
@@ -10884,7 +10875,7 @@ export const api = {
         fail('ไม่มีสิทธิ์เปิดออเดอร์เพิ่มในงานนี้', 403);
       }
       requireActive(source);
-      const root = source.childKind === 'ADD_ON' ? findTicketRaw(source.parentTicketId) : source;
+      const root = source.childKind === 'ADD_ON' && source.parentTicketId != null ? findTicketRaw(source.parentTicketId) : source;
       const n = db.tickets.filter((t) => t.parentTicketId === root.id && t.childKind === 'ADD_ON').length + 2;
       const nextId = Math.max(...db.tickets.map((t) => t.id)) + 1;
       const now = new Date().toISOString();
@@ -10896,7 +10887,9 @@ export const api = {
         status: 'draft', paymentStatus: null, fulfillmentStatus: null,
         lifecycle: 'ACTIVE', lostReason: null, lostAt: null,
         quotationOnly: true, orderConfirmedQuotationId: null, closeConfirmedAt: null, closeConfirmedByName: null,
-        salesStage: 'LEAD_APPROACH', createdAt: now.slice(0, 10), updatedAt: now.slice(0, 10), closedAt: null, stageUpdatedAt: now,
+        // The customer is already buying: the order starts where a buyer quotation is drafted (QUOTE_BUYER is on every
+        // route), with the normal stage event, like DealPartyService#createAddOnOrder.
+        salesStage: 'QUOTE_BUYER', createdAt: now.slice(0, 10), updatedAt: now.slice(0, 10), closedAt: null, stageUpdatedAt: now,
         events: [],
       };
       db.tickets.unshift(child);
@@ -10908,6 +10901,7 @@ export const api = {
         });
       }
       pushEvent(child, user, 'CREATED', null, 'draft', null);
+      pushEvent(child, user, 'STAGE_CHANGED', 'LEAD_APPROACH', 'QUOTE_BUYER', 'เริ่มที่ขั้นเสนอราคาผู้ซื้อ (ออเดอร์เพิ่ม)');
       pushEvent(child, user, 'ADD_ON_ORDER_CREATED', null, null, `ออเดอร์เพิ่มของ ${root.code}`);
       pushEvent(root, user, 'ADD_ON_ORDER_CREATED', null, null, `เปิดออเดอร์เพิ่ม ${child.code}`);
       return delay({ addOnOrder: { ticketId: child.id, code: child.code, parentTicketId: root.id } });

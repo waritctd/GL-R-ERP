@@ -55,6 +55,8 @@ export const EVENT_KIND_LABEL = {
   DEAL_PROMOTED_FROM_QUOTATION: 'ยืนยันคำสั่งซื้อจากใบเสนอราคา',
   // DealQuotationService#undoOrderConfirmation: the order confirmation was taken back.
   ORDER_CONFIRMATION_UNDONE: 'ยกเลิกการยืนยันคำสั่งซื้อ',
+  // DealPartyService#createAddOnOrder: on the root and on the new add-on order.
+  ADD_ON_ORDER_CREATED: 'เปิดออเดอร์เพิ่ม',
   CLOSED:             'ปิดเรื่อง',
   CANCELLED:          'ยกเลิก',
   EDITED:             'แก้ไขรายการสินค้า',

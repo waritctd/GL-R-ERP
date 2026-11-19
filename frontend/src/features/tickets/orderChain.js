@@ -5,7 +5,8 @@ import { actsAsOwner } from './dealOwnership.js';
 
 /** The root deal's code: an add-on names its parent, everything else is its own root. */
 export function rootCode(summary) {
-  return summary?.childKind === 'ADD_ON' ? summary.parentCode : summary?.code;
+  // A null parent (the root was hard-deleted: FK ON DELETE SET NULL) makes the add-on its own root, as on the server.
+  return summary?.childKind === 'ADD_ON' && summary.parentCode ? summary.parentCode : summary?.code;
 }
 
 /** What the order is called on screen: the root shows `<code>-1`, an add-on its own code. */

@@ -26,6 +26,7 @@ import th.co.glr.hr.dealparty.DealPartyDtos.PatchPartyRequest;
 import th.co.glr.hr.dealquotation.DealQuotationService;
 import th.co.glr.hr.ticket.DealLifecycle;
 import th.co.glr.hr.ticket.DealOwnership;
+import th.co.glr.hr.ticket.DealStage;
 import th.co.glr.hr.ticket.TicketEventKind;
 import th.co.glr.hr.ticket.TicketRepository;
 import th.co.glr.hr.ticket.TicketSummaryDto;
@@ -272,7 +273,9 @@ public class DealPartyService {
         tickets.lockTicketForUpdate(ticketId);
         requireActive(requireSummary(ticketId));
         // An add-on always hangs directly under its root, so one hop is the whole walk.
-        long rootId = "ADD_ON".equals(source.childKind()) ? source.parentTicketId() : ticketId;
+        // A null parent (FK ON DELETE SET NULL after the root was hard-deleted) makes the add-on its own root.
+        long rootId = "ADD_ON".equals(source.childKind()) && source.parentTicketId() != null
+            ? source.parentTicketId() : ticketId;
         if (rootId != ticketId) {
             tickets.lockTicketForUpdate(rootId);
         }
@@ -282,7 +285,12 @@ public class DealPartyService {
         parties.findByTicket(rootId).stream().filter(DealPartyDto::headline).findFirst()
             .ifPresent(h -> parties.insert(newId, h.customerId(), h.contactId(), h.role(), DealPartyDtos.STATUS_ACTIVE,
                 true, actor.id()));
+        // The customer is already buying: the order starts at QUOTE_BUYER (on every route), where a buyer quotation is
+        // drafted. Same mechanism as TicketService#create's start stage: write the stage plus the normal STAGE_CHANGED.
+        tickets.updateSalesStage(newId, DealStage.QUOTE_BUYER);
         tickets.addEvent(newId, actor.id(), actor.name(), TicketEventKind.CREATED, null, "draft", null);
+        tickets.addEvent(newId, actor.id(), actor.name(), TicketEventKind.STAGE_CHANGED, DealStage.LEAD_APPROACH,
+            DealStage.QUOTE_BUYER, "เริ่มที่ขั้นเสนอราคาผู้ซื้อ (ออเดอร์เพิ่ม)");
         tickets.addEvent(newId, actor.id(), actor.name(), TicketEventKind.ADD_ON_ORDER_CREATED, null, null,
             "ออเดอร์เพิ่มของ " + root.code());
         tickets.addEvent(rootId, actor.id(), actor.name(), TicketEventKind.ADD_ON_ORDER_CREATED, null, null,
