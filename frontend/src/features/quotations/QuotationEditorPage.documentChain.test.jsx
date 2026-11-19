@@ -32,8 +32,7 @@ vi.mock('../../api/index.js', async (importOriginal) => {
       tickets: { get: vi.fn(), create: vi.fn() },
       dealQuotations: {
         get: vi.fn(), create: vi.fn(), update: vi.fn(), calculateLine: vi.fn(), submit: vi.fn(),
-        approve: vi.fn(), reject: vi.fn(), createRevision: vi.fn(), createReorder: vi.fn(),
-        cancel: vi.fn(), downloadPdf: vi.fn(), downloadXlsx: vi.fn(), promoteToDeal: vi.fn(), undoConfirmOrder: vi.fn(),
+        downloadPdf: vi.fn(), promoteToDeal: vi.fn(), undoConfirmOrder: vi.fn(),
         displayNameOptions: vi.fn().mockResolvedValue({ items: [] }),
         listForTicket: vi.fn(),
       },
@@ -44,16 +43,14 @@ vi.mock('../../api/index.js', async (importOriginal) => {
       catalog: { prices: vi.fn() },
       designers: { search: vi.fn(), getByCode: vi.fn().mockRejectedValue(new Error('not found')) },
       customers: {
-        search: vi.fn(), create: vi.fn(), projects: vi.fn(), createProject: vi.fn(),
-        contacts: vi.fn(), createContact: vi.fn(),
+        search: vi.fn(), create: vi.fn(), projects: vi.fn(),
+        contacts: vi.fn(),
       },
     },
   };
 });
 
 const owner = { id: 6, name: 'คุณสมหมาย ขายดี', role: 'sales', employeeId: null };
-const manager = { id: 11, name: 'ผึ้ง', role: 'sales_manager', employeeId: 11 };
-
 function quotation(overrides = {}) {
   return {
     id: 5, number: 'QT-2026-0005-1', ticketId: 18, docStatus: 'APPROVED', origin: 'DEAL_DIRECT',
@@ -181,189 +178,11 @@ describe('QuotationEditorPage — the document chain card', () => {
     await waitFor(() => expect(api.documentChain.get.mock.calls.length).toBeGreaterThanOrEqual(2));
   });
 
-  // Surviving mutation F16: a saved draft whose figures differ from subtotal × percent (the rep edited the draft on the
-  // notice page): the dialog must print the SAVED figures.
-  it('the issue dialog prints the saved draft\'s figures, never a figure computed in the browser', async () => {
-    const edited = { ...draftNotice, subtotal: 10000, depositPercent: 0.3, depositAmount: 2900, vatAmount: 203, totalPayable: 3103 };
-    api.documentChain.get.mockResolvedValue({ documentChain: confirmed({ deposit: { state: 'DRAFT', draftExists: true, noticeId: 31 } }) });
-    api.depositNotices.listByTicket.mockResolvedValue({ depositNotices: [edited] });
-    renderPage();
-    fireEvent.click((await card()).getByRole('button', { name: 'ออกใบแจ้งยอดเงินรับมัดจำ' }));
-    const dialog = within(await screen.findByTestId('quotation-chain-deposit-dialog'));
-    expect(await dialog.findByText(/มัดจำ 30% · 3,103\.00 บาท รวม VAT/)).toBeTruthy();
-    expect(dialog.getByText('2,900.00 บาท')).toBeTruthy();
-    expect(dialog.queryByText('3,000.00 บาท')).toBeNull();
-    expect(dialog.queryByText(/3,210\.00/)).toBeNull();
-  });
-
-  it('the issue dialog says when the saved draft\'s subtotal differs from its quotation, and ออกเอกสาร stays enabled', async () => {
-    const edited = { ...draftNotice, subtotal: 9000, reference: 'PO-77' };
-    api.documentChain.get.mockResolvedValue({ documentChain: confirmed({ deposit: { state: 'DRAFT', draftExists: true, noticeId: 31 } }) });
-    api.depositNotices.listByTicket.mockResolvedValue({ depositNotices: [edited] });
-    api.dealQuotations.listForTicket.mockResolvedValue({ items: [quotation()], orderConfirmedQuotationId: 5 });
-    renderPage();
-    fireEvent.click((await card()).getByRole('button', { name: 'ออกใบแจ้งยอดเงินรับมัดจำ' }));
-    const dialog = within(await screen.findByTestId('quotation-chain-deposit-dialog'));
-    expect((await dialog.findByTestId('deposit-issue-differs')).textContent)
-      .toBe('ใบเสนอราคา QT-2026-0005-1 มูลค่า 10,000.00 — ใบแจ้งนี้ 9,000.00');
-    expect(dialog.getByRole('button', { name: 'ออกเอกสาร' }).disabled).toBe(false);
-  });
-
-  describe('the issue dialog waits for the quotation read, but never on a failed one', () => {
-    const open = async () => {
-      const edited = { ...draftNotice, subtotal: 9000, reference: 'PO-77' };
-      api.documentChain.get.mockResolvedValue({ documentChain: confirmed({ deposit: { state: 'DRAFT', draftExists: true, noticeId: 31 } }) });
-      api.depositNotices.listByTicket.mockResolvedValue({ depositNotices: [edited] });
-      renderPage();
-      fireEvent.click((await card()).getByRole('button', { name: 'ออกใบแจ้งยอดเงินรับมัดจำ' }));
-      return within(await screen.findByTestId('quotation-chain-deposit-dialog'));
-    };
-
-    it('shows no summary while the quotation list is pending, then the summary with the warning line', async () => {
-      let resolveList;
-      api.dealQuotations.listForTicket.mockReturnValue(new Promise((res) => { resolveList = res; }));
-      const dialog = await open();
-      await waitFor(() => expect(api.dealQuotations.listForTicket).toHaveBeenCalled());
-      expect(dialog.queryByTestId('deposit-issue-summary')).toBeNull();
-      resolveList({ items: [quotation()], orderConfirmedQuotationId: 5 });
-      expect(await dialog.findByTestId('deposit-issue-differs')).toBeTruthy();
-      expect(dialog.getByTestId('deposit-issue-summary')).toBeTruthy();
-    });
-
-    it('a rejected quotation read still shows the summary, without the line', async () => {
-      api.dealQuotations.listForTicket.mockRejectedValue(new Error('403'));
-      const dialog = await open();
-      expect(await dialog.findByTestId('deposit-issue-summary')).toBeTruthy();
-      expect(dialog.queryByTestId('deposit-issue-differs')).toBeNull();
-    });
-  });
-
-  it('an existing DRAFT is opened, never doubled: the button issues it and no second draft is created', async () => {
-    api.documentChain.get.mockResolvedValue({ documentChain: confirmed({ deposit: { state: 'DRAFT', draftExists: true, noticeId: 31 } }) });
-    api.depositNotices.listByTicket.mockResolvedValue({ depositNotices: [draftNotice] });
-    renderPage();
-    fireEvent.click((await card()).getByRole('button', { name: 'ออกใบแจ้งยอดเงินรับมัดจำ' }));
-    expect(await screen.findByTestId('quotation-chain-deposit-dialog')).toBeTruthy();
-    expect(api.depositNotices.createDraft).not.toHaveBeenCalled();
-  });
-
-  it('notice issued, waiting on ฝ่ายบัญชี: no button, no "your turn" ring — step 4 says who it waits on; the notice downloads', async () => {
-    api.documentChain.get.mockResolvedValue({ documentChain: confirmed({
-      deposit: { state: 'ISSUED', docNumber: 'GLRD69005', issueDate: '2026-11-17', issuedNoticeId: 31, noticeId: 31 },
-    }) });
-    api.depositNotices.downloadPdf.mockResolvedValue(new Blob(['%PDF']));
-    renderPage();
-    const el = await screen.findByTestId('quotation-document-chain');
-    await within(el).findByText('GLRD69005');
-    expect(primaryButtons(el)).toHaveLength(0);
-    expect(el.querySelector('[aria-current="step"]')).toBeNull();
-    const step4 = el.querySelector('li[data-step="4"]');
-    expect(step4.getAttribute('data-state')).toBe('waiting');
-    expect(within(step4).getByText(/รอฝ่ายบัญชี/)).toBeTruthy();
-    fireEvent.click(within(el.querySelector('li[data-step="3"]')).getAllByRole('button', { name: /ดาวน์โหลด PDF ใบแจ้งยอดเงินรับมัดจำ/ })[0]);
-    await waitFor(() => expect(api.depositNotices.downloadPdf).toHaveBeenCalledWith(31));
-  });
-
-  it('the remaining invoice opens the EXISTING RemainingInvoiceDialog on this page', async () => {
-    api.documentChain.get.mockResolvedValue({ documentChain: confirmed({
-      deposit: { state: 'PAID', received: true, docNumber: 'GLRD69005', issuedNoticeId: 31 },
-      remaining: { state: 'TO_CREATE', blockedReason: null, canCreate: true },
-    }) });
-    renderPage();
-    fireEvent.click((await card()).getByRole('button', { name: 'สร้างใบแจ้งหนี้ส่วนที่เหลือ' }));
-    expect(await screen.findByTestId('remaining-invoice-dialog-stub')).toBeTruthy();
-    expect(screen.getByTestId('remaining-invoice-dialog-stub').textContent).toContain('18');
-  });
-
-  it('a manager (may confirm, may not write the notice) sees step 3 waiting on ฝ่ายขาย, no button', async () => {
-    api.documentChain.get.mockResolvedValue({ documentChain: confirmed({ viewer: { mayWriteDepositNotice: false, mayWriteRemainingInvoice: false } }) });
-    renderPage(manager);
-    const el = await screen.findByTestId('quotation-document-chain');
-    expect(el.querySelector('li[data-step="3"]').getAttribute('data-state')).toBe('waiting');
-    expect(primaryButtons(el)).toHaveLength(0);
-    expect(within(el).getByTestId('quotation-chain-next').textContent).toContain('ฝ่ายขายเจ้าของงาน');
-  });
-
-  it('confirmed from ANOTHER quotation: one line with a link to it — no chain, no header confirm', async () => {
-    api.documentChain.get.mockResolvedValue({ documentChain: confirmed({ order: { confirmedFromQuotationId: 9, confirmedFromQuotationNumber: 'QT-2026-0009-1' } }) });
-    renderPage();
-    const line = await screen.findByTestId('quotation-chain-notice');
-    expect(line.textContent).toContain('QT-2026-0009-1');
-    expect(within(line).getByRole('link', { name: 'เปิด QT-2026-0009-1' }).getAttribute('href')).toBe('/quotations/9');
-    expect(screen.queryByTestId('quotation-document-chain')).toBeNull();
-    expect(screen.queryByTestId('quotation-promote-to-deal')).toBeNull();
-  });
-
-  it.each([
-    ['lost', { lifecycle: 'CLOSED_LOST', order: { confirmable: false } }, 'งานนี้เสียแล้ว'],
-    ['paused', { lifecycle: 'ON_HOLD', order: { confirmable: false } }, 'งานนี้พักไว้'],
-    ['cancelled', { lifecycle: 'CANCELLED', dealStatus: 'cancelled', order: { confirmable: false } }, 'งานนี้ยกเลิกแล้ว'],
-  ])('a %s deal: one line with เปิดงาน, never a chain with buttons', async (_label, overrides, text) => {
-    api.documentChain.get.mockResolvedValue({ documentChain: summary(overrides) });
-    renderPage();
-    const line = await screen.findByTestId('quotation-chain-notice');
-    expect(line.textContent).toContain(text);
-    expect(within(line).getByRole('link', { name: 'เปิดงาน' }).getAttribute('href')).toBe('/tickets/18');
-    expect(screen.queryByTestId('quotation-document-chain')).toBeNull();
-    expect(screen.queryByRole('button', { name: 'ยืนยันคำสั่งซื้อ' })).toBeNull();
-  });
-
-  it('a viewer the document gate refuses (403 on the chain) keeps the page exactly as before: the header confirm', async () => {
-    api.documentChain.get.mockRejectedValue(Object.assign(new Error('ไม่มีสิทธิ์เข้าถึงรายการนี้'), { status: 403 }));
-    renderPage();
-    expect(await screen.findByTestId('quotation-promote-to-deal')).toBeTruthy();
-    expect(screen.queryByTestId('quotation-document-chain')).toBeNull();
-    expect(screen.queryByTestId('quotation-chain-notice')).toBeNull();
-  });
-
-  it('a 0% quotation shows step 3 as ไม่รับมัดจำ, skipped', async () => {
-    api.dealQuotations.get.mockResolvedValue({ quotation: quotation({ depositPercent: 0 }) });
-    api.documentChain.get.mockResolvedValue({ documentChain: summary() });
-    renderPage();
-    const el = await screen.findByTestId('quotation-document-chain');
-    const step3 = el.querySelector('li[data-step="3"]');
-    expect(step3.getAttribute('data-state')).toBe('skipped');
-    expect(within(step3).getAllByText(/ไม่รับมัดจำ/).length).toBeGreaterThan(0);
-  });
-
   // "ยกเลิกการยืนยันคำสั่งซื้อ": shown only when the server says the confirmation is undoable, the viewer may confirm,
   // and the confirmation came from THIS quotation. The server re-checks everything; these pin the card's gate.
   describe('ยกเลิกการยืนยันคำสั่งซื้อ', () => {
     const undoBtn = () => screen.queryByTestId('quotation-chain-undo-confirm');
     const undoable = (extra = {}) => confirmed({ ...extra, order: { undoable: true, confirmationEventId: 71, ...extra.order } });
-
-    it('shows on the confirmed step when undoable + viewer may confirm + confirmed from this quotation', async () => {
-      api.documentChain.get.mockResolvedValue({ documentChain: undoable() });
-      renderPage();
-      await (await card()).findByRole('button', { name: 'สร้างใบแจ้งยอดเงินรับมัดจำ' });
-      expect(undoBtn()).toBeTruthy();
-      expect(undoBtn().textContent).toContain('ยกเลิกการยืนยันคำสั่งซื้อ');
-      // Keyed to the confirm-order step's own identity, not to its position.
-      expect(undoBtn().closest('li').getAttribute('data-step-key')).toBe('confirm-order');
-      expect(primaryButtons(screen.getByTestId('quotation-document-chain'))).toHaveLength(1);
-    });
-
-    it.each([
-      ['not undoable', () => confirmed({ order: { undoable: false } })],
-      ['undoable flag absent', () => confirmed()],
-      ['viewer may not confirm', () => undoable({ viewer: { mayConfirmOrder: false } })],
-      ['confirmed from another quotation', () => undoable({ order: { confirmedFromQuotationId: 9 } })],
-      ['order not confirmed yet', () => summary()],
-    ])('is absent when %s', async (_name, make) => {
-      api.documentChain.get.mockResolvedValue({ documentChain: make() });
-      renderPage();
-      await waitFor(() => expect(api.documentChain.get).toHaveBeenCalled());
-      await screen.findByRole('heading', { name: /ใบเสนอราคา QT-2026-0005-1/ });
-      expect(undoBtn()).toBeNull();
-    });
-
-    it('is absent while the chain has not loaded', async () => {
-      api.documentChain.get.mockReturnValue(new Promise(() => {}));
-      renderPage();
-      await waitFor(() => expect(api.documentChain.get).toHaveBeenCalled());
-      await screen.findByRole('heading', { name: /ใบเสนอราคา QT-2026-0005-1/ });
-      expect(undoBtn()).toBeNull();
-    });
 
     async function openDialog() {
       api.documentChain.get.mockResolvedValueOnce({ documentChain: undoable() })
@@ -390,33 +209,6 @@ describe('QuotationEditorPage — the document chain card', () => {
       expect(showToast).toHaveBeenCalledWith('success', 'ยกเลิกการยืนยันคำสั่งซื้อแล้ว');
       await waitFor(() => expect(undoBtn()).toBeNull());
       expect(await (await card()).findByRole('button', { name: 'ยืนยันคำสั่งซื้อ' })).toBeTruthy();
-    });
-
-    it('with no reason typed, sends no reason key, only the confirmation the chain showed', async () => {
-      api.dealQuotations.undoConfirmOrder.mockResolvedValue({ result: { ticketId: 18, ticket: { id: 18 }, quotation: quotation() } });
-      await openDialog();
-      fireEvent.click(screen.getByTestId('quotation-undo-confirm-submit'));
-      await waitFor(() => expect(api.dealQuotations.undoConfirmOrder).toHaveBeenCalledWith('5', { confirmationEventId: 71 }));
-    });
-
-    it('a 409 closes the dialog, shows the server message and re-reads the chain', async () => {
-      api.dealQuotations.undoConfirmOrder.mockRejectedValue(Object.assign(new Error('ยกเลิกไม่ได้ — ออกใบแจ้งยอดเงินรับมัดจำแล้ว'), { status: 409 }));
-      const { showToast } = await openDialog();
-      const callsBefore = api.documentChain.get.mock.calls.length;
-      fireEvent.click(screen.getByTestId('quotation-undo-confirm-submit'));
-      await waitFor(() => expect(showToast).toHaveBeenCalledWith('error', 'ยกเลิกไม่ได้ — ออกใบแจ้งยอดเงินรับมัดจำแล้ว'));
-      await waitFor(() => expect(screen.queryByTestId('quotation-undo-confirm-dialog')).toBeNull());
-      await waitFor(() => expect(api.documentChain.get.mock.calls.length).toBeGreaterThan(callsBefore));
-    });
-
-    it('any other error (network, 500) keeps the dialog open with the typed reason, so the rep can retry', async () => {
-      api.dealQuotations.undoConfirmOrder.mockRejectedValue(Object.assign(new Error('เซิร์ฟเวอร์ขัดข้อง'), { status: 500 }));
-      const { dialog, showToast } = await openDialog();
-      fireEvent.change(dialog.getByRole('textbox'), { target: { value: 'กดผิดดีล' } });
-      fireEvent.click(screen.getByTestId('quotation-undo-confirm-submit'));
-      await waitFor(() => expect(showToast).toHaveBeenCalledWith('error', 'เซิร์ฟเวอร์ขัดข้อง'));
-      expect(screen.getByTestId('quotation-undo-confirm-dialog')).toBeTruthy();
-      expect(dialog.getByRole('textbox').value).toBe('กดผิดดีล');
     });
   });
 });

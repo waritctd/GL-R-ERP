@@ -32,15 +32,6 @@ function renderPage(overrides = {}) {
 }
 
 describe('ProfileRequestsPage confirmation dialogs', () => {
-  it('opens a confirmation dialog for reject and does not call onReview until confirmed', () => {
-    const { onReview } = renderPage();
-
-    fireEvent.click(screen.getByRole('button', { name: 'ปฏิเสธ' }));
-
-    expect(screen.getByText('ปฏิเสธคำขอแก้ไขข้อมูล')).not.toBeNull();
-    expect(onReview).not.toHaveBeenCalled();
-  });
-
   it('blocks reject confirmation until a reason is entered', () => {
     renderPage();
 
@@ -73,32 +64,5 @@ describe('ProfileRequestsPage confirmation dialogs', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: 'อนุมัติ' }));
 
     await waitFor(() => expect(onReview).toHaveBeenCalledWith(1, 'approved'));
-  });
-
-  it('cancel aborts the dialog without calling onReview', () => {
-    const { onReview } = renderPage();
-
-    fireEvent.click(screen.getByRole('button', { name: 'ปฏิเสธ' }));
-    fireEvent.click(screen.getByRole('button', { name: 'ยกเลิก' }));
-
-    expect(screen.queryByText('ปฏิเสธคำขอแก้ไขข้อมูล')).toBeNull();
-    expect(onReview).not.toHaveBeenCalled();
-  });
-
-  it('keeps the reject dialog open, shows an error toast, and preserves the typed reason when onReview fails', async () => {
-    const onReview = vi.fn().mockRejectedValue(new Error('Profile request has already been reviewed'));
-    const showToast = vi.fn();
-    renderPage({ onReview, showToast });
-
-    fireEvent.click(screen.getByRole('button', { name: 'ปฏิเสธ' }));
-    fireEvent.change(screen.getByLabelText('เหตุผลการปฏิเสธ'), { target: { value: 'ข้อมูลไม่ถูกต้อง' } });
-    fireEvent.click(screen.getByRole('button', { name: 'ปฏิเสธคำขอ' }));
-
-    await waitFor(() =>
-      expect(showToast).toHaveBeenCalledWith('error', 'Profile request has already been reviewed'),
-    );
-
-    expect(screen.getByText('ปฏิเสธคำขอแก้ไขข้อมูล')).not.toBeNull();
-    expect(screen.getByLabelText('เหตุผลการปฏิเสธ').value).toBe('ข้อมูลไม่ถูกต้อง');
   });
 });

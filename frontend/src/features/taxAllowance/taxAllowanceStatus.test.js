@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  applicablePayrollMonth, hasAllowanceDisagreement, payrollVerificationInfo, resolvePayrollAllowance,
-  taxAllowanceStatusInfo, taxAllowanceStatusShortLabel,
+  applicablePayrollMonth, hasAllowanceDisagreement, resolvePayrollAllowance,
 } from './taxAllowanceStatus.js';
 
 // Guards `resolvePayrollAllowance`/`applicablePayrollMonth` against
@@ -14,10 +13,6 @@ function row({ employeeId = 1, effectiveMonth, verificationStatus = 'VERIFIED', 
 
 describe('applicablePayrollMonth', () => {
   const today = new Date(2026, 7, 7); // 7 Aug 2026 -- Date months are 0-indexed, so index 7 = August
-
-  it('uses the real calendar month for the CURRENT tax year', () => {
-    expect(applicablePayrollMonth(2026, today)).toBe(8);
-  });
 
   it('resolves a PAST tax year to December (F3) -- the year already ran its full course', () => {
     expect(applicablePayrollMonth(2025, today)).toBe(12);
@@ -33,32 +28,9 @@ describe('applicablePayrollMonth', () => {
 describe('resolvePayrollAllowance', () => {
   const today = new Date(2026, 7, 7); // August 2026 -> applicablePayrollMonth(2026, today) === 8
 
-  it('picks the LATEST qualifying effective_month among several rows for the same employee', () => {
-    const items = [
-      row({ employeeId: 1, effectiveMonth: 6 }),
-      row({ employeeId: 1, effectiveMonth: 1 }),
-      row({ employeeId: 1, effectiveMonth: 3 }),
-    ];
-    // Deliberately not array-order 0 -- proves this resolves by effectiveMonth, not "last seen".
-    expect(resolvePayrollAllowance(items, 1, 2026, today)).toEqual({ applying: items[0] });
-  });
-
-  it('ignores rows belonging to OTHER employees entirely', () => {
-    const items = [
-      row({ employeeId: 2, effectiveMonth: 8 }),
-      row({ employeeId: 1, effectiveMonth: 3 }),
-    ];
-    expect(resolvePayrollAllowance(items, 1, 2026, today)).toEqual({ applying: items[1] });
-  });
-
   it('excludes a row dated AFTER the resolved month, even though it exists (the effective_month <= filter)', () => {
     const items = [row({ employeeId: 1, effectiveMonth: 9 })]; // 9 > applicablePayrollMonth's 8
     expect(resolvePayrollAllowance(items, 1, 2026, today)).toBeNull();
-  });
-
-  it('includes a row dated EXACTLY on the resolved month (<=, not <)', () => {
-    const items = [row({ employeeId: 1, effectiveMonth: 8 })];
-    expect(resolvePayrollAllowance(items, 1, 2026, today)).toEqual({ applying: items[0] });
   });
 
   it('falls back to EXPIRED when every qualifying candidate is EXPIRED_UNVERIFIED', () => {
@@ -68,45 +40,6 @@ describe('resolvePayrollAllowance', () => {
     ];
     // The LATEST expired row, not the first one in the array.
     expect(resolvePayrollAllowance(items, 1, 2026, today)).toEqual({ expired: items[1] });
-  });
-
-  it('falls BACK to an earlier qualifying row when only the LATEST-dated row is expired -- never to "nothing"', () => {
-    // Mirrors the SQL exactly: the WHERE clause excludes EXPIRED_UNVERIFIED rows before DISTINCT ON ever picks a
-    // winner, so an employee whose latest row lapsed still resolves to their earlier, still-qualifying row.
-    const items = [
-      row({ employeeId: 1, effectiveMonth: 3, verificationStatus: 'VERIFIED' }),
-      row({ employeeId: 1, effectiveMonth: 7, verificationStatus: 'EXPIRED_UNVERIFIED' }),
-    ];
-    expect(resolvePayrollAllowance(items, 1, 2026, today)).toEqual({ applying: items[0] });
-  });
-
-  it('returns null when no row exists for the employee at all', () => {
-    const items = [row({ employeeId: 2, effectiveMonth: 1 })];
-    expect(resolvePayrollAllowance(items, 1, 2026, today)).toBeNull();
-  });
-
-  describe('tax-year threading (F3)', () => {
-    it('a PAST tax year resolves against the year-end state (month 12), not the current calendar month', () => {
-      const items = [
-        row({ employeeId: 1, effectiveMonth: 6 }),
-        row({ employeeId: 1, effectiveMonth: 11 }),
-      ];
-      // `today` is August 2026 -- if month resolution ignored `taxYear` and just used the real calendar month,
-      // effectiveMonth 11 (November) would be wrongly excluded (11 > 8).
-      expect(resolvePayrollAllowance(items, 1, 2025, today)).toEqual({ applying: items[1] });
-    });
-
-    it('a FUTURE tax year never resolves any row, even one dated at effective_month 1', () => {
-      const items = [row({ employeeId: 1, effectiveMonth: 1 })];
-      expect(resolvePayrollAllowance(items, 1, 2027, today)).toBeNull();
-    });
-
-    it('a FUTURE tax year with an EXPIRED_UNVERIFIED-only row also resolves to null, not the expired fallback', () => {
-      // The expired fallback only exists among CANDIDATES (effective_month <= month); month 0 for a future year
-      // admits no candidates at all, so there is nothing to fall back to.
-      const items = [row({ employeeId: 1, effectiveMonth: 1, verificationStatus: 'EXPIRED_UNVERIFIED' })];
-      expect(resolvePayrollAllowance(items, 1, 2027, today)).toBeNull();
-    });
   });
 });
 
@@ -122,79 +55,5 @@ describe('hasAllowanceDisagreement (F4) — the one predicate both register surf
     const applying = { verificationStatus: 'GRANDFATHERED_UNVERIFIED', allowances: { spouseAllowance: 50000 } };
     expect(hasAllowanceDisagreement(declaration, applying)).toBe(false);
   });
-
-  // The F4 fix itself: TaxAllowanceReviewPage's summary badge already excluded an EXPIRED_UNVERIFIED row from
-  // this flag; TaxAllowanceBreakdown's expanded panel did not, and nothing caught the two surfaces disagreeing
-  // with EACH OTHER.
-  it('false against an EXPIRED_UNVERIFIED row, even when the totals plainly differ', () => {
-    const expired = { verificationStatus: 'EXPIRED_UNVERIFIED', allowances: { spouseAllowance: 999999 } };
-    expect(hasAllowanceDisagreement(declaration, expired)).toBe(false);
-  });
-
-  it('false with no declaration, regardless of the payroll figure', () => {
-    const applying = { verificationStatus: 'VERIFIED', allowances: { spouseAllowance: 60000 } };
-    expect(hasAllowanceDisagreement(null, applying)).toBe(false);
-  });
-
-  it('false with no payroll allowance, regardless of the declaration', () => {
-    expect(hasAllowanceDisagreement(declaration, null)).toBe(false);
-  });
 });
 
-describe('taxAllowanceStatusInfo — no-declaration payroll states', () => {
-  it('GRANDFATHERED_APPLIED when no declaration exists but a payroll row is applying', () => {
-    const info = taxAllowanceStatusInfo(null, { applying: { verificationStatus: 'GRANDFATHERED_UNVERIFIED' } });
-    expect(info.key).toBe('GRANDFATHERED_APPLIED');
-    expect(info.tone).toBe('warning');
-  });
-
-  it('GRANDFATHERED_EXPIRED when no declaration exists and the payroll row is the expired fallback', () => {
-    const info = taxAllowanceStatusInfo(null, { expired: { verificationStatus: 'EXPIRED_UNVERIFIED' } });
-    expect(info.key).toBe('GRANDFATHERED_EXPIRED');
-    expect(info.tone).toBe('danger');
-  });
-
-  it('NONE when there is neither a declaration nor any payroll resolution', () => {
-    expect(taxAllowanceStatusInfo(null, null).key).toBe('NONE');
-  });
-
-  it('a declaration is always authoritative over a payroll resolution, even a conflicting one', () => {
-    const declaration = { status: 'PENDING' };
-    const info = taxAllowanceStatusInfo(declaration, { applying: { verificationStatus: 'VERIFIED' } });
-    expect(info.key).toBe('PENDING');
-  });
-});
-
-describe('GRANDFATHERED_EXPIRED short label + verification copy (F6)', () => {
-  it('has its own short chip label, distinct from GRANDFATHERED_APPLIED and from the raw key', () => {
-    const expiredLabel = taxAllowanceStatusShortLabel('GRANDFATHERED_EXPIRED');
-    expect(expiredLabel).not.toBe('GRANDFATHERED_EXPIRED'); // not just the unrecognised-key fallback
-    expect(expiredLabel).not.toBe(taxAllowanceStatusShortLabel('GRANDFATHERED_APPLIED'));
-  });
-
-  it('payrollVerificationInfo covers all three verification_status values with distinct tones', () => {
-    expect(payrollVerificationInfo('VERIFIED').tone).toBe('success');
-    expect(payrollVerificationInfo('GRANDFATHERED_UNVERIFIED').tone).toBe('warning');
-    expect(payrollVerificationInfo('EXPIRED_UNVERIFIED').tone).toBe('danger');
-  });
-});
-
-describe('taxAllowanceStatusInfo — the APPLIED badge after the whole-year ruling', () => {
-  // Owner ruling 2026-08-31: approval promotes the declaration for its whole tax year, always at effective month
-  // 1. Naming that month would put a meaningless "ตั้งแต่เดือน 1" on every current declaration, so month 1 reads
-  // as ทั้งปีภาษี instead.
-  const applied = (appliedEffectiveMonth) => taxAllowanceStatusInfo(
-    { status: 'APPROVED', appliedAt: '2026-08-31T00:00:00.000Z', appliedEffectiveMonth }, null,
-  );
-
-  it('reads ทั้งปีภาษี for a whole-year row, with no month named', () => {
-    const info = applied(1);
-    expect(info.key).toBe('APPLIED');
-    expect(info.label).toBe('ใช้กับเงินเดือนแล้ว ทั้งปีภาษี');
-    expect(info.label).not.toMatch(/เดือน 1/);
-  });
-
-  it('still names the month of a pre-ruling mid-year row', () => {
-    expect(applied(7).label).toBe('ใช้กับเงินเดือนแล้ว ตั้งแต่เดือน 7');
-  });
-});

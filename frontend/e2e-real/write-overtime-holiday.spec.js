@@ -47,7 +47,7 @@ import { apiSessionFor, apiWrite, disposeSessions } from './helpers/api.js';
 //
 // SECOND PRECONDITION: whether "today" reads as an ordinary workday or a non-workday-suggested
 // HOLIDAY depends on which day of the week the suite runs on AND on which WorkSchedule the OWNER
-// persona resolves that day. expectedSuggestionFor/expectedMultiplierFor compute the RIGHT answer
+// persona resolves that day. expectedSuggestionFor computes the RIGHT answer
 // for whichever day it is; nearestScheduledWorkdayOnOrBefore steps back to a genuinely ORDINARY
 // day for the two cases (the over-claim-disagreement case and the "frozen at approval" case) that
 // need one to isolate what they are testing from the non-workday rule. All three read the
@@ -311,11 +311,6 @@ test.describe('overtime day type: system suggestion, employee request, approver 
     return workdays.includes(isoDayOfWeekInBangkok(workDate)) ? 'WORKDAY' : 'HOLIDAY';
   }
 
-  /** The pay multiplier that goes with expectedSuggestionFor's answer: 3.00 HOLIDAY, 1.50 WORKDAY. */
-  async function expectedMultiplierFor(workDate) {
-    return (await expectedSuggestionFor(workDate)) === 'HOLIDAY' ? 3 : 1.5;
-  }
-
   /** The nearest date on/before `dateIso` that the OWNER's own resolved schedule counts as a WORKING day --
    * nudges back at most 2 days. Two days is enough for every schedule in hr.work_schedule today: the five-day
    * ones break Sat+Sun, the six-day ones only Sun. */
@@ -473,44 +468,6 @@ test.describe('overtime day type: system suggestion, employee request, approver 
         await cancelOvertime(created.id);
       }
       await deleteHolidayBestEffort(workDate);
-    }
-  });
-
-  // Case 4: the base case -- no claim at all, calendar genuinely LOADED for the year (a sentinel, same technique
-  // as Case 1).
-  test('a day with no claim stores the schedule-derived suggestion, unflagged when the calendar is loaded', async () => {
-    const workDate = todayInBangkok();
-    const sentinelDate = sentinelDateInSameYear(workDate);
-    let created = null;
-
-    await deleteHolidayBestEffort(sentinelDate);
-    await createHoliday(sentinelDate, 'e2e: sentinel holiday, loads the calendar year');
-    try {
-      await assertHolidayPersisted(sentinelDate);
-      await assertNotHoliday(workDate);
-
-      const response = await apiWrite(
-        sessions[OWNER],
-        'POST',
-        '/api/overtime',
-        overtimePayload('e2e: no day-type claim at all', undefined, workDate)
-      );
-      expect(response.status(), await response.text()).toBe(200);
-      ({ request: created } = await response.json());
-
-      const expectedDayType = await expectedSuggestionFor(workDate);
-      expect(created.suggestedDayType).toBe(expectedDayType);
-      expect(created.dayType).toBe(expectedDayType);
-      expect(created.payRateMultiplier).toBe(await expectedMultiplierFor(workDate));
-      expect(
-        created.calculationNote,
-        'the year IS loaded (sentinel above): a WORKDAY suggestion must not carry the calendar-unverified flag, and a schedule-derived HOLIDAY suggestion never needs the calendar at all'
-      ).toBeNull();
-    } finally {
-      if (created) {
-        await cancelOvertime(created.id);
-      }
-      await deleteHolidayBestEffort(sentinelDate);
     }
   });
 

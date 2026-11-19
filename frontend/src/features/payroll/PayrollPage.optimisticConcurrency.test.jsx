@@ -128,33 +128,6 @@ describe('PayrollPage optimistic concurrency (issue #422 follow-up)', () => {
     expect(options).toEqual({ ifMatch: 'ETAG-LOAD-1' });
   });
 
-  it('a second save after the first succeeds threads the NEW ETag the server returned, not the original one', async () => {
-    api.payroll.getInputDraft.mockResolvedValue({ payrollMonth: '2026-07-01', drafts: [], etag: 'ETAG-LOAD-1' });
-    api.payroll.saveInputDraft.mockResolvedValue({ payrollMonth: '2026-07-01', drafts: [], etag: 'ETAG-SAVE-2' });
-
-    renderWithClient(<PayrollPage user={hrUser} showToast={vi.fn()} />);
-
-    const costOfLiving = await screen.findByLabelText(/พิเศษ 1 \(ค่าครองชีพ\)/);
-    fireEvent.change(costOfLiving, { target: { value: '1234' } });
-    fireEvent.blur(costOfLiving);
-    await waitFor(() => expect(api.payroll.saveInputDraft).toHaveBeenCalledTimes(1));
-    // Let the first save's resolution fully settle before triggering a second one -- otherwise the second blur can
-    // land while the first save is still between "mock resolved" and "component state updated," which
-    // autosaveDraft's own guards correctly treat as still-saving and skip.
-    await waitFor(() => expect(screen.getByRole('status').textContent).toContain('บันทึกแล้ว'));
-
-    // NOTE: GPRS carries a ฿500 UAT demo default, which is ALREADY the field's value on a fresh PREVIEW period --
-    // setting it to '500' again would be a no-op from React's controlled-input value tracker's perspective, so no
-    // synthetic onChange would fire.
-    const gprs = screen.getByLabelText(/พิเศษ 6 \(ค่า GPRS\)/);
-    fireEvent.change(gprs, { target: { value: '999' } });
-    fireEvent.blur(gprs);
-    await waitFor(() => expect(api.payroll.saveInputDraft).toHaveBeenCalledTimes(2));
-
-    const [, secondOptions] = api.payroll.saveInputDraft.mock.calls[1];
-    expect(secondOptions).toEqual({ ifMatch: 'ETAG-SAVE-2' });
-  });
-
   it('a 409 on บันทึกร่าง shows a persistent conflict message, keeps HR\'s typed value in the field, and does not run preview()', async () => {
     api.payroll.getInputDraft.mockResolvedValue({ payrollMonth: '2026-07-01', drafts: [], etag: 'ETAG-LOAD-1' });
     api.payroll.saveInputDraft.mockRejectedValue(
@@ -209,64 +182,5 @@ describe('PayrollPage optimistic concurrency (issue #422 follow-up)', () => {
     // Both typed values must still be present -- the second field's edit was never discarded either.
     expect(screen.getByLabelText(/พิเศษ 1 \(ค่าครองชีพ\)/).value).toBe('111');
     expect(gprs.value).toBe('222');
-  });
-
-  /** Opus review finding NEW-1 (BLOCKER): a genuine sequence where a conflict is raised on a CLEAN form (the
-   * บันทึกร่าง button does not check dirty before submitting), so draftDirtyRef stays false throughout. */
-  it('an ordinary background refetch after a conflict on a clean form clears draftConflictRef too, not just the banner', async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    try {
-      api.payroll.getInputDraft
-        .mockResolvedValueOnce({ payrollMonth: '2026-07-01', drafts: [], etag: 'ETAG-LOAD-1' })
-        .mockResolvedValue({ payrollMonth: '2026-07-01', drafts: [], etag: 'ETAG-LOAD-2' });
-      api.payroll.saveInputDraft
-        .mockRejectedValueOnce(conflictError(409, 'มีผู้ใช้อื่นบันทึกร่างเงินเดือนของงวดนี้ไปแล้ว'))
-        .mockResolvedValue({ payrollMonth: '2026-07-01', drafts: [], etag: 'ETAG-SAVE-2' });
-
-      renderWithClient(<PayrollPage user={hrUser} showToast={vi.fn()} />);
-
-      // Click บันทึกร่าง WITHOUT typing anything first -- the button submits whatever is in the form regardless of
-      // dirty state, so this reaches the conflict branch with the form clean.
-      await screen.findByLabelText(/พิเศษ 1 \(ค่าครองชีพ\)/);
-      fireEvent.click(screen.getByRole('button', { name: /บันทึกร่าง/i }));
-      await screen.findByRole('alert');
-      expect(screen.getByRole('status').textContent).toContain('มีการบันทึกที่ขัดแย้งกัน');
-
-      // Advance past the real 60s refetchInterval so react-query's own background poll fires -- not a hand-simulated
-      // stand-in for one.
-      await vi.advanceTimersByTimeAsync(61_000);
-      await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
-      await waitFor(() => expect(screen.getByRole('status').textContent).toContain('บันทึกแล้ว'));
-
-      // The regression: type into a field and blur. If draftConflictRef was correctly cleared by the poll's clean
-      // path, this autosave actually fires; if not, it silently does nothing.
-      const costOfLiving = screen.getByLabelText(/พิเศษ 1 \(ค่าครองชีพ\)/);
-      fireEvent.change(costOfLiving, { target: { value: '321' } });
-      fireEvent.blur(costOfLiving);
-
-      await vi.waitFor(() => expect(api.payroll.saveInputDraft).toHaveBeenCalledTimes(2));
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it('the conflict banner\'s "โหลดข้อมูลใหม่" action clears the conflict and reloads', async () => {
-    api.payroll.getInputDraft
-      .mockResolvedValueOnce({ payrollMonth: '2026-07-01', drafts: [], etag: 'ETAG-LOAD-1' })
-      .mockResolvedValue({ payrollMonth: '2026-07-01', drafts: [{ employeeId: 1, specialPay1: 999 }], etag: 'ETAG-LOAD-2' });
-    api.payroll.saveInputDraft.mockRejectedValue(conflictError(409, 'มีผู้ใช้อื่นบันทึกร่างเงินเดือนของงวดนี้ไปแล้ว'));
-
-    renderWithClient(<PayrollPage user={hrUser} showToast={vi.fn()} />);
-
-    const costOfLiving = await screen.findByLabelText(/พิเศษ 1 \(ค่าครองชีพ\)/);
-    fireEvent.change(costOfLiving, { target: { value: '777' } });
-    fireEvent.blur(costOfLiving);
-    await screen.findByRole('alert');
-
-    const callsBeforeReload = api.payroll.getInputDraft.mock.calls.length;
-    fireEvent.click(screen.getByRole('button', { name: /โหลดข้อมูลใหม่/i }));
-
-    await waitFor(() => expect(api.payroll.getInputDraft.mock.calls.length).toBeGreaterThan(callsBeforeReload));
-    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
   });
 });

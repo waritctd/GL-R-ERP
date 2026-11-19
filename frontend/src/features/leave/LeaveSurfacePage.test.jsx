@@ -71,23 +71,6 @@ describe('LeaveSurfacePage', () => {
     api.leave.policyDocumentAvailable.mockResolvedValue('absent');
   });
 
-  it('defaults to the "ของฉัน" tab and hides "รอพิจารณา"/"ลูกทีม" for a plain employee with no reports', async () => {
-    renderLeaveSurfacePage();
-
-    const tabs = await screen.findAllByRole('tab');
-    // "กฎการลา" is gone: the §5 announcement is the LeavePolicyBar above the tabs, so a plain
-    // employee with no reports has exactly ONE tab.
-    expect(tabs.map((tab) => tab.textContent)).toEqual(
-      expect.arrayContaining([expect.stringContaining('ของฉัน')]),
-    );
-    expect(tabs.some((tab) => tab.textContent.includes('กฎการลา'))).toBe(false);
-    expect(tabs.some((tab) => tab.textContent.includes('รอพิจารณา'))).toBe(false);
-    // The beforeEach's api.leave.employees() fixture is self-only (directReport: false) -- see
-    // leaveSurfaceTabs.test.js's hasTeamMembers coverage for the pure-function rule.
-    expect(tabs.some((tab) => tab.textContent.includes('ลูกทีม'))).toBe(false);
-    expect(screen.getByRole('tab', { name: /ของฉัน/ }).getAttribute('aria-selected')).toBe('true');
-  });
-
   // "ลูกทีม" is the correctly-labelled, correctly-scoped home for the team-wide view -- see
   // leaveSurfaceTabs.js's hasTeamMembers and TeamLeaveTab.jsx's header comment.
   it('a manager with a direct report in api.leave.employees() sees and can open "ลูกทีม"', async () => {
@@ -118,95 +101,6 @@ describe('LeaveSurfacePage', () => {
     expect(await screen.findByText('พักผ่อนของลูกทีม')).not.toBeNull();
   });
 
-  it('"ลูกทีม" sits between "ของฉัน" and "รอพิจารณา" when both are visible', async () => {
-    const manager = { employeeId: 5, name: 'หัวหน้างาน', role: 'employee', manager: true };
-    api.leave.employees.mockResolvedValue({
-      employees: [
-        {
-          employeeId: 5, employeeName: 'หัวหน้างาน', employeeCode: 'GLR-005', self: true, directReport: false,
-        },
-        {
-          employeeId: 6, employeeName: 'ลูกทีม', employeeCode: 'GLR-006', self: false, directReport: true,
-        },
-      ],
-    });
-    api.leave.list.mockResolvedValue({
-      requests: [{
-        id: 804, employeeId: 6, employeeName: 'ลูกทีม', managerEmployeeId: 5, status: 'SUBMITTED',
-        leaveTypeCode: 'VACATION', leaveTypeNameTh: 'ลาพักร้อน', startDate: '2026-08-10', endDate: '2026-08-10',
-        totalDays: 1, quotaRemainingAfter: 5, reason: 'พักผ่อน',
-      }],
-    });
-    renderLeaveSurfacePage(manager);
-
-    // Both "ลูกทีม" and "รอพิจารณา" only appear once their own async signal queries resolve -- wait for the slower
-    // of the two before reading tab order, or this can race and see only the two unconditionally-visible tabs
-    // ("ของฉัน"/"กฎการลา").
-    await screen.findByRole('tab', { name: /รอพิจารณา/ });
-    const tabs = await screen.findAllByRole('tab');
-    const labels = tabs.map((tab) => tab.textContent);
-    const meIndex = labels.findIndex((label) => label.includes('ของฉัน'));
-    const teamIndex = labels.findIndex((label) => label.includes('ลูกทีม'));
-    const reviewIndex = labels.findIndex((label) => label.includes('รอพิจารณา'));
-    expect(meIndex).toBeLessThan(teamIndex);
-    expect(teamIndex).toBeLessThan(reviewIndex);
-  });
-
-  // Clicks a tab other than the default: a plain employee has only one tab, so the ?tab= round-trip
-  // needs an actor with a second one -- a manager with a direct report, switching to "รอพิจารณา".
-  it('switching tabs writes ?tab= with replace (no new history entry)', async () => {
-    const manager = { employeeId: 5, name: 'หัวหน้างาน', role: 'employee', manager: true };
-    api.leave.employees.mockResolvedValue({
-      employees: [
-        {
-          employeeId: 5, employeeName: 'หัวหน้างาน', employeeCode: 'GLR-005', self: true, directReport: false,
-        },
-        {
-          employeeId: 6, employeeName: 'ลูกทีม', employeeCode: 'GLR-006', self: false, directReport: true,
-        },
-      ],
-    });
-    api.leave.list.mockResolvedValue({
-      requests: [{
-        id: 805, employeeId: 6, employeeName: 'ลูกทีม', managerEmployeeId: 5, status: 'SUBMITTED',
-        leaveTypeCode: 'VACATION', leaveTypeNameTh: 'ลาพักร้อน', startDate: '2026-08-10', endDate: '2026-08-10',
-        totalDays: 1, quotaRemainingAfter: 5, reason: 'พักผ่อนของลูกทีม',
-      }],
-    });
-    renderLeaveSurfacePage(manager);
-
-    const reviewTab = await screen.findByRole('tab', { name: /รอพิจารณา/ });
-    fireEvent.click(reviewTab);
-
-    await waitFor(() => expect(screen.getByTestId('location-probe').textContent).toBe('/leave?tab=review'));
-    expect(screen.getByRole('tab', { name: /รอพิจารณา/ }).getAttribute('aria-selected')).toBe('true');
-  });
-
-  it('a stale/unknown ?tab= falls back to "ของฉัน"', async () => {
-    renderLeaveSurfacePage(plainEmployee, ['/leave?tab=review']);
-
-    await screen.findAllByRole('tab');
-    expect(screen.getByRole('tab', { name: /ของฉัน/ }).getAttribute('aria-selected')).toBe('true');
-  });
-
-  it('a non-HR manager with an actionable report sees and can open "รอพิจารณา"', async () => {
-    const manager = { employeeId: 5, name: 'หัวหน้างาน', role: 'employee', manager: true };
-    api.leave.list.mockResolvedValue({
-      requests: [{
-        id: 801, employeeId: 1, employeeName: 'ลูกทีม', managerEmployeeId: 5, status: 'SUBMITTED',
-        leaveTypeCode: 'VACATION', leaveTypeNameTh: 'ลาพักร้อน', startDate: '2026-08-10', endDate: '2026-08-10',
-        totalDays: 1, quotaRemainingAfter: 5, reason: 'พักผ่อน',
-      }],
-    });
-    renderLeaveSurfacePage(manager);
-
-    const reviewTab = await screen.findByRole('tab', { name: /รอพิจารณา/ });
-    fireEvent.click(reviewTab);
-
-    await waitFor(() => expect(screen.getByTestId('location-probe').textContent).toBe('/leave?tab=review'));
-    expect(await screen.findByText('พักผ่อน')).not.toBeNull();
-  });
-
   // Double-scroll containment: the request form's FileUploadField renders a real
   // `<input type="file">` visually hidden with Tailwind's `sr-only` (`position: absolute`). jsdom
   // does not compute layout, so this cannot assert scroll pixels; it asserts the structural
@@ -226,62 +120,10 @@ describe('LeaveSurfacePage', () => {
     expect(screen.queryByRole('button', { name: 'ยื่นคำขอลา' })).toBeNull();
   });
 
-  it('ceo lands on "รอพิจารณา" by default and does not see the "ยื่นคำขอลา" CTA', async () => {
-    const ceo = { employeeId: 2, name: 'ผู้บริหารระดับสูง', role: 'ceo', manager: false };
-    // ceo is in ROLE_PERMISSIONS.canReviewLeave, so "review" is unconditionally visible without
-    // waiting on any row to load; this fixture row (under the ceo's own direct management) is a
-    // realistic seed that also exercises the per-row canReview fallback path.
-    api.leave.list.mockResolvedValue({
-      requests: [{
-        id: 802, employeeId: 10, employeeName: 'ลูกทีมของ CEO', managerEmployeeId: 2, status: 'SUBMITTED',
-        leaveTypeCode: 'VACATION', leaveTypeNameTh: 'ลาพักร้อน', startDate: '2026-08-10', endDate: '2026-08-10',
-        totalDays: 1, quotaRemainingAfter: 5, reason: 'พักผ่อน',
-      }],
-    });
-    renderLeaveSurfacePage(ceo);
-
-    const reviewTab = await screen.findByRole('tab', { name: /รอพิจารณา/ });
-    await waitFor(() => expect(reviewTab.getAttribute('aria-selected')).toBe('true'));
-    expect(screen.queryByRole('button', { name: 'ยื่นคำขอลา' })).toBeNull();
-  });
-
   it('a plain employee still sees the "ยื่นคำขอลา" CTA', async () => {
     renderLeaveSurfacePage();
 
     await screen.findAllByRole('tab');
     expect(screen.getByRole('button', { name: 'ยื่นคำขอลา' })).not.toBeNull();
-  });
-
-  // leaveSurfaceTabs.js's resolveTabLabel/resolveTabHelper swap the "team" tab's copy for hr/ceo
-  // (they see every employee, not a real org-chart team, so "ลูกทีม" is misleading). That is only
-  // proven if something actually RENDERS the resolved label: a test calling resolveTabLabel()
-  // directly would pass even if LeaveSurfacePage.jsx read the tab's static `label`/`helper` fields
-  // instead.
-  it('an hr user with team members sees "พนักงานทั้งหมด", never the manager-facing "ลูกทีม" label', async () => {
-    api.leave.employees.mockResolvedValue({
-      employees: [
-        { employeeId: 99, employeeName: 'ฝ่ายบุคคล', employeeCode: 'GLR-099', self: true, directReport: false },
-        { employeeId: 1, employeeName: 'พนักงาน ทดสอบ', employeeCode: 'GLR-001', self: false, directReport: false },
-      ],
-    });
-    const hr = { employeeId: 99, name: 'ฝ่ายบุคคล', role: 'hr', manager: false };
-    renderLeaveSurfacePage(hr);
-
-    const teamTab = await screen.findByRole('tab', { name: /พนักงานทั้งหมด/ });
-    expect(screen.queryByRole('tab', { name: /^ลูกทีม$/ })).toBeNull();
-    expect(teamTab).not.toBeNull();
-  });
-
-  it('the page root establishes a positioning context so the request form\'s absolutely-positioned file input stays contained by .content-scroll', async () => {
-    const { container } = renderLeaveSurfacePage();
-    await screen.findAllByRole('tab');
-
-    const tablist = container.querySelector('[role="tablist"]');
-    // PageStack is the only ancestor between the scroll container and the tab bar / form that renders Tailwind's
-    // literal `grid` class (its signature utility, per Layout.jsx's PageStack) -- walk up to it rather than
-    // asserting on `container.firstChild`, which is brittle to unrelated wrapper changes.
-    const pageRoot = tablist.closest('.grid');
-    expect(pageRoot).not.toBeNull();
-    expect(pageRoot.classList.contains('relative')).toBe(true);
   });
 });

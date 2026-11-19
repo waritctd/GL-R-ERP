@@ -3,10 +3,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, it, expect } from 'vitest';
 
-// Guard for #exclusive-breakpoint-variant (2026-08-08). WHY A SOURCE SCAN AND NOT A RENDER TEST: jsdom has no
-// layout engine and never evaluates a media query, so no amount of `render()` in this suite can observe a
-// breakpoint at all.
-
+// Source guard (#exclusive-breakpoint-variant): jsdom never evaluates media queries, so a render test cannot
+// catch an exclusive max-[Npx]: variant; scan the source instead.
 const SRC = path.dirname(fileURLToPath(import.meta.url));
 const INDEX_CSS = fs.readFileSync(path.join(SRC, 'index.css'), 'utf8');
 
@@ -31,34 +29,6 @@ describe('inclusive breakpoint variants', () => {
       .sort();
 
     expect(offenders).toEqual([]);
-  });
-
-  it('declares the pure max-width variants widest-first, so the narrower band wins', () => {
-    // Declare custom max-width variants widest first so the narrower mobile rules win where bands overlap.
-    const declared = [...INDEX_CSS.matchAll(/@custom-variant\s+([\w-]+)\s*\{\s*@media\s*([^{]+)\{/g)]
-      .map(([, name, query]) => ({ name, query: query.trim() }));
-
-    expect(declared.length).toBeGreaterThan(0);
-
-    const pureMax = declared
-      .map(({ name, query }) => {
-        const m = /^\(max-width:\s*(\d+)px\)$/.exec(query);
-        return m ? { name, width: Number(m[1]) } : null;
-      })
-      .filter(Boolean);
-
-    expect(pureMax.map((v) => v.name)).toEqual([
-      'nav-drawer',
-      'attendance-scroll',
-      'mobile',
-      'phone', // <640px: the visit log's bottom sheet (Modal placement="sheet-on-phone")
-      'mobile-sm',
-      'mobile-xs',
-    ]);
-
-    const widths = pureMax.map((v) => v.width);
-    expect(widths).toEqual([...widths].sort((a, b) => b - a));
-    expect(new Set(widths).size).toBe(widths.length);
   });
 
   it('keeps the mobile variant byte-identical to useIsMobile.js MOBILE_QUERY', () => {

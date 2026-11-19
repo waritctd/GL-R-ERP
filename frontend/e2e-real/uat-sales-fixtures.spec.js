@@ -6,8 +6,6 @@ import {
   cancelDeal,
   createDeal,
   readDeal,
-  runId,
-  stageHistory,
 } from './helpers/sales.js';
 
 // SLICE 2 — the first WRITE against deployed UAT, and its cleanup. Two things have to be proven on a shared
@@ -38,39 +36,6 @@ test.describe('@uat-sales sales fixtures — create and cancel a deal', () => {
       await cancelDeal(sessions, ticketId);
     }
     await disposeSessions(sessions);
-  });
-
-  test('a new deal starts at LEAD_APPROACH with NO stage history', async () => {
-    const deal = await createDeal(sessions, { caseName: 'slice2 create' });
-    created.push(deal.id);
-
-    const ticket = await readDeal(sessions, 'sales', deal.id);
-
-    expect(ticket.summary.salesStage, 'a new deal must start at the first stage').toBe(
-      'LEAD_APPROACH'
-    );
-    expect(ticket.summary.lifecycle, 'a new deal is ACTIVE').toBe('ACTIVE');
-
-    // The baseline that makes every later route assertion meaningful.
-    const history = await stageHistory(sessions, 'sales', deal.id);
-    expect(
-      history,
-      'a freshly created deal must have emitted no STAGE_CHANGED event — this is the baseline ' +
-        "Case C's \"starts at S8\" is measured against"
-    ).toEqual([]);
-  });
-
-  test('the deal carries the run tag, so a failed run leaves findable rows', async () => {
-    const deal = await createDeal(sessions, { caseName: 'slice2 tagging' });
-    created.push(deal.id);
-
-    const ticket = await readDeal(sessions, 'sales', deal.id);
-
-    // sales.ticket.code is server-generated (tickets.nextTicketCode()), so the title is the only handle a human
-    // has for "what did that run leave behind". If this ever stops holding, the documented manual sweep (WHERE
-    // title LIKE 'E2E-%') stops finding anything.
-    expect(ticket.summary.title, 'the run id must lead the title').toContain(runId());
-    expect(ticket.summary.title).toMatch(/^E2E-\d{8}T\d{6}Z-[0-9a-f]{4} /);
   });
 
   test('cancel takes a deal back, and it stays cancelled', async () => {

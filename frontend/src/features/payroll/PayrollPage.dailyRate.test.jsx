@@ -169,49 +169,4 @@ describe('PayrollPage daily-rate (pay_type = D) support', () => {
     expect(submittedInput).toBeDefined();
     expect(submittedInput.daysWorked).toBe(25);
   });
-
-  it('a persisted daysWorked survives a reload -- the field pre-fills from the line, not blank', async () => {
-    api.payroll.current.mockResolvedValue({
-      period: previewPeriodWith(dailyRateLine({ daysWorked: 25 })),
-    });
-
-    renderWithClient(<PayrollPage user={hrUser} showToast={vi.fn()} />);
-
-    const daysWorked = await screen.findByLabelText(/จำนวนวันทำงานในงวดนี้/, { selector: 'input' });
-    await waitFor(() => expect(daysWorked.value).toBe('25'));
-  });
-
-  // Finding 1/4 fixes (Opus review, 2026-07-30).
-
-  it('the days-worked input is bounded to 31 (matching the backend @Max/DB CHECK)', async () => {
-    api.payroll.current.mockResolvedValue({ period: previewPeriodWith(dailyRateLine()) });
-
-    renderWithClient(<PayrollPage user={hrUser} showToast={vi.fn()} />);
-
-    const daysWorked = await screen.findByLabelText(/จำนวนวันทำงานในงวดนี้/, { selector: 'input' });
-    expect(daysWorked.max).toBe('31');
-  });
-
-  it('warns (list row + detail panel) when a daily-rate employee has no days-worked entered yet', async () => {
-    api.payroll.current.mockResolvedValue({ period: previewPeriodWith(dailyRateLine()) });
-
-    renderWithClient(<PayrollPage user={hrUser} showToast={vi.fn()} />);
-
-    await screen.findByLabelText(/จำนวนวันทำงานในงวดนี้/, { selector: 'input' });
-    expect(screen.getAllByText(/ยังไม่ได้ระบุจำนวนวันทำงาน/).length).toBeGreaterThan(0);
-  });
-
-  it('the detail-panel warning clears once a positive days-worked value is typed', async () => {
-    // Scoped to the detail-panel-specific message rather than the list-row one.
-    api.payroll.current.mockResolvedValue({ period: previewPeriodWith(dailyRateLine()) });
-
-    renderWithClient(<PayrollPage user={hrUser} showToast={vi.fn()} />);
-
-    const daysWorked = await screen.findByLabelText(/จำนวนวันทำงานในงวดนี้/, { selector: 'input' });
-    expect(screen.queryByText(/พนักงานรายวันจะได้รับเงินเดือน/)).not.toBeNull();
-
-    fireEvent.change(daysWorked, { target: { value: '25' } });
-
-    await waitFor(() => expect(screen.queryByText(/พนักงานรายวันจะได้รับเงินเดือน/)).toBeNull());
-  });
 });

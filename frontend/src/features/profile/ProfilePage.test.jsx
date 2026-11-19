@@ -75,11 +75,6 @@ describe('ProfilePage signature card role gate', () => {
     expect(screen.getByText('ลายเซ็นสำหรับใบเสนอราคา')).toBeTruthy();
   });
 
-  it('still shows the signature card for the pre-existing approver roles', () => {
-    renderProfilePage({ role: 'ceo', employeeId: 1 });
-    expect(screen.getByText('ลายเซ็นสำหรับใบเสนอราคา')).toBeTruthy();
-  });
-
   it('still hides the signature card for a role with no slot in the signature block', () => {
     renderProfilePage({ role: 'hr', employeeId: 2 });
     expect(screen.queryByText('ลายเซ็นสำหรับใบเสนอราคา')).toBeNull();

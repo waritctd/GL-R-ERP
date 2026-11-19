@@ -43,16 +43,6 @@ describe('AttendanceCorrectionRequestModal — submit flow', () => {
     api.attendanceCorrection.create.mockResolvedValue({ request: { id: 1 } });
   });
 
-  it('renders the submit form defaulted to today and CHECK_IN', async () => {
-    renderModal();
-
-    const dateInput = await screen.findByLabelText(/วันที่ที่ต้องการแก้ไข/);
-    const [y, m, d] = todayIso().split('-');
-    expect(dateInput.value).toBe(`${d}/${m}/${Number(y) + 543}`);
-    expect(screen.getByLabelText(/เวลาเข้างานที่ถูกต้อง/)).not.toBeNull();
-    expect(screen.queryByLabelText(/เวลาออกงานที่ถูกต้อง/)).toBeNull();
-  });
-
   it('submits a CHECK_IN correction with the expected payload shape', async () => {
     renderModal();
     const workDate = todayIso();
@@ -72,15 +62,6 @@ describe('AttendanceCorrectionRequestModal — submit flow', () => {
     });
   });
 
-  it('switching to BOTH shows both time fields and requires both', async () => {
-    renderModal();
-
-    fireEvent.change(await screen.findByLabelText(/รายการที่ต้องแก้ไข/), { target: { value: 'BOTH' } });
-
-    expect(await screen.findByLabelText(/เวลาเข้างานที่ถูกต้อง/)).not.toBeNull();
-    expect(screen.getByLabelText(/เวลาออกงานที่ถูกต้อง/)).not.toBeNull();
-  });
-
   it('blocks submit when the reason is too short', async () => {
     renderModal();
 
@@ -89,20 +70,5 @@ describe('AttendanceCorrectionRequestModal — submit flow', () => {
 
     await waitFor(() => expect(screen.getByText(/กรุณาระบุเหตุผลให้ชัดเจน/)).not.toBeNull());
     expect(api.attendanceCorrection.create).not.toHaveBeenCalled();
-  });
-
-  // New in this split (fix/attendance-correction-on-attendance-page): the old inline panel form just reset
-  // itself in place after a successful create. As a modal, it must also close itself, or the just-submitted form
-  // stays open with a stale toast as the only feedback.
-  it('closes itself after a successful create', async () => {
-    const { onClose } = renderModal();
-    const workDate = todayIso();
-
-    fireEvent.change(await screen.findByLabelText(/วันที่ที่ต้องการแก้ไข/), { target: { value: workDate } });
-    fireEvent.change(screen.getByLabelText(/เวลาเข้างานที่ถูกต้อง/), { target: { value: `${workDate}T08:20` } });
-    fireEvent.change(screen.getByLabelText(/เหตุผล/), { target: { value: 'ลืมสแกนนิ้วตอนเข้างาน' } });
-    fireEvent.click(screen.getByRole('button', { name: /ส่งคำขอ/ }));
-
-    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
   });
 });

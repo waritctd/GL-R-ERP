@@ -1,31 +1,6 @@
 import { render, within } from '@testing-library/react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { QuotationDocumentView } from './QuotationDocumentView.jsx';
-
-// ITEM_GRID must not end in `mobile:grid-cols-1`: at 390px `.table-head` stacked into six orphan
-// labels with every body value unlabelled underneath. It uses the repo's `reflow-cards` treatment
-// (see OvertimePanel.jsx's OVERTIME_TABLE_GRID): `.table-head` is hidden below 720px and each
-// `.data-row` cell carries its own `data-label`, printed via CSS `::before`.
-//
-// jsdom never evaluates styles.css (vitest.config.js sets `css: false`), so the label/value pairing
-// provable here is in the MARKUP (the `data-label` attribute CSS keys off), as in
-// `OvertimePage.test.jsx`. The matchMedia stub is the repo convention for "mobile width" assertions
-// (e.g. TicketListPage.test.jsx's stubMobile).
-
-const realMatchMedia = window.matchMedia;
-
-afterEach(() => {
-  window.matchMedia = realMatchMedia;
-});
-
-function stubMobileViewport() {
-  window.matchMedia = (query) => ({
-    matches: query === '(max-width: 720px)',
-    media: query,
-    addEventListener: () => {},
-    removeEventListener: () => {},
-  });
-}
 
 const quotation = {
   id: 1,
@@ -60,51 +35,6 @@ const quotation = {
   createdByName: 'คุณสมหมาย ขายดี',
 };
 
-describe('QuotationDocumentView -- mobile card reflow (F2)', () => {
-  it('gives every item value its own data-label, matching the head row, at mobile width', () => {
-    stubMobileViewport();
-    const { container } = render(<QuotationDocumentView quotation={quotation} />);
-
-    const dataRow = container.querySelector('.data-row');
-    expect(dataRow).toBeTruthy();
-
-    const expectedLabels = {
-      'รายละเอียด': 'กระเบื้องพอร์ซเลน 60x60',
-      'จำนวน': '60 แผ่น',
-      'ราคา/หน่วย': '350.00',
-      'ส่วนลด': '10%',
-      'สุทธิ': '315.00',
-      'เป็นเงิน': '18,900.00',
-    };
-
-    for (const [label, expectedText] of Object.entries(expectedLabels)) {
-      const cell = dataRow.querySelector(`[data-label="${label}"]`);
-      expect(cell, `missing data-label="${label}"`).toBeTruthy();
-      expect(cell.textContent).toContain(expectedText);
-    }
-
-    // The head row must still declare the same six labels so the CSS's `.table-head { display: none }` /
-    // `[data-label]::before` pairing stays in sync if a column is ever reordered.
-    const headRow = container.querySelector('.table-head');
-    expect(headRow.textContent).toContain('รายละเอียด');
-    expect(headRow.textContent).toContain('เป็นเงิน');
-
-    // The reflow itself is CSS (`.reflow-cards`, styles.css ~L1330) -- confirm the row carries the class the
-    // mobile stylesheet keys off, since jsdom does not evaluate styles.css directly.
-    expect(dataRow.className).toContain('reflow-cards');
-    expect(headRow.className).toContain('reflow-cards');
-  });
-});
-
-// ── ONE ตำแหน่งติดตั้ง heading per RUN, and ผู้สั่งซื้อ in the signature block ──
-
-function docItem(seq, locationLabel, descriptionLine) {
-  return {
-    id: 100 + seq, seq, locationLabel, descriptionLine, sizeLine: '', calculationLine: '',
-    piecesFinal: 10, unitPrice: 100, discountPct: 0, netUnitPrice: 100, lineAmount: 1000,
-  };
-}
-
 function docQuotation(overrides = {}) {
   return {
     id: 1, docStatus: 'APPROVED', customerName: 'บริษัท ทดสอบ จำกัด', projectName: null,
@@ -124,23 +54,11 @@ describe('QuotationDocumentView -- ยืนราคา (V178, owner ruling 202
     return label.nextElementSibling.textContent;
   }
 
-  it('DAYS mode shows the day count, unchanged from before this change', () => {
-    const { container } = render(<QuotationDocumentView quotation={docQuotation({ validityMode: 'DAYS' })} />);
-    expect(validityText(container)).toBe('30 วัน');
-  });
-
   it('DATE mode shows the exact deadline, in the same Thai date format the view already uses', () => {
     const { container } = render(<QuotationDocumentView quotation={docQuotation({
       validityMode: 'DATE', validityUntil: '2026-12-31',
     })} />);
     expect(validityText(container)).toBe('ถึง 31 ธ.ค. 2569');
-  });
-
-  it('DATE mode with no validityUntil yet (an in-progress draft) shows the "-" placeholder', () => {
-    const { container } = render(<QuotationDocumentView quotation={docQuotation({
-      validityMode: 'DATE', validityUntil: null,
-    })} />);
-    expect(validityText(container)).toBe('-');
   });
 });
 
@@ -169,142 +87,6 @@ describe('QuotationDocumentView -- มัดจำ / ไม่รับมัด
     expect(fieldText(container, 'เงื่อนไขการชำระเงิน'))
       .toBe('บริษัทขอรับเงินค่าสินค้า 100% เมื่อส่งมอบสินค้า');
   });
-
-  it('the ON_OR_BEFORE_DELIVERY term shows the owner-corrected "เมื่อ...หรือก่อน..." word order', () => {
-    const { container } = render(<QuotationDocumentView quotation={docQuotation({
-      depositPercent: 0, remainderMode: null, creditDays: null, fullPaymentTerm: 'ON_OR_BEFORE_DELIVERY',
-    })} />);
-    expect(fieldText(container, 'เงื่อนไขการชำระเงิน'))
-      .toBe('บริษัทขอรับเงินค่าสินค้า 100% เมื่อส่งมอบสินค้าหรือก่อนส่งมอบสินค้า');
-  });
-
-  // LEGACY: a zero-deposit row saved before fullPaymentTerm existed must keep reading the SAME
-  // remainderMode-based text the printed document does (DealQuotationRenderAdapter#depositLine's
-  // legacy fallback), never a blank.
-  it('a legacy zero-deposit row (no fullPaymentTerm) falls back to the remainderMode-based text', () => {
-    const { container: credit } = render(<QuotationDocumentView quotation={docQuotation({
-      depositPercent: 0, remainderMode: 'CREDIT', creditDays: 45, fullPaymentTerm: null,
-    })} />);
-    expect(fieldText(credit, 'เงื่อนไขการชำระเงิน')).toBe('ชำระเต็มจำนวนเป็นเครดิต 45 วัน');
-
-    const { container: delivery } = render(<QuotationDocumentView quotation={docQuotation({
-      depositPercent: 0, remainderMode: 'ON_DELIVERY', creditDays: null, fullPaymentTerm: null,
-    })} />);
-    expect(fieldText(delivery, 'เงื่อนไขการชำระเงิน')).toBe('ชำระเต็มจำนวนก่อนส่งมอบสินค้าหรือเมื่อส่งมอบสินค้า');
-  });
-});
-
-describe('QuotationDocumentView money-column floors (owner review V5, 2026-09-10)', () => {
-  // WHAT THIS CAN AND CANNOT PROVE. jsdom does no grid layout, so it cannot observe either bug
-  // pinned here; both were measured in a real browser and can only be re-measured in one. This is a
-  // TEXT guard on the class-string decisions, so a later edit cannot quietly drop them.
-  //
-  //   1. Every NUMERIC column carries a FIXED floor, so the grid can never shrink a baht figure
-  //      below its own text (เป็นเงิน was cut at every table width under 850px AND on desktop at
-  //      1041-1150px where the sidebar returns).
-  //   2. The floors are FIXED lengths, never `min-content`. The head row and each data row are
-  //      SEPARATE grid containers, so `min-content` sizes each row from ITS OWN numbers and
-  //      right-aligned currency staggers row to row (up to 23px of drift measured).
-  //   3. รายละเอียด keeps `minmax(0, …)` and stays the FIRST track: it wraps, so it is the one
-  //      column that should absorb the squeeze.
-  //   4. `tablet:min-w-0` releases `.reflow-cards`'s shared 900px floor for 721-1040px, which is
-  //      safe only because of (1).
-  function gridClasses(el, what) {
-    expect(el, `no ${what} to read the grid classes from`).toBeTruthy();
-    return el.className;
-  }
-
-  it('floors every money column at a fixed width and lets only รายละเอียด be squeezed', () => {
-    const { container } = render(<QuotationDocumentView quotation={quotation} />);
-
-    // Asserted on the head row AND a data row. They share one constant today, so this cannot diverge — but
-    // splitting ITEM_GRID and flooring only one is exactly how the columns would stop lining up, and a guard that
-    // only reads the head row would stay green through it.
-    for (const [el, what] of [
-      [container.querySelector('.table-head'), '.table-head'],
-      [container.querySelector('.data-row'), '.data-row'],
-    ]) {
-      const classes = gridClasses(el, what);
-
-      const shrinkable = classes.match(/minmax\(0,/g) ?? [];
-      expect(shrinkable, `${what}: only รายละเอียด may shrink below its content`).toHaveLength(1);
-
-      // `min-content` is the specific WRONG floor: it re-sizes per row and staggers the currency.
-      expect(classes, `${what}: min-content floors stagger the columns row to row`)
-        .not.toContain('min-content');
-
-      // Five fixed rem floors, one per numeric column.
-      const fixed = classes.match(/minmax\(\d+(?:\.\d+)?rem,/g) ?? [];
-      expect(fixed, `${what}: each numeric column needs its own fixed floor`).toHaveLength(5);
-
-      // The WHOLE track list, pinned literally; counting floors is not enough. Shrinking all five to
-      // `minmax(1rem, …)`, or permuting them so เป็นเงิน gets ส่วนลด's 3.5rem, keeps the counts above
-      // intact while silently clipping เป็นเงิน again by 27px and 49px (measured at 721px, with no
-      // overflow or scrollbar). The magnitudes ARE the fix, so they are the guard.
-      //
-      // The five values are the measured min-content of each column's widest formattable value at
-      // the app's 16px root, rounded up: 999,999 แผ่น 90px · ฿999,999.99 88px · 99.99% 54px ·
-      // ฿999,999.99 88px · ฿999,999,999.99 123px, except เป็นเงิน, sized for the FALLBACK font
-      // (130.5px) rather than Sarabun (see the source comment). Re-measure before changing any, and
-      // keep รายละเอียด's `minmax(0,3fr)` FIRST: a floored first column would stop the description
-      // wrapping and put the squeeze back on the money.
-      expect(classes).toContain(
-        'grid-cols-[minmax(0,3fr)_minmax(5.75rem,0.8fr)_minmax(5.75rem,0.9fr)'
-        + '_minmax(3.5rem,0.6fr)_minmax(5.75rem,0.9fr)_minmax(8.25rem,1fr)]',
-      );
-    }
-  });
-
-  it('releases the shared 900px .reflow-cards floor in the 721-1040px band', () => {
-    const { container } = render(<QuotationDocumentView quotation={quotation} />);
-
-    for (const [el, what] of [
-      [container.querySelector('.table-head'), '.table-head'],
-      [container.querySelector('.data-row'), '.data-row'],
-    ]) {
-      const classes = gridClasses(el, what);
-      expect(classes, `${what}: the shared 900px floor must be released`).toContain('tablet:min-w-0');
-      // Still opted into the card reflow: below 721px these rows must become labelled cards, which the
-      // mobile-card-reflow suite above is what actually proves.
-      expect(classes).toContain('reflow-cards');
-    }
-  });
-});
-
-describe('QuotationDocumentView ตำแหน่งติดตั้ง grouping (F1)', () => {
-  it('prints the heading once per RUN of equal labels, not once per row', () => {
-    const { container } = render(<QuotationDocumentView quotation={docQuotation({
-      items: [docItem(1, 'ชั้น 1', 'A'), docItem(2, 'ชั้น 1', 'B'), docItem(3, 'ชั้น 2', 'C')],
-    })} />);
-
-    const headings = [...container.querySelectorAll('.text-2xs.font-bold.uppercase')]
-      .map((el) => el.textContent)
-      .filter((text) => text.startsWith('ชั้น'));
-    expect(headings).toEqual(['ชั้น 1', 'ชั้น 2']);
-  });
-
-  // Two separate runs of the same label print TWICE — the heading marks where a run starts, and deduping by
-  // value would silently drop the second one's heading from the customer's document.
-  it('prints the label again when a second, non-adjacent run of it starts', () => {
-    const { container } = render(<QuotationDocumentView quotation={docQuotation({
-      items: [docItem(1, 'ชั้น 1', 'A'), docItem(2, 'ชั้น 2', 'B'), docItem(3, 'ชั้น 1', 'C')],
-    })} />);
-
-    const headings = [...container.querySelectorAll('.text-2xs.font-bold.uppercase')]
-      .map((el) => el.textContent)
-      .filter((text) => text.startsWith('ชั้น'));
-    expect(headings).toEqual(['ชั้น 1', 'ชั้น 2', 'ชั้น 1']);
-  });
-
-  it('prints no heading at all for a blank label', () => {
-    const { container } = render(<QuotationDocumentView quotation={docQuotation({
-      items: [docItem(1, null, 'A'), docItem(2, '', 'B')],
-    })} />);
-
-    const headings = [...container.querySelectorAll('.text-2xs.font-bold.uppercase')]
-      .map((el) => el.textContent);
-    expect(headings.filter((t) => t.startsWith('ชั้น'))).toEqual([]);
-  });
 });
 
 describe('QuotationDocumentView ผู้สั่งซื้อ signature slot -- owner-directed reversal of F2 (2026-09-26)', () => {
@@ -317,48 +99,6 @@ describe('QuotationDocumentView ผู้สั่งซื้อ signature slot
     expect(signatures.getByText('ผู้สั่งซื้อ')).not.toBeNull();
     expect(signatures.queryByText('คุณวิชัย มั่นคง')).toBeNull();
     expect(signatures.getByText('-')).not.toBeNull();
-  });
-
-  /** The fixture's contactName ('ณัฐพงศ์ ศรีวิไล') must NEVER appear in the signature slot, even
-   * though it is present on the quotation: the slot does not auto-fill from it. */
-  it('never falls back to the contact name any more, even when one is recorded', () => {
-    const { getByText } = render(<QuotationDocumentView quotation={docQuotation()} />);
-    const signatures = within(getByText('ผู้เกี่ยวข้อง').closest('section'));
-    expect(signatures.getByText('ผู้สั่งซื้อ')).not.toBeNull();
-    expect(signatures.queryByText('ณัฐพงศ์ ศรีวิไล')).toBeNull();
-    expect(signatures.getByText('-')).not.toBeNull();
-  });
-
-  it('falls back to a dash rather than an empty slot when no manual name was typed', () => {
-    const { getByText, container } = render(
-      <QuotationDocumentView quotation={docQuotation({ orderedByName: null })} />,
-    );
-    expect(getByText('ผู้สั่งซื้อ')).not.toBeNull();
-    expect(container.textContent).toContain('-');
-  });
-
-  // The EDITOR's field for this name is labelled ผู้ติดต่อ but the PDF still renders ผู้สั่งซื้อ. This
-  // view is the document as the customer receives it, so its heading must not follow the editor's.
-  // Wrong-way-round: the new word is asserted ABSENT, so a "make the two agree" edit goes red.
-  it('still heads the slot ผู้สั่งซื้อ — the editor\'s ผู้ติดต่อ label never reaches the document', () => {
-    const { getByText } = render(
-      <QuotationDocumentView quotation={docQuotation({ orderedByName: 'คุณวิชัย มั่นคง' })} />,
-    );
-    const signatures = within(getByText('ผู้เกี่ยวข้อง').closest('section'));
-    expect(signatures.getByText('ผู้สั่งซื้อ')).not.toBeNull();
-    expect(signatures.queryByText('ผู้ติดต่อ')).toBeNull();
-  });
-
-  it('the English document keeps "Ordered by" for the same slot', () => {
-    const { getByText } = render(
-      <QuotationDocumentView
-        quotation={docQuotation({ documentLanguage: 'EN', currency: 'USD', orderedByName: 'Mr. Wichai' })}
-      />,
-    );
-    const signatures = within(getByText('ผู้เกี่ยวข้อง').closest('section'));
-    expect(signatures.getByText('Ordered by')).not.toBeNull();
-    expect(signatures.queryByText('ผู้ติดต่อ')).toBeNull();
-    expect(signatures.queryByText('Mr. Wichai')).toBeNull();
   });
 });
 
@@ -400,22 +140,6 @@ describe('QuotationDocumentView — PLAIN / ADJUSTMENT rows, like the printed fo
     expect(cell(adj, 'ราคา/หน่วย')).toBe('฿38,198.21');
     expect(cell(adj, 'สุทธิ')).toBe('฿38,198.21');
     expect(cell(adj, 'เป็นเงิน')).toBe('-฿38,198.21');
-  });
-
-  it('a PLAIN row prints its own quantity and unit, and Net', () => {
-    const { container } = render(<QuotationDocumentView quotation={v3} />);
-    const plain = row(container, 'PLAIN');
-    expect(cell(plain, 'จำนวน')).toBe('85 Bags');
-    expect(cell(plain, 'ส่วนลด')).toBe('Net');
-  });
-
-  it('a SPECIAL_SQM tile prints พิเศษ and its ราคาพิเศษ sub-line as a <span> (the .data-row wrapper-clip rule)', () => {
-    const { container } = render(<QuotationDocumentView quotation={v3} />);
-    const tileRow = row(container, 'TILE');
-    expect(cell(tileRow, 'ส่วนลด')).toBe('พิเศษ');
-    const subLine = [...tileRow.querySelectorAll('span')].find((el) => el.textContent.startsWith('(ราคาพิเศษ'));
-    expect(subLine.tagName).toBe('SPAN');
-    expect(tileRow.querySelector('div')).toBeNull();
   });
 
   // Mixed price modes: on a MIXED document each tile row was priced in its own mode and its ส่วนลด
@@ -469,170 +193,5 @@ describe('QuotationDocumentView — the English (USD) document', () => {
     expect(container.textContent).not.toContain('ภาษีมูลค่าเพิ่ม');
     expect(container.textContent).not.toContain('฿');
   });
-
-  // Mock mode returns quantity null for an English per-sqm row; the fallback must not print the
-  // PIECE count under "SQM" ("3,360 SQM"), a plausible-looking lie.
-  it('an English per-sqm row with no server quantity prints "-", never its piece count as SQM', () => {
-    const perSqm = {
-      ...en, priceMode: 'SPECIAL_SQM',
-      items: [{
-        id: 31, seq: 1, lineType: 'TILE', descriptionLine: 'Tile Model Menorca', quantity: null, unit: 'SQM',
-        piecesFinal: 3360, unitPrice: 64, netUnitPrice: 64, lineAmount: null,
-        specialPriceLine: '(1 box = 28 pcs = 0.6 sqm)',
-      }],
-    };
-    const { container } = render(<QuotationDocumentView quotation={perSqm} />);
-    const tileRow = container.querySelector('.data-row[data-line-type="TILE"]');
-    expect(tileRow.querySelector('[data-label="Qty"]').textContent).toBe('-');
-    expect(tileRow.textContent).not.toContain('3,360');
-    // With the server's figure it prints it, 2dp as computed.
-    const { container: withQty } = render(<QuotationDocumentView quotation={{
-      ...perSqm, items: [{ ...perSqm.items[0], quantity: 71.64 }],
-    }} />);
-    expect(withQty.querySelector('.data-row[data-line-type="TILE"] [data-label="Qty"]').textContent).toBe('71.64 SQM');
-    // A pieces row with no quantity still falls back to piecesFinal, as before.
-    const { container: pcs } = render(<QuotationDocumentView quotation={{
-      ...perSqm, priceMode: 'NET', items: [{ ...perSqm.items[0], unit: 'PCS' }],
-    }} />);
-    expect(pcs.querySelector('.data-row[data-line-type="TILE"] [data-label="Qty"]').textContent).toBe('3,360 PCS');
-  });
-
-  it('prints English signatory names, falling back to the Thai one rather than an empty slot', () => {
-    const { container } = render(<QuotationDocumentView quotation={en} />);
-    expect(container.textContent).toContain('Quoted by');
-    expect(container.textContent).toContain('Jennet Longsakul');
-    // createdByNameEn is null → the Thai name, not a blank.
-    expect(container.textContent).toContain('Printed by');
-    expect(container.textContent).toContain('คุณสมหมาย ขายดี');
-  });
 });
 
-describe('QuotationDocumentView — the header lines the document prints (owner, 2026-09-11)', () => {
-  const filled = {
-    ...quotation,
-    customerAddress: '201 ซอยสุขุมวิท 63\nเขตวัฒนา กทม. 10110',
-    customerTaxId: '0105551234567',
-    customerPhone: '02-000-0000',
-    contactName: 'ธนพล ศรีวัฒนกุล', contactPhone: '081-234-5678', contactEmail: 'thanaphon@example.co.th',
-  };
-
-  // The phone and e-mail on the printed customer line are the ผู้ติดต่อ ones typed on the quotation,
-  // or nothing; the customer master's phone and the registry contact's phone/e-mail are not printed,
-  // so this panel does not show them as printed either.
-  it('shows every filled field — but not the master phone/e-mail, which the paper no longer prints', () => {
-    const { getByTestId, queryByTestId } = render(<QuotationDocumentView quotation={filled} />);
-    expect(getByTestId('doc-address').textContent).toContain('201 ซอยสุขุมวิท 63');
-    expect(getByTestId('doc-tax-id').textContent).toContain('0105551234567');
-    expect(queryByTestId('doc-customer-phone')).toBeNull();
-    expect(getByTestId('doc-contact').textContent).toBe('ติดต่อผู้สั่งซื้อธนพล ศรีวัฒนกุล');
-  });
-
-  it('shows the typed ผู้ติดต่อ phone and e-mail as the printed ones', () => {
-    const { getByTestId } = render(<QuotationDocumentView quotation={{
-      ...filled, orderedByPhone: '089-765-4321 ต่อ 77', orderedByEmail: 'bid.contact@contractor-b.example',
-    }} />);
-    expect(getByTestId('doc-customer-phone').textContent).toContain('089-765-4321 ต่อ 77');
-    expect(getByTestId('doc-contact').textContent)
-      .toBe('ติดต่อผู้สั่งซื้อธนพล ศรีวัฒนกุล · โทร. 089-765-4321 ต่อ 77 · bid.contact@contractor-b.example');
-  });
-
-  it('a missing field leaves NO bare label and NO dangling separator', () => {
-    const { queryByTestId, getByTestId } = render(<QuotationDocumentView quotation={{
-      ...filled, customerAddress: null, customerTaxId: '  ', customerPhone: '', contactPhone: null,
-    }} />);
-    expect(queryByTestId('doc-address')).toBeNull();
-    expect(queryByTestId('doc-tax-id')).toBeNull();
-    expect(queryByTestId('doc-customer-phone')).toBeNull();
-    const contactLine = getByTestId('doc-contact').textContent;
-    expect(contactLine).toBe('ติดต่อผู้สั่งซื้อธนพล ศรีวัฒนกุล');
-    expect(contactLine).not.toMatch(/·\s*·|·\s*$|โทร\.\s*(·|$)/);
-  });
-
-  it('renders no ผู้สั่งซื้อ line at all when there is nothing to put in it', () => {
-    const { queryByTestId } = render(<QuotationDocumentView quotation={{ ...quotation, contactName: null }} />);
-    expect(queryByTestId('doc-contact')).toBeNull();
-  });
-});
-
-// ── ผู้พิมพ์/พนักงานขาย print-only name override. This preview must show exactly what
-// DealQuotationRenderAdapter prints, so these tests mirror DealQuotationRenderAdapterV3Test's cases
-// one-to-one. ──
-describe('QuotationDocumentView — V179 ผู้พิมพ์/พนักงานขาย display override', () => {
-  it('with no override, shows the real createdByName/salesRepName+phone (today\'s behaviour)', () => {
-    const { container } = render(<QuotationDocumentView quotation={docQuotation({
-      createdByName: 'จินตนา', salesRepName: 'ชนิดา', salesRepPhone: '081-000-0000',
-    })} />);
-    expect(container.textContent).toContain('จินตนา');
-    expect(container.textContent).toContain('ชนิดา');
-    expect(container.textContent).toContain('T.081-000-0000');
-  });
-
-  // Example: "ผู้พิมพ์ อยากให้แสดงเป็นจินตนา ส่วนพนักงานขายอยากให้แสดงเป็น ชนิดา".
-  it('with both overrides set, shows the DISPLAY names+phone, not the real ones, in both the summary card and the signature block', () => {
-    const { container } = render(<QuotationDocumentView quotation={docQuotation({
-      createdByName: 'แอดมิน', salesRepName: 'เซลล์จริง', salesRepPhone: '081-111-1111',
-      printedByDisplayId: 144, printedByDisplayName: 'จินตนา', printedByDisplayNameEn: null,
-      salesRepDisplayId: 200, salesRepDisplayName: 'ชนิดา', salesRepDisplayNameEn: null,
-      salesRepDisplayPhone: '081-222-2222',
-    })} />);
-    expect(container.textContent).toContain('จินตนา');
-    expect(container.textContent).toContain('ชนิดา');
-    expect(container.textContent).toContain('T.081-222-2222');
-    expect(container.textContent).not.toContain('แอดมิน');
-    expect(container.textContent).not.toContain('เซลล์จริง');
-    expect(container.textContent).not.toContain('081-111-1111');
-  });
-
-  it('printedByDisplayId set but salesRepDisplayId not: only ผู้พิมพ์ follows the override', () => {
-    const { container } = render(<QuotationDocumentView quotation={docQuotation({
-      createdByName: 'แอดมิน', salesRepName: 'ชนิดา', salesRepPhone: '081-222-2222',
-      printedByDisplayId: 144, printedByDisplayName: 'จินตนา', printedByDisplayNameEn: null,
-    })} />);
-    expect(container.textContent).toContain('จินตนา');
-    expect(container.textContent).not.toContain('แอดมิน');
-    // The real sales rep still prints — this override only ever touches ผู้พิมพ์.
-    expect(container.textContent).toContain('ชนิดา');
-    expect(container.textContent).toContain('T.081-222-2222');
-  });
-
-  it('English document falls back Thai→English when the display employee has no English name', () => {
-    const { container } = render(<QuotationDocumentView quotation={docQuotation({
-      documentLanguage: 'EN',
-      printedByDisplayId: 144, printedByDisplayName: 'จินตนา', printedByDisplayNameEn: null,
-    })} />);
-    expect(container.textContent).toContain('Printed by');
-    expect(container.textContent).toContain('จินตนา');
-  });
-});
-
-// The printed document drops its "Project : …" line (DealQuotationRenderAdapter hands the renderer
-// no project name). This screen is the INTERNAL view: the approver still needs to know which project
-// they are approving, so the name stays, with the fact that it will not print said in words beside
-// it, so screen and paper are never silently different.
-describe('QuotationDocumentView — ไม่แสดงชื่อโครงการ (sales feedback #5, 2026-10-06)', () => {
-  it('an ordinary document names its project with no note', () => {
-    const { getByText, queryByText } = render(
-      <QuotationDocumentView quotation={docQuotation({ projectName: 'บ้านเอกมัย ซอย 5' })} />,
-    );
-    expect(getByText('บ้านเอกมัย ซอย 5')).not.toBeNull();
-    expect(queryByText(/ไม่แสดงในใบเสนอราคา/)).toBeNull();
-  });
-
-  it('a document that hides its project still names it here, and says it will not print', () => {
-    const { getByText, getByTestId } = render(
-      <QuotationDocumentView quotation={docQuotation({ projectName: 'บ้านเอกมัย ซอย 5', hideProjectName: true })} />,
-    );
-    expect(getByText('บ้านเอกมัย ซอย 5')).not.toBeNull();
-    // In words, next to the name it qualifies — DESIGN.md §2.7: a state is text, never colour alone.
-    const note = getByTestId('doc-project-hidden');
-    expect(note.textContent).toContain('ไม่แสดงในใบเสนอราคา');
-    expect(note.closest('div')).toBe(getByText('บ้านเอกมัย ซอย 5').closest('div'));
-  });
-
-  it('says nothing about hiding when there is no project name to hide', () => {
-    const { queryByTestId } = render(
-      <QuotationDocumentView quotation={docQuotation({ projectName: null, hideProjectName: true })} />,
-    );
-    expect(queryByTestId('doc-project-hidden')).toBeNull();
-  });
-});

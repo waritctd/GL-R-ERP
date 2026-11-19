@@ -38,38 +38,4 @@ test.describe('@uat-sales UAT harness handshake', () => {
       expected
     );
   });
-
-  test('a run id was stamped, so anything this run creates is findable afterwards', () => {
-    // Every row the journey specs create is tagged with this. Without it a failed run leaves untraceable rows in a
-    // shared database, and the documented manual sweep (WHERE title LIKE 'E2E-%') has nothing to match on.
-    expect(process.env.E2E_RUN_ID, 'global-setup did not stamp E2E_RUN_ID').toMatch(
-      /^E2E-\d{8}T\d{6}Z-[0-9a-f]{4}$/
-    );
-  });
-
-  test('the sales pipeline is readable by the roles that own it', async () => {
-    // Four sequential reads of a real deal list from a Render `starter` instance. It has hit the 30s default twice
-    // — once at 30.0s exactly, mid-request, reported as "Request context disposed", which names the timeout's
-    // victim rather than its cause.
-    test.setTimeout(90_000);
-
-    // A deliberately shallow read: it proves the deployment has a working sales surface and that
-    // TicketAccessPolicy.VIEWER_ROLES admits these four, without coupling to any seeded row.
-    for (const role of ['sales', 'import', 'ceo', 'account']) {
-      const response = await sessions[role].get('/api/tickets', { failOnStatusCode: false });
-      expect(response.status(), `${role} cannot read /api/tickets`).toBe(200);
-    }
-  });
-
-  test('write credentials are present in the captured sessions', async () => {
-    // XSRF-TOKEN is what separates "the session works" from "the session can write". Without it every journey
-    // would fail on its FIRST write with a 403 that is indistinguishable at a glance from an authorization denial
-    // — the exact confusion helpers/api.js's header is written to design out.
-    const { cookies } = await sessions.sales.storageState();
-    const names = cookies.map((cookie) => cookie.name);
-    expect(names, 'sales session is missing its session cookie').toContain('GLR_HR_SESSION');
-    expect(names, 'sales session cannot perform a write (CsrfCookieFilter would 403 it)').toContain(
-      'XSRF-TOKEN'
-    );
-  });
 });

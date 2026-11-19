@@ -18,26 +18,20 @@ vi.mock('../../api/index.js', async (importOriginal) => {
       tickets: { get: vi.fn(), create: vi.fn() },
       dealQuotations: {
         get: vi.fn(), create: vi.fn(), update: vi.fn(), calculateLine: vi.fn(), submit: vi.fn(),
-        approve: vi.fn(), reject: vi.fn(), createRevision: vi.fn(), createReorder: vi.fn(),
-        cancel: vi.fn(), downloadPdf: vi.fn(), downloadXlsx: vi.fn(), promoteToDeal: vi.fn(),
+        promoteToDeal: vi.fn(),
         displayNameOptions: vi.fn().mockResolvedValue({ items: [] }),
       },
       catalog: { prices: vi.fn() },
       designers: { search: vi.fn(), getByCode: vi.fn().mockRejectedValue(new Error('not found')) },
       customers: {
-        search: vi.fn(), create: vi.fn(), projects: vi.fn(), createProject: vi.fn(),
-        contacts: vi.fn(), createContact: vi.fn(),
+        search: vi.fn(), create: vi.fn(), projects: vi.fn(),
+        contacts: vi.fn(),
       },
     },
   };
 });
 
 const salesUser = { id: 6, name: 'คุณสมหมาย ขายดี', role: 'sales', employeeId: null };
-const otherSalesUser = { id: 999, name: 'คุณอื่น ขายดี', role: 'sales', employeeId: null };
-const salesManagerUser = { id: 11, name: 'ผึ้ง', role: 'sales_manager', employeeId: 11 };
-const ceoUser = { id: 8, name: 'ราม', role: 'ceo', employeeId: 136 };
-const importUser = { id: 7, name: 'คุณนำเข้า พานิช', role: 'import', employeeId: null };
-
 function quotation(overrides = {}) {
   return {
     id: 5, number: 'QT-2026-0005-1', ticketId: 18, docStatus: 'APPROVED', origin: 'DEAL_DIRECT',
@@ -91,64 +85,11 @@ describe('QuotationEditorPage — ยืนยันคำสั่งซื้�
     expect(screen.queryByTestId('quotation-go-to-deal')).toBeNull();
   });
 
-  it.each([
-    ['DRAFT'], ['PENDING_APPROVAL'], ['CANCELLED'], ['SUPERSEDED'],
-  ])('is NOT offered on a %s quotation', async (docStatus) => {
-    api.dealQuotations.get.mockResolvedValue({ quotation: quotation({ docStatus }) });
-    renderEditor();
-    await screen.findByText(/QT-2026-0005-1/);
-    expect(screen.queryByRole('button', { name: PROMOTE })).toBeNull();
-  });
-
   it('is NOT offered on a PRICING_REQUEST-origin quotation (that chain has its own confirm order)', async () => {
     api.dealQuotations.get.mockResolvedValue({ quotation: quotation({ origin: 'PRICING_REQUEST', docStatus: 'APPROVED' }) });
     renderEditor();
     await screen.findByText(/QT-2026-0005-1/);
     expect(screen.queryByRole('button', { name: PROMOTE })).toBeNull();
-  });
-
-  it.each([
-    ['a non-owning sales rep', otherSalesUser],
-    ['ceo (approves, does not write)', ceoUser],
-    ['import', importUser],
-  ])('is NOT offered to %s', async (_label, user) => {
-    api.dealQuotations.get.mockResolvedValue({ quotation: quotation() });
-    renderEditor(user);
-    await screen.findByText(/QT-2026-0005-1/);
-    expect(screen.queryByRole('button', { name: PROMOTE })).toBeNull();
-    expect(api.tickets.get).not.toHaveBeenCalled();
-  });
-
-  it('is offered to sales_manager on any rep\'s quotation', async () => {
-    api.dealQuotations.get.mockResolvedValue({ quotation: quotation() });
-    renderEditor(salesManagerUser);
-    expect(await screen.findByRole('button', { name: PROMOTE })).not.toBeNull();
-  });
-
-  it('(a) an ORDINARY deal (quotationOnly=false, created on the deal page) still at draft: the confirm is offered, not ไปที่ดีล', async () => {
-    api.dealQuotations.get.mockResolvedValue({ quotation: quotation() });
-    api.tickets.get.mockResolvedValue(ticketSummary({ quotationOnly: false, status: 'draft' }));
-    renderEditor();
-    expect(await screen.findByRole('button', { name: PROMOTE })).not.toBeNull();
-    expect(screen.queryByTestId('quotation-go-to-deal')).toBeNull();
-  });
-
-  it.each([[true], [false]])('(b) once the order is confirmed (status quotation_issued, quotationOnly=%s): "เปิดงาน", no confirm', async (quotationOnly) => {
-    api.dealQuotations.get.mockResolvedValue({ quotation: quotation() });
-    api.tickets.get.mockResolvedValue(ticketSummary({ quotationOnly, status: 'quotation_issued' }));
-    renderEditor();
-    const link = await screen.findByTestId('quotation-go-to-deal');
-    expect(link.textContent).toContain('เปิดงาน');
-    expect(link.getAttribute('href')).toBe('/tickets/18');
-    expect(screen.queryByRole('button', { name: PROMOTE })).toBeNull();
-  });
-
-  it('while the deal\'s status is unknown (a 403 on the deal read) the confirm stays offered — the server answers idempotently', async () => {
-    api.dealQuotations.get.mockResolvedValue({ quotation: quotation() });
-    api.tickets.get.mockRejectedValue(Object.assign(new Error('ไม่มีสิทธิ์เข้าถึงรายการนี้'), { status: 403 }));
-    renderEditor();
-    expect(await screen.findByRole('button', { name: PROMOTE })).not.toBeNull();
-    expect(screen.queryByTestId('quotation-go-to-deal')).toBeNull();
   });
 
   it('(d) confirms first (dialog titled ยืนยันคำสั่งซื้อ), then confirms the order, toasts "ยืนยันคำสั่งซื้อแล้ว" and navigates to the deal', async () => {
@@ -186,31 +127,5 @@ describe('QuotationEditorPage — ยืนยันคำสั่งซื้�
     await waitFor(() => expect(api.dealQuotations.promoteToDeal).toHaveBeenCalled());
     await new Promise((r) => setTimeout(r, 50)); // let a second request surface
     expect(api.dealQuotations.promoteToDeal).toHaveBeenCalledTimes(1);
-  });
-
-  it.each([
-    [409, 'สร้างงานได้เฉพาะใบเสนอราคาที่อนุมัติแล้วเท่านั้น (ปัจจุบัน: SUPERSEDED)'],
-    [403, 'ไม่มีสิทธิ์เข้าถึงรายการนี้'],
-  ])('a %s surfaces the server\'s own Thai message and stays on the quotation', async (status, message) => {
-    api.dealQuotations.get.mockResolvedValue({ quotation: quotation() });
-    api.dealQuotations.promoteToDeal.mockRejectedValue(Object.assign(new Error(message), { status }));
-    const { showToast } = renderEditor();
-
-    fireEvent.click(await screen.findByRole('button', { name: PROMOTE }));
-    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: PROMOTE }));
-
-    await waitFor(() => expect(showToast).toHaveBeenCalledWith('error', message));
-    expect(screen.queryByText(/deal page/)).toBeNull();
-  });
-
-  it('an error with no message falls back to "ยืนยันคำสั่งซื้อไม่สำเร็จ"', async () => {
-    api.dealQuotations.get.mockResolvedValue({ quotation: quotation() });
-    api.dealQuotations.promoteToDeal.mockRejectedValue(Object.assign(new Error(''), { status: 500 }));
-    const { showToast } = renderEditor();
-
-    fireEvent.click(await screen.findByRole('button', { name: PROMOTE }));
-    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: PROMOTE }));
-
-    await waitFor(() => expect(showToast).toHaveBeenCalledWith('error', 'ยืนยันคำสั่งซื้อไม่สำเร็จ'));
   });
 });

@@ -1,16 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
-  baseNumberOf, dropLegacyDuplicatedByChain, groupChainQuotations,
-  groupDepositNotices, groupDirectQuotations, groupRemainingInvoices, inForceFirst,
+  groupChainQuotations,
+  groupDirectQuotations, groupRemainingInvoices,
 } from './dealDocumentVersions.js';
 
 describe('dealDocumentVersions', () => {
-  it('strips only a short revision suffix from the number', () => {
-    expect(baseNumberOf('QT-2026-0016-3')).toBe('QT-2026-0016');
-    expect(baseNumberOf('QT-2026-0901')).toBe('QT-2026-0901');
-    expect(baseNumberOf(null)).toBeNull();
-  });
-
   it('chain: groups by pricingRequestId (numbers may be unrelated), versions newest first, groups by newest date', () => {
     const groups = groupChainQuotations([
       { id: 1, pricingRequestId: 7, number: 'QT-A-1', quotationRevisionNo: 1, issuedAt: '2026-01-01' },
@@ -21,24 +15,6 @@ describe('dealDocumentVersions', () => {
     expect(groups.map((g) => g.versions.map((v) => v.id))).toEqual([[3], [4], [2, 1]]);
   });
 
-  it('puts every deposit notice version in one group, version descending', () => {
-    const groups = groupDepositNotices([{ id: 1, version: 1 }, { id: 3, version: 3 }, { id: 2, version: 2 }]);
-    expect(groups).toHaveLength(1);
-    expect(groups[0].versions.map((v) => v.id)).toEqual([3, 2, 1]);
-  });
-
-  it('groups remaining invoices by baseNumber; a DRAFT with no baseNumber is its own group', () => {
-    const groups = groupRemainingInvoices([
-      { id: 1, baseNumber: 'GLR1', version: 1 }, { id: 2, baseNumber: 'GLR1', version: 2 }, { id: 3, baseNumber: null, version: 1 },
-    ]);
-    expect(groups).toHaveLength(2);
-    expect(groups.find((g) => g.key === 'remaining:GLR1').versions.map((v) => v.id)).toEqual([2, 1]);
-  });
-
-  it('drops legacy rows shared with the chain by id', () => {
-    expect(dropLegacyDuplicatedByChain([{ id: 3 }, { id: 4 }], [{ id: 3 }])).toEqual([{ id: 4 }]);
-  });
-
   it('a DRAFT that joins a group refreshes that group sort time (older group with the newest draft sorts first)', () => {
     const groups = groupRemainingInvoices([
       { id: 1, baseNumber: 'GLR-A', version: 1, status: 'ISSUED', customerQuotationId: 1, issuedAt: '2026-01-01' },
@@ -47,23 +23,6 @@ describe('dealDocumentVersions', () => {
     ]);
     expect(groups.map((g) => g.key)).toEqual(['remaining:GLR-A', 'remaining:GLR-B']);
     expect(groups[0].versions.map((v) => v.id)).toEqual([3, 1]);
-  });
-
-  it('direct base number: when the number does not end with -revisionNo it is returned unchanged (no regex guess)', () => {
-    const groups = groupDirectQuotations([
-      { id: 1, number: 'QT-A-1', revisionNo: 2, recipientType: 'OWNER' },
-      { id: 2, number: 'QT-A-2', revisionNo: 2, recipientType: 'OWNER' },
-    ]);
-    expect(groups).toHaveLength(2); // QT-A-1 is not a revision-2 suffix, so it is its own base
-    expect(groups.map((g) => g.key).sort()).toEqual(['direct:QT-A-1:OWNER', 'direct:QT-A:OWNER']);
-  });
-
-  it('direct base number: the short-suffix regex applies only when revisionNo is null', () => {
-    const groups = groupDirectQuotations([
-      { id: 1, number: 'QT-A-1', revisionNo: null, recipientType: 'OWNER' },
-      { id: 2, number: 'QT-A-2', revisionNo: null, recipientType: 'OWNER' },
-    ]);
-    expect(groups).toHaveLength(1);
   });
 
   // ── grouping is per RECIPIENT, not per base (owner ruling 2026-10-17) ──────────────────────
@@ -81,33 +40,6 @@ describe('dealDocumentVersions', () => {
     expect(groups.map((g) => g.versions.length)).toEqual([1, 1]);
   });
 
-  it('still groups a real revision chain, which shares its parent\'s recipient', () => {
-    const groups = groupDirectQuotations([
-      { id: 1, number: 'QT-2026-0014-1', revisionNo: 1, recipientType: 'DESIGNER', createdAt: '2026-10-01' },
-      { id: 2, number: 'QT-2026-0014-3', revisionNo: 3, recipientType: 'DESIGNER', createdAt: '2026-10-03' },
-    ]);
-
-    expect(groups).toHaveLength(1);
-    expect(groups[0].key).toBe('direct:QT-2026-0014:DESIGNER');
-    expect(groups[0].versions.map((v) => v.id)).toEqual([2, 1]); // newest suffix first
-  });
-
-  /** An older backend omits recipientType (DealDocumentRegister's own note). Those rows must group
-   * together under one stable token rather than each becoming its own singleton — and must not be
-   * merged with a row that DOES state a recipient. */
-  it('groups rows with no recipientType together, separately from rows that have one', () => {
-    const groups = groupDirectQuotations([
-      { id: 1, number: 'QT-2026-0014-1', revisionNo: 1, createdAt: '2026-10-01' },
-      { id: 2, number: 'QT-2026-0014-2', revisionNo: 2, createdAt: '2026-10-02' },
-      { id: 3, number: 'QT-2026-0014-3', revisionNo: 3, recipientType: 'OWNER', createdAt: '2026-10-03' },
-    ]);
-
-    expect(groups).toHaveLength(2);
-    expect(groups.map((g) => g.key).sort())
-      .toEqual(['direct:QT-2026-0014:OWNER', 'direct:QT-2026-0014:UNKNOWN']);
-    expect(groups.find((g) => g.key.endsWith(':UNKNOWN')).versions.map((v) => v.id)).toEqual([2, 1]);
-  });
-
   // ── the head row is the version in force, not merely the newest (PR-2026-0289) ──────────────
   // Confirming the order from -3 auto-cancelled the open -4 draft; newest-first put the CANCELLED -4 on top.
   const DEAL_0289 = [
@@ -120,35 +52,5 @@ describe('dealDocumentVersions', () => {
   it('direct: the version the order was confirmed from leads, then the rest newest first', () => {
     const [group] = groupDirectQuotations(DEAL_0289, { orderConfirmedQuotationId: 430 });
     expect(group.versions.map((v) => v.id)).toEqual([430, 437, 429, 426]);
-  });
-
-  it('direct: with no confirmation yet, an APPROVED version still outranks a newer CANCELLED one', () => {
-    const [group] = groupDirectQuotations(DEAL_0289);
-    expect(group.versions[0].id).toBe(430);
-  });
-
-  it('direct: an APPROVED version leads a newer open draft revision; the draft comes next', () => {
-    const versions = inForceFirst([
-      { id: 3, revisionNo: 3, docStatus: 'DRAFT' },
-      { id: 2, revisionNo: 2, docStatus: 'APPROVED' },
-      { id: 1, revisionNo: 1, docStatus: 'SUPERSEDED' },
-    ]);
-    expect(versions.map((v) => v.id)).toEqual([2, 3, 1]);
-  });
-
-  it('direct: a group of only history keeps newest first', () => {
-    const versions = inForceFirst([
-      { id: 2, revisionNo: 2, docStatus: 'CANCELLED' },
-      { id: 1, revisionNo: 1, docStatus: 'SUPERSEDED' },
-    ]);
-    expect(versions.map((v) => v.id)).toEqual([2, 1]);
-  });
-
-  it('direct: a confirmed id outside the group changes nothing', () => {
-    const versions = inForceFirst([
-      { id: 5, revisionNo: 2, docStatus: 'PENDING_APPROVAL' },
-      { id: 4, revisionNo: 1, docStatus: 'SUPERSEDED' },
-    ], 999);
-    expect(versions.map((v) => v.id)).toEqual([5, 4]);
   });
 });

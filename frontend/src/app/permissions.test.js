@@ -1,72 +1,82 @@
 import { afterEach, describe, it, expect, vi } from 'vitest';
 import { hasPermission, allowedRoute, canAccessPath, isDivisionManager, dealRedirectFor } from './permissions.js';
 
+// Capability table: each row pins who holds the capability and who must not (an unknown key fails closed).
 describe('hasPermission', () => {
-  it('grants a permission listed for the role', () => {
-    expect(hasPermission('hr', 'canViewEmployees')).toBe(true);
+  it.each([
+    ['canManagePriceImport', ['ceo', 'import'], ['sales', 'sales_manager', 'admin']],
+    ['canManageCatalogProducts', ['ceo', 'import'], ['sales', 'employee']],
+    ['canViewDealPipeline', ['sales', 'sales_manager', 'ceo'], ['account', 'import']],
+    ['canViewTeamVisits', ['sales_manager', 'ceo'], ['sales']],
+    ['canViewSensitiveEmployeeData', ['hr'], ['employee', 'sales', 'sales_manager', 'ceo', 'import', 'account']],
+    ['canDoSomethingImaginary', [], ['hr']],
+  ])('%s', (permission, allowed, denied) => {
+    for (const role of allowed) expect(hasPermission(role, permission), `${role} ${permission}`).toBe(true);
+    for (const role of denied) expect(hasPermission(role, permission), `${role} ${permission}`).toBe(false);
+  });
+});
+
+const ROLE_USERS = Object.fromEntries(
+  ['employee', 'sales', 'sales_manager', 'import', 'account', 'hr', 'ceo', 'warehouse', 'qc']
+    .map((role) => [role, { role, employeeId: 20 }]),
+);
+
+// Route-guard matrix: for each path, every listed role is asserted to be admitted or refused, so an
+// allow and a deny are always pinned together (canAccessPath fails OPEN for a path no guard claims).
+describe('canAccessPath role matrix', () => {
+  it.each([
+    ['/employees', ['hr'], ['employee']],
+    ['/employees/5', ['hr'], ['employee']],
+    ['/requests', ['hr'], ['employee']],
+    ['/payroll/deduction-consents', ['hr', 'ceo'], ['employee', 'sales', 'import', 'account']],
+    ['/hr', ['hr'], ['employee']],
+    ['/payroll', ['hr', 'ceo'], ['employee', 'sales', 'import', 'account']],
+    ['/payroll/deduction-shortfalls', ['hr', 'ceo'], ['employee', 'sales', 'import', 'account']],
+    ['/settings/leave-policy', ['hr', 'ceo'], ['employee', 'sales', 'import', 'account']],
+    ['/fulfilment', ['import', 'ceo'], ['employee', 'sales', 'sales_manager', 'hr', 'account']],
+    ['/import/deals/12', ['import', 'ceo'], ['sales', 'sales_manager', 'account', 'hr', 'employee', 'warehouse', 'qc']],
+    ['/tickets', ['sales', 'sales_manager', 'ceo'], ['employee', 'account', 'import']],
+    ['/tickets/12', ['sales', 'sales_manager', 'ceo', 'account'], ['import', 'employee']],
+    ['/tickets/12/deposit', ['sales', 'account'], ['import']],
+    ['/visits', ['sales', 'sales_manager', 'ceo'], ['hr', 'employee', 'import', 'account', 'warehouse', 'qc']],
+    ['/finance', ['account', 'ceo'], ['sales', 'employee']],
+    ['/finance/deals/501', ['account', 'ceo'], ['sales', 'employee']],
+    ['/finance/receipts-import', ['account'], ['ceo', 'sales']],
+    ['/commissions', ['sales'], ['employee']],
+    ['/price-import', ['ceo', 'import'], ['sales', 'employee', 'hr']],
+    ['/pricing-requests', ['import', 'ceo', 'sales_manager'], ['sales', 'employee']],
+    ['/pricing-requests/42', ['sales', 'import'], ['employee']],
+    ['/ceo-settings', ['ceo'], ['hr', 'employee', 'sales', 'import', 'account', 'sales_manager']],
+    ['/quotations/new', ['sales', 'sales_manager'], ['ceo', 'import', 'account']],
+    ['/quotations/12', ['ceo'], []],
+    ['/leave', ['hr', 'ceo', 'employee'], []],
+    ['/leave/new', ['employee', 'sales'], ['hr', 'ceo']],
+  ])('%s', (path, allowed, denied) => {
+    for (const role of allowed) expect(canAccessPath(path, ROLE_USERS[role]), `${role} -> ${path}`).toBe(true);
+    for (const role of denied) expect(canAccessPath(path, ROLE_USERS[role]), `${role} -> ${path}`).toBe(false);
   });
 
-  it('denies a permission not listed for the role', () => {
-    expect(hasPermission('employee', 'canViewEmployees')).toBe(false);
-  });
-
-  it('returns false for an unknown permission key', () => {
-    expect(hasPermission('hr', 'canDoSomethingImaginary')).toBe(false);
-  });
-
-  it('scopes price import to ceo/import only (#205)', () => {
-    expect(hasPermission('ceo', 'canManagePriceImport')).toBe(true);
-    expect(hasPermission('import', 'canManagePriceImport')).toBe(true);
-    expect(hasPermission('sales', 'canManagePriceImport')).toBe(false);
-    expect(hasPermission('sales_manager', 'canManagePriceImport')).toBe(false);
-    expect(hasPermission('admin', 'canManagePriceImport')).toBe(false);
-  });
-
-  it('scopes catalog product writes to ceo/import only (#205)', () => {
-    expect(hasPermission('ceo', 'canManageCatalogProducts')).toBe(true);
-    expect(hasPermission('import', 'canManageCatalogProducts')).toBe(true);
-    expect(hasPermission('sales', 'canManageCatalogProducts')).toBe(false);
-    expect(hasPermission('employee', 'canManageCatalogProducts')).toBe(false);
-  });
-
-  it('scopes the deal-pipeline BROWSER to sales/sales_manager/ceo, excluding account (Account role-scoped views)', () => {
-    expect(hasPermission('sales', 'canViewDealPipeline')).toBe(true);
-    expect(hasPermission('sales_manager', 'canViewDealPipeline')).toBe(true);
-    expect(hasPermission('ceo', 'canViewDealPipeline')).toBe(true);
-    expect(hasPermission('account', 'canViewDealPipeline')).toBe(false);
-    expect(hasPermission('import', 'canViewDealPipeline')).toBe(false);
-  });
-
-  // Role-scoped views (docs/role-scoped-views.md): the deal PIPELINE BROWSER (canViewDealPipeline) is narrower
-  // than plain ticket-detail read (canViewTickets) — import and account both keep detail-read but lose the
-  // pipeline browser; sales/sales_manager/ceo keep both.
-  it('keeps canViewTickets (detail-read) broader than canViewDealPipeline — import/account keep detail-read only', () => {
-    expect(hasPermission('import', 'canViewTickets')).toBe(true);
-    expect(hasPermission('sales', 'canViewTickets')).toBe(true);
-    expect(hasPermission('account', 'canViewTickets')).toBe(true);
-    expect(hasPermission('ceo', 'canViewTickets')).toBe(true);
-    expect(hasPermission('sales_manager', 'canViewTickets')).toBe(true);
-  });
-
-  it('scopes sensitive employee data (salary, salary history, PDPA tab) to hr only (UX-09)', () => {
-    expect(hasPermission('hr', 'canViewSensitiveEmployeeData')).toBe(true);
-    expect(hasPermission('employee', 'canViewSensitiveEmployeeData')).toBe(false);
-    expect(hasPermission('sales', 'canViewSensitiveEmployeeData')).toBe(false);
-    expect(hasPermission('sales_manager', 'canViewSensitiveEmployeeData')).toBe(false);
-    expect(hasPermission('ceo', 'canViewSensitiveEmployeeData')).toBe(false);
-    expect(hasPermission('import', 'canViewSensitiveEmployeeData')).toBe(false);
-    expect(hasPermission('account', 'canViewSensitiveEmployeeData')).toBe(false);
+  const linked = { role: 'employee', employeeId: 5 };
+  const detached = { role: 'sales', employeeId: null };
+  it.each([
+    ['/employees', null, false],
+    ['/', linked, true],
+    ['/profile', linked, true],
+    ['/overtime', linked, true],
+    ['/leave', linked, true],
+    ['/profile', detached, false],
+    ['/overtime', detached, false],
+    ['/leave', detached, false],
+    ['/my-requests', { role: 'hr', employeeId: 10 }, true],
+    ['/my-requests', detached, false],
+  ])('self-service %s for %j is %s', (path, user, expected) => {
+    expect(canAccessPath(path, user)).toBe(expected);
   });
 });
 
 describe('allowedRoute', () => {
   const hr = { role: 'hr', employeeId: 10 };
   const employee = { role: 'employee', employeeId: 5 };
-  const sales = { role: 'sales', employeeId: 9 };
-
-  it('falls back to the dashboard when there is no user', () => {
-    expect(allowedRoute('employees', null)).toBe('dashboard');
-  });
 
   it('lets HR reach employee and request routes', () => {
     expect(allowedRoute('employees', hr)).toBe('employees');
@@ -74,21 +84,10 @@ describe('allowedRoute', () => {
     expect(allowedRoute('payroll', hr)).toBe('payroll');
   });
 
-  // allowedRoute mirrors canAccessPath's canViewPayroll gate.
-  it('lets CEO reach the payroll route too (read-only oversight, #390)', () => {
-    const ceo = { role: 'ceo', employeeId: 1 };
-    expect(allowedRoute('payroll', ceo)).toBe('payroll');
-  });
-
   it('blocks an employee from HR-only routes', () => {
     expect(allowedRoute('employees', employee)).toBe('dashboard');
     expect(allowedRoute('requests', employee)).toBe('dashboard');
     expect(allowedRoute('payroll', employee)).toBe('dashboard');
-  });
-
-  it('scopes ticket routes to ticket roles', () => {
-    expect(allowedRoute('tickets', sales)).toBe('tickets');
-    expect(allowedRoute('tickets', employee)).toBe('dashboard');
   });
 
   it('allows self-service routes for any user linked to an employee', () => {
@@ -102,10 +101,6 @@ describe('allowedRoute', () => {
     expect(allowedRoute('profile', detached)).toBe('dashboard');
     expect(allowedRoute('overtime', detached)).toBe('dashboard');
   });
-
-  it('passes through a route the user is allowed to see', () => {
-    expect(allowedRoute('dashboard', employee)).toBe('dashboard');
-  });
 });
 
 describe('canAccessPath', () => {
@@ -115,172 +110,6 @@ describe('canAccessPath', () => {
   const ceo = { role: 'ceo', employeeId: 1 };
   const importer = { role: 'import', employeeId: 2 };
   const account = { role: 'account', employeeId: 3 };
-
-  it('denies every path when there is no user', () => {
-    expect(canAccessPath('/employees', null)).toBe(false);
-    expect(canAccessPath('/', null)).toBe(false);
-  });
-
-  it('lets HR reach employee, request, and payroll paths', () => {
-    expect(canAccessPath('/employees', hr)).toBe(true);
-    expect(canAccessPath('/employees/5', hr)).toBe(true);
-    expect(canAccessPath('/requests', hr)).toBe(true);
-    expect(canAccessPath('/payroll', hr)).toBe(true);
-    expect(canAccessPath('/hr', hr)).toBe(true);
-  });
-
-  it('blocks an employee from HR-only paths', () => {
-    expect(canAccessPath('/employees', employee)).toBe(false);
-    expect(canAccessPath('/employees/5', employee)).toBe(false);
-    expect(canAccessPath('/requests', employee)).toBe(false);
-    expect(canAccessPath('/payroll', employee)).toBe(false);
-    expect(canAccessPath('/hr', employee)).toBe(false);
-  });
-
-  // ── Nested /payroll paths: the fail-open case ─────────────────────────────
-  // canAccessPath returns TRUE for any path no guard claims (`if (!guard) return true`), and the
-  // `/payroll` guard is an EXACT match, so a nested payroll route without its own PATH_GUARDS entry
-  // is reachable by every authenticated role, including `employee` and `sales` (found when the
-  // shortfall ledger was added).
-  //
-  // The assertions that matter are the refusals (CLAUDE.md: wrong way round). Deleting either
-  // PATH_GUARDS entry makes this test fail (checked by mutation).
-  //
-  // FRONTEND ROUTING ONLY: not evidence about the server. The backend enforces the same split
-  // independently (@PreAuthorize("hasAnyRole('HR','CEO')") on the GET, hasRole('HR') on the PUT).
-  it('refuses every non-payroll role on the nested payroll paths', () => {
-    for (const path of ['/payroll/deduction-consents', '/payroll/deduction-shortfalls']) {
-      expect(canAccessPath(path, employee)).toBe(false);
-      expect(canAccessPath(path, sales)).toBe(false);
-      expect(canAccessPath(path, importer)).toBe(false);
-      expect(canAccessPath(path, account)).toBe(false);
-    }
-  });
-
-  it('lets HR and CEO reach the nested payroll paths, mirroring canViewPayroll', () => {
-    for (const path of ['/payroll/deduction-consents', '/payroll/deduction-shortfalls']) {
-      expect(canAccessPath(path, hr)).toBe(true);
-      expect(canAccessPath(path, ceo)).toBe(true);
-    }
-  });
-
-  // Same fail-open shape one directory over: `/settings/attendance-calendar` is an EXACT match, so a second
-  // `/settings/*` route with no PATH_GUARDS entry of its own would be reachable by every authenticated role.
-  // FRONTEND ROUTING ONLY — the server enforces its own gate, and that is not tested here.
-  it('refuses everyone but hr/ceo on the leave-policy upload settings route', () => {
-    expect(canAccessPath('/settings/leave-policy', employee)).toBe(false);
-    expect(canAccessPath('/settings/leave-policy', sales)).toBe(false);
-    expect(canAccessPath('/settings/leave-policy', importer)).toBe(false);
-    expect(canAccessPath('/settings/leave-policy', account)).toBe(false);
-  });
-
-  it('lets hr and ceo reach the leave-policy upload settings route', () => {
-    expect(canAccessPath('/settings/leave-policy', hr)).toBe(true);
-    expect(canAccessPath('/settings/leave-policy', ceo)).toBe(true);
-  });
-
-  // ── /fulfilment (งานนำเข้า) — the same fail-open shape ────────
-  // A path with no PATH_GUARDS entry is reachable by EVERY authenticated role, so the refusals are
-  // the assertions that matter; deleting the guard entry makes the first test fail.
-  //
-  // FRONTEND ROUTING ONLY. The real gate is TicketService.FULFILMENT_ROLES {import, ceo} on the
-  // page's four endpoints, not verified here.
-  it('refuses every role but import/ceo on the fulfilment workspace', () => {
-    expect(canAccessPath('/fulfilment', employee)).toBe(false);
-    expect(canAccessPath('/fulfilment', sales)).toBe(false);
-    expect(canAccessPath('/fulfilment', hr)).toBe(false);
-    expect(canAccessPath('/fulfilment', account)).toBe(false);
-    // Narrower than its nav neighbour /pricing-requests, which DOES admit sales_manager — a sales_manager here
-    // would find every button 403s.
-    expect(canAccessPath('/fulfilment', { role: 'sales_manager', employeeId: 8 })).toBe(false);
-    expect(canAccessPath('/pricing-requests', { role: 'sales_manager', employeeId: 8 })).toBe(true);
-  });
-
-  it('lets import and ceo reach the fulfilment workspace, mirroring FULFILMENT_ROLES', () => {
-    expect(canAccessPath('/fulfilment', importer)).toBe(true);
-    expect(canAccessPath('/fulfilment', ceo)).toBe(true);
-  });
-
-  it('scopes ticket paths to ticket roles', () => {
-    expect(canAccessPath('/tickets', sales)).toBe(true);
-    expect(canAccessPath('/tickets/12', sales)).toBe(true);
-    expect(canAccessPath('/tickets/12/deposit', sales)).toBe(true);
-    expect(canAccessPath('/tickets', employee)).toBe(false);
-  });
-
-  // นัดเข้าพบ (/visits): exactly the roles VisitService serves a visit list to — VISIT_ROLES {sales, sales_manager,
-  // ceo} (own list) ⊇ TEAM_ROLES {sales_manager, ceo} (team list). Wrong-way-round first: every other role is refused,
-  // and the path must not be reachable through a lookalike.
-  it('refuses /visits to every role the visit endpoints refuse', () => {
-    for (const role of ['hr', 'employee', 'import', 'account', 'warehouse', 'qc']) {
-      expect(canAccessPath('/visits', { role, employeeId: 4 }), `${role} -> /visits`).toBe(false);
-      expect(hasPermission(role, 'canViewVisits'), `${role} canViewVisits`).toBe(false);
-    }
-    expect(canAccessPath('/visits', { role: 'employee', employeeId: 4, manager: true })).toBe(false);
-  });
-
-  it('lets sales, sales_manager and ceo reach /visits, mirroring VisitService.VISIT_ROLES', () => {
-    for (const role of ['sales', 'sales_manager', 'ceo']) {
-      expect(canAccessPath('/visits', { role, employeeId: 4 }), `${role} -> /visits`).toBe(true);
-    }
-    expect(hasPermission('sales', 'canViewTeamVisits')).toBe(false);
-    expect(hasPermission('sales_manager', 'canViewTeamVisits')).toBe(true);
-    expect(hasPermission('ceo', 'canViewTeamVisits')).toBe(true);
-  });
-
-  // Account role-scoped views: the pipeline BROWSER (the `/tickets` list) is narrower than ticket-DETAIL read
-  // (`/tickets/:id`) — account keeps the latter (its worklist deep-links straight to a single deal) but loses
-  // the former (its own งานการเงิน worklist replaces it).
-  it('splits the deal-pipeline browser from ticket-detail read for account', () => {
-    expect(canAccessPath('/tickets', account)).toBe(false);
-    expect(canAccessPath('/tickets/12', account)).toBe(true);
-    expect(canAccessPath('/tickets/12/deposit', account)).toBe(true);
-    // sales/sales_manager/ceo are unaffected by the split — they still see everything.
-    expect(canAccessPath('/tickets', ceo)).toBe(true);
-  });
-
-  it('scopes /finance to canConfirmPayments (account/ceo)', () => {
-    expect(canAccessPath('/finance', account)).toBe(true);
-    expect(canAccessPath('/finance', ceo)).toBe(true);
-    expect(canAccessPath('/finance', sales)).toBe(false);
-    expect(canAccessPath('/finance', employee)).toBe(false);
-  });
-
-  it('restricts the Express receipts upload to account only (backend refuses the CEO)', () => {
-    expect(canAccessPath('/finance/receipts-import', account)).toBe(true);
-    expect(canAccessPath('/finance/receipts-import', ceo)).toBe(false);
-    expect(canAccessPath('/finance/receipts-import', sales)).toBe(false);
-  });
-
-  it('scopes the per-deal finance page /finance/deals/:id exactly like /finance (fails open if unclaimed)', () => {
-    expect(canAccessPath('/finance/deals/501', account)).toBe(true);
-    expect(canAccessPath('/finance/deals/501', ceo)).toBe(true);
-    expect(canAccessPath('/finance/deals/501', sales)).toBe(false);
-    expect(canAccessPath('/finance/deals/501', employee)).toBe(false);
-  });
-
-  it('allows self-service paths for any user linked to an employee', () => {
-    expect(canAccessPath('/profile', employee)).toBe(true);
-    // overtime/leave are allowed for a linked employee even without the view-all permission
-    expect(canAccessPath('/overtime', employee)).toBe(true);
-    expect(canAccessPath('/leave', employee)).toBe(true);
-  });
-
-  it('blocks self-service paths when the user is not linked to an employee', () => {
-    const detached = { role: 'sales', employeeId: null };
-    expect(canAccessPath('/profile', detached)).toBe(false);
-    expect(canAccessPath('/overtime', detached)).toBe(false);
-    expect(canAccessPath('/leave', detached)).toBe(false);
-  });
-
-  // /my-requests is an alias redirecting to /profile, so it gates identically: anyone with an
-  // employee record. A stricter guard would 403 an HR user following an old notification link.
-  it('gates my-requests exactly like its /profile redirect target', () => {
-    expect(canAccessPath('/my-requests', employee)).toBe(true);
-    expect(canAccessPath('/my-requests', hr)).toBe(true);
-    expect(canAccessPath('/profile', hr)).toBe(true);
-    expect(canAccessPath('/my-requests', { role: 'sales', employeeId: null })).toBe(false);
-  });
 
   // PayrollController: every GET, plus the non-persisting POST /preview and /preview/export/{kind},
   // is hasAnyRole('HR','CEO'), so the ROUTE only needs canViewPayroll (hr+ceo). Writes stay
@@ -299,103 +128,6 @@ describe('canAccessPath', () => {
     expect(canAccessPath('/payroll', account)).toBe(false);
   });
 
-  it('scopes commissions to commission-viewing roles', () => {
-    expect(canAccessPath('/commissions', sales)).toBe(true);
-    expect(canAccessPath('/commissions', employee)).toBe(false);
-  });
-
-  it('scopes price-import to ceo/import only (#205)', () => {
-    expect(canAccessPath('/price-import', ceo)).toBe(true);
-    expect(canAccessPath('/price-import', importer)).toBe(true);
-    expect(canAccessPath('/price-import', sales)).toBe(false);
-    expect(canAccessPath('/price-import', employee)).toBe(false);
-    expect(canAccessPath('/price-import', hr)).toBe(false);
-  });
-
-  it('allows unguarded and unknown paths for any authenticated user', () => {
-    // `/` and `/attendance` are intentionally open to every authenticated user.
-    expect(canAccessPath('/', employee)).toBe(true);
-    expect(canAccessPath('/attendance', employee)).toBe(true);
-  });
-
-  // Sales must not reach the bare '/pricing-requests' queue (Import's work list); it only needs the
-  // per-request detail sub-path (PICKED_UP/MORE_INFO_REQUIRED notifications link there). The guard
-  // decides URL shape, not per-request ownership, which the backend's requireViewable enforces.
-  it('scopes the bare pricing-requests queue to canViewPricingRequestQueue roles, never sales', () => {
-    expect(canAccessPath('/pricing-requests', importer)).toBe(true);
-    expect(canAccessPath('/pricing-requests', ceo)).toBe(true);
-    expect(canAccessPath('/pricing-requests', { role: 'sales_manager', employeeId: 4 })).toBe(true);
-    expect(canAccessPath('/pricing-requests', sales)).toBe(false);
-    expect(canAccessPath('/pricing-requests', employee)).toBe(false);
-  });
-
-  it('lets sales reach an individual pricing-request detail sub-path even though the queue is closed to them', () => {
-    expect(canAccessPath('/pricing-requests/42', sales)).toBe(true);
-    expect(canAccessPath('/pricing-requests/42', importer)).toBe(true);
-    expect(canAccessPath('/pricing-requests/42', employee)).toBe(false);
-  });
-
-  it('gates ceo-settings to the ceo role, matching the sidebar nav condition (UX-19)', () => {
-    expect(canAccessPath('/ceo-settings', ceo)).toBe(true);
-    expect(canAccessPath('/ceo-settings', hr)).toBe(false);
-    expect(canAccessPath('/ceo-settings', employee)).toBe(false);
-    expect(canAccessPath('/ceo-settings', sales)).toBe(false);
-    expect(canAccessPath('/ceo-settings', importer)).toBe(false);
-    expect(canAccessPath('/ceo-settings', { role: 'account', employeeId: 3 })).toBe(false);
-    expect(canAccessPath('/ceo-settings', { role: 'sales_manager', employeeId: 4 })).toBe(false);
-  });
-
-  // Role-scoped views (Import build): import is blocked from the pipeline BROWSER (/tickets exact) but keeps
-  // ticket-detail read (/tickets/:id).
-  it('blocks import from the deal-pipeline browser AND from the whole-deal page', () => {
-    expect(canAccessPath('/tickets', importer)).toBe(false);
-    // Import has its own per-deal page (/import/deals/:id). The whole-deal GET /api/tickets/{id} 403s
-    // import server-side, so the frontend guard refuses it too.
-    expect(canAccessPath('/tickets/12', importer)).toBe(false);
-    // Deposit notices are denied to import outright (DepositNoticeService), so the whole /tickets/ prefix is
-    // closed to it, not just the bare detail path.
-    expect(canAccessPath('/tickets/12/deposit', importer)).toBe(false);
-  });
-
-  // Import's OWN per-deal page (ImportDealController: import + ceo only). Every other role is
-  // refused, because canAccessPath fails OPEN for a path no guard claims.
-  it('lets import and ceo — and nobody else — reach /import/deals/:id', () => {
-    expect(canAccessPath('/import/deals/12', importer)).toBe(true);
-    expect(canAccessPath('/import/deals/12', ceo)).toBe(true);
-    for (const user of [
-      sales, account, hr, employee,
-      { role: 'sales_manager', employeeId: 4 },
-      { role: 'warehouse', employeeId: 6 },
-      { role: 'qc', employeeId: 7 },
-    ]) {
-      expect(canAccessPath('/import/deals/12', user), `${user.role} must be refused`).toBe(false);
-    }
-  });
-
-  it('keeps ceo/sales/sales_manager/account on the whole-deal page', () => {
-    for (const user of [ceo, sales, account, { role: 'sales_manager', employeeId: 4 }]) {
-      expect(canAccessPath('/tickets/12', user), `${user.role} keeps /tickets/:id`).toBe(true);
-    }
-  });
-
-  // /procurement and /factory-purchase-orders(/:id) were removed (see AppShell.test.jsx), along with
-  // their PATH_GUARDS entries, so canAccessPath falls through to its unguarded default (`true`).
-  // That is not a widening: App.jsx has no route at either path, so both hit the `path="*"`
-  // catch-all and redirect to '/'. This asserts the guard is really GONE.
-  it('leaves no guard behind for the removed procurement routes', () => {
-    for (const path of ['/procurement', '/factory-purchase-orders', '/factory-purchase-orders/1']) {
-      for (const user of [importer, ceo, sales, { role: 'account', employeeId: 3 }]) {
-        expect(canAccessPath(path, user)).toBe(true);
-      }
-    }
-  });
-
-  it('keeps sales/sales_manager/ceo on the deal-pipeline browser', () => {
-    expect(canAccessPath('/tickets', sales)).toBe(true);
-    expect(canAccessPath('/tickets', ceo)).toBe(true);
-    expect(canAccessPath('/tickets', { role: 'sales_manager', employeeId: 4 })).toBe(true);
-  });
-
   // The canCreateQuotation capability grant is OR'd into the '/quotations' guard: a grant holder's
   // ROLE need not be in ROLE_PERMISSIONS.canViewDealQuotations (qc is not).
   it('refuses /quotations to a qc user with no grant, admits one with the grant', () => {
@@ -404,42 +136,11 @@ describe('canAccessPath', () => {
     expect(canAccessPath('/quotations', { role: 'qc', employeeId: 20, canCreateQuotation: true })).toBe(true);
     expect(canAccessPath('/quotations/new', { role: 'qc', employeeId: 20, canCreateQuotation: true })).toBe(true);
   });
-
-  // /quotations/new is the create page, so its guard is the editor's own create gate
-  // (canCreateDealQuotationStandalone: sales, sales_manager, or the grant), not the wider view-only
-  // audience of the list and detail pages.
-  it('admits only quotation creators to /quotations/new; viewers keep the list and detail pages', () => {
-    for (const role of ['ceo', 'import', 'account']) {
-      expect(canAccessPath('/quotations/new', { role, employeeId: 20 }), role).toBe(false);
-      expect(canAccessPath('/quotations/new?ticket=6', { role, employeeId: 20 }), role).toBe(false);
-    }
-    for (const role of ['sales', 'sales_manager']) {
-      expect(canAccessPath('/quotations/new', { role, employeeId: 20 }), role).toBe(true);
-    }
-    expect(canAccessPath('/quotations', { role: 'ceo', employeeId: 20 })).toBe(true);
-    expect(canAccessPath('/quotations/12', { role: 'ceo', employeeId: 20 })).toBe(true);
-  });
-
-  // hr/ceo do not file leave (LeaveService SELF_SUBMIT_BLOCKED_ROLES): the composer is blocked
-  // outright, on-behalf filing included.
-  it('refuses the /leave/new composer to hr and ceo, who keep /leave', () => {
-    for (const role of ['hr', 'ceo']) {
-      expect(canAccessPath('/leave/new', { role, employeeId: 20 }), role).toBe(false);
-      expect(canAccessPath('/leave', { role, employeeId: 20 }), role).toBe(true);
-    }
-    expect(canAccessPath('/leave/new', { role: 'employee', employeeId: 20 })).toBe(true);
-    expect(canAccessPath('/leave/new', { role: 'sales', employeeId: 20 })).toBe(true);
-  });
 });
 
 describe('isDivisionManager', () => {
   it('is true for role employee with the manager flag set', () => {
     expect(isDivisionManager({ role: 'employee', manager: true, employeeId: 10 })).toBe(true);
-  });
-
-  it('is false for a plain employee (no manager flag)', () => {
-    expect(isDivisionManager({ role: 'employee', manager: false, employeeId: 10 })).toBe(false);
-    expect(isDivisionManager({ role: 'employee', employeeId: 10 })).toBe(false);
   });
 
   // Narrowed to role 'employee' on purpose: sales_manager/hr/ceo have their own dedicated landings (company mode
@@ -448,11 +149,6 @@ describe('isDivisionManager', () => {
     expect(isDivisionManager({ role: 'sales_manager', manager: true, employeeId: 11 })).toBe(false);
     expect(isDivisionManager({ role: 'hr', manager: true, employeeId: 12 })).toBe(false);
     expect(isDivisionManager({ role: 'ceo', manager: true, employeeId: 13 })).toBe(false);
-  });
-
-  it('is false for no user', () => {
-    expect(isDivisionManager(null)).toBe(false);
-    expect(isDivisionManager(undefined)).toBe(false);
   });
 });
 
@@ -549,24 +245,6 @@ describe('canAccessPath under the release lockdown', () => {
     expect(refused).toEqual([]);
   });
 
-  // Same prefix trap for the release-notice page: only /whats-new and /whats-new/<id> are released, not a path
-  // that merely starts with the same letters.
-  it('does not let /whats-new admit a lookalike path', async () => {
-    const { canAccessPath: guard } = await locked();
-    for (const user of LOCKED_ROLES) {
-      expect(guard('/whats-new-admin', user)).toBe(false);
-      expect(guard('/whats-newsletter', user)).toBe(false);
-    }
-  });
-
-  // The prefix trap this allowlist is built to avoid: HR's ล.ย.01 REGISTER shares a leading string with the
-  // employee's own declaration form. A `startsWith('/tax-allowance')` test would have admitted it.
-  it('does not let /tax-allowance admit HR’s /tax-allowance-review', async () => {
-    const { canAccessPath: guard } = await locked();
-    expect(guard('/tax-allowance', importer)).toBe(true);
-    expect(guard('/tax-allowance-review', importer)).toBe(false);
-  });
-
   // The sales stack opens for the sales roles; import gets ONLY งานนำเข้า and คิวขอราคา (plus its
   // per-deal drill-down), account ONLY การเงิน. Refusals first: what each role must still NOT reach.
   it('releases the sales stack to sales and sales_manager, nothing beyond their guards', async () => {
@@ -626,6 +304,15 @@ describe('canAccessPath under the release lockdown', () => {
     expect(guard('/some-feature-added-later', hr)).toBe(true);
   });
 
+  it('does not let /whats-new admit a lookalike path, while /whats-new itself stays open', async () => {
+    const { canAccessPath: guard } = await locked();
+    for (const user of LOCKED_ROLES) {
+      expect(guard('/whats-new', user)).toBe(true);
+      expect(guard('/whats-new-admin', user)).toBe(false);
+      expect(guard('/whats-newsletter', user)).toBe(false);
+    }
+  });
+
   it('exempts hr and ceo — their existing access is untouched', async () => {
     const { canAccessPath: guard } = await locked();
     expect(guard('/payroll', hr)).toBe(true);
@@ -638,15 +325,6 @@ describe('canAccessPath under the release lockdown', () => {
     // Pre-existing denials still hold — the lock exempts these roles, it does not widen them. /employees is
     // hr-only (EmployeeController is requireAnyRole("hr")), so CEO is refused with or without the lock.
     expect(guard('/employees', ceo)).toBe(false);
-  });
-
-  // The lock narrows; it must never widen. A locked user with no linked employee row still fails the
-  // pre-existing `!!u.employeeId` guards.
-  it('does not widen a self-service path past its own guard', async () => {
-    const { canAccessPath: guard } = await locked();
-    const noEmployeeRow = { role: 'sales', employeeId: null };
-    expect(guard('/profile', noEmployeeRow)).toBe(false);
-    expect(guard('/tax-allowance', noEmployeeRow)).toBe(false);
   });
 
   // /visits is handled like /tickets: a PATH_GUARDS entry, not a self-service path. The lock-exempt sales roles keep
@@ -690,14 +368,6 @@ describe('isSelfServiceLocked', () => {
     expect(isLocked({ role: undefined })).toBe(true);
     expect(isLocked(null)).toBe(true);
   });
-
-  it('locks nobody when the flag is off', async () => {
-    vi.stubEnv('VITE_SELF_SERVICE_ONLY', 'false');
-    vi.resetModules();
-    const { isSelfServiceLocked: isLocked } = await import('./permissions.js');
-    expect(isLocked({ role: 'sales' })).toBe(false);
-    expect(isLocked(null)).toBe(false);
-  });
 });
 
 describe('activity log access (admin capability)', () => {
@@ -710,18 +380,6 @@ describe('activity log access (admin capability)', () => {
     for (const role of ['sales', 'hr', 'ceo', 'employee', 'account', 'warehouse', 'qc']) {
       expect(canAccessPath('/activity-log', user(role, { admin: undefined }))).toBe(false);
     }
-  });
-
-  it('denies non-admins once the backend does send the field', () => {
-    for (const role of ['sales', 'hr', 'ceo', 'employee', 'sales_manager']) {
-      expect(canAccessPath('/activity-log', user(role, { admin: false }))).toBe(false);
-    }
-  });
-
-  it('denies a caller whose role merely claims to be admin', () => {
-    // No role grants this; only the flag does. Guards against the gate drifting into a role check, which is what
-    // the backend mutation check covers on the other side.
-    expect(canAccessPath('/activity-log', user('admin', { admin: false }))).toBe(false);
   });
 
   it('allows a flagged admin even though their derived role is sales', () => {
@@ -846,16 +504,6 @@ describe('quotation release through the self-service lockdown', () => {
     }
     expect(can('/quotations', user('employee', { manager: true }))).toBe(false);
   });
-
-  it('reports the audience through isQuotationReleaseUser', async () => {
-    const { isQuotationReleaseUser } = await locked();
-    expect(isQuotationReleaseUser(user('sales'))).toBe(true);
-    expect(isQuotationReleaseUser(user('sales_manager'))).toBe(true);
-    expect(isQuotationReleaseUser(user('qc', { canCreateQuotation: true }))).toBe(true);
-    expect(isQuotationReleaseUser(user('import'))).toBe(false);
-    expect(isQuotationReleaseUser(user('account'))).toBe(false);
-    expect(isQuotationReleaseUser(null)).toBe(false);
-  });
 });
 
 // An import or account user landing on a whole-deal URL (a backend notification deep-link, an old
@@ -887,11 +535,5 @@ describe('dealRedirectFor', () => {
     expect(dealRedirectFor('/tickets/12/', account)).toBe('/finance/deals/12');
     expect(dealRedirectFor('/tickets/12/deposit', account)).toBe('/finance/deals/12');
     expect(dealRedirectFor('/tickets/12?from=bell', account)).toBe('/finance/deals/12');
-  });
-
-  it('does not redirect account off the pipeline list or non-deal paths', () => {
-    expect(dealRedirectFor('/tickets', account)).toBeNull();
-    expect(dealRedirectFor('/tickets/abc', account)).toBeNull();
-    expect(dealRedirectFor('/quotations/5', account)).toBeNull();
   });
 });

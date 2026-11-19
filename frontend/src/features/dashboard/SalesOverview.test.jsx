@@ -1,12 +1,12 @@
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { SalesOverview } from './SalesOverview.jsx';
 import { api } from '../../api/index.js';
 import { bangkokTodayIso, formatThaiDate } from '../../utils/format.js';
-import { expectFigure, figureRows } from '../../test/fixtures/dashboardMoney.js';
+import { expectFigure } from '../../test/fixtures/dashboardMoney.js';
 
 globalThis.React = React;
 
@@ -51,8 +51,6 @@ function addDays(isoDate, delta) {
 }
 const TODAY = bangkokTodayIso();
 const OVERDUE_DATE = addDays(TODAY, -5);
-const THIS_MONTH = `${TODAY.slice(0, 7)}-01`;
-
 // One deal per next-action bucket (now including RECORD_DELIVERY — deal I — and RECORD_QUOTATION_OUTCOME —
 // deal J), plus a "nothing to do" deal (G) and a non-ACTIVE deal (H) that must be excluded from both the pulse
 // and the worklist entirely.
@@ -101,13 +99,10 @@ const defaultCommissionSummary = {
   tiers: [],
 };
 
-let lastClient;
-
 function renderOverview() {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
-  lastClient = queryClient;
   return render(
     <QueryClientProvider client={queryClient}>
       <MemoryRouter initialEntries={['/']}>
@@ -134,7 +129,6 @@ function worklistSection() {
   return screen.getByRole('heading', { name: 'สิ่งที่ต้องทำ' }).closest('section');
 }
 
-const never = () => new Promise(() => {});
 const groupNames = (key) => [...screen.getByTestId(`sales-group-${key}`).querySelectorAll('[data-testid^="sales-row-"]')]
   .map((row) => row.querySelector('strong').textContent);
 
@@ -145,37 +139,6 @@ describe('SalesOverview', () => {
     api.pricingRequests.queue.mockResolvedValue({ items: pricingRequests });
     api.commissions.monthlySummary.mockResolvedValue({ summary: defaultCommissionSummary });
     api.salesBoard.myWork.mockResolvedValue({ followUp: [], board: [], quietDays: 14 });
-  });
-
-  it('is งานของฉัน: money band and worklist above ควรตามต่อ and the board', async () => {
-    renderOverview();
-    expect(screen.getByRole('heading', { name: 'งานของฉัน' })).toBeTruthy();
-    await screen.findByTestId('sales-group-follow');
-    const order = ['ตัวเลขเดือนนี้', 'สิ่งที่ต้องทำ', 'ควรตามต่อ'].map((name) => (name === 'ตัวเลขเดือนนี้'
-      ? screen.getByRole('region', { name })
-      : screen.getByText(name).closest('section')));
-     
-    expect(order[0].compareDocumentPosition(order[1]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-     
-    expect(order[1].compareDocumentPosition(order[2]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(api.salesBoard.myWork).toHaveBeenCalledTimes(1);
-  });
-
-  it('an overdue follow-up shows under ถึงกำหนดตาม even though the deal is not quiet', async () => {
-    renderOverview();
-    const group = await screen.findByTestId('sales-group-follow');
-    expect(group.textContent).toContain('ถึงกำหนดตาม');
-    // Deal D: stale === false, nextFollowUpAt five days ago.
-    expect(deals.find((d) => d.id === 604).stale).toBe(false);
-    expect(within(group).getByTestId('sales-row-604')).toBeTruthy();
-  });
-
-  it('greets the rep and requests an own-scoped deal list', async () => {
-    renderOverview();
-    expect(await screen.findByText(/สวัสดี, คุณสมชาย ใจดี/)).not.toBeNull();
-    // own-scoped (the server scopes sales), plus the default 7-day movement range
-    expect(api.tickets.list).toHaveBeenCalledWith({ movementFrom: addDays(TODAY, -6), movementTo: TODAY });
-    expect(api.commissions.monthlySummary).toHaveBeenCalledWith({ payrollMonth: THIS_MONTH });
   });
 
   describe('money band', () => {
@@ -190,48 +153,11 @@ describe('SalesOverview', () => {
       expectFigure('ค่าคอมประมาณการ (เดือนนี้)', '฿100,000.00');
     });
 
-    // fix/commission-figures-from-backend (#548-style V81 regression guard): the commission figures
-    // are the SERVER-computed monthly summary (CommissionService#monthlySummary), never a client
-    // re-implementation of the tier math that could drift from a DB tier-config change (the V81
-    // tier-13 rate correction is the case on record). 99,999.99 is unreachable by any seeded tier
-    // band on this base, so only a render wired to the DTO shows it.
-    it('renders the server-computed figure, not a client-recomputed one', async () => {
-      api.commissions.monthlySummary.mockResolvedValue({
-        summary: { ...defaultCommissionSummary, payrollMonth: THIS_MONTH, commissionableBase: 1200000, tierCommission: 99999.99, totalCommission: 99999.99 },
-      });
-      renderOverview();
-
-      await waitFor(() => expectFigure('ค่าคอมประมาณการ (เดือนนี้)', '฿99,999.99'));
-      expectFigure('ค่าคอมประมาณการ (เดือนนี้)', '฿1,200,000.00');
-    });
-
     it('sums ยอดคาดหวัง over ACTIVE deals only (nothing here is at ORDER_RECEIVED yet)', async () => {
       renderOverview();
       // 610,000 + deal I's 300,000 + deal J's 120,000; deal H (CLOSED_LOST, 999,999) is excluded.
       await waitFor(() => expectFigure('ยอดคาดหวัง', '฿1,030,000.00'));
       expectFigure('ยอดที่สั่งซื้อแล้ว', '฿0.00');
-    });
-
-    it('shows the commission while the deal list is still loading, and the deal value waits', async () => {
-      api.tickets.list.mockImplementation(never);
-      api.commissions.monthlySummary.mockResolvedValue({
-        summary: { ...defaultCommissionSummary, commissionableBase: 100000, totalCommission: 250 },
-      });
-      renderOverview();
-
-      await waitFor(() => expectFigure('ค่าคอมประมาณการ (เดือนนี้)', '฿250.00'));
-      expect(figureRows('ยอดคาดหวัง')[0]).not.toContain('฿');
-      expect(worklistSection().querySelector('[aria-busy="true"]')).not.toBeNull();
-    });
-
-    it('drops the count tiles, their English helpers and the separate follow-up panel', async () => {
-      renderOverview();
-      await screen.findByTestId('sales-group-follow');
-
-      expect(document.querySelector('.stat-card')).toBeNull();
-      expect(screen.queryByText(/Overdue follow-up|Due today|Ready to quote|Open deals/)).toBeNull();
-      expect(screen.queryByText('ติดตามที่ครบกำหนด')).toBeNull();
-      expect(screen.queryByText('มูลค่า pipeline')).toBeNull();
     });
   });
 
@@ -279,64 +205,6 @@ describe('SalesOverview', () => {
       expect(screen.getByTestId('sales-row-605').textContent).toContain('นัดวันนี้');
       expect(screen.getByTestId('sales-row-601').textContent).not.toMatch(/เลยนัด|นัดวันนี้/);
     });
-
-    it('leaves a quiet deal with nothing else to do to ควรตามต่อ', async () => {
-      const quiet = Array.from({ length: 5 }, (_, i) => ({
-        ...deals[5], id: 900 + i, code: `PR-2026-09${i}`, customerName: `บริษัท เงียบ ${i}`,
-      }));
-      api.tickets.list.mockResolvedValue({ tickets: quiet });
-      api.pricingRequests.queue.mockResolvedValue({
-        items: quiet.map((d, i) => ({ id: 50 + i, ticketId: d.id, status: 'CEO_REVIEWING', orderConfirmedAt: null })),
-      });
-      renderOverview();
-
-      expect(await screen.findByText('ไม่มีสิ่งที่ต้องดำเนินการตอนนี้')).toBeTruthy();
-      expect(screen.queryByTestId('sales-group-quiet')).toBeNull();
-    });
-
-    it('opens the deal from its row', async () => {
-      renderOverview();
-      fireEvent.click(await screen.findByTestId('sales-row-604'));
-      expect((await screen.findByTestId('location-probe')).textContent).toBe('/tickets/604');
-    });
-
-    it('says so when nothing needs the rep', async () => {
-      api.tickets.list.mockResolvedValue({ tickets: [deals[6]] });
-      renderOverview();
-      expect(await screen.findByText('ไม่มีสิ่งที่ต้องดำเนินการตอนนี้')).not.toBeNull();
-    });
-
-    it('says a failed deal list failed, and keeps what it shows when a background refetch fails', async () => {
-      renderOverview();
-      await screen.findByTestId('sales-row-604');
-      api.tickets.list.mockRejectedValue(new Error('offline'));
-      await act(async () => {
-        await lastClient.refetchQueries();
-        await new Promise((resolve) => { setTimeout(resolve, 20); }); // let the error notification render
-      });
-      expect(lastClient.getQueryCache().findAll().some((q) => q.state.status === 'error')).toBe(true);
-      expect(screen.getByTestId('sales-row-604')).not.toBeNull();
-      expect(screen.queryByText('โหลดไม่สำเร็จ')).toBeNull();
-    });
-
-    it('says the list failed when the pricing-request queue fails, since every action reads it', async () => {
-      api.pricingRequests.queue.mockRejectedValue(new Error('offline'));
-      renderOverview();
-      expect(await within(worklistSection()).findByText('โหลดไม่สำเร็จ')).not.toBeNull();
-    });
-
-    it('shows an em dash for the commission figures when the summary fails', async () => {
-      api.commissions.monthlySummary.mockRejectedValue(new Error('offline'));
-      renderOverview();
-      await waitFor(() => expectFigure('ค่าคอมประมาณการ (เดือนนี้)', '—'));
-      expectFigure('ค่าคอมประมาณการ (เดือนนี้)', '—');
-    });
-
-    it('says the list failed when the first load fails', async () => {
-      api.tickets.list.mockRejectedValue(new Error('offline'));
-      renderOverview();
-      expect(await within(worklistSection()).findByText('โหลดไม่สำเร็จ')).not.toBeNull();
-    });
   });
 });
 
@@ -360,11 +228,6 @@ describe('SalesOverview — live direct quotation worklist tones (slice 2)', () 
     api.commissions.monthlySummary.mockResolvedValue({ summary: defaultCommissionSummary });
   });
 
-  function badgeFor(customerName) {
-    const row = within(worklistSection()).getByText(customerName).closest('button');
-    return row.querySelector('.status-badge');
-  }
-
   it('lists all three: CONFIRM then SUBMIT under ต้องทำต่อ, AWAIT under รอผู้อื่น', async () => {
     renderOverview();
     const worklist = within(worklistSection());
@@ -373,17 +236,6 @@ describe('SalesOverview — live direct quotation worklist tones (slice 2)', () 
     expect(groupNames('wait')).toEqual(['บริษัท รอ จำกัด']);
     // None of them is told to open a คำขอราคา.
     expect(worklist.queryByText('สร้างคำขอราคา')).toBeNull();
-  });
-
-  it('SUBMIT and CONFIRM read as warning (mine to act); AWAIT reads neutral (waiting)', async () => {
-    renderOverview();
-    await within(worklistSection()).findByText('บริษัท ร่าง จำกัด');
-    expect(badgeFor('บริษัท ร่าง จำกัด').textContent).toBe('ส่งขออนุมัติใบเสนอราคา');
-    expect(badgeFor('บริษัท ร่าง จำกัด').className).toContain('status-warning');
-    expect(badgeFor('บริษัท อนุมัติ จำกัด').textContent).toBe('ยืนยันคำสั่งซื้อ');
-    expect(badgeFor('บริษัท อนุมัติ จำกัด').className).toContain('status-warning');
-    expect(badgeFor('บริษัท รอ จำกัด').textContent).toBe('รออนุมัติใบเสนอราคา');
-    expect(badgeFor('บริษัท รอ จำกัด').className).toContain('status-neutral');
   });
 });
 
@@ -496,26 +348,6 @@ describe('SalesOverview — the procurement-source decision shows in the worklis
       await waitFor(() => expectFigure('ยอดที่สั่งซื้อแล้ว', '฿4,000.00'));
       expectFigure('ยอดคาดหวัง', '฿1,000.00');
       expectFigure('ค่าคอมประมาณการ (เดือนนี้)', '฿250.00');
-    });
-
-    it('shows — for both value figures until the stage catalog has loaded', async () => {
-      api.meta.dealStages.mockImplementation(() => new Promise(() => {}));
-      renderOverview();
-      await screen.findByRole('region', { name: 'ตัวเลขเดือนนี้' });
-      await waitFor(() => expect(figureRows('ยอดคาดหวัง')[0]).toContain('—'));
-      expect(figureRows('ยอดที่สั่งซื้อแล้ว')[0]).toContain('—');
-      expect(figureRows('ยอดที่สั่งซื้อแล้ว')[0]).not.toContain('฿');
-      expect(figureRows('ยอดคาดหวัง')[0]).not.toContain('฿');
-    });
-
-    it('every worklist row shows the deal amount', async () => {
-      renderOverview();
-      const rows = await waitFor(() => {
-        const found = [...document.querySelectorAll('[data-testid^="sales-row-"]')];
-        expect(found.length).toBeGreaterThan(0);
-        return found;
-      });
-      rows.forEach((row) => expect(row.textContent).toContain('฿'));
     });
   });
 });

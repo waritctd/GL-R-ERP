@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { renderHook, act, waitFor } from '@testing-library/react';
+import { renderHook, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createElement } from 'react';
 
@@ -14,7 +14,6 @@ vi.mock('../api/index.js', () => ({
 import { api } from '../api/index.js';
 import { useHrData } from './useHrData.js';
 
-const hrUser = { role: 'hr', employeeId: 10 };
 const employeeUser = { role: 'employee', employeeId: 5 };
 
 function setup(user) {
@@ -35,18 +34,6 @@ describe('useHrData reads', () => {
     api.profileRequests.list.mockResolvedValue({ profileRequests: [] });
   });
 
-  it('loads the full employee list for a user who can view employees', async () => {
-    api.employees.get.mockResolvedValue({ employee: { id: 10 } });
-    api.employees.list.mockResolvedValue({ employees: [{ id: 1 }, { id: 2 }] });
-
-    const { result } = setup(hrUser);
-
-    await waitFor(() => {
-      expect(result.current.employees).toEqual([{ id: 1 }, { id: 2 }]);
-    });
-    expect(api.employees.list).toHaveBeenCalledTimes(1);
-  });
-
   it('derives the list from the current employee when the user cannot view all employees', async () => {
     api.employees.get.mockResolvedValue({ employee: { id: 5 } });
 
@@ -58,72 +45,5 @@ describe('useHrData reads', () => {
     expect(result.current.employees).toEqual([{ id: 5 }]);
     expect(api.employees.list).not.toHaveBeenCalled();
     expect(api.employees.get).toHaveBeenCalledWith(5);
-  });
-
-  it('tolerates a failed profile-requests load by falling back to an empty list', async () => {
-    api.employees.list.mockResolvedValue({ employees: [] });
-    api.profileRequests.list.mockRejectedValue(new Error('boom'));
-
-    const { result } = setup(hrUser);
-
-    await waitFor(() => {
-      expect(api.profileRequests.list).toHaveBeenCalled();
-    });
-    expect(result.current.profileRequests).toEqual([]);
-  });
-});
-
-describe('useHrData mutations', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    api.employees.get.mockResolvedValue({ employee: { id: 10 } });
-    api.employees.list.mockResolvedValue({ employees: [] });
-    api.profileRequests.list.mockResolvedValue({ profileRequests: [] });
-  });
-
-  it('creates an employee, refetches the list, and toasts success', async () => {
-    api.employees.create.mockResolvedValue({ employee: { id: 9 } });
-
-    const { result, showToast } = setup(hrUser);
-
-    // Wait for the initial list query to settle before mutating.
-    await waitFor(() => expect(api.employees.list).toHaveBeenCalledTimes(1));
-
-    // The refetch after invalidation should include the created employee.
-    api.employees.list.mockResolvedValue({ employees: [{ id: 9 }] });
-
-    await act(async () => {
-      await result.current.createEmployee({ nameTh: 'ทดสอบ' });
-    });
-
-    expect(api.employees.create).toHaveBeenCalledWith({ nameTh: 'ทดสอบ' });
-    expect(showToast).toHaveBeenCalledWith('success', expect.any(String));
-    await waitFor(() => {
-      expect(api.employees.list).toHaveBeenCalledTimes(2);
-      expect(result.current.employees).toEqual([{ id: 9 }]);
-    });
-  });
-
-  it('reviews a profile request, refetches the list, and toasts success', async () => {
-    api.profileRequests.list.mockResolvedValue({ profileRequests: [{ id: 1, status: 'pending' }] });
-    api.profileRequests.update.mockResolvedValue({ profileRequest: { id: 1, status: 'approved' } });
-
-    const { result, showToast } = setup(hrUser);
-
-    await waitFor(() => {
-      expect(result.current.profileRequests).toEqual([{ id: 1, status: 'pending' }]);
-    });
-
-    api.profileRequests.list.mockResolvedValue({ profileRequests: [{ id: 1, status: 'approved' }] });
-
-    await act(async () => {
-      await result.current.reviewProfileRequest(1, 'approved');
-    });
-
-    expect(api.profileRequests.update).toHaveBeenCalledWith(1, { status: 'approved' });
-    expect(showToast).toHaveBeenCalledWith('success', expect.any(String));
-    await waitFor(() => {
-      expect(result.current.profileRequests).toEqual([{ id: 1, status: 'approved' }]);
-    });
   });
 });

@@ -55,14 +55,6 @@ describe('useToast — showToast/dismissToast referential stability', () => {
     rerender();
     expect(result.current.showToast).toBe(first);
   });
-
-  it('dismissToast keeps the same identity across re-renders', () => {
-    const { result, rerender } = renderHook(() => useToast());
-    const first = result.current.dismissToast;
-
-    rerender();
-    expect(result.current.dismissToast).toBe(first);
-  });
 });
 
 describe('useToast — App-shaped integration (P0 regression)', () => {

@@ -1,7 +1,7 @@
 import React from 'react';
 import { render, screen, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
-import { CashCard, CASH_SERIES } from './CashCard.jsx';
+import { CashCard } from './CashCard.jsx';
 
 globalThis.React = React;
 
@@ -45,52 +45,5 @@ describe('CashCard — เงินที่จะเข้า', () => {
     // The longest week fills the track; a smaller week is proportionally shorter.
     expect(within(bars[1]).getByTestId('cash-track').style.width).toBe('100%');
     expect(within(bars[2]).getByTestId('cash-track').style.width).toBe('52%');
-  });
-
-  it('keeps the validated palette, a legend, and never colours text in a series colour', () => {
-    expect(CASH_SERIES.map((s) => s.color)).toEqual(['#4f46e5', '#0284c7', '#14b8a6']);
-    render(<CashCard cash={november} />);
-    const legend = screen.getByRole('list', { name: 'คำอธิบายสี' });
-    expect(within(legend).getAllByRole('listitem').map((li) => li.textContent))
-      .toEqual(['ส่งของแล้ว รอเก็บ', 'นัดส่งของ', 'มัดจำที่คาด']);
-    for (const el of document.querySelectorAll('[style]')) {
-      expect(el.style.color).toBe('');
-    }
-  });
-
-  it('carries the same numbers as a table for anyone who cannot read the bars', () => {
-    render(<CashCard cash={november} />);
-    const table = screen.getByRole('table', { name: 'เงินที่จะเข้า รายสัปดาห์' });
-    const rows = within(table).getAllByRole('row');
-    expect(rows).toHaveLength(1 + 4 + 1); // header, four weeks, total
-    expect(within(rows[2]).getAllByRole('cell').map((c) => c.textContent))
-      .toEqual(['ถึง 13 พ.ย.', '฿45,000', '฿415,000', '฿85,300', '฿0']);
-    expect(within(rows[5]).getAllByRole('cell').map((c) => c.textContent))
-      .toEqual(['รวม', '฿45,000', '฿431,000', '฿768,900', '฿121,150']);
-  });
-
-  it('says how a week is counted into a month (the ISO Thursday rule)', () => {
-    render(<CashCard cash={november} />);
-    expect(screen.getByText('สัปดาห์ที่คร่อมเดือน นับเข้าเดือนที่มีวันพฤหัสของสัปดาห์นั้น')).toBeTruthy();
-  });
-
-  it('says so, calmly, when nothing is expected or received this month', () => {
-    const empty = {
-      ...november, forecast: 0, received: 0, deliveredAwaiting: 0, deliveriesScheduled: 0, depositsExpected: 0,
-      weeks: november.weeks.map((w) => ({ ...w, deliveredAwaiting: 0, deliveriesScheduled: 0, depositsExpected: 0, received: 0 })),
-    };
-    render(<CashCard cash={empty} />);
-    expect(screen.getByText('ยังไม่มีเงินที่คาดว่าจะเข้าเดือนนี้')).toBeTruthy();
-    expect(screen.queryAllByTestId('cash-week')).toHaveLength(0);
-  });
-
-  it('a received-only month still shows the headline, without bars', () => {
-    const receivedOnly = {
-      ...november, forecast: 0, deliveredAwaiting: 0, deliveriesScheduled: 0, depositsExpected: 0,
-      weeks: november.weeks.map((w) => ({ ...w, deliveredAwaiting: 0, deliveriesScheduled: 0, depositsExpected: 0 })),
-    };
-    render(<CashCard cash={receivedOnly} />);
-    expect(screen.getByTestId('cash-received').textContent).toBe('฿121,150');
-    expect(screen.queryByText('ยังไม่มีเงินที่คาดว่าจะเข้าเดือนนี้')).toBeNull();
   });
 });

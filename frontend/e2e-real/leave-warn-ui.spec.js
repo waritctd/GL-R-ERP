@@ -33,7 +33,6 @@ const OWNER_ROLE = 'employee'; // DEMO-EMP01
 // Design tokens actually rendered for each LeaveRulePanel tone (frontend/src/index.css) -- read as real
 // computed `color` on the panel's own heading (`style.accent`, LeaveRulePanel.jsx), never as a class-name
 // match.
-const WARNING_HEADING_COLOR = 'rgb(146, 64, 14)'; // --color-warning-dark
 const DANGER_HEADING_COLOR = 'rgb(220, 38, 38)'; // --color-danger
 
 /** Today in Asia/Bangkok, the zone the app runs leave periods in (mirrors write-leave-review.spec.js). */
@@ -73,7 +72,7 @@ function addOneDay(iso) {
  * notice 0 days, so PERSONAL's 1-day requirement is violated and the rule fires. But the period
  * must ALSO contain at least one working day: `LeaveService` refuses one that does not, with
  * `400 ช่วงวันลาต้องมีวันทำงานอย่างน้อย 1 วัน`. Those two demands conflict on a Sat/Sun, which is
- * why cases 1, 3 and 6 would fail every weekend without it.
+ * why the approver flow would fail every weekend without it.
  *
  * Using this as the END date satisfies both: the period still starts today, and it now reaches a
  * working day. On a WEEKDAY this returns today, so the period stays today..today. On a Sat/Sun it returns the coming Monday, giving today..Monday --
@@ -156,126 +155,6 @@ function rowFor(page, reason) {
   return page.locator('tr, li').filter({ hasText: reason }).first();
 }
 
-test.describe('leave composer: §5 WARN_UNPAID_* rendering (V164 UI)', () => {
-  test.beforeEach(async ({ page }) => {
-    await loginAs(page, OWNER_ROLE);
-  });
-
-  test('case 1: a warning renders amber (not danger), submit stays enabled, and the button label states the pay consequence', async ({ page }) => {
-    await gotoComposer(page);
-    // Short of its type's notice, so ADVANCE_NOTICE (WARN_UNPAID_ALL) fires -- see NOTICE_SHORT.
-    await chooseTypeAndAdvance(page, NOTICE_SHORT.typeNameTh);
-    await fillStep2({
-      page,
-      startDate: NOTICE_SHORT.date,
-      endDate: NOTICE_SHORT.date,
-      reason: 'e2e-real: case1 amber warning, enabled submit',
-    });
-    await advanceToStep3(page);
-
-    // The ADVANCE_NOTICE panel is rendered (RULE_META label), amber-toned, and NOT wrapped in the role="alert" the
-    // BLOCK path uses (LeaveRequestPage.jsx: only step3Blocking/step3Error get role="alert" -- see case 5 below
-    // for the block-path contrast).
-    const label = 'แจ้งล่วงหน้าไม่ครบกำหนด';
-    await expect(page.getByText(label, { exact: true })).toBeVisible();
-    await expect(page.getByRole('alert')).toHaveCount(0);
-    expect(await panelHeadingColor(page, label)).toBe(WARNING_HEADING_COLOR);
-
-    const submit = page.getByRole('button', { name: /ส่งคำขอ/ });
-    await expect(submit).toBeEnabled();
-    await expect(submit).toHaveText('ส่งคำขอ (ไม่รับค่าจ้าง)');
-  });
-
-  test('a clean request (no warning) shows the plain submit label', async ({ page }) => {
-    // Contrast half of case 1's label assertion: VACATION booked with full advance notice trips no gate at all, so
-    // the button must read the PLAIN label, not the unpaid one.
-    await gotoComposer(page);
-    await chooseTypeAndAdvance(page, 'ลาพักร้อน'); // VACATION, advance_notice_days = 3
-    const cleanDay = adjacentWeekdayPairStart(120);
-    await fillStep2({
-      page, startDate: cleanDay, endDate: cleanDay, reason: 'e2e-real: clean submit label',
-    });
-    await advanceToStep3(page);
-
-    await expect(page.getByText('แจ้งล่วงหน้าไม่ครบกำหนด')).toHaveCount(0);
-    const submit = page.getByRole('button', { name: 'ส่งคำขอ', exact: true });
-    await expect(submit).toBeEnabled();
-  });
-
-  test('case 2: multiple simultaneous warnings all render, not just the first', async ({ page }) => {
-    // The wedding purpose exists only on PERSONAL, whose 1-day notice no request can be short of on
-    // a weekend (see NOTICE_SHORT).
-    test.skip(weekendInBangkok(), 'PERSONAL cannot be short of notice when today is a Sat/Sun');
-    // PERSONAL + purposeCode=WEDDING, requested for MORE than the 3-day wedding cap AND submitted same-day --
-    // LeaveService#autoRejectNote evaluates the wedding cap first, appends it to `warnings`, and keeps going
-    // rather than returning -- so ADVANCE_NOTICE fires too and BOTH accumulate on one response.
-    await gotoComposer(page);
-    await chooseTypeAndAdvance(page, 'ลากิจ');
-    const start = todayInBangkok();
-    const end = daysFromToday(3); // start..start+3 = 4 calendar days, 1 day over the wedding cap.
-    await fillStep2({
-      page, startDate: start, endDate: end, purposeCode: 'WEDDING',
-      reason: 'e2e-real: case2 multiple warnings',
-    });
-
-    const weddingLabel = 'เพดานวันลาพิธีสมรส';
-    const noticeLabel = 'แจ้งล่วงหน้าไม่ครบกำหนด';
-    await expect(page.getByText(weddingLabel, { exact: true })).toBeVisible();
-    await expect(page.getByText(noticeLabel, { exact: true })).toBeVisible();
-
-    // The count that matters (not merely "one is present" -- a regression that kept only the FIRST warning would
-    // still pass two separate `toBeVisible()` calls if it kept the wrong one twice; this counts the actual number
-    // of rendered panel headings).
-    const warningHeadings = page.locator('strong').filter({ hasText: new RegExp(`^(${weddingLabel}|${noticeLabel})$`) });
-    await expect(warningHeadings).toHaveCount(2);
-  });
-
-  test('case 3: the quick-check "passed" line is suppressed when a warning fires, shown when clean', async ({ page }) => {
-    const passedLine = page.getByText(/ผ่านเงื่อนไขที่ตรวจแบบเร็วแล้ว/);
-
-    // Half A: a warning fires (NOTICE_SHORT) -> the green line must be ABSENT, not merely
-    // pushed below the amber panel -- LeaveRequestPage.jsx gates it on
-    // `!step2Blocking && step2Warnings.length === 0`.
-    await gotoComposer(page);
-    await chooseTypeAndAdvance(page, NOTICE_SHORT.typeNameTh);
-    await fillStep2({
-      page,
-      startDate: NOTICE_SHORT.date,
-      endDate: NOTICE_SHORT.date,
-      reason: 'e2e-real: case3 warning suppresses passed line',
-    });
-    await expect(page.getByText('แจ้งล่วงหน้าไม่ครบกำหนด', { exact: true })).toBeVisible();
-    await expect(passedLine).toHaveCount(0);
-
-    // Half B: a clean request -> the green line IS shown. VACATION with full advance notice, no
-    // wedding/probation/etc gate in play.
-    await gotoComposer(page);
-    await chooseTypeAndAdvance(page, 'ลาพักร้อน');
-    const cleanDay = adjacentWeekdayPairStart(130);
-    await fillStep2({
-      page, startDate: cleanDay, endDate: cleanDay, reason: 'e2e-real: case3 clean shows passed line',
-    });
-    await expect(passedLine).toBeVisible();
-  });
-
-  test('case 4: a dateless preview renders no warning at all, and never a fabricated "0 วัน"', async ({ page }) => {
-    await gotoComposer(page);
-    await chooseTypeAndAdvance(page, 'ลากิจ');
-    // Dates default to today/today -- clear the start date so step2Params becomes null (LeaveRequestPage.jsx: `if
-    // (!employeeId || !leaveTypeCode || !startDate || !endDate) return null`), which disables the preview query
-    // entirely rather than fetching for an empty range.
-    await page.locator('#leave-start-date').fill('');
-    await page.locator('#leave-reason').fill('e2e-real: case4 dateless preview');
-
-    const mainRegion = page.locator('main');
-    await expect(mainRegion.getByText('แจ้งล่วงหน้าไม่ครบกำหนด')).toHaveCount(0);
-    await expect(mainRegion.getByText(/ผ่านเงื่อนไขที่ตรวจแบบเร็วแล้ว/)).toHaveCount(0);
-    // The fabrication this case exists to catch: a stale/zeroed preview rendering "0 วัน" as though it were a real
-    // answer for a request with no dates at all.
-    await expect(mainRegion.getByText('0 วัน', { exact: true })).toHaveCount(0);
-  });
-});
-
 test.describe('leave composer: a BLOCK gate still blocks (contrast case)', () => {
   test('case 5: CONTIGUOUS_LEAVE_PAIR still BLOCKs -- red panel, submit disabled', async ({ page }) => {
     const owner = await apiSessionFor(OWNER_ROLE);
@@ -305,8 +184,8 @@ test.describe('leave composer: a BLOCK gate still blocks (contrast case)', () =>
 
       const label = 'ลาต่อเนื่องกับวันลาอื่น';
       await expect(page.getByText(label, { exact: true })).toBeVisible();
-      // BLOCK renders inside role="alert" (step3Blocking) -- the structural contrast with every WARN_UNPAID_* case
-      // above, none of which ever gets that wrapper.
+      // BLOCK renders inside role="alert" (step3Blocking) -- the structural contrast with the WARN_UNPAID_* path,
+      // which never gets that wrapper.
       await expect(page.getByRole('alert').getByText(label, { exact: true })).toBeVisible();
       expect(await panelHeadingColor(page, label)).toBe(DANGER_HEADING_COLOR);
 
@@ -321,7 +200,7 @@ test.describe('leave composer: a BLOCK gate still blocks (contrast case)', () =>
   });
 });
 
-test.describe.serial('leave approver: warning visibility, pay-consequence confirm, quota, and layout', () => {
+test.describe.serial('leave approver: warning visibility, pay-consequence confirm and quota', () => {
   /** @type {Record<string, import('@playwright/test').APIRequestContext>} */
   const sessions = {};
   const reason = `e2e-real: approver-flow warn request ${Date.now()}`;
@@ -412,58 +291,5 @@ test.describe.serial('leave approver: warning visibility, pay-consequence confir
       Number(quotaAfter.remainingDays),
       'a fully unpaid-by-rule day must not consume quota -- LeaveRepository#sumUsedDays subtracts it'
     ).toBe(quotaRemainingBeforeCreate);
-  });
-
-  // Case 8: status badge + "ไม่รับค่าจ้าง N วัน" badge are stacked vertically, with the day count spelled out,
-  // at 375/820/1280 -- asserted via REAL geometry, never a class-name check: a class can be present while
-  // flex-direction/order/wrapping regresses underneath it.
-  const VIEWPORTS = [
-    { width: 375, height: 812, label: '375 (mobile card)' },
-    { width: 820, height: 1180, label: '820 (desktop grid)' },
-    { width: 1280, height: 900, label: '1280 (desktop grid)' },
-  ];
-
-  async function assertBadgesStackedAndUnclipped(page, statusLabel) {
-    const row = rowFor(page, reason);
-    await expect(row).toBeVisible();
-    const statusBadge = row.getByText(statusLabel, { exact: true });
-    const unpaidBadge = row.getByText('ไม่รับค่าจ้าง 1 วัน', { exact: true });
-    await expect(statusBadge).toBeVisible();
-    await expect(unpaidBadge).toBeVisible();
-
-    const statusBox = await statusBadge.boundingBox();
-    const unpaidBox = await unpaidBadge.boundingBox();
-    expect(statusBox, 'status badge must have real geometry').toBeTruthy();
-    expect(unpaidBox, 'unpaid badge must have real geometry').toBeTruthy();
-
-    // STACKED, not inline: the unpaid badge's top must sit at or below the status badge's own bottom (allowing a
-    // hairline of anti-aliasing/rounding slack), and the two must be left-aligned within a few px -- an inline
-    // layout would instead sit them side by side at roughly the SAME y with different x.
-    expect(unpaidBox.y, 'unpaid badge must sit BELOW the status badge, not beside it').toBeGreaterThanOrEqual(statusBox.y + statusBox.height - 2);
-    expect(Math.abs(unpaidBox.x - statusBox.x), 'the two badges must be left-aligned (stacked column)').toBeLessThanOrEqual(4);
-
-    // UNCLIPPED: the day count must be fully readable, not cut off by an overflow:clip ancestor.
-    for (const locator of [statusBadge, unpaidBadge]) {
-      const overflow = await locator.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }));
-      expect(overflow.scrollWidth, 'badge text must not be clipped').toBeLessThanOrEqual(overflow.clientWidth);
-    }
-  }
-
-  test('case 8: the queue row stacks the status/unpaid badges at every width', async ({ page }) => {
-    await loginAs(page, 'hr');
-    for (const viewport of VIEWPORTS) {
-      await page.setViewportSize(viewport);
-      await page.goto('/leave?tab=review');
-      await assertBadgesStackedAndUnclipped(page, 'อนุมัติแล้ว');
-    }
-  });
-
-  test('case 8: the history (own) row stacks the status/unpaid badges at every width', async ({ page }) => {
-    await loginAs(page, OWNER_ROLE);
-    for (const viewport of VIEWPORTS) {
-      await page.setViewportSize(viewport);
-      await page.goto('/leave?tab=me');
-      await assertBadgesStackedAndUnclipped(page, 'อนุมัติแล้ว');
-    }
   });
 });

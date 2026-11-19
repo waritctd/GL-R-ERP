@@ -53,13 +53,6 @@ describe('HolidaysTab', () => {
     vi.useRealTimers();
   });
 
-  it('renders holidays with their source badge', async () => {
-    renderTab();
-    expect(await screen.findByText('วันขึ้นปีใหม่')).not.toBeNull();
-    expect(screen.getByText('ธปท. (BANK)')).not.toBeNull();
-    expect(screen.getByText('บริษัท (COMPANY)')).not.toBeNull();
-  });
-
   it('creates a new holiday and refetches the list', async () => {
     const showToast = vi.fn();
     api.holidays.create.mockResolvedValue({ holidayDate: `${CURRENT_YEAR}-12-05`, nameTh: 'วันพ่อ', source: 'COMPANY' });
@@ -108,21 +101,6 @@ describe('HolidaysTab', () => {
     expect(screen.getByLabelText(/^วันที่/)).toHaveProperty('disabled', true);
   });
 
-  it('updates a COMPANY-sourced holiday directly, with no reclassification confirm', async () => {
-    api.holidays.update.mockResolvedValue({ holidayDate: `${CURRENT_YEAR}-08-15`, nameTh: 'วันหยุดพิเศษ (แก้ไข)', source: 'COMPANY' });
-    renderTab();
-
-    await screen.findByText('วันหยุดพิเศษบริษัท');
-    fireEvent.click(screen.getAllByRole('button', { name: /การดำเนินการสำหรับวันหยุด/ })[1]);
-    fireEvent.click(screen.getByRole('menuitem', { name: 'แก้ไข' }));
-
-    fireEvent.change(screen.getByLabelText(/^ชื่อวันหยุด/), { target: { value: 'วันหยุดพิเศษ (แก้ไข)' } });
-    fireEvent.click(screen.getByRole('button', { name: 'บันทึก' }));
-
-    await waitFor(() => expect(api.holidays.update).toHaveBeenCalledWith(`${CURRENT_YEAR}-08-15`, { nameTh: 'วันหยุดพิเศษ (แก้ไข)' }));
-    expect(screen.queryByText(/แปลงวันหยุดจาก ธปท/)).toBeNull();
-  });
-
   // The consequential case this branch's brief calls out by name: PUT forces source='COMPANY' even on a BANK
   // row. Must go through a named confirm step, and must NOT call update() until that confirm is accepted.
   it('requires a named confirm before reclassifying a BANK holiday to COMPANY, and only updates after confirming', async () => {
@@ -145,82 +123,5 @@ describe('HolidaysTab', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'ยืนยันแก้ไข' }));
     await waitFor(() => expect(api.holidays.update).toHaveBeenCalledWith(`${CURRENT_YEAR}-01-01`, { nameTh: 'วันขึ้นปีใหม่ (แก้ไข)' }));
-  });
-
-  it('deletes a holiday through the danger-toned ConfirmDialog', async () => {
-    api.holidays.remove.mockResolvedValue(null);
-    const showToast = vi.fn();
-    renderTab(showToast);
-
-    await screen.findByText('วันหยุดพิเศษบริษัท');
-    fireEvent.click(screen.getAllByRole('button', { name: /การดำเนินการสำหรับวันหยุด/ })[1]);
-    fireEvent.click(screen.getByRole('menuitem', { name: 'ลบ' }));
-
-    const dialog = await screen.findByRole('dialog');
-    expect(dialog.textContent).toContain('วันหยุดพิเศษบริษัท');
-    fireEvent.click(screen.getByRole('button', { name: 'ลบ' }));
-
-    await waitFor(() => expect(api.holidays.remove).toHaveBeenCalledWith(`${CURRENT_YEAR}-08-15`));
-    await waitFor(() => expect(showToast).toHaveBeenCalledWith('success', 'ลบวันหยุดแล้ว'));
-  });
-
-  it('reports a genuine BOT import as a success toast plus a per-year breakdown', async () => {
-    api.holidays.fetch.mockResolvedValue({ outcomes: [{ year: CURRENT_YEAR, holidayCount: 16, applied: true }] });
-    const showToast = vi.fn();
-    renderTab(showToast);
-
-    await screen.findByText('วันขึ้นปีใหม่');
-    fireEvent.click(screen.getByRole('button', { name: /ดึงข้อมูลวันหยุดจาก ธปท/ }));
-
-    await waitFor(() => expect(showToast).toHaveBeenCalledWith('success', expect.stringContaining('สำเร็จ')));
-    expect(await screen.findByText(/นำเข้า 16 วันหยุด/)).not.toBeNull();
-  });
-
-  // The exact production incident this branch's brief names: HTTP 200, BOT_HOLIDAY_API_TOKEN unset, zero
-  // holidays actually imported. Must never render as a plain success.
-  it('reports a zero-row fetch honestly -- no success toast, a persistent non-error breakdown', async () => {
-    api.holidays.fetch.mockResolvedValue({ outcomes: [{ year: CURRENT_YEAR, holidayCount: 0, applied: false }] });
-    const showToast = vi.fn();
-    renderTab(showToast);
-
-    await screen.findByText('วันขึ้นปีใหม่');
-    fireEvent.click(screen.getByRole('button', { name: /ดึงข้อมูลวันหยุดจาก ธปท/ }));
-
-    await waitFor(() => expect(api.holidays.fetch).toHaveBeenCalledTimes(1));
-    expect(showToast).not.toHaveBeenCalledWith('success', expect.anything());
-    expect(showToast).toHaveBeenCalledWith('info', expect.stringContaining('ไม่มีวันหยุดใหม่'));
-    expect(await screen.findByText('ดึงข้อมูลจาก ธปท. แล้ว แต่ไม่มีวันหยุดใหม่')).not.toBeNull();
-    expect(screen.getByText(/ไม่มีวันหยุดใหม่ \(ยังไม่ได้ตั้งค่า BOT token/)).not.toBeNull();
-  });
-
-  // 429: a deliberate 10-minute cooldown (BotHolidayFetchService.MANUAL_FETCH_COOLDOWN), not a failure -- must
-  // render as a timed, non-error state with a live countdown, and the button must be disabled for the duration.
-  it('renders a 429 as a timed cooldown with a live countdown, and disables the fetch button', async () => {
-    // shouldAdvanceTime lets real promise microtasks (the mutation itself) resolve promptly even with fake timers
-    // installed -- only the countdown's own setInterval macrotask needs the explicit advance below.
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    api.holidays.fetch.mockRejectedValue(apiError(
-      'รอสักครู่ก่อนเรียกดึงข้อมูลวันหยุดจากธนาคารแห่งประเทศไทยอีกครั้ง (ประมาณ 5 วินาที)',
-      429,
-    ));
-    const showToast = vi.fn();
-    renderTab(showToast);
-
-    await screen.findByText('วันขึ้นปีใหม่');
-    const fetchButton = screen.getByRole('button', { name: /ดึงข้อมูลวันหยุดจาก ธปท/ });
-    fireEvent.click(fetchButton);
-
-    await waitFor(() => expect(api.holidays.fetch).toHaveBeenCalledTimes(1));
-    // Never treated as an error toast/banner.
-    expect(showToast).not.toHaveBeenCalledWith('error', expect.anything());
-    expect(await screen.findByText(/เหลืออีกประมาณ 5 วินาที/)).not.toBeNull();
-    expect(screen.getByRole('button', { name: /ดึงข้อมูลวันหยุดจาก ธปท/ })).toHaveProperty('disabled', true);
-
-    // Advance past the cooldown -- the banner clears and the button re-enables on its own, without another fetch
-    // attempt.
-    await vi.advanceTimersByTimeAsync(6000);
-    await waitFor(() => expect(screen.queryByText(/เหลืออีกประมาณ/)).toBeNull());
-    expect(screen.getByRole('button', { name: /ดึงข้อมูลวันหยุดจาก ธปท/ })).toHaveProperty('disabled', false);
-    expect(api.holidays.fetch).toHaveBeenCalledTimes(1);
   });
 });

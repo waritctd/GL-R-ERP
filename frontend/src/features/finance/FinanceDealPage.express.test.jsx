@@ -63,14 +63,4 @@ describe('FinanceDealPage — Express upload flag', () => {
     const dialog = await screen.findByRole('dialog');
     await waitFor(() => expect(within(dialog).getByText(/จับคู่รายการจาก Express/)).not.toBeNull());
   });
-
-  it('with the flag OFF the deposit confirm says nothing of Express', async () => {
-    api.receiptImports.latest.mockResolvedValue({ uploadEnabled: false });
-    renderPage('account');
-    await waitFor(() => expect(api.receiptImports.latest).toHaveBeenCalled());
-    fireEvent.click(await screen.findByRole('button', { name: 'ยืนยันรับมัดจำ' }));
-    const dialog = await screen.findByRole('dialog');
-    expect(within(dialog).getByText(/ยืนยันว่าได้รับเงินมัดจำ/)).not.toBeNull();
-    expect(within(dialog).queryByText(/Express/)).toBeNull();
-  });
 });

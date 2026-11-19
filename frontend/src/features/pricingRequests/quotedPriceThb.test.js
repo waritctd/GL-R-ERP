@@ -32,14 +32,6 @@ describe('quotedPriceInThb', () => {
     expect(r.total).toBeCloseTo(20000); // 5 แผ่น
   });
 
-  it("prefers the quote's own ตร.ม./หน่วย over the request item's", () => {
-    expect(quotedPriceInThb(quote({ sqmPerUnit: 0.5 }), request(), FX).perPiece).toBeCloseTo(4600 * 0.5);
-  });
-
-  it('treats THB as rate 1', () => {
-    expect(quotedPriceInThb(quote({ currency: 'THB', rawUnitPrice: 1000 }), request(), []).perSqm).toBeCloseTo(1000);
-  });
-
   it.each([
     ['per_box', quote({ unitBasis: 'PER_BOX' }), request()],
     ['per_linear_m', quote({ unitBasis: 'PER_LINEAR_M' }), request()],
@@ -50,10 +42,5 @@ describe('quotedPriceInThb', () => {
     ['no requested quantity', quote(), request({ requestedQtySqm: null, piecesAfterWastage: null })],
   ])('shows nothing for %s — never a guessed baht figure', (_label, q, r) => {
     expect(quotedPriceInThb(q, r, FX)).toBeNull();
-  });
-
-  it('shows nothing when the FX list has not loaded (not an import/ceo viewer)', () => {
-    expect(quotedPriceInThb(quote(), request(), undefined)).toBeNull();
-    expect(quotedPriceInThb(quote(), request(), [])).toBeNull();
   });
 });

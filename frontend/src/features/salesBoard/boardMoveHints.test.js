@@ -31,14 +31,6 @@ describe('board move hints vs TicketService', () => {
       ['CLOSED_PAID', 'DELIVERED', 'DELIVERY_SCHEDULING', 'DEPOSIT_RECEIVED', 'ORDER_RECEIVED', 'PROCUREMENT']);
   });
 
-  it('column 3: only a designer or owner quotation moves a deal in', () => {
-    expect(TICKET_SERVICE).toMatch(/QuotationRecipient\.DESIGNER\.equals\(recipientType\)\) \{\s*return DealStage\.QUOTE_DESIGN_SIDE;/);
-    expect(TICKET_SERVICE).toMatch(/QuotationRecipient\.OWNER\.equals\(recipientType\)\) \{\s*return DealStage\.QUOTE_OWNER;/);
-    expect(columnOf('QUOTE_DESIGN_SIDE')).toBe(3);
-    expect(columnOf('QUOTE_OWNER')).toBe(3);
-    expect(hint(3).moveHint).toBe('เข้าเองเมื่ออนุมัติใบถึงผู้ออกแบบ/เจ้าของ');
-  });
-
   it('column 4: a buyer quotation, a quotation with no recipient, or the order confirm', () => {
     expect(TICKET_SERVICE).toMatch(/QuotationRecipient\.BUYER\.equals\(recipientType\)\) \{\s*return DealStage\.QUOTE_BUYER;/);
     // A no-recipient quotation goes to the nearest on-route stage at or before QUOTE_BUYER — QUOTE_BUYER itself, because

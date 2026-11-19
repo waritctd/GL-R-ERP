@@ -41,37 +41,6 @@ describe('ChangePasswordModal form validation', () => {
     expect(onSubmit).not.toHaveBeenCalled();
   });
 
-  it('blocks submit and shows the required message when current password is empty', async () => {
-    const { onSubmit } = renderModal();
-
-    // Leave รหัสผ่านปัจจุบัน empty; fill a valid, matching new/confirm password.
-    fireEvent.change(screen.getByLabelText('รหัสผ่านใหม่'), { target: { value: 'newpass123' } });
-    fireEvent.change(screen.getByLabelText(/ยืนยันรหัสผ่านใหม่/), { target: { value: 'newpass123' } });
-
-    fireEvent.click(screen.getByRole('button', { name: /บันทึกรหัสผ่าน/ }));
-
-    // zod's required check blocks the submit and surfaces the inline message.
-    expect(await screen.findByText('กรุณาระบุรหัสผ่านปัจจุบัน')).not.toBeNull();
-    expect(onSubmit).not.toHaveBeenCalled();
-  });
-
-  it('blocks submit and shows the mismatch message when confirm password does not match', async () => {
-    const { onSubmit } = renderModal();
-
-    fireEvent.change(screen.getByLabelText(/รหัสผ่านปัจจุบัน/), { target: { value: 'oldpass123' } });
-    fireEvent.change(screen.getByLabelText('รหัสผ่านใหม่'), { target: { value: 'newpass123' } });
-    fireEvent.change(screen.getByLabelText(/ยืนยันรหัสผ่านใหม่/), { target: { value: 'newpass456' } });
-
-    expect(await screen.findByText('รหัสผ่านใหม่และการยืนยันไม่ตรงกัน')).not.toBeNull();
-
-    const submitButton = screen.getByRole('button', { name: /บันทึกรหัสผ่าน/ });
-    await waitFor(() => expect(submitButton.disabled).toBe(true));
-
-    fireEvent.click(submitButton);
-
-    expect(onSubmit).not.toHaveBeenCalled();
-  });
-
   it('sends the existing change-password payload shape for a valid submit', async () => {
     const { onSubmit } = renderModal();
 

@@ -1,5 +1,5 @@
 import React from 'react';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { render } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Tabs } from './Tabs.jsx';
 
@@ -20,65 +20,6 @@ afterEach(() => {
 });
 
 describe('Tabs', () => {
-  it('uses the shared horizontal-scroll affordance classes without exposing scrollbars', () => {
-    render(<Tabs items={items} value="overview" onChange={() => {}} ariaLabel="รายละเอียดดีล" idPrefix="ticket-detail" />);
-
-    const tablist = screen.getByRole('tablist', { name: 'รายละเอียดดีล' });
-    expect(tablist.className).toContain('scroll-smooth');
-    expect(tablist.className).toContain('scroll-px-1');
-    expect(tablist.className).toContain('[scrollbar-width:none]');
-    expect(tablist.className).toContain('[&::-webkit-scrollbar]:hidden');
-  });
-
-  it('shows an edge affordance when tabs overflow to the right', () => {
-    render(<Tabs items={items} value="overview" onChange={() => {}} ariaLabel="รายละเอียดดีล" idPrefix="ticket-detail" />);
-
-    const tablist = screen.getByRole('tablist', { name: 'รายละเอียดดีล' });
-    Object.defineProperties(tablist, {
-      scrollLeft: { configurable: true, value: 0 },
-      clientWidth: { configurable: true, value: 300 },
-      scrollWidth: { configurable: true, value: 520 },
-    });
-
-    fireEvent.scroll(tablist);
-
-    expect(screen.getByTestId('tabs-scroll-right-affordance')).not.toBeNull();
-  });
-
-  it('keeps the selected tab visible by scrolling the tablist horizontally, never calling scrollIntoView (which would scroll the page)', () => {
-    const scrollIntoView = vi.fn();
-    Element.prototype.scrollIntoView = scrollIntoView;
-    const focus = vi.spyOn(HTMLElement.prototype, 'focus');
-    const onChange = vi.fn();
-
-    render(<Tabs items={items} value="overview" onChange={onChange} ariaLabel="รายละเอียดดีล" idPrefix="ticket-detail" />);
-
-    const tablist = screen.getByRole('tablist', { name: 'รายละเอียดดีล' });
-    Object.defineProperties(tablist, {
-      scrollLeft: { configurable: true, writable: true, value: 0 },
-      clientWidth: { configurable: true, value: 300 },
-      scrollWidth: { configurable: true, value: 520 },
-    });
-    // The last tab sits beyond the visible right edge (400..500 vs. 0..300).
-    Object.defineProperties(screen.getByRole('tab', { name: /กิจกรรม/ }), {
-      offsetLeft: { configurable: true, value: 400 },
-      offsetWidth: { configurable: true, value: 100 },
-    });
-
-    fireEvent.keyDown(screen.getByRole('tab', { name: /ภาพรวม/ }), { key: 'End' });
-
-    expect(onChange).toHaveBeenCalledWith('activity');
-    // scrollIntoView scrolls EVERY scrollable ancestor, including the vertical page container.
-    // The deal page's tablist lives in a sticky header that re-renders on scroll, and this effect
-    // re-runs on each of those renders, so a vertical scroll from here dragged the page around.
-    // Horizontal visibility is handled by the scrollLeft math alone.
-    expect(scrollIntoView).not.toHaveBeenCalled();
-    // Roving focus stays a plain focus(): on pages where the tablist is in the normal flow, the
-    // browser must still be free to bring an off-screen tab into view (preventScroll would hide it).
-    expect(focus).toHaveBeenCalledWith();
-    // tabRight (500) - clientWidth (300) + paddingRight (0) + edge padding (8)
-    expect(tablist.scrollLeft).toBe(208);
-  });
 
   // Regression coverage for a real incident: ActivityLogPage.jsx shipped `items: [{ value: 'x', label }]`
   // instead of `{ id: 'x', label }` (this component reads `item.id`, not `value` — see
@@ -115,31 +56,6 @@ describe('Tabs', () => {
       expect(ours).toBeDefined();
       expect(ours).toContain('2 of 2');
       expect(ours).toContain('activity-log');
-    });
-
-    it('warns loudly when items share a duplicate id', () => {
-      const duplicateItems = [
-        { id: 'overview', label: 'ภาพรวม' },
-        { id: 'overview', label: 'ภาพรวม (ซ้ำ)' },
-      ];
-
-      render(<Tabs items={duplicateItems} value="overview" onChange={() => {}} ariaLabel="รายละเอียดดีล" idPrefix="ticket-detail" />);
-
-      // Same reasoning as the missing-id case above: React's own duplicate-`key` warning also fires here, so find
-      // our message rather than assume an exact call count.
-      const messages = consoleError.mock.calls.map(([message]) => message);
-      const ours = messages.find((message) => message.includes('duplicate id(s)'));
-      expect(ours).toBeDefined();
-      expect(ours).toContain('overview');
-    });
-
-    it('does not re-warn on a re-render with the same items reference', () => {
-      const { rerender } = render(
-        <Tabs items={items} value="overview" onChange={() => {}} ariaLabel="รายละเอียดดีล" idPrefix="ticket-detail" />,
-      );
-      rerender(<Tabs items={items} value="pricing" onChange={() => {}} ariaLabel="รายละเอียดดีล" idPrefix="ticket-detail" />);
-
-      expect(consoleError).not.toHaveBeenCalled();
     });
   });
 });

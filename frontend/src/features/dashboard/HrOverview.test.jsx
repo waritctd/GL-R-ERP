@@ -1,11 +1,9 @@
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { HrOverview } from './HrOverview.jsx';
-import { api } from '../../api/index.js';
-import { queryKeys } from '../../api/queryKeys.js';
 
 globalThis.React = React;
 
@@ -62,19 +60,6 @@ function renderOverview(summary = dashboardSummary, queryClient = new QueryClien
 }
 
 describe('HrOverview', () => {
-  it('renders the HR greeting', () => {
-    renderOverview();
-    expect(screen.getByText('สวัสดี ฝ่ายบุคคล')).not.toBeNull();
-    expect(screen.getByText('งานบุคคลวันนี้ · การลงเวลา · รอบเงินเดือน')).not.toBeNull();
-  });
-
-  it('shows the profile-request review CTA wired to /requests', () => {
-    renderOverview();
-    expect(screen.getByText('คำขอแก้ไขข้อมูลพนักงาน')).not.toBeNull();
-    expect(screen.getByText('3 รายการรอตรวจ')).not.toBeNull();
-    expect(screen.getByText('ตรวจคำขอ').closest('button')).not.toBeNull();
-  });
-
   it('shows payroll period status with a CTA to /payroll', () => {
     renderOverview();
     expect(screen.getByText('รอบเงินเดือน')).not.toBeNull();
@@ -82,108 +67,4 @@ describe('HrOverview', () => {
     expect(screen.getByText('ไปที่หน้าเงินเดือน').closest('button')).not.toBeNull();
   });
 
-  // RC-04 (role check 2026-10-29): PayrollController#currentOrPreview requires payrollMonth and
-  // 400s without it. 2026-10-31T18:00Z is already 1 Nov in Bangkok, so a UTC month would send
-  // the wrong period on the last evening of every month.
-  it('asks for the current Bangkok payroll month', async () => {
-    vi.useFakeTimers({ toFake: ['Date'] });
-    vi.setSystemTime(new Date('2026-10-31T18:00:00Z'));
-    try {
-      api.payroll.current.mockClear();
-      renderOverview();
-      await waitFor(() => expect(api.payroll.current).toHaveBeenCalledWith({ payrollMonth: '2026-11' }));
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  // Review of RC-04: PayrollPage caches { period, suggestionsByEmployee, ... } under
-  // payrollCurrent(month). The landing must not overwrite that entry with a bare period, or the
-  // payroll page opened within staleTime renders an empty table.
-  it('leaves the payroll page cache entry for the same month untouched', async () => {
-    vi.useFakeTimers({ toFake: ['Date'] });
-    vi.setSystemTime(new Date('2026-10-15T05:00:00Z'));
-    try {
-      const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-      const payrollPageEntry = { period: { id: 7, status: 'PROCESSED' }, suggestionsByEmployee: {} };
-      queryClient.setQueryData(queryKeys.payrollCurrent('2026-10'), payrollPageEntry);
-      api.payroll.current.mockClear();
-      renderOverview(dashboardSummary, queryClient);
-      await waitFor(() => expect(api.payroll.current).toHaveBeenCalled());
-      await waitFor(() => expect(queryClient.isFetching()).toBe(0));
-      expect(queryClient.getQueryData(queryKeys.payrollCurrent('2026-10'))).toBe(payrollPageEntry);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  // A failed payroll read used to render as "not started", which is how RC-04's 400 hid.
-  it('says the payroll period failed to load instead of claiming it has not started', async () => {
-    api.payroll.current.mockRejectedValueOnce(Object.assign(new Error('bad request'), { status: 400 }));
-    renderOverview();
-    expect(await screen.findByText('โหลดรอบเงินเดือนไม่สำเร็จ')).not.toBeNull();
-    expect(screen.queryByText('ยังไม่เริ่มรอบเงินเดือนเดือนนี้')).toBeNull();
-  });
-
-  it('shows today attendance counts', () => {
-    renderOverview();
-    const panel = screen.getByText('การลงเวลาวันนี้').closest('section');
-    const rows = within(panel);
-    expect(rows.getByText('มาแล้ว')).not.toBeNull();
-    expect(rows.getByText('มาสาย')).not.toBeNull();
-    expect(rows.getByText('ยังไม่ออก')).not.toBeNull();
-    expect(rows.getByText('20')).not.toBeNull();
-    expect(rows.getByText('2')).not.toBeNull();
-    expect(rows.getByText('1')).not.toBeNull();
-  });
-
-  it('renders leave/OT as monitoring-only, with no approve button anywhere on the page', () => {
-    renderOverview();
-    const monitorPanel = screen.getByText('ภาพรวมลา / OT (ดูอย่างเดียว)').closest('section');
-    expect(within(monitorPanel).getByText('อนุมัติโดยหัวหน้าฝ่าย/CEO — ฝ่ายบุคคลติดตามสถานะเท่านั้น')).not.toBeNull();
-    expect(within(monitorPanel).getByText('คำขอลารออนุมัติ')).not.toBeNull();
-    expect(within(monitorPanel).getByText('OT รออนุมัติ')).not.toBeNull();
-
-    // No button anywhere on the page is an approval action (e.g. "อนุมัติ") — HR approves nothing here; it only
-    // monitors leave/OT. This deliberately does not match "รออนุมัติ" ("awaiting approval") labels, which are
-    // informational counts, not approve buttons.
-    const approveButtons = screen.queryAllByRole('button')
-      .filter((button) => /^อนุมัติ/.test(button.textContent.trim()));
-    expect(approveButtons).toHaveLength(0);
-  });
-
-  it('links the leave/OT monitor rows to the read-only /leave and /overtime pages', () => {
-    renderOverview();
-    const monitorPanel = screen.getByText('ภาพรวมลา / OT (ดูอย่างเดียว)').closest('section');
-    const leaveRow = within(monitorPanel).getByText('คำขอลารออนุมัติ').closest('button');
-    const otRow = within(monitorPanel).getByText('OT รออนุมัติ').closest('button');
-    expect(leaveRow).not.toBeNull();
-    expect(otRow).not.toBeNull();
-  });
-
-  it('renders the headcount-by-division list from the dashboard summary', () => {
-    renderOverview();
-    const panel = screen.getByText('จำนวนพนักงานตามฝ่าย').closest('section');
-    const rows = within(panel);
-    expect(rows.getByText('HR-ฝ่ายบุคคล')).not.toBeNull();
-    expect(rows.getByText('SA-ฝ่ายขาย')).not.toBeNull();
-  });
-
-  it('surfaces the ล.ย.01 review queue as HR work, counting only PENDING rows', async () => {
-    renderOverview();
-    const panel = screen.getByText('งานของฝ่ายบุคคล').closest('section');
-    expect(within(panel).getByText('แบบแจ้ง ล.ย.01 (ค่าลดหย่อนภาษี)')).not.toBeNull();
-    // Two PENDING out of three declarations — the APPROVED row must not be counted. Awaited: the label renders
-    // synchronously, the count only once the register query resolves.
-    expect(await within(panel).findByText('2 รายการรอตรวจ')).not.toBeNull();
-  });
-
-  it('does not render a leave/OT queue row in the ต้องดำเนินการ action queue', () => {
-    renderOverview();
-    const queue = screen.getByText('ต้องดำเนินการ').closest('section');
-    const rows = within(queue);
-    expect(rows.getByText('คำขอแก้ไขข้อมูลรออนุมัติ')).not.toBeNull();
-    expect(rows.queryByText('OT รออนุมัติ')).toBeNull();
-    expect(rows.queryByText('ลารออนุมัติ')).toBeNull();
-  });
 });

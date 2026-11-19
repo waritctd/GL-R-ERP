@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, within, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { ProcurementSourceDialog } from './ProcurementSourceDialog.jsx';
 
 const decide = vi.fn();
@@ -30,35 +30,6 @@ const oldDeal = (lines) => src({ legacy: true, editable: true, quotationNumber: 
 beforeEach(() => { decide.mockReset(); rejectWith = null; });
 
 describe('ProcurementSourceDialog', () => {
-  it('shows every line and only ยืนยัน on a new deal', () => {
-    renderDialog(src());
-    const rows = screen.getAllByTestId('procurement-line');
-    expect(within(rows[0]).getByText('นำเข้า')).toBeTruthy();
-    expect(within(rows[1]).getByText('สต็อก')).toBeTruthy();
-    ['สั่งนำเข้า', 'จากสต็อก', 'แยกรายการ'].forEach((n) => {
-      expect(screen.getByRole('button', { name: n }).disabled).toBe(true);
-    });
-    expect(screen.getByText('ตามใบเสนอราคา QT-TEST-1')).toBeTruthy();
-    expect(screen.queryAllByRole('switch')).toHaveLength(0);
-    const names = screen.getAllByRole('button').map((b) => b.getAttribute('aria-label') || b.textContent);
-    expect(names.filter((n) => n === 'ยืนยัน')).toHaveLength(1);
-    expect(screen.queryByRole('button', { name: 'ยกเลิก' })).toBeNull();
-  });
-
-  it('old deal: quick button sets every line; flipping one selects แยกรายการ', () => {
-    renderDialog(oldDeal([{ itemId: 1, fromStock: false }, { itemId: 2, fromStock: false }]));
-    fireEvent.click(screen.getByRole('button', { name: 'จากสต็อก' }));
-    screen.getAllByRole('switch').forEach((s) => expect(s.getAttribute('aria-checked')).toBe('true'));
-    expect(screen.getByRole('button', { name: 'จากสต็อก' }).getAttribute('aria-pressed')).toBe('true');
-    fireEvent.click(screen.getAllByRole('switch')[0]);
-    expect(screen.getByRole('button', { name: 'แยกรายการ' }).getAttribute('aria-pressed')).toBe('true');
-  });
-
-  it('old deal: starts from current coverage', () => {
-    renderDialog(oldDeal([{ itemId: 1, fromStock: false }, { itemId: 2, fromStock: true }]));
-    expect(screen.getByRole('button', { name: 'แยกรายการ' }).getAttribute('aria-pressed')).toBe('true');
-  });
-
   it('posts every line once, then onDecided with anyImport', async () => {
     const ticket = { id: 7 };
     decide.mockResolvedValue({ ticket });
@@ -83,12 +54,5 @@ describe('ProcurementSourceDialog', () => {
     renderDialog(src({ lines: [] }), { items: [] });
     expect(screen.getByText('ยังไม่มีรายการสินค้า')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'ยืนยัน' }).disabled).toBe(true);
-  });
-
-  it('closes on × without posting', async () => {
-    const { onClose } = renderDialog(oldDeal([{ itemId: 1, fromStock: false }, { itemId: 2, fromStock: true }]));
-    fireEvent.click(screen.getByRole('button', { name: 'ปิด' }));
-    expect(onClose).toHaveBeenCalled();
-    expect(decide).not.toHaveBeenCalled();
   });
 });

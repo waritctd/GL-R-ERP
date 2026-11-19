@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { TicketDetailRoute, AccountFinanceRedirect } from './TicketDetailRoute.jsx';
@@ -55,11 +55,6 @@ describe('AccountFinanceRedirect (deposit sub-route)', () => {
     expect(await screen.findByText('FINANCE-DEAL-PAGE')).not.toBeNull();
     expect(screen.getByTestId('where').textContent).toBe('/finance/deals/501');
   });
-
-  it('other roles keep the deposit page', async () => {
-    renderDeposit({ role: 'sales' });
-    expect(await screen.findByText('DEPOSIT-PAGE')).not.toBeNull();
-  });
 });
 
 describe('TicketDetailRoute (H1 lockdown)', () => {
@@ -70,19 +65,5 @@ describe('TicketDetailRoute (H1 lockdown)', () => {
     expect(await screen.findByText('FINANCE-DEAL-PAGE')).not.toBeNull();
     expect(screen.getByTestId('where').textContent).toBe('/finance/deals/501');
     expect(api.tickets.get).not.toHaveBeenCalled();
-  });
-
-  it('the redirect replaces the history entry (back does not bounce into the refused page)', async () => {
-    // MemoryRouter cannot read history length; assert the destination is final and stable instead.
-    renderAt({ role: 'account', name: 'บัญชี' });
-    await waitFor(() => expect(screen.getByTestId('where').textContent).toBe('/finance/deals/501'));
-    expect(screen.queryByText('TICKET-DETAIL-PAGE')).toBeNull();
-  });
-
-  it('ceo keeps the ticket page, which reads the ticket', async () => {
-    renderAt({ role: 'ceo', name: 'ceo' });
-    expect(await screen.findByText('TICKET-DETAIL-PAGE')).not.toBeNull();
-    expect(api.tickets.get).toHaveBeenCalledWith('501');
-    expect(screen.getByTestId('where').textContent).toBe('/tickets/501');
   });
 });

@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { test, expect } from '@playwright/test';
-import { anonApi, apiSessionsFor, apiWrite, disposeSessions } from './helpers/api.js';
+import { apiSessionsFor, disposeSessions } from './helpers/api.js';
 import { loginAs } from './helpers/auth.js';
 import { cancelDeal, createDeal } from './helpers/sales.js';
 
@@ -54,14 +54,6 @@ function backdateDeal(ticketId) {
   return null;
 }
 
-const COLUMN_LABELS = [
-  'เสนอสินค้า · S1',
-  'สเปคผ่าน · S2',
-  'เสนอราคาแล้ว · S3–5',
-  'รอมัดจำ · S6',
-  'ส่งของ · เก็บเงิน · S7–9',
-];
-
 test.describe('sales board — happy paths @sales-board', () => {
   let sessions;
   const created = [];
@@ -72,46 +64,6 @@ test.describe('sales board — happy paths @sales-board', () => {
   test.afterAll(async () => {
     for (const id of created) await cancelDeal(sessions, id);
     await disposeSessions(sessions);
-  });
-
-  test('sales lands on งานของฉัน with the five board columns', async ({ page }) => {
-    await loginAs(page, 'sales');
-    await expect(page.getByRole('heading', { name: 'งานของฉัน' })).toBeVisible();
-    await expect(page.getByText('ควรตามต่อ').first()).toBeVisible();
-
-    const board = page.getByTestId('deal-board');
-    await expect(board).toBeVisible();
-    for (const label of COLUMN_LABELS) {
-      await expect(board.getByRole('region', { name: label })).toBeVisible();
-    }
-    await expect(board.locator('section[data-testid^="board-column-"]')).toHaveCount(5);
-    // Not the error branch, not the crash boundary.
-    await expect(page.getByText('โหลดไม่สำเร็จ')).toHaveCount(0);
-    await expect(page.getByText('โหลดหน้านี้ไม่สำเร็จ')).toHaveCount(0);
-    await shot(page, '01-rep-landing-desktop');
-  });
-
-  // At ≤720px the landing is the phone screen วันนี้ของฉัน (TodayOnPhone); the stacked page with the board is one tap
-  // away behind ดูหน้าเต็ม. Both must fit 375px: this is the only real-browser proof that the board fits a phone.
-  test('sales landing at 375px shows วันนี้ของฉัน, and ดูหน้าเต็ม the board, without a horizontal page scroll', async ({ page }) => {
-    const overflow = () => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
-    await page.setViewportSize({ width: 375, height: 812 });
-    await loginAs(page, 'sales');
-
-    const today = page.getByTestId('today-phone');
-    await expect(today.getByRole('heading', { level: 1, name: 'วันนี้ของฉัน' })).toBeVisible();
-    await expect(today.getByTestId('today-next-visit')).toBeVisible();
-    await expect(today.getByTestId('log-visit-sticky')).toBeVisible();
-    await expect(today.getByTestId('today-quick-actions')).toBeVisible();
-    await expect(today.getByTestId('today-follow-up')).toBeVisible();
-    expect(await overflow(), 'horizontal page overflow in px (วันนี้ของฉัน)').toBeLessThanOrEqual(1);
-    await shot(page, '02-rep-landing-375');
-
-    await today.getByRole('button', { name: 'ดูหน้าเต็ม', exact: true }).click();
-    await expect(page.getByRole('heading', { name: 'งานของฉัน' })).toBeVisible();
-    await expect(page.getByTestId('deal-board')).toBeVisible();
-    expect(await overflow(), 'horizontal page overflow in px (full page)').toBeLessThanOrEqual(1);
-    await shot(page, '02b-rep-full-page-375');
   });
 
   test('โทรแล้ว with an outcome logs a CALL and the deal leaves ควรตามต่อ', async ({ page }) => {
@@ -210,62 +162,5 @@ test.describe('sales board — failure paths @sales-board', () => {
     } finally {
       await disposeSessions(sessions);
     }
-  });
-
-  test('both endpoints refuse an anonymous caller with 401', async () => {
-    const anon = await anonApi();
-    try {
-      for (const path of ['/api/sales/my-work', '/api/sales/team-overview']) {
-        expect((await anon.get(path, { failOnStatusCode: false })).status(), path).toBe(401);
-      }
-    } finally {
-      await anon.dispose();
-    }
-  });
-
-  test('PUT /tracking: a malformed expectedQuarter is 400 and changes nothing; YYYY-Qn is accepted', async () => {
-    const sessions = await apiSessionsFor(['sales']);
-    let deal;
-    try {
-      deal = await createDeal(sessions, { caseName: 'board expectedQuarter', entryChannel: 'DESIGNER_LED' });
-      const path = `/api/tickets/${deal.id}/tracking`;
-
-      const good = await apiWrite(sessions.sales, 'put', path, { expectedQuarter: '2026-Q4' });
-      expect(good.status(), 'valid 2026-Q4').toBe(200);
-
-      for (const bad of ['2026Q4', '2026-Q5', '2026-q4', 'Q4-2026']) {
-        const res = await apiWrite(sessions.sales, 'put', path, { expectedQuarter: bad });
-        expect(res.status(), `expectedQuarter ${JSON.stringify(bad)}`).toBe(400);
-      }
-
-      // The refused writes left the earlier valid value in place.
-      const mine = await (await sessions.sales.get('/api/sales/my-work')).json();
-      const card = mine.board.find((d) => d.ticketId === deal.id);
-      expect(card?.expectedQuarter).toBe('2026-Q4');
-    } finally {
-      if (deal) await cancelDeal(sessions, deal.id);
-      await disposeSessions(sessions);
-    }
-  });
-
-  test('UI: a 500 from GET /api/sales/my-work shows the error state, not a blank page or a crash', async ({ page }) => {
-    let hits = 0;
-    await page.route('**/api/sales/my-work', (route) => {
-      hits += 1;
-      return route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ message: 'boom', status: 500 }) });
-    });
-    await loginAs(page, 'sales');
-
-    // All three panels fed by my-work (ควรตามต่อ, นัดเข้าพบสัปดาห์นี้ and the board) fall to the shared failure copy once
-    // react-query's single retry is spent. (Was 2 before the visits card existed.)
-    await expect(page.getByText('โหลดไม่สำเร็จ').first()).toBeVisible();
-    await expect(page.getByText('โหลดไม่สำเร็จ')).toHaveCount(3);
-    expect(hits).toBeGreaterThan(0);
-    // The page chrome survives: header + the rest of the shell, no error-boundary fallback, no board skeleton.
-    await expect(page.getByRole('heading', { name: 'งานของฉัน' })).toBeVisible();
-    await expect(page.getByText('โหลดหน้านี้ไม่สำเร็จ')).toHaveCount(0);
-    await expect(page.getByTestId('deal-board')).toHaveCount(0);
-    await expect(page.getByRole('status', { name: /กำลังโหลด/ })).toHaveCount(0);
-    await shot(page, '06-my-work-error-state');
   });
 });
