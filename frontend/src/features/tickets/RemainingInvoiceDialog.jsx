@@ -124,8 +124,8 @@ function DialogFooterRow({ children }) {
  *    one-shot file.
  *  - A live DRAFT -> an editable form (same fields) with "บันทึก" (re-snapshot + save), "ลบร่าง",
  *    and "ออกใบแจ้งหนี้" (issue — mints the real number).
- *  - A live ISSUED document (no draft) -> a read-only summary, "แก้ไข" (edits the same document in place:
- *    same number and status), "ออกฉบับแก้ไข" (revise — prepares a new correcting DRAFT), and a download button.
+ *  - A live ISSUED document (no draft) -> a read-only summary, "แก้ไขฉบับปัจจุบัน" (edits the same document in place:
+ *    same number and status), "ออกฉบับใหม่" (revise — prepares a new correcting DRAFT), and a download button.
  *  - Every ISSUED/SUPERSEDED version is listed below, each individually downloadable — including
  *    while a revision DRAFT is open above it: the document being corrected stays ISSUED (see
  *    RemainingInvoiceService#revise's Javadoc) and must stay reachable/downloadable.
@@ -266,7 +266,7 @@ function VersionHistory({ versions, onDownload }) {
   );
 }
 
-/** Read-only summary of the currently-live ISSUED document, plus the "ออกฉบับแก้ไข" action —
+/** Read-only summary of the currently-live ISSUED document, plus the "ออกฉบับใหม่" action —
  * hidden when `canWrite` is false: a non-owning viewer still reads/downloads, never revises. */
 function IssuedSummary({ issued, canWrite, onRevised, onDownloaded, showToast }) {
   const [revising, setRevising] = useState(false);
@@ -281,7 +281,7 @@ function IssuedSummary({ issued, canWrite, onRevised, onDownloaded, showToast })
       await api.storedRemainingInvoices.revise(issued.id);
       await onRevised?.();
     } catch (err) {
-      setError(err.message || 'ออกฉบับแก้ไขไม่สำเร็จ');
+      setError(err.message || 'ออกฉบับใหม่ไม่สำเร็จ');
     } finally {
       setRevising(false);
     }
@@ -334,16 +334,22 @@ function IssuedSummary({ issued, canWrite, onRevised, onDownloaded, showToast })
         {canWrite ? (
           <Button type="button" variant="secondary" onClick={() => setEditing(true)}
             data-testid="remaining-invoice-edit">
-            แก้ไข
+            แก้ไขฉบับปัจจุบัน
           </Button>
         ) : null}
         {canWrite ? (
           <Button type="button" variant="secondary" disabled={revising} onClick={handleRevise}
             data-testid="remaining-invoice-revise">
-            {revising ? 'กำลังออกฉบับแก้ไข…' : 'ออกฉบับแก้ไข'}
+            {revising ? 'กำลังออกฉบับใหม่…' : 'ออกฉบับใหม่'}
           </Button>
         ) : null}
       </div>
+      {canWrite ? (
+        <ul className="m-0 flex list-none flex-col gap-1 p-0 text-xs text-text-muted" data-testid="remaining-invoice-action-help">
+          <li><b className="text-text-secondary">แก้ไขฉบับปัจจุบัน</b> — แก้ในเอกสาร {issued.docNumber} ใช้เลขที่เดิม ระบบบันทึกประวัติการแก้ไขไว้</li>
+          <li><b className="text-text-secondary">ออกฉบับใหม่</b> — เปิดร่างฉบับถัดไป (เลขที่ใหม่) เมื่อออกแล้ว ฉบับ {issued.docNumber} จะถูกแทนที่</li>
+        </ul>
+      ) : null}
     </div>
   );
 }

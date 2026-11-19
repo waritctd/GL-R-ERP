@@ -726,9 +726,15 @@ describe('RemainingInvoiceDialog — a live ISSUED document exists', () => {
 
     const history = await screen.findByTestId('remaining-invoice-history');
     expect(within(history).queryByTestId('remaining-invoice-edit')).toBeNull();
-    expect(within(history).queryByRole('button', { name: 'แก้ไข' })).toBeNull();
+    expect(within(history).queryByRole('button', { name: 'แก้ไขฉบับปัจจุบัน' })).toBeNull();
     // Exactly one edit control on the page: the live ISSUED document's.
     expect(screen.getAllByTestId('remaining-invoice-edit')).toHaveLength(1);
+    // The two actions are explained under the buttons: edit keeps the number, a new version replaces it.
+    const help = screen.getByTestId('remaining-invoice-action-help');
+    expect(help.textContent).toContain('แก้ไขฉบับปัจจุบัน');
+    expect(help.textContent).toContain('ใช้เลขที่เดิม');
+    expect(help.textContent).toContain('ออกฉบับใหม่');
+    expect(help.textContent).toContain('จะถูกแทนที่');
   });
 
   it('lists SUPERSEDED versions with their own download buttons', async () => {
