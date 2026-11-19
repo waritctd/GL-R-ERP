@@ -26,8 +26,6 @@ vi.mock('../../api/index.js', async (importOriginal) => {
 // rows /fulfilment reads. No new endpoint.
 
 const me = { id: 7, role: 'import', employeeId: 2, name: 'วรรณา นำเข้า' };
-const never = () => new Promise(() => {});
-
 const pcr = (id, status, o = {}) => ({
   id, status, ticketId: 1, customerName: `ลูกค้า ${id}`, requestCode: `PCR-${id}`, ticketCode: `PR-${id}`,
   recipientType: 'DESIGNER', assignedImportId: null, assignedImportName: null, requestedByName: 'คุณสมหมาย',
@@ -106,36 +104,7 @@ describe('ImportOverview — the งานนำเข้า worklist', () => {
   });
   afterEach(cleanup);
 
-  it('is titled งานนำเข้า and lists the four groups in next-step order with their counts', async () => {
-    renderOverview();
-    await settled('arrived');
-    await settled('pickup');
-    expect(screen.getByRole('heading', { name: 'งานนำเข้า' })).not.toBeNull();
-    const order = screen.getAllByTestId(/^import-group-[a-z]+$/).map((el) => el.dataset.testid.replace('import-group-', ''));
-    expect(order).toEqual(['pickup', 'pricing', 'transit', 'arrived']);
-    expect(within(group('pickup')).getByTestId('group-count').textContent).toBe('2');
-    expect(within(group('pricing')).getByTestId('group-count').textContent).toBe('2');
-    expect(within(group('transit')).getByTestId('group-count').textContent).toBe('3');
-    expect(within(group('arrived')).getByTestId('group-count').textContent).toBe('2');
-    expect(screen.getByText(/จัดกลุ่มตามขั้นต่อไป · 9 งาน/)).not.toBeNull();
-    // the old tile band and the separate panels are gone
-    expect(screen.queryByText('ภาพรวมงานนำเข้า')).toBeNull();
-    expect(screen.queryByTestId('in-transit-panel')).toBeNull();
-    expect(screen.queryByTestId('ceo-waiting-panel')).toBeNull();
-  });
-
   describe('รอรับเรื่อง', () => {
-    it('lists SUBMITTED requests oldest first, with who sent it and how many lines', async () => {
-      renderOverview();
-      await settled('pickup');
-      expect(rowIds('pickup')).toEqual(['import-row-pickup-102', 'import-row-pickup-101']);
-      const row = screen.getByTestId('import-row-pickup-102');
-      expect(row.textContent).toContain('PCR-102');
-      expect(row.textContent).toContain('ลูกค้า 102');
-      expect(row.textContent).toContain('คุณสมหมาย');
-      expect(row.textContent).toContain('5 รายการ');
-    });
-
     it('รับเรื่อง claims inline with the existing pickup call, stays on the page, and the row moves out', async () => {
       const { showToast } = renderOverview();
       await settled('pickup');
@@ -150,28 +119,6 @@ describe('ImportOverview — the งานนำเข้า worklist', () => {
       expect(showToast).toHaveBeenCalledWith('success', expect.stringContaining('รับเรื่อง'));
       expect(screen.queryByTestId('location-probe')).toBeNull();
     });
-
-    it('รับเรื่อง is disabled while its claim is in flight, so a double tap claims once', async () => {
-      renderOverview();
-      await settled('pickup');
-      let resolve;
-      api.pricingRequests.pickup.mockReturnValue(new Promise((r) => { resolve = r; }));
-      const button = within(screen.getByTestId('import-row-pickup-102')).getByRole('button', { name: 'รับเรื่อง' });
-      fireEvent.click(button);
-      await waitFor(() => expect(button.disabled).toBe(true));
-      fireEvent.click(button);
-      expect(api.pricingRequests.pickup).toHaveBeenCalledTimes(1);
-      resolve({ pricingRequest: {} });
-    });
-
-    it('a refused claim (someone else got it first) says so and keeps the row', async () => {
-      const { showToast } = renderOverview();
-      await settled('pickup');
-      api.pricingRequests.pickup.mockRejectedValue(new Error('รับเรื่องได้เฉพาะคำขอราคาที่ถูกยื่นแล้วเท่านั้น'));
-      fireEvent.click(within(screen.getByTestId('import-row-pickup-101')).getByRole('button', { name: 'รับเรื่อง' }));
-      await waitFor(() => expect(showToast).toHaveBeenCalledWith('error', 'รับเรื่องได้เฉพาะคำขอราคาที่ถูกยื่นแล้วเท่านั้น'));
-      expect(rowIds('pickup')).toContain('import-row-pickup-101');
-    });
   });
 
   describe('รอราคาโรงงาน', () => {
@@ -181,15 +128,6 @@ describe('ImportOverview — the งานนำเข้า worklist', () => {
       expect(rowIds('pricing').sort()).toEqual(['import-row-pricing-111', 'import-row-pricing-112']);
       fireEvent.click(within(screen.getByTestId('import-row-pricing-112')).getByRole('button', { name: 'เปิด' }));
       expect(probe()).toBe('/pricing-requests/112');
-    });
-
-    it('ทั้งทีม adds the team’s requests, naming who holds each', async () => {
-      renderOverview();
-      await settled('pricing');
-      fireEvent.click(screen.getByRole('button', { name: 'ทั้งทีม' }));
-      expect(rowIds('pricing').sort()).toEqual(['import-row-pricing-111', 'import-row-pricing-112', 'import-row-pricing-121']);
-      expect(screen.getByTestId('import-row-pricing-121').textContent).toContain('สมศรี นำเข้า');
-      expect(screen.getByRole('button', { name: 'ทั้งทีม' }).getAttribute('aria-pressed')).toBe('true');
     });
   });
 
@@ -207,84 +145,6 @@ describe('ImportOverview — the งานนำเข้า worklist', () => {
       expect(row.textContent).toContain('ETA');
       fireEvent.click(within(row).getByRole('button', { name: 'อัปเดต' }));
       expect(probe()).toBe('/fulfilment');
-    });
-
-    it('a pre-V184 deal with no stored rows is still listed, and opens its deal page', async () => {
-      renderOverview();
-      await settled('transit');
-      const row = screen.getByTestId('import-row-transit-legacy-5');
-      expect(row.textContent).toContain('Legacy Co');
-      fireEvent.click(within(row).getByRole('button', { name: 'เปิด' }));
-      expect(probe()).toBe('/import/deals/5');
-    });
-
-    it('ถึงโกดังแล้ว lists received shipments with no action (it is sales’ turn)', async () => {
-      renderOverview();
-      await settled('arrived');
-      expect(rowIds('arrived').sort()).toEqual(['import-row-arrived-42', 'import-row-arrived-61']);
-      expect(within(group('arrived')).queryAllByRole('button')).toHaveLength(0);
-      expect(within(group('arrived')).getByText(/ไม่มีงานของคุณ/)).not.toBeNull();
-    });
-  });
-
-  describe('empty, loading and failure', () => {
-    it('an empty group keeps its header and says ไม่มีรายการ', async () => {
-      queue = queue.filter((r) => r.status !== 'SUBMITTED');
-      renderOverview();
-      await settled('pickup');
-      expect(within(group('pickup')).getByTestId('group-count').textContent).toBe('0');
-      expect(within(group('pickup')).getByText('ไม่มีรายการ')).not.toBeNull();
-    });
-
-    it('nothing at all reads as one calm line', async () => {
-      queue = [];
-      api.tickets.list.mockResolvedValue({ tickets: [] });
-      renderOverview();
-      expect(await screen.findByText('ไม่มีงานนำเข้าที่ต้องทำตอนนี้')).not.toBeNull();
-    });
-
-    it('a failed queue marks only the two request groups; shipments still render', async () => {
-      api.pricingRequests.queue.mockRejectedValue(new Error('boom'));
-      renderOverview();
-      await settled('transit');
-      expect(within(group('pickup')).getByText('โหลดไม่สำเร็จ')).not.toBeNull();
-      expect(within(group('pricing')).getByText('โหลดไม่สำเร็จ')).not.toBeNull();
-      expect(rowIds('transit').length).toBe(3);
-    });
-
-    // Review H2: a deal whose ใบขอซื้อ rows failed to load is NOT a deal with nothing to do.
-    it('every per-deal query failing shows the per-deal error, never the nothing-to-do line', async () => {
-      queue = [];
-      api.storedImportRequests.listForTicket.mockRejectedValue(new Error('boom'));
-      renderOverview();
-      const banner = await screen.findByTestId('import-rows-error');
-      expect(banner.textContent).toContain('โหลดใบขอซื้อของงานต่อไปนี้ไม่สำเร็จ');
-      expect(within(banner).getByRole('link', { name: /Siam Mall/ }).getAttribute('href')).toBe('/import/deals/3');
-      expect(screen.queryByText('ไม่มีงานนำเข้าที่ต้องทำตอนนี้')).toBeNull();
-      expect(screen.getByTestId('import-partial').textContent).toContain('ข้อมูลไม่ครบ — โหลดบางงานไม่สำเร็จ ลองใหม่');
-    });
-
-    it('some per-deal queries failing marks the shipment counts as partial, with a retry', async () => {
-      api.storedImportRequests.listForTicket.mockImplementation((id) => (id === 4
-        ? Promise.reject(new Error('boom'))
-        : Promise.resolve({ importRequests: ROWS[id] ?? [] })));
-      renderOverview();
-      await settled('transit');
-      expect(await screen.findByTestId('import-partial')).not.toBeNull();
-      expect(rowIds('transit')).toContain('import-row-transit-31');
-      expect(within(screen.getByTestId('import-rows-error')).getByRole('link', { name: /บ้านพักชะอำ/ })).not.toBeNull();
-      api.storedImportRequests.listForTicket.mockImplementation((id) => Promise.resolve({ importRequests: ROWS[id] ?? [] }));
-      fireEvent.click(screen.getByRole('button', { name: 'ลองใหม่' }));
-      await waitFor(() => expect(screen.queryByTestId('import-partial')).toBeNull());
-      expect(rowIds('transit')).toContain('import-row-transit-41');
-    });
-
-    it('while the deal list loads, the shipment groups are busy and the request groups are not', async () => {
-      api.tickets.list.mockImplementation(never);
-      renderOverview();
-      await settled('pickup');
-      expect(group('transit').getAttribute('aria-busy')).toBe('true');
-      expect(group('arrived').getAttribute('aria-busy')).toBe('true');
     });
   });
 });

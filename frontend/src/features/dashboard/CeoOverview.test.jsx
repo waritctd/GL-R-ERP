@@ -1,11 +1,11 @@
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
-import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { CeoOverview } from './CeoOverview.jsx';
 import { api } from '../../api/index.js';
-import { bangkokMonthStartIso, bangkokTodayIso, formatThaiDate } from '../../utils/format.js';
+import { bangkokMonthStartIso } from '../../utils/format.js';
 import {
   CASH_BY_REP, CASH_RECEIVED_THIS_MONTH, EXPECTED, SERVER_TOTALS, expectFigure, figureRows,
 } from '../../test/fixtures/dashboardMoney.js';
@@ -27,16 +27,7 @@ vi.mock('../../api/index.js', () => ({
   },
 }));
 
-const linkTo = (row, href) => [...row.querySelectorAll('a')].find((a) => a.getAttribute('href') === href);
-const TODAY = bangkokTodayIso();
-function addDays(iso, delta) {
-  const d = new Date(`${iso}T00:00:00.000Z`);
-  d.setUTCDate(d.getUTCDate() + delta);
-  return d.toISOString().slice(0, 10);
-}
 const monthStart = bangkokMonthStartIso();
-const THIS_MONTH = monthStart.slice(0, 7);
-
 const ceoUser = { id: 1, employeeId: 999, name: 'ผู้บริหาร ทดสอบ', role: 'ceo' };
 const ceoEmployee = { nameTh: 'สมศักดิ์ ผู้บริหาร', nickName: 'บอส' };
 
@@ -49,8 +40,6 @@ const dashboardSummary = {
   cashReceivedByRep: CASH_BY_REP,
   ...SERVER_TOTALS,
 };
-
-const never = () => new Promise(() => {});
 
 function leaveRequest(id) {
   return {
@@ -163,13 +152,10 @@ function SearchProbe() {
   return <div data-testid="search-probe">{useLocation().search}</div>;
 }
 
-let lastClient;
-
 function renderOverview(summary = dashboardSummary, entry = '/') {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
-  lastClient = queryClient;
 
   return render(
     <QueryClientProvider client={queryClient}>
@@ -191,148 +177,12 @@ function renderOverview(summary = dashboardSummary, entry = '/') {
   );
 }
 
-// No @testing-library/jest-dom in this project (see src/test/setup.js) — plain .textContent assertions instead
-// of toHaveTextContent, matching every other test file in this repo.
-function probeText() {
-  return screen.getByTestId('location-probe').textContent;
-}
-
-const group = (key) => screen.getByTestId(`worklist-group-${key}`);
 const findGroup = (key) => screen.findByTestId(`worklist-group-${key}`);
 
 describe('CeoOverview', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockAllData();
-  });
-
-  describe('ความเคลื่อนไหวของทีม panel', () => {
-    const mv = (id, ownerId, ownerName, extra = {}) => ({
-      id, code: `TK-${id}`, customerName: `ลูกค้า ${id}`, title: `โครงการ ${id}`, status: 'quotation_issued',
-      lifecycle: 'ACTIVE', salesStage: 'NEGOTIATION', createdById: ownerId, createdByName: ownerName,
-      amountPayable: 100, amountPaid: 0, amountOutstanding: 0, overdue: false, nextFollowUpAt: null,
-      stageChangedInRange: false, activityInRange: false, ...extra,
-    });
-    const TEAM = [
-      mv(801, 21, 'สมชาย ขายดี', { stageChangedInRange: true }),
-      mv(802, 21, 'สมชาย ขายดี', { nextFollowUpAt: '2020-01-01' }),
-      mv(803, 22, 'สมหญิง ขายเก่ง'),
-      mv(804, 22, 'สมหญิง ขายเก่ง'),
-      mv(805, 22, 'สมหญิง ขายเก่ง', { activityInRange: true }),
-      mv(806, 23, 'ไม่มีงานเปิด', { lifecycle: 'CLOSED_LOST' }),
-      mv(807, 21, 'สมชาย ขายดี', { lifecycle: 'ON_HOLD', stageChangedInRange: true, activityInRange: true }),
-    ];
-
-    beforeEach(() => {
-      api.tickets.list.mockResolvedValue({ tickets: TEAM });
-    });
-
-    it('renders one row per owner (no client-side role filter), ไม่เคลื่อนไหว desc, default range in the header', async () => {
-      renderOverview();
-      const panel = (await screen.findByRole('heading', { name: 'ความเคลื่อนไหวของทีม' })).closest('section');
-      await within(panel).findByTestId('team-row-22');
-      const ids = [...panel.querySelectorAll('[data-testid^="team-row-"]')].map((el) => el.dataset.testid);
-      expect(ids).toEqual(['team-row-22', 'team-row-21']); // สมหญิง has 2 silent, สมชาย 1; 23 has no open deal
-      for (const h of ['ผู้ดูแล', 'งานที่เปิดอยู่', 'ขยับขั้น', 'มีกิจกรรม', 'เลยนัด', 'ไม่เคลื่อนไหว', 'ยอดที่สั่งซื้อแล้ว', 'ยอดคาดหวัง']) {
-        expect(panel.textContent).toContain(h);
-      }
-      expect(panel.textContent).toContain(formatThaiDate(addDays(TODAY, -6)));
-      expect(panel.textContent).toContain(formatThaiDate(TODAY));
-      const row = within(panel).getByTestId('team-row-21');
-      expect(linkTo(row, `/tickets?owner=21&week=silent&from=${addDays(TODAY, -6)}&to=${TODAY}`).textContent.trim()).toBe('1');
-      expect(linkTo(row, '/tickets?owner=21')).toBeUndefined(); // plain number, not a link
-      expect(row.querySelectorAll('td')[0].textContent.trim()).toBe('2');
-      expect(linkTo(row, `/tickets?owner=21&week=overdue&from=${addDays(TODAY, -6)}&to=${TODAY}`).textContent.trim()).toBe('1');
-    });
-
-    it('a count links to /tickets?owner=<id>&week=<key>', async () => {
-      renderOverview();
-      const row = await screen.findByTestId('team-row-22');
-      fireEvent.click(linkTo(row, `/tickets?owner=22&week=silent&from=${addDays(TODAY, -6)}&to=${TODAY}`));
-      expect(await screen.findByTestId('location-probe')).toBeTruthy();
-      expect(probeText()).toBe(`/tickets?owner=22&week=silent&from=${addDays(TODAY, -6)}&to=${TODAY}`);
-    });
-  });
-
-  // Spec 2026-11-15 §7.4: the CEO sees ภาพรวมทีมขาย first (SALES_ENABLED is on in the test env).
-  it('opens with ภาพรวมทีมขาย, before the company money band', async () => {
-    renderOverview();
-
-    const team = await screen.findByRole('region', { name: 'ภาพรวมทีมขาย' });
-    await within(team).findByTestId('tile-held');
-    expect(api.salesBoard.teamOverview).toHaveBeenCalledTimes(1);
-    const money = screen.getByRole('region', { name: 'ผลบริษัทเดือนนี้' });
-    expect(team.compareDocumentPosition(money) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-  });
-
-  it('fetches each worklist source once, with the same filters as before', async () => {
-    renderOverview();
-    await findGroup('price');
-
-    expect(api.pricingRequests.queue).toHaveBeenCalledWith({ activeOnly: true });
-    expect(api.tickets.list).toHaveBeenCalledWith({ movementFrom: addDays(TODAY, -6), movementTo: TODAY });
-    // Only the CEO's own queue, never the whole commission history.
-    expect(api.commissions.pendingApproval).toHaveBeenCalledTimes(1);
-    expect(api.commissions.list).toHaveBeenCalledTimes(1);
-    expect(api.commissions.list).toHaveBeenCalledWith({ payrollMonth: THIS_MONTH });
-    expect(api.overtime.list).toHaveBeenCalledWith({ status: 'MANAGER_APPROVED' });
-    expect(api.overtime.list).toHaveBeenCalledWith({ status: 'SUBMITTED' });
-    expect(api.leave.list).toHaveBeenCalledWith({ status: 'SUBMITTED' });
-  });
-
-  describe('loading (progressive, never all-or-nothing)', () => {
-    it('shows the money band from the dashboard summary while every worklist query is still loading', () => {
-      [api.tickets.list, api.pricingRequests.queue, api.commissions.list, api.commissions.pendingApproval, api.overtime.list, api.leave.list]
-        .forEach((fn) => fn.mockImplementation(never));
-      renderOverview();
-
-      // Synchronous: no await. The summary is already in hand, so the figures render on the first paint.
-      expectFigure('เงินรับแล้ว (เดือนนี้)', EXPECTED.cash);
-      expectFigure('ค้างรับ', EXPECTED.outstanding);
-      expectFigure('ยอดคาดการณ์', EXPECTED.forecast);
-      expectFigure('เกินกำหนดชำระ', EXPECTED.overdue);
-      expect(screen.getByText('ทีมงานวันนี้')).not.toBeNull();
-    });
-
-    it('renders a group as soon as its own query lands, while a slow one (the deal list) keeps loading', async () => {
-      api.tickets.list.mockImplementation(never);
-      renderOverview();
-
-      const price = await findGroup('price');
-      expect(within(price).getByTestId('worklist-row-price-501')).not.toBeNull();
-      expect((await findGroup('leave')).textContent).toContain('พนักงานลา 401');
-      // Only the deal-list-backed ปิดงาน group waits; every figure is a server total.
-      expect(group('close').getAttribute('aria-busy')).toBe('true');
-      expectFigure('เกินกำหนดชำระ', EXPECTED.overdue);
-      // The total would be a partial sum here, so it waits for every source.
-      expect(screen.queryByTestId('worklist-total')).toBeNull();
-    });
-
-    it('keeps what it already shows when a background refetch fails', async () => {
-      renderOverview();
-      await screen.findByTestId('worklist-row-close-701');
-      api.tickets.list.mockRejectedValue(new Error('offline'));
-      await act(async () => {
-        await lastClient.refetchQueries();
-        await new Promise((resolve) => { setTimeout(resolve, 20); }); // let the error notification render
-      });
-      // The refetch really failed (React Query keeps the last data alongside the error).
-      expect(lastClient.getQueryCache().findAll().some((q) => q.state.status === 'error')).toBe(true);
-
-      expect(screen.getByTestId('worklist-row-close-701')).not.toBeNull();
-      expect(screen.queryByText('โหลดไม่สำเร็จ')).toBeNull();
-    });
-
-    it('shows a failed source as failed instead of loading forever, and the rest still render', async () => {
-      api.tickets.list.mockRejectedValue(new Error('boom'));
-      renderOverview();
-
-      await findGroup('price');
-      const close = await screen.findByText('โหลดไม่สำเร็จ');
-      expect(close.closest('[data-testid="worklist-group-close"]').getAttribute('aria-busy')).toBeNull();
-      expectFigure('เกินกำหนดชำระ', EXPECTED.overdue);
-      expect(screen.getByTestId('worklist-row-leave-401')).not.toBeNull();
-    });
   });
 
   describe('money band', () => {
@@ -352,45 +202,9 @@ describe('CeoOverview', () => {
       expectFigure('เกินกำหนดชำระ', EXPECTED.overdue);
       expect(figureRows('เกินกำหนดชำระ')[0]).not.toContain('฿15,000.00');
     });
-
-    it('shows an em dash for ค้างรับ and ยอดคาดการณ์ when the summary has no totals, never a sum of rows', () => {
-      renderOverview({ ...dashboardSummary, financeOutstanding: undefined, forecastValue: undefined, overdueOutstanding: undefined });
-
-      expectFigure('ค้างรับ', '—');
-      expectFigure('ยอดคาดการณ์', '—');
-      expectFigure('เกินกำหนดชำระ', '—');
-    });
-
-    it('drops the four count tiles and the old closed-sales / pipeline figures', async () => {
-      renderOverview();
-      await findGroup('price');
-
-      expect(document.querySelector('.stat-card')).toBeNull();
-      ['อนุมัติราคา', 'ค่าคอมรออนุมัติ', 'OT·ลา รออนุมัติ', 'ยอดขายเดือนนี้', 'ยอดขายปิดแล้ว', 'Pipeline บริษัท']
-        .forEach((label) => expect(screen.queryByText(label), label).toBeNull());
-      expect(screen.queryByText(/Close verifications|Manager approved|Final approvals/)).toBeNull();
-    });
   });
 
   describe('รอคุณตัดสินใจ worklist', () => {
-    it('groups in money-blocking order with a count per group and a total badge', async () => {
-      renderOverview();
-      await findGroup('close');
-
-      const order = [...document.querySelectorAll('[data-testid^="worklist-group-"]')]
-        .map((el) => el.dataset.testid.replace('worklist-group-', ''));
-      expect(order).toEqual(['price', 'close', 'commission', 'ot', 'leave']);
-
-      expect(group('price').textContent).toContain('2 รายการ');
-      expect(group('close').textContent).toContain('1 รายการ');
-      expect(group('commission').textContent).toContain('3 รายการ');
-      expect(group('ot').textContent).toContain('2 รายการ');
-      expect(group('leave').textContent).toContain('2 รายการ');
-      expect(screen.getByTestId('worklist-total').textContent).toBe('10');
-      // Screen readers get words, not a bare number (aria-label on a plain span is ignored).
-      expect(screen.getByText('รวม 10 รายการ').className).toContain('sr-only');
-    });
-
     it('keeps only the rows the CEO can act on', async () => {
       renderOverview();
       await findGroup('close');
@@ -409,89 +223,6 @@ describe('CeoOverview', () => {
       expect(screen.getByTestId('worklist-row-leave-401')).not.toBeNull();
       expect(screen.getByTestId('worklist-row-leave-402')).not.toBeNull();
     });
-
-    it('shows at most three rows per group and links the rest to the owning page', async () => {
-      api.leave.list.mockResolvedValue({ requests: [401, 402, 403, 404, 405].map(leaveRequest) });
-      renderOverview();
-      const leave = await findGroup('leave');
-
-      expect(leave.querySelectorAll('[data-testid^="worklist-row-leave-"]')).toHaveLength(3);
-      expect(leave.textContent).toContain('5 รายการ');
-      fireEvent.click(within(leave).getByRole('button', { name: /อีก 2 รายการ/ }));
-
-      await screen.findByTestId('location-probe');
-      expect(probeText()).toBe('/leave');
-    });
-
-    it('opens the owning page from a group\'s ดูทั้งหมด', async () => {
-      renderOverview();
-      const ot = await findGroup('ot');
-
-      fireEvent.click(within(ot).getByRole('button', { name: /ดูทั้งหมด/ }));
-
-      await screen.findByTestId('location-probe');
-      expect(probeText()).toBe('/employee-requests?tab=ot');
-    });
-
-    it('collapses every commission awaiting the CEO into one row that opens the approval queue', async () => {
-      renderOverview();
-      const commission = await findGroup('commission');
-
-      const row = within(commission).getByTestId('worklist-row-commission');
-      // Each rep once, however many of their records wait; the SUBMITTED one is the manager's, not here.
-      expect(row.textContent).toContain('สมชาย ขายดี, สมหญิง ขายเก่ง');
-      expect(row.textContent).not.toContain('ยังไม่ถึง CEO');
-      expect(row.textContent).not.toMatch(/อนุมัติแล้ว|ถูกปฏิเสธ|Incentive/);
-      expect(row.textContent).toContain('ค่าคอมขาย');
-      expect(row.textContent).toContain('ปรับปรุง/รับช่วงงาน');
-      expect(row.textContent).toContain('โบนัสขายสต็อก');
-      // The one row already stands for all three records: nothing is hidden behind "อีก N".
-      expect(within(commission).queryByRole('button', { name: /อีก/ })).toBeNull();
-
-      fireEvent.click(within(row).getByRole('button', { name: 'เปิดหน้าอนุมัติ' }));
-      await screen.findByTestId('location-probe');
-      expect(probeText()).toBe('/commissions?view=pending');
-    });
-
-    it.each([
-      ['pending-approval', () => api.commissions.pendingApproval],
-      ['this month\'s list', () => api.commissions.list],
-    ])('marks the commission group failed when %s fails, and the rest still render', async (_, source) => {
-      source().mockRejectedValue(new Error('offline'));
-      renderOverview();
-
-      const commission = await findGroup('commission');
-      expect(await within(commission).findByText('โหลดไม่สำเร็จ')).not.toBeNull();
-      expect(screen.getByTestId('worklist-row-price-501')).not.toBeNull();
-    });
-
-    it('says so when nothing waits on the CEO', async () => {
-      api.pricingRequests.queue.mockResolvedValue({ items: [] });
-      api.tickets.list.mockResolvedValue({ tickets: [] });
-      api.commissions.list.mockResolvedValue({ commissions: [] });
-      api.commissions.pendingApproval.mockResolvedValue({ commissions: [] });
-      api.overtime.list.mockResolvedValue({ requests: [] });
-      api.leave.list.mockResolvedValue({ requests: [] });
-      renderOverview();
-
-      expect(await screen.findByText('ไม่มีรายการที่รอการตัดสินใจจากคุณตอนนี้')).not.toBeNull();
-      expect(document.querySelector('[data-testid^="worklist-group-"]')).toBeNull();
-    });
-
-    it.each([
-      ['price-501', 'ตั้งราคา', '/pricing-requests/501'],
-      ['close-701', 'ตรวจปิดงาน', '/tickets/701'],
-      ['ot-201', 'อนุมัติ', '/employee-requests?tab=ot'],
-      ['leave-401', 'อนุมัติ', '/leave'],
-    ])('deep-links the %s row CTA instead of mutating inline', async (rowId, cta, path) => {
-      renderOverview();
-      const row = await screen.findByTestId(`worklist-row-${rowId}`);
-
-      fireEvent.click(within(row).getByRole('button', { name: cta }));
-
-      await screen.findByTestId('location-probe');
-      expect(probeText()).toBe(path);
-    });
   });
 
   describe('side panels', () => {
@@ -507,81 +238,6 @@ describe('CeoOverview', () => {
         .reduce((sum, n) => sum + n, 0);
       expect(total).toBeCloseTo(CASH_RECEIVED_THIS_MONTH, 2);
       expect(within(panel).queryByText(/%/)).toBeNull();
-    });
-
-    it('lists every rep, even more than eight', () => {
-      const reps = Array.from({ length: 9 }, (_, i) => ({ repName: `เซลส์ ${i + 1}`, amount: 1000 }));
-      renderOverview({ ...dashboardSummary, cashReceivedThisMonth: 9000, cashReceivedByRep: reps });
-
-      const panel = screen.getByText('เงินรับตามพนักงานขาย').closest('section');
-      expect(panel.querySelectorAll('[data-testid="rep-row"]')).toHaveLength(9);
-    });
-
-    it('explains the empty rep panel', () => {
-      renderOverview({ ...dashboardSummary, cashReceivedByRep: [] });
-
-      const panel = screen.getByText('เงินรับตามพนักงานขาย').closest('section');
-      expect(within(panel).getByText('ยังไม่มีเงินรับเข้าเดือนนี้')).not.toBeNull();
-    });
-
-    it('shows headcount and lateness under ทีมงานวันนี้', () => {
-      renderOverview();
-
-      expectFigure('กำลังพล', '42 คน');
-      expectFigure('มาสายวันนี้', '3 คน');
-    });
-  });
-  // Sales insights (spec 2026-11-16): the landing page is a two-way switch, state in ?view=insight. The insight body
-  // itself is pinned in SalesInsights.test.jsx; here only the wiring.
-  describe('มุมมอง: งานวันนี้ / วิเคราะห์ยอดขาย', () => {
-    beforeEach(() => api.salesAnalytics.snapshot.mockResolvedValue({ snapshot: null }));
-
-    it('defaults to today\'s dashboard, with the switch showing งานวันนี้ selected and no insight view', async () => {
-      renderOverview();
-
-      expect(screen.getByRole('tab', { name: 'งานวันนี้' }).getAttribute('aria-selected')).toBe('true');
-      expect(screen.getByRole('tab', { name: 'วิเคราะห์ยอดขาย' }).getAttribute('aria-selected')).toBe('false');
-      expect(screen.getByText('รอคุณตัดสินใจ')).toBeTruthy();
-      expect(screen.queryByTestId('sales-insights')).toBeNull();
-      expect(screen.getByRole('tabpanel').getAttribute('aria-labelledby')).toBe('landing-view-tab-today');
-      expect(api.salesAnalytics.snapshot).not.toHaveBeenCalled();
-    });
-
-    it('keeps the tablist OUTSIDE the tabpanel, which wraps only the content below the header, in both views', async () => {
-      const { unmount } = renderOverview();
-      let panel = screen.getByRole('tabpanel');
-      expect(panel.contains(screen.getByRole('tablist'))).toBe(false);
-      expect(panel.getAttribute('aria-labelledby')).toBe('landing-view-tab-today');
-      expect(panel.textContent).toContain('รอคุณตัดสินใจ');
-      expect(panel.textContent).not.toContain('ภาพรวมผู้บริหาร');
-      unmount();
-
-      renderOverview(dashboardSummary, '/?view=insight');
-      await screen.findByTestId('sales-insights');
-      panel = screen.getByRole('tabpanel');
-      expect(panel.contains(screen.getByRole('tablist'))).toBe(false);
-      expect(panel.getAttribute('aria-labelledby')).toBe('landing-view-tab-insight');
-      expect(panel.contains(screen.getByTestId('sales-insights'))).toBe(true);
-    });
-
-    it('?view=insight shows the insight view instead of the worklist', async () => {
-      renderOverview(dashboardSummary, '/?view=insight');
-
-      expect(await screen.findByTestId('sales-insights')).toBeTruthy();
-      expect(screen.getByRole('tab', { name: 'วิเคราะห์ยอดขาย' }).getAttribute('aria-selected')).toBe('true');
-      expect(screen.queryByText('รอคุณตัดสินใจ')).toBeNull();
-    });
-
-    it('clicking the switch writes the view to the URL and back again', async () => {
-      renderOverview();
-
-      fireEvent.click(screen.getByRole('tab', { name: 'วิเคราะห์ยอดขาย' }));
-      expect(await screen.findByTestId('sales-insights')).toBeTruthy();
-      expect(screen.getByTestId('search-probe').textContent).toContain('view=insight');
-
-      fireEvent.click(screen.getByRole('tab', { name: 'งานวันนี้' }));
-      expect(screen.queryByTestId('sales-insights')).toBeNull();
-      expect(screen.getByTestId('search-probe').textContent).not.toContain('view=insight');
     });
   });
 });

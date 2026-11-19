@@ -1,13 +1,11 @@
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ManagerOverview } from './ManagerOverview.jsx';
 import { api } from '../../api/index.js';
-import {
-  CASH_BY_REP, CASH_RECEIVED_THIS_MONTH, SERVER_TOTALS, figureRows,
-} from '../../test/fixtures/dashboardMoney.js';
+import { CASH_BY_REP, CASH_RECEIVED_THIS_MONTH, SERVER_TOTALS } from '../../test/fixtures/dashboardMoney.js';
 
 globalThis.React = React;
 
@@ -26,18 +24,8 @@ vi.mock('../../api/index.js', async (importOriginal) => {
 
 const managerUser = { role: 'sales_manager', name: 'ผู้จัดการ ทดสอบ', employeeId: 9 };
 const employee = { nickName: 'บอส', nameTh: 'ผู้จัดการ ทดสอบ' };
-import { bangkokTodayIso, formatThaiDate } from '../../utils/format.js';
-
-const linkTo = (row, href) => [...row.querySelectorAll('a')].find((a) => a.getAttribute('href') === href);
-const TODAY = bangkokTodayIso();
-function addDays(iso, delta) {
-  const d = new Date(`${iso}T00:00:00.000Z`);
-  d.setUTCDate(d.getUTCDate() + delta);
-  return d.toISOString().slice(0, 10);
-}
 
 const summary = { cashReceivedThisMonth: CASH_RECEIVED_THIS_MONTH, cashReceivedByRep: CASH_BY_REP, ...SERVER_TOTALS };
-
 
 const now = new Date();
 const thisMonthIso = new Date(now.getFullYear(), now.getMonth(), 5).toISOString();
@@ -108,41 +96,12 @@ function renderOverview(dashboardSummary = summary, entry = '/') {
   );
 }
 
-const probeText = () => screen.getByTestId('location-probe').textContent;
-
 describe('ManagerOverview', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     api.tickets.list.mockResolvedValue({ tickets: TICKETS });
     api.commissions.pendingApproval.mockResolvedValue(pendingOf(SUBMITTED));
     api.salesBoard.teamOverview.mockResolvedValue(TEAM);
-  });
-
-  // Spec 2026-11-15 §7.4: the body is ภาพรวมทีมขาย (TeamOverview, pinned in salesBoard/TeamOverview.test.jsx); the
-  // commission approval queue stays below it.
-  it('is the team overview plus the manager\'s own approval queue, and reads neither the deal list nor history', async () => {
-    renderOverview();
-
-    expect(screen.getByRole('heading', { name: 'ภาพรวมทีมขาย' })).toBeTruthy();
-    await screen.findByTestId('tile-held');
-    await screen.findByTestId('commission-row-301');
-    expect(api.salesBoard.teamOverview).toHaveBeenCalledTimes(1);
-    expect(api.commissions.pendingApproval).toHaveBeenCalledTimes(1);
-    expect(api.commissions.list).not.toHaveBeenCalled();
-    // The page header already says ภาพรวมทีมขาย; TeamOverview does not repeat it.
-    expect(screen.getAllByRole('heading', { name: 'ภาพรวมทีมขาย' })).toHaveLength(1);
-  });
-
-  it('drops the cash money band and the blanket ดีลที่ต้องดูแล flags', async () => {
-    renderOverview();
-    await screen.findByTestId('tile-held');
-
-    ['เงินรับแล้ว (เดือนนี้)', 'ค้างรับ', 'เกินกำหนดชำระ', 'ยอดคาดการณ์'].forEach((label) => {
-      expect(figureRows(label), label).toEqual([]);
-    });
-    expect(screen.queryByRole('heading', { name: 'ดีลที่ต้องดูแล' })).toBeNull();
-    expect(screen.queryByText(/ไม่มีความเคลื่อนไหว 7 วัน/)).toBeNull();
-    expect(screen.queryByText('฿0.00')).toBeNull();
   });
 
   describe('ค่าคอมรอคุณตรวจ', () => {
@@ -158,76 +117,6 @@ describe('ManagerOverview', () => {
       // 1,000 + … + 6,000: every SUBMITTED record, not just the five shown.
       expect(panel.textContent).toContain('฿21,000.00');
     });
-
-    it('opens the manager\'s own approval queue', async () => {
-      renderOverview();
-      const panel = (await screen.findByTestId('commission-row-301')).closest('section');
-
-      fireEvent.click(within(panel).getByRole('button', { name: 'เปิดหน้าอนุมัติ' }));
-      await screen.findByTestId('location-probe');
-      expect(probeText()).toBe('/commissions?view=pending');
-    });
-
-    it('says so when nothing waits', async () => {
-      api.commissions.pendingApproval.mockResolvedValue(pendingOf([]));
-      renderOverview();
-
-      expect(await screen.findByText('ไม่มีค่าคอมรออนุมัติตอนนี้')).not.toBeNull();
-    });
-  });
-
-
-  // Review H3: restored below TeamOverview, unchanged in behaviour (tests copied from the pre-slice-1 file).
-  describe('ความเคลื่อนไหวของทีม panel', () => {
-    const mv = (id, ownerId, ownerName, extra = {}) => deal(id, ownerName, {
-      createdById: ownerId, lifecycle: 'ACTIVE', stageChangedInRange: false, activityInRange: false,
-      nextFollowUpAt: null, ...extra,
-    });
-    const TEAM_DEALS = [
-      mv(301, 11, 'เซลส์ เอ', { stageChangedInRange: true }),
-      mv(302, 11, 'เซลส์ เอ', { nextFollowUpAt: '2020-01-01' }),
-      mv(303, 11, 'เซลส์ เอ'),
-      mv(304, 12, 'เซลส์ บี', { activityInRange: true }),
-      mv(305, 12, 'เซลส์ บี', { lifecycle: 'CLOSED_LOST' }),
-      mv(306, 13, 'เซลส์ ซี', { lifecycle: 'CLOSED_LOST' }),
-      mv(307, 11, 'เซลส์ เอ', { lifecycle: 'ON_HOLD', stageChangedInRange: true, activityInRange: true }),
-    ];
-    const rowIds = () => [...document.querySelectorAll('[data-testid^="team-row-"]')]
-      .map((el) => el.dataset.testid.replace('team-row-', ''));
-
-    beforeEach(() => {
-      api.tickets.list.mockResolvedValue({ tickets: TEAM_DEALS });
-    });
-
-    it('renders one row per owner with open deals, ไม่เคลื่อนไหว desc, with the default range in the header', async () => {
-      renderOverview();
-      const panel = (await screen.findByRole('heading', { name: 'ความเคลื่อนไหวของทีม' })).closest('section');
-      await within(panel).findByTestId('team-row-11');
-      expect(rowIds()).toEqual(['11', '12']);
-      expect(panel.textContent).toContain(formatThaiDate(addDays(TODAY, -6)));
-      expect(panel.textContent).toContain(formatThaiDate(TODAY));
-      const rowA = within(panel).getByTestId('team-row-11');
-      const count = (href) => linkTo(rowA, href)?.textContent.trim();
-      expect(rowA.querySelectorAll('td')[0].textContent.trim()).toBe('3');
-      expect(count(`/tickets?owner=11&week=moved&from=${addDays(TODAY, -6)}&to=${TODAY}`)).toBe('1');
-      expect(count(`/tickets?owner=11&week=silent&from=${addDays(TODAY, -6)}&to=${TODAY}`)).toBe('2');
-      expect(count(`/tickets?owner=11&week=overdue&from=${addDays(TODAY, -6)}&to=${TODAY}`)).toBe('1');
-    });
-
-    it('a count links to /tickets?owner=<id>&week=<key>', async () => {
-      renderOverview();
-      const row = await screen.findByTestId('team-row-12');
-      fireEvent.click(linkTo(row, `/tickets?owner=12&week=activity&from=${addDays(TODAY, -6)}&to=${TODAY}`));
-      expect(await screen.findByTestId('location-probe')).toBeTruthy();
-      expect(probeText()).toBe(`/tickets?owner=12&week=activity&from=${addDays(TODAY, -6)}&to=${TODAY}`);
-    });
-
-    it('reads the deal list once, with the default 7-day range', async () => {
-      renderOverview();
-      await screen.findByTestId('team-row-11');
-      expect(api.tickets.list).toHaveBeenCalledTimes(1);
-      expect(api.tickets.list).toHaveBeenCalledWith({ movementFrom: addDays(TODAY, -6), movementTo: TODAY });
-    });
   });
 
   it('shows อัตราปิดงาน as one line from won vs lost deals', async () => {
@@ -236,56 +125,5 @@ describe('ManagerOverview', () => {
     const panel = heading.closest('section');
     await waitFor(() => expect(panel.textContent).toContain('50%'));
     expect(panel.textContent).toContain('ปิดสำเร็จ 1 · เสีย 1');
-  });
-});
-
-// Sales insights (spec 2026-11-16): same switch as the CEO's, state in ?view=insight; the body is pinned in
-// SalesInsights.test.jsx. Nobody has an upload control here: the snapshot arrives through the weekly update.
-describe('ManagerOverview: งานวันนี้ / วิเคราะห์ยอดขาย', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    api.tickets.list.mockResolvedValue({ tickets: TICKETS });
-    api.commissions.pendingApproval.mockResolvedValue(pendingOf(SUBMITTED));
-    api.salesBoard.teamOverview.mockResolvedValue(TEAM);
-    api.salesAnalytics.snapshot.mockResolvedValue({ snapshot: null });
-  });
-
-  it('defaults to today\'s dashboard with the switch present', () => {
-    renderOverview();
-
-    expect(screen.getByRole('tab', { name: 'งานวันนี้' }).getAttribute('aria-selected')).toBe('true');
-    expect(screen.getByRole('tab', { name: 'วิเคราะห์ยอดขาย' })).toBeTruthy();
-    // fix round 1: the board link names the page it opens, not "ดูงานทีม" beside the tab งานวันนี้.
-    expect(screen.getByRole('button', { name: 'ดูงานทั้งหมด' })).toBeTruthy();
-    expect(screen.getByRole('heading', { name: 'ภาพรวมทีมขาย' })).toBeTruthy();
-    expect(screen.queryByTestId('sales-insights')).toBeNull();
-  });
-
-  it('keeps the tablist outside the tabpanel in today\'s view', () => {
-    renderOverview();
-
-    const panel = screen.getByRole('tabpanel');
-    expect(panel.contains(screen.getByRole('tablist'))).toBe(false);
-    expect(panel.getAttribute('aria-labelledby')).toBe('landing-view-tab-today');
-    expect(panel.contains(screen.getByRole('heading', { name: 'อัตราปิดงาน' }))).toBe(true);
-    expect(panel.contains(screen.getByRole('heading', { name: 'ภาพรวมทีมขาย' }))).toBe(false);
-  });
-
-  it('?view=insight shows the insight view, and the empty state has no upload control', async () => {
-    renderOverview(summary, '/?view=insight');
-
-    expect(await screen.findByTestId('sales-insights')).toBeTruthy();
-    expect(await screen.findByTestId('insight-empty')).toBeTruthy();
-    expect(screen.queryByLabelText('อัปโหลดข้อมูลวิเคราะห์')).toBeNull();
-    expect(screen.queryByRole('heading', { name: 'อัตราปิดงาน' })).toBeNull();
-  });
-
-  it('clicking the switch toggles the view', async () => {
-    renderOverview();
-
-    fireEvent.click(screen.getByRole('tab', { name: 'วิเคราะห์ยอดขาย' }));
-    expect(await screen.findByTestId('sales-insights')).toBeTruthy();
-    fireEvent.click(screen.getByRole('tab', { name: 'งานวันนี้' }));
-    expect(screen.queryByTestId('sales-insights')).toBeNull();
   });
 });

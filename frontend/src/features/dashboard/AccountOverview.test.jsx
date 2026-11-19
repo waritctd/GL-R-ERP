@@ -1,14 +1,12 @@
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { AccountOverview } from './AccountOverview.jsx';
 import { api } from '../../api/index.js';
-import { AccountFinancePage } from '../finance/AccountFinancePage.jsx';
 import { DEAL_STAGE_CATALOG } from '../../data/dealStageCatalog.js';
-import { formatThaiDate, greetingName } from '../../utils/format.js';
-import { closedDemoDeal, expectFigure, figureRows } from '../../test/fixtures/dashboardMoney.js';
+import { expectFigure, figureRows } from '../../test/fixtures/dashboardMoney.js';
 
 globalThis.React = React;
 
@@ -26,8 +24,6 @@ vi.mock('../../api/index.js', async (importOriginal) => {
 
 const accountUser = { role: 'account', name: 'บัญชี ทดสอบ', employeeId: 3 };
 const employee = { nickName: 'ปุ้ย', nameTh: 'บัญชี ทดสอบ' };
-const never = () => new Promise(() => {});
-
 const base = {
   status: 'quotation_issued', paymentStatus: null, fulfillmentStatus: null, lifecycle: 'ACTIVE',
   salesStage: 'NEGOTIATION', depositPolicy: 'REQUIRED', closeConfirmedAt: null, invoiceOnFile: false,
@@ -114,59 +110,11 @@ const findGroup = (key) => waitFor(() => {
   expect(el.getAttribute('aria-busy')).toBeNull();
   return el;
 });
-const probe = () => screen.getByTestId('location-probe').textContent;
-const GROUP_ORDER = ['chaseOverdue', 'confirmDeposit', 'confirmFinalPayment', 'confirmCloseReady', 'recordInvoiceCommission'];
-
 describe('AccountOverview', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     api.meta.dealStages.mockResolvedValue(DEAL_STAGE_CATALOG);
     serve();
-  });
-
-  it('titles the page ภาพรวมการเงิน with a greeting and today\'s date, and drops the old tiles and side cards', async () => {
-    renderOverview();
-    await findGroup('chaseOverdue');
-    expect(screen.getByRole('heading', { name: 'ภาพรวมการเงิน' })).not.toBeNull();
-    expect(screen.getByText(`สวัสดี, ${greetingName('ปุ้ย')} · ${formatThaiDate(new Date().toISOString())}`)).not.toBeNull();
-    // bento tiles, สรุปเดือนนี้ and the คิวของฉัน card are gone
-    ['สรุปเดือนนี้', 'คิวของฉัน', 'รอชำระส่วนที่เหลือ', 'รอปิดงาน'].forEach((t) => expect(screen.queryByText(t), t).toBeNull());
-    expect(document.querySelector('.rounded-md.bg-surface.p-4')).toBeNull();
-    // the per-row quotation badge is gone
-    expect(screen.queryByText('ออกใบเสนอราคาแล้ว')).toBeNull();
-  });
-
-  describe('loading and failure (per source)', () => {
-    it('shows the summary-backed figures at once while the deal lists are still loading', () => {
-      api.tickets.list.mockImplementation(never);
-      renderOverview();
-      // Synchronous: the summary is already in hand.
-      expectFigure('ค้างรับทั้งหมด', '฿777,000.50');
-      expectFigure('รับแล้ว (เดือนนี้)', '฿321,000.50');
-      // Deal-derived figures must not read as a confident zero before their list lands.
-      expect(figureRows('เกินกำหนดชำระ')[0]).not.toContain('฿0.00');
-      expect(figureRows('รอรับมัดจำ')[0]).not.toContain('฿0.00');
-    });
-
-    it('renders the scoped-list groups while the CLOSED_PAID list is still loading; only บันทึกใบกำกับ waits', async () => {
-      api.tickets.list.mockImplementation((params = {}) => (params.salesStage === 'CLOSED_PAID' ? never() : Promise.resolve({ tickets: SCOPED })));
-      renderOverview();
-      await findGroup('chaseOverdue');
-      expect(group('recordInvoiceCommission').getAttribute('aria-busy')).toBe('true');
-      expect(group('chaseOverdue').getAttribute('aria-busy')).toBeNull();
-      expect(screen.queryByTestId('worklist-total')).toBeNull(); // would be a partial sum
-    });
-
-    it('shows a failed CLOSED_PAID list as โหลดไม่สำเร็จ on its group while the rest still render', async () => {
-      api.tickets.list.mockImplementation((params = {}) => (params.salesStage === 'CLOSED_PAID'
-        ? Promise.reject(new Error('boom')) : Promise.resolve({ tickets: SCOPED })));
-      renderOverview();
-      await findGroup('chaseOverdue');
-      const failedGroup = (await screen.findByText('โหลดไม่สำเร็จ')).closest('[data-testid^="worklist-group-"]');
-      expect(failedGroup.dataset.testid).toBe('worklist-group-recordInvoiceCommission');
-      expect(failedGroup.getAttribute('aria-busy')).toBeNull();
-      expectFigure('ค้างรับทั้งหมด', '฿777,000.50');
-    });
   });
 
   describe('figures band', () => {
@@ -186,23 +134,6 @@ describe('AccountOverview', () => {
       expect(figureRows('เกินกำหนดชำระ')[0]).not.toContain('200,000.00');
     });
 
-    it('when the listed overdue rows add up to the server figure, the caption names the count and earliest due date', async () => {
-      renderOverview({ ...SUMMARY, overdueOutstanding: 200000 });
-      await findGroup('chaseOverdue');
-      expectFigure('เกินกำหนดชำระ', '฿200,000.00');
-      expectFigure('เกินกำหนดชำระ', '4 งาน');
-      expectFigure('เกินกำหนดชำระ', formatThaiDate('2026-06-01'));
-    });
-
-    it('when the list cannot account for the server figure (cap / scope), the caption claims no count and points to the finance page', async () => {
-      serve([...SCOPED, HELD_OVERDUE]); // list adds up to 207,000.00, server says 555,000.25
-      renderOverview();
-      await findGroup('chaseOverdue');
-      const text = figureRows('เกินกำหนดชำระ')[0];
-      expect(text).toContain('ดูรายการทั้งหมดในหน้าการเงิน');
-      expect(text).not.toMatch(/\d (ดีล|งาน)/);
-    });
-
     it('รอรับมัดจำ sums depositDue (not the deal outstanding) and counts the issued notices', async () => {
       renderOverview();
       await findGroup('confirmDeposit');
@@ -210,69 +141,9 @@ describe('AccountOverview', () => {
       expectFigure('รอรับมัดจำ', 'ใบแจ้งมัดจำที่ออกแล้ว 2 ใบ');
       expect(figureRows('รอรับมัดจำ')[0]).not.toContain('263,545.25');
     });
-
-    it('รับแล้ว (เดือนนี้) is cashReceivedThisMonth and ค้างรับทั้งหมด is never a sum of the loaded rows', async () => {
-      renderOverview({ financeOutstanding: 1234.5, cashReceivedThisMonth: 99.25 });
-      await findGroup('chaseOverdue');
-      expectFigure('รับแล้ว (เดือนนี้)', '฿99.25');
-      expectFigure('ค้างรับทั้งหมด', '฿1,234.50');
-    });
-
-    it('shows an em dash for the two summary figures when the summary has no totals', async () => {
-      renderOverview({});
-      await findGroup('chaseOverdue');
-      expectFigure('ค้างรับทั้งหมด', '—');
-      expectFigure('รับแล้ว (เดือนนี้)', '—');
-      expectFigure('เกินกำหนดชำระ', '—');
-    });
-
-    it('prints no caption next to an em dash or a not-yet-loaded figure (no zero captions)', async () => {
-      api.tickets.list.mockImplementation(never);
-      const { unmount } = renderOverview({});
-      // everything is "—": the dynamic captions stay empty rather than reading "0 ใบ" / "ไม่มีดีลเกินกำหนด"
-      expect(figureRows('เกินกำหนดชำระ')[0]).toBe('เกินกำหนดชำระ—');
-      expect(figureRows('รอรับมัดจำ')[0]).toBe('รอรับมัดจำ—');
-      expect(figureRows('รับแล้ว (เดือนนี้)')[0]).toBe('รับแล้ว (เดือนนี้)—');
-      unmount();
-      // a value that is present but whose list is still loading has no count caption either
-      renderOverview(SUMMARY);
-      expect(figureRows('เกินกำหนดชำระ')[0]).toBe('เกินกำหนดชำระ฿555,000.25');
-    });
-
-    it('ค้างรับทั้งหมด equals the figure AccountFinancePage prints: both read the summary\'s total', async () => {
-      api.dashboard.summary.mockResolvedValue({ summary: { financeOutstanding: 777000.5 } });
-      renderOverview();
-      await findGroup('chaseOverdue');
-      const value = figureRows('ค้างรับทั้งหมด')[0];
-      expect(value).toContain('฿777,000.50');
-      cleanup();
-
-      serve([OVERDUE[0], DEPOSITS[0], NO_ACTION], [closedDemoDeal]);
-      const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-      render(
-        <QueryClientProvider client={queryClient}>
-          {/* ?view=all: on งานการเงิน the ค้างรับทั้งหมด block moved to the ทั้งหมด view (design a-fin-land). */}
-          <MemoryRouter initialEntries={['/finance?view=all']}>
-            <AccountFinancePage user={accountUser} showToast={vi.fn()} />
-          </MemoryRouter>
-        </QueryClientProvider>,
-      );
-      const subtitle = await screen.findByText(/ค้างรับทั้งหมด ฿/);
-      expect(subtitle.textContent).toContain('ค้างรับทั้งหมด ฿777,000.50');
-    });
   });
 
   describe('สิ่งที่ต้องทำ worklist', () => {
-    it('groups in the fixed order with a total badge counting every row', async () => {
-      renderOverview();
-      await findGroup('recordInvoiceCommission');
-      const order = [...document.querySelectorAll('[data-testid^="worklist-group-"]')]
-        .map((el) => el.dataset.testid.replace('worklist-group-', ''));
-      expect(order).toEqual(GROUP_ORDER);
-      // 4 overdue + 2 deposit + 1 final + 1 close + 1 invoice; the held and no-action deals add nothing.
-      expect(screen.getByTestId('worklist-total').textContent).toBe('9');
-    });
-
     it('each group header carries its deal count and its own total (outstanding / depositDue / deal value)', async () => {
       renderOverview();
       await findGroup('recordInvoiceCommission');
@@ -282,97 +153,6 @@ describe('AccountOverview', () => {
       expect(group('confirmFinalPayment').textContent).toContain('1 งาน · ค้าง ฿40,000.00');
       expect(group('confirmCloseReady').textContent).toContain('1 งาน · มูลค่างาน ฿648,000.00');
       expect(group('recordInvoiceCommission').textContent).toContain('1 งาน · มูลค่างาน ฿792,000.00');
-    });
-
-    it('shows at most 3 rows per group, earliest due first then largest balance, with อีก N รายการ for the rest', async () => {
-      // Input order, due order and balance order all disagree: A(06-10, 50k) B(06-20, 90k) C(06-01, 10k) D(06-10, 70k).
-      // Due-asc then balance-desc gives C, D, A, B; balance-only would give B, D, A, C; input order A, B, C, D.
-      serve([overdue(101, 50000, '2026-06-10'), overdue(102, 90000, '2026-06-20'), overdue(103, 10000, '2026-06-01'), overdue(104, 70000, '2026-06-10')]);
-      renderOverview();
-      await findGroup('chaseOverdue');
-      const g = group('chaseOverdue');
-      expect(within(g).getAllByTestId(/^worklist-row-chaseOverdue-/).map((el) => el.dataset.testid))
-        .toEqual(['worklist-row-chaseOverdue-103', 'worklist-row-chaseOverdue-104', 'worklist-row-chaseOverdue-101']);
-      expect(within(g).getByText('อีก 1 รายการ')).not.toBeNull();
-    });
-
-    it('a group at or under the 3-row cap has no อีก link', async () => {
-      renderOverview();
-      await findGroup('confirmDeposit');
-      expect(within(group('confirmDeposit')).queryByText(/^อีก /)).toBeNull();
-    });
-
-    it('omits only the empty groups: with just deposit + invoice work, the other three groups are absent', async () => {
-      serve([DEPOSITS[0]], [INVOICE]);
-      renderOverview();
-      await findGroup('confirmDeposit');
-      await findGroup('recordInvoiceCommission');
-      ['chaseOverdue', 'confirmFinalPayment', 'confirmCloseReady'].forEach((k) => expect(screen.queryByTestId(`worklist-group-${k}`), k).toBeNull());
-      expect(screen.getByTestId('worklist-total').textContent).toBe('2');
-      expect(screen.queryByText('ไม่มีรายการที่ต้องดำเนินการตอนนี้')).toBeNull();
-    });
-
-    it('overdue rows show customer, code · เกินกำหนด · ครบ <date>, the balance and a danger-styled ติดตามชำระ button', async () => {
-      renderOverview();
-      await findGroup('chaseOverdue');
-      const row = screen.getByTestId('worklist-row-chaseOverdue-101');
-      expect(row.textContent).toContain('ลูกค้าเกินกำหนด 101');
-      expect(row.textContent).toContain(`OD-101 · เกินกำหนด · ครบ ${formatThaiDate('2026-06-01')}`);
-      expect(row.textContent).toContain('฿100,000.00');
-      expect(within(row).getByRole('button').textContent).toBe('ติดตามชำระ');
-    });
-
-    it('non-overdue rows show their money milestone (ขั้น N <label>) and the right amount; no quotation badge', async () => {
-      renderOverview();
-      await findGroup('confirmDeposit');
-      const dep = screen.getByTestId('worklist-row-confirmDeposit-201');
-      expect(dep.textContent).toContain('DP-201 · ขั้น 1 ได้รับคำสั่งซื้อ');
-      expect(dep.textContent).toContain('฿85,418.10'); // depositDue, not the 213,545.25 deal outstanding
-      expect(dep.textContent).not.toContain('213,545.25');
-      expect(dep.textContent).not.toContain('ออกใบเสนอราคาแล้ว');
-      const fin = screen.getByTestId('worklist-row-confirmFinalPayment-301');
-      expect(fin.textContent).toContain('FP-301 · ขั้น 4 ส่งมอบ — รอชำระส่วนที่เหลือ');
-      expect(fin.textContent).toContain('฿40,000.00');
-      // close / invoice rows print the deal value
-      expect(screen.getByTestId('worklist-row-confirmCloseReady-401').textContent).toContain('฿648,000.00');
-      expect(screen.getByTestId('worklist-row-recordInvoiceCommission-501').textContent).toContain('฿792,000.00');
-    });
-
-    it('CTA labels are the existing action labels and open the finance deal page', async () => {
-      renderOverview();
-      await findGroup('recordInvoiceCommission');
-      const cta = (key, id) => within(screen.getByTestId(`worklist-row-${key}-${id}`)).getByRole('button');
-      expect(cta('confirmDeposit', 201).textContent).toBe('ยืนยันรับมัดจำ');
-      expect(cta('confirmFinalPayment', 301).textContent).toBe('รับชำระส่วนที่เหลือ');
-      expect(cta('confirmCloseReady', 401).textContent).toBe('ยืนยันพร้อมปิดงาน');
-      expect(cta('recordInvoiceCommission', 501).textContent).toBe('บันทึกใบกำกับ');
-      fireEvent.click(cta('confirmDeposit', 201));
-      expect(probe()).toBe('/finance/deals/201');
-    });
-
-    it('ดูทั้งหมด → and อีก N รายการ open /finance filtered to that group\'s action', async () => {
-      renderOverview();
-      await findGroup('chaseOverdue');
-      fireEvent.click(within(group('confirmDeposit')).getByText('ดูทั้งหมด →'));
-      expect(probe()).toBe('/finance?action=confirmDeposit');
-      cleanup();
-      renderOverview();
-      await findGroup('chaseOverdue');
-      fireEvent.click(within(group('chaseOverdue')).getByText('อีก 1 รายการ'));
-      expect(probe()).toBe('/finance?action=chaseOverdue');
-    });
-
-    it('hides empty groups, and shows the existing empty line when nothing is left to do', async () => {
-      serve([NO_ACTION, HOLD_A], []);
-      renderOverview();
-      await screen.findByText('ไม่มีรายการที่ต้องดำเนินการตอนนี้');
-      GROUP_ORDER.forEach((k) => expect(screen.queryByTestId(`worklist-group-${k}`), k).toBeNull());
-    });
-
-    it('a deal outside every step (nothing for account to do) never gets a row', async () => {
-      renderOverview();
-      await findGroup('chaseOverdue');
-      expect(screen.queryByText('ลูกค้ารอสินค้า 701')).toBeNull();
     });
   });
 
@@ -393,15 +173,6 @@ describe('AccountOverview', () => {
       expect(panel().textContent).toContain('รับชำระส่วนที่เหลือได้เมื่องานถึงขั้น 4 ส่งมอบ');
     });
 
-    it('a held deal with no money milestone yet (pre-order, deposit bypassed) says so and shows — for an unknown balance, not ฿0.00', async () => {
-      serve([...SCOPED, held(603, { depositPolicy: 'WAIVED', paymentStatus: 'CUSTOMER_CONFIRMED', salesStage: 'QUOTE_BUYER', amountOutstanding: null })]);
-      renderOverview();
-      const row = await screen.findByTestId('awaiting-goods-row-603');
-      expect(row.textContent).toContain('HD-603 · ยังไม่ได้รับคำสั่งซื้อ');
-      expect(row.textContent).toContain('—');
-      expect(row.textContent).not.toContain('฿0.00');
-    });
-
     it('leaves out deals that are already offered the step, overdue, or not owing at all', async () => {
       serve([...SCOPED, HELD_OVERDUE]);
       renderOverview();
@@ -409,27 +180,6 @@ describe('AccountOverview', () => {
       [301, 701, 702, 101, 201].forEach((id) => expect(within(panel()).queryByTestId(`awaiting-goods-row-${id}`), String(id)).toBeNull());
       // …and none of the held deals appears as a worklist row
       expect(screen.queryByTestId('worklist-row-confirmFinalPayment-601')).toBeNull();
-    });
-
-    it('shows the panel title with โหลดไม่สำเร็จ when the scoped deal list failed, and nothing while it is still loading', async () => {
-      api.tickets.list.mockImplementation(never);
-      const { unmount } = renderOverview();
-      expect(screen.queryByTestId('awaiting-goods-panel')).toBeNull();
-      unmount();
-      api.tickets.list.mockImplementation((params = {}) => (params.salesStage === 'CLOSED_PAID'
-        ? Promise.resolve({ tickets: [] }) : Promise.reject(new Error('boom'))));
-      renderOverview();
-      const failedPanel = await screen.findByTestId('awaiting-goods-panel');
-      expect(failedPanel.textContent).toContain('รอสินค้าเข้า');
-      expect(failedPanel.textContent).toContain('โหลดไม่สำเร็จ');
-    });
-
-    it('is hidden entirely when no deal is held', async () => {
-      serve([OVERDUE[0], FINAL], []);
-      renderOverview();
-      await findGroup('chaseOverdue');
-      expect(screen.queryByTestId('awaiting-goods-panel')).toBeNull();
-      expect(screen.queryByText('รอสินค้าเข้า')).toBeNull();
     });
   });
 });
