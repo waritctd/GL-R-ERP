@@ -41,8 +41,11 @@ describe('DealHistoryPanel — planned visits', () => {
     expect(all[2].textContent).toContain('ออกใบเสนอราคา');
   });
 
-  it('no link when the viewer cannot open the นัดเข้าพบ page', () => {
-    renderPanel({ plannedVisits: [planned()], visitsHref: null });
+  it('links to the นัดเข้าพบ page only when the viewer can open it', () => {
+    const first = renderPanel({ plannedVisits: [planned()], visitsHref: null });
     expect(within(screen.getByTestId('timeline-planned-visit')).queryByRole('link')).toBeNull();
+    first.unmount();
+    renderPanel({ plannedVisits: [planned()], visitsHref: '/visits' });
+    expect(within(screen.getByTestId('timeline-planned-visit')).getByRole('link')).toBeTruthy();
   });
 });

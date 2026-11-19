@@ -258,6 +258,12 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
       expect((await screen.findByTestId('deal-fulfilment-create-ir-drafts')).disabled).toBe(true);
       expect(screen.getByTestId('ir-source-hint').textContent).toContain('จัดซื้อสินค้า');
     });
+    it.each([['CEO', CEO], ['owning rep', OWNER]])('%s: จัดซื้อสินค้า button when pending && editable and a handler is given; click calls it', async (_n, user) => {
+      const onChoose = vi.fn();
+      renderPanelWithChoose(user, onChoose, { legacy: true, pending: true, editable: true, decidedAt: null });
+      fireEvent.click(await screen.findByTestId('deal-fulfilment-choose-source'));
+      expect(onChoose).toHaveBeenCalledTimes(1);
+    });
     // TicketService#canDeclareStockCoverage is CEO or a sales-role owner/keyer: the all-documents grant does not reach it.
     it('a canManageAllSalesDocuments holder on another rep\'s deal gets no จัดซื้อสินค้า button (the server refuses the declaration)', async () => {
       const holder = { ...OTHER_REP, canManageAllSalesDocuments: true };

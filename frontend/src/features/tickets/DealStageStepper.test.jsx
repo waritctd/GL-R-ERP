@@ -3,7 +3,7 @@ import { fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { DEAL_STAGE_CATALOG } from '../../data/dealStageCatalog.js';
 import {
-  DealStageStepper, PhaseSummary, 
+  DealStageStepper, PhaseSummary,
 } from './DealStageStepper.jsx';
 
 globalThis.React = React;
@@ -96,10 +96,13 @@ describe('DealStageStepper off-route rows — แก้ช่องทางด�
   );
   const toggles = () => screen.queryAllByRole('button', { name: /แก้ช่องทาง/ });
 
-  it('renders no remedy at all when SET_ENTRY_CHANNEL is not advertised (handler wired, wrong-way-round)', () => {
-    renderBuyer({ entryChannelAction: undefined });
+  it('renders a แก้ช่องทาง remedy on the off-route rows only when SET_ENTRY_CHANNEL is advertised (handler wired either way)', () => {
+    const first = renderBuyer({ entryChannelAction: undefined });
     expect(toggles()).toHaveLength(0);
     expect(screen.queryByTestId('entry-channel-fix')).toBeNull();
+    first.unmount();
+    renderBuyer();
+    expect(toggles().length).toBeGreaterThan(0);
   });
 });
 

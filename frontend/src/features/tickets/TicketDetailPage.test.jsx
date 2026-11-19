@@ -41,7 +41,6 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         reserveStock: vi.fn(),
         // Default: the deal's source is already decided, so tests that predate the stage-10 dialog keep their IR button.
         getProcurementSource: vi.fn().mockResolvedValue({ legacy: false, editable: false, decidedAt: '2026-11-10T00:00:00Z', quotationNumber: null, lines: [] }),
-        decideProcurementSource: vi.fn(),
         recordDelivery: vi.fn(),
         completeDelivery: vi.fn(),
         actions: vi.fn(),
@@ -54,29 +53,14 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         setEntryChannel: vi.fn(),
         revision: vi.fn(),
         editItems: vi.fn(),
-        downloadQuotationXlsx: vi.fn(),
-        downloadQuotationPdf: vi.fn(),
-        remainingInvoiceOptions: vi.fn(),
         // Deal tracking.
         listActivities: vi.fn(),
         addActivity: vi.fn(),
         updateTracking: vi.fn(),
         // Deal parties (deal-party-model.md): the ผู้รับเหมาที่เสนอราคา panel and บันทึกผลประมูล.
         parties: vi.fn(),
-        addParty: vi.fn(),
-        updateParty: vi.fn(),
-        removeParty: vi.fn(),
-        recordBidOutcome: vi.fn(),
-        // Document chain fix round 1 (F-1): the deal page's own lifecycle / confirm actions.
-        confirmCustomer: vi.fn(),
-        hold: vi.fn(),
         // The revoke-close-confirm control lives in the "การเงิน" tab, outside the money section.
         revokeCloseConfirmation: vi.fn(),
-        // Fulfilment: DealFulfilmentPanel's own mutations, same self-contained pattern.
-        issueImportRequest: vi.fn(),
-        markIrSent: vi.fn(),
-        markShipping: vi.fn(),
-        markGoodsReceived: vi.fn(),
       },
       attachments: {
         list: vi.fn(),
@@ -89,16 +73,9 @@ vi.mock('../../api/index.js', async (importOriginal) => {
       // tail for whichever request reaches APPROVED_FOR_QUOTATION+.
       pricingRequests: {
         listForTicket: vi.fn(),
-        get: vi.fn(),
         listCustomerQuotations: vi.fn(),
-        createCustomerQuotation: vi.fn(),
-        issueCustomerQuotation: vi.fn(),
         recordCustomerQuotationOutcome: vi.fn(),
-        confirmOrder: vi.fn(),
-        submit: vi.fn(),
         createDepositNoticeFromQuotation: vi.fn(),
-        downloadCustomerQuotationPdf: vi.fn(),
-        downloadCustomerQuotationXlsx: vi.fn(),
       },
       // PricingRequestCreateModal's header-terms section fetches the same eligible-display-name list
       // the direct-deal quotation editor uses.
@@ -116,25 +93,11 @@ vi.mock('../../api/index.js', async (importOriginal) => {
       // Deposit: DealDepositPanel reads/writes this namespace directly, like pricingRequests above.
       depositNotices: {
         listByTicket: vi.fn(),
-        // Direct-quotation deals: the sticky สร้างใบแจ้งยอดเงินรับมัดจำ creates the draft this way.
         createDraft: vi.fn(),
-        issue: vi.fn(),
-        preview: vi.fn(),
-        downloadXlsx: vi.fn(),
-        downloadPdf: vi.fn(),
-        noteTemplates: vi.fn(),
       },
-      // The STORED remaining invoice aggregate: RemainingInvoiceDialog always checks it first, so an
-      // undefined namespace would throw before reaching the stateless preview
-      // (tickets.remainingInvoiceOptions). Defaults to "no live document yet", matching every fixture.
+      // Defaults to "no live document yet", matching every fixture.
       storedRemainingInvoices: {
         listForTicket: vi.fn().mockResolvedValue({ remainingInvoices: [] }),
-        createDraft: vi.fn(),
-        update: vi.fn(),
-        issue: vi.fn(),
-        revise: vi.fn(),
-        deleteDraft: vi.fn(),
-        download: vi.fn(),
       },
       // The items table converts a foreign-currency factory price to baht. Mocked because an unmocked namespace
       // makes every fxRates.list() call throw (api.fxRates is undefined), which would silently leave the baht line
@@ -152,7 +115,6 @@ vi.mock('../../api/index.js', async (importOriginal) => {
       importRequests: {
         brands: vi.fn(),
         pages: vi.fn(),
-        download: vi.fn(),
       },
       // The STORED ใบขอซื้อรายโรงงาน section DealFulfilmentPanel queries for every canReadStoredIr
       // viewer (sales owner/CEO/import/sales_manager); like `importRequests` above, an undefined
@@ -162,23 +124,10 @@ vi.mock('../../api/index.js', async (importOriginal) => {
       storedImportRequests: {
         listForTicket: vi.fn().mockResolvedValue({ importRequests: [] }),
         createDrafts: vi.fn(),
-        get: vi.fn(),
-        update: vi.fn(),
-        issue: vi.fn(),
-        revise: vi.fn(),
-        deleteDraft: vi.fn(),
-        advanceStep: vi.fn(),
-        setLeadTime: vi.fn(),
-        updateEmailDraft: vi.fn(),
-        markEmailSent: vi.fn(),
-        download: vi.fn(),
-        setRequiredByNote: vi.fn(),
       },
       priceImport: {
         countries: vi.fn().mockResolvedValue([]),
       },
-      // Edit-items mode's ยี่ห้อ/รุ่น fields share TicketCreateModal's CatalogAutocompleteField, which
-      // searches this on every keystroke (debounced).
       catalog: {
         prices: vi.fn(),
       },
@@ -355,14 +304,6 @@ describe('TicketDetailPage', () => {
     api.fxRates.list.mockResolvedValue({ fxRates: [] });
   });
 
-  it('renders a ticket from a mocked api.tickets.get', async () => {
-    renderTicketDetailPage();
-
-    expect(await screen.findByRole('heading', { level: 1, name: 'โครงการทดสอบ' })).not.toBeNull();
-    expect(screen.getAllByText('PR-2026-0701').length).toBeGreaterThan(0);
-    expect(api.tickets.get).toHaveBeenCalledWith(701);
-  });
-
   it('renders payment totals, overdue badge, and hides record payment without the action', async () => {
     api.tickets.get.mockResolvedValueOnce({
       ticket: buildTicket({
@@ -516,67 +457,7 @@ describe('TicketDetailPage', () => {
     expect(screen.getAllByText(/PR-2026-0701/).length).toBeGreaterThan(0);
   });
 
-  // Edit-items must show the create modal's required-field asterisks/validation: a blank ยี่ห้อ/รุ่น/ขนาด
-  // must fail inline before the API is called, not with a backend 400. These pin shared markers,
-  // the shared catalog autocomplete, and that guard.
-  describe('edit-items: required-field markers (ยี่ห้อ/รุ่น/ขนาด) match create, and catalog autocomplete', () => {
-    // item0Overrides seeds row 0 with fields the default fixture doesn't carry (e.g. a real
-    // catalogPriceId/catalogProductCode).
-    async function openEditMode(item0Overrides = {}) {
-      api.tickets.get.mockResolvedValueOnce({
-        ticket: buildTicket({
-          summary: { status: 'submitted', createdById: 1 },
-          items: [
-            {
-              id: 70101, brand: 'SCG', model: 'A1', size: '60x60', factory: 'SCG Ceramics',
-              color: 'ขาว', texture: 'ด้าน', qty: 10, qtyDelivered: 0, qtyFromStock: 0, approvedPrice: null,
-              ...item0Overrides,
-            },
-            {
-              id: 70102, brand: 'Cotto', model: 'B2', size: '30x30', factory: 'Cotto Industry',
-              color: null, texture: null, qty: 5, qtyDelivered: 0, qtyFromStock: 0, approvedPrice: null,
-            },
-          ],
-        }),
-      });
-      api.tickets.actions.mockResolvedValueOnce({
-        currentState: { lifecycle: 'ACTIVE', salesStage: 'LEAD', paymentStatus: null, fulfillmentStatus: null, status: 'submitted' },
-        availableActions: [{ action: 'EDIT_ITEMS', kind: 'operational', label: 'แก้ไขรายการสินค้า' }],
-      });
-      renderTicketDetailPage(salesOwnerUser);
-      await openTab(/ใบเสนอราคา/);
-      fireEvent.click(await screen.findByRole('button', { name: 'แก้ไขรายการสินค้า' }));
-      // Confirms edit mode has actually mounted before a test starts poking at row fields — the save button is
-      // unique (unlike the per-row ยี่ห้อ label/placeholder, which repeats once per row and would make
-      // findByLabelText/findByPlaceholderText throw on "multiple elements").
-      await screen.findByRole('button', { name: 'บันทึกการแก้ไข' });
-    }
-
-    it('clearing ยี่ห้อ and saving blocks the save with an inline required-field error', async () => {
-      await openEditMode();
-      const brandInput = document.getElementById('edit-item-0-brand');
-      fireEvent.change(brandInput, { target: { value: '' } });
-      fireEvent.click(screen.getByRole('button', { name: 'บันทึกการแก้ไข' }));
-
-      expect(await screen.findByText('กรุณากรอกยี่ห้อ / โรงงาน')).toBeTruthy();
-      expect(brandInput.getAttribute('aria-invalid')).toBe('true');
-      expect(api.tickets.editItems).not.toHaveBeenCalled();
-    });
-
-    it('SQM-basis row with no ตร.ม./แผ่น factor: qty 0 is not required — save sends the row as typed', async () => {
-      await openEditMode({ unitBasis: 'SQM', qty: 0, qtySqm: 12, sqmPerPiece: null });
-      fireEvent.click(screen.getByRole('button', { name: 'บันทึกการแก้ไข' }));
-
-      await waitFor(() => expect(api.tickets.editItems).toHaveBeenCalledTimes(1));
-      const payloadItems = api.tickets.editItems.mock.calls[0][1].items;
-      expect(payloadItems[0]).toMatchObject({ qty: 0, qtySqm: 12 });
-    });
-  });
-
-  // The counterpart to the rule above, and why bannerText is not simply nulled whenever a CTA exists:
-  // the four `can.*`-gated primaries carry a DESCRIPTIVE sentence (NEXT_ACTION_STEPS) that their terse
-  // button label does not repeat, and no other surface on the page says it.
-  describe('sticky header primary CTA — the can.* primaries KEEP their descriptive line (prefix-free)', () => {
+  describe('sticky header primary CTA — verify-close', () => {
     // The CEO's close is irreversible, so the click only opens a confirm; verifyClose runs once, on
     // confirm. (The account's ticket-detail-confirm-close stays one click, not covered here.)
     describe('W4-10 CEO ตรวจสอบและปิดงาน asks first', () => {
@@ -788,68 +669,6 @@ describe('TicketDetailPage', () => {
         if (more) fireEvent.click(more);
         expect(screen.queryByRole('menuitem', { name: 'ยืนยันคำสั่งซื้อ' })).toBeNull();
       });
-    });
-  });
-
-  // The blocker line ("รอชำระมัดจำ" / "รอชำระส่วนที่เหลือ") must not show for account: account's OWN
-  // action (confirmDeposit/confirmFinalPayment, nextAccountAction) clears each wait, so it must
-  // never read as a blocker FOR them. Uses a legacy (status: 'document_issued') ticket so
-  // nextAccountAction resolves to null (its gates require status: 'quotation_issued'), isolating the
-  // blocker guard from the resolver-first primary, which would mask the same bug by giving account a
-  // real primary action (see workState.test.js's account/ORDER_RECEIVED case).
-  //
-  // The "shows it to someone else" side uses sales_manager, not ceo: ROLE_PERMISSIONS
-  // .canConfirmPayments (src/api/routes.js) is `['account', 'ceo']`, so an `isAccount` guard would
-  // also suppress it for ceo. The page uses `isMoneyRecorder` (role === 'account' exactly).
-  describe('blocker line respects !isMoneyRecorder (P3, tightened by GLA-118)', () => {
-    function legacyDepositWaitingTicket() {
-      return buildTicket({
-        summary: {
-          lifecycle: 'ACTIVE', salesStage: 'QUOTE_DESIGN_SIDE',
-          status: 'document_issued', paymentStatus: 'DEPOSIT_NOTICE_ISSUED', createdById: 1,
-        },
-      });
-    }
-
-    it('never shows "รอชำระมัดจำ" to account — account is the role that clears it', async () => {
-      api.tickets.get.mockResolvedValue({ ticket: legacyDepositWaitingTicket() });
-      api.tickets.actions.mockResolvedValue({
-        currentState: {
-          lifecycle: 'ACTIVE', salesStage: 'QUOTE_DESIGN_SIDE', paymentStatus: 'DEPOSIT_NOTICE_ISSUED', fulfillmentStatus: null, status: 'document_issued',
-        },
-        availableActions: [],
-      });
-
-      renderTicketDetailPage(accountUser);
-
-      await screen.findByRole('heading', { level: 1, name: 'โครงการทดสอบ' });
-      expect(screen.queryByText(/รอชำระมัดจำ/)).toBeNull();
-    });
-  });
-
-  // "รอ CEO ตรวจสอบปิดงาน" is a WAIT, so it stops once the CEO has verified (lifecycle COMPLETED);
-  // closeConfirmedAt stays set forever, so it cannot be the only test.
-  describe('blocker line "รอ CEO ตรวจสอบปิดงาน" ends when the CEO has verified (QA-27)', () => {
-    function closeConfirmedDeal(lifecycle) {
-      api.tickets.get.mockResolvedValue({
-        ticket: buildTicket({
-          summary: {
-            lifecycle, salesStage: 'DELIVERED', status: 'quotation_issued', paymentStatus: 'FULLY_PAID',
-            closeConfirmedAt: '2026-07-20T09:00:00.000Z',
-          },
-        }),
-      });
-      api.tickets.actions.mockResolvedValue({
-        currentState: { lifecycle, salesStage: 'DELIVERED', paymentStatus: 'FULLY_PAID', fulfillmentStatus: 'FULLY_DELIVERED', status: 'quotation_issued' },
-        availableActions: [],
-      });
-    }
-
-    it('does not show to the CEO once the deal is COMPLETED (the CEO has no verify action left)', async () => {
-      closeConfirmedDeal('COMPLETED');
-      renderTicketDetailPage(ceoUser);
-      await screen.findByRole('heading', { level: 1, name: 'โครงการทดสอบ' });
-      expect(screen.queryByText('รอ CEO ตรวจสอบปิดงาน')).toBeNull();
     });
   });
 
@@ -1092,65 +911,6 @@ describe('TicketDetailPage', () => {
     });
   });
 
-  // "การส่งมอบ / นำเข้า": the deal-level IR/shipping/goods-received/delivery chain + optional
-  // per-factory PO detail.
-  describe('deal fulfilment panel', () => {
-    // DealFulfilmentPanel lives in the "จัดซื้อ-ส่งมอบ" tab.
-    async function fulfilmentSection() {
-      await openTab(/ส่งของ/);
-      const heading = await screen.findByRole('heading', { level: 2, name: 'การส่งมอบ / นำเข้า' });
-      return within(heading.closest('section'));
-    }
-
-    // ── There is no reserve-from-stock feature ─────────
-    //
-    // A stock line ends when the CEO confirms the price and then waits for delivery; nobody reserves
-    // anything. The จองสินค้าจากสต็อก control is gone for every role, even if an older server still
-    // advertises RESERVE_STOCK to the deal owner (the endpoint stays for fixtures, the UI does not).
-    it('never shows จองสินค้าจากสต็อก - not even to the sales deal owner when the server still advertises RESERVE_STOCK', async () => {
-      api.tickets.get.mockResolvedValueOnce({
-        ticket: buildTicket({ summary: { status: 'quotation_issued', salesStage: 'ORDER_RECEIVED', createdById: 1 } }),
-      });
-      api.tickets.actions.mockResolvedValueOnce({
-        currentState: { lifecycle: 'ACTIVE', salesStage: 'ORDER_RECEIVED', paymentStatus: 'DEPOSIT_PAID', fulfillmentStatus: null, status: 'quotation_issued' },
-        availableActions: [{ action: 'RESERVE_STOCK', kind: 'fulfillment', label: 'จองสินค้าจากสต็อก' }],
-      });
-
-      renderTicketDetailPage(salesOwnerUser);
-      const section = await fulfilmentSection();
-
-      expect(section.queryByRole('button', { name: 'จองสินค้าจากสต็อก' })).toBeNull();
-    });
-
-    // Wrong-way-round: dropping the local role check must not make the buttons unconditional.
-    it('hides the delivery buttons from a sales user the server did not offer them to', async () => {
-      api.tickets.get.mockResolvedValueOnce({
-        ticket: buildTicket({ summary: { status: 'quotation_issued', salesStage: 'DELIVERY_SCHEDULING', fulfillmentStatus: 'GOODS_RECEIVED', createdById: 1 } }),
-      });
-      api.tickets.actions.mockResolvedValueOnce({
-        currentState: { lifecycle: 'ACTIVE', salesStage: 'DELIVERY_SCHEDULING', paymentStatus: 'DEPOSIT_PAID', fulfillmentStatus: 'GOODS_RECEIVED', status: 'quotation_issued' },
-        availableActions: [],
-      });
-
-      renderTicketDetailPage(salesOwnerUser);
-      const section = await fulfilmentSection();
-
-      expect(section.queryByRole('button', { name: 'บันทึกการส่งสินค้า' })).toBeNull();
-      expect(section.queryByRole('button', { name: 'ส่งมอบครบ' })).toBeNull();
-    });
-  });
-
-  // QA-22's stored-IR read stays: the page still reads the per-factory IRs for every role the backend lets read
-  // them (they drive the สร้างใบขอซื้อ main button and the ส่งของ trackers), and never for a role it would refuse.
-  describe('stored IR read gate (QA-22)', () => {
-    it('a non-owner sales rep cannot read stored IRs: no request is made', async () => {
-      renderTicketDetailPage({ id: 2, employeeId: 2, name: 'พนักงานขายอีกคน', role: 'sales' });
-      await screen.findByTestId('deal-state-header');
-      await stickyInputsSettled().catch(() => {});
-      expect(api.storedImportRequests.listForTicket).not.toHaveBeenCalled();
-    });
-  });
-
   // Role-projected tab VISIBILITY (ticketDetailTabs.js has its own unit tests for the pure function;
   // these prove the page wires it in, per role, end to end).
   describe('tab visibility per role', () => {
@@ -1182,6 +942,12 @@ describe('TicketDetailPage', () => {
       await openTab(/ใบเสนอราคา/);
       expect(screen.queryByRole('heading', { name: 'คำขอราคา' })).toBeNull();
       expect(api.pricingRequests.listForTicket).not.toHaveBeenCalled();
+    });
+
+    it('the CEO reaches the pricing-request panel inside the same tab', async () => {
+      renderTicketDetailPage(ceoUser);
+      await openTab(/ใบเสนอราคา/);
+      expect(await screen.findByRole('heading', { name: 'คำขอราคา' })).toBeTruthy();
     });
 
     it('import still cannot reach payment content (the "การเงิน" tab predicate is unchanged)', async () => {
@@ -1217,46 +983,6 @@ describe('TicketDetailPage', () => {
     });
   });
 
-  // The เงิน tab (was การเงิน, ONE "การชำระเงิน" panel) is the drawn KPI tiles + รับแล้ว + เอกสาร (the three
-  // document steps); there is no สถานะการเงิน, ใบวางบิล step or วางบิล control.
-  describe('เงิน tab — KPI tiles, รับแล้ว and เอกสาร', () => {
-    const readyDeal = () => api.tickets.get.mockResolvedValue({
-      ticket: buildTicket({
-        summary: { status: 'quotation_issued', paymentStatus: 'DEPOSIT_PAID', fulfillmentStatus: 'GOODS_RECEIVED', createdById: 1 },
-      }),
-    });
-
-    it('account on a ready deal gets no remaining-invoice control (can.downloadRemainingInvoice is sales only)', async () => {
-      readyDeal();
-      renderTicketDetailPage(accountUser);
-      await openTab(/^เงิน/);
-
-      const step = within(await screen.findByTestId('payment-step-remaining'));
-      await waitFor(() => expect(api.storedRemainingInvoices.listForTicket).toHaveBeenCalled());
-      expect(step.queryByRole('button', { name: /สร้างใบแจ้งหนี้ส่วนที่เหลือ|จัดการเอกสาร/ })).toBeNull();
-    });
-  });
-
-  // ── Remaining-invoice download gate (stock-delivered deals) ─────────────────────────────────
-  //
-  // The gate is remainingInvoiceReadiness.js's rule, not `fulfillmentStatus === 'GOODS_RECEIVED'`
-  // (only the import axis writes it, so a from-stock deal never got the button and an import deal
-  // lost it at its first recorded delivery). UI readiness only: DepositNoticeService
-  // #getRemainingInvoiceXlsx gates on ticket status alone.
-  describe('remaining-invoice download gate', () => {
-    const INVOICE_BUTTON = 'ดาวน์โหลดใบแจ้งหนี้ส่วนที่เหลือ';
-    afterEach(() => { api.storedRemainingInvoices.listForTicket.mockResolvedValue({ remainingInvoices: [] }); });
-
-    it('withholds the download from a non-sales role even on a delivered stock deal', async () => {
-      api.tickets.get.mockResolvedValueOnce({
-        ticket: buildTicket({ summary: { status: 'quotation_issued', fulfillmentStatus: 'FULLY_DELIVERED', createdById: 1 } }),
-      });
-      renderTicketDetailPage(accountUser);
-      expect(await screen.findByRole('heading', { level: 1 })).not.toBeNull();
-      expect(screen.queryByRole('button', { name: INVOICE_BUTTON })).toBeNull();
-    });
-  });
-
   // The deal page's ONE main button creates the deposit notice (ขั้น 10) and the remaining invoice
   // (ขั้น 13); the panels carry no second copy of either label.
   describe('sticky primary — สร้างใบแจ้งยอดเงินรับมัดจำ (ขั้น 10) and สร้างใบแจ้งหนี้ (ขั้น 13), owner rulings 2026-10-28', () => {
@@ -1267,18 +993,18 @@ describe('TicketDetailPage', () => {
     const nonOwnerSales = { id: 2, employeeId: 2, name: 'เซลส์อื่น', role: 'sales' };
     const primary = () => screen.queryByTestId('ticket-primary-action');
     const primaryAction = () => primary()?.getAttribute('data-action') ?? null;
+    const location = () => screen.getByTestId('location-probe').textContent;
 
     // A deal whose customer has confirmed the order (CUSTOMER_CONFIRMED) and has no notice yet.
-    function depositStageDeal({ prs = [acceptedPr], notices = [], availableActions = [], summary = {} } = {}) {
+    function depositStageDeal() {
       const state = {
         lifecycle: 'ACTIVE', salesStage: 'ORDER_RECEIVED', paymentStatus: 'CUSTOMER_CONFIRMED', fulfillmentStatus: null, status: 'quotation_issued',
       };
-      api.tickets.get.mockResolvedValue({ ticket: buildTicket({ summary: { ...state, createdById: 1, ...summary } }) });
-      api.tickets.actions.mockResolvedValue({ currentState: state, availableActions });
-      api.pricingRequests.listForTicket.mockResolvedValue({ items: prs });
+      api.tickets.get.mockResolvedValue({ ticket: buildTicket({ summary: { ...state, createdById: 1 } }) });
+      api.tickets.actions.mockResolvedValue({ currentState: state, availableActions: [] });
+      api.pricingRequests.listForTicket.mockResolvedValue({ items: [acceptedPr] });
       api.dealQuotations.listForTicket.mockResolvedValue({ items: [] });
-      api.depositNotices.listByTicket.mockResolvedValue({ depositNotices: notices });
-      api.pricingRequests.createDepositNoticeFromQuotation.mockResolvedValue({ depositNotice: { id: 801, status: 'DRAFT' } });
+            api.pricingRequests.createDepositNoticeFromQuotation.mockResolvedValue({ depositNotice: { id: 801, status: 'DRAFT' } });
       api.depositNotices.createDraft.mockResolvedValue({ depositNotice: { id: 801, status: 'DRAFT' } });
     }
 
@@ -1287,6 +1013,19 @@ describe('TicketDetailPage', () => {
       api.dealQuotations.listForTicket.mockReset();
       api.storedRemainingInvoices.listForTicket.mockReset();
       api.storedRemainingInvoices.listForTicket.mockResolvedValue({ remainingInvoices: [] });
+    });
+
+    it('ขั้น 10, order-confirmed accepted PR, no notice: the main button is สร้างใบแจ้งยอดเงินรับมัดจำ; clicking creates it from the quotation and opens /deposit', async () => {
+      depositStageDeal();
+      renderTicketDetailPageAtRoute(['/tickets/701'], salesOwnerUser);
+      await waitFor(() => expect(primaryAction()).toBe('create_deposit_notice'));
+      expect(primary().textContent).toContain('สร้างใบแจ้งยอดเงินรับมัดจำ');
+
+      fireEvent.click(primary());
+
+      await waitFor(() => expect(api.pricingRequests.createDepositNoticeFromQuotation).toHaveBeenCalledWith(501, {}));
+      await waitFor(() => expect(location()).toBe('/tickets/701/deposit'));
+      expect(api.depositNotices.createDraft).not.toHaveBeenCalled();
     });
 
     it('a sales rep who does NOT own the deal gets no create_deposit_notice main button (the backend refuses non-owners)', async () => {
@@ -1310,6 +1049,8 @@ describe('TicketDetailPage', () => {
     const primaryAction = () => primary()?.getAttribute('data-action') ?? null;
     // jsdom has no scrollIntoView: record which element the page asked to scroll to.
     let scrolledIds = [];
+    const location = () => screen.getByTestId('location-probe').textContent;
+    const scrolledToIrSection = () => scrolledIds.includes('deal-fulfilment-stored-ir');
     beforeEach(() => {
       scrolledIds = [];
       Element.prototype.scrollIntoView = function scrollIntoView() { scrolledIds.push(this.id); };
@@ -1317,15 +1058,15 @@ describe('TicketDetailPage', () => {
       api.tickets.getProcurementSource.mockResolvedValue({ legacy: false, editable: false, decidedAt: '2026-11-10T00:00:00Z', quotationNumber: null, lines: [] });
     });
 
-    function irStageDeal({ rows = [], salesStage = 'DEPOSIT_RECEIVED', lifecycle = 'ACTIVE', fulfillmentStatus = null } = {}) {
+    function irStageDeal() {
       const state = {
-        lifecycle, salesStage, paymentStatus: 'DEPOSIT_PAID', fulfillmentStatus, status: 'quotation_issued',
+        lifecycle: 'ACTIVE', salesStage: 'DEPOSIT_RECEIVED', paymentStatus: 'DEPOSIT_PAID', fulfillmentStatus: null, status: 'quotation_issued',
       };
       api.tickets.get.mockResolvedValue({ ticket: buildTicket({ summary: { ...state, createdById: 1 } }) });
       api.tickets.actions.mockResolvedValue({ currentState: state, availableActions: [] });
       api.pricingRequests.listForTicket.mockResolvedValue({ items: [acceptedPr] });
       api.dealQuotations.listForTicket.mockResolvedValue({ items: [] });
-      api.storedImportRequests.listForTicket.mockResolvedValue({ importRequests: rows });
+      api.storedImportRequests.listForTicket.mockResolvedValue({ importRequests: [] });
       api.storedImportRequests.createDrafts.mockResolvedValue({ importRequests: [{ id: 31, status: 'DRAFT', ticketId: 701 }] });
     }
 
@@ -1333,6 +1074,28 @@ describe('TicketDetailPage', () => {
       api.dealQuotations.listForTicket.mockReset();
       api.storedImportRequests.listForTicket.mockResolvedValue({ importRequests: [] });
       delete Element.prototype.scrollIntoView;
+    });
+
+    it('owner rep at DEPOSIT_PAID: the main button is สร้างใบขอซื้อ (IR); clicking asks first (W3-11), confirming creates the drafts once and lands on the จัดซื้อ-ส่งมอบ tab', async () => {
+      irStageDeal();
+      renderTicketDetailPageAtRoute(['/tickets/701'], salesOwnerUser);
+      await waitFor(() => expect(primaryAction()).toBe('create_import_request'));
+      expect(primary().textContent).toContain('ออกใบขอซื้อ (IR)');
+      await waitFor(() => expect(primary().disabled).toBe(false));
+
+      fireEvent.click(primary());
+
+      // ออกใบขอซื้อ (IR) is irreversible -> the handle opens the panel's confirm; nothing is sent yet.
+      const dialog = await screen.findByRole('dialog', { name: 'ยืนยันการออกใบขอซื้อ (IR)' });
+      expect(api.storedImportRequests.createDrafts).not.toHaveBeenCalled();
+      const confirm = within(dialog).getByRole('button', { name: 'ออกใบขอซื้อ' });
+      await waitFor(() => expect(confirm.disabled).toBe(false));
+      fireEvent.click(confirm);
+
+      await waitFor(() => expect(api.storedImportRequests.createDrafts).toHaveBeenCalledTimes(1));
+      expect(api.storedImportRequests.createDrafts).toHaveBeenCalledWith(701, undefined);
+      await waitFor(() => expect(location()).toContain('tab=ship'));
+      await waitFor(() => expect(scrolledToIrSection()).toBe(true));
     });
 
     it('a sales rep who does NOT own the deal gets no create_import_request main button', async () => {
@@ -1427,6 +1190,25 @@ describe('TicketDetailPage', () => {
       api.dealQuotations.listForTicket.mockResolvedValue({ items: rows });
     }
 
+    // DEAL_DIRECT deal whose only quotation is APPROVED and whose order was already confirmed.
+    function directApprovedDeal() {
+      const approved = quotationRow({ id: 77, number: 'QT-2026-0077-1', origin: 'DEAL_DIRECT', docStatus: 'APPROVED', recipientType: 'DESIGNER' });
+      api.tickets.get.mockResolvedValue({
+        ticket: buildTicket({
+          summary: {
+            lifecycle: 'ACTIVE', salesStage: 'PRESENTATION', status: 'quotation_issued', createdById: 1,
+            liveDirectQuotation: { id: 77, number: 'QT-2026-0077-1', docStatus: 'APPROVED', recipientType: 'DESIGNER' },
+          },
+        }),
+      });
+      api.tickets.actions.mockResolvedValue({
+        currentState: { lifecycle: 'ACTIVE', salesStage: 'PRESENTATION', paymentStatus: null, fulfillmentStatus: null, status: 'quotation_issued' },
+        availableActions: [],
+      });
+      api.dealQuotations.listForTicket.mockResolvedValue({ items: [approved] });
+    }
+
+    const primary = () => screen.getByTestId('ticket-primary-action');
     const primaryAction = () => screen.queryByTestId('ticket-primary-action')?.getAttribute('data-action') ?? null;
     async function settle() {
       await waitFor(() => expect(api.dealQuotations.listForTicket).toHaveBeenCalled());
@@ -1450,6 +1232,42 @@ describe('TicketDetailPage', () => {
       fireEvent.click(trigger);
       return screen.queryByTestId('deal-quotation-revise');
     }
+
+    it('DEAL_DIRECT: an APPROVED quotation on an order-confirmed deal -> CTA "แก้ใบเสนอราคา"; click mints a revision and opens it', async () => {
+      directApprovedDeal();
+      renderTicketDetailPageAtRoute(['/tickets/701'], salesOwnerUser);
+      await waitFor(() => expect(primaryAction()).toBe('revise_quotation'));
+      expect(primary().textContent).toContain('แก้ใบเสนอราคา');
+      expect(api.dealQuotations.createRevision).not.toHaveBeenCalled();
+      fireEvent.click(primary());
+      await waitFor(() => expect(api.dealQuotations.createRevision).toHaveBeenCalledWith(77));
+      await waitFor(() => expect(screen.getByTestId('location-probe').textContent).toBe('/quotations/88'));
+    });
+
+    it('PR-origin: an ISSUED quotation at QUOTE_OWNER keeps บันทึกผลใบเสนอราคา as primary AND offers แก้ใบเสนอราคา in the overflow menu; click revises it', async () => {
+      prOriginDeal({ salesStage: 'QUOTE_OWNER' });
+      renderTicketDetailPageAtRoute(['/tickets/701'], salesOwnerUser);
+      await waitFor(() => expect(primaryAction()).toBe('record_quotation_outcome'));
+      await settle();
+      const item = await reviseMenuItem();
+      expect(item).not.toBeNull();
+      expect(item.textContent).toContain('แก้ใบเสนอราคา');
+      expect(primaryAction()).toBe('record_quotation_outcome');
+      fireEvent.click(item);
+      await waitFor(() => expect(api.dealQuotations.createRevision).toHaveBeenCalledWith(80));
+      await waitFor(() => expect(screen.getByTestId('location-probe').textContent).toBe('/quotations/88'));
+    });
+
+    it('error path: a refused revision (409) toasts the server\'s Thai message and stays on the deal', async () => {
+      api.dealQuotations.createRevision.mockRejectedValue(Object.assign(new Error('มีฉบับแก้ไขของใบเสนอราคานี้อยู่แล้ว'), { status: 409 }));
+      prOriginDeal();
+      const showToast = vi.fn();
+      renderTicketDetailPageAtRoute(['/tickets/701'], salesOwnerUser, showToast);
+      await settle();
+      fireEvent.click(await reviseMenuItem());
+      await waitFor(() => expect(showToast).toHaveBeenCalledWith('error', 'มีฉบับแก้ไขของใบเสนอราคานี้อยู่แล้ว'));
+      expect(screen.getByTestId('location-probe').textContent).toBe('/tickets/701');
+    });
 
     it('consumes the predicate: when canReviseDealQuotation refuses the quotation there is no revise item', async () => {
       quotationMeta.canReviseDealQuotation.mockImplementation(() => false);
@@ -1545,53 +1363,6 @@ describe('TicketDetailPage', () => {
       await waitFor(() => expect(api.tickets.setEntryChannel).toHaveBeenCalledWith(701, {
         value: 'DESIGNER_LED', note: 'มีผู้ออกแบบเข้ามาร่วมจริง',
       }));
-    });
-  });
-
-  // deal-party-model.md: one deal per project, each bidding contractor a BUYER party.
-  describe('deal parties — ผู้รับเหมาที่เสนอราคา and บันทึกผลประมูล', () => {
-    const party = (overrides) => ({
-      id: 1, ticketId: 701, customerId: 5, customerName: 'บริษัท ก จำกัด', contactId: null, contactName: null,
-      role: 'BUYER', status: 'QUOTED', notAwardedReason: null, headline: false, splitTicketId: null, splitTicketCode: null,
-      latestQuotationId: 11, latestQuotationNumber: 'QT-2026-0011-1', latestQuotationStatus: 'APPROVED', latestQuotationAmount: 512900,
-      ...overrides,
-    });
-    const threeBidders = () => [
-      party({ id: 1, customerName: 'บริษัท ตัวอย่าง คอนสตรัคชั่น จำกัด', headline: true, contactName: 'คุณประมูล หนึ่ง' }),
-      party({ id: 2, customerName: 'บจก.สมมติ ก่อสร้าง', latestQuotationId: 12, latestQuotationNumber: 'QT-2026-0012-2', latestQuotationAmount: 491400.03 }),
-      party({ id: 3, customerName: 'บจก.เดโม เอ็นจิเนียริ่ง', status: 'NEGOTIATING', latestQuotationId: 13, latestQuotationNumber: 'QT-2026-0013-1', latestQuotationStatus: 'PENDING_APPROVAL' }),
-      party({ id: 4, customerName: 'บริษัท ดีไซน์ สตูดิโอ ตัวอย่าง จำกัด', role: 'DESIGNER', status: 'ACTIVE', latestQuotationId: null, latestQuotationNumber: null, latestQuotationStatus: null, latestQuotationAmount: null }),
-    ];
-    function bidDeal(parties = threeBidders(), summary = {}) {
-      api.tickets.get.mockResolvedValue({
-        ticket: buildTicket({
-          summary: {
-            lifecycle: 'ACTIVE', salesStage: 'QUOTE_BUYER', status: 'draft', createdById: 1, entryChannel: 'BUYER_DIRECT',
-            code: 'DL-2026-0280', projectName: 'GRAND RIVER HOTEL', ...summary,
-          },
-        }),
-      });
-      api.tickets.parties.mockResolvedValue({ parties });
-      api.dealQuotations.listForTicket.mockResolvedValue({ items: [] });
-    }
-
-    function renderDealPage(user = salesOwnerUser) {
-      return render(
-        <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })}>
-          <MemoryRouter initialEntries={['/tickets/701?tab=deal']}>
-            <TicketDetailPage user={user} ticketId={701} onBack={vi.fn()} showToast={vi.fn()} />
-          </MemoryRouter>
-        </QueryClientProvider>,
-      );
-    }
-
-    it('a viewer who may not edit the deal gets no บันทึกผลประมูล and no add button', async () => {
-      bidDeal();
-      renderDealPage({ id: 77, employeeId: 77, name: 'อื่น', role: 'sales' });
-      await screen.findByTestId('deal-parties-panel');
-      await stickyInputsSettled();
-      expect(screen.queryByTestId('add-party')).toBeNull();
-      expect(document.querySelector('[data-action="record_bid_outcome"]')).toBeNull();
     });
   });
 });

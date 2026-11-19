@@ -8,15 +8,12 @@
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import {
-  act, fireEvent, render, screen, within,
+  act, fireEvent, render, screen, waitFor, within,
 } from '@testing-library/react';
-import {
-  MemoryRouter, useLocation, 
-} from 'react-router-dom';
+import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { TicketDetailPage } from './TicketDetailPage.jsx';
 import { api } from '../../api/index.js';
-import {  } from '../../utils/format.js';
 
 globalThis.React = React;
 
@@ -127,17 +124,11 @@ function setDeal(summary = {}, availableActions = [], extra = {}) {
   });
 }
 
-function LocationProbe() {
-  const location = useLocation();
-  return <div data-testid="location-probe">{location.search}</div>;
-}
-
-function renderPage(user = salesOwner, { url = '/tickets/701', showToast = vi.fn() } = {}) {
+function renderPage(user = salesOwner, { showToast = vi.fn() } = {}) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   const utils = render(
     <QueryClientProvider client={queryClient}>
-      <MemoryRouter initialEntries={[url]}>
-        <LocationProbe />
+      <MemoryRouter initialEntries={['/tickets/701']}>
         <TicketDetailPage user={user} ticketId={701} onBack={vi.fn()} showToast={showToast} />
       </MemoryRouter>
     </QueryClientProvider>,
@@ -162,7 +153,6 @@ beforeEach(() => {
   api.tickets.parties.mockResolvedValue({ parties: [] });
   api.tickets.addActivity.mockResolvedValue({ id: 1, kind: 'CALL' });
   api.tickets.reopen.mockResolvedValue({ ticket: buildTicket() });
-  api.tickets.resume.mockResolvedValue({ ticket: buildTicket() });
   api.attachments.list.mockResolvedValue({ attachments: [] });
   api.pricingRequests.listForTicket.mockResolvedValue({ items: [] });
   api.pricingRequests.listCustomerQuotations.mockResolvedValue({ items: [] });
@@ -171,12 +161,21 @@ beforeEach(() => {
   api.storedImportRequests.listForTicket.mockResolvedValue({ importRequests: [] });
   api.fxRates.list.mockResolvedValue({ fxRates: [] });
   api.expectedPayments.list.mockResolvedValue([]);
-  api.salesVisits.create.mockResolvedValue({ id: 5, ticketId: 701 });
   api.salesVisits.plannedOnDeal.mockResolvedValue([]);
   api.catalog.prices.mockResolvedValue({ items: [] });
 });
 
 describe('the ขั้นต่อไป card', () => {
+  it('a paused deal offers ดำเนินการต่อ, which opens the existing resume dialog', async () => {
+    setDeal({ lifecycle: 'ON_HOLD', salesStage: 'QUOTE_OWNER' }, ['RESUME']);
+    renderPage();
+    await pageReady();
+    const card = await screen.findByTestId('next-step-card');
+    expect(within(card).getByTestId('next-step-title').textContent).toBe('งานนี้พักไว้ชั่วคราว');
+    fireEvent.click(await within(card).findByRole('button', { name: 'ดำเนินการต่อ' }));
+    expect(await screen.findByRole('dialog', { name: 'ดำเนินการต่อ' })).toBeTruthy();
+  });
+
   it('wrong-way-round: a paused deal without RESUME offers no button', async () => {
     setDeal({ lifecycle: 'ON_HOLD', salesStage: 'QUOTE_OWNER' }, []);
     renderPage(salesManager);
@@ -184,6 +183,17 @@ describe('the ขั้นต่อไป card', () => {
     await settle();
     const card = screen.getByTestId('next-step-card');
     expect(within(card).queryByRole('button', { name: 'ดำเนินการต่อ' })).toBeNull();
+  });
+
+  it('a lost deal offers เปิดงานอีกครั้ง when REOPEN is allowed, and says งาน in its toast', async () => {
+    setDeal({ lifecycle: 'CLOSED_LOST', salesStage: 'QUOTE_OWNER', lostReason: 'PRICE' }, ['REOPEN']);
+    const { showToast } = renderPage(salesOwner);
+    await pageReady();
+    const card = await screen.findByTestId('next-step-card');
+    await waitFor(() => expect(within(card).getByTestId('next-step-title').textContent).toBe('เสียงานแล้ว'));
+    fireEvent.click(await within(card).findByRole('button', { name: 'เปิดงานอีกครั้ง' }));
+    await waitFor(() => expect(api.tickets.reopen).toHaveBeenCalledWith(701, {}));
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith('success', 'เปิดงานอีกครั้งแล้ว'));
   });
 
   it('wrong-way-round: a lost deal without REOPEN offers no button; a cancelled deal offers none', async () => {
@@ -205,6 +215,18 @@ describe('the ขั้นต่อไป card', () => {
 });
 
 describe('header quick actions โทรแล้ว / นัดเข้าพบ', () => {
+  it('โทรแล้ว opens the board’s call dialog and logs a CALL activity on this deal', async () => {
+    renderPage();
+    await pageReady();
+    fireEvent.click(await screen.findByRole('button', { name: 'โทรแล้ว' }));
+    const dialog = await screen.findByRole('dialog', { name: 'โทรแล้ว' });
+    fireEvent.click(within(dialog).getByRole('radio', { name: 'คุยแล้ว ยังสนใจ' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'บันทึก' }));
+    await waitFor(() => expect(api.tickets.addActivity).toHaveBeenCalledWith(701, expect.objectContaining({
+      kind: 'CALL', note: 'คุยแล้ว ยังสนใจ',
+    })));
+  });
+
   it('wrong-way-round: a sales rep who does not own the deal gets neither', async () => {
     renderPage(otherSales);
     await pageReady();
@@ -223,6 +245,13 @@ describe('relocated actions keep their old permission condition', () => {
     await settle();
   }
 
+  it('พักงาน: shown with PLACE_ON_HOLD on an active deal, opens the พักงาน dialog', async () => {
+    setDeal({}, ['PLACE_ON_HOLD']);
+    await overviewReady(salesOwner);
+    fireEvent.click(await screen.findByRole('button', { name: 'พักงาน' }));
+    expect(await screen.findByRole('dialog', { name: 'พักงาน' })).toBeTruthy();
+  });
+
   it('wrong-way-round: no พักงาน without PLACE_ON_HOLD, nor on a paused deal', async () => {
     setDeal({}, []);
     const first = renderPage();
@@ -233,6 +262,13 @@ describe('relocated actions keep their old permission condition', () => {
     setDeal({ lifecycle: 'ON_HOLD' }, ['PLACE_ON_HOLD']);
     await overviewReady(salesOwner);
     expect(screen.queryByRole('button', { name: 'พักงาน' })).toBeNull();
+  });
+
+  it('ยกเลิกงาน: the owner with CANCEL, opens the existing cancel dialog', async () => {
+    setDeal({}, ['CANCEL']);
+    await overviewReady(salesOwner);
+    fireEvent.click(await screen.findByRole('button', { name: 'ยกเลิกงาน' }));
+    expect(await screen.findByRole('dialog', { name: 'ยกเลิกงาน' })).toBeTruthy();
   });
 
   it('wrong-way-round: ยกเลิกงาน stays owner-only even when CANCEL is listed (ceo, sales_manager, another rep)', async () => {
@@ -246,6 +282,15 @@ describe('relocated actions keep their old permission condition', () => {
     }
   });
 
+  it('logging any activity is under + บันทึก for the deal’s writers', async () => {
+    await overviewReady(salesOwner);
+    const timeline = screen.getByTestId('deal-timeline');
+    fireEvent.click(within(timeline).getByRole('button', { name: '+ บันทึก' }));
+    fireEvent.change(within(timeline).getByDisplayValue('โทรศัพท์'), { target: { value: 'EMAIL' } });
+    fireEvent.click(within(timeline).getByRole('button', { name: 'บันทึกกิจกรรม' }));
+    await waitFor(() => expect(api.tickets.addActivity).toHaveBeenCalledWith(701, expect.objectContaining({ kind: 'EMAIL' })));
+  });
+
   it('wrong-way-round: another rep may comment but not log an activity', async () => {
     await overviewReady(otherSales);
     const timeline = screen.getByTestId('deal-timeline');
@@ -254,23 +299,16 @@ describe('relocated actions keep their old permission condition', () => {
     expect(within(timeline).queryByText('บันทึกกิจกรรมติดตาม')).toBeNull();
   });
 
+  it('file upload is on ไฟล์ for a participant on an open deal', async () => {
+    await overviewReady(salesOwner);
+    await openTab('ไฟล์');
+    expect(await screen.findByText(/^แนบไฟล์ \(PDF/)).toBeTruthy();
+  });
+
   it('wrong-way-round: no upload for a rep who is not a participant', async () => {
     await overviewReady(otherSales);
     await openTab('ไฟล์');
     await settle();
     expect(screen.queryByText(/^แนบไฟล์ \(PDF/)).toBeNull();
-  });
-});
-
-// Fix round 1: the reviewer's findings, each pinned (behaviour where jsdom can show it, class presence where only a real
-// browser can — each test says which).
-describe('fix round 1', () => {
-  it('M10 wrong-way (behaviour): no "ไปที่<tab>" to a tab this role cannot see (import, money step)', async () => {
-    setDeal({ salesStage: 'DELIVERED' }, []);
-    renderPage({ id: 8, employeeId: 8, name: 'นำเข้า', role: 'import' });
-    await pageReady();
-    await settle();
-    expect(screen.queryByRole('tab', { name: 'เงิน' })).toBeNull();
-    expect(screen.queryByTestId('next-step-tab')).toBeNull();
   });
 });

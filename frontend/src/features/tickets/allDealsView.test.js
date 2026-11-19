@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
-  TABLE_ONLY_PARAMS, readStoredView, resolveDealsView, 
+  TABLE_ONLY_PARAMS, readStoredView, resolveDealsView,
   writeStoredView,
 } from './allDealsView.js';
 

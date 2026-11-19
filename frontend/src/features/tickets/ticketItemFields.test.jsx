@@ -1,10 +1,8 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import {  } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import {
   applyCatalogPick,
-  
   REQUIRED_ITEM_FIELD_LABELS,
   requiredItemFieldErrors,
 } from './ticketItemFields.jsx';

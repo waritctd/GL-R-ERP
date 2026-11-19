@@ -185,21 +185,6 @@ describe('TicketListPage', () => {
     api.tickets.create.mockResolvedValue({ ticket: { summary: { id: 502, code: 'PR-2026-0502' } } });
   });
 
-  it('renders rows from a mocked api.tickets.list', async () => {
-    renderTicketListPage();
-
-    expect(screen.getByRole('heading', { level: 1, name: 'งานทั้งหมด' })).toBeTruthy();
-    expect(screen.getByText('ติดตามงานตามขอบเขตบทบาทและตัวกรองที่เลือก')).toBeTruthy();
-    expect(await screen.findByText('บริษัท ทดสอบ จำกัด')).not.toBeNull();
-    expect(screen.getByText('PR-2026-0501')).not.toBeNull();
-    // sales now also sends the default movement range (see 'movement range' below); the plain
-    // no-params call is what an unchanged role (account/import) still makes.
-    expect(api.tickets.list).toHaveBeenCalledWith(expect.objectContaining({
-      movementFrom: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
-      movementTo: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
-    }));
-  });
-
   it('shows create for Sales and hides it for non-Sales ticket-list roles', async () => {
     const rolesWithoutCreate = [
       { employeeId: 2, name: 'Manager ทดสอบ', role: 'sales_manager' },
@@ -364,6 +349,13 @@ describe('TicketListPage', () => {
     });
 
     // UNCHANGED ROLE: account/import render exactly as before.
+    it('sales_manager gets the range row and the API is called with movement params', async () => {
+      renderTicketListPage(managerUser, ['/tickets?inbox=0']);
+      await screen.findByText('ลูกค้า-ขยับ');
+      expect(screen.getByRole('group', { name: 'ช่วงวันที่' })).toBeTruthy();
+      expect(lastListArgs()).toHaveProperty('movementFrom');
+    });
+
     it.each([['account', accountUser], ['import', importUser]])('%s: no range row, old columns, API called without movement params', async (_role, user) => {
       renderTicketListPage(user, ['/tickets?inbox=0']); // inbox=0: every deal the role may read, not the worklist subset
       await screen.findByText('ลูกค้า-ขยับ');

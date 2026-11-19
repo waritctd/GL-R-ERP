@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  isAwaitingBidOutcome, 
+  isAwaitingBidOutcome,
 } from './dealPartyMeta.js';
 
 describe('dealPartyMeta', () => {

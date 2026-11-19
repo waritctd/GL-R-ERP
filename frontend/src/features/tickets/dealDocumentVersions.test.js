@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   groupChainQuotations,
-  groupDirectQuotations, groupRemainingInvoices, 
+  groupDirectQuotations, groupRemainingInvoices,
 } from './dealDocumentVersions.js';
 
 describe('dealDocumentVersions', () => {

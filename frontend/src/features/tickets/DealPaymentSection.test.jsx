@@ -58,6 +58,7 @@ const ROLES = { owner, otherSales, salesManager, ceo };
 
 const acceptedPr = { id: 501, status: 'QUOTATION_ACCEPTED', orderConfirmedAt: '2026-07-01T09:00:00Z', ticketCreatedById: 1 };
 const draftNotice = { id: 31, status: 'DRAFT', docNumber: null, depositPercent: 0.3, depositAmount: 300, totalPayable: 321, updatedAt: 'u1', customerName: 'ลูกค้า' };
+const issuedInvoice = { id: 900, status: 'ISSUED', docNumber: 'GLR6900014-1', docDate: '2026-11-05' };
 const issuedNotice = { ...draftNotice, status: 'ISSUED', docNumber: 'GLRD6900012', docDate: '2026-10-31', version: 1 };
 
 function summaryOf(overrides = {}) {
@@ -103,22 +104,6 @@ const settled = async () => {
 };
 
 beforeEach(() => { vi.clearAllMocks(); });
-
-// Deal page redesign (drawing a-deal-money, 2026-11-16): the one "การชำระเงิน" panel became three KPI tiles, then
-// รับแล้ว (the timeline) beside เอกสาร (the three steps) — same steps, same rows.
-describe('DealPaymentSection — KPI tiles, รับแล้ว beside เอกสาร, no วางบิล', () => {
-  it('is three KPI tiles plus the รับแล้ว timeline and the เอกสาร steps, and no สถานะการเงิน or วางบิล text', async () => {
-    const { container } = renderSection();
-    await settled();
-    expect(screen.queryAllByRole('heading', { level: 2 })).toHaveLength(0);
-    expect(within(screen.getByTestId('money-kpis')).getAllByTestId('money-kpi')).toHaveLength(3);
-    expect(within(screen.getByTestId('money-documents')).getByRole('heading', { level: 3, name: 'เอกสาร' })).toBeTruthy();
-    expect(within(screen.getByTestId('money-received')).getByRole('heading', { level: 3, name: 'รับแล้ว' })).toBeTruthy();
-    expect(['payment-step-deposit', 'payment-step-remaining', 'payment-step-final'].every((id) => screen.getByTestId(id))).toBe(true);
-    expect(screen.getByText('ใบแจ้งยอดเงินรับมัดจำ')).toBeTruthy();
-    expect(container.textContent).not.toMatch(/สถานะการเงิน|วางบิล|ครบกำหนดชำระ|ติดตามครั้งถัดไป|ใบวางบิล/);
-  });
-});
 
 describe('DealPaymentSection — KPI tiles and progress bar', () => {
   // The three figures were the balance strip's ยอดที่ต้องชำระ / ชำระแล้ว / คงเหลือ; they are the drawn tiles
@@ -257,11 +242,47 @@ describe('DealPaymentSection — step 2 ใบแจ้งหนี้ส่ว�
     expect(remaining().queryByRole('button')).toBeNull();
   });
 
+  it('ready (none yet): the manager gets สร้างใบแจ้งหนี้ส่วนที่เหลือ, which opens the dialog through the page', async () => {
+    const onManageRemainingInvoice = vi.fn();
+    renderSection({ summary: afterDeposit, depositNotices: [issuedNotice], canManageRemainingInvoice: true, onManageRemainingInvoice });
+    await settled();
+    expect(remaining().getByText('ยังไม่ออก')).toBeTruthy();
+    fireEvent.click(remaining().getByRole('button', { name: 'สร้างใบแจ้งหนี้ส่วนที่เหลือ' }));
+    expect(onManageRemainingInvoice).toHaveBeenCalledTimes(1);
+  });
+
   it('ready (none yet) for a viewer who cannot manage it (ceo here): no button, a waiting-for-sales hint', async () => {
     renderSection({ user: ceo, summary: afterDeposit, depositNotices: [issuedNotice], canManageRemainingInvoice: false });
     await settled();
     expect(remaining().queryByRole('button')).toBeNull();
     expect(remaining().getByText(/รอฝ่ายขาย/)).toBeTruthy();
+  });
+
+  it('ISSUED: รอชำระ with doc number; จัดการเอกสาร only for the manager', async () => {
+    const first = renderSection({
+      user: salesManager, summary: afterDeposit, remainingInvoices: [issuedInvoice], canManageRemainingInvoice: false,
+    });
+    await settled();
+    expect(remaining().getByText('รอชำระ')).toBeTruthy();
+    expect(remaining().getByText('GLR6900014-1')).toBeTruthy();
+    expect(remaining().queryByRole('button', { name: 'จัดการเอกสาร' })).toBeNull();
+    first.unmount();
+    renderSection({ summary: afterDeposit, remainingInvoices: [issuedInvoice], canManageRemainingInvoice: true });
+    await settled();
+    expect(remaining().getByRole('button', { name: 'จัดการเอกสาร' })).toBeTruthy();
+  });
+
+  it('paid in full by the deposit (no remaining invoice): a done, neutral "not needed" state with no create button and no chip', async () => {
+    renderSection({
+      summary: summaryOf({
+        paymentStatus: 'FULLY_PAID', paymentStage: 'FULLY_PAID', amountPaid: 1000, amountOutstanding: 0, fulfillmentStatus: 'GOODS_RECEIVED',
+      }),
+      depositNotices: [issuedNotice], canManageRemainingInvoice: true,
+    });
+    await settled();
+    expect(remaining().getByText('ไม่ต้องออก — ชำระครบจากมัดจำ')).toBeTruthy();
+    expect(remaining().queryByText('ยังไม่ออก')).toBeNull();
+    expect(remaining().queryByRole('button')).toBeNull();
   });
 
   it('a deal that skips the deposit is ready for its invoice straight away', async () => {

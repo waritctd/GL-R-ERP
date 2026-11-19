@@ -4,8 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { DEAL_STAGE_CATALOG } from '../../data/dealStageCatalog.js';
 import { hasDealStageLabel } from '../../utils/format.js';
 import {
-  nextOnRoute, routePath,
-  routePosition, 
+  nextOnRoute, routePath, routePosition,
 } from './stageCatalog.js';
 import { GATE_LABEL } from './stageMeta.js';
 import { MOCK_FACT_GATED_STAGES } from '../../api/mockApi.js';

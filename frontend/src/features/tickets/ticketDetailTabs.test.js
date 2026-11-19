@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  resolveTicketDetailTab, 
+  resolveTicketDetailTab,
   visibleTicketDetailTabIds,
 } from './ticketDetailTabs.js';
 

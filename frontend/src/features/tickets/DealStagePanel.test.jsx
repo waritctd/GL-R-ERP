@@ -7,7 +7,6 @@ import { describe, expect, it, vi } from 'vitest';
 import { DEAL_STAGE_CATALOG } from '../../data/dealStageCatalog.js';
 import { api } from '../../api/index.js';
 import { DealStagePanel } from './DealStagePanel.jsx';
-import {  } from './stageMeta.js';
 
 // The guided-advance flow calls api.tickets.{updateTracking,addActivity} directly (then defers the actual
 // stage move to the parent's onUpdateStage), so the module is mocked here (vitest hoists vi.mock above the
@@ -325,6 +324,7 @@ describe('DealStagePanel guided advance (readiness gate)', () => {
  * and pass vacuously. */
 describe('DealStagePanel route awareness', () => {
   const OWNER_OFF = ['QUOTE_DESIGN_SIDE'];
+  const BUYER_OFF = ['QUOTE_DESIGN_SIDE', 'QUOTE_OWNER', 'OWNER_SIGNOFF', 'AWAITING_BUYER'];
   const routeDecisions = (off) => catalog.stages.map((stage, index) => ({
     stage: stage.code,
     no: index + 1,
@@ -335,6 +335,25 @@ describe('DealStagePanel route awareness', () => {
       : null,
     onRoute: !off.includes(stage.code),
   }));
+
+  const routeLine = () => screen.queryByTestId('deal-route-line');
+
+  describe('route line', () => {
+    it.each([
+      ['DESIGNER_LED', [], 'QUOTE_BUYER', 'เส้นทาง · ผู้ออกแบบนำงานมา', '15 ขั้น'],
+      ['OWNER_DIRECT', OWNER_OFF, 'SPEC_APPROVED', 'เส้นทาง · เจ้าของติดต่อโดยตรง', '14 ขั้น'],
+      ['BUYER_DIRECT', BUYER_OFF, 'QUOTE_BUYER', 'เส้นทาง · ผู้ซื้อ/ผู้รับเหมาติดต่อโดยตรง', '11 ขั้น'],
+    ])('%s names the route and its stage count, never a route position (W5-02)', (channel, off, salesStage, name, total) => {
+      renderPanel({
+        summary: baseSummary({ salesStage, entryChannel: channel }),
+        stageDecisions: routeDecisions(off),
+      });
+      expect(routeLine()).not.toBeNull();
+      expect(routeLine().textContent).toContain(`${name} · ${total}`);
+      // The panel uses ONE numbering (the stage's own 1-15 number), so no route position here.
+      expect(routeLine().textContent).not.toContain('ขั้นที่');
+    });
+  });
 
   describe('ถัดไป follows the route', () => {
     const nextText = () => screen.getByTestId('deal-stage-next').textContent;
@@ -369,6 +388,17 @@ describe('DealStagePanel route awareness', () => {
      * route` above, which reads `deal-stage-next` and does not consult `auto`: trust that one for
      * route behaviour, and fix it first if this pair ever disagrees.
      */
+    it('openAdvance() moves to the ON-route S6 when that is the stage the server offers', () => {
+      noopHandlers.onUpdateStage.mockClear();
+      const { ref } = renderPanelWithRef({
+        summary: baseSummary({ salesStage: 'QUOTE_OWNER', entryChannel: 'OWNER_DIRECT' }),
+        stageDecisions: routeDecisions(OWNER_OFF),
+        availableActions: [{ action: 'ADVANCE_STAGE', targetStage: 'OWNER_SIGNOFF' }],
+      });
+      act(() => ref.current.openAdvance());
+      expect(noopHandlers.onUpdateStage).toHaveBeenCalledWith({ stage: 'OWNER_SIGNOFF' });
+    });
+
     it('openAdvance() does not move to S4 on an owner-direct deal even if the server listed ADVANCE_STAGE for it', () => {
       noopHandlers.onUpdateStage.mockClear();
       const { ref } = renderPanelWithRef({
