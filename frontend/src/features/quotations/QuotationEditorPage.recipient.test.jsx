@@ -1,7 +1,7 @@
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes, useLocation, useParams } from 'react-router-dom';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { QuotationEditorPage } from './QuotationEditorPage.jsx';
 import { api } from '../../api/index.js';
@@ -140,7 +140,7 @@ beforeEach(() => {
   api.dealQuotations.listForTicket.mockResolvedValue({ items: [] });
 });
 
-describe('/quotations/new — step 1 is "ดีล" (slice 2 §A)', () => {
+describe('recipient on an existing PRICING_REQUEST draft (slice 2 §C)', () => {
 
   it('PRICING_REQUEST: read-only "จากคำขอราคา", no radios, and the update never sends a recipientType', async () => {
     api.dealQuotations.get.mockResolvedValue({
@@ -159,6 +159,58 @@ describe('/quotations/new — step 1 is "ดีล" (slice 2 §A)', () => {
     await waitFor(() => expect(api.dealQuotations.update).toHaveBeenCalled());
     const [, payload] = api.dealQuotations.update.mock.calls[0];
     expect('recipientType' in payload).toBe(false);
+  });
+});
+
+describe('/quotations/new?ticket= — recipient preselected from the deal stage (slice 2 §A / flow B)', () => {
+  it('the ?ticket= create carries the preselected recipient', async () => {
+    api.tickets.get.mockResolvedValue({ ticket: { summary: ticketSummary({ salesStage: 'QUOTE_DESIGN_SIDE' }) } });
+    api.dealQuotations.create.mockResolvedValue({ quotation: { id: 99 } });
+    renderEditor('/quotations/new?ticket=18', { idRoute: 'probe' });
+    await waitFor(() => expect(screen.getByRole('radio', { name: 'ผู้ออกแบบ' }).getAttribute('aria-checked')).toBe('true'));
+    await fillCompleteQuotationItem();
+    await waitFor(() => expect(saveButton().disabled).toBe(false));
+    fireEvent.click(saveButton());
+    await waitFor(() => expect(api.dealQuotations.create).toHaveBeenCalledWith(18, expect.objectContaining({ recipientType: 'DESIGNER' })));
+  }, 10000);
+
+  it('?recipient=OWNER on a deal past draft (order confirmed): the APPROVED designer quotation still blocks saving, WITH the reason', async () => {
+    api.tickets.get.mockResolvedValue({
+      ticket: { summary: ticketSummary({ status: 'quotation_issued', salesStage: 'QUOTE_DESIGN_SIDE', liveDirectQuotation: { id: 77, number: 'QT-2026-0077-1', docStatus: 'APPROVED', recipientType: 'DESIGNER' } }) },
+    });
+    renderEditor('/quotations/new?ticket=18&recipient=OWNER');
+    await waitFor(() => expect(screen.getByRole('radio', { name: 'เจ้าของโครงการ' }).getAttribute('aria-checked')).toBe('true'));
+    await fillCompleteQuotationItem();
+    await waitFor(() => expect(saveButton().disabled).toBe(true));
+    expect(saveButton().title).toContain('งานนี้มีใบเสนอราคาที่ใช้งานอยู่ (QT-2026-0077-1)');
+  }, 10000);
+
+  it('N6: a deal with a live direct quotation disables บันทึกร่าง WITH the reason, beside the inline notice', async () => {
+    api.tickets.get.mockResolvedValue({
+      ticket: { summary: ticketSummary({ salesStage: 'QUOTE_OWNER', liveDirectQuotation: { id: 77, number: 'QT-2026-0077-1', docStatus: 'DRAFT', recipientType: 'OWNER' } }) },
+    });
+    renderEditor('/quotations/new?ticket=18');
+    const notice = await screen.findByTestId('deal-picker-live-quotation');
+    expect(within(notice).getByRole('link', { name: 'เปิดใบเสนอราคา' }).getAttribute('href')).toBe('/quotations/77');
+    await fillCompleteQuotationItem();
+    expect(saveButton().disabled).toBe(true);
+    expect(saveButton().title).toContain('งานนี้มีใบเสนอราคาที่ใช้งานอยู่ (QT-2026-0077-1)');
+  }, 10000);
+});
+
+describe('recipient on an existing DRAFT (slice 2 §C)', () => {
+  it('DEAL_DIRECT: the stored recipient is checked, editable, and a change is saved through update', async () => {
+    api.dealQuotations.get.mockResolvedValue({ quotation: draft({ recipientType: 'OWNER' }) });
+    api.dealQuotations.update.mockImplementation(async () => ({ quotation: draft({ recipientType: 'BUYER' }) }));
+    renderEditor('/quotations/5');
+    await waitFor(() => expect(screen.getByRole('radio', { name: 'เจ้าของโครงการ' }).getAttribute('aria-checked')).toBe('true'));
+
+    fireEvent.click(screen.getByRole('radio', { name: 'ผู้ซื้อ / ผู้รับเหมา' }));
+    await waitFor(() => expect(saveButton().disabled).toBe(false));
+    fireEvent.click(saveButton());
+    await waitFor(() => expect(api.dealQuotations.update).toHaveBeenCalled());
+    const [, payload] = api.dealQuotations.update.mock.calls[0];
+    expect(payload.recipientType).toBe('BUYER');
   });
 });
 
