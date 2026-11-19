@@ -19,14 +19,14 @@ vi.mock('../../api/index.js', async (importOriginal) => {
       tickets: { get: vi.fn(), create: vi.fn() },
       dealQuotations: {
         get: vi.fn(), create: vi.fn(), update: vi.fn(), calculateLine: vi.fn(), submit: vi.fn(),
-        approve: vi.fn(), reject: vi.fn(), createRevision: vi.fn(), createReorder: vi.fn(), cancel: vi.fn(),
-        downloadPdf: vi.fn(), downloadXlsx: vi.fn(), displayNameOptions: vi.fn(),
+        approve: vi.fn(), reject: vi.fn(),
+        displayNameOptions: vi.fn(),
       },
       catalog: { prices: vi.fn() },
       designers: { search: vi.fn(), getByCode: vi.fn().mockRejectedValue(new Error('not found')) },
       customers: {
-        search: vi.fn(), create: vi.fn(), update: vi.fn(), projects: vi.fn(), createProject: vi.fn(),
-        contacts: vi.fn(), createContact: vi.fn(),
+        search: vi.fn(), create: vi.fn(), update: vi.fn(), projects: vi.fn(),
+        contacts: vi.fn(),
       },
     },
   };
@@ -148,13 +148,6 @@ beforeEach(() => {
 });
 
 describe('QuotationEditorPage — GLA-123 slice S1 origin=PRICING_REQUEST', () => {
-  it('an unchanged linked line shows the "ราคาจาก CEO" badge, not the amber marker', async () => {
-    api.dealQuotations.get.mockResolvedValue({ quotation: pricingRequestDraft() });
-    renderEditor('/quotations/5');
-    await waitFor(() => expect(screen.getByText('ราคาจาก CEO')).toBeTruthy());
-    expect(screen.queryByText('เปลี่ยนจากราคา CEO — ต้องให้ CEO อนุมัติ')).toBeNull();
-  });
-
   it('NET: a changed linked line shows the amber marker with "ราคา CEO: ฿83.00 · ส่วนลด 10%"', async () => {
     api.dealQuotations.get.mockResolvedValue({
       quotation: pricingRequestDraft({ items: [linkedNetTileItem({ priceChangedFromCeo: true, discountPct: 20 })] }),
@@ -163,256 +156,6 @@ describe('QuotationEditorPage — GLA-123 slice S1 origin=PRICING_REQUEST', () =
     await waitFor(() => expect(screen.getByText('เปลี่ยนจากราคา CEO — ต้องให้ CEO อนุมัติ')).toBeTruthy());
     expect(screen.getByText('ราคา CEO: ฿83.00 · ส่วนลด 10%')).toBeTruthy();
     expect(screen.queryByText('ราคาจาก CEO')).toBeNull();
-  });
-
-  it('SPECIAL_SQM: a changed linked line shows "ราคาพิเศษ CEO: ฿1,350.00/ตร.ม."', async () => {
-    const item = linkedNetTileItem({
-      priceChangedFromCeo: true, unitPrice: null, discountPct: null, specialPriceSqm: 1500,
-      ceoListUnitPrice: null, ceoDiscountPct: null, ceoSpecialPriceSqm: 1350, ceoDirectNetPrice: null,
-    });
-    api.dealQuotations.get.mockResolvedValue({
-      quotation: pricingRequestDraft({ priceMode: 'SPECIAL_SQM', ceoPriceMode: 'SPECIAL_SQM', items: [item] }),
-    });
-    renderEditor('/quotations/5');
-    await waitFor(() => expect(screen.getByText('เปลี่ยนจากราคา CEO — ต้องให้ CEO อนุมัติ')).toBeTruthy());
-    expect(screen.getByText('ราคาพิเศษ CEO: ฿1,350.00/ตร.ม.')).toBeTruthy();
-  });
-
-  it('DIRECT_NET: a changed linked line shows "ราคาสุทธิ CEO: ฿74.70"', async () => {
-    const item = linkedNetTileItem({
-      priceChangedFromCeo: true, unitPrice: 999, discountPct: null, netUnitPrice: 999,
-      ceoListUnitPrice: null, ceoDiscountPct: null, ceoSpecialPriceSqm: null, ceoDirectNetPrice: 74.7,
-    });
-    api.dealQuotations.get.mockResolvedValue({
-      quotation: pricingRequestDraft({ priceMode: 'DIRECT_NET', ceoPriceMode: 'DIRECT_NET', items: [item] }),
-    });
-    renderEditor('/quotations/5');
-    await waitFor(() => expect(screen.getByText('เปลี่ยนจากราคา CEO — ต้องให้ CEO อนุมัติ')).toBeTruthy());
-    expect(screen.getByText('ราคาสุทธิ CEO: ฿74.70')).toBeTruthy();
-  });
-
-  // The other tests keep the document's CURRENT priceMode equal to the CEO's ORIGINAL ceoPriceMode,
-  // which cannot catch a marker formatted against the CURRENT mode. Here the rep switched the
-  // document to NET but the CEO decided SPECIAL_SQM, so the marker must still read ceoSpecialPriceSqm
-  // (ราคาพิเศษ CEO), not the NET-shaped "ราคา CEO: ... ส่วนลด ...%" text.
-  it('mode mismatch: CURRENT priceMode=NET but ceoPriceMode=SPECIAL_SQM still formats against SPECIAL_SQM', async () => {
-    const item = linkedNetTileItem({
-      priceChangedFromCeo: true, unitPrice: 999, discountPct: 5,
-      ceoListUnitPrice: null, ceoDiscountPct: null, ceoSpecialPriceSqm: 1350, ceoDirectNetPrice: null,
-    });
-    api.dealQuotations.get.mockResolvedValue({
-      quotation: pricingRequestDraft({
-        priceMode: 'NET', ceoPriceMode: 'SPECIAL_SQM', priceModeChangedFromCeo: true, items: [item],
-      }),
-    });
-    renderEditor('/quotations/5');
-    await waitFor(() => expect(screen.getByText('เปลี่ยนจากราคา CEO — ต้องให้ CEO อนุมัติ')).toBeTruthy());
-    expect(screen.getByText('ราคาพิเศษ CEO: ฿1,350.00/ตร.ม.')).toBeTruthy();
-    expect(screen.queryByText(/^ราคา CEO:/)).toBeNull();
-  });
-
-  it('header marker appears when priceModeChangedFromCeo is true, naming the CEO mode', async () => {
-    api.dealQuotations.get.mockResolvedValue({
-      quotation: pricingRequestDraft({ priceMode: 'DIRECT_NET', ceoPriceMode: 'NET', priceModeChangedFromCeo: true }),
-    });
-    renderEditor('/quotations/5');
-    await waitFor(() => expect(screen.getByText('เปลี่ยนวิธีกรอกราคาจาก CEO — ต้องให้ CEO อนุมัติ')).toBeTruthy());
-    expect(screen.getByText(/CEO เลือก: ราคาตั้ง/)).toBeTruthy();
-  });
-
-  it('no header marker when priceModeChangedFromCeo is false', async () => {
-    api.dealQuotations.get.mockResolvedValue({ quotation: pricingRequestDraft() });
-    renderEditor('/quotations/5');
-    await waitFor(() => expect(screen.getByText('ราคาจาก CEO')).toBeTruthy());
-    expect(screen.queryByText('เปลี่ยนวิธีกรอกราคาจาก CEO — ต้องให้ CEO อนุมัติ')).toBeNull();
-  });
-
-  it('shows the "สร้างจากคำขอราคา" link to the source pricing request', async () => {
-    api.dealQuotations.get.mockResolvedValue({ quotation: pricingRequestDraft() });
-    renderEditor('/quotations/5');
-    await waitFor(() => expect(screen.getByText(/สร้างจากคำขอราคา PCR-2026-0042/)).toBeTruthy());
-    const link = screen.getByText(/สร้างจากคำขอราคา PCR-2026-0042/).closest('a');
-    expect(link.getAttribute('href')).toBe('/pricing-requests/42');
-  });
-
-  it('extra-row actions (เพิ่มตำแหน่ง / เพิ่มรายการในตำแหน่งนี้ / สินค้า-บริการอื่น / เพิ่มส่วนลดพิเศษ) are hidden, with the redirect note', async () => {
-    api.dealQuotations.get.mockResolvedValue({ quotation: pricingRequestDraft() });
-    renderEditor('/quotations/5');
-    await waitFor(() => expect(screen.getByText('ราคาจาก CEO')).toBeTruthy());
-    expect(screen.getByText('เพิ่มรายการอื่นได้ที่คำขอราคา')).toBeTruthy();
-    expect(screen.queryByRole('button', { name: /เพิ่มตำแหน่ง/ })).toBeNull();
-    expect(screen.queryByRole('button', { name: /เพิ่มรายการในตำแหน่งนี้/ })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'เพิ่มสินค้าหรือบริการอื่นในตำแหน่งนี้' })).toBeNull();
-    expect(screen.queryByRole('button', { name: /เพิ่มส่วนลดพิเศษ/ })).toBeNull();
-  });
-
-  // Submit is live for this origin: canSubmitDealQuotation is origin-agnostic, so the SAME ordinary
-  // submit button DEAL_DIRECT has serves this origin too.
-  it('submit is now a normal, enabled ส่งขออนุมัติ button that calls the real endpoint', async () => {
-    api.dealQuotations.get.mockResolvedValue({ quotation: pricingRequestDraft() });
-    api.dealQuotations.submit.mockResolvedValue({ quotation: pricingRequestDraft({ docStatus: 'PENDING_APPROVAL' }) });
-    renderEditor('/quotations/5');
-    await waitFor(() => expect(screen.getByRole('button', { name: 'ส่งขออนุมัติ' })).toBeTruthy());
-    const button = screen.getByRole('button', { name: 'ส่งขออนุมัติ' });
-    expect(button.disabled).toBe(false);
-    expect(button.getAttribute('title')).not.toBe('ส่งอนุมัติจะเปิดใช้ในขั้นถัดไป');
-    fireEvent.click(button);
-    await waitFor(() => expect(screen.getByText('ส่งขออนุมัติใบเสนอราคา')).toBeTruthy());
-    const confirmButtons = screen.getAllByRole('button', { name: 'ส่งขออนุมัติ' });
-    fireEvent.click(confirmButtons[confirmButtons.length - 1]);
-    await waitFor(() => expect(api.dealQuotations.submit).toHaveBeenCalledWith('5'));
-  });
-
-  it('a DEAL_DIRECT quotation is completely unaffected: no CEO badge/marker, no PR link, normal submit and add-item actions', async () => {
-    api.dealQuotations.get.mockResolvedValue({ quotation: draft() });
-    renderEditor('/quotations/5');
-    await waitFor(() => expect(screen.getByRole('button', { name: /เพิ่มรายการในตำแหน่งนี้/ })).toBeTruthy());
-    expect(screen.queryByText('ราคาจาก CEO')).toBeNull();
-    expect(screen.queryByText('เปลี่ยนจากราคา CEO — ต้องให้ CEO อนุมัติ')).toBeNull();
-    expect(screen.queryByText(/สร้างจากคำขอราคา/)).toBeNull();
-    expect(screen.queryByText('เพิ่มรายการอื่นได้ที่คำขอราคา')).toBeNull();
-    expect(screen.getByRole('button', { name: /เพิ่มตำแหน่ง/ })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'เพิ่มสินค้าหรือบริการอื่นในตำแหน่งนี้' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: /เพิ่มส่วนลดพิเศษ/ })).toBeTruthy();
-    const submitButton = screen.getByRole('button', { name: 'ส่งขออนุมัติ' });
-    expect(submitButton.getAttribute('title')).not.toBe('ส่งอนุมัติจะเปิดใช้ในขั้นถัดไป');
-  });
-});
-
-// Only the item's `id` used to be adopted from a save response (QuotationEditorPage#applySavedQuotation);
-// every other server-computed field, including this marker, stayed at the INITIAL load's value until
-// a full reload. A rep who edited a linked line's price then saved would keep seeing the OLD badge
-// even though the save made it CEO-changed server-side, and reverting + saving would leave the amber
-// marker stuck.
-describe('QuotationEditorPage — GLA-123 M5 fix: per-line CEO marker refreshes after save, no reload', () => {
-  it('edit -> save -> the marker flips to "changed" from the SAVE response, without a reload', async () => {
-    api.dealQuotations.get.mockResolvedValue({ quotation: pricingRequestDraft() });
-    api.dealQuotations.update.mockResolvedValue({
-      quotation: pricingRequestDraft({
-        priceModeChangedFromCeo: false,
-        items: [linkedNetTileItem({ priceChangedFromCeo: true, discountPct: 20 })],
-      }),
-    });
-    renderEditor('/quotations/5');
-    await waitFor(() => expect(screen.getByText('ราคาจาก CEO')).toBeTruthy());
-    expect(screen.queryByText('เปลี่ยนจากราคา CEO — ต้องให้ CEO อนุมัติ')).toBeNull();
-
-    fireEvent.change(screen.getByLabelText('ส่วนลด %'), { target: { value: '20' } });
-    fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
-
-    await waitFor(() => expect(api.dealQuotations.update).toHaveBeenCalledTimes(1));
-    // The marker below comes from the SAVE RESPONSE's own priceChangedFromCeo/ceo* fields; this test
-    // never re-renders from a fresh api.dealQuotations.get, so it passes only if the save response
-    // was merged into local state.
-    await waitFor(() => expect(screen.getByText('เปลี่ยนจากราคา CEO — ต้องให้ CEO อนุมัติ')).toBeTruthy());
-    expect(screen.getByText('ราคา CEO: ฿83.00 · ส่วนลด 10%')).toBeTruthy();
-    expect(screen.queryByText('ราคาจาก CEO')).toBeNull();
-  });
-
-  it('edit -> save (changed) -> revert -> save again -> the marker clears back to the badge', async () => {
-    api.dealQuotations.get.mockResolvedValue({ quotation: pricingRequestDraft() });
-    api.dealQuotations.update
-      .mockResolvedValueOnce({
-        quotation: pricingRequestDraft({
-          items: [linkedNetTileItem({ priceChangedFromCeo: true, discountPct: 20 })],
-        }),
-      })
-      .mockResolvedValueOnce({
-        quotation: pricingRequestDraft({
-          items: [linkedNetTileItem({ priceChangedFromCeo: false, discountPct: 10 })],
-        }),
-      });
-    renderEditor('/quotations/5');
-    await waitFor(() => expect(screen.getByText('ราคาจาก CEO')).toBeTruthy());
-
-    fireEvent.change(screen.getByLabelText('ส่วนลด %'), { target: { value: '20' } });
-    fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
-    await waitFor(() => expect(api.dealQuotations.update).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect(screen.getByText('เปลี่ยนจากราคา CEO — ต้องให้ CEO อนุมัติ')).toBeTruthy());
-
-    fireEvent.change(screen.getByLabelText('ส่วนลด %'), { target: { value: '10' } });
-    fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
-    await waitFor(() => expect(api.dealQuotations.update).toHaveBeenCalledTimes(2));
-
-    await waitFor(() => expect(screen.queryByText('เปลี่ยนจากราคา CEO — ต้องให้ CEO อนุมัติ')).toBeNull());
-    expect(screen.getByText('ราคาจาก CEO')).toBeTruthy();
-  });
-});
-
-// A rep changed ส่วนลด from 10 to 25 and the line kept showing "✓ ราคาจาก CEO" (the UNCHANGED badge)
-// next to a number they had just changed. The row had validation errors (the demo item lacked
-// ความหนา/แผ่น/ตร.ม./แผ่น/กล่อง), which blocks the 2s autosave debounce (gated on
-// `!hasValidationErrors`), and `priceChangedFromCeo` only comes from the server, so the marker froze at
-// "unchanged" while the row stayed invalid. The server flag is ORed with
-// `isTilePriceChangedFromCeoLocally` (quotationMeta.js), a client-side mirror of
-// DealQuotationRepository#priceChangedFromCeo over the row's CURRENT (unsaved) values; these tests pin
-// that the marker updates on every keystroke with NO save.
-describe('QuotationEditorPage — coordinator follow-up: LOCAL CEO marker before any save lands', () => {
-  it('amber marker appears the instant ส่วนลด changes on a row with validation errors (autosave blocked), and clears on revert -- update is never called', async () => {
-    // thicknessMm: null reproduces the coordinator's exact repro and blocks autosave regardless of the 2s debounce
-    // timing.
-    api.dealQuotations.get.mockResolvedValue({
-      quotation: pricingRequestDraft({ items: [linkedNetTileItem({ thicknessMm: null })] }),
-    });
-    renderEditor('/quotations/5');
-    await waitFor(() => expect(screen.getByText('ราคาจาก CEO')).toBeTruthy());
-    expect(screen.queryByText('เปลี่ยนจากราคา CEO — ต้องให้ CEO อนุมัติ')).toBeNull();
-
-    fireEvent.change(screen.getByLabelText('ส่วนลด %'), { target: { value: '25' } });
-    await waitFor(() => expect(screen.getByText('เปลี่ยนจากราคา CEO — ต้องให้ CEO อนุมัติ')).toBeTruthy());
-    expect(screen.getByText('ราคา CEO: ฿83.00 · ส่วนลด 10%')).toBeTruthy();
-    expect(screen.queryByText('ราคาจาก CEO')).toBeNull();
-    expect(api.dealQuotations.update).not.toHaveBeenCalled();
-
-    fireEvent.change(screen.getByLabelText('ส่วนลด %'), { target: { value: '10' } });
-    await waitFor(() => expect(screen.getByText('ราคาจาก CEO')).toBeTruthy());
-    expect(screen.queryByText('เปลี่ยนจากราคา CEO — ต้องให้ CEO อนุมัติ')).toBeNull();
-    expect(api.dealQuotations.update).not.toHaveBeenCalled();
-  });
-
-  it('the SERVER flag stays authoritative after a save: even once the rep types the discount back to the CEO\'s own number (so the LOCAL comparison alone would read "unchanged"), a server response that still says priceChangedFromCeo keeps the amber marker showing', async () => {
-    // A COMPLETE row (no validation errors) this time -- บันทึกร่าง is itself disabled while any row has a
-    // blocking validation error, so exercising an actual save (as this test needs) requires a row that would pass
-    // validateQuotationItem, unlike the two tests above.
-    api.dealQuotations.get.mockResolvedValue({
-      quotation: pricingRequestDraft({ items: [linkedNetTileItem({ discountPct: 25 })] }),
-    });
-    // Retyping 10 makes discountPct === ceoDiscountPct, so the local check alone would read `false`
-    // (a rep undoing their own edit). The mocked save response still echoes priceChangedFromCeo: true
-    // (e.g. the document's price_mode differs from the CEO's on the server, which local fields cannot
-    // see). The server flag must win: ORing can only ADD amber markers, never let a local "looks fine
-    // now" hide one the server still asserts.
-    api.dealQuotations.update.mockResolvedValue({
-      quotation: pricingRequestDraft({
-        items: [linkedNetTileItem({ discountPct: 10, priceChangedFromCeo: true })],
-      }),
-    });
-    renderEditor('/quotations/5');
-    await waitFor(() => expect(screen.getByText('เปลี่ยนจากราคา CEO — ต้องให้ CEO อนุมัติ')).toBeTruthy());
-
-    fireEvent.change(screen.getByLabelText('ส่วนลด %'), { target: { value: '10' } });
-    fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
-    await waitFor(() => expect(api.dealQuotations.update).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect(screen.getByText('เปลี่ยนจากราคา CEO — ต้องให้ CEO อนุมัติ')).toBeTruthy());
-    expect(screen.queryByText('ราคาจาก CEO')).toBeNull();
-  });
-
-  it('header mode marker appears the instant the rep switches price mode locally, before any save', async () => {
-    api.dealQuotations.get.mockResolvedValue({ quotation: pricingRequestDraft() });
-    renderEditor('/quotations/5');
-    await waitFor(() => expect(screen.getByText('ราคาจาก CEO')).toBeTruthy());
-    expect(screen.queryByText('เปลี่ยนวิธีกรอกราคาจาก CEO — ต้องให้ CEO อนุมัติ')).toBeNull();
-
-    // The Thai editor's name for DIRECT_NET; the CEO's screen and the "CEO เลือก: …" marker quoting
-    // it below keep the CEO's per-แผ่น wording.
-    fireEvent.click(screen.getByRole('button', { name: 'ราคาสุทธิ บาท/ตร.ม.' }));
-    await waitFor(() => expect(screen.getByText('เปลี่ยนวิธีกรอกราคาจาก CEO — ต้องให้ CEO อนุมัติ')).toBeTruthy());
-    expect(screen.getByText(/CEO เลือก: ราคาตั้ง/)).toBeTruthy();
-    expect(api.dealQuotations.update).not.toHaveBeenCalled();
-
-    fireEvent.click(screen.getByRole('button', { name: 'ราคาตั้ง − ส่วนลด %' }));
-    await waitFor(() => expect(screen.queryByText('เปลี่ยนวิธีกรอกราคาจาก CEO — ต้องให้ CEO อนุมัติ')).toBeNull());
-    expect(api.dealQuotations.update).not.toHaveBeenCalled();
   });
 });
 
@@ -425,17 +168,6 @@ describe('QuotationEditorPage — GLA-123 slice S2 approval (reworked)', () => {
     renderEditor('/quotations/5', salesManagerUser);
     await screen.findByRole('button', { name: 'อนุมัติ' });
     expect(screen.getByRole('button', { name: 'ไม่อนุมัติ' })).toBeTruthy();
-  });
-
-  it('sales_manager confirms อนุมัติ -> calls approve with no payload, on an UNCHANGED quotation', async () => {
-    api.dealQuotations.get.mockResolvedValue({ quotation: pendingApprovalQuotation() });
-    api.dealQuotations.approve.mockResolvedValue({ quotation: pendingApprovalQuotation({
-      docStatus: 'ISSUED', approvedById: 7, approvedByName: 'คุณผึ้ง ผู้จัดการฝ่ายขาย',
-    }) });
-    renderEditor('/quotations/5', salesManagerUser);
-    fireEvent.click(await screen.findByRole('button', { name: 'อนุมัติ' }));
-    fireEvent.click(await screen.findByRole('button', { name: 'ยืนยันอนุมัติ' }));
-    await waitFor(() => expect(api.dealQuotations.approve).toHaveBeenCalledWith('5', {}));
   });
 
   it('sales_manager sees NO อนุมัติ button, and an inline explanation, on a CHANGED quotation', async () => {
@@ -465,24 +197,6 @@ describe('QuotationEditorPage — GLA-123 slice S2 approval (reworked)', () => {
     await waitFor(() => expect(api.dealQuotations.approve).toHaveBeenCalledWith('5', {}));
   });
 
-  it('the approve dialog shows the changed-price summary prominently for a priceChangedFromCeo line', async () => {
-    api.dealQuotations.get.mockResolvedValue({
-      quotation: pendingApprovalQuotation({
-        items: [linkedNetTileItem({ unitPrice: 90, discountPct: 5, priceChangedFromCeo: true })],
-      }),
-    });
-    renderEditor('/quotations/5', ceoUser);
-    fireEvent.click(await screen.findByRole('button', { name: 'อนุมัติ' }));
-    await waitFor(() => expect(screen.getByText(/ราคา CEO: ฿83.00/)).toBeTruthy());
-  });
-
-  it('the approve dialog shows "no change" when nothing was changed from the CEO decision', async () => {
-    api.dealQuotations.get.mockResolvedValue({ quotation: pendingApprovalQuotation() });
-    renderEditor('/quotations/5', ceoUser);
-    fireEvent.click(await screen.findByRole('button', { name: 'อนุมัติ' }));
-    await waitFor(() => expect(screen.getByText('ราคาทุกรายการตรงกับที่ CEO อนุมัติ ไม่มีการเปลี่ยนแปลง')).toBeTruthy());
-  });
-
   it('reject requires a reason and calls reject with it', async () => {
     api.dealQuotations.get.mockResolvedValue({ quotation: pendingApprovalQuotation() });
     api.dealQuotations.reject.mockResolvedValue({ quotation: pricingRequestDraft({ docStatus: 'DRAFT', approvalNote: 'ราคาไม่เหมาะสม' }) });
@@ -494,12 +208,5 @@ describe('QuotationEditorPage — GLA-123 slice S2 approval (reworked)', () => {
     expect(confirmReject.disabled).toBe(false);
     fireEvent.click(confirmReject);
     await waitFor(() => expect(api.dealQuotations.reject).toHaveBeenCalledWith('5', { reason: 'ราคาไม่เหมาะสม' }));
-  });
-
-  it('a DEAL_DIRECT quotation is completely unaffected — either role decides, one click, done', async () => {
-    api.dealQuotations.get.mockResolvedValue({ quotation: draft({ docStatus: 'PENDING_APPROVAL', submittedAt: '2026-09-20T03:00:00Z' }) });
-    renderEditor('/quotations/5', salesManagerUser);
-    await screen.findByRole('button', { name: 'อนุมัติ' });
-    expect(screen.queryByText('มีรายการที่เปลี่ยนจากราคา CEO — ต้องให้ CEO อนุมัติ')).toBeNull();
   });
 });

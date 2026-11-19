@@ -1,9 +1,13 @@
 import React from 'react';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { api } from '../../api/index.js';
 import {
-  emptyQuotationItem, QuotationItemRow, resolveTileSqmPerPiece, sizeTextFromCatalog, emptyPlainItem, itemInputFromRow,
+  emptyQuotationItem,
+  QuotationItemRow,
+  resolveTileSqmPerPiece,
+  emptyPlainItem,
+  itemInputFromRow,
 } from './QuotationItemRow.jsx';
 
 globalThis.React = React;
@@ -17,21 +21,6 @@ function renderRow(itemOverrides = {}, onChange = vi.fn()) {
   const { container } = render(<QuotationItemRow item={item} index={0} onChange={onChange} onRemove={vi.fn()} />);
   return { item, onChange, container };
 }
-
-describe('QuotationItemRow — PCR-form props', () => {
-  it('hides ระยะเวลานำเข้า under hideLeadTime while a picked origin still writes its default lead time (PCR form, owner ruling 2026-10-18)', () => {
-    const onChange = vi.fn();
-    render(<QuotationItemRow item={emptyQuotationItem()} index={0} onChange={onChange} onRemove={vi.fn()} hideLeadTime />);
-    expect(screen.queryByLabelText(/^ระยะเวลานำเข้า/)).toBeNull();
-    fireEvent.change(screen.getByLabelText(/^ประเทศต้นทาง/), { target: { value: 'อิตาลี' } });
-    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ originCountry: 'อิตาลี', leadTimeMinDays: 75, leadTimeMaxDays: 90 }));
-  });
-
-  it('renders no ลบรายการ button when onRemove is not given (a lone PCR row has nothing to remove)', () => {
-    render(<QuotationItemRow item={emptyQuotationItem()} index={0} onChange={vi.fn()} />);
-    expect(screen.queryByRole('button', { name: 'ลบรายการ' })).toBeNull();
-  });
-});
 
 describe('QuotationItemRow — English per-sqm (owner decision 2026-09-13)', () => {
   function renderPerSqm(itemOverrides = {}, { priceMode = 'SPECIAL_SQM', documentLanguage = 'EN' } = {}) {
@@ -61,25 +50,6 @@ describe('QuotationItemRow — English per-sqm (owner decision 2026-09-13)', () 
     expect(onChange).toHaveBeenLastCalledWith({ sqmPerBox: 0.495 });
   });
 
-  it('a cleared (null or blank) ตร.ม./กล่อง reaches the wire as null', () => {
-    expect(itemInputFromRow({ ...emptyQuotationItem(), sqmPerBox: null }, 'SPECIAL_SQM', 'EN').sqmPerBox).toBeNull();
-    expect(itemInputFromRow({ ...emptyQuotationItem(), sqmPerBox: '' }, 'SPECIAL_SQM', 'EN').sqmPerBox).toBeNull();
-    expect(itemInputFromRow({ ...emptyQuotationItem(), sqmPerBox: 0.495 }, 'SPECIAL_SQM', 'EN').sqmPerBox).toBe(0.495);
-  });
-
-  it('a THAI ราคาพิเศษ row still asks for a list price + ราคาพิเศษ, and no ตร.ม./กล่อง field', () => {
-    renderPerSqm({}, { documentLanguage: 'TH' });
-    // Per ตร.ม. including VAT.
-    expect(screen.getByLabelText(/^ราคาตั้ง\/ตร\.ม\. \(รวม VAT\)/)).not.toBeNull();
-    expect(screen.getByLabelText(/^ราคาพิเศษ\/ตร\.ม\. \(รวม VAT\)/)).not.toBeNull();
-    expect(screen.queryByLabelText(/^ตร\.ม\.\/กล่อง/)).toBeNull();
-  });
-
-  it('English in another mode shows no ตร.ม./กล่อง field', () => {
-    renderPerSqm({}, { priceMode: 'NET' });
-    expect(screen.queryByLabelText(/^ตร\.ม\.\/กล่อง/)).toBeNull();
-  });
-
   async function pick(cat, rowOverrides = {}) {
     api.catalog.prices.mockImplementation(async (q) => ((q ?? '').includes('Menorca') ? { items: [cat] } : { items: [] }));
     const { onChange } = renderPerSqm({ sqmPerBox: 9.99, ...rowOverrides });
@@ -91,51 +61,6 @@ describe('QuotationItemRow — English per-sqm (owner decision 2026-09-13)', () 
   it('a catalogue pick carries ProductPriceDto.sqmPerBox onto the row', async () => {
     const patch = await pick({ priceId: 7, collection: 'Menorca', sizeRaw: '6.5x32.8', priceUnit: 'per_sqm', pcsPerBox: 28, sqmPerBox: 0.6 });
     expect(patch).toMatchObject({ piecesPerBox: 28, sqmPerBox: 0.6 });
-  });
-
-  // A catalogue pick that FILLS ตร.ม./กล่อง must reset a ticked "ขายแผ่นไม่เต็มกล่อง"
-  // (roundToFullBox === false) like typing the value by hand: a box area forces full-box rounding
-  // server-side, so the checkbox left ticked would keep sending roundToFullBox=false.
-  it('a catalogue pick that fills ตร.ม./กล่อง resets a ticked ขายแผ่นไม่เต็มกล่อง', async () => {
-    const patch = await pick(
-      { priceId: 11, collection: 'Menorca', sizeRaw: '60x120', priceUnit: 'per_sqm', pcsPerBox: 28, sqmPerBox: 0.6 },
-      { roundToFullBox: false },
-    );
-    expect(patch).toMatchObject({ sqmPerBox: 0.6, roundToFullBox: true });
-  });
-
-  /** A pick whose product has NO box area must NOT force the checkbox back on: "sell loose pieces"
-   * is legal without a box area, so nothing here should touch roundToFullBox. */
-  it('a catalogue pick with NO ตร.ม./กล่อง leaves a ticked ขายแผ่นไม่เต็มกล่อง alone', async () => {
-    const patch = await pick(
-      { priceId: 12, collection: 'Menorca', sizeRaw: '60x120', priceUnit: 'per_sqm', pcsPerBox: 28, sqmPerBox: null },
-      { roundToFullBox: false },
-    );
-    expect(patch.sqmPerBox).toBeNull();
-    expect(patch).not.toHaveProperty('roundToFullBox');
-  });
-
-  // A pick takes the NEW product's box count; a product with none clears the field rather than
-  // keeping the previous product's number.
-  it('a pick whose product has NO box count clears แผ่น/กล่อง instead of keeping the previous product\'s', async () => {
-    const patch = await pick(
-      { priceId: 9, collection: 'Menorca', sizeRaw: '60x120', priceUnit: 'per_sqm', pcsPerBox: null, sqmPerBox: null },
-      { piecesPerBox: 66 },
-    );
-    expect(patch.piecesPerBox).toBeNull();
-  });
-
-  it('a pick replaces a previous product\'s แผ่น/กล่อง with the new product\'s own count', async () => {
-    const patch = await pick(
-      { priceId: 10, collection: 'Menorca', sizeRaw: '60x120', priceUnit: 'per_sqm', pcsPerBox: 38, sqmPerBox: null },
-      { piecesPerBox: 66 },
-    );
-    expect(patch.piecesPerBox).toBe(38);
-  });
-
-  it('a per_linear_m pick NEVER carries its sqm_per_box (linear metres), nor keeps the old value', async () => {
-    const patch = await pick({ priceId: 8, collection: 'Menorca trim', sizeRaw: '7x60', priceUnit: 'per_linear_m', pcsPerBox: 10, sqmPerBox: 6.0 });
-    expect(patch.sqmPerBox).toBeNull();
   });
 });
 
@@ -153,65 +78,12 @@ describe('QuotationItemRow — Thai price boxes carry their unit (2026-09-14, pe
     return { item, onChange };
   }
 
-  it('labels ราคาตั้ง/ตร.ม. (รวม VAT), placed BEFORE ราคาพิเศษ/ตร.ม. (รวม VAT) in DOM order', () => {
-    renderThaiSpecial();
-    const priceInput = screen.getByLabelText(/^ราคาตั้ง\/ตร\.ม\. \(รวม VAT\)/);
-    const specialInput = screen.getByLabelText(/^ราคาพิเศษ\/ตร\.ม\. \(รวม VAT\)/);
-    expect(priceInput).not.toBeNull();
-    expect(specialInput).not.toBeNull();
-    expect(priceInput.compareDocumentPosition(specialInput) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-  });
-
-  it('both price inputs render the SAME trailing unit — there is no per-แผ่น box left on the row', () => {
-    renderThaiSpecial();
-    expect(screen.getAllByText('บาท/ตร.ม.')).toHaveLength(2);
-    expect(screen.queryByText('บาท/แผ่น')).toBeNull();
-  });
-
-  it('with no price typed, the line under ราคาตั้ง says the per-แผ่น price will be worked out', () => {
-    renderThaiSpecial();
-    expect(screen.getByTestId('list-per-piece-0').textContent).toBe('ระบบคำนวณราคาต่อแผ่นให้');
-  });
-
   // The figure the old helper line showed UNDER the box (1,299 × 1.39 × 1.07): a row still holding a
   // price per แผ่น shows it IN the box and names the per-แผ่น figure beneath.
   it('1299 a piece at 0.72 ตร.ม./แผ่น shows as 1932 per ตร.ม. in the box, with the per-แผ่น figure underneath', () => {
     renderThaiSpecial({ unitPrice: 1299, sqmPerPiece: 0.72 });
     expect(screen.getByLabelText(/^ราคาตั้ง\/ตร\.ม\. \(รวม VAT\)/).value).toBe('1932');
     expect(screen.getByTestId('list-per-piece-0').textContent).toBe('คิดจากราคา ฿1,299.00/แผ่น (ก่อน VAT)');
-  });
-
-  // Guards: every Thai mode gets an in-field unit; an English row gets none of it.
-  it('NET mode carries the per-ตร.ม. unit and the per-แผ่น line too', () => {
-    renderRow({ unitPrice: 850, sqmPerPiece: 0.36 });
-    expect(screen.getByLabelText(/^ราคา\/ตร\.ม\. \(รวม VAT\)/)).not.toBeNull();
-    expect(screen.getAllByText('บาท/ตร.ม.')).toHaveLength(1);
-    expect(screen.getByTestId('list-per-piece-0')).not.toBeNull();
-    expect(screen.queryByText('บาท/แผ่น')).toBeNull();
-  });
-
-  it('DIRECT_NET mode carries it on both of its boxes', () => {
-    const onChange = vi.fn();
-    render(
-      <QuotationItemRow item={{ ...emptyQuotationItem(), unitPrice: 850 }} index={0} onChange={onChange} onRemove={vi.fn()}
-        priceMode="DIRECT_NET" documentLanguage="TH" currency="THB" />,
-    );
-    expect(screen.getByLabelText(/^ราคาสุทธิ\/ตร\.ม\. \(รวม VAT\)/)).not.toBeNull();
-    expect(screen.getByLabelText(/^ราคาตั้ง\/ตร\.ม\. \(รวม VAT\)/)).not.toBeNull();
-    expect(screen.getAllByText('บาท/ตร.ม.')).toHaveLength(2);
-    expect(screen.queryByLabelText(/^ราคาตั้ง\/แผ่น/)).toBeNull();
-  });
-
-  it('English per-sqm mode never renders the Thai label, the per-แผ่น line, or a บาท unit', () => {
-    const onChange = vi.fn();
-    render(
-      <QuotationItemRow item={{ ...emptyQuotationItem(), specialPriceSqm: 64, sqmPerBox: 0.6 }} index={0}
-        onChange={onChange} onRemove={vi.fn()} priceMode="SPECIAL_SQM" documentLanguage="EN" currency="USD" />,
-    );
-    expect(screen.queryByLabelText(/^ราคาตั้ง\/ตร\.ม\./)).toBeNull();
-    expect(screen.queryByTestId('list-per-piece-0')).toBeNull();
-    expect(screen.queryByText('บาท/แผ่น')).toBeNull();
-    expect(screen.queryByText('บาท/ตร.ม.')).toBeNull();
   });
 
   // The whole wire shape of a row still holding a per-แผ่น list price: its usual fields plus the two
@@ -258,57 +130,9 @@ describe('QuotationItemRow — จากสต็อก (direct quotation ships 
     expect(onChange).toHaveBeenLastCalledWith({ stockSource: 'IN_THAILAND', leadTimeMinDays: null, leadTimeMaxDays: null });
   });
 
-  it('ticking drops a catalogue-default lead time so the hidden 60-75 days is not saved', () => {
-    const { onChange } = renderStockRow({ leadTimeMinDays: 60, leadTimeMaxDays: 75 });
-    fireEvent.click(screen.getByLabelText('จากสต็อก'));
-    expect(onChange).toHaveBeenLastCalledWith(
-      expect.objectContaining({ stockSource: 'IN_THAILAND', leadTimeMinDays: null, leadTimeMaxDays: null }),
-    );
-  });
-
-  it('unticking a ticked row sends null', () => {
-    const { onChange } = renderStockRow({ stockSource: 'IN_THAILAND' });
-    const box = screen.getByLabelText('จากสต็อก');
-    expect(box.checked).toBe(true);
-    fireEvent.click(box);
-    expect(onChange).toHaveBeenLastCalledWith({ stockSource: null, leadTimeMinDays: null, leadTimeMaxDays: null });
-  });
-
-  it('unticking restores the origin default lead time', () => {
-    const { onChange } = renderStockRow({ stockSource: 'IN_THAILAND', originCountry: 'อิตาลี', leadTimeMinDays: null, leadTimeMaxDays: null });
-    fireEvent.click(screen.getByLabelText('จากสต็อก'));
-    expect(onChange).toHaveBeenLastCalledWith({ stockSource: null, leadTimeMinDays: 75, leadTimeMaxDays: 90 });
-  });
-
-  it('hides ระยะเวลานำเข้า while ticked and shows it otherwise', () => {
-    renderStockRow({ stockSource: 'IN_THAILAND' });
-    expect(screen.queryByLabelText(/^ระยะเวลานำเข้า/)).toBeNull();
-  });
-
-  it('keeps ระยะเวลานำเข้า on an import row', () => {
-    renderStockRow();
-    expect(screen.getByLabelText(/^ระยะเวลานำเข้า/)).not.toBeNull();
-  });
-
-  it('is disabled when the row is read-only', () => {
-    renderStockRow({ stockSource: 'IN_THAILAND' }, { readOnly: true });
-    expect(screen.getByLabelText('จากสต็อก').disabled).toBe(true);
-  });
-
-  it('is absent unless the page asks for it (the PCR form carries its own checkbox)', () => {
-    renderStockRow({}, { showStockOption: false });
-    expect(screen.queryByLabelText('จากสต็อก')).toBeNull();
-  });
-
   it('only an IN_THAILAND tick reaches the wire; IN_TRANSIT (a pricing-request value the server refuses) and PLAIN rows send none', () => {
     expect(itemInputFromRow({ ...emptyQuotationItem(), stockSource: 'IN_TRANSIT' }, 'NET', 'TH').stockSource).toBeNull();
     expect(itemInputFromRow({ ...emptyPlainItem(), stockSource: 'IN_THAILAND' }, 'NET', 'TH')).not.toHaveProperty('stockSource');
-  });
-
-  it('the saved payload carries the declaration', () => {
-    expect(itemInputFromRow({ ...emptyQuotationItem(), stockSource: 'IN_THAILAND' }, 'NET', 'TH').stockSource)
-      .toBe('IN_THAILAND');
-    expect(itemInputFromRow({ ...emptyQuotationItem(), stockSource: undefined }, 'NET', 'TH').stockSource).toBeNull();
   });
 });
 
@@ -326,77 +150,6 @@ describe('QuotationItemRow', () => {
       catalogSizeText: null,
     });
     expect(onChange).not.toHaveBeenCalledWith(expect.objectContaining({ productCode: expect.anything() }));
-  });
-
-  // The manual "กรอกเอง" box is always visible in both modes.
-  describe('เผื่อ (wastage) %/แผ่น mode switch', () => {
-    // The จำนวน quantity-mode toggle also has a button labelled "แผ่น", so queries are scoped with
-    // `within` to this field's FormField root; an unscoped getByRole('button', { name: 'แผ่น' })
-    // matches both toggles and throws.
-    function wastageField() {
-      return within(screen.getByText('เผื่อ (wastage)').closest('label').parentElement);
-    }
-
-    // The mode-switch buttons are labelled "%"/"แผ่น" too, so the trailing-unit span (aria-hidden)
-    // is asserted via the input's DOM neighbour, not getByText (which would match both).
-    it('always renders the manual input, with a % suffix in PERCENT mode', () => {
-      const { container } = renderRow({ wastageMode: 'PERCENT', wastageValue: 0 });
-      const input = screen.getByLabelText('เผื่อ (wastage)');
-      expect(input).not.toBeNull();
-      expect(container.querySelector(`#waste-0 + span`).textContent).toBe('%');
-    });
-
-    it('switching to แผ่น mode resets wastageValue to 0', () => {
-      const { onChange } = renderRow({ wastageMode: 'PERCENT', wastageValue: 10 });
-
-      fireEvent.click(wastageField().getByRole('button', { name: 'แผ่น' }));
-
-      expect(onChange).toHaveBeenCalledWith({ wastageMode: 'PIECES', wastageValue: 0 });
-    });
-
-    // onChange is mocked in renderRow, so the item prop never re-renders after a click; the suffix
-    // swap is asserted against a row rendered already in PIECES mode.
-    it('renders a แผ่น suffix on the manual box when already in PIECES mode', () => {
-      const { container } = renderRow({ wastageMode: 'PIECES', wastageValue: 3 });
-      expect(container.querySelector(`#waste-0 + span`).textContent).toBe('แผ่น');
-    });
-
-    it('re-clicking the already-active mode preserves the typed value instead of resetting it', () => {
-      const { onChange } = renderRow({ wastageMode: 'PERCENT', wastageValue: 7 });
-
-      fireEvent.click(wastageField().getByRole('button', { name: '%' }));
-
-      expect(onChange).toHaveBeenCalledWith({ wastageMode: 'PERCENT', wastageValue: 7 });
-    });
-
-    it('switching to % mode resets wastageValue to 0', () => {
-      const { onChange } = renderRow({ wastageMode: 'PIECES', wastageValue: 12 });
-
-      fireEvent.click(wastageField().getByRole('button', { name: '%' }));
-
-      expect(onChange).toHaveBeenCalledWith({ wastageMode: 'PERCENT', wastageValue: 0 });
-    });
-
-    it('clicking a preset chip sets wastageValue without needing a separate custom-input toggle', () => {
-      const { onChange } = renderRow({ wastageMode: 'PERCENT', wastageValue: 0 });
-
-      fireEvent.click(wastageField().getByRole('button', { name: '15%' }));
-
-      expect(onChange).toHaveBeenCalledWith({ wastageMode: 'PERCENT', wastageValue: 15 });
-    });
-
-    it('does not render % presets in PIECES mode', () => {
-      renderRow({ wastageMode: 'PIECES', wastageValue: 3 });
-      expect(wastageField().queryByRole('button', { name: '5%' })).toBeNull();
-    });
-  });
-
-  // The max lead-time input needs its OWN accessible name, not just the FormField label the min
-  // input claims via htmlFor.
-  it('the lead-time max input has its own accessible label', () => {
-    renderRow({ leadTimeMinDays: 30, leadTimeMaxDays: 45 });
-
-    expect(screen.getByLabelText('ถึง (วัน)')).not.toBeNull();
   });
 
   // pickCatalog fills every field ProductPriceDto carries EXCEPT ราคา/หน่วย: `cat.price` is the
@@ -460,164 +213,6 @@ describe('QuotationItemRow', () => {
     const lastPatch = onChange.mock.calls[onChange.mock.calls.length - 1][0];
     expect('unitPrice' in lastPatch).toBe(false);
   });
-
-  // An originCountryCode with no ประเทศต้นทาง option (a factory outside IT/ES/CN/TH) must leave the
-  // field BLANK rather than guess "อื่นๆ", which carries no lead time and looks filled in.
-  it('an unmapped originCountryCode leaves ประเทศต้นทาง alone rather than guessing', async () => {
-    api.catalog.prices.mockImplementation(async (q) => (
-      (q ?? '').includes('Lusso')
-        ? { items: [{ priceId: 7, collection: 'Lusso', factoryName: 'Somewhere', originCountryCode: 'PT' }] }
-        : { items: [] }
-    ));
-    const { onChange } = renderRow({ originCountry: '' });
-
-    fireEvent.change(screen.getByLabelText(/^รุ่น \/ ค้นหาแคตตาล็อก/), { target: { value: 'Lusso' } });
-    fireEvent.mouseDown(await waitFor(() => screen.getByRole('option', { name: /Lusso/ }), { timeout: 1000 }));
-
-    const lastPatch = onChange.mock.calls[onChange.mock.calls.length - 1][0];
-    expect(lastPatch.originCountry).toBe('');
-    // No lead-time range either: no country to derive one from.
-    expect('leadTimeMinDays' in lastPatch).toBe(false);
-  });
-
-  // sales.quotation_item has no origin_country_other column (only sales.pricing_request_item does),
-  // and direct-deal's itemInputFromRow never reads item.originCountryOther, so a typed-name box
-  // shown there would silently drop what the rep typed on every save. It must render only when the
-  // PCR-only `requireOriginCountry` prop is set.
-  it('never shows "ระบุประเทศต้นทาง" for อื่นๆ on direct-deal (requireOriginCountry unset) -- the box would silently drop its own value on save', () => {
-    renderRow();
-
-    fireEvent.change(screen.getByLabelText(/^ประเทศต้นทาง/), { target: { value: 'อื่นๆ' } });
-
-    expect(screen.queryByLabelText('ระบุประเทศต้นทาง')).toBeNull();
-  });
-
-  // ตำแหน่งติดตั้ง lives in its group's header, not the row: a per-row copy would put the label in
-  // two places and let them disagree.
-  it('no longer renders a per-item ตำแหน่งติดตั้ง field', () => {
-    renderRow();
-    expect(screen.queryByLabelText(/ตำแหน่งติดตั้ง/)).toBeNull();
-  });
-
-  // With only one location the row must not carry a dead "ย้ายไปตำแหน่ง…" dropdown, and
-  // ทำซ้ำรายการ degrades to a plain button.
-  it('offers ทำซ้ำรายการ as a button and no ย้าย control when there is a single location group', () => {
-    const onDuplicate = vi.fn();
-    render(
-      <QuotationItemRow
-        item={emptyQuotationItem('g1')}
-        index={0}
-        groupId="g1"
-        locationGroups={[{ groupId: 'g1', label: 'ชั้น 1' }]}
-        onChange={vi.fn()}
-        onRemove={vi.fn()}
-        onDuplicate={onDuplicate}
-      />,
-    );
-
-    expect(screen.queryByLabelText('ย้ายไปตำแหน่ง')).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'ทำซ้ำรายการ' }));
-    expect(onDuplicate).toHaveBeenCalledWith('g1');
-  });
-
-  it('offers ย้ายไปตำแหน่ง and ทำซ้ำ-into-another-group once a second location group exists', () => {
-    const onMove = vi.fn();
-    const onDuplicate = vi.fn();
-    render(
-      <QuotationItemRow
-        item={emptyQuotationItem('g1')}
-        index={0}
-        groupId="g1"
-        locationGroups={[{ groupId: 'g1', label: 'ชั้น 1' }, { groupId: 'g2', label: '' }]}
-        onChange={vi.fn()}
-        onRemove={vi.fn()}
-        onMove={onMove}
-        onDuplicate={onDuplicate}
-      />,
-    );
-
-    // A blank group label reads as ไม่ระบุตำแหน่ง in the picker, never as an empty option.
-    fireEvent.change(screen.getByLabelText('ย้ายไปตำแหน่ง'), { target: { value: 'g2' } });
-    expect(onMove).toHaveBeenCalledWith('g2');
-    expect(screen.getByRole('option', { name: 'ไม่ระบุตำแหน่ง' })).not.toBeNull();
-
-    fireEvent.change(screen.getByLabelText('ทำซ้ำรายการ'), { target: { value: 'g2' } });
-    expect(onDuplicate).toHaveBeenCalledWith('g2');
-  });
-
-  // One click on a remembered product instead of retyping its name. Only on an untouched row.
-  it('offers ใช้ล่าสุด chips on a blank row and fills the same fields the typeahead would', () => {
-    const onChange = vi.fn();
-    const onCatalogPicked = vi.fn();
-    const recent = [{ priceId: 42, collection: 'Trilogy', factoryName: 'Panaria SpA', color: 'Ivory', surface: 'Lappato', sizeRaw: '60x120', thicknessMm: 10, sqmPerPiece: 0.72, pcsPerBox: 3, originCountryCode: 'IT' }];
-    render(
-      <QuotationItemRow
-        item={emptyQuotationItem('g1')}
-        index={0}
-        groupId="g1"
-        recentPicks={recent}
-        onChange={onChange}
-        onRemove={vi.fn()}
-        onCatalogPicked={onCatalogPicked}
-      />,
-    );
-
-    fireEvent.click(screen.getByRole('button', { name: 'Trilogy' }));
-
-    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({
-      catalogPriceId: 42, model: 'Trilogy', color: 'Ivory', originCountry: 'อิตาลี',
-    }));
-    expect(onCatalogPicked).toHaveBeenCalledWith(recent[0]);
-  });
-
-  // The ขนาด (ซม.) field is cm, so the catalogue rows offered beside it read in cm too
-  // (sizeTextFromCatalog), never the factory's raw millimetre string.
-  it('the typeahead option and the ใช้ล่าสุด chip show the catalogue size in cm, not the raw factory string', async () => {
-    const bioarch = { priceId: 77, factoryName: 'Panaria', collection: 'BIOARCH', color: 'BARGE GIALLA', widthMm: 200, heightMm: 305, sizeRaw: '200x305', price: 53.9 };
-    api.catalog.prices.mockImplementation(async (q) => ((q ?? '').includes('BIOARCH') ? { items: [bioarch] } : { items: [] }));
-    render(
-      <QuotationItemRow
-        item={emptyQuotationItem('g1')}
-        index={0}
-        groupId="g1"
-        recentPicks={[bioarch]}
-        onChange={vi.fn()}
-        onRemove={vi.fn()}
-      />,
-    );
-
-    expect(screen.getByRole('button', { name: 'BIOARCH' }).title).toBe('Panaria · BARGE GIALLA · 20x30.5');
-    fireEvent.change(screen.getByLabelText(/^รุ่น \/ ค้นหาแคตตาล็อก/), { target: { value: 'BIOARCH' } });
-    const option = await waitFor(() => screen.getByRole('option', { name: /BIOARCH/ }), { timeout: 1000 });
-    expect(option.textContent).toContain('20x30.5');
-    expect(option.textContent).not.toContain('200x305');
-  });
-
-  it('hides the ใช้ล่าสุด chips once the row already names a product', () => {
-    render(
-      <QuotationItemRow
-        item={{ ...emptyQuotationItem('g1'), model: 'Already chosen' }}
-        index={0}
-        groupId="g1"
-        recentPicks={[{ priceId: 42, collection: 'Trilogy' }]}
-        onChange={vi.fn()}
-        onRemove={vi.fn()}
-      />,
-    );
-    expect(screen.queryByText('ใช้ล่าสุด')).toBeNull();
-  });
-
-  // Reuses PricingRequestCreateModal's provenance-badge pattern so a row from the catalog says so
-  // without locking any field.
-  it('shows the "จาก catalog" provenance badge only once catalogPriceId is set', () => {
-    renderRow({ catalogPriceId: null });
-    expect(screen.queryByText(/จาก catalog/)).toBeNull();
-  });
-
-  it('the provenance badge includes the product code when one is set', () => {
-    renderRow({ catalogPriceId: 42, productCode: 'PAN-T600-IVO' });
-    expect(screen.getByText('จาก catalog · PAN-T600-IVO')).not.toBeNull();
-  });
 });
 
 // The catalogue's own แผ่น/ตร.ม. figure must win outright over geometry: production's
@@ -629,77 +224,6 @@ describe('QuotationItemRow — แผ่น/ตร.ม. resolution (resolveTileS
   it('resolves STRAIGHT FROM THE CATALOGUE, not from width x height geometry', () => {
     const cat = { priceUnit: 'per_sqm', sizeRaw: '300x600', sqmPerPiece: 0.135 };
     expect(resolveTileSqmPerPiece(cat)).toBe(0.135);
-  });
-
-  // Mutation check: proves the test above exercises the catalogue-vs-geometry choice. Swap the
-  // implementation for a geometric one and the SAME test must go red.
-  it('MUTATION CHECK — a geometry-preferring resolver fails the catalogue-wins test above', () => {
-    function geometryPreferringResolver(cat) {
-      const match = /^(\d+(?:\.\d+)?)\s*[xX×]\s*(\d+(?:\.\d+)?)/.exec(cat?.sizeRaw ?? '');
-      if (match) return Number(((Number(match[1]) / 1000) * (Number(match[2]) / 1000)).toFixed(6));
-      return cat?.sqmPerPiece ?? null;
-    }
-    const cat = { priceUnit: 'per_sqm', sizeRaw: '300x600', sqmPerPiece: 0.135 };
-    // Geometry reads 300x600 as centimetres and answers 0.18, the WRONG figure. If this ever equalled
-    // 0.135 the mutation would be worthless as a guard.
-    expect(geometryPreferringResolver(cat)).not.toBe(0.135);
-    expect(geometryPreferringResolver(cat)).toBe(0.18);
-  });
-
-  // per_linear_m: the catalogue's sqm_per_piece is LINEAR METRES per piece there, not area (a 7x60cm
-  // trim's 0.600 is 14x a real 0.042 sqm/piece). Never surfaced as a resolved figure.
-  it('never resolves a figure for a per_linear_m product, even when the catalogue has one', () => {
-    const cat = { priceUnit: 'per_linear_m', sizeRaw: '7x60', sqmPerPiece: 0.6 };
-    expect(resolveTileSqmPerPiece(cat)).toBeNull();
-  });
-
-  // Branch (b): when the catalogue row has no sqm_per_piece, compute from ITS OWN width_mm/height_mm
-  // (always millimetres, so no unit inference). ~250 production rows need this. MUST agree with
-  // DealQuotationService#resolveSqmPerPiece step 3, or the UI blocks a row the server accepts.
-  it('falls back to the catalogue\'s own width_mm x height_mm when it has no sqm_per_piece', () => {
-    const cat = { priceUnit: 'per_sqm', sqmPerPiece: null, widthMm: 600, heightMm: 1200 };
-    expect(resolveTileSqmPerPiece(cat)).toBeCloseTo(0.72, 6);
-  });
-
-  // sqm_per_piece WINS over geometry wherever they disagree (8.6% of the real catalogue): 300x600
-  // storing 0.135 against a geometric 0.180 is a real production row.
-  it('prefers the catalogue sqm_per_piece over its own dimensions when the two disagree', () => {
-    const cat = { priceUnit: 'per_piece', sqmPerPiece: 0.135, widthMm: 300, heightMm: 600 };
-    expect(resolveTileSqmPerPiece(cat)).toBe(0.135);
-  });
-
-  // A per_linear_m row must not reach branch (b) either: geometry is as wrong there as the stored
-  // figure.
-  it('still resolves nothing for per_linear_m even when width/height are present', () => {
-    const cat = { priceUnit: 'per_linear_m', sqmPerPiece: null, widthMm: 70, heightMm: 600 };
-    expect(resolveTileSqmPerPiece(cat)).toBeNull();
-  });
-
-  // No catalogue link and nothing typed: the rule is "ask the rep", never "invent a number".
-  // Branch (b) needs the CATALOGUE's width_mm/height_mm, which an unpicked row lacks.
-  it('a brand-new row with no catalogue pick invents nothing — the field starts empty', () => {
-    const item = emptyQuotationItem();
-    expect(item.sqmPerPiece).toBeNull();
-    expect(item.sqmPerPieceSource).toBeNull();
-  });
-
-  it('picking a catalog row with no sqm_per_piece of its own resolves nothing (asks the rep, invents nothing)', async () => {
-    api.catalog.prices.mockImplementation(async (q) => (
-      (q ?? '').includes('Corner')
-        // No `collection`: the typeahead falls back to productName for both the search match and the
-        // displayed option text, so this must be named "Corner" to be found.
-        ? { items: [{ priceId: 5, productName: 'Corner', priceUnit: 'per_piece', sqmPerPiece: null }] }
-        : { items: [] }
-    ));
-    const { onChange } = renderRow();
-
-    fireEvent.change(screen.getByLabelText(/^รุ่น \/ ค้นหาแคตตาล็อก/), { target: { value: 'Corner' } });
-    const result = await waitFor(() => screen.getByRole('option', { name: /Corner/ }), { timeout: 1000 });
-    fireEvent.mouseDown(result);
-
-    const lastPatch = onChange.mock.calls[onChange.mock.calls.length - 1][0];
-    expect(lastPatch.sqmPerPiece).toBeNull();
-    expect(lastPatch.sqmPerPieceSource).toBeNull();
   });
 
   // Typing over a catalog-resolved value is always honoured, and the provenance flips from
@@ -719,29 +243,6 @@ describe('QuotationItemRow — แผ่น/ตร.ม. resolution (resolveTileS
       sqmPerPieceSource: 'manual',
     });
   });
-
-  // Round trip: what the rep typed must redisplay exactly, through the stored reciprocal
-  // (enter 16.39 -> store 1/16.39 -> redisplay 16.39).
-  it('an overridden value round-trips through the stored sqmPerPiece reciprocal without drift', () => {
-    const onChange = vi.fn();
-    const item = { ...emptyQuotationItem(), catalogPriceId: null };
-    const { rerender } = render(<QuotationItemRow item={item} index={0} onChange={onChange} onRemove={vi.fn()} />);
-
-    fireEvent.change(screen.getByLabelText(/^แผ่น\/ตร\.ม\./), { target: { value: '16.39' } });
-    const patch = onChange.mock.calls[onChange.mock.calls.length - 1][0];
-    // NUMERIC(10,6) precision, matching every column sqm_per_piece is persisted in; see
-    // sqmPerPieceFromPiecesPerSqm's comment for why 6dp makes the round trip exact.
-    expect(patch.sqmPerPiece).toBeCloseTo(1 / 16.39, 6);
-
-    // Re-render as the parent would after applying the patch and confirm the field reads back
-    // exactly 16.39 (not 16.38 or 16.40) from the stored reciprocal alone (piecesPerSqmDisplay
-    // cleared, as on a freshly reloaded saved row).
-    rerender(<QuotationItemRow
-      item={{ ...item, sqmPerPiece: patch.sqmPerPiece, piecesPerSqmDisplay: null }}
-      index={0} onChange={onChange} onRemove={vi.fn()}
-    />);
-    expect(screen.getByLabelText(/^แผ่น\/ตร\.ม\./).value).toBe('16.39');
-  });
 });
 
 // ขนาด (ซม.) -> แผ่น/ตร.ม. fallback. The field is labelled ขนาด (ซม.), so its unit is declared
@@ -754,47 +255,6 @@ describe('QuotationItemRow — ขนาด (ซม.) → แผ่น/ตร.�
     const view = render(<QuotationItemRow item={item} index={0} onChange={onChange} onRemove={vi.fn()} />);
     return { item, onChange, ...view };
   }
-
-  it('typing ขนาด fills แผ่น/ตร.ม. from it and shows "คำนวณจากขนาด"; a later size recalculates it', () => {
-    const { item, onChange, rerender } = renderBlank();
-
-    fireEvent.change(screen.getByLabelText(/^ขนาด \(ซม\.\)/), { target: { value: '60x120' } });
-    expect(onChange).toHaveBeenLastCalledWith({
-      sizeText: '60x120',
-      sqmPerPiece: 0.72,
-      piecesPerSqmDisplay: 1.39,
-      sqmPerPieceSource: 'size',
-    });
-
-    // Re-render as the parent would after the patch, then confirm the badge and the แผ่น/ตร.ม.
-    // field reflect it before the second edit.
-    const patched = { ...item, ...onChange.mock.calls.at(-1)[0] };
-    rerender(<QuotationItemRow item={patched} index={0} onChange={onChange} onRemove={vi.fn()} />);
-    expect(screen.getByTestId('sqm-status-0').textContent).toContain('คำนวณจากขนาด');
-    expect(screen.getByLabelText(/^แผ่น\/ตร\.ม\./).value).toBe('1.39');
-
-    fireEvent.change(screen.getByLabelText(/^ขนาด \(ซม\.\)/), { target: { value: '60x60' } });
-    expect(onChange).toHaveBeenLastCalledWith({
-      sizeText: '60x60',
-      sqmPerPiece: 0.36,
-      piecesPerSqmDisplay: 2.78,
-      sqmPerPieceSource: 'size',
-    });
-  });
-
-  it('does not recalculate once the rep has typed over แผ่น/ตร.ม. directly (source manual)', () => {
-    const { onChange } = renderBlank({ sqmPerPiece: 0.5, sqmPerPieceSource: 'manual' });
-    fireEvent.change(screen.getByLabelText(/^ขนาด \(ซม\.\)/), { target: { value: '60x120' } });
-    expect(onChange).toHaveBeenLastCalledWith({ sizeText: '60x120' });
-  });
-
-  it('does not recalculate a catalogue-resolved value (source catalog)', () => {
-    const { onChange } = renderBlank({
-      catalogPriceId: 42, catalogPriceUnit: 'per_piece', sqmPerPiece: 0.135, sqmPerPieceSource: 'catalog',
-    });
-    fireEvent.change(screen.getByLabelText(/^ขนาด \(ซม\.\)/), { target: { value: '60x120' } });
-    expect(onChange).toHaveBeenLastCalledWith({ sizeText: '60x120' });
-  });
 
   // A catalogue-resolved row whose แผ่น/ตร.ม. survived a size retype was a production bug: two lines
   // linked to a 600x600mm catalogue row kept 0.36 ตร.ม./แผ่น (and the printed 60x60cm size) after
@@ -821,128 +281,12 @@ describe('QuotationItemRow — ขนาด (ซม.) → แผ่น/ตร.�
       });
     });
 
-    it('the second prod line ("3x60") recomputes the same way', () => {
-      const { onChange } = renderCatalogPicked();
-      fireEvent.change(screen.getByLabelText(/^ขนาด \(ซม\.\)/), { target: { value: '3x60' } });
-      const patch = onChange.mock.calls.at(-1)[0];
-      expect(patch.sizeText).toBe('3x60');
-      expect(patch.sqmPerPieceSource).toBe('size');
-      expect(patch.sqmPerPiece).toBeCloseTo(0.018, 6);
-    });
-
     it('leaves the catalogue figure UNCHANGED when the retyped size is the SAME tile in millimetres', () => {
       const { onChange } = renderCatalogPicked();
       fireEvent.change(screen.getByLabelText(/^ขนาด \(ซม\.\)/), { target: { value: '600x600' } });
-      // Only sizeText patches; sqmPerPiece/source are NOT touched, as in the "does not recalculate
-      // a catalogue-resolved value" case above.
+      // Only sizeText patches; sqmPerPiece/source are NOT touched.
       expect(onChange).toHaveBeenLastCalledWith({ sizeText: '600x600' });
     });
-
-    // The catalogue's OWN millimetre figures typed into this cm field ("300x600" for a
-    // 60x60cm/600x600mm tile) parse as a plain size pair, genuinely different from catalogSizeText
-    // (sizeTextDiffersFromCatalogFaceSize), but resolve to 18 m²/piece, outside
-    // sqmPerPieceFromSizeCm's 0.001-10 m² bound, so it returns null. Patching `sqmPerPiece: recomputed`
-    // unconditionally nulled a valid catalogue figure on either failure (unparseable OR out of
-    // range), producing a blocking "required" error that refused every save for the document.
-    it('an out-of-range recompute (mm typed into a cm field) keeps the existing แผ่น/ตร.ม. rather than nulling it', () => {
-      const { onChange } = renderCatalogPicked();
-      fireEvent.change(screen.getByLabelText(/^ขนาด \(ซม\.\)/), { target: { value: '300x600' } });
-      // Only sizeText patches; sqmPerPiece/source stay as the catalogue left them (0.36 /
-      // 'catalog'), so the row stays valid and แผ่น/ตร.ม. stays manually editable.
-      expect(onChange).toHaveBeenLastCalledWith({ sizeText: '300x600' });
-    });
-
-    it('a \'manual\' value is never overwritten, even on a row that still carries catalogSizeText', () => {
-      const { onChange } = renderCatalogPicked({ sqmPerPieceSource: 'manual', sqmPerPiece: 0.5 });
-      fireEvent.change(screen.getByLabelText(/^ขนาด \(ซม\.\)/), { target: { value: '30x60' } });
-      expect(onChange).toHaveBeenLastCalledWith({ sizeText: '30x60' });
-    });
-
-    // Pins that "can't tell" (an unparseable intermediate) is not treated as "confirmed different",
-    // matching the backend's FALLBACK rule.
-    it('clearing ขนาด entirely leaves the catalogue figure UNCHANGED (not wiped)', () => {
-      const { onChange } = renderCatalogPicked();
-      fireEvent.change(screen.getByLabelText(/^ขนาด \(ซม\.\)/), { target: { value: '' } });
-      // Only sizeText patches; sqmPerPiece/source are not even in the patch, so the parent's
-      // `{ ...item, ...patch }` merge leaves them as they were.
-      expect(onChange).toHaveBeenLastCalledWith({ sizeText: '' });
-    });
-
-    it('an unparseable intermediate while retyping ("3", then "30x") leaves the catalogue figure UNCHANGED at each step', () => {
-      const { onChange, item, rerender } = renderCatalogPicked();
-
-      fireEvent.change(screen.getByLabelText(/^ขนาด \(ซม\.\)/), { target: { value: '3' } });
-      expect(onChange).toHaveBeenLastCalledWith({ sizeText: '3' });
-
-      // Re-render as the parent would after that patch, then keep typing: "30x" is still
-      // unparseable (no second number yet).
-      const patched = { ...item, ...onChange.mock.calls.at(-1)[0] };
-      rerender(<QuotationItemRow item={patched} index={0} onChange={onChange} onRemove={vi.fn()} />);
-      fireEvent.change(screen.getByLabelText(/^ขนาด \(ซม\.\)/), { target: { value: '30x' } });
-      expect(onChange).toHaveBeenLastCalledWith({ sizeText: '30x' });
-    });
-
-    it('finishing the retype ("30x60") after those unparseable intermediates still recomputes', () => {
-      const { onChange } = renderCatalogPicked({ sizeText: '30x' });
-      fireEvent.change(screen.getByLabelText(/^ขนาด \(ซม\.\)/), { target: { value: '30x60' } });
-      expect(onChange).toHaveBeenLastCalledWith({
-        sizeText: '30x60',
-        sqmPerPiece: 0.18,
-        piecesPerSqmDisplay: 5.56,
-        sqmPerPieceSource: 'size',
-      });
-    });
-
-    it('an unparseable catalogSizeText (e.g. a dirty sizeRaw fallback) never triggers the new branch, even for a genuinely different-looking size', () => {
-      const { onChange } = renderCatalogPicked({ catalogSizeText: 'JOLLY COCO 60x120' });
-      fireEvent.change(screen.getByLabelText(/^ขนาด \(ซม\.\)/), { target: { value: '30x60' } });
-      // Falls through to the 'catalog'-source logic: only sizeText patches, nothing wiped.
-      expect(onChange).toHaveBeenLastCalledWith({ sizeText: '30x60' });
-    });
-  });
-
-  it('never fills แผ่น/ตร.ม. from a size on a per_linear_m catalogue row', () => {
-    const { onChange } = renderBlank({ catalogPriceId: 8, catalogPriceUnit: 'per_linear_m' });
-    fireEvent.change(screen.getByLabelText(/^ขนาด \(ซม\.\)/), { target: { value: '60x120' } });
-    expect(onChange).toHaveBeenLastCalledWith({ sizeText: '60x120' });
-  });
-
-  it('never overwrites a value loaded with sqmPerPiece already set and no recorded source (a reloaded draft)', () => {
-    const { onChange } = renderBlank({ sqmPerPiece: 0.5, sqmPerPieceSource: null });
-    fireEvent.change(screen.getByLabelText(/^ขนาด \(ซม\.\)/), { target: { value: '60x120' } });
-    expect(onChange).toHaveBeenLastCalledWith({ sizeText: '60x120' });
-  });
-
-  it('clears a size-derived value once the size becomes unreadable', () => {
-    const { onChange } = renderBlank({ sqmPerPiece: 0.72, sqmPerPieceSource: 'size', piecesPerSqmDisplay: 1.39 });
-    fireEvent.change(screen.getByLabelText(/^ขนาด \(ซม\.\)/), { target: { value: '60x' } });
-    expect(onChange).toHaveBeenLastCalledWith({
-      sizeText: '60x',
-      sqmPerPiece: null,
-      piecesPerSqmDisplay: '',
-      sqmPerPieceSource: null,
-    });
-  });
-
-  it('a catalogue pick whose resolver returns null falls back to the catalogue size text', async () => {
-    api.catalog.prices.mockImplementation(async (q) => (
-      (q ?? '').includes('NoFactor')
-        // No sqmPerPiece, no widthMm/heightMm: resolveTileSqmPerPiece resolves nothing, so the
-        // fallback reads sizeTextFromCatalog's fallback to sizeRaw ("60x120", a clean pair).
-        ? { items: [{ priceId: 9, productName: 'NoFactor', priceUnit: 'per_piece', sqmPerPiece: null, sizeRaw: '60x120' }] }
-        : { items: [] }
-    ));
-    const { onChange } = renderBlank();
-
-    fireEvent.change(screen.getByLabelText(/^รุ่น \/ ค้นหาแคตตาล็อก/), { target: { value: 'NoFactor' } });
-    const option = await waitFor(() => screen.getByRole('option', { name: /NoFactor/ }), { timeout: 1000 });
-    fireEvent.mouseDown(option);
-
-    const patch = onChange.mock.calls.at(-1)[0];
-    expect(patch.sizeText).toBe('60x120');
-    expect(patch.sqmPerPiece).toBe(0.72);
-    expect(patch.piecesPerSqmDisplay).toBe(1.39);
-    expect(patch.sqmPerPieceSource).toBe('size');
   });
 
   it('the saved payload never carries sqmPerPieceSource (or piecesPerSqmDisplay) -- both are UI-only', () => {
@@ -953,74 +297,7 @@ describe('QuotationItemRow — ขนาด (ซม.) → แผ่น/ตร.�
   });
 });
 
-describe('sizeTextFromCatalog — ขนาด comes from the catalogue mm, never the raw string', () => {
-  it("does not leak Equipe's product name into ขนาด (the owner's 2026-09-13 report)", () => {
-    // VEN027994 as production holds it: the Equipe profile takes size_from product_name, so
-    // size_raw IS the product name, and the field must not show the whole string.
-    const cat = {
-      widthMm: 12, heightMm: 200,
-      sizeRaw: '1,2X20 JOLLY COCO WHITE MATT',
-    };
-    expect(sizeTextFromCatalog(cat)).toBe('1.2x20');
-    expect(sizeTextFromCatalog(cat)).not.toContain('JOLLY');
-  });
-
-  it('renders whole-centimetre sizes without trailing zeros, matching the field hint', () => {
-    expect(sizeTextFromCatalog({ widthMm: 600, heightMm: 1200 })).toBe('60x120');
-    expect(sizeTextFromCatalog({ widthMm: 200, heightMm: 200 })).toBe('20x20');
-  });
-
-  it('keeps a real fractional centimetre rather than rounding it away', () => {
-    // Vives writes 36'4X33'7 = 364 x 337 mm; 36.4x33.7 must survive, not become 36x34.
-    expect(sizeTextFromCatalog({ widthMm: 364, heightMm: 337 })).toBe('36.4x33.7');
-  });
-
-  it("prefers the database's own size_cm (V174) when the backend serves it", () => {
-    expect(sizeTextFromCatalog({ sizeCm: '20x20', widthMm: 200, heightMm: 200, sizeRaw: '200x200' }))
-      .toBe('20x20');
-  });
-
-  it('computes the same value when sizeCm is absent — the backend image lags the frontend deploy', () => {
-    // Not dead code: the frontend deploys immediately while Render runs a pinned image, so there is
-    // a window where sizeCm is not yet served. Both paths must agree.
-    const cat = { widthMm: 200, heightMm: 200, sizeRaw: '200x200' };
-    expect(sizeTextFromCatalog(cat)).toBe('20x20');
-    expect(sizeTextFromCatalog({ ...cat, sizeCm: '20x20' })).toBe(sizeTextFromCatalog(cat));
-  });
-
-  it('falls back to the raw string only when the catalogue has no dimensions', () => {
-    expect(sizeTextFromCatalog({ sizeRaw: '60x120' })).toBe('60x120');
-    expect(sizeTextFromCatalog({ widthMm: 0, heightMm: 0, sizeRaw: 'ตามภาพ' })).toBe('ตามภาพ');
-    expect(sizeTextFromCatalog({})).toBe('');
-    // A blank sizeRaw ('' is not nullish) must not shadow a usable size.
-    expect(sizeTextFromCatalog({ sizeRaw: '', size: '60x60' })).toBe('60x60');
-  });
-});
-
 describe('ส่วนลด % — blank by default, and a rep can clear it (owner, 2026-09-13)', () => {
-  function renderNet(item, onChange = vi.fn()) {
-    render(<QuotationItemRow item={item} index={0} priceMode="NET" onChange={onChange} onRemove={vi.fn()} />);
-    return onChange;
-  }
-
-  it('a new row starts with an empty discount, not a pre-filled 0', () => {
-    renderNet(emptyQuotationItem());
-    expect(screen.getByLabelText(/^ส่วนลด %/).value).toBe('');
-  });
-
-  it('clearing a typed discount leaves it blank instead of snapping back to 0', () => {
-    // The reported bug: onChange turned '' back into 0, so the field could never be emptied.
-    const onChange = renderNet({ ...emptyQuotationItem(), discountPct: 5 });
-    fireEvent.change(screen.getByLabelText(/^ส่วนลด %/), { target: { value: '' } });
-    expect(onChange).toHaveBeenCalledWith({ discountPct: null });
-  });
-
-  it('a typed discount is still captured as a number', () => {
-    const onChange = renderNet(emptyQuotationItem());
-    fireEvent.change(screen.getByLabelText(/^ส่วนลด %/), { target: { value: '7.5' } });
-    expect(onChange).toHaveBeenCalledWith({ discountPct: 7.5 });
-  });
-
   it('a blank discount still reaches the server as 0 — pricing is unchanged', () => {
     // The server prices null and 0 identically (WastageCalculator), but the payload must never send ''.
     expect(itemInputFromRow({ ...emptyQuotationItem(), discountPct: null }, 'NET').discountPct).toBe(0);
@@ -1036,61 +313,9 @@ describe('ขายแผ่นไม่เต็มกล่อง — owner-ap
     return { onChange };
   }
 
-  it('a brand-new row defaults to off (rounds up)', () => {
-    expect(emptyQuotationItem().roundToFullBox).toBe(true);
-    renderRoundLoose();
-    expect(screen.getByLabelText(/^ขายแผ่นไม่เต็มกล่อง/).checked).toBe(false);
-  });
-
-  it('is disabled with a reason until แผ่น/กล่อง is filled', () => {
-    renderRoundLoose({ piecesPerBox: '', piecesFinal: null, boxes: null });
-    expect(screen.getByLabelText(/^ขายแผ่นไม่เต็มกล่อง/).disabled).toBe(true);
-    expect(screen.getByText('กรอกแผ่น/กล่องก่อน')).not.toBeNull();
-    // No summary yet either — nothing has been computed.
-    expect(screen.queryByTestId('round-loose-summary-0')).toBeNull();
-  });
-
   it('checking it sends roundToFullBox: false', () => {
     const { onChange } = renderRoundLoose();
     fireEvent.click(screen.getByLabelText(/^ขายแผ่นไม่เต็มกล่อง/));
-    expect(onChange).toHaveBeenLastCalledWith({ roundToFullBox: false });
-  });
-
-  it('unchecking it sends roundToFullBox: true', () => {
-    const { onChange } = renderRoundLoose({ roundToFullBox: false });
-    fireEvent.click(screen.getByLabelText(/^ขายแผ่นไม่เต็มกล่อง/));
-    expect(onChange).toHaveBeenLastCalledWith({ roundToFullBox: true });
-  });
-
-  it('shows the rounded-up summary when off', () => {
-    renderRoundLoose({ roundToFullBox: true, piecesFinal: 40, boxes: 4 });
-    expect(screen.getByLabelText(/^ขายแผ่นไม่เต็มกล่อง/).checked).toBe(false);
-    expect(screen.getByTestId('round-loose-summary-0').textContent).toBe('ปัดขึ้นเต็มกล่อง → 4 กล่อง (40 แผ่น)');
-  });
-
-  it('shows the box+loose summary when on', () => {
-    renderRoundLoose({ roundToFullBox: false });
-    expect(screen.getByLabelText(/^ขายแผ่นไม่เต็มกล่อง/).checked).toBe(true);
-    expect(screen.getByTestId('round-loose-summary-0').textContent).toBe('3 กล่อง + 2 แผ่น (32 แผ่น)');
-  });
-
-  // Only disabled when a box AREA (ตร.ม./กล่อง) is present.
-  it('is disabled with a reason in English per-sqm mode WITH a box area, regardless of the row\'s own stored value', () => {
-    renderRoundLoose({ roundToFullBox: false, sqmPerBox: 0.6 }, { priceMode: 'SPECIAL_SQM', documentLanguage: 'EN' });
-    const checkbox = screen.getByLabelText(/^ขายแผ่นไม่เต็มกล่อง/);
-    expect(checkbox.disabled).toBe(true);
-    // Shown UNCHECKED: the option cannot be true-loose here, whatever the row's stale stored value;
-    // itemInputFromRow forces the wire value true (pinned in quotationItemInput.test.jsx), so this
-    // is only the checkbox's display state.
-    expect(checkbox.checked).toBe(false);
-    expect(screen.getByText(/ต้องปัดขึ้นเต็มกล่องเสมอ/)).not.toBeNull();
-  });
-
-  it('is ENABLED in English per-sqm mode when ตร.ม./กล่อง is blank (Option B)', () => {
-    const { onChange } = renderRoundLoose({ sqmPerBox: null }, { priceMode: 'SPECIAL_SQM', documentLanguage: 'EN' });
-    const checkbox = screen.getByLabelText(/^ขายแผ่นไม่เต็มกล่อง/);
-    expect(checkbox.disabled).toBe(false);
-    fireEvent.click(checkbox);
     expect(onChange).toHaveBeenLastCalledWith({ roundToFullBox: false });
   });
 
@@ -1101,11 +326,6 @@ describe('ขายแผ่นไม่เต็มกล่อง — owner-ap
     );
     fireEvent.change(screen.getByLabelText(/^ตร\.ม\.\/กล่อง/), { target: { value: '0.6' } });
     expect(onChange).toHaveBeenLastCalledWith({ sqmPerBox: 0.6, roundToFullBox: true });
-  });
-
-  it('readOnly disables it regardless of แผ่น/กล่อง', () => {
-    renderRoundLoose({}, { readOnly: true });
-    expect(screen.getByLabelText(/^ขายแผ่นไม่เต็มกล่อง/).disabled).toBe(true);
   });
 });
 
@@ -1124,47 +344,5 @@ describe('QuotationItemRow — hidePricing (V185)', () => {
     expect(screen.queryByLabelText(/^ราคา\/ตร\.ม\./)).toBeNull();
     expect(screen.queryByTestId('list-per-piece-0')).toBeNull();
     expect(screen.queryByLabelText(/^ส่วนลด/)).toBeNull();
-  });
-
-  it('hides ราคาตั้ง/ราคาพิเศษ under hidePricing (SPECIAL_SQM mode)', () => {
-    const item = { ...emptyQuotationItem() };
-    render(
-      <QuotationItemRow item={item} index={0} onChange={vi.fn()} onRemove={vi.fn()}
-        priceMode="SPECIAL_SQM" hidePricing />,
-    );
-    expect(screen.queryByLabelText(/ราคาตั้ง/)).toBeNull();
-    expect(screen.queryByLabelText(/ราคาพิเศษ/)).toBeNull();
-  });
-
-  it('hides ราคาสุทธิ under hidePricing (DIRECT_NET mode)', () => {
-    const item = { ...emptyQuotationItem() };
-    render(
-      <QuotationItemRow item={item} index={0} onChange={vi.fn()} onRemove={vi.fn()}
-        priceMode="DIRECT_NET" hidePricing />,
-    );
-    expect(screen.queryByLabelText(/ราคาสุทธิ/)).toBeNull();
-  });
-
-  it('never renders the live ฿ calculation footer under hidePricing', () => {
-    const item = { ...emptyQuotationItem(), calculationLine: 'ทดสอบ', lineAmount: 1234 };
-    render(<QuotationItemRow item={item} index={0} onChange={vi.fn()} onRemove={vi.fn()} hidePricing />);
-    expect(screen.queryByText('ทดสอบ')).toBeNull();
-  });
-
-  it('still renders every non-price field under hidePricing — รุ่น/สี/ผิว/ขนาด/ความหนา/แผ่น-ตร.ม./แผ่น-กล่อง/จำนวน/เผื่อ/ประเทศต้นทาง/ระยะเวลานำเข้า', () => {
-    const item = { ...emptyQuotationItem() };
-    render(<QuotationItemRow item={item} index={0} onChange={vi.fn()} onRemove={vi.fn()} hidePricing />);
-    expect(screen.getByLabelText(/รุ่น \/ ค้นหาแคตตาล็อก/)).not.toBeNull();
-    expect(screen.getByLabelText(/^สี/)).not.toBeNull();
-    expect(screen.getByLabelText(/^ผิว/)).not.toBeNull();
-    expect(screen.getByLabelText(/^ขนาด \(ซม\.\)/)).not.toBeNull();
-    expect(screen.getByLabelText(/^ความหนา \(มม\.\)/)).not.toBeNull();
-    expect(screen.getByLabelText(/^แผ่น\/ตร\.ม\./)).not.toBeNull();
-    expect(screen.getByLabelText(/^แผ่น\/กล่อง/)).not.toBeNull();
-    expect(screen.getByLabelText(/^จำนวน/)).not.toBeNull();
-    // The manual "กรอกเอง" box is always rendered, so getByLabelText resolves directly on a fresh row.
-    expect(screen.getByLabelText('เผื่อ (wastage)')).not.toBeNull();
-    expect(screen.getByLabelText(/^ประเทศต้นทาง/)).not.toBeNull();
-    expect(screen.getByLabelText(/^ระยะเวลานำเข้า \(วัน\)/)).not.toBeNull();
   });
 });

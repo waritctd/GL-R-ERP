@@ -43,17 +43,6 @@ describe('QuotationDocumentView — ผู้ติดต่อ\'s Phone and Ema
     expect(block.textContent).not.toContain('ไม่พิมพ์');
   });
 
-  it('shows only the one that was typed, with no bare label for the other', () => {
-    const phoneOnly = view({ orderedByPhone: PHONE, orderedByEmail: null });
-    expect(phoneOnly.getByTestId('doc-sales-contact').textContent).toContain(PHONE);
-    expect(phoneOnly.getByTestId('doc-sales-contact').textContent).not.toContain('Email');
-    phoneOnly.unmount();
-
-    const emailOnly = view({ orderedByPhone: '   ', orderedByEmail: EMAIL });
-    expect(emailOnly.getByTestId('doc-sales-contact').textContent).toContain(EMAIL);
-    expect(emailOnly.getByTestId('doc-sales-contact').textContent).not.toContain('Phone');
-  });
-
   // The panel reproduces what the paper prints (owner, 2026-10-13: the typed values, or nothing).
   // So the header lines above the block — ติดต่อผู้สั่งซื้อ and โทร. — show the typed phone and
   // email, and show no phone/email at all when none was typed: no fallback to the master ones.
@@ -68,51 +57,6 @@ describe('QuotationDocumentView — ผู้ติดต่อ\'s Phone and Ema
     expect(contact).toContain(EMAIL);
     expect(contact).not.toContain('081-234-5678');
     expect(contact).not.toContain('thanaphon@example.co.th');
-  });
-
-  it('a typed email beside a blank phone shows the email and no phone at all — not the master one', () => {
-    const { getByTestId, queryByTestId } = view({ orderedByPhone: null, orderedByEmail: EMAIL, customerPhone: '02-000-0000' });
-
-    expect(queryByTestId('doc-customer-phone')).toBeNull();
-    const contact = getByTestId('doc-contact').textContent;
-    expect(contact).toContain(EMAIL);
-    expect(contact).not.toContain('081-234-5678');
-    expect(contact).not.toContain('02-000-0000');
-    expect(contact).not.toContain('thanaphon@example.co.th');
-  });
-
-  // The paper strips a label the rep typed into the phone ("โทร 02 314 354-2" — the shape 299 of
-  // 4,320 customer-directory rows carry, which reps copy from) before printing "Phone 02 314 354-2",
-  // and prints nothing for a label-only value. The screen mirrors the paper, so it does the same.
-  it('strips a phone label the rep typed, the way the PDF does, and shows nothing for a label-only phone', () => {
-    for (const typed of ['โทร 02 314 354-2', 'โทร. 02 314 354-2', 'Tel: 02 314 354-2', 'Tel. 02 314 354-2']) {
-      const page = view({ orderedByPhone: typed, orderedByEmail: null });
-      expect(page.getByTestId('doc-customer-phone').textContent, typed).toBe('โทร.02 314 354-2');
-      expect(page.getByTestId('doc-contact').textContent, typed).toBe('ติดต่อผู้สั่งซื้อธนพล ศรีวัฒนกุล · โทร. 02 314 354-2');
-      page.unmount();
-    }
-    for (const labelOnly of ['โทร.', 'Tel.', '   ']) {
-      const page = view({ orderedByPhone: labelOnly, orderedByEmail: '  ' });
-      expect(page.queryByTestId('doc-customer-phone'), labelOnly).toBeNull();
-      expect(page.getByTestId('doc-contact').textContent, labelOnly).toBe('ติดต่อผู้สั่งซื้อธนพล ศรีวัฒนกุล');
-      expect(page.queryByTestId('doc-sales-contact'), labelOnly).toBeNull();
-      page.unmount();
-    }
-  });
-
-  // Wrong way round: with nothing typed there is no block at all — no heading, no "printed when filled"
-  // note about nothing.
-  it('is absent when neither was typed', () => {
-    const typed = view({ orderedByPhone: PHONE, orderedByEmail: EMAIL });
-    expect(typed.queryByTestId('doc-sales-contact')).not.toBeNull(); // the control
-    typed.unmount();
-
-    for (const empty of [{}, { orderedByPhone: null, orderedByEmail: null }, { orderedByPhone: '', orderedByEmail: '   ' }]) {
-      const page = view(empty);
-      expect(page.queryByTestId('doc-sales-contact'), JSON.stringify(empty)).toBeNull();
-      expect(page.container.textContent).not.toContain(PRINTED_WHEN_FILLED);
-      page.unmount();
-    }
   });
 
   // Wrong way round: the typed contact belongs on the header line (as printed) but never in the

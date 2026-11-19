@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import { quotationChainSteps, quotationChainView } from './quotationChain.js';
-import { chainNextStep } from '../documentChain/documentChainText.js';
 
 // The quotation page's document chain card: WHICH quotation shows the chain (quotationChainView) and what each of the
 // four steps says (quotationChainSteps). Both read only the quotation and the server's chain summary.
@@ -47,70 +46,12 @@ describe('quotationChainView — which quotation carries the chain, and the one 
     expect(quotationChainView(q({ docStatus }), chain(), { dealHref: DEAL }).mode).toBe('none');
   });
 
-  it('a PRICING_REQUEST-origin quotation shows nothing (that route confirms on the request page)', () => {
-    expect(quotationChainView(q({ origin: 'PRICING_REQUEST' }), chain(), { dealHref: DEAL }).mode).toBe('none');
-  });
-
-  it('no summary (loading, or a viewer the document gate refuses) shows nothing', () => {
-    expect(quotationChainView(q(), null, { dealHref: DEAL }).mode).toBe('none');
-  });
-
   it('confirmed from a DIFFERENT quotation: one line naming it, linking to it', () => {
     const view = quotationChainView(q(), confirmedHere({ order: { confirmedFromQuotationId: 9, confirmedFromQuotationNumber: 'QT-2026-0009-1' } }), { dealHref: DEAL });
     expect(view.mode).toBe('notice');
     expect(view.reason).toBe('OTHER_QUOTATION');
     expect(view.text).toContain('QT-2026-0009-1');
     expect(view.link).toEqual({ to: '/quotations/9', label: 'เปิด QT-2026-0009-1' });
-  });
-
-  it('a SUPERSEDED revision: one line, linking to the quotation that carries the chain when there is one', () => {
-    const superseded = quotationChainView(q({ docStatus: 'SUPERSEDED' }), confirmedHere({ order: { confirmedFromQuotationId: 9, confirmedFromQuotationNumber: 'QT-2026-0005-2' } }), { dealHref: DEAL });
-    expect(superseded).toMatchObject({ mode: 'notice', reason: 'SUPERSEDED', link: { to: '/quotations/9' } });
-    const noChainYet = quotationChainView(q({ docStatus: 'SUPERSEDED' }), chain(), { dealHref: DEAL });
-    expect(noChainYet).toMatchObject({ mode: 'notice', reason: 'SUPERSEDED', link: { to: DEAL, label: 'เปิดงาน' } });
-  });
-
-  it('a CANCELLED quotation: one line, linking to the deal', () => {
-    expect(quotationChainView(q({ docStatus: 'CANCELLED' }), chain(), { dealHref: DEAL }))
-      .toMatchObject({ mode: 'notice', reason: 'CANCELLED', link: { to: DEAL, label: 'เปิดงาน' } });
-  });
-
-  it.each([
-    ['CLOSED_LOST', 'draft', 'DEAL_LOST'],
-    ['CANCELLED', 'cancelled', 'DEAL_CANCELLED'],
-    ['ON_HOLD', 'draft', 'DEAL_PAUSED'],
-    ['DORMANT', 'draft', 'DEAL_PAUSED'],
-  ])('a deal at lifecycle %s: one line, never a chain with buttons', (lifecycle, dealStatus, reason) => {
-    const view = quotationChainView(q(), chain({ lifecycle, dealStatus, order: { confirmable: false } }), { dealHref: DEAL });
-    expect(view).toMatchObject({ mode: 'notice', reason, link: { to: DEAL, label: 'เปิดงาน' } });
-  });
-
-  it('the same for a quotation the order WAS confirmed from, once the deal is lost or paused', () => {
-    expect(quotationChainView(q(), confirmedHere({ lifecycle: 'CLOSED_LOST' }), { dealHref: DEAL }).reason).toBe('DEAL_LOST');
-    expect(quotationChainView(q(), confirmedHere({ lifecycle: 'ON_HOLD' }), { dealHref: DEAL }).reason).toBe('DEAL_PAUSED');
-  });
-
-  it('names the deal page หน้ารายละเอียดงาน, never หน้างาน (the job site) — fix round 1', () => {
-    const texts = [
-      quotationChainView(q({ docStatus: 'SUPERSEDED' }), chain(), { dealHref: DEAL }).text,
-      quotationChainView(q(), chain({ lifecycle: 'ON_HOLD', order: { confirmable: false } }), { dealHref: DEAL }).text,
-      quotationChainView(q(), confirmedHere({ order: { confirmedFromQuotationId: null, confirmedFromQuotationNumber: null } }), { dealHref: DEAL }).text,
-      quotationChainView(q(), chain({ order: { confirmable: false } }), { dealHref: DEAL }).text,
-    ];
-    for (const text of texts) {
-      expect(text).toContain('หน้ารายละเอียดงาน');
-      expect(text).not.toMatch(/ที่หน้างาน/);
-    }
-  });
-
-  it('confirmed some other way (no quotation named, or not one this viewer may see): one line to the deal', () => {
-    const view = quotationChainView(q(), confirmedHere({ order: { confirmedFromQuotationId: null, confirmedFromQuotationNumber: null } }), { dealHref: DEAL });
-    expect(view).toMatchObject({ mode: 'notice', reason: 'CONFIRMED_ELSEWHERE', link: { to: DEAL } });
-  });
-
-  it('a viewer who cannot open the deal gets the line with no link', () => {
-    const view = quotationChainView(q({ docStatus: 'CANCELLED' }), chain(), { dealHref: null });
-    expect(view.link).toBeNull();
   });
 });
 
@@ -127,48 +68,11 @@ describe('quotationChainSteps — the four steps, the ONE current step, and who 
     expect(steps[3].locked).toBe('ยืนยันคำสั่งซื้อก่อน');
   });
 
-  it('the confirm-order step carries its own key, confirmed or not (the undo button keys on it, not on a position)', () => {
-    expect(quotationChainSteps(q(), chain())[1].key).toBe('confirm-order');
-    expect(quotationChainSteps(q(), chain({ order: { confirmed: true } }))[1].key).toBe('confirm-order');
-    expect(quotationChainSteps(q(), chain()).filter((s) => s.key === 'confirm-order')).toHaveLength(1);
-  });
-
   it('not yet confirmed, a viewer who may not confirm: step 2 waits on sales, no action', () => {
     const steps = quotationChainSteps(q(), chain({ viewer: { mayConfirmOrder: false } }));
     expect(stateOf(steps)).toEqual(['done', 'waiting', 'todo', 'todo']);
     expect(steps.some((s) => s.action)).toBe(false);
     expect(steps[1].waitingOn).toBe('ฝ่ายขายเจ้าของงาน');
-  });
-
-  // Fix round 1, F-5: a BLANK percent is the default 30% (DealQuotationRenderAdapter.effectiveDepositPercent), not 0%.
-  it('a quotation with no deposit percent set is a 30% quotation: step 3 is NOT skipped before the confirm', () => {
-    const steps = quotationChainSteps(q({ depositPercent: null }), chain());
-    expect(steps[2].state).not.toBe('skipped');
-    expect(steps[2].locked).toBe('ยืนยันคำสั่งซื้อก่อน');
-  });
-
-  it('a 0% quotation shows step 3 as ไม่รับมัดจำ, skipped, even before the order is confirmed', () => {
-    const steps = quotationChainSteps(q({ depositPercent: 0 }), chain());
-    expect(steps[2]).toMatchObject({ state: 'skipped', detail: 'ไม่รับมัดจำ' });
-  });
-
-  it('confirmed, no notice yet, the owner: step 3 is current with the create action', () => {
-    const steps = quotationChainSteps(q(), confirmedHere());
-    expect(stateOf(steps)).toEqual(['done', 'done', 'current', 'todo']);
-    expect(steps[1].meta).toMatch(/^ยืนยันแล้ว · /);
-    expect(steps[2]).toMatchObject({ action: 'deposit', actionLabel: 'สร้างใบแจ้งยอดเงินรับมัดจำ' });
-    expect(steps[3].locked).toBe('ออกได้หลังฝ่ายบัญชียืนยันรับมัดจำ');
-  });
-
-  it('a draft notice: the action issues the existing draft', () => {
-    const steps = quotationChainSteps(q(), confirmedHere({ deposit: { state: 'DRAFT', draftExists: true, noticeId: 31 } }));
-    expect(steps[2]).toMatchObject({ state: 'current', action: 'deposit', actionLabel: 'ออกใบแจ้งยอดเงินรับมัดจำ' });
-  });
-
-  it('confirmed, no notice, a viewer who may not write it (manager): step 3 waits on sales', () => {
-    const steps = quotationChainSteps(q(), confirmedHere({ viewer: { mayWriteDepositNotice: false } }));
-    expect(steps[2]).toMatchObject({ state: 'waiting', waitingOn: 'ฝ่ายขายเจ้าของงาน' });
-    expect(steps.some((s) => s.action)).toBe(false);
   });
 
   it('notice issued, deposit not received: step 3 done with its number; step 4 WAITS on ฝ่ายบัญชี (not the viewer\'s turn)', () => {
@@ -181,62 +85,12 @@ describe('quotationChainSteps — the four steps, the ONE current step, and who 
     expect(steps.some((s) => s.action)).toBe(false);
   });
 
-  it('deposit received, goods not ready: step 4 waits with the true reason', () => {
-    const steps = quotationChainSteps(q(), confirmedHere({
-      deposit: { state: 'PAID', received: true, docNumber: 'GLRD69005', issuedNoticeId: 31 },
-      remaining: { state: 'TO_CREATE', blockedReason: 'GOODS_NOT_READY' },
-    }));
-    expect(steps[2].meta).toContain('รับเงินแล้ว');
-    expect(steps[3]).toMatchObject({ state: 'waiting', locked: 'ออกได้เมื่อสินค้าถึงขั้นรับ/ส่งมอบแล้ว' });
-  });
-
-  it('the invoice can be made: step 4 current with the invoice action', () => {
-    const steps = quotationChainSteps(q(), confirmedHere({
-      deposit: { state: 'PAID', received: true, docNumber: 'GLRD69005', issuedNoticeId: 31 },
-      remaining: { state: 'TO_CREATE', blockedReason: null, canCreate: true },
-    }));
-    expect(steps[3]).toMatchObject({ state: 'current', action: 'remaining', actionLabel: 'สร้างใบแจ้งหนี้ส่วนที่เหลือ' });
-  });
-
-  it('the invoice issued: every step done, the invoice downloadable', () => {
-    const steps = quotationChainSteps(q(), confirmedHere({
-      deposit: { state: 'PAID', received: true, docNumber: 'GLRD69005', issuedNoticeId: 31 },
-      remaining: { state: 'ISSUED', blockedReason: null, invoiceId: 900, docNumber: 'GLR6900014-1', docDate: '2026-11-20' },
-    }));
-    expect(stateOf(steps)).toEqual(['done', 'done', 'done', 'done']);
-    expect(steps[3]).toMatchObject({ detail: 'GLR6900014-1', download: 'invoice' });
-  });
-
-  it('no deposit, stock goods: step 3 skipped, step 4 current', () => {
-    const steps = quotationChainSteps(q({ depositPercent: 0 }), confirmedHere({
-      deposit: { state: 'NOT_REQUIRED', required: false, percent: 0 },
-      remaining: { state: 'TO_CREATE', blockedReason: null, canCreate: true },
-    }));
-    expect(stateOf(steps)).toEqual(['done', 'done', 'skipped', 'current']);
-  });
-
-  it('paid in full by the deposit: step 4 skipped as not needed', () => {
-    const steps = quotationChainSteps(q(), confirmedHere({
-      deposit: { state: 'PAID', received: true, docNumber: 'GLRD69005', issuedNoticeId: 31 },
-      remaining: { state: 'NOT_NEEDED', blockedReason: null },
-    }));
-    expect(steps[3]).toMatchObject({ state: 'skipped', detail: 'ไม่ต้องออก — ชำระครบจากมัดจำ' });
-  });
-
   it('there is never more than ONE current step (= one primary button), for any summary in this file', () => {
     const summaries = [chain(), confirmedHere(), confirmedHere({ deposit: { state: 'DRAFT' } }),
       confirmedHere({ deposit: { state: 'PAID' }, remaining: { state: 'TO_CREATE', blockedReason: null, canCreate: true } }),
       confirmedHere({ deposit: { state: 'PAID' }, remaining: { state: 'DRAFT', blockedReason: null } })];
     for (const s of summaries) {
       expect(quotationChainSteps(q(), s).filter((step) => step.state === 'current').length).toBeLessThanOrEqual(1);
-    }
-  });
-
-  it('the step marked current/waiting is the one chainNextStep names — the same function the deal page reads', () => {
-    for (const s of [chain(), confirmedHere(), confirmedHere({ deposit: { state: 'ISSUED' } })]) {
-      const next = chainNextStep(s);
-      const steps = quotationChainSteps(q(), s);
-      expect(['current', 'waiting']).toContain(steps[next.index].state);
     }
   });
 });

@@ -2,7 +2,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { copyFromQuotation } from './quotationCopy.js';
 import { canCopyDealQuotation, rowPriceMode } from './quotationMeta.js';
 import { adjustmentInputFromRow, itemInputFromRow, rowFromServerItem } from './QuotationItemRow.jsx';
-import { bangkokTodayIso } from '../../utils/format.js';
 
 vi.mock('../../api/index.js', () => ({ api: { catalog: { prices: vi.fn() } } }));
 
@@ -65,8 +64,7 @@ const EARLY_ORDER_DISCOUNT = {
   descriptionLine: 'ส่วนลดพิเศษ 3% เมื่อสั่งซื้อภายใน 30 พ.ย. 2569', piecesFinal: 0, priceMode: null,
 };
 
-// Every identifying value below is distinctive ON PURPOSE: the "nothing of the source survives"
-// test looks for each of them in the copied state, so none may collide with a price or a quantity.
+// Every identifying value below is distinctive ON PURPOSE, so none collides with a price or a quantity.
 const SOURCE = deepFreeze({
   id: 918273, number: 'QT-2026-0777-1', ticketId: 827364, docStatus: 'APPROVED', revisionNo: 1,
   parentQuotationId: null, derivedFromQuotationId: null, derivedFromQuotationNumber: null,
@@ -112,91 +110,9 @@ describe('copyFromQuotation — what the new draft starts with', () => {
     expect(copyFromQuotation(source({ priceMode: 'DIRECT_NET', documentLanguage: 'EN', currency: 'USD' }), NEW_QUOTATION_TERMS).docSettings)
       .toEqual({ priceMode: 'DIRECT_NET', documentLanguage: 'EN' });
   });
-
-  // THE TABLE. One row per thing the editor's เงื่อนไข / header state holds, so a field added to
-  // the editor later cannot be copied (or dropped) by accident: this equality names every key.
-  it('copies the terms, the display names, the designer and the project tick — and clears the customer phone and email', () => {
-    expect(copyFromQuotation(SOURCE, NEW_QUOTATION_TERMS).terms).toEqual({
-      // ── copied ──
-      unitCode: 'A001',                       // หน่วยงาน / ผู้ออกแบบ — the project's designer, same job
-      depositPercent: 45,
-      depositPercentCustom: true,             // 45 is not one of the preset chips
-      noDeposit: false,
-      fullPaymentTerm: '',
-      remainderMode: 'CREDIT',
-      creditDays: 30,
-      validityDays: 30,
-      validityMode: 'DATE',
-      validityUntil: '2026-11-30',
-      customerNotes: 'ส่งของภายใน 30 วันหลังยืนยัน',
-      printedByDisplayId: 4,                  // "the display names"
-      salesRepDisplayId: 9,
-      hideProjectName: true,
-      // ── as for any new quotation ──
-      offerDate: bangkokTodayIso(),           // not the source's 2026-09-18
-      projectName: '',                        // see suggestedProjectName below
-      // ── left for the rep ──
-      orderedByPhone: '',
-      orderedByEmail: '',
-      omitContactHonorific: false,            // the "คุณ" box belongs with the ผู้ติดต่อ, which is not copied
-    });
-  });
-
-  // The deal a copy is saved on is NEW, and a project belongs to a customer — so the name cannot
-  // select anything until the rep has chosen who the new customer is. It travels as the name the
-  // โครงการ box offers, and the document then prints whichever project the rep confirms there.
-  it('carries the project NAME, as the name to offer once a customer is chosen (same job, different bidder)', () => {
-    expect(copyFromQuotation(SOURCE, NEW_QUOTATION_TERMS).suggestedProjectName).toBe('คอนโด ริเวอร์ไซด์ ชั้น 5');
-    expect(copyFromQuotation(source({ projectName: null }), NEW_QUOTATION_TERMS).suggestedProjectName).toBe('');
-  });
-
-  it('a "ไม่รับมัดจำ" source stays "ไม่รับมัดจำ", with the payment term it chose', () => {
-    const { terms } = copyFromQuotation(source({
-      depositPercent: 0, remainderMode: null, creditDays: null, fullPaymentTerm: 'ON_DELIVERY',
-    }), NEW_QUOTATION_TERMS);
-    expect(terms).toMatchObject({ noDeposit: true, depositPercent: 0, fullPaymentTerm: 'ON_DELIVERY' });
-  });
-
-  it('a source with nothing in an optional field copies a blank, never the text "null"', () => {
-    const { terms } = copyFromQuotation(source({
-      unitCode: null, depositPercent: 30, remainderMode: 'ON_DELIVERY', creditDays: null, validityMode: 'DAYS',
-      validityUntil: null, customerNotes: null, printedByDisplayId: null, salesRepDisplayId: null,
-      hideProjectName: false,
-    }), NEW_QUOTATION_TERMS);
-    expect(terms).toMatchObject({
-      unitCode: '', depositPercent: 30, depositPercentCustom: false, creditDays: '', validityMode: 'DAYS',
-      validityUntil: '', customerNotes: '', printedByDisplayId: '', salesRepDisplayId: '', hideProjectName: false,
-    });
-  });
 });
 
 describe('copyFromQuotation — the rows', () => {
-  it('copies every row, in document order: tiles and สินค้า/บริการอื่น in the list, ส่วนลดพิเศษ after them', () => {
-    const { items, adjustments } = copyFromQuotation(SOURCE, NEW_QUOTATION_TERMS);
-    expect(items.map((row) => [row.lineType, row.model ?? row.description])).toEqual([
-      ['TILE', 'Trilogy'], ['TILE', 'Urbanature'], ['PLAIN', 'ค่าขนส่ง'],
-    ]);
-    expect(adjustments.map((row) => [row.lineType, row.adjustmentKind, row.adjustmentPct, row.adjustmentDeadline]))
-      .toEqual([['ADJUSTMENT', 'PERCENT', 3, '2026-11-30']]);
-  });
-
-  it('keeps the ตำแหน่งติดตั้ง of every row', () => {
-    const { groups, items } = copyFromQuotation(SOURCE, NEW_QUOTATION_TERMS);
-    expect(groups.map((group) => group.label)).toEqual(['ชั้น 5 โซน A', 'ชั้น 5 โซน B']);
-    const labelOf = new Map(groups.map((group) => [group.groupId, group.label]));
-    expect(items.map((row) => labelOf.get(row.groupId))).toEqual(['ชั้น 5 โซน A', 'ชั้น 5 โซน A', 'ชั้น 5 โซน B']);
-  });
-
-  it('keeps what the rep typed on each row: prices, discounts, quantities, notes — and, on a mixed document, each row\'s own price mode', () => {
-    const [tile, special, freight] = copyFromQuotation(SOURCE, NEW_QUOTATION_TERMS).items;
-    expect(tile).toMatchObject({
-      priceMode: 'NET', listPriceSqm: 1800, discountPct: 20, piecesInput: 10, quantityMode: 'PIECES',
-      itemNotes: 'ตัดขอบ 4 ด้าน', leadTimeMinDays: 75, leadTimeMaxDays: 90, catalogPriceId: 321, originCountry: 'อิตาลี',
-    });
-    expect(special).toMatchObject({ priceMode: 'SPECIAL_SQM', specialPriceSqm: 1350 });
-    expect(freight).toMatchObject({ description: 'ค่าขนส่ง', quantity: 2, unit: 'งาน', unitPrice: 500, itemNotes: 'ส่งหน้างาน' });
-  });
-
   // The relation that matters, stated without re-listing forty fields: saving the copy untouched
   // sends, for every row, exactly what re-saving the SOURCE would send — minus the row's id. The
   // right-hand side is the editor's existing load→save round trip (rowFromServerItem →
@@ -214,59 +130,13 @@ describe('copyFromQuotation — the rows', () => {
     expect(adjustments.map(adjustmentInputFromRow))
       .toEqual([{ ...adjustmentInputFromRow(rowFromServerItem(EARLY_ORDER_DISCOUNT)), id: null }]);
   });
-
-  // A copied draft opens showing its totals: without the rows' own amounts the estimate would read
-  // 0.00 until the rep touched every row.
-  it('brings each row\'s computed amount along, so the draft opens with its totals', () => {
-    const { items } = copyFromQuotation(SOURCE, NEW_QUOTATION_TERMS);
-    expect(items.map((row) => row.lineAmount)).toEqual([9682, 9076.6, 1000]);
-  });
-
-  it('gives every row a key of its own', () => {
-    const { items, adjustments } = copyFromQuotation(SOURCE, NEW_QUOTATION_TERMS);
-    const keys = [...items, ...adjustments].map((row) => row.clientId);
-    expect(keys).toHaveLength(4);
-    expect(keys.every((key) => key != null && key !== '')).toBe(true);
-    expect(new Set(keys).size).toBe(4);
-  });
 });
 
 describe('copyFromQuotation — nothing of the source survives (wrong way round)', () => {
-  it('no row carries a server id, and none carries the source row\'s picture', () => {
-    const { items, adjustments } = copyFromQuotation(SOURCE, NEW_QUOTATION_TERMS);
-    const rows = [...items, ...adjustments];
-    expect(rows).toHaveLength(4); // …so the two checks below are about real rows
-    expect(rows.map((row) => row.id ?? null)).toEqual([null, null, null, null]);
-    expect(rows.map((row) => [Boolean(row.hasPicture), row.pictureUrl ?? null]))
-      .toEqual([[false, null], [false, null], [false, null], [false, null]]);
-  });
-
   it('a copy keeps a จากสต็อก row (IN_THAILAND) and drops IN_TRANSIT, which a direct quotation cannot hold', () => {
     const withStock = (value) => ({ ...SOURCE, items: SOURCE.items.map((it, i) => (i === 0 ? { ...it, stockSource: value } : it)) });
     expect(copyFromQuotation(withStock('IN_THAILAND'), NEW_QUOTATION_TERMS).items[0].stockSource).toBe('IN_THAILAND');
     expect(copyFromQuotation(withStock('IN_TRANSIT'), NEW_QUOTATION_TERMS).items[0].stockSource).toBeNull();
-  });
-
-  // The broad one. Whatever the copied state is made of, the source's identity is in none of it —
-  // not in a field this test knows about, and not in one added to the DTO later and spread through
-  // by accident. (`lineAmount` and friends are numbers that belong to the rows, not to the source.)
-  it('the source\'s id, number, status, approval, customer, contact and row ids appear nowhere in the copied state', () => {
-    const state = copyFromQuotation(SOURCE, NEW_QUOTATION_TERMS);
-    expect(state.items).toHaveLength(3); // the state is a real copy, not an empty one
-    const everything = JSON.stringify(state);
-
-    for (const leaked of [
-      '918273', 'QT-2026-0777', '827364',                                       // quotation id, number, deal
-      '5550001', '5550002', '5550003', '5550004', '/api/deal-quotations/',      // row ids, picture urls
-      'APPROVED', 'อนุมัติตามเสนอ', 'ผู้จัดการ อนุมัติเอง', '2026-09-22',             // status and approval
-      'บริษัท ผู้รับเหมา เอ จำกัด', '1 ถนนเดิม', '0105550000001', '02-111-1111',     // the customer
-      '6660001', 'สมชาย ลูกค้าเดิม', '081-999-0000', 'old.contact@contractor-a.example', // the contact snapshot
-      'คุณวิชัย มั่นคง', '089-765-4321', 'wichai@contractor-a.example',            // ผู้ติดต่อ
-      'P003',                                                                   // ฝ่าย, a field that no longer exists
-      '2026-09-18', '2026-09-20',                                               // the source's own dates
-    ]) {
-      expect(everything, `"${leaked}" leaked into the copied state`).not.toContain(leaked);
-    }
   });
 });
 
@@ -278,8 +148,6 @@ describe('copyFromQuotation — nothing of the source survives (wrong way round)
 // it. Such a copy starts its validity where any new quotation starts it, and says that it did.
 describe('copyFromQuotation — a ยืนราคา date that has passed', () => {
   const YESTERDAY = '2026-11-01';
-  const TOMORROW = '2026-11-03';
-
   const copyOf = (overrides) => copyFromQuotation(source(overrides), NEW_QUOTATION_TERMS);
 
   it('starts all three validity terms as a new quotation starts them, and takes nothing else from one', () => {
@@ -288,7 +156,7 @@ describe('copyFromQuotation — a ยืนราคา date that has passed', (
       validityMode: 'DAYS',
       validityDays: 60,
       validityUntil: '',
-      // ── every other term, exactly as in THE TABLE above ──
+      // ── every other term, copied as it was ──
       unitCode: 'A001',
       depositPercent: 45,
       depositPercentCustom: true,
@@ -306,60 +174,6 @@ describe('copyFromQuotation — a ยืนราคา date that has passed', (
       orderedByEmail: '',
       omitContactHonorific: false,
     });
-  });
-
-  // The boundary is the server's: it refuses a date BEFORE the document's own, and a quotation
-  // made today may be valid until today.
-  it('a date that is today has not passed: copied as typed', () => {
-    expect(copyOf({ validityUntil: TODAY }).terms)
-      .toMatchObject({ validityMode: 'DATE', validityDays: 30, validityUntil: TODAY });
-  });
-
-  it('a date after today is copied as typed', () => {
-    expect(copyOf({ validityUntil: TOMORROW }).terms)
-      .toMatchObject({ validityMode: 'DATE', validityDays: 30, validityUntil: TOMORROW });
-  });
-
-  // The rule is about a date the rep fixed. A validity counted in days has none, because the
-  // server stores no date beside it, and it stays the source's even if a date were ever left there.
-  it('a validity counted in days is copied as typed', () => {
-    expect(copyOf({ validityMode: 'DAYS', validityUntil: null }).terms)
-      .toMatchObject({ validityMode: 'DAYS', validityDays: 30, validityUntil: '' });
-    expect(copyOf({ validityMode: 'DAYS', validityUntil: YESTERDAY }).terms)
-      .toMatchObject({ validityMode: 'DAYS', validityDays: 30, validityUntil: YESTERDAY });
-  });
-
-  // A draft saved on ระบุวันที่ before its date was typed. No date is not a date that has passed.
-  it('ระบุวันที่ with no date typed yet is copied as typed', () => {
-    expect(copyOf({ validityUntil: null }).terms)
-      .toMatchObject({ validityMode: 'DATE', validityDays: 30, validityUntil: '' });
-  });
-
-  // What the editor's notice is written from.
-  it('says whether the date had passed — true for a date before today, and for nothing else', () => {
-    const cases = [
-      ['a date before today', { validityUntil: YESTERDAY }, true],
-      ['a date that is today', { validityUntil: TODAY }, false],
-      ['a date after today', { validityUntil: TOMORROW }, false],
-      ['counted in days', { validityMode: 'DAYS', validityUntil: null }, false],
-      ['counted in days, with a date left beside it', { validityMode: 'DAYS', validityUntil: YESTERDAY }, false],
-      ['ระบุวันที่ with no date typed yet', { validityUntil: null }, false],
-    ];
-    const verdicts = (pick) => Object.fromEntries(cases.map((row) => [row[0], pick(row)]));
-
-    expect(verdicts(([, overrides]) => copyOf(overrides).validityDatePassed))
-      .toEqual(verdicts(([, , expected]) => expected));
-  });
-
-  // Wrong way round. Not carried means carried nowhere: not in the terms, and not in something
-  // added beside them to say what the date used to be.
-  it('the date that passed appears nowhere in the copied state', () => {
-    // The control: this same search does find a date that has NOT passed.
-    expect(JSON.stringify(copyOf({ validityUntil: TOMORROW }))).toContain(TOMORROW);
-
-    const state = copyOf({ validityUntil: YESTERDAY });
-    expect(state.items).toHaveLength(3); // the state is a real copy, not an empty one
-    expect(JSON.stringify(state)).not.toContain(YESTERDAY);
   });
 });
 

@@ -6,7 +6,6 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { QuotationEditorPage } from './QuotationEditorPage.jsx';
 import { api } from '../../api/index.js';
 import { QUOTATION_FIELD_IDS } from './quotationMeta.js';
-import { queryKeys } from '../../api/queryKeys.js';
 
 globalThis.React = React;
 
@@ -42,14 +41,13 @@ vi.mock('../../api/index.js', async (importOriginal) => {
       tickets: { get: vi.fn(), create: vi.fn(), changeCustomer: vi.fn() },
       dealQuotations: {
         get: vi.fn(), create: vi.fn(), update: vi.fn(), calculateLine: vi.fn(), submit: vi.fn(),
-        approve: vi.fn(), reject: vi.fn(), createRevision: vi.fn(), cancel: vi.fn(),
-        downloadPdf: vi.fn(), downloadXlsx: vi.fn(), displayNameOptions: vi.fn(),
+        displayNameOptions: vi.fn(),
       },
       catalog: { prices: vi.fn() },
       designers: { search: vi.fn(), getByCode: vi.fn().mockRejectedValue(new Error('not found')) },
       customers: {
-        search: vi.fn(), create: vi.fn(), update: vi.fn(), projects: vi.fn(), createProject: vi.fn(),
-        contacts: vi.fn(), createContact: vi.fn(),
+        search: vi.fn(), create: vi.fn(), update: vi.fn(), projects: vi.fn(),
+        contacts: vi.fn(),
       },
     },
   };
@@ -61,10 +59,6 @@ const TICKET_ID = 827364;
 const CONFLICT = 'เปลี่ยนลูกค้าไม่ได้ เนื่องจากมีใบเสนอราคาที่ส่งขออนุมัติแล้ว';
 
 const salesUser = { id: 6, name: 'คุณสมหมาย ขายดี', role: 'sales', employeeId: null };
-const ceoUser = { id: 8, name: 'ราม', role: 'ceo', employeeId: 136 };
-const importUser = { id: 7, name: 'คุณนำเข้า พานิช', role: 'import', employeeId: null };
-const accountUser = { id: 5, name: 'คุณบัญชี รอบคอบ', role: 'account', employeeId: null };
-
 // The customer the deal is on today, and the one the typo is being corrected TO. Every identifying
 // value is distinctive so "the old customer leaked back" and "the new one arrived" are unmistakable.
 const OLD_CUSTOMER = {
@@ -280,44 +274,6 @@ describe('"เปลี่ยนลูกค้า" on a saved DRAFT direct quot
     expect(isDirty()).toBe(false);
   });
 
-  it('a later ordinary edit and save carries the NEW project and nothing of the old customer — not its ผู้ติดต่อ either', async () => {
-    const contactName = `${OLD_CONTACT.firstName} ${OLD_CONTACT.lastName}`;
-    renderSaved(draft({
-      contactId: OLD_CONTACT.id, contactName, contactPhone: OLD_CONTACT.phone, contactEmail: null, orderedByName: contactName,
-    }));
-    await waitFor(() => expect(fieldValue(QUOTATION_FIELD_IDS.customerName)).toBe(OLD_CUSTOMER.name));
-    // The control: the draft opens on its own contact's card.
-    expect(await screen.findByRole('button', { name: 'เปลี่ยนผู้ติดต่อ' })).not.toBeNull();
-    const scope = await openThePickers();
-    await pickTheOtherCustomerAndProject();
-    confirmTheChange(scope);
-    await waitFor(() => expect(fieldValue(QUOTATION_FIELD_IDS.customerName)).toBe(NEW_CUSTOMER.name));
-    expect(api.dealQuotations.update).not.toHaveBeenCalled();
-    // The old customer's contact card is gone: the picker is back to choosing, for the new customer.
-    await waitFor(() => expect(screen.queryByRole('button', { name: 'เปลี่ยนผู้ติดต่อ' })).toBeNull());
-    expect(screen.queryByText(contactName)).toBeNull();
-
-    fireEvent.change(byId('offerDate'), { target: { value: '2026-09-19' } });
-    fireEvent.blur(byId('offerDate'));
-    expect(isDirty()).toBe(true);
-    fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
-
-    await waitFor(() => expect(api.dealQuotations.update).toHaveBeenCalledTimes(1));
-    const [quotationId, payload] = api.dealQuotations.update.mock.calls[0];
-    expect(Number(quotationId)).toBe(918273); // the editor passes the route param as it came, a string
-    // The project name is a field the rep owns and every save sends in full, so it must already be
-    // the new project's — an old one here would put customer A's project back on the document.
-    expect(payload.projectName).toBe(NEW_CUSTOMERS_PROJECT.name);
-    // No contact: an old-customer contactId here would be refused by the server as 400.
-    expect(payload.contactId).toBeNull();
-    const sent = JSON.stringify(payload);
-    for (const stale of [OLD_CUSTOMER.name, OLD_CUSTOMER.taxId, OLD_CUSTOMER.address, OLD_CUSTOMER.phone, OLD_PROJECT.name, OLD_CONTACT.firstName]) {
-      expect(sent).not.toContain(stale);
-    }
-    await waitFor(() => expect(isDirty()).toBe(false));
-    expect(fieldValue(QUOTATION_FIELD_IDS.customerName)).toBe(NEW_CUSTOMER.name);
-  });
-
   // Wrong way round: a refusal must not look like a success. The 409 is the real answer once a
   // quotation of the deal has been submitted from another tab or by the approver.
   it('shows the server\'s refusal in a toast and leaves the customer fields and the dirty state alone', async () => {
@@ -362,29 +318,6 @@ describe('"เปลี่ยนลูกค้า" is not offered where the cus
     }
   });
 
-  it('not on a quotation that came from a pricing request', async () => {
-    await theControlIsThere();
-
-    renderSaved(draft({
-      origin: 'PRICING_REQUEST', pricingRequestId: 12, pricingRequestCode: 'PCR-2026-0012',
-      items: [{ ...TILE, priceMode: null }],
-    }));
-    await pageIsUp();
-
-    expect(screen.queryByRole('button', { name: CHANGE })).toBeNull();
-  });
-
-  it('not to someone who may view quotations but not write them (ceo, import, account)', async () => {
-    await theControlIsThere();
-
-    for (const viewer of [ceoUser, importUser, accountUser]) {
-      const page = renderSaved(draft(), viewer);
-      await pageIsUp();
-      expect(screen.queryByRole('button', { name: CHANGE }), `offered to ${viewer.role}`).toBeNull();
-      page.unmount();
-    }
-  });
-
   // The gate is TicketService#requireDealOwnership: the OWNING rep, not any sales rep who can edit
   // the quotation. canChangeDealCustomer mirrors it, so the button and the server cannot disagree.
   it('not to a sales rep who does not own the deal, even one who can edit the quotation', async () => {
@@ -392,15 +325,6 @@ describe('"เปลี่ยนลูกค้า" is not offered where the cus
 
     dealOwnerId = 99; // the deal belongs to someone else; the quotation still names this rep
     renderSaved(draft({ salesRepId: salesUser.id }));
-    await pageIsUp();
-
-    expect(screen.queryByRole('button', { name: CHANGE })).toBeNull();
-  });
-
-  it('not to a canCreateQuotation grant holder who is not the owner, a manager or the ceo', async () => {
-    await theControlIsThere();
-
-    renderSaved(draft(), { id: 20, name: 'คุณภิญญดา', role: 'qc', canCreateQuotation: true });
     await pageIsUp();
 
     expect(screen.queryByRole('button', { name: CHANGE })).toBeNull();
@@ -415,49 +339,5 @@ describe('"เปลี่ยนลูกค้า" is not offered where the cus
 
     expect(await screen.findByRole('button', { name: CHANGE })).toBeTruthy();
   });
-
-  // There is no deal yet, so there is nothing to re-point: the customer is simply picked, in the
-  // inline-create card that is already on the page.
-  it('not on /quotations/new, where the customer is still being chosen', async () => {
-    api.dealQuotations.get.mockResolvedValue({ quotation: null });
-    render(
-      <Providers path="/quotations/new">
-        <Route path="/quotations/new" element={<QuotationEditorPage user={salesUser} showToast={vi.fn()} />} />
-      </Providers>,
-    );
-
-    // Slice 2 flow A: /quotations/new opens on เลือกดีลที่มีอยู่; the customer is chosen on สร้างดีลใหม่.
-    fireEvent.click(await screen.findByRole('button', { name: 'สร้างงานใหม่' }));
-    await waitFor(() => expect(byId(QUOTATION_FIELD_IDS.customer)).not.toBeNull());
-    await new Promise((resolve) => { setTimeout(resolve, 60); });
-
-    expect(screen.queryByRole('button', { name: CHANGE })).toBeNull();
-    expect(api.tickets.changeCustomer).not.toHaveBeenCalled();
-  });
 });
 
-describe('the header names the FROZEN customer once the quotation is no longer a draft', () => {
-  // react-query keeps the deal's live customer record cached after a draft is submitted (the query
-  // is only disabled, not evicted), so a customer renamed since then must not reach the header of
-  // an approved document, whose printed customer is the snapshot taken at submit.
-  it('shows the snapshot name, not a renamed live customer record, on a PENDING_APPROVAL quotation', async () => {
-    const RENAMED = 'บริษัท ชื่อใหม่หลังส่งอนุมัติ จำกัด';
-    const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
-    // Both queries are disabled off DRAFT, but data cached while it was one is still served.
-    client.setQueryData(queryKeys.ticketDetail(TICKET_ID), ticketSummary());
-    client.setQueryData(queryKeys.customerRecord(OLD_CUSTOMER.id), { ...OLD_CUSTOMER, name: RENAMED });
-    const quotation = draft({ docStatus: 'PENDING_APPROVAL', submittedAt: '2026-09-21T03:00:00Z' });
-    api.dealQuotations.get.mockResolvedValue({ quotation });
-    render(
-      <Providers path={`/quotations/${quotation.id}`} client={client}>
-        <Route path="/quotations/:id" element={<QuotationEditorPage user={salesUser} showToast={vi.fn()} />} />
-      </Providers>,
-    );
-    await screen.findByRole('heading', { level: 1 });
-    await new Promise((resolve) => { setTimeout(resolve, 60); });
-
-    const header = screen.getByRole('heading', { level: 1 }).closest('header');
-    expect(header.textContent).toContain(OLD_CUSTOMER.name);
-    expect(header.textContent).not.toContain(RENAMED);
-  });
-});

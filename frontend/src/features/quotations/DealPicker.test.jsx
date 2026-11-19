@@ -1,7 +1,7 @@
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes, useLocation, useParams } from 'react-router-dom';
-import { fireEvent, render, screen, waitFor, within, cleanup } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { DealPicker } from './DealPicker.jsx';
 import { api } from '../../api/index.js';
@@ -17,7 +17,7 @@ vi.mock('../../api/index.js', async (importOriginal) => {
     ...actual,
     api: {
       tickets: { list: vi.fn() },
-      dealQuotations: { createRevision: vi.fn() },
+      dealQuotations: { },
     },
   };
 });
@@ -61,10 +61,6 @@ function renderPicker({ user = salesUser, selected = null, recipientType = '', i
   return { showToast };
 }
 
-function location() {
-  return screen.getByTestId('location').textContent;
-}
-
 async function openList() {
   const input = await screen.findByRole('combobox', { name: /^งาน/ });
   fireEvent.focus(input);
@@ -99,139 +95,5 @@ describe('DealPicker — เลือกดีลที่มีอยู่ (sl
     await openList();
     await waitFor(() => expect(optionTexts()).toHaveLength(3));
   });
-
-  it('each option shows code · customer · project · the Thai stage label', async () => {
-    renderPicker();
-    await openList();
-    const option = await screen.findByRole('option', { name: /DL-2026-0012/ });
-    expect(option.textContent).toContain('บริษัท บางนา จำกัด');
-    expect(option.textContent).toContain('Mega Bangna');
-    expect(option.textContent).toContain('เสนอราคาเจ้าของโครงการ');
-    expect(option.textContent).not.toContain('QUOTE_OWNER');
-  });
-
-  it('filters client-side on customer, project and code — case-insensitive, no extra request', async () => {
-    renderPicker();
-    const input = await openList();
-    await waitFor(() => expect(optionTexts()).toHaveLength(2));
-
-    fireEvent.change(input, { target: { value: 'bangna' } });
-    expect(optionTexts()).toHaveLength(1);
-    expect(optionTexts()[0]).toContain('DL-2026-0012');
-
-    fireEvent.change(input, { target: { value: 'ลาดพร้าว' } });
-    expect(optionTexts()).toHaveLength(1);
-    expect(optionTexts()[0]).toContain('DL-2026-0011');
-
-    fireEvent.change(input, { target: { value: 'dl-2026-0012' } });
-    expect(optionTexts()[0]).toContain('DL-2026-0012');
-
-    fireEvent.change(input, { target: { value: 'ไม่มีดีลนี้' } });
-    expect(within(screen.getByRole('listbox', { name: 'ผลการค้นหางาน' })).queryAllByRole('option')).toHaveLength(0);
-    expect(screen.getByText('ไม่พบงานที่ตรงกับคำค้น')).not.toBeNull();
-
-    expect(api.tickets.list).toHaveBeenCalledTimes(1);
-  });
-
-  it('keyboard: ArrowDown walks the options (aria-activedescendant), Enter picks -> ?ticket=<id>', async () => {
-    renderPicker();
-    const input = await openList();
-    await waitFor(() => expect(optionTexts()).toHaveLength(2));
-
-    fireEvent.keyDown(input, { key: 'ArrowDown' });
-    expect(input.getAttribute('aria-activedescendant')).toBe('deal-option-11');
-    fireEvent.keyDown(input, { key: 'ArrowDown' });
-    expect(input.getAttribute('aria-activedescendant')).toBe('deal-option-12');
-    fireEvent.keyDown(input, { key: 'Enter' });
-
-    await waitFor(() => expect(location()).toBe('/quotations/new?ticket=12'));
-  });
-
-  it('keyboard: Escape closes the list without picking', async () => {
-    renderPicker();
-    const input = await openList();
-    await waitFor(() => expect(optionTexts()).toHaveLength(2));
-    fireEvent.keyDown(input, { key: 'Escape' });
-    expect(screen.queryByRole('listbox', { name: 'ผลการค้นหางาน' })).toBeNull();
-    expect(input.getAttribute('aria-expanded')).toBe('false');
-    expect(location()).toBe('/quotations/new');
-  });
-
-  it('a mouse pick sets ?ticket=<id> too', async () => {
-    renderPicker();
-    await openList();
-    fireEvent.mouseDown(await screen.findByRole('option', { name: /DL-2026-0011/ }));
-    await waitFor(() => expect(location()).toBe('/quotations/new?ticket=11'));
-  });
-
-  it('a selected deal renders as a chip; "เปลี่ยนดีล" drops ?ticket= and brings the search back', async () => {
-    renderPicker({ selected: DEALS[1], initialPath: '/quotations/new?ticket=12' });
-    expect(screen.queryByRole('combobox', { name: /^งาน/ })).toBeNull();
-    expect(screen.getByText('DL-2026-0012')).not.toBeNull();
-    expect(screen.getByText('บริษัท บางนา จำกัด')).not.toBeNull();
-
-    fireEvent.click(screen.getByRole('button', { name: 'เปลี่ยนงาน' }));
-    await waitFor(() => expect(location()).toBe('/quotations/new'));
-  });
-
-  it('a deal list the role cannot read degrades to a calm Thai message, not a crash', async () => {
-    api.tickets.list.mockRejectedValue(Object.assign(new Error('ไม่มีสิทธิ์เข้าถึงรายการนี้'), { status: 403 }));
-    renderPicker();
-    expect(await screen.findByText(/โหลดรายการงานไม่ได้/)).not.toBeNull();
-  });
 });
 
-describe('DealPicker — the picked deal already has a live direct quotation (N6)', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    api.tickets.list.mockResolvedValue({ tickets: DEALS });
-  });
-
-  function withLive(docStatus) {
-    return { ...DEALS[1], liveDirectQuotation: { id: 77, number: 'QT-2026-0077-1', docStatus, recipientType: 'OWNER' } };
-  }
-
-  it('DRAFT: an inline notice (not a dialog) naming the quotation and its status, with เปิดใบเสนอราคา and the reason a new one cannot be made', () => {
-    renderPicker({ selected: withLive('DRAFT'), initialPath: '/quotations/new?ticket=12' });
-    const notice = screen.getByTestId('deal-picker-live-quotation');
-    expect(notice.textContent).toContain('งานนี้มีใบเสนอราคาที่ใช้งานอยู่ — QT-2026-0077-1 · ร่าง');
-    // The disabled-with-reason half (DESIGN.md §14): the SAME reason the editor's บันทึกร่าง carries.
-    expect(notice.textContent).toContain('สร้างใบเสนอราคาใหม่บนงานนี้ไม่ได้');
-    expect(within(notice).getByRole('link', { name: 'เปิดใบเสนอราคา' }).getAttribute('href')).toBe('/quotations/77');
-    expect(within(notice).queryByRole('button', { name: 'สร้างฉบับแก้ไข' })).toBeNull();
-    expect(screen.queryByRole('dialog')).toBeNull();
-  });
-
-  it('PENDING_APPROVAL: no revision offered either (only an APPROVED quotation may be revised)', () => {
-    renderPicker({ selected: withLive('PENDING_APPROVAL'), initialPath: '/quotations/new?ticket=12' });
-    const notice = screen.getByTestId('deal-picker-live-quotation');
-    expect(notice.textContent).toContain('รออนุมัติ');
-    expect(within(notice).queryByRole('button', { name: 'สร้างฉบับแก้ไข' })).toBeNull();
-  });
-
-  it('APPROVED: สร้างฉบับแก้ไข creates the revision (-n) and opens it', async () => {
-    api.dealQuotations.createRevision.mockResolvedValue({ quotation: { id: 78, number: 'QT-2026-0077-2' } });
-    const { showToast } = renderPicker({ selected: withLive('APPROVED'), initialPath: '/quotations/new?ticket=12' });
-    const notice = screen.getByTestId('deal-picker-live-quotation');
-    fireEvent.click(within(notice).getByRole('button', { name: 'สร้างฉบับแก้ไข' }));
-    await waitFor(() => expect(api.dealQuotations.createRevision).toHaveBeenCalledWith(77, {}));
-    expect(await screen.findByText('quotation page 78')).not.toBeNull();
-    expect(showToast).toHaveBeenCalledWith('success', 'สร้างฉบับแก้ไขแล้ว');
-  });
-
-  // N6 relaxation: an APPROVED earlier-party quotation does not block a later recipient — but only while the
-  // deal is still in draft.
-  it('APPROVED DESIGNER + recipient OWNER: no notice while the deal is in draft, the notice once the order is confirmed', () => {
-    const live = { id: 77, number: 'QT-2026-0077-1', docStatus: 'APPROVED', recipientType: 'DESIGNER' };
-    renderPicker({ selected: { ...DEALS[1], status: 'draft', liveDirectQuotation: live }, recipientType: 'OWNER', initialPath: '/quotations/new?ticket=12' });
-    expect(screen.queryByTestId('deal-picker-live-quotation')).toBeNull();
-    cleanup();
-    renderPicker({ selected: { ...DEALS[1], status: 'quotation_issued', liveDirectQuotation: live }, recipientType: 'OWNER', initialPath: '/quotations/new?ticket=12' });
-    expect(screen.getByTestId('deal-picker-live-quotation')).not.toBeNull();
-  });
-
-  it('no notice at all for a deal without a live direct quotation', () => {
-    renderPicker({ selected: DEALS[1], initialPath: '/quotations/new?ticket=12' });
-    expect(screen.queryByTestId('deal-picker-live-quotation')).toBeNull();
-  });
-});

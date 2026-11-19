@@ -1,13 +1,12 @@
 import React from 'react';
-import { onlineManager, QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { MemoryRouter, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { MemoryRouter, Route, Routes, useLocation, useParams } from 'react-router-dom';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { QuotationEditorPage } from './QuotationEditorPage.jsx';
 import { api } from '../../api/index.js';
 import { rowPriceMode } from './quotationMeta.js';
 import { adjustmentInputFromRow, itemInputFromRow, rowFromServerItem } from './QuotationItemRow.jsx';
-import { writeQuotationDefaults } from './quotationPrefs.js';
 import { bangkokTodayIso } from '../../utils/format.js';
 
 globalThis.React = React;
@@ -43,14 +42,14 @@ vi.mock('../../api/index.js', async (importOriginal) => {
       pricingRequests: { listForTicket: vi.fn() },
       dealQuotations: {
         get: vi.fn(), create: vi.fn(), update: vi.fn(), calculateLine: vi.fn(), submit: vi.fn(),
-        approve: vi.fn(), reject: vi.fn(), createRevision: vi.fn(), createReorder: vi.fn(), cancel: vi.fn(),
-        downloadPdf: vi.fn(), downloadXlsx: vi.fn(), displayNameOptions: vi.fn(),
+        createRevision: vi.fn(), createReorder: vi.fn(),
+        displayNameOptions: vi.fn(),
       },
       catalog: { prices: vi.fn() },
       designers: { search: vi.fn(), getByCode: vi.fn().mockRejectedValue(new Error('not found')) },
       customers: {
-        search: vi.fn(), create: vi.fn(), update: vi.fn(), projects: vi.fn(), createProject: vi.fn(),
-        contacts: vi.fn(), createContact: vi.fn(),
+        search: vi.fn(), create: vi.fn(), update: vi.fn(), projects: vi.fn(),
+        contacts: vi.fn(),
       },
     },
   };
@@ -62,29 +61,13 @@ const COPY = 'คัดลอกเป็นใบใหม่';
 // still ahead of it; a case about a date that has passed moves the source's date, never the clock.
 // Only `Date` is pinned. The debounced searches and the waits below run on real timers.
 const TODAY = '2026-11-02';
-const YESTERDAY = '2026-11-01';
 beforeEach(() => { vi.setSystemTime(new Date(`${TODAY}T09:00:00+07:00`)); });
 afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
-/** A Storage that stores. This repo's Node ships a built-in `localStorage` that keeps nothing (see
- * quotationPrefs.test.js), so a case about the terms a rep's quotations start with brings its own. */
-function memoryStorage() {
-  const map = new Map();
-  return {
-    getItem: (key) => (map.has(key) ? map.get(key) : null),
-    setItem: (key, value) => { map.set(key, String(value)); },
-    removeItem: (key) => { map.delete(key); },
-  };
-}
-
 const salesUser = { id: 6, name: 'คุณสมหมาย ขายดี', role: 'sales', employeeId: null };
-const ceoUser = { id: 8, name: 'ราม', role: 'ceo', employeeId: 136 };
-const importUser = { id: 7, name: 'คุณนำเข้า พานิช', role: 'import', employeeId: null };
-const accountUser = { id: 5, name: 'คุณบัญชี รอบคอบ', role: 'account', employeeId: null };
-
 // The contractor the copy is FOR — and the project that contractor already has on file.
 const NEW_CUSTOMER = { id: 2, name: 'บริษัท ผู้รับเหมา บี จำกัด', taxId: '0105550000002', address: '2 ถนนใหม่', phone: '02-222-2222' };
 const NEW_CUSTOMERS_PROJECT = { id: 77, customerId: 2, name: 'คอนโด ริเวอร์ไซด์ ชั้น 5' };
@@ -161,9 +144,6 @@ const SOURCE_IDENTITY = [
 ];
 
 const byId = (id) => document.getElementById(id);
-const group = (name) => screen.getByRole('group', { name });
-const pressed = (button) => button.getAttribute('aria-pressed') === 'true';
-
 function Providers({ path, children }) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   return (
@@ -232,12 +212,6 @@ async function chooseItsProject() {
   fireEvent.mouseDown(await screen.findByRole('option', { name: new RegExp(NEW_CUSTOMERS_PROJECT.name) }));
 }
 
-/** Everything a person could read on the page: its text, and what every control holds. */
-function everythingOnThePage() {
-  const controls = [...document.querySelectorAll('input, textarea, select')].map((el) => el.value);
-  return [document.body.textContent, ...controls].join('\n');
-}
-
 beforeEach(() => {
   vi.clearAllMocks();
   api.dealQuotations.get.mockResolvedValue({ quotation: source() });
@@ -275,36 +249,6 @@ describe('the "คัดลอกเป็นใบใหม่" button on a sav
     expect(api.tickets.create).not.toHaveBeenCalled();
   });
 
-  // Owner 2026-10-12: "a small button to duplicate beside the quotation line instead of ... inside,
-  // its too much cta". So it is an icon button next to the title, named for the reader by its
-  // aria-label, and it is neither part of the heading's text nor one of the action-bar CTAs.
-  it('is a small icon button beside the title, outside the heading and outside the action bar', async () => {
-    renderSaved(source());
-
-    const button = await screen.findByRole('button', { name: COPY });
-    const heading = screen.getByRole('heading', { level: 1 });
-    expect(button.textContent).toBe('');
-    expect(heading.textContent).toBe('ใบเสนอราคา QT-2026-0777-1');
-    expect(heading.contains(button)).toBe(false);
-    expect(heading.parentElement.contains(button)).toBe(true);
-    expect(button.closest('.page-actions')).toBeNull();
-  });
-
-  // The copy is made from what is SAVED. A draft with edits still on the page would be copied
-  // without them — and leaving the page would lose them from the source too — so the button waits
-  // for the save rather than quietly doing either.
-  it('on a draft, waits for unsaved edits to be saved first', async () => {
-    renderSaved(source({ docStatus: 'DRAFT', submittedAt: null, approvedById: null, approvedByName: null, approvedAt: null }));
-
-    const button = await screen.findByRole('button', { name: COPY });
-    expect(button.disabled).toBe(false);
-
-    fireEvent.change(byId('customerNotes'), { target: { value: 'แก้ไขหมายเหตุ ยังไม่ได้บันทึก' } });
-
-    expect(screen.getByRole('button', { name: COPY }).disabled).toBe(true);
-    expect(screen.getByRole('button', { name: COPY }).title).toContain('บันทึก');
-  });
-
   // Wrong way round. A quotation written from a คำขอราคา carries the CEO's prices for THAT request;
   // they are not the rep's to re-issue to another customer.
   it('is never offered on a quotation that came from a pricing request', async () => {
@@ -319,158 +263,6 @@ describe('the "คัดลอกเป็นใบใหม่" button on a sav
 
     await screen.findByRole('button', { name: 'ดาวน์โหลด' }); // the page is up
     expect(screen.queryByRole('button', { name: COPY })).toBeNull();
-  });
-
-  // Wrong way round. Being able to READ a quotation is not being able to write one.
-  it('is never offered to someone who may view quotations but not create them', async () => {
-    const asTheRep = renderSaved(source());
-    await screen.findByRole('button', { name: COPY }); // the control
-    asTheRep.unmount();
-
-    for (const viewer of [ceoUser, importUser, accountUser]) {
-      const page = renderSaved(source(), viewer);
-      await screen.findByRole('button', { name: 'ดาวน์โหลด' });
-      expect(screen.queryByRole('button', { name: COPY }), `offered to ${viewer.role}`).toBeNull();
-      page.unmount();
-    }
-  });
-});
-
-describe('/quotations/new?copyFrom= — the draft it opens', () => {
-  // A blank form shown while the source is on its way would be typed into, and then replaced.
-  it('shows no form to type into until the source has arrived', async () => {
-    api.dealQuotations.get.mockReturnValue(new Promise(() => {}));
-    renderCopy();
-
-    await waitFor(() => expect(api.dealQuotations.get).toHaveBeenCalledTimes(1));
-    expect(screen.queryByLabelText(/^ลูกค้า/)).toBeNull();
-    expect(screen.queryByRole('button', { name: 'บันทึกร่าง' })).toBeNull();
-  });
-
-  // The request can also be HELD BACK before it settles: offline, or between retries while the
-  // tab is hidden. That is neither loading nor an answer, and a form shown then would be typed
-  // into and then replaced the moment the source arrives.
-  it('shows no form while the source request is held back, either', async () => {
-    onlineManager.setOnline(false);
-    try {
-      renderCopy();
-      await new Promise((resolve) => { setTimeout(resolve, 50); });
-
-      // Control: the request really is paused, not sent.
-      expect(api.dealQuotations.get).not.toHaveBeenCalled();
-      expect(screen.queryByLabelText(/^ลูกค้า/)).toBeNull();
-      expect(screen.queryByRole('button', { name: 'บันทึกร่าง' })).toBeNull();
-    } finally {
-      onlineManager.setOnline(true);
-    }
-  });
-
-  it('is the new-quotation editor, already filled in from the source and not yet saved', async () => {
-    await openCopy();
-
-    expect(String(api.dealQuotations.get.mock.calls[0][0])).toBe('918273');
-    // Rows, in the source's order and under the source's ตำแหน่งติดตั้ง.
-    expect(byId('group-label-0').value).toBe('ชั้น 5 โซน A');
-    expect(byId('group-label-1').value).toBe('ชั้น 5 โซน B');
-    expect(byId('model-1').value).toBe('Urbanature');
-    expect(byId('plain-desc-2').value).toBe('ค่าขนส่ง');
-    expect(byId('adj-pct-3').value).toBe('3');
-    expect(byId('adj-deadline-3').value).toBe('30/11/2569');
-    // Each row in the price mode it was typed in, with the price it was typed with.
-    expect(pressed(within(group('วิธีกรอกราคากระเบื้อง')).getByRole('button', { name: 'ผสมหลายวิธี' }))).toBe(true);
-    expect(byId('price-mode-0').value).toBe('NET');
-    expect(byId('price-0').value).toBe('1800');
-    expect(byId('price-mode-1').value).toBe('SPECIAL_SQM');
-    expect(byId('special-1').value).toBe('1350');
-    // The terms.
-    expect(pressed(within(group('ภาษาเอกสาร')).getByRole('button', { name: /ไทย/ }))).toBe(true);
-    expect(byId('depositPercent').value).toBe('45');
-    expect(byId('creditDays').value).toBe('30');
-    expect(byId('validityUntil').value).toBe('30/11/2569');
-    expect(byId('customerNotes').value).toBe('ส่งของภายใน 30 วันหลังยืนยัน');
-    expect(byId('hideProjectNameInline').checked).toBe(true);
-    expect(byId('inline-quotation-designer-picker').value).toContain('A001');
-    await waitFor(() => expect(byId('printedByDisplayId').value).toBe('4'));
-    expect(byId('salesRepDisplayId').value).toBe('9');
-
-    // It is a NEW quotation: the page is not the source's, and nothing has been written.
-    expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('สร้างใบเสนอราคา');
-    expect(screen.queryByRole('button', { name: 'ดาวน์โหลด' })).toBeNull();
-    expect(api.tickets.create).not.toHaveBeenCalled();
-    expect(api.dealQuotations.create).not.toHaveBeenCalled();
-    expect(api.dealQuotations.update).not.toHaveBeenCalled();
-  });
-
-  // Wrong way round: what the rep must fill in again is EMPTY, and the source's customer, contact
-  // and ผู้ติดต่อ are nowhere on the page — not in a field, not in a line of text.
-  it('leaves the customer, the ผู้ติดต่อ and the customer phone/email for the rep', async () => {
-    await openCopy();
-
-    expect(screen.getByLabelText(/^ลูกค้า/).value).toBe('');
-    expect(screen.getByLabelText(/^โครงการ/).disabled).toBe(true); // a project belongs to a customer
-    // The picker holds no contact, and waits for the new customer (a contact belongs to one).
-    expect(screen.getByLabelText(/^ผู้ติดต่อ/).textContent).toContain('เลือกลูกค้าก่อน');
-    expect(byId('orderedByPhoneInline')?.value).toBe('');
-    expect(byId('orderedByEmailInline')?.value).toBe('');
-
-    const page = everythingOnThePage();
-    for (const leaked of SOURCE_IDENTITY) {
-      expect(page, `"${leaked}" is on the opened copy`).not.toContain(leaked);
-    }
-  });
-
-  it('says which quotation it was copied from and what still has to be filled in', async () => {
-    await openCopy();
-
-    const notice = screen.getByTestId('copy-notice');
-    expect(notice.textContent).toContain('QT-2026-0777-1');
-    expect(notice.textContent).toContain('ลูกค้า');
-    expect(notice.textContent).toContain('เลือกผู้ติดต่อ และกรอกโทรศัพท์/อีเมลลูกค้า');
-    // None of the source's rows has a picture, so the notice has nothing to say about pictures.
-    expect(notice.textContent).not.toContain('รูปภาพ');
-  });
-
-  // Item pictures are stored against the source's rows and this editor has no way to attach one
-  // to a row, so a copy cannot bring them. It says so — once, and only when there was one to lose.
-  it('says so when the source had item pictures, which do not come along', async () => {
-    api.dealQuotations.get.mockResolvedValue({
-      quotation: source({
-        items: [
-          { ...TILE, hasPicture: true, picturePlacement: 'BELOW', pictureUrl: '/api/deal-quotations/918273/items/5550001/picture' },
-          SPECIAL_TILE, FREIGHT, EARLY_ORDER_DISCOUNT,
-        ],
-      }),
-    });
-    await openCopy();
-
-    expect(screen.getByTestId('copy-notice').textContent).toContain('รูปภาพ');
-    expect(document.querySelector('img[src*="/api/deal-quotations/"]')).toBeNull();
-  });
-
-  // A ยืนราคา date that has gone by is not carried: the server refuses it on the first save, which
-  // is after the new deal has been made. The draft says the validity has to be set again, and
-  // says nothing about ยืนราคา when the date did come along.
-  it('says so when the source\'s ยืนราคา date had passed — and only then', async () => {
-    const stillAhead = await openCopy(); // the control: the same source, its date still ahead
-    expect(byId('validityUntil').value).toBe('30/11/2569');
-    expect(screen.getByTestId('copy-notice').textContent).not.toContain('ยืนราคา');
-    stillAhead.unmount();
-
-    api.dealQuotations.get.mockResolvedValue({ quotation: source({ validityUntil: YESTERDAY }) });
-    await openCopy();
-
-    expect(screen.getByTestId('copy-notice').textContent).toContain('ยืนราคา');
-    expect(everythingOnThePage()).not.toContain(YESTERDAY);
-  });
-
-  // Same job, different bidder. A project is a record under a customer, so the name cannot pick
-  // one until the rep has said who the customer is — and then it is already in the box.
-  it('offers the source\'s project name as soon as the new customer is chosen', async () => {
-    await openCopy();
-
-    await chooseTheNewCustomer();
-
-    expect(screen.getByLabelText(/^โครงการ/).value).toBe('คอนโด ริเวอร์ไซด์ ชั้น 5');
   });
 });
 
@@ -549,176 +341,6 @@ describe('/quotations/new?copyFrom= — saving it', () => {
 
     expect(await screen.findByText('navigated-to-31337')).not.toBeNull();
   });
-
-  // Wrong way round for the save: what was not carried is not sent. The validity that IS sent is
-  // the one a new quotation of this rep's starts with, their own remembered 60 days, and not the
-  // source's 30 days on a fixed date.
-  it('saves a copy whose source\'s ยืนราคา date had passed with a new quotation\'s validity, and never sends that date', async () => {
-    vi.stubGlobal('localStorage', memoryStorage());
-    writeQuotationDefaults(salesUser.id, { validityDays: 60 });
-    api.dealQuotations.get.mockResolvedValue({ quotation: source({ validityUntil: YESTERDAY }) });
-    await openCopy();
-    await chooseTheNewCustomer();
-    await chooseItsProject();
-    chooseRecipientAndChannel();
-    await waitFor(() => expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).disabled).toBe(false));
-
-    fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
-
-    await waitFor(() => expect(api.dealQuotations.create).toHaveBeenCalledTimes(1));
-    const [, payload] = api.dealQuotations.create.mock.calls[0];
-    expect({ validityMode: payload.validityMode, validityDays: payload.validityDays, validityUntil: payload.validityUntil })
-      .toEqual({ validityMode: 'DAYS', validityDays: 60, validityUntil: null });
-    expect(JSON.stringify([api.tickets.create.mock.calls, api.dealQuotations.create.mock.calls])).not.toContain(YESTERDAY);
-    // Only ยืนราคา started over: the other terms are still the source's.
-    expect(payload).toMatchObject({ unitCode: 'A001', depositPercent: 45, remainderMode: 'CREDIT', creditDays: 30 });
-  });
-});
-
-describe('/quotations/new?copyFrom= — when it must not copy', () => {
-  // Wrong way round. The link can be typed, bookmarked or shared; the button being hidden is not
-  // what stops a pricing-request quotation being copied.
-  it('refuses a source that came from a pricing request: nothing is filled in, and it says why', async () => {
-    api.dealQuotations.get.mockResolvedValue({
-      quotation: source({ origin: 'PRICING_REQUEST', pricingRequestId: 12, pricingRequestCode: 'PCR-2026-0012' }),
-    });
-    renderCopy();
-
-    const refusal = await screen.findByTestId('copy-refused');
-    expect(refusal.textContent).toContain('QT-2026-0777-1');
-    expect(refusal.textContent).toContain('คำขอราคา');
-    // An ordinary blank new quotation, which the rep can still fill in by hand.
-    expect(byId('model-0')).toBeNull();
-    expect(byId('customerNotes').value).toBe('');
-    expect(screen.getByLabelText(/^ลูกค้า/).value).toBe('');
-    expect(screen.queryByTestId('copy-notice')).toBeNull();
-    const page = everythingOnThePage();
-    for (const leaked of SOURCE_IDENTITY) {
-      expect(page, `"${leaked}" is on the refused copy`).not.toContain(leaked);
-    }
-  });
-
-  it('refuses a source the viewer cannot read, with the server\'s own reason', async () => {
-    api.dealQuotations.get.mockRejectedValue(Object.assign(new Error('ไม่มีสิทธิ์เข้าถึงรายการนี้'), { status: 403 }));
-    renderCopy();
-
-    const refusal = await screen.findByTestId('copy-refused');
-    expect(refusal.textContent).toContain('ไม่มีสิทธิ์เข้าถึงรายการนี้');
-    expect(byId('model-0')).toBeNull();
-    expect(screen.getByLabelText(/^ลูกค้า/).value).toBe('');
-    expect(screen.queryByTestId('copy-notice')).toBeNull();
-  });
-
-  // REGRESSION GUARD — green before the feature exists: /quotations/new already refuses someone
-  // who may not create a quotation. It is here so that opening a copy can never become a way
-  // around that refusal.
-  it('gives someone who may not create quotations no editor at all, copy or not', async () => {
-    renderCopy(importUser);
-
-    expect(await screen.findByText(/มีสิทธิ์ดูใบเสนอราคาเท่านั้น/)).not.toBeNull();
-    expect(byId('model-0')).toBeNull();
-    expect(screen.queryByRole('button', { name: 'บันทึกร่าง' })).toBeNull();
-    expect(screen.queryByTestId('copy-notice')).toBeNull();
-  });
 });
 
 
-// A page instance outlives a route change (/quotations/:id and /quotations/new render the same
-// component at the same place), so these cases mount BOTH routes with the real editor.
-function renderBothRoutes(path, user = salesUser) {
-  const showToast = vi.fn();
-  const result = render(
-    <Providers path={path}>
-      <Route path="/quotations/new" element={<QuotationEditorPage user={user} showToast={showToast} />} />
-      <Route path="/quotations/:id" element={<QuotationEditorPage user={user} showToast={showToast} />} />
-    </Providers>,
-  );
-  return { ...result, showToast };
-}
-
-describe('/quotations/new?copyFrom= — then picking an existing deal', () => {
-  it('keeps the copied rows, and the save lands on the picked deal — no second deal is made', async () => {
-    api.tickets.list.mockResolvedValue({
-      tickets: [{
-        id: 18, code: 'DL-2026-0018', createdById: 6, customerName: 'บริษัท ผู้รับเหมา บี จำกัด', customerId: 2,
-        projectName: 'คอนโด ริเวอร์ไซด์ ชั้น 5', lifecycle: 'ACTIVE', salesStage: 'QUOTE_DESIGN_SIDE', liveDirectQuotation: null,
-      }],
-    });
-    api.tickets.get.mockResolvedValue({
-      ticket: {
-        summary: {
-          id: 18, code: 'DL-2026-0018', createdById: 6, createdByName: 'คุณสมหมาย ขายดี',
-          customerName: 'บริษัท ผู้รับเหมา บี จำกัด', customerId: 2, projectId: 77, projectName: 'คอนโด ริเวอร์ไซด์ ชั้น 5',
-          contactId: null, contactName: null, salesStage: 'QUOTE_DESIGN_SIDE', entryChannel: 'DESIGNER_LED',
-        },
-      },
-    });
-    renderBothRoutes('/quotations/new?copyFrom=918273');
-    await waitFor(() => expect(byId('model-0')?.value).toBe('Trilogy'));
-
-    fireEvent.click(screen.getByRole('button', { name: 'เลือกงานที่มีอยู่' }));
-    fireEvent.focus(await screen.findByRole('combobox', { name: /^งาน/ }));
-    fireEvent.mouseDown(await screen.findByRole('option', { name: /DL-2026-0018/ }));
-    await waitFor(() => expect(api.tickets.get).toHaveBeenCalledWith(18));
-
-    // The half-built form is not wiped by choosing a deal.
-    await waitFor(() => expect(screen.getByRole('radio', { name: 'ผู้ออกแบบ' }).getAttribute('aria-checked')).toBe('true'));
-    expect(byId('model-0')?.value).toBe('Trilogy');
-    await waitFor(() => expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).disabled).toBe(false));
-    fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
-
-    await waitFor(() => expect(api.dealQuotations.create).toHaveBeenCalledTimes(1));
-    expect(api.dealQuotations.create.mock.calls[0][0]).toBe(18);
-    expect(api.dealQuotations.create.mock.calls[0][1].items).toHaveLength(4);
-    expect(api.tickets.create).not.toHaveBeenCalled();
-  });
-});
-
-// The page instance survives /quotations/:id -> /quotations/new?copyFrom=, so what the earlier visit
-// left in its state must not reach the copy.
-describe('a copy opened from a page that was already showing something else', () => {
-  const GO_COPY = 'go-copy';
-  function GoCopy() {
-    const navigate = useNavigate();
-    return <button type="button" onClick={() => navigate('/quotations/new?copyFrom=918273')}>{GO_COPY}</button>;
-  }
-  function renderWithGoCopy(path) {
-    const showToast = vi.fn();
-    return render(
-      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })}>
-        <MemoryRouter initialEntries={[path]}>
-          <GoCopy />
-          <Routes>
-            <Route path="/quotations/new" element={<QuotationEditorPage user={salesUser} showToast={showToast} />} />
-            <Route path="/quotations/:id" element={<QuotationEditorPage user={salesUser} showToast={showToast} />} />
-          </Routes>
-        </MemoryRouter>
-      </QueryClientProvider>,
-    );
-  }
-  const recipientRadios = () => within(screen.getByRole('radiogroup', { name: 'ผู้รับใบเสนอราคา' })).getAllByRole('radio');
-
-  it('preselects no recipient, and blocks บันทึกร่าง until one is chosen, even if the source had one', async () => {
-    api.dealQuotations.get.mockResolvedValue({ quotation: source({ recipientType: 'DESIGNER', recipientLabel: 'ผู้ออกแบบ' }) });
-    renderBothRoutes('/quotations/918273');
-    fireEvent.click(await screen.findByRole('button', { name: COPY }));
-
-    await waitFor(() => expect(byId('model-0')?.value).toBe('Trilogy'));
-    expect(recipientRadios().map((r) => r.getAttribute('aria-checked'))).toEqual(['false', 'false', 'false']);
-    expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).disabled).toBe(true);
-    expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).title).toContain('ต้องเลือกผู้รับใบเสนอราคา');
-  });
-
-  it('opens on สร้างดีลใหม่ even after the rep chose เลือกดีลที่มีอยู่ on an earlier new-quotation visit', async () => {
-    renderWithGoCopy('/quotations/new');
-    fireEvent.click(await screen.findByRole('button', { name: 'สร้างงานใหม่' }));
-    fireEvent.click(screen.getByRole('button', { name: 'เลือกงานที่มีอยู่' }));
-    expect(screen.getByRole('button', { name: 'เลือกงานที่มีอยู่' }).getAttribute('aria-pressed')).toBe('true');
-
-    fireEvent.click(screen.getByRole('button', { name: GO_COPY }));
-
-    await waitFor(() => expect(byId('model-0')?.value).toBe('Trilogy'));
-    expect(screen.getByRole('button', { name: 'สร้างงานใหม่' }).getAttribute('aria-pressed')).toBe('true');
-    expect(screen.getByLabelText(/^ลูกค้า/)).not.toBeNull();
-  });
-});

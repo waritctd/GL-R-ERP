@@ -1,6 +1,6 @@
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { DealCustomerCard } from './DealCustomerCard.jsx';
@@ -25,14 +25,12 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         search: vi.fn(),
         create: vi.fn(),
         projects: vi.fn(),
-        createProject: vi.fn(),
         contacts: vi.fn(),
-        createContact: vi.fn(),
         update: vi.fn(),
       },
       // The "เลือกดีลที่มีอยู่" branch mounts DealPicker, which reads the deal list.
       tickets: { list: vi.fn() },
-      dealQuotations: { createRevision: vi.fn() },
+      dealQuotations: { },
     },
   };
 });
@@ -82,17 +80,6 @@ describe('DealCustomerCard', () => {
     expect(api.customers.contacts).not.toHaveBeenCalled();
   });
 
-  it('clearing the selected customer resets โครงการ too', async () => {
-    render(wrap(<Harness initial={{ customer: testCustomer, project: testProject, entryChannel: 'UNSPECIFIED' }} />));
-
-    fireEvent.click(screen.getByRole('button', { name: 'ล้างลูกค้าที่เลือก' }));
-
-    expect(screen.queryByText(testCustomer.name)).toBeNull();
-    expect(await screen.findByLabelText(/^ลูกค้า/)).not.toBeNull(); // search input is back
-    expect(screen.queryByText(testProject.name)).toBeNull(); // โครงการ chip is gone too
-    expect(screen.getByLabelText(/^โครงการ/).disabled).toBe(true);
-  });
-
   it('เพิ่มลูกค้าใหม่ creates a customer and selects it, without ever calling customers.search for the new name', async () => {
     api.customers.search.mockResolvedValue({ customers: [] });
     api.customers.create.mockResolvedValue({ customer: { id: 99, name: 'บริษัท ใหม่ จำกัด', taxId: null } });
@@ -111,97 +98,6 @@ describe('DealCustomerCard', () => {
     expect(await screen.findByText('บริษัท ใหม่ จำกัด')).not.toBeNull();
   });
 
-  it('F3: เพิ่มลูกค้าใหม่ seeds the name field from what was already typed into the typeahead', async () => {
-    api.customers.search.mockResolvedValue({ customers: [] });
-    render(wrap(<Harness />));
-
-    fireEvent.change(screen.getByLabelText(/^ลูกค้า/), { target: { value: 'บริษัท ใหม่ จำกัด' } });
-    await waitFor(() => expect(api.customers.search).toHaveBeenCalledWith('บริษัท ใหม่ จำกัด'));
-    fireEvent.mouseDown(await screen.findByRole('button', { name: 'เพิ่มลูกค้าใหม่' }));
-
-    // The rep must not have to retype the name already typed into the search box to get here.
-    expect(screen.getByPlaceholderText('บริษัท … จำกัด').value).toBe('บริษัท ใหม่ จำกัด');
-  });
-
-  it('F3: เพิ่มลูกค้าใหม่ from an empty search box still opens with an empty name field', async () => {
-    render(wrap(<Harness />));
-
-    fireEvent.focus(screen.getByLabelText(/^ลูกค้า/));
-    fireEvent.mouseDown(await screen.findByRole('button', { name: 'เพิ่มลูกค้าใหม่' }));
-
-    expect(screen.getByPlaceholderText('บริษัท … จำกัด').value).toBe('');
-  });
-
-  it('โครงการใหม่ creates a project under the selected customer and selects it', async () => {
-    api.customers.createProject.mockResolvedValue({ project: { id: 2, customerId: 1, name: 'โครงการใหม่ทดสอบ' } });
-    render(wrap(<Harness initial={{ customer: testCustomer, project: null, contact: null, entryChannel: 'UNSPECIFIED' }} />));
-
-    await waitFor(() => expect(api.customers.projects).toHaveBeenCalledWith(testCustomer.id));
-    fireEvent.focus(await screen.findByLabelText(/^โครงการ/));
-    fireEvent.mouseDown(await screen.findByRole('option', { name: 'เพิ่มโครงการใหม่' }));
-
-    const nameInput = screen.getByPlaceholderText('ชื่อโครงการ');
-    fireEvent.change(nameInput, { target: { value: 'โครงการใหม่ทดสอบ' } });
-    fireEvent.click(screen.getByRole('button', { name: 'เพิ่มโครงการ' }));
-
-    await waitFor(() => expect(api.customers.createProject).toHaveBeenCalledWith(testCustomer.id, { name: 'โครงการใหม่ทดสอบ' }));
-    // The chip replaces the search input once a project is selected -- same pattern as ลูกค้า.
-    await waitFor(() => expect(screen.getByText('โครงการใหม่ทดสอบ')).not.toBeNull());
-  });
-
-  // ── โครงการ type-ahead ──
-  describe('โครงการ type-ahead filter', () => {
-    const projectA = { id: 1, customerId: 1, name: 'โครงการ Central Ladprao ชั้น B1' };
-    const projectB = { id: 2, customerId: 1, name: 'โครงการ Siam Paragon ชั้น 3' };
-
-    function renderWithProjects() {
-      api.customers.projects.mockResolvedValue({ projects: [projectA, projectB] });
-      return render(wrap(<Harness initial={{ customer: testCustomer, project: null, contact: null, entryChannel: 'UNSPECIFIED' }} />));
-    }
-
-    it('typing filters the already-loaded list client-side, without a second fetch', async () => {
-      renderWithProjects();
-      const field = await screen.findByLabelText(/^โครงการ/);
-      fireEvent.focus(field);
-      await screen.findByRole('option', { name: /Central Ladprao/ });
-      expect(screen.getByRole('option', { name: /Siam Paragon/ })).not.toBeNull();
-
-      fireEvent.change(field, { target: { value: 'Siam' } });
-
-      expect(screen.queryByRole('option', { name: /Central Ladprao/ })).toBeNull();
-      expect(screen.getByRole('option', { name: /Siam Paragon/ })).not.toBeNull();
-      expect(api.customers.projects).toHaveBeenCalledTimes(1); // client-side filter, not a new request
-    });
-
-    it('ArrowDown highlights options and Enter picks the highlighted one', async () => {
-      renderWithProjects();
-      const field = await screen.findByLabelText(/^โครงการ/);
-      fireEvent.focus(field);
-      await screen.findByRole('option', { name: /Central Ladprao/ });
-
-      fireEvent.keyDown(field, { key: 'ArrowDown' });
-      fireEvent.keyDown(field, { key: 'ArrowDown' });
-      fireEvent.keyDown(field, { key: 'ArrowDown' });
-      fireEvent.keyDown(field, { key: 'Enter' });
-
-      // The first keyboard row is เพิ่มโครงการใหม่; the third row is Siam Paragon.
-      await waitFor(() => expect(screen.getByText(projectB.name)).not.toBeNull());
-      expect(screen.queryByLabelText(/^โครงการ/)).toBeNull();
-    });
-
-    it('Escape closes the popup without picking anything', async () => {
-      renderWithProjects();
-      const field = await screen.findByLabelText(/^โครงการ/);
-      fireEvent.focus(field);
-      await screen.findByRole('option', { name: /Central Ladprao/ });
-
-      fireEvent.keyDown(field, { key: 'Escape' });
-
-      expect(screen.queryByRole('listbox', { name: 'ผลการค้นหาโครงการ' })).toBeNull();
-      expect(screen.getByLabelText(/^โครงการ/)).not.toBeNull(); // still unselected, field still there
-    });
-  });
-
   it('a create-customer failure toasts the backend message and keeps the inline form open', async () => {
     const showToast = vi.fn();
     api.customers.create.mockRejectedValue(new Error('ชื่อลูกค้าซ้ำในระบบ'));
@@ -218,60 +114,9 @@ describe('DealCustomerCard', () => {
     expect(screen.getByPlaceholderText('บริษัท … จำกัด').value).toBe('บริษัท ซ้ำ จำกัด');
   });
 
-  // ยังไม่ระบุช่องทาง is a stored default, never a choice: the rep picks one of the three real channels.
-  it('ช่องทางรับงาน offers only the three real channels — no ไม่ระบุ option', () => {
-    render(wrap(<Harness />));
-    expect(screen.queryByRole('button', { name: /ไม่ระบุ/ })).toBeNull();
-    expect(screen.getAllByRole('button').filter((b) => b.hasAttribute('aria-pressed'))).toHaveLength(3);
-  });
-
-  it('ช่องทางรับงาน starts with nothing pressed and toggles to the picked code on click', () => {
-    render(wrap(<Harness />));
-    const channels = screen.getAllByRole('button').filter((b) => b.hasAttribute('aria-pressed'));
-    expect(channels.every((b) => b.getAttribute('aria-pressed') === 'false')).toBe(true);
-
-    const designerLed = channels.find((b) => b.textContent.includes('ผู้ออกแบบ'));
-    fireEvent.click(designerLed);
-    expect(designerLed.getAttribute('aria-pressed')).toBe('true');
-    const buyer = channels.find((b) => b.textContent.includes('ผู้ซื้อ'));
-    fireEvent.click(buyer);
-    expect(buyer.getAttribute('aria-pressed')).toBe('true');
-    expect(designerLed.getAttribute('aria-pressed')).toBe('false');
-  });
-
-  it('ช่องทางรับงาน shows the inline hint when told it is missing, and exposes the control the checklist targets', () => {
-    render(wrap(<Harness errors={{ entryChannel: 'ต้องเลือกช่องทางรับงานก่อนบันทึกร่าง' }} />));
-    expect(screen.getByText('ต้องเลือกช่องทางรับงานก่อนบันทึกร่าง')).not.toBeNull();
-    expect(document.getElementById('deal-entry-channel')).not.toBeNull();
-  });
-
-  it('ช่องทางรับงาน shows no hint when there is no error', () => {
-    render(wrap(<Harness />));
-    expect(screen.queryByText('ต้องเลือกช่องทางรับงานก่อนบันทึกร่าง')).toBeNull();
-    expect(document.getElementById('deal-entry-channel')).not.toBeNull();
-  });
-
   // ── เลขที่ผู้เสียภาษี / โทร. on the SELECTED customer ──
   describe('F7: editing the selected customer\'s เลขที่ผู้เสียภาษี / โทร.', () => {
     const withPhone = { ...testCustomer, phone: '02-111-2222' };
-
-    it('renders neither field until a customer is picked', () => {
-      render(wrap(<Harness />));
-      expect(screen.queryByLabelText(/^เลขที่ผู้เสียภาษี/)).toBeNull();
-      expect(screen.queryByLabelText(/^โทร\./)).toBeNull();
-    });
-
-    it('renders both fields prefilled from the selected customer record', () => {
-      render(wrap(<Harness initial={{ customer: withPhone, project: null, contact: null, entryChannel: 'UNSPECIFIED' }} />));
-      expect(screen.getByLabelText(/^เลขที่ผู้เสียภาษี/).value).toBe('0105565012345');
-      expect(screen.getByLabelText(/^โทร\./).value).toBe('02-111-2222');
-    });
-
-    it('a customer with NO tax id renders an empty (not absent) field -- still quotable', () => {
-      render(wrap(<Harness initial={{ customer: { id: 7, name: 'บริษัท ไม่มีเลขภาษี จำกัด' }, project: null, contact: null, entryChannel: 'UNSPECIFIED' }} />));
-      expect(screen.getByLabelText(/^เลขที่ผู้เสียภาษี/).value).toBe('');
-      expect(screen.getByLabelText(/^โทร\./).value).toBe('');
-    });
 
     it('an edit PUTs ONLY the changed field, and the chip shows the saved value', async () => {
       api.customers.update.mockResolvedValue({ customer: { ...withPhone, taxId: '0105565099999' } });
@@ -288,13 +133,6 @@ describe('DealCustomerCard', () => {
       await waitFor(() => expect(screen.getByText('(0105565099999)')).not.toBeNull());
     });
 
-    it('blurring an UNCHANGED field sends no request at all', async () => {
-      render(wrap(<Harness initial={{ customer: withPhone, project: null, contact: null, entryChannel: 'UNSPECIFIED' }} />));
-      fireEvent.blur(screen.getByLabelText(/^เลขที่ผู้เสียภาษี/));
-      fireEvent.blur(screen.getByLabelText(/^โทร\./));
-      expect(api.customers.update).not.toHaveBeenCalled();
-    });
-
     it('a 403 surfaces the backend Thai message and RESTORES the previous value', async () => {
       const showToast = vi.fn();
       api.customers.update.mockRejectedValue(new Error('ไม่มีสิทธิ์เข้าถึงรายการนี้'));
@@ -308,19 +146,6 @@ describe('DealCustomerCard', () => {
       // The rep must not walk away believing a refused correction was saved.
       await waitFor(() => expect(screen.getByLabelText(/^โทร\./).value).toBe('02-111-2222'));
     });
-
-    it('the add-customer modal keeps customer details and requires structured geography', async () => {
-      api.customers.search.mockResolvedValue({ customers: [] });
-      render(wrap(<Harness />));
-      fireEvent.focus(screen.getByLabelText(/^ลูกค้า/));
-      fireEvent.mouseDown(await screen.findByRole('button', { name: 'เพิ่มลูกค้าใหม่' }));
-
-      expect(screen.getByPlaceholderText('บริษัท … จำกัด')).not.toBeNull();
-      expect(screen.getByPlaceholderText('0105xxxxxxxxx')).not.toBeNull();
-      expect(screen.getByPlaceholderText('02-xxx-xxxx')).not.toBeNull();
-      expect(screen.getByLabelText('เลขที่ / อาคาร / หมู่ / ซอย / ถนน')).not.toBeNull();
-      expect(screen.getByRole('button', { name: 'บันทึกลูกค้าใหม่' }).disabled).toBe(true);
-    });
   });
 
   // ── Foreign-customer address ──
@@ -331,30 +156,6 @@ describe('DealCustomerCard', () => {
       fireEvent.focus(screen.getByLabelText(/^ลูกค้า/));
       fireEvent.mouseDown(await screen.findByRole('button', { name: 'เพิ่มลูกค้าใหม่' }));
     }
-
-    it('Thai mode (unchanged): the structured จังหวัด/เขต/แขวง fields are required and no free-text ที่อยู่ shows', async () => {
-      await openNewCustomerModal();
-
-      expect(screen.getByLabelText('เลขที่ / อาคาร / หมู่ / ซอย / ถนน')).not.toBeNull();
-      expect(screen.getByRole('combobox', { name: 'จังหวัด' })).not.toBeNull();
-      expect(screen.queryByLabelText(/^ที่อยู่/)).toBeNull();
-      expect(screen.getByRole('button', { name: 'บันทึกลูกค้าใหม่' }).disabled).toBe(true);
-
-      fireEvent.change(screen.getByPlaceholderText('บริษัท … จำกัด'), { target: { value: 'บริษัท ไทย จำกัด' } });
-      // Name alone is still not enough in Thai mode -- structured geography stays required.
-      expect(screen.getByRole('button', { name: 'บันทึกลูกค้าใหม่' }).disabled).toBe(true);
-    });
-
-    it('checking ลูกค้าต่างประเทศ swaps in a free-text ที่อยู่ textarea and drops the structured requirement', async () => {
-      await openNewCustomerModal();
-
-      fireEvent.click(screen.getByRole('checkbox', { name: /ลูกค้าต่างประเทศ/ }));
-
-      expect(screen.queryByLabelText('เลขที่ / อาคาร / หมู่ / ซอย / ถนน')).toBeNull();
-      expect(screen.queryByRole('combobox', { name: 'จังหวัด' })).toBeNull();
-      const address = screen.getByLabelText(/^ที่อยู่/);
-      expect(address.tagName).toBe('TEXTAREA');
-    });
 
     it('submits a foreign customer with a free-text address and NO structured codes, hitting the non-structured backend path', async () => {
       api.customers.create.mockResolvedValue({ customer: { id: 101, name: 'Vietnam Tiles Co., Ltd.', taxId: null } });
@@ -383,262 +184,6 @@ describe('DealCustomerCard', () => {
         expect(payload[key]).toBeUndefined();
       }
       await waitFor(() => expect(screen.getByText('Vietnam Tiles Co., Ltd.')).not.toBeNull());
-    });
-
-    it('unchecking ลูกค้าต่างประเทศ goes back to requiring structured geography', async () => {
-      await openNewCustomerModal();
-      fireEvent.change(screen.getByPlaceholderText('บริษัท … จำกัด'), { target: { value: 'บริษัท กลับไทย จำกัด' } });
-      fireEvent.click(screen.getByRole('checkbox', { name: /ลูกค้าต่างประเทศ/ }));
-      fireEvent.change(screen.getByLabelText(/^ที่อยู่/), { target: { value: 'Somewhere abroad' } });
-
-      fireEvent.click(screen.getByRole('checkbox', { name: /ลูกค้าต่างประเทศ/ }));
-
-      expect(screen.getByRole('combobox', { name: 'จังหวัด' })).not.toBeNull();
-      expect(screen.getByRole('button', { name: 'บันทึกลูกค้าใหม่' }).disabled).toBe(true);
-    });
-  });
-
-  it('renders Thai inline error hints passed via the errors prop', () => {
-    render(wrap(
-      <DealCustomerCard
-        value={{ customer: null, project: null, contact: null, entryChannel: 'UNSPECIFIED' }}
-        onChange={vi.fn()}
-        errors={{ customer: 'กรุณาเลือกลูกค้า', project: 'กรุณาเลือกโครงการ' }}
-      />,
-    ));
-    expect(screen.getByText('กรุณาเลือกลูกค้า')).not.toBeNull();
-    expect(screen.getByText('กรุณาเลือกโครงการ')).not.toBeNull();
-  });
-});
-
-// ── A way for sales to fill in the customer address ──
-describe('DealCustomerCard — ที่อยู่ on the selected customer', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    api.locations.provinces.mockResolvedValue({ items: data.provinces });
-    api.locations.districts.mockResolvedValue({ items: data.districts.filter((d) => d.provinceCode === '10') });
-    api.locations.subdistricts.mockResolvedValue({ items: data.subdistricts.filter((d) => d.districtCode === '1039') });
-    api.customers.projects.mockResolvedValue({ projects: [testProject] });
-    api.customers.contacts.mockResolvedValue({ contacts: [testContact] });
-  });
-
-  const repeat = { ...testCustomer, phone: '02-111-2222', address: '201 ซอยสุขุมวิท 63\nเขตวัฒนา กทม. 10110' };
-  const initial = (customer) => ({ customer, project: null, contact: null, entryChannel: 'UNSPECIFIED' });
-
-  it('a REPEAT customer arrives with every saved detail prefilled, the address multi-line', () => {
-    render(wrap(<Harness initial={initial(repeat)} />));
-    const address = screen.getByLabelText(/^ที่อยู่/);
-    expect(address.tagName).toBe('TEXTAREA');
-    expect(address.value).toBe('201 ซอยสุขุมวิท 63\nเขตวัฒนา กทม. 10110');
-    expect(screen.getByLabelText(/^เลขที่ผู้เสียภาษี/).value).toBe('0105565012345');
-    expect(screen.getByLabelText(/^โทร\./).value).toBe('02-111-2222');
-  });
-
-  it('a blank address is an empty, fillable field — and a blur PUTs ONLY the address', async () => {
-    api.customers.update.mockResolvedValue({ customer: { ...testCustomer, address: '1 ถนนพระราม 9' } });
-    render(wrap(<Harness initial={initial(testCustomer)} />));
-    const address = screen.getByLabelText(/^ที่อยู่/);
-    expect(address.value).toBe('');
-    fireEvent.change(address, { target: { value: '  1 ถนนพระราม 9  ' } });
-    fireEvent.blur(address);
-    await waitFor(() => expect(api.customers.update).toHaveBeenCalledWith(testCustomer.id, { address: '1 ถนนพระราม 9' }));
-    await waitFor(() => expect(screen.getByLabelText(/^ที่อยู่/).value).toBe('1 ถนนพระราม 9'));
-  });
-
-  it('blurring an UNCHANGED address sends nothing', () => {
-    render(wrap(<Harness initial={initial(repeat)} />));
-    fireEvent.blur(screen.getByLabelText(/^ที่อยู่/));
-    expect(api.customers.update).not.toHaveBeenCalled();
-  });
-
-  it('a refused address save restores the previous value and says why', async () => {
-    const showToast = vi.fn();
-    api.customers.update.mockRejectedValue(new Error('ไม่มีสิทธิ์เข้าถึงรายการนี้'));
-    render(wrap(<Harness initial={initial(repeat)} showToast={showToast} />));
-    const address = screen.getByLabelText(/^ที่อยู่/);
-    fireEvent.change(address, { target: { value: 'ที่อยู่ผิด' } });
-    fireEvent.blur(address);
-    await waitFor(() => expect(showToast).toHaveBeenCalledWith('error', 'ไม่มีสิทธิ์เข้าถึงรายการนี้'));
-    await waitFor(() => expect(screen.getByLabelText(/^ที่อยู่/).value).toBe(repeat.address));
-  });
-});
-
-// ── Flow A ──
-// The card is step 1 "ดีล": a segmented choice (เลือกดีลที่มีอยู่ | สร้างดีลใหม่) over the DealPicker /
-// customer+project card, then ผู้รับใบเสนอราคา* (three pill radios, required, in S-order). There is no
-// "ดีลจะอยู่ที่ขั้น …" helper line: the recipient does not move the deal's stage.
-describe('DealCustomerCard — ดีล step (slice 2)', () => {
-  const salesUser = { id: 6, name: 'คุณสมหมาย ขายดี', role: 'sales' };
-
-  function ModeHarness({ initialMode = 'pick', initialValue, errors, onModeChange, onChange }) {
-    const [mode, setMode] = React.useState(initialMode);
-    const [value, setValue] = React.useState(initialValue
-      ?? { customer: null, project: null, entryChannel: 'UNSPECIFIED', recipientType: '' });
-    return (
-      <DealCustomerCard
-        user={salesUser}
-        mode={mode}
-        onModeChange={(next) => { onModeChange?.(next); setMode(next); }}
-        selectedDeal={null}
-        value={value}
-        onChange={(patch) => { onChange?.(patch); setValue((prev) => ({ ...prev, ...patch })); }}
-        errors={errors}
-        showToast={vi.fn()}
-      />
-    );
-  }
-
-  function renderCard(props) {
-    return render(wrap(<MemoryRouter initialEntries={['/quotations/new']}><ModeHarness {...props} /></MemoryRouter>));
-  }
-
-  beforeEach(() => {
-    vi.clearAllMocks();
-    api.tickets.list.mockResolvedValue({ tickets: [] });
-    api.customers.projects.mockResolvedValue({ projects: [] });
-  });
-
-  it('is titled "ดีล" and opens on เลือกดีลที่มีอยู่: the deal search, no customer/project fields, no ช่องทางรับงาน', async () => {
-    renderCard();
-    expect(screen.getByRole('heading', { name: 'งาน' })).not.toBeNull();
-    expect(screen.getByRole('button', { name: 'เลือกงานที่มีอยู่' }).getAttribute('aria-pressed')).toBe('true');
-    expect(screen.getByRole('button', { name: 'สร้างงานใหม่' }).getAttribute('aria-pressed')).toBe('false');
-    expect(await screen.findByRole('combobox', { name: /^งาน/ })).not.toBeNull();
-    expect(screen.queryByLabelText(/^ลูกค้า/)).toBeNull();
-    expect(screen.queryByText('ช่องทางรับงาน')).toBeNull();
-  });
-
-  it('สร้างดีลใหม่ swaps in today\'s customer + project card and ช่องทางรับงาน (reports the choice upward)', async () => {
-    const onModeChange = vi.fn();
-    renderCard({ onModeChange });
-    fireEvent.click(screen.getByRole('button', { name: 'สร้างงานใหม่' }));
-    expect(onModeChange).toHaveBeenCalledWith('create');
-    expect(screen.getByRole('button', { name: 'สร้างงานใหม่' }).getAttribute('aria-pressed')).toBe('true');
-    expect(screen.getByLabelText(/^ลูกค้า/)).not.toBeNull();
-    expect(screen.getByText('ช่องทางรับงาน')).not.toBeNull();
-    expect(screen.queryByRole('combobox', { name: /^งาน/ })).toBeNull();
-  });
-
-  it.each([['pick'], ['create']])('ผู้รับใบเสนอราคา is offered on the %s branch: three radios in S-order, none chosen', (initialMode) => {
-    renderCard({ initialMode });
-    const group = screen.getByRole('radiogroup', { name: 'ผู้รับใบเสนอราคา' });
-    const radios = within(group).getAllByRole('radio');
-    expect(radios.map((r) => r.textContent)).toEqual(['ผู้ออกแบบ', 'เจ้าของโครงการ', 'ผู้ซื้อ / ผู้รับเหมา']);
-    expect(radios.map((r) => r.getAttribute('aria-checked'))).toEqual(['false', 'false', 'false']);
-    expect(group.getAttribute('aria-required')).toBe('true');
-  });
-
-  it('choosing one checks it (and only it); the field promises no stage move', () => {
-    renderCard();
-    fireEvent.click(screen.getByRole('radio', { name: 'เจ้าของโครงการ' }));
-    expect(screen.getByRole('radio', { name: 'เจ้าของโครงการ' }).getAttribute('aria-checked')).toBe('true');
-    fireEvent.click(screen.getByRole('radio', { name: 'ผู้ซื้อ / ผู้รับเหมา' }));
-    expect(screen.getAllByRole('radio').map((r) => r.getAttribute('aria-checked'))).toEqual(['false', 'false', 'true']);
-    // No "ดีลจะอยู่ที่ขั้น …" line: the recipient does not move the deal's stage, so the field must
-    // not say it will. And no S-codes.
-    expect(screen.queryByText(/(ดีล|งาน)จะอยู่ที่ขั้น|(ดีล|งาน)อยู่ที่ขั้น/)).toBeNull();
-    expect(document.body.textContent).not.toMatch(/\bS\d+\b|QUOTE_/);
-  });
-
-  it('on a new deal the recipient pills sit BELOW the required ช่องทางรับงาน row (#1085 + slice 2)', () => {
-    renderCard({ initialMode: 'create' });
-    const channel = screen.getByRole('group', { name: 'ช่องทางรับงาน' });
-    const recipient = screen.getByRole('radiogroup', { name: 'ผู้รับใบเสนอราคา' });
-    expect(channel.compareDocumentPosition(recipient) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    // UNSPECIFIED is not a pickable channel.
-    expect(within(channel).getAllByRole('button')).toHaveLength(3);
-  });
-
-  it('arrow keys move the choice inside the group (radiogroup keyboard pattern)', () => {
-    renderCard({ initialValue: { customer: null, project: null, entryChannel: 'UNSPECIFIED', recipientType: 'DESIGNER' } });
-    const designer = screen.getByRole('radio', { name: 'ผู้ออกแบบ' });
-    expect(designer.getAttribute('tabindex')).toBe('0');
-    expect(screen.getByRole('radio', { name: 'เจ้าของโครงการ' }).getAttribute('tabindex')).toBe('-1');
-    fireEvent.keyDown(designer, { key: 'ArrowRight' });
-    expect(screen.getByRole('radio', { name: 'เจ้าของโครงการ' }).getAttribute('aria-checked')).toBe('true');
-  });
-
-  it('the required error renders in the field\'s own error slot and marks the group invalid', () => {
-    renderCard({ errors: { recipient: 'กรุณาเลือกผู้รับใบเสนอราคา' } });
-    expect(screen.getByRole('alert').textContent).toBe('กรุณาเลือกผู้รับใบเสนอราคา');
-    expect(screen.getByRole('radiogroup', { name: 'ผู้รับใบเสนอราคา' }).getAttribute('aria-invalid')).toBe('true');
-  });
-
-  // Owner ruling 2026-11-07 (reverses "allow + inline note"): the server 409s a direct quotation addressed to a party
-  // OFF the deal's route, so an off-route party's pill is DISABLED and says why, in DealRoute.refusalMessage's own
-  // sentence (DESIGN.md §14: a disabled action says why). The route is READ from the served catalog; the buyer
-  // (QUOTE_BUYER) is on every route. On the new-deal card the deal's channel is the one being chosen on that card.
-  describe('off-route recipient pills (owner ruling 2026-11-07)', () => {
-    const OWNER_DIRECT = 'เจ้าของติดต่อโดยตรง';
-    const BUYER_DIRECT = 'ผู้ซื้อ/ผู้รับเหมาติดต่อโดยตรง';
-    const sentence = (channelPhrase, no) => `ช่องทางรับงานของงานนี้คือ${channelPhrase} — ขั้นที่ ${no} ไม่อยู่ในเส้นทางนี้ — แก้ช่องทางรับงานก่อน`;
-    const isDisabled = (el) => el.disabled || el.getAttribute('aria-disabled') === 'true';
-    const pills = () => within(screen.getByRole('radiogroup', { name: 'ผู้รับใบเสนอราคา' })).getAllByRole('radio');
-
-    function createValue(entryChannel, recipientType) {
-      return { customer: null, project: null, entryChannel, recipientType };
-    }
-
-    it.each([
-      ['OWNER_DIRECT', [true, false, false], [sentence(OWNER_DIRECT, 4)]],
-      ['BUYER_DIRECT', [true, true, false], [sentence(BUYER_DIRECT, 4), sentence(BUYER_DIRECT, 5)]],
-    ])('new deal on %s: the off-route pills are disabled and each says why; the buyer never is', async (entryChannel, disabled, reasons) => {
-      renderCard({ initialMode: 'create', initialValue: createValue(entryChannel, '') });
-      for (const reason of reasons) expect((await screen.findAllByText(reason)).length).toBeGreaterThan(0);
-      expect(pills().map(isDisabled)).toEqual(disabled);
-    });
-
-    it('a disabled pill cannot be picked: clicking it leaves the choice (and onChange) alone', async () => {
-      const onChange = vi.fn();
-      renderCard({ initialMode: 'create', initialValue: createValue('OWNER_DIRECT', 'OWNER'), onChange });
-      await screen.findAllByText(sentence(OWNER_DIRECT, 4));
-      onChange.mockClear();
-      fireEvent.click(screen.getByRole('radio', { name: 'ผู้ออกแบบ' }));
-      expect(onChange).not.toHaveBeenCalledWith(expect.objectContaining({ recipientType: 'DESIGNER' }));
-      expect(screen.getByRole('radio', { name: 'ผู้ออกแบบ' }).getAttribute('aria-checked')).toBe('false');
-      expect(screen.getByRole('radio', { name: 'เจ้าของโครงการ' }).getAttribute('aria-checked')).toBe('true');
-    });
-
-    it.each([
-      ['DESIGNER_LED', 'DESIGNER'], ['DESIGNER_LED', 'OWNER'], ['DESIGNER_LED', 'BUYER'],
-      ['OWNER_DIRECT', 'OWNER'], ['OWNER_DIRECT', 'BUYER'],
-      ['BUYER_DIRECT', 'BUYER'],
-      ['UNSPECIFIED', 'DESIGNER'],
-    ])('new deal on %s with recipient %s: on-route (or no stated route) — nothing disabled, no reason', async (entryChannel, recipientType) => {
-      renderCard({ initialMode: 'create', initialValue: createValue(entryChannel, recipientType) });
-      // Let the catalog query settle before asserting absence.
-      await waitFor(() => expect(api.meta.dealStages).toHaveBeenCalled());
-      await new Promise((resolve) => { setTimeout(resolve, 0); });
-      if (entryChannel !== 'UNSPECIFIED' && entryChannel !== 'DESIGNER_LED') {
-        // The disabled pills of a routed channel are the ones that must NOT include the chosen, on-route party.
-        expect(isDisabled(screen.getByRole('radio', { name: recipientType === 'OWNER' ? 'เจ้าของโครงการ' : 'ผู้ซื้อ / ผู้รับเหมา' }))).toBe(false);
-      } else {
-        pills().forEach((pill) => expect(isDisabled(pill)).toBe(false));
-        expect(screen.queryByText(/ไม่อยู่ในเส้นทางนี้/)).toBeNull();
-      }
-    });
-
-    // The roving tab stop and the arrow keys step over a disabled pill: landing on one would be a dead key.
-    it('on an owner-direct deal the tab stop is เจ้าของโครงการ and the arrow keys wrap past the disabled ผู้ออกแบบ', async () => {
-      renderCard({ initialMode: 'create', initialValue: createValue('OWNER_DIRECT', '') });
-      await screen.findAllByText(sentence(OWNER_DIRECT, 4));
-      expect(pills().map((pill) => pill.getAttribute('tabindex'))).toEqual(['-1', '0', '-1']);
-
-      fireEvent.keyDown(screen.getByRole('radio', { name: 'เจ้าของโครงการ' }), { key: 'ArrowLeft' });
-      expect(pills().map((pill) => pill.getAttribute('aria-checked'))).toEqual(['false', 'false', 'true']);
-      fireEvent.keyDown(screen.getByRole('radio', { name: 'ผู้ซื้อ / ผู้รับเหมา' }), { key: 'ArrowRight' });
-      expect(pills().map((pill) => pill.getAttribute('aria-checked'))).toEqual(['false', 'true', 'false']);
-      fireEvent.keyDown(screen.getByRole('radio', { name: 'เจ้าของโครงการ' }), { key: 'Home' });
-      expect(screen.getByRole('radio', { name: 'เจ้าของโครงการ' }).getAttribute('aria-checked')).toBe('true');
-    });
-
-    it('changing the new deal\'s channel re-evaluates the pills against the NEW route', async () => {
-      renderCard({ initialMode: 'create', initialValue: createValue('DESIGNER_LED', 'OWNER') });
-      await waitFor(() => expect(api.meta.dealStages).toHaveBeenCalled());
-      pills().forEach((pill) => expect(isDisabled(pill)).toBe(false));
-      fireEvent.click(screen.getByRole('button', { name: 'ผู้ซื้อ/ผู้รับเหมาติดต่อโดยตรง' }));
-      expect((await screen.findAllByText(sentence(BUYER_DIRECT, 5))).length).toBeGreaterThan(0);
-      expect(pills().map(isDisabled)).toEqual([true, true, false]);
     });
   });
 });

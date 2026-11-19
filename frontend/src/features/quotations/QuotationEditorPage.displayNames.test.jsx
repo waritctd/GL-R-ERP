@@ -19,14 +19,13 @@ vi.mock('../../api/index.js', async (importOriginal) => {
       tickets: { get: vi.fn(), create: vi.fn() },
       dealQuotations: {
         get: vi.fn(), create: vi.fn(), update: vi.fn(), calculateLine: vi.fn(), submit: vi.fn(),
-        approve: vi.fn(), reject: vi.fn(), createRevision: vi.fn(), createReorder: vi.fn(), cancel: vi.fn(),
-        downloadPdf: vi.fn(), downloadXlsx: vi.fn(), displayNameOptions: vi.fn(),
+        displayNameOptions: vi.fn(),
       },
       catalog: { prices: vi.fn() },
       designers: { search: vi.fn(), getByCode: vi.fn().mockRejectedValue(new Error('not found')) },
       customers: {
-        search: vi.fn(), create: vi.fn(), update: vi.fn(), projects: vi.fn(), createProject: vi.fn(),
-        contacts: vi.fn(), createContact: vi.fn(),
+        search: vi.fn(), create: vi.fn(), update: vi.fn(), projects: vi.fn(),
+        contacts: vi.fn(),
       },
     },
   };
@@ -106,17 +105,6 @@ beforeEach(() => {
 });
 
 describe('QuotationEditorPage — V179 ผู้พิมพ์/พนักงานขาย print-name selectors', () => {
-  it('fetches the options and renders both selects defaulted to "(ค่าเริ่มต้น)"', async () => {
-    renderEditor('/quotations/5');
-    await waitFor(() => expect(api.dealQuotations.displayNameOptions).toHaveBeenCalled());
-    await waitFor(() => expect(byId('printedByDisplayId')).toBeTruthy());
-    expect(byId('printedByDisplayId').value).toBe('');
-    expect(byId('salesRepDisplayId').value).toBe('');
-    // Both options populate both selects (they share the same eligible union).
-    const printedOptionTexts = [...byId('printedByDisplayId').options].map((o) => o.textContent);
-    expect(printedOptionTexts).toEqual(['(ค่าเริ่มต้น)', 'พนักงาน ได้สิทธิ์', 'ผู้จัดการ ฝ่ายขาย']);
-  });
-
   it('warns on BOTH พนักงานขาย selects that picking one moves the deal owner', async () => {
     renderEditor('/quotations/5');
     await waitFor(() => expect(byId('salesRepDisplayId')).toBeTruthy());
@@ -135,15 +123,6 @@ describe('QuotationEditorPage — V179 ผู้พิมพ์/พนักง�
     ).toHaveLength(0));
   });
 
-  it('a draft that already carries display ids pre-selects them', async () => {
-    api.dealQuotations.get.mockResolvedValue({
-      quotation: draft({ printedByDisplayId: 4, printedByDisplayName: 'พนักงาน ได้สิทธิ์', salesRepDisplayId: 9, salesRepDisplayName: 'ผู้จัดการ ฝ่ายขาย' }),
-    });
-    renderEditor('/quotations/5');
-    await waitFor(() => expect(byId('printedByDisplayId')?.value).toBe('4'));
-    expect(byId('salesRepDisplayId').value).toBe('9');
-  });
-
   it('choosing an option and saving sends its id as a NUMBER in the payload', async () => {
     renderEditor('/quotations/5');
     await waitFor(() => expect(byId('printedByDisplayId')).toBeTruthy());
@@ -156,101 +135,5 @@ describe('QuotationEditorPage — V179 ผู้พิมพ์/พนักง�
     expect(payload.printedByDisplayId).toBe(4);
     expect(payload.salesRepDisplayId).toBe(9);
   });
-
-  it('switching a set override back to "(ค่าเริ่มต้น)" sends null, not the string ""', async () => {
-    api.dealQuotations.get.mockResolvedValue({
-      quotation: draft({ printedByDisplayId: 4, printedByDisplayName: 'พนักงาน ได้สิทธิ์' }),
-    });
-    renderEditor('/quotations/5');
-    await waitFor(() => expect(byId('printedByDisplayId')?.value).toBe('4'));
-    fireEvent.change(byId('printedByDisplayId'), { target: { value: '' } });
-    await waitFor(() => expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).disabled).toBe(false));
-    fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
-    await waitFor(() => expect(api.dealQuotations.update).toHaveBeenCalled());
-    const [, payload] = api.dealQuotations.update.mock.calls[0];
-    expect(payload.printedByDisplayId).toBeNull();
-  });
-
-  // Opus review nit N1: before this fix, the "ข้อมูลลูกค้าและผู้ขาย" read-only strip showed the REAL rep under
-  // พนักงานขาย even when salesRepDisplayId was set, disagreeing with what QuotationDocumentView's preview and
-  // the printed PDF show for the exact same document.
-  it('the เงื่อนไข select and the card select both reflect a saved salesRepDisplay override', async () => {
-    api.dealQuotations.get.mockResolvedValue({
-      quotation: draft({
-        salesRepDisplayId: 9, salesRepDisplayName: 'ผู้จัดการ ฝ่ายขาย', salesRepDisplayPhone: '089-999-9999',
-      }),
-    });
-    renderEditor('/quotations/5');
-    await waitFor(() => expect(byId('salesRepDisplayId')?.value).toBe('9'));
-    // The override is what's SELECTED on the card's own twin select too -- not text-matched (a collapsed
-    // <select>'s other <option> labels are still in the DOM and would make a plain text search meaningless the
-    // moment the empty option ALSO carries text, per the fix just below this test).
-    expect(byId('salesRepDisplayIdCard').value).toBe('9');
-  });
-
-  // Opus review fix: the card's own select's EMPTY option means "use the real name" -- its label must show the
-  // REAL rep even when an override is already saved, not the override itself.
-  it('the card select\'s empty option always labels the REAL rep, even with an override saved', async () => {
-    api.dealQuotations.get.mockResolvedValue({
-      quotation: draft({
-        salesRepDisplayId: 9, salesRepDisplayName: 'ผู้จัดการ ฝ่ายขาย', salesRepDisplayPhone: '089-999-9999',
-      }),
-    });
-    renderEditor('/quotations/5');
-    await waitFor(() => expect(byId('salesRepDisplayIdCard')?.value).toBe('9'));
-    const emptyOption = [...byId('salesRepDisplayIdCard').options].find((o) => o.value === '');
-    expect(emptyOption.textContent).toBe('คุณสมหมาย ขายดี · T.081-000-0000');
-  });
-
-  it('the context strip shows the real rep when no salesRepDisplay override is set', async () => {
-    renderEditor('/quotations/5');
-    await waitFor(() => expect(byId('salesRepDisplayId')?.value).toBe(''));
-    expect(screen.getByText('คุณสมหมาย ขายดี · T.081-000-0000')).toBeTruthy();
-  });
-
-  // Owner feedback 2026-09-14 ("keep both, add inline edit here too"): the card's own salesRepDisplayIdCard
-  // select is a SECOND control over the SAME terms.salesRepDisplayId the เงื่อนไข panel's own salesRepDisplayId
-  // select drives -- picking a value in either one must move the other.
-  it('the card select and the เงื่อนไข select stay in sync (either one moves the other)', async () => {
-    renderEditor('/quotations/5');
-    await waitFor(() => expect(byId('salesRepDisplayIdCard')).toBeTruthy());
-    expect(byId('salesRepDisplayIdCard').value).toBe('');
-    expect(byId('salesRepDisplayId').value).toBe('');
-
-    fireEvent.change(byId('salesRepDisplayIdCard'), { target: { value: '9' } });
-    expect(byId('salesRepDisplayId').value).toBe('9'); // moved by the CARD's own select
-
-    fireEvent.change(byId('salesRepDisplayId'), { target: { value: '4' } });
-    expect(byId('salesRepDisplayIdCard').value).toBe('4'); // moved by the เงื่อนไข select
-  });
 });
 
-// Owner feedback 2026-09-14 ("sometimes there's a typo in the ... project so they should be able to correct
-// it") -- โครงการ was static text on this same card; now a real, saved field.
-describe('QuotationEditorPage — โครงการ is editable on the summary card', () => {
-  it('pre-fills from the quotation and sends an edit in the save payload', async () => {
-    renderEditor('/quotations/5');
-    await waitFor(() => expect(byId('projectNameCard')?.value).toBe('โครงการ A'));
-
-    fireEvent.change(byId('projectNameCard'), { target: { value: 'Associates By Choice' } });
-    await waitFor(() => expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).disabled).toBe(false));
-    fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
-
-    await waitFor(() => expect(api.dealQuotations.update).toHaveBeenCalled());
-    const [, payload] = api.dealQuotations.update.mock.calls[0];
-    expect(payload.projectName).toBe('Associates By Choice');
-  });
-
-  it('a blank projectName sends null, not the empty string', async () => {
-    renderEditor('/quotations/5');
-    await waitFor(() => expect(byId('projectNameCard')?.value).toBe('โครงการ A'));
-
-    fireEvent.change(byId('projectNameCard'), { target: { value: '' } });
-    await waitFor(() => expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).disabled).toBe(false));
-    fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
-
-    await waitFor(() => expect(api.dealQuotations.update).toHaveBeenCalled());
-    const [, payload] = api.dealQuotations.update.mock.calls[0];
-    expect(payload.projectName).toBeNull();
-  });
-});

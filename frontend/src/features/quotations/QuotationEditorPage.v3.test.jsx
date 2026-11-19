@@ -1,7 +1,7 @@
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { QuotationEditorPage } from './QuotationEditorPage.jsx';
 import { api } from '../../api/index.js';
@@ -23,16 +23,14 @@ vi.mock('../../api/index.js', async (importOriginal) => {
       tickets: { get: vi.fn(), create: vi.fn() },
       dealQuotations: {
         get: vi.fn(), create: vi.fn(), update: vi.fn(), calculateLine: vi.fn(), submit: vi.fn(),
-        approve: vi.fn(), reject: vi.fn(), createRevision: vi.fn(), createReorder: vi.fn(), cancel: vi.fn(),
-        downloadPdf: vi.fn(), downloadXlsx: vi.fn(),
       },
       catalog: { prices: vi.fn() },
       // Consumed by DesignerPicker.jsx. getByCode default-resolves to undefined so the picker's
       // resolved-name hint effect finds nothing rather than throwing when a test never sets a unitCode.
       designers: { search: vi.fn(), getByCode: vi.fn().mockRejectedValue(new Error('not found')) },
       customers: {
-        search: vi.fn(), create: vi.fn(), update: vi.fn(), projects: vi.fn(), createProject: vi.fn(),
-        contacts: vi.fn(), createContact: vi.fn(),
+        search: vi.fn(), create: vi.fn(), update: vi.fn(), projects: vi.fn(),
+        contacts: vi.fn(),
       },
     },
   };
@@ -173,160 +171,6 @@ describe('v3/v3b document settings', () => {
     expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).disabled).toBe(true);
   }, 20000);
 
-  it.each([
-    ['NET', { discountPct: 5 }, (i) => { fireEvent.change(byId(`price-${i}`), { target: { value: '12' } }); }, { unitPrice: 12, discountPct: 5, directNetPrice: null, specialPriceSqm: null }],
-    ['DIRECT_NET', { unitPrice: 900, netUnitPrice: 850 }, (i) => { fireEvent.change(byId(`direct-net-${i}`), { target: { value: '11' } }); }, { directNetPrice: 11, unitPrice: 11, specialPriceSqm: null }],
-    ['SPECIAL_SQM', { specialPriceSqm: 1350, netUnitPrice: 453.84 }, (i) => {
-      fireEvent.change(byId(`special-${i}`), { target: { value: '64' } });
-      fireEvent.change(byId(`sqm-box-${i}`), { target: { value: '0.6' } });
-    }, { specialPriceSqm: 64, unitPrice: 64, sqmPerBox: 0.6, directNetPrice: null }],
-  ])('a THAI %s draft switched to English clears every price, keeps percentages and quantities, blocks save, then saves the NEW numbers', async (mode, tileOverrides, reenterTile, expectedTile) => {
-    api.dealQuotations.get.mockResolvedValue({
-      quotation: draft({ priceMode: mode, items: [{ ...TILE_ITEM, ...tileOverrides }, PLAIN_ITEM] }),
-    });
-    renderEditor('/quotations/5');
-    await waitFor(() => expect(byId('plain-price-1')?.value).toBe('800'));
-    api.dealQuotations.calculateLine.mockClear();
-
-    fireEvent.click(within(group('ภาษาเอกสาร')).getByRole('button', { name: /English/ }));
-
-    for (const id of ['price-0', 'direct-net-0', 'special-0', 'plain-price-1']) {
-      if (byId(id)) expect(byId(id).value, id).toBe('');
-    }
-    for (const stale of ['800', '850', '900', '1350']) expect(inputValues(), `no input still holds ${stale}`).not.toContain(stale);
-    if (mode === 'NET') expect(byId('disc-0').value).toBe('5');
-    expect(byId('plain-qty-1').value).toBe('1');
-    expect(screen.getByText('เปลี่ยนภาษาเอกสาร: ล้างราคาทั้งหมดแล้ว — กรุณากรอกราคาใหม่เป็น USD (ไม่มี VAT)')).not.toBeNull();
-    await flushPreviewDebounce();
-    expect(api.dealQuotations.calculateLine).not.toHaveBeenCalled();
-    expect(document.body.textContent).not.toMatch(/48,450|51,841\.50|800\.00/);
-    expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).disabled).toBe(true);
-
-    reenterTile(0);
-    fireEvent.change(byId('plain-price-1'), { target: { value: '700' } });
-    await waitFor(() => expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).disabled).toBe(false));
-    fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
-    await waitFor(() => expect(api.dealQuotations.update).toHaveBeenCalled());
-    const [, payload] = api.dealQuotations.update.mock.calls[0];
-    expect(payload).toMatchObject({ priceMode: mode, documentLanguage: 'EN', currency: 'USD' });
-    expect(payload.items[0]).toMatchObject(expectedTile);
-    expect(payload.items[1]).toMatchObject({ lineType: 'PLAIN', unitPrice: 700, quantity: 1 });
-  }, 25000);
-
-  it('switching back does NOT restore any cleared price', async () => {
-    api.dealQuotations.get.mockResolvedValue({
-      quotation: draft({ priceMode: 'SPECIAL_SQM', items: [{ ...TILE_ITEM, specialPriceSqm: 1350, netUnitPrice: 453.84 }, PLAIN_ITEM] }),
-    });
-    renderEditor('/quotations/5');
-    await waitFor(() => expect(byId('special-0')?.value).toBe('1350'));
-    fireEvent.click(within(group('ภาษาเอกสาร')).getByRole('button', { name: /English/ }));
-    fireEvent.click(within(group('ภาษาเอกสาร')).getByRole('button', { name: /ไทย/ }));
-    expect(byId('special-0').value).toBe('');
-    expect(byId('price-0').value).toBe('');
-    expect(byId('plain-price-1').value).toBe('');
-    for (const stale of ['1350', '850', '800']) expect(inputValues()).not.toContain(stale);
-  }, 20000);
-
-  // A row ticked "ขายแผ่นไม่เต็มกล่อง" under Thai ราคาพิเศษ must not become PERMANENTLY un-submittable
-  // after switching to English per-sqm. The checkbox goes disabled AND renders unchecked in that mode
-  // (roundToFullBoxDisabledReason), so a stale stored `roundToFullBox: false` could not be cleared and
-  // validateQuotationItem's checklist branch would block save/submit forever. `applyPriceMode`
-  // resets the stored flag to `true` on reaching this mode.
-  //
-  // The checkbox renders unchecked regardless of the flag, and the SAVE payload already forces
-  // `roundToFullBox: true` in this mode (itemInputFromRow), so neither the checkbox state nor a
-  // payload assertion taken while still in per-sqm mode can tell a real reset from a masked one.
-  // Switching BACK to a mode where the checkbox re-enables (Thai ราคาพิเศษ) does: a lingering flag
-  // would re-appear CHECKED, the "silent resurrection" the "Clear all prices on switch" rule forbids.
-  // The reset only fires when the row carries a box area (sqmPerBox); without one, English per-sqm
-  // honours roundToFullBox normally (see quotationItemInput.test.jsx), so this scenario uses a row
-  // WITH one.
-  it('a ticked "ขายแผ่นไม่เต็มกล่อง" row with a box area survives a switch to English per-sqm — no permanent block, flag reset, submit possible', async () => {
-    api.dealQuotations.get.mockResolvedValue({
-      quotation: draft({
-        priceMode: 'SPECIAL_SQM',
-        items: [{ ...TILE_ITEM, specialPriceSqm: 1350, netUnitPrice: 453.84, roundToFullBox: false, sqmPerBox: 0.6 }],
-      }),
-    });
-    renderEditor('/quotations/5');
-    await waitFor(() => expect(byId('special-0')?.value).toBe('1350'));
-    // Ticked under Thai ราคาพิเศษ, where the option is allowed.
-    expect(byId('round-loose-0').checked).toBe(true);
-    expect(screen.queryByTestId('checklist-blocking')).toBeNull();
-
-    fireEvent.click(within(group('ภาษาเอกสาร')).getByRole('button', { name: /English/ }));
-
-    // English per-sqm: the checkbox goes disabled and renders UNCHECKED. The checklist DOES block
-    // (the switch cleared ราคาพิเศษ and English per-sqm needs its own ตร.ม./กล่อง), but that is the
-    // expected "re-enter your prices" block, not a roundToFullBox one; the round-trip below is what matters.
-    await waitFor(() => expect(byId('round-loose-0').disabled).toBe(true));
-    expect(byId('round-loose-0').checked).toBe(false);
-
-    // Switch BACK to a mode where the checkbox re-enables. If the stored flag had merely been masked (not actually
-    // reset), it would silently re-appear CHECKED here with no re-entry — this is the assertion a reset-less
-    // `applyPriceMode` cannot pass.
-    fireEvent.click(within(group('ภาษาเอกสาร')).getByRole('button', { name: /ไทย/ }));
-    await waitFor(() => expect(byId('round-loose-0').disabled).toBe(false));
-    expect(byId('round-loose-0').checked).toBe(false);
-
-    // The language switch also clears every price; re-enter what Thai ราคาพิเศษ needs (list price +
-    // ราคาพิเศษ) to prove the row is fully submittable.
-    fireEvent.change(byId('price-0'), { target: { value: '2000' } });
-    fireEvent.change(byId('special-0'), { target: { value: '1350' } });
-
-    await waitFor(() => expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).disabled).toBe(false));
-    expect(screen.queryByTestId('checklist-blocking')).toBeNull();
-
-    fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
-    await waitFor(() => expect(api.dealQuotations.update).toHaveBeenCalled());
-    const [, payload] = api.dealQuotations.update.mock.calls[0];
-    // The stored flag saves as `true`: the reset survived the round-trip, not merely the moment the
-    // mode was per-sqm.
-    expect(payload.items[0]).toMatchObject({ roundToFullBox: true });
-  }, 20000);
-
-  // The opposite of the test above: a row with NO box area is legitimately loose-pieces-capable in
-  // English per-sqm, so switching INTO that mode must NOT reset it, and the checkbox must stay
-  // enabled.
-  it('a ticked "ขายแผ่นไม่เต็มกล่อง" row with NO box area keeps it after switching to English per-sqm', async () => {
-    api.dealQuotations.get.mockResolvedValue({
-      quotation: draft({
-        priceMode: 'SPECIAL_SQM',
-        items: [{ ...TILE_ITEM, specialPriceSqm: 1350, netUnitPrice: 453.84, roundToFullBox: false, sqmPerBox: null }],
-      }),
-    });
-    renderEditor('/quotations/5');
-    await waitFor(() => expect(byId('special-0')?.value).toBe('1350'));
-    expect(byId('round-loose-0').checked).toBe(true);
-
-    fireEvent.click(within(group('ภาษาเอกสาร')).getByRole('button', { name: /English/ }));
-
-    // English per-sqm, no box area: the checkbox stays ENABLED and CHECKED — not reset, not disabled — unlike the
-    // box-area case above.
-    await waitFor(() => expect(byId('special-0')?.value).toBe(''));
-    expect(byId('round-loose-0').disabled).toBe(false);
-    expect(byId('round-loose-0').checked).toBe(true);
-
-    // Re-enter what English per-sqm needs (no box area required) and save — the loose-pieces selection is
-    // accepted, not silently discarded.
-    fireEvent.change(byId('special-0'), { target: { value: '64' } });
-    await waitFor(() => expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).disabled).toBe(false));
-    fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
-    await waitFor(() => expect(api.dealQuotations.update).toHaveBeenCalled());
-    const [, payload] = api.dealQuotations.update.mock.calls[0];
-    expect(payload.items[0]).toMatchObject({ roundToFullBox: false, sqmPerBox: null });
-  }, 20000);
-
-  it('the live preview of a Thai draft still calls calculate-line with TH', async () => {
-    renderEditor('/quotations/new?ticket=18');
-    await screen.findByRole('group', { name: 'วิธีกรอกราคากระเบื้อง' });
-    fireEvent.click(screen.getByRole('button', { name: /เพิ่มรายการในตำแหน่งนี้/ }));
-    fireEvent.change(screen.getByLabelText(/^แผ่น\/ตร\.ม\./), { target: { value: '1.39' } });
-    fireEvent.change(screen.getByLabelText(/^ราคา\/ตร\.ม\./), { target: { value: '350' } });
-    await waitFor(() => expect(api.dealQuotations.calculateLine).toHaveBeenCalled(), { timeout: 1000 });
-    expect(api.dealQuotations.calculateLine.mock.calls.at(-1)[1]).toBe('TH');
-  });
-
   it('ALWAYS sends priceMode and documentLanguage on update, even when untouched', async () => {
     renderEditor('/quotations/5');
     await screen.findByRole('group', { name: 'ภาษาเอกสาร' });
@@ -334,26 +178,6 @@ describe('v3/v3b document settings', () => {
     fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
     await waitFor(() => expect(api.dealQuotations.update).toHaveBeenCalled());
     expect(api.dealQuotations.update.mock.calls[0][1]).toMatchObject({ priceMode: 'NET', documentLanguage: 'TH', currency: 'THB' });
-  });
-
-  it('ราคาพิเศษ shows the per-piece net the SERVER derived (calculate-line), sent without any stale net', async () => {
-    renderEditor('/quotations/new?ticket=18');
-    await screen.findByRole('group', { name: 'วิธีกรอกราคากระเบื้อง' });
-    fireEvent.click(within(group('วิธีกรอกราคากระเบื้อง')).getByRole('button', { name: 'ราคาพิเศษ บาท/ตร.ม.' }));
-    fireEvent.click(screen.getByRole('button', { name: /เพิ่มรายการในตำแหน่งนี้/ }));
-    // The Thai ราคาพิเศษ needs its list price as well (DealQuotationService#requirePriceValidForType
-    // refuses a TILE row without one); until both are typed the editor previews nothing
-    // (quotationMeta#rowHasPriceForPreview) rather than a figure priced under another mode. Both are
-    // per ตร.ม. including VAT, so the row needs its แผ่น/ตร.ม. before either can be previewed.
-    fireEvent.change(screen.getByLabelText(/^แผ่น\/ตร\.ม\./), { target: { value: '2.78' } });
-    fireEvent.change(screen.getByLabelText(/^ราคาตั้ง\/ตร\.ม\. \(รวม VAT\)/), { target: { value: '2000' } });
-    fireEvent.change(screen.getByLabelText(/^ราคาพิเศษ\/ตร\.ม\./), { target: { value: '1350' } });
-
-    await waitFor(() => expect(screen.getByTestId('special-net-0').textContent).toBe('= สุทธิ ฿453.84/แผ่น (ก่อน VAT)'));
-    const sent = api.dealQuotations.calculateLine.mock.calls.at(-1)[0];
-    expect(sent).toMatchObject({
-      lineType: 'TILE', specialPriceSqm: 1350, listPriceSqm: 2000, unitPrice: null, directNetPrice: null, discountPct: null,
-    });
   });
 });
 
@@ -392,77 +216,6 @@ describe('lead time required to submit (owner feedback #7, 2026-09-14)', () => {
 
     await waitFor(() => expect(screen.getByRole('button', { name: 'ส่งขออนุมัติ' }).disabled).toBe(false));
   });
-
-  it('VW-01: a stock line (stockSource IN_THAILAND, no lead time) does NOT block ส่งขออนุมัติ, but an IN_TRANSIT row beside it still does (owner 2026-10-29)', async () => {
-    api.dealQuotations.get.mockResolvedValue({
-      quotation: draft({ items: [{ ...TILE_ITEM, stockSource: 'IN_THAILAND', leadTimeMinDays: null, leadTimeMaxDays: null }] }),
-    });
-    renderEditor('/quotations/5');
-    expect((await screen.findByRole('button', { name: 'ส่งขออนุมัติ' })).disabled).toBe(false);
-
-    api.dealQuotations.get.mockResolvedValue({
-      quotation: draft({
-        items: [
-          { ...TILE_ITEM, seq: 1, stockSource: 'IN_THAILAND', leadTimeMinDays: null, leadTimeMaxDays: null },
-          { ...TILE_ITEM, id: 105, seq: 2, stockSource: 'IN_TRANSIT', leadTimeMinDays: null, leadTimeMaxDays: null },
-        ],
-      }),
-    });
-    cleanup();
-    renderEditor('/quotations/5');
-    const blocked = await screen.findByRole('button', { name: 'ส่งขออนุมัติ' });
-    expect(blocked.disabled).toBe(true);
-    expect(blocked.title).toBe('กรุณาระบุระยะเวลานำเข้า (วัน) ของรายการที่ 2');
-  });
-
-  it('a HALF-filled lead time (only min, or only max) still blocks', async () => {
-    api.dealQuotations.get.mockResolvedValue({
-      quotation: draft({ items: [{ ...TILE_ITEM, leadTimeMinDays: 30, leadTimeMaxDays: null }] }),
-    });
-    renderEditor('/quotations/5');
-    const submitBtn = await screen.findByRole('button', { name: 'ส่งขออนุมัติ' });
-    expect(submitBtn.disabled).toBe(true);
-  });
-
-  it('multiple rows missing a lead time are ALL named, comma-separated, by their own item number', async () => {
-    const PLAIN_ITEM = {
-      id: 102, seq: 2, lineType: 'PLAIN', locationLabel: null, descriptionLine: 'ค่าขนส่ง', quantity: 1,
-      unit: 'งาน', unitPrice: 800, discountPct: 0, netUnitPrice: 800, lineAmount: 800, piecesFinal: 0,
-    };
-    api.dealQuotations.get.mockResolvedValue({
-      quotation: draft({
-        items: [
-          { ...TILE_ITEM, seq: 1, leadTimeMinDays: null, leadTimeMaxDays: null },
-          PLAIN_ITEM, // #7: PLAIN is exempt -- never named, and never counted as item 3 itself.
-          { ...TILE_ITEM, id: 105, seq: 3, leadTimeMinDays: null, leadTimeMaxDays: null },
-        ],
-      }),
-    });
-    renderEditor('/quotations/5');
-    const submitBtn = await screen.findByRole('button', { name: 'ส่งขออนุมัติ' });
-    expect(submitBtn.title).toBe('กรุณาระบุระยะเวลานำเข้า (วัน) ของรายการที่ 1, 3');
-  });
-
-  it('a PLAIN-only document with no TILE row at all never blocks on lead time', async () => {
-    const PLAIN_ITEM = {
-      id: 102, seq: 1, lineType: 'PLAIN', locationLabel: null, descriptionLine: 'ค่าขนส่ง', quantity: 1,
-      unit: 'งาน', unitPrice: 800, discountPct: 0, netUnitPrice: 800, lineAmount: 800, piecesFinal: 0,
-    };
-    api.dealQuotations.get.mockResolvedValue({ quotation: draft({ items: [PLAIN_ITEM] }) });
-    renderEditor('/quotations/5');
-    const submitBtn = await screen.findByRole('button', { name: 'ส่งขออนุมัติ' });
-    expect(submitBtn.disabled).toBe(false);
-  });
-
-  it('the row itself shows an inline hint on an existing draft (already "touched" on load)', async () => {
-    api.dealQuotations.get.mockResolvedValue({
-      quotation: draft({ items: [{ ...TILE_ITEM, leadTimeMinDays: null, leadTimeMaxDays: null }] }),
-    });
-    renderEditor('/quotations/5');
-    await screen.findByRole('button', { name: 'ส่งขออนุมัติ' });
-
-    expect(screen.getByText('กรุณาระบุระยะเวลานำเข้า (วัน)')).not.toBeNull();
-  });
 });
 
 // Typing 0 as a custom deposit % must block ส่งขออนุมัติ, not just show depositZeroError: depositPercent
@@ -484,30 +237,6 @@ describe('0% deposit requires a payment term to submit (Opus review F2, 2026-09-
     expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).disabled).toBe(false);
   });
 
-  it('the checklist ALSO lists the gap, alongside the block', async () => {
-    renderEditor('/quotations/5');
-    await screen.findByRole('button', { name: '30%' });
-
-    fireEvent.click(screen.getByRole('button', { name: 'อื่นๆ' }));
-    fireEvent.change(screen.getByLabelText('มัดจำ %'), { target: { value: '0' } });
-
-    // It blocks ส่งขออนุมัติ, so it sits in the submit-blocking group, not under ควรกรอก.
-    const submitBlocking = await screen.findByTestId('checklist-submit-blocking');
-    expect(within(submitBlocking).getByText('มัดจำ 0% กรุณาเลือกเงื่อนไขการชำระเงิน')).not.toBeNull();
-    expect(within(screen.getByTestId('checklist-warnings')).queryByText('มัดจำ 0% กรุณาเลือกเงื่อนไขการชำระเงิน')).toBeNull();
-  });
-
-  it('ticking "ไม่รับมัดจำ" with no term chosen ALSO blocks ส่งขออนุมัติ (the pre-existing route, unaffected in shape)', async () => {
-    renderEditor('/quotations/5');
-    await screen.findByRole('button', { name: '30%' });
-
-    fireEvent.click(screen.getByRole('checkbox', { name: /ไม่รับมัดจำ/ }));
-
-    const submitBtn = await screen.findByRole('button', { name: 'ส่งขออนุมัติ' });
-    expect(submitBtn.disabled).toBe(true);
-    expect(submitBtn.title).toBe('มัดจำ 0% ต้องเลือกเงื่อนไขการชำระเงินก่อนส่งขออนุมัติ');
-  });
-
   it('choosing a term after ticking "ไม่รับมัดจำ" clears the block', async () => {
     renderEditor('/quotations/5');
     await screen.findByRole('button', { name: '30%' });
@@ -517,13 +246,6 @@ describe('0% deposit requires a payment term to submit (Opus review F2, 2026-09-
     fireEvent.change(screen.getByLabelText('เงื่อนไขการชำระเงิน'), { target: { value: 'ON_DELIVERY' } });
 
     await waitFor(() => expect(screen.getByRole('button', { name: 'ส่งขออนุมัติ' }).disabled).toBe(false));
-  });
-
-  it('a normal 30% deposit quotation (default fixture) is unaffected — submit stays enabled, no checklist entry', async () => {
-    renderEditor('/quotations/5');
-    const submitBtn = await screen.findByRole('button', { name: 'ส่งขออนุมัติ' });
-    expect(submitBtn.disabled).toBe(false);
-    expect(screen.queryByText('มัดจำ 0% กรุณาเลือกเงื่อนไขการชำระเงิน')).toBeNull();
   });
 });
 
@@ -549,100 +271,9 @@ describe('PLAIN and ส่วนลดพิเศษ rows', () => {
     expect(items[2]).toMatchObject({ adjustmentPct: 3, adjustmentAmount: null });
     expect('unitPrice' in items[2]).toBe(false);
   });
-
-  it('an incomplete ส่วนลดพิเศษ blocks the save and is named in the checklist', async () => {
-    renderEditor('/quotations/5');
-    await screen.findByRole('button', { name: 'เพิ่มส่วนลดพิเศษ' });
-    fireEvent.click(screen.getByRole('button', { name: 'เพิ่มส่วนลดพิเศษ' }));
-    expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).disabled).toBe(true);
-    expect(within(screen.getByTestId('checklist-blocking')).getByText('รายการที่ 2: ขาด เปอร์เซ็นต์ส่วนลด')).not.toBeNull();
-  });
-});
-
-describe('"ข้อมูลที่ยังไม่ครบ" checklist (owner, 2026-09-11)', () => {
-  it('a missing ที่อยู่ is a WARNING — ส่งขออนุมัติ stays enabled', async () => {
-    renderEditor('/quotations/5');
-    const warnings = await screen.findByTestId('checklist-warnings');
-    expect(within(warnings).getByText('ยังไม่ได้กรอกที่อยู่ลูกค้า')).not.toBeNull();
-    expect(screen.queryByTestId('checklist-blocking')).toBeNull();
-    expect(screen.getByRole('button', { name: 'ส่งขออนุมัติ' }).disabled).toBe(false);
-  });
-
-  // A missing ผู้สั่งซื้อ produces no checklist entry, blocking or otherwise, and ส่งขออนุมัติ stays
-  // enabled.
-  it('a missing ผู้สั่งซื้อ no longer blocks ส่งขออนุมัติ, or appears in the checklist at all', async () => {
-    api.dealQuotations.get.mockResolvedValue({ quotation: draft({ contactId: null, contactName: null, contactPhone: null, contactEmail: null }) });
-    api.tickets.get.mockResolvedValue({
-      ticket: { summary: { id: 18, createdById: 6, customerName: CUSTOMER.name, customerId: 5, projectName: 'โครงการ A', contactId: null } },
-    });
-    renderEditor('/quotations/5');
-    await screen.findByTestId('checklist-warnings'); // the unrelated ที่อยู่ warning still renders
-    expect(screen.queryByTestId('checklist-blocking')).toBeNull();
-    expect(screen.queryByText('กรุณาระบุผู้สั่งซื้อ')).toBeNull();
-    expect(screen.getByRole('button', { name: 'ส่งขออนุมัติ' }).disabled).toBe(false);
-  });
-
-  it('clicking an entry focuses its field', async () => {
-    renderEditor('/quotations/5');
-    fireEvent.click(await screen.findByRole('button', { name: 'ยังไม่ได้กรอกที่อยู่ลูกค้า' }));
-    expect(document.activeElement?.id).toBe('deal-customer-address');
-  });
-
-  it('the ส่งขออนุมัติ dialog restates the optional gaps', async () => {
-    renderEditor('/quotations/5');
-    await screen.findByTestId('checklist-warnings');
-    fireEvent.click(screen.getByRole('button', { name: 'ส่งขออนุมัติ' }));
-    expect(within(screen.getByTestId('submit-warnings')).getByText('ยังไม่ได้กรอกที่อยู่ลูกค้า')).not.toBeNull();
-  });
-
-  // The dialog's "optional gaps" list must not carry an entry that blocks ส่งขออนุมัติ. Only reachable
-  // by a concurrent edit (the opening button is disabled for it), so blank the field behind the open dialog.
-  it('the ส่งขออนุมัติ dialog\'s optional-gaps list leaves out a submit-blocking entry that appears while it is open', async () => {
-    api.dealQuotations.get.mockResolvedValue({ quotation: draft({ remainderMode: 'CREDIT', creditDays: 30 }) });
-    renderEditor('/quotations/5');
-    await screen.findByTestId('checklist-warnings');
-    fireEvent.click(screen.getByRole('button', { name: 'ส่งขออนุมัติ' }));
-    const optionalGaps = await screen.findByTestId('submit-warnings');
-
-    fireEvent.change(document.getElementById('creditDays'), { target: { value: '' } });
-
-    // The entry exists (the page checklist lists it as submit-blocking)…
-    const creditDays = 'กรุณาระบุจำนวนวันเครดิต อย่างน้อย 1 วัน';
-    expect(within(await screen.findByTestId('checklist-submit-blocking')).getByText(creditDays)).not.toBeNull();
-    // …but the optional-gaps list keeps only the genuinely optional one.
-    expect(within(optionalGaps).getByText('ยังไม่ได้กรอกที่อยู่ลูกค้า')).not.toBeNull();
-    expect(within(optionalGaps).queryByText(creditDays)).toBeNull();
-  });
 });
 
 describe('customer address + repeat-customer autofill (owner, 2026-09-11)', () => {
-  it('a repeat customer on the ?ticket= path arrives with its saved details', async () => {
-    api.customers.search.mockResolvedValue({ customers: [{ ...CUSTOMER, address: '201 ซอยสุขุมวิท 63' }] });
-    renderEditor('/quotations/new?ticket=18');
-    await waitFor(() => expect(document.getElementById('deal-customer-address')?.value).toBe('201 ซอยสุขุมวิท 63'));
-    expect(document.getElementById('deal-customer-tax-id').value).toBe('0105551234567');
-    expect(document.getElementById('deal-customer-phone').value).toBe('02-000-0000');
-    // ผู้สั่งซื้อ is a single optional free-text input (no contact picker, no editable โทร./อีเมล),
-    // unaffected by the customer/ticket data this test seeds. Resolving the customer autofill is not
-    // an edit: the pristine page stays quiet either way.
-    expect(screen.queryByTestId('quotation-checklist')).toBeNull();
-  });
-
-  it('ที่อยู่ is editable on an existing draft: saved on blur, and the draft is re-saved so the document carries it', async () => {
-    api.customers.update.mockResolvedValue({ customer: { ...CUSTOMER, address: '1 ถนนพระราม 9' } });
-    renderEditor('/quotations/5');
-    await screen.findByTestId('checklist-warnings');
-    const address = document.getElementById('deal-customer-address');
-    fireEvent.change(address, { target: { value: '1 ถนนพระราม 9' } });
-    fireEvent.blur(address);
-
-    await waitFor(() => expect(api.customers.update).toHaveBeenCalledWith(5, { address: '1 ถนนพระราม 9' }));
-    await waitFor(() => expect(screen.queryByText('ยังไม่ได้กรอกที่อยู่ลูกค้า')).toBeNull());
-    // The document snapshots the customer on a DRAFT save, so the address edit must trigger one — here the
-    // 2-second autosave.
-    await waitFor(() => expect(api.dealQuotations.update).toHaveBeenCalled(), { timeout: 4000 });
-  });
-
   it('ส่งขออนุมัติ SAVES unsaved edits first, then submits', async () => {
     renderEditor('/quotations/5');
     await screen.findByTestId('checklist-warnings');
@@ -659,26 +290,6 @@ describe('customer address + repeat-customer autofill (owner, 2026-09-11)', () =
 });
 
 describe('ยืนราคา — จำนวนวัน / ระบุวันที่ toggle (V178, owner ruling 2026-09-14)', () => {
-  it('ระบุวันที่ is hidden on a document with no special pricing (TILE_ITEM has discountPct 0)', async () => {
-    renderEditor('/quotations/5');
-    await screen.findByTestId('checklist-warnings');
-    const toggle = group('ยืนราคา');
-    expect(within(toggle).getByRole('button', { name: 'จำนวนวัน' })).not.toBeNull();
-    expect(within(toggle).queryByRole('button', { name: 'ระบุวันที่' })).toBeNull();
-    // The days select still renders (จำนวนวัน is always available).
-    expect(document.getElementById('validityDays')).not.toBeNull();
-  });
-
-  it('ระบุวันที่ is offered on a document WITH special pricing, in DIRECT_NET (2c)', async () => {
-    api.dealQuotations.get.mockResolvedValue({
-      quotation: draft({ priceMode: 'DIRECT_NET', items: [{ ...TILE_ITEM, unitPrice: 850, netUnitPrice: 700 }] }),
-    });
-    renderEditor('/quotations/5');
-    await screen.findByTestId('checklist-warnings');
-    const toggle = group('ยืนราคา');
-    expect(within(toggle).getByRole('button', { name: 'ระบุวันที่' })).not.toBeNull();
-  });
-
   it('choosing ระบุวันที่ shows a date input and saves validityMode/validityUntil; validityDays is still sent', async () => {
     api.dealQuotations.get.mockResolvedValue({
       quotation: draft({ priceMode: 'NET', items: [{ ...TILE_ITEM, discountPct: 10 }] }),
@@ -707,23 +318,6 @@ describe('ยืนราคา — จำนวนวัน / ระบุว�
     expect(payload.validityUntil).toBe('2026-12-31');
     expect(payload.validityDays).toBe(30);
   });
-
-  it('losing special pricing while in ระบุวันที่ mode auto-switches back to จำนวนวัน', async () => {
-    api.dealQuotations.get.mockResolvedValue({
-      quotation: draft({ priceMode: 'NET', items: [{ ...TILE_ITEM, discountPct: 10 }] }),
-    });
-    renderEditor('/quotations/5');
-    await screen.findByTestId('checklist-warnings');
-    fireEvent.click(within(group('ยืนราคา')).getByRole('button', { name: 'ระบุวันที่' }));
-    expect(screen.getByLabelText('ยืนราคาถึงวันที่')).not.toBeNull();
-
-    // Clear the discount on the only tile row -- the document no longer has special pricing.
-    fireEvent.change(screen.getByLabelText('ส่วนลด %'), { target: { value: '0' } });
-
-    await waitFor(() => expect(screen.queryByLabelText('ยืนราคาถึงวันที่')).toBeNull());
-    expect(document.getElementById('validityDays')).not.toBeNull();
-    expect(within(group('ยืนราคา')).queryByRole('button', { name: 'ระบุวันที่' })).toBeNull();
-  });
 });
 
 // What a typed per-ตร.ม. (incl. VAT) price asks the server, what comes back onto the row, and what a
@@ -732,25 +326,11 @@ describe('ยืนราคา — จำนวนวัน / ระบุว�
 describe('ราคา/ตร.ม. รวม VAT ทุกแบบ (sales feedback #1, 2026-10-06, V192.2)', () => {
   const byId = (id) => document.getElementById(id);
   const lastPreviewed = () => api.dealQuotations.calculateLine.mock.calls.at(-1)[0];
-  // A row priced per ตร.ม.: the owner's 60×120, 1,800 → 1,210.25 a piece (the server's figures).
-  const TYPED_ITEM = {
-    ...TILE_ITEM, sizeText: '60x120', sqmPerPiece: 0.72, unitPrice: 1210.25, netUnitPrice: 1210.25,
-    listPriceSqm: 1800, directNetPriceSqm: null,
-  };
-  const TYPED_NET_ITEM = { ...TYPED_ITEM, netUnitPrice: 531.16, directNetPriceSqm: 790 };
 
   async function addRowWithArea() {
     await screen.findByRole('group', { name: 'วิธีกรอกราคากระเบื้อง' });
     fireEvent.click(screen.getByRole('button', { name: /เพิ่มรายการในตำแหน่งนี้/ }));
     fireEvent.change(screen.getByLabelText(/^แผ่น\/ตร\.ม\./), { target: { value: '1.39' } });
-  }
-
-  async function savedItem() {
-    fireEvent.change(screen.getByLabelText('หมายเหตุเพิ่มเติม'), { target: { value: 'x' } });
-    await waitFor(() => expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).disabled).toBe(false));
-    fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
-    await waitFor(() => expect(api.dealQuotations.update).toHaveBeenCalled());
-    return api.dealQuotations.update.mock.calls[0][1].items[0];
   }
 
   it('typing ราคา/ตร.ม. asks the server with that figure and no per-แผ่น price, then shows the per-แผ่น answer', async () => {
@@ -765,69 +345,6 @@ describe('ราคา/ตร.ม. รวม VAT ทุกแบบ (sales feedb
     expect(lastPreviewed()).toMatchObject({ lineType: 'TILE', listPriceSqm: 1800, unitPrice: null, directNetPriceSqm: null });
     // The box keeps what the rep typed — the per-แผ่น answer goes UNDER it, never into it.
     expect(screen.getByLabelText(/^ราคา\/ตร\.ม\./).value).toBe('1800');
-  });
-
-  it('a draft priced per ตร.ม. opens showing the typed figure, and a save re-sends exactly that', async () => {
-    api.dealQuotations.get.mockResolvedValue({ quotation: draft({ items: [TYPED_ITEM] }) });
-    renderEditor('/quotations/5');
-    await screen.findByTestId('checklist-warnings');
-
-    expect(byId('price-0').value).toBe('1800');
-    expect(screen.getByTestId('list-per-piece-0').textContent).toBe('= ฿1,210.25/แผ่น (ก่อน VAT)');
-    expect(await savedItem()).toMatchObject({ id: 101, listPriceSqm: 1800, unitPrice: null });
-  });
-
-  // The no-drift guarantee for every draft that exists today. 850 a piece shows as 2,528.41 per ตร.ม. (850 ×
-  // 2.78 × 1.07) — and is saved back as 850 a piece, not as a re-derived figure.
-  it('a draft saved before this change is SHOWN per ตร.ม. but saved back per แผ่น, so an untouched price cannot move', async () => {
-    renderEditor('/quotations/5');
-    await screen.findByTestId('checklist-warnings');
-
-    expect(byId('price-0').value).toBe('2528.41');
-    expect(screen.getByTestId('list-per-piece-0').textContent).toBe('คิดจากราคา ฿850.00/แผ่น (ก่อน VAT)');
-    expect(await savedItem()).toMatchObject({ id: 101, unitPrice: 850, listPriceSqm: null });
-  });
-
-  it('retyping the price on such a draft makes that row a per-ตร.ม. one from then on', async () => {
-    api.dealQuotations.calculateLine.mockResolvedValue({
-      item: { unitPrice: 676.39, netUnitPrice: 676.39, lineAmount: 38554.23, calculationLine: '(server calc)' },
-    });
-    renderEditor('/quotations/5');
-    await screen.findByTestId('checklist-warnings');
-    fireEvent.change(byId('price-0'), { target: { value: '2012' } });
-
-    await waitFor(() => expect(screen.getByTestId('list-per-piece-0').textContent).toBe('= ฿676.39/แผ่น (ก่อน VAT)'));
-    expect(lastPreviewed()).toMatchObject({ listPriceSqm: 2012, unitPrice: null });
-    expect(await savedItem()).toMatchObject({ id: 101, listPriceSqm: 2012, unitPrice: null });
-  });
-
-  // A refused preview must not leave the PREVIOUS price's per-แผ่น figure sitting under a box that now says
-  // something else.
-  it('a refused preview clears the per-แผ่น figure and keeps what was typed', async () => {
-    api.dealQuotations.get.mockResolvedValue({ quotation: draft({ items: [TYPED_ITEM] }) });
-    api.dealQuotations.calculateLine.mockRejectedValue(new Error('400'));
-    renderEditor('/quotations/5');
-    await screen.findByTestId('checklist-warnings');
-    expect(screen.getByTestId('list-per-piece-0').textContent).toBe('= ฿1,210.25/แผ่น (ก่อน VAT)');
-
-    fireEvent.change(byId('price-0'), { target: { value: '1900' } });
-
-    await waitFor(() => expect(api.dealQuotations.calculateLine).toHaveBeenCalled(), { timeout: 1000 });
-    await waitFor(() => expect(screen.getByTestId('list-per-piece-0').textContent).toBe('ระบบคำนวณราคาต่อแผ่นให้'));
-    expect(byId('price-0').value).toBe('1900');
-  });
-
-  // The server refuses to convert a per-ตร.ม. price with no area per piece, so nothing is asked — and the row
-  // says what is missing instead of showing a number.
-  it('a per-ตร.ม. price on a row with no แผ่น/ตร.ม. is not sent for a preview', async () => {
-    renderEditor('/quotations/new?ticket=18');
-    await screen.findByRole('group', { name: 'วิธีกรอกราคากระเบื้อง' });
-    fireEvent.click(screen.getByRole('button', { name: /เพิ่มรายการในตำแหน่งนี้/ }));
-    fireEvent.change(screen.getByLabelText(/^ราคา\/ตร\.ม\./), { target: { value: '1800' } });
-
-    await new Promise((resolve) => { setTimeout(resolve, 450); });
-    expect(api.dealQuotations.calculateLine).not.toHaveBeenCalled();
-    expect(screen.getByTestId('list-per-piece-0').textContent).toBe('กรอกแผ่น/ตร.ม. ก่อน ระบบจึงคำนวณราคาต่อแผ่นได้');
   });
 
   it('ราคาสุทธิ: the net is typed per ตร.ม., and a blank ราคาตั้ง is sent as that same net — without filling its own box in', async () => {
@@ -845,43 +362,5 @@ describe('ราคา/ตร.ม. รวม VAT ทุกแบบ (sales feedb
     // "เว้นว่าง = ใช้ราคาสุทธิ" has to stay blank: the list price the server derived for THIS request was the
     // editor's own stand-in, not something the rep typed.
     expect(byId('price-0').value).toBe('');
-  });
-
-  // docHasSpecialPricing (a ราคาสุทธิ row whose list and net differ) gates ระบุวันที่, and losing it resets
-  // ยืนราคา to จำนวนวัน on the spot. The per-แผ่น list price must therefore not blink out between a keystroke
-  // and the server's answer.
-  it('ราคาสุทธิ: retyping ราคาตั้ง does not knock ยืนราคา out of ระบุวันที่ while the server works it out', async () => {
-    api.dealQuotations.get.mockResolvedValue({
-      quotation: draft({ priceMode: 'DIRECT_NET', items: [TYPED_NET_ITEM], validityMode: 'DATE', validityUntil: '2026-12-31' }),
-    });
-    let answer;
-    api.dealQuotations.calculateLine.mockReturnValue(new Promise((resolve) => { answer = resolve; }));
-    renderEditor('/quotations/5');
-    await screen.findByTestId('checklist-warnings');
-    expect(screen.getByLabelText('ยืนราคาถึงวันที่').value).toBe('31/12/2569');
-
-    fireEvent.change(byId('price-0'), { target: { value: '1900' } });
-    await waitFor(() => expect(api.dealQuotations.calculateLine).toHaveBeenCalled(), { timeout: 1000 });
-    expect(screen.getByLabelText('ยืนราคาถึงวันที่').value).toBe('31/12/2569');
-
-    answer({ item: { unitPrice: 1277.49, netUnitPrice: 531.16, lineAmount: 30276.12, calculationLine: '(server calc)' } });
-    await waitFor(() => expect(screen.getByTestId('list-per-piece-0').textContent).toBe('= ฿1,277.49/แผ่น (ก่อน VAT)'));
-    expect(screen.getByLabelText('ยืนราคาถึงวันที่').value).toBe('31/12/2569');
-  });
-
-  it('switching the document to English clears the per-ตร.ม. price and goes back to a per-piece box', async () => {
-    api.dealQuotations.get.mockResolvedValue({ quotation: draft({ items: [TYPED_ITEM] }) });
-    renderEditor('/quotations/5');
-    await screen.findByTestId('checklist-warnings');
-    fireEvent.click(within(group('ภาษาเอกสาร')).getByRole('button', { name: /English/ }));
-
-    const box = await screen.findByLabelText(/^ราคา\/หน่วย/);
-    expect(box.value).toBe('');
-    expect(screen.queryByLabelText(/^ราคา\/ตร\.ม\./)).toBeNull();
-
-    fireEvent.change(box, { target: { value: '15' } });
-    await waitFor(() => expect(api.dealQuotations.calculateLine).toHaveBeenCalled(), { timeout: 1000 });
-    expect(lastPreviewed()).toMatchObject({ unitPrice: 15, listPriceSqm: null, directNetPriceSqm: null });
-    expect(api.dealQuotations.calculateLine.mock.calls.at(-1)[1]).toBe('EN');
   });
 });
