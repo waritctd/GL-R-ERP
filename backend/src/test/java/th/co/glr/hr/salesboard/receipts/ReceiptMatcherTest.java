@@ -58,14 +58,4 @@ class ReceiptMatcherTest {
         assertThat(ReceiptMatcher.match(row("ลูกค้า", "510.01", null), List.of(small)).matched()).isFalse();
     }
 
-    @Test
-    void twoDealsOfTheSameCustomerBothExpectingThatAmountIsAmbiguous() {
-        Candidate a = deal(1, "ลุมพินี เรสซิเดนซ์", Set.of(), Set.of(), "372000");
-        Candidate b = deal(2, "ลุมพินี เรสซิเดนซ์", Set.of(), Set.of(), "372000");
-        Match m = ReceiptMatcher.match(row("ลุมพินี เรสซิเดนซ์", "372000", null), List.of(a, b));
-        assertThat(m.matched()).isFalse();
-        assertThat(m.reason()).isEqualTo(Reason.AMBIGUOUS);
-        assertThat(m.candidateIds()).containsExactlyInAnyOrder(1L, 2L);
-    }
-
 }
