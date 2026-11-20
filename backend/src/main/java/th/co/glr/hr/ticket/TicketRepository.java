@@ -2810,7 +2810,7 @@ public class TicketRepository {
     /** The deal-level facts that stop an order confirmation being undone; see {@code DealQuotationService#undoRefusal}. */
     public record UndoFacts(boolean bidOrSplit, boolean nonDraftDepositNotice, boolean paymentReceipt,
                             boolean remainingInvoice, boolean importRequest, boolean deliveryRecord,
-                            boolean manualStockDecision) {}
+                            boolean manualStockDecision, boolean prePortalSettledByExpress) {}
 
     /** One read of every downstream row an undo must not orphan. "Bid or split" = the bid path wrote its
      * BID_OUTCOME_RECORDED right AFTER the promotion event in the same transaction (DealPartyService#recordBidOutcome),
@@ -2829,7 +2829,12 @@ public class TicketRepository {
                OR EXISTS(SELECT 1 FROM sales.ticket WHERE parent_ticket_id = :t
                           AND COALESCE(child_kind, 'BID_SPLIT') = 'BID_SPLIT')) AS bid_or_split,
               EXISTS(SELECT 1 FROM sales.deposit_notice WHERE ticket_id = :t AND status <> 'DRAFT') AS notice,
-              EXISTS(SELECT 1 FROM sales.payment_receipt WHERE ticket_id = :t) AS receipt,
+              EXISTS(SELECT 1 FROM sales.payment_receipt WHERE ticket_id = :t
+                      AND NOT (source = 'PRE_PORTAL' AND kind = 'DEPOSIT')) AS receipt,
+              EXISTS(SELECT 1 FROM sales.payment_receipt r WHERE r.ticket_id = :t AND r.source = 'PRE_PORTAL'
+                      AND (r.express_doc_no IS NOT NULL
+                           OR EXISTS(SELECT 1 FROM sales.receipt_import_row w
+                                      WHERE w.receipt_id = r.receipt_id AND w.status = 'RESOLVED'))) AS pre_portal_settled,
               EXISTS(SELECT 1 FROM sales.remaining_invoice WHERE ticket_id = :t) AS invoice,
               EXISTS(SELECT 1 FROM sales.import_request WHERE ticket_id = :t) AS import_req,
               EXISTS(SELECT 1 FROM sales.delivery_record WHERE ticket_id = :t) AS delivery,
@@ -2841,7 +2846,7 @@ public class TicketRepository {
                           AND procurement_source_decided_at IS NOT NULL)) AS manual_stock
             """, Map.of("t", ticketId), (rs, n) -> new UndoFacts(rs.getBoolean("bid_or_split"), rs.getBoolean("notice"),
                 rs.getBoolean("receipt"), rs.getBoolean("invoice"), rs.getBoolean("import_req"),
-                rs.getBoolean("delivery"), rs.getBoolean("manual_stock")));
+                rs.getBoolean("delivery"), rs.getBoolean("manual_stock"), rs.getBoolean("pre_portal_settled")));
     }
 
     /** A delivery round of the order that is past DRAFT (V236): it holds coverage lines on the order's items. */
@@ -2927,15 +2932,65 @@ public class TicketRepository {
                 quotationNumber), Boolean.class));
     }
 
+    /** Why a pre-portal deal's deposit policy is NOT_REQUIRED: the deposit was paid outside the portal. */
+    public static final String PRE_PORTAL_POLICY_REASON = "งานที่เดินมาก่อนใช้ระบบ: มัดจำรับแล้วนอกระบบ";
+    private static final String PRE_PORTAL_WAS = " · เดิม ";
+
+    /** The POLICY_CHANGED note of the pre-portal marking; it names the policy it replaced so an undo can put it back. */
+    public static String prePortalPolicyNote(String policyBefore) {
+        return followedPolicyNote(DepositPolicy.NOT_REQUIRED, PRE_PORTAL_POLICY_REASON) + PRE_PORTAL_WAS + policyBefore;
+    }
+
+    /** The deposit policy the pre-portal marking replaced (read from its POLICY_CHANGED after the promotion), if it changed one. */
+    public Optional<String> prePortalPolicyBefore(long ticketId, long afterEventId) {
+        String prefix = followedPolicyNote(DepositPolicy.NOT_REQUIRED, PRE_PORTAL_POLICY_REASON) + PRE_PORTAL_WAS;
+        return jdbc.query("""
+            SELECT substr(message, :len + 1) FROM sales.ticket_event
+             WHERE ticket_id = :t AND kind = 'POLICY_CHANGED' AND event_id > :after AND starts_with(message, :prefix)
+             ORDER BY event_id DESC LIMIT 1
+            """, Map.of("t", ticketId, "after", afterEventId, "prefix", prefix, "len", prefix.length()),
+            (rs, n) -> rs.getString(1)).stream().findFirst();
+    }
+
+    /** Puts the deposit policy back as the system's own (no person, no reason), under CUSTOMER_CONFIRMED like the other system flip. */
+    public int restoreDepositPolicy(long ticketId, String policy) {
+        return jdbc.update("""
+            UPDATE sales.ticket SET deposit_policy = :p, deposit_policy_reason = NULL, deposit_policy_set_by = NULL, updated_at = now()
+             WHERE ticket_id = :t AND payment_status = 'CUSTOMER_CONFIRMED'
+            """, Map.of("t", ticketId, "p", policy));
+    }
+
+    /** Undo of the order confirmation on a pre-portal deal: the PRE_PORTAL receipt goes, the expected payments it filled
+     * reopen (nothing else can have filled them: the undo refuses when any other money exists), Express rows that
+     * suggested it lose the suggestion, and the flag clears. Returns the amount of the receipt removed. */
+    public BigDecimal removePrePortal(long ticketId) {
+        jdbc.update("""
+            UPDATE sales.receipt_import_row
+               SET suggested_receipt_id = NULL,
+                   reason = CASE WHEN reason = 'POSSIBLE_MANUAL_DUPLICATE' THEN 'NO_CANDIDATE' ELSE reason END
+             WHERE suggested_receipt_id IN (SELECT receipt_id FROM sales.payment_receipt WHERE ticket_id = :t AND source = 'PRE_PORTAL')
+            """, Map.of("t", ticketId));
+        jdbc.update("""
+            UPDATE sales.expected_payment
+               SET received_amount = 0, status = 'OPEN', receipt_id = NULL, updated_at = now()
+             WHERE ticket_id = :t AND status <> 'CANCELLED' AND (received_amount > 0 OR receipt_id IS NOT NULL)
+            """, Map.of("t", ticketId));
+        BigDecimal amount = sumPrePortalReceipts(ticketId);
+        jdbc.update("DELETE FROM sales.payment_receipt WHERE ticket_id = :t AND source = 'PRE_PORTAL'", Map.of("t", ticketId));
+        jdbc.update("UPDATE sales.ticket SET pre_portal = FALSE, updated_at = now() WHERE ticket_id = :t", Map.of("t", ticketId));
+        return amount;
+    }
+
     /** A person's deposit-policy change (waiver) after the promotion: a deposit_policy POLICY_CHANGED that is not the
-     * system's own flip for this quotation. entry_channel and other POLICY_CHANGED notes do not count. */
+     * system's own flip for this quotation nor the pre-portal marking. entry_channel and other POLICY_CHANGED notes do not count. */
     public boolean hasPersonDepositPolicyChangeAfter(long ticketId, long afterEventId, String quotationNumber) {
         return Boolean.TRUE.equals(jdbc.queryForObject("""
             SELECT EXISTS(SELECT 1 FROM sales.ticket_event WHERE ticket_id = :t AND kind = 'POLICY_CHANGED'
                            AND event_id > :after AND starts_with(message, 'deposit_policy →')
-                           AND NOT
+                           AND NOT starts_with(message, :prePortalPrefix) AND NOT
             """ + FOLLOWED_POLICY_NOTE_MATCH + ")",
-            followedPolicyNoteParams(new MapSqlParameterSource().addValue("t", ticketId).addValue("after", afterEventId),
+            followedPolicyNoteParams(new MapSqlParameterSource().addValue("t", ticketId).addValue("after", afterEventId)
+                .addValue("prePortalPrefix", followedPolicyNote(DepositPolicy.NOT_REQUIRED, PRE_PORTAL_POLICY_REASON)),
                 quotationNumber), Boolean.class));
     }
 

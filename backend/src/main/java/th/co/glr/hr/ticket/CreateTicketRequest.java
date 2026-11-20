@@ -57,8 +57,21 @@ public record CreateTicketRequest(
     String startStage,
     /** Required when {@code startStage} is PROCUREMENT: the deposit (THB, 0 or more) the customer already paid outside the
      * portal, written as one DEPOSIT receipt of source PRE_PORTAL when above 0. Ignored for other starts. */
-    @DecimalMin("0") @Digits(integer = 12, fraction = 2) BigDecimal preDeposit
+    @DecimalMin("0") @Digits(integer = 12, fraction = 2) BigDecimal preDeposit,
+    /** Required when {@code preDeposit} is above 0: the day the customer paid it (not in the future, Asia/Bangkok). It is
+     * the receipt's received date, so the deposit counts in that day's cash period. */
+    LocalDate preDepositDate
 ) {
+    /** The sixteen-argument shape before preDepositDate. */
+    public CreateTicketRequest(String title, String priority, String customerName, Long customerId,
+                               Long projectId, Long contactId, String note, String entryChannel,
+                               List<TicketItemRequest> items, LocalDate nextFollowUpAt, Boolean quotationOnly,
+                               Long ownerEmployeeId, String designerName, BigDecimal estimatedValue, String startStage,
+                               BigDecimal preDeposit) {
+        this(title, priority, customerName, customerId, projectId, contactId, note, entryChannel,
+            items, nextFollowUpAt, quotationOnly, ownerEmployeeId, designerName, estimatedValue, startStage, preDeposit, null);
+    }
+
     /** The fifteen-argument shape before preDeposit. */
     public CreateTicketRequest(String title, String priority, String customerName, Long customerId,
                                Long projectId, Long contactId, String note, String entryChannel,

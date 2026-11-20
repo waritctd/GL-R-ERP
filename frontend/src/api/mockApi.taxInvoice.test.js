@@ -139,7 +139,10 @@ describe('mockApi delivery rounds — tax invoice', () => {
     expect(before.order.asksPreDeposit).toBe(true);
     const { round } = await api.deliveryRequests.createDraft(18, { quotationId: before.approvedQuotations[0].id });
     await expect(api.deliveryRequests.send(round.id, { systemDocs: [] })).rejects.toThrow('ใส่มัดจำที่รับแล้วก่อนใช้ระบบ');
-    await api.deliveryRequests.send(round.id, { systemDocs: [], preDeposit: 5000 });
+    // The date the deposit was received is required with an amount above 0, and is not in the future.
+    await expect(api.deliveryRequests.send(round.id, { systemDocs: [], preDeposit: 5000 })).rejects.toThrow('ใส่วันที่ได้รับมัดจำ');
+    await expect(api.deliveryRequests.send(round.id, { systemDocs: [], preDeposit: 5000, preDepositDate: '2999-01-01' })).rejects.toThrow('ในอนาคต');
+    await api.deliveryRequests.send(round.id, { systemDocs: [], preDeposit: 5000, preDepositDate: '2026-11-01' });
     const pre = (await api.tickets.listPayments(18)).items.filter((p) => p.source === 'PRE_PORTAL');
     expect(pre).toHaveLength(1);
     expect(Number(pre[0].amount)).toBe(5000);

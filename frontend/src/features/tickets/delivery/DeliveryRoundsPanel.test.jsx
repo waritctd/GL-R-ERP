@@ -109,6 +109,9 @@ describe('DeliveryRoundsPanel', () => {
     const input = within(sheet).getByLabelText('มัดจำที่รับแล้วก่อนใช้ระบบ (บาท)');
     fireEvent.change(input, { target: { value: '999999' } });
     expect(within(sheet).getByTestId('send-blocked-reason').textContent).toContain('เกินยอดใบเสนอราคา');
+    // An amount above 0 also needs the date it was received (พ.ศ. field, committed on blur).
+    fireEvent.change(input, { target: { value: '500' } });
+    expect(within(sheet).getByTestId('send-blocked-reason').textContent).toContain('ใส่วันที่ได้รับมัดจำ');
     fireEvent.change(input, { target: { value: '0' } });
     await waitFor(() => expect(within(sheet).getByTestId('send-to-warehouse').disabled).toBe(false));
     fireEvent.click(within(sheet).getByTestId('send-to-warehouse'));

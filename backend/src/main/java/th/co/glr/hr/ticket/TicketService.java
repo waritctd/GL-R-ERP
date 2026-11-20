@@ -535,7 +535,7 @@ public class TicketService {
             TicketSummaryDto created = requireTicket(id).summary();
             requireStageWriteAccess(created, DealStage.SPEC_APPROVED, actor);
             tickets.updateSalesStage(id, DealStage.PROCUREMENT);
-            becomePrePortal(id, request.preDeposit(), actor);
+            becomePrePortal(id, request.preDeposit(), request.preDepositDate(), actor);
             tickets.addEvent(id, actor.id(), actor.name(),
                 TicketEventKind.STAGE_CHANGED, created.salesStage(), DealStage.PROCUREMENT, "งานที่เดินมาก่อนใช้ระบบ");
         }
@@ -1149,32 +1149,44 @@ public class TicketService {
         return deposit.setScale(2, java.math.RoundingMode.HALF_UP);
     }
 
+    /** The deposit and the day it was received: the date is required when the amount is above 0 and is not in the future (Asia/Bangkok). */
+    public static BigDecimal requirePreDeposit(BigDecimal deposit, java.time.LocalDate receivedOn) {
+        BigDecimal amount = requirePreDeposit(deposit);
+        if (amount.signum() > 0) {
+            if (receivedOn == null) {
+                throw new ApiException(HttpStatus.BAD_REQUEST, "ใส่วันที่ได้รับมัดจำ");
+            }
+            if (receivedOn.isAfter(bangkokDate(Instant.now()))) {
+                throw new ApiException(HttpStatus.BAD_REQUEST, "วันที่ได้รับมัดจำต้องไม่เป็นวันในอนาคต");
+            }
+        }
+        return amount;
+    }
+
     /**
      * A deal becomes pre-portal (the สั่งซื้อแล้ว start, or the first request on an old deal): the flag, the deposit the
      * customer already paid outside the portal as ONE DEPOSIT receipt of source PRE_PORTAL (nothing when 0), and a bell to
-     * account, sales manager, the warehouse manager (the warehouse's manager-position staff, else every warehouse person)
+     * account, sales manager, the warehouse manager ({@link WarehouseStaff#managerRecipientIds})
      * and every invoice issuer, one bell per person. Performs NO authorization: the caller has authorized {@code actor}.
      * The caller takes the advisory lock (if it confirms the order) BEFORE calling, then this writes the ticket row.
      */
     @Transactional
-    public void becomePrePortal(long ticketId, BigDecimal deposit, UserPrincipal actor) {
-        BigDecimal amount = requirePreDeposit(deposit);
+    public void becomePrePortal(long ticketId, BigDecimal deposit, java.time.LocalDate receivedOn, UserPrincipal actor) {
+        BigDecimal amount = requirePreDeposit(deposit, receivedOn);
         TicketSummaryDto s = requireTicket(ticketId).summary();
         tickets.markPrePortal(ticketId);
         if (amount.signum() > 0) {
-            long receiptId = tickets.insertSourcedReceipt(ticketId, "DEPOSIT", amount, actor.id(), null, null, null,
-                PRE_PORTAL_SOURCE);
+            long receiptId = tickets.insertSourcedReceipt(ticketId, "DEPOSIT", amount, actor.id(),
+                receivedOn.atStartOfDay(java.time.ZoneId.of("Asia/Bangkok")).toInstant(), null, null, PRE_PORTAL_SOURCE);
             tickets.addEventWithDocument(ticketId, actor.id(), actor.name(), TicketEventKind.PAYMENT_RECORDED,
                 s.status(), s.status(), "kind=DEPOSIT, amount=" + amount + " — มัดจำที่รับแล้วก่อนใช้ระบบ",
                 RelatedDocumentType.PAYMENT_RECEIPT, receiptId);
-            tickets.applyReceiptToExpectedPayments(ticketId, "DEPOSIT", amount, bangkokDate(java.time.Instant.now()), receiptId);
+            tickets.applyReceiptToExpectedPayments(ticketId, "DEPOSIT", amount, receivedOn, receiptId);
         }
         String message = actor.name() + " ตั้งงานเป็นงานที่เดินมาก่อนใช้ระบบ · มัดจำที่รับแล้ว " + ThaiText.money(amount) + " บาท\n"
             + DealNoticeText.dealLabel(s.code(), s.customerName()) + "\nแจ้งเพื่อทราบ ไม่ต้องดำเนินการ";
         java.util.Set<Long> direct = new java.util.LinkedHashSet<>();
-        var staff = employeeAuth.findAllActive().stream().filter(th.co.glr.hr.auth.WarehouseStaff::is).toList();
-        var managers = staff.stream().filter(e -> th.co.glr.hr.auth.DivisionAccessPolicy.isManager(e)).toList();
-        (managers.isEmpty() ? staff : managers).forEach(e -> direct.add(e.employeeId()));
+        direct.addAll(WarehouseStaff.managerRecipientIds(employeeAuth));
         direct.addAll(notifications.taxInvoiceIssuerIds());
         direct.remove(actor.id());
         direct.forEach(id -> notifications.notifyEmployeeAtLink(id, PRE_PORTAL_NOTICE, message, "/tickets/" + ticketId));
@@ -2579,7 +2591,7 @@ public class TicketService {
     }
 
     /** The Asia/Bangkok calendar date of a receipt (now when it has no time). */
-    private static java.time.LocalDate bangkokDate(Instant at) {
+    static java.time.LocalDate bangkokDate(Instant at) {
         return (at == null ? Instant.now() : at).atZone(java.time.ZoneId.of("Asia/Bangkok")).toLocalDate();
     }
 

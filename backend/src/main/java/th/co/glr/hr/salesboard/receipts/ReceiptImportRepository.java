@@ -133,16 +133,14 @@ public class ReceiptImportRepository {
                AND kind IN ('DEPOSIT', 'BALANCE') AND amount = :a
                AND NOT EXISTS (SELECT 1 FROM sales.receipt_import_row w
                                 WHERE w.receipt_id = payment_receipt.receipt_id AND w.status = 'RESOLVED')
-               AND ((source = 'PRE_PORTAL' AND kind = 'DEPOSIT'
-                     AND CAST(:d AS date) <= (received_at AT TIME ZONE 'Asia/Bangkok')::date)
-                    OR (source <> 'PRE_PORTAL' AND abs((received_at AT TIME ZONE 'Asia/Bangkok')::date - CAST(:d AS date)) <= :days))
+               AND (source <> 'PRE_PORTAL' OR kind = 'DEPOSIT')
+               AND abs((received_at AT TIME ZONE 'Asia/Bangkok')::date - CAST(:d AS date)) <= :days
              ORDER BY abs((received_at AT TIME ZONE 'Asia/Bangkok')::date - CAST(:d AS date)), receipt_id
              LIMIT 1
             """, new MapSqlParameterSource().addValue("t", ticketId).addValue("a", amount).addValue("d", docDate)
                 .addValue("days", TWIN_DAYS), (rs, n) -> rs.getLong(1)).stream().findFirst();
     }
 
-    // A PRE_PORTAL receipt is dated the day the rep typed it, not the day the customer paid: it twins a DEPOSIT row dated on or before that day, whatever the gap (a later same-amount instalment is a different payment).
     public static final int TWIN_DAYS = 7;
 
     /** Is an Express row already RESOLVED against this receipt? A tax invoice's money settles at most one row. */

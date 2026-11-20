@@ -23,6 +23,22 @@ public final class WarehouseStaff {
         return employee != null && employee.active() && ROLE.equals(DivisionAccessPolicy.roleFor(employee));
     }
 
+    /**
+     * The warehouse manager: active warehouse staff whose position title STARTS WITH "ผู้จัดการ" (whitespace ignored), so an
+     * assistant ("ผู้ช่วยผู้จัดการ") is not one. The ONE definition; {@link #managerRecipientIds} is how a bell uses it.
+     */
+    public static boolean isManager(EmployeeLoginRecord employee) {
+        return is(employee) && employee.positionName() != null
+            && employee.positionName().replaceAll("\\s+", "").startsWith("ผู้จัดการ");
+    }
+
+    /** The warehouse manager's id(s); every active warehouse person only when nobody holds the title. */
+    public static List<Long> managerRecipientIds(EmployeeAuthRepository employees) {
+        List<Long> managers = employees.findAllActive().stream().filter(WarehouseStaff::isManager)
+            .map(EmployeeLoginRecord::employeeId).toList();
+        return managers.isEmpty() ? recipientIds(employees) : managers;
+    }
+
     /** Employee ids of every active warehouse person, for notifications. */
     public static List<Long> recipientIds(EmployeeAuthRepository employees) {
         return employees.findAllActive().stream().filter(WarehouseStaff::is).map(EmployeeLoginRecord::employeeId).toList();

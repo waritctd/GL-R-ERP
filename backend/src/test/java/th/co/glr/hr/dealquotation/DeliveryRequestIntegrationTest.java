@@ -45,6 +45,7 @@ class DeliveryRequestIntegrationTest extends AbstractDealDirectQuotationIntegrat
     private DeliveryRequestService rounds;
     private UserPrincipal otherSales;
     private UserPrincipal warehouse;
+    private static final java.time.LocalDate TODAY = java.time.LocalDate.now(java.time.ZoneId.of("Asia/Bangkok"));
     private long warehouseEmployeeId;
     private DepositNoticeService depositNotices;
 
@@ -844,7 +845,7 @@ class DeliveryRequestIntegrationTest extends AbstractDealDirectQuotationIntegrat
         Map<String, Object> base = jdbc.queryForMap("SELECT customer_id, project_id FROM sales.ticket WHERE ticket_id = :t",
             Map.of("t", deal(salesActor)));
         return ticketService.create(new th.co.glr.hr.ticket.CreateTicketRequest("งานเก่า", "NORMAL", null,
-            ((Number) base.get("customer_id")).longValue(), ((Number) base.get("project_id")).longValue(), null, null, "OWNER_DIRECT", List.of(), null, null, null, null, null, "PROCUREMENT", deposit),
+            ((Number) base.get("customer_id")).longValue(), ((Number) base.get("project_id")).longValue(), null, null, "OWNER_DIRECT", List.of(), null, null, null, null, null, "PROCUREMENT", deposit, TODAY),
             salesActor).summary().id();
     }
 
@@ -866,13 +867,16 @@ class DeliveryRequestIntegrationTest extends AbstractDealDirectQuotationIntegrat
         assertThat(order.prePortal()).isFalse();
 
         // The deposit is required (0 allowed) and cannot exceed the quotation total: nothing is written on a refusal.
-        refusal(() -> rounds.send(rid, null, null, salesActor), HttpStatus.BAD_REQUEST);
-        refusal(() -> rounds.send(rid, null, new BigDecimal("-1"), salesActor), HttpStatus.BAD_REQUEST);
-        refusal(() -> rounds.send(rid, null, new BigDecimal("99999999"), salesActor), HttpStatus.CONFLICT);
+        refusal(() -> rounds.send(rid, null, null, null, salesActor), HttpStatus.BAD_REQUEST);
+        refusal(() -> rounds.send(rid, null, new BigDecimal("-1"), TODAY, salesActor), HttpStatus.BAD_REQUEST);
+        // The date is required with an amount above 0, and is not in the future.
+        refusal(() -> rounds.send(rid, null, new BigDecimal("1000.00"), null, salesActor), HttpStatus.BAD_REQUEST);
+        refusal(() -> rounds.send(rid, null, new BigDecimal("1000.00"), TODAY.plusDays(1), salesActor), HttpStatus.BAD_REQUEST);
+        refusal(() -> rounds.send(rid, null, new BigDecimal("99999999"), TODAY, salesActor), HttpStatus.CONFLICT);
         assertThat(jdbc.queryForObject("SELECT pre_portal FROM sales.ticket WHERE ticket_id = :t", Map.of("t", ticketId), Boolean.class)).isFalse();
         assertThat(jdbc.queryForObject("SELECT count(*) FROM sales.payment_receipt WHERE ticket_id = :t", Map.of("t", ticketId), Long.class)).isZero();
 
-        RoundDto sent = rounds.send(rid, null, new BigDecimal("1000.00"), salesActor);
+        RoundDto sent = rounds.send(rid, null, new BigDecimal("1000.00"), TODAY.minusDays(3), salesActor);
         assertThat(sent.status()).isEqualTo("SENT");
         assertThat(sent.lines()).isNotEmpty();
         assertThat(rounds.list(ticketId, salesActor).order().prePortal()).isTrue();
@@ -882,6 +886,8 @@ class DeliveryRequestIntegrationTest extends AbstractDealDirectQuotationIntegrat
         assertThat(jdbc.queryForMap("SELECT kind, amount, source, recorded_by FROM sales.payment_receipt WHERE ticket_id = :t",
             Map.of("t", ticketId))).containsEntry("kind", "DEPOSIT").containsEntry("source", "PRE_PORTAL")
             .containsEntry("recorded_by", salesActor.id()).extracting(m -> m.get("amount")).isEqualTo(new BigDecimal("1000.00"));
+        assertThat(jdbc.queryForObject("SELECT (received_at AT TIME ZONE 'Asia/Bangkok')::date FROM sales.payment_receipt WHERE ticket_id = :t",
+            Map.of("t", ticketId), java.time.LocalDate.class)).as("received on the date the rep gave").isEqualTo(TODAY.minusDays(3));
         assertThat(one("SELECT deposit_policy FROM sales.ticket WHERE ticket_id = :t", ticketId)).isEqualTo("NOT_REQUIRED");
         // C2: account, sales manager, the warehouse (no warehouse manager exists, so every warehouse person) and the issuer.
         assertThat(notices(accountId, "DEAL_PRE_PORTAL")).hasSize(1);
@@ -892,6 +898,20 @@ class DeliveryRequestIntegrationTest extends AbstractDealDirectQuotationIntegrat
     }
 
     @Test
+    void preportal_bellGoesToTheWarehouseManagerOnly_notTheAssistantManagerNorStaff() {
+        EmployeeRepository employees = new EmployeeRepository(jdbc, new EmployeeReferenceRepository(jdbc),
+            new EmployeeCodeGenerator(jdbc));
+        long manager = createEmployee(employees, "หัวหน้าคลัง ทดสอบ", "wh-mgr-dr@glr.co.th", "WH", "คลังสินค้า", "ผู้จัดการ");
+        long assistant = createEmployee(employees, "ผู้ช่วยคลัง ทดสอบ", "wh-asst-dr@glr.co.th", "WH", "คลังสินค้า", "ผู้ช่วยผู้จัดการ");
+        long ticketId = deal(salesActor);
+        approved(ticketId, draft(), salesActor);
+        rounds.send(rounds.createDraft(ticketId, null, salesActor).id(), null, BigDecimal.ZERO, null, salesActor);
+        assertThat(notices(manager, "DEAL_PRE_PORTAL")).hasSize(1);
+        assertThat(notices(assistant, "DEAL_PRE_PORTAL")).isEmpty();
+        assertThat(notices(warehouseEmployeeId, "DEAL_PRE_PORTAL")).isEmpty();
+    }
+
+    @Test
     void preportal_anOldDealWithPreliminaryLines_stillAsksTheDepositAndSends() {
         long ticketId = deal(salesActor);
         jdbc.update("INSERT INTO sales.ticket_item (ticket_id, brand, qty, qty_from_stock, sort_order) VALUES (:t, 'SCG', 5, 0, 0)",
@@ -899,7 +919,7 @@ class DeliveryRequestIntegrationTest extends AbstractDealDirectQuotationIntegrat
         approved(ticketId, draft(), salesActor);
         long rid = rounds.createDraft(ticketId, null, salesActor).id();
         assertThat(rounds.list(ticketId, salesActor).order().unconfirmed()).as("N-I1: the sheet asks for the deposit send requires").isTrue();
-        assertThat(rounds.send(rid, null, BigDecimal.ZERO, salesActor).status()).isEqualTo("SENT");
+        assertThat(rounds.send(rid, null, BigDecimal.ZERO, null, salesActor).status()).isEqualTo("SENT");
         assertThat(rounds.list(ticketId, salesActor).order().prePortal()).isTrue();
     }
 

@@ -2193,8 +2193,21 @@ public class DealQuotationService {
         Instant restoreStageAt = restoreStage == null ? null
             : tickets.latestStageChangeAtBefore(ticketId, promotion.eventId()).orElse(null);
         // Under the CUSTOMER_CONFIRMED payment status the compare-and-set needs, so before the ticket reset below.
+        boolean prePortal = tickets.isPrePortal(ticketId);
+        BigDecimal prePortalDeposit = BigDecimal.ZERO;
+        String policyNow = locked.depositPolicy();
+        if (prePortal) {
+            // The pre-portal marking goes first: policy back to what it replaced (recorded in its POLICY_CHANGED), the
+            // PRE_PORTAL receipt deleted with its effect on the expected payments, the flag cleared.
+            var was = tickets.prePortalPolicyBefore(ticketId, promotion.eventId());
+            if (was.isPresent()) {
+                tickets.restoreDepositPolicy(ticketId, was.get());
+                policyNow = was.get();
+            }
+            prePortalDeposit = tickets.removePrePortal(ticketId);
+        }
         if (tickets.hasSystemPolicyChangeAfter(ticketId, promotion.eventId(), quotation.number())) {
-            boolean nowNotRequired = DepositPolicy.NOT_REQUIRED.equals(locked.depositPolicy());
+            boolean nowNotRequired = DepositPolicy.NOT_REQUIRED.equals(policyNow);
             tickets.syncDepositPolicyFromQuotation(ticketId,
                 nowNotRequired ? DepositPolicy.NOT_REQUIRED : DepositPolicy.REQUIRED,
                 nowNotRequired ? DepositPolicy.REQUIRED : DepositPolicy.NOT_REQUIRED, null);
@@ -2215,7 +2228,9 @@ public class DealQuotationService {
         String note = "ยกเลิกการยืนยันคำสั่งซื้อจากใบเสนอราคา " + quotation.number()
             + " (ยืนยันโดย " + promotion.actorName() + " เมื่อ " + when + ")"
             + (reason == null || reason.isBlank() ? "" : " · เหตุผล: " + reason.trim())
-            + (draftNotices > 0 ? " · ลบใบแจ้งรับมัดจำฉบับร่างแล้ว" : "");
+            + (draftNotices > 0 ? " · ลบใบแจ้งรับมัดจำฉบับร่างแล้ว" : "")
+            + (prePortal ? " · ยกเลิกการตั้งเป็นงานที่เดินมาก่อนใช้ระบบ"
+                + (prePortalDeposit.signum() > 0 ? " และลบมัดจำที่รับแล้ว ฿" + prePortalDeposit.toPlainString() : "") : "");
         tickets.addEventWithDocument(ticketId, actor.id(), actor.name(), TicketEventKind.ORDER_CONFIRMATION_UNDONE,
             TicketStatus.QUOTATION_ISSUED, TicketStatus.DRAFT, note, RelatedDocumentType.QUOTATION, quotationId);
         return promotionResult(ticketId, quotationId);
@@ -2253,6 +2268,7 @@ public class DealQuotationService {
                 + s.paymentStatus() + ") จึงยกเลิกการยืนยันไม่ได้";
         }
         TicketRepository.UndoFacts f = tickets.undoConfirmationFacts(s.id());
+        boolean prePortal = tickets.isPrePortal(s.id());
         if (f.bidOrSplit()) {
             return "คำสั่งซื้อนี้มาจากการบันทึกผลประมูลหรือการแยกงาน จึงยกเลิกการยืนยันจากหน้านี้ไม่ได้";
         }
@@ -2261,6 +2277,9 @@ public class DealQuotationService {
         }
         if (f.paymentReceipt()) {
             return "มีการบันทึกรับชำระเงินแล้ว จึงยกเลิกการยืนยันคำสั่งซื้อไม่ได้";
+        }
+        if (f.prePortalSettledByExpress()) {
+            return "มัดจำที่รับแล้วก่อนใช้ระบบถูกจับคู่กับรายการ Express แล้ว จึงยกเลิกการยืนยันคำสั่งซื้อไม่ได้ ให้ฝ่ายบัญชีปรับยอด";
         }
         if (f.remainingInvoice()) {
             return "มีใบแจ้งหนี้ยอดคงเหลือแล้ว จึงยกเลิกการยืนยันคำสั่งซื้อไม่ได้";
@@ -2279,7 +2298,8 @@ public class DealQuotationService {
         }
         boolean autoRoutedFromStock = DealStage.DELIVERY_SCHEDULING.equals(s.salesStage())
             && FulfilmentStatus.FROM_STOCK.equals(s.fulfillmentStatus()) && routedByTheConfirmationItself(s.id());
-        if (!DealStage.ORDER_RECEIVED.equals(s.salesStage()) && !autoRoutedFromStock) {
+        // A pre-portal deal's confirm keeps the stage the deal was at (it never moved it), so there is no stage to refuse on.
+        if (!prePortal && !DealStage.ORDER_RECEIVED.equals(s.salesStage()) && !autoRoutedFromStock) {
             return "งานเดินหน้าไปขั้น " + s.salesStage() + " แล้ว จึงยกเลิกการยืนยันคำสั่งซื้อไม่ได้";
         }
         if (s.fulfillmentStatus() != null && !FulfilmentStatus.FROM_STOCK.equals(s.fulfillmentStatus())) {

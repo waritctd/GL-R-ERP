@@ -58,7 +58,7 @@ public class DeliveryRequestController {
     @PostMapping("/delivery-requests/{rid}/send")
     RoundResponse send(@PathVariable long rid, @RequestBody(required = false) SendRequest request, HttpSession session) {
         return new RoundResponse(service.send(rid, request == null ? null : request.systemDocs(),
-            request == null ? null : request.preDeposit(), sessions.requireUser(session)));
+            request == null ? null : request.preDeposit(), request == null ? null : request.preDepositDate(), sessions.requireUser(session)));
     }
 
     @PostMapping("/delivery-requests/{rid}/forward")

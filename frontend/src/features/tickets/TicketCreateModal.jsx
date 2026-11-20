@@ -16,7 +16,7 @@ import {
 } from './CreateDealItems.jsx';
 import { FieldError, FieldLabel, PickChips, RadioCards } from './dealDialogParts.jsx';
 import { ESTIMATE_ERROR, parseEstimatedValue } from './dealEstimate.js';
-import { PRE_DEPOSIT_ERROR, PreDepositField, parsePreDeposit } from './delivery/PreDepositField.jsx';
+import { PRE_DEPOSIT_ERROR, PreDepositField, parsePreDeposit, preDepositDateError } from './delivery/PreDepositField.jsx';
 
 /**
  * สร้างงานใหม่ — the owner-approved short form (drawing m-create, 2026-11-16): ชื่อโครงการ, ลูกค้า / บริษัท, ผู้ออกแบบ,
@@ -156,6 +156,7 @@ export function TicketCreateModal({ user, onClose, onSubmit, initialStartStage =
   const [estimatedValue, setEstimatedValue] = useState('');
   const [startStage, setStartStage] = useState(initialStartStage);
   const [preDeposit, setPreDeposit] = useState('');
+  const [preDepositDate, setPreDepositDate] = useState('');
   const [entryChannel, setEntryChannel] = useState(null);
   // Only for a creator who cannot add items afterwards (canEditDealItemsAfterCreate); always [] otherwise.
   const offersItems = !canEditDealItemsAfterCreate(user);
@@ -250,19 +251,21 @@ export function TicketCreateModal({ user, onClose, onSubmit, initialStartStage =
     const value = parseEstimatedValue(estimatedValue);
     if (Number.isNaN(value)) errors.value = ESTIMATE_ERROR;
     if (startStage === 'PROCUREMENT' && Number.isNaN(parsePreDeposit(preDeposit))) errors.preDeposit = PRE_DEPOSIT_ERROR;
+    const depositDateError = startStage === 'PROCUREMENT' ? preDepositDateError(parsePreDeposit(preDeposit), preDepositDate) : '';
+    if (depositDateError) errors.preDepositDate = depositDateError;
     const sentItems = offersItems ? items : [];
     Object.assign(errors, validateCreateItems(sentItems));
     if (Object.keys(errors).length > 0) {
       setFieldErrors(errors);
       setError('');
-      const first = ['project', 'customer', 'entryChannel', 'value', 'preDeposit'].find((key) => errors[key]);
+      const first = ['project', 'customer', 'entryChannel', 'value', 'preDeposit', 'preDepositDate'].find((key) => errors[key]);
       if (first === 'entryChannel') {
         // A radiogroup cannot take focus itself: focus its first chip (review round 2, L-5). The error is role="alert"
         // and the group is aria-describedby it, so it is announced.
         document.querySelector('#deal-entry-channel [role="radio"]')?.focus();
       } else {
         document.getElementById({
-          project: 'deal-project-name', customer: 'deal-customer', value: 'deal-estimated-value', preDeposit: 'deal-pre-deposit',
+          project: 'deal-project-name', customer: 'deal-customer', value: 'deal-estimated-value', preDeposit: 'deal-pre-deposit', preDepositDate: 'deal-pre-deposit-date',
         }[first])?.focus();
       }
       return;
@@ -294,7 +297,7 @@ export function TicketCreateModal({ user, onClose, onSubmit, initialStartStage =
         designerName,
         estimatedValue: value,
         startStage,
-        ...(startStage === 'PROCUREMENT' ? { preDeposit: parsePreDeposit(preDeposit) } : {}),
+        ...(startStage === 'PROCUREMENT' ? { preDeposit: parsePreDeposit(preDeposit), ...(preDepositDate ? { preDepositDate } : {}) } : {}),
         priority,
         note: note.trim() || null,
         nextFollowUpAt: nextFollowUpAt || null,
@@ -467,8 +470,11 @@ export function TicketCreateModal({ user, onClose, onSubmit, initialStartStage =
           <PreDepositField
             id="deal-pre-deposit"
             value={preDeposit}
-            onChange={(text) => { setPreDeposit(text); clearError('preDeposit'); }}
+            onChange={(text) => { setPreDeposit(text); clearError('preDeposit'); clearError('preDepositDate'); }}
             error={fieldErrors.preDeposit}
+            date={preDepositDate}
+            onDateChange={(iso) => { setPreDepositDate(iso); clearError('preDepositDate'); }}
+            dateError={fieldErrors.preDepositDate}
           />
         ) : null}
 

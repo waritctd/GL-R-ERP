@@ -172,13 +172,13 @@ class ReceiptImportIntegrationTest extends AbstractDealQuotationSlice2Integratio
         assertThat(repository.findManualTwin(d, new BigDecimal("32100"), LocalDate.parse(today))).isEmpty();
     }
 
-    /** A pre-portal deposit is dated the day the rep typed it, so the Express row (dated the real payment) still twins by amount. */
+    /** A pre-portal deposit carries the date the rep gave, so it twins an Express row by the normal window around that date. */
     @Test
-    void aPrePortalReceiptIsATwinOnAmountAlone_andSettlesAtMostOneExpressRow() throws Exception {
+    void aPrePortalReceiptIsATwinWithinTheDateWindow_andSettlesAtMostOneExpressRow() throws Exception {
         long d = awaitingDeposit(salesActor, "30000.00", "DN6900052");
         jdbc.update("""
             INSERT INTO sales.payment_receipt (ticket_id, kind, amount, recorded_by, source, received_at)
-            VALUES (:t, 'DEPOSIT', 30000, :by, 'PRE_PORTAL', now())
+            VALUES (:t, 'DEPOSIT', 30000, :by, 'PRE_PORTAL', now() - interval '40 days')
             """, Map.of("t", d, "by", salesActor.id()));
         String lastMonth = LocalDate.now(java.time.ZoneId.of("Asia/Bangkok")).minusDays(40).toString();
         assertThat(upload(account, csv(row("RE-PP-1", lastMonth, "", "30000", "DN6900052"))).get("matched").asInt()).isZero();
@@ -191,7 +191,7 @@ class ReceiptImportIntegrationTest extends AbstractDealQuotationSlice2Integratio
     }
 
     @Test
-    void aPrePortalReceiptIsNotTheTwinOfALaterSameAmountExpressRow() throws Exception {
+    void aPrePortalReceiptIsNotTheTwinOfAnExpressRowOutsideTheDateWindow() throws Exception {
         long d = awaitingDeposit(salesActor, "30000.00", "DN6900053");
         jdbc.update("""
             INSERT INTO sales.payment_receipt (ticket_id, kind, amount, recorded_by, source, received_at)

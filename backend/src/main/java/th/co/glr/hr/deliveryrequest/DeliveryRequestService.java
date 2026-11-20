@@ -616,12 +616,13 @@ public class DeliveryRequestService {
     }
 
     public RoundDto send(long rid, List<SystemDocRef> systemDocs, UserPrincipal actor) {
-        return send(rid, systemDocs, null, actor);
+        return send(rid, systemDocs, null, null, actor);
     }
 
     /** {@code preDeposit}: required (0 or more) only when this send makes the deal pre-portal; see {@link PrePortal}. */
     @Transactional
-    public RoundDto send(long rid, List<SystemDocRef> systemDocs, BigDecimal preDeposit, UserPrincipal actor) {
+    public RoundDto send(long rid, List<SystemDocRef> systemDocs, BigDecimal preDeposit, java.time.LocalDate preDepositDate,
+                         UserPrincipal actor) {
         var round = rounds.findById(rid).orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบรอบส่งที่ขอ"));
         long ticketId = round.ticketId();
         TicketSummaryDto s = summary(ticketId);
@@ -639,7 +640,7 @@ public class DeliveryRequestService {
                 throw new ApiException(HttpStatus.CONFLICT, "เลือกใบเสนอราคาของรอบนี้ก่อนส่ง");
             }
             if (asksPreDeposit(s)) {
-                prePortal.confirmAndMark(ticketId, chosen, preDeposit, actor);
+                prePortal.confirmAndMark(ticketId, chosen, preDeposit, preDepositDate, actor);
             } else {
                 prePortal.ensureOrderConfirmed(ticketId, chosen, actor);
             }

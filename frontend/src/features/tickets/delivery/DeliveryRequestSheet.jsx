@@ -16,7 +16,7 @@ import { cn } from '../../../utils/cn.js';
 import { formatMoney } from '../../../utils/format.js';
 import { RemainingInvoiceDialog } from '../RemainingInvoiceDialog.jsx';
 import { fileSizeText, MAX_FILES_PER_ROUND, MAX_UPLOAD_BYTES, useFileOpener } from './deliveryRound.js';
-import { PreDepositField, parsePreDeposit } from './PreDepositField.jsx';
+import { PreDepositField, parsePreDeposit, preDepositDateError } from './PreDepositField.jsx';
 import { RoundDocuments, useRoundDocuments } from './RoundDocuments.jsx';
 
 const SECTION_LABEL = 'flex items-baseline justify-between gap-2 text-[0.8125rem] font-bold text-text-secondary';
@@ -72,6 +72,7 @@ export function DeliveryRequestSheet({ ticketId, order, approvedQuotations, summ
   const [uploading, setUploading] = useState([]);
   const [fileErrors, setFileErrors] = useState([]);
   const [preDeposit, setPreDeposit] = useState('');
+  const [preDepositDate, setPreDepositDate] = useState('');
 
   const refresh = () => {
     queryClient.invalidateQueries({ queryKey: queryKeys.deliveryRequests(ticketId) });
@@ -115,11 +116,12 @@ export function DeliveryRequestSheet({ ticketId, order, approvedQuotations, summ
   const asksDeposit = order.asksPreDeposit === true; // the server's own rule, the same one send() enforces
   const depositValue = parsePreDeposit(preDeposit);
   const depositTooBig = asksDeposit && !Number.isNaN(depositValue) && quotation?.preDepositMax != null && depositValue > Number(quotation.preDepositMax);
+  const depositDateError = asksDeposit ? preDepositDateError(depositValue, preDepositDate) : '';
   const send = useMutation({
     mutationFn: async () => {
       await api.deliveryRequests.update(round.id, { quotationId: round.quotationId, note: note ?? '' });
       const systemDocs = docs.rows.filter((r) => selected.has(r.key)).map((r) => ({ kind: r.kind, id: r.id }));
-      return api.deliveryRequests.send(round.id, { systemDocs, ...(asksDeposit ? { preDeposit: parsePreDeposit(preDeposit) } : {}) });
+      return api.deliveryRequests.send(round.id, { systemDocs, ...(asksDeposit ? { preDeposit: parsePreDeposit(preDeposit), ...(preDepositDate ? { preDepositDate } : {}) } : {}) });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['tickets'] });
@@ -185,6 +187,7 @@ export function DeliveryRequestSheet({ ticketId, order, approvedQuotations, summ
   else if (uploading.length > 0) blocked = 'รออัปโหลดไฟล์ให้เสร็จก่อน';
   else if (asksDeposit && Number.isNaN(depositValue)) blocked = 'ใส่มัดจำที่รับแล้วก่อนใช้ระบบ (0 ถ้ายังไม่ได้รับ)';
   else if (depositTooBig) blocked = 'มัดจำที่รับแล้วเกินยอดใบเสนอราคา';
+  else if (depositDateError) blocked = depositDateError;
   // An old deal has no lines until its order is confirmed by this send, so only a confirmed order can be fully covered.
   else if (round.lines.length === 0 && !order.unconfirmed) blocked = 'ทุกรายการมีรอบส่งครอบคลุมแล้ว';
   const sending = send.isPending;
@@ -246,6 +249,9 @@ export function DeliveryRequestSheet({ ticketId, order, approvedQuotations, summ
             id="request-pre-deposit"
             value={preDeposit}
             onChange={setPreDeposit}
+            date={preDepositDate}
+            onDateChange={setPreDepositDate}
+            dateError={depositDateError || null}
             error={depositTooBig ? 'เกินยอดใบเสนอราคา' : null}
             max={quotation?.preDepositMax ?? null}
             disabled={!round || sending}

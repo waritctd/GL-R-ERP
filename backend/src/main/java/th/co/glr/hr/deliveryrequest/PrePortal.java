@@ -55,10 +55,11 @@ public class PrePortal {
      * everything rolls back if it exceeds the quotation total (409).
      */
     @Transactional
-    public void confirmAndMark(long ticketId, Long quotationId, BigDecimal deposit, UserPrincipal actor) {
-        TicketService.requirePreDeposit(deposit);
+    public void confirmAndMark(long ticketId, Long quotationId, BigDecimal deposit, java.time.LocalDate receivedOn,
+                               UserPrincipal actor) {
+        TicketService.requirePreDeposit(deposit, receivedOn);
         confirmIfNeeded(ticketId, quotationId, actor);
-        ticketService.becomePrePortal(ticketId, deposit, actor);
+        ticketService.becomePrePortal(ticketId, deposit, receivedOn, actor);
         requireDepositWithinTotal(ticketId);
     }
 
@@ -84,10 +85,10 @@ public class PrePortal {
                 "คงขั้นเดิมของงานที่เดินมาก่อนใช้ระบบ");
         }
         if (!DepositPolicy.NOT_REQUIRED.equals(confirmed.depositPolicy())) {
-            tickets.updateDepositPolicy(ticketId, DepositPolicy.NOT_REQUIRED,
-                "งานที่เดินมาก่อนใช้ระบบ: มัดจำรับแล้วนอกระบบ", actor.id());
+            tickets.updateDepositPolicy(ticketId, DepositPolicy.NOT_REQUIRED, TicketRepository.PRE_PORTAL_POLICY_REASON, actor.id());
+            // The note names the policy it replaced: the undo of this confirmation puts it back from here.
             tickets.addEvent(ticketId, actor.id(), actor.name(), TicketEventKind.POLICY_CHANGED, before, before,
-                TicketRepository.followedPolicyNote(DepositPolicy.NOT_REQUIRED, "งานที่เดินมาก่อนใช้ระบบ: มัดจำรับแล้วนอกระบบ"));
+                TicketRepository.prePortalPolicyNote(confirmed.depositPolicy()));
         }
         return true;
     }

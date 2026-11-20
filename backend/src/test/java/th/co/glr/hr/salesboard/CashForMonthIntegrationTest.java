@@ -100,7 +100,7 @@ class CashForMonthIntegrationTest extends AbstractDealQuotationSlice2Integration
         receipt(delivered, "BALANCE", "222", "2026-10-31T16:59:00Z", "RE-4");   // 23:59 Bangkok, 31 Oct
         receipt(delivered, "BALANCE", "33", "2026-10-31T17:00:00Z", "RE-5");    // 00:00 Bangkok, Sun 1 Nov
         receipt(delivered, "ADJUSTMENT", "10", "2026-11-10T05:00:00Z", "RE-6"); // a refund subtracts
-        // money the rep recorded as received before the portal is not this month's collection
+        // a deposit the rep recorded as received before the portal counts in the period of the date they gave
         jdbc.update("UPDATE sales.payment_receipt SET source = 'PRE_PORTAL' WHERE receipt_id = :id", Map.of("id",
             receipt(delivered, "DEPOSIT", "777", "2026-11-12T05:00:00Z", "RE-PRE")));
 
@@ -113,7 +113,7 @@ class CashForMonthIntegrationTest extends AbstractDealQuotationSlice2Integration
         assertThat(mine.month()).isEqualTo("2026-11");
         // The week of Mon 30 Nov has its Thursday on 3 Dec, so its 400 belongs to December (ISO week rule).
         assertThat(mine.forecast()).isEqualByComparingTo("2619");
-        assertThat(mine.received()).isEqualByComparingTo("1273");
+        assertThat(mine.received()).isEqualByComparingTo("2050");
         assertThat(mine.deliveredAwaiting()).isEqualByComparingTo("500");
         assertThat(mine.deliveriesScheduled()).isEqualByComparingTo("120");
         assertThat(mine.depositsExpected()).isEqualByComparingTo("0");
@@ -122,7 +122,7 @@ class CashForMonthIntegrationTest extends AbstractDealQuotationSlice2Integration
             LocalDate.parse("2026-11-02"), LocalDate.parse("2026-11-09"), LocalDate.parse("2026-11-16"),
             LocalDate.parse("2026-11-23"));
         week(mine, 0, "0", "0", "0", "1033"); // Sun 1 Nov folds into the first week
-        week(mine, 1, "500", "0", "0", "-10");
+        week(mine, 1, "500", "0", "0", "767");
         week(mine, 2, "0", "50", "0", "0");
         week(mine, 3, "0", "70", "0", "250"); // Mon 30 Nov's receipt is still November cash: the last week holds it
         BigDecimal weeklyReceived = mine.weeks().stream().map(CashWeek::received)
@@ -131,7 +131,7 @@ class CashForMonthIntegrationTest extends AbstractDealQuotationSlice2Integration
 
         CashMonth team = board.cashForMonth(null, NOV);
         assertThat(team.forecast()).isEqualByComparingTo("92619");
-        assertThat(team.received()).isEqualByComparingTo("51273");
+        assertThat(team.received()).isEqualByComparingTo("52050");
         assertThat(team.deliveredAwaiting()).isEqualByComparingTo("90500");
     }
 

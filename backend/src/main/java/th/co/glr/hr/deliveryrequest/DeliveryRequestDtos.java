@@ -76,7 +76,7 @@ public final class DeliveryRequestDtos {
     public record SystemDocRef(String kind, long id) {}
 
     /** {@code preDeposit}: the deposit already received outside the portal, required only when the send makes the deal pre-portal. */
-    public record SendRequest(List<SystemDocRef> systemDocs, BigDecimal preDeposit) {}
+    public record SendRequest(List<SystemDocRef> systemDocs, BigDecimal preDeposit, java.time.LocalDate preDepositDate) {}
 
     /** {@code reasonCodes}: ADDRESS_TAX_ID, PAYMENT_PROOF, DELIVERY_DATE_PLACE; {@code detail}: free text. One of the two is required. */
     public record ReturnRequest(List<String> reasonCodes, String detail) {}

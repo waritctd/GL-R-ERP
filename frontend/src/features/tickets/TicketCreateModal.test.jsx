@@ -88,6 +88,11 @@ describe('TicketCreateModal — the drawn short form (m-create)', () => {
     fireEvent.click(submitButton());
     expect(await screen.findByText(/ใส่มัดจำที่รับแล้ว/)).toBeTruthy();
     expect(onSubmit).not.toHaveBeenCalled();
+    // Above 0 the date it was received is required too.
+    fireEvent.change(screen.getByLabelText('มัดจำที่รับแล้วก่อนใช้ระบบ (บาท)'), { target: { value: '500' } });
+    fireEvent.click(submitButton());
+    expect(await screen.findByText('ใส่วันที่ได้รับมัดจำ')).toBeTruthy();
+    expect(onSubmit).not.toHaveBeenCalled();
     fireEvent.change(screen.getByLabelText('มัดจำที่รับแล้วก่อนใช้ระบบ (บาท)'), { target: { value: '0' } });
     fireEvent.click(submitButton());
 

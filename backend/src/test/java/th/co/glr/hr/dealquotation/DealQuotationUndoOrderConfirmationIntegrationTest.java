@@ -137,6 +137,55 @@ class DealQuotationUndoOrderConfirmationIntegrationTest extends DirectQuotationD
         assertRefusedAndNothingWritten(c);
     }
 
+    /** A deal made pre-portal by its first document: confirmed, the deposit policy set to NOT_REQUIRED, a PRE_PORTAL receipt. */
+    private Confirmed prePortalDeal(String deposit) {
+        long deal = pipelineTicket(salesActor);
+        DealQuotationDto approved = approvedDirectQuotation(deal, salesActor);
+        new th.co.glr.hr.deliveryrequest.PrePortal(tickets, new th.co.glr.hr.deliveryrequest.DeliveryRequestRepository(jdbc),
+            quotationService, ticketService).confirmAndMark(deal, approved.id(), new java.math.BigDecimal(deposit),
+            java.time.LocalDate.now(java.time.ZoneId.of("Asia/Bangkok")).minusDays(2), salesActor);
+        return new Confirmed(deal, approved);
+    }
+
+    @Test
+    void prePortal_undoRemovesTheMarking_receiptFlagAndPolicyGoBack() {
+        Confirmed c = prePortalDeal("1000.00");
+        String policyBefore = jdbc.queryForObject("""
+            SELECT substr(message, position(' · เดิม ' in message) + 8) FROM sales.ticket_event
+             WHERE ticket_id = :t AND kind = 'POLICY_CHANGED' AND message LIKE '%เดิม%'
+            """, Map.of("t", c.deal()), String.class);
+        jdbc.update("""
+            INSERT INTO sales.expected_payment (ticket_id, kind, amount, expected_week, status, created_by)
+            VALUES (:t, 'DEPOSIT', 1000, date '2026-11-30', 'OPEN', :by)""", Map.of("t", c.deal(), "by", salesActor.id()));
+        // the fixture's expected row was filled by the receipt only if inserted before; apply it by hand to prove the reversal
+        jdbc.update("UPDATE sales.expected_payment SET received_amount = 1000, status = 'RECEIVED', receipt_id = "
+            + "(SELECT receipt_id FROM sales.payment_receipt WHERE ticket_id = :t) WHERE ticket_id = :t", Map.of("t", c.deal()));
+        assertThat(jdbc.queryForObject("SELECT pre_portal FROM sales.ticket WHERE ticket_id = :t", Map.of("t", c.deal()), Boolean.class)).isTrue();
+        assertThat(jdbc.queryForObject("SELECT deposit_policy FROM sales.ticket WHERE ticket_id = :t", Map.of("t", c.deal()), String.class))
+            .isEqualTo(DepositPolicy.NOT_REQUIRED);
+
+        confirmer.undoOrderConfirmation(c.quotation().id(), null, null, salesActor);
+
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM sales.payment_receipt WHERE ticket_id = :t", Map.of("t", c.deal()), Long.class)).isZero();
+        assertThat(jdbc.queryForMap("SELECT pre_portal, deposit_policy, deposit_policy_set_by, status FROM sales.ticket WHERE ticket_id = :t",
+            Map.of("t", c.deal()))).containsEntry("pre_portal", false).containsEntry("deposit_policy", policyBefore)
+            .containsEntry("deposit_policy_set_by", null).containsEntry("status", TicketStatus.DRAFT);
+        assertThat(jdbc.queryForMap("SELECT status, received_amount, receipt_id FROM sales.expected_payment WHERE ticket_id = :t",
+            Map.of("t", c.deal()))).containsEntry("status", "OPEN").containsEntry("receipt_id", null)
+            .extracting(m -> m.get("received_amount")).isEqualTo(new java.math.BigDecimal("0.00"));
+        assertThat(eventCount(c.deal(), TicketEventKind.ORDER_CONFIRMATION_UNDONE)).isEqualTo(1);
+    }
+
+    @Test
+    void prePortal_undoIsRefusedWhenAnExpressRowResolvedAgainstTheReceipt() {
+        Confirmed c = prePortalDeal("1000.00");
+        long receiptId = jdbc.queryForObject("SELECT receipt_id FROM sales.payment_receipt WHERE ticket_id = :t", Map.of("t", c.deal()), Long.class);
+        jdbc.update("UPDATE sales.payment_receipt SET express_doc_no = 'RE-X-1' WHERE receipt_id = :r", Map.of("r", receiptId));
+
+        assertRefusedAndNothingWritten(c);
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM sales.payment_receipt WHERE ticket_id = :t", Map.of("t", c.deal()), Long.class)).isEqualTo(1);
+    }
+
     @ParameterizedTest
     @ValueSource(strings = {"DRAFT", "ISSUED"})
     void cutOff_anImportRequest(String status) {

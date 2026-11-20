@@ -3763,32 +3763,40 @@ function mockRoundCoverage(ticket, excludeRoundId) {
 }
 
 // TicketService#requirePreDeposit: required, 0 or more, at most 2 decimals (400).
-function mockRequirePreDeposit(deposit) {
+function mockRequirePreDeposit(deposit, receivedOn) {
   const n = deposit === null || deposit === undefined || deposit === '' ? NaN : Number(deposit);
   if (!Number.isFinite(n) || n < 0 || Math.abs(n * 100 - Math.round(n * 100)) > 1e-9) {
     fail('ใส่มัดจำที่รับแล้วก่อนใช้ระบบ (0 ถ้ายังไม่ได้รับ) เป็นตัวเลขไม่ติดลบ ทศนิยมไม่เกิน 2 ตำแหน่ง', 400);
   }
+  // The date is required with an amount above 0, and is not in the future (Asia/Bangkok).
+  if (n > 0 && !receivedOn) fail('ใส่วันที่ได้รับมัดจำ', 400);
+  if (n > 0 && receivedOn > bangkokTodayIso()) fail('วันที่ได้รับมัดจำต้องไม่เป็นวันในอนาคต', 400);
   return moneyValue(n);
 }
 
+// WarehouseStaff#isManager: a warehouse person whose position STARTS WITH "ผู้จัดการ" (an assistant manager is not one).
+function mockIsWarehouseManager(u) {
+  return u.active && u.role === 'warehouse' && String(u.positionTh || '').replace(/\s+/g, '').startsWith('ผู้จัดการ');
+}
+
 // TicketService#becomePrePortal: the flag, the deposit as ONE DEPOSIT receipt of source PRE_PORTAL (nothing when 0), and one
-// bell per person to account, sales manager, the warehouse manager (manager-position warehouse staff, else every warehouse
+// bell per person to account, sales manager, the warehouse manager (WarehouseStaff#isManager, else every warehouse
 // person) and every invoice issuer.
-function mockBecomePrePortal(ticket, deposit, user) {
-  const amount = mockRequirePreDeposit(deposit);
+function mockBecomePrePortal(ticket, deposit, receivedOn, user) {
+  const amount = mockRequirePreDeposit(deposit, receivedOn);
   ticket.prePortal = true;
   if (amount > 0) {
     const receiptId = Math.max(0, ...(db.paymentReceipts ?? []).map((r) => r.receiptId)) + 1;
     const now = new Date().toISOString();
     db.paymentReceipts.push({
-      receiptId, ticketId: ticket.id, kind: 'DEPOSIT', amount, currency: 'THB', receivedAt: now, recordedById: user.id,
+      receiptId, ticketId: ticket.id, kind: 'DEPOSIT', amount, currency: 'THB', receivedAt: new Date(`${receivedOn}T00:00:00+07:00`).toISOString(), recordedById: user.id,
       recordedByName: user.name, note: null, depositNoticeId: null, receiptRef: null, createdAt: now, source: 'PRE_PORTAL', customerName: null,
     });
     pushEvent(ticket, user, 'PAYMENT_RECORDED', ticket.status, ticket.status, `kind=DEPOSIT, amount=${amount} — มัดจำที่รับแล้วก่อนใช้ระบบ`);
   }
   const message = `${user.name} ตั้งงานเป็นงานที่เดินมาก่อนใช้ระบบ · มัดจำที่รับแล้ว ${mockThaiMoney(amount)} บาท\n${ticket.code}\nแจ้งเพื่อทราบ ไม่ต้องดำเนินการ`;
   const staff = db.users.filter((u) => u.active && u.role === 'warehouse');
-  const managers = staff.filter(isManagerPosition);
+  const managers = staff.filter(mockIsWarehouseManager);
   const direct = new Set([...(managers.length ? managers : staff).map((u) => u.id),
     ...db.users.filter((u) => u.active && mockIsIssuer(u)).map((u) => u.id)]);
   direct.delete(user.id);
@@ -3799,6 +3807,8 @@ function mockBecomePrePortal(ticket, deposit, user) {
         role === 'account' ? `/finance/deals/${ticket.id}` : `/tickets/${ticket.id}`));
   });
 }
+
+const MOCK_PRE_PORTAL_POLICY_NOTE = 'deposit_policy → NOT_REQUIRED — งานที่เดินมาก่อนใช้ระบบ: มัดจำรับแล้วนอกระบบ · เดิม ';
 
 // PrePortal#confirmIfNeeded: confirms from the chosen quotation (else the newest APPROVED) by the ordinary confirm. The
 // caller is already authorised for its own action, so no edit-access check here (the CEO may create the first IR). The stage
@@ -3819,8 +3829,9 @@ function mockConfirmIfNeeded(ticket, quotationId, user) {
     ticket.salesStage = before;
   }
   if (ticket.depositPolicy !== 'NOT_REQUIRED') {
+    // The note names the policy it replaced: the undo of this confirmation puts it back from here.
+    pushEvent(ticket, user, 'POLICY_CHANGED', before, before, `${MOCK_PRE_PORTAL_POLICY_NOTE}${ticket.depositPolicy ?? 'REQUIRED'}`);
     ticket.depositPolicy = 'NOT_REQUIRED';
-    pushEvent(ticket, user, 'POLICY_CHANGED', before, before, 'deposit_policy → NOT_REQUIRED — งานที่เดินมาก่อนใช้ระบบ: มัดจำรับแล้วนอกระบบ');
   }
 }
 
@@ -3847,11 +3858,11 @@ function mockEnsureOrderConfirmed(ticket, quotationId, user) {
 }
 
 // PrePortal#confirmAndMark: an old deal's first request confirms its order, then marks it pre-portal with the deposit.
-function mockConfirmAndMark(ticket, quotationId, deposit, user) {
-  const amount = mockRequirePreDeposit(deposit);
+function mockConfirmAndMark(ticket, quotationId, deposit, receivedOn, user) {
+  const amount = mockRequirePreDeposit(deposit, receivedOn);
   mockRequireDepositWithinTotal(ticket, quotationId, amount);
   mockConfirmIfNeeded(ticket, quotationId, user);
-  mockBecomePrePortal(ticket, deposit, user);
+  mockBecomePrePortal(ticket, deposit, receivedOn, user);
 }
 
 // DeliveryRequestService#unconfirmed: an old or pre-portal deal whose first send confirms the order (its lines, if any, are preliminary and the confirm replaces them).
@@ -4817,6 +4828,15 @@ function mockUndoRefusal(ticket) {
   if (mockDepositNotices.some((d) => d.ticketId === ticket.id && d.status !== 'DRAFT')) {
     return 'ยกเลิกไม่ได้ — ออกใบแจ้งยอดเงินรับมัดจำแล้ว';
   }
+  // A pre-portal deal's own PRE_PORTAL deposit does not block the undo (it is removed with it); any other money does, and
+  // so does a deposit an Express row has been matched to.
+  const receipts = (db.paymentReceipts ?? []).filter((r) => r.ticketId === ticket.id);
+  if (receipts.some((r) => !(r.source === 'PRE_PORTAL' && r.kind === 'DEPOSIT'))) {
+    return 'ยกเลิกไม่ได้ — มีการบันทึกรับชำระเงินแล้ว';
+  }
+  if (receipts.some((r) => r.source === 'PRE_PORTAL' && r.expressDocNo)) {
+    return 'มัดจำที่รับแล้วก่อนใช้ระบบถูกจับคู่กับรายการ Express แล้ว จึงยกเลิกการยืนยันคำสั่งซื้อไม่ได้ ให้ฝ่ายบัญชีปรับยอด';
+  }
   // Only the bid path writes BID_OUTCOME_RECORDED right AFTER the confirmation; an older outcome does not block.
   const promotionId = mockConfirmedQuotationEvent(ticket)?.id ?? 0;
   const after = (kinds) => ticket.events.some((e) => kinds.includes(e.kind) && e.id > promotionId);
@@ -4834,7 +4854,7 @@ function mockUndoRefusal(ticket) {
   // deposit waiver after the confirmation routes it too, and that is a person's move.
   const autoRouted = ticket.salesStage === 'DELIVERY_SCHEDULING' && ticket.fulfillmentStatus === 'FROM_STOCK'
     && !mockPersonPolicyChangeAfter(ticket, promotionId);
-  if (ticket.salesStage !== 'ORDER_RECEIVED' && !autoRouted) {
+  if (!ticket.prePortal && ticket.salesStage !== 'ORDER_RECEIVED' && !autoRouted) {
     return 'งานเดินหน้าไปขั้นถัดไปแล้ว จึงยกเลิกการยืนยันคำสั่งซื้อไม่ได้';
   }
   if (ticket.fulfillmentStatus != null && ticket.fulfillmentStatus !== 'FROM_STOCK') {
@@ -4848,7 +4868,8 @@ function mockUndoRefusal(ticket) {
 function mockPersonPolicyChangeAfter(ticket, promotionId) {
   const number = mockDealQuotations.find((q) => q.id === ticket.orderConfirmedQuotationId)?.number;
   return ticket.events.some((e) => e.kind === 'POLICY_CHANGED' && e.id > promotionId
-    && String(e.message).startsWith('deposit_policy →') && !isFollowedPolicyNote(e.message, number));
+    && String(e.message).startsWith('deposit_policy →') && !isFollowedPolicyNote(e.message, number)
+    && !String(e.message).startsWith(MOCK_PRE_PORTAL_POLICY_NOTE.slice(0, -' · เดิม '.length)));
 }
 
 // Mirrors DocumentChainService#forTicket's assembly (the gate is the caller's).
@@ -10980,7 +11001,7 @@ export const api = {
       if (startStage !== 'LEAD_APPROACH' && !['sales', 'sales_manager', 'ceo'].includes(user.role)) {
         fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       }
-      if (startStage === 'PROCUREMENT') mockRequirePreDeposit(payload.preDeposit); // before anything is written (Java rolls back)
+      if (startStage === 'PROCUREMENT') mockRequirePreDeposit(payload.preDeposit, payload.preDepositDate); // before anything is written (Java rolls back)
       const ownerOption = payload.ownerEmployeeId != null && payload.ownerEmployeeId !== user.id
         ? mockEligibleQuotationDisplayNameUsers().find((u) => u.id === payload.ownerEmployeeId) : null;
       if (payload.ownerEmployeeId != null && payload.ownerEmployeeId !== user.id && !ownerOption) {
@@ -11059,7 +11080,7 @@ export const api = {
         // Mirrors TicketService.create (V237): สั่งซื้อแล้ว, a deal ordered before the portal, flagged pre_portal.
         ticket.salesStage = 'PROCUREMENT';
         pushEvent(ticket, user, 'STAGE_CHANGED', 'LEAD_APPROACH', 'PROCUREMENT', 'งานที่เดินมาก่อนใช้ระบบ');
-        mockBecomePrePortal(ticket, payload.preDeposit, user);
+        mockBecomePrePortal(ticket, payload.preDeposit, payload.preDepositDate, user);
       }
       // Mirrors TicketRepository.create (V204): the deal's customer is its first party — BUYER,
       // ACTIVE, the headline — so every deal has at least one party, as the backfill gave older ones.
@@ -16373,7 +16394,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
         const chosen = round.quotationId != null ? mockRoundResolveQuotation(ticket.id, round.quotationId)
           : mockRoundResolveQuotation(ticket.id, null);
         if (chosen == null) fail('เลือกใบเสนอราคาของรอบนี้ก่อนส่ง', 409);
-        if (mockAsksPreDeposit(ticket)) mockConfirmAndMark(ticket, chosen, body?.preDeposit, user);
+        if (mockAsksPreDeposit(ticket)) mockConfirmAndMark(ticket, chosen, body?.preDeposit, body?.preDepositDate, user);
         else mockEnsureOrderConfirmed(ticket, chosen, user);
         const from = ticket.salesStage;
         ticket.salesStage = 'DELIVERY_SCHEDULING';
@@ -21083,6 +21104,22 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       const restoreStage = events.find((e) => e.id > promotion.id && autoStage(e))?.fromStatus ?? null;
       const restoreStageAt = restoreStage == null ? null
         : [...events].reverse().find((e) => e.kind === 'STAGE_CHANGED' && e.id < promotion.id)?.createdAt ?? null;
+      // A pre-portal deal: the marking goes first (policy back to what it replaced, the PRE_PORTAL receipt deleted, the flag cleared).
+      const wasPrePortal = ticket.prePortal === true;
+      let prePortalDeposit = 0;
+      if (wasPrePortal) {
+        const was = [...events].reverse().find((e) => e.id > promotion.id && e.kind === 'POLICY_CHANGED'
+          && String(e.message).startsWith(MOCK_PRE_PORTAL_POLICY_NOTE));
+        if (was) {
+          ticket.depositPolicy = String(was.message).slice(MOCK_PRE_PORTAL_POLICY_NOTE.length);
+          ticket.depositPolicyReason = null;
+          ticket.depositPolicySetBy = null;
+        }
+        prePortalDeposit = (db.paymentReceipts ?? []).filter((r) => r.ticketId === ticket.id && r.source === 'PRE_PORTAL')
+          .reduce((sum, r) => sum + Number(r.amount), 0);
+        db.paymentReceipts = (db.paymentReceipts ?? []).filter((r) => !(r.ticketId === ticket.id && r.source === 'PRE_PORTAL'));
+        ticket.prePortal = false;
+      }
       // The system's policy flip is reversed only while nobody chose the policy (deposit_policy_set_by NULL).
       if (events.some((e) => e.id > promotion.id && e.kind === 'POLICY_CHANGED' && isFollowedPolicyNote(e.message, row.number))) {
         const nowNotRequired = ticket.depositPolicy === 'NOT_REQUIRED';
@@ -21120,7 +21157,8 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       ticket.undoneQuotationIds = [...(ticket.undoneQuotationIds ?? []), row.id];
       pushEvent(ticket, user, 'ORDER_CONFIRMATION_UNDONE', 'quotation_issued', 'draft',
         `ยกเลิกการยืนยันคำสั่งซื้อจากใบเสนอราคา ${row.number} (ยืนยันโดย ${promotion.actorName} เมื่อ ${mockUndoNoteTime(promotion.createdAt)})`
-        + (reason ? ` · เหตุผล: ${reason}` : '') + (draftNotices > 0 ? ' · ลบใบแจ้งรับมัดจำฉบับร่างแล้ว' : ''));
+        + (reason ? ` · เหตุผล: ${reason}` : '') + (draftNotices > 0 ? ' · ลบใบแจ้งรับมัดจำฉบับร่างแล้ว' : '')
+        + (wasPrePortal ? ` · ยกเลิกการตั้งเป็นงานที่เดินมาก่อนใช้ระบบ${prePortalDeposit > 0 ? ` และลบมัดจำที่รับแล้ว ฿${prePortalDeposit}` : ''}` : ''));
       return result();
     },
 
