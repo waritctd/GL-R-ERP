@@ -19,6 +19,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import th.co.glr.hr.auth.DealEntryAccess;
 import th.co.glr.hr.auth.EmployeeAuthRepository;
+import th.co.glr.hr.auth.OversightReader;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.auth.WarehouseStaff;
 import th.co.glr.hr.common.ApiException;
@@ -152,30 +153,38 @@ public class TicketService {
         this.dealQuotations    = dealQuotations;
     }
 
+    /** Oversight reader (sales_manager, or the live read-all grant outside import): reads every deal, edits nothing. */
+    private boolean oversightReader(UserPrincipal actor) {
+        return OversightReader.is(actor, employeeAuth::canReadAllSales);
+    }
+
     public List<TicketSummaryDto> list(String status, UserPrincipal actor) {
-        requireRole(actor, VIEWER_ROLES);
-        Long createdByFilter = "sales".equals(actor.role()) && !employeeAuth.canManageAllSalesDocuments(actor) ? actor.id() : null;
-        return forRole(tickets.findSummaries(status, null, createdByFilter, actor.role(), null), actor.role());
+        boolean reader = oversightReader(actor);
+        if (!reader) {
+            requireRole(actor, VIEWER_ROLES);
+        }
+        Long createdByFilter = "sales".equals(actor.role()) && !reader && !employeeAuth.canManageAllSalesDocuments(actor) ? actor.id() : null;
+        return forRole(tickets.findSummaries(status, null, createdByFilter, actor.role(), null), actor.role(), reader);
     }
 
     /**
      * Import receives no customer money totals on any summary it is
      * handed. Applied after the query, so ordering, paging and counts are untouched.
      */
-    private static List<TicketSummaryDto> forRole(List<TicketSummaryDto> rows, String role) {
+    private static List<TicketSummaryDto> forRole(List<TicketSummaryDto> rows, String role, boolean reader) {
         List<TicketSummaryDto> out = rows;
         if (IMPORT_ROLES.contains(role)) {
             out = out.stream().map(TicketSummaryDto::withoutMoney).toList();
         }
-        if (!canReadActivities(role)) {
+        if (!reader && !canReadActivities(role)) {
             out = out.stream().map(TicketSummaryDto::withoutActivity).toList();
         }
         return out;
     }
 
     /** The activity facts (lastActivityAt, range flags) removed for roles that cannot read a deal's activities. */
-    private static TicketDto withoutUnreadableActivity(TicketDto ticket, String role) {
-        if (canReadActivities(role)) {
+    private static TicketDto withoutUnreadableActivity(TicketDto ticket, String role, boolean reader) {
+        if (reader || canReadActivities(role)) {
             return ticket;
         }
         return new TicketDto(ticket.summary().withoutActivity(), ticket.items(), ticket.events(),
@@ -187,7 +196,7 @@ public class TicketService {
      * {@link #projectForRole}: only the activity facts are removed there, nothing else about those responses changes.
      */
     public TicketDto withoutUnreadableActivity(TicketDto ticket, UserPrincipal actor) {
-        return withoutUnreadableActivity(ticket, actor.role());
+        return withoutUnreadableActivity(ticket, actor.role(), false);
     }
 
     /**
@@ -230,7 +239,10 @@ public class TicketService {
      */
     public Page<TicketSummaryDto> listPage(String status, String salesStage, LocalDate movementFrom,
                                            LocalDate movementTo, String fold, UserPrincipal actor, PageRequest page) {
-        requireRole(actor, VIEWER_ROLES);
+        boolean reader = oversightReader(actor);
+        if (!reader) {
+            requireRole(actor, VIEWER_ROLES);
+        }
         if (fold != null && !"project".equals(fold)) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "fold ต้องเป็น project");
         }
@@ -240,16 +252,16 @@ public class TicketService {
         if (movementFrom != null && movementFrom.isAfter(movementTo)) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "movementFrom ต้องไม่เกิน movementTo");
         }
-        Long createdByFilter = "sales".equals(actor.role()) && !employeeAuth.canManageAllSalesDocuments(actor) ? actor.id() : null;
+        Long createdByFilter = "sales".equals(actor.role()) && !reader && !employeeAuth.canManageAllSalesDocuments(actor) ? actor.id() : null;
         // Role-scoped views: import/account only see the slice of the deal
         // pipeline relevant to their own worklist — see TicketRepository.appendRoleScope.
         // ceo/sales_manager/sales are unaffected (the repository ignores any other role).
-        if (fold != null && FOLD_ROLES.contains(actor.role())) {
+        if (fold != null && (reader || FOLD_ROLES.contains(actor.role()))) {
             // Capped at PageRequest.MAX_SIZE orders; `total` then carries the real count so the client can see the cut.
             List<TicketSummaryDto> all = forRole(
                 tickets.findSummaries(status, salesStage, createdByFilter, actor.role(),
                     new PageRequest(0, PageRequest.MAX_SIZE), movementFrom, movementTo),
-                actor.role());
+                actor.role(), reader);
             List<TicketSummaryDto> folded = foldProjects(all);
             int total = all.size() < PageRequest.MAX_SIZE ? folded.size()
                 : Math.max(folded.size(), tickets.countSummaries(status, salesStage, createdByFilter, actor.role()));
@@ -257,7 +269,7 @@ public class TicketService {
         }
         List<TicketSummaryDto> rows =
             forRole(tickets.findSummaries(status, salesStage, createdByFilter, actor.role(), page, movementFrom, movementTo),
-                actor.role());
+                actor.role(), reader);
         // Skip the COUNT round-trip when the whole result set fits on page 0.
         int total = (page.page() == 0 && rows.size() < page.size())
             ? rows.size()
@@ -346,7 +358,16 @@ public class TicketService {
     /** The one read-access rule for a single ticket: viewer role required, and sales reps only see their own
      * tickets. Every endpoint that returns or renders ticket data must go through this. */
     private TicketDto requireViewAccess(long ticketId, UserPrincipal actor) {
-        requireRole(actor, VIEWER_ROLES);
+        return requireViewAccess(ticketId, actor, true);
+    }
+
+    /** {@code allowReader} false is {@link #comment}'s gate: the read-all grant is a READ right only, so a flag-only
+     * holder is judged exactly as before the grant existed (sales_manager keeps what its role has). */
+    private TicketDto requireViewAccess(long ticketId, UserPrincipal actor, boolean allowReader) {
+        boolean reader = allowReader && oversightReader(actor);
+        if (!reader) {
+            requireRole(actor, VIEWER_ROLES);
+        }
         // Account does not read a deal through the ticket
         // routes AT ALL -- not even one inside its list scope. It reads the finance deal view
         // (FinanceDealService, GET /api/finance/deals/{id}), which carries no cost/pricing/tracking
@@ -357,10 +378,10 @@ public class TicketService {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
         TicketDto ticket = requireTicket(ticketId);
-        if ("sales".equals(actor.role()) && !ownsDealOrHolder(ticket.summary(), actor)) {
+        if ("sales".equals(actor.role()) && !reader && !ownsDealOrHolder(ticket.summary(), actor)) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
-        return projectForRole(ticket, actor.role());
+        return projectForRole(ticket, actor.role(), reader);
     }
 
     /** The account role's ROW scope for the finance paths: account may act on / read a deal only when it is inside
@@ -390,7 +411,11 @@ public class TicketService {
      * rep may already read their own deal's quotations through {@link #requireViewAccess}.
      */
     private TicketDto projectForRole(TicketDto ticket, String role) {
-        ticket = withoutUnreadableActivity(ticket, role);
+        return projectForRole(ticket, role, false);
+    }
+
+    private TicketDto projectForRole(TicketDto ticket, String role, boolean reader) {
+        ticket = withoutUnreadableActivity(ticket, role, reader);
         if (!IMPORT_ROLES.contains(role)) {
             return ticket;
         }
@@ -3188,9 +3213,31 @@ public class TicketService {
         requireViewAccess(ticketId, actor);
     }
 
+    /** The READ gate of a deal's expected payments (ExpectedPaymentService): the deal's sales side as before
+     * ({@link #requireDealWriteAccess}, never widened), or an oversight reader, who reads and writes nothing. */
+    public void requireExpectedPaymentsRead(long ticketId, UserPrincipal actor) {
+        if (oversightReader(actor)) {
+            requireViewAccess(ticketId, actor);
+        } else {
+            requireDealWriteAccess(ticketId, actor);
+        }
+    }
+
+    /** True when {@code actor} reads this deal ONLY through the read-all grant (not as owner/keyer, sales_manager or ceo).
+     * Such a reader does not see the sales side's private DRAFT delivery rounds (same rule as warehouse staff). */
+    public boolean readsOnlyByGrant(TicketSummaryDto s, UserPrincipal actor) {
+        return !"sales_manager".equals(actor.role()) && !"ceo".equals(actor.role())
+            && OversightReader.holder(actor, employeeAuth::canReadAllSales) && !ownsDealOrHolder(s, actor);
+    }
+
     public List<DealActivityDto> listActivities(long ticketId, UserPrincipal actor) {
         TicketSummaryDto s = requireTicket(ticketId).summary();
-        requireDealOwnership(s, actor);
+        if (oversightReader(actor)) {
+            // Its own READ gate: requireDealOwnership also guards twelve writes and is never widened.
+            requireViewAccess(ticketId, actor);
+        } else {
+            requireDealOwnership(s, actor);
+        }
         return tickets.findActivitiesByTicket(ticketId);
     }
 
@@ -3951,7 +3998,7 @@ public class TicketService {
         if (IMPORT_ROLES.contains(actor.role()) && !tickets.isInImportScope(ticketId)) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
-        requireViewAccess(ticketId, actor);
+        requireViewAccess(ticketId, actor, false);
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.COMMENTED, null, null, request.message());
         return projectForRole(requireTicket(ticketId), actor.role());

@@ -191,6 +191,23 @@ class AttachmentTicketAccessIntegrationTest extends AbstractPostgresIntegrationT
         jdbc.update("UPDATE sales.delivery_request SET status = 'DRAFT' WHERE delivery_request_id = :r", Map.of("r", requestId));
         assertForbidden(() -> controller.download(roundFile, sessionFor(warehouse)));
 
+        // The read-all grant (any role but import) reads the deal's files, but a DRAFT round is sales' private work: its file
+        // is neither listed nor downloadable (as if absent) until the round is sent. Without the flag hr stays refused.
+        assertForbidden(() -> controller.list(ticketId, sessionFor(hr)));
+        jdbc.update("UPDATE hr.employee SET can_read_all_sales = TRUE WHERE employee_id IN (:h, :i)",
+            Map.of("h", hr.id(), "i", importUser.id()));
+        assertThatCode(() -> controller.download(attachmentId, sessionFor(hr))).doesNotThrowAnyException();
+        assertThat(controller.list(ticketId, sessionFor(hr)).get("attachments")).extracting(a -> a.id()).containsExactly(attachmentId);
+        assertThatThrownBy(() -> controller.download(roundFile, sessionFor(hr)))
+            .isInstanceOf(ApiException.class).extracting(e -> ((ApiException) e).getStatus()).isEqualTo(HttpStatus.NOT_FOUND);
+        assertThat(controller.list(ticketId, sessionFor(importUser)).get("attachments")).extracting(a -> a.id()).containsExactly(attachmentId);
+        jdbc.update("UPDATE sales.delivery_request SET status = 'SENT' WHERE delivery_request_id = :r", Map.of("r", requestId));
+        assertThatCode(() -> controller.download(roundFile, sessionFor(hr))).doesNotThrowAnyException();
+        assertThat(controller.list(ticketId, sessionFor(hr)).get("attachments")).hasSize(2);
+        assertThatThrownBy(() -> controller.download(roundFile, sessionFor(importUser)))
+            .isInstanceOf(ApiException.class).extracting(e -> ((ApiException) e).getStatus()).isEqualTo(HttpStatus.NOT_FOUND);
+        jdbc.update("UPDATE sales.delivery_request SET status = 'DRAFT' WHERE delivery_request_id = :r", Map.of("r", requestId));
+
         // The undo of the order confirmation removes the round and keeps its files as deal files (link cleared, side kept):
         // sales still read it, import still does not.
         jdbc.update("UPDATE sales.attachment SET delivery_request_id = NULL WHERE attachment_id = :a", Map.of("a", roundFile));

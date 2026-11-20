@@ -22,6 +22,7 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.SessionContext;
+import th.co.glr.hr.auth.OversightReader;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.auth.WarehouseStaff;
 import th.co.glr.hr.common.ApiException;
@@ -53,8 +54,8 @@ public class AttachmentController {
     @GetMapping("/tickets/{ticketId}/attachments")
     Map<String, List<AttachmentDto>> list(@PathVariable long ticketId, HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
-        requireTicketReadAccess(ticketId, user);
-        return Map.of("attachments", attachments.findByTicketId(ticketId, mayReadRoundFiles(user)));
+        boolean grantOnly = requireTicketReadAccess(ticketId, user);
+        return Map.of("attachments", attachments.findByTicketId(ticketId, mayReadRoundFiles(user), !grantOnly));
     }
 
     @PostMapping("/tickets/{ticketId}/attachments")
@@ -84,7 +85,11 @@ public class AttachmentController {
         if (!mayReadRoundFiles(user) && attachments.isRoundFile(id)) {
             throw new ApiException(HttpStatus.NOT_FOUND, "ไม่พบไฟล์");
         }
-        requireAttachmentReadAccess(dto, user);
+        boolean grantOnly = requireAttachmentReadAccess(dto, user);
+        // The read-all grant never reaches the sales side's private DRAFT round files (refused as if absent).
+        if (grantOnly && attachments.roundStatus(id).filter("DRAFT"::equals).isPresent()) {
+            throw new ApiException(HttpStatus.NOT_FOUND, "ไม่พบไฟล์");
+        }
         String filePath = attachments.findFilePathById(id);
         if (filePath == null) throw new ApiException(HttpStatus.NOT_FOUND, "ไม่พบไฟล์บนเซิร์ฟเวอร์");
 
@@ -184,7 +189,7 @@ public class AttachmentController {
      * invoice on every deal despite being refused the deal itself everywhere else, while
      * {@code account} could not open the receipt it is required to confirm money against.
      */
-    private void requireTicketReadAccess(long ticketId, UserPrincipal actor) {
+    private boolean requireTicketReadAccess(long ticketId, UserPrincipal actor) {
         TicketSummaryDto summary = requireTicketSummary(ticketId);
         // import and account are row-scoped to their OWN list
         // scope. The scope predicate is a DB query, so it is only run for the role that needs it, and
@@ -197,10 +202,15 @@ public class AttachmentController {
             case "account" -> tickets.isInAccountScope(ticketId) || tickets.isDeadDealWithIssuedDepositNotice(ticketId);
             default -> false;
         };
-        if (!TicketAccessPolicy.canViewDocuments(summary, actor, inRoleScope,
+        if (TicketAccessPolicy.canViewDocuments(summary, actor, inRoleScope,
                 tickets.holdsAllSalesDocumentsGrant(actor))) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
+            return false;
         }
+        // The read-all grant (READ only; import excluded by the helper): admitted, but flagged so DRAFT round files stay hidden.
+        if (OversightReader.is(actor, tickets::holdsReadAllSalesGrant)) {
+            return true;
+        }
+        throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
     }
 
     /** Attaching or removing a document is strictly narrower than reading one. See
@@ -219,20 +229,20 @@ public class AttachmentController {
     }
 
     /** The uploader may always reach their own file; everyone else goes through the deal gate. */
-    private void requireAttachmentReadAccess(AttachmentDto dto, UserPrincipal actor) {
+    private boolean requireAttachmentReadAccess(AttachmentDto dto, UserPrincipal actor) {
         if (actor.id() == dto.uploadedBy()) {
-            return;
+            return false;
         }
         // The warehouse is refused every deal; it reads the files of a round sales has sent, and nothing else.
         if (WarehouseStaff.is(actor) && attachments.roundStatus(dto.id()).filter(st -> !"DRAFT".equals(st)).isPresent()) {
-            return;
+            return false;
         }
         // The invoice issuer (a per-person grant, any role) reads the files of a round forwarded to it, and nothing else.
         if (tickets.holdsTaxInvoiceGrant(actor.id())
             && attachments.roundStatus(dto.id()).filter(st -> "FORWARDED".equals(st) || "INVOICED".equals(st)).isPresent()) {
-            return;
+            return false;
         }
-        requireTicketReadAccess(dto.ticketId(), actor);
+        return requireTicketReadAccess(dto.ticketId(), actor);
     }
 
     private void requireAttachmentWriteAccess(AttachmentDto dto, UserPrincipal actor) {

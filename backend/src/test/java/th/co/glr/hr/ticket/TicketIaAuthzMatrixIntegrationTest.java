@@ -252,6 +252,53 @@ class TicketIaAuthzMatrixIntegrationTest extends AbstractPostgresIntegrationTest
         assertForbidden(() -> ticketService.listActivities(ticketId, importActor));
     }
 
+    /** The per-person read-all grant (V238): reads the deal page and its shared readers on a deal the holder does not own,
+     * whatever the role (hr, a plain employee, the qc person who acts as sales), and writes nothing: no comment, no
+     * activity, no expected payment. Without the flag every one of those reads is still refused; import stays refused even
+     * with the flag. */
+    @Test
+    void readAllSalesHolder_readsTheDealAndItsTabsButWritesNothing() {
+        var expected = new th.co.glr.hr.salesboard.ExpectedPaymentService(
+            new th.co.glr.hr.salesboard.ExpectedPaymentRepository(jdbc), ticketService, tickets);
+        var monday = LocalDate.now().with(java.time.temporal.TemporalAdjusters.previousOrSame(java.time.DayOfWeek.MONDAY));
+        var payment = new th.co.glr.hr.salesboard.ExpectedPaymentDtos.ExpectedPaymentRequest("DEPOSIT", new BigDecimal("100.00"), monday);
+        var activity = new DealActivityRequest(LocalDate.now(), "CALL", "x");
+        List<UserPrincipal> holders = List.of(hrActor, employeeActor, salesOtherActor);
+
+        // No flag: unchanged refusals (hr / employee / a non-owning rep), reads and the read-only expected payments alike.
+        for (UserPrincipal who : holders) {
+            assertForbidden(() -> ticketService.get(ticketId, who));
+            assertForbidden(() -> ticketService.listActivities(ticketId, who));
+            assertForbidden(() -> expected.list(ticketId, who));
+        }
+
+        jdbc.update("UPDATE hr.employee SET can_read_all_sales = TRUE WHERE employee_id IN (:a, :b, :c, :d)",
+            Map.of("a", hrActor.id(), "b", employeeActor.id(), "c", salesOtherActor.id(), "d", importActor.id()));
+        for (UserPrincipal who : holders) {
+            assertThatCode(() -> ticketService.get(ticketId, who)).as("get %s", who.role()).doesNotThrowAnyException();
+            assertThatCode(() -> ticketService.actions(ticketId, who)).doesNotThrowAnyException();
+            assertThatCode(() -> ticketService.listPayments(ticketId, who)).doesNotThrowAnyException();
+            assertThatCode(() -> ticketService.listDeliveries(ticketId, who)).doesNotThrowAnyException();
+            assertThatCode(() -> ticketService.requireDealReadAccess(ticketId, who)).doesNotThrowAnyException();
+            assertThatCode(() -> ticketService.listActivities(ticketId, who)).doesNotThrowAnyException();
+            assertThatCode(() -> expected.list(ticketId, who)).doesNotThrowAnyException();
+            // The flag is a READ right only.
+            assertForbidden(() -> ticketService.comment(ticketId, new CommentRequest("hello"), who));
+            assertForbidden(() -> ticketService.addActivity(ticketId, activity, who));
+            assertForbidden(() -> expected.create(ticketId, payment, who));
+            assertForbidden(() -> expected.update(ticketId, 1L, payment, who));
+            assertForbidden(() -> expected.cancel(ticketId, 1L, who));
+        }
+        // import stays price-free whatever the flag says.
+        assertForbidden(() -> ticketService.get(ticketId, importActor));
+        assertForbidden(() -> ticketService.requireDealReadAccess(ticketId, importActor));
+        assertForbidden(() -> ticketService.listActivities(ticketId, importActor));
+        assertForbidden(() -> expected.list(ticketId, importActor));
+        // account keeps its finance-only path even with the flag.
+        jdbc.update("UPDATE hr.employee SET can_read_all_sales = TRUE WHERE employee_id = :a", Map.of("a", accountActor.id()));
+        assertForbidden(() -> ticketService.get(ticketId, accountActor));
+    }
+
     @Test
     void attachments_aSalesRepWhoIsNeitherCreatorNorAssigneeIsRefused() throws Exception {
         assertAttachmentsForbidden(salesOtherActor);
