@@ -199,11 +199,13 @@ public class SalesBoardService {
             rankFollowUp(deals, returning, STALE_LIMIT), quietRule.quietDays(), weekVisits, cashForMonth(null, month));
     }
 
-    /** Every rep's open deals for the sales_manager / ceo งานทั้งหมด board — the same gate and the same
+    /** Every rep's open deals for the sales_manager / ceo งานทั้งหมด board — the same
      * {@link SalesBoardRepository#activeDealsAllReps()} rows {@link #teamOverview} already reads, served whole so the
-     * team overview's payload stays as it is. */
+     * team overview's payload stays as it is. Also open to an {@link th.co.glr.hr.auth.OversightReader} (a read-all
+     * flag holder whose role is not import/account): the board is read-only, so the flag may see it. */
     public SalesBoardDtos.TeamBoard teamBoard(UserPrincipal actor) {
-        if (!TEAM_ROLES.contains(actor.role())) {
+        if (!TEAM_ROLES.contains(actor.role())
+            && !th.co.glr.hr.auth.OversightReader.is(actor, employees::canReadAllSales)) {
             throw new ApiException(HttpStatus.FORBIDDEN, FORBIDDEN);
         }
         // DealBoard renders this list, so it — and only it among the team reads — carries the due state.

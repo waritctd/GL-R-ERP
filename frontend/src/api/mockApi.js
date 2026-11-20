@@ -15769,10 +15769,10 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       });
     },
     // Mirrors SalesBoardService.teamBoard: SalesBoardRepository.activeDealsAllReps (every rep's ACTIVE, non-CLOSED_PAID
-    // deal, ORDER BY last_touched_at, ticket_id — mockBoardDeals already sorts so), sales_manager / ceo only.
+    // deal, ORDER BY last_touched_at, ticket_id — mockBoardDeals already sorts so), sales_manager / ceo / read-all flag holder.
     async teamBoard() {
       const user = requireSession();
-      if (!['sales_manager', 'ceo'].includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      if (!['sales_manager', 'ceo'].includes(user.role) && !holdsReadAllSalesGrant(user)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       return delay({ board: mockWithPaymentDue(mockBoardDeals()), quietDays: MOCK_QUIET_DAYS });
     },
     async teamOverview() {

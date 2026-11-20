@@ -10,8 +10,8 @@ import th.co.glr.hr.salesboard.SalesBoardDtos.TeamBoard;
 import th.co.glr.hr.salesboard.SalesBoardDtos.TeamOverview;
 
 /** GET /api/sales/my-work (sales, sales_manager, ceo — the caller's own deals; takes no owner parameter),
- * GET /api/sales/team-overview (sales_manager, ceo) and GET /api/sales/team-board (sales_manager, ceo — every rep's
- * open deals for the งานทั้งหมด board). Role checks live in {@link SalesBoardService}. */
+ * GET /api/sales/team-overview (sales_manager, ceo) and GET /api/sales/team-board (sales_manager, ceo, or a read-all flag
+ * holder other than import/account — every rep's open deals for the งานทั้งหมด board). Role checks live in {@link SalesBoardService}. */
 @RestController
 @RequestMapping("/api/sales")
 public class SalesBoardController {
