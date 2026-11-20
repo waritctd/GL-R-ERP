@@ -373,8 +373,9 @@ export function DepositNoticePage({ ticketId, onBack, showToast }) {
 
   // Re-seed the editable `form` whenever the doc's identity/version/status actually changes (new draft created,
   // or DRAFT -> ISSUED) — not on every background refetch of the same doc (e.g. a save doesn't bump
-  // version/status, so no reseed fires and in-flight edits aren't clobbered).
-  const docSeedKey = doc ? `${doc.id}:${doc.version}:${doc.status}` : null;
+  // version/status, so no reseed fires and in-flight edits aren't clobbered). The reference is in the key too:
+  // re-pointing a draft to another buyer's quotation replaces its customer and items on the server.
+  const docSeedKey = doc ? `${doc.id}:${doc.version}:${doc.status}:${doc.reference ?? ''}` : null;
   // The draft's updatedAt as last read from the server (the list, or this page's own save):
   // sent as expectedUpdatedAt, so a save over someone else's newer one is refused (409).
   const stampRef = useRef(null);
