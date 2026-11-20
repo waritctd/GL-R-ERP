@@ -157,4 +157,22 @@ class QuotationRendererTest {
             "PIECE", null, null);       // unitBasis, manualPrice, manualOverrideReason
     }
 
+    @Test
+    void v2RemarkLongerThanBoxWrapsAndGrowsItsRowShortOnesUntouched() throws Exception {
+        String longLead = "3.ระยะเวลานำเข้า : " + "รายการที่ 1-2 ประมาณ 3-7 วัน  รายการที่ 3 ประมาณ 30-45 วัน  ".repeat(3);
+        List<String> remarks = new ArrayList<>(List.of("1.a", "2.b", longLead, "4.d", "5.e", "6.f", "7.g", "8.h"));
+        var item = new QuotationRenderModel.RenderItem("โซน 1", List.of("กระเบื้อง"), BigDecimal.TEN, "แผ่น",
+            BigDecimal.ONE, "Net", BigDecimal.ONE, BigDecimal.TEN);
+        var model = new QuotationRenderModel(java.time.LocalDate.of(2026, 9, 10), "QT-1", "P003", "D002", "Sales T.0",
+            "คุณทดสอบ", "โทร. 000", "Test", List.of(item), remarks,
+            new QuotationRenderModel.Signatories("A", "B", "C", null, null), true);
+        try (var wb = WorkbookFactory.create(new ByteArrayInputStream(renderer.toXls(model)))) {
+            var sh = wb.getSheetAt(0);
+            var longRow = sh.getRow(25);
+            var shortRow = sh.getRow(23);
+            assertThat(longRow.getCell(1).getCellStyle().getWrapText()).isTrue();
+            assertThat(longRow.getHeightInPoints()).isGreaterThan(shortRow.getHeightInPoints());
+            assertThat(shortRow.getCell(1).getCellStyle().getWrapText()).isFalse();
+        }
+    }
 }
