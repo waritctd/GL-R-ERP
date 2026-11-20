@@ -382,10 +382,6 @@ class DepositNoticeAccountNotificationIntegrationTest extends AbstractPostgresIn
             return sent.stream().map(SentMail::to).toList();
         }
 
-        List<String> recipients() {
-            return sent.stream().map(SentMail::to).toList();
-        }
-
         @Override
         public void send(String to, String subject, String body) {
             sent.add(new SentMail(to, subject, null, body));

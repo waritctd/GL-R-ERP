@@ -74,8 +74,6 @@ class DealQuotationCreateGuardsIntegrationTest extends AbstractDealQuotationSlic
         assertThat(reorder.docStatus()).isEqualTo(QuotationStatus.DRAFT);
     }
 
-    // ── precedence ───────────────────────────────────────────────────────────────────────────────
-
     // ── N6 ───────────────────────────────────────────────────────────────────────────────────────
 
     @Test

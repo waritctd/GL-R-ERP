@@ -121,6 +121,33 @@ class SalesBoardScopeIntegrationTest extends AbstractDealQuotationSlice2Integrat
         return new th.co.glr.hr.dealparty.DealPartyRepository(jdbc).forkAddOn(root, summary(root).code() + "-2", keyer.id());
     }
 
+    private JsonNode projectList(UserPrincipal actor) throws Exception {
+        return ok(get("/api/tickets").param("fold", "project"), actor).get("tickets");
+    }
+
+    /** Rep B owns the add-on of rep A's project: B gets ONE row under A's code and title, linking to B's own order,
+     * with only B's order counted. A's own list never counts B's order's value. */
+    @Test
+    void anAddOnOwnedByAnotherRep_isOneRowUnderTheRootsCode_linkingToTheirOwnOrder() throws Exception {
+        long root = deal(salesActor);
+        approved(root, salesActor, "DESIGNER");
+        long addOn = addOn(root, otherSalesActor);
+        jdbc.update("UPDATE sales.ticket SET created_by = :b, estimated_value = 700 WHERE ticket_id = :id",
+            Map.of("b", otherSalesActor.id(), "id", addOn));
+
+        JsonNode rows = projectList(otherSalesActor);
+        assertThat(ids(rows, "id")).containsExactly(addOn);
+        JsonNode row = byId(rows, "id", addOn);
+        assertThat(row.get("code").asText()).isEqualTo(summary(root).code());
+        assertThat(row.get("orderCount").asInt()).isEqualTo(1);
+        assertThat(new BigDecimal(row.get("amountPayable").asText())).isLessThanOrEqualTo(BigDecimal.valueOf(1000));
+
+        JsonNode board = ok(get("/api/sales/my-work"), otherSalesActor).get("board");
+        assertThat(ids(board)).containsExactly(addOn);
+        assertThat(byId(board, addOn).get("orderCodes").get(0).asText()).isEqualTo(summary(root).code());
+        assertThat(new BigDecimal(byId(board, addOn).get("value").asText())).isEqualByComparingTo("700");
+    }
+
     /** สั่งเพิ่ม: a project is ONE row (ProjectFold). The add-on folds into its root (orderCount 2, both open, summed
      * value, both codes), and the team's openDeals counts the project once. */
     @Test
@@ -206,14 +233,22 @@ class SalesBoardScopeIntegrationTest extends AbstractDealQuotationSlice2Integrat
     }
 
     private static List<Long> ids(JsonNode deals) {
+        return ids(deals, "ticketId");
+    }
+
+    private static List<Long> ids(JsonNode deals, String field) {
         List<Long> out = new ArrayList<>();
-        deals.forEach(d -> out.add(d.get("ticketId").asLong()));
+        deals.forEach(d -> out.add(d.get(field).asLong()));
         return out;
     }
 
     private static JsonNode byId(JsonNode deals, long id) {
+        return byId(deals, "ticketId", id);
+    }
+
+    private static JsonNode byId(JsonNode deals, String field, long id) {
         for (JsonNode d : deals) {
-            if (d.get("ticketId").asLong() == id) {
+            if (d.get(field).asLong() == id) {
                 return d;
             }
         }

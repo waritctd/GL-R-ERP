@@ -12,7 +12,6 @@ import static org.mockito.Mockito.when;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
 import java.time.Clock;
-import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
@@ -115,7 +114,7 @@ class BotFxFetchServiceTest {
         return new MockedRestClient(restClient, uriSpec);
     }
 
-    /** A {@link Clock} a test can advance by hand, so the cooldown guard needs no real sleep. */
+    /** A {@link Clock} pinned to a chosen instant and zone. */
     private static final class MutableClock extends Clock {
         private Instant instant;
         private final ZoneId zone;
@@ -127,10 +126,6 @@ class BotFxFetchServiceTest {
         private MutableClock(Instant instant, ZoneId zone) {
             this.instant = instant;
             this.zone = zone;
-        }
-
-        void advance(Duration amount) {
-            instant = instant.plus(amount);
         }
 
         @Override

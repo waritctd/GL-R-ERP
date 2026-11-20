@@ -256,12 +256,6 @@ class DealQuotationMixedPriceModeIntegrationTest extends AbstractDealDirectQuota
         assertThat(approved.grandTotal()).isEqualByComparingTo(created.grandTotal());
     }
 
-    // ── the live preview ────────────────────────────────────────────────────────────────────
-
-    // ── what the customer's document prints ─────────────────────────────────────────────────
-
-    // ── "has special pricing" — decided row by row ──────────────────────────────────────────
-
     // ── fixtures ────────────────────────────────────────────────────────────────────────────
 
     /** ราคาตั้ง 1,800 บาท/ตร.ม. รวม VAT, less {@code discountPct}% — stating NET as its own mode. */

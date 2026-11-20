@@ -60,6 +60,8 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         // Deal parties (deal-party-model.md): the ผู้รับเหมาที่เสนอราคา panel and บันทึกผลประมูล.
         parties: vi.fn(),
         orders: vi.fn(),
+        // สั่งเพิ่ม: opens an add-on order (POST /api/tickets/{id}/add-on-orders).
+        createAddOnOrder: vi.fn(),
         // The revoke-close-confirm control lives in the "การเงิน" tab, outside the money section.
         revokeCloseConfirmation: vi.fn(),
       },
@@ -1366,6 +1368,49 @@ describe('TicketDetailPage', () => {
       await waitFor(() => expect(api.tickets.setEntryChannel).toHaveBeenCalledWith(701, {
         value: 'DESIGNER_LED', note: 'มีผู้ออกแบบเข้ามาร่วมจริง',
       }));
+    });
+  });
+
+  // สั่งเพิ่ม (add-on orders): the entry on the ใบเสนอราคา tab, the confirm sheet, and where confirming lands.
+  describe('add-on order (สั่งเพิ่ม)', () => {
+    function addOnDeal(summary = {}) {
+      api.tickets.get.mockResolvedValue({
+        ticket: buildTicket({
+          summary: {
+            lifecycle: 'ACTIVE', salesStage: 'ORDER_RECEIVED', status: 'quotation_issued', createdById: 1,
+            code: 'DL-2026-0300', projectName: 'โครงการตัวอย่าง', addOnCount: 1, ...summary,
+          },
+        }),
+      });
+      api.tickets.parties.mockResolvedValue({ parties: [] });
+      api.dealQuotations.listForTicket.mockResolvedValue({ items: [] });
+    }
+
+    it('the owner sees the button; the sheet names the next code, and confirming opens the new order in the editor', async () => {
+      addOnDeal();
+      api.tickets.createAddOnOrder.mockResolvedValue({ addOnOrder: { ticketId: 902, code: 'DL-2026-0300-3', parentTicketId: 701 } });
+      renderTicketDetailPageAtRoute(['/tickets/701?tab=quote'], salesOwnerUser);
+      fireEvent.click(await screen.findByTestId('add-on-order-open'));
+      const sheet = await screen.findByTestId('add-on-order-sheet');
+      expect(within(sheet).getByText('เปิดออเดอร์เพิ่มในงานนี้?')).toBeTruthy();
+      expect(sheet.textContent).toContain('DL-2026-0300-3');
+      expect(sheet.textContent).toContain('ออเดอร์เดิม (DL-2026-0300-1) ไม่ถูกแก้ไข');
+      fireEvent.click(within(sheet).getByTestId('add-on-order-confirm'));
+      await waitFor(() => expect(screen.getByTestId('location-probe').textContent).toBe('/quotations/new?ticket=902'));
+      expect(api.tickets.createAddOnOrder).toHaveBeenCalledWith(701);
+    });
+
+    it('is not offered to account, nor to a rep who does not own the deal', async () => {
+      addOnDeal();
+      const { unmount } = renderTicketDetailPageAtRoute(['/tickets/701?tab=quote'], { id: 77, employeeId: 77, name: 'อื่น', role: 'sales' });
+      await screen.findByText('ใบเสนอราคาของงานนี้');
+      await stickyInputsSettled();
+      expect(screen.queryByTestId('add-on-order-open')).toBeNull();
+      unmount();
+      renderTicketDetailPageAtRoute(['/tickets/701?tab=quote'], accountUser);
+      await screen.findByText('ใบเสนอราคาของงานนี้');
+      await stickyInputsSettled();
+      expect(screen.queryByTestId('add-on-order-open')).toBeNull();
     });
   });
 

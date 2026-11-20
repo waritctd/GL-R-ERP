@@ -391,4 +391,33 @@ describe('RemainingInvoiceDialog — canWrite=false (not this deal\'s owning sal
     fireEvent.click(screen.getByTestId('remaining-invoice-download'));
     await waitFor(() => expect(api.storedRemainingInvoices.download).toHaveBeenCalledWith(issuedRow.id));
   });
+
+  it('hides the edit control from a viewer who cannot write', async () => {
+    api.storedRemainingInvoices.listForTicket.mockResolvedValue({
+      remainingInvoices: [docRow({ status: 'ISSUED', docNumber: 'GLR6900001-1', baseNumber: 'GLR6900001' })],
+    });
+    renderDialog({ canWrite: false });
+
+    await screen.findByTestId('remaining-invoice-issued-summary');
+    expect(screen.queryByTestId('remaining-invoice-edit')).toBeNull();
+  });
+
+  it('a SUPERSEDED version stays read-only: no edit control in the history list or beside it', async () => {
+    const superseded = docRow({ id: 899, status: 'SUPERSEDED', docNumber: 'GLR6900001-1', version: 1, supersededById: 900 });
+    const issuedRow = docRow({ id: 900, status: 'ISSUED', docNumber: 'GLR6900001-2', version: 2, baseNumber: 'GLR6900001' });
+    api.storedRemainingInvoices.listForTicket.mockResolvedValue({ remainingInvoices: [superseded, issuedRow] });
+    renderDialog();
+
+    const history = await screen.findByTestId('remaining-invoice-history');
+    expect(within(history).queryByTestId('remaining-invoice-edit')).toBeNull();
+    expect(within(history).queryByRole('button', { name: 'แก้ไขฉบับปัจจุบัน' })).toBeNull();
+    // Exactly one edit control on the page: the live ISSUED document's.
+    expect(screen.getAllByTestId('remaining-invoice-edit')).toHaveLength(1);
+    // The two actions are explained under the buttons: edit keeps the number, a new version replaces it.
+    const help = screen.getByTestId('remaining-invoice-action-help');
+    expect(help.textContent).toContain('แก้ไขฉบับปัจจุบัน');
+    expect(help.textContent).toContain('ใช้เลขที่เดิม');
+    expect(help.textContent).toContain('ออกฉบับใหม่');
+    expect(help.textContent).toContain('จะถูกแทนที่');
+  });
 });

@@ -21,8 +21,6 @@ class EmployeeReferenceForeignKeyIntegrationTest extends AbstractPostgresIntegra
         new ExpectedForeignKey("employee_department_id_fkey", "department_id", "hr.department"),
         new ExpectedForeignKey("employee_position_id_fkey", "position_id", "hr.position"));
 
-    // PART 1 — schema backstop (see class Javadoc: real coverage, but NOT evidence about V147).
-
     /** Matched the same way V147's own guard matches it: column + referenced table via pg_constraint/pg_attribute,
      * never by conname alone (a differently -named FK on the same column would enforce the identical rule, and
      * this test must recognise that too, not just V147's SQL). */

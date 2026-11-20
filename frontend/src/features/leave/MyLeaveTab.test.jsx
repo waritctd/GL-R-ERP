@@ -93,8 +93,8 @@ describe('MyLeaveTab balances: one primary card + a single disclosure (owner fee
 
   it('DEFECT: the "โควตาคงเหลือ" stat sums ONLY the everyday three, never the rare types', async () => {
     // Regression: the stat once summed EVERY balance (7 + 30 + 3 + MATERNITY 98 + MILITARY 366 +
-    // ORDINATION 60 = "โควตาคงเหลือ 564 วัน"). A bare `queryByText(/366/)` is a null check
-    // could not detect it (the buggy sum renders 372), so assert the STAT's own value.
+    // ORDINATION 60 = "โควตาคงเหลือ 564 วัน"). A bare `queryByText(/366/)` null check could not
+    // detect it (the buggy sum renders 372), so assert the STAT's own value.
     api.leave.balances.mockResolvedValue({
       balances: [
         { leaveTypeCode: 'VACATION', leaveTypeNameTh: 'ลาพักร้อน', remainingDays: 6, approvedDays: 0, pendingDays: 0, annualQuotaDays: 6 },

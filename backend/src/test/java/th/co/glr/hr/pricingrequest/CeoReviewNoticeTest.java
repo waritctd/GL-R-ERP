@@ -50,14 +50,6 @@ class CeoReviewNoticeTest {
             null, null, null, true, null, null, null, null, stockSource, (LocalDate) null);
     }
 
-    private static PricingRequestItemDto withDescription(PricingRequestItemDto i, String description) {
-        return new PricingRequestItemDto(i.id(), i.pricingRequestId(), null, null, null, null, null, description,
-            null, null, null, null, i.requestedQty(), i.requestedQtySqm(), i.requestedUnit(), null, "CONFIRMED",
-            (LocalDate) null, null, null, i.sortOrder(), null, null, null, null, null, null, null, null, null,
-            null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, true,
-            null, null, null, null, i.stockSource(), (LocalDate) null);
-    }
-
     private static PricingCostingWriteItem cost(long itemId, String landedPerUnit, String sqmPerUnit,
                                                 String uncostableReason) {
         return new PricingCostingWriteItem(itemId, 1L, 1L, 1, null, "F", null, null, null, null, null, null,

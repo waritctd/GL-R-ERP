@@ -451,6 +451,139 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
     }
 
     @Test
+    void updateDraft_onAnIssuedInvoice_nonOwnerRolesAreRefused_rowAndAuditUntouched() {
+        DealFixture fixture = buildAcceptedDeal(salesActor, "EditIssuedRiAuthz");
+        RemainingInvoiceDocumentDto issued = remainingInvoiceService.issue(
+            remainingInvoiceService.createDraft(fixture.ticketId(), null, salesActor).id(), salesActor);
+
+        for (UserPrincipal intruder : List.of(otherSalesActor, ceoActor, importActor, accountActor, salesManagerActor)) {
+            assertThatThrownBy(() -> remainingInvoiceService.updateDraft(issued.id(),
+                    new RemainingInvoiceDraftRequest(null, "SHOULD-NEVER-STICK", null, null, null), intruder))
+                .isInstanceOfSatisfying(ApiException.class,
+                    e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+        }
+
+        RemainingInvoiceDocumentDto reread = remainingInvoiceService.get(issued.id(), salesActor);
+        assertThat(reread.reference()).isEqualTo(issued.reference());
+        assertThat(editedEvents(fixture.ticketId())).isEmpty();
+    }
+
+    @Test
+    void updateDraft_onASupersededInvoice_isStillRefusedWith409() {
+        DealFixture fixture = buildAcceptedDeal(salesActor, "EditSupersededRi");
+        RemainingInvoiceDocumentDto v1 = remainingInvoiceService.issue(
+            remainingInvoiceService.createDraft(fixture.ticketId(), null, salesActor).id(), salesActor);
+        remainingInvoiceService.issue(remainingInvoiceService.revise(v1.id(), salesActor).id(), salesActor);
+        assertThat(remainingInvoiceService.get(v1.id(), salesActor).status()).isEqualTo("SUPERSEDED");
+
+        assertThatThrownBy(() -> remainingInvoiceService.updateDraft(v1.id(),
+                new RemainingInvoiceDraftRequest(null, "SHOULD-NEVER-STICK", null, null, null), salesActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> {
+                assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
+                assertThat(e.getMessage()).isEqualTo("เอกสารนี้ถูกแทนที่ด้วยฉบับใหม่แล้ว แก้ไขไม่ได้");
+            });
+        assertThat(remainingInvoiceService.get(v1.id(), salesActor).reference()).isEqualTo(v1.reference());
+        assertThat(editedEvents(fixture.ticketId())).isEmpty();
+    }
+
+    /** Once the deposit is paid in full the notice cannot be edited BELOW what was received (account refunds first). */
+    @Test
+    void editingTheIssuedDepositNotice_belowTheReceivedDeposit_isRefused() {
+        DealFixture fixture = buildAcceptedDeal(salesActor, "EditBelowReceived");
+        ticketService.confirmDepositPaid(fixture.ticketId(), accountActor);
+        DepositNoticeDto notice = depositNoticeService.getById(fixture.depositNoticeId(), salesActor);
+
+        assertThatThrownBy(() -> depositNoticeService.update(
+            fixture.depositNoticeId(), noticeWithPercent(notice, "0.01"), salesActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> {
+                assertThat(e.getStatus()).isEqualTo(org.springframework.http.HttpStatus.CONFLICT);
+                assertThat(e.getMessage()).contains("ลดยอดมัดจำต่ำกว่าที่รับชำระแล้วไม่ได้");
+            });
+    }
+
+    /** Overpaid deposit: the invoice still deducts the NOTICE's deposit and payable = notice total + invoice; after
+     * account refunds the excess as an ADJUSTMENT receipt, only the invoice is outstanding (the refund is never left unbilled). */
+    @Test
+    void overpaidDeposit_invoiceDeductsTheNotice_andRefundLeavesNothingOutstanding() {
+        DealFixture fixture = buildAcceptedDeal(salesActor, "OverpaidDeposit");
+        long ticketId = fixture.ticketId();
+        var dn = new DepositNoticeRepository(jdbc).findById(fixture.depositNoticeId()).orElseThrow();
+        ticketService.confirmDepositPaid(ticketId, accountActor);
+        BigDecimal excess = new BigDecimal("10700.00");
+        jdbc.update("UPDATE sales.payment_receipt SET amount = :a WHERE ticket_id = :id AND kind = 'DEPOSIT'",
+            Map.of("a", dn.totalPayable().add(excess), "id", ticketId));
+
+        RemainingInvoiceDocumentDto issued = remainingInvoiceService.issue(
+            remainingInvoiceService.createDraft(ticketId, null, salesActor).id(), salesActor);
+        assertThat(issued.depositDeduction()).isEqualByComparingTo(dn.depositAmount());
+        assertThat(tickets.payableAmount(ticketId)).isEqualByComparingTo(dn.totalPayable().add(issued.grandTotal()));
+
+        jdbc.update("INSERT INTO sales.payment_receipt (ticket_id, kind, amount, recorded_by, receipt_ref)"
+            + " VALUES (:t, 'ADJUSTMENT', :a, :by, 'REFUND-TEST')",
+            Map.of("t", ticketId, "a", excess, "by", accountActor.id()));
+        assertThat(tickets.netDepositReceived(ticketId)).isEqualByComparingTo(dn.totalPayable());
+        assertThat(tickets.payableAmount(ticketId)).isEqualByComparingTo(dn.totalPayable().add(issued.grandTotal()));
+        // net received = notice total, so only the invoice itself is still outstanding (no phantom 10,700)
+        assertThat(tickets.findSummaryById(ticketId).orElseThrow().amountOutstanding())
+            .isEqualByComparingTo(issued.grandTotal());
+    }
+
+    @Test
+    void updatingAnIssuedNotice_above100Percent_isRefused_andOnACancelledDeal_isRefused() {
+        DealFixture fixture = buildAcceptedDeal(salesActor, "UpdateGuards");
+        DepositNoticeDto notice = depositNoticeService.getById(fixture.depositNoticeId(), salesActor);
+
+        assertThatThrownBy(() -> depositNoticeService.update(
+            fixture.depositNoticeId(), noticeWithPercent(notice, "1.50"), salesActor))
+            .isInstanceOfSatisfying(ApiException.class,
+                e -> assertThat(e.getStatus()).isEqualTo(org.springframework.http.HttpStatus.BAD_REQUEST));
+
+        jdbc.update("UPDATE sales.ticket SET lifecycle = 'CANCELLED' WHERE ticket_id = :id",
+            Map.of("id", fixture.ticketId()));
+        assertThatThrownBy(() -> depositNoticeService.update(
+            fixture.depositNoticeId(), noticeWithPercent(notice, "0.30"), salesActor))
+            .isInstanceOfSatisfying(ApiException.class,
+                e -> assertThat(e.getStatus()).isEqualTo(org.springframework.http.HttpStatus.CONFLICT));
+    }
+
+    /** updateDraft's repository writes are told the status the service read, so a DRAFT save cannot land on a row
+     * issued in between (and an ISSUED save cannot land on a superseded one). */
+    @Test
+    void repositoryWrites_refuseARowThatIsNoLongerInTheStatusTheServiceRead() {
+        DealFixture fixture = buildAcceptedDeal(salesActor, "RiRepoRace");
+        RemainingInvoiceDocumentDto issued = remainingInvoiceService.issue(
+            remainingInvoiceService.createDraft(fixture.ticketId(), null, salesActor).id(), salesActor);
+
+        int fields = remainingInvoiceRepository.updateDraftFields(issued.id(), "RACE", null, LocalDate.of(2026, 1, 1),
+            List.of(), null, "DRAFT");
+        int snapshot = remainingInvoiceRepository.updateSnapshot(issued.id(), null, "RACE", null, null, null, null,
+            BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ONE, "DRAFT");
+
+        assertThat(fields).isZero();
+        assertThat(snapshot).isZero();
+        RemainingInvoiceDocumentDto reread = remainingInvoiceService.get(issued.id(), salesActor);
+        assertThat(reread.reference()).isEqualTo(issued.reference());
+        assertThat(reread.grandTotal()).isEqualByComparingTo(issued.grandTotal());
+    }
+
+    @Test
+    void editingTheIssuedDepositNotice_refreshesADraftInvoiceToo() {
+        DealFixture fixture = buildAcceptedDeal(salesActor, "CascadeDraftRi");
+        RemainingInvoiceDocumentDto draft = remainingInvoiceService.createDraft(fixture.ticketId(), null, salesActor);
+        DepositNoticeDto notice = depositNoticeService.getById(fixture.depositNoticeId(), salesActor);
+        String newPercent = notice.depositPercent().compareTo(new BigDecimal("0.40")) == 0 ? "0.20" : "0.40";
+
+        DepositNoticeDto editedNotice = depositNoticeService.update(
+            fixture.depositNoticeId(), noticeWithPercent(notice, newPercent), salesActor);
+
+        RemainingInvoiceDocumentDto refreshed = remainingInvoiceService.get(draft.id(), salesActor);
+        assertThat(refreshed.status()).isEqualTo("DRAFT");
+        assertThat(refreshed.depositDeduction()).isEqualByComparingTo(editedNotice.depositAmount());
+        assertThat(refreshed.netAmount()).isEqualByComparingTo(refreshed.itemsTotal().subtract(editedNotice.depositAmount()));
+        assertThat(refreshed.grandTotal()).isNotEqualByComparingTo(draft.grandTotal());
+    }
+
+    @Test
     void issue_accountAndSalesManager_areRefused_rowStaysDraft() {
         DealFixture fixture = buildAcceptedDeal(salesActor, "IssueAuthz1");
         RemainingInvoiceDocumentDto draft = remainingInvoiceService.createDraft(fixture.ticketId(), null, salesActor);
@@ -461,6 +594,11 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
                     e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
         }
         assertThat(remainingInvoiceService.get(draft.id(), salesActor).status()).isEqualTo("DRAFT");
+    }
+
+    private DepositNoticeDraftRequest noticeWithPercent(DepositNoticeDto n, String percent) {
+        return new DepositNoticeDraftRequest(n.customerName(), n.customerTaxId(), n.customerAddress(),
+            n.projectName(), n.reference(), new BigDecimal(percent), n.notes(), null);
     }
 
     // Fixture helpers — adapted from DepositNoticeIssueGuardIntegrationTest's own approach for driving a deal
