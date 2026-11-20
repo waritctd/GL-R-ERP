@@ -19,10 +19,10 @@
 // Steps with no picture (alt null) are screens the mock app cannot show honestly (the PDF itself, the editor's
 // customer lock and quotation picker). Every label in "straight quotes" is on screen today.
 //
-// SCREENSHOTS. One per step, at /whats-new/v2.0.0/<entry id>-<step number>.png (frontend/public/whats-new/…).
+// SCREENSHOTS. One per step, at /whats-new-img/v2.0.0/<entry id>-<step number>.png (frontend/public/whats-new-img/…).
 
 const RELEASE_ID = 'v2.0.0';
-const shot = (entryId, n) => `/whats-new/${RELEASE_ID}/${entryId}-${n}.png`;
+const shot = (entryId, n) => `/whats-new-img/${RELEASE_ID}/${entryId}-${n}.png`;
 
 /** A step tuple is [text, detail, alt]; an alt of null means the step has NO screenshot (image null). The step keeps
  * its number, so the other images keep their paths. */

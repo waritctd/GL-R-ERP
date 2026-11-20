@@ -18,6 +18,10 @@ export const ROLE_LABEL = {
   employee: 'พนักงานทั่วไป',
 };
 
+/** A Thai lead-in word plus a role label: Thai joins without a space (สำหรับฝ่ายขาย), a Latin label needs one
+ * (สำหรับ CEO, สำหรับ QC). */
+export const withRole = (lead, label) => `${lead}${/^[A-Za-z0-9]/.test(label) ? ' ' : ''}${label}`;
+
 export const CHANGE_KINDS = { new: 'ใหม่', changed: 'เปลี่ยนแปลง', data: 'ปรับข้อมูล' };
 
 /** Who sees the publish / email control. A UI hint only: ReleaseNoticeService enforces the same set. */

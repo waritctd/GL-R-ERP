@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button } from '../../components/common/Button.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { cn } from '../../utils/cn.js';
-import { ROLE_LABEL, entriesForViewer } from './audiences.js';
+import { ROLE_LABEL, entriesForViewer, withRole } from './audiences.js';
 import { releaseLink, unreadReleaseNotices, useNotifications } from './releaseNoticeHooks.js';
 import { findRelease, latestRelease } from './releases/index.js';
 
@@ -114,7 +114,7 @@ export function WhatsNewBubble({ user, onNavigate, open: controlledOpen, onOpenC
         >
           <div className="border-b border-border px-4 pb-2.5 pt-3.5">
             <span className="block text-xs text-text-muted">อัปเดต {release.dateLabel}</span>
-            <strong className="text-md text-text">สำหรับ{ROLE_LABEL[user?.role] ?? 'คุณ'}</strong>
+            <strong className="text-md text-text">{withRole('สำหรับ', ROLE_LABEL[user?.role] ?? 'คุณ')}</strong>
           </div>
           <ul className="m-0 grid max-h-[50dvh] list-none gap-0.5 overflow-y-auto p-2">
             {entries.map((entry) => (

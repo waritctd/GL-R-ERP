@@ -7,7 +7,7 @@ import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { PageStack } from '../../components/common/Layout.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { TabPanel, Tabs } from '../../components/common/Tabs.jsx';
-import { ROLE_LABEL, allTabSections, canManageReleaseNotes, entriesForViewer } from './audiences.js';
+import { ROLE_LABEL, allTabSections, withRole, canManageReleaseNotes, entriesForViewer } from './audiences.js';
 import { FeedbackInbox, useFeedbackInbox } from './FeedbackInbox.jsx';
 import { FeedbackTab } from './FeedbackTab.jsx';
 import { ChangeCard } from './ChangeCard.jsx';
@@ -127,7 +127,7 @@ export function WhatsNewPage({ user, showToast }) {
   const roleLabel = ROLE_LABEL[user?.role] ?? 'คุณ';
   const mine = entriesForViewer(release, user);
   const { sections, addressOnlyRoles } = allTabSections(release);
-  const mineGroups = [{ key: 'mine', label: `สำหรับ${roleLabel}`, entries: mine }];
+  const mineGroups = [{ key: 'mine', label: withRole('สำหรับ', roleLabel), entries: mine }];
   // Roles whose only entries are the everyone ones; the release says so itself.
   const addressOnlyNote = addressOnlyRoles.length > 0
     ? `${addressOnlyRoles.map((role) => ROLE_LABEL[role]).join(' · ')}: ${release.otherRolesNote ?? 'ฉบับนี้ไม่มีเรื่องเฉพาะแผนก'}`
@@ -150,7 +150,7 @@ export function WhatsNewPage({ user, showToast }) {
       <PageHeader
         eyebrow="มีอะไรใหม่"
         title={release.dateLabel}
-        subtitle={`${release.title} · สำหรับ${roleLabel}`}
+        subtitle={`${release.title} · ${withRole('สำหรับ', roleLabel)}`}
       />
       {canManageReleaseNotes(user) ? <ReleaseNoticeAdmin release={release} showToast={showToast} /> : null}
       <div>
