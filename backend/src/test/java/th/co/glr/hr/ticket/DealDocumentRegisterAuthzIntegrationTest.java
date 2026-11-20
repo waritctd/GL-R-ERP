@@ -264,12 +264,33 @@ class DealDocumentRegisterAuthzIntegrationTest extends AbstractPostgresIntegrati
             new th.co.glr.hr.dealquotation.DealQuotationRepository(jdbc, new th.co.glr.hr.catalog.CatalogRepository(jdbc)));
         var noticeDraft = new th.co.glr.hr.deposit.DepositNoticeDraftRequest(null, null, null, null, null, null, null, null);
         List<UserPrincipal> holders = List.of(hrActor, employeeActor, salesOtherActor);
+        long customerId = jdbc.queryForObject("SELECT customer_id FROM sales.ticket WHERE ticket_id = :t",
+            Map.of("t", ticketId), Long.class);
+        var chain = new th.co.glr.hr.documentchain.DocumentChainService(
+            new th.co.glr.hr.documentchain.DocumentChainRepository(jdbc), tickets, depositNoticeService,
+            new DepositNoticeRepository(jdbc), new th.co.glr.hr.deposit.RemainingInvoiceRepository(jdbc),
+            org.mockito.Mockito.mock(th.co.glr.hr.dealquotation.DealQuotationService.class));
 
         for (UserPrincipal who : List.of(hrActor, employeeActor)) {
             assertForbidden(() -> registers.listNotices(null, null, null, who));
             assertForbidden(() -> customerService.search("Doc", who));
         }
+        long quotationId = jdbc.queryForObject("SELECT quotation_id FROM sales.quotation WHERE ticket_id = :t",
+            Map.of("t", ticketId), Long.class); // the legacy quotation seeded in setup
+        jdbc.update("""
+            INSERT INTO sales.deposit_notice (ticket_id, status, doc_number, reference, issue_date, customer_name,
+                project_name, deposit_percent, deposit_amount, vat_amount, total_payable)
+            VALUES (:t, 'ISSUED', 'DN-RG-1', 'QT-2026-DOCREG-0001', CURRENT_DATE, 'ลูกค้า', 'โครงการ', 0.5, 1000, 70, 1070)
+            """, Map.of("t", ticketId));
+        jdbc.update("""
+            INSERT INTO sales.remaining_invoice (ticket_id, customer_quotation_id, status, base_number, doc_number,
+                version, doc_date, customer_name, project_name, items_total, deposit_deduction, net_amount, vat_amount,
+                grand_total, issued_at)
+            VALUES (:t, :q, 'ISSUED', 'RI-RG-1', 'RI-RG-1-1', 1, CURRENT_DATE, 'ลูกค้า', 'โครงการ', 2000, 1000, 1000, 70,
+                    1070, now())
+            """, Map.of("t", ticketId, "q", quotationId));
         assertThat(registers.listNotices(null, null, null, salesOtherActor).rows()).as("a plain rep sees only her own").isEmpty();
+        assertThat(registers.listInvoices(null, null, null, salesOtherActor).rows()).as("a plain rep sees only her own").isEmpty();
         jdbc.update("UPDATE hr.employee SET can_read_all_sales = TRUE WHERE employee_id IN (:a, :b, :c, :d)",
             Map.of("a", hrActor.id(), "b", employeeActor.id(), "c", salesOtherActor.id(), "d", importAssigneeActor.id()));
         for (UserPrincipal who : holders) {
@@ -279,16 +300,29 @@ class DealDocumentRegisterAuthzIntegrationTest extends AbstractPostgresIntegrati
             assertThat(pricingRequestService.listForTicket(ticketId, who)).as(who.role()).hasSize(1);
             assertThat(pricingRequestService.list(null, null, false, who)).as(who.role()).isNotEmpty();
             assertThatCode(() -> quotationService.listForPricingRequest(pricingRequestId, who)).doesNotThrowAnyException();
-            assertThatCode(() -> registers.listNotices(null, null, null, who)).doesNotThrowAnyException();
-            assertThatCode(() -> registers.listInvoices(null, null, null, who)).doesNotThrowAnyException();
+            assertThat(registers.listNotices(null, null, null, who).rows()).as(who.role()).hasSize(1)
+                .allMatch(r -> !r.viewerMayWrite());
+            assertThat(registers.listInvoices(null, null, null, who).rows()).as(who.role()).hasSize(1)
+                .allMatch(r -> !r.viewerMayWrite());
             assertThatCode(() -> customerService.search("Doc", who)).doesNotThrowAnyException();
             assertAttachmentsOk(who);
+            assertThatCode(() -> customerService.listContacts(customerId, who)).as(who.role()).doesNotThrowAnyException();
+            assertThatCode(() -> customerService.listProjects(customerId, who)).as(who.role()).doesNotThrowAnyException();
+            assertThat(chain.forTicket(ticketId, who)).as(who.role() + " document chain").isNotNull();
+            assertForbidden(() -> quotationService.create(pricingRequestId,
+                new th.co.glr.hr.customerquotation.CustomerQuotationRequests.CreateCustomerQuotationRequest(
+                    null, null, null, null, null, null), who));
             // ...and nothing is writable: a deposit notice, a pricing-request cancel / attachment.
             assertForbidden(() -> depositNoticeService.createDraft(ticketId, noticeDraft, who));
             assertForbidden(() -> pricingRequestService.cancel(pricingRequestId,
                 new PricingRequestRequests.CancelPricingRequestRequest("x"), who));
         }
         assertThat(pricingRequestService.get(pricingRequestId, salesOwnerActor).summary().status()).isNotEqualTo("CANCELLED");
+        // a DRAFT request is sales' private work, yet the holders read it (as sales_manager does)
+        jdbc.update("UPDATE sales.pricing_request SET status = 'DRAFT' WHERE pricing_request_id = :id", Map.of("id", pricingRequestId));
+        for (UserPrincipal who : holders) {
+            assertThatCode(() -> pricingRequestService.get(pricingRequestId, who)).as(who.role() + " draft").doesNotThrowAnyException();
+        }
         // import with the flag: no deposit-notice reads (a customer financial document), exactly as without it.
         assertForbidden(() -> depositNoticeService.listByTicket(ticketId, importAssigneeActor));
         assertForbidden(() -> registers.listNotices(null, null, null, importAssigneeActor));

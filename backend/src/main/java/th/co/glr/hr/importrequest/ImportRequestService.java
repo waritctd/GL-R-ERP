@@ -420,7 +420,8 @@ public class ImportRequestService {
         if (!wantsBodyChange && !wantsFooterChange) {
             // An entirely empty PATCH changes nothing, but must still be scoped to someone who may at least SEE this row —
             // read access, the lowest bar any branch above already clears.
-            requireRead(existing.ticketId(), actor);
+            // The read-all grant is NOT enough here: this PATCH is a write verb, so it never admits a reader.
+            requireRead(existing.ticketId(), actor, false);
         }
         // Refuse on an inactive deal (LOST/ON_HOLD/DORMANT) like every legacy
         // ticket-mutating method (TicketService#requireActive) — a stored ใบขอซื้อ must
@@ -435,7 +436,7 @@ public class ImportRequestService {
             throw new ApiException(HttpStatus.CONFLICT,
                 "ใบขอซื้อที่ออกเลขแล้วแก้ไขเนื้อหาไม่ได้ — ต้องออกฉบับแก้ไขใหม่");
         }
-        if (draft) {
+        if (draft && wantsBodyChange) {
             stored.updateDraftBody(id, request.projectName(), request.customerName(),
                 request.requestedByName(), request.requiredByNote());
             if (request.items() != null) {
@@ -1836,12 +1837,16 @@ public class ImportRequestService {
     /** STORED-aggregate read gate: CEO/import/sales_manager unrestricted; sales
      * only the deal's own owner. */
     private void requireRead(long ticketId, UserPrincipal actor) {
+        requireRead(ticketId, actor, true);
+    }
+
+    private void requireRead(long ticketId, UserPrincipal actor, boolean allowReadAllGrant) {
         String role = actor.role();
         if ("ceo".equals(role) || READ_ONLY_ROLES.contains(role)) {
             return;
         }
         if (ownsDeal(ticketId, actor)
-            || th.co.glr.hr.auth.OversightReader.holder(actor, tickets::holdsReadAllSalesGrant)) {
+            || allowReadAllGrant && th.co.glr.hr.auth.OversightReader.holder(actor, tickets::holdsReadAllSalesGrant)) {
             return; // the read-all grant: read only; requireFullWrite/canFullWrite never count it
         }
         throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");

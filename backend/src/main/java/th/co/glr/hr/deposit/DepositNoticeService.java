@@ -613,7 +613,8 @@ public class DepositNoticeService {
         DepositNoticeDto doc = getById(docId, actor);
         try {
             byte[] pdf = renderer.toPdf(renderModel(doc, bangkokToday()));
-            return bundle.bundle(pdf, doc.ticketId(), doc.reference(), actor, "DEPOSIT_NOTICE", docId);
+            return bundle.bundle(pdf, doc.ticketId(), doc.reference(), actor, "DEPOSIT_NOTICE", docId,
+                readsOnlyByGrant(doc.ticketId(), actor));
         } catch (ApiException e) {
             throw e;
         } catch (Exception e) {
@@ -648,7 +649,7 @@ public class DepositNoticeService {
     /** The bundle (PO + quotation) for a download of a document of {@code ticketId}. */
     DocumentBundle.Result bundled(byte[] pdf, long ticketId, String quotationNumber, UserPrincipal actor,
                                   String kind, long documentId) {
-        return bundle.bundle(pdf, ticketId, quotationNumber, actor, kind, documentId);
+        return bundle.bundle(pdf, ticketId, quotationNumber, actor, kind, documentId, readsOnlyByGrant(ticketId, actor));
     }
 
     // ── Remaining Invoice (ข้อ 13.5) ─────────────────────────────────────────
@@ -1476,6 +1477,12 @@ public class DepositNoticeService {
      * not in {@link #mayWriteDealDocuments} or {@link #ownsDeal}, so a holder never writes a document. */
     public boolean readsByGrant(UserPrincipal actor) {
         return th.co.glr.hr.auth.OversightReader.holder(actor, tickets::holdsReadAllSalesGrant);
+    }
+
+    /** True when {@code actor} reads this deal only through the read-all grant (no DRAFT delivery-round files for them). */
+    private boolean readsOnlyByGrant(long ticketId, UserPrincipal actor) {
+        return readsByGrant(actor) && !"sales_manager".equals(actor.role()) && !"ceo".equals(actor.role())
+            && tickets.findById(ticketId).map(t -> !ownsDeal(t.summary(), actor)).orElse(false);
     }
 
     /** The per-deal read scope of {@code actor}: the all-documents grant or the read-all grant reads every deal. */

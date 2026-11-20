@@ -262,7 +262,7 @@ class StoredImportRequestIntegrationTest extends AbstractPostgresIntegrationTest
     /** v2.3.0 read-all grant: a flagged hr / non-owning rep reads another rep's stored import request and the list,
      * and still cannot create, issue or revise one. Without the flag the read stays refused. */
     @Test
-    void readAllHolderReadsButCannotCreateIssueOrRevise() {
+    void readAllHolderReadsButWritesNothing() {
         long id = byFactory(DraftSeed.seed(jdbc, ticketId, owner), padanaFactoryId).id();
         UserPrincipal hr = principal(insertEmployee("STORED-HR"), "hr");
         for (UserPrincipal who : List.of(hr, otherSalesRep)) {
@@ -279,6 +279,24 @@ class StoredImportRequestIntegrationTest extends AbstractPostgresIntegrationTest
             assertThatThrownBy(() -> service.issue(id, null, who)).isInstanceOfSatisfying(ApiException.class,
                 e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
         }
+        // ...and no write verb opens: an empty PATCH is refused (and leaves updated_at alone), as are a body update,
+        // a revise and a delete.
+        var empty = new th.co.glr.hr.importrequest.ImportRequestRequests.UpdateImportRequestRequest(
+            null, null, null, null, null, null, null, null, null, null, null, null);
+        var body = new th.co.glr.hr.importrequest.ImportRequestRequests.UpdateImportRequestRequest(
+            "x", null, null, null, null, null, null, null, null, null, null, null);
+        Object before = jdbc.queryForObject("SELECT updated_at FROM sales.import_request WHERE import_request_id = :id",
+            Map.of("id", id), java.sql.Timestamp.class);
+        for (UserPrincipal who : List.of(hr, otherSalesRep)) {
+            for (org.assertj.core.api.ThrowableAssert.ThrowingCallable call : List.<org.assertj.core.api.ThrowableAssert.ThrowingCallable>of(
+                    () -> service.update(id, empty, who), () -> service.update(id, body, who),
+                    () -> service.revise(id, who), () -> service.deleteDraft(id, who))) {
+                assertThatThrownBy(call).isInstanceOfSatisfying(ApiException.class,
+                    e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+            }
+        }
+        assertThat(jdbc.queryForObject("SELECT updated_at FROM sales.import_request WHERE import_request_id = :id",
+            Map.of("id", id), java.sql.Timestamp.class)).isEqualTo(before);
         assertThat(service.get(id, owner).status()).isEqualTo(ImportRequestStatus.DRAFT);
     }
 

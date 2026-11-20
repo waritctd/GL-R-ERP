@@ -101,6 +101,16 @@ class DealPartyIntegrationTest extends AbstractDealDirectQuotationIntegrationTes
         refusal(() -> partyService.createAddOnOrder(ticketId, salesActor), HttpStatus.CONFLICT);
     }
 
+    /** v2.3.0 read-all grant: a flagged rep who does not own the deal lists its parties and still cannot add one. */
+    @Test
+    void readAllHolderListsPartiesButChangesNone() {
+        long ticketId = deal(salesActor);
+        refusal(() -> partyService.list(ticketId, otherSalesActor), HttpStatus.FORBIDDEN);
+        jdbc.update("UPDATE hr.employee SET can_read_all_sales = TRUE WHERE employee_id = :id", Map.of("id", otherSalesActor.id()));
+        assertThat(partyService.list(ticketId, otherSalesActor)).isNotEmpty();
+        refusal(() -> partyService.add(ticketId, new AddPartyRequest(1L, "BUYER", null), otherSalesActor), HttpStatus.FORBIDDEN);
+    }
+
     @Test
     void orders_totalsSumTheLiveOrders_skipUnreadableSiblings_andImportGetsNoMoney() {
         long rootId = deal(salesActor);

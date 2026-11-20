@@ -90,7 +90,7 @@ public class DocumentBundle {
 
     /** The defaults, nothing remembered (callers that have no stored document). */
     public Result bundle(byte[] documentPdf, long ticketId, String quotationNumber, UserPrincipal actor) {
-        return bundle(documentPdf, ticketId, quotationNumber, actor, null, 0);
+        return bundle(documentPdf, ticketId, quotationNumber, actor, null, 0, false);
     }
 
     /** Remembers the sheet's choice for a document. Every id must be an attachment of THIS deal (400 otherwise).
@@ -111,16 +111,17 @@ public class DocumentBundle {
      * One pass: the document, the chosen attachments (the remembered / default choice, in order) and the quotation
      * are imported into ONE destination PDF and saved once. Total chosen size over {@link #MAX_BYTES} is a 413.
      * @param kind / documentId  the document whose remembered choice applies ({@code kind == null}: the defaults)
+     * @param hideDraftRoundFiles  a flag-only reader never sees files of DRAFT delivery rounds (as on the attachment list)
      */
     public Result bundle(byte[] documentPdf, long ticketId, String quotationNumber, UserPrincipal actor,
-                         String kind, long documentId) {
+                         String kind, long documentId, boolean hideDraftRoundFiles) {
         List<String> skipped = new ArrayList<>();
         // No per-attachment gate here: every role that may read a notice (owner/keyer, grant holder, sales_manager, ceo,
         // account in scope) may also list and download the deal's attachments (TicketAccessPolicy.canViewDocuments).
         java.util.Map<Long, AttachmentDto> deal = new java.util.LinkedHashMap<>();
         try {
-            attachments.findByTicketId(ticketId).stream().sorted(Comparator.comparingLong(AttachmentDto::id))
-                .forEach(a -> deal.put(a.id(), a));
+            attachments.findByTicketId(ticketId, true, !hideDraftRoundFiles).stream()
+                .sorted(Comparator.comparingLong(AttachmentDto::id)).forEach(a -> deal.put(a.id(), a));
         } catch (Exception e) {
             log.warn("Attachments of ticket {} could not be listed for the PDF bundle", ticketId, e);
             addOnce(skipped, "po");

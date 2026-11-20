@@ -107,12 +107,19 @@ class VisitScopeIntegrationTest extends AbstractDealQuotationSlice2IntegrationTe
         UserPrincipal qc = actor(createEmployee("คิวซี", "qc-visit@glr.co.th", "QC", "ฝ่าย QC", null), "qc");
         UserPrincipal staff = actor(createEmployee("พนักงาน", "emp-visit@glr.co.th", "OTHER", "ฝ่ายอื่น", null), "employee");
 
+        UserPrincipal flaggedSales = actor(createEmployee("เซลส์อ่านอย่างเดียว", "sales-ro-visit@glr.co.th", "SALES", "แผนกขาย", null), "sales");
         for (UserPrincipal who : List.of(qc, staff)) {
             assertThat(status(range("/api/sales/visits/team", today, today), who)).as(who.role()).isEqualTo(403);
             assertThat(status(get("/api/sales/visits/deal/" + theirDeal + "/planned"), who)).isEqualTo(403);
         }
         jdbc.update("UPDATE hr.employee SET can_read_all_sales = TRUE WHERE employee_id IN (:a, :b)",
             Map.of("a", qc.id(), "b", staff.id()));
+        jdbc.update("UPDATE hr.employee SET can_read_all_sales = TRUE WHERE employee_id = :a", Map.of("a", flaggedSales.id()));
+        // A flagged sales rep passes the visit-role check, so only the owner-or-team rule stops her ticking or cancelling.
+        assertThat(status(post("/api/sales/visits/" + theirs + "/done").contentType(MediaType.APPLICATION_JSON)
+            .content("{\"note\":\"x\"}"), flaggedSales)).as("flagged sales done").isEqualTo(403);
+        assertThat(status(post("/api/sales/visits/" + theirs + "/cancel"), flaggedSales)).as("flagged sales cancel").isEqualTo(403);
+        assertThat(status(createRequest(theirDeal, "ลูกค้า", today, null, false), flaggedSales)).as("flagged sales create on their deal").isEqualTo(403);
         for (UserPrincipal who : List.of(qc, staff)) {
             assertThat(ids(ok(range("/api/sales/visits/team", today, today), who))).as(who.role()).contains(theirs);
             assertThat(ids(ok(get("/api/sales/visits/deal/" + theirDeal + "/planned"), who))).contains(theirs);
