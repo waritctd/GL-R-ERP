@@ -232,15 +232,30 @@ public class DepositNoticeService {
         }
         // The customer always comes from the quotation the STORED reference names (a new-engine quotation with a
         // party): typed customer fields are ignored and the reference is kept, since the read-time join keys on it.
-        CustomerHeaderInfo quotationHeader = resolveCustomerHeader(summary, null, null, null, doc.ticketId(), doc.reference());
+        String reference = doc.reference();
+        CustomerHeaderInfo quotationHeader = resolveCustomerHeader(summary, null, null, null, doc.ticketId(), reference);
         boolean fromQuotation = quotationHeader.customerName() != null;
+        String requested = blankToNull(req.reference());
+        List<DepositNoticeItemRequest> items = echoOnly(req.items(), doc.items());
+        if (fromQuotation && requested != null && !requested.equals(reference)) {
+            // Re-pointing: a DRAFT may move to another party quotation of THIS deal (docs.findQuotationPartyCustomerId is
+            // ticket-scoped and needs a party); anything else is refused, never silently ignored.
+            if (!"DRAFT".equals(doc.status()) || docs.findQuotationPartyCustomerId(doc.ticketId(), requested).isEmpty()) {
+                throw new ApiException(HttpStatus.CONFLICT,
+                    "เปลี่ยนใบเสนอราคาอ้างอิงได้เฉพาะใบแจ้งยอดที่ยังเป็นฉบับร่าง และต้องเป็นใบเสนอราคาของดีลนี้");
+            }
+            reference = requested;
+            // the lines follow the new quotation (as create builds them); client-sent items are ignored
+            items = docs.findDealQuotationItems(docs.findNewEngineQuotationId(doc.ticketId(), requested).orElseThrow());
+            quotationHeader = resolveCustomerHeader(summary, null, null, null, doc.ticketId(), reference);
+        }
         var effective = new DepositNoticeDraftRequest(
             fromQuotation ? quotationHeader.customerName() : req.customerName(),
             fromQuotation ? quotationHeader.taxId() : req.customerTaxId(),
             fromQuotation ? quotationHeader.address() : req.customerAddress(),
-            req.projectName(), fromQuotation ? doc.reference() : req.reference(),
+            req.projectName(), fromQuotation ? reference : req.reference(),
             depositPercent,
-            req.notes(), echoOnly(req.items(), doc.items()), req.expectedUpdatedAt(), req.preparerId()
+            req.notes(), items, req.expectedUpdatedAt(), req.preparerId()
         );
         docs.update(docId, effective, doc.items(), doc.status());
         DepositNoticeDto updated = docs.findById(docId).orElseThrow();

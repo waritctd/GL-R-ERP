@@ -1,6 +1,7 @@
 package th.co.glr.hr.dealquotation;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.catchThrowableOfType;
 
 import java.io.ByteArrayOutputStream;
 import java.util.ArrayList;
@@ -16,7 +17,9 @@ import org.apache.pdfbox.text.PDFTextStripper;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpStatus;
 import org.springframework.mock.web.MockMultipartFile;
+import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.attachment.AttachmentRepository;
 import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.common.LibreOfficePdfConverter;
@@ -271,28 +274,75 @@ class DepositNoticeBundlePdfIntegrationTest extends DirectQuotationDealTestBase 
         assertThat(remainingInvoiceService.get(invoice.id(), salesActor).customerName()).isEqualTo(buyerA.name());
     }
 
-    /** Typed customer fields and a changed reference are ignored once the notice's reference resolves to a party; the
-     * STORED columns (which receipt import matches on) hold the party's values, and the DTO says so. */
+    /** Typed customer fields are ignored once the notice's reference resolves to a party (the STORED columns, which
+     * receipt import matches on, hold the party's values). A DRAFT may be re-pointed to another party quotation of the
+     * deal; any other changed reference is refused with 409, never silently ignored. */
     @Test
-    void noticeUpdateKeepsTheQuotationCustomerAndReference() {
+    void noticeUpdateKeepsTheQuotationCustomer_andRepointsOnlyADraftToAPartyQuotationOfTheDeal() {
         Deal deal = confirmedDepositDeal();
         var buyer = addressToSecondBuyer(deal.ticketId(), deal.quotation().id());
         DepositNoticeDto n = deal.notice();
 
         DepositNoticeDto updated = depositNoticeService.update(n.id(), new DepositNoticeDraftRequest("พิมพ์เอง", "111",
-            "ที่อยู่พิมพ์เอง", "โครงการใหม่", "QT-OTHER", null, null, null), salesActor);
-
+            "ที่อยู่พิมพ์เอง", "โครงการใหม่", null, null, null, null), salesActor);
         assertThat(updated.customerName()).isEqualTo(buyer.name());
         assertThat(updated.reference()).isEqualTo(deal.quotation().number());
         assertThat(updated.projectName()).isEqualTo("โครงการใหม่");
         assertThat(updated.customerFromQuotation()).isTrue();
+
+        // not a party quotation of this deal (unknown number, or one without a party): 409, notice untouched
+        cloneQuotation(deal.quotation().id(), "QT-NOPARTY", 91, false);
+        String noParty = "QT-NOPARTY";
+        for (String ref : List.of("QT-OTHER", noParty)) {
+            assertThat(catchThrowableOfType(() -> depositNoticeService.update(n.id(),
+                new DepositNoticeDraftRequest(null, null, null, null, ref, null, null, null), salesActor), ApiException.class)
+                .getStatus()).isEqualTo(HttpStatus.CONFLICT);
+        }
+
+        // a party quotation of the same deal: the draft takes that party's customer
+        long otherId = cloneQuotation(deal.quotation().id(), "QT-OTHER-PARTY", 92, true);
+        var otherBuyer = addressToBuyer(deal.ticketId(), otherId, "คุณส้ม", "0100000000555", "55 ถนนทดสอบ");
+        DepositNoticeDto moved = depositNoticeService.update(n.id(),
+            new DepositNoticeDraftRequest(null, null, null, null, "QT-OTHER-PARTY", null, null, null), salesActor);
+        assertThat(moved.reference()).isEqualTo("QT-OTHER-PARTY");
+        assertThat(moved.customerName()).isEqualTo(otherBuyer.name());
+        assertThat(moved.customerTaxId()).isEqualTo(otherBuyer.taxId());
+        var newLines = depositNoticeService.itemsFromDealQuotation(otherId);
+        assertThat(moved.subtotal()).isNotEqualByComparingTo(updated.subtotal());
+        assertThat(moved.items()).extracting(i -> i.amount()).containsExactlyElementsOf(newLines.stream().map(i -> i.amount()).toList());
+        assertThat(moved.subtotal()).isEqualByComparingTo(newLines.stream().map(i -> i.amount())
+            .reduce(java.math.BigDecimal.ZERO, java.math.BigDecimal::add));
         assertThat(jdbc.queryForObject("SELECT customer_name FROM sales.deposit_notice WHERE deposit_notice_id = :id",
-            java.util.Map.of("id", n.id()), String.class)).isEqualTo(buyer.name());
+            java.util.Map.of("id", n.id()), String.class)).isEqualTo(otherBuyer.name());
+
+        // ISSUED: a changed reference is refused
+        jdbc.update("UPDATE sales.deposit_notice SET status = 'ISSUED' WHERE deposit_notice_id = :id", java.util.Map.of("id", n.id()));
+        assertThat(catchThrowableOfType(() -> depositNoticeService.update(n.id(),
+            new DepositNoticeDraftRequest(null, null, null, null, deal.quotation().number(), null, null, null), salesActor),
+            ApiException.class).getStatus()).isEqualTo(HttpStatus.CONFLICT);
+        jdbc.update("UPDATE sales.deposit_notice SET status = 'DRAFT' WHERE deposit_notice_id = :id", java.util.Map.of("id", n.id()));
 
         // the party row gone: the stored values show again and the editor is told they are editable
-        jdbc.update("UPDATE sales.quotation SET party_id = NULL WHERE quotation_id = :id",
-            java.util.Map.of("id", deal.quotation().id()));
+        jdbc.update("UPDATE sales.quotation SET party_id = NULL WHERE quotation_id = :id", java.util.Map.of("id", otherId));
         assertThat(depositNoticeService.getById(n.id(), salesActor).customerFromQuotation()).isFalse();
+    }
+
+    /** A second quotation of the same deal (a copy of {@code id} under a new number/version, party cleared); a deal
+     * holds only one live direct quotation, so the service cannot create it. */
+    private long cloneQuotation(long id, String number, int version, boolean unused) {
+        jdbc.update("CREATE TEMP TABLE q_clone AS SELECT * FROM sales.quotation WHERE quotation_id = :id", java.util.Map.of("id", id));
+        long newId = jdbc.queryForObject("SELECT max(quotation_id) + 1000 FROM sales.quotation", java.util.Map.of(), Long.class);
+        jdbc.update("UPDATE q_clone SET quotation_id = :n, number = :num, quotation_version = :v, party_id = NULL",
+            java.util.Map.of("n", newId, "num", number, "v", version));
+        jdbc.update("INSERT INTO sales.quotation OVERRIDING SYSTEM VALUE SELECT * FROM q_clone", java.util.Map.of());
+        jdbc.update("DROP TABLE q_clone", java.util.Map.of());
+        // its lines too, with doubled amounts so they differ from the original's
+        jdbc.update("CREATE TEMP TABLE qi_clone AS SELECT * FROM sales.quotation_item WHERE quotation_id = :id", java.util.Map.of("id", id));
+        jdbc.update("UPDATE qi_clone SET quotation_item_id = quotation_item_id + (SELECT max(quotation_item_id) FROM sales.quotation_item),"
+            + " quotation_id = :n, amount = amount * 2", java.util.Map.of("n", newId));
+        jdbc.update("INSERT INTO sales.quotation_item OVERRIDING SYSTEM VALUE SELECT * FROM qi_clone", java.util.Map.of());
+        jdbc.update("DROP TABLE qi_clone", java.util.Map.of());
+        return newId;
     }
 
     // ── fixtures ──────────────────────────────────────────────────────────────────────────────
