@@ -2350,6 +2350,7 @@ function authResponse(user) {
   return {
     user: publicUser(user),
     admin: Boolean(user?.admin),
+    operator: Boolean(user?.operator),
     canCreateQuotation: Boolean(user?.canCreateQuotation),
     canIssueBillingNote: Boolean(user?.canIssueBillingNote),
     canManageAllSalesDocuments: holdsAllSalesDocumentsGrant(user),

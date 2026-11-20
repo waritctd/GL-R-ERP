@@ -7,7 +7,7 @@ import { SALES_ENABLED } from '../../app/features.js';
 import { hasPermission, isDivisionManager, isQuotationReleaseUser, isReleasedPath, isSelfServiceLocked } from '../../app/permissions.js';
 import { PRODUCT_NAME } from '../../app/product.js';
 import { cn } from '../../utils/cn.js';
-import { roleLabel } from '../../utils/format.js';
+import { displayRole, roleLabel } from '../../utils/format.js';
 import { ErrorBoundary } from '../common/ErrorBoundary.jsx';
 import { RouteFallback } from '../common/RouteFallback.jsx';
 import { Icon } from '../common/Icon.jsx';
@@ -397,7 +397,7 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
           </div>
           <div className="topbar-title grid min-w-0 flex-1 gap-0.5" aria-label="พื้นที่ทำงานปัจจุบัน">
             <span className="overflow-hidden text-ellipsis whitespace-nowrap font-extrabold" translate="no">{PRODUCT_NAME}</span>
-            <small className="overflow-hidden text-ellipsis whitespace-nowrap text-xs text-text-muted">{roleLabel(user.role)}</small>
+            <small className="overflow-hidden text-ellipsis whitespace-nowrap text-xs text-text-muted">{roleLabel(displayRole(user))}</small>
           </div>
           <div className="flex flex-none items-center gap-2.5 mobile:gap-1">
             <div className="text-right mobile:hidden">

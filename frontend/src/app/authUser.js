@@ -15,6 +15,8 @@ export function userFromAuthResponse(response) {
   return {
     ...response.user,
     admin: Boolean(response.admin),
+    // Display identity only (developers who run the portal); `role` stays the permission role.
+    operator: Boolean(response.operator),
     canCreateQuotation: Boolean(response.canCreateQuotation),
     canIssueBillingNote: Boolean(response.canIssueBillingNote),
     canManageAllSalesDocuments: Boolean(response.canManageAllSalesDocuments),

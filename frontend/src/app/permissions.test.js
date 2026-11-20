@@ -1,4 +1,7 @@
 import { afterEach, describe, it, expect, vi } from 'vitest';
+import { ROLE_PERMISSIONS } from '../api/routes.js';
+import { ALL_ROLES } from '../features/whatsNew/audiences.js';
+import { userFromAuthResponse } from './authUser.js';
 import { hasPermission, allowedRoute, canAccessPath, isDivisionManager, dealRedirectFor } from './permissions.js';
 
 // Capability table: each row pins who holds the capability and who must not (an unknown key fails closed).
@@ -380,6 +383,23 @@ describe('activity log access (admin capability)', () => {
     for (const role of ['sales', 'hr', 'ceo', 'employee', 'account', 'warehouse', 'qc']) {
       expect(canAccessPath('/activity-log', user(role, { admin: undefined }))).toBe(false);
     }
+  });
+
+  it('operator is display only: no role list, hasPermission or route access changes with it', () => {
+    const paths = ['/activity-log', '/payroll', '/finance', '/tickets', '/tickets/12', '/quotations/new', '/employees',
+      '/commissions', '/people-insights', '/fulfilment', '/import/deals/1', '/import/deals/12', '/hr', '/requests'];
+    for (const roles of Object.values(ROLE_PERMISSIONS)) expect(roles).not.toContain('operator');
+    for (const role of ALL_ROLES) {
+      for (const admin of [false, true]) {
+        for (const path of paths) {
+          const base = { id: 216, employeeId: 216, role, admin };
+          expect(canAccessPath(path, { ...base, operator: true }), `${role} admin=${admin} ${path}`)
+            .toBe(canAccessPath(path, { ...base, operator: false }));
+        }
+      }
+    }
+    expect(userFromAuthResponse({ user: { role: 'ceo' }, operator: true })).toMatchObject({ role: 'ceo', operator: true });
+    expect(userFromAuthResponse({ user: { role: 'ceo' } }).operator).toBe(false);
   });
 
   it('allows a flagged admin even though their derived role is sales', () => {
