@@ -259,6 +259,29 @@ class StoredImportRequestIntegrationTest extends AbstractPostgresIntegrationTest
                 e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
     }
 
+    /** v2.3.0 read-all grant: a flagged hr / non-owning rep reads another rep's stored import request and the list,
+     * and still cannot create, issue or revise one. Without the flag the read stays refused. */
+    @Test
+    void readAllHolderReadsButCannotCreateIssueOrRevise() {
+        long id = byFactory(DraftSeed.seed(jdbc, ticketId, owner), padanaFactoryId).id();
+        UserPrincipal hr = principal(insertEmployee("STORED-HR"), "hr");
+        for (UserPrincipal who : List.of(hr, otherSalesRep)) {
+            assertThatThrownBy(() -> service.get(id, who)).isInstanceOfSatisfying(ApiException.class,
+                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+        }
+        jdbc.update("UPDATE hr.employee SET can_read_all_sales = TRUE WHERE employee_id IN (:a, :b)",
+            Map.of("a", hr.id(), "b", otherSalesRep.id()));
+        for (UserPrincipal who : List.of(hr, otherSalesRep)) {
+            assertThat(service.get(id, who).status()).isEqualTo(ImportRequestStatus.DRAFT);
+            assertThat(service.list(ticketId, who)).isNotEmpty();
+            assertThatThrownBy(() -> service.createDrafts(ticketId, null, who)).isInstanceOfSatisfying(ApiException.class,
+                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+            assertThatThrownBy(() -> service.issue(id, null, who)).isInstanceOfSatisfying(ApiException.class,
+                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+        }
+        assertThat(service.get(id, owner).status()).isEqualTo(ImportRequestStatus.DRAFT);
+    }
+
     @Test
     void ceoCanRaiseAndIssue() {
         long id = byFactory(DraftSeed.seed(jdbc, ticketId, ceoUser), padanaFactoryId).id();

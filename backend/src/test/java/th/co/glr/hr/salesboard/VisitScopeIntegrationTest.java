@@ -98,6 +98,32 @@ class VisitScopeIntegrationTest extends AbstractDealQuotationSlice2IntegrationTe
         }
     }
 
+    /** v2.3.0 read-all grant: a flagged qc/employee reads the team's week and a deal's planned visits, and is refused
+     * to log, tick or cancel any visit (TEAM_ROLES is not widened); without the flag the team view stays closed. */
+    @Test
+    void readAllHolderSeesTheTeamButChangesNoVisit() throws Exception {
+        long theirDeal = deal(otherSalesActor);
+        long theirs = plan(otherSalesActor, theirDeal, "คุณอรุณ", today);
+        UserPrincipal qc = actor(createEmployee("คิวซี", "qc-visit@glr.co.th", "QC", "ฝ่าย QC", null), "qc");
+        UserPrincipal staff = actor(createEmployee("พนักงาน", "emp-visit@glr.co.th", "OTHER", "ฝ่ายอื่น", null), "employee");
+
+        for (UserPrincipal who : List.of(qc, staff)) {
+            assertThat(status(range("/api/sales/visits/team", today, today), who)).as(who.role()).isEqualTo(403);
+            assertThat(status(get("/api/sales/visits/deal/" + theirDeal + "/planned"), who)).isEqualTo(403);
+        }
+        jdbc.update("UPDATE hr.employee SET can_read_all_sales = TRUE WHERE employee_id IN (:a, :b)",
+            Map.of("a", qc.id(), "b", staff.id()));
+        for (UserPrincipal who : List.of(qc, staff)) {
+            assertThat(ids(ok(range("/api/sales/visits/team", today, today), who))).as(who.role()).contains(theirs);
+            assertThat(ids(ok(get("/api/sales/visits/deal/" + theirDeal + "/planned"), who))).contains(theirs);
+            assertThat(status(post("/api/sales/visits/" + theirs + "/done").contentType(MediaType.APPLICATION_JSON)
+                .content("{\"note\":\"x\"}"), who)).as(who.role()).isEqualTo(403);
+            assertThat(status(post("/api/sales/visits/" + theirs + "/cancel"), who)).isEqualTo(403);
+            assertThat(status(createRequest(null, "ลูกค้า", today, null, false), who)).isEqualTo(403);
+        }
+        assertThat(visitStatus(theirs)).isEqualTo("PLANNED");
+    }
+
     // ── done / cancel lifecycle ──────────────────────────────────────────────
 
     @Test

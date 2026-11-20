@@ -150,9 +150,12 @@ public class PricingRequestService {
     }
 
     public List<PricingRequestSummaryDto> listForTicket(long ticketId, UserPrincipal actor) {
-        requireRole(actor, VIEWER_ROLES);
+        boolean reader = isOversightReader(actor);
+        if (!reader) {
+            requireRole(actor, VIEWER_ROLES);
+        }
         TicketSummaryDto ticket = requireTicket(ticketId);
-        if ("sales".equals(actor.role()) && !(DealOwnership.isOwnerOrKeyer(ticket, actor.id()) || tickets.holdsAllSalesDocumentsGrant(actor))) {
+        if ("sales".equals(actor.role()) && !reader && !(DealOwnership.isOwnerOrKeyer(ticket, actor.id()) || tickets.holdsAllSalesDocumentsGrant(actor))) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
         // Separate read path from findSummaries/list — must apply the same DRAFT privacy rule so a request that's
@@ -165,14 +168,17 @@ public class PricingRequestService {
 
     public List<PricingRequestSummaryDto> list(String status, Long assignedImportId,
                                                boolean activeDealsOnly, UserPrincipal actor) {
-        requireRole(actor, VIEWER_ROLES);
+        boolean reader = isOversightReader(actor);
+        if (!reader) {
+            requireRole(actor, VIEWER_ROLES);
+        }
         if (status != null && !PricingRequestStatus.isValid(status)) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "ไม่รองรับสถานะ '" + status + "'");
         }
         // a can_manage_all_sales_documents holder acts as owner of every deal: all requests, drafts included
         boolean holder = tickets.holdsAllSalesDocumentsGrant(actor);
-        Long createdByFilter = "sales".equals(actor.role()) && !holder ? actor.id() : null;
-        boolean draftOversight = "ceo".equals(actor.role()) || "sales_manager".equals(actor.role()) || holder;
+        Long createdByFilter = "sales".equals(actor.role()) && !holder && !reader ? actor.id() : null;
+        boolean draftOversight = "ceo".equals(actor.role()) || "sales_manager".equals(actor.role()) || holder || reader;
         return requests.findSummaries(status, assignedImportId, createdByFilter, activeDealsOnly,
             draftOversight, actor.id());
     }
@@ -916,7 +922,10 @@ public class PricingRequestService {
     /** The one read-access rule for a single pricing request: viewer role required, and sales reps only see
      * requests on tickets they created. Every read path (get, updateDraft, submit, cancel) must go through this. */
     private PricingRequestSummaryDto requireViewable(long id, UserPrincipal actor) {
-        requireRole(actor, VIEWER_ROLES);
+        boolean reader = isOversightReader(actor);
+        if (!reader) {
+            requireRole(actor, VIEWER_ROLES);
+        }
         PricingRequestSummaryDto summary = requests.findSummary(id)
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบคำขอราคานี้"));
         // A DRAFT is the rep's private scratchpad (see this class's Javadoc) — only the owning sales rep and
@@ -925,7 +934,7 @@ public class PricingRequestService {
         if (PricingRequestStatus.DRAFT.equals(summary.status()) && !canSeeDraft(actor, summary)) {
             throw new ApiException(HttpStatus.NOT_FOUND, "ไม่พบคำขอราคานี้");
         }
-        if ("sales".equals(actor.role()) && !(DealOwnership.isOwnerOrKeyer(summary.ticketCreatedById(), summary.ticketKeyedById(), actor.id()) || tickets.holdsAllSalesDocumentsGrant(actor))) {
+        if ("sales".equals(actor.role()) && !reader && !(DealOwnership.isOwnerOrKeyer(summary.ticketCreatedById(), summary.ticketKeyedById(), actor.id()) || tickets.holdsAllSalesDocumentsGrant(actor))) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
         return summary;
@@ -935,7 +944,13 @@ public class PricingRequestService {
     private boolean canSeeDraft(UserPrincipal actor, PricingRequestSummaryDto summary) {
         return (DealOwnership.isOwnerOrKeyer(summary.ticketCreatedById(), summary.ticketKeyedById(), actor.id()) || tickets.holdsAllSalesDocumentsGrant(actor))
             || "ceo".equals(actor.role())
-            || "sales_manager".equals(actor.role());
+            || "sales_manager".equals(actor.role())
+            || isOversightReader(actor);
+    }
+
+    /** READ gates only (sales_manager, or the live read-all grant outside import/account). Every write re-checks owner/role. */
+    private boolean isOversightReader(UserPrincipal actor) {
+        return th.co.glr.hr.auth.OversightReader.is(actor, tickets::holdsReadAllSalesGrant);
     }
 
     /** Why a deal's open requests are being cascade-cancelled: it was marked lost, or cancelled. */

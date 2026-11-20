@@ -1840,8 +1840,9 @@ public class ImportRequestService {
         if ("ceo".equals(role) || READ_ONLY_ROLES.contains(role)) {
             return;
         }
-        if (ownsDeal(ticketId, actor)) {
-            return;
+        if (ownsDeal(ticketId, actor)
+            || th.co.glr.hr.auth.OversightReader.holder(actor, tickets::holdsReadAllSalesGrant)) {
+            return; // the read-all grant: read only; requireFullWrite/canFullWrite never count it
         }
         throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
     }
