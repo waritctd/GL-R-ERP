@@ -571,7 +571,7 @@ function DraftEditor({ draft, issuedOfSameQuotation, issuedMode = false, onCance
           {downloading ? 'กำลังดาวน์โหลด…' : issuedMode ? 'ดาวน์โหลด' : 'ดาวน์โหลด (ตัวอย่าง)'}
         </Button>
         {sheetOpen ? (
-          <DocumentDownloadSheet kind="remaining" documentId={draft.id} ticketId={draft.ticketId} canSave={canWrite}
+          <DocumentDownloadSheet kind="remaining" documentId={draft.id} ticketId={draft.ticketId} canSave
             onClose={() => setSheetOpen(false)} onDownload={handleDownload} />
         ) : null}
         {issuedMode ? null : (
