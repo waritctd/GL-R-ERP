@@ -160,6 +160,22 @@ class DealPartyIntegrationTest extends AbstractDealDirectQuotationIntegrationTes
         assertThat(partyService.list(ticketId, salesManagerActor)).hasSize(2);
     }
 
+    /** Confirming the order from a SECOND buyer's quotation (not through the bid outcome) moves the headline and bill-to to it. */
+    @Test
+    void confirmOrderFromAnotherBuyersQuotation_movesHeadlineAndBillToToThatBuyer() {
+        long ticketId = deal(salesActor);
+        CustomerDto contractorB = contractor("บจก.ผู้รับเหมา ชนะ");
+        DealPartyDto partyB = partyService.add(ticketId, new AddPartyRequest(contractorB.id(), "BUYER", null), salesActor);
+        approved(ticketId, draft().withRecipientType("BUYER"), salesActor);
+        var quotationB = approved(ticketId, draft().withPartyId(partyB.id()), salesActor);
+
+        quotationService.confirmOrderFromDirectQuotation(quotationB.id(), salesActor);
+
+        assertThat(partyService.list(ticketId, salesActor)).filteredOn(DealPartyDto::headline).singleElement()
+            .satisfies(p -> assertThat(p.id()).isEqualTo(partyB.id()));
+        assertThat(summary(ticketId).customerId()).isEqualTo(contractorB.id());
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────────────────────────
 
     private CustomerDto contractor(String name) {

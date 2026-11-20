@@ -244,12 +244,38 @@ function payloadKey(payload) {
   return JSON.stringify({ ...payload, expectedUpdatedAt: null });
 }
 
-export function DepositNoticePage({ ticketId, onBack, backLabel = 'เปิดงาน', quotationId = null, onIssued, showToast }) {
+/** The page's loading frame; the route shows it too while it waits for the viewer's write right. */
+export function DepositNoticeSkeleton() {
+  return (
+    <div className="grid w-full grid-cols-1 gap-[18px] min-w-0 max-w-[1320px]" aria-busy="true" aria-label="กำลังโหลดใบแจ้งยอดเงินรับมัดจำ">
+      <header className="flex items-center gap-3 mb-1">
+        <Skeleton width={80} height={28} />
+        <div className="flex-1">
+          <Skeleton width="35%" height={20} />
+        </div>
+      </header>
+      <Panel>
+        <Panel.Header><Skeleton width="25%" height={16} /></Panel.Header>
+        <div className="px-4.5 py-3.5">
+          <SkeletonText lines={4} />
+        </div>
+      </Panel>
+      <Panel>
+        <Panel.Header><Skeleton width="25%" height={16} /></Panel.Header>
+        <div className="px-4.5 py-3.5">
+          <SkeletonText lines={3} />
+        </div>
+      </Panel>
+    </div>
+  );
+}
+
+export function DepositNoticePage({ ticketId, onBack, backLabel = 'เปิดงาน', quotationId = null, startEditing = false, canWrite = true, onIssued, showToast }) {
   const queryClient = useQueryClient();
   const [customerSearch, setCsSearch] = useState('');
   const [confirmIssue, setConfirmIssue] = useState(false);
   // An ISSUED notice is read-only until sales presses แก้ไข; saving then updates the same document in place.
-  const [editingIssued, setEditingIssued] = useState(false);
+  const [editingIssued, setEditingIssued] = useState(startEditing);
   const [downloading, setDownloading] = useState(null); // 'xlsx' | 'pdf' | null
   const [pdfSheetOpen, setPdfSheetOpen] = useState(false); // the ดาวน์โหลด PDF sheet (which files go into the PDF)
 
@@ -603,33 +629,11 @@ export function DepositNoticePage({ ticketId, onBack, backLabel = 'เปิด�
   const vat = round2(deposit * vatPercent);
   const total = round2(deposit + vat);
 
-  if (loading) {
-    return (
-      <div className="grid w-full grid-cols-1 gap-[18px] min-w-0 max-w-[1320px]" aria-busy="true" aria-label="กำลังโหลดใบแจ้งยอดเงินรับมัดจำ">
-        <header className="flex items-center gap-3 mb-1">
-          <Skeleton width={80} height={28} />
-          <div className="flex-1">
-            <Skeleton width="35%" height={20} />
-          </div>
-        </header>
-        <Panel>
-          <Panel.Header><Skeleton width="25%" height={16} /></Panel.Header>
-          <div className="px-4.5 py-3.5">
-            <SkeletonText lines={4} />
-          </div>
-        </Panel>
-        <Panel>
-          <Panel.Header><Skeleton width="25%" height={16} /></Panel.Header>
-          <div className="px-4.5 py-3.5">
-            <SkeletonText lines={3} />
-          </div>
-        </Panel>
-      </div>
-    );
-  }
+  if (loading) return <DepositNoticeSkeleton />;
 
   const isIssued = doc?.status === 'ISSUED';
-  const locked = isIssued && !editingIssued; // read-only view
+  // Read-only view: an issued notice until แก้ไข is pressed, and always for a viewer who may not write (draft too).
+  const locked = !canWrite || (isIssued && !editingIssued);
   const referencedQuotation = resolveNoticeQuotation(dealQuotationsQuery.data, form.reference);
   const noticePercent = Math.round(Number(form.depositPercent) * 100);
   // A quotation with no % stored means the 30% default (as everywhere else).
@@ -649,7 +653,7 @@ export function DepositNoticePage({ ticketId, onBack, backLabel = 'เปิด�
   return (
     <div className="grid w-full grid-cols-1 gap-[18px] min-w-0 max-w-[1320px]">
       {pdfSheetOpen && doc ? (
-        <DocumentDownloadSheet kind="deposit" documentId={doc.id} ticketId={ticketId} reference={form.reference}
+        <DocumentDownloadSheet kind="deposit" documentId={doc.id} ticketId={ticketId} reference={form.reference} canSave={canWrite}
           onClose={() => setPdfSheetOpen(false)} onDownload={() => handleDownload('pdf', true)} />
       ) : null}
       <PageHeader
@@ -677,10 +681,10 @@ export function DepositNoticePage({ ticketId, onBack, backLabel = 'เปิด�
                 { key: 'xlsx', label: 'Excel', icon: 'fileText', onSelect: () => handleDownload('xlsx'), disabled: downloadBusy, disabledReason: downloading != null ? 'กำลังดาวน์โหลด…' : 'กำลังบันทึก…' },
               ]}
             />
-            {!isIssued ? (
+            {!isIssued && canWrite ? (
               <Button variant="primary" onClick={handleIssue} disabled={saving}>ออกเอกสาร</Button>
             ) : null}
-            {locked ? (
+            {locked && isIssued && canWrite ? (
               <Button variant="secondary" onClick={() => setEditingIssued(true)}>แก้ไขฉบับปัจจุบัน</Button>
             ) : null}
           </>
@@ -733,12 +737,14 @@ export function DepositNoticePage({ ticketId, onBack, backLabel = 'เปิด�
             title="ยังไม่มีใบแจ้งยอดเงินรับมัดจำ"
             description="สร้างเอกสารฉบับร่างเพื่อเริ่มกรอกรายละเอียดใบแจ้งยอดมัดจำสำหรับงานนี้"
           />
+          {canWrite ? (
           <div className="flex justify-center px-4.5 pb-4.5">
             <Button variant="primary" onClick={handleCreateDraft} disabled={creatingDraft}>
               <Icon name="plus" size={14} />
               {creatingDraft ? 'กำลังสร้าง…' : 'สร้างเอกสารฉบับร่าง'}
             </Button>
           </div>
+          ) : null}
         </Panel>
       ) : (
         <>
@@ -1021,7 +1027,7 @@ export function DepositNoticePage({ ticketId, onBack, backLabel = 'เปิด�
             </div>
           </Panel>
 
-          {!isIssued ? (
+          {!isIssued && canWrite ? (
             <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-border-muted bg-surface p-4">
               <p className="m-0 text-xs text-text-muted">
                 กด &quot;ออกเอกสาร&quot; เพื่อออกเลขที่เอกสารอย่างเป็นทางการ — หลังจากนี้ยังแก้ไขได้ในเอกสารเดิม (เลขที่คงเดิม) และระบบจะบันทึกประวัติการแก้ไข

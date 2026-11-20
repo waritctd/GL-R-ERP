@@ -519,7 +519,7 @@ export function DealDocumentRegister({
 
       {pdfSheet ? (
         <DocumentDownloadSheet kind={pdfSheet.kind} documentId={pdfSheet.row.id} ticketId={ticketId}
-          reference={pdfSheet.row.reference} onClose={() => setPdfSheet(null)} onDownload={downloadFromSheet} />
+          reference={pdfSheet.row.reference} canSave={canWriteRemainingInvoice} onClose={() => setPdfSheet(null)} onDownload={downloadFromSheet} />
       ) : null}
       {remainingInvoiceDialogOpen ? (
         <RemainingInvoiceDialog ticketId={ticketId} canWrite={canWriteRemainingInvoice} showToast={showToast}

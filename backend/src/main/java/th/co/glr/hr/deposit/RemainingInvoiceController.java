@@ -25,10 +25,25 @@ import th.co.glr.hr.auth.UserPrincipal;
 public class RemainingInvoiceController {
     private final RemainingInvoiceService service;
     private final SessionContext sessions;
+    private final DealDocumentListService lists;
 
-    public RemainingInvoiceController(RemainingInvoiceService service, SessionContext sessions) {
+    public RemainingInvoiceController(RemainingInvoiceService service, SessionContext sessions, DealDocumentListService lists) {
         this.service = service;
         this.sessions = sessions;
+        this.lists = lists;
+    }
+
+    /** Every live remaining invoice (DRAFT/ISSUED, older versions nested) the viewer may read, across deals; optional {@code status}. */
+    @GetMapping("/remaining-invoices")
+    Map<String, Object> listAll(@RequestParam(required = false) String status, @RequestParam(required = false) Integer limit,
+                                @RequestParam(required = false) Integer offset, HttpSession session) {
+        var page = lists.listInvoices(status, limit, offset, sessions.requireUser(session));
+        return Map.of("remainingInvoices", page.rows(), "total", page.total());
+    }
+
+    @GetMapping("/remaining-invoices/counts")
+    DealDocumentRows.Counts counts(HttpSession session) {
+        return lists.invoiceCounts(sessions.requireUser(session));
     }
 
     @GetMapping("/tickets/{ticketId}/remaining-invoices")

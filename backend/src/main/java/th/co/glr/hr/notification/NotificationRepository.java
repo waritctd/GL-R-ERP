@@ -175,6 +175,9 @@ public class NotificationRepository {
         // DeliveryRequestService#forward / #sendBack: the warehouse's two outcomes.
         Map.entry("DELIVERY_REQUEST_FORWARDED", "ออกใบกำกับภาษี รอบส่งนี้รอคุณ"),
         Map.entry("DELIVERY_REQUEST_RETURNED", "คลังส่งเอกสารกลับ แก้ไขแล้วส่งอีกครั้ง"),
+        // DealQuotationService#undoOrderConfirmation: the sales side withdrew the order, so a round the warehouse may be
+        // reviewing was deleted.
+        Map.entry("DELIVERY_REQUEST_REMOVED", "ฝ่ายขายยกเลิกคำขอส่งของ"),
         // DeliveryRequestService#confirmInvoice: the round's tax invoice is attached and its money recorded.
         Map.entry("TAX_INVOICE_CONFIRMED", "ออกใบกำกับภาษีแล้ว ส่งของได้"),
         // TicketService#recordDeliveryInternal: goods recorded against a round by someone other than the deal's owner.

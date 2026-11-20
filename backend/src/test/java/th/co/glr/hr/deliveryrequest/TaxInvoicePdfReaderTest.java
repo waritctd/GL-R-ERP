@@ -44,6 +44,14 @@ public class TaxInvoicePdfReaderTest {
         assertThat(blank.invoiceNumber()).isNull();
     }
 
+    @Test
+    void extractionStopsAtTheTextCap_textPastItIsNeverRead() throws Exception {
+        var read = TaxInvoicePdfReader.read(pdf("Tax Invoice No. IV2611-0042", "Date 19/11/2569",
+            "x".repeat(TaxInvoicePdfReader.MAX_TEXT_CHARS + 10), "Grand Total 85,065.00"));
+        assertThat(read.invoiceNumber()).isEqualTo("IV2611-0042");
+        assertThat(read.total()).isNull();
+    }
+
     /** A one-page text PDF of invented lines (no real document), shared with the round integration test. */
     public static byte[] pdf(String... lines) throws Exception {
         try (PDDocument doc = new PDDocument(); ByteArrayOutputStream out = new ByteArrayOutputStream()) {

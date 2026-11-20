@@ -78,6 +78,7 @@ public class ReceiptPlacement {
             || !ReceiptImportService.POSSIBLE_MANUAL_DUPLICATE.equals(row.reason()) || row.suggestedReceiptId() == null) {
             throw new ApiException(HttpStatus.CONFLICT, "รายการนี้ไม่ได้รอเลือกว่าเป็นรายการเดียวกับที่บันทึกเอง");
         }
+        imports.lockReceipt(row.suggestedReceiptId()); // before the "already settled" check below: serialise same-money races
         var manual = imports.manualReceipt(row.suggestedReceiptId())
             .orElseThrow(() -> new ApiException(HttpStatus.CONFLICT, "ไม่พบรายการที่บันทึกเองนี้แล้ว"));
         if ("TAX_INVOICE".equals(manual.source()) && imports.isSettledByRow(manual.receiptId())) {

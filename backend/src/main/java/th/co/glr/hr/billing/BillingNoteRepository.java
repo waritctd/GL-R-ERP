@@ -108,9 +108,9 @@ public class BillingNoteRepository {
             SELECT l.source_type, l.source_id, bn.id AS note_id, bn.doc_number
               FROM sales.billing_note_line l
               JOIN sales.billing_note bn ON bn.id = l.billing_note_id
-             WHERE bn.customer_id = :customerId AND l.source_id IS NOT NULL
+             WHERE l.source_id IS NOT NULL -- any customer's note: a document's customer is its quotation party, which can differ from the note's
                AND l.note_status IN ('DRAFT', 'ISSUED')
-            """, Map.of("customerId", customerId), (rs, n) -> Map.entry(
+            """, Map.of(), (rs, n) -> Map.entry(
                 rs.getString("source_type") + ":" + rs.getLong("source_id"),
                 new ClaimedBy(rs.getLong("note_id"), rs.getString("doc_number"))));
         Map<String, ClaimedBy> byKey = new HashMap<>();
@@ -327,6 +327,9 @@ public class BillingNoteRepository {
      * <p>The deposit-notice half has no such gap: {@code deposit_notice_id} is a real column on
      * {@code payment_receipt}, so its outstanding figure is exact.
      *
+     * <p>A document belongs to the customer of its QUOTATION's party (a deal with several buyers bills each buyer's
+     * documents to that buyer), falling back to the ticket's bill-to for a legacy document with no new-engine quotation.
+     *
      * <p>{@code due_date} is read from {@code sales.ticket.due_date} (V53's own billing fields) —
      * neither source document type carries its own due date, so the deal's billing due date is the
      * best available default; a caller may override it per line when adding to a draft.
@@ -337,14 +340,20 @@ public class BillingNoteRepository {
                %1$s AS outstanding_amount
           FROM sales.remaining_invoice ri
           JOIN sales.ticket t ON t.ticket_id = ri.ticket_id
-         WHERE t.customer_id = :customerId AND ri.status = 'ISSUED'
+          LEFT JOIN sales.quotation rq ON rq.quotation_id = ri.customer_quotation_id
+          LEFT JOIN sales.deal_party rp ON rp.party_id = rq.party_id
+         WHERE COALESCE(rp.customer_id, t.customer_id) = :customerId AND ri.status = 'ISSUED'
         UNION ALL
         SELECT 'DEPOSIT_NOTICE', dn.deposit_notice_id, dn.ticket_id,
                dn.doc_number, dn.issue_date, t.due_date,
                %2$s
           FROM sales.deposit_notice dn
           JOIN sales.ticket t ON t.ticket_id = dn.ticket_id
-         WHERE t.customer_id = :customerId AND dn.status = 'ISSUED'
+          LEFT JOIN LATERAL (SELECT q.party_id FROM sales.quotation q
+                              WHERE q.ticket_id = dn.ticket_id AND q.number = dn.reference AND q.origin IS NOT NULL
+                              ORDER BY q.quotation_id DESC LIMIT 1) dq ON TRUE
+          LEFT JOIN sales.deal_party dp ON dp.party_id = dq.party_id
+         WHERE COALESCE(dp.customer_id, t.customer_id) = :customerId AND dn.status = 'ISSUED'
         ORDER BY doc_date NULLS LAST, doc_number
         """;
 

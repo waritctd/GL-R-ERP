@@ -227,6 +227,9 @@ export const API_ROUTES = {
     openForProject: (projectName) => `/api/tickets/open-for-project?projectName=${encodeURIComponent(projectName ?? '')}`,
   },
   depositNotices: {
+    // Cross-deal list (`?status=DRAFT|ISSUED`) and its per-status counts: DealDocumentListService.
+    list: '/api/deposit-notices',
+    counts: '/api/deposit-notices/counts',
     get: (id) => `/api/deposit-notices/${id}`,
     update: (id) => `/api/deposit-notices/${id}`,
     preview: (id) => `/api/deposit-notices/${id}/preview`,
@@ -307,6 +310,8 @@ export const API_ROUTES = {
     forTicket: (ticketId) => `/api/tickets/${ticketId}/document-chain`,
   },
   storedRemainingInvoices: {
+    list: '/api/remaining-invoices',
+    counts: '/api/remaining-invoices/counts',
     forTicket: (ticketId) => `/api/tickets/${ticketId}/remaining-invoices`,
     get: (id) => `/api/remaining-invoices/${id}`,
     issue: (id) => `/api/remaining-invoices/${id}/issue`,

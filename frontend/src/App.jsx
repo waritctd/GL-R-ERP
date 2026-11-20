@@ -3,12 +3,15 @@ import { Navigate, Route, Routes, useLocation, useNavigate, useParams, useSearch
 import { api } from './api/index.js';
 import { AppShell } from './components/layout/AppShell.jsx';
 import { Toast } from './components/common/Toast.jsx';
+import { Button } from './components/common/Button.jsx';
+import { StatePanel } from './components/common/StatePanel.jsx';
 import { RouteFallback } from './components/common/RouteFallback.jsx';
 import { LoginPage } from './features/auth/LoginPage.jsx';
 import { ForgotPasswordPage } from './features/auth/ForgotPasswordPage.jsx';
 import { ResetPasswordPage } from './features/auth/ResetPasswordPage.jsx';
 import { useHrData } from './hooks/useHrData.js';
 import { useToast } from './hooks/useToast.js';
+import { useDocumentChain } from './features/documentChain/documentChain.js';
 import { SALES_ENABLED } from './app/features.js';
 import { hasPermission, isDivisionManager, landsOnSelfService } from './app/permissions.js';
 import { RequireAccess } from './app/RequireAccess.jsx';
@@ -60,6 +63,7 @@ const DeductionConsentsPage = lazy(() => import('./features/payroll/DeductionCon
 const TaxAllowancePage = lazy(() => import('./features/taxAllowance/TaxAllowancePage.jsx').then(toDefault('TaxAllowancePage')));
 const TaxAllowanceReviewPage = lazy(() => import('./features/taxAllowance/TaxAllowanceReviewPage.jsx').then(toDefault('TaxAllowanceReviewPage')));
 const DepositNoticePage = lazy(() => import('./features/deposits/DepositNoticePage.jsx').then(toDefault('DepositNoticePage')));
+const DepositNoticeSkeleton = lazy(() => import('./features/deposits/DepositNoticePage.jsx').then(toDefault('DepositNoticeSkeleton')));
 const CeoSettingsPage = lazy(() => import('./features/ceoSettings/CeoSettingsPage.jsx').then(toDefault('CeoSettingsPage')));
 const PriceImportPage = lazy(() => import('./features/catalog/PriceImportPage.jsx').then(toDefault('PriceImportPage')));
 const CatalogSearchPage = lazy(() => import('./features/catalog/CatalogSearchPage.jsx').then(toDefault('CatalogSearchPage')));
@@ -83,19 +87,43 @@ const SafeFormSubmitterProbe = lazy(() => import('./dev/SafeFormSubmitterProbe.j
 
 // Thin wrappers that source the ticket id from the URL for the frozen sales pages (they already
 // fetch by id internally).
-function DepositNoticeRoute({ user, showToast }) {
+export function DepositNoticeRoute({ user, showToast }) {
   const { ticketId } = useParams();
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   // "สร้าง" from the delivery request sheet (?returnTo=ship-request): back and after-issue land on that order's sheet again.
   const toRequest = searchParams.get('returnTo') === 'ship-request';
   const backToRequest = () => navigate(`/tickets/${ticketId}?tab=ship&request=open`);
+  // Opened from เอกสารขาย (?from=docs): back returns to its notice tab; ?edit=1 opens an issued notice in edit mode.
+  const fromDocs = searchParams.get('from') === 'docs';
+  // Opened from a quotation's chain card (?from=quotation&quotation=<id>): back returns to that quotation.
+  const quotationParam = searchParams.get('quotation') ?? '';
+  const fromQuotation = searchParams.get('from') === 'quotation' && /^[1-9]\d*$/.test(quotationParam) ? quotationParam : null;
+  // The chain's flag says whether this viewer may write the deal's documents (the server refuses everyone else): it
+  // gates ?edit=1 and the page's edit controls. Until it answers the page waits so its first render already knows;
+  // a failed read shows an error with a retry (never a silently read-only page that hides the owner's buttons).
+  const wantsEdit = searchParams.get('edit') === '1';
+  const chain = useDocumentChain(ticketId);
+  if (chain.isPending) return <DepositNoticeSkeleton />;
+  if (chain.isError && chain.data == null) {
+    return (
+      <StatePanel
+        state="error"
+        title="โหลดสิทธิ์การแก้ไขไม่สำเร็จ"
+        description="เปิดใบแจ้งมัดจำไม่ได้ในตอนนี้ กรุณาลองใหม่อีกครั้ง"
+        action={<Button type="button" variant="secondary" onClick={() => chain.refetch()}>ลองใหม่</Button>}
+      />
+    );
+  }
+  const canWrite = chain.data?.viewer?.mayWriteDepositNotice === true;
   return (
     <DepositNoticePage
       user={user}
       ticketId={ticketId}
-      onBack={toRequest ? backToRequest : () => navigate(`/tickets/${ticketId}`)}
-      backLabel={toRequest ? 'กลับไปที่คำขอ' : undefined}
+      onBack={toRequest ? backToRequest : fromQuotation ? () => navigate(`/quotations/${fromQuotation}`) : fromDocs ? () => navigate('/quotations?doc=deposit') : () => navigate(`/tickets/${ticketId}`)}
+      backLabel={toRequest ? 'กลับไปที่คำขอ' : fromQuotation ? 'กลับไปใบเสนอราคา' : fromDocs ? 'กลับไปเอกสารขาย' : undefined}
+      canWrite={canWrite}
+      startEditing={wantsEdit && canWrite}
       quotationId={toRequest ? searchParams.get('quotation') : null}
       onIssued={toRequest ? backToRequest : undefined}
       showToast={showToast}

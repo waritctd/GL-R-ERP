@@ -19,6 +19,18 @@ export function documentChainQueryOptions(ticketId) {
   };
 }
 
+const DEAL_CLOSED_TEXT = {
+  COMPLETED: 'ปิดงานแล้ว', ON_HOLD: 'พักงานไว้', DORMANT: 'พักงานไว้', CLOSED_LOST: 'เสียงานแล้ว', CANCELLED: 'ยกเลิกแล้ว',
+};
+
+/** Why a deal's notices and invoices cannot be edited (the server refuses with 409 unless the lifecycle is ACTIVE,
+ * DepositNoticeService#requireActiveLifecycle); null when they can. A cancelled status counts as CANCELLED. */
+export function dealDocumentsLockedReason(lifecycle, status) {
+  const state = status === 'cancelled' ? 'CANCELLED' : lifecycle;
+  if (!state || state === 'ACTIVE') return null;
+  return `งานนี้${DEAL_CLOSED_TEXT[state] ?? 'ไม่ได้อยู่ในสถานะดำเนินการ'} แก้ไขเอกสารไม่ได้`;
+}
+
 /** `enabled` false skips the read (no deal, or a viewer the page already knows the gate refuses). */
 export function useDocumentChain(ticketId, { enabled = true } = {}) {
   return useQuery({
@@ -40,6 +52,7 @@ export function useDocumentChain(ticketId, { enabled = true } = {}) {
  *   ticketActions(ticketId)            the deal page's server-gated actions
  *   ['tickets', 'list']                deal lists / boards
  *   ['dealQuotations']                 the quotation list's chain marks, the quotation detail, the deal's quotations
+ *   ['depositNotices', 'list' | 'counts'], ['remainingInvoices']   the เอกสารขาย document tabs
  */
 export function invalidateDealDocuments(queryClient, ticketId) {
   // depositNotices / storedRemainingInvoices are not Number()-coerced: the deal page keys them by its route-param
@@ -53,6 +66,8 @@ export function invalidateDealDocuments(queryClient, ticketId) {
     queryKeys.ticketActions(ticketId),
     ['tickets', 'list'],
     ['dealQuotations'],
+    // เอกสารขาย's cross-deal lists and their counts (queryKeys.depositNoticeList / ...Counts, remainingInvoiceList / ...Counts).
+    ['depositNotices', 'list'], ['depositNotices', 'counts'], ['remainingInvoices'],
   ];
   return Promise.all(keys.map((queryKey) => queryClient.invalidateQueries({ queryKey })));
 }

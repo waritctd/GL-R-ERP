@@ -48,26 +48,38 @@ public class DealQuotationController {
     private final SessionContext sessions;
     /** The list's per-row chain mark; null only in a standalone controller test that does not exercise it. */
     private final th.co.glr.hr.documentchain.DocumentChainService documentChain;
+    /** The list's per-row {@code documents}; null only in a standalone controller test that does not exercise it. */
+    private final th.co.glr.hr.deposit.DealDocumentListService documentLists;
 
     public DealQuotationController(DealQuotationService quotations, SessionContext sessions) {
         this(quotations, sessions, null);
     }
 
-    @org.springframework.beans.factory.annotation.Autowired
     public DealQuotationController(DealQuotationService quotations, SessionContext sessions,
                                    th.co.glr.hr.documentchain.DocumentChainService documentChain) {
+        this(quotations, sessions, documentChain, null);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public DealQuotationController(DealQuotationService quotations, SessionContext sessions,
+                                   th.co.glr.hr.documentchain.DocumentChainService documentChain,
+                                   th.co.glr.hr.deposit.DealDocumentListService documentLists) {
         this.quotations = quotations;
         this.sessions = sessions;
         this.documentChain = documentChain;
+        this.documentLists = documentLists;
     }
 
     /**
      * One row of {@code GET /api/deal-quotations}: the quotation, unwrapped, plus {@code chainStage} — where an APPROVED
      * direct quotation stands in its deal's document chain (DocumentChainRules#listStage), null on every other row and
      * for a viewer who may not read that deal's documents. Sales API contract change (2026-11-17): additive.
+     * {@code documents} (2026-11-20, additive): the deal's deposit notice and this quotation's live remaining invoices,
+     * null when there are none or the viewer may not read them.
      */
     public record DealQuotationListRow(@com.fasterxml.jackson.annotation.JsonUnwrapped DealQuotationDto quotation,
-                                       String chainStage) {}
+                                       String chainStage,
+                                       th.co.glr.hr.deposit.DealDocumentRows.QuotationDocuments documents) {}
 
     @PostMapping("/tickets/{ticketId}/deal-quotations")
     ResponseEntity<Map<String, DealQuotationDto>> create(@PathVariable long ticketId,
@@ -140,7 +152,11 @@ public class DealQuotationController {
         UserPrincipal user = sessions.requireUser(session);
         List<DealQuotationDto> rows = quotations.search(status, needsRework, origin, user);
         Map<Long, String> stages = documentChain == null ? Map.of() : documentChain.listStages(rows, user);
-        return Map.of("items", rows.stream().map(row -> new DealQuotationListRow(row, stages.get(row.id()))).toList());
+        var documents = documentLists == null ? Map.<Long, th.co.glr.hr.deposit.DealDocumentRows.QuotationDocuments>of()
+            : documentLists.summarize(rows.stream().collect(java.util.stream.Collectors.toMap(
+                DealQuotationDto::id, DealQuotationDto::ticketId, (a, b) -> a)), user);
+        return Map.of("items", rows.stream()
+            .map(row -> new DealQuotationListRow(row, stages.get(row.id()), documents.get(row.id()))).toList());
     }
 
     /** Per-status counts for the caller's own list scope — {@code {all, pendingApproval,

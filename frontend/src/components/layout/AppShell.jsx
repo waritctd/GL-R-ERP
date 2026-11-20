@@ -154,14 +154,14 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
     // quotations, scoped server-side, not by this nav item.
     {
       path: '/quotations',
-      label: 'ใบเสนอราคา',
-      helper: 'Direct deal quotations',
+      label: 'เอกสารขาย',
+      helper: 'Sales documents',
       icon: 'fileText',
       group: 'sales',
       show: (hasPermission(user.role, 'canViewDealQuotations') || Boolean(user.canCreateQuotation)) && SALES_ENABLED,
       match: ['/quotations'],
     },
-    // นัดเข้าพบ — after ใบเสนอราคา, where the design's NAV puts it for sales. Same audience as the '/visits'
+    // นัดเข้าพบ — after เอกสารขาย (was ใบเสนอราคา until 2026-11-20), where the design's NAV puts it for sales. Same audience as the '/visits'
     // PATH_GUARDS entry (canViewVisits = VisitService.VISIT_ROLES): a rep's own week; sales_manager / ceo the team's.
     { path: '/visits', label: 'นัดเข้าพบ', helper: 'Visits', icon: 'calendar', group: 'sales', show: hasPermission(user.role, 'canViewVisits') && SALES_ENABLED },
     { path: '/ceo-settings', label: 'ตั้งค่าราคา', helper: 'CEO price config', icon: 'setting', group: 'settings', show: user.role === 'ceo' && SALES_ENABLED },

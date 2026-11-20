@@ -76,6 +76,22 @@ public final class DealQuotationRenderAdapter {
                                                       java.util.Map<Long, DealQuotationRepository.PictureImage> itemPictures,
                                                       byte[] printedBySignaturePng, String printedBySignatureMime,
                                                       byte[] salesRepSignaturePng, String salesRepSignatureMime) {
+        return toRenderModel(quotation, approverSignaturePng, approverSignatureMime, bankBlockLines, itemPictures,
+            printedBySignaturePng, printedBySignatureMime, salesRepSignaturePng, salesRepSignatureMime, null);
+    }
+
+    /**
+     * {@code reuseApproverName}: for a reused-price quotation, the display name of the source quotation's approver
+     * (the caller also passes that approver's signature as {@code approverSignaturePng}); null = legacy source with no
+     * approver, which prints the text-only "อนุมัติตามราคาเดิม" line with no signature.
+     */
+    public static QuotationRenderModel toRenderModel(DealQuotationDto quotation, byte[] approverSignaturePng,
+                                                      String approverSignatureMime,
+                                                      List<String> bankBlockLines,
+                                                      java.util.Map<Long, DealQuotationRepository.PictureImage> itemPictures,
+                                                      byte[] printedBySignaturePng, String printedBySignatureMime,
+                                                      byte[] salesRepSignaturePng, String salesRepSignatureMime,
+                                                      String reuseApproverName) {
         // B4 (header วันที่) = the date the SALES REP CREATED the quotation, for every status.
         // Printing the APPROVED date would make an approved document appear to have been quoted
         // on the day the manager got round to it. Mirrors DealQuotationRepository#mapQuotation's
@@ -208,11 +224,15 @@ public final class DealQuotationRenderAdapter {
         Signatories signatories = new Signatories(
             printedByName(quotation, english),
             salesRepDisplayNameOrReal(quotation, english),
-            // A rule-approved add-on quotation (V232) prints no person in the approver slot: no name, no signature.
-            ruleApproved ? "อนุมัติตามราคาเดิม " + quotation.approvalSourceNumbers()
+            // A rule-approved add-on quotation (V232) prints the SOURCE quotation's approver (name + signature) with the
+            // reuse text; a legacy source with no approver prints the text alone.
+            ruleApproved ? (reuseApproverName == null
+                    ? "อนุมัติตามราคาเดิม " + quotation.approvalSourceNumbers()
+                    : reuseApproverName + " (อนุมัติตามราคาเดิม " + quotation.approvalSourceNumbers() + ")")
                 : displayName(quotation.approvedByName(), quotation.approvedByNameEn(), english),
             null,
-            ruleApproved ? null : approverSignaturePng, ruleApproved ? null : approverSignatureMime,
+            ruleApproved && reuseApproverName == null ? null : approverSignaturePng,
+            ruleApproved && reuseApproverName == null ? null : approverSignatureMime,
             bangkokDate(quotation.createdAt()), bangkokDate(quotation.submittedAt()), bangkokDate(quotation.approvedAt()),
             printedBySignaturePng, printedBySignatureMime,
             salesRepSignaturePng, salesRepSignatureMime);

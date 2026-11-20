@@ -426,6 +426,17 @@ public class DealQuotationRepository {
         return rows.stream().findFirst();
     }
 
+    /** The customer of the party this quotation is addressed to (empty for a quotation with no party), for the notices
+     * that name a specific document: the customer comes from the quotation, never from the deal's headline. */
+    public Optional<String> findPartyCustomerNameOfQuotation(long quotationId) {
+        return jdbc.query("""
+            SELECT c.name FROM sales.quotation q
+              JOIN sales.deal_party p ON p.party_id = q.party_id
+              JOIN customers.customer c ON c.customer_id = p.customer_id
+             WHERE q.quotation_id = :id
+            """, Map.of("id", quotationId), (rs, n) -> rs.getString("name")).stream().findFirst();
+    }
+
     /** The deal's ONE party when it has exactly one (the pre-V204 shape every backfilled deal has), else empty —
      * the party a path that was not told one (a PRICING_REQUEST-origin quotation) attaches its document to. */
     public Optional<Long> findSolePartyId(long ticketId) {
@@ -467,6 +478,30 @@ public class DealQuotationRepository {
                    status = 'AWARDED', not_awarded_reason = NULL, updated_at = now()
              WHERE party_id = :id AND status <> 'AWARDED'
             """, Map.of("id", partyId));
+    }
+
+    /** The awarded BUYER party becomes the deal's headline and bill-to, as a bid outcome does (DealPartyService#recordBidOutcome):
+     * the confirmation path that does not go through the bid outcome used to leave the old headline in place. A party
+     * that is already the headline, or is not a BUYER, is left alone. Returns true when the headline moved. */
+    public boolean makeAwardedPartyHeadline(long partyId) {
+        Long ticketId = jdbc.query("""
+            SELECT ticket_id FROM sales.deal_party WHERE party_id = :id AND role = 'BUYER' AND NOT is_headline
+            """, Map.of("id", partyId), (rs, n) -> rs.getLong("ticket_id")).stream().findFirst().orElse(null);
+        if (ticketId == null) {
+            return false;
+        }
+        jdbc.update("UPDATE sales.deal_party SET is_headline = FALSE, updated_at = now() WHERE ticket_id = :t AND is_headline",
+            Map.of("t", ticketId));
+        jdbc.update("UPDATE sales.deal_party SET is_headline = TRUE, updated_at = now() WHERE party_id = :id",
+            Map.of("id", partyId));
+        jdbc.update("""
+            UPDATE sales.ticket t
+               SET customer_id = c.customer_id, customer_name = c.name, contact_id = COALESCE(p.contact_id, t.contact_id),
+                   title = CASE WHEN t.title = t.customer_name THEN c.name ELSE t.title END, updated_at = now()
+              FROM sales.deal_party p JOIN customers.customer c ON c.customer_id = p.customer_id
+             WHERE p.party_id = :id AND t.ticket_id = p.ticket_id
+            """, Map.of("id", partyId));
+        return true;
     }
 
     /** The reverse of {@link #markPartyAwarded}, for an undone order confirmation: AWARDED -> the status (and reason) it

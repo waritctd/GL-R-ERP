@@ -114,7 +114,7 @@ describe('AppShell navigation (role-scoped views)', () => {
     }
   });
 
-  it('shows นัดเข้าพบ to sales, sales_manager and ceo, directly after ใบเสนอราคา', async () => {
+  it('shows นัดเข้าพบ to sales, sales_manager and ceo, directly after เอกสารขาย', async () => {
     for (const role of ['sales', 'sales_manager', 'ceo']) {
       const { unmount } = renderShell({ role, employeeId: 4, name: 'ทดสอบ', email: `${role}@test.local` });
       await screen.findByText('เนื้อหา');
@@ -223,7 +223,7 @@ describe('AppShell navigation under the release lockdown', () => {
     await renderLockedShell({ role: 'sales', employeeId: 41, name: 'ขาย ทดสอบ', email: 'sales@test.local' });
     await screen.findByText('เนื้อหา');
 
-    expect(screen.getByText('ใบเสนอราคา')).toBeTruthy();
+    expect(screen.getByText('เอกสารขาย')).toBeTruthy();
     expect(screen.getByText('งานทั้งหมด')).toBeTruthy();
     expect(screen.getByText('นัดเข้าพบ')).toBeTruthy();
     expect(screen.getByText('แคตตาล็อกสินค้า')).toBeTruthy();
@@ -247,7 +247,7 @@ describe('AppShell navigation under the release lockdown', () => {
     await screen.findByText('เนื้อหา');
     expect(screen.getByText('คิวขอราคา')).toBeTruthy();
     expect(screen.getByText('การขนส่ง')).toBeTruthy();
-    expect(screen.queryByText('ใบเสนอราคา')).toBeNull();
+    expect(screen.queryByText('เอกสารขาย')).toBeNull();
     expect(screen.queryByText('งานทั้งหมด')).toBeNull();
     expect(screen.queryByText('นัดเข้าพบ')).toBeNull();
     expect(screen.queryByText('แคตตาล็อกสินค้า')).toBeNull();
@@ -279,22 +279,22 @@ describe('AppShell navigation under the release lockdown', () => {
   });
 });
 
-// #H4: the canCreateQuotation capability grant (owner ruling 2026-09-09) OR'd into the "ใบเสนอราคา" nav item's
+// #H4: the canCreateQuotation capability grant (owner ruling 2026-09-09) OR'd into the "เอกสารขาย" nav item's
 // visibility -- same OR the '/quotations' PATH_GUARDS entry applies, so the two never disagree about who sees
 // the route at all.
 describe('AppShell navigation — canCreateQuotation grant (#H4)', () => {
-  it('hides ใบเสนอราคา from a qc user with no grant', async () => {
+  it('hides เอกสารขาย from a qc user with no grant', async () => {
     renderShell({ role: 'qc', employeeId: 20, name: 'ภิญญดา ทดสอบ' });
     await screen.findByText('เนื้อหา');
 
-    expect(screen.queryByText('ใบเสนอราคา')).toBeNull();
+    expect(screen.queryByText('เอกสารขาย')).toBeNull();
   });
 
-  it('shows ใบเสนอราคา to a qc user WITH the grant, though qc is not in canViewDealQuotations', async () => {
+  it('shows เอกสารขาย to a qc user WITH the grant, though qc is not in canViewDealQuotations', async () => {
     renderShell({ role: 'qc', employeeId: 20, name: 'ภิญญดา ทดสอบ', canCreateQuotation: true });
     await screen.findByText('เนื้อหา');
 
-    expect(screen.getByText('ใบเสนอราคา')).toBeTruthy();
+    expect(screen.getByText('เอกสารขาย')).toBeTruthy();
   });
 });
 

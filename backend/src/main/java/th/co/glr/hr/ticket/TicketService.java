@@ -1049,7 +1049,17 @@ public class TicketService {
     @Transactional
     public TicketDto confirmCustomerForPromotedQuotation(long ticketId, String quotationNumber,
                                                          Integer quotationDepositPercent, UserPrincipal actor) {
-        TicketSummaryDto s = loadAndVerifyStatus(ticketId, TicketStatus.QUOTATION_ISSUED);
+        return confirmCustomerForPromotedQuotation(ticketId, quotationNumber, quotationDepositPercent, actor, false);
+    }
+
+    /** {@code anyOpenStatus}: the first request of a pre-portal deal, whose ticket may sit in any status but closed or
+     * cancelled (the caller left it as it was); false keeps the {@code quotation_issued} requirement. */
+    @Transactional
+    public TicketDto confirmCustomerForPromotedQuotation(long ticketId, String quotationNumber,
+                                                         Integer quotationDepositPercent, UserPrincipal actor,
+                                                         boolean anyOpenStatus) {
+        TicketSummaryDto s = anyOpenStatus ? requireTicket(ticketId).summary()
+            : loadAndVerifyStatus(ticketId, TicketStatus.QUOTATION_ISSUED);
         requireActive(s);
         return applyCustomerConfirmation(ticketId, s, quotationNumber, quotationDepositPercent, actor);
     }

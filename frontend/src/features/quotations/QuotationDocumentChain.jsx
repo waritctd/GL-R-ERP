@@ -7,19 +7,21 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { api } from '../../api/index.js';
-import { Button } from '../../components/common/Button.jsx';
+import { Button, buttonVariants } from '../../components/common/Button.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { SkeletonText } from '../../components/common/Skeleton.jsx';
 import { cn } from '../../utils/cn.js';
 import { downloadBlob } from '../../utils/download.js';
+import { warnIfBundleSkipped } from '../../utils/userMessages.js';
 import {
-  createDepositNoticeDraft, dealQuotationsWithConfirmedQueryOptions, depositNoticesQueryOptions, pickDepositNotice,
+  createDepositNoticeDraft, dealQuotationsWithConfirmedQueryOptions, depositNoticeFileName, depositNoticesQueryOptions, pickDepositNotice,
   resolveNoticeQuotation,
 } from '../deposits/createDepositNoticeDraft.js';
 import { DepositIssueSummary } from '../deposits/DepositNoticePage.jsx';
-import { invalidateDealDocuments } from '../documentChain/documentChain.js';
+import { dealDocumentsLockedReason, invalidateDealDocuments } from '../documentChain/documentChain.js';
 import { chainNextStep } from '../documentChain/documentChainText.js';
+import { DocumentDownloadSheet } from '../tickets/DocumentDownloadSheet.jsx';
 import { RemainingInvoiceDialog } from '../tickets/RemainingInvoiceDialog.jsx';
 import { CONFIRM_ORDER_STEP_KEY, quotationChainSteps } from './quotationChain.js';
 
@@ -46,13 +48,23 @@ function Marker({ state, n }) {
 
 const mono = 'font-mono text-xs font-bold text-text';
 
+/** แก้ไข: the notice is its page (a link), the invoice its dialog (a button). The icon form needs the aria-label. */
+function EditControl({ edit, variant, size, className, children }) {
+  const label = { 'aria-label': edit.label, title: edit.label };
+  return edit.to ? (
+    <Link to={edit.to} {...label} className={cn(buttonVariants({ variant, size }), className)}>{children}</Link>
+  ) : (
+    <Button type="button" variant={variant} size={size} onClick={edit.onClick} className={className} {...label}>{children}</Button>
+  );
+}
+
 /**
  * One step. Desktop: a column (marker over title, number, meta, the action). Phone: a row — finished and skipped steps
  * fold to ONE line (marker, title · number, a 44px download), the viewer's own step is its full-width button, a
  * waiting step is its title and who it waits on, a future step its title alone (the lock reason is desktop-only, to
  * keep the card near 160px above the document at 375px).
  */
-function Step({ index, step, last, railDone, onAction, actionBusy, download, onUndo }) {
+function Step({ index, step, last, railDone, onAction, actionBusy, download, edit, onUndo }) {
   const folded = step.state === 'done' || step.state === 'skipped';
   const muted = step.state === 'todo' || step.state === 'skipped';
   return (
@@ -113,24 +125,33 @@ function Step({ index, step, last, railDone, onAction, actionBusy, download, onU
             ยกเลิกการยืนยันคำสั่งซื้อ
           </Button>
         ) : null}
-        {download ? (
-          <Button
-            type="button" variant="secondary" size="sm" disabled={download.busy} onClick={download.onClick}
-            aria-label={download.label} title={download.label}
-            className="mt-1 gap-1.5 mobile:hidden"
-          >
-            <Icon name="download" size={14} />
-            {download.busy ? 'กำลังดาวน์โหลด…' : 'ดาวน์โหลด PDF'}
-          </Button>
+        {edit || download ? (
+          <span className="mt-1 flex flex-wrap gap-2 mobile:hidden">
+            {edit ? <EditControl edit={edit} variant="secondary" size="sm" className="gap-1.5"><Icon name="pencil" size={14} />{edit.text}</EditControl> : null}
+            {download ? (
+              <Button
+                type="button" variant="secondary" size="sm" onClick={download.onClick}
+                aria-label={download.label} title={download.label} className="gap-1.5"
+              >
+                <Icon name="download" size={14} />
+                ดาวน์โหลด
+              </Button>
+            ) : null}
+          </span>
         ) : null}
       </div>
-      {download ? (
-        <Button
-          type="button" variant="icon" disabled={download.busy} onClick={download.onClick}
-          aria-label={download.label} title={download.label} className="hidden shrink-0 mobile:inline-flex"
-        >
-          <Icon name="download" size={16} />
-        </Button>
+      {edit || download ? (
+        <span className="hidden shrink-0 gap-1 mobile:inline-flex">
+          {edit ? <EditControl edit={edit} variant="icon" className="shrink-0"><Icon name="pencil" size={16} /></EditControl> : null}
+          {download ? (
+            <Button
+              type="button" variant="icon" onClick={download.onClick}
+              aria-label={download.label} title={download.label} className="shrink-0"
+            >
+              <Icon name="download" size={16} />
+            </Button>
+          ) : null}
+        </span>
       ) : <span className="hidden mobile:block" aria-hidden="true" />}
     </li>
   );
@@ -164,7 +185,7 @@ export function QuotationDocumentChain({ quotation, chain, onConfirmOrder, onUnd
   const ticketId = quotation.ticketId;
   const [noticeDialogOpen, setNoticeDialogOpen] = useState(false);
   const [remainingOpen, setRemainingOpen] = useState(false);
-  const [downloading, setDownloading] = useState(null);
+  const [sheetKind, setSheetKind] = useState(null); // 'deposit' | 'remaining': the ดาวน์โหลด file-choice sheet
 
   // สร้าง/ออกใบแจ้งยอดเงินรับมัดจำ: the deal page's own path — the list is read fresh, an existing DRAFT is opened
   // (never doubled), otherwise the server makes the draft. Then the dialog shows THAT draft.
@@ -197,25 +218,34 @@ export function QuotationDocumentChain({ quotation, chain, onConfirmOrder, onUnd
   const canUndo = Boolean(onUndoConfirm && chain.order?.undoable && chain.viewer?.mayConfirmOrder
     && chain.order.confirmedFromQuotationId != null && Number(chain.order.confirmedFromQuotationId) === Number(quotation.id));
 
-  async function download(key, fetchBlob, name) {
-    setDownloading(key);
-    try {
-      downloadBlob(await fetchBlob(), name, 'pdf');
-    } catch (err) {
-      showToast?.('error', err.message || 'ดาวน์โหลดไม่สำเร็จ');
-    } finally {
-      setDownloading(null);
-    }
+  // The sheet saves the file choice and then calls this; it shows any error itself.
+  async function downloadFromSheet() {
+    const notice = sheetKind === 'deposit';
+    const blob = await (notice ? api.depositNotices.downloadPdf(deposit.issuedNoticeId) : api.storedRemainingInvoices.download(remaining.invoiceId));
+    downloadBlob(blob, notice ? depositNoticeFileName({ docNumber: deposit.docNumber, reference: quotation.number }, ticketId) : remaining.docNumber ?? 'remaining-invoice', 'pdf');
+    warnIfBundleSkipped(blob, showToast);
   }
   const downloads = {
     notice: deposit.issuedNoticeId != null ? {
-      label: 'ดาวน์โหลด PDF ใบแจ้งยอดเงินรับมัดจำ', busy: downloading === 'notice',
-      onClick: () => download('notice', () => api.depositNotices.downloadPdf(deposit.issuedNoticeId), deposit.docNumber ?? 'deposit-notice'),
+      label: 'ดาวน์โหลด PDF ใบแจ้งยอดเงินรับมัดจำ', onClick: () => setSheetKind('deposit'),
     } : null,
     invoice: remaining.invoiceId != null ? {
-      label: 'ดาวน์โหลด PDF ใบแจ้งหนี้ส่วนที่เหลือ', busy: downloading === 'invoice',
-      onClick: () => download('invoice', () => api.storedRemainingInvoices.download(remaining.invoiceId), remaining.docNumber ?? 'remaining-invoice'),
+      label: 'ดาวน์โหลด PDF ใบแจ้งหนี้ส่วนที่เหลือ', onClick: () => setSheetKind('remaining'),
     } : null,
+  };
+  // Only a viewer the server lets write (the chain's flags) is offered แก้ไข. An issued notice opens its page in edit
+  // mode and comes back here (?from=quotation).
+  // The server refuses a write on a deal that is not ACTIVE (409), so the owner of a closed / held deal gets the reason instead.
+  const lockedReason = dealDocumentsLockedReason(chain.lifecycle, chain.dealStatus);
+  const mayWriteNotice = Boolean(chain.viewer?.mayWriteDepositNotice) && !lockedReason;
+  const mayWriteInvoice = Boolean(chain.viewer?.mayWriteRemainingInvoice) && !lockedReason;
+  const ownerLocked = Boolean(lockedReason) && (chain.viewer?.mayWriteDepositNotice || chain.viewer?.mayWriteRemainingInvoice)
+    && steps.some((s) => s.edit);
+  const edits = {
+    notice: mayWriteNotice ? {
+      to: `/tickets/${ticketId}/deposit?${new URLSearchParams({ ...(deposit.state === 'DRAFT' ? {} : { edit: '1' }), from: 'quotation', quotation: String(quotation.id) })}`,
+    } : null,
+    invoice: mayWriteInvoice ? { onClick: () => setRemainingOpen(true) } : null,
   };
   const actions = {
     confirm: { onClick: onConfirmOrder, busy: confirmBusy },
@@ -251,11 +281,18 @@ export function QuotationDocumentChain({ quotation, chain, onConfirmOrder, onUnd
               onAction={action?.onClick}
               actionBusy={action?.busy ?? false}
               download={step.download ? downloads[step.download] : null}
+              edit={edits[step.edit] ? { ...edits[step.edit], text: step.editDraft ? 'แก้ไขร่าง' : 'แก้ไข', label: `${step.editDraft ? 'แก้ไขร่าง' : 'แก้ไข'}${step.title}` } : null}
               onUndo={canUndo && step.key === CONFIRM_ORDER_STEP_KEY ? onUndoConfirm : null}
             />
           );
         })}
       </ol>
+      {ownerLocked ? (
+        <p data-testid="quotation-chain-locked" className="m-0 mt-2 flex items-start gap-1 text-xs leading-snug text-text-muted">
+          <Icon name="lock" size={12} className="mt-0.5 shrink-0" />
+          {lockedReason}
+        </p>
+      ) : null}
 
       {noticeDialogOpen ? (
         <DepositNoticeIssueDialog
@@ -269,10 +306,23 @@ export function QuotationDocumentChain({ quotation, chain, onConfirmOrder, onUnd
           showToast={showToast}
         />
       ) : null}
+      {sheetKind ? (
+        <DocumentDownloadSheet
+          kind={sheetKind}
+          documentId={sheetKind === 'deposit' ? deposit.issuedNoticeId : remaining.invoiceId}
+          ticketId={ticketId}
+          reference={quotation.number}
+          canSave={Boolean(sheetKind === 'deposit' ? chain.viewer?.mayWriteDepositNotice : chain.viewer?.mayWriteRemainingInvoice)}
+          onClose={() => setSheetKind(null)}
+          onDownload={downloadFromSheet}
+        />
+      ) : null}
       {remainingOpen ? (
         <RemainingInvoiceDialog
           ticketId={ticketId}
-          canWrite={Boolean(chain.viewer?.mayWriteRemainingInvoice)}
+          quotationId={quotation.id}
+          initialQuotationId={quotation.id}
+          canWrite={mayWriteInvoice}
           showToast={showToast}
           onClose={() => {
             setRemainingOpen(false);

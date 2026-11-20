@@ -267,7 +267,8 @@ describe('DeliveryRoundsPanel', () => {
     expect(within(alert).queryByRole('button')).toBeNull();
     expect(screen.getByTestId('request-delivery-button').textContent).toBe('แก้ไขแล้วส่งอีกครั้ง');
     fireEvent.click(screen.getByTestId('request-delivery-button'));
-    expect(await screen.findByTestId('delivery-request-sheet')).toBeTruthy();
+    const sheet = await screen.findByTestId('delivery-request-sheet');
+    expect(within(sheet).getByTestId('sheet-returned-reason').textContent).toContain('หลักฐานการชำระเงิน · สลิปไม่ชัด');
   });
 
   it('the invoice issuer reads no deal, attaches the PDF, checks what was read, confirms; the round then reads as invoiced', async () => {
@@ -422,7 +423,7 @@ describe('DeliveryRoundsPanel', () => {
   it('before the invoice step 4 shows its reason and no record button', async () => {
     api.deliveryRequests.list.mockResolvedValue({ order: ORDER, rounds: [round('SENT')], approvedQuotations: [], canStart: false, startBlockedReason: 'x' });
     renderPanel({ dealless: true });
-    expect((await screen.findByTestId('round-step-4')).textContent).toContain('บันทึกได้เมื่อมีใบกำกับภาษีของรอบนี้');
+    expect((await screen.findByTestId('round-step-4')).textContent).toContain('บันทึกได้หลังออกใบกำกับ หรือบันทึกก่อนพร้อมหมายเหตุ');
     expect(screen.queryByTestId('record-delivery-button')).toBeNull();
   });
 
@@ -447,6 +448,7 @@ describe('DeliveryRoundsPanel', () => {
     expect(within(sheet).getByTestId('record-delivery-submit').textContent).toBe('บันทึกส่ง 150 แผ่น');
     fireEvent.change(within(sheet).getByTestId('record-recipient'), { target: { value: 'คุณลูกค้า' } });
     const photo = new File(['x'], 'note.jpg', { type: 'image/jpeg' });
+    expect(within(sheet).getByTestId('record-proof-camera').getAttribute('capture')).toBe('environment');
     fireEvent.change(within(sheet).getByTestId('record-proof-input'), { target: { files: [photo] } });
     fireEvent.click(within(sheet).getByTestId('record-delivery-submit'));
 

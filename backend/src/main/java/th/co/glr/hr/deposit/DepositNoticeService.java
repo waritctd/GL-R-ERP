@@ -626,14 +626,18 @@ public class DepositNoticeService {
         return bundle.selection("DEPOSIT_NOTICE", docId, getById(docId, actor).ticketId());
     }
 
-    /** The download sheet's choice, remembered for this notice: same gate as the PDF download. */
+    /** The download sheet's choice, remembered for this notice: writers only (the choice is the owner's, a reader's
+     * download must not overwrite it). The lifecycle is not checked: it is a preference, not a change to the deal. */
     @Transactional
     public void saveBundleSelection(long docId, UserPrincipal actor, DocumentBundle.Selection selection) {
-        bundle.saveSelection("DEPOSIT_NOTICE", docId, getById(docId, actor).ticketId(), selection);
+        saveBundleSelection("DEPOSIT_NOTICE", docId, getById(docId, actor).ticketId(), actor, selection);
     }
 
     @Transactional
-    void saveBundleSelection(String kind, long documentId, long ticketId, DocumentBundle.Selection selection) {
+    void saveBundleSelection(String kind, long documentId, long ticketId, UserPrincipal actor, DocumentBundle.Selection selection) {
+        if (!mayWriteDealDocuments(requireTicketViewer(ticketId, actor).summary(), actor)) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
+        }
         bundle.saveSelection(kind, documentId, ticketId, selection);
     }
 

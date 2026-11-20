@@ -1,6 +1,6 @@
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { RemainingInvoiceDialog } from './RemainingInvoiceDialog.jsx';
 import { api } from '../../api/index.js';
@@ -366,6 +366,65 @@ describe('RemainingInvoiceDialog — a live ISSUED document exists', () => {
   });
 });
 
+describe('RemainingInvoiceDialog — quotationId narrows a deal with two buyer quotations', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.depositNotices.noteTemplates.mockResolvedValue({ templates: [] });
+    api.tickets.remainingInvoiceOptions.mockResolvedValue({ options: baseOptions() });
+  });
+  const twoBuyers = () => ({ remainingInvoices: [
+    docRow({ id: 910, customerQuotationId: 11, status: 'ISSUED', docNumber: 'GLR6900058-1', baseNumber: 'GLR6900058' }),
+    docRow({ id: 920, customerQuotationId: 12, status: 'ISSUED', docNumber: 'GLR6900061-1', baseNumber: 'GLR6900061' }),
+  ] });
+
+  it('shows only that quotation\'s invoice and history; without it the deal-wide pick is unchanged', async () => {
+    api.storedRemainingInvoices.listForTicket.mockResolvedValue(twoBuyers());
+    renderDialog({ quotationId: 12, canWrite: false });
+    const history = await screen.findByTestId('remaining-invoice-history');
+    expect(within(history).getByText('GLR6900061-1')).not.toBeNull();
+    expect(within(history).queryByText('GLR6900058-1')).toBeNull();
+  });
+
+  it('a legacy invoice without customerQuotationId is found when the quotation has none of its own, and never shadows one that does', async () => {
+    const legacy = docRow({ id: 930, customerQuotationId: null, status: 'ISSUED', docNumber: 'GLR6900050-1', baseNumber: 'GLR6900050' });
+    api.storedRemainingInvoices.listForTicket.mockResolvedValue({ remainingInvoices: [legacy] });
+    renderDialog({ quotationId: 11, canWrite: false });
+    expect(within(await screen.findByTestId('remaining-invoice-history')).getByText('GLR6900050-1')).not.toBeNull();
+    expect(screen.queryByTestId('remaining-invoice-waiting-for-sales')).toBeNull();
+
+    cleanup();
+    api.storedRemainingInvoices.listForTicket.mockResolvedValue({ remainingInvoices: [legacy, ...twoBuyers().remainingInvoices] });
+    renderDialog({ quotationId: 12, canWrite: false });
+    const history = await screen.findByTestId('remaining-invoice-history');
+    expect(within(history).getByText('GLR6900061-1')).not.toBeNull();
+    expect(within(history).queryByText('GLR6900050-1')).toBeNull();
+  });
+
+  it('scopeQuotationId scopes by the invoice\'s own quotation when the visible quotationId is hidden (account); null means a legacy invoice', async () => {
+    api.storedRemainingInvoices.listForTicket.mockResolvedValue(twoBuyers());
+    renderDialog({ quotationId: null, scopeQuotationId: 12, canWrite: false });
+    const history = await screen.findByTestId('remaining-invoice-history');
+    expect(within(history).getByText('GLR6900061-1')).not.toBeNull();
+    expect(within(history).queryByText('GLR6900058-1')).toBeNull();
+
+    cleanup();
+    const legacy = docRow({ id: 930, customerQuotationId: null, status: 'ISSUED', docNumber: 'GLR6900050-1', baseNumber: 'GLR6900050' });
+    api.storedRemainingInvoices.listForTicket.mockResolvedValue({ remainingInvoices: [...twoBuyers().remainingInvoices, legacy] });
+    renderDialog({ quotationId: null, scopeQuotationId: null, canWrite: false });
+    const legacyHistory = await screen.findByTestId('remaining-invoice-history');
+    expect(within(legacyHistory).getByText('GLR6900050-1')).not.toBeNull();
+    expect(within(legacyHistory).queryByText('GLR6900058-1')).toBeNull();
+  });
+
+  it('without quotationId the first issued document of the deal is used, as before', async () => {
+    api.storedRemainingInvoices.listForTicket.mockResolvedValue(twoBuyers());
+    renderDialog({ canWrite: false });
+    const history = await screen.findByTestId('remaining-invoice-history');
+    expect(within(history).getByText('GLR6900058-1')).not.toBeNull();
+    expect(within(history).getByText('GLR6900061-1')).not.toBeNull();
+  });
+});
+
 describe('RemainingInvoiceDialog — canWrite=false (not this deal\'s owning sales rep)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -402,12 +461,11 @@ describe('RemainingInvoiceDialog — canWrite=false (not this deal\'s owning sal
     expect(screen.getByTestId('include-quotation').checked).toBe(true);
     expect(screen.getByTestId('include-attachment-6').checked).toBe(false);
 
-    fireEvent.click(screen.getByTestId('include-quotation'));
-    fireEvent.click(screen.getByTestId('include-attachment-6'));
+    // a reader sees the owner's remembered choice read-only: it downloads with it and never overwrites it
+    expect(screen.getByTestId('include-quotation').disabled).toBe(true);
     fireEvent.click(confirm);
     await waitFor(() => expect(api.storedRemainingInvoices.download).toHaveBeenCalledWith(issuedRow.id));
-    expect(api.storedRemainingInvoices.saveBundleSelection)
-      .toHaveBeenCalledWith(issuedRow.id, { quotation: false, attachmentIds: [5, 6] });
+    expect(api.storedRemainingInvoices.saveBundleSelection).not.toHaveBeenCalled();
   });
 
   it('hides the edit control from a viewer who cannot write', async () => {

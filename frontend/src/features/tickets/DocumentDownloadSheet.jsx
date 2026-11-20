@@ -12,9 +12,11 @@ const UPLOAD_ACCEPT = '.pdf,.png,.jpg,.jpeg';
  * The one "ดาวน์โหลด PDF" sheet for a deposit notice / remaining invoice: the document itself is always in; the
  * referenced quotation and the deal's attachments are checkboxes. It starts from the server's remembered choice for
  * this document (else the quotation + every PO), SAVES the choice (PUT) and then calls `onDownload()`, which downloads
- * the PDF with the saved choice and shows its own errors. `kind` is 'deposit' | 'remaining'.
+ * the PDF with the saved choice and shows its own errors. `kind` is 'deposit' | 'remaining'. `canSave` false (a viewer
+ * who may not write the document: the server refuses the PUT, the choice is the owner's) shows the remembered choice
+ * read-only and downloads with it.
  */
-export function DocumentDownloadSheet({ kind, documentId, ticketId, reference, onClose, onDownload }) {
+export function DocumentDownloadSheet({ kind, documentId, ticketId, reference, onClose, onDownload, canSave = true }) {
   const queryClient = useQueryClient();
   const remaining = kind === 'remaining';
   // The SAME key and shape as TicketDetailPage's attachment list (a plain array): the two share one cache entry.
@@ -84,8 +86,10 @@ export function DocumentDownloadSheet({ kind, documentId, ticketId, reference, o
     setError(null);
     try {
       const selection = { quotation, attachmentIds: files.filter((f) => checked.has(f.id)).map((f) => f.id) };
-      await (remaining ? api.storedRemainingInvoices.saveBundleSelection(documentId, selection)
-        : api.depositNotices.saveBundleSelection(documentId, selection));
+      if (canSave) {
+        await (remaining ? api.storedRemainingInvoices.saveBundleSelection(documentId, selection)
+          : api.depositNotices.saveBundleSelection(documentId, selection));
+      }
       await onDownload();
       onClose();
     } catch (err) {
@@ -109,6 +113,11 @@ export function DocumentDownloadSheet({ kind, documentId, ticketId, reference, o
       )}
     >
       <div className="grid gap-3">
+        {!canSave ? (
+          <p className="m-0 text-sm text-text-muted" data-testid="sheet-read-only-note">
+            ดาวน์โหลดตามไฟล์ที่เลือกไว้ก่อนหน้า (เปลี่ยนได้เฉพาะผู้ที่แก้ไขเอกสารนี้ได้)
+          </p>
+        ) : null}
         {selectionFailed ? (
           <p role="alert" className="m-0 text-sm text-warning-dark">
             โหลดตัวเลือกที่จำไว้ไม่สำเร็จ ใช้ค่าเริ่มต้น (ใบเสนอราคาและ PO)
@@ -122,25 +131,27 @@ export function DocumentDownloadSheet({ kind, documentId, ticketId, reference, o
           <span>ตัวเอกสาร (รวมเสมอ)</span>
         </label>
         <label className="flex items-center gap-2 text-sm">
-          <input type="checkbox" checked={quotation} disabled={!ready}
+          <input type="checkbox" checked={quotation} disabled={!ready || !canSave}
             onChange={(e) => setQuotation(e.target.checked)} data-testid="include-quotation" />
           <span>ใบเสนอราคาที่อ้างอิง{reference ? ` (${reference})` : ''}</span>
         </label>
         {files.map((file) => (
           <label key={file.id} className="flex min-w-0 items-center gap-2 text-sm">
-            <input type="checkbox" checked={checked.has(file.id)} disabled={!ready}
+            <input type="checkbox" checked={checked.has(file.id)} disabled={!ready || !canSave}
               onChange={() => toggle(file.id)} data-testid={`include-attachment-${file.id}`} />
             <span className="min-w-0 truncate">{file.fileName}</span>
             <span className="shrink-0 text-xs text-text-muted">{attachTypeLabel(file.attachType)}</span>
           </label>
         ))}
-        <label className="cursor-pointer">
-          <input type="file" accept={UPLOAD_ACCEPT} className="sr-only" onChange={handleUpload}
-            disabled={uploading} data-testid="sheet-upload-input" />
-          <span className="inline-block rounded-md border border-border px-3 py-2 text-sm font-bold">
-            {uploading ? 'กำลังอัปโหลด…' : 'อัปโหลดไฟล์เพิ่ม'}
-          </span>
-        </label>
+        {canSave ? (
+          <label className="cursor-pointer">
+            <input type="file" accept={UPLOAD_ACCEPT} className="sr-only" onChange={handleUpload}
+              disabled={uploading} data-testid="sheet-upload-input" />
+            <span className="inline-block rounded-md border border-border px-3 py-2 text-sm font-bold">
+              {uploading ? 'กำลังอัปโหลด…' : 'อัปโหลดไฟล์เพิ่ม'}
+            </span>
+          </label>
+        ) : null}
         {error ? <p role="alert" className="m-0 text-sm text-danger">{error}</p> : null}
       </div>
     </Modal>

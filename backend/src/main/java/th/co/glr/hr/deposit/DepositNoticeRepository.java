@@ -82,14 +82,14 @@ public class DepositNoticeRepository {
     /** The statuses a new-engine quotation is billable in (what {@link #findGoverningQuotation} admits), as a predicate on
      * alias {@code q}. The ONE rule: customer lookups prefer the newest such row of a number, then the newest row, and
      * {@link #findRepointTarget} takes only such a row, so a notice's customer and lines never come from different rows. */
-    private static final String BILLABLE_Q = """
+    static final String BILLABLE_Q = """
         ((q.origin = 'PRICING_REQUEST' AND q.doc_status IN ('ACCEPTED','ISSUED'))
           OR (q.origin = 'DEAL_DIRECT' AND q.doc_status IN ('ACCEPTED','ISSUED','APPROVED')))""";
 
     /** The notice's customer is the QUOTATION's party customer whenever the reference names a new-engine quotation of
      * this deal that has a party (a deal can hold several BUYER parties; the stored header may name the headline one).
      * The stored columns are used only when no such quotation resolves (legacy reference, no party). */
-    private static final String QUOTATION_CUSTOMER_JOIN = """
+    static final String QUOTATION_CUSTOMER_JOIN = """
         LEFT JOIN LATERAL (
             SELECT c.name, c.tax_id, c.address, c.branch
               FROM sales.quotation q

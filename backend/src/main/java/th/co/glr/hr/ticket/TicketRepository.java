@@ -341,7 +341,7 @@ public class TicketRepository {
     }
 
     /** A lost or cancelled deal; the one predicate every "dead deal" check shares. */
-    private static final String DEAD_DEAL_SQL = "(t.lifecycle IN ('CLOSED_LOST', 'CANCELLED') OR t.status = 'cancelled')";
+    public static final String DEAD_DEAL_SQL = "(t.lifecycle IN ('CLOSED_LOST', 'CANCELLED') OR t.status = 'cancelled')";
 
     public boolean isDeadDeal(long ticketId) {
         return Boolean.TRUE.equals(jdbc.queryForObject(
@@ -3093,14 +3093,16 @@ public class TicketRepository {
      * Empty when the order was never confirmed from a direct quotation.
      */
     public Optional<Long> findOrderConfirmedQuotationId(long ticketId) {
-        return jdbc.query("""
-            SELECT related_document_id FROM sales.ticket_event
-             WHERE ticket_id = :ticketId AND kind = :kind
-               AND related_document_type = 'QUOTATION' AND related_document_id IS NOT NULL
-             ORDER BY created_at DESC, event_id DESC
-             LIMIT 1
-            """, Map.of("ticketId", ticketId, "kind", TicketEventKind.DEAL_PROMOTED_FROM_QUOTATION),
-            (rs, n) -> rs.getLong("related_document_id")).stream().findFirst();
+        return Optional.ofNullable(jdbc.queryForObject("SELECT " + confirmedQuotationIdSql(":ticketId"),
+            Map.of("ticketId", ticketId, "promoted", TicketEventKind.DEAL_PROMOTED_FROM_QUOTATION), Long.class));
+    }
+
+    /** The quotation the deal's order was confirmed from (its latest DEAL_PROMOTED_FROM_QUOTATION event), as a scalar
+     * subquery for the ticket id expression given; needs the {@code :promoted} parameter. The ONE statement for it. */
+    public static String confirmedQuotationIdSql(String ticketIdExpr) {
+        return "(SELECT related_document_id FROM sales.ticket_event WHERE ticket_id = " + ticketIdExpr
+            + " AND kind = :promoted AND related_document_type = 'QUOTATION' AND related_document_id IS NOT NULL"
+            + " ORDER BY created_at DESC, event_id DESC LIMIT 1)";
     }
 
     /** The DEAL_PROMOTED_FROM_QUOTATION event names the quotation whose confirm-order made the deal an order. */

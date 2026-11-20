@@ -2467,6 +2467,134 @@ const mockImportRequests = []; // ImportRequestDto-shaped rows, each carrying it
 // "preview" numbers under mock mode.
 let mockRemainingInvoiceSeq = 1;
 const mockRemainingInvoices = []; // RemainingInvoiceDocumentDto-shaped rows, each with its own `items`.
+// GET /api/deal-quotations rows' `documents` (DealDocumentRows.QuotationDocuments): the deal's one notice and THIS quotation's
+// invoices, null when there are none. Read live, so a notice made through the mock shows up on the list.
+function mockViewerMayWriteDealDocuments(ticketId) {
+  const user = requireSession();
+  const ticket = findTicketRaw(ticketId);
+  return isSalesOwner(ticket, user) && (ticket.lifecycle ?? 'ACTIVE') === 'ACTIVE' && ticket.status !== 'cancelled';
+}
+function mockQuotationDocuments(q) {
+  const notice = mockDepositNotices.find((d) => d.ticketId === q.ticketId && d.status !== 'SUPERSEDED' && d.status !== 'CANCELLED');
+  const invoices = mockRemainingInvoices.filter((r) => r.ticketId === q.ticketId && (r.customerQuotationId ?? null) === q.id && r.status !== 'SUPERSEDED');
+  if (!notice && invoices.length === 0) return null;
+  return {
+    depositNotice: notice ? { id: notice.id, status: notice.status, docNumber: notice.docNumber ?? null, forThisQuotation: !notice.reference || notice.reference === q.number } : null,
+    remainingInvoices: invoices.map((r) => ({ id: r.id, status: r.status, docNumber: r.docNumber ?? null, version: r.status === 'DRAFT' ? null : r.version })),
+    // the list rows' rule: owner or keyer in a sales role (the mock has no all-sales-documents grant)
+    viewerMayWrite: mockViewerMayWriteDealDocuments(q.ticketId),
+  };
+}
+
+// เอกสารขาย tabs (GET /api/deposit-notices, /api/remaining-invoices): a fixed set of states (draft, paid, unpaid, a
+// revision pending beside an older version, a deal with two buyer quotations) laid over the mock's REAL deals and
+// quotations, so เปิด and the deal and quotation links lead somewhere. Not derived from the live notice/invoice arrays.
+// Built lazily: mockDealQuotations is declared further down this file. Row shapes mirror DealDocumentRows.
+let mockDocFixtureCache = null;
+function mockDocFixtures() {
+  if (mockDocFixtureCache) return mockDocFixtureCache;
+  const quotationOf = (t, nth = 0) => mockDealQuotations.filter((q) => q.ticketId === t?.id)[nth] ?? null;
+  const origin = (t, quotation, overrides = {}) => ({
+    ticketId: t.id, ticketCode: t.code, projectName: t.projectName ?? t.title ?? null, customerName: t.customerName ?? null,
+    ownerId: t.createdById, ownerName: t.createdByName,
+    quotationId: quotation?.id ?? null, quotationNumber: quotation?.number ?? null,
+    lifecycle: t.status === 'cancelled' ? 'CANCELLED' : t.lifecycle ?? 'ACTIVE', ...overrides,
+  });
+  const twoBuyers = db.tickets.find((t) => mockDealQuotations.filter((q) => q.ticketId === t.id).length >= 2);
+  const mine = db.tickets.filter((t) => t.createdById === 6 && t !== twoBuyers);
+  const others = db.tickets.filter((t) => t.createdById !== 6 && t !== twoBuyers);
+  const [t1, t2, t3] = mine;
+  const t4 = others[0] ?? mine[3] ?? t3;
+  mockDocFixtureCache = {
+    notices: [
+      { id: 9001, status: 'DRAFT', docNumber: null, version: 1, issueDate: null, updatedAt: '2026-11-18T09:00:00Z', depositPercent: 0.3, depositAmount: 100000, vatAmount: 7000, totalPayable: 107000, moneyReceived: false, origin: origin(t1, quotationOf(t1)) },
+      { id: 9002, status: 'ISSUED', docNumber: 'GLRD69041', version: 1, issueDate: '2026-11-10', updatedAt: '2026-11-10T09:00:00Z', depositPercent: 0.5, depositAmount: 200000, vatAmount: 14000, totalPayable: 214000, moneyReceived: true, origin: origin(t2, quotationOf(t2)) },
+      // No quotation resolved: the number prints as plain text, not a link.
+      { id: 9003, status: 'ISSUED', docNumber: 'GLRD69042', version: 1, issueDate: '2026-11-12', updatedAt: '2026-11-12T09:00:00Z', depositPercent: 0.3, depositAmount: 60000, vatAmount: 4200, totalPayable: 64200, moneyReceived: false, origin: origin(t4, null, { quotationNumber: 'QT-2026-9003' }) },
+      ...(twoBuyers ? [{ id: 9004, status: 'ISSUED', docNumber: 'GLRD69043', version: 1, issueDate: '2026-11-14', updatedAt: '2026-11-14T09:00:00Z', depositPercent: 0.4, depositAmount: 80000, vatAmount: 5600, totalPayable: 85600, moneyReceived: false, origin: origin(twoBuyers, quotationOf(twoBuyers, 0)) }] : []),
+    ],
+    invoices: [
+      {
+        id: 9301, status: 'ISSUED', docNumber: 'GLR6900058-2', version: 2, docDate: '2026-11-16', updatedAt: '2026-11-16T09:00:00Z',
+        itemsTotal: 300000, depositDeduction: 100000, netAmount: 200000, vatAmount: 14000, grandTotal: 214000,
+        origin: origin(t1, quotationOf(t1)),
+        pendingRevision: { id: 9302, nextVersion: 3 },
+        olderVersions: [{ id: 9300, docNumber: 'GLR6900058-1', version: 1, docDate: '2026-11-13', grandTotal: 207000 }],
+      },
+      {
+        id: 9303, status: 'DRAFT', docNumber: null, version: 1, docDate: '2026-11-19', updatedAt: '2026-11-19T09:00:00Z',
+        itemsTotal: 150000, depositDeduction: 60000, netAmount: 90000, vatAmount: 6300, grandTotal: 96300,
+        origin: origin(t4, null, { quotationNumber: 'QT-2026-9003' }), pendingRevision: null, olderVersions: [],
+      },
+      ...(twoBuyers ? [{
+        id: 9304, status: 'ISSUED', docNumber: 'GLR6900061-1', version: 1, docDate: '2026-11-17', updatedAt: '2026-11-17T09:00:00Z',
+        itemsTotal: 120000, depositDeduction: 40000, netAmount: 80000, vatAmount: 5600, grandTotal: 85600,
+        origin: origin(twoBuyers, quotationOf(twoBuyers, 1)), pendingRevision: null, olderVersions: [],
+      }] : []),
+    ],
+  };
+  mockSeedDocFixtureDocuments(mockDocFixtureCache);
+  return mockDocFixtureCache;
+}
+
+// Real stored documents behind the fixture rows (same ids), so the notice page, the invoice dialog and the download sheet
+// that the เอกสารขาย rows open find them. The list rows themselves stay static.
+function mockSeedDocFixtureDocuments({ notices, invoices }) {
+  const now = new Date().toISOString();
+  for (const n of notices) {
+    if (mockDepositNotices.some((d) => d.id === n.id)) continue;
+    const ticket = findTicketRaw(n.origin.ticketId);
+    mockDepositNotices.push(buildMockDoc({
+      id: n.id, ticketId: n.origin.ticketId, docType: 'DEPOSIT_NOTICE', version: 1, docNumber: n.docNumber, issueDate: n.issueDate,
+      status: n.status, customerName: n.origin.customerName ?? '', customerTaxId: '', customerAddress: '', projectName: n.origin.projectName ?? '',
+      reference: n.origin.quotationNumber, depositPercent: n.depositPercent, vatPercent: 0.07, notes: [],
+      items: [{ seq: 1, description: 'รายการสินค้า (ข้อมูลตัวอย่าง)', qty: 1, unit: 'ชุด', unitPrice: n.depositAmount / n.depositPercent, netUnitPrice: n.depositAmount / n.depositPercent, amount: n.depositAmount / n.depositPercent }],
+      issuedByName: n.status === 'ISSUED' ? ticket.createdByName : null, preparerName: ticket.createdByName, preparerId: ticket.createdById,
+      hasPdf: false, hasXlsx: false, createdAt: now, updatedAt: n.updatedAt,
+    }));
+  }
+  const stored = (id, status, version, base, row, origin) => {
+    if (mockRemainingInvoices.some((r) => r.id === id)) return;
+    const ticket = findTicketRaw(origin.ticketId);
+    mockRemainingInvoices.push({
+      id, ticketId: origin.ticketId, customerQuotationId: origin.quotationId, depositNoticeId: null,
+      baseNumber: base, version, docNumber: status === 'DRAFT' ? null : `${base}-${version}`, status, supersededById: null,
+      reference: origin.quotationNumber, depositReference: null, docDate: row.docDate, notes: [],
+      customerName: origin.customerName, customerTaxId: null, customerBranch: null, customerAddress: null, projectName: origin.projectName,
+      itemsTotal: row.itemsTotal, depositDeduction: row.depositDeduction, netAmount: row.netAmount, vatAmount: row.vatAmount, grandTotal: row.grandTotal,
+      createdById: ticket.createdById, createdByName: ticket.createdByName, preparerId: ticket.createdById, preparerName: ticket.createdByName,
+      createdAt: now, updatedAt: row.updatedAt,
+      issuedById: status === 'DRAFT' ? null : ticket.createdById, issuedByName: status === 'DRAFT' ? null : ticket.createdByName, issuedAt: status === 'DRAFT' ? null : row.updatedAt,
+      items: [{ id: `${id}-1`, remainingInvoiceId: id, seq: 1, description: 'รายการสินค้า (ข้อมูลตัวอย่าง)', qty: 1, unit: 'ชุด', unitPrice: row.itemsTotal, discountLabel: null, netUnitPrice: row.itemsTotal, amount: row.itemsTotal }],
+    });
+  };
+  for (const inv of invoices) {
+    const base = inv.docNumber ? inv.docNumber.replace(/-\d+$/, '') : `GLR69${String(inv.id).padStart(5, '0')}`;
+    for (const old of inv.olderVersions ?? []) stored(old.id, 'SUPERSEDED', old.version, base, { ...inv, docDate: old.docDate, grandTotal: old.grandTotal }, inv.origin);
+    stored(inv.id, inv.status, inv.version, base, inv, inv.origin);
+    if (inv.pendingRevision) stored(inv.pendingRevision.id, 'DRAFT', inv.pendingRevision.nextVersion, base, inv, inv.origin);
+  }
+}
+
+// Mirrors DealDocumentListService's scope: sales_manager/ceo/account see every deal, sales their own; import is refused (403).
+// account and ceo never see drafts (a settled rule); sales and sales_manager do.
+function mockDealDocumentRows(fixture, status) {
+  const user = requireSession();
+  if (!['sales', 'sales_manager', 'ceo', 'account'].includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+  const seesDrafts = user.role === 'sales' || user.role === 'sales_manager';
+  const scoped = fixture
+    .filter((r) => (user.role !== 'sales' || r.origin.ownerId === user.id) && (seesDrafts || r.status !== 'DRAFT'))
+    .map((r) => ({
+      ...r,
+      viewerMayWrite: user.role === 'sales' && r.origin.ownerId === user.id && r.origin.lifecycle === 'ACTIVE',
+      ...('itemsTotal' in r ? { customerQuotationId: r.origin.quotationId } : {}),
+    }));
+  const rows = structuredClone(status ? scoped.filter((r) => r.status === status) : scoped);
+  return { scoped, rows, total: rows.length };
+}
+const mockDealDocumentCounts = (scoped) => ({
+  all: scoped.length, draft: scoped.filter((r) => r.status === 'DRAFT').length, issued: scoped.filter((r) => r.status === 'ISSUED').length,
+});
 const mockArGlrSeqByYear = {}; // mirrors sales.document_sequence WHERE doc_type = 'AR_GLR', keyed by Thai year.
 
 function findStoredRemainingInvoiceRaw(id) {
@@ -3826,9 +3954,12 @@ function mockConfirmIfNeeded(ticket, quotationId, user) {
   const row = mockDealQuotations.find((q) => q.id === chosenId);
   if (row.docStatus !== 'APPROVED') fail(`ยืนยันคำสั่งซื้อได้เฉพาะใบเสนอราคาที่อนุมัติแล้วเท่านั้น (ปัจจุบัน: ${row.docStatus})`, 409);
   if ((ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE') fail(`งานไม่ได้อยู่ในสถานะ ACTIVE (${ticket.lifecycle}) จึงยืนยันคำสั่งซื้อไม่ได้`, 409);
-  if (ticket.status !== 'draft') fail(`ยืนยันคำสั่งซื้อไม่ได้ — สถานะงาน (${ticket.status}) ผ่านขั้นออกใบเสนอราคาไปแล้ว`, 409);
+  // The first request of a pre-portal deal accepts any open ticket status and leaves it as it is.
+  if (ticket.status === 'closed' || ticket.status === 'cancelled') fail(`ยืนยันคำสั่งซื้อไม่ได้ — งานนี้ปิดหรือยกเลิกแล้ว (${ticket.status})`, 409);
   const before = ticket.salesStage;
-  applyMockOrderConfirmation(ticket, row, user, 'draft');
+  const statusBefore = ticket.status;
+  applyMockOrderConfirmation(ticket, row, user, statusBefore);
+  if (statusBefore !== 'draft') ticket.status = statusBefore;
   if (dealStageIndex(ticket.salesStage) < dealStageIndex(before)) {
     pushEvent(ticket, user, 'STAGE_CHANGED', ticket.salesStage, before, 'คงขั้นเดิมของงานที่เดินมาก่อนใช้ระบบ');
     ticket.salesStage = before;
@@ -16809,6 +16940,14 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
 
   // Mirrors DepositNoticeController + DepositNoticeService (deposit/).
   depositNotices: {
+    async listAll({ status } = {}) {
+      const page = mockDealDocumentRows(mockDocFixtures().notices, status);
+      return delay({ depositNotices: page.rows, total: page.total });
+    },
+    async counts() {
+      return delay(mockDealDocumentCounts(mockDealDocumentRows(mockDocFixtures().notices).scoped));
+    },
+
     async noteTemplates() {
       requireSession();
       return delay({ templates: mockNoteTemplates });
@@ -17098,6 +17237,14 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
   },
 
   storedRemainingInvoices: {
+    async listAll({ status } = {}) {
+      const page = mockDealDocumentRows(mockDocFixtures().invoices, status);
+      return delay({ remainingInvoices: page.rows, total: page.total });
+    },
+    async counts() {
+      return delay(mockDealDocumentCounts(mockDealDocumentRows(mockDocFixtures().invoices).scoped));
+    },
+
     async createDraft(ticketId, payload = {}) {
       const ticket = findTicketRaw(Number(ticketId));
       const user = requireRemainingInvoiceWriteGate(ticket);
@@ -20215,6 +20362,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
         items: sorted.map((q) => ({
           ...forDealQuotationViewer(buildDealQuotationDto(q), viewer),
           chainStage: mockListChainStage(q, viewer),
+          documents: mockQuotationDocuments(q),
         })),
       });
     },
@@ -21168,8 +21316,8 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
         for (let i = mockDeliveryRequests.length - 1; i >= 0; i -= 1) {
           if (mockDeliveryRequests[i].ticketId === ticket.id) mockDeliveryRequests.splice(i, 1);
         }
-        db.users.filter((u) => u.active && u.role === 'warehouse').forEach((u) => addNotification(u.id, ticket.id, ticket.code,
-          'DELIVERY_REQUEST_RETURNED', `${user.name} ยกเลิกการยืนยันคำสั่งซื้อ คำขอส่งของรอบที่ ${removedRounds.join(', ')} ถูกลบ\n${ticket.code}`, `/tickets/${ticket.id}`));
+        db.users.filter((u) => u.active && u.role === 'warehouse').forEach((u) => removedRounds.forEach((n) => addNotification(u.id, ticket.id, ticket.code,
+          'DELIVERY_REQUEST_REMOVED', `${ticket.code} รอบส่งที่ ${n} · ฝ่ายขายยกเลิกการยืนยันคำสั่งซื้อ คำขอนี้ถูกยกเลิก`, `/tickets/${ticket.id}`)));
       }
       let draftNotices = 0;
       for (let i = mockDepositNotices.length - 1; i >= 0; i -= 1) {

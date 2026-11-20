@@ -178,6 +178,11 @@ export const queryKeys = {
   openDealsForProject: (name) => ['tickets', 'open-for-project', String(name ?? '').trim().replace(/\s+/g, ' ').toLowerCase()],
   ticketActivities: (id) => ['tickets', 'activities', id == null ? id : Number(id)],
   depositNotices: (ticketId) => ['depositNotices', ticketId],
+  // Cross-deal lists behind the ใบแจ้งมัดจำ / ใบแจ้งหนี้ส่วนที่เหลือ tabs of เอกสารขาย.
+  depositNoticeList: (status) => ['depositNotices', 'list', status ?? ''],
+  depositNoticeCounts: () => ['depositNotices', 'counts'],
+  remainingInvoiceList: (status) => ['remainingInvoices', 'list', status ?? ''],
+  remainingInvoiceCounts: () => ['remainingInvoices', 'counts'],
   depositNoteTemplates: () => ['depositNotices', 'templates'],
   documentPreparerOptions: (ticketId) => ['depositNotices', 'preparerOptions', ticketId],
   remainingInvoiceOptions: (ticketId, quotationId) => ['remainingInvoice', 'options', ticketId, quotationId ?? null],
