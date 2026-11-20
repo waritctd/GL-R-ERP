@@ -99,7 +99,7 @@ public class RemainingInvoiceService {
     public DocumentBundle.Selection bundleSelection(long id, UserPrincipal actor) {
         RemainingInvoiceDocumentDto doc = requireStored(id);
         depositNoticeService.requireTicketViewer(doc.ticketId(), actor);
-        return depositNoticeService.bundleSelection("REMAINING_INVOICE", id, doc.ticketId());
+        return depositNoticeService.bundleSelection("REMAINING_INVOICE", id, doc.ticketId(), actor);
     }
 
     /** The same frozen snapshot as a PDF of the invoice alone (no bundled PO / quotation). */

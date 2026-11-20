@@ -364,6 +364,20 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
                 e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
     }
 
+    /** v2.3.0: the read-all grant is READ only: a flag-only reader (a sales rep who does not own the deal) writes no invoice. */
+    @Test
+    void flagOnlyReader_cannotCreateOrIssueARemainingInvoice() {
+        DealFixture fixture = buildAcceptedDeal(salesActor, "FlagOnlyWrite");
+        long draftId = remainingInvoiceService.createDraft(fixture.ticketId(), null, salesActor).id();
+        jdbc.update("UPDATE hr.employee SET can_read_all_sales = TRUE WHERE employee_id = :id", Map.of("id", otherSalesActor.id()));
+
+        assertThatThrownBy(() -> remainingInvoiceService.createDraft(fixture.ticketId(), null, otherSalesActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+        assertThatThrownBy(() -> remainingInvoiceService.issue(draftId, otherSalesActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+        assertThat(remainingInvoiceService.get(draftId, salesActor).status()).isEqualTo("DRAFT");
+    }
+
     @Test
     void read_ceoAndAccountInScopeAndSalesManager_canReadAndDownload_viewerRoleUnaffectedByTheWriteGate() {
         DealFixture fixture = buildAcceptedDeal(salesActor, "AuthzRead3");

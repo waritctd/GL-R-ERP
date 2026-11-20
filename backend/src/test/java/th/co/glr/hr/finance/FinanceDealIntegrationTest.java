@@ -39,6 +39,17 @@ class FinanceDealIntegrationTest extends FinanceDealTestBase {
             assertThat(deal.availableActions()).as(actor.role()).isEmpty();
             assertThat(deal.commissionInvoice()).isNull();
         }
+        // D5: a DRAFT delivery round's file is sales' private work: hidden from a flag-only reader, as ever for a sales_manager.
+        long draftRound = jdbc.queryForObject("""
+            INSERT INTO sales.delivery_request (ticket_id, round_no, status, requested_by)
+            VALUES (:t, 1, 'DRAFT', :u) RETURNING delivery_request_id
+            """, new org.springframework.jdbc.core.namedparam.MapSqlParameterSource("t", ticketId).addValue("u", salesRepId), Long.class);
+        long draftFile = attachments.save(ticketId, null, "slip.pdf", "uploads/slip.pdf", "application/pdf", 10L, "OTHER",
+            salesRepId, draftRound, "SALES").id();
+        assertThat(service.get(ticketId, readAllHolder).documents().contracts())
+            .extracting(FinanceDealDto.FileDoc::id).doesNotContain(draftFile);
+        assertThat(service.get(ticketId, salesManager).documents().contracts())
+            .extracting(FinanceDealDto.FileDoc::id).contains(draftFile);
         jdbc.update("UPDATE hr.employee SET can_read_all_sales = TRUE WHERE employee_id = :id",
             new org.springframework.jdbc.core.namedparam.MapSqlParameterSource("id", importUser.id()));
         assertThatThrownBy(() -> service.get(ticketId, importUser))

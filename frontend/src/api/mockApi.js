@@ -16806,10 +16806,12 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
   // Mirrors AttachmentController + FileStorageService (attachment/).
   attachments: {
     async list(ticketId) {
-      const { user } = requireAttachmentTicketAccess(ticketId);
+      const { user, ticket } = requireAttachmentTicketAccess(ticketId);
       // AttachmentController#list: import never sees a delivery round's files (mayReadRoundFiles).
       // v2.3.0 (D5): a flag-only reader never reads the files of a DRAFT round (the sales side's private work).
-      const flagOnly = holdsReadAllSalesGrant(user) && user.role !== 'sales_manager';
+      // Java hides them only when canViewDocuments fails: never for sales_manager, ceo, the owner/keyer or a documents-grant holder.
+      const flagOnly = holdsReadAllSalesGrant(user) && user.role !== 'sales_manager' && user.role !== 'ceo'
+        && !actsAsOwner(ticket, user);
       const draftRound = (a) => a.deliveryRequestId != null
         && mockDeliveryRequests.find((r) => r.id === a.deliveryRequestId)?.status === 'DRAFT';
       return delay({ attachments: structuredClone(mockAttachments.filter((a) => a.ticketId === Number(ticketId)

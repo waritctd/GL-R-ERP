@@ -223,6 +223,9 @@ class DepositNoticeBundlePdfIntegrationTest extends DirectQuotationDealTestBase 
             .as("owner").isGreaterThanOrEqualTo(1);
         assertThat(firstPageContaining(pageTexts(depositNoticeService.getPdfBundle(id, salesManagerActor).pdf()), "DRAFT-ROUND-SENTINEL"))
             .as("sales manager").isGreaterThanOrEqualTo(1);
+        // the remembered choice never hands a flag-only reader the id of a DRAFT-round file
+        assertThat(depositNoticeService.bundleSelection(id, reader).attachmentIds()).as("reader ids").isEmpty();
+        assertThat(depositNoticeService.bundleSelection(id, salesActor).attachmentIds()).as("owner ids").containsExactly(draftFile);
     }
 
     // ── customer header follows the quotation's party ───────────────────────────────────────

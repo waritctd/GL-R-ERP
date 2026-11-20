@@ -197,6 +197,9 @@ class AttachmentTicketAccessIntegrationTest extends AbstractPostgresIntegrationT
         jdbc.update("UPDATE hr.employee SET can_read_all_sales = TRUE WHERE employee_id IN (:h, :i)",
             Map.of("h", hr.id(), "i", importUser.id()));
         assertThatCode(() -> controller.download(attachmentId, sessionFor(hr))).doesNotThrowAnyException();
+        // ...but the grant is READ only: a flag-only holder neither attaches nor removes a file.
+        assertForbidden(() -> controller.upload(ticketId, pdfFile(), "OTHER", null, sessionFor(hr)));
+        assertForbidden(() -> controller.delete(attachmentId, sessionFor(hr)));
         assertThat(controller.list(ticketId, sessionFor(hr)).get("attachments")).extracting(a -> a.id()).containsExactly(attachmentId);
         assertThatThrownBy(() -> controller.download(roundFile, sessionFor(hr)))
             .isInstanceOf(ApiException.class).extracting(e -> ((ApiException) e).getStatus()).isEqualTo(HttpStatus.NOT_FOUND);

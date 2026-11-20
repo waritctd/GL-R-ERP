@@ -88,6 +88,17 @@ public class DocumentBundle {
             .sorted(Comparator.comparingLong(AttachmentDto::id)).map(AttachmentDto::id).toList());
     }
 
+    /** {@link #selection} for a reader: a flag-only reader never learns the ids of DRAFT delivery-round files. */
+    public Selection selection(String kind, long documentId, long ticketId, boolean hideDraftRoundFiles) {
+        Selection sel = selection(kind, documentId, ticketId);
+        if (!hideDraftRoundFiles) {
+            return sel;
+        }
+        java.util.Set<Long> visible = new java.util.HashSet<>();
+        attachments.findByTicketId(ticketId, true, false).forEach(a -> visible.add(a.id()));
+        return new Selection(sel.quotation(), sel.attachmentIds().stream().filter(visible::contains).toList());
+    }
+
     /** The defaults, nothing remembered (callers that have no stored document). */
     public Result bundle(byte[] documentPdf, long ticketId, String quotationNumber, UserPrincipal actor) {
         return bundle(documentPdf, ticketId, quotationNumber, actor, null, 0, false);

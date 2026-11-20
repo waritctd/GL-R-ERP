@@ -192,7 +192,7 @@ public class FinanceDealService {
             s.paymentDueDate(), s.paymentDueBasis(), s.paymentDueCreditDays(), s.overdue(),
             s.closeConfirmedAt(), s.invoiceOnFile(), s.commissionRecorded(), FinanceDealDto.INCLUDING_VAT, payments);
 
-        List<AttachmentDto> files = attachments.findByTicketId(ticketId);
+        List<AttachmentDto> files = attachments.findByTicketId(ticketId, true, !readOnlyViewer || "sales_manager".equals(actor.role()));
         var documents = new FinanceDealDto.Documents(
             quotation.map(q -> new FinanceDealDto.QuotationDoc(q.id(), q.number(), q.status(), q.totalAmount(),
                 FinanceDealDto.EXCLUDING_VAT, q.currency(), q.issuedAt(), q.acceptedAt(),

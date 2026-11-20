@@ -624,7 +624,7 @@ public class DepositNoticeService {
 
     /** What the download sheet should show for this notice: the remembered choice, else the defaults. */
     public DocumentBundle.Selection bundleSelection(long docId, UserPrincipal actor) {
-        return bundle.selection("DEPOSIT_NOTICE", docId, getById(docId, actor).ticketId());
+        return bundleSelection("DEPOSIT_NOTICE", docId, getById(docId, actor).ticketId(), actor);
     }
 
     /** The download sheet's choice, remembered for this notice: writers only (the choice is the owner's, a reader's
@@ -642,8 +642,8 @@ public class DepositNoticeService {
         bundle.saveSelection(kind, documentId, ticketId, selection);
     }
 
-    DocumentBundle.Selection bundleSelection(String kind, long documentId, long ticketId) {
-        return bundle.selection(kind, documentId, ticketId);
+    DocumentBundle.Selection bundleSelection(String kind, long documentId, long ticketId, UserPrincipal actor) {
+        return bundle.selection(kind, documentId, ticketId, readsOnlyByGrant(ticketId, actor));
     }
 
     /** The bundle (PO + quotation) for a download of a document of {@code ticketId}. */
