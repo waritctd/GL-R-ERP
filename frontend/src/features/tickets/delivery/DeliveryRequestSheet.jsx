@@ -112,9 +112,9 @@ export function DeliveryRequestSheet({ ticketId, order, approvedQuotations, summ
     savePatch.mutate({ untickedDocs: [...next] });
   };
   // Sending makes an old deal pre-portal: the rep says what the customer already paid outside the portal.
-  const asksDeposit = Boolean(order.unconfirmed && !order.prePortal);
+  const asksDeposit = order.asksPreDeposit === true; // the server's own rule, the same one send() enforces
   const depositValue = parsePreDeposit(preDeposit);
-  const depositTooBig = asksDeposit && !Number.isNaN(depositValue) && quotation?.total != null && depositValue > Number(quotation.total);
+  const depositTooBig = asksDeposit && !Number.isNaN(depositValue) && quotation?.preDepositMax != null && depositValue > Number(quotation.preDepositMax);
   const send = useMutation({
     mutationFn: async () => {
       await api.deliveryRequests.update(round.id, { quotationId: round.quotationId, note: note ?? '' });
@@ -247,7 +247,7 @@ export function DeliveryRequestSheet({ ticketId, order, approvedQuotations, summ
             value={preDeposit}
             onChange={setPreDeposit}
             error={depositTooBig ? 'เกินยอดใบเสนอราคา' : null}
-            max={quotation?.total ?? null}
+            max={quotation?.preDepositMax ?? null}
             disabled={!round || sending}
           />
         ) : null}

@@ -17,11 +17,13 @@ public final class DeliveryRequestDtos {
      * chosen quotation, so a draft round has no lines to show until then. */
     public record OrderRef(long ticketId, String code, String displayCode, int orderNo, String customerName,
                            String projectName, String parentCode, String ownerName, boolean prePortal,
-                           boolean unconfirmed) {}
+                           boolean unconfirmed, boolean asksPreDeposit) {}
 
-    /** {@code depositBlockedReason}: why a deposit notice cannot be drafted from this quotation (DepositNoticeRepository's
+    /** {@code preDepositMax}: only while the send asks for the pre-portal deposit: the most the rep may enter, the
+     * quotation total (VAT included) less the money already on the deal; null otherwise. {@code depositBlockedReason}: why a deposit notice cannot be drafted from this quotation (DepositNoticeRepository's
      * own rule), null when it can. */
-    public record ApprovedQuotationDto(long id, String number, BigDecimal total, String docStatus, String depositBlockedReason) {}
+    public record ApprovedQuotationDto(long id, String number, BigDecimal total, String docStatus, String depositBlockedReason,
+                                       BigDecimal preDepositMax) {}
 
     public record LineDto(long itemId, String description, String unit, BigDecimal coveredQty, BigDecimal deliveredQty) {}
 

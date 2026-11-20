@@ -16,6 +16,13 @@ async function confirmedDeal18() {
 }
 
 describe('mockApi delivery rounds — tax invoice', () => {
+  it('refuses a delivery with no invoice and no note (the server\'s NO_INVOICE_NOTE_REQUIRED)', async () => {
+    await confirmedDeal18();
+    const items = (await api.tickets.get(18)).ticket.items;
+    await expect(api.tickets.recordDelivery(18, { source: 'WAREHOUSE', lines: [{ itemId: items[0].id, qty: 1 }], noInvoiceNote: '  ' }))
+      .rejects.toThrow('กรุณาระบุหมายเหตุหรือเลขอ้างอิง');
+  });
+
   it('records the invoice as money received (capped at what is owed), once, for the grant holder only', async () => {
     await confirmedDeal18();
     patchTicketForTests(18, { quotations: [{ id: 999, docStatus: 'ACCEPTED', totalAmount: 100, issuedAt: '2026-11-01' }] });
@@ -63,6 +70,14 @@ describe('mockApi delivery rounds — tax invoice', () => {
     await api.deliveryRequests.confirmInvoice(round.id, body);
     await login('warehouse@glr.co.th');
     expect((await api.deliveryRequests.list(18)).rounds[0].invoice.total).toBeNull();
+  });
+
+  it('refuses a delivery that over-covers its invoiced round (per-round cap)', async () => {
+    await login('sales@glr.co.th');
+    const round = (await api.deliveryRequests.list(18)).rounds.find((r) => r.status === 'INVOICED');
+    const line = round.lines[0];
+    await expect(api.tickets.recordDelivery(18, { source: 'WAREHOUSE', deliveryRequestId: round.id, lines: [{ itemId: line.itemId, qty: Number(line.coveredQty) + 1 }] }))
+      .rejects.toThrow('จำนวนเกินที่รอบนี้ครอบคลุม');
   });
 
   it('lets the LATEST invoiced round be voided beside another forwarded round (no jam), and import can never issue', async () => {
@@ -114,6 +129,21 @@ describe('mockApi delivery rounds — tax invoice', () => {
     patchTicketForTests(18, { paymentStatus: 'DEPOSIT_PAID' });
     await login('import@glr.co.th');
     await expect(api.deliveryRequests.voidInvoice(r2.id, { reason: 'x' })).rejects.toThrow('บทบาทนำเข้าไม่สามารถออกใบกำกับได้');
+  });
+
+  it('asks the pre-portal deposit on an old deal and writes exactly one PRE_PORTAL receipt', async () => {
+    await login('sales@glr.co.th');
+    const { ticket } = await api.tickets.get(18);
+    patchTicketForTests(18, { status: 'draft', salesStage: 'QUOTATION_ISSUED', prePortal: false, events: ticket.events.filter((e) => e.kind !== 'DEAL_PROMOTED_FROM_QUOTATION') });
+    const before = await api.deliveryRequests.list(18);
+    expect(before.order.asksPreDeposit).toBe(true);
+    const { round } = await api.deliveryRequests.createDraft(18, { quotationId: before.approvedQuotations[0].id });
+    await expect(api.deliveryRequests.send(round.id, { systemDocs: [] })).rejects.toThrow('ใส่มัดจำที่รับแล้วก่อนใช้ระบบ');
+    await api.deliveryRequests.send(round.id, { systemDocs: [], preDeposit: 5000 });
+    const pre = (await api.tickets.listPayments(18)).items.filter((p) => p.source === 'PRE_PORTAL');
+    expect(pre).toHaveLength(1);
+    expect(Number(pre[0].amount)).toBe(5000);
+    expect((await api.deliveryRequests.list(18)).order.asksPreDeposit).toBe(false);
   });
 
   it('labels the sources present when a tax invoice sits among others', () => {

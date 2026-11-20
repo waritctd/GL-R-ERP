@@ -3861,6 +3861,21 @@ function mockRoundUnconfirmed(ticket) {
     && !ticket.events.some((e) => e.kind === 'DEAL_PROMOTED_FROM_QUOTATION'));
 }
 
+// DeliveryRequestService#asksPreDeposit: the ONE rule for "this send asks for the deposit paid before the portal".
+function mockAsksPreDeposit(ticket) {
+  return (ticket.lifecycle ?? 'ACTIVE') === 'ACTIVE' && !ticket.prePortal
+    && dealStageIndex(ticket.salesStage) < dealStageIndex('ORDER_RECEIVED');
+}
+
+// DeliveryRequestService#withPreDepositMax: while the send asks for the deposit, each quotation carries the most it may be.
+function mockApprovedWithMax(ticket) {
+  const list = mockApprovedQuotationsOf(ticket.id);
+  if (!mockAsksPreDeposit(ticket)) return list.map((q) => ({ ...q, preDepositMax: null }));
+  const paid = sumPaid(ticket.id);
+  // A quotation with no stored total has no cap here (the confirm check below skips it too).
+  return list.map((q) => ({ ...q, preDepositMax: Number(q.total) > 0 ? Math.max(0, Number(q.total) - paid) : null }));
+}
+
 function mockRoundBlockedReason(ticket, user) {
   if (!mockRoundsCanWrite(ticket, user)) return 'ฝ่ายขายเจ้าของงานเป็นผู้ขอออกใบกำกับ';
   if ((ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE') return 'งานนี้ไม่ได้เปิดอยู่ ขอออกใบกำกับไม่ได้';
@@ -3967,7 +3982,7 @@ function mockRoundOrderRef(ticket) {
     customerName: ticket.customerName ?? null,
     projectName: mockProjects.find((p) => p.id === ticket.projectId)?.name ?? null,
     parentCode: root?.code ?? null, ownerName: ticket.createdByName ?? null, prePortal: ticket.prePortal === true,
-    unconfirmed: mockRoundUnconfirmed(ticket),
+    unconfirmed: mockRoundUnconfirmed(ticket), asksPreDeposit: mockAsksPreDeposit(ticket),
   };
 }
 
@@ -16283,7 +16298,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       const open = rounds.some((r) => MOCK_ROUND_OPEN.includes(r.status));
       const blocked = open ? null : mockRoundBlockedReason(ticket, user);
       return delay({
-        order: mockRoundOrderRef(ticket), rounds, approvedQuotations: mockApprovedQuotationsOf(ticket.id),
+        order: mockRoundOrderRef(ticket), rounds, approvedQuotations: mockApprovedWithMax(ticket),
         canStart: !open && blocked == null, startBlockedReason: blocked, invoiceable: mockInvoiceable(ticket),
       });
     },
@@ -16358,8 +16373,8 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
         const chosen = round.quotationId != null ? mockRoundResolveQuotation(ticket.id, round.quotationId)
           : mockRoundResolveQuotation(ticket.id, null);
         if (chosen == null) fail('เลือกใบเสนอราคาของรอบนี้ก่อนส่ง', 409);
-        if (ticket.prePortal) mockEnsureOrderConfirmed(ticket, chosen, user);
-        else mockConfirmAndMark(ticket, chosen, body?.preDeposit, user);
+        if (mockAsksPreDeposit(ticket)) mockConfirmAndMark(ticket, chosen, body?.preDeposit, user);
+        else mockEnsureOrderConfirmed(ticket, chosen, user);
         const from = ticket.salesStage;
         ticket.salesStage = 'DELIVERY_SCHEDULING';
         pushEvent(ticket, user, 'STAGE_CHANGED', from, 'DELIVERY_SCHEDULING', 'ขอออกใบกำกับจากงานที่เดินมาก่อนใช้ระบบ');

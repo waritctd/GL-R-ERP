@@ -91,9 +91,9 @@ describe('DeliveryRoundsPanel', () => {
   });
 
   it('an unconfirmed old deal: the draft has no lines yet, the sheet asks the deposit already received and sends it', async () => {
-    const OLD = { ...ORDER, prePortal: false, unconfirmed: true };
+    const OLD = { ...ORDER, prePortal: false, unconfirmed: true, asksPreDeposit: true };
     const noLines = round('DRAFT', { lines: [] });
-    api.deliveryRequests.list.mockResolvedValue({ order: OLD, rounds: [], approvedQuotations: [QUOTATION], canStart: true, startBlockedReason: null });
+    api.deliveryRequests.list.mockResolvedValue({ order: OLD, rounds: [], approvedQuotations: [{ ...QUOTATION, preDepositMax: 100000 }], canStart: true, startBlockedReason: null });
     api.deliveryRequests.createDraft.mockResolvedValue({ round: noLines });
     api.deliveryRequests.update.mockResolvedValue({ round: noLines });
     api.deliveryRequests.send.mockResolvedValue({ round: round('SENT') });

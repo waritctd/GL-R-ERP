@@ -189,6 +189,17 @@ class ReceiptImportIntegrationTest extends AbstractDealQuotationSlice2Integratio
         assertThat(paidOn(d)).isEqualByComparingTo("30000");
         assertThat(repository.findManualTwin(d, new BigDecimal("30000"), LocalDate.parse(lastMonth))).isEmpty();
     }
+
+    @Test
+    void aPrePortalReceiptIsNotTheTwinOfALaterSameAmountExpressRow() throws Exception {
+        long d = awaitingDeposit(salesActor, "30000.00", "DN6900053");
+        jdbc.update("""
+            INSERT INTO sales.payment_receipt (ticket_id, kind, amount, recorded_by, source, received_at)
+            VALUES (:t, 'DEPOSIT', 30000, :by, 'PRE_PORTAL', now())
+            """, Map.of("t", d, "by", salesActor.id()));
+        String later = LocalDate.now(java.time.ZoneId.of("Asia/Bangkok")).plusDays(20).toString();
+        assertThat(repository.findManualTwin(d, new BigDecimal("30000"), LocalDate.parse(later))).isEmpty();
+    }
     // ── authz: account only ─────────────────────────────────────────────────
 
     @Test

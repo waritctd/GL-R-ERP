@@ -136,9 +136,10 @@ public class DeliveryRequestService {
         }
         TicketSummaryDto s = summary(ticketId);
         boolean canWrite = ticketService.canWriteDeliveryRounds(s, actor);
-        List<ApprovedQuotationDto> approved = rounds.approvedQuotations(ticketId);
+        List<ApprovedQuotationDto> approved = withPreDepositMax(s, rounds.approvedQuotations(ticketId));
         VoidCtx vctx = voidCtx(ticketId, holder);
-        List<RoundDto> dtos = rounds.findByTicket(ticketId).stream().map(r -> toDto(r, s, canWrite, false, holder, vctx)).toList();
+        Memo memo = new Memo();
+        List<RoundDto> dtos = rounds.findByTicket(ticketId).stream().map(r -> toDto(r, s, canWrite, false, holder, vctx, memo)).toList();
         boolean open = dtos.stream().anyMatch(r -> OPEN.contains(r.status()));
         String blocked = open ? null : startBlockedReason(s, canWrite, approved);
         return new RoundsResponse(orderRef(s), dtos, approved, !open && blocked == null, blocked, invoiceable(ticketId));
@@ -147,10 +148,22 @@ public class DeliveryRequestService {
     private RoundsResponse listForAccount(long ticketId, UserPrincipal actor, boolean holder) {
         TicketSummaryDto s = summary(ticketId);
         VoidCtx vctx = voidCtx(ticketId, true);
+        Memo memo = new Memo();
         List<RoundDto> dtos = rounds.findByTicket(ticketId).stream()
             .filter(r -> !DeliveryRequestDtos.DRAFT.equals(r.status()))
-            .map(r -> toDto(r, s, false, false, holder, vctx)).toList();
+            .map(r -> toDto(r, s, false, false, holder, vctx, memo)).toList();
         return new RoundsResponse(orderRef(s), dtos, List.of(), false, "ฝ่ายขายเจ้าของงานเป็นผู้ขอออกใบกำกับ", invoiceable(ticketId));
+    }
+
+    /** While a send asks for the pre-portal deposit, each quotation carries the most that deposit may be: its total (VAT
+     * included, as the confirm's payable) less the money already on the deal. */
+    private List<ApprovedQuotationDto> withPreDepositMax(TicketSummaryDto s, List<ApprovedQuotationDto> approved) {
+        if (!asksPreDeposit(s)) {
+            return approved;
+        }
+        BigDecimal paid = tickets.sumPaid(s.id());
+        return approved.stream().map(q -> new ApprovedQuotationDto(q.id(), q.number(), q.total(), q.docStatus(),
+            q.depositBlockedReason(), q.total().subtract(paid).max(BigDecimal.ZERO))).toList();
     }
 
     /** What the order may still be invoiced for: payable minus the confirmed invoices, never below zero. */
@@ -175,9 +188,10 @@ public class DeliveryRequestService {
     private RoundsResponse listForIssuer(long ticketId) {
         TicketSummaryDto s = summary(ticketId);
         VoidCtx vctx = voidCtx(ticketId, true);
+        Memo memo = new Memo();
         List<RoundDto> dtos = rounds.findByTicket(ticketId).stream()
             .filter(r -> Set.of(DeliveryRequestDtos.FORWARDED, DeliveryRequestDtos.INVOICED).contains(r.status()))
-            .map(r -> toDto(r, s, false, false, true, vctx)).toList();
+            .map(r -> toDto(r, s, false, false, true, vctx, memo)).toList();
         return new RoundsResponse(orderRef(s), dtos, List.of(), false, "ฝ่ายขายเจ้าของงานเป็นผู้ขอออกใบกำกับ", invoiceable(ticketId));
     }
 
@@ -189,8 +203,9 @@ public class DeliveryRequestService {
         }
         TicketSummaryDto s = summary(ticketId);
         VoidCtx vctx = voidCtx(ticketId, issuerFlag);
+        Memo memo = new Memo();
         List<RoundDto> dtos = rounds.findByTicket(ticketId).stream()
-            .filter(r -> !DeliveryRequestDtos.DRAFT.equals(r.status())).map(r -> toDto(r, s, false, true, issuerFlag, vctx)).toList();
+            .filter(r -> !DeliveryRequestDtos.DRAFT.equals(r.status())).map(r -> toDto(r, s, false, true, issuerFlag, vctx, memo)).toList();
         return new RoundsResponse(orderRef(s), dtos, List.of(), false, "ฝ่ายขายเจ้าของงานเป็นผู้ขอออกใบกำกับ", null);
     }
 
@@ -623,10 +638,10 @@ public class DeliveryRequestService {
             if (chosen == null) {
                 throw new ApiException(HttpStatus.CONFLICT, "เลือกใบเสนอราคาของรอบนี้ก่อนส่ง");
             }
-            if (tickets.isPrePortal(ticketId)) {
-                prePortal.ensureOrderConfirmed(ticketId, chosen, actor);
-            } else {
+            if (asksPreDeposit(s)) {
                 prePortal.confirmAndMark(ticketId, chosen, preDeposit, actor);
+            } else {
+                prePortal.ensureOrderConfirmed(ticketId, chosen, actor);
             }
             tickets.updateSalesStage(ticketId, DealStage.DELIVERY_SCHEDULING);
             tickets.addEvent(ticketId, actor.id(), actor.name(), TicketEventKind.STAGE_CHANGED, s.salesStage(),
@@ -635,6 +650,11 @@ public class DeliveryRequestService {
         } else {
             prePortal.ensureOrderConfirmed(ticketId, round.quotationId(), actor);
         }
+        // The PDFs are rendered BEFORE the row lock (a render can be slow); the lock only stores them, after re-checking
+        // that the document set is still the one rendered.
+        Long preQuotationId = round.quotationId() != null ? validQuotation(ticketId, round.quotationId()) : resolveQuotation(ticketId, null);
+        Map<SystemDocRef, RenderedDoc> rendered = preQuotationId == null ? Map.of()
+            : renderSystemDocs(ticketId, validDocs(ticketId, systemDocs, preQuotationId), actor);
         tickets.lockTicketForUpdate(ticketId);
         round = rounds.findById(rid).orElseThrow();
         requireEditable(round);
@@ -653,9 +673,14 @@ public class DeliveryRequestService {
             throw new ApiException(HttpStatus.CONFLICT, "ทุกรายการมีรอบส่งครอบคลุมแล้ว");
         }
         Map<SystemDocRef, String> docNumbers = validDocs(ticketId, systemDocs, quotationId);
+        boolean same = docNumbers.size() == rendered.size() && docNumbers.entrySet().stream()
+            .allMatch(e -> rendered.containsKey(e.getKey()) && rendered.get(e.getKey()).number().equals(e.getValue()));
+        if (!same) {
+            throw new ApiException(HttpStatus.CONFLICT, "เอกสารของรอบนี้เปลี่ยนไประหว่างส่ง ลองอีกครั้ง");
+        }
         rounds.updateDraft(rid, quotationId, round.note(), null);
         rounds.replaceLines(rid, lines);
-        storeSystemDocs(ticketId, rid, docNumbers, actor);
+        storeSystemDocs(ticketId, rid, rendered, actor);
         rounds.markSent(rid, actor.id());
         String message = displayCode(s) + " รอบส่งที่ " + round.roundNo() + " · " + buyerName(s, rounds.findById(rid).orElseThrow().quotationNumber())
             + " · ฝ่ายขายขอออกใบกำกับ รอคลังตรวจเอกสาร";
@@ -724,13 +749,14 @@ public class DeliveryRequestService {
         return kept;
     }
 
-    /** Renders each document with the SENDER's own access and keeps the bytes on the round, so the warehouse sees the
-     * document as it was when sent whatever is revised afterwards. A re-send replaces this round's earlier copies. */
-    private void storeSystemDocs(long ticketId, long rid, Map<SystemDocRef, String> docs, UserPrincipal actor) {
-        rounds.deleteSystemDocs(rid).forEach(fileStorage::deleteOnCommit);
+    private record RenderedDoc(String number, byte[] pdf) {}
+
+    /** Renders each document with the SENDER's own access (no lock held), so the warehouse sees the document as it was
+     * when sent whatever is revised afterwards. */
+    private Map<SystemDocRef, RenderedDoc> renderSystemDocs(long ticketId, Map<SystemDocRef, String> docs, UserPrincipal actor) {
+        Map<SystemDocRef, RenderedDoc> out = new java.util.LinkedHashMap<>();
         for (var e : docs.entrySet()) {
             SystemDocRef d = e.getKey();
-            String name = e.getValue().replaceAll("[\\\\/]", "-") + ".pdf";
             byte[] pdf;
             try {
                 pdf = switch (d.kind()) {
@@ -751,7 +777,17 @@ public class DeliveryRequestService {
                 throw new ApiException(HttpStatus.BAD_REQUEST, "เอกสาร " + e.getValue() + " มีขนาดใหญ่เกินไป (ขนาดสูงสุดที่รองรับคือ "
                     + (fileStorage.maxUploadBytes() / (1024 * 1024)) + " MB)");
             }
-            FileStorageService.StoredFile stored = fileStorage.storeBytes("tickets", ticketId, name, "application/pdf", pdf);
+            out.put(d, new RenderedDoc(e.getValue(), pdf));
+        }
+        return out;
+    }
+
+    /** Stores the rendered copies on the round (under the row lock); a re-send replaces this round's earlier copies. */
+    private void storeSystemDocs(long ticketId, long rid, Map<SystemDocRef, RenderedDoc> docs, UserPrincipal actor) {
+        rounds.deleteSystemDocs(rid).forEach(fileStorage::deleteOnCommit);
+        for (var doc : docs.values()) {
+            String name = doc.number().replaceAll("[\\\\/]", "-") + ".pdf";
+            FileStorageService.StoredFile stored = fileStorage.storeBytes("tickets", ticketId, name, "application/pdf", doc.pdf());
             fileStorage.deleteOnRollback(stored);
             attachments.save(ticketId, null, stored.fileName(), stored.filePath(), stored.mimeType(), stored.fileSize(),
                 AttachType.SYSTEM_DOC, actor.id(), rid, "SYSTEM");
@@ -839,8 +875,21 @@ public class DeliveryRequestService {
         return declared;
     }
 
+    /** Per-list answers that do not change between the rounds of one ticket (the buyer by quotation number, the
+     * record-block reason), so a list costs one lookup each, not one per round. */
+    private static final class Memo {
+        final Map<String, DepositNoticeService.QuotationBuyer> buyers = new java.util.HashMap<>();
+        boolean blockRead;
+        String block;
+    }
+
     private RoundDto toDto(DeliveryRequestRepository.Row r, TicketSummaryDto s, boolean canWrite, boolean warehouse,
                            boolean issuerFlag, VoidCtx vctx) {
+        return toDto(r, s, canWrite, warehouse, issuerFlag, vctx, new Memo());
+    }
+
+    private RoundDto toDto(DeliveryRequestRepository.Row r, TicketSummaryDto s, boolean canWrite, boolean warehouse,
+                           boolean issuerFlag, VoidCtx vctx, Memo memo) {
         boolean editable = canWrite && EDITABLE.contains(r.status());
         List<LineDto> lines = DeliveryRequestDtos.DRAFT.equals(r.status())
             ? rounds.coverage(r.ticketId(), r.id()).stream().filter(c -> c.remaining().signum() > 0)
@@ -855,9 +904,13 @@ public class DeliveryRequestService {
         // May record only when the goods can leave (the record path's own source rules): never a button that always 409s.
         boolean recordable = invoiced && (canWrite || warehouse) && DealLifecycle.ACTIVE.equals(s.lifecycle())
             && lines.stream().anyMatch(l -> l.coveredQty().compareTo(l.deliveredQty()) > 0);
-        String recordBlock = recordable ? ticketService.deliveryBlockedReason(r.ticketId(), warehouse) : null;
+        if (recordable && !memo.blockRead) {
+            memo.block = ticketService.deliveryBlockedReason(r.ticketId(), warehouse);
+            memo.blockRead = true;
+        }
+        String recordBlock = recordable ? memo.block : null;
         boolean canRecord = recordable && recordBlock == null;
-        var buyer = depositNotices.quotationBuyer(s, r.quotationNumber());
+        var buyer = memo.buyers.computeIfAbsent(String.valueOf(r.quotationNumber()), k -> depositNotices.quotationBuyer(s, r.quotationNumber()));
         return new RoundDto(r.id(), r.roundNo(), r.status(), r.quotationId(), r.quotationNumber(), r.note(),
             r.returnReasonCodes(), r.returnReasonText(), r.requestedByName(), r.sentAt(), r.forwardedByName(),
             r.forwardedAt(), invoice, lines, rounds.files(r.id()), r.untickedDocs(),
@@ -934,13 +987,20 @@ public class DeliveryRequestService {
             }
         }
         return new OrderRef(s.id(), s.code(), displayCode(s), orderNo, s.customerName(), s.projectName(),
-            addOn ? s.parentCode() : null, s.createdByName(), tickets.isPrePortal(s.id()), unconfirmed(s));
+            addOn ? s.parentCode() : null, s.createdByName(), tickets.isPrePortal(s.id()), unconfirmed(s), asksPreDeposit(s));
     }
 
     /**
      * An old or pre-portal deal whose order the first send will confirm. Any lines it has are preliminary (the confirm
      * replaces them), so the sheet asks for the deposit exactly when {@code send} requires it.
      */
+    /** The ONE rule for "this send asks for the deposit paid before the portal": a live deal not yet confirmed in the
+     * portal (before ORDER_RECEIVED) that is not already pre-portal. {@code send} and the order block both read it. */
+    private boolean asksPreDeposit(TicketSummaryDto s) {
+        return DealLifecycle.ACTIVE.equals(s.lifecycle())
+            && DealStage.indexOf(s.salesStage()) < DealStage.indexOf(DealStage.ORDER_RECEIVED) && !tickets.isPrePortal(s.id());
+    }
+
     private boolean unconfirmed(TicketSummaryDto s) {
         boolean old = tickets.isPrePortal(s.id()) || DealStage.indexOf(s.salesStage()) < DealStage.indexOf(DealStage.ORDER_RECEIVED);
         return old && DealLifecycle.ACTIVE.equals(s.lifecycle()) && !tickets.hasPromotionFromQuotationEvent(s.id());

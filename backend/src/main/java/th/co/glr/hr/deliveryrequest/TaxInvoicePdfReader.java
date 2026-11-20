@@ -10,7 +10,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.apache.pdfbox.Loader;
-import org.apache.pdfbox.io.IOUtils;
+import org.apache.pdfbox.io.MemoryUsageSetting;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.text.PDFTextStripper;
 
@@ -18,13 +18,17 @@ import org.apache.pdfbox.text.PDFTextStripper;
  * Reads the number, date and total off an issued tax invoice (an Express print-out, a text PDF) so the issuer only checks
  * them. Express prints Latin digits and document numbers, which extract reliably even when Thai glyphs do not; a scanned
  * PDF reads nothing and the issuer types the three values. The file is untrusted: only the first {@link #MAX_PAGES} pages
- * are read, in memory only (no temp files, no external resources), the work runs on a small bounded pool with a time
- * limit, and every failure (a Throwable included) is a null, never an exception.
+ * are read with a bounded stream cache (a few MB of heap, a capped scratch file, no external resources), the work runs on
+ * a small bounded pool with a time limit, and every failure (an Exception) is a null, never an exception. An Error
+ * (out of memory) is not swallowed in the worker; the caller of {@link #read} gets a null for it.
  */
 public final class TaxInvoicePdfReader {
     static final int MAX_PAGES = 3;
     static final int MAX_TEXT_CHARS = 200_000;
     static final long TIME_LIMIT_SECONDS = 5;
+    /** Stream data past this much heap spills to a scratch file; past the scratch cap the read fails (a null). */
+    static final long MAX_HEAP_BYTES = 4L * 1024 * 1024;
+    static final long MAX_SCRATCH_BYTES = 64L * 1024 * 1024;
     private static final ThreadPoolExecutor POOL = new ThreadPoolExecutor(1, 2, 30, TimeUnit.SECONDS,
         new ArrayBlockingQueue<>(4), r -> { Thread t = new Thread(r, "tax-invoice-pdf"); t.setDaemon(true); return t; },
         new ThreadPoolExecutor.AbortPolicy());
@@ -53,26 +57,26 @@ public final class TaxInvoicePdfReader {
         Future<Read> job;
         try {
             job = POOL.submit((Callable<Read>) () -> readNow(pdf));
-        } catch (Throwable busy) {
+        } catch (java.util.concurrent.RejectedExecutionException busy) {
             return Read.NOTHING; // pool full: the issuer types it
         }
         try {
             return job.get(TIME_LIMIT_SECONDS, TimeUnit.SECONDS);
-        } catch (Throwable e) {
+        } catch (Exception e) { // timeout, interrupt, or the worker failed (an Error inside it arrives here as its cause)
             job.cancel(true);
             return Read.NOTHING;
         }
     }
 
     private static Read readNow(byte[] pdf) {
-        try (PDDocument doc = Loader.loadPDF(pdf, "", null, null, IOUtils.createMemoryOnlyStreamCache())) {
+        try (PDDocument doc = Loader.loadPDF(pdf, "", null, null, MemoryUsageSetting.setupMixed(MAX_HEAP_BYTES, MAX_SCRATCH_BYTES).streamCache)) {
             PDFTextStripper stripper = new PDFTextStripper();
             stripper.setStartPage(1);
             stripper.setEndPage(MAX_PAGES);
             String text = stripper.getText(doc);
             return parse(text.length() > MAX_TEXT_CHARS ? text.substring(0, MAX_TEXT_CHARS) : text);
-        } catch (Throwable e) {
-            return Read.NOTHING;
+        } catch (Exception e) {
+            return Read.NOTHING; // unreadable, encrypted, over the cache cap: nothing read
         }
     }
 

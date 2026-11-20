@@ -333,7 +333,7 @@ public class DeliveryRequestRepository {
                     ? "ใบเสนอราคานี้ส่งลูกค้าแล้ว ใช้ออกใบแจ้งยอดเงินรับมัดจำไม่ได้"
                     : depositPercent != null && depositPercent == 0
                         ? "ใบเสนอราคานี้ระบุไม่มีมัดจำ (ชำระเต็มจำนวน) จึงออกใบแจ้งยอดเงินรับมัดจำไม่ได้" : null;
-                return new ApprovedQuotationDto(rs.getLong("quotation_id"), rs.getString("number"), total, status, blocked);
+                return new ApprovedQuotationDto(rs.getLong("quotation_id"), rs.getString("number"), total, status, blocked, null);
             });
     }
 
