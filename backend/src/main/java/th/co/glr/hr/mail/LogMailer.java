@@ -48,7 +48,7 @@ public class LogMailer implements Mailer {
 
     @Override
     public void send(OutgoingEmail email) {
-        log.info("[LogMailer] rich email NOT sent (provider=log). to={} cc={} subject={} inline={} attachments={}",
-            email.to(), email.cc(), email.subject(), email.inlineImages().size(), email.attachments().size());
+        log.info("[LogMailer] rich email NOT sent (provider=log). to={} cc={} bcc={} subject={} inline={} attachments={}",
+            email.to(), email.cc(), email.bcc().size(), email.subject(), email.inlineImages().size(), email.attachments().size());
     }
 }

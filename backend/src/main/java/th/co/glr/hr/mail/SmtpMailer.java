@@ -129,6 +129,9 @@ public class SmtpMailer implements Mailer {
             if (!email.cc().isEmpty()) {
                 helper.setCc(email.cc().toArray(String[]::new));
             }
+            if (!email.bcc().isEmpty()) {
+                helper.setBcc(email.bcc().toArray(String[]::new));
+            }
             helper.setSubject(email.subject());
             helper.setText(email.textBody(), email.htmlBody());
             // addInline MUST come after setText() (see sendHtml's note on MIME part ordering).

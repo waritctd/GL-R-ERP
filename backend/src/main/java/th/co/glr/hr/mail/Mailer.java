@@ -53,6 +53,7 @@ public interface Mailer {
     record OutgoingEmail(
         String to,
         List<String> cc,
+        List<String> bcc,
         String subject,
         String htmlBody,
         String textBody,
@@ -62,8 +63,16 @@ public interface Mailer {
         public OutgoingEmail {
             cc = cc == null ? List.of()
                 : cc.stream().filter(a -> a != null && !a.isBlank()).map(String::trim).toList();
+            bcc = bcc == null ? List.of()
+                : bcc.stream().filter(a -> a != null && !a.isBlank()).map(String::trim).toList();
             inlineImages = inlineImages == null ? List.of() : List.copyOf(inlineImages);
             attachments = attachments == null ? List.of() : List.copyOf(attachments);
+        }
+
+        /** No BCC. */
+        public OutgoingEmail(String to, List<String> cc, String subject, String htmlBody, String textBody,
+                             List<InlineImage> inlineImages, List<Attachment> attachments) {
+            this(to, cc, List.of(), subject, htmlBody, textBody, inlineImages, attachments);
         }
     }
 

@@ -1,11 +1,13 @@
 package th.co.glr.hr.feedback;
 
 import java.time.LocalDate;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.LinkedHashSet;
 import java.util.Set;
 import java.util.stream.Collectors;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -49,9 +51,13 @@ public class FeedbackService {
     private final FeedbackRepository repository;
     private final EmployeeAuthRepository employees;
     private final NotificationService notifications;
+    /** BCC'd on ONE "new feedback" email (the first admin who really gets mail) - empty = none. */
+    private final List<String> submittedBcc;
 
     public FeedbackService(FeedbackRepository repository, EmployeeAuthRepository employees,
-                           NotificationService notifications) {
+                           NotificationService notifications,
+                           @Value("${app.feedback.submitted-bcc:}") String submittedBcc) {
+        this.submittedBcc = Arrays.stream(submittedBcc.split(",")).map(String::trim).filter(s -> !s.isEmpty()).toList();
         this.repository = repository;
         this.employees = employees;
         this.notifications = notifications;
@@ -90,8 +96,13 @@ public class FeedbackService {
         FeedbackDto saved = repository.findById(id).orElseThrow();
         String subject = ("BUG".equals(clean.kind()) ? "แจ้งปัญหา" : "ขอฟีเจอร์") + " #" + id + " จาก " + actor.name();
         String body = clean.details();
+        List<String> bccPending = submittedBcc;
         for (long adminId : repository.activeAdminIds()) {
-            notifications.notify(adminId, "FEEDBACK_SUBMITTED", subject, body, LINK, true);
+            boolean queued = notifications.notify(
+                adminId, "FEEDBACK_SUBMITTED", subject, body, LINK, bccPending).emailQueued();
+            if (queued) {
+                bccPending = List.of();
+            }
         }
         return saved;
     }

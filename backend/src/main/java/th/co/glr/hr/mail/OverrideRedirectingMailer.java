@@ -70,6 +70,7 @@ final class OverrideRedirectingMailer implements Mailer, KeyedHtmlMailer {
 
     @Override
     public void send(OutgoingEmail email) {
+        // BCC is dropped the same way (and never printed: it is not a recipient anyone should see in a UAT inbox).
         // CC is DROPPED, not redirected: a UAT deployment must never mail a real manager via the CC list, so the whole
         // message collapses to the single override inbox. See this class's Javadoc / issue #782.
         log.info("app.mail.override-to active: redirecting mail from {} (cc dropped: {}) to {}",
@@ -79,6 +80,7 @@ final class OverrideRedirectingMailer implements Mailer, KeyedHtmlMailer {
             : describe(email.to()) + " (cc: " + String.join(", ", email.cc()) + ")";
         delegate.send(new OutgoingEmail(
             overrideTo,
+            List.of(),
             List.of(),
             email.subject(),
             htmlNote(email.htmlBody(), recipients),
