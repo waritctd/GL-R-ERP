@@ -61,6 +61,7 @@ const DeductionConsentsPage = lazy(() => import('./features/payroll/DeductionCon
 const TaxAllowancePage = lazy(() => import('./features/taxAllowance/TaxAllowancePage.jsx').then(toDefault('TaxAllowancePage')));
 const TaxAllowanceReviewPage = lazy(() => import('./features/taxAllowance/TaxAllowanceReviewPage.jsx').then(toDefault('TaxAllowanceReviewPage')));
 const DepositNoticePage = lazy(() => import('./features/deposits/DepositNoticePage.jsx').then(toDefault('DepositNoticePage')));
+const DepositNoticeSkeleton = lazy(() => import('./features/deposits/DepositNoticePage.jsx').then(toDefault('DepositNoticeSkeleton')));
 const CeoSettingsPage = lazy(() => import('./features/ceoSettings/CeoSettingsPage.jsx').then(toDefault('CeoSettingsPage')));
 const PriceImportPage = lazy(() => import('./features/catalog/PriceImportPage.jsx').then(toDefault('PriceImportPage')));
 const CatalogSearchPage = lazy(() => import('./features/catalog/CatalogSearchPage.jsx').then(toDefault('CatalogSearchPage')));
@@ -93,18 +94,24 @@ function DepositNoticeRoute({ user, showToast }) {
   const backToRequest = () => navigate(`/tickets/${ticketId}?tab=ship&request=open`);
   // Opened from เอกสารขาย (?from=docs): back returns to its notice tab; ?edit=1 opens an issued notice in edit mode.
   const fromDocs = searchParams.get('from') === 'docs';
-  // ?edit=1 is honoured only for a viewer the server lets write this deal's documents (the chain's flag); until that
-  // answers, the page waits so its first render already knows.
+  // Opened from a quotation's chain card (?from=quotation&quotation=<id>): back returns to that quotation.
+  const quotationParam = searchParams.get('quotation') ?? '';
+  const fromQuotation = searchParams.get('from') === 'quotation' && /^[1-9]\d*$/.test(quotationParam) ? quotationParam : null;
+  // The chain's flag says whether this viewer may write the deal's documents (the server refuses everyone else): it
+  // gates ?edit=1 and the page's edit controls. Until it answers the page waits so its first render already knows;
+  // a failed read leaves the page read-only.
   const wantsEdit = searchParams.get('edit') === '1';
-  const chain = useDocumentChain(ticketId, { enabled: wantsEdit });
-  if (wantsEdit && chain.isPending) return null;
+  const chain = useDocumentChain(ticketId);
+  if (chain.isPending) return <DepositNoticeSkeleton />;
+  const canWrite = chain.data?.viewer?.mayWriteDepositNotice === true;
   return (
     <DepositNoticePage
       user={user}
       ticketId={ticketId}
-      onBack={toRequest ? backToRequest : fromDocs ? () => navigate('/quotations?doc=deposit') : () => navigate(`/tickets/${ticketId}`)}
-      backLabel={toRequest ? 'กลับไปที่คำขอ' : fromDocs ? 'กลับไปเอกสารขาย' : undefined}
-      startEditing={wantsEdit && chain.data?.viewer?.mayWriteDepositNotice === true}
+      onBack={toRequest ? backToRequest : fromQuotation ? () => navigate(`/quotations/${fromQuotation}`) : fromDocs ? () => navigate('/quotations?doc=deposit') : () => navigate(`/tickets/${ticketId}`)}
+      backLabel={toRequest ? 'กลับไปที่คำขอ' : fromQuotation ? 'กลับไปใบเสนอราคา' : fromDocs ? 'กลับไปเอกสารขาย' : undefined}
+      canWrite={canWrite}
+      startEditing={wantsEdit && canWrite}
       quotationId={toRequest ? searchParams.get('quotation') : null}
       onIssued={toRequest ? backToRequest : undefined}
       showToast={showToast}

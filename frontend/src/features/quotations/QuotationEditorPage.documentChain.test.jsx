@@ -14,12 +14,16 @@ globalThis.React = React;
 // one-line situations. Mock-driven: says nothing about who may act — DocumentChainIntegrationTest does.
 
 vi.mock('../tickets/RemainingInvoiceDialog.jsx', () => ({
-  RemainingInvoiceDialog: ({ ticketId, onClose }) => (
+  RemainingInvoiceDialog: ({ ticketId, quotationId, onClose }) => (
     <div data-testid="remaining-invoice-dialog-stub">
-      ใบแจ้งหนี้ {ticketId}
+      ใบแจ้งหนี้ {ticketId} ของใบเสนอราคา {quotationId}
       <button type="button" onClick={onClose}>ปิดสตับ</button>
     </div>
   ),
+}));
+
+vi.mock('../tickets/DocumentDownloadSheet.jsx', () => ({
+  DocumentDownloadSheet: ({ kind, documentId }) => <div data-testid="download-sheet-stub">{kind} {documentId}</div>,
 }));
 
 vi.mock('../../utils/download.js', () => ({ downloadBlob: vi.fn() }));
@@ -142,6 +146,36 @@ describe('QuotationEditorPage — the document chain card', () => {
     // the header's own confirm / go-to slot is gone while the card carries the chain
     expect(screen.queryByTestId('quotation-promote-to-deal')).toBeNull();
     expect(screen.queryByTestId('quotation-go-to-deal')).toBeNull();
+  });
+
+  describe('issued notice and invoice steps', () => {
+    const issued = (viewer) => confirmed({
+      deposit: { state: 'ISSUED', issuedNoticeId: 31, docNumber: 'GLRD69005', issueDate: '2026-11-18' },
+      remaining: { state: 'ISSUED', blockedReason: null, invoiceId: 41, docNumber: 'GLR6900058-1', docDate: '2026-11-19' },
+      viewer,
+    });
+
+    it('a writer gets แก้ไข (notice page in edit mode, back to this quotation; invoice dialog on this quotation) and download through the file sheet', async () => {
+      api.documentChain.get.mockResolvedValue({ documentChain: issued({}) });
+      renderPage();
+      const c = await card();
+      const edits = await c.findAllByRole('link', { name: /แก้ไข/ });
+      expect(edits[0].getAttribute('href')).toBe('/tickets/18/deposit?edit=1&from=quotation&quotation=5');
+      fireEvent.click(c.getAllByRole('button', { name: /แก้ไขใบแจ้งหนี้/ })[0]);
+      expect(screen.getByTestId('remaining-invoice-dialog-stub').textContent).toContain('ของใบเสนอราคา 5');
+      fireEvent.click(c.getAllByRole('button', { name: /ดาวน์โหลด PDF ใบแจ้งยอดเงินรับมัดจำ/ })[0]);
+      expect(screen.getByTestId('download-sheet-stub').textContent).toBe('deposit 31');
+      expect(api.depositNotices.downloadPdf).not.toHaveBeenCalled();
+    });
+
+    it('a viewer who may not write keeps only the downloads', async () => {
+      api.documentChain.get.mockResolvedValue({ documentChain: issued({ mayWriteDepositNotice: false, mayWriteRemainingInvoice: false }) });
+      renderPage();
+      const c = await card();
+      await c.findAllByRole('button', { name: /ดาวน์โหลด PDF ใบแจ้งหนี้ส่วนที่เหลือ/ });
+      expect(c.queryAllByRole('link', { name: /แก้ไข/ })).toHaveLength(0);
+      expect(c.queryAllByRole('button', { name: /แก้ไข/ })).toHaveLength(0);
+    });
   });
 
   it('ยืนยันคำสั่งซื้อ from the card opens the existing confirm first; confirming keeps the rep on the page and re-reads the chain', async () => {

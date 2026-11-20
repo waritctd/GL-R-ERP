@@ -426,6 +426,21 @@ describe('DepositNoticePage', () => {
     expect(screen.queryByRole('button', { name: 'แก้ไขฉบับปัจจุบัน' })).toBeNull();
   });
 
+  it('canWrite=false shows an issued notice and a draft read-only: no edit, save, issue or add-line controls, download stays', async () => {
+    for (const status of ['ISSUED', 'DRAFT']) {
+      api.depositNotices.listByTicket.mockResolvedValue({
+        depositNotices: [{ ...validDraftDoc, status, docNumber: status === 'ISSUED' ? 'GLRD69001' : null }],
+      });
+      const { unmount } = renderDepositNoticePage({ canWrite: false });
+      expect(await screen.findByRole('button', { name: 'ดาวน์โหลด' })).toBeTruthy();
+      expect(screen.queryByLabelText('มัดจำ %')).toBeNull();
+      for (const name of ['แก้ไขฉบับปัจจุบัน', 'บันทึกร่าง', /ออกเอกสาร/, /เพิ่มรายการ/]) {
+        expect(screen.queryByRole('button', { name })).toBeNull();
+      }
+      unmount();
+    }
+  });
+
   it('uses the served document vatPercent (10%) in the VAT label and amount, not the 7% fallback', async () => {
     api.depositNotices.listByTicket.mockResolvedValue({
       depositNotices: [{ ...validDraftDoc, vatPercent: 0.10 }],

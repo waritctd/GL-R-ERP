@@ -65,7 +65,7 @@ export const CONFIRM_ORDER_STEP_KEY = 'confirm-order';
 const WAITING_ON_TEXT = { sales: 'ฝ่ายขายเจ้าของงาน', account: 'ฝ่ายบัญชี' };
 
 /**
- * The four steps: `{ key? (confirm-order only), title, state, detail?, meta?, locked?, waitingOn?, action?, actionLabel?, download? }`, state one
+ * The four steps: `{ key? (confirm-order only), title, state, detail?, meta?, locked?, waitingOn?, action?, actionLabel?, download?, edit? ('notice' | 'invoice'), editDraft? }`, state one
  * of done | current | waiting | todo | skipped. `current` only where THIS viewer can act now (the card's one primary
  * button: `action` ∈ confirm | deposit | remaining); the chain's next step when someone else holds it is `waiting`,
  * naming who (`waitingOn`) or why (`locked`).
@@ -103,6 +103,7 @@ export function quotationChainSteps(quotation, chain) {
       title: CHAIN_STEP_TITLES[2], state: 'done', detail: deposit.docNumber ?? null,
       meta: `ออกแล้ว${deposit.issueDate ? ` · ${formatThaiDate(deposit.issueDate)}` : ''}${deposit.received ? ' · รับเงินแล้ว' : ''}`,
       download: deposit.issuedNoticeId != null ? 'notice' : undefined,
+      edit: 'notice',
     };
   } else if (deposit.state === 'TO_CREATE' || deposit.state === 'DRAFT') {
     const state = turn(2);
@@ -110,6 +111,7 @@ export function quotationChainSteps(quotation, chain) {
     const percent = deposit.percent;
     depositStep = {
       title: CHAIN_STEP_TITLES[2], state,
+      ...(deposit.state === 'DRAFT' ? { edit: 'notice', editDraft: true } : {}),
       meta: deposit.state === 'DRAFT' ? 'ฉบับร่าง — ยังไม่ออกเลขที่เอกสาร'
         : percent != null ? `มัดจำ ${Number(percent)}% ตามใบเสนอราคา` : 'มัดจำตามใบเสนอราคา',
       ...(deposit.blockedReason ? { locked: blockedText(deposit.blockedReason) } : {}),
@@ -128,6 +130,7 @@ export function quotationChainSteps(quotation, chain) {
       title: CHAIN_STEP_TITLES[3], state: 'done', detail: remaining.docNumber ?? null,
       meta: `ออกแล้ว${remaining.docDate ? ` · ${formatThaiDate(remaining.docDate)}` : ''}${remaining.state === 'PAID' ? ' · รับเงินครบแล้ว' : ''}`,
       download: remaining.invoiceId != null ? 'invoice' : undefined,
+      edit: 'invoice',
     };
   } else if (remaining.state === 'NOT_NEEDED') {
     remainingStep = { title: CHAIN_STEP_TITLES[3], state: 'skipped', detail: 'ไม่ต้องออก — ชำระครบจากมัดจำ', meta: 'ไม่ต้องออก — ชำระครบจากมัดจำ' };
@@ -136,7 +139,7 @@ export function quotationChainSteps(quotation, chain) {
     remainingStep = {
       title: CHAIN_STEP_TITLES[3], state,
       ...(remaining.blockedReason ? { locked: blockedText(remaining.blockedReason) } : {}),
-      ...(remaining.state === 'DRAFT' ? { meta: 'ฉบับร่าง — ยังไม่ออกเลขที่เอกสาร' } : {}),
+      ...(remaining.state === 'DRAFT' ? { meta: 'ฉบับร่าง — ยังไม่ออกเลขที่เอกสาร', edit: 'invoice', editDraft: true } : {}),
       ...(state === 'current'
         ? { action: 'remaining', actionLabel: remaining.state === 'DRAFT' ? 'ออกใบแจ้งหนี้ส่วนที่เหลือ' : 'สร้างใบแจ้งหนี้ส่วนที่เหลือ' }
         : {}),
