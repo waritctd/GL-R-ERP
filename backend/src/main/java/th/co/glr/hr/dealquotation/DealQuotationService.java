@@ -1655,7 +1655,7 @@ public class DealQuotationService {
         TicketSummaryDto ticket = requireTicketSummary(quotation.ticketId());
         notifications.notifyByRoleAtLink(byCeo ? "sales_manager" : "ceo", TicketEventKind.DEAL_QUOTATION_DECIDED,
             actor.name() + " (" + (byCeo ? "CEO" : "ผู้จัดการฝ่ายขาย") + ") " + decision + "\n"
-                + DealNoticeText.dealLabel(ticket.code(), ticket.customerName()) + "\n" + DealNoticeText.FYI,
+                + DealNoticeText.dealLabel(ticket.code(), quotationCustomerName(quotation.id(), ticket.customerName())) + "\n" + DealNoticeText.FYI,
             "/quotations/" + quotation.id(),
             // The creator and the rep already hear the decision as APPROVED/REJECTED (#notifyRepAndCreator).
             actor.id(), quotation.createdById(), quotation.salesRepId());
@@ -2078,6 +2078,7 @@ public class DealQuotationService {
         // V204: the confirmed quotation's party has won, whichever path confirmed it.
         if (fresh.partyId() != null) {
             quotations.markPartyAwarded(fresh.partyId());
+            quotations.makeAwardedPartyHeadline(fresh.partyId());
         }
         // The agreed order is this quotation: the deal's other open direct quotations can never be submitted or approved now
         // (see requireNoOtherDirectQuotationAfterConfirm), so cancel them rather than strand them.
@@ -2089,7 +2090,7 @@ public class DealQuotationService {
                 // Only a quotation that was WAITING on approval had told SM and CEO "รออนุมัติ"; a DRAFT never did.
                 String message = actor.name() + " ยกเลิกใบเสนอราคา " + cancelled.number()
                     + " ที่รออนุมัติ เพราะยืนยันคำสั่งซื้อจากใบเสนอราคา " + fresh.number() + " แล้ว\n"
-                    + DealNoticeText.dealLabel(locked.code(), locked.customerName()) + "\nแจ้งเพื่อทราบ ไม่ต้องอนุมัติแล้ว";
+                    + DealNoticeText.dealLabel(locked.code(), quotationCustomerName(cancelled.id(), locked.customerName())) + "\nแจ้งเพื่อทราบ ไม่ต้องอนุมัติแล้ว";
                 String link = "/quotations/" + cancelled.id();
                 for (String role : List.of("sales_manager", "ceo")) {
                     notifications.notifyByRoleAtLink(role, TicketEventKind.DEAL_QUOTATION_CANCELLED, message, link, actor.id());
@@ -2109,7 +2110,7 @@ public class DealQuotationService {
         // FYI to the CEO (the pricing-request path keeps its own notice in OrderConfirmationService).
         notifications.notifyByRoleAtLink("ceo", PricingRequestEventKind.ORDER_CONFIRMED,
             actor.name() + " ยืนยันคำสั่งซื้อจากใบเสนอราคา " + fresh.number() + " แล้ว\n"
-                + DealNoticeText.dealLabel(locked.code(), locked.customerName())
+                + DealNoticeText.dealLabel(locked.code(), quotationCustomerName(quotationId, locked.customerName()))
                 + " · ยอดรวม " + ThaiText.money(fresh.grandTotal()) + " บาท · "
                 + (depositPercent == 0 ? "ไม่เก็บมัดจำ" : "มัดจำ " + depositPercent + "%")
                 + "\nแจ้งเพื่อทราบ ไม่ต้องดำเนินการ",
@@ -2434,7 +2435,8 @@ public class DealQuotationService {
                 if (!tickets.isDeadDeal(summary.ticketId())) {
                     notifications.notifyEmployeeAtLink(summary.ticketCreatedById(),
                         PricingRequestEventKind.CUSTOMER_QUOTATION_EXPIRED,
-                        DealNoticeText.quotationExpired(row.number(), summary.ticketCode(), summary.customerName()),
+                        DealNoticeText.quotationExpired(row.number(), summary.ticketCode(),
+                            quotationCustomerName(row.quotationId(), summary.customerName())),
                         "/tickets/" + summary.ticketId());
                 }
             });
@@ -2974,6 +2976,11 @@ public class DealQuotationService {
         CustomerDto customer = customers.findById(partyCustomerId)
             .orElseThrow(() -> new ApiException(HttpStatus.BAD_REQUEST, "ไม่พบลูกค้าของผู้รับเหมารายนี้"));
         return new CustomerSnapshot(customer.name(), customer.address(), customer.taxId(), customer.phone());
+    }
+
+    /** The customer a notice about this one quotation names: its party's customer, else the deal's bill-to name. */
+    private String quotationCustomerName(long quotationId, String dealCustomerName) {
+        return quotations.findPartyCustomerNameOfQuotation(quotationId).orElse(dealCustomerName);
     }
 
     private CustomerSnapshot customerSnapshot(TicketSummaryDto ticket) {
