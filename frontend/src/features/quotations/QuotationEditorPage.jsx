@@ -58,6 +58,9 @@ import {
   itemInputFromRow, newItemClientId, QuotationItemRow,
 } from './QuotationItemRow.jsx';
 import { QuotationPlainItemRow } from './QuotationPlainItemRow.jsx';
+import { ApprovalBasisPill } from './ApprovalBasisPill.jsx';
+import { ApprovedItemsPicker } from './ApprovedItemsPicker.jsx';
+import { groupForPickedLabel, locationOrNoteDiffers, reusesApprovedPricesOnly, rowFromApprovedItem } from './approvedItemsReuse.js';
 import { QuotationAdjustmentRow } from './QuotationAdjustmentRow.jsx';
 import {
   pushRecentCatalogPick, readQuotationDefaults, readRecentCatalogPicks, writeQuotationDefaults,
@@ -243,6 +246,13 @@ export function QuotationEditorPage({ user, showToast }) {
     enabled: !!effectiveTicketId && (!id || quotation?.docStatus === 'DRAFT'),
   });
   const ticket = ticketQuery.data ?? null;
+  // Add-on orders (สั่งเพิ่ม): the approved lines this order may reuse at their approved price (ADD_ON deals only).
+  const isAddOn = ticket?.childKind === 'ADD_ON';
+  const reusableQuery = useQuery({
+    queryKey: queryKeys.reusableApprovedItems(effectiveTicketId),
+    queryFn: () => api.dealQuotations.reusableApprovedItems(effectiveTicketId),
+    enabled: isAddOn && (!id || quotation?.docStatus === 'DRAFT'),
+  });
   // The pick moves the owner only for who could move it before the all-documents grant (backend DealQuotationService#moveOwnerToSalesRep's
   // mayMove): the real owner/keyer, sales_manager, CEO or a can_create_quotation holder. A canManageAllSalesDocuments holder
   // only changes the printed rep, so no hint for them. No ticket yet = a new deal the actor will own.
@@ -525,6 +535,21 @@ export function QuotationEditorPage({ user, showToast }) {
   // buildUpsertPayload save with no re-sorting.
   const [groups, setGroups] = useState(() => [{ groupId: newLocationGroupId(), label: '' }]);
   const [terms, setTerms] = useState(() => emptyTerms(storedDefaults));
+  // An add-on's deposit % follows the first order and needs approval to change: a NEW add-on quotation starts on it.
+  const depositPresetRef = useRef(false);
+  const sourceDepositPercent = reusableQuery.data?.sourceDepositPercent ?? null;
+  const sourceTerms = reusableQuery.data?.sourceTerms ?? null;
+  useEffect(() => {
+    if (id || depositPresetRef.current || sourceDepositPercent == null) return;
+    depositPresetRef.current = true;
+    const first = sourceTerms ?? {};
+    setTerms((t) => ({
+      ...t, noDeposit: Number(sourceDepositPercent) === 0, depositPercent: sourceDepositPercent,
+      depositPercentCustom: !DEPOSIT_PERCENT_PRESETS.includes(Number(sourceDepositPercent)),
+      remainderMode: first.remainderMode ?? t.remainderMode, creditDays: first.creditDays ?? t.creditDays,
+      fullPaymentTerm: first.fullPaymentTerm ?? t.fullPaymentTerm,
+    }));
+  }, [id, sourceDepositPercent, sourceTerms]);
   const [dirty, setDirtyState] = useState(false);
   // A monotonically increasing counter of "the form changed" events, bumped on every setDirty(true)
   // (once per genuine edit, never per render). A save's onSuccess captures it when it BUILT its
@@ -1085,6 +1110,15 @@ export function QuotationEditorPage({ user, showToast }) {
     setRecentPicks(pushRecentCatalogPick(user?.id, cat));
   }
 
+  function pickApprovedItem(reusableItem) {
+    setDirty(true);
+    const picked = groupForPickedLabel(groups, items, reusableItem.locationLabel);
+    const { groupId } = picked;
+    if (picked.groups !== groups) setGroups(picked.groups);
+    const row = rowFromApprovedItem(reusableItem, docSettings.priceMode, groupId);
+    setItems((prev) => insertIntoGroup(prev, row, groupId));
+  }
+
   function removeItem(clientId) {
     setDirty(true);
     setItems((prev) => prev.filter((it) => it.clientId !== clientId));
@@ -1144,6 +1178,14 @@ export function QuotationEditorPage({ user, showToast }) {
   const isEnglish = docSettings.documentLanguage === 'EN';
   const provisionalVat = Math.round(provisionalSubtotal * vatRateForLanguage(docSettings.documentLanguage) * 100) / 100;
   const provisionalGrand = provisionalSubtotal + provisionalVat;
+  const reusesApprovedOnly = isAddOn && reusesApprovedPricesOnly({
+    items, adjustments, depositPercent: terms.noDeposit ? 0 : terms.depositPercent, sourceDepositPercent, sourceTerms,
+    terms, reusable: reusableQuery.data?.items ?? [], docSettings,
+    locationOf: (it) => labelByGroupId.get(it.groupId) ?? it.locationLabel,
+  });
+  const locationNoteChanged = isAddOn && locationOrNoteDiffers({
+    items, reusable: reusableQuery.data?.items ?? [], locationOf: (it) => labelByGroupId.get(it.groupId) ?? it.locationLabel,
+  });
   // The server's own adjustment rows, in order, once the editor is clean — what each QuotationAdjustmentRow
   // shows instead of its estimate.
   const serverAdjustments = useMemo(
@@ -1202,10 +1244,9 @@ export function QuotationEditorPage({ user, showToast }) {
   // still saves (buildQuotationChecklist's CREDIT_DAYS check stays non-blocking); only #submit refuses
   // it. An explicit INVALID (<=0) value is the already-blocking QUOTATION_CHECK.CREDIT_DAYS_INVALID
   // (in hasValidationErrors) and is not repeated here.
-  const hasMissingCreditDays = terms.remainderMode === 'CREDIT'
-    && !isEffectiveZeroDeposit({
+  const hasMissingCreditDays = (isEffectiveZeroDeposit({
       noDeposit: terms.noDeposit, depositPercentCustom: terms.depositPercentCustom, depositPercent: terms.depositPercent,
-    })
+    }) ? terms.fullPaymentTerm === 'CREDIT' : terms.remainderMode === 'CREDIT')
     && (terms.creditDays === '' || terms.creditDays == null);
   const creditDaysBlockMessage = hasMissingCreditDays
     ? 'กรุณาระบุจำนวนวันเครดิต อย่างน้อย 1 วัน ก่อนส่งขออนุมัติ' : null;
@@ -1327,7 +1368,7 @@ export function QuotationEditorPage({ user, showToast }) {
     // the rep stale data before the next fetch.
     depositPercent: terms.noDeposit ? 0 : (terms.depositPercent === '' ? null : Number(terms.depositPercent)),
     remainderMode: terms.noDeposit ? null : (terms.remainderMode || null),
-    creditDays: terms.noDeposit ? null : (terms.creditDays === '' ? null : Number(terms.creditDays)),
+    creditDays: terms.noDeposit && terms.fullPaymentTerm !== 'CREDIT' ? null : (terms.creditDays === '' ? null : Number(terms.creditDays)),
     fullPaymentTerm: terms.noDeposit ? (terms.fullPaymentTerm || null) : null,
     validityDays: terms.validityDays === '' ? null : Number(terms.validityDays),
     // V178: validityDays is ALWAYS sent, in both modes so DAYS mode has a real number to fall back to the moment
@@ -1665,7 +1706,7 @@ export function QuotationEditorPage({ user, showToast }) {
       queryClient.setQueryData(queryKeys.dealQuotationDetail(id), res.quotation);
       queryClient.invalidateQueries({ queryKey: ['dealQuotations'] });
       invalidateDealViews();
-      showToast('success', 'ส่งขออนุมัติแล้ว');
+      showToast('success', res.quotation?.docStatus === 'APPROVED' ? 'อนุมัติแล้ว — ใช้ราคาเดิมที่อนุมัติแล้วในงานนี้' : 'ส่งขออนุมัติแล้ว');
       setSubmitConfirmOpen(false);
     },
     onError: (error) => showToast('error', error.message || 'ส่งขออนุมัติไม่สำเร็จ'),
@@ -2028,45 +2069,80 @@ export function QuotationEditorPage({ user, showToast }) {
    * would skip the save, and step 3 would already have cancelled the autosave that edit scheduled.
    * Reading refs means the edit whose timer step 3 cancelled is the one step 5 saves.
    */
+  // Steps 1-5 above, shared by the downloads and the copy button. Resolves false when it refused (already toasted).
+  async function flushUnsavedEdits() {
+    if (isEditable) {
+      await contactPickerRef.current?.flushPendingContactSave();
+      if (pendingSaveRef.current) {
+        // Already toasted by updateMutation's onError if it fails; fall through to the live checks.
+        await pendingSaveRef.current.catch(() => {});
+      }
+      // Cancel any pending autosave timer now, after both awaits (see header for why).
+      if (autosaveTimerRef.current) {
+        clearTimeout(autosaveTimerRef.current);
+        autosaveTimerRef.current = null;
+      }
+      // Only refuse when there is unsaved work this flush cannot save.
+      if ((dirtyRef.current || pendingSaveRef.current) && hasValidationErrorsRef.current) {
+        refuseDownloadForValidation();
+        return false;
+      }
+      if (dirtyRef.current) {
+        // Re-checked in case an edit during the pendingSaveRef await made the form newly invalid.
+        if (hasValidationErrorsRef.current) {
+          refuseDownloadForValidation();
+          return false;
+        }
+        try {
+          await runSave(false);
+        } catch {
+          // updateMutation's onError already toasted this; returning (not rethrowing) skips the
+          // download without a duplicate toast from the outer catch.
+          return false;
+        }
+      }
+    }
+    return true;
+  }
+
   async function handleDownload(format) {
     if (downloading) return; // one flush+download in flight at a time — no double-fire
     setDownloading(format);
     try {
-      if (isEditable) {
-        await contactPickerRef.current?.flushPendingContactSave();
-        if (pendingSaveRef.current) {
-          // Already toasted by updateMutation's onError if it fails; fall through to the live checks.
-          await pendingSaveRef.current.catch(() => {});
-        }
-        // Cancel any pending autosave timer now, after both awaits (see header for why).
-        if (autosaveTimerRef.current) {
-          clearTimeout(autosaveTimerRef.current);
-          autosaveTimerRef.current = null;
-        }
-        // Only refuse when there is unsaved work this flush cannot save.
-        if ((dirtyRef.current || pendingSaveRef.current) && hasValidationErrorsRef.current) {
-          refuseDownloadForValidation();
-          return;
-        }
-        if (dirtyRef.current) {
-          // Re-checked in case an edit during the pendingSaveRef await made the form newly invalid.
-          if (hasValidationErrorsRef.current) {
-            refuseDownloadForValidation();
-            return;
-          }
-          try {
-            await runSave(false);
-          } catch {
-            // updateMutation's onError already toasted this; returning (not rethrowing) skips the
-            // download without a duplicate toast from the outer catch.
-            return;
-          }
-        }
-      }
+      if (!(await flushUnsavedEdits())) return;
       const blob = format === 'pdf' ? await api.dealQuotations.downloadPdf(id) : await api.dealQuotations.downloadXlsx(id);
       downloadBlob(blob, quotation?.number ?? 'quotation', format);
     } catch (error) {
       showToast('error', error.message || 'ดาวน์โหลดไม่สำเร็จ');
+    } finally {
+      setDownloading(null);
+    }
+  }
+
+  /**
+   * "คัดลอกข้อมูล": the quotation as clean text (the PDF's Thai text copies out garbled). The flush + fetch are async
+   * but a clipboard write needs the click's user gesture, so the write is started SYNCHRONOUSLY with a ClipboardItem
+   * whose text is a promise (flush, then fetch the CURRENT saved text; no stale prefetch). Browsers without
+   * ClipboardItem fall back to writeText after the fetch.
+   */
+  async function handleCopyData() {
+    if (downloading) return;
+    setDownloading('text');
+    const fetchText = async () => {
+      if (!(await flushUnsavedEdits())) throw new Error('refused');
+      return api.dealQuotations.downloadText(id);
+    };
+    try {
+      if (typeof ClipboardItem !== 'undefined' && navigator.clipboard?.write) {
+        const textPromise = fetchText().then((text) => new Blob([text], { type: 'text/plain' }));
+        await navigator.clipboard.write([new ClipboardItem({ 'text/plain': textPromise })]);
+      } else {
+        await navigator.clipboard.writeText(await fetchText());
+      }
+      showToast('success', 'คัดลอกข้อมูลใบเสนอราคาแล้ว — วางใน Excel หรือโปรแกรมอื่นได้เลย');
+    } catch (error) {
+      // A validation refusal already toasted its own reason.
+      if (error?.message !== 'refused') showToast('error', 'คัดลอกไม่สำเร็จ — ลองอีกครั้ง');
     } finally {
       setDownloading(null);
     }
@@ -2205,6 +2281,7 @@ export function QuotationEditorPage({ user, showToast }) {
         context={(
           <>
             {status ? <StatusBadge tone={status.tone}>{status.label}</StatusBadge> : null}
+            <ApprovalBasisPill quotation={quotation} />
             {/* "เอกสารแนบ {n} ไฟล์", beside the status of the read-only details (see
                 QuotationAttachmentsLink). Not on the edit form, whose reader attached them. */}
             {quotation && !isEditable ? <QuotationAttachmentsLink user={user} quotation={quotation} /> : null}
@@ -2243,6 +2320,11 @@ export function QuotationEditorPage({ user, showToast }) {
                   { key: 'xlsx', label: 'Excel', icon: 'fileText', onSelect: () => handleDownload('xlsx'), disabled: downloading != null, disabledReason: 'กำลังดาวน์โหลด…' },
                 ]}
               />
+            ) : null}
+            {quotation ? (
+              <Button variant="secondary" disabled={downloading != null} onClick={handleCopyData}>
+                คัดลอกข้อมูล
+              </Button>
             ) : null}
             {quotation && canSubmitDealQuotation(user, quotation) ? (
               // Submit is live for PRICING_REQUEST-origin too: canSubmitDealQuotation is
@@ -2772,6 +2854,21 @@ export function QuotationEditorPage({ user, showToast }) {
               label typed once in its header (a floor with six tiles is one label, not six). Blocks
               read top-to-bottom in the order the printed document groups them (see
               locationGroupsFromItems), so the editor previews the page structure. */}
+          {isAddOn && isEditable && !isPricingRequestOrigin ? (
+            <ApprovedItemsPicker
+              query={reusableQuery}
+              rows={items}
+              currency={currency}
+              totals={{ subtotal: provisionalSubtotal, vat: provisionalVat, grand: provisionalGrand }}
+              noApproval={reusesApprovedOnly}
+              blockedReason={locationNoteChanged ? 'ต้องรออนุมัติ: ตำแหน่งติดตั้งหรือหมายเหตุของรายการต่างจากที่อนุมัติไว้' : null}
+              onPick={pickApprovedItem}
+              onUnpick={removeItem}
+              onQuantity={(clientId, field, value) => updateItem(clientId, { [field]: value })}
+              onAddOther={() => addItem()}
+            />
+          ) : null}
+
           <Panel
             title="รายการสินค้า"
             actions={isPricingRequestOrigin ? (
@@ -3026,17 +3123,40 @@ export function QuotationEditorPage({ user, showToast }) {
                   <span className="text-xs font-bold">ไม่รับมัดจำ</span>
                 </label>
                 {terms.noDeposit ? (
-                  <select
-                    id="fullPaymentTerm"
-                    className="w-full"
-                    value={terms.fullPaymentTerm}
-                    onChange={(e) => { setTerms((t) => ({ ...t, fullPaymentTerm: e.target.value })); setDirty(true); }}
-                  >
-                    <option value="">- เลือกเงื่อนไข -</option>
-                    {FULL_PAYMENT_TERM_OPTIONS.map((opt) => (
-                      <option key={opt.code} value={opt.code}>{opt.label}</option>
-                    ))}
-                  </select>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <select
+                      id="fullPaymentTerm"
+                      className="w-full"
+                      value={terms.fullPaymentTerm}
+                      onChange={(e) => {
+                        const fullPaymentTerm = e.target.value;
+                        setTerms((t) => ({ ...t, fullPaymentTerm }));
+                        setDirty(true);
+                        // Phone reps: land straight in the days box once it has rendered.
+                        if (fullPaymentTerm === 'CREDIT') setTimeout(() => document.getElementById('creditDays')?.focus(), 0);
+                      }}
+                    >
+                      <option value="">- เลือกเงื่อนไข -</option>
+                      {FULL_PAYMENT_TERM_OPTIONS.map((opt) => (
+                        <option key={opt.code} value={opt.code}>{opt.label}</option>
+                      ))}
+                    </select>
+                    {terms.fullPaymentTerm === 'CREDIT' ? (
+                      <span className="inline-flex items-center gap-1.5 text-xs text-text-muted">
+                        เครดิต
+                        <input
+                          id="creditDays"
+                          aria-label="เครดิต (จำนวนวัน)"
+                          type="number"
+                          inputMode="numeric"
+                          className="w-16 min-h-[38px] mobile:min-h-[44px]"
+                          value={terms.creditDays}
+                          onChange={(e) => { setTerms((t) => ({ ...t, creditDays: e.target.value })); setDirty(true); }}
+                        />
+                        วัน
+                      </span>
+                    ) : null}
+                  </div>
                 ) : (
                   <div className="flex flex-wrap gap-2">
                     {DEPOSIT_PERCENT_PRESETS.map((pct) => (
@@ -3305,7 +3425,11 @@ export function QuotationEditorPage({ user, showToast }) {
             </>
           )}
         >
-          <p>ส่งใบเสนอราคา {quotation?.number} ให้ผู้จัดการฝ่ายขายหรือผู้บริหารอนุมัติ ต้องการดำเนินการต่อหรือไม่</p>
+          {reusesApprovedOnly ? (
+            <p>ใบเสนอราคา {quotation?.number} ใช้ราคาเดิมที่อนุมัติแล้วทุกรายการ จึงอนุมัติทันที ไม่ต้องรออนุมัติ ต้องการดำเนินการต่อหรือไม่</p>
+          ) : (
+            <p>ส่งใบเสนอราคา {quotation?.number} ให้ผู้จัดการฝ่ายขายหรือผู้บริหารอนุมัติ ต้องการดำเนินการต่อหรือไม่</p>
+          )}
           {/* Unlike checklistWarnings below, these THREE genuinely block (the opening button is
               disabled while any is true), so they only show if the dialog was already open when a
               concurrent edit removed a lead time, re-typed a 0% deposit, or blanked a CREDIT

@@ -260,7 +260,8 @@ export function QuotationDocumentView({ quotation }) {
             </span>
             <strong>
               {quotation.depositPercent === 0 ? (
-                quotation.fullPaymentTerm ? fullPaymentTermLabel(quotation.fullPaymentTerm)
+                quotation.fullPaymentTerm === 'CREDIT' ? `บริษัทขอรับเงินค่าสินค้าภายใน ${quotation.creditDays ?? 0} วัน นับจากวันที่ส่งมอบสินค้า`
+                  : quotation.fullPaymentTerm ? fullPaymentTermLabel(quotation.fullPaymentTerm)
                   // LEGACY: a zero-deposit row saved before the term existed has no term — mirror
                   // DealQuotationRenderAdapter#depositLine's own remainderMode-based fallback text
                   // so this summary never disagrees with the printed document.
@@ -305,7 +306,10 @@ export function QuotationDocumentView({ quotation }) {
           <div>
             <span className="block text-2xs font-bold uppercase text-text-muted">{labels.approvedBy}</span>
             <strong className="block mt-6 border-t border-border pt-2">
-              {quotation.docStatus === 'APPROVED' ? (name(quotation.approvedByNameEn, quotation.approvedByName) ?? '-') : ''}
+              {quotation.docStatus === 'APPROVED'
+                ? (quotation.approvalBasis ? `อนุมัติตามราคาเดิม ${quotation.approvalSourceNumbers ?? ''}`.trim()
+                  : (name(quotation.approvedByNameEn, quotation.approvedByName) ?? '-'))
+                : ''}
             </strong>
           </div>
           <div>

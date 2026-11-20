@@ -1,5 +1,6 @@
 import { Link } from 'react-router-dom';
 import { Icon } from '../../components/common/Icon.jsx';
+import { orderTotalLabel } from '../tickets/orderChain.js';
 import {
   BOARD_COLUMNS, MONEY_CHIP_COLUMNS, cardMoneyChip, money, otherCurrencyTotals, ownerShortName, quarterLabel, sumValue,
   totalLabel,
@@ -62,6 +63,7 @@ function DealCard({ deal, showCode, showOwner }) {
         className="min-w-0 break-words text-sm font-bold text-text no-underline after:absolute after:inset-0 after:rounded-md after:content-[''] hover:underline focus-visible:underline focus-visible:after:outline-2 focus-visible:after:outline-offset-2 focus-visible:after:outline-primary"
       >
         {deal.title || deal.customerName}
+        {deal.orderCount > 1 ? <span className="font-normal text-text-muted">{` · ${deal.orderCount} ออเดอร์`}</span> : null}
       </Link>
       {buyer ? (
         <span className="flex min-w-0 items-baseline text-xs text-text-muted">
@@ -81,6 +83,7 @@ function DealCard({ deal, showCode, showOwner }) {
       <span className="flex flex-wrap items-center justify-between gap-2">
         <span className="flex flex-wrap items-baseline gap-1.5">
           <span className="text-sm font-bold tabular-nums text-text">{money(deal.value, deal.currency)}</span>
+          {orderTotalLabel(deal) ? <span className="text-xs text-text-muted">{orderTotalLabel(deal)}</span> : null}
           {deal.valueExpired ? <Chip>หมดอายุ</Chip> : null}
         </span>
         <span className="flex flex-wrap gap-1">

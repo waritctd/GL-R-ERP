@@ -4314,7 +4314,7 @@ function mockUndoRefusal(ticket) {
   const promotionId = mockConfirmedQuotationEvent(ticket)?.id ?? 0;
   const after = (kinds) => ticket.events.some((e) => kinds.includes(e.kind) && e.id > promotionId);
   if (after(['BID_OUTCOME_RECORDED']) || ticket.events.some((e) => e.kind === 'DEAL_SPLIT_FROM_PARENT')
-    || db.tickets.some((t) => t.parentTicketId === ticket.id)) {
+    || db.tickets.some((t) => t.parentTicketId === ticket.id && t.childKind !== 'ADD_ON')) {
     return 'ยกเลิกไม่ได้ — คำสั่งซื้อนี้มาจากการบันทึกผลประมูลหรือการแยกงาน';
   }
   if (mockRemainingInvoices.some((r) => r.ticketId === ticket.id)) return 'ยกเลิกไม่ได้ — ออกใบแจ้งหนี้ส่วนที่เหลือแล้ว';
@@ -5018,6 +5018,19 @@ export function applyImportRequestRollupMock(ticket, actor) {
   autoAdvanceStage(ticket, 'DELIVERY_SCHEDULING', actor);
 }
 
+// TicketSummaryDto#parentTicketId / parentCode / childKind / addOnCount (V231). A child is a bid-split or an add-on
+// order; addOnCount is the ROOT's add-on count (an add-on reports its root's), as TicketRepository.SUMMARY_SELECT does.
+function mockLinkFacts(t) {
+  const parent = t.parentTicketId != null ? db.tickets.find((x) => x.id === t.parentTicketId) : null;
+  const rootId = t.childKind === 'ADD_ON' && t.parentTicketId != null ? t.parentTicketId : t.id;
+  return {
+    parentTicketId: t.parentTicketId ?? null,
+    parentCode: parent?.code ?? null,
+    childKind: t.parentTicketId != null ? (t.childKind ?? 'BID_SPLIT') : null,
+    addOnCount: db.tickets.filter((x) => x.parentTicketId === rootId && x.childKind === 'ADD_ON').length,
+  };
+}
+
 function buildTicketDetail(ticket) {
   const project = ticket.projectId ? mockProjects.find((p) => p.id === ticket.projectId) : null;
   const contact = ticket.contactId ? mockContacts.find((c) => c.id === ticket.contactId) : null;
@@ -5078,6 +5091,7 @@ function buildTicketDetail(ticket) {
       commissionRecorded: hasRecordedCommission(ticket),
       // TicketSummaryDto.quotationOnly.
       quotationOnly: ticket.quotationOnly === true,
+      ...mockLinkFacts(ticket),
       // Mirrors TicketSummaryDto#liveDirectQuotation.
       liveDirectQuotation: mockLiveDirectQuotation(ticket.id),
       ...paymentFields,
@@ -6920,6 +6934,172 @@ function mintDealQuotationReorder(source, user) {
 // ran against the PARENT's current data before either branch is reached -- the revision is a
 // verbatim copy of that data, so it is validated by construction and this never re-checks it,
 // matching the real service.
+// ── V232 add-on reuse: mirrors DealQuotationService#reusesApprovedPricesOnly / #keepValidSources / #reusableApprovedItems ──
+const MOCK_APPROVED_QUOTATION_STATUSES = ['APPROVED', 'ISSUED', 'SENT', 'ACCEPTED'];
+const MOCK_REUSE_RULE_NOTE = 'อนุมัติตามราคาเดิมที่อนุมัติแล้วในงานนี้';
+
+/** The project's chain from any order of it: the root and its ADD_ON children (never a BID_SPLIT child). */
+function mockOrderChain(ticket) {
+  const root = ticket.childKind === 'ADD_ON' && ticket.parentTicketId != null
+    ? db.tickets.find((t) => t.id === ticket.parentTicketId) : ticket;
+  return [root, ...db.tickets.filter((t) => t.parentTicketId === root.id && t.childKind === 'ADD_ON')
+    .sort((a, b) => a.id - b.id)];
+}
+
+/** M1 (DealQuotationService#reuseCustomerId): the customer whose approved prices may be reused: the first order's
+ * confirmed quotation's party, else the party being written to, else the deal's own customer. -1 matches nothing. */
+function mockReuseCustomerId(ticket, ownPartyId = null) {
+  const customerOf = (partyId) => (partyId != null ? mockDealParties.find((p) => p.id === Number(partyId))?.customerId ?? null : null);
+  const root = mockOrderChain(ticket)[0];
+  const confirmed = mockConfirmedQuotationEvent(root)
+    ? mockDealQuotations.find((q) => q.id === root.orderConfirmedQuotationId) : null;
+  return customerOf(confirmed?.partyId) ?? customerOf(ownPartyId) ?? ticket.customerId ?? -1;
+}
+
+/** Every line of every approved quotation in the chain addressed to `customerId`, latest approval first. */
+function mockApprovedChainSources(ticket, customerId) {
+  const chain = mockOrderChain(ticket);
+  return mockDealQuotations
+    .filter((q) => chain.some((t) => t.id === q.ticketId) && MOCK_APPROVED_QUOTATION_STATUSES.includes(q.docStatus)
+      && (mockDealParties.find((p) => p.id === q.partyId)?.customerId ?? chain.find((t) => t.id === q.ticketId)?.customerId) === customerId)
+    .sort((a, b) => String(b.approvedAt ?? '').localeCompare(String(a.approvedAt ?? '')) || b.id - a.id)
+    .flatMap((q) => {
+      const owner = chain.find((t) => t.id === q.ticketId);
+      const orderCode = owner.childKind === 'ADD_ON' ? owner.code : `${owner.code}-1`;
+      return (q.items ?? []).map((item) => ({ item, quotation: q, orderCode }));
+    });
+}
+
+/** The first order's agreed quotation: the root's confirmed one, else the latest approved one of the chain. */
+function mockReferenceQuotation(ticket, sources) {
+  const root = mockOrderChain(ticket)[0];
+  const confirmed = mockConfirmedQuotationEvent(root)
+    ? mockDealQuotations.find((q) => q.id === root.orderConfirmedQuotationId) : null;
+  return confirmed ?? sources[0]?.quotation ?? null;
+}
+
+/** A claim of reuse is kept only for an approved item of this ADD_ON deal's chain; anywhere else it is dropped. */
+function mockKeepValidSources(ticket, items, ownPartyId = null) {
+  const valid = ticket.childKind === 'ADD_ON'
+    ? new Set(mockApprovedChainSources(ticket, mockReuseCustomerId(ticket, ownPartyId)).map((s) => s.item.id)) : new Set();
+  items.forEach((it) => {
+    if (it.sourceQuotationItemId != null && !valid.has(it.sourceQuotationItemId)) it.sourceQuotationItemId = null;
+  });
+}
+
+const sameMockText = (a, b) => (String(a ?? '').trim() || null) === (String(b ?? '').trim() || null);
+const sameMockMoney = (a, b) => (a == null ? b == null : b != null && Number(a) === Number(b));
+
+/** The server's rule, never the client's claim; anything else falls back to the ordinary approval. Quantity is never checked. */
+function mockReusesApprovedPricesOnly(row, ticket) {
+  if ((row.origin || 'DEAL_DIRECT') !== 'DEAL_DIRECT' || ticket.childKind !== 'ADD_ON' || !row.items?.length) return false;
+  if (row.items.some((it) => it.sourceQuotationItemId == null || (it.lineType ?? 'TILE') === 'ADJUSTMENT')) return false;
+  const customerId = mockReuseCustomerId(ticket, row.partyId);
+  const ownCustomer = row.partyId != null ? mockDealParties.find((p) => p.id === row.partyId)?.customerId ?? null : null;
+  if (ownCustomer != null && ownCustomer !== customerId) return false;
+  const sources = mockApprovedChainSources(ticket, customerId);
+  const reference = mockReferenceQuotation(ticket, sources);
+  if (!reference || reference.depositPercent == null || reference.depositPercent !== row.depositPercent
+    || (reference.validityDays ?? null) !== (row.validityDays ?? null)
+    || !sameMockText(reference.remainderMode, row.remainderMode) || (reference.creditDays ?? null) !== (row.creditDays ?? null)
+    || !sameMockText(reference.fullPaymentTerm, row.fullPaymentTerm)
+    || row.validityMode === 'DATE' || String(row.customerNotes ?? '').trim() !== '') return false;
+  return row.items.every((it) => {
+    const src = sources.find((s2) => s2.item.id === it.sourceQuotationItemId);
+    if (!src) return false;
+    const a = it;
+    const b = src.item;
+    return sameMockMoney(a.unitPrice, b.unitPrice) && sameMockMoney(a.discountPct, b.discountPct)
+      && sameMockMoney(a.netUnitPrice, b.netUnitPrice) && sameMockMoney(a.listPriceSqm, b.listPriceSqm)
+      && sameMockMoney(a.directNetPriceSqm, b.directNetPriceSqm) && sameMockMoney(a.specialPriceSqm, b.specialPriceSqm)
+      && (a.priceMode ?? null) === (b.priceMode ?? null)
+      && (row.priceMode ?? null) === (src.quotation.priceMode ?? null)
+      && (row.currency ?? null) === (src.quotation.currency ?? null)
+      && (row.documentLanguage ?? null) === (src.quotation.documentLanguage ?? null)
+      && (a.lineType ?? 'TILE') === (b.lineType ?? 'TILE') && (a.catalogPriceId ?? null) === (b.catalogPriceId ?? null)
+      && ['productCode', 'brand', 'model', 'color', 'texture', 'sizeText', 'originCountry', 'unit', 'descriptionLine']
+        .every((k) => sameMockText(a[k], b[k]))
+      && sameMockMoney(a.thicknessMm, b.thicknessMm) && sameMockMoney(a.sqmPerPiece, b.sqmPerPiece)
+      && sameMockMoney(a.sqmPerBox, b.sqmPerBox) && (a.piecesPerBox ?? null) === (b.piecesPerBox ?? null)
+      // I2: the printed delivery promise is part of what is sold.
+      && (a.leadTimeMinDays ?? null) === (b.leadTimeMinDays ?? null)
+      && (a.leadTimeMaxDays ?? null) === (b.leadTimeMaxDays ?? null) && sameMockText(a.stockSource, b.stockSource)
+      && sameMockText(a.locationLabel, b.locationLabel) && sameMockText(a.itemNotes, b.itemNotes);
+  });
+}
+
+/** The DEAL_DIRECT approval proper (DealQuotationService#approveCore), shared by approve() and the add-on reuse rule. */
+function mockApproveDirectRow(row, user, note) {
+  const now = new Date().toISOString();
+  row.docStatus = 'APPROVED';
+  row.approvedById = user.employeeId ?? null;
+  row.approvedByName = user.name;
+  // V175: snapshot the approver's signature presence at approval (DealQuotationRepository#approve).
+  row.approverSignatureSnapshot = row.approvedById != null && mockEmployeeSignatures.has(Number(row.approvedById));
+  row.approvedAt = now;
+  row.approvalDecidedAt = now;
+  row.approvalDecidedBy = user.employeeId ?? null;
+  row.approvalNote = note;
+  // "validity_date = quotation date + N, written at approval". Uses this file's OWN
+  // bangkokTodayIso() (above, near round2) -- Bangkok LOCAL date, not `now.slice(0, 10)`, which
+  // reads the UTC calendar day off a UTC instant and is one day behind Bangkok on any approval
+  // made between 00:00-06:59 Bangkok time (UTC+7).
+  row.quotationDate = bangkokTodayIso();
+  // V178: a DATE-mode document WITH special pricing keeps its OWN validity_until verbatim (approval never
+  // recomputes it); every other case falls back to the existing day-count rule.
+  row.validityDate = row.validityMode === 'DATE' && hasSpecialPricing(row.priceMode, row.items)
+    ? row.validityUntil
+    : (row.validityDays ? addDaysIso(row.quotationDate, row.validityDays) : null);
+  row.updatedAt = now;
+  // One live offer per DEAL, any origin: sweep BEFORE the ancestor walk so a revision's parent
+  // gets its event from the sweep. See the helper's header.
+  supersedeOtherLiveMockDealQuotations(row, user, now);
+  // "When the child is APPROVED the parent becomes SUPERSEDED (not before)" -- the customer's
+  // last approved document stays valid until replaced. Runs AFTER the sweep above and stays
+  // SILENT -- no ticket event: a DRAFT ancestor from a reject/resubmit chain is invisible to
+  // the sweep's own `docStatus === 'APPROVED'` filter, so this walk is the only thing that ever
+  // supersedes one, and nothing asks for that to be logged. Walks the WHOLE ancestry chain, not
+  // just the immediate parent -- mirrors DealQuotationService#approve's own ancestor walk (see
+  // that method's Javadoc: a single hop strands every ancestor above the immediate parent
+  // forever in a 2+ reject/resubmit chain).
+  let ancestorId = row.parentQuotationId;
+  while (ancestorId) {
+    const ancestor = mockDealQuotations.find((q) => q.id === ancestorId);
+    if (!ancestor) break;
+    if (canTransitionDealQuotation(ancestor.docStatus, 'SUPERSEDED')) {
+      ancestor.docStatus = 'SUPERSEDED';
+      ancestor.updatedAt = now;
+    }
+    ancestorId = ancestor.parentQuotationId;
+  }
+  // Mirrors DealQuotationService#approve's QUOTATION_ISSUED event and TicketService#applyApprovedQuotation
+  // (spec 2026-11-15 §7.2): advance onto the recipient's stage (forward-only) and fill a blank party name with
+  // the quotation's addressee. A non-ACTIVE deal is left alone.
+  const dealTicket = db.tickets.find((t) => t.id === row.ticketId);
+  if (dealTicket) {
+    pushEvent(dealTicket, user, 'QUOTATION_ISSUED', null, null, `อนุมัติใบเสนอราคา ${row.number}`);
+    mockApplyApprovedQuotation(dealTicket, row, user);
+  }
+}
+
+/** DealQuotationService#submitDraftRow: an ADD_ON draft that reuses approved prices only is approved at once, no notice. */
+function submitDealQuotationRowOrApproveByRule(row, ticket, user, afterRejection = false) {
+  if (afterRejection || !mockReusesApprovedPricesOnly(row, ticket)) return submitDealQuotationRow(row, user);
+  const now = new Date().toISOString();
+  row.docStatus = 'PENDING_APPROVAL';
+  row.submittedAt = now;
+  row.submittedBy = user.id;
+  row.updatedAt = now;
+  mockApproveDirectRow(row, user, MOCK_REUSE_RULE_NOTE);
+  // DealQuotationRepository#approveByReuseRule: no approver snapshot, the basis and source numbers stored.
+  const sourceIds = new Set(row.items.map((it) => it.sourceQuotationItemId));
+  row.approvalBasis = 'REUSED_APPROVED_PRICE';
+  row.approvalSourceNumbers = [...new Set(mockApprovedChainSources(ticket, mockReuseCustomerId(ticket, row.partyId))
+    .filter((src) => sourceIds.has(src.item.id)).map((src) => src.quotation.number))].join(', ');
+  row.approverSignatureSnapshot = false;
+  return delay({ quotation: buildDealQuotationDto(row) });
+}
+
 function submitDealQuotationRow(row, user) {
   const now = new Date().toISOString();
   row.docStatus = 'PENDING_APPROVAL';
@@ -7520,19 +7700,20 @@ function resolveDealQuotationDepositTerms(payload) {
   const depositPercent = payload.depositPercent ?? null;
   const noDeposit = depositPercent === 0;
   const remainderMode = noDeposit ? null : (payload.remainderMode ?? null);
-  const creditDays = noDeposit ? null : (payload.creditDays ?? null);
+  const creditTerm = noDeposit && payload.fullPaymentTerm === 'CREDIT';
+  const creditDays = noDeposit && !creditTerm ? null : (payload.creditDays ?? null);
   // Mirrors DealQuotationService#requireValidCreditDays: an EXPLICIT non-blank but invalid
   // creditDays (0 or negative) is refused immediately on every save when remainderMode is CREDIT. A
   // blank value still saves (a draft may be incomplete) -- only submit() below requires it be
   // filled in, the same split fullPaymentTerm already uses.
-  if (remainderMode === 'CREDIT' && creditDays != null && Number(creditDays) <= 0) {
+  if ((remainderMode === 'CREDIT' || creditTerm) && creditDays != null && Number(creditDays) <= 0) {
     fail('กรุณาระบุจำนวนวันเครดิต อย่างน้อย 1 วัน', 400);
   }
   let fullPaymentTerm = null;
   if (noDeposit) {
     fullPaymentTerm = payload.fullPaymentTerm ? String(payload.fullPaymentTerm).trim() : null;
-    if (fullPaymentTerm && !['BEFORE_DELIVERY', 'ON_DELIVERY', 'ON_OR_BEFORE_DELIVERY'].includes(fullPaymentTerm)) {
-      fail('ต้องเป็น BEFORE_DELIVERY, ON_DELIVERY หรือ ON_OR_BEFORE_DELIVERY', 400);
+    if (fullPaymentTerm && !['BEFORE_DELIVERY', 'ON_DELIVERY', 'ON_OR_BEFORE_DELIVERY', 'CREDIT'].includes(fullPaymentTerm)) {
+      fail('ต้องเป็น BEFORE_DELIVERY, ON_DELIVERY, ON_OR_BEFORE_DELIVERY หรือ CREDIT', 400);
     }
   }
   return { depositPercent, remainderMode, creditDays, fullPaymentTerm };
@@ -7591,6 +7772,8 @@ function buildDealQuotationItems(inputs, priceMode, existingItems = null, docume
       priceMode: mixed && dealQuotationLineType(item) === 'TILE' ? rowMode : null,
       // DealQuotationRequests.ItemInput#stockSource: IN_THAILAND on a TILE row only; IN_TRANSIT is a pricing-request value.
       stockSource: dealQuotationLineType(item) === 'TILE' && item.stockSource === 'IN_THAILAND' ? 'IN_THAILAND' : null,
+      // V232: the approved item a reused add-on line copies; emptied by mockKeepValidSources unless it is valid.
+      sourceQuotationItemId: item.sourceQuotationItemId ?? null,
     };
   });
   const known = items.every((it) => it.lineAmount != null);
@@ -7722,7 +7905,10 @@ function buildDealQuotationDto(row) {
     salesRepPhone: row.salesRepPhone,
     submittedAt: row.submittedAt,
     approvedById: row.approvedById,
-    approvedByName: row.approvedByName,
+    // A rule-approved (add-on reuse) document names no approver; the basis says how it was approved.
+    approvedByName: row.approvalBasis ? null : row.approvedByName,
+    approvalBasis: row.approvalBasis ?? null,
+    approvalSourceNumbers: row.approvalSourceNumbers ?? null,
     approvedByNameEn: row.approvedByNameEn ?? null,
     approvedAt: row.approvedAt,
     approvalNote: row.approvalNote,
@@ -8163,7 +8349,7 @@ for (const t of db.tickets) {
  * onto ORDER_RECEIVED the same way the parent is. Code `<parent>-A`, `-B`, …
  */
 function mockForkChildDeal(parent, party, user) {
-  const siblings = db.tickets.filter((t) => t.parentTicketId === parent.id).length;
+  const siblings = db.tickets.filter((t) => t.parentTicketId === parent.id && t.childKind !== 'ADD_ON').length;
   const nextId = Math.max(...db.tickets.map((t) => t.id)) + 1;
   const customer = mockCustomers.find((c) => c.id === party.customerId);
   const now = new Date().toISOString();
@@ -8171,7 +8357,7 @@ function mockForkChildDeal(parent, party, user) {
     ...structuredClone({ ...parent, events: [], items: [], quotations: [], quotation: null }),
     id: nextId,
     code: `${parent.code}-${siblings < 26 ? String.fromCharCode(65 + siblings) : siblings + 1}`,
-    parentTicketId: parent.id,
+    parentTicketId: parent.id, childKind: 'BID_SPLIT',
     customerId: party.customerId, customerName: customer?.name ?? null, contactId: party.contactId ?? null,
     title: customer?.name ?? parent.title,
     status: 'draft', paymentStatus: null, fulfillmentStatus: null,
@@ -8795,7 +8981,7 @@ function mockWithPaymentDue(rows) {
   // Callers (fix round 2): my-work board, team-board board, and my-work's returning followUp rows.
   return rows.map((d) => {
     if (d.boardColumn < 4) return d;
-    const due = derivePaymentFields(db.tickets.find((t) => t.id === d.ticketId));
+    const due = derivePaymentFields(db.tickets.find((t) => t.id === (d.leadTicketId ?? d.ticketId)));
     return { ...d, paymentDueDate: due.paymentDueDate ?? null, overdue: Boolean(due.overdue) };
   });
 }
@@ -8821,15 +9007,99 @@ export function receiptSourceForTests(allReceipts) {
 
 /** Every open deal (ACTIVE, not CLOSED_PAID) as a BoardDeal, ordered as the repository's
  * `ORDER BY last_touched_at, t.ticket_id`. */
-function mockBoardDeals() {
-  return mockBoardRows((t) => (t.lifecycle ?? 'ACTIVE') === 'ACTIVE' && t.salesStage !== 'CLOSED_PAID');
+function mockBoardDeals(ownerScope = null) {
+  return mockProjectFold(
+    mockBoardRows((t) => (t.lifecycle ?? 'ACTIVE') === 'ACTIVE' && t.salesStage !== 'CLOSED_PAID'
+      && (ownerScope == null || t.createdById === ownerScope)),
+    mockBoardFoldOps(ownerScope),
+  );
 }
 
 /** SalesBoardRepository#returningPausedDeals*: paused deals whose วันที่จะกลับมาดู has arrived (QuietRule#returningSql,
  * mirrored by quietRule.js#isReturning), in the same row shape and order. */
-function mockReturningPausedDeals() {
+function mockReturningPausedDeals(ownerScope = null) {
   const today = mockTodayIso();
-  return mockBoardRows((t) => mockIsReturning(t, today) && t.salesStage !== 'CLOSED_PAID');
+  return mockProjectFold(
+    mockBoardRows((t) => mockIsReturning(t, today) && t.salesStage !== 'CLOSED_PAID'
+      && (ownerScope == null || t.createdById === ownerScope)),
+    mockBoardFoldOps(ownerScope),
+    true,
+  );
+}
+
+/**
+ * Mirrors th.co.glr.hr.ticket.ProjectFold, THE fold rule (one row per project), once for every list that folds:
+ * the root's identity; state from the lead order (the root when open, else the open add-on with the latest activity,
+ * else the root); orders counted = the viewer's visible non-cancelled chain, root first; value = the OPEN orders only;
+ * link = the root when the viewer may see it, else the lead. Rows outside an add-on chain pass through.
+ * `o`: { id, parentId (null unless ADD_ON), code, visible, open, cancelled, activity, related(keys) -> rows,
+ * project({root, lead, orders, open, mayOpenRoot}) -> row }.
+ */
+function mockProjectFold(rows, o, skipIfOpen = false) {
+  const keys = new Set(rows.map((r) => o.parentId(r) ?? o.id(r)));
+  if (!keys.size) return rows;
+  const byId = new Map(rows.map((r) => [o.id(r), r]));
+  for (const r of o.related(keys)) if (!byId.has(o.id(r))) byId.set(o.id(r), r);
+  const addOns = new Map();
+  for (const r of byId.values()) {
+    const parent = o.parentId(r);
+    if (parent != null) addOns.set(parent, [...(addOns.get(parent) ?? []), r]);
+  }
+  const done = new Set();
+  const out = [];
+  for (const r of rows) {
+    const key = o.parentId(r) ?? o.id(r);
+    const root = byId.get(key);
+    if (!addOns.has(key) || !root) { out.push(r); continue; }
+    if (done.has(key)) continue;
+    done.add(key);
+    const chain = [root, ...addOns.get(key).sort((x, y) => o.id(x) - o.id(y))];
+    const visible = chain.filter(o.visible);
+    let orders = visible.filter((x) => !o.cancelled(x));
+    if (!orders.length) orders = visible;
+    if (!orders.length) { out.push(r); continue; }
+    const open = orders.filter(o.open);
+    if (skipIfOpen && open.length) continue;
+    const rootVisible = o.visible(root);
+    const latest = (list) => list.reduce((best, x) => {
+      const [ax, ab] = [o.activity(x) ?? '', o.activity(best) ?? ''];
+      return ax > ab || (ax === ab && o.id(x) > o.id(best)) ? x : best;
+    });
+    const lead = rootVisible && o.open(root) && !o.cancelled(root) ? root
+      : open.length ? latest(open) : rootVisible ? root : latest(orders);
+    out.push(o.project({ root, lead, orders, open, mayOpenRoot: rootVisible }));
+  }
+  return out;
+}
+
+/** The board's view of a row (SalesBoardRepository's Ops): facts come from the stored ticket. */
+function mockBoardFoldOps(ownerScope) {
+  const ticket = (r) => db.tickets.find((x) => x.id === r.ticketId);
+  const isAddOn = (r) => ticket(r)?.childKind === 'ADD_ON' && ticket(r).parentTicketId != null;
+  return {
+    id: (r) => r.ticketId,
+    parentId: (r) => (isAddOn(r) ? ticket(r).parentTicketId : null),
+    visible: (r) => ownerScope == null || r.ownerId === ownerScope,
+    open: (r) => (ticket(r).lifecycle ?? 'ACTIVE') === 'ACTIVE' && ticket(r).salesStage !== 'CLOSED_PAID',
+    cancelled: (r) => ['CANCELLED', 'CLOSED_LOST'].includes(ticket(r).lifecycle),
+    activity: (r) => r.lastTouchedAt,
+    related: (keys) => mockBoardRows((t) => keys.has(t.id) || (t.childKind === 'ADD_ON' && keys.has(t.parentTicketId))),
+    project: ({ root, lead, orders, open, mayOpenRoot }) => {
+      let value = null;
+      let currency = null;
+      for (const x of open.length ? open : orders) {
+        if (x.value == null) continue;
+        if (value == null) { value = x.value; currency = x.currency; } else if (currency === x.currency) value = round2(Number(value) + Number(x.value));
+      }
+      const owner = orders.includes(root) ? root : lead;
+      return {
+        ...lead, ticketId: mayOpenRoot ? root.ticketId : lead.ticketId, title: root.title, customerName: root.customerName,
+        projectName: root.projectName, ownerId: owner.ownerId, ownerName: owner.ownerName, value, currency,
+        orderCount: orders.length, openOrderCount: open.length, orderCodes: [...new Set([root, ...orders].map((x) => x.orderCodes[0]))],
+        leadTicketId: lead.ticketId,
+      };
+    },
+  };
 }
 
 function mockBoardRows(include) {
@@ -8874,6 +9144,10 @@ function mockBoardRows(include) {
         // V220 (BoardDeal.returning / pauseReturnOn): a paused deal coming back — never an ACTIVE board row.
         returning: mockIsReturning(t, today),
         pauseReturnOn: t.pauseReturnOn ?? null,
+        orderCount: 1,
+        openOrderCount: 1,
+        orderCodes: [t.code],
+        leadTicketId: t.id,
         ...mockBoardCardDetails(t, valueQuotation),
         lastTouchedMs: last,
       };
@@ -9883,6 +10157,7 @@ export const api = {
         // too because accountActions.js's worklist is built from list rows, not detail fetches.
         commissionRecorded: hasRecordedCommission(t),
         quotationOnly: t.quotationOnly === true,
+        ...mockLinkFacts(t),
         // Mirrors TicketSummaryDto#liveDirectQuotation on the LIST projection — the CTA cascade and
         // the DealPicker read list rows.
         liveDirectQuotation: mockLiveDirectQuotation(t.id),
@@ -9890,7 +10165,39 @@ export const api = {
         nextFollowUpAt: t.nextFollowUpAt ?? null,
         ...movementFlags(t),
         ...derivePaymentFields(t),
+        orderCount: 1, openOrderCount: 1, orderCodes: [],
       }));
+      if (params.fold != null && params.fold !== 'project') fail('fold ต้องเป็น project', 400);
+      // fold=project: ProjectFold, sales / sales_manager / ceo only (import and account act on each order).
+      if (params.fold === 'project' && canReadActivities) {
+        const listed = new Set(tickets.map((x) => x.id));
+        const lifecycleOf = (x) => x.lifecycle ?? 'ACTIVE';
+        const sum = (rows, field) => rows.reduce((acc, x) => (x[field] == null ? acc : (acc ?? 0) + Number(x[field])), null);
+        return delay({
+          tickets: mockProjectFold(tickets, {
+            id: (x) => x.id,
+            parentId: (x) => (x.childKind === 'ADD_ON' ? x.parentTicketId : null),
+            visible: (x) => listed.has(x.id),
+            open: (x) => lifecycleOf(x) === 'ACTIVE' && x.salesStage !== 'CLOSED_PAID',
+            cancelled: (x) => ['CANCELLED', 'CLOSED_LOST'].includes(lifecycleOf(x)),
+            activity: (x) => [x.lastActivityAt, x.stageUpdatedAt].filter(Boolean).sort().at(-1) ?? null,
+            // A root outside the viewer's list lends its code and title only.
+            related: (keys) => [...keys].filter((k) => !listed.has(k)).map((k) => db.tickets.find((x) => x.id === k)).filter(Boolean)
+              .map((x) => ({ ...x, projectName: x.projectId ? (mockProjects.find((q) => q.id === x.projectId)?.name ?? null) : null })),
+            project: ({ root, lead, orders, open, mayOpenRoot }) => {
+              const counted = open.length ? open : orders;
+              return {
+                ...lead, id: mayOpenRoot ? root.id : lead.id, code: root.code, title: root.title,
+                customerName: root.customerName, projectId: root.projectId ?? null, projectName: root.projectName ?? null,
+                parentTicketId: null, parentCode: null, childKind: null,
+                amountPayable: sum(counted, 'amountPayable'), amountPaid: sum(counted, 'amountPaid'),
+                amountOutstanding: sum(counted, 'amountOutstanding'),
+                orderCount: orders.length, openOrderCount: open.length, orderCodes: [...new Set([root, ...orders].map((x) => x.code))],
+              };
+            },
+          }),
+        });
+      }
       return delay({ tickets });
     },
 
@@ -10849,6 +11156,96 @@ export const api = {
       pushEvent(ticket, user, 'BID_OUTCOME_RECORDED', ticket.status, ticket.status,
         `บันทึกผลประมูล: ได้งาน ${awarded.map(mockPartyName).join(', ')}`);
       return delay({ result: { primaryTicketId: ticket.id, childTicketIds, ticket: buildTicketDetail(ticket).summary } });
+    },
+
+    // POST /api/tickets/{id}/add-on-orders: DealPartyService#createAddOnOrder (404, then 403, then 409).
+    async createAddOnOrder(ticketId) {
+      const source = findTicketRaw(Number(ticketId));
+      const user = requireSession();
+      if (!(isOwnerOrKeyer(source, user.id) || holdsAllSalesDocumentsGrant(user))) {
+        fail('ไม่มีสิทธิ์เปิดออเดอร์เพิ่มในงานนี้', 403);
+      }
+      requireActive(source);
+      const root = source.childKind === 'ADD_ON' && source.parentTicketId != null ? findTicketRaw(source.parentTicketId) : source;
+      const n = db.tickets.filter((t) => t.parentTicketId === root.id && t.childKind === 'ADD_ON').length + 2;
+      const nextId = Math.max(...db.tickets.map((t) => t.id)) + 1;
+      const now = new Date().toISOString();
+      const child = {
+        ...structuredClone({ ...root, events: [], items: [], quotations: [], quotation: null }),
+        id: nextId, code: `${root.code}-${n}`,
+        parentTicketId: root.id, childKind: 'ADD_ON',
+        keyedById: user.id, keyedByName: user.name,
+        status: 'draft', paymentStatus: null, fulfillmentStatus: null,
+        lifecycle: 'ACTIVE', lostReason: null, lostAt: null,
+        quotationOnly: true, orderConfirmedQuotationId: null, closeConfirmedAt: null, closeConfirmedByName: null,
+        // The customer is already buying: the order starts where a buyer quotation is drafted (QUOTE_BUYER is on every
+        // route), with the normal stage event, like DealPartyService#createAddOnOrder.
+        salesStage: 'QUOTE_BUYER', createdAt: now.slice(0, 10), updatedAt: now.slice(0, 10), closedAt: null, stageUpdatedAt: now,
+        events: [],
+        // DealPartyRepository#forkAddOn copies none of these: the root's value must not be counted twice on the board.
+        estimatedValue: null, importedValue: null, expectedQuarter: null, buyerName: null, pauseReturnOn: null,
+        lastFollowUpAt: null,
+      };
+      db.tickets.unshift(child);
+      const headline = mockPartiesOf(root.id).find((p) => p.headline);
+      if (headline) {
+        mockInsertDealParty({
+          ticketId: child.id, customerId: headline.customerId, contactId: headline.contactId, role: headline.role,
+          status: 'ACTIVE', headline: true, addedById: user.id,
+        });
+      }
+      pushEvent(child, user, 'CREATED', null, 'draft', null);
+      pushEvent(child, user, 'STAGE_CHANGED', 'LEAD_APPROACH', 'QUOTE_BUYER', 'เริ่มที่ขั้นเสนอราคาผู้ซื้อ (ออเดอร์เพิ่ม)');
+      pushEvent(child, user, 'ADD_ON_ORDER_CREATED', null, null, `ออเดอร์เพิ่มของ ${root.code}`);
+      pushEvent(root, user, 'ADD_ON_ORDER_CREATED', null, null, `เปิดออเดอร์เพิ่ม ${child.code}`);
+      return delay({ addOnOrder: { ticketId: child.id, code: child.code, parentTicketId: root.id } });
+    },
+
+    // GET /api/tickets/{id}/orders: DealPartyService#orders. The requested deal must be readable by the viewer (its own
+    // role rule); a sibling the viewer cannot read is skipped; import gets no money; a lost/cancelled order is listed but
+    // not totalled. Mock approximation: valueExVat is payable / 1.07 (the mock keeps no pre-VAT subtotal).
+    async orders(ticketId) {
+      const user = hasRole('sales', 'import', 'ceo', 'account', 'sales_manager');
+      const canRead = (t) => {
+        if (user.role === 'sales') return actsAsOwner(t, user);
+        if (user.role === 'import') return importListScopeIncludes(t);
+        if (user.role === 'account') return accountListScopeIncludes(t);
+        return true;
+      };
+      const requested = findTicketRaw(Number(ticketId));
+      if (!canRead(requested)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      const root = requested.childKind === 'ADD_ON' && requested.parentTicketId != null
+        ? findTicketRaw(requested.parentTicketId) : requested;
+      const chain = [root, ...db.tickets
+        .filter((t) => t.parentTicketId === root.id && t.childKind === 'ADD_ON')
+        .sort((a, b) => a.id - b.id)];
+      const withMoney = user.role !== 'import';
+      const totals = { valueExVat: 0, received: 0, outstanding: 0 };
+      const orders = [];
+      chain.forEach((t, i) => {
+        if (t.id !== requested.id && !canRead(t)) return;
+        const payable = payableAmount(t);
+        const received = sumPaid(t.id);
+        const owed = moneyValue(Math.max(0, payable - received));
+        const valueExVat = moneyValue(payable / 1.07);
+        const lifecycle = t.lifecycle ?? 'ACTIVE';
+        if (lifecycle !== 'CLOSED_LOST' && lifecycle !== 'CANCELLED') {
+          totals.valueExVat += valueExVat; totals.received += received; totals.outstanding += owed;
+        }
+        orders.push({
+          ticketId: t.id, code: t.code,
+          displayCode: t.childKind === 'ADD_ON' ? t.code : `${t.code}-1`,
+          orderNo: i + 1, childKind: t.parentTicketId != null ? (t.childKind ?? 'BID_SPLIT') : null,
+          salesStage: t.salesStage, lifecycle, fulfillmentStatus: t.fulfillmentStatus ?? null,
+          valueExVat: withMoney ? valueExVat : null, received: withMoney ? received : null, outstanding: withMoney ? owed : null,
+        });
+      });
+      return delay({
+        rootTicketId: root.id, rootCode: root.code, orders,
+        totals: withMoney
+          ? { valueExVat: moneyValue(totals.valueExVat), received: moneyValue(totals.received), outstanding: moneyValue(totals.outstanding) }
+          : { valueExVat: null, received: null, outstanding: null },
+      });
     },
 
     async openForProject(projectName) {
@@ -14545,9 +14942,9 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
     async myWork() {
       const user = requireSession();
       if (!['sales', 'sales_manager', 'ceo'].includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
-      const board = mockBoardDeals().filter((d) => d.ownerId === user.id);
+      const board = mockBoardDeals(user.id);
       // ควรตามต่อ also takes the caller's OWN returning paused deals (SalesBoardRepository#returningPausedDealsOwnedBy).
-      const returning = mockReturningPausedDeals().filter((d) => d.ownerId === user.id);
+      const returning = mockReturningPausedDeals(user.id);
       return delay({
         // Fix round 2 (SalesBoardService#myWork): the RETURNING followUp rows are DealBoard cards in งานของฉัน's
         // เฉพาะงานเงียบ view, so they carry the due state too; the active followUp rows (ควรตามต่อ list only) do not.
@@ -18724,6 +19121,40 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
   // transitions mirror quotationMeta.js's DEAL_QUOTATION_TRANSITIONS so the mock's gate can't drift
   // from the frontend's own copy of QuotationStatus.
   dealQuotations: {
+    // GET /api/tickets/{id}/reusable-approved-items: DealQuotationService#reusableApprovedItems (403 before 409).
+    async reusableApprovedItems(ticketId) {
+      const user = requireSession();
+      const ticket = db.tickets.find((t) => t.id === Number(ticketId));
+      if (!ticket) fail('ไม่พบงานนี้', 404);
+      requireDealQuotationWriteAccess(ticket, user);
+      if (ticket.childKind !== 'ADD_ON') fail('ใช้ได้เฉพาะออเดอร์สั่งเพิ่มเท่านั้น', 409);
+      const sources = mockApprovedChainSources(ticket, mockReuseCustomerId(ticket));
+      const seen = new Set();
+      const items = [];
+      sources.forEach(({ item, quotation, orderCode }) => {
+        if ((item.lineType ?? 'TILE') === 'ADJUSTMENT') return;
+        const norm = (v) => String(v ?? '').trim().toLowerCase();
+        const key = item.catalogPriceId != null ? `c${item.catalogPriceId}`
+          : [item.productCode, item.sizeText, item.brand, item.model, item.color, item.texture, item.descriptionLine].map(norm).join('|');
+        if (seen.has(key)) return;
+        seen.add(key);
+        items.push({
+          ...item, id: null, sourceQuotationItemId: item.id, quotationId: quotation.id, quotationNumber: quotation.number,
+          orderCode, documentPriceMode: quotation.priceMode ?? 'NET', documentLanguage: quotation.documentLanguage ?? 'TH',
+          currency: quotation.currency ?? 'THB',
+        });
+      });
+      const reference = mockReferenceQuotation(ticket, sources);
+      return delay({
+        sourceDepositPercent: reference?.depositPercent ?? null,
+        sourceTerms: reference ? {
+          depositPercent: reference.depositPercent ?? null, remainderMode: reference.remainderMode ?? null,
+          creditDays: reference.creditDays ?? null, fullPaymentTerm: reference.fullPaymentTerm ?? null,
+        } : null,
+        items,
+      });
+    },
+
     async listForTicket(ticketId) {
       const user = requireSession();
       const ticket = db.tickets.find((t) => t.id === Number(ticketId));
@@ -18871,6 +19302,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       const now = new Date().toISOString();
       const header = resolveDealQuotationV3Header(payload);
       const items = buildDealQuotationItems(payload.items, header.priceMode, null, header.documentLanguage);
+      mockKeepValidSources(ticket, items, payload.partyId ?? null);
       // quotationDate check uses the SAME `now.slice(0, 10)` the row's own quotationDate below is set from, so the
       // two can never disagree about "today".
       const { validityMode, validityUntil } = resolveDealQuotationValidity(
@@ -19185,6 +19617,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
         : resolveDealQuotationContact(snapTicket, payload, row);
       const header = resolveDealQuotationV3Header(payload, row);
       const items = buildDealQuotationItems(payload.items, header.priceMode, row.items, header.documentLanguage);
+      mockKeepValidSources(ticket, items, row.partyId ?? null);
       // Carry the pricing-request/decision-item LINK forward across the save, keyed by the (stable) item id — the
       // client payload has no field for either, so a link can only ever be established at createFromPricingRequest,
       // never here. Mirrors DealQuotationService#update's own #withDecisionLink device.
@@ -19406,9 +19839,10 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
         }
         const revision = mintDealQuotationRevision(row, user);
         mockDealQuotations.push(revision);
-        return submitDealQuotationRow(revision, user);
+        // M2: the rule never approves a resubmission after a human rejection.
+        return submitDealQuotationRowOrApproveByRule(revision, ticket, user, true);
       }
-      return submitDealQuotationRow(row, user);
+      return submitDealQuotationRowOrApproveByRule(row, ticket, user);
     },
 
     async approve(id, payload = {}) {
@@ -19426,56 +19860,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       if (!canTransitionDealQuotation(row.docStatus, 'APPROVED')) {
         fail(`อนุมัติไม่ได้ในสถานะ '${row.docStatus}'`, 409);
       }
-      const now = new Date().toISOString();
-      row.docStatus = 'APPROVED';
-      row.approvedById = user.employeeId ?? null;
-      row.approvedByName = user.name;
-      // V175: snapshot the approver's signature presence at approval (DealQuotationRepository#approve).
-      row.approverSignatureSnapshot = row.approvedById != null && mockEmployeeSignatures.has(Number(row.approvedById));
-      row.approvedAt = now;
-      row.approvalDecidedAt = now;
-      row.approvalDecidedBy = user.employeeId ?? null;
-      row.approvalNote = payload?.note?.trim() || null;
-      // "validity_date = quotation date + N, written at approval". Uses this file's OWN
-      // bangkokTodayIso() (above, near round2) -- Bangkok LOCAL date, not `now.slice(0, 10)`, which
-      // reads the UTC calendar day off a UTC instant and is one day behind Bangkok on any approval
-      // made between 00:00-06:59 Bangkok time (UTC+7).
-      row.quotationDate = bangkokTodayIso();
-      // V178: a DATE-mode document WITH special pricing keeps its OWN validity_until verbatim (approval never
-      // recomputes it); every other case falls back to the existing day-count rule.
-      row.validityDate = row.validityMode === 'DATE' && hasSpecialPricing(row.priceMode, row.items)
-        ? row.validityUntil
-        : (row.validityDays ? addDaysIso(row.quotationDate, row.validityDays) : null);
-      row.updatedAt = now;
-      // One live offer per DEAL, any origin: sweep BEFORE the ancestor walk so a revision's parent
-      // gets its event from the sweep. See the helper's header.
-      supersedeOtherLiveMockDealQuotations(row, user, now);
-      // "When the child is APPROVED the parent becomes SUPERSEDED (not before)" -- the customer's
-      // last approved document stays valid until replaced. Runs AFTER the sweep above and stays
-      // SILENT -- no ticket event: a DRAFT ancestor from a reject/resubmit chain is invisible to
-      // the sweep's own `docStatus === 'APPROVED'` filter, so this walk is the only thing that ever
-      // supersedes one, and nothing asks for that to be logged. Walks the WHOLE ancestry chain, not
-      // just the immediate parent -- mirrors DealQuotationService#approve's own ancestor walk (see
-      // that method's Javadoc: a single hop strands every ancestor above the immediate parent
-      // forever in a 2+ reject/resubmit chain).
-      let ancestorId = row.parentQuotationId;
-      while (ancestorId) {
-        const ancestor = mockDealQuotations.find((q) => q.id === ancestorId);
-        if (!ancestor) break;
-        if (canTransitionDealQuotation(ancestor.docStatus, 'SUPERSEDED')) {
-          ancestor.docStatus = 'SUPERSEDED';
-          ancestor.updatedAt = now;
-        }
-        ancestorId = ancestor.parentQuotationId;
-      }
-      // Mirrors DealQuotationService#approve's QUOTATION_ISSUED event and TicketService#applyApprovedQuotation
-      // (spec 2026-11-15 §7.2): advance onto the recipient's stage (forward-only) and fill a blank party name with
-      // the quotation's addressee. A non-ACTIVE deal is left alone.
-      const dealTicket = db.tickets.find((t) => t.id === row.ticketId);
-      if (dealTicket) {
-        pushEvent(dealTicket, user, 'QUOTATION_ISSUED', null, null, `อนุมัติใบเสนอราคา ${row.number}`);
-        mockApplyApprovedQuotation(dealTicket, row, user);
-      }
+      mockApproveDirectRow(row, user, payload?.note?.trim() || null);
       return delay({ quotation: buildDealQuotationDto(row) });
     },
 
@@ -19867,6 +20252,11 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
     async downloadPdf(id) {
       const row = requireDealQuotationRowViewable(id);
       return mockDocPlaceholderBlob(mockDealQuotationDocLines(row));
+    },
+
+    async downloadText(id) {
+      const row = requireDealQuotationRowViewable(id);
+      return mockDealQuotationDocLines(row).join('\n');
     },
 
     async downloadXlsx(id) {

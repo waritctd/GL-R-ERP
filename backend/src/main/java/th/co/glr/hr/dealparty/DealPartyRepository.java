@@ -16,6 +16,7 @@ import th.co.glr.hr.dealparty.DealPartyDtos.DealPartyDto;
 import th.co.glr.hr.dealparty.DealPartyDtos.OpenDealDto;
 import th.co.glr.hr.dealparty.DealPartyDtos.OpenDealPartyDto;
 import th.co.glr.hr.dealquotation.WastageCalculator;
+import th.co.glr.hr.ticket.TicketRepository;
 
 /** {@code sales.deal_party} (V204) plus the few ticket writes a bid outcome needs. Plain JDBC, like its neighbours. */
 @Repository
@@ -163,9 +164,38 @@ public class DealPartyRepository {
                 .addValue("customerName", customerName).addValue("contactId", contactId));
     }
 
-    public int countChildren(long parentTicketId) {
-        Integer n = jdbc.queryForObject("SELECT COUNT(*) FROM sales.ticket WHERE parent_ticket_id = :p",
-            Map.of("p", parentTicketId), Integer.class);
+    /** Children of one kind ({@code BID_SPLIT} or {@code ADD_ON}); each kind numbers its own suffixes. */
+    /** One row of {@link #findOrderChain}: the ticket's own columns plus its three money figures. */
+    public record OrderRow(long ticketId, String code, String childKind, String salesStage, String lifecycle,
+                           String fulfillmentStatus, BigDecimal valueExVat, BigDecimal received, BigDecimal payable) {}
+
+    /**
+     * The root and its ADD_ON children (a BID_SPLIT child is another customer's deal, not an order), root first then
+     * by ticket id, with the money figures in the same statement. Value is the answered/issued quotation's pre-VAT
+     * figure, falling back to the latest APPROVED DEAL_DIRECT quotation's subtotal while nothing is confirmed.
+     */
+    public List<OrderRow> findOrderChain(long rootId) {
+        return jdbc.query(
+            "SELECT t.ticket_id, t.code, t.child_kind, t.sales_stage, t.lifecycle, t.fulfillment_status,"
+                + " COALESCE(NULLIF((" + TicketRepository.payableAmountExVatSelect("t.ticket_id") + "), 0),"
+                + " (SELECT q.total_amount FROM sales.quotation q WHERE q.ticket_id = t.ticket_id"
+                + " AND q.doc_status = 'APPROVED' AND q.origin = 'DEAL_DIRECT'"
+                + " ORDER BY q.quotation_id DESC LIMIT 1), 0) AS value_ex_vat,"
+                + " (" + TicketRepository.paidAmountSelect("t.ticket_id") + ") AS received,"
+                + " (" + TicketRepository.payableAmountSelect("t.ticket_id") + ") AS payable"
+                + " FROM sales.ticket t"
+                + " WHERE t.ticket_id = :root OR (t.parent_ticket_id = :root AND t.child_kind = 'ADD_ON')"
+                + " ORDER BY (t.ticket_id = :root) DESC, t.ticket_id",
+            Map.of("root", rootId),
+            (rs, n) -> new OrderRow(rs.getLong("ticket_id"), rs.getString("code"), rs.getString("child_kind"),
+                rs.getString("sales_stage"), rs.getString("lifecycle"), rs.getString("fulfillment_status"),
+                rs.getBigDecimal("value_ex_vat"), rs.getBigDecimal("received"), rs.getBigDecimal("payable")));
+    }
+
+    public int countChildren(long parentTicketId, String childKind) {
+        Integer n = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM sales.ticket WHERE parent_ticket_id = :p AND child_kind = :k",
+            Map.of("p", parentTicketId, "k", childKind), Integer.class);
         return n == null ? 0 : n;
     }
 
@@ -180,16 +210,39 @@ public class DealPartyRepository {
         jdbc.update("""
             INSERT INTO sales.ticket
                 (code, title, status, priority, created_by, keyed_by, customer_name, customer_id, project_id, contact_id,
-                 note, entry_channel, next_follow_up_at, quotation_only, parent_ticket_id,
+                 note, entry_channel, next_follow_up_at, quotation_only, parent_ticket_id, child_kind,
                  tender_requirement, deposit_policy, win_probability, designer_name, owner_name)
             SELECT :code, :customerName, 'draft', t.priority, t.created_by, :keyedBy, :customerName, :customerId,
-                   t.project_id, :contactId, t.note, t.entry_channel, t.next_follow_up_at, TRUE, t.ticket_id,
+                   t.project_id, :contactId, t.note, t.entry_channel, t.next_follow_up_at, TRUE, t.ticket_id, 'BID_SPLIT',
                    t.tender_requirement, t.deposit_policy, t.win_probability, t.designer_name, t.owner_name
               FROM sales.ticket t
              WHERE t.ticket_id = :parentId
             """, new MapSqlParameterSource()
                 .addValue("code", code).addValue("customerName", customerName).addValue("customerId", customerId)
                 .addValue("contactId", contactId).addValue("keyedBy", keyedBy).addValue("parentId", parentTicketId),
+            keys, new String[]{"ticket_id"});
+        return keys.getKey().longValue();
+    }
+
+    /**
+     * Fork an add-on order (สั่งเพิ่ม) under {@code rootId}: the root's project, customer, contact, owner, keyer's
+     * replacement ({@code keyedBy}), channel and policies copied, {@code child_kind} ADD_ON, a fresh draft with the
+     * default stage. {@code quotation_only} TRUE like a bid-split child: provenance only, the order confirmation flips it.
+     */
+    public long forkAddOn(long rootId, String code, long keyedBy) {
+        GeneratedKeyHolder keys = new GeneratedKeyHolder();
+        jdbc.update("""
+            INSERT INTO sales.ticket
+                (code, title, status, priority, created_by, keyed_by, customer_name, customer_id, project_id, contact_id,
+                 note, entry_channel, next_follow_up_at, quotation_only, parent_ticket_id, child_kind,
+                 tender_requirement, deposit_policy, win_probability, designer_name, owner_name)
+            SELECT :code, t.title, 'draft', t.priority, t.created_by, :keyedBy, t.customer_name, t.customer_id,
+                   t.project_id, t.contact_id, t.note, t.entry_channel, t.next_follow_up_at, TRUE, t.ticket_id, 'ADD_ON',
+                   t.tender_requirement, t.deposit_policy, t.win_probability, t.designer_name, t.owner_name
+              FROM sales.ticket t
+             WHERE t.ticket_id = :rootId
+            """, new MapSqlParameterSource()
+                .addValue("code", code).addValue("keyedBy", keyedBy).addValue("rootId", rootId),
             keys, new String[]{"ticket_id"});
         return keys.getKey().longValue();
     }

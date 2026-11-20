@@ -79,6 +79,19 @@ describe('MyWork', () => {
     expect(api.salesBoard.myWork).toHaveBeenCalledTimes(2);
   });
 
+  it('โทรแล้ว on a folded project card logs the call on its lead order, not the root', async () => {
+    const folded = { ...quiet, leadTicketId: 77, orderCount: 2 };
+    api.salesBoard.myWork.mockResolvedValue({ followUp: [folded], board: [folded], quietDays: 14 });
+    renderMyWork();
+    const row = await screen.findByTestId('follow-up-31');
+    fireEvent.click(within(row).getByRole('button', { name: /โทรแล้ว/ }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('radio', { name: 'ไม่รับสาย' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'บันทึก' }));
+    await waitFor(() => expect(api.tickets.addActivity).toHaveBeenCalledTimes(1));
+    expect(api.tickets.addActivity.mock.calls[0][0]).toBe(77);
+  });
+
   it('โทรแล้ว with ตามครั้งถัดไป 2 สัปดาห์ sends the deal\'s next follow-up date with the CALL', async () => {
     renderMyWork();
     const row = await screen.findByTestId('follow-up-31');

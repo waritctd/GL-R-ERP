@@ -58,7 +58,7 @@ abstract class AbstractDealDirectQuotationIntegrationTest extends AbstractPostgr
     protected UserPrincipal salesActor;
     protected UserPrincipal salesManagerActor;
 
-    private TicketService ticketService;
+    protected TicketService ticketService;
     private CustomerDto customer;
     private long projectId;
 

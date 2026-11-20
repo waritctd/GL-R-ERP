@@ -14,6 +14,7 @@ import { cn } from '../../utils/cn.js';
 import { dealStageLabel, formatBangkokTime, formatThaiDate } from '../../utils/format.js';
 import { InvoiceFromDealForm } from '../commissions/InvoiceFromDealForm.jsx';
 import { emptyInvoiceForm, prepareInvoiceAttachment, toCreateFromDealPayload } from '../commissions/invoiceFromDeal.js';
+import { OrderSwitcher, useProjectOrders } from '../tickets/OrderSwitcher.jsx';
 import { findStage, stageIndexIn, useStageCatalog } from '../tickets/stageCatalog.js';
 import {
   RecordPaymentModal, RevokeCloseModal, StageModal,
@@ -220,6 +221,9 @@ export function FinanceDealPage({ user }) {
     retry: false,
   });
 
+  // The project's orders: each add-on is its own deal, so the chips below the header link to the sibling finance pages.
+  const ordersQuery = useProjectOrders(id, Boolean(dealQuery.data?.deal));
+
   function applyDeal(deal) {
     queryClient.setQueryData(key, { deal });
     // The worklist, the ticket lists and the dashboard counts all derive from money state.
@@ -404,6 +408,11 @@ export function FinanceDealPage({ user }) {
       </aside>
 
       <div className="grid min-w-0 gap-4">
+      <OrderSwitcher
+        orders={ordersQuery.data?.orders}
+        currentId={id}
+        hrefFor={(order) => `/finance/deals/${order.ticketId}`}
+      />
       {downloadError ? (
         <p role="alert" className="m-0 flex items-start gap-2 text-sm font-bold text-danger">
           <Icon name="triangleAlert" size={16} className="mt-0.5 shrink-0" />

@@ -117,6 +117,31 @@ class SalesBoardScopeIntegrationTest extends AbstractDealQuotationSlice2Integrat
         assertThat(byId(work.get("board"), bare).get("value").isNull()).isTrue();
     }
 
+    private long addOn(long root, UserPrincipal keyer) {
+        return new th.co.glr.hr.dealparty.DealPartyRepository(jdbc).forkAddOn(root, summary(root).code() + "-2", keyer.id());
+    }
+
+    /** สั่งเพิ่ม: a project is ONE row (ProjectFold). The add-on folds into its root (orderCount 2, both open, summed
+     * value, both codes), and the team's openDeals counts the project once. */
+    @Test
+    void anAddOnFoldsIntoItsRootRow_andTheProjectCountsOnce() throws Exception {
+        long root = deal(salesActor);
+        DealQuotationDto quote = approved(root, salesActor, "DESIGNER");
+        long addOn = addOn(root, salesActor);
+        jdbc.update("UPDATE sales.ticket SET estimated_value = 1000 WHERE ticket_id = :id", Map.of("id", addOn));
+
+        JsonNode board = ok(get("/api/sales/my-work"), salesActor).get("board");
+
+        assertThat(ids(board)).containsExactly(root);
+        JsonNode row = byId(board, root);
+        assertThat(row.get("orderCount").asInt()).isEqualTo(2);
+        assertThat(row.get("openOrderCount").asInt()).isEqualTo(2);
+        assertThat(new BigDecimal(row.get("value").asText())).isEqualByComparingTo(quote.grandTotal().add(BigDecimal.valueOf(1000)));
+        assertThat(row.get("orderCodes")).hasSize(2);
+        assertThat(rep(ok(get("/api/sales/team-overview"), salesManagerActor), salesActor.id())
+            .get("openDeals").asInt()).isEqualTo(1);
+    }
+
     // ── review fixes: currency (M1), CLOSED_PAID (M2), value source (M3), role label ──────────
 
     @Test

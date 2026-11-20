@@ -29,6 +29,7 @@ import {
 import { ThaiDateInput } from '../../components/common/ThaiDateInput.jsx';
 import { StageProgressBar } from './DealStageStepper.jsx';
 import { dealHref } from '../finance/dealHref.js';
+import { orderTotalLabel } from './orderChain.js';
 import { dealInScope } from './salesViewScope.js';
 import {
   EMPTY_STAGE_CATALOG, findStage, routePositionForChannel, stageIndexIn, useStageCatalog,
@@ -181,6 +182,7 @@ function matchesSearch(deal, query) {
     deal.projectName,
     deal.title,
     deal.createdByName,
+    ...(deal.orderCodes ?? []),
   ].filter(Boolean).join(' ').toLowerCase().includes(value);
 }
 
@@ -401,7 +403,10 @@ function DealCard({ deal, catalog, reason = null, showTracking = false, onOpen }
   return (
     <>
       <div className="ticket-card-topline">
-        <code>{deal.code}</code>
+        <span className="min-w-0">
+          <code>{deal.code}</code>
+          {deal.orderCount > 1 ? <span className="text-xs text-text-muted">{` · ${deal.orderCount} ออเดอร์`}</span> : null}
+        </span>
         <span>{freshnessText}</span>
       </div>
 
@@ -513,8 +518,14 @@ function SalesDealCard({ deal, catalog, showOwner = false, onOpen }) {
   return (
     <>
       <div className="ticket-card-topline">
-        <code>{deal.code}</code>
-        <strong className="tabular-nums">{dealAmountLabel(deal)}</strong>
+        <span className="min-w-0">
+          <code>{deal.code}</code>
+          {deal.orderCount > 1 ? <span className="text-xs text-text-muted">{` · ${deal.orderCount} ออเดอร์`}</span> : null}
+        </span>
+        <span className="flex flex-col items-end">
+          <strong className="tabular-nums">{dealAmountLabel(deal)}</strong>
+          {orderTotalLabel(deal) ? <small className="text-xs font-normal text-text-muted">{orderTotalLabel(deal)}</small> : null}
+        </span>
       </div>
       <strong className="ticket-card-title">{deal.customerName || deal.title}</strong>
       {deal.projectName ? <span className="ticket-card-project">{deal.projectName}</span> : null}
@@ -547,7 +558,12 @@ function buildSalesColumns({ role, catalog }) {
       header: 'มูลค่า',
       sortable: true,
       sortAccessor: (deal) => Number(deal.amountPayable) || 0,
-      render: (deal) => <span className="block text-right text-sm font-bold tabular-nums text-text">{dealAmountLabel(deal)}</span>,
+      render: (deal) => (
+        <span className="block text-right text-sm font-bold tabular-nums text-text">
+          {dealAmountLabel(deal)}
+          {orderTotalLabel(deal) ? <small className="block text-xs font-normal text-text-muted">{orderTotalLabel(deal)}</small> : null}
+        </span>
+      ),
     },
     {
       key: 'date',
@@ -571,7 +587,7 @@ function buildDealColumns({ role, isManagerView, catalog }) {
     {
       key: 'customer',
       header: 'งาน / ลูกค้า / โครงการ',
-      searchAccessor: (deal) => [deal.code, deal.customerName, deal.projectName, deal.title].filter(Boolean).join(' '),
+      searchAccessor: (deal) => [deal.code, deal.customerName, deal.projectName, deal.title, ...(deal.orderCodes ?? [])].filter(Boolean).join(' '),
       // This Link (not the row's `onRowClick`, a mouse-only convenience) is the row's keyboard and
       // assistive-tech activation target, like PricingRequestQueuePage.jsx's `requestCode` column.
       // The 721–1040px tablet band renders this desktop table (`useIsMobile` is <=720px) with no
@@ -586,6 +602,7 @@ function buildDealColumns({ role, isManagerView, catalog }) {
           </Link>
           <span className="block truncate text-2xs text-text-muted">
             {[deal.projectName, deal.code].filter(Boolean).join(' · ')}
+            {deal.orderCount > 1 ? <span className="text-xs font-bold text-text-secondary">{` · ${deal.orderCount} ออเดอร์`}</span> : null}
           </span>
         </span>
       ),
@@ -684,12 +701,14 @@ export function TicketListPage({ user, showToast, viewSwitch = null }) {
   });
   const quietDays = teamOverviewQuery.data?.quietDays ?? null;
   const ticketsQuery = useQuery({
-    queryKey: isSales ? queryKeys.ticketListByRange(range.from, range.to) : queryKeys.ticketList(''),
-    queryFn: () => api.tickets.list(isSales ? { movementFrom: range.from, movementTo: range.to } : {})
+    queryKey: isSales ? queryKeys.ticketListByRange(range.from, range.to, 'project') : queryKeys.ticketList(''),
+    queryFn: () => api.tickets.list(isSales ? { movementFrom: range.from, movementTo: range.to, fold: 'project' } : {})
       .then((response) => response.tickets || []),
     // keep the previous rows on screen while a shifted range loads
     placeholderData: isSales ? keepPreviousData : undefined,
   });
+  // sales / sales_manager / ceo read ONE ROW PER PROJECT (server-side fold, so every count, total and filter below is
+  // computed from project rows); import and account keep one row per order.
   const allDeals = useMemo(() => ticketsQuery.data ?? [], [ticketsQuery.data]);
   const loading = ticketsQuery.isLoading;
   const refreshing = ticketsQuery.isFetching && !ticketsQuery.isLoading;

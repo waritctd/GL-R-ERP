@@ -358,6 +358,26 @@ describe('DepositNoticePage', () => {
   // the VAT rate must come from the served document's vatPercent, not a hardcoded 0.07 literal —
   // DepositNoticeDto.vatPercent (backend/src/main/java/th/co/glr/hr/ deposit/DepositNoticeDto.java:25) is the
   // authoritative source once a document exists.
+  it('an ISSUED notice offers an แก้ไข button: it unlocks the percent, and บันทึก updates the same document without re-issuing', async () => {
+    api.depositNotices.listByTicket.mockResolvedValue({
+      depositNotices: [{ ...validDraftDoc, status: 'ISSUED', docNumber: 'GLRD69001', depositPercent: 0.3 }],
+    });
+    renderDepositNoticePage();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'แก้ไขฉบับปัจจุบัน' }));
+    const percentInput = await screen.findByLabelText('มัดจำ %');
+    expect(percentInput.disabled).toBe(false);
+    fireEvent.change(percentInput, { target: { value: '40' } });
+    // Still the same issued document: the issue action never reappears.
+    expect(screen.queryByRole('button', { name: /ออกเอกสาร/ })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึก' }));
+
+    await waitFor(() => expect(api.depositNotices.update).toHaveBeenCalledWith(
+      9002, expect.objectContaining({ depositPercent: 0.4 }),
+    ));
+    expect(api.depositNotices.issue).not.toHaveBeenCalled();
+  });
+
   it('uses the served document vatPercent (10%) in the VAT label and amount, not the 7% fallback', async () => {
     api.depositNotices.listByTicket.mockResolvedValue({
       depositNotices: [{ ...validDraftDoc, vatPercent: 0.10 }],

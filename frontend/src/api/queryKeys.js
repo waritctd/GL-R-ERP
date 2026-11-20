@@ -102,7 +102,8 @@ export const queryKeys = {
   // ticketDetail/ticketAttachments: used by TicketDetailPage.
   ticketList: (status) => ['tickets', 'list', status ?? ''],
   // Deal list with the movement range (inclusive Bangkok days): rows carry stageChangedInRange / activityInRange.
-  ticketListByRange: (from, to) => ['tickets', 'list', 'range', from, to],
+  // `fold` = 'project': the one-row-per-project list (server-side ProjectFold); a different cache entry from the per-order one.
+  ticketListByRange: (from, to, fold) => (fold ? ['tickets', 'list', 'range', from, to, fold] : ['tickets', 'list', 'range', from, to]),
   // Account role-scoped views: the CLOSED_PAID picker AccountOverview/ AccountFinancePage/CommissionPage's
   // createFromDeal flow all use — same `salesStage` query param, distinct key from the plain ticketList above.
   ticketListBySalesStage: (salesStage) => ['tickets', 'list', 'salesStage', salesStage ?? ''],
@@ -113,6 +114,8 @@ export const queryKeys = {
   // empty/undefined id is left alone (NaN) rather than defaulted, like every other id-keyed
   // entry below that has no "no id yet" caller.
   ticketDetail: (id) => queryKeysTicketDetail(id),
+  // The project's orders (root + add-ons) for the order box / switcher; under 'tickets' so a stage or money change refreshes it.
+  ticketOrders: (id) => ['tickets', 'orders', id == null ? id : Number(id)],
   // Immutable server enumeration — fetched once, never invalidated. See stageCatalog.js.
   dealStageCatalog: () => ['meta', 'deal-stages'],
   // Under 'tickets' so every existing ['tickets'] invalidation (an activity, a stage move, a lost deal) refreshes
@@ -223,6 +226,7 @@ export const queryKeys = {
   discountApprovals: (quotationId) => ['customerQuotations', 'discountApprovals', quotationId],
   // Direct deal quotation. A sibling key space to
   // pricingRequests'/customerQuotations' above, never sharing an entry with them.
+  reusableApprovedItems: (ticketId) => ['dealQuotations', 'reusableApprovedItems', ticketId ?? ''],
   dealQuotationsByTicket: (ticketId) => ['dealQuotations', 'byTicket', ticketId ?? ''],
   // The same list WITH `orderConfirmedQuotationId` (DealDocumentRegister): the full response, kept apart from the
   // items-only entry above so its four readers keep their array. A child of that key, so invalidating it refreshes both.

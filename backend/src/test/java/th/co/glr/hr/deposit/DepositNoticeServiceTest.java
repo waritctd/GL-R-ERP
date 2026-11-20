@@ -42,7 +42,7 @@ class DepositNoticeServiceTest {
     private final CustomerQuotationRepository quotationRepo = mock(CustomerQuotationRepository.class);
     private final DocumentBundle bundle = mock(DocumentBundle.class);
     private final DepositNoticeService service = new DepositNoticeService(
-        docs, ticketRepo, notifications, renderer, customerRepo, quotationRepo, bundle);
+        docs, ticketRepo, notifications, renderer, customerRepo, quotationRepo, bundle, org.mockito.Mockito.mock(th.co.glr.hr.deposit.RemainingInvoiceRepository.class));
     {
         when(bundle.bundle(any(), org.mockito.ArgumentMatchers.anyLong(), any(), any()))
             .thenAnswer(i -> new DocumentBundle.Result(i.getArgument(0), java.util.List.of()));

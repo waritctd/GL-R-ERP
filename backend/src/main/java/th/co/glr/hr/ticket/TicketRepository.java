@@ -52,6 +52,12 @@ public class TicketRepository {
                t.reopened_at, t.reopen_count,
                t.win_probability, t.designer_name, t.owner_name, t.buyer_name,
                t.quotation_only, t.keyed_by, t.pause_return_on, t.estimated_value, t.expected_quarter,
+               t.parent_ticket_id, t.child_kind,
+               (SELECT pt.code FROM sales.ticket pt WHERE pt.ticket_id = t.parent_ticket_id) AS parent_code,
+               (SELECT COUNT(*) FROM sales.ticket ao
+                 WHERE ao.child_kind = 'ADD_ON'
+                   AND ao.parent_ticket_id = CASE WHEN t.child_kind = 'ADD_ON' THEN t.parent_ticket_id ELSE t.ticket_id END
+               ) AS add_on_count,
                (SELECT MAX(da.activity_date) FROM sales.deal_activity da
                  WHERE da.ticket_id = t.ticket_id) AS last_activity_at,
                -- Movement range (inclusive Asia/Bangkok calendar days); both FALSE when no range is given.
@@ -885,6 +891,26 @@ public class TicketRepository {
 
     // --- private helpers ---
 
+    /** {@link #findSummaryById} for many ids in one round trip (empty input, empty output). */
+    public List<TicketSummaryDto> findSummariesByIds(java.util.Collection<Long> ids) {
+        if (ids.isEmpty()) {
+            return List.of();
+        }
+        List<TicketSummaryDto> rows = jdbc.query(
+            SUMMARY_SELECT + """
+             WHERE t.ticket_id IN (:ids)
+             GROUP BY t.ticket_id, ec.first_name_th, ec.last_name_th,
+                      ea.first_name_th, ea.last_name_th,
+                      p.name, ct.first_name, ct.last_name,
+                      ecc.first_name_th, ecc.last_name_th
+            """,
+            new MapSqlParameterSource("ids", ids)
+                .addValue("movementFrom", null, Types.DATE)
+                .addValue("movementTo", null, Types.DATE),
+            (rs, rowNum) -> mapSummary(rs));
+        return enrichSummaries(rows);
+    }
+
     public Optional<TicketSummaryDto> findSummaryById(long id) {
         try {
             TicketSummaryDto summary = jdbc.queryForObject(
@@ -1349,7 +1375,9 @@ public class TicketRepository {
                 rs.getObject("last_activity_at", LocalDate.class))
             .withPauseReturnOn(rs.getObject("pause_return_on", LocalDate.class))
             .withEstimatedValue(rs.getBigDecimal("estimated_value"))
-            .withExpectedQuarter(rs.getString("expected_quarter"));
+            .withExpectedQuarter(rs.getString("expected_quarter"))
+            .withParent(rs.getObject("parent_ticket_id", Long.class), rs.getString("parent_code"),
+                rs.getString("child_kind"), rs.getInt("add_on_count"));
     }
 
     /** One row's worth of the enrichment facts {@link SummaryFactsSql#SELECT} computes for a page of deals. */
@@ -1478,7 +1506,8 @@ public class TicketRepository {
             facts.liveDirectQuotation(), facts.quotedRecipients(),
             "DEPOSIT_NOTICE_ISSUED".equals(s.paymentStatus()) ? facts.depositDue() : null,
             s.keyedById(), s.stageChangedInRange(), s.activityInRange(), s.lastActivityAt(), s.pauseReturnOn(),
-            s.estimatedValue(), s.expectedQuarter(), f.receiptSource());
+            s.estimatedValue(), s.expectedQuarter(), f.receiptSource(),
+            s.parentTicketId(), s.parentCode(), s.childKind(), s.addOnCount());
     }
 
     /** An INVOICE document is on file. The invoice is produced by an external system and uploaded here, so its
@@ -1921,6 +1950,14 @@ public class TicketRepository {
         return v == null ? BigDecimal.ZERO : v;
     }
 
+    /** Net deposit money held: DEPOSIT receipts minus ADJUSTMENT (refund) receipts, signed like SIGNED_RECEIPT_SUM. */
+    public BigDecimal netDepositReceived(long ticketId) {
+        BigDecimal v = jdbc.queryForObject("SELECT " + SIGNED_RECEIPT_SUM
+            + " FROM sales.payment_receipt WHERE ticket_id = :t AND kind IN ('DEPOSIT', 'ADJUSTMENT')",
+            Map.of("t", ticketId), BigDecimal.class);
+        return v == null ? BigDecimal.ZERO : v;
+    }
+
     /** An uploaded Express receipt (V213): source EXPRESS, receipt_ref = the Express document number. */
     public long insertExpressReceipt(long ticketId, String kind, BigDecimal amount, long recordedBy, Instant receivedAt,
                                      String expressDocNo, String customerName) {
@@ -2014,13 +2051,18 @@ public class TicketRepository {
         + " AND pe.related_document_type = 'QUOTATION' AND pe.related_document_id = q.quotation_id)))";
 
     /**
-     * Once a remaining invoice is ISSUED, what the customer owes follows the ISSUED
-     * documents -- the deposit notice's total_payable plus the remaining invoice's grand_total -- because each tax
-     * invoice rounds its own VAT, so the sum may sit a satang away from the deal's computed total. Trailing comma
-     * included; VAT-inclusive variant only (the ex-VAT figure stays the quotation's subtotal).
+     * Once a remaining invoice is ISSUED, what the customer owes follows the ISSUED documents -- the deposit PART plus
+     * the remaining invoice's grand_total -- because each tax invoice rounds its own VAT, so the sum may sit a satang
+     * away from the deal's computed total. The deposit part is the invoice's FROZEN pre-VAT deposit_deduction made
+     * VAT-inclusive (the notice's exact total_payable when the deduction equals the notice amount, else
+     * ROUND(deduction * 1.07, 2); no stored deduction -> the linked notice's total; no notice -> 0), so receipts and notice edits cannot move it.
+     * Trailing comma included; VAT-inclusive variant only (the ex-VAT figure stays the quotation's subtotal).
      */
     private static String issuedDocumentsPayable(String ticketIdRef) {
-        return "(SELECT COALESCE(dn.total_payable, 0) + ri.grand_total FROM sales.remaining_invoice ri"
+        return "(SELECT COALESCE(CASE WHEN ri.deposit_deduction IS NULL OR ri.deposit_deduction = dn.deposit_amount"
+            + " THEN dn.total_payable"
+            + " ELSE ROUND(ri.deposit_deduction * 1.07, 2) END, 0)"
+            + " + ri.grand_total FROM sales.remaining_invoice ri"
             + " LEFT JOIN sales.deposit_notice dn ON dn.deposit_notice_id = ri.deposit_notice_id"
             + " WHERE ri.ticket_id = " + ticketIdRef + " AND ri.status = 'ISSUED' AND ri.grand_total IS NOT NULL"
             + " ORDER BY ri.issued_at DESC, ri.id DESC LIMIT 1),";
@@ -2034,7 +2076,7 @@ public class TicketRepository {
     }
 
     /** Same SELECT, PRE-VAT — what {@code payableAmountSelect} returned before payable became VAT-inclusive. */
-    private static String payableAmountExVatSelect(String ticketIdRef) {
+    public static String payableAmountExVatSelect(String ticketIdRef) {
         return payableAmountSelect(ticketIdRef, false);
     }
 
@@ -2113,6 +2155,8 @@ public class TicketRepository {
      * <ul>
      *   <li>{@code remainder_mode = CREDIT} with {@code credit_days} N: due = delivery date + N
      *       ({@code CREDIT_FROM_DELIVERY});</li>
+     *   <li>a zero-deposit {@code full_payment_term = CREDIT} with {@code credit_days} N: identical to the
+     *       CREDIT remainder (due = delivery date + N, {@code CREDIT_FROM_DELIVERY});</li>
      *   <li>any other non-null {@code remainder_mode} (the remainder is due before/on delivery), or a
      *       zero-deposit {@code full_payment_term} (BEFORE_DELIVERY / ON_DELIVERY / ON_OR_BEFORE_DELIVERY):
      *       due = the delivery date ({@code ON_DELIVERY});</li>
@@ -2125,16 +2169,16 @@ public class TicketRepository {
         return """
             SELECT tq.days, tq.basis, tq.credit_days, dv.delivered_on
               FROM (SELECT CASE
-                               WHEN q.remainder_mode = 'CREDIT' AND q.credit_days IS NOT NULL THEN q.credit_days::int
+                               WHEN (q.remainder_mode = 'CREDIT' OR q.full_payment_term = 'CREDIT') AND q.credit_days IS NOT NULL THEN q.credit_days::int
                                WHEN q.full_payment_term IN ('BEFORE_DELIVERY', 'ON_DELIVERY', 'ON_OR_BEFORE_DELIVERY') THEN 0
                                WHEN q.remainder_mode IS NOT NULL AND q.remainder_mode <> 'CREDIT' THEN 0
                            END AS days,
                            CASE
-                               WHEN q.remainder_mode = 'CREDIT' AND q.credit_days IS NOT NULL THEN 'CREDIT_FROM_DELIVERY'
+                               WHEN (q.remainder_mode = 'CREDIT' OR q.full_payment_term = 'CREDIT') AND q.credit_days IS NOT NULL THEN 'CREDIT_FROM_DELIVERY'
                                WHEN q.full_payment_term IN ('BEFORE_DELIVERY', 'ON_DELIVERY', 'ON_OR_BEFORE_DELIVERY') THEN 'ON_DELIVERY'
                                WHEN q.remainder_mode IS NOT NULL AND q.remainder_mode <> 'CREDIT' THEN 'ON_DELIVERY'
                            END AS basis,
-                           CASE WHEN q.remainder_mode = 'CREDIT' AND q.credit_days IS NOT NULL THEN q.credit_days::int END AS credit_days
+                           CASE WHEN (q.remainder_mode = 'CREDIT' OR q.full_payment_term = 'CREDIT') AND q.credit_days IS NOT NULL THEN q.credit_days::int END AS credit_days
                       FROM sales.quotation q
                      WHERE q.ticket_id = %1$s AND (ANSWERED OR q.doc_status IN ('ISSUED', 'SENT'))
                      ORDER BY CASE q.doc_status WHEN 'ACCEPTED' THEN 0 WHEN 'APPROVED' THEN 1 ELSE 2 END,
@@ -2612,7 +2656,8 @@ public class TicketRepository {
     /** One read of every downstream row an undo must not orphan. "Bid or split" = the bid path wrote its
      * BID_OUTCOME_RECORDED right AFTER the promotion event in the same transaction (DealPartyService#recordBidOutcome),
      * so an outcome recorded EARLIER on the deal does not count; or the deal is a split child (DEAL_SPLIT_FROM_PARENT)
-     * or has split children. "Manual stock decision" = a STOCK_RESERVED or
+     * or has split children (a child with no kind counts as a split; only ADD_ON children are exempt: an undo
+     * deletes only this deal's own ticket_item rows, never a quotation item an add-on reuses). "Manual stock decision" = a STOCK_RESERVED or
      * PROCUREMENT_SOURCE_DECIDED event after the (latest) promotion event, or the V208 latch; the confirmation's own
      * cover of จากสต็อก lines writes neither. */
     public UndoFacts undoConfirmationFacts(long ticketId) {
@@ -2622,7 +2667,8 @@ public class TicketRepository {
                         AND event_id > COALESCE((SELECT MAX(event_id) FROM sales.ticket_event
                                                   WHERE ticket_id = :t AND kind = 'DEAL_PROMOTED_FROM_QUOTATION'), 0))
                OR EXISTS(SELECT 1 FROM sales.ticket_event WHERE ticket_id = :t AND kind = 'DEAL_SPLIT_FROM_PARENT')
-               OR EXISTS(SELECT 1 FROM sales.ticket WHERE parent_ticket_id = :t)) AS bid_or_split,
+               OR EXISTS(SELECT 1 FROM sales.ticket WHERE parent_ticket_id = :t
+                          AND COALESCE(child_kind, 'BID_SPLIT') = 'BID_SPLIT')) AS bid_or_split,
               EXISTS(SELECT 1 FROM sales.deposit_notice WHERE ticket_id = :t AND status <> 'DRAFT') AS notice,
               EXISTS(SELECT 1 FROM sales.payment_receipt WHERE ticket_id = :t) AS receipt,
               EXISTS(SELECT 1 FROM sales.remaining_invoice WHERE ticket_id = :t) AS invoice,

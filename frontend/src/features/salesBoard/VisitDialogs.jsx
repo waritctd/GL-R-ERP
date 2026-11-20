@@ -4,6 +4,7 @@ import { Modal } from '../../components/common/Modal.jsx';
 import { ThaiDateInput } from '../../components/common/ThaiDateInput.jsx';
 import { bangkokTodayIso } from '../../utils/format.js';
 import { FollowUpPicks, withFollowUp } from './FollowUpPicks.jsx';
+import { actionTicketId } from './dealPickGroups.js';
 import { timeLabel, weekRangeLabel, weekStartIso } from './visitWeek.js';
 
 // The m-visit-log dialog's three outcomes. Stored as the note's first line (sales.visit and deal_activity have no
@@ -62,7 +63,7 @@ function DealSelect({ id, deals, value, onChange }) {
       <span>งาน <Optional /></span>
       <select id={id} value={value} onChange={(e) => onChange(e.target.value)} className={INPUT}>
         <option value="">ไม่มีงาน</option>
-        {deals.map((d) => <option key={d.ticketId} value={String(d.ticketId)}>{dealLabel(d)}</option>)}
+        {deals.map((d) => <option key={d.ticketId} value={String(actionTicketId(d))}>{dealLabel(d)}</option>)}
       </select>
     </label>
   );
@@ -97,7 +98,7 @@ function weekHint(plannedDate, todayIso) {
 export function PlanVisitModal({ deals, initialDeal = null, todayIso, submitting, onClose, onSubmit }) {
   const ids = useId();
   const [contactName, setContactName] = useState(initialDeal?.designerName ?? '');
-  const [ticketId, setTicketId] = useState(initialDeal ? String(initialDeal.ticketId) : '');
+  const [ticketId, setTicketId] = useState(initialDeal ? String(actionTicketId(initialDeal)) : '');
   const [plannedDate, setPlannedDate] = useState(todayIso);
   const [plannedTime, setPlannedTime] = useState('');
   const [note, setNote] = useState('');

@@ -776,6 +776,27 @@ describe('QuotationEditorPage terms card — item 2 + item 4 (owner ruling 2026-
     expect(payload.fullPaymentTerm).toBe('ON_DELIVERY');
   });
 
+  it('"ไม่รับมัดจำ" + credit term sends fullPaymentTerm CREDIT with the entered creditDays', async () => {
+    api.dealQuotations.get.mockResolvedValue({ quotation: existingDraftWithOneItem() });
+    api.dealQuotations.update.mockResolvedValue({ quotation: existingDraftWithOneItem() });
+    renderEditor('/quotations/5');
+
+    await screen.findByRole('button', { name: '30%' });
+    fireEvent.click(screen.getByRole('checkbox', { name: /ไม่รับมัดจำ/ }));
+    fireEvent.change(screen.getByLabelText('เงื่อนไขการชำระเงิน'), { target: { value: 'CREDIT' } });
+    fireEvent.change(screen.getByLabelText('เครดิต (จำนวนวัน)'), { target: { value: '30' } });
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).disabled).toBe(false));
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
+
+    await waitFor(() => expect(api.dealQuotations.update).toHaveBeenCalledTimes(1));
+    const payload = api.dealQuotations.update.mock.calls[0][1];
+    expect(payload.depositPercent).toBe(0);
+    expect(payload.remainderMode).toBeNull();
+    expect(payload.fullPaymentTerm).toBe('CREDIT');
+    expect(payload.creditDays).toBe(30);
+  });
+
   it('typing 0 into the custom "อื่นๆ" มัดจำ input is rejected with a message pointing at the checkbox', async () => {
     api.dealQuotations.get.mockResolvedValue({ quotation: existingDraftWithOneItem() });
     renderEditor('/quotations/5');

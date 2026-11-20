@@ -335,6 +335,34 @@ describe('RemainingInvoiceDialog — drawing m-remaining', () => {
 // write actions (create/save/issue/revise/delete) hidden unless the viewer is the deal's OWNING sales rep —
 // mirrors RemainingInvoiceService#requireDepositNoticeIssueGate exactly (no CEO carve-out for THIS document
 // either — see that class's own Javadoc).
+describe('RemainingInvoiceDialog — a live ISSUED document exists', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('an ISSUED document offers an edit control: it opens the form, and บันทึก updates the SAME document in place', async () => {
+    const issuedRow = docRow({ status: 'ISSUED', docNumber: 'GLR6900001-1', baseNumber: 'GLR6900001' });
+    api.storedRemainingInvoices.listForTicket.mockResolvedValue({ remainingInvoices: [issuedRow] });
+    api.storedRemainingInvoices.update.mockResolvedValue({ remainingInvoice: issuedRow });
+    api.storedRemainingInvoices.issue.mockResolvedValue({ remainingInvoice: issuedRow });
+    api.tickets.remainingInvoiceOptions.mockResolvedValue({ options: baseOptions() });
+    api.depositNotices.noteTemplates.mockResolvedValue({ templates: [] });
+    renderDialog();
+
+    fireEvent.click(await screen.findByTestId('remaining-invoice-edit'));
+    const input = await screen.findByDisplayValue('QT-2026-0099');
+    fireEvent.change(input, { target: { value: 'PO-ISSUED-EDIT' } });
+    // Still an ISSUED document: no second issue action while editing it, and its download is not a draft preview.
+    expect(screen.queryByTestId('remaining-invoice-issue')).toBeNull();
+    expect(screen.getByTestId('remaining-invoice-download-draft').textContent).toBe('ดาวน์โหลด');
+    fireEvent.click(screen.getByTestId('remaining-invoice-save-draft'));
+
+    await waitFor(() => expect(api.storedRemainingInvoices.update).toHaveBeenCalledWith(900,
+      expect.objectContaining({ reference: 'PO-ISSUED-EDIT' })));
+    expect(api.storedRemainingInvoices.issue).not.toHaveBeenCalled();
+  });
+});
+
 describe('RemainingInvoiceDialog — canWrite=false (not this deal\'s owning sales rep)', () => {
   beforeEach(() => {
     vi.clearAllMocks();

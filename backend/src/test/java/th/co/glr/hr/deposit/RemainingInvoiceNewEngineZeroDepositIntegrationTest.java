@@ -45,7 +45,7 @@ class RemainingInvoiceNewEngineZeroDepositIntegrationTest extends AbstractPostgr
         CustomerQuotationRepository quotations = new CustomerQuotationRepository(jdbc);
         depositNotices = new DepositNoticeService(new DepositNoticeRepository(jdbc), tickets,
             new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP), new DepositNoticePdfRenderer(),
-            new CustomerRepository(jdbc), quotations, th.co.glr.hr.support.DocumentBundles.noDownload(jdbc));
+            new CustomerRepository(jdbc), quotations, th.co.glr.hr.support.DocumentBundles.noDownload(jdbc), new th.co.glr.hr.deposit.RemainingInvoiceRepository(jdbc));
         remainingInvoices = new RemainingInvoiceService(new RemainingInvoiceRepository(jdbc), depositNotices, tickets,
             new RemainingInvoicePdfRenderer(), new NotificationRepository(jdbc, mailer));
         employeeId = jdbc.queryForObject("""

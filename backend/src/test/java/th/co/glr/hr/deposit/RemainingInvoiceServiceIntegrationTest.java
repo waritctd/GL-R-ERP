@@ -155,7 +155,7 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
 
         DepositNoticeRepository depositNoticeRepository = new DepositNoticeRepository(jdbc);
         depositNoticeService = new DepositNoticeService(depositNoticeRepository, tickets, notifications,
-            new DepositNoticePdfRenderer(), customers, quotationRepository, th.co.glr.hr.support.DocumentBundles.noDownload(jdbc));
+            new DepositNoticePdfRenderer(), customers, quotationRepository, th.co.glr.hr.support.DocumentBundles.noDownload(jdbc), new th.co.glr.hr.deposit.RemainingInvoiceRepository(jdbc));
 
         orderConfirmation = new OrderConfirmationService(
             pricingRequests, tickets, ticketService, quotationRepository, depositNoticeService, notifications);
@@ -393,6 +393,61 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
         assertThat(remainingInvoiceService.file(issued.id(), ceoActor)).isNotEmpty();
         assertThat(remainingInvoiceService.file(issued.id(), accountActor)).isNotEmpty();
         assertThat(remainingInvoiceService.file(issued.id(), salesManagerActor)).isNotEmpty();
+    }
+
+    private List<Map<String, Object>> editedEvents(long ticketId) {
+        return jdbc.queryForList(
+            "SELECT actor_id, message FROM sales.ticket_event WHERE ticket_id = :t AND kind = 'EDITED'",
+            Map.of("t", ticketId));
+    }
+
+    @Test
+    void updateDraft_onAnIssuedInvoice_editsInPlace_keepsNumberAndStatus_andWritesAnAuditEvent() {
+        DealFixture fixture = buildAcceptedDeal(salesActor, "EditIssuedRi");
+        RemainingInvoiceDocumentDto issued = remainingInvoiceService.issue(
+            remainingInvoiceService.createDraft(fixture.ticketId(), null, salesActor).id(), salesActor);
+        assertThat(editedEvents(fixture.ticketId())).isEmpty();
+
+        RemainingInvoiceDocumentDto edited = remainingInvoiceService.updateDraft(issued.id(),
+            new RemainingInvoiceDraftRequest(null, "PO-ISSUED-EDIT", "DEP-ISSUED-EDIT", LocalDate.of(2026, 11, 20),
+                List.of("edited note")), salesActor);
+
+        assertThat(edited.id()).isEqualTo(issued.id());
+        assertThat(edited.status()).isEqualTo("ISSUED");
+        assertThat(edited.docNumber()).isEqualTo(issued.docNumber());
+        assertThat(edited.version()).isEqualTo(issued.version());
+        assertThat(edited.reference()).isEqualTo("PO-ISSUED-EDIT");
+        assertThat(edited.depositReference()).isEqualTo("DEP-ISSUED-EDIT");
+        assertThat(edited.docDate()).isEqualTo(LocalDate.of(2026, 11, 20));
+        assertThat(edited.notes()).containsExactly("edited note");
+        RemainingInvoiceDocumentDto reread = remainingInvoiceService.get(issued.id(), salesActor);
+        assertThat(reread.status()).isEqualTo("ISSUED");
+        assertThat(reread.reference()).isEqualTo("PO-ISSUED-EDIT");
+
+        List<Map<String, Object>> events = editedEvents(fixture.ticketId());
+        assertThat(events).hasSize(1);
+        assertThat(((Number) events.get(0).get("actor_id")).longValue()).isEqualTo(salesRepId);
+        String message = (String) events.get(0).get("message");
+        assertThat(message).contains(issued.docNumber()).contains("PO-ISSUED-EDIT");
+        assertThat(message).contains(issued.reference() == null ? "" : issued.reference());
+    }
+
+    /** Partial deposit: the notice says 107,000 (100,000 pre-VAT) but only 50,000 was received. The invoice deducts the
+     * full notice (max of notice and received), and payable = notice total + invoice -- no double billing. */
+    @Test
+    void partialDepositReceipt_invoiceStillDeductsTheNotice_andPayableFollowsTheFrozenDeduction() {
+        DealFixture fixture = buildAcceptedDeal(salesActor, "PartialDeposit");
+        long ticketId = fixture.ticketId();
+        var dn = new DepositNoticeRepository(jdbc).findById(fixture.depositNoticeId()).orElseThrow();
+        ticketService.confirmDepositPaid(ticketId, accountActor);
+        jdbc.update("UPDATE sales.payment_receipt SET amount = 50000 WHERE ticket_id = :id AND kind = 'DEPOSIT'",
+            Map.of("id", ticketId));
+
+        RemainingInvoiceDocumentDto issued = remainingInvoiceService.issue(
+            remainingInvoiceService.createDraft(ticketId, null, salesActor).id(), salesActor);
+
+        assertThat(issued.depositDeduction()).isEqualByComparingTo(dn.depositAmount());
+        assertThat(tickets.payableAmount(ticketId)).isEqualByComparingTo(dn.totalPayable().add(issued.grandTotal()));
     }
 
     @Test

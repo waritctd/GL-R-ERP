@@ -34,6 +34,7 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         addActivity: vi.fn(),
         updateTracking: vi.fn(),
         parties: vi.fn(),
+        orders: vi.fn(),
         comment: vi.fn(),
         hold: vi.fn(),
         dormant: vi.fn(),
@@ -151,6 +152,7 @@ beforeEach(() => {
   api.tickets.listDeliveries.mockResolvedValue({ items: [] });
   api.tickets.listActivities.mockResolvedValue({ items: [] });
   api.tickets.parties.mockResolvedValue({ parties: [] });
+  api.tickets.orders.mockResolvedValue({ rootTicketId: 701, rootCode: 'PR-2026-0701', orders: [], totals: null });
   api.tickets.addActivity.mockResolvedValue({ id: 1, kind: 'CALL' });
   api.tickets.reopen.mockResolvedValue({ ticket: buildTicket() });
   api.attachments.list.mockResolvedValue({ attachments: [] });

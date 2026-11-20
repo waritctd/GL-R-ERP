@@ -204,12 +204,15 @@ public final class DealQuotationRenderAdapter {
         // printedBy/salesRep each fall back to the display override when the corresponding
         // *DisplayId is set (V179) — see #printedByName/#salesRepDisplayNameOrReal. approvedBy
         // is untouched: the override never covers the approver slot.
+        boolean ruleApproved = quotation.approvalBasis() != null;
         Signatories signatories = new Signatories(
             printedByName(quotation, english),
             salesRepDisplayNameOrReal(quotation, english),
-            displayName(quotation.approvedByName(), quotation.approvedByNameEn(), english),
+            // A rule-approved add-on quotation (V232) prints no person in the approver slot: no name, no signature.
+            ruleApproved ? "อนุมัติตามราคาเดิม " + quotation.approvalSourceNumbers()
+                : displayName(quotation.approvedByName(), quotation.approvedByNameEn(), english),
             null,
-            approverSignaturePng, approverSignatureMime,
+            ruleApproved ? null : approverSignaturePng, ruleApproved ? null : approverSignatureMime,
             bangkokDate(quotation.createdAt()), bangkokDate(quotation.submittedAt()), bangkokDate(quotation.approvedAt()),
             printedBySignaturePng, printedBySignatureMime,
             salesRepSignaturePng, salesRepSignatureMime);
@@ -485,6 +488,9 @@ public final class DealQuotationRenderAdapter {
         // but those never reach depositPct == 0 in the first place) falls through to the original
         // remainderMode/creditDays-based text below, so an already-approved legacy
         // document keeps printing byte-for-byte what it always did.
+        if (WastageCalculator.FULL_PAYMENT_TERM_CREDIT.equals(fullPaymentTerm)) {
+            return "2.บริษัทขอรับเงินค่าสินค้าภายใน " + (creditDays != null ? creditDays : 0) + " วัน นับจากวันที่ส่งมอบสินค้า";
+        }
         String termText = fullPaymentTermThaiText(fullPaymentTerm);
         if (termText != null) {
             return "2." + termText;
@@ -791,6 +797,10 @@ public final class DealQuotationRenderAdapter {
             return "2.A deposit of " + depositPct + "% is required upon order confirmation, " + remainderText + ".";
         }
         // Item 4 (V181) English twin of the Thai branch above — same legacy fallback, same reason.
+        if (WastageCalculator.FULL_PAYMENT_TERM_CREDIT.equals(fullPaymentTerm)) {
+            int days = creditDays != null ? creditDays : 0;
+            return "2.Full payment is due within " + days + " " + DealQuotationLines.plural(days, "day", "days") + " of delivery.";
+        }
         String termText = fullPaymentTermEnglishText(fullPaymentTerm);
         if (termText != null) {
             return "2." + termText;

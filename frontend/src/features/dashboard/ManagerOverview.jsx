@@ -87,6 +87,13 @@ function ManagerToday({ user, employee, switcher, panelProps }) {
   // The team-movement panel and อัตราปิดงาน read the deal list with the default 7-day range (server flags per row).
   const teamRange = useMemo(() => defaultRange(), []);
   const ticketsQuery = useQuery({
+    // One row per project, like the list the panel links to (server-side fold).
+    queryKey: queryKeys.ticketListByRange(teamRange.from, teamRange.to, 'project'),
+    queryFn: () => api.tickets.list({ movementFrom: teamRange.from, movementTo: teamRange.to, fold: 'project' }).then((r) => r.tickets ?? []),
+  });
+
+  // The panel's ordered/expected money is split per ORDER (unfolded): a folded row's stage is the lead order's only.
+  const ordersQuery = useQuery({
     queryKey: queryKeys.ticketListByRange(teamRange.from, teamRange.to),
     queryFn: () => api.tickets.list({ movementFrom: teamRange.from, movementTo: teamRange.to }).then((r) => r.tickets ?? []),
   });
@@ -116,7 +123,7 @@ function ManagerToday({ user, employee, switcher, panelProps }) {
       <PageStack {...panelProps}>
       <TeamOverview showTitle={false} />
 
-      <TeamMovementPanel deals={tickets} range={teamRange} />
+      <TeamMovementPanel deals={tickets} orders={ordersQuery.data ?? null} ordersFailed={failed(ordersQuery)} range={teamRange} />
 
       <Panel title="อัตราปิดงาน">
         {failed(ticketsQuery) ? (

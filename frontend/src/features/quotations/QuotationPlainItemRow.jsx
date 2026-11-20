@@ -11,6 +11,8 @@ export function QuotationPlainItemRow({
   item, index, readOnly, errors = {}, onChange, onRemove,
   groupId = null, locationGroups = [], onMove, documentLanguage = 'TH', currency = 'THB',
 }) {
+  // V232: a line reusing an approved item keeps its approved price; the server enforces it too.
+  const priceLocked = item.sourceQuotationItemId != null;
   const moveTargets = locationGroups.filter((group) => group.groupId !== groupId);
   const primaryUnits = PLAIN_UNIT_OPTIONS[documentLanguage] ?? PLAIN_UNIT_OPTIONS.TH;
   const otherUnits = documentLanguage === 'EN' ? PLAIN_UNIT_OPTIONS.TH : PLAIN_UNIT_OPTIONS.EN;
@@ -109,14 +111,14 @@ export function QuotationPlainItemRow({
         </FormField>
         <FormField label="ราคา/หน่วย" htmlFor={`plain-price-${index}`} required error={errors.unitPrice}>
           <input
-            id={`plain-price-${index}`} type="number" step="0.01" min="0" disabled={readOnly}
+            id={`plain-price-${index}`} type="number" step="0.01" min="0" disabled={readOnly || priceLocked}
             value={item.unitPrice ?? ''}
             onChange={(e) => onChange({ unitPrice: e.target.value === '' ? '' : Number(e.target.value) })}
           />
         </FormField>
         <FormField label="ส่วนลด %" htmlFor={`plain-disc-${index}`} hint="เว้นว่าง = ไม่มีส่วนลด (พิมพ์ Net)">
           <input
-            id={`plain-disc-${index}`} type="number" step="0.01" min="0" disabled={readOnly}
+            id={`plain-disc-${index}`} type="number" step="0.01" min="0" disabled={readOnly || priceLocked}
             value={item.discountPct ?? ''}
             onChange={(e) => onChange({ discountPct: e.target.value === '' ? null : Number(e.target.value) })}
           />

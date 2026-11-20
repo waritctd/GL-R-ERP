@@ -23,6 +23,7 @@ import th.co.glr.hr.customer.CustomerRepository;
 import th.co.glr.hr.customerquotation.CustomerQuotationDtos.CustomerQuotationDto;
 import th.co.glr.hr.customerquotation.CustomerQuotationDtos.CustomerQuotationItemDto;
 import th.co.glr.hr.customerquotation.CustomerQuotationRepository;
+import th.co.glr.hr.notification.DealNoticeText;
 import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.pricingrequest.UnitBasis;
 import th.co.glr.hr.ticket.DealLifecycle;
@@ -50,6 +51,8 @@ public class DepositNoticeService {
     private static final java.util.Set<String> VIEWER_ROLES =
         java.util.Set.of("sales", "import", "ceo", "account", "sales_manager");
 
+    private static final org.slf4j.Logger LOG = org.slf4j.LoggerFactory.getLogger(DepositNoticeService.class);
+
     private final DepositNoticeRepository docs;
     private final TicketRepository   tickets;
     private final NotificationRepository notifications;
@@ -59,12 +62,15 @@ public class DepositNoticeService {
     private final CustomerQuotationRepository quotations;
 
     private final DocumentBundle bundle;
+    private final RemainingInvoiceRepository remainingInvoices;
 
     public DepositNoticeService(DepositNoticeRepository docs, TicketRepository tickets,
                            NotificationRepository notifications, DepositNoticePdfRenderer renderer,
                            CustomerRepository customers,
-                           CustomerQuotationRepository quotations, DocumentBundle bundle) {
+                           CustomerQuotationRepository quotations, DocumentBundle bundle,
+                           RemainingInvoiceRepository remainingInvoices) {
         this.bundle            = bundle;
+        this.remainingInvoices = remainingInvoices;
         this.docs              = docs;
         this.tickets           = tickets;
         this.notifications     = notifications;
@@ -201,15 +207,18 @@ public class DepositNoticeService {
     @Transactional
     public DepositNoticeDto update(long docId, DepositNoticeDraftRequest req, UserPrincipal actor) {
         requireRole(actor, SALES_ROLES);
-        DepositNoticeDto doc = requireDraft(docId);
-        requireTicketOwner(doc.ticketId(), actor);
+        DepositNoticeDto doc = requireEditable(docId);
+        requireActiveLifecycle(requireTicketOwner(doc.ticketId(), actor));
         requirePreparerInDeal(doc.ticketId(), req.preparerId(), doc.preparerId());
-        // Sales may change the deposit percent on a DRAFT (requireDraft
-        // above 409s an issued notice). docs.update recomputes the amount from it. A request
-        // without a percent keeps the draft's own.
+        // Sales may change the deposit percent on a DRAFT or an ISSUED notice (a SUPERSEDED one is refused by
+        // requireEditable above). docs.update recomputes the amount from it. A request without a percent keeps the
+        // notice's own.
         BigDecimal depositPercent = req.depositPercent() != null ? req.depositPercent() : doc.depositPercent();
         if (depositPercent.signum() <= 0) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "เปอร์เซ็นต์มัดจำต้องมากกว่า 0");
+        }
+        if (depositPercent.compareTo(BigDecimal.ONE) > 0) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "เปอร์เซ็นต์มัดจำต้องไม่เกิน 100");
         }
         // Whole percents only: the document prints the percent rounded (40.5% shows as "41%"). A
         // percent stored before that rule (0.3330) still saves while it is sent back unchanged;
@@ -223,8 +232,141 @@ public class DepositNoticeService {
             depositPercent,
             req.notes(), echoOnly(req.items(), doc.items()), req.expectedUpdatedAt(), req.preparerId()
         );
-        docs.update(docId, effective, doc.items());
-        return docs.findById(docId).orElseThrow();
+        docs.update(docId, effective, doc.items(), doc.status());
+        DepositNoticeDto updated = docs.findById(docId).orElseThrow();
+        if ("ISSUED".equals(doc.status())) {
+            BigDecimal netReceived = tickets.netDepositReceived(doc.ticketId());
+            if (updated.depositAmount().compareTo(doc.depositAmount()) < 0 && updated.depositAmount().compareTo(
+                    netReceived.divide(BigDecimal.ONE.add(VAT_RATE), 2, RoundingMode.HALF_UP)) < 0) {
+                throw new ApiException(HttpStatus.CONFLICT, "ลดยอดมัดจำต่ำกว่าที่รับชำระแล้วไม่ได้ (รับแล้ว ฿"
+                    + String.format(java.util.Locale.US, "%,.2f", netReceived) + ") — ให้ฝ่ายบัญชีบันทึกคืนเงินก่อน");
+            }
+            tickets.addEvent(doc.ticketId(), actor.id(), actor.name(), TicketEventKind.EDITED, null, null,
+                "แก้ไขใบแจ้งรับมัดจำ " + doc.docNumber() + " (ออกเลขแล้ว): " + changes(doc, updated));
+            if (doc.depositAmount().compareTo(updated.depositAmount()) != 0) {
+                // account matches the bank transfer against this amount, same channel as issue()
+                notifications.notifyByRole("account", doc.ticketId(), TicketEventKind.EDITED,
+                    "แก้ไขใบแจ้งรับมัดจำ " + doc.docNumber() + " ยอดมัดจำ " + ThaiText.money(doc.depositAmount())
+                        + " → " + ThaiText.money(updated.depositAmount()) + " บาท"
+                        + " (ยอดชำระรวม VAT " + ThaiText.money(doc.totalPayable()) + " → "
+                        + ThaiText.money(updated.totalPayable()) + " บาท) (ออกเลขแล้ว)");
+            }
+            refreshRemainingInvoices(doc.ticketId(), actor);
+        }
+        return updated;
+    }
+
+    /** Old -> new for what an in-place edit of an ISSUED notice changed (the audit message). */
+    private static String changes(DepositNoticeDto before, DepositNoticeDto after) {
+        List<String> parts = new ArrayList<>();
+        if (before.depositPercent().compareTo(after.depositPercent()) != 0) {
+            parts.add("มัดจำ " + percentText(before.depositPercent()) + "% → " + percentText(after.depositPercent()) + "%");
+        }
+        changed(parts, "อ้างอิง", before.reference(), after.reference());
+        changed(parts, "ชื่อลูกค้า", before.customerName(), after.customerName());
+        changed(parts, "เลขผู้เสียภาษี", before.customerTaxId(), after.customerTaxId());
+        changed(parts, "ที่อยู่", before.customerAddress(), after.customerAddress());
+        changed(parts, "โครงการ", before.projectName(), after.projectName());
+        changed(parts, "หมายเหตุ", String.join(" / ", before.notes()), String.join(" / ", after.notes()));
+        if (!sameLines(before.items(), after.items())) {
+            parts.add("รายการสินค้าเปลี่ยน (" + before.items().size() + " → " + after.items().size() + " รายการ)");
+        }
+        if (before.subtotal().compareTo(after.subtotal()) != 0) {
+            parts.add("ยอดสินค้า " + ThaiText.money(before.subtotal()) + " → " + ThaiText.money(after.subtotal()));
+        }
+        if (before.depositAmount().compareTo(after.depositAmount()) != 0) {
+            parts.add("เงินมัดจำ " + ThaiText.money(before.depositAmount()) + " → " + ThaiText.money(after.depositAmount()));
+        }
+        return parts.isEmpty() ? "ไม่มีการเปลี่ยนแปลงค่าหลัก" : String.join(" · ", parts);
+    }
+
+    private static void changed(List<String> parts, String label, String before, String after) {
+        if (!java.util.Objects.equals(nullToEmpty(before), nullToEmpty(after))) {
+            parts.add(label + " \"" + nullToEmpty(before) + "\" → \"" + nullToEmpty(after) + "\"");
+        }
+    }
+
+    /** Line equality by content (the ids are new on every save). */
+    private static boolean sameLines(List<DepositNoticeItemDto> a, List<DepositNoticeItemDto> b) {
+        if (a.size() != b.size()) return false;
+        for (int i = 0; i < a.size(); i++) {
+            DepositNoticeItemDto x = a.get(i), y = b.get(i);
+            if (!java.util.Objects.equals(x.description(), y.description()) || !java.util.Objects.equals(x.unit(), y.unit())
+                    || !java.util.Objects.equals(x.discountLabel(), y.discountLabel())
+                    || x.qty().compareTo(y.qty()) != 0 || x.unitPrice().compareTo(y.unitPrice()) != 0
+                    || x.netUnitPrice().compareTo(y.netUnitPrice()) != 0 || x.amount().compareTo(y.amount()) != 0) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static String percentText(BigDecimal fraction) {
+        return fraction.movePointRight(2).stripTrailingZeros().toPlainString();
+    }
+
+    private static String nullToEmpty(String v) {
+        return v == null ? "" : v;
+    }
+
+    /**
+     * The stored remaining invoices (DRAFT and ISSUED, never SUPERSEDED) snapshot their deposit deduction and money
+     * totals from the latest ISSUED notice, so an edit of that notice re-runs the same resolution they were built
+     * with. An ISSUED invoice whose figures change gets an EDITED event on the deal (number, old -> new total and
+     * deduction). A refusal of that resolution (blockingReason, an ApiException such as a deal that left
+     * quotation_issued, or a row that left its status meanwhile) skips the invoice, is logged and leaves an EDITED
+     * event saying it was NOT refreshed and why — it never fails the notice edit.
+     */
+    private void refreshRemainingInvoices(long ticketId, UserPrincipal actor) {
+        for (RemainingInvoiceDocumentDto inv : remainingInvoices.findByTicket(ticketId)) {
+            if (!"DRAFT".equals(inv.status()) && !"ISSUED".equals(inv.status())) continue;
+            String label = inv.docNumber() == null ? "ฉบับร่าง" : inv.docNumber();
+            String skipReason = null;
+            try {
+                RemainingInvoiceSnapshot snap = resolveRemainingInvoiceSnapshot(ticketId, inv.customerQuotationId(), actor);
+                ResolvedRemainingInvoice resolved = snap.resolved();
+                if (resolved.blockingReason() != null) {
+                    skipReason = resolved.blockingReason();
+                } else {
+                    RemainingInvoiceMoney money = computeRemainingInvoiceMoney(resolved);
+                    CustomerHeaderInfo header = snap.header();
+                    BigDecimal deduction = resolved.depositAmount() == null ? BigDecimal.ZERO : resolved.depositAmount();
+                    int rows = remainingInvoices.updateSnapshot(inv.id(), resolved.matchedDepositNoticeId(),
+                        snap.ticketSummary().customerName(), header.taxId(), header.branch(), header.addressOnly(),
+                        header.projectName(), resolved.itemsTotal(), deduction, money.netAmount(), money.vatAmount(),
+                        money.grandTotal(), inv.status());
+                    if (rows == 0) {
+                        skipReason = "สถานะเอกสารเปลี่ยนไประหว่างแก้ไข";
+                    } else {
+                        remainingInvoices.replaceItems(inv.id(), resolved.items());
+                        if ("ISSUED".equals(inv.status())
+                                && (inv.grandTotal().compareTo(money.grandTotal()) != 0
+                                    || inv.depositDeduction().compareTo(deduction) != 0)) {
+                            tickets.addEvent(ticketId, actor.id(), actor.name(), TicketEventKind.EDITED, null, null,
+                                "ใบแจ้งหนี้ส่วนที่เหลือ " + label + " อัปเดตตามใบแจ้งรับมัดจำที่แก้ไข: ยอดชำระ "
+                                    + ThaiText.money(inv.grandTotal()) + " → " + ThaiText.money(money.grandTotal())
+                                    + " · หักมัดจำ " + ThaiText.money(inv.depositDeduction()) + " → " + ThaiText.money(deduction));
+                            if (inv.grandTotal().compareTo(money.grandTotal()) != 0) {
+                                boolean noVat = money.vatAmount() != null && money.vatAmount().signum() == 0;
+                                notifications.notifyByRoleAtLink("account", TicketEventKind.EDITED,
+                                    "ใบแจ้งหนี้ส่วนที่เหลือ " + label + " อัปเดตตามใบแจ้งรับมัดจำที่แก้ไข\n"
+                                        + DealNoticeText.dealLabel(snap.ticketSummary().code(), snap.ticketSummary().customerName())
+                                        + " · ยอดชำระรวม " + (noVat ? "" : "VAT ") + ThaiText.money(inv.grandTotal())
+                                        + " → " + ThaiText.money(money.grandTotal()) + " บาท",
+                                    "/finance/deals/" + ticketId);
+                            }
+                        }
+                    }
+                }
+            } catch (ApiException e) {
+                skipReason = e.getMessage();
+            }
+            if (skipReason != null) {
+                LOG.warn("Remaining invoice {} not refreshed after deposit notice edit: {}", inv.id(), skipReason);
+                tickets.addEvent(ticketId, actor.id(), actor.name(), TicketEventKind.EDITED, null, null,
+                    "ใบแจ้งหนี้ส่วนที่เหลือ " + label + " ไม่ได้อัปเดตตามใบแจ้งรับมัดจำที่แก้ไข: " + skipReason);
+            }
+        }
     }
 
     // Returns HTML preview (PDF requires LibreOffice — mock for now)
@@ -740,6 +882,12 @@ public class DepositNoticeService {
             answered.totalAmount());
     }
 
+    /** Deposit deduction (pre-VAT): always the notice's own deposit amount. Money received beyond it (an overpayment)
+     * is refunded by account as an ADJUSTMENT receipt, never billed here. */
+    private static BigDecimal deductionFor(BigDecimal noticeAmount) {
+        return noticeAmount != null ? noticeAmount : BigDecimal.ZERO;
+    }
+
     /** Item/deduction sourcing (rule D11) and rule C (net must not be negative), applied
      * to the single chosen quotation — see this section's header comment for the full rules. */
     private ResolvedRemainingInvoice resolveFromQuotation(long ticketId, QualifyingQuotation chosen,
@@ -774,7 +922,7 @@ public class DepositNoticeService {
             // here — there is deliberately no subtotal-must-match rule (matched.subtotal() vs the
             // quotation's own item total).
             items = itemsFromDepositNoticeForRemainingInvoice(matched.items());
-            depositAmount = matched.depositAmount() != null ? matched.depositAmount() : BigDecimal.ZERO;
+            depositAmount = deductionFor(matched.depositAmount());
             DepositRefBundle refs = resolveDepositReferenceOptions(ticketId, matched);
             defaultDepositReference = refs.defaultRef();
             depositReferenceOptions = refs.options();
@@ -821,8 +969,8 @@ public class DepositNoticeService {
                     "ไม่พบใบเสนอราคาที่ลูกค้ายอมรับ หรือใบแจ้งยอดมัดจำที่ออกแล้วสำหรับงานนี้ จึงไม่สามารถออกใบแจ้งหนี้ส่วนที่เหลือได้");
             }
         }
-        BigDecimal depositAmount = latestIssued != null && latestIssued.depositAmount() != null
-            ? latestIssued.depositAmount() : BigDecimal.ZERO;
+        BigDecimal depositAmount = latestIssued == null ? BigDecimal.ZERO
+            : deductionFor(latestIssued.depositAmount());
         BigDecimal itemsTotal = sumAmounts(items);
         if (itemsTotal.subtract(depositAmount).compareTo(BigDecimal.ZERO) < 0) {
             return new ResolvedRemainingInvoice(items, depositAmount, legacyReference(latestIssued), List.of(), null, List.of(),
@@ -1121,6 +1269,16 @@ public class DepositNoticeService {
         }
     }
 
+    /** DRAFT or ISSUED (an issued notice is edited in place); a SUPERSEDED one is read-only (409). */
+    private DepositNoticeDto requireEditable(long docId) {
+        DepositNoticeDto doc = docs.findById(docId)
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบใบแจ้งรับมัดจำนี้"));
+        if (!"DRAFT".equals(doc.status()) && !"ISSUED".equals(doc.status())) {
+            throw new ApiException(HttpStatus.CONFLICT, DepositNoticeRepository.SUPERSEDED);
+        }
+        return doc;
+    }
+
     private DepositNoticeDto requireDraft(long docId) {
         DepositNoticeDto doc = docs.findById(docId)
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบใบแจ้งรับมัดจำนี้"));
@@ -1214,12 +1372,13 @@ public class DepositNoticeService {
         return DealOwnership.isOwnerOrKeyer(s, actor.id()) || tickets.holdsAllSalesDocumentsGrant(actor);
     }
 
-    private void requireTicketOwner(long ticketId, UserPrincipal actor) {
+    private TicketSummaryDto requireTicketOwner(long ticketId, UserPrincipal actor) {
         TicketDto t = tickets.findById(ticketId)
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบงานนี้"));
         if (!ownsDeal(t.summary(), actor)) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
+        return t.summary();
     }
 
     private void requireRole(UserPrincipal actor, java.util.Set<String> allowed) {

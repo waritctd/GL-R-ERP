@@ -122,6 +122,7 @@ public class NotificationRepository {
         Map.entry("APPROVED", "ราคาได้รับการอนุมัติ"),
         Map.entry("REJECTED", "ราคาถูกตีกลับ"),
         Map.entry("REVISION_REQUESTED", "ขอแก้ไขเอกสาร"),
+        Map.entry("EDITED", "แก้ไขเอกสารที่ออกเลขแล้ว"),
         // PricingRequestService.submit()/pickup() — added distinct from the legacy "SUBMITTED" entry above (which
         // collides with TicketEventKind.SUBMITTED) so a pricing-request notification is no longer indistinguishable
         // from a ticket-submitted one.

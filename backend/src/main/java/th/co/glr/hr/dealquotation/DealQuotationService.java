@@ -45,6 +45,8 @@ import th.co.glr.hr.dealquotation.DealQuotationRepository.PictureImage;
 import th.co.glr.hr.dealquotation.DealQuotationRequests.ApproveRequest;
 import th.co.glr.hr.dealquotation.DealQuotationRequests.CancelRequest;
 import th.co.glr.hr.dealquotation.DealQuotationRequests.ItemInput;
+import th.co.glr.hr.dealquotation.DealQuotationDtos.ReusableApprovedItemDto;
+import th.co.glr.hr.dealquotation.DealQuotationDtos.ReusableApprovedItemsDto;
 import th.co.glr.hr.dealquotation.DealQuotationRequests.RejectRequest;
 import th.co.glr.hr.dealquotation.DealQuotationRequests.UpsertDealQuotationRequest;
 import th.co.glr.hr.notification.DealNoticeText;
@@ -252,7 +254,7 @@ public class DealQuotationService {
         // #create only makes a DEAL_DIRECT document, so only the language half of the rule can bite.
         requirePriceModeAllowed(priceMode, documentLanguage, false);
         String currency = resolveCurrency(documentLanguage, request.currency());
-        List<NewItem> items = buildItems(request.items(), priceMode, documentLanguage);
+        List<NewItem> items = keepValidSources(ticket, party == null ? null : party.partyId(), buildItems(request.items(), priceMode, documentLanguage));
         BigDecimal subtotal = WastageCalculator.subtotal(items.stream().map(NewItem::lineAmount).toList());
         // A brand-new document's own date is today (Bangkok), the value #mapQuotation computes from issued_at = now().
         // Must run AFTER #buildItems: "has special pricing" is decided from the rows about to be written.
@@ -269,9 +271,11 @@ public class DealQuotationService {
         // fullPaymentTerm; see #noDeposit/#resolveFullPaymentTerm.
         boolean noDeposit = isZeroDeposit(request.depositPercent());
         String remainderMode = noDeposit ? null : blankToNull(request.remainderMode());
-        Integer creditDays = noDeposit ? null : request.creditDays();
-        requireValidCreditDays(remainderMode, creditDays);
         String fullPaymentTerm = resolveFullPaymentTerm(request.depositPercent(), request.fullPaymentTerm());
+        // The zero-deposit CREDIT term carries its own day count; every other zero-deposit term drops it.
+        boolean creditTerm = WastageCalculator.FULL_PAYMENT_TERM_CREDIT.equals(fullPaymentTerm);
+        Integer creditDays = noDeposit && !creditTerm ? null : request.creditDays();
+        requireValidCreditDays(creditTerm ? "CREDIT" : remainderMode, creditDays);
         // Refused here, before a quotation number is taken or anything is written.
         String orderedByPhone = resolveOrderedByPhone(request.orderedByPhone());
         String orderedByEmail = resolveOrderedByEmail(request.orderedByEmail());
@@ -593,7 +597,7 @@ public class DealQuotationService {
             // a rule rather than an accident of this constructor.
             item.priceMode(),
             // A revision copies the declaration; a PRICING_REQUEST row's INSERT re-reads it from its pricing-request line.
-            item.stockSource());
+            item.stockSource(), item.sourceQuotationItemId());
     }
 
     /** Refuses changing a CEO-linked line's TYPE (must stay TILE, the only type {@link #createFromPricingRequest}
@@ -899,7 +903,7 @@ public class DealQuotationService {
         String validityMode = isBlank(request.validityMode())
             ? resolveValidityMode(existing.validityMode())
             : resolveValidityMode(request.validityMode());
-        List<NewItem> items = buildItems(request.items(), priceMode, documentLanguage);
+        List<NewItem> items = keepValidSources(ticket, existing.partyId(), buildItems(request.items(), priceMode, documentLanguage));
         BigDecimal subtotal = WastageCalculator.subtotal(items.stream().map(NewItem::lineAmount).toList());
         // Must run AFTER #buildItems, as in #create: "has special pricing" is decided from the rows about to be written,
         // so a discount cleared on THIS save already refuses DATE mode here, before anything is persisted.
@@ -914,9 +918,11 @@ public class DealQuotationService {
         // depositPercent, so there is nothing stale to preserve.
         boolean noDeposit = isZeroDeposit(request.depositPercent());
         String remainderMode = noDeposit ? null : blankToNull(request.remainderMode());
-        Integer creditDays = noDeposit ? null : request.creditDays();
-        requireValidCreditDays(remainderMode, creditDays);
         String fullPaymentTerm = resolveFullPaymentTerm(request.depositPercent(), request.fullPaymentTerm());
+        // The zero-deposit CREDIT term carries its own day count; every other zero-deposit term drops it.
+        boolean creditTerm = WastageCalculator.FULL_PAYMENT_TERM_CREDIT.equals(fullPaymentTerm);
+        Integer creditDays = noDeposit && !creditTerm ? null : request.creditDays();
+        requireValidCreditDays(creditTerm ? "CREDIT" : remainderMode, creditDays);
         // The editor always sends its CURRENT value (the checkbox is always rendered), so there is no "missing keeps
         // stored" case: null on the wire means UNticked, as on create.
         boolean omitContactHonorific = resolveOmitContactHonorific(request.omitContactHonorific());
@@ -1165,6 +1171,12 @@ public class DealQuotationService {
         // The deal's lock, like create/approve/cancel/reorder: TicketService#changeCustomer takes it too, and a submit
         // slipping between its "nothing sent yet" check and its writes would leave a PENDING_APPROVAL document printing the
         // old customer. Re-read under the lock: what was loaded above may be what that change just rewrote.
+        // Add-on reuse rule reads the ROOT's approved quotations: lock the root FIRST, then this deal (one fixed order), so a
+        // root revision approved concurrently cannot supersede a source between the check and the approval.
+        long rootId = quotations.rootTicketId(found.ticketId());
+        if (rootId != found.ticketId()) {
+            quotations.lockTicket(rootId);
+        }
         quotations.lockTicket(found.ticketId());
         DealQuotationDto quotation = requireQuotation(id);
         requireNoOtherDirectQuotationAfterConfirm(quotation);
@@ -1185,7 +1197,9 @@ public class DealQuotationService {
         // Submit-time half of the credit-days rule: create/update refuse an explicit invalid VALUE
         // (#requireValidCreditDays) but let a CREDIT-remainder draft save with creditDays BLANK; submit requires it. Not
         // re-checked for a non-null value: one already accepted by create/update is never invalid.
-        if ("CREDIT".equals(quotation.remainderMode()) && quotation.creditDays() == null) {
+        if (("CREDIT".equals(quotation.remainderMode())
+            || WastageCalculator.FULL_PAYMENT_TERM_CREDIT.equals(quotation.fullPaymentTerm()))
+            && quotation.creditDays() == null) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "กรุณาระบุจำนวนวันเครดิต อย่างน้อย 1 วัน");
         }
         // A DATE-mode validity deadline that has already passed must not reach an approver: create/update refuse one
@@ -1227,7 +1241,7 @@ public class DealQuotationService {
                 && !"PRICING_REQUEST".equals(quotation.origin())) {
             return submitAsRevisionOfRejected(quotation, actor);
         }
-        return submitDraftRow(id, actor);
+        return submitDraftRow(id, actor, false);
     }
 
     /**
@@ -1245,12 +1259,17 @@ public class DealQuotationService {
             null, null,
             "สร้างใบเสนอราคาฉบับแก้ไข " + revisionNumber + " จาก " + rejected.number()
                 + " ที่ถูกตีกลับ — " + rejected.approvalNote());
-        return submitDraftRow(revisionId, actor);
+        // M2: a human said no to the original; the rule never approves its resubmission, so the person who rejected sees it.
+        return submitDraftRow(revisionId, actor, true);
     }
 
     /** The DRAFT -> PENDING_APPROVAL compare-and-set, its ticket event and its notification, shared by a first-time
      * submit and {@link #submitAsRevisionOfRejected} ({@code id} is the freshly-minted revision there). */
-    private DealQuotationDto submitDraftRow(long id, UserPrincipal actor) {
+    private DealQuotationDto submitDraftRow(long id, UserPrincipal actor, boolean afterRejection) {
+        DealQuotationDto draft = requireQuotation(id);
+        if (!afterRejection && reusesApprovedPricesOnly(draft)) {
+            return approveByRule(draft, actor);
+        }
         int rows = quotations.submit(id, actor.id());
         if (rows == 0) {
             throw new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคาไม่ได้อยู่ในสถานะร่างแล้ว จึงส่งขออนุมัติไม่ได้");
@@ -1339,6 +1358,20 @@ public class DealQuotationService {
         if ("PRICING_REQUEST".equals(quotation.origin())) {
             return approveAndIssuePricingRequestOrigin(quotation, request, actor);
         }
+        DealQuotationDto approved = approveCore(quotation, blankToNull(request.note()), actor, null);
+        notifyOtherApprover(approved, actor, "อนุมัติใบเสนอราคา " + approved.number() + " แล้ว");
+        return approved;
+    }
+
+    /**
+     * The DEAL_DIRECT approval proper, shared by {@link #approve} (an approver's decision) and the add-on reuse rule
+     * ({@link #approveByRule}): the PENDING_APPROVAL -> APPROVED compare-and-set, the one-live sweep, the ancestor walk,
+     * the QUOTATION_ISSUED event, the stage/name fill and the rep's bell. {@code actor} is recorded as the approver.
+     * No approver-to-approver FYI here: {@link #approve} adds it, the rule path deliberately sends nothing to approvers.
+     */
+    private DealQuotationDto approveCore(DealQuotationDto quotation, String note, UserPrincipal actor,
+                                         String ruleSourceNumbers) {
+        long id = quotation.id();
         // A deal may hold only ONE LIVE quotation at a time, any origin; approve() also sweeps every other live sibling
         // on this ticket. Locks the ticket BEFORE the compare-and-set (not merely before the sweep), so two concurrent
         // approve() calls on the same ticket, even on two DIFFERENT PENDING_APPROVAL rows, serialise and can never both
@@ -1357,7 +1390,9 @@ public class DealQuotationService {
                 && DealQuotationRenderAdapter.hasSpecialPricing(quotation)
             ? quotation.validityUntil()
             : (quotation.validityDays() != null ? approvalDate.plusDays(quotation.validityDays()) : null);
-        int rows = quotations.approve(id, actor.id(), blankToNull(request.note()), validityDate);
+        int rows = ruleSourceNumbers != null
+            ? quotations.approveByReuseRule(id, actor.id(), note, validityDate, "REUSED_APPROVED_PRICE", ruleSourceNumbers)
+            : quotations.approve(id, actor.id(), note, validityDate);
         if (rows == 0) {
             throw new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคาไม่ได้อยู่ในสถานะรออนุมัติ จึงอนุมัติไม่ได้");
         }
@@ -1387,9 +1422,228 @@ public class DealQuotationService {
         }
         String message = "ใบเสนอราคา " + approved.number() + " ได้รับอนุมัติแล้ว";
         // In-app + branded HTML email only; no second plain-text email with the PDF.
-        notifyRepAndCreator(approved, TicketEventKind.DEAL_QUOTATION_APPROVED, message);
-        notifyOtherApprover(approved, actor, "อนุมัติใบเสนอราคา " + approved.number() + " แล้ว");
+        // The rule path tells nobody who just did it themselves (the toast is enough); everyone else is as before.
+        notifyRepAndCreator(approved, TicketEventKind.DEAL_QUOTATION_APPROVED, message,
+            ruleSourceNumbers != null ? actor.id() : null);
         return approved;
+    }
+
+    /** The note an add-on quotation carries when the reuse rule approved it. */
+    static final String REUSE_RULE_NOTE = "อนุมัติตามราคาเดิมที่อนุมัติแล้วในงานนี้";
+
+    /**
+     * Add-on reuse rule: DRAFT -> PENDING_APPROVAL -> APPROVED in one step, nobody asked. {@code approved_by} is the
+     * submitter (ruling) and the note marks the rule. No {@link #notifySubmitted}: approvers get no noise.
+     */
+    private DealQuotationDto approveByRule(DealQuotationDto draft, UserPrincipal actor) {
+        int rows = quotations.submit(draft.id(), actor.id());
+        if (rows == 0) {
+            throw new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคาไม่ได้อยู่ในสถานะร่างแล้ว จึงส่งขออนุมัติไม่ได้");
+        }
+        java.util.Set<Long> sourceIds = new java.util.HashSet<>();
+        draft.items().forEach(i -> sourceIds.add(i.sourceQuotationItemId()));
+        String sourceNumbers = approvedSourcesInChain(draft.ticketId(), reuseCustomerId(draft.ticketId(), draft.partyId())).stream()
+            .filter(source -> sourceIds.contains(source.item().id())).map(source -> source.quotation().number())
+            .distinct().collect(java.util.stream.Collectors.joining(", "));
+        return approveCore(requireQuotation(draft.id()), REUSE_RULE_NOTE, actor, sourceNumbers);
+    }
+
+    /** One approved line of the project's chain together with the document it sits on. */
+    private record ApprovedSource(DealQuotationItemDto item, DealQuotationDto quotation, String orderCode) {}
+
+    /**
+     * M1: the customer whose approved prices an add-on may reuse: the party of the first order's confirmed quotation
+     * when it has one, else the party of the add-on quotation being written ({@code ownPartyId}), else the deal's own
+     * customer. A losing bidder's approved price is never a source for the winner. -1 matches nothing.
+     */
+    private long reuseCustomerId(long ticketId, Long ownPartyId) {
+        Long confirmed = quotations.findRootConfirmedQuotationId(ticketId)
+            .map(id -> partyCustomerIdOf(requireQuotation(id).partyId())).orElse(null);
+        Long customer = confirmed != null ? confirmed : partyCustomerIdOf(ownPartyId);
+        if (customer == null) {
+            customer = requireTicketSummary(ticketId).customerId();
+        }
+        return customer == null ? -1L : customer;
+    }
+
+    private List<ApprovedSource> approvedSourcesInChain(long ticketId, long customerId) {
+        List<ApprovedSource> out = new ArrayList<>();
+        for (DealQuotationRepository.ChainQuotation c : quotations.findApprovedQuotationsInChain(ticketId, customerId)) {
+            DealQuotationDto q = requireQuotation(c.quotationId());
+            for (DealQuotationItemDto item : q.items()) {
+                out.add(new ApprovedSource(item, q, c.orderCode()));
+            }
+        }
+        return out;
+    }
+
+    /** The first order's agreed quotation: the root's confirmed one, else the latest approved one of the chain. */
+    private DealQuotationDto referenceQuotation(long ticketId, List<ApprovedSource> sources) {
+        return quotations.findRootConfirmedQuotationId(ticketId).map(this::requireQuotation)
+            .orElseGet(() -> sources.isEmpty() ? null : sources.get(0).quotation());
+    }
+
+    /** Quantity is the ONLY thing a reused line may change: everything that says what is sold, in what pack and size,
+     * and in which unit must equal its source (blank = null). Wastage / quantity mode are quantity-side; the location heading and line note must equal. */
+    private boolean sameIdentity(DealQuotationItemDto a, DealQuotationItemDto b) {
+        return sameText(a.lineType(), b.lineType())
+            && java.util.Objects.equals(a.catalogPriceId(), b.catalogPriceId())
+            && sameText(a.productCode(), b.productCode()) && sameText(a.brand(), b.brand())
+            && sameText(a.model(), b.model()) && sameText(a.color(), b.color()) && sameText(a.texture(), b.texture())
+            && sameText(a.sizeText(), b.sizeText()) && sameText(a.originCountry(), b.originCountry())
+            && sameMoney(a.thicknessMm(), b.thicknessMm()) && sameMoney(a.sqmPerPiece(), b.sqmPerPiece())
+            && sameMoney(a.sqmPerBox(), b.sqmPerBox())
+            && java.util.Objects.equals(a.piecesPerBox(), b.piecesPerBox())
+            && sameText(a.unit(), b.unit()) && sameText(a.descriptionLine(), b.descriptionLine())
+            // I2: the printed delivery promise is part of what is sold: a changed lead time or stock source needs approval.
+            && java.util.Objects.equals(a.leadTimeMinDays(), b.leadTimeMinDays())
+            && java.util.Objects.equals(a.leadTimeMaxDays(), b.leadTimeMaxDays())
+            && sameText(a.stockSource(), b.stockSource())
+            // Free text nobody approved must not ride a rule-approved quotation: the printed ตำแหน่งติดตั้ง heading and the
+            // line note (editor-only today, compared anyway) must equal the source line's.
+            && sameText(a.locationLabel(), b.locationLabel()) && sameText(a.itemNotes(), b.itemNotes());
+    }
+
+    private boolean sameText(String a, String b) {
+        return java.util.Objects.equals(isBlank(a) ? null : a.trim(), isBlank(b) ? null : b.trim());
+    }
+
+    private static boolean sameMoney(BigDecimal a, BigDecimal b) {
+        return a == null ? b == null : b != null && a.compareTo(b) == 0;
+    }
+
+    /**
+     * Whether an ADD_ON draft may be approved by rule. The server's own check, never the client's claim: there is at
+     * least one line; every line names a source item that sits on an approved quotation of THIS project's chain; each
+     * line's unit price, discount, net price, row price mode, and its document's currency, language and price mode equal
+     * the source's; there is no ADJUSTMENT line; and the deposit % equals the first order's. Quantity is never checked
+     * (ruling: no cap). Anything else is false, and the caller then takes the ordinary approval flow.
+     */
+    private boolean reusesApprovedPricesOnly(DealQuotationDto q) {
+        if (!"DEAL_DIRECT".equals(q.origin()) || q.items().isEmpty()) {
+            return false;
+        }
+        if (!"ADD_ON".equals(requireTicketSummary(q.ticketId()).childKind())) {
+            return false;
+        }
+        for (DealQuotationItemDto item : q.items()) {
+            if (item.sourceQuotationItemId() == null || WastageCalculator.LINE_TYPE_ADJUSTMENT.equals(item.lineType())) {
+                return false;
+            }
+        }
+        // Header: the commercial terms equal the first order's, no explicit-date validity, no customer notes.
+        long customerId = reuseCustomerId(q.ticketId(), q.partyId());
+        Long ownCustomer = partyCustomerIdOf(q.partyId());
+        if (ownCustomer != null && ownCustomer != customerId) {
+            return false;
+        }
+        List<ApprovedSource> sources = approvedSourcesInChain(q.ticketId(), customerId);
+        DealQuotationDto reference = referenceQuotation(q.ticketId(), sources);
+        if (reference == null || reference.depositPercent() == null
+                || !java.util.Objects.equals(reference.validityDays(), q.validityDays())
+                || !reference.depositPercent().equals(q.depositPercent())
+                || !sameText(reference.remainderMode(), q.remainderMode())
+                || !java.util.Objects.equals(reference.creditDays(), q.creditDays())
+                || !sameText(reference.fullPaymentTerm(), q.fullPaymentTerm())
+                || WastageCalculator.VALIDITY_MODE_DATE.equals(q.validityMode())
+                || !isBlank(q.customerNotes())) {
+            return false;
+        }
+        Map<Long, ApprovedSource> byId = new java.util.HashMap<>();
+        for (ApprovedSource source : sources) {
+            byId.put(source.item().id(), source);
+        }
+        for (DealQuotationItemDto item : q.items()) {
+            ApprovedSource source = byId.get(item.sourceQuotationItemId());
+            if (source == null) {
+                return false;
+            }
+            DealQuotationItemDto from = source.item();
+            DealQuotationDto fromQuotation = source.quotation();
+            if (!sameMoney(item.unitPrice(), from.unitPrice()) || !sameMoney(item.discountPct(), from.discountPct())
+                    || !sameMoney(item.netUnitPrice(), from.netUnitPrice())
+                    || !sameMoney(item.listPriceSqm(), from.listPriceSqm())
+                    || !sameMoney(item.directNetPriceSqm(), from.directNetPriceSqm())
+                    || !sameMoney(item.specialPriceSqm(), from.specialPriceSqm())
+                    || !java.util.Objects.equals(item.priceMode(), from.priceMode())
+                    || !java.util.Objects.equals(q.priceMode(), fromQuotation.priceMode())
+                    || !java.util.Objects.equals(q.currency(), fromQuotation.currency())
+                    || !java.util.Objects.equals(q.documentLanguage(), fromQuotation.documentLanguage())
+                    || !sameIdentity(item, from)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /** {@code GET /api/tickets/{id}/reusable-approved-items}: what an add-on order may reuse at its approved price. */
+    public ReusableApprovedItemsDto reusableApprovedItems(long ticketId, UserPrincipal actor) {
+        TicketSummaryDto ticket = requireTicketSummary(ticketId);
+        requireEditAccess(actor, ticket); // 403 before 409
+        if (!"ADD_ON".equals(ticket.childKind())) {
+            throw new ApiException(HttpStatus.CONFLICT, "ใช้ได้เฉพาะออเดอร์สั่งเพิ่มเท่านั้น");
+        }
+        List<ApprovedSource> sources = approvedSourcesInChain(ticketId, reuseCustomerId(ticketId, null)); // latest approval first
+        java.util.Set<String> seen = new java.util.HashSet<>();
+        List<ReusableApprovedItemDto> items = new ArrayList<>();
+        for (ApprovedSource source : sources) {
+            DealQuotationItemDto item = source.item();
+            if (WastageCalculator.LINE_TYPE_ADJUSTMENT.equals(item.lineType())) {
+                continue;
+            }
+            // Same line = same catalogue price, else the same code/size/brand/model/colour/texture (blank = null, case ignored).
+            String key = item.catalogPriceId() != null ? "c" + item.catalogPriceId()
+                : String.join("|", sameKey(item.productCode()), sameKey(item.sizeText()), sameKey(item.brand()),
+                    sameKey(item.model()), sameKey(item.color()), sameKey(item.texture()), sameKey(item.descriptionLine()));
+            if (!seen.add(key)) {
+                continue;
+            }
+            items.add(new ReusableApprovedItemDto(source.quotation().id(), source.quotation().number(),
+                source.orderCode(), item.descriptionLine(), item.netUnitPrice(), source.quotation().priceMode(),
+                source.quotation().documentLanguage(), source.quotation().currency(), reusableInput(item)));
+        }
+        DealQuotationDto reference = referenceQuotation(ticketId, sources);
+        return new ReusableApprovedItemsDto(reference == null ? null : reference.depositPercent(),
+            reference == null ? null : new DealQuotationDtos.SourceTermsDto(reference.depositPercent(),
+                reference.remainderMode(), reference.creditDays(), reference.fullPaymentTerm()), items);
+    }
+
+    private static String sameKey(String value) {
+        return value == null ? "" : value.trim().toLowerCase();
+    }
+
+    /** An approved line as the editor sends a line back: identity and price fields as approved; the quantity is the
+     * approved one as a starting value, for the rep to replace. */
+    private static ItemInput reusableInput(DealQuotationItemDto i) {
+        return new ItemInput(i.locationLabel(), i.catalogPriceId(), i.productCode(), i.brand(), i.model(), i.color(),
+            i.texture(), i.sizeText(), i.thicknessMm(), i.sqmPerPiece(), i.quantityMode(), i.areaSqm(), i.piecesInput(),
+            i.wastageMode(), i.wastageValue(), i.piecesPerBox(), i.unitPrice(), i.discountPct(), i.originCountry(),
+            i.leadTimeMinDays(), i.leadTimeMaxDays(), i.itemNotes(), i.lineType(), i.descriptionLine(), i.quantity(), i.unit(),
+            i.specialPriceSqm(), null, null, null, null, null, i.sqmPerBox(), i.roundToFullBox(), i.listPriceSqm(),
+            i.directNetPriceSqm(), i.priceMode(), i.stockSource(), i.id());
+    }
+
+    /**
+     * Keeps a line's {@code sourceQuotationItemId} only where it names an approved item of this deal's chain on an
+     * ADD_ON deal; anywhere else it is dropped, so a bogus claim never reaches the foreign key and the line simply
+     * needs approval like any other. The price lock is {@link #reusesApprovedPricesOnly} at submit.
+     */
+    private List<NewItem> keepValidSources(TicketSummaryDto ticket, Long ownPartyId, List<NewItem> items) {
+        java.util.Set<Long> claimed = new java.util.HashSet<>();
+        for (NewItem item : items) {
+            if (item.sourceQuotationItemId() != null) {
+                claimed.add(item.sourceQuotationItemId());
+            }
+        }
+        if (claimed.isEmpty()) {
+            return items;
+        }
+        java.util.Set<Long> valid = "ADD_ON".equals(ticket.childKind())
+            ? quotations.findReusableSourceIds(ticket.id(), reuseCustomerId(ticket.id(), ownPartyId), claimed) : java.util.Set.of();
+        return items.stream()
+            .map(item -> item.sourceQuotationItemId() != null && !valid.contains(item.sourceQuotationItemId())
+                ? item.withSourceQuotationItemId(null) : item)
+            .toList();
     }
 
     /**
@@ -2520,6 +2774,10 @@ public class DealQuotationService {
         return renderer.toPdf(toRenderModel(quotation));
     }
 
+    public String renderText(long id, UserPrincipal actor) {
+        return renderer.toText(buildRenderModel(id, actor));
+    }
+
     public byte[] renderXlsx(long id, UserPrincipal actor) {
         return renderer.toXlsx(buildRenderModel(id, actor));
     }
@@ -2593,9 +2851,15 @@ public class DealQuotationService {
     /** In-app notification to the rep AND the creator, deduped when they are the same employee (a rep who created
      * their own deal). */
     private void notifyRepAndCreator(DealQuotationDto quotation, String kind, String message) {
+        notifyRepAndCreator(quotation, kind, message, null);
+    }
+
+    private void notifyRepAndCreator(DealQuotationDto quotation, String kind, String message, Long exclude) {
         String link = "/quotations/" + quotation.id();
-        notifications.notifyEmployeeAtLink(quotation.salesRepId(), kind, message, link);
-        if (quotation.createdById() != quotation.salesRepId()) {
+        if (exclude == null || exclude.longValue() != quotation.salesRepId()) {
+            notifications.notifyEmployeeAtLink(quotation.salesRepId(), kind, message, link);
+        }
+        if (quotation.createdById() != quotation.salesRepId() && (exclude == null || !java.util.Objects.equals(exclude, quotation.createdById()))) {
             notifications.notifyEmployeeAtLink(quotation.createdById(), kind, message, link);
         }
     }
@@ -2737,6 +3001,7 @@ public class DealQuotationService {
             // a single-mode document's row.
             String rowPriceMode = rowPriceMode(input, priceMode, seq);
             NewItem item = buildItem(input, seq, rowPriceMode, documentLanguage, adjustmentBase);
+            item = item.withSourceQuotationItemId(input.sourceQuotationItemId());
             // …and it is STORED on the row only where it is the row's to decide. On a single-mode document the column
             // stays NULL, so nothing a client left on a row can sit there unseen and decide a price the day the document
             // is switched to MIXED.
@@ -3463,7 +3728,7 @@ public class DealQuotationService {
             // every row as NET.
             item.priceMode(),
             // A revision copies the declaration; a PRICING_REQUEST row's INSERT re-reads it from its pricing-request line.
-            item.stockSource());
+            item.stockSource(), item.sourceQuotationItemId());
     }
 
     // price_catalog.product_prices' price_unit for a linear-metre trim (V153). Its sqm_per_piece is LINEAR METRES per
