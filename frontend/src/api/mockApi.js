@@ -2471,7 +2471,8 @@ const mockRemainingInvoices = []; // RemainingInvoiceDocumentDto-shaped rows, ea
 // invoices, null when there are none. Read live, so a notice made through the mock shows up on the list.
 function mockViewerMayWriteDealDocuments(ticketId) {
   const user = requireSession();
-  return isSalesOwner(findTicketRaw(ticketId), user);
+  const ticket = findTicketRaw(ticketId);
+  return isSalesOwner(ticket, user) && (ticket.lifecycle ?? 'ACTIVE') === 'ACTIVE' && ticket.status !== 'cancelled';
 }
 function mockQuotationDocuments(q) {
   const notice = mockDepositNotices.find((d) => d.ticketId === q.ticketId && d.status !== 'SUPERSEDED' && d.status !== 'CANCELLED');
@@ -2496,7 +2497,8 @@ function mockDocFixtures() {
   const origin = (t, quotation, overrides = {}) => ({
     ticketId: t.id, ticketCode: t.code, projectName: t.projectName ?? t.title ?? null, customerName: t.customerName ?? null,
     ownerId: t.createdById, ownerName: t.createdByName,
-    quotationId: quotation?.id ?? null, quotationNumber: quotation?.number ?? null, ...overrides,
+    quotationId: quotation?.id ?? null, quotationNumber: quotation?.number ?? null,
+    lifecycle: t.status === 'cancelled' ? 'CANCELLED' : t.lifecycle ?? 'ACTIVE', ...overrides,
   });
   const twoBuyers = db.tickets.find((t) => mockDealQuotations.filter((q) => q.ticketId === t.id).length >= 2);
   const mine = db.tickets.filter((t) => t.createdById === 6 && t !== twoBuyers);
@@ -2582,8 +2584,13 @@ function mockDealDocumentRows(fixture, status) {
   const seesDrafts = user.role === 'sales' || user.role === 'sales_manager';
   const scoped = fixture
     .filter((r) => (user.role !== 'sales' || r.origin.ownerId === user.id) && (seesDrafts || r.status !== 'DRAFT'))
-    .map((r) => ({ ...r, viewerMayWrite: user.role === 'sales' ? r.origin.ownerId === user.id : false }));
-  return { scoped, rows: structuredClone(status ? scoped.filter((r) => r.status === status) : scoped) };
+    .map((r) => ({
+      ...r,
+      viewerMayWrite: user.role === 'sales' && r.origin.ownerId === user.id && r.origin.lifecycle === 'ACTIVE',
+      ...('itemsTotal' in r ? { customerQuotationId: r.origin.quotationId } : {}),
+    }));
+  const rows = structuredClone(status ? scoped.filter((r) => r.status === status) : scoped);
+  return { scoped, rows, total: rows.length };
 }
 const mockDealDocumentCounts = (scoped) => ({
   all: scoped.length, draft: scoped.filter((r) => r.status === 'DRAFT').length, issued: scoped.filter((r) => r.status === 'ISSUED').length,
@@ -16931,7 +16938,8 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
   // Mirrors DepositNoticeController + DepositNoticeService (deposit/).
   depositNotices: {
     async listAll({ status } = {}) {
-      return delay({ depositNotices: mockDealDocumentRows(mockDocFixtures().notices, status).rows });
+      const page = mockDealDocumentRows(mockDocFixtures().notices, status);
+      return delay({ depositNotices: page.rows, total: page.total });
     },
     async counts() {
       return delay(mockDealDocumentCounts(mockDealDocumentRows(mockDocFixtures().notices).scoped));
@@ -17227,7 +17235,8 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
 
   storedRemainingInvoices: {
     async listAll({ status } = {}) {
-      return delay({ remainingInvoices: mockDealDocumentRows(mockDocFixtures().invoices, status).rows });
+      const page = mockDealDocumentRows(mockDocFixtures().invoices, status);
+      return delay({ remainingInvoices: page.rows, total: page.total });
     },
     async counts() {
       return delay(mockDealDocumentCounts(mockDealDocumentRows(mockDocFixtures().invoices).scoped));

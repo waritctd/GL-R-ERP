@@ -180,6 +180,11 @@ class DepositNoticeBundlePdfIntegrationTest extends DirectQuotationDealTestBase 
         assertThat(chosen).as("notice + the ticked file, no quotation").hasSize(2);
         assertThat(depositNoticeService.bundleSelection(id, salesActor).attachmentIds()).containsExactly(other);
 
+        // a reader (sales_manager reads every deal) can download but not overwrite the owner's remembered choice
+        assertStatus(org.springframework.http.HttpStatus.FORBIDDEN, () -> depositNoticeService.saveBundleSelection(id,
+            salesManagerActor, new th.co.glr.hr.deposit.DocumentBundle.Selection(true, List.of())));
+        assertThat(depositNoticeService.bundleSelection(id, salesActor).attachmentIds()).containsExactly(other);
+
         long foreign = attachFile(pipelineTicket(salesActor), "f.pdf", "application/pdf", onePagePdf("F"), AttachType.OTHER);
         assertStatus(org.springframework.http.HttpStatus.BAD_REQUEST, () -> depositNoticeService.saveBundleSelection(id,
             salesActor, new th.co.glr.hr.deposit.DocumentBundle.Selection(true, List.of(foreign))));

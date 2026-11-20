@@ -78,60 +78,60 @@ class DealDocumentListIntegrationTest extends AbstractPostgresIntegrationTest {
 
     @Test
     void noticeList_isScopedByRole_andDraftsAreHiddenFromCeoAndAccount() {
-        assertThat(ids(lists.listNotices(null, actor(repA, "sales")))).containsExactly("GLRD69001");
-        assertThat(lists.listNotices(null, actor(repB, "sales"))).extracting(n -> n.status()).containsExactly("DRAFT");
-        assertThat(lists.listNotices(null, actor(9001, "sales_manager"))).hasSize(2);
-        assertThat(lists.listNotices("DRAFT", actor(9001, "sales_manager"))).hasSize(1);
-        assertThat(lists.listNotices(null, actor(9002, "ceo"))).extracting(n -> n.status()).containsExactly("ISSUED");
-        assertThat(ids(lists.listNotices(null, actor(9003, "account")))).containsExactly("GLRD69001"); // deal A only, no draft
+        assertThat(ids(notices(null, actor(repA, "sales")))).containsExactly("GLRD69001");
+        assertThat(notices(null, actor(repB, "sales"))).extracting(n -> n.status()).containsExactly("DRAFT");
+        assertThat(notices(null, actor(9001, "sales_manager"))).hasSize(2);
+        assertThat(notices("DRAFT", actor(9001, "sales_manager"))).hasSize(1);
+        assertThat(notices(null, actor(9002, "ceo"))).extracting(n -> n.status()).containsExactly("ISSUED");
+        assertThat(ids(notices(null, actor(9003, "account")))).containsExactly("GLRD69001"); // deal A only, no draft
         assertThat(lists.noticeCounts(actor(9001, "sales_manager"))).isEqualTo(new DealDocumentRows.Counts(2, 1, 1));
         assertThat(lists.noticeCounts(actor(9002, "ceo"))).isEqualTo(new DealDocumentRows.Counts(1, 0, 1));
         // the per-deal read refuses import, so the list does too
-        assertThatThrownBy(() -> lists.listNotices(null, actor(9004, "import"))).isInstanceOf(ApiException.class);
-        assertThatThrownBy(() -> lists.listInvoices(null, actor(9004, "import"))).isInstanceOf(ApiException.class);
+        assertThatThrownBy(() -> notices(null, actor(9004, "import"))).isInstanceOf(ApiException.class);
+        assertThatThrownBy(() -> invoices(null, actor(9004, "import"))).isInstanceOf(ApiException.class);
     }
 
     @Test
     void noticeRow_resolvesItsQuotation_andFlagsWriteAndMoney() {
-        NoticeRow byReference = lists.listNotices(null, actor(repA, "sales")).get(0);
+        NoticeRow byReference = notices(null, actor(repA, "sales")).get(0);
         assertThat(byReference.origin().quotationId()).isEqualTo(qA2);
         assertThat(byReference.origin().quotationNumber()).isEqualTo("QA2-" + ticketA);
         assertThat(byReference.origin().ownerId()).isEqualTo(repA);
         assertThat(byReference.moneyReceived()).isTrue();
         assertThat(byReference.viewerMayWrite()).isTrue();
-        assertThat(lists.listNotices(null, actor(9001, "sales_manager")).stream()
+        assertThat(notices(null, actor(9001, "sales_manager")).stream()
             .filter(n -> n.id() == byReference.id()).findFirst().orElseThrow().viewerMayWrite()).isFalse();
 
-        NoticeRow byConfirmedOrder = lists.listNotices(null, actor(repB, "sales")).get(0);
+        NoticeRow byConfirmedOrder = notices(null, actor(repB, "sales")).get(0);
         assertThat(byConfirmedOrder.origin().quotationId()).isEqualTo(qB1);
         assertThat(byConfirmedOrder.moneyReceived()).isFalse();
     }
 
     @Test
     void invoiceList_showsTheLiveDocumentWithOlderVersionsNested_andItsQuotation() {
-        List<InvoiceRow> rows = lists.listInvoices(null, actor(9002, "ceo"));
+        List<InvoiceRow> rows = invoices(null, actor(9002, "ceo"));
         assertThat(rows).hasSize(1);
         InvoiceRow live = rows.get(0);
         assertThat(live.docNumber()).isEqualTo("GLR6900001-2");
         assertThat(live.origin().quotationId()).isEqualTo(qA1);
         assertThat(live.olderVersions()).extracting(o -> o.docNumber()).containsExactly("GLR6900001-1");
         assertThat(live.viewerMayWrite()).isFalse();
-        assertThat(lists.listInvoices(null, actor(repB, "sales"))).isEmpty();
+        assertThat(invoices(null, actor(repB, "sales"))).isEmpty();
 
         // the draft revision folds into the ISSUED row for whoever may see drafts; counted once, as issued
-        InvoiceRow withPending = lists.listInvoices(null, actor(9001, "sales_manager")).get(0);
-        assertThat(lists.listInvoices(null, actor(9001, "sales_manager"))).hasSize(1);
+        InvoiceRow withPending = invoices(null, actor(9001, "sales_manager")).get(0);
+        assertThat(invoices(null, actor(9001, "sales_manager"))).hasSize(1);
         assertThat(withPending.status()).isEqualTo("ISSUED");
         assertThat(withPending.pendingRevision().nextVersion()).isEqualTo(3);
         assertThat(live.pendingRevision()).isNull();
         assertThat(lists.invoiceCounts(actor(9001, "sales_manager"))).isEqualTo(new DealDocumentRows.Counts(1, 0, 1));
-        assertThat(lists.listInvoices("DRAFT", actor(9001, "sales_manager"))).isEmpty();
+        assertThat(invoices("DRAFT", actor(9001, "sales_manager"))).isEmpty();
 
         // account sees QA1's number but no id: QA1 is a draft, not in account's quotation list
-        InvoiceRow forAccount = lists.listInvoices(null, actor(9003, "account")).get(0);
+        InvoiceRow forAccount = invoices(null, actor(9003, "account")).get(0);
         assertThat(forAccount.origin().quotationId()).isNull();
         assertThat(forAccount.origin().quotationNumber()).isEqualTo("QA1-" + ticketA);
-        assertThat(lists.listNotices(null, actor(9003, "account")).get(0).origin().quotationId()).isEqualTo(qA2);
+        assertThat(notices(null, actor(9003, "account")).get(0).origin().quotationId()).isEqualTo(qA2);
     }
 
     @Test
@@ -152,7 +152,47 @@ class DealDocumentListIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(lists.summarize(Map.of(qA1, ticketA), actor(9001, "sales_manager")).get(qA1).viewerMayWrite()).isFalse();
     }
 
+    @Test
+    void aDealThatIsNotActiveIsReadOnly_pagingCountsAllRows_andAnInvoiceCarriesItsOwnQuotation() {
+        // the owner's rows turn read-only (the server refuses their writes with 409) on a completed deal
+        jdbc.getJdbcTemplate().update("UPDATE sales.ticket SET lifecycle = 'COMPLETED' WHERE ticket_id = " + ticketA);
+        NoticeRow notice = notices(null, actor(repA, "sales")).get(0);
+        assertThat(notice.viewerMayWrite()).isFalse();
+        assertThat(notice.origin().lifecycle()).isEqualTo("COMPLETED");
+        assertThat(invoices(null, actor(repA, "sales")).get(0).viewerMayWrite()).isFalse();
+        assertThat(lists.summarize(Map.of(qA1, ticketA), actor(repA, "sales")).get(qA1).viewerMayWrite()).isFalse();
+        String status = jdbc.getJdbcTemplate().queryForObject("SELECT status FROM sales.ticket WHERE ticket_id = " + ticketA, String.class);
+        jdbc.getJdbcTemplate().update("UPDATE sales.ticket SET lifecycle = 'ACTIVE', status = 'cancelled' WHERE ticket_id = " + ticketA);
+        assertThat(notices(null, actor(repA, "sales")).get(0).origin().lifecycle()).isEqualTo("CANCELLED");
+        jdbc.getJdbcTemplate().update("UPDATE sales.ticket SET status = '" + status + "' WHERE ticket_id = " + ticketA);
+
+        // limit / offset page the rows; total is the whole match
+        var all = lists.listNotices(null, null, null, actor(9001, "sales_manager"));
+        assertThat(all.total()).isEqualTo(2);
+        var first = lists.listNotices(null, 1, 0, actor(9001, "sales_manager"));
+        var second = lists.listNotices(null, 1, 1, actor(9001, "sales_manager"));
+        assertThat(first.rows()).hasSize(1);
+        assertThat(first.total()).isEqualTo(2);
+        assertThat(second.rows()).hasSize(1);
+        assertThat(second.rows().get(0).id()).isNotEqualTo(first.rows().get(0).id());
+        assertThat(lists.listInvoices(null, 1, 5, actor(9001, "sales_manager")).rows()).isEmpty();
+        assertThat(lists.listInvoices(null, 1, 5, actor(9001, "sales_manager")).total()).isEqualTo(1);
+
+        // the invoice row names its OWN quotation even where account is not allowed the link
+        InvoiceRow forAccount = invoices(null, actor(9003, "account")).get(0);
+        assertThat(forAccount.origin().quotationId()).isNull();
+        assertThat(forAccount.customerQuotationId()).isEqualTo(qA1);
+    }
+
     // ── fixtures ──
+
+    private List<NoticeRow> notices(String status, UserPrincipal actor) {
+        return lists.listNotices(status, null, null, actor).rows();
+    }
+
+    private List<InvoiceRow> invoices(String status, UserPrincipal actor) {
+        return lists.listInvoices(status, null, null, actor).rows();
+    }
 
     private static List<String> ids(List<NoticeRow> rows) {
         return rows.stream().map(NoticeRow::docNumber).toList();

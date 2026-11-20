@@ -35,8 +35,10 @@ public class RemainingInvoiceController {
 
     /** Every live remaining invoice (DRAFT/ISSUED, older versions nested) the viewer may read, across deals; optional {@code status}. */
     @GetMapping("/remaining-invoices")
-    Map<String, List<DealDocumentRows.InvoiceRow>> listAll(@RequestParam(required = false) String status, HttpSession session) {
-        return Map.of("remainingInvoices", lists.listInvoices(status, sessions.requireUser(session)));
+    Map<String, Object> listAll(@RequestParam(required = false) String status, @RequestParam(required = false) Integer limit,
+                                @RequestParam(required = false) Integer offset, HttpSession session) {
+        var page = lists.listInvoices(status, limit, offset, sessions.requireUser(session));
+        return Map.of("remainingInvoices", page.rows(), "total", page.total());
     }
 
     @GetMapping("/remaining-invoices/counts")

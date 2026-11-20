@@ -26,13 +26,13 @@ const FILES = [
   { id: 5, fileName: 'po-1.pdf', attachType: 'PO' },
 ];
 
-function renderSheet(client = new QueryClient({ defaultOptions: { queries: { retry: false } } })) {
+function renderSheet(client = new QueryClient({ defaultOptions: { queries: { retry: false } } }), props = {}) {
   const onDownload = vi.fn().mockResolvedValue(undefined);
   const onClose = vi.fn();
   render(
     <QueryClientProvider client={client}>
       <DocumentDownloadSheet kind="deposit" documentId={12} ticketId={701} reference="QT-1"
-        onClose={onClose} onDownload={onDownload} />
+        onClose={onClose} onDownload={onDownload} {...props} />
     </QueryClientProvider>,
   );
   return { onDownload, onClose };
@@ -76,6 +76,18 @@ describe('DocumentDownloadSheet', () => {
     fireEvent.click(screen.getByTestId('document-download-confirm'));
     await waitFor(() => expect(onDownload).toHaveBeenCalled());
     expect(api.depositNotices.saveBundleSelection).toHaveBeenCalledWith(12, { quotation: true, attachmentIds: [5, 7] });
+  });
+
+  it('a viewer who cannot write sees the remembered choice read-only and downloads without saving it', async () => {
+    const { onDownload } = renderSheet(undefined, { canSave: false });
+    const confirm = await screen.findByTestId('document-download-confirm');
+    await waitFor(() => expect(screen.getByTestId('include-attachment-5').checked).toBe(true));
+    expect(screen.getByTestId('include-attachment-5').disabled).toBe(true);
+    expect(screen.queryByTestId('sheet-upload-input')).toBeNull();
+    expect(screen.getByTestId('sheet-read-only-note')).not.toBeNull();
+    fireEvent.click(confirm);
+    await waitFor(() => expect(onDownload).toHaveBeenCalledTimes(1));
+    expect(api.depositNotices.saveBundleSelection).not.toHaveBeenCalled();
   });
 
   it('stays open and shows the message when the download is refused (e.g. over the size cap)', async () => {

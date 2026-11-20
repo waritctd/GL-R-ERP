@@ -3,6 +3,8 @@ import { Navigate, Route, Routes, useLocation, useNavigate, useParams, useSearch
 import { api } from './api/index.js';
 import { AppShell } from './components/layout/AppShell.jsx';
 import { Toast } from './components/common/Toast.jsx';
+import { Button } from './components/common/Button.jsx';
+import { StatePanel } from './components/common/StatePanel.jsx';
 import { RouteFallback } from './components/common/RouteFallback.jsx';
 import { LoginPage } from './features/auth/LoginPage.jsx';
 import { ForgotPasswordPage } from './features/auth/ForgotPasswordPage.jsx';
@@ -85,7 +87,7 @@ const SafeFormSubmitterProbe = lazy(() => import('./dev/SafeFormSubmitterProbe.j
 
 // Thin wrappers that source the ticket id from the URL for the frozen sales pages (they already
 // fetch by id internally).
-function DepositNoticeRoute({ user, showToast }) {
+export function DepositNoticeRoute({ user, showToast }) {
   const { ticketId } = useParams();
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
@@ -99,10 +101,20 @@ function DepositNoticeRoute({ user, showToast }) {
   const fromQuotation = searchParams.get('from') === 'quotation' && /^[1-9]\d*$/.test(quotationParam) ? quotationParam : null;
   // The chain's flag says whether this viewer may write the deal's documents (the server refuses everyone else): it
   // gates ?edit=1 and the page's edit controls. Until it answers the page waits so its first render already knows;
-  // a failed read leaves the page read-only.
+  // a failed read shows an error with a retry (never a silently read-only page that hides the owner's buttons).
   const wantsEdit = searchParams.get('edit') === '1';
   const chain = useDocumentChain(ticketId);
   if (chain.isPending) return <DepositNoticeSkeleton />;
+  if (chain.isError && chain.data == null) {
+    return (
+      <StatePanel
+        state="error"
+        title="โหลดสิทธิ์การแก้ไขไม่สำเร็จ"
+        description="เปิดใบแจ้งมัดจำไม่ได้ในตอนนี้ กรุณาลองใหม่อีกครั้ง"
+        action={<Button type="button" variant="secondary" onClick={() => chain.refetch()}>ลองใหม่</Button>}
+      />
+    );
+  }
   const canWrite = chain.data?.viewer?.mayWriteDepositNotice === true;
   return (
     <DepositNoticePage

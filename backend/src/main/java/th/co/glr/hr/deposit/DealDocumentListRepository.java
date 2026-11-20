@@ -18,8 +18,10 @@ import th.co.glr.hr.deposit.DealDocumentRows.NoticeRef;
 import th.co.glr.hr.deposit.DealDocumentRows.NoticeRow;
 import th.co.glr.hr.deposit.DealDocumentRows.PendingRevision;
 import th.co.glr.hr.deposit.DealDocumentRows.OlderVersion;
+import th.co.glr.hr.deposit.DealDocumentRows.Paged;
 import th.co.glr.hr.deposit.DealDocumentRows.Origin;
 import th.co.glr.hr.deposit.DepositNoticeService.DealDocumentScope;
+import th.co.glr.hr.ticket.DealLifecycle;
 import th.co.glr.hr.ticket.TicketEventKind;
 import th.co.glr.hr.ticket.TicketRepository;
 
@@ -111,8 +113,11 @@ public class DealDocumentListRepository {
 
     private static final String OWNER_JOIN = " LEFT JOIN hr.employee e ON e.employee_id = t.created_by ";
 
+    /** The deal's lifecycle as the write gate sees it: a cancelled status counts as CANCELLED. */
+    private static final String LIFECYCLE_COL = ", CASE WHEN t.status = 'cancelled' THEN 'CANCELLED' ELSE t.lifecycle END AS lifecycle ";
+
     private static final String OWNER_COLS = ", t.code AS ticket_code, t.created_by, t.keyed_by, "
-        + DepositNoticeRepository.PREPARER_NAME_SQL + " AS owner_name ";
+        + DepositNoticeRepository.PREPARER_NAME_SQL + " AS owner_name " + LIFECYCLE_COL;
 
     /** The resolved quotation's id, only when the viewer sees that quotation in GET /api/deal-quotations: account sees
      * customer-facing statuses of deals inside its scope; every other role that reaches here sees the deals it may read.
@@ -127,15 +132,16 @@ public class DealDocumentListRepository {
         return ", CASE WHEN " + visible + " THEN rq.quotation_id END AS quotation_id, rq.number AS quotation_number ";
     }
 
+    /** The owner rule AND an ACTIVE deal: the server refuses a write on any other lifecycle with 409. */
     private static boolean mayWrite(Viewer v, ResultSet rs) throws SQLException {
-        return v.writesEverywhere() || (v.sales() && (rs.getLong("created_by") == v.id()
-            || (rs.getObject("keyed_by") != null && rs.getLong("keyed_by") == v.id())));
+        return DealLifecycle.ACTIVE.equals(rs.getString("lifecycle")) && (v.writesEverywhere() || (v.sales() && (rs.getLong("created_by") == v.id()
+            || (rs.getObject("keyed_by") != null && rs.getLong("keyed_by") == v.id()))));
     }
 
     private static Origin origin(ResultSet rs, String customerName) throws SQLException {
         return new Origin(rs.getLong("ticket_id"), rs.getString("ticket_code"), rs.getString("project_name"),
             customerName, rs.getLong("created_by"), rs.getString("owner_name"),
-            (Long) rs.getObject("quotation_id", Long.class), rs.getString("quotation_number"));
+            (Long) rs.getObject("quotation_id", Long.class), rs.getString("quotation_number"), rs.getString("lifecycle"));
     }
 
     private MapSqlParameterSource params() {
@@ -143,11 +149,13 @@ public class DealDocumentListRepository {
     }
 
     /** Live notices (DRAFT/ISSUED as the viewer may see them), newest first; optionally one status. */
-    public List<NoticeRow> findNotices(Viewer v, String status) {
+    public Paged<NoticeRow> findNotices(Viewer v, String status, int limit, int offset) {
         MapSqlParameterSource params = params();
         if (status != null) params.addValue("status", status);
+        params.addValue("limit", limit).addValue("offset", offset);
+        int[] total = {0};
         String sql = """
-            SELECT d.deposit_notice_id, d.ticket_id, d.status, d.doc_number, d.version, d.issue_date, d.updated_at,
+            SELECT COUNT(*) OVER () AS total_rows, d.deposit_notice_id, d.ticket_id, d.status, d.doc_number, d.version, d.issue_date, d.updated_at,
                    d.project_name, d.deposit_percent, d.deposit_amount, d.vat_amount, d.total_payable,
                    CASE WHEN qc.name IS NOT NULL THEN qc.name ELSE d.customer_name END AS customer_name,
                    -- PRE_PORTAL deposits are kind DEPOSIT receipts too, so they count here
@@ -159,12 +167,14 @@ public class DealDocumentListRepository {
               JOIN sales.ticket t ON t.ticket_id = d.ticket_id
             """ + OWNER_JOIN + DepositNoticeRepository.QUOTATION_CUSTOMER_JOIN + NOTICE_QUOTATION + "WHERE TRUE"
             + statusClause(v, "d", status) + scopeClause(v, params, null)
-            + " ORDER BY d.updated_at DESC, d.deposit_notice_id DESC";
-        return jdbc.query(sql, params, (rs, n) -> new NoticeRow(rs.getLong("deposit_notice_id"), rs.getString("status"),
+            + " ORDER BY d.updated_at DESC, d.deposit_notice_id DESC LIMIT :limit OFFSET :offset";
+        List<NoticeRow> rows = jdbc.query(sql, params, (rs, n) -> { total[0] = rs.getInt("total_rows"); return new NoticeRow(rs.getLong("deposit_notice_id"), rs.getString("status"),
             rs.getString("doc_number"), rs.getInt("version"), rs.getObject("issue_date", java.time.LocalDate.class),
             rs.getObject("updated_at", java.time.OffsetDateTime.class), rs.getBigDecimal("deposit_percent"),
             rs.getBigDecimal("deposit_amount"), rs.getBigDecimal("vat_amount"), rs.getBigDecimal("total_payable"),
-            rs.getBoolean("money_received"), origin(rs, rs.getString("customer_name")), mayWrite(v, rs)));
+            rs.getBoolean("money_received"), origin(rs, rs.getString("customer_name")), mayWrite(v, rs)); });
+        // ponytail: a page past the end has no row to carry the total; the UI never asks for one
+        return new Paged<>(rows, total[0]);
     }
 
     /** One invoice row plus what collapsing a draft revision into its ISSUED version needs. */
@@ -175,7 +185,7 @@ public class DealDocumentListRepository {
      * {@code pendingRevision} instead of a second row, and its SUPERSEDED earlier versions as {@code olderVersions}. A first
      * draft with no issued version stays a DRAFT row. {@code status} filters the collapsed rows.
      */
-    public List<InvoiceRow> findInvoices(Viewer v, String status) {
+    public Paged<InvoiceRow> findInvoices(Viewer v, String status, int limit, int offset) {
         MapSqlParameterSource params = params();
         String sql = """
             SELECT d.id, d.ticket_id, d.status, d.doc_number, d.base_number, d.version, d.doc_date, d.updated_at,
@@ -192,9 +202,10 @@ public class DealDocumentListRepository {
             rs.getString("doc_number"), rs.getInt("version"), rs.getObject("doc_date", java.time.LocalDate.class),
             rs.getObject("updated_at", java.time.OffsetDateTime.class), rs.getBigDecimal("items_total"),
             rs.getBigDecimal("deposit_deduction"), rs.getBigDecimal("net_amount"), rs.getBigDecimal("vat_amount"),
-            rs.getBigDecimal("grand_total"), origin(rs, rs.getString("customer_name")), mayWrite(v, rs), null, List.of()),
+            rs.getBigDecimal("grand_total"), origin(rs, rs.getString("customer_name")), mayWrite(v, rs), null, List.of(),
+            (Long) rs.getObject("customer_quotation_id", Long.class)),
             rs.getString("base_number"), (Long) rs.getObject("customer_quotation_id", Long.class)));
-        if (raw.isEmpty()) return List.of();
+        if (raw.isEmpty()) return new Paged<>(List.of(), 0);
 
         // One more statement for every row's history; the viewer may read the deal, so may read its earlier versions.
         Map<String, List<OlderVersion>> older = new HashMap<>();
@@ -226,7 +237,7 @@ public class DealDocumentListRepository {
                 built = new InvoiceRow(row.id(), row.status(), row.docNumber(), row.version(), row.docDate(), row.updatedAt(),
                     row.itemsTotal(), row.depositDeduction(), row.netAmount(), row.vatAmount(), row.grandTotal(),
                     row.origin(), row.viewerMayWrite(), draft == null ? null
-                        : new PendingRevision(draft.row().id(), row.version() + 1), history);
+                        : new PendingRevision(draft.row().id(), row.version() + 1), history, row.customerQuotationId());
             }
             out.add(built);
         }
@@ -235,7 +246,9 @@ public class DealDocumentListRepository {
         for (int i = 0; i < raw.size(); i++) {
             if (!absorbed.contains(raw.get(i))) rows.add(out.get(i));
         }
-        return status == null ? rows : rows.stream().filter(r -> status.equals(r.status())).toList();
+        List<InvoiceRow> all = status == null ? rows : rows.stream().filter(r -> status.equals(r.status())).toList();
+        // ponytail: collapsing drafts into their issued rows needs every row, so paging is in memory; SQL paging if it gets slow
+        return new Paged<>(all.subList(Math.min(offset, all.size()), Math.min(offset + limit, all.size())), all.size());
     }
 
     public record LeanNotice(long ticketId, long id, String status, String docNumber, Long quotationId, boolean mayWrite) {}
@@ -246,7 +259,7 @@ public class DealDocumentListRepository {
      * customer name; the write flag is the list rows' own rule. */
     public List<LeanNotice> findLeanNotices(Viewer v, Collection<Long> ticketIds) {
         MapSqlParameterSource params = params();
-        String sql = "SELECT d.deposit_notice_id, d.ticket_id, d.status, d.doc_number, t.created_by, t.keyed_by " + quotationCols(v, params) + """
+        String sql = "SELECT d.deposit_notice_id, d.ticket_id, d.status, d.doc_number, t.created_by, t.keyed_by " + LIFECYCLE_COL + quotationCols(v, params) + """
               FROM sales.deposit_notice d
               JOIN sales.ticket t ON t.ticket_id = d.ticket_id
             """ + NOTICE_QUOTATION + "WHERE TRUE" + statusClause(v, "d", null) + scopeClause(v, params, ticketIds);
@@ -257,7 +270,7 @@ public class DealDocumentListRepository {
     /** Live invoices of those deals that resolve to a quotation the viewer sees; the same lean shape. */
     public List<LeanInvoice> findLeanInvoices(Viewer v, Collection<Long> ticketIds) {
         MapSqlParameterSource params = params();
-        String sql = "SELECT d.id, d.status, d.doc_number, d.version, t.created_by, t.keyed_by " + quotationCols(v, params) + """
+        String sql = "SELECT d.id, d.status, d.doc_number, d.version, t.created_by, t.keyed_by " + LIFECYCLE_COL + quotationCols(v, params) + """
               FROM sales.remaining_invoice d
               JOIN sales.ticket t ON t.ticket_id = d.ticket_id
             """ + INVOICE_QUOTATION + "WHERE TRUE" + statusClause(v, "d", null) + scopeClause(v, params, ticketIds)

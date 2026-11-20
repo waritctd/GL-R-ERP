@@ -11,7 +11,7 @@ import { cn } from '../../utils/cn.js';
 import { downloadBlob } from '../../utils/download.js';
 import { warnIfBundleSkipped } from '../../utils/userMessages.js';
 import { depositNoticeFileName } from '../deposits/createDepositNoticeDraft.js';
-import { invalidateDealDocuments } from '../documentChain/documentChain.js';
+import { dealDocumentsLockedReason, invalidateDealDocuments } from '../documentChain/documentChain.js';
 import { DocumentDownloadSheet } from '../tickets/DocumentDownloadSheet.jsx';
 import { RemainingInvoiceDialog } from '../tickets/RemainingInvoiceDialog.jsx';
 import { formatMoney, formatThaiDate } from '../../utils/format.js';
@@ -45,6 +45,7 @@ export function canSeeDealDocumentLists(user) {
 const noticePath = (ticketId) => `/tickets/${ticketId}/deposit`;
 // ?from=docs: the notice page's back link returns to this page. ?edit=1: an issued notice opens in แก้ไขฉบับปัจจุบัน.
 const noticeRowPath = (row) => `${noticePath(row.origin.ticketId)}?from=docs${row.viewerMayWrite && row.status === 'ISSUED' ? '&edit=1' : ''}`;
+// A deal that is closed, held or cancelled refuses every write: the owner is told why instead of offered แก้ไข.
 
 /**
  * The documents made from one quotation row (`row.documents`, see DealDocumentRows.QuotationDocuments), as links to
@@ -242,7 +243,7 @@ function RowActions({ row, kind, card, onOpenInvoice, onDownload }) {
       </span>
       {!writable ? (
         <span className="text-xs text-text-muted" data-testid="doc-lock-note">
-          {`แก้ไขได้เฉพาะเจ้าของงาน${row.origin.ownerName ? ` ${row.origin.ownerName}` : ''}`}
+          {dealDocumentsLockedReason(row.origin.lifecycle) ?? `แก้ไขได้เฉพาะเจ้าของงาน${row.origin.ownerName ? ` ${row.origin.ownerName}` : ''}`}
         </span>
       ) : null}
     </span>
@@ -282,9 +283,14 @@ export function DealDocumentList({ kind, user }) {
   const [sheetRow, setSheetRow] = useState(null); // the row whose ดาวน์โหลด sheet is open
   const [dialogRow, setDialogRow] = useState(null); // the invoice row open in RemainingInvoiceDialog
 
-  const listQuery = useQuery({ queryKey: cfg.queryKey(), queryFn: () => cfg.fetchList().then((r) => r?.[cfg.listKey] ?? []) });
+  // The server returns the newest 500 (`total` is how many match); the table pages those client-side.
+  const listQuery = useQuery({
+    queryKey: cfg.queryKey(),
+    queryFn: () => cfg.fetchList().then((r) => ({ rows: r?.[cfg.listKey] ?? [], total: r?.total ?? null })),
+  });
   const countsQuery = useQuery({ queryKey: cfg.countsKey(), queryFn: () => cfg.fetchCounts().then((r) => r ?? null) });
-  const rows = useMemo(() => listQuery.data ?? [], [listQuery.data]);
+  const rows = useMemo(() => listQuery.data?.rows ?? [], [listQuery.data]);
+  const total = listQuery.data?.total;
   const counts = countsQuery.data ?? null;
 
   const repOptions = useMemo(
@@ -348,6 +354,7 @@ export function DealDocumentList({ kind, user }) {
           documentId={sheetRow.id}
           ticketId={sheetRow.origin.ticketId}
           reference={sheetRow.origin.quotationNumber}
+          canSave={sheetRow.viewerMayWrite === true}
           onClose={() => setSheetRow(null)}
           onDownload={downloadSheetRow}
         />
@@ -357,6 +364,7 @@ export function DealDocumentList({ kind, user }) {
           ticketId={dialogRow.origin.ticketId}
           quotationId={dialogRow.origin.quotationId}
           initialQuotationId={dialogRow.origin.quotationId}
+          scopeQuotationId={dialogRow.customerQuotationId ?? null}
           canWrite={dialogRow.viewerMayWrite === true}
           showToast={showToast}
           onClose={() => { invalidateDealDocuments(queryClient, dialogRow.origin.ticketId); setDialogRow(null); }}
@@ -399,6 +407,9 @@ export function DealDocumentList({ kind, user }) {
           </label>
         ) : null}
       </div>
+      {Number.isFinite(total) && total > rows.length ? (
+        <p className="mb-2 mt-0 text-xs text-text-muted" data-testid="doc-list-truncated">{`แสดง ${rows.length} รายการล่าสุด จากทั้งหมด ${total}`}</p>
+      ) : null}
       <DataTable
         columns={columns}
         rows={shown}

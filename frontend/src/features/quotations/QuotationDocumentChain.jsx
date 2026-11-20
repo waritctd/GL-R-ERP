@@ -19,7 +19,7 @@ import {
   resolveNoticeQuotation,
 } from '../deposits/createDepositNoticeDraft.js';
 import { DepositIssueSummary } from '../deposits/DepositNoticePage.jsx';
-import { invalidateDealDocuments } from '../documentChain/documentChain.js';
+import { dealDocumentsLockedReason, invalidateDealDocuments } from '../documentChain/documentChain.js';
 import { chainNextStep } from '../documentChain/documentChainText.js';
 import { DocumentDownloadSheet } from '../tickets/DocumentDownloadSheet.jsx';
 import { RemainingInvoiceDialog } from '../tickets/RemainingInvoiceDialog.jsx';
@@ -235,11 +235,17 @@ export function QuotationDocumentChain({ quotation, chain, onConfirmOrder, onUnd
   };
   // Only a viewer the server lets write (the chain's flags) is offered แก้ไข. An issued notice opens its page in edit
   // mode and comes back here (?from=quotation).
+  // The server refuses a write on a deal that is not ACTIVE (409), so the owner of a closed / held deal gets the reason instead.
+  const lockedReason = dealDocumentsLockedReason(chain.lifecycle, chain.dealStatus);
+  const mayWriteNotice = Boolean(chain.viewer?.mayWriteDepositNotice) && !lockedReason;
+  const mayWriteInvoice = Boolean(chain.viewer?.mayWriteRemainingInvoice) && !lockedReason;
+  const ownerLocked = Boolean(lockedReason) && (chain.viewer?.mayWriteDepositNotice || chain.viewer?.mayWriteRemainingInvoice)
+    && steps.some((s) => s.edit);
   const edits = {
-    notice: chain.viewer?.mayWriteDepositNotice ? {
+    notice: mayWriteNotice ? {
       to: `/tickets/${ticketId}/deposit?${new URLSearchParams({ ...(deposit.state === 'DRAFT' ? {} : { edit: '1' }), from: 'quotation', quotation: String(quotation.id) })}`,
     } : null,
-    invoice: chain.viewer?.mayWriteRemainingInvoice ? { onClick: () => setRemainingOpen(true) } : null,
+    invoice: mayWriteInvoice ? { onClick: () => setRemainingOpen(true) } : null,
   };
   const actions = {
     confirm: { onClick: onConfirmOrder, busy: confirmBusy },
@@ -281,6 +287,12 @@ export function QuotationDocumentChain({ quotation, chain, onConfirmOrder, onUnd
           );
         })}
       </ol>
+      {ownerLocked ? (
+        <p data-testid="quotation-chain-locked" className="m-0 mt-2 flex items-start gap-1 text-xs leading-snug text-text-muted">
+          <Icon name="lock" size={12} className="mt-0.5 shrink-0" />
+          {lockedReason}
+        </p>
+      ) : null}
 
       {noticeDialogOpen ? (
         <DepositNoticeIssueDialog
@@ -300,6 +312,7 @@ export function QuotationDocumentChain({ quotation, chain, onConfirmOrder, onUnd
           documentId={sheetKind === 'deposit' ? deposit.issuedNoticeId : remaining.invoiceId}
           ticketId={ticketId}
           reference={quotation.number}
+          canSave={Boolean(sheetKind === 'deposit' ? chain.viewer?.mayWriteDepositNotice : chain.viewer?.mayWriteRemainingInvoice)}
           onClose={() => setSheetKind(null)}
           onDownload={downloadFromSheet}
         />
@@ -309,7 +322,7 @@ export function QuotationDocumentChain({ quotation, chain, onConfirmOrder, onUnd
           ticketId={ticketId}
           quotationId={quotation.id}
           initialQuotationId={quotation.id}
-          canWrite={Boolean(chain.viewer?.mayWriteRemainingInvoice)}
+          canWrite={mayWriteInvoice}
           showToast={showToast}
           onClose={() => {
             setRemainingOpen(false);

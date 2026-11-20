@@ -11,9 +11,14 @@ public final class DealDocumentRows {
     private DealDocumentRows() {}
 
     /** Where a notice or invoice belongs: the deal, the customer as printed on the document, the owner rep and the
-     * quotation it resolves to (null when none does). */
+     * quotation it resolves to (null when none does). {@code lifecycle} is the deal's, CANCELLED for a cancelled status:
+     * anything but ACTIVE is read-only (DepositNoticeService#requireActiveLifecycle). */
     public record Origin(long ticketId, String ticketCode, String projectName, String customerName,
-                         Long ownerId, String ownerName, Long quotationId, String quotationNumber) {}
+                         Long ownerId, String ownerName, Long quotationId, String quotationNumber,
+                         String lifecycle) {}
+
+    /** One page of a list plus how many rows matched in all. */
+    public record Paged<T>(List<T> rows, int total) {}
 
     public record NoticeRow(long id, String status, String docNumber, int version, LocalDate issueDate,
                             OffsetDateTime updatedAt, BigDecimal depositPercent, BigDecimal depositAmount,
@@ -26,7 +31,7 @@ public final class DealDocumentRows {
                              OffsetDateTime updatedAt, BigDecimal itemsTotal, BigDecimal depositDeduction,
                              BigDecimal netAmount, BigDecimal vatAmount, BigDecimal grandTotal,
                              Origin origin, boolean viewerMayWrite, PendingRevision pendingRevision,
-                             List<OlderVersion> olderVersions) {}
+                             List<OlderVersion> olderVersions, Long customerQuotationId) {}
 
     /** A DRAFT revision waiting beside the ISSUED invoice it will replace. */
     public record PendingRevision(long id, int nextVersion) {}
@@ -40,6 +45,6 @@ public final class DealDocumentRows {
      * is 1 until it is issued). */
     public record InvoiceRef(long id, String status, String docNumber, Integer version) {}
 
-    /** {@code viewerMayWrite}: the same rule as the list rows' flag (owner or keyer in a sales role, or the all-sales-documents grant). */
+    /** {@code viewerMayWrite}: the same rule as the list rows' flag (owner or keyer in a sales role, or the all-sales-documents grant, on an ACTIVE deal). */
     public record QuotationDocuments(NoticeRef depositNotice, List<InvoiceRef> remainingInvoices, boolean viewerMayWrite) {}
 }

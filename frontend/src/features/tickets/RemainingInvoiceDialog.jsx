@@ -141,7 +141,7 @@ function DialogFooterRow({ children }) {
  * This is UI convenience only (hides buttons that would otherwise just 403), never the actual
  * security boundary — that is, and stays, the backend gate above.
  */
-export function RemainingInvoiceDialog({ ticketId, canWrite = true, onClose, onDownloaded, showToast, initialQuotationId = null, quotationId = null }) {
+export function RemainingInvoiceDialog({ ticketId, canWrite = true, onClose, onDownloaded, showToast, initialQuotationId = null, quotationId = null, scopeQuotationId }) {
   const queryClient = useQueryClient();
 
   // Slice 6.1: the payment terms and due date, READ-ONLY, from the summary the server already serves
@@ -165,12 +165,16 @@ export function RemainingInvoiceDialog({ ticketId, canWrite = true, onClose, onD
   // works on the whole deal as before. Older invoices have no customerQuotationId (the server list resolves them to a
   // quotation by reference or by the confirmed order): they are used only when that quotation has none of its own, so
   // on a two-buyer deal a buyer's own invoice is never shadowed by a legacy one.
+  // `scopeQuotationId` scopes by the invoice's OWN quotation where the visible link (`quotationId`) may be hidden from
+  // the viewer (account): a number narrows to it, null = a legacy invoice with none, undefined = no scoping by it.
+  const scopeId = scopeQuotationId === undefined ? quotationId : scopeQuotationId;
+  const scoped = scopeQuotationId !== undefined || quotationId != null;
   const list = useMemo(() => {
     const all = listQuery.data ?? [];
-    if (quotationId == null) return all;
-    const own = all.filter((d) => d.customerQuotationId === quotationId);
+    if (!scoped) return all;
+    const own = all.filter((d) => (d.customerQuotationId ?? null) === scopeId);
     return own.length ? own : all.filter((d) => d.customerQuotationId == null);
-  }, [listQuery.data, quotationId]);
+  }, [listQuery.data, scoped, scopeId]);
   const draft = list.find((d) => d.status === 'DRAFT');
   const issued = list.find((d) => d.status === 'ISSUED');
   const history = useMemo(
@@ -201,7 +205,7 @@ export function RemainingInvoiceDialog({ ticketId, canWrite = true, onClose, onD
   return (
     <>
     {versionSheet ? (
-      <DocumentDownloadSheet kind="remaining" documentId={versionSheet.id} ticketId={ticketId}
+      <DocumentDownloadSheet kind="remaining" documentId={versionSheet.id} ticketId={ticketId} canSave={canWrite}
         onClose={() => setVersionSheet(null)} onDownload={downloadVersion} />
     ) : null}
     <Modal
@@ -353,7 +357,7 @@ function IssuedSummary({ issued, canWrite, onRevised, onDownloaded, showToast })
           {downloading ? 'กำลังดาวน์โหลด…' : 'ดาวน์โหลด'}
         </Button>
         {sheetOpen ? (
-          <DocumentDownloadSheet kind="remaining" documentId={issued.id} ticketId={issued.ticketId}
+          <DocumentDownloadSheet kind="remaining" documentId={issued.id} ticketId={issued.ticketId} canSave={canWrite}
             onClose={() => setSheetOpen(false)} onDownload={handleDownload} />
         ) : null}
         {canWrite ? (
@@ -567,7 +571,7 @@ function DraftEditor({ draft, issuedOfSameQuotation, issuedMode = false, onCance
           {downloading ? 'กำลังดาวน์โหลด…' : issuedMode ? 'ดาวน์โหลด' : 'ดาวน์โหลด (ตัวอย่าง)'}
         </Button>
         {sheetOpen ? (
-          <DocumentDownloadSheet kind="remaining" documentId={draft.id} ticketId={draft.ticketId}
+          <DocumentDownloadSheet kind="remaining" documentId={draft.id} ticketId={draft.ticketId} canSave={canWrite}
             onClose={() => setSheetOpen(false)} onDownload={handleDownload} />
         ) : null}
         {issuedMode ? null : (

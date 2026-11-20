@@ -1,9 +1,9 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import React from 'react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { App } from './App.jsx';
+import { App, DepositNoticeRoute } from './App.jsx';
 import { getLastPage } from './features/whatsNew/lastPage.js';
 
 // Some deeper components (e.g. AppShell.jsx) rely on the classic JSX runtime's implicit global `React`, per
@@ -57,6 +57,7 @@ vi.mock('./api/index.js', () => ({
     attendance: {
       daily: vi.fn().mockResolvedValue({ days: [] }),
     },
+    documentChain: { get: vi.fn() },
   },
   ROLE_PERMISSIONS: {
     canUseEmployeeExperience: ['employee'],
@@ -87,6 +88,22 @@ vi.mock('./hooks/useHrData.js', () => ({
 }));
 
 import { api } from './api/index.js';
+
+describe('DepositNoticeRoute', () => {
+  it('a failed chain read shows an error with a retry, never a silently read-only page', async () => {
+    api.documentChain.get.mockRejectedValueOnce(new Error('boom')).mockReturnValue(new Promise(() => {}));
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <MemoryRouter initialEntries={['/tickets/18/deposit']}>
+          <Routes><Route path="/tickets/:ticketId/deposit" element={<DepositNoticeRoute user={{ id: 6, role: 'sales' }} showToast={vi.fn()} />} /></Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    expect(await screen.findByText('โหลดสิทธิ์การแก้ไขไม่สำเร็จ')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'ลองใหม่' }));
+    await waitFor(() => expect(api.documentChain.get).toHaveBeenCalledTimes(2));
+  });
+});
 
 describe('App auth restore', () => {
   beforeEach(() => {

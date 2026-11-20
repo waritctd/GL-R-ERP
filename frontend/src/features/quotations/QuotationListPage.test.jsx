@@ -25,8 +25,8 @@ vi.mock('../../api/index.js', async (importOriginal) => {
 
 // The real dialog is covered by its own test; here only what the rows hand it matters.
 vi.mock('../tickets/RemainingInvoiceDialog.jsx', () => ({
-  RemainingInvoiceDialog: ({ ticketId, quotationId, initialQuotationId, canWrite }) => (
-    <div data-testid="invoice-dialog">{`ticket ${ticketId} quotation ${quotationId}/${initialQuotationId} write ${canWrite}`}</div>
+  RemainingInvoiceDialog: ({ ticketId, quotationId, initialQuotationId, canWrite, scopeQuotationId }) => (
+    <div data-testid="invoice-dialog">{`ticket ${ticketId} quotation ${quotationId}/${initialQuotationId} write ${canWrite}${scopeQuotationId === undefined ? '' : ` scope ${scopeQuotationId}`}`}</div>
   ),
 }));
 
@@ -309,15 +309,29 @@ describe('QuotationListPage — เอกสารขาย document tabs', () =
     expect(screen.getAllByRole('button', { name: /ดาวน์โหลด/ }).length).toBeGreaterThan(0);
   });
 
+  it('a row on a closed deal says why it cannot be edited instead of naming the owner; a truncated list says so', async () => {
+    api.depositNotices.listAll.mockResolvedValue({ total: 700, depositNotices: [
+      noticeRow({ lifecycle: 'COMPLETED' }, { viewerMayWrite: false }),
+    ] });
+    renderListPage(salesUser, '/quotations?doc=deposit');
+    await screen.findByText('GLRD69041');
+    expect(screen.getAllByText('งานนี้ปิดงานแล้ว แก้ไขเอกสารไม่ได้').length).toBeGreaterThan(0);
+    expect(screen.queryByText(/แก้ไขได้เฉพาะเจ้าของงาน/)).toBeNull();
+    expect(screen.queryByRole('link', { name: 'แก้ไข' })).toBeNull();
+    expect(screen.getByTestId('doc-list-truncated').textContent).toBe('แสดง 1 รายการล่าสุด จากทั้งหมด 700');
+  });
+
   it('an invoice row opens the dialog scoped to its quotation, labelled by its pending revision', async () => {
     api.storedRemainingInvoices.listAll.mockResolvedValue({ remainingInvoices: [{
       id: 9301, status: 'ISSUED', docNumber: 'GLR6900058-2', version: 2, docDate: '2026-11-16', grandTotal: 214000, viewerMayWrite: true,
       pendingRevision: { id: 9302, nextVersion: 3 }, olderVersions: [],
-      origin: { ticketId: 91, ticketCode: 'DL-2611-001', customerName: 'ก', ownerId: 6, ownerName: 'ส', quotationId: 11, quotationNumber: 'QT-2026-9001' },
+      origin: { ticketId: 91, ticketCode: 'DL-2611-001', customerName: 'ก', ownerId: 6, ownerName: 'ส', quotationId: null, quotationNumber: 'QT-2026-9001' },
+      customerQuotationId: 11,
     }] });
     renderListPage(salesUser, '/quotations?doc=remaining');
     fireEvent.click(await screen.findByRole('button', { name: 'แก้ไขร่าง -3' }));
-    expect(screen.getByTestId('invoice-dialog').textContent).toBe('ticket 91 quotation 11/11 write true');
+    // the visible link is hidden (null) but the dialog is still scoped by the invoice's own quotation
+    expect(screen.getByTestId('invoice-dialog').textContent).toBe('ticket 91 quotation null/null write true scope 11');
   });
 });
 

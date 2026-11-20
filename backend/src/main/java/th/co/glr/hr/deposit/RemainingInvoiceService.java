@@ -88,12 +88,11 @@ public class RemainingInvoiceService {
         }
     }
 
-    /** The download sheet's choice, remembered for this invoice: same gate as the PDF download. */
+    /** The download sheet's choice, remembered for this invoice: writers only (see DepositNoticeService#saveBundleSelection). */
     @Transactional
     public void saveBundleSelection(long id, UserPrincipal actor, DocumentBundle.Selection selection) {
         RemainingInvoiceDocumentDto doc = requireStored(id);
-        depositNoticeService.requireTicketViewer(doc.ticketId(), actor);
-        depositNoticeService.saveBundleSelection("REMAINING_INVOICE", id, doc.ticketId(), selection);
+        depositNoticeService.saveBundleSelection("REMAINING_INVOICE", id, doc.ticketId(), actor, selection);
     }
 
     /** What the download sheet should show for this invoice: the remembered choice, else the defaults. */

@@ -16,6 +16,7 @@ import th.co.glr.hr.deposit.DealDocumentRows.InvoiceRef;
 import th.co.glr.hr.deposit.DealDocumentRows.InvoiceRow;
 import th.co.glr.hr.deposit.DealDocumentRows.NoticeRef;
 import th.co.glr.hr.deposit.DealDocumentRows.NoticeRow;
+import th.co.glr.hr.deposit.DealDocumentRows.Paged;
 import th.co.glr.hr.deposit.DealDocumentRows.QuotationDocuments;
 import th.co.glr.hr.deposit.DepositNoticeService.DealDocumentScope;
 import th.co.glr.hr.ticket.TicketRepository;
@@ -57,16 +58,23 @@ public class DealDocumentListService {
         return s;
     }
 
-    public List<NoticeRow> listNotices(String status, UserPrincipal actor) {
-        return repo.findNotices(requireViewer(actor), requireStatus(status));
+    static final int DEFAULT_LIMIT = 500;
+    static final int MAX_LIMIT = 1000;
+
+    private static int limitOf(Integer limit) {
+        return limit == null ? DEFAULT_LIMIT : Math.max(1, Math.min(limit, MAX_LIMIT));
+    }
+
+    public Paged<NoticeRow> listNotices(String status, Integer limit, Integer offset, UserPrincipal actor) {
+        return repo.findNotices(requireViewer(actor), requireStatus(status), limitOf(limit), offset == null ? 0 : Math.max(0, offset));
     }
 
     public Counts noticeCounts(UserPrincipal actor) {
         return repo.countNotices(requireViewer(actor));
     }
 
-    public List<InvoiceRow> listInvoices(String status, UserPrincipal actor) {
-        return repo.findInvoices(requireViewer(actor), requireStatus(status));
+    public Paged<InvoiceRow> listInvoices(String status, Integer limit, Integer offset, UserPrincipal actor) {
+        return repo.findInvoices(requireViewer(actor), requireStatus(status), limitOf(limit), offset == null ? 0 : Math.max(0, offset));
     }
 
     public Counts invoiceCounts(UserPrincipal actor) {

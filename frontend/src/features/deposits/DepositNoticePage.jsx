@@ -653,7 +653,7 @@ export function DepositNoticePage({ ticketId, onBack, backLabel = 'เปิด�
   return (
     <div className="grid w-full grid-cols-1 gap-[18px] min-w-0 max-w-[1320px]">
       {pdfSheetOpen && doc ? (
-        <DocumentDownloadSheet kind="deposit" documentId={doc.id} ticketId={ticketId} reference={form.reference}
+        <DocumentDownloadSheet kind="deposit" documentId={doc.id} ticketId={ticketId} reference={form.reference} canSave={canWrite}
           onClose={() => setPdfSheetOpen(false)} onDownload={() => handleDownload('pdf', true)} />
       ) : null}
       <PageHeader

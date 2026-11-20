@@ -168,6 +168,16 @@ describe('QuotationEditorPage — the document chain card', () => {
       expect(api.depositNotices.downloadPdf).not.toHaveBeenCalled();
     });
 
+    it('on a completed deal the owner keeps the downloads, gets the reason, and no แก้ไข', async () => {
+      api.documentChain.get.mockResolvedValue({ documentChain: { ...issued({}), lifecycle: 'COMPLETED' } });
+      renderPage();
+      const c = await card();
+      await c.findAllByRole('button', { name: /ดาวน์โหลด PDF ใบแจ้งหนี้ส่วนที่เหลือ/ });
+      expect(c.getByTestId('quotation-chain-locked').textContent).toBe('งานนี้ปิดงานแล้ว แก้ไขเอกสารไม่ได้');
+      expect(c.queryAllByRole('link', { name: /แก้ไข/ })).toHaveLength(0);
+      expect(c.queryAllByRole('button', { name: /แก้ไข/ })).toHaveLength(0);
+    });
+
     it('a viewer who may not write keeps only the downloads', async () => {
       api.documentChain.get.mockResolvedValue({ documentChain: issued({ mayWriteDepositNotice: false, mayWriteRemainingInvoice: false }) });
       renderPage();
