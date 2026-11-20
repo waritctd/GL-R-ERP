@@ -1,4 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { withRole } from './audiences.js';
+
+describe('withRole', () => {
+  it('spaces a Latin role label from the Thai lead-in and joins Thai labels', () => {
+    expect(withRole('สำหรับ', 'CEO')).toBe('สำหรับ CEO');
+    expect(withRole('สำหรับ', 'ฝ่ายขาย')).toBe('สำหรับฝ่ายขาย');
+  });
+});
 
 // noticePayload is what the CEO/HR control sends to /api/release-notes/*: publishPayload's audience (the same role
 // filter as the page, so nobody is told about a page they cannot open) plus the email copy the backend renders.

@@ -7,7 +7,7 @@ import { FormField } from '../../components/common/FormField.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { ThaiDateInput } from '../../components/common/ThaiDateInput.jsx';
 import { FEEDBACK_AREAS, FEEDBACK_KINDS, PROGRESS_STEPS, statusView } from './feedbackMeta.js';
-import { ROLE_LABEL } from './audiences.js';
+import { ROLE_LABEL, withRole } from './audiences.js';
 import { Progress, charCount, isoDateLabel } from './FeedbackTab.jsx';
 
 const areaLabel = (code) => FEEDBACK_AREAS.find(([id]) => id === code)?.[1] ?? code;
@@ -123,7 +123,7 @@ function RequestersPanel({ item, onDone, showToast }) {
           return (
             <button key={role} type="button" aria-pressed={all} onClick={() => toggleTeam(role)}
               className={`min-h-11 rounded-pill border px-3 text-sm font-bold ${all ? 'border-primary bg-primary text-surface' : 'border-border-input bg-surface text-icon-muted'}`}>
-              {`ทั้ง${ROLE_LABEL[role] ?? role} (${members.length})`}
+              {`${withRole('ทั้ง', ROLE_LABEL[role] ?? role)} (${members.length})`}
             </button>
           );
         })}
