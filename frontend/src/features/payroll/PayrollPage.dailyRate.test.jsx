@@ -93,7 +93,7 @@ function dailyRateLine(overrides = {}) {
     id: 203,
     employeeId: 203,
     employeeCode: '10060',
-    employeeName: 'พัฒวุฒิ สังฆวาส',
+    employeeName: 'สมชาย ทดสอบดี',
     baseSalary: 11250,
     dailyRate: 450,
     payType: 'D',

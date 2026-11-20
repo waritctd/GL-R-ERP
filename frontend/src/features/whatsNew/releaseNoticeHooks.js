@@ -9,6 +9,12 @@ export function releaseLink(releaseId) {
   return `/whats-new/${releaseId}`;
 }
 
+/** The release id a bell row's link points at, or null when it is not a release link. */
+export function releaseIdOfLink(link) {
+  const prefix = releaseLink('');
+  return typeof link === 'string' && link.startsWith(prefix) ? link.slice(prefix.length) : null;
+}
+
 /** The viewer's notifications, from the SAME cache entry the bell polls: no second request, and a mark-read here
  * updates the bell's badge too. */
 export function useNotifications() {

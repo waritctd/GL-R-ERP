@@ -436,10 +436,10 @@ const passwordResetTokens = new Map();
 
 // ── Mock in-memory document store ─────────────────────────────────────────────
 const mockCustomers = [
-  { id: 1, name: 'บริษัท ก้าวหน้า คอนสตรัคชั่น จำกัด',  taxId: '0105565012345', address: '123 ถนนสุขุมวิท แขวงคลองเตย กรุงเทพฯ 10110', branch: 'สำนักงานใหญ่', phone: '02-123-4567' },
-  { id: 2, name: 'บริษัท ไทยแลนด์ ดีเวลลอปเมนท์ จำกัด', taxId: '0105556789012', address: '456 ถนนรัชดาภิเษก แขวงลาดยาว กรุงเทพฯ 10900',  branch: 'สำนักงานใหญ่', phone: '02-234-5678' },
-  { id: 3, name: 'บริษัท พรีเมียม ดีไซน์ กรุ๊ป จำกัด',   taxId: '0105578901234', address: '789 ถนนพระราม 4 แขวงพระโขนง กรุงเทพฯ 10260',    branch: 'สำนักงานใหญ่', phone: '02-345-6789' },
-  { id: 4, name: 'บริษัท เรืองแสง พร็อพเพอร์ตี้ จำกัด',  taxId: '0105591234567', address: '321 ถนนนวมินทร์ แขวงคลองกุ่ม กรุงเทพฯ 10240',  branch: 'สำนักงานใหญ่', phone: '02-456-7890' },
+  { id: 1, name: 'บริษัท สมมติก้าวไกล คอนสตรัคชั่น จำกัด',  taxId: '0105565012345', address: '123 ถนนสุขุมวิท แขวงคลองเตย กรุงเทพฯ 10110', branch: 'สำนักงานใหญ่', phone: '02-123-4567' },
+  { id: 2, name: 'บริษัท สมมติ ดีเวลลอปเมนท์ จำกัด', taxId: '0105556789012', address: '456 ถนนรัชดาภิเษก แขวงลาดยาว กรุงเทพฯ 10900',  branch: 'สำนักงานใหญ่', phone: '02-234-5678' },
+  { id: 3, name: 'บริษัท สมมติ ดีไซน์ กรุ๊ป จำกัด',   taxId: '0105578901234', address: '789 ถนนพระราม 4 แขวงพระโขนง กรุงเทพฯ 10260',    branch: 'สำนักงานใหญ่', phone: '02-345-6789' },
+  { id: 4, name: 'บริษัท สมมติ พร็อพเพอร์ตี้ จำกัด',  taxId: '0105591234567', address: '321 ถนนนวมินทร์ แขวงคลองกุ่ม กรุงเทพฯ 10240',  branch: 'สำนักงานใหญ่', phone: '02-456-7890' },
   // The customer ticket 18 (demoSales.js, SALES1's "ศูนย์การค้า Fashion Island" deal) names.
   // ผู้สั่งซื้อ is REQUIRED on the quotation: without a customer row and a contact under it, ticket
   // 18 -- the deal every seeded ใบเสนอราคา hangs off -- could never satisfy that rule in mock mode,
@@ -2350,6 +2350,7 @@ function authResponse(user) {
   return {
     user: publicUser(user),
     admin: Boolean(user?.admin),
+    operator: Boolean(user?.operator),
     canCreateQuotation: Boolean(user?.canCreateQuotation),
     canIssueBillingNote: Boolean(user?.canIssueBillingNote),
     canManageAllSalesDocuments: holdsAllSalesDocumentsGrant(user),

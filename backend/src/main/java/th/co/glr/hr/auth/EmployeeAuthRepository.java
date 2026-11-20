@@ -85,6 +85,17 @@ public class EmployeeAuthRepository {
         return byId;
     }
 
+    /** Display identity only (AuthResponse.operator): a developer who runs the portal. Grants no permission. */
+    public boolean isOperator(long employeeId) {
+        Boolean operator = jdbc.queryForObject("""
+            SELECT EXISTS (
+                SELECT 1 FROM hr.employee
+                 WHERE employee_id = :id AND is_active AND is_operator
+            )
+            """, Map.of("id", employeeId), Boolean.class);
+        return Boolean.TRUE.equals(operator);
+    }
+
     /** Whether this employee holds the admin capability, for the UI hint on AuthResponse. That one is the security
      * gate and must not depend on the auth module; this one only decides whether a nav item renders. */
     public boolean isAdmin(long employeeId) {

@@ -63,7 +63,7 @@ class FeedbackServiceIntegrationTest extends AbstractPostgresIntegrationTest {
         NotificationService notifications = new NotificationService(
             new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP), emailService);
         service = transactional(new FeedbackService(
-            new FeedbackRepository(jdbc), new EmployeeAuthRepository(jdbc), notifications));
+            new FeedbackRepository(jdbc), new EmployeeAuthRepository(jdbc), notifications, ""));
 
         long sales = division("SA", "ฝ่ายขาย");
         long accounting = division("AC", "ฝ่ายบัญชี");
@@ -167,6 +167,25 @@ class FeedbackServiceIntegrationTest extends AbstractPostgresIntegrationTest {
         }
         assertThat(statusOf(id)).isEqualTo("PENDING");
         assertThat(bellCount(rep)).isEqualTo(before);
+    }
+
+    @Test
+    void submittedBccGoesOnExactlyOneAdminEmail() {
+        employee("FB-ADM-3", division("AC3", "ฝ่ายบัญชี 3"), "admin3@glr.co.th", true, true);
+        FeedbackService withBcc = transactional(new FeedbackService(
+            new FeedbackRepository(jdbc), new EmployeeAuthRepository(jdbc),
+            new NotificationService(new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP),
+                new NotificationEmailService(mailer, new BrandAssets(), "", "", "https://glr-hub.com")),
+            "dev@example.com, "));
+        clearInvocations(mailer);
+
+        withBcc.submit(principal(rep, "sales"), submit("BUG", "QUOTATIONS", DETAILS, null, null));
+
+        ArgumentCaptor<Mailer.OutgoingEmail> sent = ArgumentCaptor.forClass(Mailer.OutgoingEmail.class);
+        verify(mailer, times(1)).send(sent.capture());
+        assertThat(sent.getValue().bcc()).containsExactly("dev@example.com");
+        // The other active admin gets the plain mail, no BCC.
+        verify(mailer, times(1)).sendHtml(anyString(), anyString(), anyString(), anyString(), anyList());
     }
 
     // ── Several requesters ──────────────────────────────────────────────────────────────────────────────────

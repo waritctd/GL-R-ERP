@@ -141,7 +141,8 @@ public class AuthService {
                 info = new AuthResponse.ViewAsInfo(real.id(), real.name());
             }
         }
-        return new AuthResponse(user, employees.isAdmin(user.id()), employees.canCreateQuotation(user.id()),
+        return new AuthResponse(user, employees.isAdmin(user.id()), employees.isOperator(user.id()),
+            employees.canCreateQuotation(user.id()),
             employees.canIssueBillingNote(user.id()), employees.canManageAllSalesDocuments(user), canViewAs,
             canViewPeopleInsights(user), info);
     }

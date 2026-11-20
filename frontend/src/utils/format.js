@@ -111,6 +111,11 @@ const ROLE_LABELS = {
 };
 export const ROLE_LABEL_KEYS = Object.keys(ROLE_LABELS);
 
+// What the person is shown as: operator is a display identity layered over the permission role.
+export function displayRole(user) {
+  return user?.operator ? 'operator' : user?.role;
+}
+
 export function roleLabel(role) {
   return ROLE_LABELS[role] ?? role?.toUpperCase() ?? '-';
 }

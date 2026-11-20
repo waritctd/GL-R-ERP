@@ -344,6 +344,17 @@ class DepositNoticeBundlePdfIntegrationTest extends DirectQuotationDealTestBase 
         assertThat(depositNoticeService.getById(n.id(), salesActor).customerFromQuotation()).isFalse();
     }
 
+    /** Once the referenced quotation is no longer billable the notice cannot be issued (409). (quotation.number is
+     * unique, so one number never has several rows; the customer lookups still prefer a billable row.) */
+    @Test
+    void issueIsRefusedOnceTheReferencedQuotationIsCancelled() {
+        Deal deal = confirmedDepositDeal();
+        jdbc.update("UPDATE sales.quotation SET doc_status = 'CANCELLED' WHERE quotation_id = :id",
+            java.util.Map.of("id", deal.quotation().id()));
+        assertThat(catchThrowableOfType(() -> depositNoticeService.issue(deal.notice().id(), salesActor), ApiException.class)
+            .getMessage()).contains("ใบเสนอราคาอ้างอิง");
+    }
+
     /** A second quotation of the same deal (a copy of {@code id} under a new number/version, party cleared); a deal
      * holds only one live direct quotation, so the service cannot create it. */
     private long cloneQuotation(long id, String number, int version, boolean unused) {

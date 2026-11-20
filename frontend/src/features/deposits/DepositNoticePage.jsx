@@ -639,7 +639,7 @@ export function DepositNoticePage({ ticketId, onBack, showToast }) {
   // A draft whose customer comes from its quotation may be re-pointed to another party quotation of this deal in a
   // status the server bills (it refuses any other).
   const partyQuotations = (dealQuotationsQuery.data?.items ?? []).filter((q) => q.partyId != null
-    && (['ACCEPTED', 'ISSUED'].includes(q.docStatus) || (q.docStatus === 'APPROVED' && (q.origin ?? 'DEAL_DIRECT') === 'DEAL_DIRECT')));
+    && (['ACCEPTED', 'ISSUED'].includes(q.docStatus) || (q.docStatus === 'APPROVED' && q.origin === 'DEAL_DIRECT')));
   const percentDiffers = !locked && form.depositPercent !== '' && quotationPercent != null
     && quotationPercent !== noticePercent;
   const subtotalDiffers = !locked && referencedQuotation != null

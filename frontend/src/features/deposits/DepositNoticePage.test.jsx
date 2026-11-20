@@ -299,7 +299,7 @@ describe('DepositNoticePage', () => {
     it('lets a draft be re-pointed to another party quotation of the deal (a select with number and customer)', async () => {
       draftWith({ customerFromQuotation: true });
       api.dealQuotations.listForTicket.mockResolvedValue({ items: [
-        { ...quotation, partyId: 1, docStatus: 'APPROVED', customerName: 'บริษัท เอ' },
+        { ...quotation, partyId: 1, docStatus: 'APPROVED', origin: 'DEAL_DIRECT', customerName: 'บริษัท เอ' },
         { id: 62, number: 'QT-2026-0043', partyId: 2, docStatus: 'ISSUED', customerName: 'บริษัท บี' },
         { id: 64, number: 'QT-2026-0045', partyId: 3, docStatus: 'DRAFT', customerName: 'ร่าง' },
         { id: 63, number: 'QT-2026-0044', partyId: null, customerName: 'ไม่มีฝ่าย' },

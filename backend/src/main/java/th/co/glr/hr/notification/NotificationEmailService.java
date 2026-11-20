@@ -54,6 +54,13 @@ public class NotificationEmailService {
 
     @Async
     public void send(long employeeId, String to, String recipientName, String subject, String body, String link) {
+        send(employeeId, to, recipientName, subject, body, link, List.of());
+    }
+
+    /** As above, also BCC'ing {@code bcc} (empty = exactly the plain path). */
+    @Async
+    public void send(long employeeId, String to, String recipientName, String subject, String body, String link,
+                     List<String> bcc) {
         // See overrideConfigured's Javadoc above: this is a send-or-skip decision, not a "who do I send to" decision.
         // `to` reaches the Mailer exactly as received below, whether or not an override is configured - the Mailer is
         // what redirects it (and marks that it did) when one is active.
@@ -66,7 +73,12 @@ public class NotificationEmailService {
         String htmlBody = htmlBody(recipientName, body, link);
         String textBody = textBody(recipientName, body, link);
         try {
-            mailer.sendHtml(to, finalSubject, htmlBody, textBody, logoInlineImages);
+            if (bcc == null || bcc.isEmpty()) {
+                mailer.sendHtml(to, finalSubject, htmlBody, textBody, logoInlineImages);
+            } else {
+                mailer.send(new Mailer.OutgoingEmail(to, List.of(), bcc, finalSubject, htmlBody, textBody,
+                    logoInlineImages, List.of()));
+            }
             log.info("Notification email dispatched: employee={} to={}", employeeId,
                 (to == null || to.isBlank()) ? "(none - relying on app.mail.override-to)" : to);
         } catch (Exception exception) {

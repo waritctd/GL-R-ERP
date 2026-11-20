@@ -602,7 +602,7 @@ export function createDemoDatabase() {
       status: 'draft', priority: 'NORMAL',
       createdById: 6, createdByName: 'คุณสมหมาย ขายดี',
       assignedToId: null, assignedToName: null,
-      customerName: 'บริษัท ก้าวหน้า คอนสตรัคชั่น จำกัด', note: 'ผู้ออกแบบสนใจรุ่น Marble Look — นัดนำเสนอสัปดาห์หน้า',
+      customerName: 'บริษัท สมมติก้าวไกล คอนสตรัคชั่น จำกัด', note: 'ผู้ออกแบบสนใจรุ่น Marble Look — นัดนำเสนอสัปดาห์หน้า',
       projectId: 1,
       paymentStatus: null, fulfillmentStatus: null,
       salesStage: 'PRESENTATION', lostReason: null, lostAt: null,
@@ -674,7 +674,7 @@ export function createDemoDatabase() {
   const projects = [
     {
       id: 1, code: 'PRJ-2026-001', name: 'โครงการ Central Ladprao ชั้น B1',
-      customerName: 'บริษัท ก้าวหน้า คอนสตรัคชั่น จำกัด',
+      customerName: 'บริษัท สมมติก้าวไกล คอนสตรัคชั่น จำกัด',
       location: 'ชั้น B1 ห้างสรรพสินค้า Central Ladprao',
       status: 'ACTIVE', priority: 'HIGH',
       estimatedValue: 450000, actualValue: null,

@@ -22,7 +22,7 @@ const admin = { id: 9, role: 'employee', employeeId: 49, name: 'แอดมิ�
 
 const TAB_NAME = 'แจ้งปัญหา / ขอฟีเจอร์';
 
-function renderPage(user, path = '/whats-new/2026-11-16?tab=feedback') {
+function renderPage(user, path = '/whats-new/v2.0.0?tab=feedback') {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   render(
     <QueryClientProvider client={queryClient}>

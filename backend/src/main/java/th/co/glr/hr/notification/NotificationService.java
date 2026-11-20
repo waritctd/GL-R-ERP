@@ -39,23 +39,41 @@ public class NotificationService {
     @Transactional
     public NotificationDto notifyWithEmailBody(long employeeId, String type, String subject, String body,
                                                String link, String emailBody) {
+        return notifyWithEmailBody(employeeId, type, subject, body, link, emailBody, List.of()).dto();
+    }
+
+    /** Like {@link #notify} (email = body) and BCCs {@code bcc} on the email; {@code emailQueued} says whether an
+     * email was queued for this recipient, so a caller can BCC only the first one that really goes out. */
+    @Transactional
+    public Sent notify(long employeeId, String type, String subject, String body, String link, List<String> bcc) {
+        return notifyWithEmailBody(employeeId, type, subject, body, link, body, bcc);
+    }
+
+    public record Sent(NotificationDto dto, boolean emailQueued) {}
+
+    private Sent notifyWithEmailBody(long employeeId, String type, String subject, String body,
+                                     String link, String emailBody, List<String> bcc) {
         validate(employeeId, type, subject, body);
         boolean sendEmail = emailBody != null && !emailBody.isBlank();
         String cleanLink = trimmedOrNull(link);
         long id = notifications.insert(employeeId, type.trim(), subject.trim(), body.trim(), cleanLink);
         NotificationDto created = notifications.findById(id)
             .orElseThrow(() -> new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "Notification was not saved"));
+        boolean queued = false;
         if (sendEmail) {
             // Deliberately NOT gated on the employee having an address: app.mail.override-to can still redirect this email
             // to a test inbox even when there is no address on file, and only NotificationEmailService (which owns that
             // config) knows whether an override is configured.
-            notifications.findEmployeeRecipient(employeeId)
-                .ifPresentOrElse(
-                    recipient -> sendEmailAfterCommit(
-                        employeeId, recipient.email(), recipient.name(), subject.trim(), emailBody.trim(), cleanLink),
-                    () -> log.info("Notification email skipped: employee={} not found", employeeId));
+            var recipient = notifications.findEmployeeRecipient(employeeId);
+            if (recipient.isPresent()) {
+                var r = recipient.get();
+                sendEmailAfterCommit(employeeId, r.email(), r.name(), subject.trim(), emailBody.trim(), cleanLink, bcc);
+                queued = r.email() != null && !r.email().isBlank();
+            } else {
+                log.info("Notification email skipped: employee={} not found", employeeId);
+            }
         }
-        return created;
+        return new Sent(created, queued);
     }
 
     @Transactional
@@ -69,8 +87,14 @@ public class NotificationService {
     // Behaviour unchanged — the deferral moved verbatim into AfterCommit so the sales-pipeline mail router shares
     // one implementation with this path instead of copying it.
     private void sendEmailAfterCommit(long employeeId, String to, String recipientName, String subject, String body,
-                                      String link) {
-        AfterCommit.run(() -> emailService.send(employeeId, to, recipientName, subject, body, link));
+                                      String link, List<String> bcc) {
+        AfterCommit.run(() -> {
+            if (bcc == null || bcc.isEmpty()) {
+                emailService.send(employeeId, to, recipientName, subject, body, link);
+            } else {
+                emailService.send(employeeId, to, recipientName, subject, body, link, bcc);
+            }
+        });
     }
 
     private void validate(long employeeId, String type, String subject, String body) {

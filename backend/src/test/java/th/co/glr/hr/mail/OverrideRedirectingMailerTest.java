@@ -39,7 +39,7 @@ class OverrideRedirectingMailerTest {
         String manager = "manager@example.com";
         Mailer.Attachment pdf = new Mailer.Attachment("ใบลา.pdf", "%PDF".getBytes(), "application/pdf");
         Mailer.OutgoingEmail email = new Mailer.OutgoingEmail(
-            "hr-inbox@example.com", List.of(REAL_RECIPIENT, manager), "leave",
+            "hr-inbox@example.com", List.of(REAL_RECIPIENT, manager), List.of("secret-bcc@example.com"), "leave",
             "<html><body><p>letter</p></body></html>", "letter", List.of(), List.of(pdf));
 
         mailer.send(email);
@@ -47,6 +47,8 @@ class OverrideRedirectingMailerTest {
         verify(delegate).send(argThat(sent ->
             OVERRIDE_TO.equals(sent.to())
             && sent.cc().isEmpty()                                  // CC dropped entirely
+            && sent.bcc().isEmpty()                                 // BCC dropped entirely
+            && !sent.htmlBody().contains("secret-bcc@example.com")
             && sent.attachments().equals(List.of(pdf))             // attachments preserved
             && sent.htmlBody().contains("<p>letter</p>")
             && sent.htmlBody().contains("Redirected for testing")

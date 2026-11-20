@@ -33,8 +33,10 @@ public final class ReleaseNoticePolicy {
     /** A change's one-sentence "why" (release files hold them to one sentence; this is the server's hard cap). */
     public static final int MAX_WHY = 300;
 
-    /** The id becomes a URL path segment (/whats-new/{id}) and the idempotency key, so it is a plain slug. */
-    private static final Pattern RELEASE_ID = Pattern.compile("^[a-z0-9][a-z0-9-]{0,39}$");
+    /** The id becomes a URL path segment (/whats-new/{id}) and the idempotency key, so it is a plain slug: lower-case
+     * letter/digit groups joined by single dots or hyphens (no leading, trailing or doubled separator), so a version such as
+     * {@code v2.0.0} fits. */
+    private static final Pattern RELEASE_ID = Pattern.compile("^(?=.{1,40}$)[a-z0-9]+(?:[.-][a-z0-9]+)*$");
     /** hr.notification.title is VARCHAR(200); "มีอะไรใหม่: " + title must fit. */
     private static final int MAX_RELEASE_TITLE = 150;
     private static final int MAX_CHANGE_TITLE = 200;

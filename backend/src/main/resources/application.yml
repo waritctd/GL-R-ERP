@@ -68,6 +68,9 @@ spring:
       max-file-size: ${APP_MAX_FILE_SIZE:10MB}
       max-request-size: ${APP_MAX_REQUEST_SIZE:12MB}
 app:
+  feedback:
+    # Comma-separated addresses BCC'd on ONE "new feedback submitted" email (the first admin's). Empty = none.
+    submitted-bcc: ${APP_FEEDBACK_SUBMITTED_BCC:}
   # Test site only: lets listed demo accounts switch between each other (full re-sign-in). Off by default;
   # the controller refuses to start on the prod profile when enabled.
   test-site:

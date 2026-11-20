@@ -75,7 +75,7 @@ export default async function globalSetup() {
           "  application.yml's app.cors.allowed-origins defaults to ports 5173/5174 only, and " +
           'this suite runs its dev server on its own port. Start the backend with that origin ' +
           'allowed:\n\n' +
-          `    APP_CORS_ALLOWED_ORIGINS=${FRONTEND_ORIGIN} java -jar backend/target/glr-hr-backend-*.jar\n\n` +
+          `    APP_CORS_ALLOWED_ORIGINS=${FRONTEND_ORIGIN} java -jar backend/target/glr-hr-backend.jar\n\n` +
           '  scripts/start-e2e-backend.mjs sets this for you.\n'
       );
     }

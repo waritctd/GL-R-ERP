@@ -26,7 +26,7 @@ const sales = { id: 6, role: 'sales', employeeId: 41, name: 'ยา' };
 const hr = { id: 2, role: 'hr', employeeId: 47, name: 'บุคคล' };
 const ceo = { id: 8, role: 'ceo', employeeId: 48, name: 'ซีอีโอ' };
 
-function renderPage(user, path = '/whats-new/2026-11-16', showToast = vi.fn()) {
+function renderPage(user, path = '/whats-new/v2.0.0', showToast = vi.fn()) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   const { unmount } = render(
     <QueryClientProvider client={queryClient}>
@@ -63,20 +63,23 @@ describe('WhatsNewPage', () => {
     }
   });
 
-  it('marks this release’s unread bell notice read on open, and nothing else', async () => {
+  it('marks this release’s unread bell notice and the retired date-style ones read on open, not a newer release’s', async () => {
     api.notifications.list.mockResolvedValue({
       notifications: [
-        { id: 11, type: 'RELEASE_NOTE', link: '/whats-new/2026-11-16', read: false, message: 'm', createdAt: '2026-11-16T01:00:00Z' },
+        { id: 11, type: 'RELEASE_NOTE', link: '/whats-new/v2.0.0', read: false, message: 'm', createdAt: '2026-11-16T01:00:00Z' },
         { id: 12, type: 'RELEASE_NOTE', link: '/whats-new/2026-01-01', read: false, message: 'm', createdAt: '2026-01-01T01:00:00Z' },
-        { id: 13, type: 'APPROVED', link: '/whats-new/2026-11-16', read: false, message: 'm', createdAt: '2026-11-16T01:00:00Z' },
-        { id: 14, type: 'RELEASE_NOTE', link: '/whats-new/2026-11-16', read: true, message: 'm', createdAt: '2026-11-16T01:00:00Z' },
+        { id: 13, type: 'APPROVED', link: '/whats-new/2026-01-01', read: false, message: 'm', createdAt: '2026-11-16T01:00:00Z' },
+        { id: 14, type: 'RELEASE_NOTE', link: '/whats-new/v2.0.0', read: true, message: 'm', createdAt: '2026-11-16T01:00:00Z' },
+        // a release newer than this bundle: left unread, so the next load can show it
+        { id: 15, type: 'RELEASE_NOTE', link: '/whats-new/v9.9.9', read: false, message: 'm', createdAt: '2026-12-01T01:00:00Z' },
       ],
     });
 
     renderPage(sales);
 
     await waitFor(() => expect(api.notifications.markRead).toHaveBeenCalledWith(11));
-    expect(api.notifications.markRead).toHaveBeenCalledTimes(1);
+    expect(api.notifications.markRead).toHaveBeenCalledWith(12);
+    expect(api.notifications.markRead).toHaveBeenCalledTimes(2);
   });
 
   describe('admin control (CEO / HR)', () => {
@@ -103,7 +106,7 @@ describe('WhatsNewPage', () => {
       for (const role of ['sales', 'sales_manager', 'account', 'import', 'warehouse', 'qc', 'employee']) {
         const { unmount } = render(
           <QueryClientProvider client={new QueryClient()}>
-            <MemoryRouter initialEntries={['/whats-new/2026-11-16']}>
+            <MemoryRouter initialEntries={['/whats-new/v2.0.0']}>
               <Routes>
                 <Route path="/whats-new/:releaseId" element={<WhatsNewPage user={{ ...sales, role }} showToast={vi.fn()} />} />
               </Routes>

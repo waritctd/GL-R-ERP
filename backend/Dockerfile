@@ -186,8 +186,8 @@ RUN fc-cache -f -v && \
       echo "All $# required font faces resolve exactly (family AND style)."; \
     fi
 
-# finalName defaults to ${artifactId}-${version} -> glr-hr-backend-0.1.0.jar
-COPY --from=build /app/target/glr-hr-backend-0.1.0.jar app.jar
+# pom.xml sets <finalName>glr-hr-backend</finalName>, so the jar name carries no version.
+COPY --from=build /app/target/glr-hr-backend.jar app.jar
 
 # Drop root: run as an unprivileged user (least privilege / container hardening, issue #27).
 RUN useradd -r -u 10001 appuser

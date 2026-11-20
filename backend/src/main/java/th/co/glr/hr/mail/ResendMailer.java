@@ -174,6 +174,9 @@ public class ResendMailer implements Mailer, KeyedHtmlMailer {
         if (!email.cc().isEmpty()) {
             request.cc(email.cc());
         }
+        if (!email.bcc().isEmpty()) {
+            request.bcc(email.bcc());
+        }
         // Inline images and file attachments are the same Resend concept - an Attachment; an inline one simply carries
         // a contentId the HTML references via cid:<contentId> (see sendHtml).
         List<com.resend.services.emails.model.Attachment> resendAttachments = new java.util.ArrayList<>();

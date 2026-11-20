@@ -3,6 +3,8 @@ import { dirname, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   addDaysIso,
+  displayRole,
+  roleLabel,
   bangkokMonthStartIso,
   depositNoticeStatusLabel,
   formatMoney,
@@ -198,5 +200,13 @@ describe('paymentStageLabel — QA-16 chip values', () => {
     for (const code of codes) {
       expect(paymentStageLabel(code).label, code).not.toBe(code);
     }
+  });
+});
+
+describe('displayRole', () => {
+  it('shows operator over the permission role, which stays untouched', () => {
+    expect(displayRole({ role: 'ceo', operator: true })).toBe('operator');
+    expect(displayRole({ role: 'ceo' })).toBe('ceo');
+    expect(roleLabel(displayRole({ role: 'ceo', operator: true }))).toBe('OPERATOR');
   });
 });
