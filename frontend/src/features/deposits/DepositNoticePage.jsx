@@ -629,8 +629,9 @@ export function DepositNoticePage({ ticketId, onBack, showToast }) {
   const noticePercent = Math.round(Number(form.depositPercent) * 100);
   // A quotation with no % stored means the 30% default (as everywhere else).
   const quotationPercent = referencedQuotation ? (referencedQuotation.depositPercent ?? 30) : null;
-  // A quotation addressed to a party names the customer: the header fields follow it (the server ignores typed values).
-  const customerFromQuotation = referencedQuotation?.partyId != null;
+  // The server says when the header is the referenced quotation's party customer (it then ignores typed values and
+  // keeps the reference), so the editor locks on that flag, not on its own guess from the quotation list.
+  const customerFromQuotation = doc?.customerFromQuotation === true;
   const percentDiffers = !locked && form.depositPercent !== '' && quotationPercent != null
     && quotationPercent !== noticePercent;
   const subtotalDiffers = !locked && referencedQuotation != null
@@ -760,7 +761,7 @@ export function DepositNoticePage({ ticketId, onBack, showToast }) {
               <div className="grid grid-cols-2 gap-3 mobile:grid-cols-1">
                 {customerFromQuotation ? (
                   <p className="col-span-full m-0 text-sm text-text-muted" data-testid="customer-from-quotation">
-                    ชื่อ เลขผู้เสียภาษี และที่อยู่ดึงจากใบเสนอราคา {referencedQuotation.number} (แก้ไม่ได้)
+                    ชื่อ เลขผู้เสียภาษี และที่อยู่ดึงจากใบเสนอราคา {form.reference} (แก้ไม่ได้)
                   </p>
                 ) : null}
                 <div className={customerFromQuotation ? 'hidden' : 'relative col-span-full'}>
@@ -808,7 +809,7 @@ export function DepositNoticePage({ ticketId, onBack, showToast }) {
                     onChange={(e) => setField('projectName', e.target.value)} placeholder="โครงการ…" />
                 </FormField>
                 <FormField label="อ้างอิง PO / ใบเสนอราคา" htmlFor="doc-reference">
-                  <input id="doc-reference" value={form.reference}
+                  <input id="doc-reference" value={form.reference} readOnly={customerFromQuotation}
                     onChange={(e) => setField('reference', e.target.value)} placeholder="PO-XXXX" />
                 </FormField>
                 <DocumentPreparerSelect ticketId={ticketId} id="doc-preparer" value={form.preparerId}

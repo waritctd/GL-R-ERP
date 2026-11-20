@@ -211,7 +211,8 @@ public class DepositNoticeService {
     public DepositNoticeDto update(long docId, DepositNoticeDraftRequest req, UserPrincipal actor) {
         requireRole(actor, SALES_ROLES);
         DepositNoticeDto doc = requireEditable(docId);
-        requireActiveLifecycle(requireTicketOwner(doc.ticketId(), actor));
+        TicketSummaryDto summary = requireTicketOwner(doc.ticketId(), actor);
+        requireActiveLifecycle(summary);
         requirePreparerInDeal(doc.ticketId(), req.preparerId(), doc.preparerId());
         // Sales may change the deposit percent on a DRAFT or an ISSUED notice (a SUPERSEDED one is refused by
         // requireEditable above). docs.update recomputes the amount from it. A request without a percent keeps the
@@ -229,9 +230,15 @@ public class DepositNoticeService {
         if (depositPercent.compareTo(doc.depositPercent()) != 0 && !isWholePercent(depositPercent)) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "เปอร์เซ็นต์มัดจำต้องเป็นจำนวนเต็ม");
         }
+        // The customer always comes from the quotation the STORED reference names (a new-engine quotation with a
+        // party): typed customer fields are ignored and the reference is kept, since the read-time join keys on it.
+        CustomerHeaderInfo quotationHeader = resolveCustomerHeader(summary, null, null, null, doc.ticketId(), doc.reference());
+        boolean fromQuotation = quotationHeader.customerName() != null;
         var effective = new DepositNoticeDraftRequest(
-            req.customerName(), req.customerTaxId(), req.customerAddress(),
-            req.projectName(), req.reference(),
+            fromQuotation ? quotationHeader.customerName() : req.customerName(),
+            fromQuotation ? quotationHeader.taxId() : req.customerTaxId(),
+            fromQuotation ? quotationHeader.address() : req.customerAddress(),
+            req.projectName(), fromQuotation ? doc.reference() : req.reference(),
             depositPercent,
             req.notes(), echoOnly(req.items(), doc.items()), req.expectedUpdatedAt(), req.preparerId()
         );
@@ -335,7 +342,7 @@ public class DepositNoticeService {
                     CustomerHeaderInfo header = snap.header();
                     BigDecimal deduction = resolved.depositAmount() == null ? BigDecimal.ZERO : resolved.depositAmount();
                     int rows = remainingInvoices.updateSnapshot(inv.id(), resolved.matchedDepositNoticeId(),
-                        snap.ticketSummary().customerName(), header.taxId(), header.branch(), header.addressOnly(),
+                        header.customerNameOr(snap.ticketSummary().customerName()), header.taxId(), header.branch(), header.addressOnly(),
                         header.projectName(), resolved.itemsTotal(), deduction, money.netAmount(), money.vatAmount(),
                         money.grandTotal(), inv.status());
                     if (rows == 0) {
@@ -353,7 +360,7 @@ public class DepositNoticeService {
                                 boolean noVat = money.vatAmount() != null && money.vatAmount().signum() == 0;
                                 notifications.notifyByRoleAtLink("account", TicketEventKind.EDITED,
                                     "ใบแจ้งหนี้ส่วนที่เหลือ " + label + " อัปเดตตามใบแจ้งรับมัดจำที่แก้ไข\n"
-                                        + DealNoticeText.dealLabel(snap.ticketSummary().code(), snap.ticketSummary().customerName())
+                                        + DealNoticeText.dealLabel(snap.ticketSummary().code(), header.customerNameOr(snap.ticketSummary().customerName()))
                                         + " · ยอดชำระรวม " + (noVat ? "" : "VAT ") + ThaiText.money(inv.grandTotal())
                                         + " → " + ThaiText.money(money.grandTotal()) + " บาท",
                                     "/finance/deals/" + ticketId);

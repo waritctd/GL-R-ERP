@@ -153,7 +153,12 @@ class DepositNoticeBundlePdfIntegrationTest extends DirectQuotationDealTestBase 
 
     /** A second BUYER party (another customer) and the quotation re-addressed to it. */
     private th.co.glr.hr.customer.CustomerDto addressToSecondBuyer(long ticketId, long quotationId) {
-        var buyer = customers.create("คุณมะนาว", "0100000000444", "44 ถนนทดสอบ", "สนญ.", "02-000-0444");
+        return addressToBuyer(ticketId, quotationId, "คุณมะนาว", "0100000000444", "44 ถนนทดสอบ");
+    }
+
+    private th.co.glr.hr.customer.CustomerDto addressToBuyer(long ticketId, long quotationId, String name, String taxId,
+                                                              String address) {
+        var buyer = customers.create(name, taxId, address, "สนญ.", "02-000-0444");
         Long partyId = jdbc.queryForObject("INSERT INTO sales.deal_party (ticket_id, customer_id, role, status)"
             + " VALUES (:t, :c, 'BUYER', 'QUOTED') RETURNING party_id",
             java.util.Map.of("t", ticketId, "c", buyer.id()), Long.class);
@@ -199,6 +204,58 @@ class DepositNoticeBundlePdfIntegrationTest extends DirectQuotationDealTestBase 
 
         assertThat(invoice.customerName()).isEqualTo(buyer.name());
         assertThat(invoice.customerTaxId()).isEqualTo(buyer.taxId());
+    }
+
+    /** The read joins on the invoice's own customer_quotation_id; its free-text reference (which users edit) is only the
+     * fallback for a row with no id. */
+    @Test
+    void remainingInvoiceReadKeysOnItsQuotationId_notOnTheEditableReference() {
+        long ticketId = quotationOnlyTicket(salesActor);
+        DealQuotationDto a = approvedZeroDepositQuotation(ticketId);
+        confirmer.confirmOrderFromDirectQuotation(a.id(), salesActor);
+        var buyerA = addressToSecondBuyer(ticketId, a.id());
+        // a second new-engine quotation of the deal (a copy of A's row: one live quotation per deal is a service rule)
+        long bId = jdbc.queryForObject("""
+            INSERT INTO sales.quotation OVERRIDING SYSTEM VALUE SELECT (jsonb_populate_record(NULL::sales.quotation, to_jsonb(q)
+                || jsonb_build_object('quotation_id', nextval(pg_get_serial_sequence('sales.quotation', 'quotation_id')),
+                                      'number', 'QT-COPY-B', 'quotation_version', 99))).*
+              FROM sales.quotation q WHERE q.quotation_id = :a RETURNING quotation_id""",
+            java.util.Map.of("a", a.id()), Long.class);
+        var buyerB = addressToBuyer(ticketId, bId, "คุณส้ม", "0100000000555", "55 ถนนทดสอบ");
+        RemainingInvoiceDocumentDto invoice = remainingInvoiceService.createDraft(ticketId, null, salesActor);
+        assertThat(invoice.customerName()).isEqualTo(buyerA.name());
+
+        // no id: the reference number decides; with an id: the reference text naming A's number cannot move it off B
+        jdbc.update("UPDATE sales.remaining_invoice SET customer_quotation_id = NULL, reference = :r WHERE id = :id",
+            java.util.Map.of("r", "QT-COPY-B", "id", invoice.id()));
+        assertThat(remainingInvoiceService.get(invoice.id(), salesActor).customerName()).isEqualTo(buyerB.name());
+        jdbc.update("UPDATE sales.remaining_invoice SET customer_quotation_id = :q, reference = :r WHERE id = :id",
+            java.util.Map.of("q", a.id(), "r", "QT-COPY-B", "id", invoice.id()));
+        assertThat(remainingInvoiceService.get(invoice.id(), salesActor).customerName()).isEqualTo(buyerA.name());
+    }
+
+    /** Typed customer fields and a changed reference are ignored once the notice's reference resolves to a party; the
+     * STORED columns (which receipt import matches on) hold the party's values, and the DTO says so. */
+    @Test
+    void noticeUpdateKeepsTheQuotationCustomerAndReference() {
+        Deal deal = confirmedDepositDeal();
+        var buyer = addressToSecondBuyer(deal.ticketId(), deal.quotation().id());
+        DepositNoticeDto n = deal.notice();
+
+        DepositNoticeDto updated = depositNoticeService.update(n.id(), new DepositNoticeDraftRequest("พิมพ์เอง", "111",
+            "ที่อยู่พิมพ์เอง", "โครงการใหม่", "QT-OTHER", null, null, null), salesActor);
+
+        assertThat(updated.customerName()).isEqualTo(buyer.name());
+        assertThat(updated.reference()).isEqualTo(deal.quotation().number());
+        assertThat(updated.projectName()).isEqualTo("โครงการใหม่");
+        assertThat(updated.customerFromQuotation()).isTrue();
+        assertThat(jdbc.queryForObject("SELECT customer_name FROM sales.deposit_notice WHERE deposit_notice_id = :id",
+            java.util.Map.of("id", n.id()), String.class)).isEqualTo(buyer.name());
+
+        // the party row gone: the stored values show again and the editor is told they are editable
+        jdbc.update("UPDATE sales.quotation SET party_id = NULL WHERE quotation_id = :id",
+            java.util.Map.of("id", deal.quotation().id()));
+        assertThat(depositNoticeService.getById(n.id(), salesActor).customerFromQuotation()).isFalse();
     }
 
     // ── fixtures ──────────────────────────────────────────────────────────────────────────────

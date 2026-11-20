@@ -108,7 +108,7 @@ public class DepositNoticeRepository {
                    d.vat_percent, d.vat_amount, d.total_payable,
                    d.notes, d.pdf_path, d.xlsx_path,
                    d.issued_by_name, d.preparer_name, d.preparer_id,
-                   d.created_at, d.updated_at
+                   d.created_at, d.updated_at, (qc.name IS NOT NULL) AS customer_from_quotation
               FROM sales.deposit_notice d
               """ + QUOTATION_CUSTOMER_JOIN + """
              WHERE d.deposit_notice_id = :id
@@ -136,7 +136,7 @@ public class DepositNoticeRepository {
                    d.vat_percent, d.vat_amount, d.total_payable,
                    d.notes, d.pdf_path, d.xlsx_path,
                    d.issued_by_name, d.preparer_name, d.preparer_id,
-                   d.created_at, d.updated_at
+                   d.created_at, d.updated_at, (qc.name IS NOT NULL) AS customer_from_quotation
               FROM sales.deposit_notice d
               """ + QUOTATION_CUSTOMER_JOIN + """
              WHERE d.ticket_id = :ticketId
@@ -622,7 +622,8 @@ public class DepositNoticeRepository {
             (Long) rs.getObject("preparer_id"),
             rs.getObject("created_at", OffsetDateTime.class),
             rs.getObject("updated_at", OffsetDateTime.class),
-            List.of()
+            List.of(),
+            rs.getBoolean("customer_from_quotation")
         );
     }
 
@@ -635,7 +636,7 @@ public class DepositNoticeRepository {
             doc.vatPercent(), doc.vatAmount(), doc.totalPayable(),
             doc.notes(), doc.hasPdf(), doc.hasXlsx(),
             doc.issuedByName(), doc.preparerName(), doc.preparerId(),
-            doc.createdAt(), doc.updatedAt(), items
+            doc.createdAt(), doc.updatedAt(), items, doc.customerFromQuotation()
         );
     }
 }

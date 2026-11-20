@@ -46,7 +46,9 @@ public class RemainingInvoiceRepository {
                 FROM sales.quotation q
                 JOIN sales.deal_party dp ON dp.party_id = q.party_id
                 JOIN customers.customer c ON c.customer_id = dp.customer_id
-               WHERE q.ticket_id = r.ticket_id AND q.number = r.reference AND q.origin IS NOT NULL
+               WHERE q.ticket_id = r.ticket_id AND q.origin IS NOT NULL
+                 AND (q.quotation_id = r.customer_quotation_id
+                      OR (r.customer_quotation_id IS NULL AND q.number = r.reference))
                ORDER BY q.quotation_id DESC LIMIT 1) qc ON TRUE
         """;
 
