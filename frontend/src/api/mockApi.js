@@ -4431,7 +4431,8 @@ const mockFeedbackSeed = (id, userId, name, department, role, over) => ({
   id, kind: 'BUG', area: 'QUOTATIONS', details: 'ตัวอย่างข้อมูลสมมติสำหรับทดลองระบบ', extra: null, impact: null,
   pagePath: '/quotations', userAgent: 'Mock', viewport: '390x844', reporterEmployeeId: userId, reporterName: name,
   reporterDepartment: department, reporterRole: role, status: 'PENDING', eta: null, denyReason: null,
-  createdAt: '2026-11-14T03:42:00.000Z', updatedAt: '2026-11-14T03:42:00.000Z', ...over,
+  createdAt: '2026-11-14T03:42:00.000Z', updatedAt: '2026-11-14T03:42:00.000Z',
+  requesters: [{ employeeId: userId, name, department }], ...over,
 });
 const mockFeedback = [
   mockFeedbackSeed(3, 4, 'พนักงานตัวอย่าง', 'ฝ่ายบัญชี', 'employee',
@@ -14083,6 +14084,7 @@ export const api = {
         reporterEmployeeId: user.id, reporterName: user.name, reporterRole: user.role,
         reporterDepartment: employeeForUser(user)?.departmentTh ?? null,
         status: 'PENDING', eta: null, denyReason: null, createdAt: now, updatedAt: now,
+        requesters: [{ employeeId: user.id, name: user.name, department: employeeForUser(user)?.departmentTh ?? null }],
       };
       mockFeedback.unshift(saved);
       db.users.filter((u) => u.admin && u.active).forEach((admin) => mockFeedbackNotify(
@@ -14091,7 +14093,7 @@ export const api = {
     },
     async listMine() {
       const user = requireSession();
-      return delay(mockFeedback.filter((f) => f.reporterEmployeeId === user.id).map((f) => ({ ...f })));
+      return delay(mockFeedback.filter((f) => f.requesters.some((r) => r.employeeId === user.id)).map((f) => ({ ...f })));
     },
     async listAll() {
       mockRequireFeedbackAdmin();
@@ -14112,6 +14114,21 @@ export const api = {
       mockFeedbackNotify(found.reporterEmployeeId, 'FEEDBACK_DECIDED',
         accept ? `รับเรื่อง #${found.id} แล้ว` : `ไม่รับเรื่อง #${found.id}`,
         accept ? `กำหนดเสร็จ ${mockFeedbackDate(payload.eta)}` : `เหตุผล: ${reason}`);
+      return delay({ ...found });
+    },
+    async people() {
+      mockRequireFeedbackAdmin();
+      return delay(db.users.filter((u) => u.active).map((u) => ({
+        employeeId: u.id, name: u.name, department: employeeForUser(u)?.departmentTh ?? null, role: u.role,
+      })));
+    },
+    async setRequesters(id, employeeIds = []) {
+      mockRequireFeedbackAdmin();
+      const found = mockFeedbackById(id);
+      const wanted = [...new Set([found.reporterEmployeeId, ...employeeIds])];
+      const users = wanted.map((uid) => db.users.find((u) => u.id === uid && u.active));
+      if (users.some((u) => !u)) fail('มีพนักงานที่ไม่พบหรือพ้นสภาพ');
+      found.requesters = users.map((u) => ({ employeeId: u.id, name: u.name, department: employeeForUser(u)?.departmentTh ?? null }));
       return delay({ ...found });
     },
     async update(id, payload = {}) {

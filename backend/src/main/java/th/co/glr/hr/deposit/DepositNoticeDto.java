@@ -36,5 +36,7 @@ public record DepositNoticeDto(
     Long              preparerId,
     OffsetDateTime    createdAt,
     OffsetDateTime    updatedAt,
-    List<DepositNoticeItemDto> items
+    List<DepositNoticeItemDto> items,
+    // true when customerName/TaxId/Address are the quotation party's (read-only in the editor), false for stored values
+    boolean           customerFromQuotation
 ) {}

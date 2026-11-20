@@ -6,16 +6,19 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.feedback.FeedbackDtos.DecisionRequest;
 import th.co.glr.hr.feedback.FeedbackDtos.FeedbackDto;
+import th.co.glr.hr.feedback.FeedbackDtos.Person;
+import th.co.glr.hr.feedback.FeedbackDtos.RequestersRequest;
 import th.co.glr.hr.feedback.FeedbackDtos.SubmitRequest;
 import th.co.glr.hr.feedback.FeedbackDtos.UpdateRequest;
 
-/** Identity-gated (any signed-in employee) for submit + own list; admin-only gates live in {@link FeedbackService}. */
+/** Identity-gated (any signed-in employee) for submit + own (any-requester) list; admin-only gates live in {@link FeedbackService}. */
 @RestController
 @RequestMapping("/api/feedback")
 public class FeedbackController {
@@ -45,6 +48,16 @@ public class FeedbackController {
     @PostMapping("/{id}/decision")
     FeedbackDto decide(@PathVariable long id, @RequestBody DecisionRequest request, HttpSession session) {
         return feedback.decide(sessions.requireUser(session), id, request);
+    }
+
+    @GetMapping("/people")
+    List<Person> people(HttpSession session) {
+        return feedback.people(sessions.requireUser(session));
+    }
+
+    @PutMapping("/{id}/requesters")
+    FeedbackDto setRequesters(@PathVariable long id, @RequestBody RequestersRequest request, HttpSession session) {
+        return feedback.setRequesters(sessions.requireUser(session), id, request);
     }
 
     @PatchMapping("/{id}")

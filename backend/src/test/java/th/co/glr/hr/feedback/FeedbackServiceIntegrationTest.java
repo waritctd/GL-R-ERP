@@ -169,6 +169,58 @@ class FeedbackServiceIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(bellCount(rep)).isEqualTo(before);
     }
 
+    // ── Several requesters ──────────────────────────────────────────────────────────────────────────────────
+
+    @Test
+    void adminSetsRequesters_theyShareTheRequestAndAllGetTheNotification_reporterStays() {
+        long id = pending();
+        UserPrincipal adminUser = principal(admin, "employee");
+
+        FeedbackDto set = service.setRequesters(adminUser, id, new FeedbackDtos.RequestersRequest(List.of(otherRep)));
+
+        // The reporter is silently kept and listed first; adding people notifies nobody.
+        assertThat(set.requesters()).extracting(FeedbackDtos.Requester::employeeId).containsExactly(rep, otherRep);
+        assertThat(service.listMine(principal(otherRep, "account"))).extracting(FeedbackDto::id).containsExactly(id);
+        assertThat(bellCount(otherRep)).isZero();
+        clearInvocations(mailer);
+
+        service.decide(adminUser, id, new DecisionRequest("ACCEPT", LocalDate.of(2026, 12, 5), null, null));
+
+        assertThat(bellCount(rep)).isEqualTo(1);
+        assertThat(bellCount(otherRep)).isEqualTo(1);
+        verify(mailer, times(2)).sendHtml(anyString(), anyString(), anyString(), anyString(), anyList());
+
+        // Removing everyone else leaves just the reporter.
+        assertThat(service.setRequesters(adminUser, id, new FeedbackDtos.RequestersRequest(List.of())).requesters())
+            .extracting(FeedbackDtos.Requester::employeeId).containsExactly(rep);
+        assertThat(service.listMine(principal(otherRep, "account"))).isEmpty();
+    }
+
+    @Test
+    void requestersAndPeopleAreAdminOnly_andAnInactiveOrUnknownPersonIs400() {
+        long id = pending();
+        for (UserPrincipal denied : List.of(principal(rep, "sales"), principal(ceo, "ceo"))) {
+            assertThatThrownBy(() -> service.setRequesters(denied, id, new FeedbackDtos.RequestersRequest(List.of(otherRep))))
+                .hasFieldOrPropertyWithValue("status", HttpStatus.FORBIDDEN);
+            assertThatThrownBy(() -> service.people(denied))
+                .hasFieldOrPropertyWithValue("status", HttpStatus.FORBIDDEN);
+        }
+        UserPrincipal adminUser = principal(admin, "employee");
+        assertThatThrownBy(() -> service.setRequesters(adminUser, id, new FeedbackDtos.RequestersRequest(List.of(inactiveAdmin))))
+            .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST);
+        assertThatThrownBy(() -> service.setRequesters(adminUser, id + 999, new FeedbackDtos.RequestersRequest(List.of())))
+            .hasFieldOrPropertyWithValue("status", HttpStatus.NOT_FOUND);
+        assertThat(service.people(adminUser)).extracting(FeedbackDtos.Person::employeeId)
+            .contains(rep, otherRep, admin).doesNotContain(inactiveAdmin);
+        assertThat(service.listAll(adminUser)).allSatisfy(f -> assertThat(f.requesters()).hasSize(1));
+
+        // A reporter who has since left must not block edits.
+        service.setRequesters(adminUser, id, new FeedbackDtos.RequestersRequest(List.of(otherRep)));
+        jdbc.update("UPDATE hr.employee SET is_active = false WHERE employee_id IN (:a, :b)", Map.of("a", rep, "b", otherRep));
+        assertThat(service.setRequesters(adminUser, id, new FeedbackDtos.RequestersRequest(List.of(otherRep, ceo))).requesters())
+            .extracting(FeedbackDtos.Requester::employeeId).containsExactly(rep, otherRep, ceo);
+    }
+
     // ── helpers ─────────────────────────────────────────────────────────────────────────────────────────────
 
     private long pending() {

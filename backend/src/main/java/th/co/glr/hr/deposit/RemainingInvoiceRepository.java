@@ -25,27 +25,43 @@ public class RemainingInvoiceRepository {
         this.jdbc = jdbc;
     }
 
+    /** The customer header is the QUOTATION's party customer whenever the reference names a new-engine quotation of this
+     * deal that has a party (a deal can hold several BUYER parties, and the stored snapshot may name the headline one);
+     * the stored columns are used only when no such quotation resolves (legacy reference, no party). */
     private static final String SELECT_RI = """
-        SELECT id, ticket_id, customer_quotation_id, deposit_notice_id, base_number, version,
-               doc_number, status, superseded_by_id,
-               reference, deposit_reference, doc_date, notes,
-               customer_name, customer_tax_id, customer_branch, customer_address, project_name,
-               items_total, deposit_deduction, net_amount, vat_amount, grand_total,
-               created_by_id, created_by_name, preparer_id, preparer_name, created_at, updated_at,
-               issued_by_id, issued_by_name, issued_at
-          FROM sales.remaining_invoice
+        SELECT r.id, r.ticket_id, r.customer_quotation_id, r.deposit_notice_id, r.base_number, r.version,
+               r.doc_number, r.status, r.superseded_by_id,
+               r.reference, r.deposit_reference, r.doc_date, r.notes,
+               CASE WHEN qc.name IS NOT NULL THEN qc.name ELSE r.customer_name END AS customer_name,
+               CASE WHEN qc.name IS NOT NULL THEN qc.tax_id ELSE r.customer_tax_id END AS customer_tax_id,
+               CASE WHEN qc.name IS NOT NULL THEN qc.branch ELSE r.customer_branch END AS customer_branch,
+               CASE WHEN qc.name IS NOT NULL THEN qc.address ELSE r.customer_address END AS customer_address,
+               r.project_name,
+               r.items_total, r.deposit_deduction, r.net_amount, r.vat_amount, r.grand_total,
+               r.created_by_id, r.created_by_name, r.preparer_id, r.preparer_name, r.created_at, r.updated_at,
+               r.issued_by_id, r.issued_by_name, r.issued_at
+          FROM sales.remaining_invoice r
+          LEFT JOIN LATERAL (
+              SELECT c.name, c.tax_id, c.address, c.branch
+                FROM sales.quotation q
+                JOIN sales.deal_party dp ON dp.party_id = q.party_id
+                JOIN customers.customer c ON c.customer_id = dp.customer_id
+               WHERE q.ticket_id = r.ticket_id AND q.origin IS NOT NULL
+                 AND (q.quotation_id = r.customer_quotation_id
+                      OR (r.customer_quotation_id IS NULL AND q.number = r.reference))
+               ORDER BY q.quotation_id DESC LIMIT 1) qc ON TRUE
         """;
 
     public List<RemainingInvoiceDocumentDto> findByTicket(long ticketId) {
         List<RemainingInvoiceDocumentDto> rows = jdbc.query(
-            SELECT_RI + " WHERE ticket_id = :id ORDER BY COALESCE(base_number, ''), version",
+            SELECT_RI + " WHERE r.ticket_id = :id ORDER BY COALESCE(r.base_number, ''), r.version",
             Map.of("id", ticketId), (rs, n) -> mapRow(rs));
         return withItems(rows);
     }
 
     public Optional<RemainingInvoiceDocumentDto> findById(long id) {
         List<RemainingInvoiceDocumentDto> rows = jdbc.query(
-            SELECT_RI + " WHERE id = :id", Map.of("id", id), (rs, n) -> mapRow(rs));
+            SELECT_RI + " WHERE r.id = :id", Map.of("id", id), (rs, n) -> mapRow(rs));
         return withItems(rows).stream().findFirst();
     }
 

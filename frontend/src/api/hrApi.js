@@ -878,6 +878,8 @@ export const api = {
     listAll: () => apiRequest(API_ROUTES.feedback.list),
     decide: (id, payload) => apiRequest(API_ROUTES.feedback.decision(id), { method: 'POST', body: payload }),
     update: (id, payload) => apiRequest(API_ROUTES.feedback.detail(id), { method: 'PATCH', body: payload }),
+    people: () => apiRequest(API_ROUTES.feedback.people),
+    setRequesters: (id, employeeIds) => apiRequest(API_ROUTES.feedback.requesters(id), { method: 'PUT', body: { employeeIds } }),
   },
   commissions: {
     list: (params) => apiRequest(withQuery(API_ROUTES.commissions.list, params)),

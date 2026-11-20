@@ -629,6 +629,9 @@ export function DepositNoticePage({ ticketId, onBack, showToast }) {
   const noticePercent = Math.round(Number(form.depositPercent) * 100);
   // A quotation with no % stored means the 30% default (as everywhere else).
   const quotationPercent = referencedQuotation ? (referencedQuotation.depositPercent ?? 30) : null;
+  // The server says when the header is the referenced quotation's party customer (it then ignores typed values and
+  // keeps the reference), so the editor locks on that flag, not on its own guess from the quotation list.
+  const customerFromQuotation = doc?.customerFromQuotation === true;
   const percentDiffers = !locked && form.depositPercent !== '' && quotationPercent != null
     && quotationPercent !== noticePercent;
   const subtotalDiffers = !locked && referencedQuotation != null
@@ -756,7 +759,12 @@ export function DepositNoticePage({ ticketId, onBack, showToast }) {
               </div>
             ) : (
               <div className="grid grid-cols-2 gap-3 mobile:grid-cols-1">
-                <div className="relative col-span-full">
+                {customerFromQuotation ? (
+                  <p className="col-span-full m-0 text-sm text-text-muted" data-testid="customer-from-quotation">
+                    ชื่อ เลขผู้เสียภาษี และที่อยู่ดึงจากใบเสนอราคา {form.reference} (แก้ไม่ได้)
+                  </p>
+                ) : null}
+                <div className={customerFromQuotation ? 'hidden' : 'relative col-span-full'}>
                   <FormField label="ค้นหาลูกค้า (master)" htmlFor="doc-customer-search">
                     <input
                       id="doc-customer-search"
@@ -782,17 +790,17 @@ export function DepositNoticePage({ ticketId, onBack, showToast }) {
                   <input
                     id="doc-customer-name"
                     ref={(el) => { fieldRefs.current.customerName = el; }}
-                    value={form.customerName}
+                    value={form.customerName} readOnly={customerFromQuotation}
                     onChange={(e) => setField('customerName', e.target.value)} placeholder="บริษัท…"
                   />
                 </FormField>
                 <FormField label="เลขประจำตัวผู้เสียภาษี" htmlFor="doc-customer-tax">
-                  <input id="doc-customer-tax" value={form.customerTaxId}
+                  <input id="doc-customer-tax" value={form.customerTaxId} readOnly={customerFromQuotation}
                     onChange={(e) => setField('customerTaxId', e.target.value)} placeholder="0000000000000" />
                 </FormField>
                 <div className="col-span-full">
                   <FormField label="ที่อยู่" htmlFor="doc-customer-address">
-                    <textarea id="doc-customer-address" rows={2} value={form.customerAddress}
+                    <textarea id="doc-customer-address" rows={2} value={form.customerAddress} readOnly={customerFromQuotation}
                       onChange={(e) => setField('customerAddress', e.target.value)} placeholder="ที่อยู่…" className="resize-y" />
                   </FormField>
                 </div>
@@ -801,7 +809,7 @@ export function DepositNoticePage({ ticketId, onBack, showToast }) {
                     onChange={(e) => setField('projectName', e.target.value)} placeholder="โครงการ…" />
                 </FormField>
                 <FormField label="อ้างอิง PO / ใบเสนอราคา" htmlFor="doc-reference">
-                  <input id="doc-reference" value={form.reference}
+                  <input id="doc-reference" value={form.reference} readOnly={customerFromQuotation}
                     onChange={(e) => setField('reference', e.target.value)} placeholder="PO-XXXX" />
                 </FormField>
                 <DocumentPreparerSelect ticketId={ticketId} id="doc-preparer" value={form.preparerId}

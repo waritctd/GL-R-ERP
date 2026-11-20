@@ -3,21 +3,27 @@ package th.co.glr.hr.feedback;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
+import java.util.LinkedHashSet;
 import java.util.Set;
+import java.util.stream.Collectors;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import th.co.glr.hr.auth.DivisionAccessPolicy;
 import th.co.glr.hr.auth.EmployeeAuthRepository;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.common.ThaiText;
 import th.co.glr.hr.feedback.FeedbackDtos.DecisionRequest;
 import th.co.glr.hr.feedback.FeedbackDtos.FeedbackDto;
+import th.co.glr.hr.feedback.FeedbackDtos.Person;
+import th.co.glr.hr.feedback.FeedbackDtos.Requester;
+import th.co.glr.hr.feedback.FeedbackDtos.RequestersRequest;
 import th.co.glr.hr.feedback.FeedbackDtos.SubmitRequest;
 import th.co.glr.hr.feedback.FeedbackDtos.UpdateRequest;
 import th.co.glr.hr.notification.NotificationService;
 
-/** Staff submit and read their own; the admin (live hr.employee.is_admin, as the activity log) decides and tracks. */
+/** Staff submit and read their own (as any requester); the admin (live hr.employee.is_admin, as the activity log) decides and tracks. */
 @Service
 public class FeedbackService {
     static final String LINK = "/whats-new?tab=feedback";
@@ -27,6 +33,7 @@ public class FeedbackService {
     private static final Set<String> FEATURE_IMPACTS = Set.of("DAILY", "SOMETIMES", "NICE");
     private static final int MAX_TEXT = 4000;
     private static final int MAX_PER_HOUR = 10;
+    private static final int MAX_REQUESTERS = 200;
     private static final Map<String, String> STEP_LABEL = Map.of("ACCEPTED", "รับเรื่อง", "IN_PROGRESS", "กำลังทำ",
         "TESTING", "ทดสอบ", "RELEASED", "ใช้งานได้แล้ว");
 
@@ -79,6 +86,7 @@ public class FeedbackService {
         SubmitRequest clean = new SubmitRequest(request.kind(), request.area(), details, extra, impact,
             cut(request.pagePath(), 300), cut(request.userAgent(), 300), cut(request.viewport(), 30));
         long id = repository.insert(actor.id(), actor.name(), repository.departmentOf(actor.id()), actor.role(), clean);
+        repository.addRequester(id, actor.id());
         FeedbackDto saved = repository.findById(id).orElseThrow();
         String subject = ("BUG".equals(clean.kind()) ? "แจ้งปัญหา" : "ขอฟีเจอร์") + " #" + id + " จาก " + actor.name();
         String body = clean.details();
@@ -89,7 +97,7 @@ public class FeedbackService {
     }
 
     public List<FeedbackDto> listMine(UserPrincipal actor) {
-        return repository.findByReporter(actor.id());
+        return repository.findByRequester(actor.id());
     }
 
     public List<FeedbackDto> listAll(UserPrincipal actor) {
@@ -122,11 +130,13 @@ public class FeedbackService {
         }
         String ref = "#" + id;
         // รับเรื่อง and ไม่รับเรื่อง: a one-line bell, and a detailed email.
-        notifications.notifyWithEmailBody(before.reporterEmployeeId(), "FEEDBACK_DECIDED",
-            accept ? "รับเรื่อง " + ref + " แล้ว" : "ไม่รับเรื่อง " + ref,
-            accept ? "กำหนดเสร็จ " + ThaiText.date(request.eta()) : "เหตุผล: " + reason, LINK,
-            accept ? detailedBody(before, "รับเรื่องแล้ว", request.eta(), null)
-                : detailedBody(before, "ไม่รับเรื่อง", null, reason));
+        for (Requester requester : before.requesters()) {
+            notifications.notifyWithEmailBody(requester.employeeId(), "FEEDBACK_DECIDED",
+                accept ? "รับเรื่อง " + ref + " แล้ว" : "ไม่รับเรื่อง " + ref,
+                accept ? "กำหนดเสร็จ " + ThaiText.date(request.eta()) : "เหตุผล: " + reason, LINK,
+                accept ? detailedBody(before, "รับเรื่องแล้ว", request.eta(), null)
+                    : detailedBody(before, "ไม่รับเรื่อง", null, reason));
+        }
         return existing(id);
     }
 
@@ -157,11 +167,47 @@ public class FeedbackService {
         if (request != null && Boolean.TRUE.equals(request.silent())) {
             return after;
         }
-        notifications.notifyWithEmailBody(before.reporterEmployeeId(), "FEEDBACK_UPDATED",
-            firstRelease ? "เรื่อง #" + id + " ใช้งานได้แล้ว" : "อัปเดตเรื่อง #" + id,
-            "ความคืบหน้า: " + STEP_LABEL.get(after.status()) + " · กำหนดเสร็จ " + ThaiText.date(after.eta()), LINK,
-            firstRelease ? detailedBody(after, "ใช้งานได้แล้ว", after.eta(), null) : null);
+        for (Requester requester : after.requesters()) {
+            notifications.notifyWithEmailBody(requester.employeeId(), "FEEDBACK_UPDATED",
+                firstRelease ? "เรื่อง #" + id + " ใช้งานได้แล้ว" : "อัปเดตเรื่อง #" + id,
+                "ความคืบหน้า: " + STEP_LABEL.get(after.status()) + " · กำหนดเสร็จ " + ThaiText.date(after.eta()), LINK,
+                firstRelease ? detailedBody(after, "ใช้งานได้แล้ว", after.eta(), null) : null);
+        }
         return after;
+    }
+
+    /** Admin replaces who asked for this request. The reporter always stays; adding people notifies nobody. */
+    @Transactional
+    public FeedbackDto setRequesters(UserPrincipal actor, long id, RequestersRequest request) {
+        requireAdmin(actor);
+        FeedbackDto item = existing(id);
+        if (request == null || request.employeeIds() == null) {
+            throw bad("คำขอไม่ถูกต้อง");
+        }
+        Set<Long> wanted = new LinkedHashSet<>(request.employeeIds());
+        wanted.add(item.reporterEmployeeId());
+        if (wanted.contains(null)) {
+            throw bad("คำขอไม่ถูกต้อง");
+        }
+        if (wanted.size() > MAX_REQUESTERS) {
+            throw bad("เพิ่มผู้ขอได้ไม่เกิน 200 คน");
+        }
+        List<Long> ids = List.copyOf(wanted);
+        // Only NEWLY added people must be active: a reporter / requester who has since left stays on the list.
+        Set<Long> current = item.requesters().stream().map(Requester::employeeId).collect(Collectors.toSet());
+        List<Long> added = ids.stream().filter(e -> !current.contains(e) && e != item.reporterEmployeeId()).toList();
+        if (!added.isEmpty() && repository.countActive(added) != added.size()) {
+            throw bad("มีพนักงานที่ไม่พบหรือพ้นสภาพ");
+        }
+        repository.replaceRequesters(id, ids);
+        return existing(id);
+    }
+
+    /** Active employees the admin can pick as requesters. */
+    public List<Person> people(UserPrincipal actor) {
+        requireAdmin(actor);
+        return employees.findAllActive().stream()
+            .map(e -> new Person(e.employeeId(), e.name(), e.divisionName(), DivisionAccessPolicy.roleFor(e))).toList();
     }
 
     /** The reporter-facing email/bell text: which request, its status and date, then their own words back. */
@@ -177,7 +223,7 @@ public class FeedbackService {
         if (reason != null) {
             body.append("เหตุผล: ").append(reason).append('\n');
         }
-        return body.append("\nรายละเอียดที่คุณแจ้ง:\n").append(item.details()).toString();
+        return body.append("\nรายละเอียดคำขอ:\n").append(item.details()).toString();
     }
 
     private FeedbackDto existing(long id) {

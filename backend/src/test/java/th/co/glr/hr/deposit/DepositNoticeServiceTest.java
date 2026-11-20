@@ -182,7 +182,7 @@ class DepositNoticeServiceTest {
             "ACME", "0100000000000", "Bangkok", "Showroom", reference, "THB",
             new BigDecimal("0.50"), subtotal, depositAmount,
             new BigDecimal("0.07"), BigDecimal.ZERO, BigDecimal.ZERO,
-            List.of(), true, true, "Sales", "Preparer", null, null, null, items);
+            List.of(), true, true, "Sales", "Preparer", null, null, null, items, false);
     }
 
     // ── Deposit percent = what the source quotation's PDF printed ────
@@ -227,7 +227,7 @@ class DepositNoticeServiceTest {
             "ACME", "0100000000000", "Bangkok", "Showroom", "REF-1", "THB",
             depositPercent, new BigDecimal("1000.00"), new BigDecimal("500.00"),
             new BigDecimal("0.07"), new BigDecimal("35.00"), new BigDecimal("535.00"),
-            List.of(), false, false, "Sales", "Preparer", null, null, null, List.of());
+            List.of(), false, false, "Sales", "Preparer", null, null, null, List.of(), false);
         when(docs.findById(docId)).thenReturn(Optional.of(draft));
     }
 

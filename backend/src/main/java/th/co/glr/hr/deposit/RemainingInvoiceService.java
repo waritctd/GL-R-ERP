@@ -175,7 +175,7 @@ public class RemainingInvoiceService {
         try {
             id = stored.insertDraft(ticketId, quotationId, resolved.matchedDepositNoticeId(),
                 reference, depositReference, docDate, notes,
-                s.customerName(), header.taxId(), header.branch(), header.addressOnly(), header.projectName(),
+                header.customerNameOr(s.customerName()), header.taxId(), header.branch(), header.addressOnly(), header.projectName(),
                 itemsTotal, depositAmount, money.netAmount(), money.vatAmount(), money.grandTotal(), actor.id(), actor.name());
         } catch (DataIntegrityViolationException e) {
             throw new ApiException(HttpStatus.CONFLICT,
@@ -211,7 +211,7 @@ public class RemainingInvoiceService {
 
         DepositNoticeService.CustomerHeaderInfo header = snap.header();
         TicketSummaryDto s = snap.ticketSummary();
-        requireRowUpdated(stored.updateSnapshot(id, resolved.matchedDepositNoticeId(), s.customerName(), header.taxId(),
+        requireRowUpdated(stored.updateSnapshot(id, resolved.matchedDepositNoticeId(), header.customerNameOr(s.customerName()), header.taxId(),
             header.branch(), header.addressOnly(), header.projectName(),
             itemsTotal, depositAmount, money.netAmount(), money.vatAmount(), money.grandTotal(), existing.status()), id);
         stored.replaceItems(id, items);
@@ -236,7 +236,7 @@ public class RemainingInvoiceService {
                 boolean noVat = updated.vatAmount() != null && updated.vatAmount().signum() == 0;
                 notifications.notifyByRoleAtLink("account", TicketEventKind.EDITED,
                     "แก้ไขใบแจ้งหนี้ " + existing.docNumber() + " (ออกเลขแล้ว)\n"
-                        + DealNoticeText.dealLabel(s.code(), s.customerName()) + " · ยอดชำระรวม " + (noVat ? "" : "VAT ")
+                        + DealNoticeText.dealLabel(s.code(), header.customerNameOr(s.customerName())) + " · ยอดชำระรวม " + (noVat ? "" : "VAT ")
                         + ThaiText.money(existing.grandTotal()) + " → " + ThaiText.money(updated.grandTotal()) + " บาท",
                     "/finance/deals/" + existing.ticketId());
             }
@@ -294,7 +294,7 @@ public class RemainingInvoiceService {
 
         // Freeze the REFRESHED content onto this row before minting — the user-typed dialog fields
         // (reference/depositReference/docDate/notes) are untouched by this call.
-        stored.updateSnapshot(id, resolved.matchedDepositNoticeId(), snapSummary.customerName(), header.taxId(),
+        stored.updateSnapshot(id, resolved.matchedDepositNoticeId(), header.customerNameOr(snapSummary.customerName()), header.taxId(),
             header.branch(), header.addressOnly(), header.projectName(),
             itemsTotal, depositAmount, money.netAmount(), money.vatAmount(), money.grandTotal(), "DRAFT");
         stored.replaceItems(id, items);
@@ -345,7 +345,7 @@ public class RemainingInvoiceService {
         boolean noVat = issued.vatAmount() != null && issued.vatAmount().signum() == 0;
         notifications.notifyByRoleAtLink("account", TicketEventKind.REMAINING_INVOICE_ISSUED,
             actor.name() + " ออกใบแจ้งหนี้ " + docNumber + (version > 1 ? " (ฉบับแก้ไข)" : "") + " แล้ว\n"
-                + DealNoticeText.dealLabel(s.code(), s.customerName()) + " · ยอดชำระรวม "
+                + DealNoticeText.dealLabel(s.code(), header.customerNameOr(s.customerName())) + " · ยอดชำระรวม "
                 + (noVat ? "" : "VAT ") + ThaiText.money(issued.grandTotal()) + " บาท"
                 + "\nสิ่งที่ต้องทำต่อ: ตรวจรับเงินโอนจากลูกค้า แล้วบันทึกรับชำระในระบบ",
             "/finance/deals/" + draft.ticketId());

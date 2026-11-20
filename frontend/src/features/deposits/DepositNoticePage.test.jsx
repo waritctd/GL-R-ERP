@@ -284,6 +284,29 @@ describe('DepositNoticePage', () => {
       });
     }
 
+    it('makes the customer fields read-only, labelled as from the quotation, when it is addressed to a party', async () => {
+      draftWith({ customerFromQuotation: true });
+      api.dealQuotations.listForTicket.mockResolvedValue({ items: [quotation] });
+      renderDepositNoticePage();
+
+      expect(await screen.findByTestId('customer-from-quotation')).not.toBeNull();
+      expect(screen.getByLabelText(/อ้างอิง PO/).readOnly).toBe(true);
+      expect(screen.getByLabelText(/ชื่อบริษัท/).readOnly).toBe(true);
+      expect(screen.getByLabelText(/เลขประจำตัวผู้เสียภาษี/).readOnly).toBe(true);
+      expect(screen.getByLabelText('ที่อยู่').readOnly).toBe(true);
+    });
+
+    it('keeps the customer fields editable when the server did not take them from a quotation party', async () => {
+      draftWith({ customerFromQuotation: false });
+      api.dealQuotations.listForTicket.mockResolvedValue({ items: [{ ...quotation, partyId: 322 }] });
+      renderDepositNoticePage();
+
+      await screen.findByTestId('deposit-percent-differs');
+      expect(screen.queryByTestId('customer-from-quotation')).toBeNull();
+      expect(screen.getByLabelText(/ชื่อบริษัท/).readOnly).toBe(false);
+      expect(screen.getByLabelText(/อ้างอิง PO/).readOnly).toBe(false);
+    });
+
     it('shows which quotation and which percent, next to the notice percent, and leaves ออกเอกสาร enabled', async () => {
       draftWith();
       api.dealQuotations.listForTicket.mockResolvedValue({ items: [{ id: 60, number: 'QT-2026-0001', depositPercent: 50 }, quotation] });
