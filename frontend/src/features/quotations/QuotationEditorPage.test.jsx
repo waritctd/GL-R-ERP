@@ -398,7 +398,7 @@ describe('QuotationEditorPage live provisional totals (#M6)', () => {
 // summary, and the first บันทึกร่าง has to mint the ticket itself (api.tickets.create) before it can
 // create the quotation on top of it (api.dealQuotations.create).
 describe('QuotationEditorPage inline deal creation', () => {
-  const testCustomer = { id: 1, name: 'บริษัท ก้าวหน้า คอนสตรัคชั่น จำกัด', taxId: '0105565012345' };
+  const testCustomer = { id: 1, name: 'บริษัท สมมติก้าวไกล คอนสตรัคชั่น จำกัด', taxId: '0105565012345' };
   const testProject = { id: 1, customerId: 1, name: 'โครงการ Central Ladprao ชั้น B1' };
 
   // Renders the real editor at /quotations/new with no ticket query param, plus a stand-in for /quotations/:id

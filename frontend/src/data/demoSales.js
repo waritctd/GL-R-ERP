@@ -347,7 +347,7 @@ export function buildDemoSalesSeed() {
       depositPercent, vatPercent: 0.07,
       notes: ['ราคารวมค่าขนส่งถึงชั้น 1 ของหน่วยงานในเขต กทม. แต่ไม่รวมค่าตัด/ติดตั้ง'],
       items, issuedByName: status === 'ISSUED' ? SALES1.name : null,
-      preparerName: 'จินตนา หาญมนตรี',
+      preparerName: 'สมหญิง ตัวอย่างดี',
       // This is the post-render READ state (a seeded document is never "just issued" — it's already sitting there
       // for demo purposes), NOT what depositNotices.issue's own response returns. Do not use this seed as a
       // reference for what issue() itself returns.

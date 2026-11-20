@@ -34,7 +34,7 @@ vi.mock('../../api/index.js', async (importOriginal) => {
   };
 });
 
-const testCustomer = { id: 1, name: 'บริษัท ก้าวหน้า คอนสตรัคชั่น จำกัด', taxId: '0105565012345' };
+const testCustomer = { id: 1, name: 'บริษัท สมมติก้าวไกล คอนสตรัคชั่น จำกัด', taxId: '0105565012345' };
 const testProject = { id: 1, customerId: 1, name: 'โครงการ Central Ladprao ชั้น B1' };
 const testContact = { id: 1, customerId: 1, firstName: 'วิภา', lastName: 'สมิทธ์' };
 

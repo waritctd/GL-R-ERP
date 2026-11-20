@@ -248,13 +248,13 @@ describe('QuotationListPage — revisions of one document fold into the version 
 // number on top; search by the quotation total; the date column is the approval date.
 describe('QuotationListPage — flat list by number (sales request 2026-11-16)', () => {
   const items = [
-    row({ id: 11, number: 'QT-2026-0119-1', customerName: 'บริษัท ไวท์ วูด กรีน จำกัด', projectName: 'บ้านคุณปองพล', ticketId: 114, ticketCode: 'PR-2026-0114', docStatus: 'SUPERSEDED', grandTotal: 40449.21, quotationDate: '2026-07-24' }),
+    row({ id: 11, number: 'QT-2026-0119-1', customerName: 'บริษัท สมมติ วูด จำกัด', projectName: 'บ้านคุณปองพล', ticketId: 114, ticketCode: 'PR-2026-0114', docStatus: 'SUPERSEDED', grandTotal: 40449.21, quotationDate: '2026-07-24' }),
     row({ id: 31, number: 'QT-2026-0141-2', customerName: 'คุณรมิตา เกรียงไกรรัตน์', projectName: 'บ้านคุณรมิตา', ticketId: 136, ticketCode: 'PR-2026-0136', docStatus: 'APPROVED', grandTotal: 7198.45, quotationDate: '2026-07-29', approvedAt: '2026-07-29T03:00:00Z' }),
-    row({ id: 12, number: 'QT-2026-0119-2', customerName: 'บริษัท ไวท์ วูด กรีน จำกัด', projectName: 'บ้านคุณปองพล', ticketId: 114, ticketCode: 'PR-2026-0114', docStatus: 'APPROVED', grandTotal: 5444.8, quotationDate: '2026-07-24',
+    row({ id: 12, number: 'QT-2026-0119-2', customerName: 'บริษัท สมมติ วูด จำกัด', projectName: 'บ้านคุณปองพล', ticketId: 114, ticketCode: 'PR-2026-0114', docStatus: 'APPROVED', grandTotal: 5444.8, quotationDate: '2026-07-24',
       // 18:30 UTC on the 15th is already the 16th in Bangkok: the cell must show the Bangkok day.
       approvedAt: '2026-11-15T18:30:00Z' }),
     row({ id: 32, number: 'QT-2026-0141-3', customerName: 'คุณรมิตา เกรียงไกรรัตน์', projectName: 'บ้านคุณรมิตา', ticketId: 136, ticketCode: 'PR-2026-0136', docStatus: 'DRAFT', grandTotal: 6406.61, quotationDate: '2026-11-13', approvedAt: null }),
-    row({ id: 13, number: 'QT-2026-0120-1', customerName: 'บริษัท ไวท์ วูด กรีน จำกัด', projectName: 'บ้านคุณปองพล', ticketId: 114, ticketCode: 'PR-2026-0114', docStatus: 'SUPERSEDED', grandTotal: 9188.14, quotationDate: '2026-07-24' }),
+    row({ id: 13, number: 'QT-2026-0120-1', customerName: 'บริษัท สมมติ วูด จำกัด', projectName: 'บ้านคุณปองพล', ticketId: 114, ticketCode: 'PR-2026-0114', docStatus: 'SUPERSEDED', grandTotal: 9188.14, quotationDate: '2026-07-24' }),
   ];
   beforeEach(() => {
     vi.clearAllMocks();
