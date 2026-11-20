@@ -20,11 +20,29 @@ public record RecordDeliveryRequest(
     // Slice 6d (วันที่ส่ง): the Asia/Bangkok day the goods went. Optional — null (or today) records the moment it was
     // saved, exactly as before. A past day may be at most 7 days back and never in the future; TicketService
     // #recordPartialDelivery enforces it, not the client. Stored in delivery_record.delivered_at.
-    LocalDate deliveredOn
+    LocalDate deliveredOn,
+    // The delivery round this record is made through. Optional: null with no note takes the order's oldest INVOICED round
+    // with quantity still to deliver; with a note it is a delivery with no round. A sent round that is not yet invoiced is
+    // linked too (the note is then required). A round that is not this deal's is a 404, a draft a 409.
+    Long deliveryRequestId,
+    // Ploy ruling 2026-11-20: with no confirmed tax invoice sales or warehouse staff may still record a delivery, but only
+    // with this note/reference (trimmed, non-blank, max 500). Ignored when the delivery is made against an INVOICED round.
+    String noInvoiceNote
 ) {
     /** The shape before slice 6d: no delivery day — the record is stamped with the moment it is saved. */
     public RecordDeliveryRequest(String source, String note, List<Line> lines, String recipientName) {
-        this(source, note, lines, recipientName, null);
+        this(source, note, lines, recipientName, null, null, null);
+    }
+
+    /** The shape before delivery rounds: no round named. */
+    public RecordDeliveryRequest(String source, String note, List<Line> lines, String recipientName, LocalDate deliveredOn) {
+        this(source, note, lines, recipientName, deliveredOn, null, null);
+    }
+
+    /** The shape with a round named and no note. */
+    public RecordDeliveryRequest(String source, String note, List<Line> lines, String recipientName, LocalDate deliveredOn,
+                                 Long deliveryRequestId) {
+        this(source, note, lines, recipientName, deliveredOn, deliveryRequestId, null);
     }
 
     public record Line(

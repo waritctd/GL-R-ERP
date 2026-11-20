@@ -1,5 +1,5 @@
 import React, { lazy, Suspense, useEffect, useMemo, useState } from 'react';
-import { Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom';
+import { Navigate, Route, Routes, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { api } from './api/index.js';
 import { AppShell } from './components/layout/AppShell.jsx';
 import { Toast } from './components/common/Toast.jsx';
@@ -85,12 +85,19 @@ const SafeFormSubmitterProbe = lazy(() => import('./dev/SafeFormSubmitterProbe.j
 // fetch by id internally).
 function DepositNoticeRoute({ user, showToast }) {
   const { ticketId } = useParams();
+  const [searchParams] = useSearchParams();
   const navigate = useNavigate();
+  // "สร้าง" from the delivery request sheet (?returnTo=ship-request): back and after-issue land on that order's sheet again.
+  const toRequest = searchParams.get('returnTo') === 'ship-request';
+  const backToRequest = () => navigate(`/tickets/${ticketId}?tab=ship&request=open`);
   return (
     <DepositNoticePage
       user={user}
       ticketId={ticketId}
-      onBack={() => navigate(`/tickets/${ticketId}`)}
+      onBack={toRequest ? backToRequest : () => navigate(`/tickets/${ticketId}`)}
+      backLabel={toRequest ? 'กลับไปที่คำขอ' : undefined}
+      quotationId={toRequest ? searchParams.get('quotation') : null}
+      onIssued={toRequest ? backToRequest : undefined}
       showToast={showToast}
     />
   );

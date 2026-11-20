@@ -137,7 +137,8 @@ export function DealDocumentRegister({
   // header comment) — governs BOTH the deposit notice and the remaining invoice.
   const canViewDepositAndInvoice = !quotationsOnly && Boolean(sections?.depositNotice);
   // The attachments family's gate is the page's own canViewDocumentsTab, unchanged.
-  const showAttachments = !quotationsOnly && canViewDocumentsTab;
+  // On the ไฟล์ tab the attachments panel (ไฟล์อื่นของงาน) owns these rows, so the files part does not list them twice.
+  const showAttachments = part === 'all' && canViewDocumentsTab;
   // the remaining invoice's own WRITE gate — mirrors RemainingInvoiceService#requireDepositNoticeIssueGate /
   // mockApi's requireRemainingInvoiceWriteGate exactly (sales role + this deal's own owner, no CEO carve-out).
   const canWriteRemainingInvoice = isSalesOwner(summary, user);
@@ -300,10 +301,14 @@ export function DealDocumentRegister({
   }
 
   const hasAnyVisibleSection = canViewQuotations || canViewDepositAndInvoice || showAttachments || canViewImportRequests;
-  const panelTitle = quotationsOnly ? 'ใบเสนอราคาของงานนี้' : 'เอกสารของงาน';
+  // The ไฟล์ tab's "เอกสารจากระบบ n ฉบับ" (design M19): the system documents this register lists.
+  const systemDocCount = (canViewDepositAndInvoice ? depositGroups.length + remainingGroups.length : 0)
+    + (canViewImportRequests ? importRequestRows.length : 0);
+  const panelTitle = quotationsOnly ? 'ใบเสนอราคาของงานนี้' : part === 'files' ? `เอกสารจากระบบ ${systemDocCount} ฉบับ` : 'เอกสารของงาน';
   const panelTestId = quotationsOnly ? 'deal-quotations-card' : 'deal-document-register';
 
   if (!hasAnyVisibleSection) {
+    if (part === 'files') return null;
     return (
       <Panel title={panelTitle} actions={quotationsOnly ? quotationsAction : null} data-testid={panelTestId}>
         <div className="p-4">

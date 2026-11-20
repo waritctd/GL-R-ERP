@@ -65,6 +65,7 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         // The revoke-close-confirm control lives in the "การเงิน" tab, outside the money section.
         revokeCloseConfirmation: vi.fn(),
       },
+      deliveryRequests: { list: vi.fn() },
       attachments: {
         list: vi.fn(),
         upload: vi.fn(),
@@ -253,6 +254,8 @@ async function stickyInputsSettled() {
   await act(async () => { await new Promise((resolve) => { setTimeout(resolve, 50); }); });
 }
 
+const NO_ROUNDS = { order: { orderNo: 1, parentCode: null }, approvedQuotations: [], rounds: [], canStart: false };
+
 describe('TicketDetailPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -275,6 +278,7 @@ describe('TicketDetailPage', () => {
       availableActions: [],
     });
     api.attachments.list.mockResolvedValue({ attachments: [] });
+    api.deliveryRequests.list.mockResolvedValue(NO_ROUNDS);
     api.attachments.upload.mockResolvedValue({ attachment: { id: 9, fileName: 'po.pdf' } });
     api.attachments.delete.mockResolvedValue({});
     api.tickets.listPayments.mockResolvedValue({ items: [] });
@@ -975,14 +979,14 @@ describe('TicketDetailPage', () => {
     it('offers NO upload control to account, which may read documents but not write them', async () => {
       const { container, unmount } = renderTicketDetailPage(accountUser);
       fireEvent.click(await screen.findByRole('tab', { name: /^ไฟล์/ }));
-      expect(await screen.findByRole('heading', { level: 2, name: 'ไฟล์แนบ (PO / ใบเซ็น)' })).not.toBeNull();
+      expect(await screen.findByRole('heading', { level: 2, name: 'ไฟล์อื่นของงาน (PO / ใบเซ็น)' })).not.toBeNull();
       expect(container.querySelector('#ticket-attachment-file')).toBeNull();
       unmount();
 
       // The deal's own rep keeps it — this is a targeted narrowing, not a gutting of the panel.
       const { container: ownerContainer } = renderTicketDetailPage(salesOwnerUser);
       fireEvent.click(await screen.findByRole('tab', { name: /^ไฟล์/ }));
-      await screen.findByRole('heading', { level: 2, name: 'ไฟล์แนบ (PO / ใบเซ็น)' });
+      await screen.findByRole('heading', { level: 2, name: 'ไฟล์อื่นของงาน (PO / ใบเซ็น)' });
       expect(ownerContainer.querySelector('#ticket-attachment-file')).not.toBeNull();
     });
   });

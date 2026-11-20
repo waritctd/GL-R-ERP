@@ -113,7 +113,7 @@ class AttachmentControllerTest {
     private AttachmentDto attachment() {
         return new AttachmentDto(
             ATTACHMENT_ID, TICKET_ID, null, "file.pdf", "OTHER",
-            "application/pdf", 123L, UPLOADER_ID, Instant.parse("2026-07-01T00:00:00Z"));
+            "application/pdf", 123L, UPLOADER_ID, Instant.parse("2026-07-01T00:00:00Z"), null);
     }
 
     private String missingFilePath() {

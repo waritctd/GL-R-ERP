@@ -2,6 +2,7 @@ import thaiLocations from '../data/thai-locations.json';
 import { formatThaiAddress } from '../features/locations/thaiAddress.js';
 import { isPastProcurement } from '../features/finance/moneyMilestone.js';
 import { accountOwesStep } from '../features/tickets/accountActions.js';
+import { docBelongsToRound, MAX_UPLOAD_BYTES } from '../features/tickets/delivery/deliveryRound.js';
 import { actsAsOwner, holdsAllSalesDocumentsGrant, isOwnerOrKeyer, isSalesOwner } from '../features/tickets/dealOwnership.js';
 import {
   chainDepositBlockedReason, chainDepositState, chainListStage, chainOrderConfirmed, chainRemainingBlockedReason,
@@ -2353,6 +2354,7 @@ function authResponse(user) {
     operator: Boolean(user?.operator),
     canCreateQuotation: Boolean(user?.canCreateQuotation),
     canIssueBillingNote: Boolean(user?.canIssueBillingNote),
+    canIssueTaxInvoice: Boolean(user?.canIssueTaxInvoice),
     canManageAllSalesDocuments: holdsAllSalesDocumentsGrant(user),
     canViewAs: false,
     canViewPeopleInsights: ['ceo', 'hr'].includes(user?.role),
@@ -2490,9 +2492,13 @@ function mockRemainingInvoiceSnapshot(ticket) {
       unitPrice, discountLabel: null, netUnitPrice: unitPrice, amount };
   });
   const itemsTotal = Math.round(items.reduce((sum, it) => sum + it.amount, 0) * 100) / 100;
-  const depositDeduction = 0;
+  // WastageCalculator.vatRateFor: no VAT on an English quotation.
+  const vatRate = mockApprovedQuotationsOf(ticket.id).some((a) => mockDealQuotations.find((q) => q.id === a.id)?.documentLanguage === 'EN') ? 0 : 0.07;
+  // DepositNoticeService#receivedBeforeInvoice: a pre-portal deal deducts the money received (pre-VAT), never above the items.
+  const depositDeduction = ticket.prePortal
+    ? Math.min(itemsTotal, Math.max(0, Math.round((sumPaid(ticket.id) / (1 + vatRate)) * 100) / 100)) : 0;
   const netAmount = Math.round((itemsTotal - depositDeduction) * 100) / 100;
-  const vatAmount = Math.round(netAmount * 0.07 * 100) / 100;
+  const vatAmount = Math.round(netAmount * vatRate * 100) / 100;
   const grandTotal = Math.round((netAmount + vatAmount) * 100) / 100;
   return { items, itemsTotal, depositDeduction, netAmount, vatAmount, grandTotal };
 }
@@ -3604,6 +3610,394 @@ function requireAttachmentTicketAccess(ticketId, { write = false } = {}) {
   return { user, ticket };
 }
 
+// ── Delivery rounds (V236) — mirrors th.co.glr.hr.deliveryrequest.DeliveryRequestService ──────────────────────
+// Read = the deal-read rule (sales owner / sales_manager / ceo; account and import are refused). Write = the delivery
+// write rule (CEO, the owning rep or a grant holder), 403 before any 409. Files are real mockAttachments rows carrying
+// deliveryRequestId + uploaderSide, so the existing attachments.delete (the uploader may) removes them.
+const mockDeliveryRequests = [];
+let mockDeliveryRequestSeq = 1;
+const MOCK_ROUND_OPEN = ['DRAFT', 'SENT', 'RETURNED', 'FORWARDED'];
+const MOCK_ROUND_EDITABLE = ['DRAFT', 'RETURNED'];
+const MOCK_ROUND_MIME_BY_EXT = {
+  pdf: 'application/pdf', jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif', webp: 'image/webp',
+  heic: 'image/heic', heif: 'image/heif', xls: 'application/vnd.ms-excel',
+  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+};
+const MOCK_ROUND_MAX_FILES = 30;
+const MOCK_ROUND_TYPES_MESSAGE = 'รองรับเฉพาะไฟล์ PDF, รูปภาพ (JPG, PNG, GIF, WEBP, HEIC) หรือ Excel (XLS, XLSX)';
+
+// The invoice issuer is a per-person grant on ANY role (DeliveryRequestService#requireIssuer).
+// The import role stays price-free: the grant gives it nothing (DeliveryRequestService#holdsGrant, NOT_IMPORT_DIVISION).
+const MOCK_IMPORT_CANNOT_ISSUE = 'บทบาทนำเข้าไม่สามารถออกใบกำกับได้';
+const mockIsIssuer = (user) => Boolean(user?.canIssueTaxInvoice) && user?.role !== 'import';
+const mockHasForwardedRound = (ticketId) => mockDeliveryRequests.some((r) => r.ticketId === ticketId && ['FORWARDED', 'INVOICED'].includes(r.status));
+
+// DeliveryRequestService#listFor: the deal-read rule (account only inside its list scope); refused that, a grant holder
+// still reads the orders that have a round forwarded to it (`issuerOnly`). Returns { user, issuerOnly }.
+function mockRoundsRead(ticket) {
+  const user = requireSession();
+  // Account reads the finance view: inside its list scope it may READ the non-DRAFT rounds, and acts on none.
+  if (user.role === 'account' && accountListScopeIncludes(ticket)) return { user, issuerOnly: false, accountView: true };
+  const dealOk = ['sales_manager', 'ceo'].includes(user.role) || (user.role === 'sales' && actsAsOwner(ticket, user));
+  if (dealOk) return { user, issuerOnly: false };
+  if (mockIsIssuer(user) && mockHasForwardedRound(ticket.id)) return { user, issuerOnly: true };
+  fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+  return null;
+}
+
+function mockRequireIssuer() {
+  const user = requireSession();
+  if (user.role === 'import') fail(MOCK_IMPORT_CANNOT_ISSUE, 403);
+  if (!mockIsIssuer(user)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+  return user;
+}
+
+// What the order may still be invoiced for: payable minus the confirmed invoices (DeliveryRequestService#invoiceable).
+const mockInvoiceable = (ticket) => moneyValue(Math.max(0, payableAmount(ticket)
+  - mockDeliveryRequests.filter((r) => r.ticketId === ticket.id && r.status === 'INVOICED').reduce((sum, r) => sum + r.invoice.total, 0)));
+
+// Import stays price-free: no round files and no invoice money (priceFree in DeliveryRequestService).
+function mockPriceFree(dto) {
+  return {
+    ...dto, files: [],
+    invoice: dto.invoice ? { ...dto.invoice, total: null, recordedAmount: null, receiptId: null } : null,
+  };
+}
+
+const mockBaht = (n) => Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+function mockRoundsCanWrite(ticket, user) {
+  return user.role === 'ceo' || isSalesOwner(ticket, user);
+}
+
+function mockRoundsWrite(ticket) {
+  const user = requireSession();
+  if (!mockRoundsCanWrite(ticket, user)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+  return user;
+}
+
+function mockApprovedQuotationsOf(ticketId) {
+  return mockDealQuotations
+    .filter((q) => q.ticketId === ticketId && (q.origin ?? 'DEAL_DIRECT') === 'DEAL_DIRECT'
+      && ['APPROVED', 'ISSUED', 'SENT', 'ACCEPTED'].includes(q.docStatus))
+    .sort((a, b) => a.id - b.id)
+    .map((q) => ({
+      id: q.id, number: q.number, total: q.grandTotal ?? 0, docStatus: q.docStatus,
+      // DepositNoticeRepository#findGoverningQuotation: a DEAL_DIRECT quotation sources a notice when ACCEPTED, ISSUED or
+      // APPROVED (not SENT); a 0% one is refused by the service.
+      depositBlockedReason: !['ACCEPTED', 'ISSUED', 'APPROVED'].includes(q.docStatus)
+        ? 'ใบเสนอราคานี้ส่งลูกค้าแล้ว ใช้ออกใบแจ้งยอดเงินรับมัดจำไม่ได้'
+        : q.depositPercent === 0 ? 'ใบเสนอราคานี้ระบุไม่มีมัดจำ (ชำระเต็มจำนวน) จึงออกใบแจ้งยอดเงินรับมัดจำไม่ได้' : null,
+    }));
+}
+
+// DeliveryRequestRepository#systemDocNumber: an issued (or approved) document of this deal, else 400.
+function mockRoundDocLookups(ticketId) {
+  const found = (list, id) => list.find((d) => d.id === Number(id) && d.ticketId === ticketId && d.status === 'ISSUED');
+  return {
+    QUOTATION: (id) => mockApprovedQuotationsOf(ticketId).find((q) => q.id === Number(id))?.number,
+    DEPOSIT_NOTICE: (id) => found(mockDepositNotices, id)?.docNumber,
+    REMAINING_INVOICE: (id) => found(mockRemainingInvoices, id)?.docNumber,
+    IMPORT_REQUEST: (id) => found(mockImportRequests, id)?.docNumber,
+  };
+}
+
+// DeliveryRequestRepository#candidateDocKeys: every KIND:id key systemDocNumber accepts for this deal.
+function mockRoundCandidateKeys(ticketId) {
+  const issued = (list) => list.filter((d) => d.ticketId === ticketId && d.status === 'ISSUED');
+  return new Set([
+    ...mockApprovedQuotationsOf(ticketId).map((q) => `QUOTATION:${q.id}`),
+    ...issued(mockDepositNotices).map((d) => `DEPOSIT_NOTICE:${d.id}`),
+    ...issued(mockRemainingInvoices).map((d) => `REMAINING_INVOICE:${d.id}`),
+    ...issued(mockImportRequests).map((d) => `IMPORT_REQUEST:${d.id}`),
+  ]);
+}
+
+// DeliveryRequestService#validUnticked: a malformed key is a 400; a well-formed key that is no longer a candidate is dropped.
+function mockRoundValidUnticked(ticketId, keys) {
+  keys.forEach((k) => {
+    if (typeof k !== 'string' || !/^(QUOTATION|DEPOSIT_NOTICE|REMAINING_INVOICE|IMPORT_REQUEST):\d{1,18}$/.test(k)) fail('เอกสารนี้ไม่ใช่ของงานนี้', 400);
+  });
+  const candidates = mockRoundCandidateKeys(ticketId);
+  const kept = keys.filter((k) => candidates.has(k));
+  if (kept.length > Math.min(candidates.size, 100)) fail('เอกสารนี้ไม่ใช่ของงานนี้', 400);
+  return kept;
+}
+
+// DeliveryRequestService#requireOfQuotation: a notice / invoice that names one of this order's quotations belongs to
+// that one; a blank or PO-number reference is attachable only when the order has a single quotation.
+function mockRoundRequireOfQuotation(ticketId, d, quotationId) {
+  const doc = (d.kind === 'DEPOSIT_NOTICE' ? mockDepositNotices : mockRemainingInvoices).find((x) => x.id === d.id);
+  const approved = mockApprovedQuotationsOf(ticketId);
+  const ref = d.kind === 'DEPOSIT_NOTICE' ? doc?.reference
+    : approved.find((q) => q.id === doc?.customerQuotationId)?.number;
+  const { ok } = docBelongsToRound(ref, approved, quotationId);
+  if (!ok) fail('เอกสารนี้ไม่ใช่ของใบเสนอราคาที่เลือกสำหรับรอบนี้', 400);
+}
+
+function mockRoundSystemDocs(ticketId, refs, quotationId) {
+  const lookups = mockRoundDocLookups(ticketId);
+  return (refs ?? []).map((d) => {
+    const number = lookups[d?.kind]?.(d.id);
+    if (!number) fail('เอกสารนี้ไม่ใช่ของงานนี้', 400);
+    const ref = { kind: d.kind, id: Number(d.id), number };
+    if (d.kind === 'DEPOSIT_NOTICE' || d.kind === 'REMAINING_INVOICE') mockRoundRequireOfQuotation(ticketId, ref, quotationId);
+    return ref;
+  });
+}
+
+function mockItemDescription(item) {
+  return [item.brand, item.model, item.color, item.texture, item.size].filter(Boolean).join(' ');
+}
+
+// What no round covers yet, per item: qty - delivered - lines of the order's OTHER non-DRAFT rounds.
+function mockRoundCoverage(ticket, excludeRoundId) {
+  return (ticket.items ?? []).map((item) => {
+    const inOthers = mockDeliveryRequests
+      .filter((r) => r.ticketId === ticket.id && r.status !== 'DRAFT' && r.id !== excludeRoundId)
+      .flatMap((r) => r.lines.filter((l) => l.itemId === item.id))
+      .reduce((sum, l) => sum + l.qty, 0);
+    const remaining = Number(item.qty || 0) - Number(item.qtyDelivered || 0) - inOthers;
+    return { itemId: item.id, description: mockItemDescription(item), unit: 'แผ่น', remaining };
+  });
+}
+
+// TicketService#requirePreDeposit: required, 0 or more, at most 2 decimals (400).
+function mockRequirePreDeposit(deposit) {
+  const n = deposit === null || deposit === undefined || deposit === '' ? NaN : Number(deposit);
+  if (!Number.isFinite(n) || n < 0 || Math.abs(n * 100 - Math.round(n * 100)) > 1e-9) {
+    fail('ใส่มัดจำที่รับแล้วก่อนใช้ระบบ (0 ถ้ายังไม่ได้รับ) เป็นตัวเลขไม่ติดลบ ทศนิยมไม่เกิน 2 ตำแหน่ง', 400);
+  }
+  return moneyValue(n);
+}
+
+// TicketService#becomePrePortal: the flag, the deposit as ONE DEPOSIT receipt of source PRE_PORTAL (nothing when 0), and one
+// bell per person to account, sales manager, the warehouse manager (manager-position warehouse staff, else every warehouse
+// person) and every invoice issuer.
+function mockBecomePrePortal(ticket, deposit, user) {
+  const amount = mockRequirePreDeposit(deposit);
+  ticket.prePortal = true;
+  if (amount > 0) {
+    const receiptId = Math.max(0, ...(db.paymentReceipts ?? []).map((r) => r.receiptId)) + 1;
+    const now = new Date().toISOString();
+    db.paymentReceipts.push({
+      receiptId, ticketId: ticket.id, kind: 'DEPOSIT', amount, currency: 'THB', receivedAt: now, recordedById: user.id,
+      recordedByName: user.name, note: null, depositNoticeId: null, receiptRef: null, createdAt: now, source: 'PRE_PORTAL', customerName: null,
+    });
+    pushEvent(ticket, user, 'PAYMENT_RECORDED', ticket.status, ticket.status, `kind=DEPOSIT, amount=${amount} — มัดจำที่รับแล้วก่อนใช้ระบบ`);
+  }
+  const message = `${user.name} ตั้งงานเป็นงานที่เดินมาก่อนใช้ระบบ · มัดจำที่รับแล้ว ${mockThaiMoney(amount)} บาท\n${ticket.code}\nแจ้งเพื่อทราบ ไม่ต้องดำเนินการ`;
+  const staff = db.users.filter((u) => u.active && u.role === 'warehouse');
+  const managers = staff.filter(isManagerPosition);
+  const direct = new Set([...(managers.length ? managers : staff).map((u) => u.id),
+    ...db.users.filter((u) => u.active && mockIsIssuer(u)).map((u) => u.id)]);
+  direct.delete(user.id);
+  direct.forEach((id) => addNotification(id, ticket.id, ticket.code, 'DEAL_PRE_PORTAL', message, `/tickets/${ticket.id}`));
+  ['account', 'sales_manager'].forEach((role) => {
+    db.users.filter((u) => u.role === role && u.active && u.id !== user.id && !direct.has(u.id))
+      .forEach((u) => addNotification(u.id, ticket.id, ticket.code, 'DEAL_PRE_PORTAL', message,
+        role === 'account' ? `/finance/deals/${ticket.id}` : `/tickets/${ticket.id}`));
+  });
+}
+
+// PrePortal#confirmIfNeeded: confirms from the chosen quotation (else the newest APPROVED) by the ordinary confirm. The
+// caller is already authorised for its own action, so no edit-access check here (the CEO may create the first IR). The stage
+// goes back to the higher of before and after, and the deposit policy becomes NOT_REQUIRED (the deposit is on the deal).
+function mockConfirmIfNeeded(ticket, quotationId, user) {
+  if (ticket.events.some((e) => e.kind === 'DEAL_PROMOTED_FROM_QUOTATION')) return;
+  const approved = mockApprovedQuotationsOf(ticket.id);
+  const chosenId = quotationId ?? [...approved].reverse().find((q) => q.docStatus === 'APPROVED')?.id ?? null;
+  if (chosenId == null) fail('ต้องมีใบเสนอราคาที่อนุมัติแล้ว', 409);
+  const row = mockDealQuotations.find((q) => q.id === chosenId);
+  if (row.docStatus !== 'APPROVED') fail(`ยืนยันคำสั่งซื้อได้เฉพาะใบเสนอราคาที่อนุมัติแล้วเท่านั้น (ปัจจุบัน: ${row.docStatus})`, 409);
+  if ((ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE') fail(`งานไม่ได้อยู่ในสถานะ ACTIVE (${ticket.lifecycle}) จึงยืนยันคำสั่งซื้อไม่ได้`, 409);
+  if (ticket.status !== 'draft') fail(`ยืนยันคำสั่งซื้อไม่ได้ — สถานะงาน (${ticket.status}) ผ่านขั้นออกใบเสนอราคาไปแล้ว`, 409);
+  const before = ticket.salesStage;
+  applyMockOrderConfirmation(ticket, row, user, 'draft');
+  if (dealStageIndex(ticket.salesStage) < dealStageIndex(before)) {
+    pushEvent(ticket, user, 'STAGE_CHANGED', ticket.salesStage, before, 'คงขั้นเดิมของงานที่เดินมาก่อนใช้ระบบ');
+    ticket.salesStage = before;
+  }
+  if (ticket.depositPolicy !== 'NOT_REQUIRED') {
+    ticket.depositPolicy = 'NOT_REQUIRED';
+    pushEvent(ticket, user, 'POLICY_CHANGED', before, before, 'deposit_policy → NOT_REQUIRED — งานที่เดินมาก่อนใช้ระบบ: มัดจำรับแล้วนอกระบบ');
+  }
+}
+
+// PrePortal#requireDepositWithinTotal. The server checks after the confirm and rolls the whole transaction back; the mock has
+// no rollback, so it checks BEFORE writing anything: the net money received (signed) plus `extra` against the quotation total.
+function mockRequireDepositWithinTotal(ticket, quotationId, extra = 0) {
+  if (ticket.events.some((e) => e.kind === 'DEAL_PROMOTED_FROM_QUOTATION')) return;
+  const approved = mockApprovedQuotationsOf(ticket.id);
+  const chosen = approved.find((q) => q.id === (quotationId ?? [...approved].reverse().find((x) => x.docStatus === 'APPROVED')?.id));
+  const entered = (db.paymentReceipts ?? []).filter((r) => r.ticketId === ticket.id && r.source === 'PRE_PORTAL')
+    .reduce((sum, r) => sum + Number(r.amount), 0) + Number(extra);
+  const received = sumPaid(ticket.id) + Number(extra); // signed: account's ADJUSTMENT lowers it
+  const total = Number(chosen?.total);
+  if (entered > 0 && Number.isFinite(total) && total > 0 && received > total) { // a quotation with no stored total has no cap here
+    fail(`มัดจำที่รับแล้วก่อนใช้ระบบเกินยอดรวมใบเสนอราคา (ยอดรวม ${total} บาท) ให้ฝ่ายบัญชีปรับยอด`, 409);
+  }
+}
+
+// PrePortal#ensureOrderConfirmed: a no-op unless the deal is pre_portal and not yet confirmed.
+function mockEnsureOrderConfirmed(ticket, quotationId, user) {
+  if (!ticket.prePortal) return;
+  mockRequireDepositWithinTotal(ticket, quotationId);
+  mockConfirmIfNeeded(ticket, quotationId, user);
+}
+
+// PrePortal#confirmAndMark: an old deal's first request confirms its order, then marks it pre-portal with the deposit.
+function mockConfirmAndMark(ticket, quotationId, deposit, user) {
+  const amount = mockRequirePreDeposit(deposit);
+  mockRequireDepositWithinTotal(ticket, quotationId, amount);
+  mockConfirmIfNeeded(ticket, quotationId, user);
+  mockBecomePrePortal(ticket, deposit, user);
+}
+
+// DeliveryRequestService#unconfirmed: an old or pre-portal deal whose first send confirms the order (its lines, if any, are preliminary and the confirm replaces them).
+function mockRoundUnconfirmed(ticket) {
+  const old = ticket.prePortal || dealStageIndex(ticket.salesStage) < dealStageIndex('ORDER_RECEIVED');
+  return Boolean(old && (ticket.lifecycle ?? 'ACTIVE') === 'ACTIVE'
+    && !ticket.events.some((e) => e.kind === 'DEAL_PROMOTED_FROM_QUOTATION'));
+}
+
+function mockRoundBlockedReason(ticket, user) {
+  if (!mockRoundsCanWrite(ticket, user)) return 'ฝ่ายขายเจ้าของงานเป็นผู้ขอออกใบกำกับ';
+  if ((ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE') return 'งานนี้ไม่ได้เปิดอยู่ ขอออกใบกำกับไม่ได้';
+  if (mockApprovedQuotationsOf(ticket.id).length === 0) return 'ต้องมีใบเสนอราคาที่อนุมัติแล้ว';
+  // An old deal is confirmed by its first send, so it has no lines to cover yet.
+  if (mockRoundUnconfirmed(ticket)) return null;
+  if ((ticket.items ?? []).length === 0) return 'ต้องยืนยันออเดอร์ก่อนจึงจะขอออกใบกำกับได้';
+  if (mockRoundCoverage(ticket, 0).every((c) => c.remaining <= 0)) return 'ทุกรายการมีรอบส่งครอบคลุมแล้ว';
+  return null;
+}
+
+function mockRoundDto(round, ticket, user) {
+  const editable = mockRoundsCanWrite(ticket, user) && MOCK_ROUND_EDITABLE.includes(round.status);
+  const lines = round.status === 'DRAFT'
+    ? mockRoundCoverage(ticket, round.id).filter((c) => c.remaining > 0)
+      .map((c) => ({ itemId: c.itemId, description: c.description, unit: c.unit, coveredQty: c.remaining, deliveredQty: 0 }))
+    : round.lines.map((l) => {
+      const item = (ticket.items ?? []).find((i) => i.id === l.itemId);
+      return { itemId: l.itemId, description: item ? mockItemDescription(item) : '', unit: 'แผ่น', coveredQty: l.qty, deliveredQty: moneyValue(l.qty - mockRoundLineRemaining(round, l.itemId)) };
+    });
+  const quotation = mockApprovedQuotationsOf(ticket.id).find((q) => q.id === round.quotationId);
+  return {
+    id: round.id, roundNo: round.roundNo, status: round.status, quotationId: round.quotationId ?? null,
+    quotationNumber: quotation?.number ?? null, note: round.note ?? null,
+    returnReasonCodes: round.returnReasonCodes ?? [], returnReasonText: round.returnReasonText ?? null,
+    requestedByName: round.requestedByName ?? null, sentAt: round.sentAt ?? null,
+    forwardedByName: round.forwardedByName ?? null, forwardedAt: round.forwardedAt ?? null,
+    // The warehouse never sees money (RoundDto's InvoiceDto: total / recordedAmount / receiptId are null for it).
+    invoice: round.invoice ? {
+      number: round.invoice.number, date: round.invoice.date, attachmentId: round.invoice.attachmentId,
+      invoicedByName: round.invoice.invoicedByName, invoicedAt: round.invoice.invoicedAt,
+      total: user.role === 'warehouse' ? null : round.invoice.total,
+      recordedAmount: user.role === 'warehouse' ? null : round.invoice.recordedAmount,
+      receiptId: user.role === 'warehouse' ? null : round.invoice.receiptId,
+    } : null,
+    lines, untickedDocs: round.untickedDocs ?? [],
+    files: mockAttachments.filter((a) => a.deliveryRequestId === round.id).map((a) => ({
+      attachmentId: a.id, fileName: a.fileName, mimeType: a.mimeType, fileSize: a.fileSize, kind: a.attachType,
+      uploaderSide: a.uploaderSide ?? 'SYSTEM', uploadedById: a.uploadedBy, uploadedByName: db.users.find((u) => u.id === a.uploadedBy)?.name ?? null,
+      uploadedAt: a.uploadedAt,
+    })),
+    viewer: { canEdit: editable, canSend: editable, canReview: user.role === 'warehouse' && round.status === 'SENT', canIssue: mockIsIssuer(user) && round.status === 'FORWARDED',
+      canRecordDelivery: mockRoundRecordable(round, ticket, user) && mockDeliveryBlockedReason(ticket, user.role === 'warehouse') == null,
+      recordBlockedReason: mockRoundRecordable(round, ticket, user) ? mockDeliveryBlockedReason(ticket, user.role === 'warehouse') : null,
+      canVoid: round.status === 'INVOICED' && mockMayVoidHere(user, ticket) && mockVoidBlock(round) == null,
+      voidBlockedReason: round.status === 'INVOICED' && mockMayVoidHere(user, ticket) ? mockVoidBlock(round) : null },
+  };
+}
+
+// DeliveryRequestService#toDto: an INVOICED round with quantity left that the viewer may record against (before the goods test).
+const mockRoundRecordable = (round, ticket, user) => round.status === 'INVOICED' && (user.role === 'warehouse' || mockRoundsCanWrite(ticket, user))
+  && (ticket.lifecycle ?? 'ACTIVE') === 'ACTIVE' && mockRoundHasRemaining(round);
+
+// TicketService#deliveryBlockedReason: whether goods can leave under the record path's source rules. `sourceFixed` (the
+// warehouse, which cannot pick): FROM_STOCK means STOCK (deposit settled), else WAREHOUSE (goods received); otherwise any.
+function mockDeliveryBlockedReason(ticket, sourceFixed) {
+  const fromStock = ticket.fulfillmentStatus === 'FROM_STOCK';
+  const ok = sourceFixed ? (fromStock ? depositSettled(ticket) : warehouseAvailableFor(ticket)) : deliveryAvailable(ticket);
+  if (ok) return null;
+  return sourceFixed && fromStock ? 'ส่งสินค้าจากสต็อกได้หลังรับชำระมัดจำแล้ว' : 'ต้องรับสินค้าเข้าโกดังก่อนจึงจะบันทึกการส่งได้';
+}
+
+// DeliveryRequestService.VoidCtx: an issuer-grant holder, or account inside its list scope.
+const mockMayVoidHere = (user, ticket) => mockIsIssuer(user) || (user.role === 'account' && accountListScopeIncludes(ticket));
+// DeliveryRequestService.VoidCtx#blocked: null when an INVOICED round may be voided, else the Thai reason. All must hold:
+// it is the order's most recently CONFIRMED invoice; no receipt was recorded after it; no Express row is settled against
+// its receipt; no delivery is recorded against the round.
+function mockVoidBlock(round) {
+  if ((db.deliveryRecords ?? []).some((r) => r.deliveryRequestId === round.id)
+    || (round.lines.length && !mockRoundHasRemaining(round))) return 'บันทึกการส่งของของรอบนี้แล้ว ยกเลิกใบกำกับไม่ได้';
+  const invoiced = mockDeliveryRequests.filter((r) => r.ticketId === round.ticketId && r.status === 'INVOICED');
+  const latest = invoiced.reduce((best, r) => (!best || r.invoice.invoicedAt > best.invoice.invoicedAt
+    || (r.invoice.invoicedAt === best.invoice.invoicedAt && r.id > best.id) ? r : best), null);
+  if (latest && latest.id !== round.id) {
+    return `ยกเลิกได้เฉพาะใบกำกับที่ยืนยันล่าสุดของออเดอร์ ให้ยกเลิกใบกำกับของรอบส่งที่ ${latest.roundNo} ก่อน`;
+  }
+  const owner = findTicketRaw(round.ticketId);
+  if (owner.paymentStatus === 'FULLY_PAID' || owner.salesStage === 'CLOSED_PAID') return 'งานนี้ยืนยันรับชำระครบแล้ว ให้ฝ่ายบัญชีปรับยอดแทน';
+  const newest = Math.max(0, ...(db.paymentReceipts ?? []).filter((r) => r.ticketId === round.ticketId).map((r) => r.receiptId));
+  const own = round.invoice.receiptId;
+  if (own != null ? newest !== own : newest > (round.receiptSeqAtConfirm ?? 0)) {
+    return 'มีการบันทึกรับเงินหลังใบกำกับนี้แล้ว ให้ฝ่ายบัญชีปรับยอด';
+  }
+  if (own != null && mockReceiptImportRows.some((r) => r.status === 'RESOLVED' && r.resolvedReceiptId === own)) {
+    return 'ยกเลิกใบกำกับนี้ไม่ได้ เพราะมีการจับคู่รายการชำระเงินจาก Express กับเงินก้อนนี้แล้ว ให้ฝ่ายบัญชีปรับยอดแทน';
+  }
+  return null;
+}
+
+function mockRoundOrderRef(ticket) {
+  const addOn = ticket.childKind === 'ADD_ON';
+  const root = addOn && ticket.parentTicketId != null ? db.tickets.find((t) => t.id === ticket.parentTicketId) : null;
+  const orderNo = addOn ? Number(String(ticket.code).split('-').pop()) || 1 : 1;
+  return {
+    ticketId: ticket.id, code: ticket.code, displayCode: addOn ? ticket.code : `${ticket.code}-1`, orderNo,
+    customerName: ticket.customerName ?? null,
+    projectName: mockProjects.find((p) => p.id === ticket.projectId)?.name ?? null,
+    parentCode: root?.code ?? null, ownerName: ticket.createdByName ?? null, prePortal: ticket.prePortal === true,
+    unconfirmed: mockRoundUnconfirmed(ticket),
+  };
+}
+
+// The orders DTO's latestRound: the newest round of any status (a draft included), or null.
+function mockLatestRound(ticketId) {
+  const latest = mockDeliveryRequests.filter((r) => r.ticketId === ticketId).sort((a, b) => b.roundNo - a.roundNo)[0];
+  return latest ? { roundNo: latest.roundNo, status: latest.status } : null;
+}
+
+function mockRoundOf(rid) {
+  const round = mockDeliveryRequests.find((r) => r.id === Number(rid));
+  if (!round) fail('ไม่พบรอบส่งที่ขอ', 404);
+  return round;
+}
+
+const MOCK_ROUND_RETURN_REASONS = {
+  ADDRESS_TAX_ID: 'ที่อยู่ออกใบกำกับ / เลขผู้เสียภาษี',
+  PAYMENT_PROOF: 'หลักฐานการชำระเงิน',
+  DELIVERY_DATE_PLACE: 'วันและสถานที่ส่ง',
+};
+
+function mockWarehouseRound(rid) {
+  const user = requireSession();
+  if (user.role !== 'warehouse') fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+  const round = mockRoundOf(rid);
+  if (round.status !== 'SENT') fail('เรื่องนี้ถูกดำเนินการแล้ว', 409);
+  return { round, ticket: findTicketRaw(round.ticketId), user };
+}
+
+function mockRoundResolveQuotation(ticketId, wanted) {
+  const approved = mockApprovedQuotationsOf(ticketId);
+  if (wanted != null) {
+    if (!approved.some((q) => q.id === Number(wanted))) fail('ใบเสนอราคานี้ไม่ใช่ของออเดอร์นี้หรือยังไม่ได้อนุมัติ', 409);
+    return Number(wanted);
+  }
+  return approved.length === 1 ? approved[0].id : null;
+}
+
 // Deal tracking (V83): activities for one ticket, oldest first (matches
 // TicketRepository.findActivitiesByTicket's ORDER BY activity_date, created_at).
 function dealActivitiesForTicket(ticketId) {
@@ -3911,7 +4305,8 @@ function hasReceivedGoods(ticketId) {
 }
 
 function warehouseAvailableFor(ticket) {
-  return ticket.fulfillmentStatus === 'GOODS_RECEIVED' || hasReceivedGoods(ticket.id);
+  return ticket.fulfillmentStatus === 'GOODS_RECEIVED' || hasReceivedGoods(ticket.id)
+    || (ticket.prePortal === true && !mockImportRequests.some((r) => r.ticketId === ticket.id && r.status === 'ISSUED'));
 }
 
 // Mirrors TicketService.depositSettled: paid (or later), or a no-deposit policy at CUSTOMER_CONFIRMED. Stock goods
@@ -3998,11 +4393,80 @@ function mockThaiLongDate(iso) {
   return `${d} ${MOCK_THAI_MONTHS_LONG[m - 1]} ${y + 543}`;
 }
 
+// Delivered against one round: the quantities of the delivery records linked to it.
+function mockRoundDelivered(round, itemId) {
+  return (db.deliveryRecords ?? []).filter((r) => r.deliveryRequestId === round.id)
+    .flatMap((r) => r.items ?? []).filter((i) => i.itemId === itemId).reduce((sum, i) => sum + Number(i.qty), 0);
+}
+
+// What the round still covers for an item, capped at what the item itself still needs (goods that already left count).
+const mockRoundLineRemaining = (round, itemId) => {
+  const line = round.lines.find((l) => l.itemId === itemId);
+  const item = (findTicketRaw(round.ticketId)?.items ?? []).find((i) => i.id === itemId);
+  const itemLeft = item ? Math.max(0, Number(item.qty ?? 0) - Number(item.qtyDelivered ?? 0)) : Infinity;
+  return line ? Math.min(Math.max(0, moneyValue(line.qty - mockRoundDelivered(round, itemId))), itemLeft) : 0;
+};
+
+const mockRoundHasRemaining = (round) => round.lines.some((l) => mockRoundLineRemaining(round, l.itemId) > 0);
+
+// TicketService#resolveDeliveryTarget (Ploy rulings 2026-11-20). A NAMED round must be this deal's (404) and not a draft
+// (409); an INVOICED one is the invoice the delivery counts against, any other sent round is only linked (the note is then
+// required). With no round named: a note means the no-invoice path (no round), else the oldest INVOICED round with quantity
+// left, else none. Returns { invoiced, linkId, cap } (cap = the linked round, invoiced or not, for the per-round quantity cap).
+function mockResolveDeliveryTarget(ticketId, wantedId, noInvoiceNote) {
+  if (wantedId != null) {
+    const named = mockDeliveryRequests.find((r) => r.id === Number(wantedId) && r.ticketId === ticketId);
+    if (!named) fail('ไม่พบรอบส่งที่ขอ', 404);
+    if (named.status === 'DRAFT') fail('รอบนี้ยังไม่ได้ส่งขอ บันทึกการส่งไม่ได้', 409);
+    return { invoiced: named.status === 'INVOICED' ? named : null, linkId: named.id, cap: named };
+  }
+  if (String(noInvoiceNote ?? '').trim()) return { invoiced: null, linkId: null, cap: null };
+  const oldest = mockDeliveryRequests.filter((r) => r.ticketId === ticketId && r.status === 'INVOICED')
+    .sort((a, b) => a.roundNo - b.roundNo).find(mockRoundHasRemaining) ?? null;
+  return { invoiced: oldest, linkId: oldest?.id ?? null, cap: oldest };
+}
+
+// TicketService#requireNoInvoiceNote: no invoice, so a trimmed non-blank note of at most 500.
+function mockRequireNoInvoiceNote(note) {
+  const trimmed = String(note ?? '').trim();
+  if (!trimmed) fail('ยังไม่มีใบกำกับภาษีของรอบนี้ กรุณาระบุหมายเหตุหรือเลขอ้างอิง', 409, { code: 'NO_INVOICE_NOTE_REQUIRED' });
+  if (trimmed.length > 500) fail('หมายเหตุหรือเลขอ้างอิงยาวเกิน 500 ตัวอักษร', 400);
+  return trimmed;
+}
+
+// TicketService#completeRound: everything the (resolved, invoiced) round still covers. `source` null = from stock cover.
+function mockCompleteRound(ticket, user, roundId, payload, source) {
+  const target = mockResolveDeliveryTarget(ticket.id, roundId, payload.noInvoiceNote);
+  const round = target.cap;
+  const remaining = (round
+    ? round.lines.map((l) => ({ itemId: l.itemId, qty: mockRoundLineRemaining(round, l.itemId) }))
+    : ticket.items.map((it) => ({ itemId: it.id, qty: moneyValue(Number(it.qty ?? 0) - Number(it.qtyDelivered ?? 0)) })))
+    .filter((line) => line.qty > 0 && ticket.items.some((it) => it.id === line.itemId));
+  if (!remaining.length) fail('ไม่มีจำนวนค้างส่ง', 409);
+  const coveredByStock = remaining.every((line) => {
+    const item = ticket.items.find((it) => it.id === line.itemId);
+    return moneyValue(Number(item.qtyDelivered ?? 0) + line.qty) <= Number(item.qtyFromStock ?? 0);
+  });
+  recordDeliveryForTicket(ticket, user, {
+    source: source ?? (coveredByStock ? 'STOCK' : 'WAREHOUSE'),
+    note: payload.note ?? null,
+    recipientName: payload.recipientName ?? null,
+    lines: remaining,
+    // Slice 6d fix round 1 (M2): CompleteDeliveryRequest.deliveredOn, the same window as the dialog.
+    deliveredOn: payload.deliveredOn ?? null,
+    deliveryRequestId: target.linkId,
+    noInvoiceNote: payload.noInvoiceNote ?? null,
+  }, true);
+}
+
 function recordDeliveryForTicket(ticket, user, payload = {}, completing = false) {
   // Java's order (TicketService#recordDeliveryInternal): lines, then the date, then the source.
   const lines = payload.lines ?? [];
   if (!lines.length) fail('ต้องระบุรายการส่งสินค้า', 400);
   const deliveredAt = mockBackDatedDeliveryAt(payload.deliveredOn, ticket);
+  const target = mockResolveDeliveryTarget(ticket.id, payload.deliveryRequestId, payload.noInvoiceNote);
+  const round = target.invoiced;
+  const noInvoiceNote = round ? null : mockRequireNoInvoiceNote(payload.noInvoiceNote);
   const source = String(payload.source ?? '').trim().toUpperCase();
   if (!['WAREHOUSE', 'STOCK'].includes(source)) fail('source ต้องเป็น WAREHOUSE หรือ STOCK', 400);
   if (source === 'STOCK' && !depositSettled(ticket)) {
@@ -4015,6 +4479,10 @@ function recordDeliveryForTicket(ticket, user, payload = {}, completing = false)
     const qty = moneyValue(line.qty);
     if (qty <= 0) fail('จำนวนส่งมอบต้องมากกว่า 0', 400);
     combined.set(item.id, moneyValue((combined.get(item.id) ?? 0) + qty));
+  }
+  for (const [itemId, qty] of target.cap ? combined.entries() : []) {
+    const left = mockRoundLineRemaining(target.cap, itemId);
+    if (qty > left) fail(`จำนวนเกินที่รอบนี้ครอบคลุม (เหลือ ${left})`, 409, { code: 'ROUND_QTY_EXCEEDED' });
   }
   for (const [itemId, qty] of combined.entries()) {
     const item = ticket.items.find((it) => it.id === itemId);
@@ -4047,6 +4515,8 @@ function recordDeliveryForTicket(ticket, user, payload = {}, completing = false)
     // Step 8: who on the customer's side received/confirmed this delivery — optional, mirrors
     // TicketRepository.insertDeliveryRecord's new recipientName column (V78).
     recipientName: payload.recipientName ?? null,
+    deliveryRequestId: target.linkId,
+    noInvoiceNote,
     createdAt: now,
     items: recordItems,
   });
@@ -4054,8 +4524,21 @@ function recordDeliveryForTicket(ticket, user, payload = {}, completing = false)
     const item = ticket.items.find((it) => it.id === line.itemId);
     const name = [item.brand, item.model, item.size].filter(Boolean).join(' ') || `รายการ ${item.id}`;
     return `${name}: ${Number(item.qtyDelivered).toLocaleString('en-US')}/${Number(item.qty).toLocaleString('en-US')}`;
-  }).join(', ') + (deliveredAt ? ` · วันที่ส่ง ${mockThaiLongDate(payload.deliveredOn)}` : '');
+  }).join(', ') + (deliveredAt ? ` · วันที่ส่ง ${mockThaiLongDate(payload.deliveredOn)}` : '')
+    + (noInvoiceNote ? ` · ส่งก่อนออกใบกำกับ: ${noInvoiceNote}` : '');
   pushEvent(ticket, user, 'DELIVERY_RECORDED', ticket.status, ticket.status, message);
+  if (ticket.createdById !== user.id) {
+    const total = recordItems.reduce((sum, line) => sum + line.qty, 0);
+    addNotification(ticket.createdById, ticket.id, ticket.code, 'DELIVERY_RECORDED',
+      `ส่งของแล้ว ${total} แผ่น\nดีล ${ticket.code} · ลูกค้า ${String(ticket.customerName ?? '').trim() || 'ไม่ระบุลูกค้า'} · ${round ? `รอบส่งที่ ${round.roundNo}` : 'ส่งก่อนออกใบกำกับ'} · บันทึกโดย ${user.name}`,
+      `/tickets/${ticket.id}?tab=ship`);
+  }
+  if (noInvoiceNote) {
+    // Audit visibility: account and the sales manager hear of every delivery made before its tax invoice.
+    const audit = `${user.name} บันทึกส่งสินค้าก่อนออกใบกำกับภาษี\n${ticket.code}\nหมายเหตุ/เลขอ้างอิง: ${noInvoiceNote}`;
+    db.users.filter((u) => ['account', 'sales_manager'].includes(u.role) && u.active && u.id !== user.id).forEach((u) => addNotification(
+      u.id, ticket.id, ticket.code, 'DELIVERY_RECORDED', audit, u.role === 'account' ? `/finance/deals/${ticket.id}` : `/tickets/${ticket.id}?tab=ship`));
+  }
   const full = ticket.items.every((item) => Number(item.qtyDelivered ?? 0) >= Number(item.qty ?? 0));
   if (full) {
     ticket.fulfillmentStatus = 'FULLY_DELIVERED';
@@ -4534,9 +5017,9 @@ function mockReleaseNotifiedUserIds(releaseId) {
     .map((n) => n.userId));
 }
 
-function addNotification(userId, ticketId, ticketCode, type, message) {
+function addNotification(userId, ticketId, ticketCode, type, message, link = null) {
   const nextId = Math.max(...db.notifications.map((n) => n.id), 0) + 1;
-  db.notifications.unshift({ id: nextId, userId, ticketId, ticketCode, type, message, read: false, createdAt: new Date().toISOString() });
+  db.notifications.unshift({ id: nextId, userId, ticketId, ticketCode, type, message, ...(link ? { link } : {}), read: false, createdAt: new Date().toISOString() });
 }
 
 // Mirrors ThaiText.money (backend/src/main/java/th/co/glr/hr/common/ThaiText.java): "," grouping, no decimals
@@ -4939,6 +5422,25 @@ export function addUndoBlockerForTests(ticketId, kind) {
   else if (kind === 'importRequest') mockImportRequests.push({ id: 990000 + mockImportRequests.length, ticketId: ticket.id, status: 'DRAFT', items: [] });
   else if (kind === 'deliveryRecord') db.deliveryRecords.push({ deliveryId: 990000 + db.deliveryRecords.length, ticketId: ticket.id, items: [] });
   else throw new Error(`unknown blocker ${kind}`);
+}
+
+/** TEST-ONLY seam — not part of `api`. The tax-invoice rule's precondition for tests that are about delivery itself: gives
+ * the deal an INVOICED round covering everything not yet delivered, unless one with quantity left exists (the twin of the
+ * backend's DeliveryRoundFixture.ensureInvoicedRound). Returns the round id. */
+export function ensureInvoicedRoundForTests(ticketId) {
+  const ticket = findTicketRaw(Number(ticketId));
+  const open = mockDeliveryRequests.find((r) => r.ticketId === ticket.id && r.status === 'INVOICED' && mockRoundHasRemaining(r));
+  if (open) return open.id;
+  const id = Math.max(0, ...mockDeliveryRequests.map((r) => r.id)) + 1;
+  const roundNo = Math.max(0, ...mockDeliveryRequests.filter((r) => r.ticketId === ticket.id).map((r) => r.roundNo)) + 1;
+  mockDeliveryRequests.push({
+    id, ticketId: ticket.id, roundNo, status: 'INVOICED', quotationId: null, note: null, untickedDocs: [],
+    requestedByName: null, sentAt: null,
+    lines: (ticket.items ?? []).map((i) => ({ itemId: i.id, qty: moneyValue(Number(i.qty ?? 0) - Number(i.qtyDelivered ?? 0)) })).filter((l) => l.qty > 0),
+    invoice: { number: `FX-${ticket.id}-${roundNo}`, date: new Date().toISOString().slice(0, 10), total: 0, recordedAmount: 0, receiptId: null,
+      attachmentId: null, invoicedByName: null, invoicedAt: new Date().toISOString() },
+  });
+  return id;
 }
 
 /** TEST-ONLY seam — not part of `api`. Sets a ticket line's qtyFromStock (a legacy reserve). */
@@ -6408,6 +6910,7 @@ const DEMO_ROLE_EMAIL = {
   sales_manager: 'demo.salesmanager@demo.invalid',
   employee:      'demo.employee@demo.invalid',
   account:       'demo.import@demo.invalid', // no dedicated account demo
+  warehouse:     'demo.warehouse@demo.invalid',
 };
 
 /**
@@ -9002,9 +9505,18 @@ export function receiptSourceForTests(allReceipts) {
   // Owner ruling (fix round 1): a refund / credit note (ADJUSTMENT) or a zero amount is not money received.
   const receipts = allReceipts.filter((r) => r.kind !== 'ADJUSTMENT' && Number(r.amount) > 0);
   if (!receipts.length) return null;
-  const express = receipts.filter((r) => r.source === 'EXPRESS' || r.expressDocNo).length;
+  const isExpress = (r) => r.source === 'EXPRESS' || Boolean(r.expressDocNo);
+  const express = receipts.filter(isExpress).length;
   if (express === receipts.length) return 'EXPRESS';
-  return express > 0 ? 'MIXED' : 'MANUAL';
+  const tax = receipts.filter((r) => r.source === 'TAX_INVOICE').length;
+  if (tax === receipts.length) return 'TAX_INVOICE';
+  const pre = receipts.filter((r) => r.source === 'PRE_PORTAL' && !isExpress(r)).length;
+  if (receipts.every((r) => r.source === 'PRE_PORTAL')) return 'PRE_PORTAL';
+  if (tax === 0 && pre === 0) return express > 0 ? 'MIXED' : 'MANUAL';
+  // A tax invoice or a pre-portal deposit among other sources: the sources present, joined by '+' (TicketRepository RECEIPT_SOURCE_SQL).
+  return [express > 0 ? 'EXPRESS' : null,
+    receipts.some((r) => !isExpress(r) && !['TAX_INVOICE', 'PRE_PORTAL'].includes(r.source)) ? 'MANUAL' : null,
+    pre > 0 ? 'PRE_PORTAL' : null, tax > 0 ? 'TAX_INVOICE' : null].filter(Boolean).join('+');
 }
 
 /** Every open deal (ACTIVE, not CLOSED_PAID) as a BoardDeal, ordered as the repository's
@@ -9636,6 +10148,13 @@ function mockRefusal(code, message) {
 
 function mockPlaceExpressReceipt(ticketId, row, user, amount = row.amount, ref = row.docNo.trim()) {
   if (user.role !== 'account') fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403); // EXPRESS_RECEIPT_ROLES (H2/H3)
+  return mockPlaceSourcedReceipt(ticketId, {
+    amount, ref, docDate: row.docDate, source: 'EXPRESS', customerName: row.customerName ?? null, label: 'Express',
+  }, user);
+}
+
+/** TicketService#recordSourcedReceipt: the one body behind an Express row and a confirmed round tax invoice. */
+function mockPlaceSourcedReceipt(ticketId, { amount, ref, docDate, source, customerName, label }, user) {
   const ticket = findTicketRaw(Number(ticketId));
   if ((ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE') mockRefusal('DEAL_NOT_ACTIVE', 'งานไม่ได้อยู่ในสถานะ ACTIVE จึงบันทึกรับเงินไม่ได้');
   const payable = payableAmount(ticket);
@@ -9645,20 +10164,65 @@ function mockPlaceExpressReceipt(ticketId, row, user, amount = row.amount, ref =
   const notice = latestIssuedDepositNotice(ticket.id);
   const depositSoFar = (db.paymentReceipts ?? []).filter((r) => r.ticketId === ticket.id && r.kind === 'DEPOSIT')
     .reduce((x, r) => x + Number(r.amount), 0);
-  const kind = notice?.totalPayable != null
+  // A tax invoice is the money of a delivery, never the deposit (TicketService#recordSourcedReceipt, M10).
+  const kind = source === 'TAX_INVOICE' ? 'BALANCE' : notice?.totalPayable != null
     ? (Number(notice.totalPayable) > depositSoFar ? 'DEPOSIT' : 'BALANCE')
     : (ticket.depositPolicy === 'REQUIRED' && !settled ? 'DEPOSIT' : 'BALANCE');
   const receiptId = Math.max(0, ...(db.paymentReceipts ?? []).map((r) => r.receiptId)) + 1;
   const now = new Date().toISOString();
   db.paymentReceipts.push({
-    receiptId, ticketId: ticket.id, kind, amount, currency: 'THB', receivedAt: `${row.docDate}T05:00:00.000Z`,
+    receiptId, ticketId: ticket.id, kind, amount, currency: 'THB', receivedAt: `${docDate}T05:00:00.000Z`,
     recordedById: user.id, recordedByName: user.name, note: null, depositNoticeId: null, receiptRef: ref,
-    createdAt: now, source: 'EXPRESS', customerName: row.customerName ?? null,
+    createdAt: now, source, customerName,
   });
-  pushEvent(ticket, user, 'PAYMENT_RECORDED', ticket.status, ticket.status, `kind=${kind}, amount=${amount} — Express ${ref}`);
+  pushEvent(ticket, user, 'PAYMENT_RECORDED', ticket.status, ticket.status, `kind=${kind}, amount=${amount} — ${label} ${ref}`);
   reconcilePaymentStatus(ticket, user, false);
-  mockApplyReceiptToExpected(ticket.id, kind, amount, row.docDate, receiptId, ref);
+  mockApplyReceiptToExpected(ticket.id, kind, amount, docDate, receiptId, ref);
   return receiptId;
+}
+
+const mockExpectedSnapshot = (ticketId) => new Map(mockExpectedPayments
+  .filter((p) => p.ticketId === Number(ticketId) && p.status !== 'CANCELLED')
+  .map((p) => [p.id, { received: p.receivedAmount ?? 0, status: p.status }]));
+
+/** TicketRepository.expectedDeltasJson: what a receipt did to the expected payments, [{id, added, closed}]. */
+function mockExpectedDeltas(before, after) {
+  const out = [];
+  after.forEach((now, id) => {
+    const was = before.get(id);
+    const closed = now.status === 'RECEIVED' && (!was || was.status !== 'RECEIVED');
+    const added = round2(now.received - (was?.received ?? 0));
+    if (added !== 0 || closed) out.push({ id, added, closed });
+  });
+  return out.length ? out : null;
+}
+
+/**
+ * TicketService#removeTaxInvoiceReceipt (the only receipt delete): queued Express rows keep their place with the
+ * suggestion cleared; the expected payments move back by exactly the stored deltas (never below 0, closed rows reopen,
+ * cancelled or gone rows are skipped); the payment track steps back when no money is left (returns the status it went
+ * to). The deal's stage is left where it is.
+ */
+function mockRemoveTaxInvoiceReceipt(ticket, receiptId, deltas) {
+  mockReceiptImportRows.forEach((row) => {
+    if (row.suggestedReceiptId === receiptId) {
+      if (row.reason === 'POSSIBLE_MANUAL_DUPLICATE') row.reason = 'NO_CANDIDATE';
+      row.suggestedReceiptId = null;
+    }
+  });
+  (deltas ?? []).forEach((d) => {
+    const row = mockExpectedPayments.find((p) => p.id === d.id && p.ticketId === ticket.id && p.status !== 'CANCELLED');
+    if (!row) return;
+    row.receivedAmount = Math.max(0, round2((row.receivedAmount ?? 0) - d.added));
+    if (d.closed && row.status === 'RECEIVED' && row.receiptId === receiptId) Object.assign(row, { status: 'OPEN', receiptId: null, receiptRef: null });
+  });
+  const at = db.paymentReceipts.findIndex((r) => r.receiptId === receiptId && r.source === 'TAX_INVOICE');
+  if (at >= 0) db.paymentReceipts.splice(at, 1);
+  if (['DEPOSIT_PAID', 'AWAITING_FINAL_PAYMENT'].includes(ticket.paymentStatus) && sumPaid(ticket.id) <= 0) {
+    ticket.paymentStatus = !depositBypassesNotice(ticket) && latestIssuedDepositNotice(ticket.id) ? 'DEPOSIT_NOTICE_ISSUED' : 'CUSTOMER_CONFIRMED';
+    return ticket.paymentStatus;
+  }
+  return null;
 }
 
 const mockKnownDocNo = (docNo) => {
@@ -9672,7 +10236,8 @@ const mockKnownDocNo = (docNo) => {
 const mockManualTwin = (ticketId, row) => {
   const gap = (r) => Math.abs(new Date(`${mockBangkokDateOf(r.receivedAt)}T00:00:00Z`) - new Date(`${row.docDate}T00:00:00Z`)) / 86_400_000;
   return (db.paymentReceipts ?? [])
-    .filter((r) => r.ticketId === Number(ticketId) && (r.source ?? 'MANUAL') === 'MANUAL' && !r.expressDocNo
+    .filter((r) => r.ticketId === Number(ticketId) && ['MANUAL', 'TAX_INVOICE'].includes(r.source ?? 'MANUAL') && !r.expressDocNo
+      && !mockReceiptImportRows.some((w) => w.status === 'RESOLVED' && w.resolvedReceiptId === r.receiptId)
       && ['DEPOSIT', 'BALANCE'].includes(r.kind) && Number(r.amount) === row.amount && gap(r) <= 7)
     .sort((a, b) => gap(a) - gap(b) || a.receiptId - b.receiptId)[0] ?? null;
 };
@@ -9716,8 +10281,11 @@ const mockQueuedDto = (r, candidates = []) => ({
   possibleManualReceiptId: r.suggestedReceiptId ?? null,
   possibleManual: (() => {
     const m = r.suggestedReceiptId == null ? null : (db.paymentReceipts ?? []).find((x) => x.receiptId === r.suggestedReceiptId);
+    const taxInvoice = m?.source === 'TAX_INVOICE';
     return m ? { receiptId: m.receiptId, ticketId: m.ticketId, kind: m.kind, amount: m.amount, receivedAt: m.receivedAt,
-      recordedByName: m.recordedByName ?? null, alreadyLinked: Boolean(m.expressDocNo) } : null;
+      recordedByName: m.recordedByName ?? null, alreadyLinked: Boolean(m.expressDocNo), source: m.source ?? 'MANUAL',
+      invoiceNumber: taxInvoice ? m.receiptRef : null,
+      roundNo: taxInvoice ? (mockDeliveryRequests.find((d) => d.invoice?.receiptId === m.receiptId)?.roundNo ?? null) : null } : null;
   })(),
   candidates,
 });
@@ -10340,23 +10908,7 @@ export const api = {
       const ticket = findTicketRaw(Number(id));
       const user = requireOwningRepOrCeo(ticket);
       requireActive(ticket);
-      const remaining = (ticket.items ?? [])
-        .map((item) => ({ itemId: item.id, qty: moneyValue(Number(item.qty ?? 0) - Number(item.qtyDelivered ?? 0)) }))
-        .filter((line) => line.qty > 0);
-      if (!remaining.length) fail('ไม่มีจำนวนค้างส่ง', 409);
-      const allRemainingCoveredByStock = (ticket.items ?? []).every((item) => {
-        const remainingQty = moneyValue(Number(item.qty ?? 0) - Number(item.qtyDelivered ?? 0));
-        if (remainingQty <= 0) return true;
-        return moneyValue(Number(item.qtyDelivered ?? 0) + remainingQty) <= Number(item.qtyFromStock ?? 0);
-      });
-      recordDeliveryForTicket(ticket, user, {
-        source: allRemainingCoveredByStock ? 'STOCK' : 'WAREHOUSE',
-        note: payload.note ?? null,
-        recipientName: payload.recipientName ?? null,
-        lines: remaining,
-        // Slice 6d fix round 1 (M2): CompleteDeliveryRequest.deliveredOn, the same window as the dialog.
-        deliveredOn: payload.deliveredOn ?? null,
-      }, true);
+      mockCompleteRound(ticket, user, payload.deliveryRequestId ?? null, payload, null);
       return delay({ ticket: buildTicketDetail(ticket) });
     },
 
@@ -10395,16 +10947,17 @@ export const api = {
       // (SPEC_APPROVED) only, and the estimate (CreateTicketRequest @DecimalMin(exclusive 0) @Digits(12,2)) is > 0
       // within NUMERIC(14,2).
       const startStage = payload.startStage || 'LEAD_APPROACH';
-      if (!['LEAD_APPROACH', 'SPEC_APPROVED'].includes(startStage)) fail('งานใหม่เริ่มได้ที่ S1 หรือ S2 เท่านั้น', 400);
+      if (!['LEAD_APPROACH', 'SPEC_APPROVED', 'PROCUREMENT'].includes(startStage)) fail('งานใหม่เริ่มได้ที่ S1 S2 หรือสั่งซื้อแล้วเท่านั้น', 400);
       if (payload.estimatedValue != null && !mockValidEstimate(payload.estimatedValue)) {
         fail('มูลค่าโดยประมาณต้องมากกว่า 0', 400);
       }
       // Starting at S2 needs the stage write gate a hand move to S2 needs (TicketService#requireStageWriteAccess:
       // sales roles as owner/keyer, sales_manager, ceo). APPROXIMATION, not evidence — see
       // DealLifecycleDialogsIntegrationTest for the real gate.
-      if (startStage === 'SPEC_APPROVED' && !['sales', 'sales_manager', 'ceo'].includes(user.role)) {
+      if (startStage !== 'LEAD_APPROACH' && !['sales', 'sales_manager', 'ceo'].includes(user.role)) {
         fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       }
+      if (startStage === 'PROCUREMENT') mockRequirePreDeposit(payload.preDeposit); // before anything is written (Java rolls back)
       const ownerOption = payload.ownerEmployeeId != null && payload.ownerEmployeeId !== user.id
         ? mockEligibleQuotationDisplayNameUsers().find((u) => u.id === payload.ownerEmployeeId) : null;
       if (payload.ownerEmployeeId != null && payload.ownerEmployeeId !== user.id && !ownerOption) {
@@ -10478,6 +11031,12 @@ export const api = {
         // Mirrors TicketService.createDeal: the deal is created at S1 and moved to S2 in the same transaction.
         ticket.salesStage = 'SPEC_APPROVED';
         pushEvent(ticket, user, 'STAGE_CHANGED', 'LEAD_APPROACH', 'SPEC_APPROVED', 'เริ่มที่ S2 · สเปคผ่าน');
+      }
+      if (startStage === 'PROCUREMENT') {
+        // Mirrors TicketService.create (V237): สั่งซื้อแล้ว, a deal ordered before the portal, flagged pre_portal.
+        ticket.salesStage = 'PROCUREMENT';
+        pushEvent(ticket, user, 'STAGE_CHANGED', 'LEAD_APPROACH', 'PROCUREMENT', 'งานที่เดินมาก่อนใช้ระบบ');
+        mockBecomePrePortal(ticket, payload.preDeposit, user);
       }
       // Mirrors TicketRepository.create (V204): the deal's customer is its first party — BUYER,
       // ACTIVE, the headline — so every deal has at least one party, as the backfill gave older ones.
@@ -11240,6 +11799,7 @@ export const api = {
           orderNo: i + 1, childKind: t.parentTicketId != null ? (t.childKind ?? 'BID_SPLIT') : null,
           salesStage: t.salesStage, lifecycle, fulfillmentStatus: t.fulfillmentStatus ?? null,
           valueExVat: withMoney ? valueExVat : null, received: withMoney ? received : null, outstanding: withMoney ? owed : null,
+          latestRound: mockLatestRound(t.id),
         });
       });
       return delay({
@@ -14294,6 +14854,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       const ticket = findTicketRaw(Number(ticketId));
       const user = requireOwningRepOrCeo(ticket);
       requireActive(ticket);
+      mockEnsureOrderConfirmed(ticket, null, user); // an old deal's order is confirmed by its first IR
       if (dealStageIndex(ticket.salesStage) < dealStageIndex('ORDER_RECEIVED')) {
         fail('สร้างใบขอซื้อได้หลังจากยืนยันคำสั่งซื้อแล้ว (ORDER_RECEIVED) เท่านั้น', 409);
       }
@@ -15228,11 +15789,15 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
     async sameAsManual(rowId) {
       const user = mockRequireAccount();
       const row = mockRequireQueued(rowId, 'UNMATCHED');
-      const manual = (db.paymentReceipts ?? []).find((r) => r.receiptId === row.suggestedReceiptId && (r.source ?? 'MANUAL') === 'MANUAL');
+      const manual = (db.paymentReceipts ?? []).find((r) => r.receiptId === row.suggestedReceiptId && ['MANUAL', 'TAX_INVOICE'].includes(r.source ?? 'MANUAL'));
       if (row.reason !== 'POSSIBLE_MANUAL_DUPLICATE' || !manual) fail('รายการนี้ไม่ได้รอเลือกว่าเป็นรายการเดียวกับที่บันทึกเอง', 409);
       if (manual.expressDocNo) fail('รายการที่บันทึกเองนี้ผูกกับเลขที่ Express อื่นแล้ว', 409);
-      manual.expressDocNo = row.docNo.trim();
-      Object.assign(row, { status: 'RESOLVED', resolvedTicketId: manual.ticketId, resolvedBy: user.id });
+      if (manual.source === 'TAX_INVOICE' && mockReceiptImportRows.some((w) => w.status === 'RESOLVED' && w.resolvedReceiptId === manual.receiptId)) {
+        fail('เงินก้อนนี้ของใบกำกับถูกจับคู่กับรายการ Express อื่นแล้ว', 409);
+      }
+      // A tax invoice's receipt carries no Express number: the row is only settled against it, nothing is written.
+      if (manual.source !== 'TAX_INVOICE') manual.expressDocNo = row.docNo.trim();
+      Object.assign(row, { status: 'RESOLVED', resolvedTicketId: manual.ticketId, resolvedBy: user.id, resolvedReceiptId: manual.receiptId });
       return delay(mockQueuedDto(row));
     },
     async flagManager(rowId) {
@@ -15684,11 +16249,328 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
     },
   },
 
+  // Mirrors DeliveryRequestController + DeliveryRequestService (deliveryrequest/).
+  deliveryRequests: {
+    async list(ticketId) {
+      const ticket = findTicketRaw(Number(ticketId));
+      const warehouse = requireSession().role === 'warehouse';
+      // DeliveryRequestService#listForWarehouse: the warehouse reads only an order whose request was sent, without money.
+      if (warehouse && !mockDeliveryRequests.some((r) => r.ticketId === ticket.id && r.status !== 'DRAFT')) {
+        fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      }
+      const access = warehouse ? { user: requireSession(), issuerOnly: false } : mockRoundsRead(ticket);
+      const { user } = access;
+      const hide = warehouse || access.accountView;
+      const dtos = mockDeliveryRequests.filter((r) => r.ticketId === ticket.id && (!hide || r.status !== 'DRAFT')
+        && (!access.issuerOnly || ['FORWARDED', 'INVOICED'].includes(r.status)))
+        .sort((a, b) => b.roundNo - a.roundNo).map((r) => mockRoundDto(r, ticket, user));
+      const rounds = user.role === 'import' ? dtos.map(mockPriceFree) : dtos;
+      const blockedText = 'ฝ่ายขายเจ้าของงานเป็นผู้ขอออกใบกำกับ';
+      if (warehouse || access.issuerOnly || access.accountView) {
+        return delay({
+          order: mockRoundOrderRef(ticket), rounds, approvedQuotations: [], canStart: false, startBlockedReason: blockedText,
+          invoiceable: warehouse || user.role === 'import' ? null : mockInvoiceable(ticket),
+        });
+      }
+      const open = rounds.some((r) => MOCK_ROUND_OPEN.includes(r.status));
+      const blocked = open ? null : mockRoundBlockedReason(ticket, user);
+      return delay({
+        order: mockRoundOrderRef(ticket), rounds, approvedQuotations: mockApprovedQuotationsOf(ticket.id),
+        canStart: !open && blocked == null, startBlockedReason: blocked, invoiceable: mockInvoiceable(ticket),
+      });
+    },
+    async createDraft(ticketId, payload = {}) {
+      const ticket = findTicketRaw(Number(ticketId));
+      const user = mockRoundsWrite(ticket);
+      const openRounds = mockDeliveryRequests.filter((r) => r.ticketId === ticket.id && MOCK_ROUND_OPEN.includes(r.status));
+      // The sales-side round first, like DeliveryRequestRepository#findOpen.
+      const existing = openRounds.find((r) => r.status !== 'FORWARDED') ?? openRounds[0];
+      if (existing) return delay({ round: mockRoundDto(existing, ticket, user) });
+      const blocked = mockRoundBlockedReason(ticket, user);
+      if (blocked) fail(blocked, 409);
+      const round = {
+        id: mockDeliveryRequestSeq++, ticketId: ticket.id,
+        roundNo: mockDeliveryRequests.filter((r) => r.ticketId === ticket.id && r.status !== 'DRAFT').length + 1,
+        status: 'DRAFT', quotationId: mockRoundResolveQuotation(ticket.id, payload?.quotationId ?? null), note: null,
+        requestedByName: user.name, sentAt: null, lines: [],
+      };
+      mockDeliveryRequests.push(round);
+      return delay({ round: mockRoundDto(round, ticket, user) });
+    },
+    async update(rid, payload) {
+      const round = mockRoundOf(rid);
+      const ticket = findTicketRaw(round.ticketId);
+      const user = mockRoundsWrite(ticket);
+      if (!MOCK_ROUND_EDITABLE.includes(round.status)) fail('เรื่องนี้ส่งไปแล้ว', 409);
+      if (payload?.quotationId != null) round.quotationId = mockRoundResolveQuotation(ticket.id, payload.quotationId);
+      round.note = payload?.note && String(payload.note).trim() ? String(payload.note).trim() : null;
+      if (Array.isArray(payload?.untickedDocs)) round.untickedDocs = mockRoundValidUnticked(ticket.id, payload.untickedDocs);
+      return delay({ round: mockRoundDto(round, ticket, user) });
+    },
+    async addFile(rid, file) {
+      const round = mockRoundOf(rid);
+      const ticket = findTicketRaw(round.ticketId);
+      // The warehouse may attach once the request is sent (SENT or FORWARDED); its draft is sales-private.
+      const warehouse = requireSession().role === 'warehouse';
+      if (warehouse && round.status === 'DRAFT') fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      const user = warehouse ? requireSession() : mockRoundsWrite(ticket);
+      // An INVOICED round takes proof of delivery (kind DELIVERY_PROOF) from sales or the warehouse.
+      const proof = round.status === 'INVOICED';
+      if (!proof && !(warehouse ? ['SENT', 'FORWARDED'] : MOCK_ROUND_OPEN).includes(round.status)) fail('รอบนี้ปิดแล้ว แนบไฟล์เพิ่มไม่ได้', 409);
+      const name = file?.name ?? 'file.pdf';
+      const ext = name.includes('.') ? name.split('.').pop().toLowerCase() : '';
+      // DeliveryRequestService#allowedMime: the extension must be allowed; a blank / octet-stream declared type is decided by
+      // the extension (canonical MIME stored), any other declared type must itself be allowed.
+      const byExt = MOCK_ROUND_MIME_BY_EXT[ext];
+      if (!byExt) fail(MOCK_ROUND_TYPES_MESSAGE, 400);
+      const declared = String(file?.type ?? '').toLowerCase().trim();
+      const blankType = declared === '' || declared === 'application/octet-stream';
+      if (!blankType && !Object.values(MOCK_ROUND_MIME_BY_EXT).includes(declared)) fail(MOCK_ROUND_TYPES_MESSAGE, 400);
+      if (mockAttachments.filter((a) => a.deliveryRequestId === round.id && a.attachType !== 'SYSTEM_DOC').length >= MOCK_ROUND_MAX_FILES) {
+        fail(`แนบไฟล์ได้ไม่เกิน ${MOCK_ROUND_MAX_FILES} ไฟล์ต่อรอบ`, 400);
+      }
+      if ((file?.size ?? 0) > 10 * 1024 * 1024) fail('ไฟล์มีขนาดใหญ่เกินไป (ขนาดสูงสุดที่รองรับคือ 10 MB)', 400);
+      mockAttachments.push({
+        id: mockAttachSeq++, ticketId: ticket.id, quotationId: null, fileName: name, attachType: proof ? 'DELIVERY_PROOF' : 'OTHER',
+        mimeType: blankType ? byExt : declared, fileSize: file?.size ?? 0, uploadedBy: user.id,
+        uploadedAt: new Date().toISOString(), deliveryRequestId: round.id, uploaderSide: warehouse ? 'WAREHOUSE' : 'SALES',
+      });
+      return delay({ round: mockRoundDto(round, ticket, user) });
+    },
+    async send(rid, body = {}) {
+      const round = mockRoundOf(rid);
+      const ticket = findTicketRaw(round.ticketId);
+      const user = mockRoundsWrite(ticket);
+      if (!MOCK_ROUND_EDITABLE.includes(round.status)) fail('เรื่องนี้ส่งไปแล้ว', 409);
+      // DeliveryRequestService#send: a deal not confirmed in the portal (stage before ORDER_RECEIVED) is an old one: mark it,
+      // confirm its order from the chosen quotation and move it to delivery. A pre_portal deal made at the import stage
+      // only gets the confirm.
+      const notConfirmed = dealStageIndex(ticket.salesStage) < dealStageIndex('ORDER_RECEIVED');
+      if (notConfirmed && (ticket.lifecycle ?? 'ACTIVE') === 'ACTIVE') {
+        const chosen = round.quotationId != null ? mockRoundResolveQuotation(ticket.id, round.quotationId)
+          : mockRoundResolveQuotation(ticket.id, null);
+        if (chosen == null) fail('เลือกใบเสนอราคาของรอบนี้ก่อนส่ง', 409);
+        if (ticket.prePortal) mockEnsureOrderConfirmed(ticket, chosen, user);
+        else mockConfirmAndMark(ticket, chosen, body?.preDeposit, user);
+        const from = ticket.salesStage;
+        ticket.salesStage = 'DELIVERY_SCHEDULING';
+        pushEvent(ticket, user, 'STAGE_CHANGED', from, 'DELIVERY_SCHEDULING', 'ขอออกใบกำกับจากงานที่เดินมาก่อนใช้ระบบ');
+      } else {
+        mockEnsureOrderConfirmed(ticket, round.quotationId, user);
+      }
+      if ((ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE' || (ticket.items ?? []).length === 0) {
+        fail('ต้องยืนยันออเดอร์ก่อนจึงจะขอออกใบกำกับได้', 409);
+      }
+      const quotationId = round.quotationId != null ? mockRoundResolveQuotation(ticket.id, round.quotationId)
+        : mockRoundResolveQuotation(ticket.id, null);
+      if (quotationId == null) fail('เลือกใบเสนอราคาของรอบนี้ก่อนส่ง', 409);
+      const lines = mockRoundCoverage(ticket, round.id).filter((c) => c.remaining > 0);
+      if (lines.length === 0) fail('ทุกรายการมีรอบส่งครอบคลุมแล้ว', 409);
+      const systemDocs = mockRoundSystemDocs(ticket.id, body?.systemDocs, quotationId);
+      // A re-send replaces this round's earlier stored copies; each copy is a frozen file named by its document number.
+      for (let i = mockAttachments.length - 1; i >= 0; i -= 1) {
+        if (mockAttachments[i].deliveryRequestId === round.id && mockAttachments[i].attachType === 'SYSTEM_DOC') mockAttachments.splice(i, 1);
+      }
+      systemDocs.forEach((d) => mockAttachments.push({
+        id: mockAttachSeq++, ticketId: ticket.id, quotationId: null, fileName: `${d.number}.pdf`, attachType: 'SYSTEM_DOC',
+        mimeType: 'application/pdf', fileSize: 48 * 1024, uploadedBy: user.id, uploadedAt: new Date().toISOString(),
+        deliveryRequestId: round.id, uploaderSide: 'SYSTEM',
+      }));
+      Object.assign(round, {
+        quotationId, status: 'SENT', sentAt: new Date().toISOString(), requestedByName: user.name, requestedById: user.id,
+        returnReasonCodes: [], returnReasonText: null,
+        lines: lines.map((c) => ({ itemId: c.itemId, qty: c.remaining })),
+      });
+      const display = mockRoundOrderRef(ticket).displayCode;
+      pushEvent(ticket, user, 'DELIVERY_REQUEST_SENT', null, null, `ขอออกใบกำกับ รอบส่งที่ ${round.roundNo}`);
+      const message = `${display} รอบส่งที่ ${round.roundNo} · ฝ่ายขายขอออกใบกำกับ รอคลังตรวจเอกสาร`;
+      // Warehouse = effective role 'warehouse' (WarehouseStaff on the server); the mock's user role is already effective.
+      ['warehouse', 'account', 'sales_manager'].forEach((role) => {
+        db.users.filter((u) => u.role === role && u.active && u.id !== user.id)
+          .forEach((u) => addNotification(u.id, ticket.id, ticket.code, 'DELIVERY_REQUEST_SENT', message, `/tickets/${ticket.id}?tab=ship`));
+      });
+      return delay({ round: mockRoundDto(round, ticket, user) });
+    },
+    // DeliveryRequestService#lockedWarehouseRound: warehouse staff only (403), still SENT (409).
+    async forward(rid) {
+      const { round, ticket, user } = mockWarehouseRound(rid);
+      // The refusal counts every holder (the actor included); only the bell leaves the actor out.
+      const holders = db.users.filter((u) => u.active && mockIsIssuer(u));
+      const issuers = holders.filter((u) => u.id !== user.id);
+      if (holders.length === 0) fail('ยังไม่มีผู้ออกใบกำกับภาษีในระบบ กรุณาแจ้งผู้ดูแล', 409);
+      Object.assign(round, { status: 'FORWARDED', forwardedByName: user.name, forwardedAt: new Date().toISOString() });
+      pushEvent(ticket, user, 'DELIVERY_REQUEST_FORWARDED', null, null, `ส่งต่อให้ออกใบกำกับ รอบส่งที่ ${round.roundNo}`);
+      // The issuers are the people holding can_issue_tax_invoice: the mock marks them with canIssueTaxInvoice.
+      issuers.forEach((u) => addNotification(
+        u.id, ticket.id, ticket.code, 'DELIVERY_REQUEST_FORWARDED',
+        `${mockRoundOrderRef(ticket).displayCode} รอบส่งที่ ${round.roundNo} · คลังตรวจเอกสารแล้ว รอออกใบกำกับภาษี`,
+        `/tickets/${ticket.id}?tab=ship`,
+      ));
+      return delay({ round: mockRoundDto(round, ticket, user) });
+    },
+    // DeliveryRequestService#attachTaxInvoice: the issuer attaches the issued PDF to a FORWARDED round. The mock cannot read a
+    // PDF, so the "read" is faked from a fixture: IV<yymm>-<round id padded>, today, and the order's still-unrecorded total.
+    async attachTaxInvoice(rid, file) {
+      const user = mockRequireIssuer();
+      const round = mockRoundOf(rid);
+      if (round.status !== 'FORWARDED') fail('เรื่องนี้ถูกดำเนินการแล้ว', 409);
+      const ticket = findTicketRaw(round.ticketId);
+      const name = file?.name ?? 'invoice.pdf';
+      if (!/\.pdf$/i.test(name)) fail('ใบกำกับภาษีต้องเป็นไฟล์ PDF', 400);
+      if ((file?.size ?? 0) > MAX_UPLOAD_BYTES) fail(`ไฟล์ใหญ่เกินไป (ขนาดสูงสุดที่รองรับคือ ${MAX_UPLOAD_BYTES / (1024 * 1024)} MB)`, 400);
+      mockAttachments.filter((a) => a.deliveryRequestId === round.id && a.attachType === 'INVOICE' && a.uploadedBy !== user.id).forEach((old) => {
+        pushEvent(ticket, user, 'TAX_INVOICE_FILE_REPLACED', null, null, `รอบส่งที่ ${round.roundNo} · เปลี่ยนไฟล์ใบกำกับ ${old.fileName} ที่ ${db.users.find((u) => u.id === old.uploadedBy)?.name ?? 'ผู้อื่น'} แนบไว้`);
+      });
+      for (let i = mockAttachments.length - 1; i >= 0; i -= 1) {
+        if (mockAttachments[i].deliveryRequestId === round.id && mockAttachments[i].attachType === 'INVOICE') mockAttachments.splice(i, 1);
+      }
+      const attachment = {
+        id: mockAttachSeq++, ticketId: ticket.id, quotationId: null, fileName: name, attachType: 'INVOICE',
+        mimeType: 'application/pdf', fileSize: file?.size ?? 0, uploadedBy: user.id, uploadedAt: new Date().toISOString(),
+        deliveryRequestId: round.id, uploaderSide: 'ISSUER',
+      };
+      mockAttachments.push(attachment);
+      // A file named like "IV2611-0042.pdf" reads as that number (so a demo can show both outcomes); any other file reads nothing.
+      const named = /([A-Z]{2,3}\d{4}-\d{3,5})/.exec(name);
+      const left = Math.max(0, payableAmount(ticket) - sumPaid(ticket.id));
+      const read = named
+        ? { invoiceNumber: named[1], invoiceDate: mockTodayIso(), total: left > 0 ? left : 85065 }
+        : { invoiceNumber: null, invoiceDate: null, total: null };
+      return delay({ attachmentId: attachment.id, read, readOk: Boolean(named), totalWeak: Boolean(named && /weak/i.test(name)) });
+    },
+    // DeliveryRequestService#confirmInvoice: toRecord = min(payable - paid, max(0, invoiced so far - paid)).
+    async confirmInvoice(rid, body = {}) {
+      const user = mockRequireIssuer();
+      const round = mockRoundOf(rid);
+      if (round.status !== 'FORWARDED') fail('เรื่องนี้ถูกดำเนินการแล้ว', 409);
+      const ticket = findTicketRaw(round.ticketId);
+      const number = String(body?.invoiceNumber ?? '').trim();
+      if (!number || number.length > 60) fail('ระบุเลขที่ใบกำกับ (ไม่เกิน 60 ตัวอักษร)', 400);
+      if (!body?.invoiceDate || body.invoiceDate > mockTodayIso()) fail('วันที่ใบกำกับต้องไม่เป็นวันในอนาคต', 400);
+      const raw = Number(body?.total);
+      if (!(raw > 0) || Math.abs(raw * 100 - Math.round(raw * 100)) > 1e-6) fail('ยอดรวมใบกำกับต้องมากกว่า 0 และไม่เกิน 2 ตำแหน่งทศนิยม', 400);
+      const total = moneyValue(raw);
+      const file = mockAttachments.find((a) => a.deliveryRequestId === round.id && a.attachType === 'INVOICE');
+      if (!file) fail('แนบไฟล์ใบกำกับภาษีก่อนยืนยัน', 409);
+      if ((ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE') fail('งานนี้ไม่ได้เปิดอยู่ จึงบันทึกรับเงินจากใบกำกับไม่ได้', 409);
+      if (mockDeliveryRequests.some((r) => r.status === 'INVOICED' && r.invoice?.number.toUpperCase() === number.toUpperCase())) {
+        fail('เลขที่ใบกำกับนี้ถูกยืนยันไว้ในรอบอื่นแล้ว', 409);
+      }
+      const paid = sumPaid(ticket.id);
+      const payable = payableAmount(ticket);
+      const invoicedSoFar = mockDeliveryRequests.filter((r) => r.ticketId === ticket.id && r.status === 'INVOICED')
+        .reduce((sum, r) => sum + r.invoice.total, 0) + total;
+      // ฿1.00 over is allowed (Express rounds VAT per line); the recorded amount is still capped at payable below.
+      if (payable > 0 && invoicedSoFar > payable + 1) {
+        fail(`ยอดใบกำกับรวมของออเดอร์นี้เกินมูลค่างาน ออกใบกำกับได้อีกไม่เกิน ฿${mockBaht(mockInvoiceable(ticket))}`, 400);
+      }
+      if ((db.paymentReceipts ?? []).some((r) => r.ticketId === ticket.id && String(r.receiptRef ?? '').trim().toUpperCase() === number.toUpperCase())) {
+        mockRefusal('DUPLICATE', `เลขที่ ${number} มีรายการรับเงินที่ฝ่ายบัญชีบันทึกเองไว้แล้วในงานนี้ ให้ฝ่ายบัญชีลบรายการนั้นก่อน แล้วยืนยันใบกำกับอีกครั้ง`);
+      }
+      const toRecord = moneyValue(Math.max(0, Math.min(payable - paid, Math.max(0, invoicedSoFar - paid))));
+      const expectedBefore = mockExpectedSnapshot(ticket.id);
+      const receiptId = toRecord > 0
+        ? mockPlaceSourcedReceipt(ticket.id, { amount: toRecord, ref: number, docDate: body.invoiceDate, source: 'TAX_INVOICE', customerName: null, label: 'ใบกำกับ' }, user)
+        : null;
+      round.expectedDeltas = receiptId == null ? null : mockExpectedDeltas(expectedBefore, mockExpectedSnapshot(ticket.id));
+      round.receiptSeqAtConfirm = Math.max(0, ...(db.paymentReceipts ?? []).filter((r) => r.ticketId === ticket.id).map((r) => r.receiptId));
+      Object.assign(round, {
+        status: 'INVOICED',
+        invoice: {
+          number, date: body.invoiceDate, total, recordedAmount: toRecord, receiptId, attachmentId: file.id,
+          invoicedByName: user.name, invoicedAt: new Date().toISOString(),
+        },
+      });
+      pushEvent(ticket, user, 'TAX_INVOICE_CONFIRMED', null, null, `ใบกำกับ ${number} ฿${mockBaht(total)} · บันทึกรับเงิน ฿${mockBaht(toRecord)}`);
+      const message = `${mockRoundOrderRef(ticket).displayCode} รอบส่งที่ ${round.roundNo} · ออกใบกำกับ ${number} แล้ว ส่งของได้`;
+      const link = `/tickets/${ticket.id}?tab=ship`;
+      // Warehouse, the people who asked (owner, keyer, sender), then account and sales manager; never the issuer.
+      const told = new Set([
+        ...db.users.filter((u) => u.role === 'warehouse' && u.active).map((u) => u.id),
+        ticket.createdById, ticket.keyedById, round.requestedById,
+      ].filter((id) => id != null && id !== user.id));
+      db.users.filter((u) => ['account', 'sales_manager'].includes(u.role) && u.active && u.id !== user.id)
+        .forEach((u) => told.add(u.id));
+      told.forEach((id) => addNotification(id, ticket.id, ticket.code, 'TAX_INVOICE_CONFIRMED', message, link));
+      return delay({ round: mockRoundDto(round, ticket, user) });
+    },
+    // DeliveryRequestService#voidInvoice: an issuer-grant holder or account (in scope), only while INVOICED and no delivery
+    // is recorded against the round; removes this round's TAX_INVOICE receipt and returns the round to FORWARDED.
+    async voidInvoice(rid, body = {}) {
+      const user = requireSession();
+      if (user.role === 'import') fail(MOCK_IMPORT_CANNOT_ISSUE, 403);
+      const round = mockRoundOf(rid);
+      const ticket = findTicketRaw(round.ticketId);
+      if (!mockMayVoidHere(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      if (round.status !== 'INVOICED') fail('รอบนี้ไม่ได้อยู่ในสถานะออกใบกำกับแล้ว', 409);
+      const reason = String(body?.reason ?? '').trim();
+      if (!reason || reason.length > 300) fail('ระบุเหตุผลที่ยกเลิกใบกำกับ (ไม่เกิน 300 ตัวอักษร)', 400);
+      if ((ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE') fail('งานนี้ไม่ได้เปิดอยู่ จึงยกเลิกใบกำกับไม่ได้', 409);
+      const blocked = mockVoidBlock(round);
+      if (blocked) fail(blocked, 409);
+      const { number, total, recordedAmount, receiptId } = round.invoice;
+      const steppedBack = receiptId != null ? mockRemoveTaxInvoiceReceipt(ticket, receiptId, round.expectedDeltas) : null;
+      round.invoice = null;
+      round.expectedDeltas = null;
+      round.status = 'FORWARDED';
+      pushEvent(ticket, user, 'TAX_INVOICE_VOIDED', null, null,
+        `รอบส่งที่ ${round.roundNo} · ยกเลิกใบกำกับ ${number} ฿${mockBaht(total)} · ลบรายการรับเงิน ฿${mockBaht(recordedAmount ?? 0)} · เหตุผล: ${reason}${steppedBack ? ` · สถานะการชำระเงินย้อนกลับเป็น ${{ CUSTOMER_CONFIRMED: 'ลูกค้ายืนยันคำสั่งซื้อ', DEPOSIT_NOTICE_ISSUED: 'ออกใบแจ้งมัดจำ' }[steppedBack] ?? steppedBack}` : ''} · ขั้นของงานคงไว้ตามเดิม ไม่ย้อนกลับ`);
+      const message = `${mockRoundOrderRef(ticket).displayCode} รอบส่งที่ ${round.roundNo} · ยกเลิกใบกำกับ ${number} แล้ว รอออกใบกำกับใหม่ · ${reason}`;
+      const told = new Set([
+        ...db.users.filter((u) => u.role === 'warehouse' && u.active).map((u) => u.id),
+        ticket.createdById, ticket.keyedById, round.requestedById,
+        ...db.users.filter((u) => ['account', 'sales_manager'].includes(u.role) && u.active).map((u) => u.id),
+      ].filter((id) => id != null && id !== user.id));
+      told.forEach((id) => addNotification(id, ticket.id, ticket.code, 'TAX_INVOICE_VOIDED', message, `/tickets/${ticket.id}?tab=ship`));
+      return delay({ round: mockRoundDto(round, ticket, user) });
+    },
+    // DeliveryRequestService#recordDelivery: sales (the delivery-write rule) or ANY warehouse staff, against one round.
+    async recordDelivery(rid, body = {}) {
+      const user = requireSession();
+      const round = mockRoundOf(rid);
+      const ticket = findTicketRaw(round.ticketId);
+      if (user.role !== 'warehouse' && !mockRoundsCanWrite(ticket, user)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      // The warehouse acts only on a round it can read: never a draft, never a deal that was not sent to it.
+      if (user.role === 'warehouse' && (round.status === 'DRAFT' || !mockDeliveryRequests.some((r) => r.ticketId === ticket.id && r.status !== 'DRAFT'))) {
+        fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      }
+      requireActive(ticket);
+      const source = body?.source || (ticket.fulfillmentStatus === 'FROM_STOCK' ? 'STOCK' : 'WAREHOUSE');
+      if (body?.complete === true) {
+        mockCompleteRound(ticket, user, round.id, body, source);
+      } else {
+        recordDeliveryForTicket(ticket, user, {
+          source, note: body?.note ?? null, recipientName: body?.recipientName ?? null, lines: body?.lines ?? [],
+          deliveredOn: body?.deliveredOn ?? null, deliveryRequestId: round.id, noInvoiceNote: body?.noInvoiceNote ?? null,
+        });
+      }
+      return delay({ round: mockRoundDto(round, ticket, user) });
+    },
+    async sendBack(rid, body = {}) {
+      const { round, ticket, user } = mockWarehouseRound(rid);
+      const codes = [...new Set(body?.reasonCodes ?? [])];
+      const detail = body?.detail && String(body.detail).trim() ? String(body.detail).trim() : null;
+      if (!codes.every((c) => Object.hasOwn(MOCK_ROUND_RETURN_REASONS, c)) || (codes.length === 0 && !detail)) fail('ระบุเหตุผลที่ส่งกลับ', 400);
+      Object.assign(round, { status: 'RETURNED', returnReasonCodes: codes, returnReasonText: detail });
+      const reason = [...codes.map((c) => MOCK_ROUND_RETURN_REASONS[c]), detail].filter(Boolean).join(', ');
+      pushEvent(ticket, user, 'DELIVERY_REQUEST_RETURNED', null, null, `ส่งกลับฝ่ายขาย รอบส่งที่ ${round.roundNo} · ${reason}`);
+      // The owner, the keyer and the sender, never the warehouse person.
+      new Set([ticket.createdById, ticket.keyedById, round.requestedById].filter((id) => id != null && id !== user.id)).forEach((id) => addNotification(
+        id, ticket.id, ticket.code, 'DELIVERY_REQUEST_RETURNED',
+        `${mockRoundOrderRef(ticket).displayCode} รอบส่งที่ ${round.roundNo} · คลังส่งกลับ: ${reason}`,
+        `/tickets/${ticket.id}?tab=ship`,
+      ));
+      return delay({ round: mockRoundDto(round, ticket, user) });
+    },
+  },
+
   // Mirrors AttachmentController + FileStorageService (attachment/).
   attachments: {
     async list(ticketId) {
-      requireAttachmentTicketAccess(ticketId);
-      return delay({ attachments: structuredClone(mockAttachments.filter((a) => a.ticketId === Number(ticketId))) });
+      const { user } = requireAttachmentTicketAccess(ticketId);
+      // AttachmentController#list: import never sees a delivery round's files (mayReadRoundFiles).
+      return delay({ attachments: structuredClone(mockAttachments.filter((a) => a.ticketId === Number(ticketId)
+        && !(user.role === 'import' && a.deliveryRequestId != null))).map((a) => ({ ...a, deliveryRequestId: a.deliveryRequestId ?? null })) });
     },
     // `quotationId` is accepted by hrApi (sent as a multipart field when truthy) and threaded
     // through here; hardcoding `quotationId: null` would mean no mock-driven run could ever produce
@@ -15710,6 +16592,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       return delay({ attachment: structuredClone(attachment) });
     },
     fileUrl: (id) => `#mock-file-${id}`,
+    fileBlob: async () => new Blob(['mock'], { type: 'text/plain' }),
     async delete(id) {
       const user = requireSession();
       const idx = mockAttachments.findIndex((a) => a.id === Number(id));
@@ -15719,6 +16602,22 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       if (mockAttachments[idx].uploadedBy !== user.id) {
         requireAttachmentTicketAccess(mockAttachments[idx].ticketId, { write: true });
       }
+      // AttachmentController#delete: a round's files are frozen once sent, except the uploader's own extra file while SENT.
+      const owner = mockDeliveryRequests.find((r) => r.id === mockAttachments[idx].deliveryRequestId);
+      // The issued tax invoice: only the issuer who attached it, and only while the round is FORWARDED (requireInvoiceFileDeletable).
+      if (owner && mockAttachments[idx].attachType === 'INVOICE') {
+        if (mockAttachments[idx].uploadedBy !== user.id || !mockIsIssuer(user)) fail('ลบได้เฉพาะไฟล์ที่ตนเองแนบ', 403);
+        if (owner.status !== 'FORWARDED') fail('ยืนยันใบกำกับแล้ว ลบไฟล์ไม่ได้', 409);
+        mockAttachments.splice(idx, 1);
+        return delay({ ok: true });
+      }
+      const extra = mockAttachments[idx].attachType !== 'SYSTEM_DOC';
+      // While editable an extra file is its uploader's alone (the warehouse's photo is not sales' to remove).
+      if (owner && MOCK_ROUND_EDITABLE.includes(owner.status) && extra && mockAttachments[idx].uploadedBy !== user.id) {
+        fail('ลบได้เฉพาะไฟล์ที่ตนเองแนบ', 403);
+      }
+      const ownExtraOnSent = owner?.status === 'SENT' && mockAttachments[idx].uploadedBy === user.id && extra;
+      if (owner && !MOCK_ROUND_EDITABLE.includes(owner.status) && !ownExtraOnSent) fail('รอบนี้ส่งไปแล้ว ลบไฟล์ไม่ได้', 409);
       mockAttachments.splice(idx, 1);
       return delay({ ok: true });
     },
@@ -15843,16 +16742,21 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       return delay({ templates: mockNoteTemplates });
     },
 
-    async createDraft(ticketId, payload) {
+    async createDraft(ticketId, payload, { quotationId } = {}) {
       // Mirrors DepositNoticeService.createDraftFromQuotation: requireRole(SALES_ROLES) + requireTicketOwner.
       const user = hasRole('sales');
       const ticket = findTicketRaw(Number(ticketId));
       if (!actsAsOwner(ticket, user)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
-      requireNoIssuedDepositNotice(ticket.id);
-      // Phase 1 lifecycle gate (mirrors DepositNoticeService.createDraft).
+      // Phase 1 lifecycle gate (mirrors DepositNoticeService.createDraft); the confirm refuses a lost or paused deal itself.
       requireActive(ticket);
+      mockEnsureOrderConfirmed(ticket, null, user);
+      requireNoIssuedDepositNotice(ticket.id);
       if (!['approved', 'quotation_issued', 'document_issued'].includes(ticket.status)) fail('งานต้องได้รับการอนุมัติก่อน', 409);
       requireDepositNoticePath(ticket);
+      // The delivery request's chosen quotation (M10): it must be one of this deal's approved ones.
+      if (quotationId != null && mockApprovedQuotationsOf(Number(ticketId)).find((q) => q.id === Number(quotationId))?.depositBlockedReason !== null) {
+        fail('ใบเสนอราคานี้ใช้ออกใบแจ้งรับมัดจำไม่ได้', 409);
+      }
 
       // Legacy path: auto-build from approved ticket items (sales.ticket_item.approved_price — written only by the
       // @Deprecated, routeless TicketService.approve).
@@ -16126,6 +17030,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       const ticket = findTicketRaw(Number(ticketId));
       const user = requireRemainingInvoiceWriteGate(ticket);
       requireActive(ticket);
+      mockEnsureOrderConfirmed(ticket, null, user);
       if (ticket.status !== 'quotation_issued') {
         fail('ออกใบกำกับภาษีส่วนที่เหลือได้เฉพาะงานที่อยู่ในสถานะ quotation_issued เท่านั้น', 409);
       }

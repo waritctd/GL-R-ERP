@@ -8,6 +8,7 @@ import Ban from 'lucide-react/dist/esm/icons/ban.mjs';
 import BriefcaseBusiness from 'lucide-react/dist/esm/icons/briefcase-business.mjs';
 import Building2 from 'lucide-react/dist/esm/icons/building-2.mjs';
 import CalendarClock from 'lucide-react/dist/esm/icons/calendar-clock.mjs';
+import Camera from 'lucide-react/dist/esm/icons/camera.mjs';
 import Check from 'lucide-react/dist/esm/icons/check.mjs';
 import ChevronDown from 'lucide-react/dist/esm/icons/chevron-down.mjs';
 import ChevronLeft from 'lucide-react/dist/esm/icons/chevron-left.mjs';
@@ -20,6 +21,7 @@ import Clock3 from 'lucide-react/dist/esm/icons/clock-3.mjs';
 import Ellipsis from 'lucide-react/dist/esm/icons/ellipsis.mjs';
 import ExternalLink from 'lucide-react/dist/esm/icons/external-link.mjs';
 import Home from 'lucide-react/dist/esm/icons/home.mjs';
+import ImageIcon from 'lucide-react/dist/esm/icons/image.mjs';
 import Info from 'lucide-react/dist/esm/icons/info.mjs';
 import LayoutDashboard from 'lucide-react/dist/esm/icons/layout-dashboard.mjs';
 import LockKeyhole from 'lucide-react/dist/esm/icons/lock-keyhole.mjs';
@@ -28,6 +30,7 @@ import Package from 'lucide-react/dist/esm/icons/package.mjs';
 import LogOut from 'lucide-react/dist/esm/icons/log-out.mjs';
 import Mail from 'lucide-react/dist/esm/icons/mail.mjs';
 import Menu from 'lucide-react/dist/esm/icons/menu.mjs';
+import Minus from 'lucide-react/dist/esm/icons/minus.mjs';
 import Pencil from 'lucide-react/dist/esm/icons/pencil.mjs';
 import Phone from 'lucide-react/dist/esm/icons/phone.mjs';
 import Plus from 'lucide-react/dist/esm/icons/plus.mjs';
@@ -57,6 +60,8 @@ const icons = {
   briefcase: BriefcaseBusiness,
   building: Building2,
   calendar: CalendarClock,
+  camera: Camera,
+  image: ImageIcon,
   check: Check,
   chevronDown: ChevronDown,
   chevronLeft: ChevronLeft,
@@ -80,6 +85,7 @@ const icons = {
   logout: LogOut,
   mail: Mail,
   menu: Menu,
+  minus: Minus,
   pencil: Pencil,
   phone: Phone,
   plus: Plus,

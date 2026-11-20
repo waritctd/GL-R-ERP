@@ -12,7 +12,9 @@ import { queryKeys } from '../../api/queryKeys.js';
 // depositPercent is not sent on either branch: the backend picks the new draft's percent
 // (DepositNoticeService.createDraftFromQuotation; findGoverningQuotation, #1170).
 // `noteTemplates` (already loaded) are optional.
-export async function createDepositNoticeDraft(ticketId, noteTemplates) {
+// `quotationId` (optional): the quotation a delivery request chose; only the ticket-level route takes it (the
+// pricing-request route drafts from its own accepted quotation).
+export async function createDepositNoticeDraft(ticketId, noteTemplates, quotationId = null) {
   const { items: pricingRequests } = await api.pricingRequests.listForTicket(ticketId);
   const acceptedPricingRequestId = (pricingRequests ?? [])
     .find((pr) => pr.status === 'QUOTATION_ACCEPTED')?.id ?? null;
@@ -20,9 +22,10 @@ export async function createDepositNoticeDraft(ticketId, noteTemplates) {
     return api.pricingRequests.createDepositNoticeFromQuotation(acceptedPricingRequestId, {});
   }
   // No templates (the deal page): omit `notes` and the backend applies the default notes.
-  return api.depositNotices.createDraft(ticketId, noteTemplates
-    ? { notes: noteTemplates.filter((t) => t.defaultSelected).map((t) => t.text) }
-    : {});
+  const body = noteTemplates ? { notes: noteTemplates.filter((t) => t.defaultSelected).map((t) => t.text) } : {};
+  return quotationId != null
+    ? api.depositNotices.createDraft(ticketId, body, { quotationId })
+    : api.depositNotices.createDraft(ticketId, body);
 }
 
 /** The ticket's deposit-notice list: one key + fetcher shared by the deal page's main button and its reads. */

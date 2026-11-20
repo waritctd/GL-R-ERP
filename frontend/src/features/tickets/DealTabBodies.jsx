@@ -62,12 +62,14 @@ export function DealShipTab({ orderSwitcher = null, fulfilment }) {
   );
 }
 
-/** ไฟล์: the document register without its quotation list, then the attachments panel. */
-export function DealFilesTab({ orderSwitcher = null, register, attachments = null }) {
+/** ไฟล์: the order chips, the document register without its quotation list, one block per delivery round, then the other files.
+ * On ทั้งโครงการ only `rounds` (each order's round files, stacked) shows. */
+export function DealFilesTab({ orderSwitcher = null, register = null, rounds = null, attachments = null }) {
   return (
     <div className="flex min-w-0 flex-col gap-4">
       {orderSwitcher}
       {register}
+      {rounds}
       {attachments}
     </div>
   );

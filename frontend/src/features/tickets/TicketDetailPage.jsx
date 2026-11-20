@@ -39,6 +39,8 @@ import { DealDocumentRegister, canReadStoredImportRequests } from './DealDocumen
 import { ProcurementSourceDialog } from './ProcurementSourceDialog.jsx';
 import { RemainingInvoiceDialog } from './RemainingInvoiceDialog.jsx';
 import { DealFulfilmentPanel } from './DealFulfilmentPanel.jsx';
+import { DeliveryRoundsPanel } from './delivery/DeliveryRoundsPanel.jsx';
+import { deliveryRoundsQueryOptions, requestActionLabel, shipPrimaryOf } from './delivery/deliveryRoundsQuery.js';
 import { DealHistoryPanel } from './DealHistoryPanel.jsx';
 import { DealLegacyQuotations } from './DealLegacyQuotations.jsx';
 import { DealPaymentSection } from './DealPaymentSection.jsx';
@@ -68,6 +70,7 @@ import { AddOnOrderSheet } from './AddOnOrderSheet.jsx';
 import { BidOutcomeModal } from './BidOutcomeModal.jsx';
 import { canOpenAddOn } from './orderChain.js';
 import { OrderSwitcher, useProjectOrders } from './OrderSwitcher.jsx';
+import { RoundFilesSection } from './delivery/RoundFilesSection.jsx';
 import { ProjectOrdersCard, ProjectQuotationsByOrder, ProjectTotalsTiles } from './ProjectOrdersCard.jsx';
 import {
   buyerParties, isAwaitingBidOutcome, isBiddingParty,
@@ -474,6 +477,15 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // tab's per-order lists. Same audience as the whole-deal read (sales, sales_manager, ceo).
   const ordersQuery = useProjectOrders(ticketId, canViewDealTracking && !!ticket);
   const projectOrders = ordersQuery.data?.orders ?? [];
+  // The ส่งของ tab's one primary is the delivery-rounds panel's request action when this viewer has it (design M10); the
+  // page's stage next-step stays on the stage panel and ภาพรวม. Same query key as the panel, so one fetch.
+  const deliveryRoundsQuery = useQuery({
+    ...deliveryRoundsQueryOptions(ticketId),
+    enabled: canViewDealTracking && !!ticketId && !!ticket && activeTab === 'ship',
+  });
+  const shipPrimary = activeTab === 'ship' ? shipPrimaryOf(deliveryRoundsQuery.data) : null;
+  const deliveryRequestAvailable = shipPrimary?.kind === 'request';
+  const deliveryRecordRound = shipPrimary?.kind === 'record' ? shipPrimary.round : null;
   const showOrderSwitcher = projectOrders.length > 1;
   const allScope = searchParams.get('scope') === 'all';
   const orderSwitcherFor = (tab, allLabel = null) => (showOrderSwitcher ? (
@@ -1017,6 +1029,10 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   const inForceQuotationCount = (dealQuotationsQuery.data ?? [])
     .filter((q) => !['SUPERSEDED', 'CANCELLED'].includes(q.docStatus)).length;
   const fileCount = (attachmentsQuery.data ?? []).length;
+  // Round files (rows with deliveryRequestId) show grouped by round; the flat lists keep the deal's own files only.
+  const ownFiles = (attachments ?? []).filter((a) => a.deliveryRequestId == null);
+  // The rounds GET is the server's read rule (it refuses import); the section renders nothing for a refused viewer.
+  const canViewRoundFiles = activeTab === 'files' && user?.role !== 'import';
   const tabItemsWithCounts = tabItems.map((tab) => {
     const count = { quote: inForceQuotationCount, files: fileCount }[tab.id];
     return count > 0 ? { ...tab, badge: count, badgeClassName: 'mobile:hidden' } : tab;
@@ -1449,7 +1465,11 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       // Every IN_PAGE_JUMP_TARGET id lives inside a tab; JUMP_TARGET_TAB names which, so runOnTab can
       // switch there before scrolling.
       stickyPrimaryAction = (
-        <Button type="button" variant="primary" data-testid="ticket-primary-action" data-action={actionKey} onClick={() => runOnTab(JUMP_TARGET_TAB[jumpId] ?? activeTab, () => scrollToSection(jumpId))}>
+        <Button type="button" variant="primary" data-testid="ticket-primary-action" data-action={actionKey} onClick={() => runOnTab(JUMP_TARGET_TAB[jumpId] ?? activeTab, () => (
+          // บันทึกส่งมอบ opens the record sheet itself (the round's, or the no-invoice one): the delivery panel has no button of its own.
+          actionKey === 'record_delivery' || actionKey === 'recordDelivery'
+            ? setSearchParams((prev) => { const next = new URLSearchParams(prev); next.set('record', 'next'); return next; })
+            : scrollToSection(jumpId)))}>
           {workStateAction.label}
           <Icon name="chevronRight" size={14} />
         </Button>
@@ -1514,7 +1534,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // table's step (paused / lost: the state the resume / reopen button acts on; the tab button: where that step lives).
   // For the four server-gated buttons stickyPrimaryLabel is the explanatory sentence, already said by bannerText, so the
   // title is the button's own label instead.
-  const cardTitle = !stickyPrimaryAction ? nextStep.title
+  let cardTitle = !stickyPrimaryAction ? nextStep.title
     : stickyPrimaryAction === primaryAction ? primaryActionLabel
       : (stickyPrimaryLabel ?? nextStep.title);
   if (!cardAction && nextStep.kind === 'resume' && canResumeDeal) {
@@ -1545,6 +1565,36 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       <Button type="button" variant="secondary" data-testid="next-step-tab" onClick={() => setActiveTab(nextStep.tab)}>
         {NEXT_STEP_TAB_LABEL[nextStep.tab]}
         <Icon name="chevronRight" size={14} />
+      </Button>
+    );
+  }
+
+  if (deliveryRequestAvailable) {
+    cardTitle = requestActionLabel(deliveryRoundsQuery.data);
+    cardAction = (
+      <Button
+        type="button"
+        variant="primary"
+        data-testid="ticket-primary-action"
+        data-action="request_delivery"
+        onClick={() => setSearchParams((prev) => { const next = new URLSearchParams(prev); next.set('request', 'open'); return next; })}
+      >
+        {requestActionLabel(deliveryRoundsQuery.data)}
+      </Button>
+    );
+  }
+
+  if (deliveryRecordRound) {
+    cardTitle = 'บันทึกการส่งสินค้า';
+    cardAction = (
+      <Button
+        type="button"
+        variant="primary"
+        data-testid="ticket-primary-action"
+        data-action="record_delivery"
+        onClick={() => setSearchParams((prev) => { const next = new URLSearchParams(prev); next.set('record', String(deliveryRecordRound.id)); return next; })}
+      >
+        บันทึกการส่งสินค้า
       </Button>
     );
   }
@@ -1823,6 +1873,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
               />
             )}
             designerName={designerNames.join(', ') || summary.designerName || null}
+            prePortal={deliveryRoundsQuery.data?.order?.prePortal === true}
             dealValue={sections.payment ? summary.amountPayable ?? null : null}
             winProbability={canViewDealTracking ? summary.effectiveWinProbability ?? null : null}
             awaitingBid={awaitingBid ? { projectName: summary.projectName, count: buyerParties(parties).length } : null}
@@ -2089,10 +2140,20 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
             // trackers (read-only here, ดูอย่างเดียว) and the delivery table. id (DOM): the primary button's
             // fulfilment jump target.
             <div id="deal-fulfilment-panel" tabIndex={-1} className="mobile:scroll-mt-[420px] outline-none">
+              {sections.delivery && canViewDealTracking ? <div className="mb-4"><DeliveryRoundsPanel
+                ticketId={ticketId}
+                showRequestButton={!deliveryRequestAvailable}
+                hostRecordRoundId={deliveryRecordRound?.id ?? null}
+                hostHasPrimary={Boolean(shipPrimary)}
+                canRecordNoInvoice={actionNames.has('RECORD_PARTIAL_DELIVERY')}
+                showToast={showToast}
+                onCreateIr={() => fulfilmentPanelRef.current?.createIrDrafts()}
+              /></div> : null}
               {sections.delivery ? (
                 <DealFulfilmentPanel
                   ref={fulfilmentPanelRef}
                   ticketId={ticketId}
+                  prePortal={deliveryRoundsQuery.data?.order?.prePortal === true}
                   user={user}
                   summary={summary}
                   items={items}
@@ -2100,8 +2161,6 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                   procurementSource={procurementSource}
                   onChooseProcurementSource={() => setProcurementDialogOpen(true)}
                   showToast={showToast}
-                  // วันที่ส่ง's earliest day is the order-confirmation day (slice 6d fix round 1, L1).
-                  events={events}
                 />
               ) : null}
             </div>
@@ -2111,8 +2170,11 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
 
       <TabPanel id="files" idPrefix="ticket-detail" active={activeTab === 'files'}>
         <DealFilesTab
-          orderSwitcher={orderSwitcherFor('files')}
-          register={(
+          orderSwitcher={orderSwitcherFor('files', 'ทั้งโครงการ')}
+          rounds={canViewRoundFiles ? (showOrderSwitcher && allScope
+            ? projectOrders.map((o) => <RoundFilesSection key={o.ticketId} ticketId={o.ticketId} heading={`ออเดอร์ ${o.orderNo}`} withOwnFiles />)
+            : <RoundFilesSection ticketId={ticketId} />) : null}
+          register={showOrderSwitcher && allScope ? null : (
             // The old เอกสาร tab's document register minus the quotation family (now on ใบเสนอราคา): deposit
             // notice, remaining invoice, ใบขอซื้อ, attachments — each family behind its own gate inside.
             <DealDocumentRegister
@@ -2128,16 +2190,16 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
               pricingRequests={pricingRequests}
               pricingRequestsLoading={canViewPricingRequests && pricingRequestsQuery.isLoading}
               legacyQuotations={sortedQuotations}
-              attachments={attachments}
+              attachments={ownFiles}
               attachLoading={attachLoading}
             />
           )}
-          attachments={canViewDocumentsTab ? (
+          attachments={canViewDocumentsTab && !(showOrderSwitcher && allScope) ? (
             // DealAttachmentsPanel (was in ประวัติ) behind its INNER condition `canViewDocumentsTab`
             // (createdById/assignedToId participant OR ROLE_PERMISSIONS.canViewTicketDocuments). `canUpload` /
             // `notTerminal` reproduce the original `!TERMINAL.includes(st) && ...` guards.
             <DealAttachmentsPanel
-              attachments={attachments}
+              attachments={ownFiles}
               attachLoading={attachLoading}
               canManageDocuments={canManageDocuments}
               uploadingFile={uploadingFile}

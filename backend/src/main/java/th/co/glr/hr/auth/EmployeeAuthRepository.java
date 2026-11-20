@@ -176,6 +176,25 @@ public class EmployeeAuthRepository {
         return Boolean.TRUE.equals(granted);
     }
 
+    /** The per-person invoice-issuer grant ({@code hr.employee.can_issue_tax_invoice}, any role): a live read of an active
+     * row, never cached on the session. */
+    public boolean canIssueTaxInvoice(long employeeId) {
+        return canIssueTaxInvoice(jdbc, employeeId);
+    }
+
+    /** The import role (division PCIM, as {@code DivisionAccessPolicy#roleFor}) stays price-free: the grant gives it nothing,
+     * so it is never counted as an issuer. Needs {@code d} = hr.division. */
+    public static final String NOT_IMPORT_DIVISION =
+        "LOWER(TRIM(COALESCE(NULLIF(TRIM(d.source_code), ''), split_part(COALESCE(d.name_th, ''), '-', 1)))) <> 'pcim'";
+
+    /** The one SQL copy, for repositories that already hold a jdbc template (TicketRepository). */
+    public static boolean canIssueTaxInvoice(NamedParameterJdbcTemplate jdbc, long employeeId) {
+        return Boolean.TRUE.equals(jdbc.queryForObject("""
+            SELECT EXISTS (SELECT 1 FROM hr.employee e LEFT JOIN hr.division d ON d.division_id = e.division_id
+                            WHERE e.employee_id = :id AND e.is_active AND e.can_issue_tax_invoice AND """
+                + " " + NOT_IMPORT_DIVISION + ")", Map.of("id", employeeId), Boolean.class));
+    }
+
     /** Stores a user-chosen password and clears the forced-change flag. */
     public void updatePassword(long employeeId, String passwordHash) {
         jdbc.update("""

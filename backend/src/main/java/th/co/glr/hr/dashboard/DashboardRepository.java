@@ -187,8 +187,8 @@ public class DashboardRepository {
     }
 
     private static final java.time.ZoneId BANGKOK = java.time.ZoneId.of("Asia/Bangkok");
-    /** The Bangkok month window on receipts, shared by every "cash received this month" figure. */
-    private static final String RECEIVED_IN_MONTH = "received_at >= :from AND received_at < :to";
+    /** The Bangkok month window on receipts, shared by every "cash received this month" figure. Money a rep recorded as received before the portal (PRE_PORTAL) is not this month's collection. */
+    private static final String RECEIVED_IN_MONTH = "received_at >= :from AND received_at < :to AND source <> 'PRE_PORTAL'";
 
     private static MapSqlParameterSource monthWindow(LocalDate monthStart) {
         return new MapSqlParameterSource()

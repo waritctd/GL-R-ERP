@@ -14,6 +14,7 @@ import { cn } from '../../utils/cn.js';
 import { dealStageLabel, formatBangkokTime, formatThaiDate } from '../../utils/format.js';
 import { InvoiceFromDealForm } from '../commissions/InvoiceFromDealForm.jsx';
 import { emptyInvoiceForm, prepareInvoiceAttachment, toCreateFromDealPayload } from '../commissions/invoiceFromDeal.js';
+import { DeliveryRoundsPanel } from '../tickets/delivery/DeliveryRoundsPanel.jsx';
 import { OrderSwitcher, useProjectOrders } from '../tickets/OrderSwitcher.jsx';
 import { findStage, stageIndexIn, useStageCatalog } from '../tickets/stageCatalog.js';
 import {
@@ -446,6 +447,9 @@ export function FinanceDealPage({ user }) {
           />
         </section>
       ) : null}
+      {/* ส่งของ: the order's delivery rounds. Account sees them (view only); an account person who holds the invoice-issuer
+          grant also gets the tax-invoice step here, where the bell notice lands. Nothing for an order with no rounds. */}
+      <DeliveryRoundsPanel ticketId={deal.id} dealless quiet />
       <MilestoneSections deal={deal} onError={setDownloadError} />
 
       <CommentsSection deal={deal} onPosted={applyDeal} />

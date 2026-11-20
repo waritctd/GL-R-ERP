@@ -192,6 +192,8 @@ class DeliveryBackDateIntegrationTest extends AbstractPostgresIntegrationTest {
             new StockReservationRequest(List.of(
                 new StockReservationRequest.Line(onlyItemId(ticketId), new BigDecimal("10.00"), "ทดสอบ"))),
             ceoUser);
+        // The tax-invoice rule: goods leave only against an INVOICED round.
+        DeliveryRoundFixture.ensureInvoicedRound(jdbc, ticketId);
         return ticketId;
     }
 

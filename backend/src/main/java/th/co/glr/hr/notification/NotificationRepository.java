@@ -170,6 +170,16 @@ public class NotificationRepository {
         // would fall through to the generic "อัปเดตสถานะคำขอราคา", which reads as routine pipeline noise; the whole
         // point of this notification is that it is not.
         Map.entry("STOCK_RESERVED", "พนักงานขายประกาศสินค้าจากสต็อกเอง"),
+        // DeliveryRequestService#send: the sales rep asks the warehouse to check the round's documents.
+        Map.entry("DELIVERY_REQUEST_SENT", "ตรวจเอกสารขอออกใบกำกับ"),
+        // DeliveryRequestService#forward / #sendBack: the warehouse's two outcomes.
+        Map.entry("DELIVERY_REQUEST_FORWARDED", "ออกใบกำกับภาษี รอบส่งนี้รอคุณ"),
+        Map.entry("DELIVERY_REQUEST_RETURNED", "คลังส่งเอกสารกลับ แก้ไขแล้วส่งอีกครั้ง"),
+        // DeliveryRequestService#confirmInvoice: the round's tax invoice is attached and its money recorded.
+        Map.entry("TAX_INVOICE_CONFIRMED", "ออกใบกำกับภาษีแล้ว ส่งของได้"),
+        // TicketService#recordDeliveryInternal: goods recorded against a round by someone other than the deal's owner.
+        Map.entry("DELIVERY_RECORDED", "บันทึกการส่งของแล้ว"),
+        Map.entry("TAX_INVOICE_VOIDED", "ยกเลิกใบกำกับภาษี รอบส่งนี้รอออกใบกำกับใหม่"),
         // profile/ProfileRequestService#create — the HR-facing submit notification only.
         // The employee-facing approve/reject notification does NOT read this map: routing it through
         // notifyEmployeeOfProfileRequest -> notifyEmployeeAt -> SalesNotificationMailRouter would
@@ -200,6 +210,7 @@ public class NotificationRepository {
         Map.entry("DELIVERY_COMPLETED", "ส่งสินค้าครบแล้ว — รอฝ่ายบัญชีดำเนินการ"),
         Map.entry("REMAINING_INVOICE_ISSUED", "ออกใบแจ้งหนี้ (ยอดคงเหลือ) แล้ว — รอยืนยันรับชำระ"),
         Map.entry("CLOSE_READY_FOR_CEO", "ดีลพร้อมปิด — รอ CEO ตรวจสอบ"),
+        Map.entry("DEAL_PRE_PORTAL", "งานที่เดินมาก่อนใช้ระบบ — รับมัดจำแล้วนอกระบบ"),
         Map.entry("ORDER_CONFIRMED_NO_DEPOSIT", "ยืนยันคำสั่งซื้อแล้ว — ดีลนี้ไม่เก็บมัดจำ"),
         // Payment and deal-lifecycle notifications (see TicketEventKind).
         Map.entry("PAYMENT_RECEIVED", "ฝ่ายบัญชีรับชำระเงินเพิ่มแล้ว"),
@@ -231,6 +242,18 @@ public class NotificationRepository {
      * (/quotations/{id}). */
     public void notifyEmployeeAtLink(long employeeId, String type, String message, String link) {
         notifyEmployeeAt(employeeId, type, message, link);
+    }
+
+    /** Every active employee holding the can_issue_tax_invoice grant (read live, any role but import). */
+    public List<Long> taxInvoiceIssuerIds() {
+        return jdbc.queryForList("SELECT e.employee_id FROM hr.employee e LEFT JOIN hr.division d ON d.division_id = e.division_id"
+            + " WHERE e.is_active AND e.can_issue_tax_invoice AND " + th.co.glr.hr.auth.EmployeeAuthRepository.NOT_IMPORT_DIVISION,
+            Map.of(), Long.class);
+    }
+
+    /** Tells each of {@code issuerIds} (from {@link #taxInvoiceIssuerIds}, the actor already left out). */
+    public void notifyTaxInvoiceIssuers(List<Long> issuerIds, String type, String message, String link) {
+        issuerIds.forEach(id -> notifyEmployeeAt(id, type, message, link));
     }
 
     /** Quotation v2 counterpart to {@link #notifyEmployeeAtLink}, for {@link #notifyByRole}. */

@@ -320,6 +320,45 @@ class DealQuotationUndoOrderConfirmationIntegrationTest extends DirectQuotationD
     }
 
     // ───────────────────────────────────────────────────────────────────────────────────
+    // Delivery rounds (V236): a sent round holds lines on the items the undo deletes
+    // ───────────────────────────────────────────────────────────────────────────────────
+
+    @Test
+    void sentDeliveryRound_refusesTheUndoWithItsOwnReason() {
+        Confirmed c = confirmedDeal();
+        long round = insertRound(c.deal(), "SENT");
+        jdbc.update("INSERT INTO sales.delivery_request_line (delivery_request_id, item_id, qty) "
+            + "SELECT :r, item_id, 1 FROM sales.ticket_item WHERE ticket_id = :t LIMIT 1", Map.of("r", round, "t", c.deal()));
+        assertThatThrownBy(() -> confirmer.undoOrderConfirmation(c.quotation().id(), "กดผิด", null, salesActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> {
+                assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
+                assertThat(e.getMessage()).contains("ส่งเรื่องขอออกใบกำกับ");
+            });
+        assertThat(itemCount(c.deal())).as("nothing was deleted").isPositive();
+    }
+
+    @Test
+    void draftDeliveryRound_isDroppedWithTheUndo_andItsFilesStayOnTheDeal() {
+        Confirmed c = confirmedDeal();
+        long round = insertRound(c.deal(), "DRAFT");
+        jdbc.update("INSERT INTO sales.attachment (ticket_id, file_name, file_path, attach_type, uploaded_by, delivery_request_id,"
+            + " uploader_side) VALUES (:t, 'slip.jpg', '/x/slip.jpg', 'OTHER', :u, :r, 'SALES')",
+            Map.of("t", c.deal(), "u", salesActor.id(), "r", round));
+
+        confirmer.undoOrderConfirmation(c.quotation().id(), "กดผิด", null, salesActor);
+
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sales.delivery_request WHERE ticket_id = :t",
+            Map.of("t", c.deal()), Integer.class)).isZero();
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sales.attachment WHERE ticket_id = :t AND delivery_request_id IS NULL",
+            Map.of("t", c.deal()), Integer.class)).as("the file is kept, unlinked").isEqualTo(1);
+    }
+
+    private long insertRound(long deal, String status) {
+        return jdbc.queryForObject("INSERT INTO sales.delivery_request (ticket_id, round_no, status) VALUES (:t, 1, :s)"
+            + " RETURNING delivery_request_id", Map.of("t", deal, "s", status), Long.class);
+    }
+
+    // ───────────────────────────────────────────────────────────────────────────────────
     // Helpers
     // ───────────────────────────────────────────────────────────────────────────────────
 

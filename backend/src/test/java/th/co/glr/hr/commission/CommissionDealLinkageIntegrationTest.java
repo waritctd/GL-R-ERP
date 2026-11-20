@@ -1,5 +1,6 @@
 package th.co.glr.hr.commission;
 
+import th.co.glr.hr.ticket.DeliveryRoundFixture;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
@@ -309,6 +310,7 @@ class CommissionDealLinkageIntegrationTest extends AbstractPostgresIntegrationTe
         // V184: completeDelivery's gate (canWriteDelivery) transferred from {import,ceo,owning-rep} to {ceo,
         // owning-rep} only -- import no longer completes delivery. salesActor (the deal owner) is used here instead of
         // importActor; this fixture is not testing delivery authz.
+        DeliveryRoundFixture.ensureInvoicedRound(jdbc, ticketId);
         TicketDto delivered = ticketService.completeDelivery(
             ticketId, new CompleteDeliveryRequest("ส่งครบ", "คุณลูกค้า"), salesActor);
         assertThat(delivered.summary().fulfillmentStatus()).isEqualTo(FulfilmentStatus.FULLY_DELIVERED);

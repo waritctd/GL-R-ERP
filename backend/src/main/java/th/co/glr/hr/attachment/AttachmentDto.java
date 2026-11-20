@@ -11,5 +11,7 @@ public record AttachmentDto(
     String mimeType,
     Long fileSize,
     long uploadedBy,
-    Instant uploadedAt
+    Instant uploadedAt,
+    /** Set for a file attached to a delivery round (V236), else null: the ไฟล์ tab groups by it. */
+    Long deliveryRequestId
 ) {}

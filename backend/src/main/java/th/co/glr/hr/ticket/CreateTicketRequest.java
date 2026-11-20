@@ -51,17 +51,30 @@ public record CreateTicketRequest(
      * board / forecast's LAST value fallback (after a quotation and imported_value). > 0, and NUMERIC(14,2) — the
      * precision of imported_value (V215). Editable afterwards through PUT /tracking. */
     @DecimalMin(value = "0", inclusive = false) @Digits(integer = 12, fraction = 2) BigDecimal estimatedValue,
-    /** Optional เริ่มที่: {@code LEAD_APPROACH} (S1, the default) or {@code SPEC_APPROVED} (S2). Anything else is a
-     * 400; starting at S2 needs the same stage write access as moving a deal there by hand. */
-    String startStage
+    /** Optional เริ่มที่: {@code LEAD_APPROACH} (S1, the default), {@code SPEC_APPROVED} (S2) or {@code PROCUREMENT}
+     * (สั่งซื้อแล้ว: a deal ordered before the portal, flagged {@code pre_portal}). Anything else is a 400; starting
+     * past S1 needs the same stage write access as moving a deal to S2 by hand. */
+    String startStage,
+    /** Required when {@code startStage} is PROCUREMENT: the deposit (THB, 0 or more) the customer already paid outside the
+     * portal, written as one DEPOSIT receipt of source PRE_PORTAL when above 0. Ignored for other starts. */
+    @DecimalMin("0") @Digits(integer = 12, fraction = 2) BigDecimal preDeposit
 ) {
+    /** The fifteen-argument shape before preDeposit. */
+    public CreateTicketRequest(String title, String priority, String customerName, Long customerId,
+                               Long projectId, Long contactId, String note, String entryChannel,
+                               List<TicketItemRequest> items, LocalDate nextFollowUpAt, Boolean quotationOnly,
+                               Long ownerEmployeeId, String designerName, BigDecimal estimatedValue, String startStage) {
+        this(title, priority, customerName, customerId, projectId, contactId, note, entryChannel,
+            items, nextFollowUpAt, quotationOnly, ownerEmployeeId, designerName, estimatedValue, startStage, null);
+    }
+
     /** The twelve-argument shape before the short create form's fields. */
     public CreateTicketRequest(String title, String priority, String customerName, Long customerId,
                                Long projectId, Long contactId, String note, String entryChannel,
                                List<TicketItemRequest> items, LocalDate nextFollowUpAt, Boolean quotationOnly,
                                Long ownerEmployeeId) {
         this(title, priority, customerName, customerId, projectId, contactId, note, entryChannel,
-            items, nextFollowUpAt, quotationOnly, ownerEmployeeId, null, null, null);
+            items, nextFollowUpAt, quotationOnly, ownerEmployeeId, null, null, null, null);
     }
 
     /** The pre-owner eleven-argument shape: the actor owns the deal. */

@@ -1,13 +1,15 @@
 import { useMemo, useState } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Link, useSearchParams } from 'react-router-dom';
-import { api } from '../../api/index.js';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { api, ROLE_PERMISSIONS } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { Button, buttonVariants } from '../../components/common/Button.jsx';
 import { DataTable } from '../../components/common/DataTable.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { PageStack } from '../../components/common/Layout.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
+import { DealPickSheet } from '../tickets/delivery/DealPickSheet.jsx';
+import { TicketCreateModal } from '../tickets/TicketCreateModal.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { ApprovalBasisPill } from './ApprovalBasisPill.jsx';
 import { cn } from '../../utils/cn.js';
@@ -586,6 +588,19 @@ function QuotationCard({ row }) {
  */
 export function QuotationListPage({ user }) {
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
+  // ขอออกใบกำกับ / ส่งของ: pick a deal (a sheet), or make a new one for work ordered before the portal.
+  const [picking, setPicking] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const canRequestInvoice = ROLE_PERMISSIONS.canCreateTickets.includes(user?.role);
+  const createDeal = useMutation({
+    mutationFn: (payload) => api.tickets.create(payload),
+    onSuccess: (response) => {
+      queryClient.invalidateQueries({ queryKey: ['tickets'] });
+      const id = response?.ticket?.summary?.id;
+      if (id != null) navigate(`/tickets/${id}?tab=ship&request=open`);
+    },
+  });
   const isApprover = canApproveDealQuotation(user);
 
   // The active tab lives in the URL (`?status=`), not in component state, so a tab is linkable,
@@ -703,6 +718,11 @@ export function QuotationListPage({ user }) {
                 <Icon name="plus" size={14} />
                 สร้างใบเสนอราคา
               </Link>
+            ) : null}
+            {canRequestInvoice ? (
+              <Button type="button" variant="secondary" size="sm" data-testid="request-invoice-button" onClick={() => setPicking(true)}>
+                ขอออกใบกำกับ / ส่งของ
+              </Button>
             ) : null}
             <Button
               type="button"
@@ -866,6 +886,17 @@ export function QuotationListPage({ user }) {
           emptyState={{ icon: 'fileText', title: 'ไม่มีใบเสนอราคาในเงื่อนไขนี้' }}
         />
       </div>
+      {picking ? (
+        <DealPickSheet onClose={() => setPicking(false)} onCreateNew={() => { setPicking(false); setCreating(true); }} />
+      ) : null}
+      {creating ? (
+        <TicketCreateModal
+          user={user}
+          initialStartStage="PROCUREMENT"
+          onClose={() => setCreating(false)}
+          onSubmit={(payload) => createDeal.mutateAsync(payload)}
+        />
+      ) : null}
     </PageStack>
   );
 }

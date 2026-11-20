@@ -112,6 +112,14 @@ public class ImportRequestService {
     private final TicketService ticketService;
     private final NotificationRepository notifications;
 
+    private th.co.glr.hr.deliveryrequest.PrePortal prePortal;
+
+    /** Setter-injected so hand-wired tests are unaffected. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void wirePrePortal(th.co.glr.hr.deliveryrequest.PrePortal prePortal) {
+        this.prePortal = prePortal;
+    }
+
     public ImportRequestService(ImportRequestQueryRepository repository,
                                 ImportRequestRenderer renderer,
                                 ImportRequestRepository stored,
@@ -279,6 +287,9 @@ public class ImportRequestService {
                                                UserPrincipal actor) {
         requireTicket(ticketId); // 404 first
         requireFullWrite(ticketId, actor);
+        if (prePortal != null) {
+            prePortal.ensureOrderConfirmed(ticketId, null, actor); // an old deal's order is confirmed by its first IR; before the row lock
+        }
         // Row lock, then re-read the deal: an undo of the order confirmation (DealQuotationService#undoOrderConfirmation)
         // holds this lock, so a create that checked the state without it could survive the undo. Row lock only.
         tickets.lockTicketForUpdate(ticketId);

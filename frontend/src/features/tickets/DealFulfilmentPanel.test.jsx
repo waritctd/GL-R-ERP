@@ -4,7 +4,6 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { DealFulfilmentPanel } from './DealFulfilmentPanel.jsx';
 import { api } from '../../api/index.js';
-import { addDaysIso, bangkokTodayIso } from '../../utils/format.js';
 
 globalThis.React = React;
 
@@ -327,6 +326,482 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
       await screen.findByTestId(`ir-factory-card-11`);
       expect(screen.queryByTestId('ir-footer-open-11')).toBeNull();
     });
+
+    // NewFactoryCountryModal's `entries` state is seeded once from `factoryNames` via useState's lazy
+    // initializer and does not re-derive when the PROP changes. A retry with a DIFFERENT (wider)
+    // missing-factory set must not read `entries[newName]` (undefined, no optional chaining at the
+    // `<select>`'s `value={entries[name].countryCode}`) and crash. Keying the modal by the retry key
+    // remounts it fresh.
+    it('does not crash when a retry 409s back with a DIFFERENT (wider) missing-factory set', async () => {
+      api.storedImportRequests.createDrafts
+        .mockRejectedValueOnce(Object.assign(new Error('กรุณาระบุประเทศให้กับโรงงานใหม่: Rex Ceramics'), { status: 409 }))
+        .mockRejectedValueOnce(Object.assign(new Error('กรุณาระบุประเทศให้กับโรงงานใหม่: Rex Ceramics, New Factory'), { status: 409 }));
+      renderPanel(OWNER, []);
+      await createIrAndConfirm();
+
+      const select = await screen.findByLabelText(/^ประเทศ/);
+      fireEvent.change(select, { target: { value: 'CN' } });
+      const submit = await screen.findByTestId('new-factory-country-submit');
+      await waitFor(() => expect(submit.disabled).toBe(false));
+      fireEvent.click(submit);
+
+      await waitFor(() => expect(api.storedImportRequests.createDrafts).toHaveBeenCalledTimes(2));
+      // Both factories from the WIDER retry set must render their own country picker — this would throw reading
+      // `entries['New Factory']` off stale state without the remount.
+      expect(await screen.findAllByLabelText(/^ประเทศ/)).toHaveLength(2);
+      expect(screen.getByText('New Factory')).not.toBeNull();
+    });
+  });
+
+  describe('CEO-only footer', () => {
+    it('CEO sees the footer edit control on an issued row', async () => {
+      renderPanel(CEO, [issuedRow()]);
+      expect(await screen.findByTestId('ir-footer-open-11')).not.toBeNull();
+    });
+
+    it('the owning sales rep does not see the footer edit control', async () => {
+      renderPanel(OWNER, [issuedRow()]);
+      await screen.findByTestId(`ir-factory-card-11`);
+      expect(screen.queryByTestId('ir-footer-open-11')).toBeNull();
+    });
+
+    it('import does not see the footer edit control', async () => {
+      renderPanel(IMPORT, [issuedRow()]);
+      await screen.findByTestId(`ir-factory-card-11`);
+      expect(screen.queryByTestId('ir-footer-open-11')).toBeNull();
+    });
+  });
+
+  describe('mark-sent', () => {
+    // The order email is import's job (งานนำเข้า / import deal page); the sales deal tab shows none of it.
+    it('the owning sales rep: the factory card has no order-email button and no "อีเมลสั่งซื้อ:" line', async () => {
+      renderPanel(OWNER, [issuedRow()]);
+      await screen.findByTestId('ir-factory-card-11');
+      expect(screen.queryByTestId('ir-email-open-11')).toBeNull();
+      expect(screen.queryByText(/อีเมลสั่งซื้อ/)).toBeNull();
+    });
+
+    it('CEO keeps the order email on the deal tab (the ruling is for the sales rep only)', async () => {
+      renderPanel(CEO, [issuedRow()]);
+      expect((await screen.findByTestId('ir-email-open-11')).textContent).toBe('อีเมลสั่งซื้อ');
+    });
+
+    it('sales_manager (read-only) sees no email-edit control', async () => {
+      renderPanel(SALES_MANAGER, [issuedRow()]);
+      await screen.findByTestId('ir-factory-card-11');
+      expect(screen.queryByTestId('ir-email-open-11')).toBeNull();
+    });
+  });
+
+  describe('lead-time edit', () => {
+    it('the owning rep can edit lead time on a DRAFT row', async () => {
+      api.storedImportRequests.update.mockResolvedValue({ importRequest: draftRow({ leadTimeMinDays: 20, leadTimeMaxDays: 30 }) });
+      renderPanel(OWNER, [draftRow()]);
+      await screen.findByTestId('ir-factory-card-10');
+      fireEvent.change(screen.getByTestId('ir-lead-min-10'), { target: { value: '20' } });
+      fireEvent.change(screen.getByTestId('ir-lead-max-10'), { target: { value: '30' } });
+      fireEvent.click(screen.getByTestId('ir-lead-save-10'));
+      await waitFor(() => expect(api.storedImportRequests.update)
+        .toHaveBeenCalledWith(10, { leadTimeMinDays: 20, leadTimeMaxDays: 30 }));
+    });
+
+    // ImportRequestService#update reads a null/null lead time as "no change", so a both-blank save on
+    // a DRAFT clears nothing; toasting "saved" over an unchanged 30–45 was a false success.
+    it('a both-blank lead-time save on a DRAFT is refused with a validation message, not reported as saved', async () => {
+      const showToast = vi.fn();
+      renderPanel(OWNER, [draftRow()], { showToast });
+      await screen.findByTestId('ir-factory-card-10');
+      fireEvent.change(screen.getByTestId('ir-lead-min-10'), { target: { value: '' } });
+      fireEvent.change(screen.getByTestId('ir-lead-max-10'), { target: { value: '' } });
+      fireEvent.click(screen.getByTestId('ir-lead-save-10'));
+      expect(showToast).toHaveBeenCalledWith('error', expect.stringContaining('กรุณาระบุระยะเวลานำเข้า'));
+      expect(api.storedImportRequests.update).not.toHaveBeenCalled();
+    });
+
+    // A viewer with no write path renders PLAIN TEXT, not a look-alike disabled input: import cannot
+    // touch lead time until the row is ISSUED.
+    it('import cannot edit lead time on a DRAFT row (post-issue only) — renders read-only text, not a disabled input', async () => {
+      renderPanel(IMPORT, [draftRow()]);
+      await screen.findByTestId('ir-factory-card-10');
+      expect(screen.queryByTestId('ir-lead-min-10')).toBeNull();
+      expect(await screen.findByTestId('ir-lead-readonly-10')).not.toBeNull();
+    });
+
+    // Two more wrong-way cases: sales_manager (the owning rep IS canFullWrite, so use sales_manager)
+    // and sales_manager on an ISSUED row: neither is import/CEO (canAdvance) nor the owning rep on a
+    // draft (canFullWrite), so both get read-only text on the ISSUED row too.
+    it('sales_manager sees read-only lead-time text on an ISSUED row, never a disabled input', async () => {
+      renderPanel(SALES_MANAGER, [issuedRow()]);
+      await screen.findByTestId('ir-factory-card-11');
+      expect(screen.queryByTestId('ir-lead-min-11')).toBeNull();
+      expect(await screen.findByTestId('ir-lead-readonly-11')).not.toBeNull();
+    });
+
+    it('the owning sales rep sees read-only lead-time text on an ISSUED row (post-issue write moves to import/CEO)', async () => {
+      renderPanel(OWNER, [issuedRow()]);
+      await screen.findByTestId('ir-factory-card-11');
+      expect(screen.queryByTestId('ir-lead-min-11')).toBeNull();
+      expect(await screen.findByTestId('ir-lead-readonly-11')).not.toBeNull();
+    });
+
+    it('import can edit lead time on an ISSUED row', async () => {
+      api.storedImportRequests.setLeadTime.mockResolvedValue({ importRequest: issuedRow({ leadTimeMinDays: 20, leadTimeMaxDays: 30 }) });
+      renderPanel(IMPORT, [issuedRow()]);
+      await screen.findByTestId('ir-factory-card-11');
+      expect(screen.getByTestId('ir-lead-min-11').disabled).toBe(false);
+      fireEvent.change(screen.getByTestId('ir-lead-min-11'), { target: { value: '20' } });
+      fireEvent.change(screen.getByTestId('ir-lead-max-11'), { target: { value: '30' } });
+      fireEvent.click(screen.getByTestId('ir-lead-save-11'));
+      await waitFor(() => expect(api.storedImportRequests.setLeadTime)
+        .toHaveBeenCalledWith(11, { leadTimeMinDays: 20, leadTimeMaxDays: 30 }));
+    });
+  });
+
+  // The missing-country picker parses factory names out of a 409 message string (there is no
+  // structured field). A retry that comes back with the SAME missing set must not reopen the modal
+  // forever.
+  describe('missing-country retry guard (S7)', () => {
+    it('does not reopen the picker a second time when the retry 409s with the same missing names again', async () => {
+      const showToast = vi.fn();
+      api.storedImportRequests.createDrafts
+        .mockRejectedValueOnce(Object.assign(new Error('กรุณาระบุประเทศให้กับโรงงานใหม่: Rex Ceramics'), { status: 409 }))
+        .mockRejectedValueOnce(Object.assign(new Error('กรุณาระบุประเทศให้กับโรงงานใหม่: Rex Ceramics'), { status: 409 }));
+      api.storedImportRequests.listForTicket.mockResolvedValue({ importRequests: [] });
+      const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+      render(
+        <QueryClientProvider client={queryClient}>
+          <DealFulfilmentPanel user={OWNER} ticketId={1} summary={summary} items={[]} availableActions={[]} showToast={showToast} />
+        </QueryClientProvider>,
+      );
+      await createIrAndConfirm();
+      const select = await screen.findByLabelText(/^ประเทศ/);
+      fireEvent.change(select, { target: { value: 'CN' } });
+      const submit = await screen.findByTestId('new-factory-country-submit');
+      await waitFor(() => expect(submit.disabled).toBe(false));
+      fireEvent.click(submit);
+
+      await waitFor(() => expect(api.storedImportRequests.createDrafts).toHaveBeenCalledTimes(2));
+      // The SAME missing set came back a second time — the modal must not still be open (it would loop with an empty
+      // country picker forever otherwise); a plain error surfaces instead.
+      await waitFor(() => expect(screen.queryByTestId('new-factory-country-submit')).toBeNull());
+      expect(showToast).toHaveBeenCalledWith('error', expect.stringContaining('ยังระบุโรงงานไม่ครบ'));
+    });
+  });
+
+  // CEO footer editable from DRAFT, visible read-only to everyone else.
+  describe('CEO footer on a DRAFT row (nit)', () => {
+    it('CEO can open the footer editor on a DRAFT row, not just ISSUED', async () => {
+      renderPanel(CEO, [draftRow({ vesselEtaNote: 'ประมาณ 10/10/26' })]);
+      expect(await screen.findByTestId('ir-footer-open-10')).not.toBeNull();
+    });
+
+    it('a non-CEO viewer sees the footer status read-only on a DRAFT row', async () => {
+      renderPanel(OWNER, [draftRow({ checkedByName: 'ราม', vesselEtaNote: 'ประมาณ 10/10/26' })]);
+      expect(await screen.findByTestId('ir-footer-readonly-10')).not.toBeNull();
+    });
+  });
+
+  // The footer form is not seeded once at mount: a note the server derived AFTER mount (issue()
+  // writes vesselEtaNote) would open as a blank input, and saving any other field would write ''
+  // over it.
+  describe('CEO footer editor re-seeds from the row each time it opens', () => {
+    it('shows the vessel ETA the server derived at issue, and saves it back unchanged', async () => {
+      const note = 'ประมาณ 01/11/26 – 16/11/26 (30–45 วัน)';
+      api.storedImportRequests.issue.mockResolvedValue({});
+      api.storedImportRequests.update.mockResolvedValue({});
+      renderPanel(CEO, [draftRow()]);
+      const issue = await screen.findByTestId('ir-issue-10');
+      api.storedImportRequests.listForTicket.mockResolvedValue({ importRequests: [issuedRow({ id: 10, vesselEtaNote: note })] });
+      await issueIrAndConfirm(issue);
+      await screen.findByTestId('factory-progress-10');
+      fireEvent.click(screen.getByTestId('ir-footer-open-10'));
+      expect(screen.getByLabelText('กำหนดเรือเข้าโดยประมาณ').value).toBe(note);
+      fireEvent.click(screen.getByTestId('ir-footer-save-10'));
+      await waitFor(() => expect(api.storedImportRequests.update)
+        .toHaveBeenCalledWith(10, expect.objectContaining({ vesselEtaNote: note })));
+    });
+  });
+
+  // The app's ConfirmDialog, not window.confirm().
+  describe('delete-draft confirmation (nit)', () => {
+    it('deleting a draft goes through the ConfirmDialog, not window.confirm', async () => {
+      const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+      api.storedImportRequests.deleteDraft.mockResolvedValue({ status: 'deleted' });
+      renderPanel(OWNER, [draftRow()]);
+      fireEvent.click(await screen.findByTestId('ir-delete-10'));
+      // Two "ลบร่าง" buttons exist once the dialog opens (the row action + the dialog's own confirm) — the LAST one
+      // is the dialog's.
+      const buttons = await screen.findAllByRole('button', { name: 'ลบร่าง' });
+      fireEvent.click(buttons[buttons.length - 1]);
+      await waitFor(() => expect(api.storedImportRequests.deleteDraft).toHaveBeenCalledWith(10));
+      expect(confirmSpy).not.toHaveBeenCalled();
+      confirmSpy.mockRestore();
+    });
+  });
+
+  // The create button relabels once the deal already has rows.
+  describe('create-button relabel (nit)', () => {
+    it('reads "ออกใบขอซื้อ (IR)" with no rows yet, and "ออกใบขอซื้อ (IR) โรงงานที่ยังไม่มี" once rows exist (CR-1 rename)', async () => {
+      const { rerender } = renderPanel(OWNER, []);
+      const initialButton = await screen.findByTestId('deal-fulfilment-create-ir-drafts');
+      expect(initialButton.textContent).toBe('ออกใบขอซื้อ (IR)');
+
+      api.storedImportRequests.listForTicket.mockResolvedValue({ importRequests: [draftRow()] });
+      const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+      rerender(
+        <QueryClientProvider client={queryClient}>
+          <DealFulfilmentPanel user={OWNER} ticketId={2} summary={summary} items={[]} availableActions={[]} showToast={vi.fn()} />
+        </QueryClientProvider>,
+      );
+      expect(await screen.findByText('ออกใบขอซื้อ (IR) โรงงานที่ยังไม่มี')).not.toBeNull();
+    });
+  });
+
+  // A failed storedIrQuery fetch must not read as "no IR yet" nor bring back the legacy per-brand
+  // buttons.
+  describe('tab layout before the first IR (5a)', () => {
+    const precedes = (a, b) => Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+
+    it('no issued IR yet: the stored-IR box is shown and the นำเข้าสินค้า progress card is not rendered', async () => {
+      renderPanel(OWNER, [], { summary: { ...summary, fulfillmentStatus: null } });
+      await screen.findByTestId('deal-fulfilment-stored-ir');
+      expect(screen.queryByText('นำเข้าสินค้า')).toBeNull();
+      expect(screen.queryByText(/ยังไม่ออกคำขอนำเข้า/)).toBeNull();
+    });
+
+    it('once fulfillmentStatus is set the progress card is back, ahead of the stored-IR box (as today)', async () => {
+      renderPanel(OWNER, [issuedRow()], { summary: { ...summary, fulfillmentStatus: 'IR_ISSUED' } });
+      const stored = await screen.findByTestId('deal-fulfilment-stored-ir');
+      const card = screen.getByText('นำเข้าสินค้า');
+      expect(precedes(card, stored)).toBe(true);
+    });
+  });
+
+  it('before the first IR the commission-weight button stays reachable, below the stored-IR box, and opens its modal; no จองสินค้า beside it', async () => {
+    renderPanel(CEO, [], {
+      summary: { ...summary, fulfillmentStatus: null },
+      availableActions: [{ action: 'SET_ITEM_WEIGHT_MULTIPLIER' }, { action: 'RESERVE_STOCK' }],
+    });
+    const stored = await screen.findByTestId('deal-fulfilment-stored-ir');
+    const weight = await screen.findByTestId('deal-fulfilment-set-item-weight');
+    expect(Boolean(stored.compareDocumentPosition(weight) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
+    // No reserve-from-stock feature, even if the server still advertised it.
+    expect(screen.queryByTestId('deal-fulfilment-reserve-stock')).toBeNull();
+    fireEvent.click(weight);
+    expect(await screen.findByTestId('deal-fulfilment-set-item-weight-submit')).not.toBeNull();
+  });
+
+  describe('required-by field is folded behind a toggle (5b)', () => {
+    const TOGGLE = '+ กำหนดวันที่ต้องการของ (ไม่บังคับ)';
+
+    it('hidden until the toggle is clicked', async () => {
+      renderPanel(OWNER, []);
+      await screen.findByTestId('deal-fulfilment-create-ir-drafts');
+      expect(screen.queryByTestId('deal-required-by-note')).toBeNull();
+      fireEvent.click(screen.getByText(TOGGLE));
+      expect(screen.getByTestId('deal-required-by-note')).not.toBeNull();
+      expect(screen.getByTestId('deal-required-by-note-save')).not.toBeNull();
+    });
+
+    // ImportRequestService.REQUIRED_BY_ROLES = {sales, ceo}: a sales_manager holder gets the IR controls but not this field.
+    it('a sales_manager holder gets no required-by toggle; a sales holder does', async () => {
+      renderPanel({ ...SALES_MANAGER, canManageAllSalesDocuments: true }, []);
+      await screen.findByTestId('deal-fulfilment-create-ir-drafts');
+      expect(screen.queryByText(TOGGLE)).toBeNull();
+    });
+    it('a sales-role holder on another rep\'s deal gets the required-by toggle', async () => {
+      renderPanel({ ...OTHER_REP, canManageAllSalesDocuments: true }, []);
+      await screen.findByTestId('deal-fulfilment-create-ir-drafts');
+      expect(screen.getByText(TOGGLE)).not.toBeNull();
+    });
+
+    it('once open, clearing all the text keeps the field open so the empty value can be saved', async () => {
+      renderPanel(OWNER, [draftRow({ requiredByNote: 'Within 21/5/26' })]);
+      const input = await screen.findByTestId('deal-required-by-note');
+      await waitFor(() => expect(input.value).toBe('Within 21/5/26'));
+      fireEvent.change(input, { target: { value: '' } });
+      expect(screen.getByTestId('deal-required-by-note').value).toBe('');
+      expect(screen.getByTestId('deal-required-by-note-save')).not.toBeNull();
+    });
+
+    it('a saved non-empty value shows it expanded, with no toggle needed', async () => {
+      renderPanel(OWNER, [draftRow({ requiredByNote: 'Within 21/5/26' })]);
+      const input = await screen.findByTestId('deal-required-by-note');
+      await waitFor(() => expect(input.value).toBe('Within 21/5/26'));
+    });
+  });
+
+  describe('every factory already covered (5c)', () => {
+    const noCreateControls = () => {
+      expect(screen.queryByTestId('deal-fulfilment-create-ir-drafts')).toBeNull();
+      expect(screen.queryByTestId('deal-required-by-note')).toBeNull();
+      expect(screen.queryByText(/กำหนดวันที่ต้องการของ/)).toBeNull();
+      expect(screen.queryByText(/หนึ่งใบต่อหนึ่งโรงงาน/)).toBeNull();
+    };
+
+    it('hasUncoveredFactories=false: create button, required-by and helper line are gone; ทุกโรงงานออกใบขอซื้อแล้ว shows', async () => {
+      renderPanel(OWNER, [issuedRow()], { hasUncoveredFactories: false });
+      await screen.findByText('ทุกโรงงานออกใบขอซื้อแล้ว');
+      noCreateControls();
+    });
+
+    it('false with no live IR row at all (nothing to import) says ไม่มีรายการที่ต้องออกใบขอซื้อ, not that every factory has one', async () => {
+      renderPanel(OWNER, [], { hasUncoveredFactories: false });
+      await screen.findByText('ไม่มีรายการที่ต้องออกใบขอซื้อ');
+      expect(screen.queryByText('ทุกโรงงานออกใบขอซื้อแล้ว')).toBeNull();
+    });
+
+    it.each([['true', true], ['absent (older backend)', undefined]])('hasUncoveredFactories %s: create controls stay, no all-covered text', async (_n, flag) => {
+      renderPanel(OWNER, [issuedRow()], { hasUncoveredFactories: flag });
+      await screen.findByTestId('deal-fulfilment-create-ir-drafts');
+      expect(screen.queryByText('ทุกโรงงานออกใบขอซื้อแล้ว')).toBeNull();
+      expect(screen.getByText(/หนึ่งใบต่อหนึ่งโรงงาน/)).not.toBeNull();
+      expect(screen.getByText('+ กำหนดวันที่ต้องการของ (ไม่บังคับ)')).not.toBeNull();
+    });
+  });
+
+  describe('storedIrQuery failure (S5)', () => {
+    it('shows an error, not "ยังไม่มีใบขอซื้อสำหรับดีลนี้", and does not resurrect the legacy IR block', async () => {
+      // IMPORT (isFulfilment): the role the legacy per-brand block is gated on
+      // (`isFulfilment && !hasStoredIrs`): the case that must NOT reappear on a fetch error.
+      api.storedImportRequests.listForTicket.mockRejectedValue(new Error('เครือข่ายขัดข้อง'));
+      const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+      render(
+        <QueryClientProvider client={queryClient}>
+          <DealFulfilmentPanel user={IMPORT} ticketId={1} summary={summary} items={[]} availableActions={[]} showToast={vi.fn()} />
+        </QueryClientProvider>,
+      );
+      expect(await screen.findByTestId('deal-fulfilment-stored-ir-error')).not.toBeNull();
+      expect(screen.queryByText('ยังไม่มีใบขอซื้อสำหรับดีลนี้')).toBeNull();
+      expect(screen.queryByTestId('deal-fulfilment-import-request')).toBeNull();
+    });
+  });
+});
+
+// Sales presses ออกใบขอซื้อ (IR) once the quotation is approved; one IR per factory is created and
+// each PDF downloads straight away so sales can hand it over; import then downloads the same IR from
+// /fulfilment.
+describe('DealFulfilmentPanel — ออกใบขอซื้อ (IR) downloads every created PDF (CR-1)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    globalThis.URL.createObjectURL = vi.fn(() => 'blob:ir');
+    globalThis.URL.revokeObjectURL = vi.fn();
+    api.storedImportRequests.download.mockResolvedValue(new Blob(['pdf'], { type: 'application/pdf' }));
+  });
+
+  it('relabels the button ออกใบขอซื้อ (IR) for the owning rep and CEO, and import still does not get it', async () => {
+    renderPanel(OWNER, []);
+    expect((await screen.findByTestId('deal-fulfilment-create-ir-drafts')).textContent).toBe('ออกใบขอซื้อ (IR)');
+  });
+
+  it('after a successful create, downloads the PDF of each IR it just created (one per factory)', async () => {
+    const created = [issuedRow({ id: 21, factoryName: 'Cotto Industry' }), issuedRow({ id: 22, factoryId: 2, factoryName: 'Panaria' })];
+    api.storedImportRequests.createDrafts.mockResolvedValueOnce({ importRequests: created });
+    renderPanel(OWNER, []);
+    await createIrAndConfirm();
+
+    await waitFor(() => expect(api.storedImportRequests.download).toHaveBeenCalledTimes(2));
+    expect(api.storedImportRequests.download.mock.calls.map((c) => c[0]).sort()).toEqual([21, 22]);
+  });
+
+  it('10-29: create ends with the rows ISSUED (no ออกเลข button) and the toast ออกใบขอซื้อ (IR) แล้ว', async () => {
+    const showToast = vi.fn();
+    const issued = [issuedRow({ id: 21, importStep: 'CONTACTED' }), issuedRow({ id: 22, factoryId: 2, factoryName: 'Panaria', docNumber: 'IR26002', importStep: 'CONTACTED' })];
+    api.storedImportRequests.createDrafts.mockResolvedValueOnce({ importRequests: issued });
+    renderPanel(OWNER, [], { showToast });
+    // after the create the refetch returns the server's rows, which are already ISSUED
+    api.storedImportRequests.listForTicket.mockResolvedValue({ importRequests: issued });
+    await createIrAndConfirm();
+
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith('success', 'ออกใบขอซื้อ (IR) แล้ว'));
+    await screen.findByText('Panaria');
+    expect(screen.queryByTestId('ir-issue-21')).toBeNull();
+    expect(screen.queryByTestId('ir-issue-22')).toBeNull();
+    expect(screen.queryByTestId('ir-draft-hint-21')).toBeNull();
+  });
+
+  it('downloads only the NEW IRs when some factories already had one', async () => {
+    const existing = draftRow({ id: 10, factoryName: 'Cotto Industry' });
+    const fresh = issuedRow({ id: 23, factoryId: 3, factoryName: 'Rex Ceramics' });
+    api.storedImportRequests.createDrafts.mockResolvedValueOnce({ importRequests: [existing, fresh] });
+    renderPanel(OWNER, [existing]);
+    await screen.findByText('Cotto Industry');
+    await createIrAndConfirm();
+
+    await waitFor(() => expect(api.storedImportRequests.download).toHaveBeenCalledTimes(1));
+    expect(api.storedImportRequests.download).toHaveBeenCalledWith(23, undefined);
+  });
+
+  it('a failed PDF download does not undo the create: the toast says the IRs exist but the PDF failed', async () => {
+    const showToast = vi.fn();
+    api.storedImportRequests.createDrafts.mockResolvedValueOnce({ importRequests: [issuedRow({ id: 21 })] });
+    api.storedImportRequests.download.mockRejectedValueOnce(new Error('ดาวน์โหลดใบขอซื้อไม่สำเร็จ'));
+    api.storedImportRequests.listForTicket.mockResolvedValue({ importRequests: [] });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <DealFulfilmentPanel user={OWNER} ticketId={1} summary={summary} items={[]} availableActions={[]} showToast={showToast} />
+      </QueryClientProvider>,
+    );
+    await createIrAndConfirm();
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith('success', expect.stringContaining('ออกใบขอซื้อ (IR)')));
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith('error', expect.stringContaining('ออกใบขอซื้อ (IR) แล้ว แต่ดาวน์โหลด')));
+  });
+
+  it('refreshes the stored IRs, the import deal and the fulfilment worklist after creating (F)', async () => {
+    api.storedImportRequests.createDrafts.mockResolvedValueOnce({ importRequests: [issuedRow({ id: 21 })] });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    api.storedImportRequests.listForTicket.mockResolvedValue({ importRequests: [] });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <DealFulfilmentPanel user={OWNER} ticketId={1} summary={summary} items={[]} availableActions={[]} showToast={vi.fn()} />
+      </QueryClientProvider>,
+    );
+    await createIrAndConfirm();
+    await waitFor(() => expect(api.storedImportRequests.createDrafts).toHaveBeenCalled());
+    await waitFor(() => {
+      const keys = invalidate.mock.calls.map((c) => JSON.stringify(c[0]?.queryKey));
+      expect(keys.some((k) => k.includes('importRequests'))).toBe(true);
+      // the cross-deal /fulfilment page reads the ticket list for its candidates
+      expect(keys.some((k) => k.includes('"tickets","list"'))).toBe(true);
+    });
+  });
+});
+
+// The ส่งมอบสินค้า step must not print raw codes ("WAREHOUSE", "6: 250") in the history or the
+// บันทึกการส่งสินค้า select. The wire value (what recordDelivery sends) stays the code; only what the
+// person reads changes.
+describe('DealFulfilmentPanel — ส่งมอบสินค้า shows words, not codes', () => {
+  const deliveryItems = [
+    { id: 6, brand: 'Brand X', model: 'Model Y', size: '60x60', qty: 500, qtyDelivered: 0 },
+    // Same brand + model, other size: the history must tell the two apart.
+    { id: 7, brand: 'Brand X', model: 'Model Y', size: '30x60', qty: 100, qtyDelivered: 0 },
+  ];
+
+  afterEach(() => {
+    api.tickets.listDeliveries.mockResolvedValue({ items: [] });
+    api.tickets.recordDelivery.mockReset();
+  });
+
+  it('the history names the source in Thai and each line by brand + model + size (fallback รายการ id), never "6: 250"', async () => {
+    api.tickets.listDeliveries.mockResolvedValue({
+      items: [
+        { deliveryId: 1, deliveredAt: '2026-10-01T03:00:00Z', source: 'WAREHOUSE', items: [{ itemId: 6, qty: 250 }, { itemId: 99, qty: 3 }], deliveredByName: 'สมหญิง', note: null },
+        { deliveryId: 2, deliveredAt: '2026-10-02T03:00:00Z', source: 'STOCK', items: [{ itemId: 7, qty: 10 }], deliveredByName: null, note: null },
+      ],
+    });
+    renderPanel(OWNER, [], { items: deliveryItems });
+
+    expect(await screen.findByText(/Brand X Model Y 60x60: 250/)).not.toBeNull();
+    expect(screen.getByText(/รายการ 99: 3/)).not.toBeNull();
+    expect(screen.getByText(/Brand X Model Y 30x60: 10/)).not.toBeNull();
+    expect(screen.queryByText(/รายการ #/)).toBeNull();
+    expect(screen.queryByText(/(^|[\s,])6: 250/)).toBeNull();
+    expect(screen.getByText('คลังสินค้า', { selector: 'strong' })).not.toBeNull();
+    expect(screen.getByText('สต็อก', { selector: 'strong' })).not.toBeNull();
+    expect(screen.queryByText('WAREHOUSE')).toBeNull();
+    expect(screen.queryByText('STOCK')).toBeNull();
   });
 });
 
@@ -358,108 +833,235 @@ describe('DealFulfilmentPanel — ยืนยันการออกใบข�
   });
 });
 
-// Drawing m-delivery (2026-11-16): the body is rebuilt; recordDelivery is sent exactly as before.
-describe('DealFulfilmentPanel — บันทึกการส่งสินค้า (drawing m-delivery)', () => {
-  // ordered / delivered / remaining all differ per line, and from line to line.
-  const lines = [
-    { id: 21, brand: 'Equipe', model: 'Raku 20x20', qty: 120, qtyDelivered: 56, qtyFromStock: 0 },
-    { id: 22, brand: 'Mutina', model: 'Bullnose', qty: 40, qtyDelivered: 40, qtyFromStock: 0 },
-    { id: 23, brand: 'Equipe', model: 'Splendours', qty: 75.5, qtyDelivered: 0, qtyFromStock: 0 },
-  ];
-  const ACTIONS = [{ action: 'RECORD_PARTIAL_DELIVERY' }];
-  const open = async (over = {}) => {
-    renderPanel(OWNER, [], { items: lines, availableActions: ACTIONS, ...over });
-    fireEvent.click(await screen.findByTestId('deal-fulfilment-record-delivery'));
-    return screen.findByRole('dialog', { name: 'บันทึกการส่งสินค้า' });
+// Slice 6c (prototype item 6.6): the confirm shows, per factory, how many items it gets and the expected lead time,
+// from the coverage route's `splitPreview` — ImportRequestService's dry run of createDrafts' own split. The panel only
+// renders what the server sent; it computes no split and no lead time of its own.
+describe('DealFulfilmentPanel — ยืนยันออกใบขอซื้อ: รายการและระยะเวลานำเข้าต่อโรงงาน (slice 6c)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.storedImportRequests.createDrafts.mockReset();
+    api.storedImportRequests.createDrafts.mockResolvedValue({ importRequests: [] });
+  });
+  const PREVIEW = {
+    factories: [
+      { factoryName: 'Cotto Industry', newFactory: false, itemCount: 3, leadTimeMinDays: 100, leadTimeMaxDays: 120, leadTimeSource: 'QUOTATION' },
+      { factoryName: 'Rex Ceramics', newFactory: false, itemCount: 1, leadTimeMinDays: 75, leadTimeMaxDays: 90, leadTimeSource: 'COUNTRY_DEFAULT' },
+      { factoryName: 'Polska Tile', newFactory: false, itemCount: 2, leadTimeMinDays: null, leadTimeMaxDays: null, leadTimeSource: null },
+      { factoryName: 'Brand New Co', newFactory: true, itemCount: 1, leadTimeMinDays: null, leadTimeMaxDays: null, leadTimeSource: null },
+    ],
+    linesWithoutFactory: [],
   };
-  const submit = () => fireEvent.click(screen.getByTestId('deal-fulfilment-record-delivery-submit'));
+  const NAMES = PREVIEW.factories.map((f) => f.factoryName);
+  const blocks = (dialog) => within(within(dialog).getByRole('list', { name: 'โรงงานที่จะออกใบขอซื้อ' })).getAllByRole('listitem');
+
+  it('one block per factory the server previewed: name, n รายการ and นำเข้าประมาณ min–max วัน with its source', async () => {
+    renderPanel(OWNER, [], { hasUncoveredFactories: true, uncoveredFactoryNames: NAMES, splitPreview: PREVIEW });
+    const dialog = await openIrConfirm();
+
+    expect(within(dialog).getByTestId('ir-confirm-summary').textContent).toBe('4 โรงงาน · ส่งถึงฝ่ายนำเข้าทันที');
+    const [cotto, rex] = blocks(dialog);
+    expect(within(cotto).getByTestId('ir-confirm-factory-name').textContent).toBe('Cotto Industry');
+    expect(within(cotto).getByTestId('ir-confirm-factory-count').textContent).toBe('3 รายการ');
+    expect(within(cotto).getByTestId('ir-confirm-factory-lead').textContent).toBe('นำเข้าประมาณ 100–120 วัน');
+    expect(within(cotto).getByTestId('ir-confirm-factory-source').textContent).toBe('ตามใบเสนอราคา');
+    expect(within(rex).getByTestId('ir-confirm-factory-lead').textContent).toBe('นำเข้าประมาณ 75–90 วัน');
+    expect(within(rex).getByTestId('ir-confirm-factory-source').textContent).toBe('ค่าเริ่มต้นของประเทศ');
+    // The names-only table and its "shown after issuing" note are replaced, not shown alongside.
+    expect(within(dialog).queryByRole('table', { name: 'โรงงานที่จะออกใบขอซื้อ' })).toBeNull();
+    expect(dialog.textContent).not.toContain('จะแสดงในใบขอซื้อแต่ละใบหลังออก');
+  });
+
+  it('no lead time yet: says it will be asked before issuing; a new factory is tagged and says its country comes first', async () => {
+    renderPanel(OWNER, [], { hasUncoveredFactories: true, uncoveredFactoryNames: NAMES, splitPreview: PREVIEW });
+    const [, , polska, brandNew] = blocks(await openIrConfirm());
+
+    expect(within(polska).getByTestId('ir-confirm-factory-lead').textContent).toBe('ยังไม่มีระยะเวลานำเข้า · จะให้ระบุก่อนออก');
+    expect(within(polska).queryByTestId('ir-confirm-factory-source')).toBeNull();
+    expect(within(polska).queryByTestId('ir-confirm-factory-new')).toBeNull();
+    expect(within(brandNew).getByTestId('ir-confirm-factory-new').textContent).toBe('โรงงานใหม่');
+    expect(within(brandNew).getByTestId('ir-confirm-factory-lead').textContent)
+      .toBe('ยังไม่มีระยะเวลานำเข้า · จะให้เลือกประเทศของโรงงานก่อนออก');
+  });
+
+  // Fix round L5: the warning says the IR cannot be issued, so the button agrees — disabled, described by the warning.
+  // The server's 409 stays the backstop; this only stops the button contradicting the copy beside it.
+  it('a line the split cannot place disables ออกใบขอซื้อ, with the warning as its stated reason, and sends nothing', async () => {
+    renderPanel(OWNER, [], {
+      hasUncoveredFactories: true,
+      uncoveredFactoryNames: ['Cotto Industry'],
+      splitPreview: {
+        factories: [PREVIEW.factories[0]],
+        linesWithoutFactory: [
+          { ticketItemId: 31, code: 'Free Text One', size: '10x10 cm' },
+          { ticketItemId: 32, code: 'Grout', size: null },
+        ],
+      },
+    });
+    const dialog = await openIrConfirm();
+
+    expect(within(dialog).getByTestId('ir-confirm-unplaced').textContent)
+      .toBe('2 รายการยังไม่มีโรงงาน — ออกใบขอซื้อไม่ได้จนกว่าจะระบุโรงงาน: Free Text One (10x10 cm), Grout');
+    expect(within(dialog).getByTestId('ir-confirm-unplaced').getAttribute('role')).toBe('note');
+    const confirm = within(dialog).getByRole('button', { name: 'ออกใบขอซื้อ' });
+    expect(confirm.disabled).toBe(true);
+    const reasonId = confirm.getAttribute('aria-describedby');
+    expect(reasonId).toBeTruthy();
+    expect(document.getElementById(reasonId)).toBe(within(dialog).getByTestId('ir-confirm-unplaced'));
+    fireEvent.click(confirm);
+    await act(async () => {});
+    expect(api.storedImportRequests.createDrafts).not.toHaveBeenCalled();
+  });
+
+  it('every line placed: ออกใบขอซื้อ stays enabled and carries no disabled reason', async () => {
+    renderPanel(OWNER, [], { hasUncoveredFactories: true, uncoveredFactoryNames: NAMES, splitPreview: PREVIEW });
+    const confirm = within(await openIrConfirm()).getByRole('button', { name: 'ออกใบขอซื้อ' });
+    expect(confirm.disabled).toBe(false);
+    expect(confirm.getAttribute('aria-describedby')).toBeNull();
+  });
+
+  it('asks the server with the rep\'s unsaved factory pick, and shows the server\'s split instead of adding the pick by name', async () => {
+    const directSummary = { ...summary, liveDirectQuotation: { id: 5, docStatus: 'APPROVED' } };
+    const lines = [
+      { id: 1, brand: 'SCG', model: 'Catalogue', factory: 'Cotto', catalogPriceId: 90, qty: 10 },
+      { id: 3, brand: 'ค่าติดตั้ง', model: 'Free text', factory: null, catalogPriceId: null, qty: 10, qtyFromStock: 0 },
+    ];
+    renderPanel(OWNER, [], {
+      summary: directSummary, items: lines, hasUncoveredFactories: true, uncoveredFactoryNames: ['Cotto'],
+      splitPreview: { factories: [{ ...PREVIEW.factories[0], factoryName: 'Cotto', itemCount: 2 }], linesWithoutFactory: [] },
+    });
+    await waitFor(() => expect(api.storedImportRequests.coverage).toHaveBeenCalledWith(1, undefined));
+    const button = await screen.findByTestId('deal-fulfilment-create-ir-drafts');
+    const select = await screen.findByTestId('ir-line-factory-3');
+    await waitFor(() => expect(within(select).getByRole('option', { name: 'Rex Ceramics' })).not.toBeNull());
+    fireEvent.change(select, { target: { value: '7' } });
+    await waitFor(() => expect(api.storedImportRequests.coverage)
+      .toHaveBeenCalledWith(1, [{ ticketItemId: 3, factoryId: 7 }]));
+    await waitFor(() => expect(button.disabled).toBe(false));
+
+    const dialog = await openIrConfirm(button);
+    // The server's answer is the whole truth: Rex Ceramics is not added on top of it by the client.
+    expect(blocks(dialog).map((li) => within(li).getByTestId('ir-confirm-factory-name').textContent)).toEqual(['Cotto']);
+    expect(within(dialog).getByTestId('ir-confirm-summary').textContent).toBe('1 โรงงาน · ส่งถึงฝ่ายนำเข้าทันที');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'ออกใบขอซื้อ' }));
+    await waitFor(() => expect(api.storedImportRequests.createDrafts).toHaveBeenCalledTimes(1));
+    expect(api.storedImportRequests.createDrafts.mock.calls).toEqual([[1, { itemFactories: [{ ticketItemId: 3, factoryId: 7 }] }]]);
+  });
+
+  it('keeps the warning first and never says ดีล', async () => {
+    renderPanel(OWNER, [], {
+      hasUncoveredFactories: true, uncoveredFactoryNames: NAMES,
+      splitPreview: { ...PREVIEW, linesWithoutFactory: [{ ticketItemId: 31, code: 'X', size: null }] },
+    });
+    const dialog = await openIrConfirm();
+    expect(dialog.querySelector('.modal-body').firstElementChild.firstElementChild)
+      .toBe(within(dialog).getByTestId('ir-confirm-warning'));
+    expect(dialog.textContent).not.toContain('ดีล');
+  });
+
+  it('a null splitPreview (what import and sales_manager receive) falls back to the names-only table', async () => {
+    renderPanel(CEO, [], { hasUncoveredFactories: true, uncoveredFactoryNames: ['Cotto Industry'], splitPreview: null });
+    const dialog = await openIrConfirm();
+    expect(irConfirmFactories(dialog)).toEqual({ summary: '1 โรงงาน · ส่งถึงฝ่ายนำเข้าทันที', names: ['Cotto Industry'] });
+    expect(within(dialog).queryByRole('list', { name: 'โรงงานที่จะออกใบขอซื้อ' })).toBeNull();
+  });
+});
+
+// Task 9: recording a delivery moved to the round card (DeliveryRoundsPanel, tested there): this panel keeps the delivery
+// table and history, and no longer holds a record or complete button, whatever the server advertises.
+describe('DealFulfilmentPanel — การบันทึกส่งสินค้าย้ายไปที่รอบส่ง', () => {
+  const lines = [{ id: 21, brand: 'Equipe', model: 'Raku 20x20', qty: 120, qtyDelivered: 56, qtyFromStock: 0 }];
 
   beforeEach(() => {
     vi.clearAllMocks();
-    api.tickets.recordDelivery.mockReset();
-    api.tickets.recordDelivery.mockResolvedValue({});
   });
 
-  it('edited: the typed qty, the chosen source and the trimmed note go out unchanged', async () => {
-    const dialog = within(await open());
-    fireEvent.change(dialog.getByLabelText('จำนวนส่งมอบ Equipe Raku 20x20'), { target: { value: '10' } });
-    fireEvent.change(dialog.getByLabelText('จำนวนส่งมอบ Equipe Splendours'), { target: { value: '0' } });
-    fireEvent.change(dialog.getByLabelText('แหล่งสินค้า'), { target: { value: 'STOCK' } });
-    fireEvent.change(dialog.getByLabelText('หมายเหตุ'), { target: { value: '  ส่งรอบแรก  ' } });
-    submit();
-    await waitFor(() => expect(api.tickets.recordDelivery).toHaveBeenCalledTimes(1));
-    expect(api.tickets.recordDelivery.mock.calls).toEqual([[1, {
-      source: 'STOCK', note: 'ส่งรอบแรก', lines: [{ itemId: 21, qty: 10 }],
-    }]]);
-  });
-
-  it('every line zeroed: a toast, and nothing is sent', async () => {
-    const showToast = vi.fn();
-    const dialog = within(await open({ showToast }));
-    fireEvent.change(dialog.getByLabelText('จำนวนส่งมอบ Equipe Raku 20x20'), { target: { value: '0' } });
-    fireEvent.change(dialog.getByLabelText('จำนวนส่งมอบ Equipe Splendours'), { target: { value: '' } });
-    submit();
-    expect(showToast).toHaveBeenCalledWith('error', 'กรุณาระบุจำนวนส่งมอบอย่างน้อย 1 รายการ');
-    expect(api.tickets.recordDelivery).not.toHaveBeenCalled();
-  });
-
-  it('wrong way round: without RECORD_PARTIAL_DELIVERY nobody gets the opener — not the owner, not the CEO', async () => {
+  it('no record or complete button for the owner or the CEO even when the legacy actions are advertised; a hint points to the round', async () => {
     for (const viewer of [OWNER, CEO]) {
-      const view = renderPanel(viewer, [], { items: lines, availableActions: [] });
-      await screen.findByText('ส่งมอบสินค้า');
+      const view = renderPanel(viewer, [], {
+        items: lines, availableActions: [{ action: 'RECORD_PARTIAL_DELIVERY' }, { action: 'COMPLETE_DELIVERY' }],
+      });
+      expect((await screen.findByTestId('delivery-record-hint')).textContent).toContain('หมายเหตุ');
       expect(screen.queryByTestId('deal-fulfilment-record-delivery')).toBeNull();
+      expect(screen.queryByTestId('deal-fulfilment-complete')).toBeNull();
+      expect(screen.getByRole('table', { name: 'การส่งสินค้าให้ลูกค้า' })).not.toBeNull();
       view.unmount();
     }
+    expect(api.tickets.recordDelivery).not.toHaveBeenCalled();
+    expect(api.tickets.completeDelivery).not.toHaveBeenCalled();
+  });
+});
+
+describe('DealFulfilmentPanel — ระบุสินค้าจากสต็อก (RESERVE_STOCK)', () => {
+  const stockItems = [
+    { id: 6, brand: 'Brand X', model: 'Model Y', size: '60x60', qty: 500, qtyDelivered: 0, qtyFromStock: 0 },
+    { id: 7, brand: 'Brand X', model: 'Model Z', size: '30x60', qty: 100, qtyDelivered: 0, qtyFromStock: 100 },
+  ];
+
+  afterEach(() => api.tickets.reserveStock.mockReset());
+
+  it('shows a จากสต็อก checkbox per line only when the deal advertises RESERVE_STOCK, checked where fully covered', async () => {
+    renderPanel(OWNER, [], { items: stockItems, availableActions: [{ action: 'RESERVE_STOCK' }] });
+    const first = await screen.findByTestId('deal-fulfilment-reserve-stock-6');
+    expect(first.checked).toBe(false);
+    expect(screen.getByTestId('deal-fulfilment-reserve-stock-7').checked).toBe(true);
   });
 
-  describe('วันที่ส่ง (slice 6d): default today, back at most 7 days, never a future day', () => {
-    const today = bangkokTodayIso();
-    const be = (iso) => `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${Number(iso.slice(0, 4)) + 543}`;
-    const typeDate = (dialog, iso) => {
-      const field = dialog.getByLabelText('วันที่ส่ง');
-      fireEvent.change(field, { target: { value: be(iso) } });
-      fireEvent.blur(field);
-    };
-
-    it('8 days back and tomorrow are refused in the field, which keeps the day it had', async () => {
-      const dialog = within(await open());
-      typeDate(dialog, addDaysIso(today, -8));
-      expect(dialog.getByLabelText('วันที่ส่ง').value).toBe(be(today));
-      expect(dialog.getByText('วันที่อยู่นอกช่วงที่เลือกได้')).toBeTruthy();
-      typeDate(dialog, addDaysIso(today, 1));
-      expect(dialog.getByLabelText('วันที่ส่ง').value).toBe(be(today));
-      submit();
-      await waitFor(() => expect(api.tickets.recordDelivery).toHaveBeenCalledTimes(1));
-      expect(api.tickets.recordDelivery.mock.calls[0][1]).not.toHaveProperty('deliveredOn');
-    });
+  it('shows no checkbox without the action', async () => {
+    renderPanel(OWNER, [], { items: stockItems, availableActions: [] });
+    await screen.findByText('Brand X Model Y');
+    expect(screen.queryByTestId('deal-fulfilment-reserve-stock-6')).toBeNull();
   });
 
-  // Fix round 1 (M2): the one-click ส่งมอบครบ asks for the same วันที่ส่ง, in a small confirm dialog.
-  describe('ส่งมอบครบ with วันที่ส่ง (fix round 1, M2)', () => {
-    const today = bangkokTodayIso();
-    const be = (iso) => `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${Number(iso.slice(0, 4)) + 543}`;
-    const COMPLETE = [{ action: 'COMPLETE_DELIVERY' }];
-    const openComplete = async (over = {}) => {
-      api.tickets.completeDelivery.mockReset();
-      api.tickets.completeDelivery.mockResolvedValue({});
-      renderPanel(OWNER, [], { items: lines, availableActions: COMPLETE, ...over });
-      fireEvent.click(await screen.findByTestId('deal-fulfilment-complete'));
-      return within(await screen.findByRole('dialog', { name: 'ส่งมอบครบทุกรายการ' }));
-    };
-    const confirm = (dialog) => fireEvent.click(dialog.getByRole('button', { name: 'ยืนยันส่งมอบครบ' }));
+  const ACTIONS = [{ action: 'RESERVE_STOCK' }];
+  const tick = async (id) => fireEvent.click(await screen.findByTestId(`deal-fulfilment-reserve-stock-${id}`));
 
-    it('a past day up to 7 back goes as deliveredOn; 8 back is refused in the field', async () => {
-      const dialog = await openComplete();
-      const field = dialog.getByLabelText('วันที่ส่ง');
-      fireEvent.change(field, { target: { value: be(addDaysIso(today, -8)) } });
-      fireEvent.blur(field);
-      expect(field.value).toBe(be(today));
-      fireEvent.change(field, { target: { value: be(addDaysIso(today, -4)) } });
-      fireEvent.blur(field);
-      confirm(dialog);
-      await waitFor(() => expect(api.tickets.completeDelivery).toHaveBeenCalledTimes(1));
-      expect(api.tickets.completeDelivery.mock.calls[0]).toEqual([1,
-        { note: 'ส่งมอบครบจากหน้ารายละเอียดงาน', deliveredOn: addDaysIso(today, -4) }]);
-    });
+  it('clicking an unticked line opens the dialog naming the line and does not call reserveStock yet', async () => {
+    renderPanel(OWNER, [], { items: stockItems, availableActions: ACTIONS });
+    await tick(6);
+    const dialog = await screen.findByRole('dialog', { name: 'ยืนยันสินค้าจากสต็อก' });
+    expect(dialog.textContent).toContain('Brand X Model Y');
+    expect(dialog.textContent).toContain('500');
+    expect(dialog.textContent).toContain('ข้ามขั้นสั่งนำเข้า (IR)');
+    expect(dialog.textContent).toContain('ค่าคอมมิชชั่น');
+    expect(api.tickets.reserveStock).not.toHaveBeenCalled();
   });
+
+  it('confirming declares the whole line from stock once and closes the dialog', async () => {
+    api.tickets.reserveStock.mockResolvedValue({});
+    renderPanel(OWNER, [], { items: stockItems, availableActions: ACTIONS });
+    await tick(6);
+    const dialog = await screen.findByRole('dialog', { name: 'ยืนยันสินค้าจากสต็อก' });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'ยืนยันจากสต็อก' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'ยืนยันสินค้าจากสต็อก' })).toBeNull());
+    expect(api.tickets.reserveStock).toHaveBeenCalledTimes(1);
+    expect(api.tickets.reserveStock).toHaveBeenCalledWith(1, { lines: [{ itemId: 6, qtyFromStock: 500 }] });
+  });
+
+  it('cancelling calls nothing and the checkbox stays unticked', async () => {
+    renderPanel(OWNER, [], { items: stockItems, availableActions: ACTIONS });
+    await tick(6);
+    const dialog = await screen.findByRole('dialog', { name: 'ยืนยันสินค้าจากสต็อก' });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'ยกเลิก' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'ยืนยันสินค้าจากสต็อก' })).toBeNull());
+    expect(api.tickets.reserveStock).not.toHaveBeenCalled();
+    expect(screen.getByTestId('deal-fulfilment-reserve-stock-6').checked).toBe(false);
+  });
+
+  it('clicking a covered line opens the untick dialog; confirming sends 0', async () => {
+    api.tickets.reserveStock.mockResolvedValue({});
+    renderPanel(OWNER, [], { items: stockItems, availableActions: ACTIONS });
+    await tick(7);
+    const dialog = await screen.findByRole('dialog', { name: 'ยกเลิกสินค้าจากสต็อก' });
+    expect(dialog.textContent).toContain('Brand X Model Z');
+    expect(dialog.textContent).toContain('กลับไปอยู่ในรายการนำเข้า');
+    expect(api.tickets.reserveStock).not.toHaveBeenCalled();
+    // The confirm must not read 'ยกเลิก': that is the back-out button everywhere else in the app.
+    fireEvent.click(within(dialog).getByRole('button', { name: 'ยกเลิก' }));
+    expect(api.tickets.reserveStock).not.toHaveBeenCalled();
+    await tick(7);
+    fireEvent.click(within(await screen.findByRole('dialog', { name: 'ยกเลิกสินค้าจากสต็อก' })).getByRole('button', { name: 'กลับไปสั่งนำเข้า' }));
+    await waitFor(() => expect(api.tickets.reserveStock).toHaveBeenCalledTimes(1));
+    expect(api.tickets.reserveStock).toHaveBeenCalledWith(1, { lines: [{ itemId: 7, qtyFromStock: 0 }] });
+  });
+
 });

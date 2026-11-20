@@ -69,7 +69,8 @@ public class CashRepository {
     /**
      * THB receipts received on Bangkok days [from, toInclusive], signed as TicketRepository.SIGNED_RECEIPT_SUM
      * (ADJUSTMENT subtracts). Every source counts (MANUAL and EXPRESS alike) — cash is cash, and the upload dedupes
-     * on its own document number so it is never in here twice.
+     * on its own document number so it is never in here twice. PRE_PORTAL (a deposit the rep says came in before the portal) is
+     * not collected in the window, so it is left out.
      */
     public List<ReceivedDayRow> receivedByDay(Long ownerId, LocalDate from, LocalDate toInclusive) {
         MapSqlParameterSource p = new MapSqlParameterSource()
@@ -82,7 +83,7 @@ public class CashRepository {
               FROM sales.payment_receipt r
               JOIN sales.ticket t ON t.ticket_id = r.ticket_id
              WHERE r.received_at >= :fromTs AND r.received_at < :toTs
-               AND r.currency = 'THB'
+               AND r.currency = 'THB' AND r.source <> 'PRE_PORTAL'
             """ + owner + " GROUP BY 1, 2 ORDER BY 1, 2",
             p, (rs, n) -> new ReceivedDayRow(rs.getLong("owner_id"), rs.getObject("day", LocalDate.class),
                 rs.getBigDecimal("received")));

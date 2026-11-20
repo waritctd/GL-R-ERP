@@ -141,7 +141,7 @@ function DialogFooterRow({ children }) {
  * This is UI convenience only (hides buttons that would otherwise just 403), never the actual
  * security boundary — that is, and stays, the backend gate above.
  */
-export function RemainingInvoiceDialog({ ticketId, canWrite = true, onClose, onDownloaded, showToast }) {
+export function RemainingInvoiceDialog({ ticketId, canWrite = true, onClose, onDownloaded, showToast, initialQuotationId = null }) {
   const queryClient = useQueryClient();
 
   // Slice 6.1: the payment terms and due date, READ-ONLY, from the summary the server already serves
@@ -224,7 +224,7 @@ export function RemainingInvoiceDialog({ ticketId, canWrite = true, onClose, onD
             <IssuedSummary issued={issued} canWrite={canWrite} onRevised={invalidateList} onDownloaded={onDownloaded}
               showToast={showToast} />
           ) : canWrite ? (
-            <CreateForm ticketId={ticketId} onCreated={invalidateList} />
+            <CreateForm ticketId={ticketId} onCreated={invalidateList} initialQuotationId={initialQuotationId} />
           ) : (
             <WaitingForSalesState />
           )}
@@ -625,8 +625,8 @@ function DraftEditor({ draft, issuedOfSameQuotation, issuedMode = false, onCance
  * whose terminal action creates a STORED DRAFT (`api.storedRemainingInvoices.createDraft`) instead
  * of downloading a one-shot file.
  */
-function CreateForm({ ticketId, onCreated }) {
-  const [selectedQuotationId, setSelectedQuotationId] = useState(null);
+function CreateForm({ ticketId, onCreated, initialQuotationId = null }) {
+  const [selectedQuotationId, setSelectedQuotationId] = useState(initialQuotationId);
 
   const optionsQuery = useQuery({
     queryKey: queryKeys.remainingInvoiceOptions(ticketId, selectedQuotationId),

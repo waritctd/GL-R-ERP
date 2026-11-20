@@ -2007,6 +2007,22 @@ public class DealQuotationService {
      */
     @Transactional
     public PromoteToDealResultDto confirmOrderFromDirectQuotation(long quotationId, UserPrincipal actor, Set<Long> keepPartyIds) {
+        return confirmOrder(quotationId, actor, keepPartyIds, true);
+    }
+
+    /**
+     * The confirmation for a caller that has ALREADY authorized {@code actor} for its own action (the first IR, deposit
+     * notice, remaining invoice or delivery request of a pre-portal deal): skips this method's edit-access check, so an
+     * actor allowed the outer action (the CEO creating the IR) is not refused by the confirm's narrower audience. Never
+     * route it from a controller.
+     */
+    @Transactional
+    public PromoteToDealResultDto confirmOrderAuthorizedByCaller(long quotationId, UserPrincipal actor) {
+        return confirmOrder(quotationId, actor, Set.of(), false);
+    }
+
+    private PromoteToDealResultDto confirmOrder(long quotationId, UserPrincipal actor, Set<Long> keepPartyIds,
+                                                boolean checkEditAccess) {
         if (ticketService == null) {
             // Same defensive shape as #approveAndIssuePricingRequestOrigin: only reachable if the bean is wired without
             // #wireTicketService.
@@ -2015,7 +2031,9 @@ public class DealQuotationService {
         DealQuotationDto quotation = requireQuotation(quotationId);
         long ticketId = quotation.ticketId();
         // Authz first; see this method's Javadoc.
-        requireEditAccess(actor, requireTicketSummary(ticketId));
+        if (checkEditAccess) {
+            requireEditAccess(actor, requireTicketSummary(ticketId));
+        }
         if (!DealQuotationRepository.ORIGIN_DEAL_DIRECT.equals(quotation.origin())) {
             throw new ApiException(HttpStatus.CONFLICT,
                 "ยืนยันคำสั่งซื้อจากหน้านี้ได้เฉพาะใบเสนอราคา (ไม่ผ่านคำขอราคา) เท่านั้น");
@@ -2182,6 +2200,7 @@ public class DealQuotationService {
                 nowNotRequired ? DepositPolicy.REQUIRED : DepositPolicy.NOT_REQUIRED, null);
         }
         int draftNotices = tickets.deleteDraftDepositNotices(ticketId);
+        tickets.deleteDraftDeliveryRounds(ticketId);
         tickets.deleteItems(ticketId);
         if (tickets.revertOrderConfirmation(ticketId, restoreStage, restoreStageAt) != 1) {
             throw new ApiException(HttpStatus.CONFLICT,
@@ -2251,6 +2270,9 @@ public class DealQuotationService {
         }
         if (f.deliveryRecord()) {
             return "มีการบันทึกส่งสินค้าแล้ว จึงยกเลิกการยืนยันคำสั่งซื้อไม่ได้";
+        }
+        if (tickets.hasSentDeliveryRound(s.id())) {
+            return "ย้อนการยืนยันคำสั่งซื้อไม่ได้ เพราะส่งเรื่องขอออกใบกำกับ/ส่งของแล้ว";
         }
         if (f.manualStockDecision()) {
             return "มีการระบุที่มาสินค้า (สต็อก/นำเข้า) หลังยืนยันคำสั่งซื้อแล้ว จึงยกเลิกการยืนยันไม่ได้";

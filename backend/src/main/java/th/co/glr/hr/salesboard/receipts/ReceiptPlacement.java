@@ -80,7 +80,13 @@ public class ReceiptPlacement {
         }
         var manual = imports.manualReceipt(row.suggestedReceiptId())
             .orElseThrow(() -> new ApiException(HttpStatus.CONFLICT, "ไม่พบรายการที่บันทึกเองนี้แล้ว"));
-        if (imports.linkManualReceipt(manual.receiptId(), row.receipt().docNo()) != 1) {
+        if ("TAX_INVOICE".equals(manual.source()) && imports.isSettledByRow(manual.receiptId())) {
+            throw new ApiException(HttpStatus.CONFLICT, "เงินก้อนนี้ของใบกำกับถูกจับคู่กับรายการ Express อื่นแล้ว");
+        }
+        // A tax invoice's receipt carries no Express number: "the same money" only settles this row (RESOLVED against the
+        // receipt, nothing written); a void of that invoice puts the row back in the queue.
+        if (("MANUAL".equals(manual.source()) || "PRE_PORTAL".equals(manual.source()))
+            && imports.linkManualReceipt(manual.receiptId(), row.receipt().docNo()) != 1) {
             throw new ApiException(HttpStatus.CONFLICT, "รายการที่บันทึกเองนี้ผูกกับเลขที่ Express อื่นแล้ว");
         }
         imports.markResolved(rowId, manual.ticketId(), manual.receiptId(), actor.id());

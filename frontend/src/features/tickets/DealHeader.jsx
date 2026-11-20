@@ -34,6 +34,8 @@ export function DealHeader({
   quickActions = null,
   // Who / value / chance, each null when this viewer may not see it (the page decides).
   designerName = null,
+  // The deal was ordered before the portal (the rounds read's order.prePortal): a small mark beside the stage.
+  prePortal = false,
   dealValue = null,
   winProbability = null,
   // deal-party-model.md: `{ projectName, count }` while several contractors are bidding and none is awarded — the
@@ -81,6 +83,7 @@ export function DealHeader({
               ? <StatusBadge tone="info">{`${step.code} ${step.label}`}</StatusBadge>
               : <StatusBadge tone={lifecycle.tone}>{lifecycle.label}</StatusBadge>}
             {summary.hasEdits && !condensed ? <StatusBadge tone="warning">✎ มีการแก้ไข</StatusBadge> : null}
+            {prePortal ? <StatusBadge tone="neutral">ก่อนใช้ระบบ</StatusBadge> : null}
           </div>
           {summary.childKind === 'ADD_ON' && summary.parentTicketId ? (
             // An add-on order (สั่งเพิ่ม) names the deal it hangs under; the link is the way back to the root.

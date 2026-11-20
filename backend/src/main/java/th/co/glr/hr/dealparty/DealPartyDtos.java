@@ -101,8 +101,12 @@ public final class DealPartyDtos {
      */
     public record OrderDto(
         long ticketId, String code, String displayCode, int orderNo, String childKind, String salesStage,
-        String lifecycle, String fulfillmentStatus, BigDecimal valueExVat, BigDecimal received, BigDecimal outstanding
+        String lifecycle, String fulfillmentStatus, BigDecimal valueExVat, BigDecimal received, BigDecimal outstanding,
+        LatestRoundDto latestRound
     ) {}
+
+    /** The order's newest delivery round (any status, a draft included), or null when none was ever started. */
+    public record LatestRoundDto(int roundNo, String status) {}
 
     public record OrderTotalsDto(BigDecimal valueExVat, BigDecimal received, BigDecimal outstanding) {}
 

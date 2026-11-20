@@ -52,11 +52,12 @@ public final class ReceiptImportDtos {
                                   PossibleManual possibleManual, List<CandidateDto> candidates) {}
 
     /**
-     * The MANUAL receipt an Express row may duplicate: on which deal, what kind, how much, when, typed by whom.
+     * The MANUAL receipt (or the TAX_INVOICE one, {@code source}, with its {@code invoiceNumber} and delivery {@code roundNo}) an Express row may duplicate: on which deal, what kind, how much, when, typed by whom.
      * {@code alreadyLinked}: it is already linked to an Express number (another row), so "same as manual" would 409.
      */
     public record PossibleManual(long receiptId, long ticketId, String kind, BigDecimal amount, Instant receivedAt,
-                                 String recordedByName, boolean alreadyLinked) {}
+                                 String recordedByName, boolean alreadyLinked, String source, String invoiceNumber,
+                                 Integer roundNo) {}
 
     /** A row account sent to the sales manager to look at (read-only: no deals to pick, no actions). */
     public record FlaggedRowDto(long rowId, String docNo, LocalDate docDate, String customerName, BigDecimal amount,

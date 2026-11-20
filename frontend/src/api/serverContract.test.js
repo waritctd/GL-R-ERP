@@ -450,6 +450,9 @@ describe('controller surface / hrApi.js contract', () => {
  * retiring the endpoint) is the direction of travel and the stale-entry test deletes the entry.
  */
 const UNREACHABLE_FROM_UI = new Set([
+  // ส่งมอบครบ went with the old deal-page buttons: the delivery sheet records lines (a round's, or the deal's with a note when
+  // there is no invoice). The route stays (e2e and API clients complete a delivery with it) under the same invoice/note rule.
+  'POST /api/tickets/{}/deliveries/complete',
   // The one-click legacy "issue IR" is closed: the endpoint answers 409 for every deal and no screen
   // calls it. Retire the endpoint and hrApi method together in a follow-up.
   'POST /api/tickets/{}/import-request',

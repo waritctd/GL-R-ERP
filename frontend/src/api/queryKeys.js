@@ -116,6 +116,8 @@ export const queryKeys = {
   // entry below that has no "no id yet" caller.
   ticketDetail: (id) => queryKeysTicketDetail(id),
   // The project's orders (root + add-ons) for the order box / switcher; under 'tickets' so a stage or money change refreshes it.
+  // A deal's delivery rounds; under 'tickets' so any deal refresh reloads it.
+  deliveryRequests: (id) => ['tickets', 'delivery-requests', id == null ? id : Number(id)],
   ticketOrders: (id) => ['tickets', 'orders', id == null ? id : Number(id)],
   // Immutable server enumeration — fetched once, never invalidated. See stageCatalog.js.
   dealStageCatalog: () => ['meta', 'deal-stages'],

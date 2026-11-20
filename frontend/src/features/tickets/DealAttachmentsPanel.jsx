@@ -25,7 +25,7 @@ export function DealAttachmentsPanel({
 }) {
   return (
     <Panel
-      title="ไฟล์แนบ (PO / ใบเซ็น)"
+      title="ไฟล์อื่นของงาน (PO / ใบเซ็น)"
       // No แนบใบกำกับภาษี control here, deliberately (2026-07-30 owner decision). Do not reintroduce it — the
       // frontend regression guard is TicketDetailPage.test.jsx, "offers NO ใบกำกับภาษี upload control in เอกสาร".
       actions={canUpload && (

@@ -21,6 +21,11 @@ import th.co.glr.hr.ticket.TicketRepository;
 /** {@code sales.deal_party} (V204) plus the few ticket writes a bid outcome needs. Plain JDBC, like its neighbours. */
 @Repository
 public class DealPartyRepository {
+    /** The round an order's summary shows: the EARLIEST unfinished round (an older round still awaiting its invoice is
+     * never hidden by a newer one), else the latest finished one. */
+    private static final String SHOWN_ROUND_ORDER =
+        "(r.status = 'INVOICED'), (CASE WHEN r.status = 'INVOICED' THEN -r.round_no ELSE r.round_no END)";
+
     private final NamedParameterJdbcTemplate jdbc;
 
     public DealPartyRepository(NamedParameterJdbcTemplate jdbc) {
@@ -167,7 +172,8 @@ public class DealPartyRepository {
     /** Children of one kind ({@code BID_SPLIT} or {@code ADD_ON}); each kind numbers its own suffixes. */
     /** One row of {@link #findOrderChain}: the ticket's own columns plus its three money figures. */
     public record OrderRow(long ticketId, String code, String childKind, String salesStage, String lifecycle,
-                           String fulfillmentStatus, BigDecimal valueExVat, BigDecimal received, BigDecimal payable) {}
+                           String fulfillmentStatus, BigDecimal valueExVat, BigDecimal received, BigDecimal payable,
+                           Integer latestRoundNo, String latestRoundStatus) {}
 
     /**
      * The root and its ADD_ON children (a BID_SPLIT child is another customer's deal, not an order), root first then
@@ -182,14 +188,19 @@ public class DealPartyRepository {
                 + " AND q.doc_status = 'APPROVED' AND q.origin = 'DEAL_DIRECT'"
                 + " ORDER BY q.quotation_id DESC LIMIT 1), 0) AS value_ex_vat,"
                 + " (" + TicketRepository.paidAmountSelect("t.ticket_id") + ") AS received,"
-                + " (" + TicketRepository.payableAmountSelect("t.ticket_id") + ") AS payable"
+                + " (" + TicketRepository.payableAmountSelect("t.ticket_id") + ") AS payable,"
+                + " (SELECT r.round_no FROM sales.delivery_request r WHERE r.ticket_id = t.ticket_id"
+                + " ORDER BY " + SHOWN_ROUND_ORDER + " LIMIT 1) AS latest_round_no,"
+                + " (SELECT r.status FROM sales.delivery_request r WHERE r.ticket_id = t.ticket_id"
+                + " ORDER BY " + SHOWN_ROUND_ORDER + " LIMIT 1) AS latest_round_status"
                 + " FROM sales.ticket t"
                 + " WHERE t.ticket_id = :root OR (t.parent_ticket_id = :root AND t.child_kind = 'ADD_ON')"
                 + " ORDER BY (t.ticket_id = :root) DESC, t.ticket_id",
             Map.of("root", rootId),
             (rs, n) -> new OrderRow(rs.getLong("ticket_id"), rs.getString("code"), rs.getString("child_kind"),
                 rs.getString("sales_stage"), rs.getString("lifecycle"), rs.getString("fulfillment_status"),
-                rs.getBigDecimal("value_ex_vat"), rs.getBigDecimal("received"), rs.getBigDecimal("payable")));
+                rs.getBigDecimal("value_ex_vat"), rs.getBigDecimal("received"), rs.getBigDecimal("payable"),
+                rs.getObject("latest_round_no", Integer.class), rs.getString("latest_round_status")));
     }
 
     public int countChildren(long parentTicketId, String childKind) {

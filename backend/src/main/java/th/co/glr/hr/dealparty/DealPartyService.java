@@ -342,7 +342,8 @@ public class DealPartyService {
             orders.add(new OrderDto(row.ticketId(), row.code(),
                 root && !"ADD_ON".equals(row.childKind()) ? row.code() + "-1" : row.code(), i + 1,
                 row.childKind(), row.salesStage(), row.lifecycle(), row.fulfillmentStatus(),
-                withMoney ? row.valueExVat() : null, withMoney ? row.received() : null, withMoney ? owed : null));
+                withMoney ? row.valueExVat() : null, withMoney ? row.received() : null, withMoney ? owed : null,
+                row.latestRoundNo() == null ? null : new DealPartyDtos.LatestRoundDto(row.latestRoundNo(), row.latestRoundStatus())));
         }
         return new ProjectOrdersDto(rootId, rootCode, orders,
             withMoney ? new OrderTotalsDto(value, received, outstanding) : new OrderTotalsDto(null, null, null));

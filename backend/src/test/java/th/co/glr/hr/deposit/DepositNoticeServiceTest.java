@@ -186,6 +186,19 @@ class DepositNoticeServiceTest {
             List.of(), true, true, "Sales", "Preparer", null, null, null, items, false);
     }
 
+    @Test
+    void createDraft_asksPrePortalToConfirmTheOrderFirst() {
+        var prePortal = mock(th.co.glr.hr.deliveryrequest.PrePortal.class);
+        service.wirePrePortal(prePortal);
+        stubTicket(10L, TicketStatus.QUOTATION_ISSUED, "CUSTOMER_CONFIRMED");
+        when(docs.createDraft(eq(10L), any(), any(), any())).thenReturn(203L);
+        stubDraft(203L, 10L);
+
+        service.createDraft(10L, new DepositNoticeDraftRequest(null, null, null, null, null, null, null, null), owner);
+
+        verify(prePortal).ensureOrderConfirmed(10L, null, owner);
+    }
+
     // ── Deposit percent = what the source quotation's PDF printed ────
     // The governing quotation's percent (DepositNoticeRepository#findGoverningQuotation: legacy
     // 50, new-engine its own, blank 30); a caller-supplied percent is never read on create, and

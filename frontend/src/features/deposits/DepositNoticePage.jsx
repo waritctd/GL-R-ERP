@@ -244,7 +244,7 @@ function payloadKey(payload) {
   return JSON.stringify({ ...payload, expectedUpdatedAt: null });
 }
 
-export function DepositNoticePage({ ticketId, onBack, showToast }) {
+export function DepositNoticePage({ ticketId, onBack, backLabel = 'เปิดงาน', quotationId = null, onIssued, showToast }) {
   const queryClient = useQueryClient();
   const [customerSearch, setCsSearch] = useState('');
   const [confirmIssue, setConfirmIssue] = useState(false);
@@ -414,7 +414,7 @@ export function DepositNoticePage({ ticketId, onBack, showToast }) {
 
   const createDraftMutation = useMutation({
     // See createDepositNoticeDraft for the accepted-quotation vs ticket-level routing.
-    mutationFn: () => createDepositNoticeDraft(ticketId, noteTemplates),
+    mutationFn: () => createDepositNoticeDraft(ticketId, noteTemplates, quotationId),
     onSuccess: () => invalidateDepositNotices(),
     onError: (err) => showToast('error', err.message || 'สร้างเอกสารฉบับร่างไม่สำเร็จ'),
   });
@@ -484,6 +484,7 @@ export function DepositNoticePage({ ticketId, onBack, showToast }) {
       // paymentStatus.
       queryClient.invalidateQueries({ queryKey: ['tickets', 'list'] });
       queryClient.invalidateQueries({ queryKey: queryKeys.ticketDetail(ticketId) });
+      onIssued?.(res.depositNotice);
     },
     onError: (err) => {
       setConfirmIssue(false);
@@ -711,7 +712,7 @@ export function DepositNoticePage({ ticketId, onBack, showToast }) {
           onClick={onBack}
           className="inline-flex min-h-[38px] cursor-pointer items-center gap-1 rounded-md border-0 bg-transparent p-0 font-bold text-primary hover:text-primary-hover mobile:min-h-[44px]"
         >
-          เปิดงาน
+          {backLabel}
           <Icon name="chevronRight" size={14} />
         </button>
       </div>

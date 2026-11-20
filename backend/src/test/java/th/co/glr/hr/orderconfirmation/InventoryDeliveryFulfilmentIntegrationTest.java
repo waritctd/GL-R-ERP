@@ -1,5 +1,6 @@
 package th.co.glr.hr.orderconfirmation;
 
+import th.co.glr.hr.ticket.DeliveryRoundFixture;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 

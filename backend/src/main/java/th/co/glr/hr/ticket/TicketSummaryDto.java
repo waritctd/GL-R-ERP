@@ -197,7 +197,9 @@ public record TicketSummaryDto(
      * Where this deal's money came from, for the finance worklist's chip (slice 6.3): {@code EXPRESS} when EVERY
      * {@code sales.payment_receipt} row came from account's Express file ({@code source = 'EXPRESS'}, V213) or was typed
      * by hand and later linked to an Express document ({@code express_doc_no}, V214); {@code MANUAL} when none did;
-     * {@code MIXED} when some did; {@code null} when the deal has no receipt at all. Computed by
+     * {@code TAX_INVOICE} when every receipt is the money of a confirmed round tax invoice (V236); with a tax invoice
+     * among other sources the sources present joined by '+' ({@code MANUAL+TAX_INVOICE}); {@code MIXED} when
+     * Express and hand-typed receipts mix; {@code null} when the deal has no receipt at all. Computed by
      * {@code TicketRepository#enrichSummaries} in the statement that already carries the rest of the enrichment (no
      * query per row). Withheld by {@link #withoutMoney()}: it describes received money.
      */

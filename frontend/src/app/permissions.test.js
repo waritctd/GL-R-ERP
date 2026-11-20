@@ -114,6 +114,20 @@ describe('canAccessPath', () => {
   const importer = { role: 'import', employeeId: 2 };
   const account = { role: 'account', employeeId: 3 };
 
+
+  it('lets the warehouse open exactly /tickets/:id (its round view), through the lock, and no other deal path', () => {
+    const wh = { role: 'warehouse', employeeId: 6 };
+    expect(canAccessPath('/tickets/12?tab=ship', wh)).toBe(true);
+    for (const path of ['/tickets', '/tickets/12/deposit', '/tickets/12/x']) {
+      expect(canAccessPath(path, wh), path).toBe(false);
+    }
+
+    // The invoice issuer is a per-person grant on ANY role: it opens the same one page and nothing wider.
+    const issuer = { role: 'qc', employeeId: 7, canIssueTaxInvoice: true };
+    expect(canAccessPath('/tickets/12?tab=ship', issuer)).toBe(true);
+    for (const path of ['/tickets', '/tickets/12/deposit']) expect(canAccessPath(path, issuer), path).toBe(false);
+    expect(canAccessPath('/tickets/12', { role: 'qc', employeeId: 7 })).toBe(false);
+  });
   // PayrollController: every GET, plus the non-persisting POST /preview and /preview/export/{kind},
   // is hasAnyRole('HR','CEO'), so the ROUTE only needs canViewPayroll (hr+ceo). Writes stay
   // canManagePayroll (hr-only) and are gated inside PayrollPage.jsx; ceo at '/payroll' is read-only
@@ -246,6 +260,22 @@ describe('canAccessPath under the release lockdown', () => {
       }
     }
     expect(refused).toEqual([]);
+  });
+
+  it('under the lock the warehouse still opens exactly /tickets/:id; qc and employee do not', async () => {
+    const { canAccessPath: guard } = await locked();
+    const wh = { role: 'warehouse', employeeId: 6 };
+    expect(guard('/tickets/12?tab=ship', wh)).toBe(true);
+    expect(guard('/tickets/12/deposit', wh)).toBe(false);
+    expect(guard('/tickets', wh)).toBe(false);
+    for (const role of ['qc', 'employee']) expect(guard('/tickets/12', { role, employeeId: 7 }), role).toBe(false);
+
+    // The forward notice's link must open for an issuer of ANY locked role (qc, employee, import, warehouse), and only
+    // for the grant holder.
+    for (const role of ['qc', 'employee', 'import', 'warehouse']) {
+      expect(guard('/tickets/12?tab=ship', { role, employeeId: 7, canIssueTaxInvoice: true }), `${role} holder`).toBe(true);
+      expect(guard('/tickets/12/deposit', { role, employeeId: 7, canIssueTaxInvoice: true }), `${role} holder sub-path`).toBe(false);
+    }
   });
 
   // The sales stack opens for the sales roles; import gets ONLY งานนำเข้า and คิวขอราคา (plus its
