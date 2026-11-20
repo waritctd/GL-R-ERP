@@ -15,12 +15,12 @@ public final class FeedbackDtos {
                                 String pagePath, String userAgent, String viewport) {
     }
 
-    /** decision ACCEPT (needs eta) | DENY (needs reason). */
-    public record DecisionRequest(String decision, LocalDate eta, String reason) {
+    /** decision ACCEPT (needs eta) | DENY (needs reason). silent=true: no bell/email to the reporter. */
+    public record DecisionRequest(String decision, LocalDate eta, String reason, Boolean silent) {
     }
 
     /** Admin edit of an accepted request. status ACCEPTED|IN_PROGRESS|TESTING|RELEASED; null field = unchanged. */
-    public record UpdateRequest(String status, LocalDate eta) {
+    public record UpdateRequest(String status, LocalDate eta, Boolean silent) {
     }
 
     public record FeedbackDto(long id, String kind, String area, String details, String extra, String impact,

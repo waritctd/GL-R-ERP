@@ -19,7 +19,16 @@ export function useFeedbackInbox(enabled) {
   });
 }
 
-function DecisionPanel({ item, mode, onDone, showToast }) {
+function SilentToggle({ checked, onChange }) {
+  return (
+    <label className="flex items-center gap-2 text-sm">
+      <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} />
+      ไม่ต้องแจ้งผู้แจ้ง (ไม่ส่งอีเมล)
+    </label>
+  );
+}
+
+function DecisionPanel({ item, mode, silent, onSilent, onDone, showToast }) {
   const queryClient = useQueryClient();
   const [eta, setEta] = useState('');
   const [reason, setReason] = useState('');
@@ -42,7 +51,7 @@ function DecisionPanel({ item, mode, onDone, showToast }) {
       setError('เขียนเหตุผลให้ผู้แจ้งเข้าใจ');
     } else {
       setError('');
-      decide.mutate(accept ? { decision: 'ACCEPT', eta } : { decision: 'DENY', reason: reason.trim() });
+      decide.mutate({ ...(accept ? { decision: 'ACCEPT', eta } : { decision: 'DENY', reason: reason.trim() }), silent });
       return;
     }
     fieldRef.current?.focus();
@@ -60,6 +69,7 @@ function DecisionPanel({ item, mode, onDone, showToast }) {
             onChange={(e) => setReason([...e.target.value].slice(0, 2000).join(''))} />
         </FormField>
       )}
+      <SilentToggle checked={silent} onChange={onSilent} />
       <div className="flex flex-wrap gap-2">
         <Button onClick={save} loading={decide.isPending}>{accept ? 'ยืนยันรับเรื่อง' : 'ยืนยันไม่รับ'}</Button>
         <Button variant="secondary" onClick={onDone}>ยกเลิก</Button>
@@ -71,6 +81,7 @@ function DecisionPanel({ item, mode, onDone, showToast }) {
 function InboxRow({ item, showToast }) {
   const queryClient = useQueryClient();
   const [mode, setMode] = useState(null);
+  const [silent, setSilent] = useState(false);
   const view = statusView(item.status);
   const accepted = !['PENDING', 'DENIED'].includes(item.status);
   const update = useMutation({
@@ -100,20 +111,21 @@ function InboxRow({ item, showToast }) {
           <Button variant="secondary" onClick={() => setMode('DENY')}>ไม่รับ</Button>
         </div>
       ) : null}
-      {mode ? <DecisionPanel item={item} mode={mode} onDone={() => setMode(null)} showToast={showToast} /> : null}
+      {mode ? <DecisionPanel item={item} mode={mode} silent={silent} onSilent={setSilent} onDone={() => setMode(null)} showToast={showToast} /> : null}
       {accepted ? (
         <div className="grid gap-2.5 rounded-md bg-surface-muted p-3">
           <div className="grid gap-2.5 sm:grid-cols-2">
             <FormField label="กำหนดเสร็จ" htmlFor={`eta-${item.id}`}>
               <ThaiDateInput id={`eta-${item.id}`} value={item.eta ?? ''}
-                onChange={(e) => e.target.value && update.mutate({ eta: e.target.value })} />
+                onChange={(e) => e.target.value && update.mutate({ eta: e.target.value, silent })} />
             </FormField>
             <FormField label="ความคืบหน้า" htmlFor={`pg-${item.id}`}>
-              <select id={`pg-${item.id}`} value={item.status} onChange={(e) => update.mutate({ status: e.target.value })}>
+              <select id={`pg-${item.id}`} value={item.status} onChange={(e) => update.mutate({ status: e.target.value, silent })}>
                 {PROGRESS_STEPS.map(([id, label], n) => <option key={id} value={id}>{`${n + 1}. ${label}`}</option>)}
               </select>
             </FormField>
           </div>
+          <SilentToggle checked={silent} onChange={setSilent} />
           <Progress status={item.status} />
         </div>
       ) : null}
