@@ -88,12 +88,30 @@ public class RemainingInvoiceService {
         }
     }
 
+    /** The download sheet's choice, remembered for this invoice: same gate as the PDF download. */
+    @Transactional
+    public void saveBundleSelection(long id, UserPrincipal actor, DocumentBundle.Selection selection) {
+        RemainingInvoiceDocumentDto doc = requireStored(id);
+        depositNoticeService.requireTicketViewer(doc.ticketId(), actor);
+        depositNoticeService.saveBundleSelection("REMAINING_INVOICE", id, doc.ticketId(), selection);
+    }
+
+    /** What the download sheet should show for this invoice: the remembered choice, else the defaults. */
+    public DocumentBundle.Selection bundleSelection(long id, UserPrincipal actor) {
+        RemainingInvoiceDocumentDto doc = requireStored(id);
+        depositNoticeService.requireTicketViewer(doc.ticketId(), actor);
+        return depositNoticeService.bundleSelection("REMAINING_INVOICE", id, doc.ticketId());
+    }
+
     /** The same frozen snapshot as {@link #file}, as a PDF. */
     public DocumentBundle.Result getPdfBundle(long id, UserPrincipal actor) {
         RemainingInvoiceDocumentDto doc = requireStored(id);
         depositNoticeService.requireTicketViewer(doc.ticketId(), actor);
         try {
-            return depositNoticeService.bundled(renderer.toPdf(toRenderable(doc)), doc.ticketId(), doc.reference(), actor);
+            return depositNoticeService.bundled(renderer.toPdf(toRenderable(doc)), doc.ticketId(), doc.reference(),
+                actor, "REMAINING_INVOICE", id);
+        } catch (ApiException e) {
+            throw e;
         } catch (Exception e) {
             throw new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "สร้างไฟล์ PDF ไม่สำเร็จ: " + e.getMessage());
         }

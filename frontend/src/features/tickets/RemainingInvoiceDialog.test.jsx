@@ -25,7 +25,10 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         revise: vi.fn(),
         deleteDraft: vi.fn(),
         download: vi.fn(),
+        bundleSelection: vi.fn(),
+        saveBundleSelection: vi.fn(),
       },
+      attachments: { list: vi.fn(), upload: vi.fn() },
       depositNotices: {
         noteTemplates: vi.fn(),
         preparerOptions: vi.fn(),
@@ -378,18 +381,33 @@ describe('RemainingInvoiceDialog — canWrite=false (not this deal\'s owning sal
     expect(api.tickets.remainingInvoiceOptions).not.toHaveBeenCalled(); // never even previews
   });
 
-  it('shows the read-only issued summary with download but WITHOUT the revise button', async () => {
+  it('shows the read-only issued summary with a download sheet, WITHOUT the revise button', async () => {
     const issuedRow = docRow({ status: 'ISSUED', docNumber: 'GLR6900001-1', baseNumber: 'GLR6900001' });
     api.storedRemainingInvoices.listForTicket.mockResolvedValue({ remainingInvoices: [issuedRow] });
     api.storedRemainingInvoices.download.mockResolvedValue(new Blob(['x']));
+    api.storedRemainingInvoices.saveBundleSelection.mockResolvedValue({ ok: true });
+    // the server's defaults: the quotation and every PO; other files unticked
+    api.storedRemainingInvoices.bundleSelection.mockResolvedValue({ quotation: true, attachmentIds: [5] });
+    api.attachments.list.mockResolvedValue({ attachments: [
+      { id: 5, fileName: 'po.pdf', attachType: 'PO' }, { id: 6, fileName: 'extra.pdf', attachType: 'OTHER' },
+    ] });
     renderDialog({ canWrite: false });
 
     expect(await screen.findByTestId('remaining-invoice-issued-summary')).not.toBeNull();
-    expect(screen.getByTestId('remaining-invoice-download')).not.toBeNull();
     expect(screen.queryByTestId('remaining-invoice-revise')).toBeNull();
 
     fireEvent.click(screen.getByTestId('remaining-invoice-download'));
+    const confirm = await screen.findByTestId('document-download-confirm');
+    await waitFor(() => expect(screen.getByTestId('include-attachment-5').checked).toBe(true));
+    expect(screen.getByTestId('include-quotation').checked).toBe(true);
+    expect(screen.getByTestId('include-attachment-6').checked).toBe(false);
+
+    fireEvent.click(screen.getByTestId('include-quotation'));
+    fireEvent.click(screen.getByTestId('include-attachment-6'));
+    fireEvent.click(confirm);
     await waitFor(() => expect(api.storedRemainingInvoices.download).toHaveBeenCalledWith(issuedRow.id));
+    expect(api.storedRemainingInvoices.saveBundleSelection)
+      .toHaveBeenCalledWith(issuedRow.id, { quotation: false, attachmentIds: [5, 6] });
   });
 
   it('hides the edit control from a viewer who cannot write', async () => {

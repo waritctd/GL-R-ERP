@@ -19,6 +19,7 @@ function duplicateQuery(options) {
 async function withBundleSkipped(res) {
   const blob = await res.blob();
   blob.bundleSkipped = res.headers?.get?.('X-Document-Bundle-Skipped') ?? '';
+  blob.bundleLarge = res.headers?.get?.('X-Document-Bundle-Large') === 'true';
   return blob;
 }
 
@@ -492,9 +493,17 @@ export const api = {
       if (!res.ok) throw new Error('Download failed');
       return res.blob();
     },
+    bundleSelection: (id) => apiRequest(API_ROUTES.depositNotices.bundleSelection(id)),
+    // The sheet saves its choice (which attachments, and the quotation) here, then downloads the PDF with it.
+    saveBundleSelection: (id, selection) =>
+      apiRequest(API_ROUTES.depositNotices.bundleSelection(id), { method: 'PUT', body: selection }),
     downloadPdf: async (id) => {
       const res = await fetch(API_ROUTES.depositNotices.file(id, 'pdf'), { credentials: 'include' });
-      if (!res.ok) throw new Error('Download failed');
+      if (!res.ok) {
+        // e.g. 413 "chosen files too large": the server's own Thai message reaches the sheet
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.message || 'Download failed');
+      }
       return withBundleSkipped(res);
     },
     listByTicket: (ticketId) => apiRequest(API_ROUTES.tickets.listDocs(ticketId)),
@@ -521,6 +530,9 @@ export const api = {
     revise: (id) => apiRequest(API_ROUTES.storedRemainingInvoices.revise(id), { method: 'POST' }),
     deleteDraft: (id) => apiRequest(API_ROUTES.storedRemainingInvoices.get(id), { method: 'DELETE' }),
     // Binary, so it goes through fetch directly — same shape as storedImportRequests.download above.
+    bundleSelection: (id) => apiRequest(API_ROUTES.storedRemainingInvoices.bundleSelection(id)),
+    saveBundleSelection: (id, selection) =>
+      apiRequest(API_ROUTES.storedRemainingInvoices.bundleSelection(id), { method: 'PUT', body: selection }),
     download: async (id) => {
       const res = await fetch(API_ROUTES.storedRemainingInvoices.file(id), { credentials: 'include' });
       if (!res.ok) {

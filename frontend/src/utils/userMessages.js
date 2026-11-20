@@ -39,7 +39,7 @@ export function sanitizeToastMessage(kind, message) {
   return mapped.message;
 }
 
-const BUNDLE_PART_LABEL = { po: 'PO', quotation: 'ใบเสนอราคา' };
+const BUNDLE_PART_LABEL = { po: 'PO', attachment: 'ไฟล์แนบ', quotation: 'ใบเสนอราคา' };
 
 /** The warning for a PDF download whose bundle left out a PO / the quotation (hrApi copies the server's
  * X-Document-Bundle-Skipped header onto the blob as `bundleSkipped`); null when nothing was skipped. */
@@ -50,6 +50,7 @@ function bundleSkippedMessage(blob) {
 
 /** Toasts the bundleSkippedMessage warning after a PDF download; a no-op when nothing was skipped. */
 export function warnIfBundleSkipped(blob, showToast) {
-  const message = bundleSkippedMessage(blob);
+  const message = [bundleSkippedMessage(blob), blob?.bundleLarge ? 'ไฟล์รวมใหญ่เกิน 15 MB อาจส่งทางอีเมลไม่ได้' : null]
+    .filter(Boolean).join(' · ');
   if (message) showToast?.('warning', message);
 }
