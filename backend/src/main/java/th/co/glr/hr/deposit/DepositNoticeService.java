@@ -238,15 +238,21 @@ public class DepositNoticeService {
         String requested = blankToNull(req.reference());
         List<DepositNoticeItemRequest> items = echoOnly(req.items(), doc.items());
         if (fromQuotation && requested != null && !requested.equals(reference)) {
-            // Re-pointing: a DRAFT may move to another party quotation of THIS deal (docs.findQuotationPartyCustomerId is
-            // ticket-scoped and needs a party); anything else is refused, never silently ignored.
-            if (!"DRAFT".equals(doc.status()) || docs.findQuotationPartyCustomerId(doc.ticketId(), requested).isEmpty()) {
+            // Re-pointing: a DRAFT may move to another party quotation of THIS deal in a status create would bill
+            // (findRepointTarget); anything else is refused, never silently ignored.
+            var target = "DRAFT".equals(doc.status()) ? docs.findRepointTarget(doc.ticketId(), requested).orElse(null) : null;
+            if (target == null) {
                 throw new ApiException(HttpStatus.CONFLICT,
-                    "เปลี่ยนใบเสนอราคาอ้างอิงได้เฉพาะใบแจ้งยอดที่ยังเป็นฉบับร่าง และต้องเป็นใบเสนอราคาของดีลนี้");
+                    "เปลี่ยนใบเสนอราคาอ้างอิงได้เฉพาะใบแจ้งยอดที่ยังเป็นฉบับร่าง และต้องเป็นใบเสนอราคาที่ใช้ออกใบแจ้งยอดได้ของดีลนี้");
             }
+            if (target.depositPercent().signum() == 0) throw zeroDepositRefusal(requested);
+            // lines and percent follow the new quotation (as create builds them); client-sent items are ignored
+            items = docs.findDealQuotationItems(target.quotationId());
+            if (items.isEmpty()) {
+                throw new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคา " + requested + " ไม่มีรายการสินค้า จึงเปลี่ยนมาอ้างอิงไม่ได้");
+            }
+            depositPercent = target.depositPercent();
             reference = requested;
-            // the lines follow the new quotation (as create builds them); client-sent items are ignored
-            items = docs.findDealQuotationItems(docs.findNewEngineQuotationId(doc.ticketId(), requested).orElseThrow());
             quotationHeader = resolveCustomerHeader(summary, null, null, null, doc.ticketId(), reference);
         }
         var effective = new DepositNoticeDraftRequest(

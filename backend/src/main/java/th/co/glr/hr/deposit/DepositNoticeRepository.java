@@ -499,6 +499,25 @@ public class DepositNoticeRepository {
             """, Map.of("t", ticketId, "n", number), Long.class).stream().findFirst();
     }
 
+    /** A quotation a DRAFT notice may be re-pointed to: new-engine, addressed to a party, of this deal, and in a status
+     * {@link #findGoverningQuotation} would bill (PRICING_REQUEST ACCEPTED/ISSUED, DEAL_DIRECT also APPROVED). Carries
+     * the deposit percent the same way. */
+    public record RepointTarget(long quotationId, String number, BigDecimal depositPercent) {}
+
+    public Optional<RepointTarget> findRepointTarget(long ticketId, String number) {
+        return jdbc.query("""
+            SELECT quotation_id, number, deposit_percent FROM sales.quotation
+             WHERE ticket_id = :t AND number = :n AND party_id IS NOT NULL
+               AND ((origin = 'PRICING_REQUEST' AND doc_status IN ('ACCEPTED','ISSUED'))
+                 OR (origin = 'DEAL_DIRECT' AND doc_status IN ('ACCEPTED','ISSUED','APPROVED')))
+             ORDER BY quotation_id DESC LIMIT 1
+            """, Map.of("t", ticketId, "n", number), (rs, i) -> {
+                Integer stored = (Integer) rs.getObject("deposit_percent");
+                return new RepointTarget(rs.getLong("quotation_id"), rs.getString("number"), BigDecimal.valueOf(
+                    stored != null ? stored : DealQuotationRenderAdapter.DEFAULT_DEPOSIT_PERCENT, 2));
+            }).stream().findFirst();
+    }
+
     /** The new-engine (origin set) quotation of this deal with this number: the one a notice's reference names. */
     public Optional<Long> findNewEngineQuotationId(long ticketId, String number) {
         return jdbc.queryForList("SELECT quotation_id FROM sales.quotation WHERE ticket_id = :t AND number = :n"

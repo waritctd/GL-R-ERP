@@ -302,8 +302,25 @@ class DepositNoticeBundlePdfIntegrationTest extends DirectQuotationDealTestBase 
         // a party quotation of the same deal: the draft takes that party's customer
         long otherId = cloneQuotation(deal.quotation().id(), "QT-OTHER-PARTY", 92, true);
         var otherBuyer = addressToBuyer(deal.ticketId(), otherId, "คุณส้ม", "0100000000555", "55 ถนนทดสอบ");
-        DepositNoticeDto moved = depositNoticeService.update(n.id(),
-            new DepositNoticeDraftRequest(null, null, null, null, "QT-OTHER-PARTY", null, null, null), salesActor);
+        var repoint = new DepositNoticeDraftRequest(null, null, null, null, "QT-OTHER-PARTY", null, null, null);
+        // refused: a status create would not bill, a 0% quotation, a quotation with no lines (each 409, notice untouched)
+        jdbc.update("UPDATE sales.quotation SET doc_status = 'DRAFT' WHERE quotation_id = :id", java.util.Map.of("id", otherId));
+        assertThat(catchThrowableOfType(() -> depositNoticeService.update(n.id(), repoint, salesActor), ApiException.class)
+            .getStatus()).isEqualTo(HttpStatus.CONFLICT);
+        jdbc.update("UPDATE sales.quotation SET doc_status = 'APPROVED', deposit_percent = 0 WHERE quotation_id = :id", java.util.Map.of("id", otherId));
+        assertThat(catchThrowableOfType(() -> depositNoticeService.update(n.id(), repoint, salesActor), ApiException.class)
+            .getMessage()).contains("ไม่มีมัดจำ");
+        jdbc.update("UPDATE sales.quotation SET deposit_percent = 40 WHERE quotation_id = :id", java.util.Map.of("id", otherId));
+        jdbc.update("CREATE TEMP TABLE qi_keep AS SELECT * FROM sales.quotation_item WHERE quotation_id = :id", java.util.Map.of("id", otherId));
+        jdbc.update("DELETE FROM sales.quotation_item WHERE quotation_id = :id", java.util.Map.of("id", otherId));
+        assertThat(catchThrowableOfType(() -> depositNoticeService.update(n.id(), repoint, salesActor), ApiException.class)
+            .getStatus()).isEqualTo(HttpStatus.CONFLICT);
+        jdbc.update("INSERT INTO sales.quotation_item OVERRIDING SYSTEM VALUE SELECT * FROM qi_keep", java.util.Map.of());
+        jdbc.update("DROP TABLE qi_keep", java.util.Map.of());
+        assertThat(depositNoticeService.getById(n.id(), salesActor).reference()).isEqualTo(deal.quotation().number());
+
+        DepositNoticeDto moved = depositNoticeService.update(n.id(), repoint, salesActor);
+        assertThat(moved.depositPercent()).isEqualByComparingTo("0.40");
         assertThat(moved.reference()).isEqualTo("QT-OTHER-PARTY");
         assertThat(moved.customerName()).isEqualTo(otherBuyer.name());
         assertThat(moved.customerTaxId()).isEqualTo(otherBuyer.taxId());

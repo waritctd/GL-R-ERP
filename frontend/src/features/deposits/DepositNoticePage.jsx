@@ -636,8 +636,10 @@ export function DepositNoticePage({ ticketId, onBack, showToast }) {
   // The server says when the header is the referenced quotation's party customer (it then ignores typed values and
   // keeps the reference), so the editor locks on that flag, not on its own guess from the quotation list.
   const customerFromQuotation = doc?.customerFromQuotation === true;
-  // A draft whose customer comes from its quotation may be re-pointed to another party quotation of this deal.
-  const partyQuotations = (dealQuotationsQuery.data?.items ?? []).filter((q) => q.partyId != null);
+  // A draft whose customer comes from its quotation may be re-pointed to another party quotation of this deal in a
+  // status the server bills (it refuses any other).
+  const partyQuotations = (dealQuotationsQuery.data?.items ?? []).filter((q) => q.partyId != null
+    && (['ACCEPTED', 'ISSUED'].includes(q.docStatus) || (q.docStatus === 'APPROVED' && (q.origin ?? 'DEAL_DIRECT') === 'DEAL_DIRECT')));
   const percentDiffers = !locked && form.depositPercent !== '' && quotationPercent != null
     && quotationPercent !== noticePercent;
   const subtotalDiffers = !locked && referencedQuotation != null
