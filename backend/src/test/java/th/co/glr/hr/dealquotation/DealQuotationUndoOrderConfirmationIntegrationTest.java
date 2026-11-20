@@ -373,15 +373,36 @@ class DealQuotationUndoOrderConfirmationIntegrationTest extends DirectQuotationD
     // ───────────────────────────────────────────────────────────────────────────────────
 
     @Test
-    void sentDeliveryRound_refusesTheUndoWithItsOwnReason() {
-        Confirmed c = confirmedDeal();
+    void sentDeliveryRound_isDroppedWithTheUndo_filesStayAsDealFiles_warehouseIsTold() {
+        Confirmed c = prePortalDeal("1000.00");
+        long wh = createEmployee("คลัง ยกเลิก", "wh-undo@glr.co.th", "WH", "คลังสินค้า", null);
         long round = insertRound(c.deal(), "SENT");
+        jdbc.update("INSERT INTO sales.delivery_request_line (delivery_request_id, item_id, qty) "
+            + "SELECT :r, item_id, 1 FROM sales.ticket_item WHERE ticket_id = :t LIMIT 1", Map.of("r", round, "t", c.deal()));
+        jdbc.update("INSERT INTO sales.attachment (ticket_id, file_name, file_path, attach_type, uploaded_by, delivery_request_id,"
+            + " uploader_side) VALUES (:t, 'po.pdf', '/x/po.pdf', 'OTHER', :u, :r, 'SALES')",
+            Map.of("t", c.deal(), "u", salesActor.id(), "r", round));
+
+        confirmer.undoOrderConfirmation(c.quotation().id(), null, null, salesActor);
+
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sales.delivery_request WHERE ticket_id = :t", Map.of("t", c.deal()), Integer.class)).isZero();
+        assertThat(jdbc.queryForMap("SELECT delivery_request_id, uploader_side FROM sales.attachment WHERE ticket_id = :t",
+            Map.of("t", c.deal()))).containsEntry("delivery_request_id", null).containsEntry("uploader_side", "SALES");
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM hr.notification WHERE employee_id = :e", Map.of("e", wh), Integer.class)).isEqualTo(1);
+        assertThat(jdbc.queryForObject("SELECT message FROM sales.ticket_event WHERE ticket_id = :t AND kind = 'ORDER_CONFIRMATION_UNDONE'",
+            Map.of("t", c.deal()), String.class)).contains("ลบคำขอส่งของรอบที่");
+    }
+
+    @Test
+    void forwardedDeliveryRound_refusesTheUndoWithItsOwnReason() {
+        Confirmed c = confirmedDeal();
+        long round = insertRound(c.deal(), "FORWARDED");
         jdbc.update("INSERT INTO sales.delivery_request_line (delivery_request_id, item_id, qty) "
             + "SELECT :r, item_id, 1 FROM sales.ticket_item WHERE ticket_id = :t LIMIT 1", Map.of("r", round, "t", c.deal()));
         assertThatThrownBy(() -> confirmer.undoOrderConfirmation(c.quotation().id(), "กดผิด", null, salesActor))
             .isInstanceOfSatisfying(ApiException.class, e -> {
                 assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
-                assertThat(e.getMessage()).contains("ส่งเรื่องขอออกใบกำกับ");
+                assertThat(e.getMessage()).contains("ส่งต่อให้ออกใบกำกับแล้ว");
             });
         assertThat(itemCount(c.deal())).as("nothing was deleted").isPositive();
     }

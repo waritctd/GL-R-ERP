@@ -2201,7 +2201,9 @@ public class DealQuotationService {
             // PRE_PORTAL receipt deleted with its effect on the expected payments, the flag cleared.
             var was = tickets.prePortalPolicyBefore(ticketId, promotion.eventId());
             if (was.isPresent()) {
-                tickets.restoreDepositPolicy(ticketId, was.get());
+                if (tickets.restoreDepositPolicy(ticketId, was.get()) != 1) {
+                    throw new ApiException(HttpStatus.CONFLICT, "คืนค่านโยบายมัดจำไม่สำเร็จ กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
+                }
                 policyNow = was.get();
             }
             prePortalDeposit = tickets.removePrePortal(ticketId);
@@ -2213,7 +2215,7 @@ public class DealQuotationService {
                 nowNotRequired ? DepositPolicy.REQUIRED : DepositPolicy.NOT_REQUIRED, null);
         }
         int draftNotices = tickets.deleteDraftDepositNotices(ticketId);
-        tickets.deleteDraftDeliveryRounds(ticketId);
+        List<Integer> removedRounds = tickets.deleteOpenDeliveryRounds(ticketId);
         tickets.deleteItems(ticketId);
         if (tickets.revertOrderConfirmation(ticketId, restoreStage, restoreStageAt) != 1) {
             throw new ApiException(HttpStatus.CONFLICT,
@@ -2229,10 +2231,21 @@ public class DealQuotationService {
             + " (ยืนยันโดย " + promotion.actorName() + " เมื่อ " + when + ")"
             + (reason == null || reason.isBlank() ? "" : " · เหตุผล: " + reason.trim())
             + (draftNotices > 0 ? " · ลบใบแจ้งรับมัดจำฉบับร่างแล้ว" : "")
+            + (removedRounds.isEmpty() ? "" : " · ลบคำขอส่งของรอบที่ "
+                + removedRounds.stream().map(String::valueOf).collect(java.util.stream.Collectors.joining(", ")) + " (ไฟล์ยังอยู่ในงาน)")
             + (prePortal ? " · ยกเลิกการตั้งเป็นงานที่เดินมาก่อนใช้ระบบ"
                 + (prePortalDeposit.signum() > 0 ? " และลบมัดจำที่รับแล้ว ฿" + prePortalDeposit.toPlainString() : "") : "");
         tickets.addEventWithDocument(ticketId, actor.id(), actor.name(), TicketEventKind.ORDER_CONFIRMATION_UNDONE,
             TicketStatus.QUOTATION_ISSUED, TicketStatus.DRAFT, note, RelatedDocumentType.QUOTATION, quotationId);
+        if (!removedRounds.isEmpty()) {
+            // The warehouse may have been reviewing a sent request: tell them it is gone.
+            String msg = actor.name() + " ยกเลิกการยืนยันคำสั่งซื้อ คำขอส่งของรอบที่ "
+                + removedRounds.stream().map(String::valueOf).collect(java.util.stream.Collectors.joining(", ")) + " ถูกลบ\n"
+                + DealNoticeText.dealLabel(locked.code(), locked.customerName());
+            for (long id : th.co.glr.hr.auth.WarehouseStaff.recipientIds(employeeAuth)) {
+                notifications.notifyEmployeeAtLink(id, "DELIVERY_REQUEST_RETURNED", msg, "/tickets/" + ticketId);
+            }
+        }
         return promotionResult(ticketId, quotationId);
     }
 
@@ -2290,8 +2303,8 @@ public class DealQuotationService {
         if (f.deliveryRecord()) {
             return "มีการบันทึกส่งสินค้าแล้ว จึงยกเลิกการยืนยันคำสั่งซื้อไม่ได้";
         }
-        if (tickets.hasSentDeliveryRound(s.id())) {
-            return "ย้อนการยืนยันคำสั่งซื้อไม่ได้ เพราะส่งเรื่องขอออกใบกำกับ/ส่งของแล้ว";
+        if (tickets.hasForwardedDeliveryRound(s.id())) {
+            return "มีคำขอที่ส่งต่อให้ออกใบกำกับแล้ว ยกเลิกการยืนยันคำสั่งซื้อไม่ได้";
         }
         if (f.manualStockDecision()) {
             return "มีการระบุที่มาสินค้า (สต็อก/นำเข้า) หลังยืนยันคำสั่งซื้อแล้ว จึงยกเลิกการยืนยันไม่ได้";

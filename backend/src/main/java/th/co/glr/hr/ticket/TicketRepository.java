@@ -2849,21 +2849,26 @@ public class TicketRepository {
                 rs.getBoolean("delivery"), rs.getBoolean("manual_stock"), rs.getBoolean("pre_portal_settled")));
     }
 
-    /** A delivery round of the order that is past DRAFT (V236): it holds coverage lines on the order's items. */
-    public boolean hasSentDeliveryRound(long ticketId) {
+    /** A delivery round already forwarded to the invoice issuer (or invoiced): an undo never touches one. */
+    public boolean hasForwardedDeliveryRound(long ticketId) {
         return Boolean.TRUE.equals(jdbc.queryForObject(
-            "SELECT EXISTS(SELECT 1 FROM sales.delivery_request WHERE ticket_id = :t AND status <> 'DRAFT')",
+            "SELECT EXISTS(SELECT 1 FROM sales.delivery_request WHERE ticket_id = :t AND status IN ('FORWARDED','INVOICED'))",
             Map.of("t", ticketId), Boolean.class));
     }
 
-    /** Undo of the order confirmation: drops the order's DRAFT rounds. Their files stay on the deal, unlinked. */
-    public void deleteDraftDeliveryRounds(long ticketId) {
+    /** Undo of the order confirmation: drops the order's DRAFT/SENT/RETURNED rounds with their lines (their files stay on the
+     * deal, unlinked, uploader_side kept). Returns the round numbers removed. */
+    public List<Integer> deleteOpenDeliveryRounds(long ticketId) {
+        List<Integer> nos = jdbc.queryForList(
+            "SELECT round_no FROM sales.delivery_request WHERE ticket_id = :t AND status IN ('DRAFT','SENT','RETURNED') ORDER BY round_no",
+            Map.of("t", ticketId), Integer.class);
         jdbc.update("""
-            UPDATE sales.attachment SET delivery_request_id = NULL, uploader_side = NULL
+            UPDATE sales.attachment SET delivery_request_id = NULL
              WHERE delivery_request_id IN (SELECT delivery_request_id FROM sales.delivery_request
-                                            WHERE ticket_id = :t AND status = 'DRAFT')
+                                            WHERE ticket_id = :t AND status IN ('DRAFT','SENT','RETURNED'))
             """, Map.of("t", ticketId));
-        jdbc.update("DELETE FROM sales.delivery_request WHERE ticket_id = :t AND status = 'DRAFT'", Map.of("t", ticketId));
+        jdbc.update("DELETE FROM sales.delivery_request WHERE ticket_id = :t AND status IN ('DRAFT','SENT','RETURNED')", Map.of("t", ticketId));
+        return nos;
     }
 
     /** The confirmation's own event: who pressed it and when. */
@@ -2952,11 +2957,11 @@ public class TicketRepository {
             (rs, n) -> rs.getString(1)).stream().findFirst();
     }
 
-    /** Puts the deposit policy back as the system's own (no person, no reason), under CUSTOMER_CONFIRMED like the other system flip. */
+    /** Puts the deposit policy back as the system's own (no person, no reason); the caller holds the ticket lock. Returns the rows changed. */
     public int restoreDepositPolicy(long ticketId, String policy) {
         return jdbc.update("""
             UPDATE sales.ticket SET deposit_policy = :p, deposit_policy_reason = NULL, deposit_policy_set_by = NULL, updated_at = now()
-             WHERE ticket_id = :t AND payment_status = 'CUSTOMER_CONFIRMED'
+             WHERE ticket_id = :t
             """, Map.of("t", ticketId, "p", policy));
     }
 

@@ -4847,6 +4847,7 @@ function mockUndoRefusal(ticket) {
   if (mockRemainingInvoices.some((r) => r.ticketId === ticket.id)) return 'ยกเลิกไม่ได้ — ออกใบแจ้งหนี้ส่วนที่เหลือแล้ว';
   if (mockImportRequests.some((r) => r.ticketId === ticket.id)) return 'ยกเลิกไม่ได้ — มีใบขอซื้อ (นำเข้า) แล้ว';
   if ((db.deliveryRecords ?? []).some((d) => d.ticketId === ticket.id)) return 'ยกเลิกไม่ได้ — มีการบันทึกส่งสินค้าแล้ว';
+  if (mockHasForwardedRound(ticket.id)) return 'มีคำขอที่ส่งต่อให้ออกใบกำกับแล้ว ยกเลิกการยืนยันคำสั่งซื้อไม่ได้';
   if (after(['STOCK_RESERVED', 'PROCUREMENT_SOURCE_DECIDED']) || ticket.procurementDecidedAt != null) {
     return 'ยกเลิกไม่ได้ — มีการระบุที่มาสินค้าหลังยืนยันคำสั่งซื้อแล้ว';
   }
@@ -21129,6 +21130,17 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
           ticket.depositPolicyReason = null;
         }
       }
+      // DRAFT/SENT/RETURNED rounds go with their lines; their files stay on the deal; the warehouse is told.
+      const removedRounds = mockDeliveryRequests.filter((r) => r.ticketId === ticket.id).map((r) => r.roundNo);
+      if (removedRounds.length) {
+        const gone = new Set(mockDeliveryRequests.filter((r) => r.ticketId === ticket.id).map((r) => r.id));
+        mockAttachments.forEach((att) => { if (gone.has(att.deliveryRequestId)) att.deliveryRequestId = null; });
+        for (let i = mockDeliveryRequests.length - 1; i >= 0; i -= 1) {
+          if (mockDeliveryRequests[i].ticketId === ticket.id) mockDeliveryRequests.splice(i, 1);
+        }
+        db.users.filter((u) => u.active && u.role === 'warehouse').forEach((u) => addNotification(u.id, ticket.id, ticket.code,
+          'DELIVERY_REQUEST_RETURNED', `${user.name} ยกเลิกการยืนยันคำสั่งซื้อ คำขอส่งของรอบที่ ${removedRounds.join(', ')} ถูกลบ\n${ticket.code}`, `/tickets/${ticket.id}`));
+      }
       let draftNotices = 0;
       for (let i = mockDepositNotices.length - 1; i >= 0; i -= 1) {
         if (mockDepositNotices[i].ticketId === ticket.id && mockDepositNotices[i].status === 'DRAFT') {
@@ -21158,6 +21170,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       pushEvent(ticket, user, 'ORDER_CONFIRMATION_UNDONE', 'quotation_issued', 'draft',
         `ยกเลิกการยืนยันคำสั่งซื้อจากใบเสนอราคา ${row.number} (ยืนยันโดย ${promotion.actorName} เมื่อ ${mockUndoNoteTime(promotion.createdAt)})`
         + (reason ? ` · เหตุผล: ${reason}` : '') + (draftNotices > 0 ? ' · ลบใบแจ้งรับมัดจำฉบับร่างแล้ว' : '')
+        + (removedRounds.length ? ` · ลบคำขอส่งของรอบที่ ${removedRounds.join(', ')} (ไฟล์ยังอยู่ในงาน)` : '')
         + (wasPrePortal ? ` · ยกเลิกการตั้งเป็นงานที่เดินมาก่อนใช้ระบบ${prePortalDeposit > 0 ? ` และลบมัดจำที่รับแล้ว ฿${prePortalDeposit}` : ''}` : ''));
       return result();
     },
