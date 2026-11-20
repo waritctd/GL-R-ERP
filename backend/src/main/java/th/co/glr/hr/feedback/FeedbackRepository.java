@@ -1,6 +1,8 @@
 package th.co.glr.hr.feedback;
 
 import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -9,6 +11,7 @@ import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
 import th.co.glr.hr.feedback.FeedbackDtos.FeedbackDto;
+import th.co.glr.hr.feedback.FeedbackDtos.Requester;
 
 @Repository
 public class FeedbackRepository {
@@ -28,7 +31,7 @@ public class FeedbackRepository {
         rs.getString("viewport"), rs.getLong("reporter_employee_id"), rs.getString("reporter_name"),
         rs.getString("reporter_department"), rs.getString("reporter_role"), rs.getString("status"),
         rs.getObject("eta", LocalDate.class), rs.getString("deny_reason"),
-        rs.getTimestamp("created_at").toInstant(), rs.getTimestamp("updated_at").toInstant());
+        rs.getTimestamp("created_at").toInstant(), rs.getTimestamp("updated_at").toInstant(), List.of());
 
     private final NamedParameterJdbcTemplate jdbc;
 
@@ -53,16 +56,66 @@ public class FeedbackRepository {
     }
 
     public Optional<FeedbackDto> findById(long id) {
-        return jdbc.query(SELECT + " WHERE feedback_id = :id", Map.of("id", id), MAPPER).stream().findFirst();
+        return withRequesters(jdbc.query(SELECT + " WHERE feedback_id = :id", Map.of("id", id), MAPPER))
+            .stream().findFirst();
     }
 
-    public List<FeedbackDto> findByReporter(long employeeId) {
-        return jdbc.query(SELECT + " WHERE reporter_employee_id = :id ORDER BY created_at DESC, feedback_id DESC",
-            Map.of("id", employeeId), MAPPER);
+    /** Requests this person is a requester of (the reporter included). */
+    public List<FeedbackDto> findByRequester(long employeeId) {
+        return withRequesters(jdbc.query(SELECT + """
+             WHERE EXISTS (SELECT 1 FROM hr.feedback_requester r
+                            WHERE r.feedback_id = hr.feedback_request.feedback_id AND r.employee_id = :id)
+             ORDER BY created_at DESC, feedback_id DESC
+            """, Map.of("id", employeeId), MAPPER));
     }
 
     public List<FeedbackDto> findAll() {
-        return jdbc.query(SELECT + " ORDER BY created_at DESC, feedback_id DESC", Map.of(), MAPPER);
+        return withRequesters(jdbc.query(SELECT + " ORDER BY created_at DESC, feedback_id DESC", Map.of(), MAPPER));
+    }
+
+    /** Attaches every row's requesters (reporter first, then by added_at) with ONE query. */
+    private List<FeedbackDto> withRequesters(List<FeedbackDto> rows) {
+        if (rows.isEmpty()) {
+            return rows;
+        }
+        Map<Long, List<Requester>> byFeedback = new HashMap<>();
+        jdbc.query("""
+            SELECT r.feedback_id, r.employee_id, d.name_th AS department,
+                   COALESCE(NULLIF(TRIM(CONCAT_WS(' ', e.first_name_th, e.last_name_th)), ''), e.email) AS name
+              FROM hr.feedback_requester r
+              JOIN hr.feedback_request f ON f.feedback_id = r.feedback_id
+              JOIN hr.employee e ON e.employee_id = r.employee_id
+              LEFT JOIN hr.division d ON d.division_id = e.division_id
+             WHERE r.feedback_id IN (:ids)
+             ORDER BY r.feedback_id, (r.employee_id = f.reporter_employee_id) DESC, r.added_at, r.employee_id
+            """, Map.of("ids", rows.stream().map(FeedbackDto::id).toList()), rs -> {
+                byFeedback.computeIfAbsent(rs.getLong("feedback_id"), k -> new ArrayList<>()).add(
+                    new Requester(rs.getLong("employee_id"), rs.getString("name"), rs.getString("department")));
+            });
+        return rows.stream().map(r -> r.withRequesters(byFeedback.getOrDefault(r.id(), List.of()))).toList();
+    }
+
+    public void addRequester(long feedbackId, long employeeId) {
+        jdbc.update("""
+            INSERT INTO hr.feedback_requester (feedback_id, employee_id) VALUES (:f, :e) ON CONFLICT DO NOTHING
+            """, Map.of("f", feedbackId, "e", employeeId));
+    }
+
+    /** Replaces the set, keeping added_at of people already on it. */
+    public void replaceRequesters(long feedbackId, List<Long> employeeIds) {
+        jdbc.update("DELETE FROM hr.feedback_requester WHERE feedback_id = :f AND employee_id NOT IN (:ids)",
+            Map.of("f", feedbackId, "ids", employeeIds));
+        jdbc.update("""
+            INSERT INTO hr.feedback_requester (feedback_id, employee_id)
+            SELECT :f, e FROM unnest(CAST(:ids AS bigint[])) AS e ON CONFLICT DO NOTHING
+            """, new MapSqlParameterSource().addValue("f", feedbackId)
+            .addValue("ids", employeeIds.toArray(new Long[0])));
+    }
+
+    /** How many of these ids are ACTIVE employees. */
+    public int countActive(List<Long> employeeIds) {
+        return jdbc.queryForObject("SELECT COUNT(*) FROM hr.employee WHERE is_active AND employee_id IN (:ids)",
+            Map.of("ids", employeeIds), Integer.class);
     }
 
     /** Submissions by this reporter in the last hour (rate limit). */

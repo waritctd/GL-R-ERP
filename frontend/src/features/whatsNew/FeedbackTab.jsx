@@ -49,6 +49,9 @@ function MyRow({ item }) {
       </div>
       <p className="m-0 whitespace-pre-wrap break-words">{item.details}</p>
       <p className="m-0 text-xs text-text-muted">แจ้งเมื่อ {when(item.createdAt)}</p>
+      {(item.requesters ?? []).length > 1 ? (
+        <p className="m-0 break-words text-xs text-text-muted">ผู้ขอร่วม: {item.requesters.map((r) => r.name).join(', ')}</p>
+      ) : null}
       {accepted ? (
         <>
           <p className="m-0 text-sm"><b>กำหนดเสร็จ:</b> {isoDateLabel(item.eta)}</p>

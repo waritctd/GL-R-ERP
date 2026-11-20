@@ -402,6 +402,8 @@ export const API_ROUTES = {
     list: '/api/feedback',
     decision: (id) => `/api/feedback/${id}/decision`,
     detail: (id) => `/api/feedback/${id}`,
+    people: '/api/feedback/people',
+    requesters: (id) => `/api/feedback/${id}/requesters`,
   },
   notifications: {
     list: '/api/notifications',

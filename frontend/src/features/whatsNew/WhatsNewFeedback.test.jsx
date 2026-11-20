@@ -1,7 +1,7 @@
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
-import { render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { api } from '../../api/index.js';
 import { recordPage } from './lastPage.js';
@@ -13,7 +13,7 @@ vi.mock('../../api/index.js', () => ({
   api: {
     notifications: { list: vi.fn(), markRead: vi.fn() },
     releaseNotes: { audience: vi.fn(), publish: vi.fn(), email: vi.fn() },
-    feedback: { submit: vi.fn(), listMine: vi.fn(), listAll: vi.fn(), decide: vi.fn(), update: vi.fn() },
+    feedback: { submit: vi.fn(), listMine: vi.fn(), listAll: vi.fn(), decide: vi.fn(), update: vi.fn(), people: vi.fn(), setRequesters: vi.fn() },
   },
 }));
 
@@ -95,5 +95,23 @@ describe('feedback tab: admin', () => {
     expect(within(first).getByRole('button', { name: 'ไม่รับ' })).toBeTruthy();
     const inProgress = items.find((li) => li.textContent.includes('#14'));
     expect(within(inProgress).queryByRole('button', { name: 'ไม่รับ' })).toBeNull();
+  });
+
+  it('adds a whole team in one tap and saves the reporter plus the team', async () => {
+    api.feedback.people.mockResolvedValue([
+      { employeeId: 41, name: 'ผู้แจ้ง', department: 'ฝ่ายขาย', role: 'sales' },
+      { employeeId: 42, name: 'เซลส์ สอง', department: 'ฝ่ายขาย', role: 'sales' },
+      { employeeId: 43, name: 'บัญชี หนึ่ง', department: 'ฝ่ายบัญชี', role: 'account' },
+    ]);
+    api.feedback.setRequesters.mockResolvedValue(row({ id: 15 }));
+    renderPage(admin);
+
+    await screen.findByText('เรื่องที่แจ้งเข้ามา (3)');
+    const item = screen.getAllByRole('listitem').find((li) => li.textContent.includes('#15'));
+    fireEvent.click(within(item).getByRole('button', { name: 'แก้ไขผู้ขอ' }));
+    fireEvent.click(await within(item).findByRole('button', { name: 'ทั้งฝ่ายบัญชี (1)' }));
+    fireEvent.click(within(item).getByRole('button', { name: 'บันทึก (2 คน)' }));
+
+    await waitFor(() => expect(api.feedback.setRequesters).toHaveBeenCalledWith(15, expect.arrayContaining([41, 43])));
   });
 });

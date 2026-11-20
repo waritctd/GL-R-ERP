@@ -23,7 +23,7 @@ function SilentToggle({ checked, onChange }) {
   return (
     <label className="flex items-center gap-2 text-sm">
       <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} />
-      ไม่ต้องแจ้งผู้แจ้ง (ไม่ส่งอีเมล)
+      ไม่ต้องแจ้งผู้ขอ (ไม่ส่งอีเมล)
     </label>
   );
 }
@@ -78,11 +78,87 @@ function DecisionPanel({ item, mode, silent, onSilent, onDone, showToast }) {
   );
 }
 
+/** Admin edits who asked for this request: team chips add a whole role at once, the list picks individuals. */
+function RequestersPanel({ item, onDone, showToast }) {
+  const queryClient = useQueryClient();
+  const reporterId = item.reporterEmployeeId;
+  const [selected, setSelected] = useState(() => new Set([reporterId, ...(item.requesters ?? []).map((r) => r.employeeId)]));
+  const [search, setSearch] = useState('');
+  const { data } = useQuery({ queryKey: queryKeys.feedbackPeople(), queryFn: () => api.feedback.people() });
+  const people = Array.isArray(data) ? data : [];
+  const teams = [...new Set(people.map((p) => p.role))];
+  const needle = search.trim().toLowerCase();
+  const shown = needle
+    ? people.filter((p) => `${p.name} ${p.department ?? ''}`.toLowerCase().includes(needle))
+    : people;
+  const save = useMutation({
+    mutationFn: () => api.feedback.setRequesters(item.id, [...selected]),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.feedbackAll() });
+      onDone();
+    },
+    onError: (e) => showToast?.('error', e.message || 'บันทึกไม่สำเร็จ'),
+  });
+
+  function toggle(id) {
+    const next = new Set(selected);
+    if (!next.delete(id)) next.add(id);
+    setSelected(next);
+  }
+
+  function toggleTeam(role) {
+    const members = people.filter((p) => p.role === role).map((p) => p.employeeId);
+    const all = members.every((id) => selected.has(id));
+    const next = new Set(selected);
+    members.forEach((id) => (all && id !== reporterId ? next.delete(id) : next.add(id)));
+    setSelected(next);
+  }
+
+  return (
+    <div className="grid gap-2.5 rounded-md bg-surface-muted p-3">
+      <div className="flex flex-wrap gap-2">
+        {teams.map((role) => {
+          const members = people.filter((p) => p.role === role);
+          const all = members.every((p) => selected.has(p.employeeId));
+          return (
+            <button key={role} type="button" aria-pressed={all} onClick={() => toggleTeam(role)}
+              className={`min-h-11 rounded-pill border px-3 text-sm font-bold ${all ? 'border-primary bg-primary text-surface' : 'border-border-input bg-surface text-icon-muted'}`}>
+              {`ทั้ง${ROLE_LABEL[role] ?? role} (${members.length})`}
+            </button>
+          );
+        })}
+      </div>
+      <input type="search" aria-label="ค้นหาชื่อหรือฝ่าย" placeholder="ค้นหาชื่อหรือฝ่าย" value={search}
+        onChange={(e) => setSearch(e.target.value)} />
+      <ul className="m-0 grid max-h-[60vh] list-none gap-1 overflow-y-auto p-0">
+        {shown.map((p) => (
+          <li key={p.employeeId}>
+            <label className="flex min-h-11 w-full items-center gap-2 rounded-md px-2 text-sm">
+              <input type="checkbox" checked={selected.has(p.employeeId)} disabled={p.employeeId === reporterId}
+                onChange={() => toggle(p.employeeId)} />
+              <span className="min-w-0 break-words">
+                {p.name}{p.department ? <span className="text-text-muted"> · {p.department}</span> : null}
+                {p.employeeId === reporterId ? <span className="text-text-muted"> (ผู้แจ้ง)</span> : null}
+              </span>
+            </label>
+          </li>
+        ))}
+      </ul>
+      <div className="flex flex-wrap gap-2">
+        <Button onClick={() => save.mutate()} loading={save.isPending}>{`บันทึก (${selected.size} คน)`}</Button>
+        <Button variant="secondary" onClick={onDone}>ยกเลิก</Button>
+      </div>
+    </div>
+  );
+}
+
 function InboxRow({ item, showToast }) {
   const queryClient = useQueryClient();
   const [mode, setMode] = useState(null);
   const [silent, setSilent] = useState(false);
+  const [editing, setEditing] = useState(false);
   const view = statusView(item.status);
+  const requesters = item.requesters?.length ? item.requesters : [{ employeeId: item.reporterEmployeeId, name: item.reporterName }];
   const accepted = !['PENDING', 'DENIED'].includes(item.status);
   const update = useMutation({
     mutationFn: (payload) => api.feedback.update(item.id, payload),
@@ -105,6 +181,12 @@ function InboxRow({ item, showToast }) {
         {item.pagePath ? ` · หน้า ${item.pagePath}` : ''}
         {item.impact ? ` · ${FEEDBACK_KINDS[item.kind].impacts.find(([id]) => id === item.impact)?.[1] ?? ''}` : ''}
       </p>
+      {requesters.length > 1 ? (
+        <p className="m-0 break-words text-xs text-text-muted">ผู้ขอ ({requesters.length}): {requesters.map((r) => r.name).join(', ')}</p>
+      ) : null}
+      {editing ? <RequestersPanel item={item} onDone={() => setEditing(false)} showToast={showToast} /> : (
+        <div><Button variant="secondary" onClick={() => setEditing(true)}>แก้ไขผู้ขอ</Button></div>
+      )}
       {item.status === 'PENDING' && !mode ? (
         <div className="flex flex-wrap gap-2">
           <Button onClick={() => setMode('ACCEPT')}>รับเรื่อง</Button>
