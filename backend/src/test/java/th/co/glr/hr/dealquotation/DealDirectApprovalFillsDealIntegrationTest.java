@@ -385,6 +385,22 @@ class DealDirectApprovalFillsDealIntegrationTest extends AbstractDealQuotationSl
         assertThat(submitted.docStatus()).isEqualTo("PENDING_APPROVAL");
     }
 
+    /** Free text nobody approved must not print on a rule-approved quotation: a reused line with a changed note needs approval. */
+    @Test
+    void addOn_reusedLineWithAChangedNote_fallsBackToApproval() {
+        long addOn = addOnWithApprovedRoot();
+
+        DealQuotationDto submitted = submitReuse(addOn, i -> new ItemInput(i.locationLabel(), i.catalogPriceId(),
+            i.productCode(), i.brand(), i.model(), i.color(), i.texture(), i.sizeText(), i.thicknessMm(), i.sqmPerPiece(),
+            i.quantityMode(), i.areaSqm(), i.piecesInput(), i.wastageMode(), i.wastageValue(), i.piecesPerBox(),
+            i.unitPrice(), i.discountPct(), i.originCountry(), i.leadTimeMinDays(), i.leadTimeMaxDays(), "ราคานี้รวมค่าขนส่ง",
+            i.lineType(), i.description(), i.quantity(), i.unit(), i.specialPriceSqm(), i.directNetPrice(), i.adjustmentPct(),
+            i.adjustmentDeadline(), i.adjustmentAmount(), i.id(), i.sqmPerBox(), i.roundToFullBox(), i.listPriceSqm(),
+            i.directNetPriceSqm(), i.priceMode(), i.stockSource(), i.sourceQuotationItemId()), 50);
+
+        assertThat(submitted.docStatus()).isEqualTo("PENDING_APPROVAL");
+    }
+
     /** Only approved prices addressed to the SAME party are sources: a quotation of the project addressed to another
      * party (a losing bidder) is not offered, and a claim on its line is dropped, so the line needs approval. */
     @Test

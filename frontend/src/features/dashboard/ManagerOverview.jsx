@@ -92,6 +92,12 @@ function ManagerToday({ user, employee, switcher, panelProps }) {
     queryFn: () => api.tickets.list({ movementFrom: teamRange.from, movementTo: teamRange.to, fold: 'project' }).then((r) => r.tickets ?? []),
   });
 
+  // The panel's ordered/expected money is split per ORDER (unfolded): a folded row's stage is the lead order's only.
+  const ordersQuery = useQuery({
+    queryKey: queryKeys.ticketListByRange(teamRange.from, teamRange.to),
+    queryFn: () => api.tickets.list({ movementFrom: teamRange.from, movementTo: teamRange.to }).then((r) => r.tickets ?? []),
+  });
+
   // null while loading: the panel shows its own skeleton, the rest of the page is already up.
   const pendingCommissions = commissionsQuery.data ?? null;
   const tickets = ticketsQuery.data ?? null;
@@ -117,7 +123,7 @@ function ManagerToday({ user, employee, switcher, panelProps }) {
       <PageStack {...panelProps}>
       <TeamOverview showTitle={false} />
 
-      <TeamMovementPanel deals={tickets} range={teamRange} />
+      <TeamMovementPanel deals={tickets} orders={ordersQuery.data ?? null} ordersFailed={failed(ordersQuery)} range={teamRange} />
 
       <Panel title="อัตราปิดงาน">
         {failed(ticketsQuery) ? (

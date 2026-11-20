@@ -1484,7 +1484,7 @@ public class DealQuotationService {
     }
 
     /** Quantity is the ONLY thing a reused line may change: everything that says what is sold, in what pack and size,
-     * and in which unit must equal its source (blank = null). Wastage / quantity mode / notes are quantity-side. */
+     * and in which unit must equal its source (blank = null). Wastage / quantity mode are quantity-side; the location heading and line note must equal. */
     private boolean sameIdentity(DealQuotationItemDto a, DealQuotationItemDto b) {
         return sameText(a.lineType(), b.lineType())
             && java.util.Objects.equals(a.catalogPriceId(), b.catalogPriceId())
@@ -1498,7 +1498,10 @@ public class DealQuotationService {
             // I2: the printed delivery promise is part of what is sold: a changed lead time or stock source needs approval.
             && java.util.Objects.equals(a.leadTimeMinDays(), b.leadTimeMinDays())
             && java.util.Objects.equals(a.leadTimeMaxDays(), b.leadTimeMaxDays())
-            && sameText(a.stockSource(), b.stockSource());
+            && sameText(a.stockSource(), b.stockSource())
+            // Free text nobody approved must not ride a rule-approved quotation: the printed ตำแหน่งติดตั้ง heading and the
+            // line note (editor-only today, compared anyway) must equal the source line's.
+            && sameText(a.locationLabel(), b.locationLabel()) && sameText(a.itemNotes(), b.itemNotes());
     }
 
     private boolean sameText(String a, String b) {

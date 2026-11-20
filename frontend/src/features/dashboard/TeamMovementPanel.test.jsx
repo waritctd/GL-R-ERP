@@ -25,12 +25,12 @@ const DEALS = [
   deal(2, { amountPayable: 250 }),
 ];
 
-function renderPanel() {
+function renderPanel(props = { deals: DEALS, orders: DEALS }) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={queryClient}>
       <MemoryRouter>
-        <TeamMovementPanel deals={DEALS} range={RANGE} />
+        <TeamMovementPanel {...props} range={RANGE} />
       </MemoryRouter>
     </QueryClientProvider>,
   );
@@ -70,5 +70,48 @@ describe('TeamMovementPanel', () => {
     const { DEAL_STAGE_CATALOG } = await import('../../data/dealStageCatalog.js');
     resolve(DEAL_STAGE_CATALOG);
     await waitFor(() => expect(cells().slice(-2)).toEqual(['฿4,000.00', '฿250.00']));
+  });
+
+  it('classes money per ORDER: a project whose root is ordered and whose add-on is still quoting', async () => {
+    const { DEAL_STAGE_CATALOG } = await import('../../data/dealStageCatalog.js');
+    api.meta.dealStages.mockResolvedValue(DEAL_STAGE_CATALOG);
+    // The folded row takes the ROOT's (ordered) stage but sums both orders' value (4000 + 250); the per-order rows split it.
+    const folded = [deal(1, { salesStage: 'ORDER_RECEIVED', amountPayable: 4250 })];
+    const orders = [
+      deal(1, { salesStage: 'ORDER_RECEIVED', amountPayable: 4000 }),
+      deal(2, { salesStage: 'QUOTE_BUYER', amountPayable: 250 }),
+    ];
+    renderPanel({ deals: folded, orders });
+    const row = screen.getByTestId('team-row-11');
+    await waitFor(() => expect([...row.querySelectorAll('td')].slice(-2).map((td) => td.textContent.trim()))
+      .toEqual(['฿4,000.00', '฿250.00']));
+    expect(row.querySelectorAll('td')[0].textContent).toBe('1'); // one open project
+  });
+
+  it('attributes an add-on moved to another rep to ITS owner: that owner gets a row and the money is not dropped', async () => {
+    const { DEAL_STAGE_CATALOG } = await import('../../data/dealStageCatalog.js');
+    api.meta.dealStages.mockResolvedValue(DEAL_STAGE_CATALOG);
+    // Folded: the project is one row owned by A (the lead order is the root). Orders: R-2 belongs to B, 50,000, quoting.
+    const folded = [deal(1, { salesStage: 'ORDER_RECEIVED', amountPayable: 54000 })];
+    const orders = [
+      deal(1, { salesStage: 'ORDER_RECEIVED', amountPayable: 4000 }),
+      deal(2, { createdById: 12, createdByName: 'เซลส์ บี', salesStage: 'QUOTE_BUYER', amountPayable: 50000 }),
+    ];
+    renderPanel({ deals: folded, orders });
+    const rowB = await screen.findByTestId('team-row-12');
+    await waitFor(() => expect([...rowB.querySelectorAll('td')].slice(-2).map((td) => td.textContent.trim()))
+      .toEqual(['฿0.00', '฿50,000.00']));
+    const cells = (id) => [...screen.getByTestId(`team-row-${id}`).querySelectorAll('td')].slice(-2)
+      .reduce((sum, td) => sum + Number(td.textContent.replace(/[^\d.]/g, '')), 0);
+    expect(cells(11) + cells(12)).toBe(54000);
+  });
+
+  it('shows — for money until the per-order list has loaded, and says so when it failed', async () => {
+    const { DEAL_STAGE_CATALOG } = await import('../../data/dealStageCatalog.js');
+    api.meta.dealStages.mockResolvedValue(DEAL_STAGE_CATALOG);
+    renderPanel({ deals: DEALS, orders: null, ordersFailed: true });
+    const row = await screen.findByTestId('team-row-11');
+    await waitFor(() => expect(screen.getByRole('alert')).toBeTruthy());
+    expect([...row.querySelectorAll('td')].slice(-2).map((td) => td.textContent.trim())).toEqual(['—', '—']);
   });
 });
