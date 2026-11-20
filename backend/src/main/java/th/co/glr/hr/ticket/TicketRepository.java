@@ -26,6 +26,19 @@ import org.springframework.http.HttpStatus;
 
 @Repository
 public class TicketRepository {
+    /** The AWARDED buyer of the deal at {@code t.ticket_id} (owner rule #65: the customer comes from the quotation): the
+     * customer of the party of its live (APPROVED/ISSUED/SENT/ACCEPTED) quotation whose party is AWARDED — the same
+     * quotation -> party -> customer hop {@code DepositNoticeRepository#QUOTATION_CUSTOMER_JOIN} makes. A scalar
+     * subselect, so the list and the board read it in their own statement; NULL before any party is awarded. */
+    public static final String AWARDED_BUYER_SQL = """
+        (SELECT ac.name
+           FROM sales.quotation aq
+           JOIN sales.deal_party ad ON ad.party_id = aq.party_id AND ad.status IN ('AWARDED', 'AWARDED_SPLIT')
+           JOIN customers.customer ac ON ac.customer_id = ad.customer_id
+          WHERE aq.ticket_id = t.ticket_id AND aq.origin IS NOT NULL
+            AND aq.doc_status IN ('APPROVED', 'ISSUED', 'SENT', 'ACCEPTED')
+          ORDER BY aq.quotation_id DESC LIMIT 1)""";
+
     private static final String SUMMARY_SELECT = """
         SELECT t.ticket_id,
                t.code, t.type, t.title, t.status, t.priority,
@@ -53,6 +66,8 @@ public class TicketRepository {
                t.win_probability, t.designer_name, t.owner_name, t.buyer_name,
                t.quotation_only, t.keyed_by, t.pause_return_on, t.estimated_value, t.expected_quarter,
                t.parent_ticket_id, t.child_kind,
+               """ + AWARDED_BUYER_SQL + """
+ AS awarded_buyer,
                (SELECT pt.code FROM sales.ticket pt WHERE pt.ticket_id = t.parent_ticket_id) AS parent_code,
                (SELECT COUNT(*) FROM sales.ticket ao
                  WHERE ao.child_kind = 'ADD_ON'
@@ -1382,7 +1397,8 @@ public class TicketRepository {
             .withEstimatedValue(rs.getBigDecimal("estimated_value"))
             .withExpectedQuarter(rs.getString("expected_quarter"))
             .withParent(rs.getObject("parent_ticket_id", Long.class), rs.getString("parent_code"),
-                rs.getString("child_kind"), rs.getInt("add_on_count"));
+                rs.getString("child_kind"), rs.getInt("add_on_count"))
+            .withAwardedBuyerName(rs.getString("awarded_buyer"));
     }
 
     /** One row's worth of the enrichment facts {@link SummaryFactsSql#SELECT} computes for a page of deals. */
@@ -1512,7 +1528,8 @@ public class TicketRepository {
             "DEPOSIT_NOTICE_ISSUED".equals(s.paymentStatus()) ? facts.depositDue() : null,
             s.keyedById(), s.stageChangedInRange(), s.activityInRange(), s.lastActivityAt(), s.pauseReturnOn(),
             s.estimatedValue(), s.expectedQuarter(), f.receiptSource(),
-            s.parentTicketId(), s.parentCode(), s.childKind(), s.addOnCount());
+            s.parentTicketId(), s.parentCode(), s.childKind(), s.addOnCount())
+            .withAwardedBuyerName(s.awardedBuyerName());
     }
 
     /** An INVOICE document is on file. The invoice is produced by an external system and uploaded here, so its

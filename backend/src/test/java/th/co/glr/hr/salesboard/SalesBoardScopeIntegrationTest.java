@@ -169,6 +169,32 @@ class SalesBoardScopeIntegrationTest extends AbstractDealQuotationSlice2Integrat
             .get("openDeals").asInt()).isEqualTo(1);
     }
 
+    /** Owner rule #65: a two-buyer deal's list row and board card name the AWARDED buyer from the quotation, not the
+     * headline party (QUOTED); a deal with no awarded party keeps the deal's customer (null awardedBuyerName). */
+    @Test
+    void theRowNamesTheAwardedBuyerOfTheQuotation_notTheHeadlineParty() throws Exception {
+        long root = deal(salesActor);
+        DealQuotationDto first = approved(root, salesActor, "DESIGNER");
+        long bare = deal(salesActor);
+        var parties = new th.co.glr.hr.dealparty.DealPartyRepository(jdbc);
+        long headline = parties.findByTicket(root).get(0).id();
+        parties.updateStatus(headline, "QUOTED");
+        var buyerB = customers.create("บริษัท ผู้ซื้อที่ได้งาน จำกัด", "0100000000303", "303 ถนนทดสอบ", "สนญ.", "02-000-0303");
+        long awarded = parties.insert(root, buyerB.id(), null, "BUYER", "AWARDED", false, salesActor.id());
+        jdbc.update("UPDATE sales.quotation SET party_id = :p WHERE quotation_id = :q", Map.of("p", awarded, "q", first.id()));
+
+        JsonNode row = byId(projectList(salesActor), "id", root);
+        assertThat(row.get("awardedBuyerName").asText()).isEqualTo(buyerB.name());
+        assertThat(row.get("customerName").asText()).isEqualTo(customer.name());
+        assertThat(byId(projectList(salesActor), "id", bare).get("awardedBuyerName").isNull()).isTrue();
+
+        JsonNode board = ok(get("/api/sales/my-work"), salesActor).get("board");
+        assertThat(byId(board, root).get("awardedBuyerName").asText()).isEqualTo(buyerB.name());
+        assertThat(byId(board, bare).get("awardedBuyerName").isNull()).isTrue();
+        // different buyers across a project's orders: the first order's, then " +N"
+        assertThat(th.co.glr.hr.ticket.ProjectFold.buyerLabel(List.of("A", "B", "A", "C"), x -> x)).isEqualTo("A +2");
+    }
+
     // ── review fixes: currency (M1), CLOSED_PAID (M2), value source (M3), role label ──────────
 
     @Test

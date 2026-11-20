@@ -70,6 +70,16 @@ public final class ProjectFold {
         }
     }
 
+    /**
+     * The buyer the project row shows (owner rule #65): the first counted order's awarded buyer, with " +N" when N
+     * other distinct buyers were awarded other orders of the project; null when no order has one (the row then shows
+     * the root's customer). Root first, as {@link Project#orders}.
+     */
+    public static <T> String buyerLabel(List<T> orders, Function<T, String> awardedBuyer) {
+        List<String> names = orders.stream().map(awardedBuyer).filter(n -> n != null && !n.isBlank()).distinct().toList();
+        return names.isEmpty() ? null : names.size() == 1 ? names.get(0) : names.get(0) + " +" + (names.size() - 1);
+    }
+
     /** Loads the chain rows the list does not carry. */
     @FunctionalInterface
     public interface Related<T> {

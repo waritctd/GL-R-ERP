@@ -9457,6 +9457,24 @@ function mockBoardValueQuotation(ticketId) {
     })[0] ?? null;
 }
 
+/** TicketRepository#AWARDED_BUYER_SQL: the customer of the AWARDED party of the deal's live quotation (newest first);
+ * null before any party is awarded. Owner rule #65. */
+function mockAwardedBuyerName(ticketId) {
+  const live = new Set(['APPROVED', 'ISSUED', 'SENT', 'ACCEPTED']);
+  const q = mockDealQuotations
+    .filter((x) => x.ticketId === ticketId && x.partyId != null && live.has(x.docStatus)
+      && ['AWARDED', 'AWARDED_SPLIT'].includes(mockDealParties.find((p) => p.id === x.partyId)?.status))
+    .sort((x, y) => y.id - x.id)[0];
+  const customerId = q ? mockDealParties.find((p) => p.id === q.partyId)?.customerId : null;
+  return mockCustomers.find((c) => c.id === customerId)?.name ?? null;
+}
+
+/** ProjectFold#buyerLabel: the first order's awarded buyer, " +N" for N other distinct buyers; null when none. */
+function mockBuyerLabel(orders, nameOf) {
+  const names = [...new Set(orders.map(nameOf).filter(Boolean))];
+  return names.length === 0 ? null : names.length === 1 ? names[0] : `${names[0]} +${names.length - 1}`;
+}
+
 /** DealCancelReason.VALID: the offered four (DEAL_STAGE_CATALOG.cancelReasons = DealCancelReason.OFFERED) plus the three
  * codes retired on 2026-11-16, which already-cancelled deals carry and the API still accepts. */
 const MOCK_CANCEL_REASON_VALID = [
@@ -9656,6 +9674,7 @@ function mockBoardFoldOps(ownerScope) {
         projectName: root.projectName, ownerId: owner.ownerId, ownerName: owner.ownerName, value, currency,
         orderCount: orders.length, openOrderCount: open.length, orderCodes: [...new Set([root, ...orders].map((x) => x.orderCodes[0]))],
         leadTicketId: lead.ticketId,
+        awardedBuyerName: mockBuyerLabel(orders, (x) => x.awardedBuyerName),
       };
     },
   };
@@ -9707,6 +9726,7 @@ function mockBoardRows(include) {
         openOrderCount: 1,
         orderCodes: [t.code],
         leadTicketId: t.id,
+        awardedBuyerName: mockAwardedBuyerName(t.id),
         ...mockBoardCardDetails(t, valueQuotation),
         lastTouchedMs: last,
       };
@@ -10781,6 +10801,7 @@ export const api = {
         ...movementFlags(t),
         ...derivePaymentFields(t),
         orderCount: 1, openOrderCount: 1, orderCodes: [],
+        awardedBuyerName: mockAwardedBuyerName(t.id),
       }));
       if (params.fold != null && params.fold !== 'project') fail('fold ต้องเป็น project', 400);
       // fold=project: ProjectFold, sales / sales_manager / ceo only (import and account act on each order).
@@ -10808,6 +10829,7 @@ export const api = {
                 amountPayable: sum(counted, 'amountPayable'), amountPaid: sum(counted, 'amountPaid'),
                 amountOutstanding: sum(counted, 'amountOutstanding'),
                 orderCount: orders.length, openOrderCount: open.length, orderCodes: [...new Set([root, ...orders].map((x) => x.code))],
+                awardedBuyerName: mockBuyerLabel(orders, (x) => x.awardedBuyerName),
               };
             },
           }),

@@ -179,6 +179,7 @@ function matchesSearch(deal, query) {
   return [
     deal.code,
     deal.customerName,
+    deal.awardedBuyerName,
     deal.projectName,
     deal.title,
     deal.createdByName,
@@ -411,7 +412,7 @@ function DealCard({ deal, catalog, reason = null, showTracking = false, onOpen }
       </div>
 
       <strong className="ticket-card-title">
-        {deal.customerName || deal.title}
+        {deal.awardedBuyerName || deal.customerName || deal.title}
       </strong>
       {deal.projectName ? (
         <span className="ticket-card-project">{deal.projectName}</span>
@@ -451,7 +452,7 @@ function MoneyWorklistCard({ deal, onOpen }) {
       </div>
 
       <strong className="ticket-card-title">
-        {deal.customerName || deal.title}
+        {deal.awardedBuyerName || deal.customerName || deal.title}
       </strong>
 
       <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
@@ -527,7 +528,7 @@ function SalesDealCard({ deal, catalog, showOwner = false, onOpen }) {
           {orderTotalLabel(deal) ? <small className="text-xs font-normal text-text-muted">{orderTotalLabel(deal)}</small> : null}
         </span>
       </div>
-      <strong className="ticket-card-title">{deal.customerName || deal.title}</strong>
+      <strong className="ticket-card-title">{deal.awardedBuyerName || deal.customerName || deal.title}</strong>
       {deal.projectName ? <span className="ticket-card-project">{deal.projectName}</span> : null}
       {showOwner ? <span className="text-xs text-text-muted">ผู้ดูแล: {deal.createdByName}</span> : null}
       <DealStageCell deal={deal} catalog={catalog} />
@@ -587,7 +588,7 @@ function buildDealColumns({ role, isManagerView, catalog }) {
     {
       key: 'customer',
       header: 'งาน / ลูกค้า / โครงการ',
-      searchAccessor: (deal) => [deal.code, deal.customerName, deal.projectName, deal.title, ...(deal.orderCodes ?? [])].filter(Boolean).join(' '),
+      searchAccessor: (deal) => [deal.code, deal.customerName, deal.awardedBuyerName, deal.projectName, deal.title, ...(deal.orderCodes ?? [])].filter(Boolean).join(' '),
       // This Link (not the row's `onRowClick`, a mouse-only convenience) is the row's keyboard and
       // assistive-tech activation target, like PricingRequestQueuePage.jsx's `requestCode` column.
       // The 721–1040px tablet band renders this desktop table (`useIsMobile` is <=720px) with no
@@ -598,7 +599,7 @@ function buildDealColumns({ role, isManagerView, catalog }) {
             to={dealHref(role, deal.id)}
             className="block truncate font-bold text-link underline decoration-1 underline-offset-2 hover:decoration-2"
           >
-            {deal.customerName || deal.title}
+            {deal.awardedBuyerName || deal.customerName || deal.title}
           </Link>
           <span className="block truncate text-2xs text-text-muted">
             {[deal.projectName, deal.code].filter(Boolean).join(' · ')}

@@ -40,6 +40,9 @@ public final class SalesBoardDtos {
      * finds the project's row. {@code openOrderCount} of them are open (the value counts only those) and
      * {@code leadTicketId} is the order whose state the row shows (the payment-due chip is looked up by it);
      * {@code ticketId} is the id the card opens. Rule: {@code ticket.ProjectFold}.
+     * {@code awardedBuyerName}: the AWARDED buyer of the order quotation (owner rule #65,
+     * {@code TicketRepository#AWARDED_BUYER_SQL}); on a project row the first order's, with " +N" for N other buyers;
+     * null when no party is awarded (the card then names {@code customerName}).
      */
     public record BoardDeal(long ticketId, String title, String customerName, String projectName, long ownerId,
                             String ownerName, String salesStage, String repCode, int boardColumn, BigDecimal value,
@@ -49,7 +52,7 @@ public final class SalesBoardDtos {
                             LocalDate pauseReturnOn, String quotationNumber, String buyerName,
                             LocalDate expectedDepositWeek, boolean depositReceived, LocalDate paymentDueDate,
                             boolean overdue, int orderCount, List<String> orderCodes, int openOrderCount,
-                            long leadTicketId) {
+                            long leadTicketId, String awardedBuyerName) {
         /** The shape before add-on folding: one order, no codes. */
         public BoardDeal(long ticketId, String title, String customerName, String projectName, long ownerId,
                          String ownerName, String salesStage, String repCode, int boardColumn, BigDecimal value,
@@ -62,7 +65,7 @@ public final class SalesBoardDtos {
             this(ticketId, title, customerName, projectName, ownerId, ownerName, salesStage, repCode, boardColumn,
                 value, currency, valueExpired, designerName, winProbability, expectedQuarter, lastTouchedAt,
                 daysQuiet, quiet, lastActivityKind, lastActivityNote, returning, pauseReturnOn, quotationNumber,
-                buyerName, expectedDepositWeek, depositReceived, paymentDueDate, overdue, 1, List.of(), 1, ticketId);
+                buyerName, expectedDepositWeek, depositReceived, paymentDueDate, overdue, 1, List.of(), 1, ticketId, null);
         }
 
         /** The shape before slice 6.2's card fields: no quotation number / buyer, no money state. */
@@ -84,7 +87,7 @@ public final class SalesBoardDtos {
                 boardColumn, value, currency, valueExpired, designerName, winProbability, expectedQuarter,
                 lastTouchedAt, daysQuiet, quiet, lastActivityKind, lastActivityNote, returning, pauseReturnOn,
                 quotationNumber, buyerName, expectedDepositWeek, depositReceived, paymentDueDate, overdue,
-                orderCount, orderCodes, openOrderCount, leadTicketId);
+                orderCount, orderCodes, openOrderCount, leadTicketId, awardedBuyerName);
         }
 
         /**
@@ -93,12 +96,12 @@ public final class SalesBoardDtos {
          * open orders, and the order count / open count / codes.
          */
         public BoardDeal asProject(long linkId, BoardDeal root, long ownerId, String ownerName, BigDecimal totalValue,
-                                   String totalCurrency, int count, int openCount, List<String> codes) {
+                                   String totalCurrency, int count, int openCount, List<String> codes, String awardedBuyer) {
             return new BoardDeal(linkId, root.title, root.customerName, root.projectName, ownerId, ownerName,
                 salesStage, repCode, boardColumn, totalValue, totalCurrency, valueExpired, designerName,
                 winProbability, expectedQuarter, lastTouchedAt, daysQuiet, quiet, lastActivityKind, lastActivityNote,
                 returning, pauseReturnOn, quotationNumber, buyerName, expectedDepositWeek, depositReceived,
-                paymentDueDate, overdue, count, codes, openCount, ticketId);
+                paymentDueDate, overdue, count, codes, openCount, ticketId, awardedBuyer);
         }
 
         /** The shape before {@code returning}/{@code pauseReturnOn}: an ACTIVE board row. */

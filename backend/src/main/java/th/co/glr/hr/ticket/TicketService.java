@@ -297,7 +297,7 @@ public class TicketService {
                 }
                 long linkId = p.mayOpenRoot() ? p.root().id() : p.lead().id();
                 return p.lead().asProject(linkId, p.root(), payable, paid, outstanding, p.count(), p.open().size(),
-                    p.codes(TicketSummaryDto::code));
+                    p.codes(TicketSummaryDto::code), ProjectFold.buyerLabel(p.orders(), TicketSummaryDto::awardedBuyerName));
             }
             private java.math.BigDecimal add(java.math.BigDecimal a, java.math.BigDecimal b) {
                 return a == null ? b : b == null ? a : a.add(b);

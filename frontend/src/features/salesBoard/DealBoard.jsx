@@ -28,7 +28,9 @@ function Chip({ tone = 'neutral', children }) {
  * In เสนอราคาแล้ว the value's own quotation number follows, never broken across lines.
  */
 function cardWho(deal) {
-  if (deal.boardColumn === 4 && deal.buyerName) return { buyer: `ผู้ซื้อ: ${deal.buyerName}` };
+  // The awarded buyer (owner rule #65: the customer comes from the quotation) wins over the rep's typed buyer name.
+  const awarded = deal.awardedBuyerName || deal.buyerName;
+  if (deal.boardColumn === 4 && awarded) return { buyer: `ผู้ซื้อ: ${awarded}` };
   return { designer: deal.designerName };
 }
 
