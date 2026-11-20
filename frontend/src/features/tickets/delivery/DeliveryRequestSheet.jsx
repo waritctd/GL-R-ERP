@@ -217,7 +217,11 @@ export function DeliveryRequestSheet({ ticketId, order, approvedQuotations, summ
       )}
     >
       <div className="flex flex-col gap-5">
-        <p className="m-0 text-base"><b>{order.projectName || order.customerName}</b></p>
+        <div className="flex flex-col gap-0.5">
+          <p className="m-0 text-base"><b>{order.projectName || order.customerName}</b></p>
+          {/* The buyer is the chosen quotation's customer, never only the deal's headline one (owner rule #65). */}
+          {round?.customerName ? <p className="m-0 text-sm text-text-secondary" data-testid="round-buyer">ผู้ซื้อ · {round.customerName}</p> : null}
+        </div>
         {error ? <p role="alert" className="m-0 text-sm text-danger" data-testid="sheet-error">{error}</p> : null}
         {openFailed && approvedQuotations.length === 0 ? (
           // An order with no approved quotation cannot be asked for: the way forward is the quotation.

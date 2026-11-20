@@ -54,6 +54,38 @@ function ConfirmSheet({ values, invoiceable, pending, error, onConfirm, onClose 
   );
 }
 
+/** The buyer to type into Express, read from the quotation of this round (owner rule #65): each value has its own copy button. */
+function BuyerCard({ round }) {
+  const [copied, setCopied] = useState(null);
+  const copy = async (key, text) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(key);
+    } catch {
+      setCopied('failed');
+    }
+  };
+  const rows = [['name', 'ชื่อลูกค้า', round.customerName], ['taxId', 'เลขประจำตัวผู้เสียภาษี', round.taxId], ['branch', 'สาขา', round.branch]];
+  return (
+    <div className="flex flex-col gap-1 rounded-md border border-border bg-surface px-4 py-3" data-testid="invoice-buyer">
+      <h4 className="m-0 text-[0.8125rem] font-bold text-text-secondary">ออกใบกำกับในนาม (ผู้ซื้อ)</h4>
+      {rows.map(([key, label, value]) => (
+        <div key={key} className="flex min-h-12 items-center justify-between gap-3">
+          <span className="flex min-w-0 flex-col">
+            <small className="text-xs text-text-muted">{label}</small>
+            <b className="text-base [overflow-wrap:anywhere]" data-testid={`invoice-buyer-${key}`}>{value || '—'}</b>
+          </span>
+          <Button type="button" variant="secondary" className="min-h-11 shrink-0" disabled={!value} aria-label={`คัดลอก${label}`} data-testid={`invoice-buyer-copy-${key}`} onClick={() => copy(key, value)}>
+            {copied === key ? 'คัดลอกแล้ว' : 'คัดลอก'}
+          </Button>
+        </div>
+      ))}
+      {copied === 'failed' ? <p role="alert" className="m-0 text-sm text-danger">คัดลอกไม่สำเร็จ เลือกข้อความแล้วคัดลอกเอง</p> : null}
+      {round.customerFromDeal ? <p className="m-0 text-xs text-text-muted" data-testid="invoice-buyer-from-deal">ใบเสนอราคานี้ไม่ได้ระบุลูกค้า ใช้ลูกค้าของงานแทน</p> : null}
+    </div>
+  );
+}
+
 /** `round`: a FORWARDED round the viewer may issue (viewer.canIssue). */
 /** `primary`: false when another round of the order is also waiting on this viewer; its action then sits on the card as a secondary button. */
 export function TaxInvoiceStep({ round, ticketId, invoiceable = null, primary = true }) {
@@ -120,6 +152,7 @@ export function TaxInvoiceStep({ round, ticketId, invoiceable = null, primary = 
   return (
     <section className="flex flex-col gap-3" data-testid="tax-invoice-step">
       <h3 className="m-0 px-1 text-[0.8125rem] font-bold text-text-secondary">ใบกำกับภาษีที่ออกแล้ว</h3>
+      {round.customerName ? <BuyerCard round={round} /> : null}
       {file ? (
         <div className="flex min-h-14 items-center gap-3 rounded-md border border-border bg-surface px-4 py-2" data-testid="invoice-file">
           <Icon name="fileText" size={20} />

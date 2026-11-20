@@ -3882,7 +3882,15 @@ function mockRoundDto(round, ticket, user) {
       return { itemId: l.itemId, description: item ? mockItemDescription(item) : '', unit: 'แผ่น', coveredQty: l.qty, deliveredQty: moneyValue(l.qty - mockRoundLineRemaining(round, l.itemId)) };
     });
   const quotation = mockApprovedQuotationsOf(ticket.id).find((q) => q.id === round.quotationId);
+  // DepositNoticeService#quotationBuyer: the chosen quotation's party customer, else the deal's own (owner rule #65).
+  const partyId = mockDealQuotations.find((q) => q.id === round.quotationId)?.partyId ?? null;
+  const partyCustomerId = partyId != null ? mockDealParties.find((p) => p.id === partyId)?.customerId ?? null : null;
+  const buyer = mockCustomers.find((c) => c.id === (partyCustomerId ?? ticket.customerId)) ?? null;
   return {
+    customerName: buyer?.name ?? ticket.customerName ?? null,
+    taxId: user.role === 'warehouse' ? null : buyer?.taxId ?? null,
+    branch: user.role === 'warehouse' ? null : buyer?.branch ?? null,
+    customerFromDeal: partyCustomerId == null,
     id: round.id, roundNo: round.roundNo, status: round.status, quotationId: round.quotationId ?? null,
     quotationNumber: quotation?.number ?? null, note: round.note ?? null,
     returnReasonCodes: round.returnReasonCodes ?? [], returnReasonText: round.returnReasonText ?? null,

@@ -261,7 +261,7 @@ describe('DeliveryRoundsPanel', () => {
   });
 
   it('the invoice issuer reads no deal, attaches the PDF, checks what was read, confirms; the round then reads as invoiced', async () => {
-    const issuing = { viewer: { ...viewer(false), canIssue: true }, forwardedByName: 'คุณคลัง', forwardedAt: '2026-11-19T04:15:00Z' };
+    const issuing = { viewer: { ...viewer(false), canIssue: true }, customerName: 'บริษัท ผู้ซื้อจริง จำกัด', taxId: '0100000000999', branch: 'สาขา 2', customerFromDeal: false, forwardedByName: 'คุณคลัง', forwardedAt: '2026-11-19T04:15:00Z' };
     const invoiceFile = { attachmentId: 21, fileName: 'IV2611-0042.pdf', mimeType: 'application/pdf', fileSize: 148480, kind: 'INVOICE', uploaderSide: 'ISSUER', uploadedById: 90 };
     const list = (rounds) => ({ order: ORDER, rounds, approvedQuotations: [], canStart: false, startBlockedReason: 'x' });
     api.deliveryRequests.list
@@ -276,6 +276,11 @@ describe('DeliveryRoundsPanel', () => {
     renderPanel({ dealless: true });
 
     expect(await screen.findByTestId('tax-invoice-step')).toBeTruthy();
+    // the buyer to type into Express comes from the quotation: name, tax id and branch, each with its own copy button
+    expect(screen.getByTestId('invoice-buyer-name').textContent).toBe('บริษัท ผู้ซื้อจริง จำกัด');
+    expect(screen.getByTestId('invoice-buyer-taxId').textContent).toBe('0100000000999');
+    expect(screen.getByTestId('invoice-buyer-branch').textContent).toBe('สาขา 2');
+    expect(screen.getByTestId('invoice-buyer-copy-taxId')).toBeTruthy();
     expect(api.tickets.get).not.toHaveBeenCalled();
     expect(screen.getByTestId('invoice-confirm').disabled).toBe(true);
     expect(screen.getByTestId('invoice-blocked').textContent).toBe('แนบไฟล์ใบกำกับภาษีก่อน');

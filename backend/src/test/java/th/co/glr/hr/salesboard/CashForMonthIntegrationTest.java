@@ -100,6 +100,9 @@ class CashForMonthIntegrationTest extends AbstractDealQuotationSlice2Integration
         receipt(delivered, "BALANCE", "222", "2026-10-31T16:59:00Z", "RE-4");   // 23:59 Bangkok, 31 Oct
         receipt(delivered, "BALANCE", "33", "2026-10-31T17:00:00Z", "RE-5");    // 00:00 Bangkok, Sun 1 Nov
         receipt(delivered, "ADJUSTMENT", "10", "2026-11-10T05:00:00Z", "RE-6"); // a refund subtracts
+        // money the rep recorded as received before the portal is not this month's collection
+        jdbc.update("UPDATE sales.payment_receipt SET source = 'PRE_PORTAL' WHERE receipt_id = :id", Map.of("id",
+            receipt(delivered, "DEPOSIT", "777", "2026-11-12T05:00:00Z", "RE-PRE")));
 
         long theirs = dealAt(otherSalesActor, "DELIVERED");
         expected(theirs, "BALANCE", "90000", "2026-11-09", "OPEN");

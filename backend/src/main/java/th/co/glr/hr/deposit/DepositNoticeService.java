@@ -1544,6 +1544,15 @@ public class DepositNoticeService {
         return resolveCustomerHeader(s, reqTaxId, reqAddress, reqProjectName, s.id(), null);
     }
 
+    /** The buyer printed on anything tied to a quotation (owner rule #65): that quotation's party customer, else the
+     * deal's own customer ({@code fromDeal}). Read-only; delivery rounds show it to sales, the warehouse and the issuer. */
+    public record QuotationBuyer(String name, String taxId, String branch, boolean fromDeal) {}
+
+    public QuotationBuyer quotationBuyer(TicketSummaryDto s, String quotationNumber) {
+        CustomerHeaderInfo h = resolveCustomerHeader(s, null, null, null, s.id(), quotationNumber);
+        return new QuotationBuyer(h.customerNameOr(s.customerName()), h.taxId(), h.branch(), h.customerName() == null);
+    }
+
     /** As above, but when {@code quotationNumber} names a new-engine quotation addressed to a party whose customer is
      * (any BUYER party, headline or not), the name / tax id / branch / address come ONLY from THAT customer: typed values
      * are ignored. Anything else (no number, a legacy number, no party) behaves exactly as the 4-argument form. */

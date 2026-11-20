@@ -52,6 +52,12 @@ class DeliveryRequestIntegrationTest extends AbstractDealDirectQuotationIntegrat
     void wireRounds() throws Exception {
         TicketRepository tickets = new TicketRepository(jdbc);
         depositNotices = mock(DepositNoticeService.class);
+        // The buyer lookup is the real one (owner rule #65); every other call on this service stays a mock.
+        DepositNoticeService realNotices = new DepositNoticeService(new th.co.glr.hr.deposit.DepositNoticeRepository(jdbc), tickets,
+            new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP), new th.co.glr.hr.deposit.DepositNoticePdfRenderer(),
+            new th.co.glr.hr.customer.CustomerRepository(jdbc), new th.co.glr.hr.customerquotation.CustomerQuotationRepository(jdbc),
+            th.co.glr.hr.support.DocumentBundles.noDownload(jdbc), new th.co.glr.hr.deposit.RemainingInvoiceRepository(jdbc));
+        when(depositNotices.quotationBuyer(any(), any())).thenAnswer(i -> realNotices.quotationBuyer(i.getArgument(0), i.getArgument(1)));
         FileStorageService storage = new FileStorageService(Files.createTempDirectory("glr-rounds").toString());
         rounds = transactional(new DeliveryRequestService(new DeliveryRequestRepository(jdbc), tickets, ticketService,
             new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP), new AttachmentRepository(jdbc), storage,
@@ -777,6 +783,26 @@ class DeliveryRequestIntegrationTest extends AbstractDealDirectQuotationIntegrat
         refusal(() -> rounds.send(onSecond, List.of(new SystemDocRef("DEPOSIT_NOTICE", n2)), salesActor), HttpStatus.BAD_REQUEST);
         refusal(() -> rounds.send(onSecond, List.of(new SystemDocRef("DEPOSIT_NOTICE", po2)), salesActor), HttpStatus.BAD_REQUEST);
         assertThat(rounds.send(onSecond, List.of(new SystemDocRef("QUOTATION", two.get(1).id())), salesActor).files()).hasSize(1);
+    }
+
+    @Test
+    void theRoundNamesTheBuyerOfItsQuotation_notTheDealsHeadlineCustomer() {
+        long ticketId = confirmedDeal();
+        rounds.createDraft(ticketId, null, salesActor);
+        String headline = rounds.list(ticketId, salesActor).rounds().get(0).customerName();
+        assertThat(headline).isNotBlank();
+
+        var buyer = new th.co.glr.hr.customer.CustomerRepository(jdbc).create("บริษัท ผู้ซื้อจริง จำกัด", "0100000000999", "999 ถนนทดสอบ", "สาขา 2", "02-000-0999");
+        long partyId = jdbc.queryForObject("INSERT INTO sales.deal_party (ticket_id, customer_id, role, status)"
+            + " VALUES (:t, :c, 'BUYER', 'AWARDED') RETURNING party_id", Map.of("t", ticketId, "c", buyer.id()), Long.class);
+        jdbc.update("UPDATE sales.quotation SET party_id = :p WHERE quotation_id = :q", Map.of("p", partyId,
+            "q", rounds.list(ticketId, salesActor).approvedQuotations().get(0).id()));
+
+        RoundDto round = rounds.list(ticketId, salesActor).rounds().get(0);
+        assertThat(round.customerFromDeal()).isFalse();
+        assertThat(round.customerName()).isEqualTo("บริษัท ผู้ซื้อจริง จำกัด").isNotEqualTo(headline);
+        assertThat(round.taxId()).isEqualTo("0100000000999");
+        assertThat(round.branch()).isEqualTo("สาขา 2");
     }
 
     private long issuedNotice(long ticketId, String number) {

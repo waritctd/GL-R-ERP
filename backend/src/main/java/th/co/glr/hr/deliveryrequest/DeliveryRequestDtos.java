@@ -52,11 +52,14 @@ public final class DeliveryRequestDtos {
 
     public record ConfirmInvoiceRequest(String invoiceNumber, java.time.LocalDate invoiceDate, BigDecimal total) {}
 
-    /** {@code invoice} is null until the issuer confirms the tax invoice (the attached file shows in {@code files}). */
+    /** {@code customerName}/{@code taxId}/{@code branch}: the buyer, read from the chosen quotation's party (owner rule #65);
+     * {@code customerFromDeal} is true when the quotation has no party and the deal's own customer stands in.
+     * {@code invoice} is null until the issuer confirms the tax invoice (the attached file shows in {@code files}). */
     public record RoundDto(long id, int roundNo, String status, Long quotationId, String quotationNumber, String note,
                            List<String> returnReasonCodes, String returnReasonText, String requestedByName,
                            Instant sentAt, String forwardedByName, Instant forwardedAt, InvoiceDto invoice,
-                           List<LineDto> lines, List<FileDto> files, List<String> untickedDocs, ViewerDto viewer) {}
+                           List<LineDto> lines, List<FileDto> files, List<String> untickedDocs, ViewerDto viewer,
+                           String customerName, String taxId, String branch, boolean customerFromDeal) {}
 
     /** {@code invoiceable}: what the order may still be invoiced for (payable minus confirmed invoices); null for the
      * warehouse and import, which never see money. */

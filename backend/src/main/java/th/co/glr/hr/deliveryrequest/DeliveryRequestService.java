@@ -161,7 +161,8 @@ public class DeliveryRequestService {
     private static RoundsResponse priceFree(RoundsResponse r) {
         List<RoundDto> dtos = r.rounds().stream().map(d -> new RoundDto(d.id(), d.roundNo(), d.status(), d.quotationId(),
             d.quotationNumber(), d.note(), d.returnReasonCodes(), d.returnReasonText(), d.requestedByName(), d.sentAt(),
-            d.forwardedByName(), d.forwardedAt(), priceFree(d.invoice()), d.lines(), List.of(), d.untickedDocs(), d.viewer())).toList();
+            d.forwardedByName(), d.forwardedAt(), priceFree(d.invoice()), d.lines(), List.of(), d.untickedDocs(), d.viewer(),
+            d.customerName(), d.taxId(), d.branch(), d.customerFromDeal())).toList();
         return new RoundsResponse(r.order(), dtos, r.approvedQuotations(), r.canStart(), r.startBlockedReason(), null);
     }
 
@@ -301,7 +302,8 @@ public class DeliveryRequestService {
         tickets.addEvent(s.id(), actor.id(), actor.name(), TicketEventKind.DELIVERY_REQUEST_FORWARDED, null, null,
             "ส่งต่อให้ออกใบกำกับ รอบส่งที่ " + round.roundNo());
         notifications.notifyTaxInvoiceIssuers(issuers, TicketEventKind.DELIVERY_REQUEST_FORWARDED,
-            displayCode(s) + " รอบส่งที่ " + round.roundNo() + " · คลังตรวจเอกสารแล้ว รอออกใบกำกับภาษี",
+            displayCode(s) + " รอบส่งที่ " + round.roundNo() + " · " + buyerName(s, round.quotationNumber())
+                + " · คลังตรวจเอกสารแล้ว รอออกใบกำกับภาษี",
             "/tickets/" + s.id() + "?tab=ship");
         return toDto(rounds.findById(rid).orElseThrow(), s, false, true, false, VoidCtx.NONE);
     }
@@ -655,7 +657,8 @@ public class DeliveryRequestService {
         rounds.replaceLines(rid, lines);
         storeSystemDocs(ticketId, rid, docNumbers, actor);
         rounds.markSent(rid, actor.id());
-        String message = displayCode(s) + " รอบส่งที่ " + round.roundNo() + " · ฝ่ายขายขอออกใบกำกับ รอคลังตรวจเอกสาร";
+        String message = displayCode(s) + " รอบส่งที่ " + round.roundNo() + " · " + buyerName(s, rounds.findById(rid).orElseThrow().quotationNumber())
+            + " · ฝ่ายขายขอออกใบกำกับ รอคลังตรวจเอกสาร";
         tickets.addEvent(ticketId, actor.id(), actor.name(), TicketEventKind.DELIVERY_REQUEST_SENT, null, null,
             "ขอออกใบกำกับ รอบส่งที่ " + round.roundNo());
         String link = "/tickets/" + ticketId + "?tab=ship";
@@ -854,12 +857,14 @@ public class DeliveryRequestService {
             && lines.stream().anyMatch(l -> l.coveredQty().compareTo(l.deliveredQty()) > 0);
         String recordBlock = recordable ? ticketService.deliveryBlockedReason(r.ticketId(), warehouse) : null;
         boolean canRecord = recordable && recordBlock == null;
+        var buyer = depositNotices.quotationBuyer(s, r.quotationNumber());
         return new RoundDto(r.id(), r.roundNo(), r.status(), r.quotationId(), r.quotationNumber(), r.note(),
             r.returnReasonCodes(), r.returnReasonText(), r.requestedByName(), r.sentAt(), r.forwardedByName(),
             r.forwardedAt(), invoice, lines, rounds.files(r.id()), r.untickedDocs(),
             new ViewerDto(editable, editable, warehouse && DeliveryRequestDtos.SENT.equals(r.status()), canIssue,
                 canRecord, invoiced && vctx.scope() && voidBlock == null, invoiced && vctx.scope() ? voidBlock : null,
-                recordBlock));
+                recordBlock),
+            buyer.name(), warehouse ? null : buyer.taxId(), warehouse ? null : buyer.branch(), buyer.fromDeal());
     }
 
     /**
@@ -911,6 +916,11 @@ public class DeliveryRequestService {
         Instant newestAt = newest == null ? null : ((java.sql.Timestamp) newest.get("created_at")).toInstant();
         return new VoidCtx(true, rounds.latestConfirmed(ticketId).orElse(null), rounds.deliveredRoundIds(ticketId),
             newestId, newestAt, rounds.receiptsSettledByImportRows(ticketId), paidInFull);
+    }
+
+    /** The buyer's name for a bell: the quotation's party customer, else the deal's (owner rule #65). */
+    private String buyerName(TicketSummaryDto s, String quotationNumber) {
+        return depositNotices.quotationBuyer(s, quotationNumber).name();
     }
 
     private OrderRef orderRef(TicketSummaryDto s) {

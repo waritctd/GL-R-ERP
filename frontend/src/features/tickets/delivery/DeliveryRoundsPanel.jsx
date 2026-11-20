@@ -218,6 +218,9 @@ function OpenRound({ round, orderLabel, warehouse = null, onVoid = null, onRecor
           />
         ))}
       </ol>
+      {round.status !== 'DRAFT' && round.customerName ? (
+        <p className="m-0 px-1 text-sm text-text-secondary" data-testid="round-buyer">ผู้ซื้อ · <b className="text-text">{round.customerName}</b></p>
+      ) : null}
       {round.status === 'RETURNED' && returnReasonText(round) ? (
         <div role="status" className="flex flex-col gap-2 rounded-md border border-warning-border bg-warning-bg px-3 py-2 text-sm text-text" data-testid="returned-reason">
           <p className="m-0"><b>คลังส่งกลับ:</b> {returnReasonText(round)}</p>
