@@ -112,6 +112,20 @@ public class DepositNoticeController {
         return Map.of("depositNotice", service.issue(docId, body == null ? null : body.expectedUpdatedAt(), user));
     }
 
+    /** What the PDF download sheet starts from: the remembered choice, else the quotation and every PO. */
+    @GetMapping("/deposit-notices/{docId}/bundle-selection")
+    DocumentBundle.Selection bundleSelection(@PathVariable long docId, HttpSession session) {
+        return service.bundleSelection(docId, sessions.requireUser(session));
+    }
+
+    /** The download sheet saves its choice here before downloading; the PDF GET then uses the saved choice. */
+    @PutMapping("/deposit-notices/{docId}/bundle-selection")
+    Map<String, Boolean> saveBundleSelection(@PathVariable long docId, @RequestBody DocumentBundle.Selection selection,
+                                             HttpSession session) {
+        service.saveBundleSelection(docId, sessions.requireUser(session), selection);
+        return Map.of("ok", true);
+    }
+
     // File download
     @GetMapping("/deposit-notices/{docId}/file")
     ResponseEntity<byte[]> file(

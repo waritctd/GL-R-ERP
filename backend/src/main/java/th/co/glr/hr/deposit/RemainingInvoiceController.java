@@ -82,6 +82,18 @@ public class RemainingInvoiceController {
         return Map.of("deleted", true);
     }
 
+    @GetMapping("/remaining-invoices/{id}/bundle-selection")
+    DocumentBundle.Selection bundleSelection(@PathVariable long id, HttpSession session) {
+        return service.bundleSelection(id, sessions.requireUser(session));
+    }
+
+    @PutMapping("/remaining-invoices/{id}/bundle-selection")
+    Map<String, Boolean> saveBundleSelection(@PathVariable long id, @RequestBody DocumentBundle.Selection selection,
+                                             HttpSession session) {
+        service.saveBundleSelection(id, sessions.requireUser(session), selection);
+        return Map.of("ok", true);
+    }
+
     @GetMapping("/remaining-invoices/{id}/file")
     ResponseEntity<byte[]> file(
         @PathVariable long id,

@@ -1,6 +1,7 @@
 package th.co.glr.hr.dealquotation;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.catchThrowableOfType;
 
 import java.io.ByteArrayOutputStream;
 import java.util.ArrayList;
@@ -16,7 +17,9 @@ import org.apache.pdfbox.text.PDFTextStripper;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpStatus;
 import org.springframework.mock.web.MockMultipartFile;
+import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.attachment.AttachmentRepository;
 import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.common.LibreOfficePdfConverter;
@@ -149,6 +152,43 @@ class DepositNoticeBundlePdfIntegrationTest extends DirectQuotationDealTestBase 
             .isEqualTo(lastPage(quotationService.renderPdf(quotation.id(), salesActor)));
     }
 
+    // ── the download sheet's choice ─────────────────────────────────────────────────────────────
+
+    /** Defaults are the quotation + every PO, oldest first; the sheet PUTs a choice (PO off, another file on, quotation
+     * off), which is what the next PDF holds; a foreign attachment id is a 400; chosen files over the cap are a 413. */
+    @Test
+    void theDownloadSheetChoice_picksTheFiles_andIsRemembered() throws Exception {
+        Deal deal = confirmedDepositDeal();
+        long id = deal.notice().id();
+        attachPo(deal.ticketId(), onePagePdf("PO-FIRST-1111"));
+        attachPo(deal.ticketId(), onePagePdf(PO_SENTINEL));
+        long other = attachFile(deal.ticketId(), "x.pdf", "application/pdf", onePagePdf("OTHER-SENTINEL"), AttachType.OTHER);
+        int quotationPages = pageCount(quotationService.renderPdf(deal.quotation().id(), salesActor));
+
+        List<String> defaults = pageTexts(depositNoticeService.getPdfBundle(id, salesActor).pdf());
+        assertThat(firstPageContaining(defaults, "PO-FIRST-1111")).as("oldest PO first")
+            .isLessThan(firstPageContaining(defaults, PO_SENTINEL));
+        assertThat(firstPageContaining(defaults, "OTHER-SENTINEL")).as("an OTHER file is unticked").isEqualTo(-1);
+        assertThat(defaults).hasSize(1 + 2 + quotationPages);
+
+        var choice = new th.co.glr.hr.deposit.DocumentBundle.Selection(false, List.of(other));
+        depositNoticeService.saveBundleSelection(id, salesActor, choice);
+        depositNoticeService.saveBundleSelection(id, salesActor, choice); // a double tap is idempotent
+        List<String> chosen = pageTexts(depositNoticeService.getPdfBundle(id, salesActor).pdf());
+        assertThat(firstPageContaining(chosen, "OTHER-SENTINEL")).isGreaterThanOrEqualTo(1);
+        assertThat(firstPageContaining(chosen, PO_SENTINEL)).isEqualTo(-1);
+        assertThat(chosen).as("notice + the ticked file, no quotation").hasSize(2);
+        assertThat(depositNoticeService.bundleSelection(id, salesActor).attachmentIds()).containsExactly(other);
+
+        long foreign = attachFile(pipelineTicket(salesActor), "f.pdf", "application/pdf", onePagePdf("F"), AttachType.OTHER);
+        assertStatus(org.springframework.http.HttpStatus.BAD_REQUEST, () -> depositNoticeService.saveBundleSelection(id,
+            salesActor, new th.co.glr.hr.deposit.DocumentBundle.Selection(true, List.of(foreign))));
+
+        jdbc.update("UPDATE sales.attachment SET file_size = 41943041 WHERE attachment_id = :id", java.util.Map.of("id", other));
+        assertStatus(org.springframework.http.HttpStatus.PAYLOAD_TOO_LARGE,
+            () -> depositNoticeService.getPdfBundle(id, salesActor));
+    }
+
     // ── customer header follows the quotation's party ───────────────────────────────────────
 
     /** A second BUYER party (another customer) and the quotation re-addressed to it. */
@@ -234,28 +274,92 @@ class DepositNoticeBundlePdfIntegrationTest extends DirectQuotationDealTestBase 
         assertThat(remainingInvoiceService.get(invoice.id(), salesActor).customerName()).isEqualTo(buyerA.name());
     }
 
-    /** Typed customer fields and a changed reference are ignored once the notice's reference resolves to a party; the
-     * STORED columns (which receipt import matches on) hold the party's values, and the DTO says so. */
+    /** Typed customer fields are ignored once the notice's reference resolves to a party (the STORED columns, which
+     * receipt import matches on, hold the party's values). A DRAFT may be re-pointed to another party quotation of the
+     * deal; any other changed reference is refused with 409, never silently ignored. */
     @Test
-    void noticeUpdateKeepsTheQuotationCustomerAndReference() {
+    void noticeUpdateKeepsTheQuotationCustomer_andRepointsOnlyADraftToAPartyQuotationOfTheDeal() {
         Deal deal = confirmedDepositDeal();
         var buyer = addressToSecondBuyer(deal.ticketId(), deal.quotation().id());
         DepositNoticeDto n = deal.notice();
 
         DepositNoticeDto updated = depositNoticeService.update(n.id(), new DepositNoticeDraftRequest("พิมพ์เอง", "111",
-            "ที่อยู่พิมพ์เอง", "โครงการใหม่", "QT-OTHER", null, null, null), salesActor);
-
+            "ที่อยู่พิมพ์เอง", "โครงการใหม่", null, null, null, null), salesActor);
         assertThat(updated.customerName()).isEqualTo(buyer.name());
         assertThat(updated.reference()).isEqualTo(deal.quotation().number());
         assertThat(updated.projectName()).isEqualTo("โครงการใหม่");
         assertThat(updated.customerFromQuotation()).isTrue();
+
+        // not a party quotation of this deal (unknown number, or one without a party): 409, notice untouched
+        cloneQuotation(deal.quotation().id(), "QT-NOPARTY", 91, false);
+        String noParty = "QT-NOPARTY";
+        for (String ref : List.of("QT-OTHER", noParty)) {
+            assertThat(catchThrowableOfType(() -> depositNoticeService.update(n.id(),
+                new DepositNoticeDraftRequest(null, null, null, null, ref, null, null, null), salesActor), ApiException.class)
+                .getStatus()).isEqualTo(HttpStatus.CONFLICT);
+        }
+
+        // a party quotation of the same deal: the draft takes that party's customer
+        long otherId = cloneQuotation(deal.quotation().id(), "QT-OTHER-PARTY", 92, true);
+        var otherBuyer = addressToBuyer(deal.ticketId(), otherId, "คุณส้ม", "0100000000555", "55 ถนนทดสอบ");
+        var repoint = new DepositNoticeDraftRequest(null, null, null, null, "QT-OTHER-PARTY", null, null, null);
+        // refused: a status create would not bill, a 0% quotation, a quotation with no lines (each 409, notice untouched)
+        jdbc.update("UPDATE sales.quotation SET doc_status = 'DRAFT' WHERE quotation_id = :id", java.util.Map.of("id", otherId));
+        assertThat(catchThrowableOfType(() -> depositNoticeService.update(n.id(), repoint, salesActor), ApiException.class)
+            .getStatus()).isEqualTo(HttpStatus.CONFLICT);
+        jdbc.update("UPDATE sales.quotation SET doc_status = 'APPROVED', deposit_percent = 0 WHERE quotation_id = :id", java.util.Map.of("id", otherId));
+        assertThat(catchThrowableOfType(() -> depositNoticeService.update(n.id(), repoint, salesActor), ApiException.class)
+            .getMessage()).contains("ไม่มีมัดจำ");
+        jdbc.update("UPDATE sales.quotation SET deposit_percent = 40 WHERE quotation_id = :id", java.util.Map.of("id", otherId));
+        jdbc.update("CREATE TEMP TABLE qi_keep AS SELECT * FROM sales.quotation_item WHERE quotation_id = :id", java.util.Map.of("id", otherId));
+        jdbc.update("DELETE FROM sales.quotation_item WHERE quotation_id = :id", java.util.Map.of("id", otherId));
+        assertThat(catchThrowableOfType(() -> depositNoticeService.update(n.id(), repoint, salesActor), ApiException.class)
+            .getStatus()).isEqualTo(HttpStatus.CONFLICT);
+        jdbc.update("INSERT INTO sales.quotation_item OVERRIDING SYSTEM VALUE SELECT * FROM qi_keep", java.util.Map.of());
+        jdbc.update("DROP TABLE qi_keep", java.util.Map.of());
+        assertThat(depositNoticeService.getById(n.id(), salesActor).reference()).isEqualTo(deal.quotation().number());
+
+        DepositNoticeDto moved = depositNoticeService.update(n.id(), repoint, salesActor);
+        assertThat(moved.depositPercent()).isEqualByComparingTo("0.40");
+        assertThat(moved.reference()).isEqualTo("QT-OTHER-PARTY");
+        assertThat(moved.customerName()).isEqualTo(otherBuyer.name());
+        assertThat(moved.customerTaxId()).isEqualTo(otherBuyer.taxId());
+        var newLines = depositNoticeService.itemsFromDealQuotation(otherId);
+        assertThat(moved.subtotal()).isNotEqualByComparingTo(updated.subtotal());
+        assertThat(moved.items()).extracting(i -> i.amount()).containsExactlyElementsOf(newLines.stream().map(i -> i.amount()).toList());
+        assertThat(moved.subtotal()).isEqualByComparingTo(newLines.stream().map(i -> i.amount())
+            .reduce(java.math.BigDecimal.ZERO, java.math.BigDecimal::add));
         assertThat(jdbc.queryForObject("SELECT customer_name FROM sales.deposit_notice WHERE deposit_notice_id = :id",
-            java.util.Map.of("id", n.id()), String.class)).isEqualTo(buyer.name());
+            java.util.Map.of("id", n.id()), String.class)).isEqualTo(otherBuyer.name());
+
+        // ISSUED: a changed reference is refused
+        jdbc.update("UPDATE sales.deposit_notice SET status = 'ISSUED' WHERE deposit_notice_id = :id", java.util.Map.of("id", n.id()));
+        assertThat(catchThrowableOfType(() -> depositNoticeService.update(n.id(),
+            new DepositNoticeDraftRequest(null, null, null, null, deal.quotation().number(), null, null, null), salesActor),
+            ApiException.class).getStatus()).isEqualTo(HttpStatus.CONFLICT);
+        jdbc.update("UPDATE sales.deposit_notice SET status = 'DRAFT' WHERE deposit_notice_id = :id", java.util.Map.of("id", n.id()));
 
         // the party row gone: the stored values show again and the editor is told they are editable
-        jdbc.update("UPDATE sales.quotation SET party_id = NULL WHERE quotation_id = :id",
-            java.util.Map.of("id", deal.quotation().id()));
+        jdbc.update("UPDATE sales.quotation SET party_id = NULL WHERE quotation_id = :id", java.util.Map.of("id", otherId));
         assertThat(depositNoticeService.getById(n.id(), salesActor).customerFromQuotation()).isFalse();
+    }
+
+    /** A second quotation of the same deal (a copy of {@code id} under a new number/version, party cleared); a deal
+     * holds only one live direct quotation, so the service cannot create it. */
+    private long cloneQuotation(long id, String number, int version, boolean unused) {
+        jdbc.update("CREATE TEMP TABLE q_clone AS SELECT * FROM sales.quotation WHERE quotation_id = :id", java.util.Map.of("id", id));
+        long newId = jdbc.queryForObject("SELECT max(quotation_id) + 1000 FROM sales.quotation", java.util.Map.of(), Long.class);
+        jdbc.update("UPDATE q_clone SET quotation_id = :n, number = :num, quotation_version = :v, party_id = NULL",
+            java.util.Map.of("n", newId, "num", number, "v", version));
+        jdbc.update("INSERT INTO sales.quotation OVERRIDING SYSTEM VALUE SELECT * FROM q_clone", java.util.Map.of());
+        jdbc.update("DROP TABLE q_clone", java.util.Map.of());
+        // its lines too, with doubled amounts so they differ from the original's
+        jdbc.update("CREATE TEMP TABLE qi_clone AS SELECT * FROM sales.quotation_item WHERE quotation_id = :id", java.util.Map.of("id", id));
+        jdbc.update("UPDATE qi_clone SET quotation_item_id = quotation_item_id + (SELECT max(quotation_item_id) FROM sales.quotation_item),"
+            + " quotation_id = :n, amount = amount * 2", java.util.Map.of("n", newId));
+        jdbc.update("INSERT INTO sales.quotation_item OVERRIDING SYSTEM VALUE SELECT * FROM qi_clone", java.util.Map.of());
+        jdbc.update("DROP TABLE qi_clone", java.util.Map.of());
+        return newId;
     }
 
     // ── fixtures ──────────────────────────────────────────────────────────────────────────────
@@ -279,10 +383,14 @@ class DepositNoticeBundlePdfIntegrationTest extends DirectQuotationDealTestBase 
     }
 
     private void attachPoFile(long ticketId, String name, String mime, byte[] bytes) {
+        attachFile(ticketId, name, mime, bytes, AttachType.PO);
+    }
+
+    private long attachFile(long ticketId, String name, String mime, byte[] bytes, String type) {
         FileStorageService.StoredFile stored = fileStorage.store("tickets", ticketId,
             new MockMultipartFile("file", name, mime, bytes), Set.of());
-        attachments.save(ticketId, null, name, stored.filePath(), stored.mimeType(), stored.fileSize(),
-            AttachType.PO, salesActor.id());
+        return attachments.save(ticketId, null, name, stored.filePath(), stored.mimeType(), stored.fileSize(),
+            type, salesActor.id()).id();
     }
 
     private static byte[] onePagePdf(String text) throws Exception {

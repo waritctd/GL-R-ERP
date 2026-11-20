@@ -19,7 +19,7 @@ public class CorsConfig {
                     .allowedOrigins(allowedOrigins.toArray(String[]::new))
                     .allowedMethods("GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS")
                     .allowedHeaders("Content-Type", "X-XSRF-TOKEN", "X-GLR-Agent-Token")
-                    .exposedHeaders("X-Document-Bundle-Skipped")
+                    .exposedHeaders("X-Document-Bundle-Skipped", "X-Document-Bundle-Large")
                     .allowCredentials(true)
                     .maxAge(3600);
             }

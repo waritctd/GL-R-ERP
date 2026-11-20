@@ -455,6 +455,40 @@ public class DepositNoticeRepository {
         }
     }
 
+    /** The remembered bundle choice for a document: whether the quotation goes in, and which deal attachments, in order. */
+    public record BundleSelection(boolean includeQuotation, List<Long> attachmentIds) {}
+
+    /** Empty when the user never chose for this document (the defaults then apply). A deleted attachment is gone. */
+    public Optional<BundleSelection> findBundleSelection(String kind, long documentId) {
+        Map<String, Object> p = Map.of("k", kind, "d", documentId);
+        List<Boolean> pref = jdbc.queryForList("SELECT include_quotation FROM sales.document_bundle_pref"
+            + " WHERE document_kind = :k AND document_id = :d", p, Boolean.class);
+        if (pref.isEmpty()) {
+            return Optional.empty();
+        }
+        List<Long> ids = jdbc.queryForList("SELECT attachment_id FROM sales.document_attachment_selection"
+            + " WHERE document_kind = :k AND document_id = :d ORDER BY seq", p, Long.class);
+        return Optional.of(new BundleSelection(pref.get(0), ids));
+    }
+
+    /** Idempotent (upserts, then drops what is no longer chosen), so a double tap never trips the primary key. */
+    public void saveBundleSelection(String kind, long documentId, boolean includeQuotation, List<Long> attachmentIds) {
+        jdbc.update("INSERT INTO sales.document_bundle_pref (document_kind, document_id, include_quotation)"
+            + " VALUES (:k, :d, :q) ON CONFLICT (document_kind, document_id) DO UPDATE SET include_quotation = :q",
+            new MapSqlParameterSource().addValue("k", kind).addValue("d", documentId).addValue("q", includeQuotation));
+        int seq = 0;
+        for (Long id : attachmentIds) {
+            jdbc.update("INSERT INTO sales.document_attachment_selection (document_kind, document_id, attachment_id, seq)"
+                + " VALUES (:k, :d, :a, :s) ON CONFLICT (document_kind, document_id, attachment_id) DO UPDATE SET seq = :s",
+                new MapSqlParameterSource().addValue("k", kind).addValue("d", documentId).addValue("a", id)
+                    .addValue("s", seq++));
+        }
+        jdbc.update("DELETE FROM sales.document_attachment_selection WHERE document_kind = :k AND document_id = :d"
+            + (attachmentIds.isEmpty() ? "" : " AND attachment_id NOT IN (:keep)"),
+            new MapSqlParameterSource().addValue("k", kind).addValue("d", documentId)
+                .addValue("keep", attachmentIds.isEmpty() ? List.of(0L) : attachmentIds));
+    }
+
     /** The customer of the party a new-engine quotation (this deal, this number) is addressed to; empty for a legacy
      * number or a quotation with no party. A deal can hold several BUYER parties, so this is not always the deal's. */
     public Optional<Long> findQuotationPartyCustomerId(long ticketId, String number) {
@@ -463,6 +497,25 @@ public class DepositNoticeRepository {
              WHERE q.ticket_id = :t AND q.number = :n AND q.origin IS NOT NULL
              ORDER BY q.quotation_id DESC LIMIT 1
             """, Map.of("t", ticketId, "n", number), Long.class).stream().findFirst();
+    }
+
+    /** A quotation a DRAFT notice may be re-pointed to: new-engine, addressed to a party, of this deal, and in a status
+     * {@link #findGoverningQuotation} would bill (PRICING_REQUEST ACCEPTED/ISSUED, DEAL_DIRECT also APPROVED). Carries
+     * the deposit percent the same way. */
+    public record RepointTarget(long quotationId, String number, BigDecimal depositPercent) {}
+
+    public Optional<RepointTarget> findRepointTarget(long ticketId, String number) {
+        return jdbc.query("""
+            SELECT quotation_id, number, deposit_percent FROM sales.quotation
+             WHERE ticket_id = :t AND number = :n AND party_id IS NOT NULL
+               AND ((origin = 'PRICING_REQUEST' AND doc_status IN ('ACCEPTED','ISSUED'))
+                 OR (origin = 'DEAL_DIRECT' AND doc_status IN ('ACCEPTED','ISSUED','APPROVED')))
+             ORDER BY quotation_id DESC LIMIT 1
+            """, Map.of("t", ticketId, "n", number), (rs, i) -> {
+                Integer stored = (Integer) rs.getObject("deposit_percent");
+                return new RepointTarget(rs.getLong("quotation_id"), rs.getString("number"), BigDecimal.valueOf(
+                    stored != null ? stored : DealQuotationRenderAdapter.DEFAULT_DEPOSIT_PERCENT, 2));
+            }).stream().findFirst();
     }
 
     /** The new-engine (origin set) quotation of this deal with this number: the one a notice's reference names. */

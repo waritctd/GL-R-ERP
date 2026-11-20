@@ -232,15 +232,36 @@ public class DepositNoticeService {
         }
         // The customer always comes from the quotation the STORED reference names (a new-engine quotation with a
         // party): typed customer fields are ignored and the reference is kept, since the read-time join keys on it.
-        CustomerHeaderInfo quotationHeader = resolveCustomerHeader(summary, null, null, null, doc.ticketId(), doc.reference());
+        String reference = doc.reference();
+        CustomerHeaderInfo quotationHeader = resolveCustomerHeader(summary, null, null, null, doc.ticketId(), reference);
         boolean fromQuotation = quotationHeader.customerName() != null;
+        String requested = blankToNull(req.reference());
+        List<DepositNoticeItemRequest> items = echoOnly(req.items(), doc.items());
+        if (fromQuotation && requested != null && !requested.equals(reference)) {
+            // Re-pointing: a DRAFT may move to another party quotation of THIS deal in a status create would bill
+            // (findRepointTarget); anything else is refused, never silently ignored.
+            var target = "DRAFT".equals(doc.status()) ? docs.findRepointTarget(doc.ticketId(), requested).orElse(null) : null;
+            if (target == null) {
+                throw new ApiException(HttpStatus.CONFLICT,
+                    "เปลี่ยนใบเสนอราคาอ้างอิงได้เฉพาะใบแจ้งยอดที่ยังเป็นฉบับร่าง และต้องเป็นใบเสนอราคาที่ใช้ออกใบแจ้งยอดได้ของดีลนี้");
+            }
+            if (target.depositPercent().signum() == 0) throw zeroDepositRefusal(requested);
+            // lines and percent follow the new quotation (as create builds them); client-sent items are ignored
+            items = docs.findDealQuotationItems(target.quotationId());
+            if (items.isEmpty()) {
+                throw new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคา " + requested + " ไม่มีรายการสินค้า จึงเปลี่ยนมาอ้างอิงไม่ได้");
+            }
+            depositPercent = target.depositPercent();
+            reference = requested;
+            quotationHeader = resolveCustomerHeader(summary, null, null, null, doc.ticketId(), reference);
+        }
         var effective = new DepositNoticeDraftRequest(
             fromQuotation ? quotationHeader.customerName() : req.customerName(),
             fromQuotation ? quotationHeader.taxId() : req.customerTaxId(),
             fromQuotation ? quotationHeader.address() : req.customerAddress(),
-            req.projectName(), fromQuotation ? doc.reference() : req.reference(),
+            req.projectName(), fromQuotation ? reference : req.reference(),
             depositPercent,
-            req.notes(), echoOnly(req.items(), doc.items()), req.expectedUpdatedAt(), req.preparerId()
+            req.notes(), items, req.expectedUpdatedAt(), req.preparerId()
         );
         docs.update(docId, effective, doc.items(), doc.status());
         DepositNoticeDto updated = docs.findById(docId).orElseThrow();
@@ -545,19 +566,43 @@ public class DepositNoticeService {
         }
     }
 
+    /** The PDF with the remembered (else default) attachment choice; the sheet's PUT is what changes it. */
     public DocumentBundle.Result getPdfBundle(long docId, UserPrincipal actor) {
         DepositNoticeDto doc = getById(docId, actor);
         try {
             byte[] pdf = renderer.toPdf(renderModel(doc, bangkokToday()));
-            return bundle.bundle(pdf, doc.ticketId(), doc.reference(), actor);
+            return bundle.bundle(pdf, doc.ticketId(), doc.reference(), actor, "DEPOSIT_NOTICE", docId);
+        } catch (ApiException e) {
+            throw e;
         } catch (Exception e) {
             throw new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "สร้างไฟล์ PDF ไม่สำเร็จ: " + e.getMessage());
         }
     }
 
+    /** What the download sheet should show for this notice: the remembered choice, else the defaults. */
+    public DocumentBundle.Selection bundleSelection(long docId, UserPrincipal actor) {
+        return bundle.selection("DEPOSIT_NOTICE", docId, getById(docId, actor).ticketId());
+    }
+
+    /** The download sheet's choice, remembered for this notice: same gate as the PDF download. */
+    @Transactional
+    public void saveBundleSelection(long docId, UserPrincipal actor, DocumentBundle.Selection selection) {
+        bundle.saveSelection("DEPOSIT_NOTICE", docId, getById(docId, actor).ticketId(), selection);
+    }
+
+    @Transactional
+    void saveBundleSelection(String kind, long documentId, long ticketId, DocumentBundle.Selection selection) {
+        bundle.saveSelection(kind, documentId, ticketId, selection);
+    }
+
+    DocumentBundle.Selection bundleSelection(String kind, long documentId, long ticketId) {
+        return bundle.selection(kind, documentId, ticketId);
+    }
+
     /** The bundle (PO + quotation) for a download of a document of {@code ticketId}. */
-    DocumentBundle.Result bundled(byte[] pdf, long ticketId, String quotationNumber, UserPrincipal actor) {
-        return bundle.bundle(pdf, ticketId, quotationNumber, actor);
+    DocumentBundle.Result bundled(byte[] pdf, long ticketId, String quotationNumber, UserPrincipal actor,
+                                  String kind, long documentId) {
+        return bundle.bundle(pdf, ticketId, quotationNumber, actor, kind, documentId);
     }
 
     // ── Remaining Invoice (ข้อ 13.5) ─────────────────────────────────────────

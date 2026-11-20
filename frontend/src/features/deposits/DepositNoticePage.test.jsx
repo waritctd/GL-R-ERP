@@ -296,6 +296,21 @@ describe('DepositNoticePage', () => {
       expect(screen.getByLabelText('ที่อยู่').readOnly).toBe(true);
     });
 
+    it('lets a draft be re-pointed to another party quotation of the deal (a select with number and customer)', async () => {
+      draftWith({ customerFromQuotation: true });
+      api.dealQuotations.listForTicket.mockResolvedValue({ items: [
+        { ...quotation, partyId: 1, docStatus: 'APPROVED', customerName: 'บริษัท เอ' },
+        { id: 62, number: 'QT-2026-0043', partyId: 2, docStatus: 'ISSUED', customerName: 'บริษัท บี' },
+        { id: 64, number: 'QT-2026-0045', partyId: 3, docStatus: 'DRAFT', customerName: 'ร่าง' },
+        { id: 63, number: 'QT-2026-0044', partyId: null, customerName: 'ไม่มีฝ่าย' },
+      ] });
+      renderDepositNoticePage();
+
+      const select = await screen.findByLabelText(/อ้างอิง PO/);
+      await waitFor(() => expect(select.tagName).toBe('SELECT'));
+      expect([...select.options].map((o) => o.textContent)).toEqual(['QT-2026-0042 — บริษัท เอ', 'QT-2026-0043 — บริษัท บี']);
+    });
+
     it('keeps the customer fields editable when the server did not take them from a quotation party', async () => {
       draftWith({ customerFromQuotation: false });
       api.dealQuotations.listForTicket.mockResolvedValue({ items: [{ ...quotation, partyId: 322 }] });

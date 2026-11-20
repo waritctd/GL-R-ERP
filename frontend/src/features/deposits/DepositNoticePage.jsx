@@ -18,6 +18,7 @@ import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { FormField, fieldErrorId } from '../../components/common/FormField.jsx';
 import { depositNoticeStatusLabel, formatThaiDate } from '../../utils/format.js';
 import { downloadBlob } from '../../utils/download.js';
+import { DocumentDownloadSheet } from '../tickets/DocumentDownloadSheet.jsx';
 import { warnIfBundleSkipped } from '../../utils/userMessages.js';
 import { round2 } from '../quotations/quotationMeta.js';
 import {
@@ -250,6 +251,7 @@ export function DepositNoticePage({ ticketId, onBack, showToast }) {
   // An ISSUED notice is read-only until sales presses แก้ไข; saving then updates the same document in place.
   const [editingIssued, setEditingIssued] = useState(false);
   const [downloading, setDownloading] = useState(null); // 'xlsx' | 'pdf' | null
+  const [pdfSheetOpen, setPdfSheetOpen] = useState(false); // the ดาวน์โหลด PDF sheet (which files go into the PDF)
 
   // UX-03: per-field issue-validation errors, keyed 'customerName' | 'items' (at-least-one-line-item) |
   // `items.<index>.<field>` | 'total'. Populated only by handleIssue() below — see the SCOPING DECISION comment
@@ -371,8 +373,9 @@ export function DepositNoticePage({ ticketId, onBack, showToast }) {
 
   // Re-seed the editable `form` whenever the doc's identity/version/status actually changes (new draft created,
   // or DRAFT -> ISSUED) — not on every background refetch of the same doc (e.g. a save doesn't bump
-  // version/status, so no reseed fires and in-flight edits aren't clobbered).
-  const docSeedKey = doc ? `${doc.id}:${doc.version}:${doc.status}` : null;
+  // version/status, so no reseed fires and in-flight edits aren't clobbered). The reference is in the key too:
+  // re-pointing a draft to another buyer's quotation replaces its customer and items on the server.
+  const docSeedKey = doc ? `${doc.id}:${doc.version}:${doc.status}:${doc.reference ?? ''}` : null;
   // The draft's updatedAt as last read from the server (the list, or this page's own save):
   // sent as expectedUpdatedAt, so a save over someone else's newer one is refused (409).
   const stampRef = useRef(null);
@@ -552,7 +555,7 @@ export function DepositNoticePage({ ticketId, onBack, showToast }) {
   // An issued notice downloads as stored. A draft is saved first when the form differs from what was loaded or last
   // saved (through the same path as บันทึกร่าง, so the 409 handling is the same) and downloads only if that save
   // succeeded; an unchanged draft downloads as stored without saving, so a reader who cannot save still gets the file.
-  async function handleDownload(extension) {
+  async function handleDownload(extension, rethrow = false) {
     if (!doc || downloading || saving) return;
     if (!locked && refusesClearedItems()) return;
     setDownloading(extension);
@@ -578,6 +581,7 @@ export function DepositNoticePage({ ticketId, onBack, showToast }) {
         warnIfBundleSkipped(blob, showToast);
       } catch (err) {
         showToast('error', err.message || 'ดาวน์โหลดไม่สำเร็จ');
+        if (rethrow) throw err; // the PDF sheet shows it too and stays open
       }
     } finally {
       setDownloading(null);
@@ -632,6 +636,10 @@ export function DepositNoticePage({ ticketId, onBack, showToast }) {
   // The server says when the header is the referenced quotation's party customer (it then ignores typed values and
   // keeps the reference), so the editor locks on that flag, not on its own guess from the quotation list.
   const customerFromQuotation = doc?.customerFromQuotation === true;
+  // A draft whose customer comes from its quotation may be re-pointed to another party quotation of this deal in a
+  // status the server bills (it refuses any other).
+  const partyQuotations = (dealQuotationsQuery.data?.items ?? []).filter((q) => q.partyId != null
+    && (['ACCEPTED', 'ISSUED'].includes(q.docStatus) || (q.docStatus === 'APPROVED' && (q.origin ?? 'DEAL_DIRECT') === 'DEAL_DIRECT')));
   const percentDiffers = !locked && form.depositPercent !== '' && quotationPercent != null
     && quotationPercent !== noticePercent;
   const subtotalDiffers = !locked && referencedQuotation != null
@@ -639,6 +647,10 @@ export function DepositNoticePage({ ticketId, onBack, showToast }) {
 
   return (
     <div className="grid w-full grid-cols-1 gap-[18px] min-w-0 max-w-[1320px]">
+      {pdfSheetOpen && doc ? (
+        <DocumentDownloadSheet kind="deposit" documentId={doc.id} ticketId={ticketId} reference={form.reference}
+          onClose={() => setPdfSheetOpen(false)} onDownload={() => handleDownload('pdf', true)} />
+      ) : null}
       <PageHeader
         title={`ใบแจ้งยอดเงินรับมัดจำ${doc?.docNumber ? ` ${doc.docNumber}` : ''}`}
         subtitle={doc
@@ -660,7 +672,7 @@ export function DepositNoticePage({ ticketId, onBack, showToast }) {
               triggerIcon="download"
               align="start"
               items={[
-                { key: 'pdf', label: 'PDF', icon: 'fileText', onSelect: () => handleDownload('pdf'), disabled: downloadBusy, disabledReason: downloading != null ? 'กำลังดาวน์โหลด…' : 'กำลังบันทึก…' },
+                { key: 'pdf', label: 'PDF', icon: 'fileText', onSelect: () => setPdfSheetOpen(true), disabled: downloadBusy, disabledReason: downloading != null ? 'กำลังดาวน์โหลด…' : 'กำลังบันทึก…' },
                 { key: 'xlsx', label: 'Excel', icon: 'fileText', onSelect: () => handleDownload('xlsx'), disabled: downloadBusy, disabledReason: downloading != null ? 'กำลังดาวน์โหลด…' : 'กำลังบันทึก…' },
               ]}
             />
@@ -809,8 +821,19 @@ export function DepositNoticePage({ ticketId, onBack, showToast }) {
                     onChange={(e) => setField('projectName', e.target.value)} placeholder="โครงการ…" />
                 </FormField>
                 <FormField label="อ้างอิง PO / ใบเสนอราคา" htmlFor="doc-reference">
-                  <input id="doc-reference" value={form.reference} readOnly={customerFromQuotation}
-                    onChange={(e) => setField('reference', e.target.value)} placeholder="PO-XXXX" />
+                  {customerFromQuotation && doc?.status === 'DRAFT' && partyQuotations.length > 0 ? (
+                    <select id="doc-reference" value={form.reference}
+                      onChange={(e) => setField('reference', e.target.value)}>
+                      {partyQuotations.some((q) => q.number === form.reference) ? null
+                        : <option value={form.reference}>{form.reference}</option>}
+                      {partyQuotations.map((q) => (
+                        <option key={q.id} value={q.number}>{q.number}{q.customerName ? ` — ${q.customerName}` : ''}</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input id="doc-reference" value={form.reference} readOnly={customerFromQuotation}
+                      onChange={(e) => setField('reference', e.target.value)} placeholder="PO-XXXX" />
+                  )}
                 </FormField>
                 <DocumentPreparerSelect ticketId={ticketId} id="doc-preparer" value={form.preparerId}
                   storedName={doc?.preparerName} onChange={(v) => setField('preparerId', v)} />

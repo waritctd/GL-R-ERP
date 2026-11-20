@@ -231,6 +231,7 @@ export const API_ROUTES = {
     update: (id) => `/api/deposit-notices/${id}`,
     preview: (id) => `/api/deposit-notices/${id}/preview`,
     issue: (id) => `/api/deposit-notices/${id}/issue`,
+    bundleSelection: (id) => `/api/deposit-notices/${id}/bundle-selection`,
     file: (id, fmt) => `/api/deposit-notices/${id}/file?format=${fmt}`,
     noteTemplates: '/api/document-note-templates',
     // ผู้จัดทำ choices for a deal's deposit notice / remaining invoice: { items: [{ id, name }] }
@@ -309,6 +310,7 @@ export const API_ROUTES = {
     forTicket: (ticketId) => `/api/tickets/${ticketId}/remaining-invoices`,
     get: (id) => `/api/remaining-invoices/${id}`,
     issue: (id) => `/api/remaining-invoices/${id}/issue`,
+    bundleSelection: (id) => `/api/remaining-invoices/${id}/bundle-selection`,
     revise: (id) => `/api/remaining-invoices/${id}/revise`,
     file: (id, fmt = 'pdf') => `/api/remaining-invoices/${id}/file?format=${fmt}`,
   },
