@@ -1418,11 +1418,13 @@ public class DepositNoticeService {
     // Package-private (not private) — "the existing requireTicketViewer" RemainingInvoiceService's
     // read/list/download gate reuses directly.
     TicketDto requireTicketViewer(long ticketId, UserPrincipal actor) {
-        requireRole(actor, VIEWER_ROLES);
+        if (!readsByGrant(actor)) {
+            requireRole(actor, VIEWER_ROLES);
+        }
         TicketDto t = tickets.findById(ticketId)
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบงานนี้"));
         // The per-role half is dealDocumentScope (below), which the document chain's list mark applies in SQL too.
-        switch (tickets.holdsAllSalesDocumentsGrant(actor) ? DealDocumentScope.ALL : dealDocumentScope(actor.role())) {
+        switch (readScope(actor)) {
             case ALL -> { }
             case OWNER_OR_KEYER -> {
                 if (!ownsDeal(t.summary(), actor)) {
@@ -1468,6 +1470,18 @@ public class DepositNoticeService {
             case "account" -> DealDocumentScope.ACCOUNT;
             default -> DealDocumentScope.ALL;
         };
+    }
+
+    /** The read-all grant holder (never import/account; sales_manager already reads by role). READ gates only: it is
+     * not in {@link #mayWriteDealDocuments} or {@link #ownsDeal}, so a holder never writes a document. */
+    public boolean readsByGrant(UserPrincipal actor) {
+        return th.co.glr.hr.auth.OversightReader.holder(actor, tickets::holdsReadAllSalesGrant);
+    }
+
+    /** The per-deal read scope of {@code actor}: the all-documents grant or the read-all grant reads every deal. */
+    public DealDocumentScope readScope(UserPrincipal actor) {
+        return tickets.holdsAllSalesDocumentsGrant(actor) || readsByGrant(actor)
+            ? DealDocumentScope.ALL : dealDocumentScope(actor.role());
     }
 
     /** {@link #requireTicketViewer} for callers outside this package (the document chain summary). */

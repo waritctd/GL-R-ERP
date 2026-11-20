@@ -38,7 +38,8 @@ public class DealDocumentListService {
 
     private Viewer viewer(UserPrincipal actor) {
         boolean grant = tickets.holdsAllSalesDocumentsGrant(actor);
-        DealDocumentScope scope = grant ? DealDocumentScope.ALL : DepositNoticeService.dealDocumentScope(actor.role());
+        DealDocumentScope scope = grant || th.co.glr.hr.auth.OversightReader.holder(actor, tickets::holdsReadAllSalesGrant)
+            ? DealDocumentScope.ALL : DepositNoticeService.dealDocumentScope(actor.role()); // the read-all grant reads every deal; writesEverywhere stays the documents grant only
         return new Viewer(scope, actor.id(),
             !grant && ("ceo".equals(actor.role()) || "account".equals(actor.role())), grant, "sales".equals(actor.role()));
     }

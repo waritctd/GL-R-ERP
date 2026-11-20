@@ -437,8 +437,8 @@ public class DealPartyService {
 
     private void requireViewAccess(TicketSummaryDto summary, UserPrincipal actor) {
         String role = actor.role();
-        if (tickets.holdsAllSalesDocumentsGrant(actor)) {
-            return;
+        if (tickets.holdsAllSalesDocumentsGrant(actor) || ticketService.oversightReader(actor)) {
+            return; // read-only: requireManageAccess (every write) is untouched
         }
         if (!VIEW_ROLES.contains(role)) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");

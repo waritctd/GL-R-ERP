@@ -201,9 +201,12 @@ public class CustomerQuotationService {
     }
 
     public List<CustomerQuotationDto> listForPricingRequest(long pricingRequestId, UserPrincipal actor) {
-        requireRole(actor, VIEW_ROLES);
+        boolean reader = ticketService.oversightReader(actor);
+        if (!reader) {
+            requireRole(actor, VIEW_ROLES);
+        }
         PricingRequestSummaryDto summary = requirePricingRequest(pricingRequestId);
-        if ("sales".equals(actor.role())) {
+        if ("sales".equals(actor.role()) && !reader) {
             requireOwner(summary, actor);
         }
         return quotations.findByPricingRequest(pricingRequestId);
@@ -836,6 +839,9 @@ public class CustomerQuotationService {
     }
 
     private void requireViewAccess(CustomerQuotationDto quotation, UserPrincipal actor) {
+        if (ticketService.oversightReader(actor)) {
+            return; // read-only oversight; the write gates (requireEditAccess) are untouched
+        }
         requireRole(actor, VIEW_ROLES);
         if ("sales".equals(actor.role())) {
             PricingRequestSummaryDto summary = requirePricingRequest(quotation.pricingRequestId());

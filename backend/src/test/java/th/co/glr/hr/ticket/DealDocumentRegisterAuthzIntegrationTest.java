@@ -253,6 +253,48 @@ class DealDocumentRegisterAuthzIntegrationTest extends AbstractPostgresIntegrati
         }
     }
 
+    /** v2.3.0 read-all grant: a flagged hr / employee / non-owning rep reads every document family and both registers
+     * (and the customer master) of another rep's deal, and still cannot write one. Import stays refused with the flag. */
+    @Test
+    void readAllHolder_readsEveryDocumentFamilyButWritesNone() throws Exception {
+        var registers = new th.co.glr.hr.deposit.DealDocumentListService(
+            new th.co.glr.hr.deposit.DealDocumentListRepository(jdbc), tickets);
+        var customerService = new th.co.glr.hr.customer.CustomerService(new CustomerRepository(jdbc),
+            new ContactRepository(jdbc), new ProjectRepository(jdbc), new th.co.glr.hr.auth.EmployeeAuthRepository(jdbc),
+            new th.co.glr.hr.dealquotation.DealQuotationRepository(jdbc, new th.co.glr.hr.catalog.CatalogRepository(jdbc)));
+        var noticeDraft = new th.co.glr.hr.deposit.DepositNoticeDraftRequest(null, null, null, null, null, null, null, null);
+        List<UserPrincipal> holders = List.of(hrActor, employeeActor, salesOtherActor);
+
+        for (UserPrincipal who : List.of(hrActor, employeeActor)) {
+            assertForbidden(() -> registers.listNotices(null, null, null, who));
+            assertForbidden(() -> customerService.search("Doc", who));
+        }
+        assertThat(registers.listNotices(null, null, null, salesOtherActor).rows()).as("a plain rep sees only her own").isEmpty();
+        jdbc.update("UPDATE hr.employee SET can_read_all_sales = TRUE WHERE employee_id IN (:a, :b, :c, :d)",
+            Map.of("a", hrActor.id(), "b", employeeActor.id(), "c", salesOtherActor.id(), "d", importAssigneeActor.id()));
+        for (UserPrincipal who : holders) {
+            assertThatCode(() -> depositNoticeService.listByTicket(ticketId, who)).as(who.role()).doesNotThrowAnyException();
+            assertNotForbidden(() -> depositNoticeService.getRemainingInvoiceOptions(ticketId, who));
+            assertThatCode(() -> pricingRequestService.get(pricingRequestId, who)).doesNotThrowAnyException();
+            assertThat(pricingRequestService.listForTicket(ticketId, who)).as(who.role()).hasSize(1);
+            assertThat(pricingRequestService.list(null, null, false, who)).as(who.role()).isNotEmpty();
+            assertThatCode(() -> quotationService.listForPricingRequest(pricingRequestId, who)).doesNotThrowAnyException();
+            assertThatCode(() -> registers.listNotices(null, null, null, who)).doesNotThrowAnyException();
+            assertThatCode(() -> registers.listInvoices(null, null, null, who)).doesNotThrowAnyException();
+            assertThatCode(() -> customerService.search("Doc", who)).doesNotThrowAnyException();
+            assertAttachmentsOk(who);
+            // ...and nothing is writable: a deposit notice, a pricing-request cancel / attachment.
+            assertForbidden(() -> depositNoticeService.createDraft(ticketId, noticeDraft, who));
+            assertForbidden(() -> pricingRequestService.cancel(pricingRequestId,
+                new PricingRequestRequests.CancelPricingRequestRequest("x"), who));
+        }
+        assertThat(pricingRequestService.get(pricingRequestId, salesOwnerActor).summary().status()).isNotEqualTo("CANCELLED");
+        // import with the flag: no deposit-notice reads (a customer financial document), exactly as without it.
+        assertForbidden(() -> depositNoticeService.listByTicket(ticketId, importAssigneeActor));
+        assertForbidden(() -> registers.listNotices(null, null, null, importAssigneeActor));
+        assertThat(th.co.glr.hr.auth.OversightReader.is(importAssigneeActor, id -> true)).isFalse();
+    }
+
     private static void assertForbidden(org.assertj.core.api.ThrowableAssert.ThrowingCallable callable) {
         assertThatThrownBy(callable)
             .isInstanceOf(ApiException.class)

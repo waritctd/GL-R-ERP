@@ -145,8 +145,7 @@ public class DocumentChainService {
      * the WHERE clause). One statement for the whole page.
      */
     public Map<Long, String> listStages(List<DealQuotationDto> rows, UserPrincipal actor) {
-        DealDocumentScope scope = DepositNoticeService.dealDocumentScope(actor.role());
-        if (tickets.holdsAllSalesDocumentsGrant(actor)) scope = DealDocumentScope.ALL;
+        DealDocumentScope scope = depositNoticeService.readScope(actor);
         if (scope == DealDocumentScope.NONE) return Map.of();
         List<Long> ids = rows.stream()
             .filter(row -> DealQuotationRepository.ORIGIN_DEAL_DIRECT.equals(row.origin())

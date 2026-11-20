@@ -86,7 +86,8 @@ public class CustomerService {
     }
 
     private void requireReadAccess(UserPrincipal actor) {
-        if (VIEWER_ROLES.contains(actor.role()) || DealEntryAccess.canEnterDeal(actor, employeeAuth)) {
+        if (VIEWER_ROLES.contains(actor.role()) || DealEntryAccess.canEnterDeal(actor, employeeAuth)
+            || th.co.glr.hr.auth.OversightReader.holder(actor, employeeAuth::canReadAllSales)) {
             return;
         }
         throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");

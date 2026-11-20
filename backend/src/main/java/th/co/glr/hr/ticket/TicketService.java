@@ -154,7 +154,7 @@ public class TicketService {
     }
 
     /** Oversight reader (sales_manager, or the live read-all grant outside import): reads every deal, edits nothing. */
-    private boolean oversightReader(UserPrincipal actor) {
+    public boolean oversightReader(UserPrincipal actor) {
         return OversightReader.is(actor, employeeAuth::canReadAllSales);
     }
 
