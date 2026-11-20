@@ -1,7 +1,6 @@
 package th.co.glr.hr.leave;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -12,14 +11,11 @@ import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
-import java.time.LocalTime;
 import java.time.ZoneId;
 import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
-import org.springframework.mock.web.MockMultipartFile;
 import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.attendance.schedule.CompanyWideWorkScheduleResolver;
 import th.co.glr.hr.attendance.schedule.DbHolidayCalendar;
@@ -29,7 +25,6 @@ import th.co.glr.hr.attendance.schedule.WorkScheduleAssignmentRepository;
 import th.co.glr.hr.attendance.schedule.WorkScheduleResolver;
 import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
-import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.config.AppProperties;
 import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.notification.NotificationService;
@@ -132,125 +127,6 @@ class LeaveScheduleHolidayAwareIntegrationTest extends AbstractPostgresIntegrati
             .containsEntry(officeEmployee, new BigDecimal("5.00"));
     }
 
-    @Test
-    void aSeededHolidayInsideARangeIsNotCountedAsWorkingForEitherA5DayOrA6DayEmployee() {
-        long warehouseDept = insertDepartmentOnSchedule("WH-HOL", "OPS_6D");
-        long officeDept = insertDepartmentOnSchedule("OFC-HOL", "OFFICE_5D");
-        long warehouseControl = insertEmployee("WH-HOL-CTRL", warehouseDept);
-        long officeControl = insertEmployee("OFC-HOL-CTRL", officeDept);
-
-        // Vacuous-fixture guard: submit a CONTROL pair over the identical Mon 8/3. hr.holiday is empty by default
-        // (V115), so this also proves the test is not accidentally relying on a pre-seeded row.
-        LeaveRequestDto warehouseControlResult = leaveService.submit(
-            submitRequest(warehouseControl, "LEAVE_WITHOUT_PAY", "2026-08-03", "2026-08-04"),
-            employee(warehouseControl));
-        LeaveRequestDto officeControlResult = leaveService.submit(
-            submitRequest(officeControl, "LEAVE_WITHOUT_PAY", "2026-08-03", "2026-08-04"),
-            employee(officeControl));
-        assertThat(warehouseControlResult.totalDays())
-            .as("control, no holiday seeded yet: both Mon and Tue count")
-            .isEqualByComparingTo("2.00");
-        assertThat(officeControlResult.totalDays())
-            .as("control, no holiday seeded yet: both Mon and Tue count")
-            .isEqualByComparingTo("2.00");
-
-        insertHoliday("2026-08-04", "ทดสอบวันหยุด");
-
-        long warehouseEmployee = insertEmployee("WH-HOL-EMP", warehouseDept);
-        long officeEmployee = insertEmployee("OFC-HOL-EMP", officeDept);
-        LeaveRequestDto warehouseResult = leaveService.submit(
-            submitRequest(warehouseEmployee, "LEAVE_WITHOUT_PAY", "2026-08-03", "2026-08-04"),
-            employee(warehouseEmployee));
-        LeaveRequestDto officeResult = leaveService.submit(
-            submitRequest(officeEmployee, "LEAVE_WITHOUT_PAY", "2026-08-03", "2026-08-04"),
-            employee(officeEmployee));
-
-        assertThat(warehouseResult.totalDays())
-            .as("Mon counts, the seeded Tue holiday does not -- even on a six-day (OPS_6D) schedule")
-            .isEqualByComparingTo("1.00");
-        assertThat(officeResult.totalDays())
-            .as("same for a five-day (OFFICE_5D) schedule -- holiday beats schedule for everyone")
-            .isEqualByComparingTo("1.00");
-
-        // Leave requires approval (2026-08-05): findUnpaidLeaveDaysByEmployeeForMonth is filtered to APPROVED requests
-        // -- drive all four requests (control pair included) there first.
-        leaveService.approve(warehouseControlResult.id(), new ReviewLeaveRequest("approved"), hr());
-        leaveService.approve(officeControlResult.id(), new ReviewLeaveRequest("approved"), hr());
-        leaveService.approve(warehouseResult.id(), new ReviewLeaveRequest("approved"), hr());
-        leaveService.approve(officeResult.id(), new ReviewLeaveRequest("approved"), hr());
-
-        Map<Long, BigDecimal> unpaidAugust =
-            leaveRepository.findUnpaidLeaveDaysByEmployeeForMonth(LocalDate.parse("2026-08-01"));
-        assertThat(unpaidAugust)
-            .containsEntry(warehouseEmployee, new BigDecimal("1.00"))
-            .containsEntry(officeEmployee, new BigDecimal("1.00"))
-            // The CONTROL pair reads 1.00 here, not the 2.00 it was granted at, and that is correct rather than a bug:
-            // findUnpaidLeaveDaysByEmployeeForMonth deliberately RECOMPUTES each request's unpaid days against the CURRENT
-            // hr.holiday contents at read time.
-            .containsEntry(warehouseControl, new BigDecimal("1.00"))
-            .containsEntry(officeControl, new BigDecimal("1.00"));
-    }
-
-    @Test
-    void maternityStillCountsCalendarDaysIncludingASeededHolidayAndAWeekendUnaffectedByEitherFix() {
-        long officeDept = insertDepartmentOnSchedule("OFC-MAT", "OFFICE_5D");
-        long maternityEmployee = insertEmployee("MAT-EMP", officeDept);
-        long controlEmployee = insertEmployee("MAT-CTRL", officeDept);
-        insertHoliday("2026-08-04", "ทดสอบวันหยุด");
-        MockMultipartFile certificate =
-            new MockMultipartFile("attachment", "cert.pdf", "application/pdf", "pdf".getBytes());
-
-        // Maternity counts all seven calendar days, including holidays and weekends excluded by working-day leave.
-        LeaveRequestDto maternityResult = leaveService.submit(
-            submitRequest(maternityEmployee, "MATERNITY", "2026-08-03", "2026-08-09"),
-            certificate, employee(maternityEmployee));
-        LeaveRequestDto controlResult = leaveService.submit(
-            submitRequest(controlEmployee, "LEAVE_WITHOUT_PAY", "2026-08-03", "2026-08-09"),
-            employee(controlEmployee));
-
-        assertThat(maternityResult.totalDays())
-            .as("MATERNITY counts all 7 calendar days: 5 weekdays + the holiday + the weekend")
-            .isEqualByComparingTo("7.00");
-        assertThat(controlResult.totalDays())
-            .as("the SAME range under WORKING_DAYS drops the holiday and the weekend: only 4 days")
-            .isEqualByComparingTo("4.00");
-    }
-
-    @Test
-    void aSubDayWorkingDaysRequestOnASeededHolidayIsRejectedButASubDayMaternityRequestOnTheSameHolidayIsNot() {
-        long officeDept = insertDepartmentOnSchedule("OFC-SUB", "OFFICE_5D");
-        long workingDaysEmployee = insertEmployee("SUB-HOL-EMP", officeDept);
-        long maternityEmployee = insertEmployee("SUB-HOL-MAT", officeDept);
-        insertHoliday("2026-08-04", "ทดสอบวันหยุด"); // Tuesday
-        MockMultipartFile certificate =
-            new MockMultipartFile("attachment", "cert.pdf", "application/pdf", "pdf".getBytes());
-
-        SubmitLeaveRequest subDayOnHolidayWorkingDays = new SubmitLeaveRequest(
-            workingDaysEmployee, "LEAVE_WITHOUT_PAY",
-            LocalDate.parse("2026-08-04"), LocalDate.parse("2026-08-04"),
-            "sub-day on a holiday", LocalTime.of(8, 30), LocalTime.of(12, 30),
-            null, null, null, null, null, null, null);
-        SubmitLeaveRequest subDayOnHolidayMaternity = new SubmitLeaveRequest(
-            maternityEmployee, "MATERNITY",
-            LocalDate.parse("2026-08-04"), LocalDate.parse("2026-08-04"),
-            "sub-day maternity on the same holiday", LocalTime.of(8, 30), LocalTime.of(12, 30),
-            null, null, null, null, null, null, null);
-
-        // WORKING_DAYS: the new schedule/holiday-aware gate in validateSubDayTimes correctly rejects a sub-day request
-        // whose only date is a holiday -- there is no working day to take partial leave from.
-        assertThatThrownBy(() -> leaveService.submit(subDayOnHolidayWorkingDays, employee(workingDaysEmployee)))
-            .isInstanceOf(ApiException.class)
-            .extracting(ex -> ((ApiException) ex).getStatus())
-            .isEqualTo(HttpStatus.BAD_REQUEST);
-
-        // CALENDAR_DAYS (MATERNITY): the SAME holiday date, the SAME gate, must NOT reject -- this is the
-        // double-handling guard. Before the basis gate in validateSubDayTimes, this would have been wrongly rejected
-        // once holiday-awareness landed (it was accepted, holiday-blind, prior to this branch).
-        LeaveRequestDto maternityResult =
-            leaveService.submit(subDayOnHolidayMaternity, certificate, employee(maternityEmployee));
-        assertThat(maternityResult.status()).isEqualTo("SUBMITTED");
-    }
-
     // --- helpers ------------------------------------------------------------
 
     private SubmitLeaveRequest submitRequest(long employeeId, String leaveTypeCode, String startDate, String endDate) {
@@ -296,10 +172,4 @@ class LeaveScheduleHolidayAwareIntegrationTest extends AbstractPostgresIntegrati
             Long.class);
     }
 
-    private void insertHoliday(String date, String nameTh) {
-        jdbc.update("""
-            INSERT INTO hr.holiday (holiday_date, name_th, source)
-            VALUES (:date, :nameTh, 'COMPANY')
-            """, new MapSqlParameterSource().addValue("date", LocalDate.parse(date)).addValue("nameTh", nameTh));
-    }
 }

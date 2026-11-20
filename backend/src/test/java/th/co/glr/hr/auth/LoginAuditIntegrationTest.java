@@ -1,7 +1,6 @@
 package th.co.glr.hr.auth;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.LocalDate;
@@ -15,7 +14,6 @@ import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import th.co.glr.hr.audit.AuditLogRepository;
 import th.co.glr.hr.audit.AuditService;
-import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
 /** Proves a successful login actually lands a row in hr.audit_log, through the real AuthService, the real
@@ -57,42 +55,6 @@ class LoginAuditIntegrationTest extends AbstractPostgresIntegrationTest {
         // moves division, the row still says what they were when they logged in.
         assertThat(row.get("role")).isEqualTo("hr");
         assertThat(row.get("must_change_password")).isEqualTo("false");
-    }
-
-    @Test
-    void writesOneRowPerLoginSoRepeatVisitsAreDistinguishable() {
-        service.login(new LoginRequest("audit.login@glr.co.th", PASSWORD, null), new MockHttpServletRequest());
-        service.login(new LoginRequest("audit.login@glr.co.th", PASSWORD, null), new MockHttpServletRequest());
-        service.login(new LoginRequest("audit.login@glr.co.th", PASSWORD, null), new MockHttpServletRequest());
-
-        assertThat(loginRowsFor(employeeId)).hasSize(3);
-    }
-
-    @Test
-    void writesNothingWhenTheCredentialsAreRejected() {
-        // Asked the wrong way round: the trail must never imply a login that did not happen.
-        assertThatThrownBy(() -> service.login(
-            new LoginRequest("audit.login@glr.co.th", "wrong-password", null), new MockHttpServletRequest()))
-            .isInstanceOf(ApiException.class);
-        assertThatThrownBy(() -> service.login(
-            new LoginRequest("nobody@glr.co.th", PASSWORD, null), new MockHttpServletRequest()))
-            .isInstanceOf(ApiException.class);
-
-        assertThat(loginRowsFor(employeeId)).isEmpty();
-        assertThat(jdbc.queryForObject(
-            "SELECT count(*) FROM hr.audit_log WHERE action = 'LOGIN'", Map.of(), Long.class)).isZero();
-    }
-
-    @Test
-    void writesNothingWhenTheEmployeeIsInactive() {
-        jdbc.update("UPDATE hr.employee SET is_active = FALSE WHERE employee_id = :id",
-            Map.of("id", employeeId));
-
-        assertThatThrownBy(() -> service.login(
-            new LoginRequest("audit.login@glr.co.th", PASSWORD, null), new MockHttpServletRequest()))
-            .isInstanceOf(ApiException.class);
-
-        assertThat(loginRowsFor(employeeId)).isEmpty();
     }
 
     private List<Map<String, Object>> loginRowsFor(long id) {

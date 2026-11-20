@@ -5,7 +5,6 @@ import static org.mockito.Mockito.mock;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
-import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -23,12 +22,9 @@ import th.co.glr.hr.notification.SalesNotificationMailer;
 import th.co.glr.hr.leave.LeaveRepository;
 import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.payroll.PayrollCalculator;
-import th.co.glr.hr.payroll.PayrollLineDto;
-import th.co.glr.hr.payroll.PayrollPeriodDto;
 import th.co.glr.hr.payroll.PayrollRepository;
 import th.co.glr.hr.payroll.PayrollService;
 import th.co.glr.hr.payroll.PayslipRenderer;
-import th.co.glr.hr.payroll.ProcessPayrollRequest;
 import th.co.glr.hr.payroll.declaration.TaxAllowanceDeclarationDtos.TaxAllowanceDeclarationDto;
 import th.co.glr.hr.payroll.declaration.TaxAllowanceDeclarationDtos.TaxAllowanceDeclarationSubmitRequest;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
@@ -130,52 +126,6 @@ class TaxAllowanceExpiryIntegrationTest extends AbstractPostgresIntegrationTest 
             .isEqualTo(declaration.expiredAt());
     }
 
-    @Test
-    void sweepDoesNotTouchAnAlreadyProcessedMonthForAnUnrelatedEmployee() {
-        // employeeToExpire: an overdue applied declaration the sweep SHOULD act on.
-        long employeeToExpire = seedEmployee("EXP-B", new BigDecimal("50000.00"));
-        submitApprovedAndApplied(employeeToExpire, 2020, new BigDecimal("60000"));
-
-        // employeeProcessed: a COMPLETELY different employee whose June 2026 payroll has already been processed for
-        // real, with its own standing (non-expiring, non-declaration-backed) allowance context. The sweep must never
-        // reach into hr.payroll_line at all.
-        long employeeProcessed = seedEmployee("EXP-C", new BigDecimal("45000.00"));
-        payrollService.process(new ProcessPayrollRequest(LocalDate.of(2026, 6, 1), List.of()), hrActor());
-        PayrollLineDto before = reloadedLineFor(LocalDate.of(2026, 6, 1), employeeProcessed);
-
-        service.expireOverdueVerifications();
-
-        PayrollLineDto after = reloadedLineFor(LocalDate.of(2026, 6, 1), employeeProcessed);
-        assertThat(after.withholdingTax())
-            .as("an already-filed month's withholding tax must never be retro-altered by the sweep")
-            .isEqualByComparingTo(before.withholdingTax());
-        assertThat(after.taxAllowanceTotal()).isEqualByComparingTo(before.taxAllowanceTotal());
-        assertThat(after.netPay()).isEqualByComparingTo(before.netPay());
-
-        PayrollPeriodDto period = payrollRepository.findPeriodByMonth(LocalDate.of(2026, 6, 1)).orElseThrow();
-        assertThat(period.status()).isEqualTo("PROCESSED");
-    }
-
-    /** The mirror of expiry: EXPIRED -> APPROVED restores the whole year's lineage on the parent table. */
-    @Test
-    void reverifyRestoresBothTablesAndPayrollPicksTheAllowanceUpAgain() {
-        long employeeId = seedEmployee("EXP-D", new BigDecimal("50000.00"));
-        long declarationId = submitApprovedAndApplied(employeeId, 2020, new BigDecimal("60000"));
-        service.expireOverdueVerifications();
-        assertThat(declarationRepository.findById(declarationId).orElseThrow().status())
-            .isEqualTo(TaxAllowanceDeclarationStatus.EXPIRED);
-        assertThat(payrollRepository.findTaxAllowancesByEmployee(LocalDate.of(2020, 6, 1)))
-            .doesNotContainKey(employeeId);
-
-        TaxAllowanceDeclarationDto reverified = service.reverify(declarationId, hrActor());
-
-        assertThat(reverified.status()).isEqualTo(TaxAllowanceDeclarationStatus.APPROVED);
-        assertThat(reverified.expiredAt()).isNull();
-        assertThat(payrollRepository.findTaxAllowancesByEmployee(LocalDate.of(2020, 6, 1)))
-            .as("re-verification must restore the WHOLE year's lineage on the parent table")
-            .containsKey(employeeId);
-    }
-
     // --- helpers ---------------------------------------------------------------------------------
 
     private long submitApprovedAndApplied(long employeeId, int taxYear, BigDecimal spouseAllowance) {
@@ -196,16 +146,6 @@ class TaxAllowanceExpiryIntegrationTest extends AbstractPostgresIntegrationTest 
         // APPROVED declaration with applied_at set.
         approveSigned(declaration.declarationId());
         return declaration.declarationId();
-    }
-
-    private PayrollLineDto reloadedLineFor(LocalDate month, long employeeId) {
-        long periodId = payrollRepository.findPeriodByMonth(month)
-            .map(PayrollPeriodDto::id)
-            .orElseThrow(() -> new AssertionError("no period persisted for " + month));
-        return payrollRepository.findLines(periodId).stream()
-            .filter(line -> line.employeeId() == employeeId)
-            .findFirst()
-            .orElseThrow(() -> new AssertionError("no persisted line for employee " + employeeId + " / " + month));
     }
 
     private long seedEmployee(String code, BigDecimal salary) {

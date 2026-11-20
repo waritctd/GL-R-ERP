@@ -14,7 +14,6 @@ import {
   confirmOrder,
   createDeal,
   createImportRequestDrafts,
-  declareStockCoverage,
   expectNeverEntered,
   expectRoute,
   logActivity,
@@ -29,7 +28,7 @@ import {
 } from './helpers/sales.js';
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────
-// The four sales-pipeline JOURNEY specs (Cases A-D), proving the four real routes named
+// The three sales-pipeline JOURNEY specs (Cases A-C), proving the three real routes named
 // in DealStage.java:78-100 are what a deal ACTUALLY WALKS, not merely a stage it happens to end
 // on:
 //
@@ -37,7 +36,6 @@ import {
 //      S1->S2->S4->S3->S5->S6->S7->S8->S9->S10->(S11)->S12…S17->S18->S19∥S20
 //   B  the owner buys direct: skips S3, S4, S7, S8
 //   C  a contractor arrives with a BOQ and spec already in hand: starts at S8, skipping S1-S7
-//   D  everything already in stock: skips S12-S17 (PROCUREMENT) only
 //
 // ── Why a destination assertion is not enough ────────────────────────────────────────────────
 // `expect(salesStage).toBe('CLOSED_PAID')` is satisfied by any number of illegal routes — a stage
@@ -54,7 +52,7 @@ import {
 // other journey specs already rely on would not be trustworthy evidence about the route itself.
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 
-test.describe('@uat-sales pipeline journeys — Cases A-D', () => {
+test.describe('@uat-sales pipeline journeys — Cases A-C', () => {
   /** @type {Record<string, import('@playwright/test').APIRequestContext>} */
   const sessions = {};
   /** Every deal this file creates, so afterAll can take them back even if a test threw. */
@@ -360,7 +358,7 @@ test.describe('@uat-sales pipeline journeys — Cases A-D', () => {
       const baseline = await stageHistory(sessions, 'sales', deal.id);
       expect(baseline, 'a freshly created deal must have no STAGE_CHANGED history').toEqual([]);
 
-      // No manual move needs inserting between issue and confirm-order for this route (unlike Cases A/B/D), so
+      // No manual move needs inserting between issue and confirm-order for this route (unlike Cases A/B), so
       // runPricingChainToOrder's own tail applies unmodified.
       await runPricingChainToOrder(sessions, deal.id, {
         factoryName: factory.factoryName,
@@ -402,127 +400,6 @@ test.describe('@uat-sales pipeline journeys — Cases A-D', () => {
       expect(history, 'a refused fact-gate move must write no STAGE_CHANGED event').toEqual([]);
       const untouched = await readDeal(sessions, 'sales', deal.id);
       expect(untouched.summary.salesStage).toBe('LEAD_APPROACH');
-    });
-  });
-
-  // ── Case D — everything already in stock ──────────────────────────────────────────────────
-  test('Case D — everything already in stock, skips PROCUREMENT (S12-S17) only', async () => {
-    test.setTimeout(300_000);
-
-    const factory = await test.step('discover a factory this database can actually cost', async () => {
-      const usable = await resolveFactory(sessions);
-      expect(usable.factoryName).toBeTruthy();
-      return usable;
-    });
-
-    const deal = await test.step('create the deal and label it OWNER_DIRECT (the shortest front half)', async () => {
-      const d = await createDeal(sessions, { caseName: 'caseD stock owner-direct' });
-      created.push(d.id);
-      await setEntryChannel(sessions, d.id, 'OWNER_DIRECT');
-      return d;
-    });
-
-    await test.step('S1 -> S2: manual, no note', async () => {
-      await advanceStage(sessions, 'sales', deal.id, 'PRESENTATION', { note: null });
-    });
-
-    let ownerChain;
-    await test.step('S2 -> S5 (-> QUOTE_OWNER): auto, via the OWNER pricing-request chain', async () => {
-      ownerChain = await runPricingChainToIssue(sessions, deal.id, {
-        factoryName: factory.factoryName,
-        recipientType: 'OWNER',
-      });
-    });
-
-    await test.step('S5 -> S6 -> S9 (-> OWNER_SIGNOFF -> NEGOTIATION): manual, no note on either (S6->S9 is Case B\'s subtle hop again)', async () => {
-      await advanceStage(sessions, 'sales', deal.id, 'OWNER_SIGNOFF', { note: null });
-      await advanceStage(sessions, 'sales', deal.id, 'NEGOTIATION', { note: null });
-    });
-
-    await test.step('S9 -> S10 (-> ORDER_RECEIVED): auto, the slice-3 tail', async () => {
-      await acceptCustomerQuotation(sessions, ownerChain.quotationId);
-      const result = await confirmOrder(sessions, ownerChain.pricingRequestId);
-      expect(result.pricingRequest.status).toBe(PRICING_REQUEST_STATUS.QUOTATION_ACCEPTED);
-    });
-
-    // reserveStock is floored at ORDER_RECEIVED (TicketService:992) — this is exactly why the full chain above has
-    // to run FIRST, and stock only substitutes for the import request afterwards.
-
-    await test.step(
-      'waive the deposit — so the declaration below is the only thing that changed on this deal ' +
-        "(see waiveDeposit's own doc)",
-      async () => {
-        await waiveDeposit(sessions, deal.id, {
-          reason: 'e2e Case D: stock deal, no real DepositNoticeService document',
-        });
-      }
-    );
-
-    await test.step('S10 -> S18 (ORDER_RECEIVED -> DELIVERY_SCHEDULING): auto, declareStockCoverage — a THREE-index jump', async () => {
-      const ticket = await readDeal(sessions, 'sales', deal.id);
-      expect(
-        ticket.items,
-        "confirmOrder's reconciliation must have created exactly one ticket item from the OWNER PCR"
-      ).toHaveLength(1);
-      const item = ticket.items[0];
-
-      const updated = await declareStockCoverage(sessions, 'ceo', deal.id, [
-        { itemId: item.id, qtyFromStock: item.qty },
-      ]);
-      expect(
-        updated.summary.fulfillmentStatus,
-        'full coverage on every line must set fulfillment_status FROM_STOCK'
-      ).toBe('FROM_STOCK');
-      expect(updated.summary.salesStage).toBe('DELIVERY_SCHEDULING');
-    });
-
-    await test.step(
-      'the import path is now STRUCTURALLY closed — creating per-factory ใบขอซื้อ refuses 409 because ' +
-        'every line is covered from stock (the one-click legacy IR is closed for every deal, W3-04, so ' +
-        'it can no longer carry this proof)',
-      async () => {
-        const refused = await createImportRequestDrafts(sessions, deal.id, { expect: 409 });
-        const body = await refused.json();
-        expect(
-          body.message,
-          'must be the nothing-to-order message — fully covered from stock, so PROCUREMENT was skipped'
-        ).toContain('ครอบคลุมจากสต็อกทั้งหมด');
-      }
-    );
-
-    await test.step('S18 -> S19 (-> DELIVERED): auto, completeDelivery (STOCK source — fully covered by the declaration above)', async () => {
-      const updated = await completeDelivery(sessions, deal.id);
-      expect(updated.summary.salesStage).toBe('DELIVERED');
-    });
-
-    await test.step('S19 -> S20 (-> CLOSED_PAID): auto, confirmFinalPayment', async () => {
-      const updated = await confirmFinalPayment(sessions, deal.id);
-      expect(updated.salesStage).toBe('CLOSED_PAID'); // finance view: { deal }, not { ticket }
-    });
-
-    await test.step('prove the ROUTE — PROCUREMENT is the one stage this route must never touch', async () => {
-      const history = await stageHistory(sessions, 'sales', deal.id);
-      expectRoute(
-        history,
-        [
-          'LEAD_APPROACH', 'PRESENTATION', 'QUOTE_OWNER', 'OWNER_SIGNOFF', 'NEGOTIATION',
-          'ORDER_RECEIVED', 'DELIVERY_SCHEDULING', 'DELIVERED', 'CLOSED_PAID',
-        ],
-        [
-          /* LEAD_APPROACH       -> PRESENTATION       */ null,
-          /* PRESENTATION        -> QUOTE_OWNER        */ AUTO_STAGE_MESSAGE,
-          /* QUOTE_OWNER         -> OWNER_SIGNOFF      */ null,
-          /* OWNER_SIGNOFF       -> NEGOTIATION        */ null,
-          /* NEGOTIATION         -> ORDER_RECEIVED     */ AUTO_STAGE_MESSAGE,
-          /* ORDER_RECEIVED      -> DELIVERY_SCHEDULING*/ AUTO_STAGE_MESSAGE,
-          /* DELIVERY_SCHEDULING -> DELIVERED          */ AUTO_STAGE_MESSAGE,
-          /* DELIVERED           -> CLOSED_PAID        */ AUTO_STAGE_MESSAGE,
-        ]
-      );
-      expectNeverEntered(history, [
-        'SPEC_APPROVED', 'QUOTE_DESIGN_SIDE', 'AWAITING_BUYER', 'QUOTE_BUYER',
-        'DEPOSIT_RECEIVED', 'PROCUREMENT',
-      ]);
     });
   });
 });

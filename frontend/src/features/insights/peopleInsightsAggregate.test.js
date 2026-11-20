@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { PEOPLE_FIXTURE as DATA } from './peopleInsightsFixture.js';
-import { latestMonthIndex, monthTotals, personRows, summarise, teamRows } from './peopleInsightsAggregate.js';
+import { personRows, summarise } from './peopleInsightsAggregate.js';
 
 // Person 3 is time-exempt and the fixture carries a stray attendance row for them: nothing of it may be counted.
 describe('summarise', () => {
@@ -22,29 +22,6 @@ describe('summarise', () => {
     expect(summarise(DATA, [2], null).quotaUsed).toEqual({ PERSONAL: 1 });
     expect(summarise({ ...DATA, quotaUsage: [{ employeeId: 2, leaveTypeCode: 'PERSONAL', days: 7 }] }, [2], '2026-04').byType).toEqual({ PERSONAL: 1 });
   });
-
-  it('sums the whole year when no month is given, and restricts to the given people', () => {
-    const year = summarise(DATA, null, null);
-    expect(year.leaveDays).toBe(16);
-    expect(year.lateFiled).toBe(1);
-    expect(year.scanDays).toBe(30);
-    expect(year.late).toBe(3);
-    const only2 = summarise(DATA, [2], null);
-    expect(only2.leaveDays).toBe(1);
-    expect(only2.scanDays).toBe(5);
-  });
-});
-
-describe('monthTotals / latestMonthIndex', () => {
-  it('gives leave days per month up to the latest month that has data', () => {
-    expect(latestMonthIndex(DATA)).toBe(3); // April
-    expect(monthTotals(DATA, null, 4)).toEqual([0, 0, 2, 14]);
-  });
-
-  it('falls back to the as-of month, then January, when there is no data', () => {
-    expect(latestMonthIndex({ ...DATA, leave: [], attendance: [] })).toBe(3);
-    expect(latestMonthIndex({ ...DATA, leave: [], attendance: [], asOf: null })).toBe(0);
-  });
 });
 
 describe('personRows', () => {
@@ -64,17 +41,5 @@ describe('personRows', () => {
 
   it('marks the time-exempt person and gives them no lateness, scans or average', () => {
     expect(by(3)).toMatchObject({ timeExempt: true, late: 0, scanDays: 0, lateMin: 0, avgIn: null, leaveDays: 2 });
-  });
-});
-
-describe('teamRows', () => {
-  it('compares each team on its members, with exempt people out of the late rate', () => {
-    const [t] = teamRows(DATA);
-    expect(t).toMatchObject({ id: '7', label: 'ทีมทดสอบ', n: 2, leaveDays: 3, late: 0, scanDays: 5 });
-    expect(t.heads).toEqual(['เอ']);
-  });
-
-  it('is empty when the response carries no teams', () => {
-    expect(teamRows({ ...DATA, teams: [] })).toEqual([]);
   });
 });

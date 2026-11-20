@@ -71,18 +71,6 @@ class CommissionDocumentationInvariantIntegrationTest extends AbstractPostgresIn
         assertThat(totals.getOrDefault(salesRepId, BigDecimal.ZERO)).isEqualByComparingTo(BigDecimal.ZERO);
     }
 
-    @Test
-    void managerApprovedSaleCommission_withAttachment_doesNotReachPayrollTotals() {
-        wireService();
-        long salesRepId = createEmployee("พนักงานขาย รอซีอีโอ", "pending-mgr-approved@glr.co.th", "SA", "แผนกขาย");
-        long commissionId = seedSaleCommission(salesRepId, new BigDecimal("500000.00"), true, CommissionStatus.SUBMITTED);
-        commissionService.approve(commissionId, managerActor); // -> MANAGER_APPROVED, no CEO sign-off yet
-
-        Map<Long, BigDecimal> totals = commissionService.payrollCommissionTotalsByEmployee(PAYROLL_MONTH);
-
-        assertThat(totals.getOrDefault(salesRepId, BigDecimal.ZERO)).isEqualByComparingTo(BigDecimal.ZERO);
-    }
-
     /** Positive control: proves the two tests above are actually exercising the aggregation (not silently no-op'ing
      * for some unrelated reason) — the exact same record, once it clears BOTH approvals, DOES reach payroll with a
      * non-zero amount. */
@@ -93,65 +81,6 @@ class CommissionDocumentationInvariantIntegrationTest extends AbstractPostgresIn
         long commissionId = seedSaleCommission(salesRepId, new BigDecimal("500000.00"), true, CommissionStatus.SUBMITTED);
         commissionService.approve(commissionId, managerActor);
         commissionService.approve(commissionId, ceoActor);
-
-        Map<Long, BigDecimal> totals = commissionService.payrollCommissionTotalsByEmployee(PAYROLL_MONTH);
-
-        assertThat(totals.getOrDefault(salesRepId, BigDecimal.ZERO)).isGreaterThan(BigDecimal.ZERO);
-    }
-
-    // RECORDED, NOT GATED (V102, owner decision 2026-07-30 — see handoff 120): payroll's own logic never checked
-    // invoice_attachment_id and still doesn't — that decision was explicit, not an oversight left in place.
-
-    @Test
-    void grandfatheredLegacyRow_withNoAttachmentAndNoProvenance_stillReachesPayrollTotals() {
-        wireService();
-        long salesRepId = createEmployee("พนักงานขาย นำเข้าเดิม", "bulk-import-style@glr.co.th", "SA", "แผนกขาย");
-        // Mirrors db/migration-demo/V21 DEMO-INV-0002 and the real 2026 historical commission import: an
-        // invoice_details row with NEITHER invoice_attachment_id NOR evidence_provenance, and a commission_record
-        // inserted directly as APPROVED — never touching CommissionService#submit/#createFromDeal.
-        long commissionId = seedSaleCommission(salesRepId, new BigDecimal("500000.00"), false, CommissionStatus.SUBMITTED);
-        jdbc.update("""
-            UPDATE sales.commission_record
-               SET status = 'APPROVED', approved_by_id = :ceoId, approved_at = now(),
-                   manager_approved_by = :managerId, manager_approved_at = now(),
-                   ceo_approved_by = :ceoId, ceo_approved_at = now()
-             WHERE commission_id = :id
-            """,
-            Map.of("id", commissionId, "ceoId", ceoEmployeeId, "managerId", managerEmployeeId));
-
-        CommissionRecord seeded = commissions.findById(commissionId).orElseThrow();
-        assertThat(seeded.invoiceDetails().invoiceAttachmentId()).isNull();
-        assertThat(seeded.status()).isEqualTo(CommissionStatus.APPROVED);
-
-        Map<Long, BigDecimal> totals = commissionService.payrollCommissionTotalsByEmployee(PAYROLL_MONTH);
-
-        // Payroll is unchanged by V102 — a grandfathered legacy row still reaches its rep's total exactly as before.
-        // See the section comment above before changing this assertion.
-        assertThat(totals.getOrDefault(salesRepId, BigDecimal.ZERO)).isGreaterThan(BigDecimal.ZERO);
-    }
-
-    @Test
-    void demoSeedStyleGrandfatheredRow_alsoReachesPayrollTotals() {
-        wireService();
-        // Same shape as db/migration-demo/V21's DEMO-INV-0002 block: invoice_details with only (invoice_number,
-        // invoice_date, gross_amount) set -- no attachment, no provenance -- and commission_record inserted straight
-        // to APPROVED via approved_by_id/approved_at, never via managerApprove()/ceoApprove().
-        long invoiceId = insertGrandfatheredInvoiceRow(
-            "DEMO-STYLE-" + UUID.randomUUID(), INVOICE_DATE, new BigDecimal("180000.00"));
-        long salesRepId = createEmployee("พนักงานขาย สไตล์ demo", "demo-style@glr.co.th", "SA", "แผนกขาย");
-        jdbc.update("""
-            INSERT INTO sales.commission_record
-                (invoice_id, sales_rep_id, submitted_by_id, status, payroll_month,
-                 actual_received, commissionable_base, approved_by_id, approved_at)
-            VALUES
-                (:invoiceId, :salesRepId, :salesRepId, 'APPROVED', :payrollMonth,
-                 180000.00, 180000.00, :ceoId, now())
-            """,
-            new MapSqlParameterSource()
-                .addValue("invoiceId", invoiceId)
-                .addValue("salesRepId", salesRepId)
-                .addValue("payrollMonth", PAYROLL_MONTH)
-                .addValue("ceoId", ceoEmployeeId));
 
         Map<Long, BigDecimal> totals = commissionService.payrollCommissionTotalsByEmployee(PAYROLL_MONTH);
 

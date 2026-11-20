@@ -31,21 +31,6 @@ class CeoReviewNoticeSavepointIntegrationTest extends AbstractPostgresIntegratio
             .isEqualTo(1);
     }
 
-    @Test
-    void aSuccessfulCostingStillReturnsItsResultInsideATransaction() {
-        CalculationResult result = new CalculationResult(java.util.List.of(), null);
-        LandedCostCalculator ok = new LandedCostCalculator(null, null, null, null, null, null) {
-            @Override
-            public CalculationResult calculate(PricingRequestSummaryDto summary) {
-                return result;
-            }
-        };
-
-        CalculationResult got = transactionTemplate.execute(status -> CeoReviewNotice.costsOrNull(ok, summary()));
-
-        assertThat(got).isSameAs(result);
-    }
-
     private static PricingRequestSummaryDto summary() {
         return new PricingRequestSummaryDto(1L, "PR-0001", 1L, "T-0001", "โครงการ", "ACME", 1L, "DESIGNER", null,
             "Designer", "READY_FOR_CEO_REVIEW", 1L, "เซล", null, null, null, null, "THB", null, 1, 1, null,

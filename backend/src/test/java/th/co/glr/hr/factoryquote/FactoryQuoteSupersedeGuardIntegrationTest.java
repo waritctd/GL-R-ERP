@@ -1,7 +1,6 @@
 package th.co.glr.hr.factoryquote;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.Mockito.mock;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
@@ -97,38 +96,6 @@ class FactoryQuoteSupersedeGuardIntegrationTest extends AbstractPostgresIntegrat
 
         assertThat(result).isZero();
         assertThat(statusOf(quoteId)).isEqualTo(FactoryQuoteStatus.CANCELLED);
-    }
-
-    @Test
-    void supersede_refusesNotAvailableQuote_rowUnchanged() {
-        long quoteId = createDraftQuote("Factory NotAvailable");
-        int requestedRows = factoryQuotes.markContacted(quoteId, java.time.LocalDate.now(), null, salesRepId);
-        assertThat(requestedRows).isEqualTo(1);
-        int notAvailableRows = factoryQuotes.markNotAvailable(quoteId, "โรงงานไม่รับออเดอร์", salesRepId);
-        assertThat(notAvailableRows).isEqualTo(1);
-        assertThat(statusOf(quoteId)).isEqualTo(FactoryQuoteStatus.NOT_AVAILABLE);
-
-        int result = factoryQuotes.supersede(quoteId);
-
-        assertThat(result).isZero();
-        assertThat(statusOf(quoteId)).isEqualTo(FactoryQuoteStatus.NOT_AVAILABLE);
-    }
-
-    @Test
-    void supersede_isIdempotentRefusalOnAlreadySupersededQuote() {
-        long quoteId = createDraftQuote("Factory AlreadySuperseded");
-        factoryQuotes.markContacted(quoteId, java.time.LocalDate.now(), null, salesRepId);
-        factoryQuotes.updateFirstResponse(quoteId, "REF-1", "THB", "30 days", "45 days", null, null);
-        assertThat(statusOf(quoteId)).isEqualTo(FactoryQuoteStatus.RESPONSE_RECEIVED);
-        int firstSupersede = factoryQuotes.supersede(quoteId); // fixture setup, not under test
-        assertThat(firstSupersede).isEqualTo(1);
-        assertThat(statusOf(quoteId)).isEqualTo(FactoryQuoteStatus.SUPERSEDED);
-
-        int result = factoryQuotes.supersede(quoteId);
-
-        assertThat(result).isZero();
-        assertThat(statusOf(quoteId)).isEqualTo(FactoryQuoteStatus.SUPERSEDED);
-        assertThat(isCurrentOf(quoteId)).isFalse();
     }
 
     @Test

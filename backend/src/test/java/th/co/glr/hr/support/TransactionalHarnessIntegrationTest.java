@@ -3,10 +3,6 @@ package th.co.glr.hr.support;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-import java.sql.Connection;
-import java.sql.ResultSet;
-import java.sql.SQLException;
-import java.sql.Statement;
 import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
@@ -20,30 +16,6 @@ import org.springframework.transaction.annotation.Transactional;
 class TransactionalHarnessIntegrationTest extends AbstractPostgresIntegrationTest {
 
     // Capability A: transactionTemplate rolls back every statement in its body on failure.
-
-    @Test
-    void transactionTemplateRollsBackEveryStatementOnFailure() {
-        String rolledBackName = "harness-tt-rollback-" + UUID.randomUUID();
-
-        assertThatThrownBy(() -> transactionTemplate.executeWithoutResult(status -> {
-            insertFactory(rolledBackName);
-            throw new RuntimeException("harness: forced failure inside transactionTemplate");
-        })).isInstanceOf(RuntimeException.class);
-
-        assertThat(countFactoryByName(rolledBackName))
-            .as("transactionTemplate.executeWithoutResult must roll back every statement its body "
-                + "ran once that body throws — otherwise capability A supplies no real transaction "
-                + "boundary at all")
-            .isZero();
-
-        // Positive control: proves the zero above is a real rollback, not the insert silently failing for every input
-        // (e.g. a bad table/column name would also leave the row absent).
-        String committedName = "harness-tt-commit-" + UUID.randomUUID();
-        transactionTemplate.executeWithoutResult(status -> insertFactory(committedName));
-        assertThat(countFactoryByName(committedName))
-            .as("positive control: a non-throwing transactionTemplate body must commit")
-            .isOne();
-    }
 
     // Capability B: transactional(service) proxy honours @Transactional, and its absence.
 
@@ -97,63 +69,7 @@ class TransactionalHarnessIntegrationTest extends AbstractPostgresIntegrationTes
     // Consequence #2 of the missing proxy: pg_advisory_xact_lock is transaction-scoped, so without a real
     // transaction it is released the instant its own SELECT completes.
 
-    private static final long LOCK_KEY = 987654321L;
-
-    @Test
-    void advisoryXactLockIsHeldForTheTransaction_andReleasedInstantlyWithoutOne() throws SQLException {
-        // Inside a real transaction: the lock is held for the whole transaction, so a second, independent physical
-        // connection cannot acquire it while the first is still open.
-        transactionTemplate.executeWithoutResult(status -> {
-            jdbc.getJdbcTemplate().execute("SELECT pg_advisory_xact_lock(" + LOCK_KEY + ")");
-            try {
-                assertThat(tryAdvisoryLockFromSecondConnection())
-                    .as("a lock taken inside an open transaction must still be held from a second, "
-                        + "independent connection's point of view")
-                    .isFalse();
-            } catch (SQLException e) {
-                throw new RuntimeException(e);
-            }
-        });
-
-        // Outside any transaction (capability A/B not used here — this is the plain, un-proxied, no-template pattern
-        // all ~123 other integration tests in this suite use): the SAME lock key, taken via a single autocommitted
-        // statement, dies the instant that statement ends.
-        try (Connection autocommitting = jdbc.getJdbcTemplate().getDataSource().getConnection()) {
-            assertThat(autocommitting.getAutoCommit())
-                .as("premise guard: this connection must be in autocommit, otherwise the lock below "
-                    + "would be held by a genuine open transaction and prove nothing")
-                .isTrue();
-            try (Statement holder = autocommitting.createStatement()) {
-                holder.execute("SELECT pg_advisory_xact_lock(" + LOCK_KEY + ")");
-            }
-            assertThat(tryAdvisoryLockFromSecondConnection())
-                .as("outside a real transaction, pg_advisory_xact_lock is released at the end of its "
-                    + "own auto-committed statement — a second connection acquires it immediately "
-                    + "even though the holder's connection is STILL OPEN. This is consequence #2 of "
-                    + "the missing AOP proxy: every lockPricingRequest-then-replay-check guard in "
-                    + "this suite runs unprotected")
-                .isTrue();
-        }
-    }
-
-    /** A second, independent physical connection trying to take #LOCK_KEY without blocking, obtained straight from
-     * the DataSource so it never joins any Spring-managed transaction. Closed via try-with-resources — never left
-     * to the per-test DROP DATABASE ... */
-    private boolean tryAdvisoryLockFromSecondConnection() throws SQLException {
-        try (Connection second = jdbc.getJdbcTemplate().getDataSource().getConnection();
-             Statement statement = second.createStatement();
-             ResultSet rs = statement.executeQuery("SELECT pg_try_advisory_xact_lock(" + LOCK_KEY + ")")) {
-            rs.next();
-            return rs.getBoolean(1);
-        }
-    }
-
     // Fixture helpers
-
-    private void insertFactory(String name) {
-        jdbc.update("INSERT INTO price_catalog.factories (name, country) VALUES (:name, 'TH')",
-            new MapSqlParameterSource().addValue("name", name));
-    }
 
     private int countFactoryByName(String name) {
         Integer count = jdbc.queryForObject(

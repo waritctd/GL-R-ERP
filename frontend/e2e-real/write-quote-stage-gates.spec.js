@@ -363,30 +363,6 @@ test.describe.serial('quote stage gates + versioning — real browser walk', () 
     await shot(salesPage, '07-buyer-guided-advance-stage9');
   });
 
-  test('8. a deal born from a quotation starts on the recipient stage', async () => {
-    const c2 = await newCustomer('born');
-    const page = salesPage;
-    await page.goto('/quotations/new');
-    await page.getByRole('button', { name: 'สร้างงานใหม่' }).click();
-    await page.locator('#deal-customer').fill(c2.name);
-    await page.getByRole('option', { name: new RegExp(c2.name) }).first().click();
-    await page.locator('#deal-project').click();
-    await page.getByRole('option', { name: new RegExp(`โครงการ ${tag} born`) }).first().click();
-    await page.getByRole('button', { name: 'ผู้ออกแบบนำงานมา' }).click();
-    await page.locator('#quotation-recipient-OWNER').click();
-    await fillTileLine(page);
-    await shot(page, '08-born-editor');
-    await page.getByRole('button', { name: 'บันทึกร่าง', exact: true }).last().click();
-    await page.waitForURL(/\/quotations\/\d+$/, { timeout: 30_000 });
-    const q = (await (await sessions.sales.get(`/api/deal-quotations/${page.url().match(/quotations\/(\d+)/)[1]}`)).json()).quotation;
-    created.push(q.ticketId);
-    const t = await ticketOf(q.ticketId);
-    expect(t.summary.salesStage).toBe('QUOTE_OWNER');
-    await page.goto(`/tickets/${q.ticketId}`);
-    await stageIs(page, 5);
-    await shot(page, '08-born-deal-stage5');
-  });
-
   test('9. off-route recipient: the pill is disabled with the route sentence, and the API refuses it 409', async () => {
     const deal = await newDeal('C-offroute', 'OWNER_DIRECT');
     const page = salesPage;

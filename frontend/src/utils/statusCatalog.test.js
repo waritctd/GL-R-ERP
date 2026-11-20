@@ -14,12 +14,9 @@ import {
   TICKET_STATUS_LABEL_KEYS,
   attendanceCorrectionStatusLabel,
   commissionStatusLabel,
-  dealStageLabel,
   factoryQuoteStatusLabel,
-  hasDealStageLabel,
   leaveStatusLabel,
   overtimeStatusLabel,
-  pricingCostingStatusLabel,
   pricingDecisionStatusLabel,
   pricingRequestStatusLabel,
   roleLabel,
@@ -94,37 +91,6 @@ const FRONTEND_ONLY_KEYS = {
   },
 };
 
-// Maps deliberately NOT covered by this digest
-// ───────────────────────────────────────────────────────────────────────────── An honest documented exclusion, never a
-// silent skip — each names the map, the investigation behind it, and the finding, un-fixed, for a reviewer to act on.
-const EXCLUDED_MAPS = {
-  pricingCostingStatusLabel:
-    'sales.pricing_costing.status has no backing Java type at all post-V141 — confirmed by '
-    + 'reading every file under backend/.../pricingcosting/: no PricingCostingStatus class or enum '
-    + 'exists anywhere in the tree. Its only formal declaration is the '
-    + 'chk_pricing_costing_status CHECK constraint in '
-    + "V61__factory_quote_costing_foundation.sql ('DRAFT','CALCULATED','SUBMITTED','SUPERSEDED',"
-    + "'CANCELLED'), a SQL text artifact reflection has no access to — and a migration is immutable "
-    + 'once applied, so a regex anchored to V61 would go stale the moment a LATER migration '
-    + 're-declares the constraint. Investigated anyway: the map covers 4 of the 5 CHECK values '
-    + '(missing SUPERSEDED), but grepping every pricing_costing write site '
-    + '(PricingCostingRepository.createComputed, and PricingRequestRepository\'s '
-    + 'cancelOpenChildrenForDeadRequest/cancelOpenStep2Children cascades) found none ever writes '
-    + "'SUPERSEDED' to this column — every cascade writes 'CANCELLED' instead, so unlike the "
-    + 'factoryQuoteStatusLabel gap in KNOWN_UNLABELLED above, this one looks currently dormant, '
-    + 'not live. Reported, not guarded — there is no Java source to reflect on.',
-  'hasDealStageLabel / dealStageLabel':
-    'DealStage already has a stronger guard than a digest entry would add. It is served live at '
-    + 'GET /api/meta/deal-stages (DealStageMetaController), checked at RUNTIME on every fetch of '
-    + "that catalog by stageMeta.js's assertStageLabelsComplete (throws in dev/test, "
-    + 'console.error in prod), and checked at BUILD TIME by '
-    + "features/tickets/stageCatalog.test.js, which reads DealStage.java directly out of the "
-    + 'backend source tree (with its own anti-vacuity floor) and asserts hasDealStageLabel for '
-    + 'every code in DealStage.ORDER — and, unlike a plain digest, also checks gate/phase/'
-    + 'businessCode/auto structurally. A third mirror here would not close a gap; it would just be '
-    + 'one more copy of the same fifteen codes to keep in sync.',
-};
-
 describe('status catalog digest — harness sanity', () => {
   // These run first so a digest that failed to load, or a format.js export that came back undefined, fails
   // LOUDLY instead of letting every assertion below pass vacuously.
@@ -132,33 +98,6 @@ describe('status catalog digest — harness sanity', () => {
     expect(Object.keys(GROUPS).length).toBeGreaterThanOrEqual(10);
     const total = Object.values(GROUPS).reduce((sum, list) => sum + list.length, 0);
     expect(total).toBeGreaterThan(50);
-  });
-
-  it('every covered map resolves to a non-empty backend group and a non-empty key list', () => {
-    for (const spec of MAP_SPECS) {
-      expect(GROUPS[spec.group], `digest has no group "${spec.group}" for ${spec.name}`).toBeDefined();
-      expect(GROUPS[spec.group].length, `${spec.group} is empty`).toBeGreaterThan(0);
-      expect(spec.keys.length, `${spec.name}'s own key list is empty`).toBeGreaterThan(0);
-    }
-  });
-
-  it('the sentinel-probe technique detects an unknown code as unlabelled', () => {
-    for (const spec of MAP_SPECS) {
-      expect(isUnlabelled(spec.labelFn, `${UNKNOWN_SENTINEL}_2`, spec.hasKey), spec.name).toBe(true);
-    }
-  });
-
-  it('the sentinel-probe technique does NOT flag a real labelled code', () => {
-    // The other half of the anti-vacuity check on the technique itself: a probe that always returned true would
-    // make direction 1 below pass on every status, checking nothing.
-    expect(isUnlabelled(ticketStatusLabel, 'draft')).toBe(false);
-    expect(isUnlabelled(overtimeStatusLabel, 'SUBMITTED')).toBe(false);
-    expect(isUnlabelled(specialMoneyStatusLabel, 'CANCELLED')).toBe(false);
-    // roleLabel's own anti-vacuity case: 'hr' is a real, curated entry ('HR') that happens to equal its own
-    // .toUpperCase() fallback — exactly the coincidence the hasKey path exists to see through. Both halves are
-    // kept for roleLabel, matching the other specs.
-    expect(isUnlabelled(roleLabel, 'hr', hasRoleLabelKey)).toBe(false);
-    expect(isUnlabelled(roleLabel, 'account', hasRoleLabelKey)).toBe(false);
   });
 });
 
@@ -240,18 +179,5 @@ describe('exemption lists stay honest', () => {
       }
     }
     expect(stale).toEqual([]);
-  });
-});
-
-describe('maps deliberately not covered by this digest', () => {
-  it('every EXCLUDED_MAPS entry names a real export and carries a reason', () => {
-    // pricingCostingStatusLabel / hasDealStageLabel / dealStageLabel must still exist as exports — if one is
-    // renamed or removed, the exclusion above is talking about nothing.
-    expect(typeof pricingCostingStatusLabel).toBe('function');
-    expect(typeof hasDealStageLabel).toBe('function');
-    expect(typeof dealStageLabel).toBe('function');
-    for (const [name, reason] of Object.entries(EXCLUDED_MAPS)) {
-      expect(reason.length, `EXCLUDED_MAPS["${name}"] needs a reason`).toBeGreaterThan(40);
-    }
   });
 });

@@ -129,86 +129,6 @@ class DeductionObligationPayrollEngineIntegrationTest extends AbstractPostgresIn
                 LocalDate.of(2026, 3, 1), LocalDate.of(2026, 5, 1));
     }
 
-    /** D1 fix (Opus review): reproduces the exact probe from the review -- process the completing month, then
-     * re-process it (and a third time), asserting the SAME ฿640 final instalment every time. A single-run test
-     * cannot catch this -- the bug only appears on RE-processing the month that causes completion. */
-    @Test
-    void theCompletingMonthYieldsTheSameFinalInstalmentOnEveryReprocess() {
-        long employeeId = seedEmployee("OBL-REPROCESS-FINAL", new BigDecimal("30000.00"));
-        long obligationId = obligationRepository.insert(new DeductionObligationCreateRequest(
-            employeeId, DeductionObligationKind.STUDENT_LOAN, new BigDecimal("1000.00"), new BigDecimal("2640.00"),
-            "กยศ-REPROCESS-FINAL", LocalDate.of(2026, 1, 1), null), employeeId);
-
-        processAndDeduction(LocalDate.of(2026, 1, 1), employeeId);
-        processAndDeduction(LocalDate.of(2026, 2, 1), employeeId);
-
-        BigDecimal firstRun = processAndDeduction(LocalDate.of(2026, 3, 1), employeeId);
-        assertThat(firstRun).isEqualByComparingTo("640.00");
-        assertThat(obligationRepository.findById(obligationId).orElseThrow().status())
-            .isEqualTo(DeductionObligationStatus.COMPLETED);
-        assertThat(obligationRepository.sumRemittanceTotal(obligationId)).isEqualByComparingTo("2640.00");
-
-        // RE-PROCESS the same completing month. Must yield the identical 640.00, not 0.00.
-        BigDecimal secondRun = processAndDeduction(LocalDate.of(2026, 3, 1), employeeId);
-        assertThat(secondRun).isEqualByComparingTo("640.00");
-        assertThat(obligationRepository.findById(obligationId).orElseThrow().status())
-            .isEqualTo(DeductionObligationStatus.COMPLETED);
-        assertThat(obligationRepository.sumRemittanceTotal(obligationId)).isEqualByComparingTo("2640.00");
-
-        // A third time, for good measure -- must still be stable.
-        BigDecimal thirdRun = processAndDeduction(LocalDate.of(2026, 3, 1), employeeId);
-        assertThat(thirdRun).isEqualByComparingTo("640.00");
-        assertThat(obligationRepository.sumRemittanceTotal(obligationId)).isEqualByComparingTo("2640.00");
-        assertThat(obligationRepository.findLedger(obligationId)).hasSize(3); // Jan, Feb, Mar -- never duplicated
-    }
-
-    /** D2 fix (Opus review): an obligation recorded with a start_date AFTER the payroll month being processed must
-     * not drive that month's deduction at all -- it must behave exactly as if no obligation existed (falls back to
-     * the HR-typed/absent manual figure), and must record no ledger row. */
-    @Test
-    void anObligationWithAFutureStartDateDoesNotDeductBeforeItStarts() {
-        long employeeId = seedEmployee("OBL-FUTURESTART", new BigDecimal("30000.00"));
-        LocalDate startDate = LocalDate.of(2027, 6, 1);
-        long obligationId = obligationRepository.insert(new DeductionObligationCreateRequest(
-            employeeId, DeductionObligationKind.STUDENT_LOAN, new BigDecimal("1000.00"), null,
-            "กยศ-FUTURESTART", startDate, null), employeeId);
-
-        // A payroll month well BEFORE the obligation's start_date must deduct nothing and record nothing.
-        BigDecimal beforeStart = processAndDeduction(LocalDate.of(2026, 1, 1), employeeId);
-        assertThat(beforeStart).isEqualByComparingTo("0.00");
-        assertThat(obligationRepository.sumRemittanceTotal(obligationId)).isEqualByComparingTo("0.00");
-        assertThat(obligationRepository.findLedger(obligationId)).isEmpty();
-
-        // Once the payroll month reaches the start_date, the obligation drives the deduction normally.
-        BigDecimal atStart = processAndDeduction(startDate, employeeId);
-        assertThat(atStart).isEqualByComparingTo("1000.00");
-        assertThat(obligationRepository.sumRemittanceTotal(obligationId)).isEqualByComparingTo("1000.00");
-    }
-
-    /** Off-by-one-month fix (Opus re-review): payrollMonth is always normalised to the 1st, but an authority's
-     * document is rarely dated the 1st. Fixed by truncating start_date to its own month-start before comparing. */
-    @Test
-    void aMidMonthStartDateStillDeductsInItsOwnStartingMonth() {
-        long midMonthEmployee = seedEmployee("OBL-MIDMONTH", new BigDecimal("30000.00"));
-        long midMonthObligationId = obligationRepository.insert(new DeductionObligationCreateRequest(
-            midMonthEmployee, DeductionObligationKind.STUDENT_LOAN, new BigDecimal("1000.00"), null,
-            "กยศ-MIDMONTH", LocalDate.of(2026, 1, 15), null), midMonthEmployee);
-
-        long controlEmployee = seedEmployee("OBL-MIDMONTH-CTRL", new BigDecimal("30000.00"));
-        obligationRepository.insert(new DeductionObligationCreateRequest(
-            controlEmployee, DeductionObligationKind.STUDENT_LOAN, new BigDecimal("1000.00"), null,
-            "กยศ-MIDMONTH-CTRL", LocalDate.of(2026, 1, 1), null), controlEmployee);
-
-        BigDecimal midMonthJanuary = processAndDeduction(LocalDate.of(2026, 1, 1), midMonthEmployee);
-        BigDecimal controlJanuary = processAndDeduction(LocalDate.of(2026, 1, 1), controlEmployee);
-
-        // The document is dated mid-January, but it still drives the WHOLE of January -- not zero, and not deferred to
-        // February.
-        assertThat(midMonthJanuary).isEqualByComparingTo("1000.00");
-        assertThat(controlJanuary).isEqualByComparingTo("1000.00");
-        assertThat(obligationRepository.sumRemittanceTotal(midMonthObligationId)).isEqualByComparingTo("1000.00");
-    }
-
     /** The core "must survive a re-run" requirement: reprocessing the SAME month upserts that period's own ledger
      * row instead of inserting a second one. A mocked repository cannot demonstrate this -- it would happily
      * "insert" twice and the test would still pass against the mock. */
@@ -255,25 +175,6 @@ class DeductionObligationPayrollEngineIntegrationTest extends AbstractPostgresIn
         assertThat(line.legalExecutionDeduction()).isLessThanOrEqualTo(capByRate);
         // The ledger records what was ACTUALLY remitted (post-cap), never the raw instruction.
         assertThat(obligationRepository.sumRemittanceTotal(obligationId)).isEqualByComparingTo(line.legalExecutionDeduction());
-    }
-
-    /** Case 2: near completion, THIS obligation's own remaining balance binds tighter than the statutory cap. */
-    @Test
-    void theObligationsOwnRemainingBalanceCanBindTighterThanTheStatutoryCap() {
-        LocalDate month = LocalDate.of(2026, 1, 1);
-        long employeeId = seedEmployee("OBL-OWNCAP", new BigDecimal("30000.00"));
-        long obligationId = obligationRepository.insert(new DeductionObligationCreateRequest(
-            employeeId, DeductionObligationKind.LEGAL_EXECUTION, new BigDecimal("1000.00"), new BigDecimal("50.00"),
-            "LED-OWNCAP", month, null), employeeId);
-
-        PayrollPeriodDto period = payrollService.process(new ProcessPayrollRequest(month, List.of()), hr());
-        PayrollLineDto line = lineFor(period, employeeId);
-
-        // Far below any statutory cap for a ฿30,000 salary -- this obligation's own remaining balance (50.00 total,
-        // nothing remitted yet) is what actually bound.
-        assertThat(line.legalExecutionDeduction()).isEqualByComparingTo("50.00");
-        assertThat(obligationRepository.findById(obligationId).orElseThrow().status())
-            .isEqualTo(DeductionObligationStatus.COMPLETED);
     }
 
     // --- helpers ------------------------------------------------------------

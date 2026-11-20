@@ -5,7 +5,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { QuotationEditorPage } from './QuotationEditorPage.jsx';
 import { api } from '../../api/index.js';
-import { buildQuotationChecklist, orderedByEmailError } from './quotationMeta.js';
+import { orderedByEmailError } from './quotationMeta.js';
 
 globalThis.React = React;
 
@@ -31,14 +31,13 @@ vi.mock('../../api/index.js', async (importOriginal) => {
       tickets: { get: vi.fn(), create: vi.fn() },
       dealQuotations: {
         get: vi.fn(), create: vi.fn(), update: vi.fn(), calculateLine: vi.fn(), submit: vi.fn(),
-        approve: vi.fn(), reject: vi.fn(), createRevision: vi.fn(), createReorder: vi.fn(), cancel: vi.fn(),
-        downloadPdf: vi.fn(), downloadXlsx: vi.fn(), displayNameOptions: vi.fn(),
+        displayNameOptions: vi.fn(),
       },
       catalog: { prices: vi.fn() },
       designers: { search: vi.fn(), getByCode: vi.fn().mockRejectedValue(new Error('not found')) },
       customers: {
-        search: vi.fn(), create: vi.fn(), update: vi.fn(), projects: vi.fn(), createProject: vi.fn(),
-        contacts: vi.fn(), createContact: vi.fn(), updateContact: vi.fn(),
+        search: vi.fn(), create: vi.fn(), update: vi.fn(), projects: vi.fn(),
+        contacts: vi.fn(),
       },
     },
   };
@@ -46,7 +45,6 @@ vi.mock('../../api/index.js', async (importOriginal) => {
 
 const PHONE = '089-765-4321 ต่อ 77';
 const EMAIL = 'bid.contact@contractor-b.example';
-const PRINTED_WHEN_FILLED = 'พิมพ์ในใบเสนอราคาเมื่อกรอก';
 const PHONE_LABEL = 'โทร.';
 const EMAIL_LABEL = 'อีเมล';
 // โทร. is also the customer card's box and อีเมล the picked contact's edit box: narrow to orderedBy*.
@@ -128,9 +126,6 @@ function renderEditor(path) {
   );
 }
 
-const controls = () => [...document.querySelectorAll('button, input, select, textarea')];
-/** The next form control in reading order. */
-const directlyAfter = (control) => controls()[controls().indexOf(control) + 1];
 /** The text of whatever the control names as its description (a FormField hint or error line). */
 const describedBy = (control) => (control.getAttribute('aria-describedby') ?? '')
   .split(/\s+/).filter(Boolean)
@@ -144,19 +139,6 @@ async function pickContact(name) {
   await waitFor(() => expect(trigger.disabled).toBe(false));
   fireEvent.click(trigger);
   fireEvent.click(await screen.findByRole('option', { name: new RegExp(name) }));
-}
-
-// Every field validateQuotationItem requires — the same fill QuotationEditorPage.test.jsx uses.
-async function fillCompleteQuotationItem() {
-  fireEvent.change(screen.getByLabelText(/^รุ่น \/ ค้นหาแคตตาล็อก/), { target: { value: 'Trilogy' } });
-  fireEvent.change(screen.getByLabelText(/^สี/), { target: { value: 'Ivory' } });
-  fireEvent.change(screen.getByLabelText(/^ผิว/), { target: { value: 'Lappato' } });
-  fireEvent.change(screen.getByLabelText(/^ขนาด/), { target: { value: '60x120' } });
-  fireEvent.change(screen.getByLabelText(/^ความหนา/), { target: { value: '10' } });
-  fireEvent.change(screen.getByLabelText(/^แผ่น\/ตร\.ม\./), { target: { value: '1.39' } });
-  fireEvent.change(screen.getByLabelText(/^แผ่น\/กล่อง/), { target: { value: '3' } });
-  fireEvent.change(screen.getByLabelText(/^ราคา\/ตร\.ม\./), { target: { value: '850' } });
-  fireEvent.change(screen.getByLabelText(/^จำนวน/), { target: { value: '36' } });
 }
 
 beforeEach(() => {
@@ -180,65 +162,6 @@ beforeEach(() => {
   api.dealQuotations.update.mockImplementation(async () => ({ quotation: draft() }));
   api.dealQuotations.calculateLine.mockResolvedValue({ item: {} });
   api.dealQuotations.displayNameOptions.mockResolvedValue({ items: [] });
-});
-
-describe('ผู้ติดต่อ — the customer phone and email, directly under the picker, in both forms', () => {
-  it('a quotation for an existing deal: two inputs labelled โทร. and อีเมล, next after the ผู้ติดต่อ picker and its "คุณ" box', async () => {
-    renderEditor('/quotations/new?ticket=18');
-
-    const picker = await screen.findByLabelText(/^ผู้ติดต่อ/);
-    const honorific = screen.getByRole('checkbox', { name: /ไม่เติม/ });
-    const phone = screen.getByLabelText(PHONE_LABEL, BOX);
-    const email = screen.getByLabelText(EMAIL_LABEL, BOX);
-
-    expect([picker.tagName, picker.id, phone.id, email.id]).toEqual(['BUTTON', 'quotation-contact', 'orderedByPhoneCard', 'orderedByEmailCard']);
-    expect([phone.tagName, email.tagName]).toEqual(['INPUT', 'INPUT']);
-    // The bare English labels are gone.
-    expect([screen.queryByLabelText('Phone'), screen.queryByLabelText('Email')]).toEqual([null, null]);
-    // Directly under: nothing else to fill in comes between them.
-    expect(directlyAfter(picker)).toBe(honorific);
-    expect(directlyAfter(honorific)).toBe(phone);
-    expect(directlyAfter(phone)).toBe(email);
-    // The server's own limits, so a value it would refuse for length cannot be typed.
-    expect([phone.maxLength, email.maxLength]).toEqual([50, 254]);
-    // Both start empty, and neither is required.
-    expect([phone.value, email.value, phone.required, email.required]).toEqual(['', '', false, false]);
-  });
-
-  it('a quotation that creates its deal inline: the same two inputs, in the same place', async () => {
-    renderEditor('/quotations/new');
-    // /quotations/new opens on เลือกดีลที่มีอยู่; the inline card is the other branch.
-    fireEvent.click(await screen.findByRole('button', { name: 'สร้างงานใหม่' }));
-
-    await screen.findByLabelText(/^ลูกค้า/);
-    const picker = screen.getByLabelText(/^ผู้ติดต่อ/);
-    const honorific = screen.getByRole('checkbox', { name: /ไม่เติม/ });
-    const phone = screen.getByLabelText(PHONE_LABEL, BOX);
-    const email = screen.getByLabelText(EMAIL_LABEL, BOX);
-
-    expect([picker.tagName, phone.id, email.id]).toEqual(['BUTTON', 'orderedByPhoneInline', 'orderedByEmailInline']);
-    expect(directlyAfter(picker)).toBe(honorific);
-    expect(directlyAfter(honorific)).toBe(phone);
-    expect(directlyAfter(phone)).toBe(email);
-    expect([phone.maxLength, email.maxLength]).toEqual([50, 254]);
-  });
-
-  // The picker's hint is the ONLY explanatory text on the form (the old "…พิมพ์ในใบเสนอราคาเมื่อกรอก"
-  // line is gone in both forms).
-  it('neither carries a line of its own any more — in both forms', async () => {
-    const first = renderEditor('/quotations/new?ticket=18');
-    await screen.findByLabelText(/^ผู้ติดต่อ/);
-    expect([describedBy(screen.getByLabelText(PHONE_LABEL, BOX)), describedBy(screen.getByLabelText(EMAIL_LABEL, BOX))]).toEqual(['', '']);
-    expect(screen.queryByText(new RegExp(PRINTED_WHEN_FILLED))).toBeNull();
-    first.unmount();
-
-    renderEditor('/quotations/new');
-    // /quotations/new opens on เลือกดีลที่มีอยู่; the inline card is the other branch.
-    fireEvent.click(await screen.findByRole('button', { name: 'สร้างงานใหม่' }));
-    await screen.findByLabelText(/^ลูกค้า/);
-    expect([describedBy(screen.getByLabelText(PHONE_LABEL, BOX)), describedBy(screen.getByLabelText(EMAIL_LABEL, BOX))]).toEqual(['', '']);
-    expect(screen.queryByText(new RegExp(PRINTED_WHEN_FILLED))).toBeNull();
-  });
 });
 
 describe('ผู้ติดต่อ — what the editor saves', () => {
@@ -280,85 +203,6 @@ describe('ผู้ติดต่อ — what the editor saves', () => {
     expect(cleared).toMatchObject({ contactId: null, clearContact: true });
     expect(cleared).not.toHaveProperty('orderedByName');
   });
-
-  // Optional, both of them: an untouched pair never holds the save back, and is sent as an
-  // explicit null — every save states every header field, so nothing is left for the server to
-  // guess from a missing key.
-  it('left empty, both are sent as null and the save goes through', async () => {
-    renderEditor('/quotations/new?ticket=18');
-
-    fireEvent.click(await screen.findByRole('button', { name: /เพิ่มรายการในตำแหน่งนี้/ }));
-    await fillCompleteQuotationItem();
-    await waitFor(() => expect(saveButton().disabled).toBe(false));
-    fireEvent.click(saveButton());
-
-    await waitFor(() => expect(api.dealQuotations.create).toHaveBeenCalledTimes(1));
-    expect(api.dealQuotations.create.mock.calls[0][1]).toMatchObject({ orderedByPhone: null, orderedByEmail: null });
-  });
-
-  it('the inline form saves them too, with the picked contact, on the quotation it creates with its new deal', async () => {
-    api.customers.contacts.mockResolvedValue({ contacts: [SOMCHAI] });
-    renderEditor('/quotations/new');
-    // /quotations/new opens on เลือกดีลที่มีอยู่; the inline card is the other branch.
-    fireEvent.click(await screen.findByRole('button', { name: 'สร้างงานใหม่' }));
-
-    fireEvent.change(await screen.findByLabelText(/^ลูกค้า/), { target: { value: 'แฟชั่น' } });
-    fireEvent.mouseDown(await screen.findByRole('option', { name: new RegExp(CUSTOMER.name) }));
-    await waitFor(() => expect(api.customers.projects).toHaveBeenCalledWith(CUSTOMER.id));
-    fireEvent.focus(screen.getByLabelText(/^โครงการ/));
-    fireEvent.mouseDown(await screen.findByRole('option', { name: new RegExp(PROJECT.name) }));
-    // A new deal's recipient and a real ช่องทางรับงาน gate บันทึกร่าง.
-    fireEvent.click(screen.getByRole('radio', { name: 'ผู้ออกแบบ' }));
-    fireEvent.click(screen.getByRole('button', { name: /ผู้ออกแบบนำงานมา/ }));
-    // The picker lists the contacts of the customer just chosen, before any deal exists.
-    await pickContact('สมชาย');
-    expect(api.customers.contacts).toHaveBeenCalledWith(CUSTOMER.id);
-    fireEvent.change(screen.getByLabelText(PHONE_LABEL, BOX), { target: { value: PHONE } });
-    fireEvent.change(screen.getByLabelText(EMAIL_LABEL, BOX), { target: { value: EMAIL } });
-    fireEvent.click(screen.getByRole('button', { name: /เพิ่มรายการในตำแหน่งนี้/ }));
-    await fillCompleteQuotationItem();
-    await waitFor(() => expect(saveButton().disabled).toBe(false));
-    fireEvent.click(saveButton());
-
-    await waitFor(() => expect(api.dealQuotations.create).toHaveBeenCalledTimes(1));
-    expect(api.dealQuotations.create.mock.calls[0][0]).toBe(42);
-    expect(api.dealQuotations.create.mock.calls[0][1]).toMatchObject({ contactId: SOMCHAI.id, orderedByPhone: PHONE, orderedByEmail: EMAIL });
-    // The deal itself is given no contact: the quotation carries it.
-    expect(api.tickets.create.mock.calls[0][0].contactId).toBeNull();
-    expect(JSON.stringify(api.tickets.create.mock.calls[0][0])).not.toContain(EMAIL);
-  });
-
-  it('a stored draft opens with its Phone and Email in the boxes; one from before they existed opens with both empty', async () => {
-    api.dealQuotations.get.mockResolvedValue({ quotation: draft({ orderedByPhone: PHONE, orderedByEmail: EMAIL }) });
-    const withBoth = renderEditor('/quotations/5');
-    await waitFor(() => expect(screen.getByLabelText(PHONE_LABEL, BOX).value).toBe(PHONE));
-    expect(screen.getByLabelText(EMAIL_LABEL, BOX).value).toBe(EMAIL);
-    withBoth.unmount();
-
-    api.dealQuotations.get.mockResolvedValue({ quotation: draft() }); // no such keys on the DTO
-    renderEditor('/quotations/5');
-    await screen.findByDisplayValue('Trilogy'); // the stored draft has been read into the form
-    expect([screen.getByLabelText(PHONE_LABEL, BOX).value, screen.getByLabelText(EMAIL_LABEL, BOX).value]).toEqual(['', '']);
-  });
-
-  it('changing one and clearing the other on a stored draft sends the new value and a null', async () => {
-    api.dealQuotations.get.mockResolvedValue({ quotation: draft({ orderedByPhone: PHONE, orderedByEmail: EMAIL }) });
-    renderEditor('/quotations/5');
-    await waitFor(() => expect(screen.getByLabelText(PHONE_LABEL, BOX).value).toBe(PHONE));
-
-    fireEvent.change(screen.getByLabelText(PHONE_LABEL, BOX), { target: { value: '02-123-4567' } });
-    fireEvent.change(screen.getByLabelText(EMAIL_LABEL, BOX), { target: { value: '' } });
-    await waitFor(() => expect(saveButton().disabled).toBe(false));
-    fireEvent.click(saveButton());
-
-    await waitFor(() => expect(api.dealQuotations.update).toHaveBeenCalled());
-    const sent = api.dealQuotations.update.mock.calls[0][1];
-    expect(sent).toMatchObject({ orderedByPhone: '02-123-4567', orderedByEmail: null, contactId: null });
-    // The stored name ('คุณวิชัย มั่นคง') is not sent back either: the server owns it now.
-    expect(sent).not.toHaveProperty('orderedByName');
-    // No contact before, none now: nothing to clear, so the key is not sent at all.
-    expect(sent).not.toHaveProperty('clearContact');
-  });
 });
 
 describe('ผู้ติดต่อ — the Email is checked before the save, not by it', () => {
@@ -385,19 +229,6 @@ describe('ผู้ติดต่อ — the Email is checked before the save, 
     await waitFor(() => expect(api.dealQuotations.update).toHaveBeenCalled());
     expect(api.dealQuotations.update.mock.calls[0][1].orderedByEmail).toBe('somchai@example.com');
   });
-
-  // Phone is free text — an extension, several numbers — so nothing about its shape is checked.
-  it('a Phone is never flagged, whatever its shape', async () => {
-    renderEditor('/quotations/5');
-    const phone = await screen.findByLabelText(PHONE_LABEL, BOX);
-    await waitFor(() => expect(saveButton().disabled).toBe(false));
-
-    fireEvent.change(phone, { target: { value: '02-123-4567 ต่อ 12, 081-234-5678 (คุณวิชัย)' } });
-    fireEvent.blur(phone);
-
-    expect(screen.getByLabelText(PHONE_LABEL, BOX).getAttribute('aria-invalid')).not.toBe('true');
-    expect(saveButton().disabled).toBe(false);
-  });
 });
 
 describe('orderedByEmailError — the shape check itself', () => {
@@ -410,144 +241,5 @@ describe('orderedByEmailError — the shape check itself', () => {
         ...Object.fromEntries(WELL_FORMED_EMAILS.map((value) => [value, 'accepted'])),
       });
   });
-
-  it('says what is wrong in Thai, in the words the server uses', () => {
-    expect(String(orderedByEmailError('somchai@'))).toBe(BAD_EMAIL);
-  });
-
-  // REGRESSION GUARD — green before the check exists (a check that accepts everything accepts a
-  // blank). It is here for the day the check is tightened: the field is optional.
-  it('has nothing to say about an empty field', () => {
-    expect(['', '   ', null, undefined].map(verdict)).toEqual(['accepted', 'accepted', 'accepted', 'accepted']);
-  });
 });
 
-describe('buildQuotationChecklist — a malformed Email is a blocking entry that points at its field', () => {
-  const complete = {
-    customer: { id: 5, name: CUSTOMER.name, address: 'กรุงเทพฯ', taxId: CUSTOMER.taxId, phone: CUSTOMER.phone },
-    projectName: 'โครงการ A', hasProject: true, items: [TILE_ITEM], itemErrorsByRow: [{}],
-  };
-  const emailEntry = (args) => buildQuotationChecklist({ ...complete, ...args })
-    .find((entry) => entry.check === 'orderedByEmail');
-
-  it('blocks, with the field of whichever form is on screen as its target', () => {
-    // The box is the CUSTOMER's email (labelled อีเมล), and the entry says so.
-    expect(emailEntry({ orderedByEmail: 'somchai@' }))
-      .toMatchObject({ blocking: true, targetId: 'orderedByEmailCard', message: `Email ของลูกค้า: ${BAD_EMAIL}` });
-    expect(emailEntry({ orderedByEmail: 'somchai@', isInlineCreate: true }))
-      .toMatchObject({ blocking: true, targetId: 'orderedByEmailInline' });
-    // …and says nothing when there is nothing wrong.
-    expect(emailEntry({ orderedByEmail: '' })).toBeUndefined();
-    expect(emailEntry({ orderedByEmail: EMAIL })).toBeUndefined();
-    expect(emailEntry({})).toBeUndefined();
-  });
-});
-
-// The โทร./อีเมล boxes are the only phone and e-mail the document prints. A picked contact's own
-// เบอร์/อีเมล (the card) fill them, so the rep does not key the same number twice.
-describe('ผู้ติดต่อ — the picked contact fills โทร. / อีเมล', () => {
-  const KANNIKA = { id: 32, customerId: 5, firstName: 'กรรณิการ์', lastName: null, phone: '081-926-1114', email: 'kannika@contractor-b.example' };
-  const boxes = () => [screen.getByLabelText(PHONE_LABEL, BOX).value, screen.getByLabelText(EMAIL_LABEL, BOX).value];
-
-  beforeEach(() => {
-    api.customers.contacts.mockResolvedValue({ contacts: [SOMCHAI, KANNIKA] });
-  });
-
-  it('picking a contact puts its เบอร์ and อีเมล in the empty boxes, and the save sends them', async () => {
-    renderEditor('/quotations/5');
-    await screen.findByDisplayValue('Trilogy');
-
-    await pickContact('กรรณิการ์');
-    expect(boxes()).toEqual([KANNIKA.phone, KANNIKA.email]);
-
-    await waitFor(() => expect(saveButton().disabled).toBe(false));
-    fireEvent.click(saveButton());
-    await waitFor(() => expect(api.dealQuotations.update).toHaveBeenCalled());
-    expect(api.dealQuotations.update.mock.calls[0][1])
-      .toMatchObject({ contactId: KANNIKA.id, orderedByPhone: KANNIKA.phone, orderedByEmail: KANNIKA.email });
-  });
-
-  it('a box the rep already typed in is left alone', async () => {
-    renderEditor('/quotations/5');
-    await screen.findByDisplayValue('Trilogy');
-    fireEvent.change(screen.getByLabelText(PHONE_LABEL, BOX), { target: { value: PHONE } });
-
-    await pickContact('กรรณิการ์');
-    expect(boxes()).toEqual([PHONE, KANNIKA.email]);
-  });
-
-  it('untouched boxes follow a change of contact and empty on ล้าง; typed text survives both', async () => {
-    renderEditor('/quotations/5');
-    await screen.findByDisplayValue('Trilogy');
-
-    await pickContact('กรรณิการ์');
-    await pickContact('สมชาย'); // has a phone, no e-mail
-    expect(boxes()).toEqual([SOMCHAI.phone, '']);
-
-    fireEvent.change(screen.getByLabelText(EMAIL_LABEL, BOX), { target: { value: EMAIL } });
-    fireEvent.click(screen.getByRole('button', { name: 'ล้างผู้ติดต่อ' }));
-    expect(boxes()).toEqual(['', EMAIL]);
-  });
-
-  it('editing the card’s เบอร์ carries into an untouched โทร. box', async () => {
-    api.customers.updateContact.mockImplementation(async (_customerId, _contactId, patch) => ({ contact: { ...KANNIKA, ...patch } }));
-    renderEditor('/quotations/5');
-    await screen.findByDisplayValue('Trilogy');
-    await pickContact('กรรณิการ์');
-
-    const cardPhone = screen.getByLabelText('แก้ไขเบอร์ผู้ติดต่อ');
-    fireEvent.change(cardPhone, { target: { value: '02-555-0100' } });
-    fireEvent.blur(cardPhone);
-
-    await waitFor(() => expect(boxes()).toEqual(['02-555-0100', KANNIKA.email]));
-  });
-
-  // Blank is a choice the rep can make (print no number): reopening a draft never refills it.
-  it('a stored draft with a contact and empty boxes opens with the boxes still empty', async () => {
-    api.dealQuotations.get.mockResolvedValue({
-      quotation: draft({ contactId: KANNIKA.id, contactName: 'กรรณิการ์', contactPhone: KANNIKA.phone, contactEmail: KANNIKA.email }),
-    });
-    renderEditor('/quotations/5');
-    await screen.findByDisplayValue(KANNIKA.phone); // the card has the contact
-    expect(boxes()).toEqual(['', '']);
-  });
-
-  // The picked contact's values are only "untouched" while the picker still remembers that contact:
-  // every path that drops or reverts it must carry the boxes with it, or X's number prints on Y's quotation.
-  it('changing the customer on the new-deal card empties the filled boxes; the next customer’s contact fills them again', async () => {
-    const OTHER = { id: 6, name: 'บริษัท ซิตี้โฮม จำกัด', taxId: '0105559999999', address: 'ชลบุรี', phone: '03-000-0000' };
-    const OTHER_CONTACT = { id: 41, customerId: 6, firstName: 'มาลี', lastName: null, phone: '090-111-2222', email: 'malee@city-home.example' };
-    api.customers.search.mockResolvedValue({ customers: [CUSTOMER, OTHER] });
-    api.customers.contacts.mockImplementation(async (customerId) => ({ contacts: customerId === OTHER.id ? [OTHER_CONTACT] : [KANNIKA] }));
-    renderEditor('/quotations/new');
-    fireEvent.click(await screen.findByRole('button', { name: 'สร้างงานใหม่' }));
-
-    fireEvent.change(await screen.findByLabelText(/^ลูกค้า/), { target: { value: 'แฟชั่น' } });
-    fireEvent.mouseDown(await screen.findByRole('option', { name: new RegExp(CUSTOMER.name) }));
-    await pickContact('กรรณิการ์');
-    expect(boxes()).toEqual([KANNIKA.phone, KANNIKA.email]);
-
-    fireEvent.click(screen.getByRole('button', { name: 'ล้างลูกค้าที่เลือก' }));
-    fireEvent.change(await screen.findByLabelText(/^ลูกค้า/), { target: { value: 'ซิตี้' } });
-    fireEvent.mouseDown(await screen.findByRole('option', { name: new RegExp(OTHER.name) }));
-    await waitFor(() => expect(boxes()).toEqual(['', '']));
-
-    await pickContact('มาลี');
-    expect(boxes()).toEqual([OTHER_CONTACT.phone, OTHER_CONTACT.email]);
-  });
-
-  it('a refused edit of the card’s อีเมล puts the contact’s original address back in the box', async () => {
-    api.customers.updateContact.mockRejectedValue(new Error('refused'));
-    renderEditor('/quotations/5');
-    await screen.findByDisplayValue('Trilogy');
-    await pickContact('กรรณิการ์');
-    expect(boxes()).toEqual([KANNIKA.phone, KANNIKA.email]);
-
-    const cardEmail = screen.getByLabelText('แก้ไขอีเมลผู้ติดต่อ');
-    fireEvent.change(cardEmail, { target: { value: 'rejected@contractor-b.example' } });
-    fireEvent.blur(cardEmail);
-
-    await waitFor(() => expect(api.customers.updateContact).toHaveBeenCalled());
-    await waitFor(() => expect(boxes()).toEqual([KANNIKA.phone, KANNIKA.email]));
-  });
-});

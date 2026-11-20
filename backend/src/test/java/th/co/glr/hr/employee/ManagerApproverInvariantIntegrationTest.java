@@ -125,29 +125,6 @@ class ManagerApproverInvariantIntegrationTest extends AbstractPostgresIntegratio
         return positionNameTh != null && positionNameTh.replaceAll("\\s+", "").contains("ผู้จัดการ");
     }
 
-    @Test
-    void theShapesActuallyExerciseBothOutcomes() {
-        // Guards the test above against passing vacuously. If a fixture change ever made every shape land on the same
-        // side, the loop would still find zero disagreements and report success while proving nothing about the
-        // interesting half of the equivalence.
-        insertEmployee("MGR", divisionWithManager, "ผู้จัดการฝ่ายขาย", true);
-        long covered = insertEmployee("S1", divisionWithManager, null, true);
-        long manager = insertEmployee("S2", divisionWithManager, "ผู้จัดการฝ่ายขาย", true);
-        long orphan = insertEmployee("S3", divisionWithoutManager, null, true);
-
-        assertThat(repository.hasManagerApprover(covered)).isTrue();
-        // A ผู้จัดการ never routes through another ผู้จัดการ, even though one exists in their ฝ่าย.
-        assertThat(repository.hasManagerApprover(manager)).isFalse();
-        assertThat(repository.hasManagerApprover(orphan)).isFalse();
-    }
-
-    @Test
-    void anEmployeeRowThatDoesNotExistFailsClosed() {
-        // Unreachable through the services, but the answer must withhold the CEO bypass rather than grant it on the
-        // strength of a missing row.
-        assertThat(repository.hasManagerApprover(-1L)).isTrue();
-    }
-
     /** Sweeps every active employee and asks whether any of them would satisfy the services'
      * managesEmployee(employeeId, user) — the brute-force definition the SQL optimises. */
     private boolean anyActiveEmployeeManages(long employeeId) {

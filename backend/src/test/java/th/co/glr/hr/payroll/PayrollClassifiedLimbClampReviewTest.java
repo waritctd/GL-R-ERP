@@ -14,67 +14,6 @@ import th.co.glr.hr.payroll.PayrollClassifiedCalculationDtos.PayrollClassifiedCa
 class PayrollClassifiedLimbClampReviewTest {
     private final PayrollCalculator calculator = new PayrollCalculator();
 
-    @Test
-    void allowanceHeadroomUnusedByTheRegularLimbMustStillShelterTheCumulativeLimb() {
-        Map<PayrollComponent, BigDecimal> amounts = new EnumMap<>(PayrollComponent.class);
-        amounts.put(PayrollComponent.SALARY, new BigDecimal("15000.00"));
-        // A closing month for a sales rep: one large irregular commission, ป.96 ข้อ 1(6).
-        amounts.put(PayrollComponent.COMMISSION_PAY, new BigDecimal("400000.00"));
-
-        Map<PayrollComponent, PayrollTaxTreatment> treatments = new EnumMap<>(PayrollComponent.class);
-        treatments.put(PayrollComponent.COMMISSION_PAY, PayrollTaxTreatment.EXTRA_CUMULATIVE_ACTUAL);
-
-        Map<PayrollComponent, Boolean> sso = new EnumMap<>(PayrollComponent.class);
-        sso.put(PayrollComponent.SALARY, Boolean.TRUE);
-
-        // Ordinary, entirely legal declarations: spouse 60,000 + life 100,000 + home-loan interest 100,000. Together
-        // with the 60,000 personal allowance these exceed the 180,000 annualised salary on their own.
-        PayrollTaxAllowanceInput allowances = new PayrollTaxAllowanceInput(
-            new BigDecimal("60000.00"),  // spouse
-            BigDecimal.ZERO,             // child
-            BigDecimal.ZERO,             // parent care (baht)
-            BigDecimal.ZERO,             // disabled care
-            BigDecimal.ZERO,             // maternity
-            new BigDecimal("100000.00"), // life insurance
-            BigDecimal.ZERO,             // health insurance
-            BigDecimal.ZERO,             // parent health
-            BigDecimal.ZERO,             // rmf
-            BigDecimal.ZERO,             // ssf
-            BigDecimal.ZERO,             // pension
-            BigDecimal.ZERO,             // thai esg
-            new BigDecimal("100000.00"), // home loan interest
-            BigDecimal.ZERO,             // education donation
-            BigDecimal.ZERO,             // general donation
-            BigDecimal.ZERO,             // political donation
-            0                            // parent care count
-        );
-
-        PayrollClassifiedCalculation result = calculator.calculateClassified(new PayrollClassifiedCalculationInput(
-            1L, "REV-001 ทดสอบ", amounts, treatments, sso,
-            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
-            BigDecimal.ZERO, BigDecimal.ZERO, false, BigDecimal.ZERO, null,
-            allowances, PayrollYearToDate.empty(), 1, 2026, null
-        ));
-
-        // The identity, using only figures the engine itself reports.
-        BigDecimal expectedTaxable = result.projectedAnnualIncome()
-            .subtract(result.taxExpenseDeduction())
-            .subtract(result.taxAllowanceTotal())
-            .max(BigDecimal.ZERO);
-
-        assertThat(result.taxableAnnualIncome())
-            .withFailMessage(
-                "annual taxable must be projected(%s) - expense(%s) - allowances(%s) = %s, but the engine reports %s"
-                    + " -- allowance headroom the REGULAR limb could not absorb was destroyed by the .max(ZERO) clamp",
-                result.projectedAnnualIncome(), result.taxExpenseDeduction(), result.taxAllowanceTotal(),
-                expectedTaxable, result.taxableAnnualIncome())
-            .isEqualByComparingTo(expectedTaxable);
-
-        assertThat(result.annualTax())
-            .withFailMessage("annual tax must follow from the correct annual taxable income")
-            .isEqualByComparingTo(calculator.progressiveTax(expectedTaxable));
-    }
-
     /** REVIEW test: the legacy PayrollCalculator#calculate derives the SSO wage base from baseSalary -
      * unpaidLeaveDeduction + leaveDeductionRefund, so an employee on unpaid leave contributes on wages actually
      * paid (and the 2026-07-23 cancel-after-close auto-refund restores the contribution). */

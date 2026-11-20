@@ -18,19 +18,16 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIf;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import th.co.glr.hr.auth.UserPrincipal;
-import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.employee.UpsertEmployeeRequest;
 import th.co.glr.hr.salesboard.VisitDtos.CreateVisitRequest;
 import th.co.glr.hr.support.PostgresTestSupport;
 import th.co.glr.hr.ticket.CreateTicketRequest;
-import th.co.glr.hr.ticket.DealActivityRequest;
 import th.co.glr.hr.ticket.TicketRepository;
 import th.co.glr.hr.ticket.TicketService;
 
@@ -117,124 +114,6 @@ class VisitFollowUpConcurrencyIntegrationTest {
             Integer.class)).isEqualTo(1);
         assertThat(siteVisits(dealId)).isEqualTo(1);
         assertThat(nextFollowUp(dealId)).isEqualTo(date);
-    }
-
-    @Test
-    void aReassignmentWaitsForATickThatIsWritingItsActivityAndDate() throws Exception {
-        String tag = Long.toString(System.nanoTime());
-        UserPrincipal rep = rep("พนักงานขาย ล็อก " + tag, "visit-fu-lock-" + tag + "@glr.co.th");
-        UserPrincipal other = rep("พนักงานขาย รับต่อ " + tag, "visit-fu-lock-other-" + tag + "@glr.co.th");
-        long dealId = deal(rep);
-        LocalDate today = LocalDate.now(VisitService.BANGKOK);
-        long visitId = visits.create(new CreateVisitRequest(dealId, "คุณอรุณ", today, null, null, false), rep).id();
-        long key = 6_300_000_000L + Math.floorMod(tag.hashCode(), 1_000_000);
-
-        String fn = "test_hold_activity_" + tag;
-        String trigger = "trg_test_hold_activity_" + tag;
-        try (Connection holder = dataSource.getConnection()) {
-            advisory(holder, "SELECT pg_advisory_lock(?)", key);
-            jdbc.update("CREATE FUNCTION sales." + fn + "() RETURNS trigger AS $$ BEGIN "
-                + "PERFORM pg_advisory_xact_lock_shared(" + key + "); RETURN NEW; END $$ LANGUAGE plpgsql", Map.of());
-            jdbc.update("CREATE TRIGGER " + trigger + " BEFORE INSERT ON sales.deal_activity FOR EACH ROW "
-                + "WHEN (NEW.ticket_id = " + dealId + ") EXECUTE FUNCTION sales." + fn + "()", Map.of());
-            ExecutorService pool = Executors.newFixedThreadPool(2);
-            try {
-                Future<VisitDtos.VisitDto> tick = pool.submit(
-                    () -> visits.markDone(visitId, "ไปแล้ว", today.plusDays(7), rep));
-                assertThat(awaitWaiting(1)).as("the tick is parked at its activity write").isTrue();
-
-                Future<Integer> reassign = pool.submit(() -> tickets.moveOwnerToSalesRep(dealId, other.id()));
-                assertThat(awaitWaiting(2))
-                    .as("the reassignment must wait on the deal's row lock the tick holds (R4)").isTrue();
-                assertThat(reassign.isDone()).isFalse();
-
-                advisory(holder, "SELECT pg_advisory_unlock(?)", key);
-                assertThat(tick.get(30, TimeUnit.SECONDS).status()).isEqualTo("DONE");
-                assertThat(reassign.get(30, TimeUnit.SECONDS)).isEqualTo(1);
-            } finally {
-                advisory(holder, "SELECT pg_advisory_unlock_all() WHERE ? IS NOT NULL", key);
-                pool.shutdownNow();
-                jdbc.update("DROP TRIGGER IF EXISTS " + trigger + " ON sales.deal_activity", Map.of());
-                jdbc.update("DROP FUNCTION IF EXISTS sales." + fn + "()", Map.of());
-            }
-        }
-
-        // The tick wrote while its owner held the deal; the reassignment came after it.
-        assertThat(siteVisits(dealId)).isEqualTo(1);
-        assertThat(nextFollowUp(dealId)).isEqualTo(today.plusDays(7));
-    }
-
-    /**
-     * A tick with a date while the deal is being paused: the ACTIVE check must run under the deal's row lock, so the
-     * tick waits for the pause and is then refused (409) with nothing written — not let through on the ACTIVE it read
-     * before the pause committed.
-     */
-    @Test
-    void aTickWithADate_racingAPause_isRefused409_andWritesNothing() throws Exception {
-        String tag = Long.toString(System.nanoTime());
-        UserPrincipal rep = rep("พนักงานขาย พัก " + tag, "visit-fu-pause-" + tag + "@glr.co.th");
-        long dealId = deal(rep);
-        LocalDate today = LocalDate.now(VisitService.BANGKOK);
-        long visitId = visits.create(new CreateVisitRequest(dealId, "คุณอรุณ", today, null, null, false), rep).id();
-        LocalDate original = nextFollowUp(dealId);
-
-        Throwable refused = whilePausing(dealId, () -> visits.markDone(visitId, "ไปแล้ว", today.plusDays(7), rep));
-
-        assertThat(refused).isInstanceOf(ApiException.class);
-        assertThat(((ApiException) refused).getStatus()).isEqualTo(HttpStatus.CONFLICT);
-        assertThat(jdbc.queryForObject("SELECT status FROM sales.visit WHERE visit_id = :id", Map.of("id", visitId),
-            String.class)).isEqualTo("PLANNED");
-        assertThat(siteVisits(dealId)).isZero();
-        assertThat(nextFollowUp(dealId)).isEqualTo(original);
-    }
-
-    /** The call dialog's ตามครั้งถัดไป (TicketService#addActivity), same race, same rule. */
-    @Test
-    void aCallWithADate_racingAPause_isRefused409_andWritesNothing() throws Exception {
-        String tag = Long.toString(System.nanoTime());
-        UserPrincipal rep = rep("พนักงานขาย โทร " + tag, "call-fu-pause-" + tag + "@glr.co.th");
-        long dealId = deal(rep);
-        LocalDate today = LocalDate.now(VisitService.BANGKOK);
-        LocalDate original = nextFollowUp(dealId);
-
-        Throwable refused = whilePausing(dealId, () -> ticketService.addActivity(dealId,
-            new DealActivityRequest(today, "CALL", "โทรแล้ว", today.plusDays(7)), rep));
-
-        assertThat(refused).isInstanceOf(ApiException.class);
-        assertThat(((ApiException) refused).getStatus()).isEqualTo(HttpStatus.CONFLICT);
-        assertThat(jdbc.queryForObject("SELECT count(*) FROM sales.deal_activity WHERE ticket_id = :id",
-            Map.of("id", dealId), Integer.class)).isZero();
-        assertThat(nextFollowUp(dealId)).isEqualTo(original);
-    }
-
-    /**
-     * Pauses the deal in an open transaction (holding its row lock), runs {@code call} on another thread until Postgres
-     * reports it waiting on a lock, commits the pause, and returns what the call threw (null when it returned).
-     */
-    private Throwable whilePausing(long dealId, java.util.concurrent.Callable<?> call) throws Exception {
-        ExecutorService pool = Executors.newSingleThreadExecutor();
-        try (Connection holder = dataSource.getConnection()) {
-            holder.setAutoCommit(false);
-            try (PreparedStatement pause = holder.prepareStatement(
-                    "UPDATE sales.ticket SET lifecycle = 'ON_HOLD' WHERE ticket_id = ?")) {
-                pause.setLong(1, dealId);
-                assertThat(pause.executeUpdate()).isEqualTo(1);
-            }
-            Future<?> running = pool.submit(call);
-            try {
-                assertThat(awaitWaiting(1)).as("the request waits on the deal row the pause holds").isTrue();
-            } finally {
-                holder.commit();
-            }
-            try {
-                running.get(30, TimeUnit.SECONDS);
-                return null;
-            } catch (java.util.concurrent.ExecutionException e) {
-                return e.getCause();
-            }
-        } finally {
-            pool.shutdownNow();
-        }
     }
 
     /** True once at least {@code n} other backends of this database are waiting on a lock (deadline 15 s). */

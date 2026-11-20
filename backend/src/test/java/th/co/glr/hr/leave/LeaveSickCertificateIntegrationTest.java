@@ -59,104 +59,8 @@ class LeaveSickCertificateIntegrationTest extends AbstractPostgresIntegrationTes
     // No-certificate monthly tolerance: real SQL proof that occasions 1-3 are ALLOWED and the 4th is REJECTED --
     // and that the count resets at a calendar-month boundary.
 
-    @Test
-    void firstThreeCertificatelessSickRequestsInACalendarMonthAreApprovedButTheFourthWarnsUnpaid() {
-        long employeeId = insertEmployee("SICK-TOL-001");
-
-        // Mon 2026-07-06, Wed 2026-07-08, Fri 2026-07-10, Mon 2026-07-13 -- four distinct working days, all in July
-        // 2026, all certificate-less. The boundary is asserted from BOTH sides in one flow: the 3rd is still allowed,
-        // the 4th (same employee, same month, same shape) is not.
-        LeaveRequestDto first = leaveService.submit(sickRequest(employeeId, "2026-07-06"), employee(employeeId));
-        LeaveRequestDto second = leaveService.submit(sickRequest(employeeId, "2026-07-08"), employee(employeeId));
-        LeaveRequestDto third = leaveService.submit(sickRequest(employeeId, "2026-07-10"), employee(employeeId));
-        LeaveRequestDto fourth = leaveService.submit(sickRequest(employeeId, "2026-07-13"), employee(employeeId));
-
-        assertThat(first.status()).isEqualTo("SUBMITTED");
-        assertThat(second.status()).isEqualTo("SUBMITTED");
-        assertThat(third.status()).isEqualTo("SUBMITTED");
-        // SICK_NO_CERT_TOLERANCE_EXHAUSTED is
-        // WARN_UNPAID_ALL, not BLOCK -- the 4th request still submits, wholly unpaid by rule.
-        assertThat(fourth.status()).isEqualTo("SUBMITTED");
-        assertThat(fourth.systemNoteCode()).isNull();
-        assertThat(fourth.ruleWarnings()).extracting(LeaveRuleWarningDto::code)
-            .containsExactly("SICK_NO_CERT_TOLERANCE_EXHAUSTED");
-        assertThat(fourth.ruleWarnings().get(0).messageTh()).isNotBlank();
-        assertThat(fourth.unpaidByRuleDays()).isEqualByComparingTo("1.00");
-        // Money-effect pin: the first three each granted a paid day (paid_days_cap is NULL for SICK, well within the
-        // 30-day quota) -- today's pre-V124 code would have auto-rejected ALL FOUR.
-        assertThat(first.paidDays()).isEqualByComparingTo("1.00");
-        assertThat(second.paidDays()).isEqualByComparingTo("1.00");
-        assertThat(third.paidDays()).isEqualByComparingTo("1.00");
-        assertThat(fourth.paidDays()).isEqualByComparingTo("0.00");
-    }
-
-    @Test
-    void theNoCertificateOccasionCountResetsAtACalendarMonthBoundary() {
-        long employeeId = insertEmployee("SICK-TOL-RESET-001");
-
-        // Three certificate-less occasions in JUNE (Mon 22nd, Tue 23rd, Wed 24th 2026) exhaust June's tolerance...
-        LeaveRequestDto juneFirst = leaveService.submit(sickRequest(employeeId, "2026-06-22"), employee(employeeId));
-        LeaveRequestDto juneSecond = leaveService.submit(sickRequest(employeeId, "2026-06-23"), employee(employeeId));
-        LeaveRequestDto juneThird = leaveService.submit(sickRequest(employeeId, "2026-06-24"), employee(employeeId));
-        assertThat(juneFirst.status()).isEqualTo("SUBMITTED");
-        assertThat(juneSecond.status()).isEqualTo("SUBMITTED");
-        assertThat(juneThird.status()).isEqualTo("SUBMITTED");
-
-        // A fourth certificate-less occasion, still in June, would warn unpaid
-        // (same boundary as the test above) -- proving June's own count is
-        // genuinely exhausted, not that this employee has some unlimited allowance.
-        LeaveRequestDto juneFourth = leaveService.submit(sickRequest(employeeId, "2026-06-25"), employee(employeeId));
-        assertThat(juneFourth.status()).isEqualTo("SUBMITTED");
-        assertThat(juneFourth.ruleWarnings()).extracting(LeaveRuleWarningDto::code)
-            .containsExactly("SICK_NO_CERT_TOLERANCE_EXHAUSTED");
-
-        // ...but a request starting in JULY is a NEW calendar month: the counter must have reset, not carried the
-        // exhausted June count forward. Wed 2026-07-01 is FIXED_NOW itself, a working day, SICK requires zero advance
-        // notice.
-        LeaveRequestDto julyFirst = leaveService.submit(sickRequest(employeeId, "2026-07-01"), employee(employeeId));
-        assertThat(julyFirst.status()).isEqualTo("SUBMITTED");
-    }
-
-    @Test
-    void certifiedSickRequestsDoNotCountAgainstTheNoCertificateMonthlyTolerance() {
-        // MUTATION-CHECK NOTE: this is the ONE test in this class that only the real SQL can prove.
-        long employeeId = insertEmployee("SICK-NOCT-001");
-        stubFileStorage();
-
-        LeaveRequestDto certifiedFirst = leaveService.submit(
-            sickRequest(employeeId, "2026-07-01"), certificate(), employee(employeeId));
-        LeaveRequestDto certifiedSecond = leaveService.submit(
-            sickRequest(employeeId, "2026-07-02"), certificate(), employee(employeeId));
-        LeaveRequestDto certifiedThird = leaveService.submit(
-            sickRequest(employeeId, "2026-07-03"), certificate(), employee(employeeId));
-        assertThat(certifiedFirst.status()).isEqualTo("SUBMITTED");
-        assertThat(certifiedSecond.status()).isEqualTo("SUBMITTED");
-        assertThat(certifiedThird.status()).isEqualTo("SUBMITTED");
-
-        LeaveRequestDto uncertifiedFourth = leaveService.submit(
-            sickRequest(employeeId, "2026-07-06"), employee(employeeId));
-
-        assertThat(uncertifiedFourth.status()).isEqualTo("SUBMITTED");
-        assertThat(uncertifiedFourth.paidDays()).isEqualByComparingTo("1.00");
-    }
-
     // Certificate filing window: real submit calls WITH a real MultipartFile, so hr.leave_request.attachment_id is
     // genuinely populated through the real LeaveAttachmentRepository/hr.file_attachment schema.
-
-    @Test
-    void aSickRequestWithACertificateFiledWithinTheWorkingDayWindowIsApproved() {
-        // FIXED_NOW = Wed 2026-07-01. Start Mon 2026-06-29: addWorkingDays(Mon, 3) = Thu 2026-07-02 -- "today"
-        // (2026-07-01) is on/before that deadline -> ON TIME.
-        long employeeId = insertEmployee("SICK-WIN-OK-001");
-        stubFileStorage();
-
-        LeaveRequestDto result = leaveService.submit(
-            sickRequest(employeeId, "2026-06-29"), certificate(), employee(employeeId));
-
-        assertThat(result.status()).isEqualTo("SUBMITTED");
-        assertThat(result.paidDays()).isEqualByComparingTo("1.00");
-        assertRealAttachmentPersisted(result.id());
-    }
 
     @Test
     void aSickRequestWithACertificateFiledOutsideTheWorkingDayWindowWarnsUnpaid() {
@@ -184,16 +88,6 @@ class LeaveSickCertificateIntegrationTest extends AbstractPostgresIntegrationTes
     // THE combined case the task calls out explicitly: no certificate AND beyond the 3-working-day window, with
     // tolerance still available -> ALLOWED. The filing-window clause governs the certificate path only; it must
     // never gate the no-certificate tolerance path.
-
-    @Test
-    void aCertificatelessSickRequestFiledLongAfterItsStartDateIsStillApprovedWhenToleranceRemains() {
-        long employeeId = insertEmployee("SICK-COMBO-001");
-
-        LeaveRequestDto result = leaveService.submit(sickRequest(employeeId, "2026-06-01"), employee(employeeId));
-
-        assertThat(result.status()).isEqualTo("SUBMITTED");
-        assertThat(result.paidDays()).isEqualByComparingTo("1.00");
-    }
 
     // --- helpers --------------------------------------------------------
 

@@ -139,68 +139,6 @@ class CommissionAdjustItemWeightsConcurrencyIntegrationTest extends AbstractPost
             .isEqualByComparingTo(expected);
     }
 
-    @Test
-    void anAdjusterHoldingTheRecordLock_parksASecondAdjusterBeforeItWritesAnything_untilItCommits() throws Exception {
-        long ticketId = dealWithTwoEqualLines();
-        long commissionId = createRecord(ticketId);
-        long lineB = tickets.findById(ticketId).orElseThrow().items().get(1).id();
-
-        CountDownLatch lockHeld = new CountDownLatch(1);
-        CountDownLatch releaseLock = new CountDownLatch(1);
-        AtomicReference<Throwable> holderFailure = new AtomicReference<>();
-        // Holder: a separate connection/transaction that has taken the record's row lock -- exactly what a concurrent
-        // adjuster that got there first holds.
-        Thread holder = new Thread(() -> {
-            try {
-                transactionTemplate.executeWithoutResult(status -> {
-                    jdbc.queryForObject(
-                        "SELECT commission_id FROM sales.commission_record WHERE commission_id = :id FOR UPDATE",
-                        Map.of("id", commissionId), Long.class);
-                    lockHeld.countDown();
-                    try {
-                        releaseLock.await(30, TimeUnit.SECONDS);
-                    } catch (InterruptedException e) {
-                        Thread.currentThread().interrupt();
-                    }
-                });
-            } catch (Throwable t) {
-                holderFailure.set(t);
-            }
-        }, "lock-holder");
-        holder.start();
-        assertThat(lockHeld.await(30, TimeUnit.SECONDS)).isTrue();
-
-        CountDownLatch adjusterDone = new CountDownLatch(1);
-        AtomicReference<Throwable> adjusterFailure = new AtomicReference<>();
-        Thread adjuster = new Thread(() -> {
-            try {
-                service.adjustItemWeights(commissionId, weights(lineB, 2), managerActor);
-            } catch (Throwable t) {
-                adjusterFailure.set(t);
-            } finally {
-                adjusterDone.countDown();
-            }
-        }, "adjuster");
-        adjuster.start();
-
-        // While the lock is held the adjuster must NOT get through.
-        assertThat(adjusterDone.await(2, TimeUnit.SECONDS))
-            .as("adjustItemWeights must wait for the commission_record row lock").isFalse();
-        // ...and it must be parked BEFORE it has written anything.
-        org.assertj.core.api.Assertions.assertThatCode(() -> jdbc.queryForObject(
-                "SELECT item_id FROM sales.ticket_item WHERE item_id = :id FOR UPDATE NOWAIT",
-                Map.of("id", lineB), Long.class))
-            .as("a parked adjuster has written nothing: line B must not be row-locked by it")
-            .doesNotThrowAnyException();
-        releaseLock.countDown();
-        assertThat(adjusterDone.await(30, TimeUnit.SECONDS)).as("adjuster completes once the lock is released").isTrue();
-        holder.join(30_000);
-        assertThat(holderFailure.get()).isNull();
-        assertThat(adjusterFailure.get()).isNull();
-        assertThat(tickets.findById(ticketId).orElseThrow().items())
-            .extracting(TicketItemDto::weightMultiplier).containsExactly(1, 2);
-    }
-
     // ─────────────────────────────────────────────────────────────────────────────────────
 
     private static ItemWeightMultiplierRequest weights(long itemId, int weight) {

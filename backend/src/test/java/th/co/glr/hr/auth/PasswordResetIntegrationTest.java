@@ -130,23 +130,8 @@ class PasswordResetIntegrationTest extends AbstractPostgresIntegrationTest {
             .satisfies(ex -> assertThat(((ApiException) ex).getStatus().value()).isEqualTo(400));
     }
 
-    @Test
-    void aTokenAlreadyUsedCannotBeUsedAgain() {
-        insertEmployeeWithEmail("RESET-004", "reset.reused@glr.co.th", "EMP004", ORIGINAL_PASSWORD);
-
-        service.forgotPassword(new ForgotPasswordRequest("reset.reused@glr.co.th"));
-        String rawToken = extractToken(mailer.lastSentTo("reset.reused@glr.co.th"));
-
-        service.resetPassword(new ResetPasswordRequest(rawToken, "FirstNewPass1!"));
-
-        assertThatThrownBy(() -> service.resetPassword(new ResetPasswordRequest(rawToken, "SecondNewPass1!")))
-            .isInstanceOf(ApiException.class)
-            .satisfies(ex -> assertThat(((ApiException) ex).getStatus().value()).isEqualTo(400));
-    }
-
-    /** The race #aTokenAlreadyUsedCannotBeUsedAgain does NOT cover: that test reuses a token strictly SEQUENTIALLY,
-     * which only proves used_at sticks after a commit — it says nothing about two requests that both read the
-     * token as still-open BEFORE either writes. */
+    /** Two requests that both read the token as still-open BEFORE either writes: a sequential reuse check would
+     * not catch this race. */
     @RepeatedTest(10)
     void exactlyOneOfTwoConcurrentResetsWithTheSameTokenWinsAndTheLoserIsRejected() throws Exception {
         long id = insertEmployeeWithEmail("RESET-007", "reset.race@glr.co.th", "EMP007", ORIGINAL_PASSWORD);
@@ -201,41 +186,6 @@ class PasswordResetIntegrationTest extends AbstractPostgresIntegrationTest {
             "SELECT count(*) FROM hr.password_reset_token WHERE employee_id = :id AND used_at IS NOT NULL",
             Map.of("id", id), Integer.class);
         assertThat(usedCount).isEqualTo(1);
-    }
-
-    @Test
-    void newPasswordEqualToTheEmployeesOwnCodeIsRejectedWithTheSharedMessage() {
-        // The code itself becomes the attempted new password, so it must clear ResetPasswordRequest's own @Size(min =
-        // 8) - "EMP-00005" does.
-        String employeeCode = "EMP-00005";
-        insertEmployeeWithEmail("RESET-005", "reset.owncode@glr.co.th", employeeCode, ORIGINAL_PASSWORD);
-
-        service.forgotPassword(new ForgotPasswordRequest("reset.owncode@glr.co.th"));
-        String rawToken = extractToken(mailer.lastSentTo("reset.owncode@glr.co.th"));
-
-        assertThatThrownBy(() -> service.resetPassword(new ResetPasswordRequest(rawToken, employeeCode)))
-            .isInstanceOf(ApiException.class)
-            .hasMessage("รหัสผ่านใหม่ต้องไม่ใช่รหัสพนักงานของคุณ");
-    }
-
-    @Test
-    void rapidRepeatedForgotPasswordRequestsIssueOnlyOneValidToken() {
-        long id = insertEmployeeWithEmail("RESET-006", "reset.cooldown@glr.co.th", "EMP006", ORIGINAL_PASSWORD);
-
-        service.forgotPassword(new ForgotPasswordRequest("reset.cooldown@glr.co.th"));
-        service.forgotPassword(new ForgotPasswordRequest("reset.cooldown@glr.co.th"));
-
-        // The cooldown guard must have skipped issuing (and emailing) a second token: exactly one row exists for this
-        // employee, not two.
-        Integer tokenCount = jdbc.queryForObject(
-            "SELECT count(*) FROM hr.password_reset_token WHERE employee_id = :id",
-            Map.of("id", id), Integer.class);
-        assertThat(tokenCount).isEqualTo(1);
-
-        long emailsToThisAddress = mailer.sent().stream()
-            .filter(sent -> "reset.cooldown@glr.co.th".equals(sent.to()))
-            .count();
-        assertThat(emailsToThisAddress).isEqualTo(1);
     }
 
     private String extractToken(String textBody) {

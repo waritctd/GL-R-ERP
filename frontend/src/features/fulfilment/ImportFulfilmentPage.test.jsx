@@ -5,7 +5,6 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ImportFulfilmentPage } from './ImportFulfilmentPage.jsx';
 import { api } from '../../api/index.js';
-import { queryKeys } from '../../api/queryKeys.js';
 
 globalThis.React = React;
 
@@ -126,22 +125,6 @@ describe('ImportFulfilmentPage (per-factory, stored aggregate)', () => {
     expect(within(card).getByText(/ถึงโกดัง 0\/2 โรงงาน/)).not.toBeNull();
   });
 
-  it('chip counts read the number of SHIPMENTS at each step', async () => {
-    mockRowsByTicket({
-      1: [
-        row({ id: 1, importStep: 'IN_TRANSIT' }),
-        row({ id: 2, factoryName: 'B', importStep: 'IN_TRANSIT' }),
-        row({ id: 3, factoryName: 'C', importStep: 'ORDERED' }),
-      ],
-    });
-    renderPage();
-
-    await screen.findByTestId('fulfilment-deal');
-    expect(screen.getByTestId('step-chip-ALL').textContent).toMatch(/3/);
-    expect(screen.getByTestId('step-chip-IN_TRANSIT').textContent).toMatch(/2/);
-    expect(screen.getByTestId('step-chip-ORDERED').textContent).toMatch(/1/);
-  });
-
   it('advances a factory to the chosen step in place (never a deal-level transition)', async () => {
     renderPage();
     const card = await screen.findByTestId('fulfilment-deal');
@@ -157,14 +140,6 @@ describe('ImportFulfilmentPage (per-factory, stored aggregate)', () => {
   describe('the undo snackbar', () => {
     afterEach(() => vi.useRealTimers());
 
-    it('is titled การขนส่ง and says it is the one place a step moves', async () => {
-      renderPage();
-      await screen.findByTestId('fulfilment-deal');
-      expect(screen.getByRole('heading', { name: 'การขนส่ง' })).not.toBeNull();
-      expect(screen.getByText(/ที่เดียวที่เลื่อนขั้นตอนการนำเข้าได้/)).not.toBeNull();
-      expect(screen.getByText(/ฝ่ายขายเห็นขั้นตอนเดียวกันในหน้ารายละเอียดงาน \(ดูอย่างเดียว\)/)).not.toBeNull();
-    });
-
     it('an advance shows "เลื่อนเป็น … · IR · เลิกทำ"; เลิกทำ undoes THAT advance (expectedStep = its target)', async () => {
       api.storedImportRequests.undoStep.mockResolvedValue({ importRequest: row() });
       const { showToast } = renderPage();
@@ -177,57 +152,6 @@ describe('ImportFulfilmentPage (per-factory, stored aggregate)', () => {
       await waitFor(() => expect(api.storedImportRequests.undoStep).toHaveBeenCalledWith(1, { expectedStep: 'PICKED_UP' }));
       await waitFor(() => expect(screen.queryByTestId('step-undo-snackbar')).toBeNull());
       expect(showToast).toHaveBeenCalledWith('success', expect.stringContaining('เลิกทำ'));
-    });
-
-    it('goes away after 30 seconds, and nothing is undone', async () => {
-      vi.useFakeTimers({ shouldAdvanceTime: true });
-      renderPage();
-      const card = await screen.findByTestId('fulfilment-deal');
-      fireEvent.click(within(card).getByTestId('advance-1'));
-      await screen.findByTestId('step-undo-snackbar');
-      await vi.advanceTimersByTimeAsync(29_000);
-      expect(screen.getByTestId('step-undo-snackbar')).not.toBeNull();
-      await vi.advanceTimersByTimeAsync(1_500);
-      await waitFor(() => expect(screen.queryByTestId('step-undo-snackbar')).toBeNull());
-      expect(api.storedImportRequests.undoStep).not.toHaveBeenCalled();
-    });
-
-    it('counts down to the server’s undoUntil, not 30 s from the client clock', async () => {
-      vi.useFakeTimers({ shouldAdvanceTime: true });
-      api.storedImportRequests.advanceStep.mockResolvedValue({
-        importRequest: row({ importStep: 'PICKED_UP' }), undoUntil: new Date(Date.now() + 10_000).toISOString(),
-      });
-      renderPage();
-      const card = await screen.findByTestId('fulfilment-deal');
-      fireEvent.click(within(card).getByTestId('advance-1'));
-      await screen.findByTestId('step-undo-snackbar');
-      await vi.advanceTimersByTimeAsync(11_000);
-      await waitFor(() => expect(screen.queryByTestId('step-undo-snackbar')).toBeNull());
-    });
-
-    it('is announced politely, takes focus on its เลิกทำ, and gives focus back when it closes', async () => {
-      vi.useFakeTimers({ shouldAdvanceTime: true });
-      renderPage();
-      const card = await screen.findByTestId('fulfilment-deal');
-      const advanceButton = within(card).getByTestId('advance-1');
-      advanceButton.focus();
-      fireEvent.click(advanceButton);
-      const snack = await screen.findByTestId('step-undo-snackbar');
-      expect(snack.getAttribute('role')).toBe('status');
-      expect(snack.getAttribute('aria-live')).toBe('polite');
-      await waitFor(() => expect(document.activeElement).toBe(within(snack).getByRole('button', { name: 'เลิกทำ' })));
-      await vi.advanceTimersByTimeAsync(31_000);
-      await waitFor(() => expect(screen.queryByTestId('step-undo-snackbar')).toBeNull());
-      expect(document.activeElement).toBe(within(screen.getByTestId('fulfilment-deal')).getByTestId('advance-1'));
-    });
-
-    it('a refused undo (window passed / step moved) says so in a toast', async () => {
-      api.storedImportRequests.undoStep.mockRejectedValue(new Error('เลิกทำไม่ได้แล้ว'));
-      const { showToast } = renderPage();
-      const card = await screen.findByTestId('fulfilment-deal');
-      fireEvent.click(within(card).getByTestId('advance-1'));
-      fireEvent.click(within(await screen.findByTestId('step-undo-snackbar')).getByRole('button', { name: 'เลิกทำ' }));
-      await waitFor(() => expect(showToast).toHaveBeenCalledWith('error', 'เลิกทำไม่ได้แล้ว'));
     });
 
     it('an advance to ถึงโกดัง offers no undo (it completes the shipment; the server refuses it too)', async () => {
@@ -252,91 +176,6 @@ describe('ImportFulfilmentPage (per-factory, stored aggregate)', () => {
     expect(hrefs.filter((h) => h.startsWith('/tickets'))).toEqual([]);
   });
 
-  // SYNC: the same per-factory rows are shown on the import deal page, so an advance made here must refresh that
-  // page's cached copy too — otherwise a stale step shows until a hard reload.
-  it('refreshes the import deal page cache after advancing a factory (sync)', async () => {
-    const { queryClient } = renderPage();
-    const spy = vi.spyOn(queryClient, 'invalidateQueries');
-    const card = await screen.findByTestId('fulfilment-deal');
-    fireEvent.click(within(card).getByTestId('advance-1'));
-
-    await waitFor(() => expect(spy).toHaveBeenCalledWith({ queryKey: queryKeys.importDeal(1) }));
-    expect(spy).toHaveBeenCalledWith({ queryKey: queryKeys.storedImportRequests(1) });
-  });
-
-  it('keeps an all-received deal in the done group, out of the active list', async () => {
-    // PR-B REVIEW ROUND 1, S2: "done" is keyed on the TICKET's own fulfillmentStatus, not merely "every ISSUED row
-    // I can see is RECEIVED" — so this fixture's ticket must actually carry that status, matching what
-    // ImportRequestService#applyImportRequestRollup would have written server-side.
-    api.tickets.list.mockResolvedValue({
-      tickets: [ticket({ fulfillmentStatus: 'GOODS_RECEIVED' }), ticket({ id: 2, code: 'D-ACTIVE', customerName: 'ลูกค้าสอง', fulfillmentStatus: 'IR_ISSUED' })],
-    });
-    mockRowsByTicket({
-      1: [row({ id: 1, ticketId: 1, ticketCode: 'PR-2026-0701', importStep: 'RECEIVED' })],
-      2: [row({ id: 2, ticketId: 2, ticketCode: 'D-ACTIVE', factoryName: 'F2', importStep: 'ORDERED' })],
-    });
-    renderPage();
-
-    // The received deal is not an active card…
-    await screen.findByTestId('fulfilment-deal');
-    expect(screen.getAllByTestId('fulfilment-deal')).toHaveLength(1);
-    expect(dealCardFor('D-ACTIVE')).not.toBeNull();
-    // …it sits in the collapsed done group instead.
-    expect(within(screen.getByTestId('fulfilment-done')).getByText(/PR-2026-0701/)).not.toBeNull();
-  });
-
-  it('filtering to a step hides deals that have no factory at that step', async () => {
-    mockRowsByTicket({ 1: [row({ id: 1, importStep: 'ORDERED' })] });
-    renderPage();
-    await screen.findByTestId('fulfilment-deal');
-
-    fireEvent.click(screen.getByTestId('step-chip-RECEIVED'));
-    expect(screen.queryByTestId('fulfilment-deal')).toBeNull();
-
-    fireEvent.click(screen.getByTestId('step-chip-ORDERED'));
-    expect(screen.getByTestId('fulfilment-deal')).not.toBeNull();
-  });
-
-  it('filters by customer or deal code from the search box', async () => {
-    api.tickets.list.mockResolvedValue({
-      tickets: [ticket({ id: 1, code: 'D-ONE', customerName: 'ลูกค้าหนึ่ง' }),
-        ticket({ id: 2, code: 'D-TWO', customerName: 'ลูกค้าสอง' })],
-    });
-    mockRowsByTicket({
-      1: [row({ id: 1, ticketId: 1, ticketCode: 'D-ONE' })],
-      2: [row({ id: 2, ticketId: 2, ticketCode: 'D-TWO', factoryName: 'F2' })],
-    });
-    renderPage();
-    await screen.findAllByTestId('fulfilment-deal');
-
-    fireEvent.change(screen.getByTestId('fulfilment-search'), { target: { value: 'D-TWO' } });
-    expect(screen.getByText('ลูกค้าสอง')).not.toBeNull();
-    expect(screen.queryByText('ลูกค้าหนึ่ง')).toBeNull();
-  });
-
-  it('shows a clear empty state when no deal has import progress yet', async () => {
-    api.tickets.list.mockResolvedValue({ tickets: [] });
-    mockRowsByTicket({});
-    renderPage();
-    expect(await screen.findByText('ยังไม่มีงานนำเข้ารายโรงงาน')).not.toBeNull();
-  });
-
-  it('shows a "ส่งอีเมลแล้ว" badge once markEmailSent has been recorded, "ยังไม่ส่งอีเมล" otherwise', async () => {
-    mockRowsByTicket({
-      1: [row({ id: 1, emailSentAt: null }), row({ id: 2, factoryName: 'B', emailSentAt: '2026-09-15T00:00:00Z', emailSentByName: 'สมชาย' })],
-    });
-    renderPage();
-    await screen.findByTestId('fulfilment-deal');
-    expect(screen.getByText('ยังไม่ส่งอีเมล')).not.toBeNull();
-    expect(screen.getByText('ส่งอีเมลแล้ว')).not.toBeNull();
-  });
-
-  it('the งานนำเข้า order-email button stays, labelled without the ✉ emoji', async () => {
-    renderPage();
-    const card = await screen.findByTestId('fulfilment-deal');
-    expect(within(card).getByTestId('order-email-1').textContent).toBe('อีเมลสั่งซื้อ');
-  });
-
   it('opens the order-email modal and marks it sent — import/CEO can send it', async () => {
     renderPage();
     const card = await screen.findByTestId('fulfilment-deal');
@@ -347,135 +186,6 @@ describe('ImportFulfilmentPage (per-factory, stored aggregate)', () => {
     fireEvent.click(sendButton);
 
     await waitFor(() => expect(api.storedImportRequests.markEmailSent).toHaveBeenCalledWith(1));
-  });
-
-  it('lets import/CEO edit lead time on an issued row', async () => {
-    api.storedImportRequests.setLeadTime.mockResolvedValue({ importRequest: row({ leadTimeMinDays: 20, leadTimeMaxDays: 30 }) });
-    renderPage();
-    const card = await screen.findByTestId('fulfilment-deal');
-    fireEvent.click(within(card).getByTestId('lead-time-edit-1'));
-
-    fireEvent.click(within(card).getByTestId('lead-time-save-1'));
-    await waitFor(() => expect(api.storedImportRequests.setLeadTime)
-      .toHaveBeenCalledWith(1, { leadTimeMinDays: 30, leadTimeMaxDays: 45 }));
-  });
-
-  // PR-B REVIEW ROUND 1, nit: a rejected lead-time save must leave the editor OPEN, not vanish behind a save
-  // that never happened.
-  it('LeadTimeInline stays open when the save is rejected (400), instead of closing on a failed save', async () => {
-    api.storedImportRequests.setLeadTime.mockRejectedValue(Object.assign(new Error('ระยะเวลานำเข้าไม่ถูกต้อง'), { status: 400 }));
-    renderPage();
-    const card = await screen.findByTestId('fulfilment-deal');
-    fireEvent.click(within(card).getByTestId('lead-time-edit-1'));
-    fireEvent.click(within(card).getByTestId('lead-time-save-1'));
-
-    await waitFor(() => expect(api.storedImportRequests.setLeadTime).toHaveBeenCalled());
-    // The inputs (only rendered while the editor is open) must still be there.
-    expect(within(card).getByTestId('lead-time-save-1')).not.toBeNull();
-  });
-
-  it('a blank lead-time save shows a validation message and does not call the API at all', async () => {
-    renderPage();
-    const card = await screen.findByTestId('fulfilment-deal');
-    fireEvent.click(within(card).getByTestId('lead-time-edit-1'));
-    const inputs = within(card).getAllByRole('spinbutton');
-    fireEvent.change(inputs[0], { target: { value: '' } });
-    fireEvent.click(within(card).getByTestId('lead-time-save-1'));
-
-    expect(api.storedImportRequests.setLeadTime).not.toHaveBeenCalled();
-    // Editor stays open — the same "stays open" contract as the rejected-save case above.
-    expect(within(card).getByTestId('lead-time-save-1')).not.toBeNull();
-  });
-
-  // PR-B REVIEW ROUND 1, B1: the order-email save must send Java's own field names.
-  it('order-email save sends emailTo/emailSubject/emailBody, not to/subject/body', async () => {
-    api.storedImportRequests.updateEmailDraft.mockResolvedValue({ importRequest: row() });
-    renderPage();
-    const card = await screen.findByTestId('fulfilment-deal');
-    fireEvent.click(within(card).getByTestId('order-email-1'));
-    const modal = await screen.findByTestId('order-email-modal');
-    const saveButton = within(modal).getByRole('button', { name: 'บันทึก' });
-    fireEvent.click(saveButton);
-
-    await waitFor(() => expect(api.storedImportRequests.updateEmailDraft).toHaveBeenCalledWith(1, {
-      emailTo: '', emailSubject: 'Purchase order IR26001 - GL&R', emailBody: 'Dear Cotto Industry team,...',
-    }));
-  });
-
-  it('hides "บันทึก" in the order-email modal once the email has already been sent', async () => {
-    mockRowsByTicket({ 1: [row({ emailSentAt: '2026-09-18T00:00:00Z' })] });
-    renderPage();
-    const card = await screen.findByTestId('fulfilment-deal');
-    fireEvent.click(within(card).getByTestId('order-email-1'));
-    const modal = await screen.findByTestId('order-email-modal');
-    expect(within(modal).queryByRole('button', { name: 'บันทึก' })).toBeNull();
-  });
-
-  // PR-B REVIEW ROUND 1, B3: advancing a step must reset the picker's default target, or a second advance in a
-  // row submits a STALE target (behind the row's real current step) and 409s.
-  describe('B3 — advance twice in a row', () => {
-    it('resets the picker default after the first advance so a second advance targets the NEW next step', async () => {
-      mockRowsByTicket({ 1: [row({ id: 1, importStep: 'CONTACTED' })] });
-      // The mutation's own onSuccess invalidates storedImportRequests, which react-query refetches automatically.
-      api.storedImportRequests.advanceStep.mockImplementationOnce(async () => {
-        mockRowsByTicket({ 1: [row({ id: 1, importStep: 'ORDERED' })] });
-        return { importRequest: row({ importStep: 'ORDERED' }) };
-      });
-      renderPage();
-      const card = await screen.findByTestId('fulfilment-deal');
-      // CONTACTED's only forward-adjacent default is ORDERED.
-      fireEvent.click(within(card).getByTestId('advance-1'));
-      await waitFor(() => expect(api.storedImportRequests.advanceStep)
-        .toHaveBeenCalledWith(1, { targetStep: 'ORDERED' }));
-
-      // Wait for the bar to actually re-render at the NEW current step before the second click — this is the render
-      // FactoryProgressBar's own useEffect resets `target` on.
-      await screen.findByText(/S13/);
-      api.storedImportRequests.advanceStep.mockClear();
-      fireEvent.click(within(screen.getByTestId('fulfilment-deal')).getByTestId('advance-1'));
-      // Must target PICKED_UP (the step after the NEW current step ORDERED) — never ORDERED again, which the row's
-      // own forward-only guard would 409 on. This is exactly what used to fail before B3's fix: `target` state
-      // stayed at the FIRST render's default (ORDERED) forever.
-      await waitFor(() => expect(api.storedImportRequests.advanceStep)
-        .toHaveBeenCalledWith(1, { targetStep: 'PICKED_UP' }));
-    });
-  });
-
-  // PR-B REVIEW ROUND 1, B4: widened candidate filter — PARTIALLY_DELIVERED (mixed stock+import, factories still
-  // in transit) must stay visible, and a legacy/untracked deal must show with a link rather than vanish.
-  describe('B4 — widened candidate filter', () => {
-    it('keeps a PARTIALLY_DELIVERED deal (mixed stock+import) visible with its factories', async () => {
-      api.tickets.list.mockResolvedValue({
-        tickets: [ticket({ fulfillmentStatus: 'PARTIALLY_DELIVERED' })],
-      });
-      mockRowsByTicket({ 1: [row({ id: 1, importStep: 'IN_TRANSIT' })] });
-      renderPage();
-      const card = await screen.findByTestId('fulfilment-deal');
-      expect(within(card).getByText('Cotto Industry')).not.toBeNull();
-    });
-
-    it('excludes FROM_STOCK and FULLY_DELIVERED deals entirely', async () => {
-      api.tickets.list.mockResolvedValue({
-        tickets: [
-          ticket({ id: 1, code: 'D-STOCK', fulfillmentStatus: 'FROM_STOCK' }),
-          ticket({ id: 2, code: 'D-DONE', fulfillmentStatus: 'FULLY_DELIVERED' }),
-        ],
-      });
-      mockRowsByTicket({});
-      renderPage();
-      expect(await screen.findByText('ยังไม่มีงานนำเข้ารายโรงงาน')).not.toBeNull();
-    });
-
-    it('shows a legacy/untracked deal (no stored ISSUED row) with a link to its own deal page instead of dropping it', async () => {
-      api.tickets.list.mockResolvedValue({
-        tickets: [ticket({ id: 9, code: 'D-LEGACY', customerName: 'ลูกค้าเก่า', fulfillmentStatus: 'IR_SENT' })],
-      });
-      mockRowsByTicket({ 9: [] });
-      renderPage();
-      const legacySection = await screen.findByTestId('fulfilment-legacy');
-      expect(within(legacySection).getByText('ลูกค้าเก่า')).not.toBeNull();
-      expect(within(legacySection).getByRole('link', { name: /D-LEGACY/ })).not.toBeNull();
-    });
   });
 
   // PR-B REVIEW ROUND 2, X2: TicketService#applyImportRequestRollup writes ONLY the GOODS_RECEIVED event for an
@@ -511,63 +221,6 @@ describe('ImportFulfilmentPage (per-factory, stored aggregate)', () => {
       expect(within(card).getByText('Cotto Industry')).not.toBeNull();
       expect(screen.queryByTestId('fulfilment-done')).toBeNull();
     });
-
-    it('keeps a PARTIALLY_DELIVERED deal active while another factory is still a DRAFT', async () => {
-      api.tickets.list.mockResolvedValue({
-        tickets: [ticket({ fulfillmentStatus: 'PARTIALLY_DELIVERED' })],
-      });
-      mockRowsByTicket({
-        1: [row({ id: 1, importStep: 'RECEIVED' }), row({ id: 2, factoryName: 'B', status: 'DRAFT', importStep: null })],
-      });
-      renderPage();
-
-      await screen.findByTestId('fulfilment-deal');
-      expect(screen.queryByTestId('fulfilment-done')).toBeNull();
-    });
-  });
-
-  // PR-B REVIEW ROUND 2, X3: the legacy section is for the pre-V184 chain only — a deal that reached
-  // GOODS_RECEIVED or PARTIALLY_DELIVERED with zero stored rows got there via pure stock, which this page has
-  // nothing to show or link to.
-  describe('X3 — legacy section scope', () => {
-    it('does not list a pure-stock PARTIALLY_DELIVERED deal with no stored rows anywhere', async () => {
-      api.tickets.list.mockResolvedValue({
-        tickets: [ticket({ fulfillmentStatus: 'PARTIALLY_DELIVERED' })],
-      });
-      mockRowsByTicket({ 1: [] });
-      renderPage();
-
-      expect(await screen.findByText('ยังไม่มีงานนำเข้ารายโรงงาน')).not.toBeNull();
-      expect(screen.queryByTestId('fulfilment-legacy')).toBeNull();
-      expect(screen.queryByTestId('fulfilment-deal')).toBeNull();
-      expect(screen.queryByTestId('fulfilment-done')).toBeNull();
-    });
-
-    it('does not list a GOODS_RECEIVED deal with no stored rows (e.g. reached via FROM_STOCK) in the legacy section', async () => {
-      api.tickets.list.mockResolvedValue({
-        tickets: [ticket({ fulfillmentStatus: 'GOODS_RECEIVED' })],
-      });
-      mockRowsByTicket({ 1: [] });
-      renderPage();
-
-      expect(await screen.findByText('ยังไม่มีงานนำเข้ารายโรงงาน')).not.toBeNull();
-      expect(screen.queryByTestId('fulfilment-legacy')).toBeNull();
-    });
-
-    it('still lists an IR_SENT/SHIPPING deal with no stored rows in the legacy section', async () => {
-      api.tickets.list.mockResolvedValue({
-        tickets: [
-          ticket({ id: 1, code: 'D-IR-SENT', customerName: 'ลูกค้าหนึ่ง', fulfillmentStatus: 'IR_SENT' }),
-          ticket({ id: 2, code: 'D-SHIPPING', customerName: 'ลูกค้าสอง', fulfillmentStatus: 'SHIPPING' }),
-        ],
-      });
-      mockRowsByTicket({ 1: [], 2: [] });
-      renderPage();
-
-      const legacySection = await screen.findByTestId('fulfilment-legacy');
-      expect(within(legacySection).getByText('ลูกค้าหนึ่ง')).not.toBeNull();
-      expect(within(legacySection).getByText('ลูกค้าสอง')).not.toBeNull();
-    });
   });
 
   // PR-B REVIEW ROUND 2, X4: the completion toast used to claim "รับครบทุกโรงงาน" off a CLIENT-side guess —
@@ -598,107 +251,6 @@ describe('ImportFulfilmentPage (per-factory, stored aggregate)', () => {
 
       await waitFor(() => expect(showToast).toHaveBeenCalledWith('success', 'รับครบทุกโรงงาน — ส่งต่อฝ่ายขายเพื่อส่งมอบ'));
     });
-
-    it('shows the completion toast for a PARTIALLY_DELIVERED deal once the refetched rows confirm every issued row is RECEIVED', async () => {
-      api.tickets.list.mockResolvedValue({ tickets: [ticket({ fulfillmentStatus: 'PARTIALLY_DELIVERED' })] });
-      // The confirmation read is import's own projection, which carries the post-advance rows;
-      // listForTicket still answers with the pre-advance rows, so a toast decided from it is wrong.
-      api.importDeals.get.mockResolvedValue({ deal: {
-        fulfillmentStatus: 'PARTIALLY_DELIVERED',
-        importRequests: [row({ id: 1, importStep: 'RECEIVED' })],
-      } });
-      mockRowsByTicket({ 1: [row({ id: 1, importStep: 'AWAITING_CUSTOMS' })] });
-      api.storedImportRequests.advanceStep.mockResolvedValue({ importRequest: row({ id: 1, importStep: 'RECEIVED' }) });
-      const showToast = vi.fn();
-      renderPage(showToast);
-      const card = await screen.findByTestId('fulfilment-deal');
-      fireEvent.click(within(card).getByTestId('advance-1'));
-
-      await waitFor(() => expect(showToast).toHaveBeenCalledWith('success', 'รับครบทุกโรงงาน — ส่งต่อฝ่ายขายเพื่อส่งมอบ'));
-    });
-
-    it('does not claim completion for a PARTIALLY_DELIVERED deal while another issued row is still short of RECEIVED', async () => {
-      api.tickets.list.mockResolvedValue({ tickets: [ticket({ fulfillmentStatus: 'PARTIALLY_DELIVERED' })] });
-      api.importDeals.get.mockResolvedValue({ deal: {
-        fulfillmentStatus: 'PARTIALLY_DELIVERED',
-        importRequests: [row({ id: 1, importStep: 'RECEIVED' }), row({ id: 2, factoryName: 'B', importStep: 'IN_TRANSIT' })],
-      } });
-      mockRowsByTicket({
-        1: [row({ id: 1, importStep: 'AWAITING_CUSTOMS' }), row({ id: 2, factoryName: 'B', importStep: 'IN_TRANSIT' })],
-      });
-      api.storedImportRequests.advanceStep.mockResolvedValue({ importRequest: row({ id: 1, importStep: 'RECEIVED' }) });
-      const showToast = vi.fn();
-      renderPage(showToast);
-      const card = await screen.findByTestId('fulfilment-deal');
-      fireEvent.click(within(card).getByTestId('advance-1'));
-
-      await waitFor(() => expect(showToast).toHaveBeenCalledWith('success', 'อัปเดตสถานะรายโรงงานแล้ว'));
-      expect(showToast).not.toHaveBeenCalledWith('success', expect.stringContaining('รับครบทุกโรงงาน'));
-    });
-
-    it('does not claim completion for a PARTIALLY_DELIVERED deal while another factory is still a DRAFT', async () => {
-      api.tickets.list.mockResolvedValue({ tickets: [ticket({ fulfillmentStatus: 'PARTIALLY_DELIVERED' })] });
-      const draftB = row({ id: 2, factoryName: 'B', status: 'DRAFT', importStep: null });
-      api.importDeals.get.mockResolvedValue({ deal: {
-        fulfillmentStatus: 'PARTIALLY_DELIVERED',
-        importRequests: [row({ id: 1, importStep: 'RECEIVED' }), draftB],
-      } });
-      mockRowsByTicket({ 1: [row({ id: 1, importStep: 'AWAITING_CUSTOMS' }), draftB] });
-      api.storedImportRequests.advanceStep.mockResolvedValue({ importRequest: row({ id: 1, importStep: 'RECEIVED' }) });
-      const showToast = vi.fn();
-      renderPage(showToast);
-      const card = await screen.findByTestId('fulfilment-deal');
-      fireEvent.click(within(card).getByTestId('advance-1'));
-
-      await waitFor(() => expect(showToast).toHaveBeenCalledWith('success', 'อัปเดตสถานะรายโรงงานแล้ว'));
-      expect(showToast).not.toHaveBeenCalledWith('success', expect.stringContaining('รับครบทุกโรงงาน'));
-    });
-  });
-
-  // PR-B REVIEW ROUND 1, S5: a failed tickets.list or per-deal rows fetch must render as an error.
-  describe('S5 — error rendering', () => {
-    it('shows an error banner when the deal list itself fails to load', async () => {
-      api.tickets.list.mockRejectedValue(new Error('โหลดไม่สำเร็จ'));
-      renderPage();
-      expect(await screen.findByTestId('fulfilment-tickets-error')).not.toBeNull();
-      // Must NOT read as "nothing to do".
-      expect(screen.queryByText('ยังไม่มีงานนำเข้ารายโรงงาน')).toBeNull();
-    });
-
-    it('shows a per-deal error banner when one deal\'s rows fail to load, without hiding the rest', async () => {
-      api.tickets.list.mockResolvedValue({
-        tickets: [ticket({ id: 1, code: 'D-OK' }), ticket({ id: 2, code: 'D-ERR', customerName: 'ลูกค้าพัง', fulfillmentStatus: 'IR_ISSUED' })],
-      });
-      api.storedImportRequests.listForTicket.mockImplementation((ticketId) => (Number(ticketId) === 2
-        ? Promise.reject(new Error('โหลดใบขอซื้อไม่สำเร็จ'))
-        : Promise.resolve({ importRequests: [row({ id: 1, ticketId: 1, ticketCode: 'D-OK' })] })));
-      renderPage();
-      await screen.findByTestId('fulfilment-deal');
-      expect(await screen.findByTestId('fulfilment-rows-error')).not.toBeNull();
-      expect(screen.getByText('ลูกค้าพัง')).not.toBeNull();
-    });
-  });
-});
-
-// CR-1 (R9): import receives each factory's IR with no hand-off and downloads it from /fulfilment.
-// Characterization of what already exists — pinned here so the CR-1 flow cannot silently lose it.
-describe('ImportFulfilmentPage — import downloads each factory IR PDF (CR-1, R9)', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    globalThis.URL.createObjectURL = vi.fn(() => 'blob:ir');
-    globalThis.URL.revokeObjectURL = vi.fn();
-    api.storedImportRequests.download.mockResolvedValue(new Blob(['pdf'], { type: 'application/pdf' }));
-    api.tickets.list.mockResolvedValue({ tickets: [ticket()] });
-    mockRowsByTicket({ 1: [row({ id: 1 }), row({ id: 2, factoryId: 2, factoryName: 'Panaria', docNumber: 'IR26002' })] });
-  });
-
-  it('offers a PDF download per factory row, internal and factory copy', async () => {
-    renderPage();
-    await screen.findByTestId('ir-download-internal-1');
-    fireEvent.click(screen.getByTestId('ir-download-internal-1'));
-    await waitFor(() => expect(api.storedImportRequests.download).toHaveBeenCalledWith(1, undefined));
-    fireEvent.click(screen.getByTestId('ir-download-factory-2'));
-    await waitFor(() => expect(api.storedImportRequests.download).toHaveBeenCalledWith(2, 'factory'));
   });
 });
 

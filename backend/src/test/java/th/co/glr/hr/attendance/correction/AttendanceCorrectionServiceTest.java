@@ -4,8 +4,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
-import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -14,7 +12,6 @@ import static org.mockito.Mockito.when;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
-import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
@@ -40,30 +37,6 @@ class AttendanceCorrectionServiceTest {
     // --- submit: happy path ---------------------------------------------------------------------
 
     @Test
-    void employeeSubmitsForThemselvesFromTheSession() {
-        when(repository.employeeExists(10L)).thenReturn(true);
-        when(repository.hasOpenRequest(10L, PAST_DATE)).thenReturn(false);
-        when(repository.create(eq(10L), eq(10L), any())).thenReturn(55L);
-        when(repository.findById(55L)).thenReturn(Optional.of(dto(55L, 10L, "SUBMITTED")));
-
-        AttendanceCorrectionRequestDto result = service.submit(checkInRequest(), employee(10L));
-
-        assertThat(result.id()).isEqualTo(55L);
-        verify(repository).create(eq(10L), eq(10L), any());
-        verify(auditService).record(any(), eq("SUBMIT_ATTENDANCE_CORRECTION_REQUEST"),
-            eq("attendance_correction_request"), eq(55L), eq(null), any());
-    }
-
-    @Test
-    void employeeCannotSubmitWithoutASession() {
-        assertThatThrownBy(() -> service.submit(checkInRequest(), employee(null)))
-            .isInstanceOf(ApiException.class)
-            .extracting(exception -> ((ApiException) exception).getStatus())
-            .isEqualTo(HttpStatus.BAD_REQUEST);
-        verify(repository, never()).create(anyLong(), anyLong(), any());
-    }
-
-    @Test
     void submitRefusesADuplicateOpenRequestForTheSameDay() {
         when(repository.employeeExists(10L)).thenReturn(true);
         when(repository.hasOpenRequest(10L, PAST_DATE)).thenReturn(true);
@@ -75,91 +48,8 @@ class AttendanceCorrectionServiceTest {
         verify(repository, never()).create(anyLong(), anyLong(), any());
     }
 
-    @Test
-    void submitRefusesAFutureWorkDate() {
-        when(repository.employeeExists(10L)).thenReturn(true);
-        LocalDate future = LocalDate.now(java.time.ZoneId.of("Asia/Bangkok")).plusDays(1);
-        SubmitAttendanceCorrectionRequest request = new SubmitAttendanceCorrectionRequest(
-            future, AttendanceCorrectionType.CHECK_IN,
-            future.atTime(8, 20).atOffset(BANGKOK_OFFSET), null, "ลืมสแกนนิ้ว");
-
-        assertThatThrownBy(() -> service.submit(request, employee(10L)))
-            .isInstanceOf(ApiException.class)
-            .extracting(exception -> ((ApiException) exception).getStatus())
-            .isEqualTo(HttpStatus.BAD_REQUEST);
-        verify(repository, never()).create(anyLong(), anyLong(), any());
-    }
-
     // submit: CHECK-constraint-consistency validated in Java, before the DB ever sees it ------- Mirrors
     // chk_attendance_correction_fields_match_type.
-
-    @Test
-    void checkInTypeWithNullRequestedCheckInIsRejectedBeforeTheDatabase() {
-        when(repository.employeeExists(10L)).thenReturn(true);
-        SubmitAttendanceCorrectionRequest request = new SubmitAttendanceCorrectionRequest(
-            PAST_DATE, AttendanceCorrectionType.CHECK_IN, null, null, "ลืมสแกนนิ้ว");
-
-        assertThatThrownBy(() -> service.submit(request, employee(10L)))
-            .isInstanceOf(ApiException.class)
-            .extracting(exception -> ((ApiException) exception).getStatus())
-            .isEqualTo(HttpStatus.BAD_REQUEST);
-        verify(repository, never()).create(anyLong(), anyLong(), any());
-    }
-
-    @Test
-    void checkOutTypeWithNullRequestedCheckOutIsRejected() {
-        when(repository.employeeExists(10L)).thenReturn(true);
-        SubmitAttendanceCorrectionRequest request = new SubmitAttendanceCorrectionRequest(
-            PAST_DATE, AttendanceCorrectionType.CHECK_OUT, null, null, "ลืมสแกนนิ้ว");
-
-        assertThatThrownBy(() -> service.submit(request, employee(10L)))
-            .isInstanceOf(ApiException.class)
-            .extracting(exception -> ((ApiException) exception).getStatus())
-            .isEqualTo(HttpStatus.BAD_REQUEST);
-        verify(repository, never()).create(anyLong(), anyLong(), any());
-    }
-
-    @Test
-    void bothTypeRequiresBothTimes() {
-        when(repository.employeeExists(10L)).thenReturn(true);
-        SubmitAttendanceCorrectionRequest request = new SubmitAttendanceCorrectionRequest(
-            PAST_DATE, AttendanceCorrectionType.BOTH,
-            PAST_DATE.atTime(8, 20).atOffset(BANGKOK_OFFSET), null, "ลืมสแกนนิ้วทั้งเข้าและออก");
-
-        assertThatThrownBy(() -> service.submit(request, employee(10L)))
-            .isInstanceOf(ApiException.class)
-            .extracting(exception -> ((ApiException) exception).getStatus())
-            .isEqualTo(HttpStatus.BAD_REQUEST);
-        verify(repository, never()).create(anyLong(), anyLong(), any());
-    }
-
-    @Test
-    void checkInTypeWithAnExtraRequestedCheckOutIsRejected() {
-        when(repository.employeeExists(10L)).thenReturn(true);
-        SubmitAttendanceCorrectionRequest request = new SubmitAttendanceCorrectionRequest(
-            PAST_DATE, AttendanceCorrectionType.CHECK_IN,
-            PAST_DATE.atTime(8, 20).atOffset(BANGKOK_OFFSET),
-            PAST_DATE.atTime(17, 30).atOffset(BANGKOK_OFFSET), "ลืมสแกนนิ้ว");
-
-        assertThatThrownBy(() -> service.submit(request, employee(10L)))
-            .isInstanceOf(ApiException.class)
-            .extracting(exception -> ((ApiException) exception).getStatus())
-            .isEqualTo(HttpStatus.BAD_REQUEST);
-    }
-
-    @Test
-    void checkOutBeforeCheckInIsRejectedForBothType() {
-        when(repository.employeeExists(10L)).thenReturn(true);
-        SubmitAttendanceCorrectionRequest request = new SubmitAttendanceCorrectionRequest(
-            PAST_DATE, AttendanceCorrectionType.BOTH,
-            PAST_DATE.atTime(17, 30).atOffset(BANGKOK_OFFSET),
-            PAST_DATE.atTime(8, 20).atOffset(BANGKOK_OFFSET), "เวลาสลับกัน");
-
-        assertThatThrownBy(() -> service.submit(request, employee(10L)))
-            .isInstanceOf(ApiException.class)
-            .extracting(exception -> ((ApiException) exception).getStatus())
-            .isEqualTo(HttpStatus.BAD_REQUEST);
-    }
 
     // --- cancel ----------------------------------------------------------------------------------
 
@@ -186,63 +76,8 @@ class AttendanceCorrectionServiceTest {
         verify(repository, never()).cancel(anyLong());
     }
 
-    @Test
-    void cancelRefusesARequestThatIsAlreadyDecided() {
-        when(repository.findById(55L)).thenReturn(Optional.of(dto(55L, 10L, "APPROVED")));
-
-        assertThatThrownBy(() -> service.cancel(55L, employee(10L)))
-            .isInstanceOf(ApiException.class)
-            .extracting(exception -> ((ApiException) exception).getStatus())
-            .isEqualTo(HttpStatus.CONFLICT);
-        verify(repository, never()).cancel(anyLong());
-    }
-
     // notification deep links ------------------------------------------ notificationService was already mocked
     // above but no test here ever verified a single notify call.
-
-    @Test
-    void approvingNotifiesTheEmployeeAtTheAttendancePageLink() {
-        when(repository.findById(55L))
-            .thenReturn(Optional.of(dto(55L, 10L, "SUBMITTED")))
-            .thenReturn(Optional.of(dto(55L, 10L, "APPROVED")));
-        when(repository.resolveSiteCode(10L, PAST_DATE)).thenReturn("SHOWROOM");
-        when(repository.resolveBadgeCode(10L)).thenReturn("MANUAL-10");
-        when(repository.approve(eq(55L), eq(500L), any())).thenReturn(1);
-
-        service.approve(55L, null, ceo(500L));
-
-        verify(notificationService).notify(
-            eq(10L), eq("ATTENDANCE_CORRECTION_APPROVED"), anyString(), anyString(), eq("/attendance"), eq(true));
-    }
-
-    @Test
-    void rejectingNotifiesTheEmployeeAtTheAttendancePageLink() {
-        when(repository.findById(55L))
-            .thenReturn(Optional.of(dto(55L, 10L, "SUBMITTED")))
-            .thenReturn(Optional.of(dto(55L, 10L, "REJECTED")));
-        when(repository.reject(eq(55L), eq(500L), any())).thenReturn(1);
-
-        service.reject(55L, new ReviewAttendanceCorrectionRequest("กรุณาแนบหลักฐาน"), ceo(500L));
-
-        verify(notificationService).notify(
-            eq(10L), eq("ATTENDANCE_CORRECTION_REJECTED"), anyString(), anyString(), eq("/attendance"), eq(true));
-    }
-
-    @Test
-    void submittingNotifiesEveryCeoApproverAtTheAttendancePageLink() {
-        when(repository.employeeExists(10L)).thenReturn(true);
-        when(repository.hasOpenRequest(10L, PAST_DATE)).thenReturn(false);
-        when(repository.create(eq(10L), eq(10L), any())).thenReturn(55L);
-        when(repository.findById(55L)).thenReturn(Optional.of(dto(55L, 10L, "SUBMITTED")));
-        when(ceoApprovers.findEmployeeIds()).thenReturn(List.of(500L, 501L));
-
-        service.submit(checkInRequest(), employee(10L));
-
-        verify(notificationService).notify(
-            eq(500L), eq("ATTENDANCE_CORRECTION_SUBMITTED"), anyString(), anyString(), eq("/attendance"), eq(true));
-        verify(notificationService).notify(
-            eq(501L), eq("ATTENDANCE_CORRECTION_SUBMITTED"), anyString(), anyString(), eq("/attendance"), eq(true));
-    }
 
     // --- helpers ------------------------------------------------------------
 

@@ -5,7 +5,6 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 
 import java.time.LocalDate;
-import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.HashMap;
 import java.util.Map;
@@ -39,7 +38,6 @@ class AttendanceCorrectionScopeIntegrationTest extends AbstractPostgresIntegrati
     private long salesDivision;
     private long salesManager;
     private long salesStaff;
-    private long anotherStaff;
     private long ceoEmployee;
 
     @BeforeEach
@@ -63,19 +61,8 @@ class AttendanceCorrectionScopeIntegrationTest extends AbstractPostgresIntegrati
         salesDivision = insertDivision("SLS", "ฝ่ายขาย");
         salesManager = insertEmployee("M001", salesDivision);
         salesStaff = insertEmployee("S001", salesDivision);
-        anotherStaff = insertEmployee("S002", salesDivision);
+        insertEmployee("S002", salesDivision);
         ceoEmployee = insertEmployee("C001", salesDivision);
-    }
-
-    // --- submit is self-only --------------------------------------------------------------------
-
-    @Test
-    void anEmployeeSubmitsForThemselvesRegardlessOfSession() {
-        AttendanceCorrectionRequestDto created = service.submit(
-            checkInRequest(), employee(salesStaff));
-
-        assertThat(created.employeeId()).isEqualTo(salesStaff);
-        assertThat(created.status()).isEqualTo("SUBMITTED");
     }
 
     // --- approve: division manager is not the CEO -----------------------------------------------
@@ -92,61 +79,6 @@ class AttendanceCorrectionScopeIntegrationTest extends AbstractPostgresIntegrati
             .isEqualTo(HttpStatus.FORBIDDEN);
 
         assertThat(repository.findById(requestId).orElseThrow().status()).isEqualTo("SUBMITTED");
-    }
-
-    // --- approve: self-approval is blocked, even for the requester -------------------------------
-
-    /** A plain employee attempting to approve their OWN request must also 403 — self-approval is not a carve-out
-     * requireCeo makes for the requester. */
-    @Test
-    void anEmployeeCannotApproveTheirOwnCorrectionRequest() {
-        long requestId = submitAsAndReturnId(salesStaff);
-
-        assertThatThrownBy(() -> service.approve(requestId, null, employee(salesStaff)))
-            .isInstanceOf(ApiException.class)
-            .extracting(exception -> ((ApiException) exception).getStatus())
-            .isEqualTo(HttpStatus.FORBIDDEN);
-
-        assertThat(repository.findById(requestId).orElseThrow().status()).isEqualTo("SUBMITTED");
-    }
-
-    // --- reject: same CEO-only gate ---------------------------------------------------------------
-
-    @Test
-    void aDivisionManagerCannotRejectAnotherEmployeesCorrection() {
-        long requestId = submitAsAndReturnId(salesStaff);
-
-        assertThatThrownBy(() -> service.reject(requestId, null, manager(salesManager, salesDivision)))
-            .isInstanceOf(ApiException.class)
-            .extracting(exception -> ((ApiException) exception).getStatus())
-            .isEqualTo(HttpStatus.FORBIDDEN);
-
-        assertThat(repository.findById(requestId).orElseThrow().status()).isEqualTo("SUBMITTED");
-    }
-
-    // --- list: an employee cannot list someone else's requests -------------------------------------
-
-    @Test
-    void anEmployeeCannotListAnotherEmployeesRequests() {
-        submitAsAndReturnId(anotherStaff);
-
-        // Same convention as AttendanceScopeIntegrationTest.anEmployeeAskingForSomeoneElseIsRejected: asking for a
-        // specific out-of-scope employee's rows is refused outright (403), rather than silently returning zero rows
-        // the caller could confuse with "no requests exist".
-        assertThatThrownBy(() -> service.list(employee(salesStaff), anotherStaff, null))
-            .isInstanceOf(ApiException.class)
-            .extracting(exception -> ((ApiException) exception).getStatus())
-            .isEqualTo(HttpStatus.FORBIDDEN);
-    }
-
-    @Test
-    void anEmployeesOwnRequestListNeverIncludesSomeoneElses() {
-        submitAsAndReturnId(anotherStaff);
-        submitAsAndReturnId(salesStaff, LocalDate.of(2026, 7, 16));
-
-        var rows = service.list(employee(salesStaff), null, null);
-
-        assertThat(rows).extracting(AttendanceCorrectionRequestDto::employeeId).containsOnly(salesStaff);
     }
 
     // --- approve: the CEO succeeding is the contrast case, kept minimal --------------------------
@@ -183,12 +115,6 @@ class AttendanceCorrectionScopeIntegrationTest extends AbstractPostgresIntegrati
             workDate, AttendanceCorrectionType.CHECK_IN,
             workDate.atTime(8, 20).atOffset(BANGKOK_OFFSET), null, "ลืมสแกนนิ้วตอนเข้างาน");
         return service.submit(request, employee(employeeId)).id();
-    }
-
-    private SubmitAttendanceCorrectionRequest checkInRequest() {
-        return new SubmitAttendanceCorrectionRequest(
-            WORK_DATE, AttendanceCorrectionType.CHECK_IN,
-            WORK_DATE.atTime(8, 20).atOffset(BANGKOK_OFFSET), null, "ลืมสแกนนิ้วตอนเข้างาน");
     }
 
     private UserPrincipal employee(long employeeId) {

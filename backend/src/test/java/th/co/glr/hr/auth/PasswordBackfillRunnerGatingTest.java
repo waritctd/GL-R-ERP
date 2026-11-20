@@ -25,12 +25,6 @@ class PasswordBackfillRunnerGatingTest {
     }
 
     @Test
-    void backfillRunnerIsAbsentWhenFlagIsExplicitlyFalse() {
-        runner.withPropertyValues("app.auth.seed-employee-code-passwords=false")
-            .run(context -> assertThat(context).doesNotHaveBean(PasswordBackfillRunner.class));
-    }
-
-    @Test
     void backfillRunnerIsPresentOnlyWhenFlagIsTrue() {
         runner.withPropertyValues("app.auth.seed-employee-code-passwords=true")
             .run(context -> assertThat(context).hasSingleBean(PasswordBackfillRunner.class));

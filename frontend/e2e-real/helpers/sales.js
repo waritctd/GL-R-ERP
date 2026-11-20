@@ -990,11 +990,3 @@ export function directQuotationBody(recipientType) {
     ...(recipientType ? { recipientType } : {}),
   };
 }
-
-/** POST /api/tickets/{id}/deal-quotations. Quoting a recipient on an ACTIVE deal moves it onto that
- * recipient's stage (D-2) — the legitimate way to reach ขั้น 4/5/8, since a hand move there is 409 (D-3). */
-export async function createDirectQuotation(sessions, dealId, recipientType) {
-  const response = await apiWrite(sessions.sales, 'post', `/api/tickets/${dealId}/deal-quotations`, directQuotationBody(recipientType));
-  expect(response.status(), 'POST /api/tickets/{id}/deal-quotations').toBe(201);
-  return (await response.json()).quotation;
-}

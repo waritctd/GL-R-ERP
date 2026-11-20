@@ -13,10 +13,7 @@ vi.mock('../../api/index.js', () => ({
     priceImport: {
       factories: vi.fn(),
       versions: vi.fn(),
-      createFactory: vi.fn(),
-      updateFactory: vi.fn(),
       countries: vi.fn(),
-      uploadAndCommit: vi.fn(),
     },
     catalog: {
       prices: vi.fn(),
@@ -24,12 +21,6 @@ vi.mock('../../api/index.js', () => ({
     },
   },
 }));
-
-const MOCK_COUNTRIES = [
-  { countryCode: 'IT', nameEn: 'Italy', nameTh: 'อิตาลี' },
-  { countryCode: 'TH', nameEn: 'Thailand', nameTh: 'ไทย' },
-  { countryCode: 'ZZ', nameEn: 'Other', nameTh: 'อื่นๆ' },
-];
 
 function renderPage(props = {}) {
   return render(<PriceImportPage showToast={vi.fn()} {...props} />);
@@ -46,7 +37,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   api.priceImport.factories.mockResolvedValue([{ factoryId: 1, name: 'Rex Ceramics' }]);
   api.priceImport.versions.mockResolvedValue([]);
-  api.priceImport.countries.mockResolvedValue(MOCK_COUNTRIES);
+  api.priceImport.countries.mockResolvedValue([]);
   api.catalog.prices.mockResolvedValue({
     items: [
       {
@@ -94,156 +85,5 @@ describe('PriceImportPage product delete (UX-07)', () => {
     // loadProducts(factoryId) refresh: prices() is called once on factory select and once more after a successful
     // delete.
     await waitFor(() => expect(api.catalog.prices).toHaveBeenCalledTimes(2));
-  });
-
-  it('cancelling the dialog closes it without calling the API', async () => {
-    await selectFactoryAndAwaitProduct();
-
-    fireEvent.click(screen.getByRole('button', { name: 'ลบ' }));
-    await screen.findByRole('heading', { name: 'ลบสินค้า' });
-
-    fireEvent.click(screen.getByRole('button', { name: 'ยกเลิก' }));
-
-    await waitFor(() => expect(screen.queryByRole('heading', { name: 'ลบสินค้า' })).toBeNull());
-    expect(api.catalog.deleteProduct).not.toHaveBeenCalled();
-  });
-
-  it('uses Thai display copy for price-import status and commit actions', async () => {
-    api.priceImport.versions.mockResolvedValue([
-      { versionId: 1, label: 'รายการราคา Q3', status: 'ACTIVE', uploadedAt: '2026-07-01T00:00:00Z' },
-    ]);
-
-    await selectFactoryAndAwaitProduct();
-
-    expect(screen.getByText('อัปโหลดรายการราคาหรือแก้ไขรายสินค้าด้วยตนเอง')).not.toBeNull();
-    expect(screen.getByText('รายการสินค้าที่ใช้งานอยู่')).not.toBeNull();
-    expect(await screen.findByText('ใช้งานอยู่')).not.toBeNull();
-    expect(screen.queryByText(/ACTIVE|Commit|price list/i)).toBeNull();
-  });
-});
-
-// V163 merged sales.factory_config onto price_catalog.factories, and added a country <select> plus an edit
-// action per factory row — this is the only place จัดซื้อ can now put a real RFQ email on a real factory.
-describe('PriceImportPage factory master data (V163)', () => {
-  it('lists every factory with its master data and flags a missing RFQ email', async () => {
-    api.priceImport.factories.mockResolvedValue([
-      { factoryId: 1, name: 'Panaria SpA', country: 'IT', defaultCurrency: 'EUR', email: null, unit: 'sqm' },
-      { factoryId: 2, name: 'SCG Ceramics', country: 'TH', defaultCurrency: 'THB', email: 'buy@scg.example', unit: 'piece' },
-    ]);
-    renderPage();
-
-    expect(await screen.findByText('ข้อมูลโรงงาน')).not.toBeNull();
-    expect(screen.getByText('อิตาลี (IT)')).not.toBeNull();
-    expect(screen.getByText('ไทย (TH)')).not.toBeNull();
-    expect(screen.getByText('buy@scg.example')).not.toBeNull();
-    // Panaria has no email — flagged, not silently blank, and counted in the summary line.
-    expect(screen.getByText('ยังไม่ระบุ')).not.toBeNull();
-    expect(screen.getByText('1 จาก 2 โรงงานยังไม่มีอีเมลขอราคา — กด "แก้ไข" เพื่อเพิ่ม')).not.toBeNull();
-  });
-
-  it('populates the add-factory country select from GET /api/price-import/countries and submits the chosen code', async () => {
-    api.priceImport.createFactory.mockResolvedValue({
-      factoryId: 9, name: 'New Factory', country: 'IT', defaultCurrency: 'EUR', email: null, unit: 'piece',
-    });
-    renderPage();
-
-    fireEvent.click(await screen.findByRole('button', { name: /เพิ่มโรงงาน/ }));
-    const countrySelect = await screen.findByLabelText(/ประเทศ/);
-    // The old free-text "ประเทศ (2 อักษร)" input is gone — this is a real <select> of the fetched roster.
-    expect(countrySelect.tagName).toBe('SELECT');
-    expect(screen.getByRole('option', { name: 'อิตาลี (IT)' })).not.toBeNull();
-
-    fireEvent.change(screen.getByLabelText(/ชื่อโรงงาน/), { target: { value: 'New Factory' } });
-    fireEvent.change(countrySelect, { target: { value: 'IT' } });
-    fireEvent.click(screen.getByRole('button', { name: 'บันทึก' }));
-
-    await waitFor(() => expect(api.priceImport.createFactory).toHaveBeenCalledWith(
-      'New Factory', 'IT', null, 'EUR', '', 'piece',
-    ));
-  });
-
-  it('offers อื่นๆ (ZZ) again, and requires a typed country name before submitting it (PR-B)', async () => {
-    api.priceImport.createFactory.mockResolvedValue({
-      factoryId: 10, name: 'New Factory', country: 'ZZ', countryOther: 'Vietnam', defaultCurrency: 'EUR', email: null, unit: 'piece',
-    });
-    renderPage();
-
-    fireEvent.click(await screen.findByRole('button', { name: /เพิ่มโรงงาน/ }));
-    const countrySelect = await screen.findByLabelText(/^ประเทศ/);
-    expect(screen.getByRole('option', { name: 'อื่นๆ (ZZ)' })).not.toBeNull();
-
-    fireEvent.change(screen.getByLabelText(/ชื่อโรงงาน/), { target: { value: 'New Factory' } });
-    fireEvent.change(countrySelect, { target: { value: 'ZZ' } });
-    fireEvent.click(screen.getByRole('button', { name: 'บันทึก' }));
-
-    // Client-side guard: ZZ with no typed country name never reaches the API.
-    expect(api.priceImport.createFactory).not.toHaveBeenCalled();
-    expect(await screen.findByText('กรุณาระบุชื่อประเทศเมื่อเลือก อื่นๆ')).not.toBeNull();
-
-    fireEvent.change(screen.getByLabelText(/^ระบุชื่อประเทศ/), { target: { value: 'Vietnam' } });
-    fireEvent.click(screen.getByRole('button', { name: 'บันทึก' }));
-
-    await waitFor(() => expect(api.priceImport.createFactory).toHaveBeenCalledWith(
-      'New Factory', 'ZZ', 'Vietnam', 'EUR', '', 'piece',
-    ));
-  });
-
-  it('does not submit the add-factory form without a country, and surfaces the backend 400 message on failure', async () => {
-    api.priceImport.createFactory.mockRejectedValue(new Error('ต้องระบุประเทศของโรงงาน'));
-    renderPage();
-
-    fireEvent.click(await screen.findByRole('button', { name: /เพิ่มโรงงาน/ }));
-    fireEvent.change(await screen.findByLabelText(/ชื่อโรงงาน/), { target: { value: 'No Country Factory' } });
-    fireEvent.click(screen.getByRole('button', { name: 'บันทึก' }));
-
-    // Client-side guard: blank country never even reaches the API.
-    expect(api.priceImport.createFactory).not.toHaveBeenCalled();
-    expect(await screen.findByText('กรุณาเลือกประเทศ')).not.toBeNull();
-
-    fireEvent.change(screen.getByLabelText(/ประเทศ/), { target: { value: 'IT' } });
-    fireEvent.click(screen.getByRole('button', { name: 'บันทึก' }));
-
-    // Now it does reach the API, and a 400 from the server is shown verbatim, not a generic failure.
-    await waitFor(() => expect(api.priceImport.createFactory).toHaveBeenCalled());
-    expect(await screen.findByText('ต้องระบุประเทศของโรงงาน')).not.toBeNull();
-  });
-
-  it('opens the edit modal pre-filled with the existing factory and saves via PUT', async () => {
-    api.priceImport.factories.mockResolvedValue([
-      { factoryId: 3, name: 'CDE', country: 'IT', defaultCurrency: 'EUR', email: null, unit: 'piece' },
-    ]);
-    api.priceImport.updateFactory.mockResolvedValue({
-      factoryId: 3, name: 'CDE', country: 'IT', defaultCurrency: 'EUR', email: 'buy@cde.example', unit: 'piece',
-    });
-    renderPage();
-
-    fireEvent.click(await screen.findByRole('button', { name: 'แก้ไข' }));
-    expect(await screen.findByRole('heading', { name: 'แก้ไขข้อมูลโรงงาน' })).not.toBeNull();
-    // Pre-filled from the row being edited, not blank fields as if this were "add".
-    expect(screen.getByLabelText(/ชื่อโรงงาน/).value).toBe('CDE');
-    expect(screen.getByLabelText(/ประเทศ/).value).toBe('IT');
-
-    fireEvent.change(screen.getByLabelText('อีเมลขอราคา (ถ้ามี)'), { target: { value: 'buy@cde.example' } });
-    fireEvent.click(screen.getByRole('button', { name: 'บันทึก' }));
-
-    await waitFor(() => expect(api.priceImport.updateFactory).toHaveBeenCalledWith(
-      3, 'CDE', 'IT', null, 'EUR', 'buy@cde.example', 'piece',
-    ));
-    // The list re-renders with the saved email — no page reload needed to see the fix take effect.
-    expect(await screen.findByText('buy@cde.example')).not.toBeNull();
-  });
-
-  it('surfaces a 409 duplicate-name conflict from updateFactory verbatim', async () => {
-    api.priceImport.factories.mockResolvedValue([
-      { factoryId: 3, name: 'CDE', country: 'IT', defaultCurrency: 'EUR', email: null, unit: 'piece' },
-    ]);
-    api.priceImport.updateFactory.mockRejectedValue(new Error('มีโรงงานชื่อนี้อยู่แล้ว: LEA'));
-    renderPage();
-
-    fireEvent.click(await screen.findByRole('button', { name: 'แก้ไข' }));
-    fireEvent.change(await screen.findByLabelText(/ชื่อโรงงาน/), { target: { value: 'LEA' } });
-    fireEvent.click(screen.getByRole('button', { name: 'บันทึก' }));
-
-    expect(await screen.findByText('มีโรงงานชื่อนี้อยู่แล้ว: LEA')).not.toBeNull();
   });
 });

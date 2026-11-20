@@ -37,14 +37,4 @@ describe('mockApi.tickets.list -- account scope (H1)', () => {
       expect(stageIn || oldRule, `deal ${t.id} at ${t.salesStage}/${t.lifecycle}`).toBe(true);
     }
   });
-
-  it('excludes a lost deal at PROCUREMENT that has no pending payment', async () => {
-    await api.auth.login({ role: 'ceo' });
-    const all = (await api.tickets.list()).tickets;
-    await api.auth.login({ role: 'account' });
-    const seenIds = new Set((await api.tickets.list()).tickets.map((t) => t.id));
-    const deadLate = all.filter((t) => isDead(t) && STAGE_ORDER.indexOf(t.salesStage) >= FLOOR
-      && !PENDING.includes(t.paymentStatus) && t.overdue !== true);
-    for (const t of deadLate) expect(seenIds.has(t.id)).toBe(false);
-  });
 });

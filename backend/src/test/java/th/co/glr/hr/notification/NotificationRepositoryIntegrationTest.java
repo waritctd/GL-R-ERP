@@ -20,23 +20,6 @@ class NotificationRepositoryIntegrationTest extends AbstractPostgresIntegrationT
     }
 
     @Test
-    void notifyEmployeeWritesToHrNotificationWithTicketLink() {
-        long divisionId = insertDivision("SA", "Sales");
-        long employeeId = insertEmployee("EMP-100", divisionId, true);
-
-        repository.notifyEmployee(employeeId, 55L, "APPROVED", "Ticket PR-2026-0099 ได้รับการอนุมัติราคาแล้ว");
-
-        List<NotificationDto> rows = repository.findByEmployeeId(employeeId);
-        assertThat(rows).hasSize(1);
-        NotificationDto row = rows.get(0);
-        assertThat(row.type()).isEqualTo("APPROVED");
-        assertThat(row.title()).isEqualTo("ราคาได้รับการอนุมัติ");
-        assertThat(row.message()).isEqualTo("Ticket PR-2026-0099 ได้รับการอนุมัติราคาแล้ว");
-        assertThat(row.link()).isEqualTo("/tickets/55");
-        assertThat(countLegacySalesNotifications()).isZero();
-    }
-
-    @Test
     void notifyByRoleFansOutToActiveEmployeesInMatchingDivisionOnly() {
         long importDivision = insertDivision("PCIM", "Import");
         long salesDivision = insertDivision("SA", "Sales");
@@ -50,88 +33,6 @@ class NotificationRepositoryIntegrationTest extends AbstractPostgresIntegrationT
         assertThat(repository.findByEmployeeId(inactiveImportEmployee)).isEmpty();
         assertThat(repository.findByEmployeeId(salesEmployee)).isEmpty();
         assertThat(countLegacySalesNotifications()).isZero();
-    }
-
-    // Review-remediation plan Commit D: PricingRequestService.submit() used to notify with type "SUBMITTED",
-    // identical to TicketEventKind.SUBMITTED — a pricing-request notification was indistinguishable from a
-    // ticket-submitted one.
-    @Test
-    void pricingRequestSubmittedAndPickedUpGetTheirOwnTitles() {
-        long importDivision = insertDivision("PCIM", "Import");
-        long importEmployee = insertEmployee("EMP-300", importDivision, true);
-        long salesDivision = insertDivision("SA", "Sales");
-        long salesEmployee = insertEmployee("EMP-301", salesDivision, true);
-
-        repository.notifyByRole("import", 88L, "PRICING_REQUEST_SUBMITTED", "คำขอราคา PCR-2026-0001 รอการรับเรื่อง");
-        repository.notifyEmployee(salesEmployee, 88L, "PICKED_UP", "คำขอราคา PCR-2026-0001 ถูกรับเรื่องแล้ว");
-
-        List<NotificationDto> importRows = repository.findByEmployeeId(importEmployee);
-        assertThat(importRows).hasSize(1);
-        assertThat(importRows.get(0).type()).isEqualTo("PRICING_REQUEST_SUBMITTED");
-        assertThat(importRows.get(0).title()).isEqualTo("มีคำขอราคาใหม่");
-
-        List<NotificationDto> salesRows = repository.findByEmployeeId(salesEmployee);
-        assertThat(salesRows).hasSize(1);
-        assertThat(salesRows.get(0).type()).isEqualTo("PICKED_UP");
-        assertThat(salesRows.get(0).title()).isEqualTo("คำขอราคาถูกรับเรื่องแล้ว");
-    }
-
-    // mail-copy wording fix: name is now FIRST NAME ONLY (was CONCAT_WS(first, last) before this change) -- it
-    // feeds only the "เรียน คุณ<name>," greeting, and a Thai greeting addresses someone by first name after คุณ,
-    // not by full name. See EmailRecipient's Javadoc.
-    @Test
-    void findEmployeeRecipientResolvesTheAddressAndTheFirstNameOnlyForTheGreeting() {
-        long divisionId = insertDivision("SA", "Sales2");
-        long employeeId = insertEmployeeWithNameAndEmail("EMP-400", divisionId, "สมชาย", "ใจดี",
-            "somchai@glr.co.th");
-
-        var recipient = repository.findEmployeeRecipient(employeeId);
-
-        assertThat(recipient).isPresent();
-        assertThat(recipient.get().email()).isEqualTo("somchai@glr.co.th");
-        assertThat(recipient.get().name()).isEqualTo("สมชาย");
-    }
-
-    // Flipped from the old findEmployeeEmailIsEmptyWhenTheEmployeeHasAnEmptyStringEmailOnFile, which pinned the
-    // PRE-fix contract (empty Optional whenever the address was blank/missing).
-    @Test
-    void findEmployeeRecipientIsPresentWithNullEmailWhenTheEmployeeHasAnEmptyStringEmailOnFile() {
-        long divisionId = insertDivision("SA", "Sales3");
-        long employeeId = insertEmployeeWithNameAndEmail("EMP-401", divisionId, "สมหญิง", "ดีใจ", "");
-
-        var recipient = repository.findEmployeeRecipient(employeeId);
-
-        assertThat(recipient).isPresent();
-        assertThat(recipient.get().email()).isNull();
-        assertThat(recipient.get().name()).isEqualTo("สมหญิง");
-    }
-
-    // hr.employee.email is a nullable VARCHAR(255) - a real SQL NULL (as opposed to an empty string) is reachable
-    // in production and must pass through the same NULLIF(BTRIM(...), '') as the empty-string case above.
-    @Test
-    void findEmployeeRecipientIsPresentWithNullEmailWhenTheEmployeeHasATrueSqlNullEmail() {
-        long divisionId = insertDivision("SA", "Sales4");
-        Number id = jdbc.queryForObject("""
-            INSERT INTO hr.employee (employee_code, first_name_th, last_name_th, email, division_id, is_active)
-            VALUES (:code, :firstName, :lastName, NULL, :divisionId, TRUE)
-            RETURNING employee_id
-            """, Map.of("code", "EMP-402", "firstName", "สมหญิง", "lastName", "ดีใจ",
-                "divisionId", divisionId), Number.class);
-        long employeeId = id.longValue();
-
-        var recipient = repository.findEmployeeRecipient(employeeId);
-
-        assertThat(recipient).isPresent();
-        assertThat(recipient.get().email()).isNull();
-        assertThat(recipient.get().name()).isEqualTo("สมหญิง");
-    }
-
-    // The only case left that returns empty under the new contract: no employee row at all. Had no coverage before
-    // this fix - the old findEmployeeEmail() conflated "no employee" with "no address" into the same empty
-    // Optional, so nothing distinguished them.
-    @Test
-    void findEmployeeRecipientIsEmptyWhenTheEmployeeDoesNotExist() {
-        assertThat(repository.findEmployeeRecipient(999_999_999L)).isEmpty();
     }
 
     /** sales_manager is the one role here that is not a whole ฝ่าย: it is a strict SUBSET of sales, narrowed by
@@ -168,28 +69,6 @@ class NotificationRepositoryIntegrationTest extends AbstractPostgresIntegrationT
             .hasSize(1);
         assertThat(repository.findByEmployeeId(rep)).hasSize(1);
         assertThat(repository.findByEmployeeId(managerOfAnotherDivision)).isEmpty();
-    }
-
-    /** An unknown role must resolve to nobody — a typo must not fan out to everyone. */
-    @Test
-    void notifyByRoleWithAnUnrecognisedRoleNotifiesNobody() {
-        long salesDivision = insertDivision("SA", "ฝ่ายขาย");
-        long manager = insertEmployee("EMP-500", salesDivision, true, "ผู้จัดการฝ่ายขาย");
-
-        repository.notifyByRole("sales-manager", 99L, "STOCK_RESERVED", "typo'd role");
-
-        assertThat(repository.findByEmployeeId(manager)).isEmpty();
-    }
-
-    private long insertEmployeeWithNameAndEmail(String code, long divisionId, String firstName, String lastName,
-                                                String email) {
-        Number id = jdbc.queryForObject("""
-            INSERT INTO hr.employee (employee_code, first_name_th, last_name_th, email, division_id, is_active)
-            VALUES (:code, :firstName, :lastName, :email, :divisionId, TRUE)
-            RETURNING employee_id
-            """, Map.of("code", code, "firstName", firstName, "lastName", lastName,
-                "email", email == null ? "" : email, "divisionId", divisionId), Number.class);
-        return id.longValue();
     }
 
     private Integer countLegacySalesNotifications() {

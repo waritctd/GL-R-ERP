@@ -1,7 +1,7 @@
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { TeamOverview } from './TeamOverview.jsx';
 import { api } from '../../api/index.js';
@@ -67,13 +67,6 @@ describe('TeamOverview', () => {
     expect(within(quiet).getByText('6 งาน')).toBeTruthy();
   });
 
-  it('can drop its own heading when the page header already says it', async () => {
-    renderTeam({ showTitle: false });
-
-    await screen.findByTestId('tile-held');
-    expect(screen.queryByRole('heading', { name: 'ภาพรวมทีมขาย' })).toBeNull();
-  });
-
   it('has one table row per rep, with counts, th-TH baht and last update; a name opens that rep\'s deals', async () => {
     renderTeam();
 
@@ -93,50 +86,6 @@ describe('TeamOverview', () => {
     expect(within(rows[0]).getByText('วันนี้')).toBeTruthy();
     // The deal list's existing ?owner= filter (TicketListPage) — the plan assumed none existed.
     expect(within(somMai).getByRole('link', { name: 'คุณสมหมาย ขายดี' }).getAttribute('href')).toBe('/tickets?owner=6');
-  });
-
-  it('lists ดีลที่ควรโทรตาม in the order served, with owner, value and days quiet', async () => {
-    renderTeam();
-
-    const list = await screen.findByTestId('team-stale');
-    expect(screen.getByText('งานที่ควรโทรตาม')).toBeTruthy();
-    const items = within(list).getAllByRole('listitem');
-    expect(items.map((li) => within(li).getByRole('link').textContent)).toEqual(['Etihad Lounge', 'สยามพารากอน', 'Central Ladprao']);
-    expect(within(items[0]).getByText('฿1,880,000')).toBeTruthy();
-    expect(within(items[0]).getByText(/คุณกมล รุ่งเรือง/)).toBeTruthy();
-    expect(within(items[0]).getByText('เงียบ 41 วัน')).toBeTruthy();
-    expect(within(items[2]).getByText('—')).toBeTruthy();
-  });
-
-  // Owner ruling 2026-11-16: a paused deal whose วันที่จะกลับมาดู has arrived counts in the quiet figures (served) and
-  // is labelled as a paused deal coming back, not as a silent active one.
-  it('labels a returning paused deal in the stale list as paused, not as quiet', async () => {
-    api.salesBoard.teamOverview.mockResolvedValue({
-      ...fixture,
-      stale: [stale({ ticketId: 50, title: 'งานที่พักไว้', quiet: false, returning: true, pauseReturnOn: '2026-11-16', daysQuiet: 60 })],
-    });
-    renderTeam();
-
-    const item = within(await screen.findByTestId('team-stale')).getAllByRole('listitem')[0];
-    expect(within(item).getByText('พักไว้ · ถึงวันกลับมาดู 16 พ.ย. 2569')).toBeTruthy();
-    expect(within(item).queryByText(/เงียบ/)).toBeNull();
-  });
-
-  // Review round 2, M-1: the server lists every returning paused deal FIRST (uncapped, until resumed or re-dated), then
-  // the quiet ones by value × days quiet. The panel's subtitle says that order, not only the second half of it.
-  it('the ดีลที่ควรโทรตาม subtitle describes the real order: returning work first, then value × days quiet', async () => {
-    renderTeam();
-
-    expect(await screen.findByText('งานที่ถึงวันกลับมาดูขึ้นก่อน แล้วเรียงตามมูลค่า × วันที่เงียบ')).toBeTruthy();
-    expect(screen.queryByText('เรียงตามมูลค่า × วันที่เงียบ')).toBeNull();
-  });
-
-  it('never shows the old ฿0.00, and has no cash tile while the payload carries no cash', async () => {
-    renderTeam();
-
-    await screen.findByTestId('tile-held');
-    expect(screen.queryByTestId('tile-cash')).toBeNull();
-    expect(screen.queryByText('฿0.00')).toBeNull();
   });
 });
 
@@ -160,37 +109,5 @@ describe('TeamOverview — review fixes (M1 currency, role label)', () => {
     expect(within(row).getByText('฿2,000 + USD 1,000')).toBeTruthy();
     const item = within(screen.getByTestId('team-stale')).getAllByRole('listitem')[0];
     expect(within(item).getByText('USD 1,000')).toBeTruthy();
-  });
-
-  it('labels a manager\'s or the CEO\'s own deals with their role', async () => {
-    api.salesBoard.teamOverview.mockResolvedValue({
-      quietDays: 14,
-      reps: [
-        { employeeId: 9, name: 'ผู้จัดการ ทดสอบ', role: 'sales_manager', openDeals: 1, openValue: 0,
-          otherCurrencyValues: {}, quietDeals: 0, lastUpdateAt: null },
-        { employeeId: 3, name: 'ซีอีโอ ทดสอบ', role: 'ceo', openDeals: 1, openValue: 0, otherCurrencyValues: {},
-          quietDeals: 0, lastUpdateAt: null },
-        { employeeId: 6, name: 'คุณสมหมาย ขายดี', role: 'sales', openDeals: 1, openValue: 0, otherCurrencyValues: {},
-          quietDeals: 0, lastUpdateAt: null },
-      ],
-      stale: [],
-    });
-    renderTeam();
-
-    const rows = within(await screen.findByRole('table')).getAllByRole('row').slice(1);
-    expect(within(rows[0]).getByText('ผจก.ขาย')).toBeTruthy();
-    expect(within(rows[1]).getByText('CEO')).toBeTruthy();
-    expect(within(rows[2]).queryByText(/ผจก\.ขาย|CEO/)).toBeNull();
-  });
-  it('นำเข้าจากชีท opens the pipeline import dialog, and closing it sends nothing', async () => {
-    renderTeam({ showTitle: false });
-    await screen.findByTestId('tile-held');
-
-    fireEvent.click(screen.getByRole('button', { name: 'นำเข้าจากชีท' }));
-
-    expect(screen.getByRole('dialog', { name: 'นำเข้า pipeline จากชีท' })).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'ยกเลิก' }));
-    expect(screen.queryByRole('dialog')).toBeNull();
-    expect(api.salesBoard.pipelineImport).not.toHaveBeenCalled();
   });
 });

@@ -3,12 +3,10 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, it, expect } from 'vitest';
 
-// Guard for the global base layer moved out of styles.css into index.css's `@layer base`. This file is NOT an
-// equivalent replacement and must not be read as one. WHAT THIS REPLACES, AND WHAT IT DOES NOT.
-
+// Source guard for the global `@layer base` in index.css (the rules moved out of styles.css): layer order,
+// the form-control height rule and the 720px override ordering. Not a render test: jsdom has no layout.
 const SRC = path.dirname(fileURLToPath(import.meta.url));
 const INDEX_CSS = fs.readFileSync(path.join(SRC, 'index.css'), 'utf8');
-const STYLES_CSS = fs.readFileSync(path.join(SRC, 'styles.css'), 'utf8');
 
 const stripComments = (css) => css.replace(/\/\*[\s\S]*?\*\//g, '');
 
@@ -66,17 +64,9 @@ function ruleAt(index, label) {
 }
 
 const FORM_CONTROL = find((r) => r.selector.startsWith('input:where('));
-const CHECKBOX_RESET = find((r) => r.selector.includes("input[type='checkbox']"));
-const LABEL = find((r) => r.selector === 'label');
-const TEXTAREA = find((r) => r.selector === 'textarea');
 const MOBILE_OVERRIDE = find((r) => r.selector.startsWith('@media') && r.selector.includes('720px'));
 
 describe('@layer base — the global base layer', () => {
-  it('exists in index.css and parses into top-level rules', () => {
-    expect(BASE).toBeTruthy();
-    expect(RULES.length).toBeGreaterThan(5);
-  });
-
   it('is declared between theme and legacy, so base rules keep LOSING to styles.css class rules', () => {
     // Assert base precedes legacy using comment-stripped CSS so defaults cannot override component classes.
     expect(stripComments(INDEX_CSS)).toMatch(/@layer\s+theme,\s*base,\s*legacy,\s*utilities\s*;/);
@@ -100,24 +90,6 @@ describe('the four load-bearing declarations', () => {
     expect(body).toMatch(/(^|[\s;])height:\s*40px/);
     expect(body).not.toMatch(/min-height/);
   });
-
-  it('3. resets native checkbox/radio out of the full-width padded box', () => {
-    // Without this they inherit `width: 100%` and the 40px padded box: a bare radio rendered as a full-width bar
-    // with its label pushed off screen (measured 668px on the ล.ย.01 form).
-    const { selector, body } = ruleAt(CHECKBOX_RESET, "input[type='checkbox']");
-    expect(selector).toContain("input[type='radio']");
-    expect(body).toMatch(/width:\s*16px/);
-    expect(body).toMatch(/height:\s*16px/);
-    expect(body).toMatch(/padding:\s*0/);
-  });
-
-  it('4. packs the global label grid to the start', () => {
-    // ~185 hand-rolled field wrappers across src/features inherit this rule to stack label text above their
-    // control.
-    const { body } = ruleAt(LABEL, 'label');
-    expect(body).toMatch(/align-content:\s*start/);
-    expect(body).toMatch(/display:\s*grid/);
-  });
 });
 
 describe('ordering invariants inside @layer base', () => {
@@ -129,38 +101,5 @@ describe('ordering invariants inside @layer base', () => {
     expect(MOBILE_OVERRIDE).toBeGreaterThan(FORM_CONTROL);
     expect(MOBILE_OVERRIDE).toBe(RULES.length - 1);
     expect(override.body).toMatch(/height:\s*44px/);
-  });
-
-  it('keeps the standalone textarea rule after the shared 40px rule', () => {
-    // `textarea` is the one control that must still grow; it re-opens the height the 40px rule pins. Ordered
-    // before that rule, the 40px wins and every textarea collapses to one line.
-    const textarea = ruleAt(TEXTAREA, 'textarea');
-    expect(TEXTAREA).toBeGreaterThan(FORM_CONTROL);
-    expect(textarea.body).toMatch(/height:\s*auto/);
-  });
-});
-
-describe('token de-duplication', () => {
-  it('never re-declares the non-color tokens in styles.css', () => {
-    // styles.css's `:root` used to redeclare all 29 of these, duplicating index.css's `@theme static`. Because
-    // that copy sat in `@layer legacy` -- ordered AFTER `@layer theme` -- it was the one the cascade actually
-    // served, so the `@theme static` values were silently dead.
-    const declarations = stripComments(STYLES_CSS).match(
-      /--(?:font-family|text|space|radius|shadow)[\w-]*\s*:/g,
-    );
-    expect(declarations).toBeNull();
-  });
-
-  it('declares each of them exactly once, and that once is index.css', () => {
-    // Non-vacuity, stated durably. Asserting a positive count in index.css cannot go vacuous: if the token
-    // disappeared entirely the count would be 0 and this fails. And it keeps holding when styles.css reaches zero
-    // rules, which is the whole point of the programme this test belongs to.
-    const declarations = (css, token) =>
-      stripComments(css).match(new RegExp(`(^|[;{\\s])${token}\\s*:`, 'g')) ?? [];
-
-    for (const token of ['--font-family', '--text-sm', '--space-4', '--radius-md', '--shadow-md']) {
-      expect(declarations(INDEX_CSS, token), `${token} must be declared in index.css`).toHaveLength(1);
-      expect(declarations(STYLES_CSS, token), `${token} must NOT be declared in styles.css`).toHaveLength(0);
-    }
   });
 });

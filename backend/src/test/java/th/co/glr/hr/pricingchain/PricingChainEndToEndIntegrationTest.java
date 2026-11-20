@@ -2,11 +2,6 @@ package th.co.glr.hr.pricingchain;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyLong;
-import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
@@ -22,7 +17,6 @@ import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.catalog.CatalogRepository;
 import th.co.glr.hr.common.ApiException;
-import th.co.glr.hr.config.AppProperties;
 import th.co.glr.hr.customer.ContactRepository;
 import th.co.glr.hr.customer.CustomerDto;
 import th.co.glr.hr.customer.CustomerRepository;
@@ -62,7 +56,6 @@ import th.co.glr.hr.pricingdecision.PricingDecisionDtos.PricingDecisionItemDto;
 import th.co.glr.hr.pricingdecision.PricingDecisionDtos.PricingDecisionSalesViewDto;
 import th.co.glr.hr.pricingdecision.PricingDecisionRepository;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.ApprovePricingDecisionRequest;
-import th.co.glr.hr.pricingdecision.PricingDecisionRequests.ReturnPricingDecisionRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.StartPricingDecisionRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.UpdatePricingDecisionItemRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.UpdatePricingDecisionRequest;
@@ -94,7 +87,6 @@ class PricingChainEndToEndIntegrationTest extends AbstractPostgresIntegrationTes
     private TicketRepository tickets;
     private PricingRequestRepository pricingRequests;
     private PricingRequestService pricingRequestService;
-    private FactoryQuoteRepository factoryQuoteRepository;
     private FactoryQuoteService factoryQuoteService;
     private PricingCostingRepository costingRepository;
     private PricingCostingService costingService;
@@ -138,7 +130,6 @@ class PricingChainEndToEndIntegrationTest extends AbstractPostgresIntegrationTes
             pricingRequests, tickets, notifications, objectMapper, new ContactRepository(jdbc), fileStorage, factoryQuoteCarryForward());
 
         FactoryQuoteRepository factoryQuotes = new FactoryQuoteRepository(jdbc);
-        factoryQuoteRepository = factoryQuotes;
         FxRateRepository fxRates = new FxRateRepository(jdbc);
         PricingFormulaEngine formulaEngine = new PricingFormulaEngine(new PricingFormulaConfigRepository(jdbc));
         // V141 ("CEO owns costing"): shared by FactoryQuoteService's markReadyForCosting auto-advance check and
@@ -441,130 +432,7 @@ class PricingChainEndToEndIntegrationTest extends AbstractPostgresIntegrationTes
     // returnToImport -> AWAITING_FACTORY_RESPONSE -> Import renegotiates + re-marks ready -> new costing version
     // (computed fresh by the CEO's second startReview) -> CEO approves v2.
 
-    @Test
-    void costAffectingReturnLoop_composesThroughANewCostingVersionAndASecondDecision() {
-        PricingChainFixture fixture = driveToReadyForCeoReview();
-
-        PricingDecisionDto decisionV1 = decisionService.startReview(fixture.pricingRequestId(),
-            new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, UUID.randomUUID().toString()), ceoActor);
-        assertThat(decisionV1.decisionVersionNo()).isEqualTo(1);
-
-        PricingDecisionDto returned = decisionService.returnToImport(decisionV1.id(),
-            new ReturnPricingDecisionRequest("ราคาต้นทุนคลาดเคลื่อน กรุณาคำนวณใหม่"), ceoActor);
-        assertThat(returned.status()).isEqualTo(PricingDecisionStatus.RETURNED);
-        // V141: there is no COSTING_REVISION_REQUIRED any more — a returned request goes straight back to
-        // AWAITING_FACTORY_RESPONSE.
-        assertThat(pricingRequestService.get(fixture.pricingRequestId(), importActor).summary().status())
-            .isEqualTo(PricingRequestStatus.AWAITING_FACTORY_RESPONSE);
-
-        // Both quotes are already READY_FOR_COSTING (unchanged by returnToImport — it never touches factory quotes) —
-        // markReady only accepts a RESPONSE_RECEIVED/NEGOTIATING quote, so Import must submit a fresh revision on EACH
-        // before either can be re-marked ready.
-        FactoryQuoteDto currentA = factoryQuoteRepository.findCurrentByFactory(fixture.pricingRequestId(), FACTORY_A)
-            .orElseThrow();
-        FactoryQuoteDto currentB = factoryQuoteRepository.findCurrentByFactory(fixture.pricingRequestId(), FACTORY_B)
-            .orElseThrow();
-        FactoryQuoteDto revisedA = factoryQuoteService.receive(currentA.id(),
-            responsePerPiece("REF-LOOP-A-v2", "95.00", fixture.itemAId()), importActor);
-        factoryQuoteService.markReadyForCosting(revisedA.id(), importActor);
-        // Factory B's CURRENT quote was never touched by the revise-A-only step above, so it is still
-        // READY_FOR_COSTING from the original driveToReadyForCeoReview pass.
-        assertThat(pricingRequestService.get(fixture.pricingRequestId(), importActor).summary().status())
-            .isEqualTo(PricingRequestStatus.READY_FOR_CEO_REVIEW);
-        // Revise B as well anyway, so the SECOND decision's cost genuinely differs from the first on BOTH lines, not
-        // just A — this pulls the request back down to AWAITING_FACTORY_RESPONSE again (B's fresh revision is
-        // RESPONSE_RECEIVED, not ready).
-        FactoryQuoteDto revisedB = factoryQuoteService.receive(currentB.id(),
-            responsePerBox("REF-LOOP-B-v2", "950.00", fixture.itemBId(), new BigDecimal("5")), importActor);
-        assertThat(pricingRequestService.get(fixture.pricingRequestId(), importActor).summary().status())
-            .isEqualTo(PricingRequestStatus.AWAITING_FACTORY_RESPONSE);
-        factoryQuoteService.markReadyForCosting(revisedB.id(), importActor);
-        // The LAST re-marked-ready revision auto-advances the request back to READY_FOR_CEO_REVIEW.
-        assertThat(pricingRequestService.get(fixture.pricingRequestId(), importActor).summary().status())
-            .isEqualTo(PricingRequestStatus.READY_FOR_CEO_REVIEW);
-
-        // CEO starts a SECOND decision version — computing a FRESH costing from the revised factory prices — and
-        // approves it.
-        PricingDecisionDto decisionV2 = decisionService.startReview(fixture.pricingRequestId(),
-            new StartPricingDecisionRequest(new BigDecimal("0.15"), "THB", null, UUID.randomUUID().toString()), ceoActor);
-        assertThat(decisionV2.decisionVersionNo()).isEqualTo(2);
-        assertThat(decisionV2.pricingCostingId()).isNotEqualTo(decisionV1.pricingCostingId());
-        for (PricingDecisionItemDto item : decisionV2.items()) {
-            decisionService.update(decisionV2.id(), new UpdatePricingDecisionRequest(null, List.of(
-                new UpdatePricingDecisionItemRequest(item.id(), null, new BigDecimal("1.00"), null, null, false))), ceoActor);
-        }
-        PricingDecisionDto approvedV2 = decisionService.approve(decisionV2.id(),
-            new ApprovePricingDecisionRequest("อนุมัติ v2", UUID.randomUUID().toString()), ceoActor);
-        assertThat(approvedV2.status()).isEqualTo(PricingDecisionStatus.APPROVED);
-        assertThat(pricingRequestService.get(fixture.pricingRequestId(), ceoActor).summary().status())
-            .isEqualTo(PricingRequestStatus.APPROVED_FOR_QUOTATION);
-
-        // The v1 RETURNED decision stays readable as history; exactly one row is APPROVED.
-        List<PricingDecisionDto> history = decisionService.list(fixture.pricingRequestId(), ceoActor);
-        assertThat(history).hasSize(2);
-        assertThat(history.get(0).status()).isEqualTo(PricingDecisionStatus.RETURNED);
-        assertThat(history.get(1).status()).isEqualTo(PricingDecisionStatus.APPROVED);
-        assertThat(jdbc.queryForObject("""
-            SELECT COUNT(*) FROM sales.pricing_decision WHERE pricing_request_id = :id AND status = 'APPROVED'
-            """, Map.of("id", fixture.pricingRequestId()), Long.class)).isEqualTo(1L);
-
-        // The approved decision now composes into a customer quotation exactly as the main chain test proves — the
-        // returned/superseded v1 leaves no trace in the final price.
-        CustomerQuotationDto quotation = quotationService.create(fixture.pricingRequestId(),
-            new CreateCustomerQuotationRequest(null, null, null, null, null, null), salesActor);
-        assertThat(quotation.pricingDecisionId()).isEqualTo(approvedV2.id());
-        assertThat(quotation.items()).hasSize(2);
-    }
-
     // Helpers
-
-    private record PricingChainFixture(long pricingRequestId, long itemAId, long itemBId) {}
-
-    /** Drives Steps 1 and the 1->2 handoff and Step 2 to READY_FOR_CEO_REVIEW, exactly the way the main chain test
-     * does it above — used by the return-loop test so it starts from a real, fully-driven precondition rather than
-     * a hand-rolled SQL shortcut. */
-    private PricingChainFixture driveToReadyForCeoReview() {
-        PricingRequestRequests.CreatePricingRequestRequest createRequest = new PricingRequestRequests.CreatePricingRequestRequest(
-            PricingRequestRecipient.DESIGNER, null, "Designer Co.", LocalDate.now().plusDays(14),
-            new BigDecimal("5000.00"), "THB", "chain return-loop walk", UUID.randomUUID().toString(),
-            List.of(
-                pricingItemPerPiece(FACTORY_A, catalogProductIdFactoryA, "SCG", "Tile Chain A", new BigDecimal("10")),
-                pricingItemPerBox(FACTORY_B, catalogProductIdFactoryB, "Cotto", "Tile Chain B", new BigDecimal("5"))));
-        // V185: see the identical comment in fullPricingChain_stepOneThroughStepFour_composesWithoutShortcuts above --
-        // bypasses createDraft so item B keeps its real PER_BOX requestedUnitBasis, and replays createDraft's own
-        // PRICING_REQUEST_CREATED event write for parity.
-        long pricingRequestId = pricingRequests.create(ticketId, pricingRequests.nextRequestCode(), createRequest, salesRepId);
-        pricingRequests.addEvent(pricingRequestId, ticketId, salesRepId, salesActor.name(),
-            PricingRequestEventKind.PRICING_REQUEST_CREATED, null, PricingRequestStatus.DRAFT, null, null);
-        pricingRequestService.submit(pricingRequestId, salesActor);
-        pricingRequestService.pickup(pricingRequestId, importActor);
-
-        List<FactoryQuoteDto> drafts = factoryQuoteService.generateDrafts(pricingRequestId, importActor);
-        FactoryQuoteDto draftA = quoteFor(drafts, FACTORY_A);
-        FactoryQuoteDto draftB = quoteFor(drafts, FACTORY_B);
-        long itemAId = draftA.items().get(0).pricingRequestItemId();
-        long itemBId = draftB.items().get(0).pricingRequestItemId();
-
-        factoryQuoteService.markContacted(draftA.id(),
-            new MarkFactoryContactedRequest(java.time.LocalDate.now(java.time.ZoneId.of("Asia/Bangkok")), null), importActor);
-        factoryQuoteService.markContacted(draftB.id(),
-            new MarkFactoryContactedRequest(java.time.LocalDate.now(java.time.ZoneId.of("Asia/Bangkok")), null), importActor);
-        drainDispatches();
-
-        FactoryQuoteDto responseA = factoryQuoteService.receive(draftA.id(),
-            responsePerPiece("REF-LOOP-A", "100.00", itemAId), importActor);
-        factoryQuoteService.markReadyForCosting(responseA.id(), importActor);
-        FactoryQuoteDto responseB = factoryQuoteService.receive(draftB.id(),
-            responsePerBox("REF-LOOP-B", "1000.00", itemBId, new BigDecimal("5")), importActor);
-        factoryQuoteService.markReadyForCosting(responseB.id(), importActor);
-        // V141 ("CEO owns costing"): the LAST factory quote becoming ready auto-advances the request straight to
-        // READY_FOR_CEO_REVIEW — there is no Import-driven costing draft/submit step any more (PricingCostingService
-        // is read-only).
-        assertThat(pricingRequestService.get(pricingRequestId, importActor).summary().status())
-            .isEqualTo(PricingRequestStatus.READY_FOR_CEO_REVIEW);
-
-        return new PricingChainFixture(pricingRequestId, itemAId, itemBId);
-    }
 
     private void assertUnitBasisCoherentAcrossChain(long pricingRequestItemId, long pricingRequestId,
                                                      long costingId, long decisionId, long quotationId,

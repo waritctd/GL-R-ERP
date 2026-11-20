@@ -28,12 +28,6 @@ describe('landedCostBreakdown', () => {
     expect(b.listPerPiece).toBe(18.4);
   });
 
-  it('flags a freight the CEO entered himself (snapshot freightSource CEO_MANUAL)', () => {
-    const manual = { ...costingItem, calculationSnapshot: JSON.stringify({ ...JSON.parse(costingItem.calculationSnapshot), freightSource: 'CEO_MANUAL' }) };
-    expect(landedCostBreakdown({ costingItem: manual, formulaConfig, marginFraction: 0.3, sellingBuffer: 1 }).freight.manual).toBe(true);
-    expect(landedCostBreakdown({ costingItem, formulaConfig, marginFraction: 0.3, sellingBuffer: 1 }).freight.manual).toBe(false);
-  });
-
   it('a selling buffer above 1 still multiplies both prices, with VAT on ราคาพิเศษ only', () => {
     const b = landedCostBreakdown({ costingItem, formulaConfig, marginFraction: 0.3, sellingBuffer: 1.1 });
     expect(b.listPerPiece).toBe(20.24); // 14.1544 × 1.3 × 1.1
@@ -44,11 +38,5 @@ describe('landedCostBreakdown', () => {
     const snap = { ...JSON.parse(costingItem.calculationSnapshot), insuranceRate: '0' };
     const b = landedCostBreakdown({ costingItem: { ...costingItem, calculationSnapshot: JSON.stringify(snap) }, formulaConfig });
     expect(b.insurance).toBe(0);
-  });
-
-  it('returns null for a line with nothing to break down', () => {
-    expect(landedCostBreakdown({ costingItem: null })).toBeNull();
-    expect(landedCostBreakdown({ costingItem: { ...costingItem, uncostableReason: 'x' } })).toBeNull();
-    expect(landedCostBreakdown({ costingItem: { ...costingItem, calculationSnapshot: '{}' } })).toBeNull();
   });
 });

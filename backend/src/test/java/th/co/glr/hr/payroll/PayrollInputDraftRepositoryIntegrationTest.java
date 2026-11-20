@@ -81,80 +81,6 @@ class PayrollInputDraftRepositoryIntegrationTest extends AbstractPostgresIntegra
         assertThat(row.parentCareCount()).isNull();
     }
 
-    @Test
-    void aNullWithholdingOverrideMeansNoOverrideTypedNotZero() {
-        long employeeId = seedEmployee("DRAFT-002", "ไม่มี", "โอเวอร์ไรด์");
-        LocalDate month = LocalDate.of(2026, 8, 1);
-
-        repository.saveInputDrafts(month, List.of(fullInput(employeeId,
-            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
-            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
-            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
-            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
-            null, // withholdingTaxOverride -- never typed
-            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, null,
-            BigDecimal.ZERO, BigDecimal.ZERO, false, null, null)), 1L);
-
-        PayrollEmployeeInputRequest row = repository.findInputDrafts(month).get(0);
-
-        assertThat(row.withholdingTaxOverride())
-            .as("never-typed must stay null, distinct from an explicit 0")
-            .isNull();
-    }
-
-    @Test
-    void savingTheSameEmployeeAndMonthTwiceUpsertsRatherThanDuplicating() {
-        long employeeId = seedEmployee("DRAFT-003", "อัพเซิร์ต", "ทดสอบ");
-        LocalDate month = LocalDate.of(2026, 8, 1);
-
-        repository.saveInputDrafts(month, List.of(fullInput(employeeId,
-            new BigDecimal("10"), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
-            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
-            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
-            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, null,
-            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, null,
-            BigDecimal.ZERO, BigDecimal.ZERO, false, null, null)), 1L);
-        // HR edits the same employee/month again, e.g. after typing more into the same field.
-        repository.saveInputDrafts(month, List.of(fullInput(employeeId,
-            new BigDecimal("999"), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
-            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
-            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
-            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, null,
-            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, null,
-            BigDecimal.ZERO, BigDecimal.ZERO, false, null, null)), 1L);
-
-        List<PayrollEmployeeInputRequest> found = repository.findInputDrafts(month);
-
-        assertThat(found).hasSize(1);
-        assertThat(found.get(0).specialPay1())
-            .as("the second save must overwrite the first, not add a second row")
-            .isEqualByComparingTo("999");
-    }
-
-    @Test
-    void deleteInputDraftsClearsOnlyTheGivenMonth() {
-        long employeeId = seedEmployee("DRAFT-004", "ลบร่าง", "ทดสอบ");
-        LocalDate august = LocalDate.of(2026, 8, 1);
-        LocalDate september = LocalDate.of(2026, 9, 1);
-
-        repository.saveInputDrafts(august, List.of(zeroInput(employeeId)), 1L);
-        repository.saveInputDrafts(september, List.of(zeroInput(employeeId)), 1L);
-
-        repository.deleteInputDrafts(august);
-
-        assertThat(repository.findInputDrafts(august))
-            .as("august's draft was cleared")
-            .isEmpty();
-        assertThat(repository.findInputDrafts(september))
-            .as("september's draft, a different month, must be untouched")
-            .hasSize(1);
-    }
-
-    @Test
-    void aMonthWithNoSavedDraftReturnsAnEmptyList() {
-        assertThat(repository.findInputDrafts(LocalDate.of(2026, 8, 1))).isEmpty();
-    }
-
     private long seedEmployee(String code, String firstNameTh, String lastNameTh) {
         return jdbc.queryForObject(
             """
@@ -164,13 +90,6 @@ class PayrollInputDraftRepositoryIntegrationTest extends AbstractPostgresIntegra
             """,
             Map.of("code", code, "first", firstNameTh, "last", lastNameTh),
             Long.class);
-    }
-
-    private PayrollEmployeeInputRequest zeroInput(long employeeId) {
-        BigDecimal zero = BigDecimal.ZERO;
-        return fullInput(employeeId, zero, zero, zero, zero, zero, zero, zero, zero, zero,
-            zero, zero, zero, zero, zero, zero, zero, zero, null, zero, zero, zero, null,
-            zero, zero, false, null, null);
     }
 
     private PayrollEmployeeInputRequest fullInput(

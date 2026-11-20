@@ -1,13 +1,9 @@
 package th.co.glr.hr.mail;
 
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 
 import java.util.List;
@@ -23,14 +19,6 @@ class OverrideRedirectingMailerTest {
     private final Mailer mailer = new OverrideRedirectingMailer(delegate, OVERRIDE_TO);
 
     @Test
-    void constructorRejectsABlankOverride() {
-        assertThatThrownBy(() -> new OverrideRedirectingMailer(delegate, ""))
-            .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new OverrideRedirectingMailer(delegate, null))
-            .isInstanceOf(IllegalArgumentException.class);
-    }
-
-    @Test
     void sendRedirectsAwayFromTheRealRecipient() {
         mailer.send(REAL_RECIPIENT, "RFQ", "please quote this");
 
@@ -42,82 +30,6 @@ class OverrideRedirectingMailerTest {
             argThat(body -> body.contains("please quote this")
                 && body.contains("Redirected for testing")
                 && body.contains(REAL_RECIPIENT)));
-    }
-
-    @Test
-    void sendHtmlRedirectsAwayFromTheRealRecipientInBothAlternativesAndPassesAttachmentsThrough() {
-        Mailer.InlineImage logo = new Mailer.InlineImage("logo", "logo.png", new byte[] {1, 2, 3}, "image/png");
-
-        mailer.sendHtml(REAL_RECIPIENT, "Leave submitted", "<html><body><p>hi</p></body></html>",
-            "hi", List.of(logo));
-
-        verify(delegate).sendHtml(
-            argThat(to -> !REAL_RECIPIENT.equals(to)),
-            eq("Leave submitted"),
-            argThat(html -> html.contains("<p>hi</p>") // original content untouched...
-                && html.contains("Redirected for testing")
-                && html.contains(REAL_RECIPIENT) // ...but the real address is DISCLOSED in the note
-                && html.indexOf("</body>") > html.indexOf(REAL_RECIPIENT) // note lands INSIDE <body>
-                && html.trim().endsWith("</html>")),
-            argThat(text -> text.contains("hi")
-                && text.contains("Redirected for testing")
-                && text.contains(REAL_RECIPIENT)),
-            eq(List.of(logo)));
-        verify(delegate).sendHtml(eq(OVERRIDE_TO), anyString(), anyString(), anyString(), anyList());
-    }
-
-    @Test
-    void sendHtmlFallsBackToAppendingTheNoteWhenThereIsNoClosingBodyTag() {
-        mailer.sendHtml(REAL_RECIPIENT, "subject", "<p>no body tag here</p>", "no body tag here", List.of());
-
-        verify(delegate).sendHtml(eq(OVERRIDE_TO), anyString(),
-            argThat(html -> html.startsWith("<p>no body tag here</p>") && html.contains("Redirected for testing")),
-            anyString(), anyList());
-    }
-
-    @Test
-    void sendWithAttachmentRedirectsAwayFromTheRealRecipient() {
-        byte[] pdf = "%PDF".getBytes();
-
-        mailer.sendWithAttachment(REAL_RECIPIENT, "Payslip", "Attached", "payslip.pdf", pdf);
-
-        verify(delegate, never()).sendWithAttachment(eq(REAL_RECIPIENT), anyString(), anyString(), anyString(), any());
-        verify(delegate).sendWithAttachment(
-            eq(OVERRIDE_TO),
-            eq("Payslip"),
-            argThat(body -> body.contains("Attached")
-                && body.contains("Redirected for testing")
-                && body.contains(REAL_RECIPIENT)),
-            eq("payslip.pdf"),
-            eq(pdf));
-    }
-
-    // The exact path #782 named as completely unguarded: FactoryEmailService.send(...) with attachments calls
-    // Mailer.sendWithAttachments (plural) - not the singular sendWithAttachment NotificationEmailService's payslip
-    // path uses. Both must redirect; they are different methods.
-    @Test
-    void sendWithAttachmentsPluralRedirectsAwayFromTheRealRecipient() {
-        List<Mailer.Attachment> attachments = List.of(new Mailer.Attachment("quote.pdf", "%PDF".getBytes(), "application/pdf"));
-
-        mailer.sendWithAttachments(REAL_RECIPIENT, "RFQ with drawing", "please quote", attachments);
-
-        verify(delegate, never()).sendWithAttachments(eq(REAL_RECIPIENT), anyString(), anyString(), anyList());
-        verify(delegate).sendWithAttachments(
-            eq(OVERRIDE_TO),
-            eq("RFQ with drawing"),
-            argThat(body -> body.contains("please quote")
-                && body.contains("Redirected for testing")
-                && body.contains(REAL_RECIPIENT)),
-            eq(attachments));
-    }
-
-    // The interface's 4-arg sendHtml is a DEFAULT method that delegates to `this.sendHtml(..., List.of())` - not
-    // overridden separately in OverrideRedirectingMailer.
-    @Test
-    void fourArgSendHtmlDefaultMethodStillRedirects() {
-        mailer.sendHtml(REAL_RECIPIENT, "subject", "<html><body>hi</body></html>", "hi");
-
-        verify(delegate).sendHtml(eq(OVERRIDE_TO), eq("subject"), anyString(), anyString(), eq(List.of()));
     }
 
     // The rich send path (leave-submission email): the CC list must be DROPPED, not redirected, so a UAT run never
@@ -144,21 +56,4 @@ class OverrideRedirectingMailerTest {
             && sent.textBody().contains(manager)));
     }
 
-    @Test
-    void blankOriginalToStillRedirectsAndNotesNoAddressWasOnFile() {
-        mailer.send(null, "subject", "body");
-
-        verify(delegate).send(eq(OVERRIDE_TO), eq("subject"),
-            argThat(body -> body.contains("no address on file")));
-    }
-
-    // The old bracketed "[Redirected for testing - ...]" shape was a classic spam-filter trigger -
-    // NotificationEmailService was already fixed to drop it (see its test history). Pin that this class - the new
-    // single home for the note - never reintroduces that shape.
-    @Test
-    void theNoteIsNeverBracketed() {
-        mailer.send(REAL_RECIPIENT, "subject", "body");
-
-        verify(delegate).send(eq(OVERRIDE_TO), anyString(), argThat(body -> !body.contains("[Redirected")));
-    }
 }

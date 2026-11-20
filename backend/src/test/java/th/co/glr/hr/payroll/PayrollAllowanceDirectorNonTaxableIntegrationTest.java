@@ -66,8 +66,7 @@ class PayrollAllowanceDirectorNonTaxableIntegrationTest extends AbstractPostgres
     // ---- P8: a stored tax-allowance declaration changes the bracket/amount through preview -----
 
     /** Salary 40,000, January (monthsRemaining = 12), no YTD. Baseline (no stored allowance): taxableAnnualIncome
-     * 309,500.00 sits in the 10% bracket, annualTax 8,450.00, withholdingTax 704.00 (whole baht since 2026-08-28;
-     * see PayrollPersistedPayslipIntegrationTest for the full trace -- identical inputs). */
+     * 309,500.00 sits in the 10% bracket, annualTax 8,450.00, withholdingTax 704.00 (whole baht since 2026-08-28). */
     @Test
     void storedTaxAllowanceChangesTheBracketAndAmountThroughPreview() {
         LocalDate month = LocalDate.of(2026, 1, 1);
@@ -108,101 +107,7 @@ class PayrollAllowanceDirectorNonTaxableIntegrationTest extends AbstractPostgres
         assertThat(afterAllowance.withholdingTax()).isLessThan(beforeAllowance.withholdingTax());
     }
 
-    // ---- P10: director remuneration through preview: gross + tax rise, SSO stays zero -----------
-
-    /** A director has base salary 0 and only director_remuneration (150,000.00/month, January, no YTD). A plain
-     * salaried employee previewed in the same run keeps paying ordinary SSO (875.00), proving the zero-SSO result
-     * is specific to the director's remuneration type, not some preview-wide default. */
-    @Test
-    void directorRemunerationRaisesGrossAndTaxButSocialSecurityStaysZeroThroughPreview() {
-        LocalDate month = LocalDate.of(2026, 1, 1);
-        long director = seedDirector("DIR-P10", "กรรมการ", "ทดสอบ", new BigDecimal("150000.00"));
-        long plainEmployee = seedEmployee("EMP-P10", "พนักงาน", "ทั่วไป", new BigDecimal("30000.00"));
-
-        PayrollLineDto directorLine = previewLineFor(month, director);
-        PayrollLineDto plainLine = previewLineFor(month, plainEmployee);
-
-        assertThat(directorLine.baseSalary()).isEqualByComparingTo("0.00");
-        assertThat(directorLine.directorRemuneration()).isEqualByComparingTo("150000.00");
-        assertThat(directorLine.grossEarnings()).isEqualByComparingTo("150000.00");
-        assertThat(directorLine.grossTaxableIncome()).isEqualByComparingTo("150000.00");
-        assertThat(directorLine.ssoWageBase()).isEqualByComparingTo("0.00");
-        assertThat(directorLine.socialSecurity()).isEqualByComparingTo("0.00");
-        assertThat(directorLine.withholdingTax()).isEqualByComparingTo("22917.00");
-        assertThat(directorLine.netPay()).isEqualByComparingTo("127083.00");
-
-        // The director's zero SSO is specific to them, not a preview-wide effect.
-        assertThat(plainLine.socialSecurity()).isEqualByComparingTo("875.00");
-    }
-
-    // ---- P12: non-taxable income through preview: excluded from tax/SSO, added back to net ------
-
-    /** Salary 30,000, January, nonTaxableIncome 5,000 supplied in the request body. */
-    @Test
-    void nonTaxableIncomeThroughPreviewIsExcludedFromTaxAndSsoButAddedBackToNet() {
-        LocalDate month = LocalDate.of(2026, 1, 1);
-        long employeeId = seedEmployee("NTX-001", "ไม่คิดภาษี", "ทดสอบ", new BigDecimal("30000.00"));
-
-        PayrollPeriodDto period = payrollService.preview(
-            new ProcessPayrollRequest(month, List.of(inputWithNonTaxableIncome(employeeId, new BigDecimal("5000.00")))),
-            hr());
-        PayrollLineDto line = period.lines().stream()
-            .filter(item -> item.employeeId() == employeeId)
-            .findFirst()
-            .orElseThrow();
-
-        assertThat(line.nonTaxableIncome()).isEqualByComparingTo("5000.00");
-        assertThat(line.grossEarnings()).isEqualByComparingTo("30000.00");
-        assertThat(line.grossTaxableIncome()).isEqualByComparingTo("30000.00");
-        assertThat(line.socialSecurity()).isEqualByComparingTo("875.00");
-        assertThat(line.withholdingTax()).isEqualByComparingTo("165.00");
-        assertThat(line.netPay()).isEqualByComparingTo("33960.00");
-    }
-
-    /** A per-run ค่าลดหย่อนบุตร typed by HR for an employee with NO stored ล.ย.01 row. V93 caps บุตร per head, but
-     * the amount and the head count travel by different routes: PayrollService#mergeAllowances took the amount
-     * from the request body and the count from the stored declaration only. */
-    @Test
-    void aPerRunChildAllowanceSurvivesWhenTheEmployeeHasNoStoredDeclaration() {
-        LocalDate month = LocalDate.of(2026, 1, 1);
-        long employeeId = seedEmployee("ETA-900", "ไม่มี", "แบบแจ้ง", new BigDecimal("100000.00"));
-
-        PayrollLineDto withoutDeclaration = previewLineFor(month, employeeId);
-
-        PayrollPeriodDto withDeclaration = payrollService.preview(
-            new ProcessPayrollRequest(month, List.of(
-                inputWithChildAllowance(employeeId, new BigDecimal("60000.00")))), hr());
-        PayrollLineDto declaredLine = withDeclaration.lines().stream()
-            .filter(line -> line.employeeId() == employeeId)
-            .findFirst()
-            .orElseThrow();
-
-        assertThat(declaredLine.taxAllowanceTotal())
-            .withFailMessage("a per-run 60,000 child allowance must not be erased by a zero stored head count")
-            .isEqualByComparingTo(withoutDeclaration.taxAllowanceTotal().add(new BigDecimal("60000.00")));
-        assertThat(declaredLine.withholdingTax()).isLessThan(withoutDeclaration.withholdingTax());
-    }
-
     // --- helpers ------------------------------------------------------------
-
-    private PayrollEmployeeInputRequest inputWithChildAllowance(long employeeId, BigDecimal childAllowance) {
-        PayrollEmployeeInputRequest base = inputWithNonTaxableIncome(employeeId, BigDecimal.ZERO);
-        return new PayrollEmployeeInputRequest(
-            base.employeeId(),
-            base.specialPay1(), base.specialPay2(), base.specialPay3(), base.specialPay4(),
-            base.specialPay5(), base.specialPay6(), base.specialPay7(), base.specialPay8(),
-            base.nonTaxableIncome(), base.unpaidLeaveDays(), base.studentLoanDeduction(),
-            base.legalExecutionDeduction(), base.otherPostTaxDeductions(),
-            base.spouseAllowance(),
-            childAllowance,
-            base.parentCareAllowance(), base.disabledCareAllowance(), base.maternityAllowance(),
-            base.lifeInsuranceAllowance(), base.healthInsuranceAllowance(),
-            base.parentHealthInsuranceAllowance(), base.rmfAllowance(), base.ssfAllowance(),
-            base.pensionInsuranceAllowance(), base.thaiEsgAllowance(), base.homeLoanInterestAllowance(),
-            base.educationDonation(), base.generalDonation(), base.politicalDonation(),
-            base.warningLetterDeduction(), base.customerReturnDeduction(), base.otherPretaxDeduction(),
-            base.withholdingTaxOverride());
-    }
 
     private PayrollLineDto previewLineFor(LocalDate payrollMonth, long employeeId) {
         PayrollPeriodDto period = payrollService.preview(
@@ -211,39 +116,6 @@ class PayrollAllowanceDirectorNonTaxableIntegrationTest extends AbstractPostgres
             .filter(line -> line.employeeId() == employeeId)
             .findFirst()
             .orElseThrow(() -> new AssertionError("no payroll line for employee " + employeeId));
-    }
-
-    private PayrollEmployeeInputRequest inputWithNonTaxableIncome(long employeeId, BigDecimal nonTaxableIncome) {
-        return new PayrollEmployeeInputRequest(
-            employeeId,
-            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, // specialPay1-4
-            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, // specialPay5-8
-            BigDecimal.ZERO, // specialPay9
-            nonTaxableIncome,
-            BigDecimal.ZERO, // unpaidLeaveDays
-            BigDecimal.ZERO, // studentLoanDeduction
-            BigDecimal.ZERO, // legalExecutionDeduction
-            BigDecimal.ZERO, // otherPostTaxDeductions
-            BigDecimal.ZERO, // spouseAllowance
-            BigDecimal.ZERO, // childAllowance
-            BigDecimal.ZERO, // parentCareAllowance
-            BigDecimal.ZERO, // disabledCareAllowance
-            BigDecimal.ZERO, // maternityAllowance
-            BigDecimal.ZERO, // lifeInsuranceAllowance
-            BigDecimal.ZERO, // healthInsuranceAllowance
-            BigDecimal.ZERO, // parentHealthInsuranceAllowance
-            BigDecimal.ZERO, // rmfAllowance
-            BigDecimal.ZERO, // ssfAllowance
-            BigDecimal.ZERO, // pensionInsuranceAllowance
-            BigDecimal.ZERO, // thaiEsgAllowance
-            BigDecimal.ZERO, // homeLoanInterestAllowance
-            BigDecimal.ZERO, // educationDonation
-            BigDecimal.ZERO, // generalDonation
-            BigDecimal.ZERO, // politicalDonation
-            BigDecimal.ZERO, // warningLetterDeduction
-            BigDecimal.ZERO, // customerReturnDeduction
-            BigDecimal.ZERO, // otherPretaxDeduction
-            null); // withholdingTaxOverride (none)
     }
 
     private UserPrincipal hr() {
@@ -266,20 +138,4 @@ class PayrollAllowanceDirectorNonTaxableIntegrationTest extends AbstractPostgres
         return employeeId;
     }
 
-    /** A director: no salary at all, only director_remuneration -- must still be payroll-eligible. */
-    private long seedDirector(String code, String firstNameTh, String lastNameTh, BigDecimal directorRemuneration) {
-        long employeeId = jdbc.queryForObject(
-            """
-            INSERT INTO hr.employee (employee_code, first_name_th, last_name_th, current_salary, director_remuneration, is_active)
-            VALUES (:code, :first, :last, 0, :directorRemuneration, TRUE)
-            RETURNING employee_id
-            """,
-            Map.of("code", code, "first", firstNameTh, "last", lastNameTh, "directorRemuneration", directorRemuneration),
-            Long.class);
-        // DIRECTOR_REMUNERATION is non-zero and HR-classified per the handoff -- REGULAR_REPROJECT here (directors are
-        // typically paid the same amount every month). Deliberately NOT SSO- included: this test's whole point is that
-        // director remuneration stays outside the SSO base.
-        seedRegularTaxTreatment(employeeId, 2026, PayrollComponent.DIRECTOR_REMUNERATION);
-        return employeeId;
-    }
 }

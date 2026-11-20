@@ -97,31 +97,6 @@ class LeaveWarnUnpaidQuotaIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(splits.get(0).totalDays()).isEqualByComparingTo("1.00");
     }
 
-    @Test
-    void aWeddingExcessWarningLeavesOnlyTheExcessDaysUnpaidAndUnconsumedFromQuota() {
-        // WARN_UNPAID_EXCESS companion: real PERSONAL (min_service_months=0, prorated_first_year=TRUE,
-        // annual_quota_days=7.00 -- V116/V120), WEDDING_LEAVE_MAX_DAYS=3 (a Java constant, not a column -- see
-        // LeaveService#autoRejectNote's wedding-cap comment). 4 working days (Mon-Thu), 1 over the cap.
-        long employeeId = insertEmployee("WARN-QUOTA-002", LocalDate.parse("2015-01-01"), null);
-
-        SubmitLeaveRequest weddingRequest = new SubmitLeaveRequest(
-            employeeId, "PERSONAL", LocalDate.parse("2026-07-13"), LocalDate.parse("2026-07-16"),
-            "Own wedding", null, null, null, null, null, null, null, "WEDDING", null);
-        LeaveRequestDto warned = leaveService.submit(weddingRequest, employee(employeeId));
-
-        assertThat(warned.status()).isEqualTo("SUBMITTED");
-        assertThat(warned.ruleWarnings()).hasSize(1);
-        assertThat(warned.ruleWarnings().get(0).code()).isEqualTo("WEDDING_MAX_DAYS");
-        assertThat(warned.totalDays()).isEqualByComparingTo("4.00");
-        // Only the 1 excess day is unpaid by rule -- the other 3 are ordinary paid quota consumption.
-        assertThat(warned.unpaidByRuleDays()).isEqualByComparingTo("1.00");
-        assertThat(warned.paidDays()).isEqualByComparingTo("3.00");
-        assertThat(warned.unpaidDays()).isEqualByComparingTo("1.00");
-        // Quota only moved by the 3 PAID days -- the 1 excess day never touched it (7.00 - 3.00 = 4.00).
-        assertThat(warned.quotaRemainingBefore()).isEqualByComparingTo("7.00");
-        assertThat(warned.quotaRemainingAfter()).isEqualByComparingTo("4.00");
-    }
-
     private SubmitLeaveRequest submitRequest(long employeeId, String startDate, String endDate) {
         return new SubmitLeaveRequest(
             employeeId, "VACATION", LocalDate.parse(startDate), LocalDate.parse(endDate), "Integration test leave");

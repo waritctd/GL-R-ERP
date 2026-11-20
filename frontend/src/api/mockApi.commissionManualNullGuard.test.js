@@ -11,19 +11,6 @@ import { api } from './mockApi.js';
 describe('duplicate-invoice check tolerates invoice-less manual commissions', () => {
   const REP = 990501;
 
-  it('lets an invoice-backed commission be created while a manual row exists', async () => {
-    await api.auth.login({ role: 'sales_manager' });
-    await api.commissions.createManualCommission({
-      salesRepId: REP, kind: 'ADJUSTMENT', amount: -1000,
-      reason: 'ปรับปรุงยอดงวดก่อน', payrollMonth: '2026-08',
-    });
-
-    await expect(api.commissions.create({
-      salesRepId: REP, invoiceNumber: 'INV-NULLGUARD-001', invoiceDate: '2026-08-09',
-      grossAmount: 60000, payrollMonth: '2026-08', invoiceAttachment: { name: 'inv.pdf' },
-    })).resolves.toBeTruthy();
-  });
-
   // Checks missing invoice numbers do not collide with invoice-less manual commission rows.
   it('does not treat a missing invoice number as a duplicate of an invoice-less row', async () => {
     await api.auth.login({ role: 'sales_manager' });

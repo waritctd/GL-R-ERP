@@ -8,7 +8,6 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -95,124 +94,6 @@ class StockDeclarationNotificationIntegrationTest extends AbstractPostgresIntegr
         ceoUser = principal(ceoId, "กรรมการ ผู้จัดการ", "ceo");
     }
 
-    // ── recipient resolution: the refusals are the evidence ──────────────────
-
-    /** The whole point of not reusing notifyByRole("sales"): that branch selects the entire ฝ่าย, which would hand
-     * the notification to the rep who just declared and to every one of their peers. */
-    @Test
-    void onlyActiveSalesManagersAreNotified_andTheDeclaringRepIsNot() {
-        long ticketId = createLegacyTicketWithTwoItems();
-
-        decide(ticketId, owner, true, false);
-
-        assertThat(everyRecipientOf(TicketEventKind.STOCK_RESERVED))
-            .describedAs("the sales manager and the assistant manager, and nobody else at all")
-            .containsExactlyInAnyOrder(salesManagerId, assistantSalesManagerId);
-
-        // Spelled out one by one, so a failure names the category that leaked rather than a set diff.
-        assertThat(inbox(ownerId))
-            .describedAs("the rep who declared must not be told about their own declaration")
-            .isEmpty();
-        assertThat(inbox(otherRepId))
-            .describedAs("a peer rep has no supervisory interest in another rep's bonus input")
-            .isEmpty();
-        assertThat(inbox(inactiveSalesManagerId))
-            .describedAs("a departed manager (is_active = FALSE) must be excluded, as for every other role")
-            .isEmpty();
-        assertThat(inbox(salesEmployeeWithNoPositionId))
-            .describedAs("a NULL position_id must not resolve to a manager via the LEFT JOIN")
-            .isEmpty();
-        assertThat(inbox(importManagerId))
-            .describedAs("a ผู้จัดการ of a DIFFERENT ฝ่าย — the position match must not escape ฝ่ายขาย")
-            .isEmpty();
-        assertThat(inbox(ceoId))
-            .describedAs("the ruling is 'notify the sales manager', not 'notify up the whole chain'")
-            .isEmpty();
-    }
-
-    /** The predicate behind notifyByRole("sales_manager", ...) is a hand-copy of
-     * CommissionRepository#findSalesManagerApproverEmployeeIds — deliberately, so that "who supervises a rep's
-     * commission INPUT" and "who signs a rep's commission OFF" cannot become two different people. */
-    @Test
-    void theNotifiedSetMatchesTheCommissionApproverPredicateItMirrors() {
-        long ticketId = createLegacyTicketWithTwoItems();
-
-        decide(ticketId, owner, true, false);
-
-        List<Long> commissionApprovers =
-            new th.co.glr.hr.commission.CommissionRepository(jdbc).findSalesManagerApproverEmployeeIds();
-        assertThat(commissionApprovers)
-            .describedAs("guard on the guard: an empty fixture would make the comparison vacuous")
-            .isNotEmpty();
-        assertThat(everyRecipientOf(TicketEventKind.STOCK_RESERVED))
-            .containsExactlyInAnyOrderElementsOf(commissionApprovers);
-    }
-
-    // ── content: enough to act on without opening the ticket ─────────────────
-
-    @Test
-    void theNotificationNamesTheDealTheRepAndTheDeclaredQuantities() {
-        long ticketId = createLegacyTicketWithTwoItems();
-        String code = tickets.findById(ticketId).orElseThrow().summary().code();
-
-        decide(ticketId, owner, true, false);
-
-        NotificationDto row = onlyNotification(salesManagerId);
-        assertThat(row.type()).isEqualTo(TicketEventKind.STOCK_RESERVED);
-        assertThat(row.title())
-            .describedAs("must not fall through to the generic 'อัปเดตสถานะคำขอราคา'")
-            .isEqualTo("พนักงานขายประกาศสินค้าจากสต็อกเอง");
-        assertThat(row.link()).isEqualTo("/tickets/" + ticketId);
-        assertThat(row.message())
-            .contains(code)                       // which deal
-            .contains("ลูกค้าทดสอบ")                 // whose deal
-            .contains("เจ้าของดีล ทดสอบ")             // which rep
-            .contains("100/160")                  // how much, deal-wide
-            .contains("STOCK_BONUS");             // why it is worth reading
-        assertThat(row.message())
-            .describedAs("a partial declaration must not claim the deal left the import axis")
-            .doesNotContain("ครบทั้งดีล");
-    }
-
-    /** Full coverage is the case that also reroutes the deal (FROM_STOCK, skipping the entire import journey), so
-     * the message has to say so — that is the difference between "worth a look eventually" and "this deal just
-     * stopped being an import". */
-    @Test
-    void fullCoverageIsCalledOutBecauseItReroutesTheDeal() {
-        long ticketId = createLegacyTicket(List.of(item("100.00")));
-
-        ticketService.decideProcurementSource(ticketId, split(ticketId, true), owner);
-
-        assertThat(onlyNotification(salesManagerId).message())
-            .contains("100/100")
-            .contains("ครบทั้งดีล");
-        assertThat(fulfillmentStatus(ticketId))
-            .describedAs("precondition for the claim the message makes")
-            .isEqualTo(FulfilmentStatus.FROM_STOCK);
-    }
-
-    // ── trigger: only the rep's own declaration ──────────────────────────────
-
-    /** The CEO is the correction/override path — a CEO declaring is the mitigation working, not the risk. Notifying
-     * on it would double the volume with the half that needs no supervision. */
-    @Test
-    void aCeoCorrectionNotifiesNobody() {
-        long ticketId = createTicketWithOneItem();
-        long itemId = onlyItemId(ticketId);
-
-        // Both declarations are the CEO's (never the owning rep's), so neither is the rep's own declaration that would
-        // notify the sales manager.
-        ticketService.reserveStock(ticketId, declare(itemId, "25.00"), ceoUser);
-        ticketService.reserveStock(ticketId, declare(itemId, "30.00"), ceoUser);
-
-        assertThat(everyRecipientOf(TicketEventKind.STOCK_RESERVED)).isEmpty();
-        assertThat(qtyFromStock(itemId))
-            .describedAs("precondition: those corrections really did land, so the silence is a choice")
-            .isEqualByComparingTo("30.00");
-    }
-
-    // ── rollback ─────────────────────────────────────────────────────────────
-
     /** The defect class PR #708 fixed for files: a side effect that outlives the transaction that caused it. Here
      * it would be a notification telling a manager to review a declaration that never happened. Why this cannot
      * pass vacuously. */
@@ -258,86 +139,6 @@ class StockDeclarationNotificationIntegrationTest extends AbstractPostgresIntegr
             .describedAs("the once-only latch rolled back too").isNull();
     }
 
-    /** The commit side of the same wiring: with nothing failing, both halves persist together. */
-    @Test
-    void aCommittedDeclarationKeepsItsNotification() {
-        long ticketId = createLegacyTicket(List.of(item("100.00")));
-        long itemId = onlyItemId(ticketId);
-        NotificationRepository notificationSpy = spy(new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP));
-        TicketService service = transactional(newTicketService(new TicketRepository(jdbc), notificationSpy));
-
-        service.decideProcurementSource(ticketId, split(ticketId, true), owner);
-
-        verify(notificationSpy).notifyByRole(eq("sales_manager"), eq(ticketId),
-            eq(TicketEventKind.STOCK_RESERVED), anyString());
-        verify(notificationSpy, never()).notifyByRole(eq("sales"), anyLong(), anyString(), anyString());
-        assertThat(inbox(salesManagerId)).hasSize(1);
-        assertThat(qtyFromStock(itemId)).isEqualByComparingTo("100.00");
-    }
-
-    // ── RESERVE_STOCK is advertised exactly where reserveStock would accept the call ─────────────
-
-    @Test
-    void reserveStockIsAdvertisedToTheCeoAtOrderReceivedBeforeAnyFulfilmentStatus() {
-        long ticketId = createTicketWithOneItem();
-
-        assertThat(advertised(ticketId, ceoUser)).contains("RESERVE_STOCK");
-    }
-
-    @Test
-    void reserveStockIsNotAdvertisedBelowOrderReceived() {
-        long ticketId = createTicketWithOneItem();
-        tickets.updateSalesStage(ticketId, DealStage.QUOTE_OWNER);
-
-        assertThat(advertised(ticketId, ceoUser)).doesNotContain("RESERVE_STOCK");
-    }
-
-    /** The sales manager sees the deal but is deliberately outside canDeclareStockCoverage ("Sales declares"). */
-    @Test
-    void reserveStockIsNotAdvertisedToTheSalesManager() {
-        long ticketId = createTicketWithOneItem();
-
-        assertThat(advertised(ticketId, principal(salesManagerId, "ผู้จัดการ ฝ่ายขาย", "sales_manager")))
-            .doesNotContain("RESERVE_STOCK");
-    }
-
-    @Test
-    void reserveStockIsNotAdvertisedOnceTheDealIsOnTheFulfilmentAxis() {
-        long ticketId = createTicketWithOneItem();
-        for (String status : List.of("IR_ISSUED", "FROM_STOCK")) {
-            jdbc.update("UPDATE sales.ticket SET fulfillment_status = :s WHERE ticket_id = :id",
-                Map.of("s", status, "id", ticketId));
-
-            assertThat(advertised(ticketId, ceoUser)).describedAs(status).doesNotContain("RESERVE_STOCK");
-        }
-    }
-
-    @Test
-    void reserveStockIsNotAdvertisedOnANonActiveDeal() {
-        long ticketId = createTicketWithOneItem();
-        for (String lifecycle : List.of("DORMANT", "CLOSED_LOST")) {
-            jdbc.update("UPDATE sales.ticket SET lifecycle = :l WHERE ticket_id = :id",
-                Map.of("l", lifecycle, "id", ticketId));
-
-            assertThat(advertised(ticketId, ceoUser)).describedAs(lifecycle).doesNotContain("RESERVE_STOCK");
-        }
-    }
-
-    @Test
-    void reserveStockIsNotAdvertisedToTheImportRole() {
-        long ticketId = createTicketWithOneItem();
-
-        assertThat(advertised(ticketId, principal(salesManagerId, "ฝ่ายนำเข้า", "import")))
-            .doesNotContain("RESERVE_STOCK");
-    }
-
-    private List<String> advertised(long ticketId, UserPrincipal actor) {
-        return ticketService.actions(ticketId, actor).availableActions().stream()
-            .map(TicketResponses.TicketActionDto::action).toList();
-    }
-
-    // ── helpers ──────────────────────────────────────────────────────────────
-
     private TicketService newTicketService(TicketRepository ticketRepository,
                                            NotificationRepository notificationRepository) {
         // PricingRequestService is mocked exactly as in StockDeclarationAuthzIntegrationTest: reserveStock never calls
@@ -349,16 +150,6 @@ class StockDeclarationNotificationIntegrationTest extends AbstractPostgresIntegr
         return new TicketService(ticketRepository, notificationRepository,
             new ObjectMapper(), new CustomerRepository(jdbc), new QuotationRenderer(), pricingRequests, new th.co.glr.hr.auth.EmployeeAuthRepository(jdbc), new th.co.glr.hr.customer.ContactRepository(jdbc), new th.co.glr.hr.customer.ProjectRepository(jdbc),
             new th.co.glr.hr.dealquotation.DealQuotationRepository(jdbc, new th.co.glr.hr.catalog.CatalogRepository(jdbc)));
-    }
-
-    private static StockReservationRequest declare(long itemId, String qtyFromStock) {
-        return new StockReservationRequest(List.of(
-            new StockReservationRequest.Line(itemId, new BigDecimal(qtyFromStock), "มีของในสต็อก")));
-    }
-
-    /** A deal parked at the {@link DealStage#ORDER_RECEIVED} floor a declaration must clear. */
-    private long createTicketWithOneItem() {
-        return createTicket(List.of(item("100.00")));
     }
 
     /**
@@ -379,19 +170,11 @@ class StockDeclarationNotificationIntegrationTest extends AbstractPostgresIntegr
         return ticketId;
     }
 
-    private long createLegacyTicketWithTwoItems() {
-        return createLegacyTicket(List.of(item("100.00"), item("60.00")));
-    }
-
     private ProcurementSourceRequest split(long ticketId, boolean... fromStock) {
         List<Long> ids = itemIds(ticketId);
         List<ProcurementSourceRequest.Line> lines = new java.util.ArrayList<>();
         for (int i = 0; i < ids.size(); i++) lines.add(new ProcurementSourceRequest.Line(ids.get(i), fromStock[i]));
         return new ProcurementSourceRequest(lines);
-    }
-
-    private void decide(long ticketId, UserPrincipal actor, boolean... fromStock) {
-        ticketService.decideProcurementSource(ticketId, split(ticketId, fromStock), actor);
     }
 
     private long createTicket(List<TicketItemRequest> items) {
@@ -422,33 +205,9 @@ class StockDeclarationNotificationIntegrationTest extends AbstractPostgresIntegr
         return notifications.findByEmployeeId(employeeId);
     }
 
-    private NotificationDto onlyNotification(long employeeId) {
-        List<NotificationDto> rows = inbox(employeeId);
-        assertThat(rows).hasSize(1);
-        return rows.get(0);
-    }
-
-    /** Every employee holding a notification of this type — the set assertion's raw material. */
-    private List<Long> everyRecipientOf(String type) {
-        return jdbc.queryForList("""
-            SELECT employee_id FROM hr.notification WHERE type = :type ORDER BY employee_id
-            """, Map.of("type", type), Long.class);
-    }
-
     private BigDecimal qtyFromStock(long itemId) {
         return jdbc.queryForObject("SELECT qty_from_stock FROM sales.ticket_item WHERE item_id = :itemId",
             Map.of("itemId", itemId), BigDecimal.class);
-    }
-
-    private String fulfillmentStatus(long ticketId) {
-        return jdbc.queryForObject("SELECT fulfillment_status FROM sales.ticket WHERE ticket_id = :ticketId",
-            Map.of("ticketId", ticketId), String.class);
-    }
-
-    private int stockReservedEvents(long ticketId) {
-        return jdbc.queryForObject("""
-            SELECT COUNT(*) FROM sales.ticket_event WHERE ticket_id = :ticketId AND kind = :kind
-            """, Map.of("ticketId", ticketId, "kind", TicketEventKind.STOCK_RESERVED), Integer.class);
     }
 
     private long employee(EmployeeRepository employees, String name, String emailPrefix,

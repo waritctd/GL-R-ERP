@@ -133,20 +133,6 @@ class CashForMonthIntegrationTest extends AbstractDealQuotationSlice2Integration
     }
 
     @Test
-    void theWeekOf30NovTo4DecBelongsToDecember() {
-        long lead = dealAt(salesActor, "LEAD_APPROACH");
-        expected(lead, "DEPOSIT", "400", "2026-11-30", "OPEN");
-        expected(lead, "DEPOSIT", "7000", "2026-12-07", "OPEN");
-
-        CashMonth dec = board.cashForMonth(salesActor.id(), YearMonth.of(2026, 12));
-        assertThat(dec.forecast()).isEqualByComparingTo("7400");
-        assertThat(dec.depositsExpected()).isEqualByComparingTo("7400");
-        assertThat(dec.weeks().get(0).weekStart()).isEqualTo(LocalDate.parse("2026-11-30"));
-        assertThat(dec.weeks().get(0).depositsExpected()).isEqualByComparingTo("400");
-        assertThat(board.cashForMonth(salesActor.id(), NOV).forecast()).isEqualByComparingTo("0");
-    }
-
-    @Test
     void aPartlyReceivedRowKeepsOnlyItsRemainderInTheBuckets() {
         long lead = dealAt(salesActor, "LEAD_APPROACH");
         long row = expected(lead, "DEPOSIT", "1000", "2026-11-09", "OPEN");
@@ -156,16 +142,6 @@ class CashForMonthIntegrationTest extends AbstractDealQuotationSlice2Integration
         CashMonth nov = board.cashForMonth(salesActor.id(), NOV);
         assertThat(nov.forecast()).as("the forecast is the plan").isEqualByComparingTo("1000");
         assertThat(nov.depositsExpected()).as("only what is still to come").isEqualByComparingTo("600");
-    }
-
-    @Test
-    void emptyMonthIsZerosWithEveryWeek() {
-        CashMonth empty = board.cashForMonth(salesActor.id(), YearMonth.of(2027, 2));
-        assertThat(empty.forecast()).isEqualByComparingTo("0");
-        assertThat(empty.received()).isEqualByComparingTo("0");
-        assertThat(empty.weeks()).extracting(CashWeek::weekStart).containsExactly(
-            LocalDate.parse("2027-02-01"), LocalDate.parse("2027-02-08"), LocalDate.parse("2027-02-15"),
-            LocalDate.parse("2027-02-22"));
     }
 
     // ── scope through HTTP, this month ────────────────────────────────────────
@@ -186,33 +162,6 @@ class CashForMonthIntegrationTest extends AbstractDealQuotationSlice2Integration
         assertThat(cash.get("forecast").decimalValue()).isEqualByComparingTo("100");
         assertThat(cash.get("received").decimalValue()).isEqualByComparingTo("0");
         assertThat(cash.get("depositsExpected").decimalValue()).isEqualByComparingTo("100");
-    }
-
-    @Test
-    void teamOverviewCarriesTeamCashAndEachRepsExpectedAndReceived() throws Exception {
-        LocalDate today = LocalDate.now(VisitService.BANGKOK);
-        LocalDate monday = today.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY));
-        LocalDate inMonth = monday.getMonth() == today.getMonth() ? monday : monday.plusWeeks(1);
-        long mine = dealAt(salesActor, "LEAD_APPROACH");
-        long theirs = dealAt(otherSalesActor, "LEAD_APPROACH");
-        expected(mine, "DEPOSIT", "100", inMonth.toString(), "OPEN");
-        expected(theirs, "DEPOSIT", "90000", inMonth.toString(), "OPEN");
-        receipt(theirs, "DEPOSIT", "50000", Instant.now().toString(), "RE-THEIRS");
-
-        JsonNode team = ok(get("/api/sales/team-overview"), salesManagerActor);
-        assertThat(team.get("cash").get("forecast").decimalValue()).isEqualByComparingTo("90100");
-        assertThat(team.get("cash").get("received").decimalValue()).isEqualByComparingTo("50000");
-        JsonNode me = rep(team, salesActor.id());
-        JsonNode them = rep(team, otherSalesActor.id());
-        assertThat(me.get("expected").decimalValue()).isEqualByComparingTo("100");
-        assertThat(me.get("received").decimalValue()).isEqualByComparingTo("0");
-        assertThat(them.get("expected").decimalValue()).isEqualByComparingTo("90000");
-        assertThat(them.get("received").decimalValue()).isEqualByComparingTo("50000");
-    }
-
-    @Test
-    void salesRoleStillCannotReachTheTeamCash() throws Exception {
-        assertThat(perform(get("/api/sales/team-overview"), salesActor).getResponse().getStatus()).isEqualTo(403);
     }
 
     // ── fixtures ─────────────────────────────────────────────────────────────

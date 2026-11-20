@@ -1166,13 +1166,13 @@ public class QuotationRenderer {
             // dropped) CONSECUTIVE rows starting at REMARK_HEAD_ROWS[0] — the compaction in
             // #compactRemarksSection has already removed the now-unused continuation/trailing rows
             // (plus, in the 7-line case, the now-unused 8th packed slot too), so this range abuts
-            // the totals block with no gap, each ONE merged B..I cell, never wrapped/split — see
-            // REMARK_V2_COMPACT_SHIFT's Javadoc for why a wrap is neither needed (8x the width of
-            // column B alone) nor safe (it would re-open the gap the compaction just closed).
+            // the totals block with no gap, each ONE merged B..H cell, one line unless the text overflows
+            // the box (#wrapRemarkIfOverflow grows that row's own height; no row is added or removed).
             for (int i = 0; i < remarkLines.size() && i < REMARK_HEAD_ROWS.length; i++) {
                 int row = REMARK_HEAD_ROWS[0] + i;
                 setStr(sh, row, LABEL_VALUE_COL, remarkLines.get(i));
                 mergeRemarkRow(sh, row);
+                wrapRemarkIfOverflow(sh, row, remarkLines.get(i));
             }
             // The box's bottom edge sits on the LAST line actually
             // written, not always REMARK_HEAD_ROWS[0] + 7 — a 7-line list would otherwise leave the
@@ -1264,6 +1264,38 @@ public class QuotationRenderer {
     // single-column-B cells untouched (stays content-equivalent, see the class Javadoc).
     private void mergeRemarkRow(Sheet sh, int row) {
         mergeIfAbsent(sh, row, row, REMARK_BOX_FIRST_COL, REMARK_BOX_LAST_COL);
+    }
+
+    /** A remark wider than the B..H box (e.g. a long per-item lead-time line) is wrapped and its row grown to the
+     * lines needed; a line that fits is left untouched. Same measuring as #shrinkToFitIfOverflow. */
+    private void wrapRemarkIfOverflow(Sheet sh, int row, String text) {
+        if (text == null || text.isEmpty()) return;
+        try {
+            Cell cell = getOrKeep(sh, row, REMARK_BOX_FIRST_COL);
+            CellStyle base = cell.getCellStyle();
+            Font poiFont = sh.getWorkbook().getFontAt(base.getFontIndexAsInt());
+            FontResolver.Resolved resolved = FontResolver.resolve(poiFont.getFontName());
+            java.util.OptionalDouble widthPt = FontResolver.stringWidthPt(
+                resolved, text, poiFont.getFontHeightInPoints(), poiFont.getBold());
+            if (widthPt.isEmpty()) return;
+            int charWidthTwips = LibreOfficeMetrics.charWidthTwips(sh.getWorkbook());
+            int boxTwips = 0;
+            for (int c = REMARK_BOX_FIRST_COL; c <= REMARK_BOX_LAST_COL; c++) {
+                boxTwips += LibreOfficeMetrics.columnTwips(sh.getColumnWidth(c), charWidthTwips);
+            }
+            boxTwips -= 2 * LibreOfficeMetrics.TEXT_INSET_TWIPS;
+            int textTwips = (int) Math.ceil(widthPt.getAsDouble() * 20.0 * 1.05); // 5% margin for Thai width underestimate
+            if (textTwips <= boxTwips) return;
+            int lines = (int) Math.ceil((double) textTwips / boxTwips);
+            CellStyle wrap = sh.getWorkbook().createCellStyle();
+            wrap.cloneStyleFrom(base);
+            wrap.setWrapText(true);
+            cell.setCellStyle(wrap);
+            Row r = sh.getRow(row);
+            r.setHeightInPoints(r.getHeightInPoints() * lines);
+        } catch (RuntimeException e) {
+            log.debug("Remark wrap sizing unavailable for '{}': {}", text, e.getMessage());
+        }
     }
 
     /** html-fidelity-spec §8 — closes the remark box (see #REMARK_BOX_LAST_COL) over rows labelRow ("หมายเหตุ :")

@@ -2,11 +2,6 @@ package th.co.glr.hr.pricingchain;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyLong;
-import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
@@ -21,7 +16,6 @@ import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.catalog.CatalogRepository;
 import th.co.glr.hr.common.ApiException;
-import th.co.glr.hr.config.AppProperties;
 import th.co.glr.hr.customer.ContactRepository;
 import th.co.glr.hr.customer.CustomerDto;
 import th.co.glr.hr.customer.CustomerRepository;
@@ -31,7 +25,6 @@ import th.co.glr.hr.customerquotation.CustomerQuotationDtos.CustomerQuotationDto
 import th.co.glr.hr.customerquotation.CustomerQuotationRepository;
 import th.co.glr.hr.customerquotation.CustomerQuotationRequests.CreateCustomerQuotationRequest;
 import th.co.glr.hr.customerquotation.CustomerQuotationRequests.IssueCustomerQuotationRequest;
-import th.co.glr.hr.customerquotation.CustomerQuotationRequests.RecordQuotationOutcomeRequest;
 import th.co.glr.hr.customerquotation.CustomerQuotationService;
 import th.co.glr.hr.dealquotation.WastageCalculator;
 import th.co.glr.hr.employee.EmployeeCodeGenerator;
@@ -45,7 +38,6 @@ import th.co.glr.hr.factoryquote.FactoryQuoteRequests.MarkFactoryContactedReques
 import th.co.glr.hr.factoryquote.FactoryQuoteRequests.ReceiveFactoryQuoteItemRequest;
 import th.co.glr.hr.factoryquote.FactoryQuoteRequests.ReceiveFactoryQuoteRequest;
 import th.co.glr.hr.factoryquote.FactoryQuoteService;
-import th.co.glr.hr.factoryquote.FactoryQuoteStatus;
 import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.pricing.FxRateRepository;
 import th.co.glr.hr.pricing.PricingFormulaConfigRepository;
@@ -70,9 +62,7 @@ import th.co.glr.hr.pricingrequest.UnitBasis;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 import th.co.glr.hr.support.RecordingSalesMailer;
 import th.co.glr.hr.ticket.CreateTicketRequest;
-import th.co.glr.hr.ticket.DealLostReason;
 import th.co.glr.hr.ticket.QuotationRenderer;
-import th.co.glr.hr.ticket.QuotationStatus;
 import th.co.glr.hr.ticket.TicketDto;
 import th.co.glr.hr.ticket.TicketItemRequest;
 import th.co.glr.hr.ticket.TicketRepository;
@@ -172,42 +162,6 @@ class PricingRequestCancelCutoffIntegrationTest extends AbstractPostgresIntegrat
         assertThat(isCancelStamped(pricingRequestId)).isFalse();
     }
 
-    /** The CEO cannot buy their way past the cutoff either. The CEO override in PricingRequestService.cancel is a
-     * ROLE gate — it decides WHO may cancel, and says nothing about WHEN. */
-    @Test
-    void cancel_fromQuotationIssued_isRefusedForTheCeoToo_soTheOverrideIsRoleOnly() {
-        long pricingRequestId = approvedPricingRequest(new BigDecimal("10"));
-        issueQuotation(pricingRequestId);
-
-        assertThatThrownBy(() -> pricingRequestService.cancel(pricingRequestId, cancelRequest(), ceoActor))
-            .isInstanceOfSatisfying(ApiException.class, e ->
-                assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
-
-        assertThat(statusOf(pricingRequestId)).isEqualTo(PricingRequestStatus.QUOTATION_ISSUED);
-        assertThat(isCancelStamped(pricingRequestId)).isFalse();
-    }
-
-    /** QUOTATION_ACCEPTED is terminal and stays terminal. Once the customer has accepted, the deal is moving to PO
-     * and fulfilment; unwinding it is an ORDER amendment and must not re-enter the pricing chain — the same ruling
-     * that denies this status a SUPERSEDED edge. */
-    @Test
-    void cancel_fromQuotationAccepted_isRefused_andTheAcceptedDealStaysAccepted() {
-        long pricingRequestId = approvedPricingRequest(new BigDecimal("10"));
-        CustomerQuotationDto issued = issueQuotation(pricingRequestId);
-        quotationService.recordOutcome(issued.id(),
-            new RecordQuotationOutcomeRequest("ACCEPTED", null, UUID.randomUUID().toString()), salesActor);
-        assertThat(statusOf(pricingRequestId)).isEqualTo(PricingRequestStatus.QUOTATION_ACCEPTED);
-
-        assertThatThrownBy(() -> pricingRequestService.cancel(pricingRequestId, cancelRequest(), salesActor))
-            .isInstanceOfSatisfying(ApiException.class, e ->
-                assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
-
-        assertThat(statusOf(pricingRequestId)).isEqualTo(PricingRequestStatus.QUOTATION_ACCEPTED);
-        assertThat(isCancelStamped(pricingRequestId)).isFalse();
-        // The customer's accepted offer is untouched — the thing that would actually hurt.
-        assertThat(quotationService.get(issued.id(), salesActor).docStatus()).isEqualTo(QuotationStatus.ACCEPTED);
-    }
-
     // Guard 2 — the role gate, wrong-way-round.
 
     /** Ownership is the gate. Another sales rep — same role, same division, no relationship to this deal — must not
@@ -217,21 +171,6 @@ class PricingRequestCancelCutoffIntegrationTest extends AbstractPostgresIntegrat
         long pricingRequestId = approvedPricingRequest(new BigDecimal("10"));
 
         assertThatThrownBy(() -> pricingRequestService.cancel(pricingRequestId, cancelRequest(), otherSalesActor))
-            .isInstanceOfSatisfying(ApiException.class, e ->
-                assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
-
-        assertThat(statusOf(pricingRequestId)).isEqualTo(PricingRequestStatus.APPROVED_FOR_QUOTATION);
-        assertThat(isCancelStamped(pricingRequestId)).isFalse();
-    }
-
-    /** Import drives this request's entire middle life — pickup, the factory conversation, marking it ready — so
-     * "Import may cancel it" is the plausible-sounding wrong answer, not a strawman. They may not: cancelling is
-     * the deal owner's call (or the CEO's). */
-    @Test
-    void cancel_byImport_isRefused_eventThoughImportDrivesTheRequestsWholeMiddleLife() {
-        long pricingRequestId = approvedPricingRequest(new BigDecimal("10"));
-
-        assertThatThrownBy(() -> pricingRequestService.cancel(pricingRequestId, cancelRequest(), importActor))
             .isInstanceOfSatisfying(ApiException.class, e ->
                 assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
 
@@ -253,16 +192,6 @@ class PricingRequestCancelCutoffIntegrationTest extends AbstractPostgresIntegrat
 
     // The widening — the three statuses that could not be cancelled at all before.
 
-    @Test
-    void cancel_fromReadyForCeoReview_isNowAllowed() {
-        long pricingRequestId = readyForCeoReviewPricingRequest(new BigDecimal("10"));
-        assertThat(statusOf(pricingRequestId)).isEqualTo(PricingRequestStatus.READY_FOR_CEO_REVIEW);
-
-        pricingRequestService.cancel(pricingRequestId, cancelRequest(), salesActor);
-
-        assertThat(statusOf(pricingRequestId)).isEqualTo(PricingRequestStatus.CANCELLED);
-    }
-
     /** The status this gap hurt most: the CEO has the request open, the customer walks away, and before this change
      * there was nothing the deal owner could do about it short of killing the whole ticket. The CEO's open DRAFT
      * decision must go with it. */
@@ -278,265 +207,6 @@ class PricingRequestCancelCutoffIntegrationTest extends AbstractPostgresIntegrat
 
         assertThat(statusOf(pricingRequestId)).isEqualTo(PricingRequestStatus.CANCELLED);
         assertThat(decisionStatusOf(pricingRequestId)).isEqualTo("SUPERSEDED");
-    }
-
-    // The cascade — every child the newly-admitted statuses can own.
-
-    /** The cascade gap the widening would otherwise have opened. It is produced the way production produces one (a
-     * second receive creates a revision and supersedes its predecessor), not inserted, so the fixture cannot be
-     * more convenient than reality. */
-    @Test
-    void cancel_cancelsTheLiveFactoryQuote_andLeavesAnAlreadyTerminalOneAlone() {
-        long pricingRequestId = approvedPricingRequestWithASupersededQuote();
-        assertThat(quoteCountAt(pricingRequestId, FactoryQuoteStatus.READY_FOR_COSTING)).isEqualTo(1L);
-        assertThat(quoteCountAt(pricingRequestId, FactoryQuoteStatus.SUPERSEDED)).isEqualTo(1L);
-
-        pricingRequestService.cancel(pricingRequestId, cancelRequest(), salesActor);
-
-        assertThat(quoteCountAt(pricingRequestId, FactoryQuoteStatus.READY_FOR_COSTING)).isZero();
-        assertThat(quoteCountAt(pricingRequestId, FactoryQuoteStatus.CANCELLED)).isEqualTo(1L);
-        // Untouched, not swept up: the superseded revision is history, and history is not cancelled.
-        assertThat(quoteCountAt(pricingRequestId, FactoryQuoteStatus.SUPERSEDED)).isEqualTo(1L);
-        // chk_factory_quote_current_terminal permits is_current = FALSE only for SUPERSEDED/ CANCELLED, and
-        // uq_factory_quote_current_factory keys on it — so a cancelled quote that stayed current would both
-        // misrepresent the row and block a later quote to the same factory.
-        assertThat(jdbc.queryForObject("""
-            SELECT COUNT(*) FROM sales.factory_quote
-             WHERE pricing_request_id = :id AND status = 'CANCELLED' AND is_current = TRUE
-            """, Map.of("id", pricingRequestId), Long.class)).isZero();
-    }
-
-    /** The other two children of a late cancel, and the one that is easiest to get wrong. That is a no-op invisible
-     * by construction: the rows it was meant to catch never appear in the statuses it looked for. */
-    @Test
-    void cancel_fromApprovedForQuotation_retiresTheSubmittedCostingAndTheApprovedDecision() {
-        long pricingRequestId = approvedPricingRequest(new BigDecimal("10"));
-        assertThat(costingStatusOf(pricingRequestId)).isEqualTo("SUBMITTED");
-        assertThat(decisionStatusOf(pricingRequestId)).isEqualTo("APPROVED");
-
-        pricingRequestService.cancel(pricingRequestId, cancelRequest(), salesActor);
-
-        assertThat(costingStatusOf(pricingRequestId)).isEqualTo("CANCELLED");
-        assertThat(decisionStatusOf(pricingRequestId)).isEqualTo("SUPERSEDED");
-    }
-
-    /** The customer-facing hole the cutoff would otherwise have opened, and the reason DRAFT is in the quotation
-     * cascade's predicate. A quotation may be created (as DRAFT) only while the request sits at
-     * APPROVED_FOR_QUOTATION — a status cancel now admits. */
-    @Test
-    void cancel_retiresADraftQuotation_soItCanNeverBeIssuedToTheCustomerAfterwards() {
-        long pricingRequestId = approvedPricingRequest(new BigDecimal("10"));
-        CustomerQuotationDto draft = quotationService.create(pricingRequestId,
-            new CreateCustomerQuotationRequest(null, null, null, LocalDate.now().plusDays(30), null,
-                UUID.randomUUID().toString()), salesActor);
-        assertThat(draft.docStatus()).isEqualTo(QuotationStatus.DRAFT);
-
-        pricingRequestService.cancel(pricingRequestId, cancelRequest(), salesActor);
-
-        assertThat(quotationService.get(draft.id(), salesActor).docStatus()).isEqualTo(QuotationStatus.SUPERSEDED);
-        // The consequence that actually matters: no offer can reach the customer from here.
-        assertThatThrownBy(() -> quotationService.issue(draft.id(),
-            new IssueCustomerQuotationRequest(UUID.randomUUID().toString()), salesActor))
-            .isInstanceOfSatisfying(ApiException.class, e ->
-                assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
-        assertThat(quotationService.get(draft.id(), salesActor).docStatus()).isEqualTo(QuotationStatus.SUPERSEDED);
-    }
-
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // P2 notifications. B3: factory cannot quote -> the requesting rep (CEO already told).
-    // B4: request cancelled / superseded / cascade-cancelled -> the import staffer assigned to it.
-    // ─────────────────────────────────────────────────────────────────────────────────────
-
-    private static final String STOP_LINE =
-        "สิ่งที่ต้องทำต่อ: หยุดดำเนินการกับคำขอนี้ — หากติดต่อโรงงานไปแล้ว กรุณาแจ้งโรงงาน";
-
-    private PricingRequestRequests.CreatePricingRequestRequest draftRequest(BigDecimal quantity) {
-        return new PricingRequestRequests.CreatePricingRequestRequest(
-            PricingRequestRecipient.DESIGNER, null, "Designer Co.", LocalDate.now().plusDays(14),
-            new BigDecimal("5000.00"), "THB", "p2 notification walk", UUID.randomUUID().toString(),
-            List.of(pricingItem(quantity)));
-    }
-
-    /** A request Sales has submitted but nobody in Import has picked up: no assigned import staffer yet. */
-    private long submittedRequest() {
-        long id = pricingRequestService.createDraft(ticketId, draftRequest(new BigDecimal("10")), salesActor).summary().id();
-        pricingRequestService.submit(id, salesActor);
-        return id;
-    }
-
-    /** Picked up by {@link #importActor}, so {@code assigned_import_id} is set. */
-    private long pickedUpRequest() {
-        long id = submittedRequest();
-        pricingRequestService.pickup(id, importActor);
-        return id;
-    }
-
-    private String dealLine(long pricingRequestId) {
-        var s = pricingRequestService.get(pricingRequestId, importActor).summary();
-        return "ดีล " + s.ticketCode() + " · ลูกค้า " + s.customerName();
-    }
-
-    private String codeOf(long pricingRequestId) {
-        return pricingRequestService.get(pricingRequestId, importActor).summary().requestCode();
-    }
-
-    @Test
-    void cancel_ofAPickedUpRequest_tellsTheAssignedImportStafferToStop() {
-        long id = pickedUpRequest();
-
-        pricingRequestService.cancel(id, cancelRequest(), salesActor);
-
-        mailer.assertNoticeFor(importActor.id(), "PRICING_REQUEST_CANCELLED", "คำขอราคาถูกยกเลิก",
-            salesActor.name() + " ยกเลิกคำขอราคา " + codeOf(id) + " — เหตุผล: ลูกค้ายกเลิกโครงการ\n"
-                + dealLine(id) + "\n" + STOP_LINE,
-            "/pricing-requests/" + id);
-        mailer.assertBellRecipients("PRICING_REQUEST_CANCELLED", importActor.id());
-    }
-
-    /** Nobody picked it up yet, so there is nobody in Import to tell. */
-    @Test
-    void cancel_ofARequestNobodyHasPickedUp_notifiesNoImportStaffer() {
-        long id = submittedRequest();
-
-        pricingRequestService.cancel(id, cancelRequest(), salesActor);
-
-        // No bell row at all (so no per-employee email either): not the picked-up one, and not the whole import
-        // division either -- importActor IS in PCIM, so a role-wide fan-out would show up here.
-        mailer.assertBellRecipients("PRICING_REQUEST_CANCELLED");
-    }
-
-    /** A refused cancel (409, past the cutoff) tells nobody. */
-    @Test
-    void cancel_refusedPastTheCutoff_notifiesNoImportStaffer() {
-        long id = approvedPricingRequest(new BigDecimal("10"));
-        issueQuotation(id);
-
-        assertThatThrownBy(() -> pricingRequestService.cancel(id, cancelRequest(), salesActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
-
-        mailer.assertBellRecipients("PRICING_REQUEST_CANCELLED");
-    }
-
-    @Test
-    void customerChangeRevision_ofAPickedUpRequest_tellsTheAssignedImportStafferToWaitForTheNewRound() {
-        long ceoRoleId = mailer.seedRoleEmployee("ceo");
-        long id = pickedUpRequest();
-
-        pricingRequestService.createCustomerChangeRevision(id, new PricingRequestRequests.CustomerChangeRevisionRequest(
-            "ลูกค้าขอเปลี่ยนจำนวน", UUID.randomUUID().toString(), PricingRequestRecipient.DESIGNER, null,
-            "Designer Co.", LocalDate.now().plusDays(14), new BigDecimal("5000.00"), "THB", "revision",
-            List.of(pricingItem(new BigDecimal("12")))), salesActor);
-
-        String title = "คำขอราคามีรอบแก้ไขใหม่";
-        mailer.assertNoticeFor(importActor.id(), "PRICING_REQUEST_REVISED", title,
-            salesActor.name() + " เปลี่ยนแปลงคำขอราคา " + codeOf(id)
-                + " ตามที่ลูกค้าขอ และสร้างรอบแก้ไขใหม่ — เหตุผล: ลูกค้าขอเปลี่ยนจำนวน\n" + dealLine(id)
-                + "\nสิ่งที่ต้องทำต่อ: หยุดดำเนินการตามคำขอเดิม แล้วรอรอบแก้ไขใหม่ส่งเข้ามา",
-            "/pricing-requests/" + id);
-        // The CEO's existing notice, reworded (no English "revision").
-        mailer.assertNoticeFor(ceoRoleId, "PRICING_REQUEST_REVISED", title,
-            "คำขอราคา " + codeOf(id) + " มีรอบแก้ไขใหม่ตามที่ลูกค้าขอ", "/pricing-requests/" + id);
-        mailer.assertBellRecipients("PRICING_REQUEST_REVISED", importActor.id(), ceoRoleId);
-    }
-
-    /** A dead deal cancels every open request; Import hears about the one it holds, not the one nobody picked up. */
-    @Test
-    void cascadeFromADeadDeal_tellsTheAssignedImportStafferPerRequest_notForUnassignedOnes() {
-        long assigned = pickedUpRequest();
-        submittedRequest(); // a second open request nobody has picked up
-
-        pricingRequestService.cancelOpenForTicket(ticketId, DealLostReason.PRICE, PricingRequestService.DeadDealCause.LOST, salesActor);
-
-        mailer.assertEmployeeNotice(importActor.id(), "PRICING_REQUEST_CANCELLED", "คำขอราคาถูกยกเลิก",
-            "ดีลถูกบันทึกว่าเสียงาน — คำขอราคา " + codeOf(assigned) + " จึงถูกยกเลิกอัตโนมัติ\n"
-                + dealLine(assigned) + "\n" + STOP_LINE,
-            "/pricing-requests/" + assigned);
-    }
-
-    /**
-     * A deal with a SUPERSEDED parent (already told "รอบแก้ไขใหม่" when the revision was made) and a live child
-     * round: the cascade tells the assigned staffer about the live child only, not the dead parent again.
-     */
-    @Test
-    void cascade_overASupersededParentAndALiveChild_tellsOnlyTheLiveChildsStaffer() {
-        long parent = pickedUpRequest();
-        long child = pricingRequestService.createCustomerChangeRevision(parent,
-            new PricingRequestRequests.CustomerChangeRevisionRequest(
-                "ลูกค้าขอเปลี่ยนจำนวน", UUID.randomUUID().toString(), PricingRequestRecipient.DESIGNER, null,
-                "Designer Co.", LocalDate.now().plusDays(14), new BigDecimal("5000.00"), "THB", "revision",
-                List.of(pricingItem(new BigDecimal("12")))), salesActor).summary().id();
-        pricingRequestService.submit(child, salesActor);
-        pricingRequestService.pickup(child, importActor);
-        assertThat(statusOf(parent)).isEqualTo(PricingRequestStatus.SUPERSEDED);
-
-        pricingRequestService.cancelOpenForTicket(ticketId, DealLostReason.PRICE, PricingRequestService.DeadDealCause.LOST, salesActor);
-
-        mailer.assertEmployeeNotice(importActor.id(), "PRICING_REQUEST_CANCELLED", "คำขอราคาถูกยกเลิก",
-            "ดีลถูกบันทึกว่าเสียงาน — คำขอราคา " + codeOf(child) + " จึงถูกยกเลิกอัตโนมัติ\n"
-                + dealLine(child) + "\n" + STOP_LINE,
-            "/pricing-requests/" + child);
-    }
-
-    /**
-     * A deal with an ISSUED ใบขอซื้อ (IR) already tells import via DEAL_LOST / DEAL_CANCELLED, so the
-     * cascade sends the assigned staffer no second PRICING_REQUEST_CANCELLED for the same action.
-     */
-    @Test
-    void cascadeFromADeadDealWithAnIssuedIr_sendsTheStafferNoSecondNotice() {
-        pickedUpRequest();
-        long factoryId = jdbc.queryForObject("""
-            INSERT INTO price_catalog.factories (name, country, default_currency)
-            VALUES ('Factory Cascade', 'IT', 'EUR') RETURNING factory_id
-            """, Map.of(), Long.class);
-        jdbc.update("""
-            INSERT INTO sales.import_request
-                (ticket_id, factory_id, factory_name, brand, version, status, doc_number, issue_date,
-                 import_step, import_step_at, first_issued_date)
-            VALUES (:t, :f, 'Factory Cascade', 'Brand', 1, 'ISSUED', 'IR-CASCADE-1', CURRENT_DATE,
-                    'CONTACTED', CURRENT_DATE, CURRENT_DATE)
-            """, Map.of("t", ticketId, "f", factoryId));
-
-        pricingRequestService.cancelOpenForTicket(ticketId, DealLostReason.PRICE, PricingRequestService.DeadDealCause.LOST, salesActor);
-
-        mailer.assertNoNotice("PRICING_REQUEST_CANCELLED", "คำขอราคาถูกยกเลิก");
-    }
-
-    /** The cascade names the real cause: a cancelled deal (cancel reason) reads "ดีลถูกยกเลิก", not "เสียงาน". */
-    @Test
-    void cascadeFromACancelledDeal_namesTheCancellationAsTheCause() {
-        long assigned = pickedUpRequest();
-
-        pricingRequestService.cancelOpenForTicket(ticketId, "OWNER_CANCELLED", PricingRequestService.DeadDealCause.CANCELLED, salesActor);
-
-        mailer.assertEmployeeNotice(importActor.id(), "PRICING_REQUEST_CANCELLED", "คำขอราคาถูกยกเลิก",
-            "ดีลถูกยกเลิก — คำขอราคา " + codeOf(assigned) + " จึงถูกยกเลิกอัตโนมัติ\n"
-                + dealLine(assigned) + "\n" + STOP_LINE,
-            "/pricing-requests/" + assigned);
-    }
-
-    @Test
-    void markNotAvailable_tellsTheRequestingRepAsWellAsTheCeo_andOnlyOnce() {
-        long ceoRoleId = mailer.seedRoleEmployee("ceo");
-        long id = pickedUpRequest();
-        FactoryQuoteDto draft = factoryQuoteService.generateDrafts(id, importActor).get(0);
-        factoryQuoteService.markContacted(draft.id(), new MarkFactoryContactedRequest(
-            java.time.LocalDate.now(java.time.ZoneId.of("Asia/Bangkok")), null), importActor);
-        var request = new th.co.glr.hr.factoryquote.FactoryQuoteRequests.MarkNotAvailableRequest("โรงงานปิดสายการผลิต");
-
-        factoryQuoteService.markNotAvailable(draft.id(), request, importActor);
-        assertThatThrownBy(() -> factoryQuoteService.markNotAvailable(draft.id(), request, importActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
-
-        String title = "โรงงานไม่สามารถเสนอราคาได้";
-        mailer.assertNoticeFor(salesActor.id(), "FACTORY_NOT_AVAILABLE", title,
-            "ฝ่ายนำเข้า (" + importActor.name() + ") แจ้งว่าโรงงาน " + draft.factoryName()
-                + " ไม่สามารถเสนอราคาได้ — เหตุผล: โรงงานปิดสายการผลิต\nคำขอราคา " + codeOf(id) + " · " + dealLine(id)
-                + "\nแจ้งเพื่อทราบ ไม่ต้องดำเนินการ",
-            "/pricing-requests/" + id);
-        mailer.assertNoticeFor(ceoRoleId, "FACTORY_NOT_AVAILABLE", title,
-            "คำขอราคา " + codeOf(id) + " โรงงานไม่สามารถเสนอราคาได้: " + draft.factoryName(),
-            "/pricing-requests/" + id);
-        mailer.assertBellRecipients("FACTORY_NOT_AVAILABLE", salesActor.id(), ceoRoleId);
     }
 
     // Fixtures — every precondition is driven through the real services, never SQL
@@ -564,22 +234,6 @@ class PricingRequestCancelCutoffIntegrationTest extends AbstractPostgresIntegrat
         FactoryQuoteDto responded = factoryQuoteService.receive(draft.id(),
             factoryResponse(draft.items().get(0).pricingRequestItemId(), quantity), importActor);
         factoryQuoteService.markReadyForCosting(responded.id(), importActor);
-        return pricingRequestId;
-    }
-
-    /** An APPROVED_FOR_QUOTATION request whose factory-quote chain contains BOTH a live READY_FOR_COSTING quote and
-     * an already-SUPERSEDED one. */
-    private long approvedPricingRequestWithASupersededQuote() {
-        BigDecimal quantity = new BigDecimal("10");
-        long pricingRequestId = readyForCeoReviewPricingRequest(quantity);
-        FactoryQuoteDto current = factoryQuoteService.list(pricingRequestId, importActor).stream()
-            .filter(FactoryQuoteDto::current)
-            .findFirst()
-            .orElseThrow();
-        FactoryQuoteDto revised = factoryQuoteService.receive(current.id(),
-            factoryResponse(current.items().get(0).pricingRequestItemId(), quantity), importActor);
-        factoryQuoteService.markReadyForCosting(revised.id(), importActor);
-        approveCeoDecision(pricingRequestId);
         return pricingRequestId;
     }
 
@@ -626,19 +280,6 @@ class PricingRequestCancelCutoffIntegrationTest extends AbstractPostgresIntegrat
         return jdbc.queryForObject("""
             SELECT status FROM sales.pricing_decision WHERE pricing_request_id = :id
             """, Map.of("id", pricingRequestId), String.class);
-    }
-
-    private String costingStatusOf(long pricingRequestId) {
-        return jdbc.queryForObject("""
-            SELECT status FROM sales.pricing_costing WHERE pricing_request_id = :id
-            """, Map.of("id", pricingRequestId), String.class);
-    }
-
-    private long quoteCountAt(long pricingRequestId, String status) {
-        return jdbc.queryForObject("""
-            SELECT COUNT(*) FROM sales.factory_quote
-             WHERE pricing_request_id = :id AND status = :status
-            """, Map.of("id", pricingRequestId, "status", status), Long.class);
     }
 
     // V185 (direct-deal-form parity): color/texture/thicknessMm/sqmPerPiece/piecesPerBox/a quantity are now

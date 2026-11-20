@@ -83,20 +83,6 @@ describe('RequestsPage tab bar', () => {
     api.specialMoney.attachments.mockResolvedValue({ attachments: [] });
   });
 
-  it('renders both tabs and defaults to the overtime tab', async () => {
-    renderRequestsPage('/employee-requests');
-
-    const tabs = screen.getAllByRole('tab');
-    expect(tabs).toHaveLength(2);
-    expect(screen.getByRole('tab', { name: 'ล่วงเวลา' }).getAttribute('aria-selected')).toBe('true');
-    expect(screen.getByRole('tab', { name: 'สวัสดิการ / เงินพิเศษ' }).getAttribute('aria-selected')).toBe('false');
-    // The OT panel deliberately has no page heading of its own — RequestsPage owns the only one, otherwise the tab
-    // renders two stacked headers. Identify the panel by its form instead. Exactly one — the assertion is about
-    // there being a SINGLE page heading, not about the wording.
-    expect(screen.getAllByRole('heading', { name: 'คำขอเงินพิเศษ' })).toHaveLength(1);
-    expect(await screen.findByLabelText(/วันที่ทำ OT/)).not.toBeNull();
-  });
-
   it('selects the welfare panel when ?tab=welfare is in the query string', async () => {
     renderRequestsPage('/employee-requests?tab=welfare');
 

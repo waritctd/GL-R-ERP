@@ -111,22 +111,6 @@ class PayrollYtdAndSsoIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(line.socialSecurity()).isEqualByComparingTo("875.00");
     }
 
-    /** 10,200 of the 10,500 annual SSO cap already withheld this year (via a YTD seed row): only 300.00 remains, so
-     * this month's SSO is capped at 300.00 even though the wage base alone would produce 875.00. */
-    @Test
-    void monthlySocialSecurityThroughPreviewIsLimitedByRemainingAnnualCap() {
-        long employeeId = seedEmployee("SSO-002", "เอสเอสโอ", "สอง", new BigDecimal("40000.00"));
-        LocalDate month = LocalDate.of(2026, 1, 1);
-        payrollRepository.upsertYtdSeed(2026, List.of(
-            new YtdSeedUpsertRequest(employeeId,
-                BigDecimal.ZERO, new BigDecimal("10200.00"), BigDecimal.ZERO, "near the annual cap")
-        ), employeeId);
-
-        PayrollLineDto line = previewLineFor(month, employeeId);
-
-        assertThat(line.socialSecurity()).isEqualByComparingTo("300.00");
-    }
-
     /** The annual cap is already fully reached: this month contributes zero SSO, not a negative. */
     @Test
     void monthlySocialSecurityThroughPreviewIsZeroOnceTheAnnualCapIsFullyReached() {

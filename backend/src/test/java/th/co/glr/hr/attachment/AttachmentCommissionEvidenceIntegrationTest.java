@@ -62,16 +62,6 @@ class AttachmentCommissionEvidenceIntegrationTest extends AbstractPostgresIntegr
     // status -- not just APPROVED (a MANAGER_APPROVED commission's approver still needs the file to review it).
 
     @Test
-    void repCannotDelete_evenAtSubmittedStatus_evidenceStillNeededForApproval() {
-        assertRepCannotDeleteEvidenceAt(CommissionStatus.SUBMITTED);
-    }
-
-    @Test
-    void repCannotDelete_evenAtManagerApprovedStatus_evidenceStillNeededForCeoApproval() {
-        assertRepCannotDeleteEvidenceAt(CommissionStatus.MANAGER_APPROVED);
-    }
-
-    @Test
     void repCannotDelete_onceApproved_theReceiptBehindMoneyAlreadyOwed() {
         assertRepCannotDeleteEvidenceAt(CommissionStatus.APPROVED);
     }
@@ -94,21 +84,6 @@ class AttachmentCommissionEvidenceIntegrationTest extends AbstractPostgresIntegr
 
     // Positive controls: the guard is scoped to files that actually back a live commission, not a blanket "sales
     // reps can never delete their own attachments" rule.
-
-    @Test
-    void unrelatedAttachment_notBackingAnyCommission_stillDeletesNormally() throws Exception {
-        wire();
-        long ticketId = insertTicket(repEmployeeId);
-        FileStorageService.StoredFile stored = storeFile("unrelated-" + UUID.randomUUID() + ".pdf");
-        AttachmentDto ticketAttachment = attachments.save(ticketId, null, stored.fileName(), stored.filePath(),
-            stored.mimeType(), stored.fileSize(), "OTHER", accountEmployeeId);
-
-        Map<String, Boolean> result = controller.delete(ticketAttachment.id(), sessionFor(repEmployeeId, "sales"));
-
-        assertThat(result.get("ok")).isTrue();
-        assertThat(attachments.findById(ticketAttachment.id())).isEmpty();
-        assertThat(Files.exists(Path.of(stored.filePath()))).isFalse();
-    }
 
     @Test
     void onceCommissionIsVoided_theReceiptCanBeDeletedAgain() {

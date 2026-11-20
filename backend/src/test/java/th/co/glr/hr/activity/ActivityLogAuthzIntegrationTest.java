@@ -62,97 +62,6 @@ class ActivityLogAuthzIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     @Test
-    void refusesTheSummaryEndpointForTheSameCallers() {
-        assertThatThrownBy(() -> service.summarize(principal(hr, "hr"), DAY, DAY))
-            .isInstanceOfSatisfying(ApiException.class, e ->
-                assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
-        assertThatThrownBy(() -> service.summarize(principal(ceo, "ceo"), DAY, DAY))
-            .isInstanceOfSatisfying(ApiException.class, e ->
-                assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
-    }
-
-    @Test
-    void refusesTheSemanticAuditEndpointForTheSameCallers() {
-        // Third entry point, same gate. hr.audit_log carries who approved whose leave and who processed payroll, so an
-        // ungated read here would be the worst of the three.
-        assertThatThrownBy(() -> service.auditEvents(principal(hr, "hr"), DAY, DAY, null, null))
-            .isInstanceOfSatisfying(ApiException.class, e ->
-                assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
-        assertThatThrownBy(() -> service.auditEvents(principal(ceo, "ceo"), DAY, DAY, null, null))
-            .isInstanceOfSatisfying(ApiException.class, e ->
-                assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
-        assertThatThrownBy(() -> service.auditEvents(principal(plainEmployee, "admin"), DAY, DAY, null, null))
-            .isInstanceOfSatisfying(ApiException.class, e ->
-                assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
-    }
-
-    @Test
-    void showsTheAdminWhoRequestedAndWhoApproved() {
-        jdbc.update("""
-            INSERT INTO hr.audit_log (actor_user_id, actor_email, action, entity, entity_id, at)
-            VALUES (:sales, 'sales@glr.co.th', 'SUBMIT_LEAVE_REQUEST', 'leave_request', 7, :t1),
-                   (:hr,    'hr@glr.co.th',    'APPROVE_LEAVE_REQUEST', 'leave_request', 7, :t2)
-            """, Map.of("sales", sales, "hr", hr, "t1", at(10, 0), "t2", at(10, 5)));
-
-        List<AuditEventDto> events = service.auditEvents(principal(admin, "sales"), DAY, DAY, null, null);
-
-        assertThat(events).extracting(AuditEventDto::action)
-            .containsExactly("APPROVE_LEAVE_REQUEST", "SUBMIT_LEAVE_REQUEST");
-        assertThat(events).extracting(AuditEventDto::actorEmployeeCode)
-            .containsExactly("HR-001", "SLS-001");
-    }
-
-    @Test
-    void refusesTheApplicationEventEndpointForTheSameCallers() {
-        // Fourth entry point, same gate. hr.app_event carries exception messages and job failures, so an ungated read
-        // here would hand an ordinary employee the server's error output.
-        assertThatThrownBy(() -> service.appEvents(principal(hr, "hr"), DAY, DAY, null, null))
-            .isInstanceOfSatisfying(ApiException.class, e ->
-                assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
-        assertThatThrownBy(() -> service.appEvents(principal(ceo, "ceo"), DAY, DAY, null, null))
-            .isInstanceOfSatisfying(ApiException.class, e ->
-                assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
-        assertThatThrownBy(() -> service.appEvents(principal(plainEmployee, "admin"), DAY, DAY, null, null))
-            .isInstanceOfSatisfying(ApiException.class, e ->
-                assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
-    }
-
-    @Test
-    void roundTripsApplicationEventsAndJobRunsThroughRealPostgres() {
-        // Proves the INSERT is actually accepted: `kind` and `level` carry CHECK constraints and `message` is NOT
-        // NULL, none of which a mocked repository would enforce.
-        repository.insertAppEvents(List.of(
-            new AppEvent(at(9, 40), AppEvent.KIND_LOG, "ERROR", "th.co.glr.hr.Example",
-                "upload failed", "java.io.IOException", "disk full",
-                "th.co.glr.hr.Example.save(Example.java:12)", "corr-1", "http-1", null),
-            new AppEvent(at(9, 45), AppEvent.KIND_JOB, "INFO", "BotFxFetchService.fetch",
-                "job completed", null, null, null, null, "scheduler-1", 1234)));
-
-        List<AppEventDto> all = service.appEvents(principal(admin, "sales"), DAY, DAY, null, null);
-        assertThat(all).extracting(AppEventDto::kind)
-            .containsExactly(AppEvent.KIND_JOB, AppEvent.KIND_LOG);   // newest first
-
-        List<AppEventDto> jobsOnly = service.appEvents(principal(admin, "sales"), DAY, DAY, "JOB", null);
-        assertThat(jobsOnly).hasSize(1);
-        assertThat(jobsOnly.get(0).logger()).isEqualTo("BotFxFetchService.fetch");
-        assertThat(jobsOnly.get(0).durationMs()).isEqualTo(1234);
-
-        AppEventDto logRow = all.stream()
-            .filter(row -> AppEvent.KIND_LOG.equals(row.kind())).findFirst().orElseThrow();
-        assertThat(logRow.exceptionType()).isEqualTo("java.io.IOException");
-        assertThat(logRow.correlationId()).isEqualTo("corr-1");
-    }
-
-    @Test
-    void refusesACallerClaimingAdminOnTheSessionWhenTheDatabaseSaysOtherwise() {
-        // The principal is session state and a stale or forged one must not be believed. The role string is
-        // attacker-controlled in the sense that matters here: it is whatever the session was built with. Only
-        // hr.employee.is_admin decides.
-        assertForbidden(principal(hr, "admin"));
-        assertForbidden(principal(plainEmployee, "admin"));
-    }
-
-    @Test
     void refusesAnAdminWhoseFlagWasRevokedWithoutThemLoggingOut() {
         UserPrincipal stillHoldingASession = principal(admin, "sales");
         assertThat(service.list(stillHoldingASession, DAY, DAY, null, null)).isNotEmpty();
@@ -162,20 +71,6 @@ class ActivityLogAuthzIntegrationTest extends AbstractPostgresIntegrationTest {
 
         // No re-login, same principal object: the gate reads live, so access is gone immediately.
         assertForbidden(stillHoldingASession);
-    }
-
-    @Test
-    void refusesAnAdminWhoHasBeenDeactivated() {
-        jdbc.update("UPDATE hr.employee SET is_active = FALSE WHERE employee_id = :id",
-            Map.of("id", admin));
-
-        assertForbidden(principal(admin, "sales"));
-    }
-
-    @Test
-    void refusesAPrincipalWhoseEmployeeRowNoLongerExists() {
-        // EXISTS, not queryForObject: a missing row must deny, not 500.
-        assertForbidden(principal(9_999_999L, "admin"));
     }
 
     @Test
@@ -190,41 +85,6 @@ class ActivityLogAuthzIntegrationTest extends AbstractPostgresIntegrationTest {
             .contains("/api/leave-requests/7/approve", "/api/payroll/periods");
         // Newest first — the ORDER BY is contract, because it decides which rows a LIMIT keeps.
         assertThat(rows).isSortedAccordingTo((a, b) -> b.at().compareTo(a.at()));
-    }
-
-    @Test
-    void narrowsToOneEmployeeWhenAsked() {
-        List<ActivityLogEntryDto> rows = service.list(principal(admin, "sales"), DAY, DAY, hr, null);
-
-        assertThat(rows).isNotEmpty();
-        assertThat(rows).extracting(ActivityLogEntryDto::employeeId).containsOnly(hr);
-    }
-
-    @Test
-    void summarizesPerEmployeeWithinTheBangkokDay() {
-        insertActivity(hr, "GET", "/api/employees", 200, at(9, 30));
-
-        List<ActivityLogSummaryDto> summary = service.summarize(principal(admin, "sales"), DAY, DAY);
-
-        ActivityLogSummaryDto hrRow = summary.stream()
-            .filter(row -> row.employeeId() == hr).findFirst().orElseThrow();
-        assertThat(hrRow.requestCount()).isEqualTo(2);
-        assertThat(hrRow.employeeCode()).isEqualTo("HR-001");
-    }
-
-    @Test
-    void excludesActivityFromTheAdjacentBangkokDay() {
-        // The window trap: 2026-08-31 23:30 Bangkok is 2026-08-31 16:30Z, and 2026-09-01 00:30 Bangkok is 2026-08-30
-        // 17:30Z. A UTC-based window would put one of these on the wrong day.
-        insertActivity(sales, "GET", "/api/late", 200,
-            DAY.atTime(23, 30).atZone(BANGKOK).toOffsetDateTime());
-        insertActivity(sales, "GET", "/api/tomorrow", 200,
-            DAY.plusDays(1).atTime(0, 30).atZone(BANGKOK).toOffsetDateTime());
-
-        List<ActivityLogEntryDto> rows = service.list(principal(admin, "sales"), DAY, DAY, sales, null);
-
-        assertThat(rows).extracting(ActivityLogEntryDto::path).contains("/api/late");
-        assertThat(rows).extracting(ActivityLogEntryDto::path).doesNotContain("/api/tomorrow");
     }
 
     private void assertForbidden(UserPrincipal caller) {

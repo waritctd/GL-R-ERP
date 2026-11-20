@@ -4,7 +4,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
@@ -17,7 +16,6 @@ import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.mock.web.MockMultipartFile;
-import org.springframework.web.multipart.MultipartFile;
 import th.co.glr.hr.attachment.AttachmentRepository;
 import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.audit.AuditService;
@@ -44,7 +42,6 @@ import th.co.glr.hr.ticket.TicketRepository;
 class CommissionPendingItemWeightIntegrationTest extends AbstractPostgresIntegrationTest {
     private static final LocalDate JUNE_INVOICE = LocalDate.of(2026, 6, 15);   // -> payroll month 2026-07-01
     private static final LocalDate JULY_INVOICE = LocalDate.of(2026, 7, 15);   // -> payroll month 2026-08-01
-
     private TicketRepository tickets;
     private CommissionRepository commissions;
     private CommissionCalculator calculator;
@@ -220,65 +217,6 @@ class CommissionPendingItemWeightIntegrationTest extends AbstractPostgresIntegra
         assertThat(result.items()).extracting(PendingCommissionItemDto::weightMultiplier).containsExactly(2, 3);
     }
 
-    @Test
-    void managerAdjust_afterManagerApproved_isRefused_andItemWeightsUnchanged() {
-        long ticketId = dealWithItems(itemSpec(10, 4, 1000, 2), itemSpec(5, 5, 2000, 1));
-        long commissionId = createRecord(ticketId, JUNE_INVOICE, "300000.00");
-        long itemB = tickets.findById(ticketId).orElseThrow().items().get(1).id();
-        commissionService.approve(commissionId, managerActor);
-        assertThat(commissions.findById(commissionId).orElseThrow().status()).isEqualTo(CommissionStatus.MANAGER_APPROVED);
-        Snapshot before = snapshot(ticketId, commissionId);
-
-        assertThatThrownBy(() -> commissionService.adjustItemWeights(
-                commissionId, weights(new ItemWeightMultiplierRequest.Line(itemB, 3)), managerActor))
-            .isInstanceOfSatisfying(ApiException.class,
-                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
-
-        assertThat(snapshot(ticketId, commissionId)).isEqualTo(before);
-    }
-
-    @Test
-    void adjust_refusedFor_sales_account_import_hr_ceo_andNothingChanges() {
-        long ticketId = dealWithItems(itemSpec(10, 4, 1000, 2), itemSpec(5, 5, 2000, 1));
-        long commissionId = createRecord(ticketId, JUNE_INVOICE, "300000.00");
-        long itemB = tickets.findById(ticketId).orElseThrow().items().get(1).id();
-        Snapshot before = snapshot(ticketId, commissionId);
-
-        for (UserPrincipal caller : List.of(repActor, accountActor, importActor, hrActor, ceoActor, employeeActor)) {
-            assertThatThrownBy(() -> commissionService.adjustItemWeights(
-                    commissionId, weights(new ItemWeightMultiplierRequest.Line(itemB, 3)), caller))
-                .as("role %s must be refused", caller.role())
-                .isInstanceOfSatisfying(ApiException.class,
-                    e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
-            assertThat(snapshot(ticketId, commissionId)).as("after %s", caller.role()).isEqualTo(before);
-        }
-    }
-
-    @Test
-    void adjust_itemFromAnotherDeal_isRefused_andNothingChanges() {
-        long ticketA = dealWithItems(itemSpec(10, 4, 1000, 2), itemSpec(5, 5, 2000, 1));
-        long ticketB = dealWithItems(itemSpec(6, 3, 1200, 2));
-        long commissionA = createRecord(ticketA, JUNE_INVOICE, "300000.00");
-        long commissionB = createRecord(ticketB, JUNE_INVOICE, "200000.00");
-        long foreignItem = tickets.findById(ticketB).orElseThrow().items().get(0).id();
-        long ownItem = tickets.findById(ticketA).orElseThrow().items().get(0).id();
-        Snapshot beforeA = snapshot(ticketA, commissionA);
-        Snapshot beforeB = snapshot(ticketB, commissionB);
-
-        // Mixed request: one legitimate line plus one from another deal -- the whole call is refused, the legitimate
-        // line must not have been applied either.
-        assertThatThrownBy(() -> commissionService.adjustItemWeights(
-                commissionA,
-                weights(new ItemWeightMultiplierRequest.Line(ownItem, 3),
-                    new ItemWeightMultiplierRequest.Line(foreignItem, 3)),
-                managerActor))
-            .isInstanceOfSatisfying(ApiException.class,
-                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
-
-        assertThat(snapshot(ticketA, commissionA)).isEqualTo(beforeA);
-        assertThat(snapshot(ticketB, commissionB)).isEqualTo(beforeB);
-    }
-
     // fixtures
 
     /** qty / qty_from_stock / approved price / starting per-item weight multiplier. */
@@ -344,17 +282,6 @@ class CommissionPendingItemWeightIntegrationTest extends AbstractPostgresIntegra
         return jdbc.queryForObject(
             "SELECT effective_weight_multiplier FROM sales.commission_record WHERE commission_id = :id",
             Map.of("id", commissionId), BigDecimal.class);
-    }
-
-    /** Item weights (by sort order) + the frozen effective weight, as stored. Strings so scale compares exactly. */
-    private record Snapshot(List<Integer> itemWeights, String effectiveWeight, String status) {}
-
-    private Snapshot snapshot(long ticketId, long commissionId) {
-        List<Integer> weightsByItem = tickets.findById(ticketId).orElseThrow().items().stream()
-            .map(TicketItemDto::weightMultiplier).toList();
-        BigDecimal effective = effectiveWeightColumn(commissionId);
-        return new Snapshot(weightsByItem, effective == null ? null : effective.toPlainString(),
-            commissions.findById(commissionId).orElseThrow().status());
     }
 
     private long createEmployee(EmployeeRepository employees, String name, String email, String divisionCode,

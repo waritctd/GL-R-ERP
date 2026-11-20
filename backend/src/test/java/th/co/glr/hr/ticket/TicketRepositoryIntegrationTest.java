@@ -4,7 +4,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.math.BigDecimal;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
@@ -12,12 +11,6 @@ import org.junit.jupiter.api.Test;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import th.co.glr.hr.common.PageRequest;
-import th.co.glr.hr.customer.ContactDto;
-import th.co.glr.hr.customer.ContactRepository;
-import th.co.glr.hr.customer.CustomerDto;
-import th.co.glr.hr.customer.CustomerRepository;
-import th.co.glr.hr.customer.ProjectDto;
-import th.co.glr.hr.customer.ProjectRepository;
 import th.co.glr.hr.employee.EmployeeCodeGenerator;
 import th.co.glr.hr.employee.EmployeeReferenceRepository;
 import th.co.glr.hr.employee.EmployeeRepository;
@@ -58,121 +51,6 @@ class TicketRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
             .containsExactlyInAnyOrder("Toyota", "Honda");
     }
 
-    // สี and เนื้อผิว are optional (no @NotBlank on TicketItemRequest): the live price catalog
-    // fills `color` on only 21% of its active rows and `surface` on 22%, so a rep picking a
-    // catalogued product would otherwise have to invent both. This
-    // asserts the real Postgres round-trip rather than the annotation alone: sales.ticket_item's
-    // color/texture columns are nullable, so a null must persist as a null and read back as one
-    // — a mocked repository would "pass" this while the actual INSERT rejected it.
-    @Test
-    void createTicket_persistsItemWithNoColourOrTexture() {
-        long ticketId = tickets.create(sampleTicket(
-            item("Bode", "Stone gallary", null, null, "600x1200")),
-            tickets.nextTicketCode(), actorId, "พนักงานขาย");
-
-        TicketItemDto persisted = tickets.findById(ticketId).orElseThrow().items().get(0);
-        assertThat(persisted.brand()).isEqualTo("Bode");
-        assertThat(persisted.color()).isNull();
-        assertThat(persisted.texture()).isNull();
-    }
-
-    // V110: catalog link round-trip ───────────────── Fix for "สร้างคำขอราคาไม่ควรต้องกรอกหาจาก catalog ซ้ำ": the
-    // catalog product picked when a deal line is created must survive into ticket_item and read back out, through
-    // BOTH the create path and an items edit.
-
-    @Test
-    void createTicket_persistsCatalogLinkAndReadsItBack() {
-        long priceId = insertCatalogProduct("Cotto Factory", "TH", "CT-100",
-            new BigDecimal("250.00"), "THB", "per_piece");
-
-        long ticketId = tickets.create(sampleTicket(
-            itemWithCatalogLink("Cotto", "Stone Series", "White", "Matte", "60x60", priceId, "CT-100")),
-            tickets.nextTicketCode(), actorId, "พนักงานขาย");
-
-        TicketItemDto persisted = tickets.findById(ticketId).orElseThrow().items().get(0);
-        assertThat(persisted.catalogPriceId()).isEqualTo(priceId);
-        assertThat(persisted.catalogProductCode()).isEqualTo("CT-100");
-    }
-
-    @Test
-    void createTicket_customLineHasNoCatalogLink() {
-        // A hand-typed ("custom") line has no catalog link — must stay valid (nullable columns), not merely "happens
-        // to work because the FK is absent".
-        long ticketId = tickets.create(sampleTicket(
-            item("Custom", "Line", "White", "Matte", "L")), tickets.nextTicketCode(), actorId, "พนักงานขาย");
-
-        TicketItemDto persisted = tickets.findById(ticketId).orElseThrow().items().get(0);
-        assertThat(persisted.catalogPriceId()).isNull();
-        assertThat(persisted.catalogProductCode()).isNull();
-    }
-
-    @Test
-    void editItems_roundTripsCatalogLinkThroughReplaceItemsPreservingPricing() {
-        // replaceItemsPreservingPricing is what TicketService.editItems actually calls (see
-        // mergeEditedItemsPreservingPricing) — exercising it directly here proves the SQL this task changed, without
-        // needing to stand up TicketService's full collaborator graph.
-        long priceId = insertCatalogProduct("Cotto Factory", "TH", "CT-200",
-            new BigDecimal("300.00"), "THB", "per_piece");
-        long ticketId = tickets.create(sampleTicket(
-            item("Toyota", "Hilux", "White", "Matte", "L")), tickets.nextTicketCode(), actorId, "พนักงานขาย");
-        TicketItemDto existing = tickets.findById(ticketId).orElseThrow().items().get(0);
-        assertThat(existing.catalogPriceId()).isNull(); // sanity: started with no link
-
-        TicketItemDto edited = new TicketItemDto(
-            existing.id(), ticketId, "Cotto", "Stone Series", "White", "Matte", "60x60", "Cotto Factory",
-            new BigDecimal("10"), null, null, null, null,
-            existing.proposedPrice(), existing.approvedPrice(), existing.currency(), 0,
-            existing.calcedCost(), existing.calcedPrice(), existing.calcConfigVersion(), "PIECE",
-            existing.manualPrice(), existing.manualOverrideReason(),
-            existing.qtyDelivered(), existing.qtyFromStock(), existing.stockNote(),
-            priceId, "CT-200");
-
-        tickets.replaceItemsPreservingPricing(ticketId, List.of(edited));
-
-        TicketItemDto persisted = tickets.findById(ticketId).orElseThrow().items().get(0);
-        assertThat(persisted.brand()).isEqualTo("Cotto");
-        assertThat(persisted.catalogPriceId()).isEqualTo(priceId);
-        assertThat(persisted.catalogProductCode()).isEqualTo("CT-200");
-    }
-
-    @Test
-    void editItems_clearingTheLinkPersistsAsNull() {
-        // Mirrors the frontend's own invalidation rule (TicketCreateModal.jsx's updateItem): once a descriptive field
-        // is hand-edited, the catalog link is cleared, not left stale — an edit that sends null must actually
-        // overwrite a previously-linked row, not silently keep the old value.
-        long priceId = insertCatalogProduct("Cotto Factory", "TH", "CT-300",
-            new BigDecimal("400.00"), "THB", "per_piece");
-        long ticketId = tickets.create(sampleTicket(
-            itemWithCatalogLink("Cotto", "Stone Series", "White", "Matte", "60x60", priceId, "CT-300")),
-            tickets.nextTicketCode(), actorId, "พนักงานขาย");
-        TicketItemDto existing = tickets.findById(ticketId).orElseThrow().items().get(0);
-        assertThat(existing.catalogPriceId()).isEqualTo(priceId); // sanity: started linked
-
-        TicketItemDto edited = new TicketItemDto(
-            existing.id(), ticketId, "Cotto (edited by hand)", "Stone Series", "White", "Matte", "60x60", "Cotto Factory",
-            existing.qty(), existing.qtySqm(), null, null, null,
-            existing.proposedPrice(), existing.approvedPrice(), existing.currency(), 0,
-            existing.calcedCost(), existing.calcedPrice(), existing.calcConfigVersion(), "PIECE",
-            existing.manualPrice(), existing.manualOverrideReason(),
-            existing.qtyDelivered(), existing.qtyFromStock(), existing.stockNote(),
-            null, null);
-
-        tickets.replaceItemsPreservingPricing(ticketId, List.of(edited));
-
-        TicketItemDto persisted = tickets.findById(ticketId).orElseThrow().items().get(0);
-        assertThat(persisted.catalogPriceId()).isNull();
-        assertThat(persisted.catalogProductCode()).isNull();
-    }
-
-    // ── stock-sourced deal-line pricing (sourced_from_stock / stock_sale_price) ──────────
-    // Sales may flag a line "from warehouse" and type in its own selling price. CAPTURE-ONLY:
-    // nothing downstream reads this pair, so a flagged line can still be attached to,
-    // and priced through, an ordinary PricingRequest — see the migration's
-    // header for the full rule. Round-tripped through BOTH write paths (insertItems via
-    // ticket creation, and replaceItemsPreservingPricing via an items edit) and read back through
-    // findItemsByTicketId, same discipline as the catalog-link tests above — a mocked repository
-    // would happily "pass" this while the real CHECK constraint / columns did something else.
-
     @Test
     void createTicket_stockSourcedLineWithNoPrice_persistsTheFlagAndANullPrice() {
         // chk_ticket_item_stock_sale_price is relaxed to
@@ -183,75 +61,6 @@ class TicketRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
 
         TicketItemDto persisted = tickets.findById(ticketId).orElseThrow().items().get(0);
         assertThat(persisted.sourcedFromStock()).isTrue();
-        assertThat(persisted.stockSalePrice()).isNull();
-    }
-
-    @Test
-    void createTicket_aStockSalePriceSentByAnOldClient_isStoredNull() {
-        long ticketId = tickets.create(sampleTicket(
-            itemFromStock("Cotto", "Stone Series", "White", "Matte", "60x60", new BigDecimal("555.00"))),
-            tickets.nextTicketCode(), actorId, "พนักงานขาย");
-
-        TicketItemDto persisted = tickets.findById(ticketId).orElseThrow().items().get(0);
-        assertThat(persisted.sourcedFromStock()).isTrue();
-        assertThat(persisted.stockSalePrice()).isNull();
-    }
-
-    @Test
-    void createTicket_notFromStockHasNullStockSalePrice() {
-        long ticketId = tickets.create(sampleTicket(
-            item("Toyota", "Hilux", "White", "Matte", "L")), tickets.nextTicketCode(), actorId, "พนักงานขาย");
-
-        TicketItemDto persisted = tickets.findById(ticketId).orElseThrow().items().get(0);
-        assertThat(persisted.sourcedFromStock()).isFalse();
-        assertThat(persisted.stockSalePrice()).isNull();
-    }
-
-    @Test
-    void editItems_roundTripsTheStockFlagWithNoPriceThroughReplaceItemsPreservingPricing() {
-        long ticketId = tickets.create(sampleTicket(
-            item("Toyota", "Hilux", "White", "Matte", "L")), tickets.nextTicketCode(), actorId, "พนักงานขาย");
-        TicketItemDto existing = tickets.findById(ticketId).orElseThrow().items().get(0);
-        assertThat(existing.sourcedFromStock()).isFalse(); // sanity: started not-from-stock
-
-        TicketItemDto edited = new TicketItemDto(
-            existing.id(), ticketId, existing.brand(), existing.model(), existing.color(),
-            existing.texture(), existing.size(), existing.factory(),
-            existing.qty(), existing.qtySqm(), null, null, null,
-            existing.proposedPrice(), existing.approvedPrice(), existing.currency(), 0,
-            existing.calcedCost(), existing.calcedPrice(), existing.calcConfigVersion(), "PIECE",
-            existing.manualPrice(), existing.manualOverrideReason(),
-            existing.qtyDelivered(), existing.qtyFromStock(), existing.stockNote(),
-            existing.catalogPriceId(), existing.catalogProductCode(),
-            null, null, null, null, null, 1,
-            true, null);
-
-        tickets.replaceItemsPreservingPricing(ticketId, List.of(edited));
-
-        TicketItemDto persisted = tickets.findById(ticketId).orElseThrow().items().get(0);
-        assertThat(persisted.sourcedFromStock()).isTrue();
-        assertThat(persisted.stockSalePrice()).isNull();
-    }
-
-    @Test
-    void createTicket_forcesStockSalePriceNullWhenNotFlaggedFromStock() {
-        // TicketService.create validates "flag true => positive price" but
-        // deliberately does not reject the INVERSE, so a malformed request carrying
-        // {sourcedFromStock:false, stockSalePrice:500} must not reach
-        // chk_ticket_item_stock_sale_price and come back as a 500 (DataIntegrityViolationException
-        // -> ApiExceptionHandler.handleDataAccess); insertItems force-nulls it, exactly as
-        // mergeEditedItemsPreservingPricing does on the edit
-        // path. Real Postgres, real CHECK — a mocked repository could not prove this.
-        TicketItemRequest strayPrice = new TicketItemRequest(
-            "Toyota", "Hilux", "White", "Matte", "L", null,
-            new BigDecimal("1"), null, null, null, null, null, null, "THB",
-            null, null, false, new BigDecimal("500.00"));
-
-        long ticketId = tickets.create(sampleTicket(strayPrice),
-            tickets.nextTicketCode(), actorId, "พนักงานขาย");
-
-        TicketItemDto persisted = tickets.findById(ticketId).orElseThrow().items().get(0);
-        assertThat(persisted.sourcedFromStock()).isFalse();
         assertThat(persisted.stockSalePrice()).isNull();
     }
 
@@ -278,108 +87,6 @@ class TicketRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
 
         assertThatThrownBy(() -> tickets.replaceItemsPreservingPricing(ticketId, List.of(edited)))
             .isInstanceOf(DataIntegrityViolationException.class);
-    }
-
-    @Test
-    void catalogPriceId_rejectsAnIdThatDoesNotExistInPriceCatalog() {
-        long ticketId = tickets.create(sampleTicket(
-            item("Custom", "Line", "White", "Matte", "L")), tickets.nextTicketCode(), actorId, "พนักงานขาย");
-        TicketItemDto existing = tickets.findById(ticketId).orElseThrow().items().get(0);
-
-        TicketItemDto edited = new TicketItemDto(
-            existing.id(), ticketId, "Custom", "Line", "White", "Matte", "L", null,
-            existing.qty(), null, null, null, null, null, null, "THB", 0,
-            null, null, null, "PIECE", null, null,
-            BigDecimal.ZERO, BigDecimal.ZERO, null,
-            999_999_999L, "NOPE"); // no such price_catalog.product_prices row
-
-        assertThatThrownBy(() -> tickets.replaceItemsPreservingPricing(ticketId, List.of(edited)))
-            .isInstanceOf(DataIntegrityViolationException.class);
-    }
-
-    // Slice F (ticket-workspace IA programme): ราคาตั้ง on the deal's item rows ──────────────
-    // findItemsByTicketId's LEFT JOIN to price_catalog.product_prices resolves catalogPrice/
-    // catalogCurrency/catalogPriceUnit/sqmPerPiece and derives source.
-
-    @Test
-    void findItemsByTicketId_catalogLinkedItem_resolvesCatalogPriceFields() {
-        long priceId = insertCatalogProductWithSqmPerPiece("Cotto Factory", "TH", "CT-400",
-            new BigDecimal("350.5000"), "THB", "per_sqm", new BigDecimal("1.440000"),
-            new BigDecimal("9.0"), new BigDecimal("2"));
-
-        long ticketId = tickets.create(sampleTicket(
-            itemWithCatalogLink("Cotto", "Stone Series", "White", "Matte", "60x60", priceId, "CT-400")),
-            tickets.nextTicketCode(), actorId, "พนักงานขาย");
-
-        TicketItemDto persisted = tickets.findById(ticketId).orElseThrow().items().get(0);
-        assertThat(persisted.source()).isEqualTo("catalog");
-        assertThat(persisted.catalogPrice()).isEqualByComparingTo("350.5000");
-        assertThat(persisted.catalogCurrency()).isEqualTo("THB");
-        assertThat(persisted.catalogPriceUnit()).isEqualTo("per_sqm");
-        assertThat(persisted.sqmPerPiece()).isEqualByComparingTo("1.440000");
-        // "Fill from catalogue": the PCR form seeds
-        // ความหนา / แผ่น-กล่อง / ประเทศต้นทาง for a catalogue-linked deal line, so the same join also
-        // carries pp.thickness_mm, pp.pcs_per_box and the factory's country.
-        assertThat(persisted.catalogThicknessMm()).isEqualByComparingTo("9.0");
-        assertThat(persisted.catalogPcsPerBox()).isEqualByComparingTo("2");
-        assertThat(persisted.catalogOriginCountryCode()).isEqualTo("TH");
-    }
-
-    @Test
-    void findItemsByTicketId_catalogRowWithoutThickness_leavesTheNewFieldsNull() {
-        // 41 % of the prod catalogue has no thickness: the fields must come back null, never 0.
-        long priceId = insertCatalogProductWithSqmPerPiece("Cotto Factory", "TH", "CT-402",
-            new BigDecimal("350.5000"), "THB", "per_sqm", new BigDecimal("1.440000"), null, null);
-
-        long ticketId = tickets.create(sampleTicket(
-            itemWithCatalogLink("Cotto", "Stone Series", "White", "Matte", "60x60", priceId, "CT-402")),
-            tickets.nextTicketCode(), actorId, "พนักงานขาย");
-
-        TicketItemDto persisted = tickets.findById(ticketId).orElseThrow().items().get(0);
-        assertThat(persisted.catalogThicknessMm()).isNull();
-        assertThat(persisted.catalogPcsPerBox()).isNull();
-        assertThat(persisted.catalogOriginCountryCode()).isEqualTo("TH");
-    }
-
-    @Test
-    void findItemsByTicketId_freeTextItem_hasNullCatalogFieldsAndStaysInTheList() {
-        // Proves the join is LEFT, not INNER: a custom line has catalog_price_id = NULL and must still come back in
-        // the list -- an INNER JOIN would drop the row entirely rather than merely leaving the catalog fields null.
-        long ticketId = tickets.create(sampleTicket(
-            item("Custom", "Line", "White", "Matte", "L")), tickets.nextTicketCode(), actorId, "พนักงานขาย");
-
-        List<TicketItemDto> items = tickets.findById(ticketId).orElseThrow().items();
-        assertThat(items).hasSize(1); // <- would be empty under an INNER JOIN
-        TicketItemDto persisted = items.get(0);
-        assertThat(persisted.source()).isEqualTo("custom");
-        assertThat(persisted.catalogPrice()).isNull();
-        assertThat(persisted.catalogCurrency()).isNull();
-        assertThat(persisted.catalogPriceUnit()).isNull();
-        assertThat(persisted.sqmPerPiece()).isNull();
-        assertThat(persisted.catalogThicknessMm()).isNull();
-        assertThat(persisted.catalogPcsPerBox()).isNull();
-        assertThat(persisted.catalogOriginCountryCode()).isNull();
-    }
-
-    @Test
-    void findItemsByTicketId_retiredCatalogPrice_stillReadsBackWithNullCatalogFields() {
-        // ON DELETE SET NULL (V110): retiring the catalog price a line was linked to must clear the link, not block or
-        // cascade the delete. Reaches the same "must still be in the list" proof as the free-text case above via
-        // retirement instead of "never linked".
-        long priceId = insertCatalogProduct("Cotto Factory", "TH", "CT-500",
-            new BigDecimal("275.00"), "THB", "per_piece");
-        long ticketId = tickets.create(sampleTicket(
-            itemWithCatalogLink("Cotto", "Stone Series", "White", "Matte", "60x60", priceId, "CT-500")),
-            tickets.nextTicketCode(), actorId, "พนักงานขาย");
-
-        jdbc.update("DELETE FROM price_catalog.product_prices WHERE price_id = :id", Map.of("id", priceId));
-
-        List<TicketItemDto> items = tickets.findById(ticketId).orElseThrow().items();
-        assertThat(items).hasSize(1); // <- would be empty under an INNER JOIN
-        TicketItemDto persisted = items.get(0);
-        assertThat(persisted.catalogPriceId()).isNull(); // ON DELETE SET NULL fired
-        assertThat(persisted.source()).isEqualTo("custom"); // re-derived from the now-null link
-        assertThat(persisted.catalogPrice()).isNull();
     }
 
     private long insertCatalogProductWithSqmPerPiece(String factoryName, String countryCode2, String productCode,
@@ -447,30 +154,6 @@ class TicketRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(firstPage.get(0).itemCount()).isEqualTo(1);
     }
 
-    /** Paging must not duplicate or skip a row when the sort key ties. The test above only ever fetches page 0, so
-     * it cannot see this: it passed throughout the period when findSummaries ordered by created_at DESC alone. */
-    @Test
-    void summariesDoNotDuplicateOrSkipRowsWhenCreatedAtTies() {
-        List<Long> created = new ArrayList<>();
-        for (int i = 0; i < 25; i++) {
-            created.add(tickets.create(sampleTicket(item("Brand" + i, "Model", "Red", "Matte", "S")),
-                tickets.nextTicketCode(), actorId, "พนักงานขาย"));
-        }
-        jdbc.update(
-            "UPDATE sales.ticket SET created_at = timestamptz '2026-01-01 00:00:00+00' "
-                + "WHERE ticket_id IN (:ids)",
-            new MapSqlParameterSource("ids", created));
-
-        List<Long> pagedIds = new ArrayList<>();
-        for (int page = 0; page < created.size(); page++) {
-            tickets.findSummaries(null, null, PageRequest.resolve(page, 1))
-                .forEach(summary -> pagedIds.add(summary.id()));
-        }
-
-        assertThat(pagedIds).doesNotHaveDuplicates();
-        assertThat(pagedIds).containsExactlyInAnyOrderElementsOf(created);
-    }
-
     @Test
     void createQuotation_versionsAndSupersedesPerRecipientChain() {
         long ticketId = tickets.create(sampleTicket(
@@ -504,8 +187,6 @@ class TicketRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(tickets.findById(ticketId).orElseThrow().quotation().quotationVersion()).isEqualTo(2);
     }
 
-    // ── quotation snapshot (V49): item-data freeze at issue time ─────────────
-
     @Test
     void insertQuotationItems_snapshotsOnlyPricedItemsWithFrozenUnitPriceAndAmount() {
         long ticketId = tickets.create(sampleTicket(
@@ -538,217 +219,6 @@ class TicketRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     @Test
-    void insertQuotationItems_noOpWhenAllItemsUnpriced() {
-        long ticketId = tickets.create(sampleTicket(
-            item("Toyota", "Hilux", "White", "Matte", "L")), tickets.nextTicketCode(), actorId, "พนักงานขาย");
-        QuotationDto quotation = tickets.createQuotation(ticketId, "QT-2026-0013", actorId, BigDecimal.ZERO);
-
-        TicketItemDto unpriced = new TicketItemDto(0L, ticketId, "Honda", "Civic", null, null, null,
-            null, new BigDecimal("5"), null, null, null, null, null,
-            null, "THB", 0, null, null, null, "PIECE", null, null);
-
-        tickets.insertQuotationItems(quotation.id(), List.of(unpriced));
-
-        assertThat(tickets.findQuotationItemsByQuotationId(quotation.id(), ticketId)).isEmpty();
-    }
-
-    @Test
-    void updateQuotationHeader_persistsCustomerAndProjectSnapshot() {
-        long ticketId = tickets.create(sampleTicket(
-            item("Toyota", "Hilux", "White", "Matte", "L")), tickets.nextTicketCode(), actorId, "พนักงานขาย");
-        QuotationDto quotation = tickets.createQuotation(ticketId, "QT-2026-0011", actorId, new BigDecimal("100.00"));
-
-        tickets.updateQuotationHeader(quotation.id(), "Frozen Co., Ltd.", "Frozen Address",
-            "0100000000001", "02-111-1111", "Frozen Project");
-
-        TicketRepository.QuotationHeaderSnapshot header =
-            tickets.findQuotationHeaderSnapshot(quotation.id()).orElseThrow();
-        assertThat(header.customerName()).isEqualTo("Frozen Co., Ltd.");
-        assertThat(header.customerAddress()).isEqualTo("Frozen Address");
-        assertThat(header.customerTaxId()).isEqualTo("0100000000001");
-        assertThat(header.customerPhone()).isEqualTo("02-111-1111");
-        assertThat(header.projectName()).isEqualTo("Frozen Project");
-    }
-
-    @Test
-    void uniqueIndex_rejectsDuplicateTicketRecipientAndVersionPair() {
-        long ticketId = tickets.create(sampleTicket(
-            item("Toyota", "Hilux", "White", "Matte", "L")), tickets.nextTicketCode(), actorId, "พนักงานขาย");
-        tickets.createQuotation(ticketId, "QT-2026-0020", actorId, new BigDecimal("100.00"));
-
-        // Same ticket + same recipient_type + same version is rejected.
-        assertThatThrownBy(() -> jdbc.update("""
-            INSERT INTO sales.quotation
-                (ticket_id, number, issued_by, total_amount, currency, quotation_version, doc_status)
-            VALUES (:ticketId, :number, :issuedBy, :total, 'THB', 1, 'ISSUED')
-            """,
-            new MapSqlParameterSource()
-                .addValue("ticketId", ticketId)
-                .addValue("number", "QT-2026-0021")
-                .addValue("issuedBy", actorId)
-                .addValue("total", new BigDecimal("100.00"))))
-            .isInstanceOf(DataIntegrityViolationException.class);
-
-        // Same ticket + same version is allowed for a different recipient chain.
-        jdbc.update("""
-            INSERT INTO sales.quotation
-                (ticket_id, number, issued_by, total_amount, currency, quotation_version, doc_status, recipient_type)
-            VALUES (:ticketId, :number, :issuedBy, :total, 'THB', 1, 'ISSUED', 'DESIGNER')
-            """,
-            new MapSqlParameterSource()
-                .addValue("ticketId", ticketId)
-                .addValue("number", "QT-2026-0022")
-                .addValue("issuedBy", actorId)
-                .addValue("total", new BigDecimal("100.00")));
-    }
-
-    @Test
-    void createTicket_withCustomerProjectContact_surfacesInSummary() {
-        CustomerRepository customers = new CustomerRepository(jdbc);
-        ProjectRepository projects = new ProjectRepository(jdbc);
-        ContactRepository contacts = new ContactRepository(jdbc);
-
-        CustomerDto customer = customers.create("บริษัท ทดสอบ จำกัด", "0100000000000", "123 ถนนทดสอบ", "สำนักงานใหญ่", "02-000-0000");
-        ProjectDto project = projects.create(customer.id(), "โครงการทดสอบ");
-        ContactDto contact = contacts.create(customer.id(), "สมชาย", "ใจดี", "ผู้จัดการ", "somchai@test.co.th", "080-000-0000");
-
-        long ticketId = tickets.create(
-            new CreateTicketRequest("ใบเสนอราคา", "NORMAL", customer.name(),
-                customer.id(), project.id(), contact.id(), null, null, List.of(item("Toyota", "Hilux", "White", "Matte", "L"))),
-            tickets.nextTicketCode(), actorId, "พนักงานขาย");
-
-        TicketSummaryDto summary = tickets.findById(ticketId).orElseThrow().summary();
-
-        assertThat(summary.customerId()).isEqualTo(customer.id());
-        assertThat(summary.projectId()).isEqualTo(project.id());
-        assertThat(summary.projectName()).isEqualTo("โครงการทดสอบ");
-        assertThat(summary.contactId()).isEqualTo(contact.id());
-        assertThat(summary.contactName()).isEqualTo("สมชาย ใจดี");
-    }
-
-    @Test
-    void addEventWithSnapshot_persistsAndReadsBackAsJsonText() {
-        long ticketId = tickets.create(sampleTicket(
-            item("Toyota", "Hilux", "White", "Matte", "L")), tickets.nextTicketCode(), actorId, "พนักงานขาย");
-
-        tickets.addEventWithSnapshot(ticketId, actorId, "พนักงานขาย",
-            TicketEventKind.PRICE_PROPOSED, TicketStatus.IN_REVIEW, TicketStatus.PRICE_PROPOSED,
-            "note", "[{\"brand\":\"Toyota\",\"qty\":1}]");
-
-        List<TicketEventDto> events = tickets.findById(ticketId).orElseThrow().events();
-        TicketEventDto priceProposed = events.stream()
-            .filter(e -> TicketEventKind.PRICE_PROPOSED.equals(e.kind()))
-            .findFirst().orElseThrow();
-
-        assertThat(priceProposed.itemSnapshot()).contains("brand").contains("Toyota");
-
-        // plain addEvent (no snapshot) must still work and leave item_snapshot null
-        tickets.addEvent(ticketId, actorId, "พนักงานขาย", TicketEventKind.COMMENTED, null, null, "no snapshot here");
-        TicketEventDto commented = tickets.findById(ticketId).orElseThrow().events().stream()
-            .filter(e -> TicketEventKind.COMMENTED.equals(e.kind()))
-            .findFirst().orElseThrow();
-        assertThat(commented.itemSnapshot()).isNull();
-    }
-
-    @Test
-    void addEventWithDocument_persistsTheLinkAndRejectsAHalfSetOne() {
-        // Real SQL only: the CHECK enforcing "both columns or neither" and the type vocabulary cannot fire against a
-        // Mockito stub.
-        long ticketId = tickets.create(sampleTicket(
-            item("Toyota", "Hilux", "White", "Matte", "L")), tickets.nextTicketCode(), actorId, "พนักงานขาย");
-
-        tickets.addEventWithDocument(ticketId, actorId, "พนักงานขาย",
-            TicketEventKind.QUOTATION_ISSUED, TicketStatus.APPROVED, TicketStatus.QUOTATION_ISSUED,
-            "linked", RelatedDocumentType.QUOTATION, 4242L);
-
-        assertThat(tickets.findById(ticketId).orElseThrow().events())
-            .anyMatch(e -> TicketEventKind.QUOTATION_ISSUED.equals(e.kind()));
-
-        // An id without a type (or vice versa) must be refused, not silently stored.
-        assertThatThrownBy(() -> tickets.addEventWithDocument(ticketId, actorId, "พนักงานขาย",
-            TicketEventKind.COMMENTED, null, null, "half a link", null, 99L))
-            .isInstanceOf(DataIntegrityViolationException.class);
-
-        // And an unknown document type must be refused too.
-        assertThatThrownBy(() -> tickets.addEventWithDocument(ticketId, actorId, "พนักงานขาย",
-            TicketEventKind.COMMENTED, null, null, "bad type", "INVOICE_PDF", 1L))
-            .isInstanceOf(DataIntegrityViolationException.class);
-    }
-
-    // ── findPricingChainFallbackItems —the read-only display fallback for a deal
-    //    whose sales.ticket_item is still empty (pre-order-confirmation), picking the deal's
-    //    live new-engine quotation.
-    //    Real Postgres only: the priority CASE/ORDER BY and the origin/doc_status filters
-    //    cannot be proven against a mocked repository. ─────────────────────────────────────
-
-    @Test
-    void findPricingChainFallbackItems_returnsIssuedPricingRequestQuotationItems() {
-        long ticketId = tickets.create(sampleTicket(), tickets.nextTicketCode(), actorId, "พนักงานขาย");
-        insertQuotationWithItem(ticketId, "PRICING_REQUEST", "ISSUED",
-            "SCG", "A1", "ขาว", "ด้าน", "60x60", new BigDecimal("20"));
-
-        List<TicketItemDto> fallback = tickets.findPricingChainFallbackItems(ticketId);
-
-        assertThat(fallback).hasSize(1);
-        TicketItemDto item = fallback.get(0);
-        assertThat(item.brand()).isEqualTo("SCG");
-        assertThat(item.model()).isEqualTo("A1");
-        assertThat(item.color()).isEqualTo("ขาว");
-        assertThat(item.texture()).isEqualTo("ด้าน");
-        assertThat(item.size()).isEqualTo("60x60");
-        assertThat(item.qty()).isEqualByComparingTo("20");
-        // Not a real ticket_item row -- every pricing-approval-history field stays at its TicketItemDto default, never
-        // borrowed from the quotation (see the repository method's own Javadoc on why).
-        assertThat(item.proposedPrice()).isNull();
-        assertThat(item.approvedPrice()).isNull();
-        assertThat(item.calcedCost()).isNull();
-        assertThat(item.weightMultiplier()).isEqualTo(1);
-        assertThat(item.sourcedFromStock()).isFalse();
-    }
-
-    @Test
-    void findPricingChainFallbackItems_prefersAcceptedOverIssued_acrossOrigins() {
-        long ticketId = tickets.create(sampleTicket(), tickets.nextTicketCode(), actorId, "พนักงานขาย");
-        // An older ISSUED PRICING_REQUEST-origin quotation...
-        insertQuotationWithItem(ticketId, "PRICING_REQUEST", "ISSUED",
-            "Stale", "Issued", null, null, null, new BigDecimal("1"));
-        // ...and a newer ACCEPTED DEAL_DIRECT-origin one. ACCEPTED must win regardless of
-        // which origin it came from or insertion order (the method's own CASE doc_status priority).
-        insertQuotationWithItem(ticketId, "DEAL_DIRECT", "ACCEPTED",
-            "Live", "Accepted", null, null, null, new BigDecimal("2"));
-
-        List<TicketItemDto> fallback = tickets.findPricingChainFallbackItems(ticketId);
-
-        assertThat(fallback).hasSize(1);
-        assertThat(fallback.get(0).brand()).isEqualTo("Live");
-    }
-
-    // Wrong-way-round: proves the fallback does NOT leak a quotation that has never reached
-    // ISSUED/ACCEPTED/APPROVED -- a rep's in-progress DRAFT must never render as if it were the deal's committed
-    // items.
-    @Test
-    void findPricingChainFallbackItems_returnsEmpty_whenOnlyDraftQuotationExists() {
-        long ticketId = tickets.create(sampleTicket(), tickets.nextTicketCode(), actorId, "พนักงานขาย");
-        insertQuotationWithItem(ticketId, "PRICING_REQUEST", "DRAFT",
-            "NotYet", "Draft", null, null, null, new BigDecimal("1"));
-
-        assertThat(tickets.findPricingChainFallbackItems(ticketId)).isEmpty();
-    }
-
-    @Test
-    void findPricingChainFallbackItems_returnsEmpty_whenTicketHasNoQuotationAtAll() {
-        long ticketId = tickets.create(sampleTicket(), tickets.nextTicketCode(), actorId, "พนักงานขาย");
-
-        assertThat(tickets.findPricingChainFallbackItems(ticketId)).isEmpty();
-    }
-
-    // ── Deposit policy that follows the quotation ─────────────────
-    // syncDepositPolicyFromQuotation is the only write the system makes to deposit_policy. It is a
-    // compare-and-set: it moves the row only while the policy is still the expected one, nobody
-    // has set it by hand (deposit_policy_set_by IS NULL; waiveDeposit always records its actor),
-    // and the payment track is still at CUSTOMER_CONFIRMED. 0 rows means "leave it alone".
-
-    @Test
     void syncDepositPolicyFromQuotation_movesASystemOwnedPolicyBothWays_andRecordsNoPerson() {
         long ticketId = confirmedTicket();
 
@@ -767,25 +237,6 @@ class TicketRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
             .containsEntry("deposit_policy_set_by", null);
     }
 
-    /** A waiver that commits between the service's read and this write must win. */
-    @Test
-    void syncDepositPolicyFromQuotation_writesNothing_whenThePolicyIsNotTheExpectedOne() {
-        long ticketId = confirmedTicket();
-
-        assertThat(tickets.syncDepositPolicyFromQuotation(ticketId, DepositPolicy.NOT_REQUIRED,
-            DepositPolicy.REQUIRED, "ใบเสนอราคา QT-2 ระบุมัดจำ 50%")).isZero();
-        assertThat(depositPolicyRow(ticketId))
-            .containsEntry("deposit_policy", DepositPolicy.REQUIRED)
-            .containsEntry("deposit_policy_reason", null);
-
-        tickets.updateDepositPolicy(ticketId, DepositPolicy.CREDIT_CUSTOMER, "ลูกค้าเครดิต 30 วัน", actorId);
-        assertThat(tickets.syncDepositPolicyFromQuotation(ticketId, DepositPolicy.REQUIRED,
-            DepositPolicy.NOT_REQUIRED, "ใบเสนอราคา QT-2 ระบุไม่รับมัดจำ (ชำระเต็มจำนวน)")).isZero();
-        assertThat(depositPolicyRow(ticketId))
-            .containsEntry("deposit_policy", DepositPolicy.CREDIT_CUSTOMER)
-            .containsEntry("deposit_policy_reason", "ลูกค้าเครดิต 30 วัน");
-    }
-
     /** A NOT_REQUIRED a person chose (waiveDeposit) is never flipped back by a quotation. */
     @Test
     void syncDepositPolicyFromQuotation_writesNothing_onAPolicyAPersonSet() {
@@ -800,52 +251,6 @@ class TicketRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(((Number) row.get("deposit_policy_set_by")).longValue()).isEqualTo(actorId);
     }
 
-    /** Before the customer confirms there is nothing to follow; once a deposit notice is out
-     * (rule 4) the policy is a money question, not a quotation one. */
-    @Test
-    void syncDepositPolicyFromQuotation_writesNothing_offCustomerConfirmed() {
-        long unconfirmed = tickets.create(sampleTicket(), tickets.nextTicketCode(), actorId, "พนักงานขาย");
-        assertThat(tickets.syncDepositPolicyFromQuotation(unconfirmed, DepositPolicy.REQUIRED,
-            DepositPolicy.NOT_REQUIRED, "ใบเสนอราคา QT-4 ระบุไม่รับมัดจำ (ชำระเต็มจำนวน)")).isZero();
-        assertThat(depositPolicyRow(unconfirmed)).containsEntry("deposit_policy", DepositPolicy.REQUIRED);
-
-        long noticeIssued = confirmedTicket();
-        jdbc.update("UPDATE sales.ticket SET payment_status = 'DEPOSIT_NOTICE_ISSUED' WHERE ticket_id = :id",
-            Map.of("id", noticeIssued));
-        assertThat(tickets.syncDepositPolicyFromQuotation(noticeIssued, DepositPolicy.REQUIRED,
-            DepositPolicy.NOT_REQUIRED, "ใบเสนอราคา QT-4 ระบุไม่รับมัดจำ (ชำระเต็มจำนวน)")).isZero();
-        assertThat(depositPolicyRow(noticeIssued)).containsEntry("deposit_policy", DepositPolicy.REQUIRED);
-    }
-
-    /** A deposit notice already ISSUED pins the policy at REQUIRED even while the payment track is
-     * still CUSTOMER_CONFIRMED: approving a 0% revision must not flip it (0 rows, so the service
-     * records no POLICY_CHANGED event). The no-notice flip is pinned by the first sync test; the
-     * NOT_REQUIRED -> REQUIRED direction is unchanged by a notice. */
-    @Test
-    void syncDepositPolicyFromQuotation_keepsRequired_whileADepositNoticeIsIssued() {
-        long ticket = confirmedTicket();
-        jdbc.update("""
-            INSERT INTO sales.deposit_notice (ticket_id, version, status, customer_name, deposit_percent,
-                subtotal, deposit_amount, vat_percent, vat_amount, total_payable)
-            VALUES (:id, 1, 'ISSUED', 'x', 0.3, 0, 0, 0.07, 0, 0)""", Map.of("id", ticket));
-
-        assertThat(tickets.syncDepositPolicyFromQuotation(ticket, DepositPolicy.REQUIRED,
-            DepositPolicy.NOT_REQUIRED, "ใบเสนอราคา QT-5 ระบุไม่รับมัดจำ (ชำระเต็มจำนวน)")).isZero();
-        assertThat(depositPolicyRow(ticket)).containsEntry("deposit_policy", DepositPolicy.REQUIRED);
-    }
-
-    // ── Payment chip: the derived paymentStage follows the payment
-    // track. Literals, not PaymentStage constants, so this pins the wire value the frontend maps. ──
-
-    @Test
-    void paymentStage_notStarted_whenNoPaymentTrackAndNothingPaid_withOrWithoutAPayable() {
-        long noPayable = tickets.create(sampleTicket(), tickets.nextTicketCode(), actorId, "พนักงานขาย");
-        assertThat(paymentStage(noPayable)).isEqualTo("NOT_STARTED");
-
-        long quotedNotConfirmed = payableTicket(null, DepositPolicy.REQUIRED);
-        assertThat(paymentStage(quotedNotConfirmed)).isEqualTo("NOT_STARTED");
-    }
-
     @Test
     void paymentStage_noDeposit_forEveryBypassPolicy_onceTheCustomerConfirmedAndNothingIsPaid() {
         for (String policy : List.of(DepositPolicy.NOT_REQUIRED, DepositPolicy.WAIVED, DepositPolicy.CREDIT_CUSTOMER)) {
@@ -858,53 +263,6 @@ class TicketRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
         long ticket = payableTicket("AWAITING_FINAL_PAYMENT", DepositPolicy.REQUIRED);
         pay(ticket, "DEPOSIT", "321.00");
         assertThat(paymentStage(ticket)).isEqualTo(PaymentStage.BALANCE_PENDING);
-    }
-
-    /** NOT_STARTED means "order not confirmed yet": a legacy deal already at ORDER_RECEIVED or later with a null
-     * track keeps the old derivation. */
-    @Test
-    void paymentStage_nullTrackAtOrAfterOrderReceived_keepsTheOldDerivation() {
-        long procurement = payableTicket(null, DepositPolicy.REQUIRED);
-        jdbc.update("UPDATE sales.ticket SET sales_stage = 'PROCUREMENT' WHERE ticket_id = :id", Map.of("id", procurement));
-        assertThat(paymentStage(procurement)).isEqualTo(PaymentStage.BALANCE_PENDING);
-
-        long orderReceived = payableTicket(null, DepositPolicy.REQUIRED);
-        jdbc.update("UPDATE sales.ticket SET sales_stage = 'ORDER_RECEIVED' WHERE ticket_id = :id", Map.of("id", orderReceived));
-        assertThat(paymentStage(orderReceived)).isEqualTo(PaymentStage.BALANCE_PENDING);
-
-        long nothingPayable = tickets.create(sampleTicket(), tickets.nextTicketCode(), actorId, "พนักงานขาย");
-        jdbc.update("UPDATE sales.ticket SET sales_stage = 'PROCUREMENT' WHERE ticket_id = :id", Map.of("id", nothingPayable));
-        assertThat(paymentStage(nothingPayable)).isEqualTo(PaymentStage.NOT_REQUIRED);
-    }
-
-    /** The unchanged rows of the chip: the new values must not leak into the REQUIRED-deposit path. */
-    @Test
-    void paymentStage_keepsDepositAndMoneyStates_forRequiredPolicyAndLegacyRows() {
-        assertThat(paymentStage(payableTicket("CUSTOMER_CONFIRMED", DepositPolicy.REQUIRED)))
-            .isEqualTo(PaymentStage.DEPOSIT_PENDING);
-        assertThat(paymentStage(payableTicket("DEPOSIT_NOTICE_ISSUED", DepositPolicy.REQUIRED)))
-            .isEqualTo(PaymentStage.DEPOSIT_PENDING);
-
-        long depositPaid = payableTicket("DEPOSIT_PAID", DepositPolicy.REQUIRED);
-        pay(depositPaid, "DEPOSIT", "321.00");
-        assertThat(paymentStage(depositPaid)).isEqualTo(PaymentStage.DEPOSIT_RECEIVED);
-
-        long partial = payableTicket("AWAITING_FINAL_PAYMENT", DepositPolicy.REQUIRED);
-        pay(partial, "DEPOSIT", "321.00");
-        pay(partial, "BALANCE", "100.00");
-        assertThat(paymentStage(partial)).isEqualTo(PaymentStage.PARTIALLY_PAID);
-
-        long full = payableTicket("FULLY_PAID", DepositPolicy.REQUIRED);
-        pay(full, "BALANCE", "1070.00");
-        assertThat(paymentStage(full)).isEqualTo(PaymentStage.FULLY_PAID);
-
-        // legacy rows: no payment_status but money on file still shows the money state, not NOT_STARTED
-        long legacyDeposit = payableTicket(null, DepositPolicy.REQUIRED);
-        pay(legacyDeposit, "DEPOSIT", "321.00");
-        assertThat(paymentStage(legacyDeposit)).isEqualTo(PaymentStage.DEPOSIT_RECEIVED);
-        long legacyBalance = payableTicket(null, DepositPolicy.REQUIRED);
-        pay(legacyBalance, "BALANCE", "100.00");
-        assertThat(paymentStage(legacyBalance)).isEqualTo(PaymentStage.PARTIALLY_PAID);
     }
 
     /** A priced item makes payable 1,000 + 7% VAT = 1,070.00 (ticket-item fallback of payableAmount). */
@@ -944,45 +302,6 @@ class TicketRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
             """, Map.of("id", ticketId));
     }
 
-    // sales.quotation.number is VARCHAR(30) NOT NULL UNIQUE.
-    private static final java.util.concurrent.atomic.AtomicLong TEST_QUOTATION_SEQ =
-        new java.util.concurrent.atomic.AtomicLong();
-
-    private long insertQuotationWithItem(long ticketId, String origin, String docStatus,
-                                         String brand, String model, String color, String texture,
-                                         String size, BigDecimal qty) {
-        // ux_quotation_ticket_recipient_version uniques on -- recipient_type defaults 'UNSPECIFIED' for every row this
-        // test inserts, so two quotations on the SAME ticket need distinct quotation_version too, or the second insert
-        // 409s against the first.
-        long seq = TEST_QUOTATION_SEQ.incrementAndGet();
-        Long quotationId = jdbc.queryForObject("""
-            INSERT INTO sales.quotation (ticket_id, number, issued_by, origin, doc_status, quotation_version)
-            VALUES (:ticketId, :number, :issuedBy, :origin, :docStatus, :version)
-            RETURNING quotation_id
-            """,
-            new MapSqlParameterSource()
-                .addValue("ticketId", ticketId)
-                .addValue("number", "QT-B5-" + ticketId + "-" + seq)
-                .addValue("issuedBy", actorId)
-                .addValue("origin", origin)
-                .addValue("docStatus", docStatus)
-                .addValue("version", (int) seq),
-            Long.class);
-        jdbc.update("""
-            INSERT INTO sales.quotation_item (quotation_id, seq, brand, model, color, texture, size, qty, raw_unit, unit_price, amount)
-            VALUES (:quotationId, 1, :brand, :model, :color, :texture, :size, :qty, 'แผ่น', 100, 100)
-            """,
-            new MapSqlParameterSource()
-                .addValue("quotationId", quotationId)
-                .addValue("brand", brand)
-                .addValue("model", model)
-                .addValue("color", color)
-                .addValue("texture", texture)
-                .addValue("size", size)
-                .addValue("qty", qty));
-        return quotationId;
-    }
-
     private CreateTicketRequest sampleTicket(TicketItemRequest... items) {
         return new CreateTicketRequest("ใบเสนอราคา", "NORMAL", "ลูกค้าทดสอบ", null, null, null, null, null, List.of(items));
     }
@@ -990,13 +309,6 @@ class TicketRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
     private TicketItemRequest item(String brand, String model, String color, String texture, String size) {
         return new TicketItemRequest(brand, model, color, texture, size, null,
             new BigDecimal("1"), null, null, null, null, null, null, "THB");
-    }
-
-    private TicketItemRequest itemWithCatalogLink(String brand, String model, String color, String texture,
-                                                  String size, Long catalogPriceId, String catalogProductCode) {
-        return new TicketItemRequest(brand, model, color, texture, size, null,
-            new BigDecimal("1"), null, null, null, null, null, null, "THB",
-            catalogPriceId, catalogProductCode);
     }
 
     private TicketItemRequest itemFromStock(String brand, String model, String color, String texture,

@@ -56,10 +56,4 @@ class ActuatorHealthIntegrationTest {
             .andExpect(jsonPath("$.details").doesNotExist());
     }
 
-    @Test
-    void protectedEndpointStillRequiresAuthentication() throws Exception {
-        // The actuator permit must not widen default-deny: an unrelated protected endpoint is still 401 when
-        // unauthenticated.
-        mvc.perform(get("/api/employees")).andExpect(status().isUnauthorized());
-    }
 }

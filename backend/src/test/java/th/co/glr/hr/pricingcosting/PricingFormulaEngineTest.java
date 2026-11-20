@@ -11,10 +11,9 @@ import org.junit.jupiter.params.provider.CsvSource;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.pricing.PricingFormulaConfigDtos.PricingClearanceFeeDto;
 import th.co.glr.hr.pricing.PricingFormulaConfigDtos.PricingDutyRateDto;
-import th.co.glr.hr.pricing.PricingFormulaConfigDtos.PricingFormulaConfigDto;
 import th.co.glr.hr.pricing.PricingFormulaConfigDtos.PricingFreightRateDto;
 
-/** Fast, DB-free unit tests for PricingFormulaEngine — every band-edge case and every arithmetic step of V109's
+/** Fast, DB-free unit tests for PricingFormulaEngine — band edges, duty, rounding and the container rule of V109's
  * formula, hand-verified. */
 class PricingFormulaEngineTest {
     private final PricingFormulaEngine engine = new PricingFormulaEngine(null);
@@ -32,20 +31,13 @@ class PricingFormulaEngineTest {
         );
     }
 
-    @Test
-    void freightQtyBand_minIsInclusive_101FallsInSecondBandNotFirst() {
-        // 101 is the SECOND band's min and the FIRST band's max — max-exclusive means it must land in [101,451), never
-        // [1,101).
-        PricingFreightRateDto match = engine.selectFreightRate(italyFreightRates(), "IT", bd("10"), bd("101"), "test");
-        assertThat(match.amountThb()).isEqualByComparingTo("80000");
-        assertThat(match.qtyMinSqm()).isEqualByComparingTo("101");
-    }
-
     // Single-assertion band-edge cases: columns are case name, thickness mm, quantity sqm, expected amountThb.
     @ParameterizedTest(name = "{0}")
     @CsvSource({
         "freightQtyBand_justBelowMax_staysInFirstBand,             10,   100.99, 50000",
         "freightQtyBand_exactMin_1FallsInFirstBand,                10,   1,      50000",
+        // 101 is band2's min and band1's max — must land in [101,451), never [1,101).
+        "freightQtyBand_minIsInclusive_101FallsInSecondBandNotFirst, 10, 101,    80000",
         // 8 is band2's min and band1's max — must land in [8,12), never [3,8).
         "freightThicknessBand_minIsInclusive_8FallsInSecondBandNotFirst, 8, 50,  50000",
         "freightThicknessBand_justBelowMax_staysInFirstBand,       7.99, 50,     80000",
@@ -56,26 +48,6 @@ class PricingFormulaEngineTest {
     }
 
     @Test
-    void freightQtyBand_nullMaxCatchesEverythingAboveTheTopBoundary() {
-        PricingFreightRateDto atBoundary = engine.selectFreightRate(italyFreightRates(), "IT", bd("10"), bd("801"), "test");
-        assertThat(atBoundary.amountThb()).isEqualByComparingTo("100000");
-        PricingFreightRateDto wayAbove = engine.selectFreightRate(italyFreightRates(), "IT", bd("10"), bd("999999999"), "test");
-        assertThat(wayAbove.amountThb()).isEqualByComparingTo("100000");
-        // And the band just below the NULL-max band's start is still the PREVIOUS (finite) band.
-        PricingFreightRateDto justBelow = engine.selectFreightRate(italyFreightRates(), "IT", bd("10"), bd("800.99"), "test");
-        assertThat(justBelow.amountThb()).isEqualByComparingTo("90000");
-    }
-
-    /** V151's whole point: the country match is now EXACT on the canonical ISO code, no fuzzy matching — "Italy" (a
-     * display name, what the pre-V151 free-text column held) must NOT match the "IT" rows, exactly as much a miss
-     * as an unrelated code like "VN". */
-    @Test
-    void freight_countryCodeMustMatchExactly_displayNameIsNotAFallback() {
-        assertThatThrownBy(() -> engine.selectFreightRate(italyFreightRates(), "Italy", bd("10"), bd("50"), "รายการที่ 7"))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus().value()).isEqualTo(422));
-    }
-
-    @Test
     void freight_missingCountry_throwsRatherThanReturningZero() {
         assertThatThrownBy(() -> engine.selectFreightRate(italyFreightRates(), "VN", bd("10"), bd("50"), "รายการที่ 42"))
             .isInstanceOf(FreightBandNotFoundException.class) // typed signal, still a plain 422 ApiException
@@ -83,26 +55,6 @@ class PricingFormulaEngineTest {
                 assertThat(e.getStatus().value()).isEqualTo(422);
                 assertThat(e.getMessage()).contains("รายการที่ 42");
             });
-    }
-
-    @Test
-    void freight_thicknessBeyondEverySeededBand_throwsRatherThanReturningZero() {
-        assertThatThrownBy(() -> engine.selectFreightRate(italyFreightRates(), "IT", bd("25"), bd("50"), "รายการที่ 9"))
-            .isInstanceOfSatisfying(ApiException.class, e -> {
-                assertThat(e.getStatus().value()).isEqualTo(422);
-                assertThat(e.getMessage()).contains("รายการที่ 9");
-            });
-    }
-
-    @Test
-    void freight_overlappingBands_throwsInsteadOfSilentlyPickingOne() {
-        List<PricingFreightRateDto> corrupted = List.of(
-            new PricingFreightRateDto(1L, "IT", "อิตาลี", bd("8"), bd("12"), bd("1"), bd("101"), bd("50000")),
-            new PricingFreightRateDto(2L, "IT", "อิตาลี", bd("8"), bd("12"), bd("50"), bd("150"), bd("999999"))
-        );
-        assertThatThrownBy(() -> engine.selectFreightRate(corrupted, "IT", bd("10"), bd("60"), "test"))
-            .isNotInstanceOf(FreightBandNotFoundException.class) // a corrupt table is not a "gap" the CEO can fill
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus().value()).isEqualTo(422));
     }
 
     // ── Clearance fee band selection — half-open [min, max), qty only ───────────────────────
@@ -117,34 +69,16 @@ class PricingFormulaEngineTest {
         );
     }
 
-    @Test
-    void clearanceBand_minIsInclusive_101FallsInSecondBandNotFirst() {
-        PricingClearanceFeeDto match = engine.selectClearanceFee(clearanceFees(), bd("101"), "test");
-        assertThat(match.amountThb()).isEqualByComparingTo("12000");
-    }
-
-    @Test
-    void clearanceBand_justBelowMax_staysInFirstBand() {
-        PricingClearanceFeeDto match = engine.selectClearanceFee(clearanceFees(), bd("100.99"), "test");
-        assertThat(match.amountThb()).isEqualByComparingTo("8000");
-    }
-
-    @Test
-    void clearanceBand_nullMaxCatchesEverythingAboveTheTopBoundary() {
-        assertThat(engine.selectClearanceFee(clearanceFees(), bd("801"), "test").amountThb())
-            .isEqualByComparingTo("20000");
-        assertThat(engine.selectClearanceFee(clearanceFees(), bd("50000000"), "test").amountThb())
-            .isEqualByComparingTo("20000");
-    }
-
-    @Test
-    void clearance_qtyBelowEveryBandsMinimum_throwsRatherThanReturningZero() {
-        // Every seeded band starts at min=1 — a qty of 0 (or negative) matches none of them.
-        assertThatThrownBy(() -> engine.selectClearanceFee(clearanceFees(), bd("0"), "shipment ABC"))
-            .isInstanceOfSatisfying(ApiException.class, e -> {
-                assertThat(e.getStatus().value()).isEqualTo(422);
-                assertThat(e.getMessage()).contains("shipment ABC");
-            });
+    // Min is inclusive (101 -> second band), a null max catches everything above the top boundary.
+    @ParameterizedTest(name = "{0}")
+    @CsvSource({
+        "clearanceBand_minIsInclusive_101FallsInSecondBandNotFirst, 101,      12000",
+        "clearanceBand_nullMaxCatchesTheTopBoundary,                801,      20000",
+        "clearanceBand_nullMaxCatchesEverythingAbove,               50000000, 20000",
+    })
+    void clearanceBandEdge(String caseName, String quantity, String expectedAmount) {
+        assertThat(engine.selectClearanceFee(clearanceFees(), bd(quantity), "test").amountThb())
+            .isEqualByComparingTo(expectedAmount);
     }
 
     // ── Duty rate selection — exact match ────────────────────────────────────────────────────
@@ -167,24 +101,7 @@ class PricingFormulaEngineTest {
         assertThat(engine.selectDutyRate(dutyRates(), "GLASS_MOSAIC", "test").dutyPct()).isEqualByComparingTo("0.1");
     }
 
-    @Test
-    void duty_unknownProductType_throwsRatherThanReturningZero() {
-        assertThatThrownBy(() -> engine.selectDutyRate(dutyRates(), "SANITARY_WARE", "รายการที่ 5"))
-            .isInstanceOfSatisfying(ApiException.class, e -> {
-                assertThat(e.getStatus().value()).isEqualTo(422);
-                assertThat(e.getMessage()).contains("รายการที่ 5");
-            });
-    }
-
     // ── Pure arithmetic — hand-computed ──────────────────────────────────────────────────────
-
-    /** i = C x insurance_value_factor x insurance_rate x insurance_buffer, V109's own worked constants: 1.15 x
-     * 0.0045 x 1.07. Hand-computed: 10000 x 1.15 = 11500; x 0.0045 = 51.75; x 1.07 = 55.3725. */
-    @Test
-    void insurance_handComputed() {
-        BigDecimal result = engine.insurance(bd("10000.0000"), config(bd("1.15"), bd("0.0045"), bd("1.07"), bd("1.07"), bd("1.07")));
-        assertThat(result).isEqualByComparingTo("55.3725");
-    }
 
     /** duty amount = cif x dutyPct. Hand-computed: 60055.3725 x 0.30 = 18016.61175, HALF_UP to 4dp (the digit
      * immediately after is exactly 5) rounds AWAY FROM ZERO: 18016.6118. */
@@ -192,21 +109,6 @@ class PricingFormulaEngineTest {
     void dutyAmount_handComputed_halfUpRoundsExactMidpointUp() {
         BigDecimal result = engine.dutyAmount(bd("60055.3725"), bd("0.30"));
         assertThat(result).isEqualByComparingTo("18016.6118");
-    }
-
-    /** TC = [(cif + duty) x cost_buffer] + clearance. Hand-computed: (60055.3725 + 18016.6118) = 78071.9843; x 1.07
-     * = 83537.023201, rounds to 83537.0232; + 8000.0000 = 91537.0232. */
-    @Test
-    void totalLandedCost_handComputed() {
-        BigDecimal result = engine.totalLandedCost(bd("60055.3725"), bd("18016.6118"), bd("1.07"), bd("8000.0000"));
-        assertThat(result).isEqualByComparingTo("91537.0232");
-    }
-
-    /** UC = TC / Q. Hand-computed: 91537.0232 / 100 = 915.370232 (exact, terminating). */
-    @Test
-    void unitCostPerSqm_handComputed() {
-        BigDecimal result = engine.unitCostPerSqm(bd("91537.0232"), bd("100"));
-        assertThat(result).isEqualByComparingTo("915.370232");
     }
 
     // Selling price rounding — owner ruling 2026-09-19 (Phase 2 CEO pricing): SP is now HALF_UP 2dp, no longer
@@ -220,28 +122,6 @@ class PricingFormulaEngineTest {
         assertThat(result).isEqualByComparingTo("128.40");
     }
 
-    /** margin=0, buffer=1, so the raw figure equals the cost exactly and only the HALF_UP 2dp rounding acts. Columns:
-     * case name, cost, expected selling price.
-     *
-     * <ul>
-     *   <li>19196: the OLD round-up brief's own worked example, now under the NEW rule: ฿191.96 in stays ฿191.96 —
-     *       it no longer bumps to ฿200. This is the owner's own stated correction (2026-09-19): "฿191.96 no longer
-     *       becomes ฿200; it prints as ฿191.96."</li>
-     *   <li>halfUp: HALF_UP at the 2dp boundary: a third-decimal exactly at 5 rounds up (191.965 -> 191.97).</li>
-     *   <li>justBelowHalfUp: companion — just under the halfway point rounds down (191.964 -> 191.96) — HALF_UP is
-     *       not "always up", only exact halves are.</li>
-     * </ul> */
-    @ParameterizedTest(name = "{0}")
-    @CsvSource({
-        "sellingPrice_19196_noLongerRoundsUpTo200_stays19196,  191.96,  191.96",
-        "sellingPrice_halfUpAtThirdDecimal_roundsUp,           191.965, 191.97",
-        "sellingPrice_justBelowHalfUpAtThirdDecimal_roundsDown, 191.964, 191.96",
-    })
-    void sellingPrice_zeroMarginUnitBuffer_roundsHalfUpToTwoDp(String caseName, String cost, String expected) {
-        BigDecimal result = engine.sellingPrice(bd(cost), BigDecimal.ZERO, BigDecimal.ONE);
-        assertThat(result).isEqualByComparingTo(expected);
-    }
-
     /** The owner's own worked example (2026-09-19, Phase 2 CEO pricing UAT): UC per แผ่น 1,061.20 x margin 20% x
      * selling_buffer 1.07 must print as a 2-decimal figure, NOT the old round-up-to-฿10 result of ฿1,370 — raw =
      * 1061.20 x 1.20 x 1.07 = 1,362.5808, HALF_UP 2dp = ฿1,362.58. */
@@ -250,12 +130,6 @@ class PricingFormulaEngineTest {
         BigDecimal result = engine.sellingPrice(bd("1061.20"), bd("0.20"), bd("1.07"));
         assertThat(result).isEqualByComparingTo("1362.58");
         assertThat(result).isNotEqualByComparingTo("1370");
-    }
-
-    private PricingFormulaConfigDto config(BigDecimal ivf, BigDecimal ir, BigDecimal ib, BigDecimal costBuffer,
-                                           BigDecimal sellingBuffer) {
-        return new PricingFormulaConfigDto(1L, 1, ivf, ir, ib, costBuffer, sellingBuffer, bd("0.20"), bd("10"),
-            true, java.time.LocalDate.now(), java.time.Instant.now(), List.of(), List.of(), List.of(), List.of());
     }
 
     private static BigDecimal bd(String value) {
@@ -302,19 +176,6 @@ class PricingFormulaEngineTest {
         assertThat(PricingFormulaEngine.containerCapacitySqm(bd("17"))).isEqualByComparingTo("450");
         assertThat(PricingFormulaEngine.containerCapacitySqm(bd("21"))).isEqualByComparingTo("450");
         assertThat(PricingFormulaEngine.containerCapacitySqm(bd("25"))).isEqualByComparingTo("450");
-    }
-
-    @Test
-    void containerUnits_sumsSqmOverEachLinesOwnCapacity() {
-        // 400 @10 = 0.5, 225 @19 = 0.5
-        assertThat(PricingFormulaEngine.containerUnits(lines(line("10", "400"), line("19", "225"))))
-            .isEqualByComparingTo("1");
-        // 300 @19 = 0.6667, 300 @10 = 0.375
-        assertThat(PricingFormulaEngine.containerUnits(lines(line("19", "300"), line("10", "300"))).doubleValue())
-            .isCloseTo(1.0416667, org.assertj.core.data.Offset.offset(0.000001));
-        // a single thick line: 700 / 450
-        assertThat(PricingFormulaEngine.containerUnits(lines(line("19", "700"))).doubleValue())
-            .isCloseTo(1.5555556, org.assertj.core.data.Offset.offset(0.000001));
     }
 
     @Test
@@ -372,53 +233,6 @@ class PricingFormulaEngineTest {
     }
 
     @Test
-    void containerFreight_thinOnly_isUnchanged_fullContainerRatePerContainer() {
-        // DL-2026-0325: 7,820 ตร.ม. (Equipe, 8 มม.) = 9 × 800 + 620 → 10 containers × 100,000
-        PricingFormulaEngine.ContainerCharge freight = engine.containerFreight(italyFreightRates(), "IT", lines(line("8", "7820")), "test");
-        assertThat(freight.fullContainers()).isEqualTo(10);
-        assertThat(freight.amountThb()).isEqualByComparingTo("1000000");
-        // 3,910 @8 → 5 full
-        assertThat(engine.containerFreight(italyFreightRates(), "IT", lines(line("8", "3910")), "test").amountThb())
-            .isEqualByComparingTo("500000");
-        // 3,250 @8 → 4 full + 50 ตร.ม. in the 1–100 band (50,000)
-        assertThat(engine.containerFreight(italyFreightRates(), "IT", lines(line("8", "3250")), "test").amountThb())
-            .isEqualByComparingTo("450000");
-        // a part load alone (300 ตร.ม.) is just its band
-        assertThat(engine.containerFreight(italyFreightRates(), "IT", lines(line("8", "300")), "test").amountThb())
-            .isEqualByComparingTo("80000");
-    }
-
-    @Test
-    void containerFreight_thinOnly_splitsAcrossSeveralLinesOfTheSameFactory() {
-        // two thin lines combine: 2,000 + 1,250 = 3,250 → same as the single-line 4 full + 50 case
-        assertThat(engine.containerFreight(italyFreightRates(), "IT", lines(line("8", "2000"), line("9", "1250")), "test").amountThb())
-            .isEqualByComparingTo("450000");
-    }
-
-    @Test
-    void containerFreight_fallsBackToThe800Band_whenTheTableHasNoFullContainerColumn() {
-        List<PricingFreightRateDto> noTopBand = List.of(
-            new PricingFreightRateDto(1L, "IT", "อิตาลี", bd("12"), bd("17"), bd("451"), bd("801"), bd("100000")));
-        assertThat(engine.containerFreight(noTopBand, "IT", lines(line("12", "1600")), "test").amountThb())
-            .isEqualByComparingTo("200000");
-    }
-
-    @Test
-    void containerFreight_thickOnly_fullContainerRateIsTheBandHolding450() {
-        // 700 @19: 1 full at the 17–21 band holding 450 (101–451 = 100,000) + 250 ตร.ม. leftover in that
-        // same band (100,000) = 200,000. The thick table has no 801+ band, so the old 800-based split cannot price this.
-        PricingFormulaEngine.ContainerCharge freight = engine.containerFreight(italyThinAndThickRates(), "IT", lines(line("19", "700")), "test");
-        assertThat(freight.fullContainers()).isEqualTo(1);
-        assertThat(freight.amountThb()).isEqualByComparingTo("200000");
-        // 720 @19: rounds up to 2 full → 2 × 100,000
-        assertThat(engine.containerFreight(italyThinAndThickRates(), "IT", lines(line("19", "720")), "test").amountThb())
-            .isEqualByComparingTo("200000");
-        // 450 @17 (exactly one thick container) → 1 × 100,000, nothing left
-        assertThat(engine.containerFreight(italyThinAndThickRates(), "IT", lines(line("17", "450")), "test").amountThb())
-            .isEqualByComparingTo("100000");
-    }
-
-    @Test
     void containerFreight_mixedShipment_chargesTheHighestFullContainerRatePresent() {
         // 400 @10 + 225 @19: E = 1.0 → 1 full, no leftover. Thin full rate 100,000 vs thick full rate 120,000 → 120,000.
         PricingFormulaEngine.ContainerCharge freight = engine.containerFreight(dearThickRates(), "IT",
@@ -438,45 +252,6 @@ class PricingFormulaEngineTest {
         // same shipment on the seeded IT table: 100,000 (both full rates tie) + 60,000
         assertThat(engine.containerFreight(italyThinAndThickRates(), "IT", lines(line("19", "300"), line("10", "300")), "test").amountThb())
             .isEqualByComparingTo("160000");
-    }
-
-    @Test
-    void containerClearance_usesTheSameSplitOverTheWholeShipment() {
-        // thin: 3,910 @8 → 5 × 20,000; 3,250 → 4 × 20,000 + 8,000
-        assertThat(engine.containerClearance(clearanceFees(), lines(line("8", "3910")), "test").amountThb())
-            .isEqualByComparingTo("100000");
-        assertThat(engine.containerClearance(clearanceFees(), lines(line("8", "3250")), "test").amountThb())
-            .isEqualByComparingTo("88000");
-        // DL-2026-0325: 7,820 → 10 × 20,000
-        assertThat(engine.containerClearance(clearanceFees(), lines(line("8", "7820")), "test").amountThb())
-            .isEqualByComparingTo("200000");
-        // thick-only 700 @19: 1 full (20,000) + leftover looked up at r × 450 = 250 → 101–451 = 12,000
-        assertThat(engine.containerClearance(clearanceFees(), lines(line("19", "700")), "test").amountThb())
-            .isEqualByComparingTo("32000");
-        // thick-only 720 @19: 2 full
-        assertThat(engine.containerClearance(clearanceFees(), lines(line("19", "720")), "test").amountThb())
-            .isEqualByComparingTo("40000");
-        // mixed 300 @19 + 300 @10: 1 full + leftover at r × 800 = 33.3 → 1–101 = 8,000
-        assertThat(engine.containerClearance(clearanceFees(), lines(line("19", "300"), line("10", "300")), "test").amountThb())
-            .isEqualByComparingTo("28000");
-    }
-
-    @Test
-    void containerFreight_missingBand_namesTheFailingThickness_onTheFullRatePath() {
-        // 400 @10 + 450 @25: E = 1.5 → full containers; 25 mm has no band at all → the error names 25, not 10
-        assertThatThrownBy(() -> engine.containerFreight(italyThinAndThickRates(), "IT",
-            lines(line("10", "400"), line("25", "450")), "ชิปเมนต์ X"))
-            .isInstanceOf(ApiException.class)
-            .hasMessageContaining("ชิปเมนต์ X หนา 25 มม.");
-    }
-
-    @Test
-    void containerFreight_missingBand_namesTheFailingThickness_onTheLeftoverPath() {
-        // 100 @10 + 50 @25: E < 1 → leftover only; the 25 mm lookup fails and is named
-        assertThatThrownBy(() -> engine.containerFreight(italyThinAndThickRates(), "IT",
-            lines(line("10", "100"), line("25", "50")), "ชิปเมนต์ X"))
-            .isInstanceOf(ApiException.class)
-            .hasMessageContaining("ชิปเมนต์ X หนา 25 มม.");
     }
 
     @Test

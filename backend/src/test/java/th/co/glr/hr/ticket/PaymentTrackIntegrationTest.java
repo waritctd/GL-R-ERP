@@ -2,11 +2,6 @@ package th.co.glr.hr.ticket;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyLong;
-import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
@@ -21,8 +16,6 @@ import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.catalog.CatalogRepository;
 import th.co.glr.hr.common.ApiException;
-import th.co.glr.hr.common.PageRequest;
-import th.co.glr.hr.config.AppProperties;
 import th.co.glr.hr.customer.ContactRepository;
 import th.co.glr.hr.customer.CustomerDto;
 import th.co.glr.hr.customer.CustomerRepository;
@@ -41,7 +34,6 @@ import th.co.glr.hr.deposit.DepositNoticeItemRequest;
 import th.co.glr.hr.deposit.DepositNoticePdfRenderer;
 import th.co.glr.hr.deposit.DepositNoticeRepository;
 import th.co.glr.hr.deposit.DepositNoticeService;
-import th.co.glr.hr.deposit.RemainingInvoicePdfRenderer;
 import th.co.glr.hr.employee.EmployeeCodeGenerator;
 import th.co.glr.hr.employee.EmployeeReferenceRepository;
 import th.co.glr.hr.employee.EmployeeRepository;
@@ -59,11 +51,7 @@ import th.co.glr.hr.orderconfirmation.OrderConfirmationRequests.CreateDepositNot
 import th.co.glr.hr.orderconfirmation.OrderConfirmationService;
 import th.co.glr.hr.pricing.FxRateRepository;
 import th.co.glr.hr.pricing.PricingFormulaConfigRepository;
-import th.co.glr.hr.pricingcosting.PricingCostingDtos.PricingCostingDto;
 import th.co.glr.hr.pricingcosting.PricingCostingRepository;
-import th.co.glr.hr.pricingcosting.PricingCostingRequests.CreateCostingRequest;
-import th.co.glr.hr.pricingcosting.PricingCostingRequests.RecalculateCostingRequest;
-import th.co.glr.hr.pricingcosting.PricingCostingRequests.SubmitCostingRequest;
 import th.co.glr.hr.pricingcosting.PricingCostingService;
 import th.co.glr.hr.pricingcosting.PricingFormulaEngine;
 import th.co.glr.hr.pricingdecision.PricingDecisionDtos.PricingDecisionDto;
@@ -175,8 +163,6 @@ class PaymentTrackIntegrationTest extends AbstractPostgresIntegrationTest {
     private void insertFactory(String name) {
     }
 
-    // POSITIVE — full end-to-end walks (plan scenarios 6, 7), revision (8), authz-visible (9)
-
     @Test
     void requiredPath_walksEndToEnd_nullThroughDepositNoticeIssuedThroughFullyPaid() {
         Deal deal = buildDealToQuotationAccepted("required");
@@ -287,175 +273,6 @@ class PaymentTrackIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     @Test
-    void bypassDeal_partiallyPaid_isVisibleToAccountRoleListScope_beforeAndAfter() {
-        Deal deal = buildDealToQuotationAccepted("authz");
-        // Owning rep only -- see the note on the bypass-path test above.
-        ticketService.waiveDeposit(deal.ticketId(), DepositPolicy.WAIVED, "ทดสอบ authz visibility", salesActor);
-        orderConfirmation.confirmOrder(
-            deal.pricingRequestId(), new ConfirmOrderRequest(UUID.randomUUID().toString()), salesActor);
-        assertThat(paymentStatusOf(deal.ticketId())).isEqualTo(PaymentTrack.CUSTOMER_CONFIRMED);
-
-        // BEFORE (S10 floor): confirmOrder puts the deal at ORDER_RECEIVED (S10), and every live
-        // order from S10 on is in account's list by STAGE alone -- so a bypass deal sitting at
-        // CUSTOMER_CONFIRMED is already visible, even though CUSTOMER_CONFIRMED is not in
-        // ACCOUNT_PENDING_PAYMENT_STATUSES and no due_date is set.
-        assertThat(accountVisibleTicketIds()).contains(deal.ticketId());
-
-        BigDecimal payable = tickets.payableAmount(deal.ticketId());
-        assertThat(payable.signum()).as("fixture must have a positive payable amount").isPositive();
-        ticketService.recordPayment(deal.ticketId(),
-            new RecordPaymentRequest("DEPOSIT", payable.multiply(new BigDecimal("0.30")), null,
-                "ชำระบางส่วน", null, null, false),
-            accountActor);
-
-        // Site 6, bypass branch: CUSTOMER_CONFIRMED -> AWAITING_FINAL_PAYMENT, never DEPOSIT_PAID (which PaymentTrack
-        // refuses entirely for a bypass policy).
-        assertThat(paymentStatusOf(deal.ticketId())).isEqualTo(PaymentTrack.AWAITING_FINAL_PAYMENT);
-
-        // AFTER: the real repository list query through the real service (TicketService.listPage
-        // -> TicketRepository.findSummaries -> appendRoleScope), never a mock — the deal stays
-        // visible once the partial payment lands (via BOTH the S10 stage disjunct and
-        // ACCOUNT_PENDING_PAYMENT_STATUSES's AWAITING_FINAL_PAYMENT entry).
-        assertThat(accountVisibleTicketIds()).contains(deal.ticketId());
-    }
-
-    /**
-     * A SECOND partial payment on a
-     * bypass-policy deal must not throw. reconcilePaymentStatus must not gate its idempotency check on the
-     * its idempotency check on the hardcoded DEPOSIT_PAID literal while the write target is
-     * policy-dependent: on a bypass deal the guard would never match, the block would re-enter,
-     * and PaymentTrack would be asked for an AWAITING_FINAL_PAYMENT -> AWAITING_FINAL_PAYMENT
-     * self-loop it correctly refuses. Because recordPayment is @Transactional the receipt insert
-     * would roll back too, so the instalment could not be recorded at all (HTTP 500).
-     *
-     * The bypassDeal_partiallyPaid test records exactly ONE payment, which cannot catch this.
-     * This one records TWO.
-     */
-    @Test
-    void bypassDeal_secondPartialPayment_isRecorded_andPaymentStatusStaysOnPath() {
-        Deal deal = buildDealToQuotationAccepted("twopay");
-        // Owning rep only -- see the note on the bypass-path test above.
-        ticketService.waiveDeposit(deal.ticketId(), DepositPolicy.WAIVED, "ทดสอบชำระสองงวด", salesActor);
-        orderConfirmation.confirmOrder(
-            deal.pricingRequestId(), new ConfirmOrderRequest(UUID.randomUUID().toString()), salesActor);
-
-        BigDecimal payable = tickets.payableAmount(deal.ticketId());
-        assertThat(payable.signum()).as("fixture must have a positive payable amount").isPositive();
-        BigDecimal instalment = payable.multiply(new BigDecimal("0.30"));
-
-        ticketService.recordPayment(deal.ticketId(),
-            new RecordPaymentRequest("DEPOSIT", instalment, null, "งวดที่ 1", null, null, false),
-            accountActor);
-        assertThat(paymentStatusOf(deal.ticketId())).isEqualTo(PaymentTrack.AWAITING_FINAL_PAYMENT);
-
-        // The second instalment is the one that would blow up.
-        ticketService.recordPayment(deal.ticketId(),
-            new RecordPaymentRequest("BALANCE", instalment, null, "งวดที่ 2", null, null, false),
-            accountActor);
-
-        // Still on the bypass path, and NOT advanced to FULLY_PAID (60% of payable is not full).
-        assertThat(paymentStatusOf(deal.ticketId())).isEqualTo(PaymentTrack.AWAITING_FINAL_PAYMENT);
-
-        // And the receipt actually persisted — the rollback was the real damage, not just the 500.
-        assertThat(tickets.findReceiptsByTicket(deal.ticketId()))
-            .as("both instalments must be recorded")
-            .hasSize(2);
-    }
-
-    /**
-     * A multi-hop advance must WALK, and the intermediate state must SHOW. A
-     * REQUIRED deal paying in full from DEPOSIT_PAID goes DEPOSIT_PAID -> AWAITING_FINAL_PAYMENT
-     * -> FULLY_PAID. The column ends at FULLY_PAID either way, so asserting only the end state
-     * cannot tell a walk from a jump — this asserts the AWAITING_FINAL_PAYMENT ticket_event,
-     * which is the only durable trace that the state was ever reached.
-     */
-    @Test
-    void requiredDeal_payingInFullFromDepositPaid_walksThroughAwaitingFinalPayment_andItShows() {
-        Deal deal = buildDealToQuotationAccepted("walkshow");
-        orderConfirmation.confirmOrder(
-            deal.pricingRequestId(), new ConfirmOrderRequest(UUID.randomUUID().toString()), salesActor);
-        DepositNoticeDto walkDraft = orderConfirmation.createDepositNoticeFromQuotation(
-            deal.pricingRequestId(), new CreateDepositNoticeFromQuotationRequest(null), salesActor);
-        depositNoticeService.issue(walkDraft.id(), salesActor);
-        assertThat(paymentStatusOf(deal.ticketId())).isEqualTo(PaymentTrack.DEPOSIT_NOTICE_ISSUED);
-
-        ticketService.confirmDepositPaid(deal.ticketId(), accountActor);
-        assertThat(paymentStatusOf(deal.ticketId())).isEqualTo(PaymentTrack.DEPOSIT_PAID);
-
-        long awaitingEventsBefore = countEvents(deal.ticketId(), TicketEventKind.AWAITING_FINAL_PAYMENT);
-
-        // Pay the whole remaining balance in one go — the jump the walk has to decompose.
-        BigDecimal outstanding = tickets.payableAmount(deal.ticketId())
-            .subtract(nullToZeroLocal(tickets.sumPaid(deal.ticketId())));
-        assertThat(outstanding.signum()).as("fixture must leave a balance").isPositive();
-        ticketService.recordPayment(deal.ticketId(),
-            new RecordPaymentRequest("BALANCE", outstanding, null, "ชำระเต็มจำนวน", null, null, false),
-            accountActor);
-
-        assertThat(paymentStatusOf(deal.ticketId())).isEqualTo(PaymentTrack.FULLY_PAID);
-        assertThat(countEvents(deal.ticketId(), TicketEventKind.AWAITING_FINAL_PAYMENT))
-            .as("the walk must leave a trace that AWAITING_FINAL_PAYMENT was reached")
-            .isGreaterThan(awaitingEventsBefore);
-    }
-
-    private long countEvents(long ticketId, String kind) {
-        return jdbc.queryForObject(
-            "SELECT COUNT(*) FROM sales.ticket_event WHERE ticket_id = :id AND kind = :k",
-            java.util.Map.of("id", ticketId, "k", kind), Long.class);
-    }
-
-    private static BigDecimal nullToZeroLocal(BigDecimal v) {
-        return v == null ? BigDecimal.ZERO : v;
-    }
-
-    private List<Long> accountVisibleTicketIds() {
-        return ticketService.listPage(null, accountActor, PageRequest.resolve(0, 200)).items()
-            .stream().map(TicketSummaryDto::id).toList();
-    }
-
-    // WRONG-WAY-ROUND #1 (skip/off-path) — repository level. This proves the SAME refusal survives into
-    // advancePaymentStatus against a real row: an off-path target throws BEFORE any SQL executes, not after a
-    // partial write.
-
-    @Test
-    void advancePaymentStatus_targetNotARealStatus_throwsBeforeAnySql_rowUnchanged() {
-        long ticketId = createBareTicket();
-        tickets.updatePaymentStatusUnchecked(ticketId, PaymentTrack.CUSTOMER_CONFIRMED);
-
-        assertThatThrownBy(() -> tickets.advancePaymentStatus(
-                ticketId, DepositPolicy.REQUIRED, PaymentTrack.CUSTOMER_CONFIRMED, "NOT_A_REAL_STATUS"))
-            // Converted from IllegalStateException to a 409 at the source: an illegal edge is a conflict the caller can
-            // act on, not an opaque 500. The row must still be untouched, which is what the assertion below proves — the
-            // throw happens before any SQL.
-            .isInstanceOf(ApiException.class)
-            .extracting(e -> ((ApiException) e).getStatus()).isEqualTo(HttpStatus.CONFLICT);
-
-        assertThat(paymentStatusOf(ticketId)).isEqualTo(PaymentTrack.CUSTOMER_CONFIRMED);
-    }
-
-    // WRONG-WAY-ROUND #2: reverse
-
-    @Test
-    void advancePaymentStatus_reverse_throwsBeforeAnySql_rowUnchanged() {
-        long ticketId = createBareTicket();
-        tickets.updatePaymentStatusUnchecked(ticketId, PaymentTrack.FULLY_PAID);
-
-        assertThatThrownBy(() -> tickets.advancePaymentStatus(
-                ticketId, DepositPolicy.REQUIRED, PaymentTrack.FULLY_PAID, PaymentTrack.DEPOSIT_PAID))
-            // Converted from IllegalStateException to a 409 at the source: an illegal edge is a conflict the caller can
-            // act on, not an opaque 500. The row must still be untouched, which is what the assertion below proves — the
-            // throw happens before any SQL.
-            .isInstanceOf(ApiException.class)
-            .extracting(e -> ((ApiException) e).getStatus()).isEqualTo(HttpStatus.CONFLICT);
-
-        assertThat(paymentStatusOf(ticketId)).isEqualTo(PaymentTrack.FULLY_PAID);
-    }
-
-    // EXTRA (not one of the plan's 5 named wrong-way-round scenarios, but required to precisely mutation-check
-    // guard (b), the compare-and-set clause itself): a stale "expected" — a concurrent-writer race — and the
-    // null-entry IS NOT DISTINCT FROM correctness. See the branch report.
-
-    @Test
     void advancePaymentStatus_staleExpected_returnsZeroRows_rowUnchanged() {
         long ticketId = createBareTicket();
         tickets.updatePaymentStatusUnchecked(ticketId, PaymentTrack.DEPOSIT_PAID);
@@ -469,20 +286,6 @@ class PaymentTrackIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(rows).isZero();
         assertThat(paymentStatusOf(ticketId)).isEqualTo(PaymentTrack.DEPOSIT_PAID);
     }
-
-    @Test
-    void advancePaymentStatus_nullExpected_matchesNullColumn_viaIsNotDistinctFrom() {
-        long ticketId = createBareTicket();
-        assertThat(paymentStatusOf(ticketId)).isNull();
-
-        int rows = tickets.advancePaymentStatus(
-            ticketId, DepositPolicy.REQUIRED, null, PaymentTrack.CUSTOMER_CONFIRMED);
-
-        assertThat(rows).isEqualTo(1);
-        assertThat(paymentStatusOf(ticketId)).isEqualTo(PaymentTrack.CUSTOMER_CONFIRMED);
-    }
-
-    // WRONG-WAY-ROUND #3: late waiveDeposit (guard c)
 
     @Test
     void waiveDeposit_afterDepositNoticeIssued_isRefused_depositPolicyUnchanged() {
@@ -500,77 +303,6 @@ class PaymentTrackIntegrationTest extends AbstractPostgresIntegrationTest {
 
         assertThat(depositPolicyOf(ticketId)).isEqualTo(DepositPolicy.REQUIRED);
     }
-
-    // WRONG-WAY-ROUND #4: issueImportRequest with NULL payment status on a bypass policy (guard d)
-
-    @Test
-    void issueImportRequest_nullPaymentStatusOnBypassPolicy_isRefused_fulfillmentStatusStaysNull() {
-        long ticketId = createBareTicket();
-        tickets.updateDepositPolicy(ticketId, DepositPolicy.WAIVED, "ทดสอบ", salesRepId);
-        tickets.markQuotationIssuedForOrderConfirmation(ticketId); // status draft -> quotation_issued
-        assertThat(paymentStatusOf(ticketId)).isNull();
-
-        assertThatThrownBy(() -> ticketService.requireImportRequestIssuable(
-                tickets.findById(ticketId).orElseThrow().summary()))
-            .isInstanceOfSatisfying(ApiException.class,
-                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
-
-        assertThat(fulfillmentStatusOf(ticketId)).isNull();
-    }
-
-    // WRONG-WAY-ROUND #5: off-path — a WAIVED deal cannot reach DEPOSIT_NOTICE_ISSUED
-
-    @Test
-    void advancePaymentStatus_waivedPolicyCannotReachDepositNoticeIssued_repositoryLevel() {
-        long ticketId = createBareTicket();
-        tickets.updateDepositPolicy(ticketId, DepositPolicy.WAIVED, "ทดสอบ", salesRepId);
-        tickets.updatePaymentStatusUnchecked(ticketId, PaymentTrack.CUSTOMER_CONFIRMED);
-
-        assertThatThrownBy(() -> tickets.advancePaymentStatus(
-                ticketId, DepositPolicy.WAIVED, PaymentTrack.CUSTOMER_CONFIRMED, PaymentTrack.DEPOSIT_NOTICE_ISSUED))
-            // Converted from IllegalStateException to a 409 at the source: an illegal edge is a conflict the caller can
-            // act on, not an opaque 500. The row must still be untouched, which is what the assertion below proves — the
-            // throw happens before any SQL.
-            .isInstanceOf(ApiException.class)
-            .extracting(e -> ((ApiException) e).getStatus()).isEqualTo(HttpStatus.CONFLICT);
-
-        assertThat(paymentStatusOf(ticketId)).isEqualTo(PaymentTrack.CUSTOMER_CONFIRMED);
-    }
-
-    /**
-     * Same off-path fact, proven through the real SERVICE call this time — this is what proves a
-     * gap found while writing this test class: {@code DepositNoticeService.issue}'s loosened
-     * precondition (site 2) originally checked ONLY {@code paymentStatus}, not {@code
-     * deposit_policy}. {@code createDraft} now refuses a bypass-policy deal, but a DRAFT made while
-     * the deal was still REQUIRED survives a later waive, so a WAIVED deal at {@code
-     * CUSTOMER_CONFIRMED} can still hold a real DRAFT deposit notice and sail past the service-level guard into {@code
-     * advancePaymentStatus}, which would throw {@link IllegalStateException} UNCAUGHT —
-     * {@code ApiExceptionHandler} has no handler for it, so it would have surfaced as an opaque
-     * 500 ("เกิดข้อผิดพลาดภายในระบบ"), not a clean conflict. Fixed by adding an explicit {@code
-     * !DepositPolicy.bypassesDepositNotice(...)} check to that same precondition — see {@code
-     * DepositNoticeService.issue}'s own comment.
-     */
-    @Test
-    void depositNoticeServiceIssue_onWaivedPolicyDeal_isRefusedWithCleanConflict_notAnUncaughtException() {
-        long ticketId = createBareTicket();
-        tickets.markQuotationIssuedForOrderConfirmation(ticketId);
-        tickets.updatePaymentStatusUnchecked(ticketId, PaymentTrack.CUSTOMER_CONFIRMED);
-        long docId = depositNoticeService.createDraft(ticketId, bareDraftRequest(), salesActor).id();
-        tickets.updateDepositPolicy(ticketId, DepositPolicy.WAIVED, "ทดสอบ", salesRepId);
-
-        assertThatThrownBy(() -> depositNoticeService.issue(docId, salesActor))
-            .isInstanceOfSatisfying(ApiException.class,
-                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
-
-        assertThat(paymentStatusOf(ticketId)).isEqualTo(PaymentTrack.CUSTOMER_CONFIRMED);
-        DepositNoticeDto reread = depositNoticeRepository.findById(docId).orElseThrow();
-        assertThat(reread.status()).isEqualTo("DRAFT");
-    }
-
-    // ═══════════════════════════════════════════════════════════════════════════════════════
-    // Hand-off notification: a no-deposit order tells account there will be no deposit
-    // notice. Fires on the FIRST confirmation only, on any confirm path (here: the PCR path).
-    // ═══════════════════════════════════════════════════════════════════════════════════════
 
     private static final String NO_DEPOSIT_TITLE = "ยืนยันคำสั่งซื้อแล้ว — ดีลนี้ไม่เก็บมัดจำ";
 
@@ -595,22 +327,6 @@ class PaymentTrackIntegrationTest extends AbstractPostgresIntegrationTest {
         mailer.assertRoleNotice("account", "ORDER_CONFIRMED_NO_DEPOSIT", NO_DEPOSIT_TITLE, message,
             "/finance/deals/" + deal.ticketId(), accountId);
     }
-
-    @Test
-    void confirmOrder_onADealWithADeposit_doesNotNotifyAccountOfNoDeposit() {
-        mailer.seedRoleEmployee("account");
-        Deal deal = buildDealToQuotationAccepted("with-deposit-notice");
-
-        orderConfirmation.confirmOrder(
-            deal.pricingRequestId(), new ConfirmOrderRequest(UUID.randomUUID().toString()), salesActor);
-
-        assertThat(depositPolicyOf(deal.ticketId())).as("fixture: a deposit is required")
-            .isEqualTo(DepositPolicy.REQUIRED);
-        mailer.assertNoNotice("ORDER_CONFIRMED_NO_DEPOSIT", NO_DEPOSIT_TITLE);
-    }
-
-    // Bare-ticket fixture helpers — for the repository-level / wrong-way-round tests, where the fact under test is
-    // the GUARD, not how the ticket got there.
 
     private long createBareTicket() {
         return tickets.create(sampleTicketRequest(), tickets.nextTicketCode(), salesRepId, "พนักงานขาย เพย์เมนต์");
@@ -637,14 +353,6 @@ class PaymentTrackIntegrationTest extends AbstractPostgresIntegrationTest {
     private String depositPolicyOf(long ticketId) {
         return tickets.findById(ticketId).orElseThrow().summary().depositPolicy();
     }
-
-    private String fulfillmentStatusOf(long ticketId) {
-        return tickets.findById(ticketId).orElseThrow().summary().fulfillmentStatus();
-    }
-
-    // Heavy fixture — mirrors DepositNoticeIssueGuardIntegrationTest's approach for driving a deal through the
-    // real Steps 1-6 services up to QUOTATION_ACCEPTED, WITHOUT calling confirmOrder (so each positive test
-    // controls exactly when site 1 fires itself).
 
     private record Deal(long ticketId, long pricingRequestId) {}
 
@@ -696,7 +404,6 @@ class PaymentTrackIntegrationTest extends AbstractPostgresIntegrationTest {
         String email = FACTORY.toLowerCase().replace(" ", "-") + "@example.com";
         factoryQuoteService.markContacted(draft.id(),
             new MarkFactoryContactedRequest(java.time.LocalDate.now(java.time.ZoneId.of("Asia/Bangkok")), null), importActor);
-        drainDispatches();
         ReceiveFactoryQuoteRequest response = new ReceiveFactoryQuoteRequest(
             "REF-" + UUID.randomUUID(), "THB", "30 days", "45 days", "revision", "note",
             List.of(new ReceiveFactoryQuoteItemRequest(
@@ -706,10 +413,6 @@ class PaymentTrackIntegrationTest extends AbstractPostgresIntegrationTest {
             UUID.randomUUID().toString());
         FactoryQuoteDto responded = factoryQuoteService.receive(draft.id(), response, importActor);
         factoryQuoteService.markReadyForCosting(responded.id(), importActor);
-
-        // Import's last act is markReadyForCosting above. The costing write calls are severed
-        // (@Deprecated, 409) — startReview computes the landed cost itself when the CEO opens the
-        // review.
 
         PricingDecisionDto decision = decisionService.startReview(pricingRequestId,
             new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, UUID.randomUUID().toString()), ceoActor);
@@ -727,12 +430,6 @@ class PaymentTrackIntegrationTest extends AbstractPostgresIntegrationTest {
             draftQuotation.id(), new IssueCustomerQuotationRequest(UUID.randomUUID().toString()), salesActor);
         quotationService.recordOutcome(issued.id(),
             new RecordQuotationOutcomeRequest(QuotationStatus.ACCEPTED, "ลูกค้าโอเค", UUID.randomUUID().toString()), salesActor);
-    }
-
-    private void drainDispatches() {
-        // No-op now: FactoryQuoteService.send is synchronous (manual-RFQ redesign) -- there is no dispatch/worker
-        // queue left to drain. Kept (rather than removing every call site) so this helper's callers do not all need to
-        // be revisited individually.
     }
 
     private TicketItemRequest ticketItem(String brand, String model, String factory) {

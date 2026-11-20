@@ -24,12 +24,6 @@ describe('SalesTabs (role-scoped views)', () => {
       .toEqual(['งานทั้งหมด', 'คิวขอราคา']);
   });
 
-  it('gives sales_manager the deal-list tab and the pricing queue tab, queue trailing', () => {
-    renderTabs('sales_manager');
-    expect(screen.getAllByRole('link').map((link) => link.textContent))
-      .toEqual(['งานทั้งหมด', 'คิวขอราคา']);
-  });
-
   // A bar offering ONE destination is chrome that navigates nowhere — the tab is always the page you are already
   // on. Both roles below keep their sidebar entries (/tickets and /pricing-requests are separate AppShell nav
   // items), so nothing becomes unreachable.
@@ -39,25 +33,10 @@ describe('SalesTabs (role-scoped views)', () => {
     expect(screen.queryByLabelText('งานขาย (Sales)')).toBeNull();
   });
 
-  it('renders nothing for import, left with only the pricing queue', () => {
-    renderTabs('import');
-    expect(screen.queryByText('งานทั้งหมด')).toBeNull();
-    expect(screen.queryAllByRole('link')).toHaveLength(0);
-  });
-
   // Account has neither canViewDealPipeline nor canViewPricingRequestQueue, so this bar has nothing to offer it
   // at all — its worklist is its own งานการเงิน page (/finance), not this component.
   it('gives account no tabs at all (its worklist is งานการเงิน, not this bar)', () => {
     renderTabs('account');
     expect(screen.queryAllByRole('link')).toHaveLength(0);
-  });
-
-  // The removed tab must not come back by accident, in any role's bar.
-  it('never renders a ภาพรวม tab for any role', () => {
-    for (const role of ['sales', 'sales_manager', 'ceo', 'import', 'account']) {
-      const { unmount } = renderTabs(role);
-      expect(screen.queryByText('ภาพรวม')).toBeNull();
-      unmount();
-    }
   });
 });

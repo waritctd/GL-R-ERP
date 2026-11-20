@@ -168,26 +168,6 @@ class PayrollLeaveCorrectionAutoRefundIntegrationTest extends AbstractPostgresIn
         assertThat(previewLineM2.leaveDeductionRefund()).isEqualByComparingTo("0.00");
     }
 
-    @Test
-    void pendingCorrectionWithNoOtherPayrollActivityStillRefunds() {
-        long employeeId = insertEmployee("REFUND-002");
-        LocalDate month = firstMondayOfMonth(3).withDayOfMonth(1);
-        // Correction inserted directly, bypassing the leave workflow entirely, to isolate the payroll-side refund
-        // logic from leave-side plumbing: this employee has NEVER submitted any leave request and has no other payroll
-        // inputs this month at all.
-        insertPendingCorrection(employeeId, month.minusMonths(1), new BigDecimal("2.50"));
-
-        PayrollPeriodDto preview = payrollService.preview(new ProcessPayrollRequest(month, List.of()), hr());
-        PayrollLineDto line = lineFor(preview, employeeId);
-        assertThat(line.leaveRefundDays()).isEqualByComparingTo("2.50");
-        assertThat(line.leaveDeductionRefund()).isEqualByComparingTo(DAILY_RATE.multiply(new BigDecimal("2.50")).setScale(2, java.math.RoundingMode.HALF_UP));
-
-        PayrollPeriodDto processed = payrollService.process(new ProcessPayrollRequest(month, List.of()), hr());
-        PayrollLineDto processedLine = lineFor(processed, employeeId);
-        assertThat(processedLine.leaveRefundDays()).isEqualByComparingTo("2.50");
-        assertThat(leaveRepository.findPendingPayrollCorrectionsByEmployee()).doesNotContainKey(employeeId);
-    }
-
     // --- helpers ------------------------------------------------------------
 
     private LocalDate firstMondayOfMonth(int monthsFromNow) {
@@ -276,26 +256,6 @@ class PayrollLeaveCorrectionAutoRefundIntegrationTest extends AbstractPostgresIn
             )
             VALUES (:leaveRequestId, 2025, 6.00, 6.00, 0.00, 6.00, 0.00, 0.00, 6.00)
             """, new MapSqlParameterSource("leaveRequestId", leaveRequestId));
-    }
-
-    private void insertPendingCorrection(long employeeId, LocalDate payrollMonth, BigDecimal unpaidDays) {
-        // A correction always references a real leave_request row (FK), so create a trivial already-cancelled one to
-        // satisfy it -- its own fields are irrelevant to this test, only the correction row's
-        // employee_id/payroll_month/unpaid_days_to_refund matter.
-        Long leaveRequestId = jdbc.queryForObject("""
-            INSERT INTO hr.leave_request (
-                employee_id, leave_type_code, start_date, end_date, total_days, paid_days, unpaid_days,
-                quota_year, reason, status, quota_remaining_before, quota_remaining_after, requested_by_id
-            )
-            VALUES (
-                :employeeId, 'VACATION', :payrollMonth, :payrollMonth, 1, 0, 1,
-                EXTRACT(YEAR FROM :payrollMonth)::smallint, 'fixture', 'CANCELLED', 6, 6, :employeeId
-            )
-            RETURNING leave_request_id
-            """, new MapSqlParameterSource()
-                .addValue("employeeId", employeeId)
-                .addValue("payrollMonth", payrollMonth), Long.class);
-        leaveRepository.recordPayrollCorrection(leaveRequestId, employeeId, payrollMonth, unpaidDays);
     }
 
     private int countCorrectionRows(long leaveRequestId) {

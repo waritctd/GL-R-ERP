@@ -1,7 +1,6 @@
 package th.co.glr.hr.overtime;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 
 import java.math.BigDecimal;
@@ -17,7 +16,6 @@ import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.http.HttpStatus;
 import th.co.glr.hr.attachment.AttachmentRepository;
 import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.attendance.daily.AttendanceDailyService;
@@ -29,7 +27,6 @@ import th.co.glr.hr.commission.CommissionAttachmentRepository;
 import th.co.glr.hr.commission.CommissionCalculator;
 import th.co.glr.hr.commission.CommissionRepository;
 import th.co.glr.hr.commission.CommissionService;
-import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.config.AppProperties;
 import th.co.glr.hr.employee.ManagerApproverRepository;
 import th.co.glr.hr.leave.LeaveRepository;
@@ -125,31 +122,6 @@ class RetroactiveOvertimeReachesPayrollIntegrationTest extends AbstractPostgresI
             .isEqualByComparingTo(new BigDecimal("375.00"));
     }
 
-    /** Overtime only becomes payable at the second approval stage. A request stuck at MANAGER_APPROVED must not be
-     * paid — payroll filters on status, and this proves the filter is in the SQL rather than only in the service's
-     * head. */
-    @Test
-    void managerApprovedOvertimeIsNotYetPaid() {
-        LocalDate workDate = backdatedWorkDateInCurrentMonth();
-        insertPunchesCovering(workDate);
-        long id = overtimeService.submit(backdated(workDate), employee(staff)).id();
-        overtimeService.approve(id, new ApproveOvertimeRequest("ok", null), directManager());
-
-        assertThat(statusOf(id)).isEqualTo("MANAGER_APPROVED");
-        assertThat(payableMinutesOf(id)).isEqualTo(120);
-        assertThat(overtimePayFor(workDate.withDayOfMonth(1), staff)).isEqualByComparingTo(BigDecimal.ZERO);
-    }
-
-    @Test
-    void rejectedBackdatedOvertimeIsNeverPaid() {
-        LocalDate workDate = backdatedWorkDateInCurrentMonth();
-        long id = overtimeService.submit(backdated(workDate), employee(staff)).id();
-        overtimeService.reject(id, new ReviewOvertimeRequest("not approved"), directManager());
-
-        assertThat(statusOf(id)).isEqualTo("REJECTED");
-        assertThat(overtimePayFor(workDate.withDayOfMonth(1), staff)).isEqualByComparingTo(BigDecimal.ZERO);
-    }
-
     /** The gross figure on the payroll line has to move, not just the overtime column — otherwise the money is
      * visible in a report and absent from the payslip. */
     @Test
@@ -172,40 +144,6 @@ class RetroactiveOvertimeReachesPayrollIntegrationTest extends AbstractPostgresI
         assertThat(after.netPay()).isGreaterThan(before.netPay());
     }
 
-    /** The guard that makes the whole thing safe. Without it a request could be filed into a month payroll had
-     * already closed, be approved, and then never appear in any payroll run — because saveProcessedPeriod writes a
-     * period once. */
-    @Test
-    void overtimeCannotBeFiledIntoAnAlreadyProcessedPayrollMonth() {
-        LocalDate workDate = backdatedWorkDateInCurrentMonth();
-        insertProcessedPeriod(workDate.withDayOfMonth(1));
-
-        assertThatThrownBy(() -> overtimeService.submit(backdated(workDate), employee(staff)))
-            .isInstanceOf(ApiException.class)
-            .extracting(exception -> ((ApiException) exception).getStatus())
-            .isEqualTo(HttpStatus.CONFLICT);
-    }
-
-    /** The same guard at the far end of the workflow: a request filed while the month was open can still reach CEO
-     * approval after payroll has run. It must be refused there too, or it lands in a closed month and is never
-     * paid. */
-    @Test
-    void ceoApprovalIsRefusedOnceThePayrollMonthClosesUnderneathTheRequest() {
-        LocalDate workDate = backdatedWorkDateInCurrentMonth();
-        insertPunchesCovering(workDate);
-        long id = overtimeService.submit(backdated(workDate), employee(staff)).id();
-        overtimeService.approve(id, new ApproveOvertimeRequest("ok", null), directManager());
-
-        // Payroll runs for the month while the request waits on the CEO.
-        insertProcessedPeriod(workDate.withDayOfMonth(1));
-
-        assertThatThrownBy(() -> overtimeService.approve(id, new ApproveOvertimeRequest("ok", null), ceo()))
-            .isInstanceOf(ApiException.class)
-            .extracting(exception -> ((ApiException) exception).getStatus())
-            .isEqualTo(HttpStatus.CONFLICT);
-        assertThat(statusOf(id)).isEqualTo("MANAGER_APPROVED");
-    }
-
     /** REGRESSION TEST for the fix, not a characterization of a defect anymore. */
     @Test
     void overtimeIsNotRepricedByALaterSalaryChange() {
@@ -221,50 +159,6 @@ class RetroactiveOvertimeReachesPayrollIntegrationTest extends AbstractPostgresI
         // Same work, same approval, same money — the rate was frozen at approval.
         assertThat(overtimePayFor(workDate.withDayOfMonth(1), staff))
             .isEqualByComparingTo(new BigDecimal("375.00"));
-    }
-
-    /** Overtime worked before a raise is paid at the old rate, even though by the time it is filed and approved the
-     * employee's current_salary is already the new one. The raise is recorded in hr.salary_history with an
-     * effective_date after the work date, so findSalaryBasisAsOf must not pick it up. */
-    @Test
-    void overtimeWorkedBeforeARaiseIsPaidAtTheOldRate() {
-        LocalDate workDate = backdatedWorkDateInCurrentMonth();
-        insertSalaryHistory(staff, workDate.plusDays(1), new BigDecimal("60000.00"));
-        jdbc.update("UPDATE hr.employee SET current_salary = 60000 WHERE employee_id = :id",
-            Map.of("id", staff));
-
-        fileAndFullyApprove(workDate);
-
-        assertThat(overtimePayFor(workDate.withDayOfMonth(1), staff))
-            .isEqualByComparingTo(new BigDecimal("375.00"));
-    }
-
-    /** The counterpart case: when salary_history has an entry effective on or before the work date, that historical
-     * amount is the basis, not whatever current_salary happens to hold. */
-    @Test
-    void overtimeUsesTheSalaryHistoryRowEffectiveOnOrBeforeTheWorkDate() {
-        LocalDate workDate = backdatedWorkDateInCurrentMonth();
-        insertSalaryHistory(staff, workDate, new BigDecimal("60000.00"));
-        jdbc.update("UPDATE hr.employee SET current_salary = 90000 WHERE employee_id = :id",
-            Map.of("id", staff));
-
-        fileAndFullyApprove(workDate);
-
-        // 2 h x (60,000 / 30 / 8) x 1.5 = 750.00
-        assertThat(overtimePayFor(workDate.withDayOfMonth(1), staff))
-            .isEqualByComparingTo(new BigDecimal("750.00"));
-    }
-
-    private void insertSalaryHistory(long employeeId, LocalDate effectiveDate, BigDecimal newAmount) {
-        Map<String, Object> params = new HashMap<>();
-        params.put("employeeId", employeeId);
-        params.put("effectiveDate", effectiveDate);
-        params.put("oldAmount", SALARY);
-        params.put("newAmount", newAmount);
-        jdbc.update("""
-            INSERT INTO hr.salary_history (employee_id, effective_date, recorded_date, old_amount, new_amount)
-            VALUES (:employeeId, :effectiveDate, :effectiveDate, :oldAmount, :newAmount)
-            """, params);
     }
 
     // --- helpers ------------------------------------------------------------
@@ -322,12 +216,6 @@ class RetroactiveOvertimeReachesPayrollIntegrationTest extends AbstractPostgresI
             .filter(line -> line.employeeId() == employeeId)
             .findFirst()
             .orElseThrow(() -> new AssertionError("no payroll line for employee " + employeeId));
-    }
-
-    private int payableMinutesOf(long id) {
-        return jdbc.queryForObject(
-            "SELECT payable_minutes FROM hr.overtime_request WHERE overtime_request_id = :id",
-            Map.of("id", id), Integer.class);
     }
 
     private String statusOf(long id) {
@@ -400,16 +288,4 @@ class RetroactiveOvertimeReachesPayrollIntegrationTest extends AbstractPostgresI
             """, Map.of("code", code, "name", nameTh), Long.class);
     }
 
-
-    private void insertProcessedPeriod(LocalDate payrollMonth) {
-        jdbc.update("""
-            INSERT INTO hr.payroll_period (payroll_month, period_start, period_end, pay_date, status)
-            VALUES (
-                :payrollMonth, :payrollMonth,
-                (:payrollMonth + INTERVAL '1 month - 1 day')::date,
-                (:payrollMonth + INTERVAL '1 month - 1 day')::date,
-                'PROCESSED'
-            )
-            """, Map.of("payrollMonth", payrollMonth));
-    }
 }

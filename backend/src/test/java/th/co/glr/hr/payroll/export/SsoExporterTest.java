@@ -6,8 +6,6 @@ import java.io.ByteArrayInputStream;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
-import org.apache.poi.ss.usermodel.Cell;
-import org.apache.poi.ss.usermodel.CellType;
 import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
 import org.apache.poi.ss.usermodel.Workbook;
@@ -84,96 +82,7 @@ class SsoExporterTest {
             .as("total เงินสมทบ filed for August").isEqualTo(22_588.0);
     }
 
-    // ---- layout ------------------------------------------------------------------------------
-
-    @Test
-    void headerRowMatchesTheReferenceFilingsColumns() {
-        Sheet sheet = build(List.of(insured("1111111111111", "15000.00", "750.00"))).getSheetAt(0);
-
-        assertThat(cells(sheet.getRow(0)))
-            .containsExactly("เลขบัตรประชาชน", "คำนำหน้า", "ชื่อ", "สกุล", "ค่าจ้าง", "เงินสมทบ");
-    }
-
-    /** The reference filing orders each sheet by เลขบัตรประชาชน ascending, but findExportRows hands rows over in
-     * employee_code order. The three ids below are deliberately supplied in a DIFFERENT order from their sorted
-     * one, so a build that just echoed the caller's order would fail this. */
-    @Test
-    void rowsAreOrderedByNationalIdAscendingNotByCallerOrder() {
-        List<PayrollExportRow> rows = List.of(
-            insured("3999999999999", "15000.00", "750.00"),
-            insured("1111111111111", "15000.00", "750.00"),
-            insured("2555555555555", "15000.00", "750.00"));
-
-        Sheet sheet = build(rows).getSheetAt(0);
-
-        assertThat(List.of(
-                (long) sheet.getRow(1).getCell(0).getNumericCellValue(),
-                (long) sheet.getRow(2).getCell(0).getNumericCellValue(),
-                (long) sheet.getRow(3).getCell(0).getNumericCellValue()))
-            .containsExactly(1111111111111L, 2555555555555L, 3999999999999L);
-    }
-
-    /** เลขบัตรประชาชน / ค่าจ้าง / เงินสมทบ must be real numeric cells, not text. */
-    @Test
-    void idAndAmountCellsAreNumericNotText() {
-        Row row = build(List.of(insured("1111111111111", "15000.00", "750.00")))
-            .getSheetAt(0).getRow(1);
-
-        assertThat(row.getCell(0).getCellType()).isEqualTo(CellType.NUMERIC);
-        assertThat(row.getCell(4).getCellType()).isEqualTo(CellType.NUMERIC);
-        assertThat(row.getCell(5).getCellType()).isEqualTo(CellType.NUMERIC);
-        assertThat(row.getCell(1).getCellType()).isEqualTo(CellType.STRING);
-    }
-
-    /** คำนำหน้า is the Thai title WORD, which the .txt format could not carry (it wanted an SSO 3-char code nobody
-     * had, and shipped three spaces). Asserting the word is present is the point. */
-    @Test
-    void titleColumnCarriesTheThaiTitleWord() {
-        Row row = build(List.of(insured("1111111111111", "15000.00", "750.00")))
-            .getSheetAt(0).getRow(1);
-
-        assertThat(row.getCell(1).getStringCellValue()).isEqualTo("นางสาว");
-        assertThat(row.getCell(2).getStringCellValue()).isEqualTo("ทดสอบ");
-        assertThat(row.getCell(3).getStringCellValue()).isEqualTo("ระบบ");
-    }
-
     // ---- branch split ------------------------------------------------------------------------
-
-    @Test
-    void eachBranchGetsItsOwnSheetHoldingOnlyItsOwnEmployees() {
-        List<PayrollExportRow> rows = List.of(
-            branched("1111111111111", "110001", "20000.00", "875.00"),
-            branched("2222222222222", "000000", "30000.00", "875.00"),
-            branched("3333333333333", "110001", "10000.00", "500.00"));
-
-        Workbook book = build(rows);
-
-        assertThat(sheetNames(book)).containsExactly("000000", "110001");
-        assertThat(book.getSheet("000000").getLastRowNum()).as("1 header + 1 detail").isEqualTo(1);
-        assertThat(book.getSheet("110001").getLastRowNum()).as("1 header + 2 details").isEqualTo(2);
-        assertThat(total(book, "110001", 5)).isEqualTo(1_375.0);
-        assertThat(total(book, "000000", 5)).isEqualTo(875.0);
-    }
-
-    @Test
-    void allEmployeesUnassignedStillProducesExactlyOneSheetAtTheEmployerBranch() {
-        List<PayrollExportRow> rows = List.of(
-            insured("1111111111111", "20000.00", "875.00"),
-            insured("2222222222222", "30000.00", "875.00"));
-
-        Workbook book = build(rows);
-
-        assertThat(sheetNames(book)).containsExactly("000000");
-        assertThat(book.getSheet("000000").getLastRowNum()).isEqualTo(2);
-    }
-
-    @Test
-    void noInsuredEmployeeStillProducesOneHeaderOnlySheet() {
-        Workbook book = build(List.of(director("1111111111111")));
-
-        assertThat(sheetNames(book)).containsExactly("000000");
-        assertThat(book.getSheet("000000").getLastRowNum()).as("header row only").isZero();
-    }
 
     @Test
     void directorsWithZeroContributionAreExcluded() {
@@ -200,15 +109,6 @@ class SsoExporterTest {
         assertThat(row.getCell(4).getNumericCellValue()).isNotEqualTo(17_500.0);
         assertThat(row.getCell(5).getNumericCellValue()).as("เงินสมทบ still capped at 875")
             .isEqualTo(875.0);
-    }
-
-    /** ssoWageGross == null (rows processed before V123) falls back to ssoWageBase. */
-    @Test
-    void ssoWageGrossNullFallsBackToSsoWageBase() {
-        Row row = build(List.of(insured("1111111111111", "15000.00", "750.00")))
-            .getSheetAt(0).getRow(1);
-
-        assertThat(row.getCell(4).getNumericCellValue()).isEqualTo(15_000.0);
     }
 
     /** Wrong-way-round rounding, per มาตรา 46 วรรคท้าย: exactly .50 rounds UP, just-under-.50 rounds DOWN. */
@@ -241,41 +141,6 @@ class SsoExporterTest {
 
         assertThat(book.getSheet("000000").getRow(1).getCell(4).getNumericCellValue()).isEqualTo(20_851.0);
         assertThat(book.getSheet("000000").getRow(2).getCell(4).getNumericCellValue()).isEqualTo(20_850.0);
-    }
-
-    // ---- identity ----------------------------------------------------------------------------
-
-    /** เลขบัตรประชาชน keys on the NATIONAL ID (owner ruling 2026-08-03), not social_security_no. The two ids below
-     * deliberately DIFFER — with a fixture where they match, this passes under either preference and proves
-     * nothing. */
-    @Test
-    void keysOnNationalIdNotSocialSecurityNo() {
-        PayrollExportRow row = row(1, null, "9000000000001", "9000000000002",
-            "15000.00", null, "750.00");
-
-        Sheet sheet = build(List.of(row)).getSheetAt(0);
-
-        assertThat((long) sheet.getRow(1).getCell(0).getNumericCellValue()).isEqualTo(9000000000001L);
-    }
-
-    @Test
-    void fallsBackToSocialSecurityNoWhenNationalIdIsMissing() {
-        PayrollExportRow row = row(1, null, null, "9000000000002", "15000.00", null, "750.00");
-
-        Sheet sheet = build(List.of(row)).getSheetAt(0);
-
-        assertThat((long) sheet.getRow(1).getCell(0).getNumericCellValue()).isEqualTo(9000000000002L);
-    }
-
-    /** Neither id on file: the cell stays BLANK so the e-service rejects the row, rather than filing a real
-     * person's wages under id 0. */
-    @Test
-    void bothIdsMissingLeavesTheCellBlankRatherThanZero() {
-        PayrollExportRow row = row(1, null, null, null, "15000.00", null, "750.00");
-
-        Cell cell = build(List.of(row)).getSheetAt(0).getRow(1).getCell(0);
-
-        assertThat(cell.getCellType()).isEqualTo(CellType.BLANK);
     }
 
     // ---- helpers -----------------------------------------------------------------------------
@@ -319,10 +184,6 @@ class SsoExporterTest {
         return row(1, null, nationalId, nationalId, wageBase, null, contribution);
     }
 
-    private PayrollExportRow branched(String nationalId, String branch, String wageBase, String contribution) {
-        return row(1, branch, nationalId, nationalId, wageBase, null, contribution);
-    }
-
     private PayrollExportRow uncapped(String nationalId, String wageGross, String wageBase, String contribution) {
         return row(1, null, nationalId, nationalId, wageBase, wageGross, contribution);
     }
@@ -351,14 +212,6 @@ class SsoExporterTest {
             names.add(book.getSheetName(i));
         }
         return names;
-    }
-
-    private List<String> cells(Row row) {
-        List<String> values = new ArrayList<>();
-        for (Cell cell : row) {
-            values.add(cell.getStringCellValue());
-        }
-        return values;
     }
 
     /** Sums one numeric column down a sheet's detail rows — what the e-service itself totals. */

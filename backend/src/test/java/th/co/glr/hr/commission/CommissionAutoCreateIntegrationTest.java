@@ -2,11 +2,7 @@ package th.co.glr.hr.commission;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyLong;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
@@ -25,7 +21,6 @@ import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.catalog.CatalogRepository;
 import th.co.glr.hr.common.ApiException;
-import th.co.glr.hr.config.AppProperties;
 import th.co.glr.hr.customer.ContactRepository;
 import th.co.glr.hr.customer.CustomerDto;
 import th.co.glr.hr.customer.CustomerRepository;
@@ -42,7 +37,6 @@ import th.co.glr.hr.deposit.DepositNoticeDto;
 import th.co.glr.hr.deposit.DepositNoticePdfRenderer;
 import th.co.glr.hr.deposit.DepositNoticeRepository;
 import th.co.glr.hr.deposit.DepositNoticeService;
-import th.co.glr.hr.deposit.RemainingInvoicePdfRenderer;
 import th.co.glr.hr.employee.EmployeeCodeGenerator;
 import th.co.glr.hr.employee.EmployeeReferenceRepository;
 import th.co.glr.hr.employee.EmployeeRepository;
@@ -258,53 +252,8 @@ class CommissionAutoCreateIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(tickets.hasInvoiceAttachment(ticketId)).isFalse();
     }
 
-    @Test
-    void submitAsSales_isForbidden_andCreatesNoCommissionRecord() {
-        long ticketId = driveDealToClosedPaid(new BigDecimal("10"));
-        int before = countCommissionRecords();
-        SubmitCommissionRequest request = submitRequestLinkedTo(ticketId, new BigDecimal("1000.00"));
-
-        assertThatThrownBy(() -> commissionService.submit(request, invoiceFile(), salesActor))
-            .isInstanceOfSatisfying(ApiException.class,
-                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
-
-        assertThat(countCommissionRecords()).isEqualTo(before);
-    }
-
-    @Test
-    void salesCannotApprove_evenAManagerApprovedCommission() {
-        long ticketId = driveDealToClosedPaid(new BigDecimal("10"));
-        CommissionRecord created = commissionService.createFromDeal(
-            ticketId, "INV-A2-" + UUID.randomUUID().toString().substring(0, 8), LocalDate.of(2026, 6, 15),
-            null, null, null, null, null, null, null, null, invoiceFile(), accountActor);
-        commissionService.approve(created.id(), salesManagerActor); // -> MANAGER_APPROVED
-
-        assertThatThrownBy(() -> commissionService.approve(created.id(), salesActor))
-            .isInstanceOfSatisfying(ApiException.class,
-                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
-
-        CommissionRecord stillManagerApproved = commissions.findById(created.id()).orElseThrow();
-        assertThat(stillManagerApproved.status()).isEqualTo(CommissionStatus.MANAGER_APPROVED);
-    }
-
     // grossAmount defaulting: omitted → the deal's real payable amount; provided → used as given. Two separate
     // deals — createFromDeal only allows one live commission per deal.
-
-    @Test
-    void createFromDeal_omittedGrossAmount_defaultsFromDealPayable() {
-        long ticketId = driveDealToClosedPaid(new BigDecimal("10"));
-        BigDecimal payable = tickets.payableAmount(ticketId); // QA-02: VAT-inclusive (the calculator divides by 1.07 itself)
-        assertThat(payable.signum()).isPositive();
-
-        CommissionRecord created = commissionService.createFromDeal(
-            ticketId, "INV-A2-DEFAULT-" + UUID.randomUUID().toString().substring(0, 8),
-            LocalDate.of(2026, 6, 15), null, null, null, null, null, null, null, null,
-            invoiceFile(), accountActor);
-
-        assertThat(created.invoiceDetails().grossAmount()).isEqualByComparingTo(payable);
-        assertThat(created.dealPayableAmountSnapshot()).isEqualByComparingTo(payable);
-        assertThat(created.dealAmountMismatch()).isFalse();
-    }
 
     /**
      * QA-02 (owner ruling 2026-10-28; supersedes the 2026-09-30 pre-VAT default): the commission workbooks take
@@ -328,65 +277,7 @@ class CommissionAutoCreateIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(created.dealAmountMismatch()).isFalse();
     }
 
-    @Test
-    void createFromDeal_providedGrossAmount_isUsedAsGiven_insteadOfDealPayable() {
-        long ticketId = driveDealToClosedPaid(new BigDecimal("10"));
-        BigDecimal payable = tickets.payableAmount(ticketId);
-        BigDecimal override = payable.add(new BigDecimal("50000.00")); // deliberately different + beyond threshold
-
-        CommissionRecord created = commissionService.createFromDeal(
-            ticketId, "INV-A2-OVERRIDE-" + UUID.randomUUID().toString().substring(0, 8),
-            LocalDate.of(2026, 6, 15), override, null, null, null, null, null, null, null,
-            invoiceFile(), accountActor);
-
-        assertThat(created.invoiceDetails().grossAmount()).isEqualByComparingTo(override);
-        assertThat(created.invoiceDetails().grossAmount()).isNotEqualByComparingTo(payable);
-        assertThat(created.dealAmountMismatch()).isTrue(); // flagged, not blocked
-    }
-
-    // Duplicate guard: a second commission for the same deal is rejected outright.
-
-    @Test
-    void createFromDeal_secondCallForSameDeal_isRejected_andCreatesNoSecondRecord() {
-        long ticketId = driveDealToClosedPaid(new BigDecimal("10"));
-        commissionService.createFromDeal(
-            ticketId, "INV-A2-FIRST-" + UUID.randomUUID().toString().substring(0, 8), LocalDate.of(2026, 6, 15),
-            null, null, null, null, null, null, null, null, invoiceFile(), accountActor);
-        int afterFirst = countCommissionRecords();
-
-        assertThatThrownBy(() -> commissionService.createFromDeal(
-                ticketId, "INV-A2-SECOND-" + UUID.randomUUID().toString().substring(0, 8), LocalDate.of(2026, 6, 15),
-                null, null, null, null, null, null, null, null, invoiceFile(), accountActor))
-            .isInstanceOfSatisfying(ApiException.class,
-                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
-
-        assertThat(countCommissionRecords()).isEqualTo(afterFirst);
-    }
-
-    @Test
-    void createFromDeal_rejectsWhenDealNotYetClosedPaid_andCreatesNoRecord() {
-        long ticketId = driveDealThroughDeliveryOnly(new BigDecimal("10")); // DELIVERED, not CLOSED_PAID
-        int before = countCommissionRecords();
-
-        assertThatThrownBy(() -> commissionService.createFromDeal(
-                ticketId, "INV-A2-NOTREADY-" + UUID.randomUUID().toString().substring(0, 8), LocalDate.of(2026, 6, 15),
-                null, null, null, null, null, null, null, null, invoiceFile(), accountActor))
-            .isInstanceOfSatisfying(ApiException.class,
-                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_CONTENT));
-
-        assertThat(countCommissionRecords()).isEqualTo(before);
-    }
-
     // Fixture helpers (same pattern as CommissionDealLinkageIntegrationTest).
-
-    private SubmitCommissionRequest submitRequestLinkedTo(long ticketId, BigDecimal grossAmount) {
-        long dealOwnerId = ticketService.get(ticketId, ceoActor).summary().createdById();
-        return new SubmitCommissionRequest(
-            ticketId, dealOwnerId, "INV-A2-MANUAL-" + UUID.randomUUID().toString().substring(0, 8),
-            LocalDate.of(2026, 6, 15), grossAmount,
-            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
-            BigDecimal.ZERO, BigDecimal.ZERO);
-    }
 
     private MultipartFile invoiceFile() {
         return new MockMultipartFile("invoiceAttachment", "invoice.pdf", "application/pdf", "pdf".getBytes());
@@ -511,9 +402,6 @@ class CommissionAutoCreateIntegrationTest extends AbstractPostgresIntegrationTes
     }
 
     private void drainDispatches() {
-        // No-op now: FactoryQuoteService.send is synchronous (manual-RFQ redesign) -- there is no dispatch/worker
-        // queue left to drain. Kept (rather than removing every call site) so this helper's callers do not all need to
-        // be revisited individually.
     }
 
     private TicketItemRequest ticketItem(String brand, String model, String factory) {

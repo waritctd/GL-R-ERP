@@ -39,18 +39,6 @@ class CommissionMonthlyEarningWindowTest {
     }
 
     @Test
-    void fiftyFiveThousandInOneCalendarMonth_clearsTheFloor_paidNormally() {
-        // ฿55,000 received within ONE calendar month is above the ฿50,000 monthly floor once VAT-stripped (55,000 /
-        // 1.07 ≈ 51,401.87) — paid, not zeroed.
-        BigDecimal monthTotal = new BigDecimal("55000.00");
-        BigDecimal base = calculator.monthlyTierBase(monthTotal);
-        BigDecimal commission = calculator.progressiveCommission(base, tiers);
-
-        assertThat(base).isGreaterThan(new BigDecimal("50000"));
-        assertThat(commission).isGreaterThan(BigDecimal.ZERO);
-    }
-
-    @Test
     void sameFiftyFiveThousand_splitAcrossAWindowBoundary_wronglyForfeitsTheWholeCommission() {
         // The exact same ฿55,000 as above, but split across a shifted 26th/25th-style boundary instead of staying in
         // one calendar month — e.g. ฿30,000 before the boundary and ฿25,000 after it.

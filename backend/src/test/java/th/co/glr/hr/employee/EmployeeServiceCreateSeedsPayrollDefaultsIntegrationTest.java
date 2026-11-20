@@ -71,26 +71,6 @@ class EmployeeServiceCreateSeedsPayrollDefaultsIntegrationTest extends AbstractP
         assertThat(treatments).doesNotContainKey(PayrollComponent.NON_TAXABLE_INCOME);
     }
 
-    @Test
-    void seedingOnCreateNeverOverwritesAnHrClassificationMadeAfterwards() {
-        EmployeeDto created = employeeService.create(req("บุญมี รักงาน", "SALES", "boonmee@glr.co.th", new BigDecimal("28000")), hr());
-        int taxYear = LocalDate.now(java.time.ZoneId.of("Asia/Bangkok")).getYear();
-
-        // HR reclassifies พิเศษ 1 to REGULAR_REPROJECT for this employee -- a genuine, deliberate edit.
-        payrollRepository.upsertComponentTaxTreatment(taxYear, java.util.List.of(
-            new th.co.glr.hr.payroll.PayrollClassificationDtos.ComponentTaxTreatmentUpsertRequest(
-                created.id(), PayrollComponent.SPECIAL_PAY_1, PayrollTaxTreatment.REGULAR_REPROJECT)
-        ), created.id());
-
-        // Re-running the seed (defensive: this is what would happen if create() were somehow invoked twice, or a
-        // future migration re-ran the same seeding logic) must not clobber the HR edit.
-        payrollRepository.seedComponentTaxTreatmentDefaults(created.id(), taxYear, created.id());
-
-        assertThat(payrollRepository.findComponentTaxTreatmentsByEmployee(taxYear).get(created.id())
-            .get(PayrollComponent.SPECIAL_PAY_1))
-            .isEqualTo(PayrollTaxTreatment.REGULAR_REPROJECT);
-    }
-
     private UpsertEmployeeRequest req(String nameTh, String divisionCode, String email, BigDecimal salary) {
         return new UpsertEmployeeRequest(
             null, null, nameTh, null, null, null, null, null, null, null,

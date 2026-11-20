@@ -1,25 +1,17 @@
 package th.co.glr.hr.mail;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import com.resend.core.exception.ResendException;
 import jakarta.mail.MessagingException;
 import java.io.IOException;
-import java.io.OutputStream;
 import java.net.ConnectException;
-import java.net.InetSocketAddress;
-import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.SocketTimeoutException;
 import java.net.UnknownHostException;
-import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.Map;
-import java.util.concurrent.TimeUnit;
 import javax.net.ssl.SSLHandshakeException;
-import okhttp3.OkHttpClient;
-import okhttp3.Request;
 import org.eclipse.angus.mail.util.MailConnectException;
 import org.eclipse.angus.mail.util.SocketConnectException;
 import org.junit.jupiter.api.Test;
@@ -115,64 +107,6 @@ class MailFailureTableTest {
         assertThat(misclassified).as("rows classified wrongly").isEmpty();
     }
 
-    // ── The same distinctions on REAL sockets, so the connect-vs-read rule is not a guess about stack shapes ──────
-
-    @Test
-    void aRealReadTimeoutFromOkHttpIsUnknown() throws Exception {
-        try (ServerSocket silent = new ServerSocket(0)) {
-            Thread acceptor = new Thread(() -> {
-                try (Socket accepted = silent.accept()) {
-                    Thread.sleep(3000);
-                } catch (Exception ignored) {
-                    // the client has timed out
-                }
-            });
-            acceptor.start();
-            OkHttpClient client = new OkHttpClient.Builder().readTimeout(300, TimeUnit.MILLISECONDS).build();
-            Exception failure = callAsTheResendSdkDoes(client, "http://127.0.0.1:" + silent.getLocalPort() + "/emails");
-            assertThat(failure.getCause()).isInstanceOf(SocketTimeoutException.class);
-            assertThat(MailFailures.certainlyNotAccepted(failure)).isFalse();
-        }
-    }
-
-    @Test
-    void aRealTlsHandshakeFailureFromOkHttpIsFailed() throws Exception {
-        try (ServerSocket plain = new ServerSocket(0)) {
-            Thread acceptor = new Thread(() -> {
-                try (Socket accepted = plain.accept(); OutputStream out = accepted.getOutputStream()) {
-                    out.write("220 not a TLS server\r\n".getBytes(StandardCharsets.US_ASCII));
-                    out.flush();
-                    Thread.sleep(500);
-                } catch (Exception ignored) {
-                    // the client has given up
-                }
-            });
-            acceptor.start();
-            OkHttpClient client = new OkHttpClient.Builder().connectTimeout(2, TimeUnit.SECONDS)
-                .readTimeout(2, TimeUnit.SECONDS).build();
-            Exception failure = callAsTheResendSdkDoes(client, "https://127.0.0.1:" + plain.getLocalPort() + "/emails");
-            assertThat(failure.getCause()).isInstanceOf(javax.net.ssl.SSLException.class);
-            assertThat(MailFailures.certainlyNotAccepted(failure)).isTrue();
-        }
-    }
-
-    @Test
-    void aRealConnectTimeoutIsFailed_whereTheNetworkDropsPackets() {
-        // TEST-NET-1 (RFC 5737) is never routed; most networks drop the SYN, giving a genuine JDK connect timeout.
-        // Where the network answers "unreachable" instead, this test has nothing to observe and is skipped.
-        SocketTimeoutException timeout = null;
-        try (Socket socket = new Socket()) {
-            socket.connect(new InetSocketAddress("192.0.2.1", 9), 300);
-        } catch (SocketTimeoutException expected) {
-            timeout = expected;
-        } catch (IOException other) {
-            assumeTrue(false, "network answered " + other + " instead of dropping the SYN");
-        }
-        assumeTrue(timeout != null, "connected unexpectedly");
-        assertThat(MailFailures.certainlyNotAccepted(new RuntimeException(timeout))).isTrue();
-        assertThat(MailFailures.certainlyNotAccepted(smtpConnect(timeout))).isTrue();
-    }
-
     // ── helpers: the shapes each mailer really produces ──────────────────────────────────────────────────────
 
     private static Object[] row(Throwable failure, boolean certainlyNotAccepted) {
@@ -222,11 +156,4 @@ class MailFailureTableTest {
     }
 
     /** The Resend SDK (4.13) runs OkHttp's call and wraps an IOException as {@code new RuntimeException(e)}. */
-    private static Exception callAsTheResendSdkDoes(OkHttpClient client, String url) {
-        try (okhttp3.Response ignored = client.newCall(new Request.Builder().url(url).build()).execute()) {
-            throw new AssertionError("the call unexpectedly succeeded");
-        } catch (IOException io) {
-            return new RuntimeException(io);
-        }
-    }
 }

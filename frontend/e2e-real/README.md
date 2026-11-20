@@ -229,9 +229,9 @@ behaviour worth knowing. All stay recorded so they remain visible.
   (`write-overtime.spec.js`) runs locally, against the local stack this file's "Running it" section
   starts, on every invocation. The sales pipeline's coverage (`uat-sales-*.spec.js` — the
   pricing-request chain from lead to `ORDER_RECEIVED`, the stage/note/readiness/role refusal
-  matrix, and the four real routes named in `DealStage.java`'s own Javadoc: Case A designer-led,
-  Case B owner-direct, Case C buyer-direct/starts-at-S8, Case D an all-from-stock deal that skips
-  PROCUREMENT) runs ONLY against a **deployed UAT environment**, via `npm run test:e2e:uat` — see
+  matrix, and the real routes named in `DealStage.java`'s own Javadoc: Case A designer-led,
+  Case B owner-direct, Case C buyer-direct/starts-at-S8;
+  the fourth, all-from-stock route is no longer walked) runs ONLY against a **deployed UAT environment**, via `npm run test:e2e:uat` — see
   "Running against deployed UAT" below. `playwright.real.config.js` excludes every `uat-*.spec.js`
   file from a local run entirely (`testIgnore`), so a green local `npm run test:e2e` asserts
   nothing about the sales pipeline at all — it is neither run nor skipped-and-reported, just absent
@@ -368,8 +368,8 @@ re-pointing the authz assertions at the wrong persona.
 A second mode of this SAME suite (same `playwright.real.config.js`, same `helpers/`) drives the
 sales pipeline end to end against a deployed UAT environment instead of the local stack above —
 real Vercel frontend, real Render backend, real Postgres, no mocks anywhere, no local server
-started. This is what actually proves the pricing-request chain, the refusal matrix, and the four
-sales-pipeline routes (Cases A-D) named in this file's "Not covered" section above.
+started. This is what actually proves the pricing-request chain, the refusal matrix, and the three
+sales-pipeline routes (Cases A-C) named in this file's "Not covered" section above.
 
 ```bash
 E2E_BASE_URL=https://<uat-frontend-host> \

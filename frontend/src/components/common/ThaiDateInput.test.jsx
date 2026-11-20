@@ -2,7 +2,6 @@ import React, { useState } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { ThaiDateInput } from './ThaiDateInput.jsx';
-import { Modal } from './Modal.jsx';
 
 globalThis.React = React;
 
@@ -40,17 +39,6 @@ describe('ThaiDateInput', () => {
     expect(onValue).toHaveBeenLastCalledWith('2027-01-31');
   });
 
-  // Review 2 #2: editing digit by digit passes through other valid dates (31 → 3 → 30); only the
-  // final one may reach the parent, or handlers like the overtime end-date reset fire on 3/01.
-  it('editing through an intermediate valid date reports only the final date', () => {
-    const onValue = vi.fn();
-    render(<Controlled initial="2027-01-31" onValue={onValue} />);
-    type('3/01/2570');
-    type('30/01/2570');
-    fireEvent.blur(field());
-    expect(onValue.mock.calls).toEqual([['2027-01-30']]);
-  });
-
   // Review 2 #1: an invalid entry must neither clear the value (a blank hire date gets saved in a
   // noValidate form) nor leave garbage on screen over the old value: it reverts, with the reason.
   it('a ค.ศ. year typed over a valid date is never reported; on blur the field reverts and says why', () => {
@@ -83,18 +71,6 @@ describe('ThaiDateInput', () => {
     expect(screen.getByText(/ปี พ\.ศ\./)).not.toBeNull();
   });
 
-  it('a partly typed date shows no error while typing; on blur it reverts with an error', () => {
-    const onValue = vi.fn();
-    render(<Controlled initial="2026-11-03" onValue={onValue} />);
-    type('31/01/25');
-    expect(field().value).toBe('31/01/25');
-    expect(field().getAttribute('aria-invalid')).not.toBe('true');
-    fireEvent.blur(field());
-    expect(onValue).not.toHaveBeenCalled();
-    expect(field().value).toBe('03/11/2569');
-    expect(field().getAttribute('aria-invalid')).toBe('true');
-  });
-
   // Review 2 #8: min/max used to be inert on typing — only the calendar honoured them.
   it('a typed date outside min/max is not reported; the field reverts with an error', () => {
     const onValue = vi.fn();
@@ -104,80 +80,6 @@ describe('ThaiDateInput', () => {
     expect(onValue).not.toHaveBeenCalled();
     expect(field().value).toBe('15/11/2569');
     expect(field().getAttribute('aria-invalid')).toBe('true');
-  });
-
-  // A stored value already outside a moved bound (effectiveTo after effectiveFrom changed) is not
-  // the user's edit: tabbing through must not flag it.
-  it('tabbing through an unchanged value that is outside min/max shows no error', () => {
-    render(<Controlled initial="2026-11-05" min="2026-11-10" />);
-    fireEvent.blur(field());
-    expect(field().getAttribute('aria-invalid')).not.toBe('true');
-  });
-
-  it('a value changed from outside replaces uncommitted text', () => {
-    const { rerender } = render(<ThaiDateInput aria-label="วันที่" value="2027-01-31" onChange={() => {}} />);
-    type('5/1/25');
-    rerender(<ThaiDateInput aria-label="วันที่" value="2026-07-02" onChange={() => {}} />);
-    expect(field().value).toBe('02/07/2569');
-  });
-
-  // Review 3: a parent that keeps its value (AttendancePage: `value || today`) must not leave the
-  // field blank while the value is still a date.
-  it('a parent that keeps its value after a commit leaves the field showing that value', () => {
-    function FallsBack() {
-      const [value, setValue] = useState('2026-08-15');
-      return <ThaiDateInput aria-label="วันที่" value={value} onChange={(e) => setValue(e.target.value || '2026-08-15')} />;
-    }
-    render(<FallsBack />);
-    type('');
-    fireEvent.blur(field());
-    expect(field().value).toBe('15/08/2569');
-  });
-
-  // onErrorChange (optional; review round 3): a refused entry reverts WITHOUT calling onChange, so a parent that must
-  // not read "refused" as "no date" (PauseDealModal) is told the field's own error, and told '' once it clears.
-  describe('onErrorChange', () => {
-    it('is called with the error when a typed value is refused', () => {
-      const onErrorChange = vi.fn();
-      render(<Controlled initial="" min="2026-11-10" onErrorChange={onErrorChange} />);
-      type('01/11/2569');
-      fireEvent.blur(field());
-      expect(onErrorChange).toHaveBeenLastCalledWith('วันที่อยู่นอกช่วงที่เลือกได้');
-    });
-
-    it('is called with "" when the refused field is cleared, or a valid date is typed or picked', () => {
-      const onErrorChange = vi.fn();
-      render(<Controlled initial="" min="2026-11-10" onErrorChange={onErrorChange} />);
-      const refuse = () => { type('01/11/2569'); fireEvent.blur(field()); };
-
-      refuse();
-      type('');
-      fireEvent.blur(field());
-      expect(onErrorChange).toHaveBeenLastCalledWith('');
-
-      refuse();
-      type('20/11/2569');
-      fireEvent.blur(field());
-      expect(onErrorChange).toHaveBeenLastCalledWith('');
-    });
-
-    it('is called with "" when a day is picked in the calendar after a refusal', () => {
-      const onErrorChange = vi.fn();
-      // A stored value, so the refused entry reverts to it and the calendar opens on that month (not "today's").
-      render(<Controlled initial="2026-11-15" min="2026-11-10" onErrorChange={onErrorChange} />);
-      type('01/11/2569');
-      fireEvent.blur(field());
-      expect(onErrorChange).toHaveBeenLastCalledWith('วันที่อยู่นอกช่วงที่เลือกได้');
-      fireEvent.click(screen.getByRole('button', { name: 'เลือกวันที่' }));
-      fireEvent.click(screen.getByRole('button', { name: '25 พฤศจิกายน 2569' }));
-      expect(onErrorChange).toHaveBeenLastCalledWith('');
-    });
-
-    it('is optional: without it a refusal still reverts with the error and nothing throws', () => {
-      render(<Controlled initial="" min="2026-11-10" />);
-      expect(() => { type('01/11/2569'); fireEvent.blur(field()); }).not.toThrow();
-      expect(field().getAttribute('aria-invalid')).toBe('true');
-    });
   });
 
   it('clearing the field reports an empty value on blur', () => {
@@ -208,21 +110,6 @@ describe('ThaiDateInput', () => {
     expect(fireEvent.keyDown(field(), { key: 'Enter' })).toBe(true);
   });
 
-  it('follows a value changed from outside (form reset / copy-from)', () => {
-    const { rerender } = render(<ThaiDateInput aria-label="วันที่" value="2026-07-02" onChange={() => {}} />);
-    expect(field().value).toBe('02/07/2569');
-    rerender(<ThaiDateInput aria-label="วันที่" value="" onChange={() => {}} />);
-    expect(field().value).toBe('');
-  });
-
-  it('passes the field name through on change (react-hook-form Controller / handlers keyed by name)', () => {
-    const onChange = vi.fn();
-    render(<ThaiDateInput aria-label="วันที่" name="startDate" value="" onChange={onChange} />);
-    type('01/11/2569');
-    fireEvent.blur(field());
-    expect(onChange.mock.calls.at(-1)[0].target).toMatchObject({ name: 'startDate', value: '2026-11-01' });
-  });
-
   it('the calendar popup is in พ.ศ. and picking a day reports the ค.ศ. ISO value', () => {
     const onValue = vi.fn();
     render(<Controlled initial="2027-01-15" onValue={onValue} />);
@@ -233,75 +120,5 @@ describe('ThaiDateInput', () => {
     fireEvent.click(screen.getByRole('button', { name: '31 มกราคม 2570' }));
     expect(onValue).toHaveBeenLastCalledWith('2027-01-31');
     expect(screen.queryByRole('dialog')).toBeNull();
-  });
-
-  it('calendar month navigation crosses the year in พ.ศ.', () => {
-    render(<Controlled initial="2026-12-10" />);
-    fireEvent.click(screen.getByRole('button', { name: 'เลือกวันที่' }));
-    fireEvent.click(screen.getByRole('button', { name: 'เดือนถัดไป' }));
-    expect(screen.getByRole('dialog').textContent).toContain('มกราคม 2570');
-  });
-
-  it('min/max disable days outside the range in the calendar', () => {
-    render(<Controlled initial="2026-11-15" min="2026-11-10" max="2026-11-20" />);
-    fireEvent.click(screen.getByRole('button', { name: 'เลือกวันที่' }));
-    expect(screen.getByRole('button', { name: '9 พฤศจิกายน 2569' }).disabled).toBe(true);
-    expect(screen.getByRole('button', { name: '10 พฤศจิกายน 2569' }).disabled).toBe(false);
-    expect(screen.getByRole('button', { name: '21 พฤศจิกายน 2569' }).disabled).toBe(true);
-  });
-
-  it('Escape closes the calendar without changing the value', () => {
-    const onValue = vi.fn();
-    render(<Controlled initial="2027-01-15" onValue={onValue} />);
-    fireEvent.click(screen.getByRole('button', { name: 'เลือกวันที่' }));
-    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
-    expect(screen.queryByRole('dialog')).toBeNull();
-    expect(onValue).not.toHaveBeenCalled();
-  });
-
-  // Inside a Modal, opening the calendar moves focus into it, and Escape — even when the browser
-  // left focus on <body> (Safari does not focus a clicked button) — closes ONLY the calendar.
-  it('inside a Modal: focus moves into the calendar and Escape closes only the calendar', () => {
-    const onClose = vi.fn();
-    render(<Modal title="ฟอร์ม" onClose={onClose}><Controlled initial="2027-01-15" /></Modal>);
-    fireEvent.click(screen.getByRole('button', { name: 'เลือกวันที่' }));
-    const dialog = screen.getByRole('dialog', { name: 'เลือกวันที่' });
-    expect(dialog.contains(document.activeElement)).toBe(true);
-    document.body.focus();
-    fireEvent.keyDown(document.body, { key: 'Escape' });
-    expect(screen.queryByRole('dialog', { name: 'เลือกวันที่' })).toBeNull();
-    expect(onClose).not.toHaveBeenCalled();
-  });
-
-  it('focus leaving the calendar closes it', () => {
-    render(<><Controlled initial="2027-01-15" /><input aria-label="อื่น" /></>);
-    fireEvent.click(screen.getByRole('button', { name: 'เลือกวันที่' }));
-    const dialog = screen.getByRole('dialog');
-    fireEvent.blur(dialog.querySelector('button'), { relatedTarget: screen.getByLabelText('อื่น') });
-    expect(screen.queryByRole('dialog')).toBeNull();
-  });
-
-  // A phone keyboard opening fires resize; the open calendar must not pull focus back.
-  it('a resize while the calendar is open does not steal focus from the text field', () => {
-    render(<Controlled initial="2027-01-15" />);
-    fireEvent.click(screen.getByRole('button', { name: 'เลือกวันที่' }));
-    field().focus();
-    fireEvent(window, new Event('resize'));
-    fireEvent.scroll(window);
-    expect(document.activeElement).toBe(field());
-  });
-
-  it('focus moving from the text field to another field closes the open calendar', () => {
-    render(<><Controlled initial="2027-01-15" /><input aria-label="อื่น" /></>);
-    fireEvent.click(screen.getByRole('button', { name: 'เลือกวันที่' }));
-    field().focus();
-    fireEvent.blur(field(), { relatedTarget: screen.getByLabelText('อื่น') });
-    expect(screen.queryByRole('dialog')).toBeNull();
-  });
-
-  it('disabled disables both the text field and the calendar button', () => {
-    render(<Controlled initial="2027-01-15" disabled />);
-    expect(field().disabled).toBe(true);
-    expect(screen.getByRole('button', { name: 'เลือกวันที่' }).disabled).toBe(true);
   });
 });

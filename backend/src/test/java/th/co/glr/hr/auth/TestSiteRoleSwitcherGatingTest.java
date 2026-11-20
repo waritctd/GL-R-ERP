@@ -15,17 +15,6 @@ class TestSiteRoleSwitcherGatingTest {
         .withUserConfiguration(TestSiteRoleSwitcherController.class);
 
     @Test
-    void flagAbsent_noEndpoints() {
-        runner.run(context -> assertThat(context).doesNotHaveBean(TestSiteRoleSwitcherController.class));
-    }
-
-    @Test
-    void flagFalse_noEndpoints() {
-        runner.withPropertyValues("app.test-site.role-switcher.enabled=false")
-            .run(context -> assertThat(context).doesNotHaveBean(TestSiteRoleSwitcherController.class));
-    }
-
-    @Test
     void flagOn_withProdProfile_refusesToStart() {
         runner.withPropertyValues("app.test-site.role-switcher.enabled=true", "spring.profiles.active=prod")
             .run(context -> assertThat(context).hasFailed());

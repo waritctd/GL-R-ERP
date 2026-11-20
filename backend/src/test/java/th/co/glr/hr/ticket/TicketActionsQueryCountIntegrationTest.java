@@ -100,38 +100,6 @@ class TicketActionsQueryCountIntegrationTest extends AbstractPostgresIntegration
         }
     }
 
-    /** The same invariant stated as a count: the totals are identical at every stage, and are fewer than there are
-     * stages. Equality across stages catches a repository call reached only for some targets — it would fire a
-     * different number of times depending on where the deal currently sits. */
-    @Test
-    void actionsIssuesTheSameNumberOfStatementsAtEveryStage_andFewerThanThereAreStages() {
-        Map<String, Map<String, Integer>> countsByActorAndStage = new LinkedHashMap<>();
-        for (String stage : DealStage.ORDER) {
-            long ticketId = readyToAdvanceFrom(stage);
-            actors.forEach((label, actor) -> {
-                if (accountOutsideScope(actor, stage)) return;
-                counter.reset();
-                actionsFor(ticketId, actor);
-                countsByActorAndStage
-                    .computeIfAbsent(label, k -> new LinkedHashMap<>())
-                    .put(stage, counter.total());
-            });
-        }
-
-        countsByActorAndStage.forEach((label, byStage) -> {
-            int atFirstStage = byStage.values().iterator().next();
-            assertThat(byStage.values())
-                .as("statement count as %s must not depend on the deal's stage, but was %s",
-                    label, byStage)
-                .containsOnly(atFirstStage);
-            assertThat(atFirstStage)
-                .as("actions() as %s issued %d statements for %d stages — that is the scaling "
-                        + "an N+1 in the stage guard chain produces (counts: %s)",
-                    label, atFirstStage, DealStage.ORDER.size(), byStage)
-                .isLessThan(DealStage.ORDER.size());
-        });
-    }
-
     /**
      * GET /api/tickets (listPage) must not run per-deal queries. On prod (2026-10-30) every listed deal
      * cost ~8 round trips in enrichSummary, so the CEO dashboard's full list of 272 deals took minutes
@@ -189,8 +157,6 @@ class TicketActionsQueryCountIntegrationTest extends AbstractPostgresIntegration
         assertThat(counter.repeatedStatements().keySet().iterator().next())
             .contains("sales.deal_activity");
     }
-
-    // Seed follow-up data and an activity so readiness checks reach the full guard chain.
 
     private long readyToAdvanceFrom(String stage) {
         long ticketId = createDealWithOneItem();

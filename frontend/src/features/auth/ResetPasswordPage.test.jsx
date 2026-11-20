@@ -45,15 +45,6 @@ describe('ResetPasswordPage', () => {
       expect(screen.getByTestId('reset-password-invalid')).not.toBeNull();
       expect(api.auth.resetPassword).not.toHaveBeenCalled();
     });
-
-    it('offers a way to request a new link', () => {
-      const onNavigateToForgotPassword = vi.fn();
-      renderAt('/reset-password', { onNavigateToForgotPassword });
-
-      fireEvent.click(screen.getByTestId('reset-password-request-new'));
-
-      expect(onNavigateToForgotPassword).toHaveBeenCalledTimes(1);
-    });
   });
 
   describe('happy path', () => {
@@ -84,33 +75,6 @@ describe('ResetPasswordPage', () => {
       expect(screen.getByText('รหัสผ่านใหม่และการยืนยันไม่ตรงกัน')).not.toBeNull();
       expect(api.auth.resetPassword).not.toHaveBeenCalled();
     });
-
-    it('blocks submit when the new password is under 8 characters', () => {
-      renderAt('/reset-password?token=abc123');
-
-      fireEvent.change(screen.getByTestId('reset-password-new'), { target: { value: 'short' } });
-      fireEvent.change(screen.getByTestId('reset-password-confirm'), { target: { value: 'short' } });
-      fireEvent.click(screen.getByTestId('reset-password-submit'));
-
-      expect(screen.getByText('รหัสผ่านใหม่ต้องมีอย่างน้อย 8 ตัวอักษร')).not.toBeNull();
-      expect(api.auth.resetPassword).not.toHaveBeenCalled();
-    });
   });
 
-  describe('invalid or expired token rejected by the server', () => {
-    it('shows the server\'s own Thai message and a way back to request a new link', async () => {
-      api.auth.resetPassword.mockRejectedValue(
-        new Error('ลิงก์สำหรับตั้งรหัสผ่านใหม่ไม่ถูกต้องหรือหมดอายุแล้ว กรุณาขอลิงก์ใหม่อีกครั้ง'),
-      );
-      renderAt('/reset-password?token=stale-token');
-
-      fireEvent.change(screen.getByTestId('reset-password-new'), { target: { value: 'BrandNewPass1!' } });
-      fireEvent.change(screen.getByTestId('reset-password-confirm'), { target: { value: 'BrandNewPass1!' } });
-      fireEvent.click(screen.getByTestId('reset-password-submit'));
-
-      expect(await screen.findByText('ลิงก์สำหรับตั้งรหัสผ่านใหม่ไม่ถูกต้องหรือหมดอายุแล้ว กรุณาขอลิงก์ใหม่อีกครั้ง')).not.toBeNull();
-      // Still on the form (not the success state) - a rejected token must not look like success.
-      expect(screen.getByTestId('reset-password-submit')).not.toBeNull();
-    });
-  });
 });

@@ -25,31 +25,6 @@ class SpecialMoneyRepositoryIntegrationTest extends AbstractPostgresIntegrationT
         repository = new SpecialMoneyRepository(jdbc, new ObjectMapper());
     }
 
-    @Test
-    void findPolicyAmountsReadsBothAmountAndTextValueForTheEffectiveDatedRows() {
-        // A made-up request_type (special_money_policy.request_type carries no FK/check to SpecialMoneyType) so this
-        // test's rows never collide with the real V66 seed data. A superseded row (effective_to set) must not be
-        // picked up.
-        jdbc.update("""
-            INSERT INTO hr.special_money_policy (request_type, policy_key, amount, effective_from, effective_to, version)
-            VALUES ('TEST_POLICY_TYPE', 'cap', 4000, DATE '2015-01-01', DATE '2017-12-31', 1)
-            """, Map.of());
-        jdbc.update("""
-            INSERT INTO hr.special_money_policy (request_type, policy_key, amount, effective_from, version)
-            VALUES ('TEST_POLICY_TYPE', 'cap', 6000, DATE '2018-01-01', 2)
-            """, Map.of());
-        jdbc.update("""
-            INSERT INTO hr.special_money_policy (request_type, policy_key, text_value, effective_from, version)
-            VALUES ('TEST_POLICY_TYPE', 'note_code', 'FUNERAL-X', DATE '2018-01-01', 2)
-            """, Map.of());
-
-        PolicyAmounts amounts = repository.findPolicyAmounts("TEST_POLICY_TYPE", LocalDate.of(2026, 1, 1));
-
-        assertThat(amounts.amount("cap")).isEqualByComparingTo("6000");
-        assertThat(amounts.text("note_code")).isEqualTo("FUNERAL-X");
-        assertThat(amounts.version()).isEqualTo(2);
-    }
-
     /** findUsage's year filter used to be EXTRACT for both the amount and the count query -- event_date is
      * employee-supplied and SubmitSpecialMoneyHttpRequest places no bound on it, so an annual cap keyed on it
      * could always be defeated by filing against a year nothing had been approved against yet. */

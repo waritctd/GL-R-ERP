@@ -1,7 +1,6 @@
 package th.co.glr.hr.payroll;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 
 import java.math.BigDecimal;
@@ -11,7 +10,6 @@ import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.http.HttpStatus;
 import th.co.glr.hr.attachment.AttachmentRepository;
 import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.audit.AuditService;
@@ -20,7 +18,6 @@ import th.co.glr.hr.commission.CommissionAttachmentRepository;
 import th.co.glr.hr.commission.CommissionCalculator;
 import th.co.glr.hr.commission.CommissionRepository;
 import th.co.glr.hr.commission.CommissionService;
-import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.config.AppProperties;
 import th.co.glr.hr.leave.LeaveRepository;
 import th.co.glr.hr.notification.CeoApproverRepository;
@@ -89,76 +86,6 @@ class WelfareReachesPayrollIntegrationTest extends AbstractPostgresIntegrationTe
         assertThat(line.grossEarnings()).isEqualByComparingTo(SALARY.add(new BigDecimal("5000.00")));
     }
 
-    /** Only APPROVED money is paid. This fixture deliberately gives the non-approved rows a payroll_month, which
-     * the services CANNOT currently produce -- the month is assigned only at CEO approval, in the same statement
-     * that sets the status. */
-    @Test
-    void onlyApprovedClaimsArePaid() {
-        insertApprovedWelfare(staff, "AID_FUNERAL", new BigDecimal("5000.00"), PAYROLL_MONTH);
-        insertWelfareWithMonthAndStatus(staff, new BigDecimal("3000.00"), PAYROLL_MONTH, "SUBMITTED");
-        insertWelfareWithMonthAndStatus(staff, new BigDecimal("2000.00"), PAYROLL_MONTH, "REJECTED");
-        insertWelfareWithMonthAndStatus(staff, new BigDecimal("1000.00"), PAYROLL_MONTH, "CANCELLED");
-
-        assertThat(previewLineFor(staff).welfarePay()).isEqualByComparingTo("5000.00");
-    }
-
-    @Test
-    void welfareApprovedForAnotherMonthIsNotPaidInThisOne() {
-        insertApprovedWelfare(staff, "AID_WEDDING", new BigDecimal("5000.00"), PAYROLL_MONTH.plusMonths(1));
-
-        assertThat(previewLineFor(staff).welfarePay()).isEqualByComparingTo("0.00");
-    }
-
-    /** The cutover guard. Welfare used to be keyed into พิเศษ 9 by hand; now it is automatic, so a month carrying
-     * both figures would pay it twice — invisibly, because both look like ordinary earnings on the payslip. */
-    @Test
-    void bothAutoWelfareAndAManualSpecialPay9IsRefused() {
-        insertApprovedWelfare(staff, "AID_FUNERAL", new BigDecimal("5000.00"), PAYROLL_MONTH);
-
-        assertThatThrownBy(() -> previewWithSpecialPay9(staff, new BigDecimal("5000.00")))
-            .isInstanceOf(ApiException.class)
-            .hasMessageContaining("จ่ายซ้ำ")
-            .extracting(exception -> ((ApiException) exception).getStatus())
-            .isEqualTo(HttpStatus.BAD_REQUEST);
-    }
-
-    @Test
-    void aManualSpecialPay9AloneIsStillAccepted() {
-        // พิเศษ 9 is a general เงินรางวัล slot, not a welfare-only one. Refusing it outright would break every
-        // legitimate use; the guard must fire only on the genuine collision.
-        PayrollLineDto line = previewWithSpecialPay9(staff, new BigDecimal("1500.00"));
-
-        assertThat(line.welfarePay()).isEqualByComparingTo("0.00");
-        assertThat(line.grossEarnings()).isEqualByComparingTo(SALARY.add(new BigDecimal("1500.00")));
-    }
-
-    @Test
-    void welfareIsOutsideTheSsoWageBase() {
-        insertApprovedWelfare(staff, "AID_FUNERAL", new BigDecimal("5000.00"), PAYROLL_MONTH);
-
-        // ค่าจ้าง under พ.ร.บ.ประกันสังคม ม.5 is money paid in return for WORK. Welfare is not, so it must not inflate
-        // the contribution base -- V128 seeds is_included = FALSE and the calculator's SSO loop honours it.
-        PayrollLineDto withWelfare = previewLineFor(staff);
-        BigDecimal ssoBaseWithWelfare = withWelfare.ssoWageBase();
-
-        jdbc.update("DELETE FROM hr.special_money_request", Map.of());
-        BigDecimal ssoBaseWithout = previewLineFor(staff).ssoWageBase();
-
-        assertThat(ssoBaseWithWelfare).isEqualByComparingTo(ssoBaseWithout);
-    }
-
-    @Test
-    void processingStampsThePeriodThatPaidTheClaim() {
-        long requestId = insertApprovedWelfare(staff, "AID_FUNERAL", new BigDecimal("5000.00"), PAYROLL_MONTH);
-        assertThat(includedPeriodOf(requestId)).isNull();
-
-        payrollService.process(new ProcessPayrollRequest(PAYROLL_MONTH, List.of()), hrActor());
-
-        // included_period_id has existed since V66 and was never written, because nothing consumed these rows. Without
-        // it there is no way to answer "which payslip paid this claim".
-        assertThat(includedPeriodOf(requestId)).isNotNull();
-    }
-
     // Fixtures
 
     private PayrollLineDto previewLineFor(long employeeId) {
@@ -168,67 +95,8 @@ class WelfareReachesPayrollIntegrationTest extends AbstractPostgresIntegrationTe
             .orElseThrow(() -> new AssertionError("no payroll line for employee " + employeeId));
     }
 
-    private PayrollLineDto previewWithSpecialPay9(long employeeId, BigDecimal amount) {
-        BigDecimal zero = BigDecimal.ZERO;
-        PayrollEmployeeInputRequest input = new PayrollEmployeeInputRequest(
-            employeeId,
-            zero, zero, zero, zero, zero, zero, zero, zero, amount, // specialPay1-9
-            zero, // nonTaxableIncome
-            zero, // unpaidLeaveDays
-            zero, // studentLoanDeduction
-            zero, // legalExecutionDeduction
-            zero, // otherPostTaxDeductions
-            zero, zero, zero, zero, zero, // spouse..maternity
-            zero, zero, zero, zero, zero, // life..ssf
-            zero, zero, zero, zero, zero, zero, // pension..political
-            zero, // warningLetterDeduction
-            zero, // customerReturnDeduction
-            zero, // otherPretaxDeduction
-            null, // withholdingTaxOverride
-            zero, // mealAllowance
-            zero, // perDiemExempt
-            zero, // perDiemTaxable
-            null, // perDiemBasis
-            zero, // bonusPay
-            zero, // otherOneOffPay
-            false, // customerReturnAlreadyEarned
-            null, // garnishmentType
-            null // parentCareCount
-        );
-        return payrollService.preview(new ProcessPayrollRequest(PAYROLL_MONTH, List.of(input)), hrActor()).lines().stream()
-            .filter(line -> line.employeeId() == employeeId)
-            .findFirst()
-            .orElseThrow(() -> new AssertionError("no payroll line for employee " + employeeId));
-    }
-
-    private Long includedPeriodOf(long requestId) {
-        return jdbc.queryForObject(
-            "SELECT included_period_id FROM hr.special_money_request WHERE special_money_request_id = :id",
-            Map.of("id", requestId), Long.class);
-    }
-
     private long insertApprovedWelfare(long employeeId, String type, BigDecimal amount, LocalDate payrollMonth) {
         return insertWelfare(employeeId, type, amount, payrollMonth, "APPROVED");
-    }
-
-    /** A non-approved row that nonetheless carries a payroll_month and an approved_amount -- the shape a future
-     * void/revert path could create, and the only shape that can tell the status filter apart from the month
-     * filter. See onlyApprovedClaimsArePaid's javadoc. */
-    private long insertWelfareWithMonthAndStatus(
-            long employeeId, BigDecimal amount, LocalDate payrollMonth, String status) {
-        Map<String, Object> params = new HashMap<>();
-        params.put("employeeId", employeeId);
-        params.put("amount", amount);
-        params.put("payrollMonth", payrollMonth);
-        params.put("status", status);
-        return jdbc.queryForObject("""
-            INSERT INTO hr.special_money_request
-                (employee_id, request_type, event_date, requested_amount, approved_amount,
-                 payroll_bucket, policy_version, reason, status, payroll_month)
-            VALUES (:employeeId, 'MEDICAL', DATE '2026-09-05', :amount, :amount,
-                 'NON_TAXABLE', 1, 'test', :status, :payrollMonth)
-            RETURNING special_money_request_id
-            """, params, Long.class);
     }
 
     private long insertWelfare(

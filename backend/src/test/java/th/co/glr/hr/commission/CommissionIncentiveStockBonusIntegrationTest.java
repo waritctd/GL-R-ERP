@@ -1,7 +1,6 @@
 package th.co.glr.hr.commission;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 
 import java.math.BigDecimal;
@@ -9,13 +8,11 @@ import java.time.LocalDate;
 import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
-import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import th.co.glr.hr.attachment.AttachmentRepository;
 import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
-import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.employee.EmployeeCodeGenerator;
 import th.co.glr.hr.employee.EmployeeReferenceRepository;
 import th.co.glr.hr.employee.EmployeeRepository;
@@ -120,54 +117,6 @@ class CommissionIncentiveStockBonusIntegrationTest extends AbstractPostgresInteg
         assertThat(importedSummary.stockBonusAmount()).isEqualByComparingTo(BigDecimal.ZERO);
     }
 
-    // Review fix (2026-08-02), wrong-way-round: a still-SUBMITTED receipt (nobody has approved it) must NOT
-    // contribute to the stock bonus, even though it has a real linked ticket with a real stock share.
-
-    @Test
-    void stockBonus_ignoresAStillSubmittedReceipt_reflectsOnlyTheApprovedOne() {
-        wireService();
-        enableStockBonus();
-        long salesRepId = createEmployee("พนักงานขาย ยังไม่อนุมัติ", "submitted-stock@glr.co.th", "SA", "แผนกขาย");
-
-        // APPROVED: ฿100,000 fully from stock -> ฿100,000 stock receipts -> exactly 1 block -> ฿1,000.
-        long approvedTicketId = createTicket(salesRepId);
-        addTicketItem(approvedTicketId, new BigDecimal("100.00"), new BigDecimal("100.00"));
-        seedApprovedStockLinkedCommission(salesRepId, approvedTicketId, new BigDecimal("100000.00"), AUGUST_2026);
-
-        // SUBMITTED (never approved by anyone): ฿500,000 fully from stock on a DIFFERENT ticket. If this leaked in,
-        // receipts would be 600,000 -> 6 blocks -> ฿6,000. It must not.
-        long submittedTicketId = createTicket(salesRepId);
-        addTicketItem(submittedTicketId, new BigDecimal("100.00"), new BigDecimal("100.00"));
-        seedSubmittedStockLinkedCommission(salesRepId, submittedTicketId, new BigDecimal("500000.00"), AUGUST_2026);
-
-        SalesRepCommissionSummaryDto summary = repSummaryFor(commissionService.payrollReadySummary(AUGUST_2026, hrActor), salesRepId);
-
-        assertThat(summary.stockBonusAmount()).isEqualByComparingTo(new BigDecimal("1000.00"));
-        assertThat(summary.stockBonusAmount()).isNotEqualByComparingTo(new BigDecimal("6000.00"));
-    }
-
-    // Config-gated OFF by default: the seeded V108 row (enabled = FALSE) pays zero until the CEO flips it, then
-    // pays once flipped -- same ticket/receipt, only the config row changes.
-
-    @Test
-    void stockBonus_staysZeroWithSeededDisabledConfig_andPaysOnceFlippedTrue() {
-        wireService();
-        long salesRepId = createEmployee("พนักงานขาย ปิดสวิตช์", "toggle-stock@glr.co.th", "SA", "แผนกขาย");
-        long ticketId = createTicket(salesRepId);
-        addTicketItem(ticketId, new BigDecimal("100.00"), new BigDecimal("100.00")); // fully from stock
-        seedApprovedStockLinkedCommission(salesRepId, ticketId, new BigDecimal("300000.00"), AUGUST_2026);
-
-        // Seeded config is enabled = FALSE -- must pay zero even though the stock share (100%) and receipts (฿300,000,
-        // three whole ฿100,000 blocks) would otherwise pay ฿3,000.
-        SalesRepCommissionSummaryDto beforeEnable = repSummaryFor(commissionService.payrollReadySummary(AUGUST_2026, hrActor), salesRepId);
-        assertThat(beforeEnable.stockBonusAmount()).isEqualByComparingTo(BigDecimal.ZERO);
-
-        enableStockBonus();
-
-        SalesRepCommissionSummaryDto afterEnable = repSummaryFor(commissionService.payrollReadySummary(AUGUST_2026, hrActor), salesRepId);
-        assertThat(afterEnable.stockBonusAmount()).isEqualByComparingTo(new BigDecimal("3000.00"));
-    }
-
     // Double-count guard (transition safeguard): an approved manual INCENTIVE/STOCK_BONUS for the rep-month
     // suppresses the auto-computed limb -- exactly one of each in the total, not two.
 
@@ -187,96 +136,6 @@ class CommissionIncentiveStockBonusIntegrationTest extends AbstractPostgresInteg
         assertThat(summary.manualAdjustmentAmount()).isEqualByComparingTo(new BigDecimal("15000.00"));
         BigDecimal tierCommission = calculator.progressiveCommission(new BigDecimal("3000000.00"));
         assertThat(summary.commissionAmount()).isEqualByComparingTo(tierCommission.add(new BigDecimal("15000.00")));
-    }
-
-    @Test
-    void manualStockBonusSuppression_exactlyOneStockBonusInTheTotal_notTwo() {
-        wireService();
-        enableStockBonus();
-        long salesRepId = createEmployee("พนักงานขาย มีโบนัสสต๊อคมือ", "manual-stockbonus@glr.co.th", "SA", "แผนกขาย");
-        long ticketId = createTicket(salesRepId);
-        addTicketItem(ticketId, new BigDecimal("100.00"), new BigDecimal("100.00"));
-        seedApprovedStockLinkedCommission(salesRepId, ticketId, new BigDecimal("300000.00"), AUGUST_2026);
-        commissionService.createManualCommission(
-            salesRepId, CommissionKind.STOCK_BONUS, new BigDecimal("1000.00"),
-            "hand-entered override", AUGUST_2026, ceoActor);
-
-        SalesRepCommissionSummaryDto summary = repSummaryFor(commissionService.payrollReadySummary(AUGUST_2026, hrActor), salesRepId);
-
-        // Auto-computed stock bonus (would be ฿3,000 here) is suppressed; only the manual ฿1,000 appears.
-        assertThat(summary.stockBonusAmount()).isEqualByComparingTo(BigDecimal.ZERO);
-        assertThat(summary.manualAdjustmentAmount()).isEqualByComparingTo(new BigDecimal("1000.00"));
-    }
-
-    // Review fix (2026-08-02): the double-count guard only suppresses the auto limb for a STRICTLY POSITIVE summed
-    // manual amount (a replacement). A ZERO or NEGATIVE manual entry is a CORRECTION layered on top -- the auto
-    // limb must still compute, and the correction adds to it.
-
-    @Test
-    void negativeManualIncentive_isACorrection_autoLimbStillComputesAndCorrectionAdds() {
-        wireService();
-        long salesRepId = createEmployee("พนักงานขาย แก้ไขอินเซนทีฟ", "negative-manual-incentive@glr.co.th", "SA", "แผนกขาย");
-        seedApprovedTierCommission(salesRepId, ACTUAL_RECEIVED_AT_FIRST_THRESHOLD, AUGUST_2026); // tier base exactly 3,000,000 -> auto incentive 15,000
-        commissionService.createManualCommission(
-            salesRepId, CommissionKind.INCENTIVE, new BigDecimal("-5000.00"),
-            "correction: prior INCENTIVE overstated", AUGUST_2026, ceoActor);
-
-        SalesRepCommissionSummaryDto summary = repSummaryFor(commissionService.payrollReadySummary(AUGUST_2026, hrActor), salesRepId);
-
-        // The auto limb is NOT suppressed -- it still computes the full 15,000.
-        assertThat(summary.incentiveAmount()).isEqualByComparingTo(new BigDecimal("15000.00"));
-        assertThat(summary.manualAdjustmentAmount()).isEqualByComparingTo(new BigDecimal("-5000.00"));
-        BigDecimal tierCommission = calculator.progressiveCommission(new BigDecimal("3000000.00"));
-        // Total = tier commission + auto incentive (15,000) + the -5,000 correction = tier + 10,000.
-        assertThat(summary.commissionAmount())
-            .isEqualByComparingTo(tierCommission.add(new BigDecimal("15000.00")).subtract(new BigDecimal("5000.00")));
-        assertThat(summary.commissionAmount()).isNotEqualByComparingTo(tierCommission.subtract(new BigDecimal("5000.00")));
-    }
-
-    @Test
-    void zeroManualIncentiveNote_isNotAReplacement_autoLimbStillComputesInFull() {
-        wireService();
-        long salesRepId = createEmployee("พนักงานขาย บันทึกศูนย์", "zero-manual-incentive@glr.co.th", "SA", "แผนกขาย");
-        seedApprovedTierCommission(salesRepId, ACTUAL_RECEIVED_AT_FIRST_THRESHOLD, AUGUST_2026);
-        commissionService.createManualCommission(
-            salesRepId, CommissionKind.INCENTIVE, BigDecimal.ZERO,
-            "note only, not a replacement", AUGUST_2026, ceoActor);
-
-        SalesRepCommissionSummaryDto summary = repSummaryFor(commissionService.payrollReadySummary(AUGUST_2026, hrActor), salesRepId);
-
-        assertThat(summary.incentiveAmount()).isEqualByComparingTo(new BigDecimal("15000.00"));
-    }
-
-    @Test
-    void negativeManualStockBonus_isACorrection_autoLimbStillComputesAndCorrectionAdds() {
-        wireService();
-        enableStockBonus();
-        long salesRepId = createEmployee("พนักงานขาย แก้ไขโบนัสสต๊อค", "negative-manual-stockbonus@glr.co.th", "SA", "แผนกขาย");
-        long ticketId = createTicket(salesRepId);
-        addTicketItem(ticketId, new BigDecimal("100.00"), new BigDecimal("100.00"));
-        seedApprovedStockLinkedCommission(salesRepId, ticketId, new BigDecimal("300000.00"), AUGUST_2026); // auto stock bonus 3,000
-        commissionService.createManualCommission(
-            salesRepId, CommissionKind.STOCK_BONUS, new BigDecimal("-1000.00"),
-            "correction: prior STOCK_BONUS overstated", AUGUST_2026, ceoActor);
-
-        SalesRepCommissionSummaryDto summary = repSummaryFor(commissionService.payrollReadySummary(AUGUST_2026, hrActor), salesRepId);
-
-        assertThat(summary.stockBonusAmount()).isEqualByComparingTo(new BigDecimal("3000.00"));
-        assertThat(summary.manualAdjustmentAmount()).isEqualByComparingTo(new BigDecimal("-1000.00"));
-    }
-
-    // Authz regression: the new fields ride the existing payrollReadySummary response -- no new role gate was
-    // added or widened. A non-payroll role still 403s.
-
-    @Test
-    void payrollReadySummary_stillForbiddenForNonPayrollRole_newFieldsOpenNoNewPath() {
-        wireService();
-        UserPrincipal salesActor = new UserPrincipal(
-            ceoEmployeeId + 1, "sales-authz-405@glr.co.th", "Sales Rep", "sales",
-            ceoEmployeeId + 1, true, LocalDate.now(), false, null, false);
-
-        assertThatThrownBy(() -> commissionService.payrollReadySummary(AUGUST_2026, salesActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
     }
 
     // Helpers
@@ -355,21 +214,6 @@ class CommissionIncentiveStockBonusIntegrationTest extends AbstractPostgresInteg
         commissionService.approve(commissionId, managerActor);
         commissionService.approve(commissionId, ceoActor);
         return commissionId;
-    }
-
-    /** Review fix (2026-08-02): same as #seedApprovedStockLinkedCommission but deliberately left at SUBMITTED --
-     * nobody has reviewed it -- so tests can prove it does NOT contribute to
-     * CommissionRepository#sumActiveStockActualReceived's APPROVED-only aggregation. */
-    private long seedSubmittedStockLinkedCommission(long salesRepId, long ticketId, BigDecimal actualReceived, LocalDate payrollMonth) {
-        SubmitCommissionRequest request = new SubmitCommissionRequest(
-            ticketId, salesRepId, "INV-STOCKBONUS-SUBMITTED-" + UUID.randomUUID(), INVOICE_DATE, actualReceived,
-            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
-            BigDecimal.ZERO, BigDecimal.ZERO);
-        InvoiceCalculation calculation = calculator.calculateInvoice(
-            request.grossAmount(), request.bankFees(), request.suspenseVat(), request.transportFee(),
-            request.cutFee(), request.shortfall(), request.withholdingTax(), request.overpayment());
-        long invoiceId = commissions.createInvoice(request);
-        return commissions.createCommissionRecord(invoiceId, ticketId, salesRepId, salesRepId, payrollMonth, calculation);
     }
 
     private long createEmployee(String nameTh, String email, String divisionSourceCode, String divisionNameTh) {

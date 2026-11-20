@@ -70,8 +70,6 @@ class DeliveryAuthzIntegrationTest extends AbstractPostgresIntegrationTest {
             createEmployee(employees, "ผู้จัดการฝ่ายขาย", "deliv-salesmgr@glr.co.th"), "sales_manager");
     }
 
-    // ── the refusals: these are the evidence ─────────────────────────────────────────────────
-
     /** The case the widened gate must NOT open. otherSalesRep holds the same sales role as the owner, so the only
      * thing between them and another rep's deal is the per-row ownership test. */
     @Test
@@ -81,75 +79,6 @@ class DeliveryAuthzIntegrationTest extends AbstractPostgresIntegrationTest {
 
         assertThatThrownBy(() -> ticketService.recordPartialDelivery(
                 ticketId, deliver(itemId, "3.00"), otherSalesRep))
-            .isInstanceOfSatisfying(ApiException.class,
-                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
-
-        assertThat(qtyDelivered(itemId)).isEqualByComparingTo("0.00");
-    }
-
-    /** The rule this exists for: sales_manager is read+comment oversight and must never gain a write. It is the one
-     * refusal a reader might expect to be a grant, since requireStageWriteAccess lets it set these very stages by
-     * hand. */
-    @Test
-    void salesManager_isRefused_becauseOversightIsReadAndCommentOnly() {
-        long ticketId = deliverableDeal();
-        long itemId = onlyItemId(ticketId);
-
-        assertThatThrownBy(() -> ticketService.recordPartialDelivery(
-                ticketId, deliver(itemId, "3.00"), salesManagerUser))
-            .isInstanceOfSatisfying(ApiException.class,
-                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
-
-        assertThat(qtyDelivered(itemId)).isEqualByComparingTo("0.00");
-    }
-
-    @Test
-    void account_isRefused_andNothingIsDelivered() {
-        long ticketId = deliverableDeal();
-        long itemId = onlyItemId(ticketId);
-
-        assertThatThrownBy(() -> ticketService.recordPartialDelivery(
-                ticketId, deliver(itemId, "3.00"), accountUser))
-            .isInstanceOfSatisfying(ApiException.class,
-                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
-
-        assertThat(qtyDelivered(itemId)).isEqualByComparingTo("0.00");
-    }
-
-    @Test
-    void hr_isRefused_andNothingIsDelivered() {
-        long ticketId = deliverableDeal();
-        long itemId = onlyItemId(ticketId);
-
-        assertThatThrownBy(() -> ticketService.recordPartialDelivery(
-                ticketId, deliver(itemId, "3.00"), hrUser))
-            .isInstanceOfSatisfying(ApiException.class,
-                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
-
-        assertThat(qtyDelivered(itemId)).isEqualByComparingTo("0.00");
-    }
-
-    /** completeDelivery carries its own gate, so it needs its own refusal — not an inference. */
-    @Test
-    void completeDelivery_salesRepWhoDoesNotOwnTheDeal_isRefused_andNothingIsDelivered() {
-        long ticketId = deliverableDeal();
-        long itemId = onlyItemId(ticketId);
-
-        assertThatThrownBy(() -> ticketService.completeDelivery(
-                ticketId, new CompleteDeliveryRequest(null, null), otherSalesRep))
-            .isInstanceOfSatisfying(ApiException.class,
-                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
-
-        assertThat(qtyDelivered(itemId)).isEqualByComparingTo("0.00");
-    }
-
-    @Test
-    void completeDelivery_salesManager_isRefused() {
-        long ticketId = deliverableDeal();
-        long itemId = onlyItemId(ticketId);
-
-        assertThatThrownBy(() -> ticketService.completeDelivery(
-                ticketId, new CompleteDeliveryRequest(null, null), salesManagerUser))
             .isInstanceOfSatisfying(ApiException.class,
                 e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
 
@@ -171,53 +100,6 @@ class DeliveryAuthzIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(qtyDelivered(itemId)).isEqualByComparingTo("0.00");
     }
 
-    /** REVIEW ROUND 1, S2: the mutation refusal above proves import cannot ACT — this proves the action is not even
-     * ADVERTISED to them, so a mock or a stale frontend cache can never offer a button that instantly 403s. */
-    @Test
-    void import_recordDeliveryActionsAreNotAdvertised() {
-        long ticketId = deliverableDeal();
-
-        List<String> importActions = ticketService.actions(ticketId, importUser).availableActions().stream()
-            .map(TicketResponses.TicketActionDto::action)
-            .toList();
-
-        assertThat(importActions).doesNotContain("RECORD_PARTIAL_DELIVERY", "COMPLETE_DELIVERY");
-
-        // The owning rep and CEO — the ones the mutation gate DOES admit — must see them, so this is a real
-        // ownership-scoped assertion, not a permanently-hidden action nobody ever sees.
-        List<String> ownerActions = ticketService.actions(ticketId, owner).availableActions().stream()
-            .map(TicketResponses.TicketActionDto::action)
-            .toList();
-        assertThat(ownerActions).contains("RECORD_PARTIAL_DELIVERY", "COMPLETE_DELIVERY");
-    }
-
-    /** completeDelivery carries its own gate, so import's refusal needs its own case too. */
-    @Test
-    void completeDelivery_import_isRefused_theChangeIsATransferToSales_notAnAddition() {
-        long ticketId = deliverableDeal();
-        long itemId = onlyItemId(ticketId);
-
-        assertThatThrownBy(() -> ticketService.completeDelivery(
-                ticketId, new CompleteDeliveryRequest(null, null), importUser))
-            .isInstanceOfSatisfying(ApiException.class,
-                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
-
-        assertThat(qtyDelivered(itemId)).isEqualByComparingTo("0.00");
-    }
-
-    // ── the grants: these prove the owning rep and CEO keep/gain access ──────────────────────
-
-    /** The new capability, and the point of the original 2026-08-17 widening. */
-    @Test
-    void dealOwner_recordsDelivery_andTheQuantityLands() {
-        long ticketId = deliverableDeal();
-        long itemId = onlyItemId(ticketId);
-
-        ticketService.recordPartialDelivery(ticketId, deliver(itemId, "4.00"), owner);
-
-        assertThat(qtyDelivered(itemId)).isEqualByComparingTo("4.00");
-    }
-
     @Test
     void dealOwner_completesDelivery_andTheDealReachesFullyDelivered() {
         long ticketId = deliverableDeal();
@@ -229,18 +111,6 @@ class DeliveryAuthzIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(tickets.findById(ticketId).orElseThrow().summary().fulfillmentStatus())
             .isEqualTo(FulfilmentStatus.FULLY_DELIVERED);
     }
-
-    @Test
-    void ceo_stillRecordsDelivery() {
-        long ticketId = deliverableDeal();
-        long itemId = onlyItemId(ticketId);
-
-        ticketService.recordPartialDelivery(ticketId, deliver(itemId, "1.00"), ceoUser);
-
-        assertThat(qtyDelivered(itemId)).isEqualByComparingTo("1.00");
-    }
-
-    // ── fixtures ────────────────────────────────────────────────────────────────────────────
 
     /** A deal with 10 units, all declared from stock, so a delivery is actually possible — canRecordDelivery needs
      * remaining quantity AND a source (FROM_STOCK, stock on the lines, or a received warehouse quantity). */

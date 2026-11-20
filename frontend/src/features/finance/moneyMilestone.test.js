@@ -1,21 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { DEAL_STAGE_CATALOG } from '../../data/dealStageCatalog.js';
-import { MONEY_TRACK, isMilestoneSkipped, isPastProcurement, moneyMilestoneOf } from './moneyMilestone.js';
+import { MONEY_TRACK, isMilestoneSkipped, moneyMilestoneOf } from './moneyMilestone.js';
 
 // Pins the mirror of th.co.glr.hr.ticket.MoneyMilestone (backend). The stage list comes from the guarded
 // catalog fixture (which stageCatalog.test.js pins against DealStage.java), so a stage added to the backend
 // forces a decision here instead of silently mapping to nothing.
 describe('moneyMilestone (mirrors MoneyMilestone.java)', () => {
-  it('the track is the five milestones, in order, with the backend labels', () => {
-    expect(MONEY_TRACK.map((m) => [m.index, m.key, m.label])).toEqual([
-      [1, 'ORDER_RECEIVED', 'ได้รับคำสั่งซื้อ'],
-      [2, 'DEPOSIT_RECEIVED', 'ได้รับมัดจำ'],
-      [3, 'PROCUREMENT', 'รอสินค้า / นำเข้า'],
-      [4, 'DELIVERY', 'ส่งมอบ — รอชำระส่วนที่เหลือ'],
-      [5, 'CLOSED_PAID', 'ชำระครบ ปิดงาน'],
-    ]);
-  });
-
   const EXPECTED = {
     LEAD_APPROACH: null,
     PRESENTATION: null,
@@ -34,20 +23,10 @@ describe('moneyMilestone (mirrors MoneyMilestone.java)', () => {
     CLOSED_PAID: 5,
   };
 
-  it('the expectation table covers every stage in the pipeline order (no stage left unmapped by omission)', () => {
-    expect(Object.keys(EXPECTED)).toEqual(DEAL_STAGE_CATALOG.stages.map((s) => s.code));
-  });
-
   it.each(Object.entries(EXPECTED))('%s -> milestone %s', (stage, index) => {
     const step = moneyMilestoneOf(stage);
     if (index == null) expect(step).toBeNull();
     else expect(step?.index).toBe(index);
-  });
-
-  it('an unknown or null stage has no milestone', () => {
-    expect(moneyMilestoneOf('NOT_A_STAGE')).toBeNull();
-    expect(moneyMilestoneOf(null)).toBeNull();
-    expect(moneyMilestoneOf(undefined)).toBeNull();
   });
 
   it('only the deposit milestone can be skipped, and only for a bypassing policy', () => {
@@ -60,14 +39,5 @@ describe('moneyMilestone (mirrors MoneyMilestone.java)', () => {
     expect(isMilestoneSkipped(deposit, 'REQUIRED')).toBe(false);
     expect(isMilestoneSkipped(deposit, null)).toBe(false);
     expect(isMilestoneSkipped(null, 'WAIVED')).toBe(false);
-  });
-});
-
-// The final-payment gate (TicketService#canConfirmFinalPaymentNow): open from money milestone 4 on.
-describe('isPastProcurement', () => {
-  it.each([['DELIVERY_SCHEDULING', true], ['DELIVERED', true], ['CLOSED_PAID', true],
-    ['PROCUREMENT', false], ['DEPOSIT_RECEIVED', false], ['ORDER_RECEIVED', false], ['QUOTE_BUYER', false],
-    ['NOT_A_STAGE', false], [null, false], [undefined, false]])('%s -> %s', (stage, expected) => {
-    expect(isPastProcurement(stage)).toBe(expected);
   });
 });

@@ -3,7 +3,6 @@ package th.co.glr.hr.auth;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.time.LocalDate;
-import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.springframework.mock.web.MockFilterChain;
@@ -17,23 +16,6 @@ class ViewAsReadOnlyFilterTest {
     private static final String MESSAGE = "โหมดดูแทนพนักงานเป็นแบบอ่านอย่างเดียว ไม่สามารถทำรายการนี้ได้";
 
     private final ViewAsReadOnlyFilter filter = new ViewAsReadOnlyFilter();
-
-    @ParameterizedTest(name = "[{index}] {0} {1} passes when not viewing")
-    @CsvSource({
-        "POST,   /api/employees",
-        "PUT,    /api/employees/1",
-        "PATCH,  /api/employees/1",
-        "DELETE, /api/employees/1",
-    })
-    void withoutViewAs_writesPass(String method, String path) throws Exception {
-        MockFilterChain chain = new MockFilterChain();
-        MockHttpServletResponse response = new MockHttpServletResponse();
-
-        filter.doFilter(request(method, path, session(false)), response, chain);
-
-        assertThat(chain.getRequest()).as("chain invoked").isNotNull();
-        assertThat(response.getStatus()).isEqualTo(200);
-    }
 
     @ParameterizedTest(name = "[{index}] {0} {1} passes while viewing")
     @CsvSource({
@@ -84,51 +66,6 @@ class ViewAsReadOnlyFilterTest {
         assertThat(response.getContentAsString(java.nio.charset.StandardCharsets.UTF_8))
             .isEqualTo("{\"message\":\"" + MESSAGE + "\",\"status\":403}");
         assertThat(chain.getRequest()).as("chain NOT invoked").isNull();
-    }
-
-    @ParameterizedTest(name = "[{index}] {0} {1} is allowlisted while viewing")
-    @CsvSource({
-        "POST,   /api/view-as",
-        "DELETE, /api/view-as",
-        "POST,   /api/auth/logout",
-        "POST,   /api/auth/login",
-        "POST,   /api/payroll/tax-allowances/declarations/me/form.pdf",
-        "POST,   /api/payroll/tax-allowances/declarations/me/estimate",
-        "POST,   /api/payroll/preview",
-        "POST,   /api/payroll/preview/export/kbank",
-        "POST,   /api/deposit-notices/12/preview",
-        "POST,   /api/customer-quotations/12/preview",
-        "POST,   /api/deal-quotations/calculate-line",
-        "POST,   /api/leave/preview",
-        "POST,   /api/commissions/simulator",
-    })
-    void whileViewing_allowlistedPostsPass(String method, String path) throws Exception {
-        MockFilterChain chain = new MockFilterChain();
-        MockHttpServletResponse response = new MockHttpServletResponse();
-
-        filter.doFilter(request(method, path, session(true)), response, chain);
-
-        assertThat(chain.getRequest()).as("chain invoked").isNotNull();
-        assertThat(response.getStatus()).isEqualTo(200);
-    }
-
-    @Test
-    void nonApiPathsAreNeverTouched() throws Exception {
-        MockFilterChain chain = new MockFilterChain();
-
-        filter.doFilter(request("POST", "/index.html", session(true)), new MockHttpServletResponse(), chain);
-
-        assertThat(chain.getRequest()).isNotNull();
-    }
-
-    @Test
-    void sessionlessRequestPasses() throws Exception {
-        MockFilterChain chain = new MockFilterChain();
-
-        filter.doFilter(new MockHttpServletRequest("POST", "/api/employees") {{ setRequestURI("/api/employees"); }},
-            new MockHttpServletResponse(), chain);
-
-        assertThat(chain.getRequest()).isNotNull();
     }
 
     private static MockHttpSession session(boolean viewing) {

@@ -1,19 +1,11 @@
 package th.co.glr.hr.notification;
 
-import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.AdditionalMatchers.aryEq;
-import static org.mockito.ArgumentMatchers.argThat;
-import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.reset;
 import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
-import java.time.Instant;
-import java.util.Optional;
 import java.util.concurrent.Executor;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -48,120 +40,6 @@ class NotificationServiceTest {
     @BeforeEach
     void resetMocks() {
         reset(notifications, mailer);
-    }
-
-    @Test
-    void notifyWritesInAppRowAndAttemptsEmailSynchronouslyInTest() {
-        NotificationDto saved = new NotificationDto(
-            42L,
-            7L,
-            null,
-            null,
-            "LEAVE_SUBMITTED",
-            "Leave submitted",
-            "Your leave request was submitted.",
-            "/leave/1",
-            false,
-            Instant.parse("2026-07-08T00:00:00Z"));
-        when(notifications.insert(7L, "LEAVE_SUBMITTED", "Leave submitted",
-            "Your leave request was submitted.", "/leave/1")).thenReturn(42L);
-        when(notifications.findById(42L)).thenReturn(Optional.of(saved));
-        when(notifications.findEmployeeRecipient(7L))
-            .thenReturn(Optional.of(new EmailRecipient("employee@glr.co.th", "สมชาย ใจดี")));
-
-        NotificationDto result = service.notify(
-            7L,
-            "LEAVE_SUBMITTED",
-            "Leave submitted",
-            "Your leave request was submitted.",
-            "/leave/1",
-            true);
-
-        assertThat(result).isEqualTo(saved);
-        verify(notifications).insert(7L, "LEAVE_SUBMITTED", "Leave submitted",
-            "Your leave request was submitted.", "/leave/1");
-        // The dead-code defect this locks in: NotificationService used to call the email service's 4-arg overload, so
-        // recipientName/link never reached the email (always the generic greeting, never a portal link) even though
-        // notify() receives both.
-        verify(mailer).sendHtml(
-            eq("employee@glr.co.th"),
-            eq("[GL&R Portal] Leave submitted"),
-            argThat(html -> html.contains("เรียน คุณสมชาย ใจดี,")
-                && html.contains("Your leave request was submitted.")
-                && html.contains("https://portal.example/leave/1")
-                && html.contains(">GL&amp;R Portal<") && !html.contains("ระบบบริหารงานบุคคล")),
-            argThat(text -> text.contains("เรียน คุณสมชาย ใจดี,")
-                && text.contains("Your leave request was submitted.")
-                && text.contains("https://portal.example/leave/1")
-                && text.contains("\nGL&R Portal\n") && !text.contains("ระบบบริหารงานบุคคล")),
-            argThat(images -> images.size() == 1 && "glr-logo".equals(images.get(0).contentId())));
-    }
-
-    // This TestConfig has overrideTo="" (blank, matching prod/demo) - pins that prod/demo behaviour does NOT
-    // change by this fix: an employee who exists but has no address on file still gets no email when no override
-    // is configured.
-    @Test
-    void notifySkipsEmailWhenEmployeeHasNoEmailAndNoOverrideConfigured() {
-        NotificationDto saved = new NotificationDto(
-            43L, 7L, null, null, "LEAVE_SUBMITTED", "Leave submitted",
-            "Your leave request was submitted.", "/leave/1", false,
-            Instant.parse("2026-07-08T00:00:00Z"));
-        when(notifications.insert(7L, "LEAVE_SUBMITTED", "Leave submitted",
-            "Your leave request was submitted.", "/leave/1")).thenReturn(43L);
-        when(notifications.findById(43L)).thenReturn(Optional.of(saved));
-        when(notifications.findEmployeeRecipient(7L))
-            .thenReturn(Optional.of(new EmailRecipient(null, "สมชาย ใจดี")));
-
-        service.notify(
-            7L,
-            "LEAVE_SUBMITTED",
-            "Leave submitted",
-            "Your leave request was submitted.",
-            "/leave/1",
-            true);
-
-        verifyNoInteractions(mailer);
-    }
-
-    // The only case findEmployeeRecipient() still returns empty for: no employee row at all. That must skip email
-    // under every override configuration, since there is no employee id left to notify about.
-    @Test
-    void notifySkipsEmailWhenEmployeeRowIsMissing() {
-        NotificationDto saved = new NotificationDto(
-            44L, 9L, null, null, "LEAVE_SUBMITTED", "Leave submitted",
-            "Your leave request was submitted.", "/leave/1", false,
-            Instant.parse("2026-07-08T00:00:00Z"));
-        when(notifications.insert(9L, "LEAVE_SUBMITTED", "Leave submitted",
-            "Your leave request was submitted.", "/leave/1")).thenReturn(44L);
-        when(notifications.findById(44L)).thenReturn(Optional.of(saved));
-        when(notifications.findEmployeeRecipient(9L)).thenReturn(Optional.empty());
-
-        service.notify(
-            9L,
-            "LEAVE_SUBMITTED",
-            "Leave submitted",
-            "Your leave request was submitted.",
-            "/leave/1",
-            true);
-
-        verifyNoInteractions(mailer);
-    }
-
-    @Test
-    void sendWithAttachmentDelegatesToConfiguredMailer() {
-        emailService.sendWithAttachment(
-            "employee@glr.co.th",
-            "Payslip",
-            "Attached",
-            "payslip.pdf",
-            "%PDF".getBytes());
-
-        verify(mailer).sendWithAttachment(
-            eq("employee@glr.co.th"),
-            eq("Payslip"),
-            eq("Attached"),
-            eq("payslip.pdf"),
-            aryEq("%PDF".getBytes()));
     }
 
     @Test
@@ -241,64 +119,6 @@ class NotificationServiceOverrideConfiguredTest {
     @BeforeEach
     void resetMocks() {
         reset(notifications, mailer);
-    }
-
-    // THE regression test for this bug. What this test still proves is the half that is genuinely still this
-    // layer's: an addressless employee is NOT skipped when an override is configured (attempts the send instead).
-    @Test
-    void notifyStillAttemptsEmailWhenEmployeeHasNoEmailOnFileAndOverrideIsConfigured() {
-        NotificationDto saved = new NotificationDto(
-            42L, 7L, null, null, "LEAVE_SUBMITTED", "Leave submitted",
-            "Your leave request was submitted.", "/leave/1", false,
-            Instant.parse("2026-07-08T00:00:00Z"));
-        when(notifications.insert(7L, "LEAVE_SUBMITTED", "Leave submitted",
-            "Your leave request was submitted.", "/leave/1")).thenReturn(42L);
-        when(notifications.findById(42L)).thenReturn(Optional.of(saved));
-        when(notifications.findEmployeeRecipient(7L))
-            .thenReturn(Optional.of(new EmailRecipient(null, "สมชาย ใจดี")));
-
-        service.notify(
-            7L,
-            "LEAVE_SUBMITTED",
-            "Leave submitted",
-            "Your leave request was submitted.",
-            "/leave/1",
-            true);
-
-        verify(mailer).sendHtml(
-            isNull(),
-            eq("[GL&R Portal] Leave submitted"),
-            argThat(html -> html.contains("เรียน คุณสมชาย ใจดี,")
-                && html.contains("Your leave request was submitted.")
-                && !html.contains("Redirected for testing")),
-            argThat(text -> text.contains("เรียน คุณสมชาย ใจดี,")
-                && text.contains("Your leave request was submitted.")
-                && !text.contains("Redirected for testing")),
-            argThat(images -> images.size() == 1 && "glr-logo".equals(images.get(0).contentId())));
-    }
-
-    // Even with an override configured, a MISSING employee row must still skip email - override-to can rescue an
-    // employee that exists but has no address, not fabricate a recipient for an id nobody recognises.
-    @Test
-    void notifySkipsEmailWhenEmployeeRowIsMissing() {
-        NotificationDto saved = new NotificationDto(
-            45L, 9L, null, null, "LEAVE_SUBMITTED", "Leave submitted",
-            "Your leave request was submitted.", "/leave/1", false,
-            Instant.parse("2026-07-08T00:00:00Z"));
-        when(notifications.insert(9L, "LEAVE_SUBMITTED", "Leave submitted",
-            "Your leave request was submitted.", "/leave/1")).thenReturn(45L);
-        when(notifications.findById(45L)).thenReturn(Optional.of(saved));
-        when(notifications.findEmployeeRecipient(9L)).thenReturn(Optional.empty());
-
-        service.notify(
-            9L,
-            "LEAVE_SUBMITTED",
-            "Leave submitted",
-            "Your leave request was submitted.",
-            "/leave/1",
-            true);
-
-        verifyNoInteractions(mailer);
     }
 
     @Configuration

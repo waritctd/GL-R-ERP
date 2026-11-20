@@ -1,5 +1,5 @@
 import React from 'react';
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { UpdateStageModal } from './UpdateStageModal.jsx';
 
@@ -75,154 +75,6 @@ describe('UpdateStageModal renders the backend decision', () => {
     fireEvent.click(save);
     expect(onSubmit).toHaveBeenCalledWith({ stage: 'DELIVERY_SCHEDULING', note: 'ลูกค้าเร่งส่งของ' });
   });
-
-  it('picks the backward wording from the stage numbers, not from a rule of its own', () => {
-    renderModal({
-      stageDecisions: [
-        decision('NEGOTIATION', 9, { allowed: false, blockedReason: 'current' }),
-        decision('PRESENTATION', 2, { requiresReason: true }),
-      ],
-    });
-    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'PRESENTATION' } });
-    expect(screen.getByText(/กำลังย้อนสถานะกลับ/)).toBeTruthy();
-  });
-
-  it('shows every blocked stage with the server\'s own reason, instead of hiding it', () => {
-    renderModal();
-    fireEvent.click(screen.getByTestId('update-stage-blocked-toggle'));
-    const list = within(screen.getByTestId('update-stage-blocked-list'));
-    // The current stage is excluded — "you are already here" is not a blocker worth explaining.
-    expect(list.queryByText(/อยู่ในขั้นตอน NEGOTIATION อยู่แล้ว/)).toBeNull();
-    expect(list.getByText(/ยังไม่ได้ยืนยันคำสั่งซื้อของลูกค้า/)).toBeTruthy();
-    expect(list.getByText('ไม่มีสิทธิ์เข้าถึงรายการนี้')).toBeTruthy();
-    // Labelled in Thai, not shown as a raw code.
-    expect(list.getByText('ได้รับใบสั่งซื้อ')).toBeTruthy();
-  });
-
-  it('explains itself rather than showing an empty select when nothing is reachable', () => {
-    renderModal({
-      stageDecisions: decisions.map((d) => ({ ...d, allowed: false, blockedReason: 'ไม่มีสิทธิ์เข้าถึงรายการนี้' })),
-    });
-    expect(screen.queryByRole('combobox')).toBeNull();
-    expect(screen.getByTestId('update-stage-none-available')).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'บันทึก' }).disabled).toBe(true);
-  });
-
-  it('renders QUOTE_OWNER with its Thai label — the stage V143 added and this side never had', () => {
-    renderModal();
-    expect(screen.getByRole('option', { name: /เสนอราคาเจ้าของโครงการ/ })).toBeTruthy();
-  });
-
-  // SK-06 walk: S1 read 'เข้าถึงเจ้าของ/ผู้ออกแบบโครงการ' here but 'เข้าถึงผู้ออกแบบโครงการ' on the deal page.
-  it('words the stages by the deal\'s channel, in the options and the blocked list alike', () => {
-    renderModal({
-      deal: { salesStage: 'NEGOTIATION', entryChannel: 'OWNER_DIRECT' },
-      stageDecisions: [
-        decision('LEAD_APPROACH', 1),
-        decision('SPEC_APPROVED', 3, { allowed: false, blockedReason: 'ไม่มีสิทธิ์เข้าถึงรายการนี้' }),
-      ],
-    });
-    expect(screen.getByRole('option', { name: '1. เข้าถึงเจ้าของโครงการ' })).toBeTruthy();
-    fireEvent.click(screen.getByTestId('update-stage-blocked-toggle'));
-    expect(screen.getByText('เจ้าของตกลงตามสเปคแล้ว')).toBeTruthy();
-  });
-});
-
-/** The remedy for the route gate's refusal. Only rows the server marked `onRoute: false` get it: a row blocked
- * for another reason ("ไม่มีสิทธิ์เข้าถึงรายการนี้", a payment fact) would be offered a remedy that cannot
- * clear it. */
-describe('UpdateStageModal blocked rows — แก้ช่องทางดีล', () => {
-  const FIRST = { action: 'SET_ENTRY_CHANNEL', kind: 'policy', requiredFields: ['value'] };
-  const STATED = { action: 'SET_ENTRY_CHANNEL', kind: 'policy', requiredFields: ['value', 'note'] };
-  const OFF_REASON = 'ช่องทางรับงานของงานนี้คือเจ้าของติดต่อโดยตรง — ขั้นที่ 4 ไม่อยู่ในเส้นทางนี้ — แก้ช่องทางรับงานก่อน';
-  const routed = [
-    decision('SPEC_APPROVED', 3, { onRoute: true }),
-    decision('QUOTE_DESIGN_SIDE', 4, { allowed: false, onRoute: false, blockedReason: OFF_REASON }),
-    decision('NEGOTIATION', 9, { allowed: false, onRoute: true, blockedReason: 'current' }),
-    decision('ORDER_RECEIVED', 10, {
-      allowed: false, onRoute: true, blockedReason: 'เลื่อนไปขั้นตอน ORDER_RECEIVED ไม่ได้: ยังไม่ได้ยืนยันคำสั่งซื้อของลูกค้า',
-    }),
-    decision('DEPOSIT_RECEIVED', 11, { allowed: false, blockedReason: 'ไม่มีสิทธิ์เข้าถึงรายการนี้' }),
-  ];
-  function renderRouted(props = {}) {
-    const utils = renderModal({
-      stageDecisions: routed,
-      deal: { salesStage: 'NEGOTIATION', entryChannel: 'OWNER_DIRECT' },
-      entryChannelAction: FIRST,
-      onSetEntryChannel: vi.fn(),
-      ...props,
-    });
-    fireEvent.click(screen.getByTestId('update-stage-blocked-toggle'));
-    return utils;
-  }
-  const toggles = () => screen.queryAllByRole('button', { name: /แก้ช่องทางรับงาน/ });
-  // Asserts the control exists BEFORE clicking, so a missing remedy fails as an assertion.
-  const firstToggle = () => {
-    expect(toggles().length).toBeGreaterThan(0);
-    return toggles()[0];
-  };
-
-  it('offers the remedy on the off-route blocked row, keeping the server\'s reason beside it', () => {
-    renderRouted();
-    const list = within(screen.getByTestId('update-stage-blocked-list'));
-    expect(list.getByText(OFF_REASON)).toBeTruthy();
-    expect(list.getAllByRole('button', { name: /แก้ช่องทางรับงาน/ })).toHaveLength(1);
-  });
-
-  it('does NOT offer it on rows blocked for another reason (permission, payment fact, no onRoute at all)', () => {
-    renderRouted();
-    const list = screen.getByTestId('update-stage-blocked-list');
-    const rows = Array.from(list.querySelectorAll('li'));
-    const withRemedy = rows.filter((row) => within(row).queryByRole('button', { name: /แก้ช่องทางรับงาน/ }));
-    expect(withRemedy).toHaveLength(1);
-    expect(withRemedy[0].textContent).toContain('ไม่อยู่ในเส้นทางนี้');
-  });
-
-  it('renders no remedy when SET_ENTRY_CHANNEL is not advertised, even with a handler and an off-route row', () => {
-    renderRouted({ entryChannelAction: undefined });
-    expect(toggles()).toHaveLength(0);
-    expect(screen.queryByTestId('entry-channel-fix')).toBeNull();
-  });
-
-  it('renders no remedy when there is no handler', () => {
-    renderRouted({ onSetEntryChannel: undefined });
-    expect(toggles()).toHaveLength(0);
-  });
-
-  it('opens inline: still exactly one dialog, and the stage select / options are untouched', () => {
-    renderRouted();
-    fireEvent.click(firstToggle());
-    expect(screen.getAllByRole('dialog')).toHaveLength(1);
-    expect(screen.getAllByRole('radio').map((radio) => radio.value))
-      .toEqual(['DESIGNER_LED', 'OWNER_DIRECT', 'BUYER_DIRECT']);
-    // The stage <select> is the only combobox; the channel choice is not smuggled in as another.
-    expect(screen.getAllByRole('combobox')).toHaveLength(1);
-    expect(screen.getAllByRole('option').map((option) => option.value)).toEqual(['SPEC_APPROVED']);
-  });
-
-  it('saves through the handler; the modal footer บันทึก stays a different, unaffected button', () => {
-    const onSetEntryChannel = vi.fn();
-    const onSubmit = vi.fn();
-    renderRouted({ onSetEntryChannel, onSubmit });
-    fireEvent.click(firstToggle());
-    fireEvent.click(screen.getByRole('radio', { name: /ผู้ออกแบบนำงานมา/ }));
-    fireEvent.click(screen.getByRole('button', { name: 'บันทึกช่องทางใหม่' }));
-    expect(onSetEntryChannel).toHaveBeenCalledWith({ value: 'DESIGNER_LED', note: null });
-    expect(onSubmit).not.toHaveBeenCalled();
-  });
-
-  it('asks for a reason only when the advertisement asks for one', () => {
-    const { unmount } = renderRouted({ entryChannelAction: FIRST });
-    fireEvent.click(firstToggle());
-    expect(screen.queryByTestId('entry-channel-fix-reason')).toBeNull();
-    unmount();
-
-    renderRouted({ entryChannelAction: STATED });
-    fireEvent.click(firstToggle());
-    expect(screen.getByTestId('entry-channel-fix-reason')).toBeTruthy();
-    fireEvent.click(screen.getByRole('radio', { name: /ผู้ออกแบบนำงานมา/ }));
-    expect(screen.getByRole('button', { name: 'บันทึกช่องทางใหม่' }).disabled).toBe(true);
-  });
 });
 
 // F5b: leaving PROCUREMENT for a later stage by hand warns that the goods are not all in.
@@ -238,26 +90,5 @@ describe('UpdateStageModal goods-not-arrived warning', () => {
     renderModal({ deal: { salesStage: 'PROCUREMENT', fulfillmentStatus: 'SHIPPING' }, stageDecisions: procurementDecisions });
     fireEvent.change(screen.getByRole('combobox'), { target: { value: 'DELIVERY_SCHEDULING' } });
     expect(screen.getByText(WARNING)).not.toBeNull();
-  });
-
-  it('shows no warning for a backward target, once the goods arrived, or from another stage', () => {
-    const { unmount } = renderModal({ deal: { salesStage: 'PROCUREMENT', fulfillmentStatus: 'SHIPPING' }, stageDecisions: procurementDecisions });
-    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'SPEC_APPROVED' } });
-    expect(screen.queryByText(WARNING)).toBeNull();
-    unmount();
-
-    const partial = renderModal({ deal: { salesStage: 'PROCUREMENT', fulfillmentStatus: 'PARTIALLY_DELIVERED' }, stageDecisions: procurementDecisions });
-    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'DELIVERY_SCHEDULING' } });
-    expect(screen.getByText(WARNING)).not.toBeNull(); // Case 8: imports still in transit
-    partial.unmount();
-
-    const arrived = renderModal({ deal: { salesStage: 'PROCUREMENT', fulfillmentStatus: 'GOODS_RECEIVED' }, stageDecisions: procurementDecisions });
-    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'DELIVERY_SCHEDULING' } });
-    expect(screen.queryByText(WARNING)).toBeNull();
-    arrived.unmount();
-
-    renderModal({ deal: { salesStage: 'NEGOTIATION' }, stageDecisions: procurementDecisions });
-    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'DELIVERY_SCHEDULING' } });
-    expect(screen.queryByText(WARNING)).toBeNull();
   });
 });

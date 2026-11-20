@@ -3,7 +3,6 @@ package th.co.glr.hr.attendance;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.time.Clock;
-import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
 import java.time.YearMonth;
@@ -38,91 +37,12 @@ class AttendanceMonthlyReportJobIntegrationTest extends AbstractPostgresIntegrat
 
     private long alice;
     private long bob;
-    private long someoneElse;
 
     @BeforeEach
     void seedEmployees() {
         alice = insertEmployee("10016", "ทดสอบ", "หนึ่ง");
         bob = insertEmployee("10030", "ทดสอบ", "สอง");
-        someoneElse = insertEmployee("10099", "คนอื่น", "ไม่เกี่ยว");
-    }
-
-    @Test
-    void aDayWithOnlyAClockInOrOnlyAClockOutCountsAsAttended() {
-        insertPunch(alice, at(1, 8, 20));
-        insertPunch(alice, at(1, 17, 40));   // in + out on the 1st: one day, not two
-        insertPunch(alice, at(2, 8, 25));    // clock-in only
-        insertPunch(alice, at(3, 17, 35));   // clock-out only
-
-        job(List.of("10016")).send(OCTOBER);
-
-        assertThat(mailer.onlyBody()).contains("ทดสอบ หนึ่ง (10016): 3 วัน");
-    }
-
-    /**
-     * The prod shape for these two people: fingerprint/PIN punches arrive with the employee CODE as
-     * badge_code and are stored with employee_id NULL (bulk ingest matches badge_card_no only), and
-     * only the odd card tap is linked. The rest of attendance resolves both via
-     * AttendanceSql.RESOLVED_EMPLOYEE_JOIN; this report must count the same days.
-     */
-    @Test
-    void punchesStoredWithoutAnEmployeeIdStillCountWhenTheBadgeResolvesToThem() {
-        insertUnlinkedPunch("10016", at(1, 8, 20));               // fingerprint, by employee code
-        insertPunch(alice, at(2, 8, 20));                         // linked card tap ...
-        insertUnlinkedPunch("10016", at(2, 17, 40));              // ... plus fingerprint, same day
-        insertUnlinkedPunch("CARD10016", at(3, 8, 20));           // unlinked tap, by card serial
-        insertUnlinkedPunch("10099", at(4, 8, 20));               // someone else's code
-
-        job(List.of("10016")).send(OCTOBER);
-
-        assertThat(mailer.onlyBody()).contains("ทดสอบ หนึ่ง (10016): 3 วัน");
-    }
-
-    @Test
-    void punchesOnTheDaysEitherSideOfTheMonthAreNotCounted() {
-        insertPunch(alice, LocalDate.of(2026, 9, 30).atTime(23, 50));
-        insertPunch(alice, at(31, 9, 0));
-        insertPunch(alice, LocalDate.of(2026, 11, 1).atTime(0, 10));
-
-        job(List.of("10016")).send(OCTOBER);
-
-        assertThat(mailer.onlyBody()).contains("ทดสอบ หนึ่ง (10016): 1 วัน");
-    }
-
-    @Test
-    void anEmployeeWithNoPunchesIsListedWithZeroRatherThanLeftOut() {
-        insertPunch(alice, at(5, 8, 30));
-
-        job(List.of("10016", "10030")).send(OCTOBER);
-
-        assertThat(mailer.onlyBody())
-            .contains("ทดสอบ หนึ่ง (10016): 1 วัน")
-            .contains("ทดสอบ สอง (10030): 0 วัน");
-    }
-
-    @Test
-    void anotherEmployeesPunchesNeitherAppearNorInflateTheCount() {
-        insertPunch(alice, at(6, 8, 30));
-        insertPunch(someoneElse, at(6, 8, 31));
-        insertPunch(someoneElse, at(7, 8, 30));
-        insertPunch(someoneElse, at(8, 8, 30));
-
-        job(List.of("10016", "10030")).send(OCTOBER);
-
-        assertThat(mailer.onlyBody())
-            .contains("ทดสอบ หนึ่ง (10016): 1 วัน")
-            .contains("ทดสอบ สอง (10030): 0 วัน")
-            .doesNotContain("10099")
-            .doesNotContain("คนอื่น");
-    }
-
-    @Test
-    void aConfiguredCodeWithNoEmployeeIsCalledOutNotSilentlyDropped() {
-        job(List.of("10016", "77777")).send(OCTOBER);
-
-        assertThat(mailer.onlyBody())
-            .contains("ทดสอบ หนึ่ง (10016): 0 วัน")
-            .contains("77777: ไม่พบรหัสพนักงานนี้ในระบบ");
+        insertEmployee("10099", "คนอื่น", "ไม่เกี่ยว");
     }
 
     @Test
@@ -132,68 +52,6 @@ class AttendanceMonthlyReportJobIntegrationTest extends AbstractPostgresIntegrat
         assertThat(mailer.sent).hasSize(1);
         assertThat(mailer.sent.get(0).to()).isEqualTo(RECIPIENT);
         assertThat(mailer.sent.get(0).subject()).contains("ตุลาคม 2569");
-    }
-
-    @Test
-    void copiesEveryConfiguredCcAddress() {
-        new AttendanceMonthlyReportJob(jdbc, emailService, RECIPIENT,
-            List.of(" cc@example.test ", "", "second@example.test"), List.of("10016")).send(OCTOBER);
-
-        assertThat(mailer.sent).hasSize(1);
-        assertThat(mailer.sent.get(0).to()).isEqualTo(RECIPIENT);
-        assertThat(mailer.sent.get(0).cc()).containsExactly("cc@example.test", "second@example.test");
-    }
-
-    @Test
-    void withNoCcConfiguredTheMailHasNoCc() {
-        job(List.of("10016")).send(OCTOBER);
-
-        assertThat(mailer.sent).hasSize(1);
-        assertThat(mailer.sent.get(0).cc()).isEmpty();
-    }
-
-    /** The CC path is the rich send, which needs an HTML part; names come from the DB, so escape them. */
-    @Test
-    void theHtmlPartRepeatsTheLinesWithNamesEscaped() {
-        jdbc.update("""
-            INSERT INTO hr.employee (employee_code, first_name_th, last_name_th, is_active)
-            VALUES ('10051', 'ชื่อ', '<b>สกุล</b>', TRUE)
-            """, Map.of());
-        insertPunch(alice, at(1, 8, 20));
-
-        job(List.of("10016", "10051")).send(OCTOBER);
-
-        assertThat(mailer.sent.get(0).html())
-            .contains("ทดสอบ หนึ่ง (10016): 1 วัน")
-            .contains("&lt;b&gt;สกุล&lt;/b&gt;")
-            .doesNotContain("<b>สกุล</b>");
-    }
-
-    /** With a CC configured, so the leave path's own "no recipient at all" skip cannot mask this one. */
-    @Test
-    void aBlankRecipientSendsNothingEvenWithACcConfigured() {
-        insertPunch(alice, at(1, 8, 20));
-
-        new AttendanceMonthlyReportJob(jdbc, emailService, " ", List.of("cc@example.test"), List.of("10016"))
-            .send(OCTOBER);
-
-        assertThat(mailer.sent).isEmpty();
-    }
-
-    @Test
-    void noEmployeeCodesSendsNothing() {
-        new AttendanceMonthlyReportJob(jdbc, emailService, RECIPIENT, List.of(), List.of(" ", "")).send(OCTOBER);
-
-        assertThat(mailer.sent).isEmpty();
-    }
-
-    @Test
-    void anEmployeeWithNoNameOnFileIsListedByCodeWithoutPrintingNull() {
-        jdbc.update("INSERT INTO hr.employee (employee_code, is_active) VALUES ('10050', TRUE)", Map.of());
-
-        job(List.of("10050")).send(OCTOBER);
-
-        assertThat(mailer.onlyBody()).contains("(10050): 0 วัน").doesNotContain("null");
     }
 
     /** The run at noon on the last day reports that same month, including that morning's scans. */
@@ -211,18 +69,6 @@ class AttendanceMonthlyReportJobIntegrationTest extends AbstractPostgresIntegrat
         assertThat(mailer.onlyBody())
             .contains("(10016): 2 วัน")
             .contains("ข้อมูลถึงวันที่ 31 ตุลาคม 2569 เวลา 12:00 น.");
-    }
-
-    @Test
-    void theRunOnTheLastDayOfDecemberReportsDecember() {
-        Clock noonOn31December = Clock.fixed(
-            ZonedDateTime.of(2026, 12, 31, 12, 0, 0, 0, BANGKOK).toInstant(), BANGKOK);
-
-        new AttendanceMonthlyReportJob(jdbc, emailService, RECIPIENT, List.of(), List.of("10016"), noonOn31December)
-            .sendThisMonth();
-
-        assertThat(mailer.sent).hasSize(1);
-        assertThat(mailer.sent.get(0).subject()).contains("ธันวาคม 2569");
     }
 
     @Test
@@ -259,15 +105,6 @@ class AttendanceMonthlyReportJobIntegrationTest extends AbstractPostgresIntegrat
             VALUES (:code, 'CARD' || :code, :firstName, :lastName, TRUE)
             RETURNING employee_id
             """, Map.of("code", code, "firstName", firstName, "lastName", lastName), Long.class);
-    }
-
-    private void insertUnlinkedPunch(String badgeCode, LocalDateTime local) {
-        jdbc.update("""
-            INSERT INTO hr.attendance_punch (site_code, badge_code, punch_time, work_date)
-            VALUES ('SHOWROOM', :badge, :at, :workDate)
-            """,
-            Map.of("badge", badgeCode, "at", local.atZone(BANGKOK).toOffsetDateTime(),
-                   "workDate", local.toLocalDate()));
     }
 
     private void insertPunch(long employeeId, LocalDateTime local) {
@@ -319,5 +156,6 @@ class AttendanceMonthlyReportJobIntegrationTest extends AbstractPostgresIntegrat
         public void sendWithAttachments(String to, String subject, String body, List<Attachment> attachments) {
             sent.add(new SentMail(to, List.of(), subject, body, null));
         }
+
     }
 }

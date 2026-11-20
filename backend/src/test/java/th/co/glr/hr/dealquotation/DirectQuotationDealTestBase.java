@@ -171,16 +171,6 @@ abstract class DirectQuotationDealTestBase extends AbstractPostgresIntegrationTe
         return approved;
     }
 
-    /** Revise {@code source} to {@code draft}'s terms, submit, and approve. */
-    protected DealQuotationDto approvedRevision(DealQuotationDto source, UpsertDealQuotationRequest draft) {
-        DealQuotationDto revision = quotationService.createRevision(source.id(), salesActor);
-        quotationService.update(revision.id(), draft, salesActor);
-        quotationService.submit(revision.id(), salesActor);
-        DealQuotationDto approved = quotationService.approve(revision.id(), new ApproveRequest(null), salesManagerActor);
-        assertThat(approved.docStatus()).isEqualTo(QuotationStatus.APPROVED);
-        return approved;
-    }
-
     /** One TILE line (10 pcs, loose), one PLAIN line (2 JOB), one ADJUSTMENT (flat -100); 50% deposit. */
     protected UpsertDealQuotationRequest directDraft() {
         ItemInput tile = new ItemInput(
@@ -210,31 +200,12 @@ abstract class DirectQuotationDealTestBase extends AbstractPostgresIntegrationTe
         return withDeposit(0, "BEFORE_DELIVERY", directDraft().items());
     }
 
-    /** {@code stock} lines carry the จากสต็อก tick; a deal of only such lines routes to delivery on a 0% confirm. */
-    protected UpsertDealQuotationRequest stockDraft(Integer depositPercent, String fullPaymentTerm, ItemInput... lines) {
-        return withDeposit(depositPercent, fullPaymentTerm, List.of(lines));
-    }
-
     private UpsertDealQuotationRequest withDeposit(Integer depositPercent, String fullPaymentTerm, List<ItemInput> items) {
         UpsertDealQuotationRequest d = directDraft();
         return new UpsertDealQuotationRequest(d.contactId(), d.deptCode(), d.unitCode(), d.offerDate(), depositPercent,
             d.remainderMode(), d.creditDays(), d.validityDays(), d.validityMode(), d.validityUntil(),
             d.customerNotes(), d.priceMode(), d.documentLanguage(), d.currency(), null, null, null, null,
             fullPaymentTerm, null, null, null, null, d.recipientType(), items);
-    }
-
-    protected ItemInput stockTile(String model, boolean stock) {
-        return stockTile(model, stock, null);
-    }
-
-    /** {@code id} non-null is a row the editor already saved, which update rewrites in place. */
-    protected ItemInput stockTile(String model, boolean stock, Long id) {
-        return new ItemInput(
-            null, null, null, "SCG", model, "White", "Matte", "60x60", new BigDecimal("10.00"),
-            new BigDecimal("0.36"), WastageCalculator.QUANTITY_MODE_PIECES, null, 10,
-            WastageCalculator.WASTAGE_MODE_NONE, null, 4, new BigDecimal("100.00"), BigDecimal.ZERO, "ไทย-สต็อก",
-            3, 7, null, WastageCalculator.LINE_TYPE_TILE, null, null, null, null, null, null, null, null,
-            id, null, false).withStockSource(stock ? "IN_THAILAND" : null);
     }
 
     // Reads and assertions

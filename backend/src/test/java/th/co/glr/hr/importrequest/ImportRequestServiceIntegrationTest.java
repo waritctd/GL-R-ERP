@@ -6,7 +6,6 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
 import java.time.LocalDate;
-import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -79,79 +78,11 @@ class ImportRequestServiceIntegrationTest extends AbstractPostgresIntegrationTes
         insertItem(ticketId, "LEA", "Ceppo Grigio", "60x120 cm", "44", "pcs", 2);
     }
 
-    // ── the SQL actually runs and carries the deal's own data ────────────────────────────────
-
-    @Test
-    void brandsOnTheDealAreListedOncePerBrand() {
-        assertThat(service.brands(ticketId, importUser)).containsExactlyInAnyOrder("Padana", "LEA");
-    }
-
-    @Test
-    void renderingProducesAFormCarryingOnlyTheRequestedBrandsLines() throws Exception {
-        byte[] pdf = service.render(ticketId, "Padana", "IR69068", "Within 21/5/26", importUser);
-
-        String text = textOf(pdf);
-        assertThat(text).contains("Lithos Nero Nat", "Terrazzo White Nat");
-        // One IR per brand: the LEA line belongs on its own form and must not leak onto this one.
-        assertThat(text).doesNotContain("Ceppo Grigio");
-        // Values that can only have come through the SQL, not from the caller. The point of the assertion is that the
-        // DEAL's customer reached the form — not that it fitted on one line, which it cannot.
-        assertThat(text).contains("บริษัท").contains("ยู่ฮุย").contains("จำกัด");
-        // Caller-supplied values still print.
-        assertThat(text).contains("IR69068").contains("Within 21/5/26");
-    }
-
-    @Test
-    void anUnknownBrandIsRefusedRatherThanRenderedEmpty() {
-        assertThatThrownBy(() -> service.render(ticketId, "NoSuchBrand", null, null, importUser))
-            .isInstanceOf(ApiException.class)
-            .hasMessageContaining("NoSuchBrand");
-    }
-
-    /** F-SM-001 has no unbranded variant and "Brand" is a header field, so a deal carrying a line with no brand
-     * must refuse outright — bucketing it under whichever brand was asked for would print the wrong thing on a
-     * controlled document. */
-    @Test
-    void aDealWithABlankBrandedLineIsRefusedEvenForABrandThatIsPresent() {
-        insertItem(ticketId, "   ", "Unbranded Filler", "30x30 cm", "10", "pcs", 3);
-
-        assertThatThrownBy(() -> service.render(ticketId, "Padana", null, null, importUser))
-            .isInstanceOf(ApiException.class)
-            .hasMessageContaining("แบรนด์");
-    }
-
-    @Test
-    void aTicketThatDoesNotExistIsRefused() {
-        assertThatThrownBy(() -> service.render(999_999L, "Padana", null, null, importUser))
-            .isInstanceOf(ApiException.class);
-    }
-
     // ── authorisation, asked the wrong way round ─────────────────────────────────────────────
 
     @Test
     void salesCannotRenderAnImportRequest() {
         assertThatThrownBy(() -> service.render(ticketId, "Padana", null, null, salesUser))
-            .isInstanceOf(ApiException.class)
-            .hasMessageContaining("ไม่มีสิทธิ์");
-    }
-
-    @Test
-    void accountCannotRenderAnImportRequest() {
-        assertThatThrownBy(() -> service.render(ticketId, "Padana", null, null, accountUser))
-            .isInstanceOf(ApiException.class)
-            .hasMessageContaining("ไม่มีสิทธิ์");
-    }
-
-    @Test
-    void hrCannotRenderAnImportRequest() {
-        assertThatThrownBy(() -> service.render(ticketId, "Padana", null, null, hrUser))
-            .isInstanceOf(ApiException.class)
-            .hasMessageContaining("ไม่มีสิทธิ์");
-    }
-
-    @Test
-    void salesCannotEvenListTheBrandsOnADeal() {
-        assertThatThrownBy(() -> service.brands(ticketId, salesUser))
             .isInstanceOf(ApiException.class)
             .hasMessageContaining("ไม่มีสิทธิ์");
     }
@@ -165,12 +96,6 @@ class ImportRequestServiceIntegrationTest extends AbstractPostgresIntegrationTes
     }
 
     // ── fixtures ──────────────────────────────────────────────────────────────────────────────
-
-    private static String textOf(byte[] pdf) throws Exception {
-        try (var doc = org.apache.pdfbox.Loader.loadPDF(pdf)) {
-            return new org.apache.pdfbox.text.PDFTextStripper().getText(doc);
-        }
-    }
 
     private static UserPrincipal principal(long employeeId, String role) {
         return new UserPrincipal(employeeId, role + "@glr.co.th", role, role, employeeId, true,

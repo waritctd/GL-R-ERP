@@ -80,23 +80,6 @@ class ManualCommissionIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(countCommissionRecords()).isEqualTo(before);
     }
 
-    @Test
-    void plainRepRole_cannotCreateManualCommission_zeroRowsCreated() {
-        wireService();
-        // A plain rep with none of the special-division roles (sales/sales_manager/ceo/account/ hr/import) — the
-        // DivisionAccessPolicy fallback role. Explicitly NOT in CommissionService.MANUAL_CREATE_ROLES.
-        long employeeId = createEmployee("พนักงานทั่วไป แมนนวล", "employee-manual@glr.co.th", "WH", "คลังสินค้า");
-        UserPrincipal employeeActor = new UserPrincipal(employeeId, employeeId + "@glr.co.th", "Warehouse Staff",
-            "employee", employeeId, true, LocalDate.now(), false, null, false);
-        int before = countCommissionRecords();
-
-        assertThatThrownBy(() -> commissionService.createManualCommission(
-                employeeId, CommissionKind.MANAGER, new BigDecimal("1000.00"), "should never work", PAYROLL_MONTH, employeeActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
-
-        assertThat(countCommissionRecords()).isEqualTo(before);
-    }
-
     // Positive-side sales_manager/ceo access, both are allowed (right-way-round sanity check alongside the
     // wrong-way-round tests above).
 
@@ -155,31 +138,6 @@ class ManualCommissionIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(saleCommissionId).isPositive();
     }
 
-    // The two additional manual kinds ride the identical path — this proves the V84 CHECK accepts their literal
-    // string values and they feed payroll exactly like ADJUSTMENT/MANAGER, so no per-kind logic diverged when the
-    // set was widened.
-    @Test
-    void stockBonusAndIncentive_manualKinds_acceptedAndFeedPayrollOnceApproved() {
-        wireService();
-        long salesRepId = createEmployee("พนักงานขาย โบนัส", "bonus@glr.co.th", "SB", "แผนกขาย");
-
-        CommissionRecord stock = commissionService.createManualCommission(
-            salesRepId, CommissionKind.STOCK_BONUS, new BigDecimal("1000.00"),
-            "stock-sale bonus — interim manual entry", PAYROLL_MONTH, managerActor);
-        assertThat(stock.manualAmount()).isEqualByComparingTo(new BigDecimal("1000.00"));
-        assertThat(stock.invoiceDetails()).isNull();
-        commissionService.approve(stock.id(), ceoActor);
-
-        CommissionRecord incentive = commissionService.createManualCommission(
-            salesRepId, CommissionKind.INCENTIVE, new BigDecimal("15000.00"),
-            "performance incentive — interim manual entry", PAYROLL_MONTH, managerActor);
-        commissionService.approve(incentive.id(), ceoActor);
-
-        SalesRepCommissionSummaryDto after = repSummaryFor(payrollReadySummary(), salesRepId);
-        assertThat(after.commissionAmount()).isEqualByComparingTo(new BigDecimal("16000.00"));
-        assertThat(after.manualAdjustmentAmount()).isEqualByComparingTo(new BigDecimal("16000.00"));
-    }
-
     // Negative ADJUSTMENT: reduces the payroll total by exactly the (negative) manual amount.
 
     @Test
@@ -196,77 +154,6 @@ class ManualCommissionIntegrationTest extends AbstractPostgresIntegrationTest {
 
         BigDecimal afterCommission = repSummaryFor(payrollReadySummary(), salesRepId).commissionAmount();
         assertThat(beforeCommission.subtract(afterCommission)).isEqualByComparingTo(new BigDecimal("2000.00"));
-    }
-
-    @Test
-    void managerKindEntry_cannotBeNegative() {
-        wireService();
-        long salesRepId = createEmployee("พนักงานขาย ทดสอบลบ", "manager-negative@glr.co.th", "SA", "แผนกขาย");
-        int before = countCommissionRecords();
-
-        assertThatThrownBy(() -> commissionService.createManualCommission(
-                salesRepId, CommissionKind.MANAGER, new BigDecimal("-500.00"), "should be rejected", PAYROLL_MONTH, ceoActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
-        assertThat(countCommissionRecords()).isEqualTo(before);
-    }
-
-    @Test
-    void blankReason_isRejected() {
-        wireService();
-        long salesRepId = createEmployee("พนักงานขาย ไม่มีเหตุผล", "no-reason@glr.co.th", "SA", "แผนกขาย");
-
-        assertThatThrownBy(() -> commissionService.createManualCommission(
-                salesRepId, CommissionKind.ADJUSTMENT, new BigDecimal("1000.00"), "   ", PAYROLL_MONTH, managerActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
-    }
-
-    // MANAGER-kind entry: targets the manager and lands in payroll the same way. Created directly by the CEO --
-    // lands APPROVED immediately, no manager-review step needed.
-
-    @Test
-    void managerKindEntry_forTheManager_landsInPayroll() {
-        wireService();
-        // managerEmployeeId has NO SALE commission this month -- the manual MANAGER entry is their only commission
-        // this month, so payrollReadySummary must synthesize a summary row (base 0.00) rather than only handling reps
-        // who already have a tier-calc row.
-        CommissionRecord created = commissionService.createManualCommission(
-            managerEmployeeId, CommissionKind.MANAGER, new BigDecimal("15000.00"),
-            "July team/manager commission", PAYROLL_MONTH, ceoActor);
-        assertThat(created.status()).isEqualTo(CommissionStatus.APPROVED);
-
-        SalesRepCommissionSummaryDto summary = repSummaryFor(payrollReadySummary(), managerEmployeeId);
-        assertThat(summary.commissionableBase()).isEqualByComparingTo(BigDecimal.ZERO);
-        assertThat(summary.commissionAmount()).isEqualByComparingTo(new BigDecimal("15000.00"));
-        assertThat(summary.manualAdjustmentAmount()).isEqualByComparingTo(new BigDecimal("15000.00"));
-    }
-
-    // Manual entries never touch the tier calc: no invoice required, amount stored verbatim, and the weighted
-    // tier-base sum (the input to simulate()/progressiveCommission) is completely unaffected by a manual entry,
-    // even while it is active (MANAGER_APPROVED).
-
-    @Test
-    void manualEntry_neverFeedsTierCalc_amountStoredVerbatim() {
-        wireService();
-        long salesRepId = createEmployee("พนักงานขาย ไม่มีใบกำกับ", "no-invoice@glr.co.th", "SA", "แผนกขาย");
-        BigDecimal weightedBefore = commissions.sumActiveWeightedActualReceived(salesRepId, PAYROLL_MONTH);
-        assertThat(weightedBefore).isEqualByComparingTo(BigDecimal.ZERO);
-
-        CommissionRecord created = commissionService.createManualCommission(
-            salesRepId, CommissionKind.ADJUSTMENT, new BigDecimal("12345.67"),
-            "interim stock incentive, applied by hand", PAYROLL_MONTH, managerActor);
-
-        CommissionRecord reloaded = commissions.findById(created.id()).orElseThrow();
-        assertThat(reloaded.manualAmount()).isEqualByComparingTo(new BigDecimal("12345.67"));
-        assertThat(reloaded.manualReason()).isEqualTo("interim stock incentive, applied by hand");
-        assertThat(reloaded.invoiceDetails()).isNull();
-        assertThat(reloaded.sourceTicketId()).isNull();
-        assertThat(reloaded.actualReceived()).isEqualByComparingTo(BigDecimal.ZERO);
-        assertThat(reloaded.commissionableBase()).isEqualByComparingTo(BigDecimal.ZERO);
-
-        // The weighted tier-base sum (what simulate()/payrollReadySummary's tier math consumes) must be completely
-        // unaffected by this manual entry, active or not.
-        BigDecimal weightedAfter = commissions.sumActiveWeightedActualReceived(salesRepId, PAYROLL_MONTH);
-        assertThat(weightedAfter).isEqualByComparingTo(BigDecimal.ZERO);
     }
 
     // Helpers

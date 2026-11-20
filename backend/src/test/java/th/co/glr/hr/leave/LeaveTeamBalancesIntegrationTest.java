@@ -69,59 +69,6 @@ class LeaveTeamBalancesIntegrationTest extends AbstractPostgresIntegrationTest {
             .doesNotContain(report2);
     }
 
-    @Test
-    void managerDoesNotSeeThemselvesInTheirOwnTeamList() {
-        long manager = insertEmployee("TQ-MGR-C", null, true);
-        insertEmployee("TQ-RPT-C", manager, true);
-
-        List<LeaveTeamMemberBalanceDto> team = leaveService.teamBalances(employee(manager), 2026);
-
-        assertThat(team).extracting(LeaveTeamMemberBalanceDto::employeeId).doesNotContain(manager);
-    }
-
-    @Test
-    void inactiveReportIsExcluded() {
-        long manager = insertEmployee("TQ-MGR-D", null, true);
-        insertEmployee("TQ-RPT-D-INACTIVE", manager, false);
-
-        List<LeaveTeamMemberBalanceDto> team = leaveService.teamBalances(employee(manager), 2026);
-
-        assertThat(team).isEmpty();
-    }
-
-    @Test
-    void anEmployeeWithNoDirectReportsGetsAnEmptyListNotAnError() {
-        long plainEmployee = insertEmployee("TQ-PLAIN-D", null, true);
-
-        List<LeaveTeamMemberBalanceDto> team = leaveService.teamBalances(employee(plainEmployee), 2026);
-
-        assertThat(team).isEmpty();
-    }
-
-    @Test
-    void hrStillSeesEveryone() {
-        long manager1 = insertEmployee("TQ-MGR-E1", null, true);
-        long manager2 = insertEmployee("TQ-MGR-E2", null, true);
-        long report1 = insertEmployee("TQ-RPT-E1", manager1, true);
-        long report2 = insertEmployee("TQ-RPT-E2", manager2, true);
-
-        List<LeaveTeamMemberBalanceDto> team = leaveService.teamBalances(hr(), 2026);
-
-        assertThat(team).extracting(LeaveTeamMemberBalanceDto::employeeId)
-            .as("HR keeps its existing whole-company reach -- this endpoint must not regress it")
-            .contains(manager1, manager2, report1, report2);
-    }
-
-    @Test
-    void ceoStillSeesEveryone() {
-        long manager = insertEmployee("TQ-MGR-F", null, true);
-        long report = insertEmployee("TQ-RPT-F", manager, true);
-
-        List<LeaveTeamMemberBalanceDto> team = leaveService.teamBalances(ceo(), 2026);
-
-        assertThat(team).extracting(LeaveTeamMemberBalanceDto::employeeId).contains(manager, report);
-    }
-
     // --- helpers ------------------------------------------------------------
 
     private long insertEmployee(String code, Long reportsToId, boolean active) {

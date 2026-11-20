@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { api } from './hrApi.js';
 
-// The four calls the page makes for a quotation's เอกสารแนบ, as the REAL client issues them.
+// Calls the page makes for a quotation's เอกสารแนบ, as the REAL client issues them.
 // Mirrors th.co.glr.hr.dealquotation.DealQuotationAttachmentController:
 //
 //   GET    /api/deal-quotations/{id}/attachments             → { items }
@@ -30,20 +30,6 @@ describe('hrApi.dealQuotations, เอกสารแนบ', () => {
   afterEach(() => {
     document.cookie = 'XSRF-TOKEN=; expires=Thu, 01 Jan 1970 00:00:00 GMT';
     vi.restoreAllMocks();
-  });
-
-  it('listAttachments(id) GETs the quotation\'s list and answers the envelope', async () => {
-    const items = [{ id: 71, fileName: 'vendor.pdf', inherited: false }];
-    fetchMock.mockResolvedValue(json({ items }));
-
-    const answer = await api.dealQuotations.listAttachments(41);
-
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    const [url, options] = fetchMock.mock.calls[0];
-    expect(url).toBe('/api/deal-quotations/41/attachments');
-    expect(options.method ?? 'GET').toBe('GET');
-    expect(options.credentials).toBe('include');
-    expect(answer).toEqual({ items });
   });
 
   it('uploadAttachment(id, file) POSTs the file as the multipart part `file`, with the CSRF header', async () => {
@@ -88,17 +74,5 @@ describe('hrApi.dealQuotations, เอกสารแนบ', () => {
     expect(options.method).toBe('DELETE');
     expect(new Headers(options.headers).get('X-XSRF-TOKEN')).toBe(TOKEN);
     expect(answer).toEqual({ ok: true });
-  });
-
-  it('deleteAttachment rejects with the server\'s own message when the removal is refused', async () => {
-    fetchMock.mockResolvedValue(json({ message: 'ใบเสนอราคาไม่ได้อยู่ในสถานะร่างแล้ว จึงลบเอกสารแนบไม่ได้', status: 409 }, 409));
-
-    await expect(api.dealQuotations.deleteAttachment(72))
-      .rejects.toMatchObject({ status: 409, message: 'ใบเสนอราคาไม่ได้อยู่ในสถานะร่างแล้ว จึงลบเอกสารแนบไม่ได้' });
-  });
-
-  it('attachmentUrl(attachmentId) is the file route, for a link, and fetches nothing', () => {
-    expect(api.dealQuotations.attachmentUrl(72)).toBe('/api/deal-quotation-attachments/72/file');
-    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

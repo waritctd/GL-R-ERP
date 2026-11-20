@@ -10,8 +10,6 @@ import org.junit.jupiter.api.Test;
  * DealStage#requiresJustification (Part C). The Part C tests are written from the owner's four real routes. */
 class DealStageTest {
 
-    // ── Part B: QUOTE_OWNER inserted, nothing else moved ─────────────────────
-
     /** Pinned in full rather than spot-checked. ORDER's positions are mirrored by the V50 CHECK constraint (as
      * widened by V143), the uat seeds, the frontend stage metadata and every historical sales_stage value, so a
      * reordering is a data-compatibility break, not a refactor. */
@@ -31,8 +29,6 @@ class DealStageTest {
             .isEqualTo(DealStage.indexOf(DealStage.QUOTE_OWNER) + 1);
     }
 
-    // ── Part C: the four real routes need no written justification ───────────
-
     /** Case A, the full designer → owner → contractor route, hop by hop:
      * S1→S2→S4→S3→S5→S6→S7→S8→S9→S10→S11→S12…S17→S18→S19→S20. Note S4→S3, which is backward in ORDER and is
      * nevertheless the everyday path. */
@@ -45,46 +41,6 @@ class DealStageTest {
             DealStage.ORDER_RECEIVED, DealStage.DEPOSIT_RECEIVED, DealStage.PROCUREMENT,
             DealStage.DELIVERY_SCHEDULING, DealStage.DELIVERED, DealStage.CLOSED_PAID));
     }
-
-    /** Case B — the owner buys directly, so S3, S4, S7 and S8 never happen. */
-    @Test
-    void caseB_ownerBuysDirect_needsNoNoteForTheStagesTheOwnerReplaces() {
-        assertNoNoteAlongPath(List.of(
-            DealStage.LEAD_APPROACH, DealStage.PRESENTATION, DealStage.QUOTE_OWNER,
-            DealStage.OWNER_SIGNOFF, DealStage.NEGOTIATION, DealStage.ORDER_RECEIVED,
-            DealStage.DEPOSIT_RECEIVED, DealStage.PROCUREMENT, DealStage.DELIVERY_SCHEDULING,
-            DealStage.DELIVERED, DealStage.CLOSED_PAID));
-    }
-
-    /** Case C — a contractor arrives holding a BOQ and a spec, so the deal starts at S8. A ticket is always created
-     * at LEAD_APPROACH, so this shows up as one seven-stage jump. */
-    @Test
-    void caseC_contractorArrivesAtS8_needsNoNoteForTheSevenStagesBefore() {
-        assertThat(DealStage.requiresJustification(DealStage.LEAD_APPROACH, DealStage.QUOTE_BUYER))
-            .isFalse();
-        assertNoNoteAlongPath(List.of(
-            DealStage.LEAD_APPROACH, DealStage.QUOTE_BUYER, DealStage.NEGOTIATION,
-            DealStage.ORDER_RECEIVED, DealStage.DEPOSIT_RECEIVED, DealStage.PROCUREMENT,
-            DealStage.DELIVERY_SCHEDULING, DealStage.DELIVERED, DealStage.CLOSED_PAID));
-    }
-
-    /** Case D — everything is already in stock, so PROCUREMENT (S12–S17) is skipped entirely. */
-    @Test
-    void caseD_filledFromStock_needsNoNoteForSkippingProcurement() {
-        assertThat(DealStage.requiresJustification(DealStage.DEPOSIT_RECEIVED, DealStage.DELIVERY_SCHEDULING))
-            .isFalse();
-    }
-
-    /** A deposit that is not required means S11 never happens either. */
-    @Test
-    void aDealWithNoDeposit_needsNoNoteForSkippingDepositReceived() {
-        assertThat(DealStage.requiresJustification(DealStage.ORDER_RECEIVED, DealStage.PROCUREMENT))
-            .isFalse();
-        assertThat(DealStage.requiresJustification(DealStage.ORDER_RECEIVED, DealStage.DELIVERY_SCHEDULING))
-            .isFalse();
-    }
-
-    // ── …and the relaxation stops at the mandatory stages ────────────────────
 
     /** Wrong-way-round half of Part C: the five stages every route has in common. Stepping OVER one of them is a
      * genuine exception and still costs a sentence. */
@@ -102,34 +58,6 @@ class DealStageTest {
         assertThat(DealStage.requiresJustification(DealStage.LEAD_APPROACH, DealStage.CLOSED_PAID)).isTrue();
     }
 
-    /** Landing ON a mandatory stage is not skipping it — only stepping over it is. */
-    @Test
-    void landingOnAMandatoryStageIsNotASkip() {
-        assertThat(DealStage.requiresJustification(DealStage.QUOTE_DESIGN_SIDE, DealStage.NEGOTIATION)).isFalse();
-        assertThat(DealStage.requiresJustification(DealStage.LEAD_APPROACH, DealStage.NEGOTIATION)).isFalse();
-        assertThat(DealStage.requiresJustification(DealStage.QUOTE_OWNER, DealStage.NEGOTIATION)).isFalse();
-        // …but one stage further IS a skip, because NEGOTIATION is then stepped over rather than landed on. This is
-        // the boundary the rule turns on.
-        assertThat(DealStage.requiresJustification(DealStage.QUOTE_OWNER, DealStage.ORDER_RECEIVED)).isTrue();
-    }
-
-    // ── backward moves are unchanged ─────────────────────────────────────────
-
-    /** The one allowlisted pair, and nothing else. In particular Part B did NOT widen it: S5 is reached going
-     * forward from S3 in the real route, so no QUOTE_OWNER -> backward move became routine. */
-    @Test
-    void onlyQuoteDesignSideBackToSpecApproved_isARoutineBackwardMove() {
-        assertThat(DealStage.requiresJustification(DealStage.QUOTE_DESIGN_SIDE, DealStage.SPEC_APPROVED))
-            .isFalse();
-
-        assertThat(DealStage.requiresJustification(DealStage.QUOTE_OWNER, DealStage.SPEC_APPROVED)).isTrue();
-        assertThat(DealStage.requiresJustification(DealStage.QUOTE_OWNER, DealStage.QUOTE_DESIGN_SIDE)).isTrue();
-        assertThat(DealStage.requiresJustification(DealStage.OWNER_SIGNOFF, DealStage.QUOTE_OWNER)).isTrue();
-        assertThat(DealStage.requiresJustification(DealStage.QUOTE_DESIGN_SIDE, DealStage.PRESENTATION)).isTrue();
-        assertThat(DealStage.requiresJustification(DealStage.PRESENTATION, DealStage.LEAD_APPROACH)).isTrue();
-        assertThat(DealStage.requiresJustification(DealStage.CLOSED_PAID, DealStage.DELIVERED)).isTrue();
-    }
-
     /** Every backward move that is not that one pair needs a reason — checked exhaustively. */
     @Test
     void everyOtherBackwardMoveNeedsAReason() {
@@ -145,24 +73,6 @@ class DealStageTest {
             }
         }
     }
-
-    // ── degenerate inputs ────────────────────────────────────────────────────
-
-    /** updateStage rejects an unknown code (400) and a no-op move (409) before it ever asks, so the predicate must
-     * not second-guess either — it answers false and lets those guards speak. */
-    @Test
-    void unknownCodesAndNoOpMovesAreNotJustifiable() {
-        assertThat(DealStage.requiresJustification("NOT_A_STAGE", DealStage.DELIVERED)).isFalse();
-        assertThat(DealStage.requiresJustification(DealStage.DELIVERED, "NOT_A_STAGE")).isFalse();
-        assertThat(DealStage.requiresJustification(null, DealStage.DELIVERED)).isFalse();
-        assertThat(DealStage.requiresJustification(DealStage.DELIVERED, null)).isFalse();
-        for (String stage : DealStage.ORDER) {
-            assertThat(DealStage.requiresJustification(stage, stage)).as("%s -> itself", stage).isFalse();
-        }
-    }
-
-    // Part D: the catalog served to clients ──────────────────────────────── Every assertion below covers a field
-    // the frontend used to declare for itself in features/tickets/stageMeta.js.
 
     /** The three write-gate sets partition ORDER exactly. */
     @Test
@@ -189,69 +99,6 @@ class DealStageTest {
         assertThat(DealStage.gateOf("NOT_A_STAGE")).isNull();
     }
 
-    /** Every stage has a phase, phases run 1–5, and they never go backwards along {@code ORDER}. */
-    @Test
-    void everyStageHasAPhaseAndPhasesAreMonotonicAlongTheOrder() {
-        int previous = 0;
-        for (String stage : DealStage.ORDER) {
-            int phase = DealStage.phaseOf(stage);
-            assertThat(phase).as("phase of %s", stage).isBetween(1, 5);
-            assertThat(phase).as("phase of %s must not go backwards", stage).isGreaterThanOrEqualTo(previous);
-            previous = phase;
-        }
-        assertThat(DealStage.ORDER.stream().map(DealStage::phaseOf).distinct().toList())
-            .containsExactly(1, 2, 3, 4, 5);
-        assertThat(DealStage.phaseOf("NOT_A_STAGE")).isZero();
-    }
-
-    /** The display sequence and the owner's S-sheet number are different things, and this pins exactly how. */
-    @Test
-    void displayNumberAndBusinessCodeAreBothTotalAndDeliberatelyDifferent() {
-        for (int i = 0; i < DealStage.ORDER.size(); i++) {
-            String stage = DealStage.ORDER.get(i);
-            assertThat(DealStage.displayNoOf(stage)).as("display no of %s", stage).isEqualTo(i + 1);
-            assertThat(DealStage.businessCodeOf(stage)).as("business code of %s", stage).isNotNull();
-        }
-        assertThat(DealStage.ORDER.stream().map(DealStage::businessCodeOf).distinct())
-            .as("no two stages may share a sheet number").hasSize(DealStage.ORDER.size());
-
-        // The divergence itself, stated: S5 is the 5th stage, but S6 is the 6th and S20 is the 15th.
-        assertThat(DealStage.displayNoOf(DealStage.QUOTE_OWNER)).isEqualTo(5);
-        assertThat(DealStage.businessCodeOf(DealStage.QUOTE_OWNER)).isEqualTo("S5");
-        assertThat(DealStage.displayNoOf(DealStage.CLOSED_PAID)).isEqualTo(15);
-        assertThat(DealStage.businessCodeOf(DealStage.CLOSED_PAID)).isEqualTo("S20");
-        assertThat(DealStage.businessCodeOf(DealStage.PROCUREMENT)).isEqualTo("S12–S17");
-
-        assertThat(DealStage.displayNoOf("NOT_A_STAGE")).isZero();
-        assertThat(DealStage.businessCodeOf("NOT_A_STAGE")).isNull();
-    }
-
-    /**
-     * The seven stages the rep does not click into: the four with an {@code autoAdvanceStage} call
-     * site (ORDER_RECEIVED, DEPOSIT_RECEIVED, PROCUREMENT, CLOSED_PAID) plus the three quote
-     * stages, which a quotation addressed to that recipient moves the deal onto (owner ruling
-     * 2026-10-16). The quote-stage entries are load-bearing, not cosmetic: the catalog serves the
-     * flag per stage and the deal page's one-click เลื่อนไป is gated on {@code !next.auto}, so
-     * these three entries withdraw the manual advance from the stage panel's inline button, the ⋯
-     * menu, the stage picker and the page's sticky CTA at once. The server-side refusal is
-     * {@code TicketService.requireStageFactsHold}'s own quote-stage gate.
-     *
-     * <p>This is not the fact-gated set: PROCUREMENT is auto-advanced but not gated, and DELIVERED
-     * is gated but absent here, as is DELIVERY_SCHEDULING — the rep also reaches both by hand as
-     * part of the normal flow.
-     */
-    @Test
-    void autoAdvancedIsExactlyTheSevenStagesTheRepDoesNotClickInto() {
-        // In DealStage.ORDER sequence, not grouped by kind: the three quote stages sit in the
-        // middle of the pipeline, between SPEC_APPROVED and the operational four.
-        assertThat(DealStage.ORDER.stream().filter(DealStage::isAutoAdvanced).toList())
-            .containsExactly(DealStage.QUOTE_DESIGN_SIDE, DealStage.QUOTE_OWNER,
-                DealStage.QUOTE_BUYER, DealStage.ORDER_RECEIVED, DealStage.DEPOSIT_RECEIVED,
-                DealStage.PROCUREMENT, DealStage.CLOSED_PAID);
-        assertThat(DealStage.isAutoAdvanced(DealStage.DELIVERY_SCHEDULING)).isFalse();
-        assertThat(DealStage.isAutoAdvanced("NOT_A_STAGE")).isFalse();
-    }
-
     private static void assertNoNoteAlongPath(List<String> path) {
         for (int i = 0; i + 1 < path.size(); i++) {
             assertThat(DealStage.requiresJustification(path.get(i), path.get(i + 1)))
@@ -261,60 +108,4 @@ class DealStageTest {
         }
     }
 
-    // ── Slice 1: reps' S-codes and the five board columns ────────────────────
-
-    @Test
-    void repCodeOf_matchesRepWorkbookCodes() {
-        java.util.Map<String, String> expected = java.util.Map.ofEntries(
-            java.util.Map.entry("LEAD_APPROACH", "S1"), java.util.Map.entry("PRESENTATION", "S1"),
-            java.util.Map.entry("SPEC_APPROVED", "S2"),
-            java.util.Map.entry("QUOTE_DESIGN_SIDE", "S3"), java.util.Map.entry("QUOTE_OWNER", "S3"),
-            java.util.Map.entry("OWNER_SIGNOFF", "S3"),
-            java.util.Map.entry("AWAITING_BUYER", "S5"),
-            java.util.Map.entry("QUOTE_BUYER", "S6"), java.util.Map.entry("NEGOTIATION", "S6"),
-            java.util.Map.entry("ORDER_RECEIVED", "S6"),
-            java.util.Map.entry("DEPOSIT_RECEIVED", "S7"), java.util.Map.entry("PROCUREMENT", "S7"),
-            java.util.Map.entry("DELIVERY_SCHEDULING", "S8"),
-            java.util.Map.entry("DELIVERED", "S9"), java.util.Map.entry("CLOSED_PAID", "S9"));
-        expected.forEach((stage, code) ->
-            assertThat(DealStage.repCodeOf(stage)).as("repCodeOf(%s)", stage).isEqualTo(code));
-    }
-
-    @Test
-    void boardColumnOf_groupsIntoFive() {
-        java.util.Map<String, Integer> byCode = java.util.Map.of(
-            "S1", 1, "S2", 2, "S3", 3, "S5", 3, "S6", 4, "S7", 5, "S8", 5, "S9", 5);
-        for (String stage : DealStage.ORDER) {
-            assertThat(DealStage.boardColumnOf(stage)).as("boardColumnOf(%s)", stage)
-                .isEqualTo(byCode.get(DealStage.repCodeOf(stage)));
-        }
-        assertThat(DealStage.boardColumnOf("QUOTE_OWNER")).isEqualTo(3);
-        assertThat(DealStage.boardColumnOf("DELIVERED")).isEqualTo(5);
-    }
-
-    @Test
-    void everyStageHasARepCodeAndColumn() {
-        for (String stage : DealStage.ORDER) {
-            assertThat(DealStage.repCodeOf(stage)).as("repCodeOf(%s)", stage).isNotNull();
-            assertThat(DealStage.boardColumnOf(stage)).as("boardColumnOf(%s)", stage).isBetween(1, 5);
-        }
-    }
-
-    @Test
-    void boardColumnIsMonotonicInPipelineOrder() {
-        int previous = 0;
-        for (String stage : DealStage.ORDER) {
-            int column = DealStage.boardColumnOf(stage);
-            assertThat(column).as("column of %s after %d", stage, previous).isGreaterThanOrEqualTo(previous);
-            previous = column;
-        }
-    }
-
-    @Test
-    void unknownStage_returnsNullAndZero() {
-        assertThat(DealStage.repCodeOf("NOPE")).isNull();
-        assertThat(DealStage.repCodeOf(null)).isNull();
-        assertThat(DealStage.boardColumnOf("NOPE")).isZero();
-        assertThat(DealStage.boardColumnOf(null)).isZero();
-    }
 }

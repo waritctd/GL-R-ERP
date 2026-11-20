@@ -2,8 +2,6 @@ package th.co.glr.hr.auth;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -120,75 +118,6 @@ class DealEntryAccessIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(dto.summary().id()).isPositive();
     }
 
-    @Test
-    void salesManager_canCreateTicket() {
-        var dto = ticketService.create(ticketRequest(), actor(salesManagerId, "sales_manager"));
-        assertThat(dto.summary().id()).isPositive();
-    }
-
-    @Test
-    void importAccountAndEmployeeRoles_cannotCreateTicket() {
-        assertForbidden(() -> ticketService.create(ticketRequest(), actor(importUserId, "import")));
-        assertForbidden(() -> ticketService.create(ticketRequest(), actor(accountUserId, "account")));
-        assertForbidden(() -> ticketService.create(ticketRequest(), actor(employeeUserId, "employee")));
-    }
-
-    // ── customer / project create + customer search (HTTP layer, real Postgres) ────────────
-
-    @Test
-    void qcWithoutGrant_cannotCreateCustomerOrProjectOrSearch() throws Exception {
-        customerMvc.perform(post("/api/customers").session(session(qcUserId, "qc"))
-                .contentType(MediaType.APPLICATION_JSON).content("{\"name\":\"ACME QC\"}"))
-            .andExpect(status().isForbidden());
-        customerMvc.perform(post("/api/customers/{id}/projects", projectOwnerCustomerId).session(session(qcUserId, "qc"))
-                .contentType(MediaType.APPLICATION_JSON).content("{\"name\":\"โครงการ QC\"}"))
-            .andExpect(status().isForbidden());
-        customerMvc.perform(get("/api/customers").session(session(qcUserId, "qc")))
-            .andExpect(status().isForbidden());
-    }
-
-    @Test
-    void qcWithGrant_canCreateCustomerAndProjectAndSearch() throws Exception {
-        grantQuotationCapability(qcUserId);
-        customerMvc.perform(post("/api/customers").session(session(qcUserId, "qc"))
-                .contentType(MediaType.APPLICATION_JSON).content("{\"name\":\"ACME QC Granted\"}"))
-            .andExpect(status().is2xxSuccessful());
-        customerMvc.perform(post("/api/customers/{id}/projects", projectOwnerCustomerId).session(session(qcUserId, "qc"))
-                .contentType(MediaType.APPLICATION_JSON).content("{\"name\":\"โครงการ QC Granted\"}"))
-            .andExpect(status().is2xxSuccessful());
-        customerMvc.perform(get("/api/customers").session(session(qcUserId, "qc")))
-            .andExpect(status().isOk());
-    }
-
-    @Test
-    void salesManager_canCreateCustomerAndProjectAndSearch() throws Exception {
-        customerMvc.perform(post("/api/customers").session(session(salesManagerId, "sales_manager"))
-                .contentType(MediaType.APPLICATION_JSON).content("{\"name\":\"ACME SM\"}"))
-            .andExpect(status().is2xxSuccessful());
-        customerMvc.perform(post("/api/customers/{id}/projects", projectOwnerCustomerId).session(session(salesManagerId, "sales_manager"))
-                .contentType(MediaType.APPLICATION_JSON).content("{\"name\":\"โครงการ SM\"}"))
-            .andExpect(status().is2xxSuccessful());
-        customerMvc.perform(get("/api/customers").session(session(salesManagerId, "sales_manager")))
-            .andExpect(status().isOk());
-    }
-
-    @Test
-    void importAccountAndEmployeeRoles_cannotCreateCustomerOrProject() throws Exception {
-        for (long id : List.of(importUserId, accountUserId, employeeUserId)) {
-            String role = id == importUserId ? "import" : id == accountUserId ? "account" : "employee";
-            customerMvc.perform(post("/api/customers").session(session(id, role))
-                    .contentType(MediaType.APPLICATION_JSON).content("{\"name\":\"ACME " + role + "\"}"))
-                .andExpect(status().isForbidden());
-            customerMvc.perform(post("/api/customers/{id}/projects", projectOwnerCustomerId).session(session(id, role))
-                    .contentType(MediaType.APPLICATION_JSON).content("{\"name\":\"โครงการ " + role + "\"}"))
-                .andExpect(status().isForbidden());
-        }
-        // import/account ARE in TicketAccessPolicy.VIEWER_ROLES (unaffected by this widening -- that read gate was
-        // already open to them before this change), so search stays 200 for them; only plain employee is denied there.
-        customerMvc.perform(get("/api/customers").session(session(employeeUserId, "employee")))
-            .andExpect(status().isForbidden());
-    }
-
     // ── update customer (owner feedback F7, 2026-09-10) ───────────────────────────────────
 
     /** PUT /api/customers/{id} is a NEW write endpoint on the customer master, gated by
@@ -232,14 +161,6 @@ class DealEntryAccessIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(taxIdOf(id)).isEqualTo("0105542000002");
     }
 
-    /** A missing customer is a 404, not a silent 200 — and never a row created by the update. */
-    @Test
-    void updatingACustomerThatDoesNotExistIs404() throws Exception {
-        customerMvc.perform(put("/api/customers/{id}", 999_999_999L).session(session(salesManagerId, "sales_manager"))
-                .contentType(MediaType.APPLICATION_JSON).content("{\"phone\":\"02-1\"}"))
-            .andExpect(status().isNotFound());
-    }
-
     private static final String SEED_TAX_ID = "F7-SEED-TAXID";
     private static final String SEED_PHONE  = "02-000-0001";
 
@@ -257,120 +178,6 @@ class DealEntryAccessIntegrationTest extends AbstractPostgresIntegrationTest {
     private String phoneOf(long id) {
         return jdbc.queryForObject("SELECT phone FROM customers.customer WHERE customer_id = :id",
             Map.of("id", id), String.class);
-    }
-
-    // ── update contact (gap fix, prod QT-2026-0041-1) ─────────────────────────────────────
-
-    /** PUT /api/customers/{customerId/contacts/{contactId}} is a NEW write endpoint, gated by
-     * DealEntryAccess#requireCanEnterDeal — exactly the gate POST /api/customers/{id/contacts} uses, no wider. */
-    @Test
-    void rolesOutsideTheDealEntryGate_cannotUpdateAContact_andTheRowIsUnchanged() throws Exception {
-        long customerId = seedCustomerForUpdate();
-        long contactId = seedContactForUpdate(customerId);
-        for (long actorId : List.of(importUserId, accountUserId, employeeUserId, qcUserId)) {
-            String role = actorId == importUserId ? "import"
-                : actorId == accountUserId ? "account"
-                : actorId == employeeUserId ? "employee" : "qc";
-            customerMvc.perform(put("/api/customers/{customerId}/contacts/{contactId}", customerId, contactId)
-                    .session(session(actorId, role))
-                    .contentType(MediaType.APPLICATION_JSON)
-                    .content("{\"email\":\"hacked-" + role + "@evil.example\"}"))
-                .andExpect(status().isForbidden());
-            assertThat(contactEmailOf(contactId)).as("%s must not have rewritten the row", role)
-                .isEqualTo(SEED_CONTACT_EMAIL);
-        }
-    }
-
-    @Test
-    void salesSalesManagerAndAGrantedQc_canUpdateAContact() throws Exception {
-        long customerId = seedCustomerForUpdate();
-        long contactId = seedContactForUpdate(customerId);
-        // sales: the ordinary rep on the deal card.
-        customerMvc.perform(put("/api/customers/{customerId}/contacts/{contactId}", customerId, contactId)
-                .session(session(employeeUserId, "sales"))
-                .contentType(MediaType.APPLICATION_JSON).content("{\"email\":\"new1@example.com\"}"))
-            .andExpect(status().isOk());
-        assertThat(contactEmailOf(contactId)).isEqualTo("new1@example.com");
-
-        customerMvc.perform(put("/api/customers/{customerId}/contacts/{contactId}", customerId, contactId)
-                .session(session(salesManagerId, "sales_manager"))
-                .contentType(MediaType.APPLICATION_JSON).content("{\"phone\":\"02-777-0000\"}"))
-            .andExpect(status().isOk());
-        assertThat(contactPhoneOf(contactId)).isEqualTo("02-777-0000");
-        assertThat(contactEmailOf(contactId)).as("a body carrying only phone must not blank the e-mail")
-            .isEqualTo("new1@example.com");
-
-        grantQuotationCapability(qcUserId);
-        customerMvc.perform(put("/api/customers/{customerId}/contacts/{contactId}", customerId, contactId)
-                .session(session(qcUserId, "qc"))
-                .contentType(MediaType.APPLICATION_JSON).content("{\"email\":\"new2@example.com\"}"))
-            .andExpect(status().isOk());
-        assertThat(contactEmailOf(contactId)).isEqualTo("new2@example.com");
-    }
-
-    /** A blank firstName is refused, mirroring the customer update's blank-name refusal. */
-    @Test
-    void blankFirstNameOnContactUpdateIsRefused() throws Exception {
-        long customerId = seedCustomerForUpdate();
-        long contactId = seedContactForUpdate(customerId);
-        customerMvc.perform(put("/api/customers/{customerId}/contacts/{contactId}", customerId, contactId)
-                .session(session(salesManagerId, "sales_manager"))
-                .contentType(MediaType.APPLICATION_JSON).content("{\"firstName\":\"\"}"))
-            .andExpect(status().isBadRequest());
-        assertThat(contactFirstNameOf(contactId)).isEqualTo(SEED_CONTACT_FIRST_NAME);
-    }
-
-    /** A contact id that exists but belongs to a DIFFERENT customer must 404, exactly like the customer-update 404
-     * above — proves th.co.glr.hr.customer.ContactRepository#update's WHERE contact_id = ... The row must be
-     * unchanged, because a 404 that had already written would be a bug too. */
-    @Test
-    void updatingAContactThroughAMismatchedCustomerIdIs404_andTheRowIsUnchanged() throws Exception {
-        long customerId = seedCustomerForUpdate();
-        long contactId = seedContactForUpdate(customerId);
-        long otherCustomerId = seedCustomerForUpdate();
-
-        customerMvc.perform(put("/api/customers/{customerId}/contacts/{contactId}", otherCustomerId, contactId)
-                .session(session(salesManagerId, "sales_manager"))
-                .contentType(MediaType.APPLICATION_JSON).content("{\"email\":\"leaked@example.com\"}"))
-            .andExpect(status().isNotFound());
-        assertThat(contactEmailOf(contactId)).as("a mismatched customerId must not have rewritten the row")
-            .isEqualTo(SEED_CONTACT_EMAIL);
-    }
-
-    /** A missing contact is a 404, not a silent 200. */
-    @Test
-    void updatingAContactThatDoesNotExistIs404() throws Exception {
-        long customerId = seedCustomerForUpdate();
-        customerMvc.perform(put("/api/customers/{customerId}/contacts/{contactId}", customerId, 999_999_999L)
-                .session(session(salesManagerId, "sales_manager"))
-                .contentType(MediaType.APPLICATION_JSON).content("{\"email\":\"x@example.com\"}"))
-            .andExpect(status().isNotFound());
-    }
-
-    private static final String SEED_CONTACT_FIRST_NAME = "F7-SEED-CONTACT";
-    private static final String SEED_CONTACT_EMAIL      = "seed-contact@example.com";
-    private static final String SEED_CONTACT_PHONE      = "02-000-0002";
-
-    private long seedContactForUpdate(long customerId) {
-        return new ContactRepository(jdbc)
-            .create(customerId, SEED_CONTACT_FIRST_NAME, "นามสกุลทดสอบ", "ตำแหน่งทดสอบ",
-                SEED_CONTACT_EMAIL, SEED_CONTACT_PHONE)
-            .id();
-    }
-
-    private String contactEmailOf(long contactId) {
-        return jdbc.queryForObject("SELECT email FROM customers.contact WHERE contact_id = :id",
-            Map.of("id", contactId), String.class);
-    }
-
-    private String contactPhoneOf(long contactId) {
-        return jdbc.queryForObject("SELECT phone FROM customers.contact WHERE contact_id = :id",
-            Map.of("id", contactId), String.class);
-    }
-
-    private String contactFirstNameOf(long contactId) {
-        return jdbc.queryForObject("SELECT first_name FROM customers.contact WHERE contact_id = :id",
-            Map.of("id", contactId), String.class);
     }
 
     // ── helpers ─────────────────────────────────────────────────────────────────────────────

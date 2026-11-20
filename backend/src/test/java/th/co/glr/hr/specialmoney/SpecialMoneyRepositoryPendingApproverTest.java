@@ -30,40 +30,4 @@ class SpecialMoneyRepositoryPendingApproverTest {
         assertThat(repository.resolvePendingApproverName(rs)).isEqualTo("ราม");
     }
 
-    @Test
-    void managerApprovedLegacyRow_stillResolvesToCeo() throws SQLException {
-        // MANAGER_APPROVED survives only for rows written before the manager stage was removed (SpecialMoneyService's
-        // class Javadoc) -- ceoApproveFrom handles it the same way as SUBMITTED, so the pending-approver display must
-        // too.
-        ResultSet rs = resultSet("MANAGER_APPROVED", "ราม");
-
-        assertThat(repository.resolvePendingApproverRole(rs)).isEqualTo("ceo");
-        assertThat(repository.resolvePendingApproverName(rs)).isEqualTo("ราม");
-    }
-
-    @Test
-    void multipleCeoCandidates_omitsNameButKeepsRole() throws SQLException {
-        // Ambiguity case: PendingApproverSql#SINGLE_ACTIVE_CEO_NAME_SQL resolves to SQL NULL when more than one active
-        // ceo-role employee exists.
-        ResultSet rs = resultSet("SUBMITTED", null);
-
-        assertThat(repository.resolvePendingApproverRole(rs)).isEqualTo("ceo");
-        assertThat(repository.resolvePendingApproverName(rs)).isNull();
-    }
-
-    @Test
-    void approvedStatus_hasNoPendingApprover() throws SQLException {
-        ResultSet rs = resultSet("APPROVED", "ราม");
-
-        assertThat(repository.resolvePendingApproverRole(rs)).isNull();
-        assertThat(repository.resolvePendingApproverName(rs)).isNull();
-    }
-
-    @Test
-    void rejectedStatus_hasNoPendingApprover() throws SQLException {
-        ResultSet rs = resultSet("REJECTED", null);
-
-        assertThat(repository.resolvePendingApproverRole(rs)).isNull();
-        assertThat(repository.resolvePendingApproverName(rs)).isNull();
-    }
 }

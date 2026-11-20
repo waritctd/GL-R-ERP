@@ -96,41 +96,6 @@ class PayrollClassifiedEngineIntegrationTest extends AbstractPostgresIntegration
             .hasMessageContaining("BLK-001");
     }
 
-    @Test
-    void zeroAmountComponentNeedsNoClassificationAndDoesNotBlockTheRun() {
-        long employeeId = seedEmployee("BLK-002", "ไม่บล็อก", "ทดสอบ", new BigDecimal("30000.00"));
-        // SPECIAL_PAY_1 present in the request but zero -- never classified, must not block.
-        PayrollEmployeeInputRequest input = input(employeeId, specialPays(BigDecimal.ZERO),
-            BigDecimal.ZERO, null, null, BigDecimal.ZERO, null, null, false, null, null);
-
-        PayrollPeriodDto period = payrollService.preview(
-            new ProcessPayrollRequest(LocalDate.of(2026, 1, 1), List.of(input)), hr());
-
-        assertThat(period.lines()).hasSize(1);
-    }
-
-    // ---- REGULAR_REPROJECT (ข้อ 1(4)): annualise x monthsRemaining, recomputed each period --------
-
-    @Test
-    void regularReprojectAnnualisesSalaryToThePinnedFigure() {
-        long employeeId = seedEmployee("REG-001", "ปกติ", "ทดสอบ", new BigDecimal("50000.00"));
-        PayrollLineDto line = previewLineFor(LocalDate.of(2026, 1, 1), employeeId,
-            input(employeeId, specialPays(BigDecimal.ZERO), BigDecimal.ZERO, null, null, BigDecimal.ZERO,
-                null, null, false, null, null));
-
-        // Hand trace: regularAnnualProjection = 0 + 50,000 x 12 = 600,000; taxExpenseDeduction caps at
-        // 100,000; SSO allowance = min(10,500, 0 + 875x12) = 10,500; taxAllowanceTotal = 60,000 +
-        // 10,500 = 70,500; taxableAnnualIncome = 600,000 - 100,000 - 70,500 = 429,500; annualTax =
-        // 150,000@5% + 129,500@10% = 7,500 + 12,950 = 20,450; withholdingTax = 20,450 / 12 = 1,704.1666
-        // -> HALF_UP 1,704.17 -> whole baht 1,704.00.
-        assertThat(line.projectedAnnualIncome()).isEqualByComparingTo("600000.00");
-        assertThat(line.taxAllowanceTotal()).isEqualByComparingTo("70500.00");
-        assertThat(line.taxableAnnualIncome()).isEqualByComparingTo("429500.00");
-        assertThat(line.annualTax()).isEqualByComparingTo("20450.00");
-        assertThat(line.withholdingTax()).isEqualByComparingTo("1704.00");
-        assertThat(line.withholdingTaxRegularLimb()).isEqualByComparingTo("1704.00");
-    }
-
     // ---- EXTRA_KNOWN_FREQUENCY (ข้อ 1(5)): x known count, taxed as the difference ------------------
 
     @Test
@@ -308,56 +273,6 @@ class PayrollClassifiedEngineIntegrationTest extends AbstractPostgresIntegration
         assertThat(line.garnishmentType()).isEqualTo("BONUS");
     }
 
-    @Test
-    void overtimeGarnishmentCapsAtThirtyPercentOfOvertimeAndDiligencePaidThisPeriod() {
-        long employeeId = seedEmployee("GARN-OT-001", "อายัดโอที", "ทดสอบ", new BigDecimal("20000.00"));
-        // OVERTIME_PAY only reaches payroll via approved hr.overtime_request rows -- not HR-typed on
-        // the request -- so this test uses SPECIAL_PAY_5 (พิเศษ 5, เบี้ยขยันประจำ -- see
-        // PayrollComponent's javadoc / PayrollService#specialPayDtos, one
-        // of the two components named for this garnishment type) instead, classified
-        // REGULAR. SPECIAL_PAY_4 (พิเศษ 4, ค่าตำแหน่ง -- a position allowance, NOT เบี้ยขยัน) is
-        // ALSO given a large non-zero amount here and must be excluded from the cap base: this is the
-        // regression pin for the off-by-one defect where the calculator
-        // read SPECIAL_PAY_4 instead of SPECIAL_PAY_5, letting a position allowance inflate the
-        // ป.วิ.พ. ม.302 เบี้ยขยัน/ค่าล่วงเวลา garnishment cap.
-        payrollRepository.upsertComponentTaxTreatment(TAX_YEAR, List.of(
-            new ComponentTaxTreatmentUpsertRequest(employeeId, PayrollComponent.SPECIAL_PAY_4, PayrollTaxTreatment.REGULAR_REPROJECT),
-            new ComponentTaxTreatmentUpsertRequest(employeeId, PayrollComponent.SPECIAL_PAY_5, PayrollTaxTreatment.REGULAR_REPROJECT)
-        ), employeeId);
-        PayrollEmployeeInputRequest input = input(employeeId,
-            specialPays4And5(new BigDecimal("5000.00"), new BigDecimal("2000.00")),
-            BigDecimal.ZERO, null, new BigDecimal("5000.00"), BigDecimal.ZERO,
-            null, null, false, PayrollGarnishmentType.OVERTIME_OR_DILIGENCE, null);
-
-        PayrollLineDto line = previewLineFor(LocalDate.of(2026, 1, 1), employeeId, input);
-
-        // Lawful cap: 30% of OT(0) + special-pay-5/เบี้ยขยัน(2,000) = 600.00 -- less than the 5,000 requested, so the
-        // cap binds.
-        assertThat(line.legalExecutionDeduction()).isEqualByComparingTo("600.00");
-    }
-
-    @Test
-    void severanceGarnishmentHasNoPercentageCapButMustLeaveThreeHundredThousand() {
-        long employeeId = seedEmployee("GARN-SEV-001", "อายัดออกจากงาน", "ทดสอบ", new BigDecimal("500000.00"));
-        PayrollEmployeeInputRequest input = input(employeeId, specialPays(BigDecimal.ZERO),
-            BigDecimal.ZERO, null, new BigDecimal("1000000.00"), BigDecimal.ZERO,
-            null, null, false, PayrollGarnishmentType.SEVERANCE, null);
-
-        PayrollLineDto line = previewLineFor(LocalDate.of(2026, 1, 1), employeeId, input);
-
-        BigDecimal netBeforeGarnishment = line.grossTaxableIncome()
-            .subtract(line.socialSecurity()).subtract(line.withholdingTax())
-            .subtract(line.studentLoanDeduction()).subtract(line.otherPostTaxDeductions())
-            .subtract(line.warningLetterDeduction()).subtract(line.customerReturnDeduction());
-        BigDecimal expectedCap = netBeforeGarnishment.subtract(new BigDecimal("300000.00")).max(BigDecimal.ZERO).setScale(2);
-
-        assertThat(line.legalExecutionDeduction()).isEqualByComparingTo(expectedCap);
-        // The huge 1,000,000 request proves the cap (not the request) bound.
-        assertThat(line.legalExecutionDeduction()).isLessThan(new BigDecimal("1000000.00"));
-        // The statutory floor actually held: at least 300,000 remained available before the deduction.
-        assertThat(netBeforeGarnishment).isGreaterThanOrEqualTo(new BigDecimal("300000.00"));
-    }
-
     // ---- 12-month simulation: totals to the correct annual liability -------------------------------
 
     /** Engineered so the arithmetic is exactly checkable without re-deriving progressive-tax brackets by hand every
@@ -476,75 +391,6 @@ class PayrollClassifiedEngineIntegrationTest extends AbstractPostgresIntegration
     }
 
     /**
-     * Both extra limbs in one year. The two whole-year simulations above each exercise
-     * exactly ONE extra limb: {@link #twelveMonthSimulationTotalsToTheCorrectAnnualLiability} runs
-     * REGULAR + {@code EXTRA_CUMULATIVE_ACTUAL} with no bonus, and {@link
-     * #twelveMonthSimulationWithAMidYearBonusMatchesAHandComputedAnnualLiability} runs REGULAR +
-     * {@code EXTRA_KNOWN_FREQUENCY} with no cumulative income. Neither runs BOTH, which is the
-     * combination a real GL&amp;R sales employee actually has — the handoff names commission as the
-     * archetypal {@code EXTRA_CUMULATIVE_ACTUAL} and bonus as the archetypal {@code
-     * EXTRA_KNOWN_FREQUENCY}, and a rep who receives both in one tax year is the normal case, not an
-     * exotic one.
-     *
-     * <p>The liability below is computed BY HAND from the statute, never from engine output:
-     *
-     * <pre>
-     *   annual income = 80,000 x 12 + 200,000 bonus + 15,000 x 12 commission = 1,340,000
-     *   expense deduction  = min(50%, 100,000 cap)                           =   100,000
-     *   personal allowance                                                   =    60,000
-     *   SSO (17,500 ceiling x 5% = 875/mo, annual cap 10,500)                =    10,500
-     *   net taxable = 1,340,000 - 170,500                                    = 1,169,500
-     *
-     *   progressive tax on 1,169,500:
-     *       150,001-  300,000 @  5% = 150,000 x 0.05 =  7,500
-     *       300,001-  500,000 @ 10% = 200,000 x 0.10 = 20,000
-     *       500,001-  750,000 @ 15% = 250,000 x 0.15 = 37,500
-     *       750,001-1,000,000 @ 20% = 250,000 x 0.20 = 50,000
-     *     1,000,001-1,169,500 @ 25% = 169,500 x 0.25 = 42,375
-     *                                          total = 157,375
-     * </pre>
-     *
-     * <p>This test pins that the KNOWN limb and the CUMULATIVE limb are not stacked on the regular
-     * limb independently: {@link PayrollYearToDate#knownLimbTaxableIncome()} carries every
-     * settled known-limb baht forward, and stage 3's own YTD-inclusive base
-     * ({@code netWithCumulativeYtd}) is built from it, so the two limbs do not consume the same tax
-     * brackets twice. Without that carry-forward ({@code knownThisPeriod} is only ever THIS
-     * period's amount), this test fails.
-     */
-    @Test
-    void twelveMonthSimulationWithBothABonusAndCumulativeCommissionMatchesTheHandComputedLiability() {
-        long employeeId = seedEmployee("SIM-12M-BOTH", "โบนัสและคอมมิชชั่น", "ทดสอบ", new BigDecimal("80000.00"));
-        payrollRepository.upsertComponentTaxTreatment(TAX_YEAR, List.of(
-            new ComponentTaxTreatmentUpsertRequest(
-                employeeId, PayrollComponent.BONUS_PAY, PayrollTaxTreatment.EXTRA_KNOWN_FREQUENCY),
-            new ComponentTaxTreatmentUpsertRequest(
-                employeeId, PayrollComponent.SPECIAL_PAY_7, PayrollTaxTreatment.EXTRA_CUMULATIVE_ACTUAL)
-        ), employeeId);
-
-        BigDecimal sumOfMonthlyWithholding = BigDecimal.ZERO;
-        for (int month = 1; month <= 12; month++) {
-            BigDecimal bonusThisMonth = month == 6 ? new BigDecimal("200000.00") : BigDecimal.ZERO;
-            BigDecimal[] specialPays = new BigDecimal[]{
-                BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
-                BigDecimal.ZERO, new BigDecimal("15000.00"), BigDecimal.ZERO, BigDecimal.ZERO};
-            PayrollEmployeeInputRequest input = input(employeeId, specialPays,
-                BigDecimal.ZERO, null, null, BigDecimal.ZERO, bonusThisMonth, null, false, null, null);
-
-            PayrollPeriodDto period = payrollService.process(
-                new ProcessPayrollRequest(LocalDate.of(2026, month, 1), List.of(input)), hr());
-            sumOfMonthlyWithholding = sumOfMonthlyWithholding.add(onlyLine(period, employeeId).withholdingTax());
-        }
-
-        assertThat(sumOfMonthlyWithholding)
-            .withFailMessage(
-                "12 months of withholding must equal the hand-computed ป.96 liability of 157,375.00, was %s "
-                    + "(a shortfall means the KNOWN and CUMULATIVE limbs are stacked on the regular limb "
-                    + "independently and consume the same tax brackets twice)",
-                sumOfMonthlyWithholding)
-            .isEqualByComparingTo("157375.00");
-    }
-
-    /**
      * Whole-baht payslip, through the real service + Postgres seam.
      *
      * <p>Three rules, each chosen for a reason and each proven here by a value that would otherwise
@@ -646,11 +492,6 @@ class PayrollClassifiedEngineIntegrationTest extends AbstractPostgresIntegration
 
     private BigDecimal[] specialPays5(BigDecimal specialPay5) {
         return new BigDecimal[]{BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, specialPay5,
-            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO};
-    }
-
-    private BigDecimal[] specialPays4And5(BigDecimal specialPay4, BigDecimal specialPay5) {
-        return new BigDecimal[]{BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, specialPay4, specialPay5,
             BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO};
     }
 

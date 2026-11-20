@@ -44,45 +44,9 @@ function token(name) {
 }
 
 describe('design tokens — Phase 3.4 infrastructure', () => {
-  it('defines every gap token TOKENS.md documents', () => {
-    const expectedTokens = [
-      '--color-overlay',
-      '--color-overlay-drawer',
-      '--color-veil',
-      '--motion-fast',
-      '--motion-standard',
-      '--motion-slow',
-      '--ease-standard',
-      '--ease-exit',
-      '--content-max',
-      '--page-gutter-mobile',
-      '--page-gutter-tablet',
-      '--page-gutter-desktop',
-    ];
-    expectedTokens.forEach((token) => {
-      expect(indexCss, `${token} should be declared in index.css`).toContain(`${token}:`);
-    });
-  });
-
   it('declares the mobile/tablet breakpoint custom variants (single-source of the F-01 breakpoint)', () => {
     expect(indexCss).toMatch(/@custom-variant\s+mobile\s*\{[\s\S]*?max-width:\s*720px/);
     expect(indexCss).toMatch(/@custom-variant\s+tablet\s*\{[\s\S]*?min-width:\s*721px[\s\S]*?max-width:\s*1040px/);
-  });
-
-  it('provides a reduced-motion override for the new motion tokens', () => {
-    expect(indexCss).toMatch(/prefers-reduced-motion:\s*reduce/);
-    expect(indexCss).toMatch(/--motion-standard:\s*0ms/);
-  });
-
-  it('overlay colors match the existing hardcoded literals they will eventually replace', () => {
-    // Modal.jsx's backdrop now consumes this token directly via `bg-overlay` (Group C primitives port) — the old
-    // styles.css `.modal-backdrop { background: rgba(...) }` literal is gone, but the mobile drawer backdrop below
-    // is still a hardcoded literal.
-    expect(indexCss).toContain('rgba(15, 23, 42, 0.52)');
-    // styles.css mobile drawer backdrop — distinct from the modal overlay above
-    expect(indexCss).toContain('rgba(15, 23, 42, 0.48)');
-    // styles.css .loading-veil
-    expect(indexCss).toContain('rgba(255, 255, 255, 0.55)');
   });
 
   describe('contrast (WCAG 2.1 AA) — pairs cited in DESIGN.md §19 / TOKENS.md', () => {

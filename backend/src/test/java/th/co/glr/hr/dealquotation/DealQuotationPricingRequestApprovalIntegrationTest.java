@@ -365,32 +365,13 @@ class DealQuotationPricingRequestApprovalIntegrationTest extends AbstractPostgre
     // Wrong-way-round role refusals — unrelated to the CEO gate, plain requireApproveAccess.
 
     @Test
-    void approve_bySalesRep_forbidden_nothingWritten() {
+    void approve_bySalesRepImportAccountQc_forbidden_nothingWritten() {
         DealQuotationDto submitted = submittedQuotation();
-        assertThatThrownBy(() -> quotationService.approve(submitted.id(), new ApproveRequest(null), salesActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+        for (var actor : java.util.List.of(salesActor, importActor, accountActor, qcActor)) {
+            assertThatThrownBy(() -> quotationService.approve(submitted.id(), new ApproveRequest(null), actor))
+                .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+        }
         assertThat(quotationService.get(submitted.id(), salesActor).docStatus()).isEqualTo(QuotationStatus.PENDING_APPROVAL);
-    }
-
-    @Test
-    void approve_byImport_forbidden_nothingWritten() {
-        DealQuotationDto submitted = submittedQuotation();
-        assertThatThrownBy(() -> quotationService.approve(submitted.id(), new ApproveRequest(null), importActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
-    }
-
-    @Test
-    void approve_byAccount_forbidden_nothingWritten() {
-        DealQuotationDto submitted = submittedQuotation();
-        assertThatThrownBy(() -> quotationService.approve(submitted.id(), new ApproveRequest(null), accountActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
-    }
-
-    @Test
-    void approve_byQc_forbidden_nothingWritten() {
-        DealQuotationDto submitted = submittedQuotation();
-        assertThatThrownBy(() -> quotationService.approve(submitted.id(), new ApproveRequest(null), qcActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
     }
 
     // Reject — a single approver (either role) clears the document back to DRAFT with a reason.
@@ -523,7 +504,7 @@ class DealQuotationPricingRequestApprovalIntegrationTest extends AbstractPostgre
 
     @Test
     void approve_freezesTheApproverSnapshot() throws Exception {
-        signatureService.upload(salesManagerId, png(HtmlXlsFidelityTest.signaturePng()), salesManagerActor);
+        signatureService.upload(salesManagerId, png(LegacyDirectQuotationFixtures.signaturePng()), salesManagerActor);
         byte[] originalSignature = signatureRepository.find(salesManagerId).orElseThrow().image();
 
         DealQuotationDto submitted = submittedQuotation();

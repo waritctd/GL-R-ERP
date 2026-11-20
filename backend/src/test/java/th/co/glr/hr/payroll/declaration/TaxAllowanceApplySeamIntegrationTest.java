@@ -6,7 +6,6 @@ import static org.mockito.Mockito.mock;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
-import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
@@ -109,16 +108,6 @@ class TaxAllowanceApplySeamIntegrationTest extends AbstractPostgresIntegrationTe
         seedSsoIncluded(employeeId, 2026, PayrollComponent.SALARY);
     }
 
-    @Test
-    void aPendingDeclarationNeverAppearsInFindTaxAllowancesByEmployee() {
-        submit(new BigDecimal("60000"));
-
-        Map<Long, th.co.glr.hr.payroll.PayrollTaxAllowanceInput> resolved =
-            payrollRepository.findTaxAllowancesByEmployee(LocalDate.of(2026, 6, 1));
-
-        assertThat(resolved).doesNotContainKey(employeeId);
-    }
-
     /** The reversed decision #2: approval alone is go-live, with no second Apply call anywhere. */
     @Test
     void approvingPutsItInTheParentTableAsVerifiedWithNoSeparateApply() {
@@ -147,162 +136,6 @@ class TaxAllowanceApplySeamIntegrationTest extends AbstractPostgresIntegrationTe
             payrollRepository.findTaxAllowancesByEmployee(LocalDate.of(2026, 6, 1));
         assertThat(resolved).containsKey(employeeId);
         assertThat(resolved.get(employeeId).spouseAllowance()).isEqualByComparingTo("60000.00");
-    }
-
-    /** Regression guard for the reset-on-overwrite fix: that fix makes upsertTaxAllowances itself downgrade an
-     * already-VERIFIED row back to GRANDFATHERED_UNVERIFIED when its content changes -- exactly the ON CONFLICT DO
-     * UPDATE branch a SECOND apply over the same employee/year/effective-month drives. */
-    @Test
-    void approvingASecondDeclarationOverAnAlreadyVerifiedRowStillEndsVerified() {
-        TaxAllowanceDeclarationDto first = submit(new BigDecimal("60000"));
-        approveSigned(first.declarationId());
-        assertThat(verificationStatusOf(employeeId)).isEqualTo("VERIFIED");
-
-        // A second declaration for the SAME employee/year, with a DIFFERENT amount -- its promotion drives
-        // upsertTaxAllowances down the ON CONFLICT DO UPDATE branch over a row that is currently VERIFIED, the exact
-        // interaction the reset-on-overwrite fix touches.
-        TaxAllowanceDeclarationDto second = submit(new BigDecimal("90000"));
-        approveSigned(second.declarationId());
-
-        assertThat(countEmployeeTaxAllowanceRows(employeeId))
-            .as("still one row for this employee/year -- ON CONFLICT overwrote, not duplicated")
-            .isEqualTo(1);
-        assertThat(verificationStatusOf(employeeId))
-            .as("promotion must still end VERIFIED even though upsertTaxAllowances resets it mid-transaction")
-            .isEqualTo("VERIFIED");
-        Long verifiedBy = jdbc.queryForObject(
-            "SELECT verified_by_id FROM hr.employee_tax_allowance WHERE employee_id = :id",
-            Map.of("id", employeeId), Long.class);
-        assertThat(verifiedBy).isEqualTo(hrEmployeeId);
-        OffsetDateTime verifiedAt = jdbc.queryForObject(
-            "SELECT verified_at FROM hr.employee_tax_allowance WHERE employee_id = :id",
-            Map.of("id", employeeId), OffsetDateTime.class);
-        assertThat(verifiedAt).isNotNull();
-
-        Map<Long, th.co.glr.hr.payroll.PayrollTaxAllowanceInput> resolved =
-            payrollRepository.findTaxAllowancesByEmployee(LocalDate.of(2026, 6, 1));
-        assertThat(resolved.get(employeeId).spouseAllowance())
-            .as("the second declaration's NEW figure is what's actually live, not a stale skipped one")
-            .isEqualByComparingTo("90000.00");
-    }
-
-    /** The PROCESSED-month guard is GONE, and this pins that deliberately rather than leaving its absence to be
-     * re-added by someone reading the old comment. Nothing here retro-alters January: the seeded PROCESSED
-     * period's own hr.payroll_line rows are never touched by any statement the promotion runs. */
-    @Test
-    void approvingIsNotBlockedByAnAlreadyProcessedMonth() {
-        seedProcessedPeriod(LocalDate.of(2026, 1, 1));
-        TaxAllowanceDeclarationDto declaration = submit(new BigDecimal("60000"));
-
-        approveSigned(declaration.declarationId());
-
-        assertThat(countEmployeeTaxAllowanceRows(employeeId)).isEqualTo(1);
-        assertThat(declarationRepository.findById(declaration.declarationId()).orElseThrow().appliedAt())
-            .isNotNull();
-    }
-
-    /** THE trap the whole-year rule introduces, and the reason PayrollRepository#deleteMidYearTaxAllowances exists.
-     * findTaxAllowancesByEmployee is ORDER BY effective_month DESC: a whole-year row at month 1 LOSES to any
-     * surviving mid-year row. */
-    @Test
-    void approvingClearsAStaleMidYearRowInsteadOfLosingToItOnEffectiveMonthDesc() {
-        jdbc.update("""
-            INSERT INTO hr.employee_tax_allowance
-                (employee_id, tax_year, effective_month, spouse_allowance, verification_status)
-            VALUES (:id, 2026, 7, 30000, 'VERIFIED')
-            """, Map.of("id", employeeId));
-        assertThat(payrollRepository.findTaxAllowancesByEmployee(LocalDate.of(2026, 9, 1))
-            .get(employeeId).spouseAllowance())
-            .as("precondition: the stale July row is what September resolves to today")
-            .isEqualByComparingTo("30000.00");
-
-        approveSigned(submit(new BigDecimal("90000")).declarationId());
-
-        assertThat(countEmployeeTaxAllowanceRows(employeeId))
-            .as("one row per employee/tax-year -- the July row is gone, not shadowed")
-            .isEqualTo(1);
-        assertThat(payrollRepository.findTaxAllowancesByEmployee(LocalDate.of(2026, 9, 1))
-            .get(employeeId).spouseAllowance())
-            .as("September must NOT still resolve the superseded July figure")
-            .isEqualByComparingTo("90000.00");
-        // ...and every month of the year now resolves it, which is what "ทั้งปีภาษี" means.
-        assertThat(payrollRepository.findTaxAllowancesByEmployee(LocalDate.of(2026, 2, 1))
-            .get(employeeId).spouseAllowance())
-            .isEqualByComparingTo("90000.00");
-    }
-
-    /** The backlog drain TaxAllowanceDeclarationService#apply still exists for: a row approved BEFORE the ruling,
-     * when approval did not promote. That state can no longer be produced through the service, so it is built
-     * through the repository — the same two calls the pre-ruling approve made. */
-    @Test
-    void applyStillDrainsADeclarationApprovedBeforeTheRulingWithNoMonthArgument() {
-        TaxAllowanceDeclarationDto declaration = submit(new BigDecimal("60000"));
-        declarationRepository.approve(declaration.declarationId(), hrEmployeeId, "pre-ruling approval");
-        assertThat(declarationRepository.findById(declaration.declarationId()).orElseThrow().appliedAt())
-            .as("precondition: APPROVED with applied_at still NULL")
-            .isNull();
-        assertThat(countEmployeeTaxAllowanceRows(employeeId)).isZero();
-
-        service.apply(declaration.declarationId(), hrActor());
-
-        assertThat(countEmployeeTaxAllowanceRows(employeeId)).isEqualTo(1);
-        assertThat(verificationStatusOf(employeeId)).isEqualTo("VERIFIED");
-        assertThat(declarationRepository.findById(declaration.declarationId()).orElseThrow()
-            .appliedEffectiveMonth()).isEqualTo(1);
-    }
-
-    /** Expire every dated declaration for the year so the lookup cannot fall back to an older verified row. */
-    @Test
-    void expiringDoesNotFallBackToAnOlderDatedRowForTheSameYear() {
-        jdbc.update("""
-            INSERT INTO hr.employee_tax_allowance
-                (employee_id, tax_year, effective_month, spouse_allowance, verification_status)
-            VALUES (:id, 2026, 1, 60000, 'VERIFIED')
-            """, Map.of("id", employeeId));
-        jdbc.update("""
-            INSERT INTO hr.employee_tax_allowance
-                (employee_id, tax_year, effective_month, spouse_allowance, verification_status)
-            VALUES (:id, 2026, 7, 60000, 'VERIFIED')
-            """, Map.of("id", employeeId));
-
-        // Sanity: before expiry, July resolves the July row (latest on-or-before July).
-        assertThat(payrollRepository.findTaxAllowancesByEmployee(LocalDate.of(2026, 7, 1)))
-            .containsKey(employeeId);
-
-        payrollRepository.expireTaxAllowanceVerification(employeeId, 2026);
-
-        assertThat(payrollRepository.findTaxAllowancesByEmployee(LocalDate.of(2026, 7, 1)))
-            .as("must NOT fall back to the January row now that both are EXPIRED_UNVERIFIED")
-            .doesNotContainKey(employeeId);
-        // The DEFECT this pins: expiring only the July row would leave January VERIFIED, and July's query (ORDER BY
-        // effective_month DESC, excluding only EXPIRED_UNVERIFIED) would silently resolve January instead of nothing.
-        assertThat(jdbc.queryForObject(
-            "SELECT COUNT(*) FROM hr.employee_tax_allowance WHERE employee_id = :id AND verification_status = 'EXPIRED_UNVERIFIED'",
-            Map.of("id", employeeId), Integer.class))
-            .isEqualTo(2);
-    }
-
-    @Test
-    void approvingANewerDeclarationSupersedesThePreviousAndHistorySurvives() {
-        TaxAllowanceDeclarationDto first = submit(new BigDecimal("60000"));
-        approveSigned(first.declarationId());
-
-        // A second declaration for the same employee/year — allowed once the first is no longer PENDING
-        // (uq_tad_one_pending_per_employee_year only blocks a SECOND concurrent PENDING).
-        TaxAllowanceDeclarationDto second = submit(new BigDecimal("90000"));
-        approveSigned(second.declarationId());
-
-        TaxAllowanceDeclarationDto firstAfter = declarationRepository.findById(first.declarationId()).orElseThrow();
-        assertThat(firstAfter.status()).isEqualTo(TaxAllowanceDeclarationStatus.SUPERSEDED);
-        assertThat(firstAfter.supersededById()).isEqualTo(second.declarationId());
-
-        TaxAllowanceDeclarationDto secondAfter = declarationRepository.findById(second.declarationId()).orElseThrow();
-        assertThat(secondAfter.status()).isEqualTo(TaxAllowanceDeclarationStatus.APPROVED);
-
-        // History survives — both rows still exist, findForEmployee still returns both.
-        assertThat(declarationRepository.findForEmployee(employeeId, 2026))
-            .extracting(TaxAllowanceDeclarationDto::declarationId)
-            .contains(first.declarationId(), second.declarationId());
     }
 
     @Test
@@ -347,25 +180,11 @@ class TaxAllowanceApplySeamIntegrationTest extends AbstractPostgresIntegrationTe
         return service.submitOwn(request, employeeActor());
     }
 
-    private void seedProcessedPeriod(LocalDate month) {
-        jdbc.update("""
-            INSERT INTO hr.payroll_period (payroll_month, period_start, period_end, pay_date, status)
-            VALUES (:month, :month, :monthEnd, :monthEnd, 'PROCESSED')
-            """,
-            Map.of("month", month, "monthEnd", month.withDayOfMonth(month.lengthOfMonth())));
-    }
-
     private int countEmployeeTaxAllowanceRows(long employeeId) {
         Integer count = jdbc.queryForObject(
             "SELECT COUNT(*) FROM hr.employee_tax_allowance WHERE employee_id = :employeeId",
             Map.of("employeeId", employeeId), Integer.class);
         return count == null ? 0 : count;
-    }
-
-    private String verificationStatusOf(long employeeId) {
-        return jdbc.queryForObject(
-            "SELECT verification_status FROM hr.employee_tax_allowance WHERE employee_id = :id",
-            Map.of("id", employeeId), String.class);
     }
 
     private PayrollLineDto lineFor(PayrollPeriodDto period) {

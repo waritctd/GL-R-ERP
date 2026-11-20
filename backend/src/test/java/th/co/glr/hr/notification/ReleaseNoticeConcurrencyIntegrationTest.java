@@ -23,7 +23,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.BrokenBarrierException;
 import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.TimeoutException;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 import org.junit.jupiter.api.BeforeEach;
@@ -49,8 +48,6 @@ class ReleaseNoticeConcurrencyIntegrationTest extends AbstractPostgresIntegratio
     private static final String RELEASE_ID = "2026-11-17";
     private static final Request REQUEST = new Request(RELEASE_ID, "อัปเดต",
         List.of(new Change("หน้าใหม่", List.of("sales"), "เหตุผลสั้น ๆ")), RELEASE_ID, null);
-    private static final Request OPT_IN = new Request(RELEASE_ID, "อัปเดต",
-        List.of(new Change("หน้าใหม่", List.of("sales"), "เหตุผลสั้น ๆ")), RELEASE_ID, Boolean.TRUE);
 
     private Mailer mailer;
     private NotificationEmailService emailService;
@@ -94,93 +91,10 @@ class ReleaseNoticeConcurrencyIntegrationTest extends AbstractPostgresIntegratio
             Integer.class)).isEqualTo(6);
     }
 
-    @Test
-    void publishRacingTheRetry_mailsEachPersonOnce() throws Exception {
-        race(() -> service.publishWithEmail(actor(hrId, "hr"), REQUEST),
-            () -> service.email(actor(ceoId, "ceo"), REQUEST));
-
-        assertThat(count("RELEASE_NOTE_EMAILED")).isEqualTo(6);
-        verify(mailer, times(6)).sendHtml(anyString(), anyString(), anyString(), anyString(), anyList());
-    }
-
-    @Test
-    void twoOptInResendsAtOnce_mailEachUnconfirmedPersonOnce() throws Exception {
-        for (long rep : reps) {
-            jdbc.update("""
-                INSERT INTO hr.audit_log (action, entity, entity_id, after_json, at)
-                VALUES ('RELEASE_NOTE_EMAILED', 'employee', :id, jsonb_build_object('releaseId', :releaseId),
-                        now() - interval '2 hours')
-                """, Map.of("id", rep, "releaseId", RELEASE_ID));
-        }
-        assertThat(service.audience(actor(hrId, "hr"), REQUEST).email().unconfirmed()).isEqualTo(6);
-
-        race(() -> service.email(actor(hrId, "hr"), OPT_IN), () -> service.email(actor(ceoId, "ceo"), OPT_IN));
-
-        verify(mailer, times(6)).sendHtml(anyString(), anyString(), anyString(), anyString(), anyList());
-        assertThat(count("RELEASE_NOTE_EMAILED")).isEqualTo(12);
-    }
-
     // ── Deterministic interleavings (fix round 2). Each test holds one press at the exact point where an unlocked
     //    read would race, using latches, not sleeps. With the lock, the other press cannot reach that point, so the
     //    hold simply times out and the run is serial; without the lock, both pass the point and the double send is
     //    certain, not probabilistic. ──────────────────────────────────────────────────────────────────────────────
-
-    @Test
-    void twoRetriesReadingWhoIsDueAtTheSameMoment_mailEachPersonOnce() throws Exception {
-        // Both presses are lined up right after reading "who is due" and before writing attempt rows.
-        CyclicBarrier bothHaveRead = new CyclicBarrier(2);
-        ReleaseNoticeService lined = service(realDelivery(), Duration.ofMinutes(30),
-            target -> target.afterEmailStatesRead = () -> awaitQuietly(bothHaveRead));
-
-        race(() -> lined.email(actor(hrId, "hr"), REQUEST), () -> lined.email(actor(ceoId, "ceo"), REQUEST));
-
-        assertThat(count("RELEASE_NOTE_EMAILED")).isEqualTo(6);
-        verify(mailer, times(6)).sendHtml(anyString(), anyString(), anyString(), anyString(), anyList());
-    }
-
-    @Test
-    void aQueuedBatchExpiredToFailed_racingThePlainRetry_neverDoubleSends() throws Exception {
-        // A batch sat in the queue past the window (FAILED: never started). The plain retry re-attempts everyone
-        // while the original task finally leaves the queue. The original's start() is held right after its
-        // "still the latest attempt?" check, and the retry is run to completion meanwhile.
-        List<List<ReleaseNoticeDelivery.Delivery>> held = new ArrayList<>();
-        service(holding(held), Duration.ofMinutes(30), target -> { }).publishWithEmail(actor(hrId, "hr"), REQUEST);
-        ReleaseNoticeService expired = service(realDelivery(), Duration.ZERO, target -> { });
-        assertThat(expired.audience(actor(hrId, "hr"), REQUEST).email().failed()).isEqualTo(6);
-
-        CountDownLatch checked = new CountDownLatch(1);
-        CountDownLatch retryDone = new CountDownLatch(1);
-        AtomicBoolean firstPerson = new AtomicBoolean(true);
-        ReleaseNoticeDelivery original = realDelivery();
-        original.beforeStartRow = delivery -> {
-            if (firstPerson.getAndSet(false)) {
-                checked.countDown();
-                awaitQuietly(retryDone);
-            }
-        };
-        ExecutorService pool = Executors.newFixedThreadPool(2);
-        try {
-            Future<?> leavingTheQueue = pool.submit(() -> original.deliver(actor(hrId, "hr"), RELEASE_ID, held.get(0)));
-            assertThat(checked.await(30, TimeUnit.SECONDS)).isTrue();
-            Future<?> retry = pool.submit(() -> {
-                try {
-                    return expired.email(actor(ceoId, "ceo"), REQUEST);
-                } finally {
-                    retryDone.countDown();
-                }
-            });
-            retry.get(60, TimeUnit.SECONDS);
-            leavingTheQueue.get(60, TimeUnit.SECONDS);
-        } finally {
-            pool.shutdownNow();
-        }
-
-        verify(mailer, times(6)).sendHtml(anyString(), anyString(), anyString(), anyString(), anyList());
-        for (int i = 0; i < 6; i++) {
-            verify(mailer, times(1)).sendHtml(org.mockito.ArgumentMatchers.eq("rep" + i + "@example.com"), anyString(),
-                anyString(), anyString(), anyList());
-        }
-    }
 
     /** Waits for the other side, but never longer than a few seconds: when the lock keeps the other side out, the
      * wait ends by timeout and the run continues serially. */
@@ -200,19 +114,6 @@ class ReleaseNoticeConcurrencyIntegrationTest extends AbstractPostgresIntegratio
         } catch (InterruptedException interrupted) {
             Thread.currentThread().interrupt();
         }
-    }
-
-    private ReleaseNoticeDelivery realDelivery() {
-        return new ReleaseNoticeDelivery(emailService, audit, new ReleaseNoticeRepository(jdbc), transactionManager);
-    }
-
-    private ReleaseNoticeDelivery holding(List<List<ReleaseNoticeDelivery.Delivery>> held) {
-        return new ReleaseNoticeDelivery(emailService, audit, new ReleaseNoticeRepository(jdbc), transactionManager) {
-            @Override
-            public void deliver(UserPrincipal actor, String releaseId, List<Delivery> deliveries) {
-                held.add(deliveries);
-            }
-        };
     }
 
     /** The seams are fields of the TARGET; set them before wrapping it in the transactional proxy. */

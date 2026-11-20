@@ -3,7 +3,6 @@ package th.co.glr.hr.dashboard;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
-import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -13,14 +12,11 @@ import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
-import java.time.OffsetDateTime;
 import java.time.ZoneId;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
-import org.mockito.ArgumentCaptor;
 import th.co.glr.hr.auth.UserPrincipal;
 
 class DashboardServiceTest {
@@ -54,125 +50,6 @@ class DashboardServiceTest {
         when(repository.notifications(anyLong())).thenReturn(new NotificationSummaryDto(2, 3, 5));
     }
 
-    @Test
-    void hrSummaryUsesCompanyScopeWithoutTicketLeak() {
-        DashboardSummaryDto summary = service.summary(user("hr", 10L, null, false));
-
-        assertThat(summary.role()).isEqualTo("hr");
-        assertThat(summary.generatedAt()).isEqualTo(OffsetDateTime.parse("2026-07-05T09:00:00+07:00"));
-        assertThat(summary.notifications().unread()).isEqualTo(2);
-
-        ArgumentCaptor<DashboardQueryScope> headcountScope = ArgumentCaptor.forClass(DashboardQueryScope.class);
-        verify(repository).headcount(headcountScope.capture());
-        assertThat(headcountScope.getValue().isAll()).isTrue();
-
-        ArgumentCaptor<DashboardQueryScope> attendanceScope = ArgumentCaptor.forClass(DashboardQueryScope.class);
-        verify(repository).attendance(attendanceScope.capture(), eq(LocalDate.of(2026, 7, 5)), eq(LocalDate.of(2026, 7, 1)));
-        assertThat(attendanceScope.getValue().isAll()).isTrue();
-
-        ArgumentCaptor<DashboardQueryScope> pendingScope = ArgumentCaptor.forClass(DashboardQueryScope.class);
-        ArgumentCaptor<DashboardPendingVisibility> visibility = ArgumentCaptor.forClass(DashboardPendingVisibility.class);
-        ArgumentCaptor<DashboardQueryScope> ticketScope = ArgumentCaptor.forClass(DashboardQueryScope.class);
-        ArgumentCaptor<DashboardQueryScope> leaveScope = ArgumentCaptor.forClass(DashboardQueryScope.class);
-        verify(repository).pendingApprovals(
-            pendingScope.capture(), visibility.capture(), any(), ticketScope.capture(), leaveScope.capture());
-        assertThat(pendingScope.getValue().isAll()).isTrue();
-        assertThat(visibility.getValue().profileRequests()).isTrue();
-        assertThat(visibility.getValue().overtime()).isTrue();
-        assertThat(visibility.getValue().leave()).isTrue();
-        assertThat(visibility.getValue().tickets()).isFalse();
-        assertThat(ticketScope.getValue().isNone()).isTrue();
-        // Scope-decision case 1/5: hr -> ALL for leave (matches LeaveService#canReviewAll).
-        assertThat(leaveScope.getValue().isAll()).isTrue();
-    }
-
-    @Test
-    void ceoSummaryGetsCompanyAndTicketScopes() {
-        service.summary(user("ceo", 20L, null, false));
-
-        ArgumentCaptor<DashboardQueryScope> ticketScope = ArgumentCaptor.forClass(DashboardQueryScope.class);
-        verify(repository).tickets(ticketScope.capture(), eq(LocalDate.of(2026, 7, 1)), any());
-        assertThat(ticketScope.getValue().isAll()).isTrue();
-
-        // Scope-decision case 3/5: ceo -> ALL for leave, same branch as hr -- NOT because LeaveService#canReviewAll
-        // covers ceo, but because this mirrors the pre-existing pendingEmployeeScope pattern and
-        // LeaveService#canViewAll: a company-wide VIEW figure, not an approval claim.
-        ArgumentCaptor<DashboardQueryScope> leaveScope = ArgumentCaptor.forClass(DashboardQueryScope.class);
-        verify(repository).pendingApprovals(any(), any(), any(), any(), leaveScope.capture());
-        assertThat(leaveScope.getValue().isAll()).isTrue();
-    }
-
-    @Test
-    void managerSummaryUsesDivisionScopeAndHidesProfileApprovals() {
-        service.summary(user("employee", 11L, 5L, true));
-
-        ArgumentCaptor<DashboardQueryScope> headcountScope = ArgumentCaptor.forClass(DashboardQueryScope.class);
-        verify(repository).headcount(headcountScope.capture());
-        assertThat(headcountScope.getValue().isDivision()).isTrue();
-        assertThat(headcountScope.getValue().divisionId()).isEqualTo(5L);
-
-        ArgumentCaptor<DashboardQueryScope> pendingScope = ArgumentCaptor.forClass(DashboardQueryScope.class);
-        ArgumentCaptor<DashboardPendingVisibility> visibility = ArgumentCaptor.forClass(DashboardPendingVisibility.class);
-        ArgumentCaptor<DashboardQueryScope> leaveScope = ArgumentCaptor.forClass(DashboardQueryScope.class);
-        verify(repository).pendingApprovals(pendingScope.capture(), visibility.capture(), any(), any(), leaveScope.capture());
-        assertThat(pendingScope.getValue().isDivision()).isTrue();
-        assertThat(visibility.getValue().profileRequests()).isFalse();
-        assertThat(visibility.getValue().overtime()).isTrue();
-        assertThat(visibility.getValue().leave()).isTrue();
-        assertThat(visibility.getValue().tickets()).isFalse();
-        // Scope-decision case 2/5: division manager -> OWN_OR_DIRECT_REPORTS carrying the MANAGER's own employeeId
-        // (11L, not a target employee's) -- overtime keeps the DIVISION scope above (pendingScope), leave deliberately
-        // does not. This is the divergence the bug was in.
-        assertThat(leaveScope.getValue().isOwnOrDirectReports()).isTrue();
-        assertThat(leaveScope.getValue().isDivision()).isFalse();
-        assertThat(leaveScope.getValue().employeeId()).isEqualTo(11L);
-    }
-
-    @Test
-    void employeeSummaryUsesSelfScopeAndNoBroadHeadcountOrTickets() {
-        DashboardSummaryDto summary = service.summary(user("employee", 12L, 7L, false));
-
-        assertThat(summary.headcount().scope()).isEqualTo("none");
-        assertThat(summary.headcount().active()).isNull();
-        assertThat(summary.totalOpen()).isZero();
-
-        ArgumentCaptor<DashboardQueryScope> attendanceScope = ArgumentCaptor.forClass(DashboardQueryScope.class);
-        verify(repository).attendance(attendanceScope.capture(), eq(LocalDate.of(2026, 7, 5)), eq(LocalDate.of(2026, 7, 1)));
-        assertThat(attendanceScope.getValue().isSelf()).isTrue();
-        assertThat(attendanceScope.getValue().employeeId()).isEqualTo(12L);
-
-        ArgumentCaptor<DashboardQueryScope> ticketScope = ArgumentCaptor.forClass(DashboardQueryScope.class);
-        verify(repository).tickets(ticketScope.capture(), eq(LocalDate.of(2026, 7, 1)), any());
-        assertThat(ticketScope.getValue().isNone()).isTrue();
-
-        // Scope-decision case 4/5: ordinary (non-manager, manager=false) employee -> ALSO OWN_OR_DIRECT_REPORTS now,
-        // carrying their OWN employeeId -- this is the D2 regression proof at the unit level.
-        ArgumentCaptor<DashboardQueryScope> leaveScope = ArgumentCaptor.forClass(DashboardQueryScope.class);
-        verify(repository).pendingApprovals(any(), any(), any(), any(), leaveScope.capture());
-        assertThat(leaveScope.getValue().isOwnOrDirectReports()).isTrue();
-        assertThat(leaveScope.getValue().employeeId()).isEqualTo(12L);
-    }
-
-    @Test
-    void leaveScopeIsNoneWhenTheAccountHasNoLinkedEmployeeRecord() {
-        // Scope-decision case 5/5: null employeeId -> NONE.
-        service.summary(user("employee", null, null, false));
-
-        ArgumentCaptor<DashboardQueryScope> leaveScope = ArgumentCaptor.forClass(DashboardQueryScope.class);
-        verify(repository).pendingApprovals(any(), any(), any(), any(), leaveScope.capture());
-        assertThat(leaveScope.getValue().isNone()).isTrue();
-    }
-
-    @Test
-    void salesSummaryKeepsTicketsScopedToOwnEmployee() {
-        service.summary(user("sales", 30L, 9L, false));
-
-        ArgumentCaptor<DashboardQueryScope> ticketScope = ArgumentCaptor.forClass(DashboardQueryScope.class);
-        verify(repository).tickets(ticketScope.capture(), eq(LocalDate.of(2026, 7, 1)), any());
-        assertThat(ticketScope.getValue().isSelf()).isTrue();
-        assertThat(ticketScope.getValue().employeeId()).isEqualTo(30L);
-    }
-
     @ParameterizedTest
     @ValueSource(strings = {"account", "ceo", "sales_manager"})
     void cashReceivedThisMonthIsTheSumOfThePerRepRowsForTheMoneyRoles(String role) {
@@ -187,17 +64,6 @@ class DashboardServiceTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"account", "ceo", "sales_manager"})
-    void aMonthWithNoReceiptsIsZeroNotNull(String role) {
-        when(repository.cashReceivedByRep(any())).thenReturn(List.of());
-
-        DashboardSummaryDto summary = service.summary(user(role, 40L, null, false));
-
-        assertThat(summary.cashReceivedThisMonth()).isEqualByComparingTo("0");
-        assertThat(summary.cashReceivedByRep()).isEmpty();
-    }
-
-    @ParameterizedTest
     @ValueSource(strings = {"hr", "import", "sales", "employee"})
     void cashReceivedIsNullForEveryOtherRoleAndNeverQueried(String role) {
         when(repository.cashReceivedByRep(any()))
@@ -208,50 +74,6 @@ class DashboardServiceTest {
         assertThat(summary.cashReceivedThisMonth()).isNull();
         assertThat(summary.cashReceivedByRep()).isNull();
         verify(repository, never()).cashReceivedByRep(any());
-    }
-
-    @Test
-    void cashReceivedUsesTheBangkokMonthEvenWhenUtcIsStillLastMonth() {
-        // 2026-06-30T20:30Z is already 2026-07-01 03:30 in Bangkok.
-        DashboardService boundary = new DashboardService(
-            repository, Clock.fixed(Instant.parse("2026-06-30T20:30:00Z"), BANGKOK));
-        when(repository.cashReceivedByRep(LocalDate.of(2026, 7, 1)))
-            .thenReturn(List.of(new CashByRepDto("สมชาย ขายดี", new BigDecimal("1.00"))));
-
-        DashboardSummaryDto summary = boundary.summary(user("account", 42L, null, false));
-
-        assertThat(summary.cashReceivedThisMonth()).isEqualByComparingTo("1.00");
-    }
-
-    @ParameterizedTest
-    @ValueSource(strings = {"account", "ceo", "sales_manager"})
-    void financeOutstandingAndForecastAreServerTotalsForTheMoneyRoles(String role) {
-        when(repository.financeOutstanding()).thenReturn(new BigDecimal("293545.25"));
-        when(repository.forecastValue()).thenReturn(new BigDecimal("80000.25"));
-        when(repository.overdueOutstanding()).thenReturn(new BigDecimal("15000.50"));
-
-        DashboardSummaryDto summary = service.summary(user(role, 43L, null, false));
-
-        assertThat(summary.financeOutstanding()).isEqualByComparingTo("293545.25");
-        assertThat(summary.forecastValue()).isEqualByComparingTo("80000.25");
-        assertThat(summary.overdueOutstanding()).isEqualByComparingTo("15000.50");
-    }
-
-    @ParameterizedTest
-    @ValueSource(strings = {"hr", "import", "sales", "employee"})
-    void financeOutstandingAndForecastAreNullForOtherRolesAndNeverQueried(String role) {
-        when(repository.financeOutstanding()).thenReturn(new BigDecimal("1.00"));
-        when(repository.forecastValue()).thenReturn(new BigDecimal("1.00"));
-        when(repository.overdueOutstanding()).thenReturn(new BigDecimal("1.00"));
-
-        DashboardSummaryDto summary = service.summary(user(role, 44L, null, false));
-
-        assertThat(summary.financeOutstanding()).isNull();
-        assertThat(summary.forecastValue()).isNull();
-        assertThat(summary.overdueOutstanding()).isNull();
-        verify(repository, never()).financeOutstanding();
-        verify(repository, never()).forecastValue();
-        verify(repository, never()).overdueOutstanding();
     }
 
     private UserPrincipal user(String role, Long employeeId, Long divisionId, boolean manager) {

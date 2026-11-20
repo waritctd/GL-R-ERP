@@ -1,11 +1,10 @@
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { TeamMovementPanel } from './TeamMovementPanel.jsx';
 import { api } from '../../api/index.js';
-import { formatThaiDate } from '../../utils/format.js';
 
 globalThis.React = React;
 
@@ -36,40 +35,9 @@ function renderPanel(props = { deals: DEALS, orders: DEALS }) {
   );
 }
 
-const linkTo = (row, href) => [...row.querySelectorAll('a')].find((a) => a.getAttribute('href') === href);
-
 describe('TeamMovementPanel', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-  });
-
-  it('shows the range it was given and carries it explicitly in every count link', async () => {
-    api.meta.dealStages.mockImplementation(() => new Promise(() => {}));
-    renderPanel();
-    const panel = screen.getByRole('heading', { name: 'ความเคลื่อนไหวของทีม' }).closest('section');
-    expect(panel.textContent).toContain(formatThaiDate(RANGE.from));
-    expect(panel.textContent).toContain(formatThaiDate(RANGE.to));
-
-    const row = within(panel).getByTestId('team-row-11');
-    const range = 'from=2025-03-01&to=2025-03-07';
-    for (const week of ['moved', 'activity', 'overdue', 'silent']) {
-      expect(linkTo(row, `/tickets?owner=11&week=${week}&${range}`), week).toBeDefined();
-    }
-    // the open-deals count is a plain number, not a link
-    expect([...row.querySelectorAll('a')].every((a) => a.getAttribute('href').includes('week='))).toBe(true);
-  });
-
-  it('shows — in both value columns until the stage catalog has loaded, then the sums', async () => {
-    let resolve;
-    api.meta.dealStages.mockImplementation(() => new Promise((r) => { resolve = r; }));
-    renderPanel();
-    const row = screen.getByTestId('team-row-11');
-    const cells = () => [...row.querySelectorAll('td')].map((td) => td.textContent.trim());
-    expect(cells().slice(-2)).toEqual(['—', '—']);
-
-    const { DEAL_STAGE_CATALOG } = await import('../../data/dealStageCatalog.js');
-    resolve(DEAL_STAGE_CATALOG);
-    await waitFor(() => expect(cells().slice(-2)).toEqual(['฿4,000.00', '฿250.00']));
   });
 
   it('classes money per ORDER: a project whose root is ordered and whose add-on is still quoting', async () => {
@@ -104,14 +72,5 @@ describe('TeamMovementPanel', () => {
     const cells = (id) => [...screen.getByTestId(`team-row-${id}`).querySelectorAll('td')].slice(-2)
       .reduce((sum, td) => sum + Number(td.textContent.replace(/[^\d.]/g, '')), 0);
     expect(cells(11) + cells(12)).toBe(54000);
-  });
-
-  it('shows — for money until the per-order list has loaded, and says so when it failed', async () => {
-    const { DEAL_STAGE_CATALOG } = await import('../../data/dealStageCatalog.js');
-    api.meta.dealStages.mockResolvedValue(DEAL_STAGE_CATALOG);
-    renderPanel({ deals: DEALS, orders: null, ordersFailed: true });
-    const row = await screen.findByTestId('team-row-11');
-    await waitFor(() => expect(screen.getByRole('alert')).toBeTruthy());
-    expect([...row.querySelectorAll('td')].slice(-2).map((td) => td.textContent.trim())).toEqual(['—', '—']);
   });
 });

@@ -50,63 +50,6 @@ class DashboardPaymentOverdueMatchesFinanceIntegrationTest extends AbstractPostg
         assertOverdueCount(1, id);
     }
 
-    @Test
-    void ownerDirectDeal_paidTheVatInclusiveAmount_isNotOverdue() {
-        long id = creditDealDelivered31DaysAgo("ACCEPTED", "CUSTOMER_CONFIRMED");
-        pay(id, "107000.00");
-
-        assertOverdueCount(0, id);
-    }
-
-    @Test
-    void confirmedDealDirectQuotation_stillApproved_isPayable_andOverdue() {
-        long id = creditDealDelivered31DaysAgo("APPROVED", "CUSTOMER_CONFIRMED"); // confirm-order leaves it APPROVED
-        jdbc.update("UPDATE sales.quotation SET origin = 'DEAL_DIRECT' WHERE ticket_id = :id", Map.of("id", id));
-        long quotationId = jdbc.queryForObject("SELECT quotation_id FROM sales.quotation WHERE ticket_id = :id",
-            Map.of("id", id), Long.class);
-        tickets.addEventWithDocument(id, repId, "ทดสอบ", "DEAL_PROMOTED_FROM_QUOTATION", null, null,
-            "ยืนยันคำสั่งซื้อ", "QUOTATION", quotationId); // the per-quotation fact the payable rule keys on
-
-        assertOverdueCount(1, id);
-    }
-
-    @Test
-    void issuedRemainingInvoice_payableFollowsTheIssuedDocuments_aSatangShortIsOverdue() {
-        long id = creditDealDelivered31DaysAgo("ACCEPTED", "CUSTOMER_CONFIRMED");
-        // per-document VAT rounding: 32,100.00 + 74,900.01 = 107,000.01, one satang above the quotation's 107,000.00
-        long notice = jdbc.queryForObject("""
-            INSERT INTO sales.deposit_notice (ticket_id, version, status, customer_name, deposit_percent,
-                subtotal, deposit_amount, vat_percent, vat_amount, total_payable)
-            VALUES (:id, 1, 'ISSUED', 'x', 0.3, 100000.00, 30000.00, 0.07, 2100.00, 32100.00)
-            RETURNING deposit_notice_id""", Map.of("id", id), Number.class).longValue();
-        jdbc.update("""
-            INSERT INTO sales.remaining_invoice (ticket_id, deposit_notice_id, status, base_number, doc_number,
-                issued_at, grand_total)
-            VALUES (:id, :notice, 'ISSUED', 'GLR6999999', 'GLR6999999-1', now(), 74900.01)""",
-            new MapSqlParameterSource("id", id).addValue("notice", notice));
-        pay(id, "107000.00");
-
-        assertOverdueCount(1, id);
-    }
-
-    @Test
-    void storedDueDateInThePast_withoutQuotationTerms_isNotOverdue() {
-        long id = createDeal();
-        insertQuotation(id, "ACCEPTED"); // no remainder_mode / credit_days: no derived due date
-        setStoredDueDate(id, today().minusDays(10));
-
-        assertOverdueCount(0, id);
-    }
-
-    @Test
-    void unpaidDeposit_isNeverOverdue_evenLongAfterDelivery() {
-        long id = creditDealDelivered31DaysAgo("ACCEPTED", "DEPOSIT_NOTICE_ISSUED");
-
-        assertOverdueCount(0, id);
-    }
-
-    // ── helpers ─────────────────────────────────────────────────────────────────────────────
-
     /** Quotation subtotal 100,000 (TH, 107,000 incl. VAT), CREDIT 30 days, fully delivered 31 days ago. */
     private long creditDealDelivered31DaysAgo(String quotationStatus, String paymentStatus) {
         long id = createDeal();

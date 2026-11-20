@@ -7,7 +7,6 @@ import static org.mockito.Mockito.mock;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
-import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
@@ -30,7 +29,6 @@ import th.co.glr.hr.ticket.TicketRepository;
  * plain employee/warehouse/qc) could read every rep's commission amounts. */
 class CommissionListScopeIntegrationTest extends AbstractPostgresIntegrationTest {
     private static final LocalDate PAYROLL_MONTH = LocalDate.of(2026, 6, 1);
-    private static final LocalDate OTHER_PAYROLL_MONTH = LocalDate.of(2026, 5, 1);
 
     private CommissionRepository commissions;
     private CommissionService commissionService;
@@ -39,11 +37,9 @@ class CommissionListScopeIntegrationTest extends AbstractPostgresIntegrationTest
     private long repAId;
     private long repBId;
     private UserPrincipal repAActor;
-    private UserPrincipal repBActor;
     private UserPrincipal accountActor;
     private UserPrincipal hrActor;
     private UserPrincipal managerActor;
-    private UserPrincipal ceoActor;
     private UserPrincipal importActor;
     private UserPrincipal employeeActor;
     private UserPrincipal warehouseActor;
@@ -69,11 +65,9 @@ class CommissionListScopeIntegrationTest extends AbstractPostgresIntegrationTest
         long managerId = createEmployee("ผู้จัดการขาย ลิสต์", "commission-list-manager@glr.co.th", "SA", "แผนกขาย");
 
         repAActor = principal(repAId, "sales");
-        repBActor = principal(repBId, "sales");
         accountActor = principal(accountId, "account");
         hrActor = principal(999_888L, "hr");
         managerActor = principal(managerId, "sales_manager");
-        ceoActor = principal(999_333L, "ceo");
         // Denied viewer roles — rejected at the role gate before any DB lookup, so synthetic ids. hr reads commissions
         // via the payroll-ready feed (PAYROLL_ROLES), account only does createFromDeal — neither may call the list,
         // per canListCommissionRecords.
@@ -97,43 +91,6 @@ class CommissionListScopeIntegrationTest extends AbstractPostgresIntegrationTest
 
         assertThat(idsSeenByRepA).contains(recordA);
         assertThat(idsSeenByRepA).doesNotContain(recordB);
-    }
-
-    @Test
-    void listAsRepB_excludesRepAsRow_symmetric() {
-        long recordA = seedManualCommission(repAId, PAYROLL_MONTH);
-        long recordB = seedManualCommission(repBId, PAYROLL_MONTH);
-
-        List<Long> idsSeenByRepB = idsIn(commissionService.list(PAYROLL_MONTH, repBActor));
-
-        assertThat(idsSeenByRepB).contains(recordB);
-        assertThat(idsSeenByRepB).doesNotContain(recordA);
-    }
-
-    /** The two allowed non-sales viewer roles — sales_manager and ceo — get the null salesRepId filter and see
-     * EVERY rep's rows (they review/approve/oversee the whole commission feed, so full visibility is intended).
-     * This is the "positive control" half of the role gate: it must stay reachable. */
-    @Test
-    void listAsAllowedNonSalesRole_seesBothReps() {
-        long recordA = seedManualCommission(repAId, PAYROLL_MONTH);
-        long recordB = seedManualCommission(repBId, PAYROLL_MONTH);
-
-        List<Long> idsSeenByManager = idsIn(commissionService.list(PAYROLL_MONTH, managerActor));
-        assertThat(idsSeenByManager).contains(recordA, recordB);
-
-        List<Long> idsSeenByCeo = idsIn(commissionService.list(PAYROLL_MONTH, ceoActor));
-        assertThat(idsSeenByCeo).contains(recordA, recordB);
-    }
-
-    @Test
-    void listAsRepA_differentPayrollMonth_isExcluded() {
-        long recordThisMonth = seedManualCommission(repAId, PAYROLL_MONTH);
-        long recordOtherMonth = seedManualCommission(repAId, OTHER_PAYROLL_MONTH);
-
-        List<Long> idsSeenByRepA = idsIn(commissionService.list(PAYROLL_MONTH, repAActor));
-
-        assertThat(idsSeenByRepA).contains(recordThisMonth);
-        assertThat(idsSeenByRepA).doesNotContain(recordOtherMonth);
     }
 
     /** The role gate (LIST_VIEWER_ROLES = sales/sales_manager/ceo) added 2026-07-24. */

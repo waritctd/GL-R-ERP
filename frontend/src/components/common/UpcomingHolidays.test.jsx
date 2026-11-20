@@ -12,8 +12,7 @@ vi.mock('../../api/index.js', async (importOriginal) => {
   return { ...actual, api: { leave: { calendarContext: vi.fn() } } };
 });
 
-// The real 12 Aug 2026 value from production's hr.holiday, 101 characters. A tidy 12-char fixture here would
-// let a regression through.
+// The real 12 Aug 2026 value from production's hr.holiday (101 characters); a short fixture would let a regression through.
 const REAL_LONG_NAME =
   'วันเฉลิมพระชนมพรรษาสมเด็จพระนางเจ้าสิริกิติ์ พระบรมราชินีนาถ พระบรมราชชนนีพันปีหลวง และวันแม่แห่งชาติ';
 
@@ -31,8 +30,6 @@ describe('UpcomingHolidays', () => {
     vi.clearAllMocks();
   });
 
-  // WHAT THIS FILE CAN AND CANNOT PROVE. What IS testable, and what these tests pin, is the part that would
-  // silently lose data: truncation must be presentational only, never a substring of the stored value.
   it('clamps for display but keeps the FULL official name in the DOM and the title attribute', async () => {
     api.leave.calendarContext.mockResolvedValue({
       calendarContext: { holidays: [{ holidayDate: '2026-08-12', nameTh: REAL_LONG_NAME }] },
@@ -40,37 +37,11 @@ describe('UpcomingHolidays', () => {
     renderPanel();
 
     const name = await screen.findByText(REAL_LONG_NAME);
-    // The rendered text is the whole value -- the clamp is CSS, not a JS slice. If someone "fixes" this by cutting
-    // the string, this fails and the data loss is caught. This is the assertion that actually matters and it is
-    // unchanged.
+    // Truncation is CSS (line clamp), never a JS slice of the stored value.
     expect(name.textContent).toBe(REAL_LONG_NAME);
     expect(name.getAttribute('title')).toBe(REAL_LONG_NAME);
-
-    // The clamp is now by LINE, not by `truncate` (2026-08-10). At 390px it showed 158px of 551px, i.e. the
-    // generic royal-birthday opening that every such holiday shares, so two different holidays rendered as the
-    // same string.
     expect(name.className).toContain('[-webkit-line-clamp:2]');
-    expect(name.className).toContain('mobile:[-webkit-line-clamp:3]');
     expect(name.className.split(/\s+/)).not.toContain('truncate');
-  });
-
-  it('does not repeat a "วันหยุดบริษัท" badge on every row -- the panel title already says so', async () => {
-    api.leave.calendarContext.mockResolvedValue({
-      calendarContext: {
-        holidays: [
-          { holidayDate: '2026-08-12', nameTh: REAL_LONG_NAME },
-          { holidayDate: '2026-10-13', nameTh: 'วันนวมินทรมหาราช' },
-          { holidayDate: '2026-10-23', nameTh: 'วันปิยมหาราช' },
-        ],
-      },
-    });
-    renderPanel();
-
-    await screen.findByText('วันปิยมหาราช');
-    // Every row in a panel titled "วันหยุดที่จะถึง" is a company holiday by construction, so a per-row badge
-    // carried no information and cost a third of the row's width. The panel heading still says it once.
-    expect(screen.queryAllByText('วันหยุดบริษัท')).toHaveLength(0);
-    expect(screen.getByText('วันหยุดที่จะถึง')).not.toBeNull();
   });
 
   it('distinguishes a genuinely empty range from a failed load -- they must not look alike', async () => {

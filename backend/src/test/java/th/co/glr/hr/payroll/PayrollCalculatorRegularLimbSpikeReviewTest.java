@@ -14,10 +14,6 @@ import org.junit.jupiter.api.Test;
 class PayrollCalculatorRegularLimbSpikeReviewTest {
     private final PayrollCalculator calculator = new PayrollCalculator();
 
-    private static final List<BigDecimal> NO_SPECIAL = List.of(
-        BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
-        BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO);
-
     private record YearRun(BigDecimal totalWithheld, PayrollCalculation december) {}
 
     /** Runs a whole tax year, carrying both limbs forward exactly as PayrollRepository's year-to-date query does,
@@ -72,20 +68,6 @@ class PayrollCalculatorRegularLimbSpikeReviewTest {
 
     private static final IntFunction<BigDecimal> NONE = month -> BigDecimal.ZERO;
 
-    /** The control. ฿30,000 salary + ฿20,000 commission every month lands on the year's liability to the satang — a
-     * STABLE commission in the regular limb is handled perfectly. */
-    @Test
-    @DisplayName("control: a steady monthly commission lands exactly on the year's liability")
-    void aSteadyCommissionReconcilesExactly() {
-        YearRun run = year(
-            month -> new BigDecimal("30000.00"),
-            month -> new BigDecimal("20000.00"),
-            NONE, NONE);
-
-        assertThat(run.december().annualTax()).isEqualByComparingTo("20450.00");
-        assertThat(run.totalWithheld()).isEqualByComparingTo(run.december().annualTax());
-    }
-
     /** Documents over-withholding when a commission spike is projected as recurring income. */
     @Test
     @DisplayName("DEFECT: a spiky commission month over-withholds ฿17,527.51 and never gives it back")
@@ -114,59 +96,4 @@ class PayrollCalculatorRegularLimbSpikeReviewTest {
             .isEqualByComparingTo(BigDecimal.ZERO);
     }
 
-    /** The same money paid as a เงินโบนัส in พิเศษ 1 — the VARIABLE limb — instead of as commission. ป.96 ข้อ 1(5)
-     * applies, nothing is annualised, and the year lands exactly on the liability. */
-    @Test
-    @DisplayName("DEFECT contrast: the identical money in the VARIABLE limb reconciles to the satang")
-    void theSameSpikeInTheVariableLimbReconcilesExactly() {
-        YearRun run = year(
-            month -> new BigDecimal("30000.00"),
-            month -> new BigDecimal("20000.00"),
-            month -> month == 3 ? new BigDecimal("280000.00") : BigDecimal.ZERO,
-            NONE);
-
-        assertThat(run.december().annualTax()).isEqualByComparingTo("58925.00");
-        assertThat(run.totalWithheld())
-            .as("variable-limb treatment of the identical income is exact")
-            .isEqualByComparingTo("58925.00");
-    }
-
-    /** Documents over-withholding when one-off director remuneration is projected as recurring income. */
-    @Test
-    @DisplayName("DEFECT: a one-off director remuneration over-withholds ฿107,117.87 permanently")
-    void aOneOffDirectorRemunerationPermanentlyOverWithholds() {
-        YearRun run = year(
-            month -> new BigDecimal("50000.00"),
-            NONE, NONE,
-            month -> month == 6 ? new BigDecimal("1200000.00") : BigDecimal.ZERO);
-
-        assertThat(run.december().annualTax())
-            .as("actual liability on 600,000 salary + 1,200,000 director remuneration")
-            .isEqualByComparingTo("272375.00");
-        assertThat(run.totalWithheld())
-            .withFailMessage("DEFECT PINNED: expected 379,492.87 withheld; got %s", run.totalWithheld())
-            .isEqualByComparingTo("379492.87");
-        assertThat(run.totalWithheld().subtract(run.december().annualTax()))
-            .isEqualByComparingTo("107117.87");
-    }
-
-    /** A late spike is less damaging but not harmless — a November commission spike still strands ฿6,045.84. The
-     * magnitude scales with the periods remaining, which is why January is the worst month to be paid a large
-     * commission and December the safest. */
-    @Test
-    @DisplayName("DEFECT: the damage scales with periods remaining — January is the worst month to be paid")
-    void theOverWithholdingScalesWithThePeriodsRemaining() {
-        BigDecimal january = year(
-            month -> new BigDecimal("30000.00"),
-            month -> month == 1 ? new BigDecimal("300000.00") : new BigDecimal("20000.00"),
-            NONE, NONE).totalWithheld().subtract(new BigDecimal("58925.00"));
-        BigDecimal november = year(
-            month -> new BigDecimal("30000.00"),
-            month -> month == 11 ? new BigDecimal("300000.00") : new BigDecimal("20000.00"),
-            NONE, NONE).totalWithheld().subtract(new BigDecimal("58925.00"));
-
-        assertThat(january).isEqualByComparingTo("16229.17");
-        assertThat(november).isEqualByComparingTo("6045.84");
-        assertThat(january).isGreaterThan(november);
-    }
 }

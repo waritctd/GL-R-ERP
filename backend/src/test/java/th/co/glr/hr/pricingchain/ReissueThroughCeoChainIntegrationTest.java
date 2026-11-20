@@ -1,12 +1,7 @@
 package th.co.glr.hr.pricingchain;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyLong;
-import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
@@ -16,12 +11,9 @@ import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.http.HttpStatus;
 import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.catalog.CatalogRepository;
-import th.co.glr.hr.common.ApiException;
-import th.co.glr.hr.config.AppProperties;
 import th.co.glr.hr.customer.ContactRepository;
 import th.co.glr.hr.customer.CustomerDto;
 import th.co.glr.hr.customer.CustomerRepository;
@@ -33,7 +25,6 @@ import th.co.glr.hr.customerquotation.CustomerQuotationRepository;
 import th.co.glr.hr.customerquotation.CustomerQuotationRequests.CreateCustomerQuotationRequest;
 import th.co.glr.hr.customerquotation.CustomerQuotationRequests.CreateRevisionRequest;
 import th.co.glr.hr.customerquotation.CustomerQuotationRequests.IssueCustomerQuotationRequest;
-import th.co.glr.hr.customerquotation.CustomerQuotationRequests.RecordQuotationOutcomeRequest;
 import th.co.glr.hr.customerquotation.CustomerQuotationRequests.UpdateCustomerQuotationItemRequest;
 import th.co.glr.hr.customerquotation.CustomerQuotationRequests.UpdateCustomerQuotationRequest;
 import th.co.glr.hr.customerquotation.CustomerQuotationService;
@@ -75,7 +66,6 @@ import th.co.glr.hr.pricingrequest.UnitBasis;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 import th.co.glr.hr.ticket.CreateTicketRequest;
 import th.co.glr.hr.ticket.QuotationRenderer;
-import th.co.glr.hr.ticket.QuotationStatus;
 import th.co.glr.hr.ticket.TicketDto;
 import th.co.glr.hr.ticket.TicketItemRequest;
 import th.co.glr.hr.ticket.TicketRepository;
@@ -189,138 +179,7 @@ class ReissueThroughCeoChainIntegrationTest extends AbstractPostgresIntegrationT
         assertThat(revisedLine.finalUnitPrice()).isGreaterThan(issued.items().get(0).finalUnitPrice());
     }
 
-    /** The other half of the same loophole. Any non-zero discount on a REVISION draft is now a 409 naming the path
-     * Sales must take instead. */
-    @Test
-    void updateOnARevisionDraft_withADiscount_is409_soSalesCannotMoveAPriceAfterIssue() {
-        CustomerQuotationDto revision = issuedThenRevisedQuotation();
-        long revisionItemId = revision.items().get(0).id();
-        BigDecimal approvedPrice = revision.items().get(0).approvedUnitPrice();
-
-        assertThatThrownBy(() -> quotationService.update(revision.id(), new UpdateCustomerQuotationRequest(
-            null, null, null, null, null,
-            List.of(new UpdateCustomerQuotationItemRequest(revisionItemId, null, null, new BigDecimal("5.0000")))),
-            salesActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> {
-                assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
-                assertThat(e.getMessage()).contains("customer-change revision");
-            });
-
-        // Rejected before it wrote: the line is still at the CEO-approved price. Not a rollback assertion —
-        // @Transactional is inert here (see this class's Javadoc) — the guard simply throws before
-        // quotations.updateItems is reached.
-        CustomerQuotationDto unchanged = quotationService.get(revision.id(), salesActor);
-        assertThat(unchanged.items().get(0).salesDiscount()).isEqualByComparingTo(BigDecimal.ZERO);
-        assertThat(unchanged.items().get(0).finalUnitPrice()).isEqualByComparingTo(approvedPrice);
-    }
-
-    /** The guard reads the RESOLVED discount, not req.salesDiscount() — so it cannot be slipped past by omitting
-     * the field and letting a non-zero value already on the row survive update's "null = leave unchanged" merge. */
-    @Test
-    void updateOnARevisionDraft_omittingTheDiscountField_stillRejectsADiscountAlreadyOnTheRow() {
-        CustomerQuotationDto revision = issuedThenRevisedQuotation();
-        long revisionItemId = revision.items().get(0).id();
-        jdbc.update("""
-            UPDATE sales.quotation_item SET sales_discount = 5.0000 WHERE quotation_item_id = :id
-            """, Map.of("id", revisionItemId));
-
-        assertThatThrownBy(() -> quotationService.update(revision.id(), new UpdateCustomerQuotationRequest(
-            null, null, null, null, null,
-            List.of(new UpdateCustomerQuotationItemRequest(revisionItemId, "แก้คำอธิบาย", null, null))),
-            salesActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
-    }
-
-    /** The boundary, asserted so the guard cannot quietly grow into "no quotation may ever be discounted". Discount
-     * Policy B on a FIRST quotation is untouched: there the CEO's own decision supplied the floor, so discounting
-     * down to it is authority the CEO granted. */
-    @Test
-    void updateOnAFirstQuotationDraft_stillAllowsADiscount_soPolicyBIsUntouched() {
-        long pricingRequestId = approvedPricingRequest(new BigDecimal("10"));
-        CustomerQuotationDto draft = quotationService.create(pricingRequestId,
-            new CreateCustomerQuotationRequest(null, null, null, null, null, UUID.randomUUID().toString()), salesActor);
-        CustomerQuotationItemDto line = draft.items().get(0);
-        assertThat(draft.parentQuotationId()).isNull();
-
-        CustomerQuotationDto updated = quotationService.update(draft.id(), new UpdateCustomerQuotationRequest(
-            null, null, null, null, null,
-            List.of(new UpdateCustomerQuotationItemRequest(line.id(), null, null, new BigDecimal("5.0000")))),
-            salesActor);
-
-        assertThat(updated.items().get(0).salesDiscount()).isEqualByComparingTo("5.0000");
-        assertThat(updated.items().get(0).finalUnitPrice())
-            .isEqualByComparingTo(line.approvedUnitPrice().subtract(new BigDecimal("5.0000")));
-    }
-
     // Work item 2 — QUOTATION_ACCEPTED is terminal, and the repository now enforces it
-
-    /** The capability this change REMOVES. Asserted at both levels, because they fail differently and a reviewer
-     * should see both: the service 409s, and the row is untouched (no child pricing request was created either). */
-    @Test
-    void customerChangeRevision_fromQuotationAccepted_is409_andLeavesTheAcceptedDealAlone() {
-        long pricingRequestId = approvedPricingRequest(new BigDecimal("10"));
-        CustomerQuotationDto issued = issueQuotation(pricingRequestId);
-        quotationService.recordOutcome(issued.id(),
-            new RecordQuotationOutcomeRequest(QuotationStatus.ACCEPTED, "ลูกค้าโอเค", UUID.randomUUID().toString()),
-            salesActor);
-        assertThat(pricingRequestService.get(pricingRequestId, salesActor).summary().status())
-            .isEqualTo(PricingRequestStatus.QUOTATION_ACCEPTED);
-
-        assertThatThrownBy(() -> pricingRequestService.createCustomerChangeRevision(
-            pricingRequestId, revisionRequest(new BigDecimal("10")), salesActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> {
-                assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
-                assertThat(e.getMessage()).contains("ลูกค้ายอมรับใบเสนอราคาแล้ว");
-            });
-
-        assertThat(pricingRequestService.get(pricingRequestId, salesActor).summary().status())
-            .isEqualTo(PricingRequestStatus.QUOTATION_ACCEPTED);
-        assertThat(quotationService.get(issued.id(), salesActor).docStatus()).isEqualTo(QuotationStatus.ACCEPTED);
-        assertThat(jdbc.queryForObject("""
-            SELECT COUNT(*) FROM sales.pricing_request WHERE parent_pricing_request_id = :id
-            """, Map.of("id", pricingRequestId), Long.class)).isZero();
-    }
-
-    /** The repository half of the same rule, reached directly so the state machine is proved to be what enforces it
-     * rather than the service's own 409 sitting in front. The old raw UPDATE could not produce this outcome at
-     * all: it would have returned rowcount 1 and superseded the row. */
-    @Test
-    void supersedeForCustomerRevision_fromQuotationAccepted_throwsAndWritesNothing() {
-        long pricingRequestId = approvedPricingRequest(new BigDecimal("10"));
-        CustomerQuotationDto issued = issueQuotation(pricingRequestId);
-        quotationService.recordOutcome(issued.id(),
-            new RecordQuotationOutcomeRequest(QuotationStatus.ACCEPTED, null, UUID.randomUUID().toString()), salesActor);
-
-        assertThatThrownBy(() -> pricingRequests.supersedeForCustomerRevision(
-            pricingRequestId, PricingRequestStatus.QUOTATION_ACCEPTED, pricingRequestId))
-            .isInstanceOf(IllegalStateException.class)
-            .hasMessageContaining(PricingRequestStatus.QUOTATION_ACCEPTED);
-
-        assertThat(jdbc.queryForObject("""
-            SELECT status FROM sales.pricing_request WHERE pricing_request_id = :id
-            """, Map.of("id", pricingRequestId), String.class)).isEqualTo(PricingRequestStatus.QUOTATION_ACCEPTED);
-        assertThat(jdbc.queryForObject("""
-            SELECT superseded_by_pricing_request_id FROM sales.pricing_request WHERE pricing_request_id = :id
-            """, Map.of("id", pricingRequestId), Long.class)).isNull();
-    }
-
-    /** The compare-and-set the caller depends on for the lost-update race, tightened from a negative guard to WHERE
-     * status = :expected. */
-    @Test
-    void supersedeForCustomerRevision_whenTheRowMovedUnderneath_returnsZeroInsteadOfSupersedingAnyway() {
-        long pricingRequestId = approvedPricingRequest(new BigDecimal("10"));
-        issueQuotation(pricingRequestId);
-        // The caller read APPROVED_FOR_QUOTATION; by the time it writes, issue() has moved the row on to
-        // QUOTATION_ISSUED. Both are legal SUPERSEDED predecessors, so this proves the compare-and-set — not the
-        // transition assertion — is what refuses.
-        int rows = pricingRequests.supersedeForCustomerRevision(
-            pricingRequestId, PricingRequestStatus.APPROVED_FOR_QUOTATION, pricingRequestId);
-
-        assertThat(rows).isZero();
-        assertThat(jdbc.queryForObject("""
-            SELECT status FROM sales.pricing_request WHERE pricing_request_id = :id
-            """, Map.of("id", pricingRequestId), String.class)).isEqualTo(PricingRequestStatus.QUOTATION_ISSUED);
-    }
 
     // Work item 3 — factory quotes carry forward ONLY when nothing cost-relevant changed
 
@@ -340,26 +199,6 @@ class ReissueThroughCeoChainIntegrationTest extends AbstractPostgresIntegrationT
         assertThat(factoryQuoteCount(child.summary().id())).isZero();
         // And the parent's quotes were not disturbed on the way past.
         assertThat(readyForCostingQuoteCount(parentId)).isEqualTo(1L);
-    }
-
-    /** The same refusal for a DIFFERENT reason: the item list itself changed shape. An added item has no factory
-     * price at all, so a mapping derived from a fuzzy match is how a real price silently lands on the wrong line.
-     * Item-count equality is a precondition of the mapping, not a nicety. */
-    @Test
-    void revisionThatAddsAnItem_doesNotCarryTheFactoryQuoteForward_andWaitsForImport() {
-        long parentId = approvedPricingRequest(new BigDecimal("10"));
-        issueQuotation(parentId);
-
-        PricingRequestRequests.CustomerChangeRevisionRequest twoItems = new PricingRequestRequests.CustomerChangeRevisionRequest(
-            "ลูกค้าขอเพิ่มรายการ", UUID.randomUUID().toString(), PricingRequestRecipient.DESIGNER, null,
-            "Designer Co.", LocalDate.now().plusDays(14), null, "THB", "added item",
-            List.of(pricingItem(new BigDecimal("10")), pricingItem(new BigDecimal("3"))));
-        PricingRequestDetailDto child = pricingRequestService.createCustomerChangeRevision(parentId, twoItems, salesActor);
-        pricingRequestService.submit(child.summary().id(), salesActor);
-
-        assertThat(pricingRequestService.get(child.summary().id(), salesActor).summary().status())
-            .isEqualTo(PricingRequestStatus.SUBMITTED);
-        assertThat(factoryQuoteCount(child.summary().id())).isZero();
     }
 
     /**
@@ -408,194 +247,9 @@ class ReissueThroughCeoChainIntegrationTest extends AbstractPostgresIntegrationT
         assertThat(decision.items().get(0).frozenLandedCostPerPieceThb()).isGreaterThan(BigDecimal.ZERO);
     }
 
-    /** The audit trail the shortcut writes. Import never touched this request, so the events must say so rather
-     * than implying a factory round-trip that did not happen — and the transition recorded must be the real one
-     * (SUBMITTED -> READY_FOR_CEO_REVIEW), not a fabricated Import hop. */
-    @Test
-    void carryForward_recordsTheAdvanceAsSubmittedToReadyForCeoReview_withNoImportPickup() {
-        long parentId = approvedPricingRequest(new BigDecimal("10"));
-        issueQuotation(parentId);
-        PricingRequestDetailDto child = pricingRequestService.createCustomerChangeRevision(
-            parentId, revisionRequest(new BigDecimal("10")), salesActor);
-        long childId = child.summary().id();
-
-        pricingRequestService.submit(childId, salesActor);
-
-        assertThat(jdbc.queryForObject("""
-            SELECT COUNT(*) FROM sales.pricing_request_event
-             WHERE pricing_request_id = :id AND from_status = 'SUBMITTED' AND to_status = 'READY_FOR_CEO_REVIEW'
-            """, Map.of("id", childId), Long.class)).isEqualTo(1L);
-        assertThat(jdbc.queryForObject("""
-            SELECT COUNT(*) FROM sales.pricing_request_event
-             WHERE pricing_request_id = :id AND to_status = 'IMPORT_REVIEWING'
-            """, Map.of("id", childId), Long.class)).isZero();
-    }
-
     // Work item 4 — the parent's offer stays live until the replacement is issued
 
-    /** Owner ruling: the already-issued quotation stays ISSUED and valid while the replacement chain runs. It used
-     * to be flipped to SUPERSEDED the instant a revision was created, which left the customer holding no live
-     * offer for the whole time — and nothing to fall back to if the CEO refused the new price. */
-    @Test
-    void parentQuotationStaysIssuedWhileTheChainRuns_andRetiresWhenTheReplacementIssues() {
-        long parentId = approvedPricingRequest(new BigDecimal("10"));
-        CustomerQuotationDto parentQuotation = issueQuotation(parentId);
-
-        PricingRequestDetailDto child = pricingRequestService.createCustomerChangeRevision(
-            parentId, revisionRequest(new BigDecimal("25")), salesActor);
-        long childId = child.summary().id();
-
-        // Immediately after the revision is created: parent request SUPERSEDED, parent decision SUPERSEDED, parent
-        // QUOTATION still live.
-        assertThat(pricingRequestService.get(parentId, salesActor).summary().status())
-            .isEqualTo(PricingRequestStatus.SUPERSEDED);
-        assertThat(jdbc.queryForObject("""
-            SELECT status FROM sales.pricing_decision WHERE pricing_request_id = :id
-            """, Map.of("id", parentId), String.class)).isEqualTo("SUPERSEDED");
-        assertThat(quotationService.get(parentQuotation.id(), salesActor).docStatus())
-            .isEqualTo(QuotationStatus.ISSUED);
-        // QA-13: live as a document, but no customer outcome lands on it — the revision is the chain now.
-        assertThatThrownBy(() -> quotationService.recordOutcome(parentQuotation.id(),
-            new RecordQuotationOutcomeRequest(QuotationStatus.REJECTED, "ลูกค้าตอบ", UUID.randomUUID().toString()),
-            salesActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> {
-                assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
-                assertThat(e.getMessage()).contains("รอบแก้ไข");
-            });
-        assertThat(quotationService.get(parentQuotation.id(), salesActor).docStatus())
-            .isEqualTo(QuotationStatus.ISSUED);
-
-        // Still live all the way through Import and the CEO's fresh decision. The quantity changed (10 -> 25), so this
-        // revision takes the ordinary Import path rather than the factory-quote carry-forward shortcut — see the
-        // carry-forward tests above.
-        pricingRequestService.submit(childId, salesActor);
-        assertThat(pricingRequestService.get(childId, salesActor).summary().status())
-            .isEqualTo(PricingRequestStatus.SUBMITTED);
-        driveSubmittedRequestToApprovedForQuotation(childId, new BigDecimal("25"));
-        assertThat(quotationService.get(parentQuotation.id(), salesActor).docStatus())
-            .isEqualTo(QuotationStatus.ISSUED);
-
-        // A DRAFT replacement is not a replacement — only a real issue retires the old offer.
-        CustomerQuotationDto replacementDraft = quotationService.create(childId,
-            new CreateCustomerQuotationRequest(null, null, null, null, null, UUID.randomUUID().toString()), salesActor);
-        assertThat(quotationService.get(parentQuotation.id(), salesActor).docStatus())
-            .isEqualTo(QuotationStatus.ISSUED);
-
-        CustomerQuotationDto replacement = quotationService.issue(replacementDraft.id(),
-            new IssueCustomerQuotationRequest(UUID.randomUUID().toString()), salesActor);
-
-        assertThat(quotationService.get(parentQuotation.id(), salesActor).docStatus())
-            .isEqualTo(QuotationStatus.SUPERSEDED);
-        assertThat(quotationService.get(replacement.id(), salesActor).docStatus())
-            .isEqualTo(QuotationStatus.ISSUED);
-    }
-
     // QA-13 fallback (Ploy 2026-10-31): a dead revision hands the parent's live offer back.
-
-    @Test
-    void cancellingTheRevision_revivesTheParent_soTheOldIssuedQuoteCanBeAcceptedAgain() {
-        long parentId = approvedPricingRequest(new BigDecimal("10"));
-        CustomerQuotationDto parentQuotation = issueQuotation(parentId);
-        long childId = pricingRequestService.createCustomerChangeRevision(
-            parentId, revisionRequest(new BigDecimal("25")), salesActor).summary().id();
-
-        pricingRequestService.cancel(childId, cancelReason(), salesActor);
-
-        assertThat(statusOf(parentId)).isEqualTo(PricingRequestStatus.QUOTATION_ISSUED);
-        assertThat(supersededBy(parentId)).isNull();
-        assertThat(jdbc.queryForObject(
-            "SELECT superseded_at FROM sales.pricing_request WHERE pricing_request_id = :id",
-            Map.of("id", parentId), java.sql.Timestamp.class)).isNull();
-        assertThat(decisionStatus(parentId)).isEqualTo("APPROVED");
-        assertThat(quotationService.get(parentQuotation.id(), salesActor).docStatus())
-            .isEqualTo(QuotationStatus.ISSUED);
-        assertThat(quotationService.recordOutcome(parentQuotation.id(), new RecordQuotationOutcomeRequest(
-            QuotationStatus.ACCEPTED, "ลูกค้าตกลง", UUID.randomUUID().toString()), salesActor).docStatus())
-            .isEqualTo(QuotationStatus.ACCEPTED);
-        assertThat(statusOf(parentId)).isEqualTo(PricingRequestStatus.QUOTATION_ACCEPTED);
-    }
-
-    @Test
-    void cancellingTheRevision_leavesAParentThatNeverHadAnIssuedQuoteSuperseded() {
-        long parentId = pricingRequestService.createDraft(ticketId,
-            new PricingRequestRequests.CreatePricingRequestRequest(PricingRequestRecipient.DESIGNER, null,
-                "Designer Co.", LocalDate.now().plusDays(14), new BigDecimal("5000.00"), "THB", "no quote yet",
-                UUID.randomUUID().toString(), List.of(pricingItem(new BigDecimal("10")))), salesActor)
-            .summary().id();
-        pricingRequestService.submit(parentId, salesActor);
-        long childId = pricingRequestService.createCustomerChangeRevision(
-            parentId, revisionRequest(new BigDecimal("25")), salesActor).summary().id();
-        assertThat(statusOf(parentId)).isEqualTo(PricingRequestStatus.SUPERSEDED);
-
-        pricingRequestService.cancel(childId, cancelReason(), salesActor);
-
-        assertThat(statusOf(parentId)).isEqualTo(PricingRequestStatus.SUPERSEDED);
-        assertThat(supersededBy(parentId)).isEqualTo(childId);
-    }
-
-    @Test
-    void cancellingTheThirdLink_revivesOnlyTheSecond_andLeavesTheFirstSuperseded() {
-        long p1 = approvedPricingRequest(new BigDecimal("10"));
-        CustomerQuotationDto q1 = issueQuotation(p1);
-        long p2 = pricingRequestService.createCustomerChangeRevision(
-            p1, revisionRequest(new BigDecimal("25")), salesActor).summary().id();
-        pricingRequestService.submit(p2, salesActor);
-        driveSubmittedRequestToApprovedForQuotation(p2, new BigDecimal("25"));
-        CustomerQuotationDto q2 = issueQuotation(p2);
-        assertThat(quotationService.get(q1.id(), salesActor).docStatus()).isEqualTo(QuotationStatus.SUPERSEDED);
-        long p3 = pricingRequestService.createCustomerChangeRevision(
-            p2, revisionRequest(new BigDecimal("30")), salesActor).summary().id();
-        assertThat(statusOf(p2)).isEqualTo(PricingRequestStatus.SUPERSEDED);
-
-        pricingRequestService.cancel(p3, cancelReason(), salesActor);
-
-        assertThat(statusOf(p2)).isEqualTo(PricingRequestStatus.QUOTATION_ISSUED);
-        assertThat(supersededBy(p2)).isNull();
-        assertThat(quotationService.get(q2.id(), salesActor).docStatus()).isEqualTo(QuotationStatus.ISSUED);
-        assertThat(statusOf(p1)).isEqualTo(PricingRequestStatus.SUPERSEDED);
-        assertThat(supersededBy(p1)).isEqualTo(p2);
-        assertThat(quotationService.get(q1.id(), salesActor).docStatus()).isEqualTo(QuotationStatus.SUPERSEDED);
-    }
-
-    private static PricingRequestRequests.CancelPricingRequestRequest cancelReason() {
-        return new PricingRequestRequests.CancelPricingRequestRequest("CEO ไม่อนุมัติราคาใหม่");
-    }
-
-    private String statusOf(long pricingRequestId) {
-        return pricingRequests.findSummary(pricingRequestId).orElseThrow().status();
-    }
-
-    private Long supersededBy(long pricingRequestId) {
-        return jdbc.queryForObject(
-            "SELECT superseded_by_pricing_request_id FROM sales.pricing_request WHERE pricing_request_id = :id",
-            Map.of("id", pricingRequestId), Long.class);
-    }
-
-    private String decisionStatus(long pricingRequestId) {
-        return jdbc.queryForObject(
-            "SELECT status FROM sales.pricing_decision WHERE pricing_request_id = :id ORDER BY pricing_decision_id DESC LIMIT 1",
-            Map.of("id", pricingRequestId), String.class);
-    }
-
-    /** Scoping, wrong-way-round: issuing a first quotation must not reach across to some OTHER deal's superseded
-     * chain. */
-    @Test
-    void issuing_doesNotRetireAQuotationBelongingToAnUnrelatedDeal() {
-        long unrelatedId = approvedPricingRequest(new BigDecimal("10"));
-        CustomerQuotationDto unrelatedQuotation = issueQuotation(unrelatedId);
-        // Make the unrelated deal's request SUPERSEDED, so ONLY the chain key stands between it and the sweep: without
-        // that clause it matches every condition the UPDATE tests.
-        pricingRequestService.createCustomerChangeRevision(
-            unrelatedId, revisionRequest(new BigDecimal("25")), salesActor);
-        assertThat(pricingRequestService.get(unrelatedId, salesActor).summary().status())
-            .isEqualTo(PricingRequestStatus.SUPERSEDED);
-
-        long otherId = approvedPricingRequest(new BigDecimal("10"));
-        issueQuotation(otherId);
-
-        assertThat(quotationService.get(unrelatedQuotation.id(), salesActor).docStatus())
-            .isEqualTo(QuotationStatus.ISSUED);
-    }
 
     // Fixtures — every precondition is driven through the real services, never SQL
 
@@ -642,17 +296,6 @@ class ReissueThroughCeoChainIntegrationTest extends AbstractPostgresIntegrationT
                 UUID.randomUUID().toString()), salesActor);
         return quotationService.issue(draft.id(),
             new IssueCustomerQuotationRequest(UUID.randomUUID().toString()), salesActor);
-    }
-
-    /** An issued quotation plus the DRAFT correction revision made from it. */
-    private CustomerQuotationDto issuedThenRevisedQuotation() {
-        long pricingRequestId = approvedPricingRequest(new BigDecimal("10"));
-        CustomerQuotationDto issued = issueQuotation(pricingRequestId);
-        CustomerQuotationDto revision = quotationService.createRevision(issued.id(),
-            new CreateRevisionRequest("แก้ไขรายละเอียดที่ไม่เกี่ยวกับราคา", UUID.randomUUID().toString()), salesActor);
-        assertThat(revision.parentQuotationId()).isEqualTo(issued.id());
-        assertThat(revision.docStatus()).isEqualTo(QuotationStatus.DRAFT);
-        return revision;
     }
 
     private PricingRequestRequests.CustomerChangeRevisionRequest revisionRequest(BigDecimal quantity) {

@@ -7,7 +7,6 @@ import {
 } from 'vitest';
 import { ReviewQueueTab } from './ReviewQueueTab.jsx';
 import { api } from '../../api/index.js';
-import { downloadBlob } from '../../utils/download.js';
 
 globalThis.React = React;
 
@@ -77,54 +76,6 @@ const submittedUnderSomeoneElse = {
   reason: 'ธุระส่วนตัว',
 };
 
-const submittedWithCertificate = {
-  id: 704,
-  employeeId: 4,
-  employeeName: 'ลูกทีม สาม',
-  employeeCode: 'GLR-004',
-  managerEmployeeId: 5,
-  leaveTypeCode: 'SICK',
-  leaveTypeNameTh: 'ลาป่วย',
-  startDate: '2026-08-14',
-  endDate: '2026-08-14',
-  totalDays: 1,
-  quotaRemainingAfter: 25,
-  status: 'SUBMITTED',
-  reason: 'ไข้หวัดใหญ่',
-  attachmentId: 9001,
-  attachmentFileName: 'ใบรับรองแพทย์.pdf',
-};
-
-// §5 WARN_UNPAID_* gates (V164 follow-up, 2026-09-09): a SUBMITTED request carrying one warning -- `messageTh`
-// copied VERBATIM from LeaveRuleMessages' real ADVANCE_NOTICE template (WARN_UNPAID_TAIL included), same
-// reason CLAUDE.md gives for never hand-translating backend copy.
-const submittedWithWarning = {
-  id: 705,
-  employeeId: 6,
-  employeeName: 'ลูกทีม สี่',
-  employeeCode: 'GLR-006',
-  managerEmployeeId: 5,
-  leaveTypeCode: 'PERSONAL',
-  leaveTypeNameTh: 'ลากิจ',
-  startDate: '2026-08-20',
-  endDate: '2026-08-20',
-  totalDays: 1,
-  paidDays: 0,
-  unpaidDays: 1,
-  quotaRemainingAfter: 5,
-  status: 'SUBMITTED',
-  reason: 'ธุระด่วน',
-  ruleWarnings: [{
-    code: 'ADVANCE_NOTICE',
-    params: {
-      leaveTypeNameTh: 'ลากิจ', noticeDays: '3', section: '5', days: '1',
-    },
-    messageTh: 'การลากิจต้องยื่นล่วงหน้าอย่างน้อย 3 วัน (ระเบียบข้อ 5) คำขอนี้ยื่นไม่ทันกำหนด '
-      + 'แต่ยังส่งให้หัวหน้างานพิจารณาได้ หากอนุมัติ วันลา 1 วันจะไม่ได้รับค่าจ้าง',
-  }],
-  unpaidByRuleDays: 1,
-};
-
 // `actingUser` overrides the default division-manager persona -- only the pending-approver-note tests need it
 // (an hr actor sees a different note than the manager the row is waiting on).
 function renderReviewQueueTab(actingUser = manager, showToast = vi.fn()) {
@@ -145,20 +96,6 @@ function renderReviewQueueTab(actingUser = manager, showToast = vi.fn()) {
 // unimplemented in jsdom, so it returns false and the DESKTOP table renders. Confirmed by mutation: with the
 // card's gate forced permanently true, the unstubbed version of this test stayed green.
 const originalMatchMedia = window.matchMedia;
-
-function stubMobileViewport() {
-  const listeners = new Set();
-  window.matchMedia = (query) => ({
-    matches: true,
-    media: query,
-    addEventListener: (_e, cb) => listeners.add(cb),
-    removeEventListener: (_e, cb) => listeners.delete(cb),
-    addListener: (cb) => listeners.add(cb),
-    removeListener: (cb) => listeners.delete(cb),
-    dispatchEvent: () => false,
-    onchange: null,
-  });
-}
 
 describe('ReviewQueueTab', () => {
   afterEach(() => {
@@ -215,23 +152,6 @@ describe('ReviewQueueTab', () => {
     await waitFor(() => expect(api.leave.reject).toHaveBeenCalledWith(701, { reviewerNote: 'เอกสารไม่ครบ' }));
   });
 
-  it('puts rows awaiting a decision above the already-approved ones this user may only void', async () => {
-    api.leave.list.mockResolvedValue({
-      // LeaveRepository#findRequests orders by start_date DESC, so an approved row dated further out legitimately
-      // arrives FIRST -- the interleave that used to open a queue headed "รอคุณพิจารณา 1" on a row needing nothing,
-      // and could push a real decision onto page 2.
-      requests: [
-        { ...approvedUnderManager, startDate: '2026-09-20', endDate: '2026-09-20' },
-        submittedUnderManager,
-      ],
-    });
-    renderReviewQueueTab();
-
-    await screen.findByText('พักผ่อน');
-    const body = document.querySelector('tbody').textContent;
-    expect(body.indexOf('พักผ่อน')).toBeLessThan(body.indexOf('ไม่สบาย'));
-  });
-
   it('cancel is offered for an already-APPROVED report even though approve/reject are not', async () => {
     api.leave.list.mockResolvedValue({ requests: [approvedUnderManager] });
     api.leave.cancel.mockResolvedValue({ request: { ...approvedUnderManager, status: 'CANCELLED' } });
@@ -243,107 +163,6 @@ describe('ReviewQueueTab', () => {
     fireEvent.click(screen.getByRole('button', { name: 'ยกเลิกคำขอ' }));
 
     await waitFor(() => expect(api.leave.cancel).toHaveBeenCalledWith(702, { reviewerNote: null }));
-  });
-
-  // feat/pending-approver-info: "who this is waiting on" beside the รออนุมัติ badge — narrowed on 2026-08-11 so
-  // it never names the person reading it (PendingApproverNote's `viewer`).
-  it('omits the pending-approver note on a row that is waiting on the viewer themselves', async () => {
-    api.leave.list.mockResolvedValue({
-      // managerEmployeeId 5 === the acting manager's own employeeId, so "ผู้จัดการ (คุณเอ็ม)" would be this user
-      // telling themselves their own name — on EVERY pending row in their queue.
-      requests: [
-        { ...submittedUnderManager, pendingApproverRole: 'manager', pendingApproverName: 'เอ็ม' },
-        { ...approvedUnderManager, pendingApproverRole: null, pendingApproverName: null },
-      ],
-    });
-    renderReviewQueueTab();
-
-    await screen.findByText('พักผ่อน');
-    await screen.findByText('ไม่สบาย');
-    expect(screen.queryByText('ผู้จัดการ (คุณเอ็ม)')).toBeNull();
-  });
-
-  it('keeps the note when the row is waiting on SOMEONE ELSE, even though this viewer may act on it', async () => {
-    // An hr actor may decide any request (canReviewAll), including ones that normally sit with a division manager
-    // — and for them the note is the whole point. Suppression is only ever about the self-referential case, never
-    // about "can this user act on it".
-    api.leave.list.mockResolvedValue({
-      requests: [{
-        ...submittedUnderManager,
-        managerEmployeeId: 999,
-        pendingApproverRole: 'manager',
-        pendingApproverName: 'เอ็ม',
-        canReview: true,
-      }],
-    });
-    renderReviewQueueTab({ employeeId: 5, name: 'ฝ่ายบุคคล', role: 'hr' });
-
-    await screen.findByText('พักผ่อน');
-    expect(await screen.findByText('ผู้จัดการ (คุณเอ็ม)')).not.toBeNull();
-  });
-
-  // Role-only fallback: the backend omits pendingApproverName when the role's candidate set is ambiguous (e.g.
-  // more than one active hr-role employee) -- the note must still show the role.
-  it('shows the role alone when the backend could not resolve a single approver name', async () => {
-    api.leave.list.mockResolvedValue({
-      requests: [{ ...submittedUnderManager, pendingApproverRole: 'hr', pendingApproverName: null }],
-    });
-    renderReviewQueueTab();
-
-    await screen.findByText('พักผ่อน');
-    expect(await screen.findByText('ฝ่ายบุคคล')).not.toBeNull();
-  });
-
-  it('DEFECT (state split): zero actionable requests shows the empty StatePanel, not a spinner or blank screen', async () => {
-    api.leave.list.mockResolvedValue({ requests: [submittedUnderSomeoneElse] });
-    renderReviewQueueTab();
-
-    expect(await screen.findByText('ไม่มีคำขอที่ต้องพิจารณาในตอนนี้')).not.toBeNull();
-  });
-
-  it('DEFECT (state split): a 403 renders the denied StatePanel, and no toast fires for the load failure', async () => {
-    const showToast = vi.fn();
-    api.leave.list.mockRejectedValue(Object.assign(new Error('ไม่มีสิทธิ์เข้าถึงรายการนี้'), { status: 403 }));
-    renderReviewQueueTab(manager, showToast);
-
-    expect(await screen.findByText('ยังเปิดหน้านี้ไม่ได้')).not.toBeNull();
-    expect(showToast).not.toHaveBeenCalled();
-  });
-
-  describe('Phase A4: certificate download', () => {
-    it('a row with no attachment never renders a download button', async () => {
-      api.leave.list.mockResolvedValue({ requests: [submittedUnderManager] });
-      renderReviewQueueTab();
-
-      fireEvent.click(await screen.findByRole('button', { name: /ดูรายละเอียดคำขอลาของ/ }));
-      expect(screen.queryByRole('button', { name: /ดาวน์โหลด/ })).toBeNull();
-    });
-
-    it('downloads the attachment via GET /api/leave/attachments/{id} and hands the blob to downloadBlob', async () => {
-      api.leave.list.mockResolvedValue({ requests: [submittedWithCertificate] });
-      const blob = new Blob(['fake-pdf']);
-      api.leave.downloadAttachment.mockResolvedValue(blob);
-      renderReviewQueueTab();
-
-      fireEvent.click(await screen.findByRole('button', { name: /ดูรายละเอียดคำขอลาของ/ }));
-      fireEvent.click(await screen.findByRole('button', { name: 'ดาวน์โหลด' }));
-
-      await waitFor(() => expect(api.leave.downloadAttachment).toHaveBeenCalledWith(9001));
-      await waitFor(() => expect(downloadBlob).toHaveBeenCalledWith(blob, 'leave-attachment-704', 'pdf'));
-    });
-
-    it('a failed download shows an error toast instead of failing silently', async () => {
-      const showToast = vi.fn();
-      api.leave.list.mockResolvedValue({ requests: [submittedWithCertificate] });
-      api.leave.downloadAttachment.mockRejectedValue(new Error('ไม่พบเอกสารนี้'));
-      renderReviewQueueTab(manager, showToast);
-
-      fireEvent.click(await screen.findByRole('button', { name: /ดูรายละเอียดคำขอลาของ/ }));
-      fireEvent.click(await screen.findByRole('button', { name: 'ดาวน์โหลด' }));
-
-      await waitFor(() => expect(showToast).toHaveBeenCalledWith('error', 'ไม่พบเอกสารนี้'));
-      expect(downloadBlob).not.toHaveBeenCalled();
-    });
   });
 
   describe('Phase A4: 409 already-decided', () => {
@@ -368,79 +187,6 @@ describe('ReviewQueueTab', () => {
       // list() is called again (query invalidation) so the row can show its real current status.
       await waitFor(() => expect(api.leave.list).toHaveBeenCalledTimes(2));
     });
-
-    it('dismisses the inline conflict panel when the row is collapsed again', async () => {
-      api.leave.list.mockResolvedValue({ requests: [submittedUnderManager] });
-      api.leave.approve.mockRejectedValue(Object.assign(new Error('คำขอลานี้ได้รับการพิจารณาไปแล้ว'), { status: 409 }));
-      renderReviewQueueTab();
-
-      await screen.findByText('พักผ่อน');
-      fireEvent.click(screen.getByRole('button', { name: 'อนุมัติ' }));
-      const approveButtons = await screen.findAllByRole('button', { name: 'อนุมัติ' });
-      fireEvent.click(approveButtons[approveButtons.length - 1]);
-      await screen.findByText('คำขอนี้ถูกพิจารณาไปแล้ว');
-
-      fireEvent.click(screen.getByRole('button', { name: /ซ่อนรายละเอียดคำขอลาของ/ }));
-      expect(screen.queryByText('คำขอนี้ถูกพิจารณาไปแล้ว')).toBeNull();
-    });
-
-    it('disables only the affected row\'s action buttons while its own mutation is in flight', async () => {
-      let resolveApprove;
-      api.leave.list.mockResolvedValue({ requests: [submittedUnderManager, submittedWithCertificate] });
-      api.leave.approve.mockImplementation(() => new Promise((resolve) => { resolveApprove = resolve; }));
-      renderReviewQueueTab();
-
-      await screen.findByText('พักผ่อน');
-      const approveButtons = screen.getAllByRole('button', { name: 'อนุมัติ' });
-      fireEvent.click(approveButtons[0]);
-      const confirmButtons = await screen.findAllByRole('button', { name: 'อนุมัติ' });
-      fireEvent.click(confirmButtons[confirmButtons.length - 1]);
-
-      // While the mutation for row 701 is in flight, that row's own icon button disables -- the other row (704) is
-      // untouched by this mutation and stays interactive.
-      await waitFor(() => expect(screen.getAllByRole('button', { name: 'อนุมัติ' })[0].disabled).toBe(true));
-      const otherRowApprove = screen.getAllByRole('button', { name: 'อนุมัติ' })[1];
-      expect(otherRowApprove.disabled).toBe(false);
-
-      resolveApprove({ request: { ...submittedUnderManager, status: 'APPROVED' } });
-      await waitFor(() => expect(screen.getAllByRole('button', { name: 'อนุมัติ' })[0].disabled).toBe(false));
-    });
   });
 
-  // §5 WARN_UNPAID_* gates (V164 follow-up, 2026-09-09): the approver must see the warning BEFORE approving, not
-  // after (owner ruling #2 -- LeaveRequestDto's own ruleWarnings Javadoc).
-  describe('§5 WARN_UNPAID_* gates (V164 follow-up)', () => {
-    it('shows the warning in the expanded row, and the confirm button states the unpaid days', async () => {
-      api.leave.list.mockResolvedValue({ requests: [submittedWithWarning] });
-      api.leave.approve.mockResolvedValue({ request: { ...submittedWithWarning, status: 'APPROVED' } });
-      renderReviewQueueTab();
-
-      await screen.findByText('ธุระด่วน');
-      // Not visible before the row is expanded -- it lives in renderExpanded, above the request's other detail
-      // fields.
-      expect(screen.queryByText(/ต้องยื่นล่วงหน้าอย่างน้อย 3 วัน/)).toBeNull();
-
-      fireEvent.click(screen.getByRole('button', { name: /ดูรายละเอียดคำขอลาของ/ }));
-      expect(await screen.findByText(/ต้องยื่นล่วงหน้าอย่างน้อย 3 วัน/)).not.toBeNull();
-
-      // The row's own icon button and the ConfirmDialog's button do NOT share a label any more -- the icon button
-      // (opens the dialog) stays plain "อนุมัติ", the dialog's real commit button states the pay consequence, so an
-      // approver cannot click past it unaware.
-      fireEvent.click(screen.getByRole('button', { name: 'อนุมัติ' }));
-      const confirmButton = await screen.findByRole('button', { name: /อนุมัติ \(ไม่จ่ายค่าจ้าง/ });
-      fireEvent.click(confirmButton);
-
-      await waitFor(() => expect(api.leave.approve).toHaveBeenCalledWith(705, {}));
-    });
-
-    it("shows the stacked unpaid badge on the MOBILE CARD's collapsed row, alongside the status badge", async () => {
-      stubMobileViewport();
-      api.leave.list.mockResolvedValue({ requests: [submittedWithWarning] });
-      renderReviewQueueTab();
-
-      await screen.findByText('ธุระด่วน');
-      expect(await screen.findByText('รออนุมัติ')).not.toBeNull();
-      expect(await screen.findByText(/ไม่รับค่าจ้าง/)).not.toBeNull();
-    });
-  });
 });

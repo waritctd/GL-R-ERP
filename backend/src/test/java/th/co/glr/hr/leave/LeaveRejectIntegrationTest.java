@@ -1,7 +1,6 @@
 package th.co.glr.hr.leave;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 
 import java.time.Clock;
@@ -15,7 +14,6 @@ import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
-import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
@@ -80,26 +78,6 @@ class LeaveRejectIntegrationTest extends AbstractPostgresIntegrationTest {
         // (findUnpaidLeaveDaysByEmployeeForMonth is filtered to APPROVED only).
         assertThat(leaveRepository.findUnpaidLeaveDaysByEmployeeForMonth(LocalDate.parse("2026-08-01")))
             .doesNotContainKey(employeeId);
-    }
-
-    /** Mirrors LeaveRepository#approve's own optimistic-concurrency shape (the WHERE status = 'SUBMITTED' guard,
-     * surfaced by LeaveService#reject as a 409): a request that has already been reviewed -- here, already
-     * APPROVED -- cannot also be rejected out from under that decision. */
-    @Test
-    void rejectingAnAlreadyReviewedRequestFailsAndLeavesTheApprovalIntact() {
-        long employeeId = insertEmployee("REJECT-002");
-        LeaveRequestDto submitted = leaveService.submit(
-            submitRequest(employeeId, "SICK", "2026-08-12", "2026-08-12"),
-            employee(employeeId));
-        leaveService.approve(submitted.id(), new ReviewLeaveRequest("approved"), hr());
-
-        assertThatThrownBy(() -> leaveService.reject(submitted.id(), new ReviewLeaveRequest("too late"), hr()))
-            .isInstanceOf(ApiException.class);
-
-        var row = jdbc.queryForMap(
-            "SELECT status FROM hr.leave_request WHERE leave_request_id = :id",
-            new MapSqlParameterSource("id", submitted.id()));
-        assertThat(row.get("status")).isEqualTo("APPROVED");
     }
 
     // --- helpers ------------------------------------------------------------

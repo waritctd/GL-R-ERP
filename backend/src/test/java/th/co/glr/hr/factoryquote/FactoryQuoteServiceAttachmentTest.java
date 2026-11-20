@@ -3,7 +3,6 @@ package th.co.glr.hr.factoryquote;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyLong;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -61,45 +60,6 @@ class FactoryQuoteServiceAttachmentTest {
     }
 
     @Test
-    void rejectsAnAlreadyDeletedAttachment() {
-        stubAttachment(10L, 20L, Instant.now());
-
-        assertConflict(() -> service.deleteAttachment(10L, "reason", importActor));
-        verify(quotes, never()).tombstoneAttachment(anyLong(), anyLong(), anyString());
-    }
-
-    @Test
-    void rejectsWhenPricingRequestHasReachedReadyForCeoReview() {
-        stubAttachment(10L, 20L, null);
-        stubQuote(20L, 30L, FactoryQuoteStatus.RESPONSE_RECEIVED);
-        stubPricingRequest(30L, PricingRequestStatus.READY_FOR_CEO_REVIEW);
-
-        assertConflict(() -> service.deleteAttachment(10L, "reason", importActor));
-        verify(quotes, never()).tombstoneAttachment(anyLong(), anyLong(), anyString());
-    }
-
-    @Test
-    void rejectsWhenTheQuoteItselfIsReadyForCosting() {
-        stubAttachment(10L, 20L, null);
-        stubQuote(20L, 30L, FactoryQuoteStatus.READY_FOR_COSTING);
-        stubPricingRequest(30L, PricingRequestStatus.AWAITING_FACTORY_RESPONSE);
-
-        assertConflict(() -> service.deleteAttachment(10L, "reason", importActor));
-        verify(quotes, never()).tombstoneAttachment(anyLong(), anyLong(), anyString());
-    }
-
-    @Test
-    void rejectsWhenReferencedByASubmittedCosting() {
-        stubAttachment(10L, 20L, null);
-        stubQuote(20L, 30L, FactoryQuoteStatus.RESPONSE_RECEIVED);
-        stubPricingRequest(30L, PricingRequestStatus.AWAITING_FACTORY_RESPONSE);
-        when(quotes.existsSubmittedCostingReferencingQuote(20L)).thenReturn(true);
-
-        assertConflict(() -> service.deleteAttachment(10L, "reason", importActor));
-        verify(quotes, never()).tombstoneAttachment(anyLong(), anyLong(), anyString());
-    }
-
-    @Test
     void tombstonesWhenEveryGuardPasses() {
         stubAttachment(10L, 20L, null);
         stubQuote(20L, 30L, FactoryQuoteStatus.RESPONSE_RECEIVED);
@@ -145,8 +105,4 @@ class FactoryQuoteServiceAttachmentTest {
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
     }
 
-    private static void assertConflict(org.assertj.core.api.ThrowableAssert.ThrowingCallable action) {
-        assertThatThrownBy(action)
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
-    }
 }

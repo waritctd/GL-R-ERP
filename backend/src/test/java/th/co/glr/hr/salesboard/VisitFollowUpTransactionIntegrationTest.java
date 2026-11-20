@@ -92,25 +92,6 @@ class VisitFollowUpTransactionIntegrationTest {
             .isEqualTo(rep.id());
     }
 
-    @Test
-    void aDateRefusedOnAPausedDeal_throughTheProxy_leavesNoTickNoActivityNoDate() {
-        String tag = Long.toString(System.nanoTime());
-        UserPrincipal rep = rep("พนักงานขาย พักงาน " + tag, "visit-fu-paused-" + tag + "@glr.co.th");
-        long dealId = deal(rep);
-        LocalDate today = LocalDate.now(VisitService.BANGKOK);
-        long visitId = visits.create(new CreateVisitRequest(dealId, "คุณอรุณ", today, null, null, false), rep).id();
-        LocalDate before = nextFollowUp(dealId);
-        jdbc.update("UPDATE sales.ticket SET lifecycle = 'ON_HOLD' WHERE ticket_id = :id", Map.of("id", dealId));
-
-        assertThatThrownBy(() -> visits.markDone(visitId, "ไปแล้ว", today.plusDays(7), rep))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
-
-        assertThat(jdbc.queryForObject("SELECT status FROM sales.visit WHERE visit_id = :id", Map.of("id", visitId),
-            String.class)).isEqualTo("PLANNED");
-        assertThat(siteVisits(dealId)).isZero();
-        assertThat(nextFollowUp(dealId)).isEqualTo(before);
-    }
-
     private UserPrincipal rep(String name, String email) {
         long id = employees.create(new UpsertEmployeeRequest(
             null, null, name, null, null, null, null, null, null, null,

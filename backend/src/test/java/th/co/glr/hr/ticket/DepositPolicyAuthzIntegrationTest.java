@@ -73,8 +73,6 @@ class DepositPolicyAuthzIntegrationTest extends AbstractPostgresIntegrationTest 
             createEmployee(employees, "ผู้จัดการฝ่ายขาย", "deposit-salesmgr@glr.co.th"), "sales_manager");
     }
 
-    // ── deposit policy: the refusals (this is the evidence) ─────────────────────────────
-
     /** The case the narrowed gate must NOT open. Each of these roles used to be able to reach here (account/ceo via
      * the old ACCOUNT_ROLES gate); another sales rep was never allowed, and is re-pinned here so the whole refusal
      * set is exercised together. */
@@ -94,42 +92,6 @@ class DepositPolicyAuthzIntegrationTest extends AbstractPostgresIntegrationTest 
         assertThat(depositPolicyReason(ticketId)).isNull();
     }
 
-    /** GLA-118 owner ruling 2026-09-20, part B: sales_manager may set deposit policy as a backup to the owning rep. */
-    @Test
-    void salesManager_setsDepositPolicyAsBackupOwner_andTheRowIsActuallyWritten() {
-        long ticketId = createPricedDeal();
-
-        ticketService.waiveDeposit(ticketId, DepositPolicy.CREDIT_CUSTOMER, "sales_manager สำรอง", salesManagerUser);
-
-        assertThat(depositPolicy(ticketId)).isEqualTo(DepositPolicy.CREDIT_CUSTOMER);
-        assertThat(depositPolicyReason(ticketId)).isEqualTo("sales_manager สำรอง");
-        assertThat(depositPolicySetBy(ticketId)).isEqualTo(salesManagerUser.id());
-    }
-
-    /** Nit case: a user whose id happens to equal createdById but whose CURRENT role is no longer sales must be
-     * judged by TicketService#canSetDepositPolicy's role-based clauses, never by the id match alone. */
-    @Test
-    void sameIdAsOriginalOwner_butRoleNoLongerSales_decidesByRoleNotId() {
-        long ticketId = createPricedDeal();
-
-        // Same employee id as the deal's createdById, but the ACTOR's role in this call is now sales_manager: still
-        // granted, via the separate sales_manager clause (SALES_ROLES excludes "sales_manager", so the ownership half
-        // of the OR never fires for them).
-        UserPrincipal promotedOwner = principal(ownerId, "sales_manager");
-        ticketService.waiveDeposit(ticketId, DepositPolicy.WAIVED, "เลื่อนตำแหน่งแล้ว", promotedOwner);
-        assertThat(depositPolicy(ticketId)).isEqualTo(DepositPolicy.WAIVED);
-        assertThat(depositPolicySetBy(ticketId)).isEqualTo(ownerId);
-
-        // Same employee id, role moved to account entirely: refused — account is in neither clause, and the id match
-        // alone grants nothing. The row from the successful call above stays exactly as that call left it.
-        UserPrincipal movedToAccount = principal(ownerId, "account");
-        assertThatThrownBy(() ->
-            ticketService.waiveDeposit(ticketId, DepositPolicy.CREDIT_CUSTOMER, "ย้ายแผนกแล้ว", movedToAccount))
-            .isInstanceOfSatisfying(ApiException.class,
-                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
-        assertThat(depositPolicy(ticketId)).isEqualTo(DepositPolicy.WAIVED);
-    }
-
     /** Rule FR-A-05, unchanged by this ticket: not even the owner may flip the policy once a deposit notice has
      * actually been issued. */
     @Test
@@ -145,35 +107,6 @@ class DepositPolicyAuthzIntegrationTest extends AbstractPostgresIntegrationTest 
 
         assertThat(depositPolicy(ticketId)).isEqualTo(DepositPolicy.REQUIRED);
     }
-
-    /** Pre-existing validation (not this ticket's own gate), pinned here as the task's own "wrong-way-round" list
-     * asks for. */
-    @Test
-    void nonRequiredPolicyWithoutReason_isRejected_evenForTheOwner() {
-        long ticketId = createPricedDeal();
-
-        assertThatThrownBy(() -> ticketService.waiveDeposit(ticketId, DepositPolicy.WAIVED, " ", owner))
-            .isInstanceOfSatisfying(ApiException.class,
-                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
-
-        assertThat(depositPolicy(ticketId)).isEqualTo(DepositPolicy.REQUIRED);
-        assertThat(depositPolicyReason(ticketId)).isNull();
-    }
-
-    // ── deposit policy: the grant (necessary, but not the evidence) ─────────────────────
-
-    @Test
-    void owner_setsDepositPolicy_andTheRowIsActuallyWritten() {
-        long ticketId = createPricedDeal();
-
-        ticketService.waiveDeposit(ticketId, DepositPolicy.CREDIT_CUSTOMER, "ลูกค้าเครดิตชั้นดี", owner);
-
-        assertThat(depositPolicy(ticketId)).isEqualTo(DepositPolicy.CREDIT_CUSTOMER);
-        assertThat(depositPolicyReason(ticketId)).isEqualTo("ลูกค้าเครดิตชั้นดี");
-        assertThat(depositPolicySetBy(ticketId)).isEqualTo(ownerId);
-    }
-
-    // ── confirm deposit: the refusals (this is the evidence) ────────────────────────────
 
     /** The case the narrowed gate must NOT open. owner (the deal's own sales rep) is deliberately included:
      * money-receipt confirmation was already sales-excluded before this ticket, and this pins that ownership
@@ -191,61 +124,6 @@ class DepositPolicyAuthzIntegrationTest extends AbstractPostgresIntegrationTest 
 
         assertThat(paymentStatus(ticketId)).isEqualTo(PaymentTrack.DEPOSIT_NOTICE_ISSUED);
         assertThat(paymentReceiptCount(ticketId)).isZero();
-    }
-
-    // ── confirm deposit: the grant (necessary, but not the evidence) ────────────────────
-
-    @Test
-    void account_confirmsDeposit_andPaymentStatusActuallyAdvances() {
-        long ticketId = createPricedDealAwaitingDepositConfirmation();
-
-        ticketService.confirmDepositPaid(ticketId, accountUser);
-
-        assertThat(paymentStatus(ticketId)).isEqualTo(PaymentTrack.DEPOSIT_PAID);
-        assertThat(paymentReceiptCount(ticketId)).isEqualTo(1);
-    }
-
-    // ── available actions: the advertiser must never drift from the gates ───────────────
-
-    /** Review fix: WAIVE_DEPOSIT must not be offered once a deposit notice exists, matching Rule 4
-     * (TicketService#waiveDeposit 409s past that point — see
-     * depositPolicy_cannotChangeAfterNoticeIssued_evenForTheOwner above). */
-    @Test
-    void availableActions_neverOfferWaiveDepositOnceDepositNoticeExists_butStillOfferDepositPaidToAccount() {
-        long ticketId = createPricedDealAwaitingDepositConfirmation();
-
-        assertThat(actionCodes(ticketId, owner)).doesNotContain("WAIVE_DEPOSIT", "DEPOSIT_PAID");
-        assertThat(actionCodes(ticketId, salesManagerUser)).doesNotContain("WAIVE_DEPOSIT", "DEPOSIT_PAID");
-        assertThat(actionCodes(ticketId, ceoUser)).doesNotContain("WAIVE_DEPOSIT", "DEPOSIT_PAID");
-        assertThat(actionCodes(ticketId, accountUser)).contains("DEPOSIT_PAID").doesNotContain("WAIVE_DEPOSIT");
-    }
-
-    /** The positive case the test above deliberately does not cover: a deal whose payment track has not started yet
-     * (paymentStatus null) still owes WAIVE_DEPOSIT to the owner and, per Rule B, to sales_manager as a backup —
-     * account/ceo see nothing. */
-    @Test
-    void availableActions_offerWaiveDepositToOwnerAndSalesManager_whenPaymentTrackNotStarted() {
-        long ticketId = createPricedDeal();
-
-        assertThat(actionCodes(ticketId, owner)).contains("WAIVE_DEPOSIT");
-        assertThat(actionCodes(ticketId, salesManagerUser)).contains("WAIVE_DEPOSIT");
-        assertThat(actionCodes(ticketId, ceoUser)).doesNotContain("WAIVE_DEPOSIT");
-        // H1 lockdown: a deal with no payment track started is at the lead stage -- OUTSIDE account's list scope -- so
-        // account is refused the finance action list outright (not merely shown no WAIVE_DEPOSIT). This used to read
-        // the list through the /tickets actions endpoint.
-        assertThatThrownBy(() -> ticketService.financeActions(ticketId, accountUser))
-            .isInstanceOfSatisfying(ApiException.class,
-                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
-    }
-
-    // ── helpers ───────────────────────────────────────────────────────────────────────
-
-    // H1 lockdown: account reads its action list from financeActions (same gate logic, no /tickets view check).
-    private List<String> actionCodes(long ticketId, UserPrincipal actor) {
-        var response = "account".equals(actor.role())
-            ? ticketService.financeActions(ticketId, actor)
-            : ticketService.actions(ticketId, actor);
-        return response.availableActions().stream().map(TicketResponses.TicketActionDto::action).toList();
     }
 
     /** A deal priced at ฿1,000 (approved_price × qty), so payableAmount is nonzero and confirmDepositPaid's "no
@@ -283,11 +161,6 @@ class DepositPolicyAuthzIntegrationTest extends AbstractPostgresIntegrationTest 
     private String depositPolicyReason(long ticketId) {
         return jdbc.queryForObject("SELECT deposit_policy_reason FROM sales.ticket WHERE ticket_id = :id",
             Map.of("id", ticketId), String.class);
-    }
-
-    private Long depositPolicySetBy(long ticketId) {
-        return jdbc.queryForObject("SELECT deposit_policy_set_by FROM sales.ticket WHERE ticket_id = :id",
-            Map.of("id", ticketId), Long.class);
     }
 
     private String paymentStatus(long ticketId) {

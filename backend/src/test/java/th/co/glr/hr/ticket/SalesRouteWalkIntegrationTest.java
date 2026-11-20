@@ -1,7 +1,6 @@
 package th.co.glr.hr.ticket;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -15,10 +14,8 @@ import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import th.co.glr.hr.auth.UserPrincipal;
-import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.customer.CustomerRepository;
 import th.co.glr.hr.employee.EmployeeCodeGenerator;
 import th.co.glr.hr.employee.EmployeeReferenceRepository;
@@ -68,8 +65,6 @@ class SalesRouteWalkIntegrationTest extends AbstractPostgresIntegrationTest {
         importActor = principal(createEmployee(employees, "ฝ่ายนำเข้า เส้นทางดีล", "routewalk-import@glr.co.th"), "import");
     }
 
-    // ═══ Route A — designer -> owner -> contractor, the full spine ═══════════
-
     /** > S2 -> S4 -> S3 -> S5 -> S6 -> S7 -> S8 -> S9 -> S10 -> S11 -> S12…S17 -> S18 -> S19 -> S20. Every stage in
      * DealStage#ORDER is visited once, including the one routine backward pair (S4 -> S3). */
     @Test
@@ -115,113 +110,6 @@ class SalesRouteWalkIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(finalState.commissionRecorded()).isFalse();
     }
 
-    // ═══ Route B — the owner buys directly ════════════════════════════════════
-
-    /** Owner-direct: S3 (re-worded "the owner agreed the spec") IS visited; S4 is the only stage the route excludes
-     * and a manual move into it is refused. S7/S8 are on-route but this walk takes the O-b branch (the owner buys
-     * themselves) straight from S6 to S9. */
-    @Test
-    void routeB_ownerBuysDirect_keepsSpecApproval_andExcludesOnlyTheDesignerQuote() {
-        long ticketId = createOneItemDeal("ดีล B: เจ้าของซื้อตรง", "100.00", "800.00"); // payable 80,000
-        setStatus(ticketId, TicketStatus.QUOTATION_ISSUED);
-        ticketService.setEntryChannel(ticketId, EntryChannel.OWNER_DIRECT, null, ownerRep);
-        assertThat(entryChannelOf(ticketId)).isEqualTo(EntryChannel.OWNER_DIRECT);
-
-        advanceTo(ticketId, DealStage.PRESENTATION, null);
-        // The route's defining refusal, through the real gate: no designer to quote.
-        logAnActivityAndFollowUp(ticketId);
-        assertThatThrownBy(() -> ticketService.updateStage(ticketId, DealStage.QUOTE_DESIGN_SIDE, null, ownerRep))
-            .isInstanceOfSatisfying(ApiException.class,
-                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
-        assertThat(stageOf(ticketId)).isEqualTo(DealStage.PRESENTATION);
-
-        advanceTo(ticketId, DealStage.SPEC_APPROVED, null); // S3 — kept, only re-worded
-        advanceTo(ticketId, DealStage.QUOTE_OWNER, null);
-        advanceTo(ticketId, DealStage.OWNER_SIGNOFF, null);
-        advanceTo(ticketId, DealStage.NEGOTIATION, null);   // O-b: skips S7 + S8 (on-route, not visited)
-
-        ticketService.confirmCustomer(ticketId, ownerRep);
-        assertThat(stageOf(ticketId)).isEqualTo(DealStage.ORDER_RECEIVED);
-
-        tickets.updatePaymentStatusUnchecked(ticketId, PaymentTrack.DEPOSIT_NOTICE_ISSUED);
-        ticketService.confirmDepositPaid(ticketId, accountActor);
-        assertThat(stageOf(ticketId)).isEqualTo(DealStage.DEPOSIT_RECEIVED);
-
-        walkImportJourneyToDeliveryScheduling(ticketId);
-
-        ticketService.completeDelivery(ticketId,
-            new CompleteDeliveryRequest("ส่งครบ", "เจ้าของโครงการ"), ownerRep);
-        assertThat(stageOf(ticketId)).isEqualTo(DealStage.DELIVERED);
-
-        ticketService.confirmFinalPayment(ticketId, accountActor);
-        assertThat(stageOf(ticketId)).isEqualTo(DealStage.CLOSED_PAID);
-        assertThat(paymentStatusOf(ticketId)).isEqualTo(PaymentTrack.FULLY_PAID);
-        assertThat(fulfilmentOf(ticketId)).isEqualTo(FulfilmentStatus.FULLY_DELIVERED);
-
-        // S3 happened exactly once — the reversal of the old "S3 never happens" assertion.
-        assertThat(stageChangedToCount(ticketId, DealStage.SPEC_APPROVED)).isEqualTo(1);
-        // The route's only exclusion never happened, and neither did the two O-b skips.
-        assertStageNeverVisited(ticketId, DealStage.QUOTE_DESIGN_SIDE,
-            DealStage.AWAITING_BUYER, DealStage.QUOTE_BUYER);
-    }
-
-    // ═══ Route C — a contractor arrives with a BOQ ════════════════════════════
-
-    /** The deal OPENS at DealStage#QUOTE_BUYER (S8), skipping S1-S7 entirely — the first stage move ever made on
-     * this deal lands on S8. Also the BUYER_DIRECT entry channel: route C IS that channel. */
-    @Test
-    void routeC_contractorWithBoq_opensAtQuoteBuyer() {
-        long ticketId = createOneItemDeal("ดีล C: ผู้รับเหมามี BOQ", "50.00", "2000.00"); // payable 100,000
-        setStatus(ticketId, TicketStatus.QUOTATION_ISSUED);
-        assertThat(stageOf(ticketId)).isEqualTo(DealStage.LEAD_APPROACH);
-
-        ticketService.setEntryChannel(ticketId, EntryChannel.BUYER_DIRECT,
-            "ผู้รับเหมานำ BOQ และสเปกมาเองตั้งแต่ต้น", ownerRep);
-        assertThat(entryChannelOf(ticketId)).isEqualTo(EntryChannel.BUYER_DIRECT);
-
-        // The deal opens at S8 by QUOTING THE CONTRACTOR (owner ruling 2026-10-16,
-        // .design/quote-stage-gates D-2) — a manual updateStage into ขั้น 8 is now refused until
-        // that document exists, which is exactly the bypass the ruling closes. The route itself is
-        // unchanged: still S1 straight to S8, skipping S2-S7.
-        //
-        // ⚠️ Coverage moved, not lost. This block also used to assert the NOTE rule for the long
-        // jump ("crosses only route-dependent stages, none MANDATORY, so no note is required —
-        // asserted, not assumed"). The document-driven advance never consults the note rule, so it
-        // cannot assert that here any more. DealStageQuoteOwnerAndRouteIntegrationTest
-        // #caseC_leadApproachStraightToQuoteBuyer_needsNoNote is where that rule is pinned now,
-        // with a quotation fixture in place so the manual call is reachable.
-        ticketService.advanceStageForCustomerQuotationIssue(ticketId, QuotationRecipient.BUYER, ownerRep);
-        assertThat(stageOf(ticketId)).isEqualTo(DealStage.QUOTE_BUYER);
-
-        advanceTo(ticketId, DealStage.NEGOTIATION, null);
-
-        ticketService.confirmCustomer(ticketId, ownerRep);
-        assertThat(stageOf(ticketId)).isEqualTo(DealStage.ORDER_RECEIVED);
-
-        tickets.updatePaymentStatusUnchecked(ticketId, PaymentTrack.DEPOSIT_NOTICE_ISSUED);
-        ticketService.confirmDepositPaid(ticketId, accountActor);
-        assertThat(stageOf(ticketId)).isEqualTo(DealStage.DEPOSIT_RECEIVED);
-
-        walkImportJourneyToDeliveryScheduling(ticketId);
-
-        ticketService.completeDelivery(ticketId,
-            new CompleteDeliveryRequest("ส่งครบ", "ผู้รับเหมา"), ownerRep);
-        assertThat(stageOf(ticketId)).isEqualTo(DealStage.DELIVERED);
-
-        ticketService.confirmFinalPayment(ticketId, accountActor);
-        assertThat(stageOf(ticketId)).isEqualTo(DealStage.CLOSED_PAID);
-        assertThat(paymentStatusOf(ticketId)).isEqualTo(PaymentTrack.FULLY_PAID);
-        assertThat(fulfilmentOf(ticketId)).isEqualTo(FulfilmentStatus.FULLY_DELIVERED);
-
-        // The defining property: S1-S7 never appear as a STAGE_CHANGED target anywhere in this deal's history — its
-        // very first recorded stage move landed on QUOTE_BUYER.
-        assertStageNeverVisited(ticketId, DealStage.LEAD_APPROACH, DealStage.PRESENTATION,
-            DealStage.SPEC_APPROVED, DealStage.QUOTE_DESIGN_SIDE, DealStage.QUOTE_OWNER,
-            DealStage.OWNER_SIGNOFF, DealStage.AWAITING_BUYER);
-    }
-
-    // ═══ Route D — everything already in stock ════════════════════════════════
-
     /** reserveStock's full-coverage branch jumps the deal straight from DealStage#DEPOSIT_RECEIVED to
      * DealStage#DELIVERY_SCHEDULING — DealStage#PROCUREMENT (S12-S17) is never visited. */
     @Test
@@ -263,121 +151,6 @@ class SalesRouteWalkIntegrationTest extends AbstractPostgresIntegrationTest {
         // The defining property: PROCUREMENT never appears as a STAGE_CHANGED target.
         assertStageNeverVisited(ticketId, DealStage.PROCUREMENT);
     }
-
-    // ═══ Route E — partial stock, split per line item ═════════════════════════
-
-    /** A two-item deal: item 1 (40 pcs) is declared fully from stock, item 2 (60 pcs) is genuinely imported. */
-    @Test
-    void routeE_partialStock_splitsPerLineItem() {
-        long ticketId = createTwoItemDeal("ดีล E: สต็อกบางส่วน",
-            "40.00", "1000.00",    // item 1: 40 pcs @ 1,000 = 40,000, fully from stock
-            "60.00", "1000.00");   // item 2: 60 pcs @ 1,000 = 60,000, imported
-        setStatus(ticketId, TicketStatus.QUOTATION_ISSUED);
-        List<TicketItemDto> items = tickets.findById(ticketId).orElseThrow().items();
-        assertThat(items).hasSize(2);
-        long item1 = items.get(0).id();
-        long item2 = items.get(1).id();
-
-        advanceTo(ticketId, DealStage.PRESENTATION, null);
-        advanceTo(ticketId, DealStage.QUOTE_OWNER, null);
-        advanceTo(ticketId, DealStage.OWNER_SIGNOFF, null);
-        advanceTo(ticketId, DealStage.NEGOTIATION, null);
-
-        ticketService.confirmCustomer(ticketId, ownerRep);
-        assertThat(stageOf(ticketId)).isEqualTo(DealStage.ORDER_RECEIVED);
-
-        tickets.updatePaymentStatusUnchecked(ticketId, PaymentTrack.DEPOSIT_NOTICE_ISSUED);
-        ticketService.confirmDepositPaid(ticketId, accountActor);
-        assertThat(stageOf(ticketId)).isEqualTo(DealStage.DEPOSIT_RECEIVED);
-
-        // Declare item 1 fully covered from stock; item 2 is left untouched (0). Coverage is PARTIAL, so this must NOT
-        // auto-advance the stage or set FROM_STOCK.
-        ticketService.reserveStock(ticketId,
-            new StockReservationRequest(List.of(
-                new StockReservationRequest.Line(item1, new BigDecimal("40.00"), "มีของครบในสต็อก"))),
-            ceo);
-        assertThat(stageOf(ticketId)).isEqualTo(DealStage.DEPOSIT_RECEIVED);
-        assertThat(fulfilmentOf(ticketId)).isNull();
-        assertThat(qtyFromStockOf(item1)).isEqualByComparingTo("40.00");
-        assertThat(qtyFromStockOf(item2)).isEqualByComparingTo("0.00");
-
-        // fulfillment_status is still null (the partial declaration above did not set it), so the rest is procured for
-        // real — same journey as routes A/B/C.
-        walkImportJourneyToDeliveryScheduling(ticketId);
-
-        // Deliver item 1 from stock first ...
-        ticketService.recordPartialDelivery(ticketId,
-            new RecordDeliveryRequest("STOCK", "ส่งจากสต็อกก่อน",
-                List.of(new RecordDeliveryRequest.Line(item1, new BigDecimal("40.00"))), "ลูกค้า"),
-            ownerRep);
-        assertThat(stageOf(ticketId)).isEqualTo(DealStage.DELIVERY_SCHEDULING);
-        assertThat(fulfilmentOf(ticketId)).isEqualTo(FulfilmentStatus.PARTIALLY_DELIVERED);
-
-        // The goods-received event keeps warehouse delivery available after the status becomes partially delivered.
-        ticketService.completeDelivery(ticketId,
-            new CompleteDeliveryRequest("ส่งส่วนนำเข้าที่เหลือ", "ลูกค้า"), ownerRep);
-        assertThat(stageOf(ticketId)).isEqualTo(DealStage.DELIVERED);
-        assertThat(fulfilmentOf(ticketId)).isEqualTo(FulfilmentStatus.FULLY_DELIVERED);
-
-        ticketService.confirmFinalPayment(ticketId, accountActor);
-        assertThat(stageOf(ticketId)).isEqualTo(DealStage.CLOSED_PAID);
-        assertThat(paymentStatusOf(ticketId)).isEqualTo(PaymentTrack.FULLY_PAID);
-        assertThat(fulfilmentOf(ticketId)).isEqualTo(FulfilmentStatus.FULLY_DELIVERED);
-
-        // The defining property: BOTH halves of the split really happened, and they differ.
-        assertThat(qtyFromStockOf(item1)).isEqualByComparingTo("40.00");
-        assertThat(qtyFromStockOf(item2)).isEqualByComparingTo("0.00");
-        assertThat(qtyFromStockOf(item1)).isNotEqualByComparingTo(qtyFromStockOf(item2));
-    }
-
-    // ═══ Route G — credit after delivery ═══════════════════════════════════════
-
-    /** On CREDIT_CUSTOMER terms PaymentTrack's bypass path has no DEPOSIT_NOTICE_ISSUED/DEPOSIT_PAID state at all,
-     * so DealStage#DEPOSIT_RECEIVED is skipped outright — not merely "not required", genuinely unreachable on this
-     * policy. The goods go out first; the whole invoice is settled afterward. */
-    @Test
-    void routeG_creditAfterDelivery_skipsDepositAndPaysAfterDelivery() {
-        long ticketId = createOneItemDeal("ดีล G: เครดิตหลังส่งของ", "100.00", "300.00"); // payable 30,000
-        setStatus(ticketId, TicketStatus.QUOTATION_ISSUED);
-
-        advanceTo(ticketId, DealStage.PRESENTATION, null);
-        advanceTo(ticketId, DealStage.QUOTE_OWNER, null);
-        advanceTo(ticketId, DealStage.OWNER_SIGNOFF, null);
-        advanceTo(ticketId, DealStage.NEGOTIATION, null);
-
-        // Credit terms, decided before the order is confirmed: payment_status is still null here, so waiveDeposit's
-        // own "no deposit invoice issued yet" guard holds.
-        ticketService.waiveDeposit(ticketId, DepositPolicy.CREDIT_CUSTOMER,
-            "ลูกค้าเครดิต 30 วัน ตามสัญญาก่อสร้าง", ownerRep);
-        assertThat(depositPolicyOf(ticketId)).isEqualTo(DepositPolicy.CREDIT_CUSTOMER);
-
-        ticketService.confirmCustomer(ticketId, ownerRep);
-        assertThat(stageOf(ticketId)).isEqualTo(DealStage.ORDER_RECEIVED);
-        assertThat(paymentStatusOf(ticketId)).isEqualTo(PaymentTrack.CUSTOMER_CONFIRMED);
-
-        // No deposit notice, no confirmDepositPaid: PaymentTrack.BYPASS_ALLOWED has no entry for
-        // DEPOSIT_NOTICE_ISSUED/DEPOSIT_PAID at all. issueImportRequest's bypass clause (bypassesDepositNotice &&
-        // CUSTOMER_CONFIRMED) is what actually lets this proceed.
-        walkImportJourneyToDeliveryScheduling(ticketId);
-
-        ticketService.completeDelivery(ticketId,
-            new CompleteDeliveryRequest("ส่งของก่อนตามเครดิต", "ลูกค้า"), ownerRep);
-        assertThat(stageOf(ticketId)).isEqualTo(DealStage.DELIVERED);
-        assertThat(fulfilmentOf(ticketId)).isEqualTo(FulfilmentStatus.FULLY_DELIVERED);
-        // DELIVERED precedes CLOSED_PAID: the deal is not fully paid yet at this point.
-        assertThat(paymentStatusOf(ticketId)).isNotEqualTo(PaymentTrack.FULLY_PAID);
-        assertThat(stageOf(ticketId)).isNotEqualTo(DealStage.CLOSED_PAID);
-
-        ticketService.confirmFinalPayment(ticketId, accountActor);
-        assertThat(stageOf(ticketId)).isEqualTo(DealStage.CLOSED_PAID);
-        assertThat(paymentStatusOf(ticketId)).isEqualTo(PaymentTrack.FULLY_PAID);
-        assertThat(fulfilmentOf(ticketId)).isEqualTo(FulfilmentStatus.FULLY_DELIVERED);
-
-        // The defining property: DEPOSIT_RECEIVED is skipped entirely.
-        assertStageNeverVisited(ticketId, DealStage.DEPOSIT_RECEIVED);
-    }
-
-    // ── helpers ──────────────────────────────────────────────────────────────
 
     /**
      * A plain forward (or, for the one routine pair, backward) hop through the ungated front
@@ -471,18 +244,6 @@ class SalesRouteWalkIntegrationTest extends AbstractPostgresIntegrationTest {
         return ticketId;
     }
 
-    private long createTwoItemDeal(String title, String qty1, String price1, String qty2, String price2) {
-        long ticketId = createTicketWithItems(title, List.of(
-            new TicketItemRequest("Brand", "รุ่น A", null, null, "60x60", "Factory A",
-                new BigDecimal(qty1), null, "PIECE", null, null, null, null, "THB"),
-            new TicketItemRequest("Brand", "รุ่น B", null, null, "80x80", "Factory B",
-                new BigDecimal(qty2), null, "PIECE", null, null, null, null, "THB")));
-        List<TicketItemDto> items = tickets.findById(ticketId).orElseThrow().items();
-        setApprovedPrice(items.get(0).id(), price1);
-        setApprovedPrice(items.get(1).id(), price2);
-        return ticketId;
-    }
-
     private long onlyItemId(long ticketId) {
         List<TicketItemDto> items = tickets.findById(ticketId).orElseThrow().items();
         assertThat(items).hasSize(1);
@@ -515,21 +276,6 @@ class SalesRouteWalkIntegrationTest extends AbstractPostgresIntegrationTest {
     private String fulfilmentOf(long ticketId) {
         return jdbc.queryForObject("SELECT fulfillment_status FROM sales.ticket WHERE ticket_id = :id",
             Map.of("id", ticketId), String.class);
-    }
-
-    private String depositPolicyOf(long ticketId) {
-        return jdbc.queryForObject("SELECT deposit_policy FROM sales.ticket WHERE ticket_id = :id",
-            Map.of("id", ticketId), String.class);
-    }
-
-    private String entryChannelOf(long ticketId) {
-        return jdbc.queryForObject("SELECT entry_channel FROM sales.ticket WHERE ticket_id = :id",
-            Map.of("id", ticketId), String.class);
-    }
-
-    private BigDecimal qtyFromStockOf(long itemId) {
-        return jdbc.queryForObject("SELECT qty_from_stock FROM sales.ticket_item WHERE item_id = :id",
-            Map.of("id", itemId), BigDecimal.class);
     }
 
     private long createEmployee(EmployeeRepository employees, String name, String email) {

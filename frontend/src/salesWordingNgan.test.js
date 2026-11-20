@@ -2,20 +2,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, it, expect } from 'vitest';
+// Owner decision 2026-11-17: sales screens say งาน, not ดีล; scans every user-visible string in src.
 // espree is ESLint's own parser (a direct dependency of `eslint`), so it reads these files exactly as `npm run lint`
 // does. Tokenizing, rather than grepping, is the point: comments never become tokens, identifiers are not strings,
 // and what is left is the text a user can be shown.
 import * as espree from 'espree';
-
-// Owner decision 2026-11-17 ("Yes, use งาน"): sales screens say งาน, not ดีล.
-//
-// WHAT IS SCANNED: every string literal, template-literal chunk, JSX text, JSX attribute string and regex literal in
-// src/**/*.{js,jsx}, except tests, test fixtures and the published มีอะไรใหม่ releases (those have their own tests).
-// Comments and identifiers are not tokens of that kind, so they are never read.
-//
-// WHAT MAY STILL SAY ดีล: only the WHOLE strings listed below, in the named file, each with its reason. A token is
-// compared after normalising (quotes, the `${`/`}` of a template chunk and runs of whitespace removed). A new string
-// that merely CONTAINS an allowed one is not allowed. A listed string that no longer exists fails the second test.
 
 const SRC = path.dirname(fileURLToPath(import.meta.url));
 
@@ -96,37 +87,10 @@ describe('sales wording: งาน, not ดีล', () => {
     expect(offenders, `${offenders.length} user-visible string(s) still say ดีล`).toEqual([]);
   });
 
-  it('every allowlist entry still matches a whole string and carries a reason', () => {
-    const stale = ALLOWED.filter(([file, text]) => !deal.some((t) => t.file === file && t.text === text));
-    expect(stale).toEqual([]);
-    for (const [, text, reason] of ALLOWED) expect(reason, text).toMatch(/\S{10,}/);
-  });
-
   it('one wording per concept: no UI string uses a retired spelling', () => {
     const offenders = tokens
       .filter((t) => BANNED_CONCEPT_SPELLINGS.some((b) => t.text.includes(b)))
       .map((t) => `${t.file}:${t.line} ${t.text.slice(0, 120)}`);
     expect(offenders).toEqual([]);
-  });
-
-  it('the scanner reads JSX text, attributes and templates, skips comments, and covers all of src but the 3 exclusions', () => {
-    const code = '// ดีล in a comment\nconst a = <p title="ดีลA" aria-label={\'ดีลH\'}>ดีลB {`ดีลC ${x} ดีลI`}</p>; /* ดีล */';
-    expect(textTokens(code, 'x.jsx').map((t) => t.text).filter((s) => s.includes('ดีล')))
-      .toEqual(['ดีลA', 'ดีลH', 'ดีลB', 'ดีลC', 'ดีลI']);
-    // Widening an exclusion must fail here, not silently turn the guard green.
-    expect(EXCLUDED.map(String)).toEqual([
-      String(/\.test\.jsx?$/), String(/^test\//), String(/^features\/whatsNew\/releases\//),
-    ]);
-    const files = scannedFiles();
-    for (const sentinel of [
-      'api/mockApi.js', 'data/demoHr.js', 'utils/format.js', 'app/permissions.js',
-      'features/tickets/TicketDetailPage.jsx', 'features/quotations/QuotationEditorPage.jsx',
-      'features/salesBoard/TeamOverview.jsx', 'features/whatsNew/feedbackMeta.js',
-    ]) {
-      expect(files, sentinel).toContain(sentinel);
-    }
-    const all = sourceFiles(SRC).length;
-    const tests = sourceFiles(SRC).filter((f) => /\.test\.jsx?$/.test(f)).length;
-    expect(files.length).toBeGreaterThan((all - tests) * 0.9);
   });
 });

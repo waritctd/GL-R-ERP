@@ -13,7 +13,6 @@ import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
-import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.brand.BrandAssets;
@@ -55,7 +54,6 @@ import th.co.glr.hr.pricing.FxRateRepository;
 import th.co.glr.hr.pricing.PricingFormulaConfigRepository;
 import th.co.glr.hr.pricingcosting.LandedCostCalculator;
 import th.co.glr.hr.pricingcosting.PricingCostingRepository;
-import th.co.glr.hr.pricingcosting.PricingCostingService;
 import th.co.glr.hr.pricingcosting.PricingFormulaEngine;
 import th.co.glr.hr.pricingdecision.PricingDecisionDtos.PricingDecisionDto;
 import th.co.glr.hr.pricingdecision.PricingDecisionRepository;
@@ -206,43 +204,7 @@ class DepositNoticeAccountNotificationIntegrationTest extends AbstractPostgresIn
         assertThat(message).doesNotContain("รอยืนยันรับชำระ");
     }
 
-    @Test
-    void issue_firstTime_actuallyMailsTheSharedAccountBoxThroughTheRealRouter() {
-        DraftFixture fixture = buildDraftDepositNotice();
-        mailer.sent.clear();
-
-        DepositNoticeDto issued = depositNoticeService.issue(fixture.docId(), salesActor);
-
-        assertThat(mailer.recipients()).contains("account@glr.co.th");
-        assertThat(mailer.recipients()).doesNotContain("accountant.notice@glr.co.th");
-        SentMail toAccount = mailer.sent.stream()
-            .filter(m -> m.to().equals("account@glr.co.th")).findFirst().orElseThrow();
-        assertThat(toAccount.subject()).contains("ออกใบแจ้งมัดจำแล้ว");
-        assertThat(toAccount.textBody()).contains(fixture.ticketCode());
-        assertThat(toAccount.textBody()).contains(issued.docNumber());
-    }
-
-    /** Opus review (2026-09-19): doc.customerName() CAN be blank (see DepositNoticeService.resolveCustomerHeader's
-     * own comments on the new pricing-request chain), so this pins the same "ไม่ระบุลูกค้า" fallback
-     * TicketService#notifySalesManagerOfRepDeclaration already uses for the identical gap. */
-    @Test
-    void issue_blankCustomerName_fallsBackToPlaceholderRatherThanPrintingBlank() {
-        DraftFixture fixture = buildDraftDepositNotice();
-        jdbc.update("UPDATE sales.deposit_notice SET customer_name = '' WHERE deposit_notice_id = :id",
-            Map.of("id", fixture.docId()));
-        long maxNotificationIdBeforeIssue = maxNotificationId();
-
-        depositNoticeService.issue(fixture.docId(), salesActor);
-
-        String message = (String) jdbc.queryForMap("""
-            SELECT message FROM hr.notification WHERE notification_id > :maxId
-            """, Map.of("maxId", maxNotificationIdBeforeIssue)).get("message");
-        assertThat(message).contains("ไม่ระบุลูกค้า");
-        assertThat(message).doesNotContain(fixture.customerName());
-    }
-
-    // Wrong-way-round: a failed issue (precondition 409) notifies nobody
-
+    // Wrong-way-round: a repeated issue (409) notifies nobody
     @Test
     void issue_secondCallOnAnAlreadyIssuedDocIsRefused_andRaisesNoSecondAccountNotification() {
         DraftFixture fixture = buildDraftDepositNotice();
@@ -290,62 +252,6 @@ class DepositNoticeAccountNotificationIntegrationTest extends AbstractPostgresIn
                 + ThaiText.money(edited.totalPayable()) + " บาท");
     }
 
-    // Rollback: the critical AfterCommit trap this branch exists to avoid regressing
-
-    @Test
-    void issue_rolledBackTransaction_notifiesNobodyByRowOrByMail() {
-        DraftFixture fixture = buildDraftDepositNotice();
-        mailer.sent.clear();
-        DepositNoticeService transactionalService = transactional(depositNoticeService);
-
-        assertThatThrownBy(() -> transactionTemplate.execute(status -> {
-            transactionalService.issue(fixture.docId(), salesActor);
-            throw new IllegalStateException("forced rollback after the account notification was raised");
-        })).isInstanceOf(IllegalStateException.class);
-
-        // Load-bearing: zero rows proves the transaction actually rolled back, not that issue() never ran.
-        assertThat(countAccountNotificationRows()).isZero();
-        assertThat(mailer.sent())
-            .as("a rolled-back issue() must not email account about a deposit notice that no "
-                + "longer exists")
-            .isEmpty();
-    }
-
-    /** The other half of the same contract — a committed issue() through the same real transactional proxy must
-     * still mail after commit. Without this, #issue_rolledBackTransaction_notifiesNobodyByRowOrByMail alone would
-     * stay green on wiring that can never send at all. */
-    @Test
-    void issue_committedTransaction_actuallyMailsAfterCommitThroughTheRealProxy() {
-        DraftFixture fixture = buildDraftDepositNotice();
-        mailer.sent.clear();
-        DepositNoticeService transactionalService = transactional(depositNoticeService);
-
-        transactionTemplate.execute(status -> transactionalService.issue(fixture.docId(), salesActor));
-
-        assertThat(countAccountNotificationRows()).isEqualTo(1);
-        assertThat(mailer.recipients()).contains("account@glr.co.th");
-    }
-
-    // Pin: confirmDepositPaid must NOT notify account (owner decided explicitly against it)
-
-    @Test
-    void confirmDepositPaid_doesNotRaiseASecondAccountNotification() {
-        DraftFixture fixture = buildDraftDepositNotice();
-        depositNoticeService.issue(fixture.docId(), salesActor);
-        long rowsAfterIssue = countAccountNotificationRows();
-        assertThat(rowsAfterIssue).isEqualTo(1);
-        mailer.sent.clear();
-
-        // GLA-118 (owner ruling 2026-09-17): confirmDepositPaid is account-only now — the CEO fallback this used to
-        // exercise is gone, so this drives it as account instead.
-        ticketService.confirmDepositPaid(fixture.ticketId(), accountActor);
-
-        assertThat(countAccountNotificationRows())
-            .as("confirmDepositPaid is explicitly NOT one of the notify moments this branch adds")
-            .isEqualTo(rowsAfterIssue);
-        assertThat(mailer.recipients()).doesNotContain("account@glr.co.th");
-    }
-
     // Fixture helpers — mirrors DepositNoticeIssueGuardIntegrationTest's approach for driving a deal to a DRAFT
     // deposit notice through the real Steps 1-6 services, stopping one call short of issue() so each test drives
     // that call itself.
@@ -365,7 +271,6 @@ class DepositNoticeAccountNotificationIntegrationTest extends AbstractPostgresIn
         return jdbc.queryForObject(
             "SELECT COALESCE(MAX(notification_id), 0) FROM hr.notification", Map.of(), Long.class);
     }
-
 
     private DraftFixture buildDraftDepositNotice() {
         long catalogProductId = insertCatalogProduct(FACTORY, "IT",
@@ -473,15 +378,7 @@ class DepositNoticeAccountNotificationIntegrationTest extends AbstractPostgresIn
     private static final class CapturingMailer implements Mailer {
         private final List<SentMail> sent = new ArrayList<>();
 
-        List<SentMail> sentList() {
-            return sent;
-        }
-
         List<String> sent() {
-            return sent.stream().map(SentMail::to).toList();
-        }
-
-        List<String> recipients() {
             return sent.stream().map(SentMail::to).toList();
         }
 

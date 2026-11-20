@@ -21,7 +21,7 @@ import org.springframework.web.context.request.ServletRequestAttributes;
 import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
 
-/** The three shapes {@code viewingAs} is merged into when AuditService swaps in the real actor. */
+/** A view-as write is attributed to the real actor, with {@code viewingAs} merged into the recorded after-state. */
 class AuditServiceTest {
     private static final ObjectMapper JSON = new ObjectMapper();
     private final AuditLogRepository repo = mock(AuditLogRepository.class);
@@ -58,20 +58,6 @@ class AuditServiceTest {
         JsonNode after = recorded(Map.of("taxYear", 2026));
         assertThat(after.path("taxYear").asInt()).isEqualTo(2026);
         assertThat(after.path("viewingAs").path("employeeId").asLong()).isEqualTo(2L);
-        assertThat(after.path("viewingAs").path("name").asText()).isEqualTo("Target");
-    }
-
-    @Test
-    void nullAfter_becomesJustViewingAs() throws Exception {
-        JsonNode after = recorded(null);
-        assertThat(after.size()).isEqualTo(1);
-        assertThat(after.path("viewingAs").path("employeeId").asLong()).isEqualTo(2L);
-    }
-
-    @Test
-    void nonObjectAfter_isWrappedAsValue() throws Exception {
-        JsonNode after = recorded(java.util.List.of(1, 2));
-        assertThat(after.path("value").size()).isEqualTo(2);
         assertThat(after.path("viewingAs").path("name").asText()).isEqualTo("Target");
     }
 

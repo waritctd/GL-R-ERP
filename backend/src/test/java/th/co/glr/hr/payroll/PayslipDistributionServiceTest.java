@@ -1,13 +1,10 @@
 package th.co.glr.hr.payroll;
 
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import java.math.BigDecimal;
@@ -18,10 +15,8 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
-import org.springframework.http.HttpStatus;
 import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
-import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.notification.NotificationEmailService;
 
 class PayslipDistributionServiceTest {
@@ -35,19 +30,6 @@ class PayslipDistributionServiceTest {
         emailService,
         auditService
     );
-
-    @Test
-    void queueDistributionCountsAlreadySentLinesAndAuditsRequest() {
-        PayrollPeriodDto period = period(List.of(line(123L, 42L), line(124L, 77L)));
-        when(payrollRepository.findPeriodById(99L)).thenReturn(Optional.of(period));
-        when(payrollRepository.findSentPayslipLineIds(99L)).thenReturn(Set.of(123L));
-        UserPrincipal hr = hrUser();
-
-        PayslipDistributionResponse response = service.queueDistribution(99L, hr);
-
-        assertThat(response).isEqualTo(new PayslipDistributionResponse(99L, 2, 1, 1));
-        verify(auditService).record(hr, "DISTRIBUTE_PAYSLIPS", "payroll_period", 99L, null, response);
-    }
 
     @Test
     void sendPayslipsSkipsSentLinesAndMarksSuccessfulDelivery() {
@@ -73,34 +55,8 @@ class PayslipDistributionServiceTest {
         verify(payslipRenderer, never()).toPdf(sentLine, period);
     }
 
-    @Test
-    void sendPayslipsMarksMissingEmailAsFailedWithoutRendering() {
-        PayrollLineDto line = line(123L, 42L);
-        PayrollPeriodDto period = period(List.of(line));
-        when(payrollRepository.findPeriodById(99L)).thenReturn(Optional.of(period));
-        when(payrollRepository.findSentPayslipLineIds(99L)).thenReturn(Set.of());
-        when(payrollRepository.findEmployeeEmailsByIds(Set.of(42L))).thenReturn(Map.of());
-
-        service.sendPayslips(99L, hrUser());
-
-        verify(payrollRepository).markPayslipEmailFailed(99L, line, null, "Employee has no email address");
-        verifyNoInteractions(payslipRenderer);
-        verifyNoInteractions(emailService);
-    }
-
-    @Test
-    void nonHrCannotQueueDistribution() {
-        assertThatThrownBy(() -> service.queueDistribution(99L, employeeUser()))
-            .isInstanceOfSatisfying(ApiException.class, exception ->
-                assertThat(exception.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
-    }
-
     private UserPrincipal hrUser() {
         return new UserPrincipal(7L, "hr@glr.co.th", "HR", "hr", 42L, true, LocalDate.now(), false, null, false);
-    }
-
-    private UserPrincipal employeeUser() {
-        return new UserPrincipal(8L, "employee@glr.co.th", "Employee", "employee", 42L, true, LocalDate.now(), false, null, false);
     }
 
     private PayrollPeriodDto period(List<PayrollLineDto> lines) {

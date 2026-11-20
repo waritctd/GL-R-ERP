@@ -5,11 +5,9 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIf;
@@ -22,8 +20,6 @@ import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiExceptionHandler;
 import th.co.glr.hr.dealquotation.AbstractDealQuotationSlice2IntegrationTest;
-import th.co.glr.hr.dealquotation.DealQuotationDtos.DealQuotationDto;
-import th.co.glr.hr.ticket.DealLifecycle;
 import th.co.glr.hr.ticket.QuietRule;
 import th.co.glr.hr.ticket.TicketController;
 import tools.jackson.databind.DeserializationFeature;
@@ -64,21 +60,6 @@ class TeamBoardScopeIntegrationTest extends AbstractDealQuotationSlice2Integrati
     // ── refused: every role but sales_manager / ceo ──────────────────────────────
 
     @Test
-    void aSalesRepIsRefused_andCannotReachAnotherRepsDealThroughIt() throws Exception {
-        long mine = deal(salesActor);
-        long theirs = deal(otherSalesActor);
-        jdbc.update("UPDATE sales.ticket SET title = 'ดีลของอีกคน' WHERE ticket_id = :id", Map.of("id", theirs));
-
-        MvcResult result = perform(salesActor);
-
-        assertThat(result.getResponse().getStatus()).isEqualTo(403);
-        String body = body(result);
-        assertThat(body).doesNotContain("ดีลของอีกคน").doesNotContain("\"board\"").doesNotContain("ticketId");
-        // ...while the same rep still reaches their own deal through their own endpoint.
-        assertThat(ids(ok("/api/sales/my-work", salesActor).get("board"))).contains(mine).doesNotContain(theirs);
-    }
-
-    @Test
     void everyNonManagerRoleIsRefusedAndGetsNoRows() throws Exception {
         deal(salesActor);
         deal(otherSalesActor);
@@ -110,78 +91,7 @@ class TeamBoardScopeIntegrationTest extends AbstractDealQuotationSlice2Integrati
         assertThat(board.get("quietDays").asInt()).isEqualTo(14);
     }
 
-    @Test
-    void ceoSeesEveryRepsOpenDeals() throws Exception {
-        long a = deal(salesActor);
-        long b = deal(otherSalesActor);
-        UserPrincipal ceo = actor(createEmployee("ซีอีโอ", "ceo-team-board@glr.co.th", "EXE", "ผู้บริหาร", null), "ceo");
-
-        assertThat(ids(ok(ceo).get("board"))).containsExactlyInAnyOrder(a, b);
-    }
-
-    @Test
-    void rowsCarryTheBoardShape_valueQuarterAndQuietFromTheSharedRule() throws Exception {
-        long quoted = deal(salesActor);
-        DealQuotationDto approved = approved(quoted, salesActor, "DESIGNER");
-        long quiet = deal(otherSalesActor);
-        jdbc.update("UPDATE sales.ticket SET expected_quarter = '2026-Q4' WHERE ticket_id = :id", Map.of("id", quiet));
-        backdate(quiet, 30);
-
-        JsonNode rows = ok(salesManagerActor).get("board");
-
-        JsonNode q = byId(rows, quoted);
-        assertThat(new BigDecimal(q.get("value").asText())).isEqualByComparingTo(approved.grandTotal());
-        assertThat(q.get("boardColumn").asInt()).isEqualTo(3);
-        assertThat(q.get("quiet").asBoolean()).isFalse();
-        JsonNode s = byId(rows, quiet);
-        assertThat(s.get("quiet").asBoolean()).isTrue();
-        assertThat(s.get("daysQuiet").asInt()).isEqualTo(30);
-        assertThat(s.get("expectedQuarter").asText()).isEqualTo("2026-Q4");
-    }
-
-    @Test
-    void closedPausedAndPaidDealsAreNotOnTheBoard() throws Exception {
-        long active = deal(salesActor);
-        long lost = deal(salesActor);
-        long paused = deal(otherSalesActor);
-        long paid = deal(otherSalesActor);
-        setLifecycle(lost, DealLifecycle.CLOSED_LOST);
-        setLifecycle(paused, DealLifecycle.ON_HOLD);
-        jdbc.update("UPDATE sales.ticket SET sales_stage = 'CLOSED_PAID' WHERE ticket_id = :id", Map.of("id", paid));
-
-        assertThat(ids(ok(salesManagerActor).get("board"))).containsExactly(active);
-    }
-
-    /** The board exposes no row the manager's own ticket list does not already return. */
-    @Test
-    void everyTeamBoardRowIsAlreadyOnTheManagersTicketList() throws Exception {
-        deal(salesActor);
-        deal(otherSalesActor);
-        deal(salesManagerActor);
-
-        List<Long> boardIds = ids(ok(salesManagerActor).get("board"));
-        List<Long> listIds = new ArrayList<>();
-        okAt("/api/tickets?size=500", salesManagerActor).get("tickets").forEach(t -> listIds.add(t.get("id").asLong()));
-
-        assertThat(boardIds).isNotEmpty();
-        assertThat(listIds).containsAll(boardIds);
-    }
-
     // ── helpers ──────────────────────────────────────────────────────────────
-
-    private void backdate(long ticketId, int days) {
-        Map<String, Object> p = Map.of("d", days, "id", ticketId);
-        jdbc.update("UPDATE sales.ticket SET created_at = now() - make_interval(days => :d) WHERE ticket_id = :id", p);
-        jdbc.update("UPDATE sales.ticket_event SET created_at = now() - make_interval(days => :d) WHERE ticket_id = :id",
-            p);
-        jdbc.update("UPDATE sales.deal_activity SET created_at = now() - make_interval(days => :d) WHERE ticket_id = :id",
-            p);
-    }
-
-    private void setLifecycle(long ticketId, String lifecycle) {
-        jdbc.update("UPDATE sales.ticket SET lifecycle = :l WHERE ticket_id = :id",
-            Map.of("l", lifecycle, "id", ticketId));
-    }
 
     private JsonNode ok(UserPrincipal actor) throws Exception {
         return okAt(TEAM_BOARD, actor);

@@ -1,7 +1,15 @@
 package th.co.glr.hr.dealquotation;
 
+import java.awt.BasicStroke;
+import java.awt.Color;
+import java.awt.Graphics2D;
+import java.awt.RenderingHints;
+import java.awt.image.BufferedImage;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.util.List;
 import java.util.Map;
+import javax.imageio.ImageIO;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.dealquotation.DealQuotationDtos.DealQuotationDto;
@@ -33,6 +41,30 @@ import th.co.glr.hr.dealquotation.DealQuotationRequests.UpsertDealQuotationReque
  */
 final class LegacyDirectQuotationFixtures {
     private LegacyDirectQuotationFixtures() {}
+
+    /** A synthetic sine-squiggle signature PNG for tests that upload an employee signature. */
+    static byte[] signaturePng() {
+        BufferedImage img = new BufferedImage(300, 120, BufferedImage.TYPE_INT_ARGB);
+        Graphics2D g = img.createGraphics();
+        g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+        g.setColor(new Color(20, 30, 120));
+        g.setStroke(new BasicStroke(5f));
+        int prevX = 20, prevY = 80;
+        for (int x = 30; x <= 280; x += 10) {
+            int y = 60 + (int) (35 * Math.sin(x / 18.0)) - (x / 12);
+            g.drawLine(prevX, prevY, x, y);
+            prevX = x;
+            prevY = y;
+        }
+        g.dispose();
+        try {
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            ImageIO.write(img, "png", out);
+            return out.toByteArray();
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+    }
 
     static DealQuotationDto createAlongsideLive(NamedParameterJdbcTemplate jdbc, DealQuotationService service,
                                                 long ticketId, UpsertDealQuotationRequest request,

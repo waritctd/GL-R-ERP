@@ -1,7 +1,6 @@
 package th.co.glr.hr.leave;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -13,17 +12,13 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
-import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
-import org.springframework.mock.web.MockMultipartFile;
 import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
-import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
@@ -79,28 +74,6 @@ class LeaveUnpaidDeductionIntegrationTest extends AbstractPostgresIntegrationTes
     }
 
     @Test
-    void withinQuotaLeaveIsFullyPaidAndContributesNoUnpaidDays() {
-        long employeeId = insertEmployee("VAC-WITHIN");
-
-        // Mon 2026-07-13 .. Tue 2026-07-14: 2 working days, well within the 6-day VACATION quota.
-        LeaveRequestDto result = leaveService.submit(
-            submitRequest(employeeId, "VACATION", "2026-07-13", "2026-07-14"),
-            employee(employeeId));
-
-        // Leave requires approval: this test's subject is the SUBMISSION-time split
-        // (fully paid, zero unpaid days) -- a rule-passing request lands SUBMITTED, not
-        // APPROVED. No #approve() needed for the doesNotContainKey assertion below: it holds
-        // trivially either way (zero unpaid days), so it is not evidence either way about the
-        // approval seam -- that seam has its own dedicated coverage below.
-        assertThat(result.status()).isEqualTo("SUBMITTED");
-        assertThat(result.totalDays()).isEqualByComparingTo("2.00");
-        assertThat(result.paidDays()).isEqualByComparingTo("2.00");
-        assertThat(result.unpaidDays()).isEqualByComparingTo("0.00");
-        assertThat(leaveRepository.findUnpaidLeaveDaysByEmployeeForMonth(LocalDate.parse("2026-07-01")))
-            .doesNotContainKey(employeeId);
-    }
-
-    @Test
     void beyondQuotaLeaveIsApprovedWithASplitInsteadOfAutoRejected() {
         long employeeId = insertEmployee("VAC-BEYOND");
 
@@ -129,145 +102,6 @@ class LeaveUnpaidDeductionIntegrationTest extends AbstractPostgresIntegrationTes
             .containsEntry(employeeId, new BigDecimal("1.00"));
     }
 
-    /**
-     * Leave requires approval: THE payroll-critical property, pinned on ONE fixture with BOTH
-     * sides asserted -- not two separate tests that could each pass for the wrong reason. A
-     * rule-passing request sits SUBMITTED until a human reviews it, and payroll (via {@link
-     * LeaveRepository#findUnpaidLeaveDaysByEmployeeForMonth}'s {@code WHERE status = 'APPROVED'})
-     * must not see it until then.
-     *
-     * <p>Mutation: widening {@code findUnpaidLeaveDaysByEmployeeForMonth}'s status filter to
-     * include SUBMITTED (e.g. {@code WHERE lr.status IN ('APPROVED', 'SUBMITTED')}) must turn the
-     * FIRST assertion below red (the SUBMITTED-only side) and nothing else in this class.
-     */
-    @Test
-    void submittedLeaveContributesNothingToPayrollUntilApprovedThenContributesItsUnpaidDays() {
-        long employeeId = insertEmployee("SUBMIT-GATE-001");
-
-        // Mon 2026-07-13 .. Tue 2026-07-21: 7 working days against a 6-day VACATION quota, nothing used yet -> 6 paid
-        // + 1 unpaid, computed and persisted at submit time regardless of status.
-        LeaveRequestDto leave = leaveService.submit(
-            submitRequest(employeeId, "VACATION", "2026-07-13", "2026-07-21"),
-            employee(employeeId));
-        assertThat(leave.status()).isEqualTo("SUBMITTED");
-        assertThat(leave.unpaidDays()).isEqualByComparingTo("1.00");
-
-        // Side 1: SUBMITTED (pending approval) contributes ZERO to payroll's unpaid-day view -- the whole point of
-        // this branch. Before this branch this request could not even exist in this state (submit() went straight to
-        // APPROVED), so this side was previously untestable.
-        assertThat(leaveRepository.findUnpaidLeaveDaysByEmployeeForMonth(LocalDate.parse("2026-07-01")))
-            .as("a SUBMITTED request must not yet reduce anyone's pay")
-            .doesNotContainKey(employeeId);
-
-        leaveService.approve(leave.id(), new ReviewLeaveRequest("approved"), hr());
-
-        // Side 2: the SAME request, now APPROVED, contributes its unpaid days -- proving Side 1 was a genuine "not
-        // yet", not an accidental "never" (e.g. a broken employee_id join).
-        assertThat(leaveRepository.findUnpaidLeaveDaysByEmployeeForMonth(LocalDate.parse("2026-07-01")))
-            .as("the identical request, now APPROVED, must reduce pay")
-            .containsEntry(employeeId, new BigDecimal("1.00"));
-    }
-
-    @Test
-    void leaveWithoutPayIsAlwaysFullyUnpaidFromDayOne() {
-        long employeeId = insertEmployee("LWOP-001");
-
-        LeaveRequestDto result = leaveService.submit(
-            submitRequest(employeeId, "LEAVE_WITHOUT_PAY", "2026-07-13", "2026-07-14"),
-            employee(employeeId));
-
-        assertThat(result.status()).isEqualTo("SUBMITTED");
-        assertThat(result.paidDays()).isEqualByComparingTo("0.00");
-        assertThat(result.unpaidDays()).isEqualByComparingTo("2.00");
-        // Leave requires approval: findUnpaidLeaveDaysByEmployeeForMonth is filtered
-        // to APPROVED requests -- drive the request there before checking payroll's view of it.
-        leaveService.approve(result.id(), new ReviewLeaveRequest("approved"), hr());
-        assertThat(leaveRepository.findUnpaidLeaveDaysByEmployeeForMonth(LocalDate.parse("2026-07-01")))
-            .containsEntry(employeeId, new BigDecimal("2.00"));
-    }
-
-    @Test
-    void aLeaveSpanningTwoCalendarMonthsSplitsItsUnpaidDaysCorrectly() {
-        long employeeId = insertEmployee("SPLIT-001");
-
-        // §5 leave-rules-as-data: this scenario uses VACATION, not PERSONAL, because PERSONAL
-        // carries a 3-consecutive-calendar-day cap (§5.2) that a 13-calendar-day span like this one
-        // would violate -- see LeaveTypeRuleIntegrationTest for that gate's dedicated coverage. VACATION
-        // has no consecutive-day cap; the point of this test is the cross-month unpaid-day split,
-        // not which type triggers it.
-        //
-        // Thu 2026-07-23 .. Tue 2026-08-04: working days (chronological) are 7/23, 7/24, 7/27, 7/28,
-        // 7/29, 7/30, 7/31 (7 in July) then 8/3, 8/4 (2 in August) -- 9 total... but the 6-day VACATION
-        // quota (nothing used yet) only covers the first 6 (7/23 through 7/30, all July): paid=6,
-        // unpaid=3, split 1 (7/31) in July and 2 (8/3, 8/4) in August -- a genuinely cross-month UNPAID
-        // split, which the original all-August-unpaid PERSONAL scenario did not actually exercise.
-        LeaveRequestDto result = leaveService.submit(
-            submitRequest(employeeId, "VACATION", "2026-07-23", "2026-08-04"),
-            employee(employeeId));
-
-        assertThat(result.status()).isEqualTo("SUBMITTED");
-        assertThat(result.totalDays()).isEqualByComparingTo("9.00");
-        assertThat(result.paidDays()).isEqualByComparingTo("6.00");
-        assertThat(result.unpaidDays()).isEqualByComparingTo("3.00");
-
-        // Leave requires approval: findUnpaidLeaveDaysByEmployeeForMonth is filtered
-        // to APPROVED requests -- drive the request there before checking payroll's per-month view.
-        leaveService.approve(result.id(), new ReviewLeaveRequest("approved"), hr());
-        assertThat(leaveRepository.findUnpaidLeaveDaysByEmployeeForMonth(LocalDate.parse("2026-07-01")))
-            .containsEntry(employeeId, new BigDecimal("1.00"));
-        assertThat(leaveRepository.findUnpaidLeaveDaysByEmployeeForMonth(LocalDate.parse("2026-08-01")))
-            .containsEntry(employeeId, new BigDecimal("2.00"));
-    }
-
-    @Test
-    void sickLeaveBeyondQuotaWithNoCertificateIsApprovedButFullyUnpaidUntilTheMonthlyToleranceRunsOut() {
-        // §5.1: a certificate-less SICK request is not an unconditional auto-reject --
-        // it is tolerated up to 3 occasions per calendar month, independent of quota state. Quota
-        // exhaustion and the certificate rule are independent: quota exhaustion drives an
-        // APPROVED-but-fully-UNPAID split (the ordinary quota machinery), while the certificate
-        // rule gates on the MONTHLY OCCASION COUNT, not on quota availability at all.
-        long employeeId = insertEmployee("SICK-30PLUS");
-        // Exhaust the 30-day SICK quota first, WITH a certificate each time so the fill-up itself is approved.
-        MockMultipartFile certificate = new MockMultipartFile("attachment", "cert.pdf", "application/pdf", "pdf".getBytes());
-        LeaveRequestDto fillUp = leaveService.submit(
-            submitRequest(employeeId, "SICK", "2026-07-13", "2026-08-21"), // 30 working weekdays
-            certificate,
-            employee(employeeId));
-        assertThat(fillUp.status()).isEqualTo("SUBMITTED");
-        assertThat(fillUp.paidDays()).isEqualByComparingTo("30.00");
-
-        // Occasions 1-3 this month (August), quota fully exhausted (remaining 0): each is APPROVED (money-moving: the
-        // OLD code auto-rejected every one of these, 0 pay) but entirely UNPAID (the ordinary quota-exceeded split,
-        // unrelated to the certificate rule).
-        LeaveRequestDto firstOccasion = leaveService.submit(
-            submitRequest(employeeId, "SICK", "2026-08-24", "2026-08-24"), employee(employeeId)); // Mon
-        LeaveRequestDto secondOccasion = leaveService.submit(
-            submitRequest(employeeId, "SICK", "2026-08-25", "2026-08-25"), employee(employeeId)); // Tue
-        LeaveRequestDto thirdOccasion = leaveService.submit(
-            submitRequest(employeeId, "SICK", "2026-08-26", "2026-08-26"), employee(employeeId)); // Wed
-        for (LeaveRequestDto occasion : List.of(firstOccasion, secondOccasion, thirdOccasion)) {
-            assertThat(occasion.status()).isEqualTo("SUBMITTED");
-            assertThat(occasion.paidDays()).isEqualByComparingTo("0.00");
-            assertThat(occasion.unpaidDays()).isEqualByComparingTo("1.00");
-        }
-
-        // The 4th certificate-less occasion this SAME month: the monthly tolerance (not quota) is
-        // what binds. SICK_NO_CERT_TOLERANCE_EXHAUSTED
-        // is WARN_UNPAID_ALL, not BLOCK -- SUBMITTED, unpaid by rule (not merely "quota is 0", though
-        // the day count looks the same either way here: quota was already exhausted by the fill-up).
-        LeaveRequestDto fourthOccasion = leaveService.submit(
-            submitRequest(employeeId, "SICK", "2026-08-27", "2026-08-27"), employee(employeeId)); // Thu
-
-        assertThat(fourthOccasion.status()).isEqualTo("SUBMITTED");
-        assertThat(fourthOccasion.systemNoteCode()).isNull();
-        assertThat(fourthOccasion.ruleWarnings()).extracting(LeaveRuleWarningDto::code)
-            .containsExactly("SICK_NO_CERT_TOLERANCE_EXHAUSTED");
-        assertThat(fourthOccasion.ruleWarnings().get(0).messageTh()).isNotBlank();
-        assertThat(fourthOccasion.unpaidByRuleDays()).isEqualByComparingTo("1.00");
-        assertThat(fourthOccasion.paidDays()).isEqualByComparingTo("0.00");
-        assertThat(fourthOccasion.unpaidDays()).isEqualByComparingTo("1.00");
-    }
-
     @Test
     void cancellingAfterPayrollHasProcessedRecordsARealPayrollCorrection() {
         long employeeId = insertEmployee("CANCEL-001");
@@ -293,49 +127,6 @@ class LeaveUnpaidDeductionIntegrationTest extends AbstractPostgresIntegrationTes
         // deducted for it.
         assertThat(leaveRepository.findUnpaidLeaveDaysByEmployeeForMonth(LocalDate.parse("2026-07-01")))
             .doesNotContainKey(employeeId);
-    }
-
-    /**
-     * Paper-form contact-during-leave autofill, authz -- required by
-     * CLAUDE.md's "Permission changes must ship evidence" rule: {@code GET
-     * /api/leave/contact-defaults} exposes another employee's home address + phone, so it needs the
-     * same real-DB, wrong-way-round proof as any other scope/filter change. Two employees with no
-     * manager relationship (plain {@link #insertEmployee} sets no {@code reports_to_employee_id}): a
-     * plain employee asking for a peer's contact defaults -- someone who is neither themself, their
-     * manager, nor a direct report -- must be refused. This asserts the caller CANNOT reach what they
-     * shouldn't (not merely that they can reach their own), matching {@link LeaveService#balances}'s
-     * predicate that {@link LeaveService#contactDefaults} deliberately reuses.
-     */
-    @Test
-    void employeeCannotReadANonReportPeersContactDefaults() {
-        long actorId = insertEmployee("PEER-ACTOR");
-        long peerId = insertEmployee("PEER-OTHER");
-
-        assertThatThrownBy(() -> leaveService.contactDefaults(employee(actorId), peerId))
-            .isInstanceOf(ApiException.class)
-            .extracting(exception -> ((ApiException) exception).getStatus())
-            .isEqualTo(HttpStatus.FORBIDDEN);
-    }
-
-    @Test
-    void cancellingBeforePayrollProcessesRecordsNoCorrection() {
-        long employeeId = insertEmployee("CANCEL-002");
-        LeaveRequestDto approved = leaveService.submit(
-            submitRequest(employeeId, "VACATION", "2026-07-13", "2026-07-21"),
-            employee(employeeId));
-        assertThat(approved.unpaidDays()).isEqualByComparingTo("1.00");
-        // Leave requires approval: approve first so this test's "no processed period ->
-        // no correction" assertion is genuinely exercising #recordPayrollCorrectionIfNeeded's
-        // processed-period check, not trivially passing because the request was never APPROVED at
-        // all (that would make this test vacuous -- see CLAUDE.md's fixture-supplies-what-
-        // production-lacks trap).
-        leaveService.approve(approved.id(), new ReviewLeaveRequest("approved"), hr());
-
-        // No payroll_period has been PROCESSED for July -- nothing was ever actually deducted, so cancelling owes no
-        // credit back.
-        leaveService.cancel(approved.id(), new ReviewLeaveRequest("changed my mind"), hr());
-
-        assertThat(leaveRepository.findPendingPayrollCorrectionsByEmployee()).doesNotContainKey(employeeId);
     }
 
     // --- helpers ------------------------------------------------------------

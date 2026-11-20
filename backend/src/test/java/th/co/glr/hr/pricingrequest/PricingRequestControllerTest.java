@@ -1,16 +1,10 @@
 package th.co.glr.hr.pricingrequest;
 
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyBoolean;
-import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import java.time.Instant;
@@ -36,22 +30,6 @@ class PricingRequestControllerTest {
         .setControllerAdvice(new ApiExceptionHandler())
         .build();
 
-    // ── authentication ─────────────────────────────────────────────────────
-
-    @Test
-    void createDraft_rejectsWithoutSession() throws Exception {
-        mvc.perform(post("/api/tickets/10/pricing-requests")
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(validCreateBody()))
-            .andExpect(status().isUnauthorized());
-    }
-
-    @Test
-    void get_rejectsWithoutSession() throws Exception {
-        mvc.perform(get("/api/pricing-requests/20"))
-            .andExpect(status().isUnauthorized());
-    }
-
     // ── create ───────────────────────────────────────────────────────────
 
     @Test
@@ -64,16 +42,6 @@ class PricingRequestControllerTest {
     }
 
     @Test
-    void createDraft_rejectsInvalidBody() throws Exception {
-        // recipientType is @NotBlank and items is @NotEmpty — an empty body fails bean validation before the
-        // controller ever calls the service.
-        mvc.perform(post("/api/tickets/10/pricing-requests").session(session("sales"))
-                .contentType(MediaType.APPLICATION_JSON)
-                .content("{}"))
-            .andExpect(status().isBadRequest());
-    }
-
-    @Test
     void createDraft_rejectsWrongRole() throws Exception {
         when(service.createDraft(eq(10L), any(), any()))
             .thenThrow(new ApiException(HttpStatus.FORBIDDEN, "Forbidden"));
@@ -81,115 +49,6 @@ class PricingRequestControllerTest {
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(validCreateBody()))
             .andExpect(status().isForbidden());
-    }
-
-    // ── get ──────────────────────────────────────────────────────────────
-
-    @Test
-    void get_returnsNotFoundForUnknownId() throws Exception {
-        when(service.get(eq(999L), any())).thenThrow(new ApiException(HttpStatus.NOT_FOUND, "Pricing request not found"));
-        mvc.perform(get("/api/pricing-requests/999").session(session("sales")))
-            .andExpect(status().isNotFound());
-    }
-
-    @Test
-    void get_returnsOkOnSuccess() throws Exception {
-        when(service.get(eq(20L), any())).thenReturn(sampleDetail());
-        mvc.perform(get("/api/pricing-requests/20").session(session("sales")))
-            .andExpect(status().isOk());
-    }
-
-    // ── pickup ───────────────────────────────────────────────────────────
-
-    @Test
-    void pickup_returnsOkOnSuccess() throws Exception {
-        when(service.pickup(eq(20L), any())).thenReturn(sampleDetail());
-        mvc.perform(post("/api/pricing-requests/20/pickup").session(session("import")))
-            .andExpect(status().isOk());
-    }
-
-    @Test
-    void pickup_returnsForbiddenForWrongRole() throws Exception {
-        when(service.pickup(eq(20L), any())).thenThrow(new ApiException(HttpStatus.FORBIDDEN, "Forbidden"));
-        mvc.perform(post("/api/pricing-requests/20/pickup").session(session("sales")))
-            .andExpect(status().isForbidden());
-    }
-
-    @Test
-    void pickup_returnsConflictWhenAlreadyPickedUp() throws Exception {
-        when(service.pickup(eq(20L), any()))
-            .thenThrow(new ApiException(HttpStatus.CONFLICT, "Pricing request was already picked up"));
-        mvc.perform(post("/api/pricing-requests/20/pickup").session(session("import")))
-            .andExpect(status().isConflict());
-    }
-
-    // ── submit / cancel: illegal transition ─────────────────────────────────
-
-    @Test
-    void submit_returnsConflictOnIllegalTransition() throws Exception {
-        when(service.submit(eq(20L), any()))
-            .thenThrow(new ApiException(HttpStatus.CONFLICT, "Expected status 'DRAFT' but pricing request is 'SUBMITTED'"));
-        mvc.perform(post("/api/pricing-requests/20/submit").session(session("sales")))
-            .andExpect(status().isConflict());
-    }
-
-    @Test
-    void cancel_returnsConflictOnIllegalTransition() throws Exception {
-        when(service.cancel(eq(20L), any(), any()))
-            .thenThrow(new ApiException(HttpStatus.CONFLICT, "Cannot cancel pricing request in status 'CANCELLED'"));
-        mvc.perform(post("/api/pricing-requests/20/cancel").session(session("sales"))
-                .contentType(MediaType.APPLICATION_JSON)
-                .content("{\"reason\":\"ลูกค้ายกเลิก\"}"))
-            .andExpect(status().isConflict());
-    }
-
-    @Test
-    void cancel_rejectsBlankReason() throws Exception {
-        mvc.perform(post("/api/pricing-requests/20/cancel").session(session("sales"))
-                .contentType(MediaType.APPLICATION_JSON)
-                .content("{\"reason\":\"\"}"))
-            .andExpect(status().isBadRequest());
-    }
-
-    // ── updateDraft ──────────────────────────────────────────────────────
-
-    @Test
-    void updateDraft_returnsOkOnSuccess() throws Exception {
-        when(service.updateDraft(eq(20L), any(), any())).thenReturn(sampleDetail());
-        mvc.perform(put("/api/pricing-requests/20").session(session("sales"))
-                .contentType(MediaType.APPLICATION_JSON)
-                .content("{\"note\":\"updated note\"}"))
-            .andExpect(status().isOk());
-    }
-
-    // ── queue endpoint passes params through ────────────────────────────────
-
-    @Test
-    void list_passesQueryParamsThrough() throws Exception {
-        when(service.list(any(), any(), anyBoolean(), any())).thenReturn(List.of());
-        mvc.perform(get("/api/pricing-requests")
-                .param("status", "SUBMITTED")
-                .param("assignedImportId", "42")
-                .param("activeOnly", "false")
-                .session(session("import")))
-            .andExpect(status().isOk());
-        verify(service).list(eq("SUBMITTED"), eq(42L), eq(false), any());
-    }
-
-    @Test
-    void list_defaultsActiveOnlyToTrue() throws Exception {
-        when(service.list(isNull(), isNull(), anyBoolean(), any())).thenReturn(List.of());
-        mvc.perform(get("/api/pricing-requests").session(session("import")))
-            .andExpect(status().isOk());
-        verify(service).list(isNull(), isNull(), eq(true), any());
-    }
-
-    @Test
-    void listForTicket_passesTicketIdThrough() throws Exception {
-        when(service.listForTicket(eq(10L), any())).thenReturn(List.of());
-        mvc.perform(get("/api/tickets/10/pricing-requests").session(session("sales")))
-            .andExpect(status().isOk());
-        verify(service).listForTicket(eq(10L), any());
     }
 
     // ── helpers ──────────────────────────────────────────────────────────

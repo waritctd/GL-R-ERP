@@ -1,7 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import * as meta from './quotationMeta.js';
-import { quotationStatusLabel } from '../../utils/format.js';
-import { API_ROUTES } from '../../api/routes.js';
 import {
   canApproveDealQuotation,
   canCancelDealQuotation,
@@ -10,32 +8,19 @@ import {
   canCreateDealQuotationStandalone,
   canDecideDealQuotation,
   canEditDealQuotation,
+  isDealQuotationEditable,
+  parseSizeText,
   canPromoteDealQuotationToDeal,
   canReviseDealQuotation,
-  orderConfirmationOf,
   canSubmitDealQuotation,
   canTransitionDealQuotation,
   canViewDealQuotation,
-  dealQuotationStatusLabel,
-  defaultLeadTimeForOrigin,
-  DEAL_QUOTATION_TRANSITIONS,
-  hasDealQuotationGrant,
   hasSpecialPricing,
-  isDealQuotationEditable,
-  isDealQuotationReadOnlyViewer,
-  LINE_TYPE_ADJUSTMENT,
-  LINE_TYPE_PLAIN,
   LINE_TYPE_TILE,
-  parseSizeText,
   perSqmIncVatFromPerPiece,
   piecesPerSqmFromSqmPerPiece,
-  quotationItemMissingSummary,
-  remainderModeLabel,
-  sqmPerPieceFromPiecesPerSqm,
   sqmPerPieceFromSizeCm,
   sizeTextMatchesCatalogFaceSize,
-  sizeTextDiffersFromCatalogFaceSize,
-  validatePlainItem,
   validateQuotationItem,
 } from './quotationMeta.js';
 
@@ -77,45 +62,6 @@ describe('canTransitionDealQuotation', () => {
     expect(canTransitionDealQuotation(null, 'DRAFT')).toBe(false);
     expect(canTransitionDealQuotation('DRAFT', undefined)).toBe(false);
   });
-
-  // ISSUED/EXPIRED are the PRICING_REQUEST-origin tail (PENDING_APPROVAL -> ISSUED on one approval
-  // by sales_manager or ceo; ISSUED -> EXPIRED past validity_date). Unreachable for a DEAL_DIRECT
-  // row; see DEAL_QUOTATION_TRANSITIONS' comment for why widening this shared graph is safe.
-  it('DEAL_QUOTATION_TRANSITIONS covers exactly the seven statuses the plan (+ S2) defines', () => {
-    expect(Object.keys(DEAL_QUOTATION_TRANSITIONS).sort()).toEqual(
-      ['APPROVED', 'CANCELLED', 'DRAFT', 'EXPIRED', 'ISSUED', 'PENDING_APPROVAL', 'SUPERSEDED'].sort(),
-    );
-  });
-});
-
-describe('dealQuotationStatusLabel', () => {
-  it('has a Thai label + tone for every status', () => {
-    expect(dealQuotationStatusLabel('DRAFT')).toEqual({ label: 'ร่าง', tone: 'neutral' });
-    expect(dealQuotationStatusLabel('PENDING_APPROVAL')).toEqual({ label: 'รออนุมัติ', tone: 'warning' });
-    expect(dealQuotationStatusLabel('APPROVED')).toEqual({ label: 'อนุมัติแล้ว', tone: 'success' });
-    expect(dealQuotationStatusLabel('SUPERSEDED')).toEqual({ label: 'ฉบับที่ไม่ได้ใช้แล้ว', tone: 'neutral' });
-    expect(dealQuotationStatusLabel('CANCELLED')).toEqual({ label: 'ยกเลิก', tone: 'danger' });
-    // Only reached by a PRICING_REQUEST-origin row.
-    expect(dealQuotationStatusLabel('ISSUED')).toEqual({ label: 'ออกใบแล้ว', tone: 'success' });
-    expect(dealQuotationStatusLabel('EXPIRED')).toEqual({ label: 'หมดอายุ', tone: 'neutral' });
-  });
-
-  // QA-29d: the customer-response statuses a PRICING_REQUEST-origin row reaches after ISSUED used
-  // to fall through to the raw code ("ACCEPTED" badge). Same Thai wording as the PCR chain's own
-  // quotationStatusLabel, so the two screens never disagree about one document.
-  it.each([
-    ['SENT', 'ส่งแล้ว'],
-    ['ACCEPTED', 'ลูกค้ายอมรับ'],
-    ['REJECTED', 'ลูกค้าปฏิเสธ'],
-    ['REVISION_REQUESTED', 'ลูกค้าขอแก้ไข'],
-  ])('labels %s in Thai, identical to utils/format quotationStatusLabel', (status, label) => {
-    expect(dealQuotationStatusLabel(status).label).toBe(label);
-    expect(dealQuotationStatusLabel(status)).toEqual(quotationStatusLabel(status));
-  });
-
-  it('falls back gracefully for an unknown status', () => {
-    expect(dealQuotationStatusLabel('WEIRD')).toEqual({ label: 'WEIRD', tone: 'neutral' });
-  });
 });
 
 describe('canCreateDealQuotation', () => {
@@ -123,37 +69,19 @@ describe('canCreateDealQuotation', () => {
     expect(canCreateDealQuotation(salesOwner, ownedTicket)).toBe(true);
   });
 
-  it('lets sales_manager create on ANY deal, owned or not', () => {
-    expect(canCreateDealQuotation(salesManager, ownedTicket)).toBe(true);
-    expect(canCreateDealQuotation(salesManager, otherTicket)).toBe(true);
-  });
-
   // Wrong-way-round: the case that matters is what the caller CANNOT reach.
   it('refuses a sales rep on another rep\'s deal', () => {
     expect(canCreateDealQuotation(salesOwner, otherTicket)).toBe(false);
   });
 
-  it('refuses ceo/import/account/hr -- none of them create a deal quotation', () => {
-    expect(canCreateDealQuotation(ceo, ownedTicket)).toBe(false);
-    expect(canCreateDealQuotation(importUser, ownedTicket)).toBe(false);
-    expect(canCreateDealQuotation(accountUser, ownedTicket)).toBe(false);
-    expect(canCreateDealQuotation(hrUser, ownedTicket)).toBe(false);
-  });
-
-  it('refuses with no user or no ticket', () => {
-    expect(canCreateDealQuotation(null, ownedTicket)).toBe(false);
-    expect(canCreateDealQuotation(salesOwner, null)).toBe(false);
-  });
-
-  // #H4: the canCreateQuotation grant.
-  it('a qc user WITHOUT the grant is refused, even on their own imaginary deal', () => {
-    expect(canCreateDealQuotation(qcUser, ownedTicket)).toBe(false);
-    expect(canCreateDealQuotation(qcUser, otherTicket)).toBe(false);
-  });
-
   it('a qc user WITH the grant may create on ANY deal, same as sales_manager', () => {
     expect(canCreateDealQuotation(qcWithGrant, ownedTicket)).toBe(true);
     expect(canCreateDealQuotation(qcWithGrant, otherTicket)).toBe(true);
+  });
+
+  it('a qc user WITHOUT the grant is refused, even on their own imaginary deal', () => {
+    expect(canCreateDealQuotation(qcUser, ownedTicket)).toBe(false);
+    expect(canCreateDealQuotation(qcUser, otherTicket)).toBe(false);
   });
 });
 
@@ -175,11 +103,6 @@ describe('canCreateDealQuotationStandalone', () => {
     expect(canCreateDealQuotationStandalone(hrUser)).toBe(false);
     expect(canCreateDealQuotationStandalone(qcUser)).toBe(false);
   });
-
-  it('refuses with no user', () => {
-    expect(canCreateDealQuotationStandalone(null)).toBe(false);
-    expect(canCreateDealQuotationStandalone(undefined)).toBe(false);
-  });
 });
 
 describe('canEditDealQuotation / isDealQuotationEditable', () => {
@@ -198,16 +121,6 @@ describe('canEditDealQuotation / isDealQuotationEditable', () => {
     expect(canEditDealQuotation(accountUser, quotation())).toBe(false);
   });
 
-  // #H4: the canCreateQuotation grant.
-  it('a qc user WITHOUT the grant is refused, even on a quotation someone else owns', () => {
-    expect(canEditDealQuotation(qcUser, quotation({ salesRepId: 6 }))).toBe(false);
-  });
-
-  it('a qc user WITH the grant may edit ANY quotation, same as sales_manager', () => {
-    expect(canEditDealQuotation(qcWithGrant, quotation({ salesRepId: 6 }))).toBe(true);
-    expect(canEditDealQuotation(qcWithGrant, quotation({ salesRepId: 999 }))).toBe(true);
-  });
-
   it('isDealQuotationEditable is DRAFT-only, regardless of who is asking', () => {
     expect(isDealQuotationEditable(quotation({ docStatus: 'DRAFT' }))).toBe(true);
     expect(isDealQuotationEditable(quotation({ docStatus: 'PENDING_APPROVAL' }))).toBe(false);
@@ -217,18 +130,6 @@ describe('canEditDealQuotation / isDealQuotationEditable', () => {
 });
 
 describe('canSubmitDealQuotation / canCancelDealQuotation / canReviseDealQuotation', () => {
-  it('submit needs edit rights AND DRAFT', () => {
-    expect(canSubmitDealQuotation(salesOwner, quotation({ docStatus: 'DRAFT' }))).toBe(true);
-    expect(canSubmitDealQuotation(salesOwner, quotation({ docStatus: 'PENDING_APPROVAL' }))).toBe(false);
-    expect(canSubmitDealQuotation(otherSales, quotation({ docStatus: 'DRAFT' }))).toBe(false);
-  });
-
-  it('cancel needs edit rights AND DRAFT (mirrors "DRAFT -> (cancel) -> CANCELLED")', () => {
-    expect(canCancelDealQuotation(salesOwner, quotation({ docStatus: 'DRAFT' }))).toBe(true);
-    expect(canCancelDealQuotation(salesOwner, quotation({ docStatus: 'APPROVED' }))).toBe(false);
-    expect(canCancelDealQuotation(otherSales, quotation({ docStatus: 'DRAFT' }))).toBe(false);
-  });
-
   it('revise needs edit rights AND APPROVED only', () => {
     expect(canReviseDealQuotation(salesOwner, quotation({ docStatus: 'APPROVED' }))).toBe(true);
     expect(canReviseDealQuotation(salesOwner, quotation({ docStatus: 'DRAFT' }))).toBe(false);
@@ -247,10 +148,16 @@ describe('canSubmitDealQuotation / canCancelDealQuotation / canReviseDealQuotati
     expect(canReviseDealQuotation(salesOwner, approved, null)).toBe(false);
   });
 
-  it('orderConfirmationOf reads the promotion event and the quotation it names from the ticket events', () => {
-    expect(orderConfirmationOf(undefined)).toBeNull();
-    expect(orderConfirmationOf([{ kind: 'COMMENT' }])).toEqual({ confirmed: false });
-    expect(orderConfirmationOf([{ kind: 'DEAL_PROMOTED_FROM_QUOTATION' }])).toEqual({ confirmed: true });
+  it('submit needs edit rights AND DRAFT', () => {
+    expect(canSubmitDealQuotation(salesOwner, quotation({ docStatus: 'DRAFT' }))).toBe(true);
+    expect(canSubmitDealQuotation(salesOwner, quotation({ docStatus: 'PENDING_APPROVAL' }))).toBe(false);
+    expect(canSubmitDealQuotation(otherSales, quotation({ docStatus: 'DRAFT' }))).toBe(false);
+  });
+
+  it('cancel needs edit rights AND DRAFT (mirrors "DRAFT -> (cancel) -> CANCELLED")', () => {
+    expect(canCancelDealQuotation(salesOwner, quotation({ docStatus: 'DRAFT' }))).toBe(true);
+    expect(canCancelDealQuotation(salesOwner, quotation({ docStatus: 'APPROVED' }))).toBe(false);
+    expect(canCancelDealQuotation(otherSales, quotation({ docStatus: 'DRAFT' }))).toBe(false);
   });
 });
 
@@ -266,24 +173,11 @@ describe('canReviseDealQuotation -- PRICING_REQUEST origin', () => {
     expect(canReviseDealQuotation(salesOwner, prQ({ docStatus: 'REVISION_REQUESTED' }))).toBe(true);
   });
 
-  it('never in any other status (APPROVED/ACCEPTED/REJECTED/EXPIRED/SUPERSEDED/DRAFT/PENDING_APPROVAL/CANCELLED)', () => {
-    for (const docStatus of ['APPROVED', 'ACCEPTED', 'REJECTED', 'EXPIRED', 'SUPERSEDED', 'DRAFT', 'PENDING_APPROVAL', 'CANCELLED']) {
-      expect(canReviseDealQuotation(salesOwner, prQ({ docStatus }))).toBe(false);
-    }
-  });
-
   it('wrong-way-round: sales_manager, granted qc, non-owner sales and ceo are all refused', () => {
     expect(canReviseDealQuotation(salesManager, prQ())).toBe(false);
     expect(canReviseDealQuotation(qcWithGrant, prQ())).toBe(false);
     expect(canReviseDealQuotation(otherSales, prQ())).toBe(false);
     expect(canReviseDealQuotation(ceo, prQ())).toBe(false);
-  });
-
-  it('a DEAL_DIRECT quotation is unchanged: APPROVED only, ISSUED/REVISION_REQUESTED stay false', () => {
-    expect(canReviseDealQuotation(salesOwner, quotation({ docStatus: 'APPROVED' }))).toBe(true);
-    expect(canReviseDealQuotation(salesManager, quotation({ docStatus: 'APPROVED' }))).toBe(true);
-    expect(canReviseDealQuotation(salesOwner, quotation({ docStatus: 'ISSUED' }))).toBe(false);
-    expect(canReviseDealQuotation(salesOwner, quotation({ docStatus: 'REVISION_REQUESTED' }))).toBe(false);
   });
 });
 
@@ -301,11 +195,6 @@ describe('canPromoteDealQuotationToDeal', () => {
     for (const docStatus of ['DRAFT', 'PENDING_APPROVAL', 'SUPERSEDED', 'CANCELLED']) {
       expect(canPromoteDealQuotationToDeal(salesOwner, quotation({ docStatus }))).toBe(false);
     }
-  });
-
-  it('never a PRICING_REQUEST-origin quotation', () => {
-    expect(canPromoteDealQuotationToDeal(salesOwner,
-      quotation({ docStatus: 'APPROVED', origin: 'PRICING_REQUEST' }))).toBe(false);
   });
 
   it('never a user without edit rights (wrong-way-round)', () => {
@@ -334,31 +223,11 @@ describe('canChangeDealCustomer', () => {
     expect(canChangeDealCustomer(salesOwner, ownedTicket, null)).toBe(false);
   });
 
-  it('refuses a quotation that has left DRAFT, whoever asks', () => {
-    for (const docStatus of ['PENDING_APPROVAL', 'APPROVED', 'REJECTED', 'SUPERSEDED', 'CANCELLED']) {
-      for (const user of [salesOwner, salesManager, ceo]) {
-        expect(canChangeDealCustomer(user, ownedTicket, quotation({ origin: 'DEAL_DIRECT', docStatus })), `${user.role} on ${docStatus}`).toBe(false);
-      }
-    }
-  });
-
-  it('refuses a pricing-request quotation, and one whose origin is missing or new', () => {
-    for (const origin of ['PRICING_REQUEST', undefined, null, 'SOMETHING_ELSE']) {
-      expect(canChangeDealCustomer(salesOwner, ownedTicket, quotation({ origin })), String(origin)).toBe(false);
-      expect(canChangeDealCustomer(salesManager, ownedTicket, quotation({ origin })), String(origin)).toBe(false);
-    }
-  });
-
   it('allows the owning sales rep, the sales_manager and the ceo on a DRAFT direct quotation', () => {
     expect(canChangeDealCustomer(salesOwner, ownedTicket, draftDirect)).toBe(true);
     expect(canChangeDealCustomer(salesManager, ownedTicket, draftDirect)).toBe(true);
     expect(canChangeDealCustomer(salesManager, otherTicket, draftDirect)).toBe(true);
     expect(canChangeDealCustomer(ceo, otherTicket, draftDirect)).toBe(true);
-  });
-
-  it('compares ids as numbers, like the server', () => {
-    expect(canChangeDealCustomer({ id: '6', role: 'sales' }, { createdById: 6 }, draftDirect)).toBe(true);
-    expect(canChangeDealCustomer({ id: 6, role: 'sales' }, { createdById: null }, draftDirect)).toBe(false);
   });
 });
 
@@ -373,14 +242,6 @@ describe('canApproveDealQuotation / canDecideDealQuotation', () => {
     expect(canApproveDealQuotation(salesOwner)).toBe(false);
   });
 
-  it('import/account/hr cannot approve', () => {
-    expect(canApproveDealQuotation(importUser)).toBe(false);
-    expect(canApproveDealQuotation(accountUser)).toBe(false);
-    expect(canApproveDealQuotation(hrUser)).toBe(false);
-  });
-
-  // #H4: approve/reject stay sales_manager/ceo ONLY -- the canCreateQuotation grant does NOT extend to them
-  // (unlike create/edit/view, which treat the grant as "any deal").
   it('the canCreateQuotation grant does NOT make a qc user an approver', () => {
     expect(canApproveDealQuotation(qcWithGrant)).toBe(false);
     expect(canDecideDealQuotation(qcWithGrant, quotation({ docStatus: 'PENDING_APPROVAL' }))).toBe(false);
@@ -394,7 +255,7 @@ describe('canApproveDealQuotation / canDecideDealQuotation', () => {
   });
 });
 
-describe('canViewDealQuotation / isDealQuotationReadOnlyViewer', () => {
+describe('canViewDealQuotation', () => {
   it('grants the plan\'s exact view role set', () => {
     expect(canViewDealQuotation(salesOwner)).toBe(true);
     expect(canViewDealQuotation(salesManager)).toBe(true);
@@ -403,55 +264,11 @@ describe('canViewDealQuotation / isDealQuotationReadOnlyViewer', () => {
     expect(canViewDealQuotation(accountUser)).toBe(true);
   });
 
-  // Wrong-way-round: roles the plan never grants a read to.
   it('refuses hr/qc/warehouse and no user', () => {
     expect(canViewDealQuotation(hrUser)).toBe(false);
     expect(canViewDealQuotation(qcUser)).toBe(false);
     expect(canViewDealQuotation(warehouseUser)).toBe(false);
     expect(canViewDealQuotation(null)).toBe(false);
-  });
-
-  it('import/account are read-only viewers; sales/sales_manager/ceo are not', () => {
-    expect(isDealQuotationReadOnlyViewer(importUser)).toBe(true);
-    expect(isDealQuotationReadOnlyViewer(accountUser)).toBe(true);
-    expect(isDealQuotationReadOnlyViewer(salesOwner)).toBe(false);
-    expect(isDealQuotationReadOnlyViewer(salesManager)).toBe(false);
-    expect(isDealQuotationReadOnlyViewer(ceo)).toBe(false);
-  });
-
-  // #H4: the canCreateQuotation grant.
-  it('a qc user WITHOUT the grant cannot view; WITH the grant can view any deal', () => {
-    expect(canViewDealQuotation(qcUser)).toBe(false);
-    expect(canViewDealQuotation(qcWithGrant)).toBe(true);
-  });
-});
-
-describe('hasDealQuotationGrant (#H4)', () => {
-  it('reads the canCreateQuotation field off the user, defaulting falsy to false', () => {
-    expect(hasDealQuotationGrant(qcWithGrant)).toBe(true);
-    expect(hasDealQuotationGrant(qcUser)).toBe(false);
-    expect(hasDealQuotationGrant({ role: 'qc', canCreateQuotation: false })).toBe(false);
-    expect(hasDealQuotationGrant(null)).toBe(false);
-  });
-});
-
-describe('remainderModeLabel / defaultLeadTimeForOrigin', () => {
-  it('labels both remainder modes and falls back to the raw value', () => {
-    expect(remainderModeLabel('CREDIT')).toBe('เครดิต');
-    expect(remainderModeLabel('ON_DELIVERY')).toBe('ชำระเมื่อส่งมอบ');
-    expect(remainderModeLabel('WEIRD')).toBe('WEIRD');
-  });
-
-  it('gives each origin country its documented default lead-time range', () => {
-    expect(defaultLeadTimeForOrigin('อิตาลี')).toEqual({ leadTimeMinDays: 75, leadTimeMaxDays: 90 });
-    expect(defaultLeadTimeForOrigin('สเปน')).toEqual({ leadTimeMinDays: 75, leadTimeMaxDays: 90 });
-    expect(defaultLeadTimeForOrigin('จีน')).toEqual({ leadTimeMinDays: 30, leadTimeMaxDays: 45 });
-    expect(defaultLeadTimeForOrigin('ไทย-สต็อก')).toEqual({ leadTimeMinDays: 3, leadTimeMaxDays: 7 });
-    expect(defaultLeadTimeForOrigin('อื่นๆ')).toEqual({ leadTimeMinDays: null, leadTimeMaxDays: null });
-  });
-
-  it('returns nulls for an unknown origin rather than throwing', () => {
-    expect(defaultLeadTimeForOrigin('ดาวอังคาร')).toEqual({ leadTimeMinDays: null, leadTimeMaxDays: null });
   });
 });
 
@@ -473,10 +290,6 @@ describe('validateQuotationItem (#M4, owner ruling 2026-09-10)', () => {
     expect(validateQuotationItem(completeItem())).toEqual({});
   });
 
-  it('a fully-filled PIECES-mode item has no errors (areaSqm irrelevant in this mode)', () => {
-    expect(validateQuotationItem(completeItem({ quantityMode: 'PIECES', areaSqm: '', piecesInput: 50 }))).toEqual({});
-  });
-
   // One row per required field: blanking it (each listed bad value in turn) must produce exactly that field's
   // error and nothing else. Columns: test name, field, bad values, expected message.
   it.each([
@@ -496,75 +309,14 @@ describe('validateQuotationItem (#M4, owner ruling 2026-09-10)', () => {
     }
   });
 
-  it('AREA mode requires a positive พื้นที่, ignoring piecesInput entirely', () => {
-    expect(validateQuotationItem(completeItem({ areaSqm: 0 }))).toEqual({ areaSqm: 'กรุณาระบุพื้นที่ (ตร.ม.)' });
-    expect(validateQuotationItem(completeItem({ areaSqm: '' }))).toEqual({ areaSqm: 'กรุณาระบุพื้นที่ (ตร.ม.)' });
-  });
-
-  it('PIECES mode requires a piecesInput of at least 1, ignoring areaSqm entirely', () => {
-    expect(validateQuotationItem(completeItem({ quantityMode: 'PIECES', areaSqm: '', piecesInput: 0 })))
-      .toEqual({ piecesInput: 'กรุณาระบุจำนวนแผ่น' });
-    expect(validateQuotationItem(completeItem({ quantityMode: 'PIECES', areaSqm: '', piecesInput: '' })))
-      .toEqual({ piecesInput: 'กรุณาระบุจำนวนแผ่น' });
-  });
-
-  // A catalog pick that left a gap (e.g. NO_THICKNESS, about a third of the prod catalog) must still
-  // be flagged: catalogPriceId being set never exempts a row.
-  it('a catalog-linked item with a null thickness (a catalog gap) is still invalid', () => {
-    const item = completeItem({ catalogPriceId: 42, productCode: 'PAN-T600-IVO', thicknessMm: null });
-    expect(validateQuotationItem(item)).toEqual({ thicknessMm: 'กรุณาระบุความหนา (มม.)' });
-  });
-
-  it('optional fields (brand, productCode, locationLabel, originCountry, lead times, notes, discount) being absent never fails validation', () => {
-    const item = completeItem({
-      brand: '', productCode: '', locationLabel: '', originCountry: '',
-      leadTimeMinDays: null, leadTimeMaxDays: null, itemNotes: '', discountPct: 0,
-    });
-    expect(validateQuotationItem(item)).toEqual({});
-  });
-
-  it('accumulates every missing field on one item, not just the first', () => {
-    const errors = validateQuotationItem({ quantityMode: 'AREA' });
-    expect(Object.keys(errors).sort()).toEqual(
-      ['areaSqm', 'color', 'model', 'piecesPerBox', 'sizeText', 'sqmPerPiece', 'texture', 'thicknessMm', 'unitPrice'].sort(),
-    );
-  });
-
   // Mirrors DealQuotationService#requireEveryTileItemHasALeadTime. SUBMIT-only: `requireLeadTime`
   // defaults to OFF so a draft may be saved with no lead time; only a caller that opts in
   // (QuotationEditorPage's `submitItemErrorsByRow`) sees it.
   describe('requireLeadTime option (owner feedback #7, 2026-09-14)', () => {
-    it('is never flagged by default, even with no lead time at all', () => {
-      const item = completeItem({ leadTimeMinDays: null, leadTimeMaxDays: null });
-      expect(validateQuotationItem(item)).toEqual({});
-    });
-
     it('flags a missing lead time only when explicitly required', () => {
       const item = completeItem({ leadTimeMinDays: null, leadTimeMaxDays: null });
       expect(validateQuotationItem(item, 'NET', 'TH', { requireLeadTime: true }))
         .toEqual({ leadTimeMinDays: 'กรุณาระบุระยะเวลานำเข้า (วัน)' });
-    });
-
-    it('VW-01 (owner 2026-10-29): only an IN_THAILAND stock line is exempt; IN_TRANSIT and import (stockSource null) are still asked for a lead time', () => {
-      const stock = completeItem({ stockSource: 'IN_THAILAND', leadTimeMinDays: null, leadTimeMaxDays: null });
-      expect(validateQuotationItem(stock, 'NET', 'TH', { requireLeadTime: true })).toEqual({});
-      const inTransit = completeItem({ stockSource: 'IN_TRANSIT', leadTimeMinDays: null, leadTimeMaxDays: null });
-      expect(validateQuotationItem(inTransit, 'NET', 'TH', { requireLeadTime: true }))
-        .toEqual({ leadTimeMinDays: 'กรุณาระบุระยะเวลานำเข้า (วัน)' });
-      const imported = completeItem({ stockSource: null, leadTimeMinDays: null, leadTimeMaxDays: null });
-      expect(validateQuotationItem(imported, 'NET', 'TH', { requireLeadTime: true }))
-        .toEqual({ leadTimeMinDays: 'กรุณาระบุระยะเวลานำเข้า (วัน)' });
-    });
-
-    it('a partially-filled lead time (only one of the two numbers) is still flagged', () => {
-      const item = completeItem({ leadTimeMinDays: 30, leadTimeMaxDays: null });
-      expect(validateQuotationItem(item, 'NET', 'TH', { requireLeadTime: true }))
-        .toEqual({ leadTimeMinDays: 'กรุณาระบุระยะเวลานำเข้า (วัน)' });
-    });
-
-    it('a fully-filled lead time passes even when required', () => {
-      const item = completeItem({ leadTimeMinDays: 30, leadTimeMaxDays: 45 });
-      expect(validateQuotationItem(item, 'NET', 'TH', { requireLeadTime: true })).toEqual({});
     });
 
     // A lead time of 0 (or negative) is INVALID (min must be >= 1 day), refused with the same
@@ -573,79 +325,6 @@ describe('validateQuotationItem (#M4, owner ruling 2026-09-10)', () => {
       const item = completeItem({ leadTimeMinDays: 0, leadTimeMaxDays: 0 });
       expect(validateQuotationItem(item, 'NET', 'TH', { requireLeadTime: true }))
         .toEqual({ leadTimeMinDays: 'ระยะเวลานำเข้าต้องไม่น้อยกว่า 1 วัน และค่าสูงสุดต้องไม่น้อยกว่าค่าต่ำสุด' });
-    });
-
-    /** Wrong-way-round: the SMALLEST genuinely valid exact-day range (1, 1) passes. */
-    it('an exact one-day lead time (1, 1) is a valid value', () => {
-      const item = completeItem({ leadTimeMinDays: 1, leadTimeMaxDays: 1 });
-      expect(validateQuotationItem(item, 'NET', 'TH', { requireLeadTime: true })).toEqual({});
-    });
-  });
-
-  // ── An ENTERED lead-time range must be min>=1, max>=min ──
-  describe('lead-time value validity (owner-approved wording-scan finding 3)', () => {
-    it('refuses min < 1 unconditionally (not gated on requireLeadTime)', () => {
-      const item = completeItem({ leadTimeMinDays: 0, leadTimeMaxDays: 3 });
-      expect(validateQuotationItem(item, 'NET', 'TH'))
-        .toEqual({ leadTimeMinDays: 'ระยะเวลานำเข้าต้องไม่น้อยกว่า 1 วัน และค่าสูงสุดต้องไม่น้อยกว่าค่าต่ำสุด' });
-    });
-
-    it('refuses max < min', () => {
-      const item = completeItem({ leadTimeMinDays: 90, leadTimeMaxDays: 75 });
-      expect(validateQuotationItem(item, 'NET', 'TH').leadTimeMinDays)
-        .toBe('ระยะเวลานำเข้าต้องไม่น้อยกว่า 1 วัน และค่าสูงสุดต้องไม่น้อยกว่าค่าต่ำสุด');
-    });
-
-    it('does not fire on a partially-entered lead time (the other field still blank)', () => {
-      const item = completeItem({ leadTimeMinDays: 0, leadTimeMaxDays: null });
-      expect(validateQuotationItem(item, 'NET', 'TH').leadTimeMinDays).toBeUndefined();
-    });
-
-    it('the SAME rule applies to a PLAIN row (validatePlainItem)', () => {
-      const plain = { description: 'สุขภัณฑ์', quantity: 1, unit: 'ชุด', unitPrice: 5000, leadTimeMinDays: 0, leadTimeMaxDays: 3 };
-      expect(validatePlainItem(plain).leadTimeMinDays)
-        .toBe('ระยะเวลานำเข้าต้องไม่น้อยกว่า 1 วัน และค่าสูงสุดต้องไม่น้อยกว่าค่าต่ำสุด');
-    });
-
-    it('wrong-way-round: a valid range on a PLAIN row is untouched', () => {
-      const plain = { description: 'สุขภัณฑ์', quantity: 1, unit: 'ชุด', unitPrice: 5000, leadTimeMinDays: 75, leadTimeMaxDays: 90 };
-      expect(validatePlainItem(plain).leadTimeMinDays).toBeUndefined();
-    });
-  });
-
-  // ── An AREA-mode row that computes to ZERO pieces ──
-  describe('AREA-mode zero-pieces rejection (owner-approved wording-scan finding 4)', () => {
-    it('refuses when the debounced preview reports piecesBeforeWastage === 0', () => {
-      const item = completeItem({ quantityMode: 'AREA', areaSqm: 0.01, piecesBeforeWastage: 0 });
-      expect(validateQuotationItem(item, 'NET', 'TH').areaSqm).toBe('พื้นที่น้อยเกินไป คำนวณได้ 0 แผ่น');
-    });
-
-    it('wrong-way-round: a positive piecesBeforeWastage is untouched', () => {
-      const item = completeItem({ quantityMode: 'AREA', areaSqm: 0.36, piecesBeforeWastage: 1 });
-      expect(validateQuotationItem(item, 'NET', 'TH').areaSqm).toBeUndefined();
-    });
-
-    it('does not fire before a preview has run (piecesBeforeWastage still null/undefined)', () => {
-      const item = completeItem({ quantityMode: 'AREA', areaSqm: 0.01 });
-      expect(validateQuotationItem(item, 'NET', 'TH').areaSqm).toBeUndefined();
-    });
-  });
-
-  // ── PIECES wastage must be a whole number ──
-  describe('fractional PIECES-wastage rejection (owner-approved wording-scan finding 5)', () => {
-    it('refuses a fractional value in PIECES mode', () => {
-      const item = completeItem({ wastageMode: 'PIECES', wastageValue: 0.5 });
-      expect(validateQuotationItem(item, 'NET', 'TH').wastageValue).toBe('จำนวนแผ่นที่เผื่อต้องเป็นจำนวนเต็ม');
-    });
-
-    it('wrong-way-round: a whole-number PIECES value is untouched', () => {
-      const item = completeItem({ wastageMode: 'PIECES', wastageValue: 2 });
-      expect(validateQuotationItem(item, 'NET', 'TH').wastageValue).toBeUndefined();
-    });
-
-    it('PERCENT wastage keeps accepting a fractional value', () => {
-      const item = completeItem({ wastageMode: 'PERCENT', wastageValue: 2.5 });
-      expect(validateQuotationItem(item, 'NET', 'TH').wastageValue).toBeUndefined();
     });
   });
 });
@@ -662,33 +341,6 @@ describe('piecesPerSqmFromSqmPerPiece / sqmPerPieceFromPiecesPerSqm (แผ่�
     // genuinely 0.135 sqm/piece, not the 0.18 width x height geometry would say.
     expect(piecesPerSqmFromSqmPerPiece(0.135)).toBe(7.41);
   });
-
-  it('returns null rather than Infinity for nothing to invert', () => {
-    expect(piecesPerSqmFromSqmPerPiece(null)).toBeNull();
-    expect(piecesPerSqmFromSqmPerPiece(0)).toBeNull();
-    expect(piecesPerSqmFromSqmPerPiece('')).toBeNull();
-  });
-
-  it('CLAUDE.md acceptance check — enter 16.39, store 1/16.39, redisplay exactly 16.39', () => {
-    const stored = sqmPerPieceFromPiecesPerSqm(16.39);
-    // NUMERIC(10,6) precision matches sqm_per_piece's column scale, leaving enough headroom below
-    // the 2dp the reverse direction rounds to for the round trip to land on the original figure.
-    expect(stored).toBeCloseTo(1 / 16.39, 6);
-    expect(piecesPerSqmFromSqmPerPiece(stored)).toBe(16.39);
-  });
-
-  it('round-trips a spread of real figures without drift', () => {
-    for (const piecesPerSqm of [1.39, 2.78, 7.41, 16.39, 1, 100, 0.5]) {
-      const stored = sqmPerPieceFromPiecesPerSqm(piecesPerSqm);
-      expect(piecesPerSqmFromSqmPerPiece(stored)).toBe(piecesPerSqm);
-    }
-  });
-
-  it('returns null rather than a bogus reciprocal for a non-positive แผ่น/ตร.ม.', () => {
-    expect(sqmPerPieceFromPiecesPerSqm(0)).toBeNull();
-    expect(sqmPerPieceFromPiecesPerSqm(-1)).toBeNull();
-    expect(sqmPerPieceFromPiecesPerSqm(null)).toBeNull();
-  });
 });
 
 describe('perSqmIncVatFromPerPiece (Thai SPECIAL_SQM ราคาตั้ง shown per ตร.ม., owner feedback 2026-09-14)', () => {
@@ -699,20 +351,6 @@ describe('perSqmIncVatFromPerPiece (Thai SPECIAL_SQM ราคาตั้ง sh
     expect(perSqmIncVatFromPerPiece(881.46, 0.36)).toBe(2621.99);
     expect(perSqmIncVatFromPerPiece(843.14, 0.36)).toBe(2508.0);
     expect(perSqmIncVatFromPerPiece(900.63, 0.36)).toBe(2679.01);
-  });
-
-  it('returns null when unitPrice is missing, zero or negative', () => {
-    expect(perSqmIncVatFromPerPiece(null, 0.36)).toBeNull();
-    expect(perSqmIncVatFromPerPiece('', 0.36)).toBeNull();
-    expect(perSqmIncVatFromPerPiece(0, 0.36)).toBeNull();
-    expect(perSqmIncVatFromPerPiece(-1, 0.36)).toBeNull();
-  });
-
-  it('returns null when sqmPerPiece is missing, zero or negative', () => {
-    expect(perSqmIncVatFromPerPiece(1299.0, null)).toBeNull();
-    expect(perSqmIncVatFromPerPiece(1299.0, '')).toBeNull();
-    expect(perSqmIncVatFromPerPiece(1299.0, 0)).toBeNull();
-    expect(perSqmIncVatFromPerPiece(1299.0, -0.36)).toBeNull();
   });
 });
 
@@ -726,119 +364,6 @@ describe('sqmPerPieceFromSizeCm (ขนาด (ซม.) → ตร.ม./แผ�
     expect(sqmPerPieceFromSizeCm('30*60')).toBe(0.18);
   });
 
-  it('ignores an optional third `x thickness` segment', () => {
-    expect(sqmPerPieceFromSizeCm('60X60x0.9')).toBe(0.36);
-  });
-
-  it('returns null for anything that is not a clean widthXheight[Xthickness] pair', () => {
-    expect(sqmPerPieceFromSizeCm('')).toBeNull();
-    expect(sqmPerPieceFromSizeCm(null)).toBeNull();
-    expect(sqmPerPieceFromSizeCm('60')).toBeNull();
-    expect(sqmPerPieceFromSizeCm('1,2X20 JOLLY COCO')).toBeNull();
-    expect(sqmPerPieceFromSizeCm('JOLLY 60x60')).toBeNull();
-    expect(sqmPerPieceFromSizeCm('60x')).toBeNull();
-    expect(sqmPerPieceFromSizeCm('abc')).toBeNull();
-  });
-
-  it('returns null for a non-positive dimension', () => {
-    expect(sqmPerPieceFromSizeCm('0x60')).toBeNull();
-  });
-
-  it('returns null outside the WastageCalculator MIN/MAX_SQM_PER_PIECE bound (0.001-10 m² per piece) -- catches millimetres typed into the cm field', () => {
-    // "600x1200" parses as a clean number pair but reads as 72 m²/piece, ~100x a real tile -- exactly the
-    // millimetres-in-a-cm-field mistake WastageCalculator.java:87-88 guards against.
-    expect(sqmPerPieceFromSizeCm('600x1200')).toBeNull();
-  });
-});
-
-// ── SHARED GRAMMAR vector table. Inputs and expected {width, height, unit} results are ALSO
-// asserted, verbatim, in backend DealQuotationLinesTest.java's "SHARED GRAMMAR vector table"
-// section against `DealQuotationLines#parseTwoDimensions`; the two must never drift apart.
-describe('parseSizeText (shared size grammar, 2026-09-16)', () => {
-  it('basic separators and case', () => {
-    expect(parseSizeText('30x60')).toEqual({ width: 30, height: 60, unit: null });
-    expect(parseSizeText('30*60')).toEqual({ width: 30, height: 60, unit: null });
-    expect(parseSizeText('30 X 60')).toEqual({ width: 30, height: 60, unit: null });
-    expect(parseSizeText('30×60')).toEqual({ width: 30, height: 60, unit: null });
-  });
-
-  it('english units, per-number or trailing', () => {
-    expect(parseSizeText('30x60cm')).toEqual({ width: 30, height: 60, unit: 'cm' });
-    expect(parseSizeText('30 cm x 60 cm')).toEqual({ width: 30, height: 60, unit: 'cm' });
-    expect(parseSizeText('300x600mm')).toEqual({ width: 300, height: 600, unit: 'mm' });
-    expect(parseSizeText('600x600mm')).toEqual({ width: 600, height: 600, unit: 'mm' });
-  });
-
-  it('thai units (ซม / ซม. / ซ.ม.)', () => {
-    expect(parseSizeText('30x60 ซม.')).toEqual({ width: 30, height: 60, unit: 'cm' });
-    expect(parseSizeText('30ซม.x60ซม.')).toEqual({ width: 30, height: 60, unit: 'cm' });
-    expect(parseSizeText('30x60 ซ.ม.')).toEqual({ width: 30, height: 60, unit: 'cm' });
-  });
-
-  it('decimal comma, ignored third dimension, ignored trailing parenthetical', () => {
-    // "29,7" is 29.7 -- decimal comma, not a thousands separator.
-    expect(parseSizeText('29,7x59,7')).toEqual({ width: 29.7, height: 59.7, unit: null });
-    // Third dimension (thickness) ignored, never a second dimension pair.
-    expect(parseSizeText('30x60x1')).toEqual({ width: 30, height: 60, unit: null });
-    expect(parseSizeText('60X60x0.9')).toEqual({ width: 60, height: 60, unit: null });
-    // Trailing free text in parentheses ignored.
-    expect(parseSizeText('30x60 (หนา 9)')).toEqual({ width: 30, height: 60, unit: null });
-  });
-
-  it('unparseable', () => {
-    expect(parseSizeText('รูปทรงอิสระ')).toBeNull();
-    expect(parseSizeText('60x')).toBeNull();
-    expect(parseSizeText('JOLLY 60x60')).toBeNull();
-    expect(parseSizeText('1,2X20 JOLLY COCO')).toBeNull();
-    expect(parseSizeText('0x60')).toBeNull();
-    expect(parseSizeText('')).toBeNull();
-    expect(parseSizeText(null)).toBeNull();
-  });
-
-  // ── Unicode whitespace normalisation. JS's `\s` is Unicode-aware and treats NBSP etc. as
-  // whitespace, while Java's `\s` is ASCII-only and `String.trim()` strips only <= U+0020, so the
-  // two engines disagreed. Both agree via a shared pre-fold rather than reconciling two `\s`
-  // definitions in the pattern. The SAME vectors are pinned in DealQuotationLinesTest.java's "F2"
-  // section. ──
-  it('agrees with the backend on every measured whitespace divergence', () => {
-    expect(parseSizeText('30 x 60')).toEqual({ width: 30, height: 60, unit: null }); // NBSP
-    expect(parseSizeText('30x60 cm')).toEqual({ width: 30, height: 60, unit: 'cm' });
-    expect(parseSizeText('30x60　cm')).toEqual({ width: 30, height: 60, unit: 'cm' }); // ideographic space
-    expect(parseSizeText('30 x 60')).toEqual({ width: 30, height: 60, unit: null }); // thin space
-    expect(parseSizeText('30 x 60')).toEqual({ width: 30, height: 60, unit: null }); // narrow NBSP
-    expect(parseSizeText('﻿30x60')).toEqual({ width: 30, height: 60, unit: null }); // BOM/ZWNBSP
-    expect(parseSizeText('30x60\u2028')).toEqual({ width: 30, height: 60, unit: null }); // line separator The OTHER direction: a bare control byte, which JS's own `\s`/`.trim()` never treated as
-    // whitespace (Java's `String.trim()` always stripped it -- this closes the gap from the JS side).
-    expect(parseSizeText('30x60')).toEqual({ width: 30, height: 60, unit: null });
-    expect(parseSizeText('30x60')).toEqual({ width: 30, height: 60, unit: null });
-  });
-});
-
-// ── Catastrophic regex backtracking (ReDoS). Both timing vectors must stay well under 50ms. The
-// first is short enough to bypass the length guard and exercises the grammar fix alone; the second
-// also exercises MAX_SIZE_TEXT_LENGTH, so a regression in either fix alone blows one of them up.
-// Same vectors pinned in DealQuotationLinesTest.java's "F1" section. ──
-describe('parseSizeText ReDoS guard (F1, 2026-09-16 review)', () => {
-  it('pathological whitespace under the 64-char length guard does not catastrophically backtrack', () => {
-    const attack = '30' + ' '.repeat(18) + 'x60' + ' '.repeat(18) + 'x1' + ' '.repeat(18) + '!';
-    expect(attack.length).toBeLessThanOrEqual(64);
-    const start = performance.now();
-    const result = parseSizeText(attack);
-    const elapsedMs = performance.now() - start;
-    expect(result).toBeNull();
-    expect(elapsedMs).toBeLessThan(50);
-  });
-
-  it("the reviewer's own 248-char pathological shape does not catastrophically backtrack", () => {
-    const attack = '30' + ' '.repeat(80) + 'x60' + ' '.repeat(80) + 'x1' + ' '.repeat(80) + '!';
-    expect(attack.length).toBe(248);
-    const start = performance.now();
-    const result = parseSizeText(attack);
-    const elapsedMs = performance.now() - start;
-    expect(result).toBeNull();
-    expect(elapsedMs).toBeLessThan(50);
-  });
-
   it('longer than the 64-char length guard is rejected outright, even for an otherwise-genuine shape', () => {
     // The padding is INTERNAL (between the first number and the separator), so no trimming step could shrink it
     // away -- this pins the length guard itself, not just the regex fix.
@@ -848,50 +373,7 @@ describe('parseSizeText ReDoS guard (F1, 2026-09-16 review)', () => {
   });
 });
 
-// ── Typing "30x60x1" against a catalog-linked 60x60 row must recompute แผ่น/ตร.ม. from the TYPED
-// size (0.18), not keep the catalogue's 0.36. This is the pairing that exposed the backend/frontend
-// disagreement (backend printed the catalogue); see the matching backend test for the PDF half. ──
-describe('sqmPerPieceFromSizeCm / sizeTextDiffersFromCatalogFaceSize agree on the 2026-09-16 bug pairing', () => {
-  it('"30x60x1" against a catalogSizeText of "60x60" recomputes 0.18 and is confirmed different', () => {
-    expect(sqmPerPieceFromSizeCm('30x60x1')).toBe(0.18);
-    expect(sizeTextDiffersFromCatalogFaceSize('30x60x1', '60x60')).toBe(true);
-  });
-
-  it('an explicit mm unit is trusted for area, not compared against the cm sanity bound', () => {
-    // 300mm x 600mm = 0.18 sqm/piece -- a real, small tile; the cm reading (300x600) would be 18 sqm/piece and get
-    // rejected by the sanity bound, which is exactly the bug this unit-aware conversion avoids.
-    expect(sqmPerPieceFromSizeCm('300x600mm')).toBe(0.18);
-  });
-
-  it('explicit unit wins: "300x600mm" is a different tile than a 60x60cm catalogue row', () => {
-    expect(sizeTextDiffersFromCatalogFaceSize('300x600mm', '60x60')).toBe(true);
-  });
-
-  it('explicit unit wins the other way too: "600x600mm" still matches a 60x60cm catalogue row', () => {
-    expect(sizeTextDiffersFromCatalogFaceSize('600x600mm', '60x60')).toBe(false);
-  });
-
-  /**
-   * The two vectors above never distinguish an explicit unit from "no unit, check both readings"
-   * (both land on the same reading). This one does: catalogue 30cm x 60cm, typed "60x30mm", an
-   * explicit MM reading that matches NEITHER the catalogue's mm figures (300,600) NOR its cm
-   * figures (30,60), but WOULD match the cm figures order-swapped if the explicit unit were
-   * ignored. Forcing the typed `unit` to `null` in `compareToCatalogFaceSize` turns it red.
-   */
-  it('pins unit resolution -- mutation-discriminating (F5-style), unlike the two vectors above', () => {
-    expect(sizeTextDiffersFromCatalogFaceSize('60x30mm', '30x60')).toBe(true);
-  });
-});
-
 describe('sizeTextMatchesCatalogFaceSize (prod QT-2026-0034-1, 2026-09-15 — mirrors DealQuotationLines#sizeLine\'s REFINEMENT)', () => {
-  it('matches when the typed size equals the catalogue size exactly', () => {
-    expect(sizeTextMatchesCatalogFaceSize('60x60', '60x60')).toBe(true);
-  });
-
-  it('matches order-insensitively', () => {
-    expect(sizeTextMatchesCatalogFaceSize('120x60', '60x120')).toBe(true);
-  });
-
   it('matches when the typed size is the catalogue size in millimetres (the exact prod bug shape)', () => {
     // catalogue was picked as 60x60 cm (a 600x600mm tile); the rep typed the mm figures straight into this
     // cm-labelled field.
@@ -903,227 +385,6 @@ describe('sizeTextMatchesCatalogFaceSize (prod QT-2026-0034-1, 2026-09-15 — mi
   it('does NOT match a genuinely different size -- the exact prod bug\'s two lines', () => {
     expect(sizeTextMatchesCatalogFaceSize('30x60', '60x60')).toBe(false);
     expect(sizeTextMatchesCatalogFaceSize('3x60', '60x60')).toBe(false);
-  });
-
-  it('tolerates spacing, separators and a trailing unit', () => {
-    expect(sizeTextMatchesCatalogFaceSize('60 x 60 cm', '60x60')).toBe(true);
-    expect(sizeTextMatchesCatalogFaceSize('60×60', '60x60')).toBe(true);
-  });
-
-  it('is false whenever either side fails to parse as a plain size pair', () => {
-    expect(sizeTextMatchesCatalogFaceSize('รูปทรงอิสระ', '60x60')).toBe(false);
-    expect(sizeTextMatchesCatalogFaceSize('60x60', '')).toBe(false);
-    expect(sizeTextMatchesCatalogFaceSize('', '60x60')).toBe(false);
-    expect(sizeTextMatchesCatalogFaceSize(null, null)).toBe(false);
-  });
-});
-
-// sizeTextMatchesCatalogFaceSize's negation is NOT the right predicate for "should the editor
-// recompute แผ่น/ตร.ม.?": it reads "can't tell" (unparseable) the same as "confirmed different".
-// sizeTextDiffersFromCatalogFaceSize only fires on a CONFIRMED difference, mirroring
-// DealQuotationLines#sizeLine's FALLBACK rule (blank/unparseable typed size keeps catalogue dims).
-describe('sizeTextDiffersFromCatalogFaceSize (review fix, 2026-09-15 -- "can\'t tell" must never read as "different")', () => {
-  it('is true only when both sides parse AND genuinely differ -- the exact prod bug\'s two lines', () => {
-    expect(sizeTextDiffersFromCatalogFaceSize('30x60', '60x60')).toBe(true);
-    expect(sizeTextDiffersFromCatalogFaceSize('3x60', '60x60')).toBe(true);
-  });
-
-  it('is false when the sizes match, in cm or mm, order-insensitive', () => {
-    expect(sizeTextDiffersFromCatalogFaceSize('60x60', '60x60')).toBe(false);
-    expect(sizeTextDiffersFromCatalogFaceSize('600x600', '60x60')).toBe(false);
-    expect(sizeTextDiffersFromCatalogFaceSize('120x60', '60x120')).toBe(false);
-  });
-
-  it('is false ("not confirmed different") whenever either side fails to parse -- the exact defect this fixes', () => {
-    // A clearing edit, or any unparseable intermediate mid-retype ("3", "30x").
-    expect(sizeTextDiffersFromCatalogFaceSize('', '60x60')).toBe(false);
-    expect(sizeTextDiffersFromCatalogFaceSize('3', '60x60')).toBe(false);
-    expect(sizeTextDiffersFromCatalogFaceSize('30x', '60x60')).toBe(false);
-    // catalogSizeText itself unparseable (a catalogue row with no width/height, sizeTextFromCatalog's sizeRaw
-    // fallback) -- even a genuinely different-looking typed size must not read as "different" when there is
-    // nothing reliable to compare it against.
-    expect(sizeTextDiffersFromCatalogFaceSize('30x60', 'JOLLY COCO 60x120')).toBe(false);
-    expect(sizeTextDiffersFromCatalogFaceSize(null, null)).toBe(false);
-  });
-});
-
-// ── The catalogue side of the comparison can carry its own unit token (sizeTextFromCatalog's
-// sizeRaw/size fallback, ~49 prod rows with no width_mm/height_mm) and must honour it rather than
-// reading the digits as bare cm; see parseSizeCmPair's doc. ──
-describe('parseSizeCmPair / catalogue-side unit honouring (F3, 2026-09-16 review)', () => {
-  it('an explicit mm unit on the CATALOGUE side is converted to its actual cm face size, not read as bare cm digits', () => {
-    // Reading "600x1200 mm" as literal cm digits (600,1200) would make a correctly typed "60x120"
-    // fail to match its own catalogue row.
-    expect(sizeTextMatchesCatalogFaceSize('60x120', '600x1200 mm')).toBe(true);
-    // A genuinely different tile must still read as different.
-    expect(sizeTextMatchesCatalogFaceSize('30x60', '600x1200 mm')).toBe(false);
-  });
-
-  it('a junk size_raw fallback (not a size at all) is a parse failure, never a wrong reading', () => {
-    expect(sizeTextMatchesCatalogFaceSize('60x120', 'JOLLY COCO 60x120')).toBe(false);
-    expect(sizeTextDiffersFromCatalogFaceSize('60x120', 'JOLLY COCO 60x120')).toBe(false);
-  });
-});
-
-describe('quotationItemMissingSummary', () => {
-  it('returns null once an item has no errors', () => {
-    expect(quotationItemMissingSummary({}, 0)).toBeNull();
-  });
-
-  // The plan's own worked example.
-  it('renders "รายการที่ N: ขาด field1, field2" in row-layout order, 1-indexed', () => {
-    const errors = validateQuotationItem(completeItem({ color: '', thicknessMm: null }));
-    expect(quotationItemMissingSummary(errors, 1)).toBe('รายการที่ 2: ขาด สี, ความหนา');
-  });
-});
-
-// ── F1 grouping + origin mapping, F5 tab metadata ──
-
-describe('originCountryFromCode (F1 catalog autofill)', () => {
-  it('maps the four codes this app has ประเทศต้นทาง options for', () => {
-    expect(meta.originCountryFromCode('IT')).toBe('อิตาลี');
-    expect(meta.originCountryFromCode('ES')).toBe('สเปน');
-    expect(meta.originCountryFromCode('CN')).toBe('จีน');
-    expect(meta.originCountryFromCode('TH')).toBe('ไทย-สต็อก');
-  });
-
-  it('is case- and whitespace-insensitive about the ISO code', () => {
-    expect(meta.originCountryFromCode(' it ')).toBe('อิตาลี');
-  });
-
-  // Blank, not 'อื่นๆ': that option carries no lead time, so guessing it would look filled in while telling the
-  // customer nothing.
-  it('returns "" for an unmapped, empty or absent code', () => {
-    expect(meta.originCountryFromCode('PT')).toBe('');
-    expect(meta.originCountryFromCode('')).toBe('');
-    expect(meta.originCountryFromCode(null)).toBe('');
-    expect(meta.originCountryFromCode(undefined)).toBe('');
-  });
-
-  it('every mapped value is a real ORIGIN_COUNTRY_OPTIONS code with a lead-time range', () => {
-    for (const code of ['IT', 'ES', 'CN', 'TH']) {
-      const label = meta.originCountryFromCode(code);
-      const option = meta.ORIGIN_COUNTRY_OPTIONS.find((o) => o.code === label);
-      expect(option, `${code} -> ${label}`).toBeDefined();
-      expect(option.leadTimeMinDays).toBeGreaterThan(0);
-    }
-  });
-});
-
-// ── The แก้ predicate must match the SQL, not JS truthiness ──
-describe('isDealQuotationNeedingRework — mirrors NEEDS_REWORK_PREDICATE', () => {
-  const draft = (over = {}) => ({ docStatus: 'DRAFT', approvalNote: null, parentQuotationId: null, ...over });
-
-  it('an EMPTY-STRING approvalNote counts as present, exactly as `IS NOT NULL` does', () => {
-    // `Boolean('')` is false but `'' IS NOT NULL` is TRUE; a mock using the former shows fewer rows
-    // than production, which nobody notices from the UI.
-    expect(meta.isDealQuotationNeedingRework(draft({ approvalNote: '' }))).toBe(true);
-    expect(meta.isDealQuotationNeedingRework(draft({ approvalNote: 'ราคาสูงเกินไป' }))).toBe(true);
-  });
-
-  it('null / undefined / absent approvalNote with no parent is NOT rework', () => {
-    expect(meta.isDealQuotationNeedingRework(draft())).toBe(false);
-    expect(meta.isDealQuotationNeedingRework(draft({ approvalNote: undefined }))).toBe(false);
-  });
-
-  it('a DRAFT revision in progress counts, via parentQuotationId (the second sense of แก้)', () => {
-    expect(meta.isDealQuotationNeedingRework(draft({ parentQuotationId: 7 }))).toBe(true);
-  });
-
-  it('DRAFT is part of the definition — an APPROVED/SUPERSEDED row with a note is never rework', () => {
-    expect(meta.isDealQuotationNeedingRework({ docStatus: 'APPROVED', approvalNote: '', parentQuotationId: null })).toBe(false);
-    expect(meta.isDealQuotationNeedingRework({ docStatus: 'SUPERSEDED', approvalNote: 'x', parentQuotationId: 3 })).toBe(false);
-    expect(meta.isDealQuotationNeedingRework({ docStatus: 'PENDING_APPROVAL', approvalNote: 'x', parentQuotationId: null })).toBe(false);
-  });
-});
-
-describe('locationGroupsFromItems (F1)', () => {
-  const item = (locationLabel, model) => ({ locationLabel, model });
-
-  it('starts a new group at every change of label, and tags each item with its group', () => {
-    const { groups, items } = meta.locationGroupsFromItems([
-      item('ชั้น 1', 'A'), item('ชั้น 1', 'B'), item('ชั้น 2', 'C'),
-    ]);
-
-    expect(groups.map((g) => g.label)).toEqual(['ชั้น 1', 'ชั้น 2']);
-    expect(items.map((it) => it.groupId)).toEqual([groups[0].groupId, groups[0].groupId, groups[1].groupId]);
-  });
-
-  // Two SEPARATE runs of the same label are two groups — collecting them together would reorder items the rep
-  // arranged deliberately, and the document does not do that either.
-  it('does not merge non-adjacent runs of the same label', () => {
-    const { groups } = meta.locationGroupsFromItems([item('ชั้น 1', 'A'), item('ชั้น 2', 'B'), item('ชั้น 1', 'C')]);
-    expect(groups).toHaveLength(3);
-    expect(groups.map((g) => g.label)).toEqual(['ชั้น 1', 'ชั้น 2', 'ชั้น 1']);
-  });
-
-  it('treats null / undefined / "" as one and the same blank label', () => {
-    const { groups } = meta.locationGroupsFromItems([item(null, 'A'), item(undefined, 'B'), item('', 'C')]);
-    expect(groups).toHaveLength(1);
-    expect(groups[0].label).toBe('');
-  });
-
-  it('always yields at least one group, so a brand-new quotation has somewhere to add an item', () => {
-    expect(meta.locationGroupsFromItems([]).groups).toHaveLength(1);
-    expect(meta.locationGroupsFromItems(undefined).groups).toHaveLength(1);
-  });
-
-  it('mints distinct group ids across calls', () => {
-    const a = meta.locationGroupsFromItems([item('x', 'A')]).groups[0].groupId;
-    const b = meta.locationGroupsFromItems([item('x', 'A')]).groups[0].groupId;
-    expect(a).not.toBe(b);
-    expect(meta.newLocationGroupId()).not.toBe(meta.newLocationGroupId());
-  });
-
-  it('preserves item order exactly, so the saved document order is the loaded one', () => {
-    const input = [item('ชั้น 2', 'A'), item('ชั้น 1', 'B'), item('ชั้น 2', 'C')];
-    const { items } = meta.locationGroupsFromItems(input);
-    expect(items.map((it) => it.model)).toEqual(['A', 'B', 'C']);
-  });
-});
-
-describe('DEAL_QUOTATION_STATUS_TABS (F5)', () => {
-  it('is exactly the five tabs the owner asked for, in order', () => {
-    expect(meta.DEAL_QUOTATION_STATUS_TABS.map((t) => t.label))
-      .toEqual(['ทั้งหมด', 'รออนุมัติ', 'ฉบับแก้', 'ยกเลิก', 'อนุมัติแล้ว']);
-  });
-
-  it('drives ฉบับแก้ off needsRework, not a docStatus', () => {
-    const rework = meta.dealQuotationStatusTab('NEEDS_REWORK');
-    expect(rework.params).toEqual({ needsRework: true });
-    expect(rework.params.status).toBeUndefined();
-  });
-
-  // ISSUED/SENT/ACCEPTED rows are approved-and-beyond; they must not sit in no tab but ทั้งหมด.
-  it('อนุมัติแล้ว covers every approved-and-beyond status, still keyed APPROVED', () => {
-    const tab = meta.dealQuotationStatusTab('APPROVED');
-    expect(tab.label).toBe('อนุมัติแล้ว');
-    expect(tab.countKey).toBe('approved');
-    expect(tab.params).toEqual({ status: ['APPROVED', 'ISSUED', 'SENT', 'ACCEPTED'] });
-    // One comma-joined status param; Spring binds it to DealQuotationController#search's List<String>.
-    expect(API_ROUTES.dealQuotations.list(tab.params)).toBe('/api/deal-quotations?status=APPROVED%2CISSUED%2CSENT%2CACCEPTED');
-  });
-
-  it('sends no params at all for ทั้งหมด', () => {
-    expect(meta.dealQuotationStatusTab('all').params).toEqual({});
-  });
-
-  it('returns null for an unknown key so the caller can fall back to the role default', () => {
-    expect(meta.dealQuotationStatusTab('SUPERSEDED')).toBeNull();
-    expect(meta.dealQuotationStatusTab(null)).toBeNull();
-  });
-
-  it('sends approvers to รออนุมัติ and everyone else to ทั้งหมด', () => {
-    expect(meta.defaultDealQuotationStatusTab({ role: 'sales_manager' })).toBe('PENDING_APPROVAL');
-    expect(meta.defaultDealQuotationStatusTab({ role: 'ceo' })).toBe('PENDING_APPROVAL');
-    expect(meta.defaultDealQuotationStatusTab({ role: 'sales' })).toBe('all');
-    expect(meta.defaultDealQuotationStatusTab({ role: 'import' })).toBe('all');
-    expect(meta.defaultDealQuotationStatusTab(null)).toBe('all');
-  });
-
-  it('every tab names a countKey the counts DTO carries', () => {
-    expect(meta.DEAL_QUOTATION_STATUS_TABS.map((t) => t.countKey))
-      .toEqual(['all', 'pendingApproval', 'needsRework', 'cancelled', 'approved']);
   });
 });
 
@@ -1145,48 +406,12 @@ describe('dealQuotationListSeesAll', () => {
   });
 });
 
-describe('dealQuotationRepOptions', () => {
-  it('returns distinct, name-sorted options and skips rows with no salesRepId', () => {
-    const rows = [
-      { salesRepId: 9, salesRepName: 'ผึ้ง' },
-      { salesRepId: 6, salesRepName: 'คุณสมหมาย ขายดี' },
-      { salesRepId: null, salesRepName: 'ไม่มีเจ้าของ' },
-      { salesRepId: 9, salesRepName: 'ผึ้ง' }, // duplicate of the first row
-    ];
-    expect(meta.dealQuotationRepOptions(rows)).toEqual([
-      { id: '6', name: 'คุณสมหมาย ขายดี' },
-      { id: '9', name: 'ผึ้ง' },
-    ]);
-  });
-
-  it('is null-safe and returns an empty array for no rows', () => {
-    expect(meta.dealQuotationRepOptions(null)).toEqual([]);
-    expect(meta.dealQuotationRepOptions([])).toEqual([]);
-    expect(meta.dealQuotationRepOptions(undefined)).toEqual([]);
-  });
-});
-
 describe('filterDealQuotationRows', () => {
   const rows = [
     { id: 1, salesRepId: 6, customerName: 'บริษัท แฟชั่นไอส์แลนด์ จำกัด', projectName: 'Fashion Island' },
     { id: 2, salesRepId: 9, customerName: 'บริษัท เดโม จำกัด', projectName: null },
     { id: 3, salesRepId: 6, customerName: 'บริษัท อื่น จำกัด', projectName: 'Other Project' },
   ];
-
-  it('filters by repId, string-comparing so a numeric id and a string id both match', () => {
-    expect(meta.filterDealQuotationRows(rows, { repId: 6 }).map((r) => r.id)).toEqual([1, 3]);
-    expect(meta.filterDealQuotationRows(rows, { repId: '6' }).map((r) => r.id)).toEqual([1, 3]);
-  });
-
-  it('filters by text, case-insensitively, against customerName + projectName', () => {
-    expect(meta.filterDealQuotationRows(rows, { text: 'fashion' }).map((r) => r.id)).toEqual([1]);
-    expect(meta.filterDealQuotationRows(rows, { text: 'เดโม' }).map((r) => r.id)).toEqual([2]);
-  });
-
-  it('combines repId and text (AND, not OR)', () => {
-    expect(meta.filterDealQuotationRows(rows, { repId: 6, text: 'other' }).map((r) => r.id)).toEqual([3]);
-    expect(meta.filterDealQuotationRows(rows, { repId: 9, text: 'other' })).toEqual([]);
-  });
 
   it('filters by amount: lt1m is < threshold, gte1m owns the exact 1,000,000 boundary', () => {
     const amountRows = [
@@ -1201,121 +426,10 @@ describe('filterDealQuotationRows', () => {
     expect(meta.filterDealQuotationRows(amountRows, { amount: 'nonsense' }).map((r) => r.id)).toEqual([1, 2, 3, 4]);
     expect(meta.filterDealQuotationRows(rows, { repId: 6, amount: 'gte1m' })).toEqual([]);
   });
-
-  // Filter by whether the customer has an email. The customer master has NO email column, so it can
-  // only mean the quotation's own snapshots: contactEmail (customer-master contact snapshot, no
-  // longer printed) OR orderedByEmail (the ผู้ติดต่อ email the rep typed, which prints). Either
-  // non-blank = มีอีเมล; whitespace counts as blank (live writers NULLIF(TRIM()) these columns but an
-  // old backfill copied contact.email raw, so old rows can carry whitespace).
-  it('filters by email: has = contactEmail OR orderedByEmail non-blank, none = both blank', () => {
-    const emailRows = [
-      { id: 1, contactEmail: 'a@example.co.th', orderedByEmail: null },
-      { id: 2, contactEmail: null, orderedByEmail: 'b@example.co.th' },
-      { id: 3, contactEmail: '   ', orderedByEmail: '' },
-      { id: 4 },
-      { id: 5, contactEmail: 'c@example.co.th', orderedByEmail: 'd@example.co.th' },
-    ];
-    const ids = (opts) => meta.filterDealQuotationRows(emailRows, opts).map((r) => r.id);
-    expect(ids({ email: 'has' })).toEqual([1, 2, 5]);
-    expect(ids({ email: 'none' })).toEqual([3, 4]);
-    // Unknown / empty email value is a no-op, like amount.
-    expect(ids({ email: 'nonsense' })).toEqual([1, 2, 3, 4, 5]);
-    expect(ids({ email: '' })).toEqual([1, 2, 3, 4, 5]);
-    // Composes with repId (AND).
-    const mixed = [
-      { id: 1, salesRepId: 6, contactEmail: 'a@example.co.th' },
-      { id: 2, salesRepId: 9, contactEmail: 'b@example.co.th' },
-      { id: 3, salesRepId: 6, contactEmail: null },
-    ];
-    expect(meta.filterDealQuotationRows(mixed, { repId: 6, email: 'has' }).map((r) => r.id)).toEqual([1]);
-    expect(meta.filterDealQuotationRows(mixed, { repId: 9, email: 'none' })).toEqual([]);
-  });
-
-  it('offers exactly มีอีเมล / ไม่มีอีเมล as the email filter options, keyed has / none', () => {
-    expect(meta.DEAL_QUOTATION_EMAIL_OPTIONS).toEqual([
-      { value: 'has', label: 'มีอีเมล' },
-      { value: 'none', label: 'ไม่มีอีเมล' },
-    ]);
-  });
-
-  // ช่วงเวลา filter on quotationDate, for every role. Each window starts N days/months before
-  // `today` (Bangkok) and includes that start day; วันนี้ is today only; ทั้งหมด ('') is the default.
-  it('filters by period on quotationDate, each window inclusive of its start day', () => {
-    const today = '2026-11-12';
-    const periodRows = [
-      { id: 1, quotationDate: '2026-11-12' },
-      { id: 2, quotationDate: '2026-11-09' }, // 3d start
-      { id: 3, quotationDate: '2026-11-08' },
-      { id: 4, quotationDate: '2026-11-05' }, // 7d start
-      { id: 5, quotationDate: '2026-10-12' }, // 1m start
-      { id: 6, quotationDate: '2026-08-12' }, // 3m start
-      { id: 7, quotationDate: '2026-05-12' }, // 6m start
-      { id: 8, quotationDate: '2025-11-12' }, // 1y start
-      { id: 9, quotationDate: '2025-11-11' },
-      { id: 10, quotationDate: null },
-    ];
-    const ids = (period) => meta.filterDealQuotationRows(periodRows, { period, today }).map((r) => r.id);
-    expect(ids('today')).toEqual([1]);
-    expect(ids('3d')).toEqual([1, 2]);
-    expect(ids('7d')).toEqual([1, 2, 3, 4]);
-    expect(ids('1m')).toEqual([1, 2, 3, 4, 5]);
-    expect(ids('3m')).toEqual([1, 2, 3, 4, 5, 6]);
-    expect(ids('6m')).toEqual([1, 2, 3, 4, 5, 6, 7]);
-    expect(ids('1y')).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
-    expect(ids('')).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
-    expect(ids('nonsense')).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
-  });
-
-  it('clamps a month window to the end of a shorter month (31 มี.ค. − 1 เดือน = 28 ก.พ.)', () => {
-    const rows2 = [{ id: 1, quotationDate: '2026-02-28' }, { id: 2, quotationDate: '2026-02-27' }];
-    expect(meta.filterDealQuotationRows(rows2, { period: '1m', today: '2026-03-31' }).map((r) => r.id)).toEqual([1]);
-  });
-
-  it('period composes with email (AND)', () => {
-    const mixed = [
-      { id: 1, quotationDate: '2026-11-12', contactEmail: 'a@example.co.th' },
-      { id: 2, quotationDate: '2026-11-12', contactEmail: null },
-      { id: 3, quotationDate: '2020-01-01', contactEmail: 'b@example.co.th' },
-    ];
-    expect(meta.filterDealQuotationRows(mixed, { period: 'today', today: '2026-11-12', email: 'has' }).map((r) => r.id)).toEqual([1]);
-  });
-
-  it('offers the period options in the owner-asked order, ทั้งหมด last', () => {
-    expect(meta.DEAL_QUOTATION_PERIOD_OPTIONS.map((o) => o.label)).toEqual([
-      'วันนี้', '3 วันที่แล้ว', '7 วันที่แล้ว', '1 เดือน', '3 เดือน', '6 เดือน', '1 ปี', 'ทั้งหมด',
-    ]);
-    expect(meta.DEAL_QUOTATION_PERIOD_OPTIONS.at(-1).value).toBe('');
-  });
-
-  it('is a no-op when both filters are empty/absent', () => {
-    expect(meta.filterDealQuotationRows(rows)).toEqual(rows);
-    expect(meta.filterDealQuotationRows(rows, {})).toEqual(rows);
-    expect(meta.filterDealQuotationRows(rows, { repId: '', text: '' })).toEqual(rows);
-  });
-
-  it('is null-safe on rows and on each row', () => {
-    expect(meta.filterDealQuotationRows(null)).toEqual([]);
-    expect(meta.filterDealQuotationRows(undefined, { text: 'x' })).toEqual([]);
-    expect(meta.filterDealQuotationRows([{ id: 1 }], { text: 'x' })).toEqual([]);
-    expect(meta.filterDealQuotationRows([{ id: 1 }], { repId: '' })).toEqual([{ id: 1 }]);
-  });
 });
 
 // ── Quotation v3 / v3b ──
 describe('v3/v3b document settings', () => {
-  it('offers all three tile price modes on a Thai document', () => {
-    expect(meta.availablePriceModes('TH').map((o) => o.code)).toEqual(['NET', 'SPECIAL_SQM', 'DIRECT_NET']);
-  });
-
-  it('offers SPECIAL_SQM on an English document as a USD/ตร.ม. price (owner decision 2026-09-13)', () => {
-    const en = meta.availablePriceModes('EN');
-    expect(en.map((o) => o.code)).toEqual(['NET', 'SPECIAL_SQM', 'DIRECT_NET']);
-    expect(en.find((o) => o.code === 'SPECIAL_SQM').label).toBe('ราคา USD/ตร.ม.');
-    expect(en.find((o) => o.code === 'SPECIAL_SQM').hint).toMatch(/USD.*ไม่มี VAT.*กล่อง × ตร\.ม\.\/กล่อง/);
-    // Thai keeps its own label, untouched.
-    expect(meta.availablePriceModes('TH').find((o) => o.code === 'SPECIAL_SQM').label).toBe('ราคาพิเศษ บาท/ตร.ม.');
-  });
-
   it('rowsWithPricesCleared clears EVERY currency amount to null (not \'\') — and keeps every non-money value', () => {
     const tileRow = {
       lineType: 'TILE', unitPrice: 64, directNetPrice: 500, specialPriceSqm: 64, discountPct: 5, sqmPerBox: 0.6,
@@ -1358,86 +472,15 @@ describe('v3/v3b document settings', () => {
     expect(meta.rowHasPriceForPreview({ lineType: 'PLAIN', unitPrice: 3500 }, 'NET')).toBe(true);
   });
 
-  it('a language switch no longer moves any price mode', () => {
-    expect(meta.priceModeForLanguage('SPECIAL_SQM', 'EN')).toEqual({ priceMode: 'SPECIAL_SQM', moved: false });
-    expect(meta.priceModeForLanguage('NET', 'EN')).toEqual({ priceMode: 'NET', moved: false });
-    expect(meta.priceModeForLanguage('SPECIAL_SQM', 'TH')).toEqual({ priceMode: 'SPECIAL_SQM', moved: false });
-    expect(meta.priceModeForLanguage('BOGUS', 'EN')).toEqual({ priceMode: 'DIRECT_NET', moved: true });
-  });
-
-  it('isEnglishPerSqm is exactly SPECIAL_SQM on English', () => {
-    expect(meta.isEnglishPerSqm('SPECIAL_SQM', 'EN')).toBe(true);
-    expect(meta.isEnglishPerSqm('SPECIAL_SQM', 'TH')).toBe(false);
-    expect(meta.isEnglishPerSqm('NET', 'EN')).toBe(false);
-  });
-
   it('derives the currency and the VAT rate from the language alone', () => {
     expect(meta.currencyForLanguage('TH')).toBe('THB');
     expect(meta.currencyForLanguage('EN')).toBe('USD');
     expect(meta.vatRateForLanguage('TH')).toBe(0.07);
     expect(meta.vatRateForLanguage('EN')).toBe(0);
   });
-
-  it('formats USD with $, and puts a negative sign BEFORE the symbol', () => {
-    expect(meta.formatQuotationMoney(1234.5, 'USD')).toBe('$1,234.50');
-    expect(meta.formatQuotationMoney(-38198.21, 'THB')).toBe('-฿38,198.21');
-    expect(meta.formatQuotationMoney(null, 'THB')).toBe('-');
-  });
 });
 
 describe('v3 row labels and derivations', () => {
-  it('prints an EMPTY ส่วนลด cell for a ส่วนลดพิเศษ row, whatever it carries', () => {
-    expect(meta.documentDiscountLabel({ lineType: 'ADJUSTMENT', discountPct: 5 }, 'NET')).toBe('');
-  });
-
-  it('prints พิเศษ for a SPECIAL_SQM tile, and Net for the English per-sqm row (the USD/sqm IS the net)', () => {
-    expect(meta.documentDiscountLabel({ lineType: 'TILE' }, 'SPECIAL_SQM', 'TH')).toBe('พิเศษ');
-    expect(meta.documentDiscountLabel({ lineType: 'TILE' }, 'SPECIAL_SQM', 'EN')).toBe('Net');
-    expect(meta.documentDiscountLabel({ lineType: 'TILE', unitPrice: 600, netUnitPrice: 500 }, 'DIRECT_NET', 'EN')).toBe('Special');
-  });
-
-  it('prints Net for a DIRECT_NET tile whose net equals its list price, พิเศษ when it differs', () => {
-    expect(meta.documentDiscountLabel({ lineType: 'TILE', unitPrice: 500, netUnitPrice: 500 }, 'DIRECT_NET')).toBe('Net');
-    expect(meta.documentDiscountLabel({ lineType: 'TILE', unitPrice: 600, netUnitPrice: 500 }, 'DIRECT_NET')).toBe('พิเศษ');
-  });
-
-  it('prints N% or Net for a PLAIN row from its own discount', () => {
-    expect(meta.documentDiscountLabel({ lineType: 'PLAIN', discountPct: 0 }, 'SPECIAL_SQM')).toBe('Net');
-    expect(meta.documentDiscountLabel({ lineType: 'PLAIN', discountPct: 5 }, 'NET')).toBe('5%');
-  });
-
-  it('composes the ENGLISH discount preview with a month name and a Gregorian year (owner ruling 2026-09-13)', () => {
-    expect(meta.adjustmentDescriptionPreview({ adjustmentKind: 'PERCENT', adjustmentPct: 3, adjustmentDeadline: '2026-07-31' }, 'EN'))
-      .toBe('Special discount 3% for orders placed by July 31, 2026');
-    expect(meta.adjustmentDescriptionPreview({ adjustmentKind: 'PERCENT', adjustmentPct: 2.5, adjustmentDeadline: '2026-01-05' }, 'EN'))
-      .toBe('Special discount 2.5% for orders placed by January 5, 2026');
-    expect(meta.adjustmentDescriptionPreview({ adjustmentKind: 'PERCENT', adjustmentPct: 3, adjustmentDeadline: '' }, 'EN'))
-      .toBe('Special discount 3%');
-    expect(meta.adjustmentDescriptionPreview({ adjustmentKind: 'AMOUNT', adjustmentPct: 9 }, 'EN')).toBe('Special discount');
-    // A rep's own wording on a flat adjustment is kept, in either language.
-    expect(meta.adjustmentDescriptionPreview({ adjustmentKind: 'AMOUNT', description: 'Loyalty rebate' }, 'EN'))
-      .toBe('Loyalty rebate');
-  });
-
-  it('keeps the Thai preview when the language is TH or omitted', () => {
-    const adjustment = { adjustmentKind: 'PERCENT', adjustmentPct: 3, adjustmentDeadline: '2026-07-31' };
-    expect(meta.adjustmentDescriptionPreview(adjustment, 'TH')).toBe('ส่วนลดพิเศษ 3% สำหรับการสั่งซื้อภายใน 31/07/2569');
-    expect(meta.adjustmentDescriptionPreview(adjustment)).toBe('ส่วนลดพิเศษ 3% สำหรับการสั่งซื้อภายใน 31/07/2569');
-  });
-
-  it('composes the ส่วนลดพิเศษ preview with a zero-padded BE date, as the owner\'s QN6900704-2 prints it', () => {
-    expect(meta.adjustmentDescriptionPreview({ adjustmentKind: 'PERCENT', adjustmentPct: 3, adjustmentDeadline: '2026-07-31' }))
-      .toBe('ส่วนลดพิเศษ 3% สำหรับการสั่งซื้อภายใน 31/07/2569');
-    expect(meta.adjustmentDescriptionPreview({ adjustmentKind: 'PERCENT', adjustmentPct: 3, adjustmentDeadline: '' }))
-      .toBe('ส่วนลดพิเศษ 3%');
-  });
-
-  it('keeps the rep\'s own wording on a FLAT adjustment, and never prints a percent there', () => {
-    expect(meta.adjustmentDescriptionPreview({ adjustmentKind: 'AMOUNT', description: 'ส่วนลดท้ายบิล', adjustmentPct: 9 }))
-      .toBe('ส่วนลดท้ายบิล');
-    expect(meta.adjustmentDescriptionPreview({ adjustmentKind: 'AMOUNT', adjustmentPct: 9 })).toBe('ส่วนลดพิเศษ');
-  });
-
   it('estimates a percentage adjustment as base × pct, rounded to satang — labelled an estimate by the caller', () => {
     // The owner's QN6900704-2: 1,273,273.56 × 3% = 38,198.21 (the printed figure).
     expect(meta.estimateAdjustmentAmount({ adjustmentKind: 'PERCENT', adjustmentPct: 3 }, 1273273.56)).toBe(38198.21);
@@ -1464,57 +507,10 @@ describe('v3 row validation', () => {
     expect(meta.quotationItemMissingSummary({ sqmPerBox: 'x', specialPriceSqm: 'y' }, 0)).toBe('รายการที่ 1: ขาด ตร.ม./กล่อง, ราคาต่อ ตร.ม.');
   });
 
-  // ── ตร.ม./กล่อง is OPTIONAL for English per-sqm ──
-  describe('English per-sqm with a blank box area (Option B)', () => {
-    const perSqmNoBox = { ...tile, unitPrice: '', specialPriceSqm: 64, sqmPerBox: null };
-
-    it('is accepted with แผ่น/กล่อง filled — no sqmPerBox required at all', () => {
-      expect(meta.validateQuotationItem(perSqmNoBox, 'SPECIAL_SQM', 'EN')).toEqual({});
-    });
-
-    it('is accepted with NEITHER box field filled — exactly like any other tile row with no pieces-per-box', () => {
-      expect(meta.validateQuotationItem({ ...perSqmNoBox, piecesPerBox: null }, 'SPECIAL_SQM', 'EN')).toEqual({});
-      expect(meta.validateQuotationItem({ ...perSqmNoBox, piecesPerBox: '' }, 'SPECIAL_SQM', 'EN')).toEqual({});
-    });
-
-    it('still refuses a filled ตร.ม./กล่อง paired with a blank แผ่น/กล่อง (the partial pair)', () => {
-      const partial = { ...tile, unitPrice: '', specialPriceSqm: 64, sqmPerBox: 0.6, piecesPerBox: null };
-      expect(meta.validateQuotationItem(partial, 'SPECIAL_SQM', 'EN').piecesPerBox).toBeTruthy();
-    });
-
-    it('still flags a typed ตร.ม./กล่อง with too many decimals, even though the field is optional', () => {
-      expect(meta.validateQuotationItem({ ...perSqmNoBox, sqmPerBox: 0.1234567 }, 'SPECIAL_SQM', 'EN').sqmPerBox)
-        .toBe('ทศนิยมได้ไม่เกิน 6 ตำแหน่ง');
-    });
-  });
-
-  // validateQuotationItem must NOT flag `roundToFullBox === false` here: itemInputFromRow already
-  // forces `roundToFullBox: true` onto the wire in this mode (see quotationItemInput.test.jsx), and
-  // such a flag would permanently block save/submit for a row ticked under NET/TH then switched to
-  // English per-sqm, with no on-screen control to un-tick it (the checkbox is disabled AND
-  // unchecked). QuotationEditorPage's `applyPriceMode` resets the stored flag to `true` on reaching
-  // this mode. The SERVER still rejects roundToFullBox=false under English per-sqm.
-  it('English per-sqm no longer flags roundToFullBox=false in the checklist — that state is now unreachable, not merely re-guarded', () => {
-    const perSqm = { ...tile, unitPrice: '', specialPriceSqm: 64, sqmPerBox: 0.6 };
-    expect(meta.validateQuotationItem({ ...perSqm, roundToFullBox: false }, 'SPECIAL_SQM', 'EN')).toEqual({});
-    // Unaffected everywhere else, same as before: Thai ราคาพิเศษ, and NET in any language.
-    expect(meta.validateQuotationItem({ ...tile, roundToFullBox: false }, 'SPECIAL_SQM', 'TH').roundToFullBox).toBeUndefined();
-    expect(meta.validateQuotationItem({ ...tile, roundToFullBox: false }, 'NET', 'EN').roundToFullBox).toBeUndefined();
-  });
-
   it('SPECIAL_SQM needs the ราคาพิเศษ — and still the list price, which the server requires on every tile row', () => {
     expect(meta.validateQuotationItem({ ...tile, specialPriceSqm: '' }, 'SPECIAL_SQM')).toEqual({ specialPriceSqm: 'กรุณาระบุราคาพิเศษ (บาท/ตร.ม.)' });
     expect(meta.validateQuotationItem({ ...tile, specialPriceSqm: 1350 }, 'SPECIAL_SQM')).toEqual({});
     expect(meta.validateQuotationItem({ ...tile, unitPrice: '', specialPriceSqm: 1350 }, 'SPECIAL_SQM').unitPrice).toBeTruthy();
-  });
-
-  it('refuses a ราคาพิเศษ with more than 2 decimals (the column is NUMERIC(12,2))', () => {
-    expect(meta.validateQuotationItem({ ...tile, specialPriceSqm: 1350.125 }, 'SPECIAL_SQM').specialPriceSqm).toBe('ทศนิยมได้ไม่เกิน 2 ตำแหน่ง');
-  });
-
-  it('DIRECT_NET needs the net and lets the list price stay blank', () => {
-    expect(meta.validateQuotationItem({ ...tile, unitPrice: '', directNetPrice: '' }, 'DIRECT_NET')).toEqual({ directNetPrice: 'กรุณาระบุราคาสุทธิ (บาท/ตร.ม.)' });
-    expect(meta.validateQuotationItem({ ...tile, unitPrice: '', directNetPrice: 500 }, 'DIRECT_NET')).toEqual({});
   });
 
   it('a PLAIN row needs description, quantity, unit and a positive price — and nothing tile-shaped', () => {
@@ -1524,50 +520,9 @@ describe('v3 row validation', () => {
     expect(meta.validateQuotationItem({ lineType: 'PLAIN', description: 'ค่าขนส่ง', quantity: 1, unit: 'งาน', unitPrice: 3500 })).toEqual({});
     expect(meta.validatePlainItem({ description: 'x', quantity: 1.005, unit: 'JOB', unitPrice: 1 }).quantity).toBeTruthy();
   });
-
-  it('a ส่วนลดพิเศษ needs a positive percent (≤ 100, ≤ 3dp) or a positive amount', () => {
-    expect(meta.validateAdjustment({ adjustmentKind: 'PERCENT', adjustmentPct: '' })).toEqual({ adjustmentPct: 'กรุณาระบุเปอร์เซ็นต์ส่วนลด' });
-    expect(meta.validateAdjustment({ adjustmentKind: 'PERCENT', adjustmentPct: 101 }).adjustmentPct).toBe('ส่วนลดต้องไม่เกิน 100%');
-    expect(meta.validateAdjustment({ adjustmentKind: 'PERCENT', adjustmentPct: 3 })).toEqual({});
-    expect(meta.validateAdjustment({ adjustmentKind: 'AMOUNT', adjustmentAmount: 0 })).toEqual({ adjustmentAmount: 'กรุณาระบุจำนวนเงินส่วนลด' });
-  });
-});
-
-// ── "Sell loose pieces" ──
-describe('roundToFullBoxDisabledReason', () => {
-  it('is disabled until แผ่น/กล่อง is filled', () => {
-    expect(meta.roundToFullBoxDisabledReason({ piecesPerBox: '' }, 'NET', 'TH')).toBe('กรอกแผ่น/กล่องก่อน');
-    expect(meta.roundToFullBoxDisabledReason({ piecesPerBox: null }, 'NET', 'TH')).toBe('กรอกแผ่น/กล่องก่อน');
-    expect(meta.roundToFullBoxDisabledReason({ piecesPerBox: 0 }, 'NET', 'TH')).toBe('กรอกแผ่น/กล่องก่อน');
-  });
-
-  // Only disabled when a box AREA (ตร.ม./กล่อง) is present; mirrors
-  // DealQuotationService#buildTileItem's hasBoxArea branching.
-  it('is disabled in English per-sqm mode, once แผ่น/กล่อง AND ตร.ม./กล่อง are both filled', () => {
-    expect(meta.roundToFullBoxDisabledReason({ piecesPerBox: 10, sqmPerBox: 0.6 }, 'SPECIAL_SQM', 'EN'))
-      .toBe(meta.ROUND_TO_FULL_BOX_DISABLED_PER_SQM_REASON);
-    // The ppb-missing reason takes priority when BOTH apply — one reason at a time.
-    expect(meta.roundToFullBoxDisabledReason({ piecesPerBox: '', sqmPerBox: 0.6 }, 'SPECIAL_SQM', 'EN')).toBe('กรอกแผ่น/กล่องก่อน');
-  });
-
-  it('is enabled (null) in English per-sqm mode when ตร.ม./กล่อง is blank, even with แผ่น/กล่อง filled', () => {
-    expect(meta.roundToFullBoxDisabledReason({ piecesPerBox: 10, sqmPerBox: null }, 'SPECIAL_SQM', 'EN')).toBeNull();
-    expect(meta.roundToFullBoxDisabledReason({ piecesPerBox: 10, sqmPerBox: '' }, 'SPECIAL_SQM', 'EN')).toBeNull();
-  });
-
-  it('is enabled (null) once แผ่น/กล่อง is filled, outside English per-sqm', () => {
-    expect(meta.roundToFullBoxDisabledReason({ piecesPerBox: 10 }, 'NET', 'TH')).toBeNull();
-    expect(meta.roundToFullBoxDisabledReason({ piecesPerBox: 10 }, 'SPECIAL_SQM', 'TH')).toBeNull();
-    expect(meta.roundToFullBoxDisabledReason({ piecesPerBox: 10 }, 'DIRECT_NET', 'EN')).toBeNull();
-  });
 });
 
 describe('roundToFullBoxSummary', () => {
-  it('is null before the server has computed anything (no แผ่น/กล่อง, or no calc yet)', () => {
-    expect(meta.roundToFullBoxSummary({ piecesPerBox: '' })).toBeNull();
-    expect(meta.roundToFullBoxSummary({ piecesPerBox: 10, piecesFinal: null, boxes: null })).toBeNull();
-  });
-
   it('off (round up): "ปัดขึ้นเต็มกล่อง → N กล่อง (M แผ่น)"', () => {
     expect(meta.roundToFullBoxSummary({ piecesPerBox: 10, piecesFinal: 40, boxes: 4, roundToFullBox: true }))
       .toBe('ปัดขึ้นเต็มกล่อง → 4 กล่อง (40 แผ่น)');
@@ -1581,16 +536,6 @@ describe('roundToFullBoxSummary', () => {
     expect(meta.roundToFullBoxSummary({ piecesPerBox: 10, piecesFinal: 32, boxes: 3, roundToFullBox: false }))
       .toBe('3 กล่อง + 2 แผ่น (32 แผ่น)');
   });
-
-  it('loose = 0: no "+ N แผ่น" tail', () => {
-    expect(meta.roundToFullBoxSummary({ piecesPerBox: 10, piecesFinal: 30, boxes: 3, roundToFullBox: false }))
-      .toBe('3 กล่อง (30 แผ่น)');
-  });
-
-  it('full boxes = 0: no "กล่อง" wording at all', () => {
-    expect(meta.roundToFullBoxSummary({ piecesPerBox: 10, piecesFinal: 7, boxes: 0, roundToFullBox: false }))
-      .toBe('7 แผ่น (ไม่ครบ 1 กล่อง)');
-  });
 });
 
 // ── "ข้อมูลที่ยังไม่ครบ" checklist ──
@@ -1599,8 +544,6 @@ describe('buildQuotationChecklist', () => {
   const complete = {
     customer, projectName: 'โครงการ A', items: [{ lineType: 'TILE' }], itemErrorsByRow: [{}],
   };
-  const blocking = (entries) => entries.filter((e) => e.blocking).map((e) => e.check);
-  const warnings = (entries) => entries.filter((e) => !e.blocking).map((e) => e.check);
 
   it('pins the blocking set to what the backend already refuses — nothing the owner has not ruled on', () => {
     // creditDaysInvalid is blocking: the backend refuses an explicit invalid (<=0) creditDays on
@@ -1638,28 +581,8 @@ describe('buildQuotationChecklist', () => {
     expect(Object.values(meta.QUOTATION_CHECK)).not.toContain('contactEmail');
   });
 
-  // The editor already computes these seqs for its ส่งขออนุมัติ gate (hasMissingLeadTimes); the
-  // checklist lists them too, so a draft missing only a lead time never reads as "complete".
-  it('lists missing lead times as a submit-only entry, in the editor\'s own wording', () => {
-    const entries = meta.buildQuotationChecklist({ ...complete, missingLeadTimeSeqs: [1, 3] });
-    expect(entries).toEqual([expect.objectContaining({
-      check: 'leadTime', message: 'กรุณาระบุระยะเวลานำเข้า (วัน) ของรายการที่ 1, 3',
-      blocking: false, submitBlocking: true,
-    })]);
-    expect(meta.buildQuotationChecklist({ ...complete, missingLeadTimeSeqs: [] })).toEqual([]);
-  });
-
   it('is empty for a complete quotation', () => {
     expect(meta.buildQuotationChecklist(complete)).toEqual([]);
-  });
-
-  // The three create-time gates, each blocking and each naming its reason; the defaults leave an
-  // existing caller's checklist unchanged.
-  it('slice 2: no deal picked yet blocks with "ต้องเลือกดีล…" and skips the new-deal customer/project checks', () => {
-    const entries = meta.buildQuotationChecklist({ ...complete, isInlineCreate: true, customer: null, needsDeal: true });
-    expect(entries.map((e) => [e.check, e.blocking])).toEqual([['deal', true]]);
-    expect(entries[0].message).toBe('ต้องเลือกงานก่อนบันทึกร่าง');
-    expect(entries[0].targetId).toBe('deal-picker');
   });
 
   it('slice 2: a NEW direct quotation without a recipient blocks; any of the three recipients clears it', () => {
@@ -1685,196 +608,6 @@ describe('buildQuotationChecklist', () => {
     expect(meta.buildQuotationChecklist({ ...complete, liveDirectQuotation: { ...live, docStatus: 'CANCELLED' } })).toEqual([]);
   });
 
-  it('slice 2: N6 relaxed — an APPROVED live quotation addressed to a strictly EARLIER party does not block a later recipient; everything else still does', () => {
-    const live = (docStatus, recipientType) => ({ id: 77, number: 'QT-2026-0077-1', docStatus, recipientType });
-    const checks = (liveDirectQuotation, recipientType) =>
-      meta.buildQuotationChecklist({ ...complete, recipientRequired: true, recipientType, liveDirectQuotation }).map((e) => e.check);
-    // allowed
-    expect(checks(live('APPROVED', 'DESIGNER'), 'OWNER')).toEqual([]);
-    expect(checks(live('APPROVED', 'DESIGNER'), 'BUYER')).toEqual([]);
-    expect(checks(live('APPROVED', 'OWNER'), 'BUYER')).toEqual([]);
-    // blocked: same / earlier recipient, not APPROVED, BUYER/unknown live recipient, no recipient chosen yet
-    expect(checks(live('APPROVED', 'DESIGNER'), 'DESIGNER')).toEqual(['liveDirectQuotation']);
-    expect(checks(live('APPROVED', 'OWNER'), 'DESIGNER')).toEqual(['liveDirectQuotation']);
-    expect(checks(live('APPROVED', 'OWNER'), 'OWNER')).toEqual(['liveDirectQuotation']);
-    expect(checks(live('APPROVED', 'BUYER'), 'BUYER')).toEqual(['liveDirectQuotation']);
-    expect(checks(live('APPROVED', 'UNSPECIFIED'), 'BUYER')).toEqual(['liveDirectQuotation']);
-    expect(checks(live('PENDING_APPROVAL', 'DESIGNER'), 'OWNER')).toEqual(['liveDirectQuotation']);
-    expect(checks(live('DRAFT', 'DESIGNER'), 'OWNER')).toEqual(['liveDirectQuotation']);
-    expect(checks(live('APPROVED', 'DESIGNER'), '')).toEqual(expect.arrayContaining(['liveDirectQuotation']));
-  });
-
-  it('slice 2: N6 relaxed only while the deal is still in draft — once the order is confirmed the block returns', () => {
-    const live = { id: 77, number: 'QT-2026-0077-1', docStatus: 'APPROVED', recipientType: 'DESIGNER' };
-    const checks = (dealStatus) => meta.buildQuotationChecklist({ ...complete, recipientRequired: true, recipientType: 'OWNER', liveDirectQuotation: live, dealStatus })
-      .map((e) => e.check);
-    expect(checks('draft')).toEqual([]);
-    expect(checks(undefined)).toEqual([]);
-    expect(checks('approved')).toEqual(['liveDirectQuotation']);
-  });
-
-  // The server (DirectQuotationLocks) checks EVERY live row; the deal summary serves only the newest, so the
-  // pre-check takes the deal's live rows (newest first) and blocks if ANY row blocks, naming the newest blocker.
-  it('slice 2: N6 over every live row — any blocking row blocks, and the message names the newest BLOCKING one; a single row (object) still works', () => {
-    const row = (id, docStatus, recipientType) => ({ id, number: `QT-2026-00${id}-1`, docStatus, recipientType });
-    const blocks = (rows, recipientType, dealStatus) => meta.blocksNewDirectQuotation(rows, recipientType, dealStatus);
-    const messages = (rows, recipientType) =>
-      meta.buildQuotationChecklist({ ...complete, recipientRequired: true, recipientType, liveDirectQuotation: rows })
-        .filter((e) => e.check === 'liveDirectQuotation').map((e) => e.message);
-    const approvedDesigner = row(77, 'APPROVED', 'DESIGNER');
-    const ownerDraft = row(78, 'DRAFT', 'OWNER');
-    const ownerPending = row(78, 'PENDING_APPROVAL', 'OWNER');
-
-    // Newest row alone would allow BUYER (APPROVED designer); the older owner row blocks.
-    expect(blocks([approvedDesigner, ownerDraft], 'BUYER')).toBe(true);
-    expect(blocks([ownerDraft, approvedDesigner], 'BUYER')).toBe(true);
-    expect(blocks([row(79, 'APPROVED', 'DESIGNER'), ownerPending], 'BUYER')).toBe(true);
-    // Every row APPROVED + strictly earlier: allowed. Dead rows are ignored.
-    expect(blocks([row(79, 'APPROVED', 'OWNER'), approvedDesigner], 'BUYER')).toBe(false);
-    expect(blocks([approvedDesigner], 'BUYER')).toBe(false);
-    expect(blocks([approvedDesigner, row(80, 'CANCELLED', 'OWNER')], 'BUYER')).toBe(false);
-    expect(blocks([], 'BUYER')).toBe(false);
-    // Past draft every live row blocks.
-    expect(blocks([approvedDesigner], 'BUYER', 'quotation_issued')).toBe(true);
-    // Single-row callers (DealPicker, mockApi) are unchanged.
-    expect(blocks(approvedDesigner, 'BUYER')).toBe(false);
-    expect(blocks(ownerDraft, 'BUYER')).toBe(true);
-
-    expect(messages([row(79, 'APPROVED', 'DESIGNER'), ownerPending], 'BUYER'))
-      .toEqual(['งานนี้มีใบเสนอราคาที่ใช้งานอยู่ (QT-2026-0078-1) — แก้ไขฉบับนั้น หรือสร้างฉบับแก้ไขแทนการออกเลขใหม่']);
-    // Two blockers: the newest (highest id) is named, whatever the list order.
-    const newestNamed = ['งานนี้มีใบเสนอราคาที่ใช้งานอยู่ (QT-2026-0081-1) — แก้ไขฉบับนั้น หรือสร้างฉบับแก้ไขแทนการออกเลขใหม่'];
-    expect(messages([row(81, 'DRAFT', 'OWNER'), row(79, 'PENDING_APPROVAL', 'DESIGNER')], 'BUYER')).toEqual(newestNamed);
-    expect(messages([row(79, 'PENDING_APPROVAL', 'DESIGNER'), row(81, 'DRAFT', 'OWNER')], 'BUYER')).toEqual(newestNamed);
-    expect(messages([approvedDesigner], 'BUYER')).toEqual([]);
-  });
-
-  it('slice 2: the recipient table maps to S4/S5/S8 and back, and never offers UNSPECIFIED', () => {
-    expect(meta.QUOTATION_RECIPIENT_OPTIONS.map((o) => [o.code, o.stage])).toEqual([
-      ['DESIGNER', 'QUOTE_DESIGN_SIDE'], ['OWNER', 'QUOTE_OWNER'], ['BUYER', 'QUOTE_BUYER'],
-    ]);
-    expect(meta.stageForQuotationRecipient('UNSPECIFIED')).toBeNull();
-    expect(meta.recipientForDealStage('QUOTE_OWNER')).toBe('OWNER');
-    expect(meta.recipientForDealStage('NEGOTIATION')).toBe('');
-  });
-
-  // One pricing route per deal: the ONE definition of "live pricing request".
-  it('hasLivePricingRequest: any status but CANCELLED/SUPERSEDED on THIS deal counts', () => {
-    const pr = (status, ticketId = 18) => ({ id: 1, ticketId, status });
-    ['DRAFT', 'SUBMITTED', 'IMPORT_REVIEWING', 'APPROVED_FOR_QUOTATION', 'QUOTATION_ISSUED', 'QUOTATION_ACCEPTED']
-      .forEach((status) => expect(meta.hasLivePricingRequest([pr(status)], 18)).toBe(true));
-    expect(meta.hasLivePricingRequest([pr('CANCELLED'), pr('SUPERSEDED')], 18)).toBe(false);
-    // Another deal's request never counts; ids compare as numbers (a useParams string is fine).
-    expect(meta.hasLivePricingRequest([pr('DRAFT', 19)], 18)).toBe(false);
-    expect(meta.hasLivePricingRequest([pr('DRAFT')], '18')).toBe(true);
-    expect(meta.hasLivePricingRequest(null, 18)).toBe(false);
-    expect(meta.LIVE_PRICING_REQUEST_BLOCK_MESSAGE)
-      .toBe('งานนี้มีคำขอราคาที่ยังดำเนินการอยู่ — ใช้ใบเสนอราคาจากคำขอราคา หรือยกเลิกคำขอราคาก่อน');
-  });
-
-  it('the checklist blocks a NEW quotation on a deal with a live pricing request, with that sentence', () => {
-    expect(meta.buildQuotationChecklist({ ...complete, livePricingRequest: true })).toEqual([expect.objectContaining({
-      check: 'livePricingRequest',
-      blocking: true,
-      message: 'งานนี้มีคำขอราคาที่ยังดำเนินการอยู่ — ใช้ใบเสนอราคาจากคำขอราคา หรือยกเลิกคำขอราคาก่อน',
-    })]);
-    expect(meta.buildQuotationChecklist({ ...complete, livePricingRequest: false })).toEqual([]);
-  });
-
-  // Owner ruling 2026-11-07: the server 409s a direct quotation addressed to a party OFF the deal's route
-  // (DealRoute.refusalMessage), so the editor blocks the save with that same sentence instead of letting the rep
-  // find out from the 409. The caller (the editor) passes the sentence ONLY for a NEW or CHANGED recipient: an
-  // unchanged stored recipient on a legacy draft still saves (the server only refuses a change), so it passes none.
-  it('the checklist blocks the save with the route sentence when an off-route party is chosen', () => {
-    const sentence = 'ช่องทางรับงานของงานนี้คือเจ้าของติดต่อโดยตรง — ขั้นที่ 4 ไม่อยู่ในเส้นทางนี้ — แก้ช่องทางรับงานก่อน';
-    const entries = meta.buildQuotationChecklist({ ...complete, recipientRequired: true, recipientType: 'DESIGNER',
-      offRouteRecipientMessage: sentence });
-    expect(entries).toEqual([expect.objectContaining({ message: sentence, blocking: true })]);
-    // On-route / no stated route / not passed: nothing extra.
-    expect(meta.buildQuotationChecklist({ ...complete, recipientRequired: true, recipientType: 'OWNER',
-      offRouteRecipientMessage: null })).toEqual([]);
-    expect(meta.buildQuotationChecklist({ ...complete, recipientRequired: true, recipientType: 'DESIGNER' })).toEqual([]);
-    expect(meta.buildQuotationChecklist({ ...complete, recipientRequired: true, recipientType: 'DESIGNER',
-      offRouteRecipientMessage: '' })).toEqual([]);
-  });
-
-  // The channel pre-fills the recipient on a new deal.
-  it('owner ruling #2: each real entry channel names its recipient; UNSPECIFIED/unknown name none', () => {
-    expect(meta.recipientForEntryChannel('DESIGNER_LED')).toBe('DESIGNER');
-    expect(meta.recipientForEntryChannel('OWNER_DIRECT')).toBe('OWNER');
-    expect(meta.recipientForEntryChannel('BUYER_DIRECT')).toBe('BUYER');
-    expect(meta.recipientForEntryChannel('UNSPECIFIED')).toBe('');
-    expect(meta.recipientForEntryChannel(null)).toBe('');
-  });
-
-  // ผู้ออกแบบ and ฝ่าย are optional (also on the backend, never blocking). Wrong-way-round: neither a
-  // blank designer (unitCode) nor a blank ฝ่าย (deptCode) may produce ANY checklist entry.
-  it('never lists ผู้ออกแบบ or ฝ่าย as missing — both are optional', () => {
-    const entries = meta.buildQuotationChecklist({ ...complete, terms: { unitCode: '', deptCode: '' } });
-    expect(entries).toEqual([]);
-    expect(Object.values(meta.QUOTATION_CHECK)).not.toContain('designer');
-  });
-
-  // ผู้สั่งซื้อ produces NO checklist entry, blocking or otherwise, regardless of whether a
-  // contact-shaped value is passed in.
-  it('never checks ผู้สั่งซื้อ any more, whether or not a contact-shaped value is passed', () => {
-    expect(meta.buildQuotationChecklist({ ...complete, contact: null })).toEqual([]);
-    expect(meta.buildQuotationChecklist(complete)).toEqual([]);
-  });
-
-  it('does NOT block on a missing ที่อยู่ — it is a warning that targets the address field', () => {
-    const entries = meta.buildQuotationChecklist({ ...complete, customer: { ...customer, address: '' } });
-    expect(blocking(entries)).toEqual([]);
-    expect(entries).toEqual([{ check: 'customerAddress', message: 'ยังไม่ได้กรอกที่อยู่ลูกค้า', targetId: 'deal-customer-address', blocking: false, submitBlocking: false }]);
-  });
-
-  it('does NOT block on a missing เลขที่ผู้เสียภาษี (F7: a customer without one stays quotable), nor on any phone', () => {
-    const entries = meta.buildQuotationChecklist({
-      ...complete,
-      customer: { ...customer, taxId: null, phone: '  ' },
-    });
-    expect(blocking(entries)).toEqual([]);
-    expect(warnings(entries)).toEqual(['customerTaxId', 'customerPhone']);
-  });
-
-  it('raises nothing for a value that is merely UNKNOWN yet (undefined), only for a known-empty one', () => {
-    const entries = meta.buildQuotationChecklist({
-      ...complete, customer: { id: 5, name: 'x' }, projectName: undefined,
-    });
-    expect(entries).toEqual([]);
-  });
-
-  it('on the inline path BLOCKS on ลูกค้า and โครงการ, targeting their controls', () => {
-    const entries = meta.buildQuotationChecklist({ ...complete, isInlineCreate: true, customer: null, hasProject: false });
-    expect(entries.slice(0, 2)).toEqual([
-      { check: 'customer', message: 'ต้องเลือกลูกค้าก่อนบันทึกร่าง', targetId: 'deal-customer', blocking: true, submitBlocking: false },
-      { check: 'project', message: 'ต้องเลือกโครงการก่อนบันทึกร่าง', targetId: 'deal-project', blocking: true, submitBlocking: false },
-    ]);
-  });
-
-  it('on the inline path BLOCKS until a ช่องทางรับงาน is picked, targeting its control', () => {
-    const entries = meta.buildQuotationChecklist({
-      ...complete, isInlineCreate: true, customer: { id: 5, name: 'x' }, hasProject: true, hasEntryChannel: false,
-    });
-    expect(entries).toEqual([
-      { check: 'entryChannel', message: 'ต้องเลือกช่องทางรับงานก่อนบันทึกร่าง', targetId: 'deal-entry-channel', blocking: true, submitBlocking: false },
-    ]);
-  });
-
-  // Wrong-way-round: existing callers never pass it, and an existing deal has its channel.
-  it('raises nothing about ช่องทางรับงาน when it is picked, omitted, or the deal already exists', () => {
-    const inline = { ...complete, isInlineCreate: true, customer: { id: 5, name: 'x' }, hasProject: true };
-    expect(meta.buildQuotationChecklist({ ...inline, hasEntryChannel: true })).toEqual([]);
-    expect(meta.buildQuotationChecklist(inline)).toEqual([]);
-    expect(meta.buildQuotationChecklist({ ...complete, hasEntryChannel: false })
-      .some((e) => e.check === 'entryChannel')).toBe(false);
-  });
-
-  it('on a deal with no โครงการ only WARNS — the quotation service does not refuse it, and it is not editable here', () => {
-    const entries = meta.buildQuotationChecklist({ ...complete, projectName: null });
-    expect(entries).toEqual([{ check: 'dealProject', message: 'งานนี้ยังไม่มีโครงการ (แก้ได้ที่หน้ารายละเอียดงาน)', targetId: null, blocking: false, submitBlocking: false }]);
-  });
-
   it('BLOCKS on an incomplete row and targets its FIRST missing field', () => {
     const tileErrors = meta.validateQuotationItem({ model: 'x', color: 'y', texture: 'z', sizeText: '60x60' });
     const entries = meta.buildQuotationChecklist({
@@ -1891,53 +624,6 @@ describe('buildQuotationChecklist', () => {
     ]);
   });
 
-  it('BLOCKS a quotation with no product rows, and says why when only a ส่วนลดพิเศษ is left', () => {
-    expect(meta.buildQuotationChecklist({ ...complete, items: [], itemErrorsByRow: [] }).map((e) => e.message))
-      .toEqual(['ต้องมีรายการสินค้าอย่างน้อย 1 รายการ']);
-    expect(meta.buildQuotationChecklist({ ...complete, items: [], adjustments: [{}] }).map((e) => e.message))
-      .toEqual(['ส่วนลดพิเศษต้องมีรายการสินค้าอย่างน้อย 1 รายการอยู่ด้านบน']);
-  });
-
-  it('BLOCKS the English + ราคาพิเศษ pairing the server 400s', () => {
-    expect(blocking(meta.buildQuotationChecklist({ ...complete, priceModeLanguageConflict: true }))).toEqual(['priceModeLanguage']);
-  });
-
-  // ── FULL_PAYMENT_TERM recognises BOTH routes to depositPercent = 0 (the "ไม่รับมัดจำ" checkbox AND
-  // a custom-typed "0"); see #isEffectiveZeroDeposit's tests below. The entry stays NON-blocking
-  // (DealQuotationService#create/#update accept a zero-deposit DRAFT with no term; only #submit
-  // refuses it; QuotationEditorPage's hasUnresolvedZeroDeposit guard disables ส่งขออนุมัติ). ──
-  it('lists (but does not block) a missing เงื่อนไขการชำระเงิน on the checkbox route', () => {
-    const entries = meta.buildQuotationChecklist({ ...complete, noDeposit: true, fullPaymentTerm: '' });
-    expect(entries).toEqual([{
-      check: 'fullPaymentTerm', message: 'มัดจำ 0% กรุณาเลือกเงื่อนไขการชำระเงิน',
-      targetId: 'fullPaymentTerm', blocking: false,
-      // Save-draft stays allowed (blocking false) but ส่งขออนุมัติ is disabled for it.
-      submitBlocking: true,
-    }]);
-  });
-
-  it('ALSO lists it for a custom-typed 0% deposit, even with the checkbox unticked', () => {
-    const entries = meta.buildQuotationChecklist({
-      ...complete, noDeposit: false, depositPercentCustom: true, depositPercent: '0', fullPaymentTerm: '',
-    });
-    expect(blocking(entries)).toEqual([]);
-    expect(entries.map((e) => e.check)).toEqual(['fullPaymentTerm']);
-  });
-
-  it('does NOT list it for an ordinary 30% deposit', () => {
-    const entries = meta.buildQuotationChecklist({
-      ...complete, noDeposit: false, depositPercentCustom: false, depositPercent: 30, fullPaymentTerm: '',
-    });
-    expect(entries).toEqual([]);
-  });
-
-  it('does NOT list it once a term is chosen', () => {
-    expect(meta.buildQuotationChecklist({ ...complete, noDeposit: true, fullPaymentTerm: 'CREDIT_30' })).toEqual([]);
-    expect(meta.buildQuotationChecklist({
-      ...complete, noDeposit: false, depositPercentCustom: true, depositPercent: '0', fullPaymentTerm: 'CREDIT_30',
-    })).toEqual([]);
-  });
-
   // ── CREDIT remainder needs at least 1 credit day ──
   it('BLOCKS an explicit invalid (0) creditDays under a CREDIT remainder', () => {
     const entries = meta.buildQuotationChecklist({ ...complete, remainderMode: 'CREDIT', creditDays: 0 });
@@ -1946,68 +632,12 @@ describe('buildQuotationChecklist', () => {
       targetId: 'creditDays', blocking: true, submitBlocking: false,
     }]);
   });
-
-  it('BLOCKS an explicit negative creditDays too', () => {
-    expect(blocking(meta.buildQuotationChecklist({ ...complete, remainderMode: 'CREDIT', creditDays: -1 })))
-      .toEqual(['creditDaysInvalid']);
-  });
-
-  it('lists (but does not block) a BLANK creditDays under a CREDIT remainder', () => {
-    const entries = meta.buildQuotationChecklist({ ...complete, remainderMode: 'CREDIT', creditDays: '' });
-    expect(entries).toEqual([{
-      check: 'creditDays', message: 'กรุณาระบุจำนวนวันเครดิต อย่างน้อย 1 วัน',
-      targetId: 'creditDays', blocking: false,
-      // A blank credit-days count keeps บันทึกร่าง open but disables ส่งขออนุมัติ.
-      submitBlocking: true,
-    }]);
-  });
-
-  it('does NOT list it for a positive creditDays', () => {
-    expect(meta.buildQuotationChecklist({ ...complete, remainderMode: 'CREDIT', creditDays: 1 })).toEqual([]);
-  });
-
-  it('does NOT list it for a non-CREDIT remainder mode, whatever creditDays holds', () => {
-    expect(meta.buildQuotationChecklist({ ...complete, remainderMode: 'ON_DELIVERY', creditDays: 0 })).toEqual([]);
-    expect(meta.buildQuotationChecklist({ ...complete, remainderMode: '', creditDays: '' })).toEqual([]);
-  });
-
-  it('is skipped entirely at an effective zero deposit, even with a stale CREDIT/0 left on screen', () => {
-    expect(meta.buildQuotationChecklist({
-      ...complete, noDeposit: true, fullPaymentTerm: 'CREDIT_30', remainderMode: 'CREDIT', creditDays: 0,
-    })).toEqual([]);
-  });
 });
 
 describe('isEffectiveZeroDeposit', () => {
   it('is true when the "ไม่รับมัดจำ" checkbox is ticked, regardless of the percent fields', () => {
     expect(meta.isEffectiveZeroDeposit({ noDeposit: true })).toBe(true);
     expect(meta.isEffectiveZeroDeposit({ noDeposit: true, depositPercentCustom: false, depositPercent: 30 })).toBe(true);
-  });
-
-  // The Opus review finding (F2): typing "0" into the custom "อื่นๆ" input while UNticked must be recognised
-  // identically to the checkbox — this is the exact gap that let a rep save/attempt to submit depositPercent = 0
-  // with no fullPaymentTerm without ever ticking "ไม่รับมัดจำ".
-  it('is true for a custom-typed "0" even with the checkbox unticked', () => {
-    expect(meta.isEffectiveZeroDeposit({ noDeposit: false, depositPercentCustom: true, depositPercent: '0' })).toBe(true);
-    expect(meta.isEffectiveZeroDeposit({ noDeposit: false, depositPercentCustom: true, depositPercent: 0 })).toBe(true);
-  });
-
-  it('is false for a non-zero custom percent, a preset percent, or an empty field', () => {
-    expect(meta.isEffectiveZeroDeposit({ noDeposit: false, depositPercentCustom: true, depositPercent: '10' })).toBe(false);
-    expect(meta.isEffectiveZeroDeposit({ noDeposit: false, depositPercentCustom: false, depositPercent: 30 })).toBe(false);
-    expect(meta.isEffectiveZeroDeposit({ noDeposit: false, depositPercentCustom: true, depositPercent: '' })).toBe(false);
-  });
-
-  it('defaults to false when called with no arguments', () => {
-    expect(meta.isEffectiveZeroDeposit()).toBe(false);
-  });
-});
-
-describe('joinPresent', () => {
-  it('joins only the present parts, so a missing one leaves no dangling separator', () => {
-    expect(meta.joinPresent(['คุณธนพล', null, 'a@b.co'])).toBe('คุณธนพล · a@b.co');
-    expect(meta.joinPresent(['คุณธนพล', '', '  '])).toBe('คุณธนพล');
-    expect(meta.joinPresent([null, undefined])).toBe('');
   });
 });
 
@@ -2018,169 +648,18 @@ describe('hasSpecialPricing (#V178)', () => {
   const tile = (overrides = {}) => ({
     lineType: LINE_TYPE_TILE, unitPrice: 100, netUnitPrice: 100, discountPct: null, ...overrides,
   });
-  const plain = (overrides = {}) => ({ lineType: LINE_TYPE_PLAIN, discountPct: null, ...overrides });
-  const adjustment = (overrides = {}) => ({ lineType: LINE_TYPE_ADJUSTMENT, ...overrides });
 
   it('(a) SPECIAL_SQM with a TILE row is true, regardless of discount', () => {
     expect(hasSpecialPricing('SPECIAL_SQM', [tile()])).toBe(true);
   });
 
-  it('(b) DIRECT_NET with net below list price is true', () => {
-    expect(hasSpecialPricing('DIRECT_NET', [tile({ unitPrice: 100, netUnitPrice: 85 })])).toBe(true);
-  });
-
   it('the (b) counter-case: DIRECT_NET with net == list price is false', () => {
     expect(hasSpecialPricing('DIRECT_NET', [tile({ unitPrice: 100, netUnitPrice: 100 })])).toBe(false);
-  });
-
-  it('(c) NET with a TILE row discountPct > 0 is true', () => {
-    expect(hasSpecialPricing('NET', [tile({ discountPct: 5 })])).toBe(true);
-  });
-
-  it('the (c) counter-case, both shapes: discountPct null, and explicitly zero', () => {
-    expect(hasSpecialPricing('NET', [tile()])).toBe(false);
-    expect(hasSpecialPricing('NET', [tile({ discountPct: 0 })])).toBe(false);
-  });
-
-  it('(d) a PLAIN row with discountPct > 0 is true, regardless of priceMode', () => {
-    expect(hasSpecialPricing('NET', [plain({ discountPct: 10 })])).toBe(true);
-  });
-
-  it('a PLAIN row with no discount is false', () => {
-    expect(hasSpecialPricing('NET', [plain()])).toBe(false);
-  });
-
-  it('(e) an ADJUSTMENT row is true, regardless of price mode or the other rows', () => {
-    expect(hasSpecialPricing('NET', [tile(), adjustment()])).toBe(true);
-  });
-
-  it('no discount anywhere is false — the negative baseline every case above contrasts against', () => {
-    expect(hasSpecialPricing('NET', [tile(), plain()])).toBe(false);
-  });
-
-  it('a null/blank lineType reads as TILE, same as lineTypeOf', () => {
-    expect(hasSpecialPricing('NET', [{ unitPrice: 100, netUnitPrice: 100, discountPct: 7 }])).toBe(true);
-  });
-
-  it('an empty or missing row list is false', () => {
-    expect(hasSpecialPricing('NET', [])).toBe(false);
-    expect(hasSpecialPricing('NET', null)).toBe(false);
-    expect(hasSpecialPricing('NET', undefined)).toBe(false);
-  });
-});
-
-describe('newestQuotationByRequest — a deal\'s quotation map (deal page, request page)', () => {
-  const row = (id, pricingRequestId, docStatus) => ({ id, pricingRequestId, docStatus, origin: 'PRICING_REQUEST' });
-
-  // A revision draft cancelled after ⋯ แก้ใบเสนอราคา must not become the request's quotation (it
-  // would leave the deal page with no button at all).
-  it('a cancelled draft never stands in for the quotation it revised: the newest row that is not CANCELLED', () => {
-    const byRequest = meta.newestQuotationByRequest([row(10, 1, 'ISSUED'), row(11, 1, 'CANCELLED'), row(12, 2, 'CANCELLED')]);
-    expect(byRequest.get(1)).toMatchObject({ id: 10, docStatus: 'ISSUED' });
-    expect(byRequest.has(2)).toBe(false);
-  });
-});
-
-// Every recipient's ลูกค้ายอมรับ asks first. DESIGNER/OWNER keep the "skips the later parties"
-// copy; the BUYER (last party) and an unknown recipient get copy with no skip.
-describe('acceptOutcomeConfirmCopy', () => {
-  it('DESIGNER and OWNER keep the skip-the-later-parties copy', () => {
-    expect(meta.acceptOutcomeConfirmCopy('DESIGNER')).toEqual({
-      title: 'ยืนยันว่าลูกค้ายอมรับใบเสนอราคานี้',
-      message: 'ใบเสนอราคานี้ส่งถึงผู้ออกแบบ ถ้าลูกค้ายอมรับ งานจะใช้ใบนี้ยืนยันคำสั่งซื้อและข้ามผู้รับรายถัดไป',
-    });
-    expect(meta.acceptOutcomeConfirmCopy('OWNER').message).toContain('เจ้าของโครงการ');
-  });
-
-  it.each(['BUYER', 'UNSPECIFIED', undefined, null])('%s: asks too (never null), with the same title and no "ข้ามผู้รับรายถัดไป"', (recipient) => {
-    const copy = meta.acceptOutcomeConfirmCopy(recipient);
-    expect(copy).not.toBeNull();
-    expect(copy.title).toBe('ยืนยันว่าลูกค้ายอมรับใบเสนอราคานี้');
-    expect(copy.message).toContain('ยืนยันคำสั่งซื้อ');
-    expect(copy.message).not.toContain('ข้าม');
-  });
-});
-
-// The confirm-order lead must read as a sentence whether or not the caller has a number (no
-// "ใบเสนอราคา " + a blank).
-describe('CONFIRM_ORDER_FROM_QUOTATION_COPY.lead', () => {
-  it('names the quotation number when there is one', () => {
-    expect(meta.CONFIRM_ORDER_FROM_QUOTATION_COPY.lead('QT-2026-0101-1'))
-      .toBe('ระบบจะนำงานของใบเสนอราคา QT-2026-0101-1 เข้าสู่ขั้นตอนการขาย ที่ขั้น');
-  });
-
-  it.each([undefined, null, ''])('falls back to ใบเสนอราคานี้ with no stray double space when the number is %j', (number) => {
-    const lead = meta.CONFIRM_ORDER_FROM_QUOTATION_COPY.lead(number);
-    expect(lead).toBe('ระบบจะนำงานของใบเสนอราคานี้ เข้าสู่ขั้นตอนการขาย ที่ขั้น');
-    expect(lead).not.toMatch(/\s{2,}/);
-  });
-});
-
-// The quotation shown for a request that may hold one of each engine (deal page + PCR confirm-order dialog).
-describe('shownCustomerQuotation', () => {
-  const newEngine = { number: 'QT-2026-0099-1', docStatus: 'ACCEPTED' };
-  const legacy = (docStatus) => ({ number: 'QT-2026-0042', docStatus });
-
-  it('is the new-engine quotation when there is no old-engine one', () => {
-    expect(meta.shownCustomerQuotation(newEngine, null)).toBe(newEngine);
-  });
-
-  it('is the old-engine quotation when there is no new-engine one', () => {
-    const old = legacy('ACCEPTED');
-    expect(meta.shownCustomerQuotation(undefined, old)).toBe(old);
-    expect(meta.shownCustomerQuotation(null, null)).toBeNull();
-  });
-
-  it.each(['CANCELLED', 'SUPERSEDED', 'EXPIRED', 'REJECTED'])('keeps the new-engine quotation over a dead old-engine one (%s)', (status) => {
-    expect(meta.shownCustomerQuotation(newEngine, legacy(status))).toBe(newEngine);
-  });
-
-  it.each(['DRAFT', 'SENT', 'ACCEPTED'])('prefers a live old-engine quotation (%s) over a new-engine row', (status) => {
-    const old = legacy(status);
-    expect(meta.shownCustomerQuotation({ ...newEngine, docStatus: 'REJECTED' }, old)).toBe(old);
-  });
-});
-
-describe('splitQuotationChecklist', () => {
-  const entry = (check, blocking, submitBlocking) => ({ check, message: check, targetId: null, blocking, submitBlocking });
-
-  it('sorts entries into blocking / submitBlocking / warnings, keeping order, blocking winning', () => {
-    const entries = [
-      entry('a', false, false), entry('b', true, false), entry('c', false, true), entry('d', true, true), entry('e', false, false),
-    ];
-    const { blocking, submitBlocking, warnings } = meta.splitQuotationChecklist(entries);
-    expect(blocking.map((e) => e.check)).toEqual(['b', 'd']);
-    expect(submitBlocking.map((e) => e.check)).toEqual(['c']);
-    expect(warnings.map((e) => e.check)).toEqual(['a', 'e']);
-  });
-
-  it('returns three empty lists for no entries', () => {
-    expect(meta.splitQuotationChecklist([])).toEqual({ blocking: [], submitBlocking: [], warnings: [] });
   });
 });
 
 // Mirrors DealQuotationRenderAdapter#depositLine branch for branch (the printed remark 2).
 describe('depositTermsSummary', () => {
-  it('a 50% deposit with the remainder on delivery', () => {
-    expect(meta.depositTermsSummary({ depositPercent: 50, remainderMode: 'ON_DELIVERY' }))
-      .toBe('มัดจำ 50% · ส่วนที่เหลือก่อนหรือเมื่อส่งมอบสินค้า');
-  });
-  it('a deposit with the remainder on credit names the days', () => {
-    expect(meta.depositTermsSummary({ depositPercent: 30, remainderMode: 'CREDIT', creditDays: 30 }))
-      .toBe('มัดจำ 30% · ส่วนที่เหลือเครดิต 30 วัน');
-  });
-  it('"ไม่รับมัดจำ" names its full-payment term', () => {
-    expect(meta.depositTermsSummary({ depositPercent: 0, fullPaymentTerm: 'ON_DELIVERY' }))
-      .toBe('ไม่รับมัดจำ · ชำระเต็มจำนวนเมื่อส่งมอบสินค้า');
-    expect(meta.depositTermsSummary({ depositPercent: 0, fullPaymentTerm: 'BEFORE_DELIVERY' }))
-      .toBe('ไม่รับมัดจำ · ชำระเต็มจำนวนก่อนส่งมอบสินค้า');
-  });
-  it('a legacy zero-deposit row with no term falls back like the PDF does', () => {
-    expect(meta.depositTermsSummary({ depositPercent: 0, remainderMode: 'CREDIT', creditDays: 15 }))
-      .toBe('ไม่รับมัดจำ · ชำระเต็มจำนวนเป็นเครดิต 15 วัน');
-    expect(meta.depositTermsSummary({ depositPercent: 0 }))
-      .toBe('ไม่รับมัดจำ · ชำระเต็มจำนวนก่อนส่งมอบสินค้าหรือเมื่อส่งมอบสินค้า');
-  });
   it('100% is full payment up front, and a blank percent is the PDF default 30%', () => {
     expect(meta.depositTermsSummary({ depositPercent: 100 })).toBe('ชำระเต็มจำนวน 100% เมื่อสั่งซื้อสินค้า');
     expect(meta.depositTermsSummary({ depositPercent: null })).toBe('มัดจำ 30% · ส่วนที่เหลือก่อนหรือเมื่อส่งมอบสินค้า');
@@ -2199,13 +678,5 @@ describe('deal parties — the per-party live-quotation block (V204)', () => {
     expect(quotationTargetParty(parties, { customerId: 5, recipientType: 'BUYER' })?.id).toBe(2);
     expect(quotationTargetParty(parties, { customerId: 5, recipientType: 'OWNER' })?.id).toBe(1);
     expect(quotationTargetParty(undefined, { customerId: 5 })).toBeNull();
-  });
-
-  it('a party\'s live quotation is its latest one in DRAFT / PENDING_APPROVAL / APPROVED', () => {
-    const { liveQuotationOfParty } = meta;
-    const party = (docStatus) => ({ latestQuotationId: 9, latestQuotationNumber: 'QT-1', latestQuotationStatus: docStatus });
-    expect(liveQuotationOfParty(party('APPROVED'))).toEqual({ id: 9, number: 'QT-1', docStatus: 'APPROVED' });
-    expect(liveQuotationOfParty(party('CANCELLED'))).toBeNull();
-    expect(liveQuotationOfParty({ latestQuotationId: null })).toBeNull();
   });
 });

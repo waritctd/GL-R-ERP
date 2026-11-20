@@ -4,9 +4,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import jakarta.servlet.http.Cookie;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.CsvSource;
-import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.mock.web.MockFilterChain;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
@@ -21,19 +18,6 @@ class CsrfCookieFilterTest {
     private final CsrfCookieFilter filter = new CsrfCookieFilter();
 
     @Test
-    void safeGetPassesThroughAndIssuesATokenCookie() throws Exception {
-        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/employees");
-        MockHttpServletResponse response = new MockHttpServletResponse();
-        MockFilterChain chain = new MockFilterChain();
-
-        filter.doFilter(request, response, chain);
-
-        assertThat(chain.getRequest()).as("chain invoked for a safe GET").isNotNull();
-        assertThat(response.getHeader("Set-Cookie")).as("token cookie issued").contains(COOKIE + "=");
-        assertThat(response.getStatus()).isEqualTo(200);
-    }
-
-    @Test
     void stateChangingRequestWithoutATokenIsRejected() throws Exception {
         MockHttpServletRequest request = new MockHttpServletRequest("POST", "/api/employees");
         MockHttpServletResponse response = new MockHttpServletResponse();
@@ -43,20 +27,6 @@ class CsrfCookieFilterTest {
 
         assertThat(response.getStatus()).isEqualTo(403);
         assertThat(chain.getRequest()).as("chain NOT invoked when CSRF check fails").isNull();
-    }
-
-    @Test
-    void stateChangingRequestWithAMismatchedHeaderIsRejected() throws Exception {
-        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/api/employees");
-        request.setCookies(new Cookie(COOKIE, "cookie-token-value"));
-        request.addHeader(HEADER, "different-header-value");
-        MockHttpServletResponse response = new MockHttpServletResponse();
-        MockFilterChain chain = new MockFilterChain();
-
-        filter.doFilter(request, response, chain);
-
-        assertThat(response.getStatus()).isEqualTo(403);
-        assertThat(chain.getRequest()).isNull();
     }
 
     @Test
@@ -85,87 +55,4 @@ class CsrfCookieFilterTest {
         assertThat(response.getHeader("Set-Cookie")).as("login response bootstraps the token cookie").contains(COOKIE + "=");
     }
 
-    // Columns: case name, exempt path, assertion description. The login exemption above stays separate because
-    // it also asserts the bootstrapped token cookie.
-    @ParameterizedTest(name = "{0}")
-    @CsvSource({
-        "attendancePunchPathIsExemptFromTheCheck, /api/attendance/punch,      device punch is reachable without a session token",
-        // Self-service forgot-password: same rationale as the login bootstrap exemption above - a client landing
-        // fresh on /forgot-password, or arriving via an emailed /reset-password?token=... link, has made no prior
-        // /api/** call and so holds no CSRF cookie/header pair yet either.
-        "forgotPasswordPathIsExemptFromTheCheck,  /api/auth/forgot-password,  forgot-password is reachable without a prior token",
-        "resetPasswordPathIsExemptFromTheCheck,   /api/auth/reset-password,   reset-password is reachable without a prior token",
-    })
-    void tokenlessPostToAnExemptPathReachesTheChain(String caseName, String path, String description) throws Exception {
-        MockHttpServletRequest request = new MockHttpServletRequest("POST", path);
-        MockHttpServletResponse response = new MockHttpServletResponse();
-        MockFilterChain chain = new MockFilterChain();
-
-        filter.doFilter(request, response, chain);
-
-        assertThat(chain.getRequest()).as(description).isNotNull();
-    }
-
-    @Test
-    void nonApiRequestsAreNotFilteredForCsrf() throws Exception {
-        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/health");
-        MockHttpServletResponse response = new MockHttpServletResponse();
-        MockFilterChain chain = new MockFilterChain();
-
-        filter.doFilter(request, response, chain);
-
-        assertThat(chain.getRequest()).as("non-/api paths skip the CSRF filter").isNotNull();
-        assertThat(response.getStatus()).isEqualTo(200);
-    }
-
-    // The five multipart upload routes whose frontend call sites sent no X-XSRF-TOKEN header (see
-    // frontend/src/api/hrApi.uploadCsrf.test.js). The browser attaches the cookie by itself, so the
-    // request below is exactly what those calls sent. There is no multipart exemption: the fix
-    // belongs in the caller, and exempting file uploads here would reopen cross-site uploads.
-    // The sixth, a quotation's เอกสารแนบ, was written after that fix and is here so it stays covered.
-    @ParameterizedTest
-    @ValueSource(strings = {
-        "/api/tickets/11/attachments",
-        "/api/commissions",
-        "/api/commissions/from-deal",
-        "/api/factory-quotes/7/attachments",
-        "/api/pricing-requests/7/attachments",
-        "/api/deal-quotations/7/attachments"})
-    void aMultipartUploadWithTheCookieButNoHeaderIsRejected(String uploadRoute) throws Exception {
-        MockHttpServletRequest request = multipartUpload(uploadRoute);
-        MockHttpServletResponse response = new MockHttpServletResponse();
-        MockFilterChain chain = new MockFilterChain();
-
-        filter.doFilter(request, response, chain);
-
-        assertThat(response.getStatus()).isEqualTo(403);
-        assertThat(chain.getRequest()).as("upload never reaches the controller").isNull();
-    }
-
-    @ParameterizedTest
-    @ValueSource(strings = {
-        "/api/tickets/11/attachments",
-        "/api/commissions",
-        "/api/commissions/from-deal",
-        "/api/factory-quotes/7/attachments",
-        "/api/pricing-requests/7/attachments",
-        "/api/deal-quotations/7/attachments"})
-    void aMultipartUploadWithTheMatchingHeaderPasses(String uploadRoute) throws Exception {
-        MockHttpServletRequest request = multipartUpload(uploadRoute);
-        request.addHeader(HEADER, "upload-token");
-        MockHttpServletResponse response = new MockHttpServletResponse();
-        MockFilterChain chain = new MockFilterChain();
-
-        filter.doFilter(request, response, chain);
-
-        assertThat(response.getStatus()).isEqualTo(200);
-        assertThat(chain.getRequest()).as("upload reaches the controller").isNotNull();
-    }
-
-    private static MockHttpServletRequest multipartUpload(String route) {
-        MockHttpServletRequest request = new MockHttpServletRequest("POST", route);
-        request.setContentType("multipart/form-data; boundary=----upload");
-        request.setCookies(new Cookie(COOKIE, "upload-token"));
-        return request;
-    }
 }

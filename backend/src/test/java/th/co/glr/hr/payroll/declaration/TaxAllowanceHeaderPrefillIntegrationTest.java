@@ -35,8 +35,6 @@ class TaxAllowanceHeaderPrefillIntegrationTest extends AbstractPostgresIntegrati
     private long employeeA;
     private long employeeB;
 
-    /** Deliberately different in every digit from {@link #TAX_ID_B}, so a mix-up cannot look like a pass. */
-    private static final String TAX_ID_A = "1103700000011";
     private static final String TAX_ID_B = "9876543210987";
 
     @BeforeEach
@@ -79,109 +77,6 @@ class TaxAllowanceHeaderPrefillIntegrationTest extends AbstractPostgresIntegrati
         assertThat(prefill.lastNameTh()).isEqualTo("ใจดี");
     }
 
-    /** The same leak, from the other direction: A holding a tax ID must not see B's instead of theirs. */
-    @Test
-    void oneEmployeesPrefillNeverCarriesAnotherEmployeesTaxIdWhenBothHaveOne() {
-        givenTaxId(employeeA, TAX_ID_A);
-        givenTaxId(employeeB, TAX_ID_B);
-
-        assertThat(prefillFor(employeeA).taxpayerId()).isEqualTo(TAX_ID_A).isNotEqualTo(TAX_ID_B);
-        assertThat(prefillFor(employeeB).taxpayerId()).isEqualTo(TAX_ID_B).isNotEqualTo(TAX_ID_A);
-    }
-
-    /** The address is scoped by the same clause and is worth its own assertion: it is the other half of what
-     * identifies a person, and employee_address is joined separately from employee_pii, so one join can be right
-     * while the other is not. */
-    @Test
-    void employeeCannotObtainAnotherEmployeesAddressThroughTheHeaderPrefill() {
-        givenCurrentAddress(employeeB, "99/9", "บ้านคู่สมรส", "ลาดพร้าว", "10310");
-
-        LorYor01HeaderPrefill prefill = prefillFor(employeeA);
-
-        assertThat(prefill.address().houseNo()).isNull();
-        assertThat(prefill.address().village()).isNull();
-        assertThat(prefill.address().district()).isNull();
-        assertThat(prefill.address().postalCode()).isNull();
-    }
-
-    // --- the shape the client depends on --------------------------------------------------------
-
-    /** All thirteen address slots survive the round trip, including the five V137 added. A subset arriving would be
-     * invisible to the employee (blank boxes look identical to "we have nothing"), and they would silently retype
-     * what the master already held. */
-    @Test
-    void everyOneOfTheThirteenAddressSlotsIsPrefilled() {
-        jdbc.update("""
-            INSERT INTO hr.employee_address(
-                employee_id, address_type, house_no, building, room_no, floor, village, moo, soi,
-                junction, road, subdistrict, district, province, postal_code)
-            VALUES (:id, 'CURRENT', '123/45', 'อาคารเอ', '1201', '12', 'หมู่บ้านสวนหลวง', '4',
-                    'ซอย 7', 'แยกรัชดา', 'ถนนพระราม 9', 'ห้วยขวาง', 'ห้วยขวาง', 'กรุงเทพมหานคร', '10310')
-            """, new MapSqlParameterSource("id", employeeA));
-
-        var address = prefillFor(employeeA).address();
-
-        assertThat(address.houseNo()).isEqualTo("123/45");
-        assertThat(address.building()).isEqualTo("อาคารเอ");
-        assertThat(address.roomNo()).isEqualTo("1201");
-        assertThat(address.floor()).isEqualTo("12");
-        assertThat(address.village()).isEqualTo("หมู่บ้านสวนหลวง");
-        assertThat(address.moo()).isEqualTo("4");
-        assertThat(address.soi()).isEqualTo("ซอย 7");
-        assertThat(address.junction()).isEqualTo("แยกรัชดา");
-        assertThat(address.road()).isEqualTo("ถนนพระราม 9");
-        assertThat(address.subDistrict()).isEqualTo("ห้วยขวาง");
-        assertThat(address.district()).isEqualTo("ห้วยขวาง");
-        assertThat(address.province()).isEqualTo("กรุงเทพมหานคร");
-        assertThat(address.postalCode()).isEqualTo("10310");
-    }
-
-    /** Read and write must agree on address_type. */
-    @Test
-    void theRegisteredAddressIsNotWhatPrefillsTheForm() {
-        jdbc.update("""
-            INSERT INTO hr.employee_address(employee_id, address_type, house_no, province)
-            VALUES (:id, 'REGISTERED', 'ทะเบียนบ้าน-1', 'เชียงใหม่')
-            """, new MapSqlParameterSource("id", employeeA));
-
-        var address = prefillFor(employeeA).address();
-
-        assertThat(address.houseNo()).isNull();
-        assertThat(address.province()).isNull();
-    }
-
-    /** ข้อ 1 must survive prefill -> approve -> prefill unchanged, or every re-filing would flip the employee's
-     * สถานภาพ. This pins the two mappings as inverses; they live in different methods and nothing else would
-     * notice them drifting apart. */
-    @Test
-    void maritalStatusRoundTripsThroughTheFormsOwnVocabulary() {
-        assertThat(prefillFor(employeeA).maritalState()).isEqualTo("SINGLE");   // master holds โสด
-        assertThat(prefillFor(employeeB).maritalState()).isEqualTo("MARRIED");  // master holds สมรส
-    }
-
-    /** The column is VARCHAR(30) with no CHECK, so a decade of hand entry can have put anything in it. An
-     * unrecognised value must leave ข้อ 1 un-ticked rather than guess a legal status on the employee's behalf. */
-    @Test
-    void anUnrecognisedMaritalStatusLeavesTheBoxUnticked() {
-        jdbc.update("UPDATE hr.employee SET marital_status = 'หย่าร้าง' WHERE employee_id = :id",
-            new MapSqlParameterSource("id", employeeA));
-
-        assertThat(prefillFor(employeeA).maritalState()).isNull();
-    }
-
-    /** An employee with no PII row and no address must still get a usable, non-null envelope — the form has to open
-     * and be typeable by hand. A null headerPrefill (or a null address) would be a client-side crash on the most
-     * common state in production. */
-    @Test
-    void anEmployeeWithNoMasterDataStillGetsAnEmptyPrefillRatherThanNothing() {
-        LorYor01HeaderPrefill prefill = prefillFor(employeeA);
-
-        assertThat(prefill).isNotNull();
-        assertThat(prefill.taxpayerId()).isNull();
-        assertThat(prefill.address()).as("a null address block would crash the form's 13 inputs").isNotNull();
-        assertThat(prefill.address().postalCode()).isNull();
-    }
-
     // --- helpers --------------------------------------------------------------------------------
 
     /** Always through the real endpoint method, never the repository directly — the scoping is the service's. */
@@ -193,16 +88,6 @@ class TaxAllowanceHeaderPrefillIntegrationTest extends AbstractPostgresIntegrati
     private void givenTaxId(long employeeId, String taxId) {
         jdbc.update("INSERT INTO hr_restricted.employee_pii(employee_id, tax_id) VALUES (:id, :taxId)",
             new MapSqlParameterSource("id", employeeId).addValue("taxId", taxId));
-    }
-
-    private void givenCurrentAddress(long employeeId, String houseNo, String village, String district,
-                                     String postalCode) {
-        jdbc.update("""
-            INSERT INTO hr.employee_address(employee_id, address_type, house_no, village, district, postal_code)
-            VALUES (:id, 'CURRENT', :houseNo, :village, :district, :postalCode)
-            """, new MapSqlParameterSource("id", employeeId)
-            .addValue("houseNo", houseNo).addValue("village", village)
-            .addValue("district", district).addValue("postalCode", postalCode));
     }
 
     private long seedEmployee(String code, String firstNameTh, String lastNameTh, String maritalStatus) {

@@ -3,7 +3,6 @@ package th.co.glr.hr.importrequest;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
 import java.time.LocalDate;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
@@ -29,9 +28,8 @@ import th.co.glr.hr.ticket.TicketRepository;
 import th.co.glr.hr.ticket.TicketService;
 
 /**
- * Slice 6c: the shared wiring and the one "every kind of line" deal that both the createDrafts characterization pin
- * ({@link CreateDraftsCharacterizationIntegrationTest}) and the split preview ({@link
- * ImportRequestSplitPreviewIntegrationTest}) run against — real Postgres, real service, real repositories.
+ * Slice 6c: the shared wiring and the one "every kind of line" deal that the split preview ({@link
+ * ImportRequestSplitPreviewIntegrationTest}) runs against — real Postgres, real service, real repositories.
  *
  * <p>The deal's lines, in sort order, exercise every branch of the factory cascade and of the lead-time choice:
  * <ol start="0">
@@ -131,29 +129,6 @@ abstract class SplitFixtureSupport extends AbstractPostgresIntegrationTest {
             List.of(new NewFactoryCountryInput("Pin New Co", "TH", null)),
             List.of(new ItemFactoryInput(deal.d1ItemId(), deal.deltaFactoryId())),
             List.of(new NewFactoryLeadTimeInput("Pin Delta", 10, 20)));
-    }
-
-    /**
-     * A content checksum of EVERY base table in every application schema: one md5 per table over its rows as text.
-     * Equal before and after a call means the call inserted, updated and deleted nothing anywhere — not only in the
-     * tables createDrafts is known to write (import_request, import_request_item, document_sequence, factories,
-     * ticket_item.factory, ticket, ticket_event, notification, the recorded mail), but in any table at all.
-     */
-    protected Map<String, String> databaseFingerprint() {
-        List<String> tables = jdbc.queryForList("""
-            SELECT quote_ident(table_schema) || '.' || quote_ident(table_name)
-              FROM information_schema.tables
-             WHERE table_type = 'BASE TABLE'
-               AND table_schema NOT IN ('pg_catalog', 'information_schema')
-             ORDER BY 1
-            """, Map.of(), String.class);
-        Map<String, String> out = new LinkedHashMap<>();
-        for (String table : tables) {
-            out.put(table, jdbc.queryForObject(
-                "SELECT count(*) || ':' || COALESCE(md5(string_agg(t::text, '|' ORDER BY t::text)), '-') FROM "
-                    + table + " t", Map.of(), String.class));
-        }
-        return out;
     }
 
     // ── fixtures ─────────────────────────────────────────────────────────────────────────────

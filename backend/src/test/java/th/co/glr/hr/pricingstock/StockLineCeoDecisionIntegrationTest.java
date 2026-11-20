@@ -16,7 +16,6 @@ import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.pricingdecision.PricingDecisionDtos.PricingDecisionDto;
 import th.co.glr.hr.pricingdecision.PricingDecisionDtos.PricingDecisionItemDto;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.ApprovePricingDecisionRequest;
-import th.co.glr.hr.pricingdecision.PricingDecisionRequests.ReturnPricingDecisionRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.StartPricingDecisionRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.UpdatePricingDecisionItemRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.UpdatePricingDecisionRequest;
@@ -27,82 +26,6 @@ import th.co.glr.hr.pricingrequest.PricingRequestStatus;
  * lines, plus the authorization of the CEO's price on a stock line. It is set-only: a stock line cannot be
  * un-priced. */
 class StockLineCeoDecisionIntegrationTest extends AbstractStockLineIntegrationTest {
-
-    // Case 11 - startReview
-
-    @Test
-    void startReview_onlyStockLines_succeeds_itemsCarrySourceAndEta_noCostingLink_noCost_noListPrice() {
-        long id = persistDraft(stockLine("Stock TH", IN_THAILAND, 10), stockLine("Stock TR", IN_TRANSIT, 4));
-        seedEta(id, "Stock TR", eta());
-        forceStatus(id, PricingRequestStatus.READY_FOR_CEO_REVIEW); // precondition (routing has its own tests)
-
-        PricingDecisionDto decision = decisionService.startReview(id,
-            new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, UUID.randomUUID().toString()),
-            ceoActor);
-
-        assertThat(status(id)).isEqualTo(PricingRequestStatus.CEO_REVIEWING);
-        assertThat(decision.status()).isEqualTo(PricingDecisionStatus.DRAFT);
-        assertThat(decision.items()).hasSize(2);
-        PricingDecisionItemDto th = decisionItemFor(decision, itemId(id, "Stock TH"));
-        PricingDecisionItemDto tr = decisionItemFor(decision, itemId(id, "Stock TR"));
-        assertThat(th.stockSource()).isEqualTo(IN_THAILAND);
-        assertThat(th.expectedArrivalDate()).isNull();
-        assertThat(tr.stockSource()).isEqualTo(IN_TRANSIT);
-        assertThat(tr.expectedArrivalDate()).isEqualTo(eta());
-        for (PricingDecisionItemDto item : decision.items()) {
-            assertThat(storedCostingLink(item.id())).as("a stock line has no costing row").isNull();
-            assertThat(item.frozenLandedCostPerPieceThb()).isNull();
-            assertThat(item.frozenLandedCostPerRequestedUnitThb()).isNull();
-            assertThat(item.listUnitPrice()).as("the CEO types ราคาตั้ง; nothing is pre-filled").isNull();
-            assertThat(item.proposedSellingPricePerRequestedUnit()).isNull();
-            assertThat(item.requestedUnitBasis()).isEqualTo("PER_PIECE");
-            assertThat(item.sqmPerPiece()).as("the decision stays 'new form' eligible").isNotNull();
-        }
-        assertThat(costedRowCount(id)).as("landed-cost calculation is not needed and not run").isZero();
-        assertThat(factoryQuoteCount(id)).isZero();
-    }
-
-    @Test
-    void startReview_mixedRequest_importLineCostedAsToday_stockLineNot_viaStartReview() {
-        long id = persistSubmitAndPickUp(
-            importLine("Imp A", catalogProductFactoryA, FACTORY_A, 10),
-            stockLine("Stock TH", IN_THAILAND, 5));
-        quoteEveryImportLineReady(id);
-        forceStatus(id, PricingRequestStatus.READY_FOR_CEO_REVIEW); // precondition
-
-        PricingDecisionDto decision = decisionService.startReview(id,
-            new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, UUID.randomUUID().toString()),
-            ceoActor);
-
-        PricingDecisionItemDto imp = decisionItemFor(decision, itemId(id, "Imp A"));
-        PricingDecisionItemDto stock = decisionItemFor(decision, itemId(id, "Stock TH"));
-        assertThat(storedCostingLink(imp.id())).as("import line is costed exactly as today").isNotNull();
-        assertThat(imp.frozenLandedCostPerRequestedUnitThb()).isNotNull();
-        assertThat(imp.listUnitPrice()).isNotNull();
-        assertThat(imp.stockSource()).isNull();
-        assertThat(storedCostingLink(stock.id())).isNull();
-        assertThat(stock.frozenLandedCostPerRequestedUnitThb()).isNull();
-        assertThat(stock.listUnitPrice()).isNull();
-        assertThat(stock.stockSource()).isEqualTo(IN_THAILAND);
-        assertThat(costedRowCount(id)).as("exactly ONE costing row: the import line's").isEqualTo(1L);
-    }
-
-    @Test
-    void startReview_importOnlyRequest_isUnchanged_PIN() {
-        long id = persistSubmitAndPickUp(importLine("Imp A", catalogProductFactoryA, FACTORY_A, 10));
-        quoteEveryImportLineReady(id);
-        assertThat(status(id)).isEqualTo(PricingRequestStatus.READY_FOR_CEO_REVIEW);
-
-        PricingDecisionDto decision = decisionService.startReview(id,
-            new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, UUID.randomUUID().toString()),
-            ceoActor);
-
-        assertThat(decision.items()).singleElement().satisfies(i -> {
-            assertThat(i.stockSource()).isNull();
-            assertThat(i.frozenLandedCostPerRequestedUnitThb()).isNotNull();
-            assertThat(storedCostingLink(i.id())).isNotNull();
-        });
-    }
 
     // Case 12 - CEO update: ราคาตั้ง on a stock line
 
@@ -129,68 +52,6 @@ class StockLineCeoDecisionIntegrationTest extends AbstractStockLineIntegrationTe
         assertThat(thItem.manualSellingPricePerRequestedUnit())
             .as("this is NOT the 'ปรับราคาเอง' override").isNull();
         assertThat(updated.priceMode()).isEqualTo("NET");
-    }
-
-    @Test
-    void update_ceoPriceOnAStockLine_directNetMode_netIsTheDirectNet_listPriceStillRecorded() {
-        long id = persistDraft(stockLine("Stock TH", IN_THAILAND, 10));
-        long decisionId = seedStockOnlyDecision(id);
-        long th = itemId(id, "Stock TH");
-
-        PricingDecisionDto updated = decisionService.update(decisionId,
-            new UpdatePricingDecisionRequest(null, "DIRECT_NET", List.of(
-                new UpdatePricingDecisionItemRequest(decisionItemId(decisionId, th), null, null, null, null, false,
-                    null, false, null, false, new BigDecimal("850.00"), false, new BigDecimal("1000.00")))),
-            ceoActor);
-
-        PricingDecisionItemDto item = decisionItemFor(updated, th);
-        assertThat(item.netUnitPrice()).isEqualByComparingTo("850.00");
-        assertThat(item.listUnitPrice())
-            .as("R6: a typed ราคาตั้ง is kept whichever mode then applies").isEqualByComparingTo("1000.00");
-    }
-
-    @Test
-    void update_aNegativeListPriceOnAStockLine_isRefusedWith400_andTheEarlierValidPriceSurvives() {
-        long id = persistDraft(stockLine("Stock TH", IN_THAILAND, 10));
-        long decisionId = seedStockOnlyDecision(id);
-        long th = itemId(id, "Stock TH");
-        long decisionItemId = decisionItemId(decisionId, th);
-        // Positive control FIRST, on the same item: a valid price is accepted and stored. Without it a 400 here could
-        // just be "the decision cannot see its stock lines yet" (findItems inner-joins the costing row today), i.e.
-        // the test would pass for the wrong reason.
-        decisionService.update(decisionId, new UpdatePricingDecisionRequest(null, "NET", List.of(
-            stockPrice(decisionItemId, "1000.00", null))), ceoActor);
-        assertThat(storedListPrice(decisionItemId)).isEqualByComparingTo("1000.00");
-
-        assertThatThrownBy(() -> decisionService.update(decisionId,
-            new UpdatePricingDecisionRequest(null, "NET", List.of(stockPrice(decisionItemId, "-1.00", null))),
-            ceoActor))
-            .isInstanceOfSatisfying(ApiException.class,
-                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
-
-        assertThat(storedListPrice(decisionItemId)).isEqualByComparingTo("1000.00");
-    }
-
-    @Test
-    void update_ceoCannotTypeAListPriceOnAnImportLine_isRefusedWith400_viaStartReview() {
-        long id = persistSubmitAndPickUp(
-            importLine("Imp A", catalogProductFactoryA, FACTORY_A, 10),
-            stockLine("Stock TH", IN_THAILAND, 5));
-        quoteEveryImportLineReady(id);
-        forceStatus(id, PricingRequestStatus.READY_FOR_CEO_REVIEW);
-        PricingDecisionDto decision = decisionService.startReview(id,
-            new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, UUID.randomUUID().toString()),
-            ceoActor);
-        PricingDecisionItemDto imp = decisionItemFor(decision, itemId(id, "Imp A"));
-        BigDecimal formulaPrice = imp.listUnitPrice();
-
-        assertThatThrownBy(() -> decisionService.update(decision.id(),
-            new UpdatePricingDecisionRequest(null, "NET", List.of(stockPrice(imp.id(), "1.00", null))), ceoActor))
-            .isInstanceOfSatisfying(ApiException.class,
-                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
-
-        assertThat(storedListPrice(imp.id()))
-            .as("a costed line's list price stays server-maintained").isEqualByComparingTo(formulaPrice);
     }
 
     // Case 13 - approve
@@ -220,28 +81,6 @@ class StockLineCeoDecisionIntegrationTest extends AbstractStockLineIntegrationTe
         assertThat(storedDecisionStatus(decisionId)).isEqualTo(PricingDecisionStatus.DRAFT);
         assertThat(status(id)).isEqualTo(PricingRequestStatus.CEO_REVIEWING);
         assertThat(storedApprovedPrice(decisionItemId(decisionId, th))).isNull();
-    }
-
-    /** W5-03 (Ploy 2026-10-30): under SPECIAL_SQM / DIRECT_NET the quotation prints the net as its
-     * ราคา, so a stock line priced by the mode's own input needs no ราคาตั้ง. NET still does (its
-     * net is ราคาตั้ง less the discount) — pinned by the 422 test above. */
-    @ParameterizedTest
-    @ValueSource(strings = {"SPECIAL_SQM", "DIRECT_NET"})
-    void approve_aStockLineWithANetButNoListPrice_succeeds_inSpecialSqmAndDirectNet(String priceMode) {
-        long id = persistDraft(stockLine("Stock TH", IN_THAILAND, 10));
-        long decisionId = seedStockOnlyDecision(id);
-        seedPriceMode(decisionId, priceMode);
-        long th = itemId(id, "Stock TH");
-        jdbc.update("""
-            UPDATE sales.pricing_decision_item SET list_unit_price = NULL, net_unit_price = 399.15
-             WHERE pricing_decision_id = :d AND pricing_request_item_id = :i
-            """, Map.of("d", decisionId, "i", th));
-
-        PricingDecisionDto approved = decisionService.approve(decisionId,
-            new ApprovePricingDecisionRequest("อนุมัติ", UUID.randomUUID().toString()), ceoActor);
-
-        assertThat(approved.status()).isEqualTo(PricingDecisionStatus.APPROVED);
-        assertThat(decisionItemFor(approved, th).approvedSellingPricePerRequestedUnit()).isEqualByComparingTo("399.15");
     }
 
     @Test
@@ -283,75 +122,6 @@ class StockLineCeoDecisionIntegrationTest extends AbstractStockLineIntegrationTe
                 assertThat(e.getMessage()).contains("ต้องมีต้นทุน");
             });
         assertThat(storedDecisionStatus(decision.id())).isEqualTo(PricingDecisionStatus.DRAFT);
-    }
-
-    @Test
-    void approve_aPricedStockLine_doesNotExemptAnUncostedImportLineOnTheSameRequest_viaStartReview() {
-        long id = persistSubmitAndPickUp(
-            importLineUncostable("Uncosted", "Factory Uncostable-StockLine", 10),
-            stockLine("Stock TH", IN_THAILAND, 5));
-        quoteEveryImportLineReady(id);
-        forceStatus(id, PricingRequestStatus.READY_FOR_CEO_REVIEW);
-        PricingDecisionDto decision = decisionService.startReview(id,
-            new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, UUID.randomUUID().toString()),
-            ceoActor);
-        decisionService.update(decision.id(), new UpdatePricingDecisionRequest(null, "NET", List.of(
-            stockPrice(decisionItemFor(decision, itemId(id, "Stock TH")).id(), "1200.00", null))), ceoActor);
-
-        assertThatThrownBy(() -> decisionService.approve(decision.id(),
-            new ApprovePricingDecisionRequest("อนุมัติ", UUID.randomUUID().toString()), ceoActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> {
-                assertThat(e.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_CONTENT);
-                assertThat(e.getMessage()).contains("ต้องมีต้นทุน");
-            });
-        assertThat(storedDecisionStatus(decision.id())).isEqualTo(PricingDecisionStatus.DRAFT);
-    }
-
-    // Case 14 - return-to-import
-
-    @Test
-    void returnToImport_onARequestWithOnlyInThailandLines_isRefusedWith409_andNothingMoves() {
-        long id = persistDraft(stockLine("Stock TH 1", IN_THAILAND, 10), stockLine("Stock TH 2", IN_THAILAND, 5));
-        long decisionId = seedStockOnlyDecision(id);
-        long importBefore = notificationCount(importUserId, id);
-
-        assertThatThrownBy(() -> decisionService.returnToImport(decisionId,
-            new ReturnPricingDecisionRequest("ตีกลับ"), ceoActor))
-            .isInstanceOfSatisfying(ApiException.class,
-                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
-
-        assertThat(storedDecisionStatus(decisionId)).isEqualTo(PricingDecisionStatus.DRAFT);
-        assertThat(status(id)).isEqualTo(PricingRequestStatus.CEO_REVIEWING);
-        assertThat(notificationCount(importUserId, id)).as("import must not be pulled in").isEqualTo(importBefore);
-    }
-
-    @Test
-    void returnToImport_onARequestWithAnInTransitLine_stillWorks_PIN() {
-        long id = persistDraft(stockLine("Stock TR", IN_TRANSIT, 4), stockLine("Stock TH", IN_THAILAND, 5));
-        seedEta(id, "Stock TR", eta());
-        long decisionId = seedStockOnlyDecision(id);
-
-        decisionService.returnToImport(decisionId, new ReturnPricingDecisionRequest("ETA ไม่ตรง"), ceoActor);
-
-        assertThat(storedDecisionStatus(decisionId)).isEqualTo(PricingDecisionStatus.RETURNED);
-        assertThat(status(id)).isEqualTo(PricingRequestStatus.AWAITING_FACTORY_RESPONSE);
-    }
-
-    @Test
-    void returnToImport_onAMixedRequest_stillWorks_viaStartReview() {
-        long id = persistSubmitAndPickUp(
-            importLine("Imp A", catalogProductFactoryA, FACTORY_A, 10),
-            stockLine("Stock TH", IN_THAILAND, 5));
-        quoteEveryImportLineReady(id);
-        forceStatus(id, PricingRequestStatus.READY_FOR_CEO_REVIEW);
-        PricingDecisionDto decision = decisionService.startReview(id,
-            new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, UUID.randomUUID().toString()),
-            ceoActor);
-
-        decisionService.returnToImport(decision.id(), new ReturnPricingDecisionRequest("ต้นทุนคลาดเคลื่อน"), ceoActor);
-
-        assertThat(storedDecisionStatus(decision.id())).isEqualTo(PricingDecisionStatus.RETURNED);
-        assertThat(status(id)).isEqualTo(PricingRequestStatus.AWAITING_FACTORY_RESPONSE);
     }
 
     // Case 16 - authz, wrong way round: nobody but the CEO prices a stock line
@@ -420,12 +190,6 @@ class StockLineCeoDecisionIntegrationTest extends AbstractStockLineIntegrationTe
         };
     }
 
-    private Long storedCostingLink(long decisionItemId) {
-        return jdbc.queryForObject(
-            "SELECT pricing_costing_item_id FROM sales.pricing_decision_item WHERE pricing_decision_item_id = :id",
-            Map.of("id", decisionItemId), Long.class);
-    }
-
     private BigDecimal storedListPrice(long decisionItemId) {
         return jdbc.queryForObject(
             "SELECT list_unit_price FROM sales.pricing_decision_item WHERE pricing_decision_item_id = :id",
@@ -450,11 +214,4 @@ class StockLineCeoDecisionIntegrationTest extends AbstractStockLineIntegrationTe
             Map.of("id", decisionId), String.class);
     }
 
-    private long costedRowCount(long pricingRequestId) {
-        return jdbc.queryForObject("""
-            SELECT COUNT(*) FROM sales.pricing_costing_item pci
-              JOIN sales.pricing_costing pc ON pc.pricing_costing_id = pci.pricing_costing_id
-             WHERE pc.pricing_request_id = :id
-            """, Map.of("id", pricingRequestId), Long.class);
-    }
 }

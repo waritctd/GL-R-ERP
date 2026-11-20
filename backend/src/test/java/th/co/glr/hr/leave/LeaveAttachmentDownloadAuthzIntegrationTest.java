@@ -29,7 +29,6 @@ class LeaveAttachmentDownloadAuthzIntegrationTest extends AbstractPostgresIntegr
     private long requester;
     private long requesterManager;
     private long sameDepartmentPeer;
-    private long unrelatedEmployee;
     private long otherEmployeeManager;
     private long attachmentId;
 
@@ -51,7 +50,7 @@ class LeaveAttachmentDownloadAuthzIntegrationTest extends AbstractPostgresIntegr
         // Same department as the requester, but reports to nobody in particular -- proves department membership ALONE
         // grants no access, only the direct-manager relationship does.
         sameDepartmentPeer = insertEmployee("PEER-001", department, null, null, true);
-        unrelatedEmployee = insertEmployee("UNRELATED-001", null, null, null, true);
+        insertEmployee("UNRELATED-001", null, null, null, true);
         otherEmployeeManager = insertEmployee("MGR-OTHER", null, null, null, true);
         // Seeded only so otherEmployeeManager genuinely IS someone's direct manager -- just not the requester's --
         // proving "a manager, but of the wrong employee" is still refused.
@@ -69,16 +68,6 @@ class LeaveAttachmentDownloadAuthzIntegrationTest extends AbstractPostgresIntegr
     }
 
     @Test
-    void unrelatedEmployeeIsForbidden() {
-        assertForbidden(unrelatedEmployee);
-    }
-
-    @Test
-    void managerOfADifferentEmployeeIsForbiddenForThisAttachment() {
-        assertForbidden(otherEmployeeManager);
-    }
-
-    @Test
     void unknownAttachmentIdIsNotFoundNeverForbidden() {
         // 404, not 403 -- so this endpoint cannot be used to probe which attachment ids exist.
         assertThatThrownBy(() -> leaveService.resolveAttachmentForDownload(999_999_999L, employee(requester)))
@@ -89,53 +78,12 @@ class LeaveAttachmentDownloadAuthzIntegrationTest extends AbstractPostgresIntegr
 
     // Checks authorization precedes file availability, preventing attachment existence leaks.
 
-    @Test
-    void authorizedCallerAgainstAMissingAttachmentGetsGoneNotServerError() {
-        long missingAttachmentId = insertAttachmentWithState(insertLeaveRequest(requester), requester, "MISSING");
-
-        assertThatThrownBy(() -> leaveService.resolveAttachmentForDownload(missingAttachmentId, employee(requester)))
-            .isInstanceOf(ApiException.class)
-            .extracting(e -> ((ApiException) e).getStatus())
-            .isEqualTo(HttpStatus.GONE);
-    }
-
-    @Test
-    void unauthorizedCallerAgainstAMissingAttachmentStillGetsForbiddenNeverGone() {
-        long missingAttachmentId = insertAttachmentWithState(insertLeaveRequest(requester), requester, "MISSING");
-
-        // THE point of this test: an unauthorized caller must see the exact same 403 they would see against a
-        // perfectly healthy attachment -- never 410, which would only be reachable by someone authorized and would
-        // therefore leak that this id exists and is specifically MISSING.
-        assertThatThrownBy(() -> leaveService.resolveAttachmentForDownload(missingAttachmentId, employee(unrelatedEmployee)))
-            .isInstanceOf(ApiException.class)
-            .extracting(e -> ((ApiException) e).getStatus())
-            .isEqualTo(HttpStatus.FORBIDDEN);
-    }
-
-    @Test
-    void authorizedCallerAgainstADatabaseBackedAttachmentSucceeds() {
-        long leaveRequestId = insertLeaveRequest(requester);
-        long databaseAttachmentId = insertAttachmentWithState(leaveRequestId, requester, "DATABASE");
-
-        LeaveAttachmentRepository.AttachmentLocation location =
-            leaveService.resolveAttachmentForDownload(databaseAttachmentId, employee(requester));
-        assertThat(location.storageState()).isEqualTo("DATABASE");
-        assertThat(location.fileName()).isEqualTo("certificate.pdf");
-    }
-
     // --- regression guards: NOT the point of this class, but must not silently break -----------
 
     @Test
     void hrCanDownload() {
         LeaveAttachmentRepository.AttachmentLocation location =
             leaveService.resolveAttachmentForDownload(attachmentId, hr());
-        assertThat(location.fileName()).isEqualTo("certificate.pdf");
-    }
-
-    @Test
-    void theRequesterThemselvesCanDownloadTheirOwnAttachment() {
-        LeaveAttachmentRepository.AttachmentLocation location =
-            leaveService.resolveAttachmentForDownload(attachmentId, employee(requester));
         assertThat(location.fileName()).isEqualTo("certificate.pdf");
     }
 

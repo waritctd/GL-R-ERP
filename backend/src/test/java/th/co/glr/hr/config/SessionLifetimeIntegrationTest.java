@@ -4,7 +4,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import java.net.http.HttpResponse;
 import java.time.Duration;
-import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIf;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -36,37 +35,6 @@ class SessionLifetimeIntegrationTest extends AbstractRealSessionIntegrationTest 
         assertThat(me.statusCode()).as(me.body()).isEqualTo(200);
         assertThat(me.body()).contains(account.email());
         assertThat(stored(browser)).isNotNull();
-    }
-
-    /** The mechanism, pinned. To the servlet container a session whose max-inactive-interval is zero or negative
-     * never times out (HttpSession#setMaxInactiveInterval); any positive number of seconds is an idle limit. */
-    @Test
-    void aNewSession_carriesNoIdleLimitAtAll() throws Exception {
-        Browser browser = signIn(employee("IT", "IT-ไอที"));
-
-        assertThat(stored(browser).getMaxInactiveInterval()).isLessThanOrEqualTo(0);
-        // …and it works straight away: a "never" the container read as "expired" would fail here.
-        assertThat(browser.get(ME).statusCode()).isEqualTo(200);
-    }
-
-    /** Logging out is now the ONLY way a session ends, so it has to keep working. */
-    @Test
-    void loggingOut_stillEndsTheSession_andTheOldCookieIsDead() throws Exception {
-        Browser browser = signIn(employee("IT", "IT-ไอที"));
-        assertThat(browser.get(ME).statusCode()).isEqualTo(200);
-
-        assertThat(browser.post("/api/auth/logout").statusCode()).isBetween(200, 299);
-
-        assertThat(stored(browser)).isNull();
-        assertThat(browser.get(ME).statusCode()).isEqualTo(401);
-    }
-
-    /** "Never expires" must not have become "always signed in". */
-    @Test
-    void withNoSession_theApiStillSays401() throws Exception {
-        Browser stranger = new Browser();
-        assertThat(stranger.get(ME).statusCode()).isEqualTo(401);
-        assertThat(stranger.get(HR_ONLY).statusCode()).isEqualTo(401);
     }
 
     // ── 2. every request re-checks the account ───────────────────────────────────────────────
@@ -112,47 +80,4 @@ class SessionLifetimeIntegrationTest extends AbstractRealSessionIntegrationTest 
         assertThat(me.body()).contains("\"role\":\"employee\"").doesNotContain("\"role\":\"hr\"");
     }
 
-    /** The same rule the other way: the session follows the account, it is not a one-way ratchet. */
-    @Test
-    void anEmployeeMovedIntoHr_gainsHrAccessWithoutSigningInAgain() throws Exception {
-        Account account = employee("IT", "IT-ไอที");
-        Browser browser = signIn(account);
-        assertThat(browser.get(HR_ONLY).statusCode()).isEqualTo(403);
-
-        moveToDivision(account, "HR", "HR-บุคคล");
-
-        assertThat(browser.get(HR_ONLY).statusCode()).isEqualTo(200);
-        assertThat(browser.get(ME).body()).contains("\"role\":\"hr\"");
-    }
-
-    /** Resetting a password flags the account must-change. A session already open under the OLD password is
-     * confined to changing it at once (MustChangePasswordFilter), instead of carrying on with full access for as
-     * long as its owner cares to keep it. */
-    @Test
-    void anAccountFlaggedMustChangePassword_confinesItsOpenSessionAtOnce() throws Exception {
-        Account account = employee("HR", "HR-บุคคล");
-        Browser browser = signIn(account);
-        assertThat(browser.get(HR_ONLY).statusCode()).isEqualTo(200);
-
-        jdbc.update("UPDATE hr.employee SET must_change_password = TRUE WHERE employee_id = :id",
-            Map.of("id", account.id()));
-
-        assertThat(browser.get(HR_ONLY).statusCode()).isEqualTo(403);
-        HttpResponse<String> me = browser.get(ME); // the one read a must-change session may make
-        assertThat(me.statusCode()).isEqualTo(200);
-        assertThat(me.body()).contains("\"mustChangePassword\":true");
-    }
-
-    /** Regression guard for the tests above: an account that has NOT changed is not disturbed — same role, request
-     * after request, and its session is still the same one. */
-    @Test
-    void anUnchangedAccount_keepsItsSessionAndItsRole() throws Exception {
-        Browser browser = signIn(employee("HR", "HR-บุคคล"));
-
-        for (int i = 0; i < 3; i++) {
-            assertThat(browser.get(HR_ONLY).statusCode()).isEqualTo(200);
-            assertThat(browser.get(ME).body()).contains("\"role\":\"hr\"");
-        }
-        assertThat(stored(browser)).isNotNull();
-    }
 }

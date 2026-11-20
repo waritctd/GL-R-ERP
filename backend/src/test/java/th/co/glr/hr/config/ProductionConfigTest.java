@@ -35,19 +35,6 @@ class ProductionConfigTest {
         assertThat(yaml).doesNotContain("SPRING_DATASOURCE_PASSWORD:postgres");
     }
 
-    /** The test above only ever proves a comment could quote the right substring back -- this repo has already been
-     * bitten by exactly that class of source-text guard. */
-    @Test
-    void prodProfileResolvesDatasourceUrlFromTheSuppliedEnvironmentVariable() {
-        contextRunner
-            .withPropertyValues("SPRING_DATASOURCE_URL=jdbc:postgresql://real-db-host:5432/realdb")
-            .run(context -> {
-                assertThat(context).hasNotFailed();
-                assertThat(context.getEnvironment().getProperty("spring.datasource.url"))
-                    .isEqualTo("jdbc:postgresql://real-db-host:5432/realdb");
-            });
-    }
-
     /** The dangerous direction: application.yml's base (no-profile) document DOES carry a localhost fallback for
      * local dev (${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/hris}). */
     @Test

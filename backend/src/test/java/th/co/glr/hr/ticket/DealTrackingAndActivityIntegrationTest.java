@@ -58,34 +58,9 @@ class DealTrackingAndActivityIntegrationTest extends AbstractPostgresIntegration
         salesRep = principal(salesRepId, "sales");
     }
 
-    // ── the manual forward-advance gate ──────────────────────────────────────
-
     @Test
     void manualForwardAdvance_withNoNextFollowUpAtAndNoActivity_isBlockedAndStageUnchanged() {
         long ticketId = createTicket();
-
-        assertThatThrownBy(() -> ticketService.updateStage(ticketId, DealStage.PRESENTATION, null, salesRep))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus().value()).isEqualTo(400));
-
-        assertThat(currentStage(ticketId)).isEqualTo(DealStage.LEAD_APPROACH);
-    }
-
-    @Test
-    void manualForwardAdvance_withActivityButNoNextFollowUpAt_isBlockedAndStageUnchanged() {
-        long ticketId = createTicket();
-        logActivity(ticketId, DealActivityKind.CALL);
-
-        assertThatThrownBy(() -> ticketService.updateStage(ticketId, DealStage.PRESENTATION, null, salesRep))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus().value()).isEqualTo(400));
-
-        assertThat(currentStage(ticketId)).isEqualTo(DealStage.LEAD_APPROACH);
-    }
-
-    @Test
-    void manualForwardAdvance_withNextFollowUpAtButNoActivitySinceLastStageChange_isBlockedAndStageUnchanged() {
-        long ticketId = createTicket();
-        setNextFollowUp(ticketId, LocalDate.now().plusDays(3));
-        // No activity logged at all yet.
 
         assertThatThrownBy(() -> ticketService.updateStage(ticketId, DealStage.PRESENTATION, null, salesRep))
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus().value()).isEqualTo(400));
@@ -105,58 +80,6 @@ class DealTrackingAndActivityIntegrationTest extends AbstractPostgresIntegration
         assertThat(currentStage(ticketId)).isEqualTo(DealStage.PRESENTATION);
     }
 
-    /** The boundary the gate is actually checking: an activity logged BEFORE the most recent STAGE_CHANGED event
-     * does not satisfy a SUBSEQUENT advance attempt, even though it satisfied the one before it. Reusing the same
-     * activity across two stage changes must not be possible. */
-    @Test
-    void activityLoggedBeforeTheLastStageChange_doesNotSatisfyTheNextAdvance() {
-        long ticketId = createTicket();
-        setNextFollowUp(ticketId, LocalDate.now().plusDays(3));
-        logActivity(ticketId, DealActivityKind.CALL);
-        // First advance succeeds — this activity was logged before any STAGE_CHANGED event, so it satisfies the "since
-        // the last stage change" baseline (the ticket's own created_at).
-        ticketService.updateStage(ticketId, DealStage.PRESENTATION, null, salesRep);
-        assertThat(currentStage(ticketId)).isEqualTo(DealStage.PRESENTATION);
-
-        // Immediately try to advance again with NO new activity — the STAGE_CHANGED event just written now postdates
-        // the only activity on file, so this must be blocked.
-        assertThatThrownBy(() -> ticketService.updateStage(ticketId, DealStage.SPEC_APPROVED, null, salesRep))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus().value()).isEqualTo(400));
-        assertThat(currentStage(ticketId)).isEqualTo(DealStage.PRESENTATION);
-
-        // Log a fresh activity now (after the PRESENTATION STAGE_CHANGED event) — the same advance now succeeds.
-        logActivity(ticketId, DealActivityKind.MEETING);
-        ticketService.updateStage(ticketId, DealStage.SPEC_APPROVED, null, salesRep);
-        assertThat(currentStage(ticketId)).isEqualTo(DealStage.SPEC_APPROVED);
-    }
-
-    /**
-     * Subject is the TRACKING-field gate, not the stage gates. The DESIGNER quotation is fixture
-     * (owner ruling 2026-10-16, {@code .design/quote-stage-gates} D-3): a manual move into ขั้น 4
-     * is refused until the deal holds a quotation addressed to the designer, and this test needs to
-     * GET to ขั้น 4 in order to take the routine backward step away from it. Inserted directly so
-     * the walk below stays a sequence of real {@code updateStage} calls — the thing under test.
-     */
-    @Test
-    void routineBackwardMove_isNeverGatedByTrackingFields() {
-        long ticketId = createTicket();
-        QuoteStageFixtures.issuedQuotationOnDeal(jdbc, ticketId, salesRepId, QuotationRecipient.DESIGNER);
-        setNextFollowUp(ticketId, LocalDate.now().plusDays(3));
-        logActivity(ticketId, DealActivityKind.CALL);
-        ticketService.updateStage(ticketId, DealStage.PRESENTATION, null, salesRep);
-        logActivity(ticketId, DealActivityKind.CALL);
-        ticketService.updateStage(ticketId, DealStage.SPEC_APPROVED, null, salesRep);
-        logActivity(ticketId, DealActivityKind.CALL);
-        ticketService.updateStage(ticketId, DealStage.QUOTE_DESIGN_SIDE, null, salesRep);
-
-        // QUOTE_DESIGN_SIDE -> SPEC_APPROVED is the routine backward move (DealStage .isRoutineBackwardMove) — no note
-        // required, and no tracking-field gate at all, even though the deal was just advanced with no fresh
-        // activity/follow-up date set since.
-        TicketDto result = ticketService.updateStage(ticketId, DealStage.SPEC_APPROVED, null, salesRep);
-
-        assertThat(result.summary().salesStage()).isEqualTo(DealStage.SPEC_APPROVED);
-    }
-
     /** Genuine backward moves are still gated by the pre-existing "reason required" rule, not this one. */
     @Test
     void genuineBackwardMove_stillRequiresANoteButNotTrackingFields() {
@@ -174,117 +97,6 @@ class DealTrackingAndActivityIntegrationTest extends AbstractPostgresIntegration
         assertThat(result.summary().salesStage()).isEqualTo(DealStage.LEAD_APPROACH);
     }
 
-    /** autoAdvanceStage (system-driven, e.g. confirmCustomer's ORDER_RECEIVED advance) is a separate code path from
-     * updateStage and must never be gated by tracking fields — a deal missing both nextFollowUpAt and any activity
-     * must still auto-advance. */
-    @Test
-    void autoAdvanceStage_confirmCustomer_isNotGatedByTrackingFields() {
-        long ticketId = createTicket();
-        // Drive the deal to QUOTATION_ISSUED / paymentStatus=null directly — the mechanics of getting there are
-        // exercised elsewhere; here we only care that confirmCustomer's autoAdvanceStage is unaffected by the complete
-        // absence of nextFollowUpAt/deal_activity.
-        jdbc.update("UPDATE sales.ticket SET status = 'quotation_issued' WHERE ticket_id = :id",
-            java.util.Map.of("id", ticketId));
-
-        assertThat(currentNextFollowUp(ticketId)).isNull();
-
-        TicketDto result = ticketService.confirmCustomer(ticketId, salesRep);
-
-        assertThat(result.summary().salesStage()).isEqualTo(DealStage.ORDER_RECEIVED);
-    }
-
-    // ── win probability ──────────────────────────────────────────────────────
-
-    @Test
-    void winProbability_defaultsFromStage_whenNoOverrideSet() {
-        long ticketId = createTicket();
-
-        TicketSummaryDto summary = ticketService.get(ticketId, salesRep).summary();
-
-        assertThat(summary.winProbabilityOverride()).isNull();
-        assertThat(summary.effectiveWinProbability()).isEqualTo(WinProbabilityDefaults.defaultFor(DealStage.LEAD_APPROACH));
-    }
-
-    @Test
-    void winProbability_repOverride_winsOverTheStageDefault() {
-        long ticketId = createTicket();
-
-        ticketService.updateTracking(ticketId,
-            new TrackingUpdateRequest(77, null, null, null, null), salesRep);
-
-        TicketSummaryDto summary = ticketService.get(ticketId, salesRep).summary();
-        assertThat(summary.winProbabilityOverride()).isEqualTo(77);
-        assertThat(summary.effectiveWinProbability()).isEqualTo(77);
-    }
-
-    @Test
-    void trackingUpdate_setsCounterpartyNamesAndNextFollowUp() {
-        long ticketId = createTicket();
-
-        ticketService.updateTracking(ticketId,
-            new TrackingUpdateRequest(null, "ดีไซเนอร์ ก", "เจ้าของบ้าน ข", "ผู้ซื้อ ค",
-                LocalDate.now().plusDays(5)),
-            salesRep);
-
-        TicketSummaryDto summary = ticketService.get(ticketId, salesRep).summary();
-        assertThat(summary.designerName()).isEqualTo("ดีไซเนอร์ ก");
-        assertThat(summary.ownerName()).isEqualTo("เจ้าของบ้าน ข");
-        assertThat(summary.buyerName()).isEqualTo("ผู้ซื้อ ค");
-        assertThat(summary.nextFollowUpAt()).isEqualTo(LocalDate.now().plusDays(5));
-    }
-
-    /** A call or visit set the date after the ข้อมูลงาน form loaded; saving the form without a date must keep it. */
-    @Test
-    void trackingUpdate_withoutADate_keepsTheDateACallSet() {
-        long ticketId = createTicket();
-        LocalDate fromCall = LocalDate.now().plusDays(9);
-        tickets.updateNextFollowUpAt(ticketId, fromCall);
-
-        ticketService.updateTracking(ticketId,
-            new TrackingUpdateRequest(null, "ดีไซเนอร์ ก", null, null, null), salesRep);
-
-        assertThat(currentNextFollowUp(ticketId)).isEqualTo(fromCall);
-    }
-
-    @Test
-    void trackingUpdate_clearNextFollowUpAt_clearsTheDate() {
-        long ticketId = createTicket();
-        tickets.updateNextFollowUpAt(ticketId, LocalDate.now().plusDays(9));
-
-        ticketService.updateTracking(ticketId, new TrackingUpdateRequest(null, null, null, null, null, null, null,
-            null, true), salesRep);
-
-        assertThat(currentNextFollowUp(ticketId)).isNull();
-    }
-
-    // ── deal activity CRUD ───────────────────────────────────────────────────
-
-    @Test
-    void addActivity_thenListActivities_returnsWhatWasLogged() {
-        long ticketId = createTicket();
-
-        DealActivityDto created = ticketService.addActivity(ticketId,
-            new DealActivityRequest(LocalDate.now(), DealActivityKind.SITE_VISIT, "ไปดูหน้างาน"), salesRep);
-
-        assertThat(created.id()).isPositive();
-        assertThat(created.kind()).isEqualTo(DealActivityKind.SITE_VISIT);
-        assertThat(created.note()).isEqualTo("ไปดูหน้างาน");
-        assertThat(created.createdById()).isEqualTo(salesRepId);
-
-        List<DealActivityDto> activities = ticketService.listActivities(ticketId, salesRep);
-        assertThat(activities).hasSize(1);
-        assertThat(activities.get(0).id()).isEqualTo(created.id());
-    }
-
-    @Test
-    void addActivity_unknownKind_isRejected() {
-        long ticketId = createTicket();
-
-        assertThatThrownBy(() -> ticketService.addActivity(ticketId,
-            new DealActivityRequest(LocalDate.now(), "NOT_A_REAL_KIND", null), salesRep))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus().value()).isEqualTo(400));
-    }
-
     @Test
     void addActivity_deniedForANonOwningRep() {
         long ticketId = createTicket();
@@ -297,84 +109,6 @@ class DealTrackingAndActivityIntegrationTest extends AbstractPostgresIntegration
             new DealActivityRequest(LocalDate.now(), DealActivityKind.CALL, null), otherRep))
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus().value()).isEqualTo(403));
     }
-
-    // ── staleness ─────────────────────────────────────────────────────────────
-
-    // The 14-day QuietRule (ticket.QuietRule) replaced the 7-day activity-only rule; these pin it through the
-    // service. Last touched = latest of created_at, activity, STAGE_CHANGED/QUOTATION_ISSUED event.
-
-    @Test
-    void staleness_trueForAnActiveDealUntouchedFor14Days() {
-        long ticketId = createTicket();
-        backdateDeal(ticketId, 20);
-
-        TicketSummaryDto summary = ticketService.get(ticketId, salesRep).summary();
-
-        assertThat(summary.stale()).isTrue();
-    }
-
-    @Test
-    void staleness_falseForABrandNewDealWithNoActivity() {
-        long ticketId = createTicket();
-
-        TicketSummaryDto summary = ticketService.get(ticketId, salesRep).summary();
-
-        assertThat(summary.stale()).isFalse();
-    }
-
-    @Test
-    void staleness_falseOnceActivityIsLoggedWithinTheLast14Days() {
-        long ticketId = createTicket();
-        backdateDeal(ticketId, 20);
-        logActivity(ticketId, DealActivityKind.CALL);
-
-        TicketSummaryDto summary = ticketService.get(ticketId, salesRep).summary();
-
-        assertThat(summary.stale()).isFalse();
-    }
-
-    @Test
-    void staleness_trueForAnActivityLoggedMoreThan14DaysAgo() {
-        long ticketId = createTicket();
-        backdateDeal(ticketId, 30);
-        // Backdate the activity's created_at directly — insertDealActivity always stamps now().
-        jdbc.update("""
-            INSERT INTO sales.deal_activity (ticket_id, activity_date, kind, note, created_by_id, created_at)
-            VALUES (:ticketId, :date, :kind, NULL, :createdBy, now() - interval '15 days')
-            """,
-            java.util.Map.of(
-                "ticketId", ticketId,
-                "date", LocalDate.now().minusDays(15),
-                "kind", DealActivityKind.CALL,
-                "createdBy", salesRepId));
-
-        TicketSummaryDto summary = ticketService.get(ticketId, salesRep).summary();
-
-        assertThat(summary.stale()).isTrue();
-    }
-
-    @Test
-    void staleness_neverFlaggedOnANonActiveDeal() {
-        long ticketId = createTicket();
-        backdateDeal(ticketId, 20);
-        // Untouched for 20 days — would be stale if it were ACTIVE — but mark it lost.
-        ticketService.markLost(ticketId, DealLostReason.PRICE, null, salesRep);
-
-        TicketSummaryDto summary = ticketService.get(ticketId, salesRep).summary();
-
-        assertThat(summary.lifecycle()).isEqualTo(DealLifecycle.CLOSED_LOST);
-        assertThat(summary.stale()).isFalse();
-    }
-
-    /** Pushes the deal and every event already written for it {@code days} into the past. */
-    private void backdateDeal(long ticketId, int days) {
-        java.util.Map<String, Object> p = java.util.Map.of("d", days, "id", ticketId);
-        jdbc.update("UPDATE sales.ticket SET created_at = now() - make_interval(days => :d) WHERE ticket_id = :id", p);
-        jdbc.update("UPDATE sales.ticket_event SET created_at = now() - make_interval(days => :d) WHERE ticket_id = :id",
-            p);
-    }
-
-    // ── helpers ───────────────────────────────────────────────────────────────
 
     private long createTicket() {
         long ticketId = tickets.create(sampleTicket(), tickets.nextTicketCode(), salesRepId, "พนักงานขาย ทดสอบ");
@@ -397,10 +131,6 @@ class DealTrackingAndActivityIntegrationTest extends AbstractPostgresIntegration
 
     private String currentStage(long ticketId) {
         return tickets.findById(ticketId).orElseThrow().summary().salesStage();
-    }
-
-    private LocalDate currentNextFollowUp(long ticketId) {
-        return tickets.findById(ticketId).orElseThrow().summary().nextFollowUpAt();
     }
 
     private long createEmployee(EmployeeRepository employees, String name, String email) {

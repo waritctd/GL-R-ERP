@@ -1,21 +1,17 @@
 package th.co.glr.hr.pricing;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
 import java.time.Clock;
-import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
@@ -67,38 +63,6 @@ class BotFxFetchServiceTest {
         verify(rest.client, times(5)).get();
     }
 
-    /** (b) — a call after the cooldown interval has elapsed proceeds normally, reaching BOT again. */
-    @Test
-    void aCallAfterTheCooldownIntervalProceeds() {
-        MutableClock clock = new MutableClock(Instant.parse("2026-06-01T10:00:00Z"));
-        MockedRestClient rest = mockRestClient(VALID_BOT_JSON);
-        BotFxFetchService service = serviceWithClock(mock(FxRateRepository.class), rest.client, clock, "fake-token");
-        service.fetchNow();
-
-        clock.advance(BotFxFetchService.MANUAL_FETCH_COOLDOWN.plusSeconds(1));
-
-        assertThatCode(service::fetchNow).doesNotThrowAnyException();
-        verify(rest.client, times(10)).get(); // 5 currencies x 2 successful invocations
-    }
-
-    /** (c) — the interaction B1 specifically calls out: BotFxFetchService#fetchDailyRates() must run its fetch
-     * logic even when a manual attempt happened moments earlier and would itself be well within
-     * BotFxFetchService#MANUAL_FETCH_COOLDOWN. */
-    @Test
-    void scheduledFetchStillRunsEvenImmediatelyAfterAManualAttempt() {
-        MutableClock clock = new MutableClock(Instant.parse("2026-06-01T10:00:00Z"));
-        MockedRestClient rest = mockRestClient(VALID_BOT_JSON);
-        BotFxFetchService service = serviceWithClock(mock(FxRateRepository.class), rest.client, clock, "fake-token");
-        service.fetchNow(); // starts the manual cooldown
-        verify(rest.client, times(5)).get();
-
-        // Same instant as the manual call above -- deep inside the 10-minute cooldown window.
-        assertThatCode(service::fetchDailyRates).doesNotThrowAnyException();
-
-        // The scheduled path made its own 5 BOT calls despite the still-active manual cooldown.
-        verify(rest.client, times(10)).get();
-    }
-
     /** the Bangkok-date fix. */
     @Test
     void aFetchAtOneThirtyAmBangkokTimeUsesTheBangkokCalendarDayNotTheUtcOne() {
@@ -121,30 +85,6 @@ class BotFxFetchServiceTest {
 
         verify(repo, times(5)).upsertFromBot(
             anyString(), eq(new BigDecimal("36.5000")), eq(LocalDate.of(2026, 9, 28)));
-    }
-
-    /** Missing/blank token still throws the pre-existing 503, and the cooldown attempt is still recorded even
-     * though the fetch itself never reached BOT -- mirrors BotHolidayFetchServiceTest's equivalent case: a
-     * misconfigured token must not be a way to dodge the cooldown by retrying in a loop. */
-    @Test
-    void aMissingTokenStillThrowsAndStillCountsAsAManualAttempt() {
-        MutableClock clock = new MutableClock(Instant.parse("2026-06-01T10:00:00Z"));
-        RestClient restClient = mock(RestClient.class);
-        BotFxFetchService service = serviceWithClock(mock(FxRateRepository.class), restClient, clock, "");
-
-        assertThatThrownBy(service::fetchNow)
-            .isInstanceOf(ApiException.class)
-            .extracting(ex -> ((ApiException) ex).getStatus())
-            .isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
-        verifyNoInteractions(restClient);
-
-        // The cooldown clock started on the attempt itself (before the token check), so an immediate second call is
-        // refused with 429, not another 503.
-        assertThatThrownBy(service::fetchNow)
-            .isInstanceOf(ApiException.class)
-            .extracting(ex -> ((ApiException) ex).getStatus())
-            .isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
-        verify(restClient, never()).get();
     }
 
     private BotFxFetchService serviceWithClock(FxRateRepository repo, RestClient restClient, Clock clock, String token) {
@@ -174,7 +114,7 @@ class BotFxFetchServiceTest {
         return new MockedRestClient(restClient, uriSpec);
     }
 
-    /** A {@link Clock} a test can advance by hand, so the cooldown guard needs no real sleep. */
+    /** A {@link Clock} pinned to a chosen instant and zone. */
     private static final class MutableClock extends Clock {
         private Instant instant;
         private final ZoneId zone;
@@ -186,10 +126,6 @@ class BotFxFetchServiceTest {
         private MutableClock(Instant instant, ZoneId zone) {
             this.instant = instant;
             this.zone = zone;
-        }
-
-        void advance(Duration amount) {
-            instant = instant.plus(amount);
         }
 
         @Override

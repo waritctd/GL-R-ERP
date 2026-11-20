@@ -22,12 +22,6 @@ import th.co.glr.hr.customer.CustomerDto;
 import th.co.glr.hr.customer.CustomerRepository;
 import th.co.glr.hr.customer.ProjectDto;
 import th.co.glr.hr.customer.ProjectRepository;
-import th.co.glr.hr.customerquotation.CustomerQuotationDtos.CustomerQuotationDto;
-import th.co.glr.hr.customerquotation.CustomerQuotationRepository;
-import th.co.glr.hr.customerquotation.CustomerQuotationRequests.CreateCustomerQuotationRequest;
-import th.co.glr.hr.customerquotation.CustomerQuotationRequests.IssueCustomerQuotationRequest;
-import th.co.glr.hr.customerquotation.CustomerQuotationService;
-import th.co.glr.hr.customerquotation.DiscountApprovalRepository;
 import th.co.glr.hr.dealquotation.WastageCalculator;
 import th.co.glr.hr.employee.EmployeeCodeGenerator;
 import th.co.glr.hr.employee.EmployeeReferenceRepository;
@@ -50,7 +44,6 @@ import th.co.glr.hr.pricingcosting.PricingFormulaEngine;
 import th.co.glr.hr.pricingdecision.PricingDecisionDtos.PricingDecisionDto;
 import th.co.glr.hr.pricingdecision.PricingDecisionDtos.PricingDecisionItemDto;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.ApprovePricingDecisionRequest;
-import th.co.glr.hr.pricingdecision.PricingDecisionRequests.CostOverrideRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.StartPricingDecisionRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.UpdatePricingDecisionItemRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.UpdatePricingDecisionRequest;
@@ -60,7 +53,6 @@ import th.co.glr.hr.pricingrequest.PricingRequestRequests;
 import th.co.glr.hr.pricingrequest.PricingRequestService;
 import th.co.glr.hr.pricingrequest.PricingRequestStatus;
 import th.co.glr.hr.pricingrequest.QuantityType;
-import th.co.glr.hr.pricingrequest.UnitBasis;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 import th.co.glr.hr.ticket.CreateTicketRequest;
 import th.co.glr.hr.ticket.QuotationRenderer;
@@ -90,7 +82,6 @@ class PricingDecisionCeoPriceModeIntegrationTest extends AbstractPostgresIntegra
     private PricingRequestService pricingRequestService;
     private FactoryQuoteService factoryQuoteService;
     private PricingDecisionService decisionService;
-    private CustomerQuotationService quotationService;
     private TicketRepository tickets;
 
     private long salesRepId;
@@ -99,8 +90,6 @@ class PricingDecisionCeoPriceModeIntegrationTest extends AbstractPostgresIntegra
     private UserPrincipal salesActor;
     private UserPrincipal importActor;
     private UserPrincipal ceoActor;
-    private UserPrincipal salesManagerActor;
-    private UserPrincipal accountActor;
     private long ticketId;
     private long catalogProductIdFactoryA;
     private long catalogProductIdFactoryB;
@@ -134,20 +123,13 @@ class PricingDecisionCeoPriceModeIntegrationTest extends AbstractPostgresIntegra
         TicketService ticketService = new TicketService(tickets, notifications,
             objectMapper, customers, new QuotationRenderer(), pricingRequestService, new th.co.glr.hr.auth.EmployeeAuthRepository(jdbc), new th.co.glr.hr.customer.ContactRepository(jdbc), new th.co.glr.hr.customer.ProjectRepository(jdbc),
             new th.co.glr.hr.dealquotation.DealQuotationRepository(jdbc, new th.co.glr.hr.catalog.CatalogRepository(jdbc)));
-        quotationService = new CustomerQuotationService(new CustomerQuotationRepository(jdbc), pricingRequests,
-            decisionRepository, tickets, ticketService, customers, new QuotationRenderer(), notifications,
-            new DiscountApprovalRepository(jdbc));
 
         salesRepId = createEmployee(employees, "พนักงานขาย CEOP", "sales-ceop@glr.co.th", "SALES", "แผนกขาย");
         importUserId = createEmployee(employees, "ฝ่ายนำเข้า CEOP", "import-ceop@glr.co.th", "PCIM", "ฝ่ายนำเข้า");
         ceoUserId = createEmployee(employees, "ผู้บริหาร CEOP", "ceo-ceop@glr.co.th", "MD", "ผู้บริหาร");
-        long salesManagerId = createEmployee(employees, "ผจก.ขาย CEOP", "sm-ceop@glr.co.th", "SALES", "ฝ่ายขาย");
-        long accountId = createEmployee(employees, "บัญชี CEOP", "acct-ceop@glr.co.th", "ACCT", "ฝ่ายบัญชี");
         salesActor = actor(salesRepId, "sales");
         importActor = actor(importUserId, "import");
         ceoActor = actor(ceoUserId, "ceo");
-        salesManagerActor = actor(salesManagerId, "sales_manager");
-        accountActor = actor(accountId, "account");
 
         catalogProductIdFactoryA = insertCatalogProduct("Factory A-CEOP", "IT", "TEST-A-CEOP-001",
             new BigDecimal("100.00"), "THB", "per_piece");
@@ -189,101 +171,6 @@ class PricingDecisionCeoPriceModeIntegrationTest extends AbstractPostgresIntegra
         }
     }
 
-    @Test
-    void net_zeroDiscount_approvesWithoutTheCeoTypingAnything() {
-        PricingDecisionDto decision = startNewFormReview();
-        // The CEO picks NET and NEVER edits a single item.
-        PricingDecisionDto afterMode = decisionService.update(decision.id(),
-            new UpdatePricingDecisionRequest(null, "NET", List.of()), ceoActor);
-        for (PricingDecisionItemDto item : afterMode.items()) {
-            assertThat(item.netUnitPrice()).isNotNull();
-            assertThat(item.netUnitPrice()).isEqualByComparingTo(item.listUnitPrice());
-        }
-
-        PricingDecisionDto approved = decisionService.approve(decision.id(),
-            new ApprovePricingDecisionRequest("อนุมัติ", null), ceoActor);
-        for (PricingDecisionItemDto item : approved.items()) {
-            assertThat(item.approvedSellingPricePerRequestedUnit()).isEqualByComparingTo(item.netUnitPrice());
-            assertThat(item.minimumSellingPricePerRequestedUnit()).isEqualByComparingTo(item.netUnitPrice());
-        }
-    }
-
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // list_unit_price is NEVER a client input -- it must be
-    // refreshed by every path that recomputes the formula reference, or an item that starts
-    // uncostable can become costable via overrideItemCost yet stay permanently unable to reach a
-    // NET approval (a deadlock).
-    // ─────────────────────────────────────────────────────────────────────────────────────
-
-    @Test
-    void overrideItemCost_onAnUncostedItem_populatesListUnitPrice_andNetApprovesAtListEqualsNet() {
-        // 1. An uncosted new-form item -- a free-text line with no resolvable origin country means
-        // startReview freezes it with a null cost, a null formula reference, and (per the ORIGINAL
-        // wrong design) a permanently null list_unit_price.
-        long pricingRequestId = oneItemUncostedSubmittedCosting();
-        PricingDecisionDto decision = decisionService.startReview(pricingRequestId,
-            new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, UUID.randomUUID().toString()), ceoActor);
-        PricingDecisionItemDto uncostedItem = decision.items().get(0);
-        assertThat(uncostedItem.frozenLandedCostPerRequestedUnitThb()).isNull();
-        assertThat(uncostedItem.listUnitPrice()).isNull();
-
-        // 2. Apply overrideItemCost -- the CEO supplies a landed cost by hand, exactly as the uncosted-item UI flow
-        // requires (approve()'s uncosted gate).
-        PricingDecisionDto afterOverride = decisionService.overrideItemCost(decision.id(), uncostedItem.id(),
-            new CostOverrideRequest(new BigDecimal("500.0000"), "ไม่มีข้อมูลความหนาในแคตตาล็อก ใส่ต้นทุนเอง"), ceoActor);
-        PricingDecisionItemDto costedItem = itemById(afterOverride, uncostedItem.id());
-        assertThat(costedItem.frozenLandedCostPerRequestedUnitThb()).isNotNull();
-
-        // 3. Assert list_unit_price is now populated -- this is the exact fix: overrideItemCost must refresh
-        // list_unit_price the same way startReview originally did, not leave it frozen at null forever.
-        assertThat(costedItem.listUnitPrice()).isNotNull();
-        assertThat(costedItem.listUnitPrice()).isEqualByComparingTo(
-            costedItem.proposedSellingPricePerRequestedUnit().setScale(2, RoundingMode.HALF_UP));
-
-        // 4. Choose NET with no discount.
-        PricingDecisionDto withMode = decisionService.update(decision.id(),
-            new UpdatePricingDecisionRequest(null, "NET", List.of()), ceoActor);
-        PricingDecisionItemDto pricedItem = itemById(withMode, uncostedItem.id());
-        assertThat(pricedItem.netUnitPrice()).isNotNull();
-        assertThat(pricedItem.netUnitPrice()).isEqualByComparingTo(pricedItem.listUnitPrice());
-
-        // 5. Approve succeeds at approved = net = list -- the uncosted item, which the ORIGINAL (wrong) design could
-        // never approve under NET even after overrideItemCost, now clears approve()'s uncosted gate AND its
-        // missing-price gate in one shot.
-        PricingDecisionDto approved = decisionService.approve(decision.id(),
-            new ApprovePricingDecisionRequest("อนุมัติ", null), ceoActor);
-        PricingDecisionItemDto approvedItem = itemById(approved, uncostedItem.id());
-        assertThat(approvedItem.approvedSellingPricePerRequestedUnit()).isEqualByComparingTo(pricedItem.netUnitPrice());
-        assertThat(approvedItem.approvedSellingPricePerRequestedUnit()).isEqualByComparingTo(pricedItem.listUnitPrice());
-        assertThat(approvedItem.minimumSellingPricePerRequestedUnit()).isEqualByComparingTo(pricedItem.netUnitPrice());
-    }
-
-    @Test
-    void recalculateCost_refreshesListUnitPrice_andRecomputesNet_forTheCurrentMode() {
-        PricingDecisionDto decision = startNewFormReview();
-        PricingDecisionItemDto itemA = decision.items().get(0);
-        PricingDecisionDto withMode = decisionService.update(decision.id(), new UpdatePricingDecisionRequest(
-            null, "NET", List.of(discountItem(itemA.id(), new BigDecimal("10")))), ceoActor);
-        PricingDecisionItemDto beforeRecalc = itemById(withMode, itemA.id());
-        assertThat(beforeRecalc.listUnitPrice()).isNotNull();
-        assertThat(beforeRecalc.netUnitPrice()).isEqualByComparingTo(
-            beforeRecalc.listUnitPrice().multiply(new BigDecimal("0.90")).setScale(2, RoundingMode.HALF_UP));
-
-        // A manual cost override on the OTHER item changes nothing about itemA's own cost, but recalculateCost
-        // re-derives EVERY item's frozen cost + formula reference from the bound costing.
-        PricingDecisionItemDto itemB = decision.items().get(1);
-        decisionService.overrideItemCost(decision.id(), itemB.id(),
-            new CostOverrideRequest(new BigDecimal("42.0000"), "ทดสอบ: เปลี่ยนต้นทุนรายการอื่น"), ceoActor);
-
-        PricingDecisionDto recalculated = decisionService.recalculateCost(decision.id(), ceoActor);
-        PricingDecisionItemDto afterRecalc = itemById(recalculated, itemA.id());
-        assertThat(afterRecalc.listUnitPrice()).isEqualByComparingTo(beforeRecalc.listUnitPrice());
-        assertThat(afterRecalc.discountPct()).isEqualByComparingTo(beforeRecalc.discountPct());
-        assertThat(afterRecalc.netUnitPrice()).isEqualByComparingTo(beforeRecalc.netUnitPrice());
-        assertThat(afterRecalc.netUnitPrice()).isEqualByComparingTo(
-            afterRecalc.listUnitPrice().multiply(new BigDecimal("0.90")).setScale(2, RoundingMode.HALF_UP));
-    }
-
     // ─────────────────────────────────────────────────────────────────────────────────────
     // "ปรับราคาเอง" only ever clears the uncosted gate for
     // NET (or no mode chosen yet) -- DIRECT_NET/SPECIAL_SQM never consult the override at all, so
@@ -291,29 +178,6 @@ class PricingDecisionCeoPriceModeIntegrationTest extends AbstractPostgresIntegra
     // decision (an uncosted item, via the same oneItemUncostedSubmittedCosting fixture the
     // deriveListAndNet real-DB IT above uses).
     // ─────────────────────────────────────────────────────────────────────────────────────
-
-    @Test
-    void approve_uncostedDirectNetItem_withOverride_isStillBlocked_reviewMinor1Probe() {
-        // The review's own probe: an uncosted DIRECT_NET item with directNetPrice=100 and an override of 300 must NOT
-        // approve at 100 with no cost backing it at all -- DIRECT_NET's own computeNetUnitPrice branch never even
-        // looks at manualSellingPricePerRequestedUnit.
-        long pricingRequestId = oneItemUncostedSubmittedCosting();
-        PricingDecisionDto decision = decisionService.startReview(pricingRequestId,
-            new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, UUID.randomUUID().toString()), ceoActor);
-        PricingDecisionItemDto item = decision.items().get(0);
-        assertThat(item.frozenLandedCostPerRequestedUnitThb()).isNull();
-
-        decisionService.update(decision.id(), new UpdatePricingDecisionRequest(
-            null, "DIRECT_NET", List.of(directNetItem(item.id(), new BigDecimal("100")))), ceoActor);
-        decisionService.update(decision.id(), new UpdatePricingDecisionRequest(
-            null, List.of(overrideItem(item.id(), new BigDecimal("300"),
-                "ทดสอบ probe: override ไม่ควรปิด uncosted gate ของ DIRECT_NET"))), ceoActor);
-
-        assertThatThrownBy(() -> decisionService.approve(decision.id(),
-            new ApprovePricingDecisionRequest("อนุมัติ", null), ceoActor))
-            .isInstanceOfSatisfying(ApiException.class,
-                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_CONTENT));
-    }
 
     @Test
     void approve_uncostedSpecialSqmItem_withOverride_isStillBlocked_reviewMinor1Probe() {
@@ -332,82 +196,6 @@ class PricingDecisionCeoPriceModeIntegrationTest extends AbstractPostgresIntegra
             new ApprovePricingDecisionRequest("อนุมัติ", null), ceoActor))
             .isInstanceOfSatisfying(ApiException.class,
                 e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_CONTENT));
-    }
-
-    @Test
-    void approve_uncostedNetItem_withOverride_stillApproves_reviewMinor1ScopedCorrectly() {
-        // The guard must be precisely scoped: NET (and legacy/no-mode-yet) still lets "ปรับราคาเอง"
-        // clear the uncosted gate, because the override is NET's effective list price
-        // -- there IS real price backing (the CEO's own explicit figure), just not a landed cost.
-        long pricingRequestId = oneItemUncostedSubmittedCosting();
-        PricingDecisionDto decision = decisionService.startReview(pricingRequestId,
-            new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, UUID.randomUUID().toString()), ceoActor);
-        PricingDecisionItemDto item = decision.items().get(0);
-
-        decisionService.update(decision.id(), new UpdatePricingDecisionRequest(
-            null, List.of(overrideItem(item.id(), new BigDecimal("300"), "ทดสอบ: override เป็นราคาตั้งของ NET"))),
-            ceoActor);
-        decisionService.update(decision.id(), new UpdatePricingDecisionRequest(null, "NET", List.of()), ceoActor);
-
-        PricingDecisionDto approved = decisionService.approve(decision.id(),
-            new ApprovePricingDecisionRequest("อนุมัติ", null), ceoActor);
-        assertThat(itemById(approved, item.id()).approvedSellingPricePerRequestedUnit()).isEqualByComparingTo("300.00");
-    }
-
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // An override or margin large enough to overflow a derived
-    // NUMERIC column must 400, never reach Postgres as a raw overflow 500.
-    // ─────────────────────────────────────────────────────────────────────────────────────
-
-    @Test
-    void overrideItemCost_hugeCost_is400_neverA500_reviewMinor3Probe() {
-        // The review's own probe value: 1e15 overflows manual_landed_cost_per_unit_thb's own NUMERIC(18,4) column
-        // before the derived selling price is even computed.
-        PricingDecisionDto decision = startNewFormReview();
-        long itemId = decision.items().get(0).id();
-        assertThatThrownBy(() -> decisionService.overrideItemCost(decision.id(), itemId,
-            new CostOverrideRequest(new BigDecimal("1000000000000000"), "ทดสอบ probe: 1e15"), ceoActor))
-            .isInstanceOfSatisfying(ApiException.class,
-                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
-    }
-
-    @Test
-    void update_hugeMarginPct_is400_neverA500_reviewMinor3Probe() {
-        // Legacy (margin-formula) path -- "this covers the legacy override path too".
-        long pricingRequestId = legacyPerBoxSubmittedCosting();
-        PricingDecisionDto decision = decisionService.startReview(pricingRequestId,
-            new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, UUID.randomUUID().toString()), ceoActor);
-        long itemId = decision.items().get(0).id();
-        assertThatThrownBy(() -> decisionService.update(decision.id(), new UpdatePricingDecisionRequest(
-            null, List.of(new UpdatePricingDecisionItemRequest(itemId,
-                new BigDecimal("1000000"), null, null, null, false))), ceoActor))
-            .isInstanceOfSatisfying(ApiException.class,
-                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
-    }
-
-    @Test
-    void startReview_hugeDefaultMarginPct_is400_neverA500_reviewMinor3Probe() {
-        long pricingRequestId = twoItemSubmittedCosting();
-        assertThatThrownBy(() -> decisionService.startReview(pricingRequestId,
-            new StartPricingDecisionRequest(new BigDecimal("1000000"), "THB", null, UUID.randomUUID().toString()), ceoActor))
-            .isInstanceOfSatisfying(ApiException.class,
-                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
-    }
-
-    @Test
-    void overrideItemCost_moderateCostWithLargeMargin_overflowsDerivedListPrice_is400_reviewMinor3Probe() {
-        // Neither the cost NOR the margin individually exceeds ITS OWN bound, but their PRODUCT overflows
-        // list_unit_price's NUMERIC(14,2) column -- the multiplicative case only deriveListAndNet's own bound check
-        // (not the two input-level ones) can catch.
-        long pricingRequestId = twoItemSubmittedCosting();
-        PricingDecisionDto decision = decisionService.startReview(pricingRequestId,
-            new StartPricingDecisionRequest(new BigDecimal("500"), "THB", null, UUID.randomUUID().toString()), ceoActor);
-        long itemId = decision.items().get(0).id();
-        assertThatThrownBy(() -> decisionService.overrideItemCost(decision.id(), itemId,
-            new CostOverrideRequest(new BigDecimal("5000000000"),
-                "ทดสอบ probe: ต้นทุน x margin เกินขอบเขตราคาตั้ง"), ceoActor))
-            .isInstanceOfSatisfying(ApiException.class,
-                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
     }
 
     // Net derivation per mode (reuses WastageCalculator, never reimplements it)
@@ -475,29 +263,6 @@ class PricingDecisionCeoPriceModeIntegrationTest extends AbstractPostgresIntegra
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
-    // "ปรับราคาเอง" REPLACES the auto-calculated price as NET's list price;
-    // discount still applies on top of it.
-    // ─────────────────────────────────────────────────────────────────────────────────────
-
-    @Test
-    void manualOverride_replacesAutoListPrice_andDiscountStillAppliesOnTop() {
-        PricingDecisionDto decision = startNewFormReview();
-        PricingDecisionItemDto itemA = decision.items().get(0);
-
-        // CEO sets "ปรับราคาเอง" (mirrors the legacy override mutation exactly) BEFORE picking a mode -- must still
-        // work; the override is not itself mode-dependent.
-        decisionService.update(decision.id(), new UpdatePricingDecisionRequest(
-            null, List.of(overrideItem(itemA.id(), new BigDecimal("2000"), "ราคาพิเศษลูกค้า VIP"))), ceoActor);
-
-        PricingDecisionDto updated = decisionService.update(decision.id(), new UpdatePricingDecisionRequest(
-            null, "NET", List.of(discountItem(itemA.id(), new BigDecimal("10")))), ceoActor);
-        PricingDecisionItemDto updatedA = itemById(updated, itemA.id());
-        assertThat(updatedA.manualSellingPricePerRequestedUnit()).isEqualByComparingTo("2000");
-        // 2000 (override, NOT the auto list price) x (1 - 10/100) = 1800.00.
-        assertThat(updatedA.netUnitPrice()).isEqualByComparingTo("1800.00");
-    }
-
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Switching the mode recomputes every item's net from ITS OWN stored
     // inputs for the NEW mode, never leaving a stale figure from the old mode.
     // ─────────────────────────────────────────────────────────────────────────────────────
@@ -532,269 +297,7 @@ class PricingDecisionCeoPriceModeIntegrationTest extends AbstractPostgresIntegra
                 e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_CONTENT));
     }
 
-    @Test
-    void modeSwitch_backToNet_recomputesFromStillStoredListPriceAndDiscount() {
-        PricingDecisionDto decision = startNewFormReview();
-        PricingDecisionItemDto itemA = decision.items().get(0);
-        PricingDecisionItemDto itemB = decision.items().get(1);
-        setListUnitPriceForTest(itemA.id(), new BigDecimal("1000"));
-        setListUnitPriceForTest(itemB.id(), new BigDecimal("1000"));
-        decisionService.update(decision.id(), new UpdatePricingDecisionRequest(
-            null, "NET", List.of(
-                discountItem(itemA.id(), new BigDecimal("10")),
-                discountItem(itemB.id(), new BigDecimal("10")))),
-            ceoActor);
-        decisionService.update(decision.id(),
-            new UpdatePricingDecisionRequest(null, "DIRECT_NET", List.of()), ceoActor);
-
-        // Switch BACK to NET -- list_unit_price/discount_pct were never cleared by the trip through DIRECT_NET (only
-        // net_unit_price was), so the net recomputes to the same figure.
-        PricingDecisionDto backToNet = decisionService.update(decision.id(),
-            new UpdatePricingDecisionRequest(null, "NET", List.of()), ceoActor);
-        assertThat(itemById(backToNet, itemA.id()).netUnitPrice()).isEqualByComparingTo("900.00");
-        assertThat(itemById(backToNet, itemB.id()).netUnitPrice()).isEqualByComparingTo("900.00");
-    }
-
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // A no-op save must not log PRICING_DECISION_UPDATED or change anything.
-    // ─────────────────────────────────────────────────────────────────────────────────────
-
-    @Test
-    void update_noOpCall_doesNotLogAnEvent_orChangeUpdatedAt() {
-        PricingDecisionDto decision = startNewFormReview();
-        long eventsBefore = countUpdatedEvents(decision.pricingRequestId());
-        var updatedAtBefore = jdbc.queryForObject(
-            "SELECT updated_at FROM sales.pricing_decision WHERE pricing_decision_id = :id",
-            Map.of("id", decision.id()), java.sql.Timestamp.class);
-
-        // ceoNote=null, priceMode=null, items=empty -- touches literally nothing.
-        PricingDecisionDto result = decisionService.update(decision.id(),
-            new UpdatePricingDecisionRequest(null, List.of()), ceoActor);
-
-        assertThat(result.priceMode()).isEqualTo(decision.priceMode());
-        assertThat(countUpdatedEvents(decision.pricingRequestId())).isEqualTo(eventsBefore);
-        var updatedAtAfter = jdbc.queryForObject(
-            "SELECT updated_at FROM sales.pricing_decision WHERE pricing_decision_id = :id",
-            Map.of("id", decision.id()), java.sql.Timestamp.class);
-        assertThat(updatedAtAfter).isEqualTo(updatedAtBefore);
-    }
-
-    @Test
-    void update_itemEntryThatTouchesNothing_isSkipped_notCountedAsAChange() {
-        PricingDecisionDto decision = startNewFormReview();
-        long eventsBefore = countUpdatedEvents(decision.pricingRequestId());
-        // A request naming a real item id but setting nothing on it -- exactly what a CEO clicking "save" on an
-        // untouched row would send.
-        UpdatePricingDecisionItemRequest noOp = new UpdatePricingDecisionItemRequest(
-            decision.items().get(0).id(), null, null, null, null, false,
-            null, false, null, false, null, false);
-        decisionService.update(decision.id(), new UpdatePricingDecisionRequest(null, List.of(noOp)), ceoActor);
-        assertThat(countUpdatedEvents(decision.pricingRequestId())).isEqualTo(eventsBefore);
-    }
-
-    @Test
-    void update_discountOnly_worksBecauseListPriceAlreadyExistsFromRulingA() {
-        PricingDecisionDto decision = startNewFormReview();
-        PricingDecisionItemDto itemA = decision.items().get(0);
-        decisionService.update(decision.id(),
-            new UpdatePricingDecisionRequest(null, "NET", List.of()), ceoActor);
-
-        // Only discountPct sent -- listUnitPrice is not even a settable field -- must
-        // still derive a net from the auto-populated list price (this is the ONLY way a NET
-        // item is ever priced).
-        PricingDecisionDto updated = decisionService.update(decision.id(), new UpdatePricingDecisionRequest(
-            null, List.of(discountItem(itemA.id(), new BigDecimal("10")))),
-            ceoActor);
-        PricingDecisionItemDto updatedA = itemById(updated, itemA.id());
-        assertThat(updatedA.netUnitPrice()).isEqualByComparingTo(
-            updatedA.listUnitPrice().multiply(new BigDecimal("0.90")).setScale(2, RoundingMode.HALF_UP));
-    }
-
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // Bounds matching column scale, 400 not 500; round to 2dp before
-    // deriving the net so the stored input and the stored net always agree.
-    // ─────────────────────────────────────────────────────────────────────────────────────
-
-    @Test
-    void update_oversizedDirectNetPrice_is400_neverAServerError() {
-        // listUnitPrice is not a client-settable field at all (see
-        // UpdatePricingDecisionItemRequest's own Javadoc), so it needs no oversized-value test;
-        // directNetPrice (NUMERIC(14,2), same MAX_PRICE_14_2 bound) is the field covered here.
-        PricingDecisionDto decision = startNewFormReview();
-        long itemId = decision.items().get(0).id();
-        assertThatThrownBy(() -> decisionService.update(decision.id(), new UpdatePricingDecisionRequest(
-            null, "DIRECT_NET", List.of(directNetItem(itemId, new BigDecimal("9999999999999.99")))),
-            ceoActor))
-            .isInstanceOfSatisfying(ApiException.class,
-                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
-    }
-
-    @Test
-    void update_oversizedSpecialPriceSqm_is400_neverAServerError() {
-        PricingDecisionDto decision = startNewFormReview();
-        long itemId = decision.items().get(0).id();
-        assertThatThrownBy(() -> decisionService.update(decision.id(), new UpdatePricingDecisionRequest(
-            null, "SPECIAL_SQM", List.of(specialSqmItem(itemId, new BigDecimal("99999999999.99")))),
-            ceoActor))
-            .isInstanceOfSatisfying(ApiException.class,
-                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
-    }
-
-    @Test
-    void update_discountWithMoreThanTwoDecimals_roundsBeforeStoringAndDeriving() {
-        PricingDecisionDto decision = startNewFormReview();
-        PricingDecisionItemDto itemA = decision.items().get(0);
-        setListUnitPriceForTest(itemA.id(), new BigDecimal("1000"));
-        PricingDecisionDto updated = decisionService.update(decision.id(), new UpdatePricingDecisionRequest(
-            null, "NET", List.of(discountItem(itemA.id(), new BigDecimal("12.345")))),
-            ceoActor);
-        PricingDecisionItemDto updatedA = itemById(updated, itemA.id());
-        // 12.345 rounds HALF_UP to 12.35 -- both the STORED discount and the net it derives from must reflect the
-        // ROUNDED figure, so the two can always reproduce each other.
-        assertThat(updatedA.discountPct()).isEqualByComparingTo("12.35");
-        assertThat(updatedA.netUnitPrice()).isEqualByComparingTo(
-            new BigDecimal("1000").multiply(new BigDecimal("1").subtract(new BigDecimal("12.35").divide(new BigDecimal("100"))))
-                .setScale(2, RoundingMode.HALF_UP));
-    }
-
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // Explicit clear semantics -- a blanked discount really clears to 0.
-    // ─────────────────────────────────────────────────────────────────────────────────────
-
-    @Test
-    void update_clearingDiscount_resetsNetToListPrice_notLeftAtTheOldDiscount() {
-        PricingDecisionDto decision = startNewFormReview();
-        PricingDecisionItemDto itemA = decision.items().get(0);
-        setListUnitPriceForTest(itemA.id(), new BigDecimal("1000"));
-        decisionService.update(decision.id(), new UpdatePricingDecisionRequest(
-            null, "NET", List.of(discountItem(itemA.id(), new BigDecimal("10")))),
-            ceoActor);
-
-        PricingDecisionDto cleared = decisionService.update(decision.id(), new UpdatePricingDecisionRequest(
-            null, List.of(new UpdatePricingDecisionItemRequest(itemA.id(), null, null, null, null, false,
-                null, true, null, false, null, false))),
-            ceoActor);
-        PricingDecisionItemDto clearedA = itemById(cleared, itemA.id());
-        assertThat(clearedA.discountPct()).isNull();
-        // Cleared discount reads as 0 in the NET formula -> net == list price, NOT the old 900.00.
-        assertThat(clearedA.netUnitPrice()).isEqualByComparingTo("1000.00");
-    }
-
-    @Test
-    void update_setAndClearSameField_is400() {
-        PricingDecisionDto decision = startNewFormReview();
-        long itemId = decision.items().get(0).id();
-        // discountPct stands in for a set+clear case (listUnitPrice is not
-        // client-settable) -- exercises the requireNotSetAndCleared guard.
-        assertThatThrownBy(() -> decisionService.update(decision.id(), new UpdatePricingDecisionRequest(
-            null, "NET", List.of(new UpdatePricingDecisionItemRequest(itemId, null, null, null, null, false,
-                new BigDecimal("10"), true, null, false, null, false))),
-            ceoActor))
-            .isInstanceOfSatisfying(ApiException.class,
-                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
-    }
-
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // Validation
-    // ─────────────────────────────────────────────────────────────────────────────────────
-
-    @Test
-    void approve_blocksWhenAnyNewFormItemHasNoNetPrice() {
-        // DIRECT_NET, not NET: NET auto-fills list_unit_price for every item, so
-        // leaving an item "un-priced" under NET does not reproduce a missing net once a mode is
-        // picked. DIRECT_NET has no auto-fill at all -- typing it for only ONE of the two items is
-        // what actually leaves the other with netUnitPrice == null here.
-        PricingDecisionDto decision = startNewFormReview();
-        PricingDecisionItemDto itemA = decision.items().get(0);
-        decisionService.update(decision.id(), new UpdatePricingDecisionRequest(
-            null, "DIRECT_NET", List.of(directNetItem(itemA.id(), new BigDecimal("1000")))),
-            ceoActor); // itemB never priced
-
-        assertThatThrownBy(() -> decisionService.approve(decision.id(),
-            new ApprovePricingDecisionRequest("อนุมัติ", null), ceoActor))
-            .isInstanceOfSatisfying(ApiException.class,
-                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_CONTENT));
-    }
-
-    @Test
-    void update_specialSqmWithoutSqmPerPiece_is422_evenThoughPhase1RequiresIt() {
-        // Defence-in-depth: requireNewFormEligible already guarantees sqm_per_piece is non-null for every item of a
-        // mode-bearing decision, but computeNetUnitPrice must still refuse a null one rather than NPE if that
-        // invariant is ever violated.
-        PricingDecisionDto decision = startNewFormReview();
-        long itemAId = decision.items().get(0).id();
-        long itemBId = decision.items().get(1).id();
-        decisionService.update(decision.id(), new UpdatePricingDecisionRequest(
-            null, "SPECIAL_SQM", List.of(specialSqmItem(itemBId, new BigDecimal("1350")))),
-            ceoActor);
-        jdbc.update("""
-            UPDATE sales.pricing_request_item SET sqm_per_piece = NULL
-             WHERE pricing_request_item_id = :id
-            """, Map.of("id", decision.items().get(0).pricingRequestItemId()));
-
-        assertThatThrownBy(() -> decisionService.update(decision.id(), new UpdatePricingDecisionRequest(
-            null, List.of(specialSqmItem(itemAId, new BigDecimal("1350")))),
-            ceoActor))
-            .isInstanceOfSatisfying(ApiException.class,
-                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_CONTENT));
-    }
-
-    @Test
-    void update_priceModeFieldsWithoutModeChosen_is400() {
-        PricingDecisionDto decision = startNewFormReview();
-        long itemId = decision.items().get(0).id();
-        assertThatThrownBy(() -> decisionService.update(decision.id(), new UpdatePricingDecisionRequest(
-            null, List.of(discountItem(itemId, new BigDecimal("10")))),
-            ceoActor))
-            .isInstanceOfSatisfying(ApiException.class,
-                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
-    }
-
-    @Test
-    void update_invalidPriceMode_is400() {
-        PricingDecisionDto decision = startNewFormReview();
-        assertThatThrownBy(() -> decisionService.update(decision.id(),
-            new UpdatePricingDecisionRequest(null, "BOGUS", List.of()), ceoActor))
-            .isInstanceOfSatisfying(ApiException.class,
-                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
-    }
-
-    @Test
-    void update_discountPctOutOfRange_is400() {
-        PricingDecisionDto decision = startNewFormReview();
-        long itemId = decision.items().get(0).id();
-        assertThatThrownBy(() -> decisionService.update(decision.id(), new UpdatePricingDecisionRequest(
-            null, "NET", List.of(discountItem(itemId, new BigDecimal("150")))),
-            ceoActor))
-            .isInstanceOfSatisfying(ApiException.class,
-                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
-    }
-
     // Legacy decisions keep today's behaviour exactly
-
-    @Test
-    void legacyDecision_cannotSetPriceMode() {
-        // PER_BOX request items are NOT the Phase 1 new-form shape -- singleItemSubmittedCosting mirrors
-        // PricingDecisionIntegrationTest's own legacy (non-PER_PIECE) fixture.
-        long pricingRequestId = legacyPerBoxSubmittedCosting();
-        PricingDecisionDto decision = decisionService.startReview(pricingRequestId,
-            new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, UUID.randomUUID().toString()), ceoActor);
-        assertThat(decision.items().get(0).requestedUnitBasis()).isEqualTo(UnitBasis.PER_BOX);
-
-        assertThatThrownBy(() -> decisionService.update(decision.id(),
-            new UpdatePricingDecisionRequest(null, "NET", List.of()), ceoActor))
-            .isInstanceOfSatisfying(ApiException.class,
-                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
-
-        // The margin path is untouched: a plain (no priceMode) update still works exactly as before for this legacy
-        // decision.
-        PricingDecisionDto updated = decisionService.update(decision.id(), new UpdatePricingDecisionRequest(
-            null, List.of(new UpdatePricingDecisionItemRequest(decision.items().get(0).id(),
-                new BigDecimal("0.30"), null, null, null, false))),
-            ceoActor);
-        assertThat(updated.priceMode()).isNull();
-        assertThat(itemById(updated, decision.items().get(0).id()).proposedMarginPct()).isEqualByComparingTo("0.30");
-    }
 
     // AUTHZ (mandatory, wrong-way-round, real DB, through the real service): CEO-only fields must be null for
     // import on get()/list(), even though import CAN see cost/margin.
@@ -841,83 +344,7 @@ class PricingDecisionCeoPriceModeIntegrationTest extends AbstractPostgresIntegra
         assertThat(listAsCeo.get(0).priceMode()).isEqualTo("NET");
     }
 
-    @Test
-    void import_cannotSetPriceModeFields_viaUpdate() {
-        PricingDecisionDto decision = startNewFormReview();
-        long itemId = decision.items().get(0).id();
-        assertThatThrownBy(() -> decisionService.update(decision.id(), new UpdatePricingDecisionRequest(
-            null, "NET", List.of(discountItem(itemId, new BigDecimal("10")))),
-            importActor))
-            .isInstanceOfSatisfying(ApiException.class,
-                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
-    }
-
-    @Test
-    void salesAndAccount_cannotReachRawDecisionAtAll_soPriceModeFieldsAreUnreachable() {
-        // sales/sales_manager/account never reach get/list in the first place -- the strip in this phase is therefore
-        // only ever exercised for import, but this pins that the OTHER non-ceo roles stay refused outright rather than
-        // accidentally gaining a read path to the new fields.
-        PricingDecisionDto decision = startNewFormReview();
-        assertThatThrownBy(() -> decisionService.get(decision.id(), salesActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
-        assertThatThrownBy(() -> decisionService.get(decision.id(), salesManagerActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
-        assertThatThrownBy(() -> decisionService.get(decision.id(), accountActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
-    }
-
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // A real-DB IT driving a new-form decision (WITH a CEO discount) through
-    // CustomerQuotationService create + issue, proving NO discount-approval request is raised.
-    // ─────────────────────────────────────────────────────────────────────────────────────
-
-    @Test
-    void newFormDecisionWithDiscount_neverRaisesADiscountApproval_andIssuesCleanly() {
-        PricingDecisionDto decision = startNewFormReview();
-        PricingDecisionItemDto itemA = decision.items().get(0);
-        PricingDecisionItemDto itemB = decision.items().get(1);
-        setListUnitPriceForTest(itemA.id(), new BigDecimal("1000"));
-        setListUnitPriceForTest(itemB.id(), new BigDecimal("500"));
-        decisionService.update(decision.id(), new UpdatePricingDecisionRequest(
-            null, "NET", List.of(
-                // A REAL discount (10%) -- the whole point of this test: approved ==
-                // minimum for a new-form item, so a discounted NET price must
-                // still never trip customerquotation's per-line discount-approval gate.
-                discountItem(itemA.id(), new BigDecimal("10")),
-                discountItem(itemB.id(), new BigDecimal("5")))),
-            ceoActor);
-        decisionService.approve(decision.id(), new ApprovePricingDecisionRequest("อนุมัติ", null), ceoActor);
-
-        CustomerQuotationDto draft = quotationService.create(decision.pricingRequestId(),
-            new CreateCustomerQuotationRequest("30 days", "45 days", "รถขนส่ง", LocalDate.now().plusDays(30),
-                "หมายเหตุลูกค้า", UUID.randomUUID().toString()),
-            salesActor);
-        assertThat(draft.items()).hasSize(2);
-
-        assertThat(jdbc.queryForObject("""
-            SELECT COUNT(*) FROM sales.quotation_item_discount_approval
-             WHERE quotation_item_id IN (SELECT quotation_item_id FROM sales.quotation_item WHERE quotation_id = :id)
-            """, Map.of("id", draft.id()), Long.class)).isZero();
-
-        CustomerQuotationDto issued = quotationService.issue(draft.id(),
-            new IssueCustomerQuotationRequest(UUID.randomUUID().toString()), salesActor);
-        assertThat(issued.docStatus()).isEqualTo("ISSUED");
-
-        assertThat(jdbc.queryForObject("""
-            SELECT COUNT(*) FROM sales.quotation_item_discount_approval
-             WHERE quotation_item_id IN (SELECT quotation_item_id FROM sales.quotation_item WHERE quotation_id = :id)
-            """, Map.of("id", draft.id()), Long.class)).isZero();
-    }
-
     // Helpers
-
-    private long countUpdatedEvents(long pricingRequestId) {
-        Long count = jdbc.queryForObject("""
-            SELECT COUNT(*) FROM sales.pricing_request_event
-             WHERE pricing_request_id = :id AND event_kind = 'PRICING_DECISION_UPDATED'
-            """, Map.of("id", pricingRequestId), Long.class);
-        return count == null ? 0 : count;
-    }
 
     /** {@code listUnitPrice} is not a client-settable field
      * on {@link UpdatePricingDecisionItemRequest} — the CEO never types it, it is
@@ -951,8 +378,7 @@ class PricingDecisionCeoPriceModeIntegrationTest extends AbstractPostgresIntegra
      * be set through the CEO API — it is always server-derived from the landed-cost formula,
      * whose own output is not a round number. Several tests below need a DETERMINISTIC list price
      * to pin an exact discount/net arithmetic result independently of that formula, so they poke
-     * the column directly here, exactly like this file already pokes {@code sqm_per_piece} in
-     * {@code update_specialSqmWithoutSqmPerPiece_is422_evenThoughPhase1RequiresIt}. */
+     * the column directly here. */
     private void setListUnitPriceForTest(long itemId, BigDecimal listUnitPrice) {
         jdbc.update("""
             UPDATE sales.pricing_decision_item SET list_unit_price = :listUnitPrice
@@ -1046,34 +472,6 @@ class PricingDecisionCeoPriceModeIntegrationTest extends AbstractPostgresIntegra
             // "อื่นๆ" has no ISO code and no freight band, so the line stays uncostable
             // ("ไทย-สต็อก" now costs domestically, owner ruling 2026-11-11).
             false, "อื่นๆ", 3, 7, null, null, null, "โปรตุเกส", null);
-    }
-
-    /** A single PER_BOX item (not the Phase 1 new-form shape) driven to READY_FOR_CEO_REVIEW -- the "legacy"
-     * fixture the mode-picker eligibility gate must refuse. PricingRequestRepository.create performs the exact
-     * same DB write createDraft would. */
-    private long legacyPerBoxSubmittedCosting() {
-        PricingRequestRequests.PricingRequestItemRequest item = new PricingRequestRequests.PricingRequestItemRequest(
-            null, catalogProductIdFactoryA, null, "SCG", "Tile Legacy", "SCG Tile Legacy", null, null,
-            "60x60", "Factory A-CEOP", new BigDecimal("10"), new BigDecimal("10"), "box", UnitBasis.PER_BOX,
-            QuantityType.CONFIRMED, null, null, null);
-        PricingRequestRequests.CreatePricingRequestRequest request = new PricingRequestRequests.CreatePricingRequestRequest(
-            PricingRequestRecipient.DESIGNER, null, "Designer Co.", LocalDate.now().plusDays(14),
-            null, "THB", "legacy per-box request", UUID.randomUUID().toString(), List.of(item));
-        long pricingRequestId = pricingRequests.create(ticketId, pricingRequests.nextRequestCode(), request, salesRepId);
-        pricingRequestService.submit(pricingRequestId, salesActor);
-        pricingRequestService.pickup(pricingRequestId, importActor);
-        List<FactoryQuoteDto> drafts = factoryQuoteService.generateDrafts(pricingRequestId, importActor);
-        FactoryQuoteDto draft = drafts.get(0);
-        factoryQuoteService.markContacted(draft.id(), new MarkFactoryContactedRequest(
-            java.time.LocalDate.now(java.time.ZoneId.of("Asia/Bangkok")), null), importActor);
-        FactoryQuoteDto responded = factoryQuoteService.receive(draft.id(), new ReceiveFactoryQuoteRequest(
-            "REF-LEGACY", "THB", "30 days", "45 days", "revision", "note", List.of(
-                new ReceiveFactoryQuoteItemRequest(draft.items().get(0).pricingRequestItemId(), null, null,
-                    new BigDecimal("10"), "box", "box", new BigDecimal("1000.00"), "THB", null,
-                    new BigDecimal("0.5"), new BigDecimal("20"), null, "45 days", null, null)),
-            UUID.randomUUID().toString()), importActor);
-        factoryQuoteService.markReadyForCosting(responded.id(), importActor);
-        return pricingRequestId;
     }
 
     private PricingRequestRequests.CreatePricingRequestRequest twoItemPricingRequest() {

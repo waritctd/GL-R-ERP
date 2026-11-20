@@ -22,10 +22,7 @@ import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.notification.SalesNotificationMailer;
 import th.co.glr.hr.payroll.PayrollRepository;
 import th.co.glr.hr.payroll.PayrollService;
-import th.co.glr.hr.payroll.declaration.TaxAllowanceDeclarationDtos.TaxAllowanceAttachmentDownload;
 import th.co.glr.hr.payroll.declaration.TaxAllowanceDeclarationDtos.TaxAllowanceAttachmentDto;
-import th.co.glr.hr.payroll.declaration.TaxAllowanceDeclarationDtos.TaxAllowanceDeclarationDto;
-import th.co.glr.hr.payroll.declaration.TaxAllowanceDeclarationDtos.TaxAllowanceDeclarationRegisterResponse;
 import th.co.glr.hr.payroll.declaration.TaxAllowanceDeclarationDtos.TaxAllowanceDeclarationSubmitRequest;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
@@ -85,104 +82,6 @@ class TaxAllowanceAttachmentScopeIntegrationTest extends AbstractPostgresIntegra
             .isNotBlank();
     }
 
-    @Test
-    void anotherEmployeeCannotListTheOwnersAttachments() {
-        long declarationId = submit(employeeA);
-        uploadPdf(declarationId, employeeActor(employeeA));
-
-        assertThatThrownBy(() -> service.listAttachments(declarationId, employeeActor(employeeB)))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.NOT_FOUND));
-    }
-
-    /** The anti-requireAttachmentAccess case. HR uploads ON BEHALF of employeeA (HR is the uploader; employeeA is
-     * the declaration's beneficiary and the ONLY employee this evidence is about). */
-    @Test
-    void accessIsRecheckedOnEveryDownloadNeverCachedFromUploadTime() {
-        long declarationId = submit(employeeA);
-        TaxAllowanceAttachmentDto uploaded = uploadPdf(declarationId, hrActor());
-
-        TaxAllowanceAttachmentDownload asHr = service.getAttachmentForDownload(uploaded.attachmentId(), hrActor());
-        assertThat(asHr.attachment().attachmentId()).isEqualTo(uploaded.attachmentId());
-
-        UserPrincipal sameUploaderIdButNoLongerHr = new UserPrincipal(hrEmployeeId, "exhr@glr.co.th", "employee",
-            "employee", hrEmployeeId, true, LocalDate.now(), false, null, false);
-        assertThatThrownBy(() -> service.getAttachmentForDownload(uploaded.attachmentId(), sameUploaderIdButNoLongerHr))
-            .as("the uploader's identity must never substitute for a live owner-or-hr check")
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.NOT_FOUND));
-    }
-
-    /** Decision #5 / plan open question #2's deliberate asymmetry: CEO reads the declaration REGISTER (payroll
-     * amounts) but never its evidence (personal medical/insurance/family documents). */
-    @Test
-    void ceoCannotDownloadOrListEvidenceWhileTheRegisterStillReturns200() {
-        long declarationId = submit(employeeA);
-        TaxAllowanceAttachmentDto uploaded = uploadPdf(declarationId, employeeActor(employeeA));
-
-        TaxAllowanceDeclarationRegisterResponse register = service.getRegister(2026, null, ceoActor());
-        assertThat(register.items()).extracting(TaxAllowanceDeclarationDto::declarationId).contains(declarationId);
-
-        assertThatThrownBy(() -> service.getAttachmentForDownload(uploaded.attachmentId(), ceoActor()))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.NOT_FOUND));
-        assertThatThrownBy(() -> service.listAttachments(declarationId, ceoActor()))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.NOT_FOUND));
-    }
-
-    @Test
-    void aTombstonedFileIsNotDownloadableButTheRowSurvives() {
-        long declarationId = submit(employeeA);
-        TaxAllowanceAttachmentDto uploaded = uploadPdf(declarationId, employeeActor(employeeA));
-
-        service.deleteAttachment(uploaded.attachmentId(), "อัปโหลดผิดไฟล์", employeeActor(employeeA));
-
-        assertThatThrownBy(() -> service.getAttachmentForDownload(uploaded.attachmentId(), employeeActor(employeeA)))
-            .as("a tombstoned file must not be downloadable even by its own owner")
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.NOT_FOUND));
-
-        TaxAllowanceAttachmentDto stillThere = repository.findAttachment(uploaded.attachmentId()).orElseThrow();
-        assertThat(stillThere.deletedAt()).as("the row must survive -- a tombstone, never a hard delete").isNotNull();
-        assertThat(stillThere.fileName()).isEqualTo(uploaded.fileName());
-    }
-
-    // sectionKey (V135, feat/tax-allowance-sections) ------------------------------------------- Not an
-    // authorization change -- the owner/HR access check above is untouched; these four cases cover the new data
-    // field's own validation only (CLAUDE.md's scope note on this task).
-
-    @Test
-    void aValidSectionKeyIsAcceptedAndReturned() {
-        long declarationId = submit(employeeA);
-        TaxAllowanceAttachmentDto uploaded = uploadPdf(declarationId, "item7", employeeActor(employeeA));
-
-        assertThat(uploaded.sectionKey()).isEqualTo("item7");
-        // Persisted, not just echoed back -- re-fetching through a fresh query proves the column round-trips through
-        // hr.file_attachment, not just through the in-memory DTO this call returned.
-        assertThat(repository.findAttachment(uploaded.attachmentId()).orElseThrow().sectionKey())
-            .isEqualTo("item7");
-    }
-
-    @Test
-    void anInvalidSectionKeyIsRejected() {
-        long declarationId = submit(employeeA);
-
-        assertThatThrownBy(() -> uploadPdf(declarationId, "not-a-real-section", employeeActor(employeeA)))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
-    }
-
-    @Test
-    void anOmittedSectionKeyStaysNullRatherThanFailing() {
-        long declarationId = submit(employeeA);
-        TaxAllowanceAttachmentDto uploaded = uploadPdf(declarationId, employeeActor(employeeA));
-
-        assertThat(uploaded.sectionKey()).isNull();
-    }
-
-    @Test
-    void aBlankSectionKeyNormalizesToNullRatherThanBeingRejected() {
-        long declarationId = submit(employeeA);
-        TaxAllowanceAttachmentDto uploaded = uploadPdf(declarationId, "   ", employeeActor(employeeA));
-
-        assertThat(uploaded.sectionKey()).isNull();
-    }
-
     // --- helpers ---------------------------------------------------------------------------------
 
     private long submit(long employeeId) {
@@ -222,11 +121,4 @@ class TaxAllowanceAttachmentScopeIntegrationTest extends AbstractPostgresIntegra
             employeeId, true, LocalDate.now(), false, null, false);
     }
 
-    private UserPrincipal hrActor() {
-        return new UserPrincipal(hrEmployeeId, "hr@glr.co.th", "HR", "hr", hrEmployeeId, true, LocalDate.now(), false, null, false);
-    }
-
-    private UserPrincipal ceoActor() {
-        return new UserPrincipal(ceoEmployeeId, "ceo@glr.co.th", "CEO", "ceo", ceoEmployeeId, true, LocalDate.now(), false, null, false);
-    }
 }

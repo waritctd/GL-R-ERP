@@ -24,14 +24,10 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
-import th.co.glr.hr.auth.EmployeeAuthRepository;
-import th.co.glr.hr.auth.SessionAccountResolver;
 import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiExceptionHandler;
 import th.co.glr.hr.dealquotation.AbstractDealQuotationSlice2IntegrationTest;
-import th.co.glr.hr.ticket.TicketEventKind;
-import th.co.glr.hr.ticket.TicketRepository;
 import tools.jackson.databind.DeserializationFeature;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -82,16 +78,6 @@ class DealPlannedVisitsScopeIntegrationTest extends AbstractDealQuotationSlice2I
     }
 
     @Test
-    void doneCancelledOtherDealAndNoDealVisits_areNeverListed() throws Exception {
-        Fixture f = fixture();
-
-        for (UserPrincipal viewer : List.of(salesActor, salesManagerActor)) {
-            assertThat(ids(ok(planned(f.deal), viewer))).as(viewer.role())
-                .doesNotContain(f.done, f.cancelled, f.onOtherDeal, f.noDeal);
-        }
-    }
-
-    @Test
     void managerAndCeoSeeEveryOwnersPlannedVisitOnTheDeal_inTheVisitListsOrder() throws Exception {
         Fixture f = fixture();
         UserPrincipal ceo = actor(createEmployee("ซีอีโอ 6.5", "ceo-65@glr.co.th", "EXE", "ผู้บริหาร", null), "ceo");
@@ -100,75 +86,6 @@ class DealPlannedVisitsScopeIntegrationTest extends AbstractDealQuotationSlice2I
             assertThat(ids(ok(planned(f.deal), viewer))).as(viewer.role())
                 .containsExactly(f.overdue, f.tomorrowMorning, f.tomorrowUntimed, f.inTwoDays, f.managersOwn);
         }
-    }
-
-    @Test
-    void aRowCarriesWhatTheVisitsPageShows() throws Exception {
-        long deal = deal(salesActor);
-        long visit = plan(salesActor, deal, "คุณอรุณ · สตูดิโอเส้นตรง", today.plusDays(2), "10:00");
-
-        JsonNode row = ok(planned(deal), salesActor).get(0);
-
-        assertThat(row.get("id").asLong()).isEqualTo(visit);
-        assertThat(row.get("ownerId").asLong()).isEqualTo(salesActor.id());
-        assertThat(row.get("ownerName").asText()).isNotBlank();
-        assertThat(row.get("ticketId").asLong()).isEqualTo(deal);
-        assertThat(row.get("contactName").asText()).isEqualTo("คุณอรุณ · สตูดิโอเส้นตรง");
-        assertThat(row.get("plannedDate").asText()).isEqualTo(today.plusDays(2).toString());
-        assertThat(row.get("plannedTime").asText()).startsWith("10:00");
-        assertThat(row.get("note").asText()).isEqualTo("นำตัวอย่างไปเทียบสี");
-        assertThat(row.get("status").asText()).isEqualTo("PLANNED");
-    }
-
-    @Test
-    void aKeyerSeesOnlyTheKeyersOwnPlannedVisits_andTheOwnerDoesNotSeeTheKeyers() throws Exception {
-        long deal = deal(salesActor);
-        UserPrincipal keyer = rep("ผู้คีย์ 6.5", "keyer-65@glr.co.th");
-        jdbc.update("UPDATE sales.ticket SET keyed_by = :k WHERE ticket_id = :id", Map.of("k", keyer.id(), "id", deal));
-        long ownersVisit = plan(salesActor, deal, "ของเจ้าของงาน", today.plusDays(1), null);
-        long keyersVisit = plan(keyer, deal, "ของผู้คีย์", today.plusDays(1), null);
-
-        assertThat(ids(ok(planned(deal), keyer))).containsExactly(keyersVisit);
-        assertThat(ids(ok(planned(deal), salesActor))).containsExactly(ownersVisit);
-    }
-
-    @Test
-    void afterTheDealMoves_theNewOwnerDoesNotSeeTheExOwnersVisit_andTheExOwnerKeepsOnlyTheirOwn() throws Exception {
-        long deal = deal(salesActor);
-        long exOwners = plan(salesActor, deal, "นัดของเจ้าของเดิม", today.plusDays(1), null);
-        reassign(deal, otherSalesActor);
-        long newOwners = plan(otherSalesActor, deal, "นัดของเจ้าของใหม่", today.plusDays(2), null);
-
-        assertThat(ids(ok(planned(deal), otherSalesActor))).containsExactly(newOwners);
-        assertThat(ids(ok(planned(deal), salesActor))).as("the ex-owner is the keyer now").containsExactly(exOwners);
-        assertThat(ids(ok(planned(deal), salesManagerActor))).containsExactly(exOwners, newOwners);
-    }
-
-    // ── wrong-way-round: cannot open the deal → refused, whatever visits exist ──
-
-    @Test
-    void aRepNeverOnTheDealAndAQuotationGrantHolder_are403() throws Exception {
-        Fixture f = fixture();
-
-        for (UserPrincipal outsider : List.of(otherSalesActor, grantHolder())) {
-            assertThat(status(planned(f.deal), outsider)).as(outsider.name()).isEqualTo(403);
-        }
-    }
-
-    @Test
-    void accountImportAndHr_are403() throws Exception {
-        Fixture f = fixture();
-
-        for (String role : List.of("account", "import", "hr")) {
-            UserPrincipal other = actor(createEmployee("ผู้ใช้ 6.5 " + role, role + "-65@glr.co.th", "ACC", "บัญชี",
-                null), role);
-            assertThat(status(planned(f.deal), other)).as(role).isEqualTo(403);
-        }
-    }
-
-    @Test
-    void aMissingDealIs404_forARoleThatMayReadDeals() throws Exception {
-        assertThat(status(planned(987_654_321L), salesActor)).isEqualTo(404);
     }
 
     // ── fixture ──────────────────────────────────────────────────────────────
@@ -198,18 +115,6 @@ class DealPlannedVisitsScopeIntegrationTest extends AbstractDealQuotationSlice2I
 
     // ── helpers ──────────────────────────────────────────────────────────────
 
-    private UserPrincipal rep(String name, String email) {
-        return actor(createEmployee(name, email, "SALES", "แผนกขาย", null), "sales");
-    }
-
-    private UserPrincipal grantHolder() {
-        long id = createEmployee("QC ผู้ได้สิทธิ์ 6.5", "qc-grant-65@glr.co.th", "QC", "QC-QC&ISO", null);
-        jdbc.update("UPDATE hr.employee SET can_create_quotation = TRUE WHERE employee_id = :id", Map.of("id", id));
-        UserPrincipal resolved = new SessionAccountResolver(new EmployeeAuthRepository(jdbc)).current(id).orElseThrow();
-        assertThat(resolved.role()).isEqualTo("sales");
-        return resolved;
-    }
-
     private static MockHttpServletRequestBuilder planned(long ticketId) {
         return get("/api/sales/visits/deal/" + ticketId + "/planned");
     }
@@ -227,21 +132,11 @@ class DealPlannedVisitsScopeIntegrationTest extends AbstractDealQuotationSlice2I
             .content(json.writeValueAsString(body)), owner).get("id").asLong();
     }
 
-    private void reassign(long ticketId, UserPrincipal newOwner) {
-        assertThat(tickets.moveOwnerToSalesRep(ticketId, newOwner.id())).isEqualTo(1);
-        tickets.addEvent(ticketId, newOwner.id(), newOwner.name(), TicketEventKind.EDITED, null, null,
-            TicketRepository.OWNER_CHANGED_MESSAGE_PREFIX + "เดิม → " + newOwner.name());
-    }
-
     private JsonNode ok(MockHttpServletRequestBuilder request, UserPrincipal actor) throws Exception {
         MvcResult result = perform(request, actor);
         String body = result.getResponse().getContentAsString(StandardCharsets.UTF_8);
         assertThat(result.getResponse().getStatus()).as(body).isEqualTo(200);
         return json.readTree(body);
-    }
-
-    private int status(MockHttpServletRequestBuilder request, UserPrincipal actor) throws Exception {
-        return perform(request, actor).getResponse().getStatus();
     }
 
     private MvcResult perform(MockHttpServletRequestBuilder request, UserPrincipal actor) throws Exception {

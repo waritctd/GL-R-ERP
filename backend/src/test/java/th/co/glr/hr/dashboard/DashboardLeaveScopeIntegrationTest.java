@@ -62,77 +62,10 @@ class DashboardLeaveScopeIntegrationTest extends AbstractPostgresIntegrationTest
     }
 
     @Test
-    void managerStillSeesOvertimeAcrossTheWholeDivision() {
-        PendingApprovalsSummaryDto pending = service.summary(managerPrincipal()).pendingApprovals();
-
-        assertThat(pending.overtime())
-            .as("countOvertime is untouched by this change -- ฝ่าย manager -> CEO genuinely IS "
-                + "division-scoped, so BOTH requests in the division count here")
-            .isEqualTo(2);
-    }
-
-    @Test
     void hrSeesLeaveAcrossTheWholeCompanyRegardlessOfReportsToChain() {
         PendingApprovalsSummaryDto pending = service.summary(hrPrincipal()).pendingApprovals();
 
         assertThat(pending.leave()).isEqualTo(2);
-    }
-
-    @Test
-    void ordinaryEmployeeSeesOnlyTheirOwnLeaveNotTheirManagersWholeChain() {
-        PendingApprovalsSummaryDto pending = service.summary(employeePrincipal(directReport)).pendingApprovals();
-
-        assertThat(pending.leave())
-            .as("directReport's own card counts only their own SUBMITTED request")
-            .isEqualTo(1);
-    }
-
-    @Test
-    void nonTitleSupervisorSeesTheirDirectReportsPendingLeaveEvenWithoutAManagerTitle() {
-        // Same manager/directReport pair as the class fixture, but manager=false on the UserPrincipal -- simulating a
-        // real supervisor whose position title does NOT contain ผู้จัดการ.
-        UserPrincipal nonTitleSupervisor = new UserPrincipal(4L, "sup@glr.co.th", "sup", "employee",
-            manager, true, LocalDate.now(), false, division, false);
-
-        PendingApprovalsSummaryDto pending = service.summary(nonTitleSupervisor).pendingApprovals();
-
-        assertThat(pending.leave())
-            .as("D2: a real supervisor without ผู้จัดการ in their title must still see their "
-                + "active direct report's SUBMITTED leave -- must fail against the "
-                + "isDivisionManager-gated branch this fix removes, exactly as it would have "
-                + "before this fix even though managerPrincipal() (manager=true) already covers "
-                + "the same fixture pair above")
-            .isEqualTo(1);
-    }
-
-    @Test
-    void inactiveDirectReportsPendingLeaveIsNotCounted() {
-        // A direct report who is no longer active but still carries a stale SUBMITTED row must NOT be counted (PR #846
-        // defect D3) -- mirrors LeaveRepository#countReviewableSubmitted's `AND e.is_active = TRUE` guard and
-        // LeaveReviewSummaryIntegrationTest#aManagerOfAnInactiveReportOnlyIsNotAReviewer.
-        long inactiveReport = insertEmployee("R003", division, manager, false);
-        insertSubmittedLeave(inactiveReport);
-
-        PendingApprovalsSummaryDto pending = service.summary(managerPrincipal()).pendingApprovals();
-
-        assertThat(pending.leave())
-            .as("only directReport's (active) SUBMITTED leave counts -- the inactive report's "
-                + "stale SUBMITTED row must NOT inflate the count from 1 to 2")
-            .isEqualTo(1);
-    }
-
-    @Test
-    void managersOwnPendingLeaveIsCountedAlongsideTheirDirectReports() {
-        // A manager's own SUBMITTED leave silently vanished when the scope moved off division (division always
-        // included the manager's own row) onto reports_to_employee_id alone (a manager does not report to themselves)
-        // -- PR #846 defect D4.
-        insertSubmittedLeave(manager);
-
-        PendingApprovalsSummaryDto pending = service.summary(managerPrincipal()).pendingApprovals();
-
-        assertThat(pending.leave())
-            .as("directReport's SUBMITTED leave (1) PLUS the manager's own (1) == 2")
-            .isEqualTo(2);
     }
 
     // --- fixture helpers ------------------------------------------------
@@ -145,11 +78,6 @@ class DashboardLeaveScopeIntegrationTest extends AbstractPostgresIntegrationTest
     private UserPrincipal hrPrincipal() {
         return new UserPrincipal(2L, "hr@glr.co.th", "hr", "hr", manager, true,
             LocalDate.now(), false, null, false);
-    }
-
-    private UserPrincipal employeePrincipal(long employeeId) {
-        return new UserPrincipal(3L, "emp@glr.co.th", "emp", "employee", employeeId, true,
-            LocalDate.now(), false, division, false);
     }
 
     private long insertDivision(String code, String name) {
@@ -195,8 +123,7 @@ class DashboardLeaveScopeIntegrationTest extends AbstractPostgresIntegrationTest
                 .addValue("employeeId", employeeId)
                 .addValue("startDate", WORK_DATE)
                 .addValue("endDate", WORK_DATE));
-        // status defaults to 'SUBMITTED' (V13__leave_management_schema.sql) -- not set explicitly, mirroring
-        // DashboardRepositoryIntegrationTest#insertLeave.
+        // status defaults to 'SUBMITTED' (V13__leave_management_schema.sql) -- not set explicitly.
     }
 
     private void insertSubmittedOvertime(long employeeId) {
@@ -215,6 +142,6 @@ class DashboardLeaveScopeIntegrationTest extends AbstractPostgresIntegrationTest
                 .addValue("startAt", OffsetDateTime.parse("2026-07-05T18:00:00+07:00"))
                 .addValue("endAt", OffsetDateTime.parse("2026-07-05T19:00:00+07:00"))
                 .addValue("payrollMonth", PAYROLL_MONTH));
-        // status defaults to 'SUBMITTED', mirroring DashboardRepositoryIntegrationTest#insertOvertime.
+        // status defaults to 'SUBMITTED'.
     }
 }

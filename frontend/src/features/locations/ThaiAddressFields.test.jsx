@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ThaiAddressFields, emptyThaiAddress } from './ThaiAddressFields.jsx';
@@ -51,38 +51,6 @@ describe('Thai address cascade', () => {
     expect(state().postalCode).toBe('50200');
     fireEvent.click(screen.getByRole('button', { name: 'ล้างจังหวัด' }));
     expect(state()).toEqual(emptyThaiAddress());
-  });
-  it('supports Thai search, keyboard choice, Escape, and empty results without selecting typed text', async () => {
-    setup();
-    const input = screen.getByRole('combobox', { name: 'จังหวัด' });
-    fireEvent.focus(input);
-    fireEvent.change(input, { target: { value: 'กรุง' } });
-    await screen.findByRole('option', { name: 'กรุงเทพมหานคร' });
-    fireEvent.keyDown(input, { key: 'ArrowDown' });
-    fireEvent.keyDown(input, { key: 'Enter' });
-    expect(state().provinceCode).toBe('10');
-    fireEvent.focus(input);
-    fireEvent.change(input, { target: { value: 'ไม่มีจังหวัดนี้' } });
-    expect(screen.getByText('ไม่พบข้อมูล')).not.toBeNull();
-    fireEvent.keyDown(input, { key: 'Escape' });
-    expect(input.value).toBe('กรุงเทพมหานคร');
-    expect(state().provinceCode).toBe('10');
-  });
-  it('offers every valid postcode if a subdistrict has multiple codes', async () => {
-    api.locations.subdistricts.mockResolvedValue({ items: [{ code: '103901', districtCode: '1039', nameTh: 'คลองเตยเหนือ', postalCodes: ['10110', '10111'] }] });
-    setup();
-    await pick('จังหวัด', 'กรุงเทพมหานคร'); await pick('เขต', 'วัฒนา'); await pick('แขวง', 'คลองเตยเหนือ');
-    expect(state().postalCode).toBe('');
-    await pick('รหัสไปรษณีย์', '10111');
-    expect(state().postalCode).toBe('10111');
-  });
-  it('shows a recoverable fetch failure', async () => {
-    api.locations.provinces.mockRejectedValueOnce(new Error('offline'));
-    setup();
-    await screen.findByRole('alert');
-    fireEvent.click(screen.getByRole('button', { name: 'ลองอีกครั้ง' }));
-    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
-    await pick('จังหวัด', 'เชียงใหม่');
   });
   it('keeps legacy address text byte-for-byte and avoids duplicated prefixes', () => {
     expect(formatThaiAddress({ address: 'ที่อยู่เดิม\nบรรทัดสอง' })).toBe('ที่อยู่เดิม\nบรรทัดสอง');

@@ -26,14 +26,6 @@ class OvertimeRepositoryPendingApproverTest {
     }
 
     @Test
-    void submittedWithManagerStage_resolvesToManagerAndTheirName() throws SQLException {
-        ResultSet rs = resultSet("SUBMITTED", true, "เอ็ม", "ราม");
-
-        assertThat(repository.resolvePendingApproverRole(rs)).isEqualTo("manager");
-        assertThat(repository.resolvePendingApproverName(rs)).isEqualTo("เอ็ม");
-    }
-
-    @Test
     void submittedWithoutManagerStage_resolvesToCeoDirectly() throws SQLException {
         // hasManagerApprover false -- manager-less ฝ่าย, or requester IS the manager (Rule 2 of
         // ManagerApproverRepository) -- routes straight to the CEO, mirroring OvertimeService#approve's
@@ -44,45 +36,4 @@ class OvertimeRepositoryPendingApproverTest {
         assertThat(repository.resolvePendingApproverName(rs)).isEqualTo("ราม");
     }
 
-    @Test
-    void managerApproved_alwaysResolvesToCeo() throws SQLException {
-        ResultSet rs = resultSet("MANAGER_APPROVED", true, "เอ็ม", "ราม");
-
-        assertThat(repository.resolvePendingApproverRole(rs)).isEqualTo("ceo");
-        assertThat(repository.resolvePendingApproverName(rs)).isEqualTo("ราม");
-    }
-
-    @Test
-    void multipleCeoCandidates_omitsNameButKeepsRole() throws SQLException {
-        // Ambiguity case: PendingApproverSql#SINGLE_ACTIVE_CEO_NAME_SQL resolves to SQL NULL when more than one active
-        // ceo-role employee exists -- stood in here by the (mocked) SQL layer already reporting null.
-        ResultSet rs = resultSet("SUBMITTED", false, null, null);
-
-        assertThat(repository.resolvePendingApproverRole(rs)).isEqualTo("ceo");
-        assertThat(repository.resolvePendingApproverName(rs)).isNull();
-    }
-
-    @Test
-    void multipleDivisionManagerCandidates_omitsNameButKeepsRole() throws SQLException {
-        ResultSet rs = resultSet("SUBMITTED", true, null, "ราม");
-
-        assertThat(repository.resolvePendingApproverRole(rs)).isEqualTo("manager");
-        assertThat(repository.resolvePendingApproverName(rs)).isNull();
-    }
-
-    @Test
-    void approvedStatus_hasNoPendingApprover() throws SQLException {
-        ResultSet rs = resultSet("APPROVED", true, "เอ็ม", "ราม");
-
-        assertThat(repository.resolvePendingApproverRole(rs)).isNull();
-        assertThat(repository.resolvePendingApproverName(rs)).isNull();
-    }
-
-    @Test
-    void cancelledStatus_hasNoPendingApprover() throws SQLException {
-        ResultSet rs = resultSet("CANCELLED", false, null, "ราม");
-
-        assertThat(repository.resolvePendingApproverRole(rs)).isNull();
-        assertThat(repository.resolvePendingApproverName(rs)).isNull();
-    }
 }

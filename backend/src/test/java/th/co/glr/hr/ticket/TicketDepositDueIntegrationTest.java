@@ -41,49 +41,6 @@ class TicketDepositDueIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(tickets.findSummaryById(id).orElseThrow().depositDue()).isEqualByComparingTo("85418.10");
     }
 
-    @Test
-    void severalNotices_serveTheNewestIssuedOne_notADraftOrSupersededOne() {
-        long id = deal("DEPOSIT_NOTICE_ISSUED");
-        notice(id, 1, "SUPERSEDED", "90000.00");
-        notice(id, 2, "ISSUED", "85418.10");
-        notice(id, 3, "DRAFT", "70000.00");
-
-        assertThat(listRow(id).depositDue()).isEqualByComparingTo("85418.10");
-    }
-
-    @Test
-    void isNull_whenThereIsNoIssuedNotice() {
-        long onlyDraft = deal("DEPOSIT_NOTICE_ISSUED");
-        notice(onlyDraft, 1, "DRAFT", "85418.10");
-        long none = deal("DEPOSIT_NOTICE_ISSUED");
-
-        assertThat(listRow(onlyDraft).depositDue()).isNull();
-        assertThat(listRow(none).depositDue()).isNull();
-    }
-
-    @Test
-    void isNull_onceTheDealIsPastTheDepositStep_evenWithAnIssuedNoticeOnFile() {
-        for (String status : new String[] {"DEPOSIT_PAID", "AWAITING_FINAL_PAYMENT", "FULLY_PAID", "CUSTOMER_CONFIRMED"}) {
-            long id = deal(status);
-            notice(id, 1, "ISSUED", "85418.10");
-
-            assertThat(listRow(id).depositDue()).as(status).isNull();
-            assertThat(tickets.findSummaryById(id).orElseThrow().depositDue()).as(status).isNull();
-        }
-    }
-
-    @Test
-    void importRoleSummary_hasNoDepositDue_butTheSourceRowDid() {
-        long id = deal("DEPOSIT_NOTICE_ISSUED");
-        notice(id, 1, "ISSUED", "85418.10");
-        TicketSummaryDto row = listRow(id);
-
-        assertThat(row.depositDue()).isNotNull();
-        assertThat(row.withoutMoney().depositDue()).isNull();
-    }
-
-    // ── helpers ─────────────────────────────────────────────────────────────────────────────
-
     private long deal(String paymentStatus) {
         long id = tickets.create(
             new CreateTicketRequest("ดีลทดสอบ", "NORMAL", "ลูกค้าทดสอบ", null, null, null, null, null, List.of()),

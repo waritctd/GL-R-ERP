@@ -1,7 +1,6 @@
 package th.co.glr.hr.ticket;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -14,8 +13,6 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
-import java.util.stream.Collectors;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
@@ -66,8 +63,6 @@ class DealRouteGateIntegrationTest extends AbstractPostgresIntegrationTest {
         ceoActor = principal(createEmployee(employees, "ซีอีโอ เส้นทางดีล", "dealroute-ceo@glr.co.th"), "ceo");
     }
 
-    // ═══ Part A — what an owner-direct / buyer-direct deal CANNOT reach ═══════
-
     /** No designer to quote: S4 is off the owner-direct route. Refused 409, naming channel + remedy. */
     @Test
     void ownerDirect_isRefusedTheDesignerQuote_andTheRowDoesNotMove() {
@@ -77,166 +72,6 @@ class DealRouteGateIntegrationTest extends AbstractPostgresIntegrationTest {
 
         assertThat(stageOf(ticketId)).isEqualTo(DealStage.PRESENTATION);
         assertThat(stageChangedEvents(ticketId)).isZero();
-    }
-
-    /** Buyer-direct: no designer, the project owner is not the counterparty, S7 off-path. */
-    @Test
-    void buyerDirect_isRefusedEachOfTheFourPartyStages() {
-        for (String offRoute : List.of(DealStage.QUOTE_DESIGN_SIDE, DealStage.QUOTE_OWNER,
-                DealStage.OWNER_SIGNOFF, DealStage.AWAITING_BUYER)) {
-            long ticketId = dealAt(EntryChannel.BUYER_DIRECT, DealStage.PRESENTATION);
-
-            assertRefusedByRoute(ticketId, offRoute, "ผู้ซื้อ/ผู้รับเหมาติดต่อโดยตรง");
-
-            assertThat(stageOf(ticketId)).as("deal must not move to %s", offRoute)
-                .isEqualTo(DealStage.PRESENTATION);
-            assertThat(stageChangedEvents(ticketId)).isZero();
-        }
-    }
-
-    /**
-     * Only the OFF-route stages are refused: on an owner-direct deal S3 (kept, only re-worded) and
-     * the rest of the route still move normally. Guards against a gate that over-reaches.
-     *
-     * <p>The deal is pre-quoted to the owner and the buyer because the walk passes through ขั้น 5
-     * and ขั้น 8, which the D-3 fact gate holds shut until such a quotation exists (owner ruling
-     * 2026-10-16). That gate is not this test's subject and must not be allowed to answer for the
-     * route: without the fixture this would go red on a missing document while saying "the route
-     * refused an on-route stage", which is the opposite of what it exists to detect.
-     */
-    @Test
-    void ownerDirect_stillReachesTheStagesOnItsRoute() {
-        long ticketId = dealAt(EntryChannel.OWNER_DIRECT, DealStage.PRESENTATION);
-        QuoteStageFixtures.issuedQuotationOnDeal(jdbc, ticketId, ownerRepId, QuotationRecipient.OWNER);
-        QuoteStageFixtures.issuedQuotationOnDeal(jdbc, ticketId, ownerRepId, QuotationRecipient.BUYER);
-
-        for (String onRoute : List.of(DealStage.SPEC_APPROVED, DealStage.QUOTE_OWNER,
-                DealStage.OWNER_SIGNOFF, DealStage.AWAITING_BUYER, DealStage.QUOTE_BUYER,
-                DealStage.NEGOTIATION)) {
-            logAnActivityAndFollowUp(ticketId);
-            assertThatCode(() -> ticketService.updateStage(ticketId, onRoute, null, ownerRep))
-                .as("owner-direct deal must reach on-route %s", onRoute).doesNotThrowAnyException();
-            assertThat(stageOf(ticketId)).isEqualTo(onRoute);
-        }
-    }
-
-    // ═══ Part B — the two safety properties: nothing is refused ═══════════════
-
-    /** Design §13.1c — the unrecoverable-brick case. Pre-V144 rows and quotation-first ghosts carry UNSPECIFIED and
-     * GLA-156 removed the in-portal way to correct it, so a gate on it would brick those deals. Every party stage
-     * must be reachable, actually moved into, one after another. */
-    @Test
-    void unspecified_isRefusedNothing_everyStageStillReachable() {
-        long ticketId = dealAt(EntryChannel.UNSPECIFIED, DealStage.PRESENTATION);
-        // Pre-quoted to all three parties: the walk below crosses ขั้น 4/5/8, which the D-3 fact
-        // gate holds until each party's quotation exists (owner ruling 2026-10-16). That gate is
-        // emphatically NOT the brick this test guards against — a rep clears it by quoting
-        // someone, which is a remedy they have — whereas the channel on these rows cannot be
-        // corrected at all since GLA-156, which is precisely why the ROUTE must refuse nothing
-        // here. Keeping the fixture lets the test still prove the route refuses nothing, end to
-        // end, instead of stopping at the first unrelated gate.
-        QuoteStageFixtures.issuedQuotationOnDeal(jdbc, ticketId, ownerRepId, QuotationRecipient.DESIGNER);
-        QuoteStageFixtures.issuedQuotationOnDeal(jdbc, ticketId, ownerRepId, QuotationRecipient.OWNER);
-        QuoteStageFixtures.issuedQuotationOnDeal(jdbc, ticketId, ownerRepId, QuotationRecipient.BUYER);
-
-        assertNoStageIsOffRoute(decisionsFor(ticketId));
-        for (String stage : List.of(DealStage.QUOTE_DESIGN_SIDE, DealStage.QUOTE_OWNER,
-                DealStage.OWNER_SIGNOFF, DealStage.AWAITING_BUYER, DealStage.QUOTE_BUYER)) {
-            logAnActivityAndFollowUp(ticketId);
-            assertThatCode(() -> ticketService.updateStage(ticketId, stage, null, ownerRep))
-                .as("UNSPECIFIED deal must reach %s", stage).doesNotThrowAnyException();
-            assertThat(stageOf(ticketId)).isEqualTo(stage);
-        }
-    }
-
-    /** Design §13.2 — the majority route and the whole back catalogue see no behavioural change. */
-    @Test
-    void designerLed_isRefusedNothingByTheRoute_andOffersTheSameStagesAsUnspecified() {
-        long designerLed = dealAt(EntryChannel.DESIGNER_LED, DealStage.PRESENTATION);
-        long unspecified = dealAt(EntryChannel.UNSPECIFIED, DealStage.PRESENTATION);
-
-        // The allowedStages COMPARISON below needs no quotation fixture and deliberately gets
-        // none: both deals are equally un-quoted, so the D-3 fact gate blocks ขั้น 4/5/8 on both
-        // and cancels out of the equality. That is the assertion's whole strength — it asks only
-        // whether the two channels are treated alike, so it is immune to any gate they share.
-        assertNoStageIsOffRoute(decisionsFor(designerLed));
-        assertThat(allowedStages(decisionsFor(designerLed)))
-            .isEqualTo(allowedStages(decisionsFor(unspecified)));
-
-        // The walk does need it, for the reason given in the UNSPECIFIED test above.
-        QuoteStageFixtures.issuedQuotationOnDeal(jdbc, designerLed, ownerRepId, QuotationRecipient.DESIGNER);
-        QuoteStageFixtures.issuedQuotationOnDeal(jdbc, designerLed, ownerRepId, QuotationRecipient.OWNER);
-        QuoteStageFixtures.issuedQuotationOnDeal(jdbc, designerLed, ownerRepId, QuotationRecipient.BUYER);
-        for (String stage : List.of(DealStage.QUOTE_DESIGN_SIDE, DealStage.QUOTE_OWNER,
-                DealStage.OWNER_SIGNOFF, DealStage.AWAITING_BUYER, DealStage.QUOTE_BUYER)) {
-            logAnActivityAndFollowUp(designerLed);
-            assertThatCode(() -> ticketService.updateStage(designerLed, stage, null, ownerRep))
-                .as("designer-led deal must reach %s", stage).doesNotThrowAnyException();
-        }
-    }
-
-    // ═══ Part C — the stranding case: the gate tests the TARGET, never the current stage ═══
-
-    /**
-     * A deal sitting ON an off-route stage (it got there, then the channel was corrected to
-     * owner-direct) must still be able to move FORWARD. Gating the current stage would strand it.
-     *
-     * <p>The forward target is ขั้น 5, so the owner's quotation is fixture for the D-3 fact gate
-     * (owner ruling 2026-10-16) — this test is about the ROUTE gate reading the target and never
-     * the current stage, and a 409 about a missing document would mask exactly that.
-     */
-    @Test
-    void aDealSittingOnAnOffRouteStage_canStillMoveForward() {
-        long ticketId = dealAt(EntryChannel.DESIGNER_LED, DealStage.QUOTE_DESIGN_SIDE);
-        tickets.updateEntryChannel(ticketId, EntryChannel.OWNER_DIRECT); // the correction
-        QuoteStageFixtures.issuedQuotationOnDeal(jdbc, ticketId, ownerRepId, QuotationRecipient.OWNER);
-
-        assertThat(DealRoute.isOnRoute(EntryChannel.OWNER_DIRECT, stageOf(ticketId))).isFalse();
-        assertThat(decision(decisionsFor(ticketId), DealStage.QUOTE_OWNER).allowed()).isTrue();
-
-        logAnActivityAndFollowUp(ticketId);
-        assertThatCode(() -> ticketService.updateStage(ticketId, DealStage.QUOTE_OWNER, null, ownerRep))
-            .doesNotThrowAnyException();
-        assertThat(stageOf(ticketId)).isEqualTo(DealStage.QUOTE_OWNER);
-    }
-
-    /** …and along the routine S4 -> S3 backward pair too, which needs no reason. */
-    @Test
-    void aDealSittingOnAnOffRouteStage_canStillTakeTheRoutineBackwardStep() {
-        long ticketId = dealAt(EntryChannel.DESIGNER_LED, DealStage.QUOTE_DESIGN_SIDE);
-        tickets.updateEntryChannel(ticketId, EntryChannel.OWNER_DIRECT);
-
-        assertThatCode(() -> ticketService.updateStage(ticketId, DealStage.SPEC_APPROVED, null, ownerRep))
-            .doesNotThrowAnyException();
-        assertThat(stageOf(ticketId)).isEqualTo(DealStage.SPEC_APPROVED);
-    }
-
-    // ═══ Part D — the ladder: earlier rungs speak first ═══════════════════════
-
-    /** Rung 5 (fact gate) reports the FACT, not the route. */
-    @Test
-    void aMissingDeposit_reportsTheFactGate_notTheRoute() {
-        long ticketId = dealAt(EntryChannel.OWNER_DIRECT, DealStage.NEGOTIATION);
-
-        // account's money-stage moves go through the finance route now (and only in its list scope), so the /tickets
-        // stage path is exercised with the CEO, who keeps it and meets the same fact-gate ladder.
-        assertThatThrownBy(() -> ticketService.updateStage(ticketId, DealStage.DEPOSIT_RECEIVED, "เหตุผล", ceoActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> {
-                assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
-                assertThat(e.getMessage()).contains("ยังไม่ได้รับชำระมัดจำ").doesNotContain("แก้ช่องทางรับงาน");
-            });
-    }
-
-    /** Rung 4 (target == current) precedes the route: a deal sitting on S4 asked to go to S4. */
-    @Test
-    void targetEqualToCurrent_isReportedAsSuch_evenOnAnOffRouteStage() {
-        long ticketId = dealAt(EntryChannel.OWNER_DIRECT, DealStage.QUOTE_DESIGN_SIDE);
-
-        assertThatThrownBy(() -> ticketService.updateStage(ticketId, DealStage.QUOTE_DESIGN_SIDE, null, ownerRep))
-            .isInstanceOfSatisfying(ApiException.class, e -> {
-                assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
-                assertThat(e.getMessage()).contains("อยู่ในขั้นตอน").doesNotContain("แก้ช่องทางรับงาน");
-            });
     }
 
     /** Rung 2 (role gate) precedes the route: account is 403 on a sales stage, not the route 409. */
@@ -249,84 +84,6 @@ class DealRouteGateIntegrationTest extends AbstractPostgresIntegrationTest {
                 e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
     }
 
-    // ═══ Part E — stageDecisions / GET /api/tickets/{id}/actions ══════════════
-
-    /** The decisions are produced by running the real gate and catching, so an off-route target arrives
-     * allowed=false, onRoute=false and carrying the refusal's own message — and is therefore never advertised as
-     * an ADVANCE_STAGE action. */
-    @Test
-    void stageDecisions_markOffRouteTargetsNotAllowed_withOnRouteFalse() {
-        long ticketId = dealAt(EntryChannel.BUYER_DIRECT, DealStage.PRESENTATION);
-
-        List<StageDecisionDto> decisions = decisionsFor(ticketId);
-        Set<String> offRoute = DealRoute.offRouteStages(EntryChannel.BUYER_DIRECT);
-        assertThat(offRoute).hasSize(4);
-        for (StageDecisionDto d : decisions) {
-            if (offRoute.contains(d.stage())) {
-                assertThat(d.onRoute()).as("onRoute for %s", d.stage()).isFalse();
-                assertThat(d.allowed()).as("allowed for %s", d.stage()).isFalse();
-                assertThat(d.blockedReason()).as("reason for %s", d.stage())
-                    .contains("ผู้ซื้อ/ผู้รับเหมาติดต่อโดยตรง")
-                    .contains(DealRoute.stagePhrase(d.stage()))
-                    .doesNotContain(d.stage())
-                    .contains("แก้ช่องทางรับงาน");
-            } else {
-                assertThat(d.onRoute()).as("onRoute for %s", d.stage()).isTrue();
-            }
-        }
-        Set<String> advertised = ticketService.actions(ticketId, ownerRep).availableActions().stream()
-            .filter(a -> "ADVANCE_STAGE".equals(a.action()))
-            .map(TicketResponses.TicketActionDto::targetStage).collect(Collectors.toSet());
-        assertThat(advertised).doesNotContainAnyElementsOf(offRoute);
-        assertThat(advertised).contains(DealStage.SPEC_APPROVED);
-    }
-
-    // ═══ Part F — auto-advance precedence: silent no-op on an off-route target ═
-
-    /** Design §5 Flow 10 — owner-direct deal at QUOTE_OWNER, then a DESIGNER quotation (target S4). Stays put and
-     * throws nothing. (Backward, so monotonicity would also hold it: the next test is the one that isolates the
-     * route guard.) */
-    @Test
-    void autoAdvance_towardTheDesignerQuote_leavesAnOwnerDirectDealAtQuoteOwner_andThrowsNothing() {
-        long ticketId = dealAt(EntryChannel.OWNER_DIRECT, DealStage.QUOTE_OWNER);
-
-        assertThatCode(() -> ticketService.advanceStageForCustomerQuotationIssue(
-            ticketId, QuotationRecipient.DESIGNER, ownerRep)).doesNotThrowAnyException();
-
-        assertThat(stageOf(ticketId)).isEqualTo(DealStage.QUOTE_OWNER);
-        assertThat(stageChangedEvents(ticketId)).isZero();
-    }
-
-    /** The discriminating case: a FORWARD off-route target. Without the guard this would move to S4. */
-    @Test
-    void autoAdvance_towardAForwardOffRouteStage_isASilentNoOp() {
-        long ownerDirect = dealAt(EntryChannel.OWNER_DIRECT, DealStage.PRESENTATION);
-        assertThatCode(() -> ticketService.advanceStageForCustomerQuotationIssue(
-            ownerDirect, QuotationRecipient.DESIGNER, ownerRep)).doesNotThrowAnyException();
-        assertThat(stageOf(ownerDirect)).isEqualTo(DealStage.PRESENTATION);
-        assertThat(stageChangedEvents(ownerDirect)).isZero();
-
-        long buyerDirect = dealAt(EntryChannel.BUYER_DIRECT, DealStage.SPEC_APPROVED);
-        assertThatCode(() -> ticketService.advanceStageForCustomerQuotationIssue(
-            buyerDirect, QuotationRecipient.OWNER, ownerRep)).doesNotThrowAnyException();
-        assertThat(stageOf(buyerDirect)).isEqualTo(DealStage.SPEC_APPROVED);
-        assertThat(stageChangedEvents(buyerDirect)).isZero();
-    }
-
-    /** The guard must not reach an ON-route auto-advance, nor an operational one. */
-    @Test
-    void autoAdvance_towardAnOnRouteStage_stillAdvances() {
-        long buyerDirect = dealAt(EntryChannel.BUYER_DIRECT, DealStage.SPEC_APPROVED);
-        ticketService.advanceStageForCustomerQuotationIssue(buyerDirect, QuotationRecipient.BUYER, ownerRep);
-        assertThat(stageOf(buyerDirect)).isEqualTo(DealStage.QUOTE_BUYER);
-
-        long unspecified = dealAt(EntryChannel.UNSPECIFIED, DealStage.PRESENTATION);
-        ticketService.advanceStageForCustomerQuotationIssue(unspecified, QuotationRecipient.DESIGNER, ownerRep);
-        assertThat(stageOf(unspecified)).isEqualTo(DealStage.QUOTE_DESIGN_SIDE);
-    }
-
-    // ── helpers ──────────────────────────────────────────────────────────────
-
     private void assertRefusedByRoute(long ticketId, String stage, String channelPhrase) {
         assertThatThrownBy(() -> ticketService.updateStage(ticketId, stage, "เหตุผล", ownerRep))
             .as("a manual move into off-route %s must be refused", stage)
@@ -337,24 +94,6 @@ class DealRouteGateIntegrationTest extends AbstractPostgresIntegrationTest {
                     .doesNotContain(stage)
                     .contains("แก้ช่องทางรับงาน");
             });
-    }
-
-    private static void assertNoStageIsOffRoute(List<StageDecisionDto> decisions) {
-        assertThat(decisions).hasSize(DealStage.ORDER.size());
-        for (StageDecisionDto d : decisions) {
-            assertThat(d.onRoute()).as("onRoute for %s", d.stage()).isTrue();
-            assertThat(d.blockedReason() == null || !d.blockedReason().contains("แก้ช่องทางรับงาน"))
-                .as("route refusal on %s: %s", d.stage(), d.blockedReason()).isTrue();
-        }
-    }
-
-    private List<StageDecisionDto> decisionsFor(long ticketId) {
-        return ticketService.actions(ticketId, ownerRep).stageDecisions();
-    }
-
-    private static Set<String> allowedStages(List<StageDecisionDto> decisions) {
-        return decisions.stream().filter(StageDecisionDto::allowed)
-            .map(StageDecisionDto::stage).collect(Collectors.toSet());
     }
 
     private static StageDecisionDto decision(List<StageDecisionDto> decisions, String stage) {

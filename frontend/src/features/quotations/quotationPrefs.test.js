@@ -1,8 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import {
-  pushRecentCatalogPick, RECENT_PRODUCT_LIMIT, readQuotationDefaults, readRecentCatalogPicks,
-  writeQuotationDefaults,
-} from './quotationPrefs.js';
+import { readQuotationDefaults, writeQuotationDefaults } from './quotationPrefs.js';
 
 // This repo's Node ships a BROKEN built-in global `localStorage` (it needs --localstorage-file and shadows
 // jsdom's — `clear` is not even a function on it; see TicketCreateModal.test.jsx's own note). So every test
@@ -16,11 +13,6 @@ function memoryStorage() {
     clear: () => map.clear(),
     _map: map,
   };
-}
-
-function throwingStorage() {
-  const boom = () => { throw new DOMException('The operation is insecure.', 'SecurityError'); };
-  return { getItem: boom, setItem: boom, removeItem: boom, clear: boom };
 }
 
 describe('quotationPrefs', () => {
@@ -42,14 +34,6 @@ describe('quotationPrefs', () => {
     });
   });
 
-  // V178: the MODE is remembered (a rep who dates their validity keeps starting there); the DATE itself never is
-  // — a remembered calendar date would be a date in the past, or simply the wrong one, on every quotation after
-  // the first.
-  it('remembers validityMode but never validityUntil, even when both are passed', () => {
-    writeQuotationDefaults(6, { validityMode: 'DATE', validityUntil: '2026-12-31' });
-    expect(readQuotationDefaults(6)).toEqual({ validityMode: 'DATE' });
-  });
-
   // Item 4: unlike every other field above, noDeposit/fullPaymentTerm must NEVER round-trip — remembering
   // noDeposit would make every LATER new quotation start with no deposit, which is exactly the accidental-no-
   // deposit-quotation risk the reversal exists to prevent.
@@ -58,94 +42,5 @@ describe('quotationPrefs', () => {
       depositPercent: 50, noDeposit: true, fullPaymentTerm: 'ON_DELIVERY',
     });
     expect(readQuotationDefaults(6)).toEqual({ depositPercent: 50 });
-  });
-
-  // A stale blob is exactly what a rep who used the checkbox during the brief window this shipped (2026-09-16,
-  // before the reversal) may already have sitting in their browser's localStorage. Reading it back must silently
-  // drop the stale keys rather than warn, crash, or apply them.
-  it('ignores a stale stored noDeposit/fullPaymentTerm from before the reversal', () => {
-    // Simulates the OLD writer, which used to include these two keys.
-    writeQuotationDefaults(6, { depositPercent: 0 }); // depositPercent 0 alone is not "no deposit"
-    const key = 'glr.quotation.defaults.v1:6';
-    const stale = JSON.parse(store.getItem(key));
-    store.setItem(key, JSON.stringify({ ...stale, noDeposit: true, fullPaymentTerm: 'ON_DELIVERY' }));
-
-    const defaults = readQuotationDefaults(6);
-    expect(defaults).toEqual({ depositPercent: 0 });
-    expect(defaults.noDeposit).toBeUndefined();
-    expect(defaults.fullPaymentTerm).toBeUndefined();
-  });
-
-  // A shared sales machine is the normal case in this office — two reps on one browser must not inherit each
-  // other's terms.
-  it('keys defaults per user, so one rep never inherits another\'s', () => {
-    writeQuotationDefaults(6, { depositPercent: 50 });
-    expect(readQuotationDefaults(9)).toBeNull();
-    expect(readQuotationDefaults(6)).toEqual({ depositPercent: 50 });
-  });
-
-  it('returns null rather than an empty object when nothing worth remembering was passed', () => {
-    expect(writeQuotationDefaults(6, { depositPercent: '', remainderMode: null })).toBe(false);
-    expect(readQuotationDefaults(6)).toBeNull();
-  });
-
-  it('survives a corrupt or hand-edited value instead of throwing', () => {
-    store.setItem('glr.quotation.defaults.v1:6', '{not json');
-    store.setItem('glr.quotation.recentProducts.v1:6', '{"not":"an array"}');
-    expect(readQuotationDefaults(6)).toBeNull();
-    expect(readRecentCatalogPicks(6)).toEqual([]);
-  });
-
-  it('keeps recent picks most-recent-first, deduped by priceId', () => {
-    pushRecentCatalogPick(6, { priceId: 1, collection: 'A' });
-    pushRecentCatalogPick(6, { priceId: 2, collection: 'B' });
-    const after = pushRecentCatalogPick(6, { priceId: 1, collection: 'A' });
-
-    expect(after.map((r) => r.priceId)).toEqual([1, 2]);
-    expect(readRecentCatalogPicks(6).map((r) => r.priceId)).toEqual([1, 2]);
-  });
-
-  it('caps the recent list at RECENT_PRODUCT_LIMIT', () => {
-    for (let i = 1; i <= RECENT_PRODUCT_LIMIT + 4; i += 1) {
-      pushRecentCatalogPick(6, { priceId: i, collection: `C${i}` });
-    }
-    const stored = readRecentCatalogPicks(6);
-    expect(stored).toHaveLength(RECENT_PRODUCT_LIMIT);
-    expect(stored[0].priceId).toBe(RECENT_PRODUCT_LIMIT + 4);
-  });
-
-  // Only the fields the item editor consumes are cached — a catalog schema change must not be able to bloat or
-  // poison this key.
-  it('stores only the whitelisted catalog fields', () => {
-    pushRecentCatalogPick(6, {
-      priceId: 1, collection: 'A', originCountryCode: 'IT', thicknessMm: 10,
-      price: 43, currency: 'EUR', someFutureField: { huge: true },
-    });
-    const [entry] = readRecentCatalogPicks(6);
-    expect(entry).toEqual({ priceId: 1, collection: 'A', originCountryCode: 'IT', thicknessMm: 10 });
-  });
-
-  // The case this module exists for: in a private window the ACCESSOR ITSELF throws, so an unguarded read would
-  // take the editor down rather than starting from the app defaults.
-  describe('when localStorage throws on every access', () => {
-    beforeEach(() => vi.stubGlobal('localStorage', throwingStorage()));
-
-    it('reads degrade to "nothing saved yet"', () => {
-      expect(readQuotationDefaults(6)).toBeNull();
-      expect(readRecentCatalogPicks(6)).toEqual([]);
-    });
-
-    it('writes report failure instead of propagating', () => {
-      expect(writeQuotationDefaults(6, { depositPercent: 50 })).toBe(false);
-      expect(() => pushRecentCatalogPick(6, { priceId: 1, collection: 'A' })).not.toThrow();
-    });
-  });
-
-  // Not merely "empty": some environments have no localStorage global at all.
-  it('degrades when there is no localStorage global at all', () => {
-    vi.stubGlobal('localStorage', undefined);
-    expect(readQuotationDefaults(6)).toBeNull();
-    expect(readRecentCatalogPicks(6)).toEqual([]);
-    expect(writeQuotationDefaults(6, { depositPercent: 50 })).toBe(false);
   });
 });

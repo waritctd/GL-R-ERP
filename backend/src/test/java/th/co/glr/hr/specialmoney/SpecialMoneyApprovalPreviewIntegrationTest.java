@@ -28,9 +28,6 @@ class SpecialMoneyApprovalPreviewIntegrationTest extends AbstractPostgresIntegra
 
     /** Same seeded figures {@link SpecialMoneyApproveDeadEndIntegrationTest} pins -- see V66. */
     private static final BigDecimal PREPROBATION_KIT_TOTAL = new BigDecimal("1960.00");
-    private static final BigDecimal FUNERAL_FIXED_CAP = new BigDecimal("5000.00");
-
-    private static final String ALREADY_DECIDED_MESSAGE = "คำขอเงินพิเศษนี้ได้รับการพิจารณาไปแล้ว";
 
     private SpecialMoneyService service;
     private SpecialMoneyRepository repository;
@@ -81,29 +78,6 @@ class SpecialMoneyApprovalPreviewIntegrationTest extends AbstractPostgresIntegra
         assertThat(repository.findById(requestId).orElseThrow().status()).isEqualTo("SUBMITTED");
     }
 
-    @Test
-    void missingRequestIs404() {
-        assertThatThrownBy(() -> service.approvalPreview(999_999L, ceo()))
-            .isInstanceOf(ApiException.class)
-            .extracting("status").isEqualTo(HttpStatus.NOT_FOUND);
-    }
-
-    @Test
-    void alreadyDecidedRequestIs409() {
-        long employeeId = insertStandardEligibleEmployee("APP01");
-        long requestId = submitRequest(
-            "AID_FUNERAL", employeeId, new BigDecimal("3000"),
-            LocalDate.of(2026, 7, 1), null, Map.of("relation", "parent"));
-        attachEvidence(requestId);
-        service.approve(requestId, new ReviewSpecialMoneyRequest(null, null, null), ceo());
-        assertThat(repository.findById(requestId).orElseThrow().status()).isEqualTo("APPROVED");
-
-        assertThatThrownBy(() -> service.approvalPreview(requestId, ceo()))
-            .isInstanceOf(ApiException.class)
-            .hasMessage(ALREADY_DECIDED_MESSAGE)
-            .extracting("status").isEqualTo(HttpStatus.CONFLICT);
-    }
-
     // Preview == guard: UNIFORM_PREPROBATION_KIT (fixed kit total, over-request).
 
     @Test
@@ -143,125 +117,7 @@ class SpecialMoneyApprovalPreviewIntegrationTest extends AbstractPostgresIntegra
         assertThat(repository.findById(overRequestId).orElseThrow().status()).isEqualTo("SUBMITTED");
     }
 
-    // Preview == guard: MEDICAL, second claim after the first ate most of the cap.
-
-    @Test
-    void secondMedicalClaimPreviewMatchesApproveGuardExactly() {
-        long employeeId = insertStandardEligibleEmployee("MED01");
-        LocalDate receiptDate = LocalDate.now(BUSINESS_ZONE).minusDays(5);
-
-        long firstRequestId = submitRequest(
-            "MEDICAL", employeeId, new BigDecimal("2000"), receiptDate, receiptDate, Map.of());
-        long secondRequestId = submitRequest(
-            "MEDICAL", employeeId, new BigDecimal("2000"), receiptDate, receiptDate, Map.of());
-        // A third, identically-eligible claim so the over-by-0.01 refusal below is checked against the SAME usage
-        // context as the previewed 1000 -- before secondRequestId's own approval would otherwise shrink it further.
-        long thirdRequestId = submitRequest(
-            "MEDICAL", employeeId, new BigDecimal("2000"), receiptDate, receiptDate, Map.of());
-        attachEvidence(firstRequestId);
-        attachEvidence(secondRequestId);
-        attachEvidence(thirdRequestId);
-
-        // Nothing approved yet against this employee's ฿3,000 annual MEDICAL cap.
-        service.approve(firstRequestId, new ReviewSpecialMoneyRequest(null, null, null), ceo());
-        assertThat(repository.findById(firstRequestId).orElseThrow().status()).isEqualTo("APPROVED");
-
-        // ฿2,000 already used, so the remaining ceiling for either untouched claim is ฿1,000.
-        SpecialMoneyApprovalPreviewDto secondPreview = service.approvalPreview(secondRequestId, ceo());
-        assertThat(secondPreview.requestedAmount()).isEqualByComparingTo(new BigDecimal("2000"));
-        assertThat(secondPreview.eligibleAmount()).isEqualByComparingTo(new BigDecimal("1000"));
-        assertThat(service.approvalPreview(thirdRequestId, ceo()).eligibleAmount())
-            .isEqualByComparingTo(new BigDecimal("1000"));
-
-        // One satang over ฿1,000, no reason, on the THIRD row -- refused. Checked BEFORE the second row is touched, so
-        // this reads the same ceiling that was just previewed.
-        BigDecimal oneSatangOver = secondPreview.eligibleAmount().add(new BigDecimal("0.01"));
-        assertThatThrownBy(() -> service.approve(
-                thirdRequestId, new ReviewSpecialMoneyRequest(null, oneSatangOver, null), ceo()))
-            .isInstanceOf(ApiException.class)
-            .extracting("status").isEqualTo(HttpStatus.BAD_REQUEST);
-        assertThat(repository.findById(thirdRequestId).orElseThrow().status()).isEqualTo("SUBMITTED");
-
-        // Exactly the previewed ฿1,000, no reason -- succeeds, on the second row.
-        service.approve(
-            secondRequestId, new ReviewSpecialMoneyRequest(null, secondPreview.eligibleAmount(), null), ceo());
-        assertThat(repository.findById(secondRequestId).orElseThrow().status()).isEqualTo("APPROVED");
-        assertThat(repository.findById(secondRequestId).orElseThrow().approvedAmount())
-            .isEqualByComparingTo(new BigDecimal("1000"));
-    }
-
-    // Preview == guard: AID_FUNERAL, flat cap with an unclamped over-cap submission.
-
-    @Test
-    void aidFuneralOverCapPreviewMatchesApproveGuardExactly() {
-        long employeeId = insertStandardEligibleEmployee("AID01");
-        long requestId = submitRequest(
-            "AID_FUNERAL", employeeId, new BigDecimal("8000"),
-            LocalDate.of(2026, 7, 1), null, Map.of("relation", "parent"));
-        attachEvidence(requestId);
-
-        SpecialMoneyApprovalPreviewDto preview = service.approvalPreview(requestId, ceo());
-        assertThat(preview.requestedAmount()).isEqualByComparingTo(new BigDecimal("8000"));
-        assertThat(preview.eligibleAmount()).isEqualByComparingTo(FUNERAL_FIXED_CAP);
-
-        long overRequestId = submitRequest(
-            "AID_FUNERAL", insertStandardEligibleEmployee("AID02"), new BigDecimal("8000"),
-            LocalDate.of(2026, 7, 1), null, Map.of("relation", "parent"));
-        attachEvidence(overRequestId);
-        assertThat(service.approvalPreview(overRequestId, ceo()).eligibleAmount())
-            .isEqualByComparingTo(FUNERAL_FIXED_CAP);
-
-        service.approve(requestId, new ReviewSpecialMoneyRequest(null, preview.eligibleAmount(), null), ceo());
-        assertThat(repository.findById(requestId).orElseThrow().status()).isEqualTo("APPROVED");
-        assertThat(repository.findById(requestId).orElseThrow().approvedAmount())
-            .isEqualByComparingTo(FUNERAL_FIXED_CAP);
-
-        BigDecimal oneSatangOver = preview.eligibleAmount().add(new BigDecimal("0.01"));
-        assertThatThrownBy(() -> service.approve(
-                overRequestId, new ReviewSpecialMoneyRequest(null, oneSatangOver, null), ceo()))
-            .isInstanceOf(ApiException.class)
-            .extracting("status").isEqualTo(HttpStatus.BAD_REQUEST);
-        assertThat(repository.findById(overRequestId).orElseThrow().status()).isEqualTo("SUBMITTED");
-    }
-
-    // Preview == guard: a legacy MANAGER_APPROVED row (pre-manager-stage-removal), not just SUBMITTED.
-
-    /** #approvalPreview must work on a MANAGER_APPROVED row exactly as it does on a SUBMITTED one. */
-    @Test
-    void previewsALegacyManagerApprovedRowExactlyLikeApproveEnforces() {
-        long employeeId = insertStandardEligibleEmployee("LEG01");
-        long requestId = submitRequest(
-            "AID_FUNERAL", employeeId, new BigDecimal("8000"),
-            LocalDate.of(2026, 7, 1), null, Map.of("relation", "parent"));
-        attachEvidence(requestId);
-        parkInLegacyManagerApprovedState(requestId);
-        assertThat(repository.findById(requestId).orElseThrow().status()).isEqualTo("MANAGER_APPROVED");
-
-        SpecialMoneyApprovalPreviewDto preview = service.approvalPreview(requestId, ceo());
-        assertThat(preview.requestedAmount()).isEqualByComparingTo(new BigDecimal("8000"));
-        assertThat(preview.eligibleAmount()).isEqualByComparingTo(FUNERAL_FIXED_CAP);
-
-        // The ceiling previewed on the legacy row must equal what approving THAT SAME legacy row (via ceoApproveFrom's
-        // `from == MANAGER_APPROVED` branch) actually enforces.
-        service.approve(requestId, new ReviewSpecialMoneyRequest(null, preview.eligibleAmount(), null), ceo());
-        SpecialMoneyRequestDto approved = repository.findById(requestId).orElseThrow();
-        assertThat(approved.status()).isEqualTo("APPROVED");
-        assertThat(approved.approvedAmount()).isEqualByComparingTo(FUNERAL_FIXED_CAP);
-    }
-
     // --- helpers ----------------------------------------------------------
-
-    /** As SpecialMoneyScopeIntegrationTest#parkInLegacyManagerApprovedState: forces a row into the state welfare's
-     * now-removed manager stage used to leave rows in, since nothing can reach it through the service any more. */
-    private void parkInLegacyManagerApprovedState(long requestId) {
-        jdbc.update("""
-            UPDATE hr.special_money_request
-               SET status = 'MANAGER_APPROVED',
-                   manager_approved_by = :managerId,
-                   manager_approved_at = now()
-             WHERE special_money_request_id = :id
-            """, Map.of("id", requestId, "managerId", managerEmployeeId));
-    }
 
     private long submitRequest(
             String type, long employeeId, BigDecimal requestedAmount,

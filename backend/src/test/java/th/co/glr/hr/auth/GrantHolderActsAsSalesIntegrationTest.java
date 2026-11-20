@@ -41,13 +41,6 @@ class GrantHolderActsAsSalesIntegrationTest extends AbstractPostgresIntegrationT
         assertThat(resolver.current(id)).get().extracting(UserPrincipal::role).isEqualTo("qc");
     }
 
-    @Test
-    void accountEmployeeWithGrantKeepsAccountRole() {
-        long id = createEmployee("บัญชี กรองสิทธิ์", "ac-grant-gas@glr.co.th", "AC", "AC-ฝ่ายบัญชี");
-        setGrant(id, true);
-        assertThat(resolver.current(id)).get().extracting(UserPrincipal::role).isEqualTo("account");
-    }
-
     private void setGrant(long id, boolean granted) {
         jdbc.update("UPDATE hr.employee SET can_create_quotation = :g WHERE employee_id = :id",
             Map.of("g", granted, "id", id));

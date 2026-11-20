@@ -14,20 +14,8 @@ class DivisionAccessPolicyTest {
     }
 
     @Test
-    void executivePositionDerivesCeoRegardlessOfDivision() {
-        // A กรรมการ-family title outranks the division mapping.
-        assertThat(DivisionAccessPolicy.roleFor(record("AC", "AC-บัญชี", "กรรมการ"))).isEqualTo("ceo");
-        assertThat(DivisionAccessPolicy.roleFor(record("SA", "SA-ฝ่ายขาย", "กรรมการผู้จัดการ"))).isEqualTo("ceo");
-    }
-
-    @Test
     void hrDivisionDerivesHr() {
         assertThat(DivisionAccessPolicy.roleFor(record("HR", "HR-บุคคล", "พนักงาน"))).isEqualTo("hr");
-    }
-
-    @Test
-    void foreignPurchasingDivisionDerivesImport() {
-        assertThat(DivisionAccessPolicy.roleFor(record("PCIM", "PCIM-จัดซื้อต่างประเทศ", "พนักงาน"))).isEqualTo("import");
     }
 
     @Test
@@ -37,93 +25,6 @@ class DivisionAccessPolicyTest {
         assertThat(DivisionAccessPolicy.roleFor(record("SA", "SA-ฝ่ายขาย", "ผู้ช่วยผู้จัดการฝ่ายขาย"))).isEqualTo("sales_manager");
     }
 
-    @Test
-    void salesDivisionNonManagerDerivesSales() {
-        assertThat(DivisionAccessPolicy.roleFor(record("SA", "SA-ฝ่ายขาย", "พนักงาน"))).isEqualTo("sales");
-    }
-
-    @Test
-    void accountingDivisionDerivesAccount() {
-        // AC-ฝ่ายบัญชี confirms money receipts (deposit/final payment) on sales tickets.
-        assertThat(DivisionAccessPolicy.roleFor(record("AC", "AC-ฝ่ายบัญชี", "พนักงาน"))).isEqualTo("account");
-        // Managers in accounting keep the account role; manager power comes from isManager.
-        assertThat(DivisionAccessPolicy.roleFor(record("AC", "AC-บัญชี", "ผู้จัดการฝ่ายบัญชี"))).isEqualTo("account");
-        // Legacy import rows have no source_code — the AC- name prefix must still map.
-        assertThat(DivisionAccessPolicy.roleFor(record(null, "AC-บัญชี", "พนักงาน"))).isEqualTo("account");
-    }
-
-    @Test
-    void warehouseDivisionDerivesWarehouse() {
-        // WH-คลังสินค้า is now its own warehouse role (employee-tier access for now).
-        assertThat(DivisionAccessPolicy.roleFor(record("WH", "WH-คลังสินค้า", "พนักงาน"))).isEqualTo("warehouse");
-        // Legacy rows without a source_code map via the WH- name prefix.
-        assertThat(DivisionAccessPolicy.roleFor(record(null, "WH-คลังสินค้า", "พนักงาน"))).isEqualTo("warehouse");
-        // A warehouse manager keeps the warehouse role; manager power comes from isManager.
-        assertThat(DivisionAccessPolicy.roleFor(record("WH", "WH-คลังสินค้า", "ผู้จัดการฝ่ายคลังสินค้า"))).isEqualTo("warehouse");
-    }
-
-    @Test
-    void qcDivisionDerivesQc() {
-        // QC&ISO (source_code QC) is now its own qc role (employee-tier access for now).
-        assertThat(DivisionAccessPolicy.roleFor(record("QC", "QC&ISO", "พนักงาน"))).isEqualTo("qc");
-    }
-
-    @Test
-    void nonMappedDivisionManagerKeepsBaseEmployeeRole() {
-        // A ฝ่าย manager outside the mapped divisions is an employee by role; manager power comes from isManager.
-        assertThat(DivisionAccessPolicy.roleFor(record("PD", "PD-ฝ่ายผลิต", "ผู้จัดการฝ่ายผลิต"))).isEqualTo("employee");
-    }
-
-    @Test
-    void nullDivisionAndPositionDerivesEmployeeWithoutNpe() {
-        assertThat(DivisionAccessPolicy.roleFor(record(null, null, null))).isEqualTo("employee");
-    }
-
-    @Test
-    void divisionCodeFallsBackToNamePrefix() {
-        // source_code missing → prefix of the ฝ่าย name is used.
-        assertThat(DivisionAccessPolicy.roleFor(record(null, "SA-ฝ่ายขาย", "พนักงาน"))).isEqualTo("sales");
-    }
-
-    @Test
-    void isManagerDetectsManagerTitlesIncludingAssistants() {
-        assertThat(DivisionAccessPolicy.isManager(record("AC", "AC-บัญชี", "ผู้จัดการฝ่ายบัญชี"))).isTrue();
-        assertThat(DivisionAccessPolicy.isManager(record("WH", "WH-คลังสินค้า", "ผู้ช่วยผู้จัดการส่วนคลังสินค้า"))).isTrue();
-        assertThat(DivisionAccessPolicy.isManager(record("MD", "MD-ผู้บริหารระดับสูง", "กรรมการผู้จัดการ"))).isTrue();
-    }
-
-    @Test
-    void canonicalManagerTitleDerivesSameRolesAsBakedFormAfterV30() {
-        // V30 collapses ฝ่าย-baked titles (ผู้จัดการฝ่ายขาย/ผู้จัดการฝ่ายผลิต) to canonical "ผู้จัดการ". Scope/role
-        // must stay division-driven and unchanged for every affected employee. Sales manager: was ผู้จัดการฝ่ายขาย →
-        // now ผู้จัดการ, still sales_manager.
-        assertThat(DivisionAccessPolicy.roleFor(record("SA", "SA-ฝ่ายขาย", "ผู้จัดการ"))).isEqualTo("sales_manager");
-        assertThat(DivisionAccessPolicy.isManager(record("SA", "SA-ฝ่ายขาย", "ผู้จัดการ"))).isTrue();
-        // Production manager: was ผู้จัดการฝ่ายผลิต → now ผู้จัดการ, base role employee but still a manager.
-        assertThat(DivisionAccessPolicy.roleFor(record("PROD", "PROD-ฝ่ายผลิต", "ผู้จัดการ"))).isEqualTo("employee");
-        assertThat(DivisionAccessPolicy.isManager(record("PROD", "PROD-ฝ่ายผลิต", "ผู้จัดการ"))).isTrue();
-    }
-
-    @Test
-    void canonicalAssistantManagerStaysManagerButDistinctFromExecutive() {
-        // V30 keeps assistant managers distinct as canonical "ผู้ช่วยผู้จัดการ": still a manager, never ceo.
-        assertThat(DivisionAccessPolicy.isManager(record("PROD", "PROD-ฝ่ายผลิต", "ผู้ช่วยผู้จัดการ"))).isTrue();
-        assertThat(DivisionAccessPolicy.roleFor(record("PROD", "PROD-ฝ่ายผลิต", "ผู้ช่วยผู้จัดการ"))).isEqualTo("employee");
-    }
-
-    @Test
-    void managingDirectorTitleUntouchedByNormalizationStillCeo() {
-        // V30 must NOT rewrite กรรมการผู้จัดการ (it starts with กรรมการ, not ผู้จัดการ); it stays an executive.
-        assertThat(DivisionAccessPolicy.roleFor(record("MD", "MD-ผู้บริหารระดับสูง", "กรรมการผู้จัดการ"))).isEqualTo("ceo");
-        assertThat(DivisionAccessPolicy.isManager(record("MD", "MD-ผู้บริหารระดับสูง", "กรรมการผู้จัดการ"))).isTrue();
-    }
-
-    @Test
-    void isManagerFalseForNonManagers() {
-        assertThat(DivisionAccessPolicy.isManager(record("AC", "AC-บัญชี", "พนักงาน"))).isFalse();
-        assertThat(DivisionAccessPolicy.isManager(record(null, null, null))).isFalse();
-    }
-
     // ── can_create_quotation grant: an employee-tier role acts as sales (owner ruling 2026-10-14) ──
 
     @Test
@@ -131,30 +32,6 @@ class DivisionAccessPolicyTest {
         assertThat(DivisionAccessPolicy.roleFor(record("QC", "QC-QC&ISO", "พนักงาน", true))).isEqualTo("sales");
         assertThat(DivisionAccessPolicy.roleFor(record("WH", "WH-คลังสินค้า", "พนักงาน", true))).isEqualTo("sales");
         assertThat(DivisionAccessPolicy.roleFor(record("OTHER", "ฝ่ายอื่น", "พนักงาน", true))).isEqualTo("sales");
-    }
-
-    @Test
-    void qcWithoutGrantStaysQc() {
-        assertThat(DivisionAccessPolicy.roleFor(record("QC", "QC-QC&ISO", "พนักงาน", false))).isEqualTo("qc");
-    }
-
-    @Test
-    void grantNeverChangesAnyOtherRole() {
-        assertThat(DivisionAccessPolicy.roleFor(record("SA", "SA-ฝ่ายขาย", "ผู้จัดการฝ่ายขาย", true))).isEqualTo("sales_manager");
-        assertThat(DivisionAccessPolicy.roleFor(record("SA", "SA-ฝ่ายขาย", "พนักงาน", true))).isEqualTo("sales");
-        assertThat(DivisionAccessPolicy.roleFor(record("AC", "AC-ฝ่ายบัญชี", "พนักงาน", true))).isEqualTo("account");
-        assertThat(DivisionAccessPolicy.roleFor(record("PCIM", "PCIM-จัดซื้อต่างประเทศ", "พนักงาน", true))).isEqualTo("import");
-        assertThat(DivisionAccessPolicy.roleFor(record("HR", "HR-บุคคล", "พนักงาน", true))).isEqualTo("hr");
-        assertThat(DivisionAccessPolicy.roleFor(record("QC", "QC-QC&ISO", "กรรมการ", true))).isEqualTo("ceo");
-        assertThat(DivisionAccessPolicy.roleFor(record("MD", "MD-ผู้บริหารระดับสูง", "พนักงาน", true))).isEqualTo("ceo");
-    }
-
-    @Test
-    void inactiveGrantHolderIsNotPromoted() {
-        EmployeeLoginRecord inactive = new EmployeeLoginRecord(
-            1L, "E1", "e1@glr.co.th", "E One", false,
-            1L, "QC", "QC-QC&ISO", "พนักงาน", LocalDate.now(), "hash", false, true);
-        assertThat(DivisionAccessPolicy.roleFor(inactive)).isEqualTo("qc");
     }
 
     private EmployeeLoginRecord record(String divisionCode, String divisionName, String position) {

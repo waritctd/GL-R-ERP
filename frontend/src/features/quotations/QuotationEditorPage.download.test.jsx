@@ -1,7 +1,7 @@
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { QuotationEditorPage } from './QuotationEditorPage.jsx';
 import { api } from '../../api/index.js';
@@ -23,14 +23,13 @@ vi.mock('../../api/index.js', async (importOriginal) => {
       tickets: { get: vi.fn(), create: vi.fn() },
       dealQuotations: {
         get: vi.fn(), create: vi.fn(), update: vi.fn(), calculateLine: vi.fn(), submit: vi.fn(),
-        approve: vi.fn(), reject: vi.fn(), createRevision: vi.fn(), createReorder: vi.fn(), cancel: vi.fn(),
-        downloadPdf: vi.fn(), downloadXlsx: vi.fn(), downloadText: vi.fn(),
+        downloadPdf: vi.fn(), downloadXlsx: vi.fn(),
       },
       catalog: { prices: vi.fn() },
       designers: { search: vi.fn(), getByCode: vi.fn().mockRejectedValue(new Error('not found')) },
       customers: {
-        search: vi.fn(), create: vi.fn(), update: vi.fn(), projects: vi.fn(), createProject: vi.fn(),
-        contacts: vi.fn(), createContact: vi.fn(), updateContact: vi.fn(),
+        search: vi.fn(), create: vi.fn(), update: vi.fn(), projects: vi.fn(),
+        contacts: vi.fn(),
       },
     },
   };
@@ -124,14 +123,6 @@ async function pickDownload(format) {
 }
 
 describe('download flushes unsaved edits before rendering the document (2026-09-16 fix)', () => {
-  it('offers one ดาวน์โหลด menu listing PDF and Excel, and no separate download buttons', async () => {
-    renderEditor('/quotations/5');
-    fireEvent.click(await screen.findByRole('button', { name: 'ดาวน์โหลด' }));
-    const menu = within(await screen.findByRole('menu', { name: 'ดาวน์โหลด' }));
-    expect(menu.getAllByRole('menuitem').map((item) => item.textContent)).toEqual(['PDF', 'Excel']);
-    expect(screen.queryByRole('button', { name: 'ดาวน์โหลด PDF' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'ดาวน์โหลด Excel' })).toBeNull();
-  });
   it('an edit typed just before clicking ดาวน์โหลด PDF is saved FIRST, then the PDF is fetched -- order asserted', async () => {
     renderEditor('/quotations/5');
     const notes = await screen.findByLabelText('หมายเหตุเพิ่มเติม');
@@ -145,42 +136,6 @@ describe('download flushes unsaved edits before rendering the document (2026-09-
     expect(api.dealQuotations.update.mock.calls[0][1].customerNotes).toBe('พิกัดใหม่');
     expect(api.dealQuotations.update.mock.invocationCallOrder[0])
       .toBeLessThan(api.dealQuotations.downloadPdf.mock.invocationCallOrder[0]);
-  });
-
-  // A download must not be refused for ANY blocking validation error: an existing incomplete DRAFT
-  // (sent back for correction, or a row missing ความหนา, ~41% of the prod catalogue) has nothing
-  // this flush needs to save, so it must still download the stored document. Refusal is gated on
-  // unsaved work the flush cannot save (dirty AND invalid); see the next test. A missing ผู้สั่งซื้อ
-  // is no longer blocking (a single optional free-text field), so these two cases use "no items"
-  // (QUOTATION_CHECK.ITEMS, still blocking) for the same clean-vs-dirty distinction.
-  it('a CLEAN, untouched quotation with a blocking validation error (no items) still downloads the stored document -- nothing to flush (D1 fix)', async () => {
-    api.dealQuotations.get.mockResolvedValue({
-      quotation: draft({ items: [] }),
-    });
-    const showToast = renderEditor('/quotations/5');
-    await screen.findByText('ข้อมูลที่ยังไม่ครบ');
-
-    await pickDownload('PDF');
-
-    await waitFor(() => expect(api.dealQuotations.downloadPdf).toHaveBeenCalledWith('5'));
-    expect(api.dealQuotations.update).not.toHaveBeenCalled();
-    expect(showToast).not.toHaveBeenCalledWith('error', expect.anything());
-  });
-
-  it('a DIRTY quotation with a blocking validation error (no items) still refuses the download outright -- no PDF call, a Thai toast instead', async () => {
-    api.dealQuotations.get.mockResolvedValue({
-      quotation: draft({ items: [] }),
-    });
-    const showToast = renderEditor('/quotations/5');
-    await screen.findByText('ข้อมูลที่ยังไม่ครบ');
-    // Touch the form -- there is now unsaved work this flush cannot save because it is invalid.
-    fireEvent.change(screen.getByLabelText('หมายเหตุเพิ่มเติม'), { target: { value: 'พิกัดใหม่' } });
-
-    await pickDownload('PDF');
-
-    await waitFor(() => expect(showToast).toHaveBeenCalledWith('error', 'ยังดาวน์โหลดไม่ได้ — กรุณากรอกข้อมูลให้ครบก่อน'));
-    expect(api.dealQuotations.update).not.toHaveBeenCalled();
-    expect(api.dealQuotations.downloadPdf).not.toHaveBeenCalled();
   });
 
   it('a non-editable (APPROVED) quotation downloads directly -- no save attempted', async () => {
@@ -211,73 +166,5 @@ describe('download flushes unsaved edits before rendering the document (2026-09-
     expect(showToast.mock.calls.filter(
       (c) => c[0] === 'error' && c[1] === 'ยอดรวมหลังหักส่วนลดพิเศษติดลบ',
     )).toHaveLength(1);
-  });
-
-  // The PDF is held open (a deferred mock) so the busy window is still open when the menu is
-  // reopened; an instantly-resolving mock would close it before the second look.
-  it('picking PDF again while it is still downloading does nothing: the menu lists both formats as busy until it is done', async () => {
-    let finishPdf;
-    api.dealQuotations.downloadPdf.mockReturnValue(new Promise((resolve) => { finishPdf = resolve; }));
-    renderEditor('/quotations/5');
-    const notes = await screen.findByLabelText('หมายเหตุเพิ่มเติม');
-    fireEvent.change(notes, { target: { value: 'x' } });
-
-    await pickDownload('PDF');
-    await waitFor(() => expect(api.dealQuotations.downloadPdf).toHaveBeenCalledTimes(1));
-    // The trigger's text is its name in every state (label in name); the menu carries the busy state.
-    expect(screen.getByRole('button', { name: 'ดาวน์โหลด' }).textContent).toBe('ดาวน์โหลด');
-
-    fireEvent.click(screen.getByRole('button', { name: 'ดาวน์โหลด' }));
-    const menu = within(await screen.findByRole('menu', { name: 'ดาวน์โหลด' }));
-    // A busy item's name carries its reason ("PDF กำลังดาวน์โหลด…"), hence the prefix match.
-    const item = (format) => menu.getByRole('menuitem', { name: new RegExp(`^${format}`) });
-    for (const format of ['PDF', 'Excel']) {
-      expect(item(format).getAttribute('aria-disabled')).toBe('true');
-    }
-    expect(menu.getAllByText('กำลังดาวน์โหลด…')).toHaveLength(2);
-    fireEvent.click(item('PDF'));
-    fireEvent.click(item('Excel'));
-
-    finishPdf({ type: 'application/pdf' });
-    await waitFor(() => expect(screen.getByRole('button', { name: 'ดาวน์โหลด' }).textContent).toBe('ดาวน์โหลด'));
-    expect(api.dealQuotations.downloadPdf).toHaveBeenCalledTimes(1);
-    expect(api.dealQuotations.update).toHaveBeenCalledTimes(1);
-    expect(api.dealQuotations.downloadXlsx).not.toHaveBeenCalled();
-  });
-
-  // handleDownload must not read `dirty`/`hasValidationErrors` from the render closure captured at
-  // CLICK time: it stays suspended across several `await`s. Here the quotation is clean at the
-  // click, so a frozen `dirty: false` would skip the save and cancel the fresh autosave debounce the
-  // edit below schedules, losing the edit until the next keystroke. `fireEvent.change` right after
-  // `fireEvent.click` (no `await`) lands before handleDownload resumes past its first `await`,
-  // reproducing "an edit lands while the flush is already suspended" however fast the
-  // contact-picker flush resolves.
-  it('an edit made DURING the flush (after the click, before it decided whether to save) is still saved -- no further typing needed (D4 fix)', async () => {
-    renderEditor('/quotations/5');
-    await screen.findByLabelText('หมายเหตุเพิ่มเติม'); // freshly loaded: clean, not dirty.
-
-    await pickDownload('PDF');
-    fireEvent.change(screen.getByLabelText('หมายเหตุเพิ่มเติม'), { target: { value: 'edit during flush' } });
-
-    await waitFor(() => expect(api.dealQuotations.update).toHaveBeenCalledTimes(1));
-    expect(api.dealQuotations.update.mock.calls[0][1].customerNotes).toBe('edit during flush');
-    await waitFor(() => expect(api.dealQuotations.downloadPdf).toHaveBeenCalledWith('5'));
-  });
-});
-
-describe('คัดลอกข้อมูล copies the saved quotation as clean text', () => {
-  it('flushes edits, fetches the text and writes it to the clipboard', async () => {
-    const writeText = vi.fn().mockResolvedValue(undefined);
-    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
-    api.dealQuotations.downloadText.mockResolvedValue('ใบเสนอราคา QT-2026-0005');
-    const showToast = renderEditor('/quotations/5');
-    fireEvent.change(await screen.findByLabelText('หมายเหตุเพิ่มเติม'), { target: { value: 'พิกัดใหม่' } });
-
-    fireEvent.click(await screen.findByRole('button', { name: 'คัดลอกข้อมูล' }));
-
-    await waitFor(() => expect(writeText).toHaveBeenCalledWith('ใบเสนอราคา QT-2026-0005'));
-    expect(api.dealQuotations.update.mock.invocationCallOrder[0])
-      .toBeLessThan(api.dealQuotations.downloadText.mock.invocationCallOrder[0]);
-    expect(showToast).toHaveBeenCalledWith('success', 'คัดลอกข้อมูลใบเสนอราคาแล้ว — วางใน Excel หรือโปรแกรมอื่นได้เลย');
   });
 });

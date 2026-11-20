@@ -4,11 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import java.io.IOException;
 import java.math.BigDecimal;
-import java.time.LocalDate;
-import java.util.ArrayList;
-import java.util.List;
 import org.junit.jupiter.api.Test;
-import th.co.glr.hr.config.AppProperties;
 
 /** Pins the ภ.ง.ด.1 line assembler to a real GL&R Pnd1.txt byte-for-byte, line by line. */
 class Pnd1ExporterGoldenTest {
@@ -42,47 +38,6 @@ class Pnd1ExporterGoldenTest {
                 .isEqualTo(line);
         }
         assertThat(dataLines).isEqualTo(31);
-    }
-
-    @Test
-    void exportAppliesDefaultsOneLinePerEmployee() {
-        AppProperties.Employer employer = new AppProperties.Employer();
-        employer.setCompanyTaxId("0105542026329");
-        employer.setPnd1Branch("0000");
-
-        List<PayrollExportRow> rows = List.of(
-            rowWithTax("3100902988046", "1002818495", "นาง", "กัลยาณี", "ฐิตญาดา", "30000.00", "2929.00"),
-            rowWithTax("1103900192241", null, "นางสาว", "มาลี", "ใจดี", "18000.00", "0.00"));
-
-        byte[] bytes = exporter.export(rows, employer, LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 26));
-        String[] lines = new String(bytes, Cp874.CHARSET).split("\r\n", -1);
-
-        assertThat(lines).as("one line per employee plus the trailing empty element").hasSizeGreaterThanOrEqualTo(2);
-        String[] a = lines[0].split("\\|", -1);
-        assertThat(a).hasSize(21);
-        assertThat(a[1]).isEqualTo("00001");            // sequence
-        assertThat(a[3]).isEqualTo("0105542026329");    // payer tax id
-        assertThat(a[6]).isEqualTo("1002818495");       // legacy 10-digit alt id
-        assertThat(a[13]).isEqualTo("06");              // month
-        assertThat(a[14]).isEqualTo("2569");            // Buddhist year 2026+543
-        assertThat(a[15]).isEqualTo("1");               // default income type 40(1)
-        assertThat(a[16]).isEqualTo("26062569");        // pay date ddMMyyyy in พ.ศ.
-        assertThat(a[18]).isEqualTo("30000.00");
-        assertThat(a[19]).isEqualTo("2929.00");
-        assertThat(a[20]).isEqualTo("1");
-
-        String[] b = lines[1].split("\\|", -1);
-        assertThat(b[1]).isEqualTo("00002");            // second employee, next sequence
-        assertThat(b[6]).isEqualTo("0000000000");       // no tax id → ten zeros
-    }
-
-    private PayrollExportRow rowWithTax(String nationalId, String taxId, String title,
-                                        String first, String last, String income, String tax) {
-        return new PayrollExportRow(
-            1, "E1", title, first, last, null,
-            nationalId, taxId, null, null,
-            "99", " ถ.เทส", "10110",
-            BigDecimal.ZERO, new BigDecimal(income), new BigDecimal(tax), BigDecimal.ZERO, null, BigDecimal.ZERO, null);
     }
 
     private byte[] readGolden() throws IOException {

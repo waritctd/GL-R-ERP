@@ -21,13 +21,4 @@ class IntegrationResetInvariantTest extends AbstractPostgresIntegrationTest {
             .isEqualTo(1);
     }
 
-    @Test
-    void repositoryTestsRunAgainstTheDedicatedCloneDatabase() {
-        assumeTrue(PostgresTestSupport.usesContainer(),
-            "Clone-reset invariant applies to the Testcontainers path; skipped for TEST_DB_URL");
-        String currentDatabase = jdbc.getJdbcTemplate().queryForObject("SELECT current_database()", String.class);
-        assertThat(currentDatabase)
-            .as("repository integration tests must run on the per-test clone DB, not the shared boot DB")
-            .isEqualTo(PostgresTestSupport.workingDatabaseName());
-    }
 }

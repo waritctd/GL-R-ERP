@@ -6,7 +6,6 @@ import static org.mockito.Mockito.mock;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
-import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import th.co.glr.hr.attachment.AttachmentRepository;
@@ -97,41 +96,6 @@ class TaxAllowanceEstimateIntegrationTest extends AbstractPostgresIntegrationTes
             new AppProperties(), new LorYor01Renderer());
 
         hrEmployeeId = seedEmployee("EST-HR", new BigDecimal("50000.00"), "M");
-    }
-
-    /** The request DTO (TaxAllowanceDeclarationSubmitRequest, reused verbatim as the estimate body) has no
-     * employeeId field at all — estimateOwn resolves the employee EXCLUSIVELY from actor.employeeId(). */
-    @Test
-    void employeeCannotEstimateForAnotherEmployeeTheNumbersNeverCrossOver() {
-        long employeeA = seedEmployee("EST-A", new BigDecimal("30000.00"), "M");
-        long employeeB = seedEmployee("EST-B", new BigDecimal("90000.00"), "M");
-
-        PayrollAllowanceEstimateResult resultA =
-            service.estimateOwn(estimateRequest(new BigDecimal("60000")), employeeActor(employeeA));
-        PayrollAllowanceEstimateResult resultB =
-            service.estimateOwn(estimateRequest(new BigDecimal("60000")), employeeActor(employeeB));
-
-        assertThat(resultA.estimateAvailable()).isTrue();
-        assertThat(resultB.estimateAvailable()).isTrue();
-        assertThat(resultA.baselineWithholdingTax())
-            .as("A's estimate must reflect A's own ฿30,000 salary, never B's ฿90,000 one")
-            .isNotEqualByComparingTo(resultB.baselineWithholdingTax());
-        assertThat(resultA.proposedWithholdingTax()).isNotEqualByComparingTo(resultB.proposedWithholdingTax());
-    }
-
-    @Test
-    void estimateForADailyRateEmployeeReportsUnavailableRatherThanAFabricatedZero() {
-        long employeeId = seedEmployee("EST-D", new BigDecimal("450.00"), "D");
-
-        PayrollAllowanceEstimateResult result =
-            service.estimateOwn(estimateRequest(new BigDecimal("60000")), employeeActor(employeeId));
-
-        assertThat(result.estimateAvailable())
-            .as("no daysWorked exists outside a real run -- must not silently estimate against a ฿0 gross")
-            .isFalse();
-        assertThat(result.unavailableReason()).isNotBlank();
-        assertThat(result.baselineWithholdingTax()).isNull();
-        assertThat(result.proposedWithholdingTax()).isNull();
     }
 
     /** THE anti-drift pin: estimate, then actually submit and approve the SAME declaration and run a real

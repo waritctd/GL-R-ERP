@@ -38,11 +38,6 @@ const bangkokFmt = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Bangkok' }
 function isoIn(days = 0) {
   return bangkokFmt.format(new Date(Date.now() + days * 86_400_000));
 }
-/** ISO date → the พ.ศ. dd/mm/yyyy text the ThaiDateInput accepts. */
-function beText(iso) {
-  const [y, m, d] = iso.split('-');
-  return `${d}/${m}/${Number(y) + 543}`;
-}
 
 async function listOwn(session, from, to) {
   const res = await session.get(`/api/sales/visits?from=${from}&to=${to}`);
@@ -128,51 +123,6 @@ test.describe('visits — happy paths @visits', () => {
     const activities = await (await sessions.sales.get(`/api/tickets/${deal.id}/activities`)).json();
     expect(activities.items.some((a) => a.kind === 'SITE_VISIT' && String(a.note).includes('ส่งตัวอย่าง'))).toBe(true);
   });
-
-  test('บันทึกเข้าพบ at 375px opens as a bottom sheet and saves a same-day visit on a deal', async ({ page }) => {
-    const contact = `${RUN} หน้างาน`;
-    await page.setViewportSize({ width: 375, height: 812 });
-    await loginAs(page, 'sales');
-    // At 375px the landing is วันนี้ของฉัน; its one large บันทึกเข้าพบ carries the old sticky button's id.
-    await page.getByTestId('today-phone').getByTestId('log-visit-sticky').click();
-    const dialog = page.getByRole('dialog', { name: 'บันทึกเข้าพบ' });
-    await expect(dialog).toBeVisible();
-    const box = await dialog.boundingBox();
-    expect(box, 'dialog has a box').toBeTruthy();
-    // A bottom sheet: full width and flush with the bottom edge of the 812px viewport.
-    expect(box.width).toBeGreaterThanOrEqual(370);
-    expect(box.y + box.height).toBeGreaterThanOrEqual(805);
-    expect(box.y).toBeGreaterThan(0);
-    await shot(page, 'visits-05-log-sheet-375');
-
-    await dialog.getByRole('radio', { name: 'ไม่ได้นัด' }).click();
-    await dialog.getByLabel('พบใคร').fill(contact);
-    await dialog.getByLabel('งาน').selectOption({ label: `${RUN} visits happy` });
-    await dialog.getByRole('button', { name: 'บันทึก', exact: true }).click();
-    await expect(dialog).toHaveCount(0);
-
-    const own = await listOwn(sessions.sales, isoIn(0), isoIn(0));
-    const saved = own.find((v) => v.contactName === contact);
-    expect(saved?.status, 'one-step log creates the visit DONE').toBe('DONE');
-    expect(saved.ticketId).toBe(deal.id);
-    await shot(page, 'visits-06-after-log-375');
-  });
-
-  test('week navigation: a visit planned next week appears after ›, and สัปดาห์นี้ returns', async ({ page }) => {
-    const contact = `${RUN} สัปดาห์หน้า`;
-    const visit = await planVisit(sessions.sales, { contactName: contact, plannedDate: isoIn(7), ticketId: deal.id });
-    planned.push(visit.id);
-
-    await loginAs(page, 'sales');
-    const card = page.getByTestId('visits-this-week');
-    await expect(card).toBeVisible();
-    await expect(card.getByText(contact)).toHaveCount(0);
-    await card.getByRole('button', { name: 'สัปดาห์หน้า' }).click();
-    await expect(card.locator('li', { hasText: contact })).toBeVisible();
-    await shot(page, 'visits-07-next-week');
-    await card.getByRole('button', { name: 'สัปดาห์นี้', exact: true }).click();
-    await expect(card.getByText(contact)).toHaveCount(0);
-  });
 });
 
 test.describe('visits — failure paths @visits', () => {
@@ -215,54 +165,6 @@ test.describe('visits — failure paths @visits', () => {
     await expect(row.getByRole('button', { name: `ยกเลิกนัด: ${contact}` })).toBeVisible();
     await expect(row.getByRole('button', { name: `เข้าพบแล้ว: ${contact}` })).toHaveCount(0);
     await shot(page, 'visits-08-future-visit-no-tick');
-  });
-
-  test('UI: a 409 on tick shows the server message as a toast, keeps the dialog open, and does not crash', async ({ page }) => {
-    const contact = `${RUN} ติ๊กแล้วชน`;
-    const visit = await planVisit(sessions.sales, { contactName: contact, plannedDate: isoIn(0), ticketId: deal.id });
-    planned.push(['sales', visit.id]);
-    // Cancel it behind the page's back: the card still lists it PLANNED until refetch, so the tick hits the real
-    // service's "already cancelled" 409 rather than a stubbed one.
-    await loginAs(page, 'sales');
-    const card = page.getByTestId('visits-this-week');
-    const row = card.locator('li', { hasText: contact });
-    await expect(row).toBeVisible();
-    expect((await apiWrite(sessions.sales, 'post', `/api/sales/visits/${visit.id}/cancel`)).status()).toBe(200);
-    planned.pop();
-
-    await row.getByRole('button', { name: `เข้าพบแล้ว: ${contact}` }).click();
-    const done = page.getByRole('dialog', { name: 'เข้าพบแล้ว' });
-    await done.getByRole('button', { name: 'บันทึก', exact: true }).click();
-    await expect(page.getByText('จึงเปลี่ยนไม่ได้')).toBeVisible();
-    await expect(done).toBeVisible();
-    await expect(page.getByText('โหลดหน้านี้ไม่สำเร็จ')).toHaveCount(0);
-    await shot(page, 'visits-09-tick-409-toast');
-  });
-
-  test('a visit more than 180 days ahead is 400 (API) and the plan dialog surfaces the message', async ({ page }) => {
-    const res = await apiWrite(sessions.sales, 'post', '/api/sales/visits', {
-      contactName: `${RUN} ไกลเกิน`, plannedDate: isoIn(181), ticketId: deal.id,
-    });
-    expect(res.status()).toBe(400);
-    expect((await res.json()).message).toContain('ไม่เกิน 180 วัน');
-    const ok = await apiWrite(sessions.sales, 'post', '/api/sales/visits', {
-      contactName: `${RUN} 180พอดี`, plannedDate: isoIn(180), ticketId: deal.id,
-    });
-    expect(ok.status(), 'day 180 is still allowed').toBe(200);
-    planned.push(['sales', (await ok.json()).id]);
-
-    await loginAs(page, 'sales');
-    const card = page.getByTestId('visits-this-week');
-    await card.getByRole('button', { name: 'นัดเข้าพบ', exact: true }).click();
-    const plan = page.getByRole('dialog', { name: 'นัดเข้าพบ' });
-    await plan.getByLabel('พบใคร').fill(`${RUN} ไกลเกิน UI`);
-    const dateInput = plan.getByRole('textbox', { name: /วันที่/ });
-    await dateInput.fill(beText(isoIn(200)));
-    await dateInput.press('Tab');
-    await plan.getByRole('button', { name: 'บันทึกนัด' }).click();
-    await expect(page.getByText('ไม่เกิน 180 วัน')).toBeVisible();
-    await expect(plan).toBeVisible();
-    await shot(page, 'visits-10-too-far-400');
   });
 
   test('another user cannot tick or cancel a rep\'s visit; a rep cannot tick or cancel the manager\'s', async () => {

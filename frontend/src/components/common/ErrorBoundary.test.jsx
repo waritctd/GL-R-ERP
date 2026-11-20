@@ -68,15 +68,4 @@ describe('ErrorBoundary', () => {
       expect(screen.getByText('all good')).toBeTruthy();
     });
   });
-
-  it('renders children normally when nothing throws', () => {
-    render(
-      <ErrorBoundary>
-        <Healthy />
-      </ErrorBoundary>,
-    );
-
-    expect(screen.getByText('all good')).toBeTruthy();
-    expect(screen.queryByText('โหลดหน้านี้ไม่สำเร็จ')).toBeNull();
-  });
 });

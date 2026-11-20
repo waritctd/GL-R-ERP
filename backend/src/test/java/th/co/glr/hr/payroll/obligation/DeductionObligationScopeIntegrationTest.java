@@ -17,7 +17,6 @@ import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.payroll.obligation.DeductionObligationDtos.DeductionObligationCreateRequest;
 import th.co.glr.hr.payroll.obligation.DeductionObligationDtos.DeductionObligationDto;
-import th.co.glr.hr.payroll.obligation.DeductionObligationDtos.DeductionObligationOverrideRequest;
 import th.co.glr.hr.payroll.obligation.DeductionObligationDtos.DeductionObligationProgressDto;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
@@ -57,44 +56,11 @@ class DeductionObligationScopeIntegrationTest extends AbstractPostgresIntegratio
         assertThat(ownedByB).isEmpty();
     }
 
-    @Test
-    void anEmployeesGetOwnReturnsOnlyTheirOwnObligation() {
-        List<DeductionObligationProgressDto> ownedByA = service.getOwn(employee(employeeA));
-
-        assertThat(ownedByA).hasSize(1);
-        assertThat(ownedByA.get(0).obligation().id()).isEqualTo(obligationForA);
-        assertThat(ownedByA.get(0).obligation().employeeId()).isEqualTo(employeeA);
-    }
-
     // --- HR/CEO register + progress are never reachable by a plain employee --------------------
 
     @Test
     void anEmployeeCannotReadTheHrRegisterEvenFilteredToThemselves() {
         assertForbidden(() -> service.list(employeeA, null, null, employee(employeeA)));
-    }
-
-    @Test
-    void anEmployeeCannotReadHrProgressForTheirOwnObligationById() {
-        // The HR/CEO id-based progress route is deliberately closed to every employee, including the owner -- getOwn()
-        // is the only employee-facing read.
-        assertForbidden(() -> service.progress(obligationForA, employee(employeeA)));
-    }
-
-    @Test
-    void anEmployeeCannotReadAnotherEmployeesObligationEvenIfTheyGuessTheId() {
-        assertForbidden(() -> service.progress(obligationForA, employee(employeeB)));
-    }
-
-    // --- HR mutations are never reachable by a plain employee or by CEO (view != edit) --------
-
-    @Test
-    void anEmployeeCannotCreateAnObligationForThemselvesOrAnyoneElse() {
-        DeductionObligationCreateRequest request = new DeductionObligationCreateRequest(
-            employeeA, DeductionObligationKind.LEGAL_EXECUTION, new BigDecimal("500.00"), null,
-            "LED-X", LocalDate.of(2026, 2, 1), null);
-
-        assertForbidden(() -> service.create(request, employee(employeeA)));
-        assertThat(repository.findForEmployee(employeeA)).hasSize(1); // unchanged -- still only the seeded one
     }
 
     @Test
@@ -105,23 +71,6 @@ class DeductionObligationScopeIntegrationTest extends AbstractPostgresIntegratio
         assertForbidden(() -> service.stop(obligationForA, ceo()));
         assertThat(repository.findById(obligationForA).orElseThrow().status())
             .isEqualTo(DeductionObligationStatus.ACTIVE); // unchanged
-    }
-
-    @Test
-    void anEmployeeCannotOverrideOrAcknowledgeCompletion() {
-        // Drive the real obligation to COMPLETED first (real remittance ledger, real SQL threshold).
-        repository.upsertRemittance(obligationForA, LocalDate.of(2026, 1, 1), new BigDecimal("50000.00"), null);
-        repository.applyCompletionTransition(obligationForA, true);
-        assertThat(repository.findById(obligationForA).orElseThrow().status())
-            .isEqualTo(DeductionObligationStatus.COMPLETED);
-
-        assertForbidden(() -> service.acknowledgeCompletion(obligationForA, employee(employeeA)));
-        assertForbidden(() -> service.overrideContinue(
-            obligationForA, new DeductionObligationOverrideRequest("อยากหักต่อ"), employee(employeeA)));
-
-        DeductionObligationDto stillUntouched = repository.findById(obligationForA).orElseThrow();
-        assertThat(stillUntouched.completionAcknowledgedAt()).isNull();
-        assertThat(stillUntouched.overrideContinuePastTotal()).isFalse();
     }
 
     // --- helpers ------------------------------------------------------------

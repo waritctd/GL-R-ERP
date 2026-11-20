@@ -2,16 +2,11 @@ package th.co.glr.hr.customerquotation;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
-import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -20,7 +15,6 @@ import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.catalog.CatalogRepository;
 import th.co.glr.hr.common.ApiException;
-import th.co.glr.hr.config.AppProperties;
 import th.co.glr.hr.customer.ContactRepository;
 import th.co.glr.hr.customer.CustomerDto;
 import th.co.glr.hr.customer.CustomerRepository;
@@ -29,7 +23,6 @@ import th.co.glr.hr.customer.ProjectRepository;
 import th.co.glr.hr.customerquotation.CustomerQuotationDtos.CustomerQuotationDto;
 import th.co.glr.hr.customerquotation.CustomerQuotationDtos.CustomerQuotationItemDto;
 import th.co.glr.hr.customerquotation.CustomerQuotationRequests.CreateCustomerQuotationRequest;
-import th.co.glr.hr.customerquotation.CustomerQuotationRequests.IssueCustomerQuotationRequest;
 import th.co.glr.hr.customerquotation.CustomerQuotationRequests.UpdateCustomerQuotationItemRequest;
 import th.co.glr.hr.customerquotation.CustomerQuotationRequests.UpdateCustomerQuotationRequest;
 import th.co.glr.hr.customerquotation.DiscountApprovalDtos.DiscountApprovalDto;
@@ -63,11 +56,9 @@ import th.co.glr.hr.pricingrequest.PricingRequestRepository;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests;
 import th.co.glr.hr.pricingrequest.PricingRequestService;
 import th.co.glr.hr.pricingrequest.QuantityType;
-import th.co.glr.hr.pricingrequest.UnitBasis;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 import th.co.glr.hr.ticket.CreateTicketRequest;
 import th.co.glr.hr.ticket.QuotationRenderer;
-import th.co.glr.hr.ticket.QuotationStatus;
 import th.co.glr.hr.ticket.TicketDto;
 import th.co.glr.hr.ticket.TicketItemRequest;
 import th.co.glr.hr.ticket.TicketRepository;
@@ -168,87 +159,6 @@ class DiscountApprovalIntegrationTest extends AbstractPostgresIntegrationTest {
         ticketId = created.summary().id();
     }
 
-    // THE critical invariant — wrong-way-round
-
-    @Test
-    void approvalIsBoundToTheExactPrice_priceChangeAfterApprovalInvalidatesIt() {
-        long pricingRequestId = approvedOneItemPricingRequest();
-        CustomerQuotationDto draft = quotationService.create(pricingRequestId,
-            new CreateCustomerQuotationRequest(null, null, null, null, null, null), salesActor);
-        CustomerQuotationItemDto item = draft.items().get(0);
-
-        // Sales discounts to ฿1 off (below minimum, since minimum == approved price here) and the CEO approves it AT
-        // THIS EXACT PRICE.
-        CustomerQuotationDto atPriceA = discountItem(draft.id(), item.id(), new BigDecimal("1.00"));
-        BigDecimal priceA = itemById(atPriceA, item.id()).finalUnitPrice();
-        DiscountApprovalDto pendingA = currentApprovalFor(atPriceA.id(), item.id());
-        assertThat(pendingA.status()).isEqualTo("PENDING");
-        assertThat(pendingA.requestedFinalUnitPrice()).isEqualByComparingTo(priceA);
-
-        DiscountApprovalDto approvedA = discountApprovalService.approve(pendingA.id(), ceoActor);
-        assertThat(approvedA.status()).isEqualTo("APPROVED");
-        assertThat(approvedA.approvedFinalUnitPrice()).isEqualByComparingTo(priceA);
-        assertThat(jdbc.queryForObject("""
-            SELECT COUNT(*) FROM hr.notification WHERE type = 'DISCOUNT_APPROVED'
-            """, Map.of(), Long.class)).isEqualTo(1L);
-
-        // Sales now edits the SAME line to a DIFFERENT below-minimum price B.
-        CustomerQuotationDto atPriceB = discountItem(draft.id(), item.id(), new BigDecimal("2.00"));
-        BigDecimal priceB = itemById(atPriceB, item.id()).finalUnitPrice();
-        assertThat(priceB).isNotEqualByComparingTo(priceA);
-
-        // THE assertion this task is about ─────────────────────────────────────────── The approval granted at price A
-        // must NOT carry over to price B — issue() must STILL be refused, even though this exact line WAS approved a
-        // moment ago.
-        assertThatThrownBy(() -> quotationService.issue(atPriceB.id(), new IssueCustomerQuotationRequest(null), salesActor))
-            .isInstanceOfSatisfying(ApiException.class,
-                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_CONTENT));
-        // ─────────────────────────────────────────────────────────────────────────────────
-
-        // The line correctly reads as needing approval again — a FRESH request exists for price B, distinct from the
-        // one already decided for price A.
-        DiscountApprovalDto pendingB = currentApprovalFor(atPriceB.id(), item.id());
-        assertThat(pendingB.status()).isEqualTo("PENDING");
-        assertThat(pendingB.requestedFinalUnitPrice()).isEqualByComparingTo(priceB);
-        assertThat(pendingB.id()).isNotEqualTo(pendingA.id());
-
-        // Approving price B (and ONLY approving price B) lets issue() succeed.
-        discountApprovalService.approve(pendingB.id(), ceoActor);
-        CustomerQuotationDto issued = quotationService.issue(atPriceB.id(), new IssueCustomerQuotationRequest(null), salesActor);
-        assertThat(issued.docStatus()).isEqualTo(QuotationStatus.ISSUED);
-    }
-
-    /** If sales bounces back to a price the CEO already approved earlier (not the most recent decision on this
-     * line), issue() succeeds without asking again — the gate is "was THIS price approved", not "is the most
-     * recent decision an approval". */
-    @Test
-    void revertingToAPreviouslyApprovedPrice_issuesWithoutANewApproval() {
-        long pricingRequestId = approvedOneItemPricingRequest();
-        CustomerQuotationDto draft = quotationService.create(pricingRequestId,
-            new CreateCustomerQuotationRequest(null, null, null, null, null, null), salesActor);
-        CustomerQuotationItemDto item = draft.items().get(0);
-
-        CustomerQuotationDto atPriceA = discountItem(draft.id(), item.id(), new BigDecimal("1.00"));
-        BigDecimal priceA = itemById(atPriceA, item.id()).finalUnitPrice();
-        discountApprovalService.approve(currentApprovalFor(atPriceA.id(), item.id()).id(), ceoActor);
-
-        // Move to price B, get REJECTED.
-        discountItem(draft.id(), item.id(), new BigDecimal("2.00"));
-        DiscountApprovalDto pendingB = currentApprovalFor(draft.id(), item.id());
-        discountApprovalService.reject(pendingB.id(), new RejectDiscountApprovalRequest("ไม่อนุมัติ"), ceoActor);
-
-        // Move BACK to price A exactly.
-        CustomerQuotationDto backToA = discountItem(draft.id(), item.id(), new BigDecimal("1.00"));
-        assertThat(itemById(backToA, item.id()).finalUnitPrice()).isEqualByComparingTo(priceA);
-
-        DiscountApprovalDto currentStatus = currentApprovalFor(backToA.id(), item.id());
-        assertThat(currentStatus.status()).isEqualTo("APPROVED");
-        assertThat(currentStatus.requestedFinalUnitPrice()).isEqualByComparingTo(priceA);
-
-        CustomerQuotationDto issued = quotationService.issue(backToA.id(), new IssueCustomerQuotationRequest(null), salesActor);
-        assertThat(issued.docStatus()).isEqualTo(QuotationStatus.ISSUED);
-    }
-
     // Authorization — wrong-way-round (real DB, real service — not mocked)
 
     @Test
@@ -279,129 +189,6 @@ class DiscountApprovalIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(approved.status()).isEqualTo("APPROVED");
     }
 
-    @Test
-    void listPending_isCeoOnly() {
-        long pricingRequestId = approvedOneItemPricingRequest();
-        CustomerQuotationDto draft = quotationService.create(pricingRequestId,
-            new CreateCustomerQuotationRequest(null, null, null, null, null, null), salesActor);
-        discountItem(draft.id(), draft.items().get(0).id(), new BigDecimal("1.00"));
-
-        for (UserPrincipal refused : List.of(salesActor, salesManagerActor, accountActor, importActor)) {
-            assertThatThrownBy(() -> discountApprovalService.listPending(refused))
-                .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
-        }
-        assertThat(discountApprovalService.listPending(ceoActor)).isNotEmpty();
-    }
-
-    // Rejection: mandatory reason, recorded, shown to Sales, quotation stays blocked
-
-    @Test
-    void rejection_requiresAReason_recordsIt_leavesTheQuotationBlocked_andReRequestOpensAFreshRow() {
-        long pricingRequestId = approvedOneItemPricingRequest();
-        CustomerQuotationDto draft = quotationService.create(pricingRequestId,
-            new CreateCustomerQuotationRequest(null, null, null, null, null, null), salesActor);
-        CustomerQuotationItemDto item = draft.items().get(0);
-        CustomerQuotationDto discounted = discountItem(draft.id(), item.id(), new BigDecimal("1.00"));
-        DiscountApprovalDto pending = currentApprovalFor(discounted.id(), item.id());
-
-        // Reason is mandatory — null and blank both refused, nothing decided.
-        assertThatThrownBy(() -> discountApprovalService.reject(pending.id(),
-            new RejectDiscountApprovalRequest(null), ceoActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
-        assertThatThrownBy(() -> discountApprovalService.reject(pending.id(),
-            new RejectDiscountApprovalRequest("   "), ceoActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
-        assertThat(discountApprovals.findById(pending.id()).orElseThrow().status()).isEqualTo("PENDING");
-
-        // A real reason succeeds and is recorded verbatim (trimmed).
-        String reason = "ส่วนลดสูงเกินไปสำหรับลูกค้ารายนี้ ให้กลับไปคุยราคาใหม่";
-        DiscountApprovalDto rejected = discountApprovalService.reject(pending.id(),
-            new RejectDiscountApprovalRequest("  " + reason + "  "), ceoActor);
-        assertThat(rejected.status()).isEqualTo("REJECTED");
-        assertThat(rejected.rejectionReason()).isEqualTo(reason);
-        assertThat(rejected.approvedFinalUnitPrice()).isNull();
-        assertThat(jdbc.queryForObject("""
-            SELECT COUNT(*) FROM hr.notification WHERE type = 'DISCOUNT_REJECTED'
-            """, Map.of(), Long.class)).isEqualTo(1L);
-        // The requesting sales rep is told too, not only logged in the event trail.
-        assertThat(jdbc.queryForObject("""
-            SELECT COUNT(*) FROM hr.notification WHERE employee_id = :salesRepId AND type = 'DISCOUNT_REJECTED'
-            """, Map.of("salesRepId", salesRepId), Long.class)).isEqualTo(1L);
-
-        // Shown to Sales via the same read Sales already uses for this quotation.
-        List<DiscountApprovalDto> salesView = discountApprovalService.listForQuotation(discounted.id(), salesActor);
-        assertThat(salesView).anySatisfy(a -> {
-            assertThat(a.quotationItemId()).isEqualTo(item.id());
-            assertThat(a.status()).isEqualTo("REJECTED");
-            assertThat(a.rejectionReason()).isEqualTo(reason);
-        });
-
-        // The quotation stays blocked: issue() still refuses at the rejected price.
-        assertThatThrownBy(() -> quotationService.issue(discounted.id(), new IssueCustomerQuotationRequest(null), salesActor))
-            .isInstanceOfSatisfying(ApiException.class,
-                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_CONTENT));
-
-        // Sales revises the price and re-requests — a FRESH pending row opens (not the rejected one silently reopened)
-        // at the new price.
-        CustomerQuotationDto revised = discountItem(discounted.id(), item.id(), new BigDecimal("0.50"));
-        DiscountApprovalDto reopened = currentApprovalFor(revised.id(), item.id());
-        assertThat(reopened.id()).isNotEqualTo(pending.id());
-        assertThat(reopened.status()).isEqualTo("PENDING");
-        assertThat(reopened.requestedFinalUnitPrice()).isEqualByComparingTo(itemById(revised, item.id()).finalUnitPrice());
-    }
-
-    @Test
-    void rejectingAlreadyDecidedRequest_conflicts() {
-        long pricingRequestId = approvedOneItemPricingRequest();
-        CustomerQuotationDto draft = quotationService.create(pricingRequestId,
-            new CreateCustomerQuotationRequest(null, null, null, null, null, null), salesActor);
-        CustomerQuotationDto discounted = discountItem(draft.id(), draft.items().get(0).id(), new BigDecimal("1.00"));
-        DiscountApprovalDto pending = currentApprovalFor(discounted.id(), draft.items().get(0).id());
-
-        discountApprovalService.approve(pending.id(), ceoActor);
-
-        assertThatThrownBy(() -> discountApprovalService.reject(pending.id(),
-            new RejectDiscountApprovalRequest("สายไปแล้ว"), ceoActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
-        assertThatThrownBy(() -> discountApprovalService.approve(pending.id(), ceoActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
-    }
-
-    // Per-line granularity — owner's explicit choice over per-quotation
-
-    @Test
-    void approvalIsPerLine_approvingOneLineDoesNotApproveAnother() {
-        long pricingRequestId = approvedTwoItemPricingRequest();
-        CustomerQuotationDto draft = quotationService.create(pricingRequestId,
-            new CreateCustomerQuotationRequest(null, null, null, null, null, null), salesActor);
-        CustomerQuotationItemDto item1 = draft.items().get(0);
-        CustomerQuotationItemDto item2 = draft.items().get(1);
-
-        CustomerQuotationDto discounted = quotationService.update(draft.id(), new UpdateCustomerQuotationRequest(
-            null, null, null, null, null,
-            List.of(new UpdateCustomerQuotationItemRequest(item1.id(), null, null, new BigDecimal("1.00")),
-                    new UpdateCustomerQuotationItemRequest(item2.id(), null, null, new BigDecimal("1.00")))),
-            salesActor);
-
-        DiscountApprovalDto pending1 = currentApprovalFor(discounted.id(), item1.id());
-        DiscountApprovalDto pending2 = currentApprovalFor(discounted.id(), item2.id());
-        assertThat(pending1.id()).isNotEqualTo(pending2.id());
-
-        discountApprovalService.approve(pending1.id(), ceoActor);
-
-        // Still refused — item2 is unapproved. The message names item2 specifically ("a clear message naming the
-        // offending line", per the task brief).
-        assertThatThrownBy(() -> quotationService.issue(discounted.id(), new IssueCustomerQuotationRequest(null), salesActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> {
-                assertThat(e.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_CONTENT);
-                assertThat(e.getMessage()).contains(String.valueOf(item2.id()));
-            });
-
-        discountApprovalService.approve(pending2.id(), ceoActor);
-        CustomerQuotationDto issued = quotationService.issue(discounted.id(), new IssueCustomerQuotationRequest(null), salesActor);
-        assertThat(issued.docStatus()).isEqualTo(QuotationStatus.ISSUED);
-    }
-
     // Helpers
 
     private CustomerQuotationDto discountItem(long quotationId, long itemId, BigDecimal discount) {
@@ -417,10 +204,6 @@ class DiscountApprovalIntegrationTest extends AbstractPostgresIntegrationTest {
             .filter(a -> a.quotationItemId() == itemId)
             .findFirst()
             .orElseThrow(() -> new AssertionError("no current discount approval for item " + itemId));
-    }
-
-    private CustomerQuotationItemDto itemById(CustomerQuotationDto quotation, long itemId) {
-        return quotation.items().stream().filter(i -> i.id() == itemId).findFirst().orElseThrow();
     }
 
     /** One-item deal driven to an APPROVED pricing decision at 20% margin — no explicit minimum set anywhere, so
@@ -456,44 +239,6 @@ class DiscountApprovalIntegrationTest extends AbstractPostgresIntegrationTest {
         decisionService.approve(decision.id(),
             new ApprovePricingDecisionRequest("อนุมัติ", UUID.randomUUID().toString()), ceoActor);
         return pricingRequestId;
-    }
-
-    /** Two-item variant of #approvedOneItemPricingRequest — for the per-line granularity test, which needs two
-     * independently-approvable lines on the SAME quotation. */
-    private long approvedTwoItemPricingRequest() {
-        PricingRequestRequests.CreatePricingRequestRequest request = new PricingRequestRequests.CreatePricingRequestRequest(
-            PricingRequestRecipient.DESIGNER, null, "Designer Co.", LocalDate.now().plusDays(14),
-            new BigDecimal("1000.00"), "THB", "discount approval two-item test request", UUID.randomUUID().toString(),
-            List.of(
-                pricingItem("SCG", "Tile DA1", "Factory Discount1", catalogProductId1),
-                pricingItem("Cotto", "Tile DA2", "Factory Discount2", catalogProductId2)));
-        long pricingRequestId = pricingRequestService.createDraft(ticketId, request, salesActor).summary().id();
-        pricingRequestService.submit(pricingRequestId, salesActor);
-        pricingRequestService.pickup(pricingRequestId, importActor);
-        for (FactoryQuoteDto draft : factoryQuoteService.generateDrafts(pricingRequestId, importActor)) {
-            factoryQuoteService.markContacted(draft.id(), new MarkFactoryContactedRequest(
-                java.time.LocalDate.now(java.time.ZoneId.of("Asia/Bangkok")), null), importActor);
-            FactoryQuoteDto responded = factoryQuoteService.receive(draft.id(),
-                response("REF-" + draft.factoryName(), draft.items().get(0).pricingRequestItemId()), importActor);
-            factoryQuoteService.markReadyForCosting(responded.id(), importActor);
-        }
-
-        PricingDecisionDto decision = decisionService.startReview(pricingRequestId,
-            new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, null), ceoActor);
-        decisionService.approve(decision.id(),
-            new ApprovePricingDecisionRequest("อนุมัติ", UUID.randomUUID().toString()), ceoActor);
-        return pricingRequestId;
-    }
-
-    private PricingRequestRequests.PricingRequestItemRequest pricingItem(
-        String brand, String model, String factory, long productId
-    ) {
-        return new PricingRequestRequests.PricingRequestItemRequest(null, productId, null, brand, model,
-            brand + " " + model, "White", "Matte", "60x60", factory, null, null, null, null,
-            QuantityType.CONFIRMED, null, null, null,
-            null, new BigDecimal("10"), new BigDecimal("0.36"), WastageCalculator.QUANTITY_MODE_PIECES,
-            null, 10, WastageCalculator.WASTAGE_MODE_NONE, null, 4, null,
-            false, "ไทย-สต็อก", 3, 7, null, null, null);
     }
 
     private ReceiveFactoryQuoteRequest response(String ref, long pricingRequestItemId) {

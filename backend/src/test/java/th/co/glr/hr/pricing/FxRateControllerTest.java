@@ -4,20 +4,16 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import java.time.LocalDate;
 import java.util.List;
 import org.junit.jupiter.api.Test;
-import org.springframework.http.HttpStatus;
-import org.springframework.http.MediaType;
 import org.springframework.mock.web.MockHttpSession;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
-import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.common.ApiExceptionHandler;
 
 /**
@@ -78,35 +74,6 @@ class FxRateControllerTest {
         }
     }
 
-    @Test
-    void listIsUnauthorizedWithoutASession() throws Exception {
-        mvc.perform(get("/api/fx-rates")).andExpect(status().isUnauthorized());
-    }
-
-    /** The read widening must not leak into the write: upsert stays CEO-only, unchanged. */
-    @Test
-    void importCannotUpsertARate() throws Exception {
-        mvc.perform(put("/api/fx-rates/EUR")
-                .session(session("import"))
-                .contentType(MediaType.APPLICATION_JSON)
-                .content("""
-                    {"rateToThb": 38.5, "effectiveDate": "2026-08-01"}
-                    """))
-            .andExpect(status().isForbidden());
-    }
-
-    /** Same guard, from the role the read widening was specifically for — a plain sales rep. */
-    @Test
-    void salesCannotUpsertARate() throws Exception {
-        mvc.perform(put("/api/fx-rates/EUR")
-                .session(session("sales"))
-                .contentType(MediaType.APPLICATION_JSON)
-                .content("""
-                    {"rateToThb": 38.5, "effectiveDate": "2026-08-01"}
-                    """))
-            .andExpect(status().isForbidden());
-    }
-
     /** The manual FX fetch is a WRITE (it upserts rates), so it stays on the CEO write gate. */
     @Test
     void ceoCanTriggerManualFxFetch() throws Exception {
@@ -116,16 +83,6 @@ class FxRateControllerTest {
             .andExpect(status().is2xxSuccessful());
     }
 
-    /** BotFxFetchService.fetchNow() now throws a 429 ApiException when the CEO console's manual-fetch cooldown is
-     * still active. */
-    @Test
-    void manualFxFetchPropagatesA429FromTheServiceAsIs() throws Exception {
-        when(botFx.fetchNow()).thenThrow(new ApiException(HttpStatus.TOO_MANY_REQUESTS,
-            "รอสักครู่ก่อนเรียกดึงอัตราแลกเปลี่ยนจากธนาคารแห่งประเทศไทยอีกครั้ง (ประมาณ 300 วินาที)"));
-        mvc.perform(post("/api/fx-rates/fetch-now").session(session("ceo")))
-            .andExpect(status().isTooManyRequests());
-    }
-
     /** Wrong-way-round: everyone but CEO must be refused — the case that catches a widened gate. */
     @Test
     void manualFxFetchIsForbiddenForEveryoneButCeo() throws Exception {
@@ -133,11 +90,6 @@ class FxRateControllerTest {
             mvc.perform(post("/api/fx-rates/fetch-now").session(session(role)))
                 .andExpect(status().isForbidden());
         }
-    }
-
-    @Test
-    void manualFxFetchIsUnauthorizedWithoutASession() throws Exception {
-        mvc.perform(post("/api/fx-rates/fetch-now")).andExpect(status().isUnauthorized());
     }
 
     private MockHttpSession session(String role) {

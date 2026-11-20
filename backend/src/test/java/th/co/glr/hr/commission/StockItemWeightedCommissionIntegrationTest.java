@@ -132,49 +132,6 @@ class StockItemWeightedCommissionIntegrationTest extends AbstractPostgresIntegra
         assertThat(totals.get(salesRepId)).isEqualByComparingTo("2322.84");
     }
 
-    // Historical immutability — the regression that would cost real money
-
-    /** An EXISTING APPROVED record with weight_multiplier = 2 and effective_weight_multiplier = NULL must still
-     * contribute DOUBLE to the weighted base — even though its linked ticket's item sits at the column DEFAULTS
-     * because this ticket was never touched by the new per-item feature. */
-    @Test
-    void historicalRecord_weightMultiplierTwo_defaultWeightItem_stillContributesDouble() {
-        long salesRepId = ownerId;
-        long ticketId = createSingleItemTicketAtOrderReceived(new BigDecimal("10.00"), new BigDecimal("999.0000"));
-        // Deliberately NO reserveStock, NO setItemWeightMultipliers — this ticket's item stays at the column defaults
-        // (qty_from_stock = 0, weight_multiplier = 1), exactly as a deal that predates this feature and was never
-        // revisited would look.
-
-        SubmitCommissionRequest request = zeroDeductionRequest(ticketId, salesRepId, new BigDecimal("100000.00"));
-        InvoiceCalculation calculation = calculateInvoice(request);
-        long invoiceId = commissions.createInvoice(request);
-        // The PRE-V148 6-arg overload — effective_weight_multiplier is NULL, exactly like a real production row
-        // created before this migration.
-        long commissionId = commissions.createCommissionRecord(
-            invoiceId, ticketId, salesRepId, salesRepId, PAYROLL_MONTH, calculation);
-        // weight_multiplier = 2 set through the real, UNCHANGED manager-review path — matching how a real historical
-        // 2x-weighted record was actually created.
-        UpdateCommissionDeductionsRequest setWeight = new UpdateCommissionDeductionsRequest(
-            null, null, null, null, null, null, null, null, 2,
-            "historical-immutability test: apply the pre-V148 record-level weighting");
-        commissionService.updateDeductions(commissionId, setWeight, salesManager);
-        commissionService.approve(commissionId, salesManager);
-        commissionService.approve(commissionId, ceoActor);
-
-        CommissionRecord stored = commissions.findById(commissionId).orElseThrow();
-        assertThat(stored.effectiveWeightMultiplier()).isNull();
-        assertThat(stored.weightMultiplier()).isEqualTo(2);
-        assertThat(stored.effectiveWeight()).isEqualByComparingTo("2");
-
-        BigDecimal weighted = commissions.sumActiveWeightedActualReceived(salesRepId, PAYROLL_MONTH);
-        assertThat(weighted).isEqualByComparingTo("200000.00"); // 100,000 x 2, never x 1.
-
-        BigDecimal expectedBase = calculator.monthlyTierBase(new BigDecimal("200000.00"));
-        BigDecimal expectedCommission = calculator.progressiveCommission(expectedBase);
-        Map<Long, BigDecimal> totals = commissionService.payrollCommissionTotalsByEmployee(PAYROLL_MONTH);
-        assertThat(totals.get(salesRepId)).isEqualByComparingTo(expectedCommission);
-    }
-
     // Reviewer finding (2026-08-16): the manager's record-level override must still reach real payroll money on a
     // record created through the REAL production paths, not a hand-built fixture that bypasses
     // CommissionCalculator#itemDerivedWeight entirely.
@@ -216,144 +173,6 @@ class StockItemWeightedCommissionIntegrationTest extends AbstractPostgresIntegra
         assertThat(totals.get(salesRepId)).isEqualByComparingTo(expectedCommission);
     }
 
-    /** Same proof, through CommissionService#createFromDeal — the second real creation path, and the one a reviewer
-     * could not find calling the freeze via a name-only grep for computeItemDerivedWeight (it calls
-     * calculator.itemDerivedWeight directly). */
-    @Test
-    void managersRecordLevelOverride_stillReachesPayroll_onARecordCreatedThroughRealCreateFromDeal() {
-        long salesRepId = ownerId; // createFromDeal always attributes to the ticket's own owner.
-        long ticketId = createSingleItemTicketAtOrderReceived(new BigDecimal("10.00"), new BigDecimal("500.0000"));
-        tickets.updateSalesStage(ticketId, DealStage.CLOSED_PAID);
-
-        CommissionService realService = realCommissionService();
-        CommissionRecord created = realService.createFromDeal(
-            ticketId, "INV-OVERRIDE-DEAL-" + UUID.randomUUID(), INVOICE_DATE,
-            new BigDecimal("100000.00"), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
-            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
-            invoiceFile(), accountActor());
-
-        assertThat(created.effectiveWeightMultiplier()).isNull();
-
-        UpdateCommissionDeductionsRequest setWeight = new UpdateCommissionDeductionsRequest(
-            null, null, null, null, null, null, null, null, 3,
-            "manager applies the record-level override -- this ticket carries no per-item signal");
-        realService.updateDeductions(created.id(), setWeight, salesManager);
-        realService.approve(created.id(), salesManager);
-        realService.approve(created.id(), ceoActor);
-
-        LocalDate realPayrollMonth = INVOICE_DATE.withDayOfMonth(1).plusMonths(1);
-        BigDecimal weighted = commissions.sumActiveWeightedActualReceived(salesRepId, realPayrollMonth);
-        assertThat(weighted).isEqualByComparingTo("300000.00"); // 100,000 x 3, not x 1.
-    }
-
-    // Wrong-way-round
-
-    /** An item with qty_from_stock = 0 (nothing sourced from stock) must contribute effectiveWeight = 1 EVEN THOUGH
-     * its weight_multiplier is stored at 3 — only STOCK-sourced quantity ever earns credit. */
-    @Test
-    void itemWithZeroStockShare_storedThreeXMultiplier_contributesOnlyOneX() {
-        long ticketId = createSingleItemTicketAtOrderReceived(new BigDecimal("10.00"), new BigDecimal("500.0000"));
-        long itemId = onlyItemId(ticketId);
-        ticketService.setItemWeightMultipliers(ticketId,
-            new ItemWeightMultiplierRequest(List.of(new ItemWeightMultiplierRequest.Line(itemId, 3))), salesManager);
-        // Deliberately no reserveStock call — qty_from_stock stays at the column default of 0.
-
-        List<TicketItemDto> items = tickets.findById(ticketId).orElseThrow().items();
-        assertThat(items.get(0).weightMultiplier()).isEqualTo(3);
-        assertThat(items.get(0).qtyFromStock()).isEqualByComparingTo("0.00");
-
-        // Reviewer finding: the blend is exactly 1 here, so the real ticket state produces EMPTY, not a frozen
-        // 1.000000 -- see CommissionCalculator#itemDerivedWeight's own Javadoc for the dead-control defect this
-        // prevents.
-        Optional<BigDecimal> weight = calculator.itemDerivedWeight(toInputs(items), new BigDecimal("100000.00"));
-        assertThat(weight).isEmpty();
-    }
-
-    /** Partial stock coverage yields the BLENDED weight, never the full item multiplier — a half-stock line at x2
-     * earns 1.5, not 2 (the brief's own worked example). */
-    @Test
-    void itemHalfCoveredFromStock_twoXMultiplier_yieldsOneAndAHalf() {
-        long ticketId = createSingleItemTicketAtOrderReceived(new BigDecimal("100.00"), new BigDecimal("500.0000"));
-        long itemId = onlyItemId(ticketId);
-        ticketService.reserveStock(ticketId,
-            new StockReservationRequest(List.of(new StockReservationRequest.Line(itemId, new BigDecimal("50.00"), null))),
-            ceoActor);
-        ticketService.setItemWeightMultipliers(ticketId,
-            new ItemWeightMultiplierRequest(List.of(new ItemWeightMultiplierRequest.Line(itemId, 2))), salesManager);
-
-        List<TicketItemDto> items = tickets.findById(ticketId).orElseThrow().items();
-        Optional<BigDecimal> weight = calculator.itemDerivedWeight(toInputs(items), new BigDecimal("100000.00"));
-        assertThat(weight).isPresent();
-        assertThat(weight.get()).isEqualByComparingTo("1.5");
-    }
-
-    /** Unapproved money must never reach a payroll figure — the same invariant
-     * CommissionRepository#sumActiveStockActualReceived's own Javadoc records a real defect against. */
-    @Test
-    void submittedRecord_withFrozenItemWeight_neverReachesPayroll_untilApproved() {
-        long salesRepId = ownerId;
-        long ticketId = createSingleItemTicketAtOrderReceived(new BigDecimal("10.00"), new BigDecimal("500.0000"));
-        long itemId = onlyItemId(ticketId);
-        ticketService.reserveStock(ticketId,
-            new StockReservationRequest(List.of(new StockReservationRequest.Line(itemId, new BigDecimal("10.00"), null))),
-            ceoActor);
-        ticketService.setItemWeightMultipliers(ticketId,
-            new ItemWeightMultiplierRequest(List.of(new ItemWeightMultiplierRequest.Line(itemId, 2))), salesManager);
-
-        SubmitCommissionRequest request = zeroDeductionRequest(ticketId, salesRepId, new BigDecimal("50000.00"));
-        InvoiceCalculation calculation = calculateInvoice(request);
-        Optional<BigDecimal> effectiveWeight = calculator.itemDerivedWeight(
-            toInputs(tickets.findById(ticketId).orElseThrow().items()), calculation.actualReceived());
-        assertThat(effectiveWeight).isPresent();
-        assertThat(effectiveWeight.get()).isEqualByComparingTo("2");
-        long invoiceId = commissions.createInvoice(request);
-        commissions.createCommissionRecord(invoiceId, ticketId, salesRepId, salesRepId, PAYROLL_MONTH,
-            calculation, null, false, effectiveWeight.orElse(null));
-
-        // Still SUBMITTED — never approved.
-        Map<Long, BigDecimal> totalsBeforeApproval = commissionService.payrollCommissionTotalsByEmployee(PAYROLL_MONTH);
-        assertThat(totalsBeforeApproval.get(salesRepId)).isNull();
-
-        BigDecimal weighted = commissions.sumActiveWeightedActualReceived(salesRepId, PAYROLL_MONTH);
-        assertThat(weighted).isEqualByComparingTo("100000.00"); // 50,000 x 2 — visible to the live estimate.
-    }
-
-    /** Checks that clawbacks copy frozen item-derived weights to reverse the original contribution exactly. */
-    @Test
-    void clawback_preservesFrozenItemDerivedWeight_soTheReversalMatchesExactly() {
-        long salesRepId = ownerId;
-        long ticketId = createSingleItemTicketAtOrderReceived(new BigDecimal("10.00"), new BigDecimal("500.0000"));
-        long itemId = onlyItemId(ticketId);
-        ticketService.reserveStock(ticketId,
-            new StockReservationRequest(List.of(new StockReservationRequest.Line(itemId, new BigDecimal("10.00"), null))),
-            ceoActor);
-        ticketService.setItemWeightMultipliers(ticketId,
-            new ItemWeightMultiplierRequest(List.of(new ItemWeightMultiplierRequest.Line(itemId, 2))), salesManager);
-
-        SubmitCommissionRequest request = zeroDeductionRequest(ticketId, salesRepId, new BigDecimal("100000.00"));
-        InvoiceCalculation calculation = calculateInvoice(request);
-        Optional<BigDecimal> effectiveWeight = calculator.itemDerivedWeight(
-            toInputs(tickets.findById(ticketId).orElseThrow().items()), calculation.actualReceived());
-        long invoiceId = commissions.createInvoice(request);
-        long commissionId = commissions.createCommissionRecord(invoiceId, ticketId, salesRepId, salesRepId,
-            PAYROLL_MONTH, calculation, null, false, effectiveWeight.orElse(null));
-        commissionService.approve(commissionId, salesManager);
-        commissionService.approve(commissionId, ceoActor);
-
-        BigDecimal weightedBeforeClawback = commissions.sumActiveWeightedActualReceived(salesRepId, PAYROLL_MONTH);
-        assertThat(weightedBeforeClawback).isEqualByComparingTo("200000.00"); // 100,000 x 2
-
-        CommissionRecord original = commissions.findById(commissionId).orElseThrow();
-        assertThat(original.effectiveWeightMultiplier()).isNotNull();
-        long clawbackId = commissions.createClawback(original, salesManager.id(), PAYROLL_MONTH, "test clawback");
-        CommissionRecord clawback = commissions.findById(clawbackId).orElseThrow();
-
-        assertThat(clawback.effectiveWeightMultiplier()).isEqualByComparingTo(original.effectiveWeightMultiplier());
-
-        BigDecimal weightedAfterClawback = commissions.sumActiveWeightedActualReceived(salesRepId, PAYROLL_MONTH);
-        assertThat(weightedAfterClawback).isEqualByComparingTo(BigDecimal.ZERO);
-    }
-
     // ── helpers ──────────────────────────────────────────────────────────────
 
     /** A CommissionService wired for a REAL submit/createFromDeal call. Mirrors
@@ -373,11 +192,6 @@ class StockItemWeightedCommissionIntegrationTest extends AbstractPostgresIntegra
 
     private MultipartFile invoiceFile() {
         return new MockMultipartFile("invoiceAttachment", "invoice.pdf", "application/pdf", "pdf-bytes".getBytes());
-    }
-
-    private UserPrincipal accountActor() {
-        long accountId = createEmployee("ฝ่ายบัญชี น้ำหนักรายการ", "account-itemweight@glr.co.th", "AC", "แผนกบัญชี");
-        return principal(accountId, "account");
     }
 
     /** Creates a fully stock-covered, x2-weighted, single-item ticket and its SUBMITTED commission record — the

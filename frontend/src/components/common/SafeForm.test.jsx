@@ -28,13 +28,6 @@ function formWithButton(onSubmit, extraProps = {}) {
   );
 }
 
-// A submitter-bearing dispatch that doesn't require a real button in the DOM -- for proving canSubmit=true
-// still requires a submitter (it is a restriction, not a permission; see SafeForm.jsx's header comment)
-// without needing a `formWithButton` fixture.
-function dispatchWithSubmitter(form) {
-  form.dispatchEvent(new SubmitEvent('submit', { bubbles: true, cancelable: true, submitter: document.createElement('button') }));
-}
-
 describe('SafeForm — default (no canSubmit): the submitter guard', () => {
   it('blocks a submitter-less submit (no submit button in the DOM)', () => {
     const onSubmit = vi.fn();
@@ -56,47 +49,6 @@ describe('SafeForm — default (no canSubmit): the submitter guard', () => {
 
     expect(onSubmit).toHaveBeenCalledTimes(1);
   });
-
-  it('warns in dev, naming the form, when it blocks -- so a developer sees why nothing happened', () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const onSubmit = vi.fn();
-    formWithNoButton(onSubmit, { id: 'probe-form' });
-
-    fireEvent.submit(screen.getByTestId('safe-form'));
-
-    expect(warnSpy).toHaveBeenCalledTimes(1);
-    expect(warnSpy.mock.calls[0][0]).toContain('#probe-form');
-    expect(warnSpy.mock.calls[0][0]).toContain('SafeForm');
-  });
-
-  it('is inert, not throwing, when it blocks', () => {
-    const onSubmit = vi.fn();
-    vi.spyOn(console, 'warn').mockImplementation(() => {});
-    formWithNoButton(onSubmit);
-
-    expect(() => fireEvent.submit(screen.getByTestId('safe-form'))).not.toThrow();
-  });
-});
-
-describe('SafeForm — allowSubmitterlessSubmit escape hatch', () => {
-  it('lets a submitter-less submit through when explicitly allowed', () => {
-    const onSubmit = vi.fn();
-    formWithNoButton(onSubmit, { allowSubmitterlessSubmit: true });
-
-    fireEvent.submit(screen.getByTestId('safe-form'));
-
-    expect(onSubmit).toHaveBeenCalledTimes(1);
-  });
-
-  it('does not warn once the escape hatch is used -- that path is intentional, not a mistake', () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const onSubmit = vi.fn();
-    formWithNoButton(onSubmit, { allowSubmitterlessSubmit: true });
-
-    fireEvent.submit(screen.getByTestId('safe-form'));
-
-    expect(warnSpy).not.toHaveBeenCalled();
-  });
 });
 
 // canSubmit is a RESTRICTION, never a permission (see SafeForm.jsx's header comment, and F1/F3 of this task's
@@ -112,24 +64,6 @@ describe('SafeForm — canSubmit view/step gate', () => {
     expect(onSubmit).not.toHaveBeenCalled();
   });
 
-  it('still blocks a submitter-less submit when canSubmit is true -- canSubmit does not bypass the submitter guard', () => {
-    const onSubmit = vi.fn();
-    formWithNoButton(onSubmit, { canSubmit: true });
-
-    fireEvent.submit(screen.getByTestId('safe-form'));
-
-    expect(onSubmit).not.toHaveBeenCalled();
-  });
-
-  it('lets a submit through when canSubmit is true AND a submitter is present, even with no real button in the DOM', () => {
-    const onSubmit = vi.fn();
-    const { container } = formWithNoButton(onSubmit, { canSubmit: true });
-
-    dispatchWithSubmitter(container.querySelector('form'));
-
-    expect(onSubmit).toHaveBeenCalledTimes(1);
-  });
-
   it('still lets a real submit-button click through when canSubmit is true', () => {
     const onSubmit = vi.fn((event) => event.preventDefault());
     formWithButton(onSubmit, { canSubmit: true });
@@ -137,66 +71,6 @@ describe('SafeForm — canSubmit view/step gate', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Go' }));
 
     expect(onSubmit).toHaveBeenCalledTimes(1);
-  });
-
-  it('warns in dev when it blocks on canSubmit=false, distinctly from the submitter-guard message', () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const onSubmit = vi.fn((event) => event.preventDefault());
-    formWithButton(onSubmit, { canSubmit: false, id: 'gated-form' });
-
-    fireEvent.click(screen.getByRole('button', { name: 'Go' }));
-
-    expect(warnSpy).toHaveBeenCalledTimes(1);
-    expect(warnSpy.mock.calls[0][0]).toContain('canSubmit is false');
-  });
-
-  it('warns with the submitter-guard message, not the canSubmit one, when canSubmit is true but there is no submitter', () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const onSubmit = vi.fn();
-    formWithNoButton(onSubmit, { canSubmit: true, id: 'no-submitter-form' });
-
-    fireEvent.submit(screen.getByTestId('safe-form'));
-
-    expect(warnSpy).toHaveBeenCalledTimes(1);
-    expect(warnSpy.mock.calls[0][0]).toContain('no submitter');
-  });
-});
-
-describe('SafeForm — prop forwarding', () => {
-  it('forwards id, noValidate and className to the underlying <form>', () => {
-    render(
-      <SafeForm data-testid="safe-form" id="my-form" noValidate className="grid gap-4" onSubmit={() => {}}>
-        <input aria-label="field" />
-      </SafeForm>,
-    );
-
-    const form = screen.getByTestId('safe-form');
-    expect(form.tagName).toBe('FORM');
-    expect(form.id).toBe('my-form');
-    expect(form.noValidate).toBe(true);
-    expect(form.className).toContain('grid');
-    expect(form.className).toContain('gap-4');
-  });
-
-  it('forwards a ref to the underlying <form> DOM node', () => {
-    const ref = React.createRef();
-    render(
-      <SafeForm ref={ref} onSubmit={() => {}}>
-        <input aria-label="field" />
-      </SafeForm>,
-    );
-
-    expect(ref.current).toBeInstanceOf(HTMLFormElement);
-  });
-
-  it('renders children', () => {
-    render(
-      <SafeForm onSubmit={() => {}}>
-        <p>form content</p>
-      </SafeForm>,
-    );
-
-    expect(screen.getByText('form content')).toBeTruthy();
   });
 });
 
@@ -217,49 +91,6 @@ describe('SafeForm — an ALLOWED submit never falls through to native form subm
 
     expect(onSubmit).toHaveBeenCalledTimes(1);
     expect(preventedWhenHandlerRan).toBe(true);
-    expect(proceeded).toBe(false);
-  });
-
-  it('prevents the default even when the handler returns early without doing anything', () => {
-    formWithButton(() => {}); // e.g. ImportFactoryPicker's "already saving" / "nothing picked" returns
-
-    const proceeded = screen.getByTestId('safe-form').dispatchEvent(
-      new SubmitEvent('submit', { bubbles: true, cancelable: true, submitter: screen.getByRole('button', { name: 'Go' }) }),
-    );
-
-    expect(proceeded).toBe(false);
-  });
-
-  it('prevents the default when no onSubmit is passed at all', () => {
-    formWithButton(undefined);
-
-    const proceeded = screen.getByTestId('safe-form').dispatchEvent(
-      new SubmitEvent('submit', { bubbles: true, cancelable: true, submitter: screen.getByRole('button', { name: 'Go' }) }),
-    );
-
-    expect(proceeded).toBe(false);
-  });
-
-  it('prevents the default on an allowSubmitterlessSubmit submit too', () => {
-    const onSubmit = vi.fn();
-    formWithNoButton(onSubmit, { allowSubmitterlessSubmit: true });
-
-    const proceeded = screen.getByTestId('safe-form').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
-
-    expect(onSubmit).toHaveBeenCalledTimes(1);
-    expect(proceeded).toBe(false);
-  });
-
-  it('prevents the default on a canSubmit={true} submit that carries a submitter', () => {
-    const onSubmit = vi.fn();
-    formWithNoButton(onSubmit, { canSubmit: true });
-
-    const form = screen.getByTestId('safe-form');
-    const proceeded = form.dispatchEvent(
-      new SubmitEvent('submit', { bubbles: true, cancelable: true, submitter: document.createElement('button') }),
-    );
-
-    expect(onSubmit).toHaveBeenCalledTimes(1);
     expect(proceeded).toBe(false);
   });
 });

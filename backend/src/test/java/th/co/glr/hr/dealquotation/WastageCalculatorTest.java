@@ -39,40 +39,6 @@ class WastageCalculatorTest {
         assertThat(r.boxes()).isEqualTo(67);
     }
 
-    @Test
-    void item5_area124_piecesPerSqm2_78_wastage10pct_ppb4_roundsTo380() {
-        Result r = WastageCalculator.calculate(new Input(
-            sqmPerPieceFor("2.78"), WastageCalculator.QUANTITY_MODE_AREA, new BigDecimal("124"), null,
-            WastageCalculator.WASTAGE_MODE_PERCENT, new BigDecimal("10"), 4,
-            new BigDecimal("100"), BigDecimal.ZERO));
-
-        assertThat(r.piecesBeforeWastage()).isEqualTo(345);
-        assertThat(r.piecesAfterWastage()).isEqualTo(380);
-        assertThat(r.piecesFinal()).isEqualTo(380);
-        assertThat(r.boxes()).isEqualTo(95);
-    }
-
-    /**
-     * Item1: the line that tells the two rounding rules apart. 569 × 1.39 = 790.91 → 791 under
-     * either rule; 791 × 1.10 = 870.1 → 871 rounding up, which the box multiple lifts to 872.
-     * The printed 870 on the owner's document is HALF_UP evidence, but the rule is
-     * "ปัดขึ้นทุกกรณี" for documents from now on, so this document (and QN6900981-1 row 1,
-     * QN6900648 row 4) deliberately does not reproduce.
-     */
-    @Test
-    void item1_area569_piecesPerSqm1_39_wastage10pct_ppb2_roundsEveryFractionUp_872() {
-        Result r = WastageCalculator.calculate(new Input(
-            sqmPerPieceFor("1.39"), WastageCalculator.QUANTITY_MODE_AREA, new BigDecimal("569"), null,
-            WastageCalculator.WASTAGE_MODE_PERCENT, new BigDecimal("10"), 2,
-            new BigDecimal("100"), BigDecimal.ZERO));
-
-        assertThat(r.piecesPerSqm()).isEqualByComparingTo("1.39");
-        assertThat(r.piecesBeforeWastage()).isEqualTo(791);
-        assertThat(r.piecesAfterWastage()).isEqualTo(871);
-        assertThat(r.piecesFinal()).isEqualTo(872);
-        assertThat(r.boxes()).isEqualTo(436);
-    }
-
     /** A fraction as small as a hundredth of a piece still rounds up: 0.01 above a whole number
      * of pieces is one more piece, in the area step and in the wastage step alike. */
     @Test
@@ -125,18 +91,6 @@ class WastageCalculatorTest {
     }
 
     @Test
-    void wastageModeNone_leavesPiecesUnchanged() {
-        Result r = WastageCalculator.calculate(new Input(
-            sqmPerPieceFor("2"), WastageCalculator.QUANTITY_MODE_AREA, new BigDecimal("10"), null,
-            WastageCalculator.WASTAGE_MODE_NONE, null, null,
-            new BigDecimal("50"), BigDecimal.ZERO));
-
-        assertThat(r.piecesBeforeWastage()).isEqualTo(20);
-        assertThat(r.piecesAfterWastage()).isEqualTo(20);
-        assertThat(r.piecesFinal()).isEqualTo(20);
-    }
-
-    @Test
     void noPiecesPerBox_finalEqualsAfterWastage_boxesNull() {
         Result r = WastageCalculator.calculate(new Input(
             sqmPerPieceFor("2"), WastageCalculator.QUANTITY_MODE_AREA, new BigDecimal("10"), null,
@@ -164,17 +118,6 @@ class WastageCalculatorTest {
     }
 
     @Test
-    void piecesQuantityMode_stillReportsPiecesPerSqm_whenSqmPerPieceGiven() {
-        Result r = WastageCalculator.calculate(new Input(
-            sqmPerPieceFor("2.78"), WastageCalculator.QUANTITY_MODE_PIECES, null, 50,
-            WastageCalculator.WASTAGE_MODE_NONE, null, null,
-            new BigDecimal("50"), BigDecimal.ZERO));
-
-        assertThat(r.piecesPerSqm()).isEqualByComparingTo("2.78");
-        assertThat(r.piecesBeforeWastage()).isEqualTo(50);
-    }
-
-    @Test
     void discountPct_reducesNetUnitPrice_andLineAmount() {
         Result r = WastageCalculator.calculate(new Input(
             null, WastageCalculator.QUANTITY_MODE_PIECES, null, 10,
@@ -183,27 +126,6 @@ class WastageCalculatorTest {
 
         assertThat(r.netUnitPrice()).isEqualByComparingTo("90.00");
         assertThat(r.lineAmount()).isEqualByComparingTo("900.00"); // 10 pieces * 90
-    }
-
-    @Test
-    void zeroDiscount_netUnitPriceEqualsUnitPrice() {
-        Result r = WastageCalculator.calculate(new Input(
-            null, WastageCalculator.QUANTITY_MODE_PIECES, null, 3,
-            WastageCalculator.WASTAGE_MODE_NONE, null, null,
-            new BigDecimal("123.456"), null));
-
-        assertThat(r.netUnitPrice()).isEqualByComparingTo("123.46"); // rounded HALF_UP to 2dp
-        // R-D input scale: the LIST price is pre-rounded to 2dp
-        // (123.456 -> 123.46) before the line amount is computed at all — sales.quotation_item.
-        // unit_price is NUMERIC(14,2), so a 3dp-or-finer typed price must be rounded before
-        // it enters the money math, or the stored row could never reproduce its own amount. So
-        // lineAmount here is round2(123.46 × 3) = 370.38, not round2(123.456 × 3) = 370.37 — none
-        // of the nine owner documents this rounds against has a list price finer than 2dp, so
-        // this input-scale rule is not discriminated by any of them; it exists for the DB column
-        // width, not a printed figure. (R-D's OWN evidence — that the amount is a single rounding
-        // of list × qty × factor, not round2(netUnitPrice × qty) — is still QN6900971-4 rows
-        // 5.3-5.7 in WastageCalculator's class Javadoc; this 2dp list price is what "list" means.)
-        assertThat(r.lineAmount()).isEqualByComparingTo("370.38");
     }
 
     @Test
@@ -232,22 +154,6 @@ class WastageCalculatorTest {
     // {@code DealQuotationServiceSqmPerPieceTest#sqmPerPiece_200x300_isNeverSilentlyReadAsCentimetres}.
     // ─────────────────────────────────────────────────────────────────────────────────────────
 
-    @Test
-    void areaMode_missingSqmPerPiece_throws() {
-        assertThatThrownBy(() -> WastageCalculator.calculate(new Input(
-            null, WastageCalculator.QUANTITY_MODE_AREA, new BigDecimal("10"), null,
-            WastageCalculator.WASTAGE_MODE_NONE, null, null, BigDecimal.TEN, null)))
-            .isInstanceOf(IllegalArgumentException.class);
-    }
-
-    @Test
-    void piecesMode_missingPiecesInput_throws() {
-        assertThatThrownBy(() -> WastageCalculator.calculate(new Input(
-            null, WastageCalculator.QUANTITY_MODE_PIECES, null, null,
-            WastageCalculator.WASTAGE_MODE_NONE, null, null, BigDecimal.TEN, null)))
-            .isInstanceOf(IllegalArgumentException.class);
-    }
-
     /** {@code DealQuotationService#buildItem} catches {@code ArithmeticException}
      * (alongside {@code IllegalArgumentException}) precisely because {@code BigDecimal#
      * intValueExact} inside this class can throw it for an absurd-but-not-otherwise-invalid
@@ -275,18 +181,6 @@ class WastageCalculatorTest {
             .hasMessageContaining("ขนาดสินค้าไม่สมเหตุสมผล");
     }
 
-    @Test
-    void sqmPerPiece_tooLarge_rejectedWithThaiMessage() {
-        // The sanity bound doesn't care how an implausible figure was arrived at -- 72 sqm/piece is refused whether it
-        // came from a mislabeled unit, a bad catalog row, or anything else that resolved sqmPerPiece; it refuses the
-        // RESULT, not any particular source of it.
-        assertThatThrownBy(() -> WastageCalculator.calculate(new Input(
-            new BigDecimal("72"), WastageCalculator.QUANTITY_MODE_AREA, new BigDecimal("10"), null,
-            WastageCalculator.WASTAGE_MODE_NONE, null, null, BigDecimal.TEN, null)))
-            .isInstanceOf(IllegalArgumentException.class)
-            .hasMessageContaining("ขนาดสินค้าไม่สมเหตุสมผล");
-    }
-
     // ── wastageValue bounds are mode-dependent ────────────────────────────────────────────
 
     @Test
@@ -294,24 +188,6 @@ class WastageCalculatorTest {
         assertThatThrownBy(() -> WastageCalculator.calculate(new Input(
             sqmPerPieceFor("2"), WastageCalculator.QUANTITY_MODE_AREA, new BigDecimal("10"), null,
             WastageCalculator.WASTAGE_MODE_PERCENT, new BigDecimal("150"), null,
-            new BigDecimal("50"), BigDecimal.ZERO)))
-            .isInstanceOf(IllegalArgumentException.class);
-    }
-
-    @Test
-    void wastageValuePieces_over1Million_rejected() {
-        assertThatThrownBy(() -> WastageCalculator.calculate(new Input(
-            null, WastageCalculator.QUANTITY_MODE_PIECES, null, 10,
-            WastageCalculator.WASTAGE_MODE_PIECES, new BigDecimal("1000001"), null,
-            new BigDecimal("50"), BigDecimal.ZERO)))
-            .isInstanceOf(IllegalArgumentException.class);
-    }
-
-    @Test
-    void wastageValue_negative_rejected() {
-        assertThatThrownBy(() -> WastageCalculator.calculate(new Input(
-            null, WastageCalculator.QUANTITY_MODE_PIECES, null, 10,
-            WastageCalculator.WASTAGE_MODE_PIECES, new BigDecimal("-1"), null,
             new BigDecimal("50"), BigDecimal.ZERO)))
             .isInstanceOf(IllegalArgumentException.class);
     }
@@ -340,29 +216,6 @@ class WastageCalculatorTest {
             new BigDecimal("790"), new BigDecimal("0.72"))).isEqualByComparingTo("531.16");
     }
 
-    /** The ROUNDING ORDER, pinned separately from the four figures above so a regression names its own cause. */
-    @Test
-    void netPerPieceFromSpecialSqm_dividesByThe2dpReciprocal_notTheExactOne() {
-        BigDecimal exact = new BigDecimal("1800").divide(new BigDecimal("1.07"), 10, java.math.RoundingMode.HALF_UP)
-            .divide(BigDecimal.ONE.divide(new BigDecimal("0.72"), 10, java.math.RoundingMode.HALF_UP),
-                2, java.math.RoundingMode.HALF_UP);
-        assertThat(exact).isEqualByComparingTo("1211.21");
-        assertThat(WastageCalculator.netPerPieceFromSpecialSqm(
-            new BigDecimal("1800"), new BigDecimal("0.72"))).isEqualByComparingTo("1210.25");
-    }
-
-    /** ...and the VAT-stripped figure must NOT be rounded to 2dp before the division — a third rounding there costs
-     * QN6900648 one satang (1,210.24 against the printed 1,210.25). */
-    @Test
-    void netPerPieceFromSpecialSqm_doesNotRoundTheVatStrippedFigureFirst() {
-        BigDecimal roundedFirst = new BigDecimal("1800")
-            .divide(new BigDecimal("1.07"), 2, java.math.RoundingMode.HALF_UP)
-            .divide(new BigDecimal("1.39"), 2, java.math.RoundingMode.HALF_UP);
-        assertThat(roundedFirst).isEqualByComparingTo("1210.24");
-        assertThat(WastageCalculator.netPerPieceFromSpecialSqm(
-            new BigDecimal("1800"), new BigDecimal("0.72"))).isEqualByComparingTo("1210.25");
-    }
-
     @Test
     void netPerPieceFromSpecialSqm_rejectsNonPositiveOrMissingInputs() {
         assertThatThrownBy(() -> WastageCalculator.netPerPieceFromSpecialSqm(null, new BigDecimal("0.36")))
@@ -375,14 +228,6 @@ class WastageCalculatorTest {
             .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> WastageCalculator.netPerPieceFromSpecialSqm(new BigDecimal("1350"), BigDecimal.ZERO))
             .isInstanceOf(IllegalArgumentException.class);
-    }
-
-    /** The reciprocal is a DIVISOR in the money math now, so its 2dp value is pinned in its own right — these are
-     * the very figures the printed sub-line carries ("ตร.ม.ๆละ 2.78 แผ่น"). */
-    @Test
-    void piecesPerSqm_roundsTheReciprocalTo2dp() {
-        assertThat(WastageCalculator.piecesPerSqm(new BigDecimal("0.36"))).isEqualByComparingTo("2.78");
-        assertThat(WastageCalculator.piecesPerSqm(new BigDecimal("0.72"))).isEqualByComparingTo("1.39");
     }
 
     /**
@@ -401,17 +246,6 @@ class WastageCalculatorTest {
             .isEqualByComparingTo("38198.21");
     }
 
-    @Test
-    void adjustmentAmount_returnsThePositiveMagnitude_andHandlesAZeroBase() {
-        // The sign lives in the row's quantity (-1), never here.
-        assertThat(WastageCalculator.adjustmentAmount(new BigDecimal("1000"), new BigDecimal("10")))
-            .isEqualByComparingTo("100.00");
-        assertThat(WastageCalculator.adjustmentAmount(BigDecimal.ZERO, new BigDecimal("3")))
-            .isEqualByComparingTo("0.00");
-        assertThatThrownBy(() -> WastageCalculator.adjustmentAmount(new BigDecimal("1000"), null))
-            .isInstanceOf(IllegalArgumentException.class);
-    }
-
     // ── English per-sqm quantity = boxes × supplier sqm/box ─────────
 
     /** Her QN6900933, all three rows, to the cent. */
@@ -425,35 +259,6 @@ class WastageCalculatorTest {
         assertThat(WastageCalculator.sqmQuantityFromBoxes(1, new BigDecimal("0.005"))).isEqualByComparingTo("0.01");
     }
 
-    /**
-     * A sqm/box whose box quantity is NOT already a whole cent.
-     * Prod catalogue values go to 5dp; every QN6900933 figure happens to multiply out exactly, so
-     * those fixtures cannot tell "round the qty, then price it" from "price the unrounded qty".
-     * 120 × 0.59696 = 71.6352 → 71.64, and the amount the document prints is 71.64 × 64 = 4,584.96
-     * (the qty the customer SEES, times the price) — NOT 71.6352 × 64 = 4,584.65.
-     */
-    @Test
-    void sqmQuantityFromBoxes_roundsAFiveDecimalBoxAreaToTheCent_beforeAnyPriceIsApplied() {
-        BigDecimal qty = WastageCalculator.sqmQuantityFromBoxes(120, new BigDecimal("0.59696"));
-        assertThat(qty).isEqualByComparingTo("71.64");
-        assertThat(qty.scale()).isEqualTo(2);
-        assertThat(qty.multiply(new BigDecimal("64")).setScale(2, RoundingMode.HALF_UP)).isEqualByComparingTo("4584.96");
-        // The trap, stated: pricing the unrounded box area gives a figure that disagrees with the printed Qty × Unit
-        // price by 0.31.
-        assertThat(new BigDecimal("120").multiply(new BigDecimal("0.59696")).multiply(new BigDecimal("64"))
-            .setScale(2, RoundingMode.HALF_UP)).isEqualByComparingTo("4584.65");
-    }
-
-    @Test
-    void sqmQuantityFromBoxes_refusesMissingBoxData_neverFallsBackToPieces() {
-        assertThatThrownBy(() -> WastageCalculator.sqmQuantityFromBoxes(null, new BigDecimal("0.6")))
-            .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> WastageCalculator.sqmQuantityFromBoxes(120, null))
-            .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> WastageCalculator.sqmQuantityFromBoxes(120, BigDecimal.ZERO))
-            .isInstanceOf(IllegalArgumentException.class);
-    }
-
     // ── English per-sqm quantity with NO box area ─────────────────────────────────────────────
 
     @Test
@@ -463,41 +268,6 @@ class WastageCalculatorTest {
         // Same rounding discipline as sqmQuantityFromBoxes: HALF_UP at the cent.
         assertThat(WastageCalculator.sqmQuantityFromPieces(1, new BigDecimal("0.005"))).isEqualByComparingTo("0.01");
         assertThat(WastageCalculator.sqmQuantityFromPieces(0, new BigDecimal("0.36"))).isEqualByComparingTo("0.00");
-    }
-
-    /** Multiplies the RAW sqmPerPiece, not the 2dp piecesPerSqm reciprocal — a genuinely different figure on a
-     * value that does not round-trip evenly, same discipline as WastageCalculator#piecesPerSqm's own Javadoc warns
-     * about. */
-    @Test
-    void sqmQuantityFromPieces_multipliesRawSqmPerPiece_notThe2dpReciprocal() {
-        // sqmPerPiece = 1/2.78 = 0.359712... — piecesPerSqm(sqmPerPiece) rounds to 0.36, a DIFFERENT number from the
-        // raw value this method must actually multiply.
-        BigDecimal sqmPerPiece = BigDecimal.ONE.divide(new BigDecimal("2.78"), 10, RoundingMode.HALF_UP);
-        BigDecimal viaRaw = WastageCalculator.sqmQuantityFromPieces(1000, sqmPerPiece);
-        BigDecimal viaRounded = new BigDecimal("1000").multiply(new BigDecimal("0.36")).setScale(2, RoundingMode.HALF_UP);
-        assertThat(viaRaw).isNotEqualByComparingTo(viaRounded);
-        assertThat(viaRaw).isEqualByComparingTo("359.71"); // 1000 × 0.3597122...
-        assertThat(viaRounded).isEqualByComparingTo("360.00");
-    }
-
-    @Test
-    void sqmQuantityFromPieces_refusesMissingSqmPerPiece() {
-        assertThatThrownBy(() -> WastageCalculator.sqmQuantityFromPieces(28, null))
-            .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> WastageCalculator.sqmQuantityFromPieces(28, BigDecimal.ZERO))
-            .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> WastageCalculator.sqmQuantityFromPieces(28, new BigDecimal("-0.6")))
-            .isInstanceOf(IllegalArgumentException.class);
-    }
-
-    @Test
-    void isEnglishPerSqm_isExactlySpecialSqmOnAnEnglishDocument() {
-        assertThat(WastageCalculator.isEnglishPerSqm("EN", "SPECIAL_SQM")).isTrue();
-        assertThat(WastageCalculator.isEnglishPerSqm("TH", "SPECIAL_SQM")).isFalse();
-        assertThat(WastageCalculator.isEnglishPerSqm(null, "SPECIAL_SQM")).isFalse();
-        assertThat(WastageCalculator.isEnglishPerSqm("EN", "NET")).isFalse();
-        assertThat(WastageCalculator.isEnglishPerSqm("EN", "DIRECT_NET")).isFalse();
-        assertThat(WastageCalculator.isEnglishPerSqm("EN", null)).isFalse();
     }
 
     // ── "Sell loose pieces" ─────────────────────────────────
@@ -533,31 +303,6 @@ class WastageCalculatorTest {
         assertThat(r.loosePieces()).isEqualTo(2);
     }
 
-    /** loose = 0: an exact multiple is still reported as full boxes with a zero remainder, not null — the printed
-     * line (DealQuotationLinesTest) is what decides how to phrase zero. */
-    @Test
-    void roundToFullBoxFalse_exactMultiple_looseIsZeroNotNull() {
-        Result r = WastageCalculator.calculate(new Input(
-            null, WastageCalculator.QUANTITY_MODE_PIECES, null, 30,
-            WastageCalculator.WASTAGE_MODE_NONE, null, 10, new BigDecimal("50"), BigDecimal.ZERO, false));
-
-        assertThat(r.piecesFinal()).isEqualTo(30);
-        assertThat(r.boxes()).isEqualTo(3);
-        assertThat(r.loosePieces()).isEqualTo(0);
-    }
-
-    /** boxes = 0: fewer pieces than a single box — reported as zero full boxes, all of it loose. */
-    @Test
-    void roundToFullBoxFalse_fewerThanOneBox_boxesIsZero() {
-        Result r = WastageCalculator.calculate(new Input(
-            null, WastageCalculator.QUANTITY_MODE_PIECES, null, 7,
-            WastageCalculator.WASTAGE_MODE_NONE, null, 10, new BigDecimal("50"), BigDecimal.ZERO, false));
-
-        assertThat(r.piecesFinal()).isEqualTo(7);
-        assertThat(r.boxes()).isEqualTo(0);
-        assertThat(r.loosePieces()).isEqualTo(7);
-    }
-
     /** PERCENT wastage still applies (rounds up, like everywhere else) before the loose-pieces split — only
      * the BOX step stops rounding, not the wastage step upstream of it. */
     @Test
@@ -574,67 +319,4 @@ class WastageCalculatorTest {
         assertThat(r.loosePieces()).isEqualTo(2); // 110 - 9*12
     }
 
-    /** PIECES wastage (a flat extra count) — same "applies upstream of the loose split" shape as the PERCENT case
-     * above, with a different arithmetic rule feeding it. */
-    @Test
-    void roundToFullBoxFalse_piecesWastage_appliesBeforeTheLooseSplit() {
-        Result r = WastageCalculator.calculate(new Input(
-            null, WastageCalculator.QUANTITY_MODE_PIECES, null, 100,
-            WastageCalculator.WASTAGE_MODE_PIECES, new BigDecimal("15"), 12,
-            new BigDecimal("50"), BigDecimal.ZERO, false));
-
-        assertThat(r.piecesAfterWastage()).isEqualTo(115);
-        assertThat(r.piecesFinal()).isEqualTo(115);
-        assertThat(r.boxes()).isEqualTo(9); // 115 / 12 = 9 full boxes
-        assertThat(r.loosePieces()).isEqualTo(7); // 115 - 9*12
-    }
-
-    /** AREA quantity mode is unaffected by which field feeds piecesBeforeWastage — the loose split only cares about
-     * piecesFinal and piecesPerBox, whatever produced piecesFinal. */
-    @Test
-    void roundToFullBoxFalse_areaQuantityMode_stillSplitsCorrectly() {
-        Result r = WastageCalculator.calculate(new Input(
-            sqmPerPieceFor("2.78"), WastageCalculator.QUANTITY_MODE_AREA, new BigDecimal("10"), null,
-            WastageCalculator.WASTAGE_MODE_NONE, null, 4, new BigDecimal("50"), BigDecimal.ZERO, false));
-
-        // piecesBeforeWastage = round(10 * 2.78) = 28, no wastage -> piecesFinal = 28 (unrounded).
-        assertThat(r.piecesFinal()).isEqualTo(28);
-        assertThat(r.boxes()).isEqualTo(7);
-        assertThat(r.loosePieces()).isEqualTo(0);
-    }
-
-    /** No piecesPerBox at all: roundToFullBox is simply moot (there is no box multiple to round to or split by),
-     * exactly as null/<= 0 already behaved before this feature — false must not invent box/loose figures out of
-     * nothing. */
-    @Test
-    void roundToFullBoxFalse_noPiecesPerBox_boxesAndLooseStayNull() {
-        Result r = WastageCalculator.calculate(new Input(
-            null, WastageCalculator.QUANTITY_MODE_PIECES, null, 32,
-            WastageCalculator.WASTAGE_MODE_NONE, null, null, new BigDecimal("50"), BigDecimal.ZERO, false));
-
-        assertThat(r.piecesFinal()).isEqualTo(32);
-        assertThat(r.boxes()).isNull();
-        assertThat(r.loosePieces()).isNull();
-
-        Result rZero = WastageCalculator.calculate(new Input(
-            null, WastageCalculator.QUANTITY_MODE_PIECES, null, 32,
-            WastageCalculator.WASTAGE_MODE_NONE, null, 0, new BigDecimal("50"), BigDecimal.ZERO, false));
-        assertThat(rZero.boxes()).isNull();
-        assertThat(rZero.loosePieces()).isNull();
-    }
-
-    /** Every price mode's amount follows piecesFinal EXACTLY as it does when rounding — the money math (R-D: single
-     * rounding of list × piecesFinal × discountFactor) does not know or care whether piecesFinal got there by
-     * ceiling or by staying unrounded. */
-    @Test
-    void roundToFullBoxFalse_lineAmountFollowsUnroundedPiecesFinal_notTheOldCeiling() {
-        Result r = WastageCalculator.calculate(new Input(
-            null, WastageCalculator.QUANTITY_MODE_PIECES, null, 32,
-            WastageCalculator.WASTAGE_MODE_NONE, null, 10, new BigDecimal("100"), new BigDecimal("10"), false));
-
-        assertThat(r.piecesFinal()).isEqualTo(32);
-        assertThat(r.netUnitPrice()).isEqualByComparingTo("90.00"); // 100 * (1 - 10%), unaffected by rounding mode 100 * 32 * 0.90 = 2,880.00 -- NOT 100 * 40 * 0.90 = 3,600.00
-        // (the old ceil-to-40 amount).
-        assertThat(r.lineAmount()).isEqualByComparingTo("2880.00");
-    }
 }

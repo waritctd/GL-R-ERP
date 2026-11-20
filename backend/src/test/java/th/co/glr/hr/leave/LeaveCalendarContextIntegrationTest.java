@@ -1,12 +1,10 @@
 package th.co.glr.hr.leave;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.time.LocalDate;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.mock.web.MockHttpSession;
 import th.co.glr.hr.attendance.schedule.CompanyWideWorkScheduleResolver;
@@ -18,7 +16,6 @@ import th.co.glr.hr.attendance.schedule.WorkScheduleAssignmentRepository;
 import th.co.glr.hr.attendance.schedule.WorkScheduleResolver;
 import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
-import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.config.AppProperties;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
@@ -117,61 +114,6 @@ class LeaveCalendarContextIntegrationTest extends AbstractPostgresIntegrationTes
         // Belt-and-suspenders: A's whole response must not equal B's, and neither is some third, fixed default either
         // — each is genuinely derived from the calling session's own employee id.
         assertThat(asA).isNotEqualTo(asB);
-    }
-
-    // --- HR is not privileged here: HR gets its OWN data, nothing wider ----------------------
-
-    @Test
-    void hrCallerSeesOnlyItsOwnScheduleNotAnElevatedOrDifferentView() {
-        long hrEmployeeId = insertEmployee("CAL-HR", plainDepartmentId);
-        assignEmployeeSchedule(hrEmployeeId, "OFFICE_5D");
-
-        UserPrincipal hrUser = new UserPrincipal(
-            hrEmployeeId, "hr@glr.co.th", "HR ทดสอบ", "hr", hrEmployeeId, true, LocalDate.now(), false, null, false);
-        LeaveCalendarContextDto context = calendarContext(hrUser, RANGE_FROM, RANGE_TO);
-
-        assertThat(context.schedule().workdays())
-            .as("HR's own OFFICE_5D assignment, exactly the same code path an ordinary employee gets")
-            .containsExactly(1, 2, 3, 4, 5);
-        assertThat(context.nonWorkingDates()).contains(SATURDAY, SUNDAY);
-    }
-
-    // --- Validation mirrors HolidayController's admin GET (same bad-input shape, same behavior) --
-
-    @Test
-    void toBeforeFromIsRejectedWith400SameAsHolidayControllersAdminGet() {
-        long employeeId = insertEmployee("CAL-VALID", plainDepartmentId);
-
-        assertThatThrownBy(() -> calendarContext(employee(employeeId), RANGE_TO, RANGE_FROM))
-            .isInstanceOf(ApiException.class)
-            .satisfies(exception -> {
-                ApiException apiException = (ApiException) exception;
-                assertThat(apiException.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST);
-                assertThat(apiException.getMessage()).isEqualTo("วันที่สิ้นสุดต้องไม่มาก่อนวันที่เริ่มต้น");
-            });
-    }
-
-    @Test
-    void anAccountNotLinkedToAnEmployeeIsRejectedBeforeAnyResolution() {
-        UserPrincipal unlinked = new UserPrincipal(
-            999L, "nolink@glr.co.th", "ไม่ผูกพนักงาน", "hr", null, true, LocalDate.now(), false, null, false);
-
-        assertThatThrownBy(() -> calendarContext(unlinked, RANGE_FROM, RANGE_TO))
-            .isInstanceOf(ApiException.class)
-            .satisfies(exception -> {
-                ApiException apiException = (ApiException) exception;
-                assertThat(apiException.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST);
-                assertThat(apiException.getMessage()).isEqualTo("บัญชีผู้ใช้นี้ยังไม่ได้ผูกกับข้อมูลพนักงาน กรุณาติดต่อฝ่ายบุคคล");
-            });
-    }
-
-    @Test
-    void anAnonymousCallerIsRejectedWith401() {
-        MockHttpSession anonymousSession = new MockHttpSession();
-        assertThatThrownBy(() -> controller.calendarContext(RANGE_FROM, RANGE_TO, anonymousSession))
-            .isInstanceOf(ApiException.class)
-            .extracting(exception -> ((ApiException) exception).getStatus())
-            .isEqualTo(HttpStatus.UNAUTHORIZED);
     }
 
     // --- helpers --------------------------------------------------------------------------

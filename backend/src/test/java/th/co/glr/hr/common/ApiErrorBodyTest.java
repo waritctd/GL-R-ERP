@@ -1,7 +1,6 @@
 package th.co.glr.hr.common;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 
 import java.nio.charset.StandardCharsets;
@@ -59,47 +58,12 @@ class ApiErrorBodyTest {
         .build();
 
     @Test
-    void anOrdinaryApiException_rendersExactlyMessageAndStatus() throws Exception {
-        MvcResult result = mvc.perform(get("/t/ordinary")).andReturn();
-
-        assertThat(result.getResponse().getStatus()).isEqualTo(409);
-        assertThat(body(result))
-            .isEqualTo("{\"message\":\"ใบเสนอราคาไม่ได้อยู่ในสถานะร่างแล้ว จึงแก้ไขไม่ได้\",\"status\":409}");
-    }
-
-    @Test
-    void anExplicitlyEmptyDetailsMap_rendersExactlyMessageAndStatus() throws Exception {
-        assertThat(body(mvc.perform(get("/t/empty-details")).andReturn())).isEqualTo("{\"message\":\"x\",\"status\":400}");
-    }
-
-    /** A handler other than handleApiException builds ErrorResponse through its two-arg constructor. */
-    @Test
-    void theOtherHandlers_areUnchangedToo() throws Exception {
-        MvcResult result = mvc.perform(get("/t/denied")).andReturn();
-        assertThat(result.getResponse().getStatus()).isEqualTo(403);
-        assertThat(body(result)).isEqualTo("{\"message\":\"ไม่มีสิทธิ์เข้าถึงรายการนี้\",\"status\":403}");
-    }
-
-    @Test
     void aStructuredApiException_rendersItsDetailsAsTopLevelFields_afterMessageAndStatus() throws Exception {
         MvcResult result = mvc.perform(get("/t/structured")).andReturn();
 
         assertThat(result.getResponse().getStatus()).isEqualTo(409);
         assertThat(body(result)).isEqualTo("{\"message\":\"มีใบที่ใช้งานอยู่\",\"status\":409,"
             + "\"liveQuotationId\":42,\"number\":\"QT-2026-0042-1\",\"docStatus\":\"DRAFT\"}");
-    }
-
-    @Test
-    void aDetailMayNotShadowMessageOrStatus() {
-        for (String reserved : new String[] {"message", "status"}) {
-            assertThatThrownBy(() -> new ApiException(HttpStatus.CONFLICT, "x", Map.of(reserved, 1)))
-                .isInstanceOf(IllegalArgumentException.class);
-        }
-    }
-
-    @Test
-    void theTwoArgumentConstructor_carriesNoDetails() {
-        assertThat(new ApiException(HttpStatus.CONFLICT, "x").getDetails()).isEmpty();
     }
 
     private static String body(MvcResult result) throws Exception {

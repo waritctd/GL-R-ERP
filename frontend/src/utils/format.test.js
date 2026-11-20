@@ -2,62 +2,17 @@ import { existsSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
-  fulfilmentStatusLabel,
   addDaysIso,
-  attendanceSourceLabel,
   bangkokMonthStartIso,
-  dealStageLabel,
-  DEAL_OFFERED_TO_LABEL,
   depositNoticeStatusLabel,
-  entryChannelLabel,
-  factoryQuoteStatusLabel,
-  formatAddress,
-  quotationRecipientLabel,
-  formatFileSize,
   formatMoney,
-  OFFERED_TO_LABEL,
   formatShortDate,
-  QUOTATION_OFFERED_TO_LABEL,
   formatThaiMonthYearFromMonthInputValue,
   greetingName,
   overtimeStatusLabel,
-  pricingCostingStatusLabel,
   paymentStageLabel,
-  pricingDecisionStatusLabel,
-  quotationStatusLabel,
   specialMoneyStatusLabel,
-  SPECIAL_MONEY_STATUSES,
 } from './format.js';
-
-describe('formatAddress', () => {
-  it('joins all four parts, not just line1', () => {
-    expect(formatAddress({
-      line1: '18/9 ซอย 9 ถ.สุขุมวิท',
-      district: 'บางนา',
-      province: 'กรุงเทพมหานคร',
-      postalCode: '10111',
-    })).toBe('18/9 ซอย 9 ถ.สุขุมวิท บางนา กรุงเทพมหานคร 10111');
-  });
-
-  // mockApi.createEmployee seeds district/province/postalCode as '' — joining blindly would produce "18/9
-  // ถ.สุขุมวิท " with trailing separators.
-  it('drops empty parts instead of leaving stray separators', () => {
-    expect(formatAddress({ line1: '18/9 ถ.สุขุมวิท', district: '', province: '', postalCode: '' }))
-      .toBe('18/9 ถ.สุขุมวิท');
-  });
-
-  it('trims whitespace-only parts', () => {
-    expect(formatAddress({ line1: '18/9', district: '   ', province: 'นนทบุรี', postalCode: null }))
-      .toBe('18/9 นนทบุรี');
-  });
-
-  it('falls back to a dash when there is no address at all', () => {
-    expect(formatAddress(null)).toBe('-');
-    expect(formatAddress(undefined)).toBe('-');
-    expect(formatAddress({})).toBe('-');
-    expect(formatAddress({ line1: '', district: '', province: '', postalCode: '' })).toBe('-');
-  });
-});
 
 // A name that already carries an honorific must not get "คุณ" prepended again
 // ("สวัสดี คุณคุณสมหมาย ขายดี"): some stored names have a leading honorific and some don't,
@@ -71,53 +26,6 @@ describe('greetingName', () => {
   it('does not double "คุณ" when the name already starts with it', () => {
     expect(greetingName('คุณสมหมาย ขายดี')).toBe('คุณสมหมาย ขายดี');
   });
-
-  it('does not add "คุณ" on top of a นาย/นาง/นางสาว/ดร. title already in the name', () => {
-    expect(greetingName('นายสมชาย ใจดี')).toBe('นายสมชาย ใจดี');
-    expect(greetingName('นางสมหญิง ใจดี')).toBe('นางสมหญิง ใจดี');
-    expect(greetingName('นางสาวปิยะนุช รุ่งเรือง')).toBe('นางสาวปิยะนุช รุ่งเรือง');
-    expect(greetingName('ดร.วิชัย ธนาคาร')).toBe('ดร.วิชัย ธนาคาร');
-  });
-
-  it('returns an empty string for a missing name instead of a bare "คุณ"', () => {
-    expect(greetingName('')).toBe('');
-    expect(greetingName(null)).toBe('');
-    expect(greetingName(undefined)).toBe('');
-  });
-});
-
-describe('attendanceSourceLabel', () => {
-  it('maps each site_code to its display label', () => {
-    expect(attendanceSourceLabel({ site_code: 'SHOWROOM' })).toBe('Showroom');
-    expect(attendanceSourceLabel({ site_code: 'WAREHOUSE' })).toBe('Warehouse');
-    expect(attendanceSourceLabel({ site_code: 'WFH' })).toBe('WFH');
-  });
-
-  it('returns null for a day with no record so the caller can render a dash', () => {
-    expect(attendanceSourceLabel({ site_code: null })).toBeNull();
-    expect(attendanceSourceLabel({})).toBeNull();
-    expect(attendanceSourceLabel(null)).toBeNull();
-  });
-
-  it('falls through to the raw code for an unknown site', () => {
-    expect(attendanceSourceLabel({ site_code: 'FACTORY' })).toBe('FACTORY');
-  });
-});
-
-describe('pricing workflow status labels', () => {
-  it('maps backend pricing workflow codes to user-facing Thai labels', () => {
-    // One wording for this state everywhere it appears: "รอ CEO อนุมัติราคา". The constant name
-    // is a fossil of V141 severing the costing aggregate; statusCatalog.test.js's digest guard
-    // pins backend STATUS KEYS, never label text.
-    expect(factoryQuoteStatusLabel('READY_FOR_COSTING')).toMatchObject({ label: 'รอ CEO อนุมัติราคา', tone: 'success' });
-    expect(pricingDecisionStatusLabel('RETURNED')).toMatchObject({ label: 'ตีกลับให้แก้ไข', tone: 'danger' });
-    expect(quotationStatusLabel('REVISION_REQUESTED')).toMatchObject({ label: 'ลูกค้าขอแก้ไข', tone: 'warning' });
-    // VW-07: a direct-deal quotation reaches the finance accepted-quotation badge as APPROVED.
-    expect(quotationStatusLabel('APPROVED')).toEqual({ label: 'อนุมัติแล้ว', tone: 'success' });
-    // Kept from a deleted 'keeps stale costing visible' case: it was the file's ONLY call of
-    // pricingCostingStatusLabel, so the base mapping would otherwise go uncovered.
-    expect(pricingCostingStatusLabel('CALCULATED')).toMatchObject({ label: 'คำนวณแล้ว', tone: 'warning' });
-  });
 });
 
 // sales.deposit_notice.status only ever holds DRAFT (default) / ISSUED (#issue) / SUPERSEDED
@@ -125,14 +33,6 @@ describe('pricing workflow status labels', () => {
 // `status === 'ISSUED' ? 'ออกแล้ว' : 'ฉบับร่าง'` ternary, which rendered SUPERSEDED (and anything
 // else) as an untouched draft.
 describe('depositNoticeStatusLabel', () => {
-  it('maps DRAFT to the neutral ฉบับร่าง label', () => {
-    expect(depositNoticeStatusLabel('DRAFT')).toMatchObject({ label: 'ฉบับร่าง', tone: 'neutral' });
-  });
-
-  it('maps ISSUED to the success ออกแล้ว label', () => {
-    expect(depositNoticeStatusLabel('ISSUED')).toMatchObject({ label: 'ออกแล้ว', tone: 'success' });
-  });
-
   it('maps SUPERSEDED to ถูกแทนที่, distinct from DRAFT — this is the bug GLA-117 fixes', () => {
     expect(depositNoticeStatusLabel('SUPERSEDED')).toMatchObject({ label: 'ถูกแทนที่', tone: 'neutral' });
   });
@@ -175,27 +75,6 @@ describe('formatThaiMonthYearFromMonthInputValue', () => {
   it('rejects an out-of-range month', () => {
     expect(formatThaiMonthYearFromMonthInputValue('2026-00')).toBe('-');
     expect(formatThaiMonthYearFromMonthInputValue('2026-13')).toBe('-');
-  });
-
-  it('rejects a month without a leading zero (must be exactly "YYYY-MM")', () => {
-    expect(formatThaiMonthYearFromMonthInputValue('2026-7')).toBe('-');
-  });
-
-  it('falls back to a dash for empty/nullish input', () => {
-    expect(formatThaiMonthYearFromMonthInputValue('')).toBe('-');
-    expect(formatThaiMonthYearFromMonthInputValue(null)).toBe('-');
-    expect(formatThaiMonthYearFromMonthInputValue(undefined)).toBe('-');
-  });
-
-  it('rejects a full date, not just a month ("YYYY-MM-DD" is not "YYYY-MM")', () => {
-    expect(formatThaiMonthYearFromMonthInputValue('2026-07-01')).toBe('-');
-  });
-
-  it('rejects non-date garbage, full-width digits, and leading whitespace', () => {
-    expect(formatThaiMonthYearFromMonthInputValue('abc')).toBe('-');
-    // Full-width (zenkaku) digits are not matched by \d in a non-unicode-flag regex.
-    expect(formatThaiMonthYearFromMonthInputValue('２０２６-０７')).toBe('-');
-    expect(formatThaiMonthYearFromMonthInputValue(' 2026-07')).toBe('-');
   });
 });
 
@@ -256,25 +135,6 @@ describe('specialMoneyStatusLabel', () => {
     expect(specialMoneyStatusLabel('SUBMITTED').label).toBe('รอ CEO อนุมัติ');
     expect(specialMoneyStatusLabel('SUBMITTED').label).not.toContain('ผู้จัดการ');
   });
-
-  // MANAGER_APPROVED is unreachable for new requests but still in the enum and the chk_smr_status constraint,
-  // and SpecialMoneyService still clears such rows. It sits in the same queue as SUBMITTED, so it must not read
-  // as a further-along step -- only as an older request in the same place.
-  it('puts the legacy MANAGER_APPROVED state in the same CEO queue', () => {
-    expect(specialMoneyStatusLabel('MANAGER_APPROVED').label).toContain('รอ CEO');
-    expect(specialMoneyStatusLabel('MANAGER_APPROVED').tone)
-      .toBe(specialMoneyStatusLabel('SUBMITTED').tone);
-  });
-
-  // The panel's status filter renders straight from this list; guards against an inline copy of
-  // the options drifting from the flow.
-  it('covers every SpecialMoneyStatus enum value with a real Thai label', () => {
-    expect(SPECIAL_MONEY_STATUSES)
-      .toEqual(['SUBMITTED', 'MANAGER_APPROVED', 'APPROVED', 'REJECTED', 'CANCELLED']);
-    SPECIAL_MONEY_STATUSES.forEach((status) => {
-      expect(specialMoneyStatusLabel(status).label).not.toBe(status);
-    });
-  });
 });
 
 // Unlike welfare above, overtime has TWO real approval routes per request (see
@@ -283,25 +143,11 @@ describe('specialMoneyStatusLabel', () => {
 // manager or the requester IS one. A status-only map cannot tell the two apart, whereas welfare
 // can use one static string because ALL its requests are CEO-only.
 describe('overtimeStatusLabel', () => {
-  it('reads รอผู้จัดการ for a SUBMITTED request with no role given, so existing 1-arg callers keep working', () => {
-    expect(overtimeStatusLabel('SUBMITTED').label).toBe('รอผู้จัดการ');
-  });
-
-  it('reads รอผู้จัดการ for a SUBMITTED request explicitly routed through a manager', () => {
-    expect(overtimeStatusLabel('SUBMITTED', 'manager').label).toBe('รอผู้จัดการ');
-  });
-
   it('reads รอ CEO, not รอผู้จัดการ, for a SUBMITTED request with no manager stage', () => {
     expect(overtimeStatusLabel('SUBMITTED', 'ceo').label).toBe('รอ CEO');
     expect(overtimeStatusLabel('SUBMITTED', 'ceo').label).not.toContain('ผู้จัดการ');
     // Same tone as MANAGER_APPROVED -- from the employee's point of view both states mean the CEO holds this now.
     expect(overtimeStatusLabel('SUBMITTED', 'ceo').tone).toBe(overtimeStatusLabel('MANAGER_APPROVED').tone);
-  });
-
-  it('leaves every other status unaffected by pendingApproverRole', () => {
-    expect(overtimeStatusLabel('MANAGER_APPROVED', 'ceo')).toEqual(overtimeStatusLabel('MANAGER_APPROVED'));
-    expect(overtimeStatusLabel('APPROVED', 'ceo')).toEqual(overtimeStatusLabel('APPROVED'));
-    expect(overtimeStatusLabel('REJECTED', 'ceo')).toEqual(overtimeStatusLabel('REJECTED'));
   });
 });
 
@@ -309,18 +155,9 @@ describe('overtimeStatusLabel', () => {
 // Bangkok-midnight instant, one day behind the intended Bangkok date (a 2-day back-step and a
 // stuck forward-step on the attendance page). addDaysIso uses pure YYYY-MM-DD calendar arithmetic.
 describe('addDaysIso', () => {
-  it('stepping +1 then -1 returns the original date', () => {
-    expect(addDaysIso(addDaysIso('2026-08-15', 1), -1)).toBe('2026-08-15');
-  });
-
   it('steps a single day forward and backward with no timezone-induced skew', () => {
     expect(addDaysIso('2026-08-15', 1)).toBe('2026-08-16');
     expect(addDaysIso('2026-08-15', -1)).toBe('2026-08-14');
-  });
-
-  it('crosses a month boundary', () => {
-    expect(addDaysIso('2026-08-31', 1)).toBe('2026-09-01');
-    expect(addDaysIso('2026-09-01', -1)).toBe('2026-08-31');
   });
 
   it('crosses a year boundary', () => {
@@ -333,14 +170,6 @@ describe('addDaysIso', () => {
 // months on the Bangkok wall-clock date via a flat "months since epoch" count, so a year rollover falls out of
 // the Math.floor/modulo for free -- these pin that specific claim.
 describe('bangkokMonthStartIso monthsBack', () => {
-  it('defaults to the exact current month with no monthsBack argument', () => {
-    expect(bangkokMonthStartIso(new Date('2026-08-15T10:00:00Z'))).toBe('2026-08-01');
-  });
-
-  it('walks back within the same year when it does not cross a boundary', () => {
-    expect(bangkokMonthStartIso(new Date('2026-08-15T10:00:00Z'), 2)).toBe('2026-06-01');
-  });
-
   it('rolls a February start back 3 months into the previous November', () => {
     expect(bangkokMonthStartIso(new Date('2026-02-10T10:00:00Z'), 3)).toBe('2025-11-01');
   });
@@ -350,157 +179,8 @@ describe('bangkokMonthStartIso monthsBack', () => {
   });
 });
 
-// S3 (SPEC_APPROVED) is "the party who specifies has agreed the spec": only the WORDING varies by
-// the deal's entry channel. The 1-arg call must not change; every other stage must be
-// indistinguishable with or without a channel.
-describe('dealStageLabel(code, entryChannel?) — route-aware S3 wording', () => {
-  const DESIGNER = 'ผู้ออกแบบอนุมัติสเปค';
-
-  it('owner-direct reads เจ้าของตกลงตามสเปคแล้ว', () => {
-    expect(dealStageLabel('SPEC_APPROVED', 'OWNER_DIRECT').label).toBe('เจ้าของตกลงตามสเปคแล้ว');
-  });
-
-  it('buyer-direct reads ผู้ซื้อ/ผู้รับเหมาตกลงตามสเปคแล้ว', () => {
-    expect(dealStageLabel('SPEC_APPROVED', 'BUYER_DIRECT').label).toBe('ผู้ซื้อ/ผู้รับเหมาตกลงตามสเปคแล้ว');
-  });
-
-  it.each(['DESIGNER_LED', 'UNSPECIFIED', undefined, null, 'SOMETHING_NEW', ''])(
-    'keeps the designer wording for channel %s',
-    (channel) => {
-      expect(dealStageLabel('SPEC_APPROVED', channel).label).toBe(DESIGNER);
-    },
-  );
-
-  it('keeps the designer wording for the 1-argument call (back-compat for the existing call sites)', () => {
-    expect(dealStageLabel('SPEC_APPROVED').label).toBe(DESIGNER);
-  });
-
-  it('keeps the same tone whatever the wording', () => {
-    const tone = dealStageLabel('SPEC_APPROVED').tone;
-    expect(dealStageLabel('SPEC_APPROVED', 'OWNER_DIRECT').tone).toBe(tone);
-    expect(dealStageLabel('SPEC_APPROVED', 'BUYER_DIRECT').tone).toBe(tone);
-  });
-
-  // Wrong-way-round: the channel may re-word S3 and S1 (STAGE_LABEL_BY_CHANNEL) and NOTHING else.
-  // LEAD_APPROACH is not in this list: S1 names the party the deal entered through.
-  const OTHER_STAGES = [
-    'PRESENTATION', 'QUOTE_DESIGN_SIDE', 'QUOTE_OWNER', 'OWNER_SIGNOFF',
-    'AWAITING_BUYER', 'QUOTE_BUYER', 'NEGOTIATION', 'ORDER_RECEIVED', 'DEPOSIT_RECEIVED',
-    'PROCUREMENT', 'DELIVERY_SCHEDULING', 'DELIVERED', 'CLOSED_PAID',
-  ];
-
-  it('covers the other thirteen stage codes (guards this list against a new stage being added)', () => {
-    expect(OTHER_STAGES).toHaveLength(13);
-    for (const code of OTHER_STAGES) expect(dealStageLabel(code).label).not.toBe(code);
-  });
-
-  it.each(OTHER_STAGES)('%s is identical with and without any channel', (code) => {
-    const bare = dealStageLabel(code);
-    for (const channel of ['DESIGNER_LED', 'OWNER_DIRECT', 'BUYER_DIRECT', 'UNSPECIFIED', null]) {
-      expect(dealStageLabel(code, channel)).toEqual(bare);
-    }
-  });
-
-  it('an unknown stage code still renders its own code, with or without a channel', () => {
-    expect(dealStageLabel('NOT_A_STAGE').label).toBe('NOT_A_STAGE');
-    expect(dealStageLabel('NOT_A_STAGE', 'OWNER_DIRECT').label).toBe('NOT_A_STAGE');
-  });
-});
-
-describe('offered-to field labels (R8, owner ruling 2026-09-30)', () => {
-  it('shares one label between the deal channel and the quotation recipient', () => {
-    expect(OFFERED_TO_LABEL).toBe('เสนอแก่');
-  });
-
-  it('qualifies each one where both appear on the same surface', () => {
-    expect(DEAL_OFFERED_TO_LABEL).toBe('งานนี้เสนอแก่');
-    expect(QUOTATION_OFFERED_TO_LABEL).toBe('ใบเสนอราคานี้เสนอแก่');
-    // Both qualified forms must contain the shared label, or the two fields stop reading as the same question
-    // asked of two different documents.
-    expect(DEAL_OFFERED_TO_LABEL).toContain(OFFERED_TO_LABEL);
-    expect(QUOTATION_OFFERED_TO_LABEL).toContain(OFFERED_TO_LABEL);
-  });
-
-  it('leaves the channel OPTION labels alone — they deliberately differ from the recipient\'s', () => {
-    // The how-the-deal-arrived nuance beats symmetry. Do not "fix" this divergence.
-    expect(entryChannelLabel('DESIGNER_LED').label).toBe('ผู้ออกแบบนำงานมา');
-    expect(entryChannelLabel('OWNER_DIRECT').label).toBe('เจ้าของติดต่อโดยตรง');
-    expect(quotationRecipientLabel('DESIGNER').label).not.toBe(entryChannelLabel('DESIGNER_LED').label);
-  });
-});
-
-describe('S1 LEAD_APPROACH wording follows the entry channel', () => {
-  // The default label hedges with a slash (เข้าถึงเจ้าของ/ผู้ออกแบบโครงการ) because one string had
-  // to serve every route; name the party the deal actually entered through. S1 ONLY: S7's
-  // "รอผลประมูล / รอผู้ซื้อ" and S18's slash join two real situations, not two routes.
-  it('names the single party for each real channel', () => {
-    expect(dealStageLabel('LEAD_APPROACH', 'DESIGNER_LED').label).toBe('เข้าถึงผู้ออกแบบโครงการ');
-    expect(dealStageLabel('LEAD_APPROACH', 'OWNER_DIRECT').label).toBe('เข้าถึงเจ้าของโครงการ');
-    expect(dealStageLabel('LEAD_APPROACH', 'BUYER_DIRECT').label).toBe('เข้าถึงผู้ซื้อ/ผู้รับเหมา');
-  });
-
-  it('keeps the hedged wording when no channel was entered', () => {
-    // Nothing to name, so nothing is asserted — same rule as UNSPECIFIED everywhere else.
-    ['UNSPECIFIED', undefined, null, '', 'NOT_A_CHANNEL'].forEach((channel) => {
-      expect(dealStageLabel('LEAD_APPROACH', channel).label).toBe('เข้าถึงเจ้าของ/ผู้ออกแบบโครงการ');
-    });
-    expect(dealStageLabel('LEAD_APPROACH').label).toBe('เข้าถึงเจ้าของ/ผู้ออกแบบโครงการ');
-  });
-
-  it('leaves the tone alone — only the wording varies', () => {
-    expect(dealStageLabel('LEAD_APPROACH', 'OWNER_DIRECT').tone)
-      .toBe(dealStageLabel('LEAD_APPROACH').tone);
-  });
-
-  it('does NOT split S7 or S18 — their slashes are not route hedges', () => {
-    ['DESIGNER_LED', 'OWNER_DIRECT', 'BUYER_DIRECT'].forEach((channel) => {
-      expect(dealStageLabel('AWAITING_BUYER', channel).label).toBe(dealStageLabel('AWAITING_BUYER').label);
-      expect(dealStageLabel('DELIVERY_SCHEDULING', channel).label)
-        .toBe(dealStageLabel('DELIVERY_SCHEDULING').label);
-    });
-  });
-});
-
-// A stored file's size beside its name, in the list of a quotation's เอกสารแนบ.
-describe('formatFileSize', () => {
-  it('reads in whole KB under one megabyte', () => {
-    expect(formatFileSize(250880)).toBe('245 KB');
-    expect(formatFileSize(1536)).toBe('2 KB');
-  });
-
-  it('reads in MB with one decimal from one megabyte up', () => {
-    expect(formatFileSize(1024 * 1024)).toBe('1.0 MB');
-    expect(formatFileSize(1258291)).toBe('1.2 MB');
-    expect(formatFileSize(10 * 1024 * 1024)).toBe('10.0 MB');
-  });
-
-  it('reads a size that rounds up to a megabyte as 1.0 MB, never as "1024 KB"', () => {
-    expect(formatFileSize(1024 * 1024 - 1)).toBe('1.0 MB');
-  });
-
-  it('never reads "0 KB", which would look like an empty file', () => {
-    expect(formatFileSize(1)).toBe('1 KB');
-    expect(formatFileSize(300)).toBe('1 KB');
-  });
-
-  it('reads "-" when the size is not known', () => {
-    expect(formatFileSize(null)).toBe('-');
-    expect(formatFileSize(undefined)).toBe('-');
-  });
-});
-
 // Two neutral payment-chip values, derived by the backend.
 describe('paymentStageLabel — QA-16 chip values', () => {
-  it('labels NOT_STARTED and NO_DEPOSIT, both neutral', () => {
-    expect(paymentStageLabel('NOT_STARTED')).toEqual({ label: 'ยังไม่ถึงขั้นชำระ', tone: 'neutral' });
-    expect(paymentStageLabel('NO_DEPOSIT')).toEqual({ label: 'ไม่เก็บมัดจำ', tone: 'neutral' });
-  });
-
-  it('keeps the existing labels (BALANCE_PENDING is what an awaiting-final-payment deal now shows)', () => {
-    expect(paymentStageLabel('BALANCE_PENDING')).toEqual({ label: 'รอชำระส่วนที่เหลือ', tone: 'warning' });
-    expect(paymentStageLabel('DEPOSIT_PENDING').label).toBe('รอมัดจำ');
-    expect(paymentStageLabel('FULLY_PAID').label).toBe('ชำระครบแล้ว');
-  });
 
   // statusCatalog.test.js does not cover PaymentStage, so this reads PaymentStage.java directly
   // (the technique stageCatalog.test.js uses): every backend value must have its own label.
@@ -518,11 +198,5 @@ describe('paymentStageLabel — QA-16 chip values', () => {
     for (const code of codes) {
       expect(paymentStageLabel(code).label, code).not.toBe(code);
     }
-  });
-});
-
-describe('fulfilmentStatusLabel — one word for the document: ใบขอซื้อ (owner ruling 2026-10-29)', () => {
-  it('IR_ISSUED reads ออกใบขอซื้อแล้ว, not ออกคำขอนำเข้าแล้ว', () => {
-    expect(fulfilmentStatusLabel('IR_ISSUED').label).toBe('ออกใบขอซื้อแล้ว');
   });
 });

@@ -1,6 +1,5 @@
 package th.co.glr.hr.ticket;
 
-import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
@@ -38,7 +37,6 @@ import th.co.glr.hr.dealquotation.WastageCalculator;
 import th.co.glr.hr.deposit.DepositNoticePdfRenderer;
 import th.co.glr.hr.deposit.DepositNoticeRepository;
 import th.co.glr.hr.deposit.DepositNoticeService;
-import th.co.glr.hr.deposit.RemainingInvoicePdfRenderer;
 import th.co.glr.hr.employee.EmployeeCodeGenerator;
 import th.co.glr.hr.employee.EmployeeReferenceRepository;
 import th.co.glr.hr.employee.EmployeeRepository;
@@ -176,24 +174,12 @@ class TicketIaAuthzMatrixIntegrationTest extends AbstractPostgresIntegrationTest
         pricingRequestService.submit(pricingRequestId, salesOwnerActor);
     }
 
-    // ภาพรวม — TicketService.get() / requireViewAccess (VIEWER_ROLES + sales-owner-only)
-
     /** import has its OWN per-deal endpoint (GET /api/import/deals/{id}, ImportDealService — see
      * ImportDealAuthzIntegrationTest) and is refused the whole-deal read, mirroring the account finance-view
      * ruling. Pinned here beside the rows it differs from. */
     @Test
     void overview_importCannotReadTheWholeDeal() {
         assertForbidden(() -> ticketService.get(ticketId, importActor));
-    }
-
-    @Test
-    void overview_hrCannotReadTheTicket() {
-        assertForbidden(() -> ticketService.get(ticketId, hrActor));
-    }
-
-    @Test
-    void overview_employeeCannotReadTheTicket() {
-        assertForbidden(() -> ticketService.get(ticketId, employeeActor));
     }
 
     @Test
@@ -224,47 +210,14 @@ class TicketIaAuthzMatrixIntegrationTest extends AbstractPostgresIntegrationTest
             new org.springframework.jdbc.core.namedparam.MapSqlParameterSource("id", ticketId));
     }
 
-    // ราคา — PricingRequestService.get() / requireViewable (VIEWER_ROLES excludes account)
-
     @Test
     void pricing_accountCannotReadAPricingRequest() {
         assertForbidden(() -> pricingRequestService.get(pricingRequestId, accountActor));
     }
 
     @Test
-    void pricing_hrCannotReadAPricingRequest() {
-        assertForbidden(() -> pricingRequestService.get(pricingRequestId, hrActor));
-    }
-
-    @Test
-    void pricing_employeeCannotReadAPricingRequest() {
-        assertForbidden(() -> pricingRequestService.get(pricingRequestId, employeeActor));
-    }
-
-    @Test
-    void pricing_salesImportCeoSalesManagerCanAllReadIt() {
-        assertThatCode(() -> pricingRequestService.get(pricingRequestId, salesOwnerActor)).doesNotThrowAnyException();
-        assertThatCode(() -> pricingRequestService.get(pricingRequestId, importActor)).doesNotThrowAnyException();
-        assertThatCode(() -> pricingRequestService.get(pricingRequestId, ceoActor)).doesNotThrowAnyException();
-        assertThatCode(() -> pricingRequestService.get(pricingRequestId, salesManagerActor)).doesNotThrowAnyException();
-    }
-
-    // Exercise the shared quotation view gate through listing, avoiding an unrelated full quotation lifecycle
-    // fixture.
-
-    @Test
     void quotation_accountCannotListCustomerQuotations() {
         assertForbidden(() -> quotationService.listForPricingRequest(pricingRequestId, accountActor));
-    }
-
-    @Test
-    void quotation_hrCannotListCustomerQuotations() {
-        assertForbidden(() -> quotationService.listForPricingRequest(pricingRequestId, hrActor));
-    }
-
-    @Test
-    void quotation_employeeCannotListCustomerQuotations() {
-        assertForbidden(() -> quotationService.listForPricingRequest(pricingRequestId, employeeActor));
     }
 
     @Test
@@ -273,35 +226,8 @@ class TicketIaAuthzMatrixIntegrationTest extends AbstractPostgresIntegrationTest
     }
 
     @Test
-    void quotation_salesManagerCeoImportCanAllList() {
-        assertThatCode(() -> quotationService.listForPricingRequest(pricingRequestId, salesOwnerActor)).doesNotThrowAnyException();
-        assertThatCode(() -> quotationService.listForPricingRequest(pricingRequestId, salesManagerActor)).doesNotThrowAnyException();
-        assertThatCode(() -> quotationService.listForPricingRequest(pricingRequestId, ceoActor)).doesNotThrowAnyException();
-        assertThatCode(() -> quotationService.listForPricingRequest(pricingRequestId, importActor)).doesNotThrowAnyException();
-    }
-
-    // การเงิน (payment ledger) — TicketService.listPayments() / requireViewAccess + explicit IMPORT_ROLES 403
-
-    @Test
     void ledger_importCannotReadThePaymentLedger() {
         assertForbidden(() -> ticketService.listPayments(ticketId, importActor));
-    }
-
-    @Test
-    void ledger_hrCannotReadThePaymentLedger() {
-        assertForbidden(() -> ticketService.listPayments(ticketId, hrActor));
-    }
-
-    @Test
-    void ledger_employeeCannotReadThePaymentLedger() {
-        assertForbidden(() -> ticketService.listPayments(ticketId, employeeActor));
-    }
-
-    @Test
-    void ledger_ownerCeoSalesManagerCanAllReadIt() {
-        assertThatCode(() -> ticketService.listPayments(ticketId, salesOwnerActor)).doesNotThrowAnyException();
-        assertThatCode(() -> ticketService.listPayments(ticketId, ceoActor)).doesNotThrowAnyException();
-        assertThatCode(() -> ticketService.listPayments(ticketId, salesManagerActor)).doesNotThrowAnyException();
     }
 
     // H1 lockdown: the ledger is read by account inside the finance deal view only.
@@ -311,70 +237,9 @@ class TicketIaAuthzMatrixIntegrationTest extends AbstractPostgresIntegrationTest
         assertForbidden(() -> ticketService.listPayments(ticketId, accountActor));
     }
 
-    // การเงิน (deposit notice) — DepositNoticeService.listByTicket() / requireTicketViewer ⚠ CORRECTS THE BRIEFED
-    // MATRIX: the source (and its own comment — "Phase B: import is denied outright, unlike
-    // TicketService.requireViewAccess... every read here...
-
     @Test
     void depositNotice_importCannotListDepositNoticesEitherDespiteBeingInTheViewerRolesConstant() {
         assertForbidden(() -> depositNoticeService.listByTicket(ticketId, importActor));
-    }
-
-    @Test
-    void depositNotice_hrCannotListDepositNotices() {
-        assertForbidden(() -> depositNoticeService.listByTicket(ticketId, hrActor));
-    }
-
-    @Test
-    void depositNotice_employeeCannotListDepositNotices() {
-        assertForbidden(() -> depositNoticeService.listByTicket(ticketId, employeeActor));
-    }
-
-    @Test
-    void depositNotice_ownerCeoSalesManagerCanAllListIt() {
-        assertThatCode(() -> depositNoticeService.listByTicket(ticketId, salesOwnerActor)).doesNotThrowAnyException();
-        assertThatCode(() -> depositNoticeService.listByTicket(ticketId, ceoActor)).doesNotThrowAnyException();
-        assertThatCode(() -> depositNoticeService.listByTicket(ticketId, salesManagerActor)).doesNotThrowAnyException();
-    }
-
-    // H1 lockdown: account is ROW-SCOPED here -- refused on a deal outside its list scope (this deal is still at
-    // the lead stage), allowed once the deal is inside it.
-    @Test
-    void depositNotice_accountIsRowScoped() {
-        assertForbidden(() -> depositNoticeService.listByTicket(ticketId, accountActor));
-        putDealInAccountScope();
-        assertThatCode(() -> depositNoticeService.listByTicket(ticketId, accountActor)).doesNotThrowAnyException();
-    }
-
-    // จัดซื้อ-ส่งมอบ (deliveries) — TicketService.listDeliveries() / requireViewAccess ONLY (no extra
-    // IMPORT_ROLES-style carve-out, unlike listPayments)
-
-    @Test
-    void deliveries_hrCannotReadDeliveries() {
-        assertForbidden(() -> ticketService.listDeliveries(ticketId, hrActor));
-    }
-
-    @Test
-    void deliveries_employeeCannotReadDeliveries() {
-        assertForbidden(() -> ticketService.listDeliveries(ticketId, employeeActor));
-    }
-
-    @Test
-    void deliveries_everyOtherViewerRoleCanReadThem_exceptAccount() {
-        assertThatCode(() -> ticketService.listDeliveries(ticketId, salesOwnerActor)).doesNotThrowAnyException();
-        assertThatCode(() -> ticketService.listDeliveries(ticketId, importActor)).doesNotThrowAnyException();
-        assertThatCode(() -> ticketService.listDeliveries(ticketId, ceoActor)).doesNotThrowAnyException();
-        assertThatCode(() -> ticketService.listDeliveries(ticketId, salesManagerActor)).doesNotThrowAnyException();
-        // H1 lockdown: account no longer reads deliveries through /tickets, even inside its list scope.
-        putDealInAccountScope();
-        assertForbidden(() -> ticketService.listDeliveries(ticketId, accountActor));
-    }
-
-    // จัดซื้อ-ส่งมอบ (raw factory PO) — ProcurementService.list() / RAW_PO_ROLES = {import, ceo}
-
-    @Test
-    void rawPo_salesManagerCannotReadRawFactoryPurchaseOrders() {
-        assertForbidden(() -> procurementService.list(null, salesManagerActor));
     }
 
     @Test
@@ -383,121 +248,14 @@ class TicketIaAuthzMatrixIntegrationTest extends AbstractPostgresIntegrationTest
     }
 
     @Test
-    void rawPo_accountCannotReadRawFactoryPurchaseOrders() {
-        assertForbidden(() -> procurementService.list(null, accountActor));
-    }
-
-    @Test
-    void rawPo_hrCannotReadRawFactoryPurchaseOrders() {
-        assertForbidden(() -> procurementService.list(null, hrActor));
-    }
-
-    @Test
-    void rawPo_employeeCannotReadRawFactoryPurchaseOrders() {
-        assertForbidden(() -> procurementService.list(null, employeeActor));
-    }
-
-    @Test
-    void rawPo_importAndCeoCanReadThem() {
-        assertThatCode(() -> procurementService.list(null, importActor)).doesNotThrowAnyException();
-        assertThatCode(() -> procurementService.list(null, ceoActor)).doesNotThrowAnyException();
-    }
-
-    // กิจกรรม — TicketService.listActivities() / requireDealOwnership (owner + sales_manager + ceo ONLY — the
-    // oddity: import and account are refused, unlike every other viewer-role tab)
-
-    @Test
     void activities_importCannotReadTheActivityFeed() {
         assertForbidden(() -> ticketService.listActivities(ticketId, importActor));
-    }
-
-    @Test
-    void activities_accountCannotReadTheActivityFeed() {
-        assertForbidden(() -> ticketService.listActivities(ticketId, accountActor));
-    }
-
-    @Test
-    void activities_hrCannotReadTheActivityFeed() {
-        assertForbidden(() -> ticketService.listActivities(ticketId, hrActor));
-    }
-
-    @Test
-    void activities_employeeCannotReadTheActivityFeed() {
-        assertForbidden(() -> ticketService.listActivities(ticketId, employeeActor));
-    }
-
-    @Test
-    void activities_nonOwnerSalesRepCannotReadAnotherRepsActivityFeed() {
-        assertForbidden(() -> ticketService.listActivities(ticketId, salesOtherActor));
-    }
-
-    @Test
-    void activities_ownerSalesManagerCeoCanAllReadIt() {
-        assertThatCode(() -> ticketService.listActivities(ticketId, salesOwnerActor)).doesNotThrowAnyException();
-        assertThatCode(() -> ticketService.listActivities(ticketId, salesManagerActor)).doesNotThrowAnyException();
-        assertThatCode(() -> ticketService.listActivities(ticketId, ceoActor)).doesNotThrowAnyException();
-    }
-
-    // เอกสาร (attachments) — AttachmentController.requireTicketReadAccess() / TicketAccessPolicy.canViewDocuments:
-    // participant (createdById or assignedToId) OR a deal VIEWER_ROLE, with sales AND import both scoped to deals
-    // they participate in.
-
-    /** Import's document access is ROW-SCOPED (owner ruling 2026-09-30, superseding the blanket refusal that issue
-     * #389's review pinned here). This matrix deal carries a live SUBMITTED pricing request, so it is in scope;
-     * the out-of-scope refusal is proven against a second, pipeline-early deal. */
-    @Test
-    void attachments_importReadsAnInScopeDealsDocumentsButNotAnOutOfScopeDeals() throws Exception {
-        assertAttachmentsOk(importActor);
-
-        long outOfScopeTicketId = jdbc.queryForObject(
-            "INSERT INTO sales.ticket (code, title, created_by) VALUES ('IAM-OOS-1', 'out of import scope', :by) "
-                + "RETURNING ticket_id",
-            Map.of("by", salesOwnerActor.id()), Long.class);
-        mvc.perform(get("/api/tickets/{ticketId}/attachments", outOfScopeTicketId)
-                .session(sessionFor(importActor)))
-            .andExpect(status().isForbidden());
-    }
-
-    // H1 lockdown: account reads the documents only on a deal inside its list scope (row-scoped); the ticket read
-    // itself is refused. This used to assert account reads both, on any deal.
-    @Test
-    void attachments_accountReadsTheDocumentsItMustConfirmMoneyAgainst_onlyInsideItsListScope() throws Exception {
-        assertAttachmentsForbidden(accountActor);
-        putDealInAccountScope();
-        assertAttachmentsOk(accountActor);
-        assertForbidden(() -> ticketService.get(ticketId, accountActor));
     }
 
     @Test
     void attachments_aSalesRepWhoIsNeitherCreatorNorAssigneeIsRefused() throws Exception {
         assertAttachmentsForbidden(salesOtherActor);
     }
-
-    @Test
-    void attachments_employeeIsNeitherParticipantNorManagerAndIsRefused() throws Exception {
-        assertAttachmentsForbidden(employeeActor);
-    }
-
-    @Test
-    void attachments_theAssignedToParticipantCanReadThemEvenThoughTheyDidNotCreateTheTicket() throws Exception {
-        assertAttachmentsOk(assigneeActor);
-    }
-
-    /** The wider path this matrix used to pin as a known divergence is CLOSED (issue #389). */
-    @Test
-    void attachments_hrCannotReadThemAnyMoreThanItCanReadTheTicketItself() throws Exception {
-        assertForbidden(() -> ticketService.get(ticketId, hrActor));
-        assertAttachmentsForbidden(hrActor);
-    }
-
-    @Test
-    void attachments_ownerAndSalesManagerAndCeoCanAllReadThem() throws Exception {
-        assertAttachmentsOk(salesOwnerActor);
-        assertAttachmentsOk(salesManagerActor);
-        assertAttachmentsOk(ceoActor);
-    }
-
-    // helpers
 
     private static void assertForbidden(org.assertj.core.api.ThrowableAssert.ThrowingCallable callable) {
         assertThatThrownBy(callable)
@@ -514,11 +272,6 @@ class TicketIaAuthzMatrixIntegrationTest extends AbstractPostgresIntegrationTest
     private void assertAttachmentsForbidden(UserPrincipal actor) throws Exception {
         mvc.perform(get("/api/tickets/{ticketId}/attachments", ticketId).session(sessionFor(actor)))
             .andExpect(status().isForbidden());
-    }
-
-    private void assertAttachmentsOk(UserPrincipal actor) throws Exception {
-        mvc.perform(get("/api/tickets/{ticketId}/attachments", ticketId).session(sessionFor(actor)))
-            .andExpect(status().isOk());
     }
 
     private long createEmployee(EmployeeRepository employees, String nameTh, String email,

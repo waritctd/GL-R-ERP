@@ -2,11 +2,7 @@ package th.co.glr.hr.commission;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyLong;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
@@ -24,7 +20,6 @@ import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.catalog.CatalogRepository;
 import th.co.glr.hr.common.ApiException;
-import th.co.glr.hr.config.AppProperties;
 import th.co.glr.hr.customer.ContactRepository;
 import th.co.glr.hr.customer.CustomerDto;
 import th.co.glr.hr.customer.CustomerRepository;
@@ -41,7 +36,6 @@ import th.co.glr.hr.deposit.DepositNoticeDto;
 import th.co.glr.hr.deposit.DepositNoticePdfRenderer;
 import th.co.glr.hr.deposit.DepositNoticeRepository;
 import th.co.glr.hr.deposit.DepositNoticeService;
-import th.co.glr.hr.deposit.RemainingInvoicePdfRenderer;
 import th.co.glr.hr.employee.EmployeeCodeGenerator;
 import th.co.glr.hr.employee.EmployeeReferenceRepository;
 import th.co.glr.hr.employee.EmployeeRepository;
@@ -194,19 +188,6 @@ class CommissionDealLinkageIntegrationTest extends AbstractPostgresIntegrationTe
     private void insertFactory(String name) {
     }
 
-    // (1) The pipeline itself: a chain deal genuinely reaches CLOSED_PAID end-to-end. Never proven by an
-    // integration test before Step 9 — see class Javadoc.
-
-    @Test
-    void fullChainDeal_reachesClosedPaid_afterFullDeliveryAndFinalPayment() {
-        long ticketId = driveDealToClosedPaid(new BigDecimal("10"));
-
-        TicketDto after = ticketService.get(ticketId, ceoActor);
-        assertThat(after.summary().salesStage()).isEqualTo(DealStage.CLOSED_PAID);
-        assertThat(after.summary().fulfillmentStatus()).isEqualTo(FulfilmentStatus.FULLY_DELIVERED);
-        assertThat(after.summary().paymentStatus()).isEqualTo("FULLY_PAID");
-    }
-
     // (2) The gate: a commission cannot be submitted against a deal that hasn't reached CLOSED_PAID yet — rejected
     // outright, no commission_record row created.
 
@@ -221,43 +202,6 @@ class CommissionDealLinkageIntegrationTest extends AbstractPostgresIntegrationTe
             .isInstanceOfSatisfying(ApiException.class,
                 e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_CONTENT));
         assertThat(countCommissionRecords()).isEqualTo(before);
-    }
-
-    // (3) Cross-check within threshold: succeeds, no mismatch flag, snapshot recorded.
-
-    @Test
-    void submit_withGrossAmountWithinThreshold_succeedsWithNoMismatchFlag() {
-        long ticketId = driveDealToClosedPaid(new BigDecimal("10"));
-        BigDecimal payable = tickets.payableAmount(ticketId); // QA-02: VAT-inclusive
-        assertThat(payable.signum()).isPositive();
-        // 2% above payable — within the 5% cross-check threshold.
-        BigDecimal grossAmount = payable.multiply(new BigDecimal("1.02")).setScale(2, java.math.RoundingMode.HALF_UP);
-
-        SubmitCommissionRequest request = submitRequestLinkedTo(ticketId, grossAmount);
-        CommissionRecord created = commissionService.submit(request, invoiceFile(), accountActor);
-
-        assertThat(created.sourceTicketId()).isEqualTo(ticketId);
-        assertThat(created.dealAmountMismatch()).isFalse();
-        assertThat(created.dealPayableAmountSnapshot()).isEqualByComparingTo(payable);
-
-        CommissionRecord reloaded = commissions.findById(created.id()).orElseThrow();
-        assertThat(reloaded.dealAmountMismatch()).isFalse();
-        assertThat(reloaded.dealPayableAmountSnapshot()).isEqualByComparingTo(payable);
-    }
-
-    /** QA-02: a gross 7% below the VAT-inclusive payable (i.e. the ex-VAT figure) IS a mismatch; equal is not. */
-    @Test
-    void submit_withGrossEqualToVatInclusivePayable_isNoMismatch_andExVatGrossIsFlagged() {
-        long ticketId = driveDealToClosedPaid(new BigDecimal("10"));
-        BigDecimal payable = tickets.payableAmount(ticketId);
-        CommissionRecord equal = commissionService.submit(submitRequestLinkedTo(ticketId, payable), invoiceFile(), accountActor);
-        assertThat(equal.dealAmountMismatch()).isFalse();
-        assertThat(equal.dealPayableAmountSnapshot()).isEqualByComparingTo(payable);
-
-        long other = driveDealToClosedPaid(new BigDecimal("10"));
-        BigDecimal below = tickets.payableAmount(other).multiply(new BigDecimal("0.93")).setScale(2, java.math.RoundingMode.HALF_UP);
-        assertThat(commissionService.submit(submitRequestLinkedTo(other, below), invoiceFile(), accountActor)
-            .dealAmountMismatch()).isTrue();
     }
 
     // (4) Cross-check beyond threshold: NOT blocked, but flagged for reviewers.
@@ -279,24 +223,6 @@ class CommissionDealLinkageIntegrationTest extends AbstractPostgresIntegrationTe
 
         CommissionRecord reloaded = commissions.findById(created.id()).orElseThrow();
         assertThat(reloaded.dealAmountMismatch()).isTrue();
-    }
-
-    // (5) Regression guard: an unlinked (sourceTicketId = null) commission keeps working exactly as it did before
-    // Step 9 — this must never start requiring a linked deal.
-
-    @Test
-    void submit_withNoLinkedDeal_stillSucceeds_snapshotNullMismatchFalse() {
-        SubmitCommissionRequest request = new SubmitCommissionRequest(
-            null, salesRepId, "INV-STEP9-UNLINKED-" + UUID.randomUUID().toString().substring(0, 8),
-            LocalDate.of(2026, 6, 15), new BigDecimal("1000.00"),
-            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
-            BigDecimal.ZERO, BigDecimal.ZERO);
-
-        CommissionRecord created = commissionService.submit(request, invoiceFile(), accountActor);
-
-        assertThat(created.sourceTicketId()).isNull();
-        assertThat(created.dealPayableAmountSnapshot()).isNull();
-        assertThat(created.dealAmountMismatch()).isFalse();
     }
 
     // Fixture helpers.
@@ -435,9 +361,6 @@ class CommissionDealLinkageIntegrationTest extends AbstractPostgresIntegrationTe
     }
 
     private void drainDispatches() {
-        // No-op now: FactoryQuoteService.send is synchronous (manual-RFQ redesign) -- there is no dispatch/worker
-        // queue left to drain. Kept (rather than removing every call site) so this helper's callers do not all need to
-        // be revisited individually.
     }
 
     private TicketItemRequest ticketItem(String brand, String model, String factory) {

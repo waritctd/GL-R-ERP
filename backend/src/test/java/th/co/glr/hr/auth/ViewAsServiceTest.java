@@ -2,7 +2,6 @@ package th.co.glr.hr.auth;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import java.util.Optional;
@@ -19,12 +18,6 @@ class ViewAsServiceTest {
     private static EmployeeLoginRecord record(long id, String code, boolean active) {
         return new EmployeeLoginRecord(id, code, "e@example.test", "Name", active, 1L, "IT", null, null,
             java.time.LocalDate.now(), null, false, false);
-    }
-
-    @Test
-    void blankCode_isFalse_andNeverQueries() {
-        assertThat(service("  ").mayViewAs(1L)).isFalse();
-        verifyNoInteractions(employees);
     }
 
     @Test

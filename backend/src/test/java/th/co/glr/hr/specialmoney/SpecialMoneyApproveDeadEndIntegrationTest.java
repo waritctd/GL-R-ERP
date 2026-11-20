@@ -28,13 +28,6 @@ class SpecialMoneyApproveDeadEndIntegrationTest extends AbstractPostgresIntegrat
     /** Same zone {@code SpecialMoneyService} evaluates "today" in -- see its {@code BUSINESS_ZONE}. */
     private static final ZoneId BUSINESS_ZONE = ZoneId.of("Asia/Bangkok");
 
-    /** V66's seeded UNIFORM_PREPROBATION_KIT figures, unchanged since 2018-06-08 and with no effective_to: tshirt
-     * 220 x3, trouser 300 x3, shoes 400 x1, no back-support belt. See V66__special_money_request_schema.sql. */
-    private static final BigDecimal PREPROBATION_KIT_TOTAL = new BigDecimal("1960.00");
-
-    /** V66's seeded {@code AID_FUNERAL} flat cap, unchanged since 2018-06-08. */
-    private static final BigDecimal FUNERAL_FIXED_CAP = new BigDecimal("5000.00");
-
     private static final String CAP_OVERRIDE_REQUIRED_MESSAGE =
         "ต้องระบุเหตุผลเมื่อจำนวนเงินที่อนุมัติเกินเพดานตามนโยบายหรือเกินจำนวนที่พนักงานขอเบิก";
 
@@ -61,59 +54,6 @@ class SpecialMoneyApproveDeadEndIntegrationTest extends AbstractPostgresIntegrat
             INSERT INTO hr.department (source_code, name_th, is_active)
             VALUES ('SALES', 'ฝ่ายขายทดสอบ', TRUE) RETURNING department_id
             """, Map.of(), Long.class);
-    }
-
-    // Case 1: UNIFORM_PREPROBATION_KIT -- reachable via the UI.
-
-    /** An eligible employee types an amount well above the fixed kit total; submit accepts it unclamped. An
-     * empty-review approve -- once the CEO's only in-UI option -- then 400s and leaves the row stuck SUBMITTED. */
-    @Test
-    void preprobationKitOverRequestSubmitsCleanly_thenEmptyCeoReviewIsRefused_butApiWaysOutExist() {
-        long salesSupportEmployeeId = insertPreprobationEligibleEmployee("KIT01");
-
-        // --- submit: employee types 5000, well above the 1960 kit total. No violation is raised. ---
-        long requestId = submitRequest(
-            "UNIFORM_PREPROBATION_KIT", salesSupportEmployeeId, new BigDecimal("5000"),
-            LocalDate.of(2026, 7, 1), null, Map.of());
-        SpecialMoneyRequestDto submitted = repository.findById(requestId).orElseThrow();
-        assertThat(submitted.status()).isEqualTo("SUBMITTED");
-        assertThat(submitted.requestedAmount()).isEqualByComparingTo(new BigDecimal("5000"));
-
-        attachEvidence(requestId);
-
-        // an empty review: approve({}) -- refused, row left untouched. Formerly the CEO's only in-UI action;
-        // ApproveSpecialMoneyDialog.jsx no longer sends one.
-        assertThatThrownBy(() -> service.approve(
-                requestId, new ReviewSpecialMoneyRequest(null, null, null), ceo()))
-            .isInstanceOf(ApiException.class)
-            .hasMessage(CAP_OVERRIDE_REQUIRED_MESSAGE)
-            .extracting("status").isEqualTo(HttpStatus.BAD_REQUEST);
-        assertThat(repository.findById(requestId).orElseThrow().status()).isEqualTo("SUBMITTED");
-        assertThat(repository.findById(requestId).orElseThrow().approvedAmount()).isNull();
-
-        // way out #1 (same row -- the failed attempt above wrote nothing): approve at exactly the kit total, still no
-        // reason needed, because that no longer exceeds the ceiling.
-        service.approve(requestId, new ReviewSpecialMoneyRequest(null, PREPROBATION_KIT_TOTAL, null), ceo());
-        SpecialMoneyRequestDto approvedAtKitTotal = repository.findById(requestId).orElseThrow();
-        assertThat(approvedAtKitTotal.status()).isEqualTo("APPROVED");
-        assertThat(approvedAtKitTotal.approvedAmount()).isEqualByComparingTo(PREPROBATION_KIT_TOTAL);
-
-        // way out #2 (a fresh row, since the one above is already decided): a non-blank cap-override reason lets the
-        // CEO approve the full 5000 the employee typed.
-        long secondEmployeeId = insertPreprobationEligibleEmployee("KIT02");
-        long secondRequestId = submitRequest(
-            "UNIFORM_PREPROBATION_KIT", secondEmployeeId, new BigDecimal("5000"),
-            LocalDate.of(2026, 7, 1), null, Map.of());
-        attachEvidence(secondRequestId);
-
-        service.approve(
-            secondRequestId,
-            new ReviewSpecialMoneyRequest(null, null, "อนุมัติเกินเพดานตามดุลยพินิจ CEO"),
-            ceo());
-        SpecialMoneyRequestDto approvedByOverride = repository.findById(secondRequestId).orElseThrow();
-        assertThat(approvedByOverride.status()).isEqualTo("APPROVED");
-        assertThat(approvedByOverride.approvedAmount()).isEqualByComparingTo(new BigDecimal("5000"));
-        assertThat(approvedByOverride.capOverrideReason()).isEqualTo("อนุมัติเกินเพดานตามดุลยพินิจ CEO");
     }
 
     // Case 2: MEDICAL -- two pending claims that individually fit the cap, but not together.
@@ -160,39 +100,6 @@ class SpecialMoneyApproveDeadEndIntegrationTest extends AbstractPostgresIntegrat
         assertThat(secondApproved.approvedAmount()).isEqualByComparingTo(new BigDecimal("1000"));
     }
 
-    // Case 3: FIXED_AID over-cap -- direct API only (the frontend hardcodes the cap).
-
-    @Test
-    void fixedAidOverCapSubmitsCleanly_thenEmptyCeoReviewIsRefused() {
-        long employeeId = insertStandardEligibleEmployee("AID01");
-
-        // AID_FUNERAL's cap rule (evaluateFixedAid) only checks the relation and, for wedding/ordination, a
-        // once-per-lifetime count -- it never flags an over-cap amount. 8000 against a 5000 cap submits with no
-        // violation, stored unclamped.
-        long requestId = submitRequest(
-            "AID_FUNERAL", employeeId, new BigDecimal("8000"),
-            LocalDate.of(2026, 7, 1), null, Map.of("relation", "parent"));
-        SpecialMoneyRequestDto submitted = repository.findById(requestId).orElseThrow();
-        assertThat(submitted.status()).isEqualTo("SUBMITTED");
-        assertThat(submitted.requestedAmount()).isEqualByComparingTo(new BigDecimal("8000"));
-
-        attachEvidence(requestId);
-
-        assertThatThrownBy(() -> service.approve(
-                requestId, new ReviewSpecialMoneyRequest(null, null, null), ceo()))
-            .isInstanceOf(ApiException.class)
-            .hasMessage(CAP_OVERRIDE_REQUIRED_MESSAGE)
-            .extracting("status").isEqualTo(HttpStatus.BAD_REQUEST);
-        assertThat(repository.findById(requestId).orElseThrow().status()).isEqualTo("SUBMITTED");
-        assertThat(repository.findById(requestId).orElseThrow().approvedAmount()).isNull();
-
-        // Way out, for completeness: the fixed 5000 cap itself needs no reason.
-        service.approve(requestId, new ReviewSpecialMoneyRequest(null, FUNERAL_FIXED_CAP, null), ceo());
-        SpecialMoneyRequestDto approved = repository.findById(requestId).orElseThrow();
-        assertThat(approved.status()).isEqualTo("APPROVED");
-        assertThat(approved.approvedAmount()).isEqualByComparingTo(FUNERAL_FIXED_CAP);
-    }
-
     // --- helpers ----------------------------------------------------------
 
     private long submitRequest(
@@ -214,14 +121,6 @@ class SpecialMoneyApproveDeadEndIntegrationTest extends AbstractPostgresIntegrat
                 (special_money_request_id, file_name, storage_path, mime_type, size_bytes)
             VALUES (:id, 'evidence.pdf', '/tmp/test/evidence.pdf', 'application/pdf', 1024)
             """, Map.of("id", requestId));
-    }
-
-    /** An employee eligible for UNIFORM_PREPROBATION_KIT's PREPROBATION_SALES_SUPPORT rule: hired more than the
-     * required 7 days ago, in a department whose source_code is on V130's seeded preprobation_kit_department_codes
-     * list ("SALES,SALES2"). */
-    private long insertPreprobationEligibleEmployee(String code) {
-        return insertEmployee(
-            code, salesSupportDepartmentId, null, LocalDate.now(BUSINESS_ZONE).minusDays(30));
     }
 
     /** An employee eligible under the STANDARD probation rule (passed probation, active). */

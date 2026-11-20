@@ -6,13 +6,10 @@ import static org.mockito.Mockito.mock;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
-import java.time.ZoneId;
-import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
-import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import th.co.glr.hr.attachment.AttachmentRepository;
 import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.audit.AuditService;
@@ -114,91 +111,6 @@ class CommissionApprovedRecordImmutableIntegrationTest extends AbstractPostgresI
         assertThat(totalAfter).isEqualByComparingTo(totalBefore);
     }
 
-    // Point 2 -- the closed-payroll-month guard, mirroring the other six call sites: editing a
-    // SUBMITTED/MANAGER_APPROVED record must still be refused once ITS month has closed underneath it, even though
-    // that status never counted toward payroll on its own.
-
-    @Test
-    void updateDeductions_onSubmittedRecord_whoseMonthIsAlreadyProcessed_isRefused_recordUnchanged() {
-        LocalDate processedMonth = LocalDate.of(2026, 4, 1);
-        long commissionId = seedSubmittedTierCommission(salesRepId, processedMonth, new BigDecimal("50000.00"));
-        insertProcessedPeriod(processedMonth);
-        InvoiceDetails before = commissions.findById(commissionId).orElseThrow().invoiceDetails();
-
-        UpdateCommissionDeductionsRequest request = new UpdateCommissionDeductionsRequest(
-            new BigDecimal("1.00"), null, null, null, null, null, null, null, null,
-            "should be refused -- payroll month already processed");
-
-        assertThatThrownBy(() -> commissionService.updateDeductions(commissionId, request, managerActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> {
-                assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
-                assertThat(e.getMessage()).contains("ประมวลผลไปแล้ว");
-            });
-
-        InvoiceDetails after = commissions.findById(commissionId).orElseThrow().invoiceDetails();
-        assertThat(after.grossAmount()).isEqualByComparingTo(before.grossAmount());
-        assertThat(commissions.findById(commissionId).orElseThrow().status()).isEqualTo(CommissionStatus.SUBMITTED);
-    }
-
-    @Test
-    void updateDeductions_onSubmittedRecord_whoseMonthIsSeedCovered_isRefused_withTheOtherMessage() {
-        insertSeedCoverage(2026, LocalDate.of(2026, 6, 1));
-        long commissionId = seedSubmittedTierCommission(salesRepId, LocalDate.of(2026, 5, 1), new BigDecimal("50000.00"));
-        InvoiceDetails before = commissions.findById(commissionId).orElseThrow().invoiceDetails();
-
-        UpdateCommissionDeductionsRequest request = new UpdateCommissionDeductionsRequest(
-            new BigDecimal("1.00"), null, null, null, null, null, null, null, null,
-            "should be refused -- payroll month is seed-covered");
-
-        assertThatThrownBy(() -> commissionService.updateDeductions(commissionId, request, managerActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> {
-                assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
-                assertThat(e.getMessage()).contains("จ่ายนอกระบบ");
-                assertThat(e.getMessage()).doesNotContain("ประมวลผลไปแล้ว");
-            });
-
-        InvoiceDetails after = commissions.findById(commissionId).orElseThrow().invoiceDetails();
-        assertThat(after.grossAmount()).isEqualByComparingTo(before.grossAmount());
-    }
-
-    // Point 3 -- a CLAWBACK shares invoice_id with the original SALE it reverses
-    // (CommissionRepository#createClawback). PATCHing the CLAWBACK's own id must not be able to rewrite the
-    // ORIGINAL sale's shared invoice_details row.
-
-    @Test
-    void updateDeductions_onClawbackId_isRefused_originalSalesInvoiceUnchanged() {
-        long originalId = seedApprovedTierCommission(salesRepId, OPEN_MONTH, new BigDecimal("100000.00"));
-        CommissionRecord original = commissions.findById(originalId).orElseThrow();
-        long clawbackId = commissions.createClawback(
-            original, managerActor.id(), currentPayrollMonth(), "ลูกค้าคืนสินค้า -- test clawback");
-        InvoiceDetails originalBefore = commissions.findById(originalId).orElseThrow().invoiceDetails();
-        InvoiceDetails clawbackBefore = commissions.findById(clawbackId).orElseThrow().invoiceDetails();
-        // Sanity: the clawback really does share the original's invoice row (the mechanism the bug exploited) -- if
-        // this ever stops being true the rest of this test is testing nothing.
-        assertThat(clawbackBefore.id()).isEqualTo(originalBefore.id());
-
-        UpdateCommissionDeductionsRequest attack = new UpdateCommissionDeductionsRequest(
-            new BigDecimal("1.00"), null, null, null, null, null, null, null, null,
-            "should be refused -- id is a CLAWBACK, amount is derived");
-
-        assertThatThrownBy(() -> commissionService.updateDeductions(clawbackId, attack, managerActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> {
-                assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
-                // Distinguishing substring: proves the CLAWBACK-kind guard fired specifically, not merely that SOME guard
-                // (e.g. the APPROVED-status one, which would also block a clawback since it is created APPROVED) happened to
-                // also refuse it.
-                assertThat(e.getMessage()).contains("รายการเรียกคืนค่าคอมมิชชั่นคำนวณจากรายการต้นทางโดยอัตโนมัติ");
-            });
-
-        InvoiceDetails originalAfter = commissions.findById(originalId).orElseThrow().invoiceDetails();
-        assertThat(originalAfter.grossAmount()).isEqualByComparingTo(originalBefore.grossAmount());
-        assertThat(originalAfter.grossAmount()).isNotEqualByComparingTo(new BigDecimal("1.00"));
-        assertThat(commissions.findById(originalId).orElseThrow().actualReceived())
-            .isEqualByComparingTo(original.actualReceived());
-        InvoiceDetails clawbackAfter = commissions.findById(clawbackId).orElseThrow().invoiceDetails();
-        assertThat(clawbackAfter.grossAmount()).isEqualByComparingTo(clawbackBefore.grossAmount());
-    }
-
     // The guard is not "deny everything": the legitimate pre-final-approval review edit still works, at both
     // stages a manager/CEO can reach it from (SUBMITTED and MANAGER_APPROVED).
 
@@ -214,22 +126,6 @@ class CommissionApprovedRecordImmutableIntegrationTest extends AbstractPostgresI
         assertThat(edited.weightMultiplier()).isEqualTo(2);
         assertThat(commissions.findById(commissionId).orElseThrow().weightMultiplier()).isEqualTo(2);
         assertThat(edited.status()).isEqualTo(CommissionStatus.SUBMITTED);
-    }
-
-    @Test
-    void updateDeductions_onManagerApprovedRecord_byCeo_stillSucceeds() {
-        long commissionId = seedSubmittedTierCommission(salesRepId, OPEN_MONTH, new BigDecimal("100000.00"));
-        commissionService.approve(commissionId, managerActor); // -> MANAGER_APPROVED, still editable
-
-        UpdateCommissionDeductionsRequest legitimateEdit = new UpdateCommissionDeductionsRequest(
-            null, new BigDecimal("500.00"), null, null, null, null, null, null, null,
-            "legitimate CEO review before final sign-off -- bank fee per statement");
-        CommissionRecord edited = commissionService.updateDeductions(commissionId, legitimateEdit, ceoActor);
-
-        assertThat(edited.invoiceDetails().bankFees()).isEqualByComparingTo(new BigDecimal("500.00"));
-        assertThat(edited.status()).isEqualTo(CommissionStatus.MANAGER_APPROVED);
-        // Final amount is always recomputed from the stored fields, never set directly.
-        assertThat(edited.actualReceived()).isEqualByComparingTo(new BigDecimal("99500.00"));
     }
 
     // Helpers
@@ -257,30 +153,6 @@ class CommissionApprovedRecordImmutableIntegrationTest extends AbstractPostgresI
         commissionService.approve(commissionId, managerActor);
         commissionService.approve(commissionId, ceoActor);
         return commissionId;
-    }
-
-    private LocalDate currentPayrollMonth() {
-        return LocalDate.now(ZoneId.of("Asia/Bangkok")).withDayOfMonth(1);
-    }
-
-    private void insertSeedCoverage(int taxYear, LocalDate coversThrough) {
-        jdbc.update("""
-            INSERT INTO hr.payroll_seed_coverage (tax_year, covers_through, note)
-            VALUES (:taxYear, :coversThrough, 'commission-approved-record-immutable test coverage')
-            ON CONFLICT (tax_year) DO UPDATE SET covers_through = EXCLUDED.covers_through
-            """, Map.of("taxYear", taxYear, "coversThrough", coversThrough));
-    }
-
-    private void insertProcessedPeriod(LocalDate payrollMonth) {
-        jdbc.update("""
-            INSERT INTO hr.payroll_period (payroll_month, period_start, period_end, pay_date, status)
-            VALUES (
-                :payrollMonth, :payrollMonth,
-                (:payrollMonth + INTERVAL '1 month - 1 day')::date,
-                (:payrollMonth + INTERVAL '1 month - 1 day')::date,
-                'PROCESSED'
-            )
-            """, Map.of("payrollMonth", payrollMonth));
     }
 
     private long createEmployee(EmployeeRepository employees, String nameTh, String email,

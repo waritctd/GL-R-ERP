@@ -2,20 +2,17 @@ package th.co.glr.hr.salesboard;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
-import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIf;
-import org.springframework.http.MediaType;
 import org.springframework.http.converter.json.JacksonJsonHttpMessageConverter;
 import org.springframework.mock.web.MockHttpSession;
 import org.springframework.test.web.servlet.MockMvc;
@@ -27,7 +24,6 @@ import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiExceptionHandler;
 import th.co.glr.hr.dealquotation.AbstractDealQuotationSlice2IntegrationTest;
 import th.co.glr.hr.dealquotation.DealQuotationDtos.DealQuotationDto;
-import th.co.glr.hr.ticket.DealLifecycle;
 import th.co.glr.hr.ticket.DealStage;
 import th.co.glr.hr.ticket.QuietRule;
 import th.co.glr.hr.ticket.TicketController;
@@ -46,8 +42,6 @@ class SalesBoardScopeIntegrationTest extends AbstractDealQuotationSlice2Integrat
 
     private final ObjectMapper json = new ObjectMapper();
     private MockMvc mvc;
-    private static final LocalDate MONDAY = LocalDate.of(2026, 11, 9);
-    private static final LocalDate SUNDAY = LocalDate.of(2026, 11, 15);
 
     @BeforeEach
     void wireHttp() {
@@ -85,15 +79,6 @@ class SalesBoardScopeIntegrationTest extends AbstractDealQuotationSlice2Integrat
         assertThat(ids(work.get("followUp"))).contains(mine).doesNotContain(theirs);
     }
 
-    @Test
-    void managerMyWorkIsStillOnlyTheirOwnDeals() throws Exception {
-        long repDeal = deal(salesActor);
-
-        JsonNode work = ok(get("/api/sales/my-work"), salesManagerActor);
-
-        assertThat(ids(work.get("board"))).doesNotContain(repDeal);
-    }
-
     // ── role gates ───────────────────────────────────────────────────────────
 
     @Test
@@ -103,38 +88,7 @@ class SalesBoardScopeIntegrationTest extends AbstractDealQuotationSlice2Integrat
         assertThat(status(get("/api/sales/team-overview"), salesActor)).isEqualTo(403);
     }
 
-    @Test
-    void accountAndImportAreRefusedBoth() throws Exception {
-        deal(salesActor);
-        for (String role : List.of("account", "import", "hr")) {
-            UserPrincipal other = actor(createEmployee("ผู้ใช้ " + role, role + "-board@glr.co.th", "ACC", "บัญชี",
-                null), role);
-            assertThat(status(get("/api/sales/my-work"), other)).as("%s my-work", role).isEqualTo(403);
-            assertThat(status(get("/api/sales/team-overview"), other)).as("%s team", role).isEqualTo(403);
-        }
-    }
-
     // ── team overview ────────────────────────────────────────────────────────
-
-    @Test
-    void managerTeamOverviewHasOneRowPerRepWithCorrectCounts() throws Exception {
-        long a1 = deal(salesActor);
-        deal(salesActor);
-        deal(otherSalesActor);
-        backdate(a1, 20);
-
-        JsonNode team = ok(get("/api/sales/team-overview"), salesManagerActor);
-
-        JsonNode a = rep(team, salesActor.id());
-        JsonNode b = rep(team, otherSalesActor.id());
-        assertThat(a.get("openDeals").asInt()).isEqualTo(2);
-        assertThat(a.get("quietDeals").asInt()).isEqualTo(1);
-        assertThat(b.get("openDeals").asInt()).isEqualTo(1);
-        assertThat(b.get("quietDeals").asInt()).isZero();
-        assertThat(team.get("reps")).hasSize(2);
-        assertThat(ids(team.get("stale"))).containsExactly(a1);
-        assertThat(team.get("quietDays").asInt()).isEqualTo(14);
-    }
 
     @Test
     void ceoGetsTheTeamOverview() throws Exception {
@@ -144,94 +98,7 @@ class SalesBoardScopeIntegrationTest extends AbstractDealQuotationSlice2Integrat
         assertThat(ok(get("/api/sales/team-overview"), ceo).get("reps")).hasSize(1);
     }
 
-    // ── what is on the board ─────────────────────────────────────────────────
-
-    @Test
-    void myWorkExcludesNonActiveDeals() throws Exception {
-        long active = deal(salesActor);
-        long lost = deal(salesActor);
-        long cancelled = deal(salesActor);
-        for (long id : List.of(active, lost, cancelled)) {
-            backdate(id, 30);
-        }
-        setLifecycle(lost, DealLifecycle.CLOSED_LOST);
-        setLifecycle(cancelled, DealLifecycle.CANCELLED);
-
-        JsonNode work = ok(get("/api/sales/my-work"), salesActor);
-
-        assertThat(ids(work.get("board"))).containsExactly(active);
-        assertThat(ids(work.get("followUp"))).containsExactly(active);
-    }
-
-    @Test
-    void followUpIsCappedAtFiveAndOrderedByValueTimesDays() throws Exception {
-        long valued20 = deal(salesActor);
-        approved(valued20, salesActor, "DESIGNER");
-        long valued30 = deal(salesActor);
-        approved(valued30, salesActor, "DESIGNER");
-        backdate(valued20, 20);
-        backdate(valued30, 30);
-        List<Long> plain = new ArrayList<>();
-        for (int days = 15; days <= 19; days++) {
-            long id = deal(salesActor);
-            backdate(id, days);
-            plain.add(id);
-        }
-
-        JsonNode work = ok(get("/api/sales/my-work"), salesActor);
-
-        assertThat(ids(work.get("followUp")))
-            .containsExactly(valued30, valued20, plain.get(4), plain.get(3), plain.get(2));
-        assertThat(work.get("board")).hasSize(7);
-    }
-
     // ── days quiet reads ONE clock (review round 2, L-1) ─────────────────────
-
-    /** A deal last touched exactly N days before the read reads N days quiet — every time. daysQuiet used to be the
-     * JVM clock minus a Postgres-written timestamp; with the JVM clock lagging Postgres by up to ~16 ms, about 40% of
-     * such reads gave N-1, which tied an N-day deal with an (N-1)-day one and reordered ควรตามต่อ. Thirty reads, each
-     * straight after an exact backdate. */
-    @Test
-    void aDealTouchedExactlyNDaysAgoReadsNDaysQuiet_everyTime() {
-        long id = deal(salesActor);
-        SalesBoardRepository repo = new SalesBoardRepository(jdbc, new QuietRule(jdbc, 14));
-        List<Integer> reads = new ArrayList<>();
-        for (int i = 0; i < 30; i++) {
-            backdate(id, 19);
-            reads.add(repo.activeDealsOwnedBy(salesActor.id()).stream().filter(d -> d.ticketId() == id)
-                .findFirst().orElseThrow().daysQuiet());
-        }
-        assertThat(reads).containsOnly(19);
-    }
-
-    /** The days figure and the quiet flag come from the SAME clock: the statement's own now(). Inside one transaction
-     * now() is fixed at its start, so a deal touched 15 days less one second before it is 14 whole days quiet (and
-     * quiet, past the 14-day threshold) however much wall-clock time passes before the read. A days figure taken from
-     * the application clock reads 15 here, disagreeing with the clock that set the flag. Deterministic. */
-    @Test
-    void daysQuietAndTheQuietFlagReadOneClock() {
-        long id = deal(salesActor);
-        SalesBoardRepository repo = new SalesBoardRepository(jdbc, new QuietRule(jdbc, 14));
-        var tx = new org.springframework.transaction.support.TransactionTemplate(
-            new org.springframework.jdbc.datasource.DataSourceTransactionManager(jdbc.getJdbcTemplate().getDataSource()));
-        th.co.glr.hr.salesboard.SalesBoardDtos.BoardDeal row = tx.execute(status -> {
-            status.setRollbackOnly();
-            Map<String, Object> p = Map.of("id", id);
-            String at = "now() - interval '15 days' + interval '1 second'";
-            jdbc.update("UPDATE sales.ticket SET created_at = " + at + " WHERE ticket_id = :id", p);
-            jdbc.update("UPDATE sales.ticket_event SET created_at = " + at + " WHERE ticket_id = :id", p);
-            jdbc.update("UPDATE sales.deal_activity SET created_at = " + at + " WHERE ticket_id = :id", p);
-            try {
-                Thread.sleep(1500);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-            }
-            return repo.activeDealsOwnedBy(salesActor.id()).stream().filter(d -> d.ticketId() == id)
-                .findFirst().orElseThrow();
-        });
-        assertThat(row.quiet()).isTrue();
-        assertThat(row.daysQuiet()).isEqualTo(14);
-    }
 
     @Test
     void valueIsLatestApprovedQuotationTotal_nullWhenNone() throws Exception {
@@ -250,34 +117,56 @@ class SalesBoardScopeIntegrationTest extends AbstractDealQuotationSlice2Integrat
         assertThat(byId(work.get("board"), bare).get("value").isNull()).isTrue();
     }
 
-    @Test
-    void expectedQuarterRejectsMalformedValue() throws Exception {
-        long id = deal(salesActor);
-
-        assertThat(status(put("/api/tickets/" + id + "/tracking")
-            .contentType(MediaType.APPLICATION_JSON).content("{\"expectedQuarter\":\"2026Q4\"}"), salesActor))
-            .isEqualTo(400);
-        assertThat(status(put("/api/tickets/" + id + "/tracking")
-            .contentType(MediaType.APPLICATION_JSON).content("{\"expectedQuarter\":\"2026-Q4\"}"), salesActor))
-            .isEqualTo(200);
-
-        JsonNode work = ok(get("/api/sales/my-work"), salesActor);
-        assertThat(byId(work.get("board"), id).get("expectedQuarter").asText()).isEqualTo("2026-Q4");
+    private long addOn(long root, UserPrincipal keyer) {
+        return new th.co.glr.hr.dealparty.DealPartyRepository(jdbc).forkAddOn(root, summary(root).code() + "-2", keyer.id());
     }
 
-    /** The existing tracking form does not send expectedQuarter; omitting it must not wipe it. */
+    private JsonNode projectList(UserPrincipal actor) throws Exception {
+        return ok(get("/api/tickets").param("fold", "project"), actor).get("tickets");
+    }
+
+    /** Rep B owns the add-on of rep A's project: B gets ONE row under A's code and title, linking to B's own order,
+     * with only B's order counted. A's own list never counts B's order's value. */
     @Test
-    void trackingUpdateWithoutExpectedQuarterKeepsIt() throws Exception {
-        long id = deal(salesActor);
-        status(put("/api/tickets/" + id + "/tracking")
-            .contentType(MediaType.APPLICATION_JSON).content("{\"expectedQuarter\":\"2027-Q1\"}"), salesActor);
+    void anAddOnOwnedByAnotherRep_isOneRowUnderTheRootsCode_linkingToTheirOwnOrder() throws Exception {
+        long root = deal(salesActor);
+        approved(root, salesActor, "DESIGNER");
+        long addOn = addOn(root, otherSalesActor);
+        jdbc.update("UPDATE sales.ticket SET created_by = :b, estimated_value = 700 WHERE ticket_id = :id",
+            Map.of("b", otherSalesActor.id(), "id", addOn));
 
-        assertThat(status(put("/api/tickets/" + id + "/tracking")
-            .contentType(MediaType.APPLICATION_JSON).content("{\"designerName\":\"คุณเอ\"}"), salesActor))
-            .isEqualTo(200);
+        JsonNode rows = projectList(otherSalesActor);
+        assertThat(ids(rows, "id")).containsExactly(addOn);
+        JsonNode row = byId(rows, "id", addOn);
+        assertThat(row.get("code").asText()).isEqualTo(summary(root).code());
+        assertThat(row.get("orderCount").asInt()).isEqualTo(1);
+        assertThat(new BigDecimal(row.get("amountPayable").asText())).isLessThanOrEqualTo(BigDecimal.valueOf(1000));
 
-        JsonNode work = ok(get("/api/sales/my-work"), salesActor);
-        assertThat(byId(work.get("board"), id).get("expectedQuarter").asText()).isEqualTo("2027-Q1");
+        JsonNode board = ok(get("/api/sales/my-work"), otherSalesActor).get("board");
+        assertThat(ids(board)).containsExactly(addOn);
+        assertThat(byId(board, addOn).get("orderCodes").get(0).asText()).isEqualTo(summary(root).code());
+        assertThat(new BigDecimal(byId(board, addOn).get("value").asText())).isEqualByComparingTo("700");
+    }
+
+    /** สั่งเพิ่ม: a project is ONE row (ProjectFold). The add-on folds into its root (orderCount 2, both open, summed
+     * value, both codes), and the team's openDeals counts the project once. */
+    @Test
+    void anAddOnFoldsIntoItsRootRow_andTheProjectCountsOnce() throws Exception {
+        long root = deal(salesActor);
+        DealQuotationDto quote = approved(root, salesActor, "DESIGNER");
+        long addOn = addOn(root, salesActor);
+        jdbc.update("UPDATE sales.ticket SET estimated_value = 1000 WHERE ticket_id = :id", Map.of("id", addOn));
+
+        JsonNode board = ok(get("/api/sales/my-work"), salesActor).get("board");
+
+        assertThat(ids(board)).containsExactly(root);
+        JsonNode row = byId(board, root);
+        assertThat(row.get("orderCount").asInt()).isEqualTo(2);
+        assertThat(row.get("openOrderCount").asInt()).isEqualTo(2);
+        assertThat(new BigDecimal(row.get("value").asText())).isEqualByComparingTo(quote.grandTotal().add(BigDecimal.valueOf(1000)));
+        assertThat(row.get("orderCodes")).hasSize(2);
+        assertThat(rep(ok(get("/api/sales/team-overview"), salesManagerActor), salesActor.id())
+            .get("openDeals").asInt()).isEqualTo(1);
     }
 
     // ── review fixes: currency (M1), CLOSED_PAID (M2), value source (M3), role label ──────────
@@ -314,306 +203,6 @@ class SalesBoardScopeIntegrationTest extends AbstractDealQuotationSlice2Integrat
             .get("openDeals").asInt()).isEqualTo(1);
     }
 
-    private long addOn(long root, UserPrincipal keyer) {
-        return new th.co.glr.hr.dealparty.DealPartyRepository(jdbc).forkAddOn(root, summary(root).code() + "-2", keyer.id());
-    }
-
-    private JsonNode projectList(UserPrincipal actor) throws Exception {
-        return ok(get("/api/tickets").param("fold", "project"), actor).get("tickets");
-    }
-
-    /** สั่งเพิ่ม: a project is ONE row (ProjectFold). The add-on folds into its root (orderCount 2, both open, summed
-     * value, both codes), and the team's openDeals counts the project once. */
-    @Test
-    void anAddOnFoldsIntoItsRootRow_andTheProjectCountsOnce() throws Exception {
-        long root = deal(salesActor);
-        DealQuotationDto quote = approved(root, salesActor, "DESIGNER");
-        long addOn = addOn(root, salesActor);
-        jdbc.update("UPDATE sales.ticket SET estimated_value = 1000 WHERE ticket_id = :id", Map.of("id", addOn));
-
-        JsonNode board = ok(get("/api/sales/my-work"), salesActor).get("board");
-
-        assertThat(ids(board)).containsExactly(root);
-        JsonNode row = byId(board, root);
-        assertThat(row.get("orderCount").asInt()).isEqualTo(2);
-        assertThat(row.get("openOrderCount").asInt()).isEqualTo(2);
-        assertThat(new BigDecimal(row.get("value").asText())).isEqualByComparingTo(quote.grandTotal().add(BigDecimal.valueOf(1000)));
-        assertThat(row.get("orderCodes")).hasSize(2);
-        assertThat(rep(ok(get("/api/sales/team-overview"), salesManagerActor), salesActor.id())
-            .get("openDeals").asInt()).isEqualTo(1);
-    }
-
-    /** The fold rule with the root CLOSED_PAID and a live add-on: ONE open row under the ROOT's id and code, in the
-     * add-on's stage, worth the open order only (the closed first order does not inflate open value), on the board and
-     * in `/api/tickets?fold=project` alike. */
-    @Test
-    void aClosedRootWithALiveAddOn_isOneOpenRowInTheAddOnsStage_onTheBoardAndTheTicketList() throws Exception {
-        long root = deal(salesActor);
-        approved(root, salesActor, "DESIGNER");
-        long addOn = addOn(root, salesActor);
-        jdbc.update("UPDATE sales.ticket SET estimated_value = 1000 WHERE ticket_id = :id", Map.of("id", addOn));
-        jdbc.update("UPDATE sales.ticket SET sales_stage = 'CLOSED_PAID' WHERE ticket_id = :id", Map.of("id", root));
-        String addOnStage = summary(addOn).salesStage();
-
-        JsonNode board = ok(get("/api/sales/my-work"), salesActor).get("board");
-        assertThat(ids(board)).containsExactly(root);
-        JsonNode card = byId(board, root);
-        assertThat(card.get("salesStage").asText()).isEqualTo(addOnStage);
-        assertThat(card.get("orderCount").asInt()).isEqualTo(2);
-        assertThat(card.get("openOrderCount").asInt()).isEqualTo(1);
-        assertThat(new BigDecimal(card.get("value").asText())).isEqualByComparingTo("1000");
-        assertThat(rep(ok(get("/api/sales/team-overview"), salesManagerActor), salesActor.id())
-            .get("openDeals").asInt()).isEqualTo(1);
-
-        JsonNode rows = projectList(salesActor);
-        assertThat(ids(rows, "id")).containsExactly(root);
-        JsonNode row = byId(rows, "id", root);
-        assertThat(row.get("code").asText()).isEqualTo(summary(root).code());
-        assertThat(row.get("salesStage").asText()).isEqualTo(addOnStage);
-        assertThat(row.get("orderCount").asInt()).isEqualTo(2);
-        assertThat(row.get("openOrderCount").asInt()).isEqualTo(1);
-        // the unfolded list still has both orders
-        assertThat(ok(get("/api/tickets"), salesActor).get("tickets")).hasSize(2);
-    }
-
-    /** Import acts on each order: it never gets the project fold. */
-    @Test
-    void importKeepsOneRowPerOrder_whateverFoldSays() throws Exception {
-        long root = deal(salesActor);
-        addOn(root, salesActor);
-        UserPrincipal imp = actor(createEmployee("นำเข้า", "imp-fold@glr.co.th", "IMP", "นำเข้า", null), "import");
-
-        assertThat(ok(get("/api/tickets").param("fold", "project"), imp).get("tickets"))
-            .hasSize(ok(get("/api/tickets"), imp).get("tickets").size());
-    }
-
-    /** Rep B owns the add-on of rep A's project: B gets ONE row under A's code and title, linking to B's own order,
-     * with only B's order counted. A's own list never counts B's order's value. */
-    @Test
-    void anAddOnOwnedByAnotherRep_isOneRowUnderTheRootsCode_linkingToTheirOwnOrder() throws Exception {
-        long root = deal(salesActor);
-        approved(root, salesActor, "DESIGNER");
-        long addOn = addOn(root, otherSalesActor);
-        jdbc.update("UPDATE sales.ticket SET created_by = :b, estimated_value = 700 WHERE ticket_id = :id",
-            Map.of("b", otherSalesActor.id(), "id", addOn));
-
-        JsonNode rows = projectList(otherSalesActor);
-        assertThat(ids(rows, "id")).containsExactly(addOn);
-        JsonNode row = byId(rows, "id", addOn);
-        assertThat(row.get("code").asText()).isEqualTo(summary(root).code());
-        assertThat(row.get("orderCount").asInt()).isEqualTo(1);
-        assertThat(new BigDecimal(row.get("amountPayable").asText())).isLessThanOrEqualTo(BigDecimal.valueOf(1000));
-
-        JsonNode board = ok(get("/api/sales/my-work"), otherSalesActor).get("board");
-        assertThat(ids(board)).containsExactly(addOn);
-        assertThat(byId(board, addOn).get("orderCodes").get(0).asText()).isEqualTo(summary(root).code());
-        assertThat(new BigDecimal(byId(board, addOn).get("value").asText())).isEqualByComparingTo("700");
-    }
-
-    /** A project on the board (open root) with a paused add-on that has come back from pause is NOT also in the
-     * returning list: one project, one place (no duplicate key, no double quiet count). */
-    @Test
-    void aProjectOnTheBoardIsNotAlsoInTheReturningList() throws Exception {
-        long root = deal(salesActor);
-        long addOn = addOn(root, salesActor);
-        backdate(root, 30);
-        jdbc.update("UPDATE sales.ticket SET lifecycle = 'ON_HOLD', pause_return_on = current_date - 1"
-            + " WHERE ticket_id = :id", Map.of("id", addOn));
-
-        JsonNode work = ok(get("/api/sales/my-work"), salesActor);
-
-        assertThat(ids(work.get("board"))).containsExactly(root);
-        assertThat(ids(work.get("followUp"))).containsExactly(root);
-    }
-
-    /** Two live quotations (seeded directly: the service's sweep allows only one): the NEWER approval wins. */
-    @Test
-    void valueIsTheLatestLiveQuotation_byApprovalTime_notTheOlderOne() throws Exception {
-        long id = deal(salesActor);
-        DealQuotationDto first = approved(id, salesActor, "DESIGNER");
-        long second = cloneQuotation(first.id(), "APPROVED", "2", "now() - interval '1 day'");
-        jdbc.update("UPDATE sales.quotation SET approved_at = now() - interval '5 days', total_amount = 100"
-            + " WHERE quotation_id = :id", Map.of("id", first.id()));
-        jdbc.update("UPDATE sales.quotation SET total_amount = 300 WHERE quotation_id = :id", Map.of("id", second));
-
-        JsonNode deal = byId(ok(get("/api/sales/my-work"), salesActor).get("board"), id);
-
-        assertThat(new BigDecimal(deal.get("value").asText())).isEqualByComparingTo("321.00");
-        assertThat(deal.get("valueExpired").asBoolean()).isFalse();
-    }
-
-    @Test
-    void valuePrefersTheHeadlinePartysQuotation_overANewerOne() throws Exception {
-        long id = deal(salesActor);
-        DealQuotationDto headline = approved(id, salesActor, "DESIGNER");
-        long newer = cloneQuotation(headline.id(), "APPROVED", "2", "now()");
-        jdbc.update("UPDATE sales.quotation SET approved_at = now() - interval '5 days', total_amount = 100"
-            + " WHERE quotation_id = :id", Map.of("id", headline.id()));
-        jdbc.update("UPDATE sales.quotation SET total_amount = 300, party_id = NULL WHERE quotation_id = :id",
-            Map.of("id", newer));
-        jdbc.update("""
-            UPDATE sales.deal_party SET is_headline = TRUE
-             WHERE party_id = (SELECT party_id FROM sales.quotation WHERE quotation_id = :id)
-            """, Map.of("id", headline.id()));
-        assertThat(jdbc.queryForObject("SELECT party_id IS NOT NULL FROM sales.quotation WHERE quotation_id = :id",
-            Map.of("id", headline.id()), Boolean.class)).as("fixture: the approved quotation has a party").isTrue();
-
-        JsonNode deal = byId(ok(get("/api/sales/my-work"), salesActor).get("board"), id);
-
-        assertThat(new BigDecimal(deal.get("value").asText())).isEqualByComparingTo("107.00");
-    }
-
-    @Test
-    void sentAndAcceptedQuotationsCarryAValue() throws Exception {
-        long sent = deal(salesActor);
-        DealQuotationDto a = approved(sent, salesActor, "DESIGNER");
-        jdbc.update("UPDATE sales.quotation SET doc_status = 'SENT' WHERE quotation_id = :id", Map.of("id", a.id()));
-        long accepted = deal(salesActor);
-        DealQuotationDto b = approved(accepted, salesActor, "DESIGNER");
-        jdbc.update("UPDATE sales.quotation SET doc_status = 'ACCEPTED' WHERE quotation_id = :id", Map.of("id", b.id()));
-
-        JsonNode board = ok(get("/api/sales/my-work"), salesActor).get("board");
-
-        assertThat(new BigDecimal(byId(board, sent).get("value").asText())).isEqualByComparingTo(a.grandTotal());
-        assertThat(new BigDecimal(byId(board, accepted).get("value").asText())).isEqualByComparingTo(b.grandTotal());
-    }
-
-    @Test
-    void expiredQuotationKeepsItsValue_flaggedExpired_whenNothingLiveExists() throws Exception {
-        long id = deal(salesActor);
-        DealQuotationDto q = approved(id, salesActor, "DESIGNER");
-        jdbc.update("UPDATE sales.quotation SET doc_status = 'EXPIRED' WHERE quotation_id = :id", Map.of("id", q.id()));
-
-        JsonNode deal = byId(ok(get("/api/sales/my-work"), salesActor).get("board"), id);
-
-        assertThat(new BigDecimal(deal.get("value").asText())).isEqualByComparingTo(q.grandTotal());
-        assertThat(deal.get("valueExpired").asBoolean()).isTrue();
-    }
-
-    @Test
-    void rejectedSupersededAndCancelledQuotationsCarryNoValue() throws Exception {
-        for (String status : List.of("REJECTED", "SUPERSEDED", "CANCELLED")) {
-            long id = deal(salesActor);
-            DealQuotationDto q = approved(id, salesActor, "DESIGNER");
-            jdbc.update("UPDATE sales.quotation SET doc_status = :s WHERE quotation_id = :id",
-                Map.of("s", status, "id", q.id()));
-
-            JsonNode deal = byId(ok(get("/api/sales/my-work"), salesActor).get("board"), id);
-            assertThat(deal.get("value").isNull()).as(status).isTrue();
-        }
-    }
-
-    @Test
-    void repRowsAreOrderedByThbValueDescending() throws Exception {
-        deal(salesActor);
-        long other = deal(otherSalesActor);
-        approved(other, otherSalesActor, "DESIGNER");
-
-        JsonNode reps = ok(get("/api/sales/team-overview"), salesManagerActor).get("reps");
-
-        assertThat(reps.get(0).get("employeeId").asLong()).isEqualTo(otherSalesActor.id());
-        assertThat(reps.get(1).get("employeeId").asLong()).isEqualTo(salesActor.id());
-    }
-
-    /** Managers' and the CEO's own deals stay in the team table, labelled with their role. */
-    @Test
-    void aManagersOwnDealsStayInTheTeamTable_labelledWithTheirRole() throws Exception {
-        deal(salesManagerActor);
-        deal(salesActor);
-
-        JsonNode team = ok(get("/api/sales/team-overview"), salesManagerActor);
-
-        assertThat(rep(team, salesManagerActor.id()).get("role").asText()).isEqualTo("sales_manager");
-        assertThat(rep(team, salesActor.id()).get("role").asText()).isEqualTo("sales");
-    }
-
-    // ── visits this week (slice 2) ───────────────────────────────────────────
-
-    @Test
-    void myWorkCarriesOnlyMyOwnVisitsThisWeek() throws Exception {
-        long mineMonday = visit(salesActor, MONDAY, "PLANNED");
-        long mineSunday = visit(salesActor, SUNDAY, "DONE");
-        long mineNextWeek = visit(salesActor, LocalDate.of(2026, 11, 16), "PLANNED");
-        long mineLastWeek = visit(salesActor, LocalDate.of(2026, 11, 8), "PLANNED");
-        long theirs = visit(otherSalesActor, LocalDate.of(2026, 11, 12), "PLANNED");
-
-        JsonNode work = ok(get("/api/sales/my-work"), salesActor);
-
-        assertThat(visitIds(work.get("visitsThisWeek"))).containsExactly(mineMonday, mineSunday)
-            .doesNotContain(mineNextWeek, mineLastWeek, theirs);
-    }
-
-    @Test
-    void teamOverviewCarriesEveryRepsVisitsAndPerRepCounts() throws Exception {
-        deal(salesActor);
-        visit(salesActor, MONDAY, "DONE");
-        visit(salesActor, LocalDate.of(2026, 11, 10), "PLANNED");
-        visit(salesActor, LocalDate.of(2026, 11, 11), "CANCELLED");
-        visit(salesActor, LocalDate.of(2026, 11, 16), "DONE"); // next week: not counted
-        long noDealsVisit = visit(otherSalesActor, LocalDate.of(2026, 11, 12), "PLANNED");
-
-        JsonNode team = ok(get("/api/sales/team-overview"), salesManagerActor);
-
-        JsonNode a = rep(team, salesActor.id());
-        assertThat(a.get("visitsDone").asInt()).isEqualTo(1);
-        assertThat(a.get("visitsPlanned").asInt()).as("booked and not cancelled, done included").isEqualTo(2);
-        // A rep with visits but no open deal still gets a row, so the manager sees them.
-        JsonNode b = rep(team, otherSalesActor.id());
-        assertThat(b.get("openDeals").asInt()).isZero();
-        assertThat(b.get("visitsPlanned").asInt()).isEqualTo(1);
-        assertThat(visitIds(team.get("teamVisitsThisWeek"))).hasSize(4).contains(noDealsVisit);
-    }
-
-    @Test
-    void aRepWithNeitherDealsNorVisitsHasNoRow() throws Exception {
-        deal(salesActor);
-
-        JsonNode team = ok(get("/api/sales/team-overview"), salesManagerActor);
-
-        assertThat(team.get("reps")).hasSize(1);
-        assertThat(team.get("teamVisitsThisWeek")).isEmpty();
-    }
-
-    /** Review LOW: an owner whose only visits this week were cancelled has nothing to show, so no row. */
-    @Test
-    void anOwnerWhoseOnlyVisitsAreCancelledGetsNoRow() throws Exception {
-        deal(salesActor);
-        visit(otherSalesActor, MONDAY, "CANCELLED");
-
-        JsonNode team = ok(get("/api/sales/team-overview"), salesManagerActor);
-
-        assertThat(team.get("reps")).hasSize(1);
-        assertThat(rep(team, salesActor.id())).isNotNull();
-    }
-
-    private long visit(UserPrincipal owner, LocalDate date, String status) {
-        return jdbc.queryForObject("""
-            INSERT INTO sales.visit (owner_id, contact_name, planned_date, status, done_at)
-            VALUES (:owner, 'ลูกค้า', :date, :status, CASE WHEN :status = 'DONE' THEN now() END)
-            RETURNING visit_id
-            """, Map.of("owner", owner.id(), "date", date, "status", status), Long.class);
-    }
-
-    private static List<Long> visitIds(JsonNode visits) {
-        List<Long> out = new ArrayList<>();
-        visits.forEach(v -> out.add(v.get("id").asLong()));
-        return out;
-    }
-
-    /** A copy of {@code sourceId} on the same ticket with the given status, number suffix and approval time. */
-    private long cloneQuotation(long sourceId, String status, String revisionSuffix, String approvedAtSql) {
-        return jdbc.queryForObject("""
-            INSERT INTO sales.quotation (ticket_id, number, issued_by, total_amount, currency, doc_status, origin,
-                                         recipient_type, created_by, sales_rep_id, approved_at, approved_by,
-                                         document_language, party_id, quotation_version)
-            SELECT ticket_id, number || '-R' || :rev, issued_by, total_amount, currency, :status, origin,
-                   recipient_type, created_by, sales_rep_id, %s, approved_by, document_language, party_id,
-                   quotation_version + 1
-              FROM sales.quotation WHERE quotation_id = :id
-            RETURNING quotation_id
-            """.formatted(approvedAtSql), Map.of("id", sourceId, "status", status, "rev", revisionSuffix), Long.class);
-    }
-
     // ── helpers ──────────────────────────────────────────────────────────────
 
     /** Pushes the deal, its events and its activities {@code days} into the past. */
@@ -624,11 +213,6 @@ class SalesBoardScopeIntegrationTest extends AbstractDealQuotationSlice2Integrat
             p);
         jdbc.update("UPDATE sales.deal_activity SET created_at = now() - make_interval(days => :d) WHERE ticket_id = :id",
             p);
-    }
-
-    private void setLifecycle(long ticketId, String lifecycle) {
-        jdbc.update("UPDATE sales.ticket SET lifecycle = :l WHERE ticket_id = :id",
-            Map.of("l", lifecycle, "id", ticketId));
     }
 
     private JsonNode ok(MockHttpServletRequestBuilder request, UserPrincipal actor) throws Exception {

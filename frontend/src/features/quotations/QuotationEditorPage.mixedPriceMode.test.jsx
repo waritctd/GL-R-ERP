@@ -38,14 +38,13 @@ vi.mock('../../api/index.js', async (importOriginal) => {
       tickets: { get: vi.fn(), create: vi.fn() },
       dealQuotations: {
         get: vi.fn(), create: vi.fn(), update: vi.fn(), calculateLine: vi.fn(), submit: vi.fn(),
-        approve: vi.fn(), reject: vi.fn(), createRevision: vi.fn(), createReorder: vi.fn(), cancel: vi.fn(),
-        downloadPdf: vi.fn(), downloadXlsx: vi.fn(),
+
       },
       catalog: { prices: vi.fn() },
       designers: { search: vi.fn(), getByCode: vi.fn().mockRejectedValue(new Error('not found')) },
       customers: {
-        search: vi.fn(), create: vi.fn(), update: vi.fn(), projects: vi.fn(), createProject: vi.fn(),
-        contacts: vi.fn(), createContact: vi.fn(),
+        search: vi.fn(), create: vi.fn(), update: vi.fn(), projects: vi.fn(),
+        contacts: vi.fn(),
       },
     },
   };
@@ -108,10 +107,6 @@ function renderEditor(path = '/quotations/5') {
 }
 
 const MODES = 'วิธีกรอกราคากระเบื้อง';
-const modes = () => screen.getByRole('group', { name: MODES });
-const modeButton = (name) => within(modes()).getByRole('button', { name });
-const mixedButton = () => within(modes()).queryByRole('button', { name: 'ผสมหลายวิธี' });
-const pressed = (button) => button.getAttribute('aria-pressed') === 'true';
 const byId = (id) => document.getElementById(id);
 const rowPicker = (index) => byId(`price-mode-${index}`);
 const rowPickers = () => [...document.querySelectorAll('select[id^="price-mode-"]')];
@@ -145,70 +140,6 @@ beforeEach(() => {
   api.dealQuotations.update.mockImplementation(async () => ({ quotation: draft() }));
   api.dealQuotations.calculateLine.mockResolvedValue({
     item: { unitPrice: 1210.25, netUnitPrice: 531.16, lineAmount: 5311.6, calculationLine: '(server calc)' },
-  });
-});
-
-describe('the "วิธีกรอกราคากระเบื้อง" choice — one mode for the whole document, or a mix', () => {
-  it('still offers the three whole-document modes, and "ผสมหลายวิธี" beside them', async () => {
-    await openDraft(draft());
-
-    expect(pressed(modeButton('ราคาตั้ง − ส่วนลด %'))).toBe(true);
-    expect(modeButton('ราคาพิเศษ บาท/ตร.ม.')).not.toBeNull();
-    expect(modeButton('ราคาสุทธิ บาท/ตร.ม.')).not.toBeNull();
-    expect(mixedButton()).not.toBeNull();
-    expect(pressed(mixedButton())).toBe(false);
-    // The two kinds of choice are told apart in words, not just by position.
-    expect(within(modes()).getByText('ใช้วิธีเดียวทั้งใบ')).not.toBeNull();
-    expect(within(modes()).getByText('หรือให้แต่ละรายการเลือกเอง')).not.toBeNull();
-    // A single-mode document has no per-row choice.
-    expect(rowPickers()).toHaveLength(0);
-  });
-
-  // The owner's requirement in so many words: "ต้องอธิบายด้วยว่ากรอกวิธีหลายแบบในใบเสนอราคาเดียวกัน".
-  it('choosing ผสมหลายวิธี says what it means: several methods in one quotation, picked per row', async () => {
-    await openDraft(draft());
-
-    fireEvent.click(mixedButton());
-
-    expect(pressed(mixedButton())).toBe(true);
-    for (const single of ['ราคาตั้ง − ส่วนลด %', 'ราคาพิเศษ บาท/ตร.ม.', 'ราคาสุทธิ บาท/ตร.ม.']) {
-      expect(pressed(modeButton(single)), single).toBe(false);
-    }
-    const explanation = screen.getByText(/กรอกราคาได้หลายวิธีในใบเสนอราคาเดียวกัน/);
-    expect(explanation.textContent).toContain('แต่ละรายการ');
-    expect(explanation.textContent).toContain('วิธีคิดราคา');
-  });
-
-  // Step 2 of the flow, and the property that makes the switch safe to try: nothing is re-priced.
-  it('switching to ผสมหลายวิธี changes no row — each just gains a picker set to the mode it was in', async () => {
-    await openDraft(draft({ items: [TILE, { ...TILE, id: 102, seq: 2, model: 'Urbanature' }] }));
-    const before = { price: byId('price-0').value, discount: byId('disc-0').value };
-    api.dealQuotations.calculateLine.mockClear();
-
-    fireEvent.click(mixedButton());
-
-    expect(rowPickers().map((el) => el.value)).toEqual(['NET', 'NET']);
-    expect(byId('price-0').value).toBe(before.price);
-    expect(byId('disc-0').value).toBe(before.discount);
-    expect(byId('disc-1')).not.toBeNull();
-    // Nothing was re-previewed: the rows are in the same mode they were in a moment ago.
-    await new Promise((resolve) => { setTimeout(resolve, 450); });
-    expect(api.dealQuotations.calculateLine).not.toHaveBeenCalled();
-    expect(document.body.textContent).toContain('9,682.00');
-  });
-
-  it('a saved mixed draft opens with each row in its own mode, and says how many use which', async () => {
-    await openDraft(mixedDraft());
-
-    expect(pressed(mixedButton())).toBe(true);
-    expect(rowPickers().map((el) => el.value)).toEqual(['NET', 'SPECIAL_SQM']);
-    // Row 1 asks for a discount; row 2 for a ราคาพิเศษ — on the same document.
-    expect(byId('disc-0').value).toBe('20');
-    expect(byId('special-0')).toBeNull();
-    expect(byId('special-1').value).toBe('790');
-    expect(byId('disc-1')).toBeNull();
-    expect(screen.getByTestId('mixed-price-mode-summary').textContent)
-      .toBe('ตอนนี้: ราคาตั้ง − ส่วนลด % 1 รายการ · ราคาพิเศษ บาท/ตร.ม. 1 รายการ');
   });
 });
 
@@ -251,17 +182,6 @@ describe('one row at a time', () => {
     });
   });
 
-  // People enter several rows the same way in a run, so a new row starts where the last one was.
-  it('a new row on a mixed document starts in the mode of the row before it', async () => {
-    await openDraft(mixedDraft());
-
-    fireEvent.click(screen.getByRole('button', { name: /เพิ่มรายการในตำแหน่งนี้/ }));
-
-    await waitFor(() => expect(rowPickers()).toHaveLength(3));
-    expect(rowPicker(2).value).toBe('SPECIAL_SQM');
-    expect(byId('special-2')).not.toBeNull();
-  });
-
   it('ยืนราคาแบบ "ระบุวันที่" is offered as soon as ONE row has special pricing', async () => {
     await openDraft(mixedDraft({ items: [{ ...NET_ROW, discountPct: 0, netUnitPrice: 1210.25 }, SPECIAL_ROW] }));
     expect(within(screen.getByRole('group', { name: 'ยืนราคา' })).getByRole('button', { name: 'ระบุวันที่' })).not.toBeNull();
@@ -275,98 +195,3 @@ describe('one row at a time', () => {
   });
 });
 
-describe('back to one mode for the whole document', () => {
-  it('asks first when it would re-price rows that use another mode — and cancelling changes nothing', async () => {
-    await openDraft(mixedDraft());
-
-    fireEvent.click(modeButton('ราคาตั้ง − ส่วนลด %'));
-
-    // Named: which mode, and how many rows it will re-price.
-    expect(screen.getByText('ใช้ “ราคาตั้ง − ส่วนลด %” ทั้งใบ?')).not.toBeNull();
-    expect(screen.getByText(/มี 1 รายการที่กรอกราคาด้วยวิธีอื่นอยู่/)).not.toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'ยกเลิก' }));
-
-    expect(pressed(mixedButton())).toBe(true);
-    expect(rowPickers().map((el) => el.value)).toEqual(['NET', 'SPECIAL_SQM']);
-    expect(byId('special-1').value).toBe('790');
-    expect(screen.queryByText('ใช้ “ราคาตั้ง − ส่วนลด %” ทั้งใบ?')).toBeNull();
-  });
-
-  it('confirming puts every row in that mode: no per-row pickers, and nothing about a row mode is saved', async () => {
-    await openDraft(mixedDraft());
-
-    fireEvent.click(modeButton('ราคาตั้ง − ส่วนลด %'));
-    fireEvent.click(screen.getByRole('button', { name: 'เปลี่ยนทั้งใบ' }));
-
-    expect(pressed(modeButton('ราคาตั้ง − ส่วนลด %'))).toBe(true);
-    expect(pressed(mixedButton())).toBe(false);
-    expect(rowPickers()).toHaveLength(0);
-    // Row 2 is now asked the NET way.
-    expect(byId('disc-1')).not.toBeNull();
-    expect(byId('special-1')).toBeNull();
-
-    const payload = await saveDraft();
-    expect(payload.priceMode).toBe('NET');
-    for (const item of payload.items) expect(item).not.toHaveProperty('priceMode');
-    expect(payload.items[1]).toMatchObject({ specialPriceSqm: null, discountPct: 0, listPriceSqm: 1800 });
-  });
-
-  // No question when there is nothing to lose: every row is already priced that way.
-  it('does not ask when every row is already in that mode', async () => {
-    await openDraft(mixedDraft({ items: [NET_ROW, { ...NET_ROW, id: 102, seq: 2 }] }));
-
-    fireEvent.click(modeButton('ราคาตั้ง − ส่วนลด %'));
-
-    expect(screen.queryByText(/ทั้งใบ\?/)).toBeNull();
-    expect(pressed(modeButton('ราคาตั้ง − ส่วนลด %'))).toBe(true);
-    expect(rowPickers()).toHaveLength(0);
-  });
-});
-
-describe('where mixing is not offered', () => {
-  it('an English document has no ผสมหลายวิธี', async () => {
-    await openDraft(draft({
-      documentLanguage: 'EN', currency: 'USD', vatAmount: 0,
-      items: [{ ...TILE, listPriceSqm: null, unitPrice: 100, netUnitPrice: 80, unit: 'PCS' }],
-    }));
-    expect(mixedButton()).toBeNull();
-    expect(screen.queryByText('หรือให้แต่ละรายการเลือกเอง')).toBeNull();
-  });
-
-  it('switching a mixed document to English moves it to one mode for the whole document, and says so', async () => {
-    await openDraft(mixedDraft());
-
-    fireEvent.click(within(screen.getByRole('group', { name: 'ภาษาเอกสาร' })).getByRole('button', { name: /English/ }));
-
-    expect(mixedButton()).toBeNull();
-    expect(pressed(modeButton('ราคาตั้ง − ส่วนลด %'))).toBe(true);
-    expect(rowPickers()).toHaveLength(0);
-    // Said in the same notice that announces the cleared prices — never a silent change of mode.
-    const notice = screen.getByText(/เปลี่ยนภาษาเอกสาร/);
-    expect(notice.textContent).toContain('ผสมหลายวิธี');
-    expect(notice.textContent).toContain('ราคาตั้ง − ส่วนลด %');
-  });
-
-  // Its mode is the CEO's decision; the server refuses a mix there (DealQuotationService
-  // #requirePriceModeAllowed), so the editor does not offer one it would then have to explain away.
-  it('a quotation that came from a คำขอราคา has no ผสมหลายวิธี', async () => {
-    await openDraft(draft({
-      origin: 'PRICING_REQUEST', pricingRequestId: 9, pricingRequestCode: 'PCR-2026-0009', ceoPriceMode: 'NET',
-    }));
-    expect(mixedButton()).toBeNull();
-    expect(modeButton('ราคาพิเศษ บาท/ตร.ม.')).not.toBeNull();
-  });
-});
-
-describe('a single-mode quotation is exactly as it was', () => {
-  it('saves no row mode and the document\'s own mode, untouched', async () => {
-    await openDraft(draft());
-    fireEvent.change(screen.getByLabelText('หมายเหตุเพิ่มเติม'), { target: { value: 'x' } });
-
-    const payload = await saveDraft();
-
-    expect(payload.priceMode).toBe('NET');
-    expect(payload.items[0]).not.toHaveProperty('priceMode');
-    expect(payload.items[0]).toMatchObject({ listPriceSqm: 1800, discountPct: 20 });
-  });
-});

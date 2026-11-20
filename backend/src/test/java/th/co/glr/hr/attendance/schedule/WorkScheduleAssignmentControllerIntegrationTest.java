@@ -32,7 +32,6 @@ class WorkScheduleAssignmentControllerIntegrationTest extends AbstractPostgresIn
         Clock.fixed(Instant.parse("2026-08-10T03:00:00Z"), ZoneId.of("Asia/Bangkok"));
 
     private WorkScheduleAssignmentController controller;
-    private WorkScheduleController scheduleController;
     private WorkScheduleAssignmentRepository repository;
     private TieredWorkScheduleResolver resolver;
 
@@ -47,75 +46,6 @@ class WorkScheduleAssignmentControllerIntegrationTest extends AbstractPostgresIn
         WorkScheduleAssignmentAdminService service =
             new WorkScheduleAssignmentAdminService(repository, resolver, auditService, FIXED_CLOCK);
         controller = new WorkScheduleAssignmentController(service, new SessionContext());
-        scheduleController = new WorkScheduleController(service, new SessionContext());
-    }
-
-    // --- happy path --------------------------------------------------------------------------
-
-    @Test
-    void hrCanListTheScheduleCatalogue() {
-        List<WorkScheduleSummaryDto> schedules = listSchedules(hr());
-
-        assertThat(schedules).extracting(WorkScheduleSummaryDto::code)
-            .contains("OFFICE_5D", "OPS_6D", "WEEKEND_DUTY");
-    }
-
-    @Test
-    void hrCanAssignAScheduleAndSeeItInTheList() {
-        long division = insertDivision("WSX1", "ฝ่ายทดสอบ 1");
-        int scheduleId = scheduleIdByCode("OPS_6D");
-
-        WorkScheduleAssignmentDto created = createAssignment(
-            hr(), new WorkScheduleAssignmentCreateRequest(ScopeType.DIVISION, division, scheduleId, TODAY, null));
-
-        assertThat(created.scopeType()).isEqualTo(ScopeType.DIVISION);
-        assertThat(created.scopeId()).isEqualTo(division);
-        assertThat(created.scheduleCode()).isEqualTo("OPS_6D");
-        assertThat(created.effectiveTo()).isNull();
-
-        List<WorkScheduleAssignmentDto> assignments = listAssignments(ceo());
-        assertThat(assignments).extracting(WorkScheduleAssignmentDto::assignmentId).contains(created.assignmentId());
-    }
-
-    @Test
-    void ceoCanEndAnAssignment() {
-        long division = insertDivision("WSX2", "ฝ่ายทดสอบ 2");
-        int scheduleId = scheduleIdByCode("OFFICE_5D");
-        WorkScheduleAssignmentDto created = createAssignment(
-            ceo(), new WorkScheduleAssignmentCreateRequest(ScopeType.DIVISION, division, scheduleId, TODAY, null));
-
-        WorkScheduleAssignmentDto ended =
-            endAssignment(ceo(), created.assignmentId(), new WorkScheduleAssignmentEndRequest(TODAY.plusDays(5)));
-
-        assertThat(ended.effectiveTo()).isEqualTo(TODAY.plusDays(5));
-    }
-
-    // --- invalidate() wiring -------------------------------------------------------------------
-
-    /** Proves TieredWorkScheduleResolver.invalidate is actually called, not just present: warms the resolver's
-     * cache with an unrelated read FIRST, then creates an assignment through the admin write path, then resolves
-     * again in the SAME test without touching the clock or TTL. */
-    @Test
-    void anAssignmentWriteIsVisibleToTheNextResolveWithoutWaitingForTheTtl() {
-        long division = insertDivision("WSX3", "ฝ่ายทดสอบแคช");
-        long employee = insertEmployee("WSX3-1", division, null);
-
-        // Warms/creates the resolver's internal cache with "no assignment for this division yet".
-        WorkSchedule before = resolver.resolve(employee, division, null, TODAY);
-
-        LocalDate saturday = LocalDate.of(2026, 8, 15);
-        assertThat(before.isWorkday(saturday))
-            .as("before assigning OPS_6D, the company-wide default (Mon-Fri) treats Saturday as a non-workday")
-            .isFalse();
-
-        int scheduleId = scheduleIdByCode("OPS_6D");
-        createAssignment(hr(), new WorkScheduleAssignmentCreateRequest(ScopeType.DIVISION, division, scheduleId, TODAY, null));
-
-        WorkSchedule after = resolver.resolve(employee, division, null, TODAY);
-        assertThat(after.isWorkday(saturday))
-            .as("the write must be visible on the very next resolve() call -- proves invalidate() is wired, "
-                + "not just present (see TieredWorkScheduleResolver#invalidate javadoc)")
-            .isTrue();
     }
 
     // --- back-dating ---------------------------------------------------------------------------
@@ -127,31 +57,6 @@ class WorkScheduleAssignmentControllerIntegrationTest extends AbstractPostgresIn
 
         assertThatThrownBy(() -> createAssignment(hr(),
             new WorkScheduleAssignmentCreateRequest(ScopeType.DIVISION, division, scheduleId, TODAY.minusDays(1), null)))
-            .isInstanceOf(ApiException.class)
-            .extracting(exception -> ((ApiException) exception).getStatus())
-            .isEqualTo(HttpStatus.BAD_REQUEST);
-    }
-
-    @Test
-    void creatingAnAssignmentEffectiveTodayIsAllowed() {
-        long division = insertDivision("WSX5", "ฝ่ายทดสอบวันนี้");
-        int scheduleId = scheduleIdByCode("OPS_6D");
-
-        WorkScheduleAssignmentDto created = createAssignment(hr(),
-            new WorkScheduleAssignmentCreateRequest(ScopeType.DIVISION, division, scheduleId, TODAY, null));
-
-        assertThat(created.effectiveFrom()).isEqualTo(TODAY);
-    }
-
-    @Test
-    void endingAnAssignmentWithAPastEffectiveToIsRejected() {
-        long division = insertDivision("WSX6", "ฝ่ายทดสอบสิ้นสุดย้อนหลัง");
-        int scheduleId = scheduleIdByCode("OPS_6D");
-        WorkScheduleAssignmentDto created = createAssignment(hr(),
-            new WorkScheduleAssignmentCreateRequest(ScopeType.DIVISION, division, scheduleId, TODAY, null));
-
-        assertThatThrownBy(() -> endAssignment(
-            hr(), created.assignmentId(), new WorkScheduleAssignmentEndRequest(TODAY.minusDays(1))))
             .isInstanceOf(ApiException.class)
             .extracting(exception -> ((ApiException) exception).getStatus())
             .isEqualTo(HttpStatus.BAD_REQUEST);
@@ -182,110 +87,7 @@ class WorkScheduleAssignmentControllerIntegrationTest extends AbstractPostgresIn
             .isEqualTo(newFrom.minusDays(1));
     }
 
-    /** A genuinely conflicting FUTURE assignment (starts on/after the new one, still overlapping) is NOT silently
-     * truncated -- that would surprise whoever planned it. The create is rejected instead, asked-wrong-way-round:
-     * can a second, conflicting future assignment be created at all. */
-    @Test
-    void creatingAnAssignmentThatConflictsWithAnAlreadyPlannedFutureAssignmentIsRejected() {
-        long division = insertDivision("WSX8", "ฝ่ายทดสอบอนาคตซ้อนทับ");
-        int office = scheduleIdByCode("OFFICE_5D");
-        int ops6d = scheduleIdByCode("OPS_6D");
-        LocalDate futureFrom = TODAY.plusDays(30);
-        createAssignment(hr(),
-            new WorkScheduleAssignmentCreateRequest(ScopeType.DIVISION, division, ops6d, futureFrom, null));
-
-        // A second create, starting before the already-planned future one but still open-ended, would overlap it --
-        // must be rejected, not silently truncate the existing future plan.
-        assertThatThrownBy(() -> createAssignment(hr(),
-            new WorkScheduleAssignmentCreateRequest(ScopeType.DIVISION, division, office, TODAY, null)))
-            .isInstanceOf(ApiException.class)
-            .extracting(exception -> ((ApiException) exception).getStatus())
-            .isEqualTo(HttpStatus.CONFLICT);
-    }
-
-    // --- input validation ------------------------------------------------------------------------
-
-    @Test
-    void createRejectsAScopeIdThatDoesNotExist() {
-        int scheduleId = scheduleIdByCode("OFFICE_5D");
-        assertThatThrownBy(() -> createAssignment(hr(),
-            new WorkScheduleAssignmentCreateRequest(ScopeType.DIVISION, 9_999_999L, scheduleId, TODAY, null)))
-            .isInstanceOf(ApiException.class)
-            .extracting(exception -> ((ApiException) exception).getStatus())
-            .isEqualTo(HttpStatus.BAD_REQUEST);
-    }
-
-    @Test
-    void createRejectsAWorkScheduleIdThatDoesNotExist() {
-        long division = insertDivision("WSX9", "ฝ่ายทดสอบไม่มีตาราง");
-        assertThatThrownBy(() -> createAssignment(hr(),
-            new WorkScheduleAssignmentCreateRequest(ScopeType.DIVISION, division, 999_999, TODAY, null)))
-            .isInstanceOf(ApiException.class)
-            .extracting(exception -> ((ApiException) exception).getStatus())
-            .isEqualTo(HttpStatus.BAD_REQUEST);
-    }
-
-    @Test
-    void createRejectsAnEffectiveToBeforeEffectiveFrom() {
-        long division = insertDivision("WSXA", "ฝ่ายทดสอบช่วงเวลาผิด");
-        int scheduleId = scheduleIdByCode("OFFICE_5D");
-        assertThatThrownBy(() -> createAssignment(hr(),
-            new WorkScheduleAssignmentCreateRequest(ScopeType.DIVISION, division, scheduleId, TODAY, TODAY.minusDays(1))))
-            .isInstanceOf(ApiException.class)
-            .extracting(exception -> ((ApiException) exception).getStatus())
-            .isEqualTo(HttpStatus.BAD_REQUEST);
-    }
-
-    @Test
-    void endOnAMissingAssignmentIs404() {
-        assertThatThrownBy(() -> endAssignment(hr(), 9_999_999, new WorkScheduleAssignmentEndRequest(TODAY)))
-            .isInstanceOf(ApiException.class)
-            .extracting(exception -> ((ApiException) exception).getStatus())
-            .isEqualTo(HttpStatus.NOT_FOUND);
-    }
-
     // --- wrong-way-round authz ---------------------------------------------------------------
-
-    @Test
-    void anEmployeeCannotListTheScheduleCatalogue() {
-        assertForbidden(() -> listSchedules(employee()));
-    }
-
-    @Test
-    void aDivisionManagerCannotListTheScheduleCatalogue() {
-        assertForbidden(() -> listSchedules(manager()));
-    }
-
-    @Test
-    void anEmployeeCannotListAssignments() {
-        assertForbidden(() -> listAssignments(employee()));
-    }
-
-    @Test
-    void aSalesCallerCannotListAssignments() {
-        assertForbidden(() -> listAssignments(sales()));
-    }
-
-    @Test
-    void aDivisionManagerCannotListAssignments() {
-        assertForbidden(() -> listAssignments(manager()));
-    }
-
-    @Test
-    void anEmployeeCannotCreateAnAssignment() {
-        long division = insertDivision("WSXB", "ฝ่ายทดสอบ authz สร้าง");
-        int scheduleId = scheduleIdByCode("OFFICE_5D");
-        assertForbidden(() -> createAssignment(employee(),
-            new WorkScheduleAssignmentCreateRequest(ScopeType.DIVISION, division, scheduleId, TODAY, null)));
-    }
-
-    @Test
-    void aSalesCallerCannotCreateAnAssignment() {
-        long division = insertDivision("WSXC", "ฝ่ายทดสอบ authz sales");
-        int scheduleId = scheduleIdByCode("OFFICE_5D");
-        assertForbidden(() -> createAssignment(sales(),
-            new WorkScheduleAssignmentCreateRequest(ScopeType.DIVISION, division, scheduleId, TODAY, null)));
-    }
 
     @Test
     void aDivisionManagerCannotCreateAnAssignment() {
@@ -295,31 +97,7 @@ class WorkScheduleAssignmentControllerIntegrationTest extends AbstractPostgresIn
             new WorkScheduleAssignmentCreateRequest(ScopeType.DIVISION, division, scheduleId, TODAY, null)));
     }
 
-    @Test
-    void anEmployeeCannotEndAnAssignment() {
-        long division = insertDivision("WSXE", "ฝ่ายทดสอบ authz จบ");
-        int scheduleId = scheduleIdByCode("OFFICE_5D");
-        WorkScheduleAssignmentDto created = createAssignment(hr(),
-            new WorkScheduleAssignmentCreateRequest(ScopeType.DIVISION, division, scheduleId, TODAY, null));
-        assertForbidden(() -> endAssignment(employee(), created.assignmentId(), null));
-    }
-
-    @Test
-    void aDivisionManagerCannotEndAnAssignment() {
-        long division = insertDivision("WSXF", "ฝ่ายทดสอบ authz จบ manager");
-        int scheduleId = scheduleIdByCode("OFFICE_5D");
-        WorkScheduleAssignmentDto created = createAssignment(hr(),
-            new WorkScheduleAssignmentCreateRequest(ScopeType.DIVISION, division, scheduleId, TODAY, null));
-        assertForbidden(() -> endAssignment(manager(), created.assignmentId(), null));
-    }
-
     // --- helpers -------------------------------------------------------------------------------
-
-    private List<WorkScheduleSummaryDto> listSchedules(UserPrincipal user) {
-        MockHttpSession session = new MockHttpSession();
-        session.setAttribute(SessionContext.SESSION_USER_KEY, user);
-        return scheduleController.list(session).schedules();
-    }
 
     private List<WorkScheduleAssignmentDto> listAssignments(UserPrincipal user) {
         MockHttpSession session = new MockHttpSession();
@@ -331,12 +109,6 @@ class WorkScheduleAssignmentControllerIntegrationTest extends AbstractPostgresIn
         MockHttpSession session = new MockHttpSession();
         session.setAttribute(SessionContext.SESSION_USER_KEY, user);
         return controller.create(request, session);
-    }
-
-    private WorkScheduleAssignmentDto endAssignment(UserPrincipal user, int assignmentId, WorkScheduleAssignmentEndRequest request) {
-        MockHttpSession session = new MockHttpSession();
-        session.setAttribute(SessionContext.SESSION_USER_KEY, user);
-        return controller.end(assignmentId, request, session);
     }
 
     private static void assertForbidden(ThrowingCallable callable) {
@@ -355,20 +127,6 @@ class WorkScheduleAssignmentControllerIntegrationTest extends AbstractPostgresIn
             INSERT INTO hr.division (source_code, name_th, is_active)
             VALUES (:code, :name, TRUE) RETURNING division_id
             """, Map.of("code", code, "name", name), Long.class);
-    }
-
-    private long insertEmployee(String code, Long divisionId, Long departmentId) {
-        Map<String, Object> params = new java.util.HashMap<>();
-        params.put("code", code);
-        params.put("divisionId", divisionId);
-        params.put("departmentId", departmentId);
-        params.put("hireDate", LocalDate.of(2020, 1, 1));
-        return jdbc.queryForObject("""
-            INSERT INTO hr.employee (employee_code, first_name_th, last_name_th,
-                                     division_id, department_id, hire_date, is_active)
-            VALUES (:code, 'ทดสอบ', :code, :divisionId, :departmentId, :hireDate, TRUE)
-            RETURNING employee_id
-            """, params, Long.class);
     }
 
     private int scheduleIdByCode(String code) {

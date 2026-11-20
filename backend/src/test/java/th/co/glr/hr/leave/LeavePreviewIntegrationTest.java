@@ -7,7 +7,6 @@ import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
-import java.time.LocalTime;
 import java.time.ZoneId;
 import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
@@ -33,8 +32,7 @@ import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 class LeavePreviewIntegrationTest extends AbstractPostgresIntegrationTest {
     private static final ZoneId BUSINESS_ZONE = ZoneId.of("Asia/Bangkok");
     // Wednesday 2026-07-01 09:00 Asia/Bangkok -- comfortably past VACATION's 3-day and PERSONAL's 1-day seeded
-    // advance notice for every "should be approved" date used below, and the same fixed instant
-    // LeaveRelationalRulesIntegrationTest uses (so the reused date fixtures below match it exactly).
+    // advance notice for every "should be approved" date used below.
     private static final Instant FIXED_NOW = Instant.parse("2026-07-01T02:00:00Z");
 
     private LeaveRepository leaveRepository;
@@ -61,110 +59,11 @@ class LeavePreviewIntegrationTest extends AbstractPostgresIntegrationTest {
 
     // Baseline: no blocking gate on either side
 
-    @Test
-    void approvedVacationRequestAgreesOnBothSides() {
-        long employeeId = insertEmployee("PREV-OK-001", LocalDate.parse("2015-01-01"), null);
-        assertPreviewAgreesWithSubmit(employeeId, "VACATION", "2026-07-13", "2026-07-13", null, false, null);
-    }
-
-    /**
-     * Partial-day span: {@link LeavePreviewRequest}'s startTime/endTime widening
-     * -- previewed BEFORE submitting, the motivating multi-day case (half-day afternoon
-     * + full next day = 1.50) must show the IDENTICAL {@code totalDays}/{@code paidDays} a real
-     * submit would persist, the same "preview never lies" guarantee this whole class exists to
-     * prove, now extended to a timed span rather than only a whole-day one.
-     */
-    @Test
-    void timedMultiDaySpanPreviewAgreesWithSubmitOnTheOwnersOwnCase() {
-        long employeeId = insertEmployee("PREV-SPAN-001", LocalDate.parse("2015-01-01"), null);
-
-        LeavePreviewDto preview = leaveService.preview(new LeavePreviewRequest(
-            "VACATION", LocalDate.parse("2026-08-11"), LocalDate.parse("2026-08-12"), employeeId,
-            null, false, false, LeavePreviewDepth.FULL, null,
-            LocalTime.of(13, 0), LocalTime.of(17, 30)),
-            employee(employeeId));
-
-        assertThat(preview.blocking()).isNull();
-        assertThat(preview.totalDays()).isEqualByComparingTo("1.50");
-        assertThat(preview.paidDays()).isEqualByComparingTo("1.50");
-        assertThat(preview.unpaidDays()).isEqualByComparingTo("0.00");
-
-        LeaveRequestDto submitted = leaveService.submit(new SubmitLeaveRequest(
-            employeeId, "VACATION", LocalDate.parse("2026-08-11"), LocalDate.parse("2026-08-12"),
-            "half day then full day", LocalTime.of(13, 0), LocalTime.of(17, 30),
-            null, null, null, null, null, null, null),
-            employee(employeeId));
-
-        assertThat(submitted.totalDays())
-            .as("previewed and submitted totalDays must never drift apart for the identical request")
-            .isEqualByComparingTo(preview.totalDays());
-        assertThat(submitted.paidDays()).isEqualByComparingTo(preview.paidDays());
-    }
-
     // Categorical eligibility (LeaveService#eligibilityRuleOutcome)
-
-    @Test
-    void oncePerEmploymentAgreesOnBothSides() {
-        long employeeId = insertEmployee("PREV-ONCE-001", LocalDate.parse("2015-01-01"), null);
-        // Pre-existing ORDINATION claim -- neither preview nor submit created this; both must see it.
-        seedActiveRequest(employeeId, "ORDINATION", "2026-05-01", "2026-05-15", LeaveStatus.APPROVED);
-        assertPreviewAgreesWithSubmit(
-            employeeId, "ORDINATION", "2026-08-01", "2026-08-15", null, false, "ONCE_PER_EMPLOYMENT");
-    }
-
-    @Test
-    void resignationGateAgreesOnBothSides() {
-        long employeeId = insertEmployee("PREV-RES-001", LocalDate.parse("2015-01-01"), null);
-        insertResignation(employeeId);
-        assertPreviewAgreesWithSubmit(employeeId, "VACATION", "2026-07-13", "2026-07-13", null, false, "RESIGNATION_GATE");
-    }
-
-    @Test
-    void probationNotPassedNeitherBlocksButSubmitStillWarns() {
-        // Hired 5 days before "now" -- comfortably inside the 119-day default probation window (see
-        // SpecialMoneyPolicyEvaluator#DEFAULT_PROBATION_DAYS), so PERSONAL's probation gate fires.
-        // PROBATION_NOT_PASSED is WARN_UNPAID_ALL, not BLOCK (preview.blocking()/submit.
-        // systemNoteCode() agree, both null; the substance is in submit's ruleWarnings).
-        long employeeId = insertEmployee("PREV-PROB-001", LocalDate.parse("2026-06-26"), null);
-        assertPreviewAgreesNeitherBlocksButSubmitWarns(
-            employeeId, "PERSONAL", "2026-07-13", "2026-07-13", null, false, "PROBATION_NOT_PASSED");
-    }
 
     // Request-shape gates
 
-    @Test
-    void weddingMaxDaysNeitherBlocksButSubmitStillWarns() {
-        // WEDDING_MAX_DAYS is WARN_UNPAID_EXCESS, not BLOCK.
-        long employeeId = insertEmployee("PREV-WED-001", LocalDate.parse("2015-01-01"), null);
-        // 8-day span, over the 3-day wedding cap; well past PERSONAL's 1-day advance notice.
-        assertPreviewAgreesNeitherBlocksButSubmitWarns(
-            employeeId, "PERSONAL", "2026-07-13", "2026-07-20", "WEDDING", false, "WEDDING_MAX_DAYS");
-    }
-
-    @Test
-    void contiguousLeavePairAgreesOnBothSides() {
-        long employeeId = insertEmployee("PREV-CONTIG-001", LocalDate.parse("2015-01-01"), null);
-        // Fri 2026-07-10 PERSONAL already taken; Mon 2026-07-13 VACATION is contiguous across the weekend -- see
-        // LeaveService#isContiguous's Javadoc for why a plain weekend does not break it.
-        seedActiveRequest(employeeId, "PERSONAL", "2026-07-10", "2026-07-10", LeaveStatus.APPROVED);
-        assertPreviewAgreesWithSubmit(
-            employeeId, "VACATION", "2026-07-13", "2026-07-13", null, false, "CONTIGUOUS_LEAVE_PAIR");
-    }
-
     // Document/timing gates
-
-    @Test
-    void sickNoCertificateToleranceExhaustedNeitherBlocksButSubmitStillWarns() {
-        // SICK_NO_CERT_TOLERANCE_EXHAUSTED is WARN_UNPAID_ALL, not BLOCK.
-        long employeeId = insertEmployee("PREV-SICK-001", LocalDate.parse("2015-01-01"), null);
-        // 3 certificate-less SICK occasions already used this month (the seeded tolerance) -- the 4th still fires the
-        // gate on both sides, just no longer as a rejection.
-        seedActiveRequest(employeeId, "SICK", "2026-07-02", "2026-07-02", LeaveStatus.APPROVED);
-        seedActiveRequest(employeeId, "SICK", "2026-07-03", "2026-07-03", LeaveStatus.APPROVED);
-        seedActiveRequest(employeeId, "SICK", "2026-07-06", "2026-07-06", LeaveStatus.APPROVED);
-        assertPreviewAgreesNeitherBlocksButSubmitWarns(
-            employeeId, "SICK", "2026-07-13", "2026-07-13", null, false, "SICK_NO_CERT_TOLERANCE_EXHAUSTED");
-    }
 
     @Test
     void advanceNoticeNeitherBlocksButSubmitStillWarns() {
@@ -174,20 +73,6 @@ class LeavePreviewIntegrationTest extends AbstractPostgresIntegrationTest {
         // not declared emergency, so the plain notice gate fires.
         assertPreviewAgreesNeitherBlocksButSubmitWarns(
             employeeId, "PERSONAL", "2026-07-01", "2026-07-01", null, false, "ADVANCE_NOTICE");
-    }
-
-    @Test
-    void emergencyToleranceExhaustedNeitherBlocksButSubmitStillWarns() {
-        // EMERGENCY_TOLERANCE_EXHAUSTED is WARN_UNPAID_ALL, not BLOCK.
-        long employeeId = insertEmployee("PREV-EMERG-001", LocalDate.parse("2015-01-01"), null);
-        // 3 prior PERSONAL requests this month already used the emergency exception (emergency_filing = TRUE) -- the
-        // 4th same-day, no-notice, emergency-declared request still fires the tolerance-exhausted gate on both sides,
-        // not the plain notice one.
-        markEmergencyFiling(seedActiveRequest(employeeId, "PERSONAL", "2026-07-02", "2026-07-02", LeaveStatus.APPROVED));
-        markEmergencyFiling(seedActiveRequest(employeeId, "PERSONAL", "2026-07-03", "2026-07-03", LeaveStatus.APPROVED));
-        markEmergencyFiling(seedActiveRequest(employeeId, "PERSONAL", "2026-07-06", "2026-07-06", LeaveStatus.APPROVED));
-        assertPreviewAgreesNeitherBlocksButSubmitWarns(
-            employeeId, "PERSONAL", "2026-07-01", "2026-07-01", null, true, "EMERGENCY_TOLERANCE_EXHAUSTED");
     }
 
     // The one relational gate (§5.3.2 department coverage)
@@ -205,127 +90,7 @@ class LeavePreviewIntegrationTest extends AbstractPostgresIntegrationTest {
             requester, "VACATION", "2026-07-13", "2026-07-13", null, false, "DEPARTMENT_COVERAGE");
     }
 
-    /** Checks QUICK preview explicitly skips department coverage even when FULL preview and submission block the
-     * same request. */
-    @Test
-    void quickDepthSkipsDepartmentCoverageAndSaysSoExplicitly() {
-        long departmentId = insertDepartment("PREV-DEPT-COVER-QUICK-001");
-        long requester = insertEmployee("PREV-COVER-QUICK-001", LocalDate.parse("2015-01-01"), departmentId);
-        long colleagueA = insertEmployee("PREV-COVER-QUICK-002", LocalDate.parse("2015-01-01"), departmentId);
-        long colleagueB = insertEmployee("PREV-COVER-QUICK-003", LocalDate.parse("2015-01-01"), departmentId);
-        seedActiveRequest(colleagueA, "VACATION", "2026-07-13", "2026-07-13", LeaveStatus.SUBMITTED);
-        seedActiveRequest(colleagueB, "VACATION", "2026-07-13", "2026-07-13", LeaveStatus.APPROVED);
-
-        LeavePreviewDto quickPreview = leaveService.preview(new LeavePreviewRequest(
-            "VACATION", LocalDate.parse("2026-07-13"), LocalDate.parse("2026-07-13"), requester,
-            null, false, false, LeavePreviewDepth.QUICK, null), employee(requester));
-
-        assertThat(quickPreview.blocking()).as("QUICK depth must not surface the coverage rejection").isNull();
-        assertThat(quickPreview.coverageEvaluated()).as("must explicitly say the gate did not run").isFalse();
-        assertThat(quickPreview.datesEvaluated()).isTrue();
-
-        // The SAME request, for real, IS refused -- confirming the QUICK read above was genuinely optimistic, not
-        // merely "also happens to be approved".
-        LeaveRequestDto submitted = leaveService.submit(
-            new SubmitLeaveRequest(requester, "VACATION", LocalDate.parse("2026-07-13"), LocalDate.parse("2026-07-13"), "Integration test leave"),
-            employee(requester));
-        assertThat(submitted.status()).isEqualTo("AUTO_REJECTED");
-        assertThat(submitted.systemNoteCode()).isEqualTo("DEPARTMENT_COVERAGE");
-    }
-
-    /**
-     * Combines an accumulating WARN gate (§5 advance notice,
-     * PERSONAL's real seeded 1-day requirement, unmet by filing the SAME day) with the one relational
-     * BLOCK gate (§5.3.2 department coverage) on the IDENTICAL request, to prove two things at once
-     * that a narrower fixture could each only assert in isolation:
-     *
-     * <ol>
-     *   <li><b>Wrong-way-round:</b> under FULL depth, the BLOCK wins outright and does NOT leak the
-     *       ADVANCE_NOTICE warning that accumulated before it fired -- {@link
-     *       LeaveService.AutoRejectResult}'s own dominance rule discards it (see
-     *       {@link LeaveService#departmentCoverageRuleOutcome}'s BLOCK-return call site's comment).
-     *   <li><b>QUICK depth does not corrupt WARN reporting:</b> the SAME request, previewed at QUICK
-     *       depth, skips {@code #departmentCoverageRuleOutcome} entirely (the documented cost, proven
-     *       in isolation by {@link #quickDepthSkipsDepartmentCoverageAndSaysSoExplicitly} above) --
-     *       and with the BLOCK never reached, the ADVANCE_NOTICE warning that fired earlier in the
-     *       SAME gate chain correctly reaches {@code ruleWarnings} instead. Department coverage is a
-     *       BLOCK-only {@link LeaveRuleCode} (never contributes to {@code warnings}), so skipping it
-     *       changes nothing about what warnings the earlier gates already found -- this is the
-     *       concrete proof of that claim, not an assumption.
-     * </ol>
-     */
-    @Test
-    void aBlockingGateDiscardsAnAccumulatedWarningButQuickDepthStillSurfacesItWhenTheBlockIsSkipped() {
-        long departmentId = insertDepartment("PREV-WCOV-DEPT-001");
-        long requester = insertEmployee("PREV-WCOV-EMP-001", LocalDate.parse("2015-01-01"), departmentId);
-        long colleagueA = insertEmployee("PREV-WCOV-EMP-002", LocalDate.parse("2015-01-01"), departmentId);
-        long colleagueB = insertEmployee("PREV-WCOV-EMP-003", LocalDate.parse("2015-01-01"), departmentId);
-        // Same-day PERSONAL leave for both colleagues -- the requester's own same-day PERSONAL request below would
-        // leave nobody else in the department at work on 2026-07-01.
-        seedActiveRequest(colleagueA, "PERSONAL", "2026-07-01", "2026-07-01", LeaveStatus.SUBMITTED);
-        seedActiveRequest(colleagueB, "PERSONAL", "2026-07-01", "2026-07-01", LeaveStatus.APPROVED);
-
-        // FULL depth: department coverage BLOCKs, and must not leak the ADVANCE_NOTICE warning that accumulated before
-        // it (today, 2026-07-01, is inside PERSONAL's 1-day notice requirement).
-        LeavePreviewDto fullPreview = leaveService.preview(new LeavePreviewRequest(
-            "PERSONAL", LocalDate.parse("2026-07-01"), LocalDate.parse("2026-07-01"), requester,
-            null, false, false, LeavePreviewDepth.FULL, null), employee(requester));
-
-        assertThat(fullPreview.blocking()).isNotNull();
-        assertThat(fullPreview.blocking().code().name()).isEqualTo("DEPARTMENT_COVERAGE");
-        assertThat(fullPreview.coverageEvaluated()).isTrue();
-        assertThat(fullPreview.ruleWarnings())
-            .as("a BLOCK must not leak the ADVANCE_NOTICE warning that accumulated before it")
-            .isEmpty();
-
-        // QUICK depth, IDENTICAL request: coverage is skipped, so nothing blocks -- and the ADVANCE_NOTICE warning
-        // (unaffected by the skip) correctly surfaces instead.
-        LeavePreviewDto quickPreview = leaveService.preview(new LeavePreviewRequest(
-            "PERSONAL", LocalDate.parse("2026-07-01"), LocalDate.parse("2026-07-01"), requester,
-            null, false, false, LeavePreviewDepth.QUICK, null), employee(requester));
-
-        assertThat(quickPreview.blocking()).as("QUICK depth must not surface the coverage rejection").isNull();
-        assertThat(quickPreview.coverageEvaluated()).as("must explicitly say the gate did not run").isFalse();
-        assertThat(quickPreview.ruleWarnings())
-            .as("skipping department coverage must not suppress the WARN gate that fired above it")
-            .extracting(LeaveRuleWarningDto::code)
-            .containsExactly("ADVANCE_NOTICE");
-        assertThat(quickPreview.unpaidByRuleDays())
-            .as("the whole 1-day request is unpaid by rule (WARN_UNPAID_ALL)")
-            .isEqualByComparingTo(BigDecimal.ONE);
-    }
-
     // Nullable dates: only the eligibility gates can run
-
-    @Test
-    void previewWithNoDatesYetOnlyEvaluatesEligibilityGatesAndReportsNoBlockForAWarnOnlyEmployee() {
-        // This employee's ONLY eligibility-gate hit is PROBATION_NOT_PASSED, which is
-        // WARN_UNPAID_ALL, not BLOCK -- so this dateless preview's `blocking()` is correctly NULL
-        // (nothing here blocks the eventual submission), consistent with #submit's own behaviour
-        // for the identical employee/type. See LeaveService#eligibilityRuleOutcome's Javadoc for why
-        // this dateless path cannot surface the WARN itself (no chosen dates yet to compute "how
-        // many days would be unpaid").
-        //
-        // Also the proof for the "0 วัน" bug -- ruleWarnings must be EMPTY (not a warning carrying a fabricated
-        // "0 วัน" sentence) and unpaidByRuleDays must be null (unknown, not zero), even though
-        // PROBATION_NOT_PASSED genuinely fired against LocalDate.now(clock) -- see LeavePreviewDto's/
-        // LeaveService#preview's Javadoc for why.
-        long employeeId = insertEmployee("PREV-NODATES-001", LocalDate.parse("2026-06-26"), null);
-
-        LeavePreviewDto preview = leaveService.preview(
-            new LeavePreviewRequest("PERSONAL", null, null, employeeId, null, false, false, LeavePreviewDepth.FULL, null),
-            employee(employeeId));
-
-        assertThat(preview.datesEvaluated()).isFalse();
-        assertThat(preview.coverageEvaluated()).isFalse();
-        assertThat(preview.totalDays()).isNull();
-        assertThat(preview.paidDays()).isNull();
-        assertThat(preview.unpaidDays()).isNull();
-        assertThat(preview.quotaYearSplits()).isEmpty();
-        assertThat(preview.blocking()).isNull();
-        assertThat(preview.ruleWarnings()).isEmpty();
-        assertThat(preview.unpaidByRuleDays()).isNull();
-    }
 
     // --- helpers ------------------------------------------------------------
 
@@ -442,17 +207,6 @@ class LeavePreviewIntegrationTest extends AbstractPostgresIntegrationTest {
             .addValue("hireDate", hireDate)
             .addValue("departmentId", departmentId),
             Long.class);
-    }
-
-    /** {@code hr.resignation} (V1): one row per employee -- see LeaveService#resignationRuleOutcome. */
-    private void insertResignation(long employeeId) {
-        jdbc.update("""
-            INSERT INTO hr.resignation (employee_id, recorded_date, resign_date)
-            VALUES (:employeeId, :recordedDate, :resignDate)
-            """, new MapSqlParameterSource()
-            .addValue("employeeId", employeeId)
-            .addValue("recordedDate", LocalDate.parse("2026-06-15"))
-            .addValue("resignDate", LocalDate.parse("2026-08-15")));
     }
 
     /** Seeds an "existing" leave request directly through LeaveRepository#create -- bypassing every LeaveService

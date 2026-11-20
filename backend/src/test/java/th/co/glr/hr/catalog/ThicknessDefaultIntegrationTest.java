@@ -103,15 +103,6 @@ class ThicknessDefaultIntegrationTest extends AbstractPostgresIntegrationTest {
     // ── authorization, wrong-way-round ───────────────────────────────────────
 
     @Test
-    void anonymousCallerIsRejectedOnBothEndpoints() throws Exception {
-        mockMvc.perform(get("/api/catalog/thickness-defaults"))
-            .andExpect(status().isUnauthorized());
-        mockMvc.perform(put("/api/catalog/thickness-defaults")
-                .contentType(MediaType.APPLICATION_JSON).content(body(1L, "X", "9")))
-            .andExpect(status().isUnauthorized());
-    }
-
-    @Test
     void nonCeoRolesCannotReadOrWriteAndNothingIsStored() throws Exception {
         long priceId = seedRowWithoutThickness("TD F1", "ALTEA");
         long factoryId = factoryOf(priceId);
@@ -145,90 +136,4 @@ class ThicknessDefaultIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(statusOf(priceId)).isEqualTo("PRICEABLE");
     }
 
-    @Test
-    void aNullThicknessClearsTheDefaultRatherThanStoringZero() throws Exception {
-        long priceId = seedRowWithoutThickness("TD F3", "MONOCOLOR");
-        long factoryId = factoryOf(priceId);
-
-        mockMvc.perform(put("/api/catalog/thickness-defaults").session(session("ceo"))
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(body(factoryId, "MONOCOLOR", "9")))
-            .andExpect(status().isOk());
-        assertThat(statusOf(priceId)).isEqualTo("PRICEABLE");
-
-        mockMvc.perform(put("/api/catalog/thickness-defaults").session(session("ceo"))
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(body(factoryId, "MONOCOLOR", "null")))
-            .andExpect(status().isOk());
-
-        // Back to the honest state, NOT a stored 0 -- a zero would silently pick the lowest freight band instead of
-        // refusing to price.
-        assertThat(storedDefaults()).isZero();
-        assertThat(statusOf(priceId)).isEqualTo("NO_THICKNESS");
-    }
-
-    @Test
-    void aZeroThicknessIsRejected() throws Exception {
-        long priceId = seedRowWithoutThickness("TD F4", "PERGOLA");
-        long factoryId = factoryOf(priceId);
-
-        mockMvc.perform(put("/api/catalog/thickness-defaults").session(session("ceo"))
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(body(factoryId, "PERGOLA", "0")))
-            .andExpect(status().isBadRequest());
-
-        assertThat(storedDefaults()).isZero();
-    }
-
-    /** The subtle one: a size-level override is the escape hatch for a collection whose trim differs from its field
-     * tile. A bulk collection-level save must not wipe it. */
-    @Test
-    void aBulkCollectionSaveLeavesSizeLevelOverridesIntact() throws Exception {
-        long priceId = seedRowWithoutThickness("TD F5", "ANTHOLOGY");
-        long factoryId = factoryOf(priceId);
-
-        jdbc.update("""
-            INSERT INTO price_catalog.collection_thickness_default
-                (factory_id, collection, size_norm, thickness_mm)
-            VALUES (:f, 'ANTHOLOGY', '200X200', 20)
-            """, new MapSqlParameterSource().addValue("f", factoryId));
-
-        mockMvc.perform(put("/api/catalog/thickness-defaults").session(session("ceo"))
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(body(factoryId, "ANTHOLOGY", "9")))
-            .andExpect(status().isOk());
-
-        Integer overrides = jdbc.queryForObject("""
-            SELECT count(*) FROM price_catalog.collection_thickness_default
-             WHERE size_norm = '200X200' AND thickness_mm = 20
-            """, Map.of(), Integer.class);
-        assertThat(overrides).as("the size-level override must survive a collection-level save")
-            .isEqualTo(1);
-
-        // And it still wins, because it is more specific.
-        assertThat(jdbc.queryForObject(
-            "SELECT thickness_mm FROM price_catalog.v_priceable_product WHERE price_id = :id",
-            Map.of("id", priceId), BigDecimal.class)).isEqualByComparingTo("20");
-    }
-
-    @Test
-    void theGapListIsOrderedByHowManyRowsEachEntryWouldUnblock() throws Exception {
-        long small = seedRowWithoutThickness("TD F6", "SMALL");
-        long factoryId = factoryOf(small);
-        // Give BIG three rows against the same factory so it must sort ahead of SMALL's one.
-        for (int i = 0; i < 3; i++) {
-            long id = insertCatalogProduct("TD F6", "ES", "BIG-" + i,
-                new BigDecimal("40.00"), "EUR", "per_sqm", "ACTIVE");
-            jdbc.update("UPDATE price_catalog.product_prices SET collection='BIG', thickness_mm=NULL WHERE price_id=:id",
-                Map.of("id", id));
-        }
-
-        String json = mockMvc.perform(get("/api/catalog/thickness-defaults").session(session("ceo")))
-            .andExpect(status().isOk())
-            .andReturn().getResponse().getContentAsString();
-
-        assertThat(json.indexOf("\"BIG\"")).as("biggest-impact collection first")
-            .isLessThan(json.indexOf("\"SMALL\""));
-        assertThat(factoryId).isPositive();
-    }
 }

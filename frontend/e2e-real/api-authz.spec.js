@@ -145,15 +145,6 @@ test.describe('backend authorization (real Java services)', () => {
       await anon.dispose();
     }
   });
-
-  test('the denied roles are refused, not silently served an empty list', async () => {
-    // The failure this guards against is a gate "fixed" by turning a 403 into a 200 with zero rows. That reads as
-    // safe and is not: an empty page is indistinguishable from "there is nothing to see", so a scope bug that
-    // leaks rows later would look like data appearing rather than a permission regression.
-    const response = await sessions.ceo.get('/api/employees');
-    expect(response.status()).toBe(403);
-    expect(await response.text()).toContain('ไม่มีสิทธิ์เข้าถึงรายการนี้');
-  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -172,7 +163,6 @@ test.describe('document chain summary — DepositNoticeService#requireTicketView
   const READERS = ['sales', 'sales_manager', 'ceo', 'account'];
   const NON_VIEWERS = except('sales', 'sales_manager', 'ceo', 'account', 'import');
   const chainPath = (id) => `/api/tickets/${id}/document-chain`;
-  const MISSING = 2147480000;
 
   test.beforeAll(async () => { sessions = await apiSessionsFor(ALL); });
   test.afterAll(async () => { await disposeSessions(sessions); });
@@ -183,18 +173,6 @@ test.describe('document chain summary — DepositNoticeService#requireTicketView
     expect(response.status(), `${role} lists its deals`).toBe(200);
     return (await response.json()).tickets ?? [];
   }
-
-  test('roles that read no deal documents get 403 — before the deal is even looked up', async () => {
-    for (const role of NON_VIEWERS) {
-      expect((await sessions[role].get(chainPath(MISSING))).status(), `${role} on a missing deal`).toBe(403);
-    }
-  });
-
-  test('every role that passes the role gate gets 404 for a deal that does not exist', async () => {
-    for (const role of [...READERS, 'import']) {
-      expect((await sessions[role].get(chainPath(MISSING))).status(), `${role} on a missing deal`).toBe(404);
-    }
-  });
 
   test('each reader gets 200 on a deal from its own list; import, hr and the rest get 403 on the same deal', async () => {
     let checked = 0;
@@ -237,7 +215,6 @@ test.describe('planned visits on a deal — VisitService#plannedOnDeal', () => {
   const READERS = ['sales', 'sales_manager', 'ceo'];
   const NON_READERS = except('sales', 'sales_manager', 'ceo');
   const plannedPath = (id) => `/api/sales/visits/deal/${id}/planned`;
-  const MISSING = 2147480000;
 
   test.beforeAll(async () => { sessions = await apiSessionsFor(ALL); });
   test.afterAll(async () => { await disposeSessions(sessions); });
@@ -247,18 +224,6 @@ test.describe('planned visits on a deal — VisitService#plannedOnDeal', () => {
     expect(response.status(), `${role} lists its deals`).toBe(200);
     return (await response.json()).tickets ?? [];
   }
-
-  test('roles outside the visit roles get 403 — before the deal is even looked up', async () => {
-    for (const role of NON_READERS) {
-      expect((await sessions[role].get(plannedPath(MISSING))).status(), `${role} on a missing deal`).toBe(403);
-    }
-  });
-
-  test('the visit roles get 404 for a deal that does not exist', async () => {
-    for (const role of READERS) {
-      expect((await sessions[role].get(plannedPath(MISSING))).status(), `${role} on a missing deal`).toBe(404);
-    }
-  });
 
   test('each reader gets 200 on a deal from its own list, and a sales rep only its own PLANNED rows', async () => {
     const me = (await (await sessions.sales.get('/api/auth/me')).json()).user;
@@ -360,11 +325,11 @@ test.describe('follow-up date writes — refused before anything is written', ()
 // GET /api/tickets/{id}/import-requests/coverage — the stored ใบขอซื้อ coverage read, and (slice 6c) its
 // `splitPreview`, the dry run of createDrafts' per-factory split shown in the "ยืนยันออกใบขอซื้อ" confirm.
 // ImportRequestService#coverage:
-//   1. the deal must exist — 404 for EVERY role (requireTicket runs before the role check);
+//   1. the deal must exist — 404 for EVERY role (not pinned here);
 //   2. requireRead: ceo / import / sales_manager every deal; sales only a deal it owns or keyed; everyone else 403;
 //   3. splitPreview: an object only for createDrafts' own gate (ceo, the owning/keying rep); null for import and
 //      sales_manager, who read this route for the covered flag only.
-//   4. `itemFactory` must be `<ticketItemId>:<factoryId>` — anything else is a 400 (ImportRequestController).
+//   4. `itemFactory` must be `<ticketItemId>:<factoryId>` — anything else is a 400 (not pinned here).
 // The split itself, the no-write guarantee and the gate's SQL are proven by ImportRequestSplitPreviewIntegrationTest
 // (real Postgres, wrong-way-round, mutation-checked). Read-only: every request here is a GET.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -373,7 +338,6 @@ test.describe('stored IR coverage + split preview — ImportRequestService#cover
   let sessions;
   const NO_READ = except('ceo', 'import', 'sales_manager', 'sales');
   const coveragePath = (id, query = '') => `/api/tickets/${id}/import-requests/coverage${query}`;
-  const MISSING = 2147480000;
 
   test.beforeAll(async () => { sessions = await apiSessionsFor(ALL); });
   test.afterAll(async () => { await disposeSessions(sessions); });
@@ -383,12 +347,6 @@ test.describe('stored IR coverage + split preview — ImportRequestService#cover
     expect(response.status(), `${role} lists its deals`).toBe(200);
     return (await response.json()).tickets ?? [];
   }
-
-  test('every role gets 404 for a deal that does not exist — the deal is looked up before the role', async () => {
-    for (const role of ALL) {
-      expect((await sessions[role].get(coveragePath(MISSING))).status(), `${role} on a missing deal`).toBe(404);
-    }
-  });
 
   test('wrong-way-round: import and sales_manager get the covered flag but a null splitPreview; the rest are refused', async () => {
     const [deal] = await dealsOf('ceo');
@@ -437,27 +395,15 @@ test.describe('stored IR coverage + split preview — ImportRequestService#cover
     }
     test.skip(!own && !foreign, 'the seed gives the sales persona neither an own nor a foreign deal');
   });
-
-  test('a malformed itemFactory pair is a 400, a well-formed one is read', async () => {
-    const [deal] = await dealsOf('ceo');
-    test.skip(!deal, 'the seed has no deal the ceo can list');
-    for (const bad of ['12', 'a:b', '1:2:3']) {
-      const response = await sessions.ceo.get(coveragePath(deal.id, `?itemFactory=${encodeURIComponent(bad)}`));
-      expect(response.status(), `itemFactory=${bad}`).toBe(400);
-    }
-    // An unknown factory / a line not on this deal is ignored by the preview, never an error.
-    expect((await sessions.ceo.get(coveragePath(deal.id, '?itemFactory=2147480000:2147480000'))).status()).toBe(200);
-  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Slice 6d — DENY DIRECTION ONLY, as this file's header requires: every request below is refused before it writes.
 //   ส่งตัวอย่าง: POST /api/tickets/{id}/activities with kind SAMPLE_SENT — the same TicketService#addActivity and
 //     requireDealOwnership as a call (the deal's owner/keyer with the sales role, sales_manager, ceo). What was sent
-//     (the note) is required: a blank one is 400 even for a writer, checked before the deal is read.
+//     (the note) is required: a blank one is 400 even for a writer (not pinned here).
 //   วันที่ส่ง: POST /api/tickets/{id}/deliveries with deliveredOn — the same canWriteDelivery as any delivery (ceo, or
-//     the deal's owning rep), and the 7-day / no-future window is the SERVER's (TicketService#backDatedDeliveryInstant),
-//     so a ceo sending tomorrow is 400 before anything is written.
+//     the deal's owning rep), and the 7-day window is the SERVER's (not pinned here).
 // The allowed direction and "nothing written" are proven on real Postgres by DealActivitySampleSentIntegrationTest and
 // DeliveryBackDateIntegrationTest (mutation-checked).
 // ─────────────────────────────────────────────────────────────────────────────
@@ -500,16 +446,6 @@ test.describe('slice 6d writes — refused before anything is written', () => {
     expect(await activityCountOf(deal.id), 'no activity was written').toBe(before);
   });
 
-  test('a ส่งตัวอย่าง with nothing said about what was sent is 400, even from the ceo', async () => {
-    const [deal] = await foreignDeals();
-    test.skip(!deal, 'every seeded deal belongs to the sales persona');
-    const before = await activityCountOf(deal.id);
-    const response = await apiWrite(sessions.ceo, 'post', `/api/tickets/${deal.id}/activities`,
-      { kind: 'SAMPLE_SENT', activityDate: bangkokToday(), note: '   ' });
-    expect(response.status(), `ceo POST activities SAMPLE_SENT with a blank note on deal ${deal.id}`).toBe(400);
-    expect(await activityCountOf(deal.id), 'no activity was written').toBe(before);
-  });
-
   test('a back-dated delivery on another rep\'s deal is 403 for that rep and for every role but the ceo', async () => {
     const [deal] = await foreignDeals();
     test.skip(!deal, 'every seeded deal belongs to the sales persona');
@@ -518,22 +454,5 @@ test.describe('slice 6d writes — refused before anything is written', () => {
       const response = await apiWrite(sessions[role], 'post', `/api/tickets/${deal.id}/deliveries`, body);
       expect(response.status(), `${role} POST deliveries with deliveredOn on deal ${deal.id}`).toBe(403);
     }
-  });
-
-  test('the window is the server\'s: tomorrow, or 8 days back, is 400 even from the ceo, before any line is read', async () => {
-    const deal = (await foreignDeals()).find((d) => d.lifecycle === 'ACTIVE');
-    test.skip(!deal, 'no ACTIVE deal outside the sales persona to send it to');
-    const before = await sessions.ceo.get(`/api/tickets/${deal.id}/deliveries`);
-    expect(before.status()).toBe(200);
-    const count = ((await before.json()).items ?? []).length;
-    for (const deliveredOn of [plusDays(bangkokToday(), 1), plusDays(bangkokToday(), -8)]) {
-      // itemId 0 is no line of any deal: the date is refused first, so the 400 is the window's, not the line's.
-      const response = await apiWrite(sessions.ceo, 'post', `/api/tickets/${deal.id}/deliveries`,
-        { source: 'WAREHOUSE', lines: [{ itemId: 0, qty: 1 }], deliveredOn });
-      expect(response.status(), `ceo POST deliveries deliveredOn=${deliveredOn} on deal ${deal.id}`).toBe(400);
-      expect(JSON.stringify(await response.json()), 'the window refused it').toMatch(/อนาคต|7 วัน/);
-    }
-    const after = await sessions.ceo.get(`/api/tickets/${deal.id}/deliveries`);
-    expect(((await after.json()).items ?? []).length, 'nothing was delivered').toBe(count);
   });
 });

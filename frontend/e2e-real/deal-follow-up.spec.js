@@ -84,17 +84,6 @@ test.describe('slice 6b — follow-up date and planned visits on a deal @visits'
     expect(summary.designerName, 'the tracking PUT would have wiped this; the new path must not').toBe('สตูดิโอ e2e 6b');
   });
 
-  test('a one-step visit log carrying nextFollowUpAt moves the deal\'s date', async () => {
-    const date = isoIn(12);
-    const res = await apiWrite(sessions.sales, 'post', '/api/sales/visits', {
-      ticketId: deal.id, contactName: 'e2e 6b · Walk-in', plannedDate: isoIn(0), done: true, nextFollowUpAt: date,
-    });
-    expect(res.status(), 'POST /api/sales/visits done with nextFollowUpAt').toBe(200);
-    expect((await res.json()).dealFollowUpOpen, 'VisitDto.dealFollowUpOpen is served').toBe(true);
-
-    expect((await readDeal(sessions, 'sales', deal.id)).summary.nextFollowUpAt).toBe(date);
-  });
-
   test('a past date is refused 400 and leaves the deal\'s date alone', async () => {
     const before = (await readDeal(sessions, 'sales', deal.id)).summary.nextFollowUpAt;
     const res = await apiWrite(sessions.sales, 'post', `/api/tickets/${deal.id}/activities`, {

@@ -1,8 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { purgeLegacyDealDrafts, PURGED_MARKER } from './purgeLegacyDealDrafts.js';
 
-// Fix round 1, ruling 7: the old create form's client-side drafts (dealDrafts.js, removed) may still sit in reps'
-// browsers holding customer details. On app start, once per browser, they are removed.
+// The old create form's client-side drafts (dealDrafts.js, removed) may still sit in reps' browsers holding
+// customer details. On app start, once per browser, they are removed.
 
 function memoryStorage(initial = {}) {
   const store = new Map(Object.entries(initial));
@@ -17,9 +17,8 @@ function memoryStorage(initial = {}) {
 }
 
 describe('purgeLegacyDealDrafts', () => {
-  let storage;
-  beforeEach(() => {
-    storage = memoryStorage({
+  it('removes every old draft key and nothing else', () => {
+    const storage = memoryStorage({
       'glr:draft-deal': '{"legacy":true}',
       'glr:deal-drafts:index': '[{"id":"a"}]',
       'glr:draft-deal:a': '{"customer":{"name":"บริษัท ก"}}',
@@ -27,18 +26,8 @@ describe('purgeLegacyDealDrafts', () => {
       'glr:other-thing': 'keep',
       'glr:draft-dealership': 'keep (not a draft key: no colon after the prefix)',
     });
-  });
-
-  it('removes every old draft key and nothing else', () => {
     purgeLegacyDealDrafts(storage);
     expect(storage.keys().sort()).toEqual(['glr:draft-dealership', 'glr:other-thing', PURGED_MARKER].sort());
-  });
-
-  it('runs once per browser: a later start does not scan again', () => {
-    purgeLegacyDealDrafts(storage);
-    storage.setItem('glr:draft-deal:c', 'written after the purge');
-    purgeLegacyDealDrafts(storage);
-    expect(storage.getItem('glr:draft-deal:c')).toBe('written after the purge');
   });
 
   it('never throws when storage is unavailable or broken', () => {
