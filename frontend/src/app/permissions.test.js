@@ -212,7 +212,7 @@ describe('canAccessPath under the release lockdown', () => {
     '/tax-allowance',
     // มีอะไรใหม่: every employee must be able to open the release notice their bell row and email link to.
     '/whats-new',
-    '/whats-new/2026-11-16',
+    '/whats-new/v2.0.0',
   ];
 
   async function locked() {

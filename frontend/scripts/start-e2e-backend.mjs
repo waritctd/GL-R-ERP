@@ -33,9 +33,8 @@ function findJar() {
         '  Run:  cd backend && ./mvnw -DskipTests package'
     );
   }
-  // Maven leaves the pre-repackage jar as *.jar.original, and sources/javadoc jars can sit alongside the boot
-  // jar; match only the executable artifact.
-  const jars = entries.filter((name) => name.endsWith('.jar') && !name.includes('-sources'));
+  // The pom's finalName; an exact match skips *.jar.original and any stale versioned jar from an older build.
+  const jars = entries.filter((name) => name === 'glr-hr-backend.jar');
   if (jars.length === 0) {
     die(
       `No jar in ${TARGET_DIR}.\n` + '  Run:  cd backend && ./mvnw -DskipTests package'

@@ -12,21 +12,22 @@ import { FeedbackInbox, useFeedbackInbox } from './FeedbackInbox.jsx';
 import { FeedbackTab } from './FeedbackTab.jsx';
 import { ChangeCard } from './ChangeCard.jsx';
 import { ReleaseNoticeAdmin } from './ReleaseNoticeAdmin.jsx';
-import { releaseLink, unreadReleaseNotices, useNotifications } from './releaseNoticeHooks.js';
+import { releaseIdOfLink, releaseLink, unreadReleaseNotices, useNotifications } from './releaseNoticeHooks.js';
 import { findRelease, latestRelease } from './releases/index.js';
 
 const TAB_PREFIX = 'whats-new';
 
 /** Opening the page is reading it: this release's unread bell row(s) are marked read once, which also clears the
- * header bubble's red dot (same cache). Other releases' rows are left alone. */
+ * header bubble's red dot (same cache). So are rows of the retired date-style releases (their link opens "ไม่พบประกาศนี้"), which could otherwise
+ * never be cleared. Rows of any other release are left alone. */
 function useMarkReleaseRead(release) {
   const queryClient = useQueryClient();
   const notifications = useNotifications();
   const marked = useRef(new Set());
 
   useEffect(() => {
-    if (!release) return;
-    const pending = unreadReleaseNotices(notifications, release.id).filter((n) => !marked.current.has(n.id));
+    const pending = unreadReleaseNotices(notifications)
+      .filter((n) => ((release && n.link === releaseLink(release.id)) || isRetiredDateRelease(releaseIdOfLink(n.link))) && !marked.current.has(n.id));
     if (pending.length === 0) return;
     pending.forEach((n) => marked.current.add(n.id));
     Promise.all(pending.map((n) => api.notifications.markRead(n.id)))
@@ -34,6 +35,9 @@ function useMarkReleaseRead(release) {
       .finally(() => queryClient.invalidateQueries({ queryKey: queryKeys.notifications() }));
   }, [notifications, queryClient, release]);
 }
+
+// Only the retired date-style ids (2026-11-16 …): any other unknown id may be a release newer than this tab's bundle.
+const isRetiredDateRelease = (id) => /^\d{4}-\d{2}-\d{2}$/.test(id ?? '') && !findRelease(id);
 
 function Contents({ items }) {
   const reduceMotion = typeof window !== 'undefined'
@@ -124,10 +128,9 @@ export function WhatsNewPage({ user, showToast }) {
   const mine = entriesForViewer(release, user);
   const { sections, addressOnlyRoles } = allTabSections(release);
   const mineGroups = [{ key: 'mine', label: `สำหรับ${roleLabel}`, entries: mine }];
-  // Roles whose only entry is the everyone one. A release names it itself (`otherRolesNote`); 16 Nov predates the field
-  // and keeps its published address-move sentence word for word.
+  // Roles whose only entries are the everyone ones; the release says so itself.
   const addressOnlyNote = addressOnlyRoles.length > 0
-    ? `${addressOnlyRoles.map((role) => ROLE_LABEL[role]).join(' · ')}: ${release.otherRolesNote ?? 'ฉบับนี้มีเฉพาะการย้ายที่อยู่เว็บ (ด้านบน)'}`
+    ? `${addressOnlyRoles.map((role) => ROLE_LABEL[role]).join(' · ')}: ${release.otherRolesNote ?? 'ฉบับนี้ไม่มีเรื่องเฉพาะแผนก'}`
     : null;
   // "ทั้งหมด" (every role's section) is for HR, CEO and the owner account (the admin flag, GLR-1001 only).
   const canSeeAllTab = user?.role === 'hr' || user?.role === 'ceo' || isAdmin;
@@ -146,7 +149,7 @@ export function WhatsNewPage({ user, showToast }) {
     <PageStack>
       <PageHeader
         eyebrow="มีอะไรใหม่"
-        title={`มีอะไรใหม่ · ${release.dateLabel}`}
+        title={release.dateLabel}
         subtitle={`${release.title} · สำหรับ${roleLabel}`}
       />
       {canManageReleaseNotes(user) ? <ReleaseNoticeAdmin release={release} showToast={showToast} /> : null}

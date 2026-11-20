@@ -15,7 +15,13 @@ public class OpenApiConfig {
         return new OpenAPI()
             .info(new Info()
                 .title("GL-R HR Portal API")
-                .version("0.1.0")
-                .description("REST API for the GL-R HR portal (v0.1.0 stabilization)."));
+                .version(version())
+                .description("REST API for the GL-R HR portal."));
+    }
+
+    /** The build's version (jar manifest Implementation-Version, written by the Spring Boot plugin); "dev" off a jar. */
+    private static String version() {
+        String version = OpenApiConfig.class.getPackage().getImplementationVersion();
+        return version != null ? version : "dev";
     }
 }

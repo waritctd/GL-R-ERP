@@ -1,5 +1,6 @@
 import { Link, useLocation } from 'react-router-dom';
 import { cn } from '../../utils/cn.js';
+import { APP_VERSION } from '../../app/version.js';
 import { Icon } from '../common/Icon.jsx';
 
 const SECTIONS = [
@@ -93,6 +94,7 @@ export function Launcher({ id, panelRef, items, onNavigate }) {
           </section>
         );
       })}
+      <p className="col-span-full m-0 border-t border-border-subtle px-2.5 pt-2 text-2xs text-text-muted">v{APP_VERSION}</p>
     </nav>
   );
 }
