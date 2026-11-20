@@ -87,19 +87,24 @@ public class RemainingInvoiceController {
         return service.bundleSelection(id, sessions.requireUser(session));
     }
 
+    @PutMapping("/remaining-invoices/{id}/bundle-selection")
+    Map<String, Boolean> saveBundleSelection(@PathVariable long id, @RequestBody DocumentBundle.Selection selection,
+                                             HttpSession session) {
+        service.saveBundleSelection(id, sessions.requireUser(session), selection);
+        return Map.of("ok", true);
+    }
+
     @GetMapping("/remaining-invoices/{id}/file")
     ResponseEntity<byte[]> file(
         @PathVariable long id,
         @RequestParam(defaultValue = "xlsx") String format,
-        @RequestParam(required = false) Boolean quotation,
-        @RequestParam(required = false) String attachments,
         HttpSession session
     ) {
         UserPrincipal user = sessions.requireUser(session);
         RemainingInvoiceDocumentDto doc = service.get(id, user);
         String base = doc.docNumber() != null ? doc.docNumber() : "draft-" + id;
         if ("pdf".equals(format == null ? "" : format.trim().toLowerCase())) {
-            DocumentBundle.Result bundle = service.getPdfBundle(id, user, quotation, DocumentBundle.parseIds(attachments));
+            DocumentBundle.Result bundle = service.getPdfBundle(id, user);
             return ResponseEntity.ok()
                 .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + base + ".pdf\"")
                 .headers(DocumentBundle.skippedHeader(bundle))

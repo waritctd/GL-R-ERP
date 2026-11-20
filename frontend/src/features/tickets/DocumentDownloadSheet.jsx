@@ -11,36 +11,48 @@ const UPLOAD_ACCEPT = '.pdf,.png,.jpg,.jpeg';
 /**
  * The one "ดาวน์โหลด PDF" sheet for a deposit notice / remaining invoice: the document itself is always in; the
  * referenced quotation and the deal's attachments are checkboxes. It starts from the server's remembered choice for
- * this document (else the quotation + every PO) and hands the choice to `onDownload`, which does the download and
- * shows its own errors. `kind` is 'deposit' | 'remaining'.
+ * this document (else the quotation + every PO), SAVES the choice (PUT) and then calls `onDownload()`, which downloads
+ * the PDF with the saved choice and shows its own errors. `kind` is 'deposit' | 'remaining'.
  */
 export function DocumentDownloadSheet({ kind, documentId, ticketId, reference, onClose, onDownload }) {
   const queryClient = useQueryClient();
-  const selectionApi = kind === 'remaining' ? api.storedRemainingInvoices : api.depositNotices;
+  const remaining = kind === 'remaining';
+  // The SAME key and shape as TicketDetailPage's attachment list (a plain array): the two share one cache entry.
   const attachmentsQuery = useQuery({
     queryKey: queryKeys.ticketAttachments(ticketId),
-    queryFn: () => api.attachments.list(ticketId),
+    queryFn: () => api.attachments.list(ticketId).then((r) => r.attachments ?? []),
   });
   const selectionQuery = useQuery({
     queryKey: ['bundleSelection', kind, documentId],
-    queryFn: () => selectionApi.bundleSelection(documentId),
+    // spelled out per kind (not through an alias) so the UI-reachability scan sees every call
+    queryFn: () => (remaining ? api.storedRemainingInvoices.bundleSelection(documentId)
+      : api.depositNotices.bundleSelection(documentId)),
     gcTime: 0,
+    retry: false,
   });
-  const files = attachmentsQuery.data?.attachments ?? [];
+  // upload order (the list comes newest first), so the sheet and the PDF follow the same oldest-first order
+  const files = [...(attachmentsQuery.data ?? [])].sort((a, b) => a.id - b.id);
   const [quotation, setQuotation] = useState(true);
   const [checked, setChecked] = useState(() => new Set());
   const [ready, setReady] = useState(false);
   const [busy, setBusy] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState(null);
+  const selectionFailed = selectionQuery.isError;
 
-  // Seed once from the remembered / default choice; later edits (and uploads) are the user's.
+  // Seed once, when BOTH queries have answered: the remembered / default choice, or (selection fetch failed) the
+  // defaults, the quotation plus every PO. Later edits (and uploads) are the user's.
   useEffect(() => {
-    if (ready || !selectionQuery.data) return;
-    setQuotation(selectionQuery.data.quotation !== false);
-    setChecked(new Set(selectionQuery.data.attachmentIds ?? []));
+    if (ready || !attachmentsQuery.data || (!selectionQuery.data && !selectionFailed)) return;
+    if (selectionFailed) {
+      setQuotation(true);
+      setChecked(new Set(attachmentsQuery.data.filter((f) => f.attachType === 'PO').map((f) => f.id)));
+    } else {
+      setQuotation(selectionQuery.data.quotation !== false);
+      setChecked(new Set(selectionQuery.data.attachmentIds ?? []));
+    }
     setReady(true);
-  }, [ready, selectionQuery.data]);
+  }, [ready, attachmentsQuery.data, selectionQuery.data, selectionFailed]);
 
   function toggle(id) {
     setChecked((prev) => {
@@ -71,8 +83,10 @@ export function DocumentDownloadSheet({ kind, documentId, ticketId, reference, o
     setBusy(true);
     setError(null);
     try {
-      // list order, so the PDF follows what the sheet shows
-      await onDownload({ quotation, attachmentIds: files.filter((f) => checked.has(f.id)).map((f) => f.id) });
+      const selection = { quotation, attachmentIds: files.filter((f) => checked.has(f.id)).map((f) => f.id) };
+      await (remaining ? api.storedRemainingInvoices.saveBundleSelection(documentId, selection)
+        : api.depositNotices.saveBundleSelection(documentId, selection));
+      await onDownload();
       onClose();
     } catch (err) {
       setError(err?.message || 'ดาวน์โหลดไม่สำเร็จ');
@@ -95,6 +109,14 @@ export function DocumentDownloadSheet({ kind, documentId, ticketId, reference, o
       )}
     >
       <div className="grid gap-3">
+        {selectionFailed ? (
+          <p role="alert" className="m-0 text-sm text-warning-dark">
+            โหลดตัวเลือกที่จำไว้ไม่สำเร็จ ใช้ค่าเริ่มต้น (ใบเสนอราคาและ PO)
+          </p>
+        ) : null}
+        {attachmentsQuery.isError ? (
+          <p role="alert" className="m-0 text-sm text-danger">โหลดรายการไฟล์แนบไม่สำเร็จ</p>
+        ) : null}
         <label className="flex items-center gap-2 text-sm text-text-muted">
           <input type="checkbox" checked disabled readOnly />
           <span>ตัวเอกสาร (รวมเสมอ)</span>

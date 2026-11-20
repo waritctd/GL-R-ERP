@@ -151,33 +151,39 @@ class DepositNoticeBundlePdfIntegrationTest extends DirectQuotationDealTestBase 
 
     // ── the download sheet's choice ─────────────────────────────────────────────────────────────
 
-    /** Defaults are the quotation + every PO; a choice (PO off, another file on, quotation off) is what the PDF holds,
-     * is remembered for the next download with no parameters, and a foreign attachment id is a 400. */
+    /** Defaults are the quotation + every PO, oldest first; the sheet PUTs a choice (PO off, another file on, quotation
+     * off), which is what the next PDF holds; a foreign attachment id is a 400; chosen files over the cap are a 413. */
     @Test
     void theDownloadSheetChoice_picksTheFiles_andIsRemembered() throws Exception {
         Deal deal = confirmedDepositDeal();
         long id = deal.notice().id();
+        attachPo(deal.ticketId(), onePagePdf("PO-FIRST-1111"));
         attachPo(deal.ticketId(), onePagePdf(PO_SENTINEL));
         long other = attachFile(deal.ticketId(), "x.pdf", "application/pdf", onePagePdf("OTHER-SENTINEL"), AttachType.OTHER);
         int quotationPages = pageCount(quotationService.renderPdf(deal.quotation().id(), salesActor));
 
         List<String> defaults = pageTexts(depositNoticeService.getPdfBundle(id, salesActor).pdf());
-        assertThat(firstPageContaining(defaults, PO_SENTINEL)).isGreaterThanOrEqualTo(1);
+        assertThat(firstPageContaining(defaults, "PO-FIRST-1111")).as("oldest PO first")
+            .isLessThan(firstPageContaining(defaults, PO_SENTINEL));
         assertThat(firstPageContaining(defaults, "OTHER-SENTINEL")).as("an OTHER file is unticked").isEqualTo(-1);
-        assertThat(defaults).hasSize(1 + 1 + quotationPages);
+        assertThat(defaults).hasSize(1 + 2 + quotationPages);
 
-        List<String> chosen = pageTexts(depositNoticeService.getPdfBundle(id, salesActor, false, List.of(other)).pdf());
+        var choice = new th.co.glr.hr.deposit.DocumentBundle.Selection(false, List.of(other));
+        depositNoticeService.saveBundleSelection(id, salesActor, choice);
+        depositNoticeService.saveBundleSelection(id, salesActor, choice); // a double tap is idempotent
+        List<String> chosen = pageTexts(depositNoticeService.getPdfBundle(id, salesActor).pdf());
         assertThat(firstPageContaining(chosen, "OTHER-SENTINEL")).isGreaterThanOrEqualTo(1);
         assertThat(firstPageContaining(chosen, PO_SENTINEL)).isEqualTo(-1);
         assertThat(chosen).as("notice + the ticked file, no quotation").hasSize(2);
-
-        assertThat(pageTexts(depositNoticeService.getPdfBundle(id, salesActor).pdf()))
-            .as("remembered").hasSize(2);
         assertThat(depositNoticeService.bundleSelection(id, salesActor).attachmentIds()).containsExactly(other);
 
         long foreign = attachFile(pipelineTicket(salesActor), "f.pdf", "application/pdf", onePagePdf("F"), AttachType.OTHER);
-        assertStatus(org.springframework.http.HttpStatus.BAD_REQUEST,
-            () -> depositNoticeService.getPdfBundle(id, salesActor, null, List.of(foreign)));
+        assertStatus(org.springframework.http.HttpStatus.BAD_REQUEST, () -> depositNoticeService.saveBundleSelection(id,
+            salesActor, new th.co.glr.hr.deposit.DocumentBundle.Selection(true, List.of(foreign))));
+
+        jdbc.update("UPDATE sales.attachment SET file_size = 41943041 WHERE attachment_id = :id", java.util.Map.of("id", other));
+        assertStatus(org.springframework.http.HttpStatus.PAYLOAD_TOO_LARGE,
+            () -> depositNoticeService.getPdfBundle(id, salesActor));
     }
 
     // ── customer header follows the quotation's party ───────────────────────────────────────

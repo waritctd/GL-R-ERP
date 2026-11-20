@@ -6,6 +6,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.PDPageContentStream;
@@ -22,7 +23,6 @@ import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.dealquotation.DealQuotationService;
 import th.co.glr.hr.ticket.AttachType;
-import th.co.glr.hr.ticket.QuotationRenderer;
 
 /**
  * What the customer receives with a ใบแจ้งยอดเงินรับมัดจำ / ใบแจ้งหนี้ส่วนที่เหลือ PDF: the document, then the deal's
@@ -62,6 +62,8 @@ public class DocumentBundle {
     public static final String SKIPPED_HEADER = "X-Document-Bundle-Skipped";
     public static final String LARGE_HEADER = "X-Document-Bundle-Large";
     static final long LARGE_BYTES = 15L * 1024 * 1024;
+    /** Hard cap on the chosen files' total size: over it the download is refused (413) rather than risking the heap. */
+    static final long MAX_BYTES = 40L * 1024 * 1024;
 
     /** The response headers naming what was skipped, e.g. {@code po,quotation}, and a too-large bundle; none when clean. */
     public static org.springframework.http.HttpHeaders skippedHeader(Result bundle) {
@@ -86,33 +88,32 @@ public class DocumentBundle {
             .sorted(Comparator.comparingLong(AttachmentDto::id)).map(AttachmentDto::id).toList());
     }
 
-    /** The {@code attachments=} query value: null = not supplied, "" = none, else comma-separated ids (400 if not numbers). */
-    public static List<Long> parseIds(String raw) {
-        if (raw == null) {
-            return null;
-        }
-        try {
-            return java.util.Arrays.stream(raw.split(",")).map(String::trim).filter(v -> !v.isEmpty())
-                .map(Long::valueOf).toList();
-        } catch (NumberFormatException e) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "รายการไฟล์แนบไม่ถูกต้อง");
-        }
-    }
-
     /** The defaults, nothing remembered (callers that have no stored document). */
     public Result bundle(byte[] documentPdf, long ticketId, String quotationNumber, UserPrincipal actor) {
-        return bundle(documentPdf, ticketId, quotationNumber, actor, null, 0, null, null);
+        return bundle(documentPdf, ticketId, quotationNumber, actor, null, 0);
+    }
+
+    /** Remembers the sheet's choice for a document. Every id must be an attachment of THIS deal (400 otherwise).
+     * Not transactional itself: the caller's @Transactional method wraps it. */
+    public void saveSelection(String kind, long documentId, long ticketId, Selection selection) {
+        java.util.Set<Long> dealIds = new java.util.HashSet<>();
+        attachments.findByTicketId(ticketId).forEach(a -> dealIds.add(a.id()));
+        List<Long> ids = selection.attachmentIds() == null ? List.of() : selection.attachmentIds().stream().distinct().toList();
+        for (Long id : ids) {
+            if (!dealIds.contains(id)) {
+                throw new ApiException(HttpStatus.BAD_REQUEST, "ไฟล์แนบที่เลือกไม่ใช่ของงานนี้");
+            }
+        }
+        docs.saveBundleSelection(kind, documentId, selection.quotation(), ids);
     }
 
     /**
-     * @param kind / documentId  the document whose last choice is remembered ({@code kind == null}: defaults, no memory)
-     * @param quotationParam     null = not supplied (remembered / default applies)
-     * @param attachmentParam    null = not supplied; every id must be an attachment of THIS deal (400 otherwise).
-     *                           Supplying either parameter saves the resulting choice as the document's last one.
+     * One pass: the document, the chosen attachments (the remembered / default choice, in order) and the quotation
+     * are imported into ONE destination PDF and saved once. Total chosen size over {@link #MAX_BYTES} is a 413.
+     * @param kind / documentId  the document whose remembered choice applies ({@code kind == null}: the defaults)
      */
     public Result bundle(byte[] documentPdf, long ticketId, String quotationNumber, UserPrincipal actor,
-                         String kind, long documentId, Boolean quotationParam, List<Long> attachmentParam) {
-        byte[] out = documentPdf;
+                         String kind, long documentId) {
         List<String> skipped = new ArrayList<>();
         // No per-attachment gate here: every role that may read a notice (owner/keyer, grant holder, sales_manager, ceo,
         // account in scope) may also list and download the deal's attachments (TicketAccessPolicy.canViewDocuments).
@@ -124,55 +125,68 @@ public class DocumentBundle {
             log.warn("Attachments of ticket {} could not be listed for the PDF bundle", ticketId, e);
             addOnce(skipped, "po");
         }
-        if (attachmentParam != null) {
-            for (Long id : attachmentParam) {
-                if (!deal.containsKey(id)) {
-                    throw new ApiException(HttpStatus.BAD_REQUEST, "ไฟล์แนบที่เลือกไม่ใช่ของงานนี้");
-                }
-            }
-        }
         Selection chosen = selection(kind, documentId, ticketId);
-        boolean withQuotation = quotationParam != null ? quotationParam : chosen.quotation();
-        List<Long> ids = (attachmentParam != null ? attachmentParam : chosen.attachmentIds()).stream().distinct()
-            .filter(deal::containsKey).toList();
-        if (kind != null && (quotationParam != null || attachmentParam != null)) {
-            docs.saveBundleSelection(kind, documentId, withQuotation, ids);
+        List<Long> ids = chosen.attachmentIds().stream().distinct().filter(deal::containsKey).toList();
+        long totalBytes = ids.stream().mapToLong(id -> deal.get(id).fileSize() == null ? 0 : deal.get(id).fileSize()).sum();
+        if (totalBytes > MAX_BYTES) {
+            throw new ApiException(HttpStatus.PAYLOAD_TOO_LARGE,
+                "ไฟล์ที่เลือกรวมกันใหญ่เกิน 40 MB กรุณาเลือกไฟล์น้อยลงก่อนดาวน์โหลด");
         }
-        long totalBytes = 0;
-        for (Long id : ids) {
-            AttachmentDto file = deal.get(id);
-            String part = AttachType.PO.equals(file.attachType()) ? "po" : "attachment";
-            totalBytes += file.fileSize() == null ? 0 : file.fileSize();
-            try {
-                byte[] bytes = Files.readAllBytes(Path.of(attachments.findFilePathById(id)));
-                byte[] pdf = isPdf(bytes) ? bytes : imagePage(bytes);
-                if (pdf == null) {
-                    log.warn("Attachment {} on ticket {} is neither PDF nor PNG/JPG; skipped", id, ticketId);
+        List<PDDocument> open = new ArrayList<>();
+        try (PDDocument out = Loader.loadPDF(documentPdf)) {
+            for (Long id : ids) {
+                String part = AttachType.PO.equals(deal.get(id).attachType()) ? "po" : "attachment";
+                try {
+                    byte[] bytes = Files.readAllBytes(Path.of(attachments.findFilePathById(id)));
+                    byte[] pdf = isPdf(bytes) ? bytes : imagePage(bytes);
+                    if (pdf == null) {
+                        log.warn("Attachment {} on ticket {} is neither PDF nor PNG/JPG; skipped", id, ticketId);
+                        addOnce(skipped, part);
+                        continue;
+                    }
+                    importAll(out, pdf, open);
+                } catch (Exception e) {
+                    log.warn("Attachment {} on ticket {} could not be added to the PDF bundle", id, ticketId, e);
                     addOnce(skipped, part);
-                    continue;
                 }
-                out = QuotationRenderer.appendPdf(out, pdf);
-            } catch (Exception e) {
-                log.warn("Attachment {} on ticket {} could not be added to the PDF bundle", id, ticketId, e);
-                addOnce(skipped, part);
+            }
+            if (chosen.quotation() && quotationNumber != null && !quotationNumber.isBlank()) {
+                try {
+                    Long quotationId = docs.findNewEngineQuotationId(ticketId, quotationNumber).orElse(null);
+                    if (quotationId == null) {
+                        // a legacy / old-engine reference: nothing to attach, which is not a skip
+                        log.info("Quotation {} of ticket {} is not a new-engine quotation; nothing to attach", quotationNumber, ticketId);
+                    } else {
+                        importAll(out, quotations.renderPdfForDealDocument(quotationId, ticketId, actor), open);
+                    }
+                } catch (Exception e) {
+                    log.warn("Quotation {} could not be added to the PDF bundle of ticket {}", quotationNumber, ticketId, e);
+                    addOnce(skipped, "quotation");
+                }
+            }
+            ByteArrayOutputStream bytesOut = new ByteArrayOutputStream();
+            out.save(bytesOut);
+            return new Result(bytesOut.toByteArray(), skipped, totalBytes > LARGE_BYTES);
+        } catch (java.io.IOException e) {
+            throw new IllegalStateException("PDF bundle merge failed: " + e.getMessage(), e);
+        } finally {
+            for (PDDocument d : open) {
+                try {
+                    d.close();
+                } catch (java.io.IOException ignored) {
+                    // best effort
+                }
             }
         }
-        if (withQuotation && quotationNumber != null && !quotationNumber.isBlank()) {
-            try {
-                Long quotationId = docs.findNewEngineQuotationId(ticketId, quotationNumber).orElse(null);
-                if (quotationId == null) {
-                    // a legacy / old-engine reference: nothing to attach, which is not a skip
-                    log.info("Quotation {} of ticket {} is not a new-engine quotation; nothing to attach", quotationNumber, ticketId);
-                } else {
-                    out = QuotationRenderer.appendPdf(out,
-                        quotations.renderPdfForDealDocument(quotationId, ticketId, actor));
-                }
-            } catch (Exception e) {
-                log.warn("Quotation {} could not be added to the PDF bundle of ticket {}", quotationNumber, ticketId, e);
-                addOnce(skipped, "quotation");
-            }
+    }
+
+    /** Imports every page of {@code pdf} into {@code out}; the source stays open (in {@code open}) until the one save. */
+    private static void importAll(PDDocument out, byte[] pdf, List<PDDocument> open) throws java.io.IOException {
+        PDDocument src = Loader.loadPDF(pdf);
+        open.add(src);
+        for (int i = 0; i < src.getNumberOfPages(); i++) {
+            out.importPage(src.getPage(i));
         }
-        return new Result(out, skipped, totalBytes > LARGE_BYTES);
     }
 
     private static void addOnce(List<String> skipped, String part) {

@@ -554,7 +554,7 @@ export function DepositNoticePage({ ticketId, onBack, showToast }) {
   // An issued notice downloads as stored. A draft is saved first when the form differs from what was loaded or last
   // saved (through the same path as บันทึกร่าง, so the 409 handling is the same) and downloads only if that save
   // succeeded; an unchanged draft downloads as stored without saving, so a reader who cannot save still gets the file.
-  async function handleDownload(extension, choice) {
+  async function handleDownload(extension, rethrow = false) {
     if (!doc || downloading || saving) return;
     if (!locked && refusesClearedItems()) return;
     setDownloading(extension);
@@ -574,12 +574,13 @@ export function DepositNoticePage({ ticketId, onBack, showToast }) {
       }
       try {
         const blob = extension === 'pdf'
-          ? await api.depositNotices.downloadPdf(doc.id, choice)
+          ? await api.depositNotices.downloadPdf(doc.id)
           : await api.depositNotices.downloadXlsx(doc.id);
         downloadBlob(blob, depositNoticeFileName(doc, ticketId), extension);
         warnIfBundleSkipped(blob, showToast);
       } catch (err) {
         showToast('error', err.message || 'ดาวน์โหลดไม่สำเร็จ');
+        if (rethrow) throw err; // the PDF sheet shows it too and stays open
       }
     } finally {
       setDownloading(null);
@@ -643,7 +644,7 @@ export function DepositNoticePage({ ticketId, onBack, showToast }) {
     <div className="grid w-full grid-cols-1 gap-[18px] min-w-0 max-w-[1320px]">
       {pdfSheetOpen && doc ? (
         <DocumentDownloadSheet kind="deposit" documentId={doc.id} ticketId={ticketId} reference={form.reference}
-          onClose={() => setPdfSheetOpen(false)} onDownload={(choice) => handleDownload('pdf', choice)} />
+          onClose={() => setPdfSheetOpen(false)} onDownload={() => handleDownload('pdf', true)} />
       ) : null}
       <PageHeader
         title={`ใบแจ้งยอดเงินรับมัดจำ${doc?.docNumber ? ` ${doc.docNumber}` : ''}`}

@@ -180,8 +180,8 @@ export function RemainingInvoiceDialog({ ticketId, canWrite = true, onClose, onD
   function handleDownloadVersion(id, docNumber) {
     setVersionSheet({ id, docNumber });
   }
-  async function downloadVersion(choice) {
-    const blob = await api.storedRemainingInvoices.download(versionSheet.id, choice);
+  async function downloadVersion() {
+    const blob = await api.storedRemainingInvoices.download(versionSheet.id);
     downloadBlob(blob, versionSheet.docNumber || `draft-${versionSheet.id}`, 'pdf');
     warnIfBundleSkipped(blob, showToast);
     onDownloaded?.();
@@ -300,18 +300,16 @@ function IssuedSummary({ issued, canWrite, onRevised, onDownloaded, showToast })
     }
   }
 
-  async function handleDownload(choice) {
+  async function handleDownload() {
     setError(null);
     setDownloading(true);
     try {
-      const blob = await api.storedRemainingInvoices.download(issued.id, choice);
+      const blob = await api.storedRemainingInvoices.download(issued.id);
       downloadBlob(blob, issued.docNumber || `remaining-invoice-${issued.id}`, 'pdf');
       warnIfBundleSkipped(blob, showToast);
       onDownloaded?.();
-    } catch (err) {
-      setError(err.message || 'ดาวน์โหลดไม่สำเร็จ');
     } finally {
-      setDownloading(false);
+      setDownloading(false); // an error reaches the download sheet, which shows it and stays open
     }
   }
 
@@ -476,18 +474,16 @@ function DraftEditor({ draft, issuedOfSameQuotation, issuedMode = false, onCance
     }
   }
 
-  async function handleDownload(choice) {
+  async function handleDownload() {
     setError(null);
     setDownloading(true);
     try {
-      const blob = await api.storedRemainingInvoices.download(draft.id, choice);
+      const blob = await api.storedRemainingInvoices.download(draft.id);
       downloadBlob(blob, draft.docNumber || `draft-${draft.id}`, 'pdf');
       warnIfBundleSkipped(blob, showToast);
       onDownloaded?.();
-    } catch (err) {
-      setError(err.message || 'ดาวน์โหลดไม่สำเร็จ');
     } finally {
-      setDownloading(false);
+      setDownloading(false); // an error reaches the download sheet, which shows it and stays open
     }
   }
 

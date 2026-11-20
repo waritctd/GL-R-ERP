@@ -279,12 +279,12 @@ export function DealDocumentRegister({
     setPdfSheet({ kind: 'remaining', row: v });
   }
 
-  async function downloadFromSheet(choice) {
+  async function downloadFromSheet() {
     const { kind, row } = pdfSheet;
     const deposit = kind === 'deposit';
     const blob = await handleDownload(`${kind}-${row.id}-pdf`, () => (deposit
-      ? api.depositNotices.downloadPdf(row.id, choice)
-      : api.storedRemainingInvoices.download(row.id, choice)));
+      ? api.depositNotices.downloadPdf(row.id)
+      : api.storedRemainingInvoices.download(row.id)));
     downloadBlob(blob, deposit ? depositNoticeFileName(row, ticketId) : (row.docNumber || `draft-${row.id}`), 'pdf');
     warnIfBundleSkipped(blob, showToast);
   }

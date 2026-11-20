@@ -26,6 +26,7 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         deleteDraft: vi.fn(),
         download: vi.fn(),
         bundleSelection: vi.fn(),
+        saveBundleSelection: vi.fn(),
       },
       attachments: { list: vi.fn(), upload: vi.fn() },
       depositNotices: {
@@ -384,6 +385,7 @@ describe('RemainingInvoiceDialog — canWrite=false (not this deal\'s owning sal
     const issuedRow = docRow({ status: 'ISSUED', docNumber: 'GLR6900001-1', baseNumber: 'GLR6900001' });
     api.storedRemainingInvoices.listForTicket.mockResolvedValue({ remainingInvoices: [issuedRow] });
     api.storedRemainingInvoices.download.mockResolvedValue(new Blob(['x']));
+    api.storedRemainingInvoices.saveBundleSelection.mockResolvedValue({ ok: true });
     // the server's defaults: the quotation and every PO; other files unticked
     api.storedRemainingInvoices.bundleSelection.mockResolvedValue({ quotation: true, attachmentIds: [5] });
     api.attachments.list.mockResolvedValue({ attachments: [
@@ -403,8 +405,9 @@ describe('RemainingInvoiceDialog — canWrite=false (not this deal\'s owning sal
     fireEvent.click(screen.getByTestId('include-quotation'));
     fireEvent.click(screen.getByTestId('include-attachment-6'));
     fireEvent.click(confirm);
-    await waitFor(() => expect(api.storedRemainingInvoices.download)
-      .toHaveBeenCalledWith(issuedRow.id, { quotation: false, attachmentIds: [5, 6] }));
+    await waitFor(() => expect(api.storedRemainingInvoices.download).toHaveBeenCalledWith(issuedRow.id));
+    expect(api.storedRemainingInvoices.saveBundleSelection)
+      .toHaveBeenCalledWith(issuedRow.id, { quotation: false, attachmentIds: [5, 6] });
   });
 
   it('hides the edit control from a viewer who cannot write', async () => {

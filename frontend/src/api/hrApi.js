@@ -16,12 +16,6 @@ function duplicateQuery(options) {
 }
 
 // The PDF bundle's X-Document-Bundle-Skipped header ("po,quotation") rides on the blob for bundleSkippedMessage.
-// The download sheet's choice as query params: quotation=true|false, attachments=<comma ids> ("" = none).
-function bundleQuery(choice) {
-  if (!choice) return '';
-  return `&quotation=${choice.quotation !== false}&attachments=${(choice.attachmentIds ?? []).join(',')}`;
-}
-
 async function withBundleSkipped(res) {
   const blob = await res.blob();
   blob.bundleSkipped = res.headers?.get?.('X-Document-Bundle-Skipped') ?? '';
@@ -500,9 +494,16 @@ export const api = {
       return res.blob();
     },
     bundleSelection: (id) => apiRequest(API_ROUTES.depositNotices.bundleSelection(id)),
-    downloadPdf: async (id, choice) => {
-      const res = await fetch(API_ROUTES.depositNotices.file(id, 'pdf') + bundleQuery(choice), { credentials: 'include' });
-      if (!res.ok) throw new Error('Download failed');
+    // The sheet saves its choice (which attachments, and the quotation) here, then downloads the PDF with it.
+    saveBundleSelection: (id, selection) =>
+      apiRequest(API_ROUTES.depositNotices.bundleSelection(id), { method: 'PUT', body: selection }),
+    downloadPdf: async (id) => {
+      const res = await fetch(API_ROUTES.depositNotices.file(id, 'pdf'), { credentials: 'include' });
+      if (!res.ok) {
+        // e.g. 413 "chosen files too large": the server's own Thai message reaches the sheet
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.message || 'Download failed');
+      }
       return withBundleSkipped(res);
     },
     listByTicket: (ticketId) => apiRequest(API_ROUTES.tickets.listDocs(ticketId)),
@@ -530,8 +531,10 @@ export const api = {
     deleteDraft: (id) => apiRequest(API_ROUTES.storedRemainingInvoices.get(id), { method: 'DELETE' }),
     // Binary, so it goes through fetch directly — same shape as storedImportRequests.download above.
     bundleSelection: (id) => apiRequest(API_ROUTES.storedRemainingInvoices.bundleSelection(id)),
-    download: async (id, choice) => {
-      const res = await fetch(API_ROUTES.storedRemainingInvoices.file(id) + bundleQuery(choice), { credentials: 'include' });
+    saveBundleSelection: (id, selection) =>
+      apiRequest(API_ROUTES.storedRemainingInvoices.bundleSelection(id), { method: 'PUT', body: selection }),
+    download: async (id) => {
+      const res = await fetch(API_ROUTES.storedRemainingInvoices.file(id), { credentials: 'include' });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         throw new Error(err.message || 'ดาวน์โหลดใบแจ้งหนี้ส่วนที่เหลือไม่สำเร็จ');

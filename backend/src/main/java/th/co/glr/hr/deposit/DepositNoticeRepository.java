@@ -471,18 +471,22 @@ public class DepositNoticeRepository {
         return Optional.of(new BundleSelection(pref.get(0), ids));
     }
 
+    /** Idempotent (upserts, then drops what is no longer chosen), so a double tap never trips the primary key. */
     public void saveBundleSelection(String kind, long documentId, boolean includeQuotation, List<Long> attachmentIds) {
         jdbc.update("INSERT INTO sales.document_bundle_pref (document_kind, document_id, include_quotation)"
             + " VALUES (:k, :d, :q) ON CONFLICT (document_kind, document_id) DO UPDATE SET include_quotation = :q",
             new MapSqlParameterSource().addValue("k", kind).addValue("d", documentId).addValue("q", includeQuotation));
-        jdbc.update("DELETE FROM sales.document_attachment_selection WHERE document_kind = :k AND document_id = :d",
-            Map.of("k", kind, "d", documentId));
         int seq = 0;
         for (Long id : attachmentIds) {
             jdbc.update("INSERT INTO sales.document_attachment_selection (document_kind, document_id, attachment_id, seq)"
-                + " VALUES (:k, :d, :a, :s)", new MapSqlParameterSource().addValue("k", kind)
-                .addValue("d", documentId).addValue("a", id).addValue("s", seq++));
+                + " VALUES (:k, :d, :a, :s) ON CONFLICT (document_kind, document_id, attachment_id) DO UPDATE SET seq = :s",
+                new MapSqlParameterSource().addValue("k", kind).addValue("d", documentId).addValue("a", id)
+                    .addValue("s", seq++));
         }
+        jdbc.update("DELETE FROM sales.document_attachment_selection WHERE document_kind = :k AND document_id = :d"
+            + (attachmentIds.isEmpty() ? "" : " AND attachment_id NOT IN (:keep)"),
+            new MapSqlParameterSource().addValue("k", kind).addValue("d", documentId)
+                .addValue("keep", attachmentIds.isEmpty() ? List.of(0L) : attachmentIds));
     }
 
     /** The customer of the party a new-engine quotation (this deal, this number) is addressed to; empty for a legacy
