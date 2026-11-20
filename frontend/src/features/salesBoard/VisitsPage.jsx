@@ -277,9 +277,18 @@ function RepWeek({ showToast, initialWeekOffset }) {
  * weeks through GET /api/sales/visits/team. The rows (every rep) and this week come from GET /api/sales/team-overview,
  * the same cached query as the team dashboard. Both endpoints are sales_manager / ceo only.
  */
-function TeamWeek({ initialWeekOffset }) {
-  const query = useQuery({ queryKey: queryKeys.salesBoardTeam(), queryFn: () => api.salesBoard.teamOverview() });
-  const team = query.data;
+function TeamWeek({ initialWeekOffset, overview }) {
+  // team-overview is sales_manager / ceo only; any other read-all holder reads this week from the visits feed alone
+  // (the grid adds a row per visit owner), the same rows the grid pages other weeks with.
+  const today = bangkokTodayIso();
+  const monday = weekStartIso(today);
+  const query = useQuery(overview
+    ? { queryKey: queryKeys.salesBoardTeam(), queryFn: () => api.salesBoard.teamOverview() }
+    : {
+      queryKey: queryKeys.salesVisitsTeam(monday, addDaysIso(monday, 6)),
+      queryFn: () => api.salesVisits.team({ from: monday, to: addDaysIso(monday, 6) }),
+    });
+  const team = overview ? query.data : query.data && { reps: [], teamVisitsThisWeek: query.data };
   return (
     <>
       <PageHeader title="นัดเข้าพบ" subtitle="นัดเข้าพบของทุกคนในทีม รายสัปดาห์" />
@@ -305,9 +314,10 @@ export function VisitsPage({ user, showToast = () => {} }) {
   const initialWeekOffset = weekOffsetFromParam(params.get('week'), bangkokTodayIso());
   return (
     <PageStack>
-      {/* A read-all holder who is not a sales rep reads the team grid (read only); a rep keeps their own week. */}
-      {hasPermission(user?.role, 'canViewTeamVisits') || (isOversightReader(user) && user?.role !== 'sales')
-        ? <TeamWeek initialWeekOffset={initialWeekOffset} />
+      {/* Every oversight reader (sales_manager or read-all holder, any role) reads the team grid, read only, as a
+          sales manager does; the own-week controls stay with a rep who is not a reader. */}
+      {hasPermission(user?.role, 'canViewTeamVisits') || isOversightReader(user)
+        ? <TeamWeek initialWeekOffset={initialWeekOffset} overview={hasPermission(user?.role, 'canViewTeamVisits')} />
         : <RepWeek showToast={showToast} initialWeekOffset={initialWeekOffset} />}
     </PageStack>
   );

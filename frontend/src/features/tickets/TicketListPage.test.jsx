@@ -355,6 +355,13 @@ describe('TicketListPage', () => {
       expect(lastListArgs()).toHaveProperty('movementFrom');
     });
 
+    it('a sales-role read-all holder gets the all-deals header, not งานของฉัน', async () => {
+      renderTicketListPage({ ...managerUser, role: 'sales', readAllSales: true }, ['/tickets?inbox=0']);
+      await screen.findByText('ลูกค้า-ขยับ');
+      expect(screen.getByText('ภาพรวมทีมขาย')).toBeTruthy();
+      expect(screen.queryByText('งานของฉัน')).toBeNull();
+    });
+
     // UNCHANGED ROLE: account/import render exactly as before.
     it.each([['account', accountUser], ['import', importUser]])('%s: no range row, old columns, API called without movement params', async (_role, user) => {
       renderTicketListPage(user, ['/tickets?inbox=0']); // inbox=0: every deal the role may read, not the worklist subset

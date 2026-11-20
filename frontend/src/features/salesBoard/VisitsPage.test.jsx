@@ -144,4 +144,17 @@ describe('VisitsPage — sales_manager and ceo see the team week', () => {
       expect(pageText(container)).not.toMatch(/ดีล/);
     });
   }
+
+  it('a read-all holder with the sales role reads the team grid from the visits feed, never team-overview, with no write controls', async () => {
+    api.salesVisits.team.mockResolvedValue([
+      visit({ id: 31, ownerId: 7, ownerName: 'คุณวิภา ใจดี', contactName: 'Orbit', plannedDate: '2026-11-11' }),
+    ]);
+    renderPage({ id: 9, role: 'sales', employeeId: 9, name: 'QC', readAllSales: true });
+
+    const grid = await screen.findByTestId('visit-week');
+    expect(await within(grid).findByTestId('visit-chip-31')).toBeTruthy();
+    expect(api.salesBoard.teamOverview).not.toHaveBeenCalled();
+    expect(api.salesVisits.list).not.toHaveBeenCalled();
+    expect(screen.queryByRole('button', { name: 'บันทึกเข้าพบ' })).toBeNull();
+  });
 });
