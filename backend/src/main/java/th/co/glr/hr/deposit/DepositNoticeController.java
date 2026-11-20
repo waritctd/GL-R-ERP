@@ -23,10 +23,23 @@ import th.co.glr.hr.auth.UserPrincipal;
 public class DepositNoticeController {
     private final DepositNoticeService service;
     private final SessionContext  sessions;
+    private final DealDocumentListService lists;
 
-    public DepositNoticeController(DepositNoticeService service, SessionContext sessions) {
+    public DepositNoticeController(DepositNoticeService service, SessionContext sessions, DealDocumentListService lists) {
         this.service  = service;
         this.sessions = sessions;
+        this.lists    = lists;
+    }
+
+    /** Every deposit notice the viewer may read, across deals (the เอกสารขาย tab); optional {@code status} DRAFT|ISSUED. */
+    @GetMapping("/deposit-notices")
+    Map<String, List<DealDocumentRows.NoticeRow>> listAll(@RequestParam(required = false) String status, HttpSession session) {
+        return Map.of("depositNotices", lists.listNotices(status, sessions.requireUser(session)));
+    }
+
+    @GetMapping("/deposit-notices/counts")
+    DealDocumentRows.Counts counts(HttpSession session) {
+        return lists.noticeCounts(sessions.requireUser(session));
     }
 
     // Note templates (route + response key preserved from the retired document/ module;

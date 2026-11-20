@@ -126,7 +126,7 @@ public class DealQuotationService {
      * ISSUED (PRICING_REQUEST, see {@link DealQuotationRepository#approve}), SENT and ACCEPTED. Everything else is
      * refused on get / PDF / XLS / picture and dropped from listForTicket and search.
      */
-    private static final Set<String> ACCOUNT_VISIBLE_STATUSES = Set.of("APPROVED", "ISSUED", "SENT", "ACCEPTED");
+    public static final Set<String> ACCOUNT_VISIBLE_STATUSES = Set.of("APPROVED", "ISSUED", "SENT", "ACCEPTED");
 
     private static final Set<String> PRICING_REQUEST_VIEW_ROLES = Set.of("sales", "sales_manager", "ceo");
 
