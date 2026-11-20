@@ -28,6 +28,13 @@ describe('DealBoard', () => {
     expect(within(screen.getByTestId('board-column-4')).queryByText('Landmark Residence')).toBeNull();
   });
 
+  it('names the awarded buyer of the quotation on a รอมัดจำ card, over the typed buyer name', () => {
+    renderBoard([deal({ ticketId: 71, salesStage: 'ORDER_RECEIVED', repCode: 'S6', boardColumn: 4,
+      buyerName: 'พิมพ์เอง', awardedBuyerName: 'ผู้ซื้อที่ได้งาน +1' })]);
+
+    expect(within(screen.getByTestId('board-card-71')).getByText('ผู้ซื้อ: ผู้ซื้อที่ได้งาน +1')).toBeTruthy();
+  });
+
   // ── slice 6.2: the card's drawn details ──────────────────────────────────────────────────────────────────────
 
   const moneyCard = (over) => deal({ ticketId: 61, salesStage: 'DELIVERED', repCode: 'S9', boardColumn: 5,

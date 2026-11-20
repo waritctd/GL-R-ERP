@@ -11,12 +11,10 @@ import { FormField } from '../../components/common/FormField.jsx';
 import { Panel } from '../../components/common/Layout.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
-import { ThaiDateInput } from '../../components/common/ThaiDateInput.jsx';
 import { cn } from '../../utils/cn.js';
 import { downloadBlob } from '../../utils/download.js';
 import { bangkokTodayIso, formatThaiDate, fulfilmentStatusLabel } from '../../utils/format.js';
 import { depositReadyForIr } from './dealMoneyStatus.js';
-import { deliveryDateBounds } from './deliveryDate.js';
 import { ImportStatusStrip } from '../importProgress/ImportStatusStrip.jsx';
 import { importStepIndex } from '../importProgress/importSteps.js';
 import { nextFulfilmentActionCode } from './importActions.js';
@@ -315,43 +313,8 @@ function SubstepChips({ currentCode, fromStock = null }) {
  * markShipping/markGoodsReceived/reserveStock/recordDelivery/completeDelivery); the `can.*`
  * predicates below are the same status+role checks that used to live in TicketDetailPage.
  */
-/**
- * วันที่ส่ง (slice 6d), shared by บันทึกการส่งสินค้า and ส่งมอบครบ: today by default, back to the later of today − 7 and
- * the Bangkok day the order was confirmed (fix round 1, L1 — from `events`, deliveryDateBounds), never a future day.
- * The server enforces the same window (TicketService#backDatedDeliveryInstant); min/max only spare the rep a refusal.
- * The due date counts from it, so the hint says so.
- */
-function DeliveryDateField({ id, value, onChange, events }) {
-  const today = bangkokTodayIso();
-  const { min, max, confirmedOn } = deliveryDateBounds(today, events);
-  return (
-    <div className="flex flex-col gap-1.5">
-      <label htmlFor={id} className="text-sm font-bold text-text-secondary">วันที่ส่ง</label>
-      <ThaiDateInput
-        id={id}
-        value={value ?? today}
-        min={min}
-        max={max}
-        aria-describedby={`${id}-hint`}
-        onChange={(e) => onChange(e.target.value || today)}
-        className="min-h-[44px] w-full text-base"
-      />
-      <p id={`${id}-hint`} data-testid="delivery-date-hint" className="m-0 text-xs text-text-muted">
-        {`${confirmedOn ? `เลือกได้ตั้งแต่วันยืนยันคำสั่งซื้อ ${formatThaiDate(`${confirmedOn}T12:00:00+07:00`)}` : 'ย้อนหลังได้ไม่เกิน 7 วัน'} · วันครบกำหนดชำระนับจากวันที่ส่งครบ`}
-      </p>
-    </div>
-  );
-}
-
-/** Only a past day is sent as deliveredOn; today leaves the request exactly as before (the server stamps the moment),
- * as an unused ตามครั้งถัดไป does on a call. */
-function withDeliveredOn(payload, deliveredOn) {
-  return deliveredOn && deliveredOn !== bangkokTodayIso() ? { ...payload, deliveredOn } : payload;
-}
-
 export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
-  user, ticketId, summary, items = [], availableActions = [], procurementSource, onChooseProcurementSource, showToast,
-  events,
+  user, ticketId, summary, items = [], availableActions = [], procurementSource, onChooseProcurementSource, showToast, prePortal = false,
 }, ref) {
   const queryClient = useQueryClient();
   const role = user?.role;
@@ -373,10 +336,6 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
 
   const hasAction = (action) => availableActions.some((item) => item.action === action);
 
-  const [deliveryOpen, setDeliveryOpen] = useState(false);
-  // ส่งมอบครบ asks for วันที่ส่ง first (fix round 1, M2): null while closed, else the picked day.
-  const [completeOn, setCompleteOn] = useState(null);
-  const [deliveryDraft, setDeliveryDraft] = useState({ source: 'WAREHOUSE', note: '', lines: {} });
   // V148 (per-item stock-commission weighting): sales_manager/ceo only -- a separate control from the
   // stock-declaration modal above, matching the backend's separate authorization boundary
   // (TicketService#setItemWeightMultipliers, gated to a DIFFERENT role set than reserveStock).
@@ -706,18 +665,6 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
     onSuccess: () => { showToast?.('success', 'บันทึกสินค้าจากสต็อกแล้ว'); invalidateAfterFulfilmentChange(); },
     onError,
   });
-  const recordDeliveryMutation = useMutation({
-    mutationFn: (payload) => api.tickets.recordDelivery(ticketId, payload),
-    onSuccess: () => { showToast?.('success', 'บันทึกการส่งสินค้าแล้ว'); setDeliveryOpen(false); invalidateAfterFulfilmentChange(); },
-    onError,
-  });
-  const completeDeliveryMutation = useMutation({
-    mutationFn: (deliveredOn) => api.tickets.completeDelivery(ticketId,
-      withDeliveredOn({ note: 'ส่งมอบครบจากหน้ารายละเอียดงาน' }, deliveredOn)),
-    onSuccess: () => { showToast?.('success', 'ส่งมอบครบแล้ว'); setCompleteOn(null); invalidateAfterFulfilmentChange(); },
-    onError,
-  });
-
   // The can.* checks are the status+role permission checks that used to be routed through
   // TicketDetailPage's shared actionMutation/doAction.
   //
@@ -741,10 +688,8 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
     // advertises RECORD_PARTIAL_DELIVERY/COMPLETE_DELIVERY off that same predicate. ANDing the old
     // role set would discard the server's answer, leaving the capability "live but invisible" to
     // the owning rep. hasAction() already carries the ownership rule.
-    recordDelivery:     hasAction('RECORD_PARTIAL_DELIVERY'),
     // Same ownership-aware server answer as recordDelivery (TicketService#canDeclareStockCoverage).
     reserveStock:       hasAction('RESERVE_STOCK'),
-    completeDelivery:   hasAction('COMPLETE_DELIVERY'),
     // V148 (per-item stock-commission weighting): sales_manager/ceo only -- unlike reserveStock above, this DOES
     // keep a local role check alongside hasAction(), matching every other entry in this object except
     // reserveStock's own documented exception.
@@ -755,33 +700,11 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
   // issue-IR: a deal issues per factory.
   const showDealLevelChain = !hasStoredIrs;
 
-  function openDeliveryModal() {
-    const source = fs === 'FROM_STOCK' ? 'STOCK' : 'WAREHOUSE';
-    const lines = {};
-    items.forEach((item) => {
-      lines[item.id] = String(Math.max(0, Number(item.qty || 0) - Number(item.qtyDelivered || 0)));
-    });
-    setDeliveryDraft({ source, note: '', lines, deliveredOn: bangkokTodayIso() });
-    setDeliveryOpen(true);
-  }
-
   function openWeightModal() {
     const lines = {};
     items.forEach((item) => { lines[item.id] = String(item.weightMultiplier ?? 1); });
     setWeightDraft(lines);
     setWeightOpen(true);
-  }
-
-  function handleRecordDelivery() {
-    const lines = items
-      .map((item) => ({ itemId: item.id, qty: Number(deliveryDraft.lines[item.id] || 0) }))
-      .filter((line) => line.qty > 0);
-    if (lines.length === 0) {
-      showToast?.('error', 'กรุณาระบุจำนวนส่งมอบอย่างน้อย 1 รายการ');
-      return;
-    }
-    recordDeliveryMutation.mutate(withDeliveredOn(
-      { source: deliveryDraft.source, note: deliveryDraft.note.trim() || null, lines }, deliveryDraft.deliveredOn));
   }
 
   function handleSetItemWeight() {
@@ -832,6 +755,11 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
             Not the drawing's "แก้ไขหรือลบไม่ได้" (F1): an issued IR can be corrected by a ฉบับแก้ไข —
             ImportRequestService#revise, same requireFullWrite gate as createDrafts, until the goods are RECEIVED —
             but it can never be deleted. */}
+        {prePortal ? (
+          <DialogCallout tone="info" testId="ir-pre-portal-note">
+            งานนี้เดินมาก่อนใช้ระบบ ออกใบขอซื้อได้โดยไม่ต้องยืนยันคำสั่งซื้อหรือรับมัดจำในระบบก่อน
+          </DialogCallout>
+        ) : null}
         <DialogCallout tone="warn" testId="ir-confirm-warning">
           ออกเลข IR แล้วลบไม่ได้ · แก้ได้ด้วยการออกฉบับแก้ไขเท่านั้น
         </DialogCallout>
@@ -1156,21 +1084,11 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
                 <div className="h-full bg-success" style={{ width: `${deliveryProgress}%` }} />
               </div>
             </div>
-            <div className="flex flex-wrap gap-2">
-              {can.recordDelivery ? (
-                <Button type="button" variant="primary" disabled={recordDeliveryMutation.isPending}
-                  onClick={openDeliveryModal} data-testid="deal-fulfilment-record-delivery">
-                  บันทึกการส่งสินค้า
-                </Button>
-              ) : null}
-              {can.completeDelivery ? (
-                <Button type="button" variant="secondary" disabled={completeDeliveryMutation.isPending}
-                  onClick={() => setCompleteOn(bangkokTodayIso())} data-testid="deal-fulfilment-complete">
-                  ส่งมอบครบ
-                </Button>
-              ) : null}
-            </div>
           </div>
+          {/* The record action lives on the round card above (DeliveryRoundsPanel): one primary. */}
+          <p className="m-0 text-xs text-text-muted" data-testid="delivery-record-hint">
+            บันทึกการส่งที่รอบส่งด้านบน (ถ้ายังไม่มีใบกำกับ ต้องระบุหมายเหตุหรือเลขอ้างอิง)
+          </p>
 
           {/* Drawing a-deal-ship: one row per item, สั่ง / ส่งแล้ว / เหลือ / ที่มา. Every figure is the item's own
               qty / qtyDelivered / qtyFromStock, as the list it replaces showed them; ที่มา says คลัง for the part
@@ -1244,6 +1162,11 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
                 <div key={record.deliveryId} className="flex flex-wrap items-baseline gap-2 text-xs">
                   <span className="text-text-muted">{formatThaiDate(record.deliveredAt)}</span>
                   <strong>{DELIVERY_SOURCE_LABELS[record.source] ?? record.source}</strong>
+                  {record.noInvoiceNote ? (
+                    <span className="rounded-full bg-warning-bg px-2 py-0.5 font-bold text-warning" data-testid="delivery-no-invoice">
+                      {`ส่งก่อนออกใบกำกับ · ${record.noInvoiceNote}`}
+                    </span>
+                  ) : null}
                   <span className="text-text-muted">
                     {(record.items ?? []).map((line) => {
                       const item = items.find((i) => String(i.id) === String(line.itemId));
@@ -1263,143 +1186,6 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
           </div>
         </div>
       </div>
-
-      {deliveryOpen ? (
-        // Drawing m-delivery (2026-11-16). The request (handleRecordDelivery): source, note, the lines with a qty > 0,
-        // and — slice 6d — deliveredOn when วันที่ส่ง is a past day. Not built from the drawing: "นัดส่ง …" (owner
-        // answer 3: not now). Every figure is the item's own qty / qtyDelivered and the remaining the tracker table
-        // above derives.
-        <Modal
-          title="บันทึกการส่งสินค้า"
-          subtitle={summary?.projectName || summary?.title || undefined}
-          onClose={() => setDeliveryOpen(false)}
-          footer={(
-            <>
-              <Button type="button" variant="secondary" onClick={() => setDeliveryOpen(false)}>ยกเลิก</Button>
-              <Button type="button" variant="primary" disabled={recordDeliveryMutation.isPending}
-                onClick={handleRecordDelivery} data-testid="deal-fulfilment-record-delivery-submit">
-                บันทึกการส่ง
-              </Button>
-            </>
-          )}
-        >
-          <div className="flex flex-col gap-3.5">
-            {/* First in the scrolling body, like the deposit and IR warnings: TicketController has no route to void a
-                recorded delivery, and recording one can advance the stage. */}
-            <DialogCallout tone="warn" testId="delivery-warning">
-              บันทึกแล้วแก้ไขหรือลบไม่ได้ ตรวจจำนวนก่อนกดบันทึก
-            </DialogCallout>
-            <DialogSummary icon="truck" testId="delivery-summary">
-              {/* Slice 6.1, the drawn "ส่งงวดที่ N": the deliveries already recorded on this deal (sales.delivery_record,
-                  the history this panel already loads) plus this one — said only once that history has loaded, never
-                  guessed from an empty list that is still on its way. */}
-              {`${deliveriesQuery.isSuccess ? `ส่งงวดที่ ${deliveryRecords.length + 1} · ` : ''}เหลือส่ง ${items.filter((item) => Number(item.qty || 0) - Number(item.qtyDelivered || 0) > 0).length} รายการ`}
-            </DialogSummary>
-            {/* Phones (≤520px, mobile-xs): the สั่ง / ส่งแล้ว / เหลือส่ง columns fold into a line under the name, so
-                the table is two columns — name and the ส่งครั้งนี้ input — and the input is in view at 320px with no
-                sideways scrolling (fix round 1, F5). Same figures either way. */}
-            <DialogTable label="รายการที่ส่งครั้งนี้">
-              <thead>
-                <tr>
-                  <th scope="col" className={dialogTh}>รายการ</th>
-                  <th scope="col" className={`${dialogTh} text-right mobile-xs:hidden`}>สั่ง</th>
-                  <th scope="col" className={`${dialogTh} text-right mobile-xs:hidden`}>ส่งแล้ว</th>
-                  <th scope="col" className={`${dialogTh} text-right mobile-xs:hidden`}>เหลือส่ง</th>
-                  <th scope="col" className={`${dialogTh} text-right`}>ส่งครั้งนี้</th>
-                </tr>
-              </thead>
-              <tbody>
-                {items.map((item) => {
-                  const ordered = Number(item.qty || 0);
-                  const delivered = Number(item.qtyDelivered || 0);
-                  const remaining = Math.max(0, ordered - delivered);
-                  const name = `${item.brand ?? ''} ${item.model || ''}`.trim();
-                  return (
-                    <tr key={item.id}>
-                      <td className={`${dialogTd} [overflow-wrap:anywhere]`}>
-                        <span className="font-bold">{name}</span>
-                        <span className="hidden text-xs text-text-muted mobile-xs:block" data-testid={`delivery-line-figures-${item.id}`}>
-                          {`สั่ง ${ordered.toLocaleString('en-US')} · ส่งแล้ว ${delivered.toLocaleString('en-US')} · เหลือส่ง ${remaining.toLocaleString('en-US')}`}
-                        </span>
-                      </td>
-                      <td className={`${dialogTd} text-right mobile-xs:hidden`}>{ordered.toLocaleString('en-US')}</td>
-                      <td className={`${dialogTd} text-right mobile-xs:hidden`}>{delivered.toLocaleString('en-US')}</td>
-                      <td className={cn(dialogTd, 'text-right mobile-xs:hidden', remaining > 0 && 'font-extrabold text-text')}>
-                        {remaining.toLocaleString('en-US')}
-                      </td>
-                      <td className={`${dialogTd} text-right`}>
-                        <input type="number" min="0" max={remaining} step="0.01" inputMode="decimal"
-                          className="min-h-[44px] w-20 text-right"
-                          aria-label={`จำนวนส่งมอบ ${item.brand} ${item.model || ''}`}
-                          value={deliveryDraft.lines[item.id] ?? ''}
-                          onChange={(e) => setDeliveryDraft((draft) => ({
-                            ...draft,
-                            lines: { ...draft.lines, [item.id]: e.target.value },
-                          }))} />
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </DialogTable>
-            <label className="flex flex-col gap-1.5 text-sm font-bold text-text-secondary">
-              แหล่งสินค้า
-              <select value={deliveryDraft.source} className="min-h-[44px]"
-                onChange={(e) => setDeliveryDraft((draft) => ({ ...draft, source: e.target.value }))}>
-                {Object.entries(DELIVERY_SOURCE_LABELS).map(([code, label]) => (
-                  <option key={code} value={code}>{label}</option>
-                ))}
-              </select>
-            </label>
-            {/* วันที่ส่ง (slice 6d, owner answer 2; fix round 1 L1): DeliveryDateField. */}
-            <DeliveryDateField
-              id="delivery-date"
-              value={deliveryDraft.deliveredOn}
-              events={events}
-              onChange={(deliveredOn) => setDeliveryDraft((draft) => ({ ...draft, deliveredOn }))}
-            />
-            <label className="flex flex-col gap-1.5 text-sm font-bold text-text-secondary">
-              หมายเหตุ
-              <textarea className="min-h-16" value={deliveryDraft.note}
-                onChange={(e) => setDeliveryDraft((draft) => ({ ...draft, note: e.target.value }))} />
-            </label>
-            {/* What TicketService#recordDeliveryInternal does once every line is delivered: FULLY_DELIVERED,
-                autoAdvanceStage(DELIVERED) — rep code S9 (DealStage.REP_CODE); a no-op when the deal is already
-                there or past it, hence "ถ้ายังไม่ถึง" — and a DELIVERY_COMPLETED notice to the account role.
-                Conditional: whether THIS save completes the deal is the server's call. S9 is named once (fix round 1,
-                F6): a fully paid deal goes on to CLOSED_PAID, which is also S9, so a step name would mislead. */}
-            <DialogCallout tone="info" testId="delivery-info">
-              ถ้าบันทึกครั้งนี้ทำให้ส่งครบทุกรายการ ระบบจะบันทึกว่าส่งครบ เลื่อนงานไป S9 (ถ้ายังไม่ถึง) และแจ้งฝ่ายบัญชี
-            </DialogCallout>
-          </div>
-        </Modal>
-      ) : null}
-
-      {completeOn ? (
-        // Fix round 1 (M2): ส่งมอบครบ delivers every remaining line in one record (TicketService#completeDelivery); it
-        // now asks for วันที่ส่ง first, as บันทึกการส่งสินค้า does, so the due date can follow the real day.
-        <Modal
-          title="ส่งมอบครบทุกรายการ"
-          subtitle={summary?.projectName || summary?.title || undefined}
-          onClose={() => setCompleteOn(null)}
-          footer={(
-            <>
-              <Button type="button" variant="secondary" onClick={() => setCompleteOn(null)}>ยกเลิก</Button>
-              <Button type="button" variant="primary" disabled={completeDeliveryMutation.isPending}
-                onClick={() => completeDeliveryMutation.mutate(completeOn)} data-testid="deal-fulfilment-complete-submit">
-                ยืนยันส่งมอบครบ
-              </Button>
-            </>
-          )}
-        >
-          <div className="flex flex-col gap-3.5">
-            <DialogCallout tone="warn" testId="complete-warning">
-              {`บันทึกส่งของที่เหลือทั้งหมด ${items.filter((item) => Number(item.qty || 0) - Number(item.qtyDelivered || 0) > 0).length} รายการในครั้งเดียว — บันทึกแล้วแก้ไขหรือลบไม่ได้`}
-            </DialogCallout>
-            <DeliveryDateField id="complete-date" value={completeOn} events={events} onChange={setCompleteOn} />
-          </div>
-        </Modal>
-      ) : null}
 
       {weightOpen ? (
         <Modal

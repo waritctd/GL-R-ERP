@@ -93,6 +93,7 @@ class SalesRouteWalkIntegrationTest extends AbstractPostgresIntegrationTest {
 
         walkImportJourneyToDeliveryScheduling(ticketId); // PROCUREMENT -> ... -> DELIVERY_SCHEDULING
 
+        DeliveryRoundFixture.ensureInvoicedRound(jdbc, ticketId);
         ticketService.completeDelivery(ticketId,
             new CompleteDeliveryRequest("ส่งครบตามสัญญา", "คุณเจ้าของโครงการ"), ownerRep);
         assertThat(stageOf(ticketId)).isEqualTo(DealStage.DELIVERED);
@@ -138,6 +139,7 @@ class SalesRouteWalkIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(fulfilmentOf(ticketId)).isEqualTo(FulfilmentStatus.FROM_STOCK);
         assertThat(stageOf(ticketId)).isEqualTo(DealStage.DELIVERY_SCHEDULING);
 
+        DeliveryRoundFixture.ensureInvoicedRound(jdbc, ticketId);
         ticketService.completeDelivery(ticketId,
             new CompleteDeliveryRequest("ส่งจากสต็อก", "ลูกค้า"), ownerRep);
         assertThat(stageOf(ticketId)).isEqualTo(DealStage.DELIVERED);

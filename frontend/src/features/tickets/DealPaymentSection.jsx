@@ -27,6 +27,7 @@ import { EVENT_KIND_LABEL, PAYMENT_TRACK_KINDS } from './DealHistoryPanel.jsx';
 import { pickRemainingInvoice } from './remainingInvoiceReadiness.js';
 import { isSalesOwner } from './dealOwnership.js';
 import { ReceiptSourceChip } from '../finance/ReceiptSourceChip.jsx';
+import { deliveryRoundsQueryOptions } from './delivery/deliveryRoundsQuery.js';
 
 /** `Date.parse`-safe timestamp, or `null`: an unparseable row sorts last rather than floating to the top as `NaN` would. */
 function toTimestamp(value) {
@@ -48,7 +49,18 @@ function MoneyEventRow({ event }) {
   );
 }
 
-function MoneyReceiptRow({ receipt }) {
+/** `round`: the delivery round whose tax invoice this receipt is (source TAX_INVOICE), when the rounds are loaded. Shows both
+ * figures (R2.7): the invoice total, and the part of it recorded now (the rest was already on the order). */
+/** The invoice line of a round, with both figures: ใบกำกับ ฿X · รับไว้ก่อนแล้ว ฿Y · บันทึกรับเพิ่ม ฿Z. */
+function invoiceFigures(invoice) {
+  if (invoice?.total == null) return '';
+  const recorded = Number(invoice.recordedAmount ?? 0);
+  const earlier = Number(invoice.total) - recorded;
+  return [`ใบกำกับ ${formatMoney(invoice.total)}`, `รับไว้ก่อนแล้ว ${formatMoney(earlier)}`, `บันทึกรับเพิ่ม ${formatMoney(recorded)}`].join(' · ');
+}
+
+function MoneyReceiptRow({ receipt, round = null }) {
+  const invoice = round?.invoice;
   return (
     <li className="flex items-start gap-2">
       <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-info" aria-hidden="true" />
@@ -58,6 +70,12 @@ function MoneyReceiptRow({ receipt }) {
           <span className="font-mono text-sm text-text">{formatMoney(receipt.amount)}</span>
           <ReceiptSourceChip source={receipt.source} />
         </div>
+        {receipt.source === 'TAX_INVOICE' ? (
+          <small className="block text-xs text-text-secondary" data-testid="tax-invoice-receipt">
+            {round ? `รอบส่งที่ ${round.roundNo} · ` : ''}{receipt.receiptRef}
+            {invoice?.total != null ? ` · ${invoiceFigures(invoice)}` : ''}
+          </small>
+        ) : null}
         <small className="block text-2xs text-text-muted">
           {receipt.recordedByName || '-'}{receipt.note ? ` · ${receipt.note}` : ''}
         </small>
@@ -170,6 +188,17 @@ export function DealPaymentSection({
     enabled: !!ticketId && isOwnerSales && doc?.status === 'DRAFT',
   });
   const invoice = pickRemainingInvoice(remainingQuery.data ?? []);
+
+  // The order's delivery rounds: a confirmed tax invoice is a receipt here, and a round still waiting for its invoice is
+  // announced (its money comes from the invoice). A role that may not read rounds simply sees neither.
+  const roundsQuery = useQuery({ ...deliveryRoundsQueryOptions(ticketId), retry: false });
+  const rounds = roundsQuery.data?.rounds ?? [];
+  const waitingRounds = rounds.filter((r) => ['SENT', 'FORWARDED'].includes(r.status));
+  // A confirmed invoice that recorded nothing new (all of it was already received) has no receipt row: it is listed here so
+  // it never vanishes from the tab.
+  const unrecordedInvoiced = rounds.filter((r) => r.status === 'INVOICED' && r.invoice?.total != null
+    && !paymentReceipts.some((p) => p.receiptId === r.invoice.receiptId));
+  const showInvoiceNote = waitingRounds.length > 0 || unrecordedInvoiced.length > 0 || paymentReceipts.some((r) => r.source === 'TAX_INVOICE');
 
   const chainQuery = useDocumentChain(ticketId, { enabled: !!ticketId && canReadDepositNotices });
   const chain = chainQuery.data ?? null;
@@ -335,15 +364,40 @@ export function DealPaymentSection({
           </div>
           {paymentsLoading ? (
             <SkeletonText lines={2} />
-          ) : rows.length === 0 ? (
+          ) : rows.length === 0 && waitingRounds.length === 0 && unrecordedInvoiced.length === 0 ? (
             <EmptyState icon="clock" title="ยังไม่มีความเคลื่อนไหว" description="เหตุการณ์และการรับชำระของงานนี้จะปรากฏที่นี่" />
           ) : (
             <ul className="m-0 flex list-none flex-col gap-2.5 p-0">
               {rows.map((row) => (row.type === 'event'
                 ? <MoneyEventRow key={row.key} event={row.event} />
-                : <MoneyReceiptRow key={row.key} receipt={row.receipt} />))}
+                : <MoneyReceiptRow key={row.key} receipt={row.receipt}
+                  round={rounds.find((r) => r.invoice?.receiptId === row.receipt.receiptId) ?? null} />))}
+              {unrecordedInvoiced.map((r) => (
+                <li key={`invoiced-${r.id}`} className="flex items-start gap-2" data-testid="round-invoiced-no-receipt">
+                  <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-info" aria-hidden="true" />
+                  <div className="min-w-0 flex-1">
+                    <strong className="block text-sm text-text">รอบส่งที่ {r.roundNo} · ใบกำกับ {r.invoice.number}</strong>
+                    <small className="block text-xs text-text-secondary">{invoiceFigures(r.invoice)}</small>
+                  </div>
+                </li>
+              ))}
+              {waitingRounds.map((r) => (
+                <li key={`round-${r.id}`} className="flex items-start gap-2" data-testid="round-waiting-invoice">
+                  <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-warning" aria-hidden="true" />
+                  <div className="min-w-0 flex-1">
+                    <strong className="block text-sm text-text">รอบส่งที่ {r.roundNo}</strong>
+                    <small className="block text-xs text-text-muted">จะบันทึกจากใบกำกับภาษีเมื่อออกแล้ว</small>
+                    <span className="mt-1 inline-block rounded-full bg-warning-bg px-2 py-px text-xs font-bold text-warning">รอใบกำกับ</span>
+                  </div>
+                </li>
+              ))}
             </ul>
           )}
+          {showInvoiceNote ? (
+            <p className="m-0 text-xs text-text-muted" data-testid="tax-invoice-note">
+              ยอดในใบกำกับภาษีถูกบันทึกเป็นเงินที่รับแล้วของรอบส่งนั้น บัญชีไม่ต้องบันทึกซ้ำ
+            </p>
+          ) : null}
         </section>
 
         <section data-testid="money-documents" className="flex min-w-0 flex-col gap-3 rounded-md border border-border bg-surface p-4">

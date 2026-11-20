@@ -55,10 +55,12 @@ public class DepositNoticeController {
     Map<String, DepositNoticeDto> createDraft(
         @PathVariable long ticketId,
         @Valid @RequestBody DepositNoticeDraftRequest req,
+        @RequestParam(value = "quotationId", required = false) Long quotationId,
         HttpSession session
     ) {
         UserPrincipal user = sessions.requireUser(session);
-        return Map.of("depositNotice", service.createDraft(ticketId, req, user));
+        return Map.of("depositNotice", quotationId == null ? service.createDraft(ticketId, req, user)
+            : service.createDraft(ticketId, req, quotationId, user));
     }
 
     // List documents for a ticket

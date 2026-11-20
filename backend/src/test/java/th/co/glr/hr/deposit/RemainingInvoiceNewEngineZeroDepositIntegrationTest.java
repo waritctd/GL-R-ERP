@@ -74,6 +74,25 @@ class RemainingInvoiceNewEngineZeroDepositIntegrationTest extends AbstractPostgr
         assertThat(remainingInvoices.issue(draft.id(), owner).status()).isEqualTo("ISSUED");
     }
 
+    // Ploy 11-20: the deposit a rep entered for a deal ordered before the portal is money received, so the remaining invoice
+    // deducts it (pre-VAT, so the customer pays the quotation less what was received), never billing it a second time.
+    @Test
+    void preportalDeal_remainingInvoiceDeductsTheMoneyReceivedIncludingThePreportalDeposit() {
+        long ticket = deal("NOT_REQUIRED");
+        jdbc.update("UPDATE sales.ticket SET pre_portal = TRUE WHERE ticket_id = :t", Map.of("t", ticket));
+        jdbc.update("""
+            INSERT INTO sales.payment_receipt (ticket_id, kind, amount, recorded_by, source)
+            VALUES (:t, 'DEPOSIT', 321.00, :by, 'PRE_PORTAL')
+            """, new MapSqlParameterSource().addValue("t", ticket).addValue("by", employeeId));
+        long q = quotation(ticket, "PRICING_REQUEST", "ACCEPTED", "1000.00");
+        line(q, 1, "กระเบื้อง A", "10", "100.00");
+
+        var draft = remainingInvoices.createDraft(ticket, null, owner);
+
+        assertThat(draft.depositDeduction()).as("321 received / 1.07").isEqualByComparingTo("300.00");
+        assertThat(draft.netAmount()).isEqualByComparingTo("700.00");
+        assertThat(draft.grandTotal()).as("payable 1070 less the 321 received").isEqualByComparingTo("749.00");
+    }
     // An EN quotation carries no VAT (payable reads it as 0%): the invoice must not add 7%, before or after issue
     // (once issued, payable follows the document - a wrong 7% here would bill the customer extra).
     @Test

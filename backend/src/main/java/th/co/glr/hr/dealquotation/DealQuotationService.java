@@ -2007,6 +2007,22 @@ public class DealQuotationService {
      */
     @Transactional
     public PromoteToDealResultDto confirmOrderFromDirectQuotation(long quotationId, UserPrincipal actor, Set<Long> keepPartyIds) {
+        return confirmOrder(quotationId, actor, keepPartyIds, true);
+    }
+
+    /**
+     * The confirmation for a caller that has ALREADY authorized {@code actor} for its own action (the first IR, deposit
+     * notice, remaining invoice or delivery request of a pre-portal deal): skips this method's edit-access check, so an
+     * actor allowed the outer action (the CEO creating the IR) is not refused by the confirm's narrower audience. Never
+     * route it from a controller.
+     */
+    @Transactional
+    public PromoteToDealResultDto confirmOrderAuthorizedByCaller(long quotationId, UserPrincipal actor) {
+        return confirmOrder(quotationId, actor, Set.of(), false);
+    }
+
+    private PromoteToDealResultDto confirmOrder(long quotationId, UserPrincipal actor, Set<Long> keepPartyIds,
+                                                boolean checkEditAccess) {
         if (ticketService == null) {
             // Same defensive shape as #approveAndIssuePricingRequestOrigin: only reachable if the bean is wired without
             // #wireTicketService.
@@ -2015,7 +2031,9 @@ public class DealQuotationService {
         DealQuotationDto quotation = requireQuotation(quotationId);
         long ticketId = quotation.ticketId();
         // Authz first; see this method's Javadoc.
-        requireEditAccess(actor, requireTicketSummary(ticketId));
+        if (checkEditAccess) {
+            requireEditAccess(actor, requireTicketSummary(ticketId));
+        }
         if (!DealQuotationRepository.ORIGIN_DEAL_DIRECT.equals(quotation.origin())) {
             throw new ApiException(HttpStatus.CONFLICT,
                 "ยืนยันคำสั่งซื้อจากหน้านี้ได้เฉพาะใบเสนอราคา (ไม่ผ่านคำขอราคา) เท่านั้น");
@@ -2175,13 +2193,31 @@ public class DealQuotationService {
         Instant restoreStageAt = restoreStage == null ? null
             : tickets.latestStageChangeAtBefore(ticketId, promotion.eventId()).orElse(null);
         // Under the CUSTOMER_CONFIRMED payment status the compare-and-set needs, so before the ticket reset below.
+        // Marked by a send (after the promotion): the undo takes the marking back. Created as สั่งซื้อแล้ว (before it): the
+        // flag, its deposit and the policy stay, only the confirm is undone.
+        boolean prePortal = tickets.isPrePortal(ticketId) && tickets.prePortalMarkedAfter(ticketId, promotion.eventId());
+        BigDecimal prePortalDeposit = BigDecimal.ZERO;
+        String policyNow = locked.depositPolicy();
+        if (prePortal) {
+            // The pre-portal marking goes first: policy back to what it replaced (recorded in its POLICY_CHANGED), the
+            // PRE_PORTAL receipt deleted with its effect on the expected payments, the flag cleared.
+            var was = tickets.prePortalPolicyBefore(ticketId, promotion.eventId());
+            if (was.isPresent()) {
+                if (tickets.restoreDepositPolicy(ticketId, was.get()) != 1) {
+                    throw new ApiException(HttpStatus.CONFLICT, "คืนค่านโยบายมัดจำไม่สำเร็จ กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
+                }
+                policyNow = was.get();
+            }
+            prePortalDeposit = tickets.removePrePortal(ticketId);
+        }
         if (tickets.hasSystemPolicyChangeAfter(ticketId, promotion.eventId(), quotation.number())) {
-            boolean nowNotRequired = DepositPolicy.NOT_REQUIRED.equals(locked.depositPolicy());
+            boolean nowNotRequired = DepositPolicy.NOT_REQUIRED.equals(policyNow);
             tickets.syncDepositPolicyFromQuotation(ticketId,
                 nowNotRequired ? DepositPolicy.NOT_REQUIRED : DepositPolicy.REQUIRED,
                 nowNotRequired ? DepositPolicy.REQUIRED : DepositPolicy.NOT_REQUIRED, null);
         }
         int draftNotices = tickets.deleteDraftDepositNotices(ticketId);
+        List<Integer> removedRounds = tickets.deleteOpenDeliveryRounds(ticketId);
         tickets.deleteItems(ticketId);
         if (tickets.revertOrderConfirmation(ticketId, restoreStage, restoreStageAt) != 1) {
             throw new ApiException(HttpStatus.CONFLICT,
@@ -2196,9 +2232,22 @@ public class DealQuotationService {
         String note = "ยกเลิกการยืนยันคำสั่งซื้อจากใบเสนอราคา " + quotation.number()
             + " (ยืนยันโดย " + promotion.actorName() + " เมื่อ " + when + ")"
             + (reason == null || reason.isBlank() ? "" : " · เหตุผล: " + reason.trim())
-            + (draftNotices > 0 ? " · ลบใบแจ้งรับมัดจำฉบับร่างแล้ว" : "");
+            + (draftNotices > 0 ? " · ลบใบแจ้งรับมัดจำฉบับร่างแล้ว" : "")
+            + (removedRounds.isEmpty() ? "" : " · ลบคำขอส่งของรอบที่ "
+                + removedRounds.stream().map(String::valueOf).collect(java.util.stream.Collectors.joining(", ")) + " (ไฟล์ยังอยู่ในงาน)")
+            + (prePortal ? " · ยกเลิกการตั้งเป็นงานที่เดินมาก่อนใช้ระบบ"
+                + (prePortalDeposit.signum() > 0 ? " และลบมัดจำที่รับแล้ว ฿" + prePortalDeposit.toPlainString() : "") : "");
         tickets.addEventWithDocument(ticketId, actor.id(), actor.name(), TicketEventKind.ORDER_CONFIRMATION_UNDONE,
             TicketStatus.QUOTATION_ISSUED, TicketStatus.DRAFT, note, RelatedDocumentType.QUOTATION, quotationId);
+        if (!removedRounds.isEmpty()) {
+            // The warehouse may have been reviewing a sent request: tell them it is gone.
+            String msg = actor.name() + " ยกเลิกการยืนยันคำสั่งซื้อ คำขอส่งของรอบที่ "
+                + removedRounds.stream().map(String::valueOf).collect(java.util.stream.Collectors.joining(", ")) + " ถูกลบ\n"
+                + DealNoticeText.dealLabel(locked.code(), locked.customerName());
+            for (long id : th.co.glr.hr.auth.WarehouseStaff.recipientIds(employeeAuth)) {
+                notifications.notifyEmployeeAtLink(id, "DELIVERY_REQUEST_RETURNED", msg, "/tickets/" + ticketId);
+            }
+        }
         return promotionResult(ticketId, quotationId);
     }
 
@@ -2234,6 +2283,7 @@ public class DealQuotationService {
                 + s.paymentStatus() + ") จึงยกเลิกการยืนยันไม่ได้";
         }
         TicketRepository.UndoFacts f = tickets.undoConfirmationFacts(s.id());
+        boolean prePortal = tickets.isPrePortal(s.id());
         if (f.bidOrSplit()) {
             return "คำสั่งซื้อนี้มาจากการบันทึกผลประมูลหรือการแยกงาน จึงยกเลิกการยืนยันจากหน้านี้ไม่ได้";
         }
@@ -2242,6 +2292,9 @@ public class DealQuotationService {
         }
         if (f.paymentReceipt()) {
             return "มีการบันทึกรับชำระเงินแล้ว จึงยกเลิกการยืนยันคำสั่งซื้อไม่ได้";
+        }
+        if (f.prePortalSettledByExpress()) {
+            return "มัดจำที่รับแล้วก่อนใช้ระบบถูกจับคู่กับรายการ Express แล้ว จึงยกเลิกการยืนยันคำสั่งซื้อไม่ได้ ให้ฝ่ายบัญชีปรับยอด";
         }
         if (f.remainingInvoice()) {
             return "มีใบแจ้งหนี้ยอดคงเหลือแล้ว จึงยกเลิกการยืนยันคำสั่งซื้อไม่ได้";
@@ -2252,12 +2305,16 @@ public class DealQuotationService {
         if (f.deliveryRecord()) {
             return "มีการบันทึกส่งสินค้าแล้ว จึงยกเลิกการยืนยันคำสั่งซื้อไม่ได้";
         }
+        if (tickets.hasForwardedDeliveryRound(s.id())) {
+            return "มีคำขอที่ส่งต่อให้ออกใบกำกับแล้ว ยกเลิกการยืนยันคำสั่งซื้อไม่ได้";
+        }
         if (f.manualStockDecision()) {
             return "มีการระบุที่มาสินค้า (สต็อก/นำเข้า) หลังยืนยันคำสั่งซื้อแล้ว จึงยกเลิกการยืนยันไม่ได้";
         }
         boolean autoRoutedFromStock = DealStage.DELIVERY_SCHEDULING.equals(s.salesStage())
             && FulfilmentStatus.FROM_STOCK.equals(s.fulfillmentStatus()) && routedByTheConfirmationItself(s.id());
-        if (!DealStage.ORDER_RECEIVED.equals(s.salesStage()) && !autoRoutedFromStock) {
+        // A pre-portal deal's confirm keeps the stage the deal was at (it never moved it), so there is no stage to refuse on.
+        if (!prePortal && !DealStage.ORDER_RECEIVED.equals(s.salesStage()) && !autoRoutedFromStock) {
             return "งานเดินหน้าไปขั้น " + s.salesStage() + " แล้ว จึงยกเลิกการยืนยันคำสั่งซื้อไม่ได้";
         }
         if (s.fulfillmentStatus() != null && !FulfilmentStatus.FROM_STOCK.equals(s.fulfillmentStatus())) {

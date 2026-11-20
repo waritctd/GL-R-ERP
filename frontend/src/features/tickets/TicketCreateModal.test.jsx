@@ -77,6 +77,29 @@ describe('TicketCreateModal — the drawn short form (m-create)', () => {
     expect(onSubmit).not.toHaveBeenCalled();
   });
 
+  it('สั่งซื้อแล้ว (a deal that ran before the portal) sends startStage PROCUREMENT', async () => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    renderModal({ onSubmit });
+
+    typeProject('โครงการเก่า');
+    await pickCustomer();
+    fireEvent.click(screen.getByRole('radio', { name: /สั่งซื้อแล้ว/ }));
+    // The deposit already received is required (0 allowed): nothing is sent without it.
+    fireEvent.click(submitButton());
+    expect(await screen.findByText(/ใส่มัดจำที่รับแล้ว/)).toBeTruthy();
+    expect(onSubmit).not.toHaveBeenCalled();
+    // Above 0 the date it was received is required too.
+    fireEvent.change(screen.getByLabelText('มัดจำที่รับแล้วก่อนใช้ระบบ (บาท)'), { target: { value: '500' } });
+    fireEvent.click(submitButton());
+    expect(await screen.findByText('ใส่วันที่ได้รับมัดจำ')).toBeTruthy();
+    expect(onSubmit).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByLabelText('มัดจำที่รับแล้วก่อนใช้ระบบ (บาท)'), { target: { value: '0' } });
+    fireEvent.click(submitButton());
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(onSubmit.mock.calls[0][0]).toMatchObject({ startStage: 'PROCUREMENT', preDeposit: 0 });
+  });
+
   it('refuses a deal with no channel (owner rule 2026-09-30, kept in fix round 1)', async () => {
     const onSubmit = vi.fn();
     renderModal({ onSubmit });

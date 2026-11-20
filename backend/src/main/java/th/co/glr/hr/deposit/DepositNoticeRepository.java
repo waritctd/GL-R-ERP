@@ -160,6 +160,9 @@ public class DepositNoticeRepository {
      * approved_price rows supply the lines. See {@link #findGoverningQuotation}. */
     public record GoverningQuotation(long quotationId, boolean legacy, String number, BigDecimal depositPercent) {}
 
+    /** The DEAL_DIRECT statuses {@link #findGoverningQuotation} lets source a notice (SENT is not one of them). */
+    public static final java.util.Set<String> DEAL_DIRECT_DEPOSIT_SOURCE_STATUSES = java.util.Set.of("ACCEPTED", "ISSUED", "APPROVED");
+
     /**
      * The ONE pick of the quotation a ticket-level deposit notice bills, across both engines, so
      * when it supplies the lines they and the percent come from the same row. The PRICING-REQUEST
@@ -194,16 +197,24 @@ public class DepositNoticeRepository {
      * quotation; {@link DepositNoticeService#createDraft} then bills 0.50.
      */
     public Optional<GoverningQuotation> findGoverningQuotation(long ticketId) {
+        return findGoverningQuotation(ticketId, null);
+    }
+
+    /** {@code chosenQuotationId} (a delivery request's chosen quotation) narrows the pick to that one quotation. */
+    public Optional<GoverningQuotation> findGoverningQuotation(long ticketId, Long chosenQuotationId) {
         return jdbc.query("""
             SELECT quotation_id, origin IS NULL AS legacy, number, deposit_percent
               FROM sales.quotation
              WHERE ticket_id = :ticketId
+               AND (CAST(:chosen AS BIGINT) IS NULL OR quotation_id = :chosen)
                AND ((origin IS NULL AND pricing_request_id IS NOT NULL AND doc_status IN ('ACCEPTED','ISSUED'))
                  OR (origin = 'PRICING_REQUEST' AND doc_status IN ('ACCEPTED','ISSUED'))
-                 OR (origin = 'DEAL_DIRECT' AND doc_status IN ('ACCEPTED','ISSUED','APPROVED')))
+                 OR (origin = 'DEAL_DIRECT' AND doc_status IN (:dealDirectStatuses)))
              ORDER BY CASE WHEN doc_status IN ('ACCEPTED','APPROVED') THEN 0 ELSE 1 END, quotation_id DESC
              LIMIT 1
-            """, Map.of("ticketId", ticketId), (rs, i) -> {
+            """, new org.springframework.jdbc.core.namedparam.MapSqlParameterSource()
+                .addValue("ticketId", ticketId).addValue("chosen", chosenQuotationId)
+                .addValue("dealDirectStatuses", DEAL_DIRECT_DEPOSIT_SOURCE_STATUSES), (rs, i) -> {
                 boolean legacy = rs.getBoolean("legacy");
                 Integer stored = (Integer) rs.getObject("deposit_percent");
                 int percent = legacy ? QuotationRenderer.LEGACY_DEPOSIT_PERCENT

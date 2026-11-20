@@ -4,7 +4,6 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { DealFulfilmentPanel } from './DealFulfilmentPanel.jsx';
 import { api } from '../../api/index.js';
-import { addDaysIso, bangkokTodayIso } from '../../utils/format.js';
 
 globalThis.React = React;
 
@@ -358,108 +357,27 @@ describe('DealFulfilmentPanel — ยืนยันการออกใบข�
   });
 });
 
-// Drawing m-delivery (2026-11-16): the body is rebuilt; recordDelivery is sent exactly as before.
-describe('DealFulfilmentPanel — บันทึกการส่งสินค้า (drawing m-delivery)', () => {
-  // ordered / delivered / remaining all differ per line, and from line to line.
-  const lines = [
-    { id: 21, brand: 'Equipe', model: 'Raku 20x20', qty: 120, qtyDelivered: 56, qtyFromStock: 0 },
-    { id: 22, brand: 'Mutina', model: 'Bullnose', qty: 40, qtyDelivered: 40, qtyFromStock: 0 },
-    { id: 23, brand: 'Equipe', model: 'Splendours', qty: 75.5, qtyDelivered: 0, qtyFromStock: 0 },
-  ];
-  const ACTIONS = [{ action: 'RECORD_PARTIAL_DELIVERY' }];
-  const open = async (over = {}) => {
-    renderPanel(OWNER, [], { items: lines, availableActions: ACTIONS, ...over });
-    fireEvent.click(await screen.findByTestId('deal-fulfilment-record-delivery'));
-    return screen.findByRole('dialog', { name: 'บันทึกการส่งสินค้า' });
-  };
-  const submit = () => fireEvent.click(screen.getByTestId('deal-fulfilment-record-delivery-submit'));
+// Task 9: recording a delivery moved to the round card (DeliveryRoundsPanel, tested there): this panel keeps the delivery
+// table and history, and no longer holds a record or complete button, whatever the server advertises.
+describe('DealFulfilmentPanel — การบันทึกส่งสินค้าย้ายไปที่รอบส่ง', () => {
+  const lines = [{ id: 21, brand: 'Equipe', model: 'Raku 20x20', qty: 120, qtyDelivered: 56, qtyFromStock: 0 }];
 
   beforeEach(() => {
     vi.clearAllMocks();
-    api.tickets.recordDelivery.mockReset();
-    api.tickets.recordDelivery.mockResolvedValue({});
   });
 
-  it('edited: the typed qty, the chosen source and the trimmed note go out unchanged', async () => {
-    const dialog = within(await open());
-    fireEvent.change(dialog.getByLabelText('จำนวนส่งมอบ Equipe Raku 20x20'), { target: { value: '10' } });
-    fireEvent.change(dialog.getByLabelText('จำนวนส่งมอบ Equipe Splendours'), { target: { value: '0' } });
-    fireEvent.change(dialog.getByLabelText('แหล่งสินค้า'), { target: { value: 'STOCK' } });
-    fireEvent.change(dialog.getByLabelText('หมายเหตุ'), { target: { value: '  ส่งรอบแรก  ' } });
-    submit();
-    await waitFor(() => expect(api.tickets.recordDelivery).toHaveBeenCalledTimes(1));
-    expect(api.tickets.recordDelivery.mock.calls).toEqual([[1, {
-      source: 'STOCK', note: 'ส่งรอบแรก', lines: [{ itemId: 21, qty: 10 }],
-    }]]);
-  });
-
-  it('every line zeroed: a toast, and nothing is sent', async () => {
-    const showToast = vi.fn();
-    const dialog = within(await open({ showToast }));
-    fireEvent.change(dialog.getByLabelText('จำนวนส่งมอบ Equipe Raku 20x20'), { target: { value: '0' } });
-    fireEvent.change(dialog.getByLabelText('จำนวนส่งมอบ Equipe Splendours'), { target: { value: '' } });
-    submit();
-    expect(showToast).toHaveBeenCalledWith('error', 'กรุณาระบุจำนวนส่งมอบอย่างน้อย 1 รายการ');
-    expect(api.tickets.recordDelivery).not.toHaveBeenCalled();
-  });
-
-  it('wrong way round: without RECORD_PARTIAL_DELIVERY nobody gets the opener — not the owner, not the CEO', async () => {
+  it('no record or complete button for the owner or the CEO even when the legacy actions are advertised; a hint points to the round', async () => {
     for (const viewer of [OWNER, CEO]) {
-      const view = renderPanel(viewer, [], { items: lines, availableActions: [] });
-      await screen.findByText('ส่งมอบสินค้า');
+      const view = renderPanel(viewer, [], {
+        items: lines, availableActions: [{ action: 'RECORD_PARTIAL_DELIVERY' }, { action: 'COMPLETE_DELIVERY' }],
+      });
+      expect((await screen.findByTestId('delivery-record-hint')).textContent).toContain('หมายเหตุ');
       expect(screen.queryByTestId('deal-fulfilment-record-delivery')).toBeNull();
+      expect(screen.queryByTestId('deal-fulfilment-complete')).toBeNull();
+      expect(screen.getByRole('table', { name: 'การส่งสินค้าให้ลูกค้า' })).not.toBeNull();
       view.unmount();
     }
-  });
-
-  describe('วันที่ส่ง (slice 6d): default today, back at most 7 days, never a future day', () => {
-    const today = bangkokTodayIso();
-    const be = (iso) => `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${Number(iso.slice(0, 4)) + 543}`;
-    const typeDate = (dialog, iso) => {
-      const field = dialog.getByLabelText('วันที่ส่ง');
-      fireEvent.change(field, { target: { value: be(iso) } });
-      fireEvent.blur(field);
-    };
-
-    it('8 days back and tomorrow are refused in the field, which keeps the day it had', async () => {
-      const dialog = within(await open());
-      typeDate(dialog, addDaysIso(today, -8));
-      expect(dialog.getByLabelText('วันที่ส่ง').value).toBe(be(today));
-      expect(dialog.getByText('วันที่อยู่นอกช่วงที่เลือกได้')).toBeTruthy();
-      typeDate(dialog, addDaysIso(today, 1));
-      expect(dialog.getByLabelText('วันที่ส่ง').value).toBe(be(today));
-      submit();
-      await waitFor(() => expect(api.tickets.recordDelivery).toHaveBeenCalledTimes(1));
-      expect(api.tickets.recordDelivery.mock.calls[0][1]).not.toHaveProperty('deliveredOn');
-    });
-  });
-
-  // Fix round 1 (M2): the one-click ส่งมอบครบ asks for the same วันที่ส่ง, in a small confirm dialog.
-  describe('ส่งมอบครบ with วันที่ส่ง (fix round 1, M2)', () => {
-    const today = bangkokTodayIso();
-    const be = (iso) => `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${Number(iso.slice(0, 4)) + 543}`;
-    const COMPLETE = [{ action: 'COMPLETE_DELIVERY' }];
-    const openComplete = async (over = {}) => {
-      api.tickets.completeDelivery.mockReset();
-      api.tickets.completeDelivery.mockResolvedValue({});
-      renderPanel(OWNER, [], { items: lines, availableActions: COMPLETE, ...over });
-      fireEvent.click(await screen.findByTestId('deal-fulfilment-complete'));
-      return within(await screen.findByRole('dialog', { name: 'ส่งมอบครบทุกรายการ' }));
-    };
-    const confirm = (dialog) => fireEvent.click(dialog.getByRole('button', { name: 'ยืนยันส่งมอบครบ' }));
-
-    it('a past day up to 7 back goes as deliveredOn; 8 back is refused in the field', async () => {
-      const dialog = await openComplete();
-      const field = dialog.getByLabelText('วันที่ส่ง');
-      fireEvent.change(field, { target: { value: be(addDaysIso(today, -8)) } });
-      fireEvent.blur(field);
-      expect(field.value).toBe(be(today));
-      fireEvent.change(field, { target: { value: be(addDaysIso(today, -4)) } });
-      fireEvent.blur(field);
-      confirm(dialog);
-      await waitFor(() => expect(api.tickets.completeDelivery).toHaveBeenCalledTimes(1));
-      expect(api.tickets.completeDelivery.mock.calls[0]).toEqual([1,
-        { note: 'ส่งมอบครบจากหน้ารายละเอียดงาน', deliveredOn: addDaysIso(today, -4) }]);
-    });
+    expect(api.tickets.recordDelivery).not.toHaveBeenCalled();
+    expect(api.tickets.completeDelivery).not.toHaveBeenCalled();
   });
 });

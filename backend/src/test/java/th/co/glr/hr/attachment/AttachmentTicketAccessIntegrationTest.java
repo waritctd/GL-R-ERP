@@ -39,6 +39,7 @@ class AttachmentTicketAccessIntegrationTest extends AbstractPostgresIntegrationT
 
     private long ticketId;
     private long attachmentId;
+    private String attachmentPath;
 
     private UserPrincipal salesOwner;
     private UserPrincipal salesOther;
@@ -77,6 +78,7 @@ class AttachmentTicketAccessIntegrationTest extends AbstractPostgresIntegrationT
         // "uploader may always reach their own file" shortcut.
         attachmentId = attachments.save(ticketId, null, stored.fileName(), stored.filePath(),
             stored.mimeType(), stored.fileSize(), "OTHER", ceo.id()).id();
+        attachmentPath = stored.filePath();
     }
 
     // Problem 1: hr held sales-document access it holds nowhere else in the system.
@@ -132,6 +134,20 @@ class AttachmentTicketAccessIntegrationTest extends AbstractPostgresIntegrationT
             """, Map.of("id", ticketId));
     }
 
+    private void seedIssuedImportRequest() {
+        long factoryId = jdbc.queryForObject("""
+            INSERT INTO price_catalog.factories (name, country, default_currency)
+            VALUES ('Factory Attach Dead', 'IT', 'EUR') RETURNING factory_id
+            """, Map.of(), Long.class);
+        jdbc.update("""
+            INSERT INTO sales.import_request
+                (ticket_id, factory_id, factory_name, brand, version, status, doc_number, issue_date,
+                 import_step, import_step_at, first_issued_date)
+            VALUES (:t, :f, 'Factory Attach Dead', 'Brand', 1, 'ISSUED', 'IR-ATT-1', CURRENT_DATE,
+                    'CONTACTED', CURRENT_DATE, CURRENT_DATE)
+            """, Map.of("t", ticketId, "f", factoryId));
+    }
+
     private void assertCanRead(UserPrincipal who) {
         assertThatCode(() -> controller.list(ticketId, sessionFor(who))).as("list, %s", who.role()).doesNotThrowAnyException();
         assertThatCode(() -> controller.download(attachmentId, sessionFor(who))).as("download, %s", who.role()).doesNotThrowAnyException();
@@ -147,6 +163,102 @@ class AttachmentTicketAccessIntegrationTest extends AbstractPostgresIntegrationT
         assertForbidden(() -> controller.delete(attachmentId, sessionFor(account)));
     }
 
+    /** A delivery round's files (stored system documents, slips) carry prices: import never sees them, in the list or by
+     * id, while an ordinary attachment of the same deal stays visible to it and the money roles keep the round files. */
+    @Test
+    void importNeverSeesADeliveryRoundsFiles_butStillSeesOrdinaryAttachments() {
+        markDead();
+        seedIssuedImportRequest();
+        long requestId = jdbc.queryForObject("""
+            INSERT INTO sales.delivery_request (ticket_id, round_no, status, requested_by)
+            VALUES (:t, 1, 'SENT', :u) RETURNING delivery_request_id
+            """, Map.of("t", ticketId, "u", salesOwner.id()), Long.class);
+        long roundFile = attachments.save(ticketId, null, "DN-1.pdf", attachmentPath, "application/pdf", 3L, "SYSTEM_DOC",
+            salesOwner.id(), requestId, "SYSTEM").id();
+
+        assertThat(controller.list(ticketId, sessionFor(importUser)).get("attachments"))
+            .extracting(a -> a.id()).containsExactly(attachmentId);
+        assertThatThrownBy(() -> controller.download(roundFile, sessionFor(importUser)))
+            .isInstanceOf(ApiException.class).extracting(e -> ((ApiException) e).getStatus()).isEqualTo(HttpStatus.NOT_FOUND);
+        assertThatCode(() -> controller.download(attachmentId, sessionFor(importUser))).doesNotThrowAnyException();
+        assertThat(controller.list(ticketId, sessionFor(salesManager)).get("attachments")).hasSize(2);
+        assertThatCode(() -> controller.download(roundFile, sessionFor(ceo))).doesNotThrowAnyException();
+
+        // The warehouse (refused the deal itself) reads a SENT round's file, never a plain attachment, never a draft's.
+        UserPrincipal warehouse = actor(salesOther.id(), "warehouse");
+        assertThatCode(() -> controller.download(roundFile, sessionFor(warehouse))).doesNotThrowAnyException();
+        assertForbidden(() -> controller.download(attachmentId, sessionFor(warehouse)));
+        jdbc.update("UPDATE sales.delivery_request SET status = 'DRAFT' WHERE delivery_request_id = :r", Map.of("r", requestId));
+        assertForbidden(() -> controller.download(roundFile, sessionFor(warehouse)));
+
+        // The undo of the order confirmation removes the round and keeps its files as deal files (link cleared, side kept):
+        // sales still read it, import still does not.
+        jdbc.update("UPDATE sales.attachment SET delivery_request_id = NULL WHERE attachment_id = :a", Map.of("a", roundFile));
+        jdbc.update("DELETE FROM sales.delivery_request WHERE delivery_request_id = :r", Map.of("r", requestId));
+        assertThat(controller.list(ticketId, sessionFor(importUser)).get("attachments"))
+            .extracting(a -> a.id()).containsExactly(attachmentId);
+        assertThatThrownBy(() -> controller.download(roundFile, sessionFor(importUser)))
+            .isInstanceOf(ApiException.class).extracting(e -> ((ApiException) e).getStatus()).isEqualTo(HttpStatus.NOT_FOUND);
+        assertThatCode(() -> controller.download(roundFile, sessionFor(salesManager))).doesNotThrowAnyException();
+    }
+
+    /** A round's stored copy or extra file can be removed by its uploader only while the round is a draft or returned. */
+    @Test
+    void aDeliveryRoundsFileCannotBeDeletedOnceItsRoundIsSent() {
+        long roundId = jdbc.queryForObject("""
+            INSERT INTO sales.delivery_request (ticket_id, round_no, status, requested_by)
+            VALUES (:t, 1, 'SENT', :u) RETURNING delivery_request_id
+            """, Map.of("t", ticketId, "u", salesOwner.id()), Long.class);
+        FileStorageService.StoredFile own = storeFile("round-" + UUID.randomUUID() + ".pdf");
+        long fileId = attachments.save(ticketId, null, own.fileName(), own.filePath(), own.mimeType(), own.fileSize(),
+            "OTHER", salesOwner.id(), roundId, "SALES").id();
+
+        assertThatThrownBy(() -> controller.delete(fileId, sessionFor(ceo))).isInstanceOfSatisfying(ApiException.class,
+            e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT)); // someone else's file stays frozen
+        assertThat(attachments.findById(fileId)).isPresent();
+
+        // SENT (not yet forwarded): the uploader may take back their own extra file, never a stored system copy.
+        FileStorageService.StoredFile copy = storeFile("copy-" + UUID.randomUUID() + ".pdf");
+        long copyId = attachments.save(ticketId, null, copy.fileName(), copy.filePath(), copy.mimeType(), copy.fileSize(),
+            "SYSTEM_DOC", salesOwner.id(), roundId, "SYSTEM").id();
+        assertThatThrownBy(() -> controller.delete(copyId, sessionFor(salesOwner))).isInstanceOfSatisfying(ApiException.class,
+            e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+        assertThat(controller.delete(fileId, sessionFor(salesOwner)).get("ok")).isTrue();
+        FileStorageService.StoredFile again = storeFile("again-" + UUID.randomUUID() + ".pdf");
+        long againId = attachments.save(ticketId, null, again.fileName(), again.filePath(), again.mimeType(), again.fileSize(),
+            "OTHER", salesOwner.id(), roundId, "SALES").id();
+        jdbc.update("UPDATE sales.delivery_request SET status = 'FORWARDED' WHERE delivery_request_id = :r", Map.of("r", roundId));
+        assertThatThrownBy(() -> controller.delete(againId, sessionFor(salesOwner))).isInstanceOfSatisfying(ApiException.class,
+            e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+
+        jdbc.update("UPDATE sales.delivery_request SET status = 'RETURNED' WHERE delivery_request_id = :r", Map.of("r", roundId));
+        FileStorageService.StoredFile photo = storeFile("wh-" + UUID.randomUUID() + ".jpg");
+        long photoId = attachments.save(ticketId, null, photo.fileName(), photo.filePath(), "image/jpeg", photo.fileSize(),
+            "OTHER", salesOther.id(), roundId, "WAREHOUSE").id();
+        assertThatThrownBy(() -> controller.delete(photoId, sessionFor(salesOwner))).isInstanceOfSatisfying(ApiException.class,
+            e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN)); // the warehouse's evidence is its own
+        assertThat(controller.delete(againId, sessionFor(salesOwner)).get("ok")).isTrue();
+
+        // The issued tax invoice: the issuer (a per-person grant, any role) reads it from FORWARDED on and may replace or
+        // remove it only until the round is confirmed; import never reads it even when it holds the grant.
+        jdbc.update("UPDATE sales.delivery_request SET status = 'FORWARDED' WHERE delivery_request_id = :r", Map.of("r", roundId));
+        jdbc.update("UPDATE hr.employee SET can_issue_tax_invoice = TRUE WHERE employee_id IN (:a, :b)",
+            Map.of("a", salesOther.id(), "b", importUser.id()));
+        UserPrincipal issuer = actor(salesOther.id(), "employee");
+        FileStorageService.StoredFile iv = storeFile("iv-" + UUID.randomUUID() + ".pdf");
+        long invoiceId = attachments.save(ticketId, null, iv.fileName(), iv.filePath(), iv.mimeType(), iv.fileSize(),
+            "INVOICE", salesOther.id(), roundId, "ISSUER").id();
+        assertThatCode(() -> controller.download(invoiceId, sessionFor(issuer))).doesNotThrowAnyException();
+        assertThatThrownBy(() -> controller.download(invoiceId, sessionFor(importUser))).isInstanceOfSatisfying(ApiException.class,
+            e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.NOT_FOUND));
+        assertThatThrownBy(() -> controller.delete(invoiceId, sessionFor(ceo))).isInstanceOfSatisfying(ApiException.class,
+            e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+        jdbc.update("UPDATE sales.delivery_request SET status = 'INVOICED' WHERE delivery_request_id = :r", Map.of("r", roundId));
+        assertThatThrownBy(() -> controller.delete(invoiceId, sessionFor(issuer))).isInstanceOfSatisfying(ApiException.class,
+            e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+        jdbc.update("UPDATE sales.delivery_request SET status = 'FORWARDED' WHERE delivery_request_id = :r", Map.of("r", roundId));
+        assertThat(controller.delete(invoiceId, sessionFor(issuer)).get("ok")).isTrue();
+    }
     // ── helpers ───────────────────────────────────────────────────────────────────────────
 
     private void assertForbidden(org.assertj.core.api.ThrowableAssert.ThrowingCallable call) {

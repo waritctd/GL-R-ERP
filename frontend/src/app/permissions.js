@@ -44,6 +44,13 @@ export function allowedRoute(route, user) {
 // (`/`, `/attendance`) return true, the route table / `*` fallback handles those.
 // Kept as a named helper so the lockdown exemption below and the guard above can never drift
 // apart — the two must agree on exactly which paths this covers.
+// Whoever works a delivery round without reading the deal opens /tickets/:id (and only that, no sub-path): the warehouse,
+// and the invoice issuer (a per-person grant on ANY role). The bell links there.
+function isRoundWorkPath(path, user) {
+  const works = hasPermission(user?.role, 'canWorkDeliveryRounds') || Boolean(user?.canIssueTaxInvoice);
+  return works && /^\/tickets\/\d+\/?$/.test(path.split(/[?#]/)[0]);
+}
+
 function isActivityLogPath(path) {
   return path === '/activity-log' || path.startsWith('/activity-log/');
 }
@@ -68,7 +75,8 @@ const PATH_GUARDS = [
   { test: (p) => p === '/tickets', can: (u) => hasPermission(u.role, 'canViewDealPipeline') },
   // Whole-deal page (and its sub-paths, e.g. /tickets/:id/deposit). Import is REFUSED here — the backend 403s it
   // the whole-deal read and deposit notices — and gets its own per-deal page below.
-  { test: (p) => p.startsWith('/tickets/'), can: (u) => hasPermission(u.role, 'canViewWholeDeal') },
+  // The warehouse and the invoice issuer get exactly /tickets/:id (RoundWorkView: one round and its files), no sub-path.
+  { test: (p) => p.startsWith('/tickets/'), can: (u, p) => hasPermission(u.role, 'canViewWholeDeal') || isRoundWorkPath(p, u) },
   // นัดเข้าพบ: exactly the roles the visit endpoints serve (VisitService.VISIT_ROLES via canViewVisits). Exact match —
   // the page has no sub-paths. Like /tickets it is NOT on the self-service allowlist: the lock-exempt sales roles keep
   // it, every locked role loses it.
@@ -303,6 +311,8 @@ export function dealRedirectFor(path, user) {
 const LOCK_EXEMPTIONS = [
   { test: isActivityLogPath, can: (u) => Boolean(u.admin) },
   { test: isQuotationPath, can: isQuotationReleaseUser },
+  // The warehouse and the invoice issuer stay locked to self-service except for the one page their bell notices open.
+  { test: (p) => p.startsWith('/tickets/'), can: (u, p) => isRoundWorkPath(p, u) },
   { test: (p) => p === '/people-insights', can: (u) => Boolean(u.canViewPeopleInsights) },
 ];
 
@@ -311,9 +321,9 @@ export function canAccessPath(path, user) {
   // Checked BEFORE the guards below, not after: the lockdown has to deny paths the user's role would otherwise
   // pass (a sales rep on /tickets) as well as paths no guard claims at all. Narrow exemption, deliberate.
   if (isSelfServiceLocked(user) && !isSelfServicePath(path)
-    && !LOCK_EXEMPTIONS.some((entry) => entry.test(path) && entry.can(user))
+    && !LOCK_EXEMPTIONS.some((entry) => entry.test(path) && entry.can(user, path))
     && !isReleasedPath(path, user)) return false;
   const guard = PATH_GUARDS.find((entry) => entry.test(path));
   if (!guard) return true;
-  return guard.can(user);
+  return guard.can(user, path);
 }

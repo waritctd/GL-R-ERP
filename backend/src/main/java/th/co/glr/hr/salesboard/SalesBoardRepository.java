@@ -63,6 +63,7 @@ public class SalesBoardRepository {
                %3$s AS returning,
                q.total_amount, q.document_language, q.currency, q.expired, q.number AS quotation_number,
                t.buyer_name,
+               %4$s AS awarded_buyer,
                (SELECT MIN(ep.expected_week) FROM sales.expected_payment ep
                  WHERE ep.ticket_id = t.ticket_id AND ep.kind = 'DEPOSIT' AND ep.status = 'OPEN') AS expected_deposit_week,
                (t.payment_status IN (:depositInHandStatuses)
@@ -88,7 +89,7 @@ public class SalesBoardRepository {
                ORDER BY a.created_at DESC, a.id DESC
                LIMIT 1
           ) la ON TRUE
-        """.formatted(QuietRule.lastTouchedSql("t"), QuietRule.quietSql("t"), QuietRule.returningSql("t"));
+        """.formatted(QuietRule.lastTouchedSql("t"), QuietRule.quietSql("t"), QuietRule.returningSql("t"), TicketRepository.AWARDED_BUYER_SQL);
 
     /** The board: open ACTIVE deals. */
     private static final String ACTIVE_WHERE = """
@@ -231,7 +232,7 @@ public class SalesBoardRepository {
             rs.getBoolean("returning"), rs.getObject("pause_return_on", java.time.LocalDate.class),
             rs.getString("quotation_number"), rs.getString("buyer_name"),
             rs.getObject("expected_deposit_week", java.time.LocalDate.class), rs.getBoolean("deposit_received"),
-            null, false, 1, List.of(rs.getString("code")), 1, rs.getLong("ticket_id"));
+            null, false, 1, List.of(rs.getString("code")), 1, rs.getLong("ticket_id"), rs.getString("awarded_buyer"));
         return new Row(deal, rs.getString("code"), rs.getObject("parent_ticket_id", Long.class),
             rs.getString("child_kind"), rs.getString("lifecycle"), rs.getBoolean("has_add_on"));
     }
@@ -296,7 +297,8 @@ public class SalesBoardRepository {
         BoardDeal owner = p.orders().contains(p.root()) ? root : lead;
         long linkId = p.mayOpenRoot() ? root.ticketId() : lead.ticketId();
         BoardDeal deal = lead.asProject(linkId, root, owner.ownerId(), owner.ownerName(), value, currency,
-            p.count(), p.open().size(), p.codes(Row::code));
+            p.count(), p.open().size(), p.codes(Row::code),
+            ProjectFold.buyerLabel(p.orders(), o -> o.deal().awardedBuyerName()));
         return new Row(deal, p.root().code(), null, null, p.lead().lifecycle(), false);
     }
 

@@ -34,6 +34,8 @@ const quickAccounts = [
   { role: 'sales_manager', label: 'ผู้จัดการฝ่ายขาย', helper: 'อนุมัติค่าคอม · แก้ไขค่าหัก', icon: 'badgeDollar' },
   { role: 'import', label: 'ฝ่ายนำเข้า', helper: 'รับเรื่อง · เสนอราคาสินค้า', icon: 'clipboard' },
   { role: 'account', label: 'ฝ่ายบัญชี', helper: 'ยืนยันรับมัดจำ · รับชำระเงิน', icon: 'badgeDollar' },
+  { role: 'warehouse', label: 'คลังสินค้า', helper: 'ตรวจเอกสารขอออกใบกำกับ · ส่งของ', icon: 'package' },
+  { role: 'qc', label: 'QC (ผู้ออกใบกำกับ)', helper: 'แนบใบกำกับภาษีที่ออกแล้ว · ยืนยันยอด', icon: 'fileText' },
   { role: 'ceo', label: 'CEO', helper: 'อนุมัติคำขอราคา · ภาพรวมทั้งหมด', icon: 'shield' },
 ];
 

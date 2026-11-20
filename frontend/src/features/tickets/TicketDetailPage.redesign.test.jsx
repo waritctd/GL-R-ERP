@@ -47,6 +47,7 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         downloadQuotationPdf: vi.fn(),
         downloadQuotationXlsx: vi.fn(),
       },
+      deliveryRequests: { list: vi.fn() },
       attachments: {
         list: vi.fn(),
         upload: vi.fn(),
@@ -125,11 +126,11 @@ function setDeal(summary = {}, availableActions = [], extra = {}) {
   });
 }
 
-function renderPage(user = salesOwner, { showToast = vi.fn() } = {}) {
+function renderPage(user = salesOwner, { url = '/tickets/701', showToast = vi.fn() } = {}) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   const utils = render(
     <QueryClientProvider client={queryClient}>
-      <MemoryRouter initialEntries={['/tickets/701']}>
+      <MemoryRouter initialEntries={[url]}>
         <TicketDetailPage user={user} ticketId={701} onBack={vi.fn()} showToast={showToast} />
       </MemoryRouter>
     </QueryClientProvider>,
@@ -314,3 +315,28 @@ describe('relocated actions keep their old permission condition', () => {
     expect(screen.queryByText(/^แนบไฟล์ \(PDF/)).toBeNull();
   });
 });
+
+  describe('ส่งของ tab primary action', () => {
+    const ROUNDS = (canStart) => ({
+      order: { ticketId: 701, displayCode: 'PR-2026-0701-1', orderNo: 1 }, rounds: [], approvedQuotations: [],
+      canStart, startBlockedReason: canStart ? null : 'ยังไม่มีใบเสนอราคาที่อนุมัติแล้ว',
+    });
+
+    it('the delivery request is the one sticky primary when the viewer has it; without it the page keeps its own', async () => {
+      api.deliveryRequests.list.mockResolvedValue(ROUNDS(true));
+      renderPage(salesOwner, { url: '/tickets/701?tab=ship' });
+      await pageReady();
+      await waitFor(() => expect(screen.getByTestId('ticket-primary-action').getAttribute('data-action')).toBe('request_delivery'));
+      expect(screen.getAllByTestId('ticket-primary-action')).toHaveLength(1);
+      expect(screen.queryByTestId('request-delivery-button')).toBeNull();
+    });
+
+    it('a blocked viewer sees no request action, so the page action is not replaced', async () => {
+      api.deliveryRequests.list.mockResolvedValue(ROUNDS(false));
+      renderPage(salesOwner, { url: '/tickets/701?tab=ship' });
+      await pageReady();
+      await screen.findByTestId('request-blocked-reason');
+      expect(screen.queryByText('ขอออกใบกำกับ / ส่งของ')).toBeNull();
+    });
+  });
+

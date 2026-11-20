@@ -107,6 +107,19 @@ class ImportRequestPaymentGateIntegrationTest extends AbstractPostgresIntegratio
         assertThat(service.issue(id, null, owner).status()).isEqualTo(ImportRequestStatus.ISSUED);
     }
 
+
+    @Test
+    void createDrafts_asksPrePortalToConfirmTheOrderBeforeAnythingElse() {
+        var prePortal = org.mockito.Mockito.mock(th.co.glr.hr.deliveryrequest.PrePortal.class);
+        service.wirePrePortal(prePortal);
+        insertFactory("Pay Gate PrePortal Factory");
+        long ticketId = insertTicket("GATE-PREPORTAL", "DEPOSIT_PAID");
+        insertItem(ticketId, "Pay Gate PrePortal Factory", "Line", "60x60", "10", "pcs", 0);
+
+        service.createDrafts(ticketId, null, owner);
+
+        org.mockito.Mockito.verify(prePortal).ensureOrderConfirmed(ticketId, null, owner);
+    }
     // ── fixtures ──────────────────────────────────────────────────────────────────────────────
 
     private void setTicketStatus(long ticketId, String status) {

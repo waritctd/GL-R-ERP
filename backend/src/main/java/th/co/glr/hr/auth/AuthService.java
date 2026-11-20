@@ -143,7 +143,8 @@ public class AuthService {
         }
         return new AuthResponse(user, employees.isAdmin(user.id()), employees.isOperator(user.id()),
             employees.canCreateQuotation(user.id()),
-            employees.canIssueBillingNote(user.id()), employees.canManageAllSalesDocuments(user), canViewAs,
+            employees.canIssueBillingNote(user.id()), !"import".equals(user.role()) && employees.canIssueTaxInvoice(user.id()),
+            employees.canManageAllSalesDocuments(user), canViewAs,
             canViewPeopleInsights(user), info);
     }
 

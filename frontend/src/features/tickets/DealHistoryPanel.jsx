@@ -57,6 +57,13 @@ export const EVENT_KIND_LABEL = {
   ORDER_CONFIRMATION_UNDONE: 'ยกเลิกการยืนยันคำสั่งซื้อ',
   // DealPartyService#createAddOnOrder: on the root and on the new add-on order.
   ADD_ON_ORDER_CREATED: 'เปิดออเดอร์เพิ่ม',
+  // DeliveryRequestService: a round's request, and the warehouse / invoice steps that follow it.
+  DELIVERY_REQUEST_SENT: 'ขอออกใบกำกับ ส่งให้คลังตรวจ',
+  DELIVERY_REQUEST_RETURNED: 'คลังส่งเอกสารกลับฝ่ายขาย',
+  DELIVERY_REQUEST_FORWARDED: 'คลังส่งต่อให้ออกใบกำกับ',
+  TAX_INVOICE_CONFIRMED: 'ยืนยันใบกำกับภาษี',
+  TAX_INVOICE_VOIDED: 'ยกเลิกใบกำกับภาษี',
+  TAX_INVOICE_FILE_REPLACED: 'เปลี่ยนไฟล์ใบกำกับภาษี',
   CLOSED:             'ปิดเรื่อง',
   CANCELLED:          'ยกเลิก',
   EDITED:             'แก้ไขรายการสินค้า',

@@ -69,7 +69,7 @@ public class CashRepository {
     /**
      * THB receipts received on Bangkok days [from, toInclusive], signed as TicketRepository.SIGNED_RECEIPT_SUM
      * (ADJUSTMENT subtracts). Every source counts (MANUAL and EXPRESS alike) — cash is cash, and the upload dedupes
-     * on its own document number so it is never in here twice.
+     * on its own document number so it is never in here twice. A PRE_PORTAL deposit counts on the date the rep gave it.
      */
     public List<ReceivedDayRow> receivedByDay(Long ownerId, LocalDate from, LocalDate toInclusive) {
         MapSqlParameterSource p = new MapSqlParameterSource()

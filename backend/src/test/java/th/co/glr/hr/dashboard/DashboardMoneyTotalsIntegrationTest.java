@@ -80,6 +80,24 @@ class DashboardMoneyTotalsIntegrationTest extends AbstractPostgresIntegrationTes
         }
     }
 
+    @Test
+    void preportalReceiptCountsInTheMonthOfItsOwnDate_notThisMonth() {
+        long id = newDeal();
+        LocalDate month = LocalDate.now(BKK).withDayOfMonth(1);
+        for (String source : List.of("MANUAL", "PRE_PORTAL")) {
+            jdbc.update("""
+                INSERT INTO sales.payment_receipt (ticket_id, kind, amount, currency, received_at, recorded_by, receipt_ref, source)
+                VALUES (:id, 'DEPOSIT', :a, 'THB', CASE WHEN :src = 'MANUAL' THEN now() ELSE CAST(:last AS timestamptz) END, :by, :ref, :src)""", new MapSqlParameterSource("id", id)
+                .addValue("last", month.minusDays(3).atStartOfDay(BKK).toInstant().toString())
+                .addValue("a", "MANUAL".equals(source) ? 100 : 5000).addValue("by", repId).addValue("ref", "CR-" + source)
+                .addValue("src", source));
+        }
+        assertThat(dashboard.cashReceivedByRep(month)).singleElement()
+            .satisfies(row -> assertThat(row.amount()).isEqualByComparingTo("100"));
+        assertThat(dashboard.cashReceivedByRep(month.minusMonths(1))).singleElement()
+            .satisfies(row -> assertThat(row.amount()).isEqualByComparingTo("5000"));
+    }
+
     // ── builders ────────────────────────────────────────────────────────────────────────────
 
     private long newDeal() {

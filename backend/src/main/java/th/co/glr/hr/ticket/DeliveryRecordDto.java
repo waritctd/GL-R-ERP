@@ -16,5 +16,7 @@ public record DeliveryRecordDto(
     // migration's own header comment for why.
     String recipientName,
     Instant createdAt,
-    List<DeliveryRecordItemDto> items
+    List<DeliveryRecordItemDto> items,
+    // Ploy ruling 2026-11-20: the reference a delivery recorded before its tax invoice carries (null with an invoice).
+    String noInvoiceNote
 ) {}

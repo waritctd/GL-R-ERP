@@ -435,6 +435,19 @@ export const API_ROUTES = {
     deal: (id) => `/api/finance/deals/${id}`,
     action: (id, action) => `/api/finance/deals/${id}/${action}`,
   },
+  // Delivery rounds (V236): one request per round from sales to the warehouse; files ride on the round.
+  deliveryRequests: {
+    list: (ticketId) => `/api/tickets/${ticketId}/delivery-requests`,
+    one: (rid) => `/api/delivery-requests/${rid}`,
+    files: (rid) => `/api/delivery-requests/${rid}/files`,
+    send: (rid) => `/api/delivery-requests/${rid}/send`,
+    forward: (rid) => `/api/delivery-requests/${rid}/forward`,
+    sendBack: (rid) => `/api/delivery-requests/${rid}/return`,
+    taxInvoice: (rid) => `/api/delivery-requests/${rid}/tax-invoice`,
+    confirmInvoice: (rid) => `/api/delivery-requests/${rid}/confirm-invoice`,
+    voidInvoice: (rid) => `/api/delivery-requests/${rid}/void-invoice`,
+    recordDelivery: (rid) => `/api/delivery-requests/${rid}/deliveries`,
+  },
   attachments: {
     list: (ticketId) => `/api/tickets/${ticketId}/attachments`,
     upload: (ticketId) => `/api/tickets/${ticketId}/attachments`,
@@ -750,6 +763,8 @@ export const ROLE_PERMISSIONS = {
   // canViewTickets above still mirrors TicketService.VIEWER_ROLES for the list and the
   // import-readable sub-paths.
   canViewWholeDeal: ['sales', 'ceo', 'account', 'sales_manager'],
+  // The warehouse works a delivery round on /tickets/:id (the round and its files only, never the deal): see RoundWorkView.
+  canWorkDeliveryRounds: ['warehouse'],
   // Import's OWN per-deal page (ImportDealController: import + ceo). Presentation only — the endpoint enforces
   // the real gate and the row scope.
   canViewImportDeal: ['import', 'ceo'],

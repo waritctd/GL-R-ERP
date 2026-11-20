@@ -142,6 +142,64 @@ class ReceiptImportIntegrationTest extends AbstractDealQuotationSlice2Integratio
         assertThat(summary(d).salesStage()).isEqualTo("CLOSED_PAID");
     }
 
+
+    /** A round tax invoice already recorded the money: the Express row for it is queued as a possible duplicate, not placed twice. */
+    @Test
+    void aTaxInvoiceReceiptCountsAsATwin_soTheExpressRowIsQueuedNotPlacedTwice() throws Exception {
+        long d = awaitingDeposit(salesActor, "32100.00", "DN6900051");
+        jdbc.update("""
+            INSERT INTO sales.payment_receipt (ticket_id, kind, amount, recorded_by, receipt_ref, received_at, source)
+            VALUES (:t, 'BALANCE', 32100, :by, 'IV2611-0077', now(), 'TAX_INVOICE')
+            """, Map.of("t", d, "by", account.id()));
+        String today = LocalDate.now(java.time.ZoneId.of("Asia/Bangkok")).toString();
+        JsonNode summary = upload(account, csv(row("RE-TW-1", today, "", "32100", "DN6900051")));
+        assertThat(summary.get("matched").asInt()).isZero();
+        assertThat(queueReason("RE-TW-1")).isEqualTo("POSSIBLE_MANUAL_DUPLICATE");
+        assertThat(receiptCount("RE-TW-1")).isZero();
+
+        // The queue shows it as the TAX INVOICE (number, source), and "same money" settles the row writing no receipt.
+        JsonNode twin = ok(get("/api/sales/receipt-imports/unmatched"), account).get(0).get("possibleManual");
+        assertThat(twin.get("source").asText()).isEqualTo("TAX_INVOICE");
+        assertThat(twin.get("invoiceNumber").asText()).isEqualTo("IV2611-0077");
+        upload(account, csv(row("RE-TW-2", today, "", "32100", "DN6900051")));
+        assertThat(ok(post("/api/sales/receipt-imports/unmatched/" + rowId("RE-TW-1") + "/same-as-manual"), account)
+            .get("status").asText()).isEqualTo("RESOLVED");
+        assertThat(receiptCount("RE-TW-1")).isZero();
+        assertThat(paidOn(d)).isEqualByComparingTo("32100");
+
+        // One invoice's money settles at most ONE Express row: the second is refused, and no longer offered as its twin.
+        assertThat(status(post("/api/sales/receipt-imports/unmatched/" + rowId("RE-TW-2") + "/same-as-manual"), account)).isEqualTo(409);
+        assertThat(repository.findManualTwin(d, new BigDecimal("32100"), LocalDate.parse(today))).isEmpty();
+    }
+
+    /** A pre-portal deposit carries the date the rep gave, so it twins an Express row by the normal window around that date. */
+    @Test
+    void aPrePortalReceiptIsATwinWithinTheDateWindow_andSettlesAtMostOneExpressRow() throws Exception {
+        long d = awaitingDeposit(salesActor, "30000.00", "DN6900052");
+        jdbc.update("""
+            INSERT INTO sales.payment_receipt (ticket_id, kind, amount, recorded_by, source, received_at)
+            VALUES (:t, 'DEPOSIT', 30000, :by, 'PRE_PORTAL', now() - interval '40 days')
+            """, Map.of("t", d, "by", salesActor.id()));
+        String lastMonth = LocalDate.now(java.time.ZoneId.of("Asia/Bangkok")).minusDays(40).toString();
+        assertThat(upload(account, csv(row("RE-PP-1", lastMonth, "", "30000", "DN6900052"))).get("matched").asInt()).isZero();
+        assertThat(queueReason("RE-PP-1")).isEqualTo("POSSIBLE_MANUAL_DUPLICATE");
+        assertThat(receiptCount("RE-PP-1")).isZero();
+        assertThat(ok(post("/api/sales/receipt-imports/unmatched/" + rowId("RE-PP-1") + "/same-as-manual"), account)
+            .get("status").asText()).isEqualTo("RESOLVED");
+        assertThat(paidOn(d)).isEqualByComparingTo("30000");
+        assertThat(repository.findManualTwin(d, new BigDecimal("30000"), LocalDate.parse(lastMonth))).isEmpty();
+    }
+
+    @Test
+    void aPrePortalReceiptIsNotTheTwinOfAnExpressRowOutsideTheDateWindow() throws Exception {
+        long d = awaitingDeposit(salesActor, "30000.00", "DN6900053");
+        jdbc.update("""
+            INSERT INTO sales.payment_receipt (ticket_id, kind, amount, recorded_by, source, received_at)
+            VALUES (:t, 'DEPOSIT', 30000, :by, 'PRE_PORTAL', now())
+            """, Map.of("t", d, "by", salesActor.id()));
+        String later = LocalDate.now(java.time.ZoneId.of("Asia/Bangkok")).plusDays(20).toString();
+        assertThat(repository.findManualTwin(d, new BigDecimal("30000"), LocalDate.parse(later))).isEmpty();
+    }
     // ── authz: account only ─────────────────────────────────────────────────
 
     @Test

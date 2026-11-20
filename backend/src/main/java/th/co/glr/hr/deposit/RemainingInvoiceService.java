@@ -103,6 +103,17 @@ public class RemainingInvoiceService {
         return depositNoticeService.bundleSelection("REMAINING_INVOICE", id, doc.ticketId());
     }
 
+    /** The same frozen snapshot as a PDF of the invoice alone (no bundled PO / quotation). */
+    public byte[] getPdf(long id, UserPrincipal actor) {
+        RemainingInvoiceDocumentDto doc = requireStored(id);
+        depositNoticeService.requireTicketViewer(doc.ticketId(), actor);
+        try {
+            return renderer.toPdf(toRenderable(doc));
+        } catch (Exception e) {
+            throw new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "สร้างไฟล์ PDF ไม่สำเร็จ: " + e.getMessage());
+        }
+    }
+
     /** The same frozen snapshot as {@link #file}, as a PDF. */
     public DocumentBundle.Result getPdfBundle(long id, UserPrincipal actor) {
         RemainingInvoiceDocumentDto doc = requireStored(id);
@@ -132,6 +143,7 @@ public class RemainingInvoiceService {
     @Transactional
     public RemainingInvoiceDocumentDto createDraft(long ticketId, RemainingInvoiceDraftRequest req, UserPrincipal actor) {
         depositNoticeService.requireDepositNoticeIssueGate(ticketId, actor);
+        depositNoticeService.ensureOrderConfirmed(ticketId, actor); // before the row lock: the confirm takes advisory then row
         // Row lock before the state is read: an undo of the order confirmation (DealQuotationService#undoOrderConfirmation)
         // holds it, so a concurrent create sees the deal after the undo, not before. Row lock only: no lock order reversed.
         tickets.lockTicketForUpdate(ticketId);

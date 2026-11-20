@@ -507,7 +507,11 @@ export const api = {
       return withBundleSkipped(res);
     },
     listByTicket: (ticketId) => apiRequest(API_ROUTES.tickets.listDocs(ticketId)),
-    createDraft: (ticketId, payload) => apiRequest(API_ROUTES.tickets.createDocDraft(ticketId), { method: 'POST', body: payload }),
+    // `quotationId` (optional): the delivery request's chosen quotation the notice is drafted from.
+    createDraft: (ticketId, payload, { quotationId } = {}) => apiRequest(
+      `${API_ROUTES.tickets.createDocDraft(ticketId)}${quotationId != null ? `?quotationId=${encodeURIComponent(quotationId)}` : ''}`,
+      { method: 'POST', body: payload },
+    ),
   },
   // Mirrors RemainingInvoiceController: the STORED ใบแจ้งหนี้ส่วนที่เหลือ aggregate. DRAFT -> ISSUED
   // -> SUPERSEDED. `createDraft`'s `quotationId` is optional (RemainingInvoiceDraftRequest); omit
@@ -846,6 +850,43 @@ export const api = {
       apiRequest(API_ROUTES.finance.action(id, 'close/revoke'), { method: 'POST', body }),
     updateStage: (id, payload) => apiRequest(API_ROUTES.finance.action(id, 'stage'), { method: 'POST', body: payload }),
   },
+  // Delivery rounds (V236). list -> { order, rounds, approvedQuotations, canStart, startBlockedReason }; the writes
+  // return { round }. A file is removed with attachments.delete (the uploader may) and opened with attachments.fileUrl.
+  deliveryRequests: {
+    list: (ticketId) => apiRequest(API_ROUTES.deliveryRequests.list(ticketId)),
+    createDraft: (ticketId, payload = {}) =>
+      apiRequest(API_ROUTES.deliveryRequests.list(ticketId), { method: 'POST', body: payload }),
+    update: (rid, payload) => apiRequest(API_ROUTES.deliveryRequests.one(rid), { method: 'PATCH', body: payload }),
+    addFile: async (rid, file) => {
+      const formData = new FormData();
+      formData.append('file', file);
+      const res = await fetch(API_ROUTES.deliveryRequests.files(rid), {
+        method: 'POST', credentials: 'include', headers: csrfHeaders('POST'), body: formData,
+      });
+      if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err.message || 'อัปโหลดไม่สำเร็จ'); }
+      return res.json();
+    },
+    // body: { systemDocs: [{ kind: QUOTATION | DEPOSIT_NOTICE | REMAINING_INVOICE | IMPORT_REQUEST, id }] }
+    send: (rid, body = {}) => apiRequest(API_ROUTES.deliveryRequests.send(rid), { method: 'POST', body }),
+    // Warehouse only, from SENT. sendBack body: { reasonCodes: [ADDRESS_TAX_ID | PAYMENT_PROOF | DELIVERY_DATE_PLACE], detail }.
+    forward: (rid) => apiRequest(API_ROUTES.deliveryRequests.forward(rid), { method: 'POST' }),
+    sendBack: (rid, body) => apiRequest(API_ROUTES.deliveryRequests.sendBack(rid), { method: 'POST', body }),
+    // The invoice issuer (a per-person grant), from FORWARDED. attachTaxInvoice -> { attachmentId, read: { invoiceNumber,
+    // invoiceDate, total }, readOk } (nothing recorded yet); confirmInvoice body { invoiceNumber, invoiceDate, total } -> { round }.
+    attachTaxInvoice: async (rid, file) => {
+      const formData = new FormData();
+      formData.append('file', file);
+      const res = await fetch(API_ROUTES.deliveryRequests.taxInvoice(rid), {
+        method: 'POST', credentials: 'include', headers: csrfHeaders('POST'), body: formData,
+      });
+      if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err.message || 'อัปโหลดไม่สำเร็จ'); }
+      return res.json();
+    },
+    confirmInvoice: (rid, body) => apiRequest(API_ROUTES.deliveryRequests.confirmInvoice(rid), { method: 'POST', body }),
+    // Cancels a confirmed invoice before any delivery (issuer grant or account); body { reason }; the round goes back to FORWARDED.
+    voidInvoice: (rid, body) => apiRequest(API_ROUTES.deliveryRequests.voidInvoice(rid), { method: 'POST', body }),
+    recordDelivery: (rid, body) => apiRequest(API_ROUTES.deliveryRequests.recordDelivery(rid), { method: 'POST', body }),
+  },
   attachments: {
     list: (ticketId) => apiRequest(API_ROUTES.attachments.list(ticketId)),
     upload: async (ticketId, file, attachType, quotationId) => {
@@ -860,6 +901,12 @@ export const api = {
       return res.json();
     },
     fileUrl: (id) => API_ROUTES.attachments.file(id),
+    // The file's bytes, to show in a tab (the route answers Content-Disposition: attachment, which only downloads).
+    fileBlob: async (id) => {
+      const res = await fetch(API_ROUTES.attachments.file(id), { credentials: 'include' });
+      if (!res.ok) throw new Error('Download failed');
+      return res.blob();
+    },
     delete: (id) => apiRequest(API_ROUTES.attachments.delete(id), { method: 'DELETE' }),
   },
   dashboard: {

@@ -252,7 +252,7 @@ export function createDemoDatabase() {
     { id: 9, email: 'sales.manager@glr.co.th', password: 'demo1234', name: employees[0].nameTh, role: 'sales_manager', employeeId: employees[0].id, active: true, createdAt: iso(2025, 6, 1) },
     // ฝ่ายบัญชี — confirms money receipts (รับยอดมัดจำ / รับชำระเต็มจำนวน) on sales tickets. Real role derivation:
     // division AC-ฝ่ายบัญชี → 'account' (DivisionAccessPolicy), gates mirror TicketService.ACCOUNT_ROLES.
-    { id: 11, email: 'account@glr.co.th', password: 'demo1234', name: 'คุณบัญชี การเงิน', role: 'account', employeeId: null, active: true, createdAt: iso(2025, 6, 1) },
+    { id: 11, email: 'account@glr.co.th', password: 'demo1234', name: 'คุณบัญชี การเงิน', role: 'account', employeeId: null, active: true, canIssueTaxInvoice: true, createdAt: iso(2025, 6, 1) },
     // Second sales rep: with a single sales user, per-rep scoping and DRAFT-pricing-request
     // privacy (owning rep + CEO/sales_manager only) are never observable locally. Owns tickets
     // 16-18 and their own DRAFT/SUBMITTED pricing requests (see demoSales.js).
@@ -264,6 +264,13 @@ export function createDemoDatabase() {
     // 'employee' }) returns the FIRST matching row, so this entry never changes what role:'employee'
     // logs in as elsewhere (id 4 / employees[8]); it is reachable only by its own email.
     { id: 13, email: employees[9].email, password: 'demo1234', name: employees[9].nameTh, role: 'employee', employeeId: employees[9].id, active: true, createdAt: iso(2025, 2, 11) },
+    // คลังสินค้า — checks a delivery round's documents (DeliveryRequestService). Real role derivation: division WH →
+    // 'warehouse' (DivisionAccessPolicy). Not a deal reader (TicketAccessPolicy.VIEWER_ROLES): it is notified, and works
+    // a round through the round endpoints only (RoundWorkView).
+    { id: 14, email: 'warehouse@glr.co.th', password: 'demo1234', name: 'คุณคลัง สินค้า', role: 'warehouse', employeeId: null, active: true, createdAt: iso(2025, 6, 1) },
+    // QC holding the per-person invoice-issuer grant (hr.employee.can_issue_tax_invoice): a role with no deal page, so it
+    // works a forwarded round through RoundWorkView only (and is the case the self-service lock has to let through).
+    { id: 15, email: 'qc@glr.co.th', password: 'demo1234', name: 'คุณคิวซี ตรวจสอบ', role: 'qc', employeeId: null, active: true, canIssueTaxInvoice: true, createdAt: iso(2025, 6, 1) },
   ];
 
   const tickets = [

@@ -10,6 +10,9 @@
 // `canIssueBillingNote` is the same shape again: the per-employee "can issue billing notes"
 // capability. Also a hint only: BillingNoteService.hasWriteGrant re-reads the grant live on every
 // request.
+//
+// `canIssueTaxInvoice` is the same shape once more: the per-person invoice-issuer grant (any role). A hint only:
+// DeliveryRequestService re-reads it live on every call.
 export function userFromAuthResponse(response) {
   if (!response?.user) return null;
   return {
@@ -19,6 +22,7 @@ export function userFromAuthResponse(response) {
     operator: Boolean(response.operator),
     canCreateQuotation: Boolean(response.canCreateQuotation),
     canIssueBillingNote: Boolean(response.canIssueBillingNote),
+    canIssueTaxInvoice: Boolean(response.canIssueTaxInvoice),
     canManageAllSalesDocuments: Boolean(response.canManageAllSalesDocuments),
     canViewAs: Boolean(response.canViewAs),
     canViewPeopleInsights: Boolean(response.canViewPeopleInsights),

@@ -16,6 +16,7 @@ import {
 } from './CreateDealItems.jsx';
 import { FieldError, FieldLabel, PickChips, RadioCards } from './dealDialogParts.jsx';
 import { ESTIMATE_ERROR, parseEstimatedValue } from './dealEstimate.js';
+import { PRE_DEPOSIT_ERROR, PreDepositField, parsePreDeposit, preDepositDateError } from './delivery/PreDepositField.jsx';
 
 /**
  * สร้างงานใหม่ — the owner-approved short form (drawing m-create, 2026-11-16): ชื่อโครงการ, ลูกค้า / บริษัท, ผู้ออกแบบ,
@@ -42,6 +43,12 @@ import { ESTIMATE_ERROR, parseEstimatedValue } from './dealEstimate.js';
 const START_OPTIONS = [
   { value: 'LEAD_APPROACH', title: 'S1 · อยู่ระหว่างเสนอสินค้า', sub: 'เพิ่งเริ่มคุยหรือส่งตัวอย่าง' },
   { value: 'SPEC_APPROVED', title: 'S2 · ผู้ออกแบบตกลงสเปค', sub: 'เลือกสินค้าได้แล้ว รอทำราคา' },
+  // A deal ordered before the portal (pre_portal): starts at the import stage and may ask for an invoice at once.
+  {
+    value: 'PROCUREMENT',
+    title: 'สั่งซื้อแล้ว / งานที่เดินมาก่อนใช้ระบบ',
+    sub: 'ไปที่ขั้นนำเข้า / ส่งของเลย ไม่ต้องย้อนทำใบเสนอราคาหรือรับมัดจำในระบบ ออกใบขอซื้อ (IR) หรือขอออกใบกำกับได้ทันที',
+  },
 ];
 
 const PRIORITY_OPTIONS = ['LOW', 'NORMAL', 'HIGH'].map((code) => ({ code, label: ticketPriorityLabel(code).label }));
@@ -138,7 +145,7 @@ function CustomerSearch({ value, onSelect, onCreateNew, error, errorId }) {
   );
 }
 
-export function TicketCreateModal({ user, onClose, onSubmit }) {
+export function TicketCreateModal({ user, onClose, onSubmit, initialStartStage = 'LEAD_APPROACH' }) {
   const [projectName, setProjectName] = useState('');
   const [selectedProject, setSelectedProject] = useState(null);
   const [projectOptions, setProjectOptions] = useState([]);
@@ -147,7 +154,9 @@ export function TicketCreateModal({ user, onClose, onSubmit }) {
   const [customerSaving, setCustomerSaving] = useState(false);
   const [designerCode, setDesignerCode] = useState('');
   const [estimatedValue, setEstimatedValue] = useState('');
-  const [startStage, setStartStage] = useState('LEAD_APPROACH');
+  const [startStage, setStartStage] = useState(initialStartStage);
+  const [preDeposit, setPreDeposit] = useState('');
+  const [preDepositDate, setPreDepositDate] = useState('');
   const [entryChannel, setEntryChannel] = useState(null);
   // Only for a creator who cannot add items afterwards (canEditDealItemsAfterCreate); always [] otherwise.
   const offersItems = !canEditDealItemsAfterCreate(user);
@@ -241,19 +250,22 @@ export function TicketCreateModal({ user, onClose, onSubmit }) {
     if (!entryChannel) errors.entryChannel = 'กรุณาเลือกว่างานนี้เสนอแก่ใคร';
     const value = parseEstimatedValue(estimatedValue);
     if (Number.isNaN(value)) errors.value = ESTIMATE_ERROR;
+    if (startStage === 'PROCUREMENT' && Number.isNaN(parsePreDeposit(preDeposit))) errors.preDeposit = PRE_DEPOSIT_ERROR;
+    const depositDateError = startStage === 'PROCUREMENT' ? preDepositDateError(parsePreDeposit(preDeposit), preDepositDate) : '';
+    if (depositDateError) errors.preDepositDate = depositDateError;
     const sentItems = offersItems ? items : [];
     Object.assign(errors, validateCreateItems(sentItems));
     if (Object.keys(errors).length > 0) {
       setFieldErrors(errors);
       setError('');
-      const first = ['project', 'customer', 'entryChannel', 'value'].find((key) => errors[key]);
+      const first = ['project', 'customer', 'entryChannel', 'value', 'preDeposit', 'preDepositDate'].find((key) => errors[key]);
       if (first === 'entryChannel') {
         // A radiogroup cannot take focus itself: focus its first chip (review round 2, L-5). The error is role="alert"
         // and the group is aria-describedby it, so it is announced.
         document.querySelector('#deal-entry-channel [role="radio"]')?.focus();
       } else {
         document.getElementById({
-          project: 'deal-project-name', customer: 'deal-customer', value: 'deal-estimated-value',
+          project: 'deal-project-name', customer: 'deal-customer', value: 'deal-estimated-value', preDeposit: 'deal-pre-deposit', preDepositDate: 'deal-pre-deposit-date',
         }[first])?.focus();
       }
       return;
@@ -285,6 +297,7 @@ export function TicketCreateModal({ user, onClose, onSubmit }) {
         designerName,
         estimatedValue: value,
         startStage,
+        ...(startStage === 'PROCUREMENT' ? { preDeposit: parsePreDeposit(preDeposit), ...(preDepositDate ? { preDepositDate } : {}) } : {}),
         priority,
         note: note.trim() || null,
         nextFollowUpAt: nextFollowUpAt || null,
@@ -448,11 +461,22 @@ export function TicketCreateModal({ user, onClose, onSubmit }) {
           // sales owner/keyer, sales_manager, ceo); offered to no one the server would refuse.
           options={START_OPTIONS.map((option) => ({
             ...option,
-            disabled: option.value === 'SPEC_APPROVED' && !['sales', 'sales_manager', 'ceo'].includes(user?.role),
+            disabled: option.value !== 'LEAD_APPROACH' && !['sales', 'sales_manager', 'ceo'].includes(user?.role),
           }))}
           value={startStage}
           onChange={setStartStage}
         />
+        {startStage === 'PROCUREMENT' ? (
+          <PreDepositField
+            id="deal-pre-deposit"
+            value={preDeposit}
+            onChange={(text) => { setPreDeposit(text); clearError('preDeposit'); clearError('preDepositDate'); }}
+            error={fieldErrors.preDeposit}
+            date={preDepositDate}
+            onDateChange={(iso) => { setPreDepositDate(iso); clearError('preDepositDate'); }}
+            dateError={fieldErrors.preDepositDate}
+          />
+        ) : null}
 
         {offersItems ? (
           <CreateDealItems items={items} onChange={setItems} errors={fieldErrors} onClearError={clearError} />

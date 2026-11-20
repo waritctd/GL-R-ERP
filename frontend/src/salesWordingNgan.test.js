@@ -35,6 +35,8 @@ const ALLOWED = [
     'the mock-mode stub ends with the same V210-matched phrase as the note above'],
   ['api/mockApi.js', 'แล้ว ดีล',
     'mock copy of DepositNoticeService\'s DEPOSIT_NOTICE_ISSUED bell text; Java keeps it because the same text is emailed'],
+  ['api/mockApi.js', 'แผ่น\\nดีล',
+    'mock copy of TicketService\'s DELIVERY_RECORDED bell to the deal owner, which builds its second line with DealNoticeText.dealLabel (the same helper the notice texts above use)'],
   ['data/demoHr.js', 'ลูกค้ายืนยันคำสั่งซื้อของดีล PR-2026-0007 แล้ว',
     'demo bell row standing in for notification text, which Java keeps because the same text is emailed'],
 ];

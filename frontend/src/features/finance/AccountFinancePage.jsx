@@ -128,15 +128,14 @@ function dueChip(ticket) {
 /** Slice 6.3: where a close-ready deal's money came from (TicketSummaryDto#receiptSource) — both chips when mixed, none
  * when the server sends none. */
 function SourceChips({ source }) {
-  if (source === 'MIXED') {
-    return (
-      <span className="inline-flex flex-wrap gap-1">
-        <ReceiptSourceChip source="EXPRESS" />
-        <ReceiptSourceChip source="MANUAL" />
-      </span>
-    );
-  }
-  return <ReceiptSourceChip source={source} />;
+  // MIXED = Express + hand-typed; a tax invoice among others arrives as the sources joined by '+'. One chip per source present.
+  const sources = source === 'MIXED' ? ['EXPRESS', 'MANUAL'] : String(source).split('+');
+  if (sources.length === 1) return <ReceiptSourceChip source={sources[0]} />;
+  return (
+    <span className="inline-flex flex-wrap gap-1">
+      {sources.map((one) => <ReceiptSourceChip key={one} source={one} />)}
+    </span>
+  );
 }
 
 // One worklist line (design a-fin-land .wl): code · customer/project · figure · due chip · the group's ONE button.

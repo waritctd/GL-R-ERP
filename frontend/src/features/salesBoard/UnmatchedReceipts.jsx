@@ -185,17 +185,26 @@ export function UnmatchedReceipts({ showToast = () => {} }) {
               {row.reason === 'POSSIBLE_MANUAL_DUPLICATE' && row.possibleManual ? (
                 // Review N1: never linked silently — account says which it is.
                 <div className="grid gap-2 rounded-md border border-warning bg-warning-bg px-3 py-2">
-                  <p className="m-0 text-sm text-text">
-                    {'อาจเป็นรายการเดียวกับที่บันทึกเอง: ' + (EXPECTED_KIND_LABEL[row.possibleManual.kind] ?? row.possibleManual.kind)
-                      + ' ' + baht(row.possibleManual.amount) + ' · ' + formatThaiDate(row.possibleManual.receivedAt)
-                      + (row.possibleManual.recordedByName ? ' · ' + row.possibleManual.recordedByName : '')}
-                  </p>
+                  {row.possibleManual.source === 'TAX_INVOICE' ? (
+                    <p className="m-0 text-sm text-text" data-testid="twin-tax-invoice">
+                      {'อาจเป็นเงินก้อนเดียวกับใบกำกับภาษี ' + (row.possibleManual.invoiceNumber ?? '')
+                        + (row.possibleManual.roundNo ? ` (รอบส่งที่ ${row.possibleManual.roundNo})` : '')
+                        + ' ที่บันทึกรับเงินไว้แล้ว ' + baht(row.possibleManual.amount) + ' · ' + formatThaiDate(row.possibleManual.receivedAt)}
+                    </p>
+                  ) : (
+                    <p className="m-0 text-sm text-text">
+                      {'อาจเป็นรายการเดียวกับที่บันทึกเอง: ' + (EXPECTED_KIND_LABEL[row.possibleManual.kind] ?? row.possibleManual.kind)
+                        + ' ' + baht(row.possibleManual.amount) + ' · ' + formatThaiDate(row.possibleManual.receivedAt)
+                        + (row.possibleManual.recordedByName ? ' · ' + row.possibleManual.recordedByName : '')}
+                    </p>
+                  )}
                   <div className="flex flex-wrap gap-2">
                     {row.possibleManual.alreadyLinked ? null : (
                       // The receipt is already linked to another Express row — the server would 409 this.
                       <Button type="button" size="sm" disabled={busy}
-                        onClick={() => run(sameAsManual, row, 'ผูกกับรายการที่บันทึกเองแล้ว ไม่บันทึกซ้ำ')}>
-                        รายการเดียวกับที่บันทึกเอง
+                        onClick={() => run(sameAsManual, row, row.possibleManual.source === 'TAX_INVOICE'
+                          ? 'จับคู่กับใบกำกับแล้ว ไม่บันทึกซ้ำ' : 'ผูกกับรายการที่บันทึกเองแล้ว ไม่บันทึกซ้ำ')}>
+                        {row.possibleManual.source === 'TAX_INVOICE' ? 'เงินก้อนเดียวกับใบกำกับ' : 'รายการเดียวกับที่บันทึกเอง'}
                       </Button>
                     )}
                     <Button type="button" size="sm" variant="secondary" disabled={busy}

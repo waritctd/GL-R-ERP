@@ -37,8 +37,6 @@ public final class TicketAccessPolicy {
         return canViewDocuments(summary, actor, false);
     }
 
-    /** Selects affected frontend tests, including readers outside the import graph. */
-
     public static boolean canViewDocuments(TicketSummaryDto summary, UserPrincipal actor, boolean inRoleScope) {
         return canViewDocuments(summary, actor, inRoleScope, false);
     }

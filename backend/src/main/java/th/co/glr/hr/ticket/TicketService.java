@@ -20,6 +20,7 @@ import org.springframework.transaction.annotation.Transactional;
 import th.co.glr.hr.auth.DealEntryAccess;
 import th.co.glr.hr.auth.EmployeeAuthRepository;
 import th.co.glr.hr.auth.UserPrincipal;
+import th.co.glr.hr.auth.WarehouseStaff;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.common.Page;
 import th.co.glr.hr.common.PageRequest;
@@ -296,7 +297,7 @@ public class TicketService {
                 }
                 long linkId = p.mayOpenRoot() ? p.root().id() : p.lead().id();
                 return p.lead().asProject(linkId, p.root(), payable, paid, outstanding, p.count(), p.open().size(),
-                    p.codes(TicketSummaryDto::code));
+                    p.codes(TicketSummaryDto::code), ProjectFold.buyerLabel(p.orders(), TicketSummaryDto::awardedBuyerName));
             }
             private java.math.BigDecimal add(java.math.BigDecimal a, java.math.BigDecimal b) {
                 return a == null ? b : b == null ? a : a.add(b);
@@ -491,8 +492,9 @@ public class TicketService {
         // the deal moves by its documents. A sales API contract change, stated in the PR body.
         String startStage = request.startStage() == null || request.startStage().isBlank()
             ? DealStage.LEAD_APPROACH : request.startStage();
-        if (!DealStage.LEAD_APPROACH.equals(startStage) && !DealStage.SPEC_APPROVED.equals(startStage)) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "งานใหม่เริ่มได้ที่ S1 หรือ S2 เท่านั้น");
+        if (!DealStage.LEAD_APPROACH.equals(startStage) && !DealStage.SPEC_APPROVED.equals(startStage)
+                && !DealStage.PROCUREMENT.equals(startStage)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "งานใหม่เริ่มได้ที่ S1 S2 หรือสั่งซื้อแล้วเท่านั้น");
         }
         // Mirrors @DecimalMin(exclusive 0) on the request for service-level callers that skip bean validation; without
         // it a non-positive value would hit chk_ticket_estimated_value and fail closed as a 500.
@@ -527,6 +529,15 @@ public class TicketService {
             tickets.updateSalesStage(id, DealStage.SPEC_APPROVED);
             tickets.addEvent(id, actor.id(), actor.name(),
                 TicketEventKind.STAGE_CHANGED, created.salesStage(), DealStage.SPEC_APPROVED, "เริ่มที่ S2 · สเปคผ่าน");
+        } else if (DealStage.PROCUREMENT.equals(startStage)) {
+            // สั่งซื้อแล้ว: the deal ran before the portal. Same write gate as starting at S2 (a sales action), not the
+            // import gate of PROCUREMENT itself; the pre_portal flag lets the later gates skip confirmation and deposit.
+            TicketSummaryDto created = requireTicket(id).summary();
+            requireStageWriteAccess(created, DealStage.SPEC_APPROVED, actor);
+            tickets.updateSalesStage(id, DealStage.PROCUREMENT);
+            becomePrePortal(id, request.preDeposit(), request.preDepositDate(), actor);
+            tickets.addEvent(id, actor.id(), actor.name(),
+                TicketEventKind.STAGE_CHANGED, created.salesStage(), DealStage.PROCUREMENT, "งานที่เดินมาก่อนใช้ระบบ");
         }
         // A newly created deal is always the rep's private draft, whether or not products were attached — import/CEO
         // are notified only once a PricingRequest is created and submitted against this ticket, never at deal-creation
@@ -1123,6 +1134,68 @@ public class TicketService {
             tickets.addEvent(ticketId, actor.id(), actor.name(),
                 TicketEventKind.POLICY_CHANGED, stage, stage, TicketRepository.followedPolicyNote(policy, reason));
         }
+    }
+
+    /** The receipt source of the deposit a rep says was received outside the portal. */
+    public static final String PRE_PORTAL_SOURCE = "PRE_PORTAL";
+    private static final String PRE_PORTAL_NOTICE = "DEAL_PRE_PORTAL";
+
+    /** The deposit entered when a deal becomes pre-portal: required, 0 or more, at most 2 decimals. */
+    public static BigDecimal requirePreDeposit(BigDecimal deposit) {
+        if (deposit == null || deposit.signum() < 0 || deposit.stripTrailingZeros().scale() > 2) {
+            throw new ApiException(HttpStatus.BAD_REQUEST,
+                "ใส่มัดจำที่รับแล้วก่อนใช้ระบบ (0 ถ้ายังไม่ได้รับ) เป็นตัวเลขไม่ติดลบ ทศนิยมไม่เกิน 2 ตำแหน่ง");
+        }
+        return deposit.setScale(2, java.math.RoundingMode.HALF_UP);
+    }
+
+    /** The deposit and the day it was received: the date is required when the amount is above 0 and is not in the future (Asia/Bangkok). */
+    public static BigDecimal requirePreDeposit(BigDecimal deposit, java.time.LocalDate receivedOn) {
+        BigDecimal amount = requirePreDeposit(deposit);
+        if (amount.signum() > 0) {
+            if (receivedOn == null) {
+                throw new ApiException(HttpStatus.BAD_REQUEST, "ใส่วันที่ได้รับมัดจำ");
+            }
+            if (receivedOn.isAfter(bangkokDate(Instant.now()))) {
+                throw new ApiException(HttpStatus.BAD_REQUEST, "วันที่ได้รับมัดจำต้องไม่เป็นวันในอนาคต");
+            }
+        }
+        return amount;
+    }
+
+    /**
+     * A deal becomes pre-portal (the สั่งซื้อแล้ว start, or the first request on an old deal): the flag, the deposit the
+     * customer already paid outside the portal as ONE DEPOSIT receipt of source PRE_PORTAL (nothing when 0), and a bell to
+     * account, sales manager, the warehouse manager ({@link WarehouseStaff#managerRecipientIds})
+     * and every invoice issuer, one bell per person. Performs NO authorization: the caller has authorized {@code actor}.
+     * The caller takes the advisory lock (if it confirms the order) BEFORE calling, then this writes the ticket row.
+     */
+    @Transactional
+    public void becomePrePortal(long ticketId, BigDecimal deposit, java.time.LocalDate receivedOn, UserPrincipal actor) {
+        BigDecimal amount = requirePreDeposit(deposit, receivedOn);
+        TicketSummaryDto s = requireTicket(ticketId).summary();
+        tickets.markPrePortal(ticketId);
+        tickets.addEvent(ticketId, actor.id(), actor.name(), TicketEventKind.POLICY_CHANGED, s.status(), s.status(),
+            TicketRepository.PRE_PORTAL_MARK_NOTE);
+        if (amount.signum() > 0) {
+            long receiptId = tickets.insertSourcedReceipt(ticketId, "DEPOSIT", amount, actor.id(),
+                receivedOn.atStartOfDay(java.time.ZoneId.of("Asia/Bangkok")).toInstant(), null, null, PRE_PORTAL_SOURCE);
+            tickets.addEventWithDocument(ticketId, actor.id(), actor.name(), TicketEventKind.PAYMENT_RECORDED,
+                s.status(), s.status(), "kind=DEPOSIT, amount=" + amount + " — มัดจำที่รับแล้วก่อนใช้ระบบ",
+                RelatedDocumentType.PAYMENT_RECEIPT, receiptId);
+            tickets.applyReceiptToExpectedPayments(ticketId, "DEPOSIT", amount, receivedOn, receiptId);
+        }
+        String message = actor.name() + " ตั้งงานเป็นงานที่เดินมาก่อนใช้ระบบ · มัดจำที่รับแล้ว " + ThaiText.money(amount) + " บาท\n"
+            + DealNoticeText.dealLabel(s.code(), s.customerName()) + "\nแจ้งเพื่อทราบ ไม่ต้องดำเนินการ";
+        java.util.Set<Long> direct = new java.util.LinkedHashSet<>();
+        direct.addAll(WarehouseStaff.managerRecipientIds(employeeAuth));
+        direct.addAll(notifications.taxInvoiceIssuerIds());
+        direct.remove(actor.id());
+        direct.forEach(id -> notifications.notifyEmployeeAtLink(id, PRE_PORTAL_NOTICE, message, "/tickets/" + ticketId));
+        long[] skip = java.util.stream.LongStream.concat(java.util.stream.LongStream.of(actor.id()),
+            direct.stream().mapToLong(Long::longValue)).toArray();
+        notifications.notifyByRoleAtLink("account", PRE_PORTAL_NOTICE, message, "/finance/deals/" + ticketId, skip);
+        notifications.notifyByRoleAtLink("sales_manager", PRE_PORTAL_NOTICE, message, "/tickets/" + ticketId, skip);
     }
 
     /** Turns a lost payment-track compare-and-set race into a 409. */
@@ -1827,30 +1900,118 @@ public class TicketService {
     @Transactional
     public TicketDto completeDelivery(long ticketId, CompleteDeliveryRequest request, UserPrincipal actor) {
         TicketDto ticket = lockedAfterDeliveryAccess(ticketId, actor);
+        return completeRound(ticket, request == null ? null : request.deliveryRequestId(),
+            request == null ? null : request.note(), request == null ? null : request.recipientName(),
+            // Slice 6d fix round 1 (M2): the one-click ส่งมอบครบ takes the dialog's วันที่ส่ง, same window.
+            request == null ? null : request.deliveredOn(), null, request == null ? null : request.noInvoiceNote(), actor);
+    }
+
+    /**
+     * Record goods against ONE invoiced delivery round (POST /api/delivery-requests/{rid}/deliveries): sales (the
+     * delivery-write rule) or ANY warehouse staff, manager or not. The old /tickets/{id}/deliveries routes keep the
+     * sales-only gate, so a warehouse person never reads a TicketDetailResponse. The source is the one given (sales picks it
+     * on a mixed deal), else STOCK when the deal is fulfilled from stock, else WAREHOUSE. The round must be this deal's.
+     */
+    @Transactional
+    public TicketDto recordRoundDelivery(long ticketId, long rid, RoundDeliveryRequest request, UserPrincipal actor) {
+        requireRoundDeliveryAccess(requireTicket(ticketId).summary(), actor);
+        TicketDto ticket = requireTicketLocked(ticketId);
+        requireRoundDeliveryAccess(ticket.summary(), actor);
+        String source = request != null && request.source() != null && !request.source().isBlank() ? request.source()
+            : FulfilmentStatus.FROM_STOCK.equals(ticket.summary().fulfillmentStatus()) ? "STOCK" : "WAREHOUSE";
+        if (request != null && Boolean.TRUE.equals(request.complete())) {
+            return completeRound(ticket, rid, request.note(), request.recipientName(), request.deliveredOn(), source, request.noInvoiceNote(), actor);
+        }
+        return recordDeliveryInternal(ticket, new RecordDeliveryRequest(source, request == null ? null : request.note(),
+            request == null ? null : request.lines(), request == null ? null : request.recipientName(),
+            request == null ? null : request.deliveredOn(), rid, request == null ? null : request.noInvoiceNote()), actor, false);
+    }
+
+    private void requireRoundDeliveryAccess(TicketSummaryDto s, UserPrincipal actor) {
+        if (!canWriteDelivery(s, actor) && !WarehouseStaff.is(actor)) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
+        }
+    }
+
+    /** ส่งมอบครบ: everything the (resolved, invoiced) round still covers. {@code source} null = worked out from stock cover. */
+    private TicketDto completeRound(TicketDto ticket, Long roundId, String note, String recipientName,
+                                    LocalDate deliveredOn, String source, String noInvoiceNote, UserPrincipal actor) {
         TicketSummaryDto s = ticket.summary();
         requireActive(s);
-        List<RecordDeliveryRequest.Line> remaining = ticket.items().stream()
-            .map(item -> new RecordDeliveryRequest.Line(item.id(),
-                nullToZero(item.qty()).subtract(nullToZero(item.qtyDelivered()))))
-            .filter(line -> line.qty().signum() > 0)
-            .toList();
+        DeliveryTarget target = resolveDeliveryTarget(s.id(), roundId, noInvoiceNote);
+        TicketRepository.InvoicedRound round = target.cap();
+        Map<Long, TicketItemDto> itemsById = itemMap(ticket.items());
+        // Against a named round: what it still covers. With no round (sales side, with a note): what the items still need.
+        List<RecordDeliveryRequest.Line> remaining = round != null
+            ? round.lines().stream()
+                .filter(l -> l.remaining().signum() > 0 && itemsById.containsKey(l.itemId()))
+                .map(l -> new RecordDeliveryRequest.Line(l.itemId(), l.remaining())).toList()
+            : ticket.items().stream()
+                .map(item -> new RecordDeliveryRequest.Line(item.id(), nullToZero(item.qty()).subtract(nullToZero(item.qtyDelivered()))))
+                .filter(line -> line.qty().signum() > 0).toList();
         if (remaining.isEmpty()) {
             throw new ApiException(HttpStatus.CONFLICT, "ไม่มีจำนวนค้างส่ง");
         }
-        boolean allRemainingCoveredByStock = ticket.items().stream().allMatch(item -> {
-            BigDecimal remainingQty = nullToZero(item.qty()).subtract(nullToZero(item.qtyDelivered()));
-            if (remainingQty.signum() <= 0) return true;
-            return nullToZero(item.qtyDelivered()).add(remainingQty).compareTo(nullToZero(item.qtyFromStock())) <= 0;
+        boolean allRemainingCoveredByStock = remaining.stream().allMatch(line -> {
+            TicketItemDto item = itemsById.get(line.itemId());
+            return nullToZero(item.qtyDelivered()).add(line.qty()).compareTo(nullToZero(item.qtyFromStock())) <= 0;
         });
-        String source = allRemainingCoveredByStock ? "STOCK" : "WAREHOUSE";
         RecordDeliveryRequest delivery = new RecordDeliveryRequest(
-            source,
-            request == null ? null : request.note(),
-            remaining,
-            request == null ? null : request.recipientName(),
-            // Slice 6d fix round 1 (M2): the one-click ส่งมอบครบ takes the dialog's วันที่ส่ง, same window.
-            request == null ? null : request.deliveredOn());
+            source != null ? source : allRemainingCoveredByStock ? "STOCK" : "WAREHOUSE",
+            note, remaining, recipientName, deliveredOn, target.linkId(), noInvoiceNote);
         return recordDeliveryInternal(ticket, delivery, actor, true);
+    }
+
+    static final String NO_INVOICE_NOTE_MESSAGE = "ยังไม่มีใบกำกับภาษีของรอบนี้ กรุณาระบุหมายเหตุหรือเลขอ้างอิง";
+
+    /** The round a delivery is recorded through: {@code invoiced} is its confirmed invoice's coverage (null when there is
+     * none), {@code linkId} the round the delivery row links to (null = no round). */
+    private record DeliveryTarget(TicketRepository.InvoicedRound invoiced, Long linkId, TicketRepository.InvoicedRound cap) {}
+
+    /**
+     * The round a delivery is made through (Ploy rulings 2026-11-20). A NAMED round must be this deal's (404) and not a
+     * draft (409); an INVOICED one is the invoice the delivery counts against, any other sent round is linked too (the
+     * goods left before its invoice: the note is required and the link keeps the round's own record honest). With no round
+     * named: a caller who gave a note chose the no-invoice path (no round), otherwise the oldest INVOICED round with
+     * quantity left, else none. {@code cap} is the linked round's coverage (invoiced or not) for the per-round quantity cap. With no invoiced round a non-blank note is required, see {@link #requireNoInvoiceNote}.
+     */
+    private DeliveryTarget resolveDeliveryTarget(long ticketId, Long roundId, String noInvoiceNote) {
+        if (roundId != null) {
+            String status = tickets.findRoundStatus(ticketId, roundId)
+                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบรอบส่งที่ขอ"));
+            if ("DRAFT".equals(status)) {
+                throw new ApiException(HttpStatus.CONFLICT, "รอบนี้ยังไม่ได้ส่งขอ บันทึกการส่งไม่ได้");
+            }
+            TicketRepository.InvoicedRound invoiced = !"INVOICED".equals(status) ? null
+                : tickets.findInvoicedRounds(ticketId).stream().filter(r -> r.id() == roundId).findFirst().orElse(null);
+            return new DeliveryTarget(invoiced, roundId, tickets.findRound(ticketId, roundId).orElse(null));
+        }
+        if (noInvoiceNote != null && !noInvoiceNote.isBlank()) {
+            return new DeliveryTarget(null, null, null);
+        }
+        TicketRepository.InvoicedRound oldest = tickets.findInvoicedRounds(ticketId).stream()
+            .filter(TicketRepository.InvoicedRound::hasRemaining).findFirst().orElse(null);
+        return new DeliveryTarget(oldest, oldest == null ? null : oldest.id(), oldest);
+    }
+
+    /**
+     * No confirmed tax invoice for this delivery: whoever may record a delivery (the callers have already gated that) may
+     * still do it, but only with a note/reference for the audit trail (trimmed, non-blank, at most 500). Returns the trimmed
+     * note. Deliveries recorded before this feature (no round) are never touched.
+     */
+    private String requireNoInvoiceNote(String note) {
+        String trimmed = note == null ? "" : note.trim();
+        if (trimmed.isEmpty()) {
+            throw new ApiException(HttpStatus.CONFLICT, NO_INVOICE_NOTE_MESSAGE, Map.of("code", "NO_INVOICE_NOTE_REQUIRED"));
+        }
+        if (trimmed.length() > 500) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "หมายเหตุหรือเลขอ้างอิงยาวเกิน 500 ตัวอักษร");
+        }
+        return trimmed;
+    }
+
+    private static String qtyText(BigDecimal qty) {
+        return qty.stripTrailingZeros().toPlainString();
     }
 
     /** The delivery gate, then the deal's row lock and a fresh read (an undo of the order confirmation that committed
@@ -1869,7 +2030,11 @@ public class TicketService {
         if (request == null || request.lines() == null || request.lines().isEmpty()) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุรายการส่งสินค้า");
         }
+        // Malformed input (an empty list, a day outside the window) is a 400 before the business refusal below.
         java.time.Instant deliveredAt = backDatedDeliveryInstant(request.deliveredOn(), s.id());
+        DeliveryTarget target = resolveDeliveryTarget(s.id(), request.deliveryRequestId(), request.noInvoiceNote());
+        TicketRepository.InvoicedRound round = target.invoiced();
+        String noInvoiceNote = round == null ? requireNoInvoiceNote(request.noInvoiceNote()) : null;
         String source = request.source() == null ? "" : request.source().trim().toUpperCase();
         if (!DELIVERY_SOURCES.contains(source)) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "source ต้องเป็น WAREHOUSE หรือ STOCK");
@@ -1890,6 +2055,17 @@ public class TicketService {
         List<RecordDeliveryRequest.Line> normalized = combined.entrySet().stream()
             .map(entry -> new RecordDeliveryRequest.Line(entry.getKey(), entry.getValue()))
             .toList();
+        // Within what the linked round covers, invoiced or not (an item the round does not hold has none left). The
+        // deal's row lock is held, so two concurrent records cannot both pass.
+        TicketRepository.InvoicedRound cap = target.cap();
+        for (RecordDeliveryRequest.Line line : cap == null ? List.<RecordDeliveryRequest.Line>of() : normalized) {
+            BigDecimal left = cap.lines().stream().filter(l -> l.itemId() == line.itemId())
+                .map(TicketRepository.RoundLine::remaining).findFirst().orElse(BigDecimal.ZERO);
+            if (line.qty().compareTo(left) > 0) {
+                throw new ApiException(HttpStatus.CONFLICT, "จำนวนเกินที่รอบนี้ครอบคลุม (เหลือ " + qtyText(left) + ")",
+                    Map.of("code", "ROUND_QTY_EXCEEDED"));
+            }
+        }
         for (RecordDeliveryRequest.Line line : normalized) {
             TicketItemDto item = itemsById.get(line.itemId());
             BigDecimal newDelivered = nullToZero(item.qtyDelivered()).add(line.qty());
@@ -1906,17 +2082,32 @@ public class TicketService {
             throw new ApiException(HttpStatus.CONFLICT, "ต้องรับสินค้าเข้าโกดังก่อนส่งจากคลังสินค้า");
         }
         long deliveryId = tickets.insertDeliveryRecord(
-            s.id(), source, actor.id(), request.note(), request.recipientName(), normalized, deliveredAt);
+            s.id(), source, actor.id(), request.note(), request.recipientName(), normalized, deliveredAt, target.linkId(), noInvoiceNote);
         TicketDto updated = requireTicket(s.id());
         TicketSummaryDto updatedSummary = updated.summary();
         boolean fullyDelivered = updated.items().stream()
             .allMatch(item -> nullToZero(item.qtyDelivered()).compareTo(nullToZero(item.qty())) >= 0);
         // A back-dated record says so in the history: the event itself is stamped when it was recorded.
         String message = deliveryMessage(updated.items(), normalized)
-            + (deliveredAt == null ? "" : " · วันที่ส่ง " + ThaiText.date(request.deliveredOn()));
+            + (deliveredAt == null ? "" : " · วันที่ส่ง " + ThaiText.date(request.deliveredOn()))
+            + (noInvoiceNote == null ? "" : " · ส่งก่อนออกใบกำกับ: " + noInvoiceNote);
         tickets.addEventWithDocument(s.id(), actor.id(), actor.name(),
             TicketEventKind.DELIVERY_RECORDED, updatedSummary.status(), updatedSummary.status(), message,
             RelatedDocumentType.DELIVERY_RECORD, deliveryId);
+        if (s.createdById() != actor.id()) {
+            BigDecimal total = normalized.stream().map(RecordDeliveryRequest.Line::qty).reduce(BigDecimal.ZERO, BigDecimal::add);
+            notifications.notifyEmployeeAtLink(s.createdById(), TicketEventKind.DELIVERY_RECORDED,
+                "ส่งของแล้ว " + qtyText(total) + " แผ่น\n" + DealNoticeText.dealLabel(s.code(), s.customerName())
+                    + (round == null ? " · ส่งก่อนออกใบกำกับ" : " · รอบส่งที่ " + round.roundNo()) + " · บันทึกโดย " + actor.name(),
+                "/tickets/" + s.id() + "?tab=ship");
+        }
+        if (noInvoiceNote != null) {
+            // Audit visibility: account and the sales manager hear of every delivery made before its tax invoice.
+            String audit = actor.name() + " บันทึกส่งสินค้าก่อนออกใบกำกับภาษี\n"
+                + DealNoticeText.dealLabel(s.code(), s.customerName()) + "\nหมายเหตุ/เลขอ้างอิง: " + noInvoiceNote;
+            notifications.notifyByRoleAtLink("account", TicketEventKind.DELIVERY_RECORDED, audit, "/finance/deals/" + s.id(), actor.id());
+            notifications.notifyByRoleAtLink("sales_manager", TicketEventKind.DELIVERY_RECORDED, audit, "/tickets/" + s.id() + "?tab=ship", actor.id());
+        }
         if (fullyDelivered) {
             tickets.updateFulfillmentStatus(s.id(), FulfilmentStatus.FULLY_DELIVERED);
             tickets.addEventWithDocument(s.id(), actor.id(), actor.name(),
@@ -2072,12 +2263,34 @@ public class TicketService {
     public long recordExpressReceipt(long ticketId, BigDecimal amount, Instant receivedAt, String expressDocNo,
                                      String customerName, UserPrincipal actor) {
         requireRole(actor, EXPRESS_RECEIPT_ROLES);
+        return recordSourcedReceipt(ticketId, amount, receivedAt, expressDocNo, customerName, actor, "EXPRESS",
+            "ต้องมีเลขที่เอกสาร Express", "Express");
+    }
+
+    /**
+     * Records the money of a confirmed round tax invoice ({@code source = 'TAX_INVOICE'}, receipt_ref = the invoice
+     * number). The invoice issuer is a per-person grant, not a role, so there is NO role check here: the caller
+     * ({@code DeliveryRequestService#confirmInvoice}) has already required the grant and decided {@code amount} (the part
+     * of the invoice not already recorded, never above what the order still owes). Same kind rule, event, expected-payment
+     * and reconciliation steps as an Express row, because both go through one body.
+     */
+    @Transactional
+    public long recordTaxInvoiceReceipt(long ticketId, BigDecimal amount, java.time.LocalDate invoiceDate,
+                                        String invoiceNumber, UserPrincipal actor) {
+        Instant receivedAt = invoiceDate == null ? null : invoiceDate.atTime(12, 0).atZone(java.time.ZoneId.of("Asia/Bangkok")).toInstant();
+        return recordSourcedReceipt(ticketId, amount, receivedAt, invoiceNumber, null, actor, "TAX_INVOICE",
+            "ต้องมีเลขที่ใบกำกับภาษี", "ใบกำกับ");
+    }
+
+    private long recordSourcedReceipt(long ticketId, BigDecimal amount, Instant receivedAt, String docNo,
+                                      String customerName, UserPrincipal actor, String source, String missingRefMessage,
+                                      String eventLabel) {
         if (amount == null || amount.signum() <= 0) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "ยอดรับชำระต้องมากกว่า 0");
         }
-        String ref = blankToNull(expressDocNo);
+        String ref = blankToNull(docNo);
         if (ref == null) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องมีเลขที่เอกสาร Express");
+            throw new ApiException(HttpStatus.BAD_REQUEST, missingRefMessage);
         }
         tickets.lockTicketForUpdate(ticketId);
         TicketDto ticket = requireTicket(ticketId);
@@ -2093,24 +2306,32 @@ public class TicketService {
                 "ยอดนี้เกินยอดที่งานต้องชำระ ให้ฝ่ายบัญชีตรวจสอบ");
         }
         boolean depositWasSettled = depositSettled(s);
-        String kind = expressReceiptKind(ticketId, s, depositWasSettled);
+        // A tax invoice is the money of a delivery, never the deposit: BALANCE whatever the deposit's state (M10).
+        boolean taxInvoice = "TAX_INVOICE".equals(source);
+        String kind = taxInvoice ? "BALANCE" : expressReceiptKind(ticketId, s, depositWasSettled);
         long receiptId;
         try {
-            receiptId = tickets.insertExpressReceipt(ticketId, kind, amount, actor.id(), receivedAt, ref,
-                blankToNull(customerName));
+            receiptId = tickets.insertSourcedReceipt(ticketId, kind, amount, actor.id(), receivedAt, ref,
+                blankToNull(customerName), source);
         } catch (DataIntegrityViolationException e) {
-            throw new ExpressReceiptRefusal(ExpressReceiptRefusal.Reason.DUPLICATE, "เลขที่เอกสาร Express นี้ถูกบันทึกแล้ว");
+            throw new ExpressReceiptRefusal(ExpressReceiptRefusal.Reason.DUPLICATE, taxInvoice
+                ? "เลขที่ " + ref + " มีรายการรับเงินที่ฝ่ายบัญชีบันทึกเองไว้แล้วในงานนี้ ให้ฝ่ายบัญชีลบรายการนั้นก่อน แล้วยืนยันใบกำกับอีกครั้ง"
+                : "เลขที่เอกสาร " + eventLabel + " นี้ถูกบันทึกแล้ว");
         }
         BigDecimal newPaid = paid.add(amount);
         tickets.addEventWithDocument(ticketId, actor.id(), actor.name(), TicketEventKind.PAYMENT_RECORDED,
             s.status(), s.status(),
-            "kind=" + kind + ", amount=" + amount + ", paid=" + newPaid + ", payable=" + payable + " — Express " + ref,
+            "kind=" + kind + ", amount=" + amount + ", paid=" + newPaid + ", payable=" + payable + " — " + eventLabel + " " + ref,
             RelatedDocumentType.PAYMENT_RECEIPT, receiptId);
         tickets.applyReceiptToExpectedPayments(ticketId, kind, amount, bangkokDate(receivedAt), receiptId);
         reconcilePaymentStatus(ticketId, actor, false);
         boolean settledNow = depositSettled(requireTicket(ticketId).summary());
         if (settledNow) {
             routeAllStockDealToDelivery(ticketId, actor);
+        }
+        // The issuer's confirm notifies the rep itself, and an invoice is never "the deposit was confirmed".
+        if (taxInvoice) {
+            return receiptId;
         }
         if (settledNow && !depositWasSettled) {
             notifyRepOfDepositConfirmed(requireTicket(ticketId).summary(), amount);
@@ -2119,6 +2340,28 @@ public class TicketService {
                 payable.subtract(nullToZero(tickets.sumPaid(ticketId))), actor);
         }
         return receiptId;
+    }
+
+    /**
+     * Removes the TAX_INVOICE receipt a round's confirm created (the round's void), and nothing else. The expected
+     * payments move back by the deltas stored at confirm, and the payment track steps back when no money is left (the
+     * same {@code paid > 0} test {@link #reconcilePaymentStatus} advances on, run the other way). The deal's STAGE is left
+     * where it is. Returns the payment status it stepped back to, or null. The caller holds the ticket lock.
+     */
+    @Transactional
+    public String removeTaxInvoiceReceipt(long ticketId, long receiptId, String expectedDeltasJson) {
+        tickets.deleteTaxInvoiceReceipt(ticketId, receiptId, expectedDeltasJson);
+        TicketSummaryDto s = requireTicket(ticketId).summary();
+        boolean advancedByMoney = PaymentTrack.DEPOSIT_PAID.equals(s.paymentStatus())
+            || PaymentTrack.AWAITING_FINAL_PAYMENT.equals(s.paymentStatus());
+        if (advancedByMoney && nullToZero(tickets.sumPaid(ticketId)).signum() <= 0) {
+            boolean notice = !DepositPolicy.bypassesDepositNotice(s.depositPolicy())
+                && tickets.latestIssuedDepositNotice(ticketId).isPresent();
+            String back = notice ? PaymentTrack.DEPOSIT_NOTICE_ISSUED : PaymentTrack.CUSTOMER_CONFIRMED;
+            tickets.retreatPaymentStatus(ticketId, s.paymentStatus(), back);
+            return back;
+        }
+        return null;
     }
 
     /** The {@code /api/tickets} entrypoint: ceo only since the H1 lockdown (billing is out of scope for the finance page). */
@@ -2350,7 +2593,7 @@ public class TicketService {
     }
 
     /** The Asia/Bangkok calendar date of a receipt (now when it has no time). */
-    private static java.time.LocalDate bangkokDate(Instant at) {
+    static java.time.LocalDate bangkokDate(Instant at) {
         return (at == null ? Instant.now() : at).atZone(java.time.ZoneId.of("Asia/Bangkok")).toLocalDate();
     }
 
@@ -2389,7 +2632,8 @@ public class TicketService {
         // GOODS_RECEIVED, but once a delivery flips it to PARTIALLY_DELIVERED we fall back to the GOODS_RECEIVED event
         // so a stock-first partial delivery can't wrongly block the warehouse remainder.
         return FulfilmentStatus.GOODS_RECEIVED.equals(s.fulfillmentStatus())
-            || tickets.hasReceivedGoods(ticketId);
+            || tickets.hasReceivedGoods(ticketId)
+            || (tickets.isPrePortal(ticketId) && !tickets.hasIssuedImportRequest(ticketId)); // goods ordered before the portal, no IR in the portal
     }
 
     private static boolean hasRemainingDelivery(TicketDto ticket) {
@@ -4013,6 +4257,11 @@ public class TicketService {
             || (ownsDeal(s, actor));
     }
 
+    /** Sales-side writes on a deal's delivery rounds (DeliveryRequestService): the delivery-write rule, one predicate. */
+    public boolean canWriteDeliveryRounds(TicketSummaryDto s, UserPrincipal actor) {
+        return canWriteDelivery(s, actor);
+    }
+
     private void requireDeliveryAccess(TicketSummaryDto s, UserPrincipal actor) {
         if (!canWriteDelivery(s, actor)) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
@@ -4049,15 +4298,33 @@ public class TicketService {
     }
 
     private boolean canRecordDelivery(TicketDto ticket, UserPrincipal actor) {
-        if (!canWriteDelivery(ticket.summary(), actor) || !hasRemainingDelivery(ticket)) {
-            return false;
-        }
+        return canWriteDelivery(ticket.summary(), actor) && hasRemainingDelivery(ticket) && goodsCanLeave(ticket, false);
+    }
+
+    /**
+     * Whether goods can leave under the record path's source rules: STOCK needs the deposit settled, WAREHOUSE needs the
+     * goods received. {@code sourceFixed} (a caller who cannot pick the source, the warehouse): the source the server
+     * derives (FROM_STOCK means STOCK, else WAREHOUSE); otherwise any source will do (sales picks one on a mixed deal).
+     */
+    private boolean goodsCanLeave(TicketDto ticket, boolean sourceFixed) {
         TicketSummaryDto s = ticket.summary();
+        boolean fromStock = FulfilmentStatus.FROM_STOCK.equals(s.fulfillmentStatus());
+        if (sourceFixed) {
+            return fromStock ? depositSettled(s) : warehouseDeliveryAvailable(s, s.id());
+        }
         boolean stockAvailable = ticket.items().stream()
             .anyMatch(item -> nullToZero(item.qtyFromStock()).compareTo(nullToZero(item.qtyDelivered())) > 0);
-        boolean warehouseAvailable = warehouseDeliveryAvailable(s, s.id());
-        return ((FulfilmentStatus.FROM_STOCK.equals(s.fulfillmentStatus()) || stockAvailable) && depositSettled(s))
-            || warehouseAvailable;
+        return ((fromStock || stockAvailable) && depositSettled(s)) || warehouseDeliveryAvailable(s, s.id());
+    }
+
+    /** The Thai reason goods cannot leave yet, or null when they can (what a delivery round's record button says). */
+    public String deliveryBlockedReason(long ticketId, boolean sourceFixed) {
+        TicketDto ticket = requireTicket(ticketId);
+        if (goodsCanLeave(ticket, sourceFixed)) {
+            return null;
+        }
+        boolean stockOnly = sourceFixed && FulfilmentStatus.FROM_STOCK.equals(ticket.summary().fulfillmentStatus());
+        return stockOnly ? "ส่งสินค้าจากสต็อกได้หลังรับชำระมัดจำแล้ว" : "ต้องรับสินค้าเข้าโกดังก่อนจึงจะบันทึกการส่งได้";
     }
 
     /**

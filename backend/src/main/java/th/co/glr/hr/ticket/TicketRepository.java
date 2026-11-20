@@ -26,6 +26,19 @@ import org.springframework.http.HttpStatus;
 
 @Repository
 public class TicketRepository {
+    /** The AWARDED buyer of the deal at {@code t.ticket_id} (owner rule #65: the customer comes from the quotation): the
+     * customer of the party of its live (APPROVED/ISSUED/SENT/ACCEPTED) quotation whose party is AWARDED — the same
+     * quotation -> party -> customer hop {@code DepositNoticeRepository#QUOTATION_CUSTOMER_JOIN} makes. A scalar
+     * subselect, so the list and the board read it in their own statement; NULL before any party is awarded. */
+    public static final String AWARDED_BUYER_SQL = """
+        (SELECT ac.name
+           FROM sales.quotation aq
+           JOIN sales.deal_party ad ON ad.party_id = aq.party_id AND ad.status IN ('AWARDED', 'AWARDED_SPLIT')
+           JOIN customers.customer ac ON ac.customer_id = ad.customer_id
+          WHERE aq.ticket_id = t.ticket_id AND aq.origin IS NOT NULL
+            AND aq.doc_status IN ('APPROVED', 'ISSUED', 'SENT', 'ACCEPTED')
+          ORDER BY aq.quotation_id DESC LIMIT 1)""";
+
     private static final String SUMMARY_SELECT = """
         SELECT t.ticket_id,
                t.code, t.type, t.title, t.status, t.priority,
@@ -53,6 +66,8 @@ public class TicketRepository {
                t.win_probability, t.designer_name, t.owner_name, t.buyer_name,
                t.quotation_only, t.keyed_by, t.pause_return_on, t.estimated_value, t.expected_quarter,
                t.parent_ticket_id, t.child_kind,
+               """ + AWARDED_BUYER_SQL + """
+ AS awarded_buyer,
                (SELECT pt.code FROM sales.ticket pt WHERE pt.ticket_id = t.parent_ticket_id) AS parent_code,
                (SELECT COUNT(*) FROM sales.ticket ao
                  WHERE ao.child_kind = 'ADD_ON'
@@ -165,6 +180,11 @@ public class TicketRepository {
     /** Live {@code can_manage_all_sales_documents} read, for the services that gate on deal ownership and hold no EmployeeAuthRepository. */
     public boolean holdsAllSalesDocumentsGrant(th.co.glr.hr.auth.UserPrincipal actor) {
         return th.co.glr.hr.auth.EmployeeAuthRepository.canManageAllSalesDocuments(jdbc, actor);
+    }
+
+    /** Live {@code can_issue_tax_invoice} read, for services that hold no EmployeeAuthRepository (AttachmentController). */
+    public boolean holdsTaxInvoiceGrant(long employeeId) {
+        return th.co.glr.hr.auth.EmployeeAuthRepository.canIssueTaxInvoice(jdbc, employeeId);
     }
 
     public TicketRepository(NamedParameterJdbcTemplate jdbc) {
@@ -1377,7 +1397,8 @@ public class TicketRepository {
             .withEstimatedValue(rs.getBigDecimal("estimated_value"))
             .withExpectedQuarter(rs.getString("expected_quarter"))
             .withParent(rs.getObject("parent_ticket_id", Long.class), rs.getString("parent_code"),
-                rs.getString("child_kind"), rs.getInt("add_on_count"));
+                rs.getString("child_kind"), rs.getInt("add_on_count"))
+            .withAwardedBuyerName(rs.getString("awarded_buyer"));
     }
 
     /** One row's worth of the enrichment facts {@link SummaryFactsSql#SELECT} computes for a page of deals. */
@@ -1507,7 +1528,8 @@ public class TicketRepository {
             "DEPOSIT_NOTICE_ISSUED".equals(s.paymentStatus()) ? facts.depositDue() : null,
             s.keyedById(), s.stageChangedInRange(), s.activityInRange(), s.lastActivityAt(), s.pauseReturnOn(),
             s.estimatedValue(), s.expectedQuarter(), f.receiptSource(),
-            s.parentTicketId(), s.parentCode(), s.childKind(), s.addOnCount());
+            s.parentTicketId(), s.parentCode(), s.childKind(), s.addOnCount())
+            .withAwardedBuyerName(s.awardedBuyerName());
     }
 
     /** An INVOICE document is on file. The invoice is produced by an external system and uploaded here, so its
@@ -1521,8 +1543,11 @@ public class TicketRepository {
     /** Boolean SQL fragment: an INVOICE attachment exists on the deal at {@code ticketIdRef}. */
     private static String hasInvoiceAttachmentSql(String ticketIdRef) {
         return """
-            EXISTS(SELECT 1 FROM sales.attachment
-                    WHERE ticket_id = %s AND attach_type = 'INVOICE')
+            EXISTS(SELECT 1 FROM sales.attachment a
+                    WHERE a.ticket_id = %s AND a.attach_type = 'INVOICE'
+                      AND (a.delivery_request_id IS NULL
+                           OR EXISTS (SELECT 1 FROM sales.delivery_request r
+                                       WHERE r.delivery_request_id = a.delivery_request_id AND r.status = 'INVOICED')))
             """.formatted(ticketIdRef);
     }
 
@@ -1961,13 +1986,96 @@ public class TicketRepository {
     /** An uploaded Express receipt (V213): source EXPRESS, receipt_ref = the Express document number. */
     public long insertExpressReceipt(long ticketId, String kind, BigDecimal amount, long recordedBy, Instant receivedAt,
                                      String expressDocNo, String customerName) {
+        return insertSourcedReceipt(ticketId, kind, amount, recordedBy, receivedAt, expressDocNo, customerName, "EXPRESS");
+    }
+
+    /** One expected-payment row's progress, for the before/after read around a receipt. */
+    public record ExpectedState(BigDecimal received, String status) {}
+
+    /** Every non-cancelled expected payment of the deal: id to progress. */
+    public Map<Long, ExpectedState> expectedSnapshot(long ticketId) {
+        Map<Long, ExpectedState> out = new java.util.LinkedHashMap<>();
+        for (Map<String, Object> r : jdbc.queryForList("""
+            SELECT expected_payment_id, received_amount, status FROM sales.expected_payment
+             WHERE ticket_id = :t AND status <> 'CANCELLED' ORDER BY expected_payment_id
+            """, Map.of("t", ticketId))) {
+            out.put(((Number) r.get("expected_payment_id")).longValue(),
+                new ExpectedState((BigDecimal) r.get("received_amount"), (String) r.get("status")));
+        }
+        return out;
+    }
+
+    /** What a receipt did to the expected payments, as JSON {@code [{id, added, closed}]} (null when it touched none). */
+    public static String expectedDeltasJson(Map<Long, ExpectedState> before, Map<Long, ExpectedState> after) {
+        StringBuilder sb = new StringBuilder("[");
+        for (var e : after.entrySet()) {
+            ExpectedState b = before.get(e.getKey());
+            BigDecimal was = b == null ? BigDecimal.ZERO : b.received();
+            boolean closed = e.getValue().status().equals("RECEIVED") && (b == null || !b.status().equals("RECEIVED"));
+            BigDecimal added = e.getValue().received().subtract(was);
+            if (added.signum() == 0 && !closed) {
+                continue;
+            }
+            sb.append(sb.length() > 1 ? "," : "").append("{\"id\":").append(e.getKey()).append(",\"added\":")
+                .append(added.toPlainString()).append(",\"closed\":").append(closed).append('}');
+        }
+        return sb.length() == 1 ? null : sb.append(']').toString();
+    }
+
+    /**
+     * Deletes one TAX_INVOICE receipt of this deal (never another source), the only receipt delete in the system (a void).
+     * Same transaction, in this order: Express rows queued as its twin keep their place in the queue with the suggestion
+     * cleared; the expected payments move back by exactly the deltas stored when the invoice was confirmed (never below 0,
+     * the rows the receipt closed reopen and lose their receipt, rows now cancelled or gone are skipped); then the delete.
+     */
+    public void deleteTaxInvoiceReceipt(long ticketId, long receiptId, String deltasJson) {
+        jdbc.update("""
+            UPDATE sales.receipt_import_row
+               SET suggested_receipt_id = NULL,
+                   reason = CASE WHEN reason = 'POSSIBLE_MANUAL_DUPLICATE' THEN 'NO_CANDIDATE' ELSE reason END
+             WHERE suggested_receipt_id = :r
+            """, Map.of("r", receiptId));
+        if (deltasJson != null) {
+            for (Map<String, Object> d : jdbc.queryForList("""
+                SELECT (e->>'id')::bigint AS id, (e->>'added')::numeric AS added, (e->>'closed')::boolean AS closed
+                  FROM jsonb_array_elements(CAST(:j AS jsonb)) e
+                """, Map.of("j", deltasJson))) {
+                jdbc.update("""
+                    UPDATE sales.expected_payment
+                       SET received_amount = GREATEST(0, received_amount - :added),
+                           status = CASE WHEN :closed AND status = 'RECEIVED' AND receipt_id = :r THEN 'OPEN' ELSE status END,
+                           receipt_id = CASE WHEN :closed AND status = 'RECEIVED' AND receipt_id = :r THEN NULL ELSE receipt_id END,
+                           updated_at = now()
+                     WHERE expected_payment_id = :id AND ticket_id = :t AND status <> 'CANCELLED'
+                    """, new MapSqlParameterSource().addValue("added", d.get("added")).addValue("closed", d.get("closed"))
+                        .addValue("r", receiptId).addValue("id", d.get("id")).addValue("t", ticketId));
+            }
+        }
+        int n = jdbc.update("DELETE FROM sales.payment_receipt WHERE receipt_id = :r AND ticket_id = :t AND source = 'TAX_INVOICE'",
+            Map.of("t", ticketId, "r", receiptId));
+        if (n != 1) {
+            throw new th.co.glr.hr.common.ApiException(org.springframework.http.HttpStatus.CONFLICT, "ไม่พบรายการรับเงินของใบกำกับนี้");
+        }
+    }
+
+    /** A void's payment-status step back: {@code expected} to {@code previous} only if the row still holds {@code expected}. */
+    public int retreatPaymentStatus(long ticketId, String expected, String previous) {
+        return jdbc.update("""
+            UPDATE sales.ticket SET payment_status = :prev, updated_at = now()
+             WHERE ticket_id = :id AND payment_status IS NOT DISTINCT FROM :expected
+            """, new MapSqlParameterSource().addValue("id", ticketId).addValue("expected", expected).addValue("prev", previous));
+    }
+
+    /** {@code source}: EXPRESS (an uploaded Express row) or TAX_INVOICE (a confirmed round tax invoice, V236). */
+    public long insertSourcedReceipt(long ticketId, String kind, BigDecimal amount, long recordedBy, Instant receivedAt,
+                                     String docNo, String customerName, String source) {
         GeneratedKeyHolder keys = new GeneratedKeyHolder();
         jdbc.update("""
             INSERT INTO sales.payment_receipt
                 (ticket_id, kind, amount, currency, received_at, recorded_by, receipt_ref, source, customer_name)
             VALUES
                 (:ticketId, :kind, :amount, 'THB', COALESCE(CAST(:receivedAt AS timestamptz), now()), :recordedBy,
-                 :ref, 'EXPRESS', :customerName)
+                 :ref, :source, :customerName)
             """,
             new MapSqlParameterSource()
                 .addValue("ticketId", ticketId)
@@ -1975,7 +2083,8 @@ public class TicketRepository {
                 .addValue("amount", amount)
                 .addValue("receivedAt", receivedAt == null ? null : Timestamp.from(receivedAt))
                 .addValue("recordedBy", recordedBy)
-                .addValue("ref", expressDocNo)
+                .addValue("ref", docNo)
+                .addValue("source", source)
                 .addValue("customerName", customerName),
             keys, new String[]{"receipt_id"});
         return keys.getKey().longValue();
@@ -2353,14 +2462,17 @@ public class TicketRepository {
     @Transactional
     public long insertDeliveryRecord(long ticketId, String source, long deliveredBy, String note,
                                      String recipientName, List<RecordDeliveryRequest.Line> lines,
-                                     java.time.Instant deliveredAt) {
+                                     java.time.Instant deliveredAt, Long deliveryRequestId, String noInvoiceNote) {
         GeneratedKeyHolder keyHolder = new GeneratedKeyHolder();
         jdbc.update("""
-            INSERT INTO sales.delivery_record (ticket_id, source, delivered_by, note, recipient_name, delivered_at)
+            INSERT INTO sales.delivery_record (ticket_id, source, delivered_by, note, recipient_name, delivered_at,
+                                               delivery_request_id, no_invoice_note)
             VALUES (:ticketId, :source, :deliveredBy, :note, :recipientName,
-                    COALESCE(CAST(:deliveredAt AS timestamptz), now()))
+                    COALESCE(CAST(:deliveredAt AS timestamptz), now()), :roundId, :noInvoiceNote)
             """,
             new MapSqlParameterSource()
+                .addValue("roundId", deliveryRequestId)
+                .addValue("noInvoiceNote", noInvoiceNote)
                 .addValue("ticketId", ticketId)
                 .addValue("source", source)
                 .addValue("deliveredBy", deliveredBy)
@@ -2399,11 +2511,74 @@ public class TicketRepository {
         return deliveryId;
     }
 
+    /** One covered line of an INVOICED delivery round: what the invoice covers and what was delivered against the round. */
+    public record RoundLine(long itemId, BigDecimal covered, BigDecimal delivered, BigDecimal itemLeft) {
+        public RoundLine(long itemId, BigDecimal covered, BigDecimal delivered) {
+            this(itemId, covered, delivered, null);
+        }
+
+        /** What the round still covers, capped at what the item itself still needs (goods that already left count). */
+        public BigDecimal remaining() {
+            BigDecimal left = covered.subtract(delivered).max(BigDecimal.ZERO);
+            return itemLeft == null ? left : left.min(itemLeft.max(BigDecimal.ZERO));
+        }
+    }
+
+    /** An INVOICED round of the order with its lines (the invoice's coverage). */
+    public record InvoicedRound(long id, int roundNo, String invoiceNumber, List<RoundLine> lines) {
+        public boolean hasRemaining() {
+            return lines.stream().anyMatch(l -> l.remaining().signum() > 0);
+        }
+    }
+
+    /** The status of delivery round {@code rid} when it belongs to this order, else empty. */
+    public java.util.Optional<String> findRoundStatus(long ticketId, long rid) {
+        return jdbc.query("SELECT status FROM sales.delivery_request WHERE delivery_request_id = :r AND ticket_id = :t",
+            Map.of("r", rid, "t", ticketId), (rs, n) -> rs.getString(1)).stream().findFirst();
+    }
+
+    /** The order's INVOICED rounds, oldest first, each with covered and delivered quantities per line. */
+    public List<InvoicedRound> findInvoicedRounds(long ticketId) {
+        return findRounds(ticketId, null);
+    }
+
+    /** One sent round of the order (any non-draft status) with its lines, for the per-round quantity cap. */
+    public java.util.Optional<InvoicedRound> findRound(long ticketId, long rid) {
+        return findRounds(ticketId, rid).stream().findFirst();
+    }
+
+    private List<InvoicedRound> findRounds(long ticketId, Long onlyRid) {
+        Map<Long, List<RoundLine>> byRound = new java.util.LinkedHashMap<>();
+        Map<Long, int[]> meta = new java.util.HashMap<>();
+        Map<Long, String> numbers = new java.util.HashMap<>();
+        jdbc.query("""
+            SELECT r.delivery_request_id AS rid, r.round_no, r.invoice_number, l.item_id, l.qty AS covered,
+                   COALESCE((SELECT SUM(dri.qty) FROM sales.delivery_record_item dri
+                               JOIN sales.delivery_record dr ON dr.delivery_id = dri.delivery_id
+                              WHERE dr.delivery_request_id = r.delivery_request_id AND dri.item_id = l.item_id), 0) AS delivered,
+                   ti.qty - COALESCE(ti.qty_delivered, 0) AS item_left
+              FROM sales.delivery_request r
+              JOIN sales.delivery_request_line l ON l.delivery_request_id = r.delivery_request_id
+              JOIN sales.ticket_item ti ON ti.item_id = l.item_id
+             WHERE r.ticket_id = :t AND (r.delivery_request_id = :rid OR (:rid IS NULL AND r.status = 'INVOICED'))
+             ORDER BY r.round_no, l.item_id
+            """, new org.springframework.jdbc.core.namedparam.MapSqlParameterSource("t", ticketId).addValue("rid", onlyRid, java.sql.Types.BIGINT), rs -> {
+                long rid = rs.getLong("rid");
+                byRound.computeIfAbsent(rid, k -> new java.util.ArrayList<>())
+                    .add(new RoundLine(rs.getLong("item_id"), rs.getBigDecimal("covered"), rs.getBigDecimal("delivered"),
+                        rs.getBigDecimal("item_left")));
+                meta.put(rid, new int[] {rs.getInt("round_no")});
+                numbers.put(rid, rs.getString("invoice_number"));
+            });
+        return byRound.entrySet().stream()
+            .map(e -> new InvoicedRound(e.getKey(), meta.get(e.getKey())[0], numbers.get(e.getKey()), e.getValue())).toList();
+    }
+
     public List<DeliveryRecordDto> findDeliveriesByTicket(long ticketId) {
         List<DeliveryRecordDto> records = jdbc.query("""
             SELECT dr.delivery_id, dr.ticket_id, dr.source, dr.delivered_at, dr.delivered_by,
                    NULLIF(TRIM(CONCAT_WS(' ', e.first_name_th, e.last_name_th)), '') AS delivered_by_name,
-                   dr.note, dr.recipient_name, dr.created_at
+                   dr.note, dr.recipient_name, dr.created_at, dr.no_invoice_note
               FROM sales.delivery_record dr
               JOIN hr.employee e ON e.employee_id = dr.delivered_by
              WHERE dr.ticket_id = :ticketId
@@ -2420,7 +2595,8 @@ public class TicketRepository {
                 rs.getString("note"),
                 rs.getString("recipient_name"),
                 rs.getTimestamp("created_at").toInstant(),
-                findDeliveryItems(rs.getLong("delivery_id"))
+                findDeliveryItems(rs.getLong("delivery_id")),
+                rs.getString("no_invoice_note")
             ));
         return records;
     }
@@ -2651,7 +2827,7 @@ public class TicketRepository {
     /** The deal-level facts that stop an order confirmation being undone; see {@code DealQuotationService#undoRefusal}. */
     public record UndoFacts(boolean bidOrSplit, boolean nonDraftDepositNotice, boolean paymentReceipt,
                             boolean remainingInvoice, boolean importRequest, boolean deliveryRecord,
-                            boolean manualStockDecision) {}
+                            boolean manualStockDecision, boolean prePortalSettledByExpress) {}
 
     /** One read of every downstream row an undo must not orphan. "Bid or split" = the bid path wrote its
      * BID_OUTCOME_RECORDED right AFTER the promotion event in the same transaction (DealPartyService#recordBidOutcome),
@@ -2670,7 +2846,12 @@ public class TicketRepository {
                OR EXISTS(SELECT 1 FROM sales.ticket WHERE parent_ticket_id = :t
                           AND COALESCE(child_kind, 'BID_SPLIT') = 'BID_SPLIT')) AS bid_or_split,
               EXISTS(SELECT 1 FROM sales.deposit_notice WHERE ticket_id = :t AND status <> 'DRAFT') AS notice,
-              EXISTS(SELECT 1 FROM sales.payment_receipt WHERE ticket_id = :t) AS receipt,
+              EXISTS(SELECT 1 FROM sales.payment_receipt WHERE ticket_id = :t
+                      AND NOT (source = 'PRE_PORTAL' AND kind = 'DEPOSIT')) AS receipt,
+              EXISTS(SELECT 1 FROM sales.payment_receipt r WHERE r.ticket_id = :t AND r.source = 'PRE_PORTAL'
+                      AND (r.express_doc_no IS NOT NULL
+                           OR EXISTS(SELECT 1 FROM sales.receipt_import_row w
+                                      WHERE w.receipt_id = r.receipt_id AND w.status = 'RESOLVED'))) AS pre_portal_settled,
               EXISTS(SELECT 1 FROM sales.remaining_invoice WHERE ticket_id = :t) AS invoice,
               EXISTS(SELECT 1 FROM sales.import_request WHERE ticket_id = :t) AS import_req,
               EXISTS(SELECT 1 FROM sales.delivery_record WHERE ticket_id = :t) AS delivery,
@@ -2682,7 +2863,29 @@ public class TicketRepository {
                           AND procurement_source_decided_at IS NOT NULL)) AS manual_stock
             """, Map.of("t", ticketId), (rs, n) -> new UndoFacts(rs.getBoolean("bid_or_split"), rs.getBoolean("notice"),
                 rs.getBoolean("receipt"), rs.getBoolean("invoice"), rs.getBoolean("import_req"),
-                rs.getBoolean("delivery"), rs.getBoolean("manual_stock")));
+                rs.getBoolean("delivery"), rs.getBoolean("manual_stock"), rs.getBoolean("pre_portal_settled")));
+    }
+
+    /** A delivery round already forwarded to the invoice issuer (or invoiced): an undo never touches one. */
+    public boolean hasForwardedDeliveryRound(long ticketId) {
+        return Boolean.TRUE.equals(jdbc.queryForObject(
+            "SELECT EXISTS(SELECT 1 FROM sales.delivery_request WHERE ticket_id = :t AND status IN ('FORWARDED','INVOICED'))",
+            Map.of("t", ticketId), Boolean.class));
+    }
+
+    /** Undo of the order confirmation: drops the order's DRAFT/SENT/RETURNED rounds with their lines (their files stay on the
+     * deal, unlinked, uploader_side kept). Returns the round numbers removed. */
+    public List<Integer> deleteOpenDeliveryRounds(long ticketId) {
+        List<Integer> nos = jdbc.queryForList(
+            "SELECT round_no FROM sales.delivery_request WHERE ticket_id = :t AND status IN ('DRAFT','SENT','RETURNED') ORDER BY round_no",
+            Map.of("t", ticketId), Integer.class);
+        jdbc.update("""
+            UPDATE sales.attachment SET delivery_request_id = NULL
+             WHERE delivery_request_id IN (SELECT delivery_request_id FROM sales.delivery_request
+                                            WHERE ticket_id = :t AND status IN ('DRAFT','SENT','RETURNED'))
+            """, Map.of("t", ticketId));
+        jdbc.update("DELETE FROM sales.delivery_request WHERE ticket_id = :t AND status IN ('DRAFT','SENT','RETURNED')", Map.of("t", ticketId));
+        return nos;
     }
 
     /** The confirmation's own event: who pressed it and when. */
@@ -2697,13 +2900,32 @@ public class TicketRepository {
                 rs.getTimestamp("created_at").toInstant())).stream().findFirst();
     }
 
+    /** The STAGE_CHANGED note of the move a first send makes on a deal that was not ordered in the portal (undone with the confirm). */
+    public static final String PRE_PORTAL_SEND_STAGE_NOTE = "ขอออกใบกำกับจากงานที่เดินมาก่อนใช้ระบบ";
+    /** The note of the event that marks a deal as ordered before the portal; an undo tells "marked by a send" (the event is
+     * newer than the promotion) from "created as สั่งซื้อแล้ว" (older) by it. */
+    public static final String PRE_PORTAL_MARK_NOTE = "pre_portal → true — งานที่เดินมาก่อนใช้ระบบ";
+
+    /** True when the pre-portal marking was made after the promotion event: by a send, not at creation. Deals marked
+     * before the marking event existed (none of it at all) are recognised by their policy note. */
+    public boolean prePortalMarkedAfter(long ticketId, long afterEventId) {
+        return Boolean.TRUE.equals(jdbc.queryForObject("""
+            SELECT EXISTS(SELECT 1 FROM sales.ticket_event WHERE ticket_id = :t AND kind = 'POLICY_CHANGED' AND message = :mark
+                           AND event_id > :after)
+                OR (NOT EXISTS(SELECT 1 FROM sales.ticket_event WHERE ticket_id = :t AND kind = 'POLICY_CHANGED' AND message = :mark)
+                    AND EXISTS(SELECT 1 FROM sales.ticket_event WHERE ticket_id = :t AND kind = 'POLICY_CHANGED' AND event_id > :after
+                                AND starts_with(message, :policy)))
+            """, Map.of("t", ticketId, "after", afterEventId, "mark", PRE_PORTAL_MARK_NOTE,
+                "policy", followedPolicyNote(DepositPolicy.NOT_REQUIRED, PRE_PORTAL_POLICY_REASON)), Boolean.class));
+    }
+
     /** The `from` stage of the earliest automatic stage move written after {@code afterEventId}. */
     public Optional<String> firstAutoStageFromAfter(long ticketId, long afterEventId) {
         return jdbc.query("""
             SELECT from_status FROM sales.ticket_event
-             WHERE ticket_id = :t AND kind = 'STAGE_CHANGED' AND message = :note AND event_id > :after
+             WHERE ticket_id = :t AND kind = 'STAGE_CHANGED' AND message IN (:note, :send) AND event_id > :after
              ORDER BY event_id LIMIT 1
-            """, Map.of("t", ticketId, "note", AUTO_STAGE_NOTE, "after", afterEventId),
+            """, Map.of("t", ticketId, "note", AUTO_STAGE_NOTE, "send", PRE_PORTAL_SEND_STAGE_NOTE, "after", afterEventId),
             (rs, n) -> rs.getString("from_status")).stream().findFirst();
     }
 
@@ -2751,15 +2973,65 @@ public class TicketRepository {
                 quotationNumber), Boolean.class));
     }
 
+    /** Why a pre-portal deal's deposit policy is NOT_REQUIRED: the deposit was paid outside the portal. */
+    public static final String PRE_PORTAL_POLICY_REASON = "งานที่เดินมาก่อนใช้ระบบ: มัดจำรับแล้วนอกระบบ";
+    private static final String PRE_PORTAL_WAS = " · เดิม ";
+
+    /** The POLICY_CHANGED note of the pre-portal marking; it names the policy it replaced so an undo can put it back. */
+    public static String prePortalPolicyNote(String policyBefore) {
+        return followedPolicyNote(DepositPolicy.NOT_REQUIRED, PRE_PORTAL_POLICY_REASON) + PRE_PORTAL_WAS + policyBefore;
+    }
+
+    /** The deposit policy the pre-portal marking replaced (read from its POLICY_CHANGED after the promotion), if it changed one. */
+    public Optional<String> prePortalPolicyBefore(long ticketId, long afterEventId) {
+        String prefix = followedPolicyNote(DepositPolicy.NOT_REQUIRED, PRE_PORTAL_POLICY_REASON) + PRE_PORTAL_WAS;
+        return jdbc.query("""
+            SELECT substr(message, :len + 1) FROM sales.ticket_event
+             WHERE ticket_id = :t AND kind = 'POLICY_CHANGED' AND event_id > :after AND starts_with(message, :prefix)
+             ORDER BY event_id DESC LIMIT 1
+            """, Map.of("t", ticketId, "after", afterEventId, "prefix", prefix, "len", prefix.length()),
+            (rs, n) -> rs.getString(1)).stream().findFirst();
+    }
+
+    /** Puts the deposit policy back as the system's own (no person, no reason); the caller holds the ticket lock. Returns the rows changed. */
+    public int restoreDepositPolicy(long ticketId, String policy) {
+        return jdbc.update("""
+            UPDATE sales.ticket SET deposit_policy = :p, deposit_policy_reason = NULL, deposit_policy_set_by = NULL, updated_at = now()
+             WHERE ticket_id = :t
+            """, Map.of("t", ticketId, "p", policy));
+    }
+
+    /** Undo of the order confirmation on a pre-portal deal: the PRE_PORTAL receipt goes, the expected payments it filled
+     * reopen (nothing else can have filled them: the undo refuses when any other money exists), Express rows that
+     * suggested it lose the suggestion, and the flag clears. Returns the amount of the receipt removed. */
+    public BigDecimal removePrePortal(long ticketId) {
+        jdbc.update("""
+            UPDATE sales.receipt_import_row
+               SET suggested_receipt_id = NULL,
+                   reason = CASE WHEN reason = 'POSSIBLE_MANUAL_DUPLICATE' THEN 'NO_CANDIDATE' ELSE reason END
+             WHERE suggested_receipt_id IN (SELECT receipt_id FROM sales.payment_receipt WHERE ticket_id = :t AND source = 'PRE_PORTAL')
+            """, Map.of("t", ticketId));
+        jdbc.update("""
+            UPDATE sales.expected_payment
+               SET received_amount = 0, status = 'OPEN', receipt_id = NULL, updated_at = now()
+             WHERE ticket_id = :t AND status <> 'CANCELLED' AND (received_amount > 0 OR receipt_id IS NOT NULL)
+            """, Map.of("t", ticketId));
+        BigDecimal amount = sumPrePortalReceipts(ticketId);
+        jdbc.update("DELETE FROM sales.payment_receipt WHERE ticket_id = :t AND source = 'PRE_PORTAL'", Map.of("t", ticketId));
+        jdbc.update("UPDATE sales.ticket SET pre_portal = FALSE, updated_at = now() WHERE ticket_id = :t", Map.of("t", ticketId));
+        return amount;
+    }
+
     /** A person's deposit-policy change (waiver) after the promotion: a deposit_policy POLICY_CHANGED that is not the
-     * system's own flip for this quotation. entry_channel and other POLICY_CHANGED notes do not count. */
+     * system's own flip for this quotation nor the pre-portal marking. entry_channel and other POLICY_CHANGED notes do not count. */
     public boolean hasPersonDepositPolicyChangeAfter(long ticketId, long afterEventId, String quotationNumber) {
         return Boolean.TRUE.equals(jdbc.queryForObject("""
             SELECT EXISTS(SELECT 1 FROM sales.ticket_event WHERE ticket_id = :t AND kind = 'POLICY_CHANGED'
                            AND event_id > :after AND starts_with(message, 'deposit_policy →')
-                           AND NOT
+                           AND NOT starts_with(message, :prePortalPrefix) AND NOT
             """ + FOLLOWED_POLICY_NOTE_MATCH + ")",
-            followedPolicyNoteParams(new MapSqlParameterSource().addValue("t", ticketId).addValue("after", afterEventId),
+            followedPolicyNoteParams(new MapSqlParameterSource().addValue("t", ticketId).addValue("after", afterEventId)
+                .addValue("prePortalPrefix", followedPolicyNote(DepositPolicy.NOT_REQUIRED, PRE_PORTAL_POLICY_REASON)),
                 quotationNumber), Boolean.class));
     }
 
@@ -2800,11 +3072,11 @@ public class TicketRepository {
              WHERE ticket_id = :t
                AND (event_id = :promo
                     OR (event_id > :promo AND (kind = 'CUSTOMER_CONFIRMED'
-                        OR (kind = 'STAGE_CHANGED' AND message = :note)
-                        OR (kind = 'POLICY_CHANGED' AND
-            """ + FOLLOWED_POLICY_NOTE_MATCH + "))))",
+                        OR (kind = 'STAGE_CHANGED' AND message IN (:note, :send))
+                        OR (kind = 'POLICY_CHANGED' AND (message = :mark OR
+            """ + FOLLOWED_POLICY_NOTE_MATCH + ")))))",
             followedPolicyNoteParams(new MapSqlParameterSource().addValue("t", ticketId).addValue("promo", promotionEventId)
-                .addValue("note", AUTO_STAGE_NOTE), quotationNumber));
+                .addValue("note", AUTO_STAGE_NOTE).addValue("send", PRE_PORTAL_SEND_STAGE_NOTE).addValue("mark", PRE_PORTAL_MARK_NOTE), quotationNumber));
     }
 
     /** An ORDER_CONFIRMATION_UNDONE event naming this quotation exists (the undo's idempotent replay). */
@@ -2840,6 +3112,23 @@ public class TicketRepository {
             """, Map.of("ticketId", ticketId, "kind", TicketEventKind.DEAL_PROMOTED_FROM_QUOTATION,
                 "quotationId", quotationId), Boolean.class);
         return Boolean.TRUE.equals(value);
+    }
+
+    /** Was this deal ordered before the portal (V237)? Gates that need a confirmed order or a paid deposit skip it. */
+    public boolean isPrePortal(long ticketId) {
+        Boolean v = jdbc.queryForObject("SELECT pre_portal FROM sales.ticket WHERE ticket_id = :id",
+            Map.of("id", ticketId), Boolean.class);
+        return Boolean.TRUE.equals(v);
+    }
+
+    /** The deposit entered as pre-portal receipts (source PRE_PORTAL), for the cap against the quotation total. */
+    public BigDecimal sumPrePortalReceipts(long ticketId) {
+        return jdbc.queryForObject("SELECT COALESCE(SUM(amount), 0) FROM sales.payment_receipt WHERE ticket_id = :id AND source = 'PRE_PORTAL'",
+            Map.of("id", ticketId), BigDecimal.class);
+    }
+
+    public void markPrePortal(long ticketId) {
+        jdbc.update("UPDATE sales.ticket SET pre_portal = TRUE WHERE ticket_id = :id", Map.of("id", ticketId));
     }
 
     /**
@@ -3257,8 +3546,15 @@ public class TicketRepository {
         static final String RECEIPT_SOURCE_SQL = """
             (SELECT CASE WHEN COUNT(*) = 0 THEN NULL
                          WHEN bool_and(pr.source = 'EXPRESS' OR pr.express_doc_no IS NOT NULL) THEN 'EXPRESS'
-                         WHEN bool_or(pr.source = 'EXPRESS' OR pr.express_doc_no IS NOT NULL) THEN 'MIXED'
-                         ELSE 'MANUAL' END
+                         WHEN bool_and(pr.source = 'TAX_INVOICE') THEN 'TAX_INVOICE'
+                         WHEN bool_and(pr.source = 'PRE_PORTAL') THEN 'PRE_PORTAL'
+                         WHEN NOT bool_or(pr.source IN ('TAX_INVOICE', 'PRE_PORTAL')) THEN
+                              CASE WHEN bool_or(pr.source = 'EXPRESS' OR pr.express_doc_no IS NOT NULL) THEN 'MIXED' ELSE 'MANUAL' END
+                         ELSE concat_ws('+',
+                              CASE WHEN bool_or(pr.source = 'EXPRESS' OR pr.express_doc_no IS NOT NULL) THEN 'EXPRESS' END,
+                              CASE WHEN bool_or(pr.source NOT IN ('EXPRESS', 'TAX_INVOICE', 'PRE_PORTAL') AND pr.express_doc_no IS NULL) THEN 'MANUAL' END,
+                              CASE WHEN bool_or(pr.source = 'PRE_PORTAL' AND pr.express_doc_no IS NULL) THEN 'PRE_PORTAL' END,
+                              CASE WHEN bool_or(pr.source = 'TAX_INVOICE') THEN 'TAX_INVOICE' END) END
                FROM sales.payment_receipt pr
               WHERE pr.ticket_id = t.ticket_id AND pr.kind <> 'ADJUSTMENT' AND pr.amount > 0)""";
 

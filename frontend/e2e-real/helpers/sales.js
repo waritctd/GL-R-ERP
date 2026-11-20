@@ -842,6 +842,8 @@ export async function completeDelivery(sessions, ticketId, { note, recipientName
   const response = await apiWrite(sessions.sales, 'post', `/api/tickets/${ticketId}/deliveries/complete`, {
     note: note ?? null,
     recipientName: recipientName ?? null,
+    // Ploy ruling 2026-11-20: no confirmed tax invoice, so the sales side records with a note/reference (required).
+    noInvoiceNote: 'e2e: ส่งก่อนออกใบกำกับ',
   });
   expect(response.status(), `sales (owning rep) POST /api/tickets/${ticketId}/deliveries/complete`).toBe(200);
   const { ticket } = await response.json();

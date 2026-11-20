@@ -22,6 +22,7 @@ import th.co.glr.hr.ticket.DealStage;
 import th.co.glr.hr.ticket.DepositPolicy;
 import th.co.glr.hr.ticket.QuotationStatus;
 import th.co.glr.hr.ticket.TicketEventKind;
+import th.co.glr.hr.ticket.TicketRepository;
 import th.co.glr.hr.ticket.TicketStatus;
 
 /**
@@ -135,6 +136,113 @@ class DealQuotationUndoOrderConfirmationIntegrationTest extends DirectQuotationD
             Map.of("id", c.deal(), "by", accountActor.id()));
 
         assertRefusedAndNothingWritten(c);
+    }
+
+    /** A deal made pre-portal by its first document: confirmed, the deposit policy set to NOT_REQUIRED, a PRE_PORTAL receipt. */
+    private Confirmed prePortalDeal(String deposit) {
+        long deal = pipelineTicket(salesActor);
+        DealQuotationDto approved = approvedDirectQuotation(deal, salesActor);
+        new th.co.glr.hr.deliveryrequest.PrePortal(tickets, new th.co.glr.hr.deliveryrequest.DeliveryRequestRepository(jdbc),
+            quotationService, ticketService).confirmAndMark(deal, approved.id(), new java.math.BigDecimal(deposit),
+            java.time.LocalDate.now(java.time.ZoneId.of("Asia/Bangkok")).minusDays(2), salesActor);
+        return new Confirmed(deal, approved);
+    }
+
+    @Test
+    void prePortal_undoRemovesTheMarking_receiptFlagAndPolicyGoBack() {
+        Confirmed c = prePortalDeal("1000.00");
+        String policyBefore = jdbc.queryForObject("""
+            SELECT substr(message, position(' · เดิม ' in message) + 8) FROM sales.ticket_event
+             WHERE ticket_id = :t AND kind = 'POLICY_CHANGED' AND message LIKE '%เดิม%'
+            """, Map.of("t", c.deal()), String.class);
+        jdbc.update("""
+            INSERT INTO sales.expected_payment (ticket_id, kind, amount, expected_week, status, created_by)
+            VALUES (:t, 'DEPOSIT', 1000, date '2026-11-30', 'OPEN', :by)""", Map.of("t", c.deal(), "by", salesActor.id()));
+        // the fixture's expected row was filled by the receipt only if inserted before; apply it by hand to prove the reversal
+        jdbc.update("UPDATE sales.expected_payment SET received_amount = 1000, status = 'RECEIVED', receipt_id = "
+            + "(SELECT receipt_id FROM sales.payment_receipt WHERE ticket_id = :t) WHERE ticket_id = :t", Map.of("t", c.deal()));
+        assertThat(jdbc.queryForObject("SELECT pre_portal FROM sales.ticket WHERE ticket_id = :t", Map.of("t", c.deal()), Boolean.class)).isTrue();
+        assertThat(jdbc.queryForObject("SELECT deposit_policy FROM sales.ticket WHERE ticket_id = :t", Map.of("t", c.deal()), String.class))
+            .isEqualTo(DepositPolicy.NOT_REQUIRED);
+
+        confirmer.undoOrderConfirmation(c.quotation().id(), null, null, salesActor);
+
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM sales.payment_receipt WHERE ticket_id = :t", Map.of("t", c.deal()), Long.class)).isZero();
+        assertThat(jdbc.queryForMap("SELECT pre_portal, deposit_policy, deposit_policy_set_by, status FROM sales.ticket WHERE ticket_id = :t",
+            Map.of("t", c.deal()))).containsEntry("pre_portal", false).containsEntry("deposit_policy", policyBefore)
+            .containsEntry("deposit_policy_set_by", null).containsEntry("status", TicketStatus.DRAFT);
+        assertThat(jdbc.queryForMap("SELECT status, received_amount, receipt_id FROM sales.expected_payment WHERE ticket_id = :t",
+            Map.of("t", c.deal()))).containsEntry("status", "OPEN").containsEntry("receipt_id", null)
+            .extracting(m -> m.get("received_amount")).isEqualTo(new java.math.BigDecimal("0.00"));
+        assertThat(eventCount(c.deal(), TicketEventKind.ORDER_CONFIRMATION_UNDONE)).isEqualTo(1);
+    }
+
+    /** What DeliveryRequestService#send writes for an old deal: the confirm + marking (or the confirm alone when the deal is
+     * already pre-portal), then the move to DELIVERY_SCHEDULING with the send's own note. */
+    private void sendWrites(Confirmed c, boolean markNow) {
+        var prePortal = new th.co.glr.hr.deliveryrequest.PrePortal(tickets, new th.co.glr.hr.deliveryrequest.DeliveryRequestRepository(jdbc),
+            quotationService, ticketService);
+        String from = ticketService.get(c.deal(), salesActor).summary().salesStage();
+        if (markNow) {
+            prePortal.confirmAndMark(c.deal(), c.quotation().id(), new java.math.BigDecimal("1000.00"),
+                java.time.LocalDate.now(java.time.ZoneId.of("Asia/Bangkok")).minusDays(2), salesActor);
+        } else {
+            prePortal.ensureOrderConfirmed(c.deal(), c.quotation().id(), salesActor);
+        }
+        tickets.updateSalesStage(c.deal(), th.co.glr.hr.ticket.DealStage.DELIVERY_SCHEDULING);
+        tickets.addEvent(c.deal(), salesActor.id(), salesActor.name(), TicketEventKind.STAGE_CHANGED, from,
+            th.co.glr.hr.ticket.DealStage.DELIVERY_SCHEDULING, TicketRepository.PRE_PORTAL_SEND_STAGE_NOTE);
+    }
+
+    private Map<String, Object> ticketRow(long deal) {
+        return jdbc.queryForMap("SELECT sales_stage, pre_portal, deposit_policy FROM sales.ticket WHERE ticket_id = :t", Map.of("t", deal));
+    }
+
+    /** An old deal marked pre-portal BY its send: the undo returns it to its exact state, so the next send asks for the deposit. */
+    @Test
+    void prePortal_markedBySend_undoReturnsTheDealToItsStageBeforeTheSend_andTheNextSendAsksForTheDeposit() {
+        long deal = pipelineTicket(salesActor);
+        DealQuotationDto approved = approvedDirectQuotation(deal, salesActor);
+        Map<String, Object> before = ticketRow(deal);
+        Confirmed c = new Confirmed(deal, approved);
+        sendWrites(c, true);
+
+        confirmer.undoOrderConfirmation(approved.id(), null, null, salesActor);
+
+        assertThat(ticketRow(deal)).isEqualTo(before);
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM sales.payment_receipt WHERE ticket_id = :t", Map.of("t", deal), Long.class)).isZero();
+        // DeliveryRequestService#asksPreDeposit: before ORDER_RECEIVED and not pre-portal
+        assertThat(th.co.glr.hr.ticket.DealStage.indexOf((String) ticketRow(deal).get("sales_stage")))
+            .isLessThan(th.co.glr.hr.ticket.DealStage.indexOf(th.co.glr.hr.ticket.DealStage.ORDER_RECEIVED));
+        assertThat(tickets.isPrePortal(deal)).isFalse();
+    }
+
+    /** A deal created as สั่งซื้อแล้ว (marked before the confirm): the undo only takes the confirm back. */
+    @Test
+    void prePortal_createdAsOrdered_undoKeepsFlagDepositAndPolicy_andStageGoesBack() {
+        long deal = pipelineTicket(salesActor);
+        ticketService.becomePrePortal(deal, new java.math.BigDecimal("1000.00"),
+            java.time.LocalDate.now(java.time.ZoneId.of("Asia/Bangkok")).minusDays(2), salesActor);
+        DealQuotationDto approved = approvedDirectQuotation(deal, salesActor);
+        Map<String, Object> before = ticketRow(deal);
+        sendWrites(new Confirmed(deal, approved), false);
+
+        confirmer.undoOrderConfirmation(approved.id(), null, null, salesActor);
+
+        assertThat(ticketRow(deal)).containsEntry("sales_stage", before.get("sales_stage"))
+            .containsEntry("pre_portal", true).containsEntry("deposit_policy", DepositPolicy.NOT_REQUIRED);
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM sales.payment_receipt WHERE ticket_id = :t AND source = 'PRE_PORTAL'",
+            Map.of("t", deal), Long.class)).isEqualTo(1);
+    }
+
+    @Test
+    void prePortal_undoIsRefusedWhenAnExpressRowResolvedAgainstTheReceipt() {
+        Confirmed c = prePortalDeal("1000.00");
+        long receiptId = jdbc.queryForObject("SELECT receipt_id FROM sales.payment_receipt WHERE ticket_id = :t", Map.of("t", c.deal()), Long.class);
+        jdbc.update("UPDATE sales.payment_receipt SET express_doc_no = 'RE-X-1' WHERE receipt_id = :r", Map.of("r", receiptId));
+
+        assertRefusedAndNothingWritten(c);
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM sales.payment_receipt WHERE ticket_id = :t", Map.of("t", c.deal()), Long.class)).isEqualTo(1);
     }
 
     @ParameterizedTest
@@ -317,6 +425,66 @@ class DealQuotationUndoOrderConfirmationIntegrationTest extends DirectQuotationD
         } finally {
             pool.shutdownNow();
         }
+    }
+
+    // ───────────────────────────────────────────────────────────────────────────────────
+    // Delivery rounds (V236): a sent round holds lines on the items the undo deletes
+    // ───────────────────────────────────────────────────────────────────────────────────
+
+    @Test
+    void sentDeliveryRound_isDroppedWithTheUndo_filesStayAsDealFiles_warehouseIsTold() {
+        Confirmed c = prePortalDeal("1000.00");
+        long wh = createEmployee("คลัง ยกเลิก", "wh-undo@glr.co.th", "WH", "คลังสินค้า", null);
+        long round = insertRound(c.deal(), "SENT");
+        jdbc.update("INSERT INTO sales.delivery_request_line (delivery_request_id, item_id, qty) "
+            + "SELECT :r, item_id, 1 FROM sales.ticket_item WHERE ticket_id = :t LIMIT 1", Map.of("r", round, "t", c.deal()));
+        jdbc.update("INSERT INTO sales.attachment (ticket_id, file_name, file_path, attach_type, uploaded_by, delivery_request_id,"
+            + " uploader_side) VALUES (:t, 'po.pdf', '/x/po.pdf', 'OTHER', :u, :r, 'SALES')",
+            Map.of("t", c.deal(), "u", salesActor.id(), "r", round));
+
+        confirmer.undoOrderConfirmation(c.quotation().id(), null, null, salesActor);
+
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sales.delivery_request WHERE ticket_id = :t", Map.of("t", c.deal()), Integer.class)).isZero();
+        assertThat(jdbc.queryForMap("SELECT delivery_request_id, uploader_side FROM sales.attachment WHERE ticket_id = :t",
+            Map.of("t", c.deal()))).containsEntry("delivery_request_id", null).containsEntry("uploader_side", "SALES");
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM hr.notification WHERE employee_id = :e", Map.of("e", wh), Integer.class)).isEqualTo(1);
+        assertThat(jdbc.queryForObject("SELECT message FROM sales.ticket_event WHERE ticket_id = :t AND kind = 'ORDER_CONFIRMATION_UNDONE'",
+            Map.of("t", c.deal()), String.class)).contains("ลบคำขอส่งของรอบที่");
+    }
+
+    @Test
+    void forwardedDeliveryRound_refusesTheUndoWithItsOwnReason() {
+        Confirmed c = confirmedDeal();
+        long round = insertRound(c.deal(), "FORWARDED");
+        jdbc.update("INSERT INTO sales.delivery_request_line (delivery_request_id, item_id, qty) "
+            + "SELECT :r, item_id, 1 FROM sales.ticket_item WHERE ticket_id = :t LIMIT 1", Map.of("r", round, "t", c.deal()));
+        assertThatThrownBy(() -> confirmer.undoOrderConfirmation(c.quotation().id(), "กดผิด", null, salesActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> {
+                assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
+                assertThat(e.getMessage()).contains("ส่งต่อให้ออกใบกำกับแล้ว");
+            });
+        assertThat(itemCount(c.deal())).as("nothing was deleted").isPositive();
+    }
+
+    @Test
+    void draftDeliveryRound_isDroppedWithTheUndo_andItsFilesStayOnTheDeal() {
+        Confirmed c = confirmedDeal();
+        long round = insertRound(c.deal(), "DRAFT");
+        jdbc.update("INSERT INTO sales.attachment (ticket_id, file_name, file_path, attach_type, uploaded_by, delivery_request_id,"
+            + " uploader_side) VALUES (:t, 'slip.jpg', '/x/slip.jpg', 'OTHER', :u, :r, 'SALES')",
+            Map.of("t", c.deal(), "u", salesActor.id(), "r", round));
+
+        confirmer.undoOrderConfirmation(c.quotation().id(), "กดผิด", null, salesActor);
+
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sales.delivery_request WHERE ticket_id = :t",
+            Map.of("t", c.deal()), Integer.class)).isZero();
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sales.attachment WHERE ticket_id = :t AND delivery_request_id IS NULL",
+            Map.of("t", c.deal()), Integer.class)).as("the file is kept, unlinked").isEqualTo(1);
+    }
+
+    private long insertRound(long deal, String status) {
+        return jdbc.queryForObject("INSERT INTO sales.delivery_request (ticket_id, round_no, status) VALUES (:t, 1, :s)"
+            + " RETURNING delivery_request_id", Map.of("t", deal, "s", status), Long.class);
     }
 
     // ───────────────────────────────────────────────────────────────────────────────────

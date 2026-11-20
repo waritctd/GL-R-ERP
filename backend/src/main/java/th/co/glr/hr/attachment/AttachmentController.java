@@ -23,7 +23,9 @@ import org.springframework.web.multipart.MultipartFile;
 import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
+import th.co.glr.hr.auth.WarehouseStaff;
 import th.co.glr.hr.common.ApiException;
+import th.co.glr.hr.ticket.AttachType;
 import th.co.glr.hr.ticket.TicketAccessPolicy;
 import th.co.glr.hr.ticket.TicketDto;
 import th.co.glr.hr.ticket.TicketRepository;
@@ -52,7 +54,7 @@ public class AttachmentController {
     Map<String, List<AttachmentDto>> list(@PathVariable long ticketId, HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
         requireTicketReadAccess(ticketId, user);
-        return Map.of("attachments", attachments.findByTicketId(ticketId));
+        return Map.of("attachments", attachments.findByTicketId(ticketId, mayReadRoundFiles(user)));
     }
 
     @PostMapping("/tickets/{ticketId}/attachments")
@@ -78,6 +80,10 @@ public class AttachmentController {
         UserPrincipal user = sessions.requireUser(session);
         AttachmentDto dto = attachments.findById(id)
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบไฟล์"));
+        // A delivery round's files carry prices: refused as if absent, before any other gate.
+        if (!mayReadRoundFiles(user) && attachments.isRoundFile(id)) {
+            throw new ApiException(HttpStatus.NOT_FOUND, "ไม่พบไฟล์");
+        }
         requireAttachmentReadAccess(dto, user);
         String filePath = attachments.findFilePathById(id);
         if (filePath == null) throw new ApiException(HttpStatus.NOT_FOUND, "ไม่พบไฟล์บนเซิร์ฟเวอร์");
@@ -93,6 +99,14 @@ public class AttachmentController {
             .body(resource);
     }
 
+    /** THE gate for files linked to a delivery round (the stored system documents and the extra files). Import is
+     * price-free everywhere (it is refused deposit notices and remaining invoices), so it never sees them. Everyone
+     * else passes here and then meets the per-file gate in {@link #requireAttachmentReadAccess}, which is where warehouse
+     * staff and invoice-issuer grant holders are admitted to a round past DRAFT / past FORWARDED. */
+    private static boolean mayReadRoundFiles(UserPrincipal actor) {
+        return !"import".equals(actor.role());
+    }
+
     @Transactional
     @DeleteMapping("/attachments/{id}")
     Map<String, Boolean> delete(@PathVariable long id, HttpSession session) {
@@ -100,6 +114,24 @@ public class AttachmentController {
         AttachmentDto dto = attachments.findById(id)
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบไฟล์"));
         requireAttachmentWriteAccess(dto, user);
+        if (AttachType.INVOICE.equals(dto.attachType())) {
+            requireInvoiceFileDeletable(id, dto, user);
+        }
+        // A round's files are frozen once it is sent, except that the uploader of an extra file may still take it back
+        // while the warehouse has not forwarded the round (a system-stored copy never; from FORWARDED on nothing).
+        attachments.roundStatus(id).filter(st -> !AttachType.INVOICE.equals(dto.attachType())).ifPresent(status -> {
+            boolean editable = "DRAFT".equals(status) || "RETURNED".equals(status);
+            boolean extra = !"SYSTEM_DOC".equals(dto.attachType());
+            boolean own = user.id() == dto.uploadedBy();
+            // While editable an extra file is its uploader's alone: the warehouse's photo cannot be removed by sales.
+            if (editable && extra && !own) {
+                throw new ApiException(HttpStatus.FORBIDDEN, "ลบได้เฉพาะไฟล์ที่ตนเองแนบ");
+            }
+            boolean ownExtraOnSent = "SENT".equals(status) && own && extra;
+            if (!editable && !ownExtraOnSent) {
+                throw new ApiException(HttpStatus.CONFLICT, "รอบนี้ส่งไปแล้ว ลบไฟล์ไม่ได้");
+            }
+        });
         String filePath = attachments.findFilePathById(id);
         // CommissionService#createFromDeal registers this SAME physical file
         // a second time, independently, as ข้อ 15 evidence (hr.file_attachment, referenced by
@@ -124,6 +156,22 @@ public class AttachmentController {
         // guard for the storing direction.
         fileStorage.deleteOnCommit(filePath);
         return Map.of("ok", true);
+    }
+
+    /** The issued tax invoice of a round: only the issuer who attached it, and only while the round is FORWARDED (nothing
+     * confirmed, so replacing or removing it moves no money). Once the round is INVOICED the file backs the receipt it
+     * recorded and is frozen, as it is once a delivery rests on it. */
+    private void requireInvoiceFileDeletable(long id, AttachmentDto dto, UserPrincipal user) {
+        var status = attachments.roundStatus(id);
+        if (status.isEmpty()) {
+            return; // an INVOICE file of the deal itself (commission evidence): the normal gates decide
+        }
+        if (user.id() != dto.uploadedBy() || !tickets.holdsTaxInvoiceGrant(user.id())) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "ลบได้เฉพาะไฟล์ที่ตนเองแนบ");
+        }
+        if (!"FORWARDED".equals(status.get())) {
+            throw new ApiException(HttpStatus.CONFLICT, "ยืนยันใบกำกับแล้ว ลบไฟล์ไม่ได้");
+        }
     }
 
     /**
@@ -173,6 +221,15 @@ public class AttachmentController {
     /** The uploader may always reach their own file; everyone else goes through the deal gate. */
     private void requireAttachmentReadAccess(AttachmentDto dto, UserPrincipal actor) {
         if (actor.id() == dto.uploadedBy()) {
+            return;
+        }
+        // The warehouse is refused every deal; it reads the files of a round sales has sent, and nothing else.
+        if (WarehouseStaff.is(actor) && attachments.roundStatus(dto.id()).filter(st -> !"DRAFT".equals(st)).isPresent()) {
+            return;
+        }
+        // The invoice issuer (a per-person grant, any role) reads the files of a round forwarded to it, and nothing else.
+        if (tickets.holdsTaxInvoiceGrant(actor.id())
+            && attachments.roundStatus(dto.id()).filter(st -> "FORWARDED".equals(st) || "INVOICED".equals(st)).isPresent()) {
             return;
         }
         requireTicketReadAccess(dto.ticketId(), actor);

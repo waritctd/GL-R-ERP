@@ -64,6 +64,21 @@ public class DepositNoticeService {
     private final DocumentBundle bundle;
     private final RemainingInvoiceRepository remainingInvoices;
 
+    private th.co.glr.hr.deliveryrequest.PrePortal prePortal;
+
+    /** Setter-injected so hand-wired tests are unaffected. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void wirePrePortal(th.co.glr.hr.deliveryrequest.PrePortal prePortal) {
+        this.prePortal = prePortal;
+    }
+
+    /** An old (pre_portal) deal's order is confirmed by its first deposit notice or remaining invoice. */
+    void ensureOrderConfirmed(long ticketId, UserPrincipal actor) {
+        if (prePortal != null) {
+            prePortal.ensureOrderConfirmed(ticketId, null, actor);
+        }
+    }
+
     public DepositNoticeService(DepositNoticeRepository docs, TicketRepository tickets,
                            NotificationRepository notifications, DepositNoticePdfRenderer renderer,
                            CustomerRepository customers,
@@ -112,7 +127,14 @@ public class DepositNoticeService {
     // Create a DRAFT from approved ticket items
     @Transactional
     public DepositNoticeDto createDraft(long ticketId, DepositNoticeDraftRequest req, UserPrincipal actor) {
-        return createDraftInternal(ticketId, req, null, actor, true);
+        return createDraftInternal(ticketId, req, null, actor, true, null);
+    }
+
+    /** {@link #createDraft} against the quotation the caller chose (a delivery request's chosen quotation); 409 when
+     * that quotation cannot source a notice. */
+    @Transactional
+    public DepositNoticeDto createDraft(long ticketId, DepositNoticeDraftRequest req, Long quotationId, UserPrincipal actor) {
+        return createDraftInternal(ticketId, req, null, actor, true, quotationId);
     }
 
     /** {@link #createDraft} for a caller that has already chosen the source quotation: a non-null
@@ -121,16 +143,17 @@ public class DepositNoticeService {
     @Transactional
     public DepositNoticeDto createDraftFromQuotation(long ticketId, DepositNoticeDraftRequest req,
                                                      Integer sourceDepositPercent, UserPrincipal actor) {
-        return createDraftInternal(ticketId, req, sourceDepositPercent, actor, false);
+        return createDraftInternal(ticketId, req, sourceDepositPercent, actor, false, null);
     }
 
     /** {@code clientLines}: {@code req.items()} came from a client body (so {@link #echoOnly} distrusts them), not
      * from the server's own quotation. */
     private DepositNoticeDto createDraftInternal(long ticketId, DepositNoticeDraftRequest req,
                                                  Integer sourceDepositPercent, UserPrincipal actor,
-                                                 boolean clientLines) {
+                                                 boolean clientLines, Long chosenQuotationId) {
         requireRole(actor, SALES_ROLES);
         requireTicketOwner(ticketId, actor);
+        ensureOrderConfirmed(ticketId, actor); // before the row lock: the confirm takes advisory then row
         // The ticket row lock BEFORE any state check, as DealQuotationService#undoOrderConfirmation holds it while it
         // deletes the deal's draft notices: without it a draft created concurrently survives the undo. Row lock only (the
         // undo takes the advisory lock first, then this one), so no lock order is reversed.
@@ -154,7 +177,11 @@ public class DepositNoticeService {
         // always supplies the percent. It supplies the lines, and with them the reference, unless
         // req.items or legacy approved_price rows already supply the lines.
         DepositNoticeRepository.GoverningQuotation governing = sourceDepositPercent == null
-            ? docs.findGoverningQuotation(ticketId).orElse(null) : null;
+            ? (chosenQuotationId == null ? docs.findGoverningQuotation(ticketId)
+                : docs.findGoverningQuotation(ticketId, chosenQuotationId)).orElse(null) : null;
+        if (chosenQuotationId != null && governing == null && sourceDepositPercent == null) {
+            throw new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคานี้ใช้ออกใบแจ้งรับมัดจำไม่ได้");
+        }
         if (governing != null && governing.depositPercent().signum() == 0) {
             throw zeroDepositRefusal(governing.number());
         }
@@ -571,6 +598,16 @@ public class DepositNoticeService {
         }
     }
 
+    /** The notice's own PDF, without the bundled PO and quotation (a delivery round stores each document by itself). */
+    public byte[] getPdf(long docId, UserPrincipal actor) {
+        DepositNoticeDto doc = getById(docId, actor);
+        try {
+            return renderer.toPdf(renderModel(doc, bangkokToday()));
+        } catch (Exception e) {
+            throw new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "สร้างไฟล์ PDF ไม่สำเร็จ: " + e.getMessage());
+        }
+    }
+
     /** The PDF with the remembered (else default) attachment choice; the sheet's PUT is what changes it. */
     public DocumentBundle.Result getPdfBundle(long docId, UserPrincipal actor) {
         DepositNoticeDto doc = getById(docId, actor);
@@ -912,7 +949,7 @@ public class DepositNoticeService {
         if (bypass) {
             DepositNoticeRepository.AnsweredQuotation answered = docs.findAnsweredQuotation(ticketId).orElse(null);
             if (answered != null && answered.newEngine()) {
-                return resolveFromNewEngineQuotation(answered);
+                return resolveFromNewEngineQuotation(answered, receivedBeforeInvoice(ticketId, answered));
             }
         }
         return resolveLegacy(ticketId, ticket, notices);
@@ -924,7 +961,8 @@ public class DepositNoticeService {
      * negative line - and money follows the stored total_amount and the document language (EN = no VAT), exactly as
      * payable reads them. A row with no stored total is refused (payable skips it too).
      */
-    private ResolvedRemainingInvoice resolveFromNewEngineQuotation(DepositNoticeRepository.AnsweredQuotation answered) {
+    private ResolvedRemainingInvoice resolveFromNewEngineQuotation(DepositNoticeRepository.AnsweredQuotation answered,
+                                                                   BigDecimal deduction) {
         if (answered.totalAmount() == null) {
             return blocked("ใบเสนอราคา " + answered.number() + " ยังไม่มียอดรวมที่บันทึกไว้ จึงออกใบแจ้งหนี้ไม่ได้");
         }
@@ -936,10 +974,24 @@ public class DepositNoticeService {
         if (items.isEmpty()) {
             return blocked("ใบเสนอราคา " + answered.number() + " ไม่มีรายการสินค้า จึงออกใบแจ้งหนี้ไม่ได้");
         }
-        return new ResolvedRemainingInvoice(items, BigDecimal.ZERO, answered.number(), List.of(), null, List.of(),
+        return new ResolvedRemainingInvoice(items, deduction, answered.number(), List.of(), null, List.of(),
             List.of(), null, null, null,
             th.co.glr.hr.dealquotation.WastageCalculator.vatRateFor(answered.documentLanguage()),
             answered.totalAmount());
+    }
+
+    /**
+     * What a pre-portal deal's remaining invoice deducts: the money received so far (the deposit entered at the start,
+     * PRE_PORTAL, and any other receipt), taken back to its pre-VAT part at the invoice's own VAT rate, never above the
+     * quotation. Any other deal bills the whole quotation (no deposit was taken), so zero.
+     */
+    private BigDecimal receivedBeforeInvoice(long ticketId, DepositNoticeRepository.AnsweredQuotation answered) {
+        if (!tickets.isPrePortal(ticketId) || answered.totalAmount() == null) {
+            return BigDecimal.ZERO;
+        }
+        BigDecimal vat = BigDecimal.ONE.add(th.co.glr.hr.dealquotation.WastageCalculator.vatRateFor(answered.documentLanguage()));
+        BigDecimal preVat = tickets.sumPaid(ticketId).divide(vat, 2, RoundingMode.HALF_UP);
+        return preVat.max(BigDecimal.ZERO).min(answered.totalAmount());
     }
 
     /** Deposit deduction (pre-VAT): always the notice's own deposit amount. Money received beyond it (an overpayment)
@@ -1490,6 +1542,15 @@ public class DepositNoticeService {
     CustomerHeaderInfo resolveCustomerHeader(TicketSummaryDto s,
             String reqTaxId, String reqAddress, String reqProjectName) {
         return resolveCustomerHeader(s, reqTaxId, reqAddress, reqProjectName, s.id(), null);
+    }
+
+    /** The buyer printed on anything tied to a quotation (owner rule #65): that quotation's party customer, else the
+     * deal's own customer ({@code fromDeal}). Read-only; delivery rounds show it to sales, the warehouse and the issuer. */
+    public record QuotationBuyer(String name, String taxId, String branch, boolean fromDeal) {}
+
+    public QuotationBuyer quotationBuyer(TicketSummaryDto s, String quotationNumber) {
+        CustomerHeaderInfo h = resolveCustomerHeader(s, null, null, null, s.id(), quotationNumber);
+        return new QuotationBuyer(h.customerNameOr(s.customerName()), h.taxId(), h.branch(), h.customerName() == null);
     }
 
     /** As above, but when {@code quotationNumber} names a new-engine quotation addressed to a party whose customer is

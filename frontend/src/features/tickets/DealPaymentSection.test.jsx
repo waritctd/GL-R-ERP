@@ -24,6 +24,7 @@ vi.mock('../../api/index.js', async (importOriginal) => {
       storedRemainingInvoices: { listForTicket: vi.fn(), download: vi.fn() },
       documentChain: { get: vi.fn() },
       dealQuotations: { listForTicket: vi.fn() },
+      deliveryRequests: { list: vi.fn() },
     },
   };
 });
@@ -362,5 +363,36 @@ describe('DealPaymentSection — ใบแจ้งมัดจำ issue confirm
     expect((await within(dialog).findByTestId('deposit-issue-differs')).textContent)
       .toBe('ใบเสนอราคา QT-2026-0201 มูลค่า 1,300,000.00 — ใบแจ้งนี้ 1,240,000.11');
     expect(within(dialog).getByRole('button', { name: 'ออกเอกสาร' }).disabled).toBe(false);
+  });
+
+  it('a confirmed tax invoice reads as a receipt with both figures, and a round still waiting for its invoice is announced', async () => {
+    api.deliveryRequests.list.mockResolvedValueOnce({
+      rounds: [
+        { id: 7, roundNo: 2, status: 'FORWARDED', invoice: null },
+        { id: 6, roundNo: 1, status: 'INVOICED', invoice: { number: 'IV2611-0042', total: 85065, recordedAmount: 14177.5, receiptId: 77 } },
+      ],
+    });
+    renderSection({
+      summary: summaryOf(),
+      paymentReceipts: [{ receiptId: 77, kind: 'BALANCE', amount: 14177.5, source: 'TAX_INVOICE', receiptRef: 'IV2611-0042', receivedAt: '2026-11-19T05:00:00.000Z', recordedByName: 'คุณออกบิล' }],
+    });
+    await settled();
+    const line = await screen.findByTestId('tax-invoice-receipt');
+    expect(line.textContent).toContain('รอบส่งที่ 1 · IV2611-0042');
+    expect(line.textContent).toContain('ใบกำกับ ฿85,065.00 · รับไว้ก่อนแล้ว ฿70,887.50 · บันทึกรับเพิ่ม ฿14,177.50');
+    expect(within(screen.getByTestId('money-received')).getByText('ใบกำกับ')).toBeTruthy();
+    expect((await screen.findByTestId('round-waiting-invoice')).textContent).toContain('รอบส่งที่ 2');
+  });
+
+  it('a confirmed invoice that recorded nothing new still shows in the tab, with both figures', async () => {
+    api.deliveryRequests.list.mockResolvedValueOnce({
+      rounds: [{ id: 6, roundNo: 3, status: 'INVOICED', invoice: { number: 'IV2611-0099', total: 5000, recordedAmount: 0, receiptId: null } }],
+    });
+    renderSection({ summary: summaryOf() });
+    await settled();
+    const row = await screen.findByTestId('round-invoiced-no-receipt');
+    expect(row.textContent).toContain('รอบส่งที่ 3 · ใบกำกับ IV2611-0099');
+    expect(row.textContent).toContain('ใบกำกับ ฿5,000.00 · รับไว้ก่อนแล้ว ฿5,000.00 · บันทึกรับเพิ่ม ฿0.00');
+    expect(screen.getByTestId('tax-invoice-note').textContent).toContain('บัญชีไม่ต้องบันทึกซ้ำ');
   });
 });

@@ -129,8 +129,11 @@ public class ReceiptImportRepository {
     public Optional<Long> findManualTwin(long ticketId, BigDecimal amount, LocalDate docDate) {
         return jdbc.query("""
             SELECT receipt_id FROM sales.payment_receipt
-             WHERE ticket_id = :t AND source = 'MANUAL' AND express_doc_no IS NULL
+             WHERE ticket_id = :t AND source IN ('MANUAL', 'TAX_INVOICE', 'PRE_PORTAL') AND express_doc_no IS NULL
                AND kind IN ('DEPOSIT', 'BALANCE') AND amount = :a
+               AND NOT EXISTS (SELECT 1 FROM sales.receipt_import_row w
+                                WHERE w.receipt_id = payment_receipt.receipt_id AND w.status = 'RESOLVED')
+               AND (source <> 'PRE_PORTAL' OR kind = 'DEPOSIT')
                AND abs((received_at AT TIME ZONE 'Asia/Bangkok')::date - CAST(:d AS date)) <= :days
              ORDER BY abs((received_at AT TIME ZONE 'Asia/Bangkok')::date - CAST(:d AS date)), receipt_id
              LIMIT 1
@@ -140,11 +143,18 @@ public class ReceiptImportRepository {
 
     public static final int TWIN_DAYS = 7;
 
+    /** Is an Express row already RESOLVED against this receipt? A tax invoice's money settles at most one row. */
+    public boolean isSettledByRow(long receiptId) {
+        return Boolean.TRUE.equals(jdbc.queryForObject(
+            "SELECT EXISTS (SELECT 1 FROM sales.receipt_import_row WHERE receipt_id = :r AND status = 'RESOLVED')",
+            Map.of("r", receiptId), Boolean.class));
+    }
+
     /** Links the manual receipt to the Express number; only that column changes. 0 when already linked. */
     public int linkManualReceipt(long receiptId, String expressDocNo) {
         return jdbc.update("""
             UPDATE sales.payment_receipt SET express_doc_no = :d
-             WHERE receipt_id = :id AND source = 'MANUAL' AND express_doc_no IS NULL
+             WHERE receipt_id = :id AND source IN ('MANUAL', 'PRE_PORTAL') AND express_doc_no IS NULL
             """, Map.of("id", receiptId, "d", expressDocNo.trim()));
     }
 
@@ -166,19 +176,26 @@ public class ReceiptImportRepository {
             Long.class);
     }
 
-    /** The MANUAL receipt a queued row may duplicate, with its deal; empty when none or it is no longer MANUAL. */
+    /** The MANUAL or TAX_INVOICE receipt a queued row may duplicate, with its deal; empty when none or it is no longer one.
+     * For a tax invoice {@code reference} is the invoice number and {@code roundNo} its delivery round. */
     public Optional<ReceiptImportDtos.PossibleManual> manualReceipt(long receiptId) {
         return jdbc.query("""
-            SELECT r.receipt_id, r.ticket_id, r.kind, r.amount, r.received_at,
+            SELECT r.receipt_id, r.ticket_id, r.kind, r.amount, r.received_at, r.source, r.receipt_ref,
                    NULLIF(TRIM(CONCAT_WS(' ', e.first_name_th, e.last_name_th)), '') AS recorded_by_name,
-                   (r.express_doc_no IS NOT NULL) AS already_linked
+                   (r.express_doc_no IS NOT NULL) AS already_linked,
+                   (SELECT d.round_no FROM sales.delivery_request d WHERE d.receipt_id = r.receipt_id) AS round_no
               FROM sales.payment_receipt r
               JOIN hr.employee e ON e.employee_id = r.recorded_by
-             WHERE r.receipt_id = :id AND r.source = 'MANUAL'
-            """, Map.of("id", receiptId), (rs, n) -> new ReceiptImportDtos.PossibleManual(rs.getLong("receipt_id"),
-                rs.getLong("ticket_id"), rs.getString("kind"), rs.getBigDecimal("amount"),
-                rs.getTimestamp("received_at").toInstant(), rs.getString("recorded_by_name"),
-                rs.getBoolean("already_linked"))).stream().findFirst();
+             WHERE r.receipt_id = :id AND r.source IN ('MANUAL', 'TAX_INVOICE', 'PRE_PORTAL')
+            """, Map.of("id", receiptId), (rs, n) -> {
+                Integer round = rs.getObject("round_no", Integer.class);
+                return new ReceiptImportDtos.PossibleManual(rs.getLong("receipt_id"),
+                    rs.getLong("ticket_id"), rs.getString("kind"), rs.getBigDecimal("amount"),
+                    rs.getTimestamp("received_at").toInstant(), rs.getString("recorded_by_name"),
+                    rs.getBoolean("already_linked"), rs.getString("source"),
+                    "TAX_INVOICE".equals(rs.getString("source")) ? rs.getString("receipt_ref") : null,
+                    round);
+            }).stream().findFirst();
     }
 
     public List<QueuedRow> findByStatus(String status) {

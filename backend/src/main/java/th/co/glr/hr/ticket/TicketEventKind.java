@@ -160,5 +160,19 @@ public final class TicketEventKind {
     /** สั่งเพิ่ม: on the source deal and on the new linked deal it started (DealPartyService#createAddOnOrder). */
     public static final String ADD_ON_ORDER_CREATED = "ADD_ON_ORDER_CREATED";
 
+    // ── V236 delivery rounds ──
+    /** Sales sent a round's request (ขอออกใบกำกับ) to the warehouse. */
+    public static final String DELIVERY_REQUEST_SENT = "DELIVERY_REQUEST_SENT";
+    /** The warehouse sent a round back to sales (a later slice writes it). */
+    public static final String DELIVERY_REQUEST_RETURNED = "DELIVERY_REQUEST_RETURNED";
+    /** The warehouse forwarded a round to whoever issues the tax invoice (a later slice writes it). */
+    public static final String DELIVERY_REQUEST_FORWARDED = "DELIVERY_REQUEST_FORWARDED";
+    /** The issuer confirmed a round's tax invoice (a later slice writes it). */
+    public static final String TAX_INVOICE_CONFIRMED = "TAX_INVOICE_CONFIRMED";
+    /** A confirmed round tax invoice was cancelled (before any delivery) and its receipt removed. */
+    public static final String TAX_INVOICE_VOIDED = "TAX_INVOICE_VOIDED";
+    /** The issuer replaced an unconfirmed invoice file that someone else had attached. */
+    public static final String TAX_INVOICE_FILE_REPLACED = "TAX_INVOICE_FILE_REPLACED";
+
     private TicketEventKind() {}
 }

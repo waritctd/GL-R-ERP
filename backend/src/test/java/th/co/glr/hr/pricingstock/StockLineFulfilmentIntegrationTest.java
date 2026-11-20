@@ -1,5 +1,6 @@
 package th.co.glr.hr.pricingstock;
 
+import th.co.glr.hr.ticket.DeliveryRoundFixture;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.math.BigDecimal;
@@ -118,6 +119,7 @@ class StockLineFulfilmentIntegrationTest extends AbstractStockLineIntegrationTes
         recordDeposit();
         long itemId = ticketItemId("Stock A");
 
+        DeliveryRoundFixture.ensureInvoicedRound(jdbc, ticketId);
         var after = ticketService.recordPartialDelivery(ticketId, new RecordDeliveryRequest("STOCK", null,
             List.of(new RecordDeliveryRequest.Line(itemId, new BigDecimal("10"))), null), salesActor);
 

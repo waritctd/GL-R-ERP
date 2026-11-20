@@ -160,6 +160,12 @@ class TicketServiceTest {
         }
     }
 
+    /** The tax-invoice rule: an INVOICED round (id 99) of deal 10 covering `covered` of item 1, nothing delivered on it. */
+    private void stubRound(String covered) {
+        when(ticketRepo.findInvoicedRounds(10L)).thenReturn(List.of(new TicketRepository.InvoicedRound(99L, 1, "IV-1",
+            List.of(new TicketRepository.RoundLine(1L, new BigDecimal(covered), BigDecimal.ZERO)))));
+    }
+
     @Test
     void confirmCloseReady_refusedWithoutInvoiceOnFile() {
         // The invoice is produced externally and uploaded; without it there is nothing to verify against.
