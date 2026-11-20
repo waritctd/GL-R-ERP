@@ -73,10 +73,51 @@ public final class TaxInvoicePdfReader {
             PDFTextStripper stripper = new PDFTextStripper();
             stripper.setStartPage(1);
             stripper.setEndPage(MAX_PAGES);
-            String text = stripper.getText(doc);
-            return parse(text.length() > MAX_TEXT_CHARS ? text.substring(0, MAX_TEXT_CHARS) : text);
+            CappedWriter out = new CappedWriter(MAX_TEXT_CHARS);
+            try {
+                stripper.writeText(doc, out);
+            } catch (TextCapReached cap) {
+                // enough text: parse what was collected (the truncated text), extraction stops here
+            }
+            return parse(out.toString());
         } catch (Exception e) {
             return Read.NOTHING; // unreadable, encrypted, over the cache cap: nothing read
+        }
+    }
+
+    /** Thrown by {@link CappedWriter} to stop PDFBox once {@link #MAX_TEXT_CHARS} characters are collected. */
+    private static final class TextCapReached extends java.io.IOException {
+        TextCapReached() {
+            super("text cap reached");
+        }
+    }
+
+    private static final class CappedWriter extends java.io.Writer {
+        private final StringBuilder sb = new StringBuilder();
+        private final int cap;
+
+        CappedWriter(int cap) {
+            this.cap = cap;
+        }
+
+        @Override
+        public void write(char[] buf, int off, int len) throws java.io.IOException {
+            int room = cap - sb.length();
+            sb.append(buf, off, Math.min(len, room));
+            if (len >= room) {
+                throw new TextCapReached();
+            }
+        }
+
+        @Override
+        public void flush() {}
+
+        @Override
+        public void close() {}
+
+        @Override
+        public String toString() {
+            return sb.toString();
         }
     }
 
