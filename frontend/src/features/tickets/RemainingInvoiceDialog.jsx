@@ -11,6 +11,7 @@ import { Modal } from '../../components/common/Modal.jsx';
 import { Skeleton } from '../../components/common/Skeleton.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { downloadBlob } from '../../utils/download.js';
+import { DocumentDownloadSheet } from './DocumentDownloadSheet.jsx';
 import { warnIfBundleSkipped } from '../../utils/userMessages.js';
 import { invalidateDealDocuments } from '../documentChain/documentChain.js';
 import { formatMoney } from '../../utils/format.js';
@@ -174,9 +175,14 @@ export function RemainingInvoiceDialog({ ticketId, canWrite = true, onClose, onD
     return invalidateDealDocuments(queryClient, ticketId);
   }
 
-  async function handleDownloadVersion(id, docNumber) {
-    const blob = await api.storedRemainingInvoices.download(id);
-    downloadBlob(blob, docNumber || `draft-${id}`, 'pdf');
+  // A past version's PDF goes through the same sheet (which files go in); `versionSheet` is the row it is open for.
+  const [versionSheet, setVersionSheet] = useState(null);
+  function handleDownloadVersion(id, docNumber) {
+    setVersionSheet({ id, docNumber });
+  }
+  async function downloadVersion(choice) {
+    const blob = await api.storedRemainingInvoices.download(versionSheet.id, choice);
+    downloadBlob(blob, versionSheet.docNumber || `draft-${versionSheet.id}`, 'pdf');
     warnIfBundleSkipped(blob, showToast);
     onDownloaded?.();
   }
@@ -184,6 +190,11 @@ export function RemainingInvoiceDialog({ ticketId, canWrite = true, onClose, onD
   if (!ticketId) return null;
 
   return (
+    <>
+    {versionSheet ? (
+      <DocumentDownloadSheet kind="remaining" documentId={versionSheet.id} ticketId={ticketId}
+        onClose={() => setVersionSheet(null)} onDownload={downloadVersion} />
+    ) : null}
     <Modal
       title="ใบแจ้งหนี้ส่วนที่เหลือ"
       subtitle={issued?.docNumber ? `เลขที่เอกสารล่าสุด ${issued.docNumber}` : undefined}
@@ -228,6 +239,7 @@ export function RemainingInvoiceDialog({ ticketId, canWrite = true, onClose, onD
         </>
       )}
     </Modal>
+    </>
   );
 }
 
@@ -272,6 +284,7 @@ function IssuedSummary({ issued, canWrite, onRevised, onDownloaded, showToast })
   const [revising, setRevising] = useState(false);
   const [editing, setEditing] = useState(false);
   const [downloading, setDownloading] = useState(false);
+  const [sheetOpen, setSheetOpen] = useState(false);
   const [error, setError] = useState(null);
 
   async function handleRevise() {
@@ -287,11 +300,11 @@ function IssuedSummary({ issued, canWrite, onRevised, onDownloaded, showToast })
     }
   }
 
-  async function handleDownload() {
+  async function handleDownload(choice) {
     setError(null);
     setDownloading(true);
     try {
-      const blob = await api.storedRemainingInvoices.download(issued.id);
+      const blob = await api.storedRemainingInvoices.download(issued.id, choice);
       downloadBlob(blob, issued.docNumber || `remaining-invoice-${issued.id}`, 'pdf');
       warnIfBundleSkipped(blob, showToast);
       onDownloaded?.();
@@ -327,10 +340,14 @@ function IssuedSummary({ issued, canWrite, onRevised, onDownloaded, showToast })
       </div>
       {error ? <p className="m-0 text-sm font-bold text-danger" role="alert">{error}</p> : null}
       <div className="flex gap-2">
-        <Button type="button" variant="primary" disabled={downloading} onClick={handleDownload}
+        <Button type="button" variant="primary" disabled={downloading} onClick={() => setSheetOpen(true)}
           data-testid="remaining-invoice-download">
           {downloading ? 'กำลังดาวน์โหลด…' : 'ดาวน์โหลด'}
         </Button>
+        {sheetOpen ? (
+          <DocumentDownloadSheet kind="remaining" documentId={issued.id} ticketId={issued.ticketId}
+            onClose={() => setSheetOpen(false)} onDownload={handleDownload} />
+        ) : null}
         {canWrite ? (
           <Button type="button" variant="secondary" onClick={() => setEditing(true)}
             data-testid="remaining-invoice-edit">
@@ -397,6 +414,7 @@ function DraftEditor({ draft, issuedOfSameQuotation, issuedMode = false, onCance
   const [confirmingIssue, setConfirmingIssue] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [downloading, setDownloading] = useState(false);
+  const [sheetOpen, setSheetOpen] = useState(false);
   const [error, setError] = useState(null);
 
   // Re-prefill whenever a genuinely different (or freshly re-snapshotted) draft loads — same "key on the object
@@ -458,11 +476,11 @@ function DraftEditor({ draft, issuedOfSameQuotation, issuedMode = false, onCance
     }
   }
 
-  async function handleDownload() {
+  async function handleDownload(choice) {
     setError(null);
     setDownloading(true);
     try {
-      const blob = await api.storedRemainingInvoices.download(draft.id);
+      const blob = await api.storedRemainingInvoices.download(draft.id, choice);
       downloadBlob(blob, draft.docNumber || `draft-${draft.id}`, 'pdf');
       warnIfBundleSkipped(blob, showToast);
       onDownloaded?.();
@@ -538,10 +556,14 @@ function DraftEditor({ draft, issuedOfSameQuotation, issuedMode = false, onCance
 
       {/* Not in the drawing, kept: the draft's preview download and ลบร่าง, each with its old gate. */}
       <div className="flex flex-wrap gap-2 mobile:flex-col [&>button]:mobile:w-full">
-        <Button type="button" variant="secondary" disabled={downloading} onClick={handleDownload}
+        <Button type="button" variant="secondary" disabled={downloading} onClick={() => setSheetOpen(true)}
           data-testid="remaining-invoice-download-draft">
           {downloading ? 'กำลังดาวน์โหลด…' : issuedMode ? 'ดาวน์โหลด' : 'ดาวน์โหลด (ตัวอย่าง)'}
         </Button>
+        {sheetOpen ? (
+          <DocumentDownloadSheet kind="remaining" documentId={draft.id} ticketId={draft.ticketId}
+            onClose={() => setSheetOpen(false)} onDownload={handleDownload} />
+        ) : null}
         {issuedMode ? null : (
           <Button type="button" variant="danger" disabled={busy} onClick={handleDelete}
             data-testid="remaining-invoice-delete-draft">

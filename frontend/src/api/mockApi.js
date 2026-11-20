@@ -16083,6 +16083,11 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       return mockDocPlaceholderBlob(lines);
     },
 
+    // The real endpoint remembers the last bundle choice; the mock has no bundle, so it always answers the defaults.
+    async bundleSelection() {
+      return delay({ quotation: true, attachmentIds: [] });
+    },
+
     async downloadPdf(docId) {
       const rawDoc = mockDepositNotices.find((d) => d.id === Number(docId));
       if (!rawDoc) fail('ไม่พบใบแจ้งรับมัดจำนี้', 404);
@@ -16296,6 +16301,9 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
     // Binary, so it goes through fetch directly — same shape as storedImportRequests.download above. Renders from
     // THIS row's own stored snapshot (buildMockRemainingInvoiceXlsxFromRow), never recomputed from the ticket's
     // current state — see that function's own header comment.
+    async bundleSelection() {
+      return delay({ quotation: true, attachmentIds: [] });
+    },
     async download(id) {
       const row = findStoredRemainingInvoiceRaw(id);
       requireDepositNoticeViewer(row.ticketId);

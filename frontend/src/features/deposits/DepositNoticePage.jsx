@@ -18,6 +18,7 @@ import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { FormField, fieldErrorId } from '../../components/common/FormField.jsx';
 import { depositNoticeStatusLabel, formatThaiDate } from '../../utils/format.js';
 import { downloadBlob } from '../../utils/download.js';
+import { DocumentDownloadSheet } from '../tickets/DocumentDownloadSheet.jsx';
 import { warnIfBundleSkipped } from '../../utils/userMessages.js';
 import { round2 } from '../quotations/quotationMeta.js';
 import {
@@ -250,6 +251,7 @@ export function DepositNoticePage({ ticketId, onBack, showToast }) {
   // An ISSUED notice is read-only until sales presses แก้ไข; saving then updates the same document in place.
   const [editingIssued, setEditingIssued] = useState(false);
   const [downloading, setDownloading] = useState(null); // 'xlsx' | 'pdf' | null
+  const [pdfSheetOpen, setPdfSheetOpen] = useState(false); // the ดาวน์โหลด PDF sheet (which files go into the PDF)
 
   // UX-03: per-field issue-validation errors, keyed 'customerName' | 'items' (at-least-one-line-item) |
   // `items.<index>.<field>` | 'total'. Populated only by handleIssue() below — see the SCOPING DECISION comment
@@ -552,7 +554,7 @@ export function DepositNoticePage({ ticketId, onBack, showToast }) {
   // An issued notice downloads as stored. A draft is saved first when the form differs from what was loaded or last
   // saved (through the same path as บันทึกร่าง, so the 409 handling is the same) and downloads only if that save
   // succeeded; an unchanged draft downloads as stored without saving, so a reader who cannot save still gets the file.
-  async function handleDownload(extension) {
+  async function handleDownload(extension, choice) {
     if (!doc || downloading || saving) return;
     if (!locked && refusesClearedItems()) return;
     setDownloading(extension);
@@ -572,7 +574,7 @@ export function DepositNoticePage({ ticketId, onBack, showToast }) {
       }
       try {
         const blob = extension === 'pdf'
-          ? await api.depositNotices.downloadPdf(doc.id)
+          ? await api.depositNotices.downloadPdf(doc.id, choice)
           : await api.depositNotices.downloadXlsx(doc.id);
         downloadBlob(blob, depositNoticeFileName(doc, ticketId), extension);
         warnIfBundleSkipped(blob, showToast);
@@ -639,6 +641,10 @@ export function DepositNoticePage({ ticketId, onBack, showToast }) {
 
   return (
     <div className="grid w-full grid-cols-1 gap-[18px] min-w-0 max-w-[1320px]">
+      {pdfSheetOpen && doc ? (
+        <DocumentDownloadSheet kind="deposit" documentId={doc.id} ticketId={ticketId} reference={form.reference}
+          onClose={() => setPdfSheetOpen(false)} onDownload={(choice) => handleDownload('pdf', choice)} />
+      ) : null}
       <PageHeader
         title={`ใบแจ้งยอดเงินรับมัดจำ${doc?.docNumber ? ` ${doc.docNumber}` : ''}`}
         subtitle={doc
@@ -660,7 +666,7 @@ export function DepositNoticePage({ ticketId, onBack, showToast }) {
               triggerIcon="download"
               align="start"
               items={[
-                { key: 'pdf', label: 'PDF', icon: 'fileText', onSelect: () => handleDownload('pdf'), disabled: downloadBusy, disabledReason: downloading != null ? 'กำลังดาวน์โหลด…' : 'กำลังบันทึก…' },
+                { key: 'pdf', label: 'PDF', icon: 'fileText', onSelect: () => setPdfSheetOpen(true), disabled: downloadBusy, disabledReason: downloading != null ? 'กำลังดาวน์โหลด…' : 'กำลังบันทึก…' },
                 { key: 'xlsx', label: 'Excel', icon: 'fileText', onSelect: () => handleDownload('xlsx'), disabled: downloadBusy, disabledReason: downloading != null ? 'กำลังดาวน์โหลด…' : 'กำลังบันทึก…' },
               ]}
             />

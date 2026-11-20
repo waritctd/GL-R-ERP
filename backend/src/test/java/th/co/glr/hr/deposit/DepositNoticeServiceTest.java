@@ -44,7 +44,8 @@ class DepositNoticeServiceTest {
     private final DepositNoticeService service = new DepositNoticeService(
         docs, ticketRepo, notifications, renderer, customerRepo, quotationRepo, bundle, org.mockito.Mockito.mock(th.co.glr.hr.deposit.RemainingInvoiceRepository.class));
     {
-        when(bundle.bundle(any(), org.mockito.ArgumentMatchers.anyLong(), any(), any()))
+        when(bundle.bundle(any(), org.mockito.ArgumentMatchers.anyLong(), any(), any(), any(),
+            org.mockito.ArgumentMatchers.anyLong(), any(), any()))
             .thenAnswer(i -> new DocumentBundle.Result(i.getArgument(0), java.util.List.of()));
         // Default stub so every payment-track write in this file (advancePaymentStatus's compare-and-set) reads as
         // "succeeded" unless a specific test overrides it — Mockito's default answer for an unstubbed int-returning

@@ -17,14 +17,16 @@ import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Component;
 import th.co.glr.hr.attachment.AttachmentDto;
 import th.co.glr.hr.attachment.AttachmentRepository;
+import org.springframework.http.HttpStatus;
 import th.co.glr.hr.auth.UserPrincipal;
+import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.dealquotation.DealQuotationService;
 import th.co.glr.hr.ticket.AttachType;
 import th.co.glr.hr.ticket.QuotationRenderer;
 
 /**
  * What the customer receives with a ใบแจ้งยอดเงินรับมัดจำ / ใบแจ้งหนี้ส่วนที่เหลือ PDF: the document, then the deal's
- * PO(s) (oldest first), then the quotation PDF it references (its terms & conditions pages included). Best effort:
+ * chosen attachments (by default every PO, oldest first), then the quotation PDF it references (by default) (its terms & conditions pages included). Best effort:
  * the quotation is rendered with the requesting user's own quotation view gate (and only if it belongs to the deal), so
  * a viewer the quotation endpoint refuses gets the document without it. A missing/unreadable PO, an unknown, refused
  * or unrenderable quotation is logged at WARN and skipped, never a failed download; the skipped kinds ("po",
@@ -46,50 +48,116 @@ public class DocumentBundle {
         this.docs = docs;
     }
 
-    /** The merged PDF and which parts were left out ("po", "quotation"); empty when nothing was skipped. */
-    public record Result(byte[] pdf, List<String> skipped) {}
+    /** The merged PDF, which parts were left out ("po", "attachment", "quotation"), and whether the chosen files add up
+     * to more than {@link #LARGE_BYTES} (a heavy email attachment). */
+    public record Result(byte[] pdf, List<String> skipped, boolean large) {
+        public Result(byte[] pdf, List<String> skipped) {
+            this(pdf, skipped, false);
+        }
+    }
+
+    /** What goes into the bundle: whether the referenced quotation does, and which deal attachments, in order. */
+    public record Selection(boolean quotation, List<Long> attachmentIds) {}
 
     public static final String SKIPPED_HEADER = "X-Document-Bundle-Skipped";
+    public static final String LARGE_HEADER = "X-Document-Bundle-Large";
+    static final long LARGE_BYTES = 15L * 1024 * 1024;
 
-    /** The response header naming what was skipped, e.g. {@code po,quotation}; none when the bundle is complete. */
+    /** The response headers naming what was skipped, e.g. {@code po,quotation}, and a too-large bundle; none when clean. */
     public static org.springframework.http.HttpHeaders skippedHeader(Result bundle) {
         org.springframework.http.HttpHeaders headers = new org.springframework.http.HttpHeaders();
         if (!bundle.skipped().isEmpty()) {
             headers.set(SKIPPED_HEADER, String.join(",", bundle.skipped()));
         }
+        if (bundle.large()) {
+            headers.set(LARGE_HEADER, "true");
+        }
         return headers;
     }
 
+    /** The choice a download would use with no parameters: the remembered one, else the quotation and every PO. */
+    public Selection selection(String kind, long documentId, long ticketId) {
+        var saved = kind == null ? null : docs.findBundleSelection(kind, documentId).orElse(null);
+        if (saved != null) {
+            return new Selection(saved.includeQuotation(), saved.attachmentIds());
+        }
+        return new Selection(true, attachments.findByTicketId(ticketId).stream()
+            .filter(a -> AttachType.PO.equals(a.attachType()))
+            .sorted(Comparator.comparingLong(AttachmentDto::id)).map(AttachmentDto::id).toList());
+    }
+
+    /** The {@code attachments=} query value: null = not supplied, "" = none, else comma-separated ids (400 if not numbers). */
+    public static List<Long> parseIds(String raw) {
+        if (raw == null) {
+            return null;
+        }
+        try {
+            return java.util.Arrays.stream(raw.split(",")).map(String::trim).filter(v -> !v.isEmpty())
+                .map(Long::valueOf).toList();
+        } catch (NumberFormatException e) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "รายการไฟล์แนบไม่ถูกต้อง");
+        }
+    }
+
+    /** The defaults, nothing remembered (callers that have no stored document). */
     public Result bundle(byte[] documentPdf, long ticketId, String quotationNumber, UserPrincipal actor) {
+        return bundle(documentPdf, ticketId, quotationNumber, actor, null, 0, null, null);
+    }
+
+    /**
+     * @param kind / documentId  the document whose last choice is remembered ({@code kind == null}: defaults, no memory)
+     * @param quotationParam     null = not supplied (remembered / default applies)
+     * @param attachmentParam    null = not supplied; every id must be an attachment of THIS deal (400 otherwise).
+     *                           Supplying either parameter saves the resulting choice as the document's last one.
+     */
+    public Result bundle(byte[] documentPdf, long ticketId, String quotationNumber, UserPrincipal actor,
+                         String kind, long documentId, Boolean quotationParam, List<Long> attachmentParam) {
         byte[] out = documentPdf;
         List<String> skipped = new ArrayList<>();
         // No per-attachment gate here: every role that may read a notice (owner/keyer, grant holder, sales_manager, ceo,
         // account in scope) may also list and download the deal's attachments (TicketAccessPolicy.canViewDocuments).
-        List<AttachmentDto> pos = List.of();
+        java.util.Map<Long, AttachmentDto> deal = new java.util.LinkedHashMap<>();
         try {
-            pos = attachments.findByTicketId(ticketId).stream()
-                .filter(a -> AttachType.PO.equals(a.attachType()))
-                .sorted(Comparator.comparingLong(AttachmentDto::id)).toList();
+            attachments.findByTicketId(ticketId).stream().sorted(Comparator.comparingLong(AttachmentDto::id))
+                .forEach(a -> deal.put(a.id(), a));
         } catch (Exception e) {
-            log.warn("PO attachments of ticket {} could not be listed for the PDF bundle", ticketId, e);
+            log.warn("Attachments of ticket {} could not be listed for the PDF bundle", ticketId, e);
             addOnce(skipped, "po");
         }
-        for (AttachmentDto po : pos) {
+        if (attachmentParam != null) {
+            for (Long id : attachmentParam) {
+                if (!deal.containsKey(id)) {
+                    throw new ApiException(HttpStatus.BAD_REQUEST, "ไฟล์แนบที่เลือกไม่ใช่ของงานนี้");
+                }
+            }
+        }
+        Selection chosen = selection(kind, documentId, ticketId);
+        boolean withQuotation = quotationParam != null ? quotationParam : chosen.quotation();
+        List<Long> ids = (attachmentParam != null ? attachmentParam : chosen.attachmentIds()).stream().distinct()
+            .filter(deal::containsKey).toList();
+        if (kind != null && (quotationParam != null || attachmentParam != null)) {
+            docs.saveBundleSelection(kind, documentId, withQuotation, ids);
+        }
+        long totalBytes = 0;
+        for (Long id : ids) {
+            AttachmentDto file = deal.get(id);
+            String part = AttachType.PO.equals(file.attachType()) ? "po" : "attachment";
+            totalBytes += file.fileSize() == null ? 0 : file.fileSize();
             try {
-                byte[] bytes = Files.readAllBytes(Path.of(attachments.findFilePathById(po.id())));
+                byte[] bytes = Files.readAllBytes(Path.of(attachments.findFilePathById(id)));
                 byte[] pdf = isPdf(bytes) ? bytes : imagePage(bytes);
                 if (pdf == null) {
-                    log.warn("PO attachment {} on ticket {} is neither PDF nor PNG/JPG; skipped", po.id(), ticketId);
-                    addOnce(skipped, "po");
+                    log.warn("Attachment {} on ticket {} is neither PDF nor PNG/JPG; skipped", id, ticketId);
+                    addOnce(skipped, part);
                     continue;
                 }
                 out = QuotationRenderer.appendPdf(out, pdf);
             } catch (Exception e) {
-                log.warn("PO attachment {} on ticket {} could not be added to the PDF bundle", po.id(), ticketId, e);
-                addOnce(skipped, "po");
+                log.warn("Attachment {} on ticket {} could not be added to the PDF bundle", id, ticketId, e);
+                addOnce(skipped, part);
             }
         }
-        if (quotationNumber != null && !quotationNumber.isBlank()) {
+        if (withQuotation && quotationNumber != null && !quotationNumber.isBlank()) {
             try {
                 Long quotationId = docs.findNewEngineQuotationId(ticketId, quotationNumber).orElse(null);
                 if (quotationId == null) {
@@ -104,7 +172,7 @@ public class DocumentBundle {
                 addOnce(skipped, "quotation");
             }
         }
-        return new Result(out, skipped);
+        return new Result(out, skipped, totalBytes > LARGE_BYTES);
     }
 
     private static void addOnce(List<String> skipped, String part) {

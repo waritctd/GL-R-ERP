@@ -16,9 +16,16 @@ function duplicateQuery(options) {
 }
 
 // The PDF bundle's X-Document-Bundle-Skipped header ("po,quotation") rides on the blob for bundleSkippedMessage.
+// The download sheet's choice as query params: quotation=true|false, attachments=<comma ids> ("" = none).
+function bundleQuery(choice) {
+  if (!choice) return '';
+  return `&quotation=${choice.quotation !== false}&attachments=${(choice.attachmentIds ?? []).join(',')}`;
+}
+
 async function withBundleSkipped(res) {
   const blob = await res.blob();
   blob.bundleSkipped = res.headers?.get?.('X-Document-Bundle-Skipped') ?? '';
+  blob.bundleLarge = res.headers?.get?.('X-Document-Bundle-Large') === 'true';
   return blob;
 }
 
@@ -492,8 +499,9 @@ export const api = {
       if (!res.ok) throw new Error('Download failed');
       return res.blob();
     },
-    downloadPdf: async (id) => {
-      const res = await fetch(API_ROUTES.depositNotices.file(id, 'pdf'), { credentials: 'include' });
+    bundleSelection: (id) => apiRequest(API_ROUTES.depositNotices.bundleSelection(id)),
+    downloadPdf: async (id, choice) => {
+      const res = await fetch(API_ROUTES.depositNotices.file(id, 'pdf') + bundleQuery(choice), { credentials: 'include' });
       if (!res.ok) throw new Error('Download failed');
       return withBundleSkipped(res);
     },
@@ -521,8 +529,9 @@ export const api = {
     revise: (id) => apiRequest(API_ROUTES.storedRemainingInvoices.revise(id), { method: 'POST' }),
     deleteDraft: (id) => apiRequest(API_ROUTES.storedRemainingInvoices.get(id), { method: 'DELETE' }),
     // Binary, so it goes through fetch directly — same shape as storedImportRequests.download above.
-    download: async (id) => {
-      const res = await fetch(API_ROUTES.storedRemainingInvoices.file(id), { credentials: 'include' });
+    bundleSelection: (id) => apiRequest(API_ROUTES.storedRemainingInvoices.bundleSelection(id)),
+    download: async (id, choice) => {
+      const res = await fetch(API_ROUTES.storedRemainingInvoices.file(id) + bundleQuery(choice), { credentials: 'include' });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         throw new Error(err.message || 'ดาวน์โหลดใบแจ้งหนี้ส่วนที่เหลือไม่สำเร็จ');

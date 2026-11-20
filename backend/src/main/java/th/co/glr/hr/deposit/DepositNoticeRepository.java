@@ -455,6 +455,36 @@ public class DepositNoticeRepository {
         }
     }
 
+    /** The remembered bundle choice for a document: whether the quotation goes in, and which deal attachments, in order. */
+    public record BundleSelection(boolean includeQuotation, List<Long> attachmentIds) {}
+
+    /** Empty when the user never chose for this document (the defaults then apply). A deleted attachment is gone. */
+    public Optional<BundleSelection> findBundleSelection(String kind, long documentId) {
+        Map<String, Object> p = Map.of("k", kind, "d", documentId);
+        List<Boolean> pref = jdbc.queryForList("SELECT include_quotation FROM sales.document_bundle_pref"
+            + " WHERE document_kind = :k AND document_id = :d", p, Boolean.class);
+        if (pref.isEmpty()) {
+            return Optional.empty();
+        }
+        List<Long> ids = jdbc.queryForList("SELECT attachment_id FROM sales.document_attachment_selection"
+            + " WHERE document_kind = :k AND document_id = :d ORDER BY seq", p, Long.class);
+        return Optional.of(new BundleSelection(pref.get(0), ids));
+    }
+
+    public void saveBundleSelection(String kind, long documentId, boolean includeQuotation, List<Long> attachmentIds) {
+        jdbc.update("INSERT INTO sales.document_bundle_pref (document_kind, document_id, include_quotation)"
+            + " VALUES (:k, :d, :q) ON CONFLICT (document_kind, document_id) DO UPDATE SET include_quotation = :q",
+            new MapSqlParameterSource().addValue("k", kind).addValue("d", documentId).addValue("q", includeQuotation));
+        jdbc.update("DELETE FROM sales.document_attachment_selection WHERE document_kind = :k AND document_id = :d",
+            Map.of("k", kind, "d", documentId));
+        int seq = 0;
+        for (Long id : attachmentIds) {
+            jdbc.update("INSERT INTO sales.document_attachment_selection (document_kind, document_id, attachment_id, seq)"
+                + " VALUES (:k, :d, :a, :s)", new MapSqlParameterSource().addValue("k", kind)
+                .addValue("d", documentId).addValue("a", id).addValue("s", seq++));
+        }
+    }
+
     /** The customer of the party a new-engine quotation (this deal, this number) is addressed to; empty for a legacy
      * number or a quotation with no party. A deal can hold several BUYER parties, so this is not always the deal's. */
     public Optional<Long> findQuotationPartyCustomerId(long ticketId, String number) {

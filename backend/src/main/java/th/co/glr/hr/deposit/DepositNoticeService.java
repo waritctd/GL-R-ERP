@@ -546,18 +546,38 @@ public class DepositNoticeService {
     }
 
     public DocumentBundle.Result getPdfBundle(long docId, UserPrincipal actor) {
+        return getPdfBundle(docId, actor, null, null);
+    }
+
+    /** {@code quotation} / {@code attachmentIds}: the download sheet's choice (null = not supplied), remembered as this
+     * notice's last one; an attachment id that is not this deal's is a 400. */
+    public DocumentBundle.Result getPdfBundle(long docId, UserPrincipal actor, Boolean quotation,
+                                              List<Long> attachmentIds) {
         DepositNoticeDto doc = getById(docId, actor);
         try {
             byte[] pdf = renderer.toPdf(renderModel(doc, bangkokToday()));
-            return bundle.bundle(pdf, doc.ticketId(), doc.reference(), actor);
+            return bundle.bundle(pdf, doc.ticketId(), doc.reference(), actor, "DEPOSIT_NOTICE", docId, quotation,
+                attachmentIds);
+        } catch (ApiException e) {
+            throw e;
         } catch (Exception e) {
             throw new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "สร้างไฟล์ PDF ไม่สำเร็จ: " + e.getMessage());
         }
     }
 
+    /** What the download sheet should show for this notice: the remembered choice, else the defaults. */
+    public DocumentBundle.Selection bundleSelection(long docId, UserPrincipal actor) {
+        return bundle.selection("DEPOSIT_NOTICE", docId, getById(docId, actor).ticketId());
+    }
+
+    DocumentBundle.Selection bundleSelection(String kind, long documentId, long ticketId) {
+        return bundle.selection(kind, documentId, ticketId);
+    }
+
     /** The bundle (PO + quotation) for a download of a document of {@code ticketId}. */
-    DocumentBundle.Result bundled(byte[] pdf, long ticketId, String quotationNumber, UserPrincipal actor) {
-        return bundle.bundle(pdf, ticketId, quotationNumber, actor);
+    DocumentBundle.Result bundled(byte[] pdf, long ticketId, String quotationNumber, UserPrincipal actor,
+                                  String kind, long documentId, Boolean quotation, List<Long> attachmentIds) {
+        return bundle.bundle(pdf, ticketId, quotationNumber, actor, kind, documentId, quotation, attachmentIds);
     }
 
     // ── Remaining Invoice (ข้อ 13.5) ─────────────────────────────────────────

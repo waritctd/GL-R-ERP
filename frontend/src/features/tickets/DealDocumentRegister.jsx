@@ -11,6 +11,7 @@ import { Skeleton } from '../../components/common/Skeleton.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { downloadBlob } from '../../utils/download.js';
 import { warnIfBundleSkipped } from '../../utils/userMessages.js';
+import { DocumentDownloadSheet } from './DocumentDownloadSheet.jsx';
 import {
   depositNoticeStatusLabel, formatMoney, formatThaiDate, quotationRecipientLabel, quotationStatusLabel,
 } from '../../utils/format.js';
@@ -250,7 +251,14 @@ export function DealDocumentRegister({
     downloadBlob(blob, q.number ?? `quotation-${q.id}`, format);
   }
 
+  // The PDFs of a deposit notice / remaining invoice open the download sheet (which files go in); Excel is notice-only.
+  const [pdfSheet, setPdfSheet] = useState(null); // { kind: 'deposit' | 'remaining', row }
+
   async function downloadDepositNotice(doc, format) {
+    if (format === 'pdf') {
+      setPdfSheet({ kind: 'deposit', row: doc });
+      return;
+    }
     const key = `deposit-${doc.id}-${format}`;
     const blob = await handleDownload(key, () => (format === 'pdf'
       ? api.depositNotices.downloadPdf(doc.id)
@@ -267,10 +275,17 @@ export function DealDocumentRegister({
     downloadBlob(blob, q.number ?? `quotation-${q.id}`, format);
   }
 
-  async function downloadRemainingInvoice(v) {
-    const key = `remaining-${v.id}-pdf`;
-    const blob = await handleDownload(key, () => api.storedRemainingInvoices.download(v.id));
-    downloadBlob(blob, v.docNumber || `draft-${v.id}`, 'pdf');
+  function downloadRemainingInvoice(v) {
+    setPdfSheet({ kind: 'remaining', row: v });
+  }
+
+  async function downloadFromSheet(choice) {
+    const { kind, row } = pdfSheet;
+    const deposit = kind === 'deposit';
+    const blob = await handleDownload(`${kind}-${row.id}-pdf`, () => (deposit
+      ? api.depositNotices.downloadPdf(row.id, choice)
+      : api.storedRemainingInvoices.download(row.id, choice)));
+    downloadBlob(blob, deposit ? depositNoticeFileName(row, ticketId) : (row.docNumber || `draft-${row.id}`), 'pdf');
     warnIfBundleSkipped(blob, showToast);
   }
 
@@ -497,6 +512,10 @@ export function DealDocumentRegister({
         </RegisterSection>
       ) : null}
 
+      {pdfSheet ? (
+        <DocumentDownloadSheet kind={pdfSheet.kind} documentId={pdfSheet.row.id} ticketId={ticketId}
+          reference={pdfSheet.row.reference} onClose={() => setPdfSheet(null)} onDownload={downloadFromSheet} />
+      ) : null}
       {remainingInvoiceDialogOpen ? (
         <RemainingInvoiceDialog ticketId={ticketId} canWrite={canWriteRemainingInvoice} showToast={showToast}
           onClose={() => setRemainingInvoiceDialogOpen(false)} />

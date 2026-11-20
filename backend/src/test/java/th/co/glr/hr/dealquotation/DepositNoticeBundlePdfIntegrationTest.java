@@ -149,6 +149,37 @@ class DepositNoticeBundlePdfIntegrationTest extends DirectQuotationDealTestBase 
             .isEqualTo(lastPage(quotationService.renderPdf(quotation.id(), salesActor)));
     }
 
+    // ── the download sheet's choice ─────────────────────────────────────────────────────────────
+
+    /** Defaults are the quotation + every PO; a choice (PO off, another file on, quotation off) is what the PDF holds,
+     * is remembered for the next download with no parameters, and a foreign attachment id is a 400. */
+    @Test
+    void theDownloadSheetChoice_picksTheFiles_andIsRemembered() throws Exception {
+        Deal deal = confirmedDepositDeal();
+        long id = deal.notice().id();
+        attachPo(deal.ticketId(), onePagePdf(PO_SENTINEL));
+        long other = attachFile(deal.ticketId(), "x.pdf", "application/pdf", onePagePdf("OTHER-SENTINEL"), AttachType.OTHER);
+        int quotationPages = pageCount(quotationService.renderPdf(deal.quotation().id(), salesActor));
+
+        List<String> defaults = pageTexts(depositNoticeService.getPdfBundle(id, salesActor).pdf());
+        assertThat(firstPageContaining(defaults, PO_SENTINEL)).isGreaterThanOrEqualTo(1);
+        assertThat(firstPageContaining(defaults, "OTHER-SENTINEL")).as("an OTHER file is unticked").isEqualTo(-1);
+        assertThat(defaults).hasSize(1 + 1 + quotationPages);
+
+        List<String> chosen = pageTexts(depositNoticeService.getPdfBundle(id, salesActor, false, List.of(other)).pdf());
+        assertThat(firstPageContaining(chosen, "OTHER-SENTINEL")).isGreaterThanOrEqualTo(1);
+        assertThat(firstPageContaining(chosen, PO_SENTINEL)).isEqualTo(-1);
+        assertThat(chosen).as("notice + the ticked file, no quotation").hasSize(2);
+
+        assertThat(pageTexts(depositNoticeService.getPdfBundle(id, salesActor).pdf()))
+            .as("remembered").hasSize(2);
+        assertThat(depositNoticeService.bundleSelection(id, salesActor).attachmentIds()).containsExactly(other);
+
+        long foreign = attachFile(pipelineTicket(salesActor), "f.pdf", "application/pdf", onePagePdf("F"), AttachType.OTHER);
+        assertStatus(org.springframework.http.HttpStatus.BAD_REQUEST,
+            () -> depositNoticeService.getPdfBundle(id, salesActor, null, List.of(foreign)));
+    }
+
     // ── customer header follows the quotation's party ───────────────────────────────────────
 
     /** A second BUYER party (another customer) and the quotation re-addressed to it. */
@@ -279,10 +310,14 @@ class DepositNoticeBundlePdfIntegrationTest extends DirectQuotationDealTestBase 
     }
 
     private void attachPoFile(long ticketId, String name, String mime, byte[] bytes) {
+        attachFile(ticketId, name, mime, bytes, AttachType.PO);
+    }
+
+    private long attachFile(long ticketId, String name, String mime, byte[] bytes, String type) {
         FileStorageService.StoredFile stored = fileStorage.store("tickets", ticketId,
             new MockMultipartFile("file", name, mime, bytes), Set.of());
-        attachments.save(ticketId, null, name, stored.filePath(), stored.mimeType(), stored.fileSize(),
-            AttachType.PO, salesActor.id());
+        return attachments.save(ticketId, null, name, stored.filePath(), stored.mimeType(), stored.fileSize(),
+            type, salesActor.id()).id();
     }
 
     private static byte[] onePagePdf(String text) throws Exception {

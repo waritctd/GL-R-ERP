@@ -112,11 +112,21 @@ public class DepositNoticeController {
         return Map.of("depositNotice", service.issue(docId, body == null ? null : body.expectedUpdatedAt(), user));
     }
 
+    /** What the PDF download sheet starts from: the remembered choice, else the quotation and every PO. */
+    @GetMapping("/deposit-notices/{docId}/bundle-selection")
+    DocumentBundle.Selection bundleSelection(@PathVariable long docId, HttpSession session) {
+        return service.bundleSelection(docId, sessions.requireUser(session));
+    }
+
     // File download
     @GetMapping("/deposit-notices/{docId}/file")
     ResponseEntity<byte[]> file(
         @PathVariable long docId,
         @RequestParam(defaultValue = "pdf") String format,
+        // PDF only: the download sheet's choice. quotation=false leaves the quotation out; attachments= is a comma
+        // list of this deal's attachment ids ("" = none). Either one is remembered as the notice's last choice.
+        @RequestParam(required = false) Boolean quotation,
+        @RequestParam(required = false) String attachments,
         HttpSession session
     ) {
         UserPrincipal user = sessions.requireUser(session);
@@ -131,7 +141,7 @@ public class DepositNoticeController {
                     "application/vnd.ms-excel"))
                 .body(bytes);
         }
-        DocumentBundle.Result bundle = service.getPdfBundle(docId, user);
+        DocumentBundle.Result bundle = service.getPdfBundle(docId, user, quotation, DocumentBundle.parseIds(attachments));
         String filename = (doc.docNumber() != null ? doc.docNumber() : "draft") + ".pdf";
         return ResponseEntity.ok()
             .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + filename + "\"")
