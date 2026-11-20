@@ -170,7 +170,10 @@ public class DepositNoticeService {
 
         // Header autofill (this branch's fix): customerTaxId/customerAddress/projectName were never populated for a
         // deal created through the pricing-request chain — only customerName had a ticket-summary fallback.
-        CustomerHeaderInfo header = resolveCustomerHeader(s, req.customerTaxId(), req.customerAddress(), req.projectName());
+        // The customer is the one the referenced quotation is addressed to (a deal can hold several BUYER parties).
+        String headerReference = req.reference() == null && linesFromGoverning ? governing.number() : req.reference();
+        CustomerHeaderInfo header = resolveCustomerHeader(s, req.customerTaxId(), req.customerAddress(), req.projectName(),
+            ticketId, headerReference);
 
         // The deposit percent is the one the
         // source quotation's PDF printed: a legacy quotation 50% (the constant its PDF prints), a
@@ -187,7 +190,7 @@ public class DepositNoticeService {
         String reference = req.reference() == null && linesFromGoverning ? governing.number() : req.reference();
 
         var effective = new DepositNoticeDraftRequest(
-            req.customerName() != null ? req.customerName() : s.customerName(),
+            header.customerNameOr(req.customerName() != null ? req.customerName() : s.customerName()),
             header.taxId(), header.address(),
             header.projectName(), reference,
             effectiveDepositPercent,
@@ -714,7 +717,7 @@ public class DepositNoticeService {
         List<DepositNoticeDto> notices = docs.findByTicket(ticketId);
         ResolvedRemainingInvoice resolved = resolveRemainingInvoice(
             ticketId, ticket, s, quotationId, quotationCandidates, notices);
-        CustomerHeaderInfo header = resolveCustomerHeader(s, null, null, null);
+        CustomerHeaderInfo header = resolveCustomerHeader(s, null, null, null, ticketId, resolved.defaultReference());
         return new RemainingInvoiceSnapshot(s, header, resolved);
     }
 
@@ -1406,7 +1409,13 @@ public class DepositNoticeService {
      * the branch (B7 already shows it in parens) — {@code address} itself is what createDraft
      * builds (address+branch joined) and must not change. */
     // Package-private (not private) — reused by RemainingInvoiceService's own customer snapshot.
-    record CustomerHeaderInfo(String taxId, String address, String addressOnly, String branch, String projectName) {}
+    record CustomerHeaderInfo(String taxId, String address, String addressOnly, String branch, String projectName,
+                              String customerName) {
+        /** The quotation party's customer name when the header came from one, else {@code fallback} (the deal's). */
+        String customerNameOr(String fallback) {
+            return customerName != null ? customerName : fallback;
+        }
+    }
 
     /**
      * Single source of truth for "where does a document's customer header come from", used by
@@ -1423,13 +1432,34 @@ public class DepositNoticeService {
     // Package-private (not private) — see resolveRemainingInvoiceSnapshot above.
     CustomerHeaderInfo resolveCustomerHeader(TicketSummaryDto s,
             String reqTaxId, String reqAddress, String reqProjectName) {
+        return resolveCustomerHeader(s, reqTaxId, reqAddress, reqProjectName, s.id(), null);
+    }
+
+    /** As above, but when {@code quotationNumber} names a new-engine quotation addressed to a party whose customer is
+     * (any BUYER party, headline or not), the name / tax id / branch / address come ONLY from THAT customer: typed values
+     * are ignored. Anything else (no number, a legacy number, no party) behaves exactly as the 4-argument form. */
+    CustomerHeaderInfo resolveCustomerHeader(TicketSummaryDto s,
+            String reqTaxId, String reqAddress, String reqProjectName, long ticketId, String quotationNumber) {
+        Long customerId = s.customerId();
+        String partyCustomerName = null;
         String customerTaxId = blankToNull(reqTaxId);
         String customerAddress = blankToNull(reqAddress);
+        if (quotationNumber != null && !quotationNumber.isBlank()) {
+            Long partyCustomerId = docs.findQuotationPartyCustomerId(ticketId, quotationNumber).orElse(null);
+            CustomerDto party = partyCustomerId == null ? null : customers.findById(partyCustomerId).orElse(null);
+            if (party != null) {
+                // the quotation's customer is the only source: typed values do not win
+                customerId = partyCustomerId;
+                partyCustomerName = blankToNull(party.name());
+                customerTaxId = null;
+                customerAddress = null;
+            }
+        }
         String addressOnly = null;
         String projectName = blankToNull(reqProjectName);
         String branch = null;
-        if ((customerTaxId == null || customerAddress == null) && s.customerId() != null) {
-            CustomerDto customer = customers.findById(s.customerId()).orElse(null);
+        if ((customerTaxId == null || customerAddress == null) && customerId != null) {
+            CustomerDto customer = customers.findById(customerId).orElse(null);
             if (customer != null) {
                 branch = blankToNull(customer.branch());
                 addressOnly = blankToNull(customer.address());
@@ -1450,7 +1480,7 @@ public class DepositNoticeService {
         if (projectName == null) {
             projectName = blankToNull(s.projectName());
         }
-        return new CustomerHeaderInfo(customerTaxId, customerAddress, addressOnly, branch, projectName);
+        return new CustomerHeaderInfo(customerTaxId, customerAddress, addressOnly, branch, projectName, partyCustomerName);
     }
 
     /** A client line may only echo what the notice stores: its amount counts only when a stored line has the same

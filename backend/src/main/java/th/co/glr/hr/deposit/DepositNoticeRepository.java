@@ -79,6 +79,19 @@ public class DepositNoticeRepository {
         );
     }
 
+    /** The notice's customer is the QUOTATION's party customer whenever the reference names a new-engine quotation of
+     * this deal that has a party (a deal can hold several BUYER parties; the stored header may name the headline one).
+     * The stored columns are used only when no such quotation resolves (legacy reference, no party). */
+    private static final String QUOTATION_CUSTOMER_JOIN = """
+        LEFT JOIN LATERAL (
+            SELECT c.name, c.tax_id, c.address, c.branch
+              FROM sales.quotation q
+              JOIN sales.deal_party dp ON dp.party_id = q.party_id
+              JOIN customers.customer c ON c.customer_id = dp.customer_id
+             WHERE q.ticket_id = d.ticket_id AND q.number = d.reference AND q.origin IS NOT NULL
+             ORDER BY q.quotation_id DESC LIMIT 1) qc ON TRUE
+        """;
+
     // ── Deposit notice CRUD ─────────────────────────────────────────────────────────
 
     public Optional<DepositNoticeDto> findById(long docId) {
@@ -86,7 +99,10 @@ public class DepositNoticeRepository {
             """
             SELECT d.deposit_notice_id, d.ticket_id, d.doc_type, d.version, d.doc_number,
                    d.issue_date, d.status,
-                   d.customer_name, d.customer_tax_id, d.customer_address,
+                   CASE WHEN qc.name IS NOT NULL THEN qc.name ELSE d.customer_name END AS customer_name,
+                   CASE WHEN qc.name IS NOT NULL THEN qc.tax_id ELSE d.customer_tax_id END AS customer_tax_id,
+                   CASE WHEN qc.name IS NOT NULL THEN NULLIF(concat_ws(' ', NULLIF(qc.address, ''), NULLIF(qc.branch, '')), '')
+                        ELSE d.customer_address END AS customer_address,
                    d.project_name, d.reference, d.currency,
                    d.deposit_percent, d.subtotal, d.deposit_amount,
                    d.vat_percent, d.vat_amount, d.total_payable,
@@ -94,6 +110,7 @@ public class DepositNoticeRepository {
                    d.issued_by_name, d.preparer_name, d.preparer_id,
                    d.created_at, d.updated_at
               FROM sales.deposit_notice d
+              """ + QUOTATION_CUSTOMER_JOIN + """
              WHERE d.deposit_notice_id = :id
             """,
             Map.of("id", docId),
@@ -110,7 +127,10 @@ public class DepositNoticeRepository {
             """
             SELECT d.deposit_notice_id, d.ticket_id, d.doc_type, d.version, d.doc_number,
                    d.issue_date, d.status,
-                   d.customer_name, d.customer_tax_id, d.customer_address,
+                   CASE WHEN qc.name IS NOT NULL THEN qc.name ELSE d.customer_name END AS customer_name,
+                   CASE WHEN qc.name IS NOT NULL THEN qc.tax_id ELSE d.customer_tax_id END AS customer_tax_id,
+                   CASE WHEN qc.name IS NOT NULL THEN NULLIF(concat_ws(' ', NULLIF(qc.address, ''), NULLIF(qc.branch, '')), '')
+                        ELSE d.customer_address END AS customer_address,
                    d.project_name, d.reference, d.currency,
                    d.deposit_percent, d.subtotal, d.deposit_amount,
                    d.vat_percent, d.vat_amount, d.total_payable,
@@ -118,6 +138,7 @@ public class DepositNoticeRepository {
                    d.issued_by_name, d.preparer_name, d.preparer_id,
                    d.created_at, d.updated_at
               FROM sales.deposit_notice d
+              """ + QUOTATION_CUSTOMER_JOIN + """
              WHERE d.ticket_id = :ticketId
              ORDER BY d.version DESC
             """,
@@ -432,6 +453,16 @@ public class DepositNoticeRepository {
                     .addValue("amount",        amount)
             );
         }
+    }
+
+    /** The customer of the party a new-engine quotation (this deal, this number) is addressed to; empty for a legacy
+     * number or a quotation with no party. A deal can hold several BUYER parties, so this is not always the deal's. */
+    public Optional<Long> findQuotationPartyCustomerId(long ticketId, String number) {
+        return jdbc.queryForList("""
+            SELECT dp.customer_id FROM sales.quotation q JOIN sales.deal_party dp ON dp.party_id = q.party_id
+             WHERE q.ticket_id = :t AND q.number = :n AND q.origin IS NOT NULL
+             ORDER BY q.quotation_id DESC LIMIT 1
+            """, Map.of("t", ticketId, "n", number), Long.class).stream().findFirst();
     }
 
     /** The new-engine (origin set) quotation of this deal with this number: the one a notice's reference names. */

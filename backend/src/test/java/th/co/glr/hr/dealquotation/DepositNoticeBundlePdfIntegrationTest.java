@@ -149,6 +149,58 @@ class DepositNoticeBundlePdfIntegrationTest extends DirectQuotationDealTestBase 
             .isEqualTo(lastPage(quotationService.renderPdf(quotation.id(), salesActor)));
     }
 
+    // ── customer header follows the quotation's party ───────────────────────────────────────
+
+    /** A second BUYER party (another customer) and the quotation re-addressed to it. */
+    private th.co.glr.hr.customer.CustomerDto addressToSecondBuyer(long ticketId, long quotationId) {
+        var buyer = customers.create("คุณมะนาว", "0100000000444", "44 ถนนทดสอบ", "สนญ.", "02-000-0444");
+        Long partyId = jdbc.queryForObject("INSERT INTO sales.deal_party (ticket_id, customer_id, role, status)"
+            + " VALUES (:t, :c, 'BUYER', 'QUOTED') RETURNING party_id",
+            java.util.Map.of("t", ticketId, "c", buyer.id()), Long.class);
+        jdbc.update("UPDATE sales.quotation SET party_id = :p WHERE quotation_id = :id",
+            java.util.Map.of("p", partyId, "id", quotationId));
+        return buyer;
+    }
+
+    /** A deal with two BUYER parties: the notice built from the second party's quotation names THAT customer, not the
+     * deal's headline one. */
+    @Test
+    void noticeCustomerComesFromTheReferencedQuotationsParty() throws Exception {
+        long ticketId = quotationOnlyTicket(salesActor);
+        DealQuotationDto quotation = approvedDirectQuotation(ticketId, salesActor);
+        confirmer.confirmOrderFromDirectQuotation(quotation.id(), salesActor);
+        var buyer = addressToSecondBuyer(ticketId, quotation.id());
+
+        DepositNoticeDto notice = depositNoticeService.createDraft(ticketId,
+            new DepositNoticeDraftRequest(null, null, null, null, null, null, null, null), salesActor);
+
+        assertThat(notice.reference()).isEqualTo(quotation.number());
+        assertThat(notice.customerName()).isEqualTo(buyer.name());
+        assertThat(notice.customerTaxId()).isEqualTo(buyer.taxId());
+        assertThat(notice.customerAddress()).contains("44 ถนนทดสอบ");
+        assertThat(notice.customerName()).isNotEqualTo(customer.name());
+
+        // an already-stored notice naming the headline customer still reads and prints the quotation's customer
+        jdbc.update("UPDATE sales.deposit_notice SET customer_name = :n, customer_tax_id = '999' WHERE deposit_notice_id = :id",
+            java.util.Map.of("n", customer.name(), "id", notice.id()));
+        assertThat(depositNoticeService.getById(notice.id(), salesActor).customerName()).isEqualTo(buyer.name());
+        assertThat(pageTexts(depositNoticeService.getPdfBundle(notice.id(), salesActor).pdf()).get(0))
+            .contains(buyer.name()).doesNotContain(customer.name());
+    }
+
+    @Test
+    void remainingInvoiceCustomerComesFromTheQuotationsParty() {
+        long ticketId = quotationOnlyTicket(salesActor);
+        DealQuotationDto quotation = approvedZeroDepositQuotation(ticketId);
+        confirmer.confirmOrderFromDirectQuotation(quotation.id(), salesActor);
+        var buyer = addressToSecondBuyer(ticketId, quotation.id());
+
+        RemainingInvoiceDocumentDto invoice = remainingInvoiceService.createDraft(ticketId, null, salesActor);
+
+        assertThat(invoice.customerName()).isEqualTo(buyer.name());
+        assertThat(invoice.customerTaxId()).isEqualTo(buyer.taxId());
+    }
+
     // ── fixtures ──────────────────────────────────────────────────────────────────────────────
 
     private record Deal(long ticketId, DealQuotationDto quotation, DepositNoticeDto notice) {}

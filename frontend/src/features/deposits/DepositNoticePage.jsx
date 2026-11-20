@@ -629,6 +629,8 @@ export function DepositNoticePage({ ticketId, onBack, showToast }) {
   const noticePercent = Math.round(Number(form.depositPercent) * 100);
   // A quotation with no % stored means the 30% default (as everywhere else).
   const quotationPercent = referencedQuotation ? (referencedQuotation.depositPercent ?? 30) : null;
+  // A quotation addressed to a party names the customer: the header fields follow it (the server ignores typed values).
+  const customerFromQuotation = referencedQuotation?.partyId != null;
   const percentDiffers = !locked && form.depositPercent !== '' && quotationPercent != null
     && quotationPercent !== noticePercent;
   const subtotalDiffers = !locked && referencedQuotation != null
@@ -756,7 +758,12 @@ export function DepositNoticePage({ ticketId, onBack, showToast }) {
               </div>
             ) : (
               <div className="grid grid-cols-2 gap-3 mobile:grid-cols-1">
-                <div className="relative col-span-full">
+                {customerFromQuotation ? (
+                  <p className="col-span-full m-0 text-sm text-text-muted" data-testid="customer-from-quotation">
+                    ชื่อ เลขผู้เสียภาษี และที่อยู่ดึงจากใบเสนอราคา {referencedQuotation.number} (แก้ไม่ได้)
+                  </p>
+                ) : null}
+                <div className={customerFromQuotation ? 'hidden' : 'relative col-span-full'}>
                   <FormField label="ค้นหาลูกค้า (master)" htmlFor="doc-customer-search">
                     <input
                       id="doc-customer-search"
@@ -782,17 +789,17 @@ export function DepositNoticePage({ ticketId, onBack, showToast }) {
                   <input
                     id="doc-customer-name"
                     ref={(el) => { fieldRefs.current.customerName = el; }}
-                    value={form.customerName}
+                    value={form.customerName} readOnly={customerFromQuotation}
                     onChange={(e) => setField('customerName', e.target.value)} placeholder="บริษัท…"
                   />
                 </FormField>
                 <FormField label="เลขประจำตัวผู้เสียภาษี" htmlFor="doc-customer-tax">
-                  <input id="doc-customer-tax" value={form.customerTaxId}
+                  <input id="doc-customer-tax" value={form.customerTaxId} readOnly={customerFromQuotation}
                     onChange={(e) => setField('customerTaxId', e.target.value)} placeholder="0000000000000" />
                 </FormField>
                 <div className="col-span-full">
                   <FormField label="ที่อยู่" htmlFor="doc-customer-address">
-                    <textarea id="doc-customer-address" rows={2} value={form.customerAddress}
+                    <textarea id="doc-customer-address" rows={2} value={form.customerAddress} readOnly={customerFromQuotation}
                       onChange={(e) => setField('customerAddress', e.target.value)} placeholder="ที่อยู่…" className="resize-y" />
                   </FormField>
                 </div>
