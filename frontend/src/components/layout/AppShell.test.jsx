@@ -77,11 +77,10 @@ describe('AppShell navigation (role-scoped views)', () => {
     expect(screen.getByText('คิวขอราคา')).toBeTruthy();
   });
 
-  // งานนำเข้า's audience is canActOnFulfilment {import, ceo} — deliberately NARROWER than its คิวขอราคา
-  // neighbour, which also admits sales_manager. Wrong-way-round: the refusals are what matter, since a nav item
-  // pointing at a page whose every button 403s is worse than no nav item.
-  it('shows การขนส่ง (/fulfilment) to import and ceo only', async () => {
-    for (const role of ['sales', 'sales_manager', 'account', 'hr', 'employee']) {
+  // การขนส่ง's actors are canActOnFulfilment {import, ceo}; sales_manager and a read-all holder open it read only (v2.3.0).
+  // Wrong-way-round: the refusals are what matter, since a nav item pointing at a page the guard refuses is worse than no item.
+  it('shows การขนส่ง (/fulfilment) to import, ceo and the sales manager only', async () => {
+    for (const role of ['sales', 'account', 'hr', 'employee']) {
       const { unmount } = renderShell({ role, employeeId: 4, name: 'ทดสอบ', email: `${role}@test.local` });
       await screen.findByText('เนื้อหา');
       expect(screen.queryByText('การขนส่ง'), `${role} must not see การขนส่ง`).toBeNull();
@@ -91,6 +90,27 @@ describe('AppShell navigation (role-scoped views)', () => {
     renderShell({ role: 'ceo', employeeId: 1, name: 'ซีอีโอ ทดสอบ', email: 'ceo@test.local' });
     await screen.findByText('เนื้อหา');
     expect(screen.getByText('การขนส่ง')).toBeTruthy();
+  });
+
+  // v2.3.0 read-all: the 7 oversight pages show for a sales manager and a flag holder on ANY role but import/account,
+  // never the Express receipts or commissions; the same role without the flag keeps its menu.
+  const READER_HREFS = ['/tickets', '/quotations', '/visits', '/catalog', '/pricing-requests', '/fulfilment', '/finance'];
+  const OVERSIGHT_HREFS = [...READER_HREFS, '/finance/receipts-import', '/commissions'];
+  it('shows the seven oversight pages to a flagged warehouse and qc, not receipts or commissions', async () => {
+    for (const role of ['warehouse', 'qc']) {
+      const { unmount } = renderShell({ role, employeeId: 4, name: 'ทดสอบ', email: `${role}@test.local`, readAllSales: true });
+      await screen.findByText('เนื้อหา');
+      const hrefs = hrefsIn(launcherNav());
+      expect(hrefs.filter((h) => OVERSIGHT_HREFS.includes(h)).sort(), `${role} flagged`).toEqual([...READER_HREFS].sort());
+      unmount();
+    }
+    const { unmount } = renderShell({ role: 'qc', employeeId: 4, name: 'ทดสอบ', email: 'qc@test.local' });
+    await screen.findByText('เนื้อหา');
+    expect(hrefsIn(launcherNav()).filter((h) => OVERSIGHT_HREFS.includes(h))).toEqual([]);
+    unmount();
+    renderShell({ role: 'import', employeeId: 4, name: 'ทดสอบ', email: 'import@test.local', readAllSales: true });
+    await screen.findByText('เนื้อหา');
+    expect(screen.queryByText('งานทั้งหมด')).toBeNull();
   });
 
   it('keeps งานทั้งหมด for sales', async () => {
@@ -268,6 +288,22 @@ describe('AppShell navigation under the release lockdown', () => {
     // The settings section survives for hr (exempt from the lock).
     expect(within(launcherNav()).getByText('ตั้งค่า')).toBeTruthy();
     expect(hrefsIn(launcherNav())).toEqual(expect.arrayContaining(['/settings/attendance-calendar', '/settings/leave-policy']));
+  });
+
+  // The lock filter and canAccessPath share isReaderPath: a locked qc/warehouse WITH the flag keeps exactly the seven
+  // pages, one WITHOUT it stays confined (no nav link to a refused page, no reachable page without a link).
+  it('keeps the seven oversight pages for a flagged qc under the lock, and none without the flag', async () => {
+    const { unmount } = await renderLockedShell({ role: 'qc', employeeId: 7, name: 'คิวซี ทดสอบ', email: 'qc@test.local', readAllSales: true });
+    await screen.findByText('เนื้อหา');
+    const hrefs = hrefsIn(launcherNav());
+    expect(hrefs).toEqual(expect.arrayContaining(['/tickets', '/quotations', '/visits', '/catalog', '/pricing-requests', '/fulfilment', '/finance']));
+    expect(hrefs).not.toContain('/finance/receipts-import');
+    expect(hrefs).not.toContain('/commissions');
+    unmount();
+    await renderLockedShell({ role: 'warehouse', employeeId: 8, name: 'คลัง ทดสอบ', email: 'wh@test.local' });
+    await screen.findByText('เนื้อหา');
+    expect(screen.queryByText('งานทั้งหมด')).toBeNull();
+    expect(screen.queryByText('งานการเงิน')).toBeNull();
   });
 
   it('changes nothing when the flag is off', async () => {

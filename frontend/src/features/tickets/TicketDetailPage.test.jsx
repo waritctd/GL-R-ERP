@@ -1437,6 +1437,41 @@ describe('TicketDetailPage', () => {
     });
   });
 
+  // v2.3.0 read-all grant: a flagged warehouse reads the full page like a sales manager, keeps the round review buttons
+  // (D9), and gets no write control: no comment box, no activity form, no expected-payment editor.
+  describe('oversight reader (read-all grant)', () => {
+    const reader = { id: 31, employeeId: 31, name: 'คลัง ดูทุกดีล', role: 'warehouse', readAllSales: true };
+
+    it('reads the deal tabs, the stored IRs and the activities, but gets no comment box, activity form or expected-payment editor', async () => {
+      renderTicketDetailPage(reader);
+      await screen.findByTestId('deal-state-header');
+      await waitFor(() => expect(api.storedImportRequests.listForTicket).toHaveBeenCalledWith(701));
+      await waitFor(() => expect(api.tickets.listActivities).toHaveBeenCalled());
+      expect(await screen.findByRole('tab', { name: /ส่งของ/ })).not.toBeNull();
+      expect(screen.queryByRole('button', { name: /\+ บันทึก/ })).toBeNull();
+      fireEvent.click(screen.getByRole('tab', { name: /เงิน/ }));
+      await act(async () => { await new Promise((resolve) => { setTimeout(resolve, 50); }); });
+      expect(screen.queryByRole('button', { name: /เพิ่มเงินที่คาดว่าจะเข้า/ })).toBeNull();
+    });
+
+    it('a sales manager keeps the note composer (positive control)', async () => {
+      renderTicketDetailPage({ id: 11, employeeId: 11, name: 'ผจก.ขาย', role: 'sales_manager' });
+      expect(await screen.findByRole('button', { name: /\+ บันทึก/ })).not.toBeNull();
+    });
+
+    it('keeps the round review buttons on the ship tab, from the server\'s round.viewer', async () => {
+      const sent = {
+        id: 5, roundNo: 1, status: 'SENT', quotationId: 11, quotationNumber: 'QT-2026-0001-1', note: null, returnReasonCodes: [],
+        returnReasonText: null, requestedByName: 'คุณขาย', sentAt: '2026-11-19T03:42:00Z', forwardedByName: null, forwardedAt: null,
+        invoice: null, lines: [{ itemId: 1, description: 'กระเบื้อง', unit: 'แผ่น', coveredQty: 300, deliveredQty: 0 }], files: [],
+        viewer: { canEdit: false, canSend: false, canReview: true, canIssue: false, canRecordDelivery: false },
+      };
+      api.deliveryRequests.list.mockResolvedValue({ order: { ticketId: 701, code: 'PR-2026-0701', displayCode: 'PR-2026-0701-1', orderNo: 1, customerName: 'ลูกค้า', projectName: null, parentCode: null }, rounds: [sent], approvedQuotations: [], canStart: false, startBlockedReason: 'x' });
+      renderTicketDetailPageAtRoute(['/tickets/701?tab=ship'], reader);
+      expect(await screen.findByTestId('forward-button')).not.toBeNull();
+    });
+  });
+
   // The download gate is remainingInvoiceReadiness.js's rule (stock-delivered and imported deals), sales owner only.
   describe('remaining-invoice download gate', () => {
     const INVOICE_BUTTON = 'ดาวน์โหลดใบแจ้งหนี้ส่วนที่เหลือ';
