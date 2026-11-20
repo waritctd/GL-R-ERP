@@ -3954,9 +3954,12 @@ function mockConfirmIfNeeded(ticket, quotationId, user) {
   const row = mockDealQuotations.find((q) => q.id === chosenId);
   if (row.docStatus !== 'APPROVED') fail(`ยืนยันคำสั่งซื้อได้เฉพาะใบเสนอราคาที่อนุมัติแล้วเท่านั้น (ปัจจุบัน: ${row.docStatus})`, 409);
   if ((ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE') fail(`งานไม่ได้อยู่ในสถานะ ACTIVE (${ticket.lifecycle}) จึงยืนยันคำสั่งซื้อไม่ได้`, 409);
-  if (ticket.status !== 'draft') fail(`ยืนยันคำสั่งซื้อไม่ได้ — สถานะงาน (${ticket.status}) ผ่านขั้นออกใบเสนอราคาไปแล้ว`, 409);
+  // The first request of a pre-portal deal accepts any open ticket status and leaves it as it is.
+  if (ticket.status === 'closed' || ticket.status === 'cancelled') fail(`ยืนยันคำสั่งซื้อไม่ได้ — งานนี้ปิดหรือยกเลิกแล้ว (${ticket.status})`, 409);
   const before = ticket.salesStage;
-  applyMockOrderConfirmation(ticket, row, user, 'draft');
+  const statusBefore = ticket.status;
+  applyMockOrderConfirmation(ticket, row, user, statusBefore);
+  if (statusBefore !== 'draft') ticket.status = statusBefore;
   if (dealStageIndex(ticket.salesStage) < dealStageIndex(before)) {
     pushEvent(ticket, user, 'STAGE_CHANGED', ticket.salesStage, before, 'คงขั้นเดิมของงานที่เดินมาก่อนใช้ระบบ');
     ticket.salesStage = before;
@@ -21313,8 +21316,8 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
         for (let i = mockDeliveryRequests.length - 1; i >= 0; i -= 1) {
           if (mockDeliveryRequests[i].ticketId === ticket.id) mockDeliveryRequests.splice(i, 1);
         }
-        db.users.filter((u) => u.active && u.role === 'warehouse').forEach((u) => addNotification(u.id, ticket.id, ticket.code,
-          'DELIVERY_REQUEST_RETURNED', `${user.name} ยกเลิกการยืนยันคำสั่งซื้อ คำขอส่งของรอบที่ ${removedRounds.join(', ')} ถูกลบ\n${ticket.code}`, `/tickets/${ticket.id}`));
+        db.users.filter((u) => u.active && u.role === 'warehouse').forEach((u) => removedRounds.forEach((n) => addNotification(u.id, ticket.id, ticket.code,
+          'DELIVERY_REQUEST_REMOVED', `${ticket.code} รอบส่งที่ ${n} · ฝ่ายขายยกเลิกการยืนยันคำสั่งซื้อ คำขอนี้ถูกยกเลิก`, `/tickets/${ticket.id}`)));
       }
       let draftNotices = 0;
       for (let i = mockDepositNotices.length - 1; i >= 0; i -= 1) {

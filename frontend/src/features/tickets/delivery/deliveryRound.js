@@ -41,7 +41,7 @@ export const ROUND_STEPS = [
   { key: 'request', label: 'ขอออกใบกำกับภาษี', hint: 'ฝ่ายขายส่งเอกสารให้คลัง' },
   { key: 'review', label: 'คลังตรวจเอกสาร', hint: null },
   { key: 'invoice', label: 'ออกใบกำกับภาษี', hint: null },
-  { key: 'deliver', label: 'ส่งของ', hint: 'บันทึกได้เมื่อมีใบกำกับภาษีของรอบนี้' },
+  { key: 'deliver', label: 'ส่งของ', hint: 'บันทึกได้หลังออกใบกำกับ หรือบันทึกก่อนพร้อมหมายเหตุ' },
 ];
 
 // How many of the four steps are finished, per status. A DRAFT or RETURNED round is still step 1 (the rep's).

@@ -15,7 +15,7 @@ import { Modal } from '../../../components/common/Modal.jsx';
 import { cn } from '../../../utils/cn.js';
 import { formatMoney } from '../../../utils/format.js';
 import { RemainingInvoiceDialog } from '../RemainingInvoiceDialog.jsx';
-import { fileSizeText, MAX_FILES_PER_ROUND, MAX_UPLOAD_BYTES, useFileOpener } from './deliveryRound.js';
+import { fileSizeText, MAX_FILES_PER_ROUND, MAX_UPLOAD_BYTES, returnReasonText, useFileOpener } from './deliveryRound.js';
 import { PreDepositField, parsePreDeposit, preDepositDateError } from './PreDepositField.jsx';
 import { RoundDocuments, useRoundDocuments } from './RoundDocuments.jsx';
 
@@ -225,6 +225,11 @@ export function DeliveryRequestSheet({ ticketId, order, approvedQuotations, summ
           {/* The buyer is the chosen quotation's customer, never only the deal's headline one (owner rule #65). */}
           {round?.customerName ? <p className="m-0 text-sm text-text-secondary" data-testid="round-buyer">ผู้ซื้อ · {round.customerName}</p> : null}
         </div>
+        {round?.status === 'RETURNED' && returnReasonText(round) ? (
+          <div role="status" className="rounded-md border border-warning-border bg-warning-bg px-3 py-2 text-sm text-text" data-testid="sheet-returned-reason">
+            <b>คลังส่งกลับ:</b> {returnReasonText(round)}
+          </div>
+        ) : null}
         {error ? <p role="alert" className="m-0 text-sm text-danger" data-testid="sheet-error">{error}</p> : null}
         {openFailed && approvedQuotations.length === 0 ? (
           // An order with no approved quotation cannot be asked for: the way forward is the quotation.

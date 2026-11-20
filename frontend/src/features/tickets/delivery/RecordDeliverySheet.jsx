@@ -41,6 +41,7 @@ const itemLines = (items) => items.map((i) => ({
  * note/reference (required, max 500) that goes on the record, the history and the audit bells. */
 export function RecordDeliverySheet({ round = null, order, events = null, ticketId = null, items = [], fulfilmentStatus = null, uninvoicedRound = null, onClose, onDone }) {
   const pickerRef = useRef(null);
+  const cameraRef = useRef(null);
   const noInvoice = round == null;
   const [noteText, setNoteText] = useState('');
   const lines = (round ? round.lines : uninvoicedRound ? uninvoicedRound.lines : itemLines(items)).filter((l) => remainingOf(l) > 0);
@@ -218,13 +219,20 @@ export function RecordDeliverySheet({ round = null, order, events = null, ticket
               <Button type="button" variant="text" className="min-h-12" onClick={() => setProof(null)}>เอาออก</Button>
             </div>
           ) : (
-            <Button type="button" variant="secondary" className="min-h-12 w-full gap-2 border-dashed" data-testid="record-proof-pick" onClick={() => pickerRef.current?.click()}>
-              <Icon name="camera" size={18} />
-              ถ่ายรูปใบส่งของที่เซ็นแล้ว
-            </Button>
+            <>
+              <Button type="button" variant="secondary" className="min-h-12 w-full gap-2 border-dashed" data-testid="record-proof-pick" onClick={() => cameraRef.current?.click()}>
+                <Icon name="camera" size={18} />
+                ถ่ายรูปใบส่งของที่เซ็นแล้ว
+              </Button>
+              <Button type="button" variant="text" className="min-h-12 w-full" data-testid="record-proof-file" onClick={() => pickerRef.current?.click()}>
+                เลือกไฟล์ (รูปหรือ PDF)
+              </Button>
+            </>
           )}
           {proof && proof.size > MAX_UPLOAD_BYTES ? <p role="alert" className="m-0 text-sm text-danger">ไฟล์มีขนาดใหญ่เกินไป (สูงสุด 10 MB)</p> : null}
-          <input ref={pickerRef} type="file" accept="image/*,.pdf" capture="environment" className="sr-only" tabIndex={-1} aria-hidden="true"
+          <input ref={cameraRef} type="file" accept="image/*" capture="environment" className="sr-only" tabIndex={-1} aria-hidden="true"
+            data-testid="record-proof-camera" onChange={(e) => { setProof(e.target.files?.[0] ?? null); e.target.value = ''; }} />
+          <input ref={pickerRef} type="file" accept="image/*,.pdf" className="sr-only" tabIndex={-1} aria-hidden="true"
             data-testid="record-proof-input" onChange={(e) => { setProof(e.target.files?.[0] ?? null); e.target.value = ''; }} />
         </div>
         )}
