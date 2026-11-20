@@ -126,11 +126,11 @@ function setDeal(summary = {}, availableActions = [], extra = {}) {
   });
 }
 
-function renderPage(user = salesOwner, { showToast = vi.fn() } = {}) {
+function renderPage(user = salesOwner, { url = '/tickets/701', showToast = vi.fn() } = {}) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   const utils = render(
     <QueryClientProvider client={queryClient}>
-      <MemoryRouter initialEntries={['/tickets/701']}>
+      <MemoryRouter initialEntries={[url]}>
         <TicketDetailPage user={user} ticketId={701} onBack={vi.fn()} showToast={showToast} />
       </MemoryRouter>
     </QueryClientProvider>,

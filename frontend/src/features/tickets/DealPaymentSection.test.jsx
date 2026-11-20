@@ -373,7 +373,7 @@ describe('DealPaymentSection — ใบแจ้งมัดจำ issue confirm
       ],
     });
     renderSection({
-      summary,
+      summary: summaryOf(),
       paymentReceipts: [{ receiptId: 77, kind: 'BALANCE', amount: 14177.5, source: 'TAX_INVOICE', receiptRef: 'IV2611-0042', receivedAt: '2026-11-19T05:00:00.000Z', recordedByName: 'คุณออกบิล' }],
     });
     await settled();
@@ -388,7 +388,7 @@ describe('DealPaymentSection — ใบแจ้งมัดจำ issue confirm
     api.deliveryRequests.list.mockResolvedValueOnce({
       rounds: [{ id: 6, roundNo: 3, status: 'INVOICED', invoice: { number: 'IV2611-0099', total: 5000, recordedAmount: 0, receiptId: null } }],
     });
-    renderSection({ summary });
+    renderSection({ summary: summaryOf() });
     await settled();
     const row = await screen.findByTestId('round-invoiced-no-receipt');
     expect(row.textContent).toContain('รอบส่งที่ 3 · ใบกำกับ IV2611-0099');

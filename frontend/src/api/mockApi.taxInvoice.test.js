@@ -6,8 +6,18 @@ import { api, patchTicketForTests, receiptSourceForTests } from './mockApi.js';
 const login = (email) => api.auth.login({ email, password: 'demo1234' });
 const pdf = (name) => new File(['%PDF-'], name, { type: 'application/pdf' });
 
+// Deal 18 starts as an old deal (stage before ORDER_RECEIVED), which a first request would mark pre-portal and ask a deposit
+// of. These tests are about the invoice, so the deal is first made an already-confirmed one.
+async function confirmedDeal18() {
+  await login('sales@glr.co.th');
+  const { ticket } = await api.tickets.get(18);
+  if (ticket.events.some((e) => e.kind === 'DEAL_PROMOTED_FROM_QUOTATION')) return;
+  patchTicketForTests(18, { salesStage: 'DELIVERY_SCHEDULING', events: [...ticket.events, { id: 99018, kind: 'DEAL_PROMOTED_FROM_QUOTATION', createdAt: '2026-11-01T03:00:00.000Z' }] });
+}
+
 describe('mockApi delivery rounds — tax invoice', () => {
   it('records the invoice as money received (capped at what is owed), once, for the grant holder only', async () => {
+    await confirmedDeal18();
     patchTicketForTests(18, { quotations: [{ id: 999, docStatus: 'ACCEPTED', totalAmount: 100, issuedAt: '2026-11-01' }] });
     await login('sales@glr.co.th');
     const first = await api.deliveryRequests.list(18);

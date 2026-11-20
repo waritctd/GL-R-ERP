@@ -16592,7 +16592,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       return delay({ attachment: structuredClone(attachment) });
     },
     fileUrl: (id) => `#mock-file-${id}`,
-    fileBlob: async () => new Blob(['mock'], { type: 'text/plain' }),
+    fileBlob: async (id) => new Blob([`mock ${id}`], { type: 'text/plain' }),
     async delete(id) {
       const user = requireSession();
       const idx = mockAttachments.findIndex((a) => a.id === Number(id));

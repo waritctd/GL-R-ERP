@@ -39,6 +39,7 @@ class AttachmentTicketAccessIntegrationTest extends AbstractPostgresIntegrationT
 
     private long ticketId;
     private long attachmentId;
+    private String attachmentPath;
 
     private UserPrincipal salesOwner;
     private UserPrincipal salesOther;
@@ -77,6 +78,7 @@ class AttachmentTicketAccessIntegrationTest extends AbstractPostgresIntegrationT
         // "uploader may always reach their own file" shortcut.
         attachmentId = attachments.save(ticketId, null, stored.fileName(), stored.filePath(),
             stored.mimeType(), stored.fileSize(), "OTHER", ceo.id()).id();
+        attachmentPath = stored.filePath();
     }
 
     // Problem 1: hr held sales-document access it holds nowhere else in the system.
@@ -130,6 +132,20 @@ class AttachmentTicketAccessIntegrationTest extends AbstractPostgresIntegrationT
                 subtotal, deposit_amount, vat_percent, vat_amount, total_payable)
             VALUES (:id, 1, 'ISSUED', 'x', 0.3, 100000.00, 30000.00, 0.07, 2100.00, 32100.00)
             """, Map.of("id", ticketId));
+    }
+
+    private void seedIssuedImportRequest() {
+        long factoryId = jdbc.queryForObject("""
+            INSERT INTO price_catalog.factories (name, country, default_currency)
+            VALUES ('Factory Attach Dead', 'IT', 'EUR') RETURNING factory_id
+            """, Map.of(), Long.class);
+        jdbc.update("""
+            INSERT INTO sales.import_request
+                (ticket_id, factory_id, factory_name, brand, version, status, doc_number, issue_date,
+                 import_step, import_step_at, first_issued_date)
+            VALUES (:t, :f, 'Factory Attach Dead', 'Brand', 1, 'ISSUED', 'IR-ATT-1', CURRENT_DATE,
+                    'CONTACTED', CURRENT_DATE, CURRENT_DATE)
+            """, Map.of("t", ticketId, "f", factoryId));
     }
 
     private void assertCanRead(UserPrincipal who) {
