@@ -225,8 +225,10 @@ class DeliveryRequestIntegrationTest extends AbstractDealDirectQuotationIntegrat
         refusal(() -> rounds.list(ticketId, issuer), HttpStatus.FORBIDDEN);
         jdbc.update("UPDATE hr.employee SET can_read_all_sales = TRUE WHERE employee_id = :id", Map.of("id", issuerId));
         assertThat(rounds.list(ticketId, issuer).rounds()).isEmpty();
-        jdbc.update("UPDATE hr.employee SET can_read_all_sales = FALSE WHERE employee_id = :id", Map.of("id", issuerId));
         rounds.send(rid, null, salesActor);
+        // Once sent the same flagged reader does see the round (so the empty list above was the draft filter, not a blanket no).
+        assertThat(rounds.list(ticketId, issuer).rounds()).singleElement().satisfies(r -> assertThat(r.status()).isEqualTo("SENT"));
+        jdbc.update("UPDATE hr.employee SET can_read_all_sales = FALSE WHERE employee_id = :id", Map.of("id", issuerId));
         refusal(() -> rounds.list(ticketId, issuer), HttpStatus.FORBIDDEN);
         rounds.forward(rid, warehouse);
 

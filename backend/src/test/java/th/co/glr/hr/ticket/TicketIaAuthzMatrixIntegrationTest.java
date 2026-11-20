@@ -1,5 +1,6 @@
 package th.co.glr.hr.ticket;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
@@ -22,6 +23,7 @@ import th.co.glr.hr.attachment.AttachmentRepository;
 import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.audit.AuditLogRepository;
 import th.co.glr.hr.audit.AuditService;
+import th.co.glr.hr.auth.OversightReader;
 import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
@@ -271,6 +273,13 @@ class TicketIaAuthzMatrixIntegrationTest extends AbstractPostgresIntegrationTest
             assertForbidden(() -> ticketService.listActivities(ticketId, who));
             assertForbidden(() -> expected.list(ticketId, who));
         }
+        // The งานทั้งหมด list and board are refused to hr / employee without the flag.
+        var firstPage = th.co.glr.hr.common.PageRequest.resolve(null, null);
+        assertForbidden(() -> ticketService.list(null, hrActor));
+        assertForbidden(() -> ticketService.listPage(null, employeeActor, firstPage));
+        ticketService.addActivity(ticketId, activity, salesOwnerActor);
+        var importBefore = ticketService.listPage(null, importActor, firstPage).items().stream().map(t -> t.id()).toList();
+        var accountBefore = ticketService.listPage(null, accountActor, firstPage).items().stream().map(t -> t.id()).toList();
 
         jdbc.update("UPDATE hr.employee SET can_read_all_sales = TRUE WHERE employee_id IN (:a, :b, :c, :d)",
             Map.of("a", hrActor.id(), "b", employeeActor.id(), "c", salesOtherActor.id(), "d", importActor.id()));
@@ -282,6 +291,14 @@ class TicketIaAuthzMatrixIntegrationTest extends AbstractPostgresIntegrationTest
             assertThatCode(() -> ticketService.requireDealReadAccess(ticketId, who)).doesNotThrowAnyException();
             assertThatCode(() -> ticketService.listActivities(ticketId, who)).doesNotThrowAnyException();
             assertThatCode(() -> expected.list(ticketId, who)).doesNotThrowAnyException();
+            // The deal GET (controller path) keeps the activity facts a reader may open on /activities.
+            assertThat(ticketService.withoutUnreadableActivity(ticketService.get(ticketId, who), who).summary().lastActivityAt())
+                .as("detail lastActivityAt %s", who.role()).isNotNull();
+            // The list and the board show the deal to a flagged reader, not only her own deals (hr, employee and a
+            // non-owning rep alike).
+            assertThat(ticketService.list(null, who)).as("list %s", who.role()).extracting(t -> t.id()).contains(ticketId);
+            assertThat(ticketService.listPage(null, who, firstPage).items()).as("page %s", who.role())
+                .extracting(t -> t.id()).contains(ticketId);
             // The flag is a READ right only.
             assertForbidden(() -> ticketService.comment(ticketId, new CommentRequest("hello"), who));
             assertForbidden(() -> ticketService.addActivity(ticketId, activity, who));
@@ -294,9 +311,13 @@ class TicketIaAuthzMatrixIntegrationTest extends AbstractPostgresIntegrationTest
         assertForbidden(() -> ticketService.requireDealReadAccess(ticketId, importActor));
         assertForbidden(() -> ticketService.listActivities(ticketId, importActor));
         assertForbidden(() -> expected.list(ticketId, importActor));
-        // account keeps its finance-only path even with the flag.
+        // import's list is still the import scope (the deal is not in it), whatever the flag says.
+        assertThat(ticketService.listPage(null, importActor, firstPage).items()).extracting(t -> t.id()).containsExactlyElementsOf(importBefore);
+        // account is not a flag holder: the flag adds nothing, its list stays its own scope and the deal stays refused.
         jdbc.update("UPDATE hr.employee SET can_read_all_sales = TRUE WHERE employee_id = :a", Map.of("a", accountActor.id()));
         assertForbidden(() -> ticketService.get(ticketId, accountActor));
+        assertThat(ticketService.listPage(null, accountActor, firstPage).items()).extracting(t -> t.id()).containsExactlyElementsOf(accountBefore);
+        assertThat(OversightReader.is(accountActor, id -> true)).isFalse();
     }
 
     @Test

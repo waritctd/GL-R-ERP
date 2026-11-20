@@ -196,7 +196,7 @@ public class TicketService {
      * {@link #projectForRole}: only the activity facts are removed there, nothing else about those responses changes.
      */
     public TicketDto withoutUnreadableActivity(TicketDto ticket, UserPrincipal actor) {
-        return withoutUnreadableActivity(ticket, actor.role(), false);
+        return withoutUnreadableActivity(ticket, actor.role(), oversightReader(actor));
     }
 
     /**

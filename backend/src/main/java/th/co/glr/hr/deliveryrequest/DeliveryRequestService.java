@@ -140,12 +140,13 @@ public class DeliveryRequestService {
         VoidCtx vctx = voidCtx(ticketId, holder);
         Memo memo = new Memo();
         List<RoundDto> dtos = rounds.findByTicket(ticketId).stream().map(r -> toDto(r, s, canWrite, false, holder, vctx, memo)).toList();
-        boolean open = dtos.stream().anyMatch(r -> OPEN.contains(r.status()));
-        String blocked = open ? null : startBlockedReason(s, canWrite, approved);
         if (ticketService.readsOnlyByGrant(s, actor)) {
-            // The read-all grant reads rounds sales has sent, never sales' private drafts (and their files).
+            // The read-all grant reads rounds sales has sent, never sales' private drafts (and their files), nor
+            // that one is open: open/canStart are worked out after this filter.
             dtos = dtos.stream().filter(r -> !DeliveryRequestDtos.DRAFT.equals(r.status())).toList();
         }
+        boolean open = dtos.stream().anyMatch(r -> OPEN.contains(r.status()));
+        String blocked = open ? null : startBlockedReason(s, canWrite, approved);
         return new RoundsResponse(orderRef(s), dtos, approved, !open && blocked == null, blocked, invoiceable(ticketId));
     }
 

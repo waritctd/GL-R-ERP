@@ -201,6 +201,11 @@ class AttachmentTicketAccessIntegrationTest extends AbstractPostgresIntegrationT
         assertThatThrownBy(() -> controller.download(roundFile, sessionFor(hr)))
             .isInstanceOf(ApiException.class).extracting(e -> ((ApiException) e).getStatus()).isEqualTo(HttpStatus.NOT_FOUND);
         assertThat(controller.list(ticketId, sessionFor(importUser)).get("attachments")).extracting(a -> a.id()).containsExactly(attachmentId);
+        // A warehouse-role holder is no different: the draft's file stays hidden from the list and the download.
+        jdbc.update("UPDATE hr.employee SET can_read_all_sales = TRUE WHERE employee_id = :w", Map.of("w", warehouse.id()));
+        assertThat(controller.list(ticketId, sessionFor(warehouse)).get("attachments")).extracting(a -> a.id()).containsExactly(attachmentId);
+        assertThatThrownBy(() -> controller.download(roundFile, sessionFor(warehouse))).isInstanceOf(ApiException.class);
+        jdbc.update("UPDATE hr.employee SET can_read_all_sales = FALSE WHERE employee_id = :w", Map.of("w", warehouse.id()));
         jdbc.update("UPDATE sales.delivery_request SET status = 'SENT' WHERE delivery_request_id = :r", Map.of("r", requestId));
         assertThatCode(() -> controller.download(roundFile, sessionFor(hr))).doesNotThrowAnyException();
         assertThat(controller.list(ticketId, sessionFor(hr)).get("attachments")).hasSize(2);
