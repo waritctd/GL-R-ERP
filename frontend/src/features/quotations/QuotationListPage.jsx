@@ -23,6 +23,7 @@ import {
 } from './quotationMeta.js';
 import { readQuotationListView, writeQuotationListView } from './quotationPrefs.js';
 import { chainListMark } from '../documentChain/documentChainText.js';
+import { DealDocumentList, QuotationDocuments, canSeeDealDocumentLists } from './DealDocumentLists.jsx';
 
 /**
  * The row's document chain mark (the list endpoint's per-row `chainStage`, DocumentChainService#listStages — set only
@@ -46,7 +47,7 @@ function ChainMark({ stage }) {
 // `.table-head`/`.data-row` rules in styles.css set `display:grid` with no
 // `grid-template-columns`. A Tailwind arbitrary-value utility supplies it without a page-specific
 // CSS class (CLAUDE.md: "Do not add new page-specific CSS files"): เลขที่ / ลูกค้า·โครงการ /
-// พนักงานขาย / ยอดรวม / สถานะ / วันที่อนุมัติ, six columns weighted by how much text they carry.
+// พนักงานขาย / ยอดรวม / สถานะ / วันที่อนุมัติ / เอกสารต่อจากใบเสนอราคานี้ (free text, wraps, no floor), seven columns weighted by how much text they carry.
 //
 // ── Column floors: FIXED, identical in every row ──────────────────────────────────────────────
 // `minmax(0, …)` lets the grid shrink a column BELOW its own text, and the cells are
@@ -93,7 +94,7 @@ function ChainMark({ stage }) {
 // ⚠️ At a browser root font-size above about 18.6px the floors (30rem total) exceed the 559px the
 // row has at a 721px viewport. The wrapping <section> is `overflow-x-auto`, so that degrades to a
 // horizontal scrollbar rather than losing anything.
-const LIST_TABLE_GRID = 'grid-cols-[minmax(6.875rem,1fr)_minmax(0,2.2fr)_minmax(0,1.3fr)_minmax(8.25rem,1.1fr)_minmax(4.75rem,1fr)_minmax(6.5rem,1fr)]';
+const LIST_TABLE_GRID = 'grid-cols-[minmax(6.875rem,1fr)_minmax(0,2.2fr)_minmax(0,1.3fr)_minmax(8.25rem,1.1fr)_minmax(4.75rem,1fr)_minmax(6.5rem,1fr)_minmax(0,1.6fr)]';
 
 // The tab set is DEAL_QUOTATION_STATUS_TABS (quotationMeta.js). ร่าง and ถูกแทนที่ are deliberately
 // NOT tabs: a plain untouched draft is the rep's own working copy and a superseded document is
@@ -503,6 +504,7 @@ const makeColumns = (searchTotals) => [
     },
     render: (row) => (row.isGroup ? null : <ApprovedDate row={row} className="text-xs" />),
   },
+  { key: 'documents', header: 'เอกสารต่อจากใบเสนอราคานี้', render: (row) => (row.isGroup ? null : <QuotationDocuments row={row} />) },
 ];
 
 // In the grouped view no column sorts: a sort would tear a deal's rows out from under its header.
@@ -569,6 +571,7 @@ function QuotationCard({ row }) {
         {row.salesRepName ?? '-'} · <ApprovedDate row={row} />
       </span>
       <span className="tabular-nums text-md font-extrabold text-text">{formatMoney(row.grandTotal)}</span>
+      <QuotationDocuments row={row} heading />
     </>
   );
   if (!row.inGroup) return body;
@@ -580,34 +583,19 @@ function QuotationCard({ row }) {
   );
 }
 
-/**
- * ใบเสนอราคา list. Route-guarded by ROLE_PERMISSIONS.canViewDealQuotations; see
- * app/permissions.js PATH_GUARDS for '/quotations'. `sales` receives only its own deals'
- * quotations already scoped server-side (see dealQuotations.list's doc comment) -- this page adds
- * no client-side ownership filter.
- */
-export function QuotationListPage({ user }) {
-  const queryClient = useQueryClient();
-  const navigate = useNavigate();
-  // ขอออกใบกำกับ / ส่งของ: pick a deal (a sheet), or make a new one for work ordered before the portal.
-  const [picking, setPicking] = useState(false);
-  const [creating, setCreating] = useState(false);
-  const canRequestInvoice = ROLE_PERMISSIONS.canCreateTickets.includes(user?.role);
-  const createDeal = useMutation({
-    mutationFn: (payload) => api.tickets.create(payload),
-    onSuccess: (response) => {
-      queryClient.invalidateQueries({ queryKey: ['tickets'] });
-      const id = response?.ticket?.summary?.id;
-      if (id != null) navigate(`/tickets/${id}?tab=ship&request=open`);
-    },
-  });
-  const isApprover = canApproveDealQuotation(user);
+const DOC_TABS = [
+  { key: 'quotation', label: 'ใบเสนอราคา' },
+  { key: 'deposit', label: 'ใบแจ้งมัดจำ' },
+  { key: 'remaining', label: 'ใบแจ้งหนี้ส่วนที่เหลือ', phoneLabel: 'ใบแจ้งหนี้ที่เหลือ' },
+];
 
+/** The ใบเสนอราคา tab: the status tabs, filters and the list, as before. */
+function QuotationsTab({ user }) {
+  const [searchParams, setSearchParams] = useSearchParams();
   // The active tab lives in the URL (`?status=`), not in component state, so a tab is linkable,
   // survives a refresh and a back button, and an approver can paste "the รออนุมัติ queue" to a
   // colleague. An ABSENT param means "this role's default tab"; an unrecognised one falls back to
   // the same, rather than rendering an empty list for a typo'd or retired key.
-  const [searchParams, setSearchParams] = useSearchParams();
   const requestedKey = searchParams.get('status');
   const activeTab = dealQuotationStatusTab(requestedKey)
     ?? dealQuotationStatusTab(defaultDealQuotationStatusTab(user))
@@ -696,47 +684,7 @@ export function QuotationListPage({ user }) {
   const counts = countsQuery.data ?? null;
 
   return (
-    <PageStack>
-      <PageHeader
-        title="ใบเสนอราคา"
-        // "ของคุณ" is only true for the rep whose own rows these are. import/account are read-only
-        // viewers of OTHER people's quotations (isDealQuotationReadOnlyViewer), so the possessive
-        // would be wrong for them: a third branch rather than a reworded second one, because the
-        // approver line is right as it stands.
-        subtitle={isApprover
-          ? 'ใบเสนอราคาที่รอการอนุมัติ และทั้งหมด'
-          : isDealQuotationReadOnlyViewer(user)
-            ? 'ใบเสนอราคาทั้งหมด (ดูอย่างเดียว)'
-            : 'ใบเสนอราคาของคุณ'}
-        actions={(
-          <>
-            {canCreateDealQuotationStandalone(user) ? (
-              // The entry point into /quotations/new with no ?ticket=: the same role-only gate the
-              // editor page checks before rendering DealCustomerCard for that URL, so this link and
-              // the page it leads to never disagree about who may land there.
-              <Link to="/quotations/new" className={cn(buttonVariants({ variant: 'primary', size: 'sm' }))}>
-                <Icon name="plus" size={14} />
-                สร้างใบเสนอราคา
-              </Link>
-            ) : null}
-            {canRequestInvoice ? (
-              <Button type="button" variant="secondary" size="sm" data-testid="request-invoice-button" onClick={() => setPicking(true)}>
-                ขอออกใบกำกับ / ส่งของ
-              </Button>
-            ) : null}
-            <Button
-              type="button"
-              variant="icon"
-              onClick={() => queryClient.invalidateQueries({ queryKey: ['dealQuotations'] })}
-              title="รีเฟรช"
-              aria-label="รีเฟรช"
-            >
-              <Icon name="refresh" />
-            </Button>
-          </>
-        )}
-      />
-
+    <>
       {/* `role="tablist"` rather than a bare row of buttons: these five ARE tabs over one list, and arrow-key
        * semantics plus aria-selected is what a screen reader needs to say so. The panel they control is the table
        * below. */}
@@ -885,6 +833,135 @@ export function QuotationListPage({ user }) {
           loading={listQuery.isLoading}
           emptyState={{ icon: 'fileText', title: 'ไม่มีใบเสนอราคาในเงื่อนไขนี้' }}
         />
+      </div>
+    </>
+  );
+}
+
+/**
+ * เอกสารขาย (the /quotations route): the quotation list and, beside it, the deposit notices and remaining invoices made
+ * from quotations. Route-guarded by ROLE_PERMISSIONS.canViewDealQuotations; see
+ * app/permissions.js PATH_GUARDS for '/quotations'. `sales` receives only its own deals'
+ * quotations already scoped server-side (see dealQuotations.list's doc comment) -- this page adds
+ * no client-side ownership filter.
+ */
+export function QuotationListPage({ user }) {
+  const queryClient = useQueryClient();
+  const navigate = useNavigate();
+  // ขอออกใบกำกับ / ส่งของ: pick a deal (a sheet), or make a new one for work ordered before the portal.
+  const [picking, setPicking] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const canRequestInvoice = ROLE_PERMISSIONS.canCreateTickets.includes(user?.role);
+  const createDeal = useMutation({
+    mutationFn: (payload) => api.tickets.create(payload),
+    onSuccess: (response) => {
+      queryClient.invalidateQueries({ queryKey: ['tickets'] });
+      const id = response?.ticket?.summary?.id;
+      if (id != null) navigate(`/tickets/${id}?tab=ship&request=open`);
+    },
+  });
+  const isApprover = canApproveDealQuotation(user);
+
+  const [searchParams, setSearchParams] = useSearchParams();
+  const hasLists = canSeeDealDocumentLists(user);
+  // ?doc= picks the document tab; absent or unknown = ใบเสนอราคา. The quotation tab keeps its own ?status=.
+  const requestedDoc = searchParams.get('doc');
+  const doc = hasLists && DOC_TABS.some((tab) => tab.key === requestedDoc) ? requestedDoc : 'quotation';
+  function selectDoc(key) {
+    setSearchParams(key === 'quotation' ? {} : { doc: key }, { replace: true });
+  }
+  // Advisory counts for the tab labels (a failed call just leaves the number off). The quotation count shares its
+  // cache entry with QuotationsTab's own counts call when no period filter is set.
+  const quotationCount = useQuery({ queryKey: queryKeys.dealQuotationCounts(undefined), queryFn: () => api.dealQuotations.counts().then((r) => r ?? null) }).data?.all;
+  const depositCount = useQuery({ queryKey: queryKeys.depositNoticeCounts(), queryFn: () => api.depositNotices.counts(), enabled: hasLists }).data?.all;
+  const remainingCount = useQuery({ queryKey: queryKeys.remainingInvoiceCounts(), queryFn: () => api.storedRemainingInvoices.counts(), enabled: hasLists }).data?.all;
+  const docCounts = { quotation: quotationCount, deposit: depositCount, remaining: remainingCount };
+  // รีเฟรช reloads whichever tab is showing, and its count.
+  function refresh() {
+    const keys = {
+      quotation: [['dealQuotations']],
+      deposit: [['depositNotices', 'list'], ['depositNotices', 'counts']],
+      remaining: [['remainingInvoices']],
+    }[doc];
+    keys.forEach((queryKey) => queryClient.invalidateQueries({ queryKey }));
+  }
+
+  return (
+    <PageStack>
+      <PageHeader
+        title="เอกสารขาย"
+        // "ของคุณ" is only true for the rep whose own rows these are. import/account are read-only
+        // viewers of OTHER people's quotations (isDealQuotationReadOnlyViewer), so the possessive
+        // would be wrong for them: a third branch rather than a reworded second one, because the
+        // approver line is right as it stands.
+        subtitle={isApprover
+          ? 'เอกสารที่รออนุมัติ และเอกสารทั้งหมด'
+          : isDealQuotationReadOnlyViewer(user)
+            ? 'เอกสารขายทั้งหมด (ดูอย่างเดียว)'
+            : 'ใบเสนอราคา ใบแจ้งมัดจำ และใบแจ้งหนี้ส่วนที่เหลือของคุณ'}
+        actions={(
+          <>
+            {canCreateDealQuotationStandalone(user) ? (
+              // The entry point into /quotations/new with no ?ticket=: the same role-only gate the
+              // editor page checks before rendering DealCustomerCard for that URL, so this link and
+              // the page it leads to never disagree about who may land there.
+              <Link to="/quotations/new" className={cn(buttonVariants({ variant: 'primary', size: 'sm' }))}>
+                <Icon name="plus" size={14} />
+                สร้างใบเสนอราคา
+              </Link>
+            ) : null}
+            {canRequestInvoice ? (
+              <Button type="button" variant="secondary" size="sm" data-testid="request-invoice-button" onClick={() => setPicking(true)}>
+                ขอออกใบกำกับ / ส่งของ
+              </Button>
+            ) : null}
+            <Button
+              type="button"
+              variant="icon"
+              onClick={refresh}
+              title="รีเฟรช"
+              aria-label="รีเฟรช"
+            >
+              <Icon name="refresh" />
+            </Button>
+          </>
+        )}
+      />
+
+      {hasLists ? (
+        <div role="tablist" aria-label="ประเภทเอกสาร" className="grid grid-cols-3 border-b border-border">
+          {DOC_TABS.map((tab) => {
+            const active = doc === tab.key;
+            const count = docCounts[tab.key];
+            return (
+              <button
+                key={tab.key}
+                type="button"
+                role="tab"
+                id={`doc-tab-${tab.key}`}
+                aria-selected={active}
+                aria-controls="sales-docs-panel"
+                aria-label={Number.isFinite(count) ? `${tab.label} ${count}` : tab.label}
+                className={cn(
+                  'flex min-h-11 flex-col items-center justify-center gap-0.5 border-b-2 px-1 text-sm font-bold',
+                  active ? 'border-primary text-primary' : 'border-transparent text-text-muted hover:text-text',
+                )}
+                onClick={() => selectDoc(tab.key)}
+              >
+                {tab.phoneLabel ? (
+                  <>
+                    <span className="mobile:hidden">{tab.label}</span>
+                    <span aria-hidden="true" className="hidden mobile:inline">{tab.phoneLabel}</span>
+                  </>
+                ) : <span>{tab.label}</span>}
+                {Number.isFinite(count) ? <span className="tabular-nums text-xs font-normal">{count}</span> : null}
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
+      <div id="sales-docs-panel" role="tabpanel" aria-labelledby={hasLists ? `doc-tab-${doc}` : undefined}>
+        {doc === 'quotation' ? <QuotationsTab user={user} /> : <DealDocumentList key={doc} kind={doc} user={user} />}
       </div>
       {picking ? (
         <DealPickSheet onClose={() => setPicking(false)} onCreateNew={() => { setPicking(false); setCreating(true); }} />

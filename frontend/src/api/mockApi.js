@@ -2467,6 +2467,81 @@ const mockImportRequests = []; // ImportRequestDto-shaped rows, each carrying it
 // "preview" numbers under mock mode.
 let mockRemainingInvoiceSeq = 1;
 const mockRemainingInvoices = []; // RemainingInvoiceDocumentDto-shaped rows, each with its own `items`.
+// GET /api/deal-quotations rows' `documents` (DealDocumentRows.QuotationDocuments): the deal's one notice and THIS quotation's
+// invoices, null when there are none. Read live, so a notice made through the mock shows up on the list.
+function mockQuotationDocuments(q) {
+  const notice = mockDepositNotices.find((d) => d.ticketId === q.ticketId && d.status !== 'SUPERSEDED' && d.status !== 'CANCELLED');
+  const invoices = mockRemainingInvoices.filter((r) => r.ticketId === q.ticketId && (r.customerQuotationId ?? null) === q.id && r.status !== 'SUPERSEDED');
+  if (!notice && invoices.length === 0) return null;
+  return {
+    depositNotice: notice ? { id: notice.id, status: notice.status, docNumber: notice.docNumber ?? null, forThisQuotation: !notice.reference || notice.reference === q.number } : null,
+    remainingInvoices: invoices.map((r) => ({ id: r.id, status: r.status, docNumber: r.docNumber ?? null, version: r.status === 'DRAFT' ? null : r.version })),
+  };
+}
+
+// เอกสารขาย tabs (GET /api/deposit-notices, /api/remaining-invoices): a fixed set of states (draft, paid, unpaid, a
+// revision pending beside an older version, a deal with two buyer quotations) laid over the mock's REAL deals and
+// quotations, so เปิด and the deal and quotation links lead somewhere. Not derived from the live notice/invoice arrays.
+// Built lazily: mockDealQuotations is declared further down this file. Row shapes mirror DealDocumentRows.
+let mockDocFixtureCache = null;
+function mockDocFixtures() {
+  if (mockDocFixtureCache) return mockDocFixtureCache;
+  const quotationOf = (t, nth = 0) => mockDealQuotations.filter((q) => q.ticketId === t?.id)[nth] ?? null;
+  const origin = (t, quotation, overrides = {}) => ({
+    ticketId: t.id, ticketCode: t.code, projectName: t.projectName ?? t.title ?? null, customerName: t.customerName ?? null,
+    ownerId: t.createdById, ownerName: t.createdByName,
+    quotationId: quotation?.id ?? null, quotationNumber: quotation?.number ?? null, ...overrides,
+  });
+  const twoBuyers = db.tickets.find((t) => mockDealQuotations.filter((q) => q.ticketId === t.id).length >= 2);
+  const mine = db.tickets.filter((t) => t.createdById === 6 && t !== twoBuyers);
+  const others = db.tickets.filter((t) => t.createdById !== 6 && t !== twoBuyers);
+  const [t1, t2, t3] = mine;
+  const t4 = others[0] ?? mine[3] ?? t3;
+  mockDocFixtureCache = {
+    notices: [
+      { id: 9001, status: 'DRAFT', docNumber: null, version: 1, issueDate: null, updatedAt: '2026-11-18T09:00:00Z', depositPercent: 0.3, depositAmount: 100000, vatAmount: 7000, totalPayable: 107000, moneyReceived: false, origin: origin(t1, quotationOf(t1)) },
+      { id: 9002, status: 'ISSUED', docNumber: 'GLRD69041', version: 1, issueDate: '2026-11-10', updatedAt: '2026-11-10T09:00:00Z', depositPercent: 0.5, depositAmount: 200000, vatAmount: 14000, totalPayable: 214000, moneyReceived: true, origin: origin(t2, quotationOf(t2)) },
+      // No quotation resolved: the number prints as plain text, not a link.
+      { id: 9003, status: 'ISSUED', docNumber: 'GLRD69042', version: 1, issueDate: '2026-11-12', updatedAt: '2026-11-12T09:00:00Z', depositPercent: 0.3, depositAmount: 60000, vatAmount: 4200, totalPayable: 64200, moneyReceived: false, origin: origin(t4, null, { quotationNumber: 'QT-2026-9003' }) },
+      ...(twoBuyers ? [{ id: 9004, status: 'ISSUED', docNumber: 'GLRD69043', version: 1, issueDate: '2026-11-14', updatedAt: '2026-11-14T09:00:00Z', depositPercent: 0.4, depositAmount: 80000, vatAmount: 5600, totalPayable: 85600, moneyReceived: false, origin: origin(twoBuyers, quotationOf(twoBuyers, 0)) }] : []),
+    ],
+    invoices: [
+      {
+        id: 9301, status: 'ISSUED', docNumber: 'GLR6900058-2', version: 2, docDate: '2026-11-16', updatedAt: '2026-11-16T09:00:00Z',
+        itemsTotal: 300000, depositDeduction: 100000, netAmount: 200000, vatAmount: 14000, grandTotal: 214000,
+        origin: origin(t1, quotationOf(t1)),
+        pendingRevision: { id: 9302, nextVersion: 3 },
+        olderVersions: [{ id: 9300, docNumber: 'GLR6900058-1', version: 1, docDate: '2026-11-13', grandTotal: 207000 }],
+      },
+      {
+        id: 9303, status: 'DRAFT', docNumber: null, version: 1, docDate: '2026-11-19', updatedAt: '2026-11-19T09:00:00Z',
+        itemsTotal: 150000, depositDeduction: 60000, netAmount: 90000, vatAmount: 6300, grandTotal: 96300,
+        origin: origin(t4, null, { quotationNumber: 'QT-2026-9003' }), pendingRevision: null, olderVersions: [],
+      },
+      ...(twoBuyers ? [{
+        id: 9304, status: 'ISSUED', docNumber: 'GLR6900061-1', version: 1, docDate: '2026-11-17', updatedAt: '2026-11-17T09:00:00Z',
+        itemsTotal: 120000, depositDeduction: 40000, netAmount: 80000, vatAmount: 5600, grandTotal: 85600,
+        origin: origin(twoBuyers, quotationOf(twoBuyers, 1)), pendingRevision: null, olderVersions: [],
+      }] : []),
+    ],
+  };
+  return mockDocFixtureCache;
+}
+
+// Mirrors DealDocumentListService's scope: sales_manager/ceo/account see every deal, sales their own; import is refused (403).
+// account and ceo never see drafts (a settled rule); sales and sales_manager do.
+function mockDealDocumentRows(fixture, status) {
+  const user = requireSession();
+  if (!['sales', 'sales_manager', 'ceo', 'account'].includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+  const seesDrafts = user.role === 'sales' || user.role === 'sales_manager';
+  const scoped = fixture
+    .filter((r) => (user.role !== 'sales' || r.origin.ownerId === user.id) && (seesDrafts || r.status !== 'DRAFT'))
+    .map((r) => ({ ...r, viewerMayWrite: user.role === 'sales' ? r.origin.ownerId === user.id : false }));
+  return { scoped, rows: structuredClone(status ? scoped.filter((r) => r.status === status) : scoped) };
+}
+const mockDealDocumentCounts = (scoped) => ({
+  all: scoped.length, draft: scoped.filter((r) => r.status === 'DRAFT').length, issued: scoped.filter((r) => r.status === 'ISSUED').length,
+});
 const mockArGlrSeqByYear = {}; // mirrors sales.document_sequence WHERE doc_type = 'AR_GLR', keyed by Thai year.
 
 function findStoredRemainingInvoiceRaw(id) {
@@ -16809,6 +16884,13 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
 
   // Mirrors DepositNoticeController + DepositNoticeService (deposit/).
   depositNotices: {
+    async listAll({ status } = {}) {
+      return delay({ depositNotices: mockDealDocumentRows(mockDocFixtures().notices, status).rows });
+    },
+    async counts() {
+      return delay(mockDealDocumentCounts(mockDealDocumentRows(mockDocFixtures().notices).scoped));
+    },
+
     async noteTemplates() {
       requireSession();
       return delay({ templates: mockNoteTemplates });
@@ -17098,6 +17180,13 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
   },
 
   storedRemainingInvoices: {
+    async listAll({ status } = {}) {
+      return delay({ remainingInvoices: mockDealDocumentRows(mockDocFixtures().invoices, status).rows });
+    },
+    async counts() {
+      return delay(mockDealDocumentCounts(mockDealDocumentRows(mockDocFixtures().invoices).scoped));
+    },
+
     async createDraft(ticketId, payload = {}) {
       const ticket = findTicketRaw(Number(ticketId));
       const user = requireRemainingInvoiceWriteGate(ticket);
@@ -20215,6 +20304,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
         items: sorted.map((q) => ({
           ...forDealQuotationViewer(buildDealQuotationDto(q), viewer),
           chainStage: mockListChainStage(q, viewer),
+          documents: mockQuotationDocuments(q),
         })),
       });
     },

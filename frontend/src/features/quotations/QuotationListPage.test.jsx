@@ -17,6 +17,8 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         list: vi.fn(),
         counts: vi.fn(),
       },
+      depositNotices: { listAll: vi.fn(), counts: vi.fn() },
+      storedRemainingInvoices: { listAll: vi.fn(), counts: vi.fn() },
     },
   };
 });
@@ -24,6 +26,20 @@ vi.mock('../../api/index.js', async (importOriginal) => {
 const salesUser = { id: 6, name: 'คุณสมหมาย ขายดี', role: 'sales' };
 const ceoUser = { id: 8, name: 'ราม', role: 'ceo' };
 const salesManagerUser = { id: 9, name: 'ผึ้ง', role: 'sales_manager' };
+const accountUser = { id: 11, name: 'บัญชี', role: 'account' };
+const importUser = { id: 7, name: 'นำเข้า', role: 'import' };
+
+function noticeRow(origin = {}, overrides = {}) {
+  return {
+    id: 501, status: 'ISSUED', docNumber: 'GLRD69041', version: 1, issueDate: '2026-11-10', depositPercent: 0.3,
+    totalPayable: 107000, moneyReceived: true, viewerMayWrite: true,
+    origin: {
+      ticketId: 91, ticketCode: 'DL-2611-001', projectName: 'โครงการตัวอย่าง', customerName: 'บริษัท ตัวอย่าง ก จำกัด',
+      ownerId: 6, ownerName: 'คุณสมหมาย ขายดี', quotationId: 11, quotationNumber: 'QT-2026-9001', ...origin,
+    },
+    ...overrides,
+  };
+}
 
 function row(overrides = {}) {
   return {
@@ -83,6 +99,10 @@ describe('QuotationListPage', () => {
     // BARE, no `{ counts: ... }` envelope — DealQuotationController#counts returns the DealQuotationCountsDto
     // record itself (review finding MED-3). This fixture wrapped it while the page still read `r?.counts ??
     api.dealQuotations.counts.mockResolvedValue({ all: 7, pendingApproval: 2, needsRework: 3, cancelled: 1, approved: 4 });
+    api.depositNotices.listAll.mockResolvedValue({ depositNotices: [noticeRow()] });
+    api.depositNotices.counts.mockResolvedValue({ all: 1, draft: 0, issued: 1 });
+    api.storedRemainingInvoices.listAll.mockResolvedValue({ remainingInvoices: [] });
+    api.storedRemainingInvoices.counts.mockResolvedValue({ all: 0, draft: 0, issued: 0 });
   });
 
   it('sales lands on ทั้งหมด (no approval queue of its own)', async () => {
@@ -110,7 +130,7 @@ describe('QuotationListPage', () => {
     await screen.findByText('QD69-0001');
 
     await waitFor(() => expect(api.dealQuotations.counts).toHaveBeenCalledTimes(1));
-    const tabs = await screen.findAllByRole('tab');
+    const tabs = await within(await screen.findByRole('tablist', { name: 'สถานะใบเสนอราคา' })).findAllByRole('tab');
     // Label + count, concatenated, in DEAL_QUOTATION_STATUS_TABS order.
     await waitFor(() => expect(tabs.map((t) => t.textContent)).toEqual([
       'ทั้งหมด7', 'รออนุมัติ2', 'ฉบับแก้3', 'ยกเลิก1', 'อนุมัติแล้ว4',
@@ -196,6 +216,79 @@ describe('QuotationListPage', () => {
 
 // deal-party-model.md, prototype screen 1: a project quoted to several contractors is ONE deal, its
 // bids listed together under a group row.
+describe('QuotationListPage — เอกสารขาย document tabs', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.dealQuotations.list.mockResolvedValue({ items: [row()] });
+    api.dealQuotations.counts.mockResolvedValue({ all: 5 });
+    api.depositNotices.listAll.mockResolvedValue({ depositNotices: [noticeRow()] });
+    api.depositNotices.counts.mockResolvedValue({ all: 3, draft: 1, issued: 2 });
+    api.storedRemainingInvoices.listAll.mockResolvedValue({ remainingInvoices: [] });
+    api.storedRemainingInvoices.counts.mockResolvedValue({ all: 0, draft: 0, issued: 0 });
+  });
+
+  const docTabs = () => within(screen.getByRole('tablist', { name: 'ประเภทเอกสาร' })).getAllByRole('tab');
+
+  it('is titled เอกสารขาย, with three tabs that switch through ?doc=', async () => {
+    renderListPage(salesUser);
+    expect(screen.getByRole('heading', { name: 'เอกสารขาย' })).not.toBeNull();
+    await waitFor(() => expect(docTabs().slice(0, 2).map((t) => t.textContent)).toEqual(['ใบเสนอราคา5', 'ใบแจ้งมัดจำ3']));
+    expect(docTabs()).toHaveLength(3);
+    expect(screen.getByRole('tab', { name: /^ใบแจ้งหนี้ส่วนที่เหลือ/ })).toBe(docTabs()[2]);
+
+    fireEvent.click(docTabs()[1]);
+    expect(await screen.findByText('GLRD69041')).not.toBeNull();
+    expect(screen.getByTestId('location-search').textContent).toBe('?doc=deposit');
+    expect(docTabs()[1].getAttribute('aria-selected')).toBe('true');
+
+    fireEvent.click(docTabs()[2]);
+    expect((await screen.findAllByText('ยังไม่มีใบแจ้งหนี้ส่วนที่เหลือ')).length).toBeGreaterThan(0);
+  });
+
+  it('a notice row names its quotation and links it only when the quotation is known', async () => {
+    renderListPage(salesUser, '/quotations?doc=deposit');
+    const link = await screen.findByRole('link', { name: 'QT-2026-9001' });
+    expect(link.getAttribute('href')).toBe('/quotations/11');
+    expect(screen.getByText('รับเงินแล้ว')).not.toBeNull();
+
+    api.depositNotices.listAll.mockResolvedValue({ depositNotices: [noticeRow({ quotationId: null, quotationNumber: 'QT-2026-9003' })] });
+    renderListPage(salesUser, '/quotations?doc=deposit');
+    await waitFor(() => expect(screen.getAllByText('QT-2026-9003').length).toBeGreaterThan(0));
+    expect(screen.queryByRole('link', { name: 'QT-2026-9003' })).toBeNull();
+  });
+
+  it('account gets no ฉบับร่าง chip; sales does', async () => {
+    renderListPage(accountUser, '/quotations?doc=deposit');
+    await screen.findByText('GLRD69041');
+    expect(screen.queryByRole('button', { name: /ฉบับร่าง/ })).toBeNull();
+    expect(screen.getByRole('button', { name: /ออกแล้ว/ })).not.toBeNull();
+    expect(screen.getByRole('combobox', { name: 'กรองตามพนักงานขาย' })).not.toBeNull();
+  });
+
+  it('sales sees the draft chip', async () => {
+    renderListPage(salesUser, '/quotations?doc=deposit');
+    await screen.findByText('GLRD69041');
+    expect(screen.getByRole('button', { name: /ฉบับร่าง/ })).not.toBeNull();
+  });
+
+  it('import sees only the quotation tab, and ?doc= is ignored', async () => {
+    renderListPage(importUser, '/quotations?doc=deposit');
+    expect(await screen.findByText('QD69-0001')).not.toBeNull();
+    expect(screen.queryByRole('tablist', { name: 'ประเภทเอกสาร' })).toBeNull();
+    expect(api.depositNotices.listAll).not.toHaveBeenCalled();
+  });
+
+  it('a quotation row lists the documents made from it', async () => {
+    api.dealQuotations.list.mockResolvedValue({ items: [row({
+      ticketId: 91,
+      documents: { depositNotice: { id: 501, status: 'ISSUED', docNumber: 'GLRD69041', forThisQuotation: true }, remainingInvoices: [{ id: 7, status: 'DRAFT', docNumber: null, version: 3 }] },
+    })] });
+    renderListPage(salesUser);
+    expect((await screen.findByRole('link', { name: /GLRD69041/ })).getAttribute('href')).toBe('/tickets/91/deposit');
+    expect(screen.getByRole('link', { name: /ฉบับร่าง -3/ }).getAttribute('href')).toBe('/tickets/91?tab=money');
+  });
+});
+
 describe('QuotationListPage — จัดกลุ่มตามโครงการ', () => {
   const bid = (overrides) => row({
     ticketId: 18, ticketCode: 'DL-2026-0280', dealBuyerCount: 3, projectName: 'S26 HOTEL', docStatus: 'APPROVED', recipientType: 'BUYER', ...overrides,

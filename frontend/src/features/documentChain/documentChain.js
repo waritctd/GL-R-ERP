@@ -40,6 +40,7 @@ export function useDocumentChain(ticketId, { enabled = true } = {}) {
  *   ticketActions(ticketId)            the deal page's server-gated actions
  *   ['tickets', 'list']                deal lists / boards
  *   ['dealQuotations']                 the quotation list's chain marks, the quotation detail, the deal's quotations
+ *   ['depositNotices', 'list' | 'counts'], ['remainingInvoices']   the เอกสารขาย document tabs
  */
 export function invalidateDealDocuments(queryClient, ticketId) {
   // depositNotices / storedRemainingInvoices are not Number()-coerced: the deal page keys them by its route-param
@@ -53,6 +54,8 @@ export function invalidateDealDocuments(queryClient, ticketId) {
     queryKeys.ticketActions(ticketId),
     ['tickets', 'list'],
     ['dealQuotations'],
+    // เอกสารขาย's cross-deal lists and their counts (queryKeys.depositNoticeList / ...Counts, remainingInvoiceList / ...Counts).
+    ['depositNotices', 'list'], ['depositNotices', 'counts'], ['remainingInvoices'],
   ];
   return Promise.all(keys.map((queryKey) => queryClient.invalidateQueries({ queryKey })));
 }

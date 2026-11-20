@@ -481,6 +481,9 @@ export const api = {
     openForProject: (projectName) => apiRequest(API_ROUTES.tickets.openForProject(projectName)),
   },
   depositNotices: {
+    // All deals' notices as `{ depositNotices: [...] }`; `status` is DRAFT or ISSUED, absent = every one this viewer sees.
+    listAll: ({ status } = {}) => apiRequest(withQuery(API_ROUTES.depositNotices.list, { status })),
+    counts: () => apiRequest(API_ROUTES.depositNotices.counts),
     noteTemplates: () => apiRequest(API_ROUTES.depositNotices.noteTemplates),
     preparerOptions: (ticketId) => apiRequest(API_ROUTES.depositNotices.preparerOptions(ticketId)),
     get: (id) => apiRequest(API_ROUTES.depositNotices.get(id)),
@@ -525,6 +528,8 @@ export const api = {
     get: (ticketId) => apiRequest(API_ROUTES.documentChain.forTicket(ticketId)),
   },
   storedRemainingInvoices: {
+    listAll: ({ status } = {}) => apiRequest(withQuery(API_ROUTES.storedRemainingInvoices.list, { status })),
+    counts: () => apiRequest(API_ROUTES.storedRemainingInvoices.counts),
     listForTicket: (ticketId) => apiRequest(API_ROUTES.storedRemainingInvoices.forTicket(ticketId)),
     createDraft: (ticketId, payload) =>
       apiRequest(API_ROUTES.storedRemainingInvoices.forTicket(ticketId), { method: 'POST', body: payload }),
