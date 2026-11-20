@@ -88,7 +88,13 @@ public class NotificationService {
     // one implementation with this path instead of copying it.
     private void sendEmailAfterCommit(long employeeId, String to, String recipientName, String subject, String body,
                                       String link, List<String> bcc) {
-        AfterCommit.run(() -> emailService.send(employeeId, to, recipientName, subject, body, link, bcc));
+        AfterCommit.run(() -> {
+            if (bcc == null || bcc.isEmpty()) {
+                emailService.send(employeeId, to, recipientName, subject, body, link);
+            } else {
+                emailService.send(employeeId, to, recipientName, subject, body, link, bcc);
+            }
+        });
     }
 
     private void validate(long employeeId, String type, String subject, String body) {
