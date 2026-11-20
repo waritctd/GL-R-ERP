@@ -287,12 +287,21 @@ class DealDirectApprovalFillsDealIntegrationTest extends AbstractDealQuotationSl
         assertThat(quotationService.submit(created.id(), salesActor).docStatus()).isEqualTo("PENDING_APPROVAL");
     }
 
-    /** A rule-approved quotation records its basis and sources, shows no person as approver, and tells the rep nothing. */
+    /** A rule-approved quotation records its basis and sources, shows no person as approver on the DTO (the PDF prints the source's), and tells the rep nothing. */
     @Test
     void addOn_ruleApproval_isMarked_hasNoApproverNameOrSignature_andDoesNotNotifyTheRep() {
+        jdbc.update("INSERT INTO hr.employee_signature (employee_id, mime_type, image) VALUES (:e, 'image/png', :img)",
+            new org.springframework.jdbc.core.namedparam.MapSqlParameterSource("e", salesManagerActor.id())
+                .addValue("img", new byte[] {1, 2, 3}));
         long addOn = addOnWithApprovedRoot();
 
         DealQuotationDto submitted = submitReuse(addOn, UnaryOperator.identity(), 50);
+
+        // The printed approver slot is the SOURCE quotation's approver: name + signature image, with the reuse text.
+        var signatories = quotationService.toRenderModel(submitted).signatories();
+        assertThat(signatories.approvedBy()).contains("(อนุมัติตามราคาเดิม QT-");
+        assertThat(signatories.approvedBy()).doesNotStartWith("(");
+        assertThat(signatories.approverSignaturePng()).containsExactly(1, 2, 3);
 
         assertThat(submitted.approvalBasis()).isEqualTo("REUSED_APPROVED_PRICE");
         assertThat(submitted.approvalSourceNumbers()).startsWith("QT-");

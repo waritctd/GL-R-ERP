@@ -2058,14 +2058,22 @@ public class DealQuotationService {
             throw new ApiException(HttpStatus.CONFLICT,
                 "งานไม่ได้อยู่ในสถานะ ACTIVE (" + locked.lifecycle() + ") จึงยืนยันคำสั่งซื้อไม่ได้");
         }
-        if (!TicketStatus.DRAFT.equals(locked.status())) {
+        // The caller-authorized path serves the first request of a pre-portal deal, whose ticket can sit in any open
+        // status (submitted, approved ...): there the status is left as it is. The normal confirm still needs a draft.
+        boolean keepStatus = !checkEditAccess && !TicketStatus.DRAFT.equals(locked.status());
+        if (keepStatus) {
+            if (TicketStatus.CLOSED.equals(locked.status()) || TicketStatus.CANCELLED.equals(locked.status())) {
+                throw new ApiException(HttpStatus.CONFLICT,
+                    "ยืนยันคำสั่งซื้อไม่ได้ — งานนี้ปิดหรือยกเลิกแล้ว (" + locked.status() + ")");
+            }
+        } else if (!TicketStatus.DRAFT.equals(locked.status())) {
             throw new ApiException(HttpStatus.CONFLICT,
                 "ยืนยันคำสั่งซื้อไม่ได้ — สถานะงาน (" + locked.status() + ") ผ่านขั้นออกใบเสนอราคาไปแล้ว");
         }
 
         // The status compare-and-set runs under the row lock, so a 0 is unreachable through the API; it is checked, not
         // assumed, and rolls the whole confirmation back.
-        if (tickets.markQuotationIssuedForOrderConfirmation(ticketId) != 1) {
+        if (!keepStatus && tickets.markQuotationIssuedForOrderConfirmation(ticketId) != 1) {
             throw new ApiException(HttpStatus.CONFLICT,
                 "สถานะงานถูกเปลี่ยนโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
         }
@@ -2073,7 +2081,8 @@ public class DealQuotationService {
         // rowcount is deliberately ignored.
         tickets.markPromotedToPipeline(ticketId);
         tickets.addEventWithDocument(ticketId, actor.id(), actor.name(),
-            TicketEventKind.DEAL_PROMOTED_FROM_QUOTATION, TicketStatus.DRAFT, TicketStatus.QUOTATION_ISSUED,
+            TicketEventKind.DEAL_PROMOTED_FROM_QUOTATION, keepStatus ? locked.status() : TicketStatus.DRAFT,
+            keepStatus ? locked.status() : TicketStatus.QUOTATION_ISSUED,
             "ยืนยันคำสั่งซื้อจากใบเสนอราคา " + fresh.number(), RelatedDocumentType.QUOTATION, quotationId);
         // V204: the confirmed quotation's party has won, whichever path confirmed it.
         if (fresh.partyId() != null) {
@@ -2105,7 +2114,7 @@ public class DealQuotationService {
         // A จากสต็อก line is covered in full, as the pricing-request route does at order confirmation, so the routing below sees it.
         tickets.coverSourcedFromStockLines(ticketId);
         int depositPercent = DealQuotationRenderAdapter.effectiveDepositPercent(fresh.depositPercent());
-        ticketService.confirmCustomerForPromotedQuotation(ticketId, fresh.number(), depositPercent, actor);
+        ticketService.confirmCustomerForPromotedQuotation(ticketId, fresh.number(), depositPercent, actor, keepStatus);
         ticketService.notifySalesManagerOfStockCoverOnConfirm(ticketId, actor);
         // FYI to the CEO (the pricing-request path keeps its own notice in OrderConfirmationService).
         notifications.notifyByRoleAtLink("ceo", PricingRequestEventKind.ORDER_CONFIRMED,
@@ -2242,11 +2251,11 @@ public class DealQuotationService {
             TicketStatus.QUOTATION_ISSUED, TicketStatus.DRAFT, note, RelatedDocumentType.QUOTATION, quotationId);
         if (!removedRounds.isEmpty()) {
             // The warehouse may have been reviewing a sent request: tell them it is gone.
-            String msg = actor.name() + " ยกเลิกการยืนยันคำสั่งซื้อ คำขอส่งของรอบที่ "
-                + removedRounds.stream().map(String::valueOf).collect(java.util.stream.Collectors.joining(", ")) + " ถูกลบ\n"
-                + DealNoticeText.dealLabel(locked.code(), locked.customerName());
             for (long id : th.co.glr.hr.auth.WarehouseStaff.recipientIds(employeeAuth)) {
-                notifications.notifyEmployeeAtLink(id, "DELIVERY_REQUEST_RETURNED", msg, "/tickets/" + ticketId);
+                for (int round : removedRounds) {
+                    notifications.notifyEmployeeAtLink(id, "DELIVERY_REQUEST_REMOVED", locked.code() + " รอบส่งที่ " + round
+                        + " · ฝ่ายขายยกเลิกการยืนยันคำสั่งซื้อ คำขอนี้ถูกยกเลิก", "/tickets/" + ticketId);
+                }
             }
         }
         return promotionResult(ticketId, quotationId);
@@ -2862,15 +2871,25 @@ public class DealQuotationService {
      * deal-ownership id ({@code createdById}/{@code salesRepId}). A missing signature, or an id equal to the approver's,
      * just makes {@code signatures.find} return empty and the slot print its text-only name; each slot resolves
      * independently. */
-    private th.co.glr.hr.ticket.QuotationRenderModel toRenderModel(DealQuotationDto quotation) {
+    th.co.glr.hr.ticket.QuotationRenderModel toRenderModel(DealQuotationDto quotation) {
         byte[] signaturePng = null;
         String signatureMime = null;
-        var snapshot = quotations.findApproverSignatureSnapshot(quotation.id());
+        String reuseApproverName = null;
+        DealQuotationDto signedBy = quotation;
+        if (quotation.approvalBasis() != null) {
+            // Reused-price quotation: print the approver (name + signature) of the source quotation the price came from.
+            signedBy = latestApprovedReuseSource(quotation);
+            if (signedBy != null) {
+                reuseApproverName = displayApproverName(signedBy, quotation.documentLanguage());
+            }
+        }
+        var snapshot = signedBy == null ? java.util.Optional.<DealQuotationRepository.ApproverSignatureSnapshot>empty()
+            : quotations.findApproverSignatureSnapshot(signedBy.id());
         if (snapshot.isPresent()) {
             signaturePng = snapshot.get().image();
             signatureMime = snapshot.get().mimeType();
-        } else if (quotation.approverHasSignature() && quotation.approvedById() != null) {
-            var signature = signatures.find(quotation.approvedById());
+        } else if (signedBy != null && signedBy.approverHasSignature() && signedBy.approvedById() != null) {
+            var signature = signatures.find(signedBy.approvedById());
             if (signature.isPresent()) {
                 signaturePng = signature.get().image();
                 signatureMime = signature.get().mimeType();
@@ -2904,7 +2923,24 @@ public class DealQuotationService {
         return DealQuotationRenderAdapter.toRenderModel(quotation, signaturePng, signatureMime,
             bankBlockLines, itemPictures,
             printedBySignaturePng, printedBySignatureMime,
-            salesRepSignaturePng, salesRepSignatureMime);
+            salesRepSignaturePng, salesRepSignatureMime, reuseApproverName);
+    }
+
+    /** The approved source (named in approval_source_numbers) with the latest approval, ties to the highest id; null when
+     * none names a real approver (legacy). The chain list is already ordered latest approval first. */
+    private DealQuotationDto latestApprovedReuseSource(DealQuotationDto reused) {
+        java.util.Set<String> numbers = java.util.Arrays.stream(String.valueOf(reused.approvalSourceNumbers()).split(","))
+            .map(String::trim).collect(java.util.stream.Collectors.toSet());
+        return approvedSourcesInChain(reused.ticketId(), reuseCustomerId(reused.ticketId(), reused.partyId())).stream()
+            .map(ApprovedSource::quotation)
+            .filter(q -> numbers.contains(q.number()) && q.approvalBasis() == null && q.approvedById() != null
+                && q.approvedByName() != null)
+            .findFirst().orElse(null);
+    }
+
+    private static String displayApproverName(DealQuotationDto source, String documentLanguage) {
+        boolean english = WastageCalculator.DOCUMENT_LANGUAGE_EN.equals(documentLanguage);
+        return english && source.approvedByNameEn() != null ? source.approvedByNameEn() : source.approvedByName();
     }
 
     /** In-app notification to the rep AND the creator, deduped when they are the same employee (a rep who created

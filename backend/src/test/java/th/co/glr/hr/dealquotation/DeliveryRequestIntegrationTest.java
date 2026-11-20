@@ -924,6 +924,17 @@ class DeliveryRequestIntegrationTest extends AbstractDealDirectQuotationIntegrat
     }
 
     @Test
+    void preportal_anOldDealWhoseTicketIsPastDraft_sendsItsFirstRequest_keepingItsStatus() {
+        long ticketId = deal(salesActor);
+        approved(ticketId, draft(), salesActor);
+        jdbc.update("UPDATE sales.ticket SET status = 'submitted' WHERE ticket_id = :t", Map.of("t", ticketId));
+        long rid = rounds.createDraft(ticketId, null, salesActor).id();
+        assertThat(rounds.send(rid, null, BigDecimal.ZERO, null, salesActor).status()).isEqualTo("SENT");
+        assertThat(one("SELECT status FROM sales.ticket WHERE ticket_id = :t", ticketId)).isEqualTo("submitted");
+        assertThat(rounds.list(ticketId, salesActor).order().prePortal()).isTrue();
+    }
+
+    @Test
     void preportal_startAtProcurement_needsTheDeposit_andTheImplicitConfirmDoesNotRefuseTheCeo() {
         refusal(() -> procurementStart(null), HttpStatus.BAD_REQUEST);
         long made = procurementStart(new BigDecimal("0"));
