@@ -1175,6 +1175,8 @@ public class TicketService {
         BigDecimal amount = requirePreDeposit(deposit, receivedOn);
         TicketSummaryDto s = requireTicket(ticketId).summary();
         tickets.markPrePortal(ticketId);
+        tickets.addEvent(ticketId, actor.id(), actor.name(), TicketEventKind.POLICY_CHANGED, s.status(), s.status(),
+            TicketRepository.PRE_PORTAL_MARK_NOTE);
         if (amount.signum() > 0) {
             long receiptId = tickets.insertSourcedReceipt(ticketId, "DEPOSIT", amount, actor.id(),
                 receivedOn.atStartOfDay(java.time.ZoneId.of("Asia/Bangkok")).toInstant(), null, null, PRE_PORTAL_SOURCE);

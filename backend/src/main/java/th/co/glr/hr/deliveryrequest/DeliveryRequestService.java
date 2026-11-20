@@ -646,7 +646,7 @@ public class DeliveryRequestService {
             }
             tickets.updateSalesStage(ticketId, DealStage.DELIVERY_SCHEDULING);
             tickets.addEvent(ticketId, actor.id(), actor.name(), TicketEventKind.STAGE_CHANGED, s.salesStage(),
-                DealStage.DELIVERY_SCHEDULING, "ขอออกใบกำกับจากงานที่เดินมาก่อนใช้ระบบ");
+                DealStage.DELIVERY_SCHEDULING, TicketRepository.PRE_PORTAL_SEND_STAGE_NOTE);
             s = summary(ticketId);
         } else {
             prePortal.ensureOrderConfirmed(ticketId, round.quotationId(), actor);

@@ -2193,7 +2193,9 @@ public class DealQuotationService {
         Instant restoreStageAt = restoreStage == null ? null
             : tickets.latestStageChangeAtBefore(ticketId, promotion.eventId()).orElse(null);
         // Under the CUSTOMER_CONFIRMED payment status the compare-and-set needs, so before the ticket reset below.
-        boolean prePortal = tickets.isPrePortal(ticketId);
+        // Marked by a send (after the promotion): the undo takes the marking back. Created as สั่งซื้อแล้ว (before it): the
+        // flag, its deposit and the policy stay, only the confirm is undone.
+        boolean prePortal = tickets.isPrePortal(ticketId) && tickets.prePortalMarkedAfter(ticketId, promotion.eventId());
         BigDecimal prePortalDeposit = BigDecimal.ZERO;
         String policyNow = locked.depositPolicy();
         if (prePortal) {

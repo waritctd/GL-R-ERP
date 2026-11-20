@@ -17,6 +17,10 @@ public class AttachmentRepository {
         this.jdbc = jdbc;
     }
 
+    /** THE round-file predicate: linked to a round, or (once the undo of an order confirmation removed the round and kept
+     * the file as a deal file) still marked with the side that uploaded it, which only round files ever have. */
+    private static final String ROUND_FILE = "(delivery_request_id IS NOT NULL OR uploader_side IS NOT NULL)";
+
     public List<AttachmentDto> findByTicketId(long ticketId) {
         return findByTicketId(ticketId, true);
     }
@@ -29,7 +33,8 @@ public class AttachmentRepository {
                    attach_type, mime_type, file_size, uploaded_by, uploaded_at, delivery_request_id
               FROM sales.attachment
              WHERE ticket_id = :ticketId
-               AND (:includeRound OR delivery_request_id IS NULL)
+               AND (:includeRound OR NOT """ + ROUND_FILE + """
+)
              ORDER BY uploaded_at DESC
             """,
             Map.of("ticketId", ticketId, "includeRound", includeRoundFiles),
@@ -38,7 +43,7 @@ public class AttachmentRepository {
 
     public boolean isRoundFile(long id) {
         return Boolean.TRUE.equals(jdbc.queryForObject(
-            "SELECT EXISTS (SELECT 1 FROM sales.attachment WHERE attachment_id = :id AND delivery_request_id IS NOT NULL)",
+            "SELECT EXISTS (SELECT 1 FROM sales.attachment WHERE attachment_id = :id AND " + ROUND_FILE + ")",
             Map.of("id", id), Boolean.class));
     }
 

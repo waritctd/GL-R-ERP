@@ -190,6 +190,16 @@ class AttachmentTicketAccessIntegrationTest extends AbstractPostgresIntegrationT
         assertForbidden(() -> controller.download(attachmentId, sessionFor(warehouse)));
         jdbc.update("UPDATE sales.delivery_request SET status = 'DRAFT' WHERE delivery_request_id = :r", Map.of("r", requestId));
         assertForbidden(() -> controller.download(roundFile, sessionFor(warehouse)));
+
+        // The undo of the order confirmation removes the round and keeps its files as deal files (link cleared, side kept):
+        // sales still read it, import still does not.
+        jdbc.update("UPDATE sales.attachment SET delivery_request_id = NULL WHERE attachment_id = :a", Map.of("a", roundFile));
+        jdbc.update("DELETE FROM sales.delivery_request WHERE delivery_request_id = :r", Map.of("r", requestId));
+        assertThat(controller.list(ticketId, sessionFor(importUser)).get("attachments"))
+            .extracting(a -> a.id()).containsExactly(attachmentId);
+        assertThatThrownBy(() -> controller.download(roundFile, sessionFor(importUser)))
+            .isInstanceOf(ApiException.class).extracting(e -> ((ApiException) e).getStatus()).isEqualTo(HttpStatus.NOT_FOUND);
+        assertThatCode(() -> controller.download(roundFile, sessionFor(salesManager))).doesNotThrowAnyException();
     }
 
     /** A round's stored copy or extra file can be removed by its uploader only while the round is a draft or returned. */

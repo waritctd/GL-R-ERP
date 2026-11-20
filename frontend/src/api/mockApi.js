@@ -3782,9 +3782,14 @@ function mockIsWarehouseManager(u) {
 // TicketService#becomePrePortal: the flag, the deposit as ONE DEPOSIT receipt of source PRE_PORTAL (nothing when 0), and one
 // bell per person to account, sales manager, the warehouse manager (WarehouseStaff#isManager, else every warehouse
 // person) and every invoice issuer.
+/** TicketRepository#PRE_PORTAL_MARK_NOTE / #PRE_PORTAL_SEND_STAGE_NOTE. */
+const MOCK_PRE_PORTAL_MARK_NOTE = 'pre_portal → true — งานที่เดินมาก่อนใช้ระบบ';
+const MOCK_PRE_PORTAL_SEND_NOTE = 'ขอออกใบกำกับจากงานที่เดินมาก่อนใช้ระบบ';
+
 function mockBecomePrePortal(ticket, deposit, receivedOn, user) {
   const amount = mockRequirePreDeposit(deposit, receivedOn);
   ticket.prePortal = true;
+  pushEvent(ticket, user, 'POLICY_CHANGED', ticket.salesStage, ticket.salesStage, MOCK_PRE_PORTAL_MARK_NOTE); // TicketRepository#PRE_PORTAL_MARK_NOTE
   if (amount > 0) {
     const receiptId = Math.max(0, ...(db.paymentReceipts ?? []).map((r) => r.receiptId)) + 1;
     const now = new Date().toISOString();
@@ -16421,7 +16426,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
         else mockEnsureOrderConfirmed(ticket, chosen, user);
         const from = ticket.salesStage;
         ticket.salesStage = 'DELIVERY_SCHEDULING';
-        pushEvent(ticket, user, 'STAGE_CHANGED', from, 'DELIVERY_SCHEDULING', 'ขอออกใบกำกับจากงานที่เดินมาก่อนใช้ระบบ');
+        pushEvent(ticket, user, 'STAGE_CHANGED', from, 'DELIVERY_SCHEDULING', MOCK_PRE_PORTAL_SEND_NOTE);
       } else {
         mockEnsureOrderConfirmed(ticket, round.quotationId, user);
       }
@@ -16637,7 +16642,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       const { user } = requireAttachmentTicketAccess(ticketId);
       // AttachmentController#list: import never sees a delivery round's files (mayReadRoundFiles).
       return delay({ attachments: structuredClone(mockAttachments.filter((a) => a.ticketId === Number(ticketId)
-        && !(user.role === 'import' && a.deliveryRequestId != null))).map((a) => ({ ...a, deliveryRequestId: a.deliveryRequestId ?? null })) });
+        && !(user.role === 'import' && (a.deliveryRequestId != null || a.uploaderSide != null)))).map((a) => ({ ...a, deliveryRequestId: a.deliveryRequestId ?? null })) });
     },
     // `quotationId` is accepted by hrApi (sent as a multipart field when truthy) and threaded
     // through here; hardcoding `quotationId: null` would mean no mock-driven run could ever produce
@@ -21124,11 +21129,14 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       const autoStage = (e) => e.kind === 'STAGE_CHANGED' && e.message === 'อัตโนมัติจากขั้นตอนของดีล';
       // The stage goes back to the `from` of the first automatic move after the promotion (unchanged if none), its
       // timestamp to the latest earlier stage move (TicketRepository#firstAutoStageFromAfter / latestStageChangeAtBefore).
-      const restoreStage = events.find((e) => e.id > promotion.id && autoStage(e))?.fromStatus ?? null;
+      const sendMove = (e) => e.kind === 'STAGE_CHANGED' && e.message === MOCK_PRE_PORTAL_SEND_NOTE;
+      const restoreStage = events.find((e) => e.id > promotion.id && (autoStage(e) || sendMove(e)))?.fromStatus ?? null;
       const restoreStageAt = restoreStage == null ? null
         : [...events].reverse().find((e) => e.kind === 'STAGE_CHANGED' && e.id < promotion.id)?.createdAt ?? null;
       // A pre-portal deal: the marking goes first (policy back to what it replaced, the PRE_PORTAL receipt deleted, the flag cleared).
-      const wasPrePortal = ticket.prePortal === true;
+      // Only a marking made AFTER the promotion (by a send) is taken back; one made at creation (before it) stays.
+      const wasPrePortal = ticket.prePortal === true && events.some((e) => e.id > promotion.id && e.kind === 'POLICY_CHANGED'
+        && e.message === MOCK_PRE_PORTAL_MARK_NOTE);
       let prePortalDeposit = 0;
       if (wasPrePortal) {
         const was = [...events].reverse().find((e) => e.id > promotion.id && e.kind === 'POLICY_CHANGED'
@@ -21174,7 +21182,8 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       // The confirmation's own events: the promotion, then CUSTOMER_CONFIRMED, its automatic stage moves and its system
       // POLICY_CHANGED (the auto-cancel CANCELLED events stay).
       ticket.events = events.filter((e) => e.id !== promotion.id && !(e.id > promotion.id && (e.kind === 'CUSTOMER_CONFIRMED'
-        || autoStage(e) || (e.kind === 'POLICY_CHANGED' && isFollowedPolicyNote(e.message, row.number)))));
+        || autoStage(e) || sendMove(e) || (e.kind === 'POLICY_CHANGED'
+          && (e.message === MOCK_PRE_PORTAL_MARK_NOTE || isFollowedPolicyNote(e.message, row.number))))));
       const party = row.partyId != null ? mockDealParties.find((p) => p.id === row.partyId) : null;
       if (party?.status === 'AWARDED') {
         Object.assign(party, {

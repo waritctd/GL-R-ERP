@@ -2900,13 +2900,32 @@ public class TicketRepository {
                 rs.getTimestamp("created_at").toInstant())).stream().findFirst();
     }
 
+    /** The STAGE_CHANGED note of the move a first send makes on a deal that was not ordered in the portal (undone with the confirm). */
+    public static final String PRE_PORTAL_SEND_STAGE_NOTE = "ขอออกใบกำกับจากงานที่เดินมาก่อนใช้ระบบ";
+    /** The note of the event that marks a deal as ordered before the portal; an undo tells "marked by a send" (the event is
+     * newer than the promotion) from "created as สั่งซื้อแล้ว" (older) by it. */
+    public static final String PRE_PORTAL_MARK_NOTE = "pre_portal → true — งานที่เดินมาก่อนใช้ระบบ";
+
+    /** True when the pre-portal marking was made after the promotion event: by a send, not at creation. Deals marked
+     * before the marking event existed (none of it at all) are recognised by their policy note. */
+    public boolean prePortalMarkedAfter(long ticketId, long afterEventId) {
+        return Boolean.TRUE.equals(jdbc.queryForObject("""
+            SELECT EXISTS(SELECT 1 FROM sales.ticket_event WHERE ticket_id = :t AND kind = 'POLICY_CHANGED' AND message = :mark
+                           AND event_id > :after)
+                OR (NOT EXISTS(SELECT 1 FROM sales.ticket_event WHERE ticket_id = :t AND kind = 'POLICY_CHANGED' AND message = :mark)
+                    AND EXISTS(SELECT 1 FROM sales.ticket_event WHERE ticket_id = :t AND kind = 'POLICY_CHANGED' AND event_id > :after
+                                AND starts_with(message, :policy)))
+            """, Map.of("t", ticketId, "after", afterEventId, "mark", PRE_PORTAL_MARK_NOTE,
+                "policy", followedPolicyNote(DepositPolicy.NOT_REQUIRED, PRE_PORTAL_POLICY_REASON)), Boolean.class));
+    }
+
     /** The `from` stage of the earliest automatic stage move written after {@code afterEventId}. */
     public Optional<String> firstAutoStageFromAfter(long ticketId, long afterEventId) {
         return jdbc.query("""
             SELECT from_status FROM sales.ticket_event
-             WHERE ticket_id = :t AND kind = 'STAGE_CHANGED' AND message = :note AND event_id > :after
+             WHERE ticket_id = :t AND kind = 'STAGE_CHANGED' AND message IN (:note, :send) AND event_id > :after
              ORDER BY event_id LIMIT 1
-            """, Map.of("t", ticketId, "note", AUTO_STAGE_NOTE, "after", afterEventId),
+            """, Map.of("t", ticketId, "note", AUTO_STAGE_NOTE, "send", PRE_PORTAL_SEND_STAGE_NOTE, "after", afterEventId),
             (rs, n) -> rs.getString("from_status")).stream().findFirst();
     }
 
@@ -3053,11 +3072,11 @@ public class TicketRepository {
              WHERE ticket_id = :t
                AND (event_id = :promo
                     OR (event_id > :promo AND (kind = 'CUSTOMER_CONFIRMED'
-                        OR (kind = 'STAGE_CHANGED' AND message = :note)
-                        OR (kind = 'POLICY_CHANGED' AND
-            """ + FOLLOWED_POLICY_NOTE_MATCH + "))))",
+                        OR (kind = 'STAGE_CHANGED' AND message IN (:note, :send))
+                        OR (kind = 'POLICY_CHANGED' AND (message = :mark OR
+            """ + FOLLOWED_POLICY_NOTE_MATCH + ")))))",
             followedPolicyNoteParams(new MapSqlParameterSource().addValue("t", ticketId).addValue("promo", promotionEventId)
-                .addValue("note", AUTO_STAGE_NOTE), quotationNumber));
+                .addValue("note", AUTO_STAGE_NOTE).addValue("send", PRE_PORTAL_SEND_STAGE_NOTE).addValue("mark", PRE_PORTAL_MARK_NOTE), quotationNumber));
     }
 
     /** An ORDER_CONFIRMATION_UNDONE event naming this quotation exists (the undo's idempotent replay). */

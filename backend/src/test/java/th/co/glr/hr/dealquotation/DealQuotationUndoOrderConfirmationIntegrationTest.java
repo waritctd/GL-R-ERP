@@ -22,6 +22,7 @@ import th.co.glr.hr.ticket.DealStage;
 import th.co.glr.hr.ticket.DepositPolicy;
 import th.co.glr.hr.ticket.QuotationStatus;
 import th.co.glr.hr.ticket.TicketEventKind;
+import th.co.glr.hr.ticket.TicketRepository;
 import th.co.glr.hr.ticket.TicketStatus;
 
 /**
@@ -174,6 +175,64 @@ class DealQuotationUndoOrderConfirmationIntegrationTest extends DirectQuotationD
             Map.of("t", c.deal()))).containsEntry("status", "OPEN").containsEntry("receipt_id", null)
             .extracting(m -> m.get("received_amount")).isEqualTo(new java.math.BigDecimal("0.00"));
         assertThat(eventCount(c.deal(), TicketEventKind.ORDER_CONFIRMATION_UNDONE)).isEqualTo(1);
+    }
+
+    /** What DeliveryRequestService#send writes for an old deal: the confirm + marking (or the confirm alone when the deal is
+     * already pre-portal), then the move to DELIVERY_SCHEDULING with the send's own note. */
+    private void sendWrites(Confirmed c, boolean markNow) {
+        var prePortal = new th.co.glr.hr.deliveryrequest.PrePortal(tickets, new th.co.glr.hr.deliveryrequest.DeliveryRequestRepository(jdbc),
+            quotationService, ticketService);
+        String from = ticketService.get(c.deal(), salesActor).summary().salesStage();
+        if (markNow) {
+            prePortal.confirmAndMark(c.deal(), c.quotation().id(), new java.math.BigDecimal("1000.00"),
+                java.time.LocalDate.now(java.time.ZoneId.of("Asia/Bangkok")).minusDays(2), salesActor);
+        } else {
+            prePortal.ensureOrderConfirmed(c.deal(), c.quotation().id(), salesActor);
+        }
+        tickets.updateSalesStage(c.deal(), th.co.glr.hr.ticket.DealStage.DELIVERY_SCHEDULING);
+        tickets.addEvent(c.deal(), salesActor.id(), salesActor.name(), TicketEventKind.STAGE_CHANGED, from,
+            th.co.glr.hr.ticket.DealStage.DELIVERY_SCHEDULING, TicketRepository.PRE_PORTAL_SEND_STAGE_NOTE);
+    }
+
+    private Map<String, Object> ticketRow(long deal) {
+        return jdbc.queryForMap("SELECT sales_stage, pre_portal, deposit_policy FROM sales.ticket WHERE ticket_id = :t", Map.of("t", deal));
+    }
+
+    /** An old deal marked pre-portal BY its send: the undo returns it to its exact state, so the next send asks for the deposit. */
+    @Test
+    void prePortal_markedBySend_undoReturnsTheDealToItsStageBeforeTheSend_andTheNextSendAsksForTheDeposit() {
+        long deal = pipelineTicket(salesActor);
+        DealQuotationDto approved = approvedDirectQuotation(deal, salesActor);
+        Map<String, Object> before = ticketRow(deal);
+        Confirmed c = new Confirmed(deal, approved);
+        sendWrites(c, true);
+
+        confirmer.undoOrderConfirmation(approved.id(), null, null, salesActor);
+
+        assertThat(ticketRow(deal)).isEqualTo(before);
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM sales.payment_receipt WHERE ticket_id = :t", Map.of("t", deal), Long.class)).isZero();
+        // DeliveryRequestService#asksPreDeposit: before ORDER_RECEIVED and not pre-portal
+        assertThat(th.co.glr.hr.ticket.DealStage.indexOf((String) ticketRow(deal).get("sales_stage")))
+            .isLessThan(th.co.glr.hr.ticket.DealStage.indexOf(th.co.glr.hr.ticket.DealStage.ORDER_RECEIVED));
+        assertThat(tickets.isPrePortal(deal)).isFalse();
+    }
+
+    /** A deal created as สั่งซื้อแล้ว (marked before the confirm): the undo only takes the confirm back. */
+    @Test
+    void prePortal_createdAsOrdered_undoKeepsFlagDepositAndPolicy_andStageGoesBack() {
+        long deal = pipelineTicket(salesActor);
+        ticketService.becomePrePortal(deal, new java.math.BigDecimal("1000.00"),
+            java.time.LocalDate.now(java.time.ZoneId.of("Asia/Bangkok")).minusDays(2), salesActor);
+        DealQuotationDto approved = approvedDirectQuotation(deal, salesActor);
+        Map<String, Object> before = ticketRow(deal);
+        sendWrites(new Confirmed(deal, approved), false);
+
+        confirmer.undoOrderConfirmation(approved.id(), null, null, salesActor);
+
+        assertThat(ticketRow(deal)).containsEntry("sales_stage", before.get("sales_stage"))
+            .containsEntry("pre_portal", true).containsEntry("deposit_policy", DepositPolicy.NOT_REQUIRED);
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM sales.payment_receipt WHERE ticket_id = :t AND source = 'PRE_PORTAL'",
+            Map.of("t", deal), Long.class)).isEqualTo(1);
     }
 
     @Test
