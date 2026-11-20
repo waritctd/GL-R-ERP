@@ -146,6 +146,10 @@ class DealDocumentListIntegrationTest extends AbstractPostgresIntegrationTest {
             .extracting(i -> i.version()).containsExactly(3); // the revision's coming version, not its stored 1
         assertThat(docs.get(qA2).remainingInvoices()).isEmpty();
         assertThat(docs).doesNotContainKey(qB1); // deal B's draft is not rep A's to read
+        assertThat(docs.get(qA1).viewerMayWrite()).isTrue(); // rep A owns deal A
+        assertThat(docs.get(qA2).viewerMayWrite()).isTrue(); // the flag is per deal, also on the notice-only row
+        // a sales_manager reads every deal but writes none of them without the grant
+        assertThat(lists.summarize(Map.of(qA1, ticketA), actor(9001, "sales_manager")).get(qA1).viewerMayWrite()).isFalse();
     }
 
     // ── fixtures ──

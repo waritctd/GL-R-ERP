@@ -1,18 +1,29 @@
-import { useMemo, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { createContext, useContext, useMemo, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
+import { Button, buttonVariants } from '../../components/common/Button.jsx';
 import { DataTable } from '../../components/common/DataTable.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { cn } from '../../utils/cn.js';
+import { downloadBlob } from '../../utils/download.js';
+import { warnIfBundleSkipped } from '../../utils/userMessages.js';
+import { depositNoticeFileName } from '../deposits/createDepositNoticeDraft.js';
+import { invalidateDealDocuments } from '../documentChain/documentChain.js';
+import { DocumentDownloadSheet } from '../tickets/DocumentDownloadSheet.jsx';
+import { RemainingInvoiceDialog } from '../tickets/RemainingInvoiceDialog.jsx';
 import { formatMoney, formatThaiDate } from '../../utils/format.js';
 import { dealQuotationListSeesAll, dealQuotationRepOptions } from './quotationMeta.js';
 
 // เอกสารขาย's ใบแจ้งมัดจำ and ใบแจ้งหนี้ส่วนที่เหลือ tabs: every deal's notices / invoices in one list, each row naming the
-// quotation, deal and customer it belongs to. Row shapes: backend DealDocumentRows. Navigation only here; editing and
-// downloading are done on the deal's own pages.
+// quotation, deal and customer it belongs to. Row shapes: backend DealDocumentRows. Each row edits through the existing
+// editors (the notice page, RemainingInvoiceDialog) and downloads through DocumentDownloadSheet; who may write is the
+// server's `viewerMayWrite`.
+
+/** The signed-in user and the toast, for the pieces that sit deep inside the quotation tab's rows. */
+export const DocViewerContext = createContext({ user: null, showToast: undefined });
 
 const STATUS_BADGE = {
   DRAFT: { tone: 'warning', label: 'ฉบับร่าง' },
@@ -32,13 +43,17 @@ export function canSeeDealDocumentLists(user) {
 }
 
 const noticePath = (ticketId) => `/tickets/${ticketId}/deposit`;
-const invoicePath = (ticketId) => `/tickets/${ticketId}?tab=money`;
+// ?from=docs: the notice page's back link returns to this page. ?edit=1: an issued notice opens in แก้ไขฉบับปัจจุบัน.
+const noticeRowPath = (row) => `${noticePath(row.origin.ticketId)}?from=docs${row.viewerMayWrite && row.status === 'ISSUED' ? '&edit=1' : ''}`;
 
 /**
  * The documents made from one quotation row (`row.documents`, see DealDocumentRows.QuotationDocuments), as links to
  * where each lives. `heading` is for the phone card; the desktop column header says it already.
  */
 export function QuotationDocuments({ row, heading = false }) {
+  const { showToast } = useContext(DocViewerContext);
+  const queryClient = useQueryClient();
+  const [openInvoice, setOpenInvoice] = useState(false);
   const docs = row.documents;
   if (!docs || (!docs.depositNotice && !(docs.remainingInvoices ?? []).length)) return null;
   const notice = docs.depositNotice;
@@ -59,20 +74,38 @@ export function QuotationDocuments({ row, heading = false }) {
         </span>
       ) : null}
       {(docs.remainingInvoices ?? []).map((invoice) => (
-        <Link key={invoice.id} to={invoicePath(row.ticketId)} className={linkClass} onClick={(event) => event.stopPropagation()}>
+        <button
+          key={invoice.id}
+          type="button"
+          className={cn(linkClass, 'cursor-pointer border-0 bg-transparent p-0 text-left')}
+          onClick={(event) => { event.stopPropagation(); setOpenInvoice(true); }}
+        >
           <span className="text-text-muted no-underline">ใบแจ้งหนี้ส่วนที่เหลือ</span>
           <code>{invoice.docNumber ?? (invoice.version ? `ฉบับร่าง -${invoice.version}` : 'ยังไม่ออกเลข')}</code>
           <DocStatusBadge status={invoice.status} />
-        </Link>
+        </button>
       ))}
+      {openInvoice ? (
+        // The dialog is a portal, but React still bubbles its clicks to the row's own handler: stop them here.
+        <span onClick={(event) => event.stopPropagation()} onKeyDown={(event) => event.stopPropagation()} role="presentation">
+          <RemainingInvoiceDialog
+            ticketId={row.ticketId}
+            quotationId={row.id}
+            initialQuotationId={row.id}
+            canWrite={docs.viewerMayWrite === true}
+            showToast={showToast}
+            onClose={() => { setOpenInvoice(false); invalidateDealDocuments(queryClient, row.ticketId); }}
+          />
+        </span>
+      ) : null}
     </span>
   );
 }
 
 // DataTable's gridClassName must be ONE unbroken literal (Tailwind's scanner cannot see a concatenation; see
-// QuotationListPage's LIST_TABLE_GRID). Document / from-quotation / customer / [rep] / amount / date / open.
-const GRID = 'grid-cols-[minmax(9rem,1.2fr)_minmax(0,1.8fr)_minmax(0,1.4fr)_minmax(8.25rem,1fr)_minmax(7.5rem,1fr)_minmax(3.5rem,0.4fr)]';
-const GRID_WITH_REP = 'grid-cols-[minmax(9rem,1.2fr)_minmax(0,1.8fr)_minmax(0,1.4fr)_minmax(0,1fr)_minmax(8.25rem,1fr)_minmax(7.5rem,1fr)_minmax(3.5rem,0.4fr)]';
+// QuotationListPage's LIST_TABLE_GRID). Document / from-quotation / customer / [rep] / amount / date / actions.
+const GRID = 'grid-cols-[minmax(9rem,1.2fr)_minmax(0,1.8fr)_minmax(0,1.4fr)_minmax(8.25rem,1fr)_minmax(7.5rem,1fr)_minmax(8rem,0.9fr)]';
+const GRID_WITH_REP = 'grid-cols-[minmax(9rem,1.2fr)_minmax(0,1.8fr)_minmax(0,1.4fr)_minmax(0,1fr)_minmax(8.25rem,1fr)_minmax(7.5rem,1fr)_minmax(8rem,0.9fr)]';
 
 const KINDS = {
   deposit: {
@@ -81,7 +114,6 @@ const KINDS = {
     countsKey: queryKeys.depositNoticeCounts,
     fetchList: () => api.depositNotices.listAll(),
     fetchCounts: () => api.depositNotices.counts(),
-    openPath: noticePath,
     amount: (row) => row.totalPayable,
     // deposit_percent is stored as a fraction (0.5 = 50%), as DepositNoticePage reads it.
     amountLabel: (row) => `มัดจำ ${Math.round(Number(row.depositPercent) * 100)}% รวม VAT`,
@@ -96,7 +128,6 @@ const KINDS = {
     countsKey: queryKeys.remainingInvoiceCounts,
     fetchList: () => api.storedRemainingInvoices.listAll(),
     fetchCounts: () => api.storedRemainingInvoices.counts(),
-    openPath: invoicePath,
     amount: (row) => row.grandTotal,
     amountLabel: () => 'ยอดชำระ',
     dateOf: (row) => (row.status === 'DRAFT' ? row.updatedAt : row.docDate ?? row.updatedAt),
@@ -176,15 +207,49 @@ function DocIdentity({ row, kind, olderOpen, onToggleOlder }) {
   );
 }
 
-function OpenLink({ to, className }) {
+/**
+ * What a row offers: แก้ไข / แก้ไขร่าง for who may write (`viewerMayWrite`), เปิดดู for everyone else, and ดาวน์โหลด. A
+ * notice opens its page; an invoice opens RemainingInvoiceDialog in place. `card` = the phone card (two side-by-side
+ * 44px buttons) instead of the compact desktop column.
+ */
+function RowActions({ row, kind, card, onOpenInvoice, onDownload }) {
+  const writable = row.viewerMayWrite === true;
+  const draft = row.status === 'DRAFT';
+  const label = !writable ? 'เปิดดู'
+    : row.pendingRevision ? `แก้ไขร่าง -${row.pendingRevision.nextVersion}`
+      : draft ? 'แก้ไขร่าง' : 'แก้ไข';
+  // The invoice dialog has nothing to show a reader who cannot write for a draft (it waits for sales), so no เปิดดู there.
+  const canOpen = kind === 'deposit' || writable || !draft;
+  const size = card ? 'md' : 'sm';
+  const grow = card ? 'flex-1' : 'w-full';
+  const openClass = cn(grow, 'whitespace-nowrap');
   return (
-    <Link to={to} className={cn('inline-flex min-h-6 items-center text-xs font-bold text-info underline mobile:min-h-[44px]', className)}>
-      เปิด →
-    </Link>
+    <span className={cn('flex min-w-0 flex-col gap-1.5', card && 'mt-1')} data-testid="doc-row-actions">
+      <span className={cn('flex gap-2', !card && 'flex-col')}>
+        {canOpen ? (kind === 'deposit' ? (
+          <Link to={noticeRowPath(row)} className={cn(buttonVariants({ variant: writable ? 'primary' : 'secondary', size }), openClass)}>
+            {label}
+          </Link>
+        ) : (
+          <Button variant={writable ? 'primary' : 'secondary'} size={size} className={openClass} onClick={() => onOpenInvoice(row)}>
+            {label}
+          </Button>
+        )) : null}
+        <Button variant="secondary" size={size} className={openClass} onClick={() => onDownload(row)}>
+          <Icon name="download" size={14} />
+          {draft ? 'ตัวอย่าง PDF' : 'ดาวน์โหลด'}
+        </Button>
+      </span>
+      {!writable ? (
+        <span className="text-xs text-text-muted" data-testid="doc-lock-note">
+          {`แก้ไขได้เฉพาะเจ้าของงาน${row.origin.ownerName ? ` ${row.origin.ownerName}` : ''}`}
+        </span>
+      ) : null}
+    </span>
   );
 }
 
-function DocCard({ row, kind, cfg, olderOpen, onToggleOlder, seesAll }) {
+function DocCard({ row, kind, cfg, olderOpen, onToggleOlder, seesAll, onOpenInvoice, onDownload }) {
   return (
     <div className="flex min-w-0 flex-col gap-2" data-testid="doc-card">
       <DocIdentity row={row} kind={kind} olderOpen={olderOpen} onToggleOlder={onToggleOlder} />
@@ -197,7 +262,7 @@ function DocCard({ row, kind, cfg, olderOpen, onToggleOlder, seesAll }) {
         <span className="tabular-nums text-md font-extrabold text-text">{formatMoney(cfg.amount(row))}</span>
       </span>
       <span className="rounded-md bg-surface-muted px-3 py-2"><QuotationRef origin={row.origin} /></span>
-      <OpenLink to={cfg.openPath(row.origin.ticketId)} className="justify-center rounded-md border border-border-input" />
+      <RowActions row={row} kind={kind} card onOpenInvoice={onOpenInvoice} onDownload={onDownload} />
     </div>
   );
 }
@@ -212,6 +277,10 @@ export function DealDocumentList({ kind, user }) {
   const [status, setStatus] = useState('all');
   const [repFilter, setRepFilter] = useState('');
   const [openOlder, setOpenOlder] = useState(() => new Set());
+  const { showToast } = useContext(DocViewerContext);
+  const queryClient = useQueryClient();
+  const [sheetRow, setSheetRow] = useState(null); // the row whose ดาวน์โหลด sheet is open
+  const [dialogRow, setDialogRow] = useState(null); // the invoice row open in RemainingInvoiceDialog
 
   const listQuery = useQuery({ queryKey: cfg.queryKey(), queryFn: () => cfg.fetchList().then((r) => r?.[cfg.listKey] ?? []) });
   const countsQuery = useQuery({ queryKey: cfg.countsKey(), queryFn: () => cfg.fetchCounts().then((r) => r ?? null) });
@@ -255,11 +324,44 @@ export function DealDocumentList({ kind, user }) {
       ),
     },
     { key: 'date', header: 'วันที่', render: (row) => <span className="text-xs">{`${cfg.dateLabel(row)} ${formatThaiDate(cfg.dateOf(row))}`}</span> },
-    { key: 'open', header: '', render: (row) => <OpenLink to={cfg.openPath(row.origin.ticketId)} /> },
+    { key: 'actions', header: 'จัดการ', render: (row) => <RowActions row={row} kind={kind} onOpenInvoice={setDialogRow} onDownload={setSheetRow} /> },
   ], [cfg, kind, seesAll, openOlder]);
+
+  // The sheet saves the file choice and then calls this, which downloads; it shows any error itself.
+  async function downloadSheetRow() {
+    const row = sheetRow;
+    const blob = kind === 'deposit'
+      ? await api.depositNotices.downloadPdf(row.id)
+      : await api.storedRemainingInvoices.download(row.id);
+    const name = kind === 'deposit'
+      ? depositNoticeFileName({ docNumber: row.docNumber, reference: row.origin.quotationNumber }, row.origin.ticketId)
+      : row.docNumber || `draft-${row.id}`;
+    downloadBlob(blob, name, 'pdf');
+    warnIfBundleSkipped(blob, showToast);
+  }
 
   return (
     <div data-testid={`doc-list-${kind}`}>
+      {sheetRow ? (
+        <DocumentDownloadSheet
+          kind={kind}
+          documentId={sheetRow.id}
+          ticketId={sheetRow.origin.ticketId}
+          reference={sheetRow.origin.quotationNumber}
+          onClose={() => setSheetRow(null)}
+          onDownload={downloadSheetRow}
+        />
+      ) : null}
+      {dialogRow ? (
+        <RemainingInvoiceDialog
+          ticketId={dialogRow.origin.ticketId}
+          quotationId={dialogRow.origin.quotationId}
+          initialQuotationId={dialogRow.origin.quotationId}
+          canWrite={dialogRow.viewerMayWrite === true}
+          showToast={showToast}
+          onClose={() => { invalidateDealDocuments(queryClient, dialogRow.origin.ticketId); setDialogRow(null); }}
+        />
+      ) : null}
       <div className="mb-3 flex flex-wrap items-end gap-3">
         <div className="flex flex-wrap items-center gap-2" role="group" aria-label="กรองตามสถานะเอกสาร">
           {STATUS_CHIPS.filter((chip) => chip.key !== 'DRAFT' || seesDrafts).map((chip) => {
@@ -303,7 +405,7 @@ export function DealDocumentList({ kind, user }) {
         unfilteredTotal={rows.length}
         getRowKey={(row) => row.id}
         gridClassName={seesAll ? GRID_WITH_REP : GRID}
-        mobileCard={(row) => <DocCard row={row} kind={kind} cfg={cfg} olderOpen={openOlder.has(row.id)} onToggleOlder={() => toggleOlder(row.id)} seesAll={seesAll} />}
+        mobileCard={(row) => <DocCard row={row} kind={kind} cfg={cfg} olderOpen={openOlder.has(row.id)} onToggleOlder={() => toggleOlder(row.id)} seesAll={seesAll} onOpenInvoice={setDialogRow} onDownload={setSheetRow} />}
         searchable
         searchPlaceholder="ค้นหาลูกค้า / เลขที่เอกสาร / เลขใบเสนอราคา / โครงการ"
         loading={listQuery.isLoading}

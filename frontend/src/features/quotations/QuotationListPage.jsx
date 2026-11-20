@@ -23,7 +23,7 @@ import {
 } from './quotationMeta.js';
 import { readQuotationListView, writeQuotationListView } from './quotationPrefs.js';
 import { chainListMark } from '../documentChain/documentChainText.js';
-import { DealDocumentList, QuotationDocuments, canSeeDealDocumentLists } from './DealDocumentLists.jsx';
+import { DealDocumentList, DocViewerContext, QuotationDocuments, canSeeDealDocumentLists } from './DealDocumentLists.jsx';
 
 /**
  * The row's document chain mark (the list endpoint's per-row `chainStage`, DocumentChainService#listStages — set only
@@ -845,7 +845,7 @@ function QuotationsTab({ user }) {
  * quotations already scoped server-side (see dealQuotations.list's doc comment) -- this page adds
  * no client-side ownership filter.
  */
-export function QuotationListPage({ user }) {
+export function QuotationListPage({ user, showToast }) {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   // ขอออกใบกำกับ / ส่งของ: pick a deal (a sheet), or make a new one for work ordered before the portal.
@@ -864,6 +864,7 @@ export function QuotationListPage({ user }) {
 
   const [searchParams, setSearchParams] = useSearchParams();
   const hasLists = canSeeDealDocumentLists(user);
+  const docViewer = useMemo(() => ({ user, showToast }), [user, showToast]);
   // ?doc= picks the document tab; absent or unknown = ใบเสนอราคา. The quotation tab keeps its own ?status=.
   const requestedDoc = searchParams.get('doc');
   const doc = hasLists && DOC_TABS.some((tab) => tab.key === requestedDoc) ? requestedDoc : 'quotation';
@@ -961,7 +962,9 @@ export function QuotationListPage({ user }) {
         </div>
       ) : null}
       <div id="sales-docs-panel" role="tabpanel" aria-labelledby={hasLists ? `doc-tab-${doc}` : undefined}>
-        {doc === 'quotation' ? <QuotationsTab user={user} /> : <DealDocumentList key={doc} kind={doc} user={user} />}
+        <DocViewerContext.Provider value={docViewer}>
+          {doc === 'quotation' ? <QuotationsTab user={user} /> : <DealDocumentList key={doc} kind={doc} user={user} />}
+        </DocViewerContext.Provider>
       </div>
       {picking ? (
         <DealPickSheet onClose={() => setPicking(false)} onCreateNew={() => { setPicking(false); setCreating(true); }} />

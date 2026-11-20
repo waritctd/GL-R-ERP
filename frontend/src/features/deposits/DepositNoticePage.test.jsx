@@ -416,6 +416,16 @@ describe('DepositNoticePage', () => {
     expect(api.depositNotices.issue).not.toHaveBeenCalled();
   });
 
+  it('startEditing (?edit=1 from เอกสารขาย) opens an issued notice straight in edit mode', async () => {
+    api.depositNotices.listByTicket.mockResolvedValue({
+      depositNotices: [{ ...validDraftDoc, status: 'ISSUED', docNumber: 'GLRD69001', depositPercent: 0.3 }],
+    });
+    renderDepositNoticePage({ startEditing: true });
+
+    expect((await screen.findByLabelText('มัดจำ %')).disabled).toBe(false);
+    expect(screen.queryByRole('button', { name: 'แก้ไขฉบับปัจจุบัน' })).toBeNull();
+  });
+
   it('uses the served document vatPercent (10%) in the VAT label and amount, not the 7% fallback', async () => {
     api.depositNotices.listByTicket.mockResolvedValue({
       depositNotices: [{ ...validDraftDoc, vatPercent: 0.10 }],

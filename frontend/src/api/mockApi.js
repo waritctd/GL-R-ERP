@@ -2469,6 +2469,10 @@ let mockRemainingInvoiceSeq = 1;
 const mockRemainingInvoices = []; // RemainingInvoiceDocumentDto-shaped rows, each with its own `items`.
 // GET /api/deal-quotations rows' `documents` (DealDocumentRows.QuotationDocuments): the deal's one notice and THIS quotation's
 // invoices, null when there are none. Read live, so a notice made through the mock shows up on the list.
+function mockViewerMayWriteDealDocuments(ticketId) {
+  const user = requireSession();
+  return isSalesOwner(findTicketRaw(ticketId), user);
+}
 function mockQuotationDocuments(q) {
   const notice = mockDepositNotices.find((d) => d.ticketId === q.ticketId && d.status !== 'SUPERSEDED' && d.status !== 'CANCELLED');
   const invoices = mockRemainingInvoices.filter((r) => r.ticketId === q.ticketId && (r.customerQuotationId ?? null) === q.id && r.status !== 'SUPERSEDED');
@@ -2476,6 +2480,8 @@ function mockQuotationDocuments(q) {
   return {
     depositNotice: notice ? { id: notice.id, status: notice.status, docNumber: notice.docNumber ?? null, forThisQuotation: !notice.reference || notice.reference === q.number } : null,
     remainingInvoices: invoices.map((r) => ({ id: r.id, status: r.status, docNumber: r.docNumber ?? null, version: r.status === 'DRAFT' ? null : r.version })),
+    // the list rows' rule: owner or keyer in a sales role (the mock has no all-sales-documents grant)
+    viewerMayWrite: mockViewerMayWriteDealDocuments(q.ticketId),
   };
 }
 
@@ -2525,7 +2531,47 @@ function mockDocFixtures() {
       }] : []),
     ],
   };
+  mockSeedDocFixtureDocuments(mockDocFixtureCache);
   return mockDocFixtureCache;
+}
+
+// Real stored documents behind the fixture rows (same ids), so the notice page, the invoice dialog and the download sheet
+// that the เอกสารขาย rows open find them. The list rows themselves stay static.
+function mockSeedDocFixtureDocuments({ notices, invoices }) {
+  const now = new Date().toISOString();
+  for (const n of notices) {
+    if (mockDepositNotices.some((d) => d.id === n.id)) continue;
+    const ticket = findTicketRaw(n.origin.ticketId);
+    mockDepositNotices.push(buildMockDoc({
+      id: n.id, ticketId: n.origin.ticketId, docType: 'DEPOSIT_NOTICE', version: 1, docNumber: n.docNumber, issueDate: n.issueDate,
+      status: n.status, customerName: n.origin.customerName ?? '', customerTaxId: '', customerAddress: '', projectName: n.origin.projectName ?? '',
+      reference: n.origin.quotationNumber, depositPercent: n.depositPercent, vatPercent: 0.07, notes: [],
+      items: [{ seq: 1, description: 'รายการสินค้า (ข้อมูลตัวอย่าง)', qty: 1, unit: 'ชุด', unitPrice: n.depositAmount / n.depositPercent, netUnitPrice: n.depositAmount / n.depositPercent, amount: n.depositAmount / n.depositPercent }],
+      issuedByName: n.status === 'ISSUED' ? ticket.createdByName : null, preparerName: ticket.createdByName, preparerId: ticket.createdById,
+      hasPdf: false, hasXlsx: false, createdAt: now, updatedAt: n.updatedAt,
+    }));
+  }
+  const stored = (id, status, version, base, row, origin) => {
+    if (mockRemainingInvoices.some((r) => r.id === id)) return;
+    const ticket = findTicketRaw(origin.ticketId);
+    mockRemainingInvoices.push({
+      id, ticketId: origin.ticketId, customerQuotationId: origin.quotationId, depositNoticeId: null,
+      baseNumber: base, version, docNumber: status === 'DRAFT' ? null : `${base}-${version}`, status, supersededById: null,
+      reference: origin.quotationNumber, depositReference: null, docDate: row.docDate, notes: [],
+      customerName: origin.customerName, customerTaxId: null, customerBranch: null, customerAddress: null, projectName: origin.projectName,
+      itemsTotal: row.itemsTotal, depositDeduction: row.depositDeduction, netAmount: row.netAmount, vatAmount: row.vatAmount, grandTotal: row.grandTotal,
+      createdById: ticket.createdById, createdByName: ticket.createdByName, preparerId: ticket.createdById, preparerName: ticket.createdByName,
+      createdAt: now, updatedAt: row.updatedAt,
+      issuedById: status === 'DRAFT' ? null : ticket.createdById, issuedByName: status === 'DRAFT' ? null : ticket.createdByName, issuedAt: status === 'DRAFT' ? null : row.updatedAt,
+      items: [{ id: `${id}-1`, remainingInvoiceId: id, seq: 1, description: 'รายการสินค้า (ข้อมูลตัวอย่าง)', qty: 1, unit: 'ชุด', unitPrice: row.itemsTotal, discountLabel: null, netUnitPrice: row.itemsTotal, amount: row.itemsTotal }],
+    });
+  };
+  for (const inv of invoices) {
+    const base = inv.docNumber ? inv.docNumber.replace(/-\d+$/, '') : `GLR69${String(inv.id).padStart(5, '0')}`;
+    for (const old of inv.olderVersions ?? []) stored(old.id, 'SUPERSEDED', old.version, base, { ...inv, docDate: old.docDate, grandTotal: old.grandTotal }, inv.origin);
+    stored(inv.id, inv.status, inv.version, base, inv, inv.origin);
+    if (inv.pendingRevision) stored(inv.pendingRevision.id, 'DRAFT', inv.pendingRevision.nextVersion, base, inv, inv.origin);
+  }
 }
 
 // Mirrors DealDocumentListService's scope: sales_manager/ceo/account see every deal, sales their own; import is refused (403).

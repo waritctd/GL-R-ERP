@@ -23,6 +23,13 @@ vi.mock('../../api/index.js', async (importOriginal) => {
   };
 });
 
+// The real dialog is covered by its own test; here only what the rows hand it matters.
+vi.mock('../tickets/RemainingInvoiceDialog.jsx', () => ({
+  RemainingInvoiceDialog: ({ ticketId, quotationId, initialQuotationId, canWrite }) => (
+    <div data-testid="invoice-dialog">{`ticket ${ticketId} quotation ${quotationId}/${initialQuotationId} write ${canWrite}`}</div>
+  ),
+}));
+
 const salesUser = { id: 6, name: 'คุณสมหมาย ขายดี', role: 'sales' };
 const ceoUser = { id: 8, name: 'ราม', role: 'ceo' };
 const salesManagerUser = { id: 9, name: 'ผึ้ง', role: 'sales_manager' };
@@ -278,14 +285,39 @@ describe('QuotationListPage — เอกสารขาย document tabs', () =
     expect(api.depositNotices.listAll).not.toHaveBeenCalled();
   });
 
-  it('a quotation row lists the documents made from it', async () => {
+  it('a quotation row lists the documents made from it; an invoice opens the dialog on that quotation', async () => {
     api.dealQuotations.list.mockResolvedValue({ items: [row({
       ticketId: 91,
-      documents: { depositNotice: { id: 501, status: 'ISSUED', docNumber: 'GLRD69041', forThisQuotation: true }, remainingInvoices: [{ id: 7, status: 'DRAFT', docNumber: null, version: 3 }] },
+      documents: { depositNotice: { id: 501, status: 'ISSUED', docNumber: 'GLRD69041', forThisQuotation: true }, remainingInvoices: [{ id: 7, status: 'DRAFT', docNumber: null, version: 3 }], viewerMayWrite: true },
     })] });
     renderListPage(salesUser);
     expect((await screen.findByRole('link', { name: /GLRD69041/ })).getAttribute('href')).toBe('/tickets/91/deposit');
-    expect(screen.getByRole('link', { name: /ฉบับร่าง -3/ }).getAttribute('href')).toBe('/tickets/91?tab=money');
+    fireEvent.click(screen.getByRole('button', { name: /ฉบับร่าง -3/ }));
+    expect(screen.getByTestId('invoice-dialog').textContent).toBe('ticket 91 quotation 1/1 write true');
+  });
+
+  it('a writable issued notice offers แก้ไข into edit mode; a read-only one offers เปิดดู and the lock note', async () => {
+    api.depositNotices.listAll.mockResolvedValue({ depositNotices: [
+      noticeRow(),
+      noticeRow({}, { id: 502, docNumber: 'GLRD69042', viewerMayWrite: false, origin: { ticketId: 92, ownerName: 'คุณอื่น', quotationId: 12, quotationNumber: 'QT-2026-9002' } }),
+    ] });
+    renderListPage(salesUser, '/quotations?doc=deposit');
+    await screen.findByText('GLRD69041');
+    expect(screen.getAllByRole('link', { name: 'แก้ไข' })[0].getAttribute('href')).toBe('/tickets/91/deposit?from=docs&edit=1');
+    expect(screen.getAllByRole('link', { name: 'เปิดดู' })[0].getAttribute('href')).toBe('/tickets/92/deposit?from=docs');
+    expect(screen.getAllByText('แก้ไขได้เฉพาะเจ้าของงาน คุณอื่น').length).toBeGreaterThan(0);
+    expect(screen.getAllByRole('button', { name: /ดาวน์โหลด/ }).length).toBeGreaterThan(0);
+  });
+
+  it('an invoice row opens the dialog scoped to its quotation, labelled by its pending revision', async () => {
+    api.storedRemainingInvoices.listAll.mockResolvedValue({ remainingInvoices: [{
+      id: 9301, status: 'ISSUED', docNumber: 'GLR6900058-2', version: 2, docDate: '2026-11-16', grandTotal: 214000, viewerMayWrite: true,
+      pendingRevision: { id: 9302, nextVersion: 3 }, olderVersions: [],
+      origin: { ticketId: 91, ticketCode: 'DL-2611-001', customerName: 'ก', ownerId: 6, ownerName: 'ส', quotationId: 11, quotationNumber: 'QT-2026-9001' },
+    }] });
+    renderListPage(salesUser, '/quotations?doc=remaining');
+    fireEvent.click(await screen.findByRole('button', { name: 'แก้ไขร่าง -3' }));
+    expect(screen.getByTestId('invoice-dialog').textContent).toBe('ticket 91 quotation 11/11 write true');
   });
 });
 

@@ -9,6 +9,7 @@ import { ForgotPasswordPage } from './features/auth/ForgotPasswordPage.jsx';
 import { ResetPasswordPage } from './features/auth/ResetPasswordPage.jsx';
 import { useHrData } from './hooks/useHrData.js';
 import { useToast } from './hooks/useToast.js';
+import { useDocumentChain } from './features/documentChain/documentChain.js';
 import { SALES_ENABLED } from './app/features.js';
 import { hasPermission, isDivisionManager, landsOnSelfService } from './app/permissions.js';
 import { RequireAccess } from './app/RequireAccess.jsx';
@@ -90,12 +91,20 @@ function DepositNoticeRoute({ user, showToast }) {
   // "สร้าง" from the delivery request sheet (?returnTo=ship-request): back and after-issue land on that order's sheet again.
   const toRequest = searchParams.get('returnTo') === 'ship-request';
   const backToRequest = () => navigate(`/tickets/${ticketId}?tab=ship&request=open`);
+  // Opened from เอกสารขาย (?from=docs): back returns to its notice tab; ?edit=1 opens an issued notice in edit mode.
+  const fromDocs = searchParams.get('from') === 'docs';
+  // ?edit=1 is honoured only for a viewer the server lets write this deal's documents (the chain's flag); until that
+  // answers, the page waits so its first render already knows.
+  const wantsEdit = searchParams.get('edit') === '1';
+  const chain = useDocumentChain(ticketId, { enabled: wantsEdit });
+  if (wantsEdit && chain.isPending) return null;
   return (
     <DepositNoticePage
       user={user}
       ticketId={ticketId}
-      onBack={toRequest ? backToRequest : () => navigate(`/tickets/${ticketId}`)}
-      backLabel={toRequest ? 'กลับไปที่คำขอ' : undefined}
+      onBack={toRequest ? backToRequest : fromDocs ? () => navigate('/quotations?doc=deposit') : () => navigate(`/tickets/${ticketId}`)}
+      backLabel={toRequest ? 'กลับไปที่คำขอ' : fromDocs ? 'กลับไปเอกสารขาย' : undefined}
+      startEditing={wantsEdit && chain.data?.viewer?.mayWriteDepositNotice === true}
       quotationId={toRequest ? searchParams.get('quotation') : null}
       onIssued={toRequest ? backToRequest : undefined}
       showToast={showToast}

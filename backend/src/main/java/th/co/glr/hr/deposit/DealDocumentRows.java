@@ -40,5 +40,6 @@ public final class DealDocumentRows {
      * is 1 until it is issued). */
     public record InvoiceRef(long id, String status, String docNumber, Integer version) {}
 
-    public record QuotationDocuments(NoticeRef depositNotice, List<InvoiceRef> remainingInvoices) {}
+    /** {@code viewerMayWrite}: the same rule as the list rows' flag (owner or keyer in a sales role, or the all-sales-documents grant). */
+    public record QuotationDocuments(NoticeRef depositNotice, List<InvoiceRef> remainingInvoices, boolean viewerMayWrite) {}
 }

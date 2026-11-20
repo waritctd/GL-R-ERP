@@ -238,26 +238,26 @@ public class DealDocumentListRepository {
         return status == null ? rows : rows.stream().filter(r -> status.equals(r.status())).toList();
     }
 
-    public record LeanNotice(long ticketId, long id, String status, String docNumber, Long quotationId) {}
+    public record LeanNotice(long ticketId, long id, String status, String docNumber, Long quotationId, boolean mayWrite) {}
 
-    public record LeanInvoice(long quotationId, InvoiceRef ref) {}
+    public record LeanInvoice(long quotationId, InvoiceRef ref, boolean mayWrite) {}
 
     /** What a quotation row needs of its deals' notices: ids, status, number and the resolved quotation. No money, owner,
-     * customer name or write flag. */
+     * customer name; the write flag is the list rows' own rule. */
     public List<LeanNotice> findLeanNotices(Viewer v, Collection<Long> ticketIds) {
         MapSqlParameterSource params = params();
-        String sql = "SELECT d.deposit_notice_id, d.ticket_id, d.status, d.doc_number " + quotationCols(v, params) + """
+        String sql = "SELECT d.deposit_notice_id, d.ticket_id, d.status, d.doc_number, t.created_by, t.keyed_by " + quotationCols(v, params) + """
               FROM sales.deposit_notice d
               JOIN sales.ticket t ON t.ticket_id = d.ticket_id
             """ + NOTICE_QUOTATION + "WHERE TRUE" + statusClause(v, "d", null) + scopeClause(v, params, ticketIds);
         return jdbc.query(sql, params, (rs, n) -> new LeanNotice(rs.getLong("ticket_id"), rs.getLong("deposit_notice_id"),
-            rs.getString("status"), rs.getString("doc_number"), (Long) rs.getObject("quotation_id", Long.class)));
+            rs.getString("status"), rs.getString("doc_number"), (Long) rs.getObject("quotation_id", Long.class), mayWrite(v, rs)));
     }
 
     /** Live invoices of those deals that resolve to a quotation the viewer sees; the same lean shape. */
     public List<LeanInvoice> findLeanInvoices(Viewer v, Collection<Long> ticketIds) {
         MapSqlParameterSource params = params();
-        String sql = "SELECT d.id, d.status, d.doc_number, d.version " + quotationCols(v, params) + """
+        String sql = "SELECT d.id, d.status, d.doc_number, d.version, t.created_by, t.keyed_by " + quotationCols(v, params) + """
               FROM sales.remaining_invoice d
               JOIN sales.ticket t ON t.ticket_id = d.ticket_id
             """ + INVOICE_QUOTATION + "WHERE TRUE" + statusClause(v, "d", null) + scopeClause(v, params, ticketIds)
@@ -265,7 +265,7 @@ public class DealDocumentListRepository {
         List<LeanInvoice> rows = jdbc.query(sql, params, (rs, n) -> {
             Long q = (Long) rs.getObject("quotation_id", Long.class);
             return q == null ? null : new LeanInvoice(q, new InvoiceRef(rs.getLong("id"), rs.getString("status"),
-                rs.getString("doc_number"), rs.getInt("version")));
+                rs.getString("doc_number"), rs.getInt("version")), mayWrite(v, rs));
         }).stream().filter(java.util.Objects::nonNull).toList();
         // A revision draft is stored as version 1 until issued: show the version it will get, and none for a first draft.
         Map<Long, Integer> issuedVersion = new HashMap<>();
@@ -273,7 +273,7 @@ public class DealDocumentListRepository {
             .forEach(r -> issuedVersion.merge(r.quotationId(), r.ref().version(), Math::max));
         return rows.stream().map(r -> !"DRAFT".equals(r.ref().status()) ? r
             : new LeanInvoice(r.quotationId(), new InvoiceRef(r.ref().id(), r.ref().status(), r.ref().docNumber(),
-                issuedVersion.containsKey(r.quotationId()) ? issuedVersion.get(r.quotationId()) + 1 : null))).toList();
+                issuedVersion.containsKey(r.quotationId()) ? issuedVersion.get(r.quotationId()) + 1 : null), r.mayWrite())).toList();
     }
 
     /** all / draft / issued of the viewer's own list; a draft revision counts with the ISSUED invoice it replaces. */

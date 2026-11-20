@@ -244,12 +244,12 @@ function payloadKey(payload) {
   return JSON.stringify({ ...payload, expectedUpdatedAt: null });
 }
 
-export function DepositNoticePage({ ticketId, onBack, backLabel = 'เปิดงาน', quotationId = null, onIssued, showToast }) {
+export function DepositNoticePage({ ticketId, onBack, backLabel = 'เปิดงาน', quotationId = null, startEditing = false, onIssued, showToast }) {
   const queryClient = useQueryClient();
   const [customerSearch, setCsSearch] = useState('');
   const [confirmIssue, setConfirmIssue] = useState(false);
   // An ISSUED notice is read-only until sales presses แก้ไข; saving then updates the same document in place.
-  const [editingIssued, setEditingIssued] = useState(false);
+  const [editingIssued, setEditingIssued] = useState(startEditing);
   const [downloading, setDownloading] = useState(null); // 'xlsx' | 'pdf' | null
   const [pdfSheetOpen, setPdfSheetOpen] = useState(false); // the ดาวน์โหลด PDF sheet (which files go into the PDF)
 

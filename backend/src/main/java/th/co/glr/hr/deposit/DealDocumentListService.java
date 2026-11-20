@@ -81,9 +81,12 @@ public class DealDocumentListService {
         List<Long> ticketIds = ticketIdByQuotationId.values().stream().distinct().toList();
         Map<Long, List<DealDocumentListRepository.LeanNotice>> notices = repo.findLeanNotices(v, ticketIds).stream()
             .collect(Collectors.groupingBy(DealDocumentListRepository.LeanNotice::ticketId));
-        Map<Long, List<InvoiceRef>> invoices = repo.findLeanInvoices(v, ticketIds).stream()
+        List<DealDocumentListRepository.LeanInvoice> leanInvoices = repo.findLeanInvoices(v, ticketIds);
+        Map<Long, List<InvoiceRef>> invoices = leanInvoices.stream()
             .collect(Collectors.groupingBy(DealDocumentListRepository.LeanInvoice::quotationId,
                 Collectors.mapping(DealDocumentListRepository.LeanInvoice::ref, Collectors.toList())));
+        Map<Long, Boolean> invoiceMayWrite = new HashMap<>();
+        leanInvoices.forEach(i -> invoiceMayWrite.put(i.quotationId(), i.mayWrite()));
         Map<Long, QuotationDocuments> out = new HashMap<>();
         for (Map.Entry<Long, Long> q : ticketIdByQuotationId.entrySet()) {
             long quotationId = q.getKey();
@@ -92,9 +95,12 @@ public class DealDocumentListService {
                 .min((a, b) -> Boolean.compare("ISSUED".equals(b.status()), "ISSUED".equals(a.status()))).orElse(null);
             List<InvoiceRef> refs = invoices.getOrDefault(quotationId, List.of());
             if (notice == null && refs.isEmpty()) continue;
+            // the flag is per deal, so any one of the deal's documents carries it
+            boolean mayWrite = notice != null ? notice.mayWrite()
+                : invoiceMayWrite.getOrDefault(quotationId, false);
             out.put(quotationId, new QuotationDocuments(notice == null ? null
                 : new NoticeRef(notice.id(), notice.status(), notice.docNumber(),
-                    Objects.equals(notice.quotationId(), quotationId)), refs));
+                    Objects.equals(notice.quotationId(), quotationId)), refs, mayWrite));
         }
         return out;
     }
