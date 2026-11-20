@@ -346,7 +346,8 @@ function IssuedSummary({ issued, canWrite, onRevised, onDownloaded, showToast })
         </div>
       </div>
       {error ? <p className="m-0 text-sm font-bold text-danger" role="alert">{error}</p> : null}
-      <div className="flex gap-2">
+      {/* Phone: one full-width button per line (the draft footer's DialogFooterRow does the same), not three squeezed boxes. */}
+      <div className="flex gap-2 mobile:flex-col mobile:items-stretch [&>button]:mobile:w-full" data-testid="remaining-invoice-issued-actions">
         <Button type="button" variant="primary" disabled={downloading} onClick={() => setSheetOpen(true)}
           data-testid="remaining-invoice-download">
           {downloading ? 'กำลังดาวน์โหลด…' : 'ดาวน์โหลด'}
