@@ -224,6 +224,13 @@ describe('DeliveryRoundsPanel', () => {
     expect(screen.queryByLabelText('เอา สลิป.jpg ออก')).toBeNull();
     expect(screen.getByText('ฝ่ายขายแนบ · 2 KB')).toBeTruthy();
 
+    // Closing the sheet with its X leaves the panel standing (the close click's event is not a notice to render).
+    fireEvent.click(screen.getByTestId('send-back-button'));
+    fireEvent.click(within(await screen.findByTestId('send-back-sheet')).getByLabelText('ปิด'));
+    await waitFor(() => expect(screen.queryByTestId('send-back-sheet')).toBeNull());
+    expect(screen.queryByTestId('forward-error')).toBeNull();
+    expect(screen.getByTestId('forward-button')).toBeTruthy();
+
     fireEvent.click(screen.getByTestId('send-back-button'));
     const sheet = await screen.findByTestId('send-back-sheet');
     expect(within(sheet).getByText(/เรื่องจะกลับไปที่คุณขาย/)).toBeTruthy();

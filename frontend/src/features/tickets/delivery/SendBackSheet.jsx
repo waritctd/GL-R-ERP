@@ -38,7 +38,8 @@ export function SendBackSheet({ ticketId, order, round, onClose }) {
   return (
     <Modal
       title="ส่งกลับฝ่ายขาย"
-      onClose={sendBack.isPending ? () => {} : onClose}
+      // Modal calls onClose with the click event; our onClose(notice) takes a message, so never pass the event on.
+      onClose={sendBack.isPending ? () => {} : () => onClose()}
       placement="sheet-on-phone"
       testId="send-back-sheet"
       footer={(
