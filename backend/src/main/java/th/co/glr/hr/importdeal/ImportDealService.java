@@ -4,6 +4,7 @@ import java.util.List;
 import java.util.Set;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import th.co.glr.hr.auth.OversightReader;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.importdeal.ImportDealDtos.ImportDealCommentDto;
@@ -32,7 +33,10 @@ public class ImportDealService {
     }
 
     public ImportDealDto get(long ticketId, UserPrincipal actor) {
-        if (!IMPORT_DEAL_ROLES.contains(actor.role())) {
+        // Read-only for oversight readers (sales_manager role, read-all holder; helper excludes import). They are
+        // not in IMPORT_DEAL_ROLES, so importRequests.list below applies their own reader arm; no write uses this.
+        if (!IMPORT_DEAL_ROLES.contains(actor.role())
+                && !OversightReader.is(actor, tickets::holdsReadAllSalesGrant)) {
             throw forbidden();
         }
         // Detail read only: also a lost/cancelled deal that still has an issued IR (the link in its notice).

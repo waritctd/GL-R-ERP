@@ -24,7 +24,7 @@ class FinanceDealLockdownIntegrationTest extends FinanceDealTestBase {
     void everyFinanceRoute_refusesSalesEvenTheDealsOwnRep_andEveryOtherNonFinanceRole() throws Exception {
         long id = createS15Deal("DEPOSIT_NOTICE_ISSUED");
 
-        for (UserPrincipal actor : List.of(salesRep, salesManager, importUser, hrUser, employeeUser)) {
+        for (UserPrincipal actor : List.of(salesRep, salesManager, importUser, hrUser, employeeUser, readAllHolder)) {
             for (Route route : routes()) {
                 expectStatus(financeMvc.perform(route.request(id, actor)), 403, "role " + actor.role() + " on " + route.name());
             }
@@ -32,6 +32,17 @@ class FinanceDealLockdownIntegrationTest extends FinanceDealTestBase {
         assertThat(paymentStatusOf(id)).isEqualTo("DEPOSIT_NOTICE_ISSUED");
         assertThat(receiptCount(id)).isZero();
         assertThat(commentCount(id)).isZero();
+    }
+
+    @Test
+    void financeGet_oversightReadersOpenIt_overHttp_withEmptyActions() throws Exception {
+        long id = createS15Deal("DEPOSIT_NOTICE_ISSUED");
+        for (UserPrincipal actor : List.of(salesManager, readAllHolder)) {
+            JsonNode deal = okDeal(financeMvc.perform(get("/api/finance/deals/{id}", id).session(session(actor))));
+            assertThat(deal.get("availableActions")).as(actor.role()).isEmpty();
+        }
+        assertThat(financeMvc.perform(get("/api/finance/deals/{id}", id).session(session(hrUser)))
+            .andReturn().getResponse().getStatus()).isEqualTo(403);
     }
 
     @Test
