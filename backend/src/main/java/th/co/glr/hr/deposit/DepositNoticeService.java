@@ -422,6 +422,11 @@ public class DepositNoticeService {
         DepositNoticeDto doc = requireDraft(docId);
         requireRole(actor, SALES_ROLES);
         requireTicketOwner(doc.ticketId(), actor);
+        if (doc.reference() != null && !doc.reference().isBlank()
+                && docs.referencesUnbillableQuotation(doc.ticketId(), doc.reference())) {
+            throw new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคาอ้างอิง " + doc.reference()
+                + " ถูกยกเลิกหรือใช้ออกใบแจ้งยอดไม่ได้แล้ว — เลือกใบเสนอราคาอื่นที่ใช้งานอยู่แล้วจึงออกเอกสาร");
+        }
         // The stored percent is what the document prints: outside a whole 1-100 (a 0% ticket-route
         // draft, a 0.3330 typed before whole percents) it takes no number until fixed on the draft.
         BigDecimal pct = doc.depositPercent();

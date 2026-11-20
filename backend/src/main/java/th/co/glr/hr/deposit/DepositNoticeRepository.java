@@ -79,6 +79,13 @@ public class DepositNoticeRepository {
         );
     }
 
+    /** The statuses a new-engine quotation is billable in (what {@link #findGoverningQuotation} admits), as a predicate on
+     * alias {@code q}. The ONE rule: customer lookups prefer the newest such row of a number, then the newest row, and
+     * {@link #findRepointTarget} takes only such a row, so a notice's customer and lines never come from different rows. */
+    private static final String BILLABLE_Q = """
+        ((q.origin = 'PRICING_REQUEST' AND q.doc_status IN ('ACCEPTED','ISSUED'))
+          OR (q.origin = 'DEAL_DIRECT' AND q.doc_status IN ('ACCEPTED','ISSUED','APPROVED')))""";
+
     /** The notice's customer is the QUOTATION's party customer whenever the reference names a new-engine quotation of
      * this deal that has a party (a deal can hold several BUYER parties; the stored header may name the headline one).
      * The stored columns are used only when no such quotation resolves (legacy reference, no party). */
@@ -89,7 +96,8 @@ public class DepositNoticeRepository {
               JOIN sales.deal_party dp ON dp.party_id = q.party_id
               JOIN customers.customer c ON c.customer_id = dp.customer_id
              WHERE q.ticket_id = d.ticket_id AND q.number = d.reference AND q.origin IS NOT NULL
-             ORDER BY q.quotation_id DESC LIMIT 1) qc ON TRUE
+             ORDER BY CASE WHEN """ + BILLABLE_Q + """
+ THEN 0 ELSE 1 END, q.quotation_id DESC LIMIT 1) qc ON TRUE
         """;
 
     // ── Deposit notice CRUD ─────────────────────────────────────────────────────────
@@ -495,7 +503,8 @@ public class DepositNoticeRepository {
         return jdbc.queryForList("""
             SELECT dp.customer_id FROM sales.quotation q JOIN sales.deal_party dp ON dp.party_id = q.party_id
              WHERE q.ticket_id = :t AND q.number = :n AND q.origin IS NOT NULL
-             ORDER BY q.quotation_id DESC LIMIT 1
+             ORDER BY CASE WHEN """ + BILLABLE_Q + """
+ THEN 0 ELSE 1 END, q.quotation_id DESC LIMIT 1
             """, Map.of("t", ticketId, "n", number), Long.class).stream().findFirst();
     }
 
@@ -506,16 +515,23 @@ public class DepositNoticeRepository {
 
     public Optional<RepointTarget> findRepointTarget(long ticketId, String number) {
         return jdbc.query("""
-            SELECT quotation_id, number, deposit_percent FROM sales.quotation
-             WHERE ticket_id = :t AND number = :n AND party_id IS NOT NULL
-               AND ((origin = 'PRICING_REQUEST' AND doc_status IN ('ACCEPTED','ISSUED'))
-                 OR (origin = 'DEAL_DIRECT' AND doc_status IN ('ACCEPTED','ISSUED','APPROVED')))
+            SELECT quotation_id, number, deposit_percent FROM sales.quotation q
+             WHERE ticket_id = :t AND number = :n AND party_id IS NOT NULL AND """ + BILLABLE_Q + """
              ORDER BY quotation_id DESC LIMIT 1
             """, Map.of("t", ticketId, "n", number), (rs, i) -> {
                 Integer stored = (Integer) rs.getObject("deposit_percent");
                 return new RepointTarget(rs.getLong("quotation_id"), rs.getString("number"), BigDecimal.valueOf(
                     stored != null ? stored : DealQuotationRenderAdapter.DEFAULT_DEPOSIT_PERCENT, 2));
             }).stream().findFirst();
+    }
+
+    /** True when the reference names a new-engine quotation of this deal but none of its rows is billable any more
+     * (cancelled, rejected, expired...). A legacy number or a PO number is never "unbillable". */
+    public boolean referencesUnbillableQuotation(long ticketId, String number) {
+        return Boolean.TRUE.equals(jdbc.queryForObject("""
+            SELECT EXISTS (SELECT 1 FROM sales.quotation q WHERE q.ticket_id = :t AND q.number = :n AND q.origin IS NOT NULL)
+               AND NOT EXISTS (SELECT 1 FROM sales.quotation q WHERE q.ticket_id = :t AND q.number = :n AND """ + BILLABLE_Q + ")",
+            Map.of("t", ticketId, "n", number), Boolean.class));
     }
 
     /** The new-engine (origin set) quotation of this deal with this number: the one a notice's reference names. */
