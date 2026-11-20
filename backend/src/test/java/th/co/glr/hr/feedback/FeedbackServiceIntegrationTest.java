@@ -6,6 +6,7 @@ import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
@@ -23,6 +24,7 @@ import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.feedback.FeedbackDtos.DecisionRequest;
 import th.co.glr.hr.feedback.FeedbackDtos.FeedbackDto;
 import th.co.glr.hr.feedback.FeedbackDtos.SubmitRequest;
+import th.co.glr.hr.feedback.FeedbackDtos.UpdateRequest;
 import th.co.glr.hr.mail.Mailer;
 import th.co.glr.hr.notification.NotificationDto;
 import th.co.glr.hr.notification.NotificationEmailService;
@@ -113,7 +115,7 @@ class FeedbackServiceIntegrationTest extends AbstractPostgresIntegrationTest {
         clearInvocations(mailer);
 
         FeedbackDto accepted = service.decide(principal(admin, "employee"), id,
-            new DecisionRequest("ACCEPT", LocalDate.of(2026, 12, 5), null));
+            new DecisionRequest("ACCEPT", LocalDate.of(2026, 12, 5), null, null));
 
         assertThat(accepted.status()).isEqualTo("ACCEPTED");
         assertThat(accepted.eta()).isEqualTo(LocalDate.of(2026, 12, 5));
@@ -138,15 +140,28 @@ class FeedbackServiceIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     @Test
+    void silentAcceptAndSilentReleaseNotifyNobody() {
+        long id = pending();
+        clearInvocations(mailer);
+
+        service.decide(principal(admin, "employee"), id, new DecisionRequest("ACCEPT", LocalDate.of(2026, 12, 5), null, true));
+        FeedbackDto released = service.update(principal(admin, "employee"), id, new UpdateRequest("RELEASED", null, true));
+
+        assertThat(released.status()).isEqualTo("RELEASED");
+        assertThat(feedbackBells(rep)).isEmpty();
+        verify(mailer, never()).sendHtml(anyString(), anyString(), anyString(), anyString(), anyList());
+    }
+
+    @Test
     void nonAdminsCanNotDecide_includingCeoHrAndTheReporter_andNothingChanges() {
         long id = pending();
         long before = bellCount(rep);
 
         for (UserPrincipal denied : List.of(principal(rep, "sales"), principal(ceo, "ceo"), principal(hr, "hr"))) {
-            assertThatThrownBy(() -> service.decide(denied, id, new DecisionRequest("ACCEPT", LocalDate.of(2026, 12, 5), null)))
+            assertThatThrownBy(() -> service.decide(denied, id, new DecisionRequest("ACCEPT", LocalDate.of(2026, 12, 5), null, null)))
                 .as(denied.role())
                 .hasFieldOrPropertyWithValue("status", HttpStatus.FORBIDDEN);
-            assertThatThrownBy(() -> service.decide(denied, id, new DecisionRequest("DENY", null, "ไม่รับเรื่องนี้")))
+            assertThatThrownBy(() -> service.decide(denied, id, new DecisionRequest("DENY", null, "ไม่รับเรื่องนี้", null)))
                 .as(denied.role())
                 .hasFieldOrPropertyWithValue("status", HttpStatus.FORBIDDEN);
         }
