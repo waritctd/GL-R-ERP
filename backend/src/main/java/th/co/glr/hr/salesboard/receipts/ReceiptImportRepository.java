@@ -143,6 +143,12 @@ public class ReceiptImportRepository {
 
     public static final int TWIN_DAYS = 7;
 
+    /** Row-locks the receipt for the rest of the transaction, so two rows resolved against it at once serialise. */
+    public void lockReceipt(long receiptId) {
+        jdbc.queryForList("SELECT receipt_id FROM sales.payment_receipt WHERE receipt_id = :r FOR UPDATE",
+            Map.of("r", receiptId));
+    }
+
     /** Is an Express row already RESOLVED against this receipt? A tax invoice's money settles at most one row. */
     public boolean isSettledByRow(long receiptId) {
         return Boolean.TRUE.equals(jdbc.queryForObject(
