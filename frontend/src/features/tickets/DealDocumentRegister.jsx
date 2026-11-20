@@ -27,11 +27,12 @@ import {
   dropLegacyDuplicatedByChain, groupChainQuotations, groupDepositNotices,
   groupDirectQuotations, groupLegacyQuotations, groupRemainingInvoices, sortGroupsNewestFirst,
 } from './dealDocumentVersions.js';
-import { isSalesOwner } from './dealOwnership.js';
+import { isOversightReader, isSalesOwner } from './dealOwnership.js';
 
 /** Same read gate as ImportRequestService#requireRead: import / CEO / sales_manager, or the OWNING sales rep. */
 export function canReadStoredImportRequests(user, summary) {
   return ['import', 'ceo', 'sales_manager'].includes(user?.role)
+    || isOversightReader(user)
     || (isSalesOwner(summary, user));
 }
 

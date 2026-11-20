@@ -29,8 +29,10 @@ function allFalse() {
 /** Which of a deal's TicketDetailPage sections `role` may see. ceo and sales_manager are an unconditional
  * pass-through — both are oversight roles (sales_manager is read+comment ONLY, per the note on
  * ROLE_PERMISSIONS in api/routes.js, but that never narrows what it may *read*). */
-export function visibleSections(role) {
-  if (role === 'ceo' || role === 'sales_manager' || role === 'sales') return allTrue();
+export function visibleSections(role, reader = false) {
+  // `reader`: an oversight reader (read-all grant) sees what a sales_manager sees; the role is never faked, and
+  // every write control keeps its own role/owner check.
+  if (role === 'ceo' || role === 'sales_manager' || role === 'sales' || (reader && role !== 'import' && role !== 'account')) return allTrue();
 
   if (role === 'import') {
     return {

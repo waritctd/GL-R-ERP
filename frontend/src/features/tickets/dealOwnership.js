@@ -23,3 +23,12 @@ export function actsAsOwner(deal, user) {
 export function isSalesOwner(deal, user) {
   return (user?.role === 'sales' || holdsAllSalesDocumentsGrant(user)) && actsAsOwner(deal, user);
 }
+
+/** v2.3.0 oversight reader: a sales_manager (by role) or a holder of the per-person read-all grant (AuthResponse.readAllSales,
+ * a hint the server re-reads live), never import or account. READ presentation only: write controls keep their own role/owner
+ * checks, so a reader is never mapped to sales_manager. Mirrors the backend OversightReader. */
+export function isOversightReader(user) {
+  if (!user) return false;
+  if (user.role === 'sales_manager') return true;
+  return user.readAllSales === true && user.role !== 'import' && user.role !== 'account';
+}

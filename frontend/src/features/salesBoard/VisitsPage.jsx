@@ -3,7 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
-import { hasPermission } from '../../app/permissions.js';
+import { hasPermission, isOversightReader } from '../../app/permissions.js';
 import { Button } from '../../components/common/Button.jsx';
 import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
@@ -305,7 +305,8 @@ export function VisitsPage({ user, showToast = () => {} }) {
   const initialWeekOffset = weekOffsetFromParam(params.get('week'), bangkokTodayIso());
   return (
     <PageStack>
-      {hasPermission(user?.role, 'canViewTeamVisits')
+      {/* A read-all holder who is not a sales rep reads the team grid (read only); a rep keeps their own week. */}
+      {hasPermission(user?.role, 'canViewTeamVisits') || (isOversightReader(user) && user?.role !== 'sales')
         ? <TeamWeek initialWeekOffset={initialWeekOffset} />
         : <RepWeek showToast={showToast} initialWeekOffset={initialWeekOffset} />}
     </PageStack>

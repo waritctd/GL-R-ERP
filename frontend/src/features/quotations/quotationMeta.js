@@ -30,7 +30,7 @@
 // `ISSUED`/`EXPIRED` are unreachable for a DEAL_DIRECT row in practice (its single-shot approve()
 // only requests the APPROVED edge, and a DEAL_DIRECT quotation never expires): which edge a caller
 // requests decides what a row reaches, not which edges the table allows.
-import { holdsAllSalesDocumentsGrant, isSalesOwner } from '../tickets/dealOwnership.js';
+import { holdsAllSalesDocumentsGrant, isOversightReader, isSalesOwner } from '../tickets/dealOwnership.js';
 import { bangkokTodayIso } from '../../utils/format.js';
 export const DEAL_QUOTATION_TRANSITIONS = {
   DRAFT: ['PENDING_APPROVAL', 'CANCELLED', 'SUPERSEDED'],
@@ -241,7 +241,7 @@ export function canApproveDealQuotationNow(user, quotation) {
  * canCreateQuotation-granted employee, who may view any deal. */
 export function canViewDealQuotation(user) {
   if (!user) return false;
-  return hasDealQuotationGrant(user) || ['sales', 'sales_manager', 'ceo', 'import', 'account'].includes(user.role);
+  return hasDealQuotationGrant(user) || isOversightReader(user) || ['sales', 'sales_manager', 'ceo', 'import', 'account'].includes(user.role);
 }
 
 /** Read-only viewers per the plan ("import, account read-only") -- never see write actions regardless of

@@ -53,14 +53,14 @@ export const LEGACY_TICKET_DETAIL_TAB_IDS = Object.freeze({
 });
 
 /** The ordered list of tab ids `role` may see for this deal. */
-export function visibleTicketDetailTabIds(role) {
-  const sections = visibleSections(role);
+export function visibleTicketDetailTabIds(role, reader = false) {
+  const sections = visibleSections(role, reader);
   return TICKET_DETAIL_TABS.filter((tab) => tab.isVisible(role, sections)).map((tab) => tab.id);
 }
 
 /** `tabId` (an old key mapped to its new tab first) if `role` may see it, else `DEFAULT_TICKET_DETAIL_TAB_ID` — an
  * absent, unknown, or role-hidden `?tab=` never renders a blank or forbidden panel. */
-export function resolveTicketDetailTab(tabId, role) {
+export function resolveTicketDetailTab(tabId, role, reader = false) {
   const mapped = LEGACY_TICKET_DETAIL_TAB_IDS[tabId] ?? tabId;
-  return visibleTicketDetailTabIds(role).includes(mapped) ? mapped : DEFAULT_TICKET_DETAIL_TAB_ID;
+  return visibleTicketDetailTabIds(role, reader).includes(mapped) ? mapped : DEFAULT_TICKET_DETAIL_TAB_ID;
 }

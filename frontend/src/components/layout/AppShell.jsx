@@ -4,7 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { SALES_ENABLED } from '../../app/features.js';
-import { hasPermission, isDivisionManager, isQuotationReleaseUser, isReleasedPath, isSelfServiceLocked } from '../../app/permissions.js';
+import { hasPermission, isDivisionManager, isOversightReader, isQuotationReleaseUser, isReaderPath, isReleasedPath, isSelfServiceLocked } from '../../app/permissions.js';
 import { PRODUCT_NAME } from '../../app/product.js';
 import { cn } from '../../utils/cn.js';
 import { displayRole, roleLabel } from '../../utils/format.js';
@@ -109,6 +109,8 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
   }, []);
   const isTeamManager = isDivisionManager(user);
   const navLocked = isSelfServiceLocked(user);
+  // v2.3.0 read-all: the 7 sales/finance pages open for sales managers and grant holders; the lock filter below keeps them in step with canAccessPath.
+  const reader = isOversightReader(user);
   const navItems = [
     { path: '/', label: 'แดชบอร์ด', helper: 'Dashboard', icon: 'dashboard', show: true },
     // Admin capability, not a role: `user.admin` comes from AuthResponse and is held by exactly one person.
@@ -144,7 +146,7 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
       // งานการเงิน instead, all below. งานนำเข้า is not the same page as the
       // dashboard worklist: see .design/import-fulfilment/INFORMATION_ARCHITECTURE.md §0.
       // See docs/role-scoped-views.md.
-      show: hasPermission(user.role, 'canViewDealPipeline') && SALES_ENABLED,
+      show: (hasPermission(user.role, 'canViewDealPipeline') || reader) && SALES_ENABLED,
       match: ['/tickets'],
     },
     // Direct deal quotation. Mirrors ROLE_PERMISSIONS.canViewDealQuotations
@@ -158,24 +160,24 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
       helper: 'Sales documents',
       icon: 'fileText',
       group: 'sales',
-      show: (hasPermission(user.role, 'canViewDealQuotations') || Boolean(user.canCreateQuotation)) && SALES_ENABLED,
+      show: (hasPermission(user.role, 'canViewDealQuotations') || Boolean(user.canCreateQuotation) || reader) && SALES_ENABLED,
       match: ['/quotations'],
     },
     // นัดเข้าพบ — after เอกสารขาย (was ใบเสนอราคา until 2026-11-20), where the design's NAV puts it for sales. Same audience as the '/visits'
     // PATH_GUARDS entry (canViewVisits = VisitService.VISIT_ROLES): a rep's own week; sales_manager / ceo the team's.
-    { path: '/visits', label: 'นัดเข้าพบ', helper: 'Visits', icon: 'calendar', group: 'sales', show: hasPermission(user.role, 'canViewVisits') && SALES_ENABLED },
+    { path: '/visits', label: 'นัดเข้าพบ', helper: 'Visits', icon: 'calendar', group: 'sales', show: (hasPermission(user.role, 'canViewVisits') || reader) && SALES_ENABLED },
     { path: '/ceo-settings', label: 'ตั้งค่าราคา', helper: 'CEO price config', icon: 'setting', group: 'settings', show: user.role === 'ceo' && SALES_ENABLED },
     // Catalog browsing is scoped to the sales/CRM audience (canViewCatalog), not just the
     // feature flag.
-    { path: '/catalog', label: 'แคตตาล็อกสินค้า', helper: 'Product catalog', icon: 'search', group: 'sales', show: hasPermission(user.role, 'canViewCatalog') && SALES_ENABLED },
+    { path: '/catalog', label: 'แคตตาล็อกสินค้า', helper: 'Product catalog', icon: 'search', group: 'sales', show: (hasPermission(user.role, 'canViewCatalog') || reader) && SALES_ENABLED },
     { path: '/price-import', label: 'นำเข้าราคา', helper: 'Price import', icon: 'upload', group: 'settings', show: hasPermission(user.role, 'canManagePriceImport') && SALES_ENABLED },
     // Import's cross-deal PricingRequest queue — see permissions.js's PATH_GUARDS comment for why this is a
     // narrower audience than a single request's detail page.
-    { path: '/pricing-requests', label: 'คิวขอราคา', helper: 'Pricing request queue', icon: 'clipboard', group: 'sales', show: hasPermission(user.role, 'canViewPricingRequestQueue') && SALES_ENABLED },
+    { path: '/pricing-requests', label: 'คิวขอราคา', helper: 'Pricing request queue', icon: 'clipboard', group: 'sales', show: (hasPermission(user.role, 'canViewPricingRequestQueue') || reader) && SALES_ENABLED },
     // Import's stream-2 workspace, placed immediately after stream 1 so its two obligations to Sales read as two
     // adjacent items in the order a deal travels (price, then goods). `building`, not `clipboard`: the neighbour
     // already owns that glyph, and the chain ends at the warehouse.
-    { path: '/fulfilment', label: 'การขนส่ง', helper: 'Import shipments — the one place a step is advanced', icon: 'building', group: 'sales', show: hasPermission(user.role, 'canActOnFulfilment') && SALES_ENABLED },
+    { path: '/fulfilment', label: 'การขนส่ง', helper: 'Import shipments — the one place a step is advanced', icon: 'building', group: 'sales', show: (hasPermission(user.role, 'canActOnFulfilment') || reader) && SALES_ENABLED },
     // Account has NO ค่าคอมมิชชัน nav item: the invoice+commission step (บันทึกใบกำกับ /
     // create-from-deal at close) is the LAST STAGE of the งานการเงิน money lifecycle + the
     // Overview worklist (รับมัดจำ → รับชำระส่วนที่เหลือ → ยืนยันพร้อมปิดงาน → บันทึกใบกำกับ), not a
@@ -187,7 +189,7 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
     // Account's money-lifecycle worklist: deposit -> final payment -> close-ready ->
     // record-invoice/commission, one page. Deliberately NOT OR'd with the per-employee
     // canIssueBillingNote grant: see permissions.js's isBillingNoteReleaseUser for why.
-    { path: '/finance', label: 'งานการเงิน', helper: 'Finance worklist', icon: 'badgeDollar', group: 'finance', show: hasPermission(user.role, 'canConfirmPayments') && SALES_ENABLED },
+    { path: '/finance', label: 'งานการเงิน', helper: 'Finance worklist', icon: 'badgeDollar', group: 'finance', show: (hasPermission(user.role, 'canConfirmPayments') || reader) && SALES_ENABLED },
     // The Express receipts upload: the same audience as /finance (account, ceo = ReceiptImportService.UPLOAD_ROLES).
     // The Express receipts page: ACCOUNT only (review H2/H3), and only once the owner has switched the upload on
     // (app.receipts.express-upload.enabled, review H4) — read from GET /api/sales/receipt-imports/latest.
@@ -257,6 +259,7 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
       || (item.path === '/quotations' && isQuotationReleaseUser(user))
       // import's งานนำเข้า + คิวขอราคา and account's งานการเงิน survive the lock: the same
       // allowlist canAccessPath applies.
+      || (reader && isReaderPath(item.path))
       || isReleasedPath(item.path, user));
 
   const closeTopbarPopover = useCallback(() => setActiveTopbarPopover(null), []);

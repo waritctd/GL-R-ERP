@@ -8,6 +8,7 @@ import { DataTable } from '../../components/common/DataTable.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { cn } from '../../utils/cn.js';
+import { isOversightReader } from '../tickets/dealOwnership.js';
 import { downloadBlob } from '../../utils/download.js';
 import { warnIfBundleSkipped } from '../../utils/userMessages.js';
 import { depositNoticeFileName } from '../deposits/createDepositNoticeDraft.js';
@@ -39,7 +40,7 @@ export function DocStatusBadge({ status }) {
 
 /** The two document tabs' audience (DepositNoticeService#dealDocumentScope): import gets 403 from both lists. */
 export function canSeeDealDocumentLists(user) {
-  return ['sales', 'sales_manager', 'ceo', 'account'].includes(user?.role);
+  return ['sales', 'sales_manager', 'ceo', 'account'].includes(user?.role) || isOversightReader(user);
 }
 
 const noticePath = (ticketId) => `/tickets/${ticketId}/deposit`;

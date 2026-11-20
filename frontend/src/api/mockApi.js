@@ -1122,7 +1122,7 @@ const CUSTOMER_VIEWER_ROLES = ['sales', 'import', 'ceo', 'account', 'sales_manag
 // DealEntryAccess.canEnterDeal's canCreateQuotation grant.
 function requireCustomerViewer() {
   const user = requireSession();
-  if (!CUSTOMER_VIEWER_ROLES.includes(user.role) && !user.canCreateQuotation) {
+  if (!CUSTOMER_VIEWER_ROLES.includes(user.role) && !user.canCreateQuotation && !holdsReadAllSalesGrant(user)) {
     fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
   }
   return user;
@@ -1840,14 +1840,15 @@ function buildPricingRequestDetail(pr) {
 }
 
 function requirePricingRequestViewable(id, user) {
-  if (!PRICING_REQUEST_VIEWER_ROLES.includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+  const holder = holdsReadAllSalesGrant(user);
+  if (!PRICING_REQUEST_VIEWER_ROLES.includes(user.role) && !holder) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
   const pr = findPricingRequestRaw(id);
   const ticket = db.tickets.find((t) => t.id === pr.ticketId);
-  const draftOversight = user.role === 'ceo' || user.role === 'sales_manager';
+  const draftOversight = user.role === 'ceo' || user.role === 'sales_manager' || holder;
   if (pr.status === 'DRAFT' && !draftOversight && !actsAsOwner(ticket, user)) {
     fail('ไม่พบคำขอราคานี้', 404);
   }
-  if (user.role === 'sales' && !actsAsOwner(ticket, user)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+  if (user.role === 'sales' && !holder && !actsAsOwner(ticket, user)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
   return pr;
 }
 
@@ -2355,6 +2356,7 @@ function authResponse(user) {
     canCreateQuotation: Boolean(user?.canCreateQuotation),
     canIssueBillingNote: Boolean(user?.canIssueBillingNote),
     canIssueTaxInvoice: Boolean(user?.canIssueTaxInvoice),
+    readAllSales: holdsReadAllSalesGrant(user),
     canManageAllSalesDocuments: holdsAllSalesDocumentsGrant(user),
     canViewAs: false,
     canViewPeopleInsights: ['ceo', 'hr'].includes(user?.role),
@@ -2423,6 +2425,16 @@ function isLegacyStockSource(ticket) {
 function procurementDecisionOpen(ticket) {
   return (ticket.lifecycle ?? 'ACTIVE') === 'ACTIVE' && ticket.fulfillmentStatus == null
     && dealStageIndex(ticket.salesStage) >= dealStageIndex('ORDER_RECEIVED');
+}
+
+// v2.3.0 read-all grant (hr.employee.can_read_all_sales): the holder reads every deal and its tabs, never writes. Mirrors
+// auth/OversightReader: `holder` = the flag on any role but import/account; `reader` adds the sales_manager role. Used ONLY
+// at read gates below; every write gate keeps its own role/owner check, so a holder is never a sales_manager.
+function holdsReadAllSalesGrant(user) {
+  return Boolean(user?.readAllSales) && user.role !== 'import' && user.role !== 'account';
+}
+function isMockOversightReader(user) {
+  return user?.role === 'sales_manager' || holdsReadAllSalesGrant(user);
 }
 
 function hasRole(...roles) {
@@ -2863,7 +2875,7 @@ function findStoredImportRequestRaw(id) {
 // STORED-aggregate read gate — mirrors ImportRequestService#requireRead: CEO/import/sales_manager
 // unrestricted; sales only the deal's own owner.
 function requireStoredIrRead(ticket, user) {
-  if (user.role === 'ceo' || user.role === 'import' || user.role === 'sales_manager') return;
+  if (user.role === 'ceo' || user.role === 'import' || user.role === 'sales_manager' || holdsReadAllSalesGrant(user)) return;
   if (isSalesOwner(ticket, user)) return;
   fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
 }
@@ -3599,10 +3611,13 @@ function mockPayrollLine(employee) {
 // Mirrors TicketService.requireViewAccess: viewer role required, sales reps only see their own tickets. Used
 // by every read/render path. sales_manager is read+comment-only oversight — never add it to a write-action
 // role list.
-function requireTicketViewer(id, { accountScoped = false } = {}) {
-  const user = hasRole('sales', 'import', 'ceo', 'account', 'sales_manager');
+// v2.3.0: a read-all holder passes on any role and skips the owner check; `allowReader: false` (comment) keeps the old gate,
+// so a flag-only reader cannot comment (TicketService.requireViewAccess(allowReader=false)).
+function requireTicketViewer(id, { accountScoped = false, allowReader = true } = {}) {
+  const holder = allowReader && holdsReadAllSalesGrant(requireSession());
+  const user = holder ? requireSession() : hasRole('sales', 'import', 'ceo', 'account', 'sales_manager');
   const ticket = findTicketRaw(Number(id));
-  if (user.role === 'sales' && !actsAsOwner(ticket, user)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+  if (user.role === 'sales' && !holder && !actsAsOwner(ticket, user)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
   // H1 lockdown: account no longer reads a deal through the ticket routes (get / actions / payments / deliveries
   // / comments) at all. The row-scoped document reads (deposit notices, remaining invoices) opt in with
   // accountScoped, where account is admitted only inside its list scope.
@@ -3731,7 +3746,7 @@ function requireAttachmentTicketAccess(ticketId, { write = false } = {}) {
   const importReadsInScope = !write && user.role === 'import' && importListScopeIncludes(ticket);
   const allowed = isParticipant || importReadsInScope || (write
     ? ATTACHMENT_WRITER_ROLES.includes(user.role)
-    : ATTACHMENT_VIEWER_ROLES.includes(user.role));
+    : (ATTACHMENT_VIEWER_ROLES.includes(user.role) || holdsReadAllSalesGrant(user)));
   if (!allowed) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
   // H1 lockdown: account reads a deal's documents only inside its list scope (all four attach types).
   requireMockAccountScope(user, ticket);
@@ -3768,6 +3783,8 @@ function mockRoundsRead(ticket) {
   if (user.role === 'account' && accountListScopeIncludes(ticket)) return { user, issuerOnly: false, accountView: true };
   const dealOk = ['sales_manager', 'ceo'].includes(user.role) || (user.role === 'sales' && actsAsOwner(ticket, user));
   if (dealOk) return { user, issuerOnly: false };
+  // v2.3.0: a flag-only reader reads the rounds without the DRAFT ones and acts on none (viewer flags stay the server's).
+  if (holdsReadAllSalesGrant(user)) return { user, issuerOnly: false, readerView: true };
   if (mockIsIssuer(user) && mockHasForwardedRound(ticket.id)) return { user, issuerOnly: true };
   fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
   return null;
@@ -7199,6 +7216,7 @@ function requireDealQuotationViewAccess(ticket, user, origin = 'DEAL_DIRECT', do
     }
     return;
   }
+  if (holdsReadAllSalesGrant(user)) return;
   if (origin === 'PRICING_REQUEST') {
     if (!['sales', 'sales_manager', 'ceo'].includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
     if (user.role === 'sales' && !actsAsOwner(ticket, user)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
@@ -7249,10 +7267,10 @@ function isDealDirectOrigin(q) {
 const DEAL_QUOTATION_LIST_SEE_ALL_ROLES = ['sales_manager', 'ceo'];
 
 function scopedDealQuotationsFor(user) {
-  const grant = hasDealQuotationMockGrant(user);
+  const grant = hasDealQuotationMockGrant(user) || holdsReadAllSalesGrant(user);
   if (!grant && !DEAL_QUOTATION_VIEWER_ROLES.includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
   const base = mockDealQuotations.filter(isDealDirectOrigin);
-  if (DEAL_QUOTATION_LIST_SEE_ALL_ROLES.includes(user.role) || holdsAllSalesDocumentsGrant(user)) {
+  if (DEAL_QUOTATION_LIST_SEE_ALL_ROLES.includes(user.role) || holdsAllSalesDocumentsGrant(user) || holdsReadAllSalesGrant(user)) {
     return base;
   }
   return base.filter((q) => isOwnerOrKeyer(db.tickets.find((t) => t.id === q.ticketId), user.id));
@@ -9455,8 +9473,18 @@ function requireMockFinanceAccess(id) {
   return { user, raw };
 }
 
+// FinanceDealService.get's reader branch (v2.3.0): a sales_manager or read-all holder (not account/ceo) reads the deal with an
+// EMPTY action list and no commission invoice. Every POST keeps requireMockFinanceAccess, so a reader is refused them all.
+function requireMockFinanceRead(id) {
+  const user = requireSession();
+  if (['account', 'ceo'].includes(user.role) || !isMockOversightReader(user)) return { ...requireMockFinanceAccess(id), readOnly: false };
+  const raw = db.tickets.find((t) => t.id === Number(id));
+  if (!raw) fail('ไม่พบงานนี้', 404);
+  return { user, raw, readOnly: true };
+}
+
 // The finance view of one deal -- an explicit allowlist (no pricing requests, costs, tracking, events).
-function buildFinanceDeal(raw, user) {
+function buildFinanceDeal(raw, user, { readOnly = false } = {}) {
   const ticket = structuredClone(raw);
   const s = buildTicketDetail(ticket).summary;
   const currentKey = FINANCE_STAGE_TO_MILESTONE[s.salesStage] ?? null;
@@ -9537,8 +9565,8 @@ function buildFinanceDeal(raw, user) {
   comments: ticket.events
       .filter((e) => e.kind === 'COMMENTED')
       .map((e) => ({ id: e.id, authorName: e.actorName, createdAt: e.createdAt, message: e.message })),
-  availableActions: mockFinanceAvailableActions(user, ticket),
-  commissionInvoice: mockFinanceCommissionInvoice(ticket),
+  availableActions: readOnly ? [] : mockFinanceAvailableActions(user, ticket),
+  commissionInvoice: readOnly ? null : mockFinanceCommissionInvoice(ticket),
 };
   return deal;
 }
@@ -10846,10 +10874,11 @@ export const api = {
       // sales_manager: read+comment oversight only — kept here (not routed through requireTicketViewer) to match the
       // existing inline-array pattern; must move in lockstep with requireTicketViewer/get() and
       // TicketService.VIEWER_ROLES.
-      if (!['sales', 'import', 'ceo', 'account', 'sales_manager'].includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      const holder = holdsReadAllSalesGrant(user);
+      if (!['sales', 'import', 'ceo', 'account', 'sales_manager'].includes(user.role) && !holder) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       // A quotation-first deal is listed like any other deal ("Nothing hidden").
       let list = structuredClone(db.tickets);
-      if (user.role === 'sales') list = list.filter((t) => actsAsOwner(t, user));
+      if (user.role === 'sales' && !holder) list = list.filter((t) => actsAsOwner(t, user));
       // import/account only see the slice of the deal pipeline relevant to their own worklist — see
       // importListScopeIncludes / accountListScopeIncludes above. ceo/sales_manager/sales are
       // unaffected.
@@ -10865,7 +10894,7 @@ export const api = {
       if (movementFrom && movementFrom > movementTo) fail('movementFrom ต้องไม่เกิน movementTo', 400);
       const bangkokDay = (iso) => new Date(iso).toLocaleDateString('sv-SE', { timeZone: 'Asia/Bangkok' });
       // account / import cannot read a deal's activities (TicketService.canReadActivities), so they get none of it.
-      const canReadActivities = ['sales', 'sales_manager', 'ceo'].includes(user.role);
+      const canReadActivities = ['sales', 'sales_manager', 'ceo'].includes(user.role) || holder;
       const movementFlags = (t) => {
         if (!canReadActivities) return { stageChangedInRange: false, activityInRange: false, lastActivityAt: null };
         const acts = dealActivitiesForTicket(t.id).map((a) => a.activityDate);
@@ -10982,10 +11011,11 @@ export const api = {
       // lookup so a missing id and a real one answer alike (no existence oracle). Authz here is an
       // approximation, never the evidence.
       if (user.role === 'import' || user.role === 'account') fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
-      if (!['sales', 'ceo', 'sales_manager'].includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      const holder = holdsReadAllSalesGrant(user);
+      if (!['sales', 'ceo', 'sales_manager'].includes(user.role) && !holder) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       const ticket = structuredClone(db.tickets.find((t) => t.id === Number(id)));
       if (!ticket) fail('ไม่พบงานนี้', 404);
-      if (user.role === 'sales' && !actsAsOwner(ticket, user)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      if (user.role === 'sales' && !holder && !actsAsOwner(ticket, user)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       const detail = projectTicketDetailForRole(buildTicketDetail(ticket), user.role);
       // Read-path-only fallback (mirrors TicketService#get on the backend) -- every OTHER mock
       // mutation that returns buildTicketDetail(ticket) directly (recordPayment, reserveStock,
@@ -11398,7 +11428,7 @@ export const api = {
         const scoped = db.tickets.find((t) => t.id === Number(id));
         if (!(scoped && importListScopeIncludes(scoped))) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       }
-      const { user, ticket } = requireTicketViewer(id);
+      const { user, ticket } = requireTicketViewer(id, { allowReader: false });
       pushEvent(ticket, user, 'COMMENTED', null, null, payload.message);
       return delay({ ticket: projectTicketDetailForRole(buildTicketDetail(ticket), user.role) });
     },
@@ -11756,7 +11786,7 @@ export const api = {
     async listActivities(id) {
       const user = requireSession();
       const ticket = findTicketRaw(Number(id));
-      if (!mockCanDealOwnership(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      if (!mockCanDealOwnership(user, ticket) && !holdsReadAllSalesGrant(user)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       return delay({ items: dealActivitiesForTicket(ticket.id) });
     },
 
@@ -11969,8 +11999,10 @@ export const api = {
     // role rule); a sibling the viewer cannot read is skipped; import gets no money; a lost/cancelled order is listed but
     // not totalled. Mock approximation: valueExVat is payable / 1.07 (the mock keeps no pre-VAT subtotal).
     async orders(ticketId) {
-      const user = hasRole('sales', 'import', 'ceo', 'account', 'sales_manager');
+      const holder = holdsReadAllSalesGrant(requireSession());
+      const user = holder ? requireSession() : hasRole('sales', 'import', 'ceo', 'account', 'sales_manager');
       const canRead = (t) => {
+        if (holder) return true;
         if (user.role === 'sales') return actsAsOwner(t, user);
         if (user.role === 'import') return importListScopeIncludes(t);
         if (user.role === 'account') return accountListScopeIncludes(t);
@@ -15000,7 +15032,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
   // Mirrors ImportDealService / ImportDealDtos — GET /api/import/deals/{id}, the import-only per-deal view.
   importDeals: {
     async get(ticketId) {
-      const user = hasRole('import', 'ceo');
+      const user = isMockOversightReader(requireSession()) ? requireSession() : hasRole('import', 'ceo');
       const raw = db.tickets.find((t) => t.id === Number(ticketId));
       if (user.role === 'import' && !(raw && importListScopeIncludes(raw))) {
         fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
@@ -16020,6 +16052,9 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
         const ticket = db.tickets.find((t) => t.id === Number(ticketId));
         if (!ticket) fail('ไม่พบงานนี้', 404);
         requireMockAccountScope(user, ticket);
+      } else if (holdsReadAllSalesGrant(user)) {
+        // TicketService.requireExpectedPaymentsRead: the reader arm; the writes below still need mockRequireDealWrite.
+        if (!db.tickets.find((t) => t.id === Number(ticketId))) fail('ไม่พบงานนี้', 404);
       } else {
         mockRequireDealWrite(user, ticketId);
       }
@@ -16070,13 +16105,13 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
   salesVisits: {
     async list({ from, to }) {
       const user = requireSession();
-      if (!MOCK_VISIT_ROLES.includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      if (!MOCK_VISIT_ROLES.includes(user.role) && !holdsReadAllSalesGrant(user)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       mockRequireVisitRange(from, to);
       return delay(mockVisitsIn(from, to, user.id));
     },
     async team({ from, to }) {
       const user = requireSession();
-      if (!MOCK_VISIT_TEAM_ROLES.includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      if (!MOCK_VISIT_TEAM_ROLES.includes(user.role) && !holdsReadAllSalesGrant(user)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       mockRequireVisitRange(from, to);
       return delay(mockVisitsIn(from, to));
     },
@@ -16167,10 +16202,11 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
     // read has none). AUTHZ NOTE: approximate; DealPlannedVisitsScopeIntegrationTest is the evidence.
     async plannedOnDeal(ticketId) {
       const user = requireSession();
-      if (!MOCK_VISIT_ROLES.includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      const holder = holdsReadAllSalesGrant(user);
+      if (!MOCK_VISIT_ROLES.includes(user.role) && !holder) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       const ticket = findTicketRaw(Number(ticketId));
-      if (user.role === 'sales' && !actsAsOwner(ticket, user)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
-      const ownerId = MOCK_VISIT_TEAM_ROLES.includes(user.role) ? null : user.id;
+      if (user.role === 'sales' && !holder && !actsAsOwner(ticket, user)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      const ownerId = MOCK_VISIT_TEAM_ROLES.includes(user.role) || holder ? null : user.id;
       return delay(mockVisits
         .filter((v) => v.ticketId === ticket.id && v.status === 'PLANNED' && (ownerId == null || v.ownerId === ownerId))
         .sort((a, b) => a.plannedDate.localeCompare(b.plannedDate)
@@ -16400,8 +16436,8 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
   // (H1 lockdown), for `account` and `ceo` ONLY.
   finance: {
     async getDeal(id) {
-      const { user, raw } = requireMockFinanceAccess(id);
-      return delay({ deal: buildFinanceDeal(raw, user) });
+      const { user, raw, readOnly } = requireMockFinanceRead(id);
+      return delay({ deal: buildFinanceDeal(raw, user, { readOnly }) });
     },
 
     async addComment(id, payload) {
@@ -16463,13 +16499,13 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       }
       const access = warehouse ? { user: requireSession(), issuerOnly: false } : mockRoundsRead(ticket);
       const { user } = access;
-      const hide = warehouse || access.accountView;
+      const hide = warehouse || access.accountView || access.readerView;
       const dtos = mockDeliveryRequests.filter((r) => r.ticketId === ticket.id && (!hide || r.status !== 'DRAFT')
         && (!access.issuerOnly || ['FORWARDED', 'INVOICED'].includes(r.status)))
         .sort((a, b) => b.roundNo - a.roundNo).map((r) => mockRoundDto(r, ticket, user));
       const rounds = user.role === 'import' ? dtos.map(mockPriceFree) : dtos;
       const blockedText = 'ฝ่ายขายเจ้าของงานเป็นผู้ขอออกใบกำกับ';
-      if (warehouse || access.issuerOnly || access.accountView) {
+      if (warehouse || access.issuerOnly || access.accountView || access.readerView) {
         return delay({
           order: mockRoundOrderRef(ticket), rounds, approvedQuotations: [], canStart: false, startBlockedReason: blockedText,
           invoiceable: warehouse || user.role === 'import' ? null : mockInvoiceable(ticket),
@@ -16772,8 +16808,13 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
     async list(ticketId) {
       const { user } = requireAttachmentTicketAccess(ticketId);
       // AttachmentController#list: import never sees a delivery round's files (mayReadRoundFiles).
+      // v2.3.0 (D5): a flag-only reader never reads the files of a DRAFT round (the sales side's private work).
+      const flagOnly = holdsReadAllSalesGrant(user) && user.role !== 'sales_manager';
+      const draftRound = (a) => a.deliveryRequestId != null
+        && mockDeliveryRequests.find((r) => r.id === a.deliveryRequestId)?.status === 'DRAFT';
       return delay({ attachments: structuredClone(mockAttachments.filter((a) => a.ticketId === Number(ticketId)
-        && !(user.role === 'import' && (a.deliveryRequestId != null || a.uploaderSide != null)))).map((a) => ({ ...a, deliveryRequestId: a.deliveryRequestId ?? null })) });
+        && !(user.role === 'import' && (a.deliveryRequestId != null || a.uploaderSide != null))
+        && !(flagOnly && draftRound(a)))).map((a) => ({ ...a, deliveryRequestId: a.deliveryRequestId ?? null })) });
     },
     // `quotationId` is accepted by hrApi (sent as a multipart field when truthy) and threaded
     // through here; hardcoding `quotationId: null` would mean no mock-driven run could ever produce
@@ -18056,12 +18097,13 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
   pricingRequests: {
     async listForTicket(ticketId) {
       const user = requireSession();
-      if (!PRICING_REQUEST_VIEWER_ROLES.includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      const holder = holdsReadAllSalesGrant(user);
+      if (!PRICING_REQUEST_VIEWER_ROLES.includes(user.role) && !holder) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       const ticket = db.tickets.find((t) => t.id === Number(ticketId));
       if (!ticket) fail('ไม่พบงานนี้', 404);
       // Mirrors PricingRequestService.listForTicket: sales may only see requests on tickets they created.
-      if (user.role === 'sales' && !actsAsOwner(ticket, user)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
-      const draftOversight = user.role === 'ceo' || user.role === 'sales_manager';
+      if (user.role === 'sales' && !holder && !actsAsOwner(ticket, user)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      const draftOversight = user.role === 'ceo' || user.role === 'sales_manager' || holder;
       const items = mockPricingRequests
         .filter((pr) => pr.ticketId === Number(ticketId))
         .filter((pr) => pr.status !== 'DRAFT' || draftOversight || actsAsOwner(ticket, user))
@@ -18073,7 +18115,8 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       const user = requireSession();
       // Mirrors PricingRequestService.list: same viewer roles as a single request, plus sales is scoped to only its
       // own created tickets.
-      if (!PRICING_REQUEST_VIEWER_ROLES.includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      const holder = holdsReadAllSalesGrant(user);
+      if (!PRICING_REQUEST_VIEWER_ROLES.includes(user.role) && !holder) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       // The real gate is PricingRequestStatus.isValid (PricingRequestService.list 400s anything else).
       if (params.status && ![
         'DRAFT',
@@ -18087,14 +18130,14 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
         fail(`ไม่รองรับสถานะ '${params.status}'`, 400);
       }
       let list = mockPricingRequests;
-      if (user.role === 'sales') {
+      if (user.role === 'sales' && !holder) {
         list = list.filter((pr) => actsAsOwner(db.tickets.find((t) => t.id === pr.ticketId), user));
       }
       // Mirrors PricingRequestService.list's draft-privacy clause: a DRAFT is the owning rep's
       // private scratchpad, visible only to them plus ceo/sales_manager oversight. import must not
       // see it in the queue even though it sees every other status. Without this the mock is MORE
       // permissive than the Java service, the direction that only surfaces in production.
-      const draftOversight = user.role === 'ceo' || user.role === 'sales_manager';
+      const draftOversight = user.role === 'ceo' || user.role === 'sales_manager' || holder;
       list = list.filter((pr) => pr.status !== 'DRAFT'
         || draftOversight
         || actsAsOwner(db.tickets.find((t) => t.id === pr.ticketId), user));
