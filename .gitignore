@@ -136,8 +136,8 @@ agents/attendance/*roster*.csv
 # working notes for the team and its coding agents, not something to publish in this
 # PUBLIC repo. Kept locally on each machine; removed from tracking with `git rm --cached`
 # (they remain in history before that commit).
-/CLAUDE.md
-/AGENTS.md
+# Owner ruling 2026-11-21: AGENTS.md and its CLAUDE.md pointer are tracked again, written to be
+# safe for a public repo, so every worktree and every tool reads the same rules.
 /DESIGN.md
 /PRODUCT.md
 /STACKED-PRS.md
