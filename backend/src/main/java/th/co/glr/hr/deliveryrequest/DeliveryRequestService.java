@@ -831,6 +831,9 @@ public class DeliveryRequestService {
             return "งานนี้ไม่ได้เปิดอยู่ ขอออกใบกำกับไม่ได้";
         }
         if (approved.isEmpty()) {
+            if (rounds.hasAcceptedPricingQuotation(s.id())) {
+                return "ลูกค้าตอบรับใบเสนอราคาแล้ว ต้องยืนยันออเดอร์ก่อนจึงจะขอออกใบกำกับได้";
+            }
             return "ต้องมีใบเสนอราคาที่อนุมัติแล้ว";
         }
         // An old deal is confirmed by its first send, so it has no lines to cover yet.
@@ -1004,14 +1007,13 @@ public class DeliveryRequestService {
      * portal (before ORDER_RECEIVED) that is not already pre-portal. {@code send} and the order block both read it. */
     private boolean asksPreDeposit(TicketSummaryDto s) {
         return DealLifecycle.ACTIVE.equals(s.lifecycle())
-            && DealStage.indexOf(s.salesStage()) < DealStage.indexOf(DealStage.ORDER_RECEIVED) && !tickets.isPrePortal(s.id())
-            && !rounds.hasAcceptedPricingQuotation(s.id());
+            && DealStage.indexOf(s.salesStage()) < DealStage.indexOf(DealStage.ORDER_RECEIVED) && !tickets.isPrePortal(s.id());
     }
 
     private boolean unconfirmed(TicketSummaryDto s) {
         boolean old = tickets.isPrePortal(s.id()) || DealStage.indexOf(s.salesStage()) < DealStage.indexOf(DealStage.ORDER_RECEIVED);
         return old && DealLifecycle.ACTIVE.equals(s.lifecycle()) && !tickets.hasPromotionFromQuotationEvent(s.id())
-            && !rounds.hasAcceptedPricingQuotation(s.id());
+            && !rounds.isConfirmedPricingOrder(s.id());
     }
 
     private String displayCode(TicketSummaryDto s) {

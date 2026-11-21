@@ -4166,12 +4166,13 @@ function mockRoundsWrite(ticket) {
   return user;
 }
 
+const mockIsOrderStage = (ticketId) => dealStageIndex(findTicketRaw(ticketId)?.salesStage) >= dealStageIndex('ORDER_RECEIVED');
 function mockApprovedQuotationsOf(ticketId) {
   return mockDealQuotations
     // DeliveryRequestRepository#ORDER_QUOTATION: a direct one from APPROVED on, or the pricing-request one the customer accepted
     .filter((q) => q.ticketId === ticketId && (((q.origin ?? 'DEAL_DIRECT') === 'DEAL_DIRECT'
       && ['APPROVED', 'ISSUED', 'SENT', 'ACCEPTED'].includes(q.docStatus))
-      || (q.origin === 'PRICING_REQUEST' && q.docStatus === 'ACCEPTED')))
+      || (q.origin === 'PRICING_REQUEST' && q.docStatus === 'ACCEPTED' && mockIsOrderStage(ticketId))))
     .sort((a, b) => a.id - b.id)
     .map((q) => ({
       id: q.id, number: q.number, total: q.grandTotal ?? 0, docStatus: q.docStatus,
@@ -4370,15 +4371,14 @@ const mockHasAcceptedPricingQuotation = (ticketId) => mockDealQuotations.some((q
   && q.origin === 'PRICING_REQUEST' && q.docStatus === 'ACCEPTED');
 function mockRoundUnconfirmed(ticket) {
   const old = ticket.prePortal || dealStageIndex(ticket.salesStage) < dealStageIndex('ORDER_RECEIVED');
-  return Boolean(old && (ticket.lifecycle ?? 'ACTIVE') === 'ACTIVE' && !mockHasAcceptedPricingQuotation(ticket.id)
+  return Boolean(old && (ticket.lifecycle ?? 'ACTIVE') === 'ACTIVE' && !(mockHasAcceptedPricingQuotation(ticket.id) && mockIsOrderStage(ticket.id))
     && !ticket.events.some((e) => e.kind === 'DEAL_PROMOTED_FROM_QUOTATION'));
 }
 
 // DeliveryRequestService#asksPreDeposit: the ONE rule for "this send asks for the deposit paid before the portal".
 function mockAsksPreDeposit(ticket) {
   return (ticket.lifecycle ?? 'ACTIVE') === 'ACTIVE' && !ticket.prePortal
-    && dealStageIndex(ticket.salesStage) < dealStageIndex('ORDER_RECEIVED')
-    && !mockHasAcceptedPricingQuotation(ticket.id);
+    && dealStageIndex(ticket.salesStage) < dealStageIndex('ORDER_RECEIVED');
 }
 
 // DeliveryRequestService#withPreDepositMax: while the send asks for the deposit, each quotation carries the most it may be.
@@ -4393,6 +4393,7 @@ function mockApprovedWithMax(ticket) {
 function mockRoundBlockedReason(ticket, user) {
   if (!mockRoundsCanWrite(ticket, user)) return 'ฝ่ายขายเจ้าของงานเป็นผู้ขอออกใบกำกับ';
   if ((ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE') return 'งานนี้ไม่ได้เปิดอยู่ ขอออกใบกำกับไม่ได้';
+  if (mockApprovedQuotationsOf(ticket.id).length === 0 && mockHasAcceptedPricingQuotation(ticket.id)) return 'ลูกค้าตอบรับใบเสนอราคาแล้ว ต้องยืนยันออเดอร์ก่อนจึงจะขอออกใบกำกับได้';
   if (mockApprovedQuotationsOf(ticket.id).length === 0) return 'ต้องมีใบเสนอราคาที่อนุมัติแล้ว';
   // An old deal is confirmed by its first send, so it has no lines to cover yet.
   if (mockRoundUnconfirmed(ticket)) return null;

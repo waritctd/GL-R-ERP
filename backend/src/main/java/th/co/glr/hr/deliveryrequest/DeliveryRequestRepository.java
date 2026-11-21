@@ -320,11 +320,25 @@ public class DeliveryRequestRepository {
             });
     }
 
-    /** A quotation an order can be delivered against: a direct one from APPROVED on, or the pricing-request one the customer accepted. */
-    private static final String ORDER_QUOTATION = "((origin = 'DEAL_DIRECT' AND doc_status IN ('APPROVED','ISSUED','SENT','ACCEPTED'))"
-        + " OR (origin = 'PRICING_REQUEST' AND doc_status = 'ACCEPTED'))";
+    /** Recording ACCEPTED moves only the pricing request: the deal itself is an order from ORDER_RECEIVED on. */
+    private static final String PRICING_ORDER = "(origin = 'PRICING_REQUEST' AND doc_status = 'ACCEPTED' AND ticket_id IN"
+        + " (SELECT ticket_id FROM sales.ticket WHERE sales_stage IN ('"
+        + String.join("','", th.co.glr.hr.ticket.DealStage.ORDER.subList(
+            th.co.glr.hr.ticket.DealStage.indexOf(th.co.glr.hr.ticket.DealStage.ORDER_RECEIVED), th.co.glr.hr.ticket.DealStage.ORDER.size()))
+        + "')))";
 
-    /** The order came through a pricing request and the customer accepted it: nothing is left to confirm. */
+    /** A quotation an order can be delivered against: a direct one from APPROVED on, or the accepted pricing-request one of a confirmed order. */
+    private static final String ORDER_QUOTATION = "((origin = 'DEAL_DIRECT' AND doc_status IN ('APPROVED','ISSUED','SENT','ACCEPTED'))"
+        + " OR " + PRICING_ORDER + ")";
+
+    /** The order came through a pricing request, the customer accepted it and the deal is an order: nothing is left to confirm. */
+    public boolean isConfirmedPricingOrder(long ticketId) {
+        return Boolean.TRUE.equals(jdbc.queryForObject(
+            "SELECT EXISTS (SELECT 1 FROM sales.quotation WHERE ticket_id = :t AND " + PRICING_ORDER + ")",
+            Map.of("t", ticketId), Boolean.class));
+    }
+
+    /** The customer accepted a pricing-request quotation, whatever stage the deal is at. */
     public boolean hasAcceptedPricingQuotation(long ticketId) {
         return Boolean.TRUE.equals(jdbc.queryForObject("""
             SELECT EXISTS (SELECT 1 FROM sales.quotation

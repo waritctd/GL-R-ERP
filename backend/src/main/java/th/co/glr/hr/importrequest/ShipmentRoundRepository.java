@@ -75,6 +75,19 @@ public class ShipmentRoundRepository {
             Map.of("t", ticketId), Long.class);
     }
 
+    /** Of these IRs, the ones that have a lot or carry this deal line. */
+    public java.util.Set<Long> irsWithLotsOrLine(List<Long> irIds, long ticketItemId) {
+        if (irIds.isEmpty()) {
+            return java.util.Set.of();
+        }
+        return new java.util.HashSet<>(jdbc.queryForList("""
+            SELECT DISTINCT i.import_request_id FROM sales.import_request_item i
+             WHERE i.import_request_id IN (:ids)
+               AND (i.ticket_item_id = :item
+                    OR EXISTS (SELECT 1 FROM sales.shipment_lot l WHERE l.import_request_id = i.import_request_id))
+            """, Map.of("ids", irIds, "item", ticketItemId), Long.class));
+    }
+
     /** Per ISSUED import-request line of the deal: how much is still wanted (the quantity marked not delivered is taken off). */
     public Map<Long, BigDecimal> wantedByItem(long ticketId) {
         Map<Long, BigDecimal> out = new java.util.HashMap<>();

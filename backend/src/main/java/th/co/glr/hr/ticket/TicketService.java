@@ -2802,8 +2802,8 @@ public class TicketService {
             throw new ApiException(HttpStatus.CONFLICT, "บันทึกว่าไม่ได้รับของได้ไม่เกิน " + qtyText(allowed) + " (ส่วนที่ยังไม่ถึงโกดังและไม่ได้อยู่ระหว่างขนส่ง)");
         }
         // the same rule as clearing: goods-received cannot be taken back, so the marked quantity cannot shrink after it
-        if (qty.compareTo(nullToZero(item.qtyNotDelivered())) < 0 && s.closeConfirmedAt() != null) {
-            throw new ApiException(HttpStatus.CONFLICT, "ยืนยันปิดงานแล้ว จึงลดจำนวนที่บันทึกไม่ได้รับของไม่ได้");
+        if (qty.compareTo(nullToZero(item.qtyNotDelivered())) < 0 && (s.closeConfirmedAt() != null || DealStage.CLOSED_PAID.equals(s.salesStage()))) {
+            throw new ApiException(HttpStatus.CONFLICT, "ยืนยันปิดงานหรือรับเงินครบแล้ว จึงลดจำนวนที่บันทึกไม่ได้รับของไม่ได้");
         }
         if (qty.compareTo(nullToZero(item.qtyNotDelivered())) < 0 && tickets.hasReceivedGoods(ticketId)) {
             throw new ApiException(HttpStatus.CONFLICT, "งานนี้บันทึกรับสินค้าครบแล้ว จึงลดจำนวนที่บันทึกไม่ได้รับของไม่ได้");
@@ -2833,8 +2833,8 @@ public class TicketService {
             throw new ApiException(HttpStatus.CONFLICT, "ปิดงานแล้ว ยกเลิกการบันทึกไม่ได้รับของไม่ได้");
         }
         requireActive(s);
-        if (s.closeConfirmedAt() != null) {
-            throw new ApiException(HttpStatus.CONFLICT, "ยืนยันปิดงานแล้ว จึงยกเลิกการบันทึกไม่ได้รับของไม่ได้");
+        if (s.closeConfirmedAt() != null || DealStage.CLOSED_PAID.equals(s.salesStage())) { // commission may already be recorded
+            throw new ApiException(HttpStatus.CONFLICT, "ยืนยันปิดงานหรือรับเงินครบแล้ว จึงยกเลิกการบันทึกไม่ได้รับของไม่ได้");
         }
         // Goods-received cannot be taken back, and it would let the un-arrived quantity be delivered as if it had come.
         if (tickets.hasReceivedGoods(ticketId)) {
@@ -2856,7 +2856,7 @@ public class TicketService {
             && !requireTicket(ticketId).items().stream().allMatch(i -> nullToZero(i.qtyDelivered()).compareTo(i.deliverableQty()) >= 0)) {
             tickets.updateFulfillmentStatus(ticketId, FulfilmentStatus.PARTIALLY_DELIVERED);
             // delivery is open again, so the stage cannot stay past it
-            if (DealStage.DELIVERED.equals(s.salesStage()) || DealStage.CLOSED_PAID.equals(s.salesStage())) {
+            if (DealStage.DELIVERED.equals(s.salesStage())) {
                 tickets.updateSalesStage(ticketId, DealStage.DELIVERY_SCHEDULING);
                 tickets.addEvent(ticketId, actor.id(), actor.name(), TicketEventKind.STAGE_CHANGED, s.salesStage(), DealStage.DELIVERY_SCHEDULING,
                     "กลับมารอส่งของ: จำนวนที่บันทึกไม่ได้รับของลดลง");
