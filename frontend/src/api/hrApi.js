@@ -653,6 +653,13 @@ export const api = {
   shipmentRounds: {
     list: () => apiRequest(API_ROUTES.shipmentRounds.list()),
     get: (id) => apiRequest(API_ROUTES.shipmentRounds.get(id)),
+    // Planning (N04) and lots: `createRound` { factoryId, label, transportMode, lots: [{ importRequestId, itemId, qty }] };
+    // `removeLot` / `moveLot` answer { round: null } when the emptied round was deleted.
+    createRound: (payload) => apiRequest(API_ROUTES.shipmentRounds.list(), { method: 'POST', body: payload }),
+    addLots: (id, payload) => apiRequest(API_ROUTES.shipmentRounds.lots(id), { method: 'POST', body: payload }),
+    changeLot: (id, lotId, payload) => apiRequest(API_ROUTES.shipmentRounds.lot(id, lotId), { method: 'PUT', body: payload }),
+    removeLot: (id, lotId) => apiRequest(API_ROUTES.shipmentRounds.lot(id, lotId), { method: 'DELETE' }),
+    moveLot: (id, lotId, payload) => apiRequest(API_ROUTES.shipmentRounds.moveLot(id, lotId), { method: 'POST', body: payload }),
     updateFacts: (id, payload) => apiRequest(API_ROUTES.shipmentRounds.facts(id), { method: 'PUT', body: payload }),
     advance: (id, payload) => apiRequest(API_ROUTES.shipmentRounds.advance(id), { method: 'POST', body: payload }),
     undo: (id, payload) => apiRequest(API_ROUTES.shipmentRounds.undo(id), { method: 'POST', body: payload }),

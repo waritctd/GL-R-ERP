@@ -5,6 +5,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ImportFulfilmentPage } from './ImportFulfilmentPage.jsx';
 import { ShipmentRoundPage } from './ShipmentRoundPage.jsx';
+import { irRows } from './shipmentRounds.js';
 import { api } from '../../api/index.js';
 
 globalThis.React = React;
@@ -17,7 +18,8 @@ vi.mock('../../api/index.js', async (importOriginal) => {
       tickets: { list: vi.fn() },
       shipmentRounds: {
         list: vi.fn(), get: vi.fn(), advance: vi.fn(), undo: vi.fn(), updateFacts: vi.fn(),
-        uploadFile: vi.fn(), deleteFile: vi.fn(), downloadFile: vi.fn(),
+        createRound: vi.fn(), addLots: vi.fn(), changeLot: vi.fn(), removeLot: vi.fn(), moveLot: vi.fn(),
+        addDocument: vi.fn(), updateDocument: vi.fn(), deleteDocument: vi.fn(), attachFile: vi.fn(), removeFile: vi.fn(), downloadFile: vi.fn(),
       },
     },
   };
@@ -49,7 +51,7 @@ function round(over = {}) {
 const waitingIr = {
   importRequestId: 21, docNumber: 'IR-TEST-009', factoryId: 2, factoryName: 'Waiting Ceramics', ticketId: 109,
   ticketCode: 'PR-TEST-0009', customerName: 'ลูกค้า รอ', projectName: null,
-  lines: [{ code: 'W1', brand: null, model: 'Stone White', size: '80x80', unit: 'แผ่น', remainingQty: 450 }],
+  lines: [{ itemId: 5, code: 'W1', brand: null, model: 'Stone White', size: '80x80', unit: 'แผ่น', remainingQty: 450 }],
 };
 
 function renderAt(path, user = { id: 5, name: 'ฝ่ายนำเข้า', role: 'import' }, showToast = vi.fn()) {
@@ -85,7 +87,7 @@ describe('การขนส่ง queue (shipment rounds)', () => {
     expect(await screen.findAllByText('IR-TEST-009')).not.toHaveLength(0);
     expect(screen.getAllByText('Test Stone Co. · รอบ ทดสอบ').length).toBeGreaterThan(0);
     expect(screen.getAllByRole('link', { name: 'รายละเอียด' })[0].getAttribute('href')).toBe('/fulfilment/rounds/7');
-    expect(screen.queryByText('จัดรอบขนส่ง')).toBeNull(); // planning a round is a later slice
+    expect(screen.getByTestId('plan-round')).toBeTruthy(); // the filled จัดรอบขนส่ง button of the waiting section
   });
 
   it('advances a round from the queue asking only that step\'s facts, then offers the 30 s undo', async () => {
@@ -156,6 +158,33 @@ describe('การขนส่ง queue (shipment rounds)', () => {
       targetStep: 'RECEIVED', documents: [{ kind: 'PROFORMA', docNo: 'PI-NEW' }] })));
   });
 
+  it('จัดรอบขนส่ง: ticks a waiting IR, a smaller quantity splits it, more than remains is refused', async () => {
+    vi.mocked(api.shipmentRounds.createRound).mockResolvedValue({ round: round({ id: 9 }) });
+    renderAt('/fulfilment');
+    fireEvent.click(await screen.findByTestId('plan-round'));
+    const sheet = await screen.findByTestId('plan-round-sheet');
+    const submit = within(sheet).getByTestId('plan-round-submit');
+    expect(submit.disabled).toBe(true); // nothing ticked
+    fireEvent.click(within(sheet).getByLabelText('ลูกค้า รอ'));
+    const qty = within(sheet).getByLabelText(/ไปรอบนี้/);
+    expect(qty.value).toBe('450'); // default = all that remains
+    fireEvent.change(qty, { target: { value: '500' } });
+    expect(within(sheet).getByText(/เกินที่เหลือ/)).toBeTruthy();
+    expect(submit.disabled).toBe(true);
+    fireEvent.change(qty, { target: { value: '200' } });
+    expect(within(sheet).getByText('เหลือ 250 ไปรอบถัดไป')).toBeTruthy();
+    fireEvent.click(submit);
+    await waitFor(() => expect(api.shipmentRounds.createRound).toHaveBeenCalledWith({
+      factoryId: 2, label: null, transportMode: 'SEA', lots: [{ importRequestId: 21, itemId: 5, qty: 200 }] }));
+  });
+
+  it('queue cards show one row per IR: the summed quantity when the lines share a unit, else "n รายการ"', () => {
+    const rows = irRows(round({ lots: [lot({ lotId: 1, qty: 10, lotNo: 1, lotCount: 2 }), lot({ lotId: 2, itemId: 2, qty: 5 }), lot({ lotId: 3, importRequestId: 12, docNumber: 'IR-TEST-002', unit: 'กล่อง', qty: 1, lotCount: 1 }), lot({ lotId: 4, importRequestId: 12, docNumber: 'IR-TEST-002', unit: 'แผ่น', qty: 1, lotCount: 1 })] }));
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toMatchObject({ lotText: 'ล็อต 1 จาก 2', qtyText: '15 แผ่น' });
+    expect(rows[1]).toMatchObject({ lotText: 'ครบทั้งใบ', qtyText: '2 รายการ' });
+  });
+
   it('a read-only viewer sees the queue without the advance button', async () => {
     renderAt('/fulfilment', { id: 9, name: 'ผู้จัดการขาย', role: 'sales_manager' });
     expect(await screen.findAllByText('IR-TEST-009')).not.toHaveLength(0);
@@ -164,6 +193,22 @@ describe('การขนส่ง queue (shipment rounds)', () => {
 });
 
 describe('รอบขนส่ง page', () => {
+  it('lets import manage lots only until the round has left: remove goes back to waiting; from IN_TRANSIT it is read-only', async () => {
+    vi.mocked(api.shipmentRounds.get).mockResolvedValue({ round: round({ importStep: 'ORDERED' }) });
+    vi.mocked(api.shipmentRounds.removeLot).mockResolvedValue({ round: round({ importStep: 'ORDERED' }) });
+    renderAt('/fulfilment/rounds/7');
+    fireEvent.click((await screen.findAllByTestId('lot-manage-1'))[0]);
+    fireEvent.click(await screen.findByTestId('lot-remove'));
+    await waitFor(() => expect(api.shipmentRounds.removeLot).toHaveBeenCalledWith(7, 1));
+  });
+
+  it('has no lot actions once the round is in transit', async () => {
+    renderAt('/fulfilment/rounds/7');
+    await screen.findByText('TEST VESSEL');
+    expect(screen.queryByTestId('lot-manage-1')).toBeNull();
+    expect(screen.queryByTestId('round-add-ir')).toBeNull();
+  });
+
   it('shows the steps with their dates, the facts and each IR with its lot', async () => {
     renderAt('/fulfilment/rounds/7');
     expect(await screen.findByText('TEST VESSEL')).toBeTruthy();

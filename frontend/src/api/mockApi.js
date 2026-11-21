@@ -3251,9 +3251,10 @@ function mockShipmentDto(round) {
   });
 }
 
-function mockRecomputeIrSteps(round, actor, note) {
+function mockRecomputeIrSteps(roundOrIds, actor, note) {
   const changes = [];
-  const irIds = [...new Set(round.lots.map((l) => l.importRequestId))].sort((a, b) => a - b);
+  const irIds = Array.isArray(roundOrIds) ? [...new Set(roundOrIds)].sort((a, b) => a - b)
+    : [...new Set(roundOrIds.lots.map((l) => l.importRequestId))].sort((a, b) => a - b);
   irIds.forEach((irId) => {
     const ir = mockImportRequests.find((r) => r.id === irId);
     const lots = mockShipmentRounds.flatMap((x) => x.lots.filter((l) => l.itemId != null && l.importRequestId === irId).map((l) => ({ l, x })));
@@ -3269,6 +3270,52 @@ function mockRecomputeIrSteps(round, actor, note) {
     changes.push({ ir, from, to: step });
   });
   return changes;
+}
+
+// Slice 3 (ShipmentRoundService#placeLots and friends): same factory, ISSUED IRs on ACTIVE deals, never more than a line's
+// quantity across all lots, qty > 0, lots editable only until the round leaves (before IN_TRANSIT).
+function mockPlacedQty(itemId) {
+  return mockShipmentRounds.flatMap((r) => r.lots).filter((l) => l.itemId === itemId).reduce((sum, l) => sum + l.qty, 0);
+}
+
+function mockPlaceLots(round, inputs) {
+  for (const input of inputs ?? []) {
+    const ir = mockImportRequests.find((r) => r.id === input.importRequestId && r.status === 'ISSUED');
+    if (!ir) fail('ใบขอซื้อนี้ไม่ได้อยู่ในสถานะที่จัดรอบได้', 409);
+    if ((findTicketRaw(ir.ticketId).lifecycle ?? 'ACTIVE') !== 'ACTIVE') fail(`งานของใบขอซื้อ ${ir.docNumber} ไม่ได้อยู่ในสถานะใช้งาน`, 409);
+    if (!round.factoryId || round.factoryId !== ir.factoryId) fail(`ใบขอซื้อ ${ir.docNumber} เป็นของโรงงานอื่น`, 409);
+    const qty = Math.round(Number(input.qty) * 100) / 100;
+    if (!(qty > 0)) fail('จำนวนต้องมากกว่า 0', 400);
+    const item = ir.items.find((it) => it.id === input.itemId);
+    if (!item) fail(`รายการสินค้าไม่อยู่ในใบขอซื้อ ${ir.docNumber}`, 400);
+    if (mockPlacedQty(item.id) + qty > Number(item.qty)) fail(`จำนวนเกินที่เหลือของใบขอซื้อ ${ir.docNumber} (เหลือ ${Number(item.qty) - mockPlacedQty(item.id)})`, 409);
+    const there = round.lots.find((l) => l.itemId === item.id);
+    if (there) there.qty += qty;
+    else round.lots.push({ lotId: mockShipmentLotSeq++, importRequestId: ir.id, itemId: item.id, qty });
+  }
+}
+
+function mockRequireNotLeft(round) {
+  if (mockImportRequestStepIndex(round.importStep) >= mockImportRequestStepIndex('IN_TRANSIT')) {
+    fail('รอบนี้ออกเดินทางแล้ว แก้ไขล็อตไม่ได้ (แก้ข้อมูลและเอกสารของรอบได้ที่ แก้ไข)', 409);
+  }
+}
+
+function mockRequireDeletable(round) {
+  if (round.source !== 'PORTAL' || round.documents.length > 0) {
+    fail('ล็อตนี้เป็นล็อตสุดท้ายของรอบ และรอบนี้ลบไม่ได้ (มีเอกสาร หรือไม่ได้สร้างในระบบนี้) จึงเอาออกหรือย้ายไม่ได้', 409);
+  }
+}
+
+// After lots changed: the undo of an earlier advance is gone, and the IR steps follow their lots (events + rollup as advance).
+function mockFinishLots(rounds, irIds, user) {
+  rounds.forEach((r) => { r.undo = null; });
+  mockRecomputeIrSteps(irIds, user, null).forEach(({ ir, from, to }) => {
+    const ticket = findTicketRaw(ir.ticketId);
+    if ((ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE') return;
+    pushEvent(ticket, user, 'IMPORT_STEP_ADVANCED', null, null,
+      `โรงงาน ${ir.factoryName}: ${MOCK_IMPORT_REQUEST_STEP_LABELS_TH[from] ?? from} → ${MOCK_IMPORT_REQUEST_STEP_LABELS_TH[to] ?? to}`);
+  });
 }
 
 function mockShipmentWrite() {
@@ -15193,7 +15240,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       const waiting = mockImportRequests.filter((r) => r.status === 'ISSUED' && (findTicketRaw(r.ticketId).lifecycle ?? 'ACTIVE') === 'ACTIVE').flatMap((ir) => {
         const lines = ir.items.map((it) => {
           const placed = mockShipmentRounds.flatMap((x) => x.lots).filter((l) => l.itemId === it.id).reduce((sum, l) => sum + l.qty, 0);
-          return { code: it.code, brand: it.brand ?? null, model: it.model ?? null, size: it.size ?? null, unit: it.unit ?? null, remainingQty: Number(it.qty) - placed };
+          return { itemId: it.id, code: it.code, brand: it.brand ?? null, model: it.model ?? null, size: it.size ?? null, unit: it.unit ?? null, remainingQty: Number(it.qty) - placed };
         }).filter((l) => l.remainingQty > 0);
         if (lines.length === 0) return [];
         const ticket = findTicketRaw(ir.ticketId);
@@ -15317,6 +15364,88 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
           `โรงงาน ${ir.factoryName}: เลิกทำ ${MOCK_IMPORT_REQUEST_STEP_LABELS_TH[from] ?? from} → ${MOCK_IMPORT_REQUEST_STEP_LABELS_TH[to] ?? to}`);
       });
       return delay({ round: mockShipmentDto(round) });
+    },
+    async createRound(request) {
+      const user = mockShipmentWrite();
+      mockEnsureMigratedRounds();
+      if (!request?.factoryId || !(request.lots ?? []).length) fail('เลือกโรงงานและใบขอซื้ออย่างน้อย 1 ใบ', 400);
+      if (request.transportMode && !['SEA', 'AIR', 'LAND'].includes(request.transportMode)) fail('ประเภทการขนส่งไม่ถูกต้อง', 400);
+      const sample = mockImportRequests.find((r) => r.status === 'ISSUED' && r.factoryId === request.factoryId);
+      if (!sample) fail('ไม่พบใบขอซื้อของโรงงานนี้ที่จัดรอบได้', 409);
+      const round = {
+        id: 0, factoryId: request.factoryId, factoryName: sample.factoryName, source: 'PORTAL', importStep: 'CONTACTED',
+        contactedOn: new Date().toISOString().slice(0, 10), orderedOn: null, pickedUpOn: null, inTransitOn: null,
+        awaitingCustomsOn: null, receivedOn: null, stepByName: user.name, stepNote: null,
+        facts: { ...Object.fromEntries(MOCK_ROUND_FACT_KEYS.map((k) => [k, null])), transportMode: request.transportMode || 'SEA', label: request.label?.trim() || null },
+        documents: [], undo: null, lots: [],
+      };
+      mockPlaceLots(round, request.lots); // throws before anything is stored
+      round.id = mockShipmentRoundSeq++;
+      mockShipmentRounds.push(round);
+      mockFinishLots([round], round.lots.map((l) => l.importRequestId), user);
+      return delay({ round: mockShipmentDto(round) });
+    },
+    async addLots(id, request) {
+      const user = mockShipmentWrite();
+      const round = mockFindShipment(id);
+      mockRequireNotLeft(round);
+      if (!(request?.lots ?? []).length) fail('เลือกใบขอซื้ออย่างน้อย 1 ใบ', 400);
+      const before = structuredClone(round.lots);
+      try { mockPlaceLots(round, request.lots); } catch (e) { round.lots = before; throw e; }
+      mockFinishLots([round], round.lots.map((l) => l.importRequestId), user);
+      return delay({ round: mockShipmentDto(round) });
+    },
+    async changeLot(id, lotId, request) {
+      const user = mockShipmentWrite();
+      const round = mockFindShipment(id);
+      mockRequireNotLeft(round);
+      const lot = round.lots.find((l) => l.lotId === Number(lotId));
+      if (!lot) fail('ไม่พบล็อตในรอบนี้', 404);
+      const qty = Math.round(Number(request?.qty) * 100) / 100;
+      if (!(qty > 0)) fail('จำนวนต้องมากกว่า 0', 400);
+      const ir = mockImportRequests.find((r) => r.id === lot.importRequestId);
+      const item = ir.items.find((it) => it.id === lot.itemId);
+      if (mockPlacedQty(item.id) - lot.qty + qty > Number(item.qty)) fail(`จำนวนเกินที่สั่งในรายการนี้ (สั่ง ${item.qty})`, 409);
+      lot.qty = qty;
+      mockFinishLots([round], round.lots.map((l) => l.importRequestId), user);
+      return delay({ round: mockShipmentDto(round) });
+    },
+    async removeLot(id, lotId) {
+      const user = mockShipmentWrite();
+      const round = mockFindShipment(id);
+      mockRequireNotLeft(round);
+      const lot = round.lots.find((l) => l.lotId === Number(lotId));
+      if (!lot) fail('ไม่พบล็อตในรอบนี้', 404);
+      const last = round.lots.length === 1;
+      if (last) mockRequireDeletable(round);
+      const irIds = round.lots.map((l) => l.importRequestId);
+      round.lots = round.lots.filter((l) => l !== lot);
+      mockFinishLots([round], irIds, user);
+      if (last) mockShipmentRounds.splice(mockShipmentRounds.indexOf(round), 1);
+      return delay({ round: last ? null : mockShipmentDto(round) });
+    },
+    async moveLot(id, lotId, request) {
+      const user = mockShipmentWrite();
+      const src = mockFindShipment(id);
+      const dst = mockFindShipment(request?.toRoundId);
+      if (src === dst) fail('เลือกรอบปลายทาง', 400);
+      mockRequireNotLeft(src);
+      mockRequireNotLeft(dst);
+      if (!src.factoryId || src.factoryId !== dst.factoryId) fail('ย้ายล็อตได้เฉพาะระหว่างรอบของโรงงานเดียวกัน', 409);
+      const lot = src.lots.find((l) => l.lotId === Number(lotId));
+      if (!lot) fail('ไม่พบล็อตในรอบนี้', 404);
+      if ((findTicketRaw(mockImportRequests.find((r) => r.id === lot.importRequestId).ticketId).lifecycle ?? 'ACTIVE') !== 'ACTIVE') {
+        fail('งานของใบขอซื้อนี้ไม่ได้อยู่ในสถานะใช้งาน ย้ายล็อตไม่ได้', 409);
+      }
+      const last = src.lots.length === 1;
+      if (last) mockRequireDeletable(src);
+      const irIds = [...src.lots, ...dst.lots].map((l) => l.importRequestId);
+      src.lots = src.lots.filter((l) => l !== lot);
+      const there = dst.lots.find((l) => l.itemId === lot.itemId);
+      if (there) there.qty += lot.qty; else dst.lots.push(lot);
+      mockFinishLots([src, dst], irIds, user);
+      if (last) mockShipmentRounds.splice(mockShipmentRounds.indexOf(src), 1);
+      return delay({ round: last ? null : mockShipmentDto(src) });
     },
     async addDocument(id, input) {
       const user = mockShipmentWrite();

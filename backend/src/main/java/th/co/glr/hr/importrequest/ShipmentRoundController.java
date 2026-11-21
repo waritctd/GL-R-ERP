@@ -52,6 +52,38 @@ public class ShipmentRoundController {
         return Map.of("round", service.get(id, sessions.requireUser(session)));
     }
 
+    @PostMapping
+    Map<String, ShipmentRoundDto> create(@RequestBody ShipmentRoundDtos.CreateShipmentRoundRequest request, HttpSession session) {
+        return Map.of("round", service.createRound(request, sessions.requireUser(session)));
+    }
+
+    @PostMapping("/{id}/lots")
+    Map<String, ShipmentRoundDto> addLots(@PathVariable long id, @RequestBody ShipmentRoundDtos.AddLotsRequest request, HttpSession session) {
+        return Map.of("round", service.addLots(id, request, sessions.requireUser(session)));
+    }
+
+    @PutMapping("/{id}/lots/{lotId}")
+    Map<String, ShipmentRoundDto> changeLot(@PathVariable long id, @PathVariable long lotId,
+                                            @RequestBody ShipmentRoundDtos.ChangeLotRequest request, HttpSession session) {
+        return Map.of("round", service.changeLot(id, lotId, request, sessions.requireUser(session)));
+    }
+
+    /** "round" is null when the last lot was taken off and the (empty PORTAL) round deleted. */
+    @DeleteMapping("/{id}/lots/{lotId}")
+    Map<String, Object> removeLot(@PathVariable long id, @PathVariable long lotId, HttpSession session) {
+        Map<String, Object> body = new java.util.HashMap<>();
+        body.put("round", service.removeLot(id, lotId, sessions.requireUser(session)));
+        return body;
+    }
+
+    @PostMapping("/{id}/lots/{lotId}/move")
+    Map<String, Object> moveLot(@PathVariable long id, @PathVariable long lotId,
+                                @RequestBody ShipmentRoundDtos.MoveLotRequest request, HttpSession session) {
+        Map<String, Object> body = new java.util.HashMap<>();
+        body.put("round", service.moveLot(id, lotId, request, sessions.requireUser(session)));
+        return body;
+    }
+
     @PutMapping("/{id}/facts")
     Map<String, ShipmentRoundDto> facts(@PathVariable long id, @RequestBody UpdateShipmentRoundRequest request, HttpSession session) {
         return Map.of("round", service.updateFacts(id, request, sessions.requireUser(session)));

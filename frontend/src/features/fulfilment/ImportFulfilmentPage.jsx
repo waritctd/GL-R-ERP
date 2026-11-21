@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { Button, buttonVariants } from '../../components/common/Button.jsx';
@@ -13,8 +13,9 @@ import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { cn } from '../../utils/cn.js';
 import { formatThaiDate, fulfilmentStatusLabel } from '../../utils/format.js';
 import { AdvanceRoundSheet } from './AdvanceRoundSheet.jsx';
+import { PlanRoundSheet } from './PlanRoundSheet.jsx';
 import {
-  formatQty, lotLabel, lotProduct, lotWho, roundIrCount, roundSummaryLine, roundTitle, STEP_CHIPS, stepPillText, stepTone,
+  formatQty, irRows, lotProduct, roundIrCount, roundSummaryLine, roundTitle, STEP_CHIPS, stepPillText, stepTone, waitingFactories,
 } from './shipmentRounds.js';
 import { useRoundUndo } from './useRoundUndo.jsx';
 
@@ -34,6 +35,8 @@ export function ImportFulfilmentPage({ user, showToast }) {
   const [chip, setChip] = useState('ALL');
   const [search, setSearch] = useState('');
   const [advancing, setAdvancing] = useState(null);
+  const [planning, setPlanning] = useState(false);
+  const navigate = useNavigate();
   const undo = useRoundUndo({ showToast });
 
   const listQuery = useQuery({
@@ -154,13 +157,13 @@ export function ImportFulfilmentPage({ user, showToast }) {
       <span className="flex flex-wrap items-center gap-2"><StatusBadge tone={stepTone(r.importStep)}>{stepPillText(r.importStep)}</StatusBadge></span>
       {roundSummaryLine(r) ? <p className="m-0 text-xs text-text-muted">{roundSummaryLine(r)}</p> : null}
       <ul className="m-0 flex list-none flex-col gap-1 border-t border-border-subtle p-0 pt-2">
-        {r.lots.map((l) => (
-          <li key={l.lotId} className="flex items-start justify-between gap-3 text-sm">
+        {irRows(r).map((row) => (
+          <li key={row.key} className="flex items-start justify-between gap-3 text-sm" data-testid="round-ir-row">
             <span className="flex min-w-0 flex-col">
-              <b>{lotWho(l)}</b>
-              <small className="text-text-muted"><code>{l.docNumber}</code> · {lotLabel(l)}</small>
+              <b>{row.who}</b>
+              <small className="text-text-muted"><code>{row.docNumber}</code> · {row.lotText}</small>
             </span>
-            <span className="shrink-0 font-bold tabular-nums">{formatQty(l.qty)} {l.unit ?? ''}</span>
+            <span className="shrink-0 font-bold tabular-nums">{row.qtyText}</span>
           </li>
         ))}
       </ul>
@@ -226,6 +229,11 @@ export function ImportFulfilmentPage({ user, showToast }) {
                 รอจัดรอบขนส่ง
                 <span className="text-2xs font-normal text-text-muted">{visibleWaiting.length} ใบขอซื้อ · {new Set(visibleWaiting.map((w) => w.factoryName)).size} โรงงาน</span>
               </h2>
+              {editable && waitingFactories(waiting).length > 0 ? (
+                <Button type="button" variant="primary" className="w-full sm:w-auto sm:self-start" onClick={() => setPlanning(true)} data-testid="plan-round">
+                  <Icon name="plus" size={16} />จัดรอบขนส่ง
+                </Button>
+              ) : null}
               <DataTable
                 columns={waitingColumns}
                 rows={visibleWaiting}
@@ -293,6 +301,14 @@ export function ImportFulfilmentPage({ user, showToast }) {
           showToast={showToast}
           onClose={() => setAdvancing(null)}
           onAdvanced={(round) => { setAdvancing(null); undo.offer(round); }}
+        />
+      ) : null}
+      {planning ? (
+        <PlanRoundSheet
+          waiting={waiting}
+          showToast={showToast}
+          onClose={() => setPlanning(false)}
+          onDone={(round) => { setPlanning(false); if (round?.id) navigate(`/fulfilment/rounds/${round.id}`); }}
         />
       ) : null}
       {undo.snackbar}

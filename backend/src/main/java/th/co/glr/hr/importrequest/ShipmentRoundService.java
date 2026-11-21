@@ -22,7 +22,12 @@ import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.importrequest.ImportRequestService.StepChange;
 import th.co.glr.hr.importrequest.ShipmentRoundDtos.AdvanceShipmentRoundRequest;
+import th.co.glr.hr.importrequest.ShipmentRoundDtos.AddLotsRequest;
+import th.co.glr.hr.importrequest.ShipmentRoundDtos.ChangeLotRequest;
+import th.co.glr.hr.importrequest.ShipmentRoundDtos.CreateShipmentRoundRequest;
 import th.co.glr.hr.importrequest.ShipmentRoundDtos.DocumentInput;
+import th.co.glr.hr.importrequest.ShipmentRoundDtos.LotInput;
+import th.co.glr.hr.importrequest.ShipmentRoundDtos.MoveLotRequest;
 import th.co.glr.hr.importrequest.ShipmentRoundDtos.DocumentRequest;
 import th.co.glr.hr.importrequest.ShipmentRoundDtos.UpdateShipmentRoundRequest;
 import th.co.glr.hr.importrequest.ShipmentRoundDtos.ShipmentFacts;
@@ -122,7 +127,7 @@ public class ShipmentRoundService {
             Map<Long, List<DerivedInput>> inputs = rounds.derivedInputs(irs.stream().map(IrLock::id).toList()).stream()
                 .collect(Collectors.groupingBy(DerivedInput::importRequestId));
             for (IrLock ir : irs) {
-                Derived d = derive(ir, inputs.getOrDefault(ir.id(), List.of()));
+                ShipmentStepDerivation.Derived d = ShipmentStepDerivation.derive(ir, inputs.getOrDefault(ir.id(), List.of()));
                 if (d.step().equals(ir.importStep()) && d.at() != null && !d.at().equals(ir.importStepAt())) {
                     stored.setStepDate(ir.id(), d.at());
                 }
@@ -218,6 +223,198 @@ public class ShipmentRoundService {
                 }
             });
         return get(id, actor);
+    }
+
+    // ── planning rounds and moving lots (slice 3) ─────────────────────────────────────────────────────────
+    // Rules: same factory only; ISSUED import requests on ACTIVE deals; never more than a line's quantity across all its
+    // lots; qty > 0; lots are editable only until the round leaves (before IN_TRANSIT). Lock order: rounds (ascending, both
+    // when moving), then the import requests, then the tickets. Every change ends the undo window and recomputes the
+    // derived IR steps (a lot joining a round at ORDERED moves its IR; quantity left waiting holds it at CONTACTED).
+
+    private static final int LEFT_INDEX = ImportRequestStep.indexOf(ImportRequestStep.IN_TRANSIT);
+
+    @Transactional
+    public ShipmentRoundDto createRound(CreateShipmentRoundRequest request, UserPrincipal actor) {
+        requireWrite(actor);
+        if (request == null || request.factoryId() == null || request.lots() == null || request.lots().isEmpty()) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "เลือกโรงงานและใบขอซื้ออย่างน้อย 1 ใบ");
+        }
+        if (request.transportMode() != null && !TRANSPORT_MODES.contains(request.transportMode())) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ประเภทการขนส่งไม่ถูกต้อง");
+        }
+        String label = limit(blankToNull(request.label()), 100, "ชื่อรอบ");
+        List<IrLock> irs = rounds.lockImportRequests(List.of(),
+            request.lots().stream().map(LotInput::importRequestId).filter(java.util.Objects::nonNull).distinct().toList());
+        String factoryName = irs.stream().filter(i -> request.factoryId().equals(i.factoryId())).map(IrLock::factoryName)
+            .findFirst().orElseThrow(() -> new ApiException(HttpStatus.CONFLICT, "ไม่พบใบขอซื้อของโรงงานนี้ที่จัดรอบได้"));
+        long id = rounds.createPlannedRound(request.factoryId(), factoryName, label, request.transportMode(),
+            LocalDate.now(BANGKOK), actor.id(), actor.name());
+        placeLots(id, request.factoryId(), request.lots(), irs);
+        finishLotChange(irs, List.of(id), actor);
+        return get(id, actor);
+    }
+
+    @Transactional
+    public ShipmentRoundDto addLots(long id, AddLotsRequest request, UserPrincipal actor) {
+        requireWrite(actor);
+        ShipmentRoundDto round = lockRound(id);
+        requireNotLeft(round);
+        if (request == null || request.lots() == null || request.lots().isEmpty()) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "เลือกใบขอซื้ออย่างน้อย 1 ใบ");
+        }
+        List<IrLock> irs = rounds.lockImportRequests(List.of(id),
+            request.lots().stream().map(LotInput::importRequestId).filter(java.util.Objects::nonNull).distinct().toList());
+        placeLots(id, round.factoryId(), request.lots(), irs);
+        finishLotChange(irs, List.of(id), actor);
+        return get(id, actor);
+    }
+
+    @Transactional
+    public ShipmentRoundDto changeLot(long id, long lotId, ChangeLotRequest request, UserPrincipal actor) {
+        requireWrite(actor);
+        ShipmentRoundDto round = lockRound(id);
+        requireNotLeft(round);
+        List<IrLock> irs = rounds.lockImportRequestsOnRounds(List.of(id));
+        var lot = requireLot(id, lotId);
+        BigDecimal qty = positive(request == null ? null : request.qty());
+        var item = rounds.itemQty(lot.itemId()).orElseThrow();
+        if (item.placed().subtract(lot.qty()).add(qty).compareTo(item.qty()) > 0) {
+            throw new ApiException(HttpStatus.CONFLICT, "จำนวนเกินที่สั่งในรายการนี้ (สั่ง " + item.qty().stripTrailingZeros().toPlainString() + ")");
+        }
+        rounds.setLotQty(lotId, qty);
+        finishLotChange(irs, List.of(id), actor);
+        return get(id, actor);
+    }
+
+    /** Takes a lot off the round (its quantity goes back to waiting). Returns the round, or null when it was deleted
+     * because that was its last lot (a PORTAL round with no documents; any other round refuses instead). */
+    @Transactional
+    public ShipmentRoundDto removeLot(long id, long lotId, UserPrincipal actor) {
+        requireWrite(actor);
+        ShipmentRoundDto round = lockRound(id);
+        requireNotLeft(round);
+        List<IrLock> irs = rounds.lockImportRequestsOnRounds(List.of(id));
+        requireLot(id, lotId);
+        boolean last = rounds.lotCount(id) == 1;
+        if (last) {
+            requireRoundMayBeDeleted(round);
+        }
+        rounds.deleteLot(lotId);
+        finishLotChange(irs, List.of(id), actor);
+        if (last) {
+            rounds.deleteRound(id);
+            return null;
+        }
+        return get(id, actor);
+    }
+
+    /** Moves a whole lot to another round of the same factory that has not left (rolled cargo, a missed container). A
+     * lot of the same line already there is merged into. Returns the source round, or null when it was emptied and
+     * deleted. */
+    @Transactional
+    public ShipmentRoundDto moveLot(long id, long lotId, MoveLotRequest request, UserPrincipal actor) {
+        requireWrite(actor);
+        if (request == null || request.toRoundId() == null || request.toRoundId() == id) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "เลือกรอบปลายทาง");
+        }
+        long to = request.toRoundId();
+        rounds.lockRounds(List.of(id, to));
+        ShipmentRoundDto src = rounds.roundsWithLots(id).stream().findFirst().orElseThrow(this::notFound);
+        ShipmentRoundDto dst = rounds.roundsWithLots(to).stream().findFirst().orElseThrow(this::notFound);
+        requireNotLeft(src);
+        requireNotLeft(dst);
+        if (src.factoryId() == null || !src.factoryId().equals(dst.factoryId())) {
+            throw new ApiException(HttpStatus.CONFLICT, "ย้ายล็อตได้เฉพาะระหว่างรอบของโรงงานเดียวกัน");
+        }
+        List<IrLock> irs = rounds.lockImportRequestsOnRounds(List.of(id, to));
+        var lot = requireLot(id, lotId);
+        if (irs.stream().noneMatch(i -> i.id() == lot.importRequestId() && i.ticketActive())) {
+            throw new ApiException(HttpStatus.CONFLICT, "งานของใบขอซื้อนี้ไม่ได้อยู่ในสถานะใช้งาน ย้ายล็อตไม่ได้");
+        }
+        boolean last = rounds.lotCount(id) == 1;
+        if (last) {
+            requireRoundMayBeDeleted(src);
+        }
+        var there = rounds.lotOnRound(to, lot.itemId());
+        if (there.isPresent()) {
+            rounds.setLotQty(there.get().lotId(), there.get().qty().add(lot.qty()));
+            rounds.deleteLot(lotId);
+        } else {
+            rounds.moveLotTo(lotId, to);
+        }
+        finishLotChange(irs, List.of(id, to), actor);
+        if (last) {
+            rounds.deleteRound(id);
+            return null;
+        }
+        return get(id, actor);
+    }
+
+    /** Adds the lots to the round: checks every rule per line, merging into a lot of the same line already there. */
+    private void placeLots(long roundId, Long factoryId, List<LotInput> inputs, List<IrLock> irs) {
+        Map<Long, IrLock> byId = irs.stream().collect(Collectors.toMap(IrLock::id, Function.identity()));
+        for (LotInput in : inputs) {
+            IrLock ir = in.importRequestId() == null ? null : byId.get(in.importRequestId());
+            if (ir == null || in.itemId() == null) {
+                throw new ApiException(HttpStatus.CONFLICT, "ใบขอซื้อนี้ไม่ได้อยู่ในสถานะที่จัดรอบได้");
+            }
+            if (!ir.ticketActive()) {
+                throw new ApiException(HttpStatus.CONFLICT, "งานของใบขอซื้อ " + ir.docNumber() + " ไม่ได้อยู่ในสถานะใช้งาน");
+            }
+            if (factoryId == null || !factoryId.equals(ir.factoryId())) {
+                throw new ApiException(HttpStatus.CONFLICT, "ใบขอซื้อ " + ir.docNumber() + " เป็นของโรงงานอื่น");
+            }
+            BigDecimal qty = positive(in.qty());
+            var item = rounds.itemQty(in.itemId())
+                .filter(i -> i.importRequestId() == ir.id())
+                .orElseThrow(() -> new ApiException(HttpStatus.BAD_REQUEST, "รายการสินค้าไม่อยู่ในใบขอซื้อ " + ir.docNumber()));
+            if (item.placed().add(qty).compareTo(item.qty()) > 0) {
+                throw new ApiException(HttpStatus.CONFLICT, "จำนวนเกินที่เหลือของใบขอซื้อ " + ir.docNumber()
+                    + " (เหลือ " + item.qty().subtract(item.placed()).stripTrailingZeros().toPlainString() + ")");
+            }
+            var there = rounds.lotOnRound(roundId, in.itemId());
+            if (there.isPresent()) {
+                rounds.setLotQty(there.get().lotId(), there.get().qty().add(qty));
+            } else {
+                rounds.insertLot(roundId, ir.id(), in.itemId(), qty);
+            }
+        }
+    }
+
+    /** After lots changed: the undo of any earlier advance is gone, and the IR steps follow their lots. */
+    private void finishLotChange(List<IrLock> irs, List<Long> roundIds, UserPrincipal actor) {
+        roundIds.forEach(rounds::clearUndo);
+        rounds.clearIrUndo(irs.stream().map(IrLock::id).toList());
+        applyAftermath(onActiveDeals(recomputeIrSteps(irs, actor, null), irs), actor, null);
+    }
+
+    private void requireNotLeft(ShipmentRoundDto round) {
+        if (ImportRequestStep.indexOf(round.importStep()) >= LEFT_INDEX) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "รอบนี้ออกเดินทางแล้ว แก้ไขล็อตไม่ได้ (แก้ข้อมูลและเอกสารของรอบได้ที่ แก้ไข)");
+        }
+    }
+
+    /** An emptied round of any source may go, but only when it holds nothing of its own (documents, typed facts). */
+    private void requireRoundMayBeDeleted(ShipmentRoundDto round) {
+        if (rounds.hasOwnData(round.id())) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "ล็อตนี้เป็นล็อตสุดท้ายของรอบ และรอบนี้มีเอกสารหรือข้อมูลที่กรอกไว้ (เรือ เที่ยว ตัวแทน ตู้ วันที่ ฯลฯ) "
+                    + "กรุณาลบข้อมูลเหล่านั้นหรือย้ายไปรอบใหม่ก่อน");
+        }
+    }
+
+    private ShipmentRoundRepository.LotPlace requireLot(long roundId, long lotId) {
+        return rounds.findLot(lotId).filter(l -> l.roundId() == roundId)
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบล็อตในรอบนี้"));
+    }
+
+    private static BigDecimal positive(BigDecimal qty) {
+        BigDecimal q = qty == null ? null : qty.setScale(2, java.math.RoundingMode.HALF_UP);
+        if (q == null || q.signum() <= 0) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "จำนวนต้องมากกว่า 0");
+        }
+        return q;
     }
 
     // ── documents (import and the CEO only: a factory invoice shows cost prices and other deals' lines) ──
@@ -333,46 +530,13 @@ public class ShipmentRoundService {
 
     // ── derived IR step ─────────────────────────────────────────────────────────────────────────────────
 
-    record Derived(String step, LocalDate at, Long byId, String byName, String note) {}
-
-    /**
-     * An IR's step from its lots: the slowest round's step, CONTACTED while any quantity is on no round, and RECEIVED
-     * only when every line's full quantity sits on RECEIVED rounds (which falls out of "slowest" once nothing is
-     * unplaced). The date is that step's date on the slowest round; while quantity waits it keeps the IR's own
-     * CONTACTED stamp (or its first issue date).
-     */
-    static Derived derive(IrLock ir, List<DerivedInput> rows) {
-        Map<Long, BigDecimal> placed = new LinkedHashMap<>();
-        Map<Long, BigDecimal> wanted = new LinkedHashMap<>();
-        DerivedInput slowest = null;
-        for (DerivedInput r : rows) {
-            wanted.put(r.itemId(), r.itemQty());
-            placed.merge(r.itemId(), r.lotQty() == null ? BigDecimal.ZERO : r.lotQty(), BigDecimal::add);
-            if (r.roundStep() != null && (slowest == null
-                || ImportRequestStep.indexOf(r.roundStep()) < ImportRequestStep.indexOf(slowest.roundStep()))) {
-                slowest = r;
-            }
-        }
-        boolean unplaced = slowest == null || wanted.entrySet().stream()
-            .anyMatch(e -> placed.get(e.getKey()).compareTo(e.getValue()) < 0);
-        if (unplaced) {
-            LocalDate at = ImportRequestStep.CONTACTED.equals(ir.importStep()) && ir.importStepAt() != null
-                ? ir.importStepAt() : ir.firstIssuedDate();
-            return ImportRequestStep.CONTACTED.equals(ir.importStep())
-                ? new Derived(ImportRequestStep.CONTACTED, at, ir.importStepById(), ir.importStepByName(), ir.importStepNote())
-                : new Derived(ImportRequestStep.CONTACTED, at, null, null, null);
-        }
-        return new Derived(slowest.roundStep(), slowest.roundStepOn() != null ? slowest.roundStepOn() : ir.importStepAt(),
-            slowest.stepById(), slowest.stepByName(), slowest.stepNote());
-    }
-
     /** Writes the derived step on every locked IR whose step changed; returns what changed (ticket then IR order). */
     private List<StepChange> recomputeIrSteps(List<IrLock> irs, UserPrincipal actor, String note) {
         Map<Long, List<DerivedInput>> inputs = rounds.derivedInputs(irs.stream().map(IrLock::id).toList()).stream()
             .collect(Collectors.groupingBy(DerivedInput::importRequestId));
         List<StepChange> changes = new ArrayList<>();
         for (IrLock ir : irs) {
-            Derived d = derive(ir, inputs.getOrDefault(ir.id(), List.of()));
+            ShipmentStepDerivation.Derived d = ShipmentStepDerivation.derive(ir, inputs.getOrDefault(ir.id(), List.of()));
             if (d.step().equals(ir.importStep())) {
                 continue;
             }

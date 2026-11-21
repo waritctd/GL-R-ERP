@@ -14,15 +14,19 @@ import { cn } from '../../utils/cn.js';
 import { formatThaiDate } from '../../utils/format.js';
 import { IMPORT_STEPS, importStepIndex } from '../importProgress/importSteps.js';
 import { AdvanceRoundSheet } from './AdvanceRoundSheet.jsx';
+import { LotModal } from './LotModal.jsx';
+import { PlanRoundSheet } from './PlanRoundSheet.jsx';
 import { RoundDocuments } from './RoundDocuments.jsx';
 import { RoundFactsModal } from './RoundFactsModal.jsx';
 import {
-  factLabel, formatQty, lotLabel, lotProduct, lotWho, roundIrCount, roundTitle, STEP_DATE_KEY, stepPillText, stepTone,
+  factLabel, formatQty, lotLabel, lotProduct, lotsEditable, lotWho, roundIrCount, roundTitle, STEP_DATE_KEY, stepPillText, stepTone,
 } from './shipmentRounds.js';
 import { useRoundUndo } from './useRoundUndo.jsx';
 
 // Whole literal, one track per column (5): IR, who, product, quantity on this round, lot.
 const LOTS_GRID = 'grid-cols-[minmax(0,0.9fr)_minmax(0,1.5fr)_minmax(0,1.3fr)_minmax(0,0.8fr)_minmax(0,1.2fr)]';
+// With the lot actions column (round not yet left): 6 tracks.
+const LOTS_GRID_EDIT = 'grid-cols-[minmax(0,0.9fr)_minmax(0,1.5fr)_minmax(0,1.3fr)_minmax(0,0.8fr)_minmax(0,1.2fr)_minmax(0,0.8fr)]';
 
 function StepList({ round }) {
   const current = importStepIndex(round.importStep);
@@ -60,6 +64,8 @@ export function ShipmentRoundPage({ user, showToast }) {
   const editable = user?.role === 'import' || user?.role === 'ceo';
   const [advancing, setAdvancing] = useState(false);
   const [editing, setEditing] = useState(false);
+  const [planning, setPlanning] = useState(false);
+  const [lotOpen, setLotOpen] = useState(null);
   const undo = useRoundUndo({ showToast });
   const query = useQuery({
     queryKey: queryKeys.shipmentRound(id),
@@ -68,6 +74,10 @@ export function ShipmentRoundPage({ user, showToast }) {
     retry: false,
   });
   const round = query.data;
+  const canEditLots = editable && round != null && lotsEditable(round);
+  // The queue feeds the add picker (waiting IRs) and the move targets (other rounds of this factory that have not left).
+  const listQuery = useQuery({ queryKey: queryKeys.shipmentRounds(), queryFn: () => api.shipmentRounds.list(), enabled: canEditLots });
+  const targets = (listQuery.data?.rounds ?? []).filter((r) => r.id !== round?.id && r.factoryId === round?.factoryId && lotsEditable(r));
 
   if (query.isLoading) return <PageStack><Panel aria-busy="true" aria-label="กำลังโหลดรอบขนส่ง"><SkeletonText lines={6} /></Panel></PageStack>;
   if (query.isError || !round) {
@@ -89,6 +99,11 @@ export function ShipmentRoundPage({ user, showToast }) {
     { key: 'product', header: 'สินค้า', render: (l) => lotProduct(l) },
     { key: 'qty', header: 'ไปรอบนี้', render: (l) => <span className="flex flex-col tabular-nums"><b>{formatQty(l.qty)} {l.unit ?? ''}</b><small className="text-text-muted">จาก {formatQty(l.itemQty)}</small></span> },
     { key: 'lot', header: 'ล็อต', render: (l) => <span className="flex flex-col"><span>{lotLabel(l)}</span>{l.remainingQty > 0 ? <small className="text-text-muted">เหลือ {formatQty(l.remainingQty)} รอจัดรอบ</small> : null}</span> },
+    ...(canEditLots ? [{
+      key: 'manage',
+      header: '',
+      render: (l) => <Button type="button" size="sm" variant="secondary" onClick={() => setLotOpen(l)} data-testid={`lot-manage-${l.lotId}`}>จัดการ</Button>,
+    }] : []),
   ];
   const lotCard = (l) => (
     <div className="flex items-start justify-between gap-3 rounded-md border border-border bg-surface p-3" data-testid="lot-card">
@@ -97,7 +112,10 @@ export function ShipmentRoundPage({ user, showToast }) {
         <small className="text-text-muted"><Link to={`/import/deals/${l.ticketId}`} className="text-info underline"><code>{l.docNumber}</code></Link> · {lotProduct(l)}</small>
         <small className="text-text-muted">{lotLabel(l)}{l.remainingQty > 0 ? ` · เหลือ ${formatQty(l.remainingQty)} รอจัดรอบ` : ''}</small>
       </span>
-      <span className="shrink-0 text-right tabular-nums"><b>{formatQty(l.qty)} {l.unit ?? ''}</b><br /><small className="text-text-muted">จาก {formatQty(l.itemQty)}</small></span>
+      <span className="flex shrink-0 flex-col items-end gap-1 text-right tabular-nums">
+        <span><b>{formatQty(l.qty)} {l.unit ?? ''}</b><br /><small className="text-text-muted">จาก {formatQty(l.itemQty)}</small></span>
+        {canEditLots ? <Button type="button" size="sm" variant="secondary" onClick={() => setLotOpen(l)} data-testid={`lot-manage-${l.lotId}`}>จัดการ</Button> : null}
+      </span>
     </div>
   );
 
@@ -142,8 +160,12 @@ export function ShipmentRoundPage({ user, showToast }) {
         </div>
         <section className="flex min-w-0 flex-col gap-2" aria-label="ใบขอซื้อในรอบนี้">
           <h2 className="m-0 flex items-baseline gap-2 text-base font-bold">ใบขอซื้อในรอบนี้ <span className="text-2xs font-normal text-text-muted">{roundIrCount(round)} ใบ</span></h2>
-          <DataTable columns={lotColumns} rows={round.lots} getRowKey={(l) => l.lotId} gridClassName={LOTS_GRID} mobileCard={lotCard}
+          <DataTable columns={lotColumns} rows={round.lots} getRowKey={(l) => l.lotId} gridClassName={canEditLots ? LOTS_GRID_EDIT : LOTS_GRID} mobileCard={lotCard}
             emptyState={{ icon: 'check', title: 'ยังไม่มีใบขอซื้อในรอบนี้' }} />
+          {canEditLots ? (
+            <Button type="button" variant="secondary" className="w-full sm:w-auto" onClick={() => setPlanning(true)} data-testid="round-add-ir">เพิ่มใบขอซื้อเข้ารอบนี้</Button>
+          ) : null}
+          {editable && !lotsEditable(round) ? <p className="m-0 text-xs text-text-muted">เพิ่มหรือแบ่งของได้จนกว่าเรือจะออก หลังจากนั้นแก้ได้เฉพาะข้อมูลและเอกสารของรอบ</p> : null}
           <p className="m-0 text-xs text-text-muted">ใบขอซื้อทุกใบในรอบนี้เลื่อนขั้นตอนพร้อมกัน · แก้ไขข้อมูลใบขอซื้อ (ระยะเวลานำเข้า อีเมลสั่งซื้อ PDF) ที่หน้าของใบนั้น</p>
         </section>
       </div>
@@ -152,6 +174,10 @@ export function ShipmentRoundPage({ user, showToast }) {
         <AdvanceRoundSheet round={round} showToast={showToast} onClose={() => setAdvancing(false)}
           onAdvanced={(r) => { setAdvancing(false); undo.offer(r); }} />
       ) : null}
+      {planning ? (
+        <PlanRoundSheet round={round} waiting={listQuery.data?.waiting ?? []} showToast={showToast} onClose={() => setPlanning(false)} onDone={() => setPlanning(false)} />
+      ) : null}
+      {lotOpen ? <LotModal round={round} lot={lotOpen} targets={targets} showToast={showToast} onClose={() => setLotOpen(null)} /> : null}
       {editing ? <RoundFactsModal round={round} showToast={showToast} onClose={() => setEditing(false)} /> : null}
       {undo.snackbar}
     </PageStack>

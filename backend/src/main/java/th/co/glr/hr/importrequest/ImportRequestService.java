@@ -724,6 +724,9 @@ public class ImportRequestService {
         if (vesselEtaNote != null) {
             stored.updateFooter(id, vesselEtaNote, null, null, null, null);
         }
+        if (predecessor.isPresent()) {
+            rederiveRevisionStep(draft, id, docNumber, step, stepAt, stepById, stepByName, stepNote, firstIssuedDate, actor);
+        }
         ticketService.recordFirstImportRequestIssued(draft.ticketId(), id, actor);
         notifyImportOfIssuedIr(draft, docNumber, dealSnapshot, actor, predecessor.isPresent());
         return withPageCount(requireStored(id));
@@ -1140,6 +1143,27 @@ public class ImportRequestService {
         if (ImportRequestStep.RECEIVED.equals(targetStep) && (rounds.roundIdsOf(id).isEmpty() || rounds.hasPortalRound(id))) {
             throw new ApiException(HttpStatus.CONFLICT, "กรุณาเลื่อนไปถึงโกดังที่หน้ารอบขนส่ง");
         }
+    }
+
+    /** A revision's lots followed it from the predecessor, so its step is re-derived from them (an IR with no lots keeps
+     * the carried-forward step), with the same aftermath as any step change (events, the all-received rollup). */
+    private void rederiveRevisionStep(ImportRequestDto draft, long id, String docNumber, String step, LocalDate stepAt,
+                                      Long stepById, String stepByName, String stepNote, LocalDate firstIssuedDate,
+                                      UserPrincipal actor) {
+        if (rounds.lotsOf(id).isEmpty()) {
+            return;
+        }
+        var ir = new ShipmentRoundRepository.IrLock(id, draft.ticketId(), docNumber, draft.factoryName(), step, stepAt,
+            stepById, stepByName, stepNote, firstIssuedDate, true, draft.factoryId());
+        var d = ShipmentStepDerivation.derive(ir, rounds.derivedInputs(List.of(id)));
+        if (d.step().equals(step)) {
+            return;
+        }
+        ImportRequestDto before = requireStored(id);
+        boolean own = d.byName() != null;
+        stored.setDerivedStep(id, d.step(), d.at(), own ? d.byId() : actor.id(), own ? d.byName() : actor.name(),
+            own ? d.note() : null);
+        afterStepChanges(draft.ticketId(), List.of(new StepChange(before, step, d.step())), actor, null);
     }
 
     /** One IR whose step changed, with the step it left. */

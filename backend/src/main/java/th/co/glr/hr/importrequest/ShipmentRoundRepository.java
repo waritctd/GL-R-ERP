@@ -397,7 +397,7 @@ public class ShipmentRoundRepository {
         Map<Long, List<ShipmentWaitingLine>> lines = new java.util.HashMap<>();
         jdbc.query("""
             SELECT r.import_request_id, r.doc_number, r.factory_id, r.factory_name, r.ticket_id, t.code AS ticket_code,
-                   t.customer_name, p.name AS project_name, i.code, i.brand, i.model, i.size, i.unit,
+                   t.customer_name, p.name AS project_name, i.import_request_item_id AS item_id, i.code, i.brand, i.model, i.size, i.unit,
                    i.qty - COALESCE((SELECT sum(l.qty) FROM sales.shipment_lot l
                                       WHERE l.import_request_item_id = i.import_request_item_id), 0) AS remaining
               FROM sales.import_request r
@@ -414,7 +414,7 @@ public class ShipmentRoundRepository {
                     return;
                 }
                 long id = rs.getLong("import_request_id");
-                lines.computeIfAbsent(id, k -> new java.util.ArrayList<>()).add(new ShipmentWaitingLine(
+                lines.computeIfAbsent(id, k -> new java.util.ArrayList<>()).add(new ShipmentWaitingLine(rs.getLong("item_id"),
                     rs.getString("code"), rs.getString("brand"), rs.getString("model"), rs.getString("size"),
                     rs.getString("unit"), remaining));
                 byIr.computeIfAbsent(id, k -> {
@@ -435,22 +435,29 @@ public class ShipmentRoundRepository {
     /** Import requests carrying lots on these rounds, locked FOR UPDATE in ascending id. */
     public record IrLock(long id, long ticketId, String docNumber, String factoryName, String importStep,
                          LocalDate importStepAt, Long importStepById, String importStepByName, String importStepNote,
-                         LocalDate firstIssuedDate, boolean ticketActive) {}
+                         LocalDate firstIssuedDate, boolean ticketActive, Long factoryId) {}
 
     public List<IrLock> lockImportRequestsOnRounds(List<Long> roundIds) {
+        return lockImportRequests(roundIds, List.of());
+    }
+
+    /** ISSUED import requests carrying a lot on these rounds, plus these ids, FOR UPDATE in ascending id. */
+    public List<IrLock> lockImportRequests(List<Long> roundIds, List<Long> extraIrIds) {
         return jdbc.query("""
             SELECT import_request_id, ticket_id, doc_number, factory_name, import_step, import_step_at,
-                   import_step_by_id, import_step_by_name, import_step_note, first_issued_date,
+                   import_step_by_id, import_step_by_name, import_step_note, first_issued_date, factory_id,
                    (SELECT t.lifecycle = 'ACTIVE' FROM sales.ticket t WHERE t.ticket_id = sales.import_request.ticket_id) AS ticket_active
               FROM sales.import_request
-             WHERE status = 'ISSUED' AND import_request_id IN (
+             WHERE status = 'ISSUED' AND (import_request_id IN (
                    SELECT import_request_id FROM sales.shipment_lot WHERE shipment_round_id IN (:ids))
+                   OR import_request_id IN (:extra))
              ORDER BY import_request_id FOR UPDATE
-            """, Map.of("ids", roundIds), (rs, n) -> new IrLock(rs.getLong("import_request_id"),
+            """, Map.of("ids", roundIds.isEmpty() ? List.of(-1L) : roundIds,
+                "extra", extraIrIds.isEmpty() ? List.of(-1L) : extraIrIds), (rs, n) -> new IrLock(rs.getLong("import_request_id"),
                 rs.getLong("ticket_id"), rs.getString("doc_number"), rs.getString("factory_name"),
                 rs.getString("import_step"), date(rs, "import_step_at"), (Long) rs.getObject("import_step_by_id"),
                 rs.getString("import_step_by_name"), rs.getString("import_step_note"), date(rs, "first_issued_date"),
-                rs.getBoolean("ticket_active")));
+                rs.getBoolean("ticket_active"), (Long) rs.getObject("factory_id")));
     }
 
     /** What an IR's derived step is made of: per line, its quantity and every lot with its round's step and date. */
@@ -503,5 +510,99 @@ public class ShipmentRoundRepository {
                             WHERE r.source = 'PORTAL' AND r.shipment_round_id IN (
                                   SELECT shipment_round_id FROM sales.shipment_lot WHERE import_request_id = :ir))
             """, Map.of("ir", importRequestId), Boolean.class));
+    }
+
+    // ── slice 3: planning rounds and moving lots ──────────────────────────────────────────────────────────
+
+    /** An IR line with how much of it already rides on rounds. */
+    public record ItemQty(long importRequestId, BigDecimal qty, BigDecimal placed) {}
+
+    public Optional<ItemQty> itemQty(long itemId) {
+        return jdbc.query("""
+            SELECT i.import_request_id, i.qty,
+                   COALESCE((SELECT sum(l.qty) FROM sales.shipment_lot l WHERE l.import_request_item_id = i.import_request_item_id), 0) AS placed
+              FROM sales.import_request_item i WHERE i.import_request_item_id = :i
+            """, Map.of("i", itemId), (rs, n) -> new ItemQty(rs.getLong(1), rs.getBigDecimal(2), rs.getBigDecimal(3)))
+            .stream().findFirst();
+    }
+
+    /** A lot's place: its round, import request, line and quantity. */
+    public record LotPlace(long lotId, long roundId, long importRequestId, long itemId, BigDecimal qty) {}
+
+    public Optional<LotPlace> findLot(long lotId) {
+        return jdbc.query("SELECT shipment_lot_id, shipment_round_id, import_request_id, import_request_item_id, qty"
+            + " FROM sales.shipment_lot WHERE shipment_lot_id = :l", Map.of("l", lotId), (rs, n) -> new LotPlace(
+                rs.getLong(1), rs.getLong(2), rs.getLong(3), rs.getLong(4), rs.getBigDecimal(5))).stream().findFirst();
+    }
+
+    public Optional<LotPlace> lotOnRound(long roundId, long itemId) {
+        return jdbc.query("SELECT shipment_lot_id, shipment_round_id, import_request_id, import_request_item_id, qty"
+            + " FROM sales.shipment_lot WHERE shipment_round_id = :r AND import_request_item_id = :i",
+            Map.of("r", roundId, "i", itemId), (rs, n) -> new LotPlace(rs.getLong(1), rs.getLong(2), rs.getLong(3),
+                rs.getLong(4), rs.getBigDecimal(5))).stream().findFirst();
+    }
+
+    public void setLotQty(long lotId, BigDecimal qty) {
+        jdbc.update("UPDATE sales.shipment_lot SET qty = :q WHERE shipment_lot_id = :l", Map.of("q", qty, "l", lotId));
+    }
+
+    public void deleteLot(long lotId) {
+        jdbc.update("DELETE FROM sales.shipment_lot WHERE shipment_lot_id = :l", Map.of("l", lotId));
+    }
+
+    public int lotCount(long roundId) {
+        return jdbc.queryForObject("SELECT count(*) FROM sales.shipment_lot WHERE shipment_round_id = :r",
+            Map.of("r", roundId), Integer.class);
+    }
+
+    public int documentCount(long roundId) {
+        return jdbc.queryForObject("SELECT count(*) FROM sales.shipment_round_document WHERE shipment_round_id = :r",
+            Map.of("r", roundId), Integer.class);
+    }
+
+    /** A new PORTAL round at CONTACTED dated today (Bangkok), before any lot rides on it. */
+    public long createPlannedRound(Long factoryId, String factoryName, String label, String mode, LocalDate today,
+                                   long actorId, String actorName) {
+        return jdbc.queryForObject("""
+            INSERT INTO sales.shipment_round (factory_id, factory_name, label, transport_mode, source, import_step,
+                   contacted_on, step_by_id, step_by_name, created_by_id)
+            VALUES (:f, :fn, :label, COALESCE(:mode, 'SEA'), 'PORTAL', 'CONTACTED', :today, :actor, :actorName, :actor)
+            RETURNING shipment_round_id
+            """, new MapSqlParameterSource("f", factoryId).addValue("fn", factoryName).addValue("label", label)
+                .addValue("mode", mode).addValue("today", today).addValue("actor", actorId)
+                .addValue("actorName", actorName), Long.class);
+    }
+
+    /** Ends the IR-level undo of these IRs (their lots changed, so an old advance can no longer be undone). */
+    public void clearIrUndo(List<Long> importRequestIds) {
+        if (importRequestIds.isEmpty()) {
+            return;
+        }
+        jdbc.update("""
+            UPDATE sales.import_request
+               SET step_undo_from = NULL, step_undo_from_at = NULL, step_undo_from_by_id = NULL,
+                   step_undo_from_by_name = NULL, step_undo_from_note = NULL, step_advanced_at = NULL
+             WHERE import_request_id IN (:ids)
+            """, Map.of("ids", importRequestIds));
+    }
+
+    public void moveLotTo(long lotId, long toRoundId) {
+        jdbc.update("UPDATE sales.shipment_lot SET shipment_round_id = :to WHERE shipment_lot_id = :l",
+            Map.of("to", toRoundId, "l", lotId));
+    }
+
+    /** Whether the round holds anything of its own: a document, or a typed fact (the label alone does not count). */
+    public boolean hasOwnData(long roundId) {
+        return Boolean.TRUE.equals(jdbc.queryForObject("""
+            SELECT EXISTS (SELECT 1 FROM sales.shipment_round_document WHERE shipment_round_id = :r)
+                OR EXISTS (SELECT 1 FROM sales.shipment_round
+                            WHERE shipment_round_id = :r
+                              AND (NULLIF(btrim(vessel), '') IS NOT NULL OR NULLIF(btrim(voyage), '') IS NOT NULL
+                                   OR NULLIF(btrim(forwarder), '') IS NOT NULL OR NULLIF(btrim(container_nos), '') IS NOT NULL
+                                   OR NULLIF(btrim(port), '') IS NOT NULL OR NULLIF(btrim(gr_number), '') IS NOT NULL
+                                   OR NULLIF(btrim(note), '') IS NOT NULL
+                                   OR goods_ready_on IS NOT NULL OR etd_planned_on IS NOT NULL OR etd_actual_on IS NOT NULL
+                                   OR eta_on IS NOT NULL OR arrived_on IS NOT NULL OR customs_released_on IS NOT NULL))
+            """, Map.of("r", roundId), Boolean.class));
     }
 }

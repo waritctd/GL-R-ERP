@@ -1,5 +1,5 @@
 import { formatThaiDate } from '../../utils/format.js';
-import { IMPORT_STEPS, importStepMeta } from '../importProgress/importSteps.js';
+import { IMPORT_STEPS, importStepIndex, importStepMeta } from '../importProgress/importSteps.js';
 
 /** The facts the advance sheet asks for, per TARGET step and nothing else (N03). `RECEIVED` also carries the
  * complete-per-invoice tick, handled by the sheet itself. Document numbers are separate: see STEP_DOC_KIND. */
@@ -109,3 +109,38 @@ export const roundIrCount = (round) => new Set((round.lots ?? []).map((l) => l.i
 
 export const STEP_CHIPS = [{ key: 'ALL', label: 'ทั้งหมด' }, { key: 'WAITING', label: 'รอจัดรอบ' },
   ...IMPORT_STEPS.map((s) => ({ key: s.code, label: s.label }))];
+
+/** Lots can be planned, changed, removed or moved only until the round leaves (before IN_TRANSIT). */
+export const lotsEditable = (round) => importStepIndex(round.importStep) < importStepIndex('IN_TRANSIT');
+
+/** One row per IR on a round (queue card): who, IR no., the lot label, and the summed quantity when every line shares a
+ * unit, else "n รายการ". */
+export function irRows(round) {
+  const byIr = new Map();
+  (round.lots ?? []).forEach((l) => {
+    if (!byIr.has(l.importRequestId)) byIr.set(l.importRequestId, []);
+    byIr.get(l.importRequestId).push(l);
+  });
+  return [...byIr.values()].map((lots) => {
+    const first = lots[0];
+    const split = lots.find((l) => l.lotCount > 1);
+    const units = new Set(lots.map((l) => l.unit ?? ''));
+    return {
+      key: first.importRequestId, who: lotWho(first), docNumber: first.docNumber, ticketId: first.ticketId,
+      lotText: split ? `ล็อต ${split.lotNo} จาก ${split.lotCount}` : 'ครบทั้งใบ',
+      qtyText: units.size === 1
+        ? `${formatQty(lots.reduce((sum, l) => sum + Number(l.qty), 0))} ${first.unit ?? ''}`.trim()
+        : `${lots.length} รายการ`,
+    };
+  });
+}
+
+/** Waiting IRs grouped by factory (only factories with an id can be planned), for the N04 picker. */
+export function waitingFactories(waiting) {
+  const map = new Map();
+  (waiting ?? []).filter((w) => w.factoryId != null).forEach((w) => {
+    if (!map.has(w.factoryId)) map.set(w.factoryId, { factoryId: w.factoryId, factoryName: w.factoryName, irs: [] });
+    map.get(w.factoryId).irs.push(w);
+  });
+  return [...map.values()].sort((a, b) => (a.factoryName ?? '').localeCompare(b.factoryName ?? '', 'th'));
+}

@@ -35,7 +35,7 @@ public final class ShipmentRoundDtos {
                            Long undoById, String undoFromStep) {}
 
     /** An ISSUED IR with quantity on no round. */
-    public record ShipmentWaitingLine(String code, String brand, String model, String size, String unit,
+    public record ShipmentWaitingLine(long itemId, String code, String brand, String model, String size, String unit,
                               BigDecimal remainingQty) {}
 
     public record ShipmentWaitingDto(long importRequestId, String docNumber, Long factoryId, String factoryName,
@@ -54,6 +54,18 @@ public final class ShipmentRoundDtos {
     public record UpdateShipmentRoundRequest(ShipmentFacts facts, java.util.Map<String, LocalDate> stepDates) {}
 
     public record DocumentRequest(String kind, String docNo, LocalDate docDate, String note) {}
+
+    /** One line of an IR going on a round, and how much of it. */
+    public record LotInput(Long importRequestId, Long itemId, BigDecimal qty) {}
+
+    /** Plans a new round (N04): one factory, its optional label and transport mode, and the lots going on it. */
+    public record CreateShipmentRoundRequest(Long factoryId, String label, String transportMode, List<LotInput> lots) {}
+
+    public record AddLotsRequest(List<LotInput> lots) {}
+
+    public record ChangeLotRequest(BigDecimal qty) {}
+
+    public record MoveLotRequest(Long toRoundId) {}
 
     public record UndoShipmentRoundRequest(String expectedStep) {}
 }

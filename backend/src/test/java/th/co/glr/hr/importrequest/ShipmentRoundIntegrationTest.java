@@ -21,7 +21,12 @@ import th.co.glr.hr.customer.ContactRepository;
 import th.co.glr.hr.customer.CustomerRepository;
 import th.co.glr.hr.factory.FactoryConfigRepository;
 import th.co.glr.hr.importrequest.ShipmentRoundDtos.AdvanceShipmentRoundRequest;
+import th.co.glr.hr.importrequest.ShipmentRoundDtos.AddLotsRequest;
+import th.co.glr.hr.importrequest.ShipmentRoundDtos.ChangeLotRequest;
+import th.co.glr.hr.importrequest.ShipmentRoundDtos.CreateShipmentRoundRequest;
 import th.co.glr.hr.importrequest.ShipmentRoundDtos.DocumentInput;
+import th.co.glr.hr.importrequest.ShipmentRoundDtos.LotInput;
+import th.co.glr.hr.importrequest.ShipmentRoundDtos.MoveLotRequest;
 import th.co.glr.hr.importrequest.ShipmentRoundDtos.UpdateShipmentRoundRequest;
 import th.co.glr.hr.importrequest.ShipmentRoundDtos.ShipmentFacts;
 import th.co.glr.hr.importrequest.ShipmentRoundDtos.ShipmentRoundDto;
@@ -263,6 +268,78 @@ class ShipmentRoundIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(rounds.deleteDocument(portal, invoice, importUser).documents()).extracting(d -> d.docNo()).contains("INV-TEST-2");
     }
 
+    @Test
+    void aSplitLeavesTheRestWaitingAndTheIrAtContacted_overQuantityIsRefused_andAJoiningLotMovesTheIr() {
+        long r1 = rounds.createRound(new CreateShipmentRoundRequest(factoryId(), "รอบ ทดสอบ", "AIR",
+            List.of(new LotInput(irA, itemOf(irA), new BigDecimal("25")))), importUser).id();
+        assertThat(irStep(irA)).isEqualTo(ImportRequestStep.CONTACTED);
+        var waiting = rounds.list(importUser).waiting().stream().filter(w -> w.importRequestId() == irA).findFirst().orElseThrow();
+        assertThat(waiting.lines().get(0).remainingQty()).isEqualByComparingTo("15");
+        assertRefused(() -> rounds.addLots(r1, new AddLotsRequest(List.of(new LotInput(irA, itemOf(irA), new BigDecimal("16")))), importUser),
+            HttpStatus.CONFLICT);
+        assertRefused(() -> rounds.addLots(r1, new AddLotsRequest(List.of(new LotInput(irA, itemOf(irA), BigDecimal.ZERO))), importUser),
+            HttpStatus.BAD_REQUEST);
+
+        rounds.advance(r1, advanceTo(ImportRequestStep.CONTACTED, ImportRequestStep.ORDERED), importUser);
+        assertThat(irStep(irA)).isEqualTo(ImportRequestStep.CONTACTED); // 15 still on no round
+        rounds.addLots(r1, new AddLotsRequest(List.of(new LotInput(irA, itemOf(irA), new BigDecimal("15")))), importUser);
+        assertThat(irStep(irA)).isEqualTo(ImportRequestStep.ORDERED); // all placed; the round is at ORDERED
+        assertThat(rounds.get(r1, importUser).lots()).hasSize(1).first().satisfies(l -> assertThat(l.qty()).isEqualByComparingTo("40"));
+        assertThat(rounds.get(r1, importUser).facts().transportMode()).isEqualTo("AIR");
+    }
+
+    @Test
+    void aLotMovesToAnotherRoundOfTheSameFactory_andLotsAreLockedOnceARoundHasLeft() {
+        long r1 = rounds.createRound(new CreateShipmentRoundRequest(factoryId(), null, null,
+            List.of(new LotInput(irA, itemOf(irA), new BigDecimal("40")))), importUser).id();
+        long r2 = rounds.createRound(new CreateShipmentRoundRequest(factoryId(), null, null,
+            List.of(new LotInput(irB, itemOf(irB), new BigDecimal("40")))), importUser).id();
+        long lotA = rounds.get(r1, importUser).lots().get(0).lotId();
+
+        assertThat(rounds.moveLot(r1, lotA, new MoveLotRequest(r2), importUser)).isNull(); // r1 held only that lot: deleted
+        assertThat(rounds.get(r2, importUser).lots()).extracting(l -> l.importRequestId()).containsExactlyInAnyOrder(irA, irB);
+
+        rounds.advance(r2, advanceTo(ImportRequestStep.CONTACTED, ImportRequestStep.IN_TRANSIT), importUser);
+        long lotB = rounds.get(r2, importUser).lots().stream().filter(l -> l.importRequestId() == irB).findFirst().orElseThrow().lotId();
+        assertRefused(() -> rounds.changeLot(r2, lotB, new ChangeLotRequest(new BigDecimal("10")), importUser), HttpStatus.CONFLICT);
+        assertRefused(() -> rounds.removeLot(r2, lotB, importUser), HttpStatus.CONFLICT);
+        assertThat(rounds.updateFacts(r2, new UpdateShipmentRoundRequest(new ShipmentFacts("ยังแก้ข้อมูลได้", null, null, null, null,
+            null, null, null, null, null, null, null, null, null, null, null, null), Map.of()), importUser).facts().label())
+            .isEqualTo("ยังแก้ข้อมูลได้");
+    }
+
+    @Test
+    void anEmptiedMigratedRoundIsDeletedUnlessItHoldsItsOwnData_soMigratedIrsCanRegroup() {
+        long r1 = round("CONTACTED"); // MIGRATED
+        long r2 = round("CONTACTED");
+        lot(r1, irA, 40);
+        lot(r2, irB, 40);
+        long lotA = rounds.get(r1, importUser).lots().get(0).lotId();
+        jdbc.update("UPDATE sales.shipment_round SET vessel = 'TEST VESSEL' WHERE shipment_round_id = :r", Map.of("r", r1));
+        assertRefused(() -> rounds.moveLot(r1, lotA, new MoveLotRequest(r2), importUser), HttpStatus.CONFLICT);
+        jdbc.update("UPDATE sales.shipment_round SET vessel = NULL, label = 'ชื่ออย่างเดียวไม่นับ' WHERE shipment_round_id = :r", Map.of("r", r1));
+
+        assertThat(rounds.moveLot(r1, lotA, new MoveLotRequest(r2), importUser)).isNull();
+        assertThat(rounds.get(r2, importUser).lots()).extracting(l -> l.importRequestId()).containsExactlyInAnyOrder(irA, irB);
+    }
+
+    @Test
+    void aRevisionRederivesItsStepFromItsLots_soCuttingTheWaitingQuantityReceivesIt() {
+        long received = round("RECEIVED");
+        jdbc.update("UPDATE sales.shipment_round SET received_on = current_date WHERE shipment_round_id = :r", Map.of("r", received));
+        jdbc.update("INSERT INTO sales.shipment_lot (shipment_round_id, import_request_id, import_request_item_id, qty)"
+            + " SELECT :r, :ir, import_request_item_id, 25 FROM sales.import_request_item WHERE import_request_id = :ir",
+            Map.of("r", received, "ir", irA)); // 25 of 40 received, 15 still waiting
+
+        long revision = irService.revise(irA, owner).id();
+        jdbc.update("UPDATE sales.import_request_item SET qty = 25 WHERE import_request_id = :id", Map.of("id", revision));
+        irService.issue(revision, null, owner);
+
+        assertThat(irStep(revision)).isEqualTo(ImportRequestStep.RECEIVED);
+        assertThat(jdbc.queryForObject("SELECT fulfillment_status FROM sales.ticket WHERE ticket_id = :t", Map.of("t", ticketA), String.class))
+            .isEqualTo("GOODS_RECEIVED"); // the deal rolls up: every required factory is received
+    }
+
     // ── fixtures ────────────────────────────────────────────────────────────────────────────────────────
 
     private static AdvanceShipmentRoundRequest advanceTo(String from, String to) {
@@ -297,7 +374,8 @@ class ShipmentRoundIntegrationTest extends AbstractPostgresIntegrationTest {
 
     private long round(String step, String source) {
         return jdbc.queryForObject("""
-            INSERT INTO sales.shipment_round (factory_name, source, import_step) VALUES ('Round Factory', :src, :s)
+            INSERT INTO sales.shipment_round (factory_id, factory_name, source, import_step)
+            VALUES ((SELECT factory_id FROM price_catalog.factories WHERE name = 'Round Factory'), 'Round Factory', :src, :s)
             RETURNING shipment_round_id""", Map.of("s", step, "src", source), Long.class);
     }
 
@@ -311,6 +389,15 @@ class ShipmentRoundIntegrationTest extends AbstractPostgresIntegrationTest {
     private int stepEvents(long ticket) {
         return jdbc.queryForObject("SELECT count(*) FROM sales.ticket_event WHERE ticket_id = :t AND kind = 'IMPORT_STEP_ADVANCED'",
             Map.of("t", ticket), Integer.class);
+    }
+
+    private long factoryId() {
+        return jdbc.queryForObject("SELECT factory_id FROM price_catalog.factories WHERE name = 'Round Factory'", Map.of(), Long.class);
+    }
+
+    private long itemOf(long ir) {
+        return jdbc.queryForObject("SELECT import_request_item_id FROM sales.import_request_item WHERE import_request_id = :id ORDER BY seq LIMIT 1",
+            Map.of("id", ir), Long.class);
     }
 
     private String irStep(long ir) {
