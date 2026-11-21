@@ -35,3 +35,34 @@ export function CompletePerInvoiceField({ complete, note, onComplete, onNote, id
     </div>
   );
 }
+
+/** Short arrival: what actually reached the warehouse of each lot (default = the lot's quantity; 0 allowed, never more
+ * than the lot). `values` maps lotId -> string. */
+export function LotReceiptFields({ lots, values, onChange, idPrefix }) {
+  return (
+    <div className="flex flex-col gap-3" data-testid="lot-receipts">
+      <p className="m-0 text-xs font-bold text-text-secondary">จำนวนที่ถึงโกดังจริงของแต่ละล็อต</p>
+      {lots.map((l) => {
+        const id = `${idPrefix}-lot-${l.lotId}`;
+        const n = Number(values[l.lotId]);
+        const bad = values[l.lotId] === '' || !Number.isFinite(n) || n < 0 || n > Number(l.qty);
+        return (
+          <div key={l.lotId} className="flex flex-col gap-1">
+            <label htmlFor={id} className="text-xs font-bold text-text-secondary">
+              {l.docNumber} · {[l.brand, l.model].filter(Boolean).join(' ') || l.code} {l.size ?? ''} <span className="font-normal text-text-muted">(ล็อต {l.qty} {l.unit ?? ''})</span>
+            </label>
+            <input id={id} type="number" inputMode="decimal" min="0" max={l.qty} step="any" className="min-h-11 w-full text-base"
+              value={values[l.lotId] ?? ''} onChange={(e) => onChange(l.lotId, e.target.value)} />
+            {bad ? <small className="text-danger-dark">ต้องอยู่ระหว่าง 0 ถึง {l.qty}</small> : null}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/** True when every typed received quantity is a number from 0 up to its lot's quantity. */
+export const receiptsValid = (lots, values) => lots.every((l) => {
+  const n = Number(values[l.lotId]);
+  return values[l.lotId] !== '' && Number.isFinite(n) && n >= 0 && n <= Number(l.qty);
+});

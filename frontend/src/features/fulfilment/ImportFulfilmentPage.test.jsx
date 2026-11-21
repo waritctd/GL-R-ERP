@@ -109,6 +109,27 @@ describe('การขนส่ง queue (shipment rounds)', () => {
     await waitFor(() => expect(api.shipmentRounds.undo).toHaveBeenCalledWith(7, { expectedStep: 'AWAITING_CUSTOMS' }));
   });
 
+  it('short arrival: unticking complete lists every lot with its received quantity, capped at the lot, and sends them', async () => {
+    vi.mocked(api.shipmentRounds.advance).mockResolvedValue({ round: round({ importStep: 'RECEIVED' }) });
+    renderAt('/fulfilment');
+    fireEvent.click((await screen.findAllByTestId('round-advance-7'))[0]);
+    const sheet = await screen.findByTestId('advance-round-sheet');
+    fireEvent.click(within(sheet).getByLabelText(/ถึงโกดัง/));
+    expect(within(sheet).queryByTestId('lot-receipts')).toBeNull(); // arrived complete: nothing to ask
+    fireEvent.click(within(sheet).getByLabelText(/ของเข้าครบตามอินวอยซ์/));
+    fireEvent.change(within(sheet).getByLabelText('หมายเหตุ (ของไม่ครบ) *'), { target: { value: 'ขาดบางส่วน' } });
+    const first = within(sheet).getByLabelText(/IR-TEST-001/);
+    expect(first.value).toBe('800'); // default = the lot's quantity
+    fireEvent.change(first, { target: { value: '900' } });
+    expect(within(sheet).getByTestId('advance-round-submit').disabled).toBe(true); // more than the lot
+    fireEvent.change(first, { target: { value: '750' } });
+    fireEvent.change(within(sheet).getByLabelText(/IR-TEST-002/), { target: { value: '0' } }); // 0 is allowed
+    await waitFor(() => expect(within(sheet).getByTestId('advance-round-submit').disabled).toBe(false));
+    fireEvent.click(within(sheet).getByTestId('advance-round-submit'));
+    await waitFor(() => expect(api.shipmentRounds.advance).toHaveBeenCalledWith(7, expect.objectContaining({
+      targetStep: 'RECEIVED', lotReceipts: [{ lotId: 1, qty: 750 }, { lotId: 2, qty: 0 }] })));
+  });
+
   it('an unticked complete-per-invoice needs a note before it can be saved', async () => {
     renderAt('/fulfilment');
     fireEvent.click((await screen.findAllByTestId('round-advance-7'))[0]);

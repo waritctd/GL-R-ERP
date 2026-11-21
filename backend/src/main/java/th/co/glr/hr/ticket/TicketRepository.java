@@ -2674,6 +2674,51 @@ public class TicketRepository {
         return Boolean.TRUE.equals(value);
     }
 
+    /** Whether any lot of the deal's ISSUED import requests is on a RECEIVED shipment round with something received
+     * (COALESCE(received_qty, qty) &gt; 0): goods physically in the warehouse, even if the rest has not arrived. */
+    public boolean hasReceivedLot(long ticketId) {
+        return Boolean.TRUE.equals(jdbc.queryForObject("""
+            SELECT EXISTS (
+                SELECT 1 FROM sales.shipment_lot l
+                  JOIN sales.shipment_round r ON r.shipment_round_id = l.shipment_round_id
+                  JOIN sales.import_request ir ON ir.import_request_id = l.import_request_id
+                 WHERE ir.ticket_id = :t AND ir.status = 'ISSUED' AND r.import_step = 'RECEIVED'
+                   AND COALESCE(l.received_qty, l.qty) > 0)
+            """, Map.of("t", ticketId), Boolean.class));
+    }
+
+    /** Per deal line an ISSUED IR line points at: the IR quantity and how much of it sits on RECEIVED rounds (lot
+     * quantities as planned; a short arrival is NOT subtracted, so it can never stop a deal from being delivered). */
+    public record LineReceipt(BigDecimal irQty, BigDecimal onRounds) {}
+
+    /** {@code dealHasLots}: any ISSUED IR of the deal has a lot at all; without it nothing is capped (pre-portal, stock-only
+     * and lot-less deals behave as before). */
+    public record LotReceipts(boolean dealHasLots, Map<Long, LineReceipt> byItem) {}
+
+    public LotReceipts lotReceipts(long ticketId) {
+        Map<Long, LineReceipt> byItem = new java.util.HashMap<>();
+        boolean[] anyLots = {false};
+        jdbc.query("""
+            SELECT iri.ticket_item_id AS item_id, SUM(iri.qty) AS ir_qty,
+                   COALESCE(SUM((SELECT SUM(l.qty) FROM sales.shipment_lot l
+                                   JOIN sales.shipment_round r ON r.shipment_round_id = l.shipment_round_id
+                                  WHERE l.import_request_item_id = iri.import_request_item_id
+                                    AND r.import_step = 'RECEIVED')), 0) AS on_rounds,
+                   COALESCE(SUM((SELECT COUNT(*) FROM sales.shipment_lot l2
+                                  WHERE l2.import_request_item_id = iri.import_request_item_id)), 0) AS lots
+              FROM sales.import_request ir
+              JOIN sales.import_request_item iri ON iri.import_request_id = ir.import_request_id
+             WHERE ir.ticket_id = :t AND ir.status = 'ISSUED' AND iri.ticket_item_id IS NOT NULL
+             GROUP BY iri.ticket_item_id
+            """, Map.of("t", ticketId), rs -> {
+                byItem.put(rs.getLong("item_id"), new LineReceipt(rs.getBigDecimal("ir_qty"), rs.getBigDecimal("on_rounds")));
+                if (rs.getLong("lots") > 0) {
+                    anyLots[0] = true;
+                }
+            });
+        return new LotReceipts(anyLots[0], byItem);
+    }
+
     /** Validated ticket-status transition — the ONE way sales.ticket.status is written (ticket creation's INSERT
      * sets the initial draft and is not a transition). The SERVICE must turn that into a 409 — never re-SELECT to
      * build a nicer message, which would reintroduce the very race the WHERE clause closes. */

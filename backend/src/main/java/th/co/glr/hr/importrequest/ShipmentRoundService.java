@@ -106,6 +106,10 @@ public class ShipmentRoundService {
         ShipmentRoundDto round = lockRound(id);
         ShipmentFacts facts = request == null ? null : request.facts();
         validateFacts(facts);
+        Map<Long, BigDecimal> receipts = request == null ? Map.of() : validateReceipts(id, request.lotReceipts());
+        if (!receipts.isEmpty() && !ImportRequestStep.RECEIVED.equals(round.importStep())) {
+            throw new ApiException(HttpStatus.CONFLICT, "แก้จำนวนที่ถึงโกดังได้เมื่อรอบถึงโกดังแล้วเท่านั้น");
+        }
         List<IrLock> locked = rounds.lockImportRequestsOnRounds(List.of(id));
         Map<String, LocalDate> dates = request == null || request.stepDates() == null ? Map.of() : request.stepDates();
         for (Map.Entry<String, LocalDate> e : dates.entrySet()) {
@@ -119,6 +123,7 @@ public class ShipmentRoundService {
             requireNotBeforeFirstIssue(e.getValue(), locked);
         }
         List<IrLock> irs = endUndoWindow(id);
+        applyReceipts(id, receipts);
         if (facts != null) {
             rounds.applyFacts(id, facts, true);
         }
@@ -161,12 +166,15 @@ public class ShipmentRoundService {
         }
         requireNotBeforeFirstIssue(eventDate, irs);
         validateFacts(request.facts());
+        Map<Long, BigDecimal> receipts = Map.of();
         if (ImportRequestStep.RECEIVED.equals(target)) {
             requireNoteWhenIncomplete(request.facts());
+            receipts = validateReceipts(id, request.lotReceipts());
         }
         requireNumbers(round, request.documents(), target);
         rounds.advanceRound(id, target, eventDate, actor.id(), actor.name(), request.note(), request.facts());
         rounds.finalizeDocuments(id);
+        applyReceipts(id, receipts);
         for (DocumentInput d : request.documents() == null ? List.<DocumentInput>of() : request.documents()) {
             String no = blankToNull(d.docNo());
             if (no != null) {
@@ -175,7 +183,10 @@ public class ShipmentRoundService {
         }
 
         List<StepChange> changes = recomputeIrSteps(irs, actor, request.note());
-        applyAftermath(onActiveDeals(changes, irs), actor, request.note());
+        Set<Long> completed = applyAftermath(onActiveDeals(changes, irs), actor, request.note());
+        if (ImportRequestStep.RECEIVED.equals(target)) {
+            tellRepsLotsArrived(id, irs, completed);
+        }
         return get(id, actor);
     }
 
@@ -556,9 +567,75 @@ public class ShipmentRoundService {
         return changes.stream().filter(c -> !dead.contains(c.ir().ticketId())).toList();
     }
 
-    private void applyAftermath(List<StepChange> changes, UserPrincipal actor, String note) {
+    /** Returns the deals this completed (every factory received: the rollup ran and told the rep). */
+    private Set<Long> applyAftermath(List<StepChange> changes, UserPrincipal actor, String note) {
+        Set<Long> completed = new java.util.HashSet<>();
         changes.stream().collect(Collectors.groupingBy(c -> c.ir().ticketId(), java.util.TreeMap::new, Collectors.toList()))
-            .forEach((ticketId, list) -> irService.afterStepChanges(ticketId, list, actor, note));
+            .forEach((ticketId, list) -> {
+                if (irService.afterStepChanges(ticketId, list, actor, note)) {
+                    completed.add(ticketId);
+                }
+            });
+        return completed;
+    }
+
+    /** One bell per IR of a deal the rep owns when its lot reaches ถึงโกดัง, unless this advance completed the deal (the
+     * existing all-received notice already says so: never both). No email. Dead deals hear nothing. */
+    private void tellRepsLotsArrived(long roundId, List<IrLock> irs, Set<Long> completed) {
+        Map<Long, IrLock> byId = irs.stream().collect(Collectors.toMap(IrLock::id, Function.identity()));
+        rounds.lotsByRound(List.of(roundId)).getOrDefault(roundId, List.of()).stream()
+            .collect(Collectors.groupingBy(ShipmentRoundDtos.ShipmentLotDto::importRequestId, java.util.TreeMap::new, Collectors.toList()))
+            .forEach((irId, lots) -> {
+                IrLock ir = byId.get(irId);
+                if (ir == null || !ir.ticketActive() || completed.contains(ir.ticketId())) {
+                    return;
+                }
+                BigDecimal got = lots.stream().map(l -> l.receivedQty() != null ? l.receivedQty() : l.qty())
+                    .reduce(BigDecimal.ZERO, BigDecimal::add);
+                if (got.signum() == 0) {
+                    return; // nothing of this IR actually arrived on this round
+                }
+                BigDecimal planned = lots.stream().map(ShipmentRoundDtos.ShipmentLotDto::qty).reduce(BigDecimal.ZERO, BigDecimal::add);
+                boolean oneUnit = lots.stream().map(l -> String.valueOf(l.unit())).distinct().count() == 1;
+                String unit = lots.get(0).unit() == null ? "" : " " + lots.get(0).unit();
+                String qtyText = !oneUnit ? lots.size() + " รายการ"
+                    : got.compareTo(planned) < 0
+                        ? "ถึงโกดัง " + got.stripTrailingZeros().toPlainString() + " จาก " + planned.stripTrailingZeros().toPlainString() + unit
+                        : got.stripTrailingZeros().toPlainString() + unit;
+                irService.notifyRepOfReceivedLot(ir.ticketId(), ir.docNumber(), ir.factoryName(), qtyText.trim());
+            });
+    }
+
+    /** Short arrival: 0 up to the lot's quantity, for lots of this round. Returns lotId -> qty (scaled to 2). */
+    private Map<Long, BigDecimal> validateReceipts(long roundId, List<ShipmentRoundDtos.LotReceipt> receipts) {
+        Map<Long, BigDecimal> out = new LinkedHashMap<>();
+        if (receipts == null || receipts.isEmpty()) {
+            return out;
+        }
+        Map<Long, BigDecimal> lotQty = rounds.lotsByRound(List.of(roundId)).getOrDefault(roundId, List.of()).stream()
+            .collect(Collectors.toMap(ShipmentRoundDtos.ShipmentLotDto::lotId, ShipmentRoundDtos.ShipmentLotDto::qty));
+        for (var r : receipts) {
+            BigDecimal qty = r.qty() == null ? null : r.qty().setScale(2, java.math.RoundingMode.HALF_UP);
+            BigDecimal ordered = r.lotId() == null ? null : lotQty.get(r.lotId());
+            if (ordered == null) {
+                throw new ApiException(HttpStatus.BAD_REQUEST, "ล็อตไม่อยู่ในรอบนี้");
+            }
+            if (qty == null || qty.signum() < 0 || qty.compareTo(ordered) > 0) {
+                throw new ApiException(HttpStatus.BAD_REQUEST,
+                    "จำนวนที่ถึงโกดังต้องอยู่ระหว่าง 0 ถึงจำนวนของล็อต (" + ordered.stripTrailingZeros().toPlainString() + ")");
+            }
+            out.put(r.lotId(), qty);
+        }
+        return out;
+    }
+
+    private void applyReceipts(long roundId, Map<Long, BigDecimal> receipts) {
+        if (receipts.isEmpty()) {
+            return;
+        }
+        Map<Long, BigDecimal> lotQty = rounds.lotsByRound(List.of(roundId)).getOrDefault(roundId, List.of()).stream()
+            .collect(Collectors.toMap(ShipmentRoundDtos.ShipmentLotDto::lotId, ShipmentRoundDtos.ShipmentLotDto::qty));
+        receipts.forEach((lotId, qty) -> rounds.setLotReceived(lotId, qty.compareTo(lotQty.get(lotId)) == 0 ? null : qty));
     }
 
     // ── helpers ─────────────────────────────────────────────────────────────────────────────────────────

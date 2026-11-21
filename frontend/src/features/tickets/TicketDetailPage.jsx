@@ -40,6 +40,7 @@ import { ProcurementSourceDialog } from './ProcurementSourceDialog.jsx';
 import { RemainingInvoiceDialog } from './RemainingInvoiceDialog.jsx';
 import { DealFulfilmentPanel } from './DealFulfilmentPanel.jsx';
 import { DeliveryRoundsPanel } from './delivery/DeliveryRoundsPanel.jsx';
+import { IncomingGoodsPanel } from './IncomingGoodsPanel.jsx';
 import { deliveryRoundsQueryOptions, requestActionLabel, shipPrimaryOf } from './delivery/deliveryRoundsQuery.js';
 import { DealHistoryPanel } from './DealHistoryPanel.jsx';
 import { DealLegacyQuotations } from './DealLegacyQuotations.jsx';
@@ -2147,6 +2148,9 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
             // trackers (read-only here, ดูอย่างเดียว) and the delivery table. id (DOM): the primary button's
             // fulfilment jump target.
             <div id="deal-fulfilment-panel" tabIndex={-1} className="mobile:scroll-mt-[420px] outline-none">
+              {sections.delivery && canViewDealTracking ? (
+                <div className="mb-4"><IncomingGoodsPanel ticketId={ticketId} canMessage={['sales', 'ceo'].includes(role)} showToast={showToast} /></div>
+              ) : null}
               {sections.delivery && canViewDealTracking ? <div className="mb-4"><DeliveryRoundsPanel
                 ticketId={ticketId}
                 showRequestButton={!deliveryRequestAvailable}

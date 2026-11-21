@@ -2116,6 +2116,9 @@ public class TicketService {
         if ("WAREHOUSE".equals(source) && !warehouseDeliveryAvailable(s, ticket.summary().id())) {
             throw new ApiException(HttpStatus.CONFLICT, "ต้องรับสินค้าเข้าโกดังก่อนส่งจากคลังสินค้า");
         }
+        if ("WAREHOUSE".equals(source)) {
+            requireWithinReceivedLots(s.id(), itemsById, normalized);
+        }
         long deliveryId = tickets.insertDeliveryRecord(
             s.id(), source, actor.id(), request.note(), request.recipientName(), normalized, deliveredAt, target.linkId(), noInvoiceNote);
         TicketDto updated = requireTicket(s.id());
@@ -2668,7 +2671,56 @@ public class TicketService {
         // so a stock-first partial delivery can't wrongly block the warehouse remainder.
         return FulfilmentStatus.GOODS_RECEIVED.equals(s.fulfillmentStatus())
             || tickets.hasReceivedGoods(ticketId)
+            || tickets.hasReceivedLot(ticketId) // a lot is in the warehouse even though the rest has not arrived
             || (tickets.isPrePortal(ticketId) && !tickets.hasIssuedImportRequest(ticketId)); // goods ordered before the portal, no IR in the portal
+    }
+
+    /**
+     * Per-lot delivery cap. For a deal line an ISSUED IR line points at: stock coverage plus the imported part scaled by how
+     * much of the IR sits on RECEIVED rounds, {@code allowed = qtyFromStock + max(qty - qtyFromStock, 0) * min(1, onRounds /
+     * irQty)}, to 2 places. A fully received IR therefore allows the whole deal line even if it differs from the IR, and a
+     * short arrival does not cap (it stays recorded and visible, or the deal could never reach FULLY_DELIVERED). Only when the
+     * deal has shipment lots at all, so lot-less, pre-portal and stock-only deals behave as before.
+     */
+    private static BigDecimal allowedFromWarehouse(TicketItemDto item, TicketRepository.LineReceipt r) {
+        BigDecimal stock = nullToZero(item.qtyFromStock());
+        BigDecimal importQty = nullToZero(item.qty()).subtract(stock).max(BigDecimal.ZERO);
+        BigDecimal ratio = r.irQty().signum() <= 0 ? BigDecimal.ONE
+            : r.onRounds().divide(r.irQty(), 10, java.math.RoundingMode.HALF_UP).min(BigDecimal.ONE);
+        return stock.add(importQty.multiply(ratio)).setScale(2, java.math.RoundingMode.HALF_UP);
+    }
+
+    private void requireWithinReceivedLots(long ticketId, Map<Long, TicketItemDto> itemsById,
+                                           List<RecordDeliveryRequest.Line> lines) {
+        TicketRepository.LotReceipts receipts = tickets.lotReceipts(ticketId);
+        if (!receipts.dealHasLots()) {
+            return;
+        }
+        for (RecordDeliveryRequest.Line line : lines) {
+            TicketRepository.LineReceipt r = receipts.byItem().get(line.itemId());
+            if (r == null) {
+                continue;
+            }
+            TicketItemDto item = itemsById.get(line.itemId());
+            BigDecimal allowed = allowedFromWarehouse(item, r);
+            if (nullToZero(item.qtyDelivered()).add(line.qty()).compareTo(allowed) > 0) {
+                throw new ApiException(HttpStatus.CONFLICT, "ส่งจากคลังสินค้าได้ไม่เกินจำนวนที่ถึงโกดังแล้ว: "
+                    + deliveryLineName(item) + " (ส่งได้ไม่เกิน " + qtyText(allowed) + ")", Map.of("code", "LOT_QTY_EXCEEDED"));
+            }
+        }
+    }
+
+    /** Whether the warehouse can still deliver something under the cap: no lots on the deal, or some line has room. */
+    private boolean warehouseHasRoom(TicketDto ticket) {
+        TicketRepository.LotReceipts receipts = tickets.lotReceipts(ticket.summary().id());
+        if (!receipts.dealHasLots()) {
+            return true;
+        }
+        return ticket.items().stream().anyMatch(item -> {
+            TicketRepository.LineReceipt r = receipts.byItem().get(item.id());
+            BigDecimal limit = r == null ? nullToZero(item.qty()) : allowedFromWarehouse(item, r);
+            return limit.compareTo(nullToZero(item.qtyDelivered())) > 0;
+        });
     }
 
     private static boolean hasRemainingDelivery(TicketDto ticket) {
@@ -4367,11 +4419,12 @@ public class TicketService {
         TicketSummaryDto s = ticket.summary();
         boolean fromStock = FulfilmentStatus.FROM_STOCK.equals(s.fulfillmentStatus());
         if (sourceFixed) {
-            return fromStock ? depositSettled(s) : warehouseDeliveryAvailable(s, s.id());
+            return fromStock ? depositSettled(s) : warehouseDeliveryAvailable(s, s.id()) && warehouseHasRoom(ticket);
         }
         boolean stockAvailable = ticket.items().stream()
             .anyMatch(item -> nullToZero(item.qtyFromStock()).compareTo(nullToZero(item.qtyDelivered())) > 0);
-        return ((fromStock || stockAvailable) && depositSettled(s)) || warehouseDeliveryAvailable(s, s.id());
+        return ((fromStock || stockAvailable) && depositSettled(s))
+            || (warehouseDeliveryAvailable(s, s.id()) && warehouseHasRoom(ticket));
     }
 
     /** The Thai reason goods cannot leave yet, or null when they can (what a delivery round's record button says). */
@@ -4379,6 +4432,9 @@ public class TicketService {
         TicketDto ticket = requireTicket(ticketId);
         if (goodsCanLeave(ticket, sourceFixed)) {
             return null;
+        }
+        if (warehouseDeliveryAvailable(ticket.summary(), ticket.summary().id()) && !warehouseHasRoom(ticket)) {
+            return "ของที่ถึงโกดังส่งครบแล้ว รอล็อตถัดไป";
         }
         boolean stockOnly = sourceFixed && FulfilmentStatus.FROM_STOCK.equals(ticket.summary().fulfillmentStatus());
         return stockOnly ? "ส่งสินค้าจากสต็อกได้หลังรับชำระมัดจำแล้ว" : "ต้องรับสินค้าเข้าโกดังก่อนจึงจะบันทึกการส่งได้";

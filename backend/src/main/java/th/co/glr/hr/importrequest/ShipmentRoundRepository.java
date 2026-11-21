@@ -186,15 +186,16 @@ public class ShipmentRoundRepository {
     }
 
     /** One lot with the line it sits on, for remapping onto a revision. */
-    public record LotRow(long roundId, BigDecimal qty, Long ticketItemId, String code, String size) {}
+    public record LotRow(long roundId, BigDecimal qty, Long ticketItemId, String code, String size, BigDecimal receivedQty) {}
 
     public List<LotRow> lotsOf(long importRequestId) {
         return jdbc.query("""
-            SELECT l.shipment_round_id, l.qty, i.ticket_item_id, i.code, i.size
+            SELECT l.shipment_round_id, l.qty, i.ticket_item_id, i.code, i.size, l.received_qty
               FROM sales.shipment_lot l JOIN sales.import_request_item i USING (import_request_item_id)
              WHERE l.import_request_id = :ir ORDER BY l.shipment_lot_id
             """, Map.of("ir", importRequestId), (rs, n) -> new LotRow(rs.getLong("shipment_round_id"),
-                rs.getBigDecimal("qty"), (Long) rs.getObject("ticket_item_id"), rs.getString("code"), rs.getString("size")));
+                rs.getBigDecimal("qty"), (Long) rs.getObject("ticket_item_id"), rs.getString("code"), rs.getString("size"),
+                rs.getBigDecimal("received_qty")));
     }
 
     public void deleteLotsOf(long importRequestId) {
@@ -202,11 +203,16 @@ public class ShipmentRoundRepository {
     }
 
     public void insertLot(long roundId, long importRequestId, long itemId, BigDecimal qty) {
+        insertLot(roundId, importRequestId, itemId, qty, null);
+    }
+
+    /** {@code receivedQty}: null = arrived in full (short arrival otherwise). */
+    public void insertLot(long roundId, long importRequestId, long itemId, BigDecimal qty, BigDecimal receivedQty) {
         jdbc.update("""
-            INSERT INTO sales.shipment_lot (shipment_round_id, import_request_id, import_request_item_id, qty)
-            VALUES (:r, :ir, :item, :qty)
+            INSERT INTO sales.shipment_lot (shipment_round_id, import_request_id, import_request_item_id, qty, received_qty)
+            VALUES (:r, :ir, :item, :qty, :recv)
             """, new MapSqlParameterSource("r", roundId).addValue("ir", importRequestId)
-                .addValue("item", itemId).addValue("qty", qty));
+                .addValue("item", itemId).addValue("qty", qty).addValue("recv", receivedQty));
     }
 
     /** The currently ISSUED import request of a deal's factory, read WITHOUT a lock. */
@@ -264,7 +270,7 @@ public class ShipmentRoundRepository {
                      i.code, i.brand, i.model, i.size, i.unit, i.qty AS item_qty,
                      row_number() OVER (PARTITION BY l.import_request_item_id ORDER BY l.shipment_lot_id) AS lot_no,
                      count(*) OVER (PARTITION BY l.import_request_item_id) AS lots,
-                     i.qty - sum(l.qty) OVER (PARTITION BY l.import_request_item_id) AS remaining
+                     i.qty - sum(l.qty) OVER (PARTITION BY l.import_request_item_id) AS remaining, l.received_qty
                 FROM sales.shipment_lot l JOIN sales.import_request_item i USING (import_request_item_id))
             SELECT x.*, r.doc_number, r.ticket_id, t.code AS ticket_code, t.customer_name, p.name AS project_name
               FROM x JOIN sales.import_request r USING (import_request_id)
@@ -281,7 +287,7 @@ public class ShipmentRoundRepository {
                     rs.getString("project_name"), rs.getLong("import_request_item_id"), rs.getString("code"),
                     rs.getString("brand"), rs.getString("model"), rs.getString("size"), rs.getString("unit"),
                     rs.getBigDecimal("qty"), rs.getBigDecimal("item_qty"), rs.getInt("lot_no"),
-                    remaining.signum() > 0 ? lots + 1 : lots, remaining.max(BigDecimal.ZERO)));
+                    remaining.signum() > 0 ? lots + 1 : lots, remaining.max(BigDecimal.ZERO), rs.getBigDecimal("received_qty")));
             });
         return out;
     }
@@ -604,5 +610,37 @@ public class ShipmentRoundRepository {
                                    OR goods_ready_on IS NOT NULL OR etd_planned_on IS NOT NULL OR etd_actual_on IS NOT NULL
                                    OR eta_on IS NOT NULL OR arrived_on IS NOT NULL OR customs_released_on IS NOT NULL))
             """, Map.of("r", roundId), Boolean.class));
+    }
+
+    /** Short arrival: what actually reached the warehouse of a lot; null = the lot arrived in full. */
+    public void setLotReceived(long lotId, BigDecimal receivedQty) {
+        jdbc.update("UPDATE sales.shipment_lot SET received_qty = :q WHERE shipment_lot_id = :l",
+            new MapSqlParameterSource("l", lotId).addValue("q", receivedQty));
+    }
+
+    /** A lot of a deal's ISSUED IR with its round, for the sales view (no price, no factory documents). */
+    public record TicketLot(long lotId, long importRequestId, long itemId, BigDecimal qty, BigDecimal receivedQty,
+                            long roundId, String roundLabel, String roundStep, String transportMode, String vessel,
+                            String voyage, String port, LocalDate etdActualOn, LocalDate etaOn, LocalDate arrivedOn,
+                            LocalDate customsReleasedOn, LocalDate contactedOn, LocalDate orderedOn, LocalDate pickedUpOn,
+                            LocalDate inTransitOn, LocalDate awaitingCustomsOn, LocalDate receivedOn) {}
+
+    public List<TicketLot> lotsOfTicket(long ticketId) {
+        return jdbc.query("""
+            SELECT l.shipment_lot_id, l.import_request_id, l.import_request_item_id, l.qty, l.received_qty,
+                   r.shipment_round_id, r.label, r.import_step, r.transport_mode, r.vessel, r.voyage, r.port,
+                   r.etd_actual_on, r.eta_on, r.arrived_on, r.customs_released_on, r.contacted_on, r.ordered_on,
+                   r.picked_up_on, r.in_transit_on, r.awaiting_customs_on, r.received_on
+              FROM sales.shipment_lot l
+              JOIN sales.import_request ir ON ir.import_request_id = l.import_request_id
+              JOIN sales.shipment_round r ON r.shipment_round_id = l.shipment_round_id
+             WHERE ir.ticket_id = :t AND ir.status = 'ISSUED'
+             ORDER BY l.import_request_id, l.import_request_item_id, l.shipment_lot_id
+            """, Map.of("t", ticketId), (rs, n) -> new TicketLot(rs.getLong(1), rs.getLong(2), rs.getLong(3),
+                rs.getBigDecimal(4), rs.getBigDecimal(5), rs.getLong(6), rs.getString(7), rs.getString(8),
+                rs.getString(9), rs.getString(10), rs.getString(11), rs.getString(12), date(rs, "etd_actual_on"),
+                date(rs, "eta_on"), date(rs, "arrived_on"), date(rs, "customs_released_on"), date(rs, "contacted_on"),
+                date(rs, "ordered_on"), date(rs, "picked_up_on"), date(rs, "in_transit_on"),
+                date(rs, "awaiting_customs_on"), date(rs, "received_on")));
     }
 }

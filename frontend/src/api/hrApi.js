@@ -391,6 +391,7 @@ export const api = {
     recordPayment: (id, payload) => apiRequest(API_ROUTES.finance.action(id, 'payments'), { method: 'POST', body: payload }),
     setBilling: (id, payload) => apiRequest(API_ROUTES.tickets.billing(id), { method: 'POST', body: payload }),
     listDeliveries: (id) => apiRequest(API_ROUTES.tickets.deliveries(id)),
+    incoming: (id) => apiRequest(API_ROUTES.tickets.incoming(id)),
     reserveStock: (id, payload) => apiRequest(API_ROUTES.tickets.reserveStock(id), { method: 'POST', body: payload }),
     // "จัดซื้อสินค้า" dialog: where each deal line comes from (stock vs import). GET -> { legacy,
     // editable, decidedAt, quotationNumber, lines }; POST { lines:[{itemId, fromStock}] } -> { ticket }.

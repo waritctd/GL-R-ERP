@@ -194,6 +194,8 @@ export const API_ROUTES = {
     payments: (id) => `/api/tickets/${id}/payments`,
     billing: (id) => `/api/tickets/${id}/billing`,
     deliveries: (id) => `/api/tickets/${id}/deliveries`,
+    // The sales view of a deal's incoming goods: lots per IR with their round's status (no price, no factory document).
+    incoming: (id) => `/api/tickets/${id}/incoming`,
     reserveStock: (id) => `/api/tickets/${id}/reserve-stock`,
     procurementSource: (id) => `/api/tickets/${id}/procurement-source`,
     // V148 (per-item stock-commission weighting): the sales_manager/CEO-approved counterpart to reserveStock

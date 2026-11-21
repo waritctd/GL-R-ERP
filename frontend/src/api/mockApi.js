@@ -3232,7 +3232,7 @@ function mockShipmentLotDtos(round) {
       customerName: ticket.customerName ?? null, projectName: ticket.projectName ?? null, itemId: item.id,
       code: item.code, brand: item.brand ?? null, model: item.model ?? null, size: item.size ?? null, unit: item.unit ?? null,
       qty: lot.qty, itemQty: Number(item.qty), lotNo: all.findIndex((l) => l.lotId === lot.lotId) + 1,
-      lotCount: remaining > 0 ? all.length + 1 : all.length, remainingQty: remaining,
+      lotCount: remaining > 0 ? all.length + 1 : all.length, remainingQty: remaining, receivedQty: lot.receivedQty ?? null,
     };
   });
 }
@@ -3293,6 +3293,20 @@ function mockPlaceLots(round, inputs) {
     if (there) there.qty += qty;
     else round.lots.push({ lotId: mockShipmentLotSeq++, importRequestId: ir.id, itemId: item.id, qty });
   }
+}
+
+// Short arrival: 0 up to the lot's quantity; null on the lot = it arrived in full (ShipmentRoundService#validateReceipts).
+function mockApplyReceipts(round, receipts) {
+  for (const r of receipts ?? []) {
+    const lot = round.lots.find((l) => l.lotId === Number(r.lotId));
+    if (!lot) fail('ล็อตไม่อยู่ในรอบนี้', 400);
+    const qty = Math.round(Number(r.qty) * 100) / 100;
+    if (!Number.isFinite(qty) || qty < 0 || qty > lot.qty) fail(`จำนวนที่ถึงโกดังต้องอยู่ระหว่าง 0 ถึงจำนวนของล็อต (${lot.qty})`, 400);
+  }
+  (receipts ?? []).forEach((r) => {
+    const lot = round.lots.find((l) => l.lotId === Number(r.lotId));
+    lot.receivedQty = Number(r.qty) === lot.qty ? null : Math.round(Number(r.qty) * 100) / 100;
+  });
 }
 
 function mockRequireNotLeft(round) {
@@ -11183,6 +11197,46 @@ export const api = {
       return delay({ items: receiptsForTicket(id) });
     },
 
+    // Mirrors IncomingService: the deal's read gate, every lot of its ISSUED IRs with the round's status, never a price.
+    async incoming(id) {
+      requireTicketViewer(id);
+      mockEnsureMigratedRounds();
+      const irs = mockImportRequests.filter((r) => r.ticketId === Number(id) && r.status === 'ISSUED');
+      const out = irs.map((ir) => {
+        const lots = [];
+        const waiting = [];
+        ir.items.forEach((item) => {
+          const mine = mockShipmentRounds.flatMap((r) => r.lots.filter((l) => l.itemId === item.id).map((l) => ({ l, r })));
+          const remaining = Number(item.qty) - mine.reduce((sum, { l }) => sum + l.qty, 0);
+          const product = [[item.brand, item.model].filter(Boolean).join(' ') || item.code, item.size].filter(Boolean).join(' ');
+          mine.forEach(({ l, r }, i) => lots.push({
+            lotId: l.lotId, product, unit: item.unit ?? null, qty: l.qty, receivedQty: r.importStep === 'RECEIVED' ? (l.receivedQty ?? l.qty) : null,
+            lotNo: i + 1, lotCount: remaining > 0 ? mine.length + 1 : mine.length, step: r.importStep,
+            expectedOn: r.facts.etaOn ?? ir.expectedArrivalTo ?? null, roundLabel: r.facts.label, transportMode: r.facts.transportMode,
+            vessel: r.facts.vessel, voyage: r.facts.voyage, port: r.facts.port, etdActualOn: r.facts.etdActualOn, etaOn: r.facts.etaOn,
+            arrivedOn: r.facts.arrivedOn, customsReleasedOn: r.facts.customsReleasedOn, contactedOn: r.contactedOn, orderedOn: r.orderedOn,
+            pickedUpOn: r.pickedUpOn, inTransitOn: r.inTransitOn, awaitingCustomsOn: r.awaitingCustomsOn, receivedOn: r.receivedOn,
+          }));
+          if (remaining > 0) waiting.push({ product, unit: item.unit ?? null, remainingQty: remaining });
+        });
+        const oneUnit = new Set(ir.items.map((i) => i.unit ?? '')).size === 1;
+        return {
+          importRequestId: ir.id, docNumber: ir.docNumber, factoryName: ir.factoryName, importStep: ir.importStep,
+          expectedFrom: mockImportRequestDto(ir).expectedArrivalFrom, expectedTo: mockImportRequestDto(ir).expectedArrivalTo,
+          unit: oneUnit ? (ir.items[0].unit ?? null) : null,
+          ordered: oneUnit ? ir.items.reduce((sum, i) => sum + Number(i.qty), 0) : null,
+          received: oneUnit ? lots.reduce((sum, l) => sum + (l.receivedQty ?? 0), 0) : null, lots, waiting,
+        };
+      });
+      const allOne = out.length > 0 && out.every((i) => i.unit != null) && new Set(out.map((i) => i.unit)).size === 1;
+      return delay({
+        wantedBy: irs.map((r) => r.requiredByNote).find((n) => n && n.trim()) ?? null,
+        totalUnit: allOne ? out[0].unit : null,
+        totalOrdered: allOne ? out.reduce((sum, i) => sum + i.ordered, 0) : null,
+        totalReceived: allOne ? out.reduce((sum, i) => sum + i.received, 0) : null, irs: out,
+      });
+    },
+
     async listDeliveries(id) {
       requireTicketViewer(id);
       return delay({ items: deliveryRecordsForTicket(id) });
@@ -15275,6 +15329,8 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
           || mockImportRequestStepIndex(step) > mockImportRequestStepIndex(round.importStep)) fail('แก้วันที่ได้เฉพาะขั้นตอนที่รอบนี้ผ่านมาแล้ว', 400);
         if (date > new Date().toISOString().slice(0, 10)) fail('วันที่ของขั้นตอนต้องไม่เป็นวันที่ในอนาคต', 400);
       }
+      if ((request?.lotReceipts ?? []).length > 0 && round.importStep !== 'RECEIVED') fail('แก้จำนวนที่ถึงโกดังได้เมื่อรอบถึงโกดังแล้วเท่านั้น', 409);
+      mockApplyReceipts(round, request?.lotReceipts);
       round.undo = null; // an edit ends the undo window, so an undo can never discard it
       if (facts) MOCK_ROUND_FACT_KEYS.forEach((k) => { round.facts[k] = k === 'transportMode' ? (facts[k] ?? round.facts[k]) : (facts[k] ?? null); });
       Object.entries(dates).forEach(([step, date]) => { round[MOCK_ROUND_DATE_KEY[step]] = date; });
@@ -15317,6 +15373,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
           }
         }
       }
+      if (target === 'RECEIVED') mockApplyReceipts(round, request.lotReceipts);
       const { lots: _lots, documents: _documents, undo: _undo, ...rest } = round;
       const snapshot = structuredClone(rest);
       MOCK_ROUND_FACT_KEYS.forEach((k) => { if (facts[k] != null) round.facts[k] = facts[k]; });

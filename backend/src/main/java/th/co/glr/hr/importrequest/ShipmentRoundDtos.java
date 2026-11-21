@@ -26,7 +26,7 @@ public final class ShipmentRoundDtos {
     public record ShipmentLotDto(long lotId, long importRequestId, String docNumber, long ticketId, String ticketCode,
                          String customerName, String projectName, long itemId, String code, String brand,
                          String model, String size, String unit, BigDecimal qty, BigDecimal itemQty,
-                         int lotNo, int lotCount, BigDecimal remainingQty) {}
+                         int lotNo, int lotCount, BigDecimal remainingQty, BigDecimal receivedQty) {}
 
     public record ShipmentRoundDto(long id, Long factoryId, String factoryName, String source, String importStep,
                            LocalDate contactedOn, LocalDate orderedOn, LocalDate pickedUpOn, LocalDate inTransitOn,
@@ -47,11 +47,26 @@ public final class ShipmentRoundDtos {
     /** A document number typed on the advance sheet (kind + number). */
     public record DocumentInput(String kind, String docNo) {}
 
+    /** What actually arrived of one lot (short arrival): 0 up to the lot's quantity. */
+    public record LotReceipt(Long lotId, BigDecimal qty) {}
+
     public record AdvanceShipmentRoundRequest(String targetStep, LocalDate eventDate, String expectedStep, String note,
-                                              ShipmentFacts facts, List<DocumentInput> documents) {}
+                                              ShipmentFacts facts, List<DocumentInput> documents,
+                                              List<LotReceipt> lotReceipts) {
+        /** No short arrival: every lot arrived in full. */
+        public AdvanceShipmentRoundRequest(String targetStep, LocalDate eventDate, String expectedStep, String note,
+                                           ShipmentFacts facts, List<DocumentInput> documents) {
+            this(targetStep, eventDate, expectedStep, note, facts, documents, null);
+        }
+    }
 
     /** Facts as sent, plus corrections of the real date of steps the round has passed (step code -> date). */
-    public record UpdateShipmentRoundRequest(ShipmentFacts facts, java.util.Map<String, LocalDate> stepDates) {}
+    public record UpdateShipmentRoundRequest(ShipmentFacts facts, java.util.Map<String, LocalDate> stepDates,
+                                             List<LotReceipt> lotReceipts) {
+        public UpdateShipmentRoundRequest(ShipmentFacts facts, java.util.Map<String, LocalDate> stepDates) {
+            this(facts, stepDates, null);
+        }
+    }
 
     public record DocumentRequest(String kind, String docNo, LocalDate docDate, String note) {}
 

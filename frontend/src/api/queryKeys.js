@@ -154,6 +154,8 @@ export const queryKeys = {
   financeDeal: (id) => ['finance', 'deal', id == null ? id : Number(id)],
   ticketPayments: (id) => ['tickets', 'payments', id],
   ticketDeliveries: (id) => ['tickets', 'deliveries', id],
+  // ของกำลังมา on the deal's ส่งของ tab (GET /api/tickets/{id}/incoming).
+  ticketIncoming: (id) => ['tickets', 'incoming', Number(id)],
   // Which brands a deal needs a ใบขอซื้อ for — one F-SM-001 per brand.
   importRequestBrands: (id) => ['tickets', 'import-request-brands', id],
   // The STORED ใบขอซื้อ aggregate: one entry per deal's whole per-factory list, and

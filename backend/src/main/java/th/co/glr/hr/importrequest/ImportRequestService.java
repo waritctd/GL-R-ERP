@@ -1145,6 +1145,15 @@ public class ImportRequestService {
         }
     }
 
+    /** One bell (no email) to the deal's rep when a lot of theirs reaches ถึงโกดัง: which IR and how much. */
+    public void notifyRepOfReceivedLot(long ticketId, String docNumber, String factoryName, String qtyText) {
+        TicketSummaryDto deal = requireTicketSummary(ticketId);
+        notifications.notifyEmployeeBellOnly(deal.createdById(), "IMPORT_LOT_RECEIVED",
+            "ใบขอซื้อ (IR) " + docNumber + " จากโรงงาน " + factoryName + (qtyText.startsWith("ถึงโกดัง") ? " " : " ถึงโกดังแล้ว ") + qtyText + "\n"
+                + DealNoticeText.dealLabel(deal.code(), deal.customerName()) + "\nดูความคืบหน้าที่แท็บ ส่งของ",
+            "/tickets/" + deal.id() + "?tab=ship");
+    }
+
     /** A revision's lots followed it from the predecessor, so its step is re-derived from them (an IR with no lots keeps
      * the carried-forward step), with the same aftermath as any step change (events, the all-received rollup). */
     private void rederiveRevisionStep(ImportRequestDto draft, long id, String docNumber, String step, LocalDate stepAt,
@@ -1173,7 +1182,7 @@ public class ImportRequestService {
      * IMPORT_STEP_ADVANCED event per changed IR, then (once per deal) the all-received rollup or the first-start
      * notice. The IR rows must already hold their new steps. The ticket is locked FIRST, before any event insert:
      * the event's FK takes a KEY SHARE lock on the ticket, and two callers upgrading to FOR UPDATE would deadlock. */
-    public void afterStepChanges(long ticketId, List<StepChange> changes, UserPrincipal actor, String note) {
+    public boolean afterStepChanges(long ticketId, List<StepChange> changes, UserPrincipal actor, String note) {
         String noteSuffix = note != null && !note.isBlank() ? " — " + note : "";
         tickets.lockTicketForUpdate(ticketId);
         for (StepChange c : changes) {
@@ -1191,7 +1200,7 @@ public class ImportRequestService {
             notifyRepOfImportProgress(requireTicketSummary(ticketId), TicketEventKind.IMPORT_GOODS_RECEIVED_ALL,
                 "สินค้าตาม" + ir + " จากโรงงาน " + received.ir().factoryName() + " เข้าคลังแล้ว และครบทุกใบขอซื้อของดีลนี้",
                 "สิ่งที่ต้องทำต่อ: นัดวันส่งสินค้ากับลูกค้า");
-            return;
+            return true;
         }
         StepChange started = changes.stream().filter(c -> ImportRequestStep.CONTACTED.equals(c.from())
             && !ImportRequestStep.CONTACTED.equals(c.to())).findFirst().orElse(null);
@@ -1206,6 +1215,7 @@ public class ImportRequestService {
                     + " แล้ว ขั้นตอนล่าสุด: " + ImportRequestStep.thaiLabel(started.to()),
                 "แจ้งเพื่อทราบ ระบบจะแจ้งอีกครั้งเมื่อสินค้าเข้าคลัง");
         }
+        return false;
     }
 
     /** How long after an advance its actor may still undo it (spec 2026-11-15 §7.11 item 3, the /fulfilment snackbar). */
@@ -1347,21 +1357,26 @@ public class ImportRequestService {
         }
         List<Long> roundIds = rounds.roundIdsOf(oldId);
         boolean whole = roundIds.size() == 1 && rounds.wholeOn(oldId, roundIds.get(0));
-        // line -> round -> qty; the whole case is every new line, in full, on the one round.
-        Map<Long, Map<Long, java.math.BigDecimal>> plan = new java.util.LinkedHashMap<>();
+        // line -> round -> {qty, received}; the whole case is every new line, in full, on the one round. received is what
+        // really arrived (a short arrival carries over: summed when lots merge, capped at the new quantity).
+        Map<Long, Map<Long, java.math.BigDecimal[]>> plan = new java.util.LinkedHashMap<>();
         if (whole) {
             for (var it : revision.items()) {
-                plan.computeIfAbsent(it.id(), k -> new java.util.LinkedHashMap<>()).put(roundIds.get(0), it.qty());
+                java.math.BigDecimal received = oldLotFor(lots, it).map(ShipmentRoundRepository.LotRow::receivedQty).orElse(null);
+                plan.computeIfAbsent(it.id(), k -> new java.util.LinkedHashMap<>()).put(roundIds.get(0),
+                    new java.math.BigDecimal[] {it.qty(), received == null ? it.qty() : received.min(it.qty())});
             }
         } else {
             for (var lot : lots) {
                 var match = matchLine(lot, revision.items());
+                java.math.BigDecimal got = lot.receivedQty() != null ? lot.receivedQty() : lot.qty();
                 plan.computeIfAbsent(match.id(), k -> new java.util.LinkedHashMap<>())
-                    .merge(lot.roundId(), lot.qty(), java.math.BigDecimal::add);
+                    .merge(lot.roundId(), new java.math.BigDecimal[] {lot.qty(), got},
+                        (a, b) -> new java.math.BigDecimal[] {a[0].add(b[0]), a[1].add(b[1])});
             }
             for (var it : revision.items()) {
                 java.math.BigDecimal lotted = plan.getOrDefault(it.id(), Map.of()).values().stream()
-                    .reduce(java.math.BigDecimal.ZERO, java.math.BigDecimal::add);
+                    .map(v -> v[0]).reduce(java.math.BigDecimal.ZERO, java.math.BigDecimal::add);
                 if (it.qty().compareTo(lotted) < 0) {
                     throw new ApiException(HttpStatus.CONFLICT,
                         "ฉบับแก้ไขลดจำนวนรายการที่ " + it.seq() + " ต่ำกว่าจำนวนที่จัดลงรอบขนส่งแล้ว กรุณาแก้ที่รอบขนส่งก่อน");
@@ -1369,8 +1384,16 @@ public class ImportRequestService {
             }
         }
         rounds.deleteLotsOf(oldId);
-        plan.forEach((itemId, byRound) -> byRound.forEach((roundId, qty) ->
-            rounds.insertLot(roundId, revision.id(), itemId, qty)));
+        plan.forEach((itemId, byRound) -> byRound.forEach((roundId, v) ->
+            rounds.insertLot(roundId, revision.id(), itemId, v[0], v[1].compareTo(v[0]) == 0 ? null : v[1])));
+    }
+
+    /** The predecessor's lot of the line a revised item stands for: same deal line, else same code and size. */
+    private static Optional<ShipmentRoundRepository.LotRow> oldLotFor(List<ShipmentRoundRepository.LotRow> lots,
+                                                                       ImportRequestDtos.ImportRequestItemDto item) {
+        var byTicketItem = lots.stream().filter(l -> l.ticketItemId() != null && l.ticketItemId().equals(item.ticketItemId())).findFirst();
+        return byTicketItem.isPresent() ? byTicketItem : lots.stream().filter(l -> l.ticketItemId() == null
+            && java.util.Objects.equals(l.code(), item.code()) && java.util.Objects.equals(l.size(), item.size())).findFirst();
     }
 
     /** Prints the INTERNAL stored form from ITS OWN snapshot — everything, unlike the FACTORY copy.

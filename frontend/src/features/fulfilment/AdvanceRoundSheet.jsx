@@ -8,10 +8,12 @@ import { ThaiDateInput } from '../../components/common/ThaiDateInput.jsx';
 import { bangkokTodayIso } from '../../utils/format.js';
 import { importStepMeta, stepsAhead } from '../importProgress/importSteps.js';
 import { invalidateAfterRoundChange } from './useRoundUndo.jsx';
-import { CompletePerInvoiceField, RoundFactField } from './RoundFactFields.jsx';
+import { CompletePerInvoiceField, LotReceiptFields, receiptsValid, RoundFactField } from './RoundFactFields.jsx';
 import {
   docKindLabel, factLabel, hasNumberedDoc, roundIrCount, roundTitle, STEP_DOC_KIND, STEP_FACT_FIELDS, stepPillText, stepTone,
 } from './shipmentRounds.js';
+
+const isReceivedTarget = (t) => t === 'RECEIVED';
 
 /** N03: move a round forward. A bottom sheet on a phone, a centred dialog from 640px up (Modal's sheet-on-phone). Asks
  * ONLY the chosen step's facts; every IR on the round follows. `onAdvanced(round)` gets the updated round. */
@@ -24,10 +26,14 @@ export function AdvanceRoundSheet({ round, onClose, onAdvanced, showToast }) {
   const [complete, setComplete] = useState(true);
   const [completeNote, setCompleteNote] = useState('');
   const [docNos, setDocNos] = useState({});
+  // Short arrival: each lot's received quantity, shown once ของเข้าครบ is unticked (default = the lot's quantity).
+  const [received, setReceived] = useState(() => Object.fromEntries((round.lots ?? []).map((l) => [l.lotId, String(l.qty)])));
+  const shortArrival = isReceivedTarget(target) && !complete;
   const mode = round.facts?.transportMode;
   const fields = STEP_FACT_FIELDS[target] ?? [];
   const isReceived = target === 'RECEIVED';
   const noteMissing = isReceived && !complete && !completeNote.trim();
+  const receiptsBad = shortArrival && !receiptsValid(round.lots ?? [], received);
   // Document numbers: an optional one for the step's own document (ORDERED proforma, IN_TRANSIT invoice, no warning); on
   // the way to ถึงโกดัง a proforma and an invoice number, each asked only while the round has none. A portal round
   // cannot be received without them; a migrated or backfilled one never needs them.
@@ -53,8 +59,9 @@ export function AdvanceRoundSheet({ round, onClose, onAdvanced, showToast }) {
       sent.completePerInvoice = complete;
       if (!complete) sent.completeNote = completeNote.trim();
     }
+    const lotReceipts = shortArrival ? (round.lots ?? []).map((l) => ({ lotId: l.lotId, qty: Number(received[l.lotId]) })) : undefined;
     const documents = docKinds.filter((k) => (docNos[k] ?? '').trim()).map((k) => ({ kind: k, docNo: docNos[k].trim() }));
-    advance.mutate({ targetStep: target, eventDate: eventDate || undefined, expectedStep: round.importStep, facts: sent, documents });
+    advance.mutate({ targetStep: target, eventDate: eventDate || undefined, expectedStep: round.importStep, facts: sent, documents, lotReceipts });
   }
 
   const label = importStepMeta(target)?.label ?? '';
@@ -66,7 +73,7 @@ export function AdvanceRoundSheet({ round, onClose, onAdvanced, showToast }) {
       placement="sheet-on-phone"
       testId="advance-round-sheet"
       footer={(
-        <Button type="button" variant="primary" className="w-full sm:w-auto" disabled={advance.isPending || noteMissing || numbersMissing || !target}
+        <Button type="button" variant="primary" className="w-full sm:w-auto" disabled={advance.isPending || noteMissing || numbersMissing || receiptsBad || !target}
           onClick={submit} data-testid="advance-round-submit">
           บันทึก {label}
         </Button>
@@ -111,6 +118,9 @@ export function AdvanceRoundSheet({ round, onClose, onAdvanced, showToast }) {
         ) : null}
         {isReceived ? (
           <CompletePerInvoiceField idPrefix="advance" complete={complete} note={completeNote} onComplete={setComplete} onNote={setCompleteNote} />
+        ) : null}
+        {shortArrival ? (
+          <LotReceiptFields idPrefix="advance" lots={round.lots ?? []} values={received} onChange={(id, v) => setReceived((cur) => ({ ...cur, [id]: v }))} />
         ) : null}
         <p className="m-0 rounded-md bg-surface-subtle px-3 py-2 text-xs text-text-muted">
           ถามเฉพาะข้อมูลของขั้นที่เลือก · ใบขอซื้อ {roundIrCount(round)} ใบในรอบนี้ขยับพร้อมกัน
