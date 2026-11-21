@@ -11591,7 +11591,7 @@ export const api = {
     async clearNotDelivered(id, itemId) {
       const user = hasRole('sales_manager', 'ceo');
       const ticket = findTicketRaw(Number(id));
-      if ((ticket.lifecycle ?? 'ACTIVE') === 'COMPLETED') fail('ปิดดีลแล้ว ยกเลิกการบันทึกไม่ได้รับของไม่ได้', 409);
+      if ((ticket.lifecycle ?? 'ACTIVE') === 'COMPLETED') fail('ปิดงานแล้ว ยกเลิกการบันทึกไม่ได้รับของไม่ได้', 409);
       requireActive(ticket);
       if (hasReceivedGoods(ticket.id)) fail('งานนี้บันทึกรับสินค้าครบแล้ว จึงยกเลิกการบันทึกไม่ได้รับของไม่ได้', 409);
       const item = (ticket.items ?? []).find((i) => i.id === Number(itemId));

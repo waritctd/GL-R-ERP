@@ -2818,7 +2818,7 @@ public class TicketService {
         TicketDto ticket = requireTicket(ticketId);
         TicketSummaryDto s = ticket.summary();
         if (DealLifecycle.COMPLETED.equals(s.lifecycle())) {
-            throw new ApiException(HttpStatus.CONFLICT, "ปิดดีลแล้ว ยกเลิกการบันทึกไม่ได้รับของไม่ได้");
+            throw new ApiException(HttpStatus.CONFLICT, "ปิดงานแล้ว ยกเลิกการบันทึกไม่ได้รับของไม่ได้");
         }
         requireActive(s);
         // Goods-received cannot be taken back, and it would let the un-arrived quantity be delivered as if it had come.

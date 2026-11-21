@@ -52,7 +52,7 @@ export function NotDeliveredSheet({ ticketId, item, onClose, onDone }) {
     >
       <div className="flex flex-col gap-4">
         <p className="m-0 text-sm text-text-secondary">
-          บันทึกว่าโรงงานไม่ส่งสินค้าส่วนนี้ ดีลจะปิดได้โดยไม่ต้องส่งส่วนนี้ ยอดเงินไม่เปลี่ยนอัตโนมัติ ฝ่ายบัญชีจัดการคืนเงินหรือเครดิตตามปกติ
+          บันทึกว่าโรงงานไม่ส่งสินค้าส่วนนี้ งานจะปิดได้โดยไม่ต้องส่งส่วนนี้ ยอดเงินไม่เปลี่ยนอัตโนมัติ ฝ่ายบัญชีจัดการคืนเงินหรือเครดิตตามปกติ
         </p>
         <label className="flex flex-col gap-1.5 text-sm font-bold text-text-secondary">
           จำนวนที่ไม่ได้รับ{allowed != null ? ` (ไม่เกิน ${num(allowed)})` : ''}
