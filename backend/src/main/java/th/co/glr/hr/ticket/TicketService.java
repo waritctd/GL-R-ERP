@@ -2712,18 +2712,19 @@ public class TicketService {
         }
         TicketRepository.LineReceipt r = receipts.byItem().get(item.id());
         // the bypass is for a line with no lot on a RECEIVED round; a RECEIVED lot that got 0 caps it to its received share
-        if (goodsEvent && (r == null || r.receivedLots() == 0)) {
+        if (goodsEvent && (r == null || (r.receivedLots() == 0 && !r.lotReturned()))) {
             return qty;
         }
         BigDecimal declared = nullToZero(item.qtyFromStock());
         BigDecimal stock = depositSettled(s) ? declared : BigDecimal.ZERO;
         if (r == null) {
-            return stock.setScale(2, java.math.RoundingMode.HALF_UP);
+            return stock.min(qty).setScale(2, java.math.RoundingMode.HALF_UP);
         }
-        BigDecimal importQty = qty.subtract(declared).max(BigDecimal.ZERO);
+        // the share is of the whole line (the IR still holds the marked part); the mark only lowers the ceiling
+        BigDecimal importQty = nullToZero(item.qty()).subtract(declared).max(BigDecimal.ZERO);
         BigDecimal ratio = r.irQty().signum() <= 0 ? BigDecimal.ONE
             : r.onRounds().divide(r.irQty(), 10, java.math.RoundingMode.HALF_UP).min(BigDecimal.ONE);
-        return stock.add(importQty.multiply(ratio)).setScale(2, java.math.RoundingMode.HALF_UP);
+        return stock.add(importQty.multiply(ratio)).min(qty).setScale(2, java.math.RoundingMode.HALF_UP);
     }
 
     private void requireWithinReceivedLots(TicketSummaryDto s, Map<Long, TicketItemDto> itemsById,
@@ -2797,9 +2798,14 @@ public class TicketService {
         if (qty.compareTo(allowed) > 0) {
             throw new ApiException(HttpStatus.CONFLICT, "บันทึกว่าไม่ได้รับของได้ไม่เกิน " + qtyText(allowed) + " (ส่วนที่ยังไม่ถึงโกดังและไม่ได้อยู่ระหว่างขนส่ง)");
         }
+        // the same rule as clearing: goods-received cannot be taken back, so the marked quantity cannot shrink after it
+        if (qty.compareTo(nullToZero(item.qtyNotDelivered())) < 0 && tickets.hasReceivedGoods(ticketId)) {
+            throw new ApiException(HttpStatus.CONFLICT, "งานนี้บันทึกรับสินค้าครบแล้ว จึงลดจำนวนที่บันทึกไม่ได้รับของไม่ได้");
+        }
         if (tickets.setNotDelivered(ticketId, itemId, qty, reason, actor.id()) != 1) {
             throw new ApiException(HttpStatus.CONFLICT, "จำนวนที่ส่งแล้วเปลี่ยนไป กรุณาโหลดใหม่");
         }
+        reopenIfNoLongerComplete(ticketId, s);
         String line = deliveryLineName(item) + " " + qtyText(qty);
         tickets.addEvent(ticketId, actor.id(), actor.name(), TicketEventKind.LINE_NOT_DELIVERED, s.status(), s.status(),
             "ไม่ได้รับของ: " + line + " · เหตุผล: " + reason);
@@ -2831,12 +2837,16 @@ public class TicketService {
         }
         tickets.addEvent(ticketId, actor.id(), actor.name(), TicketEventKind.LINE_NOT_DELIVERED_CLEARED, s.status(), s.status(),
             "ยกเลิกการบันทึกไม่ได้รับของ: " + deliveryLineName(item));
-        // the deal was complete only because of the mark: it is open again
+        reopenIfNoLongerComplete(ticketId, s);
+        return requireTicket(ticketId);
+    }
+
+    /** The deal was complete only because of a mark that was cleared or lowered: it is open again. */
+    private void reopenIfNoLongerComplete(long ticketId, TicketSummaryDto s) {
         if (FulfilmentStatus.FULLY_DELIVERED.equals(s.fulfillmentStatus())
             && !requireTicket(ticketId).items().stream().allMatch(i -> nullToZero(i.qtyDelivered()).compareTo(i.deliverableQty()) >= 0)) {
             tickets.updateFulfillmentStatus(ticketId, FulfilmentStatus.PARTIALLY_DELIVERED);
         }
-        return requireTicket(ticketId);
     }
 
     /**

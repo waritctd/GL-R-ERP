@@ -287,15 +287,18 @@ public class DeliveryRequestRepository {
     public List<LineDto> lines(long id) {
         return jdbc.query("""
             SELECT l.item_id, CONCAT_WS(' ', ti.brand, ti.model, ti.color, ti.texture, ti.size) AS description,
-                   'แผ่น' AS unit, l.qty,
-                   l.qty - GREATEST(LEAST(l.qty - %s, ti.qty - COALESCE(ti.qty_delivered, 0)), 0) AS delivered
+                   'แผ่น' AS unit,
+                   -- what was marked ไม่ได้รับของ leaves the covered quantity; it never reads as delivered
+                   l.qty - GREATEST(LEAST(l.qty - %1$s, ti.qty - COALESCE(ti.qty_delivered, 0)), 0)
+                     + GREATEST(LEAST(l.qty - %1$s, ti.qty - ti.qty_not_delivered - COALESCE(ti.qty_delivered, 0)), 0) AS covered,
+                   l.qty - GREATEST(LEAST(l.qty - %1$s, ti.qty - COALESCE(ti.qty_delivered, 0)), 0) AS delivered
               FROM sales.delivery_request_line l
               JOIN sales.ticket_item ti ON ti.item_id = l.item_id
              WHERE l.delivery_request_id = :id
              ORDER BY ti.sort_order, ti.item_id
             """.formatted(LINKED_DELIVERED), Map.of("id", id),
             (rs, n) -> new LineDto(rs.getLong("item_id"), rs.getString("description"), rs.getString("unit"),
-                rs.getBigDecimal("qty"), rs.getBigDecimal("delivered")));
+                rs.getBigDecimal("covered"), rs.getBigDecimal("delivered")));
     }
 
     public List<FileDto> files(long id) {

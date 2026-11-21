@@ -4401,7 +4401,10 @@ function mockRoundDto(round, ticket, user) {
       .map((c) => ({ itemId: c.itemId, description: c.description, unit: c.unit, coveredQty: c.remaining, deliveredQty: 0 }))
     : round.lines.map((l) => {
       const item = (ticket.items ?? []).find((i) => i.id === l.itemId);
-      return { itemId: l.itemId, description: item ? mockItemDescription(item) : '', unit: 'แผ่น', coveredQty: l.qty, deliveredQty: moneyValue(l.qty - mockRoundLineRemaining(round, l.itemId)) };
+      // DeliveryRequestRepository#lines: what was marked ไม่ได้รับของ leaves the covered quantity, it never reads as delivered
+      const rawOpen = Math.min(Math.max(0, moneyValue(l.qty - mockRoundDelivered(round, l.itemId))), item ? Math.max(0, Number(item.qty ?? 0) - Number(item.qtyDelivered ?? 0)) : Infinity);
+      const deliveredQty = moneyValue(l.qty - rawOpen);
+      return { itemId: l.itemId, description: item ? mockItemDescription(item) : '', unit: 'แผ่น', coveredQty: moneyValue(deliveredQty + mockRoundLineRemaining(round, l.itemId)), deliveredQty };
     });
   const quotation = mockApprovedQuotationsOf(ticket.id).find((q) => q.id === round.quotationId);
   // DepositNoticeService#quotationBuyer: the chosen quotation's party customer, else the deal's own (owner rule #65).
@@ -4847,7 +4850,8 @@ function mockWarehouseAllowance(ticket, item) {
   mockEnsureMigratedRounds();
   const irs = mockImportRequests.filter((r) => r.ticketId === ticket.id && r.status === 'ISSUED');
   const qty = Number(item.qty ?? 0) - Number(item.qtyNotDelivered ?? 0); // deliverable
-  const dealHasLots = irs.some((ir) => ir.items.some((it) => mockShipmentRounds.some((r) => r.lots.some((l) => l.itemId === it.id))));
+  const anyReturned = irs.some((ir) => ir.items.some((it) => (ticket.items ?? []).find((ti) => ti.id === it.ticketItemId)?.hadReturnedLot));
+  const dealHasLots = anyReturned || irs.some((ir) => ir.items.some((it) => mockShipmentRounds.some((r) => r.lots.some((l) => l.itemId === it.id))));
   if (!dealHasLots) return qty;
   const mine = irs.flatMap((ir) => ir.items.filter((it) => it.ticketItemId === item.id));
   const irQty = mockSumQty(mine.map((it) => it.qty));
@@ -4855,12 +4859,13 @@ function mockWarehouseAllowance(ticket, item) {
     .flatMap((r) => r.lots.filter((l) => l.itemId === it.id)));
   const onRounds = mockSumQty(receivedLotsOf.filter((l) => (l.receivedQty ?? l.qty) > 0).map((l) => l.qty)); // a lot that got 0 holds nothing
   // the GOODS_RECEIVED bypass is for a line with no lot on a RECEIVED round (a RECEIVED lot that got 0 is capped)
-  if (hasReceivedGoods(ticket.id) && receivedLotsOf.length === 0) return qty;
+  if (hasReceivedGoods(ticket.id) && receivedLotsOf.length === 0 && !item.hadReturnedLot) return qty;
   const declared = Number(item.qtyFromStock ?? 0);
   const stock = depositSettled(ticket) ? declared : 0;
-  if (mine.length === 0) return Math.round(stock * 100) / 100;
+  if (mine.length === 0) return Math.round(Math.min(stock, qty) * 100) / 100;
   const ratio = irQty <= 0 ? 1 : Math.min(1, onRounds / irQty);
-  return Math.round((stock + Math.max(qty - declared, 0) * ratio) * 100) / 100;
+  // the share is of the whole line (the IR still holds the marked part); the mark only lowers the ceiling
+  return Math.round(Math.min(qty, stock + Math.max(Number(item.qty ?? 0) - declared, 0) * ratio) * 100) / 100;
 }
 
 // TicketService#notDeliveredAllowed: what has not arrived and is not on its way (the mark replaces an earlier mark).
@@ -11582,7 +11587,9 @@ export const api = {
       if (!reason || reason.length > 255) fail('ระบุเหตุผล (ไม่เกิน 255 ตัวอักษร)', 400);
       const allowed = mockNotDeliveredAllowed(ticket, item);
       if (qty > allowed) fail(`บันทึกว่าไม่ได้รับของได้ไม่เกิน ${allowed} (ส่วนที่ยังไม่ถึงโกดังและไม่ได้อยู่ระหว่างขนส่ง)`, 409);
+      if (qty < Number(item.qtyNotDelivered ?? 0) && hasReceivedGoods(ticket.id)) fail('งานนี้บันทึกรับสินค้าครบแล้ว จึงลดจำนวนที่บันทึกไม่ได้รับของไม่ได้', 409);
       item.qtyNotDelivered = qty; item.notDeliveredReason = reason;
+      if (ticket.fulfillmentStatus === 'FULLY_DELIVERED' && hasRemainingDelivery(ticket)) ticket.fulfillmentStatus = 'PARTIALLY_DELIVERED';
       pushEvent(ticket, user, 'LINE_NOT_DELIVERED', ticket.status, ticket.status, `ไม่ได้รับของ: ${item.brand ?? ''} ${item.model ?? ''} ${qty} · เหตุผล: ${reason}`);
       mockRederiveTicketIrs(ticket, user);
       mockCompleteDeliveryIfDone(ticket, user);
@@ -15880,11 +15887,15 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       if (round.importStep !== 'RECEIVED' || lot.receivedQty == null || lot.receivedQty !== 0) fail('คืนเข้ารอจัดรอบได้เฉพาะล็อตที่บันทึกว่าถึงโกดัง 0 ในรอบที่ถึงโกดังแล้ว', 409);
       const irIds = round.lots.map((l) => l.importRequestId);
       const last = round.lots.length === 1;
+      const irLine = mockImportRequests.find((r) => r.id === lot.importRequestId)?.items.find((it) => it.id === lot.itemId);
+      const lotTicket = mockImportRequests.find((r) => r.id === lot.importRequestId)?.ticketId;
+      const line = lotTicket == null ? null : (findTicketRaw(lotTicket).items ?? []).find((ti) => ti.id === irLine?.ticketItemId);
+      if (line) line.hadReturnedLot = true;
       round.lots = round.lots.filter((l) => l !== lot);
       mockFinishLots([round], irIds, user, true);
       let keep = true;
       if (last) { try { mockRequireDeletable(round); mockShipmentRounds.splice(mockShipmentRounds.indexOf(round), 1); keep = false; } catch { keep = true; } }
-      return delay({ round: last || !keep ? null : mockShipmentDto(round) });
+      return delay({ round: keep ? mockShipmentDto(round) : null });
     },
     async moveLot(id, lotId, request) {
       const user = mockShipmentWrite();

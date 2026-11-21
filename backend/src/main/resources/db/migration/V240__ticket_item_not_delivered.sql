@@ -6,14 +6,18 @@
 -- chk_event_kind re-declared (V236's list plus the two new kinds).
 --
 -- Rollback: DROP VIEW sales.import_item_wanted; delete LINE_NOT_DELIVERED / LINE_NOT_DELIVERED_CLEARED events and re-declare
--- chk_event_kind as V236 did; ALTER TABLE sales.ticket_item DROP the four columns.
+-- chk_event_kind as V236 did; ALTER TABLE sales.ticket_item DROP the five columns;
+-- DELETE FROM flyway_schema_history WHERE version = '240' (in the schema Flyway uses).
 
 ALTER TABLE sales.ticket_item
     ADD COLUMN qty_not_delivered NUMERIC(12,2) NOT NULL DEFAULT 0
         CONSTRAINT chk_ticket_item_qty_not_delivered CHECK (qty_not_delivered >= 0),
     ADD COLUMN not_delivered_reason VARCHAR(255),
     ADD COLUMN not_delivered_by BIGINT REFERENCES hr.employee(employee_id),
-    ADD COLUMN not_delivered_at TIMESTAMPTZ;
+    ADD COLUMN not_delivered_at TIMESTAMPTZ,
+    -- a lot of this line was recorded as 0 received and sent back to waiting: with no lot left it must not read as a legacy
+    -- line that a GOODS_RECEIVED event lets through uncapped
+    ADD COLUMN had_returned_lot BOOLEAN NOT NULL DEFAULT false;
 
 CREATE VIEW sales.import_item_wanted AS
 SELECT x.import_request_item_id,

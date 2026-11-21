@@ -104,9 +104,23 @@ public class ShipmentRoundRepository {
 
     public ReceiptTotals receiptTotals(long ticketId) {
         return jdbc.queryForObject("""
-            SELECT COALESCE(SUM(l.qty), 0) AS planned, COALESCE(SUM(COALESCE(l.received_qty, l.qty)), 0) AS received,
+            SELECT COALESCE(SUM(l.qty), 0) -- what was marked ไม่ได้รับของ is still part of what was ordered, so it never reads as ครบ
+                     + (SELECT COALESCE(SUM(m.qty_not_delivered), 0) FROM sales.ticket_item m WHERE m.ticket_id = :t) AS planned,
+                   COALESCE(SUM(COALESCE(l.received_qty, l.qty)), 0) AS received,
                    -- NULL and blank are the same "no unit"; figures need every line to share one value
-                   COUNT(DISTINCT COALESCE(NULLIF(btrim(i.unit), ''), '')) AS units,
+                   (SELECT COUNT(DISTINCT u) FROM (
+                        SELECT COALESCE(NULLIF(btrim(li.unit), ''), '') AS u
+                          FROM sales.shipment_lot ll
+                          JOIN sales.import_request_item li ON li.import_request_item_id = ll.import_request_item_id
+                          JOIN sales.import_request lr ON lr.import_request_id = ll.import_request_id
+                          JOIN sales.shipment_round rr ON rr.shipment_round_id = ll.shipment_round_id
+                         WHERE lr.ticket_id = :t AND lr.status = 'ISSUED' AND rr.import_step = 'RECEIVED'
+                        UNION ALL
+                        SELECT COALESCE(NULLIF(btrim(mi.unit), ''), '')
+                          FROM sales.import_request_item mi
+                          JOIN sales.import_request mr ON mr.import_request_id = mi.import_request_id AND mr.status = 'ISSUED'
+                          JOIN sales.ticket_item mt ON mt.item_id = mi.ticket_item_id
+                         WHERE mr.ticket_id = :t AND mt.qty_not_delivered > 0) x) AS units,
                    MIN(NULLIF(btrim(i.unit), '')) AS unit
               FROM sales.shipment_lot l
               JOIN sales.import_request_item i ON i.import_request_item_id = l.import_request_item_id
@@ -312,11 +326,13 @@ public class ShipmentRoundRepository {
             SELECT r.*, (SELECT s.step_undo_by_id FROM sales.shipment_round s WHERE s.shipment_round_id = r.shipment_round_id) AS undo_by
               FROM sales.shipment_round r
              -- a round whose lots are ALL on finished deals (CLOSED_LOST, CANCELLED, COMPLETED) is hidden; a no-project lot is live
-             WHERE EXISTS (SELECT 1 FROM sales.shipment_lot l
+             WHERE (EXISTS (SELECT 1 FROM sales.shipment_lot l
                             JOIN sales.import_request ir ON ir.import_request_id = l.import_request_id
                             LEFT JOIN sales.ticket t ON t.ticket_id = ir.ticket_id
                       WHERE l.shipment_round_id = r.shipment_round_id
                         AND (ir.ticket_id IS NULL OR t.lifecycle NOT IN ('CLOSED_LOST', 'CANCELLED', 'COMPLETED')))
+                 -- a received round whose only lot went back to waiting stays reachable for its documents and facts
+                 OR (r.import_step = 'RECEIVED' AND NOT EXISTS (SELECT 1 FROM sales.shipment_lot e WHERE e.shipment_round_id = r.shipment_round_id)))
                AND (CAST(:only AS BIGINT) IS NULL OR r.shipment_round_id = :only)
              ORDER BY (r.import_step = 'RECEIVED'), r.shipment_round_id DESC
             """, new MapSqlParameterSource("only", onlyId), (rs, n) -> {
@@ -572,6 +588,9 @@ public class ShipmentRoundRepository {
                                Long roundId) {}
 
     public List<DerivedInput> derivedInputs(List<Long> importRequestIds) {
+        if (importRequestIds.isEmpty()) { // a received round whose only lot went back to waiting carries no IR
+            return List.of();
+        }
         return jdbc.query("""
             SELECT i.import_request_id, i.import_request_item_id, COALESCE(w.wanted_qty, i.qty) AS qty, l.qty AS lot_qty, r.import_step,
                    CASE r.import_step WHEN 'CONTACTED' THEN r.contacted_on WHEN 'ORDERED' THEN r.ordered_on
@@ -699,6 +718,16 @@ public class ShipmentRoundRepository {
     public void moveLotTo(long lotId, long toRoundId) {
         jdbc.update("UPDATE sales.shipment_lot SET shipment_round_id = :to WHERE shipment_lot_id = :l",
             Map.of("to", toRoundId, "l", lotId));
+    }
+
+    /** The lot's deal line had a lot sent back to waiting (see V240 had_returned_lot). */
+    public void flagLineLotReturned(long lotId) {
+        jdbc.update("""
+            UPDATE sales.ticket_item ti SET had_returned_lot = true
+              FROM sales.shipment_lot l
+              JOIN sales.import_request_item i ON i.import_request_item_id = l.import_request_item_id
+             WHERE l.shipment_lot_id = :lot AND ti.item_id = i.ticket_item_id
+            """, Map.of("lot", lotId));
     }
 
     /** Whether the round holds anything of its own: a document, or a typed fact (the label alone does not count). */

@@ -342,7 +342,7 @@ public class ShipmentRoundService {
     /**
      * A lot recorded as exactly 0 received (on a RECEIVED round) goes back to รอจัดรอบ: nothing of it arrived, so it holds no
      * place. Any received quantity keeps the lot. Import/CEO only. Lock order: round, IRs, tickets. A round left with no lot
-     * stays when it holds data of its own (a received round normally does), else it goes; returns null then (hidden).
+     * stays, still readable, when it holds data of its own (a received round normally does); else it goes and this returns null.
      * The IRs re-derive silently: a step that moves back writes no event (the lot was never really there).
      */
     @Transactional
@@ -356,6 +356,7 @@ public class ShipmentRoundService {
             throw new ApiException(HttpStatus.CONFLICT, "คืนเข้ารอจัดรอบได้เฉพาะล็อตที่บันทึกว่าถึงโกดัง 0 ในรอบที่ถึงโกดังแล้ว");
         }
         boolean last = rounds.lotCount(id) == 1;
+        rounds.flagLineLotReturned(lotId);
         rounds.deleteLot(lotId);
         rounds.clearUndo(id);
         rounds.clearIrUndo(irs.stream().map(IrLock::id).toList());
@@ -376,10 +377,8 @@ public class ShipmentRoundService {
         List<StepChange> changes = recomputeIrSteps(stillPlaced, actor, null).stream()
             .filter(c -> ImportRequestStep.indexOf(c.to()) > ImportRequestStep.indexOf(c.from())).toList(); // a move back is silent
         applyAftermath(onActiveDeals(changes, irs), actor, null);
-        if (last) {
-            if (!rounds.hasOwnData(id)) {
-                rounds.deleteRound(id);
-            }
+        if (last && !rounds.hasOwnData(id)) {
+            rounds.deleteRound(id);
             return null;
         }
         return roundOrNullIfHidden(id, actor);

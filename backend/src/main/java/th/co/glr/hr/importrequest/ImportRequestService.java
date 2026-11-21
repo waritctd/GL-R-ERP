@@ -1267,8 +1267,11 @@ public class ImportRequestService {
         Set<Long> changedIds = changes.stream().map(c -> c.ir().id()).collect(Collectors.toSet());
         StepChange received = changes.stream().filter(c -> ImportRequestStep.RECEIVED.equals(c.to())).findFirst().orElse(null);
         if (received != null && allFactoriesReceived(ticketId)) {
+            boolean alreadyAnnounced = tickets.hasReceivedGoods(ticketId); // a lot returned, then the line marked, arrives here again
             ticketService.applyImportRequestRollup(ticketId, actor);
-            notifyAllGoodsReceived(ticketId, received.ir().docNumber(), received.ir().factoryName());
+            if (!alreadyAnnounced) {
+                notifyAllGoodsReceived(ticketId, received.ir().docNumber(), received.ir().factoryName());
+            }
             return true;
         }
         List<Long> nothingArrived = rounds.nothingArrivedIrIds(ticketId); // "latest step: received" would be a false arrival notice

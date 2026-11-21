@@ -914,6 +914,174 @@ class ShipmentRoundIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(rounds.list(salesManager).rounds().get(0).documents()).isEmpty();
     }
 
+    @Test
+    void notDeliveredMatrix_everyPathReachesTheRightAllowanceAndCompletes() {
+        // full
+        Line a = line("MX-1");
+        receive(a, 100, 100);
+        row(a, "100", true);
+        deliverItemFromWarehouse(a.ticket, a.item, "100");
+        finish(a);
+
+        // 60 arrived, the other 40 marked: all 60 in the warehouse can go, and the notice never says ครบ
+        Line b = line("MX-2");
+        receive(b, 60, 60);
+        mark(b, "40");
+        row(b, "60", true);
+        assertThat(jdbc.queryForObject("SELECT string_agg(COALESCE(message, ''), ' ') FROM hr.notification WHERE type = 'IMPORT_GOODS_RECEIVED_ALL' AND link LIKE :l",
+            Map.of("l", "/tickets/" + b.ticket + "%"), String.class)).doesNotContain("และครบ").contains("ขาด 40");
+        assertRefused(() -> deliverItemFromWarehouse(b.ticket, b.item, "61"), HttpStatus.CONFLICT);
+        deliverItemFromWarehouse(b.ticket, b.item, "60");
+        finish(b);
+
+        // 0 received, returned, marked (alone)
+        Line c = line("MX-3");
+        long cr = receive(c, 100, 0);
+        rounds.returnLotToWaiting(cr, lotOf(cr, c.ir), importUser);
+        row(c, "0", false);
+        mark(c, "100");
+        finish(c);
+
+        // received, rolled up, corrected to 0, returned: the deal has no lot left and must stay capped
+        Line d = line("MX-4");
+        long dr = receive(d, 100, 100);
+        rounds.updateFacts(dr, new UpdateShipmentRoundRequest(null, Map.of(), List.of(new LotReceipt(lotOf(dr, d.ir), BigDecimal.ZERO)), null), importUser);
+        rounds.addDocument(dr, "PROFORMA", "PI-MX-4", null, null, null, importUser);
+        assertThat(rounds.returnLotToWaiting(dr, lotOf(dr, d.ir), importUser).documents()).hasSize(1); // the round stays reachable
+        assertThat(rounds.get(dr, importUser).lots()).isEmpty();
+        rounds.updateFacts(dr, new UpdateShipmentRoundRequest(null, Map.of(ImportRequestStep.RECEIVED, LocalDate.now(java.time.ZoneId.of("Asia/Bangkok"))), List.of(), null), importUser);
+        row(d, "0", true);
+        assertRefused(() -> deliverItemFromWarehouse(d.ticket, d.item, "1"), HttpStatus.CONFLICT);
+        mark(d, "100");
+        finish(d);
+
+        // X got 0 beside Y on one IR, after the rollup; re-mark up, refused down
+        Line y = line("MX-5");
+        long x = secondLine(y, 100);
+        long r = round("ORDERED");
+        insertLot(r, y.ir, y.irItem, 100);
+        long xIrItem = irItemOf(x);
+        insertLot(r, y.ir, xIrItem, 100);
+        long lotY = lotIdOf(r, y.irItem);
+        long lotX = lotIdOf(r, xIrItem);
+        rounds.advance(r, receiveRequest(List.of(new LotReceipt(lotY, new BigDecimal("100")), new LotReceipt(lotX, BigDecimal.ZERO))), importUser);
+        assertRefused(() -> lineNotDelivered.mark(y.ticket, x, markOf("100"), salesManager), HttpStatus.CONFLICT); // returned first
+        rounds.returnLotToWaiting(r, lotX, importUser);
+        assertThat(ticketService.warehouseRemaining(y.ticket, owner).get(x)).isEqualByComparingTo("0");
+        assertRefused(() -> deliverItemFromWarehouse(y.ticket, x, "1"), HttpStatus.CONFLICT);
+        lineNotDelivered.mark(y.ticket, x, markOf("50"), salesManager);
+        lineNotDelivered.mark(y.ticket, x, markOf("100"), salesManager); // up after the rollup
+        if (ticketRepo.hasReceivedGoods(y.ticket)) {
+            assertRefused(() -> lineNotDelivered.mark(y.ticket, x, markOf("1"), salesManager), HttpStatus.CONFLICT); // down after it
+        }
+        row(y, "100", true);
+        deliverItemFromWarehouse(y.ticket, y.item, "100");
+        finish(y);
+
+        // re-mark up and down before the rollup, then refused after it
+        Line e = line("MX-6");
+        receive(e, 60, 60);
+        mark(e, "10");
+        mark(e, "30");
+        mark(e, "20"); // down, before the rollup
+        assertThat(ticketRepo.hasReceivedGoods(e.ticket)).isFalse();
+        mark(e, "40");
+        assertRefused(() -> lineNotDelivered.mark(e.ticket, e.item, markOf("1"), salesManager), HttpStatus.CONFLICT);
+        assertRefused(() -> lineNotDelivered.clear(e.ticket, e.item, salesManager), HttpStatus.CONFLICT);
+        row(e, "60", true);
+        deliverItemFromWarehouse(e.ticket, e.item, "60");
+        finish(e);
+        assertRefused(() -> lineNotDelivered.mark(e.ticket, e.item, markOf("1"), salesManager), HttpStatus.CONFLICT);
+
+        // legacy: an IR line with no lot on a deal that has a lot elsewhere and the goods event stays uncapped
+        Line l = line("MX-7");
+        long legacy = secondLine(l, 100);
+        long lr = round("RECEIVED");
+        insertLot(lr, l.ir, l.irItem, 100);
+        ticketRepo.addEvent(l.ticket, owner.id(), owner.name(), th.co.glr.hr.ticket.TicketEventKind.GOODS_RECEIVED, null, null, null);
+        assertThat(ticketService.warehouseRemaining(l.ticket, owner).get(legacy)).isEqualByComparingTo("100");
+        row(l, "100", true);
+        deliverItemFromWarehouse(l.ticket, l.item, "100");
+        deliverItemFromWarehouse(l.ticket, legacy, "100");
+        finish(l);
+    }
+
+    private record Line(long ticket, long ir, long item, long irItem) {}
+
+    private Line line(String code) {
+        long t = deal(owner.id(), code);
+        long ir = issuedIr(t, irService, code);
+        jdbc.update("UPDATE sales.ticket_item SET qty = 100 WHERE ticket_id = :t", Map.of("t", t));
+        jdbc.update("UPDATE sales.import_request_item SET qty = 100 WHERE import_request_id = :ir", Map.of("ir", ir));
+        long item = jdbc.queryForObject("SELECT item_id FROM sales.ticket_item WHERE ticket_id = :t", Map.of("t", t), Long.class);
+        return new Line(t, ir, item, itemOf(ir));
+    }
+
+    private long secondLine(Line l, int qty) {
+        long item = jdbc.queryForObject("""
+            INSERT INTO sales.ticket_item (ticket_id, brand, model, size, qty, unit, sort_order, factory)
+            VALUES (:t, 'Round Factory', 'Kaze', '30x30', :q, 'pcs', 1, 'Round Factory') RETURNING item_id""",
+            Map.of("t", l.ticket, "q", qty), Long.class);
+        jdbc.update("""
+            INSERT INTO sales.import_request_item (import_request_id, ticket_item_id, seq, code, size, qty, unit, brand, model)
+            VALUES (:ir, :ti, 2, 'LINE-2', '30x30', :q, 'pcs', 'Round Factory', 'Kaze')""", Map.of("ir", l.ir, "ti", item, "q", qty));
+        return item;
+    }
+
+    private long irItemOf(long ticketItem) {
+        return jdbc.queryForObject("SELECT import_request_item_id FROM sales.import_request_item WHERE ticket_item_id = :i", Map.of("i", ticketItem), Long.class);
+    }
+
+    private void insertLot(long round, long ir, long irItem, int qty) {
+        jdbc.update("INSERT INTO sales.shipment_lot (shipment_round_id, import_request_id, import_request_item_id, qty) VALUES (:r, :ir, :i, :q)",
+            Map.of("r", round, "ir", ir, "i", irItem, "q", qty));
+    }
+
+    private long lotIdOf(long round, long irItem) {
+        return jdbc.queryForObject("SELECT shipment_lot_id FROM sales.shipment_lot WHERE shipment_round_id = :r AND import_request_item_id = :i",
+            Map.of("r", round, "i", irItem), Long.class);
+    }
+
+    private static AdvanceShipmentRoundRequest receiveRequest(List<LotReceipt> receipts) {
+        return new AdvanceShipmentRoundRequest(ImportRequestStep.RECEIVED, null, ImportRequestStep.ORDERED, null,
+            new ShipmentFacts(null, null, null, null, null, null, null, null, null, null, null, null, null, null, false, "ทดสอบ", null), null, receipts);
+    }
+
+    private long receive(Line l, int planned, int received) {
+        long r = round("ORDERED");
+        insertLot(r, l.ir, l.irItem, planned);
+        rounds.advance(r, receiveRequest(List.of(new LotReceipt(lotIdOf(r, l.irItem), new BigDecimal(received)))), importUser);
+        return r;
+    }
+
+    private static th.co.glr.hr.ticket.MarkNotDeliveredRequest markOf(String qty) {
+        return new th.co.glr.hr.ticket.MarkNotDeliveredRequest(new BigDecimal(qty), "โรงงานไม่ส่ง");
+    }
+
+    private void mark(Line l, String qty) {
+        lineNotDelivered.mark(l.ticket, l.item, markOf(qty), salesManager);
+    }
+
+    private int events(long ticket, String kind) {
+        return jdbc.queryForObject("SELECT count(*) FROM sales.ticket_event WHERE ticket_id = :t AND kind = :k", Map.of("t", ticket, "k", kind), Integer.class);
+    }
+
+    private String fulfilment(long ticket) {
+        return jdbc.queryForObject("SELECT fulfillment_status FROM sales.ticket WHERE ticket_id = :t", Map.of("t", ticket), String.class);
+    }
+
+    private void row(Line l, String allowance, boolean goodsIn) {
+        BigDecimal remaining = ticketService.warehouseRemaining(l.ticket, owner).get(l.item);
+        assertThat(remaining).isEqualByComparingTo(allowance);
+        assertThat(ticketRepo.hasReceivedGoods(l.ticket)).isEqualTo(goodsIn);
+    }
+
+    private void finish(Line l) {
+        assertThat(fulfilment(l.ticket)).isEqualTo("FULLY_DELIVERED");
+        assertThat(events(l.ticket, "GOODS_RECEIVED")).isEqualTo(1);
+        assertThat(bells(l.ticket, "IMPORT_GOODS_RECEIVED_ALL")).isLessThanOrEqualTo(1);
+    }
+
     // ── fixtures ────────────────────────────────────────────────────────────────────────────────────────
 
     private void irStepTo(long ir, String step) {
