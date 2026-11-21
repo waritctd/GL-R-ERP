@@ -3302,6 +3302,7 @@ function mockShipmentDto(round) {
     undoById: undo ? undo.byId : null,
     undoFromStep: undo ? undo.snapshot.importStep : null,
     advanceId: undo ? undo.advanceId : null,
+    updatedAt: round.updatedAt ?? null,
   });
 }
 
@@ -3422,21 +3423,17 @@ function mockMoveLotsToRevision(old, revision) {
   const touched = [...new Set(oldLots.map(({ r }) => r))];
   const plan = []; // { round, itemId, qty, got }
   const whole = touched.length === 1 && old.items.every((it) => mockHundredths(mockSumQty(oldLots.filter(({ l }) => l.itemId === it.id).map(({ l }) => l.qty))) === mockHundredths(it.qty));
-  if (whole) {
+  const left = touched.some((r) => mockImportRequestStepIndex(r.importStep) >= mockImportRequestStepIndex('IN_TRANSIT'));
+  if (whole && !left) {
     const round = touched[0];
-    const left = mockImportRequestStepIndex(round.importStep) >= mockImportRequestStepIndex('IN_TRANSIT');
     revision.items.forEach((it) => {
       const mine = oldLots.find(({ l }) => { const oi = oldItemOf(l); return oi.ticketItemId != null ? oi.ticketItemId === it.ticketItemId : sameProduct(oi, it); });
-      if (left) {
-        if (!mine) return;
-        if (Number(it.qty) < mine.l.qty) tooLow(it);
-        plan.push({ round, itemId: it.id, qty: mine.l.qty, got: mine.l.receivedQty ?? mine.l.qty });
-      } else {
-        const got = mine?.l.receivedQty == null ? Number(it.qty) : Math.min(mine.l.receivedQty, Number(it.qty));
-        plan.push({ round, itemId: it.id, qty: Number(it.qty), got });
-      }
+      const got = mine?.l.receivedQty == null ? Number(it.qty) : Math.min(mine.l.receivedQty, Number(it.qty));
+      plan.push({ round, itemId: it.id, qty: Number(it.qty), got });
     });
   } else {
+    // every shipped lot needs exactly one revised line, checked before any lot is replaced
+    oldLots.forEach(({ l }) => lineFor(l));
     oldLots.forEach(({ l, r }) => {
       const it = lineFor(l);
       const got = l.receivedQty ?? l.qty;
@@ -3469,6 +3466,13 @@ function mockFinishLots(rounds, irIds, user) {
     if (!ticket || (ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE') return;
     pushEvent(ticket, user, 'IMPORT_STEP_ADVANCED', null, null,
       `โรงงาน ${ir.factoryName}: ${MOCK_IMPORT_REQUEST_STEP_LABELS_TH[from] ?? from} → ${MOCK_IMPORT_REQUEST_STEP_LABELS_TH[to] ?? to}`);
+    if (to === 'RECEIVED') { // a lot change or a revision can complete receipt coverage: the same rollup as an advance
+      const liveRows = mockImportRequests.filter((r) => r.ticketId === ticket.id && r.status === 'ISSUED');
+      const required = mockRequiredFactoryIds(ticket);
+      if (liveRows.every((r) => r.importStep === 'RECEIVED') && [...required].every((fid) => liveRows.some((r) => r.factoryId === fid))) {
+        applyImportRequestRollupMock(ticket, user);
+      }
+    }
   });
 }
 
@@ -15580,6 +15584,8 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
         if (date > mockTodayIso()) fail('วันที่ของขั้นตอนต้องไม่เป็นวันที่ในอนาคต', 400);
       }
       if ((request?.lotReceipts ?? []).length > 0 && round.importStep !== 'RECEIVED') fail('แก้จำนวนที่ถึงโกดังได้เมื่อรอบถึงโกดังแล้วเท่านั้น', 409);
+      if (request?.expectedUpdatedAt && round.updatedAt && request.expectedUpdatedAt !== round.updatedAt) fail('มีผู้อื่นแก้ข้อมูลรอบนี้ กรุณาโหลดใหม่', 409);
+      round.updatedAt = new Date().toISOString();
       mockApplyReceipts(round, request?.lotReceipts);
       round.undo = null; // an edit ends the undo window, so an undo can never discard it
       if (facts) MOCK_ROUND_FACT_KEYS.forEach((k) => { round.facts[k] = k === 'transportMode' ? (facts[k] ?? round.facts[k]) : (facts[k] ?? null); });
@@ -15613,7 +15619,9 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
         }
       }
       const facts = request.facts ?? {};
-      if (target === 'RECEIVED' && facts.completePerInvoice === false && !facts.completeNote?.trim()) {
+      const effFlag = facts.completePerInvoice ?? round.facts.completePerInvoice;
+      const effNote = facts.completeNote ?? round.facts.completeNote;
+      if (target === 'RECEIVED' && effFlag === false && !effNote?.trim()) {
         fail('ของไม่ครบตามอินวอยซ์ กรุณาพิมพ์หมายเหตุ', 400);
       }
       if (round.source === 'PORTAL') {
@@ -15635,6 +15643,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       round.importStep = target; round[MOCK_ROUND_DATE_KEY[target]] = eventDate;
       round.stepByName = user.name; round.stepNote = request.note ?? null;
       round.undo = { snapshot, byId: user.id, advancedAt: Date.now(), advanceId: `adv-${mockAdvanceSeq++}` };
+      round.updatedAt = new Date().toISOString();
       const changes = mockRecomputeIrSteps(round, user, request.note);
       changes.forEach(({ ir, from, to }) => {
         const ticket = mockTicketOrNull(ir);

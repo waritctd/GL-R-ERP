@@ -1162,6 +1162,7 @@ public class ImportRequestService {
         }
         if (soleRound.isPresent()) {
             rounds.advanceRound(soleRound.getAsLong(), target, eventDate, actor.id(), actor.name(), request.note(), null);
+            rounds.finalizeDocuments(soleRound.getAsLong()); // as the round page does: earlier documents are not this advance's to undo
         } else {
             rounds.createPortalRound(id, existing.factoryId(), existing.factoryName(), target, eventDate,
                 existing.importStep(), existing.importStepAt(), actor.id(), actor.name(), request.note());
@@ -1397,28 +1398,13 @@ public class ImportRequestService {
         // line -> round -> {qty, received}; the whole case is every new line, in full, on the one round. received is what
         // really arrived (a short arrival carries over: summed when lots merge, capped at the new quantity).
         Map<Long, Map<Long, java.math.BigDecimal[]>> plan = new java.util.LinkedHashMap<>();
-        if (whole) {
-            // A round that has left: what was shipped and what arrived stay as they were; an increase stays unplanned
-            // (waiting), a decrease below the lot is refused. Before departure the lot simply takes the revised quantity.
-            boolean left = ImportRequestStep.indexOf(rounds.stepOfRound(roundIds.get(0))) >= ImportRequestStep.indexOf(ImportRequestStep.IN_TRANSIT);
-            if (left) {
-                lots.forEach(l -> matchLine(l, revision.items())); // a line dropped from the draft would lose its shipped lot: 409
-            }
+        // A round that has left keeps what shipped and what arrived (an increase stays unplanned, a decrease below the lot or a
+        // dropped line is refused): every lot follows its own line through matchLine, as for a split. Before departure the
+        // whole round simply takes the revised quantities.
+        boolean left = ImportRequestStep.indexOf(rounds.stepOfRound(roundIds.get(0))) >= ImportRequestStep.indexOf(ImportRequestStep.IN_TRANSIT);
+        if (whole && !left) {
             for (var it : revision.items()) {
                 var old = oldLotFor(lots, it);
-                if (left) {
-                    if (old.isEmpty()) {
-                        continue;
-                    }
-                    var lot = old.get();
-                    if (it.qty().compareTo(lot.qty()) < 0) {
-                        throw new ApiException(HttpStatus.CONFLICT,
-                            "ฉบับแก้ไขลดจำนวนรายการที่ " + it.seq() + " ต่ำกว่าจำนวนที่จัดลงรอบขนส่งแล้ว กรุณาแก้ที่รอบขนส่งก่อน");
-                    }
-                    plan.computeIfAbsent(it.id(), k -> new java.util.LinkedHashMap<>()).put(roundIds.get(0),
-                        new java.math.BigDecimal[] {lot.qty(), lot.receivedQty()});
-                    continue;
-                }
                 java.math.BigDecimal received = old.map(ShipmentRoundRepository.LotRow::receivedQty).orElse(null);
                 plan.computeIfAbsent(it.id(), k -> new java.util.LinkedHashMap<>()).put(roundIds.get(0),
                     new java.math.BigDecimal[] {it.qty(), received == null ? it.qty() : received.min(it.qty())});

@@ -35,7 +35,7 @@ public final class ShipmentRoundDtos {
                            LocalDate contactedOn, LocalDate orderedOn, LocalDate pickedUpOn, LocalDate inTransitOn,
                            LocalDate awaitingCustomsOn, LocalDate receivedOn, String stepByName, String stepNote,
                            ShipmentFacts facts, List<ShipmentLotDto> lots, List<ShipmentDocumentDto> documents, Instant undoUntil,
-                           Long undoById, String undoFromStep, String advanceId) {}
+                           Long undoById, String undoFromStep, String advanceId, Instant updatedAt) {}
 
     /** An ISSUED IR with quantity on no round. */
     public record ShipmentWaitingLine(long itemId, String code, String brand, String model, String size, String unit,
@@ -65,9 +65,14 @@ public final class ShipmentRoundDtos {
 
     /** Facts as sent, plus corrections of the real date of steps the round has passed (step code -> date). */
     public record UpdateShipmentRoundRequest(ShipmentFacts facts, java.util.Map<String, LocalDate> stepDates,
-                                             List<LotReceipt> lotReceipts) {
+                                             List<LotReceipt> lotReceipts, Instant expectedUpdatedAt) {
+        public UpdateShipmentRoundRequest(ShipmentFacts facts, java.util.Map<String, LocalDate> stepDates,
+                                          List<LotReceipt> lotReceipts) {
+            this(facts, stepDates, lotReceipts, null);
+        }
+
         public UpdateShipmentRoundRequest(ShipmentFacts facts, java.util.Map<String, LocalDate> stepDates) {
-            this(facts, stepDates, null);
+            this(facts, stepDates, null, null);
         }
     }
 

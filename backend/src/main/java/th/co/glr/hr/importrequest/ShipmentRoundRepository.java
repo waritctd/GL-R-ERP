@@ -267,7 +267,7 @@ public class ShipmentRoundRepository {
                         rs.getString("note")),
                     List.of(), List.of(), adv == null ? null : adv.toInstant(), (Long) rs.getObject("step_undo_by_id"),
                     rs.getString("step_undo_from"),
-                    rs.getString("step_advance_id"));
+                    rs.getString("step_advance_id"), rs.getTimestamp("updated_at").toInstant());
             });
     }
 

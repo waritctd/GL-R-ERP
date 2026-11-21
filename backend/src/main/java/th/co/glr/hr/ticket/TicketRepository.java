@@ -1714,9 +1714,9 @@ public class TicketRepository {
     }
 
     /** Locks sales.ticket's own row FOR UPDATE for the remainder of the caller's transaction. */
-    public void lockTicketForUpdate(long ticketId) {
-        jdbc.query("SELECT 1 FROM sales.ticket WHERE ticket_id = :id FOR UPDATE",
-            Map.of("id", ticketId), (rs, n) -> 0);
+    public String lockTicketForUpdate(long ticketId) {
+        return jdbc.query("SELECT lifecycle FROM sales.ticket WHERE ticket_id = :id FOR UPDATE",
+            Map.of("id", ticketId), (rs, n) -> rs.getString(1)).stream().findFirst().orElse(null);
     }
 
     /**
@@ -2687,7 +2687,9 @@ public class TicketRepository {
                 SELECT 1 FROM sales.shipment_lot l
                   JOIN sales.shipment_round r ON r.shipment_round_id = l.shipment_round_id
                   JOIN sales.import_request ir ON ir.import_request_id = l.import_request_id
+                  JOIN sales.import_request_item i ON i.import_request_item_id = l.import_request_item_id
                  WHERE ir.ticket_id = :t AND ir.status = 'ISSUED' AND r.import_step = 'RECEIVED'
+                   AND i.ticket_item_id IS NOT NULL -- a lot no deal line can claim must not open the warehouse gate
                    AND COALESCE(l.received_qty, l.qty) > 0)
             """, Map.of("t", ticketId), Boolean.class));
     }

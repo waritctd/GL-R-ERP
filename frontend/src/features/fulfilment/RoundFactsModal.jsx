@@ -21,6 +21,8 @@ export function RoundFactsModal({ round, onClose, showToast }) {
   const [receipts, setReceipts] = useState(() => Object.fromEntries((round.lots ?? []).map((l) => [l.lotId, String(l.receivedQty ?? l.qty)])));
   // only lots the user typed in are sent: a refetch must not make an untouched lot overwrite another operator's correction
   const [touchedLots, setTouchedLots] = useState(() => new Set());
+  // the round as it was when the modal opened: the server refuses the save if someone changed it since
+  const [openedAt] = useState(round.updatedAt ?? null);
   const save = useMutation({
     mutationFn: (payload) => api.shipmentRounds.updateFacts(round.id, payload),
     onSuccess: () => { invalidateAfterRoundChange(queryClient, round); showToast?.('success', 'บันทึกข้อมูลรอบแล้ว'); onClose(); },
@@ -35,6 +37,7 @@ export function RoundFactsModal({ round, onClose, showToast }) {
     save.mutate({
       facts: Object.fromEntries(Object.entries(facts).map(([k, v]) => [k, v === '' ? null : v])),
       stepDates: changed,
+      expectedUpdatedAt: openedAt,
       lotReceipts: received ? (round.lots ?? []).filter((l) => touchedLots.has(l.lotId) && Number(receipts[l.lotId]) !== Number(l.receivedQty ?? l.qty))
         .map((l) => ({ lotId: l.lotId, qty: Number(receipts[l.lotId]) })) : undefined,
     });

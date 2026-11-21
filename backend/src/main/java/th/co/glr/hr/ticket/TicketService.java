@@ -2623,8 +2623,11 @@ public class TicketService {
                 TicketEventKind.DEPOSIT_PAID, s.status(), s.status(), null);
             autoAdvanceStage(s, DealStage.DEPOSIT_RECEIVED, actor);
             // Site 7: only reachable when site 6 targeted DEPOSIT_PAID.
+            // A mixed deal already PARTIALLY_DELIVERED has the goods in too when the durable GOODS_RECEIVED event exists
+            // (the rollup wrote it without a payment move while the deposit was still unpaid).
             if (PaymentTrack.DEPOSIT_PAID.equals(depositTarget)
-                    && "GOODS_RECEIVED".equals(s.fulfillmentStatus())) {
+                    && ("GOODS_RECEIVED".equals(s.fulfillmentStatus())
+                        || (FulfilmentStatus.PARTIALLY_DELIVERED.equals(s.fulfillmentStatus()) && tickets.hasReceivedGoods(ticketId)))) {
                 int rows2 = tickets.advancePaymentStatus(
                     ticketId, s.depositPolicy(), depositTarget, PaymentTrack.AWAITING_FINAL_PAYMENT);
                 requirePaymentAdvanced(rows2);
@@ -2744,12 +2747,26 @@ public class TicketService {
             warehouseAllowance(s, item, receipts, goodsEvent).compareTo(nullToZero(item.qtyDelivered())) > 0);
     }
 
-    /** Whether ส่งมอบครบ (every open quantity, source as completeRound derives it) would pass the source caps. */
+    /** Whether ส่งมอบครบ would pass the source caps, for the lines completeRound would take: the oldest invoiced round's
+     * remaining lines when there is one, else every open line of the deal. */
     private boolean canCompleteWholeDelivery(TicketDto ticket) {
         TicketSummaryDto s = ticket.summary();
-        List<TicketItemDto> open = ticket.items().stream()
-            .filter(item -> nullToZero(item.qty()).compareTo(nullToZero(item.qtyDelivered())) > 0).toList();
-        if (open.stream().allMatch(item -> nullToZero(item.qty()).compareTo(nullToZero(item.qtyFromStock())) <= 0)) {
+        TicketRepository.InvoicedRound round = tickets.findInvoicedRounds(s.id()).stream()
+            .filter(TicketRepository.InvoicedRound::hasRemaining).findFirst().orElse(null);
+        Map<Long, TicketItemDto> itemsById = itemMap(ticket.items());
+        // item -> the total delivered once completed
+        Map<Long, BigDecimal> need = new LinkedHashMap<>();
+        if (round != null) {
+            round.lines().stream().filter(l -> l.remaining().signum() > 0 && itemsById.containsKey(l.itemId()))
+                .forEach(l -> need.put(l.itemId(), nullToZero(itemsById.get(l.itemId()).qtyDelivered()).add(l.remaining())));
+        } else {
+            ticket.items().stream().filter(item -> nullToZero(item.qty()).compareTo(nullToZero(item.qtyDelivered())) > 0)
+                .forEach(item -> need.put(item.id(), nullToZero(item.qty())));
+        }
+        if (need.isEmpty()) {
+            return false;
+        }
+        if (need.entrySet().stream().allMatch(e -> e.getValue().compareTo(nullToZero(itemsById.get(e.getKey()).qtyFromStock())) <= 0)) {
             return depositSettled(s);
         }
         if (!warehouseDeliveryAvailable(s, s.id())) {
@@ -2757,8 +2774,8 @@ public class TicketService {
         }
         TicketRepository.LotReceipts receipts = tickets.lotReceipts(s.id());
         boolean goodsEvent = tickets.hasReceivedGoods(s.id());
-        return open.stream().allMatch(item ->
-            warehouseAllowance(s, item, receipts, goodsEvent).compareTo(nullToZero(item.qty())) >= 0);
+        return need.entrySet().stream().allMatch(e ->
+            warehouseAllowance(s, itemsById.get(e.getKey()), receipts, goodsEvent).compareTo(e.getValue()) >= 0);
     }
 
     private static boolean hasRemainingDelivery(TicketDto ticket) {

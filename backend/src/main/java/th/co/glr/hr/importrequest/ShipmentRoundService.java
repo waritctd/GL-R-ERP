@@ -105,9 +105,13 @@ public class ShipmentRoundService {
         requireWrite(actor);
         ShipmentRoundDto round = lockRound(id);
         ShipmentFacts facts = request == null ? null : request.facts();
+        // the editor writes every fact as sent: refuse a save built on a round someone else changed since it was opened
+        if (request != null && request.expectedUpdatedAt() != null && !request.expectedUpdatedAt().equals(round.updatedAt())) {
+            throw new ApiException(HttpStatus.CONFLICT, "มีผู้อื่นแก้ข้อมูลรอบนี้ กรุณาโหลดใหม่");
+        }
         validateFacts(facts);
         if (ImportRequestStep.RECEIVED.equals(round.importStep())) {
-            requireNoteWhenIncomplete(facts); // the receive action's rule: a round marked incomplete keeps its note
+            requireNoteWhenIncomplete(facts, null); // the receive action's rule: a round marked incomplete keeps its note
         }
         Map<Long, BigDecimal> receipts = request == null ? Map.of() : validateReceipts(id, request.lotReceipts());
         if (!receipts.isEmpty() && !ImportRequestStep.RECEIVED.equals(round.importStep())) {
@@ -136,8 +140,8 @@ public class ShipmentRoundService {
                 .collect(Collectors.groupingBy(DerivedInput::importRequestId));
             for (IrLock ir : irs) {
                 ShipmentStepDerivation.Derived d = ShipmentStepDerivation.derive(ir, inputs.getOrDefault(ir.id(), List.of()));
-                if (d.step().equals(ir.importStep()) && d.at() != null && !d.at().equals(ir.importStepAt())) {
-                    stored.setStepDate(ir.id(), d.at());
+                if (d.step().equals(ir.importStep())) {
+                    refreshStamp(ir, d);
                 }
             }
         }
@@ -171,7 +175,7 @@ public class ShipmentRoundService {
         validateFacts(request.facts());
         Map<Long, BigDecimal> receipts = Map.of();
         if (ImportRequestStep.RECEIVED.equals(target)) {
-            requireNoteWhenIncomplete(request.facts());
+            requireNoteWhenIncomplete(request.facts(), round.facts());
             receipts = validateReceipts(id, request.lotReceipts());
         }
         requireNumbers(round, request.documents(), target);
@@ -562,11 +566,7 @@ public class ShipmentRoundService {
         for (IrLock ir : irs) {
             ShipmentStepDerivation.Derived d = ShipmentStepDerivation.derive(ir, inputs.getOrDefault(ir.id(), List.of()));
             if (d.step().equals(ir.importStep())) {
-                // same step from another round (regrouped): the date and operator follow it, with no step-change event
-                if (d.byName() != null && (!java.util.Objects.equals(d.at(), ir.importStepAt())
-                    || !java.util.Objects.equals(d.byId(), ir.importStepById()))) {
-                    stored.setDerivedStep(ir.id(), d.step(), d.at(), d.byId(), d.byName(), d.note());
-                }
+                refreshStamp(ir, d); // same step from another round (regrouped): the stamp follows it, no step-change event
                 continue;
             }
             ImportRequestDtos.ImportRequestDto before = irService.requireStored(ir.id());
@@ -580,10 +580,35 @@ public class ShipmentRoundService {
         return changes;
     }
 
+    /** Writes the derived stamp (date, operator, note) of an IR whose step did not change, silently, when it differs. */
+    private void refreshStamp(IrLock ir, ShipmentStepDerivation.Derived d) {
+        if (d.byName() == null) {
+            if (d.at() != null && !d.at().equals(ir.importStepAt())) {
+                stored.setStepDate(ir.id(), d.at());
+            }
+            return;
+        }
+        if (!java.util.Objects.equals(d.at(), ir.importStepAt()) || !java.util.Objects.equals(d.byId(), ir.importStepById())
+            || !java.util.Objects.equals(d.note(), ir.importStepNote())) {
+            stored.setDerivedStep(ir.id(), d.step(), d.at(), d.byId(), d.byName(), d.note());
+        }
+    }
+
     /** A deal that is no longer ACTIVE keeps the derived IR step but gets no event, rollup or notice; so does a no-project
      * order, which has no deal (no ticket id): its step still follows its lots. */
-    private static List<StepChange> onActiveDeals(List<StepChange> changes, List<IrLock> irs) {
-        Set<Long> dead = irs.stream().filter(i -> !i.ticketActive() && i.ticketId() != null).map(IrLock::ticketId).collect(Collectors.toSet());
+    private List<StepChange> onActiveDeals(List<StepChange> changes, List<IrLock> irs) {
+        if (changes.isEmpty()) {
+            return changes;
+        }
+        // The lifecycle is read under the ticket's own lock (after the round and IR locks, tickets ascending), not from the
+        // unlocked flag the IR lock query carried: a resume that commits meanwhile is seen, so no rollup is skipped.
+        Set<Long> dead = new java.util.HashSet<>();
+        irs.stream().map(IrLock::ticketId).filter(java.util.Objects::nonNull).distinct().sorted()
+            .forEach(t -> {
+                if (!th.co.glr.hr.ticket.DealLifecycle.ACTIVE.equals(tickets.lockTicketForUpdate(t))) {
+                    dead.add(t);
+                }
+            });
         return changes.stream().filter(c -> c.ir().ticketId() != null && !dead.contains(c.ir().ticketId())).toList();
     }
 
@@ -734,9 +759,11 @@ public class ShipmentRoundService {
         }
     }
 
-    private void requireNoteWhenIncomplete(ShipmentFacts f) {
-        if (f != null && Boolean.FALSE.equals(f.completePerInvoice())
-            && (f.completeNote() == null || f.completeNote().isBlank())) {
+    /** The flag and note the round will hold: the payload's where it gives one, else the stored (an advance keeps what it omits). */
+    private void requireNoteWhenIncomplete(ShipmentFacts f, ShipmentFacts stored) {
+        Boolean flag = f != null && f.completePerInvoice() != null ? f.completePerInvoice() : stored == null ? null : stored.completePerInvoice();
+        String note = f != null && f.completeNote() != null ? f.completeNote() : stored == null ? null : stored.completeNote();
+        if (Boolean.FALSE.equals(flag) && (note == null || note.isBlank())) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "ของไม่ครบตามอินวอยซ์ กรุณาพิมพ์หมายเหตุ");
         }
     }
@@ -790,6 +817,6 @@ public class ShipmentRoundService {
             r.stepByName(), r.stepNote(), r.facts(), lots.getOrDefault(r.id(), List.of()),
             documents ? docMap.getOrDefault(r.id(), List.of()) : List.of(),
             r.undoUntil() == null ? null : r.undoUntil().plusSeconds(ImportRequestService.STEP_UNDO_WINDOW_SECONDS),
-            r.undoById(), r.undoFromStep(), r.advanceId())).toList();
+            r.undoById(), r.undoFromStep(), r.advanceId(), r.updatedAt())).toList();
     }
 }

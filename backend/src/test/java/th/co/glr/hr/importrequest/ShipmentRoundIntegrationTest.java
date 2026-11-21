@@ -660,6 +660,50 @@ class ShipmentRoundIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     @Test
+    void aDepartedRevisionPairsEachLineWithItsOwnLot_evenWhenTwoLinesShareADealLine() {
+        long item1 = itemOf(irA);
+        jdbc.update("INSERT INTO sales.import_request_item (import_request_id, ticket_item_id, seq, code, size, qty, unit, brand, model)"
+            + " SELECT import_request_id, ticket_item_id, 2, code, '30x30', 10, unit, brand, model FROM sales.import_request_item"
+            + " WHERE import_request_item_id = :i", Map.of("i", item1));
+        long item2 = jdbc.queryForObject("SELECT import_request_item_id FROM sales.import_request_item WHERE import_request_id = :ir AND seq = 2", Map.of("ir", irA), Long.class);
+        long left = round("IN_TRANSIT");
+        for (long[] l : new long[][] {{item2, 10}, {item1, 40}}) { // the small lot first: first-match pairing would swap them
+            jdbc.update("INSERT INTO sales.shipment_lot (shipment_round_id, import_request_id, import_request_item_id, qty) VALUES (:r, :ir, :i, :q)",
+                Map.of("r", left, "ir", irA, "i", l[0], "q", l[1]));
+        }
+        long revision = irService.revise(irA, owner).id();
+        irService.issue(revision, null, owner);
+
+        assertThat(jdbc.queryForList("SELECT i.size || ':' || l.qty FROM sales.shipment_lot l JOIN sales.import_request_item i USING (import_request_item_id)"
+            + " WHERE l.import_request_id = :id ORDER BY i.seq", Map.of("id", revision), String.class)).containsExactly("20x20:40.00", "30x30:10.00");
+    }
+
+    @Test
+    void aStaleFactsEditorIsRefused_andTheReceiveNeedsTheStoredIncompleteNote() {
+        long r = round("ORDERED");
+        lot(r, irA, 40);
+        ShipmentRoundDto opened = rounds.get(r, importUser);
+        rounds.updateFacts(r, new UpdateShipmentRoundRequest(new ShipmentFacts(null, null, "VESSEL-1", null, null, null, null, null,
+            null, null, null, null, null, null, false, null, null), Map.of()), importUser); // saved incomplete, no note
+        assertRefused(() -> rounds.updateFacts(r, new UpdateShipmentRoundRequest(new ShipmentFacts(null, null, "VESSEL-2", null, null, null, null,
+            null, null, null, null, null, null, null, null, null, null), Map.of(), null, opened.updatedAt()), importUser), HttpStatus.CONFLICT);
+        // receive without facts: the stored flag (false) and missing note are what counts
+        assertRefused(() -> rounds.advance(r, new AdvanceShipmentRoundRequest(ImportRequestStep.RECEIVED, null, ImportRequestStep.ORDERED, null,
+            null, List.of(new DocumentInput("PROFORMA", "PI-X"), new DocumentInput("INVOICE", "INV-X"))), importUser), HttpStatus.BAD_REQUEST);
+    }
+
+    @Test
+    void aDepositRecordedAfterTheFinalLotMovesAPartiallyDeliveredDealToAwaitingFinalPayment() {
+        jdbc.update("UPDATE sales.ticket SET fulfillment_status = 'PARTIALLY_DELIVERED', payment_status = 'DEPOSIT_NOTICE_ISSUED' WHERE ticket_id = :t", Map.of("t", ticketA));
+        ticketRepo.addEvent(ticketA, owner.id(), owner.name(), th.co.glr.hr.ticket.TicketEventKind.GOODS_RECEIVED, null, null, null);
+
+        ticketService.recordPayment(ticketA, new th.co.glr.hr.ticket.RecordPaymentRequest("DEPOSIT", new BigDecimal("100"), null, "ทดสอบ มัดจำเกินยอดเพราะไม่มีใบเสนอราคา", null, null, true), accountUser);
+
+        assertThat(jdbc.queryForObject("SELECT payment_status FROM sales.ticket WHERE ticket_id = :t", Map.of("t", ticketA), String.class))
+            .isEqualTo("AWAITING_FINAL_PAYMENT");
+    }
+
+    @Test
     void aDealResumedAfterItsLastLotArrivedWhilePausedCatchesUpOnce() {
         jdbc.update("UPDATE sales.ticket SET lifecycle = 'ON_HOLD' WHERE ticket_id = :t", Map.of("t", ticketA));
         long r = round("ORDERED");
