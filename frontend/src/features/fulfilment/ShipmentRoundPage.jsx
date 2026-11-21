@@ -132,11 +132,18 @@ export function ShipmentRoundPage({ user, showToast }) {
             <span>{roundIrCount(round)} ใบขอซื้อ</span>
           </span>
         )}
-        actions={editable && round.importStep !== 'RECEIVED' ? (
-          <Button type="button" variant="primary" onClick={() => setAdvancing(true)} data-testid="round-advance">เลื่อนขั้นตอน</Button>
+        actions={(canEditLots || (editable && round.importStep !== 'RECEIVED')) ? (
+          <>
+            {canEditLots ? (
+              <Button type="button" variant="secondary" className="hidden min-[1041px]:inline-flex" onClick={() => setPlanning(true)} data-testid="round-add-ir-header">+ เพิ่มใบขอซื้อเข้ารอบนี้</Button>
+            ) : null}
+            {editable && round.importStep !== 'RECEIVED' ? (
+              <Button type="button" variant="primary" onClick={() => setAdvancing(true)} data-testid="round-advance">เลื่อนขั้นตอน</Button>
+            ) : null}
+          </>
         ) : null}
       />
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[22rem_minmax(0,1fr)] lg:items-start">
+      <div className="grid grid-cols-1 gap-4 min-[1041px]:grid-cols-[22rem_minmax(0,1fr)] min-[1041px]:items-start">
         <div className="flex min-w-0 flex-col gap-4">
           <Panel title="ขั้นตอน"><StepList round={round} /></Panel>
           <Panel title="เอกสาร"><RoundDocuments round={round} editable={editable} showToast={showToast} /></Panel>
@@ -165,7 +172,7 @@ export function ShipmentRoundPage({ user, showToast }) {
           <DataTable columns={lotColumns} rows={round.lots} getRowKey={(l) => l.lotId} gridClassName={canEditLots ? LOTS_GRID_EDIT : LOTS_GRID} mobileCard={lotCard}
             emptyState={{ icon: 'check', title: 'ยังไม่มีใบขอซื้อในรอบนี้' }} />
           {canEditLots ? (
-            <Button type="button" variant="secondary" className="w-full sm:w-auto" onClick={() => setPlanning(true)} data-testid="round-add-ir">เพิ่มใบขอซื้อเข้ารอบนี้</Button>
+            <Button type="button" variant="secondary" className="w-full sm:w-auto min-[1041px]:hidden" onClick={() => setPlanning(true)} data-testid="round-add-ir">เพิ่มใบขอซื้อเข้ารอบนี้</Button>
           ) : null}
           {editable && !lotsEditable(round) ? <p className="m-0 text-xs text-text-muted">เพิ่มหรือแบ่งของได้จนกว่าเรือจะออก หลังจากนั้นแก้ได้เฉพาะข้อมูลและเอกสารของรอบ</p> : null}
           <p className="m-0 text-xs text-text-muted">ใบขอซื้อทุกใบในรอบนี้เลื่อนขั้นตอนพร้อมกัน · แก้ไขข้อมูลใบขอซื้อ (ระยะเวลานำเข้า อีเมลสั่งซื้อ PDF) ที่หน้าของใบนั้น</p>

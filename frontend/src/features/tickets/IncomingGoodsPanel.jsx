@@ -11,8 +11,8 @@ import { formatThaiDate } from '../../utils/format.js';
 import { IMPORT_STEPS, importStepIndex } from '../importProgress/importSteps.js';
 import { formatQty, STEP_DATE_KEY, stepLabel, stepTone } from '../fulfilment/shipmentRounds.js';
 
-// Whole literal, one track per column (5): product + lot, quantity, status, expected, the open button.
-const INCOMING_GRID = 'grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.2fr)_minmax(0,0.7fr)]';
+// Whole literal, one track per column (6, ND3): product, lot, quantity, status, expected, the open button.
+const INCOMING_GRID = 'grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)_minmax(0,0.9fr)_minmax(0,1fr)_minmax(0,1.2fr)_minmax(0,0.6fr)]';
 
 const lotWhen = (lot) => (lot.step === 'RECEIVED'
   ? `ถึง ${formatThaiDate(lot.receivedOn ?? lot.arrivedOn)}`
@@ -91,8 +91,8 @@ export function IncomingGoodsPanel({ ticketId, canMessage = false, showToast }) 
   if (!data || data.irs.length === 0) return null;
 
   const columns = (ir) => [
-    { key: 'product', header: 'สินค้า / ล็อต', render: (r) => (r.waiting ? <span className="flex flex-col"><b className="text-sm">{r.product}</b><small className="text-text-muted">ส่วนที่ยังไม่จัดรอบ</small></span>
-      : <span className="flex flex-col"><b className="text-sm">{r.product}</b><small className="text-text-muted">{lotNote(r)}</small></span>) },
+    { key: 'product', header: 'สินค้า', render: (r) => <b className="text-sm">{r.product}</b> },
+    { key: 'lot', header: 'ล็อต', render: (r) => <span className="text-sm">{r.waiting ? 'ส่วนที่ยังไม่จัดรอบ' : lotNote(r)}</span> },
     { key: 'qty', header: 'จำนวน', render: (r) => (
       <span className="flex flex-col tabular-nums">
         <b>{r.waiting ? `${formatQty(r.remainingQty)} ${r.unit ?? ''}` : lotQtyText(r)}</b>

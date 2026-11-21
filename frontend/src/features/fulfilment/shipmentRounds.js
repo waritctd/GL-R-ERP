@@ -113,6 +113,29 @@ export function roundSummaryLine(round) {
   return parts.join(' · ');
 }
 
+/** Under a round's name on the desktop table: its first proforma number, else the goods-receipt number. */
+export const roundSubline = (round) => (round.documents ?? []).find((d) => d.kind === 'PROFORMA' && d.docNo)?.docNo
+  ?? round.facts?.grNumber ?? '';
+
+/** "n ใบ · qty" and "x โครงการ · y ตัวอย่าง" for the IRs on a round (quantity only when every line shares a unit). */
+export function roundIrSummary(round) {
+  const rows = irRows(round);
+  const kinds = new Map();
+  const seen = new Set();
+  (round.lots ?? []).forEach((l) => {
+    if (seen.has(l.importRequestId)) return;
+    seen.add(l.importRequestId);
+    const kind = l.ticketId == null ? (PURPOSE_LABELS[l.orderPurpose] ?? 'ไม่มีโครงการ') : 'โครงการ';
+    kinds.set(kind, (kinds.get(kind) ?? 0) + 1);
+  });
+  const units = new Set((round.lots ?? []).map((l) => l.unit ?? ''));
+  const qty = units.size === 1 ? `${formatQty((round.lots ?? []).reduce((sum, l) => sum + Number(l.qty), 0))} ${[...units][0]}`.trim() : null;
+  return {
+    head: [`${rows.length} ใบ`, qty].filter(Boolean).join(' · '),
+    mix: [...kinds].map(([k, n]) => `${n} ${k}`).join(' · '),
+  };
+}
+
 export const roundIrCount = (round) => new Set((round.lots ?? []).map((l) => l.importRequestId)).size;
 
 export const STEP_CHIPS = [{ key: 'ALL', label: 'ทั้งหมด' }, { key: 'WAITING', label: 'รอจัดรอบ' },

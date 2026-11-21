@@ -12,19 +12,22 @@ import { PURPOSE_LABELS } from '../fulfilment/shipmentRounds.js';
 const blankLine = () => ({ key: Math.random().toString(36).slice(2), code: '', size: '', qty: '', unit: 'แผ่น' });
 
 /**
+ * The ONE form of สั่งของไม่มีโครงการ, shared by the phone sheet (N07) and the desktop side panel (ND4): `body` is the fields,
+ * `footer` the filled send button with "ยังขาด: …". Nothing here knows which of the two hosts it.
+ *
  * N07 สั่งของไม่มีโครงการ: an order for a sample, the showroom or stock, with no deal. EVERY field is required (purpose, who it
  * is for / where it is used, factory, at least one line with a quantity and unit, wanted-by date): the send button stays
  * disabled and says what is still missing. No approval: import acts on it straight away. A bottom sheet on a phone, a centred
  * dialog from 640px.
  */
-export function NewOrderSheet({ onClose, showToast }) {
+export function useNewOrderForm({ onDone, showToast, wide = false, enabled = true }) {
   const queryClient = useQueryClient();
   const [purpose, setPurpose] = useState('');
   const [note, setNote] = useState('');
   const [factoryId, setFactoryId] = useState('');
   const [lines, setLines] = useState(() => [blankLine()]);
   const [wantedBy, setWantedBy] = useState('');
-  const factories = useQuery({ queryKey: queryKeys.factoryNames(), queryFn: () => api.factoryConfigs.names().then((r) => r.factories ?? []) });
+  const factories = useQuery({ queryKey: queryKeys.factoryNames(), queryFn: () => api.factoryConfigs.names().then((r) => r.factories ?? []), enabled });
 
   const setLine = (key, patch) => setLines((cur) => cur.map((l) => (l.key === key ? { ...l, ...patch } : l)));
   const lineOk = (l) => l.code.trim() && Number(l.qty) > 0 && l.unit.trim();
@@ -45,26 +48,21 @@ export function NewOrderSheet({ onClose, showToast }) {
       queryClient.invalidateQueries({ queryKey: queryKeys.myIncoming() });
       queryClient.invalidateQueries({ queryKey: queryKeys.shipmentRounds() });
       showToast?.('success', 'ส่งคำขอสั่งของแล้ว ฝ่ายนำเข้าได้รับแจ้งเตือนแล้ว');
-      onClose();
+      setPurpose(''); setNote(''); setFactoryId(''); setLines([blankLine()]); setWantedBy('');
+      onDone?.();
     },
     onError: (e) => showToast?.('error', e?.message ?? 'ส่งคำขอไม่สำเร็จ'),
   });
 
-  return (
-    <Modal
-      title="สั่งของไม่มีโครงการ"
-      onClose={onClose}
-      placement="sheet-on-phone"
-      testId="new-order-sheet"
-      footer={(
-        <div className="flex w-full flex-col items-stretch gap-1 sm:items-end">
-          <Button type="button" variant="primary" className="w-full sm:w-auto" disabled={missing.length > 0 || send.isPending} onClick={() => send.mutate()} data-testid="new-order-send">
+  const footer = (
+    <div className={cn('flex w-full flex-col items-stretch gap-1', !wide && 'sm:items-end')}>
+          <Button type="button" variant="primary" className={cn('w-full', !wide && 'sm:w-auto')} disabled={missing.length > 0 || send.isPending} onClick={() => send.mutate()} data-testid="new-order-send">
             ส่งคำขอสั่งของ
           </Button>
-          {missing.length > 0 ? <small className="text-center text-text-muted sm:text-right" data-testid="new-order-missing">ยังขาด: {missing.join(' · ')}</small> : null}
+          {missing.length > 0 ? <small className={cn('text-center text-text-muted', !wide && 'sm:text-right')} data-testid="new-order-missing">ยังขาด: {missing.join(' · ')}</small> : null}
         </div>
-      )}
-    >
+  );
+  const body = (
       <div className="flex flex-col gap-4">
         <div className="flex flex-col gap-1">
           <span className="text-xs font-bold text-text-secondary" id="order-purpose">สั่งเพื่ออะไร *</span>
@@ -122,6 +120,26 @@ export function NewOrderSheet({ onClose, showToast }) {
         </div>
         <p className="m-0 text-xs text-text-muted">กรอกให้ครบทุกช่องจึงส่งได้ · ไม่ต้องขออนุมัติ ไม่มีใบเสนอราคา ไม่มีขั้นตอนเงิน · ฝ่ายนำเข้ารวมไปกับรอบขนส่งถัดไปของโรงงานนี้</p>
       </div>
+  );
+  return { body, footer };
+}
+
+/** Phone / narrow screens: a bottom sheet, a centred dialog from 640px. */
+export function NewOrderSheet({ form: { body, footer }, onClose }) {
+  return (
+    <Modal title="สั่งของไม่มีโครงการ" onClose={onClose} placement="sheet-on-phone" testId="new-order-sheet" footer={footer}>
+      {body}
     </Modal>
+  );
+}
+
+/** Desktop (ND4): the same form as a side panel beside the list, not a modal. */
+export function NewOrderPanel({ form: { body, footer } }) {
+  return (
+    <section className="flex flex-col gap-4 rounded-md border border-border bg-surface p-4 min-[1041px]:sticky min-[1041px]:top-4" aria-label="สั่งของไม่มีโครงการ" data-testid="new-order-panel">
+      <h2 className="m-0 text-base font-bold">สั่งของไม่มีโครงการ</h2>
+      {body}
+      <div className="flex flex-col items-stretch gap-1 border-t border-border-subtle pt-3">{footer}</div>
+    </section>
   );
 }

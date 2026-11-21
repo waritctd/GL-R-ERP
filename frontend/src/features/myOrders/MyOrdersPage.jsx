@@ -14,10 +14,11 @@ import { cn } from '../../utils/cn.js';
 import { formatThaiDate } from '../../utils/format.js';
 import { formatQty, PURPOSE_LABELS, stepLabel, stepTone } from '../fulfilment/shipmentRounds.js';
 import { LotSheet } from '../tickets/IncomingGoodsPanel.jsx';
-import { NewOrderSheet } from './NewOrderSheet.jsx';
+import { useMediaQuery } from '../../hooks/useIsMobile.js';
+import { NewOrderPanel, NewOrderSheet, useNewOrderForm } from './NewOrderSheet.jsx';
 
 // Whole literal, one track per column (7): for / who, product + lot, factory, quantity, status, expected, the open control.
-const ORDERS_GRID = 'grid-cols-[minmax(0,1.3fr)_minmax(0,1.5fr)_minmax(0,1fr)_minmax(0,0.8fr)_minmax(0,1fr)_minmax(0,1.1fr)_minmax(0,0.7fr)]';
+const ORDERS_GRID = 'grid-cols-[minmax(0,1.2fr)_minmax(0,1.4fr)_minmax(0,0.9fr)_6rem_7.5rem_minmax(0,1fr)_5rem]';
 
 const CHIPS = [{ key: 'ALL', label: 'ทั้งหมด' }, { key: 'PROJECT', label: 'โครงการ' }, { key: 'SAMPLE', label: 'ตัวอย่าง' },
   { key: 'SHOWROOM', label: 'โชว์รูม' }, { key: 'STOCK', label: 'สต็อก' }];
@@ -61,6 +62,11 @@ export function MyOrdersPage({ user, showToast }) {
   });
   const query = useQuery({ queryKey: queryKeys.myIncoming(), queryFn: () => api.myIncoming.get(), retry: false });
   const canCreate = ['sales', 'sales_manager'].includes(user?.role) || Boolean(user?.canCreateQuotation);
+  // From the desktop breakpoint the create form is a side panel beside the list (ND4); below it, the same form in a sheet.
+  const desktop = useMediaQuery('(min-width: 1041px)');
+  const sidePanel = canCreate && desktop;
+  // Held here so a draft survives crossing the breakpoint (a tablet rotated mid-order).
+  const orderForm = useNewOrderForm({ onDone: () => setCreating(false), showToast, wide: sidePanel, enabled: canCreate });
 
   const rows = useMemo(() => query.data?.rows ?? [], [query.data]);
   const term = search.trim().toLowerCase();
@@ -85,8 +91,8 @@ export function MyOrdersPage({ user, showToast }) {
       </span>
     ) },
     { key: 'product', header: 'สินค้า', render: (r) => <span className="flex flex-col"><b className="text-sm">{r.product}</b><small className="text-text-muted"><code>{r.docNumber}</code> · {lotNote(r)}</small></span> },
-    { key: 'factory', header: 'โรงงาน', render: (r) => r.factoryName },
-    { key: 'qty', header: 'จำนวน', render: (r) => <b className="tabular-nums">{qtyText(r)}</b> },
+    { key: 'factory', header: 'โรงงาน', render: (r) => <span className="whitespace-normal [overflow-wrap:anywhere]">{r.factoryName}</span> },
+    { key: 'qty', header: 'จำนวน', render: (r) => <b className="whitespace-normal tabular-nums">{qtyText(r)}</b> },
     { key: 'status', header: 'สถานะ', render: (r) => (r.waiting ? <StatusBadge tone="warning">รอจัดรอบ</StatusBadge> : <StatusBadge tone={stepTone(r.lot.step)}>{stepLabel(r.lot.step)}</StatusBadge>) },
     { key: 'when', header: 'กำหนด', render: (r) => <span className="text-sm">{whenText(r)}</span> },
     { key: 'open', header: '', render: openControl },
@@ -114,8 +120,10 @@ export function MyOrdersPage({ user, showToast }) {
       <PageHeader
         title="ของที่ฉันสั่ง"
         subtitle="ของนำเข้าทุกออเดอร์ของคุณในที่เดียว ทั้งงานโครงการ ตัวอย่าง โชว์รูม และสต็อก"
-        actions={canCreate ? <Button type="button" variant="primary" onClick={() => setCreating(true)} data-testid="new-order">+ สั่งของไม่มีโครงการ</Button> : null}
+        actions={canCreate && !sidePanel ? <Button type="button" variant="primary" onClick={() => setCreating(true)} data-testid="new-order">+ สั่งของไม่มีโครงการ</Button> : null}
       />
+      <div className={cn('grid grid-cols-1 gap-4', sidePanel && 'min-[1041px]:grid-cols-[minmax(0,1fr)_24rem] min-[1041px]:items-start')}>
+        <div className="flex min-w-0 flex-col gap-4">
       <FilterBar>
         <div className="flex min-w-0 max-w-full gap-2 overflow-x-auto" role="group" aria-label="กรองตามประเภท">
           {CHIPS.map((c) => (
@@ -142,6 +150,9 @@ export function MyOrdersPage({ user, showToast }) {
           {!query.isLoading && rows.length > 0 && visible.length === 0 ? <EmptyState icon="check" title="ไม่มีรายการในตัวกรองนี้" /> : null}
         </>
       )}
+        </div>
+        {sidePanel ? <NewOrderPanel form={orderForm} /> : null}
+      </div>
       <p className="text-2xs text-text-muted">แตะรายการของงานโครงการเพื่อไปที่แท็บ ส่งของ ของงานนั้น · ผู้จัดการฝ่ายขายเห็นของทุกคนในทีม</p>
       <ConfirmDialog
         open={Boolean(withdrawing)}
@@ -153,7 +164,7 @@ export function MyOrdersPage({ user, showToast }) {
         onConfirm={() => withdraw.mutate(withdrawing)}
         onCancel={() => setWithdrawing(null)}
       />
-      {creating ? <NewOrderSheet showToast={showToast} onClose={() => setCreating(false)} /> : null}
+      {creating && !sidePanel ? <NewOrderSheet form={orderForm} onClose={() => setCreating(false)} /> : null}
       {open ? <LotSheet ticketId={null} ir={{ docNumber: open.docNumber }} lot={open.lot} wantedBy={open.wantedBy} canMessage={false} showToast={showToast} onClose={() => setOpen(null)} /> : null}
     </PageStack>
   );

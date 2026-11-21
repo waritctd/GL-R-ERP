@@ -16,13 +16,13 @@ import { AdvanceRoundSheet } from './AdvanceRoundSheet.jsx';
 import { DownloadIrButton } from './DownloadIrButton.jsx';
 import { PlanRoundSheet } from './PlanRoundSheet.jsx';
 import {
-  formatQty, irRows, lotProduct, lotWho, lotWhoSub, roundIrCount, roundSummaryLine, roundTitle, STEP_CHIPS, stepPillText, stepTone, waitingFactories,
+  formatQty, irRows, lotProduct, lotWho, lotWhoSub, roundIrSummary, roundSubline, roundSummaryLine, roundTitle, STEP_CHIPS, stepPillText, stepTone, waitingFactories,
 } from './shipmentRounds.js';
 import { useRoundUndo } from './useRoundUndo.jsx';
 
-// Whole literals (Tailwind JIT), one track per column: the waiting table has 5, the rounds table 7.
-const WAITING_GRID = 'grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)_minmax(0,1.6fr)_minmax(0,1.5fr)_minmax(0,1fr)]';
-const ROUNDS_GRID = 'grid-cols-[minmax(0,1.5fr)_minmax(0,1.1fr)_minmax(0,0.9fr)_minmax(0,0.8fr)_minmax(0,0.8fr)_minmax(0,1.1fr)_minmax(0,1.3fr)]';
+// Whole literals (Tailwind JIT), one track per column: the waiting table has 6 (ND1), the rounds table 7.
+const WAITING_GRID = 'grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)_minmax(0,1.6fr)_minmax(0,1.4fr)_minmax(0,0.9fr)_minmax(0,1fr)]';
+const ROUNDS_GRID = 'grid-cols-[minmax(0,1.5fr)_minmax(0,1.1fr)_minmax(0,0.9fr)_minmax(0,0.8fr)_minmax(0,0.8fr)_minmax(0,1.1fr)_minmax(15rem,1.3fr)]';
 
 /**
  * การขนส่ง — import's queue of SHIPMENT ROUNDS (N01 on a phone, ND1 from desktop width). A round is one factory shipment;
@@ -83,9 +83,7 @@ export function ImportFulfilmentPage({ user, showToast }) {
     {
       key: 'ir',
       header: 'ใบขอซื้อ',
-      render: (w) => (w.ticketId == null
-        ? <span className="flex flex-col items-start gap-1"><code>{w.docNumber}</code><DownloadIrButton importRequestId={w.importRequestId} docNumber={w.docNumber} factoryName={w.factoryName} showToast={showToast} /></span>
-        : <Link to={`/import/deals/${w.ticketId}`} className="text-info underline"><code>{w.docNumber}</code></Link>),
+      render: (w) => (w.ticketId == null ? <code>{w.docNumber}</code> : <Link to={`/import/deals/${w.ticketId}`} className="text-info underline"><code>{w.docNumber}</code></Link>),
     },
     {
       key: 'who',
@@ -103,11 +101,21 @@ export function ImportFulfilmentPage({ user, showToast }) {
       header: 'ยังไม่จัดรอบ',
       render: (w) => <span className="tabular-nums font-bold">{w.lines.length > 1 ? `${w.lines.length} รายการ` : `${formatQty(w.lines[0].remainingQty)} ${w.lines[0].unit ?? ''}`}</span>,
     },
+    {
+      key: 'status',
+      header: 'สถานะ',
+      render: (w) => (
+        <span className="flex flex-col items-start gap-1">
+          <StatusBadge tone="warning">รอจัดรอบ</StatusBadge>
+          {w.ticketId == null ? <DownloadIrButton importRequestId={w.importRequestId} docNumber={w.docNumber} factoryName={w.factoryName} showToast={showToast} /> : null}
+        </span>
+      ),
+    },
   ];
 
   const openAdvance = (round) => setAdvancing(round);
   const roundActions = (round) => (
-    <span className="flex flex-wrap items-center justify-end gap-2">
+    <span className="flex flex-wrap items-center justify-end gap-2 min-[1041px]:flex-nowrap min-[1041px]:whitespace-nowrap">
       <Link to={`/fulfilment/rounds/${round.id}`} className={cn(buttonVariants({ variant: 'secondary', size: 'sm' }), 'no-underline')}>รายละเอียด</Link>
       {editable && round.importStep !== 'RECEIVED' ? (
         <Button type="button" size="sm" variant="secondary" onClick={() => openAdvance(round)} data-testid={`round-advance-${round.id}`}>เลื่อนขั้นตอน</Button>
@@ -121,23 +129,26 @@ export function ImportFulfilmentPage({ user, showToast }) {
       render: (r) => (
         <span className="flex flex-col gap-0.5">
           <Link to={`/fulfilment/rounds/${r.id}`} className="text-sm font-bold text-text underline">{roundTitle(r)}</Link>
-          <span className="text-2xs text-text-muted">{r.facts?.proformaNo || r.facts?.invoiceNo || ''}</span>
+          <span className="text-2xs text-text-muted">{roundSubline(r)}</span>
         </span>
       ),
     },
     { key: 'step', header: 'ขั้นตอน', render: (r) => <StatusBadge tone={stepTone(r.importStep)}>{stepPillText(r.importStep)}</StatusBadge> },
     { key: 'vessel', header: 'เรือ', render: (r) => r.facts?.vessel || '-' },
-    { key: 'etd', header: 'เรือออก', render: (r) => formatThaiDate(r.facts?.etdActualOn) },
-    { key: 'eta', header: 'คาดว่าถึง', render: (r) => formatThaiDate(r.facts?.etaOn) },
+    { key: 'etd', header: 'เรือออก', render: (r) => <span className="whitespace-nowrap">{formatThaiDate(r.facts?.etdActualOn)}</span> },
+    { key: 'eta', header: 'คาดว่าถึง', render: (r) => <span className="whitespace-nowrap">{formatThaiDate(r.facts?.etaOn)}</span> },
     {
       key: 'irs',
       header: 'ใบขอซื้อในรอบ',
-      render: (r) => (
-        <span className="flex flex-col gap-0.5">
-          <span className="text-sm font-bold">{roundIrCount(r)} ใบ</span>
-          <span className="text-2xs text-text-muted">{r.lots.map((l) => l.docNumber).filter((v, i, a) => a.indexOf(v) === i).join(', ')}</span>
-        </span>
-      ),
+      render: (r) => {
+        const sum = roundIrSummary(r);
+        return (
+          <span className="flex flex-col gap-0.5">
+            <span className="text-sm font-bold">{sum.head}</span>
+            <span className="text-2xs text-text-muted">{sum.mix}</span>
+          </span>
+        );
+      },
     },
     { key: 'actions', header: '', render: roundActions },
   ];
@@ -185,9 +196,16 @@ export function ImportFulfilmentPage({ user, showToast }) {
         title="การขนส่ง"
         subtitle="เลื่อนขั้นตอนทีละรอบขนส่ง · ทุกใบขอซื้อในรอบขยับพร้อมกัน · หนึ่งใบขอซื้อแบ่งไปได้หลายรอบ"
         actions={(
-          <Button type="button" variant="icon" onClick={() => queryClient.invalidateQueries({ queryKey: queryKeys.shipmentRounds() })} title="รีเฟรช" aria-label="รีเฟรช">
-            <Icon name="refresh" />
-          </Button>
+          <>
+            {editable && waitingFactories(waiting).length > 0 ? (
+              <Button type="button" variant="primary" className="hidden min-[1041px]:inline-flex" onClick={() => setPlanning(true)} data-testid="plan-round-header">
+                + จัดรอบขนส่ง
+              </Button>
+            ) : null}
+            <Button type="button" variant="icon" onClick={() => queryClient.invalidateQueries({ queryKey: queryKeys.shipmentRounds() })} title="รีเฟรช" aria-label="รีเฟรช">
+              <Icon name="refresh" />
+            </Button>
+          </>
         )}
       />
 
@@ -236,7 +254,7 @@ export function ImportFulfilmentPage({ user, showToast }) {
                 <span className="text-2xs font-normal text-text-muted">{visibleWaiting.length} ใบขอซื้อ · {new Set(visibleWaiting.map((w) => w.factoryName)).size} โรงงาน</span>
               </h2>
               {editable && waitingFactories(waiting).length > 0 ? (
-                <Button type="button" variant="primary" className="w-full sm:w-auto sm:self-start" onClick={() => setPlanning(true)} data-testid="plan-round">
+                <Button type="button" variant="primary" className="w-full sm:w-auto sm:self-start min-[1041px]:hidden" onClick={() => setPlanning(true)} data-testid="plan-round">
                   <Icon name="plus" size={16} />จัดรอบขนส่ง
                 </Button>
               ) : null}

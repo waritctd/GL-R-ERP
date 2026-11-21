@@ -60,6 +60,22 @@ describe('ของที่ฉันสั่ง', () => {
     expect(screen.getAllByText('IR-TEST-002').length).toBeGreaterThan(0);
   });
 
+  it('from the desktop breakpoint the create form is a side panel beside the list, not a sheet', async () => {
+    const original = window.matchMedia;
+    window.matchMedia = (query) => ({ matches: query.includes('min-width: 1041px'), media: query, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {} });
+    try {
+      vi.mocked(api.myIncoming.get).mockResolvedValue({ rows: [] });
+      vi.mocked(api.factoryConfigs.names).mockResolvedValue({ factories: [] });
+      renderPage();
+      const panel = await screen.findByTestId('new-order-panel');
+      expect(within(panel).getByTestId('new-order-send').disabled).toBe(true);
+      expect(within(panel).getByTestId('new-order-missing').textContent).toContain('ยังขาด');
+      expect(screen.queryByTestId('new-order')).toBeNull(); // no header button: the form is already there
+    } finally {
+      window.matchMedia = original;
+    }
+  });
+
   it('ยกเลิกคำขอ: a still-waiting no-project order can be withdrawn after a confirm', async () => {
     vi.mocked(api.myIncoming.get).mockResolvedValue(data);
     vi.mocked(api.noProjectOrders.withdraw).mockResolvedValue({ importRequest: {} });
