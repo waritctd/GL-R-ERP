@@ -49,7 +49,7 @@ class ImportRequestLeadTimeFromPricingRequestIntegrationTest extends AbstractPos
             new EmployeeAuthRepository(jdbc), new th.co.glr.hr.customer.ContactRepository(jdbc), new th.co.glr.hr.customer.ProjectRepository(jdbc),
             new th.co.glr.hr.dealquotation.DealQuotationRepository(jdbc, new th.co.glr.hr.catalog.CatalogRepository(jdbc)));
         service = new ImportRequestService(new ImportRequestQueryRepository(jdbc), new ImportRequestRenderer(),
-            new ImportRequestRepository(jdbc), new FactoryConfigRepository(jdbc), tickets, ticketService, notifications);
+            new ImportRequestRepository(jdbc), new FactoryConfigRepository(jdbc), tickets, ticketService, notifications, new th.co.glr.hr.importrequest.ShipmentRoundRepository(jdbc));
         ownerId = jdbc.queryForObject(
             "INSERT INTO hr.employee (employee_code, first_name_th, last_name_th) VALUES ('CR1-OWN', 'ทดสอบ', 'ใบขอซื้อ') RETURNING employee_id",
             Map.of(), Long.class);

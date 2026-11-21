@@ -81,7 +81,7 @@ public class ImportDealService {
 
     private static ImportDealItemDto toItem(TicketItemDto i) {
         return new ImportDealItemDto(i.id(), i.brand(), i.model(), i.color(), i.texture(), i.size(),
-            i.catalogProductCode(), i.qty(), i.qtySqm(), i.unitBasis(), i.qtyDelivered());
+            i.catalogProductCode(), i.qty(), i.qtySqm(), i.unitBasis(), i.qtyDelivered(), i.qtyNotDelivered());
     }
 
     private static ApiException forbidden() {

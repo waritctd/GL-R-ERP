@@ -157,6 +157,14 @@ public class TicketController {
         return detail(user, ticketService.recordPartialDelivery(id, request, user));
     }
 
+    /** What the warehouse can still deliver per line right now (the shared cap rule), for the delivery dialogs to default to. */
+    @GetMapping("/{id}/delivery-allowance")
+    Map<String, Object> deliveryAllowance(@PathVariable long id, HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return Map.of("lines", ticketService.warehouseRemaining(id, user).entrySet().stream()
+            .map(e -> Map.of("itemId", e.getKey(), "remaining", e.getValue())).toList());
+    }
+
     @PostMapping("/{id}/deliveries/complete")
     TicketDetailResponse completeDelivery(
         @PathVariable long id,

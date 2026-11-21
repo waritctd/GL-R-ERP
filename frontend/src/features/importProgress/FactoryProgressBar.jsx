@@ -16,7 +16,7 @@ const ETA_CHIP = `${CHIP_BOX} max-w-full border-border-subtle bg-surface font-bo
 // `editable` (import/CEO — ImportRequestService.ADVANCE_STEP_ROLES) adds the "advance" control. Everything
 // else — the step picker, the forward-only advance, the email hook — is unchanged.
 export function FactoryProgressBar({
-  row, editable = false, advancing = false, onAdvance, onOpenEmail, bare = false, titleExtra = null,
+  row, editable = false, advancing = false, onAdvance, onOpenEmail, bare = false, titleExtra = null, arrival = null,
 }) {
   const currentIdx = importStepIndex(row.importStep);
   const current = importStepMeta(row.importStep);
@@ -52,11 +52,12 @@ export function FactoryProgressBar({
               className={cn(
                 CHIP_BOX,
                 'font-bold',
-                done ? 'border-transparent bg-success-bg text-success-dark' : 'border-transparent bg-info-bg text-info',
+                done && !arrival ? 'border-transparent bg-success-bg text-success-dark' : 'border-transparent bg-info-bg text-info',
               )}
             >
-              {current ? `${current.s} · ${current.label}` : (row.importStep ?? '—')}
-              {done ? ' ✓' : null}
+              {/* part of the order is in the warehouse while the rest is not: say so, not a step that reads as nothing arrived */}
+              {arrival?.mixed ? 'ถึงโกดังไม่ครบ' : arrival ? `${['ถึงโกดัง', arrival.received, '/', arrival.ordered, arrival.unit].filter((p) => p !== '' && p != null).join(' ')}${arrival.missing ? ` · ขาด ${arrival.missing}` : ''}` : current ? `${current.s} · ${current.label}` : (row.importStep ?? '—')}
+              {done && !arrival ? ' ✓' : null}
             </span>
             {/* ETA — expected arrival window, derived from the factory's lead time (issueDate + leadTimeMin/Max).
              * Read-only, shown to sales/CEO/import alike. */}
@@ -124,7 +125,7 @@ export function FactoryProgressBar({
             const dot = isDone
               ? 'h-6 w-6 bg-success text-surface'
               : isCurrent
-                ? cn('h-7 w-7 text-surface ring-4', done ? 'bg-success ring-success-bg' : 'bg-info ring-info-bg')
+                ? cn('h-7 w-7 text-surface ring-4', done && !arrival ? 'bg-success ring-success-bg' : 'bg-info ring-info-bg')
                 : 'h-6 w-6 border border-border-muted bg-surface text-text-muted';
             return (
               <li
@@ -133,7 +134,7 @@ export function FactoryProgressBar({
                 aria-current={isCurrent ? 'step' : undefined}
               >
                 <div className="flex h-7 w-full items-center">
-                  <span className={`h-0.5 flex-1 ${i === 0 ? 'bg-transparent' : (i <= currentIdx ? 'bg-success' : 'bg-border-muted')}`} />
+                  <span className={`h-0.5 flex-1 ${i === 0 ? 'bg-transparent' : (i < currentIdx || (i === currentIdx && !(done && arrival)) ? 'bg-success' : 'bg-border-muted')}`} />
                   <span className={`grid shrink-0 place-items-center rounded-full text-2xs font-extrabold ${dot}`}>
                     {i + 1}
                   </span>
@@ -142,7 +143,7 @@ export function FactoryProgressBar({
                 <span
                   className={cn(
                     'mt-2 px-1 text-xs leading-tight',
-                    isCurrent ? (done ? 'font-extrabold text-success-dark' : 'font-extrabold text-info') : isDone ? 'font-bold text-success-dark' : 'text-text-muted',
+                    isCurrent ? (done && !arrival ? 'font-extrabold text-success-dark' : 'font-extrabold text-info') : isDone ? 'font-bold text-success-dark' : 'text-text-muted',
                   )}
                 >
                   {step.label}

@@ -194,7 +194,7 @@ public class DeliveryRequestRepository {
                AND EXISTS (SELECT 1 FROM sales.delivery_request_line l WHERE l.delivery_request_id = r.delivery_request_id)
                AND NOT EXISTS (SELECT 1 FROM sales.delivery_request_line l JOIN sales.ticket_item ti ON ti.item_id = l.item_id
                                 WHERE l.delivery_request_id = r.delivery_request_id
-                                  AND LEAST(l.qty - %s, ti.qty - COALESCE(ti.qty_delivered, 0)) > 0)
+                                  AND LEAST(l.qty - %s, ti.qty - ti.qty_not_delivered - COALESCE(ti.qty_delivered, 0)) > 0)
             """.formatted(LINKED_DELIVERED), Map.of("t", ticketId), Long.class));
     }
 
@@ -268,14 +268,14 @@ public class DeliveryRequestRepository {
         return jdbc.query("""
             SELECT ti.item_id, CONCAT_WS(' ', ti.brand, ti.model, ti.color, ti.texture, ti.size) AS description,
                    'แผ่น' AS unit, ti.qty,
-                   ti.qty
+                   GREATEST(ti.qty - ti.qty_not_delivered -- a quantity marked ไม่ได้รับของ cannot go on a new round or invoice
                    - COALESCE((SELECT SUM(dri.qty) FROM sales.delivery_record_item dri
                                  JOIN sales.delivery_record dr ON dr.delivery_id = dri.delivery_id
                                 WHERE dri.item_id = ti.item_id AND dr.delivery_request_id IS NULL), 0)
                    - COALESCE((SELECT SUM(l.qty) FROM sales.delivery_request_line l
                                  JOIN sales.delivery_request r ON r.delivery_request_id = l.delivery_request_id
                                 WHERE l.item_id = ti.item_id AND r.ticket_id = ti.ticket_id
-                                  AND r.status <> 'DRAFT' AND r.delivery_request_id <> :ex), 0) AS remaining
+                                  AND r.status <> 'DRAFT' AND r.delivery_request_id <> :ex), 0), 0) AS remaining
               FROM sales.ticket_item ti
              WHERE ti.ticket_id = :t
              ORDER BY ti.sort_order, ti.item_id
@@ -287,15 +287,18 @@ public class DeliveryRequestRepository {
     public List<LineDto> lines(long id) {
         return jdbc.query("""
             SELECT l.item_id, CONCAT_WS(' ', ti.brand, ti.model, ti.color, ti.texture, ti.size) AS description,
-                   'แผ่น' AS unit, l.qty,
-                   l.qty - GREATEST(LEAST(l.qty - %s, ti.qty - COALESCE(ti.qty_delivered, 0)), 0) AS delivered
+                   'แผ่น' AS unit,
+                   -- what was marked ไม่ได้รับของ leaves the covered quantity; it never reads as delivered
+                   l.qty - GREATEST(LEAST(l.qty - %1$s, ti.qty - COALESCE(ti.qty_delivered, 0)), 0)
+                     + GREATEST(LEAST(l.qty - %1$s, ti.qty - ti.qty_not_delivered - COALESCE(ti.qty_delivered, 0)), 0) AS covered,
+                   l.qty - GREATEST(LEAST(l.qty - %1$s, ti.qty - COALESCE(ti.qty_delivered, 0)), 0) AS delivered
               FROM sales.delivery_request_line l
               JOIN sales.ticket_item ti ON ti.item_id = l.item_id
              WHERE l.delivery_request_id = :id
              ORDER BY ti.sort_order, ti.item_id
             """.formatted(LINKED_DELIVERED), Map.of("id", id),
             (rs, n) -> new LineDto(rs.getLong("item_id"), rs.getString("description"), rs.getString("unit"),
-                rs.getBigDecimal("qty"), rs.getBigDecimal("delivered")));
+                rs.getBigDecimal("covered"), rs.getBigDecimal("delivered")));
     }
 
     public List<FileDto> files(long id) {

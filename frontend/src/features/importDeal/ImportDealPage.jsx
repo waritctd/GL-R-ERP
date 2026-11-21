@@ -182,7 +182,7 @@ export function ImportDealPage({ user, showToast }) {
   // Deliberately NOT a sum of quantities: lines are in different units (ตร.ม. / กล่อง).
   const deliveryPct = items.length > 0
     ? Math.round(items.reduce((sum, item) => {
-      const ordered = Number(item.qty) || 0;
+      const ordered = (Number(item.qty) || 0) - (Number(item.qtyNotDelivered) || 0); // less what was marked not delivered
       const delivered = Number(item.qtyDelivered) || 0;
       return sum + (ordered > 0 ? Math.min(100, (delivered / ordered) * 100) : 0);
     }, 0) / items.length)
@@ -298,7 +298,7 @@ export function ImportDealPage({ user, showToast }) {
           ) : (
             <ul className="m-0 grid list-none gap-2 p-0">
               {items.map((item) => {
-                const ordered = Number(item.qty) || 0;
+                const ordered = (Number(item.qty) || 0) - (Number(item.qtyNotDelivered) || 0);
                 const delivered = Number(item.qtyDelivered) || 0;
                 const pct = ordered > 0 ? Math.min(100, Math.round((delivered / ordered) * 100)) : 0;
                 return (
@@ -310,7 +310,7 @@ export function ImportDealPage({ user, showToast }) {
                     <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5">
                       <strong className="min-w-0 text-sm">{itemTitle(item)}</strong>
                       <span className="text-xs font-bold tabular-nums text-text-secondary">
-                        ส่งแล้ว {formatQty(item.qtyDelivered ?? 0)} / {formatQty(item.qty)} แผ่น
+                        ส่งแล้ว {formatQty(item.qtyDelivered ?? 0)} / {formatQty(ordered)} แผ่น{Number(item.qtyNotDelivered) > 0 ? ` · ไม่ได้รับของ ${formatQty(item.qtyNotDelivered)}` : ''}
                       </span>
                     </div>
                     <div className="h-1.5 overflow-hidden rounded-full bg-surface-subtle" aria-hidden="true">

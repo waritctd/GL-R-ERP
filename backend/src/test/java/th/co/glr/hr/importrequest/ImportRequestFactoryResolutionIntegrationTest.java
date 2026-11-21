@@ -65,7 +65,7 @@ class ImportRequestFactoryResolutionIntegrationTest extends AbstractPostgresInte
             new th.co.glr.hr.dealquotation.DealQuotationRepository(jdbc, new th.co.glr.hr.catalog.CatalogRepository(jdbc)));
 
         service = new ImportRequestService(queries, new ImportRequestRenderer(), stored, factories,
-            tickets, ticketService, notifications);
+            tickets, ticketService, notifications, new th.co.glr.hr.importrequest.ShipmentRoundRepository(jdbc));
 
         ownerId = insertEmployee("RESOLV-OWN");
         owner = principal(ownerId, "sales");
@@ -120,6 +120,7 @@ class ImportRequestFactoryResolutionIntegrationTest extends AbstractPostgresInte
     // ── helpers ──────────────────────────────────────────────────────────────────────────────
 
     private void receiveAllSteps(long importRequestId) {
+        DraftSeed.migratedRound(jdbc, importRequestId); // receiving goes through a migrated round, never a portal one
         for (String step : List.of(ImportRequestStep.ORDERED, ImportRequestStep.PICKED_UP,
                 ImportRequestStep.IN_TRANSIT, ImportRequestStep.AWAITING_CUSTOMS, ImportRequestStep.RECEIVED)) {
             service.advanceStep(importRequestId, new AdvanceImportStepRequest(step, null, null), importUser);

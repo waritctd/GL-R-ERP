@@ -97,6 +97,9 @@ public final class TicketEventKind {
     public static final String DEAL_ON_HOLD = "DEAL_ON_HOLD";
     public static final String DEAL_DORMANT = "DEAL_DORMANT";
     public static final String DEAL_RESUMED = "DEAL_RESUMED";
+    // V240: a deal line marked not delivered (and its clearing); both are ticket_event kinds, the first is also the bell's type.
+    public static final String LINE_NOT_DELIVERED = "LINE_NOT_DELIVERED";
+    public static final String LINE_NOT_DELIVERED_CLEARED = "LINE_NOT_DELIVERED_CLEARED";
     public static final String DEAL_REOPENED = "DEAL_REOPENED";
     public static final String DEAL_QUOTATION_CANCELLED = "DEAL_QUOTATION_CANCELLED";
     public static final String DEAL_QUOTATION_DECIDED = "DEAL_QUOTATION_DECIDED";

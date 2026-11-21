@@ -1,775 +1,350 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Link } from 'react-router-dom';
+import { useMemo, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { Link, useNavigate } from 'react-router-dom';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
-import { Button } from '../../components/common/Button.jsx';
+import { Button, buttonVariants } from '../../components/common/Button.jsx';
+import { DataTable } from '../../components/common/DataTable.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
-import { Modal } from '../../components/common/Modal.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { FilterBar, PageStack, Panel } from '../../components/common/Layout.jsx';
-import { SkeletonText } from '../../components/common/Skeleton.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { cn } from '../../utils/cn.js';
 import { formatThaiDate, fulfilmentStatusLabel } from '../../utils/format.js';
-import { FactoryProgressBar } from '../importProgress/FactoryProgressBar.jsx';
-import { IMPORT_STEPS, importStepMeta } from '../importProgress/importSteps.js';
+import { AdvanceRoundSheet } from './AdvanceRoundSheet.jsx';
+import { DownloadIrButton } from './DownloadIrButton.jsx';
+import { PlanRoundSheet } from './PlanRoundSheet.jsx';
+import {
+  formatQty, irRows, lotProduct, lotWho, lotWhoSub, roundIrSummary, roundSubline, roundSummaryLine, roundTitle, STEP_CHIPS, stepPillText, stepTone, waitingFactories,
+} from './shipmentRounds.js';
+import { useRoundUndo } from './useRoundUndo.jsx';
 
-// Spec 2026-11-15 §7.11 item 3 (design a-fulfil): this page is the ONE place a factory step is advanced, and an
-// advance is reversible for this long through POST .../advance-step/undo (V216; the server enforces the same 30 s,
-// actor-only and step-unchanged rules). An advance to RECEIVED is not offered: it completes the shipment and may roll
-// the deal up, which the undo endpoint refuses.
-export const STEP_UNDO_WINDOW_MS = 30_000;
-
-// Announced politely (role=status, aria-live) and focused on its เลิกทำ when it appears, so a keyboard or
-// screen-reader user can reach the undo inside its window; the page hands focus back when it closes.
-function StepUndoSnackbar({ undo, busy, onUndo }) {
-  const buttonRef = useRef(null);
-  useEffect(() => { buttonRef.current?.focus(); }, [undo.key]);
-  return (
-    <div
-      role="status"
-      aria-live="polite"
-      data-testid="step-undo-snackbar"
-      className="fixed inset-x-4 bottom-4 z-40 mx-auto flex max-w-xl flex-wrap items-center justify-between gap-x-4 gap-y-1 rounded-md bg-text px-4 py-3 text-sm text-surface shadow-lg"
-    >
-      <span className="min-w-0 [overflow-wrap:anywhere]">
-        เลื่อนเป็น “{undo.label}”{undo.docNumber ? ` · ${undo.docNumber}` : ''}
-      </span>
-      <button
-        ref={buttonRef}
-        type="button"
-        disabled={busy}
-        onClick={onUndo}
-        className="min-h-9 shrink-0 cursor-pointer rounded-md border-0 bg-transparent px-2 font-bold text-surface underline disabled:opacity-60 mobile:min-h-11"
-      >
-        เลิกทำ
-      </button>
-    </div>
-  );
-}
+// Whole literals (Tailwind JIT), one track per column: the waiting table has 6 (ND1), the rounds table 7.
+const WAITING_GRID = 'grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)_minmax(0,1.6fr)_minmax(0,1.4fr)_minmax(0,0.9fr)_minmax(0,1fr)]';
+const ROUNDS_GRID = 'grid-cols-[minmax(0,1.5fr)_minmax(0,1.1fr)_minmax(0,0.9fr)_minmax(0,0.8fr)_minmax(0,0.8fr)_minmax(0,1.1fr)_minmax(15rem,1.3fr)]';
 
 /**
- * งานนำเข้า — Import's cross-deal fulfilment worklist, tracking per FACTORY (see
- * .design/import-fulfilment/INFORMATION_ARCHITECTURE.md §11).
- *
- * It runs on `api.storedImportRequests` (the V154 `sales.import_request` aggregate: one row per
- * (deal, FACTORY)) and its six step codes (CONTACTED/ORDERED/PICKED_UP/IN_TRANSIT/AWAITING_CUSTOMS/
- * RECEIVED — importSteps.js; see its header). The unit is a FACTORY SHIPMENT (one stored ใบขอซื้อ
- * row) at one of six steps, not a deal at a deal-level `fulfillment_status`: a tracked deal's
- * fulfillment_status stays `IR_ISSUED` from its first factory's issue until every factory reaches
- * RECEIVED, so deal-level bucketing would mislabel it and then drop it the moment the rollup set
- * GOODS_RECEIVED (importActions.js's irTracked awareness handles the same case).
- *
- * This is "the room", not "a door": Import advances work here without opening N deal pages. Each
- * shipment renders as the same {@link FactoryProgressBar} used on the deal page's per-factory
- * cards, so the two surfaces read identically; import/ceo advance a step, edit lead time, and
- * manage the order email in place.
- *
- * A deal stays here while ANY of its ISSUED factory rows is < RECEIVED. When every factory is
- * received the deal rolls up to GOODS_RECEIVED (server-side) and drops into a collapsed "รับครบแล้ว ·
- * รอส่งมอบ" group at the foot, rather than disappearing, so the handoff to Sales's delivery step
- * reads as a handoff, never as a lost row. Delivery itself is NOT here: it is Sales's, on the
- * deal's จัดซื้อ-ส่งมอบ tab.
- *
- * NO CROSS-DEAL LIST ENDPOINT EXISTS for the stored aggregate (only per-ticket
- * `GET /tickets/{id}/import-requests` and per-row `GET /import-requests/{id}`), so this page reads
- * the deal list (already role-scoped server-side) and fetches each CANDIDATE deal's stored rows in
- * parallel (`useQueries`), where a candidate is any deal whose deal-level `fulfillmentStatus` is
- * non-null and not FROM_STOCK/FULLY_DELIVERED (see the `candidateIds` filter below). The FETCH is
- * wider than what gets SHOWN: once each candidate's rows come back they are classified —
- *
- *   - has ISSUED rows           -> tracked (an active card, or the done group once every
- *                                  required factory is RECEIVED — see `allReceived` below)
- *   - IR_ISSUED/IR_SENT/SHIPPING with NO rows -> the legacy section (pre-V184 chain still
- *                                  reachable at the deal page)
- *   - GOODS_RECEIVED/PARTIALLY_DELIVERED with NO rows -> dropped entirely. Zero stored rows at
- *     either status means pure stock (FROM_STOCK, or a stock-only mixed deal): there is no
- *     per-factory import work here to show or link to.
- *
- * This is an N+1 fetch bounded by the deal list's own role scope, acceptable for import's worklist
- * size; a real cross-deal endpoint would be a backend change.
+ * การขนส่ง — import's queue of SHIPMENT ROUNDS (N01 on a phone, ND1 from desktop width). A round is one factory shipment;
+ * advancing it moves every IR on it. ISSUED IRs with quantity on no round wait in "รอจัดรอบขนส่ง" (planning a round
+ * comes in a later slice). One request feeds the page (GET /api/shipment-rounds); the IR-level actions (lead time,
+ * order email, PDFs) live on each IR's own page, which every IR row links to.
  */
-
-function receivedCount(rows) {
-  return rows.filter((r) => r.importStep === 'RECEIVED').length;
-}
-
-function LeadTimeInline({ row, editable, onSave, saving, showToast }) {
-  const [open, setOpen] = useState(false);
-  const [min, setMin] = useState(row.leadTimeMinDays ?? '');
-  const [max, setMax] = useState(row.leadTimeMaxDays ?? '');
-  if (!open) {
-    return (
-      <span className="flex flex-wrap items-center gap-1.5 text-2xs text-text-muted">
-        {row.leadTimeMinDays != null ? `ระยะเวลานำเข้า ${row.leadTimeMinDays}–${row.leadTimeMaxDays} วัน` : 'ยังไม่ระบุระยะเวลานำเข้า'}
-        {row.expectedArrivalFrom ? ` · คาดถึง ${formatThaiDate(row.expectedArrivalFrom)} – ${formatThaiDate(row.expectedArrivalTo)}` : ''}
-        {editable ? (
-          <Button type="button" variant="text" onClick={() => setOpen(true)} data-testid={`lead-time-edit-${row.id}`}>แก้ไข</Button>
-        ) : null}
-      </span>
-    );
-  }
-  // A blank/invalid value must show a VALIDATION message, not silently submit a 0/NaN that
-  // the server would 400 on (SetLeadTimeRequest requires both fields, 1-365).
-  function handleSave() {
-    if (min === '' || max === '') {
-      showToast?.('error', 'กรุณาระบุระยะเวลานำเข้า (วัน) ทั้งค่าต่ำสุดและสูงสุด');
-      return;
-    }
-    const minN = Number(min);
-    const maxN = Number(max);
-    if (!Number.isInteger(minN) || !Number.isInteger(maxN) || minN < 1 || maxN < 1 || minN > maxN) {
-      showToast?.('error', 'ระยะเวลานำเข้าไม่ถูกต้อง — ต่ำสุดต้องไม่เกินสูงสุด และอยู่ระหว่าง 1-365 วัน');
-      return;
-    }
-    // Stay OPEN on a 400 (or any failure): onSave returns the mutation's own promise
-    // (mutateAsync), so this only closes once the server actually accepted it, rather than hiding
-    // a rejected save behind an editor that had already vanished.
-    Promise.resolve(onSave(row.id, { leadTimeMinDays: minN, leadTimeMaxDays: maxN }))
-      .then(() => setOpen(false))
-      .catch(() => {});
-  }
-  return (
-    <span className="flex flex-wrap items-center gap-1.5 text-2xs">
-      <input type="number" min="1" max="365" className="w-16" value={min} onChange={(e) => setMin(e.target.value)} aria-label="ระยะเวลานำเข้าต่ำสุด (วัน)" />
-      <span>–</span>
-      <input type="number" min="1" max="365" className="w-16" value={max} onChange={(e) => setMax(e.target.value)} aria-label="ระยะเวลานำเข้าสูงสุด (วัน)" />
-      <span>วัน</span>
-      <Button type="button" size="sm" variant="secondary" disabled={saving}
-        onClick={handleSave}
-        data-testid={`lead-time-save-${row.id}`}>
-        บันทึก
-      </Button>
-      <Button type="button" size="sm" variant="text" onClick={() => setOpen(false)}>ยกเลิก</Button>
-    </span>
-  );
-}
-
 export function ImportFulfilmentPage({ user, showToast }) {
   const queryClient = useQueryClient();
-  // Nav-gated to import/ceo; anyone here may advance. A read-only viewer (should one ever reach it) still gets
-  // the bars, just without the controls.
   const editable = user?.role === 'import' || user?.role === 'ceo';
-  const [stepFilter, setStepFilter] = useState('ALL');
+  const [chip, setChip] = useState('ALL');
   const [search, setSearch] = useState('');
-  const [emailRow, setEmailRow] = useState(null);
-  // The latest advance that can still be undone: { rowId, ticketId, targetStep, label, docNumber, key }.
-  const [undo, setUndo] = useState(null);
-  // Closes when the SERVER's window does: the advance answers with undoUntil (server time, review LOW); the 30 s
-  // constant is only the fallback for a response without it.
-  useEffect(() => {
-    if (!undo) return undefined;
-    const until = undo.undoUntil ? Date.parse(undo.undoUntil) : NaN;
-    const ms = Number.isFinite(until) ? Math.max(0, until - Date.now()) : STEP_UNDO_WINDOW_MS;
-    const timer = setTimeout(() => setUndo((cur) => (cur?.key === undo.key ? null : cur)), ms);
-    return () => clearTimeout(timer);
-  }, [undo]);
-  // Focus goes back where it was before the snackbar took it (the advance button), if that is still on the page.
-  const focusBeforeUndo = useRef(null);
-  const closingUndo = useRef(false);
-  useEffect(() => {
-    if (undo) { closingUndo.current = true; return; }
-    if (closingUndo.current && focusBeforeUndo.current?.isConnected) focusBeforeUndo.current.focus();
-    closingUndo.current = false;
-  }, [undo]);
-  // Field names MUST be emailTo/emailSubject/emailBody, matching Java's UpdateEmailDraftRequest
-  // exactly — see ImportRequestFactoryCard.jsx's comment on the failure mode (`to`/`subject`/`body`
-  // silently dropped, old value kept, 200 OK).
-  const [emailDraft, setEmailDraft] = useState({ emailTo: '', emailSubject: '', emailBody: '' });
+  const [advancing, setAdvancing] = useState(null);
+  const [planning, setPlanning] = useState(false);
+  const navigate = useNavigate();
+  const undo = useRoundUndo({ showToast });
 
+  const listQuery = useQuery({
+    queryKey: queryKeys.shipmentRounds(),
+    queryFn: () => api.shipmentRounds.list(),
+  });
+  // The legacy section: deals still on the pre-V184 chain (IR_ISSUED / IR_SENT / SHIPPING) with no stored IR row. The deal
+  // list is ONE request (no per-deal fan-out); a deal whose IRs sit on a round or wait for one is not legacy, so those
+  // ticket ids come from the rounds response itself.
   const ticketsQuery = useQuery({
     queryKey: queryKeys.ticketList(''),
     queryFn: () => api.tickets.list({}).then((r) => r?.tickets ?? []),
   });
-  const tickets = useMemo(() => ticketsQuery.data ?? [], [ticketsQuery.data]);
-  // See this file's header for why this is a bounded N+1 rather than one cross-deal call.
-  //
-  // Any non-null status except FROM_STOCK (never touches import at all) and FULLY_DELIVERED
-  // (delivery is done; see this file's header for why delivery itself stays off this page).
-  // Widened beyond IR_ISSUED/GOODS_RECEIVED so a PARTIALLY_DELIVERED mixed stock+import deal
-  // (still has factories mid-transit) and every legacy IR_SENT/SHIPPING deal (the pre-V184 chain,
-  // still reachable via the deal page's own legacy buttons) are not dropped from Import's
-  // worklist. A candidate with no stored ISSUED row renders in the `deals` builder's
-  // `legacyDeals` branch ONLY when it is still on the pre-V184 IR_ISSUED/IR_SENT/SHIPPING chain;
-  // a GOODS_RECEIVED/PARTIALLY_DELIVERED candidate with no rows reached that status through pure
-  // stock and is dropped there instead (see that branch's comment and this file's header).
-  const candidateIds = useMemo(() => tickets
-    .filter((t) => t.fulfillmentStatus != null
-      && t.fulfillmentStatus !== 'FROM_STOCK'
-      && t.fulfillmentStatus !== 'FULLY_DELIVERED')
-    .map((t) => t.id), [tickets]);
-  const ticketsById = useMemo(() => new Map(tickets.map((t) => [t.id, t])), [tickets]);
+  const rounds = useMemo(() => listQuery.data?.rounds ?? [], [listQuery.data]);
+  const waiting = useMemo(() => listQuery.data?.waiting ?? [], [listQuery.data]);
 
-  const rowsQueries = useQueries({
-    queries: candidateIds.map((ticketId) => ({
-      queryKey: queryKeys.storedImportRequests(ticketId),
-      queryFn: () => api.storedImportRequests.listForTicket(ticketId).then((r) => r?.importRequests ?? []),
-    })),
-  });
-  const rowsLoading = ticketsQuery.isLoading || (candidateIds.length > 0 && rowsQueries.some((q) => q.isLoading));
+  const counts = useMemo(() => {
+    const c = { ALL: rounds.length + waiting.length, WAITING: waiting.length };
+    rounds.forEach((r) => { c[r.importStep] = (c[r.importStep] ?? 0) + 1; });
+    return c;
+  }, [rounds, waiting]);
 
-  const invalidateAfterAdvance = useCallback((ticketId) => {
-    queryClient.invalidateQueries({ queryKey: queryKeys.storedImportRequests(ticketId) });
-    // Import's per-deal page (ImportDealPage) shows these same rows from its own query key.
-    queryClient.invalidateQueries({ queryKey: queryKeys.importDeal(ticketId) });
-    queryClient.invalidateQueries({ queryKey: queryKeys.ticketDetail(ticketId) });
-    queryClient.invalidateQueries({ queryKey: queryKeys.ticketActions(ticketId) });
-    queryClient.invalidateQueries({ queryKey: ['tickets', 'list'] });
-    queryClient.invalidateQueries({ queryKey: queryKeys.dashboardSummary() });
-    queryClient.invalidateQueries({ queryKey: queryKeys.notifications() });
-  }, [queryClient]);
+  const term = search.trim().toLowerCase();
+  const legacyDeals = useMemo(() => {
+    const tracked = new Set([...rounds.flatMap((r) => r.lots.map((l) => l.ticketId)), ...waiting.map((w) => w.ticketId)].filter((id) => id != null));
+    return (ticketsQuery.data ?? [])
+      .filter((t) => ['IR_ISSUED', 'IR_SENT', 'SHIPPING'].includes(t.fulfillmentStatus) && !tracked.has(t.id))
+      .filter((t) => !term || [t.customerName, t.code, t.projectName, t.title].some((f) => (f ?? '').toLowerCase().includes(term)))
+      .sort((a, b) => (a.overdue === b.overdue ? 0 : a.overdue ? -1 : 1)
+        || (a.customerName ?? a.code ?? '').localeCompare(b.customerName ?? b.code ?? '', 'th'));
+  }, [ticketsQuery.data, rounds, waiting, term]);
+  const visibleWaiting = useMemo(() => (chip === 'ALL' || chip === 'WAITING' ? waiting : [])
+    .filter((w) => !term || [w.factoryName, w.docNumber, w.ticketCode, w.customerName, w.projectName]
+      .some((f) => (f ?? '').toLowerCase().includes(term))), [waiting, chip, term]);
+  const visibleRounds = useMemo(() => rounds
+    .filter((r) => chip === 'ALL' || chip === r.importStep)
+    .filter((r) => !term || [roundTitle(r), r.facts?.vessel, r.facts?.proformaNo, r.facts?.invoiceNo, ...(r.documents ?? []).map((d) => d.docNo),
+      ...r.lots.flatMap((l) => [l.docNumber, l.ticketCode, l.customerName, l.projectName])]
+      .some((f) => (f ?? '').toLowerCase().includes(term))), [rounds, chip, term]);
 
-  const advance = useMutation({
-    mutationFn: ({ rowId, targetStep }) => api.storedImportRequests.advanceStep(rowId, { targetStep }),
-    // The completion toast is keyed on a FRESH read taken after the advance lands, not a
-    // CLIENT-side guess (`deal.rows.every(...)` against state that predates the advance's
-    // server-side rollup). A guess is wrong whenever the rollup declines to complete (a required
-    // factory never issued, so not in the loaded row set -- mirrors mockApi's S3 fix in
-    // mockApi.storedImportRequestRollup.test.js), and can NEVER be right for a PARTIALLY_DELIVERED
-    // deal: TicketService#applyImportRequestRollup (backend/.../TicketService.java ~942-948)
-    // writes only the GOODS_RECEIVED EVENT for that status, never fulfillment_status itself. Only
-    // worth taking when the row could have completed the deal (targetStep RECEIVED).
-    onSuccess: async (data, { rowId, ticketId, targetStep, docNumber, focusFrom }) => {
-      invalidateAfterAdvance(ticketId);
-      if (targetStep !== 'RECEIVED') {
-        // The snackbar IS the confirmation here; it replaces the toast.
-        focusBeforeUndo.current = focusFrom ?? null;
-        setUndo({
-          rowId, ticketId, targetStep, docNumber, undoUntil: data?.undoUntil ?? null,
-          label: importStepMeta(targetStep)?.label ?? targetStep,
-          key: `${rowId}:${targetStep}:${Date.now()}`,
-        });
-        return;
-      }
-      let completesDeal = false;
-      if (targetStep === 'RECEIVED') {
-        try {
-          // importDeals.get, not tickets.get: TicketService#get refuses role import (RC-02).
-          const { deal: freshDeal } = await api.importDeals.get(ticketId);
-          const fs = freshDeal?.fulfillmentStatus;
-          if (fs === 'GOODS_RECEIVED') {
-            completesDeal = true;
-          } else if (fs === 'PARTIALLY_DELIVERED') {
-            // A factory still in DRAFT means the server's allFactoriesReceived declined the rollup.
-            const all = freshDeal?.importRequests ?? [];
-            const issued = all.filter((r) => r.status === 'ISSUED');
-            completesDeal = issued.length > 0 && issued.every((r) => r.importStep === 'RECEIVED')
-              && !all.some((r) => r.status === 'DRAFT');
-          }
-        } catch {
-          // A failed confirmation read must not claim completion — fall through to the ordinary toast, same as "not
-          // GOODS_RECEIVED" would.
-          completesDeal = false;
-        }
-      }
-      showToast?.('success', completesDeal
-        ? 'รับครบทุกโรงงาน — ส่งต่อฝ่ายขายเพื่อส่งมอบ'
-        : 'อัปเดตสถานะรายโรงงานแล้ว');
+  const waitingColumns = [
+    { key: 'factory', header: 'โรงงาน', render: (w) => <b>{w.factoryName}</b> },
+    {
+      key: 'ir',
+      header: 'ใบขอซื้อ',
+      render: (w) => (w.ticketId == null ? <code>{w.docNumber}</code> : <Link to={`/import/deals/${w.ticketId}`} className="text-info underline"><code>{w.docNumber}</code></Link>),
     },
-    onError: (e) => showToast?.('error', e?.message ?? 'อัปเดตไม่สำเร็จ'),
-  });
-  const undoStep = useMutation({
-    mutationFn: ({ rowId, targetStep }) => api.storedImportRequests.undoStep(rowId, { expectedStep: targetStep }),
-    onSuccess: (_d, { ticketId }) => {
-      invalidateAfterAdvance(ticketId);
-      setUndo(null);
-      showToast?.('success', 'เลิกทำการเลื่อนขั้นตอนแล้ว');
+    {
+      key: 'who',
+      header: 'โครงการ / ลูกค้า',
+      render: (w) => (
+        <span className="flex flex-col gap-0.5">
+          <span className="text-sm font-bold">{lotWho(w)}</span>
+          <span className="text-2xs text-text-muted">{lotWhoSub(w)}</span>
+        </span>
+      ),
     },
-    onError: (e) => {
-      setUndo(null);
-      showToast?.('error', e?.message ?? 'เลิกทำไม่สำเร็จ');
+    { key: 'items', header: 'สินค้า', render: (w) => <span className="text-sm">{w.lines.map((l) => lotProduct(l)).join(', ')}</span> },
+    {
+      key: 'remaining',
+      header: 'ยังไม่จัดรอบ',
+      render: (w) => <span className="tabular-nums font-bold">{w.lines.length > 1 ? `${w.lines.length} รายการ` : `${formatQty(w.lines[0].remainingQty)} ${w.lines[0].unit ?? ''}`}</span>,
     },
-  });
-  const setLeadTime = useMutation({
-    mutationFn: ({ rowId, payload }) => api.storedImportRequests.setLeadTime(rowId, payload),
-    onSuccess: (_d, { ticketId }) => { invalidateAfterAdvance(ticketId); showToast?.('success', 'บันทึกระยะเวลานำเข้าแล้ว'); },
-    onError: (e) => showToast?.('error', e?.message ?? 'บันทึกไม่สำเร็จ'),
-  });
-  const saveEmail = useMutation({
-    mutationFn: ({ rowId, payload }) => api.storedImportRequests.updateEmailDraft(rowId, payload),
-    onSuccess: (_d, { ticketId }) => { invalidateAfterAdvance(ticketId); showToast?.('success', 'บันทึกอีเมลแล้ว'); setEmailRow(null); },
-    onError: (e) => showToast?.('error', e?.message ?? 'บันทึกไม่สำเร็จ'),
-  });
-  const markSent = useMutation({
-    mutationFn: ({ rowId, ticketId }) => api.storedImportRequests.markEmailSent(rowId).then((res) => ({ res, ticketId })),
-    onSuccess: ({ ticketId }) => { invalidateAfterAdvance(ticketId); showToast?.('success', 'บันทึกว่าส่งอีเมลแล้ว'); setEmailRow(null); },
-    onError: (e) => showToast?.('error', e?.message ?? 'บันทึกไม่สำเร็จ'),
-  });
-  const downloadPdf = useMutation({
-    mutationFn: ({ rowId, copy, row }) => api.storedImportRequests.download(rowId, copy).then((blob) => ({ blob, copy, row })),
-    onSuccess: ({ blob, copy, row }) => {
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `IR-${row.docNumber ?? `draft-${row.id}`}-${row.factoryName}${copy === 'factory' ? '' : '-internal'}.pdf`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
+    {
+      key: 'status',
+      header: 'สถานะ',
+      render: (w) => (
+        <span className="flex flex-col items-start gap-1">
+          <StatusBadge tone="warning">รอจัดรอบ</StatusBadge>
+          {w.ticketId == null ? <DownloadIrButton importRequestId={w.importRequestId} docNumber={w.docNumber} factoryName={w.factoryName} showToast={showToast} /> : null}
+        </span>
+      ),
     },
-    onError: (e) => showToast?.('error', e?.message ?? 'ดาวน์โหลดไม่สำเร็จ'),
-  });
+  ];
 
-  // Group the flat rows (per candidate ticket) into one entry per deal. Three outcomes per
-  // candidate: a fetch ERROR is its own bucket (erroredDeals), never collapsed into "nothing to
-  // track"; a candidate with zero ISSUED rows (legacyDeals) is shown rather than dropped (see the
-  // comment above the candidateIds filter).
-  const { deals, legacyDeals, erroredDeals } = useMemo(() => {
-    const tracked = [];
-    const legacy = [];
-    const errored = [];
-    candidateIds.forEach((ticketId, i) => {
-      const query = rowsQueries[i];
-      const ticket = ticketsById.get(ticketId);
-      if (query?.isError) {
-        errored.push({
-          ticketId,
-          ticketCode: ticket?.code,
-          customerName: ticket?.customerName ?? null,
-          title: ticket?.title ?? null,
-          message: query.error?.message ?? 'โหลดใบขอซื้อของงานนี้ไม่สำเร็จ',
-        });
-        return;
-      }
-      const factoryRows = query?.data ?? [];
-      // Only ISSUED rows are shipments this page tracks — a stray DRAFT (e.g. mid-creation on the deal page) is not
-      // this worklist's concern.
-      const issuedRows = factoryRows.filter((r) => r.status === 'ISSUED');
-      if (issuedRows.length === 0) {
-        // The legacy section is for the pre-V184 chain only — IR_ISSUED/IR_SENT/SHIPPING
-        // candidates with nothing stored yet, still actionable at the deal page. A
-        // GOODS_RECEIVED/PARTIALLY_DELIVERED candidate with zero stored rows reached that status
-        // through pure stock (FROM_STOCK, or a stock-only mixed deal) or finished the pre-V184
-        // chain via the deal-page buttons; either way there is no per-factory import work to show
-        // or link to, so it is dropped (see this file's header).
-        const fs = ticket?.fulfillmentStatus ?? null;
-        if (fs === 'IR_ISSUED' || fs === 'IR_SENT' || fs === 'SHIPPING') {
-          legacy.push({
-            ticketId,
-            ticketCode: ticket?.code,
-            customerName: ticket?.customerName ?? null,
-            projectName: ticket?.projectName ?? null,
-            title: ticket?.title ?? null,
-            fulfillmentStatus: fs,
-            overdue: Boolean(ticket?.overdue),
-          });
-        }
-        return;
-      }
-      const rows = [...issuedRows].sort((a, b) => (a.factoryName ?? '').localeCompare(b.factoryName ?? '', 'th'));
-      const received = receivedCount(rows);
-      tracked.push({
-        ticketId,
-        ticketCode: ticket?.code ?? rows[0].ticketCode,
-        customerName: ticket?.customerName ?? null,
-        projectName: ticket?.projectName ?? null,
-        title: ticket?.title ?? null,
-        dueDate: ticket?.dueDate ?? null,
-        overdue: Boolean(ticket?.overdue),
-        rows,
-        received,
-        total: rows.length,
-        // For GOODS_RECEIVED, keyed on the DEAL's own server-computed rollup
-        // (ticket.fulfillmentStatus), NOT "every ISSUED row I can see is RECEIVED": a deal can have
-        // a factory still in DRAFT (not counted in `rows`), so a row-only check would collapse an
-        // incomplete deal into the done group ahead of ImportRequestService#applyImportRequestRollup
-        // saying so server-side.
-        //
-        // PARTIALLY_DELIVERED (mixed stock+import) is the one status that check cannot cover:
-        // TicketService#applyImportRequestRollup (backend/.../TicketService.java ~942-948) writes
-        // ONLY the GOODS_RECEIVED event for it, never fulfillment_status, so a delivery already
-        // under way is not disturbed. With no server rollup to key on, it falls back to the
-        // row-only check: every ISSUED row here is RECEIVED (`received === rows.length`, both
-        // computed just above).
-        allReceived: ticket?.fulfillmentStatus === 'GOODS_RECEIVED'
-          || (ticket?.fulfillmentStatus === 'PARTIALLY_DELIVERED' && received === rows.length
-            // A factory still in DRAFT is not received: Java's allFactoriesReceived requires every required factory to
-            // have an ISSUED row. (A required factory with no row at all is not visible to this list — the deal page shows
-            // it.)
-            && !factoryRows.some((r) => r.status === 'DRAFT')),
-      });
-    });
-    return { deals: tracked, legacyDeals: legacy, erroredDeals: errored };
-  }, [candidateIds, rowsQueries, ticketsById]);
+  const openAdvance = (round) => setAdvancing(round);
+  const roundActions = (round) => (
+    <span className="flex flex-wrap items-center justify-end gap-2 min-[1041px]:flex-nowrap min-[1041px]:whitespace-nowrap">
+      <Link to={`/fulfilment/rounds/${round.id}`} className={cn(buttonVariants({ variant: 'secondary', size: 'sm' }), 'no-underline')}>รายละเอียด</Link>
+      {editable && round.importStep !== 'RECEIVED' ? (
+        <Button type="button" size="sm" variant="secondary" onClick={() => openAdvance(round)} data-testid={`round-advance-${round.id}`}>เลื่อนขั้นตอน</Button>
+      ) : null}
+    </span>
+  );
+  const roundColumns = [
+    {
+      key: 'round',
+      header: 'รอบ',
+      render: (r) => (
+        <span className="flex flex-col gap-0.5">
+          <Link to={`/fulfilment/rounds/${r.id}`} className="text-sm font-bold text-text underline">{roundTitle(r)}</Link>
+          <span className="text-2xs text-text-muted">{roundSubline(r)}</span>
+        </span>
+      ),
+    },
+    { key: 'step', header: 'ขั้นตอน', render: (r) => <StatusBadge tone={stepTone(r.importStep)}>{stepPillText(r.importStep)}</StatusBadge> },
+    { key: 'vessel', header: 'เรือ', render: (r) => r.facts?.vessel || '-' },
+    { key: 'etd', header: 'เรือออก', render: (r) => <span className="whitespace-nowrap">{formatThaiDate(r.facts?.etdActualOn)}</span> },
+    { key: 'eta', header: 'คาดว่าถึง', render: (r) => <span className="whitespace-nowrap">{formatThaiDate(r.facts?.etaOn)}</span> },
+    {
+      key: 'irs',
+      header: 'ใบขอซื้อในรอบ',
+      render: (r) => {
+        const sum = roundIrSummary(r);
+        return (
+          <span className="flex flex-col gap-0.5">
+            <span className="text-sm font-bold">{sum.head}</span>
+            <span className="text-2xs text-text-muted">{sum.mix}</span>
+          </span>
+        );
+      },
+    },
+    { key: 'actions', header: '', render: roundActions },
+  ];
 
-  const activeDeals = useMemo(() => deals.filter((d) => !d.allReceived), [deals]);
-  const doneDeals = useMemo(() => deals.filter((d) => d.allReceived), [deals]);
+  const waitingCard = (w) => (
+    <div className="flex items-start justify-between gap-3 rounded-md border border-border bg-surface p-3" data-testid="waiting-card">
+      <span className="flex min-w-0 flex-col gap-0.5">
+        <b className="text-sm">{w.factoryName}</b>
+        <small className="text-text-muted">
+          {w.ticketId == null ? <code>{w.docNumber}</code> : <Link to={`/import/deals/${w.ticketId}`} className="text-info underline"><code>{w.docNumber}</code></Link>}
+          {' · '}{lotWho(w)} · เหลือ {w.lines.map((l) => `${formatQty(l.remainingQty)} ${l.unit ?? ''}`.trim()).join(', ')}
+        </small>
+      </span>
+      <span className="flex shrink-0 flex-col items-end gap-1">
+        <StatusBadge tone="warning">รอจัดรอบ</StatusBadge>
+        {w.ticketId == null ? <DownloadIrButton importRequestId={w.importRequestId} docNumber={w.docNumber} factoryName={w.factoryName} showToast={showToast} /> : null}
+      </span>
+    </div>
+  );
+  const roundCard = (r) => (
+    <div className="flex flex-col gap-2 rounded-md border border-border bg-surface p-3" data-testid="round-card" data-round-id={r.id}>
+      <b className="text-sm">{roundTitle(r)}</b>
+      <span className="flex flex-wrap items-center gap-2"><StatusBadge tone={stepTone(r.importStep)}>{stepPillText(r.importStep)}</StatusBadge></span>
+      {roundSummaryLine(r) ? <p className="m-0 text-xs text-text-muted">{roundSummaryLine(r)}</p> : null}
+      <ul className="m-0 flex list-none flex-col gap-1 border-t border-border-subtle p-0 pt-2">
+        {irRows(r).map((row) => (
+          <li key={row.key} className="flex items-start justify-between gap-3 text-sm" data-testid="round-ir-row">
+            <span className="flex min-w-0 flex-col">
+              <b>{row.who}</b>
+              <small className="text-text-muted"><code>{row.docNumber}</code> · {row.lotText}</small>
+            </span>
+            <span className="shrink-0 font-bold tabular-nums">{row.qtyText}</span>
+          </li>
+        ))}
+      </ul>
+      <div className="border-t border-border-subtle pt-2">{roundActions(r)}</div>
+    </div>
+  );
 
-  const stepCounts = useMemo(() => {
-    const counts = { ALL: 0 };
-    IMPORT_STEPS.forEach((s) => { counts[s.code] = 0; });
-    activeDeals.forEach((deal) => deal.rows.forEach((row) => {
-      counts.ALL += 1;
-      if (counts[row.importStep] != null) counts[row.importStep] += 1;
-    }));
-    return counts;
-  }, [activeDeals]);
-
-  const visibleActive = useMemo(() => {
-    const term = search.trim().toLowerCase();
-    return activeDeals
-      .filter((d) => !term || [d.customerName, d.ticketCode, d.projectName, d.title]
-        .some((f) => (f ?? '').toLowerCase().includes(term)))
-      .filter((d) => stepFilter === 'ALL' || d.rows.some((r) => r.importStep === stepFilter))
-      .sort((a, b) => {
-        if (a.overdue !== b.overdue) return a.overdue ? -1 : 1;
-        return (a.customerName ?? a.ticketCode ?? '').localeCompare(b.customerName ?? b.ticketCode ?? '', 'th');
-      });
-  }, [activeDeals, stepFilter, search]);
-
-  const visibleLegacy = useMemo(() => {
-    const term = search.trim().toLowerCase();
-    return legacyDeals
-      .filter((d) => !term || [d.customerName, d.ticketCode, d.projectName, d.title]
-        .some((f) => (f ?? '').toLowerCase().includes(term)))
-      .sort((a, b) => {
-        if (a.overdue !== b.overdue) return a.overdue ? -1 : 1;
-        return (a.customerName ?? a.ticketCode ?? '').localeCompare(b.customerName ?? b.ticketCode ?? '', 'th');
-      });
-  }, [legacyDeals, search]);
-
-  const isLoading = rowsLoading;
-  const nothingAtAll = !isLoading && !ticketsQuery.isError
-    && deals.length === 0 && legacyDeals.length === 0 && erroredDeals.length === 0;
-
-  const filterOptions = [{ key: 'ALL', label: 'ทั้งหมด' },
-    ...IMPORT_STEPS.map((s) => ({ key: s.code, label: s.label }))];
-
-  function openEmail(row) {
-    setEmailRow(row);
-    setEmailDraft({ emailTo: row.emailTo ?? '', emailSubject: row.emailSubject ?? '', emailBody: row.emailBody ?? '' });
-  }
-
+  const nothing = !listQuery.isLoading && !listQuery.isError && !ticketsQuery.isLoading && !ticketsQuery.isError && rounds.length === 0 && waiting.length === 0
+    && (ticketsQuery.data ?? []).every((t) => !['IR_ISSUED', 'IR_SENT', 'SHIPPING'].includes(t.fulfillmentStatus));
   return (
     <PageStack>
       <PageHeader
         title="การขนส่ง"
-        subtitle="ที่เดียวที่เลื่อนขั้นตอนการนำเข้าได้ — ส่ง IR ให้จัดซื้อ → สั่งซื้อผู้ผลิต → ขนส่งรับของ → กำลังเดินทาง → ถึงไทย รอออกของ → ถึงโกดัง · ฝ่ายขายเห็นขั้นตอนเดียวกันในหน้ารายละเอียดงาน (ดูอย่างเดียว)"
+        subtitle="เลื่อนขั้นตอนทีละรอบขนส่ง · ทุกใบขอซื้อในรอบขยับพร้อมกัน · หนึ่งใบขอซื้อแบ่งไปได้หลายรอบ"
         actions={(
-          <Button
-            type="button"
-            variant="icon"
-            onClick={() => {
-              candidateIds.forEach((id) => queryClient.invalidateQueries({ queryKey: queryKeys.storedImportRequests(id) }));
-              queryClient.invalidateQueries({ queryKey: ['tickets', 'list'] });
-            }}
-            title="รีเฟรช"
-            aria-label="รีเฟรช"
-          >
-            <Icon name="refresh" />
-          </Button>
+          <>
+            {editable && waitingFactories(waiting).length > 0 ? (
+              <Button type="button" variant="primary" className="hidden min-[1041px]:inline-flex" onClick={() => setPlanning(true)} data-testid="plan-round-header">
+                + จัดรอบขนส่ง
+              </Button>
+            ) : null}
+            <Button type="button" variant="icon" onClick={() => queryClient.invalidateQueries({ queryKey: queryKeys.shipmentRounds() })} title="รีเฟรช" aria-label="รีเฟรช">
+              <Icon name="refresh" />
+            </Button>
+          </>
         )}
       />
 
       <FilterBar>
-        <span className="text-2xs font-extrabold uppercase tracking-wide text-text-muted">ขั้นตอน</span>
-        {filterOptions.map((option) => {
-          const active = stepFilter === option.key;
-          return (
-            <button
-              key={option.key}
-              type="button"
-              aria-pressed={active}
-              className={cn(
-                'inline-flex min-h-8 items-center gap-1.5 rounded-full border px-3 text-xs font-bold',
-                active ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-surface text-text hover:bg-surface-hover',
-              )}
-              onClick={() => setStepFilter(option.key)}
-              data-testid={`step-chip-${option.key}`}
-            >
-              {option.label}
-              <span className="tabular-nums opacity-70">{stepCounts[option.key] ?? 0}</span>
-            </button>
-          );
-        })}
+        <div className="flex min-w-0 max-w-full gap-2 overflow-x-auto" role="group" aria-label="กรองตามขั้นตอน">
+          {STEP_CHIPS.map((o) => {
+            const active = chip === o.key;
+            return (
+              <button
+                key={o.key}
+                type="button"
+                aria-pressed={active}
+                data-testid={`step-chip-${o.key}`}
+                onClick={() => setChip(o.key)}
+                className={cn(
+                  'inline-flex min-h-11 shrink-0 items-center gap-1.5 rounded-full border px-3 text-sm font-bold',
+                  active ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-surface text-text hover:bg-surface-hover',
+                )}
+              >
+                {o.label}<span className="tabular-nums opacity-70">{counts[o.key] ?? 0}</span>
+              </button>
+            );
+          })}
+        </div>
         <label className="ml-auto flex items-center gap-2 mobile:ml-0 mobile:w-full">
-          <span className="sr-only">ค้นหางาน</span>
-          <input
-            type="search"
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-            placeholder="ค้นหาลูกค้า / เลขที่งาน"
-            className="min-h-9 w-52 rounded-md border border-border-input px-3 text-sm mobile:w-full"
-            data-testid="fulfilment-search"
-          />
+          <span className="sr-only">ค้นหารอบขนส่ง</span>
+          <input type="search" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="ค้นหาโรงงาน / ใบขอซื้อ / ลูกค้า / เรือ"
+            className="min-h-11 w-64 rounded-md border border-border-input px-3 text-sm mobile:w-full" data-testid="fulfilment-search" />
         </label>
       </FilterBar>
 
-      {/* a fetch failure must render as an error, not read as "nothing to
-          do" — the deal-list query failing used to fall straight into the nothingAtAll EmptyState,
-          which told Import their worklist was empty when it had simply not loaded. */}
+      {listQuery.isError ? (
+        <Panel className="border-danger-border bg-danger-bg" data-testid="fulfilment-error">
+          <p className="m-0 text-sm text-danger-dark">โหลดรอบขนส่งไม่สำเร็จ — {listQuery.error?.message || 'ลองรีเฟรชหน้านี้อีกครั้ง'}</p>
+        </Panel>
+      ) : null}
+
       {ticketsQuery.isError ? (
-        <Panel className="border-danger-border bg-danger-bg" data-testid="fulfilment-tickets-error">
-          <p className="text-sm text-danger-dark">
-            โหลดรายชื่องานไม่สำเร็จ — {ticketsQuery.error?.message || 'ลองรีเฟรชหน้านี้อีกครั้ง'}
+        <Panel className="border-danger-border bg-danger-bg" data-testid="fulfilment-deals-error">
+          <p className="m-0 flex flex-wrap items-center gap-3 text-sm text-danger-dark">
+            โหลดรายการงานเดิมไม่สำเร็จ — {ticketsQuery.error?.message || 'ลองอีกครั้ง'}
+            <Button type="button" variant="secondary" onClick={() => ticketsQuery.refetch()}>ลองอีกครั้ง</Button>
           </p>
         </Panel>
       ) : null}
-      {erroredDeals.length > 0 ? (
-        <Panel className="border-danger-border bg-danger-bg" data-testid="fulfilment-rows-error">
-          <p className="mb-1.5 text-sm font-bold text-danger-dark">โหลดใบขอซื้อของงานต่อไปนี้ไม่สำเร็จ</p>
-          <ul className="m-0 list-disc pl-5 text-xs text-danger-dark">
-            {erroredDeals.map((d) => (
-              <li key={d.ticketId}>
-                <Link to={`/import/deals/${d.ticketId}`} className="underline">
-                  {d.customerName || d.title || d.ticketCode}
-                </Link>
-                {' — '}{d.message}
-              </li>
-            ))}
-          </ul>
-        </Panel>
-      ) : null}
 
-      {isLoading ? (
-        <Panel aria-busy="true" aria-label="กำลังโหลดงานนำเข้า">
-          <SkeletonText lines={6} />
-        </Panel>
-      ) : nothingAtAll ? (
-        <EmptyState
-          icon="check"
-          title="ยังไม่มีงานนำเข้ารายโรงงาน"
-          description="เมื่อมีการออกใบขอซื้อของโรงงานในงานใดงานหนึ่ง แต่ละโรงงานจะขึ้นที่นี่ให้เลื่อนสถานะ"
-        />
-      ) : visibleActive.length === 0 && doneDeals.length === 0 && visibleLegacy.length === 0 ? (
-        <EmptyState
-          icon="check"
-          title="ไม่มีงานนำเข้าในขั้นตอนนี้"
-          description={'ลองล้างคำค้นหรือเลือกขั้นตอน "ทั้งหมด"'}
-        />
+      {nothing ? (
+        <EmptyState icon="check" title="ยังไม่มีรอบขนส่ง" description="เมื่อมีการออกใบขอซื้อ ใบขอซื้อจะขึ้นที่นี่ให้จัดรอบและเลื่อนขั้นตอน" />
       ) : (
-        <div className="flex flex-col gap-3">
-          {visibleActive.map((deal) => (
-            <section
-              key={deal.ticketId}
-              className="rounded-xl border border-border bg-surface-subtle p-3"
-              data-testid="fulfilment-deal"
-              data-ticket-id={deal.ticketId}
-            >
-              <div className="mb-2 flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
-                <div className="min-w-0">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <strong className="min-w-0 truncate text-sm font-extrabold text-text">
-                      {deal.customerName || deal.title || deal.ticketCode}
-                    </strong>
-                    {deal.overdue ? <StatusBadge tone="danger">เกินกำหนด</StatusBadge> : null}
-                  </div>
-                  <span className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-2xs text-text-muted">
-                    <Link to={`/import/deals/${deal.ticketId}`} className="text-info underline">
-                      <code>{deal.ticketCode}</code>
-                    </Link>
-                    {deal.projectName ? <span className="truncate">{deal.projectName}</span> : null}
-                    {deal.dueDate ? <span>กำหนด {formatThaiDate(deal.dueDate)}</span> : null}
-                  </span>
-                </div>
-                <span className="shrink-0 rounded-full bg-info-bg px-2.5 py-0.5 text-2xs font-bold text-info">
-                  ถึงโกดัง {deal.received}/{deal.total} โรงงาน
-                </span>
-              </div>
-
-              <div className="flex flex-col gap-2">
-                {deal.rows.map((row) => {
-                  const dim = stepFilter !== 'ALL' && row.importStep !== stepFilter;
-                  return (
-                    <div key={row.id} className={cn('flex flex-col gap-1.5 transition-opacity', dim && 'opacity-40')}>
-                      <FactoryProgressBar
-                        row={row}
-                        editable={editable}
-                        advancing={advance.isPending}
-                        onAdvance={(r, targetStep) => advance.mutate({
-                          rowId: r.id,
-                          targetStep,
-                          ticketId: deal.ticketId,
-                          docNumber: row.docNumber,
-                          focusFrom: document.activeElement,
-                        })}
-                        onOpenEmail={editable ? openEmail : undefined}
-                      />
-                      <div className="flex flex-wrap items-center gap-3 px-1">
-                        <LeadTimeInline
-                          row={row}
-                          editable={editable}
-                          saving={setLeadTime.isPending}
-                          showToast={showToast}
-                          onSave={(rowId, payload) => setLeadTime.mutateAsync({ rowId, payload, ticketId: deal.ticketId })}
-                        />
-                        <span className="flex items-center gap-1.5 text-2xs">
-                          {row.emailSentAt ? (
-                            <StatusBadge tone="success">ส่งอีเมลแล้ว</StatusBadge>
-                          ) : (
-                            <StatusBadge tone="info">ยังไม่ส่งอีเมล</StatusBadge>
-                          )}
-                          <Button type="button" variant="text" disabled={downloadPdf.isPending}
-                            onClick={() => downloadPdf.mutate({ rowId: row.id, copy: undefined, row })}
-                            data-testid={`ir-download-internal-${row.id}`}>
-                            PDF (ภายใน)
-                          </Button>
-                          <Button type="button" variant="text" disabled={downloadPdf.isPending}
-                            onClick={() => downloadPdf.mutate({ rowId: row.id, copy: 'factory', row })}
-                            data-testid={`ir-download-factory-${row.id}`}>
-                            PDF (ให้โรงงาน)
-                          </Button>
-                        </span>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
+        <>
+          {visibleWaiting.length > 0 || listQuery.isLoading ? (
+            <section className="flex flex-col gap-2" data-testid="waiting-section">
+              <h2 className="m-0 flex items-baseline gap-2 text-base font-bold">
+                รอจัดรอบขนส่ง
+                <span className="text-2xs font-normal text-text-muted">{visibleWaiting.length} ใบขอซื้อ · {new Set(visibleWaiting.map((w) => w.factoryName)).size} โรงงาน</span>
+              </h2>
+              {editable && waitingFactories(waiting).length > 0 ? (
+                <Button type="button" variant="primary" className="w-full sm:w-auto sm:self-start min-[1041px]:hidden" onClick={() => setPlanning(true)} data-testid="plan-round">
+                  <Icon name="plus" size={16} />จัดรอบขนส่ง
+                </Button>
+              ) : null}
+              <DataTable
+                columns={waitingColumns}
+                rows={visibleWaiting}
+                getRowKey={(w) => w.importRequestId}
+                gridClassName={WAITING_GRID}
+                mobileCard={waitingCard}
+                loading={listQuery.isLoading}
+                emptyState={{ icon: 'check', title: 'ไม่มีใบขอซื้อที่รอจัดรอบ' }}
+              />
             </section>
-          ))}
-
-          {visibleActive.length === 0 ? (
-            <p className="rounded-lg border border-dashed border-border px-4 py-6 text-center text-xs text-text-muted">
-              ไม่มีงานนำเข้าที่ตรงกับตัวกรองนี้ — ดูรายการงานที่รับของครบแล้วด้านล่าง
-            </p>
           ) : null}
-
-          {doneDeals.length > 0 ? (
-            <details className="rounded-xl border border-border bg-surface" data-testid="fulfilment-done">
-              <summary className="cursor-pointer list-none px-4 py-3 text-xs font-bold text-text-muted marker:hidden">
-                <span className="inline-flex items-center gap-2">
-                  <Icon name="check" size={14} className="text-success" />
-                  รับครบแล้ว · รอฝ่ายขายส่งมอบ ({doneDeals.length})
-                </span>
-              </summary>
-              <div className="border-t border-border-subtle">
-                {doneDeals.map((deal) => (
-                  <div
-                    key={deal.ticketId}
-                    className="flex flex-wrap items-center justify-between gap-2 border-t border-border-subtle px-4 py-2.5 first:border-t-0"
-                  >
-                    <span className="flex flex-wrap items-center gap-x-2 text-xs">
-                      <strong className="text-text">{deal.customerName || deal.title || deal.ticketCode}</strong>
-                      <Link to={`/import/deals/${deal.ticketId}`} className="text-info underline">
-                        <code>{deal.ticketCode}</code>
-                      </Link>
-                    </span>
-                    <span className="text-2xs font-bold text-success-dark">
-                      ครบทุกโรงงาน ({deal.total}) → ส่งต่อส่งมอบ
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </details>
+          {chip !== 'WAITING' && (visibleRounds.length > 0 || listQuery.isLoading) ? (
+            <section className="flex flex-col gap-2" data-testid="rounds-section">
+              <h2 className="m-0 flex items-baseline gap-2 text-base font-bold">
+                รอบขนส่ง
+                <span className="text-2xs font-normal text-text-muted">{visibleRounds.length} รอบ</span>
+              </h2>
+              <DataTable
+                columns={roundColumns}
+                rows={visibleRounds}
+                getRowKey={(r) => r.id}
+                gridClassName={ROUNDS_GRID}
+                mobileCard={roundCard}
+                loading={listQuery.isLoading}
+                emptyState={{ icon: 'check', title: 'ไม่มีรอบขนส่งในขั้นตอนนี้' }}
+              />
+            </section>
           ) : null}
-
-          {/* deals whose worklist candidacy comes from a ticket-level
-              fulfillmentStatus (IR_SENT/SHIPPING — the pre-V184 chain — or a deal with nothing
-              ISSUED here yet) but that carry no stored per-factory row this page can act on. Shown
-              with a link out rather than dropped, so Import never loses visibility into a deal
-              their own worklist filter would otherwise silently exclude. */}
-          {visibleLegacy.length > 0 ? (
+          {chip === 'ALL' && legacyDeals.length > 0 ? (
             <section className="rounded-xl border border-dashed border-border bg-surface p-3" data-testid="fulfilment-legacy">
               <p className="mb-2 text-xs font-bold text-text-muted">
                 งานอื่นที่ยังไม่ติดตามแบบรายโรงงาน — เปิดที่หน้ารายละเอียดงานเพื่อดำเนินการ
               </p>
               <div className="flex flex-col gap-1.5">
-                {visibleLegacy.map((deal) => (
-                  <div key={deal.ticketId}
+                {legacyDeals.map((deal) => (
+                  <div key={deal.id}
                     className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border-subtle px-3 py-2 text-xs"
                     data-testid="fulfilment-legacy-deal">
                     <span className="flex flex-wrap items-center gap-2">
-                      <strong className="text-text">{deal.customerName || deal.title || deal.ticketCode}</strong>
+                      <strong className="text-text">{deal.customerName || deal.title || deal.code}</strong>
                       {deal.overdue ? <StatusBadge tone="danger">เกินกำหนด</StatusBadge> : null}
                       {deal.fulfillmentStatus ? (
                         <span className="text-2xs text-text-muted">{fulfilmentStatusLabel(deal.fulfillmentStatus).label}</span>
                       ) : null}
                     </span>
-                    <Link to={`/import/deals/${deal.ticketId}`} className="text-info underline">
-                      เปิดงาน <code>{deal.ticketCode}</code>
+                    <Link to={`/import/deals/${deal.id}`} className="inline-flex min-h-11 items-center text-info underline">
+                      เปิดงาน <code>{deal.code}</code>
                     </Link>
                   </div>
                 ))}
               </div>
             </section>
           ) : null}
-        </div>
+          {!listQuery.isLoading && visibleWaiting.length === 0 && visibleRounds.length === 0 && legacyDeals.length === 0 ? (
+            <EmptyState icon="check" title="ไม่มีรายการในตัวกรองนี้" description={'ลองล้างคำค้นหรือเลือก "ทั้งหมด"'} />
+          ) : null}
+        </>
       )}
 
-      <p className="text-2xs text-text-muted">
-        การส่งมอบสินค้าให้ลูกค้าไม่ได้อยู่ในหน้านี้ — บันทึกที่แท็บ จัดซื้อ-ส่งมอบ ของงานนั้น
-      </p>
+      <p className="text-2xs text-text-muted">การส่งมอบสินค้าให้ลูกค้าไม่ได้อยู่ในหน้านี้ — บันทึกที่แท็บ ส่งของ ของงานนั้น</p>
 
-      {undo ? (
-        <StepUndoSnackbar
-          undo={undo}
-          busy={undoStep.isPending}
-          onUndo={() => undoStep.mutate({ rowId: undo.rowId, targetStep: undo.targetStep, ticketId: undo.ticketId })}
+      {advancing ? (
+        <AdvanceRoundSheet
+          round={advancing}
+          showToast={showToast}
+          onClose={() => setAdvancing(null)}
+          onAdvanced={(round) => { setAdvancing(null); undo.offer(round); }}
         />
       ) : null}
-
-      {emailRow ? (
-        <Modal
-          title="อีเมลสั่งซื้อ (ร่าง)"
-          subtitle={emailRow.factoryName}
-          onClose={() => setEmailRow(null)}
-          testId="order-email-modal"
-          footer={(
-            <>
-              <Button type="button" variant="secondary" onClick={() => setEmailRow(null)}>ปิด</Button>
-              {/* Hide "บันทึก" once sent — mirrors ImportRequestFactoryCard.jsx's own fix. */}
-              {!emailRow.emailSentAt ? (
-                <Button type="button" variant="secondary" disabled={saveEmail.isPending}
-                  onClick={() => saveEmail.mutate({ rowId: emailRow.id, payload: emailDraft, ticketId: emailRow.ticketId })}>
-                  บันทึก
-                </Button>
-              ) : null}
-              <Button
-                type="button"
-                variant="secondary"
-                onClick={async () => {
-                  try {
-                    await navigator.clipboard.writeText(emailDraft.emailBody ?? '');
-                    showToast?.('success', 'คัดลอกข้อความอีเมลแล้ว');
-                  } catch {
-                    showToast?.('error', 'คัดลอกไม่สำเร็จ — เลือกข้อความแล้วคัดลอกเอง');
-                  }
-                }}
-              >
-                คัดลอกข้อความ
-              </Button>
-              {!emailRow.emailSentAt ? (
-                <Button type="button" variant="primary" disabled={markSent.isPending}
-                  onClick={() => markSent.mutate({ rowId: emailRow.id, ticketId: emailRow.ticketId })}
-                  data-testid="ir-email-mark-sent">
-                  ส่งแล้ว
-                </Button>
-              ) : null}
-            </>
-          )}
-        >
-          <div className="grid gap-2">
-            <ol className="m-0 list-decimal pl-5 text-xs text-text-muted">
-              <li>คัดลอกข้อความด้านล่าง (แก้ไขได้ก่อนคัดลอก)</li>
-              <li>วางในอีเมล/ช่องทางที่ใช้ส่งโรงงานเอง แล้วส่ง</li>
-              <li>กลับมากด &ldquo;ส่งแล้ว&rdquo;</li>
-            </ol>
-            {emailRow.emailSentAt ? (
-              <p className="text-xs font-bold text-success-dark">
-                ส่งแล้วเมื่อ {formatThaiDate(emailRow.emailSentAt)}{emailRow.emailSentByName ? ` โดย ${emailRow.emailSentByName}` : ''}
-              </p>
-            ) : null}
-            <label className="flex flex-col gap-1 text-xs font-bold text-text-secondary">
-              ถึง
-              <input type="email" value={emailDraft.emailTo} disabled={Boolean(emailRow.emailSentAt)}
-                onChange={(e) => setEmailDraft((d) => ({ ...d, emailTo: e.target.value }))} />
-            </label>
-            <label className="flex flex-col gap-1 text-xs font-bold text-text-secondary">
-              หัวข้อ
-              <input type="text" value={emailDraft.emailSubject} disabled={Boolean(emailRow.emailSentAt)}
-                onChange={(e) => setEmailDraft((d) => ({ ...d, emailSubject: e.target.value }))} />
-            </label>
-            <textarea
-              className="form-input min-h-64 font-mono text-xs"
-              readOnly={Boolean(emailRow.emailSentAt)}
-              value={emailDraft.emailBody}
-              onChange={(e) => setEmailDraft((d) => ({ ...d, emailBody: e.target.value }))}
-            />
-          </div>
-        </Modal>
+      {planning ? (
+        <PlanRoundSheet
+          waiting={waiting}
+          showToast={showToast}
+          onClose={() => setPlanning(false)}
+          onDone={(round) => { setPlanning(false); if (round?.id) navigate(`/fulfilment/rounds/${round.id}`); }}
+        />
       ) : null}
+      {undo.snackbar}
     </PageStack>
   );
 }

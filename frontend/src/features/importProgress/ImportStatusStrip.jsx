@@ -11,7 +11,7 @@ const CHIP_ARRIVED = 'border-success-border text-success';
  * tab's Step-1 "นำเข้าสินค้า" header and import's own per-deal page read identically (one import-tracking
  * system, two surfaces). */
 export function ImportStatusStrip({
-  fulfilment, arrivedCount = 0, issuedCount = 0, deliveryPct = null, testIdPrefix, className = '',
+  fulfilment, arrivedCount = 0, issuedCount = 0, deliveryPct = null, goodsArrival = null, testIdPrefix, className = '',
 }) {
   const allArrived = issuedCount > 0 && arrivedCount === issuedCount;
   return (
@@ -20,12 +20,18 @@ export function ImportStatusStrip({
       data-testid={`${testIdPrefix}-status-strip`}
     >
       {fulfilment ? <StatusBadge tone={fulfilment.tone}>{fulfilment.label}</StatusBadge> : null}
-      {issuedCount > 0 ? (
+      {/* with part of the goods in, "ถึงไทย 0/1" would contradict the warehouse figure beside it */}
+      {issuedCount > 0 && !goodsArrival ? (
         <span
           className={cn(CHIP, allArrived && CHIP_ARRIVED)}
           data-testid={`${testIdPrefix}-ir-rollup-chip`}
         >
           ถึงไทย {arrivedCount}/{issuedCount} โรงงาน
+        </span>
+      ) : null}
+      {goodsArrival ? (
+        <span className={CHIP} data-testid={`${testIdPrefix}-goods-arrival-chip`}>
+          {`ถึงโกดัง ${goodsArrival.received} / ${goodsArrival.ordered} ${goodsArrival.unit ?? ''}`.trim()}
         </span>
       ) : null}
       {deliveryPct != null ? (

@@ -11,9 +11,11 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.Set;
 import java.util.stream.Collectors;
 import org.springframework.http.HttpStatus;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import th.co.glr.hr.auth.UserPrincipal;
@@ -77,6 +79,8 @@ import th.co.glr.hr.ticket.TicketSummaryDto;
  *   <li>{@code sales_manager}: read only.
  * </ul>
  */
+// Eager even under spring.main.lazy-initialization=true: its constructor wires TicketService's resume/reopen reconcile hook.
+@Lazy(false)
 @Service
 public class ImportRequestService {
 
@@ -95,7 +99,7 @@ public class ImportRequestService {
      * form's footer (which {@link #requirePrintedFooterWrite} gates, CEO only). */
     private static final Set<String> FOOTER_ONLY_ROLES = Set.of("import");
     /** Advance a step. Global — import has no per-deal "ownership" concept, unlike sales. */
-    private static final Set<String> ADVANCE_STEP_ROLES = Set.of("import", "ceo");
+    static final Set<String> ADVANCE_STEP_ROLES = Set.of("import", "ceo");
     /** Read-only, no ownership scoping. {@code sales} also reads, but ownership-scoped — see {@link #canRead}. */
     private static final Set<String> READ_ONLY_ROLES = Set.of("import", "sales_manager");
 
@@ -111,6 +115,7 @@ public class ImportRequestService {
     private final TicketRepository tickets;
     private final TicketService ticketService;
     private final NotificationRepository notifications;
+    private final ShipmentRoundRepository rounds;
 
     private th.co.glr.hr.deliveryrequest.PrePortal prePortal;
 
@@ -126,7 +131,8 @@ public class ImportRequestService {
                                 FactoryConfigRepository factories,
                                 TicketRepository tickets,
                                 TicketService ticketService,
-                                NotificationRepository notifications) {
+                                NotificationRepository notifications,
+                                ShipmentRoundRepository rounds) {
         this.repository = repository;
         this.renderer = renderer;
         this.stored = stored;
@@ -134,6 +140,17 @@ public class ImportRequestService {
         this.tickets = tickets;
         this.ticketService = ticketService;
         this.notifications = notifications;
+        this.rounds = rounds;
+        // TicketService cannot hold this service (it is built with this one's dependency): it calls back through a hook
+        ticketService.wireImportReconciler(this::reconcileGoodsReceived);
+    }
+
+    /** A deal returning to ACTIVE (resumed or reopened): if every factory reached RECEIVED while it was paused and the
+     * goods-received rollup never ran, run it once now. Silent: no event for the rep, nothing replayed when it already ran. */
+    public void reconcileGoodsReceived(long ticketId, UserPrincipal actor) {
+        if (allFactoriesReceived(ticketId) && !tickets.hasReceivedGoods(ticketId)) {
+            ticketService.applyImportRequestRollup(ticketId, actor);
+        }
     }
 
     // ── PREVIEW (per-brand, unchanged by V184) ───────────────────────────────────────────────────
@@ -262,8 +279,25 @@ public class ImportRequestService {
 
     public ImportRequestDto get(long id, UserPrincipal actor) {
         ImportRequestDto row = requireStored(id);
-        requireRead(row.ticketId(), actor);
+        requireReadRow(row, actor);
         return withPageCount(row);
+    }
+
+    /** The read gate of ONE stored row: a deal IR follows its deal; a no-project order is read by its requester, the
+     * sales manager, import and the CEO, and (a SHOWROOM order) by holders of the showroom grant. */
+    private void requireReadRow(ImportRequestDto row, UserPrincipal actor) {
+        if (row.ticketId() != null) {
+            requireRead(row.ticketId(), actor);
+            return;
+        }
+        String role = actor.role();
+        var meta = stored.findNoProjectMeta(row.id()).orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบใบขอซื้อนี้"));
+        if ("ceo".equals(role) || READ_ONLY_ROLES.contains(role) || actor.id() == meta.requesterId()
+            || th.co.glr.hr.auth.OversightReader.holder(actor, tickets::holdsReadAllSalesGrant) // read only, like the deal reads
+            || ("SHOWROOM".equals(meta.purpose()) && tickets.holdsShowroomOrdersGrant(actor.id()))) {
+            return;
+        }
+        throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
     }
 
     /**
@@ -399,7 +433,7 @@ public class ImportRequestService {
      */
     @Transactional
     public ImportRequestDto update(long id, UpdateImportRequestRequest request, UserPrincipal actor) {
-        ImportRequestDto existing = requireStored(id);
+        ImportRequestDto existing = requireDealStored(id);
         boolean wantsLeadTimeChange = request.leadTimeMinDays() != null || request.leadTimeMaxDays() != null;
         // requiredByNote is a BODY field (this form's own "กำหนดวันที่ต้องการของ",
         // editable by the owning rep/CEO while DRAFT) — see UpdateImportRequestRequest#requiredByNote's
@@ -496,7 +530,7 @@ public class ImportRequestService {
         if (!ADVANCE_STEP_ROLES.contains(actor.role())) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
-        ImportRequestDto existing = requireStored(id);
+        ImportRequestDto existing = requireDealStored(id);
         requireDealActive(requireTicket(existing.ticketId()));
         if (!ImportRequestStatus.ISSUED.equals(existing.status())) {
             throw new ApiException(HttpStatus.CONFLICT, "แก้ไขระยะเวลานำเข้าได้เฉพาะใบขอซื้อที่ออกเลขแล้ว");
@@ -585,7 +619,7 @@ public class ImportRequestService {
      * progress step, and supersedes the version this one replaces. Order is load-bearing. */
     @Transactional
     public ImportRequestDto issue(long id, IssueImportRequestRequest request, UserPrincipal actor) {
-        ImportRequestDto draft = requireStored(id);
+        ImportRequestDto draft = requireDealStored(id);
         requireFullWrite(draft.ticketId(), actor);
         TicketSnapshot dealSnapshot = requireTicket(draft.ticketId());
         requireDealActive(dealSnapshot);
@@ -641,6 +675,9 @@ public class ImportRequestService {
         LocalDate today = LocalDate.now(BANGKOK);
         String docNumber = override != null ? override : stored.nextDocNumber(thaiYear(today));
 
+        // Lock order: the predecessor's rounds first, then its row.
+        rounds.issuedIdOf(draft.ticketId(), draft.factoryId())
+            .ifPresent(pid -> rounds.lockRounds(rounds.roundIdsOf(pid)));
         Optional<PredecessorStep> predecessor =
             stored.lockIssuedPredecessor(draft.ticketId(), draft.factoryId());
         String step;
@@ -713,8 +750,12 @@ public class ImportRequestService {
         if (issued == 0) {
             throw new ApiException(HttpStatus.CONFLICT, "ใบขอซื้อถูกเปลี่ยนแปลงโดยผู้ใช้อื่น");
         }
+        predecessor.ifPresent(p -> moveLotsToRevision(p.id(), draft));
         if (vesselEtaNote != null) {
             stored.updateFooter(id, vesselEtaNote, null, null, null, null);
+        }
+        if (predecessor.isPresent()) {
+            rederiveRevisionStep(draft, id, docNumber, step, stepAt, stepById, stepByName, stepNote, firstIssuedDate, actor);
         }
         ticketService.recordFirstImportRequestIssued(draft.ticketId(), id, actor);
         notifyImportOfIssuedIr(draft, docNumber, dealSnapshot, actor, predecessor.isPresent());
@@ -928,7 +969,7 @@ public class ImportRequestService {
      */
     @Transactional
     public ImportRequestDto revise(long id, UserPrincipal actor) {
-        ImportRequestDto issued = requireStored(id);
+        ImportRequestDto issued = requireDealStored(id);
         requireFullWrite(issued.ticketId(), actor);
         TicketSnapshot snapshot = requireTicket(issued.ticketId());
         requireDealActive(snapshot);
@@ -998,7 +1039,7 @@ public class ImportRequestService {
     /** A draft that should not exist is deleted, not tombstoned — it has no number and no audit weight. */
     @Transactional
     public void deleteDraft(long id, UserPrincipal actor) {
-        ImportRequestDto existing = requireStored(id);
+        ImportRequestDto existing = requireDealStored(id);
         requireFullWrite(existing.ticketId(), actor);
         // Like every other write in this class, refuse on an inactive deal.
         requireDealActive(requireTicket(existing.ticketId()));
@@ -1013,7 +1054,7 @@ public class ImportRequestService {
     @Transactional
     public ImportRequestDto updateEmailDraft(long id, ImportRequestRequests.UpdateEmailDraftRequest request,
             UserPrincipal actor) {
-        ImportRequestDto existing = requireStored(id);
+        ImportRequestDto existing = requireDealStored(id);
         requireFooterWrite(existing.ticketId(), actor);
         requireDealActive(requireTicket(existing.ticketId()));
         if (!ImportRequestStatus.ISSUED.equals(existing.status())) {
@@ -1041,7 +1082,7 @@ public class ImportRequestService {
      */
     @Transactional
     public ImportRequestDto markEmailSent(long id, UserPrincipal actor) {
-        ImportRequestDto existing = requireStored(id);
+        ImportRequestDto existing = requireDealStored(id);
         if (!canFullWrite(existing.ticketId(), actor) && !FOOTER_ONLY_ROLES.contains(actor.role())) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
@@ -1082,7 +1123,7 @@ public class ImportRequestService {
         if (!ADVANCE_STEP_ROLES.contains(actor.role())) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
-        ImportRequestDto existing = requireStored(id);
+        ImportRequestDto existing = requireDealStored(id);
         requireDealActive(requireTicket(existing.ticketId()));
         if (!ImportRequestStatus.ISSUED.equals(existing.status())) {
             throw new ApiException(HttpStatus.CONFLICT, "อัปเดตขั้นตอนได้เฉพาะใบขอซื้อที่ออกเลขแล้ว");
@@ -1108,47 +1149,146 @@ public class ImportRequestService {
             throw new ApiException(HttpStatus.BAD_REQUEST,
                 "วันที่ของขั้นตอนต้องไม่ก่อนวันที่ออกใบขอซื้อครั้งแรก (" + existing.firstIssuedDate() + ")");
         }
+        OptionalLong soleRound = lockSoleRound(id);
+        // RECEIVED needs the round's documents: an IR with no round, or on a portal round, gets there on the round page.
+        // Checked here, under the locks and after the role check; MIGRATED and BACKFILL rounds keep working.
+        if (ImportRequestStep.RECEIVED.equals(target) && (soleRound.isEmpty() || rounds.hasPortalRound(id))) {
+            throw new ApiException(HttpStatus.CONFLICT, "กรุณาเลื่อนไปถึงโกดังที่หน้ารอบขนส่ง");
+        }
         int rows = stored.advanceStep(id, existing.importStep(), target, eventDate,
             actor.id(), actor.name(), request.note());
         if (rows == 0) {
             throw new ApiException(HttpStatus.CONFLICT, "ขั้นตอนถูกเปลี่ยนแปลงโดยผู้ใช้อื่น หรือฉบับนี้ถูกแทนที่แล้ว");
         }
-        String noteSuffix = request.note() != null && !request.note().isBlank()
-            ? " — " + request.note() : "";
-        // The ticket must be LOCKED (FOR UPDATE) BEFORE the event insert below,
-        // not after — addEventWithDocument's FK to sales.ticket takes a KEY SHARE lock on the ticket
-        // row, and two concurrent advanceStep calls that both later try to upgrade to FOR UPDATE
-        // (the RECEIVED branch, below) would each be waiting on the other's KEY SHARE,
-        // a classic FK lock-order deadlock. Locking FIRST, unconditionally, establishes one strict
-        // order (lock, then insert) so at most one caller can ever be in that position at a time —
-        // the second simply blocks until the first commits and releases the lock.
-        tickets.lockTicketForUpdate(existing.ticketId());
-        tickets.addEventWithDocument(existing.ticketId(), actor.id(), actor.name(),
-            TicketEventKind.IMPORT_STEP_ADVANCED, null, null,
-            "โรงงาน " + existing.factoryName() + ": " + ImportRequestStep.thaiLabel(existing.importStep())
-                + " → " + ImportRequestStep.thaiLabel(target) + noteSuffix,
-            th.co.glr.hr.ticket.RelatedDocumentType.IMPORT_REQUEST, id);
+        if (soleRound.isPresent()) {
+            rounds.advanceRound(soleRound.getAsLong(), target, eventDate, actor.id(), actor.name(), request.note(), null);
+            rounds.finalizeDocuments(soleRound.getAsLong()); // as the round page does: earlier documents are not this advance's to undo
+        } else {
+            rounds.createPortalRound(id, existing.factoryId(), existing.factoryName(), target, eventDate,
+                existing.importStep(), existing.importStepAt(), actor.id(), actor.name(), request.note());
+        }
+        afterStepChanges(existing.ticketId(), List.of(new StepChange(existing, existing.importStep(), target)),
+            actor, request.note());
+        return withPageCount(requireStored(id));
+    }
 
-        String ir = "ใบขอซื้อ (IR) " + existing.docNumber();
-        boolean all = ImportRequestStep.RECEIVED.equals(target) && allFactoriesReceived(existing.ticketId());
-        if (all) {
-            ticketService.applyImportRequestRollup(existing.ticketId(), actor);
-            notifyRepOfImportProgress(requireTicketSummary(existing.ticketId()), TicketEventKind.IMPORT_GOODS_RECEIVED_ALL,
-                "สินค้าตาม" + ir + " จากโรงงาน " + existing.factoryName() + " เข้าคลังแล้ว และครบทุกใบขอซื้อของดีลนี้",
+    /** One bell (no email) to the deal's rep when a lot of theirs reaches ถึงโกดัง: which IR and how much. */
+    public void notifyRepOfReceivedLot(long ticketId, String docNumber, String factoryName, String qtyText) {
+        TicketSummaryDto deal = requireTicketSummary(ticketId);
+        notifications.notifyEmployeeBellOnly(deal.createdById(), "IMPORT_LOT_RECEIVED",
+            "ใบขอซื้อ (IR) " + docNumber + " จากโรงงาน " + factoryName + (qtyText.startsWith("ถึงโกดัง") ? " " : " ถึงโกดังแล้ว ") + qtyText + "\n"
+                + DealNoticeText.dealLabel(deal.code(), deal.customerName()) + "\nดูความคืบหน้าที่แท็บ ส่งของ",
+            "/tickets/" + deal.id() + "?tab=ship");
+    }
+
+    /** One bell (no email) to the requester of a no-project order when a lot of it reaches ถึงโกดัง; they read it on ของที่ฉันสั่ง. */
+    public void notifyRequesterOfReceivedLot(long requesterId, String docNumber, String factoryName, String qtyText) {
+        notifications.notifyEmployeeBellOnly(requesterId, "IMPORT_LOT_RECEIVED",
+            "ใบขอซื้อ (IR) " + docNumber + " จากโรงงาน " + factoryName + (qtyText.startsWith("ถึงโกดัง") ? " " : " ถึงโกดังแล้ว ")
+                + qtyText + "\nสิ่งที่ต้องทำต่อ: ดูที่ ของที่ฉันสั่ง", "/my-orders");
+    }
+
+    /** A revision's lots followed it from the predecessor, so its step is re-derived from them (an IR with no lots keeps
+     * the carried-forward step), with the same aftermath as any step change (events, the all-received rollup). */
+    private void rederiveRevisionStep(ImportRequestDto draft, long id, String docNumber, String step, LocalDate stepAt,
+                                      Long stepById, String stepByName, String stepNote, LocalDate firstIssuedDate,
+                                      UserPrincipal actor) {
+        if (rounds.lotsOf(id).isEmpty()) {
+            return;
+        }
+        var ir = new ShipmentRoundRepository.IrLock(id, draft.ticketId(), docNumber, draft.factoryName(), step, stepAt,
+            stepById, stepByName, stepNote, firstIssuedDate, true, draft.factoryId(), null);
+        var d = ShipmentStepDerivation.derive(ir, rounds.derivedInputs(List.of(id)));
+        if (d.step().equals(step)) {
+            return;
+        }
+        ImportRequestDto before = requireStored(id);
+        boolean own = d.byName() != null;
+        stored.setDerivedStep(id, d.step(), d.at(), own ? d.byId() : actor.id(), own ? d.byName() : actor.name(),
+            own ? d.note() : null);
+        afterStepChanges(draft.ticketId(), List.of(new StepChange(before, step, d.step())), actor, null);
+    }
+
+    /** One IR whose step changed, with the step it left. */
+    public record StepChange(ImportRequestDto ir, String from, String to) {}
+
+    /** The one bell to the deal's rep when every factory's goods are in: "ครบ" only when nothing is short, else the real figure. */
+    private void notifyAllGoodsReceived(long ticketId, String docNumber, String factoryName) {
+        String ir = "ใบขอซื้อ (IR) " + docNumber;
+        var totals = rounds.receiptTotals(ticketId);
+        var deal = requireTicketSummary(ticketId);
+        if (!totals.short_()) {
+            notifyRepOfImportProgress(deal, TicketEventKind.IMPORT_GOODS_RECEIVED_ALL,
+                "สินค้าตาม" + ir + " จากโรงงาน " + factoryName + " เข้าคลังแล้ว และครบทุกใบขอซื้อของดีลนี้",
                 "สิ่งที่ต้องทำต่อ: นัดวันส่งสินค้ากับลูกค้า");
-        } else if (ImportRequestStep.CONTACTED.equals(existing.importStep())
-            && stored.findIssuedByTicket(existing.ticketId()).stream()
-                .noneMatch(o -> o.id() != id && !ImportRequestStep.CONTACTED.equals(o.importStep()))
+            return;
+        }
+        // Same moment as ever, but it must not say ครบ: the rep needs the real figure before promising the customer.
+        String unit = totals.unit() == null ? "" : " " + totals.unit();
+        String qty = !totals.oneUnit() ? "มีบางรายการถึงโกดังไม่ครบ" // different units cannot be added up
+            : "ถึงโกดังแล้ว " + totals.received().stripTrailingZeros().toPlainString() + " จาก "
+            + totals.planned().stripTrailingZeros().toPlainString() + unit + " · ขาด "
+            + totals.planned().subtract(totals.received()).stripTrailingZeros().toPlainString() + unit;
+        notifications.notifyEmployeeAtLinkTitled(deal.createdById(), TicketEventKind.IMPORT_GOODS_RECEIVED_ALL,
+            "สินค้าถึงโกดังแล้ว แต่ไม่ครบตามที่สั่ง",
+            "สินค้าตาม" + ir + " จากโรงงาน " + factoryName + " ถึงโกดังแล้วทุกใบขอซื้อของดีลนี้ แต่ไม่ครบ: " + qty
+                + "\n" + DealNoticeText.dealLabel(deal.code(), deal.customerName())
+                + "\nสิ่งที่ต้องทำต่อ: ตรวจของที่ขาดก่อนนัดวันส่งสินค้ากับลูกค้า",
+            "/tickets/" + deal.id());
+    }
+
+    /** Import corrected a receipt above 0 on an IR that had received nothing: if that completes the deal, the rollup and its
+     * normal notice happen now, once (an ACTIVE deal only; a paused one catches up on resume). */
+    public void receiptCorrected(long ticketId, String docNumber, String factoryName, UserPrincipal actor) {
+        if (allFactoriesReceived(ticketId) && !tickets.hasReceivedGoods(ticketId)) {
+            ticketService.applyImportRequestRollup(ticketId, actor);
+            // the rollup writes the GOODS_RECEIVED event only on a deal it applies to (not FULLY_DELIVERED or FROM_STOCK): tell
+            // the rep only when this call actually wrote it, so a later receipt save never repeats the notice
+            if (tickets.hasReceivedGoods(ticketId)) {
+                notifyAllGoodsReceived(ticketId, docNumber, factoryName);
+            }
+        }
+    }
+
+    /** What follows any change of IR steps, shared by the IR-level advance and the shipment-round advance: one
+     * IMPORT_STEP_ADVANCED event per changed IR, then (once per deal) the all-received rollup or the first-start
+     * notice. The IR rows must already hold their new steps. The ticket is locked FIRST, before any event insert:
+     * the event's FK takes a KEY SHARE lock on the ticket, and two callers upgrading to FOR UPDATE would deadlock. */
+    public boolean afterStepChanges(long ticketId, List<StepChange> changes, UserPrincipal actor, String note) {
+        String noteSuffix = note != null && !note.isBlank() ? " — " + note : "";
+        tickets.lockTicketForUpdate(ticketId);
+        for (StepChange c : changes) {
+            tickets.addEventWithDocument(ticketId, actor.id(), actor.name(),
+                TicketEventKind.IMPORT_STEP_ADVANCED, null, null,
+                "โรงงาน " + c.ir().factoryName() + ": " + ImportRequestStep.thaiLabel(c.from())
+                    + " → " + ImportRequestStep.thaiLabel(c.to()) + noteSuffix,
+                th.co.glr.hr.ticket.RelatedDocumentType.IMPORT_REQUEST, c.ir().id());
+        }
+        Set<Long> changedIds = changes.stream().map(c -> c.ir().id()).collect(Collectors.toSet());
+        StepChange received = changes.stream().filter(c -> ImportRequestStep.RECEIVED.equals(c.to())).findFirst().orElse(null);
+        if (received != null && allFactoriesReceived(ticketId)) {
+            boolean alreadyAnnounced = tickets.hasReceivedGoods(ticketId); // a lot returned, then the line marked, arrives here again
+            ticketService.applyImportRequestRollup(ticketId, actor);
+            if (!alreadyAnnounced) {
+                notifyAllGoodsReceived(ticketId, received.ir().docNumber(), received.ir().factoryName());
+            }
+            return !alreadyAnnounced; // already told: the arrival of this lot still gets its own bell
+        }
+        List<Long> nothingArrived = rounds.nothingArrivedIrIds(ticketId); // "latest step: received" would be a false arrival notice
+        StepChange started = changes.stream().filter(c -> ImportRequestStep.CONTACTED.equals(c.from())
+            && !ImportRequestStep.CONTACTED.equals(c.to()) && !nothingArrived.contains(c.ir().id())).findFirst().orElse(null);
+        if (started != null
+            && stored.findIssuedByTicket(ticketId).stream()
+                .noneMatch(o -> !changedIds.contains(o.id()) && !ImportRequestStep.CONTACTED.equals(o.importStep()))
             // An undo back to CONTACTED, then a re-advance, must not tell the rep twice (review M4).
-            && !stored.importStartedNoticeSent(existing.ticketId(),
-                requireTicketSummary(existing.ticketId()).createdById())) {
-            // Once per deal: only the first IR to leave CONTACTED tells the rep the import has started.
-            notifyRepOfImportProgress(requireTicketSummary(existing.ticketId()), TicketEventKind.IMPORT_STARTED,
-                actor.name() + " เริ่มดำเนินการ" + ir + " กับโรงงาน " + existing.factoryName()
-                    + " แล้ว ขั้นตอนล่าสุด: " + ImportRequestStep.thaiLabel(target),
+            && !stored.importStartedNoticeSent(ticketId, requireTicketSummary(ticketId).createdById())) {
+            String ir = "ใบขอซื้อ (IR) " + started.ir().docNumber();
+            notifyRepOfImportProgress(requireTicketSummary(ticketId), TicketEventKind.IMPORT_STARTED,
+                actor.name() + " เริ่มดำเนินการ" + ir + " กับโรงงาน " + started.ir().factoryName()
+                    + " แล้ว ขั้นตอนล่าสุด: " + ImportRequestStep.thaiLabel(started.to()),
                 "แจ้งเพื่อทราบ ระบบจะแจ้งอีกครั้งเมื่อสินค้าเข้าคลัง");
         }
-        return withPageCount(requireStored(id));
+        return false;
     }
 
     /** How long after an advance its actor may still undo it (spec 2026-11-15 §7.11 item 3, the /fulfilment snackbar). */
@@ -1200,7 +1340,7 @@ public class ImportRequestService {
         if (!ImportRequestStep.isValid(expected)) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุขั้นตอนที่จะเลิกทำ");
         }
-        ImportRequestDto existing = requireStored(id);
+        ImportRequestDto existing = requireDealStored(id);
         requireDealActive(requireTicket(existing.ticketId()));
         var state = stored.findStepUndoState(id)
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบใบขอซื้อ"));
@@ -1220,18 +1360,122 @@ public class ImportRequestService {
             || clock.instant().isAfter(state.advancedAt().plusSeconds(STEP_UNDO_WINDOW_SECONDS))) {
             throw new ApiException(HttpStatus.CONFLICT, "เลยเวลาเลิกทำแล้ว (" + STEP_UNDO_WINDOW_SECONDS + " วินาที)");
         }
-        // Row first, then the deal: advanceStep's order (review H1).
+        // Rounds, then the row, then the deal: advanceStep's order (review H1).
+        OptionalLong soleRound = lockSoleRound(id);
         if (stored.undoStep(id, expected, actor.id(), STEP_UNDO_WINDOW_SECONDS) == 0) {
             throw new ApiException(HttpStatus.CONFLICT, "มีผู้อื่นเปลี่ยนขั้นตอนนี้ไปก่อน หรือเลยเวลาเลิกทำแล้ว จึงเลิกทำไม่ได้");
         }
-        tickets.lockTicketForUpdate(existing.ticketId());
         ImportRequestDto after = requireStored(id);
+        soleRound.ifPresent(r -> {
+            if (rounds.createdByAdvance(r)) {
+                rounds.deleteRound(r); // the advance made this round: undoing it returns the IR to waiting
+            } else {
+                if (rounds.undoRound(r, expected, actor.id(), rounds.advanceIdOf(r), STEP_UNDO_WINDOW_SECONDS) == 0) {
+                    throw new ApiException(HttpStatus.CONFLICT, "ขั้นตอนถูกเปลี่ยนแปลงโดยผู้ใช้อื่น จึงเลิกทำไม่ได้");
+                }
+            }
+        });
+        tickets.lockTicketForUpdate(existing.ticketId());
         tickets.addEventWithDocument(existing.ticketId(), actor.id(), actor.name(),
             TicketEventKind.IMPORT_STEP_ADVANCED, null, null,
             "โรงงาน " + existing.factoryName() + ": เลิกทำ " + ImportRequestStep.thaiLabel(expected)
                 + " → " + ImportRequestStep.thaiLabel(after.importStep()),
             th.co.glr.hr.ticket.RelatedDocumentType.IMPORT_REQUEST, id);
         return withPageCount(after);
+    }
+
+    private static final String SHARED_ROUND_MESSAGE =
+        "ใบขอซื้อนี้อยู่ในรอบขนส่งร่วมหรือแบ่งล็อต กรุณาเลื่อนขั้นตอนที่รอบขนส่ง";
+
+    /** Locks the rounds this import request rides on, re-reads them under the lock, and returns the round that carries
+     * only this request in full. Empty = no round yet; a shared or split request is refused. */
+    private OptionalLong lockSoleRound(long importRequestId) {
+        List<Long> ids = rounds.roundIdsOf(importRequestId);
+        rounds.lockRounds(ids);
+        if (ids.isEmpty()) {
+            // no round to lock: take the IR row, so a planner's lot that commits first is seen by the recheck below
+            rounds.lockImportRequests(List.of(), List.of(importRequestId));
+        }
+        if (!ids.equals(rounds.roundIdsOf(importRequestId))) {
+            throw new ApiException(HttpStatus.CONFLICT, "ขั้นตอนถูกเปลี่ยนแปลงโดยผู้ใช้อื่น หรือฉบับนี้ถูกแทนที่แล้ว");
+        }
+        if (ids.isEmpty()) {
+            return OptionalLong.empty();
+        }
+        if (ids.size() > 1 || !rounds.isSoleWhole(importRequestId, ids.get(0))) {
+            throw new ApiException(HttpStatus.CONFLICT, SHARED_ROUND_MESSAGE);
+        }
+        return OptionalLong.of(ids.get(0));
+    }
+
+    /** The one new line this lot belongs to: same deal line, else (no deal line) same code and size. Never by position. */
+    private static ImportRequestDtos.ImportRequestItemDto matchLine(ShipmentRoundRepository.LotRow lot,
+                                                                    List<ImportRequestDtos.ImportRequestItemDto> items) {
+        java.util.function.Predicate<ImportRequestDtos.ImportRequestItemDto> sameProduct = it ->
+            java.util.Objects.equals(it.code(), lot.code()) && java.util.Objects.equals(it.size(), lot.size());
+        List<ImportRequestDtos.ImportRequestItemDto> found = lot.ticketItemId() == null
+            ? items.stream().filter(sameProduct).toList()
+            : items.stream().filter(it -> lot.ticketItemId().equals(it.ticketItemId())).toList();
+        if (found.size() > 1) {
+            found = found.stream().filter(sameProduct).toList();
+        }
+        if (found.size() != 1) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "ฉบับแก้ไขตัดรายการที่แบ่งล็อตส่งแล้วออก (" + lot.code() + ") กรุณาแก้ที่รอบขนส่งก่อน");
+        }
+        return found.get(0);
+    }
+
+    /** A revision's items are new rows, so the superseded row's lots follow onto them (same rounds, same quantities). */
+    private void moveLotsToRevision(long oldId, ImportRequestDto revision) {
+        List<ShipmentRoundRepository.LotRow> lots = rounds.lotsOf(oldId);
+        if (lots.isEmpty()) {
+            return;
+        }
+        List<Long> roundIds = rounds.roundIdsOf(oldId);
+        boolean whole = roundIds.size() == 1 && rounds.wholeOn(oldId, roundIds.get(0));
+        // line -> round -> {qty, received}; the whole case is every new line, in full, on the one round. received is what
+        // really arrived (a short arrival carries over: summed when lots merge, capped at the new quantity).
+        Map<Long, Map<Long, java.math.BigDecimal[]>> plan = new java.util.LinkedHashMap<>();
+        // A round that has left keeps what shipped and what arrived (an increase stays unplanned, a decrease below the lot or a
+        // dropped line is refused): every lot follows its own line through matchLine, as for a split. Before departure the
+        // whole round simply takes the revised quantities.
+        boolean left = ImportRequestStep.indexOf(rounds.stepOfRound(roundIds.get(0))) >= ImportRequestStep.indexOf(ImportRequestStep.IN_TRANSIT);
+        if (whole && !left) {
+            for (var it : revision.items()) {
+                var old = oldLotFor(lots, it);
+                java.math.BigDecimal received = old.map(ShipmentRoundRepository.LotRow::receivedQty).orElse(null);
+                plan.computeIfAbsent(it.id(), k -> new java.util.LinkedHashMap<>()).put(roundIds.get(0),
+                    new java.math.BigDecimal[] {it.qty(), received == null ? it.qty() : received.min(it.qty())});
+            }
+        } else {
+            for (var lot : lots) {
+                var match = matchLine(lot, revision.items());
+                java.math.BigDecimal got = lot.receivedQty() != null ? lot.receivedQty() : lot.qty();
+                plan.computeIfAbsent(match.id(), k -> new java.util.LinkedHashMap<>())
+                    .merge(lot.roundId(), new java.math.BigDecimal[] {lot.qty(), got},
+                        (a, b) -> new java.math.BigDecimal[] {a[0].add(b[0]), a[1].add(b[1])});
+            }
+            for (var it : revision.items()) {
+                java.math.BigDecimal lotted = plan.getOrDefault(it.id(), Map.of()).values().stream()
+                    .map(v -> v[0]).reduce(java.math.BigDecimal.ZERO, java.math.BigDecimal::add);
+                if (it.qty().compareTo(lotted) < 0) {
+                    throw new ApiException(HttpStatus.CONFLICT,
+                        "ฉบับแก้ไขลดจำนวนรายการที่ " + it.seq() + " ต่ำกว่าจำนวนที่จัดลงรอบขนส่งแล้ว กรุณาแก้ที่รอบขนส่งก่อน");
+                }
+            }
+        }
+        rounds.deleteLotsOf(oldId);
+        plan.forEach((itemId, byRound) -> byRound.forEach((roundId, v) ->
+            rounds.insertLot(roundId, revision.id(), itemId, v[0], v[1] == null || v[1].compareTo(v[0]) == 0 ? null : v[1])));
+    }
+
+    /** The predecessor's lot of the line a revised item stands for: same deal line, else same code and size. */
+    private static Optional<ShipmentRoundRepository.LotRow> oldLotFor(List<ShipmentRoundRepository.LotRow> lots,
+                                                                       ImportRequestDtos.ImportRequestItemDto item) {
+        var byTicketItem = lots.stream().filter(l -> l.ticketItemId() != null && l.ticketItemId().equals(item.ticketItemId())).findFirst();
+        return byTicketItem.isPresent() ? byTicketItem : lots.stream().filter(l -> l.ticketItemId() == null
+            && java.util.Objects.equals(l.code(), item.code()) && java.util.Objects.equals(l.size(), item.size())).findFirst();
     }
 
     /** Prints the INTERNAL stored form from ITS OWN snapshot — everything, unlike the FACTORY copy.
@@ -1253,7 +1497,7 @@ public class ImportRequestService {
      */
     public byte[] renderStored(long id, UserPrincipal actor, boolean factoryCopy) {
         ImportRequestDto row = requireStored(id);
-        requireRead(row.ticketId(), actor);
+        requireReadRow(row, actor);
         try {
             return renderer.render(ImportRequestFormAssembler.fromStored(row, factoryCopy));
         } catch (IOException e) {
@@ -1747,6 +1991,10 @@ public class ImportRequestService {
         if (!issued.stream().allMatch(r -> ImportRequestStep.RECEIVED.equals(r.importStep()))) {
             return false;
         }
+        // a lot recorded as 0 has physically nothing: until it is corrected, or returned and marked, the deal still waits for it
+        if (rounds.hasZeroReceivedLot(ticketId)) {
+            return false;
+        }
         Set<Long> issuedFactoryIds = issued.stream().map(IssuedFactoryRow::factoryId)
             .collect(Collectors.toSet());
         return issuedFactoryIds.containsAll(requiredFactoryIds(ticketId));
@@ -1783,7 +2031,18 @@ public class ImportRequestService {
         return date.getYear() + 543;
     }
 
-    private ImportRequestDto requireStored(long id) {
+    /** A stored row that belongs to a deal: every deal-scoped action (edit, issue, revise, lead time, order email, step) answers
+     * 409 for a no-project order instead of dereferencing a missing ticket. */
+    private ImportRequestDto requireDealStored(long id) {
+        ImportRequestDto row = requireStored(id);
+        if (row.ticketId() == null) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "ใบขอซื้อนี้เป็นคำสั่งซื้อที่ไม่มีโครงการ — ดำเนินการที่หน้า การขนส่ง (รอบขนส่ง) หรือ ของที่ฉันสั่ง");
+        }
+        return row;
+    }
+
+    public ImportRequestDto requireStored(long id) {
         return stored.findById(id)
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบใบขอซื้อนี้"));
     }
@@ -1796,6 +2055,11 @@ public class ImportRequestService {
 
     private List<ImportRequestDto> withPageCounts(List<ImportRequestDto> rows) {
         return rows.stream().map(this::withPageCount).toList();
+    }
+
+    /** First issue date plus a lead-time bound; null when either is unset. */
+    static LocalDate expectedArrival(LocalDate firstIssued, Integer days) {
+        return firstIssued != null && days != null ? firstIssued.plusDays(days) : null;
     }
 
     /** Fills the DTO's {@code pageCount}, which the repository leaves at 0 — layout is not its job. */
@@ -1811,10 +2075,8 @@ public class ImportRequestService {
         // which is re-stamped to "today" on every issue including a same-day correction. Anchoring
         // on issueDate would silently push a customer-facing arrival estimate out by however long a
         // typo revision took to raise; see V184's comment on first_issued_date for the full reasoning.
-        LocalDate expectedFrom = (r.firstIssuedDate() != null && r.leadTimeMinDays() != null)
-            ? r.firstIssuedDate().plusDays(r.leadTimeMinDays()) : null;
-        LocalDate expectedTo = (r.firstIssuedDate() != null && r.leadTimeMaxDays() != null)
-            ? r.firstIssuedDate().plusDays(r.leadTimeMaxDays()) : null;
+        LocalDate expectedFrom = expectedArrival(r.firstIssuedDate(), r.leadTimeMinDays());
+        LocalDate expectedTo = expectedArrival(r.firstIssuedDate(), r.leadTimeMaxDays());
         return new ImportRequestDto(r.id(), r.ticketId(), r.ticketCode(), r.brand(),
             r.factoryId(), r.factoryName(), r.version(),
             r.status(), r.docNumber(), r.issueDate(), r.firstIssuedDate(), r.customerName(), r.projectName(),

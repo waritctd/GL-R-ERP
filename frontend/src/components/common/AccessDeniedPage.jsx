@@ -25,6 +25,7 @@ const PATH_LABELS = {
   // exists under that name.
   '/pricing-requests': 'คิวขอราคา',
   '/fulfilment': 'การขนส่ง',
+  '/my-orders': 'ของที่ฉันสั่ง',
   '/ceo-settings': 'ตั้งค่าราคา',
   '/factory-purchase-orders': 'ใบสั่งซื้อโรงงาน',
   '/employee-requests': 'คำขอ (OT / สวัสดิการ)',

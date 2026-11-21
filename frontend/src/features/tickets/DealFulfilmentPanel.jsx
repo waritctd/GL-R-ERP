@@ -17,8 +17,10 @@ import { bangkokTodayIso, formatThaiDate, fulfilmentStatusLabel } from '../../ut
 import { depositReadyForIr } from './dealMoneyStatus.js';
 import { ImportStatusStrip } from '../importProgress/ImportStatusStrip.jsx';
 import { importStepIndex } from '../importProgress/importSteps.js';
+import { formatQty } from '../fulfilment/shipmentRounds.js';
 import { nextFulfilmentActionCode } from './importActions.js';
 import { ImportRequestFactoryCard } from './ImportRequestFactoryCard.jsx';
+import { NotDeliveredSheet } from './delivery/NotDeliveredSheet.jsx';
 import { procurementPath } from './stageMeta.js';
 import { isOwnerOrKeyer, isSalesOwner } from './dealOwnership.js';
 
@@ -346,7 +348,7 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
   const fs = summary?.fulfillmentStatus ?? null;
   const fsLabel = fulfilmentStatusLabel(fs);
 
-  const totalOrdered = items.reduce((sum, item) => sum + Number(item.qty || 0), 0);
+  const totalOrdered = items.reduce((sum, item) => sum + Number(item.qty || 0) - Number(item.qtyNotDelivered || 0), 0); // deliverable: less what was marked not delivered
   const totalDelivered = items.reduce((sum, item) => sum + Number(item.qtyDelivered || 0), 0);
   const totalFromStock = items.reduce((sum, item) => sum + Number(item.qtyFromStock || 0), 0);
   const deliveryProgress = totalOrdered > 0 ? Math.min(100, Math.round((totalDelivered / totalOrdered) * 100)) : 0;
@@ -370,6 +372,26 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
     enabled: !!ticketId && canReadStoredIr,
   });
   const storedIrRows = storedIrQuery.data ?? [];
+  // What is physically in the warehouse, from the same data the ส่งของ tab's incoming panel reads (import has no read of it).
+  const incomingQuery = useQuery({
+    queryKey: queryKeys.ticketIncoming(ticketId),
+    queryFn: () => api.tickets.incoming(ticketId),
+    enabled: !!ticketId && canReadStoredIr && role !== 'import',
+    retry: false,
+  });
+  // receivedQty is set only on a RECEIVED round, so 0 of 140 that arrived differs from 140 still on the way.
+  const hasArrivedLot = (ir) => (ir?.lots ?? []).some((l) => l.receivedQty != null);
+  const partialArrival = (ir) => {
+    if (!hasArrivedLot(ir)) return null;
+    // ir.ordered is null only when the lines have two genuinely different units (NULL and blank count as one: no unit)
+    if (ir.ordered == null) {
+      return ir.lots.some((l) => l.receivedQty != null && Number(l.receivedQty) < Number(l.qty)) ? { mixed: true } : null;
+    }
+    if (Number(ir.received) >= Number(ir.ordered)) return null;
+    // ขาด only when the IR is complete on received rounds; a partial whose rest is still coming is not short yet
+    const missing = ir.importStep === 'RECEIVED' ? Number(ir.ordered) - Number(ir.received) : null;
+    return { received: formatQty(ir.received), ordered: formatQty(ir.ordered), unit: ir.unit ?? '', missing: missing == null ? null : formatQty(missing) };
+  };
   const liveStoredIrRows = storedIrRows
     .filter((r) => r.status !== 'SUPERSEDED')
     .sort((a, b) => (a.factoryName ?? '').localeCompare(b.factoryName ?? '', 'th') || a.version - b.version);
@@ -381,8 +403,10 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
   // Yang's rollup chip (origin/feat/per-factory-import-tracking's FactoryImportProgressPanel, "ถึงไทย X/N
   // โรงงาน") ported onto THIS deal's stored rows — reuses storedIrQuery above rather than adding a second query.
   const issuedIrRows = liveStoredIrRows.filter((r) => r.importStep != null);
+  // an IR with only part of its goods in (or none: on a RECEIVED round that received 0) is not "arrived"
+  const incomingIrOf = (row) => incomingQuery.data?.irs?.find((i) => i.importRequestId === row.id);
   const arrivedIrCount = issuedIrRows
-    .filter((r) => importStepIndex(r.importStep) >= importStepIndex('AWAITING_CUSTOMS')).length;
+    .filter((r) => importStepIndex(r.importStep) >= importStepIndex('AWAITING_CUSTOMS') && !partialArrival(incomingIrOf(r))).length;
   // The rollup chip is the shared ImportStatusStrip (also rendered on import's per-deal page).
 
   const [newFactoryNames, setNewFactoryNames] = useState(null); // string[] | null
@@ -631,6 +655,10 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
     queryClient.invalidateQueries({ queryKey: queryKeys.ticketDetail(ticketId) });
     queryClient.invalidateQueries({ queryKey: queryKeys.ticketActions(ticketId) });
     queryClient.invalidateQueries({ queryKey: queryKeys.ticketDeliveries(ticketId) });
+    queryClient.invalidateQueries({ queryKey: queryKeys.storedImportRequests(ticketId) });
+    queryClient.invalidateQueries({ queryKey: queryKeys.ticketIncoming(ticketId) });
+    queryClient.invalidateQueries({ queryKey: queryKeys.deliveryRequests(ticketId) });
+    queryClient.invalidateQueries({ queryKey: ['tickets', 'deliveryAllowance', ticketId] });
     queryClient.invalidateQueries({ queryKey: ['tickets', 'list'] });
     queryClient.invalidateQueries({ queryKey: queryKeys.dashboardSummary() });
     queryClient.invalidateQueries({ queryKey: queryKeys.notifications() });
@@ -660,6 +688,14 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
     onSuccess: () => { showToast?.('success', 'บันทึกน้ำหนักคอมมิชชั่นต่อรายการแล้ว'); setWeightOpen(false); invalidateAfterFulfilmentChange(); },
     onError,
   });
+  // ไม่ได้รับของ (sales manager / CEO): mark a line the factory never sent, or take the mark off
+  const [notDeliveredFor, setNotDeliveredFor] = useState(null);
+  const clearNotDeliveredMutation = useMutation({
+    mutationFn: (item) => api.tickets.clearNotDelivered(ticketId, item.id),
+    onSuccess: () => { showToast?.('success', 'ยกเลิกการบันทึกไม่ได้รับของแล้ว'); invalidateAfterFulfilmentChange(); },
+    onError: (e) => showToast?.('error', e?.message ?? 'ยกเลิกไม่สำเร็จ'),
+  });
+  const canMarkNotDelivered = role === 'sales_manager' || role === 'ceo';
   const reserveStockMutation = useMutation({
     mutationFn: ({ itemId, qtyFromStock }) => api.tickets.reserveStock(ticketId, { lines: [{ itemId, qtyFromStock }] }),
     onSuccess: () => { showToast?.('success', 'บันทึกสินค้าจากสต็อกแล้ว'); invalidateAfterFulfilmentChange(); },
@@ -809,8 +845,17 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
               arrivedCount={arrivedIrCount}
               issuedCount={issuedIrRows.length}
               deliveryPct={totalOrdered > 0 ? deliveryProgress : null}
+              goodsArrival={incomingQuery.data?.totalOrdered != null && (incomingQuery.data.irs ?? []).some(hasArrivedLot)
+                && Number(incomingQuery.data.totalReceived) < Number(incomingQuery.data.totalOrdered)
+                ? { received: formatQty(incomingQuery.data.totalReceived), ordered: formatQty(incomingQuery.data.totalOrdered), unit: incomingQuery.data.totalUnit ?? '' } : null}
             />
           </div>
+          {incomingQuery.isError && incomingQuery.error?.status !== 403 ? (
+            <p role="alert" className="m-0 mt-2 flex flex-wrap items-center gap-2 text-xs font-bold text-danger" data-testid="deal-fulfilment-incoming-error">
+              โหลดจำนวนที่ถึงโกดังไม่สำเร็จ ตัวเลขด้านล่างอาจไม่ตรงกับของจริง
+              <Button type="button" size="sm" variant="secondary" onClick={() => incomingQuery.refetch()}>ลองอีกครั้ง</Button>
+            </p>
+          ) : null}
 
           {/* Once the deal is tracked per-factory, the deal-level substep chips and the four legacy
               buttons below are dead weight: fulfillmentStatus sits at IR_ISSUED for the whole
@@ -975,6 +1020,7 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
                     showToast={showToast}
                     dealNoun="งาน"
                     showReadOnlyChip
+                    arrival={partialArrival(incomingQuery.data?.irs?.find((i) => i.importRequestId === row.id))}
                   />
                 ))}
               </div>
@@ -1108,7 +1154,8 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
                 {items.map((item) => {
                   const ordered = Number(item.qty || 0);
                   const delivered = Number(item.qtyDelivered || 0);
-                  const remaining = Math.max(0, ordered - delivered);
+                  const notDelivered = Number(item.qtyNotDelivered || 0);
+                  const remaining = Math.max(0, ordered - notDelivered - delivered);
                   const fromStock = Math.min(ordered, Number(item.qtyFromStock || 0));
                   // Not reserved from stock is นำเข้า only once the procurement source is decided; while it is
                   // pending (procurementSource.pending) nothing is known yet (fix round 1).
@@ -1124,7 +1171,23 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
                       : [{ key: 'rest', label: restLabel, tone: restTone }];
                   return (
                     <tr key={item.id} className="border-b border-border-subtle align-middle last:border-b-0">
-                      <td className="max-w-[16rem] py-2 pr-3 font-bold text-text [overflow-wrap:anywhere]">{`${item.brand ?? ''} ${item.model || ''}`.trim()}</td>
+                      <td className="max-w-[16rem] py-2 pr-3 font-bold text-text [overflow-wrap:anywhere]">
+                        {`${item.brand ?? ''} ${item.model || ''}`.trim()}
+                        {notDelivered > 0 ? (
+                          <span className="mt-0.5 flex flex-wrap items-center gap-1.5 text-2xs font-bold text-danger-dark" data-testid={`not-delivered-note-${item.id}`}>
+                            {`ไม่ได้รับของ ${notDelivered.toLocaleString('en-US')} · ${item.notDeliveredReason ?? ''}`}
+                            {canMarkNotDelivered ? (
+                              <Button type="button" size="sm" variant="text" disabled={clearNotDeliveredMutation.isPending} data-testid={`not-delivered-clear-${item.id}`}
+                                onClick={() => clearNotDeliveredMutation.mutate(item)}>ยกเลิก</Button>
+                            ) : null}
+                          </span>
+                        ) : canMarkNotDelivered && remaining > 0 ? (
+                          <span className="mt-0.5 flex">
+                            <Button type="button" size="sm" variant="secondary" className="min-h-11" data-testid={`not-delivered-open-${item.id}`}
+                              onClick={() => setNotDeliveredFor(item)}>ไม่ได้รับของ</Button>
+                          </span>
+                        ) : null}
+                      </td>
                       <td className="px-2 py-2 text-right tabular-nums">{ordered.toLocaleString('en-US')}</td>
                       <td className="px-2 py-2 text-right tabular-nums">{delivered.toLocaleString('en-US')}</td>
                       <td className={cn('px-2 py-2 text-right tabular-nums', remaining > 0 && 'font-extrabold text-text')}>{remaining.toLocaleString('en-US')}</td>
@@ -1269,6 +1332,15 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
           onSubmit={(leadTimes) => createDraftsMutation.mutate(buildCreatePayload({
             ...(leadTimeCountries ? { newFactoryCountries: leadTimeCountries } : {}), leadTimes,
           }))}
+        />
+      ) : null}
+
+      {notDeliveredFor ? (
+        <NotDeliveredSheet
+          ticketId={ticketId}
+          item={notDeliveredFor}
+          onClose={() => setNotDeliveredFor(null)}
+          onDone={() => { setNotDeliveredFor(null); showToast?.('success', 'บันทึกว่าไม่ได้รับของแล้ว'); invalidateAfterFulfilmentChange(); }}
         />
       ) : null}
 

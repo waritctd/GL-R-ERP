@@ -3,7 +3,7 @@
  * at what the round's tax invoice still covers; the server enforces the same (and the tax-invoice rule). A photo of the
  * signed delivery note may go with it: it is attached to the round once the delivery is saved. */
 import { useRef, useState } from 'react';
-import { useMutation } from '@tanstack/react-query';
+import { useMutation, useQuery } from '@tanstack/react-query';
 import { api } from '../../../api/index.js';
 import { Button } from '../../../components/common/Button.jsx';
 import { Icon } from '../../../components/common/Icon.jsx';
@@ -30,7 +30,8 @@ export function deliveryPayload({ lines, qty, deliveredOn, recipient, source }) 
 /** The deal's items as the sheet's lines, for a delivery made before any tax invoice (no round). */
 const itemLines = (items) => items.map((i) => ({
   itemId: i.id, description: [i.brand, i.model, i.size].filter(Boolean).join(' ') || `รายการ ${i.id}`, unit: 'แผ่น',
-  coveredQty: Number(i.qty || 0), deliveredQty: Number(i.qtyDelivered || 0),
+  orderedQty: Number(i.qty || 0), markedQty: Number(i.qtyNotDelivered || 0),
+  coveredQty: Number(i.qty || 0) - Number(i.qtyNotDelivered || 0), deliveredQty: Number(i.qtyDelivered || 0), // less what was marked not delivered
 }));
 
 /** `round`: an INVOICED round the viewer may record against. `events`: the deal's events when the viewer reads the deal
@@ -45,7 +46,8 @@ export function RecordDeliverySheet({ round = null, order, events = null, ticket
   const noInvoice = round == null;
   const [noteText, setNoteText] = useState('');
   const lines = (round ? round.lines : uninvoicedRound ? uninvoicedRound.lines : itemLines(items)).filter((l) => remainingOf(l) > 0);
-  const [qty, setQty] = useState(() => Object.fromEntries(lines.map((l) => [l.itemId, String(remainingOf(l))])));
+  // what the user typed; a line not typed in shows its cap (below), so the default follows the warehouse allowance once it loads
+  const [typed, setTyped] = useState({});
   const [deliveredOn, setDeliveredOn] = useState(bangkokTodayIso());
   const [recipient, setRecipient] = useState('');
   // Only a viewer who reads the deal picks the source; it starts from what the deal is (from stock, else the warehouse).
@@ -56,6 +58,19 @@ export function RecordDeliverySheet({ round = null, order, events = null, ticket
     return item != null && Number(item.qtyFromStock || 0) - Number(item.qtyDelivered || 0) >= remainingOf(l);
   });
   const [source, setSource] = useState(fulfilmentStatus === 'FROM_STOCK' || stockFits ? 'STOCK' : 'WAREHOUSE');
+  // The warehouse's remaining allowance per line (the server's one shared cap rule): the default and the limit up front.
+  const allowanceQuery = useQuery({
+    queryKey: ['tickets', 'deliveryAllowance', ticketId],
+    queryFn: () => api.tickets.deliveryAllowance(ticketId),
+    enabled: Boolean(ticketId) && source === 'WAREHOUSE',
+    retry: false,
+    staleTime: 0,
+    gcTime: 0, // every open reads the limit afresh: a delivery or an arrival since the last open changes it
+  });
+  const allow = source === 'WAREHOUSE' && allowanceQuery.data
+    ? Object.fromEntries((allowanceQuery.data.lines ?? []).map((l) => [l.itemId, Number(l.remaining)])) : null;
+  const capOf = (line) => (allow && allow[line.itemId] != null ? Math.min(remainingOf(line), allow[line.itemId]) : remainingOf(line));
+  const qty = Object.fromEntries(lines.map((l) => [l.itemId, typed[l.itemId] ?? String(capOf(l))]));
   const [proof, setProof] = useState(null);
   const [error, setError] = useState(null);
   // After the delivery is saved but the photo was not: the delivery stands, only the photo can be retried.
@@ -63,15 +78,20 @@ export function RecordDeliverySheet({ round = null, order, events = null, ticket
   const today = bangkokTodayIso();
   const { min, max, confirmedOn } = deliveryDateBounds(today, events);
 
-  const total = lines.reduce((sum, l) => sum + Math.min(Number(qty[l.itemId] || 0), remainingOf(l)), 0);
+  const total = lines.reduce((sum, l) => sum + Math.min(Number(qty[l.itemId] || 0), capOf(l)), 0);
   const unit = lines[0]?.unit ?? 'แผ่น';
-  const overLine = lines.find((l) => Number(qty[l.itemId] || 0) > remainingOf(l));
-  const problem = noInvoice && !noteText.trim() ? 'ระบุหมายเหตุหรือเลขอ้างอิงก่อนบันทึก'
+  const overLine = lines.find((l) => Number(qty[l.itemId] || 0) > capOf(l));
+  // The warehouse limit is not known yet (or could not be read): saving would only fail after submit, so it waits
+  const allowanceWait = source === 'WAREHOUSE' && Boolean(ticketId) && !allowanceQuery.data;
+  const problem = allowanceWait ? (allowanceQuery.isError ? 'โหลดจำนวนที่ส่งได้ไม่สำเร็จ ลองอีกครั้ง' : 'กำลังโหลดจำนวนที่ส่งได้…')
+    : noInvoice && !noteText.trim() ? 'ระบุหมายเหตุหรือเลขอ้างอิงก่อนบันทึก'
     : noInvoice && noteText.trim().length > 500 ? 'หมายเหตุยาวเกิน 500 ตัวอักษร' : total <= 0 ? 'ระบุจำนวนที่ส่งอย่างน้อย 1 รายการ'
-    : overLine ? `${overLine.description}: เกิน${noInvoice ? 'จำนวนที่สั่ง' : 'ที่ใบกำกับครอบคลุม'} (เหลือ ${num(remainingOf(overLine))})` : null;
+    : overLine ? (capOf(overLine) < remainingOf(overLine)
+      ? `${overLine.description}: เกินจำนวนที่ถึงโกดังแล้ว (ส่งได้ไม่เกิน ${num(capOf(overLine))})`
+      : `${overLine.description}: เกิน${noInvoice ? 'จำนวนที่สั่ง' : 'ที่ใบกำกับครอบคลุม'} (เหลือ ${num(remainingOf(overLine))})`) : null;
 
-  const set = (line, value) => setQty((prev) => ({ ...prev, [line.itemId]: value }));
-  const step = (line, delta) => set(line, String(Math.min(remainingOf(line), Math.max(0, Number(qty[line.itemId] || 0) + delta))));
+  const set = (line, value) => setTyped((prev) => ({ ...prev, [line.itemId]: value }));
+  const step = (line, delta) => set(line, String(Math.min(capOf(line), Math.max(0, Number(qty[line.itemId] || 0) + delta))));
 
   const uploadProof = async () => {
     try {
@@ -130,9 +150,10 @@ export function RecordDeliverySheet({ round = null, order, events = null, ticket
         <div className="flex w-full flex-col gap-1">
           {error ? <p role="alert" className="m-0 text-center text-sm text-danger" data-testid="record-delivery-error">{error}</p> : null}
           {problem ? <p role="status" className="m-0 text-center text-sm text-text-secondary" data-testid="record-delivery-blocked">{problem}</p> : null}
+          {allowanceWait && allowanceQuery.isError ? <Button type="button" variant="secondary" className="w-full" data-testid="record-allowance-retry" onClick={() => allowanceQuery.refetch()}>ลองอีกครั้ง</Button> : null}
           <Button type="button" variant="primary" className="w-full" disabled={Boolean(problem) || save.isPending} data-testid="record-delivery-submit"
             onClick={() => { setError(null); save.mutate(); }}>
-            {save.isPending ? 'กำลังบันทึก…' : `บันทึกส่ง ${num(total)} ${unit}`}
+            {save.isPending ? 'กำลังบันทึก…' : overLine ? `ส่งได้ไม่เกิน ${num(capOf(overLine))} ${overLine.unit ?? unit}` : `บันทึกส่ง ${num(total)} ${unit}`}
           </Button>
           <Button type="button" variant="text" className="min-h-12 w-full" disabled={save.isPending} onClick={onClose}>ยกเลิก</Button>
         </div>
@@ -164,8 +185,9 @@ export function RecordDeliverySheet({ round = null, order, events = null, ticket
             <span className="flex flex-col">
               <b className="text-base">{line.description}</b>
               <small className="text-xs text-text-muted">
-                {noInvoice ? `สั่ง ${num(line.coveredQty)} ${line.unit}` : `ใบกำกับครอบคลุม ${num(line.coveredQty)} ${line.unit}`}{Number(line.deliveredQty) > 0 ? ` · ส่งแล้ว ${num(line.deliveredQty)}` : ''}
+                {noInvoice ? `สั่ง ${num(line.orderedQty ?? line.coveredQty)}${line.markedQty > 0 ? ` · ไม่ได้รับของ ${num(line.markedQty)}` : ''} ${line.unit}` : `ใบกำกับครอบคลุม ${num(line.coveredQty)} ${line.unit}`}{Number(line.deliveredQty) > 0 ? ` · ส่งแล้ว ${num(line.deliveredQty)}` : ''}
               </small>
+              {allow ? <small className="text-xs font-bold text-text-secondary" data-testid={`record-limit-${line.itemId}`}>ส่งได้ไม่เกิน {num(capOf(line))} {line.unit}</small> : null}
             </span>
             <div className="flex items-center gap-2">
               <Button type="button" variant="secondary" className="min-h-12 w-12 shrink-0 p-0" aria-label="ลดจำนวน" onClick={() => step(line, -1)}>

@@ -33,4 +33,21 @@ describe('ImportRequestFactoryCard — what the deal page changed stays on the d
     renderCard({ row: issued, showReadOnlyChip: true });
     expect(screen.getByText('ดูอย่างเดียว')).toBeTruthy();
   });
+
+  it('part of the order in the warehouse: the card says ถึงโกดัง 70 / 140, not a step that reads as nothing arrived', () => {
+    renderCard({ row: issued, arrival: { received: '70', ordered: '140', unit: 'แผ่น' } });
+    expect(screen.getByText('ถึงโกดัง 70 / 140 แผ่น')).toBeTruthy();
+    expect(screen.queryByText(/S12/)).toBeNull();
+  });
+
+  it('a short arrival at RECEIVED has no green tick and names the shortage, including 0 of 140', () => {
+    renderCard({ row: { ...issued, importStep: 'RECEIVED' }, arrival: { received: '0', ordered: '140', unit: 'แผ่น', missing: '140' } });
+    expect(screen.getByText('ถึงโกดัง 0 / 140 แผ่น · ขาด 140')).toBeTruthy();
+    expect(screen.queryByText(/✓/)).toBeNull();
+  });
+
+  it('lines with no unit still show the figures (NULL and blank are one value): partial 100 / 196, rest still coming, no tick and no ขาด', () => {
+    renderCard({ row: { ...issued, importStep: 'AWAITING_CUSTOMS' }, arrival: { received: '100', ordered: '196', unit: '', missing: null } });
+    expect(screen.getByText('ถึงโกดัง 100 / 196')).toBeTruthy();
+  });
 });

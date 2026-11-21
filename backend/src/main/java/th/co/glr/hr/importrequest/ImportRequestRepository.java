@@ -43,7 +43,7 @@ public class ImportRequestRepository {
                r.superseded_by_id,
                r.created_at, r.updated_at, r.issued_at
           FROM sales.import_request r
-          JOIN sales.ticket t ON t.ticket_id = r.ticket_id
+          LEFT JOIN sales.ticket t ON t.ticket_id = r.ticket_id
         """;
 
     /** PR-B REVIEW ROUND 1, S9: ORDER BY r.brand was stale — V184 made brand a nullable display snapshot and
@@ -117,7 +117,7 @@ public class ImportRequestRepository {
      * fields are computed. */
     private static ImportRequestDto mapRow(java.sql.ResultSet rs) throws java.sql.SQLException {
         return new ImportRequestDto(
-            rs.getLong("import_request_id"), rs.getLong("ticket_id"), rs.getString("ticket_code"),
+            rs.getLong("import_request_id"), (Long) rs.getObject("ticket_id"), rs.getString("ticket_code"),
             rs.getString("brand"), (Long) rs.getObject("factory_id"), rs.getString("factory_name"),
             rs.getInt("version"), rs.getString("status"),
             rs.getString("doc_number"), localDate(rs, "issue_date"), localDate(rs, "first_issued_date"),
@@ -360,6 +360,26 @@ public class ImportRequestRepository {
             });
     }
 
+    /** Writes the step DERIVED from the IR's shipment rounds (slice 2). Clears the IR-level undo stamp: the undo of a
+     * round advance lives on the round. */
+    public void setDerivedStep(long id, String step, LocalDate at, Long byId, String byName, String note) {
+        jdbc.update("""
+            UPDATE sales.import_request
+               SET import_step = :step, import_step_at = :at, import_step_by_id = :by, import_step_by_name = :byName,
+                   import_step_note = :note, step_undo_from = NULL, step_undo_from_at = NULL,
+                   step_undo_from_by_id = NULL, step_undo_from_by_name = NULL, step_undo_from_note = NULL,
+                   step_advanced_at = NULL, updated_at = now()
+             WHERE import_request_id = :id AND status = 'ISSUED'
+            """, new MapSqlParameterSource("id", id).addValue("step", step).addValue("at", at)
+                .addValue("by", byId).addValue("byName", byName).addValue("note", note));
+    }
+
+    /** A corrected date of the step the IR is on (the step itself is unchanged). */
+    public void setStepDate(long id, LocalDate at) {
+        jdbc.update("UPDATE sales.import_request SET import_step_at = :at, updated_at = now() WHERE import_request_id = :id AND status = 'ISSUED'",
+            new MapSqlParameterSource("id", id).addValue("at", at));
+    }
+
     /** Compare-and-set step advance: only succeeds WHERE status = 'ISSUED' AND import_step = :expected. */
     public int advanceStep(long id, String expectedCurrentStep, String targetStep,
                            LocalDate eventDate, long actorId, String actorName, String note) {
@@ -507,5 +527,60 @@ public class ImportRequestRepository {
         return jdbc.update(
             "UPDATE sales.ticket SET required_by_note = :note, updated_at = now() WHERE ticket_id = :id",
             new MapSqlParameterSource().addValue("id", ticketId).addValue("note", note));
+    }
+
+    // ── orders with no project (สั่งของไม่มีโครงการ) ─────────────────────────────────────────────────
+
+    /** What makes an import request a no-project order: its purpose, requester, who/where note and wanted-by date. */
+    public record NoProjectMeta(String purpose, long requesterId, String purposeNote, LocalDate wantedBy) {}
+
+    /** Empty for a deal IR (and for an unknown id). */
+    public Optional<NoProjectMeta> findNoProjectMeta(long id) {
+        return jdbc.query("""
+            SELECT order_purpose, requester_id, purpose_note, wanted_by FROM sales.import_request
+             WHERE import_request_id = :id AND ticket_id IS NULL
+            """, Map.of("id", id), (rs, n) -> new NoProjectMeta(rs.getString(1), rs.getLong(2), rs.getString(3),
+                localDate(rs, "wanted_by"))).stream().findFirst();
+    }
+
+    /** One ISSUED, numbered IR at CONTACTED with no deal. The form's "สั่งมาให้" carries the who/where note and its
+     * project line the purpose, so the existing PDF prints it; the factory copy blanks both, as for a deal. */
+    public long insertNoProjectOrder(long factoryId, String factoryName, String purpose, String purposeLabel,
+                                     long requesterId, String requesterName, String purposeNote, LocalDate wantedBy,
+                                     String requiredByText, String docNumber, LocalDate today, long actorId,
+                                     String actorName, String actorEmail) {
+        KeyHolder keys = new GeneratedKeyHolder();
+        jdbc.update("""
+            INSERT INTO sales.import_request
+                (ticket_id, factory_id, factory_name, brand, version, status, doc_number, issue_date, first_issued_date,
+                 customer_name, project_name, requested_by_name, required_by_note, created_by_id, created_by_name,
+                 issued_by_id, issued_by_name, issued_by_email, issued_at, import_step, import_step_at,
+                 import_step_by_id, import_step_by_name, order_purpose, requester_id, purpose_note, wanted_by)
+            VALUES (NULL, :f, :fn, :fn, 1, 'ISSUED', :doc, :today, :today,
+                    :note, :label, :requester, :wantedText, :actor, :actorName,
+                    :actor, :actorName, :actorEmail, now(), 'CONTACTED', :today,
+                    :actor, :actorName, :purpose, :requesterId, :note, :wantedBy)
+            """, new MapSqlParameterSource("f", factoryId).addValue("fn", factoryName).addValue("doc", docNumber)
+                .addValue("today", today).addValue("note", purposeNote).addValue("label", purposeLabel)
+                .addValue("requester", requesterName).addValue("wantedText", requiredByText).addValue("actor", actorId)
+                .addValue("actorName", actorName).addValue("actorEmail", actorEmail).addValue("purpose", purpose)
+                .addValue("requesterId", requesterId).addValue("wantedBy", wantedBy),
+            keys, new String[] {"import_request_id"});
+        return keys.getKey().longValue();
+    }
+
+    /** The requester or import takes back a no-project order that is on no round yet: SUPERSEDED with no successor (the IR
+     * number stays on record). 0 rows = not a no-project ISSUED order, or a lot was planned meanwhile. */
+    public int withdrawNoProject(long importRequestId) {
+        // Lock the row first: createRound locks the same row before it inserts a lot, so the two cannot interleave.
+        if (jdbc.queryForList("SELECT 1 FROM sales.import_request WHERE import_request_id = :id AND ticket_id IS NULL AND status = 'ISSUED' FOR UPDATE",
+                Map.of("id", importRequestId), Integer.class).isEmpty()) {
+            return 0;
+        }
+        return jdbc.update("""
+            UPDATE sales.import_request SET status = 'SUPERSEDED', superseded_by_id = NULL, updated_at = now()
+             WHERE import_request_id = :id AND ticket_id IS NULL AND status = 'ISSUED'
+               AND NOT EXISTS (SELECT 1 FROM sales.shipment_lot WHERE import_request_id = :id)
+            """, Map.of("id", importRequestId));
     }
 }

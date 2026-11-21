@@ -188,6 +188,11 @@ public class TicketRepository {
     }
 
     /** Live {@code can_read_all_sales} read, for services that hold no EmployeeAuthRepository (AttachmentController). */
+    /** The showroom team's grant: reads every SHOWROOM no-project order. */
+    public boolean holdsShowroomOrdersGrant(long employeeId) {
+        return th.co.glr.hr.auth.EmployeeAuthRepository.canSeeShowroomOrders(jdbc, employeeId);
+    }
+
     public boolean holdsReadAllSalesGrant(long employeeId) {
         return th.co.glr.hr.auth.EmployeeAuthRepository.canReadAllSales(jdbc, employeeId);
     }
@@ -974,6 +979,7 @@ public class TicketRepository {
                    ti.calced_cost, ti.calced_price, ti.calc_config_version,
                    ti.manual_price, ti.manual_override_reason,
                    ti.qty_delivered, ti.qty_from_stock, ti.stock_note,
+                   ti.qty_not_delivered, ti.not_delivered_reason,
                    ti.catalog_price_id, ti.catalog_product_code, ti.weight_multiplier,
                    ti.sourced_from_stock, ti.stock_sale_price,
                    pp.price AS catalog_price, pp.currency AS catalog_currency,
@@ -1031,7 +1037,9 @@ public class TicketRepository {
                     rs.getBigDecimal("stock_sale_price"),
                     rs.getBigDecimal("catalog_thickness_mm"),
                     rs.getBigDecimal("catalog_pcs_per_box"),
-                    rs.getString("catalog_origin_country_code")
+                    rs.getString("catalog_origin_country_code"),
+                    rs.getBigDecimal("qty_not_delivered"),
+                    rs.getString("not_delivered_reason")
                 );
             });
     }
@@ -1708,10 +1716,48 @@ public class TicketRepository {
         return Boolean.TRUE.equals(value);
     }
 
+    /** What reached (or is on its way to) the warehouse for one deal line, over the ISSUED IR lines that point at it. */
+    public record LineArrival(int irLines, BigDecimal received, BigDecimal inProgress, int zeroReceivedLots) {}
+
+    public LineArrival lineArrival(long ticketId, long itemId) {
+        return jdbc.queryForObject("""
+            SELECT COUNT(DISTINCT i.import_request_item_id) AS ir_lines,
+                   COALESCE(SUM(CASE WHEN r.import_step = 'RECEIVED' AND COALESCE(l.received_qty, l.qty) > 0
+                                     THEN COALESCE(l.received_qty, l.qty) END), 0) AS received,
+                   COALESCE(SUM(CASE WHEN r.import_step <> 'RECEIVED' THEN l.qty END), 0) AS in_progress,
+                   COUNT(CASE WHEN r.import_step = 'RECEIVED' AND COALESCE(l.received_qty, l.qty) = 0 THEN 1 END) AS zeros
+              FROM sales.import_request_item i
+              JOIN sales.import_request ir ON ir.import_request_id = i.import_request_id
+                                          AND ir.ticket_id = :t AND ir.status = 'ISSUED'
+              LEFT JOIN sales.shipment_lot l ON l.import_request_item_id = i.import_request_item_id
+              LEFT JOIN sales.shipment_round r ON r.shipment_round_id = l.shipment_round_id
+             WHERE i.ticket_item_id = :item
+            """, Map.of("t", ticketId, "item", itemId), (rs, n) -> new LineArrival(rs.getInt("ir_lines"),
+                rs.getBigDecimal("received"), rs.getBigDecimal("in_progress"), rs.getInt("zeros")));
+    }
+
+    /** Sets the marked-not-delivered quantity of a line (never beyond what is not yet delivered); 0 rows = refused. */
+    public int setNotDelivered(long ticketId, long itemId, BigDecimal qty, String reason, long byId) {
+        return jdbc.update("""
+            UPDATE sales.ticket_item
+               SET qty_not_delivered = :q, not_delivered_reason = :reason, not_delivered_by = :by, not_delivered_at = now()
+             WHERE ticket_id = :t AND item_id = :item AND qty_delivered + :q <= qty
+            """, new MapSqlParameterSource("t", ticketId).addValue("item", itemId).addValue("q", qty)
+                .addValue("reason", reason).addValue("by", byId));
+    }
+
+    public int clearNotDelivered(long ticketId, long itemId) {
+        return jdbc.update("""
+            UPDATE sales.ticket_item
+               SET qty_not_delivered = 0, not_delivered_reason = NULL, not_delivered_by = NULL, not_delivered_at = NULL
+             WHERE ticket_id = :t AND item_id = :item AND qty_not_delivered > 0
+            """, Map.of("t", ticketId, "item", itemId));
+    }
+
     /** Locks sales.ticket's own row FOR UPDATE for the remainder of the caller's transaction. */
-    public void lockTicketForUpdate(long ticketId) {
-        jdbc.query("SELECT 1 FROM sales.ticket WHERE ticket_id = :id FOR UPDATE",
-            Map.of("id", ticketId), (rs, n) -> 0);
+    public String lockTicketForUpdate(long ticketId) {
+        return jdbc.query("SELECT lifecycle FROM sales.ticket WHERE ticket_id = :id FOR UPDATE",
+            Map.of("id", ticketId), (rs, n) -> rs.getString(1)).stream().findFirst().orElse(null);
     }
 
     /**
@@ -2503,7 +2549,7 @@ public class TicketRepository {
                    SET qty_delivered = qty_delivered + :qty
                  WHERE ticket_id = :ticketId
                    AND item_id = :itemId
-                   AND qty_delivered + :qty <= qty
+                   AND qty_delivered + :qty <= qty - qty_not_delivered
                 """,
                 new MapSqlParameterSource()
                     .addValue("ticketId", ticketId)
@@ -2561,7 +2607,7 @@ public class TicketRepository {
                    COALESCE((SELECT SUM(dri.qty) FROM sales.delivery_record_item dri
                                JOIN sales.delivery_record dr ON dr.delivery_id = dri.delivery_id
                               WHERE dr.delivery_request_id = r.delivery_request_id AND dri.item_id = l.item_id), 0) AS delivered,
-                   ti.qty - COALESCE(ti.qty_delivered, 0) AS item_left
+                   ti.qty - ti.qty_not_delivered - COALESCE(ti.qty_delivered, 0) AS item_left
               FROM sales.delivery_request r
               JOIN sales.delivery_request_line l ON l.delivery_request_id = r.delivery_request_id
               JOIN sales.ticket_item ti ON ti.item_id = l.item_id
@@ -2641,7 +2687,7 @@ public class TicketRepository {
 
     public boolean allLinesFullyDelivered(long ticketId) {
         Boolean value = jdbc.queryForObject("""
-            SELECT COALESCE(bool_and(qty_delivered >= qty), false)
+            SELECT COALESCE(bool_and(qty_delivered + qty_not_delivered >= qty), false)
               FROM sales.ticket_item
              WHERE ticket_id = :ticketId
             """, Map.of("ticketId", ticketId), Boolean.class);
@@ -2672,6 +2718,63 @@ public class TicketRepository {
             )
             """, Map.of("ticketId", ticketId), Boolean.class);
         return Boolean.TRUE.equals(value);
+    }
+
+    /** Whether any lot of the deal's ISSUED import requests is on a RECEIVED shipment round with something received
+     * (COALESCE(received_qty, qty) &gt; 0): goods physically in the warehouse, even if the rest has not arrived. */
+    public boolean hasReceivedLot(long ticketId) {
+        return Boolean.TRUE.equals(jdbc.queryForObject("""
+            SELECT EXISTS (
+                SELECT 1 FROM sales.shipment_lot l
+                  JOIN sales.shipment_round r ON r.shipment_round_id = l.shipment_round_id
+                  JOIN sales.import_request ir ON ir.import_request_id = l.import_request_id
+                  JOIN sales.import_request_item i ON i.import_request_item_id = l.import_request_item_id
+                 WHERE ir.ticket_id = :t AND ir.status = 'ISSUED' AND r.import_step = 'RECEIVED'
+                   AND i.ticket_item_id IS NOT NULL -- a lot no deal line can claim must not open the warehouse gate
+                   AND COALESCE(l.received_qty, l.qty) > 0)
+            """, Map.of("t", ticketId), Boolean.class));
+    }
+
+    /** Per deal line an ISSUED IR line points at: the IR quantity and how much of it sits on RECEIVED rounds (lot
+     * quantities as planned; a short arrival is NOT subtracted, so it can never stop a deal from being delivered). */
+    public record LineReceipt(BigDecimal irQty, BigDecimal onRounds, long receivedLots, boolean lotReturned) {}
+    // receivedLots: the line's lots on RECEIVED rounds, INCLUDING ones that received 0 (the GOODS_RECEIVED bypass is for lines with none)
+
+    /** {@code dealHasLots}: any ISSUED IR of the deal has a lot at all; without it nothing is capped (pre-portal, stock-only
+     * and lot-less deals behave as before). */
+    public record LotReceipts(boolean dealHasLots, Map<Long, LineReceipt> byItem) {}
+
+    public LotReceipts lotReceipts(long ticketId) {
+        Map<Long, LineReceipt> byItem = new java.util.HashMap<>();
+        boolean[] anyLots = {false};
+        jdbc.query("""
+            SELECT iri.ticket_item_id AS item_id, SUM(iri.qty) AS ir_qty,
+                   COALESCE(SUM((SELECT SUM(l.qty) FROM sales.shipment_lot l
+                                   JOIN sales.shipment_round r ON r.shipment_round_id = l.shipment_round_id
+                                  WHERE l.import_request_item_id = iri.import_request_item_id
+                                    AND r.import_step = 'RECEIVED'
+                                    AND COALESCE(l.received_qty, l.qty) > 0)), 0) AS on_rounds, -- a lot that received 0 holds nothing to deliver
+                   COALESCE(SUM((SELECT COUNT(*) FROM sales.shipment_lot l3
+                                   JOIN sales.shipment_round r3 ON r3.shipment_round_id = l3.shipment_round_id
+                                  WHERE l3.import_request_item_id = iri.import_request_item_id
+                                    AND r3.import_step = 'RECEIVED')), 0) AS received_lots,
+                   COALESCE(SUM((SELECT COUNT(*) FROM sales.shipment_lot l2
+                                  WHERE l2.import_request_item_id = iri.import_request_item_id)), 0) AS lots,
+                   COALESCE(BOOL_OR(ti.had_returned_lot), false) AS lot_returned
+              FROM sales.import_request ir
+              JOIN sales.import_request_item iri ON iri.import_request_id = ir.import_request_id
+              LEFT JOIN sales.ticket_item ti ON ti.item_id = iri.ticket_item_id
+             WHERE ir.ticket_id = :t AND ir.status = 'ISSUED'
+             GROUP BY iri.ticket_item_id
+            """, Map.of("t", ticketId), rs -> {
+                if (rs.getObject("item_id") != null) { // an unlinked line still counts toward dealHasLots
+                    byItem.put(rs.getLong("item_id"), new LineReceipt(rs.getBigDecimal("ir_qty"), rs.getBigDecimal("on_rounds"), rs.getLong("received_lots"), rs.getBoolean("lot_returned")));
+                }
+                if (rs.getLong("lots") > 0 || rs.getBoolean("lot_returned")) { // a returned last lot keeps the deal capped
+                    anyLots[0] = true;
+                }
+            });
+        return new LotReceipts(anyLots[0], byItem);
     }
 
     /** Validated ticket-status transition — the ONE way sales.ticket.status is written (ticket creation's INSERT
@@ -3305,7 +3408,7 @@ public class TicketRepository {
     public int closeOutDroppedChainItems(long ticketId, long rootPricingRequestId, long currentPricingRequestId) {
         return jdbc.update("""
             UPDATE sales.ticket_item ti
-               SET qty = ti.qty_delivered
+               SET qty = ti.qty_delivered, qty_not_delivered = 0
              WHERE ti.ticket_id = :ticketId
                AND ti.qty IS DISTINCT FROM ti.qty_delivered
                AND EXISTS (

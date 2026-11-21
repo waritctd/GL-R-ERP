@@ -391,6 +391,7 @@ export const api = {
     recordPayment: (id, payload) => apiRequest(API_ROUTES.finance.action(id, 'payments'), { method: 'POST', body: payload }),
     setBilling: (id, payload) => apiRequest(API_ROUTES.tickets.billing(id), { method: 'POST', body: payload }),
     listDeliveries: (id) => apiRequest(API_ROUTES.tickets.deliveries(id)),
+    incoming: (id) => apiRequest(API_ROUTES.tickets.incoming(id)),
     reserveStock: (id, payload) => apiRequest(API_ROUTES.tickets.reserveStock(id), { method: 'POST', body: payload }),
     // "จัดซื้อสินค้า" dialog: where each deal line comes from (stock vs import). GET -> { legacy,
     // editable, decidedAt, quotationNumber, lines }; POST { lines:[{itemId, fromStock}] } -> { ticket }.
@@ -401,6 +402,11 @@ export const api = {
     updateItemWeightMultipliers: (id, payload) =>
       apiRequest(API_ROUTES.tickets.itemWeightMultipliers(id), { method: 'POST', body: payload }),
     recordDelivery: (id, payload) => apiRequest(API_ROUTES.tickets.deliveries(id), { method: 'POST', body: payload }),
+    deliveryAllowance: (id) => apiRequest(API_ROUTES.tickets.deliveryAllowance(id)),
+    // ไม่ได้รับของ (sales manager / CEO): the most that may be marked, the mark, and taking it off
+    notDeliveredAllowed: (id, itemId) => apiRequest(`${API_ROUTES.tickets.notDelivered(id, itemId)}/allowed`),
+    markNotDelivered: (id, itemId, payload) => apiRequest(API_ROUTES.tickets.notDelivered(id, itemId), { method: 'POST', body: payload }),
+    clearNotDelivered: (id, itemId) => apiRequest(`${API_ROUTES.tickets.notDelivered(id, itemId)}/clear`, { method: 'POST' }),
     completeDelivery: (id, payload = {}) => apiRequest(API_ROUTES.tickets.completeDelivery(id), { method: 'POST', body: payload }),
     actions: (id) => apiRequest(API_ROUTES.tickets.action(id, 'actions')),
     // Ticket-native submit/pickup/propose-price/approve/reject/quotation/mark-quotation-* and the
@@ -646,6 +652,76 @@ export const api = {
     // only while that ONE form is still DRAFT.
     setRequiredByNote: (ticketId, payload) =>
       apiRequest(API_ROUTES.storedImportRequests.requiredByNote(ticketId), { method: 'PUT', body: payload }),
+  },
+  // Mirrors NoProjectOrderController: POST creates an ISSUED order with no project (every field required); GET my-incoming
+  // is the caller's one page of incoming goods (lots + unplanned quantity), no price and no factory document.
+  noProjectOrders: {
+    create: (payload) => apiRequest(API_ROUTES.noProjectOrders.create, { method: 'POST', body: payload }),
+    // The requester, import or the CEO takes back an order that is on no round yet (409 once a lot rides on one).
+    withdraw: (id) => apiRequest(API_ROUTES.noProjectOrders.withdraw(id), { method: 'POST' }),
+  },
+  myIncoming: {
+    get: () => apiRequest(API_ROUTES.myIncoming.get),
+  },
+  // Mirrors ShipmentRoundController (V239 rounds): reads import/CEO/sales_manager/read-all holders; writes and the round's
+  // documents (proforma, invoice, ...) import and CEO only. `advance` payload: { targetStep, eventDate, expectedStep, note, facts,
+  // documents: [{ kind, docNo }] }; `updateFacts` payload: { facts, stepDates }.
+  shipmentRounds: {
+    list: () => apiRequest(API_ROUTES.shipmentRounds.list()),
+    get: (id) => apiRequest(API_ROUTES.shipmentRounds.get(id)),
+    // Planning (N04) and lots: `createRound` { factoryId, label, transportMode, lots: [{ importRequestId, itemId, qty }] };
+    // `removeLot` / `moveLot` answer { round: null } when the emptied round was deleted.
+    createRound: (payload) => apiRequest(API_ROUTES.shipmentRounds.list(), { method: 'POST', body: payload }),
+    addLots: (id, payload) => apiRequest(API_ROUTES.shipmentRounds.lots(id), { method: 'POST', body: payload }),
+    changeLot: (id, lotId, payload) => apiRequest(API_ROUTES.shipmentRounds.lot(id, lotId), { method: 'PUT', body: payload }),
+    removeLot: (id, lotId) => apiRequest(API_ROUTES.shipmentRounds.lot(id, lotId), { method: 'DELETE' }),
+    moveLot: (id, lotId, payload) => apiRequest(API_ROUTES.shipmentRounds.moveLot(id, lotId), { method: 'POST', body: payload }),
+    // a lot recorded as exactly 0 received goes back to รอจัดรอบ (answers { round: null } when the round is left empty)
+    returnLotToWaiting: (id, lotId) => apiRequest(API_ROUTES.shipmentRounds.returnLotToWaiting(id, lotId), { method: 'POST' }),
+    updateFacts: (id, payload) => apiRequest(API_ROUTES.shipmentRounds.facts(id), { method: 'PUT', body: payload }),
+    advance: (id, payload) => apiRequest(API_ROUTES.shipmentRounds.advance(id), { method: 'POST', body: payload }),
+    undo: (id, payload) => apiRequest(API_ROUTES.shipmentRounds.undo(id), { method: 'POST', body: payload }),
+    // Documents: many per round and kind; a number or a file (or both). Multipart because the file is optional.
+    addDocument: async (id, { kind, docNo, docDate, note, file }) => {
+      const formData = new FormData();
+      formData.append('kind', kind);
+      if (docNo) formData.append('docNo', docNo);
+      if (docDate) formData.append('docDate', docDate);
+      if (note) formData.append('note', note);
+      if (file) formData.append('file', file);
+      const res = await fetch(API_ROUTES.shipmentRounds.documents(id), {
+        method: 'POST', credentials: 'include', headers: csrfHeaders('POST'), body: formData,
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.message || 'เพิ่มเอกสารไม่สำเร็จ');
+      }
+      return res.json();
+    },
+    updateDocument: (id, docId, payload) =>
+      apiRequest(API_ROUTES.shipmentRounds.document(id, docId), { method: 'PUT', body: payload }),
+    deleteDocument: (id, docId) => apiRequest(API_ROUTES.shipmentRounds.document(id, docId), { method: 'DELETE' }),
+    attachFile: async (id, docId, file) => {
+      const formData = new FormData();
+      formData.append('file', file);
+      const res = await fetch(API_ROUTES.shipmentRounds.documentFile(id, docId), {
+        method: 'POST', credentials: 'include', headers: csrfHeaders('POST'), body: formData,
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.message || 'แนบไฟล์ไม่สำเร็จ');
+      }
+      return res.json();
+    },
+    removeFile: (id, docId) => apiRequest(API_ROUTES.shipmentRounds.documentFile(id, docId), { method: 'DELETE' }),
+    downloadFile: async (id, docId) => {
+      const res = await fetch(API_ROUTES.shipmentRounds.documentFile(id, docId), { credentials: 'include' });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.message || 'ดาวน์โหลดไฟล์ไม่สำเร็จ');
+      }
+      return res.blob();
+    },
   },
   catalog: {
     search: (q) => apiRequest(API_ROUTES.catalog.search(q ?? '')),

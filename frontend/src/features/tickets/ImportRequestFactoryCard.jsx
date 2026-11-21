@@ -58,6 +58,8 @@ export function ImportRequestFactoryCard({
   showInlineDownload = false, showOrderEmail = false,
   // Deal page only (redesign 2026-11-16): the "ดูอย่างเดียว" chip on a card this viewer cannot edit.
   dealNoun = 'งาน', showReadOnlyChip = false,
+  // { received, ordered, unit } while only part of the IR is in the warehouse (from the deal's incoming data); else null.
+  arrival = null,
 }) {
   const queryClient = useQueryClient();
   const [leadTimeDraft, setLeadTimeDraft] = useState({ min: row.leadTimeMinDays ?? '', max: row.leadTimeMaxDays ?? '' });
@@ -310,6 +312,7 @@ export function ImportRequestFactoryCard({
             leadTimeMinDays: row.leadTimeMinDays, leadTimeMaxDays: row.leadTimeMaxDays,
           }}
           editable={false}
+          arrival={arrival}
         />
       ) : (
         <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1">

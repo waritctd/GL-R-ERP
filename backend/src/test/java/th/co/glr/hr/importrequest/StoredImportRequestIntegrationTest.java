@@ -72,7 +72,7 @@ class StoredImportRequestIntegrationTest extends AbstractPostgresIntegrationTest
             new th.co.glr.hr.dealquotation.DealQuotationRepository(jdbc, new th.co.glr.hr.catalog.CatalogRepository(jdbc)));
 
         service = new ImportRequestService(queries, new ImportRequestRenderer(), stored, factories,
-            tickets, ticketService, notifications);
+            tickets, ticketService, notifications, new th.co.glr.hr.importrequest.ShipmentRoundRepository(jdbc));
 
         ownerId = insertEmployee("STORED-OWN");
         owner = principal(ownerId, "sales");
@@ -179,6 +179,36 @@ class StoredImportRequestIntegrationTest extends AbstractPostgresIntegrationTest
         assertThat(sequenceValue()).isEqualTo(seqBefore);
     }
 
+    @Test
+    void revisionDroppingALineThatIsSplitOverRounds_isRefused_andNoLotMoves() {
+        long v1 = byFactory(DraftSeed.seed(jdbc, ticketId, owner), padanaFactoryId).id();
+        service.issue(v1, null, owner);
+        service.advanceStep(v1, new AdvanceImportStepRequest(ImportRequestStep.ORDERED, null, null), importUser);
+        // Split the first line's lot over a second round.
+        jdbc.update("""
+            UPDATE sales.shipment_lot SET qty = qty / 2 WHERE shipment_lot_id = (
+              SELECT min(shipment_lot_id) FROM sales.shipment_lot WHERE import_request_id = :ir)""", Map.of("ir", v1));
+        long roundB = jdbc.queryForObject("""
+            INSERT INTO sales.shipment_round (source, import_step) VALUES ('PORTAL', 'CONTACTED')
+            RETURNING shipment_round_id""", Map.of(), Long.class);
+        jdbc.update("""
+            INSERT INTO sales.shipment_lot (shipment_round_id, import_request_id, import_request_item_id, qty)
+            SELECT :b, import_request_id, import_request_item_id, qty FROM sales.shipment_lot
+             WHERE shipment_lot_id = (SELECT min(shipment_lot_id) FROM sales.shipment_lot WHERE import_request_id = :ir)""",
+            Map.of("b", roundB, "ir", v1));
+        ImportRequestDto v2 = service.revise(v1, owner);
+        jdbc.update("""
+            DELETE FROM sales.import_request_item WHERE import_request_id = :v2 AND code =
+              (SELECT i.code FROM sales.import_request_item i JOIN sales.shipment_lot l USING (import_request_item_id)
+                WHERE l.shipment_lot_id = (SELECT min(shipment_lot_id) FROM sales.shipment_lot WHERE import_request_id = :v1))""",
+            Map.of("v2", v2.id(), "v1", v1));
+
+        assertThatThrownBy(() -> service.issue(v2.id(), null, owner))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM sales.shipment_lot WHERE import_request_id = :id",
+            Map.of("id", v1), Integer.class)).isEqualTo(3);
+    }
+
     /** Two partial unique indexes on (ticket_id, factory_id): a correction is prepared while the previous version
      * is still live, and the revision's issue carries the predecessor's progress step FORWARD rather than
      * resetting it to CONTACTED (import-request-per-factory-PLAN.md §3). */
@@ -200,6 +230,23 @@ class StoredImportRequestIntegrationTest extends AbstractPostgresIntegrationTest
         // Carried forward, not reset — v1 had already advanced past CONTACTED.
         assertThat(v2Issued.importStep()).isEqualTo(ImportRequestStep.ORDERED);
 
+        // The lots follow the revision's new item rows onto the same round; the superseded row keeps none.
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM sales.shipment_lot WHERE import_request_id = :id",
+            Map.of("id", v1), Integer.class)).isZero();
+        assertThat(jdbc.queryForObject("""
+            SELECT count(DISTINCT l.shipment_round_id) FROM sales.shipment_lot l
+              JOIN sales.import_request_item i USING (import_request_item_id)
+             WHERE l.import_request_id = :id""",
+            Map.of("id", v2.id()), Integer.class)).isEqualTo(1);
+        // every replacement lot carries its whole item quantity
+        assertThat(jdbc.queryForObject("""
+            SELECT count(*) FROM sales.shipment_lot l
+              JOIN sales.import_request_item i USING (import_request_item_id)
+             WHERE l.import_request_id = :id AND l.qty <> i.qty""",
+            Map.of("id", v2.id()), Integer.class)).isZero();
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM sales.shipment_lot WHERE import_request_id = :id",
+            Map.of("id", v2.id()), Integer.class)).isEqualTo(2);
+
         ImportRequestDto superseded = service.get(v1, owner);
         assertThat(superseded.status()).isEqualTo(ImportRequestStatus.SUPERSEDED);
         assertThat(superseded.supersededById()).isEqualTo(v2.id());
@@ -210,6 +257,7 @@ class StoredImportRequestIntegrationTest extends AbstractPostgresIntegrationTest
     void revise_isRefusedOnceThePredecessorHasReceivedTheGoods() {
         long v1 = byFactory(DraftSeed.seed(jdbc, ticketId, owner), padanaFactoryId).id();
         service.issue(v1, null, owner);
+        DraftSeed.migratedRound(jdbc, v1);
         for (String step : List.of(ImportRequestStep.ORDERED, ImportRequestStep.PICKED_UP,
                 ImportRequestStep.IN_TRANSIT, ImportRequestStep.AWAITING_CUSTOMS, ImportRequestStep.RECEIVED)) {
             service.advanceStep(v1, new AdvanceImportStepRequest(step, null, null), importUser);

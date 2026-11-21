@@ -210,6 +210,9 @@ public class NotificationRepository {
         Map.entry("DEPOSIT_PAYMENT_CONFIRMED", "ฝ่ายบัญชียืนยันรับเงินมัดจำแล้ว"),
         Map.entry("IMPORT_STARTED", "เริ่มสั่งซื้อกับโรงงานแล้ว"),
         Map.entry("IMPORT_GOODS_RECEIVED_ALL", "สินค้าเข้าคลังครบแล้ว — พร้อมนัดส่งลูกค้า"),
+        Map.entry("LINE_NOT_DELIVERED", "มีรายการที่ไม่ได้รับของ — ส่งมอบไม่ได้"),
+        Map.entry("IMPORT_LOT_RECEIVED", "สินค้าล็อตหนึ่งถึงโกดังแล้ว"),
+        Map.entry("IMPORT_ORDER_WITHDRAWN", "ผู้สั่งยกเลิกคำขอสั่งของ"),
         Map.entry("DELIVERY_COMPLETED", "ส่งสินค้าครบแล้ว — รอฝ่ายบัญชีดำเนินการ"),
         Map.entry("REMAINING_INVOICE_ISSUED", "ออกใบแจ้งหนี้ (ยอดคงเหลือ) แล้ว — รอยืนยันรับชำระ"),
         Map.entry("CLOSE_READY_FOR_CEO", "ดีลพร้อมปิด — รอ CEO ตรวจสอบ"),
@@ -283,6 +286,17 @@ public class NotificationRepository {
             List.of(excludeEmployeeId));
     }
 
+    /** An in-app bell only: no email (a lot reaching the warehouse is a heads-up, not a mail). */
+    public void notifyEmployeeBellOnly(long employeeId, String type, String message, String link) {
+        insertEmployeeNotification(employeeId, type, message, link);
+    }
+
+    /** As {@link #notifyEmployeeAtLink} with a title of its own instead of the type's fixed one (the fixed title may say more than this notice does). */
+    public void notifyEmployeeAtLinkTitled(long employeeId, String type, String title, String message, String link) {
+        insertEmployeeNotification(employeeId, type, title, message, link);
+        salesMailer.emailForEmployee(employeeId, title, message, link);
+    }
+
     private void notifyEmployeeAt(long employeeId, String type, String message, String link) {
         String title = insertEmployeeNotification(employeeId, type, message, link);
         // The Thai TITLE, never `type`. Passing the same string the in-app row stores also means the bell and the
@@ -291,7 +305,10 @@ public class NotificationRepository {
     }
 
     private String insertEmployeeNotification(long employeeId, String type, String message, String link) {
-        String title = ticketEventTitle(type);
+        return insertEmployeeNotification(employeeId, type, ticketEventTitle(type), message, link);
+    }
+
+    private String insertEmployeeNotification(long employeeId, String type, String title, String message, String link) {
         jdbc.update("""
             INSERT INTO hr.notification (employee_id, type, title, message, link)
             VALUES (:employeeId, :type, :title, :message, :link)
@@ -358,12 +375,22 @@ public class NotificationRepository {
         notifyByRoleInternal("hr", type, message, link);
     }
 
+    /** The role's in-app bells only: no email to the people or the role mailbox. */
+    public void notifyByRoleBellOnly(String role, String type, String message, String link) {
+        notifyByRoleInternal(role, type, message, link, List.of(), false);
+    }
+
     private void notifyByRoleInternal(String role, String type, String message, String link) {
         notifyByRoleInternal(role, type, message, link, List.of());
     }
 
     private void notifyByRoleInternal(String role, String type, String message, String link,
                                       List<Long> excludeEmployeeIds) {
+        notifyByRoleInternal(role, type, message, link, excludeEmployeeIds, true);
+    }
+
+    private void notifyByRoleInternal(String role, String type, String message, String link,
+                                      List<Long> excludeEmployeeIds, boolean mail) {
         String divisionFilter = switch (role) {
             case "import" -> "d.source_code ILIKE 'PCIM%'";
             // Mirrors DivisionAccessPolicy#roleFor's hr branch ("hr".equals(divisionCode(employee))),
@@ -425,8 +452,8 @@ public class NotificationRepository {
             Long.class);
         // The mailbox is skipped only when the exclusion is what emptied the fan-out: an excluded id is an active
         // member of the role. An exclusion matching nobody leaves the mailbox mailed, like the no-exclusion path.
-        if (!notified.isEmpty() || excludeEmployeeIds.isEmpty()
-                || !excludedIdIsActiveRoleMember(divisionFilter, excludeEmployeeIds)) {
+        if (mail && (!notified.isEmpty() || excludeEmployeeIds.isEmpty()
+                || !excludedIdIsActiveRoleMember(divisionFilter, excludeEmployeeIds))) {
             salesMailer.emailForRole(role, notified, title, message, link);
         }
     }

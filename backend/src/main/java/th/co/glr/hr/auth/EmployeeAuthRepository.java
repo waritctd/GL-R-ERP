@@ -208,6 +208,18 @@ public class EmployeeAuthRepository {
             Map.of("id", employeeId), Boolean.class));
     }
 
+    /** The showroom team's grant ({@code hr.employee.can_see_showroom_orders}): reads every SHOWROOM no-project order. A
+     * live read of an active row, like the other per-person grants. */
+    public boolean canSeeShowroomOrders(long employeeId) {
+        return canSeeShowroomOrders(jdbc, employeeId);
+    }
+
+    public static boolean canSeeShowroomOrders(NamedParameterJdbcTemplate jdbc, long employeeId) {
+        return Boolean.TRUE.equals(jdbc.queryForObject(
+            "SELECT EXISTS (SELECT 1 FROM hr.employee WHERE employee_id = :id AND is_active AND can_see_showroom_orders)",
+            Map.of("id", employeeId), Boolean.class));
+    }
+
     /** Stores a user-chosen password and clears the forced-change flag. */
     public void updatePassword(long employeeId, String passwordHash) {
         jdbc.update("""
