@@ -210,6 +210,7 @@ public class NotificationRepository {
         Map.entry("DEPOSIT_PAYMENT_CONFIRMED", "ฝ่ายบัญชียืนยันรับเงินมัดจำแล้ว"),
         Map.entry("IMPORT_STARTED", "เริ่มสั่งซื้อกับโรงงานแล้ว"),
         Map.entry("IMPORT_GOODS_RECEIVED_ALL", "สินค้าเข้าคลังครบแล้ว — พร้อมนัดส่งลูกค้า"),
+        Map.entry("LINE_NOT_DELIVERED", "มีรายการที่ไม่ได้รับของ — ส่งมอบไม่ได้"),
         Map.entry("IMPORT_LOT_RECEIVED", "สินค้าล็อตหนึ่งถึงโกดังแล้ว"),
         Map.entry("IMPORT_ORDER_WITHDRAWN", "ผู้สั่งยกเลิกคำขอสั่งของ"),
         Map.entry("DELIVERY_COMPLETED", "ส่งสินค้าครบแล้ว — รอฝ่ายบัญชีดำเนินการ"),
@@ -374,12 +375,22 @@ public class NotificationRepository {
         notifyByRoleInternal("hr", type, message, link);
     }
 
+    /** The role's in-app bells only: no email to the people or the role mailbox. */
+    public void notifyByRoleBellOnly(String role, String type, String message, String link) {
+        notifyByRoleInternal(role, type, message, link, List.of(), false);
+    }
+
     private void notifyByRoleInternal(String role, String type, String message, String link) {
         notifyByRoleInternal(role, type, message, link, List.of());
     }
 
     private void notifyByRoleInternal(String role, String type, String message, String link,
                                       List<Long> excludeEmployeeIds) {
+        notifyByRoleInternal(role, type, message, link, excludeEmployeeIds, true);
+    }
+
+    private void notifyByRoleInternal(String role, String type, String message, String link,
+                                      List<Long> excludeEmployeeIds, boolean mail) {
         String divisionFilter = switch (role) {
             case "import" -> "d.source_code ILIKE 'PCIM%'";
             // Mirrors DivisionAccessPolicy#roleFor's hr branch ("hr".equals(divisionCode(employee))),
@@ -441,8 +452,8 @@ public class NotificationRepository {
             Long.class);
         // The mailbox is skipped only when the exclusion is what emptied the fan-out: an excluded id is an active
         // member of the role. An exclusion matching nobody leaves the mailbox mailed, like the no-exclusion path.
-        if (!notified.isEmpty() || excludeEmployeeIds.isEmpty()
-                || !excludedIdIsActiveRoleMember(divisionFilter, excludeEmployeeIds)) {
+        if (mail && (!notified.isEmpty() || excludeEmployeeIds.isEmpty()
+                || !excludedIdIsActiveRoleMember(divisionFilter, excludeEmployeeIds))) {
             salesMailer.emailForRole(role, notified, title, message, link);
         }
     }

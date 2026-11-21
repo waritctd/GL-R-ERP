@@ -30,7 +30,7 @@ export function deliveryPayload({ lines, qty, deliveredOn, recipient, source }) 
 /** The deal's items as the sheet's lines, for a delivery made before any tax invoice (no round). */
 const itemLines = (items) => items.map((i) => ({
   itemId: i.id, description: [i.brand, i.model, i.size].filter(Boolean).join(' ') || `รายการ ${i.id}`, unit: 'แผ่น',
-  coveredQty: Number(i.qty || 0), deliveredQty: Number(i.qtyDelivered || 0),
+  coveredQty: Number(i.qty || 0) - Number(i.qtyNotDelivered || 0), deliveredQty: Number(i.qtyDelivered || 0), // less what was marked not delivered
 }));
 
 /** `round`: an INVOICED round the viewer may record against. `events`: the deal's events when the viewer reads the deal

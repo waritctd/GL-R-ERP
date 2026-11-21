@@ -979,6 +979,7 @@ public class TicketRepository {
                    ti.calced_cost, ti.calced_price, ti.calc_config_version,
                    ti.manual_price, ti.manual_override_reason,
                    ti.qty_delivered, ti.qty_from_stock, ti.stock_note,
+                   ti.qty_not_delivered, ti.not_delivered_reason,
                    ti.catalog_price_id, ti.catalog_product_code, ti.weight_multiplier,
                    ti.sourced_from_stock, ti.stock_sale_price,
                    pp.price AS catalog_price, pp.currency AS catalog_currency,
@@ -1036,7 +1037,9 @@ public class TicketRepository {
                     rs.getBigDecimal("stock_sale_price"),
                     rs.getBigDecimal("catalog_thickness_mm"),
                     rs.getBigDecimal("catalog_pcs_per_box"),
-                    rs.getString("catalog_origin_country_code")
+                    rs.getString("catalog_origin_country_code"),
+                    rs.getBigDecimal("qty_not_delivered"),
+                    rs.getString("not_delivered_reason")
                 );
             });
     }
@@ -1711,6 +1714,44 @@ public class TicketRepository {
             )
             """, Map.of("ticketId", ticketId), Boolean.class);
         return Boolean.TRUE.equals(value);
+    }
+
+    /** What reached (or is on its way to) the warehouse for one deal line, over the ISSUED IR lines that point at it. */
+    public record LineArrival(int irLines, BigDecimal received, BigDecimal inProgress, int zeroReceivedLots) {}
+
+    public LineArrival lineArrival(long ticketId, long itemId) {
+        return jdbc.queryForObject("""
+            SELECT COUNT(DISTINCT i.import_request_item_id) AS ir_lines,
+                   COALESCE(SUM(CASE WHEN r.import_step = 'RECEIVED' AND COALESCE(l.received_qty, l.qty) > 0
+                                     THEN COALESCE(l.received_qty, l.qty) END), 0) AS received,
+                   COALESCE(SUM(CASE WHEN r.import_step <> 'RECEIVED' THEN l.qty END), 0) AS in_progress,
+                   COUNT(CASE WHEN r.import_step = 'RECEIVED' AND COALESCE(l.received_qty, l.qty) = 0 THEN 1 END) AS zeros
+              FROM sales.import_request_item i
+              JOIN sales.import_request ir ON ir.import_request_id = i.import_request_id
+                                          AND ir.ticket_id = :t AND ir.status = 'ISSUED'
+              LEFT JOIN sales.shipment_lot l ON l.import_request_item_id = i.import_request_item_id
+              LEFT JOIN sales.shipment_round r ON r.shipment_round_id = l.shipment_round_id
+             WHERE i.ticket_item_id = :item
+            """, Map.of("t", ticketId, "item", itemId), (rs, n) -> new LineArrival(rs.getInt("ir_lines"),
+                rs.getBigDecimal("received"), rs.getBigDecimal("in_progress"), rs.getInt("zeros")));
+    }
+
+    /** Sets the marked-not-delivered quantity of a line (never beyond what is not yet delivered); 0 rows = refused. */
+    public int setNotDelivered(long ticketId, long itemId, BigDecimal qty, String reason, long byId) {
+        return jdbc.update("""
+            UPDATE sales.ticket_item
+               SET qty_not_delivered = :q, not_delivered_reason = :reason, not_delivered_by = :by, not_delivered_at = now()
+             WHERE ticket_id = :t AND item_id = :item AND qty_delivered + :q <= qty
+            """, new MapSqlParameterSource("t", ticketId).addValue("item", itemId).addValue("q", qty)
+                .addValue("reason", reason).addValue("by", byId));
+    }
+
+    public int clearNotDelivered(long ticketId, long itemId) {
+        return jdbc.update("""
+            UPDATE sales.ticket_item
+               SET qty_not_delivered = 0, not_delivered_reason = NULL, not_delivered_by = NULL, not_delivered_at = NULL
+             WHERE ticket_id = :t AND item_id = :item AND qty_not_delivered > 0
+            """, Map.of("t", ticketId, "item", itemId));
     }
 
     /** Locks sales.ticket's own row FOR UPDATE for the remainder of the caller's transaction. */
@@ -2508,7 +2549,7 @@ public class TicketRepository {
                    SET qty_delivered = qty_delivered + :qty
                  WHERE ticket_id = :ticketId
                    AND item_id = :itemId
-                   AND qty_delivered + :qty <= qty
+                   AND qty_delivered + :qty <= qty - qty_not_delivered
                 """,
                 new MapSqlParameterSource()
                     .addValue("ticketId", ticketId)
@@ -2566,7 +2607,7 @@ public class TicketRepository {
                    COALESCE((SELECT SUM(dri.qty) FROM sales.delivery_record_item dri
                                JOIN sales.delivery_record dr ON dr.delivery_id = dri.delivery_id
                               WHERE dr.delivery_request_id = r.delivery_request_id AND dri.item_id = l.item_id), 0) AS delivered,
-                   ti.qty - COALESCE(ti.qty_delivered, 0) AS item_left
+                   ti.qty - ti.qty_not_delivered - COALESCE(ti.qty_delivered, 0) AS item_left
               FROM sales.delivery_request r
               JOIN sales.delivery_request_line l ON l.delivery_request_id = r.delivery_request_id
               JOIN sales.ticket_item ti ON ti.item_id = l.item_id
@@ -2646,7 +2687,7 @@ public class TicketRepository {
 
     public boolean allLinesFullyDelivered(long ticketId) {
         Boolean value = jdbc.queryForObject("""
-            SELECT COALESCE(bool_and(qty_delivered >= qty), false)
+            SELECT COALESCE(bool_and(qty_delivered + qty_not_delivered >= qty), false)
               FROM sales.ticket_item
              WHERE ticket_id = :ticketId
             """, Map.of("ticketId", ticketId), Boolean.class);
@@ -3365,7 +3406,7 @@ public class TicketRepository {
     public int closeOutDroppedChainItems(long ticketId, long rootPricingRequestId, long currentPricingRequestId) {
         return jdbc.update("""
             UPDATE sales.ticket_item ti
-               SET qty = ti.qty_delivered
+               SET qty = ti.qty_delivered, qty_not_delivered = 0
              WHERE ti.ticket_id = :ticketId
                AND ti.qty IS DISTINCT FROM ti.qty_delivered
                AND EXISTS (

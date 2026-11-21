@@ -50,7 +50,9 @@ public final class ImportDealDtos {
         /** The line's quantity basis (pcs / sqm / ...). */
         String unit,
         /** Read-only delivered-so-far quantity. */
-        BigDecimal qtyDelivered
+        BigDecimal qtyDelivered,
+        /** V240: marked not delivered (the factory never sent it); the line's deliverable quantity is qty less this. */
+        BigDecimal qtyNotDelivered
     ) {}
 
     public record ImportDealCommentDto(

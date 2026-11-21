@@ -453,7 +453,8 @@ public class TicketService {
             i.qtyDelivered(), i.qtyFromStock(), i.stockNote(), i.catalogPriceId(), i.catalogProductCode(),
             i.source(), null /* catalogPrice */, null /* catalogCurrency */, i.catalogPriceUnit(),
             i.sqmPerPiece(), 1 /* weightMultiplier */, i.sourcedFromStock(), null /* stockSalePrice */,
-            i.catalogThicknessMm(), i.catalogPcsPerBox(), i.catalogOriginCountryCode());
+            i.catalogThicknessMm(), i.catalogPcsPerBox(), i.catalogOriginCountryCode(),
+            i.qtyNotDelivered(), i.notDeliveredReason());
     }
 
     @Transactional
@@ -1999,7 +2000,7 @@ public class TicketService {
                 .filter(l -> l.remaining().signum() > 0 && itemsById.containsKey(l.itemId()))
                 .map(l -> new RecordDeliveryRequest.Line(l.itemId(), l.remaining())).toList()
             : ticket.items().stream()
-                .map(item -> new RecordDeliveryRequest.Line(item.id(), nullToZero(item.qty()).subtract(nullToZero(item.qtyDelivered()))))
+                .map(item -> new RecordDeliveryRequest.Line(item.id(), item.deliverableQty().subtract(nullToZero(item.qtyDelivered()))))
                 .filter(line -> line.qty().signum() > 0).toList();
         if (remaining.isEmpty()) {
             throw new ApiException(HttpStatus.CONFLICT, "ไม่มีจำนวนค้างส่ง");
@@ -2121,7 +2122,7 @@ public class TicketService {
         for (RecordDeliveryRequest.Line line : normalized) {
             TicketItemDto item = itemsById.get(line.itemId());
             BigDecimal newDelivered = nullToZero(item.qtyDelivered()).add(line.qty());
-            if (newDelivered.compareTo(nullToZero(item.qty())) > 0) {
+            if (newDelivered.compareTo(item.deliverableQty()) > 0) { // qty less what was marked not delivered
                 throw new ApiException(HttpStatus.CONFLICT, "จำนวนส่งมอบเกินจำนวนที่สั่ง");
             }
             if ("STOCK".equals(source)
@@ -2141,7 +2142,7 @@ public class TicketService {
         TicketDto updated = requireTicket(s.id());
         TicketSummaryDto updatedSummary = updated.summary();
         boolean fullyDelivered = updated.items().stream()
-            .allMatch(item -> nullToZero(item.qtyDelivered()).compareTo(nullToZero(item.qty())) >= 0);
+            .allMatch(item -> nullToZero(item.qtyDelivered()).compareTo(item.deliverableQty()) >= 0);
         // A back-dated record says so in the history: the event itself is stamped when it was recorded.
         String message = deliveryMessage(updated.items(), normalized)
             + (deliveredAt == null ? "" : " · วันที่ส่ง " + ThaiText.date(request.deliveredOn()))
@@ -2705,7 +2706,7 @@ public class TicketService {
      */
     private static BigDecimal warehouseAllowance(TicketSummaryDto s, TicketItemDto item, TicketRepository.LotReceipts receipts,
                                                  boolean goodsEvent) {
-        BigDecimal qty = nullToZero(item.qty());
+        BigDecimal qty = item.deliverableQty(); // what was marked not delivered is not deliverable
         if (!receipts.dealHasLots()) {
             return qty;
         }
@@ -2737,6 +2738,140 @@ public class TicketService {
                     + deliveryLineName(item) + " (ส่งได้ไม่เกิน " + qtyText(allowed) + ")", Map.of("code", "LOT_QTY_EXCEEDED"));
             }
         }
+    }
+
+    // ── a line the factory never sent (V240) ─────────────────────────────────────────────────────────────────────────
+
+    private static final Set<String> NOT_DELIVERED_ROLES = Set.of("sales_manager", "ceo");
+
+    /**
+     * Most of a line that may be marked not delivered: what has not arrived and is not on its way. The quantity less what
+     * was delivered or is in the warehouse (a RECEIVED lot with received above 0), less stock coverage; a lot on a round that
+     * has not yet received refuses, and so does a lot recorded as 0 received (it goes back to รอจัดรอบ first). A line no
+     * ISSUED IR line points at does not apply. Includes what is already marked (the mark replaces it).
+     */
+    private BigDecimal notDeliveredAllowed(TicketItemDto item) {
+        TicketRepository.LineArrival a = tickets.lineArrival(item.ticketId(), item.id());
+        if (a.irLines() == 0) {
+            throw new ApiException(HttpStatus.CONFLICT, "รายการนี้ไม่มีใบขอซื้อ (IR) ที่ออกเลขแล้ว จึงบันทึกว่าไม่ได้รับของไม่ได้");
+        }
+        if (a.inProgress().signum() > 0) {
+            throw new ApiException(HttpStatus.CONFLICT, "มีสินค้าของรายการนี้อยู่ในรอบขนส่งที่ยังดำเนินการอยู่ (" + qtyText(a.inProgress())
+                + ") บันทึกว่าไม่ได้รับของไม่ได้ จนกว่ารอบจะถึงโกดังหรือเอาออกจากรอบ");
+        }
+        if (a.zeroReceivedLots() > 0) {
+            throw new ApiException(HttpStatus.CONFLICT, "มีล็อตที่บันทึกว่าถึงโกดัง 0 ให้กดกลับไปรอจัดรอบก่อนจึงจะบันทึกว่าไม่ได้รับของได้");
+        }
+        BigDecimal arrived = nullToZero(item.qtyFromStock()).add(a.received()).max(nullToZero(item.qtyDelivered()));
+        return nullToZero(item.qty()).subtract(arrived).max(BigDecimal.ZERO);
+    }
+
+    /** The most a line may be marked not delivered, for the sheet's default (sales manager / CEO). */
+    public BigDecimal notDeliveredAllowed(long ticketId, long itemId, UserPrincipal actor) {
+        requireRole(actor, NOT_DELIVERED_ROLES);
+        TicketDto ticket = requireTicket(ticketId);
+        return notDeliveredAllowed(requireLineItem(itemMap(ticket.items()), itemId));
+    }
+
+    /**
+     * Marks {@code qty} of a deal line "ไม่ได้รับของ" (sales manager / CEO, ACTIVE deal, ticket row lock taken by the caller
+     * after the round and IR locks). Changes no amount. Writes the event and tells the rep and account (bell only).
+     */
+    @Transactional
+    public TicketDto markLineNotDelivered(long ticketId, long itemId, MarkNotDeliveredRequest request, UserPrincipal actor) {
+        requireRole(actor, NOT_DELIVERED_ROLES);
+        tickets.lockTicketForUpdate(ticketId);
+        TicketDto ticket = requireTicket(ticketId);
+        TicketSummaryDto s = ticket.summary();
+        requireActive(s);
+        TicketItemDto item = requireLineItem(itemMap(ticket.items()), itemId);
+        String reason = request == null || request.reason() == null ? "" : request.reason().trim();
+        BigDecimal qty = request == null || request.qty() == null ? BigDecimal.ZERO : request.qty().setScale(2, java.math.RoundingMode.HALF_UP);
+        if (qty.signum() <= 0) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "จำนวนต้องมากกว่า 0");
+        }
+        if (reason.isEmpty() || reason.length() > 255) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ระบุเหตุผล (ไม่เกิน 255 ตัวอักษร)");
+        }
+        BigDecimal allowed = notDeliveredAllowed(item);
+        if (qty.compareTo(allowed) > 0) {
+            throw new ApiException(HttpStatus.CONFLICT, "บันทึกว่าไม่ได้รับของได้ไม่เกิน " + qtyText(allowed) + " (ส่วนที่ยังไม่ถึงโกดังและไม่ได้อยู่ระหว่างขนส่ง)");
+        }
+        if (tickets.setNotDelivered(ticketId, itemId, qty, reason, actor.id()) != 1) {
+            throw new ApiException(HttpStatus.CONFLICT, "จำนวนที่ส่งแล้วเปลี่ยนไป กรุณาโหลดใหม่");
+        }
+        String line = deliveryLineName(item) + " " + qtyText(qty);
+        tickets.addEvent(ticketId, actor.id(), actor.name(), TicketEventKind.LINE_NOT_DELIVERED, s.status(), s.status(),
+            "ไม่ได้รับของ: " + line + " · เหตุผล: " + reason);
+        String text = actor.name() + " บันทึกว่าไม่ได้รับของ: " + line + "\nเหตุผล: " + reason + "\n"
+            + DealNoticeText.dealLabel(s.code(), s.customerName()) + "\nยอดเงินไม่เปลี่ยนอัตโนมัติ ฝ่ายบัญชีจัดการคืนเงินหรือเครดิตตามปกติ";
+        notifications.notifyEmployeeBellOnly(s.createdById(), TicketEventKind.LINE_NOT_DELIVERED, text, "/tickets/" + ticketId + "?tab=ship");
+        notifications.notifyByRoleBellOnly("account", TicketEventKind.LINE_NOT_DELIVERED, text, "/finance/deals/" + ticketId);
+        return requireTicket(ticketId);
+    }
+
+    /** Takes the mark off a line (sales manager / CEO). Refused once the deal is closed. */
+    @Transactional
+    public TicketDto clearLineNotDelivered(long ticketId, long itemId, UserPrincipal actor) {
+        requireRole(actor, NOT_DELIVERED_ROLES);
+        tickets.lockTicketForUpdate(ticketId);
+        TicketDto ticket = requireTicket(ticketId);
+        TicketSummaryDto s = ticket.summary();
+        if (DealLifecycle.COMPLETED.equals(s.lifecycle())) {
+            throw new ApiException(HttpStatus.CONFLICT, "ปิดดีลแล้ว ยกเลิกการบันทึกไม่ได้รับของไม่ได้");
+        }
+        requireActive(s);
+        // Goods-received cannot be taken back, and it would let the un-arrived quantity be delivered as if it had come.
+        if (tickets.hasReceivedGoods(ticketId)) {
+            throw new ApiException(HttpStatus.CONFLICT, "งานนี้บันทึกรับสินค้าครบแล้ว จึงยกเลิกการบันทึกไม่ได้รับของไม่ได้");
+        }
+        TicketItemDto item = requireLineItem(itemMap(ticket.items()), itemId);
+        if (tickets.clearNotDelivered(ticketId, itemId) != 1) {
+            throw new ApiException(HttpStatus.CONFLICT, "รายการนี้ไม่ได้ถูกบันทึกว่าไม่ได้รับของ");
+        }
+        tickets.addEvent(ticketId, actor.id(), actor.name(), TicketEventKind.LINE_NOT_DELIVERED_CLEARED, s.status(), s.status(),
+            "ยกเลิกการบันทึกไม่ได้รับของ: " + deliveryLineName(item));
+        // the deal was complete only because of the mark: it is open again
+        if (FulfilmentStatus.FULLY_DELIVERED.equals(s.fulfillmentStatus())
+            && !requireTicket(ticketId).items().stream().allMatch(i -> nullToZero(i.qtyDelivered()).compareTo(i.deliverableQty()) >= 0)) {
+            tickets.updateFulfillmentStatus(ticketId, FulfilmentStatus.PARTIALLY_DELIVERED);
+        }
+        return requireTicket(ticketId);
+    }
+
+    /**
+     * Marking the last open quantity completes delivery the way the last delivery does: FULLY_DELIVERED, the stage, the
+     * closed-paid check and account's hand-off, once (nothing when the deal is already FULLY_DELIVERED or something is open).
+     */
+    @Transactional
+    public TicketDto completeDeliveryIfDone(long ticketId, UserPrincipal actor) {
+        TicketDto ticket = requireTicket(ticketId);
+        TicketSummaryDto s = ticket.summary();
+        if (!DealLifecycle.ACTIVE.equals(s.lifecycle()) || FulfilmentStatus.FULLY_DELIVERED.equals(s.fulfillmentStatus())
+            || ticket.items().isEmpty()
+            || !ticket.items().stream().allMatch(i -> nullToZero(i.qtyDelivered()).compareTo(i.deliverableQty()) >= 0)) {
+            return ticket;
+        }
+        tickets.updateFulfillmentStatus(ticketId, FulfilmentStatus.FULLY_DELIVERED);
+        tickets.addEvent(ticketId, actor.id(), actor.name(), TicketEventKind.DELIVERY_COMPLETED, s.status(), s.status(),
+            "ส่งมอบครบ: ส่วนที่ไม่ได้รับของถูกบันทึกแล้ว");
+        autoAdvanceStage(s, DealStage.DELIVERED, actor);
+        TicketSummaryDto after = requireTicket(ticketId).summary();
+        maybeAdvanceClosedPaid(after, "FULLY_PAID".equals(after.paymentStatus()), actor);
+        BigDecimal outstanding = after.amountOutstanding();
+        boolean owed = outstanding != null && outstanding.signum() > 0;
+        notifications.notifyByRoleAtLink("account", TicketEventKind.DELIVERY_COMPLETED,
+            actor.name() + " บันทึกส่งสินค้าครบทุกรายการแล้ว (มีรายการที่ไม่ได้รับของ)\n"
+                + DealNoticeText.dealLabel(after.code(), after.customerName()) + " · "
+                + (owed ? "ยอดค้างชำระ " + ThaiText.money(outstanding) + " บาท" : "ลูกค้าชำระเงินครบแล้ว")
+                + "\nสิ่งที่ต้องทำต่อ: " + (owed ? "ติดตามรับชำระยอดที่เหลือ แล้วยืนยันพร้อมปิดดีล" : "ยืนยันพร้อมปิดดีลเพื่อส่งให้ CEO ตรวจสอบ"),
+            "/finance/deals/" + ticketId);
+        return requireTicket(ticketId);
+    }
+
+    /** Role gate of the not-delivered actions, for callers that lock before calling them. */
+    public void requireNotDeliveredRole(UserPrincipal actor) {
+        requireRole(actor, NOT_DELIVERED_ROLES);
     }
 
     /** Per line, what the warehouse may still deliver now: the shared allowance less what was delivered (never below 0).
@@ -2776,8 +2911,8 @@ public class TicketService {
             round.lines().stream().filter(l -> l.remaining().signum() > 0 && itemsById.containsKey(l.itemId()))
                 .forEach(l -> need.put(l.itemId(), nullToZero(itemsById.get(l.itemId()).qtyDelivered()).add(l.remaining())));
         } else {
-            ticket.items().stream().filter(item -> nullToZero(item.qty()).compareTo(nullToZero(item.qtyDelivered())) > 0)
-                .forEach(item -> need.put(item.id(), nullToZero(item.qty())));
+            ticket.items().stream().filter(item -> item.deliverableQty().compareTo(nullToZero(item.qtyDelivered())) > 0)
+                .forEach(item -> need.put(item.id(), item.deliverableQty()));
         }
         if (need.isEmpty()) {
             return false;
@@ -2796,7 +2931,7 @@ public class TicketService {
 
     private static boolean hasRemainingDelivery(TicketDto ticket) {
         return ticket.items().stream()
-            .anyMatch(item -> nullToZero(item.qty()).compareTo(nullToZero(item.qtyDelivered())) > 0);
+            .anyMatch(item -> item.deliverableQty().compareTo(nullToZero(item.qtyDelivered())) > 0);
     }
 
     /** brand model size, as the delivery history shows it; "รายการ <id>" when all three are blank. */

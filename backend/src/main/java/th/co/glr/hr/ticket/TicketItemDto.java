@@ -55,8 +55,38 @@ public record TicketItemDto(
     // constructor call keeps compiling via the compat constructor below.
     BigDecimal catalogThicknessMm,
     BigDecimal catalogPcsPerBox,
-    String catalogOriginCountryCode
+    String catalogOriginCountryCode,
+    // V240: a quantity of this line the factory never sent (marked by the sales manager or CEO, with a reason). The line's
+    // deliverable quantity is qty - qtyNotDelivered; no amount changes.
+    BigDecimal qtyNotDelivered,
+    String notDeliveredReason
 ) {
+    /** What can still be delivered at most: the ordered quantity less what was marked not delivered. */
+    public BigDecimal deliverableQty() {
+        return (qty == null ? BigDecimal.ZERO : qty).subtract(qtyNotDelivered == null ? BigDecimal.ZERO : qtyNotDelivered);
+    }
+
+    // Through the catalogue seed fields (the shape before V240): nothing marked not delivered.
+    public TicketItemDto(
+        long id, long ticketId, String brand, String model, String color, String texture, String size,
+        String factory, BigDecimal qty, BigDecimal qtySqm, BigDecimal rawPrice, String rawCurrency,
+        String rawUnit, BigDecimal proposedPrice, BigDecimal approvedPrice, String currency, int sortOrder,
+        BigDecimal calcedCost, BigDecimal calcedPrice, Integer calcConfigVersion, String unitBasis,
+        BigDecimal manualPrice, String manualOverrideReason, BigDecimal qtyDelivered, BigDecimal qtyFromStock,
+        String stockNote, Long catalogPriceId, String catalogProductCode, String source, BigDecimal catalogPrice,
+        String catalogCurrency, String catalogPriceUnit, BigDecimal sqmPerPiece, int weightMultiplier,
+        boolean sourcedFromStock, BigDecimal stockSalePrice, BigDecimal catalogThicknessMm, BigDecimal catalogPcsPerBox,
+        String catalogOriginCountryCode
+    ) {
+        this(id, ticketId, brand, model, color, texture, size, factory, qty, qtySqm,
+            rawPrice, rawCurrency, rawUnit, proposedPrice, approvedPrice, currency,
+            sortOrder, calcedCost, calcedPrice, calcConfigVersion, unitBasis,
+            manualPrice, manualOverrideReason, qtyDelivered, qtyFromStock, stockNote,
+            catalogPriceId, catalogProductCode, source, catalogPrice, catalogCurrency,
+            catalogPriceUnit, sqmPerPiece, weightMultiplier, sourcedFromStock, stockSalePrice,
+            catalogThicknessMm, catalogPcsPerBox, catalogOriginCountryCode, BigDecimal.ZERO, null);
+    }
+
     // Pre-2026-10-18 full shape (through stockSalePrice): defaults the three catalogue seed fields
     // to null, the same "nothing resolved" meaning a hand-typed line has.
     public TicketItemDto(
@@ -75,7 +105,7 @@ public record TicketItemDto(
             manualPrice, manualOverrideReason, qtyDelivered, qtyFromStock, stockNote,
             catalogPriceId, catalogProductCode, source, catalogPrice, catalogCurrency,
             catalogPriceUnit, sqmPerPiece, weightMultiplier, sourcedFromStock, stockSalePrice,
-            null, null, null);
+            null, null, null, BigDecimal.ZERO, null);
     }
 
     // V183 compat shape: reproduces the full pre-V183 canonical parameter list (through weightMultiplier) for

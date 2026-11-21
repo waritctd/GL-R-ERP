@@ -403,6 +403,10 @@ export const api = {
       apiRequest(API_ROUTES.tickets.itemWeightMultipliers(id), { method: 'POST', body: payload }),
     recordDelivery: (id, payload) => apiRequest(API_ROUTES.tickets.deliveries(id), { method: 'POST', body: payload }),
     deliveryAllowance: (id) => apiRequest(API_ROUTES.tickets.deliveryAllowance(id)),
+    // ไม่ได้รับของ (sales manager / CEO): the most that may be marked, the mark, and taking it off
+    notDeliveredAllowed: (id, itemId) => apiRequest(`${API_ROUTES.tickets.notDelivered(id, itemId)}/allowed`),
+    markNotDelivered: (id, itemId, payload) => apiRequest(API_ROUTES.tickets.notDelivered(id, itemId), { method: 'POST', body: payload }),
+    clearNotDelivered: (id, itemId) => apiRequest(`${API_ROUTES.tickets.notDelivered(id, itemId)}/clear`, { method: 'POST' }),
     completeDelivery: (id, payload = {}) => apiRequest(API_ROUTES.tickets.completeDelivery(id), { method: 'POST', body: payload }),
     actions: (id) => apiRequest(API_ROUTES.tickets.action(id, 'actions')),
     // Ticket-native submit/pickup/propose-price/approve/reject/quotation/mark-quotation-* and the

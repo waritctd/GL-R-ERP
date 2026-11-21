@@ -55,6 +55,7 @@ class ShipmentRoundIntegrationTest extends AbstractPostgresIntegrationTest {
     private IncomingService incoming;
     private NoProjectOrderService noProject;
     private MyIncomingService myIncoming;
+    private LineNotDeliveredService lineNotDelivered;
     private TicketService ticketService;
     private TicketRepository ticketRepo;
     private UserPrincipal owner;
@@ -87,6 +88,7 @@ class ShipmentRoundIntegrationTest extends AbstractPostgresIntegrationTest {
             new ImportRequestRenderer(), stored, new FactoryConfigRepository(jdbc), tickets, ticketService,
             notifications, roundRepo));
         rounds = transactional(new ShipmentRoundService(roundRepo, stored, irService, tickets, files));
+        lineNotDelivered = transactional(new LineNotDeliveredService(ticketService, rounds));
         incoming = new IncomingService(ticketService, stored, roundRepo, new ImportRequestQueryRepository(jdbc));
         noProject = transactional(new NoProjectOrderService(stored, new FactoryConfigRepository(jdbc), notifications, new EmployeeAuthRepository(jdbc)));
         myIncoming = new MyIncomingService(roundRepo, new EmployeeAuthRepository(jdbc));
@@ -836,6 +838,50 @@ class ShipmentRoundIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(irStep(irA)).isIn(ImportRequestStep.CONTACTED, ImportRequestStep.ORDERED); // never shipped: not "at customs"
         assertThat(stepEvents(ticketA)).isEqualTo(events); // it moved back, silently
         assertThat(bells(ticketA, "IMPORT_GOODS_RECEIVED_ALL")).isZero();
+    }
+
+    @Test
+    void aLineMarkedNotDeliveredIsNoLongerWanted_theIrIsDone_theDealRollsUpOnce_andClosesWithNoAmountChanged() {
+        // line 1 (40) arrived in full; line 2 (100) is on a RECEIVED round with 0 received
+        jdbc.update("INSERT INTO sales.ticket_item (ticket_id, brand, model, size, qty, unit, sort_order, factory)"
+            + " VALUES (:t, 'Round Factory', 'Kaze', '30x30', 100, 'pcs', 1, 'Round Factory')", Map.of("t", ticketA));
+        long deal2 = jdbc.queryForObject("SELECT item_id FROM sales.ticket_item WHERE ticket_id = :t AND sort_order = 1", Map.of("t", ticketA), Long.class);
+        jdbc.update("INSERT INTO sales.import_request_item (import_request_id, ticket_item_id, seq, code, size, qty, unit, brand, model)"
+            + " VALUES (:ir, :ti, 2, 'LINE-2', '30x30', 100, 'pcs', 'Round Factory', 'Kaze')", Map.of("ir", irA, "ti", deal2));
+        long item2 = jdbc.queryForObject("SELECT import_request_item_id FROM sales.import_request_item WHERE import_request_id = :ir AND seq = 2", Map.of("ir", irA), Long.class);
+        long r = round("RECEIVED");
+        lot(r, irA, 40);
+        jdbc.update("UPDATE sales.shipment_lot SET qty = 100, received_qty = 0 WHERE import_request_item_id = :i", Map.of("i", item2));
+        long lot2 = jdbc.queryForObject("SELECT shipment_lot_id FROM sales.shipment_lot WHERE import_request_item_id = :i", Map.of("i", item2), Long.class);
+        var payableBefore = ticketRepo.payableAmount(ticketA);
+        var paidBefore = ticketRepo.sumPaid(ticketA);
+        var mark = new th.co.glr.hr.ticket.MarkNotDeliveredRequest(new BigDecimal("100"), "โรงงานไม่ส่ง");
+
+        assertRefused(() -> lineNotDelivered.mark(ticketA, deal2, mark, owner), HttpStatus.FORBIDDEN); // sales manager and CEO only
+        assertRefused(() -> lineNotDelivered.mark(ticketA, deal2, mark, salesManager), HttpStatus.CONFLICT); // a 0-received lot goes back to waiting first
+        rounds.returnLotToWaiting(r, lot2, importUser);
+        // a lot on a round in progress blocks the mark
+        long inProgress = rounds.createRound(new CreateShipmentRoundRequest(factoryId(), null, null,
+            List.of(new LotInput(irA, item2, new BigDecimal("100")))), importUser).id();
+        assertRefused(() -> lineNotDelivered.mark(ticketA, deal2, mark, salesManager), HttpStatus.CONFLICT);
+        rounds.removeLot(inProgress, rounds.get(inProgress, importUser).lots().get(0).lotId(), importUser);
+        assertRefused(() -> lineNotDelivered.mark(ticketA, deal2, new th.co.glr.hr.ticket.MarkNotDeliveredRequest(new BigDecimal("101"), "x"), salesManager), HttpStatus.CONFLICT);
+
+        lineNotDelivered.mark(ticketA, deal2, mark, salesManager);
+
+        assertThat(jdbc.queryForObject("SELECT qty_not_delivered FROM sales.ticket_item WHERE item_id = :i", Map.of("i", deal2), BigDecimal.class)).isEqualByComparingTo("100");
+        assertThat(rounds.list(importUser).waiting()).extracting(w -> w.importRequestId()).doesNotContain(irA); // not wanted, not waiting
+        assertThat(irStep(irA)).isEqualTo(ImportRequestStep.RECEIVED); // nothing left to receive: done
+        assertThat(ticketRepo.hasReceivedGoods(ticketA)).isTrue(); // the normal rollup ran
+        assertThat(bells(ticketA, "IMPORT_GOODS_RECEIVED_ALL")).isEqualTo(1);
+        assertThat(incoming.incoming(ticketA, owner).irs().get(0).waiting()).isEmpty();
+
+        deliverFromWarehouse(ticketA, "40");
+        assertThat(jdbc.queryForObject("SELECT fulfillment_status FROM sales.ticket WHERE ticket_id = :t", Map.of("t", ticketA), String.class))
+            .isEqualTo("FULLY_DELIVERED"); // line 2's 100 is not deliverable
+        assertThat(ticketRepo.payableAmount(ticketA)).isEqualByComparingTo(payableBefore);
+        assertThat(ticketRepo.sumPaid(ticketA)).isEqualByComparingTo(paidBefore);
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM sales.ticket_event WHERE ticket_id = :t AND kind = 'LINE_NOT_DELIVERED'", Map.of("t", ticketA), Integer.class)).isEqualTo(1);
     }
 
     @Test

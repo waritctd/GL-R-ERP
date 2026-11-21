@@ -44,6 +44,7 @@ public class IncomingService {
         ticketService.requireDealReadAccess(ticketId, actor);
         List<ImportRequestDto> irs = stored.findByTicket(ticketId).stream()
             .filter(r -> ImportRequestStatus.ISSUED.equals(r.status())).toList();
+        Map<Long, BigDecimal> wanted = rounds.wantedByItem(ticketId); // the quantity marked not delivered is no longer wanted
         Map<Long, List<TicketLot>> lotsByIr = rounds.lotsOfTicket(ticketId).stream()
             .collect(Collectors.groupingBy(TicketLot::importRequestId));
         List<IncomingIr> out = new ArrayList<>();
@@ -57,7 +58,8 @@ public class IncomingService {
             for (ImportRequestItemDto item : ir.items()) {
                 List<TicketLot> mine = lots.stream().filter(l -> l.itemId() == item.id()).toList();
                 BigDecimal placed = mine.stream().map(TicketLot::qty).reduce(BigDecimal.ZERO, BigDecimal::add);
-                BigDecimal remaining = item.qty().subtract(placed);
+                BigDecimal itemWanted = wanted.getOrDefault(item.id(), item.qty());
+                BigDecimal remaining = itemWanted.subtract(placed);
                 String product = product(item);
                 for (int i = 0; i < mine.size(); i++) {
                     TicketLot l = mine.get(i);
@@ -75,7 +77,7 @@ public class IncomingService {
             }
             // NULL and blank are the same "no unit": figures show when every line shares one value, the unit only if there is one
             boolean oneUnit = ir.items().stream().map(i -> String.valueOf(unitOf(i))).distinct().count() == 1;
-            BigDecimal ordered = oneUnit ? ir.items().stream().map(ImportRequestItemDto::qty).reduce(BigDecimal.ZERO, BigDecimal::add) : null;
+            BigDecimal ordered = oneUnit ? ir.items().stream().map(i -> wanted.getOrDefault(i.id(), i.qty())).reduce(BigDecimal.ZERO, BigDecimal::add) : null;
             BigDecimal received = oneUnit ? lotDtos.stream().map(IncomingLot::receivedQty).filter(Objects::nonNull)
                 .reduce(BigDecimal.ZERO, BigDecimal::add) : null;
             out.add(new IncomingIr(ir.id(), ir.docNumber(), ir.factoryName(), ir.importStep(), expectedFrom,

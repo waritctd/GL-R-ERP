@@ -61,6 +61,34 @@ public class ShipmentRoundRepository {
             """, Map.of("r", roundId), Boolean.class));
     }
 
+    /** Ids of the rounds that carry a lot of any ISSUED import request of the deal, ascending. */
+    public List<Long> roundIdsOfTicket(long ticketId) {
+        return jdbc.queryForList("""
+            SELECT DISTINCT l.shipment_round_id FROM sales.shipment_lot l
+              JOIN sales.import_request ir ON ir.import_request_id = l.import_request_id
+             WHERE ir.ticket_id = :t AND ir.status = 'ISSUED' ORDER BY l.shipment_round_id
+            """, Map.of("t", ticketId), Long.class);
+    }
+
+    public List<Long> issuedIrIdsOfTicket(long ticketId) {
+        return jdbc.queryForList("SELECT import_request_id FROM sales.import_request WHERE ticket_id = :t AND status = 'ISSUED' ORDER BY import_request_id",
+            Map.of("t", ticketId), Long.class);
+    }
+
+    /** Per ISSUED import-request line of the deal: how much is still wanted (the quantity marked not delivered is taken off). */
+    public Map<Long, BigDecimal> wantedByItem(long ticketId) {
+        Map<Long, BigDecimal> out = new java.util.HashMap<>();
+        jdbc.query("""
+            SELECT w.import_request_item_id, w.wanted_qty FROM sales.import_item_wanted w
+              JOIN sales.import_request_item i ON i.import_request_item_id = w.import_request_item_id
+              JOIN sales.import_request ir ON ir.import_request_id = i.import_request_id
+             WHERE ir.ticket_id = :t
+            """, Map.of("t", ticketId), rs -> {
+                out.put(rs.getLong(1), rs.getBigDecimal(2));
+            });
+        return out;
+    }
+
     public String stepOfRound(long roundId) {
         return jdbc.queryForObject("SELECT import_step FROM sales.shipment_round WHERE shipment_round_id = :r",
             Map.of("r", roundId), String.class);
@@ -325,11 +353,12 @@ public class ShipmentRoundRepository {
         jdbc.query("""
             WITH x AS (
               SELECT l.shipment_lot_id, l.shipment_round_id, l.import_request_id, l.import_request_item_id, l.qty,
-                     i.code, i.brand, i.model, i.size, i.unit, i.qty AS item_qty,
+                     i.code, i.brand, i.model, i.size, i.unit, COALESCE(w.wanted_qty, i.qty) AS item_qty,
                      row_number() OVER (PARTITION BY l.import_request_item_id ORDER BY l.shipment_lot_id) AS lot_no,
                      count(*) OVER (PARTITION BY l.import_request_item_id) AS lots,
-                     i.qty - sum(l.qty) OVER (PARTITION BY l.import_request_item_id) AS remaining, l.received_qty
+                     COALESCE(w.wanted_qty, i.qty) - sum(l.qty) OVER (PARTITION BY l.import_request_item_id) AS remaining, l.received_qty
                 FROM sales.shipment_lot l JOIN sales.import_request_item i USING (import_request_item_id)
+                LEFT JOIN sales.import_item_wanted w ON w.import_request_item_id = l.import_request_item_id
                -- windows run over ALL lots of an item, but only of the items on the requested rounds
                WHERE l.import_request_item_id IN (SELECT import_request_item_id FROM sales.shipment_lot
                                                    WHERE shipment_round_id IN (:ids)))
@@ -471,15 +500,16 @@ public class ShipmentRoundRepository {
                    t.customer_name, p.name AS project_name, r.order_purpose, r.purpose_note,
                    NULLIF(TRIM(CONCAT_WS(' ', e.first_name_th, e.last_name_th)), '') AS requester_name,
                    i.import_request_item_id AS item_id, i.code, i.brand, i.model, i.size, i.unit,
-                   i.qty - COALESCE((SELECT sum(l.qty) FROM sales.shipment_lot l
+                   COALESCE(w.wanted_qty, i.qty) - COALESCE((SELECT sum(l.qty) FROM sales.shipment_lot l
                                       WHERE l.import_request_item_id = i.import_request_item_id), 0) AS remaining
               FROM sales.import_request r
               JOIN sales.import_request_item i ON i.import_request_id = r.import_request_id
+              LEFT JOIN sales.import_item_wanted w ON w.import_request_item_id = i.import_request_item_id
               LEFT JOIN sales.ticket t ON t.ticket_id = r.ticket_id
               LEFT JOIN customers.project p ON p.project_id = t.project_id
               LEFT JOIN hr.employee e ON e.employee_id = r.requester_id
              WHERE r.status = 'ISSUED' AND (r.ticket_id IS NULL OR t.lifecycle = 'ACTIVE')
-               AND i.qty > COALESCE((SELECT sum(l.qty) FROM sales.shipment_lot l
+               AND COALESCE(w.wanted_qty, i.qty) > COALESCE((SELECT sum(l.qty) FROM sales.shipment_lot l
                                       WHERE l.import_request_item_id = i.import_request_item_id), 0)
              ORDER BY r.import_request_id, i.seq
             """, new MapSqlParameterSource(), rs -> {
@@ -543,12 +573,13 @@ public class ShipmentRoundRepository {
 
     public List<DerivedInput> derivedInputs(List<Long> importRequestIds) {
         return jdbc.query("""
-            SELECT i.import_request_id, i.import_request_item_id, i.qty, l.qty AS lot_qty, r.import_step,
+            SELECT i.import_request_id, i.import_request_item_id, COALESCE(w.wanted_qty, i.qty) AS qty, l.qty AS lot_qty, r.import_step,
                    CASE r.import_step WHEN 'CONTACTED' THEN r.contacted_on WHEN 'ORDERED' THEN r.ordered_on
                         WHEN 'PICKED_UP' THEN r.picked_up_on WHEN 'IN_TRANSIT' THEN r.in_transit_on
                         WHEN 'AWAITING_CUSTOMS' THEN r.awaiting_customs_on WHEN 'RECEIVED' THEN r.received_on END AS step_on,
                    r.step_by_id, r.step_by_name, r.step_note, r.shipment_round_id
               FROM sales.import_request_item i
+              LEFT JOIN sales.import_item_wanted w ON w.import_request_item_id = i.import_request_item_id
               LEFT JOIN sales.shipment_lot l ON l.import_request_item_id = i.import_request_item_id
               LEFT JOIN sales.shipment_round r ON r.shipment_round_id = l.shipment_round_id
              WHERE i.import_request_id IN (:ids)
@@ -596,9 +627,11 @@ public class ShipmentRoundRepository {
 
     public Optional<ItemQty> itemQty(long itemId) {
         return jdbc.query("""
-            SELECT i.import_request_id, i.qty,
+            SELECT i.import_request_id, COALESCE(w.wanted_qty, i.qty) AS qty, -- what the factory is still to send: not what was marked not delivered
                    COALESCE((SELECT sum(l.qty) FROM sales.shipment_lot l WHERE l.import_request_item_id = i.import_request_item_id), 0) AS placed
-              FROM sales.import_request_item i WHERE i.import_request_item_id = :i
+              FROM sales.import_request_item i
+              LEFT JOIN sales.import_item_wanted w ON w.import_request_item_id = i.import_request_item_id
+             WHERE i.import_request_item_id = :i
             """, Map.of("i", itemId), (rs, n) -> new ItemQty(rs.getLong(1), rs.getBigDecimal(2), rs.getBigDecimal(3)))
             .stream().findFirst();
     }
@@ -736,13 +769,14 @@ public class ShipmentRoundRepository {
                    t.customer_name, p.name AS project_name, ir.order_purpose, ir.purpose_note,
                    NULLIF(TRIM(CONCAT_WS(' ', e.first_name_th, e.last_name_th)), '') AS requester_name, ir.requester_id, ir.wanted_by,
                    ir.required_by_note, ir.first_issued_date + ir.lead_time_max_days AS expected_to,
-                   i.import_request_item_id, i.brand, i.model, i.code, i.size, i.unit, i.qty AS item_qty,
+                   i.import_request_item_id, i.brand, i.model, i.code, i.size, i.unit, COALESCE(w.wanted_qty, i.qty) AS item_qty,
                    l.shipment_lot_id, l.qty AS lot_qty, l.received_qty,
                    r.shipment_round_id, r.label, r.import_step, r.transport_mode, r.vessel, r.voyage, r.port,
                    r.etd_actual_on, r.eta_on, r.arrived_on, r.customs_released_on, r.contacted_on, r.ordered_on,
                    r.picked_up_on, r.in_transit_on, r.awaiting_customs_on, r.received_on
               FROM sales.import_request ir
               JOIN sales.import_request_item i ON i.import_request_id = ir.import_request_id
+              LEFT JOIN sales.import_item_wanted w ON w.import_request_item_id = i.import_request_item_id
               LEFT JOIN sales.ticket t ON t.ticket_id = ir.ticket_id
               LEFT JOIN customers.project p ON p.project_id = t.project_id
               LEFT JOIN hr.employee e ON e.employee_id = ir.requester_id
@@ -758,8 +792,10 @@ public class ShipmentRoundRepository {
                         AND NOT EXISTS (SELECT 1 FROM sales.shipment_lot x JOIN sales.shipment_round xr ON xr.shipment_round_id = x.shipment_round_id
                                          WHERE x.import_request_id = ir.import_request_id
                                            AND (xr.import_step <> 'RECEIVED' OR xr.received_on IS NULL OR xr.received_on >= :cutoff))
-                        AND NOT EXISTS (SELECT 1 FROM sales.import_request_item xi WHERE xi.import_request_id = ir.import_request_id
-                                           AND xi.qty > COALESCE((SELECT SUM(xl.qty) FROM sales.shipment_lot xl
+                        AND NOT EXISTS (SELECT 1 FROM sales.import_request_item xi
+                                          LEFT JOIN sales.import_item_wanted xw ON xw.import_request_item_id = xi.import_request_item_id
+                                         WHERE xi.import_request_id = ir.import_request_id
+                                           AND COALESCE(xw.wanted_qty, xi.qty) > COALESCE((SELECT SUM(xl.qty) FROM sales.shipment_lot xl
                                                                    WHERE xl.import_request_item_id = xi.import_request_item_id), 0)))
              ORDER BY ir.import_request_id, i.seq, l.shipment_lot_id
             """, new MapSqlParameterSource("actor", actorId).addValue("allDeals", allDeals)

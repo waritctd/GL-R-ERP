@@ -385,6 +385,22 @@ public class ShipmentRoundService {
         return roundOrNullIfHidden(id, actor);
     }
 
+    /** Locks the rounds, then the import requests, of a deal's ISSUED IRs (the order every writer here uses: rounds, IRs, tickets);
+     * the caller then takes the ticket lock. Used by the not-delivered mark. */
+    @Transactional
+    public List<IrLock> lockTicketIrs(long ticketId) {
+        List<Long> roundIds = rounds.roundIdsOfTicket(ticketId);
+        rounds.lockRounds(roundIds);
+        return rounds.lockImportRequests(roundIds, rounds.issuedIrIdsOfTicket(ticketId));
+    }
+
+    /** After a line was marked not delivered (or cleared): the deal's IRs re-derive (an IR with nothing left to receive is done);
+     * the normal rollup and its one notice follow when that completes the deal. Locks as lockTicketIrs returned. */
+    @Transactional
+    public void rederiveAfterNotDelivered(List<IrLock> irs, UserPrincipal actor) {
+        applyAftermath(onActiveDeals(recomputeIrSteps(irs, actor, null), irs), actor, null);
+    }
+
     /** The round for the closing read, or null when it is now held only by finished deals (hidden): the change stays
      * committed and the caller leaves the page, as for a deleted round. */
     private ShipmentRoundDto roundOrNullIfHidden(long id, UserPrincipal actor) {

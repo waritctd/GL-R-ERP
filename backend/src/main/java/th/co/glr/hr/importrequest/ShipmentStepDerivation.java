@@ -58,6 +58,11 @@ public final class ShipmentStepDerivation {
         }
         boolean unplaced = slowest == null || wanted.entrySet().stream()
             .anyMatch(e -> placed.get(e.getKey()).compareTo(e.getValue()) < 0);
+        // every line's quantity marked not delivered (never sent, never wanted): nothing left to receive, the IR is done
+        if (slowest == null && !wanted.isEmpty() && wanted.values().stream().allMatch(q -> q != null && q.signum() <= 0)) {
+            LocalDate doneAt = ir.importStepAt() != null ? ir.importStepAt() : ir.firstIssuedDate();
+            return new Derived(ImportRequestStep.RECEIVED, doneAt, null, null, null);
+        }
         DerivedInput chosen = slowestPast != null ? slowestPast : slowest;
         String step = chosen == null ? ir.importStep() : chosen.roundStep();
         if ((unplaced || !allReceived) && (step == null

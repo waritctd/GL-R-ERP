@@ -3257,7 +3257,7 @@ function mockIncomingForIr(ir) {
   const waiting = [];
   ir.items.forEach((item) => {
     const mine = mockShipmentRounds.flatMap((r) => r.lots.filter((l) => l.itemId === item.id).map((l) => ({ l, r })));
-    const remaining = mockQtyLeft(item.qty, mockSumQty(mine.map(({ l }) => l.qty)));
+    const remaining = mockQtyLeft(mockWantedQty(item), mockSumQty(mine.map(({ l }) => l.qty)));
     const product = [[item.brand, item.model].filter(Boolean).join(' ') || item.code, item.size].filter(Boolean).join(' ');
     mine.forEach(({ l, r }, i) => lots.push({
       lotId: l.lotId, product, unit: item.unit ?? null, qty: l.qty, receivedQty: r.importStep === 'RECEIVED' ? (l.receivedQty ?? l.qty) : null,
@@ -3278,13 +3278,13 @@ function mockShipmentLotDtos(round) {
     const item = ir.items.find((it) => it.id === lot.itemId);
     const ticket = mockTicketOrNull(ir);
     const all = mockShipmentRounds.flatMap((x) => x.lots).filter((l) => l.itemId === lot.itemId);
-    const remaining = mockQtyLeft(item.qty, mockSumQty(all.map((l) => l.qty)));
+    const remaining = mockQtyLeft(mockWantedQty(item), mockSumQty(all.map((l) => l.qty)));
     return {
       lotId: lot.lotId, importRequestId: ir.id, docNumber: ir.docNumber, ticketId: ticket?.id ?? null, ticketCode: ticket?.code ?? null,
       customerName: ticket?.customerName ?? null, projectName: ticket?.projectName ?? null, itemId: item.id,
       orderPurpose: ir.orderPurpose ?? null, purposeNote: ir.purposeNote ?? null, requesterName: ir.requestedByName ?? null,
       code: item.code, brand: item.brand ?? null, model: item.model ?? null, size: item.size ?? null, unit: item.unit ?? null,
-      qty: lot.qty, itemQty: Number(item.qty), lotNo: all.findIndex((l) => l.lotId === lot.lotId) + 1,
+      qty: lot.qty, itemQty: mockWantedQty(item), lotNo: all.findIndex((l) => l.lotId === lot.lotId) + 1,
       lotCount: remaining > 0 ? all.length + 1 : all.length, remainingQty: remaining, receivedQty: lot.receivedQty ?? null,
     };
   });
@@ -3308,9 +3308,29 @@ function mockShipmentDto(round) {
 
 // ShipmentStepDerivation#derive: the slowest round's step (a tie: the later date, then the higher round id); CONTACTED
 // while any quantity is on no round.
+// ShipmentRoundRepository's import_item_wanted view: the quantity marked not delivered on a deal line is taken off the
+// unplaced part of its ISSUED IR lines, earliest IR first, so it stops showing as waiting and cannot be planned.
+function mockWantedQty(it) {
+  const ir = mockImportRequests.find((r) => r.id === it.importRequestId);
+  if (!ir || ir.status !== 'ISSUED' || it.ticketItemId == null || ir.ticketId == null) return Number(it.qty);
+  const ti = (findTicketRaw(ir.ticketId)?.items ?? []).find((x) => x.id === it.ticketItemId);
+  const nd = Number(ti?.qtyNotDelivered ?? 0);
+  if (nd <= 0) return Number(it.qty);
+  const siblings = mockImportRequests.filter((r) => r.ticketId === ir.ticketId && r.status === 'ISSUED').sort((a, b) => a.id - b.id)
+    .flatMap((r) => r.items.filter((x) => x.ticketItemId === it.ticketItemId).sort((a, b) => a.seq - b.seq));
+  let before = 0;
+  for (const sib of siblings) {
+    const unplaced = Math.max(0, Number(sib.qty) - mockPlacedQty(sib.id));
+    if (sib === it || sib.id === it.id) return Number(it.qty) - Math.min(unplaced, Math.max(nd - before, 0));
+    before += unplaced;
+  }
+  return Number(it.qty);
+}
+
 function mockDeriveIr(ir) {
   const lots = mockShipmentRounds.flatMap((x) => x.lots.filter((l) => l.itemId != null && l.importRequestId === ir.id).map((l) => ({ l, x })));
-  const unplaced = ir.items.some((it) => mockSumQty(lots.filter(({ l }) => l.itemId === it.id).map(({ l }) => l.qty)) < mockHundredths(it.qty) / 100);
+  const unplaced = ir.items.some((it) => mockSumQty(lots.filter(({ l }) => l.itemId === it.id).map(({ l }) => l.qty)) < mockHundredths(mockWantedQty(it)) / 100);
+  const nothingWanted = ir.items.length > 0 && ir.items.every((it) => mockWantedQty(it) <= 0);
   const slowerThan = (b, a) => {
     const byStep = mockImportRequestStepIndex(a.x.importStep) - mockImportRequestStepIndex(b.x.importStep);
     if (byStep !== 0) return byStep > 0;
@@ -3323,6 +3343,7 @@ function mockDeriveIr(ir) {
   const chosen = slowestPast ?? slowest;
   const allReceived = lots.every(({ x }) => x.importStep === 'RECEIVED');
   const waiting = unplaced || !slowest;
+  if (nothingWanted && lots.length === 0) return { step: 'RECEIVED', at: ir.importStepAt ?? ir.firstIssuedDate ?? null, waiting: false, slowest: null }; // every line marked not delivered: done
   // ShipmentStepDerivation: unplaced quantity or a lot on a round not yet received stops short of RECEIVED (the rest is still on its
   // way); no lots keeps the IR's own step (never RECEIVED by this path); a fresh IR stays CONTACTED with its own stamp.
   let step = chosen ? chosen.x.importStep : (ir.importStep ?? 'CONTACTED');
@@ -3388,7 +3409,7 @@ function mockPlaceLots(round, inputs) {
     // a round not stored yet (createRound) does not count in mockPlacedQty: add what this batch staged on it already
     const staged = mockShipmentRounds.includes(round) ? 0 : mockSumQty(round.lots.filter((l) => l.itemId === item.id).map((l) => l.qty));
     const placedNow = mockSumQty([mockPlacedQty(item.id), staged]);
-    if (mockHundredths(placedNow) + mockHundredths(qty) > mockHundredths(item.qty)) fail(`จำนวนเกินที่เหลือของใบขอซื้อ ${ir.docNumber} (เหลือ ${mockQtyLeft(item.qty, placedNow)})`, 409);
+    if (mockHundredths(placedNow) + mockHundredths(qty) > mockHundredths(mockWantedQty(item))) fail(`จำนวนเกินที่เหลือของใบขอซื้อ ${ir.docNumber} (เหลือ ${mockQtyLeft(item.qty, placedNow)})`, 409);
     const there = round.lots.find((l) => l.itemId === item.id);
     if (there) there.qty = mockSumQty([there.qty, qty]);
     else round.lots.push({ lotId: mockShipmentLotSeq++, importRequestId: ir.id, itemId: item.id, qty });
@@ -4802,7 +4823,7 @@ function maybeAdvanceClosedPaid(ticket, user) {
 }
 
 function hasRemainingDelivery(ticket) {
-  return (ticket.items ?? []).some((item) => Number(item.qtyDelivered ?? 0) < Number(item.qty ?? 0));
+  return (ticket.items ?? []).some((item) => Number(item.qtyDelivered ?? 0) < Number(item.qty ?? 0) - Number(item.qtyNotDelivered ?? 0));
 }
 
 // Goods reaching the warehouse is a permanent fact (the GOODS_RECEIVED event), not the mutable
@@ -4825,7 +4846,7 @@ function mockHasReceivedLot(ticketId) {
 function mockWarehouseAllowance(ticket, item) {
   mockEnsureMigratedRounds();
   const irs = mockImportRequests.filter((r) => r.ticketId === ticket.id && r.status === 'ISSUED');
-  const qty = Number(item.qty ?? 0);
+  const qty = Number(item.qty ?? 0) - Number(item.qtyNotDelivered ?? 0); // deliverable
   const dealHasLots = irs.some((ir) => ir.items.some((it) => mockShipmentRounds.some((r) => r.lots.some((l) => l.itemId === it.id))));
   if (!dealHasLots) return qty;
   const mine = irs.flatMap((ir) => ir.items.filter((it) => it.ticketItemId === item.id));
@@ -4840,6 +4861,38 @@ function mockWarehouseAllowance(ticket, item) {
   if (mine.length === 0) return Math.round(stock * 100) / 100;
   const ratio = irQty <= 0 ? 1 : Math.min(1, onRounds / irQty);
   return Math.round((stock + Math.max(qty - declared, 0) * ratio) * 100) / 100;
+}
+
+// TicketService#notDeliveredAllowed: what has not arrived and is not on its way (the mark replaces an earlier mark).
+function mockNotDeliveredAllowed(ticket, item) {
+  mockEnsureMigratedRounds();
+  const mine = mockImportRequests.filter((r) => r.ticketId === ticket.id && r.status === 'ISSUED').flatMap((r) => r.items.filter((i) => i.ticketItemId === item.id));
+  if (mine.length === 0) fail('รายการนี้ไม่มีใบขอซื้อ (IR) ที่ออกเลขแล้ว จึงบันทึกว่าไม่ได้รับของไม่ได้', 409);
+  const lots = mine.flatMap((it) => mockShipmentRounds.flatMap((r) => r.lots.filter((l) => l.itemId === it.id).map((l) => ({ l, r }))));
+  const inProgress = mockSumQty(lots.filter(({ r }) => r.importStep !== 'RECEIVED').map(({ l }) => l.qty));
+  if (inProgress > 0) fail(`มีสินค้าของรายการนี้อยู่ในรอบขนส่งที่ยังดำเนินการอยู่ (${inProgress}) บันทึกว่าไม่ได้รับของไม่ได้ จนกว่ารอบจะถึงโกดังหรือเอาออกจากรอบ`, 409);
+  if (lots.some(({ l, r }) => r.importStep === 'RECEIVED' && (l.receivedQty ?? l.qty) === 0)) fail('มีล็อตที่บันทึกว่าถึงโกดัง 0 ให้กดกลับไปรอจัดรอบก่อนจึงจะบันทึกว่าไม่ได้รับของได้', 409);
+  const received = mockSumQty(lots.filter(({ r, l }) => r.importStep === 'RECEIVED' && (l.receivedQty ?? l.qty) > 0).map(({ l }) => l.receivedQty ?? l.qty));
+  const arrived = Math.max(Number(item.qtyFromStock ?? 0) + received, Number(item.qtyDelivered ?? 0));
+  return Math.max(0, Math.round((Number(item.qty ?? 0) - arrived) * 100) / 100);
+}
+
+// LineNotDeliveredService: the IRs re-derive (an IR with nothing left to receive is done), then the normal rollup once.
+function mockRederiveTicketIrs(ticket, user) {
+  const ids = mockImportRequests.filter((r) => r.ticketId === ticket.id && r.status === 'ISSUED').map((r) => r.id);
+  mockRecomputeIrSteps(ids, user, null).forEach(({ ir, from, to }) => {
+    pushEvent(ticket, user, 'IMPORT_STEP_ADVANCED', null, null, `โรงงาน ${ir.factoryName}: ${MOCK_IMPORT_REQUEST_STEP_LABELS_TH[from] ?? from} → ${MOCK_IMPORT_REQUEST_STEP_LABELS_TH[to] ?? to}`);
+    if (to === 'RECEIVED' && mockAllFactoriesReceived(ticket)) applyImportRequestRollupMock(ticket, user);
+  });
+}
+
+// Marking the last open quantity completes delivery the way the last delivery does, once.
+function mockCompleteDeliveryIfDone(ticket, user) {
+  if ((ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE' || ticket.fulfillmentStatus === 'FULLY_DELIVERED' || hasRemainingDelivery(ticket) || (ticket.items ?? []).length === 0) return;
+  ticket.fulfillmentStatus = 'FULLY_DELIVERED';
+  pushEvent(ticket, user, 'DELIVERY_COMPLETED', ticket.status, ticket.status, 'ส่งมอบครบ: ส่วนที่ไม่ได้รับของถูกบันทึกแล้ว');
+  autoAdvanceStage(ticket, 'DELIVERED', user);
+  maybeAdvanceClosedPaid(ticket, user);
 }
 
 function warehouseAvailableFor(ticket) {
@@ -4941,7 +4994,7 @@ function mockRoundDelivered(round, itemId) {
 const mockRoundLineRemaining = (round, itemId) => {
   const line = round.lines.find((l) => l.itemId === itemId);
   const item = (findTicketRaw(round.ticketId)?.items ?? []).find((i) => i.id === itemId);
-  const itemLeft = item ? Math.max(0, Number(item.qty ?? 0) - Number(item.qtyDelivered ?? 0)) : Infinity;
+  const itemLeft = item ? Math.max(0, Number(item.qty ?? 0) - Number(item.qtyNotDelivered ?? 0) - Number(item.qtyDelivered ?? 0)) : Infinity;
   return line ? Math.min(Math.max(0, moneyValue(line.qty - mockRoundDelivered(round, itemId))), itemLeft) : 0;
 };
 
@@ -5025,7 +5078,7 @@ function recordDeliveryForTicket(ticket, user, payload = {}, completing = false)
   for (const [itemId, qty] of combined.entries()) {
     const item = ticket.items.find((it) => it.id === itemId);
     const newDelivered = moneyValue(Number(item.qtyDelivered ?? 0) + qty);
-    if (newDelivered > Number(item.qty ?? 0)) fail('จำนวนส่งมอบเกินจำนวนที่สั่ง', 409);
+    if (newDelivered > Number(item.qty ?? 0) - Number(item.qtyNotDelivered ?? 0)) fail('จำนวนส่งมอบเกินจำนวนที่สั่ง', 409);
     if (source === 'STOCK' && newDelivered > Number(item.qtyFromStock ?? 0)) {
       fail('ส่งจากสต็อกได้ไม่เกินจำนวนที่ประกาศว่าพร้อมจากสต็อก', 409);
     }
@@ -5086,7 +5139,7 @@ function recordDeliveryForTicket(ticket, user, payload = {}, completing = false)
     db.users.filter((u) => ['account', 'sales_manager'].includes(u.role) && u.active && u.id !== user.id).forEach((u) => addNotification(
       u.id, ticket.id, ticket.code, 'DELIVERY_RECORDED', audit, u.role === 'account' ? `/finance/deals/${ticket.id}` : `/tickets/${ticket.id}?tab=ship`));
   }
-  const full = ticket.items.every((item) => Number(item.qtyDelivered ?? 0) >= Number(item.qty ?? 0));
+  const full = ticket.items.every((item) => Number(item.qtyDelivered ?? 0) >= Number(item.qty ?? 0) - Number(item.qtyNotDelivered ?? 0)); // deliverable = qty less what was marked not delivered
   if (full) {
     ticket.fulfillmentStatus = 'FULLY_DELIVERED';
     pushEvent(ticket, user, 'DELIVERY_COMPLETED', ticket.status, ticket.status, completing ? 'ส่งมอบครบ' : message);
@@ -11411,7 +11464,7 @@ export const api = {
           importRequestId: ir.id, docNumber: ir.docNumber, factoryName: ir.factoryName, importStep: ir.importStep,
           expectedFrom: mockImportRequestDto(ir).expectedArrivalFrom, expectedTo: mockImportRequestDto(ir).expectedArrivalTo,
           unit: oneUnit ? ((ir.items[0].unit ?? '').trim() || null) : null,
-          ordered: oneUnit ? ir.items.reduce((sum, i) => sum + Number(i.qty), 0) : null,
+          ordered: oneUnit ? ir.items.reduce((sum, i) => sum + mockWantedQty(i), 0) : null,
           received: oneUnit ? lots.reduce((sum, l) => sum + (l.receivedQty ?? 0), 0) : null, lots, waiting,
         };
       });
@@ -11510,6 +11563,45 @@ export const api = {
       return delay({ ticket: buildTicketDetail(ticket) });
     },
 
+    // ไม่ได้รับของ (sales manager / CEO): mirrors TicketService#notDeliveredAllowed / markLineNotDelivered / clearLineNotDelivered
+    // and LineNotDeliveredService (the IRs re-derive, the rollup runs once, the last open quantity completes delivery).
+    async notDeliveredAllowed(id, itemId) {
+      hasRole('sales_manager', 'ceo');
+      const ticket = findTicketRaw(Number(id));
+      return delay({ allowed: mockNotDeliveredAllowed(ticket, (ticket.items ?? []).find((i) => i.id === Number(itemId))) });
+    },
+    async markNotDelivered(id, itemId, payload) {
+      const user = hasRole('sales_manager', 'ceo');
+      const ticket = findTicketRaw(Number(id));
+      requireActive(ticket);
+      const item = (ticket.items ?? []).find((i) => i.id === Number(itemId));
+      if (!item) fail('ไม่พบรายการนี้ในงาน', 404);
+      const qty = Math.round(Number(payload?.qty) * 100) / 100;
+      const reason = String(payload?.reason ?? '').trim();
+      if (!(qty > 0)) fail('จำนวนต้องมากกว่า 0', 400);
+      if (!reason || reason.length > 255) fail('ระบุเหตุผล (ไม่เกิน 255 ตัวอักษร)', 400);
+      const allowed = mockNotDeliveredAllowed(ticket, item);
+      if (qty > allowed) fail(`บันทึกว่าไม่ได้รับของได้ไม่เกิน ${allowed} (ส่วนที่ยังไม่ถึงโกดังและไม่ได้อยู่ระหว่างขนส่ง)`, 409);
+      item.qtyNotDelivered = qty; item.notDeliveredReason = reason;
+      pushEvent(ticket, user, 'LINE_NOT_DELIVERED', ticket.status, ticket.status, `ไม่ได้รับของ: ${item.brand ?? ''} ${item.model ?? ''} ${qty} · เหตุผล: ${reason}`);
+      mockRederiveTicketIrs(ticket, user);
+      mockCompleteDeliveryIfDone(ticket, user);
+      return delay({ ticket: buildTicketDetail(ticket) });
+    },
+    async clearNotDelivered(id, itemId) {
+      const user = hasRole('sales_manager', 'ceo');
+      const ticket = findTicketRaw(Number(id));
+      if ((ticket.lifecycle ?? 'ACTIVE') === 'COMPLETED') fail('ปิดดีลแล้ว ยกเลิกการบันทึกไม่ได้รับของไม่ได้', 409);
+      requireActive(ticket);
+      if (hasReceivedGoods(ticket.id)) fail('งานนี้บันทึกรับสินค้าครบแล้ว จึงยกเลิกการบันทึกไม่ได้รับของไม่ได้', 409);
+      const item = (ticket.items ?? []).find((i) => i.id === Number(itemId));
+      if (!item || !(Number(item.qtyNotDelivered ?? 0) > 0)) fail('รายการนี้ไม่ได้ถูกบันทึกว่าไม่ได้รับของ', 409);
+      item.qtyNotDelivered = 0; item.notDeliveredReason = null;
+      pushEvent(ticket, user, 'LINE_NOT_DELIVERED_CLEARED', ticket.status, ticket.status, `ยกเลิกการบันทึกไม่ได้รับของ: ${item.brand ?? ''} ${item.model ?? ''}`);
+      if (ticket.fulfillmentStatus === 'FULLY_DELIVERED' && hasRemainingDelivery(ticket)) ticket.fulfillmentStatus = 'PARTIALLY_DELIVERED';
+      mockRederiveTicketIrs(ticket, user);
+      return delay({ ticket: buildTicketDetail(ticket) });
+    },
     // Mirrors TicketService#warehouseRemaining: per line, what the warehouse may still deliver (the shared allowance less delivered).
     async deliveryAllowance(id) {
       requireSession();
@@ -15578,7 +15670,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       mockEnsureMigratedRounds();
       const waiting = mockImportRequests.filter((r) => r.status === 'ISSUED' && mockIrActive(r)).flatMap((ir) => {
         const lines = ir.items.map((it) => {
-          return { itemId: it.id, code: it.code, brand: it.brand ?? null, model: it.model ?? null, size: it.size ?? null, unit: it.unit ?? null, remainingQty: mockQtyLeft(it.qty, mockPlacedQty(it.id)) };
+          return { itemId: it.id, code: it.code, brand: it.brand ?? null, model: it.model ?? null, size: it.size ?? null, unit: it.unit ?? null, remainingQty: mockQtyLeft(mockWantedQty(it), mockPlacedQty(it.id)) };
         }).filter((l) => l.remainingQty > 0);
         if (lines.length === 0) return [];
         const ticket = mockTicketOrNull(ir);

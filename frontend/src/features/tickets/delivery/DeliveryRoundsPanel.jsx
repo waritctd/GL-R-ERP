@@ -410,7 +410,7 @@ export function DeliveryRoundsPanel({ ticketId, showRequestButton = true, hostRe
   const percent = ordered > 0 ? Math.min(100, Math.round((delivered / ordered) * 100)) : 0;
   // The warehouse reads no deal: it may still record before the invoice through the oldest sent round it can see.
   const uninvoiced = isWarehouse ? [...rounds].filter((r) => ['SENT', 'FORWARDED'].includes(r.status)).sort((a, b) => a.roundNo - b.roundNo)[0] ?? null : null;
-  const missing = items.some((i) => Number(i.qty || 0) - Number(i.qtyDelivered || 0) > 0);
+  const missing = items.some((i) => Number(i.qty || 0) - Number(i.qtyNotDelivered || 0) - Number(i.qtyDelivered || 0) > 0);
   // The no-invoice path (a note is required) is always a SECONDARY way to record while goods are still to deliver.
   const salesNoInvoice = canRecordNoInvoice && !readsNoDeal && missing;
   const noInvoiceSheet = noInvoiceOpen || (recordNext && !recordRound && salesNoInvoice);
