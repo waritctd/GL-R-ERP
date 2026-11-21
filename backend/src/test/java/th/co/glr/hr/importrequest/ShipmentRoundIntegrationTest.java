@@ -521,6 +521,47 @@ class ShipmentRoundIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     @Test
+    void anIrOnAFinishedDealIsMigratedToo_hiddenWhileTheDealIsOver_andBackWithItsStepOnReopen() throws Exception {
+        jdbc.update("UPDATE sales.import_request SET import_step = 'ORDERED' WHERE import_request_id = :id", Map.of("id", irB));
+        jdbc.update("UPDATE sales.ticket SET lifecycle = 'CLOSED_LOST', lost_reason = 'PRICE', lost_at = now() WHERE ticket_id = :t", Map.of("t", ticketB));
+        // V239's own data statements, run here: every ISSUED IR with lines (these two have no round yet) gets one.
+        String sql = new String(getClass().getResourceAsStream("/db/migration/V239__shipment_rounds.sql").readAllBytes(),
+            java.nio.charset.StandardCharsets.UTF_8);
+        jdbc.getJdbcTemplate().execute(sql.substring(sql.indexOf("INSERT INTO sales.shipment_round ("), sql.indexOf("-- Orders with no project")));
+
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM sales.shipment_round WHERE migrated_from_import_request_id = :id AND import_step = 'ORDERED'",
+            Map.of("id", irB), Integer.class)).isEqualTo(1);
+        assertThat(rounds.list(importUser).rounds()).extracting(r -> r.lots().get(0).importRequestId()).doesNotContain(irB);
+
+        jdbc.update("UPDATE sales.ticket SET lifecycle = 'ACTIVE', lost_reason = NULL, lost_at = NULL WHERE ticket_id = :t", Map.of("t", ticketB));
+        assertThat(rounds.list(importUser).rounds()).anySatisfy(r -> {
+            assertThat(r.lots().get(0).importRequestId()).isEqualTo(irB);
+            assertThat(r.importStep()).isEqualTo(ImportRequestStep.ORDERED);
+        });
+    }
+
+    @Test
+    void takingTheLiveLotOffAMixedRoundLeavesItHiddenAndCommits_forRemoveAndMove() {
+        jdbc.update("UPDATE sales.ticket SET lifecycle = 'CANCELLED' WHERE ticket_id = :t", Map.of("t", ticketB));
+        long mixed = round("CONTACTED");
+        lot(mixed, irA, 40);
+        lot(mixed, irB, 40);
+        long lotA = lotOf(mixed, irA);
+
+        assertThat(rounds.removeLot(mixed, lotA, importUser)).isNull(); // hidden now, but committed: no 404 and no rollback
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM sales.shipment_lot WHERE shipment_round_id = :r", Map.of("r", mixed), Integer.class)).isEqualTo(1);
+        assertThat(rounds.list(importUser).waiting()).extracting(w -> w.importRequestId()).contains(irA);
+
+        long mixed2 = round("CONTACTED");
+        lot(mixed2, irA, 25);
+        lot(mixed2, irB, 10);
+        long target = round("CONTACTED");
+        lot(target, irA, 5); // another round of this factory that has not left (the moved lot merges into it)
+        assertThat(rounds.moveLot(mixed2, lotOf(mixed2, irA), new MoveLotRequest(target), importUser)).isNull();
+        assertThat(rounds.get(target, importUser).lots()).extracting(l -> l.importRequestId()).containsExactly(irA);
+    }
+
+    @Test
     void theLastLotOfAPartiallyDeliveredDealMovesDepositPaidToAwaitingFinalPayment_andLeavesFullyPaidAlone() {
         jdbc.update("UPDATE sales.ticket SET fulfillment_status = 'PARTIALLY_DELIVERED', payment_status = 'DEPOSIT_PAID' WHERE ticket_id = :t", Map.of("t", ticketB));
         jdbc.update("UPDATE sales.ticket SET fulfillment_status = 'PARTIALLY_DELIVERED', payment_status = 'FULLY_PAID' WHERE ticket_id = :t", Map.of("t", ticketA));
@@ -603,6 +644,11 @@ class ShipmentRoundIntegrationTest extends AbstractPostgresIntegrationTest {
     private int bells(long ticket, String type) {
         return jdbc.queryForObject("SELECT count(*) FROM hr.notification WHERE type = :ty AND link LIKE :l",
             Map.of("ty", type, "l", "/tickets/" + ticket + "%"), Integer.class);
+    }
+
+    private long lotOf(long round, long ir) {
+        return jdbc.queryForObject("SELECT shipment_lot_id FROM sales.shipment_lot WHERE shipment_round_id = :r AND import_request_id = :ir",
+            Map.of("r", round, "ir", ir), Long.class);
     }
 
     private int stepEvents(long ticket) {

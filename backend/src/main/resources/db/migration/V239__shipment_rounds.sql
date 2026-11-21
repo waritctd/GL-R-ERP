@@ -112,8 +112,9 @@ COMMENT ON TABLE sales.shipment_lot IS 'A quantity of one import-request line ri
 COMMENT ON COLUMN sales.shipment_round.source IS 'PORTAL = made in the portal (number rule applies); MIGRATED = one per ISSUED IR at V239; BACKFILL = loaded from the import sheet. The last two are exempt from the proforma/invoice number rule.';
 
 -- One round per ISSUED import request that has lines, at its current step; the date of that step is the step's own stamp.
--- Deals that are over (lifecycle CLOSED_LOST, CANCELLED or COMPLETED) get no round: their goods are not Import's work any more.
--- ON_HOLD and DORMANT deals can resume, so theirs do.
+-- EVERY such IR gets its round, deals that are over included (CLOSED_LOST, CANCELLED, COMPLETED): reopenDeal can make a
+-- CLOSED_LOST deal ACTIVE again, and an IR with no round would then be re-planned and lose its step and date. The service
+-- hides a round whose lots are all on finished deals; it reappears when the deal does.
 INSERT INTO sales.shipment_round (
     factory_id, factory_name, source, import_step,
     contacted_on, ordered_on, picked_up_on, in_transit_on, awaiting_customs_on, received_on,
@@ -128,9 +129,7 @@ SELECT r.factory_id, r.factory_name, 'MIGRATED', r.import_step,
        r.import_step_by_id, r.import_step_by_name, r.import_step_note, r.import_request_id
   FROM sales.import_request r
  WHERE r.status = 'ISSUED'
-   AND EXISTS (SELECT 1 FROM sales.import_request_item i WHERE i.import_request_id = r.import_request_id)
-   AND NOT EXISTS (SELECT 1 FROM sales.ticket t WHERE t.ticket_id = r.ticket_id
-                    AND t.lifecycle IN ('CLOSED_LOST', 'CANCELLED', 'COMPLETED'));
+   AND EXISTS (SELECT 1 FROM sales.import_request_item i WHERE i.import_request_id = r.import_request_id);
 
 INSERT INTO sales.shipment_lot (shipment_round_id, import_request_id, import_request_item_id, qty)
 SELECT s.shipment_round_id, i.import_request_id, i.import_request_item_id, i.qty

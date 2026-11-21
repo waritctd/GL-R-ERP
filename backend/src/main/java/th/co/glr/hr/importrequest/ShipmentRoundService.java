@@ -316,7 +316,13 @@ public class ShipmentRoundService {
             rounds.deleteRound(id);
             return null;
         }
-        return get(id, actor);
+        return roundOrNullIfHidden(id, actor);
+    }
+
+    /** The round for the closing read, or null when it is now held only by finished deals (hidden): the change stays
+     * committed and the caller leaves the page, as for a deleted round. */
+    private ShipmentRoundDto roundOrNullIfHidden(long id, UserPrincipal actor) {
+        return rounds.onlyFinishedDeals(id) ? null : get(id, actor);
     }
 
     /** Moves a whole lot to another round of the same factory that has not left (rolled cargo, a missed container). A
@@ -358,7 +364,7 @@ public class ShipmentRoundService {
             rounds.deleteRound(id);
             return null;
         }
-        return get(id, actor);
+        return roundOrNullIfHidden(id, actor);
     }
 
     /** Adds the lots to the round: checks every rule per line, merging into a lot of the same line already there. */
