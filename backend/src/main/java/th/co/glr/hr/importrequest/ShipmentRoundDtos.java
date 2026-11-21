@@ -1,0 +1,89 @@
+package th.co.glr.hr.importrequest;
+
+import java.math.BigDecimal;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.util.List;
+
+/** Wire shapes of /api/shipment-rounds. Deliberately carries no price field of any kind. */
+public final class ShipmentRoundDtos {
+    private ShipmentRoundDtos() {}
+
+    /** The shipment facts. On a PUT every field is written as sent (transportMode keeps its value when null); on an
+     * advance only the non-null ones are. {@code vessel} is the vessel, flight or truck plate by {@code transportMode}. */
+    public record ShipmentFacts(String label, String transportMode, String vessel, String voyage, String forwarder,
+                                String containerNos, String port, LocalDate goodsReadyOn, LocalDate etdPlannedOn,
+                                LocalDate etdActualOn, LocalDate etaOn, LocalDate arrivedOn,
+                                LocalDate customsReleasedOn, String grNumber, Boolean completePerInvoice,
+                                String completeNote, String note) {}
+
+    /** A document of a round: a number, a file, or both. */
+    public record ShipmentDocumentDto(long id, String kind, String docNo, LocalDate docDate, String note,
+                                      String fileName, Long fileSize, String mimeType, Instant createdAt) {}
+
+    /** One quantity of one IR line on a round. {@code lotNo} of {@code lotCount} counts the line's lots, plus one for
+     * quantity still on no round. */
+    /** {@code ticketId}/{@code ticketCode}/{@code projectName} are null for a no-project order, which names its
+     * {@code orderPurpose} (SAMPLE / SHOWROOM / STOCK), who it is for ({@code purposeNote}) and who asked. */
+    public record ShipmentLotDto(long lotId, long importRequestId, String docNumber, Long ticketId, String ticketCode,
+                         String customerName, String projectName, long itemId, String code, String brand,
+                         String model, String size, String unit, BigDecimal qty, BigDecimal itemQty,
+                         int lotNo, int lotCount, BigDecimal remainingQty, BigDecimal receivedQty, String orderPurpose,
+                         String purposeNote, String requesterName) {}
+
+    public record ShipmentRoundDto(long id, Long factoryId, String factoryName, String source, String importStep,
+                           LocalDate contactedOn, LocalDate orderedOn, LocalDate pickedUpOn, LocalDate inTransitOn,
+                           LocalDate awaitingCustomsOn, LocalDate receivedOn, String stepByName, String stepNote,
+                           ShipmentFacts facts, List<ShipmentLotDto> lots, List<ShipmentDocumentDto> documents, Instant undoUntil,
+                           Long undoById, String undoFromStep, String advanceId) {}
+
+    /** An ISSUED IR with quantity on no round. */
+    public record ShipmentWaitingLine(long itemId, String code, String brand, String model, String size, String unit,
+                              BigDecimal remainingQty) {}
+
+    public record ShipmentWaitingDto(long importRequestId, String docNumber, Long factoryId, String factoryName,
+                             Long ticketId, String ticketCode, String customerName, String projectName,
+                             List<ShipmentWaitingLine> lines, String orderPurpose, String purposeNote, String requesterName) {}
+
+    public record ShipmentRoundsResponse(List<ShipmentRoundDto> rounds, List<ShipmentWaitingDto> waiting) {}
+
+    /** A document number typed on the advance sheet (kind + number). */
+    public record DocumentInput(String kind, String docNo) {}
+
+    /** What actually arrived of one lot (short arrival): 0 up to the lot's quantity. */
+    public record LotReceipt(Long lotId, BigDecimal qty) {}
+
+    public record AdvanceShipmentRoundRequest(String targetStep, LocalDate eventDate, String expectedStep, String note,
+                                              ShipmentFacts facts, List<DocumentInput> documents,
+                                              List<LotReceipt> lotReceipts) {
+        /** No short arrival: every lot arrived in full. */
+        public AdvanceShipmentRoundRequest(String targetStep, LocalDate eventDate, String expectedStep, String note,
+                                           ShipmentFacts facts, List<DocumentInput> documents) {
+            this(targetStep, eventDate, expectedStep, note, facts, documents, null);
+        }
+    }
+
+    /** Facts as sent, plus corrections of the real date of steps the round has passed (step code -> date). */
+    public record UpdateShipmentRoundRequest(ShipmentFacts facts, java.util.Map<String, LocalDate> stepDates,
+                                             List<LotReceipt> lotReceipts) {
+        public UpdateShipmentRoundRequest(ShipmentFacts facts, java.util.Map<String, LocalDate> stepDates) {
+            this(facts, stepDates, null);
+        }
+    }
+
+    public record DocumentRequest(String kind, String docNo, LocalDate docDate, String note) {}
+
+    /** One line of an IR going on a round, and how much of it. */
+    public record LotInput(Long importRequestId, Long itemId, BigDecimal qty) {}
+
+    /** Plans a new round (N04): one factory, its optional label and transport mode, and the lots going on it. */
+    public record CreateShipmentRoundRequest(Long factoryId, String label, String transportMode, List<LotInput> lots) {}
+
+    public record AddLotsRequest(List<LotInput> lots) {}
+
+    public record ChangeLotRequest(BigDecimal qty) {}
+
+    public record MoveLotRequest(Long toRoundId) {}
+
+    public record UndoShipmentRoundRequest(String expectedStep, String advanceId) {}
+}

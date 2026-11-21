@@ -102,7 +102,7 @@ class CatalogPricingReadAuthzIntegrationTest extends AbstractPostgresIntegration
         fxMvc = standalone(new FxRateController(
             new FxRateRepository(jdbc), sessions, botFxFetchService), jsonMapper);
         factoryMvc = standalone(
-            new FactoryConfigController(new FactoryConfigRepository(jdbc), sessions), jsonMapper);
+            new FactoryConfigController(new FactoryConfigRepository(jdbc), sessions, new th.co.glr.hr.auth.EmployeeAuthRepository(jdbc)), jsonMapper);
 
         seedFixtures();
     }

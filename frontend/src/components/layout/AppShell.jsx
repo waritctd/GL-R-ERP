@@ -4,7 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { SALES_ENABLED } from '../../app/features.js';
-import { hasPermission, isDivisionManager, isOversightReader, isQuotationReleaseUser, isReaderPath, isReleasedPath, isSelfServiceLocked } from '../../app/permissions.js';
+import { hasPermission, isDivisionManager, isMyOrdersGrantUser, isOversightReader, isQuotationReleaseUser, isReaderPath, isReleasedPath, isSelfServiceLocked } from '../../app/permissions.js';
 import { PRODUCT_NAME } from '../../app/product.js';
 import { cn } from '../../utils/cn.js';
 import { displayRole, roleLabel } from '../../utils/format.js';
@@ -166,6 +166,8 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
     // นัดเข้าพบ — after เอกสารขาย (was ใบเสนอราคา until 2026-11-20), where the design's NAV puts it for sales. Same audience as the '/visits'
     // PATH_GUARDS entry (canViewVisits = VisitService.VISIT_ROLES): a rep's own week; sales_manager / ceo the team's.
     { path: '/visits', label: 'นัดเข้าพบ', helper: 'Visits', icon: 'calendar', group: 'sales', show: (hasPermission(user.role, 'canViewVisits') || reader) && SALES_ENABLED },
+    // ของที่ฉันสั่ง: the rep's one page of all incoming goods (the ONLY new sales page for shipments), from the menu.
+    { path: '/my-orders', label: 'ของที่ฉันสั่ง', helper: 'My incoming orders', icon: 'building', group: 'sales', show: (hasPermission(user.role, 'canViewMyOrders') || reader || Boolean(user.canCreateQuotation) || Boolean(user.canSeeShowroomOrders)) && SALES_ENABLED },
     { path: '/ceo-settings', label: 'ตั้งค่าราคา', helper: 'CEO price config', icon: 'setting', group: 'settings', show: user.role === 'ceo' && SALES_ENABLED },
     // Catalog browsing is scoped to the sales/CRM audience (canViewCatalog), not just the
     // feature flag.
@@ -260,6 +262,7 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
       // import's งานนำเข้า + คิวขอราคา and account's งานการเงิน survive the lock: the same
       // allowlist canAccessPath applies.
       || (reader && isReaderPath(item.path))
+      || (item.path === '/my-orders' && isMyOrdersGrantUser(user))
       || isReleasedPath(item.path, user));
 
   const closeTopbarPopover = useCallback(() => setActiveTopbarPopover(null), []);

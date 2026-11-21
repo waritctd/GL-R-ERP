@@ -450,6 +450,11 @@ describe('controller surface / hrApi.js contract', () => {
  * retiring the endpoint) is the direction of travel and the stale-entry test deletes the entry.
  */
 const UNREACHABLE_FROM_UI = new Set([
+  // The IR-level step advance and its undo moved to the shipment round (POST /api/shipment-rounds/{id}/advance): /fulfilment
+  // advances rounds now. The routes stay: an IR that rides alone on one round is still advanced through them (and API
+  // clients and e2e use them); retire them when the round endpoints are the only path.
+  'POST /api/import-requests/{}/advance-step',
+  'POST /api/import-requests/{}/advance-step/undo',
   // ส่งมอบครบ went with the old deal-page buttons: the delivery sheet records lines (a round's, or the deal's with a note when
   // there is no invoice). The route stays (e2e and API clients complete a delivery with it) under the same invoice/note rule.
   'POST /api/tickets/{}/deliveries/complete',

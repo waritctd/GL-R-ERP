@@ -26,6 +26,8 @@ export function userFromAuthResponse(response) {
     // Per-person read-all grant (holders only; a sales_manager is recognised by role). A hint: the server re-reads it live.
     readAllSales: Boolean(response.readAllSales),
     canManageAllSalesDocuments: Boolean(response.canManageAllSalesDocuments),
+    // Per-person showroom grant (reads every SHOWROOM no-project order): a hint, the server re-reads it live.
+    canSeeShowroomOrders: Boolean(response.canSeeShowroomOrders),
     canViewAs: Boolean(response.canViewAs),
     canViewPeopleInsights: Boolean(response.canViewPeopleInsights),
     viewAs: response.viewAs ?? null,

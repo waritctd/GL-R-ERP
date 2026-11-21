@@ -157,7 +157,9 @@ const PATH_GUARDS = [
   // งานนำเข้า — Import's cross-deal fulfilment workspace. Frontend gating only — the four endpoints enforce the
   // real gate and are unchanged. Mirrors ROLE_PERMISSIONS.canActOnFulfilment, itself a mirror of
   // TicketService.FULFILMENT_ROLES {import, ceo}.
-  { test: (p) => p === '/fulfilment', can: (u) => hasPermission(u.role, 'canActOnFulfilment') || isOversightReader(u) },
+  // ของที่ฉันสั่ง: MyIncomingService serves sales, sales_manager, ceo and read-all holders (OversightReader).
+  { test: (p) => p === '/my-orders', can: (u) => hasPermission(u.role, 'canViewMyOrders') || isOversightReader(u) || Boolean(u.canCreateQuotation) || Boolean(u.canSeeShowroomOrders) },
+  { test: (p) => p === '/fulfilment' || p.startsWith('/fulfilment/'), can: (u) => hasPermission(u.role, 'canActOnFulfilment') || isOversightReader(u) },
   // Matches the launcher's nav condition exactly (AppShell.jsx: `role === 'ceo'`).
   { test: (p) => p === '/ceo-settings', can: (u) => u.role === 'ceo' },
   // Attendance calendar admin (hr.holiday / hr.work_schedule / hr.work_schedule_assignment CRUD).
@@ -312,12 +314,17 @@ export function dealRedirectFor(path, user) {
 // The read pages an oversight reader (sales_manager, or a read-all grant holder) opens: the 7 nav pages, the deal page, and the
 // drill-downs they link to. The lock exemption below and AppShell's nav filter share it, so the menu and the guard cannot drift.
 // receipts-import (account only) and commissions are never in it.
-const READER_PATH_PREFIXES = ['/tickets', '/quotations', '/catalog', '/visits', '/pricing-requests', '/fulfilment', '/import/deals', '/finance'];
+const READER_PATH_PREFIXES = ['/tickets', '/quotations', '/catalog', '/visits', '/my-orders', '/pricing-requests', '/fulfilment', '/import/deals', '/finance'];
 
 export function isReaderPath(path) {
   const pathname = path.split(/[?#]/)[0];
   if (pathname === '/finance/receipts-import') return false;
   return READER_PATH_PREFIXES.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`));
+}
+
+// /my-orders for a plain employee holding the no-project-order or showroom grant, which the page's own guard admits.
+export function isMyOrdersGrantUser(user) {
+  return Boolean(user?.canCreateQuotation || user?.canSeeShowroomOrders);
 }
 
 // Per-path lock exemptions: each opens exactly one path family for the holder of one capability, never a role.
@@ -330,6 +337,8 @@ const LOCK_EXEMPTIONS = [
   { test: (p) => p === '/people-insights', can: (u) => Boolean(u.canViewPeopleInsights) },
   // v2.3.0 read-all grant: exactly the oversight reader's read pages, one capability, never a role. Not /finance/receipts-import (account only), not /commissions.
   { test: isReaderPath, can: (u) => isOversightReader(u) },
+  // The grants that open ของที่ฉันสั่ง (no-project orders, showroom orders): this one path, no reader pages.
+  { test: (p) => p.split(/[?#]/)[0] === '/my-orders', can: isMyOrdersGrantUser },
 ];
 
 export function canAccessPath(path, user) {

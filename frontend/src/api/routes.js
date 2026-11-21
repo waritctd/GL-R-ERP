@@ -194,6 +194,8 @@ export const API_ROUTES = {
     payments: (id) => `/api/tickets/${id}/payments`,
     billing: (id) => `/api/tickets/${id}/billing`,
     deliveries: (id) => `/api/tickets/${id}/deliveries`,
+    // The sales view of a deal's incoming goods: lots per IR with their round's status (no price, no factory document).
+    incoming: (id) => `/api/tickets/${id}/incoming`,
     reserveStock: (id) => `/api/tickets/${id}/reserve-stock`,
     procurementSource: (id) => `/api/tickets/${id}/procurement-source`,
     // V148 (per-item stock-commission weighting): the sales_manager/CEO-approved counterpart to reserveStock
@@ -290,6 +292,23 @@ export const API_ROUTES = {
     // omitted) downloads the internal copy. See ImportRequestController#storedFile.
     file: (id, copy) => `/api/import-requests/${id}/file${copy ? `?copy=${encodeURIComponent(copy)}` : ''}`,
     requiredByNote: (ticketId) => `/api/tickets/${ticketId}/required-by-note`,
+  },
+  // สั่งของไม่มีโครงการ (create) and ของที่ฉันสั่ง (every incoming lot of the caller's orders and project deals).
+  noProjectOrders: { create: '/api/no-project-orders', withdraw: (id) => `/api/no-project-orders/${id}/withdraw` },
+  myIncoming: { get: '/api/my-incoming' },
+  // Shipment rounds (ShipmentRoundController): import's queue and round page. Documents and their files are import/CEO only.
+  shipmentRounds: {
+    list: () => '/api/shipment-rounds',
+    get: (id) => `/api/shipment-rounds/${id}`,
+    facts: (id) => `/api/shipment-rounds/${id}/facts`,
+    advance: (id) => `/api/shipment-rounds/${id}/advance`,
+    undo: (id) => `/api/shipment-rounds/${id}/advance/undo`,
+    lots: (id) => `/api/shipment-rounds/${id}/lots`,
+    lot: (id, lotId) => `/api/shipment-rounds/${id}/lots/${lotId}`,
+    moveLot: (id, lotId) => `/api/shipment-rounds/${id}/lots/${lotId}/move`,
+    documents: (id) => `/api/shipment-rounds/${id}/documents`,
+    document: (id, docId) => `/api/shipment-rounds/${id}/documents/${docId}`,
+    documentFile: (id, docId) => `/api/shipment-rounds/${id}/documents/${docId}/file`,
   },
   // The per-deal IMPORT view (ImportDealController) — the import-only projection of ONE deal (factories,
   // per-factory ใบขอซื้อ rows, items WITHOUT prices, read-only delivery status, the COMMENTED thread). import is
@@ -781,6 +800,8 @@ export const ROLE_PERMISSIONS = {
   // TEAM_ROLES — who GET /api/sales/visits/team serves the whole team's week to. Presentation only: VisitService
   // re-checks the role on every call.
   canViewVisits: ['sales', 'sales_manager', 'ceo'],
+  // ของที่ฉันสั่ง: the rep's one page of everything incoming (MyIncomingService: sales, the manager and CEO, read-all holders).
+  canViewMyOrders: ['sales', 'sales_manager', 'ceo'],
   canViewTeamVisits: ['sales_manager', 'ceo'],
   // Sales/CRM tool: which roles get the catalog SCREENS, scoped to the same audience as
   // canViewTickets.

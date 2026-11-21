@@ -50,4 +50,17 @@ final class DraftSeed {
         }
         return stored.findByTicket(ticketId);
     }
+
+    /** A MIGRATED round at the IR's current step carrying every line in full, as V239 gave an existing IR: the IR-level
+     * advance moves such a round, and (unlike a portal round) may take it to RECEIVED. */
+    static void migratedRound(NamedParameterJdbcTemplate jdbc, long importRequestId) {
+        Long round = jdbc.queryForObject("""
+            INSERT INTO sales.shipment_round (factory_id, factory_name, source, import_step)
+            SELECT factory_id, factory_name, 'MIGRATED', import_step FROM sales.import_request WHERE import_request_id = :ir
+            RETURNING shipment_round_id""", Map.of("ir", importRequestId), Long.class);
+        jdbc.update("""
+            INSERT INTO sales.shipment_lot (shipment_round_id, import_request_id, import_request_item_id, qty)
+            SELECT :r, import_request_id, import_request_item_id, qty FROM sales.import_request_item WHERE import_request_id = :ir""",
+            Map.of("r", round, "ir", importRequestId));
+    }
 }

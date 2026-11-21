@@ -2358,6 +2358,7 @@ function authResponse(user) {
     canIssueTaxInvoice: Boolean(user?.canIssueTaxInvoice),
     readAllSales: holdsReadAllSalesGrant(user),
     canManageAllSalesDocuments: holdsAllSalesDocumentsGrant(user),
+    canSeeShowroomOrders: user?.canSeeShowroomOrders === true,
     canViewAs: false,
     canViewPeopleInsights: ['ceo', 'hr'].includes(user?.role),
     viewAs: null,
@@ -2874,6 +2875,14 @@ function findStoredImportRequestRaw(id) {
 
 // STORED-aggregate read gate — mirrors ImportRequestService#requireRead: CEO/import/sales_manager
 // unrestricted; sales only the deal's own owner.
+// A no-project order has no deal: its requester, the sales manager, import, the CEO and read-all holders read it (SHOWROOM also the
+// showroom grant), mirroring ImportRequestService#requireReadRow.
+function requireNoProjectRead(row, user) {
+  if (['ceo', 'import', 'sales_manager'].includes(user.role) || holdsReadAllSalesGrant(user) || row.requesterId === user.id) return;
+  if (row.orderPurpose === 'SHOWROOM' && user.canSeeShowroomOrders === true) return;
+  fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+}
+
 function requireStoredIrRead(ticket, user) {
   if (user.role === 'ceo' || user.role === 'import' || user.role === 'sales_manager' || holdsReadAllSalesGrant(user)) return;
   if (isSalesOwner(ticket, user)) return;
@@ -3183,6 +3192,294 @@ function mockImportRequestDto(row) {
     // above 1 page except a "N แผ่น" hint.
     pageCount: row.items.length > 20 ? 2 : 1,
   };
+}
+
+// ── Shipment rounds (V239 / ShipmentRoundService) ────────────────────────────────────────────────────────────────
+// A round is one factory shipment; every IR on it follows its step. In mock mode an ISSUED IR that is already past
+// CONTACTED but has no round is given one on first read (as V239 did for existing IRs); one still at CONTACTED with
+// no lots is "waiting". Mirrors ShipmentRoundService#derive: an IR's step is its slowest lot's, CONTACTED while any
+// quantity is on no round.
+// Quantities in integer hundredths (the server's 2-place decimals): 0.1 + 0.2 must not drift past 0.3.
+const mockHundredths = (v) => Math.round(Number(v) * 100);
+const mockSumQty = (values) => values.reduce((sum, v) => sum + mockHundredths(v), 0) / 100;
+const mockQtyLeft = (ordered, placed) => Math.max(0, mockHundredths(ordered) - mockHundredths(placed)) / 100;
+const mockShipmentRounds = [];
+let mockShipmentRoundSeq = 1;
+let mockAdvanceSeq = 1;
+let mockShipmentLotSeq = 1;
+const MOCK_ROUND_DATE_KEY = {
+  CONTACTED: 'contactedOn', ORDERED: 'orderedOn', PICKED_UP: 'pickedUpOn', IN_TRANSIT: 'inTransitOn',
+  AWAITING_CUSTOMS: 'awaitingCustomsOn', RECEIVED: 'receivedOn',
+};
+const MOCK_ROUND_FACT_KEYS = ['label', 'transportMode', 'vessel', 'voyage', 'forwarder', 'containerNos', 'port', 'goodsReadyOn',
+  'etdPlannedOn', 'etdActualOn', 'etaOn', 'arrivedOn', 'customsReleasedOn', 'grNumber', 'completePerInvoice', 'completeNote', 'note'];
+const MOCK_DOCUMENT_KINDS = ['PROFORMA', 'INVOICE', 'PACKING_LIST', 'BILL_OF_LADING', 'CERT_ORIGIN', 'IMPORT_ENTRY', 'OTHER'];
+// Same as ShipmentRoundService#REQUIRED_NUMBERS_BY_STEP: a PORTAL round needs a proforma and an invoice number to be received.
+const MOCK_ROUND_REQUIRED_NUMBERS_BY_STEP = { RECEIVED: ['PROFORMA', 'INVOICE'] };
+let mockShipmentDocSeq = 1;
+
+function mockEnsureMigratedRounds() {
+  mockImportRequests.filter((r) => r.status === 'ISSUED' && r.importStep && r.importStep !== 'CONTACTED'
+    && !mockShipmentRounds.some((x) => x.lots.some((l) => l.importRequestId === r.id))).forEach((r) => {
+    const round = {
+      id: mockShipmentRoundSeq++, factoryId: r.factoryId, factoryName: r.factoryName, source: 'MIGRATED',
+      importStep: r.importStep, contactedOn: null, orderedOn: null, pickedUpOn: null, inTransitOn: null,
+      awaitingCustomsOn: null, receivedOn: null, stepByName: r.importStepByName ?? null, stepNote: r.importStepNote ?? null,
+      facts: { ...Object.fromEntries(MOCK_ROUND_FACT_KEYS.map((k) => [k, null])), transportMode: 'SEA' }, documents: [], undo: null,
+      lots: r.items.map((it) => ({ lotId: mockShipmentLotSeq++, importRequestId: r.id, itemId: it.id, qty: Number(it.qty) })),
+    };
+    round[MOCK_ROUND_DATE_KEY[r.importStep]] = r.importStepAt ?? null;
+    mockShipmentRounds.push(round);
+  });
+}
+
+// A no-project order (สั่งของไม่มีโครงการ) has no ticket: it counts as active and has no deal side effects.
+function mockTicketOrNull(ir) {
+  return ir.ticketId == null ? null : findTicketRaw(ir.ticketId);
+}
+function mockIrActive(ir) {
+  return ir.ticketId == null || (findTicketRaw(ir.ticketId).lifecycle ?? 'ACTIVE') === 'ACTIVE';
+}
+const MOCK_PURPOSE_LABELS = { SAMPLE: 'ตัวอย่าง', SHOWROOM: 'โชว์รูม', STOCK: 'สต็อก' };
+let mockNoProjectDocSeq = 900;
+// One allocator over every stored IR number, so an override on a project IR can never be issued again here.
+function mockAllocateNoProjectDocNumber() {
+  const yy = String(new Date().getFullYear() + 543).slice(2);
+  let docNumber;
+  do { docNumber = `IR${yy}${String(mockNoProjectDocSeq++).padStart(3, '0')}`; } while (mockImportRequests.some((r) => r.docNumber === docNumber));
+  return docNumber;
+}
+
+// The lots and the unplanned quantity of one IR as the sales view shows them (IncomingService): no price, no factory document.
+function mockIncomingForIr(ir) {
+  const lots = [];
+  const waiting = [];
+  ir.items.forEach((item) => {
+    const mine = mockShipmentRounds.flatMap((r) => r.lots.filter((l) => l.itemId === item.id).map((l) => ({ l, r })));
+    const remaining = mockQtyLeft(item.qty, mockSumQty(mine.map(({ l }) => l.qty)));
+    const product = [[item.brand, item.model].filter(Boolean).join(' ') || item.code, item.size].filter(Boolean).join(' ');
+    mine.forEach(({ l, r }, i) => lots.push({
+      lotId: l.lotId, product, unit: item.unit ?? null, qty: l.qty, receivedQty: r.importStep === 'RECEIVED' ? (l.receivedQty ?? l.qty) : null,
+      lotNo: i + 1, lotCount: remaining > 0 ? mine.length + 1 : mine.length, step: r.importStep,
+      expectedOn: r.facts.etaOn ?? mockImportRequestDto(ir).expectedArrivalTo ?? null, roundLabel: r.facts.label, transportMode: r.facts.transportMode,
+      vessel: r.facts.vessel, voyage: r.facts.voyage, port: r.facts.port, etdActualOn: r.facts.etdActualOn, etaOn: r.facts.etaOn,
+      arrivedOn: r.facts.arrivedOn, customsReleasedOn: r.facts.customsReleasedOn, contactedOn: r.contactedOn, orderedOn: r.orderedOn,
+      pickedUpOn: r.pickedUpOn, inTransitOn: r.inTransitOn, awaitingCustomsOn: r.awaitingCustomsOn, receivedOn: r.receivedOn,
+    }));
+    if (remaining > 0) waiting.push({ product, unit: item.unit ?? null, remainingQty: remaining });
+  });
+  return { lots, waiting };
+}
+
+function mockShipmentLotDtos(round) {
+  return round.lots.map((lot) => {
+    const ir = mockImportRequests.find((r) => r.id === lot.importRequestId);
+    const item = ir.items.find((it) => it.id === lot.itemId);
+    const ticket = mockTicketOrNull(ir);
+    const all = mockShipmentRounds.flatMap((x) => x.lots).filter((l) => l.itemId === lot.itemId);
+    const remaining = mockQtyLeft(item.qty, mockSumQty(all.map((l) => l.qty)));
+    return {
+      lotId: lot.lotId, importRequestId: ir.id, docNumber: ir.docNumber, ticketId: ticket?.id ?? null, ticketCode: ticket?.code ?? null,
+      customerName: ticket?.customerName ?? null, projectName: ticket?.projectName ?? null, itemId: item.id,
+      orderPurpose: ir.orderPurpose ?? null, purposeNote: ir.purposeNote ?? null, requesterName: ir.requestedByName ?? null,
+      code: item.code, brand: item.brand ?? null, model: item.model ?? null, size: item.size ?? null, unit: item.unit ?? null,
+      qty: lot.qty, itemQty: Number(item.qty), lotNo: all.findIndex((l) => l.lotId === lot.lotId) + 1,
+      lotCount: remaining > 0 ? all.length + 1 : all.length, remainingQty: remaining, receivedQty: lot.receivedQty ?? null,
+    };
+  });
+}
+
+function mockShipmentDto(round) {
+  const { undo, ...rest } = round;
+  return structuredClone({
+    ...rest,
+    lots: mockShipmentLotDtos(round),
+    documents: round.documents.map(({ id, kind, docNo, docDate, note, fileName, fileSize, mimeType, createdAt }) => ({
+      id, kind, docNo, docDate, note, fileName, fileSize, mimeType, createdAt,
+    })).sort((a, b) => MOCK_DOCUMENT_KINDS.indexOf(a.kind) - MOCK_DOCUMENT_KINDS.indexOf(b.kind) || a.id - b.id),
+    undoUntil: undo ? new Date(undo.advancedAt + 30_000).toISOString() : null,
+    undoById: undo ? undo.byId : null,
+    undoFromStep: undo ? undo.snapshot.importStep : null,
+    advanceId: undo ? undo.advanceId : null,
+  });
+}
+
+// ShipmentStepDerivation#derive: the slowest round's step (a tie: the later date, then the higher round id); CONTACTED
+// while any quantity is on no round.
+function mockDeriveIr(ir) {
+  const lots = mockShipmentRounds.flatMap((x) => x.lots.filter((l) => l.itemId != null && l.importRequestId === ir.id).map((l) => ({ l, x })));
+  const unplaced = ir.items.some((it) => mockSumQty(lots.filter(({ l }) => l.itemId === it.id).map(({ l }) => l.qty)) < mockHundredths(it.qty) / 100);
+  const slowerThan = (b, a) => {
+    const byStep = mockImportRequestStepIndex(a.x.importStep) - mockImportRequestStepIndex(b.x.importStep);
+    if (byStep !== 0) return byStep > 0;
+    const da = a.x[MOCK_ROUND_DATE_KEY[a.x.importStep]] ?? ''; const db = b.x[MOCK_ROUND_DATE_KEY[b.x.importStep]] ?? '';
+    return da !== db ? db > da : b.x.id > a.x.id;
+  };
+  const slowest = lots.reduce((a, b) => (a == null || slowerThan(b, a) ? b : a), null);
+  const waiting = unplaced || !slowest;
+  const step = waiting ? 'CONTACTED' : slowest.x.importStep;
+  let at = waiting ? (ir.firstIssuedDate ?? null) : (slowest.x[MOCK_ROUND_DATE_KEY[step]] ?? ir.importStepAt);
+  if (at && ir.firstIssuedDate && at < ir.firstIssuedDate) at = ir.firstIssuedDate; // never before it was first issued
+  return { step, at, waiting, slowest };
+}
+
+function mockRecomputeIrSteps(roundOrIds, actor, note) {
+  const changes = [];
+  const irIds = Array.isArray(roundOrIds) ? [...new Set(roundOrIds)].sort((a, b) => a - b)
+    : [...new Set(roundOrIds.lots.map((l) => l.importRequestId))].sort((a, b) => a - b);
+  irIds.forEach((irId) => {
+    const ir = mockImportRequests.find((r) => r.id === irId);
+    const { step, at, waiting, slowest } = mockDeriveIr(ir);
+    if (step === ir.importStep) {
+      // same step from another round (regrouped): its date and operator follow, no event
+      if (!waiting && (at !== ir.importStepAt)) { ir.importStepAt = at; ir.importStepByName = slowest.x.stepByName ?? ir.importStepByName; ir.stepUndo = null; }
+      return;
+    }
+    const from = ir.importStep;
+    ir.importStep = step;
+    ir.importStepAt = at;
+    ir.importStepById = actor.id; ir.importStepByName = actor.name; ir.importStepNote = note ?? null;
+    ir.stepUndo = null; ir.updatedAt = new Date().toISOString();
+    changes.push({ ir, from, to: step });
+  });
+  return changes;
+}
+
+// Slice 3 (ShipmentRoundService#placeLots and friends): same factory, ISSUED IRs on ACTIVE deals, never more than a line's
+// quantity across all lots, qty > 0, lots editable only until the round leaves (before IN_TRANSIT).
+function mockPlacedQty(itemId) {
+  return mockSumQty(mockShipmentRounds.flatMap((r) => r.lots).filter((l) => l.itemId === itemId).map((l) => l.qty));
+}
+
+function mockPlaceLots(round, inputs) {
+  for (const input of inputs ?? []) {
+    const ir = mockImportRequests.find((r) => r.id === input.importRequestId && r.status === 'ISSUED');
+    if (!ir) fail('ใบขอซื้อนี้ไม่ได้อยู่ในสถานะที่จัดรอบได้', 409);
+    if (!mockIrActive(ir)) fail(`งานของใบขอซื้อ ${ir.docNumber} ไม่ได้อยู่ในสถานะใช้งาน`, 409);
+    if (!round.factoryId || round.factoryId !== ir.factoryId) fail(`ใบขอซื้อ ${ir.docNumber} เป็นของโรงงานอื่น`, 409);
+    const qty = Math.round(Number(input.qty) * 100) / 100;
+    if (!(qty > 0)) fail('จำนวนต้องมากกว่า 0', 400);
+    const item = ir.items.find((it) => it.id === input.itemId);
+    if (!item) fail(`รายการสินค้าไม่อยู่ในใบขอซื้อ ${ir.docNumber}`, 400);
+    // a round not stored yet (createRound) does not count in mockPlacedQty: add what this batch staged on it already
+    const staged = mockShipmentRounds.includes(round) ? 0 : mockSumQty(round.lots.filter((l) => l.itemId === item.id).map((l) => l.qty));
+    const placedNow = mockSumQty([mockPlacedQty(item.id), staged]);
+    if (mockHundredths(placedNow) + mockHundredths(qty) > mockHundredths(item.qty)) fail(`จำนวนเกินที่เหลือของใบขอซื้อ ${ir.docNumber} (เหลือ ${mockQtyLeft(item.qty, placedNow)})`, 409);
+    const there = round.lots.find((l) => l.itemId === item.id);
+    if (there) there.qty = mockSumQty([there.qty, qty]);
+    else round.lots.push({ lotId: mockShipmentLotSeq++, importRequestId: ir.id, itemId: item.id, qty });
+  }
+}
+
+// Short arrival: 0 up to the lot's quantity; null on the lot = it arrived in full (ShipmentRoundService#validateReceipts).
+function mockApplyReceipts(round, receipts) {
+  for (const r of receipts ?? []) {
+    const lot = round.lots.find((l) => l.lotId === Number(r.lotId));
+    if (!lot) fail('ล็อตไม่อยู่ในรอบนี้', 400);
+    const qty = Math.round(Number(r.qty) * 100) / 100;
+    if (!Number.isFinite(qty) || qty < 0 || qty > lot.qty) fail(`จำนวนที่ถึงโกดังต้องอยู่ระหว่าง 0 ถึงจำนวนของล็อต (${lot.qty})`, 400);
+  }
+  (receipts ?? []).forEach((r) => {
+    const lot = round.lots.find((l) => l.lotId === Number(r.lotId));
+    lot.receivedQty = Number(r.qty) === lot.qty ? null : Math.round(Number(r.qty) * 100) / 100;
+  });
+}
+
+function mockRequireNotLeft(round) {
+  if (mockImportRequestStepIndex(round.importStep) >= mockImportRequestStepIndex('IN_TRANSIT')) {
+    fail('รอบนี้ออกเดินทางแล้ว แก้ไขล็อตไม่ได้ (แก้ข้อมูลและเอกสารของรอบได้ที่ แก้ไข)', 409);
+  }
+}
+
+// ShipmentRoundRepository#hasOwnData: a document, or a typed fact (the label alone does not count; an incomplete-per-invoice flag does).
+function mockRequireDeletable(round) {
+  const f = round.facts;
+  const typed = ['vessel', 'voyage', 'forwarder', 'containerNos', 'port', 'grNumber', 'note', 'completeNote', 'goodsReadyOn',
+    'etdPlannedOn', 'etdActualOn', 'etaOn', 'arrivedOn', 'customsReleasedOn'].some((k) => String(f[k] ?? '').trim()) || f.completePerInvoice === false;
+  if (round.documents.length > 0 || typed) {
+    fail('ล็อตนี้เป็นล็อตสุดท้ายของรอบ และรอบนี้มีเอกสารหรือข้อมูลที่กรอกไว้ (เรือ เที่ยว ตัวแทน ตู้ วันที่ ฯลฯ) กรุณาลบข้อมูลเหล่านั้นหรือย้ายไปรอบใหม่ก่อน', 409);
+  }
+}
+
+// ImportRequestService#moveLotsToRevision: a revision's items are new rows, so the superseded row's lots follow onto them.
+// Whole on one round: the revised quantity (a round that has left keeps its shipped and received quantities, an increase
+// stays unplanned, a decrease is refused); split: each lot follows its line, a decrease below the lots is refused.
+function mockMoveLotsToRevision(old, revision) {
+  mockEnsureMigratedRounds();
+  const oldLots = mockShipmentRounds.flatMap((r) => r.lots.filter((l) => l.importRequestId === old.id).map((l) => ({ l, r })));
+  if (oldLots.length === 0) return [];
+  const sameProduct = (a, b) => a.code === b.code && (a.size ?? null) === (b.size ?? null);
+  const oldItemOf = (lot) => old.items.find((it) => it.id === lot.itemId);
+  const lineFor = (lot) => {
+    const oi = oldItemOf(lot);
+    let found = revision.items.filter((it) => (oi.ticketItemId == null ? sameProduct(it, oi) : it.ticketItemId === oi.ticketItemId));
+    if (found.length > 1) found = found.filter((it) => sameProduct(it, oi));
+    if (found.length !== 1) fail(`ฉบับแก้ไขตัดรายการที่แบ่งล็อตส่งแล้วออก (${oi.code}) กรุณาแก้ที่รอบขนส่งก่อน`, 409);
+    return found[0];
+  };
+  const tooLow = (it) => fail(`ฉบับแก้ไขลดจำนวนรายการที่ ${it.seq} ต่ำกว่าจำนวนที่จัดลงรอบขนส่งแล้ว กรุณาแก้ที่รอบขนส่งก่อน`, 409);
+  const touched = [...new Set(oldLots.map(({ r }) => r))];
+  const plan = []; // { round, itemId, qty, got }
+  const whole = touched.length === 1 && old.items.every((it) => mockHundredths(mockSumQty(oldLots.filter(({ l }) => l.itemId === it.id).map(({ l }) => l.qty))) === mockHundredths(it.qty));
+  if (whole) {
+    const round = touched[0];
+    const left = mockImportRequestStepIndex(round.importStep) >= mockImportRequestStepIndex('IN_TRANSIT');
+    revision.items.forEach((it) => {
+      const mine = oldLots.find(({ l }) => { const oi = oldItemOf(l); return oi.ticketItemId != null ? oi.ticketItemId === it.ticketItemId : sameProduct(oi, it); });
+      if (left) {
+        if (!mine) return;
+        if (Number(it.qty) < mine.l.qty) tooLow(it);
+        plan.push({ round, itemId: it.id, qty: mine.l.qty, got: mine.l.receivedQty ?? mine.l.qty });
+      } else {
+        const got = mine?.l.receivedQty == null ? Number(it.qty) : Math.min(mine.l.receivedQty, Number(it.qty));
+        plan.push({ round, itemId: it.id, qty: Number(it.qty), got });
+      }
+    });
+  } else {
+    oldLots.forEach(({ l, r }) => {
+      const it = lineFor(l);
+      const got = l.receivedQty ?? l.qty;
+      const there = plan.find((p) => p.round === r && p.itemId === it.id);
+      if (there) { there.qty = mockSumQty([there.qty, l.qty]); there.got = mockSumQty([there.got, got]); } else plan.push({ round: r, itemId: it.id, qty: l.qty, got });
+    });
+    revision.items.forEach((it) => {
+      if (mockHundredths(it.qty) < mockHundredths(mockSumQty(plan.filter((p) => p.itemId === it.id).map((p) => p.qty)))) tooLow(it);
+    });
+  }
+  touched.forEach((r) => { r.lots = r.lots.filter((l) => l.importRequestId !== old.id); });
+  plan.forEach((p) => p.round.lots.push({ lotId: mockShipmentLotSeq++, importRequestId: revision.id, itemId: p.itemId, qty: p.qty,
+    ...(p.got === p.qty ? {} : { receivedQty: p.got }) }));
+  return touched;
+}
+
+// ShipmentRepository#isSoleWhole: the round carries only this request, every line at its full quantity.
+function mockSoleWholeRound(ir, itsRounds) {
+  if (itsRounds.length !== 1) return null;
+  const [round] = itsRounds;
+  const whole = ir.items.every((it) => mockHundredths(mockSumQty(round.lots.filter((l) => l.itemId === it.id).map((l) => l.qty))) === mockHundredths(it.qty));
+  return whole && round.lots.every((l) => l.importRequestId === ir.id) ? round : null;
+}
+
+// After lots changed: the undo of an earlier advance is gone, and the IR steps follow their lots (events + rollup as advance).
+function mockFinishLots(rounds, irIds, user) {
+  rounds.forEach((r) => { r.undo = null; });
+  mockRecomputeIrSteps(irIds, user, null).forEach(({ ir, from, to }) => {
+    const ticket = mockTicketOrNull(ir);
+    if (!ticket || (ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE') return;
+    pushEvent(ticket, user, 'IMPORT_STEP_ADVANCED', null, null,
+      `โรงงาน ${ir.factoryName}: ${MOCK_IMPORT_REQUEST_STEP_LABELS_TH[from] ?? from} → ${MOCK_IMPORT_REQUEST_STEP_LABELS_TH[to] ?? to}`);
+  });
+}
+
+function mockShipmentWrite() {
+  return hasRole('import', 'ceo');
+}
+
+function mockFindShipment(id) {
+  mockEnsureMigratedRounds();
+  const round = mockShipmentRounds.find((r) => r.id === Number(id));
+  if (!round) fail('ไม่พบรอบขนส่ง', 404);
+  return round;
 }
 
 // Mirrors ImportRequestRepository.findByTicket's `ORDER BY r.factory_name, r.version` — NOT
@@ -4491,8 +4788,35 @@ function hasReceivedGoods(ticketId) {
   return (ticket?.events ?? []).some((ev) => ev.kind === 'GOODS_RECEIVED');
 }
 
+// TicketRepository#hasReceivedLot: a lot of an ISSUED IR on a RECEIVED round with something received.
+function mockHasReceivedLot(ticketId) {
+  mockEnsureMigratedRounds();
+  const irIds = new Set(mockImportRequests.filter((r) => r.ticketId === ticketId && r.status === 'ISSUED').map((r) => r.id));
+  return mockShipmentRounds.some((r) => r.importStep === 'RECEIVED'
+    && r.lots.some((l) => irIds.has(l.importRequestId) && (l.receivedQty ?? l.qty) > 0));
+}
+
+// TicketRepository#lotReceipts + TicketService#warehouseAllowance: the one per-line cap the record check and the button share.
+function mockWarehouseAllowance(ticket, item) {
+  mockEnsureMigratedRounds();
+  const irs = mockImportRequests.filter((r) => r.ticketId === ticket.id && r.status === 'ISSUED');
+  const qty = Number(item.qty ?? 0);
+  const dealHasLots = irs.some((ir) => ir.items.some((it) => mockShipmentRounds.some((r) => r.lots.some((l) => l.itemId === it.id))));
+  if (!dealHasLots) return qty;
+  const mine = irs.flatMap((ir) => ir.items.filter((it) => it.ticketItemId === item.id));
+  const irQty = mockSumQty(mine.map((it) => it.qty));
+  const onRounds = mockSumQty(mine.flatMap((it) => mockShipmentRounds.filter((r) => r.importStep === 'RECEIVED')
+    .flatMap((r) => r.lots.filter((l) => l.itemId === it.id).map((l) => l.qty))));
+  if (hasReceivedGoods(ticket.id) && onRounds <= 0) return qty;
+  const declared = Number(item.qtyFromStock ?? 0);
+  const stock = depositSettled(ticket) ? declared : 0;
+  if (mine.length === 0) return Math.round(stock * 100) / 100;
+  const ratio = irQty <= 0 ? 1 : Math.min(1, onRounds / irQty);
+  return Math.round((stock + Math.max(qty - declared, 0) * ratio) * 100) / 100;
+}
+
 function warehouseAvailableFor(ticket) {
-  return ticket.fulfillmentStatus === 'GOODS_RECEIVED' || hasReceivedGoods(ticket.id)
+  return ticket.fulfillmentStatus === 'GOODS_RECEIVED' || hasReceivedGoods(ticket.id) || mockHasReceivedLot(ticket.id)
     || (ticket.prePortal === true && !mockImportRequests.some((r) => r.ticketId === ticket.id && r.status === 'ISSUED'));
 }
 
@@ -4681,6 +5005,15 @@ function recordDeliveryForTicket(ticket, user, payload = {}, completing = false)
   }
   if (source === 'WAREHOUSE' && !warehouseAvailableFor(ticket)) {
     fail('ต้องรับสินค้าเข้าโกดังก่อนส่งจากคลังสินค้า', 409);
+  }
+  if (source === 'WAREHOUSE') {
+    for (const [itemId, qty] of combined.entries()) {
+      const item = ticket.items.find((it) => it.id === itemId);
+      const allowed = mockWarehouseAllowance(ticket, item);
+      if (moneyValue(Number(item.qtyDelivered ?? 0) + qty) > allowed) {
+        fail(`ส่งจากคลังสินค้าได้ไม่เกินจำนวนที่ถึงโกดังแล้ว: ${[item.brand, item.model, item.size].filter(Boolean).join(' ') || `รายการ ${item.id}`} (ส่งได้ไม่เกิน ${allowed})`, 409, { code: 'LOT_QTY_EXCEEDED' });
+      }
+    }
   }
   const now = new Date().toISOString();
   const nextId = Math.max(0, ...(db.deliveryRecords ?? []).map((record) => record.deliveryId)) + 1;
@@ -11039,6 +11372,31 @@ export const api = {
       return delay({ items: receiptsForTicket(id) });
     },
 
+    // Mirrors IncomingService: the deal's read gate, every lot of its ISSUED IRs with the round's status, never a price.
+    async incoming(id) {
+      if (requireTicketViewer(id).user.role === 'import') fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      mockEnsureMigratedRounds();
+      const irs = mockImportRequests.filter((r) => r.ticketId === Number(id) && r.status === 'ISSUED');
+      const out = irs.map((ir) => {
+        const { lots, waiting } = mockIncomingForIr(ir);
+        const oneUnit = new Set(ir.items.map((i) => i.unit ?? '')).size === 1;
+        return {
+          importRequestId: ir.id, docNumber: ir.docNumber, factoryName: ir.factoryName, importStep: ir.importStep,
+          expectedFrom: mockImportRequestDto(ir).expectedArrivalFrom, expectedTo: mockImportRequestDto(ir).expectedArrivalTo,
+          unit: oneUnit ? (ir.items[0].unit ?? null) : null,
+          ordered: oneUnit ? ir.items.reduce((sum, i) => sum + Number(i.qty), 0) : null,
+          received: oneUnit ? lots.reduce((sum, l) => sum + (l.receivedQty ?? 0), 0) : null, lots, waiting,
+        };
+      });
+      const allOne = out.length > 0 && out.every((i) => i.unit != null) && new Set(out.map((i) => i.unit)).size === 1;
+      return delay({
+        wantedBy: findTicketRaw(Number(id)).requiredByNote?.trim() || null,
+        totalUnit: allOne ? out[0].unit : null,
+        totalOrdered: allOne ? out.reduce((sum, i) => sum + i.ordered, 0) : null,
+        totalReceived: allOne ? out.reduce((sum, i) => sum + i.received, 0) : null, irs: out,
+      });
+    },
+
     async listDeliveries(id) {
       requireTicketViewer(id);
       return delay({ items: deliveryRecordsForTicket(id) });
@@ -15084,6 +15442,380 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
   // "not supported in mock mode" stub, same as the legacy importRequests.pages/download above — the
   // block comment on that helper section explains why the exotic text-regeneration edge cases are
   // simplified rather than mirrored exactly.
+  // Mirrors NoProjectOrderService: whoever may enter a deal raises an order with no project; ISSUED at once (CONTACTED),
+  // every field required, no approval, no quotation or money.
+  noProjectOrders: {
+    async create(request) {
+      const user = requireSession();
+      if (!['sales', 'sales_manager'].includes(user.role) && !user.canCreateQuotation) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      if (!Object.hasOwn(MOCK_PURPOSE_LABELS, request?.purpose)) fail('เลือกว่าสั่งเพื่ออะไร (ตัวอย่าง / โชว์รูม / สต็อก)', 400);
+      const note = String(request.purposeNote ?? '').trim();
+      if (!note) fail('ระบุว่าให้ใคร / ใช้ที่ไหน', 400);
+      const factory = mockPriceImportFactories.find((f) => f.factoryId === Number(request.factoryId));
+      if (!factory) fail('เลือกโรงงาน', 400);
+      if (!(request.lines ?? []).length) fail('ใส่สินค้าอย่างน้อย 1 รายการ', 400);
+      const lines = request.lines.map((l) => {
+        if (!String(l.code ?? '').trim()) fail('ระบุรหัสหรือชื่อสินค้าของทุกรายการ', 400);
+        if (!(Number(l.qty) > 0)) fail('จำนวนต้องมากกว่า 0 ทุกรายการ', 400);
+        if (Math.round(Number(l.qty) * 100) / 100 !== Number(l.qty)) fail('จำนวนมีทศนิยมได้ไม่เกิน 2 ตำแหน่ง', 400);
+        if (Number(l.qty) > 9999999999.99) fail('จำนวนต้องไม่เกิน 9,999,999,999.99', 400);
+        if (!String(l.unit ?? '').trim()) fail('ระบุหน่วยของทุกรายการ', 400);
+        return l;
+      });
+      const today = mockTodayIso();
+      if (!request.wantedBy || request.wantedBy < today) fail('ระบุวันที่ต้องการของ (วันนี้หรือหลังจากนี้)', 400);
+      const id = mockImportRequestSeq++;
+      const row = {
+        id, ticketId: null, ticketCode: null, brand: factory.name, factoryId: factory.factoryId, factoryName: factory.name, version: 1,
+        status: 'ISSUED', docNumber: mockAllocateNoProjectDocNumber(),
+        issueDate: today, firstIssuedDate: today, customerName: note, projectName: MOCK_PURPOSE_LABELS[request.purpose],
+        requestedByName: user.name, requiredByNote: request.wantedBy, depositReceivedDate: null, vesselEtaNote: null,
+        importStep: 'CONTACTED', importStepAt: today, importStepById: user.id, importStepByName: user.name, importStepNote: null,
+        leadTimeMinDays: null, leadTimeMaxDays: null, emailTo: null, emailSubject: null, emailBody: null, emailSentAt: null,
+        createdById: user.id, createdByName: user.name, issuedById: user.id, issuedByName: user.name,
+        orderPurpose: request.purpose, requesterId: user.id, purposeNote: note, wantedBy: request.wantedBy,
+        createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), issuedAt: new Date().toISOString(),
+        items: lines.map((l, i) => ({ id: `${id}-${i + 1}`, importRequestId: id, ticketItemId: null, seq: i + 1, code: l.code.trim(), size: l.size?.trim() || null, qty: Number(l.qty), unit: l.unit.trim() })),
+      };
+      mockImportRequests.push(row);
+      return delay({ importRequest: mockImportRequestDto(row) });
+    },
+    // Takes back an order that is on no round: SUPERSEDED with no successor (the number stays on record).
+    async withdraw(id) {
+      const user = requireSession();
+      const row = mockImportRequests.find((r) => r.id === Number(id) && r.ticketId == null);
+      if (!row) fail('ไม่พบคำขอสั่งของนี้', 404);
+      if (row.requesterId !== user.id && !['import', 'ceo'].includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      if (row.status !== 'ISSUED') fail('คำขอนี้ถูกยกเลิกไปแล้ว', 409);
+      mockEnsureMigratedRounds();
+      if (mockShipmentRounds.some((r) => r.lots.some((l) => l.importRequestId === row.id))) {
+        fail('คำขอนี้อยู่ในรอบขนส่งแล้ว ให้ฝ่ายนำเข้าเอาออกจากรอบก่อนจึงยกเลิกได้', 409);
+      }
+      row.status = 'SUPERSEDED';
+      row.supersededById = null;
+      return delay({ importRequest: mockImportRequestDto(row) });
+    },
+  },
+
+  // Mirrors MyIncomingService (ของที่ฉันสั่ง): every lot and unplanned quantity of the caller's orders and project deals.
+  myIncoming: {
+    async get() {
+      const user = requireSession();
+      const manager = ['sales_manager', 'ceo'].includes(user.role);
+      const reader = user.readAllSales === true && !['import', 'account'].includes(user.role);
+      if (user.role !== 'sales' && !manager && !reader && !user.canCreateQuotation && user.canSeeShowroomOrders !== true) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      mockEnsureMigratedRounds();
+      const cutoff = mockAddDaysIso(mockTodayIso(), -30);
+      const rows = [];
+      mockImportRequests.filter((ir) => ir.status === 'ISSUED').forEach((ir) => {
+        const ticket = mockTicketOrNull(ir);
+        const mine = ticket
+          ? (mockIrActive(ir) && (manager || reader || isSalesOwner(ticket, user)))
+          : (manager || ir.requesterId === user.id || (ir.orderPurpose === 'SHOWROOM' && user.canSeeShowroomOrders === true));
+        if (!mine) return;
+        const { lots, waiting } = mockIncomingForIr(ir);
+        const base = {
+          kind: ticket ? 'PROJECT' : ir.orderPurpose, ticketId: ticket?.id ?? null, ticketCode: ticket?.code ?? null,
+          who: ticket ? (ticket.projectName || ticket.customerName || ticket.code) : ir.purposeNote,
+          requesterName: ticket ? null : ir.requestedByName, factoryName: ir.factoryName, docNumber: ir.docNumber,
+          importRequestId: ir.id, wantedBy: ticket ? ir.requiredByNote : ir.wantedBy,
+        };
+        lots.filter((l) => !(l.step === 'RECEIVED' && l.receivedOn && l.receivedOn < cutoff)).forEach((l) => rows.push({
+          ...base, waiting: false, product: l.product, unit: l.unit, qty: l.qty, lot: l, canWithdraw: false,
+        }));
+        const noLots = lots.length === 0;
+        waiting.forEach((w) => rows.push({ ...base, waiting: true, product: w.product, unit: w.unit, qty: w.remainingQty, lot: null,
+          canWithdraw: !ticket && noLots && (ir.requesterId === user.id || user.role === 'ceo') }));
+      });
+      return delay({ rows });
+    },
+  },
+
+  // Mirrors ShipmentRoundController: import's queue (rounds + issued IRs still waiting for a round) and round page.
+  // Reads: import, ceo, sales_manager and read-all flag holders; writes and files: import and ceo only.
+  shipmentRounds: {
+    async list() {
+      const user = requireSession();
+      const mayRead = ['import', 'ceo', 'sales_manager'].includes(user.role)
+        || (user.readAllSales === true && user.role !== 'account');
+      if (!mayRead) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      mockEnsureMigratedRounds();
+      const waiting = mockImportRequests.filter((r) => r.status === 'ISSUED' && mockIrActive(r)).flatMap((ir) => {
+        const lines = ir.items.map((it) => {
+          return { itemId: it.id, code: it.code, brand: it.brand ?? null, model: it.model ?? null, size: it.size ?? null, unit: it.unit ?? null, remainingQty: mockQtyLeft(it.qty, mockPlacedQty(it.id)) };
+        }).filter((l) => l.remainingQty > 0);
+        if (lines.length === 0) return [];
+        const ticket = mockTicketOrNull(ir);
+        return [{
+          importRequestId: ir.id, docNumber: ir.docNumber, factoryId: ir.factoryId, factoryName: ir.factoryName,
+          ticketId: ticket?.id ?? null, ticketCode: ticket?.code ?? null, customerName: ticket?.customerName ?? null,
+          projectName: ticket?.projectName ?? null, lines,
+          orderPurpose: ir.orderPurpose ?? null, purposeNote: ir.purposeNote ?? null, requesterName: ir.requestedByName ?? null,
+        }];
+      });
+      return delay({
+        rounds: [...mockShipmentRounds].filter((r) => r.lots.length > 0)
+          .sort((a, b) => (a.importStep === 'RECEIVED') - (b.importStep === 'RECEIVED') || b.id - a.id).map(mockShipmentDto),
+        waiting,
+      });
+    },
+    async get(id) {
+      const user = requireSession();
+      const mayRead = ['import', 'ceo', 'sales_manager'].includes(user.role)
+        || (user.readAllSales === true && user.role !== 'account');
+      if (!mayRead) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      return delay({ round: mockShipmentDto(mockFindShipment(id)) });
+    },
+    async updateFacts(id, request) {
+      mockShipmentWrite();
+      const round = mockFindShipment(id);
+      const facts = request?.facts;
+      if (round.importStep === 'RECEIVED' && facts?.completePerInvoice === false && !facts.completeNote?.trim()) fail('ของไม่ครบตามอินวอยซ์ กรุณาพิมพ์หมายเหตุ', 400);
+      if (facts?.transportMode && !['SEA', 'AIR', 'LAND'].includes(facts.transportMode)) fail('ประเภทการขนส่งไม่ถูกต้อง', 400);
+      const dates = request?.stepDates ?? {};
+      for (const [step, date] of Object.entries(dates)) {
+        if (!MOCK_IMPORT_REQUEST_STEPS.includes(step) || !date
+          || mockImportRequestStepIndex(step) > mockImportRequestStepIndex(round.importStep)) fail('แก้วันที่ได้เฉพาะขั้นตอนที่รอบนี้ผ่านมาแล้ว', 400);
+        if (date > mockTodayIso()) fail('วันที่ของขั้นตอนต้องไม่เป็นวันที่ในอนาคต', 400);
+      }
+      if ((request?.lotReceipts ?? []).length > 0 && round.importStep !== 'RECEIVED') fail('แก้จำนวนที่ถึงโกดังได้เมื่อรอบถึงโกดังแล้วเท่านั้น', 409);
+      mockApplyReceipts(round, request?.lotReceipts);
+      round.undo = null; // an edit ends the undo window, so an undo can never discard it
+      if (facts) MOCK_ROUND_FACT_KEYS.forEach((k) => { round.facts[k] = k === 'transportMode' ? (facts[k] ?? round.facts[k]) : (facts[k] ?? null); });
+      Object.entries(dates).forEach(([step, date]) => { round[MOCK_ROUND_DATE_KEY[step]] = date; });
+      if (Object.keys(dates).length > 0) {
+        // The IR's own current step date follows a correction on the round its step comes from (the same derivation).
+        [...new Set(round.lots.map((l) => l.importRequestId))].forEach((irId) => {
+          const ir = mockImportRequests.find((r) => r.id === irId);
+          const d = mockDeriveIr(ir);
+          if (!d.waiting && d.step === ir.importStep && d.at) ir.importStepAt = d.at;
+        });
+      }
+      return delay({ round: mockShipmentDto(round) });
+    },
+    async advance(id, request) {
+      const user = mockShipmentWrite();
+      const round = mockFindShipment(id);
+      const target = request?.targetStep;
+      if (!MOCK_IMPORT_REQUEST_STEPS.includes(target)) fail(`ขั้นตอนไม่ถูกต้อง: ${target}`, 400);
+      if (!MOCK_IMPORT_REQUEST_STEPS.includes(request.expectedStep)) fail('ต้องระบุขั้นตอนปัจจุบันของรอบ (expectedStep)', 400);
+      if (request.expectedStep !== round.importStep) fail('ขั้นตอนถูกเปลี่ยนแปลงโดยผู้ใช้อื่น กรุณาโหลดหน้าใหม่', 409);
+      if (mockImportRequestStepIndex(target) <= mockImportRequestStepIndex(round.importStep)) {
+        fail('เลื่อนขั้นตอนได้เฉพาะไปข้างหน้าเท่านั้น — แก้ไขข้อมูลของรอบได้ที่ แก้ไข', 409);
+      }
+      const eventDate = request.eventDate || mockTodayIso();
+      if (eventDate > mockTodayIso()) fail('วันที่ของขั้นตอนต้องไม่เป็นวันที่ในอนาคต', 400);
+      for (const lot of round.lots) {
+        const ir = mockImportRequests.find((r) => r.id === lot.importRequestId);
+        if (ir.firstIssuedDate && eventDate < ir.firstIssuedDate) {
+          fail(`วันที่ของขั้นตอนต้องไม่ก่อนวันที่ออกใบขอซื้อ ${ir.docNumber} ครั้งแรก (${ir.firstIssuedDate})`, 400);
+        }
+      }
+      const facts = request.facts ?? {};
+      if (target === 'RECEIVED' && facts.completePerInvoice === false && !facts.completeNote?.trim()) {
+        fail('ของไม่ครบตามอินวอยซ์ กรุณาพิมพ์หมายเหตุ', 400);
+      }
+      if (round.source === 'PORTAL') {
+        for (const kind of MOCK_ROUND_REQUIRED_NUMBERS_BY_STEP[target] ?? []) {
+          const typed = (request.documents ?? []).some((d) => d.kind === kind && d.docNo?.trim());
+          if (!typed && !round.documents.some((d) => d.kind === kind && d.docNo)) {
+            fail(`ต้องมีเลขที่ ${kind === 'PROFORMA' ? 'Proforma invoice' : 'Invoice'} อย่างน้อย 1 ฉบับ ก่อนเลื่อนไปขั้นตอน ${MOCK_IMPORT_REQUEST_STEP_LABELS_TH[target]}`, 400);
+          }
+        }
+      }
+      if (target === 'RECEIVED') mockApplyReceipts(round, request.lotReceipts);
+      const { lots: _lots, documents: _documents, undo: _undo, ...rest } = round;
+      const snapshot = structuredClone(rest);
+      MOCK_ROUND_FACT_KEYS.forEach((k) => { if (facts[k] != null) round.facts[k] = facts[k]; });
+      round.documents.forEach((d) => { d.createdByAdvance = false; });
+      (request.documents ?? []).filter((d) => d.docNo?.trim() && MOCK_DOCUMENT_KINDS.includes(d.kind)).forEach((d) => {
+        round.documents.push({ id: mockShipmentDocSeq++, kind: d.kind, docNo: d.docNo.trim(), docDate: null, note: null, fileName: null, fileSize: null, mimeType: null, createdAt: new Date().toISOString(), createdByAdvance: true });
+      });
+      round.importStep = target; round[MOCK_ROUND_DATE_KEY[target]] = eventDate;
+      round.stepByName = user.name; round.stepNote = request.note ?? null;
+      round.undo = { snapshot, byId: user.id, advancedAt: Date.now(), advanceId: `adv-${mockAdvanceSeq++}` };
+      const changes = mockRecomputeIrSteps(round, user, request.note);
+      changes.forEach(({ ir, from, to }) => {
+        const ticket = mockTicketOrNull(ir);
+        if (!ticket || (ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE') return; // a no-project order or a dead deal keeps the derived step but gets no event or rollup
+        pushEvent(ticket, user, 'IMPORT_STEP_ADVANCED', null, null,
+          `โรงงาน ${ir.factoryName}: ${MOCK_IMPORT_REQUEST_STEP_LABELS_TH[from] ?? from} → ${MOCK_IMPORT_REQUEST_STEP_LABELS_TH[to] ?? to}`);
+        if (to === 'RECEIVED') {
+          const liveRows = mockImportRequests.filter((r) => r.ticketId === ticket.id && r.status === 'ISSUED');
+          const required = mockRequiredFactoryIds(ticket);
+          if (liveRows.every((r) => r.importStep === 'RECEIVED') && [...required].every((fid) => liveRows.some((r) => r.factoryId === fid))) {
+            applyImportRequestRollupMock(ticket, user);
+          }
+        }
+      });
+      return delay({ round: mockShipmentDto(round) });
+    },
+    async undo(id, request) {
+      const user = mockShipmentWrite();
+      const expected = request?.expectedStep;
+      if (!MOCK_IMPORT_REQUEST_STEPS.includes(expected)) fail('ต้องระบุขั้นตอนที่จะเลิกทำ', 400);
+      const round = mockFindShipment(id);
+      if (!round.undo) fail('ไม่มีการเลื่อนขั้นตอนให้เลิกทำ', 409);
+      if (!request.advanceId || request.advanceId !== round.undo.advanceId) fail('การเลื่อนขั้นตอนนี้ถูกเปลี่ยนไปแล้ว จึงเลิกทำไม่ได้', 409);
+      if (round.importStep !== expected) fail('ขั้นตอนถูกเปลี่ยนไปแล้ว จึงเลิกทำไม่ได้', 409);
+      if (round.undo.byId !== user.id) fail('เลิกทำได้เฉพาะผู้ที่เลื่อนขั้นตอนนี้', 403);
+      if (round.importStep === 'RECEIVED') fail('รับสินค้าเข้าคลังแล้ว เลิกทำไม่ได้ — แก้ไขข้อมูลของรอบที่ แก้ไข', 409);
+      if (Date.now() - round.undo.advancedAt > 30_000) fail('เลยเวลาเลิกทำแล้ว (30 วินาที)', 409);
+      const { snapshot } = round.undo;
+      round.documents = round.documents.filter((d) => !d.createdByAdvance);
+      Object.keys(snapshot).forEach((k) => { round[k] = structuredClone(snapshot[k]); });
+      round.undo = null;
+      mockRecomputeIrSteps(round, user, round.stepNote).forEach(({ ir, from, to }) => {
+        const t = mockTicketOrNull(ir);
+        if (!t || (t.lifecycle ?? 'ACTIVE') !== 'ACTIVE') return;
+        pushEvent(t, user, 'IMPORT_STEP_ADVANCED', null, null,
+          `โรงงาน ${ir.factoryName}: เลิกทำ ${MOCK_IMPORT_REQUEST_STEP_LABELS_TH[from] ?? from} → ${MOCK_IMPORT_REQUEST_STEP_LABELS_TH[to] ?? to}`);
+      });
+      return delay({ round: mockShipmentDto(round) });
+    },
+    async createRound(request) {
+      const user = mockShipmentWrite();
+      mockEnsureMigratedRounds();
+      if (!request?.factoryId || !(request.lots ?? []).length || request.lots.includes(null)) fail('เลือกโรงงานและใบขอซื้ออย่างน้อย 1 ใบ', 400);
+      if (request.transportMode && !['SEA', 'AIR', 'LAND'].includes(request.transportMode)) fail('ประเภทการขนส่งไม่ถูกต้อง', 400);
+      const sample = mockImportRequests.find((r) => r.status === 'ISSUED' && r.factoryId === request.factoryId);
+      if (!sample) fail('ไม่พบใบขอซื้อของโรงงานนี้ที่จัดรอบได้', 409);
+      const round = {
+        id: 0, factoryId: request.factoryId, factoryName: sample.factoryName, source: 'PORTAL', importStep: 'CONTACTED',
+        contactedOn: mockTodayIso(), orderedOn: null, pickedUpOn: null, inTransitOn: null,
+        awaitingCustomsOn: null, receivedOn: null, stepByName: user.name, stepNote: null,
+        facts: { ...Object.fromEntries(MOCK_ROUND_FACT_KEYS.map((k) => [k, null])), transportMode: request.transportMode || 'SEA', label: request.label?.trim() || null },
+        documents: [], undo: null, lots: [],
+      };
+      mockPlaceLots(round, request.lots); // throws before anything is stored
+      round.id = mockShipmentRoundSeq++;
+      mockShipmentRounds.push(round);
+      mockFinishLots([round], round.lots.map((l) => l.importRequestId), user);
+      return delay({ round: mockShipmentDto(round) });
+    },
+    async addLots(id, request) {
+      const user = mockShipmentWrite();
+      const round = mockFindShipment(id);
+      mockRequireNotLeft(round);
+      if (!(request?.lots ?? []).length || request.lots.includes(null)) fail('เลือกใบขอซื้ออย่างน้อย 1 ใบ', 400);
+      const before = structuredClone(round.lots);
+      try { mockPlaceLots(round, request.lots); } catch (e) { round.lots = before; throw e; }
+      mockFinishLots([round], round.lots.map((l) => l.importRequestId), user);
+      return delay({ round: mockShipmentDto(round) });
+    },
+    async changeLot(id, lotId, request) {
+      const user = mockShipmentWrite();
+      const round = mockFindShipment(id);
+      mockRequireNotLeft(round);
+      const lot = round.lots.find((l) => l.lotId === Number(lotId));
+      if (!lot) fail('ไม่พบล็อตในรอบนี้', 404);
+      const qty = Math.round(Number(request?.qty) * 100) / 100;
+      if (!(qty > 0)) fail('จำนวนต้องมากกว่า 0', 400);
+      const ir = mockImportRequests.find((r) => r.id === lot.importRequestId);
+      const item = ir.items.find((it) => it.id === lot.itemId);
+      if (mockHundredths(mockPlacedQty(item.id)) - mockHundredths(lot.qty) + mockHundredths(qty) > mockHundredths(item.qty)) fail(`จำนวนเกินที่สั่งในรายการนี้ (สั่ง ${item.qty})`, 409);
+      lot.qty = qty;
+      mockFinishLots([round], round.lots.map((l) => l.importRequestId), user);
+      return delay({ round: mockShipmentDto(round) });
+    },
+    async removeLot(id, lotId) {
+      const user = mockShipmentWrite();
+      const round = mockFindShipment(id);
+      mockRequireNotLeft(round);
+      const lot = round.lots.find((l) => l.lotId === Number(lotId));
+      if (!lot) fail('ไม่พบล็อตในรอบนี้', 404);
+      const last = round.lots.length === 1;
+      if (last) mockRequireDeletable(round);
+      const irIds = round.lots.map((l) => l.importRequestId);
+      round.lots = round.lots.filter((l) => l !== lot);
+      mockFinishLots([round], irIds, user);
+      if (last) mockShipmentRounds.splice(mockShipmentRounds.indexOf(round), 1);
+      return delay({ round: last ? null : mockShipmentDto(round) });
+    },
+    async moveLot(id, lotId, request) {
+      const user = mockShipmentWrite();
+      const src = mockFindShipment(id);
+      const dst = mockFindShipment(request?.toRoundId);
+      if (src === dst) fail('เลือกรอบปลายทาง', 400);
+      mockRequireNotLeft(src);
+      mockRequireNotLeft(dst);
+      if (!src.factoryId || src.factoryId !== dst.factoryId) fail('ย้ายล็อตได้เฉพาะระหว่างรอบของโรงงานเดียวกัน', 409);
+      const lot = src.lots.find((l) => l.lotId === Number(lotId));
+      if (!lot) fail('ไม่พบล็อตในรอบนี้', 404);
+      if (!mockIrActive(mockImportRequests.find((r) => r.id === lot.importRequestId))) {
+        fail('งานของใบขอซื้อนี้ไม่ได้อยู่ในสถานะใช้งาน ย้ายล็อตไม่ได้', 409);
+      }
+      const last = src.lots.length === 1;
+      if (last) mockRequireDeletable(src);
+      const irIds = [...src.lots, ...dst.lots].map((l) => l.importRequestId);
+      src.lots = src.lots.filter((l) => l !== lot);
+      const there = dst.lots.find((l) => l.itemId === lot.itemId);
+      if (there) there.qty = mockSumQty([there.qty, lot.qty]); else dst.lots.push(lot);
+      mockFinishLots([src, dst], irIds, user);
+      if (last) mockShipmentRounds.splice(mockShipmentRounds.indexOf(src), 1);
+      return delay({ round: last ? null : mockShipmentDto(src) });
+    },
+    async addDocument(id, input) {
+      const user = mockShipmentWrite();
+      const round = mockFindShipment(id);
+      if (!MOCK_DOCUMENT_KINDS.includes(input?.kind)) fail('ประเภทเอกสารไม่ถูกต้อง', 400);
+      const docNo = input.docNo?.trim() || null;
+      if (!docNo && !input.file) fail('ต้องมีเลขที่เอกสารหรือไฟล์อย่างน้อยหนึ่งอย่าง', 400);
+      round.undo = null;
+      round.documents.push({
+        id: mockShipmentDocSeq++, kind: input.kind, docNo, docDate: input.docDate || null, note: input.note?.trim() || null,
+        fileName: input.file?.name ?? null, fileSize: input.file?.size ?? null, mimeType: input.file?.type ?? null,
+        createdAt: new Date().toISOString(), uploadedBy: user.id, createdByAdvance: false,
+      });
+      return delay({ round: mockShipmentDto(round) });
+    },
+    async updateDocument(id, docId, input) {
+      mockShipmentWrite();
+      const round = mockFindShipment(id);
+      const doc = round.documents.find((d) => d.id === Number(docId));
+      if (!doc) fail('ไม่พบเอกสาร', 404);
+      if (!MOCK_DOCUMENT_KINDS.includes(input?.kind)) fail('ประเภทเอกสารไม่ถูกต้อง', 400);
+      const docNo = input.docNo?.trim() || null;
+      if (!docNo && !doc.fileName) fail('ต้องมีเลขที่เอกสารหรือไฟล์อย่างน้อยหนึ่งอย่าง', 400);
+      round.undo = null;
+      Object.assign(doc, { kind: input.kind, docNo, docDate: input.docDate || null, note: input.note?.trim() || null });
+      return delay({ round: mockShipmentDto(round) });
+    },
+    async deleteDocument(id, docId) {
+      mockShipmentWrite();
+      const round = mockFindShipment(id);
+      if (!round.documents.some((d) => d.id === Number(docId))) fail('ไม่พบเอกสาร', 404);
+      round.undo = null;
+      round.documents = round.documents.filter((d) => d.id !== Number(docId));
+      return delay({ round: mockShipmentDto(round) });
+    },
+    async attachFile(id, docId, file) {
+      mockShipmentWrite();
+      const round = mockFindShipment(id);
+      const doc = round.documents.find((d) => d.id === Number(docId));
+      if (!doc) fail('ไม่พบเอกสาร', 404);
+      if (!file) fail('ไฟล์ว่างเปล่า', 400);
+      round.undo = null;
+      Object.assign(doc, { fileName: file.name ?? `${doc.kind}.pdf`, fileSize: file.size ?? 0, mimeType: file.type ?? null });
+      return delay({ round: mockShipmentDto(round) });
+    },
+    async removeFile(id, docId) {
+      mockShipmentWrite();
+      const round = mockFindShipment(id);
+      const doc = round.documents.find((d) => d.id === Number(docId));
+      if (!doc?.fileName) fail('ไม่พบไฟล์', 404);
+      if (!doc.docNo) fail('เอกสารนี้ไม่มีเลขที่ ลบทั้งรายการแทนการลบไฟล์', 400);
+      round.undo = null;
+      Object.assign(doc, { fileName: null, fileSize: null, mimeType: null });
+      return delay({ round: mockShipmentDto(round) });
+    },
+    async downloadFile(id, docId) {
+      mockShipmentWrite();
+      const doc = mockFindShipment(id).documents.find((d) => d.id === Number(docId));
+      if (!doc?.fileName) fail('ไม่พบไฟล์', 404);
+      return new Blob(['mock factory document'], { type: 'text/plain' });
+    },
+  },
   storedImportRequests: {
     async createDrafts(ticketId, request) {
       const ticket = findTicketRaw(Number(ticketId));
@@ -15293,11 +16025,12 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       // and first-issue date forward — mirrors lockIssuedPredecessor.
       const predecessor = mockImportRequests.find((r) => r.ticketId === row.ticketId
         && r.factoryId === row.factoryId && r.status === 'ISSUED');
-      let step; let stepAt; let stepById; let stepByName; let stepNote; let firstIssuedDate;
+      let step; let stepAt; let stepById; let stepByName; let stepNote; let firstIssuedDate; let movedRounds = [];
       if (predecessor) {
         step = predecessor.importStep; stepAt = predecessor.importStepAt;
         stepById = predecessor.importStepById; stepByName = predecessor.importStepByName;
         stepNote = predecessor.importStepNote; firstIssuedDate = predecessor.firstIssuedDate;
+        movedRounds = mockMoveLotsToRevision(predecessor, row);
         predecessor.status = 'SUPERSEDED';
         predecessor.supersededById = row.id;
       } else {
@@ -15320,6 +16053,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       row.updatedAt = row.issuedAt;
       row.importStep = step; row.importStepAt = stepAt; row.importStepById = stepById;
       row.importStepByName = stepByName; row.importStepNote = stepNote;
+      if (movedRounds.length > 0) mockFinishLots(movedRounds, [row.id], user); // the lots moved: the step follows them
       const factory = mockPriceImportFactories.find((f) => f.factoryId === row.factoryId);
       row.emailTo = factory?.email ?? null;
       row.emailSubject = `Purchase order ${docNumber} - GL&R`;
@@ -15377,14 +16111,41 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       if (targetIdx <= currentIdx) {
         fail('เลื่อนขั้นตอนได้เฉพาะไปข้างหน้าเท่านั้น — แก้ไขย้อนหลังด้วยการออกฉบับแก้ไข', 409);
       }
-      const eventDate = request?.eventDate || new Date().toISOString().slice(0, 10);
-      const todayIso = new Date().toISOString().slice(0, 10);
+      const eventDate = request?.eventDate || mockTodayIso();
+      const todayIso = mockTodayIso();
       if (eventDate > todayIso) fail('วันที่ของขั้นตอนต้องไม่เป็นวันที่ในอนาคต', 400);
       if (row.firstIssuedDate && eventDate < row.firstIssuedDate) {
         fail(`วันที่ของขั้นตอนต้องไม่ก่อนวันที่ออกใบขอซื้อครั้งแรก (${row.firstIssuedDate})`, 400);
       }
+      // ImportRequestService#lockSoleRound: a request on a shared or split round moves on the round page; RECEIVED needs the
+      // round's documents (no round, or a portal round), so it moves there too.
+      mockEnsureMigratedRounds();
+      const itsRounds = mockShipmentRounds.filter((r) => r.lots.some((l) => l.importRequestId === row.id));
+      const soleRound = mockSoleWholeRound(row, itsRounds);
+      if (itsRounds.length > 0 && !soleRound) fail('ใบขอซื้อนี้อยู่ในรอบขนส่งร่วมหรือแบ่งล็อต กรุณาเลื่อนขั้นตอนที่รอบขนส่ง', 409);
+      if (target === 'RECEIVED' && (!soleRound || soleRound.source === 'PORTAL')) fail('กรุณาเลื่อนไปถึงโกดังที่หน้ารอบขนส่ง', 409);
       const fromLabel = MOCK_IMPORT_REQUEST_STEP_LABELS_TH[row.importStep] ?? row.importStep ?? '—';
       const toLabel = MOCK_IMPORT_REQUEST_STEP_LABELS_TH[target] ?? target;
+      // The round carries the step (the IR's own step is derived from it): moved, or created at the target.
+      const advanceId = `adv-${mockAdvanceSeq++}`;
+      if (soleRound) {
+        const { lots: _l, documents: _d, undo: _u, ...rest } = soleRound;
+        soleRound.undo = { snapshot: structuredClone(rest), byId: user.id, advancedAt: Date.now(), advanceId };
+        soleRound.importStep = target; soleRound[MOCK_ROUND_DATE_KEY[target]] = eventDate;
+        soleRound.stepByName = user.name; soleRound.stepNote = request?.note ?? null;
+      } else {
+        const created = {
+          id: mockShipmentRoundSeq++, factoryId: row.factoryId, factoryName: row.factoryName, source: 'PORTAL', importStep: target,
+          contactedOn: null, orderedOn: null, pickedUpOn: null, inTransitOn: null, awaitingCustomsOn: null, receivedOn: null,
+          stepByName: user.name, stepNote: request?.note ?? null,
+          facts: { ...Object.fromEntries(MOCK_ROUND_FACT_KEYS.map((k) => [k, null])), transportMode: 'SEA' }, documents: [],
+          lots: row.items.map((it) => ({ lotId: mockShipmentLotSeq++, importRequestId: row.id, itemId: it.id, qty: Number(it.qty) })),
+          undo: { created: true, snapshot: { importStep: row.importStep }, byId: user.id, advancedAt: Date.now(), advanceId },
+        };
+        if (row.importStepAt && MOCK_ROUND_DATE_KEY[row.importStep]) created[MOCK_ROUND_DATE_KEY[row.importStep]] = row.importStepAt;
+        created[MOCK_ROUND_DATE_KEY[target]] = eventDate;
+        mockShipmentRounds.push(created);
+      }
       // V216: the stamp this advance replaces, for the 30 s undo (ImportRequestRepository#advanceStep).
       row.stepUndo = {
         importStep: row.importStep, importStepAt: row.importStepAt, importStepById: row.importStepById,
@@ -15433,6 +16194,14 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       if (row.importStep === 'RECEIVED') fail('รับสินค้าเข้าคลังแล้ว เลิกทำไม่ได้ — แก้ไขด้วยการออกฉบับแก้ไข', 409);
       if (Date.now() - undo.advancedAt > 30_000) fail('เลยเวลาเลิกทำแล้ว (30 วินาที)', 409);
       const fromLabel = MOCK_IMPORT_REQUEST_STEP_LABELS_TH[row.importStep] ?? row.importStep;
+      // the round the advance moved (or created) goes back with it (ImportRequestService#undoStep)
+      const undoRounds = mockShipmentRounds.filter((r) => r.lots.some((l) => l.importRequestId === row.id));
+      const undoRound = mockSoleWholeRound(row, undoRounds);
+      if (undoRound?.undo) {
+        if (undoRound.undo.created) mockShipmentRounds.splice(mockShipmentRounds.indexOf(undoRound), 1);
+        else Object.keys(undoRound.undo.snapshot).forEach((k) => { undoRound[k] = structuredClone(undoRound.undo.snapshot[k]); });
+        undoRound.undo = null;
+      }
       Object.assign(row, {
         importStep: undo.importStep, importStepAt: undo.importStepAt, importStepById: undo.importStepById,
         importStepByName: undo.importStepByName, importStepNote: undo.importStepNote, stepUndo: null,
@@ -15498,7 +16267,8 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
     // importRequests.download above (ImportRequestRenderer's own PDFBox layout is server-only).
     async download(id, copy) {
       const row = findStoredImportRequestRaw(id);
-      requireStoredIrRead(findTicketRaw(row.ticketId), requireSession());
+      if (row.ticketId == null) requireNoProjectRead(row, requireSession());
+      else requireStoredIrRead(findTicketRaw(row.ticketId), requireSession());
       void copy;
       fail('สร้างไฟล์ใบขอซื้อไม่รองรับในโหมดทดสอบ (mock) — ต้องใช้เซิร์ฟเวอร์จริง', 501);
     },
@@ -16235,7 +17005,8 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
     },
     // Mirrors FactoryConfigController#names: id + name only, for the IR creators too.
     async names() {
-      hasRole('ceo', 'import', 'sales', 'sales_manager', 'account');
+      // plus whoever may raise a no-project order (the canCreateQuotation grant on any role): its form picks a factory here
+      if (!requireSession().canCreateQuotation) hasRole('ceo', 'import', 'sales', 'sales_manager', 'account');
       return delay({ factories: mockPriceImportFactories.map((f) => ({ id: f.factoryId, factoryName: f.name })) });
     },
     // sendEmail is retired — POST /api/tickets/{id}/factory-emails/send no longer exists (factory RFQ email is

@@ -153,6 +153,14 @@ public class TicketService {
         this.dealQuotations    = dealQuotations;
     }
 
+    // Set by ImportRequestService (a constructor argument would be a cycle): a deal back to ACTIVE catches up on a
+    // shipment that completed while it was paused.
+    private java.util.function.BiConsumer<Long, UserPrincipal> importReconciler = (ticketId, actor) -> { };
+
+    public void wireImportReconciler(java.util.function.BiConsumer<Long, UserPrincipal> reconciler) {
+        this.importReconciler = reconciler;
+    }
+
     /** Oversight reader (sales_manager, or the live read-all grant outside import): reads every deal, edits nothing. */
     public boolean oversightReader(UserPrincipal actor) {
         return OversightReader.is(actor, employeeAuth::canReadAllSales);
@@ -1408,7 +1416,8 @@ public class TicketService {
      * before the imported remainder arrived — Case 8) is on the DELIVERY axis, so the firewall would
      * otherwise skip it entirely and the imported remainder could never become deliverable. For
      * exactly that one status this method writes the {@code GOODS_RECEIVED} event and a forward-only
-     * advance to ขั้น 13 — no status or payment write — so {@code TicketRepository#hasReceivedGoods} flips true and {@code
+     * advance to ขั้น 13 — no fulfilment-status write; the payment track moves DEPOSIT_PAID to AWAITING_FINAL_PAYMENT with its
+     * event, as {@code applyGoodsReceived} does — so {@code TicketRepository#hasReceivedGoods} flips true and {@code
      * TicketService#warehouseDeliveryAvailable} lets the remainder be delivered, without disturbing a
      * delivery that is already under way. {@code FULLY_DELIVERED} needs no write at all: the deal is
      * already fully delivered, so there is nothing left to unlock.
@@ -1422,8 +1431,16 @@ public class TicketService {
         TicketSummaryDto s = requireTicket(ticketId).summary();
         String cur = s.fulfillmentStatus();
         if (FulfilmentStatus.PARTIALLY_DELIVERED.equals(cur)) {
-            // Mixed stock+import deal: event + forward-only stage move to ขั้น 13; no status/payment
-            // write — the delivery already under way must not be disturbed.
+            // Mixed stock+import deal: event + forward-only stage move to ขั้น 13; the fulfilment status is not written —
+            // the delivery already under way must not be disturbed. The payment track moves exactly as applyGoodsReceived moves
+            // it (DEPOSIT_PAID -> AWAITING_FINAL_PAYMENT, compare-and-set so it is forward-only; FULLY_PAID and the rest untouched).
+            if ("DEPOSIT_PAID".equals(s.paymentStatus())) {
+                int rows = tickets.advancePaymentStatus(
+                    s.id(), s.depositPolicy(), s.paymentStatus(), PaymentTrack.AWAITING_FINAL_PAYMENT);
+                requirePaymentAdvanced(rows);
+                tickets.addEvent(s.id(), actor.id(), actor.name(),
+                    TicketEventKind.AWAITING_FINAL_PAYMENT, s.status(), s.status(), null);
+            }
             tickets.addEvent(ticketId, actor.id(), actor.name(),
                 TicketEventKind.GOODS_RECEIVED, s.status(), s.status(), null);
             autoAdvanceStage(s, DealStage.DELIVERY_SCHEDULING, actor);
@@ -2116,6 +2133,9 @@ public class TicketService {
         if ("WAREHOUSE".equals(source) && !warehouseDeliveryAvailable(s, ticket.summary().id())) {
             throw new ApiException(HttpStatus.CONFLICT, "ต้องรับสินค้าเข้าโกดังก่อนส่งจากคลังสินค้า");
         }
+        if ("WAREHOUSE".equals(source)) {
+            requireWithinReceivedLots(s, itemsById, normalized);
+        }
         long deliveryId = tickets.insertDeliveryRecord(
             s.id(), source, actor.id(), request.note(), request.recipientName(), normalized, deliveredAt, target.linkId(), noInvoiceNote);
         TicketDto updated = requireTicket(s.id());
@@ -2668,7 +2688,77 @@ public class TicketService {
         // so a stock-first partial delivery can't wrongly block the warehouse remainder.
         return FulfilmentStatus.GOODS_RECEIVED.equals(s.fulfillmentStatus())
             || tickets.hasReceivedGoods(ticketId)
+            || tickets.hasReceivedLot(ticketId) // a lot is in the warehouse even though the rest has not arrived
             || (tickets.isPrePortal(ticketId) && !tickets.hasIssuedImportRequest(ticketId)); // goods ordered before the portal, no IR in the portal
+    }
+
+    /**
+     * Per-lot delivery cap, one rule for the record check and the button. No shipment lots on the deal: uncapped (pre-portal,
+     * stock-only and lot-less deals behave as before). A GOODS_RECEIVED event means the goods arrived, so a line with no lot on
+     * a RECEIVED round is uncapped; a line with one is capped by its received share. Without the event, a line with no receipt
+     * row has no imported part available. Stock coverage counts only once the deposit is settled (the STOCK path says the
+     * same). Capped: {@code allowed = stock + max(qty - qtyFromStock, 0) * min(1, onRounds / irQty)}, to 2 places. A short
+     * arrival does not cap (planned quantity counts), or the deal could never reach FULLY_DELIVERED.
+     */
+    private static BigDecimal warehouseAllowance(TicketSummaryDto s, TicketItemDto item, TicketRepository.LotReceipts receipts,
+                                                 boolean goodsEvent) {
+        BigDecimal qty = nullToZero(item.qty());
+        if (!receipts.dealHasLots()) {
+            return qty;
+        }
+        TicketRepository.LineReceipt r = receipts.byItem().get(item.id());
+        if (goodsEvent && (r == null || r.onRounds().signum() <= 0)) {
+            return qty;
+        }
+        BigDecimal declared = nullToZero(item.qtyFromStock());
+        BigDecimal stock = depositSettled(s) ? declared : BigDecimal.ZERO;
+        if (r == null) {
+            return stock.setScale(2, java.math.RoundingMode.HALF_UP);
+        }
+        BigDecimal importQty = qty.subtract(declared).max(BigDecimal.ZERO);
+        BigDecimal ratio = r.irQty().signum() <= 0 ? BigDecimal.ONE
+            : r.onRounds().divide(r.irQty(), 10, java.math.RoundingMode.HALF_UP).min(BigDecimal.ONE);
+        return stock.add(importQty.multiply(ratio)).setScale(2, java.math.RoundingMode.HALF_UP);
+    }
+
+    private void requireWithinReceivedLots(TicketSummaryDto s, Map<Long, TicketItemDto> itemsById,
+                                           List<RecordDeliveryRequest.Line> lines) {
+        TicketRepository.LotReceipts receipts = tickets.lotReceipts(s.id());
+        boolean goodsEvent = tickets.hasReceivedGoods(s.id());
+        for (RecordDeliveryRequest.Line line : lines) {
+            TicketItemDto item = itemsById.get(line.itemId());
+            BigDecimal allowed = warehouseAllowance(s, item, receipts, goodsEvent);
+            if (nullToZero(item.qtyDelivered()).add(line.qty()).compareTo(allowed) > 0) {
+                throw new ApiException(HttpStatus.CONFLICT, "ส่งจากคลังสินค้าได้ไม่เกินจำนวนที่ถึงโกดังแล้ว: "
+                    + deliveryLineName(item) + " (ส่งได้ไม่เกิน " + qtyText(allowed) + ")", Map.of("code", "LOT_QTY_EXCEEDED"));
+            }
+        }
+    }
+
+    /** Whether the warehouse can still deliver something under the cap: some line has room. */
+    private boolean warehouseHasRoom(TicketDto ticket) {
+        TicketSummaryDto s = ticket.summary();
+        TicketRepository.LotReceipts receipts = tickets.lotReceipts(s.id());
+        boolean goodsEvent = tickets.hasReceivedGoods(s.id());
+        return ticket.items().stream().anyMatch(item ->
+            warehouseAllowance(s, item, receipts, goodsEvent).compareTo(nullToZero(item.qtyDelivered())) > 0);
+    }
+
+    /** Whether ส่งมอบครบ (every open quantity, source as completeRound derives it) would pass the source caps. */
+    private boolean canCompleteWholeDelivery(TicketDto ticket) {
+        TicketSummaryDto s = ticket.summary();
+        List<TicketItemDto> open = ticket.items().stream()
+            .filter(item -> nullToZero(item.qty()).compareTo(nullToZero(item.qtyDelivered())) > 0).toList();
+        if (open.stream().allMatch(item -> nullToZero(item.qty()).compareTo(nullToZero(item.qtyFromStock())) <= 0)) {
+            return depositSettled(s);
+        }
+        if (!warehouseDeliveryAvailable(s, s.id())) {
+            return false;
+        }
+        TicketRepository.LotReceipts receipts = tickets.lotReceipts(s.id());
+        boolean goodsEvent = tickets.hasReceivedGoods(s.id());
+        return open.stream().allMatch(item ->
+            warehouseAllowance(s, item, receipts, goodsEvent).compareTo(nullToZero(item.qty())) >= 0);
     }
 
     private static boolean hasRemainingDelivery(TicketDto ticket) {
@@ -3369,6 +3459,8 @@ public class TicketService {
             throw new ApiException(HttpStatus.CONFLICT, "งานนี้ยังไม่ได้ถูกทำเครื่องหมายเสียงาน");
         }
         tickets.clearDealLost(ticketId);
+        tickets.lockTicketForUpdate(ticketId);
+        importReconciler.accept(ticketId, actor);
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.REOPENED, s.salesStage(), s.salesStage(), blankToNull(note));
         notifyDealLifecycle(s, actor, TicketEventKind.DEAL_REOPENED,
@@ -3641,6 +3733,8 @@ public class TicketService {
         tickets.updateLifecycle(ticketId, DealLifecycle.ACTIVE);
         // V220: a resumed deal has no return date to come back on.
         tickets.updatePauseReturnOn(ticketId, null);
+        tickets.lockTicketForUpdate(ticketId);
+        importReconciler.accept(ticketId, actor);
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.RESUMED, s.salesStage(), s.salesStage(), blankToNull(note));
         notifyDealLifecycle(s, actor, TicketEventKind.DEAL_RESUMED,
@@ -4151,7 +4245,9 @@ public class TicketService {
         if (canRecordDelivery(ticket, actor)) {
             actions.add(new TicketActionDto("RECORD_PARTIAL_DELIVERY", "fulfillment", "บันทึกการส่งสินค้า",
                 List.of("source", "lines")));
-            actions.add(new TicketActionDto("COMPLETE_DELIVERY", "fulfillment", "ส่งมอบครบ"));
+            if (canCompleteWholeDelivery(ticket)) {
+                actions.add(new TicketActionDto("COMPLETE_DELIVERY", "fulfillment", "ส่งมอบครบ"));
+            }
         }
         // Account only — see PAYMENT_RECORD_ROLES's own Javadoc. ACCOUNT_ROLES would let the CEO
         // through.
@@ -4367,11 +4463,12 @@ public class TicketService {
         TicketSummaryDto s = ticket.summary();
         boolean fromStock = FulfilmentStatus.FROM_STOCK.equals(s.fulfillmentStatus());
         if (sourceFixed) {
-            return fromStock ? depositSettled(s) : warehouseDeliveryAvailable(s, s.id());
+            return fromStock ? depositSettled(s) : warehouseDeliveryAvailable(s, s.id()) && warehouseHasRoom(ticket);
         }
         boolean stockAvailable = ticket.items().stream()
             .anyMatch(item -> nullToZero(item.qtyFromStock()).compareTo(nullToZero(item.qtyDelivered())) > 0);
-        return ((fromStock || stockAvailable) && depositSettled(s)) || warehouseDeliveryAvailable(s, s.id());
+        return ((fromStock || stockAvailable) && depositSettled(s))
+            || (warehouseDeliveryAvailable(s, s.id()) && warehouseHasRoom(ticket));
     }
 
     /** The Thai reason goods cannot leave yet, or null when they can (what a delivery round's record button says). */
@@ -4379,6 +4476,9 @@ public class TicketService {
         TicketDto ticket = requireTicket(ticketId);
         if (goodsCanLeave(ticket, sourceFixed)) {
             return null;
+        }
+        if (warehouseDeliveryAvailable(ticket.summary(), ticket.summary().id()) && !warehouseHasRoom(ticket)) {
+            return "ของที่ถึงโกดังส่งครบแล้ว รอล็อตถัดไป";
         }
         boolean stockOnly = sourceFixed && FulfilmentStatus.FROM_STOCK.equals(ticket.summary().fulfillmentStatus());
         return stockOnly ? "ส่งสินค้าจากสต็อกได้หลังรับชำระมัดจำแล้ว" : "ต้องรับสินค้าเข้าโกดังก่อนจึงจะบันทึกการส่งได้";

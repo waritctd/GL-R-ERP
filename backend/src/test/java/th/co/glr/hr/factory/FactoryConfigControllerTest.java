@@ -24,7 +24,7 @@ class FactoryConfigControllerTest {
 
     private final FactoryConfigRepository repo = mock(FactoryConfigRepository.class);
     private final MockMvc mvc = MockMvcBuilders
-        .standaloneSetup(new FactoryConfigController(repo, new SessionContext()))
+        .standaloneSetup(new FactoryConfigController(repo, new SessionContext(), mock(th.co.glr.hr.auth.EmployeeAuthRepository.class)))
         .setControllerAdvice(new ApiExceptionHandler())
         .build();
 

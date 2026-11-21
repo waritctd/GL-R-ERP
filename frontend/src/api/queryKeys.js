@@ -154,6 +154,10 @@ export const queryKeys = {
   financeDeal: (id) => ['finance', 'deal', id == null ? id : Number(id)],
   ticketPayments: (id) => ['tickets', 'payments', id],
   ticketDeliveries: (id) => ['tickets', 'deliveries', id],
+  // ของที่ฉันสั่ง (GET /api/my-incoming).
+  myIncoming: () => ['myIncoming'],
+  // ของกำลังมา on the deal's ส่งของ tab (GET /api/tickets/{id}/incoming).
+  ticketIncoming: (id) => ['tickets', 'incoming', Number(id)],
   // Which brands a deal needs a ใบขอซื้อ for — one F-SM-001 per brand.
   importRequestBrands: (id) => ['tickets', 'import-request-brands', id],
   // The STORED ใบขอซื้อ aggregate: one entry per deal's whole per-factory list, and
@@ -166,6 +170,9 @@ export const queryKeys = {
   // GET /api/tickets/{id}/procurement-source: where each line comes from, and whether the rep has decided.
   procurementSource: (ticketId) => ['tickets', 'procurement-source', ticketId == null ? ticketId : Number(ticketId)],
   storedImportRequestDetail: (id) => ['importRequests', 'detail', id],
+  // Import's queue (rounds + waiting IRs) and one round by id (GET /api/shipment-rounds[/{id}]).
+  shipmentRounds: () => ['shipmentRounds', 'list'],
+  shipmentRound: (id) => ['shipmentRounds', 'detail', Number(id)],
   // The import-only per-deal view (GET /api/import/deals/{id}). Number() for the same route-param string vs
   // numeric-field reason as ticketDetail above.
   importDeal: (ticketId) => ['importDeal', Number(ticketId)],

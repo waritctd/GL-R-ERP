@@ -13,7 +13,8 @@ public final class ImportRequestDtos {
 
     public record ImportRequestDto(
         long id,
-        long ticketId,
+        /** NULL for an order with no project (สั่งของไม่มีโครงการ): every deal-scoped reader must cope. */
+        Long ticketId,
         String ticketCode,
         /** V184: the grouping key was brand; it is now #factoryId. */
         String brand,
