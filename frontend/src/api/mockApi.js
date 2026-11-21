@@ -3318,16 +3318,20 @@ function mockDeriveIr(ir) {
     return da !== db ? db > da : b.x.id > a.x.id;
   };
   const slowest = lots.reduce((a, b) => (a == null || slowerThan(b, a) ? b : a), null);
+  // a CONTACTED round is only planned: while any lot sits past it, the slowest is chosen among those rounds
+  const slowestPast = lots.filter(({ x }) => x.importStep !== 'CONTACTED').reduce((a, b) => (a == null || slowerThan(b, a) ? b : a), null);
+  const chosen = slowestPast ?? slowest;
+  const allReceived = lots.every(({ x }) => x.importStep === 'RECEIVED');
   const waiting = unplaced || !slowest;
-  // ShipmentStepDerivation: the slowest placed round's step; unplaced quantity stops short of RECEIVED (the remainder is still
-  // on its way); no lots keeps the IR's own step (never RECEIVED by this path); a fresh IR stays CONTACTED with its own stamp.
-  let step = slowest ? slowest.x.importStep : (ir.importStep ?? 'CONTACTED');
-  if (waiting && mockImportRequestStepIndex(step) > mockImportRequestStepIndex('AWAITING_CUSTOMS')) step = 'AWAITING_CUSTOMS';
+  // ShipmentStepDerivation: unplaced quantity or a lot on a round not yet received stops short of RECEIVED (the rest is still on its
+  // way); no lots keeps the IR's own step (never RECEIVED by this path); a fresh IR stays CONTACTED with its own stamp.
+  let step = chosen ? chosen.x.importStep : (ir.importStep ?? 'CONTACTED');
+  if ((waiting || !allReceived) && mockImportRequestStepIndex(step) > mockImportRequestStepIndex('AWAITING_CUSTOMS')) step = 'AWAITING_CUSTOMS';
   let at;
   if (step === 'CONTACTED') at = ir.importStep === 'CONTACTED' && ir.importStepAt ? ir.importStepAt : (ir.firstIssuedDate ?? null);
-  else at = slowest ? (slowest.x[MOCK_ROUND_DATE_KEY[slowest.x.importStep]] ?? ir.importStepAt) : ir.importStepAt;
+  else at = chosen ? (chosen.x[MOCK_ROUND_DATE_KEY[chosen.x.importStep]] ?? ir.importStepAt) : ir.importStepAt;
   if (at && ir.firstIssuedDate && at < ir.firstIssuedDate) at = ir.firstIssuedDate; // never before it was first issued
-  return { step, at, waiting, slowest };
+  return { step, at, waiting, slowest: chosen };
 }
 
 // An IR whose lots together received nothing has physically nothing (ImportRequestService#allFactoriesReceived says so).
@@ -3477,9 +3481,9 @@ function mockSoleWholeRound(ir, itsRounds) {
 }
 
 // After lots changed: the undo of an earlier advance is gone, and the IR steps follow their lots (events + rollup as advance).
-function mockFinishLots(rounds, irIds, user) {
+function mockFinishLots(rounds, irIds, user, forwardOnly = false) {
   rounds.forEach((r) => { r.undo = null; });
-  mockRecomputeIrSteps(irIds, user, null).forEach(({ ir, from, to }) => {
+  mockRecomputeIrSteps(irIds, user, null).filter(({ from, to }) => !forwardOnly || mockImportRequestStepIndex(to) > mockImportRequestStepIndex(from)).forEach(({ ir, from, to }) => {
     const ticket = mockTicketOrNull(ir);
     if (!ticket || (ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE') return;
     pushEvent(ticket, user, 'IMPORT_STEP_ADVANCED', null, null,
@@ -4826,9 +4830,11 @@ function mockWarehouseAllowance(ticket, item) {
   if (!dealHasLots) return qty;
   const mine = irs.flatMap((ir) => ir.items.filter((it) => it.ticketItemId === item.id));
   const irQty = mockSumQty(mine.map((it) => it.qty));
-  const onRounds = mockSumQty(mine.flatMap((it) => mockShipmentRounds.filter((r) => r.importStep === 'RECEIVED')
-    .flatMap((r) => r.lots.filter((l) => l.itemId === it.id).map((l) => l.qty))));
-  if (hasReceivedGoods(ticket.id) && onRounds <= 0) return qty;
+  const receivedLotsOf = mine.flatMap((it) => mockShipmentRounds.filter((r) => r.importStep === 'RECEIVED')
+    .flatMap((r) => r.lots.filter((l) => l.itemId === it.id)));
+  const onRounds = mockSumQty(receivedLotsOf.filter((l) => (l.receivedQty ?? l.qty) > 0).map((l) => l.qty)); // a lot that got 0 holds nothing
+  // the GOODS_RECEIVED bypass is for a line with no lot on a RECEIVED round (a RECEIVED lot that got 0 is capped)
+  if (hasReceivedGoods(ticket.id) && receivedLotsOf.length === 0) return qty;
   const declared = Number(item.qtyFromStock ?? 0);
   const stock = depositSettled(ticket) ? declared : 0;
   if (mine.length === 0) return Math.round(stock * 100) / 100;
@@ -15771,6 +15777,22 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       mockFinishLots([round], irIds, user);
       if (last) mockShipmentRounds.splice(mockShipmentRounds.indexOf(round), 1);
       return delay({ round: last ? null : mockShipmentDto(round) });
+    },
+    // Mirrors ShipmentRoundService#returnLotToWaiting: only a lot recorded as exactly 0 received on a RECEIVED round; a step that
+    // moves back writes no event; the round stays when it holds data of its own.
+    async returnLotToWaiting(id, lotId) {
+      const user = mockShipmentWrite();
+      const round = mockFindShipment(id);
+      const lot = round.lots.find((l) => l.lotId === Number(lotId));
+      if (!lot) fail('ไม่พบล็อตในรอบนี้', 404);
+      if (round.importStep !== 'RECEIVED' || lot.receivedQty == null || lot.receivedQty !== 0) fail('คืนเข้ารอจัดรอบได้เฉพาะล็อตที่บันทึกว่าถึงโกดัง 0 ในรอบที่ถึงโกดังแล้ว', 409);
+      const irIds = round.lots.map((l) => l.importRequestId);
+      const last = round.lots.length === 1;
+      round.lots = round.lots.filter((l) => l !== lot);
+      mockFinishLots([round], irIds, user, true);
+      let keep = true;
+      if (last) { try { mockRequireDeletable(round); mockShipmentRounds.splice(mockShipmentRounds.indexOf(round), 1); keep = false; } catch { keep = true; } }
+      return delay({ round: last || !keep ? null : mockShipmentDto(round) });
     },
     async moveLot(id, lotId, request) {
       const user = mockShipmentWrite();

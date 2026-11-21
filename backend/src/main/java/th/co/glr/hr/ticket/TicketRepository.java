@@ -2696,7 +2696,8 @@ public class TicketRepository {
 
     /** Per deal line an ISSUED IR line points at: the IR quantity and how much of it sits on RECEIVED rounds (lot
      * quantities as planned; a short arrival is NOT subtracted, so it can never stop a deal from being delivered). */
-    public record LineReceipt(BigDecimal irQty, BigDecimal onRounds) {}
+    public record LineReceipt(BigDecimal irQty, BigDecimal onRounds, long receivedLots) {}
+    // receivedLots: the line's lots on RECEIVED rounds, INCLUDING ones that received 0 (the GOODS_RECEIVED bypass is for lines with none)
 
     /** {@code dealHasLots}: any ISSUED IR of the deal has a lot at all; without it nothing is capped (pre-portal, stock-only
      * and lot-less deals behave as before). */
@@ -2712,6 +2713,10 @@ public class TicketRepository {
                                   WHERE l.import_request_item_id = iri.import_request_item_id
                                     AND r.import_step = 'RECEIVED'
                                     AND COALESCE(l.received_qty, l.qty) > 0)), 0) AS on_rounds, -- a lot that received 0 holds nothing to deliver
+                   COALESCE(SUM((SELECT COUNT(*) FROM sales.shipment_lot l3
+                                   JOIN sales.shipment_round r3 ON r3.shipment_round_id = l3.shipment_round_id
+                                  WHERE l3.import_request_item_id = iri.import_request_item_id
+                                    AND r3.import_step = 'RECEIVED')), 0) AS received_lots,
                    COALESCE(SUM((SELECT COUNT(*) FROM sales.shipment_lot l2
                                   WHERE l2.import_request_item_id = iri.import_request_item_id)), 0) AS lots
               FROM sales.import_request ir
@@ -2720,7 +2725,7 @@ public class TicketRepository {
              GROUP BY iri.ticket_item_id
             """, Map.of("t", ticketId), rs -> {
                 if (rs.getObject("item_id") != null) { // an unlinked line still counts toward dealHasLots
-                    byItem.put(rs.getLong("item_id"), new LineReceipt(rs.getBigDecimal("ir_qty"), rs.getBigDecimal("on_rounds")));
+                    byItem.put(rs.getLong("item_id"), new LineReceipt(rs.getBigDecimal("ir_qty"), rs.getBigDecimal("on_rounds"), rs.getLong("received_lots")));
                 }
                 if (rs.getLong("lots") > 0) {
                     anyLots[0] = true;

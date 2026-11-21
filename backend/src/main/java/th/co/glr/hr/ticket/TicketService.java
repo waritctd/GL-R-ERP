@@ -2710,7 +2710,8 @@ public class TicketService {
             return qty;
         }
         TicketRepository.LineReceipt r = receipts.byItem().get(item.id());
-        if (goodsEvent && (r == null || r.onRounds().signum() <= 0)) {
+        // the bypass is for a line with no lot on a RECEIVED round; a RECEIVED lot that got 0 caps it to its received share
+        if (goodsEvent && (r == null || r.receivedLots() == 0)) {
             return qty;
         }
         BigDecimal declared = nullToZero(item.qtyFromStock());

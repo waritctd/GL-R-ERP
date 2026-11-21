@@ -1,9 +1,10 @@
 import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { Link, useParams } from 'react-router-dom';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { Button } from '../../components/common/Button.jsx';
+import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { DataTable } from '../../components/common/DataTable.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
@@ -22,7 +23,7 @@ import { RoundFactsModal } from './RoundFactsModal.jsx';
 import {
   factLabel, formatQty, lotArrivalText, lotLabel, lotProduct, lotsEditable, lotWho, lotWhoSub, roundIrCount, roundTitle, STEP_DATE_KEY, stepPillText, stepTone,
 } from './shipmentRounds.js';
-import { useRoundUndo } from './useRoundUndo.jsx';
+import { invalidateAfterRoundChange, useRoundUndo } from './useRoundUndo.jsx';
 
 // Whole literal, one track per column (5): IR, who, product, quantity on this round, lot.
 const LOTS_GRID = 'grid-cols-[minmax(0,0.9fr)_minmax(0,1.5fr)_minmax(0,1.3fr)_minmax(0,0.8fr)_minmax(0,1.2fr)]';
@@ -67,6 +68,20 @@ export function ShipmentRoundPage({ user, showToast }) {
   const [editing, setEditing] = useState(false);
   const [planning, setPlanning] = useState(false);
   const [lotOpen, setLotOpen] = useState(null);
+  const [returning, setReturning] = useState(null); // a lot recorded as 0 received, asking to go back to รอจัดรอบ
+  const queryClient = useQueryClient();
+  const navigate = useNavigate();
+  const returnLot = useMutation({
+    mutationFn: (lot) => api.shipmentRounds.returnLotToWaiting(id, lot.lotId),
+    onSuccess: (data) => {
+      setReturning(null);
+      if (data?.round == null) queryClient.removeQueries({ queryKey: queryKeys.shipmentRound(id) });
+      invalidateAfterRoundChange(queryClient, { id: Number(id), lots: query.data?.lots });
+      showToast?.('success', 'คืนล็อตเข้ารอจัดรอบแล้ว');
+      if (data?.round == null) navigate('/fulfilment');
+    },
+    onError: (e) => { setReturning(null); showToast?.('error', e?.message ?? 'คืนล็อตไม่สำเร็จ'); },
+  });
   const undo = useRoundUndo({ showToast });
   const query = useQuery({
     queryKey: queryKeys.shipmentRound(id),
@@ -94,12 +109,16 @@ export function ShipmentRoundPage({ user, showToast }) {
 
   const f = round.facts ?? {};
   const mode = f.transportMode;
+  // nothing of this lot arrived: import/CEO may send its quantity back to รอจัดรอบ (the server insists on exactly 0 received)
+  const canReturn = (l) => editable && round.importStep === 'RECEIVED' && l.receivedQty != null && Number(l.receivedQty) === 0;
+  const returnButton = (l) => (canReturn(l)
+    ? <Button type="button" size="sm" variant="secondary" className="mt-1 whitespace-normal" onClick={() => setReturning(l)} data-testid={`lot-return-${l.lotId}`}>ไม่ได้รับของ · กลับไปรอจัดรอบ</Button> : null);
   const lotColumns = [
     { key: 'ir', header: 'ใบขอซื้อ', render: (l) => (l.ticketId == null ? <span className="flex flex-col items-start gap-1"><code>{l.docNumber}</code><DownloadIrButton importRequestId={l.importRequestId} docNumber={l.docNumber} factoryName={round.factoryName} showToast={showToast} /></span> : <Link to={`/import/deals/${l.ticketId}`} className="text-info underline"><code>{l.docNumber}</code></Link>) },
     { key: 'who', header: 'โครงการ / ลูกค้า', render: (l) => <span className="flex flex-col"><b className="text-sm">{lotWho(l)}</b><small className="text-text-muted">{lotWhoSub(l)}</small></span> },
     { key: 'product', header: 'สินค้า', render: (l) => lotProduct(l) },
     { key: 'qty', header: 'ไปรอบนี้', render: (l) => <span className="flex flex-col tabular-nums"><b>{formatQty(l.qty)} {l.unit ?? ''}</b><small className="text-text-muted">จาก {formatQty(l.itemQty)}</small></span> },
-    { key: 'lot', header: 'ล็อต', render: (l) => <span className="flex flex-col"><span>{lotLabel(l, round.importStep)}</span>{l.remainingQty > 0 ? <small className="text-text-muted">เหลือ {formatQty(l.remainingQty)} รอจัดรอบ</small> : null}{lotArrivalText(l, round.importStep) ? <small className="font-bold text-danger-dark" data-testid="lot-short">{lotArrivalText(l, round.importStep)}</small> : null}</span> },
+    { key: 'lot', header: 'ล็อต', render: (l) => <span className="flex flex-col"><span>{lotLabel(l, round.importStep)}</span>{l.remainingQty > 0 ? <small className="text-text-muted">เหลือ {formatQty(l.remainingQty)} รอจัดรอบ</small> : null}{lotArrivalText(l, round.importStep) ? <small className="font-bold text-danger-dark" data-testid="lot-short">{lotArrivalText(l, round.importStep)}</small> : null}{returnButton(l)}</span> },
     ...(canEditLots ? [{
       key: 'manage',
       header: '',
@@ -114,6 +133,7 @@ export function ShipmentRoundPage({ user, showToast }) {
         <small className="text-text-muted">{l.ticketId == null ? <code>{l.docNumber}</code> : <Link to={`/import/deals/${l.ticketId}`} className="text-info underline"><code>{l.docNumber}</code></Link>} · {lotProduct(l)}</small>
         <small className="text-text-muted">{lotLabel(l, round.importStep)}{l.remainingQty > 0 ? ` · เหลือ ${formatQty(l.remainingQty)} รอจัดรอบ` : ''}</small>
         {lotArrivalText(l, round.importStep) ? <small className="font-bold text-danger-dark" data-testid="lot-short">{lotArrivalText(l, round.importStep)}</small> : null}
+        {returnButton(l)}
       </span>
       <span className="flex shrink-0 flex-col items-end gap-1 text-right tabular-nums">
         <span><b>{formatQty(l.qty)} {l.unit ?? ''}</b><br /><small className="text-text-muted">จาก {formatQty(l.itemQty)}</small></span>
@@ -189,6 +209,15 @@ export function ShipmentRoundPage({ user, showToast }) {
         <PlanRoundSheet round={round} waiting={listQuery.data?.waiting ?? []} showToast={showToast} onClose={() => setPlanning(false)} onDone={() => setPlanning(false)} />
       ) : null}
       {lotOpen ? <LotModal round={round} lot={lotOpen} targets={targets} showToast={showToast} onClose={() => setLotOpen(null)} /> : null}
+      <ConfirmDialog
+        open={returning != null}
+        title="กลับไปรอจัดรอบ"
+        message={returning ? `${lotProduct(returning)} (${returning.docNumber}) บันทึกว่าไม่ได้รับของเลย จะคืนจำนวน ${formatQty(returning.qty)} ${returning.unit ?? ''} กลับไปรอจัดรอบ ถ้าโรงงานส่งภายหลังให้จัดเข้ารอบใหม่` : ''}
+        confirmLabel="กลับไปรอจัดรอบ"
+        busy={returnLot.isPending}
+        onConfirm={() => returnLot.mutate(returning)}
+        onCancel={() => setReturning(null)}
+      />
       {editing ? <RoundFactsModal round={round} showToast={showToast} onClose={() => setEditing(false)} /> : null}
       {undo.snackbar}
     </PageStack>

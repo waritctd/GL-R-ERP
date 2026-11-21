@@ -307,6 +307,7 @@ export const API_ROUTES = {
     lots: (id) => `/api/shipment-rounds/${id}/lots`,
     lot: (id, lotId) => `/api/shipment-rounds/${id}/lots/${lotId}`,
     moveLot: (id, lotId) => `/api/shipment-rounds/${id}/lots/${lotId}/move`,
+    returnLotToWaiting: (id, lotId) => `/api/shipment-rounds/${id}/lots/${lotId}/return-to-waiting`,
     documents: (id) => `/api/shipment-rounds/${id}/documents`,
     document: (id, docId) => `/api/shipment-rounds/${id}/documents/${docId}`,
     documentFile: (id, docId) => `/api/shipment-rounds/${id}/documents/${docId}/file`,

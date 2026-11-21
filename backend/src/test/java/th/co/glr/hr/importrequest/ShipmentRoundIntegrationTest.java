@@ -148,7 +148,7 @@ class ShipmentRoundIntegrationTest extends AbstractPostgresIntegrationTest {
         lot(r2, irA, 15);
 
         rounds.advance(r1, advanceTo(ImportRequestStep.CONTACTED, ImportRequestStep.IN_TRANSIT), importUser);
-        assertThat(irStep(irA)).isEqualTo(ImportRequestStep.CONTACTED); // fully placed: the slower round (still CONTACTED) governs
+        assertThat(irStep(irA)).isEqualTo(ImportRequestStep.IN_TRANSIT); // a CONTACTED round is only planned: the round past it governs
         rounds.advance(r2, advanceTo(ImportRequestStep.CONTACTED, ImportRequestStep.ORDERED), importUser);
         assertThat(irStep(irA)).isEqualTo(ImportRequestStep.ORDERED);
 
@@ -762,6 +762,80 @@ class ShipmentRoundIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(seen.irs().get(0).unit()).isNull();
         rounds.updateFacts(r, new UpdateShipmentRoundRequest(null, Map.of(), List.of(new LotReceipt(lotId, new BigDecimal("35"))), null), importUser);
         assertThat(bells(ticketA, "IMPORT_GOODS_RECEIVED_ALL")).isEqualTo(1); // not told twice
+    }
+
+    @Test
+    void aReceivedLotThatGotZeroStaysCappedAfterTheGoodsReceivedEvent_whileALineWithNoReceivedLotIsStillFree() {
+        // IR line 2 (deal line 2, 100) received 0 on a RECEIVED round; line 1 (40) received in full; the deal rolled up
+        jdbc.update("INSERT INTO sales.ticket_item (ticket_id, brand, model, size, qty, unit, sort_order, factory)"
+            + " VALUES (:t, 'Round Factory', 'Kaze', '30x30', 100, 'pcs', 1, 'Round Factory')", Map.of("t", ticketA));
+        long deal2 = jdbc.queryForObject("SELECT item_id FROM sales.ticket_item WHERE ticket_id = :t AND sort_order = 1", Map.of("t", ticketA), Long.class);
+        jdbc.update("INSERT INTO sales.import_request_item (import_request_id, ticket_item_id, seq, code, size, qty, unit, brand, model)"
+            + " VALUES (:ir, :ti, 2, 'LINE-2', '30x30', 100, 'pcs', 'Round Factory', 'Kaze')", Map.of("ir", irA, "ti", deal2));
+        long item2 = jdbc.queryForObject("SELECT import_request_item_id FROM sales.import_request_item WHERE import_request_id = :ir AND seq = 2", Map.of("ir", irA), Long.class);
+        long r = round("RECEIVED");
+        lot(r, irA, 40);
+        jdbc.update("UPDATE sales.shipment_lot SET qty = 100, received_qty = 0 WHERE import_request_item_id = :i", Map.of("i", item2));
+        ticketRepo.addEvent(ticketA, owner.id(), owner.name(), th.co.glr.hr.ticket.TicketEventKind.GOODS_RECEIVED, null, null, null);
+
+        assertRefused(() -> deliverItemFromWarehouse(ticketA, deal2, "1"), HttpStatus.CONFLICT); // nothing of line 2 arrived
+        deliverFromWarehouse(ticketA, "40"); // line 1 arrived in full
+    }
+
+    @Test
+    void planningTheRestOnANewRoundNeverRewindsAnOrderedIr_noBackwardEventAndItsDateStays() {
+        long r1 = rounds.createRound(new CreateShipmentRoundRequest(factoryId(), null, null,
+            List.of(new LotInput(irA, itemOf(irA), new BigDecimal("25")))), importUser).id();
+        rounds.advance(r1, new AdvanceShipmentRoundRequest(ImportRequestStep.ORDERED, LocalDate.now(java.time.ZoneId.of("Asia/Bangkok")),
+            ImportRequestStep.CONTACTED, null, null, null), importUser);
+        LocalDate orderedAt = jdbc.queryForObject("SELECT import_step_at FROM sales.import_request WHERE import_request_id = :i", Map.of("i", irA), LocalDate.class);
+        int events = stepEvents(ticketA);
+
+        rounds.createRound(new CreateShipmentRoundRequest(factoryId(), null, null,
+            List.of(new LotInput(irA, itemOf(irA), new BigDecimal("15")))), importUser); // the rest, planned on a CONTACTED round
+
+        assertThat(irStep(irA)).isEqualTo(ImportRequestStep.ORDERED);
+        assertThat(jdbc.queryForObject("SELECT import_step_at FROM sales.import_request WHERE import_request_id = :i", Map.of("i", irA), LocalDate.class)).isEqualTo(orderedAt);
+        assertThat(stepEvents(ticketA)).isEqualTo(events);
+    }
+
+    @Test
+    void aSaveOnAFullyDeliveredDealNeverRepeatsTheAllReceivedNotice() {
+        jdbc.update("UPDATE sales.ticket SET fulfillment_status = 'FULLY_DELIVERED' WHERE ticket_id = :t", Map.of("t", ticketA));
+        long r = round("ORDERED");
+        lot(r, irA, 40);
+        long lotId = rounds.get(r, importUser).lots().get(0).lotId();
+        rounds.advance(r, new AdvanceShipmentRoundRequest(ImportRequestStep.RECEIVED, null, ImportRequestStep.ORDERED, null,
+            new ShipmentFacts(null, null, null, null, null, null, null, null, null, null, null, null, null, null, false, "ไม่มีของถึง", null),
+            null, List.of(new LotReceipt(lotId, BigDecimal.ZERO))), importUser);
+        for (String qty : List.of("30", "35")) {
+            rounds.updateFacts(r, new UpdateShipmentRoundRequest(null, Map.of(), List.of(new LotReceipt(lotId, new BigDecimal(qty))), null), importUser);
+        }
+        assertThat(bells(ticketA, "IMPORT_GOODS_RECEIVED_ALL")).isZero(); // the rollup writes no event on this deal: nothing to announce
+    }
+
+    @Test
+    void aLotThatGotExactlyZeroGoesBackToWaiting_otherLotsStay_importAndCeoOnly_aMoveBackWritesNoEvent() {
+        long r = round("ORDERED");
+        lot(r, irA, 40);
+        lot(r, irB, 40);
+        var lots = rounds.get(r, importUser).lots();
+        long lotA = lots.stream().filter(l -> l.importRequestId() == irA).findFirst().orElseThrow().lotId();
+        long lotB = lots.stream().filter(l -> l.importRequestId() == irB).findFirst().orElseThrow().lotId();
+        rounds.advance(r, new AdvanceShipmentRoundRequest(ImportRequestStep.RECEIVED, null, ImportRequestStep.ORDERED, null,
+            new ShipmentFacts(null, null, null, null, null, null, null, null, null, null, null, null, null, null, false, "ขาดของ", null),
+            null, List.of(new LotReceipt(lotA, BigDecimal.ZERO), new LotReceipt(lotB, new BigDecimal("40")))), importUser);
+        int events = stepEvents(ticketA);
+
+        assertRefused(() -> rounds.returnLotToWaiting(r, lotA, accountUser), HttpStatus.FORBIDDEN);
+        assertRefused(() -> rounds.returnLotToWaiting(r, lotA, salesManager), HttpStatus.FORBIDDEN);
+        assertRefused(() -> rounds.returnLotToWaiting(r, lotB, importUser), HttpStatus.CONFLICT); // anything received stays
+
+        assertThat(rounds.returnLotToWaiting(r, lotA, ceoUser).lots()).extracting(l -> l.importRequestId()).containsExactly(irB);
+        assertThat(rounds.list(importUser).waiting()).extracting(w -> w.importRequestId()).contains(irA);
+        assertThat(irStep(irA)).isIn(ImportRequestStep.CONTACTED, ImportRequestStep.ORDERED); // never shipped: not "at customs"
+        assertThat(stepEvents(ticketA)).isEqualTo(events); // it moved back, silently
+        assertThat(bells(ticketA, "IMPORT_GOODS_RECEIVED_ALL")).isZero();
     }
 
     @Test

@@ -1242,7 +1242,11 @@ public class ImportRequestService {
     public void receiptCorrected(long ticketId, String docNumber, String factoryName, UserPrincipal actor) {
         if (allFactoriesReceived(ticketId) && !tickets.hasReceivedGoods(ticketId)) {
             ticketService.applyImportRequestRollup(ticketId, actor);
-            notifyAllGoodsReceived(ticketId, docNumber, factoryName);
+            // the rollup writes the GOODS_RECEIVED event only on a deal it applies to (not FULLY_DELIVERED or FROM_STOCK): tell
+            // the rep only when this call actually wrote it, so a later receipt save never repeats the notice
+            if (tickets.hasReceivedGoods(ticketId)) {
+                notifyAllGoodsReceived(ticketId, docNumber, factoryName);
+            }
         }
     }
 

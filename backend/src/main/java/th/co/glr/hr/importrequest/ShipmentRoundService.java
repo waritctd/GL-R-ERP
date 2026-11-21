@@ -339,6 +339,52 @@ public class ShipmentRoundService {
         return roundOrNullIfHidden(id, actor);
     }
 
+    /**
+     * A lot recorded as exactly 0 received (on a RECEIVED round) goes back to รอจัดรอบ: nothing of it arrived, so it holds no
+     * place. Any received quantity keeps the lot. Import/CEO only. Lock order: round, IRs, tickets. A round left with no lot
+     * stays when it holds data of its own (a received round normally does), else it goes; returns null then (hidden).
+     * The IRs re-derive silently: a step that moves back writes no event (the lot was never really there).
+     */
+    @Transactional
+    public ShipmentRoundDto returnLotToWaiting(long id, long lotId, UserPrincipal actor) {
+        requireWrite(actor);
+        ShipmentRoundDto round = lockRound(id);
+        List<IrLock> irs = rounds.lockImportRequestsOnRounds(List.of(id));
+        requireLot(id, lotId);
+        var lot = rounds.lotsByRound(List.of(id)).getOrDefault(id, List.of()).stream().filter(l -> l.lotId() == lotId).findFirst().orElseThrow();
+        if (!ImportRequestStep.RECEIVED.equals(round.importStep()) || lot.receivedQty() == null || lot.receivedQty().signum() != 0) {
+            throw new ApiException(HttpStatus.CONFLICT, "คืนเข้ารอจัดรอบได้เฉพาะล็อตที่บันทึกว่าถึงโกดัง 0 ในรอบที่ถึงโกดังแล้ว");
+        }
+        boolean last = rounds.lotCount(id) == 1;
+        rounds.deleteLot(lotId);
+        rounds.clearUndo(id);
+        rounds.clearIrUndo(irs.stream().map(IrLock::id).toList());
+        // An IR left with no lot never shipped: back to the last step that was true, not "at customs" (silent, as below).
+        String backTo = round.orderedOn() != null ? ImportRequestStep.ORDERED : ImportRequestStep.CONTACTED;
+        List<IrLock> stillPlaced = new ArrayList<>();
+        for (IrLock ir : irs) {
+            if (!rounds.roundIdsOf(ir.id()).isEmpty()) {
+                stillPlaced.add(ir);
+                continue;
+            }
+            LocalDate on = round.orderedOn() != null ? round.orderedOn() : ir.firstIssuedDate();
+            if (on != null && ir.firstIssuedDate() != null && on.isBefore(ir.firstIssuedDate())) {
+                on = ir.firstIssuedDate();
+            }
+            stored.setDerivedStep(ir.id(), backTo, on, actor.id(), actor.name(), null);
+        }
+        List<StepChange> changes = recomputeIrSteps(stillPlaced, actor, null).stream()
+            .filter(c -> ImportRequestStep.indexOf(c.to()) > ImportRequestStep.indexOf(c.from())).toList(); // a move back is silent
+        applyAftermath(onActiveDeals(changes, irs), actor, null);
+        if (last) {
+            if (!rounds.hasOwnData(id)) {
+                rounds.deleteRound(id);
+            }
+            return null;
+        }
+        return roundOrNullIfHidden(id, actor);
+    }
+
     /** The round for the closing read, or null when it is now held only by finished deals (hidden): the change stays
      * committed and the caller leaves the page, as for a deleted round. */
     private ShipmentRoundDto roundOrNullIfHidden(long id, UserPrincipal actor) {
@@ -569,6 +615,9 @@ public class ShipmentRoundService {
 
     /** Writes the derived step on every locked IR whose step changed; returns what changed (ticket then IR order). */
     private List<StepChange> recomputeIrSteps(List<IrLock> irs, UserPrincipal actor, String note) {
+        if (irs.isEmpty()) {
+            return new ArrayList<>();
+        }
         Map<Long, List<DerivedInput>> inputs = rounds.derivedInputs(irs.stream().map(IrLock::id).toList()).stream()
             .collect(Collectors.groupingBy(DerivedInput::importRequestId));
         List<StepChange> changes = new ArrayList<>();

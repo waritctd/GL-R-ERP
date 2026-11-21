@@ -29,26 +29,39 @@ public final class ShipmentStepDerivation {
     }
 
     /**
-     * An IR's step from its lots: the slowest placed round's step. RECEIVED needs every line's full quantity on RECEIVED
-     * rounds; while quantity is unplaced the step stops short of it (at most AWAITING_CUSTOMS), because the remainder is
-     * still on its way, not back at the start. With no lots at all the IR keeps its own step (never RECEIVED by this path).
-     * A fresh IR (CONTACTED) stays CONTACTED with its own stamp. The date, operator and note are the chosen round's.
+     * An IR's step from its lots: the slowest placed round's step, but a CONTACTED round is only planned, so while any lot
+     * sits on a round past CONTACTED the slowest is chosen among those (planning the rest on a new round never rewinds the
+     * IR; if every lot is on CONTACTED rounds the IR is CONTACTED). RECEIVED needs every line's full quantity on RECEIVED
+     * rounds: with unplaced quantity or a lot on a round not yet received it stops short (at most AWAITING_CUSTOMS). With no
+     * lots at all the IR keeps its own step (never RECEIVED by this path). A fresh IR (CONTACTED) stays CONTACTED with its
+     * own stamp. The date, operator and note are the chosen round's.
      */
     public static Derived derive(IrLock ir, List<DerivedInput> rows) {
         Map<Long, BigDecimal> placed = new LinkedHashMap<>();
         Map<Long, BigDecimal> wanted = new LinkedHashMap<>();
         DerivedInput slowest = null;
+        DerivedInput slowestPast = null; // among rounds past CONTACTED
+        boolean allReceived = true;
         for (DerivedInput r : rows) {
             wanted.put(r.itemId(), r.itemQty());
             placed.merge(r.itemId(), r.lotQty() == null ? BigDecimal.ZERO : r.lotQty(), BigDecimal::add);
-            if (r.roundStep() != null && (slowest == null || slower(r, slowest))) {
-                slowest = r;
+            if (r.roundStep() != null) {
+                allReceived &= ImportRequestStep.RECEIVED.equals(r.roundStep());
+                if (slowest == null || slower(r, slowest)) {
+                    slowest = r;
+                }
+                if (ImportRequestStep.indexOf(r.roundStep()) > ImportRequestStep.indexOf(ImportRequestStep.CONTACTED)
+                    && (slowestPast == null || slower(r, slowestPast))) {
+                    slowestPast = r;
+                }
             }
         }
         boolean unplaced = slowest == null || wanted.entrySet().stream()
             .anyMatch(e -> placed.get(e.getKey()).compareTo(e.getValue()) < 0);
-        String step = slowest == null ? ir.importStep() : slowest.roundStep();
-        if (unplaced && (step == null || ImportRequestStep.indexOf(step) > ImportRequestStep.indexOf(ImportRequestStep.AWAITING_CUSTOMS))) {
+        DerivedInput chosen = slowestPast != null ? slowestPast : slowest;
+        String step = chosen == null ? ir.importStep() : chosen.roundStep();
+        if ((unplaced || !allReceived) && (step == null
+            || ImportRequestStep.indexOf(step) > ImportRequestStep.indexOf(ImportRequestStep.AWAITING_CUSTOMS))) {
             step = step == null ? ImportRequestStep.CONTACTED : ImportRequestStep.AWAITING_CUSTOMS;
         }
         if (ImportRequestStep.CONTACTED.equals(step)) {
@@ -57,14 +70,14 @@ public final class ShipmentStepDerivation {
                 ? new Derived(step, at, ir.importStepById(), ir.importStepByName(), ir.importStepNote())
                 : new Derived(step, at, null, null, null);
         }
-        if (slowest == null) {
+        if (chosen == null) {
             return new Derived(step, ir.importStepAt(), ir.importStepById(), ir.importStepByName(), ir.importStepNote());
         }
-        LocalDate at = slowest.roundStepOn() != null ? slowest.roundStepOn() : ir.importStepAt();
+        LocalDate at = chosen.roundStepOn() != null ? chosen.roundStepOn() : ir.importStepAt();
         // the IR's own date is never before it was first issued (the round's dates stay as they are)
         if (at != null && ir.firstIssuedDate() != null && at.isBefore(ir.firstIssuedDate())) {
             at = ir.firstIssuedDate();
         }
-        return new Derived(step, at, slowest.stepById(), slowest.stepByName(), slowest.stepNote());
+        return new Derived(step, at, chosen.stepById(), chosen.stepByName(), chosen.stepNote());
     }
 }

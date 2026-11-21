@@ -17,7 +17,7 @@ vi.mock('../../api/index.js', async (importOriginal) => {
     api: {
       tickets: { list: vi.fn() },
       shipmentRounds: {
-        list: vi.fn(), get: vi.fn(), advance: vi.fn(), undo: vi.fn(), updateFacts: vi.fn(),
+        list: vi.fn(), get: vi.fn(), advance: vi.fn(), undo: vi.fn(), updateFacts: vi.fn(), returnLotToWaiting: vi.fn(),
         createRound: vi.fn(), addLots: vi.fn(), changeLot: vi.fn(), removeLot: vi.fn(), moveLot: vi.fn(),
         addDocument: vi.fn(), updateDocument: vi.fn(), deleteDocument: vi.fn(), attachFile: vi.fn(), removeFile: vi.fn(), downloadFile: vi.fn(),
       },
@@ -247,6 +247,20 @@ describe('รอบขนส่ง page', () => {
     vi.mocked(api.shipmentRounds.get).mockResolvedValue({ round: shortRound() });
     renderAt('/fulfilment/rounds/7');
     expect((await screen.findAllByTestId('lot-short'))[0].textContent).toBe('ถึงโกดัง 130 จาก 140 แผ่น · ขาด 10 แผ่น');
+  });
+
+  it('a lot recorded as 0 received can go back to รอจัดรอบ (confirm first); a lot with any quantity has no such button', async () => {
+    const zero = round({ importStep: 'RECEIVED', receivedOn: '2026-11-01', lots: [
+      lot({ lotId: 1, qty: 100, itemQty: 100, lotCount: 1, remainingQty: 0, receivedQty: 0 }),
+      lot({ lotId: 2, importRequestId: 12, docNumber: 'IR-TEST-002', qty: 100, itemQty: 100, lotCount: 1, remainingQty: 0, receivedQty: 100 })] });
+    vi.mocked(api.shipmentRounds.get).mockResolvedValue({ round: zero });
+    vi.mocked(api.shipmentRounds.returnLotToWaiting).mockResolvedValue({ round: zero });
+    renderAt('/fulfilment/rounds/7');
+    expect((await screen.findAllByTestId('lot-return-1'))[0].textContent).toBe('ไม่ได้รับของ · กลับไปรอจัดรอบ');
+    expect(screen.queryByTestId('lot-return-2')).toBeNull();
+    fireEvent.click(screen.getAllByTestId('lot-return-1')[0]);
+    fireEvent.click(await screen.findByRole('button', { name: 'กลับไปรอจัดรอบ' }));
+    await waitFor(() => expect(api.shipmentRounds.returnLotToWaiting).toHaveBeenCalledWith('7', 1));
   });
 
   it('a short arrival shows on the queue row too', async () => {

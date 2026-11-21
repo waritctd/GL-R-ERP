@@ -672,6 +672,8 @@ export const api = {
     changeLot: (id, lotId, payload) => apiRequest(API_ROUTES.shipmentRounds.lot(id, lotId), { method: 'PUT', body: payload }),
     removeLot: (id, lotId) => apiRequest(API_ROUTES.shipmentRounds.lot(id, lotId), { method: 'DELETE' }),
     moveLot: (id, lotId, payload) => apiRequest(API_ROUTES.shipmentRounds.moveLot(id, lotId), { method: 'POST', body: payload }),
+    // a lot recorded as exactly 0 received goes back to รอจัดรอบ (answers { round: null } when the round is left empty)
+    returnLotToWaiting: (id, lotId) => apiRequest(API_ROUTES.shipmentRounds.returnLotToWaiting(id, lotId), { method: 'POST' }),
     updateFacts: (id, payload) => apiRequest(API_ROUTES.shipmentRounds.facts(id), { method: 'PUT', body: payload }),
     advance: (id, payload) => apiRequest(API_ROUTES.shipmentRounds.advance(id), { method: 'POST', body: payload }),
     undo: (id, payload) => apiRequest(API_ROUTES.shipmentRounds.undo(id), { method: 'POST', body: payload }),

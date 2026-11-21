@@ -76,6 +76,14 @@ public class ShipmentRoundController {
         return body;
     }
 
+    /** A lot recorded as exactly 0 received goes back to รอจัดรอบ. "round" is null when the round is left with no lot. */
+    @PostMapping("/{id}/lots/{lotId}/return-to-waiting")
+    Map<String, Object> returnLotToWaiting(@PathVariable long id, @PathVariable long lotId, HttpSession session) {
+        Map<String, Object> body = new java.util.HashMap<>();
+        body.put("round", service.returnLotToWaiting(id, lotId, sessions.requireUser(session)));
+        return body;
+    }
+
     @PostMapping("/{id}/lots/{lotId}/move")
     Map<String, Object> moveLot(@PathVariable long id, @PathVariable long lotId,
                                 @RequestBody ShipmentRoundDtos.MoveLotRequest request, HttpSession session) {
