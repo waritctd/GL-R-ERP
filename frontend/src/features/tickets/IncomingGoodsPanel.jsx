@@ -145,7 +145,7 @@ export function IncomingGoodsPanel({ ticketId, canMessage = false, showToast }) 
             <section key={ir.importRequestId} className="flex flex-col gap-2" data-testid={`incoming-ir-${ir.importRequestId}`}>
               <div className="flex flex-wrap items-baseline justify-between gap-2">
                 <b className="text-sm">{ir.factoryName} · <code>{ir.docNumber}</code></b>
-                {ir.ordered != null ? <span className="text-xs text-text-muted">ถึงโกดัง {formatQty(ir.received)} / {formatQty(ir.ordered)} {ir.unit ?? ''}</span> : null}
+                {ir.ordered != null ? <span className="text-xs text-text-muted">ถึงโกดัง {formatQty(ir.received)} / {formatQty(ir.ordered)} {ir.unit ?? ''}{Number(ir.notDelivered) > 0 ? ` · ไม่ได้รับของ ${formatQty(ir.notDelivered)}` : ''}</span> : null}
               </div>
               {pct != null ? (
                 <div className="h-2 overflow-hidden rounded-full bg-surface-subtle" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100} aria-label={`ถึงโกดัง ${pct}%`}>
@@ -153,7 +153,9 @@ export function IncomingGoodsPanel({ ticketId, canMessage = false, showToast }) 
                 </div>
               ) : null}
               <DataTable columns={columns(ir)} rows={rows} getRowKey={(r) => r.lotId} gridClassName={INCOMING_GRID} mobileCard={(r) => renderCard(ir, r)}
-                emptyState={{ icon: 'check', title: 'ยังไม่มีล็อต' }} />
+                emptyState={Number(ir.notDelivered) > 0
+                  ? { icon: 'triangleAlert', title: ir.ordered == null ? 'ไม่ได้รับของ' : `ไม่ได้รับของ ${formatQty(ir.notDelivered)} ${ir.unit ?? ''}`.trim() }
+                  : { icon: 'check', title: 'ยังไม่มีล็อต' }} />
             </section>
           );
         })}

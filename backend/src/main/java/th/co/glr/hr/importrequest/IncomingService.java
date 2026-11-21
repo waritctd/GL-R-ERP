@@ -65,7 +65,7 @@ public class IncomingService {
                     TicketLot l = mine.get(i);
                     lotDtos.add(new IncomingLot(l.lotId(), product, unitOf(item), l.qty(),
                         "RECEIVED".equals(l.roundStep()) ? (l.receivedQty() != null ? l.receivedQty() : l.qty()) : null,
-                        i + 1, remaining.signum() > 0 ? mine.size() + 1 : mine.size(), l.roundStep(),
+                        i + 1, item.qty().compareTo(placed) > 0 ? mine.size() + 1 : mine.size(), l.roundStep(), // a marked rest still counts: this lot is not the whole line
                         l.etaOn() != null ? l.etaOn() : expectedTo, l.roundLabel(), l.transportMode(),
                         l.vessel(), l.voyage(), l.port(), l.etdActualOn(), l.etaOn(), l.arrivedOn(),
                         l.customsReleasedOn(), l.contactedOn(), l.orderedOn(), l.pickedUpOn(), l.inTransitOn(),
@@ -77,11 +77,13 @@ public class IncomingService {
             }
             // NULL and blank are the same "no unit": figures show when every line shares one value, the unit only if there is one
             boolean oneUnit = ir.items().stream().map(i -> String.valueOf(unitOf(i))).distinct().count() == 1;
-            BigDecimal ordered = oneUnit ? ir.items().stream().map(i -> wanted.getOrDefault(i.id(), i.qty())).reduce(BigDecimal.ZERO, BigDecimal::add) : null;
+            BigDecimal ordered = oneUnit ? ir.items().stream().map(ImportRequestItemDto::qty).reduce(BigDecimal.ZERO, BigDecimal::add) : null;
+            BigDecimal notDelivered = ir.items().stream().map(i -> i.qty().subtract(wanted.getOrDefault(i.id(), i.qty())))
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
             BigDecimal received = oneUnit ? lotDtos.stream().map(IncomingLot::receivedQty).filter(Objects::nonNull)
                 .reduce(BigDecimal.ZERO, BigDecimal::add) : null;
             out.add(new IncomingIr(ir.id(), ir.docNumber(), ir.factoryName(), ir.importStep(), expectedFrom,
-                expectedTo, oneUnit ? unitOf(ir.items().get(0)) : null, ordered, received, lotDtos, waiting));
+                expectedTo, oneUnit ? unitOf(ir.items().get(0)) : null, ordered, received, notDelivered, lotDtos, waiting));
         }
         boolean allOne = !out.isEmpty() && out.stream().allMatch(i -> i.ordered() != null)
             && out.stream().map(i -> String.valueOf(i.unit())).distinct().count() == 1;

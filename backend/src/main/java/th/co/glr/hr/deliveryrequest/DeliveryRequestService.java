@@ -1004,12 +1004,14 @@ public class DeliveryRequestService {
      * portal (before ORDER_RECEIVED) that is not already pre-portal. {@code send} and the order block both read it. */
     private boolean asksPreDeposit(TicketSummaryDto s) {
         return DealLifecycle.ACTIVE.equals(s.lifecycle())
-            && DealStage.indexOf(s.salesStage()) < DealStage.indexOf(DealStage.ORDER_RECEIVED) && !tickets.isPrePortal(s.id());
+            && DealStage.indexOf(s.salesStage()) < DealStage.indexOf(DealStage.ORDER_RECEIVED) && !tickets.isPrePortal(s.id())
+            && !rounds.hasAcceptedPricingQuotation(s.id());
     }
 
     private boolean unconfirmed(TicketSummaryDto s) {
         boolean old = tickets.isPrePortal(s.id()) || DealStage.indexOf(s.salesStage()) < DealStage.indexOf(DealStage.ORDER_RECEIVED);
-        return old && DealLifecycle.ACTIVE.equals(s.lifecycle()) && !tickets.hasPromotionFromQuotationEvent(s.id());
+        return old && DealLifecycle.ACTIVE.equals(s.lifecycle()) && !tickets.hasPromotionFromQuotationEvent(s.id())
+            && !rounds.hasAcceptedPricingQuotation(s.id());
     }
 
     private String displayCode(TicketSummaryDto s) {

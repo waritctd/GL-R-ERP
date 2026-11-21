@@ -382,15 +382,17 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
   // receivedQty is set only on a RECEIVED round, so 0 of 140 that arrived differs from 140 still on the way.
   const hasArrivedLot = (ir) => (ir?.lots ?? []).some((l) => l.receivedQty != null);
   const partialArrival = (ir) => {
-    if (!hasArrivedLot(ir)) return null;
+    const marked = Number(ir?.notDelivered || 0);
+    if (!hasArrivedLot(ir) && !(marked > 0)) return null;
     // ir.ordered is null only when the lines have two genuinely different units (NULL and blank count as one: no unit)
     if (ir.ordered == null) {
-      return ir.lots.some((l) => l.receivedQty != null && Number(l.receivedQty) < Number(l.qty)) ? { mixed: true } : null;
+      return marked > 0 || ir.lots.some((l) => l.receivedQty != null && Number(l.receivedQty) < Number(l.qty)) ? { mixed: true } : null;
     }
     if (Number(ir.received) >= Number(ir.ordered)) return null;
     // ขาด only when the IR is complete on received rounds; a partial whose rest is still coming is not short yet
     const missing = ir.importStep === 'RECEIVED' ? Number(ir.ordered) - Number(ir.received) : null;
-    return { received: formatQty(ir.received), ordered: formatQty(ir.ordered), unit: ir.unit ?? '', missing: missing == null ? null : formatQty(missing) };
+    return { received: formatQty(ir.received), ordered: formatQty(ir.ordered), unit: ir.unit ?? '', missing: missing == null ? null : formatQty(missing),
+      notDelivered: marked > 0 ? formatQty(marked) : null, nothing: Number(ir.received) === 0 };
   };
   const liveStoredIrRows = storedIrRows
     .filter((r) => r.status !== 'SUPERSEDED')
@@ -845,7 +847,7 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
               arrivedCount={arrivedIrCount}
               issuedCount={issuedIrRows.length}
               deliveryPct={totalOrdered > 0 ? deliveryProgress : null}
-              goodsArrival={incomingQuery.data?.totalOrdered != null && (incomingQuery.data.irs ?? []).some(hasArrivedLot)
+              goodsArrival={incomingQuery.data?.totalOrdered != null && (incomingQuery.data.irs ?? []).some((ir) => hasArrivedLot(ir) || Number(ir.notDelivered) > 0)
                 && Number(incomingQuery.data.totalReceived) < Number(incomingQuery.data.totalOrdered)
                 ? { received: formatQty(incomingQuery.data.totalReceived), ordered: formatQty(incomingQuery.data.totalOrdered), unit: incomingQuery.data.totalUnit ?? '' } : null}
             />

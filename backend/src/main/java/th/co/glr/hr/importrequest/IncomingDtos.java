@@ -19,10 +19,13 @@ public final class IncomingDtos {
     /** Quantity of a line that is on no round yet (รอจัดรอบ). */
     public record IncomingWaiting(String product, String unit, BigDecimal remainingQty) {}
 
-    /** {@code unit}/{@code ordered}/{@code received}: only when every line of the IR shares one unit, else null. */
+    /** {@code unit}/{@code ordered}/{@code received}: only when every line of the IR shares one unit, else null.
+     * {@code ordered} is the IR as ordered; {@code notDelivered} is the part marked ไม่ได้รับของ with no lot (with mixed units
+     * only its sign means anything). */
     public record IncomingIr(long importRequestId, String docNumber, String factoryName, String importStep,
                              LocalDate expectedFrom, LocalDate expectedTo, String unit, BigDecimal ordered,
-                             BigDecimal received, List<IncomingLot> lots, List<IncomingWaiting> waiting) {}
+                             BigDecimal received, BigDecimal notDelivered, List<IncomingLot> lots,
+                             List<IncomingWaiting> waiting) {}
 
     /** {@code wantedBy}: the customer's wanted date (the deal's required-by note). Totals only when all units match. */
     public record IncomingResponse(String wantedBy, String totalUnit, BigDecimal totalOrdered, BigDecimal totalReceived,

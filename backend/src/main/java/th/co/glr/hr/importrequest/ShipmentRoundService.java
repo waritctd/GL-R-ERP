@@ -132,13 +132,7 @@ public class ShipmentRoundService {
         List<IrLock> irs = endUndoWindow(id);
         applyReceipts(id, receipts);
         if (!receipts.isEmpty()) {
-            // a receipt raised above 0 may be the one that completes a deal: the normal rollup and notice run once (ACTIVE deals)
-            java.util.Set<Long> done = new java.util.HashSet<>();
-            irs.stream().filter(i -> i.ticketId() != null).sorted(Comparator.comparingLong(IrLock::ticketId)).forEach(i -> {
-                if (done.add(i.ticketId()) && th.co.glr.hr.ticket.DealLifecycle.ACTIVE.equals(tickets.lockTicketForUpdate(i.ticketId()))) {
-                    irService.receiptCorrected(i.ticketId(), i.docNumber(), i.factoryName(), actor);
-                }
-            });
+            rollUpAfterReceiptChange(irs, actor); // a receipt raised above 0 may be the one that completes a deal
         }
         if (facts != null) {
             rounds.applyFacts(id, facts, true);
@@ -377,11 +371,22 @@ public class ShipmentRoundService {
         List<StepChange> changes = recomputeIrSteps(stillPlaced, actor, null).stream()
             .filter(c -> ImportRequestStep.indexOf(c.to()) > ImportRequestStep.indexOf(c.from())).toList(); // a move back is silent
         applyAftermath(onActiveDeals(changes, irs), actor, null);
+        rollUpAfterReceiptChange(irs, actor); // the 0 this lot held was the last thing the deal was waiting on
         if (last && !rounds.hasOwnData(id)) {
             rounds.deleteRound(id);
             return null;
         }
         return roundOrNullIfHidden(id, actor);
+    }
+
+    /** The normal rollup and notice, once per ACTIVE deal, when a receipt change may have completed it with no step change. */
+    private void rollUpAfterReceiptChange(List<IrLock> irs, UserPrincipal actor) {
+        java.util.Set<Long> done = new java.util.HashSet<>();
+        irs.stream().filter(i -> i.ticketId() != null).sorted(Comparator.comparingLong(IrLock::ticketId)).forEach(i -> {
+            if (done.add(i.ticketId()) && th.co.glr.hr.ticket.DealLifecycle.ACTIVE.equals(tickets.lockTicketForUpdate(i.ticketId()))) {
+                irService.receiptCorrected(i.ticketId(), i.docNumber(), i.factoryName(), actor);
+            }
+        });
     }
 
     /** Locks the rounds, then the import requests, of a deal's ISSUED IRs (the order every writer here uses: rounds, IRs, tickets);

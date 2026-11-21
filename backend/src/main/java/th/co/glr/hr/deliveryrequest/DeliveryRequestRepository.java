@@ -320,14 +320,26 @@ public class DeliveryRequestRepository {
             });
     }
 
-    /** The order's quotations from APPROVED on (approved, issued, sent or accepted), oldest first. */
+    /** A quotation an order can be delivered against: a direct one from APPROVED on, or the pricing-request one the customer accepted. */
+    private static final String ORDER_QUOTATION = "((origin = 'DEAL_DIRECT' AND doc_status IN ('APPROVED','ISSUED','SENT','ACCEPTED'))"
+        + " OR (origin = 'PRICING_REQUEST' AND doc_status = 'ACCEPTED'))";
+
+    /** The order came through a pricing request and the customer accepted it: nothing is left to confirm. */
+    public boolean hasAcceptedPricingQuotation(long ticketId) {
+        return Boolean.TRUE.equals(jdbc.queryForObject("""
+            SELECT EXISTS (SELECT 1 FROM sales.quotation
+                            WHERE ticket_id = :t AND origin = 'PRICING_REQUEST' AND doc_status = 'ACCEPTED')
+            """, Map.of("t", ticketId), Boolean.class));
+    }
+
+    /** The order's quotations ({@link #ORDER_QUOTATION}), oldest first. */
     public List<ApprovedQuotationDto> approvedQuotations(long ticketId) {
         return jdbc.query("""
             SELECT quotation_id, number, doc_status, total_amount, document_language, deposit_percent
               FROM sales.quotation
-             WHERE ticket_id = :t AND origin = 'DEAL_DIRECT' AND doc_status IN ('APPROVED','ISSUED','SENT','ACCEPTED')
+             WHERE ticket_id = :t AND %s
              ORDER BY quotation_id
-            """, Map.of("t", ticketId), (rs, n) -> {
+            """.formatted(ORDER_QUOTATION), Map.of("t", ticketId), (rs, n) -> {
                 BigDecimal sub = rs.getBigDecimal("total_amount") == null ? BigDecimal.ZERO : rs.getBigDecimal("total_amount");
                 BigDecimal total = WastageCalculator.grandTotal(sub, WastageCalculator.vat(sub, rs.getString("document_language")));
                 String status = rs.getString("doc_status");
@@ -343,8 +355,7 @@ public class DeliveryRequestRepository {
     /** The document number when {@code id} is an issued or approved document of this deal of that kind, else empty. */
     public java.util.Optional<String> systemDocNumber(long ticketId, String kind, long id) {
         String sql = switch (kind) {
-            case "QUOTATION" -> "SELECT number FROM sales.quotation WHERE quotation_id = :id AND ticket_id = :t"
-                + " AND origin = 'DEAL_DIRECT' AND doc_status IN ('APPROVED','ISSUED','SENT','ACCEPTED')";
+            case "QUOTATION" -> "SELECT number FROM sales.quotation WHERE quotation_id = :id AND ticket_id = :t AND " + ORDER_QUOTATION;
             case "DEPOSIT_NOTICE" -> "SELECT doc_number FROM sales.deposit_notice WHERE deposit_notice_id = :id"
                 + " AND ticket_id = :t AND status = 'ISSUED'";
             case "REMAINING_INVOICE" -> "SELECT doc_number FROM sales.remaining_invoice WHERE id = :id"
@@ -364,8 +375,7 @@ public class DeliveryRequestRepository {
     public java.util.Set<String> candidateDocKeys(long ticketId) {
         java.util.Set<String> keys = new java.util.LinkedHashSet<>();
         String[][] sources = {
-            {"QUOTATION", "SELECT quotation_id FROM sales.quotation WHERE ticket_id = :t AND origin = 'DEAL_DIRECT'"
-                + " AND doc_status IN ('APPROVED','ISSUED','SENT','ACCEPTED')"},
+            {"QUOTATION", "SELECT quotation_id FROM sales.quotation WHERE ticket_id = :t AND " + ORDER_QUOTATION},
             {"DEPOSIT_NOTICE", "SELECT deposit_notice_id FROM sales.deposit_notice WHERE ticket_id = :t AND status = 'ISSUED'"},
             {"REMAINING_INVOICE", "SELECT id FROM sales.remaining_invoice WHERE ticket_id = :t AND status = 'ISSUED'"},
             {"IMPORT_REQUEST", "SELECT import_request_id FROM sales.import_request WHERE ticket_id = :t AND status = 'ISSUED'"},
