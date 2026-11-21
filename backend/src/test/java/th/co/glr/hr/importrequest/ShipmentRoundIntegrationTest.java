@@ -645,6 +645,21 @@ class ShipmentRoundIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     @Test
+    void aRevisionAfterDepartureCannotDropALineThatShipped() {
+        jdbc.update("INSERT INTO sales.import_request_item (import_request_id, seq, code, size, qty, unit, brand, model)"
+            + " VALUES (:ir, 2, 'LINE-B', '10x10', 20, 'pcs', 'Round Factory', 'Kaze')", Map.of("ir", irA));
+        long left = round("IN_TRANSIT");
+        lot(left, irA, 40); // lot() puts every line at 40: put B back to its own 20
+        jdbc.update("UPDATE sales.shipment_lot SET qty = 20 WHERE import_request_item_id IN"
+            + " (SELECT import_request_item_id FROM sales.import_request_item WHERE import_request_id = :ir AND seq = 2)", Map.of("ir", irA));
+        long revision = irService.revise(irA, owner).id();
+        jdbc.update("DELETE FROM sales.import_request_item WHERE import_request_id = :id AND seq = 2", Map.of("id", revision));
+
+        assertRefused(() -> irService.issue(revision, null, owner), HttpStatus.CONFLICT);
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM sales.shipment_lot WHERE import_request_id = :ir", Map.of("ir", irA), Integer.class)).isEqualTo(2);
+    }
+
+    @Test
     void aDealResumedAfterItsLastLotArrivedWhilePausedCatchesUpOnce() {
         jdbc.update("UPDATE sales.ticket SET lifecycle = 'ON_HOLD' WHERE ticket_id = :t", Map.of("t", ticketA));
         long r = round("ORDERED");

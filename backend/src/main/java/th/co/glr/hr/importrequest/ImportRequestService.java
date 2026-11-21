@@ -15,6 +15,7 @@ import java.util.OptionalLong;
 import java.util.Set;
 import java.util.stream.Collectors;
 import org.springframework.http.HttpStatus;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import th.co.glr.hr.auth.UserPrincipal;
@@ -78,6 +79,8 @@ import th.co.glr.hr.ticket.TicketSummaryDto;
  *   <li>{@code sales_manager}: read only.
  * </ul>
  */
+// Eager even under spring.main.lazy-initialization=true: its constructor wires TicketService's resume/reopen reconcile hook.
+@Lazy(false)
 @Service
 public class ImportRequestService {
 
@@ -1398,6 +1401,9 @@ public class ImportRequestService {
             // A round that has left: what was shipped and what arrived stay as they were; an increase stays unplanned
             // (waiting), a decrease below the lot is refused. Before departure the lot simply takes the revised quantity.
             boolean left = ImportRequestStep.indexOf(rounds.stepOfRound(roundIds.get(0))) >= ImportRequestStep.indexOf(ImportRequestStep.IN_TRANSIT);
+            if (left) {
+                lots.forEach(l -> matchLine(l, revision.items())); // a line dropped from the draft would lose its shipped lot: 409
+            }
             for (var it : revision.items()) {
                 var old = oldLotFor(lots, it);
                 if (left) {
