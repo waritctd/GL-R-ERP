@@ -4,20 +4,19 @@ This repository is a GL&R **HR + Sales/CRM portal** growing into an ERP platform
 complete ERP yet.
 
 ## Start here
-- [`../CLAUDE.md`](../CLAUDE.md) — **read first, every time.** Product identity, the hard guardrails,
-  scope rules, the mock-API contract, the permission-evidence requirement, and the styling direction.
-- [`../AGENTS.md`](../AGENTS.md) — the short agent-facing summary of the same rules.
-- [`../PRODUCT.md`](../PRODUCT.md) — what the product is and who the roles are.
-- [`../DESIGN.md`](../DESIGN.md) — design north star and system; with `frontend/src/index.css` it is
-  the source of truth for tokens.
+- [`../AGENTS.md`](../AGENTS.md) — **read first, every time.** Stack, commands, the rules that apply
+  everywhere, and the branch and release workflow. `CLAUDE.md` only imports it.
+- [`../backend/AGENTS.md`](../backend/AGENTS.md) and [`../frontend/AGENTS.md`](../frontend/AGENTS.md) —
+  conventions and gotchas for each side, including the mock-API contract.
+- `frontend/src/index.css` — the source of truth for design tokens.
 
 ## Where the per-branch handoffs went
 `docs/agent-handoffs/` was retired in 2026-07 (along with `docs/ui-repair/` and `docs/ux-ui-audit/`).
 The corpus had grown to ~260 files nobody read end-to-end, and a stale plan is worse than none.
 
-**The PR body is the handoff now** — see CLAUDE.md's "Before you finish an implementation task" for
-the five fields every PR body must carry (files changed, commands run, test/build results, authz
-evidence, known risks). The code's own comments carry the reasoning.
+**The commit message and the handoff note carry it now** — see the Workflow section of
+[`../AGENTS.md`](../AGENTS.md) for what a session hands over. The code's own comments carry the
+reasoning.
 
 Nothing is lost; the files are in git history:
 
@@ -33,6 +32,7 @@ file.
 - [`sales-workflow.md`](sales-workflow.md) — canonical current-state sales/deal workflow.
 - [`role-scoped-views.md`](role-scoped-views.md) — spec for role-scoped nav + per-role Overview
   landings (updated as each role ships).
+- [`versioning.md`](versioning.md) — how a release gets its version number, and where it is set.
 - [`decisions/`](decisions/) — architecture decision records.
   - [`decisions/quotation-deposit-invoice-model.md`](decisions/quotation-deposit-invoice-model.md) —
     Sales document model: a dedicated table per document type.

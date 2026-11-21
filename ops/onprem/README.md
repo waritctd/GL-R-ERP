@@ -47,8 +47,10 @@ as long as the release does not remove or rename an endpoint the old one uses.
 
 ### 1. Pick a tag
 
-`vYYYY-MM-DD`, for example `v2026-11-20`. A second release on the same day adds a letter:
-`v2026-11-20b`. Never reuse or overwrite a tag: it is the record of what runs.
+The release's version number with a `v` in front, for example `v2.3.0`. Which number goes up is in
+[`docs/versioning.md`](../../docs/versioning.md); the same number is the image tag, the git tag on
+`main` and the number in the release mail. Releases before 20 Nov 2026 used date tags such as
+`v2026-11-12d`. Never reuse or overwrite a tag: it is the record of what runs.
 
 ### 2. Build and push the image (on the Mac with the fonts)
 
@@ -57,7 +59,7 @@ Check out the exact commit you are releasing (the head of the release PR into `m
 ```bash
 docker login ghcr.io -u <github-user>          # once; a classic PAT with write:packages
 export GLR_IMAGE_REPO=ghcr.io/waritctd/glr-hr-backend
-./scripts/build-push-backend-image.sh v2026-11-20
+./scripts/build-push-backend-image.sh v2.3.0
 ```
 
 The script builds for `linux/amd64` (the server's CPU, also on Apple-silicon Macs), fails if a font
@@ -65,7 +67,7 @@ face is missing or substituted, stamps the image with the git commit, and pushes
 stamp matches what you meant to release:
 
 ```bash
-docker image inspect ghcr.io/waritctd/glr-hr-backend:v2026-11-20 \
+docker image inspect ghcr.io/waritctd/glr-hr-backend:v2.3.0 \
   --format '{{.Architecture}} {{index .Config.Labels "org.opencontainers.image.revision"}}'
 ```
 
@@ -76,12 +78,12 @@ Either way works; the second is what we used on cutover night.
 - **Pull on the server** (needs a one-time `docker login ghcr.io` on the VM with a PAT that has
   `read:packages`):
   ```bash
-  docker pull ghcr.io/waritctd/glr-hr-backend:v2026-11-20
+  docker pull ghcr.io/waritctd/glr-hr-backend:v2.3.0
   ```
 - **Copy from the Mac over SSH** (no registry login on the server; about 1.8 GB, a few minutes over
   Tailscale):
   ```bash
-  docker save ghcr.io/waritctd/glr-hr-backend:v2026-11-20 | gzip -1 \
+  docker save ghcr.io/waritctd/glr-hr-backend:v2.3.0 | gzip -1 \
     | ssh glradmin@glr-erp-prod 'gunzip | docker load'
   ```
   On an Apple-silicon Mac, an image pulled from ghcr needs `docker pull --platform linux/amd64 …`
@@ -91,7 +93,7 @@ Then check it on the server with the same `docker image inspect` line as in step
 the right commit.
 
 If the Mac's push to ghcr is refused (`denied`), copy the image over SSH as above and push it from
-the server, whose login can write: `docker push ghcr.io/waritctd/glr-hr-backend:v2026-11-20`. An
+the server, whose login can write: `docker push ghcr.io/waritctd/glr-hr-backend:v2.3.0`. An
 image that is only on the server cannot be rolled back to from the registry.
 
 ### 4. Deploy the backend (on the server)
@@ -102,7 +104,7 @@ the backend's memory.
 ```bash
 cd ~/glr/ops/onprem
 ./backup.sh                                                   # fresh backup first, always
-sed -i 's|^GLR_IMAGE_TAG=.*|GLR_IMAGE_TAG=v2026-11-20|' .env
+sed -i 's|^GLR_IMAGE_TAG=.*|GLR_IMAGE_TAG=v2.3.0|' .env
 docker compose up -d backend
 docker compose logs -f backend                                # wait for "Started HrBackendApplication", then Ctrl+C
 ```

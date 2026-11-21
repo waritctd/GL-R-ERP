@@ -1,8 +1,8 @@
 #!/bin/bash
-# Ensures the designer-skills (IA / frontend-design / etc.) and the
-# frontend-design@claude-plugins-official plugin from CLAUDE.md's
-# "Frontend design skills" rule are present in every fresh session,
-# not just the container they were first installed in.
+# Ensures the skills committed under .agents/skills (listed in
+# frontend/AGENTS.md) and the frontend-design@claude-plugins-official
+# plugin are present in every fresh remote session, not just the
+# container they were first installed in.
 set -euo pipefail
 
 if [ "${CLAUDE_CODE_REMOTE:-}" != "true" ]; then

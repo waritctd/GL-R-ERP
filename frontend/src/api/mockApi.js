@@ -11,7 +11,8 @@ import {
 // Mock backend for VITE_USE_MOCKS=true — the default verification surface for the
 // `frontend-mock` launch config that devs, QA and coding agents drive.
 //
-// THE CONTRACT (see CLAUDE.md "Mock API contract"):
+// THE CONTRACT (see frontend/AGENTS.md; comments further down that cite CLAUDE.md
+// "Mock API contract" mean this block):
 //   - Endpoints and DTO shapes ARE meant to be a faithful stand-in for the Spring
 //     backend. `contract.test.js` enforces the method surface against hrApi.js.
 //   - Authorization is NOT authoritative. The gates below approximate the Java
