@@ -63,6 +63,8 @@ abstract class FinanceDealTestBase extends AbstractPostgresIntegrationTest {
     UserPrincipal hrUser;
     UserPrincipal employeeUser;
     UserPrincipal accountUser;
+    /** read-all grant holder (role qc-like 'employee'): reads finance, never writes it. */
+    UserPrincipal readAllHolder;
 
     @BeforeEach
     void wire() {
@@ -91,6 +93,9 @@ abstract class FinanceDealTestBase extends AbstractPostgresIntegrationTest {
         hrUser = principal(createEmployee(employees, "ฝ่ายบุคคล ทดสอบ", "fin-hr@glr.co.th"), "hr");
         employeeUser = principal(createEmployee(employees, "พนักงาน ทดสอบ", "fin-emp@glr.co.th"), "employee");
         accountUser = principal(createEmployee(employees, "ฝ่ายบัญชี ทดสอบ", "fin-account@glr.co.th"), "account");
+        readAllHolder = principal(createEmployee(employees, "ผู้ดูทั้งหมด ทดสอบ", "fin-reader@glr.co.th"), "employee");
+        jdbc.update("UPDATE hr.employee SET can_read_all_sales = TRUE WHERE employee_id = :id",
+            new MapSqlParameterSource("id", readAllHolder.id()));
     }
 
     // ── JSON helpers ────────────────────────────────────────────────────────────────────────

@@ -6,6 +6,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import th.co.glr.hr.attachment.AttachmentDto;
 import th.co.glr.hr.attachment.AttachmentRepository;
+import th.co.glr.hr.auth.OversightReader;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.deposit.DepositNoticeRepository;
@@ -52,8 +53,21 @@ public class FinanceDealService {
     // ── read ────────────────────────────────────────────────────────────────────────────────
 
     public FinanceDealDto get(long ticketId, UserPrincipal actor) {
+        if (isReadOnlyViewer(actor)) {
+            // D6/D7: sales_manager by role, flag holders by grant. Read gate only: no money action uses it, the view
+            // offers no actions and no commission-invoice data (D11).
+            tickets.findSummaryById(ticketId)
+                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบงานนี้"));
+            return build(ticketId, actor, false, true);
+        }
         boolean deadDealOnly = requireFinanceAccess(ticketId, actor, true);
         return build(ticketId, actor, deadDealOnly);
+    }
+
+    /** Oversight readers (sales_manager role or read-all holder) that are NOT finance roles themselves. */
+    private boolean isReadOnlyViewer(UserPrincipal actor) {
+        return actor != null && !ALLOWED_ROLES.contains(actor.role())
+            && OversightReader.is(actor, tickets::holdsReadAllSalesGrant);
     }
 
     // ── money actions (each delegates, then returns the finance view) ───────────────────────
@@ -150,6 +164,10 @@ public class FinanceDealService {
      *                     stay strict, so no quotation link is offered (it would only 403)
      */
     private FinanceDealDto build(long ticketId, UserPrincipal actor, boolean deadDealOnly) {
+        return build(ticketId, actor, deadDealOnly, false);
+    }
+
+    private FinanceDealDto build(long ticketId, UserPrincipal actor, boolean deadDealOnly, boolean readOnlyViewer) {
         TicketSummaryDto s = tickets.findSummaryById(ticketId)
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบงานนี้"));
 
@@ -174,7 +192,7 @@ public class FinanceDealService {
             s.paymentDueDate(), s.paymentDueBasis(), s.paymentDueCreditDays(), s.overdue(),
             s.closeConfirmedAt(), s.invoiceOnFile(), s.commissionRecorded(), FinanceDealDto.INCLUDING_VAT, payments);
 
-        List<AttachmentDto> files = attachments.findByTicketId(ticketId);
+        List<AttachmentDto> files = attachments.findByTicketId(ticketId, true, !readOnlyViewer || "sales_manager".equals(actor.role()));
         var documents = new FinanceDealDto.Documents(
             quotation.map(q -> new FinanceDealDto.QuotationDoc(q.id(), q.number(), q.status(), q.totalAmount(),
                 FinanceDealDto.EXCLUDING_VAT, q.currency(), q.issuedAt(), q.acceptedAt(),
@@ -196,7 +214,8 @@ public class FinanceDealService {
 
         return new FinanceDealDto(s.id(), s.code(), s.title(), s.salesStage(), s.lifecycle(), s.status(),
             currentMilestone, track, s.customerName(), s.customerId(), s.projectName(), s.contactName(),
-            items, money, documents, finance.findComments(ticketId), availableActions(ticketId, actor, s), finance.findCommissionInvoice(ticketId).orElse(null));
+            items, money, documents, finance.findComments(ticketId), readOnlyViewer ? List.of() : availableActions(ticketId, actor, s),
+            readOnlyViewer ? null : finance.findCommissionInvoice(ticketId).orElse(null));
     }
 
     /** The money actions this caller can take right now: the ticket action list (TicketService. financeActions --

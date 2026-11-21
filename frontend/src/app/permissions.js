@@ -1,6 +1,9 @@
 import { ROLE_PERMISSIONS } from '../api/routes.js';
 import { SALES_ENABLED, SELF_SERVICE_ONLY } from './features.js';
 import { canCreateDealQuotationStandalone } from '../features/quotations/quotationMeta.js';
+import { isOversightReader } from '../features/tickets/dealOwnership.js';
+
+export { isOversightReader };
 
 export function hasPermission(role, key) {
   return ROLE_PERMISSIONS[key]?.includes(role) ?? false;
@@ -72,20 +75,20 @@ const PATH_GUARDS = [
   // a stricter guard would 403 an HR user following an old notification link.
   { test: (p) => p === '/my-requests' || p === '/profile', can: (u) => !!u.employeeId },
   // List = pipeline browser; a single ticket's DETAIL page is canViewWholeDeal.
-  { test: (p) => p === '/tickets', can: (u) => hasPermission(u.role, 'canViewDealPipeline') },
+  { test: (p) => p === '/tickets', can: (u) => hasPermission(u.role, 'canViewDealPipeline') || isOversightReader(u) },
   // Whole-deal page (and its sub-paths, e.g. /tickets/:id/deposit). Import is REFUSED here — the backend 403s it
   // the whole-deal read and deposit notices — and gets its own per-deal page below.
   // The warehouse and the invoice issuer get exactly /tickets/:id (RoundWorkView: one round and its files), no sub-path.
-  { test: (p) => p.startsWith('/tickets/'), can: (u, p) => hasPermission(u.role, 'canViewWholeDeal') || isRoundWorkPath(p, u) },
+  { test: (p) => p.startsWith('/tickets/'), can: (u, p) => hasPermission(u.role, 'canViewWholeDeal') || isOversightReader(u) || isRoundWorkPath(p, u) },
   // นัดเข้าพบ: exactly the roles the visit endpoints serve (VisitService.VISIT_ROLES via canViewVisits). Exact match —
   // the page has no sub-paths. Like /tickets it is NOT on the self-service allowlist: the lock-exempt sales roles keep
   // it, every locked role loses it.
-  { test: (p) => p === '/visits', can: (u) => hasPermission(u.role, 'canViewVisits') },
+  { test: (p) => p === '/visits', can: (u) => hasPermission(u.role, 'canViewVisits') || isOversightReader(u) },
   // Import's own per-deal page (GET /api/import/deals/{id}: import + ceo). MANDATORY entry: canAccessPath fails
   // OPEN for a path no guard claims, so without this line every authenticated role would reach
   // /import/deals/:id.
-  { test: (p) => p === '/import/deals' || p.startsWith('/import/deals/'), can: (u) => hasPermission(u.role, 'canViewImportDeal') },
-  { test: (p) => p === '/catalog', can: (u) => hasPermission(u.role, 'canViewCatalog') },
+  { test: (p) => p === '/import/deals' || p.startsWith('/import/deals/'), can: (u) => hasPermission(u.role, 'canViewImportDeal') || isOversightReader(u) },
+  { test: (p) => p === '/catalog', can: (u) => hasPermission(u.role, 'canViewCatalog') || isOversightReader(u) },
   // Direct deal quotation. Exact + prefix (the editor's /quotations/new and /quotations/:id both
   // fall under this). Mirrors ROLE_PERMISSIONS.canViewDealQuotations OR'd with the per-employee
   // canCreateQuotation grant: a grant-holder's role need not be in that list (e.g. `qc`).
@@ -94,7 +97,7 @@ const PATH_GUARDS = [
   // the wider view audience below: ceo/import/account reach the list and detail pages only.
   // Pathname only, so `/quotations/new?ticket=6` is held to it too.
   { test: (p) => p.split(/[?#]/)[0] === '/quotations/new', can: (u) => canCreateDealQuotationStandalone(u) },
-  { test: (p) => p === '/quotations' || p.startsWith('/quotations/'), can: (u) => hasPermission(u.role, 'canViewDealQuotations') || Boolean(u.canCreateQuotation) },
+  { test: (p) => p === '/quotations' || p.startsWith('/quotations/'), can: (u) => hasPermission(u.role, 'canViewDealQuotations') || Boolean(u.canCreateQuotation) || isOversightReader(u) },
   { test: (p) => p === '/commissions', can: (u) => hasPermission(u.role, 'canViewCommissions') },
   // Account's money-lifecycle worklist (งานการเงิน): mirrors ROLE_PERMISSIONS.canConfirmPayments
   // (account/ceo). The prefix arm covers /finance/deals/:id: the exact match alone would leave it
@@ -106,7 +109,7 @@ const PATH_GUARDS = [
   // The Express receipts upload is account-ONLY: ReceiptImportService refuses the CEO, so the page must not be
   // reachable by URL for them. Listed before the /finance prefix rule (first match wins).
   { test: (p) => p.split(/[?#]/)[0] === '/finance/receipts-import', can: (u) => u.role === 'account' },
-  { test: (p) => p === '/finance' || p.startsWith('/finance/'), can: (u) => hasPermission(u.role, 'canConfirmPayments') },
+  { test: (p) => p === '/finance' || p.startsWith('/finance/'), can: (u) => hasPermission(u.role, 'canConfirmPayments') || isOversightReader(u) },
   // Mirrors PayrollController exactly: every GET plus the non-persisting POST /preview and
   // /preview/export/{kind} are hasAnyRole('HR','CEO'); every write stays hr-only and is gated
   // inside PayrollPage.jsx (canManagePayroll), not at the route level.
@@ -149,12 +152,12 @@ const PATH_GUARDS = [
   // rep needs to reach their OWN request's `/pricing-requests/:id` (PICKED_UP/MORE_INFO_REQUIRED
   // notifications link there), but the backend's requireViewable ownership check is what
   // enforces per-request access; this guard only decides whether the role belongs on the URL shape.
-  { test: (p) => p === '/pricing-requests', can: (u) => hasPermission(u.role, 'canViewPricingRequestQueue') },
-  { test: (p) => p.startsWith('/pricing-requests/'), can: (u) => hasPermission(u.role, 'canViewPricingRequestQueue') || u.role === 'sales' },
+  { test: (p) => p === '/pricing-requests', can: (u) => hasPermission(u.role, 'canViewPricingRequestQueue') || isOversightReader(u) },
+  { test: (p) => p.startsWith('/pricing-requests/'), can: (u) => hasPermission(u.role, 'canViewPricingRequestQueue') || u.role === 'sales' || isOversightReader(u) },
   // งานนำเข้า — Import's cross-deal fulfilment workspace. Frontend gating only — the four endpoints enforce the
   // real gate and are unchanged. Mirrors ROLE_PERMISSIONS.canActOnFulfilment, itself a mirror of
   // TicketService.FULFILMENT_ROLES {import, ceo}.
-  { test: (p) => p === '/fulfilment', can: (u) => hasPermission(u.role, 'canActOnFulfilment') },
+  { test: (p) => p === '/fulfilment', can: (u) => hasPermission(u.role, 'canActOnFulfilment') || isOversightReader(u) },
   // Matches the launcher's nav condition exactly (AppShell.jsx: `role === 'ceo'`).
   { test: (p) => p === '/ceo-settings', can: (u) => u.role === 'ceo' },
   // Attendance calendar admin (hr.holiday / hr.work_schedule / hr.work_schedule_assignment CRUD).
@@ -306,6 +309,17 @@ export function dealRedirectFor(path, user) {
   return `${target.prefix}/${match[1]}`;
 }
 
+// The read pages an oversight reader (sales_manager, or a read-all grant holder) opens: the 7 nav pages, the deal page, and the
+// drill-downs they link to. The lock exemption below and AppShell's nav filter share it, so the menu and the guard cannot drift.
+// receipts-import (account only) and commissions are never in it.
+const READER_PATH_PREFIXES = ['/tickets', '/quotations', '/catalog', '/visits', '/pricing-requests', '/fulfilment', '/import/deals', '/finance'];
+
+export function isReaderPath(path) {
+  const pathname = path.split(/[?#]/)[0];
+  if (pathname === '/finance/receipts-import') return false;
+  return READER_PATH_PREFIXES.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`));
+}
+
 // Per-path lock exemptions: each opens exactly one path family for the holder of one capability, never a role.
 // (A team head is not hr/ceo, so the lock would otherwise hide their one page.)
 const LOCK_EXEMPTIONS = [
@@ -314,6 +328,8 @@ const LOCK_EXEMPTIONS = [
   // The warehouse and the invoice issuer stay locked to self-service except for the one page their bell notices open.
   { test: (p) => p.startsWith('/tickets/'), can: (u, p) => isRoundWorkPath(p, u) },
   { test: (p) => p === '/people-insights', can: (u) => Boolean(u.canViewPeopleInsights) },
+  // v2.3.0 read-all grant: exactly the oversight reader's read pages, one capability, never a role. Not /finance/receipts-import (account only), not /commissions.
+  { test: isReaderPath, can: (u) => isOversightReader(u) },
 ];
 
 export function canAccessPath(path, user) {

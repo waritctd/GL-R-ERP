@@ -15,6 +15,7 @@ import {
 import {
   boardDealMatches, closedCounts, readStoredView, resolveDealsView, sortByQuiet, writeStoredView,
 } from './allDealsView.js';
+import { isOversightReader } from './dealOwnership.js';
 import { rangeFromParams } from './movementRange.js';
 import { TicketCreateModal } from './TicketCreateModal.jsx';
 import { TicketListPage } from './TicketListPage.jsx';
@@ -102,7 +103,8 @@ function AllDealsBoard({ user, showToast, onShowTable }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const [filterChoice, setFilterChoice] = useState(null);
   const [creating, setCreating] = useState(false);
-  const isTeam = user.role !== 'sales';
+  // A read-all flag holder with the sales role reads the team board too (the server admits her; she keeps her create button).
+  const isTeam = user.role !== 'sales' || isOversightReader(user);
   const searchText = searchParams.get('q') ?? '';
   const canCreate = ROLE_PERMISSIONS.canCreateTickets.includes(user.role);
 

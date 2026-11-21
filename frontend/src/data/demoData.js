@@ -271,6 +271,10 @@ export function createDemoDatabase() {
     // QC holding the per-person invoice-issuer grant (hr.employee.can_issue_tax_invoice): a role with no deal page, so it
     // works a forwarded round through RoundWorkView only (and is the case the self-service lock has to let through).
     { id: 15, email: 'qc@glr.co.th', password: 'demo1234', name: 'คุณคิวซี ตรวจสอบ', role: 'qc', employeeId: null, active: true, canIssueTaxInvoice: true, createdAt: iso(2025, 6, 1) },
+    // Read-all grant (hr.employee.can_read_all_sales): a warehouse and a QC person who may read every deal and the sales/finance
+    // pages, never write them. Reachable only by their own email, so no role login ('warehouse' / 'qc') changes.
+    { id: 16, email: 'warehouse.readall@glr.co.th', password: 'demo1234', name: 'คุณคลัง ดูทุกงาน', role: 'warehouse', employeeId: null, active: true, readAllSales: true, createdAt: iso(2025, 6, 1) },
+    { id: 17, email: 'qc.readall@glr.co.th', password: 'demo1234', name: 'คุณคิวซี ดูทุกงาน', role: 'qc', employeeId: null, active: true, readAllSales: true, createdAt: iso(2025, 6, 1) },
   ];
 
   const tickets = [

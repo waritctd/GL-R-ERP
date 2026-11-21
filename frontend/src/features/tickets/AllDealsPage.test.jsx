@@ -141,6 +141,15 @@ describe('AllDealsPage (งานทั้งหมด)', () => {
     expect(await screen.findByTestId('board-card-21')).toBeTruthy();
   });
 
+  it('a read-all flag holder with the sales role gets the team board (not her own my-work board), keeping the create button', async () => {
+    renderPage({ ...salesUser, readAllSales: true });
+
+    await board();
+    expect(api.salesBoard.teamBoard).toHaveBeenCalled();
+    expect(api.salesBoard.myWork).not.toHaveBeenCalled();
+    expect(within(await screen.findByTestId('board-card-22')).getByTestId('board-card-owner').textContent).toContain('สมหมาย');
+  });
+
   it.each([['account', { id: 4, employeeId: 4, role: 'account' }], ['import', { id: 3, employeeId: 3, role: 'import' }]])(
     '%s gets the table only: no board, no board data, no view toggle',
     async (_role, user) => {

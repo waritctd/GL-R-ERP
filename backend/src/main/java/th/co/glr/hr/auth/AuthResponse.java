@@ -3,7 +3,7 @@ package th.co.glr.hr.auth;
 /** The logged-in user, plus the capabilities that are not derivable from UserPrincipal. It is a hint for
  * rendering only. This record has one construction site (AuthService.response) and none in tests. */
 public record AuthResponse(UserPrincipal user, boolean admin, boolean operator, boolean canCreateQuotation, boolean canIssueBillingNote,
-                           boolean canIssueTaxInvoice,
+                           boolean canIssueTaxInvoice, boolean readAllSales,
                            boolean canManageAllSalesDocuments,
                            boolean canViewAs, boolean canViewPeopleInsights, ViewAsInfo viewAs) {
     /** Who is really behind a read-only "view as" session; null on the response unless viewing. */

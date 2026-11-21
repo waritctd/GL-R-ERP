@@ -195,6 +195,19 @@ public class EmployeeAuthRepository {
                 + " " + NOT_IMPORT_DIVISION + ")", Map.of("id", employeeId), Boolean.class));
     }
 
+    /** The per-person read-everything grant ({@code hr.employee.can_read_all_sales}): a live read of an active row, never
+     * cached on the session. Role handling (import excluded) lives in {@link OversightReader}. */
+    public boolean canReadAllSales(long employeeId) {
+        return canReadAllSales(jdbc, employeeId);
+    }
+
+    /** The one SQL copy, for repositories that already hold a jdbc template (TicketRepository). */
+    public static boolean canReadAllSales(NamedParameterJdbcTemplate jdbc, long employeeId) {
+        return Boolean.TRUE.equals(jdbc.queryForObject(
+            "SELECT EXISTS (SELECT 1 FROM hr.employee WHERE employee_id = :id AND is_active AND can_read_all_sales)",
+            Map.of("id", employeeId), Boolean.class));
+    }
+
     /** Stores a user-chosen password and clears the forced-change flag. */
     public void updatePassword(long employeeId, String passwordHash) {
         jdbc.update("""

@@ -36,15 +36,15 @@ describe('canAccessPath role matrix', () => {
     ['/payroll', ['hr', 'ceo'], ['employee', 'sales', 'import', 'account']],
     ['/payroll/deduction-shortfalls', ['hr', 'ceo'], ['employee', 'sales', 'import', 'account']],
     ['/settings/leave-policy', ['hr', 'ceo'], ['employee', 'sales', 'import', 'account']],
-    ['/fulfilment', ['import', 'ceo'], ['employee', 'sales', 'sales_manager', 'hr', 'account']],
-    ['/import/deals/12', ['import', 'ceo'], ['sales', 'sales_manager', 'account', 'hr', 'employee', 'warehouse', 'qc']],
+    ['/fulfilment', ['import', 'ceo', 'sales_manager'], ['employee', 'sales', 'hr', 'account']],
+    ['/import/deals/12', ['import', 'ceo', 'sales_manager'], ['sales', 'account', 'hr', 'employee', 'warehouse', 'qc']],
     ['/tickets', ['sales', 'sales_manager', 'ceo'], ['employee', 'account', 'import']],
     ['/tickets/12', ['sales', 'sales_manager', 'ceo', 'account'], ['import', 'employee']],
     ['/tickets/12/deposit', ['sales', 'account'], ['import']],
     ['/visits', ['sales', 'sales_manager', 'ceo'], ['hr', 'employee', 'import', 'account', 'warehouse', 'qc']],
-    ['/finance', ['account', 'ceo'], ['sales', 'employee']],
-    ['/finance/deals/501', ['account', 'ceo'], ['sales', 'employee']],
-    ['/finance/receipts-import', ['account'], ['ceo', 'sales']],
+    ['/finance', ['account', 'ceo', 'sales_manager'], ['sales', 'employee']],
+    ['/finance/deals/501', ['account', 'ceo', 'sales_manager'], ['sales', 'employee']],
+    ['/finance/receipts-import', ['account'], ['ceo', 'sales', 'sales_manager']],
     ['/commissions', ['sales'], ['employee']],
     ['/price-import', ['ceo', 'import'], ['sales', 'employee', 'hr']],
     ['/pricing-requests', ['import', 'ceo', 'sales_manager'], ['sales', 'employee']],
@@ -286,11 +286,41 @@ describe('canAccessPath under the release lockdown', () => {
       for (const path of ['/tickets', '/tickets/7', '/pricing-requests/9', '/quotations', '/quotations/3', '/catalog']) {
         expect(guard(path, user), `${user.role} -> ${path}`).toBe(true);
       }
-      for (const path of ['/payroll', '/hr', '/employees', '/finance', '/tax-allowance-review', '/fulfilment']) {
+      for (const path of ['/payroll', '/hr', '/employees', '/tax-allowance-review', '/finance/receipts-import']) {
         expect(guard(path, user), `${user.role} -> ${path}`).toBe(false);
       }
     }
+    // The sales manager is a read-all reader: it gains the finance and fulfilment pages (read only); a rep does not.
+    for (const path of ['/finance', '/finance/deals/7', '/fulfilment', '/import/deals/7']) {
+      expect(guard(path, salesManager), `sales_manager -> ${path}`).toBe(true);
+      expect(guard(path, sales), `sales -> ${path}`).toBe(false);
+    }
     expect(guard('/commissions', salesManager)).toBe(true);
+  });
+
+  // v2.3.0 read-all grant: a per-person flag opens exactly the reader pages through the lock; the same role WITHOUT the flag
+  // stays confined to self-service, and import/account never count.
+  it('opens the reader pages through the lock only for a flag holder', async () => {
+    const { canAccessPath: guard, isOversightReader: reader } = await locked();
+    const READER_PATHS = ['/tickets', '/tickets/7', '/tickets/7/deposit', '/quotations', '/visits', '/catalog', '/pricing-requests',
+      '/pricing-requests/9', '/fulfilment', '/import/deals/7', '/finance', '/finance/deals/7'];
+    for (const role of ['warehouse', 'qc', 'employee']) {
+      const holder = { role, employeeId: 7, readAllSales: true };
+      const plain = { role, employeeId: 7 };
+      for (const path of READER_PATHS) {
+        expect(guard(path, holder), `${role} flagged -> ${path}`).toBe(true);
+        // The warehouse's own round page (/tickets/:id) is open to it with or without the flag.
+        if (!(role === 'warehouse' && path === '/tickets/7')) expect(guard(path, plain), `${role} plain -> ${path}`).toBe(false);
+      }
+      for (const path of ['/finance/receipts-import', '/commissions', '/payroll', '/hr', '/quotations/new']) {
+        expect(guard(path, holder), `${role} flagged -> ${path}`).toBe(false);
+      }
+    }
+    for (const role of ['import', 'account']) {
+      expect(reader({ role, readAllSales: true }), role).toBe(false);
+    }
+    expect(reader({ role: 'sales_manager' })).toBe(true);
+    expect(reader({ role: 'sales' })).toBe(false);
   });
 
   it('releases import only งานนำเข้า and คิวขอราคา', async () => {

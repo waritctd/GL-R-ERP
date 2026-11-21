@@ -125,7 +125,7 @@ public class ExpectedPaymentService {
         return new Valid(kind, amount.setScale(2, java.math.RoundingMode.UNNECESSARY), week);
     }
 
-    /** 404 when the deal does not exist; 403 unless a writer, or account with the deal inside its finance scope. */
+    /** 404 when the deal does not exist; 403 unless a writer, an oversight reader, or account with the deal inside its finance scope. */
     private void requireReadAccess(long ticketId, UserPrincipal actor) {
         if (READ_ONLY_ROLES.contains(actor.role())) {
             ticketRows.findById(ticketId).orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบงานนี้"));
@@ -134,7 +134,7 @@ public class ExpectedPaymentService {
             }
             return;
         }
-        tickets.requireDealWriteAccess(ticketId, actor);
+        tickets.requireExpectedPaymentsRead(ticketId, actor);
     }
 
     private TicketSummaryDto requireWriteAccess(long ticketId, UserPrincipal actor) {

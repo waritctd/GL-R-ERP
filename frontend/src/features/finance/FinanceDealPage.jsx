@@ -143,7 +143,9 @@ function MoneyBand({ deal }) {
   );
 }
 
-function CommentsSection({ deal, onPosted }) {
+// `canPost`: only account/ceo may write a note (FinanceDealService.ALLOWED_ROLES). A read-only reader (sales manager or read-all grant)
+// sees the notes but no box: the server returns no actions and refuses the POST.
+function CommentsSection({ deal, onPosted, canPost }) {
   const [text, setText] = useState('');
   const [error, setError] = useState('');
   const mutation = useMutation({
@@ -172,6 +174,7 @@ function CommentsSection({ deal, onPosted }) {
           ))}
         </ul>
       ) : <p className="m-0 text-sm text-text-muted">ยังไม่มีบันทึก</p>}
+      {canPost ? (
       <div className="grid max-w-[640px] gap-2.5">
         <FormField
           label="ข้อความถึงฝ่ายขาย" htmlFor="fin-comment-text" error={error}
@@ -186,6 +189,7 @@ function CommentsSection({ deal, onPosted }) {
           ส่งบันทึก
         </Button>
       </div>
+      ) : null}
     </section>
   );
 }
@@ -452,7 +456,7 @@ export function FinanceDealPage({ user }) {
       <DeliveryRoundsPanel ticketId={deal.id} dealless quiet />
       <MilestoneSections deal={deal} onError={setDownloadError} />
 
-      <CommentsSection deal={deal} onPosted={applyDeal} />
+      <CommentsSection deal={deal} onPosted={applyDeal} canPost={['account', 'ceo'].includes(user?.role)} />
       </div>
 
       {confirm ? (

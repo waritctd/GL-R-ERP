@@ -38,7 +38,7 @@ import {
   VALIDITY_MODE_OPTIONS, FULL_PAYMENT_TERM_OPTIONS,
   carryContactDetails, hasDealQuotationGrant,
 } from './quotationMeta.js';
-import { isOwnerOrKeyer } from '../tickets/dealOwnership.js';
+import { isOversightReader, isOwnerOrKeyer } from '../tickets/dealOwnership.js';
 import { CustomerDetailsFields } from './CustomerDetailsFields.jsx';
 import { ChangeCustomerModal } from './ChangeCustomerModal.jsx';
 import { DealCustomerCard, ExistingDealNotice, QuotationRecipientField } from './DealCustomerCard.jsx';
@@ -266,7 +266,7 @@ export function QuotationEditorPage({ user, showToast }) {
   const partiesQuery = useQuery({
     queryKey: queryKeys.ticketParties(effectiveTicketId),
     queryFn: () => api.tickets.parties(effectiveTicketId).then((r) => r?.parties ?? []),
-    enabled: Boolean(effectiveTicketId) && Boolean(ticket) && ['sales', 'sales_manager', 'ceo'].includes(user?.role),
+    enabled: Boolean(effectiveTicketId) && Boolean(ticket) && (['sales', 'sales_manager', 'ceo'].includes(user?.role) || isOversightReader(user)),
     retry: false,
   });
   const dealParties = partiesQuery.data;

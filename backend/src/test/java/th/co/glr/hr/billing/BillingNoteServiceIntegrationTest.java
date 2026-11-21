@@ -415,6 +415,19 @@ class BillingNoteServiceIntegrationTest extends AbstractPostgresIntegrationTest 
         assertThat(billingNoteRepository.findByCustomer(customer.id())).isEmpty();
     }
 
+    /** v2.3.0: the read-all flag is READ only: a flag-only holder cannot issue a billing note. */
+    @Test
+    void issue_flagOnlyReader_isForbidden() {
+        CustomerDto customer = createCustomer("FlagOnlyIssue");
+        BillingNoteDocumentDto draft = billingNoteService.createDraft(customer.id(),
+            manualDraftRequest(null, "100.00"), employeeWithGrantActor);
+        jdbc.update("UPDATE hr.employee SET can_read_all_sales = TRUE WHERE employee_id = :id", Map.of("id", hrActor.id()));
+
+        assertThatThrownBy(() -> billingNoteService.issue(draft.id(), hrActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+        assertThat(billingNoteRepository.findByCustomer(customer.id())).allSatisfy(b -> assertThat(b.status()).isEqualTo("DRAFT"));
+    }
+
     @Test
     void write_grantHolderInAPlainEmployeeRole_succeeds() {
         // The real-world shape (a QC&ISO employee): role `employee`, grant TRUE.

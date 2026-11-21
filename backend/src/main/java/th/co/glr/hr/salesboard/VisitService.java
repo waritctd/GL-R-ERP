@@ -71,13 +71,19 @@ public class VisitService {
     }
 
     public List<VisitDto> listOwn(LocalDate from, LocalDate to, UserPrincipal actor) {
-        requireRole(actor, VISIT_ROLES);
+        if (!tickets.oversightReader(actor)) {
+            requireRole(actor, VISIT_ROLES);
+        }
         requireRange(from, to);
         return visits.findOwn(actor.id(), from, to);
     }
 
     public List<VisitDto> listTeam(LocalDate from, LocalDate to, UserPrincipal actor) {
-        requireRole(actor, TEAM_ROLES);
+        // A SEPARATE read arm (the read-all grant): TEAM_ROLES also lets its members edit/cancel anyone's visit
+        // (requireWritable), so a reader is deliberately NOT added to it.
+        if (!tickets.oversightReader(actor)) {
+            requireRole(actor, TEAM_ROLES);
+        }
         requireRange(from, to);
         return visits.findAll(from, to);
     }
@@ -169,9 +175,12 @@ public class VisitService {
      * redacted. Order: {@link VisitRepository}'s list ORDER BY; no LIMIT (the lists have none either).
      */
     public List<VisitDto> plannedOnDeal(long ticketId, UserPrincipal actor) {
-        requireRole(actor, VISIT_ROLES);
+        boolean reader = tickets.oversightReader(actor);
+        if (!reader) {
+            requireRole(actor, VISIT_ROLES);
+        }
         tickets.requireDealReadAccess(ticketId, actor);
-        return TEAM_ROLES.contains(actor.role())
+        return TEAM_ROLES.contains(actor.role()) || reader
             ? visits.findPlannedOnDeal(ticketId)
             : visits.findPlannedOnDealOwnedBy(ticketId, actor.id());
     }

@@ -151,6 +151,34 @@ class DealQuotationAttachmentAuthzIntegrationTest extends AbstractDealQuotationA
         assertThat(fileRows()).as("nothing stored, nothing removed").isEqualTo(rows);
         assertThat(storedBytes(file)).isEqualTo(VENDOR_QUOTE);
 
+        // v2.3.0 read-all grant: the same strangers (and flagged import, still refused files) read the quotation, its
+        // list, its PDF and its files, and are still refused every write.
+        jdbc.update("UPDATE hr.employee SET can_read_all_sales = TRUE WHERE employee_id IN (:a, :b, :c, :d)",
+            java.util.Map.of("a", otherSalesActor.id(), "b", qcActor.id(), "c", employeeActor.id(), "d", importActor.id()));
+        for (UserPrincipal reader : List.of(otherSalesActor, qcActor, employeeActor)) {
+            String who = reader.role() + " " + reader.id() + " holding the read-all grant";
+            assertThat(quotationService.get(quotation.id(), reader).id()).as(who).isEqualTo(quotation.id());
+            assertThat(quotationService.listForTicket(quotation.ticketId(), reader)).as(who).hasSize(1);
+            assertThat(quotationService.search(null, false, null, reader)).as(who + " register")
+                .extracting(DealQuotationDto::id).contains(quotation.id());
+            assertThat(quotationService.renderPdf(quotation.id(), reader)).as(who + " pdf").isNotEmpty();
+            assertThat(attachmentService.list(quotation.id(), reader)).as(who + " files").hasSize(1);
+            assertThat(served(file, reader)).isEqualTo(VENDOR_QUOTE);
+
+            refused(who + " editing", FORBIDDEN, () -> quotationService.update(quotation.id(), draft(), reader));
+            refused(who + " submitting", FORBIDDEN, () -> quotationService.submit(quotation.id(), reader));
+            refused(who + " cancelling", FORBIDDEN, () -> quotationService.cancel(quotation.id(), new CancelRequest("x"), reader));
+            refused(who + " uploading", FORBIDDEN, () -> attachmentService.upload(quotation.id(), pdf("x.pdf"), reader));
+            refused(who + " deleting a file", FORBIDDEN, () -> attachmentService.delete(file, reader));
+        }
+        // Import never counts as a reader, whatever the flag says: still no files.
+        refused("flagged import listing files", FORBIDDEN, () -> attachmentService.list(quotation.id(), importActor));
+        assertThat(th.co.glr.hr.auth.OversightReader.is(importActor, id -> true)).isFalse();
+        assertThat(fileRows()).as("nothing stored, nothing removed").isEqualTo(rows);
+        assertThat(statusOf(quotation.id())).isEqualTo(QuotationStatus.DRAFT);
+        // The grant is not a per-test fixture: take it back so the control below is about a plain rep.
+        jdbc.update("UPDATE hr.employee SET can_read_all_sales = FALSE", java.util.Map.of());
+
         // Control: the other rep does all four on a quotation of his OWN deal.
         DealQuotationDto his = draftOwnedBy(otherSalesActor);
         DealQuotationAttachmentDto hisFile = attachmentService.upload(his.id(), pdf("own.pdf"), otherSalesActor);

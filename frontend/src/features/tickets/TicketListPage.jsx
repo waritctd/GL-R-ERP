@@ -4,6 +4,7 @@ import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tansta
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { api, ROLE_PERMISSIONS } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
+import { isOversightReader } from '../../app/permissions.js';
 import { Button } from '../../components/common/Button.jsx';
 import { DataTable } from '../../components/common/DataTable.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
@@ -819,7 +820,7 @@ export function TicketListPage({ user, showToast, viewSwitch = null }) {
   useEffect(() => {
     if (hasActiveMoreFilters) setMoreFiltersOpen(true);
   }, [hasActiveMoreFilters]);
-  const scope = scopeCopy(user.role, inboxOnly);
+  const scope = scopeCopy(isOversightReader(user) ? 'sales_manager' : user.role, inboxOnly);
   const activeFilterCount = [
     searchText.trim(),
     phaseFilter,

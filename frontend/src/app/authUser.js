@@ -23,6 +23,8 @@ export function userFromAuthResponse(response) {
     canCreateQuotation: Boolean(response.canCreateQuotation),
     canIssueBillingNote: Boolean(response.canIssueBillingNote),
     canIssueTaxInvoice: Boolean(response.canIssueTaxInvoice),
+    // Per-person read-all grant (holders only; a sales_manager is recognised by role). A hint: the server re-reads it live.
+    readAllSales: Boolean(response.readAllSales),
     canManageAllSalesDocuments: Boolean(response.canManageAllSalesDocuments),
     canViewAs: Boolean(response.canViewAs),
     canViewPeopleInsights: Boolean(response.canViewPeopleInsights),

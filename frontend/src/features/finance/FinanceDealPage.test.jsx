@@ -1,6 +1,6 @@
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { FinanceDealPage } from './FinanceDealPage.jsx';
@@ -39,13 +39,13 @@ vi.mock('../../api/index.js', async (importOriginal) => {
 const accountUser = { role: 'account', name: 'บัญชี ทดสอบ', employeeId: 3 };
 const action = (name, label, extra = {}) => ({ action: name, label, targetStage: null, requiredFields: [], ...extra });
 
-function renderPage() {
+function renderPage(user = accountUser) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   const utils = render(
     <QueryClientProvider client={queryClient}>
       <MemoryRouter initialEntries={['/finance/deals/501']}>
         <Routes>
-          <Route path="/finance/deals/:id" element={<FinanceDealPage user={accountUser} showToast={vi.fn()} />} />
+          <Route path="/finance/deals/:id" element={<FinanceDealPage user={user} showToast={vi.fn()} />} />
           <Route path="/finance" element={<div>WORKLIST-PAGE</div>} />
         </Routes>
       </MemoryRouter>
@@ -62,6 +62,18 @@ describe('FinanceDealPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     api.finance.getDeal.mockResolvedValue({ deal: makeFinanceDeal() });
+  });
+
+  // v2.3.0: a read-only reader (sales manager, read-all holder) sees the deal and its notes, but no note box and no action button.
+  it('shows the note box to account and none to a read-only reader', async () => {
+    renderPage();
+    expect(await screen.findByRole('button', { name: 'ส่งบันทึก' })).not.toBeNull();
+    cleanup();
+    api.finance.getDeal.mockResolvedValue({ deal: makeFinanceDeal({ availableActions: [] }) });
+    renderPage({ role: 'qc', name: 'ดูทุกดีล', employeeId: 4, readAllSales: true });
+    expect(await screen.findByRole('group', { name: 'สรุปยอดเงิน' })).not.toBeNull();
+    expect(screen.queryByRole('button', { name: 'ส่งบันทึก' })).toBeNull();
+    expect(screen.queryByLabelText('ข้อความถึงฝ่ายขาย')).toBeNull();
   });
 
   describe('money band', () => {

@@ -22,11 +22,38 @@ class FinanceDealIntegrationTest extends FinanceDealTestBase {
         long ticketId = createTicket(DealStage.PROCUREMENT); // salesRep owns it
         tickets.updatePaymentStatusUnchecked(ticketId, "DEPOSIT_PAID");
 
-        for (UserPrincipal actor : List.of(salesRep, salesManager, importUser, hrUser, employeeUser)) {
+        for (UserPrincipal actor : List.of(salesRep, importUser, hrUser, employeeUser)) {
             assertThatThrownBy(() -> service.get(ticketId, actor))
                 .as("role " + actor.role())
                 .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus().value()).isEqualTo(403));
         }
+    }
+
+    /** v2.3.0 D6/D7: sales_manager (role) and a read-all holder read the finance deal; no actions, no commission data. */
+    @Test
+    void oversightReaders_readTheFinanceDeal_withNoActions_andFlaggedImportStaysRefused() {
+        long ticketId = createS15Deal("DEPOSIT_NOTICE_ISSUED");
+        for (UserPrincipal actor : List.of(salesManager, readAllHolder)) {
+            var deal = service.get(ticketId, actor);
+            assertThat(deal.id()).as(actor.role()).isEqualTo(ticketId);
+            assertThat(deal.availableActions()).as(actor.role()).isEmpty();
+            assertThat(deal.commissionInvoice()).isNull();
+        }
+        // D5: a DRAFT delivery round's file is sales' private work: hidden from a flag-only reader, as ever for a sales_manager.
+        long draftRound = jdbc.queryForObject("""
+            INSERT INTO sales.delivery_request (ticket_id, round_no, status, requested_by)
+            VALUES (:t, 1, 'DRAFT', :u) RETURNING delivery_request_id
+            """, new org.springframework.jdbc.core.namedparam.MapSqlParameterSource("t", ticketId).addValue("u", salesRepId), Long.class);
+        long draftFile = attachments.save(ticketId, null, "slip.pdf", "uploads/slip.pdf", "application/pdf", 10L, "OTHER",
+            salesRepId, draftRound, "SALES").id();
+        assertThat(service.get(ticketId, readAllHolder).documents().contracts())
+            .extracting(FinanceDealDto.FileDoc::id).doesNotContain(draftFile);
+        assertThat(service.get(ticketId, salesManager).documents().contracts())
+            .extracting(FinanceDealDto.FileDoc::id).contains(draftFile);
+        jdbc.update("UPDATE hr.employee SET can_read_all_sales = TRUE WHERE employee_id = :id",
+            new org.springframework.jdbc.core.namedparam.MapSqlParameterSource("id", importUser.id()));
+        assertThatThrownBy(() -> service.get(ticketId, importUser))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus().value()).isEqualTo(403));
     }
 
     // ── who may ─────────────────────────────────────────────────────────────────────────────

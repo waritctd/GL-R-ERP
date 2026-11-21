@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Navigate, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
-import { hasPermission } from '../../app/permissions.js';
+import { hasPermission, isOversightReader } from '../../app/permissions.js';
 
 const RoundWorkView = lazy(() => import('./delivery/RoundWorkView.jsx').then((module) => ({ default: module.RoundWorkView })));
 const TicketDetailPage = lazy(() => import('./TicketDetailPage.jsx').then((module) => ({ default: module.TicketDetailPage })));
@@ -39,7 +39,8 @@ export function TicketDetailRoute({ user, showToast }) {
   // The warehouse never reads the deal, nor does an invoice issuer whose role has no deal page (the grant is per person,
   // any role): each works one delivery round (RoundWorkView), the bell notice's target. A rep or manager who also holds
   // the grant keeps the deal page (its ship tab does the same work); account lands on the finance page above.
-  if (user?.role === 'warehouse' || dealRefused || (user?.canIssueTaxInvoice && !hasPermission(user.role, 'canViewWholeDeal'))) {
+  // An oversight reader (sales manager or read-all grant holder) reads the whole page, even as warehouse or issuer.
+  if (!isOversightReader(user) && (user?.role === 'warehouse' || dealRefused || (user?.canIssueTaxInvoice && !hasPermission(user.role, 'canViewWholeDeal')))) {
     return <RoundWorkView user={user} ticketId={id} onBack={() => (location.key === 'default' ? navigate('/', { replace: true }) : navigate(-1))} />;
   }
   return (

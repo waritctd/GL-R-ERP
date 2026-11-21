@@ -343,7 +343,7 @@ public class DealPartyService {
                 root && !"ADD_ON".equals(row.childKind()) ? row.code() + "-1" : row.code(), i + 1,
                 row.childKind(), row.salesStage(), row.lifecycle(), row.fulfillmentStatus(),
                 withMoney ? row.valueExVat() : null, withMoney ? row.received() : null, withMoney ? owed : null,
-                row.latestRoundNo() == null ? null : new DealPartyDtos.LatestRoundDto(row.latestRoundNo(), row.latestRoundStatus())));
+                row.latestRoundNo() == null || hidesDraftRound(row, actor) ? null : new DealPartyDtos.LatestRoundDto(row.latestRoundNo(), row.latestRoundStatus())));
         }
         return new ProjectOrdersDto(rootId, rootCode, orders,
             withMoney ? new OrderTotalsDto(value, received, outstanding) : new OrderTotalsDto(null, null, null));
@@ -365,6 +365,11 @@ public class DealPartyService {
             }
             default -> ticketService.requireDealReadAccess(ticketId, actor);
         }
+    }
+
+    /** A flag-only reader never learns that a sales draft round exists (same rule as the rounds list). */
+    private boolean hidesDraftRound(DealPartyRepository.OrderRow row, UserPrincipal actor) {
+        return "DRAFT".equals(row.latestRoundStatus()) && ticketService.readsOnlyByGrant(requireSummary(row.ticketId()), actor);
     }
 
     private boolean canReadOrder(long ticketId, UserPrincipal actor) {
@@ -432,8 +437,8 @@ public class DealPartyService {
 
     private void requireViewAccess(TicketSummaryDto summary, UserPrincipal actor) {
         String role = actor.role();
-        if (tickets.holdsAllSalesDocumentsGrant(actor)) {
-            return;
+        if (tickets.holdsAllSalesDocumentsGrant(actor) || ticketService.oversightReader(actor)) {
+            return; // read-only: requireManageAccess (every write) is untouched
         }
         if (!VIEW_ROLES.contains(role)) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");

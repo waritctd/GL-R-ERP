@@ -28,6 +28,11 @@ public class AttachmentRepository {
     /** {@code includeRoundFiles} false leaves out every file linked to a delivery round (V236: the stored system
      * documents and the extra files such as slips), which carry prices and so are not for every role. */
     public List<AttachmentDto> findByTicketId(long ticketId, boolean includeRoundFiles) {
+        return findByTicketId(ticketId, includeRoundFiles, true);
+    }
+
+    /** {@code includeDraftRoundFiles} false also leaves out the files of a DRAFT round, which is the sales side's private work. */
+    public List<AttachmentDto> findByTicketId(long ticketId, boolean includeRoundFiles, boolean includeDraftRoundFiles) {
         return jdbc.query("""
             SELECT attachment_id, ticket_id, quotation_id, file_name,
                    attach_type, mime_type, file_size, uploaded_by, uploaded_at, delivery_request_id
@@ -35,9 +40,11 @@ public class AttachmentRepository {
              WHERE ticket_id = :ticketId
                AND (:includeRound OR NOT """ + ROUND_FILE + """
 )
+               AND (:includeDraft OR NOT EXISTS (SELECT 1 FROM sales.delivery_request r
+                    WHERE r.delivery_request_id = sales.attachment.delivery_request_id AND r.status = 'DRAFT'))
              ORDER BY uploaded_at DESC
             """,
-            Map.of("ticketId", ticketId, "includeRound", includeRoundFiles),
+            Map.of("ticketId", ticketId, "includeRound", includeRoundFiles, "includeDraft", includeDraftRoundFiles),
             (rs, i) -> map(rs));
     }
 

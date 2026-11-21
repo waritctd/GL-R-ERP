@@ -187,6 +187,11 @@ public class TicketRepository {
         return th.co.glr.hr.auth.EmployeeAuthRepository.canIssueTaxInvoice(jdbc, employeeId);
     }
 
+    /** Live {@code can_read_all_sales} read, for services that hold no EmployeeAuthRepository (AttachmentController). */
+    public boolean holdsReadAllSalesGrant(long employeeId) {
+        return th.co.glr.hr.auth.EmployeeAuthRepository.canReadAllSales(jdbc, employeeId);
+    }
+
     public TicketRepository(NamedParameterJdbcTemplate jdbc) {
         this(jdbc, new QuietRule(jdbc, QuietRule.DEFAULT_QUIET_DAYS));
     }

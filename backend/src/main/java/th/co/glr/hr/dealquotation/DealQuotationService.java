@@ -678,6 +678,8 @@ public class DealQuotationService {
             // a can_manage_all_sales_documents holder (sales / sales_manager only) acts as owner of every deal
         } else if ("account".equals(actor.role())) {
             requireAccountScope(ticketId);
+        } else if (isOversightReader(actor)) {
+            // read-only oversight (sales_manager, or the read-all grant outside import/account): any deal, no write
         } else if (!hasQuotationGrant(actor)) {
             requireRole(actor, VIEW_ROLES);
             if ("sales".equals(actor.role()) && !ownsDealOrHolder(ticket, actor)) {
@@ -781,7 +783,7 @@ public class DealQuotationService {
      * a price the detail endpoint refuses (403).
      */
     private boolean canViewPricedOriginsOnList(UserPrincipal actor) {
-        return PRICING_REQUEST_VIEW_ROLES.contains(actor.role());
+        return PRICING_REQUEST_VIEW_ROLES.contains(actor.role()) || isOversightReader(actor);
     }
 
     /**
@@ -792,10 +794,11 @@ public class DealQuotationService {
      */
     private Long listOwnerScope(UserPrincipal actor) {
         boolean grant = hasQuotationGrant(actor) || hasAllDocumentsGrant(actor);
-        if (!grant) {
+        boolean reader = isOversightReader(actor);
+        if (!grant && !reader) {
             requireRole(actor, VIEW_ROLES);
         }
-        return LIST_SEE_ALL_ROLES.contains(actor.role()) || employeeAuth.canManageAllSalesDocuments(actor) ? null : actor.id();
+        return LIST_SEE_ALL_ROLES.contains(actor.role()) || reader || employeeAuth.canManageAllSalesDocuments(actor) ? null : actor.id();
     }
 
     /** The server recomputes every number: this is the stateless preview the item editor calls on every keystroke
@@ -4264,7 +4267,7 @@ public class DealQuotationService {
             }
             return;
         }
-        if (hasQuotationGrant(actor)) {
+        if (isOversightReader(actor) || hasQuotationGrant(actor)) {
             return;
         }
         requireRole(actor, VIEW_ROLES);
@@ -4293,6 +4296,9 @@ public class DealQuotationService {
         if ("account".equals(actor.role())) {
             return tickets.isInAccountScope(quotation.ticketId());
         }
+        if (isOversightReader(actor)) {
+            return true; // read-only; role import never counts as a reader, so it keeps the CEO price out
+        }
         if (!PRICING_REQUEST_VIEW_ROLES.contains(actor.role())) {
             return false;
         }
@@ -4301,6 +4307,11 @@ public class DealQuotationService {
             return ownsDealOrHolder(ticket, actor);
         }
         return true;
+    }
+
+    /** READ gates only: sales_manager or a live read-all grant holder (never import/account). Never a write grant. */
+    private boolean isOversightReader(UserPrincipal actor) {
+        return th.co.glr.hr.auth.OversightReader.is(actor, employeeAuth::canReadAllSales);
     }
 
     private boolean hasAllDocumentsGrant(UserPrincipal actor) {

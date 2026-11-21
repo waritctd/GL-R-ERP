@@ -74,6 +74,28 @@ class TeamBoardScopeIntegrationTest extends AbstractDealQuotationSlice2Integrati
         }
     }
 
+    @Test
+    void readAllFlagHoldersGetTheBoard_butUnflaggedAndImportStayRefused() throws Exception {
+        long a = deal(salesActor);
+        long b = deal(otherSalesActor);
+        UserPrincipal flaggedWarehouse = actor(createEmployee("คลัง", "wh-flag-board@glr.co.th", "WH", "คลัง", null),
+            "warehouse");
+        UserPrincipal flaggedImport = actor(createEmployee("นำเข้า", "imp-flag-board@glr.co.th", "IMP", "นำเข้า", null),
+            "import");
+        UserPrincipal unflaggedHr = actor(createEmployee("บุคคล", "hr-noflag-board@glr.co.th", "HR", "บุคคล", null),
+            "hr");
+        jdbc.update("UPDATE hr.employee SET can_read_all_sales = TRUE WHERE employee_id IN (:a, :b, :c)",
+            java.util.Map.of("a", salesActor.id(), "b", flaggedWarehouse.id(), "c", flaggedImport.id()));
+
+        // the flagged sales rep (role sales) and the flagged warehouse user both read the whole team
+        assertThat(ids(ok(salesActor).get("board"))).containsExactlyInAnyOrder(a, b);
+        assertThat(ids(ok(flaggedWarehouse).get("board"))).containsExactlyInAnyOrder(a, b);
+        // not flagged, or flagged import (price-free whatever the flag says): still refused
+        assertThat(perform(otherSalesActor).getResponse().getStatus()).isEqualTo(403);
+        assertThat(perform(unflaggedHr).getResponse().getStatus()).isEqualTo(403);
+        assertThat(perform(flaggedImport).getResponse().getStatus()).isEqualTo(403);
+    }
+
     // ── allowed: the whole team's open deals, each with its owner ────────────────
 
     @Test

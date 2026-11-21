@@ -85,6 +85,17 @@ describe('TicketDetailRoute (H1 lockdown)', () => {
     expect(api.tickets.get).not.toHaveBeenCalled();
   });
 
+  // v2.3.0: a read-all holder reads the whole page even as warehouse or issuer; the same role without the flag keeps the round view.
+  it('a flagged warehouse or qc issuer gets the full deal page, not the round work view', async () => {
+    api.tickets.get.mockResolvedValue({ ticket: {} });
+    for (const user of [{ role: 'warehouse', name: 'คลัง', readAllSales: true }, { role: 'qc', name: 'คิวซี', canIssueTaxInvoice: true, readAllSales: true }]) {
+      renderAt(user);
+      expect(await screen.findByText('TICKET-DETAIL-PAGE'), user.role).not.toBeNull();
+      expect(screen.queryByText('ROUND-WORK-VIEW 501')).toBeNull();
+      cleanup();
+    }
+  });
+
   it('a rep who also holds the issuer grant keeps the deal page, unless that deal refuses them: then the round work view', async () => {
     api.tickets.get.mockResolvedValue({ ticket: {} });
     renderAt({ role: 'sales', name: 'ขาย', canIssueTaxInvoice: true });

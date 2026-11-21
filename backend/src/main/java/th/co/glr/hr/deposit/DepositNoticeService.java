@@ -613,7 +613,8 @@ public class DepositNoticeService {
         DepositNoticeDto doc = getById(docId, actor);
         try {
             byte[] pdf = renderer.toPdf(renderModel(doc, bangkokToday()));
-            return bundle.bundle(pdf, doc.ticketId(), doc.reference(), actor, "DEPOSIT_NOTICE", docId);
+            return bundle.bundle(pdf, doc.ticketId(), doc.reference(), actor, "DEPOSIT_NOTICE", docId,
+                readsOnlyByGrant(doc.ticketId(), actor));
         } catch (ApiException e) {
             throw e;
         } catch (Exception e) {
@@ -623,7 +624,7 @@ public class DepositNoticeService {
 
     /** What the download sheet should show for this notice: the remembered choice, else the defaults. */
     public DocumentBundle.Selection bundleSelection(long docId, UserPrincipal actor) {
-        return bundle.selection("DEPOSIT_NOTICE", docId, getById(docId, actor).ticketId());
+        return bundleSelection("DEPOSIT_NOTICE", docId, getById(docId, actor).ticketId(), actor);
     }
 
     /** The download sheet's choice, remembered for this notice: writers only (the choice is the owner's, a reader's
@@ -641,14 +642,14 @@ public class DepositNoticeService {
         bundle.saveSelection(kind, documentId, ticketId, selection);
     }
 
-    DocumentBundle.Selection bundleSelection(String kind, long documentId, long ticketId) {
-        return bundle.selection(kind, documentId, ticketId);
+    DocumentBundle.Selection bundleSelection(String kind, long documentId, long ticketId, UserPrincipal actor) {
+        return bundle.selection(kind, documentId, ticketId, readsOnlyByGrant(ticketId, actor));
     }
 
     /** The bundle (PO + quotation) for a download of a document of {@code ticketId}. */
     DocumentBundle.Result bundled(byte[] pdf, long ticketId, String quotationNumber, UserPrincipal actor,
                                   String kind, long documentId) {
-        return bundle.bundle(pdf, ticketId, quotationNumber, actor, kind, documentId);
+        return bundle.bundle(pdf, ticketId, quotationNumber, actor, kind, documentId, readsOnlyByGrant(ticketId, actor));
     }
 
     // ── Remaining Invoice (ข้อ 13.5) ─────────────────────────────────────────
@@ -1418,11 +1419,13 @@ public class DepositNoticeService {
     // Package-private (not private) — "the existing requireTicketViewer" RemainingInvoiceService's
     // read/list/download gate reuses directly.
     TicketDto requireTicketViewer(long ticketId, UserPrincipal actor) {
-        requireRole(actor, VIEWER_ROLES);
+        if (!readsByGrant(actor)) {
+            requireRole(actor, VIEWER_ROLES);
+        }
         TicketDto t = tickets.findById(ticketId)
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบงานนี้"));
         // The per-role half is dealDocumentScope (below), which the document chain's list mark applies in SQL too.
-        switch (tickets.holdsAllSalesDocumentsGrant(actor) ? DealDocumentScope.ALL : dealDocumentScope(actor.role())) {
+        switch (readScope(actor)) {
             case ALL -> { }
             case OWNER_OR_KEYER -> {
                 if (!ownsDeal(t.summary(), actor)) {
@@ -1468,6 +1471,24 @@ public class DepositNoticeService {
             case "account" -> DealDocumentScope.ACCOUNT;
             default -> DealDocumentScope.ALL;
         };
+    }
+
+    /** The read-all grant holder (never import/account; sales_manager already reads by role). READ gates only: it is
+     * not in {@link #mayWriteDealDocuments} or {@link #ownsDeal}, so a holder never writes a document. */
+    public boolean readsByGrant(UserPrincipal actor) {
+        return th.co.glr.hr.auth.OversightReader.holder(actor, tickets::holdsReadAllSalesGrant);
+    }
+
+    /** True when {@code actor} reads this deal only through the read-all grant (no DRAFT delivery-round files for them). */
+    private boolean readsOnlyByGrant(long ticketId, UserPrincipal actor) {
+        return readsByGrant(actor) && !"sales_manager".equals(actor.role()) && !"ceo".equals(actor.role())
+            && tickets.findById(ticketId).map(t -> !ownsDeal(t.summary(), actor)).orElse(false);
+    }
+
+    /** The per-deal read scope of {@code actor}: the all-documents grant or the read-all grant reads every deal. */
+    public DealDocumentScope readScope(UserPrincipal actor) {
+        return tickets.holdsAllSalesDocumentsGrant(actor) || readsByGrant(actor)
+            ? DealDocumentScope.ALL : dealDocumentScope(actor.role());
     }
 
     /** {@link #requireTicketViewer} for callers outside this package (the document chain summary). */

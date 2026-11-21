@@ -76,6 +76,7 @@ import {
   buyerParties, isAwaitingBidOutcome, isBiddingParty,
 } from './dealPartyMeta.js';
 import { visibleSections } from './salesViewScope.js';
+import { isOversightReader } from './dealOwnership.js';
 import {
   findStage, nextOnRoute, offRoutePartiesFor, stageIndexIn, useStageCatalog,
 } from './stageCatalog.js';
@@ -220,13 +221,16 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // Which sections this viewer's role gets in full vs. hidden entirely (salesViewScope.js;
   // presentation only, never a security boundary). These section ids compose
   // ticketDetailTabs.js's tabs; a role-hidden section's TAB is simply absent from the tablist.
-  const sections = visibleSections(role);
+  // v2.3.0 oversight reader (sales manager, or a read-all grant holder on any role but import/account): reads like a sales
+  // manager. Read gates below take `|| reader`; every write control keeps its own role/owner check (the role is never faked).
+  const reader = isOversightReader(user);
+  const sections = visibleSections(role, reader);
 
   // Ticket-detail IA rebuild Phase 2: `?tab=` is the single source of truth for which tab is open — an absent,
   // unknown, or role-hidden value falls back to `overview` (resolveTicketDetailTab), so a stale deep link (a
   // role change, a typo, hand-editing the URL) never renders a blank or forbidden panel.
-  const visibleTabIds = visibleTicketDetailTabIds(role);
-  const activeTab = resolveTicketDetailTab(searchParams.get('tab'), role);
+  const visibleTabIds = visibleTicketDetailTabIds(role, reader);
+  const activeTab = resolveTicketDetailTab(searchParams.get('tab'), role, reader);
   const tabItems = TICKET_DETAIL_TABS
     .filter((tab) => visibleTabIds.includes(tab.id))
     .map((tab) => ({ id: tab.id, label: tab.label, helper: tab.helper }));
@@ -401,6 +405,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     actsAsOwner(documentsTicketSummary, user)
     || user.id === documentsTicketSummary.assignedToId
     || ROLE_PERMISSIONS.canViewTicketDocuments.includes(role)
+    || reader
   );
   // The pipeline's shape (stages, phases, gates, lost/cancel reason codes), fetched once from GET
   // /api/meta/deal-stages.
@@ -423,7 +428,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // isFetching would flash it on every quiet background refetch (window refocus, another tab's
   // invalidate).
   const loading = ticketQuery.isLoading;
-  const canViewPricingRequests = ['sales', 'import', 'ceo', 'sales_manager'].includes(user?.role);
+  const canViewPricingRequests = ['sales', 'import', 'ceo', 'sales_manager'].includes(user?.role) || reader;
 
   const paymentsQuery = useQuery({
     queryKey: queryKeys.ticketPayments(ticketId),
@@ -446,7 +451,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // Deal tracking: visible to the deal owner (sales), sales_manager, ceo (mirrors salesViewScope.js's
   // dealTracking section id and TicketService.requireDealOwnership; import/account have no business
   // in it).
-  const canViewDealTracking = ['sales', 'sales_manager', 'ceo'].includes(user?.role);
+  const canViewDealTracking = ['sales', 'sales_manager', 'ceo'].includes(user?.role) || reader;
   const activitiesQuery = useQuery({
     queryKey: queryKeys.ticketActivities(ticketId),
     queryFn: () => api.tickets.listActivities(ticketId).then((r) => r.items ?? []),
@@ -501,7 +506,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
 
   // The main button creates the deposit notice / remaining invoice, so the sales rep's page reads
   // both. Same keys and shapes as DealPaymentSection's reads, so the cache is shared (one fetch).
-  const readsDocs = isSalesOwner(ticket?.summary, user) && !!ticketId;
+  const readsDocs = (isSalesOwner(ticket?.summary, user) || reader) && !!ticketId;
   const depositNoticesQuery = useQuery({ ...depositNoticesQueryOptions(ticketId), enabled: readsDocs });
   const remainingInvoicesQuery = useQuery({
     queryKey: queryKeys.storedRemainingInvoices(ticketId),
@@ -950,7 +955,8 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
 
   const ps = summary.paymentStatus;
   const fs = summary.fulfillmentStatus;
-  const isSales   = ROLE_PERMISSIONS.canCreateTickets.includes(role);
+  // A sales-role reader (read-all grant) who does not own the deal gets no sales-side control.
+  const isSales   = ROLE_PERMISSIONS.canCreateTickets.includes(role) && !(reader && !isOwner);
   // Recording ANY payment (confirmFinalPayment/recordPayment alike) is account ONLY, no CEO
   // fallback; mirrors TicketService's PAYMENT_RECORD_ROLES. canConfirmPayments still includes ceo
   // and backs /finance visibility, so it is deliberately NOT used for the flags below.
@@ -1008,7 +1014,8 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     revokeCloseConfirm: hasAction('REVOKE_CLOSE_CONFIRM'),
     verifyClose:        hasAction('VERIFY_CLOSE'),
     cancel:           hasAction('CANCEL') && !TERMINAL.includes(st)   && isOwner,
-    comment:          !TERMINAL.includes(st),
+    // A flag-only reader cannot comment (the server refuses it, D4); an owner, sales manager or CEO keeps the box.
+    comment:          !TERMINAL.includes(st) && !(reader && !isOwner && role !== 'sales_manager' && role !== 'ceo'),
     // A fallback (fromPricingChain) grid shows borrowed quotation lines, not real ticket_item rows,
     // so there is nothing for editItems to save: the affordance (and the add-item control inside
     // edit mode) is hidden rather than left to fail server-side.
@@ -2107,12 +2114,12 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
           ) : null}
           // เงินที่คาดว่าจะเข้า (spec 2026-11-15 §7.7): the deal's writers only — owner/keyer, sales_manager, ceo — the
           // same set ExpectedPaymentService lets write.
-          expected={role === 'ceo' || role === 'sales_manager' || (isSalesOwner(summary, user)) ? (
+          expected={role === 'ceo' || role === 'sales_manager' || (isSalesOwner(summary, user)) || reader ? (
             <ExpectedPaymentsPanel
               ticketId={ticketId}
               dealValue={summary.amountPayable ?? null}
               dealTitle={summary.title || summary.customerName || ''}
-              canWrite
+              canWrite={role === 'ceo' || role === 'sales_manager' || isSalesOwner(summary, user)}
               showToast={showToast}
             />
           ) : null}
@@ -2145,6 +2152,8 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                 showRequestButton={!deliveryRequestAvailable}
                 hostRecordRoundId={deliveryRecordRound?.id ?? null}
                 hostHasPrimary={Boolean(shipPrimary)}
+                // D9: a warehouse-role reader keeps the round review buttons; what each round allows stays the server's (round.viewer).
+                warehouseUserId={role === 'warehouse' ? user.id : null}
                 canRecordNoInvoice={actionNames.has('RECORD_PARTIAL_DELIVERY')}
                 showToast={showToast}
                 onCreateIr={() => fulfilmentPanelRef.current?.createIrDrafts()}

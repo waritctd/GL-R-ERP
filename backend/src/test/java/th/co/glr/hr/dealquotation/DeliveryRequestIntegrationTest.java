@@ -221,7 +221,14 @@ class DeliveryRequestIntegrationTest extends AbstractDealDirectQuotationIntegrat
         jdbc.update("UPDATE hr.employee SET can_issue_tax_invoice = TRUE WHERE employee_id = :id", Map.of("id", issuerId));
         UserPrincipal issuer = actor(issuerId, "employee"); // a role with no deal access: the grant is what admits it
         long rid = rounds.createDraft(ticketId, null, salesActor).id();
+        // The read-all grant opens the deal's reads but never sales' private DRAFT round.
+        refusal(() -> rounds.list(ticketId, issuer), HttpStatus.FORBIDDEN);
+        jdbc.update("UPDATE hr.employee SET can_read_all_sales = TRUE WHERE employee_id = :id", Map.of("id", issuerId));
+        assertThat(rounds.list(ticketId, issuer).rounds()).isEmpty();
         rounds.send(rid, null, salesActor);
+        // Once sent the same flagged reader does see the round (so the empty list above was the draft filter, not a blanket no).
+        assertThat(rounds.list(ticketId, issuer).rounds()).singleElement().satisfies(r -> assertThat(r.status()).isEqualTo("SENT"));
+        jdbc.update("UPDATE hr.employee SET can_read_all_sales = FALSE WHERE employee_id = :id", Map.of("id", issuerId));
         refusal(() -> rounds.list(ticketId, issuer), HttpStatus.FORBIDDEN);
         rounds.forward(rid, warehouse);
 

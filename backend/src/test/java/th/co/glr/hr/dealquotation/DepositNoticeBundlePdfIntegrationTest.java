@@ -19,6 +19,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import org.springframework.mock.web.MockMultipartFile;
+import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.attachment.AttachmentRepository;
 import th.co.glr.hr.attachment.FileStorageService;
@@ -113,6 +114,10 @@ class DepositNoticeBundlePdfIntegrationTest extends DirectQuotationDealTestBase 
         jdbc.update("UPDATE sales.quotation SET origin = 'PRICING_REQUEST' WHERE quotation_id = :id",
             java.util.Map.of("id", deal.quotation().id()));
         assertForbidden(() -> quotationService.renderPdf(deal.quotation().id(), importActor)); // the premise
+        // a read-all-flag holder (hr) sees the approved prices on that row, as the sales manager does
+        UserPrincipal holder = actor(createEmployee("ผู้อ่านราคา 222", "price-reader-222@glr.co.th", "HR", "ฝ่ายบุคคล", null), "hr");
+        jdbc.update("UPDATE hr.employee SET can_read_all_sales = TRUE WHERE employee_id = :id", java.util.Map.of("id", holder.id()));
+        assertThat(quotationService.renderPdf(deal.quotation().id(), holder)).isNotEmpty();
         var bundle = new th.co.glr.hr.deposit.DocumentBundle(attachments, quotationService,
             new th.co.glr.hr.deposit.DepositNoticeRepository(jdbc));
 
@@ -192,6 +197,35 @@ class DepositNoticeBundlePdfIntegrationTest extends DirectQuotationDealTestBase 
         jdbc.update("UPDATE sales.attachment SET file_size = 41943041 WHERE attachment_id = :id", java.util.Map.of("id", other));
         assertStatus(org.springframework.http.HttpStatus.PAYLOAD_TOO_LARGE,
             () -> depositNoticeService.getPdfBundle(id, salesActor));
+    }
+
+    /** A read-all-flag reader's bundle leaves out files of a DRAFT delivery round the owner ticked (sales' private work);
+     * the owner and the sales manager still get them. */
+    @Test
+    void aFlagOnlyReadersBundle_skipsDraftRoundFiles() throws Exception {
+        Deal deal = confirmedDepositDeal();
+        long id = deal.notice().id();
+        long roundId = jdbc.queryForObject("""
+            INSERT INTO sales.delivery_request (ticket_id, round_no, status, requested_by)
+            VALUES (:t, 1, 'DRAFT', :u) RETURNING delivery_request_id
+            """, java.util.Map.of("t", deal.ticketId(), "u", salesActor.id()), Long.class);
+        long draftFile = attachFile(deal.ticketId(), "d.pdf", "application/pdf", onePagePdf("DRAFT-ROUND-SENTINEL"), AttachType.OTHER);
+        jdbc.update("UPDATE sales.attachment SET delivery_request_id = :r WHERE attachment_id = :a",
+            java.util.Map.of("r", roundId, "a", draftFile));
+        depositNoticeService.saveBundleSelection(id, salesActor,
+            new th.co.glr.hr.deposit.DocumentBundle.Selection(false, List.of(draftFile)));
+        UserPrincipal reader = actor(createEmployee("ผู้อ่าน 222", "reader-222@glr.co.th", "HR", "ฝ่ายบุคคล", null), "hr");
+        jdbc.update("UPDATE hr.employee SET can_read_all_sales = TRUE WHERE employee_id = :id", java.util.Map.of("id", reader.id()));
+
+        assertThat(firstPageContaining(pageTexts(depositNoticeService.getPdfBundle(id, reader).pdf()), "DRAFT-ROUND-SENTINEL"))
+            .as("reader").isEqualTo(-1);
+        assertThat(firstPageContaining(pageTexts(depositNoticeService.getPdfBundle(id, salesActor).pdf()), "DRAFT-ROUND-SENTINEL"))
+            .as("owner").isGreaterThanOrEqualTo(1);
+        assertThat(firstPageContaining(pageTexts(depositNoticeService.getPdfBundle(id, salesManagerActor).pdf()), "DRAFT-ROUND-SENTINEL"))
+            .as("sales manager").isGreaterThanOrEqualTo(1);
+        // the remembered choice never hands a flag-only reader the id of a DRAFT-round file
+        assertThat(depositNoticeService.bundleSelection(id, reader).attachmentIds()).as("reader ids").isEmpty();
+        assertThat(depositNoticeService.bundleSelection(id, salesActor).attachmentIds()).as("owner ids").containsExactly(draftFile);
     }
 
     // ── customer header follows the quotation's party ───────────────────────────────────────

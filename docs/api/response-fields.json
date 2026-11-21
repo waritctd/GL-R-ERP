@@ -116,6 +116,7 @@
     "AuthResponse.canManageAllSalesDocuments",
     "AuthResponse.canViewAs",
     "AuthResponse.canViewPeopleInsights",
+    "AuthResponse.readAllSales",
     "AuthResponse.viewAs",
     "BidOutcomeResult.childTicketIds",
     "BillingNoteCandidateDto.docDate",

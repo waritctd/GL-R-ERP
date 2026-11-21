@@ -166,6 +166,31 @@ class ImportDealAuthzIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(json).doesNotContain(RAW_PRICE, PROPOSED_PRICE, APPROVED_PRICE, CALCED_COST, MANUAL_PRICE);
     }
 
+    /** v2.3.0 D6/D11: sales_manager (role) and a read-all holder read the import view, price-free, and advance nothing. */
+    @Test
+    void oversightReadersReadTheImportView_butAdvanceNothing_andOthersStayRefused() throws Exception {
+        ImportRequestDto ir = issueOneImportRequest();
+        UserPrincipal holder = principal(insertEmployee("IMPDEAL-RDR"), "employee");
+        UserPrincipal flaggedImport = importUser;
+        jdbc.update("UPDATE hr.employee SET can_read_all_sales = TRUE WHERE employee_id IN (:a, :b)",
+            Map.of("a", holder.id(), "b", flaggedImport.id()));
+
+        assertForbidden(() -> service.get(ticketId, hrUser)); // unflagged hr, as before
+        assertForbidden(() -> service.get(ticketId, otherSalesRep));
+        for (UserPrincipal reader : List.of(salesManager, holder)) {
+            ImportDealDto deal = service.get(ticketId, reader);
+            assertThat(deal.items()).as(reader.role()).hasSize(2);
+            assertThat(deal.importRequests()).extracting(ImportRequestDto::id).containsExactly(ir.id());
+            assertThat(new ObjectMapper().findAndRegisterModules().writeValueAsString(deal))
+                .doesNotContain(RAW_PRICE, APPROVED_PRICE, CALCED_COST);
+            assertForbidden(() -> importRequestService.advanceStep(ir.id(),
+                new th.co.glr.hr.importrequest.ImportRequestRequests.AdvanceImportStepRequest(null, null, null), reader));
+            assertForbidden(() -> ticketService.updateStage(ticketId, DealStage.PROCUREMENT, null, reader));
+        }
+        // import + flag keeps the import scope and the price-free projection (not the reader view).
+        assertThat(service.get(ticketId, flaggedImport).items()).hasSize(2);
+    }
+
     // ── 5. the paired removal: import loses GET /tickets/{id}, and ONLY that ─────────────────────
 
     @Test

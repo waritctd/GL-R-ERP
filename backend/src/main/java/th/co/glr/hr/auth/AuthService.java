@@ -144,6 +144,7 @@ public class AuthService {
         return new AuthResponse(user, employees.isAdmin(user.id()), employees.isOperator(user.id()),
             employees.canCreateQuotation(user.id()),
             employees.canIssueBillingNote(user.id()), !"import".equals(user.role()) && employees.canIssueTaxInvoice(user.id()),
+            OversightReader.holder(user, employees::canReadAllSales),
             employees.canManageAllSalesDocuments(user), canViewAs,
             canViewPeopleInsights(user), info);
     }

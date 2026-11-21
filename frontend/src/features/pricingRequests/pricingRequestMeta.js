@@ -41,7 +41,7 @@
 // (via canTransition, also asks CANCELLED), and PricingRequestDetailPage.jsx's
 // canCreateCustomerRevision (asks SUPERSEDED). They ask different questions, which is why the
 // guard checks every edge for every status rather than the ones any one caller exercises.
-import { actsAsOwner, holdsAllSalesDocumentsGrant, isOwnerOrKeyer, isSalesOwner } from '../tickets/dealOwnership.js';
+import { actsAsOwner, holdsAllSalesDocumentsGrant, isOversightReader, isOwnerOrKeyer, isSalesOwner } from '../tickets/dealOwnership.js';
 export const ALLOWED_TRANSITIONS = {
   DRAFT: ['SUBMITTED', 'CANCELLED'],
   // SUBMITTED -> READY_FOR_CEO_REVIEW is the factory-quote carry-forward edge: a customer-change revision whose
@@ -185,7 +185,7 @@ export function canManageCustomerQuotation(user, pr) {
 /** Mirrors CustomerQuotationService.VIEW_ROLES: sales (owner-scoped)/sales_manager/ceo/import may read; account
  * has no positive grant anywhere on this aggregate and stays forbidden. */
 export function canViewCustomerQuotation(user, pr) {
-  if (holdsAllSalesDocumentsGrant(user)) return true;
+  if (holdsAllSalesDocumentsGrant(user) || isOversightReader(user)) return true;
   if (!user || !['sales', 'sales_manager', 'ceo', 'import'].includes(user.role)) return false;
   if (user.role === 'sales') return isOwnerOrKeyer({ createdById: pr?.ticketCreatedById, keyedById: pr?.ticketKeyedById }, user.id);
   return true;
