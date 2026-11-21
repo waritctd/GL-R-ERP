@@ -53,6 +53,8 @@ class ShipmentRoundIntegrationTest extends AbstractPostgresIntegrationTest {
     private ShipmentRoundService rounds;
     private ImportRequestService irService;
     private IncomingService incoming;
+    private NoProjectOrderService noProject;
+    private MyIncomingService myIncoming;
     private TicketService ticketService;
     private UserPrincipal owner;
     private UserPrincipal importUser;
@@ -83,6 +85,8 @@ class ShipmentRoundIntegrationTest extends AbstractPostgresIntegrationTest {
             notifications, roundRepo);
         rounds = new ShipmentRoundService(roundRepo, stored, irService, tickets, files);
         incoming = new IncomingService(ticketService, stored, roundRepo);
+        noProject = new NoProjectOrderService(stored, new FactoryConfigRepository(jdbc), notifications, new EmployeeAuthRepository(jdbc));
+        myIncoming = new MyIncomingService(roundRepo, new EmployeeAuthRepository(jdbc));
 
         long ownerId = employee("RND-OWN");
         owner = principal(ownerId, "sales");
@@ -392,6 +396,105 @@ class ShipmentRoundIntegrationTest extends AbstractPostgresIntegrationTest {
         assertRefused(() -> incoming.incoming(ticketA, principal(employee("RND-OTHER-REP"), "sales")), HttpStatus.FORBIDDEN);
     }
 
+    @Test
+    void anOrderWithNoProjectRidesARoundToReceivedWithNoDealSideEffects_andIsReadOnlyByItsPeople() {
+        int eventsBefore = jdbc.queryForObject("SELECT count(*) FROM sales.ticket_event", Map.of(), Integer.class);
+        long order = noProject.create(orderRequest("SHOWROOM", 12), owner).id();
+        assertThat(irStep(order)).isEqualTo(ImportRequestStep.CONTACTED);
+        assertThat(rounds.list(importUser).waiting()).anySatisfy(w -> {
+            assertThat(w.importRequestId()).isEqualTo(order);
+            assertThat(w.ticketId()).isNull();
+            assertThat(w.orderPurpose()).isEqualTo("SHOWROOM");
+        });
+
+        long round = rounds.createRound(new CreateShipmentRoundRequest(factoryId(), null, null,
+            List.of(new LotInput(order, itemOf(order), new BigDecimal("12")))), importUser).id();
+        rounds.advance(round, new AdvanceShipmentRoundRequest(ImportRequestStep.RECEIVED, null, ImportRequestStep.CONTACTED, null, null,
+            List.of(new DocumentInput("PROFORMA", "PI-X"), new DocumentInput("INVOICE", "INV-X"))), importUser);
+
+        assertThat(irStep(order)).isEqualTo(ImportRequestStep.RECEIVED);
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM sales.ticket_event", Map.of(), Integer.class)).isEqualTo(eventsBefore);
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM hr.notification WHERE type = 'IMPORT_LOT_RECEIVED' AND link = '/my-orders'",
+            Map.of(), Integer.class)).isEqualTo(1);
+        assertThat(rounds.get(round, importUser).lots().get(0).orderPurpose()).isEqualTo("SHOWROOM");
+
+        // read: the requester, the sales manager, import; a showroom order also by the showroom grant, nobody else
+        UserPrincipal otherRep = principal(employee("RND-OTH-REP"), "sales");
+        assertThat(irService.get(order, owner).id()).isEqualTo(order);
+        irService.get(order, salesManager);
+        irService.get(order, importUser);
+        assertRefused(() -> irService.get(order, otherRep), HttpStatus.FORBIDDEN);
+        assertRefused(() -> irService.renderStored(order, otherRep), HttpStatus.FORBIDDEN);
+        assertThat(irService.renderStored(order, owner)).isNotEmpty();
+        jdbc.update("UPDATE hr.employee SET can_see_showroom_orders = TRUE WHERE employee_id = :id", Map.of("id", otherRep.id()));
+        irService.get(order, otherRep);
+        long sample = noProject.create(orderRequest("SAMPLE", 3), owner).id();
+        assertRefused(() -> irService.get(sample, otherRep), HttpStatus.FORBIDDEN); // the flag reads SHOWROOM only
+
+        // deal-scoped actions on it answer 409, never a 500
+        assertRefused(() -> irService.revise(order, owner), HttpStatus.CONFLICT);
+        assertRefused(() -> irService.advanceStep(order, new ImportRequestRequests.AdvanceImportStepRequest(ImportRequestStep.ORDERED, null, null), importUser),
+            HttpStatus.CONFLICT);
+
+        // ของที่ฉันสั่ง: the requester sees both orders and the project IRs of their deals; the flag holder only the showroom one
+        assertThat(myIncoming.myIncoming(owner).rows()).extracting(r -> r.kind()).contains("SHOWROOM", "SAMPLE", "PROJECT");
+        assertThat(myIncoming.myIncoming(otherRep).rows()).extracting(r -> r.kind()).containsOnly("SHOWROOM");
+        assertThat(myIncoming.myIncoming(salesManager).rows()).extracting(r -> r.importRequestId()).contains(order, sample);
+        assertRefused(() -> myIncoming.myIncoming(importUser), HttpStatus.FORBIDDEN);
+        assertThat(myIncoming.myIncoming(principal(employee("RND-OTH-REP2"), "sales")).rows()).isEmpty();
+    }
+
+    @Test
+    void aNoProjectOrderNeedsEveryField_andTheDealEntryGate() {
+        for (var bad : List.of(
+            new NoProjectOrderService.CreateRequest(null, "ให้ผู้ออกแบบ", factoryId(), tomorrow(), lines(5)),
+            new NoProjectOrderService.CreateRequest("SAMPLE", " ", factoryId(), tomorrow(), lines(5)),
+            new NoProjectOrderService.CreateRequest("SAMPLE", "ให้ผู้ออกแบบ", null, tomorrow(), lines(5)),
+            new NoProjectOrderService.CreateRequest("SAMPLE", "ให้ผู้ออกแบบ", factoryId(), tomorrow(), List.of()),
+            new NoProjectOrderService.CreateRequest("SAMPLE", "ให้ผู้ออกแบบ", factoryId(), null, lines(5)),
+            new NoProjectOrderService.CreateRequest("SAMPLE", "ให้ผู้ออกแบบ", factoryId(), tomorrow().minusDays(2), lines(5)),
+            new NoProjectOrderService.CreateRequest("SAMPLE", "ให้ผู้ออกแบบ", factoryId(), tomorrow(),
+                List.of(new NoProjectOrderService.Line("Slate", "60x60", BigDecimal.ZERO, "แผ่น"))),
+            new NoProjectOrderService.CreateRequest("SAMPLE", "ให้ผู้ออกแบบ", factoryId(), tomorrow(),
+                List.of(new NoProjectOrderService.Line("Slate", "60x60", new BigDecimal("1.234"), "แผ่น"))),
+            new NoProjectOrderService.CreateRequest("SAMPLE", "ให้ผู้ออกแบบ", factoryId(), tomorrow(),
+                List.of(new NoProjectOrderService.Line("Slate", "60x60", new BigDecimal("10000000000"), "แผ่น"))))) {
+            assertRefused(() -> noProject.create(bad, owner), HttpStatus.BAD_REQUEST);
+        }
+        assertRefused(() -> noProject.create(orderRequest("SAMPLE", 1), accountUser), HttpStatus.FORBIDDEN);
+    }
+
+    @Test
+    void aNoProjectOrderCanBeWithdrawnOnlyWhileOnNoRound_andAQuotationGrantHolderReadsTheirOrder() {
+        long order = noProject.create(orderRequest("SAMPLE", 5), owner).id();
+        UserPrincipal otherRep = principal(employee("RND-OTH-WD"), "sales");
+        assertRefused(() -> noProject.withdraw(order, otherRep), HttpStatus.FORBIDDEN);
+        noProject.withdraw(order, owner);
+        assertThat(jdbc.queryForObject("SELECT status FROM sales.import_request WHERE import_request_id = :id", Map.of("id", order), String.class))
+            .isEqualTo("SUPERSEDED"); // the IR number stays on record, with no successor
+        assertThat(jdbc.queryForObject("SELECT superseded_by_id FROM sales.import_request WHERE import_request_id = :id", Map.of("id", order), Long.class)).isNull();
+        assertThat(rounds.list(importUser).waiting()).extracting(w -> w.importRequestId()).doesNotContain(order);
+        assertThat(myIncoming.myIncoming(owner).rows()).extracting(r -> r.importRequestId()).doesNotContain(order);
+        assertRefused(() -> noProject.withdraw(order, owner), HttpStatus.CONFLICT);
+
+        long planned = noProject.create(orderRequest("STOCK", 5), owner).id();
+        rounds.createRound(new CreateShipmentRoundRequest(factoryId(), null, null,
+            List.of(new LotInput(planned, itemOf(planned), new BigDecimal("5")))), importUser);
+        assertRefused(() -> noProject.withdraw(planned, owner), HttpStatus.CONFLICT); // import takes the lot off first
+
+        // a quotation-grant holder (any role) may raise and read their own order; delivered long ago it drops off the page
+        UserPrincipal qc = principal(employee("RND-QC"), "qc");
+        jdbc.update("UPDATE hr.employee SET can_create_quotation = TRUE WHERE employee_id = :id", Map.of("id", qc.id()));
+        long mine = noProject.create(orderRequest("SAMPLE", 2), qc).id();
+        assertThat(irService.get(mine, qc).id()).isEqualTo(mine);
+        assertThat(myIncoming.myIncoming(qc).rows()).extracting(r -> r.importRequestId()).containsExactly(mine);
+        long done = round("RECEIVED");
+        jdbc.update("UPDATE sales.shipment_round SET received_on = current_date - 40 WHERE shipment_round_id = :r", Map.of("r", done));
+        jdbc.update("INSERT INTO sales.shipment_lot (shipment_round_id, import_request_id, import_request_item_id, qty)"
+            + " SELECT :r, :ir, import_request_item_id, 2 FROM sales.import_request_item WHERE import_request_id = :ir", Map.of("r", done, "ir", mine));
+        assertThat(myIncoming.myIncoming(qc).rows()).isEmpty();
+    }
+
     // ── fixtures ────────────────────────────────────────────────────────────────────────────────────────
 
     private static AdvanceShipmentRoundRequest advanceTo(String from, String to) {
@@ -452,6 +555,18 @@ class ShipmentRoundIntegrationTest extends AbstractPostgresIntegrationTest {
     private int stepEvents(long ticket) {
         return jdbc.queryForObject("SELECT count(*) FROM sales.ticket_event WHERE ticket_id = :t AND kind = 'IMPORT_STEP_ADVANCED'",
             Map.of("t", ticket), Integer.class);
+    }
+
+    private static LocalDate tomorrow() {
+        return LocalDate.now(java.time.ZoneId.of("Asia/Bangkok")).plusDays(1);
+    }
+
+    private static List<NoProjectOrderService.Line> lines(int qty) {
+        return List.of(new NoProjectOrderService.Line("Slate Grey", "60x60", new BigDecimal(qty), "แผ่น"));
+    }
+
+    private NoProjectOrderService.CreateRequest orderRequest(String purpose, int qty) {
+        return new NoProjectOrderService.CreateRequest(purpose, "ให้ผู้ออกแบบ (ทดสอบ)", factoryId(), tomorrow(), lines(qty));
     }
 
     private long factoryId() {

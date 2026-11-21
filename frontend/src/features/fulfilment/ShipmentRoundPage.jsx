@@ -14,12 +14,13 @@ import { cn } from '../../utils/cn.js';
 import { formatThaiDate } from '../../utils/format.js';
 import { IMPORT_STEPS, importStepIndex } from '../importProgress/importSteps.js';
 import { AdvanceRoundSheet } from './AdvanceRoundSheet.jsx';
+import { DownloadIrButton } from './DownloadIrButton.jsx';
 import { LotModal } from './LotModal.jsx';
 import { PlanRoundSheet } from './PlanRoundSheet.jsx';
 import { RoundDocuments } from './RoundDocuments.jsx';
 import { RoundFactsModal } from './RoundFactsModal.jsx';
 import {
-  factLabel, formatQty, lotLabel, lotProduct, lotsEditable, lotWho, roundIrCount, roundTitle, STEP_DATE_KEY, stepPillText, stepTone,
+  factLabel, formatQty, lotLabel, lotProduct, lotsEditable, lotWho, lotWhoSub, roundIrCount, roundTitle, STEP_DATE_KEY, stepPillText, stepTone,
 } from './shipmentRounds.js';
 import { useRoundUndo } from './useRoundUndo.jsx';
 
@@ -94,8 +95,8 @@ export function ShipmentRoundPage({ user, showToast }) {
   const f = round.facts ?? {};
   const mode = f.transportMode;
   const lotColumns = [
-    { key: 'ir', header: 'ใบขอซื้อ', render: (l) => <Link to={`/import/deals/${l.ticketId}`} className="text-info underline"><code>{l.docNumber}</code></Link> },
-    { key: 'who', header: 'โครงการ / ลูกค้า', render: (l) => <span className="flex flex-col"><b className="text-sm">{lotWho(l)}</b><small className="text-text-muted">งาน {l.ticketCode}</small></span> },
+    { key: 'ir', header: 'ใบขอซื้อ', render: (l) => (l.ticketId == null ? <span className="flex flex-col items-start gap-1"><code>{l.docNumber}</code><DownloadIrButton importRequestId={l.importRequestId} docNumber={l.docNumber} factoryName={round.factoryName} showToast={showToast} /></span> : <Link to={`/import/deals/${l.ticketId}`} className="text-info underline"><code>{l.docNumber}</code></Link>) },
+    { key: 'who', header: 'โครงการ / ลูกค้า', render: (l) => <span className="flex flex-col"><b className="text-sm">{lotWho(l)}</b><small className="text-text-muted">{lotWhoSub(l)}</small></span> },
     { key: 'product', header: 'สินค้า', render: (l) => lotProduct(l) },
     { key: 'qty', header: 'ไปรอบนี้', render: (l) => <span className="flex flex-col tabular-nums"><b>{formatQty(l.qty)} {l.unit ?? ''}</b><small className="text-text-muted">จาก {formatQty(l.itemQty)}</small></span> },
     { key: 'lot', header: 'ล็อต', render: (l) => <span className="flex flex-col"><span>{lotLabel(l)}</span>{l.remainingQty > 0 ? <small className="text-text-muted">เหลือ {formatQty(l.remainingQty)} รอจัดรอบ</small> : null}</span> },
@@ -109,7 +110,8 @@ export function ShipmentRoundPage({ user, showToast }) {
     <div className="flex items-start justify-between gap-3 rounded-md border border-border bg-surface p-3" data-testid="lot-card">
       <span className="flex min-w-0 flex-col gap-0.5">
         <b className="text-sm">{lotWho(l)}</b>
-        <small className="text-text-muted"><Link to={`/import/deals/${l.ticketId}`} className="text-info underline"><code>{l.docNumber}</code></Link> · {lotProduct(l)}</small>
+        {l.ticketId == null ? <DownloadIrButton importRequestId={l.importRequestId} docNumber={l.docNumber} factoryName={round.factoryName} showToast={showToast} /> : null}
+        <small className="text-text-muted">{l.ticketId == null ? <code>{l.docNumber}</code> : <Link to={`/import/deals/${l.ticketId}`} className="text-info underline"><code>{l.docNumber}</code></Link>} · {lotProduct(l)}</small>
         <small className="text-text-muted">{lotLabel(l)}{l.remainingQty > 0 ? ` · เหลือ ${formatQty(l.remainingQty)} รอจัดรอบ` : ''}</small>
       </span>
       <span className="flex shrink-0 flex-col items-end gap-1 text-right tabular-nums">

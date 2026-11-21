@@ -157,6 +157,8 @@ const PATH_GUARDS = [
   // งานนำเข้า — Import's cross-deal fulfilment workspace. Frontend gating only — the four endpoints enforce the
   // real gate and are unchanged. Mirrors ROLE_PERMISSIONS.canActOnFulfilment, itself a mirror of
   // TicketService.FULFILMENT_ROLES {import, ceo}.
+  // ของที่ฉันสั่ง: MyIncomingService serves sales, sales_manager, ceo and read-all holders (OversightReader).
+  { test: (p) => p === '/my-orders', can: (u) => hasPermission(u.role, 'canViewMyOrders') || isOversightReader(u) || Boolean(u.canCreateQuotation) || Boolean(u.canSeeShowroomOrders) },
   { test: (p) => p === '/fulfilment' || p.startsWith('/fulfilment/'), can: (u) => hasPermission(u.role, 'canActOnFulfilment') || isOversightReader(u) },
   // Matches the launcher's nav condition exactly (AppShell.jsx: `role === 'ceo'`).
   { test: (p) => p === '/ceo-settings', can: (u) => u.role === 'ceo' },
@@ -312,7 +314,7 @@ export function dealRedirectFor(path, user) {
 // The read pages an oversight reader (sales_manager, or a read-all grant holder) opens: the 7 nav pages, the deal page, and the
 // drill-downs they link to. The lock exemption below and AppShell's nav filter share it, so the menu and the guard cannot drift.
 // receipts-import (account only) and commissions are never in it.
-const READER_PATH_PREFIXES = ['/tickets', '/quotations', '/catalog', '/visits', '/pricing-requests', '/fulfilment', '/import/deals', '/finance'];
+const READER_PATH_PREFIXES = ['/tickets', '/quotations', '/catalog', '/visits', '/my-orders', '/pricing-requests', '/fulfilment', '/import/deals', '/finance'];
 
 export function isReaderPath(path) {
   const pathname = path.split(/[?#]/)[0];

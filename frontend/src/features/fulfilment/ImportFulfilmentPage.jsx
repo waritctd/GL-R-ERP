@@ -13,9 +13,10 @@ import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { cn } from '../../utils/cn.js';
 import { formatThaiDate, fulfilmentStatusLabel } from '../../utils/format.js';
 import { AdvanceRoundSheet } from './AdvanceRoundSheet.jsx';
+import { DownloadIrButton } from './DownloadIrButton.jsx';
 import { PlanRoundSheet } from './PlanRoundSheet.jsx';
 import {
-  formatQty, irRows, lotProduct, roundIrCount, roundSummaryLine, roundTitle, STEP_CHIPS, stepPillText, stepTone, waitingFactories,
+  formatQty, irRows, lotProduct, lotWho, lotWhoSub, roundIrCount, roundSummaryLine, roundTitle, STEP_CHIPS, stepPillText, stepTone, waitingFactories,
 } from './shipmentRounds.js';
 import { useRoundUndo } from './useRoundUndo.jsx';
 
@@ -61,7 +62,7 @@ export function ImportFulfilmentPage({ user, showToast }) {
 
   const term = search.trim().toLowerCase();
   const legacyDeals = useMemo(() => {
-    const tracked = new Set([...rounds.flatMap((r) => r.lots.map((l) => l.ticketId)), ...waiting.map((w) => w.ticketId)]);
+    const tracked = new Set([...rounds.flatMap((r) => r.lots.map((l) => l.ticketId)), ...waiting.map((w) => w.ticketId)].filter((id) => id != null));
     return (ticketsQuery.data ?? [])
       .filter((t) => ['IR_ISSUED', 'IR_SENT', 'SHIPPING'].includes(t.fulfillmentStatus) && !tracked.has(t.id))
       .filter((t) => !term || [t.customerName, t.code, t.projectName, t.title].some((f) => (f ?? '').toLowerCase().includes(term)))
@@ -82,15 +83,17 @@ export function ImportFulfilmentPage({ user, showToast }) {
     {
       key: 'ir',
       header: 'ใบขอซื้อ',
-      render: (w) => <Link to={`/import/deals/${w.ticketId}`} className="text-info underline"><code>{w.docNumber}</code></Link>,
+      render: (w) => (w.ticketId == null
+        ? <span className="flex flex-col items-start gap-1"><code>{w.docNumber}</code><DownloadIrButton importRequestId={w.importRequestId} docNumber={w.docNumber} factoryName={w.factoryName} showToast={showToast} /></span>
+        : <Link to={`/import/deals/${w.ticketId}`} className="text-info underline"><code>{w.docNumber}</code></Link>),
     },
     {
       key: 'who',
       header: 'โครงการ / ลูกค้า',
       render: (w) => (
         <span className="flex flex-col gap-0.5">
-          <span className="text-sm font-bold">{w.projectName || w.customerName || w.ticketCode}</span>
-          <span className="text-2xs text-text-muted">งาน {w.ticketCode}</span>
+          <span className="text-sm font-bold">{lotWho(w)}</span>
+          <span className="text-2xs text-text-muted">{lotWhoSub(w)}</span>
         </span>
       ),
     },
@@ -144,11 +147,14 @@ export function ImportFulfilmentPage({ user, showToast }) {
       <span className="flex min-w-0 flex-col gap-0.5">
         <b className="text-sm">{w.factoryName}</b>
         <small className="text-text-muted">
-          <Link to={`/import/deals/${w.ticketId}`} className="text-info underline"><code>{w.docNumber}</code></Link>
-          {' · '}{w.projectName || w.customerName || w.ticketCode} · เหลือ {w.lines.map((l) => `${formatQty(l.remainingQty)} ${l.unit ?? ''}`.trim()).join(', ')}
+          {w.ticketId == null ? <code>{w.docNumber}</code> : <Link to={`/import/deals/${w.ticketId}`} className="text-info underline"><code>{w.docNumber}</code></Link>}
+          {' · '}{lotWho(w)} · เหลือ {w.lines.map((l) => `${formatQty(l.remainingQty)} ${l.unit ?? ''}`.trim()).join(', ')}
         </small>
       </span>
-      <StatusBadge tone="warning">รอจัดรอบ</StatusBadge>
+      <span className="flex shrink-0 flex-col items-end gap-1">
+        <StatusBadge tone="warning">รอจัดรอบ</StatusBadge>
+        {w.ticketId == null ? <DownloadIrButton importRequestId={w.importRequestId} docNumber={w.docNumber} factoryName={w.factoryName} showToast={showToast} /> : null}
+      </span>
     </div>
   );
   const roundCard = (r) => (

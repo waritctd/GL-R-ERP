@@ -90,6 +90,18 @@ describe('การขนส่ง queue (shipment rounds)', () => {
     expect(screen.getByTestId('plan-round')).toBeTruthy(); // the filled จัดรอบขนส่ง button of the waiting section
   });
 
+  it('an order with no project reads "ตัวอย่าง · requester" and "ไม่มีโครงการ", with no deal link', async () => {
+    vi.mocked(api.shipmentRounds.list).mockResolvedValue({ rounds: [], waiting: [{
+      importRequestId: 31, docNumber: 'IR-TEST-031', factoryId: 2, factoryName: 'Waiting Ceramics', ticketId: null, ticketCode: null,
+      customerName: null, projectName: null, orderPurpose: 'SAMPLE', purposeNote: 'ให้ผู้ออกแบบ (ทดสอบ)', requesterName: 'คุณ ทดสอบ',
+      lines: [{ itemId: 9, code: 'S1', brand: null, model: 'Slate', size: '60x60', unit: 'แผ่น', remainingQty: 12 }] }] });
+    renderAt('/fulfilment');
+    expect((await screen.findAllByText('ตัวอย่าง · คุณ ทดสอบ')).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/ไม่มีโครงการ/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText('IR-TEST-031')[0].closest('a')).toBeNull(); // no deal to open
+    expect(screen.getAllByTestId('ir-pdf-31').length).toBeGreaterThan(0); // import gets the order form to send
+  });
+
   it('advances a round from the queue asking only that step\'s facts, then offers the 30 s undo', async () => {
     vi.mocked(api.shipmentRounds.advance).mockResolvedValue({
       round: round({ importStep: 'AWAITING_CUSTOMS', undoUntil: new Date(Date.now() + 30_000).toISOString() }),

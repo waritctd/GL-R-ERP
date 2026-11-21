@@ -23,10 +23,13 @@ public final class ShipmentRoundDtos {
 
     /** One quantity of one IR line on a round. {@code lotNo} of {@code lotCount} counts the line's lots, plus one for
      * quantity still on no round. */
-    public record ShipmentLotDto(long lotId, long importRequestId, String docNumber, long ticketId, String ticketCode,
+    /** {@code ticketId}/{@code ticketCode}/{@code projectName} are null for a no-project order, which names its
+     * {@code orderPurpose} (SAMPLE / SHOWROOM / STOCK), who it is for ({@code purposeNote}) and who asked. */
+    public record ShipmentLotDto(long lotId, long importRequestId, String docNumber, Long ticketId, String ticketCode,
                          String customerName, String projectName, long itemId, String code, String brand,
                          String model, String size, String unit, BigDecimal qty, BigDecimal itemQty,
-                         int lotNo, int lotCount, BigDecimal remainingQty, BigDecimal receivedQty) {}
+                         int lotNo, int lotCount, BigDecimal remainingQty, BigDecimal receivedQty, String orderPurpose,
+                         String purposeNote, String requesterName) {}
 
     public record ShipmentRoundDto(long id, Long factoryId, String factoryName, String source, String importStep,
                            LocalDate contactedOn, LocalDate orderedOn, LocalDate pickedUpOn, LocalDate inTransitOn,
@@ -39,8 +42,8 @@ public final class ShipmentRoundDtos {
                               BigDecimal remainingQty) {}
 
     public record ShipmentWaitingDto(long importRequestId, String docNumber, Long factoryId, String factoryName,
-                             long ticketId, String ticketCode, String customerName, String projectName,
-                             List<ShipmentWaitingLine> lines) {}
+                             Long ticketId, String ticketCode, String customerName, String projectName,
+                             List<ShipmentWaitingLine> lines, String orderPurpose, String purposeNote, String requesterName) {}
 
     public record ShipmentRoundsResponse(List<ShipmentRoundDto> rounds, List<ShipmentWaitingDto> waiting) {}
 

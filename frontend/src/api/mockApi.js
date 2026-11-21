@@ -2358,6 +2358,7 @@ function authResponse(user) {
     canIssueTaxInvoice: Boolean(user?.canIssueTaxInvoice),
     readAllSales: holdsReadAllSalesGrant(user),
     canManageAllSalesDocuments: holdsAllSalesDocumentsGrant(user),
+    canSeeShowroomOrders: user?.canSeeShowroomOrders === true,
     canViewAs: false,
     canViewPeopleInsights: ['ceo', 'hr'].includes(user?.role),
     viewAs: null,
@@ -2874,6 +2875,14 @@ function findStoredImportRequestRaw(id) {
 
 // STORED-aggregate read gate — mirrors ImportRequestService#requireRead: CEO/import/sales_manager
 // unrestricted; sales only the deal's own owner.
+// A no-project order has no deal: its requester, the sales manager, import, the CEO and read-all holders read it (SHOWROOM also the
+// showroom grant), mirroring ImportRequestService#requireReadRow.
+function requireNoProjectRead(row, user) {
+  if (['ceo', 'import', 'sales_manager'].includes(user.role) || holdsReadAllSalesGrant(user) || row.requesterId === user.id) return;
+  if (row.orderPurpose === 'SHOWROOM' && user.canSeeShowroomOrders === true) return;
+  fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+}
+
 function requireStoredIrRead(ticket, user) {
   if (user.role === 'ceo' || user.role === 'import' || user.role === 'sales_manager' || holdsReadAllSalesGrant(user)) return;
   if (isSalesOwner(ticket, user)) return;
@@ -3219,17 +3228,49 @@ function mockEnsureMigratedRounds() {
   });
 }
 
+// A no-project order (สั่งของไม่มีโครงการ) has no ticket: it counts as active and has no deal side effects.
+function mockTicketOrNull(ir) {
+  return ir.ticketId == null ? null : findTicketRaw(ir.ticketId);
+}
+function mockIrActive(ir) {
+  return ir.ticketId == null || (findTicketRaw(ir.ticketId).lifecycle ?? 'ACTIVE') === 'ACTIVE';
+}
+const MOCK_PURPOSE_LABELS = { SAMPLE: 'ตัวอย่าง', SHOWROOM: 'โชว์รูม', STOCK: 'สต็อก' };
+let mockNoProjectDocSeq = 900;
+
+// The lots and the unplanned quantity of one IR as the sales view shows them (IncomingService): no price, no factory document.
+function mockIncomingForIr(ir) {
+  const lots = [];
+  const waiting = [];
+  ir.items.forEach((item) => {
+    const mine = mockShipmentRounds.flatMap((r) => r.lots.filter((l) => l.itemId === item.id).map((l) => ({ l, r })));
+    const remaining = Number(item.qty) - mine.reduce((sum, { l }) => sum + l.qty, 0);
+    const product = [[item.brand, item.model].filter(Boolean).join(' ') || item.code, item.size].filter(Boolean).join(' ');
+    mine.forEach(({ l, r }, i) => lots.push({
+      lotId: l.lotId, product, unit: item.unit ?? null, qty: l.qty, receivedQty: r.importStep === 'RECEIVED' ? (l.receivedQty ?? l.qty) : null,
+      lotNo: i + 1, lotCount: remaining > 0 ? mine.length + 1 : mine.length, step: r.importStep,
+      expectedOn: r.facts.etaOn ?? ir.expectedArrivalTo ?? null, roundLabel: r.facts.label, transportMode: r.facts.transportMode,
+      vessel: r.facts.vessel, voyage: r.facts.voyage, port: r.facts.port, etdActualOn: r.facts.etdActualOn, etaOn: r.facts.etaOn,
+      arrivedOn: r.facts.arrivedOn, customsReleasedOn: r.facts.customsReleasedOn, contactedOn: r.contactedOn, orderedOn: r.orderedOn,
+      pickedUpOn: r.pickedUpOn, inTransitOn: r.inTransitOn, awaitingCustomsOn: r.awaitingCustomsOn, receivedOn: r.receivedOn,
+    }));
+    if (remaining > 0) waiting.push({ product, unit: item.unit ?? null, remainingQty: remaining });
+  });
+  return { lots, waiting };
+}
+
 function mockShipmentLotDtos(round) {
   return round.lots.map((lot) => {
     const ir = mockImportRequests.find((r) => r.id === lot.importRequestId);
     const item = ir.items.find((it) => it.id === lot.itemId);
-    const ticket = findTicketRaw(ir.ticketId);
+    const ticket = mockTicketOrNull(ir);
     const all = mockShipmentRounds.flatMap((x) => x.lots).filter((l) => l.itemId === lot.itemId);
     const placed = all.reduce((sum, l) => sum + l.qty, 0);
     const remaining = Math.max(0, Number(item.qty) - placed);
     return {
-      lotId: lot.lotId, importRequestId: ir.id, docNumber: ir.docNumber, ticketId: ticket.id, ticketCode: ticket.code,
-      customerName: ticket.customerName ?? null, projectName: ticket.projectName ?? null, itemId: item.id,
+      lotId: lot.lotId, importRequestId: ir.id, docNumber: ir.docNumber, ticketId: ticket?.id ?? null, ticketCode: ticket?.code ?? null,
+      customerName: ticket?.customerName ?? null, projectName: ticket?.projectName ?? null, itemId: item.id,
+      orderPurpose: ir.orderPurpose ?? null, purposeNote: ir.purposeNote ?? null, requesterName: ir.requestedByName ?? null,
       code: item.code, brand: item.brand ?? null, model: item.model ?? null, size: item.size ?? null, unit: item.unit ?? null,
       qty: lot.qty, itemQty: Number(item.qty), lotNo: all.findIndex((l) => l.lotId === lot.lotId) + 1,
       lotCount: remaining > 0 ? all.length + 1 : all.length, remainingQty: remaining, receivedQty: lot.receivedQty ?? null,
@@ -3282,7 +3323,7 @@ function mockPlaceLots(round, inputs) {
   for (const input of inputs ?? []) {
     const ir = mockImportRequests.find((r) => r.id === input.importRequestId && r.status === 'ISSUED');
     if (!ir) fail('ใบขอซื้อนี้ไม่ได้อยู่ในสถานะที่จัดรอบได้', 409);
-    if ((findTicketRaw(ir.ticketId).lifecycle ?? 'ACTIVE') !== 'ACTIVE') fail(`งานของใบขอซื้อ ${ir.docNumber} ไม่ได้อยู่ในสถานะใช้งาน`, 409);
+    if (!mockIrActive(ir)) fail(`งานของใบขอซื้อ ${ir.docNumber} ไม่ได้อยู่ในสถานะใช้งาน`, 409);
     if (!round.factoryId || round.factoryId !== ir.factoryId) fail(`ใบขอซื้อ ${ir.docNumber} เป็นของโรงงานอื่น`, 409);
     const qty = Math.round(Number(input.qty) * 100) / 100;
     if (!(qty > 0)) fail('จำนวนต้องมากกว่า 0', 400);
@@ -3325,8 +3366,8 @@ function mockRequireDeletable(round) {
 function mockFinishLots(rounds, irIds, user) {
   rounds.forEach((r) => { r.undo = null; });
   mockRecomputeIrSteps(irIds, user, null).forEach(({ ir, from, to }) => {
-    const ticket = findTicketRaw(ir.ticketId);
-    if ((ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE') return;
+    const ticket = mockTicketOrNull(ir);
+    if (!ticket || (ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE') return;
     pushEvent(ticket, user, 'IMPORT_STEP_ADVANCED', null, null,
       `โรงงาน ${ir.factoryName}: ${MOCK_IMPORT_REQUEST_STEP_LABELS_TH[from] ?? from} → ${MOCK_IMPORT_REQUEST_STEP_LABELS_TH[to] ?? to}`);
   });
@@ -11203,22 +11244,7 @@ export const api = {
       mockEnsureMigratedRounds();
       const irs = mockImportRequests.filter((r) => r.ticketId === Number(id) && r.status === 'ISSUED');
       const out = irs.map((ir) => {
-        const lots = [];
-        const waiting = [];
-        ir.items.forEach((item) => {
-          const mine = mockShipmentRounds.flatMap((r) => r.lots.filter((l) => l.itemId === item.id).map((l) => ({ l, r })));
-          const remaining = Number(item.qty) - mine.reduce((sum, { l }) => sum + l.qty, 0);
-          const product = [[item.brand, item.model].filter(Boolean).join(' ') || item.code, item.size].filter(Boolean).join(' ');
-          mine.forEach(({ l, r }, i) => lots.push({
-            lotId: l.lotId, product, unit: item.unit ?? null, qty: l.qty, receivedQty: r.importStep === 'RECEIVED' ? (l.receivedQty ?? l.qty) : null,
-            lotNo: i + 1, lotCount: remaining > 0 ? mine.length + 1 : mine.length, step: r.importStep,
-            expectedOn: r.facts.etaOn ?? ir.expectedArrivalTo ?? null, roundLabel: r.facts.label, transportMode: r.facts.transportMode,
-            vessel: r.facts.vessel, voyage: r.facts.voyage, port: r.facts.port, etdActualOn: r.facts.etdActualOn, etaOn: r.facts.etaOn,
-            arrivedOn: r.facts.arrivedOn, customsReleasedOn: r.facts.customsReleasedOn, contactedOn: r.contactedOn, orderedOn: r.orderedOn,
-            pickedUpOn: r.pickedUpOn, inTransitOn: r.inTransitOn, awaitingCustomsOn: r.awaitingCustomsOn, receivedOn: r.receivedOn,
-          }));
-          if (remaining > 0) waiting.push({ product, unit: item.unit ?? null, remainingQty: remaining });
-        });
+        const { lots, waiting } = mockIncomingForIr(ir);
         const oneUnit = new Set(ir.items.map((i) => i.unit ?? '')).size === 1;
         return {
           importRequestId: ir.id, docNumber: ir.docNumber, factoryName: ir.factoryName, importStep: ir.importStep,
@@ -15282,6 +15308,95 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
   // "not supported in mock mode" stub, same as the legacy importRequests.pages/download above — the
   // block comment on that helper section explains why the exotic text-regeneration edge cases are
   // simplified rather than mirrored exactly.
+  // Mirrors NoProjectOrderService: whoever may enter a deal raises an order with no project; ISSUED at once (CONTACTED),
+  // every field required, no approval, no quotation or money.
+  noProjectOrders: {
+    async create(request) {
+      const user = requireSession();
+      if (!['sales', 'sales_manager'].includes(user.role) && !user.canCreateQuotation) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      if (!MOCK_PURPOSE_LABELS[request?.purpose]) fail('เลือกว่าสั่งเพื่ออะไร (ตัวอย่าง / โชว์รูม / สต็อก)', 400);
+      const note = String(request.purposeNote ?? '').trim();
+      if (!note) fail('ระบุว่าให้ใคร / ใช้ที่ไหน', 400);
+      const factory = mockPriceImportFactories.find((f) => f.factoryId === Number(request.factoryId));
+      if (!factory) fail('เลือกโรงงาน', 400);
+      if (!(request.lines ?? []).length) fail('ใส่สินค้าอย่างน้อย 1 รายการ', 400);
+      const lines = request.lines.map((l) => {
+        if (!String(l.code ?? '').trim()) fail('ระบุรหัสหรือชื่อสินค้าของทุกรายการ', 400);
+        if (!(Number(l.qty) > 0)) fail('จำนวนต้องมากกว่า 0 ทุกรายการ', 400);
+        if (Math.round(Number(l.qty) * 100) / 100 !== Number(l.qty)) fail('จำนวนมีทศนิยมได้ไม่เกิน 2 ตำแหน่ง', 400);
+        if (Number(l.qty) > 9999999999.99) fail('จำนวนต้องไม่เกิน 9,999,999,999.99', 400);
+        if (!String(l.unit ?? '').trim()) fail('ระบุหน่วยของทุกรายการ', 400);
+        return l;
+      });
+      const today = new Date().toISOString().slice(0, 10);
+      if (!request.wantedBy || request.wantedBy < today) fail('ระบุวันที่ต้องการของ (วันนี้หรือหลังจากนี้)', 400);
+      const id = mockImportRequestSeq++;
+      const row = {
+        id, ticketId: null, ticketCode: null, brand: factory.name, factoryId: factory.factoryId, factoryName: factory.name, version: 1,
+        status: 'ISSUED', docNumber: `IR${String(new Date().getFullYear() + 543).slice(2)}${String(mockNoProjectDocSeq++).padStart(3, '0')}`,
+        issueDate: today, firstIssuedDate: today, customerName: note, projectName: MOCK_PURPOSE_LABELS[request.purpose],
+        requestedByName: user.name, requiredByNote: request.wantedBy, depositReceivedDate: null, vesselEtaNote: null,
+        importStep: 'CONTACTED', importStepAt: today, importStepById: user.id, importStepByName: user.name, importStepNote: null,
+        leadTimeMinDays: null, leadTimeMaxDays: null, emailTo: null, emailSubject: null, emailBody: null, emailSentAt: null,
+        createdById: user.id, createdByName: user.name, issuedById: user.id, issuedByName: user.name,
+        orderPurpose: request.purpose, requesterId: user.id, purposeNote: note, wantedBy: request.wantedBy,
+        createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), issuedAt: new Date().toISOString(),
+        items: lines.map((l, i) => ({ id: `${id}-${i + 1}`, importRequestId: id, ticketItemId: null, seq: i + 1, code: l.code.trim(), size: l.size?.trim() || null, qty: Number(l.qty), unit: l.unit.trim() })),
+      };
+      mockImportRequests.push(row);
+      return delay({ importRequest: mockImportRequestDto(row) });
+    },
+    // Takes back an order that is on no round: SUPERSEDED with no successor (the number stays on record).
+    async withdraw(id) {
+      const user = requireSession();
+      const row = mockImportRequests.find((r) => r.id === Number(id) && r.ticketId == null);
+      if (!row) fail('ไม่พบคำขอสั่งของนี้', 404);
+      if (row.requesterId !== user.id && !['import', 'ceo'].includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      if (row.status !== 'ISSUED') fail('คำขอนี้ถูกยกเลิกไปแล้ว', 409);
+      mockEnsureMigratedRounds();
+      if (mockShipmentRounds.some((r) => r.lots.some((l) => l.importRequestId === row.id))) {
+        fail('คำขอนี้อยู่ในรอบขนส่งแล้ว ให้ฝ่ายนำเข้าเอาออกจากรอบก่อนจึงยกเลิกได้', 409);
+      }
+      row.status = 'SUPERSEDED';
+      row.supersededById = null;
+      return delay({ importRequest: mockImportRequestDto(row) });
+    },
+  },
+
+  // Mirrors MyIncomingService (ของที่ฉันสั่ง): every lot and unplanned quantity of the caller's orders and project deals.
+  myIncoming: {
+    async get() {
+      const user = requireSession();
+      const manager = ['sales_manager', 'ceo'].includes(user.role);
+      const reader = user.readAllSales === true && !['import', 'account'].includes(user.role);
+      if (user.role !== 'sales' && !manager && !reader && !user.canCreateQuotation && user.canSeeShowroomOrders !== true) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      mockEnsureMigratedRounds();
+      const cutoff = new Date(Date.now() - 30 * 86_400_000).toISOString().slice(0, 10);
+      const rows = [];
+      mockImportRequests.filter((ir) => ir.status === 'ISSUED').forEach((ir) => {
+        const ticket = mockTicketOrNull(ir);
+        const mine = ticket
+          ? (mockIrActive(ir) && (manager || reader || isSalesOwner(ticket, user)))
+          : (manager || ir.requesterId === user.id || (ir.orderPurpose === 'SHOWROOM' && user.canSeeShowroomOrders === true));
+        if (!mine) return;
+        const { lots, waiting } = mockIncomingForIr(ir);
+        const base = {
+          kind: ticket ? 'PROJECT' : ir.orderPurpose, ticketId: ticket?.id ?? null, ticketCode: ticket?.code ?? null,
+          who: ticket ? (ticket.projectName || ticket.customerName || ticket.code) : ir.purposeNote,
+          requesterName: ticket ? null : ir.requestedByName, factoryName: ir.factoryName, docNumber: ir.docNumber,
+          importRequestId: ir.id, wantedBy: ticket ? ir.requiredByNote : ir.wantedBy,
+        };
+        lots.filter((l) => !(l.step === 'RECEIVED' && l.receivedOn && l.receivedOn < cutoff)).forEach((l) => rows.push({
+          ...base, waiting: false, product: l.product, unit: l.unit, qty: l.qty, lot: l, canWithdraw: false,
+        }));
+        const noLots = lots.length === 0;
+        waiting.forEach((w) => rows.push({ ...base, waiting: true, product: w.product, unit: w.unit, qty: w.remainingQty, lot: null,
+          canWithdraw: !ticket && noLots && (ir.requesterId === user.id || user.role === 'ceo') }));
+      });
+      return delay({ rows });
+    },
+  },
+
   // Mirrors ShipmentRoundController: import's queue (rounds + issued IRs still waiting for a round) and round page.
   // Reads: import, ceo, sales_manager and read-all flag holders; writes and files: import and ceo only.
   shipmentRounds: {
@@ -15291,17 +15406,18 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
         || (user.readAllSales === true && user.role !== 'account');
       if (!mayRead) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       mockEnsureMigratedRounds();
-      const waiting = mockImportRequests.filter((r) => r.status === 'ISSUED' && (findTicketRaw(r.ticketId).lifecycle ?? 'ACTIVE') === 'ACTIVE').flatMap((ir) => {
+      const waiting = mockImportRequests.filter((r) => r.status === 'ISSUED' && mockIrActive(r)).flatMap((ir) => {
         const lines = ir.items.map((it) => {
           const placed = mockShipmentRounds.flatMap((x) => x.lots).filter((l) => l.itemId === it.id).reduce((sum, l) => sum + l.qty, 0);
           return { itemId: it.id, code: it.code, brand: it.brand ?? null, model: it.model ?? null, size: it.size ?? null, unit: it.unit ?? null, remainingQty: Number(it.qty) - placed };
         }).filter((l) => l.remainingQty > 0);
         if (lines.length === 0) return [];
-        const ticket = findTicketRaw(ir.ticketId);
+        const ticket = mockTicketOrNull(ir);
         return [{
           importRequestId: ir.id, docNumber: ir.docNumber, factoryId: ir.factoryId, factoryName: ir.factoryName,
-          ticketId: ticket.id, ticketCode: ticket.code, customerName: ticket.customerName ?? null,
-          projectName: ticket.projectName ?? null, lines,
+          ticketId: ticket?.id ?? null, ticketCode: ticket?.code ?? null, customerName: ticket?.customerName ?? null,
+          projectName: ticket?.projectName ?? null, lines,
+          orderPurpose: ir.orderPurpose ?? null, purposeNote: ir.purposeNote ?? null, requesterName: ir.requestedByName ?? null,
         }];
       });
       return delay({
@@ -15386,8 +15502,8 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       round.undo = { snapshot, byId: user.id, advancedAt: Date.now() };
       const changes = mockRecomputeIrSteps(round, user, request.note);
       changes.forEach(({ ir, from, to }) => {
-        const ticket = findTicketRaw(ir.ticketId);
-        if ((ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE') return; // a dead deal keeps the derived step but gets no event or rollup
+        const ticket = mockTicketOrNull(ir);
+        if (!ticket || (ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE') return; // a no-project order or a dead deal keeps the derived step but gets no event or rollup
         pushEvent(ticket, user, 'IMPORT_STEP_ADVANCED', null, null,
           `โรงงาน ${ir.factoryName}: ${MOCK_IMPORT_REQUEST_STEP_LABELS_TH[from] ?? from} → ${MOCK_IMPORT_REQUEST_STEP_LABELS_TH[to] ?? to}`);
         if (to === 'RECEIVED') {
@@ -15415,8 +15531,8 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       Object.keys(snapshot).forEach((k) => { round[k] = structuredClone(snapshot[k]); });
       round.undo = null;
       mockRecomputeIrSteps(round, user, round.stepNote).forEach(({ ir, from, to }) => {
-        const t = findTicketRaw(ir.ticketId);
-        if ((t.lifecycle ?? 'ACTIVE') !== 'ACTIVE') return;
+        const t = mockTicketOrNull(ir);
+        if (!t || (t.lifecycle ?? 'ACTIVE') !== 'ACTIVE') return;
         pushEvent(t, user, 'IMPORT_STEP_ADVANCED', null, null,
           `โรงงาน ${ir.factoryName}: เลิกทำ ${MOCK_IMPORT_REQUEST_STEP_LABELS_TH[from] ?? from} → ${MOCK_IMPORT_REQUEST_STEP_LABELS_TH[to] ?? to}`);
       });
@@ -15491,7 +15607,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       if (!src.factoryId || src.factoryId !== dst.factoryId) fail('ย้ายล็อตได้เฉพาะระหว่างรอบของโรงงานเดียวกัน', 409);
       const lot = src.lots.find((l) => l.lotId === Number(lotId));
       if (!lot) fail('ไม่พบล็อตในรอบนี้', 404);
-      if ((findTicketRaw(mockImportRequests.find((r) => r.id === lot.importRequestId).ticketId).lifecycle ?? 'ACTIVE') !== 'ACTIVE') {
+      if (!mockIrActive(mockImportRequests.find((r) => r.id === lot.importRequestId))) {
         fail('งานของใบขอซื้อนี้ไม่ได้อยู่ในสถานะใช้งาน ย้ายล็อตไม่ได้', 409);
       }
       const last = src.lots.length === 1;
@@ -15979,7 +16095,8 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
     // importRequests.download above (ImportRequestRenderer's own PDFBox layout is server-only).
     async download(id, copy) {
       const row = findStoredImportRequestRaw(id);
-      requireStoredIrRead(findTicketRaw(row.ticketId), requireSession());
+      if (row.ticketId == null) requireNoProjectRead(row, requireSession());
+      else requireStoredIrRead(findTicketRaw(row.ticketId), requireSession());
       void copy;
       fail('สร้างไฟล์ใบขอซื้อไม่รองรับในโหมดทดสอบ (mock) — ต้องใช้เซิร์ฟเวอร์จริง', 501);
     },

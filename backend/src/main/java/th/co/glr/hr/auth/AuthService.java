@@ -145,7 +145,7 @@ public class AuthService {
             employees.canCreateQuotation(user.id()),
             employees.canIssueBillingNote(user.id()), !"import".equals(user.role()) && employees.canIssueTaxInvoice(user.id()),
             OversightReader.holder(user, employees::canReadAllSales),
-            employees.canManageAllSalesDocuments(user), canViewAs,
+            employees.canManageAllSalesDocuments(user), employees.canSeeShowroomOrders(user.id()), canViewAs,
             canViewPeopleInsights(user), info);
     }
 

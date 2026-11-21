@@ -648,6 +648,16 @@ export const api = {
     setRequiredByNote: (ticketId, payload) =>
       apiRequest(API_ROUTES.storedImportRequests.requiredByNote(ticketId), { method: 'PUT', body: payload }),
   },
+  // Mirrors NoProjectOrderController: POST creates an ISSUED order with no project (every field required); GET my-incoming
+  // is the caller's one page of incoming goods (lots + unplanned quantity), no price and no factory document.
+  noProjectOrders: {
+    create: (payload) => apiRequest(API_ROUTES.noProjectOrders.create, { method: 'POST', body: payload }),
+    // The requester, import or the CEO takes back an order that is on no round yet (409 once a lot rides on one).
+    withdraw: (id) => apiRequest(API_ROUTES.noProjectOrders.withdraw(id), { method: 'POST' }),
+  },
+  myIncoming: {
+    get: () => apiRequest(API_ROUTES.myIncoming.get),
+  },
   // Mirrors ShipmentRoundController (V239 rounds): reads import/CEO/sales_manager/read-all holders; writes and the round's
   // documents (proforma, invoice, ...) import and CEO only. `advance` payload: { targetStep, eventDate, expectedStep, note, facts,
   // documents: [{ kind, docNo }] }; `updateFacts` payload: { facts, stepDates }.

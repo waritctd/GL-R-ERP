@@ -4,7 +4,7 @@ package th.co.glr.hr.auth;
  * rendering only. This record has one construction site (AuthService.response) and none in tests. */
 public record AuthResponse(UserPrincipal user, boolean admin, boolean operator, boolean canCreateQuotation, boolean canIssueBillingNote,
                            boolean canIssueTaxInvoice, boolean readAllSales,
-                           boolean canManageAllSalesDocuments,
+                           boolean canManageAllSalesDocuments, boolean canSeeShowroomOrders,
                            boolean canViewAs, boolean canViewPeopleInsights, ViewAsInfo viewAs) {
     /** Who is really behind a read-only "view as" session; null on the response unless viewing. */
     public record ViewAsInfo(long actorId, String actorName) {}

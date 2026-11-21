@@ -211,6 +211,7 @@ public class NotificationRepository {
         Map.entry("IMPORT_STARTED", "เริ่มสั่งซื้อกับโรงงานแล้ว"),
         Map.entry("IMPORT_GOODS_RECEIVED_ALL", "สินค้าเข้าคลังครบแล้ว — พร้อมนัดส่งลูกค้า"),
         Map.entry("IMPORT_LOT_RECEIVED", "สินค้าล็อตหนึ่งถึงโกดังแล้ว"),
+        Map.entry("IMPORT_ORDER_WITHDRAWN", "ผู้สั่งยกเลิกคำขอสั่งของ"),
         Map.entry("DELIVERY_COMPLETED", "ส่งสินค้าครบแล้ว — รอฝ่ายบัญชีดำเนินการ"),
         Map.entry("REMAINING_INVOICE_ISSUED", "ออกใบแจ้งหนี้ (ยอดคงเหลือ) แล้ว — รอยืนยันรับชำระ"),
         Map.entry("CLOSE_READY_FOR_CEO", "ดีลพร้อมปิด — รอ CEO ตรวจสอบ"),

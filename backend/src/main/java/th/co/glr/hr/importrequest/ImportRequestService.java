@@ -266,8 +266,25 @@ public class ImportRequestService {
 
     public ImportRequestDto get(long id, UserPrincipal actor) {
         ImportRequestDto row = requireStored(id);
-        requireRead(row.ticketId(), actor);
+        requireReadRow(row, actor);
         return withPageCount(row);
+    }
+
+    /** The read gate of ONE stored row: a deal IR follows its deal; a no-project order is read by its requester, the
+     * sales manager, import and the CEO, and (a SHOWROOM order) by holders of the showroom grant. */
+    private void requireReadRow(ImportRequestDto row, UserPrincipal actor) {
+        if (row.ticketId() != null) {
+            requireRead(row.ticketId(), actor);
+            return;
+        }
+        String role = actor.role();
+        var meta = stored.findNoProjectMeta(row.id()).orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบใบขอซื้อนี้"));
+        if ("ceo".equals(role) || READ_ONLY_ROLES.contains(role) || actor.id() == meta.requesterId()
+            || th.co.glr.hr.auth.OversightReader.holder(actor, tickets::holdsReadAllSalesGrant) // read only, like the deal reads
+            || ("SHOWROOM".equals(meta.purpose()) && tickets.holdsShowroomOrdersGrant(actor.id()))) {
+            return;
+        }
+        throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
     }
 
     /**
@@ -403,7 +420,7 @@ public class ImportRequestService {
      */
     @Transactional
     public ImportRequestDto update(long id, UpdateImportRequestRequest request, UserPrincipal actor) {
-        ImportRequestDto existing = requireStored(id);
+        ImportRequestDto existing = requireDealStored(id);
         boolean wantsLeadTimeChange = request.leadTimeMinDays() != null || request.leadTimeMaxDays() != null;
         // requiredByNote is a BODY field (this form's own "กำหนดวันที่ต้องการของ",
         // editable by the owning rep/CEO while DRAFT) — see UpdateImportRequestRequest#requiredByNote's
@@ -500,7 +517,7 @@ public class ImportRequestService {
         if (!ADVANCE_STEP_ROLES.contains(actor.role())) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
-        ImportRequestDto existing = requireStored(id);
+        ImportRequestDto existing = requireDealStored(id);
         requireDealActive(requireTicket(existing.ticketId()));
         if (!ImportRequestStatus.ISSUED.equals(existing.status())) {
             throw new ApiException(HttpStatus.CONFLICT, "แก้ไขระยะเวลานำเข้าได้เฉพาะใบขอซื้อที่ออกเลขแล้ว");
@@ -589,7 +606,7 @@ public class ImportRequestService {
      * progress step, and supersedes the version this one replaces. Order is load-bearing. */
     @Transactional
     public ImportRequestDto issue(long id, IssueImportRequestRequest request, UserPrincipal actor) {
-        ImportRequestDto draft = requireStored(id);
+        ImportRequestDto draft = requireDealStored(id);
         requireFullWrite(draft.ticketId(), actor);
         TicketSnapshot dealSnapshot = requireTicket(draft.ticketId());
         requireDealActive(dealSnapshot);
@@ -939,7 +956,7 @@ public class ImportRequestService {
      */
     @Transactional
     public ImportRequestDto revise(long id, UserPrincipal actor) {
-        ImportRequestDto issued = requireStored(id);
+        ImportRequestDto issued = requireDealStored(id);
         requireFullWrite(issued.ticketId(), actor);
         TicketSnapshot snapshot = requireTicket(issued.ticketId());
         requireDealActive(snapshot);
@@ -1009,7 +1026,7 @@ public class ImportRequestService {
     /** A draft that should not exist is deleted, not tombstoned — it has no number and no audit weight. */
     @Transactional
     public void deleteDraft(long id, UserPrincipal actor) {
-        ImportRequestDto existing = requireStored(id);
+        ImportRequestDto existing = requireDealStored(id);
         requireFullWrite(existing.ticketId(), actor);
         // Like every other write in this class, refuse on an inactive deal.
         requireDealActive(requireTicket(existing.ticketId()));
@@ -1024,7 +1041,7 @@ public class ImportRequestService {
     @Transactional
     public ImportRequestDto updateEmailDraft(long id, ImportRequestRequests.UpdateEmailDraftRequest request,
             UserPrincipal actor) {
-        ImportRequestDto existing = requireStored(id);
+        ImportRequestDto existing = requireDealStored(id);
         requireFooterWrite(existing.ticketId(), actor);
         requireDealActive(requireTicket(existing.ticketId()));
         if (!ImportRequestStatus.ISSUED.equals(existing.status())) {
@@ -1052,7 +1069,7 @@ public class ImportRequestService {
      */
     @Transactional
     public ImportRequestDto markEmailSent(long id, UserPrincipal actor) {
-        ImportRequestDto existing = requireStored(id);
+        ImportRequestDto existing = requireDealStored(id);
         if (!canFullWrite(existing.ticketId(), actor) && !FOOTER_ONLY_ROLES.contains(actor.role())) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
@@ -1093,7 +1110,7 @@ public class ImportRequestService {
         if (!ADVANCE_STEP_ROLES.contains(actor.role())) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
-        ImportRequestDto existing = requireStored(id);
+        ImportRequestDto existing = requireDealStored(id);
         requireDealActive(requireTicket(existing.ticketId()));
         if (!ImportRequestStatus.ISSUED.equals(existing.status())) {
             throw new ApiException(HttpStatus.CONFLICT, "อัปเดตขั้นตอนได้เฉพาะใบขอซื้อที่ออกเลขแล้ว");
@@ -1154,6 +1171,13 @@ public class ImportRequestService {
             "/tickets/" + deal.id() + "?tab=ship");
     }
 
+    /** One bell (no email) to the requester of a no-project order when a lot of it reaches ถึงโกดัง; they read it on ของที่ฉันสั่ง. */
+    public void notifyRequesterOfReceivedLot(long requesterId, String docNumber, String factoryName, String qtyText) {
+        notifications.notifyEmployeeBellOnly(requesterId, "IMPORT_LOT_RECEIVED",
+            "ใบขอซื้อ (IR) " + docNumber + " จากโรงงาน " + factoryName + (qtyText.startsWith("ถึงโกดัง") ? " " : " ถึงโกดังแล้ว ")
+                + qtyText + "\nสิ่งที่ต้องทำต่อ: ดูที่ ของที่ฉันสั่ง", "/my-orders");
+    }
+
     /** A revision's lots followed it from the predecessor, so its step is re-derived from them (an IR with no lots keeps
      * the carried-forward step), with the same aftermath as any step change (events, the all-received rollup). */
     private void rederiveRevisionStep(ImportRequestDto draft, long id, String docNumber, String step, LocalDate stepAt,
@@ -1163,7 +1187,7 @@ public class ImportRequestService {
             return;
         }
         var ir = new ShipmentRoundRepository.IrLock(id, draft.ticketId(), docNumber, draft.factoryName(), step, stepAt,
-            stepById, stepByName, stepNote, firstIssuedDate, true, draft.factoryId());
+            stepById, stepByName, stepNote, firstIssuedDate, true, draft.factoryId(), null);
         var d = ShipmentStepDerivation.derive(ir, rounds.derivedInputs(List.of(id)));
         if (d.step().equals(step)) {
             return;
@@ -1267,7 +1291,7 @@ public class ImportRequestService {
         if (!ImportRequestStep.isValid(expected)) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุขั้นตอนที่จะเลิกทำ");
         }
-        ImportRequestDto existing = requireStored(id);
+        ImportRequestDto existing = requireDealStored(id);
         requireDealActive(requireTicket(existing.ticketId()));
         var state = stored.findStepUndoState(id)
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบใบขอซื้อ"));
@@ -1415,7 +1439,7 @@ public class ImportRequestService {
      */
     public byte[] renderStored(long id, UserPrincipal actor, boolean factoryCopy) {
         ImportRequestDto row = requireStored(id);
-        requireRead(row.ticketId(), actor);
+        requireReadRow(row, actor);
         try {
             return renderer.render(ImportRequestFormAssembler.fromStored(row, factoryCopy));
         } catch (IOException e) {
@@ -1943,6 +1967,17 @@ public class ImportRequestService {
     /** Buddhist year — the document number's own convention ({@code IR69068} = 2569). */
     private static int thaiYear(LocalDate date) {
         return date.getYear() + 543;
+    }
+
+    /** A stored row that belongs to a deal: every deal-scoped action (edit, issue, revise, lead time, order email, step) answers
+     * 409 for a no-project order instead of dereferencing a missing ticket. */
+    private ImportRequestDto requireDealStored(long id) {
+        ImportRequestDto row = requireStored(id);
+        if (row.ticketId() == null) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "ใบขอซื้อนี้เป็นคำสั่งซื้อที่ไม่มีโครงการ — ดำเนินการที่หน้า การขนส่ง (รอบขนส่ง) หรือ ของที่ฉันสั่ง");
+        }
+        return row;
     }
 
     public ImportRequestDto requireStored(long id) {

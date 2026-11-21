@@ -557,14 +557,16 @@ public class ShipmentRoundService {
                 own ? d.byName() : actor.name(), own ? d.note() : note);
             changes.add(new StepChange(before, ir.importStep(), d.step()));
         }
-        changes.sort(Comparator.comparingLong((StepChange c) -> c.ir().ticketId()).thenComparingLong(c -> c.ir().id()));
+        changes.sort(Comparator.comparing((StepChange c) -> c.ir().ticketId(), Comparator.nullsLast(Comparator.<Long>naturalOrder()))
+            .thenComparingLong(c -> c.ir().id()));
         return changes;
     }
 
-    /** A deal that is no longer ACTIVE keeps the derived IR step but gets no event, rollup or notice. */
+    /** A deal that is no longer ACTIVE keeps the derived IR step but gets no event, rollup or notice; so does a no-project
+     * order, which has no deal (no ticket id): its step still follows its lots. */
     private static List<StepChange> onActiveDeals(List<StepChange> changes, List<IrLock> irs) {
-        Set<Long> dead = irs.stream().filter(i -> !i.ticketActive()).map(IrLock::ticketId).collect(Collectors.toSet());
-        return changes.stream().filter(c -> !dead.contains(c.ir().ticketId())).toList();
+        Set<Long> dead = irs.stream().filter(i -> !i.ticketActive() && i.ticketId() != null).map(IrLock::ticketId).collect(Collectors.toSet());
+        return changes.stream().filter(c -> c.ir().ticketId() != null && !dead.contains(c.ir().ticketId())).toList();
     }
 
     /** Returns the deals this completed (every factory received: the rollup ran and told the rep). */
@@ -587,7 +589,7 @@ public class ShipmentRoundService {
             .collect(Collectors.groupingBy(ShipmentRoundDtos.ShipmentLotDto::importRequestId, java.util.TreeMap::new, Collectors.toList()))
             .forEach((irId, lots) -> {
                 IrLock ir = byId.get(irId);
-                if (ir == null || !ir.ticketActive() || completed.contains(ir.ticketId())) {
+                if (ir == null || !ir.ticketActive() || (ir.ticketId() != null && completed.contains(ir.ticketId()))) {
                     return;
                 }
                 BigDecimal got = lots.stream().map(l -> l.receivedQty() != null ? l.receivedQty() : l.qty())
@@ -602,6 +604,12 @@ public class ShipmentRoundService {
                     : got.compareTo(planned) < 0
                         ? "ถึงโกดัง " + got.stripTrailingZeros().toPlainString() + " จาก " + planned.stripTrailingZeros().toPlainString() + unit
                         : got.stripTrailingZeros().toPlainString() + unit;
+                if (ir.ticketId() == null) {
+                    if (ir.requesterId() != null) {
+                        irService.notifyRequesterOfReceivedLot(ir.requesterId(), ir.docNumber(), ir.factoryName(), qtyText.trim());
+                    }
+                    return;
+                }
                 irService.notifyRepOfReceivedLot(ir.ticketId(), ir.docNumber(), ir.factoryName(), qtyText.trim());
             });
     }

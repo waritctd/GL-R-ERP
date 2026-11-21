@@ -4,7 +4,7 @@ import { api } from '../../api/index.js';
 import { Button } from '../../components/common/Button.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { cn } from '../../utils/cn.js';
-import { formatQty, lotProduct, TRANSPORT_MODES, waitingFactories } from './shipmentRounds.js';
+import { formatQty, lotProduct, lotWho, TRANSPORT_MODES, waitingFactories } from './shipmentRounds.js';
 import { invalidateAfterRoundChange } from './useRoundUndo.jsx';
 
 /**
@@ -107,7 +107,7 @@ export function PlanRoundSheet({ waiting, round, onClose, onDone, showToast }) {
                   <div className="flex min-h-11 items-start gap-3 p-3">
                     <input id={`plan-pick-${ir.importRequestId}`} type="checkbox" className="mt-1 size-5" checked={on} onChange={() => toggle(ir)} />
                     <div className="flex min-w-0 flex-col">
-                      <label htmlFor={`plan-pick-${ir.importRequestId}`} className="cursor-pointer text-sm font-bold">{ir.projectName || ir.customerName || ir.ticketCode}</label>
+                      <label htmlFor={`plan-pick-${ir.importRequestId}`} className="cursor-pointer text-sm font-bold">{lotWho(ir)}</label>
                       <small className="text-text-muted"><code>{ir.docNumber}</code> · {ir.lines.length} รายการ</small>
                     </div>
                   </div>

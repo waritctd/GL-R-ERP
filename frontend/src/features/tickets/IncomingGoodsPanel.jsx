@@ -27,7 +27,7 @@ const lotShortfall = (lot) => (lot.receivedQty != null && Number(lot.receivedQty
   ? `ขาด ${formatQty(Number(lot.qty) - Number(lot.receivedQty))} ${lot.unit ?? ''}`.trim() : null);
 
 /** N06: one lot, read-only: its steps with dates, the vessel, the customer's wanted date, and a message to import. */
-function LotSheet({ ticketId, ir, lot, wantedBy, canMessage, showToast, onClose }) {
+export function LotSheet({ ticketId, ir, lot, wantedBy, canMessage, showToast, onClose }) {
   const [message, setMessage] = useState('');
   const [writing, setWriting] = useState(false);
   const send = useMutation({

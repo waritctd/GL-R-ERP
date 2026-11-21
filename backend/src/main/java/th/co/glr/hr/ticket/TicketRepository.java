@@ -188,6 +188,11 @@ public class TicketRepository {
     }
 
     /** Live {@code can_read_all_sales} read, for services that hold no EmployeeAuthRepository (AttachmentController). */
+    /** The showroom team's grant: reads every SHOWROOM no-project order. */
+    public boolean holdsShowroomOrdersGrant(long employeeId) {
+        return th.co.glr.hr.auth.EmployeeAuthRepository.canSeeShowroomOrders(jdbc, employeeId);
+    }
+
     public boolean holdsReadAllSalesGrant(long employeeId) {
         return th.co.glr.hr.auth.EmployeeAuthRepository.canReadAllSales(jdbc, employeeId);
     }

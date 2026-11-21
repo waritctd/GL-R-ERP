@@ -293,6 +293,9 @@ export const API_ROUTES = {
     file: (id, copy) => `/api/import-requests/${id}/file${copy ? `?copy=${encodeURIComponent(copy)}` : ''}`,
     requiredByNote: (ticketId) => `/api/tickets/${ticketId}/required-by-note`,
   },
+  // สั่งของไม่มีโครงการ (create) and ของที่ฉันสั่ง (every incoming lot of the caller's orders and project deals).
+  noProjectOrders: { create: '/api/no-project-orders', withdraw: (id) => `/api/no-project-orders/${id}/withdraw` },
+  myIncoming: { get: '/api/my-incoming' },
   // Shipment rounds (ShipmentRoundController): import's queue and round page. Documents and their files are import/CEO only.
   shipmentRounds: {
     list: () => '/api/shipment-rounds',
@@ -797,6 +800,8 @@ export const ROLE_PERMISSIONS = {
   // TEAM_ROLES — who GET /api/sales/visits/team serves the whole team's week to. Presentation only: VisitService
   // re-checks the role on every call.
   canViewVisits: ['sales', 'sales_manager', 'ceo'],
+  // ของที่ฉันสั่ง: the rep's one page of everything incoming (MyIncomingService: sales, the manager and CEO, read-all holders).
+  canViewMyOrders: ['sales', 'sales_manager', 'ceo'],
   canViewTeamVisits: ['sales_manager', 'ceo'],
   // Sales/CRM tool: which roles get the catalog SCREENS, scoped to the same audience as
   // canViewTickets.

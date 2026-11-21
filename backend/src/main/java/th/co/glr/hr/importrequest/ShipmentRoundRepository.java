@@ -272,10 +272,13 @@ public class ShipmentRoundRepository {
                      count(*) OVER (PARTITION BY l.import_request_item_id) AS lots,
                      i.qty - sum(l.qty) OVER (PARTITION BY l.import_request_item_id) AS remaining, l.received_qty
                 FROM sales.shipment_lot l JOIN sales.import_request_item i USING (import_request_item_id))
-            SELECT x.*, r.doc_number, r.ticket_id, t.code AS ticket_code, t.customer_name, p.name AS project_name
+            SELECT x.*, r.doc_number, r.ticket_id, t.code AS ticket_code, t.customer_name, p.name AS project_name,
+                   r.order_purpose, r.purpose_note,
+                   NULLIF(TRIM(CONCAT_WS(' ', e.first_name_th, e.last_name_th)), '') AS requester_name
               FROM x JOIN sales.import_request r USING (import_request_id)
-              JOIN sales.ticket t ON t.ticket_id = r.ticket_id
+              LEFT JOIN sales.ticket t ON t.ticket_id = r.ticket_id
               LEFT JOIN customers.project p ON p.project_id = t.project_id
+              LEFT JOIN hr.employee e ON e.employee_id = r.requester_id
              WHERE x.shipment_round_id IN (:ids)
              ORDER BY x.shipment_round_id, r.doc_number, x.shipment_lot_id
             """, Map.of("ids", roundIds), rs -> {
@@ -283,11 +286,12 @@ public class ShipmentRoundRepository {
                 int lots = rs.getInt("lots");
                 out.computeIfAbsent(rs.getLong("shipment_round_id"), k -> new java.util.ArrayList<>()).add(new ShipmentLotDto(
                     rs.getLong("shipment_lot_id"), rs.getLong("import_request_id"), rs.getString("doc_number"),
-                    rs.getLong("ticket_id"), rs.getString("ticket_code"), rs.getString("customer_name"),
+                    (Long) rs.getObject("ticket_id"), rs.getString("ticket_code"), rs.getString("customer_name"),
                     rs.getString("project_name"), rs.getLong("import_request_item_id"), rs.getString("code"),
                     rs.getString("brand"), rs.getString("model"), rs.getString("size"), rs.getString("unit"),
                     rs.getBigDecimal("qty"), rs.getBigDecimal("item_qty"), rs.getInt("lot_no"),
-                    remaining.signum() > 0 ? lots + 1 : lots, remaining.max(BigDecimal.ZERO), rs.getBigDecimal("received_qty")));
+                    remaining.signum() > 0 ? lots + 1 : lots, remaining.max(BigDecimal.ZERO), rs.getBigDecimal("received_qty"),
+                    rs.getString("order_purpose"), rs.getString("purpose_note"), rs.getString("requester_name")));
             });
         return out;
     }
@@ -403,14 +407,17 @@ public class ShipmentRoundRepository {
         Map<Long, List<ShipmentWaitingLine>> lines = new java.util.HashMap<>();
         jdbc.query("""
             SELECT r.import_request_id, r.doc_number, r.factory_id, r.factory_name, r.ticket_id, t.code AS ticket_code,
-                   t.customer_name, p.name AS project_name, i.import_request_item_id AS item_id, i.code, i.brand, i.model, i.size, i.unit,
+                   t.customer_name, p.name AS project_name, r.order_purpose, r.purpose_note,
+                   NULLIF(TRIM(CONCAT_WS(' ', e.first_name_th, e.last_name_th)), '') AS requester_name,
+                   i.import_request_item_id AS item_id, i.code, i.brand, i.model, i.size, i.unit,
                    i.qty - COALESCE((SELECT sum(l.qty) FROM sales.shipment_lot l
                                       WHERE l.import_request_item_id = i.import_request_item_id), 0) AS remaining
               FROM sales.import_request r
               JOIN sales.import_request_item i ON i.import_request_id = r.import_request_id
-              JOIN sales.ticket t ON t.ticket_id = r.ticket_id
+              LEFT JOIN sales.ticket t ON t.ticket_id = r.ticket_id
               LEFT JOIN customers.project p ON p.project_id = t.project_id
-             WHERE r.status = 'ISSUED' AND t.lifecycle = 'ACTIVE'
+              LEFT JOIN hr.employee e ON e.employee_id = r.requester_id
+             WHERE r.status = 'ISSUED' AND (r.ticket_id IS NULL OR t.lifecycle = 'ACTIVE')
                AND i.qty > COALESCE((SELECT sum(l.qty) FROM sales.shipment_lot l
                                       WHERE l.import_request_item_id = i.import_request_item_id), 0)
              ORDER BY r.import_request_id, i.seq
@@ -426,8 +433,9 @@ public class ShipmentRoundRepository {
                 byIr.computeIfAbsent(id, k -> {
                     try {
                         return new ShipmentWaitingDto(id, rs.getString("doc_number"), (Long) rs.getObject("factory_id"),
-                            rs.getString("factory_name"), rs.getLong("ticket_id"), rs.getString("ticket_code"),
-                            rs.getString("customer_name"), rs.getString("project_name"), null);
+                            rs.getString("factory_name"), (Long) rs.getObject("ticket_id"), rs.getString("ticket_code"),
+                            rs.getString("customer_name"), rs.getString("project_name"), null,
+                            rs.getString("order_purpose"), rs.getString("purpose_note"), rs.getString("requester_name"));
                     } catch (java.sql.SQLException e) {
                         throw new IllegalStateException(e);
                     }
@@ -435,13 +443,14 @@ public class ShipmentRoundRepository {
             });
         return byIr.values().stream().map(w -> new ShipmentWaitingDto(w.importRequestId(), w.docNumber(), w.factoryId(),
             w.factoryName(), w.ticketId(), w.ticketCode(), w.customerName(), w.projectName(),
-            lines.get(w.importRequestId()))).toList();
+            lines.get(w.importRequestId()), w.orderPurpose(), w.purposeNote(), w.requesterName())).toList();
     }
 
     /** Import requests carrying lots on these rounds, locked FOR UPDATE in ascending id. */
-    public record IrLock(long id, long ticketId, String docNumber, String factoryName, String importStep,
+    /** {@code ticketId} is null for a no-project order (which counts as active and has no deal side effects). */
+    public record IrLock(long id, Long ticketId, String docNumber, String factoryName, String importStep,
                          LocalDate importStepAt, Long importStepById, String importStepByName, String importStepNote,
-                         LocalDate firstIssuedDate, boolean ticketActive, Long factoryId) {}
+                         LocalDate firstIssuedDate, boolean ticketActive, Long factoryId, Long requesterId) {}
 
     public List<IrLock> lockImportRequestsOnRounds(List<Long> roundIds) {
         return lockImportRequests(roundIds, List.of());
@@ -451,8 +460,8 @@ public class ShipmentRoundRepository {
     public List<IrLock> lockImportRequests(List<Long> roundIds, List<Long> extraIrIds) {
         return jdbc.query("""
             SELECT import_request_id, ticket_id, doc_number, factory_name, import_step, import_step_at,
-                   import_step_by_id, import_step_by_name, import_step_note, first_issued_date, factory_id,
-                   (SELECT t.lifecycle = 'ACTIVE' FROM sales.ticket t WHERE t.ticket_id = sales.import_request.ticket_id) AS ticket_active
+                   import_step_by_id, import_step_by_name, import_step_note, first_issued_date, factory_id, requester_id,
+                   COALESCE((SELECT t.lifecycle = 'ACTIVE' FROM sales.ticket t WHERE t.ticket_id = sales.import_request.ticket_id), TRUE) AS ticket_active
               FROM sales.import_request
              WHERE status = 'ISSUED' AND (import_request_id IN (
                    SELECT import_request_id FROM sales.shipment_lot WHERE shipment_round_id IN (:ids))
@@ -460,10 +469,10 @@ public class ShipmentRoundRepository {
              ORDER BY import_request_id FOR UPDATE
             """, Map.of("ids", roundIds.isEmpty() ? List.of(-1L) : roundIds,
                 "extra", extraIrIds.isEmpty() ? List.of(-1L) : extraIrIds), (rs, n) -> new IrLock(rs.getLong("import_request_id"),
-                rs.getLong("ticket_id"), rs.getString("doc_number"), rs.getString("factory_name"),
+                (Long) rs.getObject("ticket_id"), rs.getString("doc_number"), rs.getString("factory_name"),
                 rs.getString("import_step"), date(rs, "import_step_at"), (Long) rs.getObject("import_step_by_id"),
                 rs.getString("import_step_by_name"), rs.getString("import_step_note"), date(rs, "first_issued_date"),
-                rs.getBoolean("ticket_active"), (Long) rs.getObject("factory_id")));
+                rs.getBoolean("ticket_active"), (Long) rs.getObject("factory_id"), (Long) rs.getObject("requester_id")));
     }
 
     /** What an IR's derived step is made of: per line, its quantity and every lot with its round's step and date. */
@@ -642,5 +651,71 @@ public class ShipmentRoundRepository {
                 date(rs, "eta_on"), date(rs, "arrived_on"), date(rs, "customs_released_on"), date(rs, "contacted_on"),
                 date(rs, "ordered_on"), date(rs, "picked_up_on"), date(rs, "in_transit_on"),
                 date(rs, "awaiting_customs_on"), date(rs, "received_on")));
+    }
+
+    // ── ของที่ฉันสั่ง ──────────────────────────────────────────────────────────────────────────────────
+
+    /** One IR line, with one of its lots when it has any (lot columns are null for quantity on no round). */
+    public record MyLine(long importRequestId, String docNumber, String factoryName, Long ticketId, String ticketCode,
+                         String customerName, String projectName, String orderPurpose, String purposeNote,
+                         String requesterName, Long requesterId, LocalDate wantedBy, String requiredByNote, LocalDate expectedTo,
+                         long itemId, String brand, String model, String code, String size, String unit,
+                         BigDecimal itemQty, TicketLot lot) {}
+
+    /**
+     * Every ISSUED IR line of the caller's scope with its lots, in ONE query: project deals (ACTIVE; {@code allDeals} or
+     * the owner/keyer of the deal) and no-project orders ({@code allOrders}, the requester, or SHOWROOM orders for the
+     * showroom grant). Columns of the lot are only what the sales view may see: no price, no factory document.
+     */
+    public List<MyLine> myLines(long actorId, boolean allDeals, boolean allOrders, boolean showroom, LocalDate cutoff) {
+        return jdbc.query("""
+            SELECT ir.import_request_id, ir.doc_number, ir.factory_name, ir.ticket_id, t.code AS ticket_code,
+                   t.customer_name, p.name AS project_name, ir.order_purpose, ir.purpose_note,
+                   NULLIF(TRIM(CONCAT_WS(' ', e.first_name_th, e.last_name_th)), '') AS requester_name, ir.requester_id, ir.wanted_by,
+                   ir.required_by_note, ir.first_issued_date + ir.lead_time_max_days AS expected_to,
+                   i.import_request_item_id, i.brand, i.model, i.code, i.size, i.unit, i.qty AS item_qty,
+                   l.shipment_lot_id, l.qty AS lot_qty, l.received_qty,
+                   r.shipment_round_id, r.label, r.import_step, r.transport_mode, r.vessel, r.voyage, r.port,
+                   r.etd_actual_on, r.eta_on, r.arrived_on, r.customs_released_on, r.contacted_on, r.ordered_on,
+                   r.picked_up_on, r.in_transit_on, r.awaiting_customs_on, r.received_on
+              FROM sales.import_request ir
+              JOIN sales.import_request_item i ON i.import_request_id = ir.import_request_id
+              LEFT JOIN sales.ticket t ON t.ticket_id = ir.ticket_id
+              LEFT JOIN customers.project p ON p.project_id = t.project_id
+              LEFT JOIN hr.employee e ON e.employee_id = ir.requester_id
+              LEFT JOIN sales.shipment_lot l ON l.import_request_item_id = i.import_request_item_id
+              LEFT JOIN sales.shipment_round r ON r.shipment_round_id = l.shipment_round_id
+             WHERE ir.status = 'ISSUED'
+               AND ((ir.ticket_id IS NOT NULL AND t.lifecycle = 'ACTIVE'
+                     AND (:allDeals OR t.created_by = :actor OR t.keyed_by = :actor))
+                 OR (ir.ticket_id IS NULL
+                     AND (:allOrders OR ir.requester_id = :actor OR (:showroom AND ir.order_purpose = 'SHOWROOM'))))
+               -- delivered long ago and nothing left to place: off the page (in SQL, so the list never grows without bound)
+               AND NOT (EXISTS (SELECT 1 FROM sales.shipment_lot x WHERE x.import_request_id = ir.import_request_id)
+                        AND NOT EXISTS (SELECT 1 FROM sales.shipment_lot x JOIN sales.shipment_round xr ON xr.shipment_round_id = x.shipment_round_id
+                                         WHERE x.import_request_id = ir.import_request_id
+                                           AND (xr.import_step <> 'RECEIVED' OR xr.received_on IS NULL OR xr.received_on >= :cutoff))
+                        AND NOT EXISTS (SELECT 1 FROM sales.import_request_item xi WHERE xi.import_request_id = ir.import_request_id
+                                           AND xi.qty > COALESCE((SELECT SUM(xl.qty) FROM sales.shipment_lot xl
+                                                                   WHERE xl.import_request_item_id = xi.import_request_item_id), 0)))
+             ORDER BY ir.import_request_id, i.seq, l.shipment_lot_id
+            """, new MapSqlParameterSource("actor", actorId).addValue("allDeals", allDeals)
+                .addValue("allOrders", allOrders).addValue("showroom", showroom).addValue("cutoff", cutoff), (rs, n) -> {
+                Long lotId = (Long) rs.getObject("shipment_lot_id");
+                TicketLot lot = lotId == null ? null : new TicketLot(lotId, rs.getLong("import_request_id"),
+                    rs.getLong("import_request_item_id"), rs.getBigDecimal("lot_qty"), rs.getBigDecimal("received_qty"),
+                    rs.getLong("shipment_round_id"), rs.getString("label"), rs.getString("import_step"),
+                    rs.getString("transport_mode"), rs.getString("vessel"), rs.getString("voyage"), rs.getString("port"),
+                    date(rs, "etd_actual_on"), date(rs, "eta_on"), date(rs, "arrived_on"), date(rs, "customs_released_on"),
+                    date(rs, "contacted_on"), date(rs, "ordered_on"), date(rs, "picked_up_on"), date(rs, "in_transit_on"),
+                    date(rs, "awaiting_customs_on"), date(rs, "received_on"));
+                return new MyLine(rs.getLong("import_request_id"), rs.getString("doc_number"), rs.getString("factory_name"),
+                    (Long) rs.getObject("ticket_id"), rs.getString("ticket_code"), rs.getString("customer_name"),
+                    rs.getString("project_name"), rs.getString("order_purpose"), rs.getString("purpose_note"),
+                    rs.getString("requester_name"), (Long) rs.getObject("requester_id"), date(rs, "wanted_by"), rs.getString("required_by_note"),
+                    date(rs, "expected_to"), rs.getLong("import_request_item_id"), rs.getString("brand"),
+                    rs.getString("model"), rs.getString("code"), rs.getString("size"), rs.getString("unit"),
+                    rs.getBigDecimal("item_qty"), lot);
+            });
     }
 }

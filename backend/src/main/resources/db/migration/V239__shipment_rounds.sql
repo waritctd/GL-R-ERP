@@ -5,7 +5,15 @@
 -- import_step, which every reader still uses. The proforma/invoice number rule (RECEIVED needs one of each) is applied by the service to PORTAL
 -- rounds only, so it is deliberately NOT a constraint: MIGRATED and BACKFILL rounds are exempt for good.
 --
--- Rollback: DROP TABLE sales.shipment_lot; DROP TABLE sales.shipment_round_document; DROP TABLE sales.shipment_round; sales.import_request is untouched.
+-- It also lets an import request exist WITHOUT a deal (a sample, showroom or stock order): ticket_id becomes nullable, and
+-- such a row must carry its purpose, requester, who/where note and wanted-by date. hr.employee.can_see_showroom_orders lets
+-- chosen people read every SHOWROOM order (a grant by flag, never by name).
+--
+-- Rollback (no no-project order may exist): ALTER TABLE hr.employee DROP COLUMN can_see_showroom_orders;
+-- ALTER TABLE sales.import_request DROP CONSTRAINT chk_import_request_project_or_order,
+-- DROP CONSTRAINT chk_import_request_order_purpose, DROP COLUMN wanted_by, DROP COLUMN purpose_note,
+-- DROP COLUMN requester_id, DROP COLUMN order_purpose, ALTER COLUMN ticket_id SET NOT NULL;
+-- then: DROP TABLE sales.shipment_lot; DROP TABLE sales.shipment_round_document; DROP TABLE sales.shipment_round.
 
 CREATE TABLE sales.shipment_round (
     shipment_round_id    BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -119,3 +127,20 @@ INSERT INTO sales.shipment_lot (shipment_round_id, import_request_id, import_req
 SELECT s.shipment_round_id, i.import_request_id, i.import_request_item_id, i.qty
   FROM sales.shipment_round s
   JOIN sales.import_request_item i ON i.import_request_id = s.migrated_from_import_request_id;
+
+-- Orders with no project (สั่งของไม่มีโครงการ): an import request owned by a requester and a purpose instead of a deal.
+ALTER TABLE sales.import_request ALTER COLUMN ticket_id DROP NOT NULL;
+ALTER TABLE sales.import_request
+    ADD COLUMN order_purpose VARCHAR(10),
+    ADD COLUMN requester_id  BIGINT REFERENCES hr.employee(employee_id),
+    ADD COLUMN purpose_note  VARCHAR(255),
+    ADD COLUMN wanted_by     DATE,
+    ADD CONSTRAINT chk_import_request_order_purpose CHECK (order_purpose IS NULL OR order_purpose IN ('SAMPLE','SHOWROOM','STOCK')),
+    ADD CONSTRAINT chk_import_request_project_or_order CHECK (
+        ticket_id IS NOT NULL
+        OR (order_purpose IS NOT NULL AND requester_id IS NOT NULL AND purpose_note IS NOT NULL AND wanted_by IS NOT NULL));
+COMMENT ON COLUMN sales.import_request.order_purpose IS 'SAMPLE / SHOWROOM / STOCK for an order with no project (ticket_id NULL); NULL on a deal IR.';
+COMMENT ON COLUMN sales.import_request.requester_id IS 'Who asked for a no-project order; they see it on ของที่ฉันสั่ง and get the lot bells.';
+
+ALTER TABLE hr.employee ADD COLUMN can_see_showroom_orders BOOLEAN NOT NULL DEFAULT FALSE;
+COMMENT ON COLUMN hr.employee.can_see_showroom_orders IS 'Reads every SHOWROOM no-project order (the showroom team), read only.';
