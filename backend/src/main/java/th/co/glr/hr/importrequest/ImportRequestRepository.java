@@ -572,6 +572,11 @@ public class ImportRequestRepository {
     /** The requester or import takes back a no-project order that is on no round yet: SUPERSEDED with no successor (the IR
      * number stays on record). 0 rows = not a no-project ISSUED order, or a lot was planned meanwhile. */
     public int withdrawNoProject(long importRequestId) {
+        // Lock the row first: createRound locks the same row before it inserts a lot, so the two cannot interleave.
+        if (jdbc.queryForList("SELECT 1 FROM sales.import_request WHERE import_request_id = :id AND ticket_id IS NULL AND status = 'ISSUED' FOR UPDATE",
+                Map.of("id", importRequestId), Integer.class).isEmpty()) {
+            return 0;
+        }
         return jdbc.update("""
             UPDATE sales.import_request SET status = 'SUPERSEDED', superseded_by_id = NULL, updated_at = now()
              WHERE import_request_id = :id AND ticket_id IS NULL AND status = 'ISSUED'

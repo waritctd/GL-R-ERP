@@ -1422,8 +1422,16 @@ public class TicketService {
         TicketSummaryDto s = requireTicket(ticketId).summary();
         String cur = s.fulfillmentStatus();
         if (FulfilmentStatus.PARTIALLY_DELIVERED.equals(cur)) {
-            // Mixed stock+import deal: event + forward-only stage move to ขั้น 13; no status/payment
-            // write — the delivery already under way must not be disturbed.
+            // Mixed stock+import deal: event + forward-only stage move to ขั้น 13; the fulfilment status is not written —
+            // the delivery already under way must not be disturbed. The payment track moves exactly as applyGoodsReceived moves
+            // it (DEPOSIT_PAID -> AWAITING_FINAL_PAYMENT, compare-and-set so it is forward-only; FULLY_PAID and the rest untouched).
+            if ("DEPOSIT_PAID".equals(s.paymentStatus())) {
+                int rows = tickets.advancePaymentStatus(
+                    s.id(), s.depositPolicy(), s.paymentStatus(), PaymentTrack.AWAITING_FINAL_PAYMENT);
+                requirePaymentAdvanced(rows);
+                tickets.addEvent(s.id(), actor.id(), actor.name(),
+                    TicketEventKind.AWAITING_FINAL_PAYMENT, s.status(), s.status(), null);
+            }
             tickets.addEvent(ticketId, actor.id(), actor.name(),
                 TicketEventKind.GOODS_RECEIVED, s.status(), s.status(), null);
             autoAdvanceStage(s, DealStage.DELIVERY_SCHEDULING, actor);
@@ -2693,7 +2701,9 @@ public class TicketService {
     private void requireWithinReceivedLots(long ticketId, Map<Long, TicketItemDto> itemsById,
                                            List<RecordDeliveryRequest.Line> lines) {
         TicketRepository.LotReceipts receipts = tickets.lotReceipts(ticketId);
-        if (!receipts.dealHasLots()) {
+        // Goods already marked received (the full rollup, or the legacy button) leave nothing to cap, whatever step an IR is on.
+        // hasReceivedGoods reads the GOODS_RECEIVED event only: a partial lot never writes it, so a real partial receipt is capped.
+        if (!receipts.dealHasLots() || tickets.hasReceivedGoods(ticketId)) {
             return;
         }
         for (RecordDeliveryRequest.Line line : lines) {
@@ -2713,7 +2723,7 @@ public class TicketService {
     /** Whether the warehouse can still deliver something under the cap: no lots on the deal, or some line has room. */
     private boolean warehouseHasRoom(TicketDto ticket) {
         TicketRepository.LotReceipts receipts = tickets.lotReceipts(ticket.summary().id());
-        if (!receipts.dealHasLots()) {
+        if (!receipts.dealHasLots() || tickets.hasReceivedGoods(ticket.summary().id())) {
             return true;
         }
         return ticket.items().stream().anyMatch(item -> {

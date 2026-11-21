@@ -9,11 +9,16 @@
 -- such a row must carry its purpose, requester, who/where note and wanted-by date. hr.employee.can_see_showroom_orders lets
 -- chosen people read every SHOWROOM order (a grant by flag, never by name).
 --
--- Rollback (no no-project order may exist): ALTER TABLE hr.employee DROP COLUMN can_see_showroom_orders;
--- ALTER TABLE sales.import_request DROP CONSTRAINT chk_import_request_project_or_order,
--- DROP CONSTRAINT chk_import_request_order_purpose, DROP COLUMN wanted_by, DROP COLUMN purpose_note,
--- DROP COLUMN requester_id, DROP COLUMN order_purpose, ALTER COLUMN ticket_id SET NOT NULL;
--- then: DROP TABLE sales.shipment_lot; DROP TABLE sales.shipment_round_document; DROP TABLE sales.shipment_round.
+-- Rollback, in this order:
+--   1. DROP TABLE sales.shipment_lot; DROP TABLE sales.shipment_round_document; DROP TABLE sales.shipment_round;
+--   2. delete every no-project order (they have no deal to go back to; withdrawn ones included), items first:
+--      DELETE FROM sales.import_request_item WHERE import_request_id IN (SELECT import_request_id FROM sales.import_request WHERE ticket_id IS NULL);
+--      DELETE FROM sales.import_request WHERE ticket_id IS NULL;
+--   3. ALTER TABLE sales.import_request DROP CONSTRAINT chk_import_request_project_or_order,
+--      DROP CONSTRAINT chk_import_request_order_purpose, DROP COLUMN wanted_by, DROP COLUMN purpose_note,
+--      DROP COLUMN requester_id, DROP COLUMN order_purpose, ALTER COLUMN ticket_id SET NOT NULL;
+--   4. ALTER TABLE hr.employee DROP COLUMN can_see_showroom_orders;
+--   5. DELETE FROM hr.flyway_schema_history WHERE version = '239';  (so Flyway applies it again, not 'missing')
 
 CREATE TABLE sales.shipment_round (
     shipment_round_id    BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -107,6 +112,8 @@ COMMENT ON TABLE sales.shipment_lot IS 'A quantity of one import-request line ri
 COMMENT ON COLUMN sales.shipment_round.source IS 'PORTAL = made in the portal (number rule applies); MIGRATED = one per ISSUED IR at V239; BACKFILL = loaded from the import sheet. The last two are exempt from the proforma/invoice number rule.';
 
 -- One round per ISSUED import request that has lines, at its current step; the date of that step is the step's own stamp.
+-- Deals that are over (lifecycle CLOSED_LOST, CANCELLED or COMPLETED) get no round: their goods are not Import's work any more.
+-- ON_HOLD and DORMANT deals can resume, so theirs do.
 INSERT INTO sales.shipment_round (
     factory_id, factory_name, source, import_step,
     contacted_on, ordered_on, picked_up_on, in_transit_on, awaiting_customs_on, received_on,
@@ -121,7 +128,9 @@ SELECT r.factory_id, r.factory_name, 'MIGRATED', r.import_step,
        r.import_step_by_id, r.import_step_by_name, r.import_step_note, r.import_request_id
   FROM sales.import_request r
  WHERE r.status = 'ISSUED'
-   AND EXISTS (SELECT 1 FROM sales.import_request_item i WHERE i.import_request_id = r.import_request_id);
+   AND EXISTS (SELECT 1 FROM sales.import_request_item i WHERE i.import_request_id = r.import_request_id)
+   AND NOT EXISTS (SELECT 1 FROM sales.ticket t WHERE t.ticket_id = r.ticket_id
+                    AND t.lifecycle IN ('CLOSED_LOST', 'CANCELLED', 'COMPLETED'));
 
 INSERT INTO sales.shipment_lot (shipment_round_id, import_request_id, import_request_item_id, qty)
 SELECT s.shipment_round_id, i.import_request_id, i.import_request_item_id, i.qty

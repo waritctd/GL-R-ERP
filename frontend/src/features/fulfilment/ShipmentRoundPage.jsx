@@ -146,7 +146,8 @@ export function ShipmentRoundPage({ user, showToast }) {
       <div className="grid grid-cols-1 gap-4 min-[1041px]:grid-cols-[22rem_minmax(0,1fr)] min-[1041px]:items-start">
         <div className="flex min-w-0 flex-col gap-4">
           <Panel title="ขั้นตอน"><StepList round={round} /></Panel>
-          <Panel title="เอกสาร"><RoundDocuments round={round} editable={editable} showToast={showToast} /></Panel>
+          {/* Documents (factory numbers, notes, files) are for import and the CEO only: the server sends them nothing else. */}
+          {editable ? <Panel title="เอกสาร"><RoundDocuments round={round} editable={editable} showToast={showToast} /></Panel> : null}
           <Panel
             title="ข้อมูลรอบนี้"
             actions={editable ? <Button type="button" size="sm" variant="secondary" onClick={() => setEditing(true)} data-testid="round-facts-edit">แก้ไข</Button> : null}

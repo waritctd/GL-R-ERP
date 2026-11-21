@@ -61,8 +61,9 @@ public class NoProjectOrderService {
         if (note.isEmpty()) {
             throw bad("ระบุว่าให้ใคร / ใช้ที่ไหน");
         }
-        if (note.length() > 255) {
-            throw bad("ให้ใคร / ใช้ที่ไหน ยาวเกิน 255 ตัวอักษร");
+        // The note is also the form's "สั่งมาให้" (customer_name VARCHAR(200)), so it is capped at 200.
+        if (note.length() > 200) {
+            throw bad("ให้ใคร / ใช้ที่ไหน ยาวเกิน 200 ตัวอักษร");
         }
         FactoryConfigDto factory = request.factoryId() == null ? null : factories.findById(request.factoryId()).orElse(null);
         if (factory == null) {

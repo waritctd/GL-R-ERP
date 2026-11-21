@@ -231,7 +231,12 @@ public class ShipmentRoundRepository {
         return jdbc.query("""
             SELECT r.*, (SELECT s.step_undo_by_id FROM sales.shipment_round s WHERE s.shipment_round_id = r.shipment_round_id) AS undo_by
               FROM sales.shipment_round r
-             WHERE EXISTS (SELECT 1 FROM sales.shipment_lot l WHERE l.shipment_round_id = r.shipment_round_id)
+             -- a round whose lots are ALL on finished deals (CLOSED_LOST, CANCELLED, COMPLETED) is hidden; a no-project lot is live
+             WHERE EXISTS (SELECT 1 FROM sales.shipment_lot l
+                            JOIN sales.import_request ir ON ir.import_request_id = l.import_request_id
+                            LEFT JOIN sales.ticket t ON t.ticket_id = ir.ticket_id
+                      WHERE l.shipment_round_id = r.shipment_round_id
+                        AND (ir.ticket_id IS NULL OR t.lifecycle NOT IN ('CLOSED_LOST', 'CANCELLED', 'COMPLETED')))
                AND (CAST(:only AS BIGINT) IS NULL OR r.shipment_round_id = :only)
              ORDER BY (r.import_step = 'RECEIVED'), r.shipment_round_id DESC
             """, new MapSqlParameterSource("only", onlyId), (rs, n) -> {
@@ -717,5 +722,17 @@ public class ShipmentRoundRepository {
                     rs.getString("model"), rs.getString("code"), rs.getString("size"), rs.getString("unit"),
                     rs.getBigDecimal("item_qty"), lot);
             });
+    }
+
+    /** A round that has lots, every one of them on a finished deal (so {@link #roundsWithLots} hides it). */
+    public boolean onlyFinishedDeals(long roundId) {
+        return Boolean.TRUE.equals(jdbc.queryForObject("""
+            SELECT EXISTS (SELECT 1 FROM sales.shipment_lot WHERE shipment_round_id = :r)
+               AND NOT EXISTS (SELECT 1 FROM sales.shipment_lot l
+                                 JOIN sales.import_request ir ON ir.import_request_id = l.import_request_id
+                                 LEFT JOIN sales.ticket t ON t.ticket_id = ir.ticket_id
+                                WHERE l.shipment_round_id = :r
+                                  AND (ir.ticket_id IS NULL OR t.lifecycle NOT IN ('CLOSED_LOST', 'CANCELLED', 'COMPLETED')))
+            """, Map.of("r", roundId), Boolean.class));
     }
 }

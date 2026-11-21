@@ -56,6 +56,7 @@ class ShipmentRoundIntegrationTest extends AbstractPostgresIntegrationTest {
     private NoProjectOrderService noProject;
     private MyIncomingService myIncoming;
     private TicketService ticketService;
+    private TicketRepository ticketRepo;
     private UserPrincipal owner;
     private UserPrincipal importUser;
     private UserPrincipal ceoUser;
@@ -70,6 +71,7 @@ class ShipmentRoundIntegrationTest extends AbstractPostgresIntegrationTest {
     void wire() {
         ImportRequestRepository stored = new ImportRequestRepository(jdbc);
         TicketRepository tickets = new TicketRepository(jdbc);
+        ticketRepo = tickets;
         NotificationRepository notifications = new NotificationRepository(jdbc, new RecordingSalesMailer(jdbc));
         ObjectMapper objectMapper = new ObjectMapper();
         FileStorageService files = new FileStorageService("/tmp/glr-shipment-round-test-uploads");
@@ -493,6 +495,57 @@ class ShipmentRoundIntegrationTest extends AbstractPostgresIntegrationTest {
         jdbc.update("INSERT INTO sales.shipment_lot (shipment_round_id, import_request_id, import_request_item_id, qty)"
             + " SELECT :r, :ir, import_request_item_id, 2 FROM sales.import_request_item WHERE import_request_id = :ir", Map.of("r", done, "ir", mine));
         assertThat(myIncoming.myIncoming(qc).rows()).isEmpty();
+    }
+
+    @Test
+    void aDealAlreadyMarkedReceivedDeliversWhateverStepItsIrIsOn() {
+        long r = round("ORDERED");
+        lot(r, irA, 40); // the IR is still ordered, but the deal was marked received (the legacy button / an earlier rollup)
+        ticketRepo.addEvent(ticketA, owner.id(), owner.name(), th.co.glr.hr.ticket.TicketEventKind.GOODS_RECEIVED, null, null, null);
+        deliverFromWarehouse(ticketA, "40"); // no lot on a RECEIVED round, yet nothing is capped
+    }
+
+    @Test
+    void roundsOfFinishedDealsAreHiddenAndRefused_aMixedRoundStillAdvances() {
+        jdbc.update("UPDATE sales.ticket SET lifecycle = 'CANCELLED' WHERE ticket_id = :t", Map.of("t", ticketB));
+        long dead = round("CONTACTED");
+        lot(dead, irB, 40);
+        long mixed = round("CONTACTED");
+        lot(mixed, irA, 40);
+        lot(mixed, irB, 40);
+
+        assertThat(rounds.list(importUser).rounds()).extracting(r -> r.id()).contains(mixed).doesNotContain(dead);
+        assertRefused(() -> rounds.advance(dead, advanceTo(ImportRequestStep.CONTACTED, ImportRequestStep.ORDERED), importUser), HttpStatus.CONFLICT);
+        assertThat(rounds.advance(mixed, advanceTo(ImportRequestStep.CONTACTED, ImportRequestStep.ORDERED), importUser).importStep())
+            .isEqualTo(ImportRequestStep.ORDERED);
+    }
+
+    @Test
+    void theLastLotOfAPartiallyDeliveredDealMovesDepositPaidToAwaitingFinalPayment_andLeavesFullyPaidAlone() {
+        jdbc.update("UPDATE sales.ticket SET fulfillment_status = 'PARTIALLY_DELIVERED', payment_status = 'DEPOSIT_PAID' WHERE ticket_id = :t", Map.of("t", ticketB));
+        jdbc.update("UPDATE sales.ticket SET fulfillment_status = 'PARTIALLY_DELIVERED', payment_status = 'FULLY_PAID' WHERE ticket_id = :t", Map.of("t", ticketA));
+        long r = round("ORDERED");
+        lot(r, irA, 40);
+        lot(r, irB, 40);
+
+        rounds.advance(r, advanceTo(ImportRequestStep.ORDERED, ImportRequestStep.RECEIVED), importUser);
+
+        Map<String, Object> b = jdbc.queryForMap("SELECT payment_status, fulfillment_status FROM sales.ticket WHERE ticket_id = :t", Map.of("t", ticketB));
+        assertThat(b).containsEntry("payment_status", "AWAITING_FINAL_PAYMENT").containsEntry("fulfillment_status", "PARTIALLY_DELIVERED");
+        Map<String, Object> a = jdbc.queryForMap("SELECT payment_status, fulfillment_status FROM sales.ticket WHERE ticket_id = :t", Map.of("t", ticketA));
+        assertThat(a).containsEntry("payment_status", "FULLY_PAID").containsEntry("fulfillment_status", "PARTIALLY_DELIVERED");
+    }
+
+    @Test
+    void factoryDocumentsReachImportAndTheCeoOnly() {
+        long r = round("CONTACTED");
+        lot(r, irA, 40);
+        rounds.addDocument(r, "PROFORMA", "PI-SECRET-1", null, null, null, importUser);
+
+        assertThat(rounds.get(r, importUser).documents()).hasSize(1);
+        assertThat(rounds.get(r, ceoUser).documents()).hasSize(1);
+        assertThat(rounds.get(r, salesManager).documents()).isEmpty();
+        assertThat(rounds.list(salesManager).rounds().get(0).documents()).isEmpty();
     }
 
     // ── fixtures ────────────────────────────────────────────────────────────────────────────────────────

@@ -87,12 +87,12 @@ public class ShipmentRoundService {
 
     public ShipmentRoundsResponse list(UserPrincipal actor) {
         requireRead(actor);
-        return new ShipmentRoundsResponse(assemble(rounds.roundsWithLots(null)), rounds.waiting());
+        return new ShipmentRoundsResponse(assemble(rounds.roundsWithLots(null), actor), rounds.waiting());
     }
 
     public ShipmentRoundDto get(long id, UserPrincipal actor) {
         requireRead(actor);
-        return assemble(rounds.roundsWithLots(id)).stream().findFirst().orElseThrow(this::notFound);
+        return assemble(rounds.roundsWithLots(id), actor).stream().findFirst().orElseThrow(this::notFound);
     }
 
     // ── writes ──────────────────────────────────────────────────────────────────────────────────────────
@@ -658,7 +658,9 @@ public class ShipmentRoundService {
 
     private ShipmentRoundDto lockRound(long id) {
         rounds.lockRounds(List.of(id));
-        return rounds.roundsWithLots(id).stream().findFirst().orElseThrow(this::notFound);
+        return rounds.roundsWithLots(id).stream().findFirst().orElseThrow(() -> rounds.onlyFinishedDeals(id)
+            ? new ApiException(HttpStatus.CONFLICT, "รอบนี้มีแต่งานที่ปิดหรือยกเลิกแล้ว จึงเลื่อนขั้นตอนหรือแก้ไขไม่ได้")
+            : notFound());
     }
 
     private ApiException notFound() {
@@ -755,14 +757,17 @@ public class ShipmentRoundService {
     }
 
     /** Lots and files joined on, and the stored advance stamp (undoUntil) turned into the undo deadline. */
-    private List<ShipmentRoundDto> assemble(List<ShipmentRoundDto> base) {
+    private List<ShipmentRoundDto> assemble(List<ShipmentRoundDto> base, UserPrincipal actor) {
+        // A factory invoice shows cost prices and other deals' lines: only import and the CEO receive the documents
+        // (numbers, notes, file names); the sales manager and read-all holders read the round without them.
+        boolean documents = ImportRequestService.ADVANCE_STEP_ROLES.contains(actor.role());
         List<Long> ids = base.stream().map(ShipmentRoundDto::id).toList();
         var lots = rounds.lotsByRound(ids);
         var docMap = rounds.documentsByRound(ids);
         return base.stream().map(r -> new ShipmentRoundDto(r.id(), r.factoryId(), r.factoryName(), r.source(), r.importStep(),
             r.contactedOn(), r.orderedOn(), r.pickedUpOn(), r.inTransitOn(), r.awaitingCustomsOn(), r.receivedOn(),
             r.stepByName(), r.stepNote(), r.facts(), lots.getOrDefault(r.id(), List.of()),
-            docMap.getOrDefault(r.id(), List.of()),
+            documents ? docMap.getOrDefault(r.id(), List.of()) : List.of(),
             r.undoUntil() == null ? null : r.undoUntil().plusSeconds(ImportRequestService.STEP_UNDO_WINDOW_SECONDS),
             r.undoById(), r.undoFromStep())).toList();
     }
