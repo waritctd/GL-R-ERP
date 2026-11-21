@@ -1,256 +1,197 @@
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ImportFulfilmentPage } from './ImportFulfilmentPage.jsx';
+import { ShipmentRoundPage } from './ShipmentRoundPage.jsx';
 import { api } from '../../api/index.js';
 
 globalThis.React = React;
 
-// PR-B port of Yang's per-factory redesign (origin/feat/per-factory-import-tracking, 65dfe171) onto the STORED
-// aggregate PR-A shipped (api.storedImportRequests, our own six step codes — see importSteps.js's header).
 vi.mock('../../api/index.js', async (importOriginal) => {
   const actual = await importOriginal();
   return {
     ...actual,
     api: {
-      tickets: { list: vi.fn(), get: vi.fn() },
-      importDeals: { get: vi.fn() },
-      storedImportRequests: {
-        listForTicket: vi.fn(),
-        advanceStep: vi.fn(),
-        setLeadTime: vi.fn(),
-        updateEmailDraft: vi.fn(),
-        markEmailSent: vi.fn(),
-        download: vi.fn(),
-        undoStep: vi.fn(),
+      tickets: { list: vi.fn() },
+      shipmentRounds: {
+        list: vi.fn(), get: vi.fn(), advance: vi.fn(), undo: vi.fn(), updateFacts: vi.fn(),
+        uploadFile: vi.fn(), deleteFile: vi.fn(), downloadFile: vi.fn(),
       },
     },
   };
 });
 
-function row(over = {}) {
+const lot = (over = {}) => ({
+  lotId: 1, importRequestId: 11, docNumber: 'IR-TEST-001', ticketId: 101, ticketCode: 'PR-TEST-0001',
+  customerName: 'บริษัท ตัวอย่าง จำกัด', projectName: 'โครงการ ทดสอบ', itemId: 1, code: 'Slate', brand: null, model: 'Slate Grey',
+  size: '60x60', unit: 'แผ่น', qty: 800, itemQty: 1200, lotNo: 1, lotCount: 2, remainingQty: 400, ...over,
+});
+
+function round(over = {}) {
   return {
-    id: 1,
-    ticketId: 1,
-    ticketCode: 'PR-2026-0701',
-    factoryId: 1,
-    factoryName: 'Cotto Industry',
-    status: 'ISSUED',
-    docNumber: 'IR26001',
-    importStep: 'ORDERED',
-    importStepAt: '2026-09-10',
-    leadTimeMinDays: 30,
-    leadTimeMaxDays: 45,
-    expectedArrivalFrom: null,
-    expectedArrivalTo: null,
-    emailTo: null,
-    emailSubject: 'Purchase order IR26001 - GL&R',
-    emailBody: 'Dear Cotto Industry team,...',
-    emailSentAt: null,
-    emailSentByName: null,
-    ...over,
+    id: 7, factoryId: 1, factoryName: 'Test Stone Co.', source: 'PORTAL', importStep: 'IN_TRANSIT',
+    contactedOn: '2026-10-01', orderedOn: '2026-10-05', pickedUpOn: '2026-10-20', inTransitOn: '2026-10-25',
+    awaitingCustomsOn: null, receivedOn: null, stepByName: 'ฝ่ายนำเข้า', stepNote: null,
+    facts: { label: 'รอบ ทดสอบ', transportMode: 'SEA', vessel: 'TEST VESSEL', etaOn: '2026-11-22' },
+    lots: [lot(), lot({ lotId: 2, importRequestId: 12, docNumber: 'IR-TEST-002', ticketId: 102, ticketCode: 'PR-TEST-0002',
+      projectName: null, customerName: 'ลูกค้า สอง', qty: 320, itemQty: 320, lotNo: 1, lotCount: 1, remainingQty: 0 })],
+    documents: [
+      { id: 1, kind: 'PROFORMA', docNo: 'PI-TEST-1', docDate: null, note: null, fileName: null },
+      { id: 2, kind: 'INVOICE', docNo: 'INV-TEST-A', docDate: null, note: null, fileName: null },
+      { id: 3, kind: 'INVOICE', docNo: 'INV-TEST-B', docDate: null, note: 'PO สอง', fileName: null },
+    ],
+    undoUntil: null, undoById: null, undoFromStep: null, ...over,
   };
 }
 
-function ticket(over = {}) {
-  return {
-    id: 1,
-    code: 'PR-2026-0701',
-    title: 'ดีลทดสอบ',
-    customerName: 'บริษัท ทดสอบ จำกัด',
-    projectName: null,
-    dueDate: null,
-    overdue: false,
-    fulfillmentStatus: 'IR_ISSUED',
-    ...over,
-  };
-}
+const waitingIr = {
+  importRequestId: 21, docNumber: 'IR-TEST-009', factoryId: 2, factoryName: 'Waiting Ceramics', ticketId: 109,
+  ticketCode: 'PR-TEST-0009', customerName: 'ลูกค้า รอ', projectName: null,
+  lines: [{ code: 'W1', brand: null, model: 'Stone White', size: '80x80', unit: 'แผ่น', remainingQty: 450 }],
+};
 
-// api.storedImportRequests.listForTicket(ticketId) is called once per candidate ticket; this resolver keys a
-// per-ticket row map so a test can supply different rows per deal.
-function mockRowsByTicket(map) {
-  api.storedImportRequests.listForTicket.mockImplementation((ticketId) =>
-    Promise.resolve({ importRequests: map[Number(ticketId)] ?? [] }));
-}
-
-function renderPage(showToast = vi.fn()) {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-  });
-  const utils = render(
-    <QueryClientProvider client={queryClient}>
-      <MemoryRouter initialEntries={['/fulfilment']}>
-        <ImportFulfilmentPage user={{ id: 5, name: 'ฝ่ายนำเข้า', role: 'import' }} showToast={showToast} />
+function renderAt(path, user = { id: 5, name: 'ฝ่ายนำเข้า', role: 'import' }, showToast = vi.fn()) {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(
+    <QueryClientProvider client={client}>
+      <MemoryRouter initialEntries={[path]}>
+        <Routes>
+          <Route path="/fulfilment" element={<ImportFulfilmentPage user={user} showToast={showToast} />} />
+          <Route path="/fulfilment/rounds/:id" element={<ShipmentRoundPage user={user} showToast={showToast} />} />
+        </Routes>
       </MemoryRouter>
     </QueryClientProvider>,
   );
-  return { ...utils, queryClient, showToast };
+  return showToast;
 }
 
-function dealCardFor(code) {
-  const found = screen.getAllByTestId('fulfilment-deal').find((c) => c.textContent.includes(code));
-  if (!found) throw new Error(`no rendered deal card for ${code}`);
-  return found;
-}
+beforeEach(() => {
+  vi.mocked(api.shipmentRounds.list).mockResolvedValue({ rounds: [round()], waiting: [waitingIr] });
+  vi.mocked(api.shipmentRounds.get).mockResolvedValue({ round: round() });
+  vi.mocked(api.tickets.list).mockResolvedValue({ tickets: [
+    // legacy: pre-V184 chain, no stored IR row on any round
+    { id: 301, code: 'PR-TEST-0301', customerName: 'ลูกค้า เดิม', title: 'งานเดิม', fulfillmentStatus: 'IR_SENT', overdue: false },
+    // not legacy: its IR waits for a round
+    { id: 109, code: 'PR-TEST-0009', customerName: 'ลูกค้า รอ', title: 'งานรอ', fulfillmentStatus: 'IR_ISSUED', overdue: false },
+  ] });
+});
+afterEach(() => vi.clearAllMocks());
 
-describe('ImportFulfilmentPage (per-factory, stored aggregate)', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    api.tickets.list.mockResolvedValue({ tickets: [ticket()] });
-    // RC-02 (role check 2026-10-29): TicketService#get refuses import outright, so the deal read
-    // is mocked the way Java answers it; the page reads import's own projection instead.
-    api.tickets.get.mockRejectedValue(Object.assign(new Error('ไม่มีสิทธิ์เข้าถึงรายการนี้'), { status: 403 }));
-    api.importDeals.get.mockResolvedValue({ deal: { fulfillmentStatus: 'IR_ISSUED' } });
-    mockRowsByTicket({ 1: [row()] });
-    api.storedImportRequests.advanceStep.mockResolvedValue({ importRequest: row({ importStep: 'PICKED_UP' }) });
+describe('การขนส่ง queue (shipment rounds)', () => {
+  it('lists the IRs still waiting for a round and the rounds, each linking to its round page', async () => {
+    renderAt('/fulfilment');
+    expect(await screen.findAllByText('IR-TEST-009')).not.toHaveLength(0);
+    expect(screen.getAllByText('Test Stone Co. · รอบ ทดสอบ').length).toBeGreaterThan(0);
+    expect(screen.getAllByRole('link', { name: 'รายละเอียด' })[0].getAttribute('href')).toBe('/fulfilment/rounds/7');
+    expect(screen.queryByText('จัดรอบขนส่ง')).toBeNull(); // planning a round is a later slice
   });
 
-  it('groups per-factory rows into one card per deal, each factory as its own bar', async () => {
-    mockRowsByTicket({
-      1: [
-        row({ id: 1, factoryName: 'Cotto Industry', importStep: 'ORDERED' }),
-        row({ id: 2, factoryName: 'Duragres Thailand', importStep: 'IN_TRANSIT' }),
-      ],
+  it('advances a round from the queue asking only that step\'s facts, then offers the 30 s undo', async () => {
+    vi.mocked(api.shipmentRounds.advance).mockResolvedValue({
+      round: round({ importStep: 'AWAITING_CUSTOMS', undoUntil: new Date(Date.now() + 30_000).toISOString() }),
     });
-    renderPage();
+    vi.mocked(api.shipmentRounds.undo).mockResolvedValue({ round: round() });
+    renderAt('/fulfilment');
+    fireEvent.click((await screen.findAllByTestId('round-advance-7'))[0]);
+    const sheet = await screen.findByTestId('advance-round-sheet');
+    // IN_TRANSIT -> the next step is AWAITING_CUSTOMS: arrival date only, no vessel / invoice fields.
+    expect(within(sheet).getByLabelText('วันที่ของถึงไทย')).toBeTruthy();
+    expect(within(sheet).queryByLabelText('ชื่อเรือ')).toBeNull();
 
-    await screen.findByTestId('fulfilment-deal');
-    const card = dealCardFor('PR-2026-0701');
-    expect(within(card).getByText('บริษัท ทดสอบ จำกัด')).not.toBeNull();
-    expect(within(card).getByText('Cotto Industry')).not.toBeNull();
-    expect(within(card).getByText('Duragres Thailand')).not.toBeNull();
-    // Rollup chip counts warehouse-received factories (none yet, of 2).
-    expect(within(card).getByText(/ถึงโกดัง 0\/2 โรงงาน/)).not.toBeNull();
+    fireEvent.click(within(sheet).getByTestId('advance-round-submit'));
+    await waitFor(() => expect(api.shipmentRounds.advance).toHaveBeenCalledWith(7,
+      expect.objectContaining({ targetStep: 'AWAITING_CUSTOMS', expectedStep: 'IN_TRANSIT' })));
+    fireEvent.click(await screen.findByRole('button', { name: 'เลิกทำ' }));
+    await waitFor(() => expect(api.shipmentRounds.undo).toHaveBeenCalledWith(7, { expectedStep: 'AWAITING_CUSTOMS' }));
   });
 
-  it('advances a factory to the chosen step in place (never a deal-level transition)', async () => {
-    renderPage();
-    const card = await screen.findByTestId('fulfilment-deal');
-    // ORDERED's only forward step in the bar's default picker is PICKED_UP.
-    fireEvent.click(within(card).getByTestId('advance-1'));
-
-    await waitFor(() => expect(api.storedImportRequests.advanceStep)
-      .toHaveBeenCalledWith(1, { targetStep: 'PICKED_UP' }));
+  it('an unticked complete-per-invoice needs a note before it can be saved', async () => {
+    renderAt('/fulfilment');
+    fireEvent.click((await screen.findAllByTestId('round-advance-7'))[0]);
+    const sheet = await screen.findByTestId('advance-round-sheet');
+    fireEvent.click(within(sheet).getByLabelText(/ถึงโกดัง/));
+    fireEvent.click(within(sheet).getByLabelText(/ของเข้าครบตามอินวอยซ์/));
+    expect(within(sheet).getByTestId('advance-round-submit').disabled).toBe(true);
+    fireEvent.change(within(sheet).getByLabelText('หมายเหตุ (ของไม่ครบ) *'), { target: { value: 'ขาด 2 กล่อง' } });
+    expect(within(sheet).getByTestId('advance-round-submit').disabled).toBe(false);
   });
 
-  // Spec 2026-11-15 §7.11 item 3 / plan task 5.3 (design a-fulfil): this page is the ONE place a step is advanced,
-  // and an advance offers a 30-second undo instead of being final at once.
-  describe('the undo snackbar', () => {
-    afterEach(() => vi.useRealTimers());
-
-    it('an advance shows "เลื่อนเป็น … · IR · เลิกทำ"; เลิกทำ undoes THAT advance (expectedStep = its target)', async () => {
-      api.storedImportRequests.undoStep.mockResolvedValue({ importRequest: row() });
-      const { showToast } = renderPage();
-      const card = await screen.findByTestId('fulfilment-deal');
-      fireEvent.click(within(card).getByTestId('advance-1'));
-      const snack = await screen.findByTestId('step-undo-snackbar');
-      expect(snack.textContent).toContain('เลื่อนเป็น “ขนส่งรับของ”');
-      expect(snack.textContent).toContain('IR26001');
-      fireEvent.click(within(snack).getByRole('button', { name: 'เลิกทำ' }));
-      await waitFor(() => expect(api.storedImportRequests.undoStep).toHaveBeenCalledWith(1, { expectedStep: 'PICKED_UP' }));
-      await waitFor(() => expect(screen.queryByTestId('step-undo-snackbar')).toBeNull());
-      expect(showToast).toHaveBeenCalledWith('success', expect.stringContaining('เลิกทำ'));
-    });
-
-    it('an advance to ถึงโกดัง offers no undo (it completes the shipment; the server refuses it too)', async () => {
-      mockRowsByTicket({ 1: [row({ importStep: 'AWAITING_CUSTOMS' })] });
-      api.storedImportRequests.advanceStep.mockResolvedValue({ importRequest: row({ importStep: 'RECEIVED' }) });
-      renderPage();
-      const card = await screen.findByTestId('fulfilment-deal');
-      fireEvent.click(within(card).getByTestId('advance-1'));
-      await waitFor(() => expect(api.storedImportRequests.advanceStep).toHaveBeenCalledWith(1, { targetStep: 'RECEIVED' }));
-      await waitFor(() => expect(api.importDeals.get).toHaveBeenCalled());
-      expect(screen.queryByTestId('step-undo-snackbar')).toBeNull();
-    });
+  it('keeps the legacy section: a pre-V184 deal with no IR row links to its deal, a deal with a waiting IR does not', async () => {
+    renderAt('/fulfilment');
+    const legacy = await screen.findByTestId('fulfilment-legacy');
+    const deals = within(legacy).getAllByTestId('fulfilment-legacy-deal');
+    expect(deals).toHaveLength(1);
+    expect(within(deals[0]).getByRole('link').getAttribute('href')).toBe('/import/deals/301');
   });
 
-  // Import has its own per-deal page (GET /api/import/deals/{id}); the whole-deal GET /api/tickets/{id} 403s
-  // import, so a link into /tickets/:id from this worklist is a dead end.
-  it('links every deal to import\'s own page (/import/deals/:id), never the whole-deal page', async () => {
-    renderPage();
-    await screen.findByTestId('fulfilment-deal');
-    const hrefs = screen.getAllByRole('link').map((a) => a.getAttribute('href'));
-    expect(hrefs).toContain('/import/deals/1');
-    expect(hrefs.filter((h) => h.startsWith('/tickets'))).toEqual([]);
+  it('RECEIVED is never undoable, so it gets a toast and no undo snackbar', async () => {
+    vi.mocked(api.shipmentRounds.advance).mockResolvedValue({ round: round({ importStep: 'RECEIVED', undoUntil: new Date(Date.now() + 30_000).toISOString() }) });
+    const showToast = renderAt('/fulfilment');
+    fireEvent.click((await screen.findAllByTestId('round-advance-7'))[0]);
+    const sheet = await screen.findByTestId('advance-round-sheet');
+    fireEvent.click(within(sheet).getByLabelText(/ถึงโกดัง/));
+    fireEvent.click(within(sheet).getByTestId('advance-round-submit'));
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith('success', 'อัปเดตสถานะรอบขนส่งแล้ว'));
+    expect(screen.queryByTestId('step-undo-snackbar')).toBeNull();
   });
 
-  it('opens the order-email modal and marks it sent — import/CEO can send it', async () => {
-    renderPage();
-    const card = await screen.findByTestId('fulfilment-deal');
-    fireEvent.click(within(card).getByTestId('order-email-1'));
-
-    const sendButton = await screen.findByTestId('ir-email-mark-sent');
-    api.storedImportRequests.markEmailSent.mockResolvedValue({ importRequest: row({ emailSentAt: '2026-09-19T00:00:00Z' }) });
-    fireEvent.click(sendButton);
-
-    await waitFor(() => expect(api.storedImportRequests.markEmailSent).toHaveBeenCalledWith(1));
+  it('a portal round with no numbers asks for a proforma and an invoice number to reach ถึงโกดัง, and sends them', async () => {
+    vi.mocked(api.shipmentRounds.get).mockResolvedValue({ round: round({ documents: [{ id: 2, kind: 'INVOICE', docNo: 'INV-TEST-A' }] }) });
+    vi.mocked(api.shipmentRounds.list).mockResolvedValue({ rounds: [round({ documents: [{ id: 2, kind: 'INVOICE', docNo: 'INV-TEST-A' }] })], waiting: [] });
+    vi.mocked(api.shipmentRounds.advance).mockResolvedValue({ round: round({ importStep: 'RECEIVED' }) });
+    renderAt('/fulfilment');
+    fireEvent.click((await screen.findAllByTestId('round-advance-7'))[0]);
+    const sheet = await screen.findByTestId('advance-round-sheet');
+    fireEvent.click(within(sheet).getByLabelText(/ถึงโกดัง/));
+    // The invoice already has a number: only the proforma is asked.
+    expect(within(sheet).queryByLabelText(/เลขที่ Invoice/)).toBeNull();
+    const submit = within(sheet).getByTestId('advance-round-submit');
+    expect(submit.disabled).toBe(true);
+    fireEvent.change(within(sheet).getByLabelText(/เลขที่ Proforma invoice/), { target: { value: 'PI-NEW' } });
+    expect(submit.disabled).toBe(false);
+    fireEvent.click(submit);
+    await waitFor(() => expect(api.shipmentRounds.advance).toHaveBeenCalledWith(7, expect.objectContaining({
+      targetStep: 'RECEIVED', documents: [{ kind: 'PROFORMA', docNo: 'PI-NEW' }] })));
   });
 
-  // PR-B REVIEW ROUND 2, X2: TicketService#applyImportRequestRollup writes ONLY the GOODS_RECEIVED event for an
-  // already PARTIALLY_DELIVERED deal — it never touches fulfillment_status, since a delivery already under way
-  // must not be disturbed.
-  describe('X2 — PARTIALLY_DELIVERED done-group rollup', () => {
-    it('moves a PARTIALLY_DELIVERED deal into the done group once every issued row is RECEIVED', async () => {
-      api.tickets.list.mockResolvedValue({
-        tickets: [ticket({ fulfillmentStatus: 'PARTIALLY_DELIVERED' })],
-      });
-      mockRowsByTicket({
-        1: [row({ id: 1, importStep: 'RECEIVED' }), row({ id: 2, factoryName: 'B', importStep: 'RECEIVED' })],
-      });
-      renderPage();
-
-      await screen.findByTestId('fulfilment-done');
-      expect(screen.queryByTestId('fulfilment-deal')).toBeNull();
-      expect(within(screen.getByTestId('fulfilment-done')).getByText(/PR-2026-0701/)).not.toBeNull();
-      // Done-group rows must not inflate the active step chips.
-      expect(screen.getByTestId('step-chip-ALL').textContent).toMatch(/0/);
-    });
-
-    it('keeps a PARTIALLY_DELIVERED deal active while any issued row is still short of RECEIVED', async () => {
-      api.tickets.list.mockResolvedValue({
-        tickets: [ticket({ fulfillmentStatus: 'PARTIALLY_DELIVERED' })],
-      });
-      mockRowsByTicket({
-        1: [row({ id: 1, importStep: 'RECEIVED' }), row({ id: 2, factoryName: 'B', importStep: 'IN_TRANSIT' })],
-      });
-      renderPage();
-
-      const card = await screen.findByTestId('fulfilment-deal');
-      expect(within(card).getByText('Cotto Industry')).not.toBeNull();
-      expect(screen.queryByTestId('fulfilment-done')).toBeNull();
-    });
-  });
-
-  // PR-B REVIEW ROUND 2, X4: the completion toast used to claim "รับครบทุกโรงงาน" off a CLIENT-side guess —
-  // every row THIS PAGE already had loaded was RECEIVED — computed BEFORE the advance's own server-side rollup
-  // runs.
-  describe('X4 — completion toast reflects the refetched ticket, not a client-side guess', () => {
-    it('shows the ordinary step-advanced toast, never the "รับครบทุกโรงงาน" claim, when the refetched ticket is NOT GOODS_RECEIVED', async () => {
-      api.importDeals.get.mockResolvedValue({ deal: { fulfillmentStatus: 'IR_ISSUED' } });
-      mockRowsByTicket({ 1: [row({ id: 1, importStep: 'AWAITING_CUSTOMS' })] });
-      api.storedImportRequests.advanceStep.mockResolvedValue({ importRequest: row({ id: 1, importStep: 'RECEIVED' }) });
-      const showToast = vi.fn();
-      renderPage(showToast);
-      const card = await screen.findByTestId('fulfilment-deal');
-      fireEvent.click(within(card).getByTestId('advance-1'));
-
-      await waitFor(() => expect(showToast).toHaveBeenCalledWith('success', 'อัปเดตสถานะรายโรงงานแล้ว'));
-      expect(showToast).not.toHaveBeenCalledWith('success', expect.stringContaining('รับครบทุกโรงงาน'));
-    });
-
-    it('shows the completion toast when the refetched ticket is genuinely GOODS_RECEIVED', async () => {
-      api.importDeals.get.mockResolvedValue({ deal: { fulfillmentStatus: 'GOODS_RECEIVED' } });
-      mockRowsByTicket({ 1: [row({ id: 1, importStep: 'AWAITING_CUSTOMS' })] });
-      api.storedImportRequests.advanceStep.mockResolvedValue({ importRequest: row({ id: 1, importStep: 'RECEIVED' }) });
-      const showToast = vi.fn();
-      renderPage(showToast);
-      const card = await screen.findByTestId('fulfilment-deal');
-      fireEvent.click(within(card).getByTestId('advance-1'));
-
-      await waitFor(() => expect(showToast).toHaveBeenCalledWith('success', 'รับครบทุกโรงงาน — ส่งต่อฝ่ายขายเพื่อส่งมอบ'));
-    });
+  it('a read-only viewer sees the queue without the advance button', async () => {
+    renderAt('/fulfilment', { id: 9, name: 'ผู้จัดการขาย', role: 'sales_manager' });
+    expect(await screen.findAllByText('IR-TEST-009')).not.toHaveLength(0);
+    expect(screen.queryByTestId('round-advance-7')).toBeNull();
   });
 });
 
+describe('รอบขนส่ง page', () => {
+  it('shows the steps with their dates, the facts and each IR with its lot', async () => {
+    renderAt('/fulfilment/rounds/7');
+    expect(await screen.findByText('TEST VESSEL')).toBeTruthy();
+    expect(document.querySelector('[data-step="IN_TRANSIT"]').getAttribute('data-state')).toBe('now');
+    expect(document.querySelector('[data-step="ORDERED"]').getAttribute('data-state')).toBe('done');
+    expect(screen.getAllByText('ล็อต 1 จาก 2').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('IR-TEST-001')[0].closest('a').getAttribute('href')).toBe('/import/deals/101');
+    // The file is optional: no warning when none is attached.
+    // Documents are ONE list; a round may carry several invoices.
+    const docs = within(screen.getByTestId('round-documents'));
+    expect(docs.getByText('INV-TEST-A')).toBeTruthy();
+    expect(docs.getByText('INV-TEST-B')).toBeTruthy();
+    expect(docs.getByTestId('doc-add')).toBeTruthy();
+    expect(screen.getByText(/ต้องมีเลขที่ Proforma และ Invoice/)).toBeTruthy(); // PORTAL round: the numbers are expected
+  });
+
+  it('labels the vessel by transport mode: an air round says เที่ยวบิน', async () => {
+    vi.mocked(api.shipmentRounds.get).mockResolvedValue({ round: round({ facts: { transportMode: 'AIR', vessel: 'TG-123' } }) });
+    renderAt('/fulfilment/rounds/7');
+    expect(await screen.findByText('TG-123')).toBeTruthy();
+    expect(screen.getByText('เที่ยวบิน')).toBeTruthy();
+    expect(screen.queryByText('ชื่อเรือ')).toBeNull();
+  });
+
+  it('a migrated round is exempt from the number rule: no "ต้องมีเลขที่" line', async () => {
+    vi.mocked(api.shipmentRounds.get).mockResolvedValue({ round: round({ source: 'MIGRATED', documents: [], facts: { label: 'รอบ เดิม' } }) });
+    renderAt('/fulfilment/rounds/7');
+    await screen.findByTestId('round-documents');
+    expect(screen.queryByText(/ต้องมีเลขที่ Proforma/)).toBeNull();
+  });
+});

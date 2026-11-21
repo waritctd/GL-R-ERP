@@ -157,7 +157,7 @@ const PATH_GUARDS = [
   // งานนำเข้า — Import's cross-deal fulfilment workspace. Frontend gating only — the four endpoints enforce the
   // real gate and are unchanged. Mirrors ROLE_PERMISSIONS.canActOnFulfilment, itself a mirror of
   // TicketService.FULFILMENT_ROLES {import, ceo}.
-  { test: (p) => p === '/fulfilment', can: (u) => hasPermission(u.role, 'canActOnFulfilment') || isOversightReader(u) },
+  { test: (p) => p === '/fulfilment' || p.startsWith('/fulfilment/'), can: (u) => hasPermission(u.role, 'canActOnFulfilment') || isOversightReader(u) },
   // Matches the launcher's nav condition exactly (AppShell.jsx: `role === 'ceo'`).
   { test: (p) => p === '/ceo-settings', can: (u) => u.role === 'ceo' },
   // Attendance calendar admin (hr.holiday / hr.work_schedule / hr.work_schedule_assignment CRUD).

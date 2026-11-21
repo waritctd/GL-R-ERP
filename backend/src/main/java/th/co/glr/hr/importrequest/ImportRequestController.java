@@ -158,7 +158,10 @@ public class ImportRequestController {
             @Valid @RequestBody AdvanceImportStepRequest request, HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
         Map<String, Object> body = new java.util.LinkedHashMap<>();
-        body.put("importRequest", asConflict(() -> service.advanceStep(id, request, user)));
+        body.put("importRequest", asConflict(() -> {
+            service.requireReceivableThroughIr(id, request.targetStep());
+            return service.advanceStep(id, request, user);
+        }));
         // When the 30 s undo window closes, in SERVER time (V216); null when there is nothing to undo.
         body.put("undoUntil", service.stepUndoUntil(id));
         return body;

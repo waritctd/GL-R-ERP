@@ -96,7 +96,7 @@ public class ImportRequestService {
      * form's footer (which {@link #requirePrintedFooterWrite} gates, CEO only). */
     private static final Set<String> FOOTER_ONLY_ROLES = Set.of("import");
     /** Advance a step. Global — import has no per-deal "ownership" concept, unlike sales. */
-    private static final Set<String> ADVANCE_STEP_ROLES = Set.of("import", "ceo");
+    static final Set<String> ADVANCE_STEP_ROLES = Set.of("import", "ceo");
     /** Read-only, no ownership scoping. {@code sales} also reads, but ownership-scoped — see {@link #canRead}. */
     private static final Set<String> READ_ONLY_ROLES = Set.of("import", "sales_manager");
 
@@ -1123,47 +1123,65 @@ public class ImportRequestService {
             throw new ApiException(HttpStatus.CONFLICT, "ขั้นตอนถูกเปลี่ยนแปลงโดยผู้ใช้อื่น หรือฉบับนี้ถูกแทนที่แล้ว");
         }
         if (soleRound.isPresent()) {
-            rounds.advanceRound(soleRound.getAsLong(), target, eventDate, actor.id(), actor.name(), request.note());
+            rounds.advanceRound(soleRound.getAsLong(), target, eventDate, actor.id(), actor.name(), request.note(), null);
         } else {
             rounds.createPortalRound(id, existing.factoryId(), existing.factoryName(), target, eventDate,
                 existing.importStep(), existing.importStepAt(), actor.id(), actor.name(), request.note());
         }
-        String noteSuffix = request.note() != null && !request.note().isBlank()
-            ? " — " + request.note() : "";
-        // The ticket must be LOCKED (FOR UPDATE) BEFORE the event insert below,
-        // not after — addEventWithDocument's FK to sales.ticket takes a KEY SHARE lock on the ticket
-        // row, and two concurrent advanceStep calls that both later try to upgrade to FOR UPDATE
-        // (the RECEIVED branch, below) would each be waiting on the other's KEY SHARE,
-        // a classic FK lock-order deadlock. Locking FIRST, unconditionally, establishes one strict
-        // order (lock, then insert) so at most one caller can ever be in that position at a time —
-        // the second simply blocks until the first commits and releases the lock.
-        tickets.lockTicketForUpdate(existing.ticketId());
-        tickets.addEventWithDocument(existing.ticketId(), actor.id(), actor.name(),
-            TicketEventKind.IMPORT_STEP_ADVANCED, null, null,
-            "โรงงาน " + existing.factoryName() + ": " + ImportRequestStep.thaiLabel(existing.importStep())
-                + " → " + ImportRequestStep.thaiLabel(target) + noteSuffix,
-            th.co.glr.hr.ticket.RelatedDocumentType.IMPORT_REQUEST, id);
+        afterStepChanges(existing.ticketId(), List.of(new StepChange(existing, existing.importStep(), target)),
+            actor, request.note());
+        return withPageCount(requireStored(id));
+    }
 
-        String ir = "ใบขอซื้อ (IR) " + existing.docNumber();
-        boolean all = ImportRequestStep.RECEIVED.equals(target) && allFactoriesReceived(existing.ticketId());
-        if (all) {
-            ticketService.applyImportRequestRollup(existing.ticketId(), actor);
-            notifyRepOfImportProgress(requireTicketSummary(existing.ticketId()), TicketEventKind.IMPORT_GOODS_RECEIVED_ALL,
-                "สินค้าตาม" + ir + " จากโรงงาน " + existing.factoryName() + " เข้าคลังแล้ว และครบทุกใบขอซื้อของดีลนี้",
+    /** The IR-level advance cannot reach RECEIVED for an IR with no round or on a portal round: that move needs the
+     * round's documents and goes through the round page. Called by the controller, so service-level callers (tests, the
+     * rounds themselves) are unaffected. MIGRATED and BACKFILL rounds keep working. */
+    public void requireReceivableThroughIr(long id, String targetStep) {
+        if (ImportRequestStep.RECEIVED.equals(targetStep) && (rounds.roundIdsOf(id).isEmpty() || rounds.hasPortalRound(id))) {
+            throw new ApiException(HttpStatus.CONFLICT, "กรุณาเลื่อนไปถึงโกดังที่หน้ารอบขนส่ง");
+        }
+    }
+
+    /** One IR whose step changed, with the step it left. */
+    public record StepChange(ImportRequestDto ir, String from, String to) {}
+
+    /** What follows any change of IR steps, shared by the IR-level advance and the shipment-round advance: one
+     * IMPORT_STEP_ADVANCED event per changed IR, then (once per deal) the all-received rollup or the first-start
+     * notice. The IR rows must already hold their new steps. The ticket is locked FIRST, before any event insert:
+     * the event's FK takes a KEY SHARE lock on the ticket, and two callers upgrading to FOR UPDATE would deadlock. */
+    public void afterStepChanges(long ticketId, List<StepChange> changes, UserPrincipal actor, String note) {
+        String noteSuffix = note != null && !note.isBlank() ? " — " + note : "";
+        tickets.lockTicketForUpdate(ticketId);
+        for (StepChange c : changes) {
+            tickets.addEventWithDocument(ticketId, actor.id(), actor.name(),
+                TicketEventKind.IMPORT_STEP_ADVANCED, null, null,
+                "โรงงาน " + c.ir().factoryName() + ": " + ImportRequestStep.thaiLabel(c.from())
+                    + " → " + ImportRequestStep.thaiLabel(c.to()) + noteSuffix,
+                th.co.glr.hr.ticket.RelatedDocumentType.IMPORT_REQUEST, c.ir().id());
+        }
+        Set<Long> changedIds = changes.stream().map(c -> c.ir().id()).collect(Collectors.toSet());
+        StepChange received = changes.stream().filter(c -> ImportRequestStep.RECEIVED.equals(c.to())).findFirst().orElse(null);
+        if (received != null && allFactoriesReceived(ticketId)) {
+            String ir = "ใบขอซื้อ (IR) " + received.ir().docNumber();
+            ticketService.applyImportRequestRollup(ticketId, actor);
+            notifyRepOfImportProgress(requireTicketSummary(ticketId), TicketEventKind.IMPORT_GOODS_RECEIVED_ALL,
+                "สินค้าตาม" + ir + " จากโรงงาน " + received.ir().factoryName() + " เข้าคลังแล้ว และครบทุกใบขอซื้อของดีลนี้",
                 "สิ่งที่ต้องทำต่อ: นัดวันส่งสินค้ากับลูกค้า");
-        } else if (ImportRequestStep.CONTACTED.equals(existing.importStep())
-            && stored.findIssuedByTicket(existing.ticketId()).stream()
-                .noneMatch(o -> o.id() != id && !ImportRequestStep.CONTACTED.equals(o.importStep()))
+            return;
+        }
+        StepChange started = changes.stream().filter(c -> ImportRequestStep.CONTACTED.equals(c.from())
+            && !ImportRequestStep.CONTACTED.equals(c.to())).findFirst().orElse(null);
+        if (started != null
+            && stored.findIssuedByTicket(ticketId).stream()
+                .noneMatch(o -> !changedIds.contains(o.id()) && !ImportRequestStep.CONTACTED.equals(o.importStep()))
             // An undo back to CONTACTED, then a re-advance, must not tell the rep twice (review M4).
-            && !stored.importStartedNoticeSent(existing.ticketId(),
-                requireTicketSummary(existing.ticketId()).createdById())) {
-            // Once per deal: only the first IR to leave CONTACTED tells the rep the import has started.
-            notifyRepOfImportProgress(requireTicketSummary(existing.ticketId()), TicketEventKind.IMPORT_STARTED,
-                actor.name() + " เริ่มดำเนินการ" + ir + " กับโรงงาน " + existing.factoryName()
-                    + " แล้ว ขั้นตอนล่าสุด: " + ImportRequestStep.thaiLabel(target),
+            && !stored.importStartedNoticeSent(ticketId, requireTicketSummary(ticketId).createdById())) {
+            String ir = "ใบขอซื้อ (IR) " + started.ir().docNumber();
+            notifyRepOfImportProgress(requireTicketSummary(ticketId), TicketEventKind.IMPORT_STARTED,
+                actor.name() + " เริ่มดำเนินการ" + ir + " กับโรงงาน " + started.ir().factoryName()
+                    + " แล้ว ขั้นตอนล่าสุด: " + ImportRequestStep.thaiLabel(started.to()),
                 "แจ้งเพื่อทราบ ระบบจะแจ้งอีกครั้งเมื่อสินค้าเข้าคลัง");
         }
-        return withPageCount(requireStored(id));
     }
 
     /** How long after an advance its actor may still undo it (spec 2026-11-15 §7.11 item 3, the /fulfilment snackbar). */
@@ -1245,8 +1263,9 @@ public class ImportRequestService {
             if (rounds.createdByAdvance(r)) {
                 rounds.deleteRound(r); // the advance made this round: undoing it returns the IR to waiting
             } else {
-                rounds.undoRound(r, after.importStep(), after.importStepById(), after.importStepByName(),
-                    after.importStepNote());
+                if (rounds.undoRound(r, expected, actor.id(), STEP_UNDO_WINDOW_SECONDS) == 0) {
+                    throw new ApiException(HttpStatus.CONFLICT, "ขั้นตอนถูกเปลี่ยนแปลงโดยผู้ใช้อื่น จึงเลิกทำไม่ได้");
+                }
             }
         });
         tickets.lockTicketForUpdate(existing.ticketId());
@@ -1879,7 +1898,7 @@ public class ImportRequestService {
         return date.getYear() + 543;
     }
 
-    private ImportRequestDto requireStored(long id) {
+    public ImportRequestDto requireStored(long id) {
         return stored.findById(id)
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบใบขอซื้อนี้"));
     }

@@ -360,6 +360,26 @@ public class ImportRequestRepository {
             });
     }
 
+    /** Writes the step DERIVED from the IR's shipment rounds (slice 2). Clears the IR-level undo stamp: the undo of a
+     * round advance lives on the round. */
+    public void setDerivedStep(long id, String step, LocalDate at, Long byId, String byName, String note) {
+        jdbc.update("""
+            UPDATE sales.import_request
+               SET import_step = :step, import_step_at = :at, import_step_by_id = :by, import_step_by_name = :byName,
+                   import_step_note = :note, step_undo_from = NULL, step_undo_from_at = NULL,
+                   step_undo_from_by_id = NULL, step_undo_from_by_name = NULL, step_undo_from_note = NULL,
+                   step_advanced_at = NULL, updated_at = now()
+             WHERE import_request_id = :id AND status = 'ISSUED'
+            """, new MapSqlParameterSource("id", id).addValue("step", step).addValue("at", at)
+                .addValue("by", byId).addValue("byName", byName).addValue("note", note));
+    }
+
+    /** A corrected date of the step the IR is on (the step itself is unchanged). */
+    public void setStepDate(long id, LocalDate at) {
+        jdbc.update("UPDATE sales.import_request SET import_step_at = :at, updated_at = now() WHERE import_request_id = :id AND status = 'ISSUED'",
+            new MapSqlParameterSource("id", id).addValue("at", at));
+    }
+
     /** Compare-and-set step advance: only succeeds WHERE status = 'ISSUED' AND import_step = :expected. */
     public int advanceStep(long id, String expectedCurrentStep, String targetStep,
                            LocalDate eventDate, long actorId, String actorName, String note) {

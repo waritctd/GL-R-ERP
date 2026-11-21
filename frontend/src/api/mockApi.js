@@ -3185,6 +3185,103 @@ function mockImportRequestDto(row) {
   };
 }
 
+// ── Shipment rounds (V239 / ShipmentRoundService) ────────────────────────────────────────────────────────────────
+// A round is one factory shipment; every IR on it follows its step. In mock mode an ISSUED IR that is already past
+// CONTACTED but has no round is given one on first read (as V239 did for existing IRs); one still at CONTACTED with
+// no lots is "waiting". Mirrors ShipmentRoundService#derive: an IR's step is its slowest lot's, CONTACTED while any
+// quantity is on no round.
+const mockShipmentRounds = [];
+let mockShipmentRoundSeq = 1;
+let mockShipmentLotSeq = 1;
+const MOCK_ROUND_DATE_KEY = {
+  CONTACTED: 'contactedOn', ORDERED: 'orderedOn', PICKED_UP: 'pickedUpOn', IN_TRANSIT: 'inTransitOn',
+  AWAITING_CUSTOMS: 'awaitingCustomsOn', RECEIVED: 'receivedOn',
+};
+const MOCK_ROUND_FACT_KEYS = ['label', 'transportMode', 'vessel', 'voyage', 'forwarder', 'containerNos', 'port', 'goodsReadyOn',
+  'etdPlannedOn', 'etdActualOn', 'etaOn', 'arrivedOn', 'customsReleasedOn', 'grNumber', 'completePerInvoice', 'completeNote', 'note'];
+const MOCK_DOCUMENT_KINDS = ['PROFORMA', 'INVOICE', 'PACKING_LIST', 'BILL_OF_LADING', 'CERT_ORIGIN', 'IMPORT_ENTRY', 'OTHER'];
+// Same as ShipmentRoundService#REQUIRED_NUMBERS_BY_STEP: a PORTAL round needs a proforma and an invoice number to be received.
+const MOCK_ROUND_REQUIRED_NUMBERS_BY_STEP = { RECEIVED: ['PROFORMA', 'INVOICE'] };
+let mockShipmentDocSeq = 1;
+
+function mockEnsureMigratedRounds() {
+  mockImportRequests.filter((r) => r.status === 'ISSUED' && r.importStep && r.importStep !== 'CONTACTED'
+    && !mockShipmentRounds.some((x) => x.lots.some((l) => l.importRequestId === r.id))).forEach((r) => {
+    const round = {
+      id: mockShipmentRoundSeq++, factoryId: r.factoryId, factoryName: r.factoryName, source: 'MIGRATED',
+      importStep: r.importStep, contactedOn: null, orderedOn: null, pickedUpOn: null, inTransitOn: null,
+      awaitingCustomsOn: null, receivedOn: null, stepByName: r.importStepByName ?? null, stepNote: r.importStepNote ?? null,
+      facts: { ...Object.fromEntries(MOCK_ROUND_FACT_KEYS.map((k) => [k, null])), transportMode: 'SEA' }, documents: [], undo: null,
+      lots: r.items.map((it) => ({ lotId: mockShipmentLotSeq++, importRequestId: r.id, itemId: it.id, qty: Number(it.qty) })),
+    };
+    round[MOCK_ROUND_DATE_KEY[r.importStep]] = r.importStepAt ?? null;
+    mockShipmentRounds.push(round);
+  });
+}
+
+function mockShipmentLotDtos(round) {
+  return round.lots.map((lot) => {
+    const ir = mockImportRequests.find((r) => r.id === lot.importRequestId);
+    const item = ir.items.find((it) => it.id === lot.itemId);
+    const ticket = findTicketRaw(ir.ticketId);
+    const all = mockShipmentRounds.flatMap((x) => x.lots).filter((l) => l.itemId === lot.itemId);
+    const placed = all.reduce((sum, l) => sum + l.qty, 0);
+    const remaining = Math.max(0, Number(item.qty) - placed);
+    return {
+      lotId: lot.lotId, importRequestId: ir.id, docNumber: ir.docNumber, ticketId: ticket.id, ticketCode: ticket.code,
+      customerName: ticket.customerName ?? null, projectName: ticket.projectName ?? null, itemId: item.id,
+      code: item.code, brand: item.brand ?? null, model: item.model ?? null, size: item.size ?? null, unit: item.unit ?? null,
+      qty: lot.qty, itemQty: Number(item.qty), lotNo: all.findIndex((l) => l.lotId === lot.lotId) + 1,
+      lotCount: remaining > 0 ? all.length + 1 : all.length, remainingQty: remaining,
+    };
+  });
+}
+
+function mockShipmentDto(round) {
+  const { undo, ...rest } = round;
+  return structuredClone({
+    ...rest,
+    lots: mockShipmentLotDtos(round),
+    documents: round.documents.map(({ id, kind, docNo, docDate, note, fileName, fileSize, mimeType, createdAt }) => ({
+      id, kind, docNo, docDate, note, fileName, fileSize, mimeType, createdAt,
+    })).sort((a, b) => MOCK_DOCUMENT_KINDS.indexOf(a.kind) - MOCK_DOCUMENT_KINDS.indexOf(b.kind) || a.id - b.id),
+    undoUntil: undo ? new Date(undo.advancedAt + 30_000).toISOString() : null,
+    undoById: undo ? undo.byId : null,
+    undoFromStep: undo ? undo.snapshot.importStep : null,
+  });
+}
+
+function mockRecomputeIrSteps(round, actor, note) {
+  const changes = [];
+  const irIds = [...new Set(round.lots.map((l) => l.importRequestId))].sort((a, b) => a - b);
+  irIds.forEach((irId) => {
+    const ir = mockImportRequests.find((r) => r.id === irId);
+    const lots = mockShipmentRounds.flatMap((x) => x.lots.filter((l) => l.itemId != null && l.importRequestId === irId).map((l) => ({ l, x })));
+    const unplaced = ir.items.some((it) => lots.filter(({ l }) => l.itemId === it.id).reduce((sum, { l }) => sum + l.qty, 0) < Number(it.qty));
+    const slowest = lots.reduce((a, b) => (a == null || mockImportRequestStepIndex(b.x.importStep) < mockImportRequestStepIndex(a.x.importStep) ? b : a), null);
+    const step = unplaced || !slowest ? 'CONTACTED' : slowest.x.importStep;
+    if (step === ir.importStep) return;
+    const from = ir.importStep;
+    ir.importStep = step;
+    ir.importStepAt = unplaced || !slowest ? (ir.firstIssuedDate ?? null) : (slowest.x[MOCK_ROUND_DATE_KEY[step]] ?? ir.importStepAt);
+    ir.importStepById = actor.id; ir.importStepByName = actor.name; ir.importStepNote = note ?? null;
+    ir.stepUndo = null; ir.updatedAt = new Date().toISOString();
+    changes.push({ ir, from, to: step });
+  });
+  return changes;
+}
+
+function mockShipmentWrite() {
+  return hasRole('import', 'ceo');
+}
+
+function mockFindShipment(id) {
+  mockEnsureMigratedRounds();
+  const round = mockShipmentRounds.find((r) => r.id === Number(id));
+  if (!round) fail('ไม่พบรอบขนส่ง', 404);
+  return round;
+}
+
 // Mirrors ImportRequestRepository.findByTicket's `ORDER BY r.factory_name, r.version` — NOT
 // `r.brand`, which is a nullable display snapshot (factory_id/factory_name is the real per-row
 // identity).
@@ -15084,6 +15181,204 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
   // "not supported in mock mode" stub, same as the legacy importRequests.pages/download above — the
   // block comment on that helper section explains why the exotic text-regeneration edge cases are
   // simplified rather than mirrored exactly.
+  // Mirrors ShipmentRoundController: import's queue (rounds + issued IRs still waiting for a round) and round page.
+  // Reads: import, ceo, sales_manager and read-all flag holders; writes and files: import and ceo only.
+  shipmentRounds: {
+    async list() {
+      const user = requireSession();
+      const mayRead = ['import', 'ceo', 'sales_manager'].includes(user.role)
+        || (user.readAllSales === true && user.role !== 'account');
+      if (!mayRead) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      mockEnsureMigratedRounds();
+      const waiting = mockImportRequests.filter((r) => r.status === 'ISSUED' && (findTicketRaw(r.ticketId).lifecycle ?? 'ACTIVE') === 'ACTIVE').flatMap((ir) => {
+        const lines = ir.items.map((it) => {
+          const placed = mockShipmentRounds.flatMap((x) => x.lots).filter((l) => l.itemId === it.id).reduce((sum, l) => sum + l.qty, 0);
+          return { code: it.code, brand: it.brand ?? null, model: it.model ?? null, size: it.size ?? null, unit: it.unit ?? null, remainingQty: Number(it.qty) - placed };
+        }).filter((l) => l.remainingQty > 0);
+        if (lines.length === 0) return [];
+        const ticket = findTicketRaw(ir.ticketId);
+        return [{
+          importRequestId: ir.id, docNumber: ir.docNumber, factoryId: ir.factoryId, factoryName: ir.factoryName,
+          ticketId: ticket.id, ticketCode: ticket.code, customerName: ticket.customerName ?? null,
+          projectName: ticket.projectName ?? null, lines,
+        }];
+      });
+      return delay({
+        rounds: [...mockShipmentRounds].filter((r) => r.lots.length > 0)
+          .sort((a, b) => (a.importStep === 'RECEIVED') - (b.importStep === 'RECEIVED') || b.id - a.id).map(mockShipmentDto),
+        waiting,
+      });
+    },
+    async get(id) {
+      const user = requireSession();
+      const mayRead = ['import', 'ceo', 'sales_manager'].includes(user.role)
+        || (user.readAllSales === true && user.role !== 'account');
+      if (!mayRead) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      return delay({ round: mockShipmentDto(mockFindShipment(id)) });
+    },
+    async updateFacts(id, request) {
+      mockShipmentWrite();
+      const round = mockFindShipment(id);
+      const facts = request?.facts;
+      if (facts?.completePerInvoice === false && !facts.completeNote?.trim()) fail('ของไม่ครบตามอินวอยซ์ กรุณาพิมพ์หมายเหตุ', 400);
+      if (facts?.transportMode && !['SEA', 'AIR', 'LAND'].includes(facts.transportMode)) fail('ประเภทการขนส่งไม่ถูกต้อง', 400);
+      const dates = request?.stepDates ?? {};
+      for (const [step, date] of Object.entries(dates)) {
+        if (!MOCK_IMPORT_REQUEST_STEPS.includes(step) || !date
+          || mockImportRequestStepIndex(step) > mockImportRequestStepIndex(round.importStep)) fail('แก้วันที่ได้เฉพาะขั้นตอนที่รอบนี้ผ่านมาแล้ว', 400);
+        if (date > new Date().toISOString().slice(0, 10)) fail('วันที่ของขั้นตอนต้องไม่เป็นวันที่ในอนาคต', 400);
+      }
+      round.undo = null; // an edit ends the undo window, so an undo can never discard it
+      if (facts) MOCK_ROUND_FACT_KEYS.forEach((k) => { round.facts[k] = k === 'transportMode' ? (facts[k] ?? round.facts[k]) : (facts[k] ?? null); });
+      Object.entries(dates).forEach(([step, date]) => { round[MOCK_ROUND_DATE_KEY[step]] = date; });
+      if (Object.keys(dates).length > 0) {
+        // The IR's own current step date follows a correction of that step on its slowest round.
+        [...new Set(round.lots.map((l) => l.importRequestId))].forEach((irId) => {
+          const ir = mockImportRequests.find((r) => r.id === irId);
+          if (ir.importStep === round.importStep && round[MOCK_ROUND_DATE_KEY[ir.importStep]]) ir.importStepAt = round[MOCK_ROUND_DATE_KEY[ir.importStep]];
+        });
+      }
+      return delay({ round: mockShipmentDto(round) });
+    },
+    async advance(id, request) {
+      const user = mockShipmentWrite();
+      const round = mockFindShipment(id);
+      const target = request?.targetStep;
+      if (!MOCK_IMPORT_REQUEST_STEPS.includes(target)) fail(`ขั้นตอนไม่ถูกต้อง: ${target}`, 400);
+      if (!MOCK_IMPORT_REQUEST_STEPS.includes(request.expectedStep)) fail('ต้องระบุขั้นตอนปัจจุบันของรอบ (expectedStep)', 400);
+      if (request.expectedStep !== round.importStep) fail('ขั้นตอนถูกเปลี่ยนแปลงโดยผู้ใช้อื่น กรุณาโหลดหน้าใหม่', 409);
+      if (mockImportRequestStepIndex(target) <= mockImportRequestStepIndex(round.importStep)) {
+        fail('เลื่อนขั้นตอนได้เฉพาะไปข้างหน้าเท่านั้น — แก้ไขข้อมูลของรอบได้ที่ แก้ไข', 409);
+      }
+      const eventDate = request.eventDate || new Date().toISOString().slice(0, 10);
+      if (eventDate > new Date().toISOString().slice(0, 10)) fail('วันที่ของขั้นตอนต้องไม่เป็นวันที่ในอนาคต', 400);
+      for (const lot of round.lots) {
+        const ir = mockImportRequests.find((r) => r.id === lot.importRequestId);
+        if (ir.firstIssuedDate && eventDate < ir.firstIssuedDate) {
+          fail(`วันที่ของขั้นตอนต้องไม่ก่อนวันที่ออกใบขอซื้อ ${ir.docNumber} ครั้งแรก (${ir.firstIssuedDate})`, 400);
+        }
+      }
+      const facts = request.facts ?? {};
+      if (target === 'RECEIVED' && facts.completePerInvoice === false && !facts.completeNote?.trim()) {
+        fail('ของไม่ครบตามอินวอยซ์ กรุณาพิมพ์หมายเหตุ', 400);
+      }
+      if (round.source === 'PORTAL') {
+        for (const kind of MOCK_ROUND_REQUIRED_NUMBERS_BY_STEP[target] ?? []) {
+          const typed = (request.documents ?? []).some((d) => d.kind === kind && d.docNo?.trim());
+          if (!typed && !round.documents.some((d) => d.kind === kind && d.docNo)) {
+            fail(`ต้องมีเลขที่ ${kind === 'PROFORMA' ? 'Proforma invoice' : 'Invoice'} อย่างน้อย 1 ฉบับ ก่อนเลื่อนไปขั้นตอน ${MOCK_IMPORT_REQUEST_STEP_LABELS_TH[target]}`, 400);
+          }
+        }
+      }
+      const { lots: _lots, documents: _documents, undo: _undo, ...rest } = round;
+      const snapshot = structuredClone(rest);
+      MOCK_ROUND_FACT_KEYS.forEach((k) => { if (facts[k] != null) round.facts[k] = facts[k]; });
+      round.documents.forEach((d) => { d.createdByAdvance = false; });
+      (request.documents ?? []).filter((d) => d.docNo?.trim() && MOCK_DOCUMENT_KINDS.includes(d.kind)).forEach((d) => {
+        round.documents.push({ id: mockShipmentDocSeq++, kind: d.kind, docNo: d.docNo.trim(), docDate: null, note: null, fileName: null, fileSize: null, mimeType: null, createdAt: new Date().toISOString(), createdByAdvance: true });
+      });
+      round.importStep = target; round[MOCK_ROUND_DATE_KEY[target]] = eventDate;
+      round.stepByName = user.name; round.stepNote = request.note ?? null;
+      round.undo = { snapshot, byId: user.id, advancedAt: Date.now() };
+      const changes = mockRecomputeIrSteps(round, user, request.note);
+      changes.forEach(({ ir, from, to }) => {
+        const ticket = findTicketRaw(ir.ticketId);
+        if ((ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE') return; // a dead deal keeps the derived step but gets no event or rollup
+        pushEvent(ticket, user, 'IMPORT_STEP_ADVANCED', null, null,
+          `โรงงาน ${ir.factoryName}: ${MOCK_IMPORT_REQUEST_STEP_LABELS_TH[from] ?? from} → ${MOCK_IMPORT_REQUEST_STEP_LABELS_TH[to] ?? to}`);
+        if (to === 'RECEIVED') {
+          const liveRows = mockImportRequests.filter((r) => r.ticketId === ticket.id && r.status === 'ISSUED');
+          const required = mockRequiredFactoryIds(ticket);
+          if (liveRows.every((r) => r.importStep === 'RECEIVED') && [...required].every((fid) => liveRows.some((r) => r.factoryId === fid))) {
+            applyImportRequestRollupMock(ticket, user);
+          }
+        }
+      });
+      return delay({ round: mockShipmentDto(round) });
+    },
+    async undo(id, request) {
+      const user = mockShipmentWrite();
+      const expected = request?.expectedStep;
+      if (!MOCK_IMPORT_REQUEST_STEPS.includes(expected)) fail('ต้องระบุขั้นตอนที่จะเลิกทำ', 400);
+      const round = mockFindShipment(id);
+      if (!round.undo) fail('ไม่มีการเลื่อนขั้นตอนให้เลิกทำ', 409);
+      if (round.importStep !== expected) fail('ขั้นตอนถูกเปลี่ยนไปแล้ว จึงเลิกทำไม่ได้', 409);
+      if (round.undo.byId !== user.id) fail('เลิกทำได้เฉพาะผู้ที่เลื่อนขั้นตอนนี้', 403);
+      if (round.importStep === 'RECEIVED') fail('รับสินค้าเข้าคลังแล้ว เลิกทำไม่ได้ — แก้ไขข้อมูลของรอบที่ แก้ไข', 409);
+      if (Date.now() - round.undo.advancedAt > 30_000) fail('เลยเวลาเลิกทำแล้ว (30 วินาที)', 409);
+      const { snapshot } = round.undo;
+      round.documents = round.documents.filter((d) => !d.createdByAdvance);
+      Object.keys(snapshot).forEach((k) => { round[k] = structuredClone(snapshot[k]); });
+      round.undo = null;
+      mockRecomputeIrSteps(round, user, round.stepNote).forEach(({ ir, from, to }) => {
+        const t = findTicketRaw(ir.ticketId);
+        if ((t.lifecycle ?? 'ACTIVE') !== 'ACTIVE') return;
+        pushEvent(t, user, 'IMPORT_STEP_ADVANCED', null, null,
+          `โรงงาน ${ir.factoryName}: เลิกทำ ${MOCK_IMPORT_REQUEST_STEP_LABELS_TH[from] ?? from} → ${MOCK_IMPORT_REQUEST_STEP_LABELS_TH[to] ?? to}`);
+      });
+      return delay({ round: mockShipmentDto(round) });
+    },
+    async addDocument(id, input) {
+      const user = mockShipmentWrite();
+      const round = mockFindShipment(id);
+      if (!MOCK_DOCUMENT_KINDS.includes(input?.kind)) fail('ประเภทเอกสารไม่ถูกต้อง', 400);
+      const docNo = input.docNo?.trim() || null;
+      if (!docNo && !input.file) fail('ต้องมีเลขที่เอกสารหรือไฟล์อย่างน้อยหนึ่งอย่าง', 400);
+      round.undo = null;
+      round.documents.push({
+        id: mockShipmentDocSeq++, kind: input.kind, docNo, docDate: input.docDate || null, note: input.note?.trim() || null,
+        fileName: input.file?.name ?? null, fileSize: input.file?.size ?? null, mimeType: input.file?.type ?? null,
+        createdAt: new Date().toISOString(), uploadedBy: user.id, createdByAdvance: false,
+      });
+      return delay({ round: mockShipmentDto(round) });
+    },
+    async updateDocument(id, docId, input) {
+      mockShipmentWrite();
+      const round = mockFindShipment(id);
+      const doc = round.documents.find((d) => d.id === Number(docId));
+      if (!doc) fail('ไม่พบเอกสาร', 404);
+      if (!MOCK_DOCUMENT_KINDS.includes(input?.kind)) fail('ประเภทเอกสารไม่ถูกต้อง', 400);
+      const docNo = input.docNo?.trim() || null;
+      if (!docNo && !doc.fileName) fail('ต้องมีเลขที่เอกสารหรือไฟล์อย่างน้อยหนึ่งอย่าง', 400);
+      round.undo = null;
+      Object.assign(doc, { kind: input.kind, docNo, docDate: input.docDate || null, note: input.note?.trim() || null });
+      return delay({ round: mockShipmentDto(round) });
+    },
+    async deleteDocument(id, docId) {
+      mockShipmentWrite();
+      const round = mockFindShipment(id);
+      if (!round.documents.some((d) => d.id === Number(docId))) fail('ไม่พบเอกสาร', 404);
+      round.undo = null;
+      round.documents = round.documents.filter((d) => d.id !== Number(docId));
+      return delay({ round: mockShipmentDto(round) });
+    },
+    async attachFile(id, docId, file) {
+      mockShipmentWrite();
+      const round = mockFindShipment(id);
+      const doc = round.documents.find((d) => d.id === Number(docId));
+      if (!doc) fail('ไม่พบเอกสาร', 404);
+      if (!file) fail('ไฟล์ว่างเปล่า', 400);
+      round.undo = null;
+      Object.assign(doc, { fileName: file.name ?? `${doc.kind}.pdf`, fileSize: file.size ?? 0, mimeType: file.type ?? null });
+      return delay({ round: mockShipmentDto(round) });
+    },
+    async removeFile(id, docId) {
+      mockShipmentWrite();
+      const round = mockFindShipment(id);
+      const doc = round.documents.find((d) => d.id === Number(docId));
+      if (!doc?.fileName) fail('ไม่พบไฟล์', 404);
+      if (!doc.docNo) fail('เอกสารนี้ไม่มีเลขที่ ลบทั้งรายการแทนการลบไฟล์', 400);
+      round.undo = null;
+      Object.assign(doc, { fileName: null, fileSize: null, mimeType: null });
+      return delay({ round: mockShipmentDto(round) });
+    },
+    async downloadFile(id, docId) {
+      mockShipmentWrite();
+      const doc = mockFindShipment(id).documents.find((d) => d.id === Number(docId));
+      if (!doc?.fileName) fail('ไม่พบไฟล์', 404);
+      return new Blob(['mock factory document'], { type: 'text/plain' });
+    },
+  },
   storedImportRequests: {
     async createDrafts(ticketId, request) {
       const ticket = findTicketRaw(Number(ticketId));

@@ -647,6 +647,57 @@ export const api = {
     setRequiredByNote: (ticketId, payload) =>
       apiRequest(API_ROUTES.storedImportRequests.requiredByNote(ticketId), { method: 'PUT', body: payload }),
   },
+  // Mirrors ShipmentRoundController (V239 rounds): reads import/CEO/sales_manager/read-all holders; writes and the round's
+  // documents (proforma, invoice, ...) import and CEO only. `advance` payload: { targetStep, eventDate, expectedStep, note, facts,
+  // documents: [{ kind, docNo }] }; `updateFacts` payload: { facts, stepDates }.
+  shipmentRounds: {
+    list: () => apiRequest(API_ROUTES.shipmentRounds.list()),
+    get: (id) => apiRequest(API_ROUTES.shipmentRounds.get(id)),
+    updateFacts: (id, payload) => apiRequest(API_ROUTES.shipmentRounds.facts(id), { method: 'PUT', body: payload }),
+    advance: (id, payload) => apiRequest(API_ROUTES.shipmentRounds.advance(id), { method: 'POST', body: payload }),
+    undo: (id, payload) => apiRequest(API_ROUTES.shipmentRounds.undo(id), { method: 'POST', body: payload }),
+    // Documents: many per round and kind; a number or a file (or both). Multipart because the file is optional.
+    addDocument: async (id, { kind, docNo, docDate, note, file }) => {
+      const formData = new FormData();
+      formData.append('kind', kind);
+      if (docNo) formData.append('docNo', docNo);
+      if (docDate) formData.append('docDate', docDate);
+      if (note) formData.append('note', note);
+      if (file) formData.append('file', file);
+      const res = await fetch(API_ROUTES.shipmentRounds.documents(id), {
+        method: 'POST', credentials: 'include', headers: csrfHeaders('POST'), body: formData,
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.message || 'เพิ่มเอกสารไม่สำเร็จ');
+      }
+      return res.json();
+    },
+    updateDocument: (id, docId, payload) =>
+      apiRequest(API_ROUTES.shipmentRounds.document(id, docId), { method: 'PUT', body: payload }),
+    deleteDocument: (id, docId) => apiRequest(API_ROUTES.shipmentRounds.document(id, docId), { method: 'DELETE' }),
+    attachFile: async (id, docId, file) => {
+      const formData = new FormData();
+      formData.append('file', file);
+      const res = await fetch(API_ROUTES.shipmentRounds.documentFile(id, docId), {
+        method: 'POST', credentials: 'include', headers: csrfHeaders('POST'), body: formData,
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.message || 'แนบไฟล์ไม่สำเร็จ');
+      }
+      return res.json();
+    },
+    removeFile: (id, docId) => apiRequest(API_ROUTES.shipmentRounds.documentFile(id, docId), { method: 'DELETE' }),
+    downloadFile: async (id, docId) => {
+      const res = await fetch(API_ROUTES.shipmentRounds.documentFile(id, docId), { credentials: 'include' });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.message || 'ดาวน์โหลดไฟล์ไม่สำเร็จ');
+      }
+      return res.blob();
+    },
+  },
   catalog: {
     search: (q) => apiRequest(API_ROUTES.catalog.search(q ?? '')),
     prices: (q, factoryId, limit) => apiRequest(API_ROUTES.catalog.prices(q, factoryId, limit)),

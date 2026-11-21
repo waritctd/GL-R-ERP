@@ -291,6 +291,17 @@ export const API_ROUTES = {
     file: (id, copy) => `/api/import-requests/${id}/file${copy ? `?copy=${encodeURIComponent(copy)}` : ''}`,
     requiredByNote: (ticketId) => `/api/tickets/${ticketId}/required-by-note`,
   },
+  // Shipment rounds (ShipmentRoundController): import's queue and round page. Documents and their files are import/CEO only.
+  shipmentRounds: {
+    list: () => '/api/shipment-rounds',
+    get: (id) => `/api/shipment-rounds/${id}`,
+    facts: (id) => `/api/shipment-rounds/${id}/facts`,
+    advance: (id) => `/api/shipment-rounds/${id}/advance`,
+    undo: (id) => `/api/shipment-rounds/${id}/advance/undo`,
+    documents: (id) => `/api/shipment-rounds/${id}/documents`,
+    document: (id, docId) => `/api/shipment-rounds/${id}/documents/${docId}`,
+    documentFile: (id, docId) => `/api/shipment-rounds/${id}/documents/${docId}/file`,
+  },
   // The per-deal IMPORT view (ImportDealController) — the import-only projection of ONE deal (factories,
   // per-factory ใบขอซื้อ rows, items WITHOUT prices, read-only delivery status, the COMMENTED thread). import is
   // refused the whole-deal GET /api/tickets/{id}; this replaces it.

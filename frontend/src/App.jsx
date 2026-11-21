@@ -69,6 +69,7 @@ const PriceImportPage = lazy(() => import('./features/catalog/PriceImportPage.js
 const CatalogSearchPage = lazy(() => import('./features/catalog/CatalogSearchPage.jsx').then(toDefault('CatalogSearchPage')));
 const PricingRequestQueuePage = lazy(() => import('./features/pricingRequests/PricingRequestQueuePage.jsx').then(toDefault('PricingRequestQueuePage')));
 const ImportDealPage = lazy(() => import('./features/importDeal/ImportDealPage.jsx').then(toDefault('ImportDealPage')));
+const ShipmentRoundPage = lazy(() => import('./features/fulfilment/ShipmentRoundPage.jsx').then(toDefault('ShipmentRoundPage')));
 const ImportFulfilmentPage = lazy(() => import('./features/fulfilment/ImportFulfilmentPage.jsx').then(toDefault('ImportFulfilmentPage')));
 const PricingRequestDetailPage = lazy(() => import('./features/pricingRequests/PricingRequestDetailPage.jsx').then(toDefault('PricingRequestDetailPage')));
 // Quotation v2 — direct deal quotation. Sibling feature to the PricingRequest chain above, not a
@@ -529,6 +530,11 @@ export function App() {
                 <Route
                   path="/fulfilment"
                   element={<ImportFulfilmentPage user={user} showToast={showToast} />}
+                />
+                {/* One shipment round (N02/ND2): steps with real dates, shipment facts, the IRs on it. */}
+                <Route
+                  path="/fulfilment/rounds/:id"
+                  element={<ShipmentRoundPage user={user} showToast={showToast} />}
                 />
                 {/* Import's OWN per-deal page (GET /api/import/deals/{id}). Import is refused the whole-deal /tickets/:id, so
                  * this is where its deal links land. Guarded by canViewImportDeal (import/ceo) in PATH_GUARDS. */}
