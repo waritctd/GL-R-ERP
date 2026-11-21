@@ -68,7 +68,7 @@ public class ShipmentRoundRepository {
 
     /** What a deal's lots planned and what reached the warehouse (received_qty, else the planned qty) over its ISSUED IRs' lots on
      * RECEIVED rounds; {@code unit} is null when the units differ. */
-    public record ReceiptTotals(BigDecimal planned, BigDecimal received, String unit) {
+    public record ReceiptTotals(BigDecimal planned, BigDecimal received, String unit, boolean oneUnit) {
         public boolean short_() {
             return planned != null && received != null && received.compareTo(planned) < 0;
         }
@@ -77,13 +77,29 @@ public class ShipmentRoundRepository {
     public ReceiptTotals receiptTotals(long ticketId) {
         return jdbc.queryForObject("""
             SELECT COALESCE(SUM(l.qty), 0) AS planned, COALESCE(SUM(COALESCE(l.received_qty, l.qty)), 0) AS received,
-                   CASE WHEN COUNT(DISTINCT i.unit) = 1 AND COUNT(i.unit) = COUNT(*) THEN MIN(i.unit) END AS unit
+                   -- NULL and blank are the same "no unit"; figures need every line to share one value
+                   COUNT(DISTINCT COALESCE(NULLIF(btrim(i.unit), ''), '')) AS units,
+                   MIN(NULLIF(btrim(i.unit), '')) AS unit
               FROM sales.shipment_lot l
               JOIN sales.import_request_item i ON i.import_request_item_id = l.import_request_item_id
               JOIN sales.import_request ir ON ir.import_request_id = l.import_request_id
               JOIN sales.shipment_round r ON r.shipment_round_id = l.shipment_round_id
              WHERE ir.ticket_id = :t AND ir.status = 'ISSUED' AND r.import_step = 'RECEIVED'
-            """, Map.of("t", ticketId), (rs, n) -> new ReceiptTotals(rs.getBigDecimal("planned"), rs.getBigDecimal("received"), rs.getString("unit")));
+            """, Map.of("t", ticketId), (rs, n) -> new ReceiptTotals(rs.getBigDecimal("planned"), rs.getBigDecimal("received"), rs.getString("unit"),
+                rs.getInt("units") <= 1));
+    }
+
+    /** ISSUED import requests of the deal that have lots whose lots together received nothing: on a RECEIVED round, but
+     * nothing physically arrived, so they must not count as goods received. */
+    public List<Long> nothingArrivedIrIds(long ticketId) {
+        return jdbc.queryForList("""
+            SELECT ir.import_request_id
+              FROM sales.import_request ir
+              JOIN sales.shipment_lot l ON l.import_request_id = ir.import_request_id
+             WHERE ir.ticket_id = :t AND ir.status = 'ISSUED'
+             GROUP BY ir.import_request_id
+            HAVING SUM(COALESCE(l.received_qty, l.qty)) = 0
+            """, Map.of("t", ticketId), Long.class);
     }
 
     /** The id of the round's latest advance (null when none is undoable). */

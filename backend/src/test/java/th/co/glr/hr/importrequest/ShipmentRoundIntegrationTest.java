@@ -148,7 +148,7 @@ class ShipmentRoundIntegrationTest extends AbstractPostgresIntegrationTest {
         lot(r2, irA, 15);
 
         rounds.advance(r1, advanceTo(ImportRequestStep.CONTACTED, ImportRequestStep.IN_TRANSIT), importUser);
-        assertThat(irStep(irA)).isEqualTo(ImportRequestStep.CONTACTED);
+        assertThat(irStep(irA)).isEqualTo(ImportRequestStep.CONTACTED); // fully placed: the slower round (still CONTACTED) governs
         rounds.advance(r2, advanceTo(ImportRequestStep.CONTACTED, ImportRequestStep.ORDERED), importUser);
         assertThat(irStep(irA)).isEqualTo(ImportRequestStep.ORDERED);
 
@@ -158,8 +158,8 @@ class ShipmentRoundIntegrationTest extends AbstractPostgresIntegrationTest {
             Map.of("r", r2, "ir", irA));
         rounds.advance(r1, advanceTo(ImportRequestStep.IN_TRANSIT, ImportRequestStep.RECEIVED), importUser);
         rounds.advance(r2, advanceTo(ImportRequestStep.ORDERED, ImportRequestStep.RECEIVED), importUser);
-        // 25 + 10 of 40 are received; 5 are on no round, so the IR is not received.
-        assertThat(irStep(irA)).isEqualTo(ImportRequestStep.CONTACTED);
+        // 25 + 10 of 40 are received; 5 are on no round, so the IR is not received: it stops short of it
+        assertThat(irStep(irA)).isEqualTo(ImportRequestStep.AWAITING_CUSTOMS);
         assertThat(rounds.list(importUser).waiting()).extracting(w -> w.importRequestId()).contains(irA);
     }
 
@@ -298,7 +298,7 @@ class ShipmentRoundIntegrationTest extends AbstractPostgresIntegrationTest {
             HttpStatus.BAD_REQUEST);
 
         rounds.advance(r1, advanceTo(ImportRequestStep.CONTACTED, ImportRequestStep.ORDERED), importUser);
-        assertThat(irStep(irA)).isEqualTo(ImportRequestStep.CONTACTED); // 15 still on no round
+        assertThat(irStep(irA)).isEqualTo(ImportRequestStep.ORDERED); // 15 still on no round: ordered all the same
         rounds.addLots(r1, new AddLotsRequest(List.of(new LotInput(irA, itemOf(irA), new BigDecimal("15")))), importUser);
         assertThat(irStep(irA)).isEqualTo(ImportRequestStep.ORDERED); // all placed; the round is at ORDERED
         assertThat(rounds.get(r1, importUser).lots()).hasSize(1).first().satisfies(l -> assertThat(l.qty()).isEqualByComparingTo("40"));
@@ -626,7 +626,7 @@ class ShipmentRoundIntegrationTest extends AbstractPostgresIntegrationTest {
             .isEqualByComparingTo("40"); // what shipped stays; the 10 more are unplanned
         assertThat(jdbc.queryForObject("SELECT received_qty FROM sales.shipment_lot WHERE import_request_id = :id", Map.of("id", revision), BigDecimal.class))
             .isNull(); // in transit: nothing received, and none is invented
-        assertThat(irStep(revision)).isEqualTo(ImportRequestStep.CONTACTED);
+        assertThat(irStep(revision)).isEqualTo(ImportRequestStep.IN_TRANSIT); // the 10 more wait, the rest is on its way
         assertThat(incoming.incoming(ticketA, owner).irs().get(0).waiting().get(0).remainingQty()).isEqualByComparingTo("10");
     }
 
@@ -715,6 +715,53 @@ class ShipmentRoundIntegrationTest extends AbstractPostgresIntegrationTest {
 
         assertThat(jdbc.queryForObject("SELECT payment_status FROM sales.ticket WHERE ticket_id = :t", Map.of("t", ticketA), String.class))
             .isEqualTo("AWAITING_FINAL_PAYMENT");
+    }
+
+    @Test
+    void aSplitIrKeepsItsStepWhileTheRestWaits_andWhenTheRestJoinsAnotherRound() {
+        long r1 = rounds.createRound(new CreateShipmentRoundRequest(factoryId(), null, null,
+            List.of(new LotInput(irA, itemOf(irA), new BigDecimal("25")))), importUser).id();
+        rounds.advance(r1, advanceTo(ImportRequestStep.CONTACTED, ImportRequestStep.ORDERED), importUser);
+        assertThat(irStep(irA)).isEqualTo(ImportRequestStep.ORDERED); // the remaining 15 were ordered too: not back to S12
+
+        long r2 = rounds.createRound(new CreateShipmentRoundRequest(factoryId(), null, null,
+            List.of(new LotInput(irA, itemOf(irA), new BigDecimal("15")))), importUser).id();
+        rounds.advance(r2, advanceTo(ImportRequestStep.CONTACTED, ImportRequestStep.ORDERED), importUser);
+        assertThat(irStep(irA)).isEqualTo(ImportRequestStep.ORDERED);
+        rounds.advance(r1, advanceTo(ImportRequestStep.ORDERED, ImportRequestStep.IN_TRANSIT), importUser);
+        assertThat(irStep(irA)).isEqualTo(ImportRequestStep.ORDERED); // the slowest round governs
+    }
+
+    @Test
+    void anIrThatReceivedNothingIsNotGoodsReceived_noRolloutNoBell_andACorrectionAboveZeroRollsUpOnce_withNullUnits() {
+        jdbc.update("UPDATE sales.import_request_item SET unit = NULL WHERE import_request_id = :ir", Map.of("ir", irA));
+        long r = round("ORDERED");
+        lot(r, irA, 40);
+        long lotId = rounds.get(r, importUser).lots().get(0).lotId();
+
+        rounds.advance(r, new AdvanceShipmentRoundRequest(ImportRequestStep.RECEIVED, null, ImportRequestStep.ORDERED, null,
+            new ShipmentFacts(null, null, null, null, null, null, null, null, null, null, null, null, null, null, false, "ไม่มีของถึง", null),
+            null, List.of(new LotReceipt(lotId, BigDecimal.ZERO))), importUser);
+
+        assertThat(irStep(irA)).isEqualTo(ImportRequestStep.RECEIVED);
+        assertThat(ticketRepo.hasReceivedGoods(ticketA)).isFalse();
+        assertThat(jdbc.queryForObject("SELECT fulfillment_status FROM sales.ticket WHERE ticket_id = :t", Map.of("t", ticketA), String.class))
+            .isNotEqualTo("GOODS_RECEIVED");
+        assertThat(bells(ticketA, "IMPORT_GOODS_RECEIVED_ALL") + bells(ticketA, "IMPORT_LOT_RECEIVED")).isZero();
+
+        rounds.updateFacts(r, new UpdateShipmentRoundRequest(null, Map.of(), List.of(new LotReceipt(lotId, new BigDecimal("30"))), null), importUser);
+
+        assertThat(ticketRepo.hasReceivedGoods(ticketA)).isTrue(); // short but above 0: rolled up, once
+        assertThat(bells(ticketA, "IMPORT_GOODS_RECEIVED_ALL")).isEqualTo(1);
+        assertThat(jdbc.queryForObject("SELECT message FROM hr.notification WHERE type = 'IMPORT_GOODS_RECEIVED_ALL' AND link LIKE :l",
+            Map.of("l", "/tickets/" + ticketA + "%"), String.class)).contains("30 จาก 40").contains("ขาด 10").doesNotContain("ครบทุก");
+        // no unit on the lines: figures still show
+        var seen = incoming.incoming(ticketA, owner);
+        assertThat(seen.totalOrdered()).isEqualByComparingTo("40");
+        assertThat(seen.irs().get(0).received()).isEqualByComparingTo("30");
+        assertThat(seen.irs().get(0).unit()).isNull();
+        rounds.updateFacts(r, new UpdateShipmentRoundRequest(null, Map.of(), List.of(new LotReceipt(lotId, new BigDecimal("35"))), null), importUser);
+        assertThat(bells(ticketA, "IMPORT_GOODS_RECEIVED_ALL")).isEqualTo(1); // not told twice
     }
 
     @Test

@@ -20,7 +20,8 @@ export function ImportStatusStrip({
       data-testid={`${testIdPrefix}-status-strip`}
     >
       {fulfilment ? <StatusBadge tone={fulfilment.tone}>{fulfilment.label}</StatusBadge> : null}
-      {issuedCount > 0 ? (
+      {/* with part of the goods in, "ถึงไทย 0/1" would contradict the warehouse figure beside it */}
+      {issuedCount > 0 && !goodsArrival ? (
         <span
           className={cn(CHIP, allArrived && CHIP_ARRIVED)}
           data-testid={`${testIdPrefix}-ir-rollup-chip`}
@@ -30,7 +31,7 @@ export function ImportStatusStrip({
       ) : null}
       {goodsArrival ? (
         <span className={CHIP} data-testid={`${testIdPrefix}-goods-arrival-chip`}>
-          ถึงโกดัง {goodsArrival.received} / {goodsArrival.ordered} {goodsArrival.unit}
+          {`ถึงโกดัง ${goodsArrival.received} / ${goodsArrival.ordered} ${goodsArrival.unit ?? ''}`.trim()}
         </span>
       ) : null}
       {deliveryPct != null ? (

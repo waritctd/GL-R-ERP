@@ -56,7 +56,7 @@ export function FactoryProgressBar({
               )}
             >
               {/* part of the order is in the warehouse while the rest is not: say so, not a step that reads as nothing arrived */}
-              {arrival?.mixed ? 'ถึงโกดังไม่ครบ' : arrival ? `ถึงโกดัง ${arrival.received} / ${arrival.ordered} ${arrival.unit}${arrival.missing ? ` · ขาด ${arrival.missing}` : ''}`.trim() : current ? `${current.s} · ${current.label}` : (row.importStep ?? '—')}
+              {arrival?.mixed ? 'ถึงโกดังไม่ครบ' : arrival ? `${['ถึงโกดัง', arrival.received, '/', arrival.ordered, arrival.unit].filter((p) => p !== '' && p != null).join(' ')}${arrival.missing ? ` · ขาด ${arrival.missing}` : ''}` : current ? `${current.s} · ${current.label}` : (row.importStep ?? '—')}
               {done && !arrival ? ' ✓' : null}
             </span>
             {/* ETA — expected arrival window, derived from the factory's lead time (issueDate + leadTimeMin/Max).

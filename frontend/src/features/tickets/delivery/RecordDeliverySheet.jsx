@@ -80,7 +80,10 @@ export function RecordDeliverySheet({ round = null, order, events = null, ticket
   const total = lines.reduce((sum, l) => sum + Math.min(Number(qty[l.itemId] || 0), capOf(l)), 0);
   const unit = lines[0]?.unit ?? 'แผ่น';
   const overLine = lines.find((l) => Number(qty[l.itemId] || 0) > capOf(l));
-  const problem = noInvoice && !noteText.trim() ? 'ระบุหมายเหตุหรือเลขอ้างอิงก่อนบันทึก'
+  // The warehouse limit is not known yet (or could not be read): saving would only fail after submit, so it waits
+  const allowanceWait = source === 'WAREHOUSE' && Boolean(ticketId) && !allowanceQuery.data;
+  const problem = allowanceWait ? (allowanceQuery.isError ? 'โหลดจำนวนที่ส่งได้ไม่สำเร็จ ลองอีกครั้ง' : 'กำลังโหลดจำนวนที่ส่งได้…')
+    : noInvoice && !noteText.trim() ? 'ระบุหมายเหตุหรือเลขอ้างอิงก่อนบันทึก'
     : noInvoice && noteText.trim().length > 500 ? 'หมายเหตุยาวเกิน 500 ตัวอักษร' : total <= 0 ? 'ระบุจำนวนที่ส่งอย่างน้อย 1 รายการ'
     : overLine ? (capOf(overLine) < remainingOf(overLine)
       ? `${overLine.description}: เกินจำนวนที่ถึงโกดังแล้ว (ส่งได้ไม่เกิน ${num(capOf(overLine))})`
@@ -146,9 +149,10 @@ export function RecordDeliverySheet({ round = null, order, events = null, ticket
         <div className="flex w-full flex-col gap-1">
           {error ? <p role="alert" className="m-0 text-center text-sm text-danger" data-testid="record-delivery-error">{error}</p> : null}
           {problem ? <p role="status" className="m-0 text-center text-sm text-text-secondary" data-testid="record-delivery-blocked">{problem}</p> : null}
+          {allowanceWait && allowanceQuery.isError ? <Button type="button" variant="secondary" className="w-full" data-testid="record-allowance-retry" onClick={() => allowanceQuery.refetch()}>ลองอีกครั้ง</Button> : null}
           <Button type="button" variant="primary" className="w-full" disabled={Boolean(problem) || save.isPending} data-testid="record-delivery-submit"
             onClick={() => { setError(null); save.mutate(); }}>
-            {save.isPending ? 'กำลังบันทึก…' : `บันทึกส่ง ${num(total)} ${unit}`}
+            {save.isPending ? 'กำลังบันทึก…' : overLine ? `ส่งได้ไม่เกิน ${num(capOf(overLine))} ${overLine.unit ?? unit}` : `บันทึกส่ง ${num(total)} ${unit}`}
           </Button>
           <Button type="button" variant="text" className="min-h-12 w-full" disabled={save.isPending} onClick={onClose}>ยกเลิก</Button>
         </div>

@@ -16,7 +16,7 @@ vi.mock('../../../api/index.js', async (importOriginal) => ({
   api: {
     deliveryRequests: { list: vi.fn(), createDraft: vi.fn(), update: vi.fn(), addFile: vi.fn(), send: vi.fn(), forward: vi.fn(), sendBack: vi.fn(), attachTaxInvoice: vi.fn(), confirmInvoice: vi.fn(), voidInvoice: vi.fn(), recordDelivery: vi.fn() },
     attachments: { fileUrl: (id) => `/f/${id}`, delete: vi.fn(), fileBlob: vi.fn() },
-    tickets: { get: vi.fn(), recordDelivery: vi.fn(), deliveryAllowance: vi.fn() },
+    tickets: { get: vi.fn(), recordDelivery: vi.fn(), deliveryAllowance: vi.fn().mockResolvedValue({ lines: [] }) },
     documentChain: { get: vi.fn() },
     dealQuotations: { downloadPdf: vi.fn() },
     storedImportRequests: { listForTicket: vi.fn() },
@@ -56,6 +56,7 @@ function renderPanel(props = {}, url = '/') {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  api.tickets.deliveryAllowance.mockResolvedValue({ lines: [] });
   api.tickets.get.mockResolvedValue({ ticket: { items: [{ id: 1, qty: 500, qtyDelivered: 200 }] } });
   api.documentChain.get.mockResolvedValue({ documentChain: CHAIN });
   api.depositNotices.listByTicket.mockResolvedValue({ depositNotices: [{ id: 31, status: 'ISSUED', version: 1, docNumber: 'DN-2026-0007', issueDate: '2026-11-10', reference: 'QT-2026-0001-1' }] });
@@ -438,7 +439,20 @@ describe('DeliveryRoundsPanel', () => {
     expect(within(sheet).getByTestId('record-qty-1').value).toBe('70');
     fireEvent.change(within(sheet).getByTestId('record-qty-1'), { target: { value: '100' } });
     expect(within(sheet).getByTestId('record-delivery-blocked').textContent).toContain('ส่งได้ไม่เกิน 70');
-    api.tickets.deliveryAllowance.mockReset();
+    expect(within(sheet).getByTestId('record-delivery-submit').textContent).toContain('ส่งได้ไม่เกิน 70'); // not "บันทึกส่ง 70"
+    api.tickets.deliveryAllowance.mockResolvedValue({ lines: [] });
+  });
+
+  it('while the warehouse limit cannot be read the submit stays disabled, says so and offers a retry', async () => {
+    api.deliveryRequests.list.mockResolvedValue({ order: ORDER, rounds: [invoicedRound()], approvedQuotations: [QUOTATION], canStart: false, startBlockedReason: 'x' });
+    api.tickets.deliveryAllowance.mockRejectedValue(new Error('boom'));
+    renderPanel({ warehouseUserId: 77 });
+    fireEvent.click(await screen.findByTestId('record-delivery-button'));
+    const sheet = await screen.findByTestId('record-delivery-sheet');
+    expect((await within(sheet).findByTestId('record-allowance-retry'))).toBeTruthy();
+    expect(within(sheet).getByTestId('record-delivery-submit').disabled).toBe(true);
+    expect(within(sheet).getByTestId('record-delivery-blocked').textContent).toContain('โหลดจำนวนที่ส่งได้ไม่สำเร็จ');
+    api.tickets.deliveryAllowance.mockResolvedValue({ lines: [] });
   });
 
   it('records against the invoiced round: quantity capped at the remainder, a past day and the recipient are sent, today is not, and the proof photo is attached after', async () => {
@@ -514,6 +528,7 @@ describe('DeliveryRoundsPanel', () => {
     fireEvent.change(within(sheet).getByTestId('record-source'), { target: { value: 'WAREHOUSE' } });
     fireEvent.change(within(sheet).getByTestId('record-qty-1'), { target: { value: '50' } });
     fireEvent.change(within(sheet).getByTestId('record-no-invoice-note'), { target: { value: 'PO-9' } });
+    await waitFor(() => expect(within(sheet).getByTestId('record-delivery-submit').disabled).toBe(false)); // the warehouse limit has loaded
     fireEvent.click(within(sheet).getByTestId('record-delivery-submit'));
     await waitFor(() => expect(api.tickets.recordDelivery).toHaveBeenCalledWith(701, { lines: [{ itemId: 1, qty: 50 }], source: 'WAREHOUSE', noInvoiceNote: 'PO-9' }));
   });
@@ -549,7 +564,9 @@ describe('DeliveryRoundsPanel', () => {
     api.deliveryRequests.recordDelivery.mockRejectedValue(Object.assign(new Error('ยังไม่มีใบกำกับภาษีของรอบนี้ กรุณาระบุหมายเหตุหรือเลขอ้างอิง'), { status: 409, details: { code: 'NO_INVOICE_NOTE_REQUIRED' } }));
     renderPanel({ warehouseUserId: 77 });
     fireEvent.click(await screen.findByTestId('record-delivery-button'));
-    fireEvent.click(within(await screen.findByTestId('record-delivery-sheet')).getByTestId('record-delivery-submit'));
+    const submit = within(await screen.findByTestId('record-delivery-sheet')).getByTestId('record-delivery-submit');
+    await waitFor(() => expect(submit.disabled).toBe(false)); // the warehouse limit has loaded
+    fireEvent.click(submit);
     expect((await screen.findByTestId('record-delivery-error')).textContent).toContain('กรุณาระบุหมายเหตุหรือเลขอ้างอิง');
     expect(screen.getByTestId('record-delivery-sheet')).toBeTruthy();
   });

@@ -45,4 +45,9 @@ describe('ImportRequestFactoryCard — what the deal page changed stays on the d
     expect(screen.getByText('ถึงโกดัง 0 / 140 แผ่น · ขาด 140')).toBeTruthy();
     expect(screen.queryByText(/✓/)).toBeNull();
   });
+
+  it('lines with no unit still show the figures (NULL and blank are one value): partial 100 / 196, rest still coming, no tick and no ขาด', () => {
+    renderCard({ row: { ...issued, importStep: 'AWAITING_CUSTOMS' }, arrival: { received: '100', ordered: '196', unit: '', missing: null } });
+    expect(screen.getByText('ถึงโกดัง 100 / 196')).toBeTruthy();
+  });
 });

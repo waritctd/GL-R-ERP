@@ -3319,10 +3319,28 @@ function mockDeriveIr(ir) {
   };
   const slowest = lots.reduce((a, b) => (a == null || slowerThan(b, a) ? b : a), null);
   const waiting = unplaced || !slowest;
-  const step = waiting ? 'CONTACTED' : slowest.x.importStep;
-  let at = waiting ? (ir.firstIssuedDate ?? null) : (slowest.x[MOCK_ROUND_DATE_KEY[step]] ?? ir.importStepAt);
+  // ShipmentStepDerivation: the slowest placed round's step; unplaced quantity stops short of RECEIVED (the remainder is still
+  // on its way); no lots keeps the IR's own step (never RECEIVED by this path); a fresh IR stays CONTACTED with its own stamp.
+  let step = slowest ? slowest.x.importStep : (ir.importStep ?? 'CONTACTED');
+  if (waiting && mockImportRequestStepIndex(step) > mockImportRequestStepIndex('AWAITING_CUSTOMS')) step = 'AWAITING_CUSTOMS';
+  let at;
+  if (step === 'CONTACTED') at = ir.importStep === 'CONTACTED' && ir.importStepAt ? ir.importStepAt : (ir.firstIssuedDate ?? null);
+  else at = slowest ? (slowest.x[MOCK_ROUND_DATE_KEY[slowest.x.importStep]] ?? ir.importStepAt) : ir.importStepAt;
   if (at && ir.firstIssuedDate && at < ir.firstIssuedDate) at = ir.firstIssuedDate; // never before it was first issued
   return { step, at, waiting, slowest };
+}
+
+// An IR whose lots together received nothing has physically nothing (ImportRequestService#allFactoriesReceived says so).
+function mockIrNothingArrived(ir) {
+  const lots = mockShipmentRounds.flatMap((r) => r.lots.filter((l) => l.importRequestId === ir.id));
+  return lots.length > 0 && mockSumQty(lots.map((l) => l.receivedQty ?? l.qty)) === 0;
+}
+
+function mockAllFactoriesReceived(ticket) {
+  const liveRows = mockImportRequests.filter((r) => r.ticketId === ticket.id && r.status === 'ISSUED');
+  const required = mockRequiredFactoryIds(ticket);
+  return liveRows.length > 0 && liveRows.every((r) => r.importStep === 'RECEIVED') && !liveRows.some(mockIrNothingArrived)
+    && [...required].every((fid) => liveRows.some((r) => r.factoryId === fid));
 }
 
 function mockRecomputeIrSteps(roundOrIds, actor, note) {
@@ -3467,9 +3485,7 @@ function mockFinishLots(rounds, irIds, user) {
     pushEvent(ticket, user, 'IMPORT_STEP_ADVANCED', null, null,
       `โรงงาน ${ir.factoryName}: ${MOCK_IMPORT_REQUEST_STEP_LABELS_TH[from] ?? from} → ${MOCK_IMPORT_REQUEST_STEP_LABELS_TH[to] ?? to}`);
     if (to === 'RECEIVED') { // a lot change or a revision can complete receipt coverage: the same rollup as an advance
-      const liveRows = mockImportRequests.filter((r) => r.ticketId === ticket.id && r.status === 'ISSUED');
-      const required = mockRequiredFactoryIds(ticket);
-      if (liveRows.every((r) => r.importStep === 'RECEIVED') && [...required].every((fid) => liveRows.some((r) => r.factoryId === fid))) {
+      if (mockAllFactoriesReceived(ticket)) {
         applyImportRequestRollupMock(ticket, user);
       }
     }
@@ -11384,16 +11400,16 @@ export const api = {
       const irs = mockImportRequests.filter((r) => r.ticketId === Number(id) && r.status === 'ISSUED');
       const out = irs.map((ir) => {
         const { lots, waiting } = mockIncomingForIr(ir);
-        const oneUnit = new Set(ir.items.map((i) => i.unit ?? '')).size === 1;
+        const oneUnit = new Set(ir.items.map((i) => (i.unit ?? '').trim())).size === 1; // NULL and blank are one value
         return {
           importRequestId: ir.id, docNumber: ir.docNumber, factoryName: ir.factoryName, importStep: ir.importStep,
           expectedFrom: mockImportRequestDto(ir).expectedArrivalFrom, expectedTo: mockImportRequestDto(ir).expectedArrivalTo,
-          unit: oneUnit ? (ir.items[0].unit ?? null) : null,
+          unit: oneUnit ? ((ir.items[0].unit ?? '').trim() || null) : null,
           ordered: oneUnit ? ir.items.reduce((sum, i) => sum + Number(i.qty), 0) : null,
           received: oneUnit ? lots.reduce((sum, l) => sum + (l.receivedQty ?? 0), 0) : null, lots, waiting,
         };
       });
-      const allOne = out.length > 0 && out.every((i) => i.unit != null) && new Set(out.map((i) => i.unit)).size === 1;
+      const allOne = out.length > 0 && out.every((i) => i.ordered != null) && new Set(out.map((i) => i.unit ?? '')).size === 1;
       return delay({
         wantedBy: findTicketRaw(Number(id)).requiredByNote?.trim() || null,
         totalUnit: allOne ? out[0].unit : null,
@@ -11490,8 +11506,8 @@ export const api = {
 
     // Mirrors TicketService#warehouseRemaining: per line, what the warehouse may still deliver (the shared allowance less delivered).
     async deliveryAllowance(id) {
+      requireSession();
       const ticket = findTicketRaw(Number(id));
-      requireOwningRepOrCeo(ticket);
       return delay({ lines: (ticket.items ?? []).map((item) => ({
         itemId: item.id, remaining: Math.max(0, Math.round((mockWarehouseAllowance(ticket, item) - Number(item.qtyDelivered ?? 0)) * 100) / 100),
       })) });
@@ -15596,6 +15612,12 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       // null is a real token: a round nobody has saved yet, so a second reader's first save is stale too
       if (request?.expectedUpdatedAt !== undefined && request.expectedUpdatedAt !== (round.updatedAt ?? null)) fail('มีผู้อื่นแก้ข้อมูลรอบนี้ กรุณาโหลดใหม่', 409);
       mockApplyReceipts(round, request?.lotReceipts);
+      if ((request?.lotReceipts ?? []).length > 0) { // a receipt raised above 0 may complete a deal: the normal rollup runs (ACTIVE deals)
+        [...new Set(round.lots.map((l) => l.importRequestId))].forEach((irId) => {
+          const t = mockTicketOrNull(mockImportRequests.find((r) => r.id === irId));
+          if (t && (t.lifecycle ?? 'ACTIVE') === 'ACTIVE' && mockAllFactoriesReceived(t) && !hasReceivedGoods(t.id)) applyImportRequestRollupMock(t, mockShipmentWrite());
+        });
+      }
       round.updatedAt = new Date().toISOString();
       round.undo = null; // an edit ends the undo window, so an undo can never discard it
       if (facts) MOCK_ROUND_FACT_KEYS.forEach((k) => { round.facts[k] = k === 'transportMode' ? (facts[k] ?? round.facts[k]) : (facts[k] ?? null); });
@@ -15661,9 +15683,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
         pushEvent(ticket, user, 'IMPORT_STEP_ADVANCED', null, null,
           `โรงงาน ${ir.factoryName}: ${MOCK_IMPORT_REQUEST_STEP_LABELS_TH[from] ?? from} → ${MOCK_IMPORT_REQUEST_STEP_LABELS_TH[to] ?? to}`);
         if (to === 'RECEIVED') {
-          const liveRows = mockImportRequests.filter((r) => r.ticketId === ticket.id && r.status === 'ISSUED');
-          const required = mockRequiredFactoryIds(ticket);
-          if (liveRows.every((r) => r.importStep === 'RECEIVED') && [...required].every((fid) => liveRows.some((r) => r.factoryId === fid))) {
+          if (mockAllFactoriesReceived(ticket)) {
             applyImportRequestRollupMock(ticket, user);
           }
         }
@@ -16191,7 +16211,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
         // The actual WRITE (including the PARTIALLY_DELIVERED event-only case) is
         // applyImportRequestRollupMock's own firewall, mirroring
         // TicketService#applyImportRequestRollup — see that function's header comment.
-        if (allReceived) {
+        if (allReceived && !mockImportRequests.filter((r) => r.ticketId === ticket.id && r.status === 'ISSUED').some(mockIrNothingArrived)) {
           applyImportRequestRollupMock(ticket, user);
         }
       }

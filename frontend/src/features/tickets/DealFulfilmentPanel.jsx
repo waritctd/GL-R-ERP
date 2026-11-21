@@ -382,12 +382,14 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
   const hasArrivedLot = (ir) => (ir?.lots ?? []).some((l) => l.receivedQty != null);
   const partialArrival = (ir) => {
     if (!hasArrivedLot(ir)) return null;
-    if (!ir.unit || ir.ordered == null) {
+    // ir.ordered is null only when the lines have two genuinely different units (NULL and blank count as one: no unit)
+    if (ir.ordered == null) {
       return ir.lots.some((l) => l.receivedQty != null && Number(l.receivedQty) < Number(l.qty)) ? { mixed: true } : null;
     }
     if (Number(ir.received) >= Number(ir.ordered)) return null;
-    const missing = (ir.waiting ?? []).length === 0 ? Number(ir.ordered) - Number(ir.received) : null;
-    return { received: formatQty(ir.received), ordered: formatQty(ir.ordered), unit: ir.unit, missing: missing == null ? null : formatQty(missing) };
+    // ขาด only when the IR is complete on received rounds; a partial whose rest is still coming is not short yet
+    const missing = ir.importStep === 'RECEIVED' ? Number(ir.ordered) - Number(ir.received) : null;
+    return { received: formatQty(ir.received), ordered: formatQty(ir.ordered), unit: ir.unit ?? '', missing: missing == null ? null : formatQty(missing) };
   };
   const liveStoredIrRows = storedIrRows
     .filter((r) => r.status !== 'SUPERSEDED')
@@ -400,8 +402,10 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
   // Yang's rollup chip (origin/feat/per-factory-import-tracking's FactoryImportProgressPanel, "ถึงไทย X/N
   // โรงงาน") ported onto THIS deal's stored rows — reuses storedIrQuery above rather than adding a second query.
   const issuedIrRows = liveStoredIrRows.filter((r) => r.importStep != null);
+  // an IR with only part of its goods in (or none: on a RECEIVED round that received 0) is not "arrived"
+  const incomingIrOf = (row) => incomingQuery.data?.irs?.find((i) => i.importRequestId === row.id);
   const arrivedIrCount = issuedIrRows
-    .filter((r) => importStepIndex(r.importStep) >= importStepIndex('AWAITING_CUSTOMS')).length;
+    .filter((r) => importStepIndex(r.importStep) >= importStepIndex('AWAITING_CUSTOMS') && !partialArrival(incomingIrOf(r))).length;
   // The rollup chip is the shared ImportStatusStrip (also rendered on import's per-deal page).
 
   const [newFactoryNames, setNewFactoryNames] = useState(null); // string[] | null
@@ -828,11 +832,17 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
               arrivedCount={arrivedIrCount}
               issuedCount={issuedIrRows.length}
               deliveryPct={totalOrdered > 0 ? deliveryProgress : null}
-              goodsArrival={incomingQuery.data?.totalUnit && (incomingQuery.data.irs ?? []).some(hasArrivedLot)
+              goodsArrival={incomingQuery.data?.totalOrdered != null && (incomingQuery.data.irs ?? []).some(hasArrivedLot)
                 && Number(incomingQuery.data.totalReceived) < Number(incomingQuery.data.totalOrdered)
-                ? { received: formatQty(incomingQuery.data.totalReceived), ordered: formatQty(incomingQuery.data.totalOrdered), unit: incomingQuery.data.totalUnit } : null}
+                ? { received: formatQty(incomingQuery.data.totalReceived), ordered: formatQty(incomingQuery.data.totalOrdered), unit: incomingQuery.data.totalUnit ?? '' } : null}
             />
           </div>
+          {incomingQuery.isError && incomingQuery.error?.status !== 403 ? (
+            <p role="alert" className="m-0 mt-2 flex flex-wrap items-center gap-2 text-xs font-bold text-danger" data-testid="deal-fulfilment-incoming-error">
+              โหลดจำนวนที่ถึงโกดังไม่สำเร็จ ตัวเลขด้านล่างอาจไม่ตรงกับของจริง
+              <Button type="button" size="sm" variant="secondary" onClick={() => incomingQuery.refetch()}>ลองอีกครั้ง</Button>
+            </p>
+          ) : null}
 
           {/* Once the deal is tracked per-factory, the deal-level substep chips and the four legacy
               buttons below are dead weight: fulfillmentStatus sits at IR_ISSUED for the whole

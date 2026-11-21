@@ -2710,7 +2710,8 @@ public class TicketRepository {
                    COALESCE(SUM((SELECT SUM(l.qty) FROM sales.shipment_lot l
                                    JOIN sales.shipment_round r ON r.shipment_round_id = l.shipment_round_id
                                   WHERE l.import_request_item_id = iri.import_request_item_id
-                                    AND r.import_step = 'RECEIVED')), 0) AS on_rounds,
+                                    AND r.import_step = 'RECEIVED'
+                                    AND COALESCE(l.received_qty, l.qty) > 0)), 0) AS on_rounds, -- a lot that received 0 holds nothing to deliver
                    COALESCE(SUM((SELECT COUNT(*) FROM sales.shipment_lot l2
                                   WHERE l2.import_request_item_id = iri.import_request_item_id)), 0) AS lots
               FROM sales.import_request ir

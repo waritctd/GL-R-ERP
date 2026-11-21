@@ -61,7 +61,7 @@ public class IncomingService {
                 String product = product(item);
                 for (int i = 0; i < mine.size(); i++) {
                     TicketLot l = mine.get(i);
-                    lotDtos.add(new IncomingLot(l.lotId(), product, item.unit(), l.qty(),
+                    lotDtos.add(new IncomingLot(l.lotId(), product, unitOf(item), l.qty(),
                         "RECEIVED".equals(l.roundStep()) ? (l.receivedQty() != null ? l.receivedQty() : l.qty()) : null,
                         i + 1, remaining.signum() > 0 ? mine.size() + 1 : mine.size(), l.roundStep(),
                         l.etaOn() != null ? l.etaOn() : expectedTo, l.roundLabel(), l.transportMode(),
@@ -70,24 +70,29 @@ public class IncomingService {
                         l.awaitingCustomsOn(), l.receivedOn()));
                 }
                 if (remaining.signum() > 0) {
-                    waiting.add(new IncomingWaiting(product, item.unit(), remaining));
+                    waiting.add(new IncomingWaiting(product, unitOf(item), remaining));
                 }
             }
-            boolean oneUnit = ir.items().stream().map(i -> String.valueOf(i.unit())).distinct().count() == 1;
+            // NULL and blank are the same "no unit": figures show when every line shares one value, the unit only if there is one
+            boolean oneUnit = ir.items().stream().map(i -> String.valueOf(unitOf(i))).distinct().count() == 1;
             BigDecimal ordered = oneUnit ? ir.items().stream().map(ImportRequestItemDto::qty).reduce(BigDecimal.ZERO, BigDecimal::add) : null;
             BigDecimal received = oneUnit ? lotDtos.stream().map(IncomingLot::receivedQty).filter(Objects::nonNull)
                 .reduce(BigDecimal.ZERO, BigDecimal::add) : null;
             out.add(new IncomingIr(ir.id(), ir.docNumber(), ir.factoryName(), ir.importStep(), expectedFrom,
-                expectedTo, oneUnit ? ir.items().get(0).unit() : null, ordered, received, lotDtos, waiting));
+                expectedTo, oneUnit ? unitOf(ir.items().get(0)) : null, ordered, received, lotDtos, waiting));
         }
-        boolean allOne = !out.isEmpty() && out.stream().allMatch(i -> i.unit() != null)
-            && out.stream().map(IncomingIr::unit).distinct().count() == 1;
+        boolean allOne = !out.isEmpty() && out.stream().allMatch(i -> i.ordered() != null)
+            && out.stream().map(i -> String.valueOf(i.unit())).distinct().count() == 1;
         // the deal's own current note, not a snapshot an IR took when it was issued
         String wantedBy = dealQueries.loadTicketSnapshot(ticketId).map(ImportRequestQueryRepository.TicketSnapshot::requiredByNote)
             .filter(n -> !n.isBlank()).orElse(null);
         return new IncomingResponse(wantedBy, allOne ? out.get(0).unit() : null,
             allOne ? out.stream().map(IncomingIr::ordered).reduce(BigDecimal.ZERO, BigDecimal::add) : null,
             allOne ? out.stream().map(IncomingIr::received).reduce(BigDecimal.ZERO, BigDecimal::add) : null, out);
+    }
+
+    private static String unitOf(ImportRequestItemDto item) {
+        return item.unit() == null || item.unit().isBlank() ? null : item.unit().trim();
     }
 
     private static String product(ImportRequestItemDto item) {

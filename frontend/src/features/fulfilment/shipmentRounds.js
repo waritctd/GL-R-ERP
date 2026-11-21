@@ -84,7 +84,8 @@ export function formatQty(value) {
 export const roundTitle = (round) => [round.factoryName, round.facts?.label].filter(Boolean).join(' · ') || `รอบขนส่ง #${round.id}`;
 
 /** "ล็อต 1 จาก 2" when the line is split (or part of it still waits for a round), else "ครบทั้งใบ". */
-export const lotLabel = (lot) => (lot.lotCount > 1 ? `ล็อต ${lot.lotNo} จาก ${lot.lotCount}` : 'ครบทั้งใบ');
+export const lotLabel = (lot, roundStep) => (lot.lotCount > 1 || lotArrivalText(lot, roundStep)
+  ? `ล็อต ${lot.lotNo} จาก ${Math.max(lot.lotCount, 1)}` : 'ครบทั้งใบ'); // a short lot is never "ครบทั้งใบ"
 
 /** A short arrival on a received round: "ถึงโกดัง 130 จาก 140 · ขาด 10"; null when it arrived in full or the round has not received. */
 export const lotArrivalText = (lot, roundStep) => {
@@ -174,7 +175,8 @@ export function irRows(round) {
     const short = round.importStep === 'RECEIVED' && units.size === 1 && got < planned;
     return {
       key: first.importRequestId, who: lotWho(first), docNumber: first.docNumber, ticketId: first.ticketId,
-      lotText: split ? `ล็อต ${split.lotNo} จาก ${split.lotCount}` : 'ครบทั้งใบ',
+      lotText: split ? `ล็อต ${split.lotNo} จาก ${split.lotCount}`
+        : round.importStep === 'RECEIVED' && got < planned ? `ล็อต ${first.lotNo} จาก 1` : 'ครบทั้งใบ',
       qtyText: short
         ? `ถึงโกดัง ${formatQty(got)} จาก ${formatQty(planned)} ${first.unit ?? ''} · ขาด ${formatQty(planned - got)}`.replace(/\s+·/, ' ·')
         : units.size === 1

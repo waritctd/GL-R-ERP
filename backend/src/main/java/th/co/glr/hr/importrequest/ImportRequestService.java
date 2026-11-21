@@ -1212,6 +1212,40 @@ public class ImportRequestService {
     /** One IR whose step changed, with the step it left. */
     public record StepChange(ImportRequestDto ir, String from, String to) {}
 
+    /** The one bell to the deal's rep when every factory's goods are in: "ครบ" only when nothing is short, else the real figure. */
+    private void notifyAllGoodsReceived(long ticketId, String docNumber, String factoryName) {
+        String ir = "ใบขอซื้อ (IR) " + docNumber;
+        var totals = rounds.receiptTotals(ticketId);
+        var deal = requireTicketSummary(ticketId);
+        if (!totals.short_()) {
+            notifyRepOfImportProgress(deal, TicketEventKind.IMPORT_GOODS_RECEIVED_ALL,
+                "สินค้าตาม" + ir + " จากโรงงาน " + factoryName + " เข้าคลังแล้ว และครบทุกใบขอซื้อของดีลนี้",
+                "สิ่งที่ต้องทำต่อ: นัดวันส่งสินค้ากับลูกค้า");
+            return;
+        }
+        // Same moment as ever, but it must not say ครบ: the rep needs the real figure before promising the customer.
+        String unit = totals.unit() == null ? "" : " " + totals.unit();
+        String qty = !totals.oneUnit() ? "มีบางรายการถึงโกดังไม่ครบ" // different units cannot be added up
+            : "ถึงโกดังแล้ว " + totals.received().stripTrailingZeros().toPlainString() + " จาก "
+            + totals.planned().stripTrailingZeros().toPlainString() + unit + " · ขาด "
+            + totals.planned().subtract(totals.received()).stripTrailingZeros().toPlainString() + unit;
+        notifications.notifyEmployeeAtLinkTitled(deal.createdById(), TicketEventKind.IMPORT_GOODS_RECEIVED_ALL,
+            "สินค้าถึงโกดังแล้ว แต่ไม่ครบตามที่สั่ง",
+            "สินค้าตาม" + ir + " จากโรงงาน " + factoryName + " ถึงโกดังแล้วทุกใบขอซื้อของดีลนี้ แต่ไม่ครบ: " + qty
+                + "\n" + DealNoticeText.dealLabel(deal.code(), deal.customerName())
+                + "\nสิ่งที่ต้องทำต่อ: ตรวจของที่ขาดก่อนนัดวันส่งสินค้ากับลูกค้า",
+            "/tickets/" + deal.id());
+    }
+
+    /** Import corrected a receipt above 0 on an IR that had received nothing: if that completes the deal, the rollup and its
+     * normal notice happen now, once (an ACTIVE deal only; a paused one catches up on resume). */
+    public void receiptCorrected(long ticketId, String docNumber, String factoryName, UserPrincipal actor) {
+        if (allFactoriesReceived(ticketId) && !tickets.hasReceivedGoods(ticketId)) {
+            ticketService.applyImportRequestRollup(ticketId, actor);
+            notifyAllGoodsReceived(ticketId, docNumber, factoryName);
+        }
+    }
+
     /** What follows any change of IR steps, shared by the IR-level advance and the shipment-round advance: one
      * IMPORT_STEP_ADVANCED event per changed IR, then (once per deal) the all-received rollup or the first-start
      * notice. The IR rows must already hold their new steps. The ticket is locked FIRST, before any event insert:
@@ -1229,32 +1263,13 @@ public class ImportRequestService {
         Set<Long> changedIds = changes.stream().map(c -> c.ir().id()).collect(Collectors.toSet());
         StepChange received = changes.stream().filter(c -> ImportRequestStep.RECEIVED.equals(c.to())).findFirst().orElse(null);
         if (received != null && allFactoriesReceived(ticketId)) {
-            String ir = "ใบขอซื้อ (IR) " + received.ir().docNumber();
             ticketService.applyImportRequestRollup(ticketId, actor);
-            var totals = rounds.receiptTotals(ticketId);
-            if (totals.short_()) {
-                // Same moment as ever, but it must not say ครบ: the rep needs the real figure before promising the customer.
-                String unit = totals.unit() == null ? "" : " " + totals.unit();
-                String qty = totals.unit() == null ? "มีบางรายการถึงโกดังไม่ครบ" // different units cannot be added up
-                    : "ถึงโกดังแล้ว " + totals.received().stripTrailingZeros().toPlainString() + " จาก "
-                    + totals.planned().stripTrailingZeros().toPlainString() + unit + " · ขาด "
-                    + totals.planned().subtract(totals.received()).stripTrailingZeros().toPlainString() + unit;
-                var deal = requireTicketSummary(ticketId);
-                notifications.notifyEmployeeAtLinkTitled(deal.createdById(), TicketEventKind.IMPORT_GOODS_RECEIVED_ALL,
-                    "สินค้าถึงโกดังแล้ว แต่ไม่ครบตามที่สั่ง",
-                    "สินค้าตาม" + ir + " จากโรงงาน " + received.ir().factoryName() + " ถึงโกดังแล้วทุกใบขอซื้อของดีลนี้ แต่ไม่ครบ: " + qty
-                        + "\n" + DealNoticeText.dealLabel(deal.code(), deal.customerName())
-                        + "\nสิ่งที่ต้องทำต่อ: ตรวจของที่ขาดก่อนนัดวันส่งสินค้ากับลูกค้า",
-                    "/tickets/" + deal.id());
-                return true;
-            }
-            notifyRepOfImportProgress(requireTicketSummary(ticketId), TicketEventKind.IMPORT_GOODS_RECEIVED_ALL,
-                "สินค้าตาม" + ir + " จากโรงงาน " + received.ir().factoryName() + " เข้าคลังแล้ว และครบทุกใบขอซื้อของดีลนี้",
-                "สิ่งที่ต้องทำต่อ: นัดวันส่งสินค้ากับลูกค้า");
+            notifyAllGoodsReceived(ticketId, received.ir().docNumber(), received.ir().factoryName());
             return true;
         }
+        List<Long> nothingArrived = rounds.nothingArrivedIrIds(ticketId); // "latest step: received" would be a false arrival notice
         StepChange started = changes.stream().filter(c -> ImportRequestStep.CONTACTED.equals(c.from())
-            && !ImportRequestStep.CONTACTED.equals(c.to())).findFirst().orElse(null);
+            && !ImportRequestStep.CONTACTED.equals(c.to()) && !nothingArrived.contains(c.ir().id())).findFirst().orElse(null);
         if (started != null
             && stored.findIssuedByTicket(ticketId).stream()
                 .noneMatch(o -> !changedIds.contains(o.id()) && !ImportRequestStep.CONTACTED.equals(o.importStep()))
@@ -1967,6 +1982,11 @@ public class ImportRequestService {
             return false;
         }
         if (!issued.stream().allMatch(r -> ImportRequestStep.RECEIVED.equals(r.importStep()))) {
+            return false;
+        }
+        // an IR on a RECEIVED round that received nothing has physically nothing: not goods received
+        List<Long> nothing = rounds.nothingArrivedIrIds(ticketId);
+        if (issued.stream().anyMatch(r -> nothing.contains(r.id()))) {
             return false;
         }
         Set<Long> issuedFactoryIds = issued.stream().map(IssuedFactoryRow::factoryId)

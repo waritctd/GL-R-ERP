@@ -131,6 +131,15 @@ public class ShipmentRoundService {
         }
         List<IrLock> irs = endUndoWindow(id);
         applyReceipts(id, receipts);
+        if (!receipts.isEmpty()) {
+            // a receipt raised above 0 may be the one that completes a deal: the normal rollup and notice run once (ACTIVE deals)
+            java.util.Set<Long> done = new java.util.HashSet<>();
+            irs.stream().filter(i -> i.ticketId() != null).sorted(Comparator.comparingLong(IrLock::ticketId)).forEach(i -> {
+                if (done.add(i.ticketId()) && th.co.glr.hr.ticket.DealLifecycle.ACTIVE.equals(tickets.lockTicketForUpdate(i.ticketId()))) {
+                    irService.receiptCorrected(i.ticketId(), i.docNumber(), i.factoryName(), actor);
+                }
+            });
+        }
         if (facts != null) {
             rounds.applyFacts(id, facts, true);
         }
@@ -641,8 +650,8 @@ public class ShipmentRoundService {
                     return; // nothing of this IR actually arrived on this round
                 }
                 BigDecimal planned = lots.stream().map(ShipmentRoundDtos.ShipmentLotDto::qty).reduce(BigDecimal.ZERO, BigDecimal::add);
-                boolean oneUnit = lots.stream().map(l -> String.valueOf(l.unit())).distinct().count() == 1;
-                String unit = lots.get(0).unit() == null ? "" : " " + lots.get(0).unit();
+                boolean oneUnit = lots.stream().map(l -> l.unit() == null ? "" : l.unit().trim()).distinct().count() == 1; // NULL and blank are one value
+                String unit = lots.get(0).unit() == null || lots.get(0).unit().isBlank() ? "" : " " + lots.get(0).unit().trim();
                 String qtyText = !oneUnit ? lots.size() + " รายการ"
                     : got.compareTo(planned) < 0
                         ? "ถึงโกดัง " + got.stripTrailingZeros().toPlainString() + " จาก " + planned.stripTrailingZeros().toPlainString() + unit

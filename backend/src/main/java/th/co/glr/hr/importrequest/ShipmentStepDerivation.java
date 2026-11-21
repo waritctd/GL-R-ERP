@@ -29,10 +29,10 @@ public final class ShipmentStepDerivation {
     }
 
     /**
-     * An IR's step from its lots: the slowest round's step, CONTACTED while any quantity is on no round, and RECEIVED
-     * only when every line's full quantity sits on RECEIVED rounds (which falls out of "slowest" once nothing is
-     * unplaced). The date is that step's date on the slowest round; while quantity waits it keeps the IR's own
-     * CONTACTED stamp (or its first issue date).
+     * An IR's step from its lots: the slowest placed round's step. RECEIVED needs every line's full quantity on RECEIVED
+     * rounds; while quantity is unplaced the step stops short of it (at most AWAITING_CUSTOMS), because the remainder is
+     * still on its way, not back at the start. With no lots at all the IR keeps its own step (never RECEIVED by this path).
+     * A fresh IR (CONTACTED) stays CONTACTED with its own stamp. The date, operator and note are the chosen round's.
      */
     public static Derived derive(IrLock ir, List<DerivedInput> rows) {
         Map<Long, BigDecimal> placed = new LinkedHashMap<>();
@@ -47,19 +47,24 @@ public final class ShipmentStepDerivation {
         }
         boolean unplaced = slowest == null || wanted.entrySet().stream()
             .anyMatch(e -> placed.get(e.getKey()).compareTo(e.getValue()) < 0);
-        if (unplaced) {
-            LocalDate at = ImportRequestStep.CONTACTED.equals(ir.importStep()) && ir.importStepAt() != null
-                ? ir.importStepAt() : ir.firstIssuedDate();
+        String step = slowest == null ? ir.importStep() : slowest.roundStep();
+        if (unplaced && (step == null || ImportRequestStep.indexOf(step) > ImportRequestStep.indexOf(ImportRequestStep.AWAITING_CUSTOMS))) {
+            step = step == null ? ImportRequestStep.CONTACTED : ImportRequestStep.AWAITING_CUSTOMS;
+        }
+        if (ImportRequestStep.CONTACTED.equals(step)) {
+            LocalDate at = ir.importStepAt() != null && ImportRequestStep.CONTACTED.equals(ir.importStep()) ? ir.importStepAt() : ir.firstIssuedDate();
             return ImportRequestStep.CONTACTED.equals(ir.importStep())
-                ? new Derived(ImportRequestStep.CONTACTED, at, ir.importStepById(), ir.importStepByName(), ir.importStepNote())
-                : new Derived(ImportRequestStep.CONTACTED, at, null, null, null);
+                ? new Derived(step, at, ir.importStepById(), ir.importStepByName(), ir.importStepNote())
+                : new Derived(step, at, null, null, null);
+        }
+        if (slowest == null) {
+            return new Derived(step, ir.importStepAt(), ir.importStepById(), ir.importStepByName(), ir.importStepNote());
         }
         LocalDate at = slowest.roundStepOn() != null ? slowest.roundStepOn() : ir.importStepAt();
         // the IR's own date is never before it was first issued (the round's dates stay as they are)
         if (at != null && ir.firstIssuedDate() != null && at.isBefore(ir.firstIssuedDate())) {
             at = ir.firstIssuedDate();
         }
-        return new Derived(slowest.roundStep(), at,
-            slowest.stepById(), slowest.stepByName(), slowest.stepNote());
+        return new Derived(step, at, slowest.stepById(), slowest.stepByName(), slowest.stepNote());
     }
 }
