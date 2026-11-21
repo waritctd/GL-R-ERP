@@ -45,6 +45,7 @@ const ROUTES = [
   '/quotations/new',
   '/quotations/1',
   '/fulfilment', // การขนส่ง — Import's fulfilment workspace (import/ceo; every other role refuses)
+  '/my-orders', // ของที่ฉันสั่ง — every incoming order of the caller (GET /api/my-incoming)
   '/import/deals/1', // Import's own per-deal page (GET /api/import/deals/{id}; import/ceo, import row-scoped)
   '/commissions',
   '/finance',
@@ -64,6 +65,8 @@ const EXCLUDED_ROUTE_PATTERNS = [
   // A test-only probe component mounted for the mock suite's SafeForm guard spec — not a product route, and not
   // something a real user can reach meaningfully.
   '/__e2e/safe-form-submitter-probe',
+  // One shipment round: no seeded round has a stable id, so cash-and-ops.spec.js opens a round it creates itself.
+  '/fulfilment/rounds/:id',
   // Admin-only portal activity log. NO seeded persona holds the admin capability, so every
   // persona this suite can log in as gets the access-denied page — sweeping it would assert
   // nothing about the page itself.

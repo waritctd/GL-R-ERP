@@ -385,10 +385,16 @@ test.describe.serial('cash + ops screens — real pricing-chain deals @cash-ops'
     await expect(page.getByText('จัดกลุ่มตามขั้นต่อไป').first()).toBeVisible();
     await shot(page, 'cash-13-import-worklist');
 
-    await page.goto('/fulfilment');
-    const deal = page.locator(`[data-testid="fulfilment-deal"][data-ticket-id="${importDeal.id}"]`);
-    await expect(deal).toBeVisible();
-    await deal.getByTestId(`advance-${row.id}`).click();
+    const planned = await apiWrite(sessions.import, 'post', '/api/shipment-rounds', {
+      factoryId: row.factoryId,
+      lots: row.items.map((item) => ({ importRequestId: row.id, itemId: item.id, qty: item.qty })),
+    });
+    expect(planned.status(), await planned.text()).toBe(200);
+    const { round } = await planned.json();
+
+    await page.goto(`/fulfilment/rounds/${round.id}`);
+    await page.getByTestId('round-advance').click();
+    await page.getByTestId('advance-round-submit').click();
     const snackbar = page.getByTestId('step-undo-snackbar');
     await expect(snackbar).toBeVisible();
     await expect(snackbar).toContainText('เลื่อนเป็น');
