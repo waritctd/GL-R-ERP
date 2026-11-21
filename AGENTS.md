@@ -12,7 +12,7 @@ HR and Sales/CRM portal for GL&R, growing into an ERP. The UI is Thai. **This re
 
 ## Build approach
 
-<TBD, set by /scope>
+**Tracer Bullet**: each change is built end to end through database, API and screen, thin but working, and shown running before the next one starts. Set in `docs/scope/index.md`, with the workflow level (Beta: after develop, check verify, then test).
 
 ## Commands
 
