@@ -75,7 +75,7 @@ class ImportStepUndoIntegrationTest extends AbstractPostgresIntegrationTest {
             new th.co.glr.hr.customer.ContactRepository(jdbc), new th.co.glr.hr.customer.ProjectRepository(jdbc),
             new th.co.glr.hr.dealquotation.DealQuotationRepository(jdbc, new th.co.glr.hr.catalog.CatalogRepository(jdbc)));
         service = new ImportRequestService(new ImportRequestQueryRepository(jdbc), new ImportRequestRenderer(), stored,
-            new FactoryConfigRepository(jdbc), tickets, ticketService, notifications);
+            new FactoryConfigRepository(jdbc), tickets, ticketService, notifications, new th.co.glr.hr.importrequest.ShipmentRoundRepository(jdbc));
 
         ownerId = employee("UNDO-OWN");
         owner = principal(ownerId, "sales");
@@ -107,13 +107,55 @@ class ImportStepUndoIntegrationTest extends AbstractPostgresIntegrationTest {
         Map<String, Object> before = stepColumns();
         int eventsBefore = stepEvents();
         advance(importUser, ImportRequestStep.ORDERED);
+        // The round made by this first advance keeps the date CONTACTED was stamped with.
+        assertThat(roundColumns().get("contacted_on")).hasToString(before.get("import_step_at").toString());
 
         ImportRequestDto undone = service.undoStep(irId, new UndoImportStepRequest(ImportRequestStep.ORDERED), importUser);
 
         assertThat(undone.importStep()).isEqualTo(ImportRequestStep.CONTACTED);
         assertThat(stepColumns()).isEqualTo(before);
+        // Undoing the advance that created the round removes it: the IR is waiting again.
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM sales.shipment_lot WHERE import_request_id = :id",
+            Map.of("id", irId), Integer.class)).isZero();
         assertThat(stepEvents()).isEqualTo(eventsBefore + 2);
         assertThat(lastStepEventMessage()).contains("เลิกทำ");
+    }
+
+    @Test
+    void theRoundFollowsTheAdvance_andTheUndoRestoresIt() {
+        advance(importUser, ImportRequestStep.ORDERED);
+        assertThat(roundColumns()).containsEntry("import_step", ImportRequestStep.ORDERED)
+            .containsEntry("source", "PORTAL").doesNotContainEntry("ordered_on", null);
+        advance(importUser, ImportRequestStep.IN_TRANSIT);
+        assertThat(roundColumns()).containsEntry("import_step", ImportRequestStep.IN_TRANSIT);
+        assertThat(roundColumns().get("in_transit_on")).isNotNull();
+
+        service.undoStep(irId, new UndoImportStepRequest(ImportRequestStep.IN_TRANSIT), importUser);
+
+        assertThat(roundColumns()).containsEntry("import_step", ImportRequestStep.ORDERED)
+            .containsEntry("in_transit_on", null);
+        assertThat(jdbc.queryForObject("SELECT sum(qty) FROM sales.shipment_lot WHERE import_request_id = :id",
+            Map.of("id", irId), BigDecimal.class)).isEqualByComparingTo("40");
+    }
+
+    @Test
+    void anIrOnASharedRound_isRefusedAnAdvanceAtTheIr() {
+        advance(importUser, ImportRequestStep.ORDERED);
+        long round = jdbc.queryForObject("SELECT shipment_round_id FROM sales.shipment_lot WHERE import_request_id = :id",
+            Map.of("id", irId), Long.class);
+        // A second import request on the same round makes it shared.
+        long other = jdbc.queryForObject("""
+            INSERT INTO sales.import_request (ticket_id, factory_id, factory_name, status, version)
+            SELECT ticket_id, factory_id, factory_name, 'DRAFT', 99 FROM sales.import_request WHERE import_request_id = :id
+            RETURNING import_request_id""", Map.of("id", irId), Long.class);
+        long item = jdbc.queryForObject("""
+            INSERT INTO sales.import_request_item (import_request_id, seq, code, qty) VALUES (:o, 1, 'X', 5)
+            RETURNING import_request_item_id""", Map.of("o", other), Long.class);
+        jdbc.update("INSERT INTO sales.shipment_lot (shipment_round_id, import_request_id, import_request_item_id, qty)"
+            + " VALUES (:r, :o, :i, 5)", new MapSqlParameterSource("r", round).addValue("o", other).addValue("i", item));
+
+        assertRefused(() -> advance(importUser, ImportRequestStep.IN_TRANSIT), HttpStatus.CONFLICT);
+        assertThat(currentStep()).isEqualTo(ImportRequestStep.ORDERED);
     }
 
     // ── who may NOT ─────────────────────────────────────────────────────────────────────────────
@@ -157,6 +199,12 @@ class ImportStepUndoIntegrationTest extends AbstractPostgresIntegrationTest {
         return jdbc.queryForMap("""
             SELECT import_step, import_step_at, import_step_by_id, import_step_by_name, import_step_note
               FROM sales.import_request WHERE import_request_id = :id""", Map.of("id", irId));
+    }
+
+    private Map<String, Object> roundColumns() {
+        return jdbc.queryForMap("""
+            SELECT r.* FROM sales.shipment_round r JOIN sales.shipment_lot l USING (shipment_round_id)
+             WHERE l.import_request_id = :id LIMIT 1""", Map.of("id", irId));
     }
 
     private int stepEvents() {

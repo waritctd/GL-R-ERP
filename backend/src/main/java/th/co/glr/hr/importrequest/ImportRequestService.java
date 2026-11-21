@@ -11,6 +11,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.Set;
 import java.util.stream.Collectors;
 import org.springframework.http.HttpStatus;
@@ -111,6 +112,7 @@ public class ImportRequestService {
     private final TicketRepository tickets;
     private final TicketService ticketService;
     private final NotificationRepository notifications;
+    private final ShipmentRoundRepository rounds;
 
     private th.co.glr.hr.deliveryrequest.PrePortal prePortal;
 
@@ -126,7 +128,8 @@ public class ImportRequestService {
                                 FactoryConfigRepository factories,
                                 TicketRepository tickets,
                                 TicketService ticketService,
-                                NotificationRepository notifications) {
+                                NotificationRepository notifications,
+                                ShipmentRoundRepository rounds) {
         this.repository = repository;
         this.renderer = renderer;
         this.stored = stored;
@@ -134,6 +137,7 @@ public class ImportRequestService {
         this.tickets = tickets;
         this.ticketService = ticketService;
         this.notifications = notifications;
+        this.rounds = rounds;
     }
 
     // ── PREVIEW (per-brand, unchanged by V184) ───────────────────────────────────────────────────
@@ -641,6 +645,9 @@ public class ImportRequestService {
         LocalDate today = LocalDate.now(BANGKOK);
         String docNumber = override != null ? override : stored.nextDocNumber(thaiYear(today));
 
+        // Lock order: the predecessor's rounds first, then its row.
+        rounds.issuedIdOf(draft.ticketId(), draft.factoryId())
+            .ifPresent(pid -> rounds.lockRounds(rounds.roundIdsOf(pid)));
         Optional<PredecessorStep> predecessor =
             stored.lockIssuedPredecessor(draft.ticketId(), draft.factoryId());
         String step;
@@ -713,6 +720,7 @@ public class ImportRequestService {
         if (issued == 0) {
             throw new ApiException(HttpStatus.CONFLICT, "ใบขอซื้อถูกเปลี่ยนแปลงโดยผู้ใช้อื่น");
         }
+        predecessor.ifPresent(p -> moveLotsToRevision(p.id(), draft));
         if (vesselEtaNote != null) {
             stored.updateFooter(id, vesselEtaNote, null, null, null, null);
         }
@@ -1108,10 +1116,17 @@ public class ImportRequestService {
             throw new ApiException(HttpStatus.BAD_REQUEST,
                 "วันที่ของขั้นตอนต้องไม่ก่อนวันที่ออกใบขอซื้อครั้งแรก (" + existing.firstIssuedDate() + ")");
         }
+        OptionalLong soleRound = lockSoleRound(id);
         int rows = stored.advanceStep(id, existing.importStep(), target, eventDate,
             actor.id(), actor.name(), request.note());
         if (rows == 0) {
             throw new ApiException(HttpStatus.CONFLICT, "ขั้นตอนถูกเปลี่ยนแปลงโดยผู้ใช้อื่น หรือฉบับนี้ถูกแทนที่แล้ว");
+        }
+        if (soleRound.isPresent()) {
+            rounds.advanceRound(soleRound.getAsLong(), target, eventDate, actor.id(), actor.name(), request.note());
+        } else {
+            rounds.createPortalRound(id, existing.factoryId(), existing.factoryName(), target, eventDate,
+                existing.importStep(), existing.importStepAt(), actor.id(), actor.name(), request.note());
         }
         String noteSuffix = request.note() != null && !request.note().isBlank()
             ? " — " + request.note() : "";
@@ -1220,18 +1235,99 @@ public class ImportRequestService {
             || clock.instant().isAfter(state.advancedAt().plusSeconds(STEP_UNDO_WINDOW_SECONDS))) {
             throw new ApiException(HttpStatus.CONFLICT, "เลยเวลาเลิกทำแล้ว (" + STEP_UNDO_WINDOW_SECONDS + " วินาที)");
         }
-        // Row first, then the deal: advanceStep's order (review H1).
+        // Rounds, then the row, then the deal: advanceStep's order (review H1).
+        OptionalLong soleRound = lockSoleRound(id);
         if (stored.undoStep(id, expected, actor.id(), STEP_UNDO_WINDOW_SECONDS) == 0) {
             throw new ApiException(HttpStatus.CONFLICT, "มีผู้อื่นเปลี่ยนขั้นตอนนี้ไปก่อน หรือเลยเวลาเลิกทำแล้ว จึงเลิกทำไม่ได้");
         }
-        tickets.lockTicketForUpdate(existing.ticketId());
         ImportRequestDto after = requireStored(id);
+        soleRound.ifPresent(r -> {
+            if (rounds.createdByAdvance(r)) {
+                rounds.deleteRound(r); // the advance made this round: undoing it returns the IR to waiting
+            } else {
+                rounds.undoRound(r, after.importStep(), after.importStepById(), after.importStepByName(),
+                    after.importStepNote());
+            }
+        });
+        tickets.lockTicketForUpdate(existing.ticketId());
         tickets.addEventWithDocument(existing.ticketId(), actor.id(), actor.name(),
             TicketEventKind.IMPORT_STEP_ADVANCED, null, null,
             "โรงงาน " + existing.factoryName() + ": เลิกทำ " + ImportRequestStep.thaiLabel(expected)
                 + " → " + ImportRequestStep.thaiLabel(after.importStep()),
             th.co.glr.hr.ticket.RelatedDocumentType.IMPORT_REQUEST, id);
         return withPageCount(after);
+    }
+
+    private static final String SHARED_ROUND_MESSAGE =
+        "ใบขอซื้อนี้อยู่ในรอบขนส่งร่วมหรือแบ่งล็อต กรุณาเลื่อนขั้นตอนที่รอบขนส่ง";
+
+    /** Locks the rounds this import request rides on, re-reads them under the lock, and returns the round that carries
+     * only this request in full. Empty = no round yet; a shared or split request is refused. */
+    private OptionalLong lockSoleRound(long importRequestId) {
+        List<Long> ids = rounds.roundIdsOf(importRequestId);
+        rounds.lockRounds(ids);
+        if (!ids.equals(rounds.roundIdsOf(importRequestId))) {
+            throw new ApiException(HttpStatus.CONFLICT, "ขั้นตอนถูกเปลี่ยนแปลงโดยผู้ใช้อื่น หรือฉบับนี้ถูกแทนที่แล้ว");
+        }
+        if (ids.isEmpty()) {
+            return OptionalLong.empty();
+        }
+        if (ids.size() > 1 || !rounds.isSoleWhole(importRequestId, ids.get(0))) {
+            throw new ApiException(HttpStatus.CONFLICT, SHARED_ROUND_MESSAGE);
+        }
+        return OptionalLong.of(ids.get(0));
+    }
+
+    /** The one new line this lot belongs to: same deal line, else (no deal line) same code and size. Never by position. */
+    private static ImportRequestDtos.ImportRequestItemDto matchLine(ShipmentRoundRepository.LotRow lot,
+                                                                    List<ImportRequestDtos.ImportRequestItemDto> items) {
+        java.util.function.Predicate<ImportRequestDtos.ImportRequestItemDto> sameProduct = it ->
+            java.util.Objects.equals(it.code(), lot.code()) && java.util.Objects.equals(it.size(), lot.size());
+        List<ImportRequestDtos.ImportRequestItemDto> found = lot.ticketItemId() == null
+            ? items.stream().filter(sameProduct).toList()
+            : items.stream().filter(it -> lot.ticketItemId().equals(it.ticketItemId())).toList();
+        if (found.size() > 1) {
+            found = found.stream().filter(sameProduct).toList();
+        }
+        if (found.size() != 1) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "ฉบับแก้ไขตัดรายการที่แบ่งล็อตส่งแล้วออก (" + lot.code() + ") กรุณาแก้ที่รอบขนส่งก่อน");
+        }
+        return found.get(0);
+    }
+
+    /** A revision's items are new rows, so the superseded row's lots follow onto them (same rounds, same quantities). */
+    private void moveLotsToRevision(long oldId, ImportRequestDto revision) {
+        List<ShipmentRoundRepository.LotRow> lots = rounds.lotsOf(oldId);
+        if (lots.isEmpty()) {
+            return;
+        }
+        List<Long> roundIds = rounds.roundIdsOf(oldId);
+        boolean whole = roundIds.size() == 1 && rounds.wholeOn(oldId, roundIds.get(0));
+        // line -> round -> qty; the whole case is every new line, in full, on the one round.
+        Map<Long, Map<Long, java.math.BigDecimal>> plan = new java.util.LinkedHashMap<>();
+        if (whole) {
+            for (var it : revision.items()) {
+                plan.computeIfAbsent(it.id(), k -> new java.util.LinkedHashMap<>()).put(roundIds.get(0), it.qty());
+            }
+        } else {
+            for (var lot : lots) {
+                var match = matchLine(lot, revision.items());
+                plan.computeIfAbsent(match.id(), k -> new java.util.LinkedHashMap<>())
+                    .merge(lot.roundId(), lot.qty(), java.math.BigDecimal::add);
+            }
+            for (var it : revision.items()) {
+                java.math.BigDecimal lotted = plan.getOrDefault(it.id(), Map.of()).values().stream()
+                    .reduce(java.math.BigDecimal.ZERO, java.math.BigDecimal::add);
+                if (it.qty().compareTo(lotted) < 0) {
+                    throw new ApiException(HttpStatus.CONFLICT,
+                        "ฉบับแก้ไขลดจำนวนรายการที่ " + it.seq() + " ต่ำกว่าจำนวนที่จัดลงรอบขนส่งแล้ว กรุณาแก้ที่รอบขนส่งก่อน");
+                }
+            }
+        }
+        rounds.deleteLotsOf(oldId);
+        plan.forEach((itemId, byRound) -> byRound.forEach((roundId, qty) ->
+            rounds.insertLot(roundId, revision.id(), itemId, qty)));
     }
 
     /** Prints the INTERNAL stored form from ITS OWN snapshot — everything, unlike the FACTORY copy.

@@ -78,7 +78,7 @@ abstract class SplitFixtureSupport extends AbstractPostgresIntegrationTest {
             new th.co.glr.hr.dealquotation.DealQuotationRepository(jdbc,
                 new th.co.glr.hr.catalog.CatalogRepository(jdbc)));
         service = new ImportRequestService(queries, new ImportRequestRenderer(), stored,
-            new FactoryConfigRepository(jdbc), tickets, ticketService, notifications);
+            new FactoryConfigRepository(jdbc), tickets, ticketService, notifications, new th.co.glr.hr.importrequest.ShipmentRoundRepository(jdbc));
 
         ownerId = insertEmployee("SPLIT-OWN");
         owner = principal(ownerId, "sales");
