@@ -15584,9 +15584,10 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
         if (date > mockTodayIso()) fail('วันที่ของขั้นตอนต้องไม่เป็นวันที่ในอนาคต', 400);
       }
       if ((request?.lotReceipts ?? []).length > 0 && round.importStep !== 'RECEIVED') fail('แก้จำนวนที่ถึงโกดังได้เมื่อรอบถึงโกดังแล้วเท่านั้น', 409);
-      if (request?.expectedUpdatedAt && round.updatedAt && request.expectedUpdatedAt !== round.updatedAt) fail('มีผู้อื่นแก้ข้อมูลรอบนี้ กรุณาโหลดใหม่', 409);
-      round.updatedAt = new Date().toISOString();
+      // null is a real token: a round nobody has saved yet, so a second reader's first save is stale too
+      if (request?.expectedUpdatedAt !== undefined && request.expectedUpdatedAt !== (round.updatedAt ?? null)) fail('มีผู้อื่นแก้ข้อมูลรอบนี้ กรุณาโหลดใหม่', 409);
       mockApplyReceipts(round, request?.lotReceipts);
+      round.updatedAt = new Date().toISOString();
       round.undo = null; // an edit ends the undo window, so an undo can never discard it
       if (facts) MOCK_ROUND_FACT_KEYS.forEach((k) => { round.facts[k] = k === 'transportMode' ? (facts[k] ?? round.facts[k]) : (facts[k] ?? null); });
       Object.entries(dates).forEach(([step, date]) => { round[MOCK_ROUND_DATE_KEY[step]] = date; });

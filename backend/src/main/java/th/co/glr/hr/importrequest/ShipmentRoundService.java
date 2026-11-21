@@ -687,6 +687,7 @@ public class ShipmentRoundService {
         Map<Long, BigDecimal> lotQty = rounds.lotsByRound(List.of(roundId)).getOrDefault(roundId, List.of()).stream()
             .collect(Collectors.toMap(ShipmentRoundDtos.ShipmentLotDto::lotId, ShipmentRoundDtos.ShipmentLotDto::qty));
         receipts.forEach((lotId, qty) -> rounds.setLotReceived(lotId, qty.compareTo(lotQty.get(lotId)) == 0 ? null : qty));
+        rounds.touch(roundId); // a receipt-only save must move the version the stale-editor check compares
     }
 
     // ── helpers ─────────────────────────────────────────────────────────────────────────────────────────

@@ -693,6 +693,19 @@ class ShipmentRoundIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     @Test
+    void aReceiptOnlySaveMovesTheVersion_soASecondSaveFromTheSameOpenIsRefused() {
+        long r = round("RECEIVED");
+        lot(r, irA, 40);
+        ShipmentRoundDto opened = rounds.get(r, importUser);
+        long lotId = opened.lots().get(0).lotId();
+        rounds.updateFacts(r, new UpdateShipmentRoundRequest(null, Map.of(),
+            List.of(new LotReceipt(lotId, new BigDecimal("30"))), opened.updatedAt()), importUser);
+        assertRefused(() -> rounds.updateFacts(r, new UpdateShipmentRoundRequest(null, Map.of(),
+            List.of(new LotReceipt(lotId, new BigDecimal("20"))), opened.updatedAt()), importUser), HttpStatus.CONFLICT);
+        assertThat(rounds.get(r, importUser).lots().get(0).receivedQty()).isEqualByComparingTo("30");
+    }
+
+    @Test
     void aDepositRecordedAfterTheFinalLotMovesAPartiallyDeliveredDealToAwaitingFinalPayment() {
         jdbc.update("UPDATE sales.ticket SET fulfillment_status = 'PARTIALLY_DELIVERED', payment_status = 'DEPOSIT_NOTICE_ISSUED' WHERE ticket_id = :t", Map.of("t", ticketA));
         ticketRepo.addEvent(ticketA, owner.id(), owner.name(), th.co.glr.hr.ticket.TicketEventKind.GOODS_RECEIVED, null, null, null);

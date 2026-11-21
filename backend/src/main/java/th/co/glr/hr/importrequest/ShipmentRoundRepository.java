@@ -150,6 +150,10 @@ public class ShipmentRoundRepository {
         return sb.toString();
     }
 
+    public void touch(long roundId) {
+        jdbc.update("UPDATE sales.shipment_round SET updated_at = clock_timestamp() WHERE shipment_round_id = :r", Map.of("r", roundId));
+    }
+
     /** Writes the facts (see {@link #factAssignments}). */
     public void applyFacts(long roundId, ShipmentFacts facts, boolean all) {
         jdbc.update("UPDATE sales.shipment_round SET " + factAssignments(all) + "updated_at = now() WHERE shipment_round_id = :r",
