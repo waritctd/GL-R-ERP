@@ -66,6 +66,26 @@ public class ShipmentRoundRepository {
             Map.of("r", roundId), String.class);
     }
 
+    /** What a deal's lots planned and what reached the warehouse (received_qty, else the planned qty) over its ISSUED IRs' lots on
+     * RECEIVED rounds; {@code unit} is null when the units differ. */
+    public record ReceiptTotals(BigDecimal planned, BigDecimal received, String unit) {
+        public boolean short_() {
+            return planned != null && received != null && received.compareTo(planned) < 0;
+        }
+    }
+
+    public ReceiptTotals receiptTotals(long ticketId) {
+        return jdbc.queryForObject("""
+            SELECT COALESCE(SUM(l.qty), 0) AS planned, COALESCE(SUM(COALESCE(l.received_qty, l.qty)), 0) AS received,
+                   CASE WHEN COUNT(DISTINCT i.unit) = 1 THEN MIN(i.unit) END AS unit
+              FROM sales.shipment_lot l
+              JOIN sales.import_request_item i ON i.import_request_item_id = l.import_request_item_id
+              JOIN sales.import_request ir ON ir.import_request_id = l.import_request_id
+              JOIN sales.shipment_round r ON r.shipment_round_id = l.shipment_round_id
+             WHERE ir.ticket_id = :t AND ir.status = 'ISSUED' AND r.import_step = 'RECEIVED'
+            """, Map.of("t", ticketId), (rs, n) -> new ReceiptTotals(rs.getBigDecimal("planned"), rs.getBigDecimal("received"), rs.getString("unit")));
+    }
+
     /** The id of the round's latest advance (null when none is undoable). */
     public String advanceIdOf(long roundId) {
         return jdbc.queryForObject("SELECT CAST(step_advance_id AS VARCHAR) FROM sales.shipment_round WHERE shipment_round_id = :r",

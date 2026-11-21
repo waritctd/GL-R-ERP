@@ -86,6 +86,13 @@ export const roundTitle = (round) => [round.factoryName, round.facts?.label].fil
 /** "ล็อต 1 จาก 2" when the line is split (or part of it still waits for a round), else "ครบทั้งใบ". */
 export const lotLabel = (lot) => (lot.lotCount > 1 ? `ล็อต ${lot.lotNo} จาก ${lot.lotCount}` : 'ครบทั้งใบ');
 
+/** A short arrival on a received round: "ถึงโกดัง 130 จาก 140 · ขาด 10"; null when it arrived in full or the round has not received. */
+export const lotArrivalText = (lot, roundStep) => {
+  if (roundStep !== 'RECEIVED' || lot.receivedQty == null || Number(lot.receivedQty) >= Number(lot.qty)) return null;
+  const unit = lot.unit ? ` ${lot.unit}` : '';
+  return `ถึงโกดัง ${formatQty(lot.receivedQty)} จาก ${formatQty(lot.qty)}${unit} · ขาด ${formatQty(Number(lot.qty) - Number(lot.receivedQty))}${unit}`;
+};
+
 export const lotProduct = (lot) => [[lot.brand, lot.model].filter(Boolean).join(' ') || lot.code, lot.size].filter(Boolean).join(' ');
 
 /** Who the lot is for: the deal's customer/project. */
@@ -129,7 +136,13 @@ export function roundIrSummary(round) {
     kinds.set(kind, (kinds.get(kind) ?? 0) + 1);
   });
   const units = new Set((round.lots ?? []).map((l) => l.unit ?? ''));
-  const qty = units.size === 1 ? `${formatQty((round.lots ?? []).reduce((sum, l) => sum + Number(l.qty), 0))} ${[...units][0]}`.trim() : null;
+  const planned = (round.lots ?? []).reduce((sum, l) => sum + Number(l.qty), 0);
+  const got = (round.lots ?? []).reduce((sum, l) => sum + Number(l.receivedQty ?? l.qty), 0);
+  const unit = [...units][0];
+  const qty = units.size !== 1 ? null
+    : round.importStep === 'RECEIVED' && got < planned
+      ? `ถึงโกดัง ${formatQty(got)} จาก ${formatQty(planned)} ${unit} · ขาด ${formatQty(planned - got)}`.replace(/\s+·/, ' ·')
+      : `${formatQty(planned)} ${unit}`.trim();
   return {
     head: [`${rows.length} ใบ`, qty].filter(Boolean).join(' · '),
     mix: [...kinds].map(([k, n]) => `${n} ${k}`).join(' · '),
@@ -156,11 +169,16 @@ export function irRows(round) {
     const first = lots[0];
     const split = lots.find((l) => l.lotCount > 1);
     const units = new Set(lots.map((l) => l.unit ?? ''));
+    const planned = lots.reduce((sum, l) => sum + Number(l.qty), 0);
+    const got = lots.reduce((sum, l) => sum + Number(l.receivedQty ?? l.qty), 0);
+    const short = round.importStep === 'RECEIVED' && units.size === 1 && got < planned;
     return {
       key: first.importRequestId, who: lotWho(first), docNumber: first.docNumber, ticketId: first.ticketId,
       lotText: split ? `ล็อต ${split.lotNo} จาก ${split.lotCount}` : 'ครบทั้งใบ',
-      qtyText: units.size === 1
-        ? `${formatQty(lots.reduce((sum, l) => sum + Number(l.qty), 0))} ${first.unit ?? ''}`.trim()
+      qtyText: short
+        ? `ถึงโกดัง ${formatQty(got)} จาก ${formatQty(planned)} ${first.unit ?? ''} · ขาด ${formatQty(planned - got)}`.replace(/\s+·/, ' ·')
+        : units.size === 1
+        ? `${formatQty(planned)} ${first.unit ?? ''}`.trim()
         : `${lots.length} รายการ`,
     };
   });

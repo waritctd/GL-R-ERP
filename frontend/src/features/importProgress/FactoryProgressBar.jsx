@@ -16,7 +16,7 @@ const ETA_CHIP = `${CHIP_BOX} max-w-full border-border-subtle bg-surface font-bo
 // `editable` (import/CEO — ImportRequestService.ADVANCE_STEP_ROLES) adds the "advance" control. Everything
 // else — the step picker, the forward-only advance, the email hook — is unchanged.
 export function FactoryProgressBar({
-  row, editable = false, advancing = false, onAdvance, onOpenEmail, bare = false, titleExtra = null,
+  row, editable = false, advancing = false, onAdvance, onOpenEmail, bare = false, titleExtra = null, arrival = null,
 }) {
   const currentIdx = importStepIndex(row.importStep);
   const current = importStepMeta(row.importStep);
@@ -55,7 +55,8 @@ export function FactoryProgressBar({
                 done ? 'border-transparent bg-success-bg text-success-dark' : 'border-transparent bg-info-bg text-info',
               )}
             >
-              {current ? `${current.s} · ${current.label}` : (row.importStep ?? '—')}
+              {/* part of the order is in the warehouse while the rest is not: say so, not a step that reads as nothing arrived */}
+              {arrival ? `ถึงโกดัง ${arrival.received} / ${arrival.ordered} ${arrival.unit}`.trim() : current ? `${current.s} · ${current.label}` : (row.importStep ?? '—')}
               {done ? ' ✓' : null}
             </span>
             {/* ETA — expected arrival window, derived from the factory's lead time (issueDate + leadTimeMin/Max).

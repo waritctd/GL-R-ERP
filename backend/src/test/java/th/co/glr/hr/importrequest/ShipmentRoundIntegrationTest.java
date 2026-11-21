@@ -590,6 +590,7 @@ class ShipmentRoundIntegrationTest extends AbstractPostgresIntegrationTest {
         jdbc.update("UPDATE sales.ticket SET payment_status = 'DEPOSIT_NOTICE_ISSUED' WHERE ticket_id = :t", Map.of("t", ticketA));
         long r1 = round("RECEIVED");
         lot(r1, irA, 10);
+        assertThat(ticketService.warehouseRemaining(ticketA, owner).values()).containsExactly(new BigDecimal("5.00")); // what the dialog defaults to
         assertRefused(() -> deliverFromWarehouse(ticketA, "6"), HttpStatus.CONFLICT); // imported part: 20 * 10 / 40 = 5
         deliverFromWarehouse(ticketA, "5");
         jdbc.update("UPDATE sales.ticket SET payment_status = 'DEPOSIT_PAID' WHERE ticket_id = :t", Map.of("t", ticketA));

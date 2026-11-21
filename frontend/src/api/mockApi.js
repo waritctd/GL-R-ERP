@@ -11488,6 +11488,15 @@ export const api = {
       return delay({ ticket: buildTicketDetail(ticket) });
     },
 
+    // Mirrors TicketService#warehouseRemaining: per line, what the warehouse may still deliver (the shared allowance less delivered).
+    async deliveryAllowance(id) {
+      const ticket = findTicketRaw(Number(id));
+      requireOwningRepOrCeo(ticket);
+      return delay({ lines: (ticket.items ?? []).map((item) => ({
+        itemId: item.id, remaining: Math.max(0, Math.round((mockWarehouseAllowance(ticket, item) - Number(item.qtyDelivered ?? 0)) * 100) / 100),
+      })) });
+    },
+
     async recordDelivery(id, payload) {
       // Stages 13-14 are Sales's — CEO, or the deal's OWN owning rep, ONLY (import is not admitted;
       // see requireOwningRepOrCeo's doc). The gate is ownership-aware, so the ticket is loaded

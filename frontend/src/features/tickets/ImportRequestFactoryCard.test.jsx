@@ -33,4 +33,10 @@ describe('ImportRequestFactoryCard — what the deal page changed stays on the d
     renderCard({ row: issued, showReadOnlyChip: true });
     expect(screen.getByText('ดูอย่างเดียว')).toBeTruthy();
   });
+
+  it('part of the order in the warehouse: the card says ถึงโกดัง 70 / 140, not a step that reads as nothing arrived', () => {
+    renderCard({ row: issued, arrival: { received: '70', ordered: '140', unit: 'แผ่น' } });
+    expect(screen.getByText('ถึงโกดัง 70 / 140 แผ่น')).toBeTruthy();
+    expect(screen.queryByText(/S12/)).toBeNull();
+  });
 });

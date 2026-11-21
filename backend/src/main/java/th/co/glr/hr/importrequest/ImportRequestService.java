@@ -1231,6 +1231,23 @@ public class ImportRequestService {
         if (received != null && allFactoriesReceived(ticketId)) {
             String ir = "ใบขอซื้อ (IR) " + received.ir().docNumber();
             ticketService.applyImportRequestRollup(ticketId, actor);
+            var totals = rounds.receiptTotals(ticketId);
+            if (totals.short_()) {
+                // Same moment as ever, but it must not say ครบ: the rep needs the real figure before promising the customer.
+                String unit = totals.unit() == null ? "" : " " + totals.unit();
+                String qty = totals.unit() == null ? "มีบางรายการถึงโกดังไม่ครบ" // different units cannot be added up
+                    : "ถึงโกดังแล้ว " + totals.received().stripTrailingZeros().toPlainString() + " จาก "
+                    + totals.planned().stripTrailingZeros().toPlainString() + unit + " · ขาด "
+                    + totals.planned().subtract(totals.received()).stripTrailingZeros().toPlainString() + unit;
+                var deal = requireTicketSummary(ticketId);
+                notifications.notifyEmployeeAtLinkTitled(deal.createdById(), TicketEventKind.IMPORT_GOODS_RECEIVED_ALL,
+                    "สินค้าถึงโกดังแล้ว แต่ไม่ครบตามที่สั่ง",
+                    "สินค้าตาม" + ir + " จากโรงงาน " + received.ir().factoryName() + " ถึงโกดังแล้วทุกใบขอซื้อของดีลนี้ แต่ไม่ครบ: " + qty
+                        + "\n" + DealNoticeText.dealLabel(deal.code(), deal.customerName())
+                        + "\nสิ่งที่ต้องทำต่อ: ตรวจของที่ขาดก่อนนัดวันส่งสินค้ากับลูกค้า",
+                    "/tickets/" + deal.id());
+                return true;
+            }
             notifyRepOfImportProgress(requireTicketSummary(ticketId), TicketEventKind.IMPORT_GOODS_RECEIVED_ALL,
                 "สินค้าตาม" + ir + " จากโรงงาน " + received.ir().factoryName() + " เข้าคลังแล้ว และครบทุกใบขอซื้อของดีลนี้",
                 "สิ่งที่ต้องทำต่อ: นัดวันส่งสินค้ากับลูกค้า");

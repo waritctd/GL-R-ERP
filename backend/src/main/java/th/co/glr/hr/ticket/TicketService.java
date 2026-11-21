@@ -2738,6 +2738,21 @@ public class TicketService {
         }
     }
 
+    /** Per line, what the warehouse may still deliver now: the shared allowance less what was delivered (never below 0).
+     * Read by whoever may record a delivery (the deal's sales side, any warehouse staff); the dialogs default to it. */
+    public Map<Long, BigDecimal> warehouseRemaining(long ticketId, UserPrincipal actor) {
+        TicketDto ticket = requireTicket(ticketId);
+        requireRoundDeliveryAccess(ticket.summary(), actor);
+        TicketSummaryDto s = ticket.summary();
+        TicketRepository.LotReceipts receipts = tickets.lotReceipts(ticketId);
+        boolean goodsEvent = tickets.hasReceivedGoods(ticketId);
+        Map<Long, BigDecimal> out = new LinkedHashMap<>();
+        for (TicketItemDto item : ticket.items()) {
+            out.put(item.id(), warehouseAllowance(s, item, receipts, goodsEvent).subtract(nullToZero(item.qtyDelivered())).max(BigDecimal.ZERO));
+        }
+        return out;
+    }
+
     /** Whether the warehouse can still deliver something under the cap: some line has room. */
     private boolean warehouseHasRoom(TicketDto ticket) {
         TicketSummaryDto s = ticket.summary();

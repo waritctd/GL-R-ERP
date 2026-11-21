@@ -17,6 +17,7 @@ import { bangkokTodayIso, formatThaiDate, fulfilmentStatusLabel } from '../../ut
 import { depositReadyForIr } from './dealMoneyStatus.js';
 import { ImportStatusStrip } from '../importProgress/ImportStatusStrip.jsx';
 import { importStepIndex } from '../importProgress/importSteps.js';
+import { formatQty } from '../fulfilment/shipmentRounds.js';
 import { nextFulfilmentActionCode } from './importActions.js';
 import { ImportRequestFactoryCard } from './ImportRequestFactoryCard.jsx';
 import { procurementPath } from './stageMeta.js';
@@ -370,6 +371,15 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
     enabled: !!ticketId && canReadStoredIr,
   });
   const storedIrRows = storedIrQuery.data ?? [];
+  // What is physically in the warehouse, from the same data the ส่งของ tab's incoming panel reads (import has no read of it).
+  const incomingQuery = useQuery({
+    queryKey: queryKeys.ticketIncoming(ticketId),
+    queryFn: () => api.tickets.incoming(ticketId),
+    enabled: !!ticketId && canReadStoredIr && role !== 'import',
+    retry: false,
+  });
+  const partialArrival = (ir) => (ir && ir.unit && ir.ordered != null && Number(ir.received) > 0 && Number(ir.received) < Number(ir.ordered)
+    ? { received: formatQty(ir.received), ordered: formatQty(ir.ordered), unit: ir.unit } : null);
   const liveStoredIrRows = storedIrRows
     .filter((r) => r.status !== 'SUPERSEDED')
     .sort((a, b) => (a.factoryName ?? '').localeCompare(b.factoryName ?? '', 'th') || a.version - b.version);
@@ -809,6 +819,9 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
               arrivedCount={arrivedIrCount}
               issuedCount={issuedIrRows.length}
               deliveryPct={totalOrdered > 0 ? deliveryProgress : null}
+              goodsArrival={incomingQuery.data?.totalUnit && Number(incomingQuery.data.totalReceived) > 0
+                && Number(incomingQuery.data.totalReceived) < Number(incomingQuery.data.totalOrdered)
+                ? { received: formatQty(incomingQuery.data.totalReceived), ordered: formatQty(incomingQuery.data.totalOrdered), unit: incomingQuery.data.totalUnit } : null}
             />
           </div>
 
@@ -975,6 +988,7 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
                     showToast={showToast}
                     dealNoun="งาน"
                     showReadOnlyChip
+                    arrival={partialArrival(incomingQuery.data?.irs?.find((i) => i.importRequestId === row.id))}
                   />
                 ))}
               </div>

@@ -20,7 +20,7 @@ import { PlanRoundSheet } from './PlanRoundSheet.jsx';
 import { RoundDocuments } from './RoundDocuments.jsx';
 import { RoundFactsModal } from './RoundFactsModal.jsx';
 import {
-  factLabel, formatQty, lotLabel, lotProduct, lotsEditable, lotWho, lotWhoSub, roundIrCount, roundTitle, STEP_DATE_KEY, stepPillText, stepTone,
+  factLabel, formatQty, lotArrivalText, lotLabel, lotProduct, lotsEditable, lotWho, lotWhoSub, roundIrCount, roundTitle, STEP_DATE_KEY, stepPillText, stepTone,
 } from './shipmentRounds.js';
 import { useRoundUndo } from './useRoundUndo.jsx';
 
@@ -99,7 +99,7 @@ export function ShipmentRoundPage({ user, showToast }) {
     { key: 'who', header: 'โครงการ / ลูกค้า', render: (l) => <span className="flex flex-col"><b className="text-sm">{lotWho(l)}</b><small className="text-text-muted">{lotWhoSub(l)}</small></span> },
     { key: 'product', header: 'สินค้า', render: (l) => lotProduct(l) },
     { key: 'qty', header: 'ไปรอบนี้', render: (l) => <span className="flex flex-col tabular-nums"><b>{formatQty(l.qty)} {l.unit ?? ''}</b><small className="text-text-muted">จาก {formatQty(l.itemQty)}</small></span> },
-    { key: 'lot', header: 'ล็อต', render: (l) => <span className="flex flex-col"><span>{lotLabel(l)}</span>{l.remainingQty > 0 ? <small className="text-text-muted">เหลือ {formatQty(l.remainingQty)} รอจัดรอบ</small> : null}</span> },
+    { key: 'lot', header: 'ล็อต', render: (l) => <span className="flex flex-col"><span>{lotLabel(l)}</span>{l.remainingQty > 0 ? <small className="text-text-muted">เหลือ {formatQty(l.remainingQty)} รอจัดรอบ</small> : null}{lotArrivalText(l, round.importStep) ? <small className="font-bold text-danger-dark" data-testid="lot-short">{lotArrivalText(l, round.importStep)}</small> : null}</span> },
     ...(canEditLots ? [{
       key: 'manage',
       header: '',
@@ -113,6 +113,7 @@ export function ShipmentRoundPage({ user, showToast }) {
         {l.ticketId == null ? <DownloadIrButton importRequestId={l.importRequestId} docNumber={l.docNumber} factoryName={round.factoryName} showToast={showToast} /> : null}
         <small className="text-text-muted">{l.ticketId == null ? <code>{l.docNumber}</code> : <Link to={`/import/deals/${l.ticketId}`} className="text-info underline"><code>{l.docNumber}</code></Link>} · {lotProduct(l)}</small>
         <small className="text-text-muted">{lotLabel(l)}{l.remainingQty > 0 ? ` · เหลือ ${formatQty(l.remainingQty)} รอจัดรอบ` : ''}</small>
+        {lotArrivalText(l, round.importStep) ? <small className="font-bold text-danger-dark" data-testid="lot-short">{lotArrivalText(l, round.importStep)}</small> : null}
       </span>
       <span className="flex shrink-0 flex-col items-end gap-1 text-right tabular-nums">
         <span><b>{formatQty(l.qty)} {l.unit ?? ''}</b><br /><small className="text-text-muted">จาก {formatQty(l.itemQty)}</small></span>

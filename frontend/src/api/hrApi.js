@@ -402,6 +402,7 @@ export const api = {
     updateItemWeightMultipliers: (id, payload) =>
       apiRequest(API_ROUTES.tickets.itemWeightMultipliers(id), { method: 'POST', body: payload }),
     recordDelivery: (id, payload) => apiRequest(API_ROUTES.tickets.deliveries(id), { method: 'POST', body: payload }),
+    deliveryAllowance: (id) => apiRequest(API_ROUTES.tickets.deliveryAllowance(id)),
     completeDelivery: (id, payload = {}) => apiRequest(API_ROUTES.tickets.completeDelivery(id), { method: 'POST', body: payload }),
     actions: (id) => apiRequest(API_ROUTES.tickets.action(id, 'actions')),
     // Ticket-native submit/pickup/propose-price/approve/reject/quotation/mark-quotation-* and the

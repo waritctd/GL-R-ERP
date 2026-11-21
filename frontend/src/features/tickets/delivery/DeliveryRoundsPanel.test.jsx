@@ -16,7 +16,7 @@ vi.mock('../../../api/index.js', async (importOriginal) => ({
   api: {
     deliveryRequests: { list: vi.fn(), createDraft: vi.fn(), update: vi.fn(), addFile: vi.fn(), send: vi.fn(), forward: vi.fn(), sendBack: vi.fn(), attachTaxInvoice: vi.fn(), confirmInvoice: vi.fn(), voidInvoice: vi.fn(), recordDelivery: vi.fn() },
     attachments: { fileUrl: (id) => `/f/${id}`, delete: vi.fn(), fileBlob: vi.fn() },
-    tickets: { get: vi.fn(), recordDelivery: vi.fn() },
+    tickets: { get: vi.fn(), recordDelivery: vi.fn(), deliveryAllowance: vi.fn() },
     documentChain: { get: vi.fn() },
     dealQuotations: { downloadPdf: vi.fn() },
     storedImportRequests: { listForTicket: vi.fn() },
@@ -425,6 +425,20 @@ describe('DeliveryRoundsPanel', () => {
     renderPanel({ dealless: true });
     expect((await screen.findByTestId('round-step-4')).textContent).toContain('บันทึกได้หลังออกใบกำกับ หรือบันทึกก่อนพร้อมหมายเหตุ');
     expect(screen.queryByTestId('record-delivery-button')).toBeNull();
+  });
+
+  it('defaults to what the warehouse may deliver now and shows that limit up front, not after submit', async () => {
+    api.deliveryRequests.list.mockResolvedValue({ order: ORDER, rounds: [invoicedRound({ lines: [{ itemId: 1, description: 'กระเบื้อง', unit: 'แผ่น', coveredQty: 140, deliveredQty: 0 }] })], approvedQuotations: [QUOTATION] });
+    api.tickets.deliveryAllowance.mockResolvedValue({ lines: [{ itemId: 1, remaining: 70 }] });
+    renderPanel({ warehouseUserId: 77 });
+
+    fireEvent.click(await screen.findByTestId('record-delivery-button'));
+    const sheet = await screen.findByTestId('record-delivery-sheet');
+    expect((await within(sheet).findByTestId('record-limit-1')).textContent).toContain('ส่งได้ไม่เกิน 70');
+    expect(within(sheet).getByTestId('record-qty-1').value).toBe('70');
+    fireEvent.change(within(sheet).getByTestId('record-qty-1'), { target: { value: '100' } });
+    expect(within(sheet).getByTestId('record-delivery-blocked').textContent).toContain('ส่งได้ไม่เกิน 70');
+    api.tickets.deliveryAllowance.mockReset();
   });
 
   it('records against the invoiced round: quantity capped at the remainder, a past day and the recipient are sent, today is not, and the proof photo is attached after', async () => {

@@ -194,6 +194,7 @@ export const API_ROUTES = {
     payments: (id) => `/api/tickets/${id}/payments`,
     billing: (id) => `/api/tickets/${id}/billing`,
     deliveries: (id) => `/api/tickets/${id}/deliveries`,
+    deliveryAllowance: (id) => `/api/tickets/${id}/delivery-allowance`,
     // The sales view of a deal's incoming goods: lots per IR with their round's status (no price, no factory document).
     incoming: (id) => `/api/tickets/${id}/incoming`,
     reserveStock: (id) => `/api/tickets/${id}/reserve-stock`,

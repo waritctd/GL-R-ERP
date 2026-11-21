@@ -537,7 +537,7 @@ export function DeliveryRoundsPanel({ ticketId, showRequestButton = true, hostRe
         />
       ) : null}
       {recordRound ? (
-        <RecordDeliverySheet round={recordRound} order={order} events={ticketQuery.data?.events ?? null} items={ticketQuery.data?.items ?? []} fulfilmentStatus={ticketQuery.data?.summary?.fulfillmentStatus ?? null} onClose={closeRecord} onDone={recordDone} />
+        <RecordDeliverySheet round={recordRound} order={order} ticketId={ticketId} events={ticketQuery.data?.events ?? null} items={ticketQuery.data?.items ?? []} fulfilmentStatus={ticketQuery.data?.summary?.fulfillmentStatus ?? null} onClose={closeRecord} onDone={recordDone} />
       ) : null}
       {voiding ? <VoidInvoiceSheet round={voiding} ticketId={ticketId} onClose={() => setVoiding(null)} /> : null}
       {forwardFor ? (

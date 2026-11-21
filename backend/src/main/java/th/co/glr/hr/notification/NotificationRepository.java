@@ -290,6 +290,12 @@ public class NotificationRepository {
         insertEmployeeNotification(employeeId, type, message, link);
     }
 
+    /** As {@link #notifyEmployeeAtLink} with a title of its own instead of the type's fixed one (the fixed title may say more than this notice does). */
+    public void notifyEmployeeAtLinkTitled(long employeeId, String type, String title, String message, String link) {
+        insertEmployeeNotification(employeeId, type, title, message, link);
+        salesMailer.emailForEmployee(employeeId, title, message, link);
+    }
+
     private void notifyEmployeeAt(long employeeId, String type, String message, String link) {
         String title = insertEmployeeNotification(employeeId, type, message, link);
         // The Thai TITLE, never `type`. Passing the same string the in-app row stores also means the bell and the
@@ -298,7 +304,10 @@ public class NotificationRepository {
     }
 
     private String insertEmployeeNotification(long employeeId, String type, String message, String link) {
-        String title = ticketEventTitle(type);
+        return insertEmployeeNotification(employeeId, type, ticketEventTitle(type), message, link);
+    }
+
+    private String insertEmployeeNotification(long employeeId, String type, String title, String message, String link) {
         jdbc.update("""
             INSERT INTO hr.notification (employee_id, type, title, message, link)
             VALUES (:employeeId, :type, :title, :message, :link)

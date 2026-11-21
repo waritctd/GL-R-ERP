@@ -241,6 +241,20 @@ describe('การขนส่ง queue (shipment rounds)', () => {
 });
 
 describe('รอบขนส่ง page', () => {
+  const shortRound = () => round({ importStep: 'RECEIVED', receivedOn: '2026-11-01', lots: [lot({ qty: 140, itemQty: 140, lotCount: 1, remainingQty: 0, receivedQty: 130 })] });
+
+  it('a short arrival shows on the lot of the round page: ถึงโกดัง 130 จาก 140 · ขาด 10', async () => {
+    vi.mocked(api.shipmentRounds.get).mockResolvedValue({ round: shortRound() });
+    renderAt('/fulfilment/rounds/7');
+    expect((await screen.findAllByTestId('lot-short'))[0].textContent).toBe('ถึงโกดัง 130 จาก 140 แผ่น · ขาด 10 แผ่น');
+  });
+
+  it('a short arrival shows on the queue row too', async () => {
+    vi.mocked(api.shipmentRounds.list).mockResolvedValue({ rounds: [shortRound()], waiting: [] });
+    renderAt('/fulfilment');
+    expect((await screen.findAllByText(/ถึงโกดัง 130 จาก 140 แผ่น · ขาด 10/)).length).toBeGreaterThan(0);
+  });
+
   it('lets import manage lots only until the round has left: remove goes back to waiting; from IN_TRANSIT it is read-only', async () => {
     vi.mocked(api.shipmentRounds.get).mockResolvedValue({ round: round({ importStep: 'ORDERED' }) });
     vi.mocked(api.shipmentRounds.removeLot).mockResolvedValue({ round: round({ importStep: 'ORDERED' }) });
