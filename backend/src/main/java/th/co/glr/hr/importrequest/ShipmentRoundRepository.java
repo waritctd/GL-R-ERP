@@ -104,31 +104,38 @@ public class ShipmentRoundRepository {
 
     public ReceiptTotals receiptTotals(long ticketId) {
         return jdbc.queryForObject("""
-            SELECT COALESCE(SUM(l.qty), 0) -- what was marked ไม่ได้รับของ is still part of what was ordered, so it never reads as ครบ
-                     + (SELECT COALESCE(SUM(m.qty_not_delivered), 0) FROM sales.ticket_item m WHERE m.ticket_id = :t) AS planned,
-                   COALESCE(SUM(COALESCE(l.received_qty, l.qty)), 0) AS received,
-                   -- NULL and blank are the same "no unit"; figures need every line to share one value
-                   (SELECT COUNT(DISTINCT u) FROM (
-                        SELECT COALESCE(NULLIF(btrim(li.unit), ''), '') AS u
-                          FROM sales.shipment_lot ll
-                          JOIN sales.import_request_item li ON li.import_request_item_id = ll.import_request_item_id
-                          JOIN sales.import_request lr ON lr.import_request_id = ll.import_request_id
-                          JOIN sales.shipment_round rr ON rr.shipment_round_id = ll.shipment_round_id
-                         WHERE lr.ticket_id = :t AND lr.status = 'ISSUED' AND rr.import_step = 'RECEIVED'
-                        UNION ALL
-                        SELECT COALESCE(NULLIF(btrim(mi.unit), ''), '')
-                          FROM sales.import_request_item mi
-                          JOIN sales.import_request mr ON mr.import_request_id = mi.import_request_id AND mr.status = 'ISSUED'
-                          JOIN sales.ticket_item mt ON mt.item_id = mi.ticket_item_id
-                         WHERE mr.ticket_id = :t AND mt.qty_not_delivered > 0) x) AS units,
-                   MIN(NULLIF(btrim(i.unit), '')) AS unit
-              FROM sales.shipment_lot l
-              JOIN sales.import_request_item i ON i.import_request_item_id = l.import_request_item_id
-              JOIN sales.import_request ir ON ir.import_request_id = l.import_request_id
-              JOIN sales.shipment_round r ON r.shipment_round_id = l.shipment_round_id
-             WHERE ir.ticket_id = :t AND ir.status = 'ISSUED' AND r.import_step = 'RECEIVED'
+            WITH base AS (
+                SELECT i.ticket_item_id AS item, NULLIF(btrim(i.unit), '') AS unit, l.qty, COALESCE(l.received_qty, l.qty) AS got
+                  FROM sales.shipment_lot l
+                  JOIN sales.import_request_item i ON i.import_request_item_id = l.import_request_item_id
+                  JOIN sales.import_request ir ON ir.import_request_id = l.import_request_id
+                  JOIN sales.shipment_round r ON r.shipment_round_id = l.shipment_round_id
+                 WHERE ir.ticket_id = :t AND ir.status = 'ISSUED' AND r.import_step = 'RECEIVED'
+                UNION ALL -- a marked line counts even with no lot left
+                SELECT mi.ticket_item_id, NULLIF(btrim(mi.unit), ''), 0, 0
+                  FROM sales.import_request_item mi
+                  JOIN sales.import_request mr ON mr.import_request_id = mi.import_request_id AND mr.status = 'ISSUED'
+                  JOIN sales.ticket_item mt ON mt.item_id = mi.ticket_item_id
+                 WHERE mr.ticket_id = :t AND mt.qty_not_delivered > 0
+            ), per AS (SELECT item, SUM(qty) AS qty, SUM(got) AS got FROM base GROUP BY item)
+            -- per line: the mark covers what did not arrive, so it adds to what was ordered only beyond the lots
+            SELECT COALESCE(SUM(GREATEST(p.qty, p.got + COALESCE(t.qty_not_delivered, 0))), 0) AS planned,
+                   COALESCE(SUM(p.got), 0) AS received,
+                   (SELECT COUNT(DISTINCT COALESCE(unit, '')) FROM base) AS units, -- NULL and blank are the same "no unit"
+                   (SELECT MIN(unit) FROM base) AS unit
+              FROM per p LEFT JOIN sales.ticket_item t ON t.item_id = p.item
             """, Map.of("t", ticketId), (rs, n) -> new ReceiptTotals(rs.getBigDecimal("planned"), rs.getBigDecimal("received"), rs.getString("unit"),
                 rs.getInt("units") <= 1));
+    }
+
+    /** Any lot of the deal's ISSUED import requests on a RECEIVED round recorded as exactly 0. */
+    public boolean hasZeroReceivedLot(long ticketId) {
+        return Boolean.TRUE.equals(jdbc.queryForObject("""
+            SELECT EXISTS (SELECT 1 FROM sales.shipment_lot l
+                             JOIN sales.import_request ir ON ir.import_request_id = l.import_request_id
+                             JOIN sales.shipment_round r ON r.shipment_round_id = l.shipment_round_id
+                            WHERE ir.ticket_id = :t AND ir.status = 'ISSUED' AND r.import_step = 'RECEIVED' AND l.received_qty = 0)
+            """, Map.of("t", ticketId), Boolean.class));
     }
 
     /** ISSUED import requests of the deal that have lots whose lots together received nothing: on a RECEIVED round, but

@@ -17,7 +17,9 @@ const INCOMING_GRID = 'grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)_minmax(0,0.9fr)_
 const lotWhen = (lot) => (lot.step === 'RECEIVED'
   ? `ถึง ${formatThaiDate(lot.receivedOn ?? lot.arrivedOn)}`
   : lot.expectedOn ? `คาดว่าถึง ${formatThaiDate(lot.expectedOn)}` : 'ยังไม่มีกำหนด');
-const lotNote = (lot) => (lot.lotCount > 1 ? `ล็อต ${lot.lotNo} จาก ${lot.lotCount}` : 'ครบทั้งใบ');
+// 'ครบทั้งใบ' = one lot carries the whole IR, and it must not sit beside a shortage
+const lotNote = (lot) => (lot.lotCount > 1 || (lot.receivedQty != null && Number(lot.receivedQty) < Number(lot.qty))
+  ? `ล็อต ${lot.lotNo} จาก ${lot.lotCount}` : 'ครบทั้งใบ');
 const lotQtyText = (lot) => (lot.receivedQty != null && Number(lot.receivedQty) !== Number(lot.qty)
   ? `${formatQty(lot.receivedQty)} จาก ${formatQty(lot.qty)} ${lot.unit ?? ''}`
   : `${formatQty(lot.qty)} ${lot.unit ?? ''}`).trim();

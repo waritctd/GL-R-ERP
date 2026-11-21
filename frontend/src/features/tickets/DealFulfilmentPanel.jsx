@@ -655,6 +655,10 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
     queryClient.invalidateQueries({ queryKey: queryKeys.ticketDetail(ticketId) });
     queryClient.invalidateQueries({ queryKey: queryKeys.ticketActions(ticketId) });
     queryClient.invalidateQueries({ queryKey: queryKeys.ticketDeliveries(ticketId) });
+    queryClient.invalidateQueries({ queryKey: queryKeys.storedImportRequests(ticketId) });
+    queryClient.invalidateQueries({ queryKey: queryKeys.ticketIncoming(ticketId) });
+    queryClient.invalidateQueries({ queryKey: queryKeys.deliveryRequests(ticketId) });
+    queryClient.invalidateQueries({ queryKey: ['tickets', 'deliveryAllowance', ticketId] });
     queryClient.invalidateQueries({ queryKey: ['tickets', 'list'] });
     queryClient.invalidateQueries({ queryKey: queryKeys.dashboardSummary() });
     queryClient.invalidateQueries({ queryKey: queryKeys.notifications() });
@@ -1336,7 +1340,7 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
           ticketId={ticketId}
           item={notDeliveredFor}
           onClose={() => setNotDeliveredFor(null)}
-          onDone={() => { setNotDeliveredFor(null); showToast?.('success', 'บันทึกว่าไม่ได้รับของแล้ว'); invalidateAfterFulfilmentChange(); queryClient.invalidateQueries({ queryKey: queryKeys.ticketIncoming(ticketId) }); }}
+          onDone={() => { setNotDeliveredFor(null); showToast?.('success', 'บันทึกว่าไม่ได้รับของแล้ว'); invalidateAfterFulfilmentChange(); }}
         />
       ) : null}
 

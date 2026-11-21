@@ -30,6 +30,7 @@ export function deliveryPayload({ lines, qty, deliveredOn, recipient, source }) 
 /** The deal's items as the sheet's lines, for a delivery made before any tax invoice (no round). */
 const itemLines = (items) => items.map((i) => ({
   itemId: i.id, description: [i.brand, i.model, i.size].filter(Boolean).join(' ') || `รายการ ${i.id}`, unit: 'แผ่น',
+  orderedQty: Number(i.qty || 0), markedQty: Number(i.qtyNotDelivered || 0),
   coveredQty: Number(i.qty || 0) - Number(i.qtyNotDelivered || 0), deliveredQty: Number(i.qtyDelivered || 0), // less what was marked not delivered
 }));
 
@@ -184,7 +185,7 @@ export function RecordDeliverySheet({ round = null, order, events = null, ticket
             <span className="flex flex-col">
               <b className="text-base">{line.description}</b>
               <small className="text-xs text-text-muted">
-                {noInvoice ? `สั่ง ${num(line.coveredQty)} ${line.unit}` : `ใบกำกับครอบคลุม ${num(line.coveredQty)} ${line.unit}`}{Number(line.deliveredQty) > 0 ? ` · ส่งแล้ว ${num(line.deliveredQty)}` : ''}
+                {noInvoice ? `สั่ง ${num(line.orderedQty ?? line.coveredQty)}${line.markedQty > 0 ? ` · ไม่ได้รับของ ${num(line.markedQty)}` : ''} ${line.unit}` : `ใบกำกับครอบคลุม ${num(line.coveredQty)} ${line.unit}`}{Number(line.deliveredQty) > 0 ? ` · ส่งแล้ว ${num(line.deliveredQty)}` : ''}
               </small>
               {allow ? <small className="text-xs font-bold text-text-secondary" data-testid={`record-limit-${line.itemId}`}>ส่งได้ไม่เกิน {num(capOf(line))} {line.unit}</small> : null}
             </span>

@@ -125,7 +125,7 @@ export function FactoryProgressBar({
             const dot = isDone
               ? 'h-6 w-6 bg-success text-surface'
               : isCurrent
-                ? cn('h-7 w-7 text-surface ring-4', done ? 'bg-success ring-success-bg' : 'bg-info ring-info-bg')
+                ? cn('h-7 w-7 text-surface ring-4', done && !arrival ? 'bg-success ring-success-bg' : 'bg-info ring-info-bg')
                 : 'h-6 w-6 border border-border-muted bg-surface text-text-muted';
             return (
               <li
@@ -134,7 +134,7 @@ export function FactoryProgressBar({
                 aria-current={isCurrent ? 'step' : undefined}
               >
                 <div className="flex h-7 w-full items-center">
-                  <span className={`h-0.5 flex-1 ${i === 0 ? 'bg-transparent' : (i <= currentIdx ? 'bg-success' : 'bg-border-muted')}`} />
+                  <span className={`h-0.5 flex-1 ${i === 0 ? 'bg-transparent' : (i < currentIdx || (i === currentIdx && !(done && arrival)) ? 'bg-success' : 'bg-border-muted')}`} />
                   <span className={`grid shrink-0 place-items-center rounded-full text-2xs font-extrabold ${dot}`}>
                     {i + 1}
                   </span>
@@ -143,7 +143,7 @@ export function FactoryProgressBar({
                 <span
                   className={cn(
                     'mt-2 px-1 text-xs leading-tight',
-                    isCurrent ? (done ? 'font-extrabold text-success-dark' : 'font-extrabold text-info') : isDone ? 'font-bold text-success-dark' : 'text-text-muted',
+                    isCurrent ? (done && !arrival ? 'font-extrabold text-success-dark' : 'font-extrabold text-info') : isDone ? 'font-bold text-success-dark' : 'text-text-muted',
                   )}
                 >
                   {step.label}

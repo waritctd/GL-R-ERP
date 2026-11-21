@@ -1272,7 +1272,7 @@ public class ImportRequestService {
             if (!alreadyAnnounced) {
                 notifyAllGoodsReceived(ticketId, received.ir().docNumber(), received.ir().factoryName());
             }
-            return true;
+            return !alreadyAnnounced; // already told: the arrival of this lot still gets its own bell
         }
         List<Long> nothingArrived = rounds.nothingArrivedIrIds(ticketId); // "latest step: received" would be a false arrival notice
         StepChange started = changes.stream().filter(c -> ImportRequestStep.CONTACTED.equals(c.from())
@@ -1991,9 +1991,8 @@ public class ImportRequestService {
         if (!issued.stream().allMatch(r -> ImportRequestStep.RECEIVED.equals(r.importStep()))) {
             return false;
         }
-        // an IR on a RECEIVED round that received nothing has physically nothing: not goods received
-        List<Long> nothing = rounds.nothingArrivedIrIds(ticketId);
-        if (issued.stream().anyMatch(r -> nothing.contains(r.id()))) {
+        // a lot recorded as 0 has physically nothing: until it is corrected, or returned and marked, the deal still waits for it
+        if (rounds.hasZeroReceivedLot(ticketId)) {
             return false;
         }
         Set<Long> issuedFactoryIds = issued.stream().map(IssuedFactoryRow::factoryId)

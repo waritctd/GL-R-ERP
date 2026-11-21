@@ -3364,7 +3364,9 @@ function mockIrNothingArrived(ir) {
 function mockAllFactoriesReceived(ticket) {
   const liveRows = mockImportRequests.filter((r) => r.ticketId === ticket.id && r.status === 'ISSUED');
   const required = mockRequiredFactoryIds(ticket);
-  return liveRows.length > 0 && liveRows.every((r) => r.importStep === 'RECEIVED') && !liveRows.some(mockIrNothingArrived)
+  return liveRows.length > 0 && liveRows.every((r) => r.importStep === 'RECEIVED')
+    // ImportRequestService#allFactoriesReceived: any lot recorded as 0 means the deal still waits for it
+    && !mockShipmentRounds.some((rd) => rd.importStep === 'RECEIVED' && rd.lots.some((l) => l.receivedQty === 0 && liveRows.some((r) => r.id === l.importRequestId)))
     && [...required].every((fid) => liveRows.some((r) => r.factoryId === fid));
 }
 

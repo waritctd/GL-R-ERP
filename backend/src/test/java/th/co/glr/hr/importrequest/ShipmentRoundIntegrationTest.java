@@ -965,6 +965,8 @@ class ShipmentRoundIntegrationTest extends AbstractPostgresIntegrationTest {
         long lotY = lotIdOf(r, y.irItem);
         long lotX = lotIdOf(r, xIrItem);
         rounds.advance(r, receiveRequest(List.of(new LotReceipt(lotY, new BigDecimal("100")), new LotReceipt(lotX, BigDecimal.ZERO))), importUser);
+        assertThat(ticketRepo.hasReceivedGoods(y.ticket)).isFalse(); // a lot recorded as 0: the deal still waits for it
+        assertThat(bells(y.ticket, "IMPORT_GOODS_RECEIVED_ALL")).isZero();
         assertRefused(() -> lineNotDelivered.mark(y.ticket, x, markOf("100"), salesManager), HttpStatus.CONFLICT); // returned first
         rounds.returnLotToWaiting(r, lotX, importUser);
         assertThat(ticketService.warehouseRemaining(y.ticket, owner).get(x)).isEqualByComparingTo("0");

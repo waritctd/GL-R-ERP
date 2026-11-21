@@ -405,7 +405,8 @@ export function DeliveryRoundsPanel({ ticketId, showRequestButton = true, hostRe
   const primaryRecord = hostHasPrimary ? null : (recordable.find((r) => r.id === primaryId) ?? null);
   const canRequest = canRequestDelivery(roundsQuery.data);
   const items = ticketQuery.data?.items ?? [];
-  const ordered = items.reduce((sum, i) => sum + Number(i.qty || 0), 0);
+  const marked = items.reduce((sum, i) => sum + Number(i.qtyNotDelivered || 0), 0);
+  const ordered = items.reduce((sum, i) => sum + Number(i.qty || 0), 0) - marked; // deliverable, as the deal's ส่งมอบ %
   const delivered = items.reduce((sum, i) => sum + Number(i.qtyDelivered || 0), 0);
   const percent = ordered > 0 ? Math.min(100, Math.round((delivered / ordered) * 100)) : 0;
   // The warehouse reads no deal: it may still record before the invoice through the oldest sent round it can see.
@@ -420,12 +421,17 @@ export function DeliveryRoundsPanel({ ticketId, showRequestButton = true, hostRe
     <section className="flex flex-col gap-4" data-testid="delivery-rounds-panel">
       {doneNotice ? <p role="status" className="m-0 rounded-md border border-success bg-success-bg px-3 py-2 text-sm font-bold text-success" data-testid="record-done">{doneNotice}</p> : null}
       {forwardError ? <p role="alert" className="m-0 rounded-md border border-danger bg-surface px-3 py-2 text-sm text-danger" data-testid="forward-error">{forwardError}</p> : null}
-      {ordered > 0 && !readsNoDeal ? (
+      {ordered + marked > 0 && !readsNoDeal ? (
         <div className="rounded-md border border-border bg-surface px-4 py-3" data-testid="delivered-summary">
           <div className="flex items-baseline justify-between gap-3">
             <span className="text-sm text-text-muted">ส่งมอบแล้ว</span>
             <b className="tabular-nums">{delivered.toLocaleString('en-US')} / {ordered.toLocaleString('en-US')} แผ่น</b>
           </div>
+          {marked > 0 ? (
+            <p className="m-0 mt-1 text-xs text-text-muted" data-testid="delivered-summary-marked">
+              สั่ง {(ordered + marked).toLocaleString('en-US')} · ไม่ได้รับของ {marked.toLocaleString('en-US')} แผ่น
+            </p>
+          ) : null}
           <div className="mt-2 h-2 overflow-hidden rounded-full bg-surface-muted" role="img" aria-label={`ส่งมอบแล้วร้อยละ ${percent}`}>
             <div className="h-full bg-primary" style={{ width: `${percent}%` }} />
           </div>
