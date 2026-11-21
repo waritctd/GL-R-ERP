@@ -19,6 +19,8 @@ export function RoundFactsModal({ round, onClose, showToast }) {
   // A received round can correct what really arrived of each lot (the IR stays RECEIVED).
   const received = round.importStep === 'RECEIVED';
   const [receipts, setReceipts] = useState(() => Object.fromEntries((round.lots ?? []).map((l) => [l.lotId, String(l.receivedQty ?? l.qty)])));
+  // only lots the user typed in are sent: a refetch must not make an untouched lot overwrite another operator's correction
+  const [touchedLots, setTouchedLots] = useState(() => new Set());
   const save = useMutation({
     mutationFn: (payload) => api.shipmentRounds.updateFacts(round.id, payload),
     onSuccess: () => { invalidateAfterRoundChange(queryClient, round); showToast?.('success', 'บันทึกข้อมูลรอบแล้ว'); onClose(); },
@@ -33,7 +35,7 @@ export function RoundFactsModal({ round, onClose, showToast }) {
     save.mutate({
       facts: Object.fromEntries(Object.entries(facts).map(([k, v]) => [k, v === '' ? null : v])),
       stepDates: changed,
-      lotReceipts: received ? (round.lots ?? []).filter((l) => Number(receipts[l.lotId]) !== Number(l.receivedQty ?? l.qty))
+      lotReceipts: received ? (round.lots ?? []).filter((l) => touchedLots.has(l.lotId) && Number(receipts[l.lotId]) !== Number(l.receivedQty ?? l.qty))
         .map((l) => ({ lotId: l.lotId, qty: Number(receipts[l.lotId]) })) : undefined,
     });
   }
@@ -62,7 +64,7 @@ export function RoundFactsModal({ round, onClose, showToast }) {
           <CompletePerInvoiceField idPrefix="facts" complete={complete} note={facts.completeNote}
             onComplete={(v) => setFacts((cur) => ({ ...cur, completePerInvoice: v }))} onNote={set('completeNote')} />
         ) : null}
-        {received ? <LotReceiptFields idPrefix="facts" lots={round.lots ?? []} values={receipts} onChange={(id, v) => setReceipts((cur) => ({ ...cur, [id]: v }))} /> : null}
+        {received ? <LotReceiptFields idPrefix="facts" lots={round.lots ?? []} values={receipts} onChange={(id, v) => { setReceipts((cur) => ({ ...cur, [id]: v })); setTouchedLots((cur) => new Set(cur).add(id)); }} /> : null}
         <fieldset className="m-0 flex flex-col gap-3 border-0 p-0">
           <legend className="mb-1 p-0 text-xs font-bold text-text-secondary">แก้วันที่จริงของขั้นตอนที่ผ่านมาแล้ว (ไม่ย้ายขั้นตอน)</legend>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">

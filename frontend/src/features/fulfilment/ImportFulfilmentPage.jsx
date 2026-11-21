@@ -74,7 +74,7 @@ export function ImportFulfilmentPage({ user, showToast }) {
       .some((f) => (f ?? '').toLowerCase().includes(term))), [waiting, chip, term]);
   const visibleRounds = useMemo(() => rounds
     .filter((r) => chip === 'ALL' || chip === r.importStep)
-    .filter((r) => !term || [roundTitle(r), r.facts?.vessel, r.facts?.proformaNo, r.facts?.invoiceNo,
+    .filter((r) => !term || [roundTitle(r), r.facts?.vessel, r.facts?.proformaNo, r.facts?.invoiceNo, ...(r.documents ?? []).map((d) => d.docNo),
       ...r.lots.flatMap((l) => [l.docNumber, l.ticketCode, l.customerName, l.projectName])]
       .some((f) => (f ?? '').toLowerCase().includes(term))), [rounds, chip, term]);
 
@@ -188,7 +188,7 @@ export function ImportFulfilmentPage({ user, showToast }) {
     </div>
   );
 
-  const nothing = !listQuery.isLoading && !listQuery.isError && rounds.length === 0 && waiting.length === 0
+  const nothing = !listQuery.isLoading && !listQuery.isError && !ticketsQuery.isLoading && !ticketsQuery.isError && rounds.length === 0 && waiting.length === 0
     && (ticketsQuery.data ?? []).every((t) => !['IR_ISSUED', 'IR_SENT', 'SHIPPING'].includes(t.fulfillmentStatus));
   return (
     <PageStack>
@@ -240,6 +240,15 @@ export function ImportFulfilmentPage({ user, showToast }) {
       {listQuery.isError ? (
         <Panel className="border-danger-border bg-danger-bg" data-testid="fulfilment-error">
           <p className="m-0 text-sm text-danger-dark">โหลดรอบขนส่งไม่สำเร็จ — {listQuery.error?.message || 'ลองรีเฟรชหน้านี้อีกครั้ง'}</p>
+        </Panel>
+      ) : null}
+
+      {ticketsQuery.isError ? (
+        <Panel className="border-danger-border bg-danger-bg" data-testid="fulfilment-deals-error">
+          <p className="m-0 flex flex-wrap items-center gap-3 text-sm text-danger-dark">
+            โหลดรายการงานเดิมไม่สำเร็จ — {ticketsQuery.error?.message || 'ลองอีกครั้ง'}
+            <Button type="button" variant="secondary" onClick={() => ticketsQuery.refetch()}>ลองอีกครั้ง</Button>
+          </p>
         </Panel>
       ) : null}
 

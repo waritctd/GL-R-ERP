@@ -90,6 +90,21 @@ describe('การขนส่ง queue (shipment rounds)', () => {
     expect(screen.getByTestId('plan-round')).toBeTruthy(); // the filled จัดรอบขนส่ง button of the waiting section
   });
 
+  it('searches the numbers on a round\'s documents', async () => {
+    renderAt('/fulfilment');
+    await screen.findAllByText('IR-TEST-009');
+    fireEvent.change(screen.getByTestId('fulfilment-search'), { target: { value: 'INV-TEST-B' } });
+    expect(screen.getAllByText('Test Stone Co. · รอบ ทดสอบ').length).toBeGreaterThan(0);
+  });
+
+  it('shows a retry, not the empty state, when the legacy deals fail to load', async () => {
+    vi.mocked(api.shipmentRounds.list).mockResolvedValue({ rounds: [], waiting: [] });
+    vi.mocked(api.tickets.list).mockRejectedValue(new Error('boom'));
+    renderAt('/fulfilment');
+    expect(await screen.findByTestId('fulfilment-deals-error')).toBeTruthy();
+    expect(screen.queryByText('ยังไม่มีรอบขนส่ง')).toBeNull();
+  });
+
   it('an order with no project reads "ตัวอย่าง · requester" and "ไม่มีโครงการ", with no deal link', async () => {
     vi.mocked(api.shipmentRounds.list).mockResolvedValue({ rounds: [], waiting: [{
       importRequestId: 31, docNumber: 'IR-TEST-031', factoryId: 2, factoryName: 'Waiting Ceramics', ticketId: null, ticketCode: null,
@@ -104,7 +119,7 @@ describe('การขนส่ง queue (shipment rounds)', () => {
 
   it('advances a round from the queue asking only that step\'s facts, then offers the 30 s undo', async () => {
     vi.mocked(api.shipmentRounds.advance).mockResolvedValue({
-      round: round({ importStep: 'AWAITING_CUSTOMS', undoUntil: new Date(Date.now() + 30_000).toISOString() }),
+      round: round({ importStep: 'AWAITING_CUSTOMS', advanceId: 'adv-uuid-1', undoUntil: new Date(Date.now() + 30_000).toISOString() }),
     });
     vi.mocked(api.shipmentRounds.undo).mockResolvedValue({ round: round() });
     renderAt('/fulfilment');
@@ -118,7 +133,7 @@ describe('การขนส่ง queue (shipment rounds)', () => {
     await waitFor(() => expect(api.shipmentRounds.advance).toHaveBeenCalledWith(7,
       expect.objectContaining({ targetStep: 'AWAITING_CUSTOMS', expectedStep: 'IN_TRANSIT' })));
     fireEvent.click(await screen.findByRole('button', { name: 'เลิกทำ' }));
-    await waitFor(() => expect(api.shipmentRounds.undo).toHaveBeenCalledWith(7, { expectedStep: 'AWAITING_CUSTOMS' }));
+    await waitFor(() => expect(api.shipmentRounds.undo).toHaveBeenCalledWith(7, { expectedStep: 'AWAITING_CUSTOMS', advanceId: 'adv-uuid-1' }));
   });
 
   it('short arrival: unticking complete lists every lot with its received quantity, capped at the lot, and sends them', async () => {

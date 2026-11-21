@@ -4,7 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { SALES_ENABLED } from '../../app/features.js';
-import { hasPermission, isDivisionManager, isOversightReader, isQuotationReleaseUser, isReaderPath, isReleasedPath, isSelfServiceLocked } from '../../app/permissions.js';
+import { hasPermission, isDivisionManager, isMyOrdersGrantUser, isOversightReader, isQuotationReleaseUser, isReaderPath, isReleasedPath, isSelfServiceLocked } from '../../app/permissions.js';
 import { PRODUCT_NAME } from '../../app/product.js';
 import { cn } from '../../utils/cn.js';
 import { displayRole, roleLabel } from '../../utils/format.js';
@@ -262,6 +262,7 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
       // import's งานนำเข้า + คิวขอราคา and account's งานการเงิน survive the lock: the same
       // allowlist canAccessPath applies.
       || (reader && isReaderPath(item.path))
+      || (item.path === '/my-orders' && isMyOrdersGrantUser(user))
       || isReleasedPath(item.path, user));
 
   const closeTopbarPopover = useCallback(() => setActiveTopbarPopover(null), []);

@@ -1,12 +1,15 @@
 package th.co.glr.hr.importrequest;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.stream.Collectors;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
+import org.springframework.transaction.annotation.Transactional;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.importrequest.ImportRequestDtos.ImportRequestDto;
 import th.co.glr.hr.importrequest.ImportRequestDtos.ImportRequestItemDto;
@@ -25,13 +28,18 @@ public class IncomingService {
     private final TicketService ticketService;
     private final ImportRequestRepository stored;
     private final ShipmentRoundRepository rounds;
+    private final ImportRequestQueryRepository dealQueries;
 
-    public IncomingService(TicketService ticketService, ImportRequestRepository stored, ShipmentRoundRepository rounds) {
+    public IncomingService(TicketService ticketService, ImportRequestRepository stored, ShipmentRoundRepository rounds,
+                           ImportRequestQueryRepository dealQueries) {
         this.ticketService = ticketService;
         this.stored = stored;
         this.rounds = rounds;
+        this.dealQueries = dealQueries;
     }
 
+    /** One snapshot for the IR read and the lot read: a revision committing between them must not split the view. */
+    @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
     public IncomingResponse incoming(long ticketId, UserPrincipal actor) {
         ticketService.requireDealReadAccess(ticketId, actor);
         List<ImportRequestDto> irs = stored.findByTicket(ticketId).stream()
@@ -41,6 +49,9 @@ public class IncomingService {
         List<IncomingIr> out = new ArrayList<>();
         for (ImportRequestDto ir : irs) {
             List<TicketLot> lots = lotsByIr.getOrDefault(ir.id(), List.of());
+            // findByTicket leaves the derived arrival window empty: same rule as the IR pages
+            LocalDate expectedFrom = ImportRequestService.expectedArrival(ir.firstIssuedDate(), ir.leadTimeMinDays());
+            LocalDate expectedTo = ImportRequestService.expectedArrival(ir.firstIssuedDate(), ir.leadTimeMaxDays());
             List<IncomingLot> lotDtos = new ArrayList<>();
             List<IncomingWaiting> waiting = new ArrayList<>();
             for (ImportRequestItemDto item : ir.items()) {
@@ -53,7 +64,7 @@ public class IncomingService {
                     lotDtos.add(new IncomingLot(l.lotId(), product, item.unit(), l.qty(),
                         "RECEIVED".equals(l.roundStep()) ? (l.receivedQty() != null ? l.receivedQty() : l.qty()) : null,
                         i + 1, remaining.signum() > 0 ? mine.size() + 1 : mine.size(), l.roundStep(),
-                        l.etaOn() != null ? l.etaOn() : ir.expectedArrivalTo(), l.roundLabel(), l.transportMode(),
+                        l.etaOn() != null ? l.etaOn() : expectedTo, l.roundLabel(), l.transportMode(),
                         l.vessel(), l.voyage(), l.port(), l.etdActualOn(), l.etaOn(), l.arrivedOn(),
                         l.customsReleasedOn(), l.contactedOn(), l.orderedOn(), l.pickedUpOn(), l.inTransitOn(),
                         l.awaitingCustomsOn(), l.receivedOn()));
@@ -66,13 +77,14 @@ public class IncomingService {
             BigDecimal ordered = oneUnit ? ir.items().stream().map(ImportRequestItemDto::qty).reduce(BigDecimal.ZERO, BigDecimal::add) : null;
             BigDecimal received = oneUnit ? lotDtos.stream().map(IncomingLot::receivedQty).filter(Objects::nonNull)
                 .reduce(BigDecimal.ZERO, BigDecimal::add) : null;
-            out.add(new IncomingIr(ir.id(), ir.docNumber(), ir.factoryName(), ir.importStep(), ir.expectedArrivalFrom(),
-                ir.expectedArrivalTo(), oneUnit ? ir.items().get(0).unit() : null, ordered, received, lotDtos, waiting));
+            out.add(new IncomingIr(ir.id(), ir.docNumber(), ir.factoryName(), ir.importStep(), expectedFrom,
+                expectedTo, oneUnit ? ir.items().get(0).unit() : null, ordered, received, lotDtos, waiting));
         }
         boolean allOne = !out.isEmpty() && out.stream().allMatch(i -> i.unit() != null)
             && out.stream().map(IncomingIr::unit).distinct().count() == 1;
-        String wantedBy = irs.stream().map(ImportRequestDto::requiredByNote).filter(n -> n != null && !n.isBlank())
-            .findFirst().orElse(null);
+        // the deal's own current note, not a snapshot an IR took when it was issued
+        String wantedBy = dealQueries.loadTicketSnapshot(ticketId).map(ImportRequestQueryRepository.TicketSnapshot::requiredByNote)
+            .filter(n -> !n.isBlank()).orElse(null);
         return new IncomingResponse(wantedBy, allOne ? out.get(0).unit() : null,
             allOne ? out.stream().map(IncomingIr::ordered).reduce(BigDecimal.ZERO, BigDecimal::add) : null,
             allOne ? out.stream().map(IncomingIr::received).reduce(BigDecimal.ZERO, BigDecimal::add) : null, out);

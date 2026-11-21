@@ -62,8 +62,9 @@ export function useNewOrderForm({ onDone, showToast, wide = false, enabled = tru
           {missing.length > 0 ? <small className={cn('text-center text-text-muted', !wide && 'sm:text-right')} data-testid="new-order-missing">ยังขาด: {missing.join(' · ')}</small> : null}
         </div>
   );
+  // a fieldset disables every field and line control while the order is on its way: an edit now would be wiped by the reset
   const body = (
-      <div className="flex flex-col gap-4">
+      <fieldset disabled={send.isPending} className="m-0 flex min-w-0 flex-col gap-4 border-0 p-0">
         <div className="flex flex-col gap-1">
           <span className="text-xs font-bold text-text-secondary" id="order-purpose">สั่งเพื่ออะไร *</span>
           <div className="flex flex-wrap gap-2" role="group" aria-labelledby="order-purpose">
@@ -119,7 +120,7 @@ export function useNewOrderForm({ onDone, showToast, wide = false, enabled = tru
           <ThaiDateInput id="order-wanted" className="min-h-11 text-base" min={bangkokTodayIso()} value={wantedBy} onChange={(e) => setWantedBy(e.target.value)} />
         </div>
         <p className="m-0 text-xs text-text-muted">กรอกให้ครบทุกช่องจึงส่งได้ · ไม่ต้องขออนุมัติ ไม่มีใบเสนอราคา ไม่มีขั้นตอนเงิน · ฝ่ายนำเข้ารวมไปกับรอบขนส่งถัดไปของโรงงานนี้</p>
-      </div>
+      </fieldset>
   );
   return { body, footer };
 }

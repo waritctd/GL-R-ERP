@@ -138,6 +138,16 @@ public class ImportRequestService {
         this.ticketService = ticketService;
         this.notifications = notifications;
         this.rounds = rounds;
+        // TicketService cannot hold this service (it is built with this one's dependency): it calls back through a hook
+        ticketService.wireImportReconciler(this::reconcileGoodsReceived);
+    }
+
+    /** A deal returning to ACTIVE (resumed or reopened): if every factory reached RECEIVED while it was paused and the
+     * goods-received rollup never ran, run it once now. Silent: no event for the rep, nothing replayed when it already ran. */
+    public void reconcileGoodsReceived(long ticketId, UserPrincipal actor) {
+        if (allFactoriesReceived(ticketId) && !tickets.hasReceivedGoods(ticketId)) {
+            ticketService.applyImportRequestRollup(ticketId, actor);
+        }
     }
 
     // ── PREVIEW (per-brand, unchanged by V184) ───────────────────────────────────────────────────
@@ -1137,6 +1147,11 @@ public class ImportRequestService {
                 "วันที่ของขั้นตอนต้องไม่ก่อนวันที่ออกใบขอซื้อครั้งแรก (" + existing.firstIssuedDate() + ")");
         }
         OptionalLong soleRound = lockSoleRound(id);
+        // RECEIVED needs the round's documents: an IR with no round, or on a portal round, gets there on the round page.
+        // Checked here, under the locks and after the role check; MIGRATED and BACKFILL rounds keep working.
+        if (ImportRequestStep.RECEIVED.equals(target) && (soleRound.isEmpty() || rounds.hasPortalRound(id))) {
+            throw new ApiException(HttpStatus.CONFLICT, "กรุณาเลื่อนไปถึงโกดังที่หน้ารอบขนส่ง");
+        }
         int rows = stored.advanceStep(id, existing.importStep(), target, eventDate,
             actor.id(), actor.name(), request.note());
         if (rows == 0) {
@@ -1151,15 +1166,6 @@ public class ImportRequestService {
         afterStepChanges(existing.ticketId(), List.of(new StepChange(existing, existing.importStep(), target)),
             actor, request.note());
         return withPageCount(requireStored(id));
-    }
-
-    /** The IR-level advance cannot reach RECEIVED for an IR with no round or on a portal round: that move needs the
-     * round's documents and goes through the round page. Called by the controller, so service-level callers (tests, the
-     * rounds themselves) are unaffected. MIGRATED and BACKFILL rounds keep working. */
-    public void requireReceivableThroughIr(long id, String targetStep) {
-        if (ImportRequestStep.RECEIVED.equals(targetStep) && (rounds.roundIdsOf(id).isEmpty() || rounds.hasPortalRound(id))) {
-            throw new ApiException(HttpStatus.CONFLICT, "กรุณาเลื่อนไปถึงโกดังที่หน้ารอบขนส่ง");
-        }
     }
 
     /** One bell (no email) to the deal's rep when a lot of theirs reaches ถึงโกดัง: which IR and how much. */
@@ -1321,7 +1327,7 @@ public class ImportRequestService {
             if (rounds.createdByAdvance(r)) {
                 rounds.deleteRound(r); // the advance made this round: undoing it returns the IR to waiting
             } else {
-                if (rounds.undoRound(r, expected, actor.id(), STEP_UNDO_WINDOW_SECONDS) == 0) {
+                if (rounds.undoRound(r, expected, actor.id(), rounds.advanceIdOf(r), STEP_UNDO_WINDOW_SECONDS) == 0) {
                     throw new ApiException(HttpStatus.CONFLICT, "ขั้นตอนถูกเปลี่ยนแปลงโดยผู้ใช้อื่น จึงเลิกทำไม่ได้");
                 }
             }
@@ -1343,6 +1349,10 @@ public class ImportRequestService {
     private OptionalLong lockSoleRound(long importRequestId) {
         List<Long> ids = rounds.roundIdsOf(importRequestId);
         rounds.lockRounds(ids);
+        if (ids.isEmpty()) {
+            // no round to lock: take the IR row, so a planner's lot that commits first is seen by the recheck below
+            rounds.lockImportRequests(List.of(), List.of(importRequestId));
+        }
         if (!ids.equals(rounds.roundIdsOf(importRequestId))) {
             throw new ApiException(HttpStatus.CONFLICT, "ขั้นตอนถูกเปลี่ยนแปลงโดยผู้ใช้อื่น หรือฉบับนี้ถูกแทนที่แล้ว");
         }
@@ -1385,8 +1395,25 @@ public class ImportRequestService {
         // really arrived (a short arrival carries over: summed when lots merge, capped at the new quantity).
         Map<Long, Map<Long, java.math.BigDecimal[]>> plan = new java.util.LinkedHashMap<>();
         if (whole) {
+            // A round that has left: what was shipped and what arrived stay as they were; an increase stays unplanned
+            // (waiting), a decrease below the lot is refused. Before departure the lot simply takes the revised quantity.
+            boolean left = ImportRequestStep.indexOf(rounds.stepOfRound(roundIds.get(0))) >= ImportRequestStep.indexOf(ImportRequestStep.IN_TRANSIT);
             for (var it : revision.items()) {
-                java.math.BigDecimal received = oldLotFor(lots, it).map(ShipmentRoundRepository.LotRow::receivedQty).orElse(null);
+                var old = oldLotFor(lots, it);
+                if (left) {
+                    if (old.isEmpty()) {
+                        continue;
+                    }
+                    var lot = old.get();
+                    if (it.qty().compareTo(lot.qty()) < 0) {
+                        throw new ApiException(HttpStatus.CONFLICT,
+                            "ฉบับแก้ไขลดจำนวนรายการที่ " + it.seq() + " ต่ำกว่าจำนวนที่จัดลงรอบขนส่งแล้ว กรุณาแก้ที่รอบขนส่งก่อน");
+                    }
+                    plan.computeIfAbsent(it.id(), k -> new java.util.LinkedHashMap<>()).put(roundIds.get(0),
+                        new java.math.BigDecimal[] {lot.qty(), lot.receivedQty()});
+                    continue;
+                }
+                java.math.BigDecimal received = old.map(ShipmentRoundRepository.LotRow::receivedQty).orElse(null);
                 plan.computeIfAbsent(it.id(), k -> new java.util.LinkedHashMap<>()).put(roundIds.get(0),
                     new java.math.BigDecimal[] {it.qty(), received == null ? it.qty() : received.min(it.qty())});
             }
@@ -1409,7 +1436,7 @@ public class ImportRequestService {
         }
         rounds.deleteLotsOf(oldId);
         plan.forEach((itemId, byRound) -> byRound.forEach((roundId, v) ->
-            rounds.insertLot(roundId, revision.id(), itemId, v[0], v[1].compareTo(v[0]) == 0 ? null : v[1])));
+            rounds.insertLot(roundId, revision.id(), itemId, v[0], v[1] == null || v[1].compareTo(v[0]) == 0 ? null : v[1])));
     }
 
     /** The predecessor's lot of the line a revised item stands for: same deal line, else same code and size. */
@@ -1995,6 +2022,11 @@ public class ImportRequestService {
         return rows.stream().map(this::withPageCount).toList();
     }
 
+    /** First issue date plus a lead-time bound; null when either is unset. */
+    static LocalDate expectedArrival(LocalDate firstIssued, Integer days) {
+        return firstIssued != null && days != null ? firstIssued.plusDays(days) : null;
+    }
+
     /** Fills the DTO's {@code pageCount}, which the repository leaves at 0 — layout is not its job. */
     private ImportRequestDto withPageCount(ImportRequestDto r) {
         int pages = ImportRequestRenderer.pagesRequired(ImportRequestFormAssembler.fromStored(r));
@@ -2008,10 +2040,8 @@ public class ImportRequestService {
         // which is re-stamped to "today" on every issue including a same-day correction. Anchoring
         // on issueDate would silently push a customer-facing arrival estimate out by however long a
         // typo revision took to raise; see V184's comment on first_issued_date for the full reasoning.
-        LocalDate expectedFrom = (r.firstIssuedDate() != null && r.leadTimeMinDays() != null)
-            ? r.firstIssuedDate().plusDays(r.leadTimeMinDays()) : null;
-        LocalDate expectedTo = (r.firstIssuedDate() != null && r.leadTimeMaxDays() != null)
-            ? r.firstIssuedDate().plusDays(r.leadTimeMaxDays()) : null;
+        LocalDate expectedFrom = expectedArrival(r.firstIssuedDate(), r.leadTimeMinDays());
+        LocalDate expectedTo = expectedArrival(r.firstIssuedDate(), r.leadTimeMaxDays());
         return new ImportRequestDto(r.id(), r.ticketId(), r.ticketCode(), r.brand(),
             r.factoryId(), r.factoryName(), r.version(),
             r.status(), r.docNumber(), r.issueDate(), r.firstIssuedDate(), r.customerName(), r.projectName(),

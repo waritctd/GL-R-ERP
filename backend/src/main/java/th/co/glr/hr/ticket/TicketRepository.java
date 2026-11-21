@@ -2713,10 +2713,12 @@ public class TicketRepository {
                                   WHERE l2.import_request_item_id = iri.import_request_item_id)), 0) AS lots
               FROM sales.import_request ir
               JOIN sales.import_request_item iri ON iri.import_request_id = ir.import_request_id
-             WHERE ir.ticket_id = :t AND ir.status = 'ISSUED' AND iri.ticket_item_id IS NOT NULL
+             WHERE ir.ticket_id = :t AND ir.status = 'ISSUED'
              GROUP BY iri.ticket_item_id
             """, Map.of("t", ticketId), rs -> {
-                byItem.put(rs.getLong("item_id"), new LineReceipt(rs.getBigDecimal("ir_qty"), rs.getBigDecimal("on_rounds")));
+                if (rs.getObject("item_id") != null) { // an unlinked line still counts toward dealHasLots
+                    byItem.put(rs.getLong("item_id"), new LineReceipt(rs.getBigDecimal("ir_qty"), rs.getBigDecimal("on_rounds")));
+                }
                 if (rs.getLong("lots") > 0) {
                     anyLots[0] = true;
                 }

@@ -6,8 +6,11 @@ import java.util.Map;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import th.co.glr.hr.auth.EmployeeAuthRepository;
 import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
+import th.co.glr.hr.common.ApiException;
+import org.springframework.http.HttpStatus;
 
 @RestController
 @RequestMapping("/api/factory-configs")
@@ -26,10 +29,12 @@ public class FactoryConfigController {
 
     private final FactoryConfigRepository repo;
     private final SessionContext sessions;
+    private final EmployeeAuthRepository employeeAuth;
 
-    public FactoryConfigController(FactoryConfigRepository repo, SessionContext sessions) {
+    public FactoryConfigController(FactoryConfigRepository repo, SessionContext sessions, EmployeeAuthRepository employeeAuth) {
         this.repo     = repo;
         this.sessions = sessions;
+        this.employeeAuth = employeeAuth;
     }
 
     @GetMapping
@@ -42,7 +47,10 @@ public class FactoryConfigController {
     @GetMapping("/names")
     Map<String, List<FactoryNameDto>> names(HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
-        sessions.requireAnyRole(user, NAME_READ_ROLES);
+        // plus whoever may raise a no-project order (the canCreateQuotation grant on any role): its form picks a factory here
+        if (!java.util.Arrays.asList(NAME_READ_ROLES).contains(user.role()) && !employeeAuth.canCreateQuotation(user.id())) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
+        }
         return Map.of("factories", repo.findAll().stream()
             .map(f -> new FactoryNameDto(f.id(), f.factoryName())).toList());
     }

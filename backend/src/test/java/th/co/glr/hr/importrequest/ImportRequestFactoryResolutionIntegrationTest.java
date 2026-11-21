@@ -120,6 +120,7 @@ class ImportRequestFactoryResolutionIntegrationTest extends AbstractPostgresInte
     // ── helpers ──────────────────────────────────────────────────────────────────────────────
 
     private void receiveAllSteps(long importRequestId) {
+        DraftSeed.migratedRound(jdbc, importRequestId); // receiving goes through a migrated round, never a portal one
         for (String step : List.of(ImportRequestStep.ORDERED, ImportRequestStep.PICKED_UP,
                 ImportRequestStep.IN_TRANSIT, ImportRequestStep.AWAITING_CUSTOMS, ImportRequestStep.RECEIVED)) {
             service.advanceStep(importRequestId, new AdvanceImportStepRequest(step, null, null), importUser);

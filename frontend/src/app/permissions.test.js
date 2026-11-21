@@ -494,6 +494,16 @@ describe('activity log access (admin capability)', () => {
       expect(locked('/activity-log', user('import', { admin: false }))).toBe(false);
     });
 
+    it('opens /my-orders, and only it, for a plain employee holding a no-project-order or showroom grant', async () => {
+      const locked = await lockedCanAccessPath();
+      for (const grant of [{ canCreateQuotation: true }, { canSeeShowroomOrders: true }]) {
+        const holder = user('employee', grant);
+        expect(locked('/my-orders', holder)).toBe(true);
+        expect(locked('/tickets', holder)).toBe(false);
+      }
+      expect(locked('/my-orders', user('employee'))).toBe(false);
+    });
+
     it('unlocks NOTHING else for that admin', async () => {
       // The narrow-exemption check. Being admin must open /activity-log and nothing more; if this goes
       // green for /tickets, the exemption has been widened into a full lockdown bypass (which adding

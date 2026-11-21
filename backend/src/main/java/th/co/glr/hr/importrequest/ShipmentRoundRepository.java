@@ -61,6 +61,17 @@ public class ShipmentRoundRepository {
             """, Map.of("r", roundId), Boolean.class));
     }
 
+    public String stepOfRound(long roundId) {
+        return jdbc.queryForObject("SELECT import_step FROM sales.shipment_round WHERE shipment_round_id = :r",
+            Map.of("r", roundId), String.class);
+    }
+
+    /** The id of the round's latest advance (null when none is undoable). */
+    public String advanceIdOf(long roundId) {
+        return jdbc.queryForObject("SELECT CAST(step_advance_id AS VARCHAR) FROM sales.shipment_round WHERE shipment_round_id = :r",
+            Map.of("r", roundId), String.class);
+    }
+
     public void deleteRound(long roundId) {
         jdbc.update("DELETE FROM sales.shipment_round WHERE shipment_round_id = :r", Map.of("r", roundId));
     }
@@ -152,7 +163,7 @@ public class ShipmentRoundRepository {
         jdbc.update("""
             UPDATE sales.shipment_round r
                SET step_undo_snapshot = to_jsonb(r) - 'step_undo_snapshot',
-                   step_undo_from = r.import_step, step_undo_by_id = :actor, step_advanced_at = now(),
+                   step_undo_from = r.import_step, step_undo_by_id = :actor, step_advanced_at = clock_timestamp(), step_advance_id = gen_random_uuid(),
                    import_step = :target,
                    contacted_on = CASE WHEN :target = 'CONTACTED' THEN :on ELSE contacted_on END,
                    ordered_on = CASE WHEN :target = 'ORDERED' THEN :on ELSE ordered_on END,
@@ -169,20 +180,21 @@ public class ShipmentRoundRepository {
 
     /** Restores the row from its snapshot when the advance is still the latest, by {@code actorId}, inside the
      * window (database clock). 0 rows = refused. */
-    public int undoRound(long roundId, String expectedStep, long actorId, int windowSeconds) {
+    public int undoRound(long roundId, String expectedStep, long actorId, String advanceId, int windowSeconds) {
         String sets = String.join(", ", java.util.Arrays.stream(STEP_COLUMNS.split(","))
             .map(String::trim).map(c -> c + " = x." + c).toList());
         return jdbc.update("""
             UPDATE sales.shipment_round r
                SET\s""" + sets + """
-                   , step_undo_from = NULL, step_undo_by_id = NULL, step_advanced_at = NULL,
+                   , step_undo_from = NULL, step_undo_by_id = NULL, step_advanced_at = NULL, step_advance_id = NULL,
                    step_undo_snapshot = NULL, updated_at = now()
               FROM jsonb_populate_record(NULL::sales.shipment_round,
                        (SELECT step_undo_snapshot FROM sales.shipment_round WHERE shipment_round_id = :r)) x
              WHERE r.shipment_round_id = :r AND r.step_undo_snapshot IS NOT NULL AND r.import_step = :expected
-               AND r.step_undo_by_id = :actor AND r.step_advanced_at >= now() - make_interval(secs => :w)
+               AND r.step_undo_by_id = :actor AND r.step_advance_id = CAST(:adv AS UUID)
+               AND r.step_advanced_at >= clock_timestamp() - make_interval(secs => :w)
             """, new MapSqlParameterSource("r", roundId).addValue("expected", expectedStep)
-                .addValue("actor", actorId).addValue("w", windowSeconds));
+                .addValue("actor", actorId).addValue("adv", advanceId).addValue("w", windowSeconds));
     }
 
     /** One lot with the line it sits on, for remapping onto a revision. */
@@ -254,7 +266,8 @@ public class ShipmentRoundRepository {
                         (Boolean) rs.getObject("complete_per_invoice"), rs.getString("complete_note"),
                         rs.getString("note")),
                     List.of(), List.of(), adv == null ? null : adv.toInstant(), (Long) rs.getObject("step_undo_by_id"),
-                    rs.getString("step_undo_from"));
+                    rs.getString("step_undo_from"),
+                    rs.getString("step_advance_id"));
             });
     }
 
@@ -276,7 +289,10 @@ public class ShipmentRoundRepository {
                      row_number() OVER (PARTITION BY l.import_request_item_id ORDER BY l.shipment_lot_id) AS lot_no,
                      count(*) OVER (PARTITION BY l.import_request_item_id) AS lots,
                      i.qty - sum(l.qty) OVER (PARTITION BY l.import_request_item_id) AS remaining, l.received_qty
-                FROM sales.shipment_lot l JOIN sales.import_request_item i USING (import_request_item_id))
+                FROM sales.shipment_lot l JOIN sales.import_request_item i USING (import_request_item_id)
+               -- windows run over ALL lots of an item, but only of the items on the requested rounds
+               WHERE l.import_request_item_id IN (SELECT import_request_item_id FROM sales.shipment_lot
+                                                   WHERE shipment_round_id IN (:ids)))
             SELECT x.*, r.doc_number, r.ticket_id, t.code AS ticket_code, t.customer_name, p.name AS project_name,
                    r.order_purpose, r.purpose_note,
                    NULLIF(TRIM(CONCAT_WS(' ', e.first_name_th, e.last_name_th)), '') AS requester_name
@@ -482,7 +498,8 @@ public class ShipmentRoundRepository {
 
     /** What an IR's derived step is made of: per line, its quantity and every lot with its round's step and date. */
     public record DerivedInput(long importRequestId, long itemId, BigDecimal itemQty, BigDecimal lotQty,
-                               String roundStep, LocalDate roundStepOn, Long stepById, String stepByName, String stepNote) {}
+                               String roundStep, LocalDate roundStepOn, Long stepById, String stepByName, String stepNote,
+                               Long roundId) {}
 
     public List<DerivedInput> derivedInputs(List<Long> importRequestIds) {
         return jdbc.query("""
@@ -490,7 +507,7 @@ public class ShipmentRoundRepository {
                    CASE r.import_step WHEN 'CONTACTED' THEN r.contacted_on WHEN 'ORDERED' THEN r.ordered_on
                         WHEN 'PICKED_UP' THEN r.picked_up_on WHEN 'IN_TRANSIT' THEN r.in_transit_on
                         WHEN 'AWAITING_CUSTOMS' THEN r.awaiting_customs_on WHEN 'RECEIVED' THEN r.received_on END AS step_on,
-                   r.step_by_id, r.step_by_name, r.step_note
+                   r.step_by_id, r.step_by_name, r.step_note, r.shipment_round_id
               FROM sales.import_request_item i
               LEFT JOIN sales.shipment_lot l ON l.import_request_item_id = i.import_request_item_id
               LEFT JOIN sales.shipment_round r ON r.shipment_round_id = l.shipment_round_id
@@ -498,7 +515,7 @@ public class ShipmentRoundRepository {
             """, Map.of("ids", importRequestIds), (rs, n) -> new DerivedInput(rs.getLong("import_request_id"),
                 rs.getLong("import_request_item_id"), rs.getBigDecimal("qty"), rs.getBigDecimal("lot_qty"),
                 rs.getString("import_step"), date(rs, "step_on"), (Long) rs.getObject("step_by_id"),
-                rs.getString("step_by_name"), rs.getString("step_note")));
+                rs.getString("step_by_name"), rs.getString("step_note"), (Long) rs.getObject("shipment_round_id")));
     }
 
     public boolean roundExists(long roundId) {
@@ -512,7 +529,7 @@ public class ShipmentRoundRepository {
     public void clearUndo(long roundId) {
         jdbc.update("""
             UPDATE sales.shipment_round
-               SET step_undo_from = NULL, step_undo_by_id = NULL, step_advanced_at = NULL, step_undo_snapshot = NULL
+               SET step_undo_from = NULL, step_undo_by_id = NULL, step_advanced_at = NULL, step_advance_id = NULL, step_undo_snapshot = NULL
              WHERE shipment_round_id = :r
             """, Map.of("r", roundId));
         jdbc.update("""
@@ -621,6 +638,7 @@ public class ShipmentRoundRepository {
                                    OR NULLIF(btrim(forwarder), '') IS NOT NULL OR NULLIF(btrim(container_nos), '') IS NOT NULL
                                    OR NULLIF(btrim(port), '') IS NOT NULL OR NULLIF(btrim(gr_number), '') IS NOT NULL
                                    OR NULLIF(btrim(note), '') IS NOT NULL
+                                   OR complete_per_invoice IS FALSE OR NULLIF(btrim(complete_note), '') IS NOT NULL
                                    OR goods_ready_on IS NOT NULL OR etd_planned_on IS NOT NULL OR etd_actual_on IS NOT NULL
                                    OR eta_on IS NOT NULL OR arrived_on IS NOT NULL OR customs_released_on IS NOT NULL))
             """, Map.of("r", roundId), Boolean.class));

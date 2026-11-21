@@ -106,6 +106,9 @@ public class ShipmentRoundService {
         ShipmentRoundDto round = lockRound(id);
         ShipmentFacts facts = request == null ? null : request.facts();
         validateFacts(facts);
+        if (ImportRequestStep.RECEIVED.equals(round.importStep())) {
+            requireNoteWhenIncomplete(facts); // the receive action's rule: a round marked incomplete keeps its note
+        }
         Map<Long, BigDecimal> receipts = request == null ? Map.of() : validateReceipts(id, request.lotReceipts());
         if (!receipts.isEmpty() && !ImportRequestStep.RECEIVED.equals(round.importStep())) {
             throw new ApiException(HttpStatus.CONFLICT, "แก้จำนวนที่ถึงโกดังได้เมื่อรอบถึงโกดังแล้วเท่านั้น");
@@ -202,6 +205,9 @@ public class ShipmentRoundService {
         if (round.undoFromStep() == null) {
             throw new ApiException(HttpStatus.CONFLICT, "ไม่มีการเลื่อนขั้นตอนให้เลิกทำ");
         }
+        if (request.advanceId() == null || !request.advanceId().equals(round.advanceId())) {
+            throw new ApiException(HttpStatus.CONFLICT, "การเลื่อนขั้นตอนนี้ถูกเปลี่ยนไปแล้ว จึงเลิกทำไม่ได้");
+        }
         if (!expected.equals(round.importStep())) {
             throw new ApiException(HttpStatus.CONFLICT, "ขั้นตอนถูกเปลี่ยนไปแล้ว จึงเลิกทำไม่ได้");
         }
@@ -218,7 +224,7 @@ public class ShipmentRoundService {
                 "เลยเวลาเลิกทำแล้ว (" + ImportRequestService.STEP_UNDO_WINDOW_SECONDS + " วินาที)");
         }
         rounds.deleteDocumentsCreatedByAdvance(id);
-        if (rounds.undoRound(id, expected, actor.id(), ImportRequestService.STEP_UNDO_WINDOW_SECONDS) == 0) {
+        if (rounds.undoRound(id, expected, actor.id(), round.advanceId(), ImportRequestService.STEP_UNDO_WINDOW_SECONDS) == 0) {
             throw new ApiException(HttpStatus.CONFLICT, "มีผู้อื่นเปลี่ยนขั้นตอนนี้ไปก่อน หรือเลยเวลาเลิกทำแล้ว จึงเลิกทำไม่ได้");
         }
         List<StepChange> changes = recomputeIrSteps(irs, actor, null);
@@ -247,7 +253,8 @@ public class ShipmentRoundService {
     @Transactional
     public ShipmentRoundDto createRound(CreateShipmentRoundRequest request, UserPrincipal actor) {
         requireWrite(actor);
-        if (request == null || request.factoryId() == null || request.lots() == null || request.lots().isEmpty()) {
+        if (request == null || request.factoryId() == null || request.lots() == null || request.lots().isEmpty()
+            || request.lots().stream().anyMatch(java.util.Objects::isNull)) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "เลือกโรงงานและใบขอซื้ออย่างน้อย 1 ใบ");
         }
         if (request.transportMode() != null && !TRANSPORT_MODES.contains(request.transportMode())) {
@@ -270,7 +277,7 @@ public class ShipmentRoundService {
         requireWrite(actor);
         ShipmentRoundDto round = lockRound(id);
         requireNotLeft(round);
-        if (request == null || request.lots() == null || request.lots().isEmpty()) {
+        if (request == null || request.lots() == null || request.lots().isEmpty() || request.lots().stream().anyMatch(java.util.Objects::isNull)) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "เลือกใบขอซื้ออย่างน้อย 1 ใบ");
         }
         List<IrLock> irs = rounds.lockImportRequests(List.of(id),
@@ -555,6 +562,11 @@ public class ShipmentRoundService {
         for (IrLock ir : irs) {
             ShipmentStepDerivation.Derived d = ShipmentStepDerivation.derive(ir, inputs.getOrDefault(ir.id(), List.of()));
             if (d.step().equals(ir.importStep())) {
+                // same step from another round (regrouped): the date and operator follow it, with no step-change event
+                if (d.byName() != null && (!java.util.Objects.equals(d.at(), ir.importStepAt())
+                    || !java.util.Objects.equals(d.byId(), ir.importStepById()))) {
+                    stored.setDerivedStep(ir.id(), d.step(), d.at(), d.byId(), d.byName(), d.note());
+                }
                 continue;
             }
             ImportRequestDtos.ImportRequestDto before = irService.requireStored(ir.id());
@@ -675,6 +687,9 @@ public class ShipmentRoundService {
 
     /** The step date may not predate the first issue of any IR on the round. */
     private static void requireNotBeforeFirstIssue(LocalDate date, List<IrLock> irs) {
+        if (date == null) {
+            return;
+        }
         for (IrLock ir : irs) {
             if (ir.firstIssuedDate() != null && date.isBefore(ir.firstIssuedDate())) {
                 throw new ApiException(HttpStatus.BAD_REQUEST, "วันที่ของขั้นตอนต้องไม่ก่อนวันที่ออกใบขอซื้อ "
@@ -775,6 +790,6 @@ public class ShipmentRoundService {
             r.stepByName(), r.stepNote(), r.facts(), lots.getOrDefault(r.id(), List.of()),
             documents ? docMap.getOrDefault(r.id(), List.of()) : List.of(),
             r.undoUntil() == null ? null : r.undoUntil().plusSeconds(ImportRequestService.STEP_UNDO_WINDOW_SECONDS),
-            r.undoById(), r.undoFromStep())).toList();
+            r.undoById(), r.undoFromStep(), r.advanceId())).toList();
     }
 }

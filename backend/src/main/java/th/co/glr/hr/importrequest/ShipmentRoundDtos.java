@@ -35,7 +35,7 @@ public final class ShipmentRoundDtos {
                            LocalDate contactedOn, LocalDate orderedOn, LocalDate pickedUpOn, LocalDate inTransitOn,
                            LocalDate awaitingCustomsOn, LocalDate receivedOn, String stepByName, String stepNote,
                            ShipmentFacts facts, List<ShipmentLotDto> lots, List<ShipmentDocumentDto> documents, Instant undoUntil,
-                           Long undoById, String undoFromStep) {}
+                           Long undoById, String undoFromStep, String advanceId) {}
 
     /** An ISSUED IR with quantity on no round. */
     public record ShipmentWaitingLine(long itemId, String code, String brand, String model, String size, String unit,
@@ -85,5 +85,5 @@ public final class ShipmentRoundDtos {
 
     public record MoveLotRequest(Long toRoundId) {}
 
-    public record UndoShipmentRoundRequest(String expectedStep) {}
+    public record UndoShipmentRoundRequest(String expectedStep, String advanceId) {}
 }

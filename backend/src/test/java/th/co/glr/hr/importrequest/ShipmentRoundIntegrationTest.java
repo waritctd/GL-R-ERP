@@ -82,12 +82,13 @@ class ShipmentRoundIntegrationTest extends AbstractPostgresIntegrationTest {
             new th.co.glr.hr.customer.ContactRepository(jdbc), new th.co.glr.hr.customer.ProjectRepository(jdbc),
             new th.co.glr.hr.dealquotation.DealQuotationRepository(jdbc, new th.co.glr.hr.catalog.CatalogRepository(jdbc)));
         ShipmentRoundRepository roundRepo = new ShipmentRoundRepository(jdbc);
-        irService = new ImportRequestService(new ImportRequestQueryRepository(jdbc),
+        // through the transactional proxy, as in production: a failure after a write rolls the whole call back
+        irService = transactional(new ImportRequestService(new ImportRequestQueryRepository(jdbc),
             new ImportRequestRenderer(), stored, new FactoryConfigRepository(jdbc), tickets, ticketService,
-            notifications, roundRepo);
-        rounds = new ShipmentRoundService(roundRepo, stored, irService, tickets, files);
-        incoming = new IncomingService(ticketService, stored, roundRepo);
-        noProject = new NoProjectOrderService(stored, new FactoryConfigRepository(jdbc), notifications, new EmployeeAuthRepository(jdbc));
+            notifications, roundRepo));
+        rounds = transactional(new ShipmentRoundService(roundRepo, stored, irService, tickets, files));
+        incoming = new IncomingService(ticketService, stored, roundRepo, new ImportRequestQueryRepository(jdbc));
+        noProject = transactional(new NoProjectOrderService(stored, new FactoryConfigRepository(jdbc), notifications, new EmployeeAuthRepository(jdbc)));
         myIncoming = new MyIncomingService(roundRepo, new EmployeeAuthRepository(jdbc));
 
         long ownerId = employee("RND-OWN");
@@ -124,7 +125,11 @@ class ShipmentRoundIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(irStep(irB)).isEqualTo(ImportRequestStep.ORDERED);
         assertThat(after.undoUntil()).isNotNull();
 
-        ShipmentRoundDto undone = rounds.undo(round, new UndoShipmentRoundRequest(ImportRequestStep.ORDERED), importUser);
+        // an undo quoting another advance (a delayed retry of an earlier one) hits nothing
+        assertRefused(() -> rounds.undo(round, new UndoShipmentRoundRequest(ImportRequestStep.ORDERED, "00000000-0000-0000-0000-000000000000"), importUser),
+            HttpStatus.CONFLICT);
+        assertThat(rounds.get(round, importUser).importStep()).isEqualTo(ImportRequestStep.ORDERED);
+        ShipmentRoundDto undone = rounds.undo(round, new UndoShipmentRoundRequest(ImportRequestStep.ORDERED, after.advanceId()), importUser);
 
         assertThat(undone.importStep()).isEqualTo(ImportRequestStep.CONTACTED);
         assertThat(undone.facts().vessel()).isNull();
@@ -132,7 +137,7 @@ class ShipmentRoundIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(undone.orderedOn()).isNull();
         assertThat(irStep(irA)).isEqualTo(ImportRequestStep.CONTACTED);
         assertThat(irStep(irB)).isEqualTo(ImportRequestStep.CONTACTED);
-        assertRefused(() -> rounds.undo(round, new UndoShipmentRoundRequest(ImportRequestStep.ORDERED), importUser), HttpStatus.CONFLICT);
+        assertRefused(() -> rounds.undo(round, new UndoShipmentRoundRequest(ImportRequestStep.ORDERED, after.advanceId()), importUser), HttpStatus.CONFLICT);
     }
 
     @Test
@@ -198,16 +203,16 @@ class ShipmentRoundIntegrationTest extends AbstractPostgresIntegrationTest {
         lot(round, irA, 40);
         rounds.advance(round, new AdvanceShipmentRoundRequest(ImportRequestStep.ORDERED, null,
             ImportRequestStep.CONTACTED, "first note", null, null), importUser);
-        rounds.advance(round, advanceTo(ImportRequestStep.ORDERED, ImportRequestStep.PICKED_UP), ceoUser);
-        rounds.undo(round, new UndoShipmentRoundRequest(ImportRequestStep.PICKED_UP), ceoUser);
+        ShipmentRoundDto picked = rounds.advance(round, advanceTo(ImportRequestStep.ORDERED, ImportRequestStep.PICKED_UP), ceoUser);
+        rounds.undo(round, new UndoShipmentRoundRequest(ImportRequestStep.PICKED_UP, picked.advanceId()), ceoUser);
         Map<String, Object> ir = jdbc.queryForMap(
             "SELECT import_step, import_step_by_name, import_step_note FROM sales.import_request WHERE import_request_id = :id", Map.of("id", irA));
         assertThat(ir).containsEntry("import_step", ImportRequestStep.ORDERED).containsEntry("import_step_note", "first note");
         assertThat(ir.get("import_step_by_name")).isEqualTo(rounds.get(round, importUser).stepByName());
 
-        rounds.advance(round, advanceTo(ImportRequestStep.ORDERED, ImportRequestStep.IN_TRANSIT), ceoUser);
+        ShipmentRoundDto left = rounds.advance(round, advanceTo(ImportRequestStep.ORDERED, ImportRequestStep.IN_TRANSIT), ceoUser);
         rounds.updateFacts(round, new UpdateShipmentRoundRequest(new ShipmentFacts("รอบ ทดสอบ", null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null), Map.of()), ceoUser);
-        assertRefused(() -> rounds.undo(round, new UndoShipmentRoundRequest(ImportRequestStep.IN_TRANSIT), ceoUser), HttpStatus.CONFLICT);
+        assertRefused(() -> rounds.undo(round, new UndoShipmentRoundRequest(ImportRequestStep.IN_TRANSIT, left.advanceId()), ceoUser), HttpStatus.CONFLICT);
         assertThat(rounds.get(round, ceoUser).importStep()).isEqualTo(ImportRequestStep.IN_TRANSIT);
         assertRefused(() -> rounds.advance(round, new AdvanceShipmentRoundRequest(ImportRequestStep.RECEIVED, null, null, null, null, null), ceoUser),
             HttpStatus.BAD_REQUEST);
@@ -259,15 +264,16 @@ class ShipmentRoundIntegrationTest extends AbstractPostgresIntegrationTest {
 
     @Test
     void theIrLevelAdvanceCannotReceiveOnAPortalOrMissingRound_andAReceivedPortalRoundKeepsItsNumbers() {
-        assertRefused(() -> irService.requireReceivableThroughIr(irA, ImportRequestStep.RECEIVED), HttpStatus.CONFLICT); // no round
+        // the gate lives in advanceStep, under the locks: no round, or a portal round, cannot be received from the IR page
+        assertRefused(() -> irStepTo(irA, ImportRequestStep.RECEIVED), HttpStatus.CONFLICT); // no round
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM sales.shipment_round", Map.of(), Integer.class)).isZero(); // and nothing was created
         long migrated = round("CONTACTED");
         lot(migrated, irB, 40);
-        irService.requireReceivableThroughIr(irB, ImportRequestStep.RECEIVED); // an exempt round is fine
-        irService.requireReceivableThroughIr(irA, ImportRequestStep.ORDERED); // only RECEIVED is gated
+        irStepTo(irB, ImportRequestStep.RECEIVED); // an exempt round is fine
 
         long portal = round("CONTACTED", "PORTAL");
         lot(portal, irA, 40);
-        assertRefused(() -> irService.requireReceivableThroughIr(irA, ImportRequestStep.RECEIVED), HttpStatus.CONFLICT);
+        assertRefused(() -> irStepTo(irA, ImportRequestStep.RECEIVED), HttpStatus.CONFLICT);
         rounds.advance(portal, new AdvanceShipmentRoundRequest(ImportRequestStep.RECEIVED, null, ImportRequestStep.CONTACTED, null,
             null, List.of(new DocumentInput("PROFORMA", "PI-TEST-1"), new DocumentInput("INVOICE", "INV-TEST-1"))), importUser);
         long invoice = rounds.get(portal, importUser).documents().stream().filter(d -> d.kind().equals("INVOICE")).findFirst().orElseThrow().id();
@@ -578,6 +584,85 @@ class ShipmentRoundIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     @Test
+    void theWarehouseCapCountsStockOnlyOnceTheDepositIsSettled_andALineWithNoReceiptRowHasNothingImportedYet() {
+        // A: 20 of the line come from stock, 10 of the IR's 40 arrived. Deposit not settled: stock does not count.
+        jdbc.update("UPDATE sales.ticket_item SET qty_from_stock = 20 WHERE ticket_id = :t", Map.of("t", ticketA));
+        jdbc.update("UPDATE sales.ticket SET payment_status = 'DEPOSIT_NOTICE_ISSUED' WHERE ticket_id = :t", Map.of("t", ticketA));
+        long r1 = round("RECEIVED");
+        lot(r1, irA, 10);
+        assertRefused(() -> deliverFromWarehouse(ticketA, "6"), HttpStatus.CONFLICT); // imported part: 20 * 10 / 40 = 5
+        deliverFromWarehouse(ticketA, "5");
+        jdbc.update("UPDATE sales.ticket SET payment_status = 'DEPOSIT_PAID' WHERE ticket_id = :t", Map.of("t", ticketA));
+        deliverFromWarehouse(ticketA, "20"); // settled: 20 stock + 5 imported = 25 in all
+        assertRefused(() -> deliverFromWarehouse(ticketA, "1"), HttpStatus.CONFLICT);
+
+        // B: a second line no IR line points at, while the first line's lot is in: nothing of it arrived
+        jdbc.update("INSERT INTO sales.ticket_item (ticket_id, brand, model, size, qty, unit, sort_order, factory)"
+            + " VALUES (:t, 'Other Factory', 'Kaze', '30x30', 10, 'pcs', 1, 'Other Factory')", Map.of("t", ticketB));
+        long second = jdbc.queryForObject("SELECT item_id FROM sales.ticket_item WHERE ticket_id = :t AND sort_order = 1", Map.of("t", ticketB), Long.class);
+        long r2 = round("RECEIVED");
+        lot(r2, irB, 40);
+        assertRefused(() -> deliverItemFromWarehouse(ticketB, second, "5"), HttpStatus.CONFLICT);
+        ticketRepo.addEvent(ticketB, owner.id(), owner.name(), th.co.glr.hr.ticket.TicketEventKind.GOODS_RECEIVED, null, null, null);
+        deliverItemFromWarehouse(ticketB, second, "5"); // the goods-received event: a line with no received lot is not capped
+    }
+
+    @Test
+    void aRevisionAfterDepartureKeepsWhatShippedAndLeavesTheIncreaseWaiting_aDecreaseBelowTheLotIsRefused() {
+        long left = round("IN_TRANSIT");
+        lot(left, irA, 40);
+
+        long tooLow = irService.revise(irA, owner).id();
+        jdbc.update("UPDATE sales.import_request_item SET qty = 30 WHERE import_request_id = :id", Map.of("id", tooLow));
+        assertRefused(() -> irService.issue(tooLow, null, owner), HttpStatus.CONFLICT);
+        jdbc.update("DELETE FROM sales.import_request WHERE import_request_id = :id", Map.of("id", tooLow));
+
+        long revision = irService.revise(irA, owner).id();
+        jdbc.update("UPDATE sales.import_request_item SET qty = 50 WHERE import_request_id = :id", Map.of("id", revision));
+        irService.issue(revision, null, owner);
+
+        assertThat(jdbc.queryForObject("SELECT qty FROM sales.shipment_lot WHERE import_request_id = :id", Map.of("id", revision), BigDecimal.class))
+            .isEqualByComparingTo("40"); // what shipped stays; the 10 more are unplanned
+        assertThat(jdbc.queryForObject("SELECT received_qty FROM sales.shipment_lot WHERE import_request_id = :id", Map.of("id", revision), BigDecimal.class))
+            .isNull(); // in transit: nothing received, and none is invented
+        assertThat(irStep(revision)).isEqualTo(ImportRequestStep.CONTACTED);
+        assertThat(incoming.incoming(ticketA, owner).irs().get(0).waiting().get(0).remainingQty()).isEqualByComparingTo("10");
+    }
+
+    @Test
+    void anIrCanJoinARoundOrderedBeforeItWasIssued_itsDateIsClampedToFirstIssue_theRoundKeepsItsOwn() {
+        LocalDate before = LocalDate.now(java.time.ZoneId.of("Asia/Bangkok")).minusDays(2);
+        long r = round("ORDERED");
+        lot(r, irB, 40); // a round with no lot is not a round yet
+        jdbc.update("UPDATE sales.shipment_round SET ordered_on = :d WHERE shipment_round_id = :r", Map.of("d", before, "r", r));
+
+        rounds.addLots(r, new AddLotsRequest(List.of(new LotInput(irA, itemOf(irA), new BigDecimal("40")))), importUser);
+
+        assertThat(irStep(irA)).isEqualTo(ImportRequestStep.ORDERED);
+        assertThat(jdbc.queryForObject("SELECT import_step_at FROM sales.import_request WHERE import_request_id = :id", Map.of("id", irA), LocalDate.class))
+            .isEqualTo(jdbc.queryForObject("SELECT first_issued_date FROM sales.import_request WHERE import_request_id = :id", Map.of("id", irA), LocalDate.class));
+        assertThat(rounds.get(r, importUser).orderedOn()).isEqualTo(before);
+    }
+
+    @Test
+    void aDealResumedAfterItsLastLotArrivedWhilePausedCatchesUpOnce() {
+        jdbc.update("UPDATE sales.ticket SET lifecycle = 'ON_HOLD' WHERE ticket_id = :t", Map.of("t", ticketA));
+        long r = round("ORDERED");
+        lot(r, irA, 40);
+        rounds.advance(r, advanceTo(ImportRequestStep.ORDERED, ImportRequestStep.RECEIVED), importUser);
+        assertThat(ticketRepo.hasReceivedGoods(ticketA)).isFalse(); // paused: no rollup
+
+        ticketService.resume(ticketA, null, owner);
+        assertThat(ticketRepo.hasReceivedGoods(ticketA)).isTrue();
+        assertThat(jdbc.queryForObject("SELECT fulfillment_status FROM sales.ticket WHERE ticket_id = :t", Map.of("t", ticketA), String.class))
+            .isEqualTo("GOODS_RECEIVED");
+        jdbc.update("UPDATE sales.ticket SET lifecycle = 'ON_HOLD' WHERE ticket_id = :t", Map.of("t", ticketA));
+        ticketService.resume(ticketA, null, owner); // already rolled up: nothing replayed
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM sales.ticket_event WHERE ticket_id = :t AND kind = 'GOODS_RECEIVED'",
+            Map.of("t", ticketA), Integer.class)).isEqualTo(1);
+    }
+
+    @Test
     void factoryDocumentsReachImportAndTheCeoOnly() {
         long r = round("CONTACTED");
         lot(r, irA, 40);
@@ -590,6 +675,10 @@ class ShipmentRoundIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     // ── fixtures ────────────────────────────────────────────────────────────────────────────────────────
+
+    private void irStepTo(long ir, String step) {
+        irService.advanceStep(ir, new ImportRequestRequests.AdvanceImportStepRequest(step, null, null), importUser);
+    }
 
     private static AdvanceShipmentRoundRequest advanceTo(String from, String to) {
         return new AdvanceShipmentRoundRequest(to, null, from, null, null, null);
@@ -636,7 +725,11 @@ class ShipmentRoundIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     private void deliverFromWarehouse(long ticket, String qty) {
-        long item = jdbc.queryForObject("SELECT item_id FROM sales.ticket_item WHERE ticket_id = :t", Map.of("t", ticket), Long.class);
+        long item = jdbc.queryForObject("SELECT item_id FROM sales.ticket_item WHERE ticket_id = :t ORDER BY sort_order LIMIT 1", Map.of("t", ticket), Long.class);
+        deliverItemFromWarehouse(ticket, item, qty);
+    }
+
+    private void deliverItemFromWarehouse(long ticket, long item, String qty) {
         ticketService.recordPartialDelivery(ticket, new RecordDeliveryRequest("WAREHOUSE", null,
             List.of(new RecordDeliveryRequest.Line(item, new BigDecimal(qty))), null, null, null, "ทดสอบส่งก่อนมีใบกำกับ"), owner);
     }

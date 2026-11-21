@@ -236,8 +236,14 @@ class StoredImportRequestIntegrationTest extends AbstractPostgresIntegrationTest
         assertThat(jdbc.queryForObject("""
             SELECT count(DISTINCT l.shipment_round_id) FROM sales.shipment_lot l
               JOIN sales.import_request_item i USING (import_request_item_id)
-             WHERE l.import_request_id = :id AND l.qty = i.qty""",
+             WHERE l.import_request_id = :id""",
             Map.of("id", v2.id()), Integer.class)).isEqualTo(1);
+        // every replacement lot carries its whole item quantity
+        assertThat(jdbc.queryForObject("""
+            SELECT count(*) FROM sales.shipment_lot l
+              JOIN sales.import_request_item i USING (import_request_item_id)
+             WHERE l.import_request_id = :id AND l.qty <> i.qty""",
+            Map.of("id", v2.id()), Integer.class)).isZero();
         assertThat(jdbc.queryForObject("SELECT count(*) FROM sales.shipment_lot WHERE import_request_id = :id",
             Map.of("id", v2.id()), Integer.class)).isEqualTo(2);
 
@@ -251,6 +257,7 @@ class StoredImportRequestIntegrationTest extends AbstractPostgresIntegrationTest
     void revise_isRefusedOnceThePredecessorHasReceivedTheGoods() {
         long v1 = byFactory(DraftSeed.seed(jdbc, ticketId, owner), padanaFactoryId).id();
         service.issue(v1, null, owner);
+        DraftSeed.migratedRound(jdbc, v1);
         for (String step : List.of(ImportRequestStep.ORDERED, ImportRequestStep.PICKED_UP,
                 ImportRequestStep.IN_TRANSIT, ImportRequestStep.AWAITING_CUSTOMS, ImportRequestStep.RECEIVED)) {
             service.advanceStep(v1, new AdvanceImportStepRequest(step, null, null), importUser);

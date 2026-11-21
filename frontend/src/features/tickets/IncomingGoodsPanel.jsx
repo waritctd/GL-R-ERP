@@ -88,6 +88,17 @@ export function IncomingGoodsPanel({ ticketId, canMessage = false, showToast }) 
     retry: false,
   });
   const data = query.data;
+  // a failed read must not look like a deal with no issued IR (a 403 is "not for you": nothing to show)
+  if (query.isError && query.error?.status !== 403) {
+    return (
+      <Panel title="ของกำลังมา" data-testid="incoming-error">
+        <p className="m-0 flex flex-wrap items-center gap-3 text-sm text-danger-dark">
+          โหลดข้อมูลของกำลังมาไม่สำเร็จ
+          <Button type="button" size="sm" variant="secondary" onClick={() => query.refetch()}>ลองอีกครั้ง</Button>
+        </p>
+      </Panel>
+    );
+  }
   if (!data || data.irs.length === 0) return null;
 
   const columns = (ir) => [

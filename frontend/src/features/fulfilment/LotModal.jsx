@@ -15,7 +15,9 @@ export function LotModal({ round, lot, targets, onClose, showToast }) {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const [qty, setQty] = useState(String(lot.qty));
-  const [to, setTo] = useState(targets[0]?.id ?? '');
+  const [picked, setPicked] = useState('');
+  // targets may arrive after the modal opens: fall back to the first one until the user picks a valid one
+  const to = targets.some((t) => String(t.id) === String(picked)) ? picked : (targets[0]?.id ?? '');
   const finish = (data, message, targetRoundId) => {
     // The emptied source round was deleted: drop its query (a refetch would 404) before refreshing the rest.
     if (data?.round == null) queryClient.removeQueries({ queryKey: queryKeys.shipmentRound(round.id) });
@@ -57,7 +59,7 @@ export function LotModal({ round, lot, targets, onClose, showToast }) {
         {targets.length > 0 ? (
           <div className="flex flex-col gap-2">
             <label htmlFor="lot-move" className="text-xs font-bold text-text-secondary">ย้ายไปรอบอื่นของโรงงานนี้ (เช่น ตกเรือ / ตกตู้)</label>
-            <select id="lot-move" className="min-h-11 w-full text-base" value={to} onChange={(e) => setTo(e.target.value)}>
+            <select id="lot-move" className="min-h-11 w-full text-base" value={to} onChange={(e) => setPicked(e.target.value)}>
               {targets.map((t) => <option key={t.id} value={t.id}>{roundTitle(t)} · #{t.id} · {stepLabel(t.importStep)}</option>)}
             </select>
             {moveRewinds ? <small className="text-text-muted">รอบปลายทางอยู่ขั้น “{stepLabel(target.importStep)}” ใบขอซื้อนี้จะย้อนไปขั้นนั้น</small> : null}

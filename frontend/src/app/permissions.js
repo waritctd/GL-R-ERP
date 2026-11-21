@@ -322,6 +322,11 @@ export function isReaderPath(path) {
   return READER_PATH_PREFIXES.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`));
 }
 
+// /my-orders for a plain employee holding the no-project-order or showroom grant, which the page's own guard admits.
+export function isMyOrdersGrantUser(user) {
+  return Boolean(user?.canCreateQuotation || user?.canSeeShowroomOrders);
+}
+
 // Per-path lock exemptions: each opens exactly one path family for the holder of one capability, never a role.
 // (A team head is not hr/ceo, so the lock would otherwise hide their one page.)
 const LOCK_EXEMPTIONS = [
@@ -332,6 +337,8 @@ const LOCK_EXEMPTIONS = [
   { test: (p) => p === '/people-insights', can: (u) => Boolean(u.canViewPeopleInsights) },
   // v2.3.0 read-all grant: exactly the oversight reader's read pages, one capability, never a role. Not /finance/receipts-import (account only), not /commissions.
   { test: isReaderPath, can: (u) => isOversightReader(u) },
+  // The grants that open ของที่ฉันสั่ง (no-project orders, showroom orders): this one path, no reader pages.
+  { test: (p) => p.split(/[?#]/)[0] === '/my-orders', can: isMyOrdersGrantUser },
 ];
 
 export function canAccessPath(path, user) {

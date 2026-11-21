@@ -42,6 +42,8 @@ CREATE TABLE sales.shipment_round (
     step_undo_from       VARCHAR(20),
     step_undo_by_id      BIGINT,
     step_advanced_at     TIMESTAMPTZ,
+    -- Names the latest advance: an undo must quote it, so a delayed retry of an earlier undo cannot hit a later advance.
+    step_advance_id      UUID,
     -- The row's step, dates, by/note and facts as they were before the latest advance, so the 30-second undo restores
     -- exactly what that advance wrote.
     step_undo_snapshot   JSONB,

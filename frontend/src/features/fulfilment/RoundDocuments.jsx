@@ -22,11 +22,13 @@ function DocumentModal({ round, doc, onClose, showToast }) {
   const save = useMutation({
     mutationFn: async () => {
       if (!doc) return api.shipmentRounds.addDocument(round.id, { kind, docNo: docNo.trim(), docDate, note: note.trim(), file });
-      await api.shipmentRounds.updateDocument(round.id, doc.id, { kind, docNo: docNo.trim() || null, docDate: docDate || null, note: note.trim() || null });
-      return file ? api.shipmentRounds.attachFile(round.id, doc.id, file) : null;
+      // File first: clearing the number of a number-only document is refused unless the document already has a file.
+      if (file) await api.shipmentRounds.attachFile(round.id, doc.id, file);
+      return api.shipmentRounds.updateDocument(round.id, doc.id, { kind, docNo: docNo.trim() || null, docDate: docDate || null, note: note.trim() || null });
     },
     onSuccess: () => done(doc ? 'บันทึกเอกสารแล้ว' : 'เพิ่มเอกสารแล้ว'),
-    onError: fail,
+    // the file may be stored even when the metadata save failed: refresh, keep the modal (and the chosen file) for a retry
+    onError: (e) => { invalidateAfterRoundChange(queryClient, round); fail(e); },
   });
   const remove = useMutation({
     mutationFn: () => api.shipmentRounds.deleteDocument(round.id, doc.id),

@@ -17,7 +17,9 @@ export function invalidateAfterRoundChange(queryClient, round) {
     queryClient.invalidateQueries({ queryKey: queryKeys.storedImportRequests(lot.ticketId) });
     queryClient.invalidateQueries({ queryKey: queryKeys.importDeal(lot.ticketId) });
     queryClient.invalidateQueries({ queryKey: queryKeys.ticketDetail(lot.ticketId) });
+    if (lot.ticketId != null) queryClient.invalidateQueries({ queryKey: queryKeys.ticketIncoming(lot.ticketId) });
   });
+  queryClient.invalidateQueries({ queryKey: queryKeys.myIncoming() });
   queryClient.invalidateQueries({ queryKey: ['tickets', 'list'] });
   queryClient.invalidateQueries({ queryKey: queryKeys.dashboardSummary() });
   queryClient.invalidateQueries({ queryKey: queryKeys.notifications() });
@@ -38,14 +40,15 @@ export function useRoundUndo({ showToast }) {
   }, [undo]);
 
   const undoMutation = useMutation({
-    mutationFn: ({ round }) => api.shipmentRounds.undo(round.id, { expectedStep: round.importStep }),
-    onSuccess: (_d, { round }) => {
+    mutationFn: ({ round }) => api.shipmentRounds.undo(round.id, { expectedStep: round.importStep, advanceId: round.advanceId }),
+    // clear only the offer this undo belongs to: another round's newer offer may be showing by now
+    onSuccess: (_d, { round, key }) => {
       invalidateAfterRoundChange(queryClient, round);
-      setUndo(null);
+      setUndo((cur) => (cur?.key === key ? null : cur));
       showToast?.('success', 'เลิกทำการเลื่อนขั้นตอนแล้ว');
     },
-    onError: (e) => {
-      setUndo(null);
+    onError: (e, { key }) => {
+      setUndo((cur) => (cur?.key === key ? null : cur));
       showToast?.('error', e?.message ?? 'เลิกทำไม่สำเร็จ');
     },
   });
@@ -63,7 +66,7 @@ export function useRoundUndo({ showToast }) {
       });
     },
     snackbar: undo ? (
-      <StepUndoSnackbar undo={undo} busy={undoMutation.isPending} onUndo={() => undoMutation.mutate({ round: undo.round })} />
+      <StepUndoSnackbar undo={undo} busy={undoMutation.isPending} onUndo={() => undoMutation.mutate({ round: undo.round, key: undo.key })} />
     ) : null,
   };
 }

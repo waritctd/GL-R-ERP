@@ -24,8 +24,8 @@ import th.co.glr.hr.importrequest.ShipmentRoundRepository.TicketLot;
 /**
  * ของที่ฉันสั่ง: ONE page for all of a rep's incoming goods, every lot and every unplanned quantity of (a) the IRs on the
  * deals they own or keyed (the deal list's own scope; the sales manager, the CEO and read-all holders see every deal) and
- * (b) their own no-project orders (the sales manager and CEO see the team's; the showroom grant reads every SHOWROOM
- * order). Goods that reached the warehouse more than 30 days ago drop off. No price, no factory document.
+ * (b) their own no-project orders (the sales manager and CEO see the team's, and read-all holders read them too, read-only: they cannot withdraw; the
+ * showroom grant reads every SHOWROOM order). Goods that reached the warehouse more than 30 days ago drop off. No price, no factory document.
  */
 @Service
 public class MyIncomingService {
@@ -57,10 +57,13 @@ public class MyIncomingService {
         // lots of one line, in order, to number them and find what is still on no round
         Map<Long, List<MyLine>> byItem = new LinkedHashMap<>();
         lines.forEach(l -> byItem.computeIfAbsent(l.itemId(), k -> new ArrayList<>()).add(l));
+        // IRs with any lot at all (old received ones included: hiding them below must not make an order withdrawable)
+        java.util.Set<Long> irsWithLots = lines.stream().filter(l -> l.lot() != null).map(MyLine::importRequestId)
+            .collect(java.util.stream.Collectors.toSet());
         List<MyIncomingRow> rows = new ArrayList<>();
         for (List<MyLine> item : byItem.values()) {
             MyLine first = item.get(0);
-            boolean noLots = lines.stream().noneMatch(l -> l.importRequestId() == first.importRequestId() && l.lot() != null);
+            boolean noLots = !irsWithLots.contains(first.importRequestId());
             boolean canWithdraw = first.ticketId() == null && noLots
                 && (actor.id() == (first.requesterId() == null ? -1L : first.requesterId()) || manager && "ceo".equals(role));
             List<MyLine> withLot = item.stream().filter(l -> l.lot() != null).toList();

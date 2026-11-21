@@ -2149,7 +2149,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
             // fulfilment jump target.
             <div id="deal-fulfilment-panel" tabIndex={-1} className="mobile:scroll-mt-[420px] outline-none">
               {sections.delivery && canViewDealTracking ? (
-                <div className="mb-4"><IncomingGoodsPanel ticketId={ticketId} canMessage={['sales', 'ceo'].includes(role)} showToast={showToast} /></div>
+                <div className="mb-4"><IncomingGoodsPanel ticketId={ticketId} canMessage={role === 'ceo' || (role === 'sales' && isSalesOwner(ticket?.summary, user))} showToast={showToast} /></div>
               ) : null}
               {sections.delivery && canViewDealTracking ? <div className="mb-4"><DeliveryRoundsPanel
                 ticketId={ticketId}
