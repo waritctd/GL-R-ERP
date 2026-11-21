@@ -378,8 +378,17 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
     enabled: !!ticketId && canReadStoredIr && role !== 'import',
     retry: false,
   });
-  const partialArrival = (ir) => (ir && ir.unit && ir.ordered != null && Number(ir.received) > 0 && Number(ir.received) < Number(ir.ordered)
-    ? { received: formatQty(ir.received), ordered: formatQty(ir.ordered), unit: ir.unit } : null);
+  // receivedQty is set only on a RECEIVED round, so 0 of 140 that arrived differs from 140 still on the way.
+  const hasArrivedLot = (ir) => (ir?.lots ?? []).some((l) => l.receivedQty != null);
+  const partialArrival = (ir) => {
+    if (!hasArrivedLot(ir)) return null;
+    if (!ir.unit || ir.ordered == null) {
+      return ir.lots.some((l) => l.receivedQty != null && Number(l.receivedQty) < Number(l.qty)) ? { mixed: true } : null;
+    }
+    if (Number(ir.received) >= Number(ir.ordered)) return null;
+    const missing = (ir.waiting ?? []).length === 0 ? Number(ir.ordered) - Number(ir.received) : null;
+    return { received: formatQty(ir.received), ordered: formatQty(ir.ordered), unit: ir.unit, missing: missing == null ? null : formatQty(missing) };
+  };
   const liveStoredIrRows = storedIrRows
     .filter((r) => r.status !== 'SUPERSEDED')
     .sort((a, b) => (a.factoryName ?? '').localeCompare(b.factoryName ?? '', 'th') || a.version - b.version);
@@ -819,7 +828,7 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
               arrivedCount={arrivedIrCount}
               issuedCount={issuedIrRows.length}
               deliveryPct={totalOrdered > 0 ? deliveryProgress : null}
-              goodsArrival={incomingQuery.data?.totalUnit && Number(incomingQuery.data.totalReceived) > 0
+              goodsArrival={incomingQuery.data?.totalUnit && (incomingQuery.data.irs ?? []).some(hasArrivedLot)
                 && Number(incomingQuery.data.totalReceived) < Number(incomingQuery.data.totalOrdered)
                 ? { received: formatQty(incomingQuery.data.totalReceived), ordered: formatQty(incomingQuery.data.totalOrdered), unit: incomingQuery.data.totalUnit } : null}
             />

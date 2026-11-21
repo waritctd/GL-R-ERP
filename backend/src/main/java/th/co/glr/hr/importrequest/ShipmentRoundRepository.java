@@ -77,7 +77,7 @@ public class ShipmentRoundRepository {
     public ReceiptTotals receiptTotals(long ticketId) {
         return jdbc.queryForObject("""
             SELECT COALESCE(SUM(l.qty), 0) AS planned, COALESCE(SUM(COALESCE(l.received_qty, l.qty)), 0) AS received,
-                   CASE WHEN COUNT(DISTINCT i.unit) = 1 THEN MIN(i.unit) END AS unit
+                   CASE WHEN COUNT(DISTINCT i.unit) = 1 AND COUNT(i.unit) = COUNT(*) THEN MIN(i.unit) END AS unit
               FROM sales.shipment_lot l
               JOIN sales.import_request_item i ON i.import_request_item_id = l.import_request_item_id
               JOIN sales.import_request ir ON ir.import_request_id = l.import_request_id

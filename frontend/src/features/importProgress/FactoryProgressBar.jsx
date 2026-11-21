@@ -52,12 +52,12 @@ export function FactoryProgressBar({
               className={cn(
                 CHIP_BOX,
                 'font-bold',
-                done ? 'border-transparent bg-success-bg text-success-dark' : 'border-transparent bg-info-bg text-info',
+                done && !arrival ? 'border-transparent bg-success-bg text-success-dark' : 'border-transparent bg-info-bg text-info',
               )}
             >
               {/* part of the order is in the warehouse while the rest is not: say so, not a step that reads as nothing arrived */}
-              {arrival ? `ถึงโกดัง ${arrival.received} / ${arrival.ordered} ${arrival.unit}`.trim() : current ? `${current.s} · ${current.label}` : (row.importStep ?? '—')}
-              {done ? ' ✓' : null}
+              {arrival?.mixed ? 'ถึงโกดังไม่ครบ' : arrival ? `ถึงโกดัง ${arrival.received} / ${arrival.ordered} ${arrival.unit}${arrival.missing ? ` · ขาด ${arrival.missing}` : ''}`.trim() : current ? `${current.s} · ${current.label}` : (row.importStep ?? '—')}
+              {done && !arrival ? ' ✓' : null}
             </span>
             {/* ETA — expected arrival window, derived from the factory's lead time (issueDate + leadTimeMin/Max).
              * Read-only, shown to sales/CEO/import alike. */}

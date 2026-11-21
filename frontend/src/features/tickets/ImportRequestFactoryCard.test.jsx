@@ -39,4 +39,10 @@ describe('ImportRequestFactoryCard — what the deal page changed stays on the d
     expect(screen.getByText('ถึงโกดัง 70 / 140 แผ่น')).toBeTruthy();
     expect(screen.queryByText(/S12/)).toBeNull();
   });
+
+  it('a short arrival at RECEIVED has no green tick and names the shortage, including 0 of 140', () => {
+    renderCard({ row: { ...issued, importStep: 'RECEIVED' }, arrival: { received: '0', ordered: '140', unit: 'แผ่น', missing: '140' } });
+    expect(screen.getByText('ถึงโกดัง 0 / 140 แผ่น · ขาด 140')).toBeTruthy();
+    expect(screen.queryByText(/✓/)).toBeNull();
+  });
 });
