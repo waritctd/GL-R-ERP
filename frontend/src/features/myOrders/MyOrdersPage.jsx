@@ -136,7 +136,7 @@ export function MyOrdersPage({ user, showToast }) {
     <PageStack>
       <PageHeader
         title="ของที่ฉันสั่ง"
-        subtitle="ของนำเข้าทุกออเดอร์ของคุณในที่เดียว ทั้งงานโครงการ ตัวอย่าง โชว์รูม และสต็อก"
+        subtitle="ของนำเข้าของทั้งทีมขายในที่เดียว กรองดูตามผู้ดูแล โครงการ หรือสถานะได้"
         actions={canCreate && !sidePanel ? <Button type="button" variant="primary" onClick={() => setCreating(true)} data-testid="new-order">+ สั่งของไม่มีโครงการ</Button> : null}
       />
       <div className={cn('grid grid-cols-1 gap-4', sidePanel && 'min-[1041px]:grid-cols-[minmax(0,1fr)_24rem] min-[1041px]:items-start')}>
@@ -181,7 +181,7 @@ export function MyOrdersPage({ user, showToast }) {
         </div>
         {sidePanel ? <NewOrderPanel form={orderForm} /> : null}
       </div>
-      <p className="text-2xs text-text-muted">แตะรายการของงานโครงการเพื่อไปที่แท็บ ส่งของ ของงานนั้น · ผู้จัดการฝ่ายขายเห็นของทุกคนในทีม</p>
+      <p className="text-2xs text-text-muted">แตะรายการของงานโครงการเพื่อไปที่แท็บ ส่งของ ของงานนั้น · เปิดได้เฉพาะงานของคุณ ส่วนของคนอื่นดูได้อย่างเดียว</p>
       <ConfirmDialog
         open={Boolean(withdrawing)}
         title="ยกเลิกคำขอสั่งของ"

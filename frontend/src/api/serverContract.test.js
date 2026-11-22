@@ -503,11 +503,6 @@ const UNREACHABLE_FROM_UI = new Set([
   'GET /api/deposit-notices/{}',
   'GET /api/factory-configs',
   'GET /api/factory-quotes/{}',
-  // DealFulfilmentPanel/ImportFulfilmentPage both read the stored ใบขอซื้อ list (GET
-  // .../import-requests, plural, per ticket) and every mutation returns its own full row, so this
-  // single-row-by-id GET has no screen that needs it. storedImportRequests.get stays in hrApi.js as
-  // a faithful mirror of ImportRequestController#getStored, like the other single-row GETs in this
-  // list (deposit-notices, factory-quotes, ...).
   'GET /api/leave/review-summary',
   'GET /api/payroll/deduction-obligations',
   'GET /api/payroll/deduction-obligations/me',
