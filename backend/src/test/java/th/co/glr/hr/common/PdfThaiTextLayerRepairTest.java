@@ -77,6 +77,28 @@ class PdfThaiTextLayerRepairTest {
     }
 
     @Test
+    void toneDrawnBeforeLowerVowel_isResolvedFromTheOtherSpans() throws IOException {
+        // Taken from the Linux CI failure (Loma). For ผู้ and ยู่ the shaper draws the tone mark before the lower
+        // vowel, so glyph 07 is the tone mark in ต่ and sits where ู is in the text of ยู่. Pairing by position
+        // gives glyph 07 two characters; the other spans say which one it is.
+        byte[] pdf = pdf(labels(0x01, "ผู้", 0x04, "ติ", 0x06, "ด", 0x08, "อ", 0x09, "ม", 0x0A, "ที่",
+                0x0D, "ยู่", 0x0E, "บ", 0x0F, "ริ", 0x10, "ษั"),
+            span("ผู้", 0x01, 0x02, 0x03) + span("ติ", 0x04, 0x05) + plain(0x06) + span("ต่", 0x04, 0x07)
+                + plain(0x08) + span("ผ", 0x01) + plain(0x09) + span("ที่", 0x0A, 0x0B, 0x0C) + plain(0x08)
+                + span("ยู่", 0x0D, 0x07, 0x03) + span("ที", 0x0A, 0x0B) + plain(0x09) + plain(0x0E)
+                + span("ริ", 0x0F, 0x05) + span("ษั", 0x10, 0x11) + span("ท", 0x0A));
+
+        String pasted = plainReaderText(PdfThaiTextLayerRepair.repair(pdf));
+
+        // Marks may paste in drawn order, so compare as canonically ordered text.
+        assertEquals(nfkd("ผู้ติดต่อผมที่อยู่ทีมบริษัท"), nfkd(pasted));
+    }
+
+    private static String nfkd(String text) {
+        return java.text.Normalizer.normalize(text, java.text.Normalizer.Form.NFKD);
+    }
+
+    @Test
     void realLigature_keepsItsWholeMapping() throws IOException {
         // One glyph really draws ด้ here, so it has no span and its two-character label is correct.
         byte[] pdf = pdf(labels(1, "ด้", 2, "ร", 3, "ผู้", 4, "?", 5, "?"),
@@ -145,7 +167,8 @@ class PdfThaiTextLayerRepairTest {
         byte[] raw = LibreOfficePdfConverter.convert(xls);
         String extracted = plainReaderText(raw);
 
-        if (!extracted.contains(text.replaceAll("\\s", ""))) {
+        // Marks may paste in drawn order (a tone mark before a lower vowel), so compare in canonical order.
+        if (!nfkd(extracted).contains(nfkd(text.replaceAll("\\s", "")))) {
             org.junit.jupiter.api.Assertions.fail(extracted + "\n" + dumpRuns(raw));
         }
     }

@@ -5,6 +5,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
+import java.text.Normalizer;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
@@ -182,31 +183,18 @@ public final class PdfThaiTextLayerRepair {
      * multi-character label outside any span is a real ligature. */
     private static Map<COSDictionary, Map<Integer, String>> rebuild(
         List<List<Run>> pages, Map<COSDictionary, Map<Integer, String>> current) throws UnsafeToRepair {
-        Map<COSDictionary, Map<Integer, String>> learned = new IdentityHashMap<>();
+        List<Span> spans = new ArrayList<>();
         for (List<Run> page : pages) {
             for (Run run : page) {
                 if (run.actualText() == null) continue;
                 String text = perGlyphText(run);
                 if (text == null) continue;
-                for (int i = 0; i < text.length(); i++) {
-                    Glyph glyph = run.glyphs().get(i);
-                    String character = String.valueOf(text.charAt(i));
-                    String earlier = learned.computeIfAbsent(glyph.font(), f -> new TreeMap<>())
-                        .putIfAbsent(glyph.code(), character);
-                    if (earlier != null && !earlier.equals(character)) {
-                        StringBuilder codes = new StringBuilder();
-                        for (Glyph g : run.glyphs()) codes.append(String.format("%02X ", g.code()));
-                        StringBuilder points = new StringBuilder();
-                        run.actualText().codePoints().forEach(cp -> points.append(String.format("U+%04X ", cp)));
-                        throw new UnsafeToRepair("one glyph stands for two characters: font="
-                            + glyph.font().getNameAsString(COSName.BASE_FONT) + " code=" + String.format("%02X", glyph.code())
-                            + " was=U+" + String.format("%04X", earlier.codePointAt(0))
-                            + " now=U+" + String.format("%04X", character.codePointAt(0)) + " at=" + i
-                            + " span=[" + points.toString().trim() + "] glyphs=[" + codes.toString().trim() + "]");
-                    }
-                }
+                List<String> characters = new ArrayList<>();
+                for (int i = 0; i < text.length(); i++) characters.add(String.valueOf(text.charAt(i)));
+                spans.add(new Span(run.glyphs(), characters));
             }
         }
+        Map<COSDictionary, Map<Integer, String>> learned = learnGlyphs(spans);
 
         Map<COSDictionary, Map<Integer, String>> changed = new IdentityHashMap<>();
         for (Map.Entry<COSDictionary, Map<Integer, String>> font : learned.entrySet()) {
@@ -215,6 +203,107 @@ public final class PdfThaiTextLayerRepair {
             if (!merged.equals(current.get(font.getKey()))) changed.put(font.getKey(), merged);
         }
         return changed;
+    }
+
+    /** One /ActualText span: the glyphs drawn for it and its characters, one per glyph. */
+    private record Span(List<Glyph> glyphs, List<String> characters) {}
+
+    /** What a span still has to explain once the glyphs already known are taken out of it. */
+    private record Open(List<Integer> unknownGlyphs, List<String> unexplained) {}
+
+    /**
+     * Which character each glyph is. Pairing a span's glyphs with its characters by position is wrong whenever the
+     * shaper draws marks in a different order than the text (Thai draws a tone mark before a lower vowel, so the glyph
+     * after ย in ยู่ is the tone mark). So a glyph is settled by the spans that leave it no choice: a span of one
+     * glyph, the first glyph of a span (the base letter), and any span left with one unknown glyph once the glyphs
+     * already settled are taken out of it. Only what that cannot settle is paired by position, and a glyph that ends
+     * up with two characters makes the whole repair give up.
+     */
+    private static Map<COSDictionary, Map<Integer, String>> learnGlyphs(List<Span> spans) throws UnsafeToRepair {
+        Map<COSDictionary, Map<Integer, String>> learned = new IdentityHashMap<>();
+        for (Span span : spans) {
+            if (span.glyphs().size() == 1 || !isMark(span.characters().get(0))) {
+                settle(learned, span.glyphs().get(0), span.characters().get(0));
+            }
+        }
+        settleSingles(spans, learned);
+        while (true) {
+            Open open = null;
+            Span openSpan = null;
+            for (Span span : spans) {
+                Open candidate = open(span, learned);
+                if (candidate.unknownGlyphs().size() > 1) {
+                    open = candidate;
+                    openSpan = span;
+                    break;
+                }
+            }
+            if (open == null) return learned;
+            for (int i = 0; i < open.unknownGlyphs().size(); i++) {
+                settle(learned, openSpan.glyphs().get(open.unknownGlyphs().get(i)), open.unexplained().get(i));
+            }
+            settleSingles(spans, learned);
+        }
+    }
+
+    private static void settleSingles(List<Span> spans, Map<COSDictionary, Map<Integer, String>> learned)
+        throws UnsafeToRepair {
+        boolean progress = true;
+        while (progress) {
+            progress = false;
+            for (Span span : spans) {
+                Open open = open(span, learned);
+                if (open.unknownGlyphs().size() == 1) {
+                    settle(learned, span.glyphs().get(open.unknownGlyphs().get(0)), open.unexplained().get(0));
+                    progress = true;
+                }
+            }
+        }
+    }
+
+    private static Open open(Span span, Map<COSDictionary, Map<Integer, String>> learned) throws UnsafeToRepair {
+        List<String> unexplained = new ArrayList<>(span.characters());
+        List<Integer> unknown = new ArrayList<>();
+        for (int i = 0; i < span.glyphs().size(); i++) {
+            Glyph glyph = span.glyphs().get(i);
+            Map<Integer, String> known = learned.get(glyph.font());
+            String character = known == null ? null : known.get(glyph.code());
+            if (character == null) {
+                unknown.add(i);
+            } else if (!unexplained.remove(character)) {
+                throw new UnsafeToRepair("one glyph stands for two characters: font="
+                    + glyph.font().getNameAsString(COSName.BASE_FONT) + " code=" + String.format("%02X", glyph.code())
+                    + " is " + describe(character) + " but a span of " + describe(String.join("", span.characters()))
+                    + " has no such character left");
+            }
+        }
+        return new Open(unknown, unexplained);
+    }
+
+    private static void settle(Map<COSDictionary, Map<Integer, String>> learned, Glyph glyph, String character)
+        throws UnsafeToRepair {
+        String earlier = learned.computeIfAbsent(glyph.font(), f -> new TreeMap<>()).putIfAbsent(glyph.code(), character);
+        if (earlier != null && !earlier.equals(character)) {
+            throw new UnsafeToRepair("one glyph stands for two characters: font="
+                + glyph.font().getNameAsString(COSName.BASE_FONT) + " code=" + String.format("%02X", glyph.code())
+                + " was " + describe(earlier) + " now " + describe(character));
+        }
+    }
+
+    private static boolean isMark(String character) {
+        int cp = character.codePointAt(0);
+        return cp == 0x0E31 || (cp >= 0x0E34 && cp <= 0x0E3A) || (cp >= 0x0E47 && cp <= 0x0E4E);
+    }
+
+    private static String describe(String text) {
+        StringBuilder points = new StringBuilder();
+        text.codePoints().forEach(cp -> points.append(String.format("U+%04X ", cp)));
+        return points.toString().trim();
+    }
+
+    /** Marks may be drawn in a different order than they are written, so texts are compared in canonical order. */
+    private static String canonical(String text) {
+        return Normalizer.normalize(drawnOrder(text), Normalizer.Form.NFKD);
     }
 
     /** The span's text with exactly one char per glyph, or null when they cannot be paired. */
@@ -242,7 +331,7 @@ public final class PdfThaiTextLayerRepair {
             }
             appendDecoded(produced, run.glyphs(), repaired, current);
         }
-        if (!drawnOrder(expected.toString()).equals(drawnOrder(produced.toString()))) {
+        if (!canonical(expected.toString()).equals(canonical(produced.toString()))) {
             throw new UnsafeToRepair("the repaired map would change the page's text");
         }
     }
