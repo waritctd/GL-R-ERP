@@ -111,7 +111,7 @@ public class RemainingInvoiceRepository {
             rs.getString("reference"), rs.getString("deposit_reference"), localDate(rs, "doc_date"), notes,
             rs.getString("customer_name"), rs.getString("customer_tax_id"),
             th.co.glr.hr.customer.CustomerPrintRule.branch(rs.getString("customer_branch"), rs.getString("customer_tax_id")),
-            th.co.glr.hr.customer.CustomerPrintRule.storedAddress(rs.getString("customer_address"), rs.getString("customer_tax_id")),
+            th.co.glr.hr.customer.CustomerPrintRule.addressOnly(rs.getString("customer_address"), rs.getString("customer_branch"), rs.getString("customer_tax_id")),
             rs.getString("project_name"),
             rs.getBigDecimal("items_total"), rs.getBigDecimal("deposit_deduction"),
             rs.getBigDecimal("net_amount"), rs.getBigDecimal("vat_amount"), rs.getBigDecimal("grand_total"),

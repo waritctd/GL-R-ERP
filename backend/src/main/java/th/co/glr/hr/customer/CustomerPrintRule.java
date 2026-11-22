@@ -24,17 +24,31 @@ public final class CustomerPrintRule {
         return printed == null ? address.trim() : address.trim() + " " + printed;
     }
 
-    /** A stored address that may already hold the default branch at its end: without a tax id that part does not print. */
-    public static String storedAddress(String address, String taxId) {
+    /**
+     * A remaining invoice's or billing note's stored address, which never had the branch joined in: without a tax id it
+     * goes only when the whole value IS the branch. A real address that merely ends with the word is left alone.
+     */
+    public static String addressOnly(String address, String branch, String taxId) {
         if (isBlank(address)) {
             return null;
         }
         String trimmed = address.trim();
-        if (!isBlank(taxId) || !trimmed.endsWith(HEAD_OFFICE)) {
-            return trimmed;
+        boolean isBranch = trimmed.equals(HEAD_OFFICE) || (!isBlank(branch) && trimmed.equals(branch.trim()));
+        return isBlank(taxId) && isBranch ? null : trimmed;
+    }
+
+    /**
+     * An older deposit notice's stored address, where the customer's address and branch were joined with a space. Without a
+     * tax id only the customer's own default branch comes off the end, and never from an address that is the customer's
+     * address as it stands ("อาคารธนาคารกรุงเทพ สำนักงานใหญ่" is a place, not a branch).
+     */
+    public static String joinedAddress(String address, String taxId, String customerAddress, String customerBranch) {
+        String kept = addressOnly(address, customerBranch, taxId);
+        if (kept == null || !isBlank(taxId) || isBlank(customerBranch) || !HEAD_OFFICE.equals(customerBranch.trim())
+            || !kept.endsWith(" " + HEAD_OFFICE) || (!isBlank(customerAddress) && kept.equals(customerAddress.trim()))) {
+            return kept;
         }
-        String rest = trimmed.substring(0, trimmed.length() - HEAD_OFFICE.length()).trim();
-        return rest.isEmpty() ? null : rest;
+        return kept.substring(0, kept.length() - HEAD_OFFICE.length()).trim();
     }
 
     private static boolean isBlank(String value) {
