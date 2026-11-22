@@ -57,7 +57,7 @@ class ShipmentRoundIntegrationTest extends AbstractPostgresIntegrationTest {
     private NoProjectOrderService noProject;
     private MyIncomingService myIncoming;
     private LineNotDeliveredService lineNotDelivered;
-    private IrLineExitService exits;
+    private IrLineLinkService links;
     private TicketService ticketService;
     private TicketRepository ticketRepo;
     private UserPrincipal owner;
@@ -91,7 +91,7 @@ class ShipmentRoundIntegrationTest extends AbstractPostgresIntegrationTest {
             notifications, roundRepo));
         rounds = transactional(new ShipmentRoundService(roundRepo, stored, irService, tickets, files));
         lineNotDelivered = transactional(new LineNotDeliveredService(ticketService, rounds));
-        exits = transactional(new IrLineExitService(stored, rounds, ticketService, tickets));
+        links = transactional(new IrLineLinkService(stored, rounds, irService, ticketService, tickets));
         incoming = new IncomingService(ticketService, stored, roundRepo, new ImportRequestQueryRepository(jdbc));
         noProject = transactional(new NoProjectOrderService(stored, new FactoryConfigRepository(jdbc), notifications, new EmployeeAuthRepository(jdbc)));
         myIncoming = new MyIncomingService(roundRepo, new EmployeeAuthRepository(jdbc));
@@ -1332,27 +1332,27 @@ class ShipmentRoundIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(fulfilment(l.ticket)).isEqualTo("PARTIALLY_DELIVERED"); // held by the unlinked line
         assertThat(ticketService.completeDeliveryIfDone(l.ticket, importUser).summary().fulfillmentStatus()).isEqualTo("PARTIALLY_DELIVERED");
 
-        assertRefused(() -> irService.linkLine(loose, l.item, owner), HttpStatus.FORBIDDEN); // the rep cannot
-        assertRefused(() -> irService.linkLine(loose, l.item, salesManager), HttpStatus.FORBIDDEN);
+        assertRefused(() -> links.link(loose, l.item, owner), HttpStatus.FORBIDDEN); // the rep cannot
+        assertRefused(() -> links.link(loose, l.item, salesManager), HttpStatus.FORBIDDEN);
         Line other = line("LK-2"); // another deal's line
-        assertRefused(() -> irService.linkLine(loose, other.item, importUser), HttpStatus.BAD_REQUEST);
+        assertRefused(() -> links.link(loose, other.item, importUser), HttpStatus.BAD_REQUEST);
         jdbc.update("UPDATE sales.ticket_item SET size = '60x60' WHERE item_id = :i", Map.of("i", l.item));
-        assertRefused(() -> irService.linkLine(loose, l.item, importUser), HttpStatus.CONFLICT); // another product
+        assertRefused(() -> links.link(loose, l.item, importUser), HttpStatus.CONFLICT); // another product
         jdbc.update("UPDATE sales.ticket_item SET size = '20x20' WHERE item_id = :i", Map.of("i", l.item));
 
-        irService.linkLine(loose, l.item, importUser);
-        irService.linkLine(loose, l.item, importUser); // double submit: nothing more happens
+        links.link(loose, l.item, importUser);
+        links.link(loose, l.item, importUser); // double submit: nothing more happens
         assertThat(fulfilment(l.ticket)).isEqualTo("FULLY_DELIVERED");
         assertThat(events(l.ticket, "DELIVERY_COMPLETED")).isEqualTo(1);
         assertThat(jdbc.queryForObject("SELECT count(*) FROM sales.ticket_event WHERE ticket_id = :t AND message LIKE 'ผูกรายการ%'", Map.of("t", l.ticket), Integer.class)).isEqualTo(1);
-        assertRefused(() -> irService.linkLine(loose, other.item, importUser), HttpStatus.CONFLICT); // already linked elsewhere
+        assertRefused(() -> links.link(loose, other.item, importUser), HttpStatus.CONFLICT); // already linked elsewhere
 
         Line closed = line("LK-3");
         long stray = jdbc.queryForObject("""
             INSERT INTO sales.import_request_item (import_request_id, ticket_item_id, seq, code, size, qty, unit, brand, model)
             VALUES (:ir, NULL, 2, 'LOOSE', '20x20', 10, 'pcs', 'Round Factory', 'Raku') RETURNING import_request_item_id""", Map.of("ir", closed.ir), Long.class);
         jdbc.update("UPDATE sales.ticket SET lifecycle = 'CLOSED_LOST' WHERE ticket_id = :t", Map.of("t", closed.ticket));
-        assertRefused(() -> irService.linkLine(stray, closed.item, importUser), HttpStatus.CONFLICT);
+        assertRefused(() -> links.link(stray, closed.item, importUser), HttpStatus.CONFLICT);
 
         // the legacy close path respects the hold too
         Line legacy = line("LK-4");
@@ -1364,66 +1364,22 @@ class ShipmentRoundIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     @Test
-    void closingOutAnUnlinkedIrLine_releasesTheDeal_keepsTheRecord_andReopens() {
-        Line l = line("CO-1");
-        receive(l, 100, 100);
-        long loose = jdbc.queryForObject("""
+    void linkingOntoAMarkedDealLine_reDerivesTheIrStep() {
+        Line k = line("LK-5"); // deal line 100, IR line A linked
+        jdbc.update("UPDATE sales.import_request_item SET qty = 90 WHERE import_request_item_id = :i", Map.of("i", k.irItem));
+        long u = jdbc.queryForObject("""
             INSERT INTO sales.import_request_item (import_request_id, ticket_item_id, seq, code, size, qty, unit, brand, model)
-            VALUES (:ir, NULL, 2, 'LOOSE', '20x20', 10, 'pcs', 'Round Factory', 'Raku') RETURNING import_request_item_id""", Map.of("ir", l.ir), Long.class);
-        long r2 = round("ORDERED");
-        insertLot(r2, l.ir, loose, 10);
-        rounds.advance(r2, receiveRequest(List.of(new LotReceipt(lotIdOf(r2, loose), new BigDecimal("10")))), importUser); // goods arrived
-        deliverItemFromWarehouse(l.ticket, l.item, "100");
-        assertThat(fulfilment(l.ticket)).isEqualTo("PARTIALLY_DELIVERED");
+            VALUES (:ir, NULL, 2, 'LOOSE', '20x20', 10, 'pcs', 'Round Factory', 'Raku') RETURNING import_request_item_id""", Map.of("ir", k.ir), Long.class);
+        lineNotDelivered.mark(k.ticket, k.item, markOf("100"), salesManager); // the whole deal line was never sent
+        assertThat(irStep(k.ir)).isNotEqualTo(ImportRequestStep.RECEIVED); // U still wants its 10: it points at no deal line
+        links.link(u, k.item, importUser); // U now shares the marked line, whose mark covers it too
+        assertThat(irStep(k.ir)).isEqualTo(ImportRequestStep.RECEIVED);
+    }
 
-        assertRefused(() -> exits.closeOut(loose, "ไม่มีในงานนี้", owner), HttpStatus.FORBIDDEN);
-        assertRefused(() -> exits.closeOut(loose, "  ", importUser), HttpStatus.BAD_REQUEST);
-        assertRefused(() -> exits.closeOut(l.irItem, "ผูกอยู่แล้ว", importUser), HttpStatus.CONFLICT); // linked lines are not closed out
-
-        exits.closeOut(loose, "ของล็อตนี้เป็นของงานอื่น", importUser);
-        exits.closeOut(loose, "ของล็อตนี้เป็นของงานอื่น", importUser); // double submit
-        assertThat(fulfilment(l.ticket)).isEqualTo("FULLY_DELIVERED");
-        assertThat(jdbc.queryForObject("SELECT count(*) FROM sales.shipment_lot WHERE import_request_item_id = :i", Map.of("i", loose), Integer.class)).isEqualTo(1);
-        assertThat(jdbc.queryForObject("SELECT COALESCE(l.received_qty, l.qty) FROM sales.shipment_lot l JOIN sales.shipment_round r ON r.shipment_round_id = l.shipment_round_id WHERE r.import_step = 'RECEIVED' AND l.import_request_item_id = :i", Map.of("i", loose), BigDecimal.class)).isEqualByComparingTo("10");
-        assertThat(jdbc.queryForObject("SELECT count(*) FROM sales.ticket_event WHERE ticket_id = :t AND message LIKE 'ปิดรายการ%'", Map.of("t", l.ticket), Integer.class)).isEqualTo(1);
-        var shown = incoming.incoming(l.ticket, owner);
-        assertThat(shown.unlinked()).isEmpty();
-        assertThat(shown.closedOut()).singleElement().satisfies(c -> {
-            assertThat(c.reason()).isEqualTo("ของล็อตนี้เป็นของงานอื่น");
-            assertThat(c.receivedQty()).isEqualByComparingTo("10");
-        });
-        assertRefused(() -> irService.linkLine(loose, l.item, importUser), HttpStatus.CONFLICT); // reopen first
-        assertRefused(() -> exits.reopen(loose, importUser), HttpStatus.CONFLICT); // delivered: no reopening in the portal
-
-        // reversible before the deal is delivered: all three fields clear and the hold comes back
-        Line m = line("CO-2");
-        long extra = jdbc.queryForObject("""
-            INSERT INTO sales.import_request_item (import_request_id, ticket_item_id, seq, code, size, qty, unit, brand, model)
-            VALUES (:ir, NULL, 2, 'LOOSE', '20x20', 10, 'pcs', 'Round Factory', 'Raku') RETURNING import_request_item_id""", Map.of("ir", m.ir), Long.class);
-        exits.closeOut(extra, "ไม่ใช่ของงานนี้", importUser);
-        assertThat(ticketRepo.unlinkedGoods(m.ticket)).isEmpty();
-        exits.reopen(extra, importUser);
-        assertThat(ticketRepo.unlinkedGoods(m.ticket)).hasSize(1);
-        assertThat(jdbc.queryForObject("SELECT count(*) FROM sales.import_request_item WHERE import_request_item_id = :i AND closed_out_reason IS NULL AND closed_out_by IS NULL AND closed_out_at IS NULL",
-            Map.of("i", extra), Integer.class)).isEqualTo(1);
-        assertThat(jdbc.queryForObject("SELECT count(*) FROM sales.ticket_event WHERE ticket_id = :t AND message LIKE 'เปิดรายการ%'", Map.of("t", m.ticket), Integer.class)).isEqualTo(1);
-
-        // a deal with no deal lines is never completed by closing out
-        Line z = line("CO-3");
-        jdbc.update("DELETE FROM sales.ticket_item WHERE item_id = :i", Map.of("i", z.item));
-        unlink(z.irItem);
-        exits.closeOut(z.irItem, "งานนี้ยังไม่มีรายการสินค้า", importUser);
-        assertThat(fulfilment(z.ticket)).isNotEqualTo("FULLY_DELIVERED");
-
-        // a revision of the IR keeps what was closed out
-        Line v = line("CO-4");
-        long gone = jdbc.queryForObject("""
-            INSERT INTO sales.import_request_item (import_request_id, ticket_item_id, seq, code, size, qty, unit, brand, model)
-            VALUES (:ir, NULL, 2, 'LOOSE', '20x20', 10, 'pcs', 'Round Factory', 'Raku') RETURNING import_request_item_id""", Map.of("ir", v.ir), Long.class);
-        exits.closeOut(gone, "ไม่ใช่ของงานนี้", importUser);
-        long revision = irService.revise(v.ir, owner).id();
-        assertThat(jdbc.queryForObject("SELECT closed_out_reason FROM sales.import_request_item WHERE import_request_id = :r AND seq = 2", Map.of("r", revision), String.class))
-            .isEqualTo("ไม่ใช่ของงานนี้");
+    @Test
+    void closeOutIsNotSwitchedOn() {
+        // the endpoints answer 409; no service reaches the closed_out columns
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM sales.import_request_item WHERE closed_out_at IS NOT NULL", Map.of(), Integer.class)).isZero();
     }
 
     private void unlink(long irItem) {

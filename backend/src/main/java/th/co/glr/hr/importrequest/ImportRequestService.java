@@ -1036,67 +1036,7 @@ public class ImportRequestService {
             .map(it -> new ImportRequestItemInput(it.ticketItemId(), it.code(), it.size(),
                 it.qty(), it.unit(), it.note(), it.color(), it.texture(), it.brand(), it.model()))
             .toList());
-        stored.copyClosedOut(issued.id(), revisionId);
         return withPageCount(requireStored(revisionId));
-    }
-
-    /**
-     * Gives an ISSUED IR line that points at no deal line its deal line (import or CEO, any step including RECEIVED). Same deal
-     * only, a live deal, and the sizes must agree when both are written. Nothing about quantities, lots, receipts or history
-     * changes; the deal gets one event and then the normal completion check and goods-received rollup. A second identical
-     * request does nothing.
-     */
-    @Transactional
-    public void linkLine(long lineId, long ticketItemId, UserPrincipal actor) {
-        if (!"import".equals(actor.role()) && !"ceo".equals(actor.role())) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
-        }
-        ImportRequestRepository.LineToLink probe = stored.findLine(lineId);
-        if (probe == null || probe.ticketId() == null) {
-            throw new ApiException(HttpStatus.NOT_FOUND, "ไม่พบรายการในใบขอซื้อของงาน");
-        }
-        long ticketId = probe.ticketId();
-        // lock order: the deal's rounds, its IRs, then the ticket
-        List<Long> roundIds = rounds.roundIdsOfTicket(ticketId);
-        rounds.lockRounds(roundIds);
-        rounds.lockImportRequests(roundIds, rounds.issuedIrIdsOfTicket(ticketId));
-        tickets.lockTicketForUpdate(ticketId);
-        ImportRequestRepository.LineToLink line = stored.findLine(lineId);
-        if (line.ticketItemId() != null) {
-            if (line.ticketItemId() == ticketItemId) {
-                return; // a double submit
-            }
-            throw new ApiException(HttpStatus.CONFLICT, "รายการนี้ผูกกับรายการอื่นของงานแล้ว");
-        }
-        if (!ImportRequestStatus.ISSUED.equals(line.status())) {
-            throw new ApiException(HttpStatus.CONFLICT, "ผูกได้เฉพาะรายการของใบขอซื้อที่ออกแล้ว");
-        }
-        if (line.closedOut()) {
-            throw new ApiException(HttpStatus.CONFLICT, "รายการนี้ถูกปิดไว้นอกงาน — เปิดรายการกลับก่อนจึงจะผูกได้");
-        }
-        requireDealActive(requireTicket(ticketId));
-        if (!stored.dealItemIds(ticketId).contains(ticketItemId)) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "รายการนี้ไม่ใช่รายการของงานเดียวกัน");
-        }
-        String dealSize = stored.ticketItemSize(ticketId, ticketItemId);
-        if (!sameSize(line.size(), dealSize)) {
-            throw new ApiException(HttpStatus.CONFLICT, "ขนาดไม่ตรงกัน (ใบขอซื้อ " + line.size() + " / งาน " + dealSize + ") — เลือกรายการของสินค้าเดียวกัน");
-        }
-        stored.linkLine(lineId, ticketItemId);
-        ImportRequestDto ir = requireStored(line.importRequestId());
-        tickets.addEventWithDocument(ticketId, actor.id(), actor.name(), TicketEventKind.IMPORT_STEP_ADVANCED, null, null,
-            "ผูกรายการ " + line.code() + " ของใบขอซื้อ " + ir.docNumber() + " เข้ากับรายการของงาน",
-            th.co.glr.hr.ticket.RelatedDocumentType.IMPORT_REQUEST, ir.id());
-        receiptCorrected(ticketId, ir.docNumber(), ir.factoryName(), actor);
-        ticketService.completeDeliveryAfterIrRevision(ticketId, actor);
-    }
-
-    private static boolean sameSize(String a, String b) {
-        if (a == null || a.isBlank() || b == null || b.isBlank()) {
-            return true; // not checkable
-        }
-        java.util.function.UnaryOperator<String> norm = v -> v.toLowerCase(java.util.Locale.ROOT).replaceAll("[\\s×*]", "");
-        return norm.apply(a).equals(norm.apply(b));
     }
 
     /** A draft that should not exist is deleted, not tombstoned — it has no number and no audit weight. */

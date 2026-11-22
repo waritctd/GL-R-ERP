@@ -627,8 +627,6 @@ export const api = {
     revise: (id) => apiRequest(API_ROUTES.storedImportRequests.revise(id), { method: 'POST' }),
     deleteDraft: (id) => apiRequest(API_ROUTES.storedImportRequests.get(id), { method: 'DELETE' }),
     // import / CEO: an IR line that points at no deal line gets its deal line (the stuck-deal exit)
-    closeOutLine: (lineId, reason) => apiRequest(API_ROUTES.storedImportRequests.closeOutLine(lineId), { method: 'POST', body: { reason } }),
-    reopenLine: (lineId) => apiRequest(API_ROUTES.storedImportRequests.reopenLine(lineId), { method: 'POST' }),
     linkLine: (lineId, ticketItemId) => apiRequest(API_ROUTES.storedImportRequests.linkLine(lineId), { method: 'POST', body: { ticketItemId } }),
     advanceStep: (id, payload) =>
       apiRequest(API_ROUTES.storedImportRequests.advanceStep(id), { method: 'POST', body: payload }),

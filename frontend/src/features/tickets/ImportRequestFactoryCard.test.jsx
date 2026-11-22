@@ -38,17 +38,11 @@ describe('ImportRequestFactoryCard — what the deal page changed stays on the d
     const row = { ...issued, importStep: 'RECEIVED', items: [{ id: 5, code: 'LOOSE', size: '20x20', qty: 10, unit: 'แผ่น', ticketItemId: null }] };
     const { unmount } = renderCard({ row, canSetLeadTime: true });
     expect(screen.getByTestId('ir-link-5')).toBeTruthy();
-    expect(screen.getByTestId('ir-close-out-5')).toBeTruthy();
+    expect(screen.queryByTestId('ir-close-out-5')).toBeNull(); // closing out is not switched on
     unmount();
-    const closed = { ...row, items: [{ ...row.items[0], closedOutReason: 'ของงานอื่น' }] };
-    const second = renderCard({ row: closed, canSetLeadTime: true });
-    expect(screen.getByTestId('ir-closed-out-5').textContent).toContain('ของงานอื่น');
-    expect(screen.getByTestId('ir-reopen-5')).toBeTruthy();
-    second.unmount();
     renderCard({ row });
     expect(screen.queryByTestId('ir-link-5')).toBeNull();
-    expect(screen.queryByTestId('ir-close-out-5')).toBeNull();
-    expect(screen.getByTestId('ir-unlinked-5').textContent).toContain('ให้ฝ่ายนำเข้าหรือ CEO ผูกหรือปิดรายการให้');
+    expect(screen.getByTestId('ir-unlinked-5').textContent).toContain('ให้ฝ่ายนำเข้าหรือ CEO ผูกให้');
   });
 
   it('part of the order in the warehouse: the card says ถึงโกดัง 70 / 140, not a step that reads as nothing arrived', () => {

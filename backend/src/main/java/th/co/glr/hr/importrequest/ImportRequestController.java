@@ -8,6 +8,7 @@ import java.util.Map;
 import org.springframework.http.ContentDisposition;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
@@ -19,6 +20,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import th.co.glr.hr.auth.SessionContext;
+import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.importrequest.ImportRequestDtos.ImportRequestCoverageResponse;
 import th.co.glr.hr.importrequest.ImportRequestDtos.ImportRequestDto;
@@ -39,10 +41,10 @@ public class ImportRequestController {
 
     private final ImportRequestService service;
     private final SessionContext sessions;
-    private final IrLineExitService exits;
+    private final IrLineLinkService links;
 
-    public ImportRequestController(ImportRequestService service, SessionContext sessions, IrLineExitService exits) {
-        this.exits = exits;
+    public ImportRequestController(ImportRequestService service, SessionContext sessions, IrLineLinkService links) {
+        this.links = links;
         this.service = service;
         this.sessions = sessions;
     }
@@ -193,26 +195,24 @@ public class ImportRequestController {
     /** Import/CEO: an IR line that points at no deal line gets its deal line (the stuck-deal exit). */
     @PostMapping("/import-requests/lines/{lineId}/link")
     Map<String, Boolean> linkLine(@PathVariable long lineId, @RequestBody LinkLineRequest request, HttpSession session) {
-        service.linkLine(lineId, request.ticketItemId(), sessions.requireUser(session));
+        links.link(lineId, request.ticketItemId(), sessions.requireUser(session));
         return Map.of("linked", true);
     }
 
     record LinkLineRequest(long ticketItemId) {}
 
-    /** Import/CEO: goods that will not be on this deal; the row, lots and receipts stay. Reversible until the deal is delivered. */
+    /** Closing out an IR line is not switched on yet (the gate blocked it): the line stays on hold until a deal line carries it, then import links it. */
     @PostMapping("/import-requests/lines/{lineId}/close-out")
-    Map<String, Boolean> closeOutLine(@PathVariable long lineId, @RequestBody CloseOutRequest request, HttpSession session) {
-        exits.closeOut(lineId, request.reason(), sessions.requireUser(session));
-        return Map.of("closedOut", true);
+    Map<String, Boolean> closeOutLine(@PathVariable long lineId, HttpSession session) {
+        sessions.requireUser(session);
+        throw new ApiException(HttpStatus.CONFLICT, "ยังไม่เปิดใช้: ปิดรายการนี้ไม่ได้ ให้รอจนกว่าใบเสนอราคาหรือออเดอร์เพิ่มของงานมีรายการนี้ แล้วฝ่ายนำเข้าผูกให้");
     }
 
     @PostMapping("/import-requests/lines/{lineId}/reopen")
     Map<String, Boolean> reopenLine(@PathVariable long lineId, HttpSession session) {
-        exits.reopen(lineId, sessions.requireUser(session));
-        return Map.of("reopened", true);
+        sessions.requireUser(session);
+        throw new ApiException(HttpStatus.CONFLICT, "ยังไม่เปิดใช้");
     }
-
-    record CloseOutRequest(String reason) {}
 
     @PostMapping("/import-requests/{id}/lead-time")
     Map<String, ImportRequestDto> setLeadTime(@PathVariable long id,
