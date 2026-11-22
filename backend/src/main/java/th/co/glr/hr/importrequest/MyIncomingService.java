@@ -50,9 +50,11 @@ public class MyIncomingService {
             && !DealEntryAccess.canEnterDeal(actor, employeeAuth)) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
-        boolean allDeals = manager || reader || employeeAuth.canManageAllSalesDocuments(actor);
+        // Opening a deal stays as before; READING the import row is open to the whole sales team (Ploy 11-23).
+        boolean dealAccess = manager || reader || employeeAuth.canManageAllSalesDocuments(actor);
+        boolean allDeals = dealAccess || "sales".equals(role);
         LocalDate cutoff = LocalDate.now(BANGKOK).minusDays(ARRIVED_DAYS);
-        List<MyLine> lines = rounds.myLines(actor.id(), allDeals, manager || reader, showroomGrant, cutoff);
+        List<MyLine> lines = rounds.myLines(actor.id(), allDeals, manager || reader || "sales".equals(role), showroomGrant, cutoff);
 
         // lots of one line, in order, to number them and find what is still on no round
         Map<Long, List<MyLine>> byItem = new LinkedHashMap<>();
@@ -81,22 +83,23 @@ public class MyIncomingService {
                     l.etaOn() != null ? l.etaOn() : first.expectedTo(), l.roundLabel(), l.transportMode(), l.vessel(),
                     l.voyage(), l.port(), l.etdActualOn(), l.etaOn(), l.arrivedOn(), l.customsReleasedOn(), l.contactedOn(),
                     l.orderedOn(), l.pickedUpOn(), l.inTransitOn(), l.awaitingCustomsOn(), l.receivedOn());
-                rows.add(row(first, product, false, l.qty(), lot, false));
+                rows.add(row(first, product, false, l.qty(), lot, false, dealAccess));
             }
             if (remaining.signum() > 0) {
-                rows.add(row(first, product, true, remaining, null, canWithdraw));
+                rows.add(row(first, product, true, remaining, null, canWithdraw, dealAccess));
             }
         }
         return new MyIncomingResponse(rows);
     }
 
-    private static MyIncomingRow row(MyLine l, String product, boolean waiting, BigDecimal qty, IncomingLot lot, boolean canWithdraw) {
+    private static MyIncomingRow row(MyLine l, String product, boolean waiting, BigDecimal qty, IncomingLot lot, boolean canWithdraw,
+                                      boolean dealAccess) {
         boolean project = l.ticketId() != null;
         String who = project ? firstNonBlank(l.projectName(), l.customerName(), l.ticketCode()) : l.purposeNote();
         String wanted = project ? l.requiredByNote() : (l.wantedBy() == null ? null : ThaiText.date(l.wantedBy()));
         return new MyIncomingRow(project ? "PROJECT" : l.orderPurpose(), l.ticketId(), l.ticketCode(), who,
             project ? null : l.requesterName(), l.factoryName(), l.docNumber(), l.importRequestId(), wanted, waiting,
-            product, l.unit(), qty, lot, canWithdraw);
+            product, l.unit(), qty, lot, canWithdraw, l.repId(), l.repName(), project && (dealAccess || l.mine()));
     }
 
     private static String firstNonBlank(String... values) {

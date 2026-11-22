@@ -87,6 +87,20 @@ describe('ของที่ฉันสั่ง', () => {
     await waitFor(() => expect(api.noProjectOrders.withdraw).toHaveBeenCalledWith(13));
   });
 
+  it("shows the whole team's rows: filters by rep, hides the open control on a deal the rep cannot open", async () => {
+    const row = (over) => ({ ...base, kind: 'PROJECT', ticketId: 101, ticketCode: 'PR-TEST-0001', who: 'โครงการ ก', docNumber: 'IR-TEST-001', importRequestId: 11,
+      waiting: true, product: 'Slate Grey 60x60', unit: 'แผ่น', qty: 5, lot: null, canWithdraw: false, repId: 5, repName: 'คุณ ทดสอบ', canOpenDeal: true, ...over });
+    vi.mocked(api.myIncoming.get).mockResolvedValue({ rows: [row({}),
+      row({ ticketId: 202, ticketCode: 'PR-TEST-0002', who: 'โครงการ ข', docNumber: 'IR-TEST-002', importRequestId: 12, repId: 9, repName: 'คุณ อื่น', canOpenDeal: false })] });
+    renderPage();
+    const incoming = await screen.findByTestId('orders-incoming');
+    expect(within(incoming).getAllByRole('link', { name: 'เปิดงาน' })).toHaveLength(1); // the other rep's deal has no link
+    expect(within(incoming).getAllByText('IR-TEST-002').length).toBeGreaterThan(0);
+    fireEvent.change(screen.getByTestId('orders-filter-rep'), { target: { value: '9' } });
+    expect(screen.queryByText('IR-TEST-001')).toBeNull();
+    expect(screen.getAllByText('IR-TEST-002').length).toBeGreaterThan(0);
+  });
+
   it('สั่งของไม่มีโครงการ: the send button stays disabled and names what is missing until every field is filled', async () => {
     vi.mocked(api.myIncoming.get).mockResolvedValue({ rows: [] });
     vi.mocked(api.factoryConfigs.names).mockResolvedValue({ factories: [{ id: 3, factoryName: 'Test Stone Co.' }] });

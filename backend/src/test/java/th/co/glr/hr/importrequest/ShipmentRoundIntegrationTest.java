@@ -469,10 +469,15 @@ class ShipmentRoundIntegrationTest extends AbstractPostgresIntegrationTest {
 
         // ของที่ฉันสั่ง: the requester sees both orders and the project IRs of their deals; the flag holder only the showroom one
         assertThat(myIncoming.myIncoming(owner).rows()).extracting(r -> r.kind()).contains("SHOWROOM", "SAMPLE", "PROJECT");
-        assertThat(myIncoming.myIncoming(otherRep).rows()).extracting(r -> r.kind()).containsOnly("SHOWROOM");
+        // v2.5.0: every sales user READS the whole team's rows; opening another rep's deal stays with its owner
+        var others = myIncoming.myIncoming(otherRep).rows();
+        assertThat(others).extracting(r -> r.kind()).contains("SHOWROOM", "SAMPLE", "PROJECT");
+        assertThat(others).filteredOn(r -> "PROJECT".equals(r.kind())).isNotEmpty().allMatch(r -> !r.canOpenDeal());
+        assertThat(others).allMatch(r -> !r.canWithdraw());
+        assertThat(myIncoming.myIncoming(owner).rows()).filteredOn(r -> "PROJECT".equals(r.kind())).allMatch(r -> r.canOpenDeal());
         assertThat(myIncoming.myIncoming(salesManager).rows()).extracting(r -> r.importRequestId()).contains(order, sample);
         assertRefused(() -> myIncoming.myIncoming(importUser), HttpStatus.FORBIDDEN);
-        assertThat(myIncoming.myIncoming(principal(employee("RND-OTH-REP2"), "sales")).rows()).isEmpty();
+        assertThat(myIncoming.myIncoming(principal(employee("RND-OTH-REP2"), "sales")).rows()).extracting(r -> r.kind()).contains("SHOWROOM", "SAMPLE");
     }
 
     @Test

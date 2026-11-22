@@ -15683,9 +15683,10 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       const rows = [];
       mockImportRequests.filter((ir) => ir.status === 'ISSUED').forEach((ir) => {
         const ticket = mockTicketOrNull(ir);
-        const mine = ticket
-          ? (mockIrActive(ir) && (manager || reader || isSalesOwner(ticket, user)))
-          : (manager || ir.requesterId === user.id || (ir.orderPurpose === 'SHOWROOM' && user.canSeeShowroomOrders === true));
+        const mine = ticket ? mockIrActive(ir) : (manager || reader || user.role === 'sales' || ir.requesterId === user.id
+          || (ir.orderPurpose === 'SHOWROOM' && user.canSeeShowroomOrders === true)); // sales reads the whole team (v2.5.0)
+        const mayOpen = Boolean(ticket) && (manager || reader || isSalesOwner(ticket, user));
+        if (ticket && !(manager || reader || user.role === 'sales' || isSalesOwner(ticket, user))) return;
         if (!mine) return;
         const { lots, waiting } = mockIncomingForIr(ir);
         const base = {
@@ -15693,6 +15694,8 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
           who: ticket ? (ticket.projectName || ticket.customerName || ticket.code) : ir.purposeNote,
           requesterName: ticket ? null : ir.requestedByName, factoryName: ir.factoryName, docNumber: ir.docNumber,
           importRequestId: ir.id, wantedBy: ticket ? ir.requiredByNote : ir.wantedBy,
+          repId: ticket ? ticket.createdById : ir.requesterId, repName: ticket ? ticket.createdByName ?? ticket.ownerName ?? null : ir.requestedByName,
+          canOpenDeal: mayOpen,
         };
         lots.filter((l) => !(l.step === 'RECEIVED' && l.receivedOn && l.receivedOn < cutoff)).forEach((l) => rows.push({
           ...base, waiting: false, product: l.product, unit: l.unit, qty: l.qty, lot: l, canWithdraw: false,
