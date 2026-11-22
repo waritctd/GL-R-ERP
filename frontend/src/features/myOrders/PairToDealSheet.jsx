@@ -9,7 +9,7 @@ import { formatQty } from '../fulfilment/shipmentRounds.js';
 const sameName = (a, b) => {
   const x = String(a ?? '').trim().toLowerCase();
   const y = String(b ?? '').trim().toLowerCase();
-  return x.length >= 3 && y.length >= 3 && (x === y || x.includes(y) || y.includes(x));
+  return (x === y && x.length >= 3) || (Math.min(x.length, y.length) >= 6 && (x.includes(y) || y.includes(x)));
 };
 const itemName = (i) => [i.brand, i.model, i.size].filter(Boolean).join(' ') || i.code || `รายการ ${i.id}`;
 

@@ -15665,7 +15665,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       if (row.ticketId != null) fail('ใบขอซื้อนี้อยู่กับงานแล้ว ย้ายกลับในระบบไม่ได้ — แจ้งผู้ดูแลระบบ', 409);
       if (row.status !== 'ISSUED' || row.orderPurpose !== 'PROJECT') fail('ผูกกับงานได้เฉพาะคำสั่งซื้อประเภทโครงการที่ออกแล้ว', 409);
       if (!ticket || (ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE') fail('งานนี้ไม่ได้อยู่ในสถานะที่ดำเนินการได้', 409);
-      const same = (a, b) => { const x = String(a ?? '').trim().toLowerCase(); const y = String(b ?? '').trim().toLowerCase(); return x.length >= 3 && y.length >= 3 && (x === y || x.includes(y) || y.includes(x)); };
+      const same = (a, b) => { const x = String(a ?? '').trim().toLowerCase(); const y = String(b ?? '').trim().toLowerCase(); return (x === y && x.length >= 3) || (Math.min(x.length, y.length) >= 6 && (x.includes(y) || y.includes(x))); };
       if (!same(row.purposeNote, ticket.projectName) && !same(row.purposeNote, ticket.customerName)) fail('ชื่อโครงการของคำสั่งซื้อไม่ตรงกับงานนี้ — เลือกงานของโครงการเดียวกัน', 409);
       const lines = request.lines ?? [];
       const targets = lines.map((l) => Number(l.ticketItemId));

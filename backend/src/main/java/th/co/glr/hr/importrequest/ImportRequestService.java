@@ -1103,7 +1103,8 @@ public class ImportRequestService {
         }
         String x = a.trim().toLowerCase(java.util.Locale.ROOT);
         String y = b.trim().toLowerCase(java.util.Locale.ROOT);
-        return x.length() >= 3 && y.length() >= 3 && (x.equals(y) || x.contains(y) || y.contains(x));
+        // equal, or one inside the other when that shorter name is long enough not to match every company ("บริษัท")
+        return x.equals(y) && x.length() >= 3 || Math.min(x.length(), y.length()) >= 6 && (x.contains(y) || y.contains(x));
     }
 
     /** A draft that should not exist is deleted, not tombstoned — it has no number and no audit weight. */
