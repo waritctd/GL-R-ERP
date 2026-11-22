@@ -297,7 +297,7 @@ export const API_ROUTES = {
     requiredByNote: (ticketId) => `/api/tickets/${ticketId}/required-by-note`,
   },
   // สั่งของไม่มีโครงการ (create) and ของที่ฉันสั่ง (every incoming lot of the caller's orders and project deals).
-  noProjectOrders: { create: '/api/no-project-orders', withdraw: (id) => `/api/no-project-orders/${id}/withdraw` },
+  noProjectOrders: { create: '/api/no-project-orders', withdraw: (id) => `/api/no-project-orders/${id}/withdraw`, pairToDeal: (id) => `/api/no-project-orders/${id}/pair-to-deal` },
   myIncoming: { get: '/api/my-incoming' },
   // Shipment rounds (ShipmentRoundController): import's queue and round page. Documents and their files are import/CEO only.
   shipmentRounds: {

@@ -78,7 +78,7 @@ export function useNewOrderForm({ onDone, showToast, wide = false, enabled = tru
           </div>
         </div>
         <div className="flex flex-col gap-1">
-          <label htmlFor="order-note" className="text-xs font-bold text-text-secondary">ให้ใคร / ใช้ที่ไหน *</label>
+          <label htmlFor="order-note" className="text-xs font-bold text-text-secondary">{purpose === 'PROJECT' ? 'ชื่อโครงการ' : 'ให้ใคร / ใช้ที่ไหน'} *</label>
           <input id="order-note" type="text" maxLength={200} className="min-h-11 w-full text-base" value={note} onChange={(e) => setNote(e.target.value)} />
         </div>
         <div className="flex flex-col gap-1">

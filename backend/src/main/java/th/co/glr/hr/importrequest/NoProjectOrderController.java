@@ -19,8 +19,11 @@ public class NoProjectOrderController {
     private final NoProjectOrderService orders;
     private final MyIncomingService incoming;
     private final SessionContext sessions;
+    private final ImportRequestService importRequests;
 
-    public NoProjectOrderController(NoProjectOrderService orders, MyIncomingService incoming, SessionContext sessions) {
+    public NoProjectOrderController(NoProjectOrderService orders, MyIncomingService incoming, SessionContext sessions,
+                                    ImportRequestService importRequests) {
+        this.importRequests = importRequests;
         this.orders = orders;
         this.incoming = incoming;
         this.sessions = sessions;
@@ -34,6 +37,14 @@ public class NoProjectOrderController {
     @org.springframework.web.bind.annotation.PostMapping("/no-project-orders/{id}/withdraw")
     Map<String, ImportRequestDto> withdraw(@org.springframework.web.bind.annotation.PathVariable long id, HttpSession session) {
         return Map.of("importRequest", orders.withdraw(id, sessions.requireUser(session)));
+    }
+
+    /** Track now, pair later: a PROJECT order onto its real deal, line by line. No undo; see ImportRequestService#pairToDeal. */
+    @PostMapping("/no-project-orders/{id}/pair-to-deal")
+    Map<String, Boolean> pairToDeal(@org.springframework.web.bind.annotation.PathVariable long id,
+                                    @RequestBody ImportRequestService.PairToDealRequest request, HttpSession session) {
+        importRequests.pairToDeal(id, request, sessions.requireUser(session));
+        return Map.of("paired", true);
     }
 
     @GetMapping("/my-incoming")
