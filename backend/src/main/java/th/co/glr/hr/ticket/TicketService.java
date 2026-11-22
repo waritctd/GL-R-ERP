@@ -2960,7 +2960,7 @@ public class TicketService {
         return "ยังส่งมอบครบไม่ได้ เพราะสินค้าใน IR ยังไม่อยู่ในรายการของงาน: "
             + goods.stream().map(g -> g.product() + " " + qtyText(g.qty()) + (g.unit() == null ? "" : " " + g.unit()) + " (" + g.docNumber() + ")")
                 .collect(java.util.stream.Collectors.joining(", "))
-            + " · ให้ฝ่ายนำเข้าหรือ CEO ผูกรายการนี้กับรายการของงานที่การ์ดใบขอซื้อ (ถ้าไม่มีสินค้านี้ในงาน ให้แก้ใบเสนอราคาก่อน)";
+            + " · สินค้านี้รออยู่จนกว่าใบเสนอราคาหรือออเดอร์เพิ่มของงานจะมีรายการนี้ แล้วฝ่ายนำเข้าหรือ CEO ผูกรายการให้ที่การ์ดใบขอซื้อ";
     }
 
     /** Whether the warehouse can still deliver something under the cap: some line has room. */
