@@ -194,7 +194,15 @@ public final class PdfThaiTextLayerRepair {
                     String earlier = learned.computeIfAbsent(glyph.font(), f -> new TreeMap<>())
                         .putIfAbsent(glyph.code(), character);
                     if (earlier != null && !earlier.equals(character)) {
-                        throw new UnsafeToRepair("one glyph stands for two characters");
+                        StringBuilder codes = new StringBuilder();
+                        for (Glyph g : run.glyphs()) codes.append(String.format("%02X ", g.code()));
+                        StringBuilder points = new StringBuilder();
+                        run.actualText().codePoints().forEach(cp -> points.append(String.format("U+%04X ", cp)));
+                        throw new UnsafeToRepair("one glyph stands for two characters: font="
+                            + glyph.font().getNameAsString(COSName.BASE_FONT) + " code=" + String.format("%02X", glyph.code())
+                            + " was=U+" + String.format("%04X", earlier.codePointAt(0))
+                            + " now=U+" + String.format("%04X", character.codePointAt(0)) + " at=" + i
+                            + " span=[" + points.toString().trim() + "] glyphs=[" + codes.toString().trim() + "]");
                     }
                 }
             }
