@@ -4854,6 +4854,19 @@ function mockHasReceivedLot(ticketId) {
     && r.lots.some((l) => irIds.has(l.importRequestId) && (l.receivedQty ?? l.qty) > 0));
 }
 
+// TicketRepository#unlinkedGoods: ISSUED IR lines on no deal line
+function mockUnlinkedIrGoods(ticketId) {
+  return mockImportRequests.filter((r) => r.ticketId === ticketId && r.status === 'ISSUED')
+    .flatMap((ir) => ir.items.filter((i) => i.ticketItemId == null).map((i) => ({
+      docNumber: ir.docNumber, product: [i.brand, i.model].filter(Boolean).join(' ') || i.code,
+      unit: (i.unit ?? '').trim() || null, qty: Number(i.qty),
+    })));
+}
+
+function mockIsGoodsLine(item) { // TicketService#isGoodsLine
+  return item.catalogPriceId != null || item.qtySqm != null || Boolean(item.model?.trim()) || Boolean(item.size?.trim());
+}
+
 // TicketRepository#lotReceipts + TicketService#warehouseAllowance: the one per-line cap the record check and the button share.
 function mockWarehouseAllowance(ticket, item) {
   mockEnsureMigratedRounds();
@@ -4868,7 +4881,8 @@ function mockWarehouseAllowance(ticket, item) {
     .flatMap((r) => r.lots.filter((l) => l.itemId === it.id)));
   const onRounds = mockSumQty(receivedLotsOf.filter((l) => (l.receivedQty ?? l.qty) > 0).map((l) => l.qty)); // a lot that got 0 holds nothing
   // the GOODS_RECEIVED bypass is for a line with no lot on a RECEIVED round (a RECEIVED lot that got 0 is capped)
-  if (hasReceivedGoods(ticket.id) && receivedLotsOf.length === 0 && !item.hadReturnedLot) return qty;
+  const heldBack = mine.length === 0 && mockUnlinkedIrGoods(ticket.id).length > 0 && mockIsGoodsLine(item);
+  if (hasReceivedGoods(ticket.id) && !heldBack && receivedLotsOf.length === 0 && !item.hadReturnedLot) return qty;
   const declared = Number(item.qtyFromStock ?? 0);
   const stock = depositSettled(ticket) ? declared : 0;
   if (mine.length === 0) return Math.round(Math.min(stock, qty) * 100) / 100;
@@ -4911,6 +4925,7 @@ function mockRederiveTicketIrs(ticket, user) {
 
 // Marking the last open quantity completes delivery the way the last delivery does, once.
 function mockCompleteDeliveryIfDone(ticket, user) {
+  if (mockUnlinkedIrGoods(ticket.id).length > 0) return;
   if ((ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE' || ticket.fulfillmentStatus === 'FULLY_DELIVERED' || hasRemainingDelivery(ticket) || (ticket.items ?? []).length === 0) return;
   ticket.fulfillmentStatus = 'FULLY_DELIVERED';
   pushEvent(ticket, user, 'DELIVERY_COMPLETED', ticket.status, ticket.status, 'ส่งมอบครบ: ส่วนที่ไม่ได้รับของถูกบันทึกแล้ว');
@@ -5118,6 +5133,9 @@ function recordDeliveryForTicket(ticket, user, payload = {}, completing = false)
       }
     }
   }
+  const finishes = ticket.items.every((item) => Number(item.qtyDelivered ?? 0) + (combined.get(item.id) ?? 0) >= Number(item.qty ?? 0) - Number(item.qtyNotDelivered ?? 0));
+  const unlinked = finishes ? mockUnlinkedIrGoods(ticket.id) : [];
+  if (completing && unlinked.length > 0) fail('ยังส่งมอบครบไม่ได้ เพราะสินค้าใน IR ยังไม่อยู่ในรายการของงาน', 409, { code: 'UNLINKED_IR_GOODS' });
   const now = new Date().toISOString();
   const nextId = Math.max(0, ...(db.deliveryRecords ?? []).map((record) => record.deliveryId)) + 1;
   let itemSeq = Math.max(0, ...(db.deliveryRecords ?? []).flatMap((record) => record.items ?? []).map((item) => item.deliveryItemId)) + 1;
@@ -5162,7 +5180,8 @@ function recordDeliveryForTicket(ticket, user, payload = {}, completing = false)
     db.users.filter((u) => ['account', 'sales_manager'].includes(u.role) && u.active && u.id !== user.id).forEach((u) => addNotification(
       u.id, ticket.id, ticket.code, 'DELIVERY_RECORDED', audit, u.role === 'account' ? `/finance/deals/${ticket.id}` : `/tickets/${ticket.id}?tab=ship`));
   }
-  const full = ticket.items.every((item) => Number(item.qtyDelivered ?? 0) >= Number(item.qty ?? 0) - Number(item.qtyNotDelivered ?? 0)); // deliverable = qty less what was marked not delivered
+  const everyLineDone = ticket.items.every((item) => Number(item.qtyDelivered ?? 0) >= Number(item.qty ?? 0) - Number(item.qtyNotDelivered ?? 0)); // deliverable = qty less what was marked not delivered
+  const full = everyLineDone && unlinked.length === 0;
   if (full) {
     ticket.fulfillmentStatus = 'FULLY_DELIVERED';
     pushEvent(ticket, user, 'DELIVERY_COMPLETED', ticket.status, ticket.status, completing ? 'ส่งมอบครบ' : message);
@@ -11498,6 +11517,7 @@ export const api = {
         totalUnit: allOne ? out[0].unit : null,
         totalOrdered: allOne ? out.reduce((sum, i) => sum + i.ordered, 0) : null,
         totalReceived: allOne ? out.reduce((sum, i) => sum + i.received, 0) : null, irs: out,
+        unlinked: mockUnlinkedIrGoods(Number(id)),
       });
     },
 

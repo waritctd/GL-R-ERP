@@ -2742,11 +2742,27 @@ public class TicketRepository {
 
     /** {@code dealHasLots}: any ISSUED IR of the deal has a lot at all; without it nothing is capped (pre-portal, stock-only
      * and lot-less deals behave as before). */
-    public record LotReceipts(boolean dealHasLots, Map<Long, LineReceipt> byItem) {}
+    public record LotReceipts(boolean dealHasLots, Map<Long, LineReceipt> byItem, boolean unlinkedGoods) {}
+
+    /** An ISSUED IR line that points at no deal line: goods the deal ordered but cannot deliver. */
+    public record UnlinkedGoods(String docNumber, String product, BigDecimal qty, String unit) {}
+
+    public List<UnlinkedGoods> unlinkedGoods(long ticketId) {
+        return jdbc.query("""
+            SELECT ir.doc_number, iri.qty, NULLIF(btrim(iri.unit), '') AS unit,
+                   COALESCE(NULLIF(btrim(concat_ws(' ', iri.brand, iri.model)), ''), iri.code) AS product
+              FROM sales.import_request ir
+              JOIN sales.import_request_item iri ON iri.import_request_id = ir.import_request_id
+             WHERE ir.ticket_id = :t AND ir.status = 'ISSUED' AND iri.ticket_item_id IS NULL
+             ORDER BY ir.import_request_id, iri.seq
+            """, Map.of("t", ticketId), (rs, n) -> new UnlinkedGoods(rs.getString("doc_number"), rs.getString("product"),
+                rs.getBigDecimal("qty"), rs.getString("unit")));
+    }
 
     public LotReceipts lotReceipts(long ticketId) {
         Map<Long, LineReceipt> byItem = new java.util.HashMap<>();
         boolean[] anyLots = {false};
+        boolean[] unlinked = {false};
         jdbc.query("""
             SELECT iri.ticket_item_id AS item_id, SUM(iri.qty) AS ir_qty,
                    COALESCE(SUM((SELECT SUM(l.qty) FROM sales.shipment_lot l
@@ -2779,14 +2795,16 @@ public class TicketRepository {
              WHERE ir.ticket_id = :t AND ir.status = 'ISSUED'
              GROUP BY iri.ticket_item_id
             """, Map.of("t", ticketId), rs -> {
-                if (rs.getObject("item_id") != null) { // an unlinked line still counts toward dealHasLots
+                if (rs.getObject("item_id") == null) { // an unlinked line still counts toward dealHasLots
+                    unlinked[0] = true;
+                } else {
                     byItem.put(rs.getLong("item_id"), new LineReceipt(rs.getBigDecimal("ir_qty"), rs.getBigDecimal("wanted_qty"), rs.getBigDecimal("on_rounds"), rs.getBigDecimal("arrived"), rs.getLong("received_lots"), rs.getBoolean("lot_returned"), rs.getBoolean("same_unit")));
                 }
                 if (rs.getLong("lots") > 0 || rs.getBoolean("lot_returned")) { // a returned last lot keeps the deal capped
                     anyLots[0] = true;
                 }
             });
-        return new LotReceipts(anyLots[0], byItem);
+        return new LotReceipts(anyLots[0], byItem, unlinked[0]);
     }
 
     /** Validated ticket-status transition — the ONE way sales.ticket.status is written (ticket creation's INSERT
